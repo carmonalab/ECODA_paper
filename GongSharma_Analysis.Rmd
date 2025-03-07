@@ -1,0 +1,2201 @@
+---
+title: "ZhangY_2022_34653365 dataset - broad cell type clustering with scGate"
+author: "Massimo Andreatta, Santiago Carmona"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+Using exploratory compositional data analysis on huge healthy data set
+
+paper: <https://www.biorxiv.org/content/10.1101/2024.09.10.612119v1> accession: TBD
+
+This script takes output of "<https://apps.allenimmunology.org/aifi/insights/dynamics-imm-health-age/downloads/>" see "Cell type frequency data"
+
+
+# For additional sample metadata see: "<https://apps.allenimmunology.org/aifi/insights/dynamics-imm-health-age/downloads/>"
+
+# General study description from authors:
+```{r}
+# Immune aging is a dynamic process driven by complex internal and external interactions. We examined the healthy human immune system across age using deep molecular profiling .
+
+# To do so, we used our Human Immune Health Atlas to label peripheral blood mononuclear cells (PBMCs) from a prospective, longitudinally sampled cohort of healthy young adults (n=49, 25-35 years) and older adults (n=47, 55-65 years) followed over the course of 2-3 years. This cohort was observed under homeostatic conditions, as well as prior to, and at 7 and 90 days following, annual influenza vaccinations, resulting in a scRNA-seq dataset with over 13.5 million PBMCs.
+
+# Our study highlights that gradual, age-related alterations in the homeostatic transcriptional networks of immune cells lead to shifts in immune responsiveness as we age.
+```
+
+# Cell type data description
+```{r}
+# Cell type frequency data
+# After labeling cell types, we tabulated the cell count for each of the 868 samples utilized in our study at each level of resolution in our Immune Health Atlas. Below, we provide these cell counts, the fraction of counts for each sample, and the centered log ratio (CLR) transformation of those fractions that we utilized for our analyses.
+
+# In addition, we utilized the absolute lymphocyte counts (ALC) provided in our clinical blood count lab results for each sample (available below) to compute estimated cell type abundance based on normalization to ALC. For more details, see our Data Analysis Methods.
+```
+
+# Metadata columns description
+```{r}
+# cohort.cohortGuid: Cohort ID (BR1 or BR2)
+# subject.subjectGuid: Subject ID
+# subject.biologicalSex: Subject Sex (Female or Male)
+# subject.cmv: Subject CMV Status (Negative or Positive)
+# subject.bmi: Subject BMI (integer)
+# subject.race: Subject race
+# subject.ethnicity: Subject ethnicity
+# subject.birthYear: Subject Birth Year
+# subject.ageAtFirstDraw: Subject Age at earliest blood draw in study
+# sample.sampleKitGuid: Sample Kit ID
+# sample.visitName: Sample Visit Name
+# sample.drawDate: Sample Draw Date (Year-Month)
+# sample.subjectAgeAtDraw: Subject age at time of draw, based on year of Draw Date and Birth Year
+# specimen.specimenGuid: Specimen ID (pbmc_sample_id in .h5 files)
+
+# Frequency-related columns
+# (for AIFI_L1 as an example; AIFI_L1 is replaced with AIFI_L2 and AIFI_L3 for those levels)
+
+# AIFI_L1: Cell Type assignment
+# AIFI_L1_count: Count of cells within this sample with cell type assignment
+# total_cells: Total cells within this sample
+# scrna.lymphocyte_count: Sum of T, NK, and B cells
+# bc.lymphocyte_count: Absolute Lymphocyte Count (ALC) from clinical Blood Counts (bc.)
+# alc_ratio: ALC per scRNA Lymphocyte Count
+# AIFI_L1_frac_total: Fraction of cells with cell type assignment divided by Total cells for this sample
+# AIFI_L1_alc: ALC estimate for this cell type assignment
+# AIFI_L1_clr: Centered Log Ratio computed using AIFI_L1_frac_total for all types within this sample
+```
+
+
+
+# Load libraries
+
+```{r, include=FALSE, fig.width=16, fig.height=12}
+# renv::init()
+# renv::snapshot()
+
+# install.packages("/Users/christianhalter/Desktop/scooter_1.0.0.tar.gz", repos = NULL, type = "source")
+
+library(scooter)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(factoextra)
+library(plotly)
+library(Hotelling)
+library(compositions)
+library(pROC)
+source("functions.R")
+
+library(Seurat)
+# devtools::install_github('satijalab/seurat-data')
+library(SeuratData)
+# install.packages("hdf5r")
+# remotes::install_github("mojaveazure/seurat-disk")
+library(SeuratDisk)
+
+# install.packages("devtools")
+# devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
+library(EPIC)
+# BiocManager::install("MOFA2")
+library(reticulate)
+library(basilisk)
+library("MOFA2")
+# BiocManager::install("fgsea")
+# BiocManager::install("sva")
+# devtools::install_github("kharchenkolab/scITD")
+library(scITD)
+# install.packages("ncdf4")
+library(ncdf4)
+library(arrow)
+```
+
+# Set paths
+
+```{r}
+my_seed <- 123
+set.seed(my_seed)
+ds_name <- "GongSharma_2024_PrePrintTBD"
+ID <- "GoSH"
+species <- "human"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+dir.create(path_root, showWarnings = F)
+path_data <- file.path(path_root, "data")
+dir.create(path_data, showWarnings = F)
+path_plots <- file.path(path_root, "plots")
+dir.create(path_plots, showWarnings = F)
+path_output <- file.path(path_root, "output")
+dir.create(path_output, showWarnings = F)
+```
+
+# Download dataset
+
+Level 1 (AIFI_L1): 9 broad cell classes
+Level 2 (AIFI_L2): 29 intermediate resolution cell types
+Level 3 (AIFI_L3): 71 high resolution cell types
+
+```{r}
+knitr::include_graphics('F1.large.jpg')
+```
+
+# Load dataset
+Manually downloaded from:
+"<https://apps.allenimmunology.org/aifi/insights/dynamics-imm-health-age/downloads/>"
+
+```{r}
+files <- list(L1 = file.path(path_data, "sound_life_AIFI_L1_frequencies.csv"),
+              L2 = file.path(path_data, "sound_life_AIFI_L2_frequencies.csv"),
+              L3 = file.path(path_data, "sound_life_AIFI_L3_frequencies.csv"))
+
+data <- list()
+
+for (f in names(files)) {
+  data[[f]] <- read.csv(files[[f]])
+}
+```
+
+
+# Cell types per layer
+
+```{r}
+t1 <- as.data.frame.matrix(t(table(data$L3$AIFI_L1, data$L3$AIFI_L2)))
+
+for (i in ncol(t1):1) {
+  t1 <- t1[order(t1[, i], decreasing = TRUE), ]
+}
+
+colnames(t1) <- str_replace_all(colnames(t1), " ", "_")
+row.names(t1) <- str_replace_all(row.names(t1), " ", "_")
+
+t2 <- as.data.frame.matrix(t(table(data$L3$AIFI_L2, data$L3$AIFI_L3)))
+
+for (i in ncol(t2):1) {
+  t2 <- t2[order(t2[, i], decreasing = TRUE), ]
+}
+
+colnames(t2) <- str_replace_all(colnames(t2), " ", "_")
+row.names(t2) <- str_replace_all(row.names(t2), " ", "_")
+```
+
+
+# Plot number of cells per sample
+
+```{r}
+for (layer in names(data)) {
+  df <- data[[layer]] %>%
+    select(paste0("AIFI_", layer),
+           paste0("AIFI_", layer, "_frac_total"),
+           paste0("total_cells"),
+           "specimen.specimenGuid") %>%
+    group_by(specimen.specimenGuid) %>%
+    reframe(cells_sum = min(total_cells),
+            annotated_cells_perc = sum(!!sym(paste0("AIFI_", layer, "_frac_total"))))
+  
+  p <- ggplot(data = df, aes(x = reorder(specimen.specimenGuid, cells_sum), y = cells_sum)) +
+    geom_bar(stat="identity", fill="steelblue") +
+    xlab("") +
+    ylab("Cells") +
+    theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    ggtitle(paste("Cell counts per sample - Layer: ", layer))
+  print(p)
+  
+  p <- ggplot(data = df, aes(x = reorder(specimen.specimenGuid, cells_sum), y = annotated_cells_perc)) +
+    geom_bar(stat="identity", fill="steelblue") +
+    xlab("") +
+    ylab("Cells") +
+    theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    ggtitle(paste("Percent annotated cells - Layer: ", layer))
+  print(p)
+}
+```
+
+# Process data into wide dataframe
+
+```{r}
+dproc <- list()
+
+for (layer in names(data)) {
+
+  dproc$meta <- data[[layer]] %>%
+    select(c(1:14)) %>%
+    unique() %>% 
+    mutate_at(1:14, as.factor)
+  
+  ctable <- data[[layer]] %>%
+    select(c(14,
+             !!sym(paste0("AIFI_", layer)),
+             !!sym(paste0("AIFI_", layer, "_count")),
+             !!sym(paste0("AIFI_", layer, "_frac_total")),
+             !!sym(paste0("AIFI_", layer, "_clr")))) %>%
+    pivot_wider(names_from = !!sym(paste0("AIFI_", layer)),
+                values_from = c(!!sym(paste0("AIFI_", layer, "_count")),
+                                !!sym(paste0("AIFI_", layer, "_frac_total")),
+                                !!sym(paste0("AIFI_", layer, "_clr")))) %>% 
+    column_to_rownames(var = "specimen.specimenGuid")
+  
+  i <- 1
+  n_cts <- length(unique(data[[layer]][[paste0("AIFI_", layer)]]))
+  
+  dproc[[layer]]$cell_counts <- ctable[, i:(i + n_cts - 1)] %>%
+    mutate_all(~replace_na(., 0)) %>%
+    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_count_"), "") %>%
+                 str_replace_all(., " ", "_")) %>%
+    select(-Platelet, -Erythrocyte)
+
+  i <- i + n_cts
+  dproc[[layer]]$freq <- ctable[, i:(i + n_cts - 1)] %>%
+    mutate_all(~replace_na(., 0)) %>%
+    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_frac_total_"), "") %>%
+                 str_replace_all(., " ", "_")) %>%
+    select(-Platelet, -Erythrocyte)
+  i <- i + n_cts
+  dproc[[layer]]$clr_authors <- ctable[, i:(i + n_cts - 1)] %>%
+    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_clr_"), "") %>%
+                 str_replace_all(., " ", "_")) %>%
+    select(-Platelet, -Erythrocyte)
+  
+  df_counts <- dproc[[layer]]$cell_counts
+  df_counts[df_counts == 0] <- 1
+  
+  # Calculate freq and clr for each ct
+  df_freq <- df_counts/rowSums(df_counts) * 100
+  dproc[[layer]]$clr_1count_zero <- Hotelling::clr(df_freq)
+  
+  df_counts <- dproc[[layer]]$cell_counts + 1
+  
+  # Calculate freq and clr for each ct
+  df_freq <- df_counts/rowSums(df_counts) * 100
+  dproc[[layer]]$clr_1count_all <- Hotelling::clr(df_freq)
+  
+  dproc[[layer]]$clr_0.01perc <- Hotelling::clr(dproc[[layer]]$freq + 0.01)
+}
+
+saveRDS(dproc, file.path(path_data, "cell_type_compositions.rds"))
+```
+
+
+# ---------------------------------------------------------------
+
+# All samples
+
+## Create scoot objects based on author annotation
+
+```{r}
+for (layer in names(data)) {
+  df_counts <- dproc[[layer]]$cell_counts
+  df_freq <- dproc[[layer]]$freq * 100
+  df_clr <- dproc[[layer]]$clr_0.01perc
+  
+  cols <- colnames(df_counts)
+  
+  df_counts$scoot_sample <- rownames(df_counts)
+  df_freq$scoot_sample <- rownames(df_freq)
+  df_clr$scoot_sample <- rownames(df_clr)
+
+  df_counts_long <- df_counts %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "cell_counts")
+  df_freq_long <- df_freq %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "freq")
+  df_clr_long <- df_clr %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "clr")
+  df_long <- dplyr::left_join(df_counts_long,
+                              df_freq_long,
+                              by = c("scoot_sample", "celltype"))
+  df_long <- dplyr::left_join(df_long,
+                              df_clr_long,
+                              by = c("scoot_sample", "celltype"))
+  
+  ctable <- list(layer_1 = df_long)
+  
+  meta <- dproc$meta
+  colnames(meta)[colnames(meta) == "specimen.specimenGuid"] <- "scoot_sample"
+  
+  assign(paste0("scoot_summary_", layer, "_authors"),
+         methods::new("scoot",
+                      data = list(composition = ctable),
+                      metadata = meta,
+                      version = packageVersion("scooter"))
+  )
+}
+```
+
+## Add second layer
+
+```{r}
+cell_name_list <- list(
+  B_cell = c(row.names(t2)[grepl("B_cell", row.names(t2))], "Plasma_cell"),
+  CD4 = row.names(t2)[grepl("CD4", row.names(t2))],
+  CD8 = row.names(t2)[grepl("CD8", row.names(t2))],
+  DC = row.names(t2)[grepl("DC", row.names(t2))],
+  gdT = row.names(t2)[grepl("gdT", row.names(t2))],
+  Mono = row.names(t2)[grepl("monocyte", row.names(t2))],
+  NK = row.names(t2)[grepl("NK", row.names(t2))],
+  Progenitor = c("CMP_cell", "CLP_cell", "BaEoMaP_cell")
+)
+
+row.names(t2)[!row.names(t2) %in% unlist(cell_name_list)]
+```
+
+```{r fig.height=9, fig.width=9}
+ctable_layer_2 <- list()
+
+for (ct in names(cell_name_list)) {
+  df_counts <- dproc[["L3"]]$cell_counts
+  
+  # Subset df_counts to ct
+  df_counts <- df_counts[, cell_name_list[[ct]]]
+  
+  # Drop samples with zero subtype cells
+  df_counts <- df_counts[!rowSums(df_counts) == 0,]
+  
+  # Calculate freq and clr for each ct
+  df_freq <- na.omit(df_counts/rowSums(df_counts) * 100) + 0.01
+  df_clr <- Hotelling::clr(df_freq)
+  
+  cols <- colnames(df_counts)
+  
+  df_counts$scoot_sample <- rownames(df_counts)
+  df_freq$scoot_sample <- rownames(df_freq)
+  df_clr$scoot_sample <- rownames(df_clr)
+
+  df_counts_long <- df_counts %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "cell_counts")
+  df_freq_long <- df_freq %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "freq")
+  df_clr_long <- df_clr %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "clr")
+  df_long <- dplyr::left_join(df_counts_long,
+                              df_freq_long,
+                              by = c("scoot_sample", "celltype"))
+  df_long <- dplyr::left_join(df_long,
+                              df_clr_long,
+                              by = c("scoot_sample", "celltype"))
+  
+  ctable_layer_2[[ct]] <- df_long
+}
+
+scoot_summary_L3_authors@data$composition$layer_2 <- ctable_layer_2
+```
+
+
+## Add pseudobulk data
+
+```{r}
+pb_samples <- as.data.frame(readRDS(file.path(path_data, "all_bulk_sample.rds")))
+row.names(pb_samples) <- pb_samples[, 1]
+pb_samples[, 1] <- NULL
+
+scoot_summary_L3_authors@data$pseudobulk$layer_1$all <- Matrix::Matrix(t(pb_samples), sparse = TRUE)
+```
+
+
+## Get scores L3 (authors)
+
+```{r}
+scores <- get_cluster_score(scoot_summary_L3_authors,
+                            cluster_by = "subject.cmv",
+                            # cluster_by = colnames(data[["L3"]][1:13]),
+                            knn_k = 15)
+```
+
+## Summary plots
+
+```{r fig.height=4, fig.width=40}
+summarized_scores <- summarize_cluster_scores(scores, p_value_cutoff = 1)
+```
+
+
+```{r fig.height=30, fig.width=5}
+summarized_scores <- scooter:::summarized_scores_barplot(summarized_scores)
+```
+
+## Plot PCAs
+
+```{r fig.height=15, fig.width=15}
+scores[["unsupervised"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+ggsave(file.path(path_plots, "unsupervised.pdf"), width = 12, height = 12)
+
+scores[["unsupervised"]][["pseudobulk"]][["layer_1"]][["all"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+
+
+scores[["unsupervised"]][["composition"]][["layer_2"]][["gdT"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores[["unsupervised"]][["composition"]][["layer_2"]][["NK"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores[["unsupervised"]][["composition"]][["layer_2"]][["DC"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores[["unsupervised"]][["composition"]][["layer_2"]][["Mono"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores[["unsupervised"]][["composition"]][["layer_2"]][["B_cell"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores[["unsupervised"]][["composition"]][["layer_2"]][["Progenitor"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+
+scores[["cohort.cohortGuid"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("cohort.cohortGuid")
+ggsave(file.path(path_plots, "cohort.cohortGuid.pdf"), width = 12, height = 12)
+scores[["subject.subjectGuid"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.subjectGuid")
+ggsave(file.path(path_plots, "subject.subjectGuid.pdf"), width = 12, height = 12)
+scores[["subject.biologicalSex"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.biologicalSex")
+ggsave(file.path(path_plots, "subject.biologicalSex.pdf"), width = 12, height = 12)
+
+scores[["subject.cmv"]][["pseudobulk"]][["layer_1"]][["all"]][["plots"]][["summary_plot"]] + ggtitle("subject.cmv")
+scores[["subject.cmv"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.cmv")
+ggsave(file.path(path_plots, "subject.cmv.pdf"), width = 12, height = 12)
+scores[["subject.cmv"]][["composition"]][["layer_2"]][["CD4"]][["plots"]][["summary_plot"]] + ggtitle("subject.cmv")
+
+
+scores[["subject.bmi"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.bmi")
+ggsave(file.path(path_plots, "subject.bmi.pdf"), width = 12, height = 12)
+scores[["subject.race"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.race")
+ggsave(file.path(path_plots, "subject.race.pdf"), width = 12, height = 12)
+scores[["subject.birthYear"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.birthYear")
+ggsave(file.path(path_plots, "subject.birthYear.pdf"), width = 12, height = 12)
+scores[["subject.birthYear"]][["composition"]][["layer_2"]][["CD8"]][["plots"]][["summary_plot"]] + ggtitle("subject.birthYear")
+scores[["subject.birthYear"]][["composition"]][["layer_2"]][["CD4"]][["plots"]][["summary_plot"]] + ggtitle("subject.birthYear")
+
+scores[["subject.ageAtFirstDraw"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.ageAtFirstDraw")
+ggsave(file.path(path_plots, "subject.ageAtFirstDraw.pdf"), width = 12, height = 12)
+scores[["sample.subjectAgeAtDraw"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("sample.subjectAgeAtDraw")
+ggsave(file.path(path_plots, "sample.subjectAgeAtDraw.pdf"), width = 12, height = 12)
+
+scores[["sample.visitName"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("sample.visitName")
+ggsave(file.path(path_plots, "sample.visitName.pdf"), width = 12, height = 12)
+```
+
+
+
+```{r fig.height=15, fig.width=15}
+scores[["subject.birthYear"]][["composition"]][["layer_2"]][["gdT"]][["plots"]][["summary_plot"]]
+scores[["subject.birthYear"]][["composition"]][["layer_2"]][["NK"]][["plots"]][["summary_plot"]]
+scores[["subject.birthYear"]][["composition"]][["layer_2"]][["DC"]][["plots"]][["summary_plot"]]
+scores[["subject.birthYear"]][["composition"]][["layer_2"]][["Mono"]][["plots"]][["summary_plot"]]
+scores[["subject.birthYear"]][["composition"]][["layer_2"]][["B_cell"]][["plots"]][["summary_plot"]]
+scores[["subject.birthYear"]][["composition"]][["layer_2"]][["Progenitor"]][["plots"]][["summary_plot"]]
+```
+
+```{r fig.height=15, fig.width=15}
+scores[["subject.biologicalSex"]][["composition"]][["layer_2"]][["gdT"]][["plots"]][["summary_plot"]]
+scores[["subject.biologicalSex"]][["composition"]][["layer_2"]][["NK"]][["plots"]][["summary_plot"]]
+scores[["subject.biologicalSex"]][["composition"]][["layer_2"]][["DC"]][["plots"]][["summary_plot"]]
+scores[["subject.biologicalSex"]][["composition"]][["layer_2"]][["Mono"]][["plots"]][["summary_plot"]]
+scores[["subject.biologicalSex"]][["composition"]][["layer_2"]][["B_cell"]][["plots"]][["summary_plot"]]
+scores[["subject.biologicalSex"]][["composition"]][["layer_2"]][["Progenitor"]][["plots"]][["summary_plot"]]
+```
+
+```{r fig.height=15, fig.width=15}
+scores[["subject.bmi"]][["composition"]][["layer_2"]][["gdT"]][["plots"]][["summary_plot"]]
+scores[["subject.bmi"]][["composition"]][["layer_2"]][["NK"]][["plots"]][["summary_plot"]]
+scores[["subject.bmi"]][["composition"]][["layer_2"]][["DC"]][["plots"]][["summary_plot"]]
+scores[["subject.bmi"]][["composition"]][["layer_2"]][["Mono"]][["plots"]][["summary_plot"]]
+scores[["subject.bmi"]][["composition"]][["layer_2"]][["B_cell"]][["plots"]][["summary_plot"]]
+scores[["subject.bmi"]][["composition"]][["layer_2"]][["Progenitor"]][["plots"]][["summary_plot"]]
+```
+
+```{r fig.height=15, fig.width=15}
+scores[["subject.race"]][["composition"]][["layer_2"]][["gdT"]][["plots"]][["summary_plot"]]
+scores[["subject.race"]][["composition"]][["layer_2"]][["NK"]][["plots"]][["summary_plot"]]
+scores[["subject.race"]][["composition"]][["layer_2"]][["DC"]][["plots"]][["summary_plot"]]
+scores[["subject.race"]][["composition"]][["layer_2"]][["Mono"]][["plots"]][["summary_plot"]]
+scores[["subject.race"]][["composition"]][["layer_2"]][["B_cell"]][["plots"]][["summary_plot"]]
+scores[["subject.race"]][["composition"]][["layer_2"]][["Progenitor"]][["plots"]][["summary_plot"]]
+```
+
+## Check age in males and females
+
+```{r}
+age_f <- as.numeric(as.character(dproc[["meta"]][dproc$meta$subject.biologicalSex == "Female",][["sample.subjectAgeAtDraw"]]))
+age_m <- as.numeric(as.character(dproc[["meta"]][dproc$meta$subject.biologicalSex == "Male",][["sample.subjectAgeAtDraw"]]))
+avg_age_f <- round(mean(age_f, na.rm = TRUE), 1)
+avg_age_m <- round(mean(age_m, na.rm = TRUE), 1)
+sd_age_f <- round(sd(age_f, na.rm = TRUE), 1)
+sd_age_m <- round(sd(age_m, na.rm = TRUE), 1)
+
+print(paste("Average age females: ", avg_age_f, " +- ", sd_age_f))
+print(paste("Average age females: ", avg_age_m, " +- ", sd_age_m))
+```
+
+
+
+```{r fig.height=15, fig.width=15}
+scores[["subject.cmv"]][["composition"]][["layer_1"]][["plots"]][["pca_loadings"]] + ggtitle("subject.cmv")
+```
+
+
+## Composition boxplots comparing main groups
+
+```{r fig.height=6, fig.width=30}
+composition_boxplot(scoot_summary_L3_authors, group_by = "subject.cmv")
+composition_boxplot(scoot_summary_L3_authors, group_by = "cohort.cohortGuid")
+```
+
+
+# Save scores
+
+```{r}
+cache_filename <- file.path(path_output, sprintf("%s.scoot_scores.rds", ds_name))
+saveRDS(scores, cache_filename)
+```
+
+# ---------------------------------------------------------------
+
+# QUICKLOAD scores
+
+```{r}
+cache_filename <- file.path(path_output, sprintf("%s.scoot_scores.rds", ds_name))
+scores <- readRDS(cache_filename)
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Plot PCA of freq vs clr vs arcsin-sqrt
+
+```{r fig.height=9, fig.width=9}
+results <- data.frame(
+  "Layer" = character(),
+  "Clustering on raw features" = numeric(),
+  "Clustering on PCA" = numeric(),
+  "Silhouette score" = numeric(),
+  "Silhouette score PCA" = numeric(),
+  "Modularity score" = numeric(),
+  "Modularity score PCA" = numeric()
+)
+
+for (layer in c(
+  # "L1",
+  # "L2",
+  "L3"
+  )) {
+  test_list <- list(counts = dproc[[layer]]$cell_counts,
+                    freq = dproc[[layer]]$freq,
+                    asin_sqrt = asin(sqrt(dproc[[layer]]$freq)),
+                    clr_1count_zero = dproc[[layer]]$clr_1count_zero,
+                    clr_1count_all = dproc[[layer]]$clr_1count_all,
+                    clr_0.01perc = dproc[[layer]]$clr_0.01perc)
+  
+  for (nam in names(test_list)) {
+  
+    clust_labels <- scoot_summary_L3_authors@metadata[match(row.names(test_list[[nam]]), scoot_summary_L3_authors@metadata$scoot_sample), ]$subject.cmv
+    
+    clust_results_raw <- clust_eval(test_list[[nam]], clust_labels)
+    # print(paste("Raw: ", nam, clust_results_raw))
+
+    plot_pca(test_list[[nam]], clust_labels, nam)
+    
+    # Extract principal component scores
+    res.pca <- prcomp(test_list[[nam]])
+    pca_scores <- as.data.frame(res.pca$x)  # Convert to data frame if necessary
+    
+    clust_results_pca <- clust_eval(pca_scores[, 1:3], clust_labels)
+    # print(paste("PCA: ", nam, clust_results_pca))
+    
+    # # Plotting with plotly
+    # p <- plot_ly(data = pca_scores, x = ~PC1, y = ~PC2, z = ~PC3, type = "scatter3d",
+    #              color = factor(clust_labels),
+    #              mode = "markers", marker = list(size = 5)) %>%
+    #   layout(scene = list(xaxis = list(title = "PC1"),
+    #                       yaxis = list(title = "PC2"),
+    #                       zaxis = list(title = "PC3")))
+    # print(p)
+    
+    sil_score <- round(calc_sil(test_list[[nam]], clust_labels), 3)
+    sil_score_pca <- round(calc_sil(pca_scores[, 1:3], clust_labels), 3)
+    mod_score <- round(calc_modularity(test_list[[nam]], clust_labels), 3)
+    mod_score_pca <- round(calc_modularity(pca_scores[, 1:3], clust_labels), 3)
+    
+    df_res <- data.frame(
+      "Layer" = paste0(layer, "_", nam),
+      "Clustering on raw features" = clust_results_raw,
+      "Clustering on PCA" = clust_results_pca,
+      "Silhouette score" = sil_score,
+      "Silhouette score PCA" = sil_score_pca,
+      "Modularity score" = mod_score,
+      "Modularity score PCA" = mod_score_pca
+    )
+    
+    results <- rbind(results, df_res)
+  }
+}
+
+
+for (nam in names(test_list)) {
+
+  clust_labels <- scoot_summary_L3_authors@metadata[match(row.names(test_list[[nam]]), scoot_summary_L3_authors@metadata$scoot_sample), ]$cohort.cohortGuid
+  plot_pca(test_list[[nam]], clust_labels, nam)
+
+  # Extract principal component scores
+  res.pca <- prcomp(test_list[[nam]])
+  pca_scores <- as.data.frame(res.pca$x)  # Convert to data frame if necessary
+  
+  # # Plotting with plotly
+  # p <- plot_ly(data = pca_scores, x = ~PC1, y = ~PC2, z = ~PC3, type = "scatter3d",
+  #              color = factor(clust_labels),
+  #              mode = "markers", marker = list(size = 5)) %>%
+  #   layout(scene = list(xaxis = list(title = "PC1"),
+  #                       yaxis = list(title = "PC2"),
+  #                       zaxis = list(title = "PC3")))
+  # print(p)
+}
+```
+
+
+
+# ---------------------------------------------------------------
+
+# CMV negative
+
+## Create scoot objects based on author annotation
+
+```{r}
+cmv_neg_samples <- dproc$meta$subject.cmv == "Negative"
+
+for (layer in names(data)) {
+  df_counts <- dproc[[layer]]$cell_counts[cmv_neg_samples,]
+  df_freq <- dproc[[layer]]$freq[cmv_neg_samples,] * 100
+  df_clr <- dproc[[layer]]$clr[cmv_neg_samples,]
+  
+  cols <- colnames(df_counts)
+  
+  df_counts$scoot_sample <- rownames(df_counts)
+  df_freq$scoot_sample <- rownames(df_freq)
+  df_clr$scoot_sample <- rownames(df_clr)
+
+  df_counts_long <- df_counts %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "cell_counts")
+  df_freq_long <- df_freq %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "freq")
+  df_clr_long <- df_clr %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "clr")
+  df_long <- dplyr::left_join(df_counts_long,
+                              df_freq_long,
+                              by = c("scoot_sample", "celltype"))
+  df_long <- dplyr::left_join(df_long,
+                              df_clr_long,
+                              by = c("scoot_sample", "celltype"))
+  
+  ctable <- list(layer_1 = df_long)
+  
+  meta <- dproc$meta
+  colnames(meta)[colnames(meta) == "specimen.specimenGuid"] <- "scoot_sample"
+  
+  assign(paste0("scoot_summary_", layer, "_authors_cmv_neg"),
+         methods::new("scoot",
+                      data = list(composition = ctable),
+                      metadata = meta,
+                      version = packageVersion("scooter"))
+  )
+}
+```
+
+
+```{r fig.height=9, fig.width=9}
+ctable_layer_2 <- list()
+
+for (ct in names(cell_name_list)) {
+  df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_samples,]
+  
+  # Subset to CMV negative
+  
+  # Subset df_counts to ct
+  df_counts <- df_counts[, cell_name_list[[ct]]]
+  
+  # Drop samples with zero subtype cells
+  df_counts <- df_counts[!rowSums(df_counts) == 0,] + 1
+  
+  # Calculate freq and clr for each ct
+  df_freq <- na.omit(df_counts/rowSums(df_counts) * 100)
+  df_clr <- Hotelling::clr(df_freq)
+  
+  cols <- colnames(df_counts)
+  
+  df_counts$scoot_sample <- rownames(df_counts)
+  df_freq$scoot_sample <- rownames(df_freq)
+  df_clr$scoot_sample <- rownames(df_clr)
+
+  df_counts_long <- df_counts %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "cell_counts")
+  df_freq_long <- df_freq %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "freq")
+  df_clr_long <- df_clr %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "clr")
+  df_long <- dplyr::left_join(df_counts_long,
+                              df_freq_long,
+                              by = c("scoot_sample", "celltype"))
+  df_long <- dplyr::left_join(df_long,
+                              df_clr_long,
+                              by = c("scoot_sample", "celltype"))
+  
+  ctable_layer_2[[ct]] <- df_long
+}
+
+scoot_summary_L3_authors_cmv_neg@data$composition$layer_2 <- ctable_layer_2
+```
+
+
+## Get scores L3 (authors) with layers
+
+```{r}
+scores_cmv_neg <- get_cluster_score(scoot_summary_L3_authors_cmv_neg,
+                                    cluster_by = colnames(data[["L3"]][1:13])[colnames(data[["L3"]][1:13]) != "subject.cmv"])
+```
+
+
+## Summary plots
+
+```{r fig.height=4, fig.width=40}
+summarized_scores_cmv_neg <- summarize_cluster_scores(scores_cmv_neg, p_value_cutoff = 1)
+```
+
+
+```{r fig.height=30, fig.width=5}
+summarized_scores_cmv_neg <- scooter:::summarized_scores_barplot(summarized_scores_cmv_neg)
+```
+
+## Check age in BR1 and BR2
+
+```{r}
+age_BR1 <- as.numeric(as.character(dproc[["meta"]][dproc$meta$cohort.cohortGuid == "BR1",][["sample.subjectAgeAtDraw"]]))
+age_BR2 <- as.numeric(as.character(dproc[["meta"]][dproc$meta$cohort.cohortGuid == "BR2",][["sample.subjectAgeAtDraw"]]))
+avg_age_BR1 <- round(mean(age_BR1, na.rm = TRUE), 1)
+avg_age_BR2 <- round(mean(age_BR2, na.rm = TRUE), 1)
+sd_age_BR1 <- round(sd(age_BR1, na.rm = TRUE), 1)
+sd_age_BR2 <- round(sd(age_BR2, na.rm = TRUE), 1)
+
+print(paste("Average age BR1: ", avg_age_BR1, " +- ", sd_age_BR1))
+print(paste("Average age BR2: ", avg_age_BR2, " +- ", sd_age_BR2))
+```
+
+## Plot PCAs
+
+```{r fig.height=15, fig.width=15}
+scores_cmv_neg[["unsupervised"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+# ggsave(file.path(path_plots, "unsupervised.pdf"), width = 12, height = 12)
+scores_cmv_neg[["unsupervised"]][["composition"]][["layer_2"]][["gdT"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores_cmv_neg[["unsupervised"]][["composition"]][["layer_2"]][["NK"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores_cmv_neg[["unsupervised"]][["composition"]][["layer_2"]][["DC"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores_cmv_neg[["unsupervised"]][["composition"]][["layer_2"]][["Mono"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores_cmv_neg[["unsupervised"]][["composition"]][["layer_2"]][["B_cell"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores_cmv_neg[["unsupervised"]][["composition"]][["layer_2"]][["Progenitor"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+
+scores_cmv_neg[["cohort.cohortGuid"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("cohort.cohortGuid")
+# ggsave(file.path(path_plots, "cohort.cohortGuid.pdf"), width = 12, height = 12)
+scores_cmv_neg[["subject.subjectGuid"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.subjectGuid")
+# ggsave(file.path(path_plots, "subject.subjectGuid.pdf"), width = 12, height = 12)
+scores_cmv_neg[["subject.biologicalSex"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.biologicalSex")
+# ggsave(file.path(path_plots, "subject.biologicalSex.pdf"), width = 12, height = 12)
+
+scores_cmv_neg[["subject.bmi"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.bmi")
+# ggsave(file.path(path_plots, "subject.bmi.pdf"), width = 12, height = 12)
+scores_cmv_neg[["subject.race"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.race")
+# ggsave(file.path(path_plots, "subject.race.pdf"), width = 12, height = 12)
+scores_cmv_neg[["subject.birthYear"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.birthYear")
+# ggsave(file.path(path_plots, "subject.birthYear.pdf"), width = 12, height = 12)
+scores_cmv_neg[["subject.birthYear"]][["composition"]][["layer_2"]][["CD8"]][["plots"]][["summary_plot"]] + ggtitle("subject.birthYear")
+scores_cmv_neg[["subject.birthYear"]][["composition"]][["layer_2"]][["CD4"]][["plots"]][["summary_plot"]] + ggtitle("subject.birthYear")
+
+scores_cmv_neg[["subject.ageAtFirstDraw"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.ageAtFirstDraw")
+# ggsave(file.path(path_plots, "subject.ageAtFirstDraw.pdf"), width = 12, height = 12)
+scores_cmv_neg[["sample.subjectAgeAtDraw"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("sample.subjectAgeAtDraw")
+# ggsave(file.path(path_plots, "sample.subjectAgeAtDraw.pdf"), width = 12, height = 12)
+
+scores_cmv_neg[["sample.visitName"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("sample.visitName")
+# ggsave(file.path(path_plots, "sample.visitName.pdf"), width = 12, height = 12)
+```
+
+```{r fig.height=15, fig.width=15}
+scores_cmv_neg[["cohort.cohortGuid"]][["composition"]][["layer_1"]][["plots"]][["pca_loadings"]] + ggtitle("cohort.cohortGuid")
+
+```
+
+
+```{r fig.height=15, fig.width=15}
+scores_cmv_neg[["subject.birthYear"]][["composition"]][["layer_2"]][["gdT"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.birthYear"]][["composition"]][["layer_2"]][["NK"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.birthYear"]][["composition"]][["layer_2"]][["DC"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.birthYear"]][["composition"]][["layer_2"]][["Mono"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.birthYear"]][["composition"]][["layer_2"]][["B_cell"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.birthYear"]][["composition"]][["layer_2"]][["Progenitor"]][["plots"]][["summary_plot"]]
+```
+
+```{r fig.height=15, fig.width=15}
+scores_cmv_neg[["subject.biologicalSex"]][["composition"]][["layer_2"]][["gdT"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.biologicalSex"]][["composition"]][["layer_2"]][["NK"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.biologicalSex"]][["composition"]][["layer_2"]][["DC"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.biologicalSex"]][["composition"]][["layer_2"]][["Mono"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.biologicalSex"]][["composition"]][["layer_2"]][["B_cell"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.biologicalSex"]][["composition"]][["layer_2"]][["Progenitor"]][["plots"]][["summary_plot"]]
+```
+
+```{r fig.height=15, fig.width=15}
+scores_cmv_neg[["subject.bmi"]][["composition"]][["layer_2"]][["gdT"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.bmi"]][["composition"]][["layer_2"]][["NK"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.bmi"]][["composition"]][["layer_2"]][["DC"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.bmi"]][["composition"]][["layer_2"]][["Mono"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.bmi"]][["composition"]][["layer_2"]][["B_cell"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.bmi"]][["composition"]][["layer_2"]][["Progenitor"]][["plots"]][["summary_plot"]]
+```
+
+```{r fig.height=15, fig.width=15}
+scores_cmv_neg[["subject.race"]][["composition"]][["layer_2"]][["gdT"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.race"]][["composition"]][["layer_2"]][["NK"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.race"]][["composition"]][["layer_2"]][["DC"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.race"]][["composition"]][["layer_2"]][["Mono"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.race"]][["composition"]][["layer_2"]][["B_cell"]][["plots"]][["summary_plot"]]
+scores_cmv_neg[["subject.race"]][["composition"]][["layer_2"]][["Progenitor"]][["plots"]][["summary_plot"]]
+```
+
+
+# Save scores
+
+```{r}
+cache_filename <- file.path(path_output, sprintf("%s.scoot_scores_cmv_neg.rds", ds_name))
+saveRDS(scores_cmv_neg, cache_filename)
+```
+
+# ---------------------------------------------------------------
+
+# QUICKLOAD scores
+
+```{r}
+cache_filename <- file.path(path_output, sprintf("%s.scoot_scores_cmv_neg.rds", ds_name))
+scores_cmv_neg <- readRDS(cache_filename)
+```
+
+
+# ---------------------------------------------------------------
+
+# CMV negative BR1
+
+## Create scoot objects based on author annotation
+
+```{r}
+cmv_neg_BR1_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1")
+
+for (layer in names(data)) {
+  df_counts <- dproc[[layer]]$cell_counts[cmv_neg_BR1_samples,]
+  df_freq <- dproc[[layer]]$freq[cmv_neg_BR1_samples,] * 100
+  df_clr <- dproc[[layer]]$clr[cmv_neg_BR1_samples,]
+  
+  cols <- colnames(df_counts)
+  
+  df_counts$scoot_sample <- rownames(df_counts)
+  df_freq$scoot_sample <- rownames(df_freq)
+  df_clr$scoot_sample <- rownames(df_clr)
+
+  df_counts_long <- df_counts %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "cell_counts")
+  df_freq_long <- df_freq %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "freq")
+  df_clr_long <- df_clr %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "clr")
+  df_long <- dplyr::left_join(df_counts_long,
+                              df_freq_long,
+                              by = c("scoot_sample", "celltype"))
+  df_long <- dplyr::left_join(df_long,
+                              df_clr_long,
+                              by = c("scoot_sample", "celltype"))
+  
+  ctable <- list(layer_1 = df_long)
+  
+  meta <- dproc$meta
+  colnames(meta)[colnames(meta) == "specimen.specimenGuid"] <- "scoot_sample"
+  
+  assign(paste0("scoot_summary_", layer, "_authors_cmv_neg_BR1"),
+         methods::new("scoot",
+                      data = list(composition = ctable),
+                      metadata = meta,
+                      version = packageVersion("scooter"))
+  )
+}
+```
+
+
+```{r fig.height=9, fig.width=9}
+ctable_layer_2 <- list()
+
+for (ct in names(cell_name_list)) {
+  df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_samples,]
+  
+  # Subset to CMV negative
+  
+  # Subset df_counts to ct
+  df_counts <- df_counts[, cell_name_list[[ct]]]
+  
+  # Drop samples with zero subtype cells
+  df_counts <- df_counts[!rowSums(df_counts) == 0,] + 1
+  
+  # Calculate freq and clr for each ct
+  df_freq <- na.omit(df_counts/rowSums(df_counts) * 100)
+  df_clr <- Hotelling::clr(df_freq)
+  
+  cols <- colnames(df_counts)
+  
+  df_counts$scoot_sample <- rownames(df_counts)
+  df_freq$scoot_sample <- rownames(df_freq)
+  df_clr$scoot_sample <- rownames(df_clr)
+
+  df_counts_long <- df_counts %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "cell_counts")
+  df_freq_long <- df_freq %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "freq")
+  df_clr_long <- df_clr %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "clr")
+  df_long <- dplyr::left_join(df_counts_long,
+                              df_freq_long,
+                              by = c("scoot_sample", "celltype"))
+  df_long <- dplyr::left_join(df_long,
+                              df_clr_long,
+                              by = c("scoot_sample", "celltype"))
+  
+  ctable_layer_2[[ct]] <- df_long
+}
+
+scoot_summary_L3_authors_cmv_neg_BR1@data$composition$layer_2 <- ctable_layer_2
+```
+
+
+## Get scores L3 (authors) with layers
+
+```{r}
+scores_cmv_neg_BR1 <- get_cluster_score(scoot_summary_L3_authors_cmv_neg_BR1,
+                                        cluster_by = colnames(data[["L3"]][1:13])[!colnames(data[["L3"]][1:13]) %in% c("cohort.cohortGuid", "subject.cmv")])
+```
+
+
+## Plot PCAs
+
+```{r fig.height=15, fig.width=15}
+scores_cmv_neg_BR1[["unsupervised"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+# ggsave(file.path(path_plots, "unsupervised.pdf"), width = 12, height = 12)
+scores_cmv_neg_BR1[["unsupervised"]][["composition"]][["layer_2"]][["gdT"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores_cmv_neg_BR1[["unsupervised"]][["composition"]][["layer_2"]][["NK"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores_cmv_neg_BR1[["unsupervised"]][["composition"]][["layer_2"]][["DC"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores_cmv_neg_BR1[["unsupervised"]][["composition"]][["layer_2"]][["Mono"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores_cmv_neg_BR1[["unsupervised"]][["composition"]][["layer_2"]][["B_cell"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+scores_cmv_neg_BR1[["unsupervised"]][["composition"]][["layer_2"]][["Progenitor"]][["plots"]][["summary_plot"]] + ggtitle("unsupervised")
+
+scores_cmv_neg_BR1[["subject.subjectGuid"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.subjectGuid")
+# ggsave(file.path(path_plots, "subject.subjectGuid.pdf"), width = 12, height = 12)
+scores_cmv_neg_BR1[["subject.biologicalSex"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.biologicalSex")
+# ggsave(file.path(path_plots, "subject.biologicalSex.pdf"), width = 12, height = 12)
+
+scores_cmv_neg_BR1[["subject.bmi"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.bmi")
+# ggsave(file.path(path_plots, "subject.bmi.pdf"), width = 12, height = 12)
+scores_cmv_neg_BR1[["subject.race"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.race")
+# ggsave(file.path(path_plots, "subject.race.pdf"), width = 12, height = 12)
+scores_cmv_neg_BR1[["subject.birthYear"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.birthYear")
+# ggsave(file.path(path_plots, "subject.birthYear.pdf"), width = 12, height = 12)
+scores_cmv_neg_BR1[["subject.birthYear"]][["composition"]][["layer_2"]][["CD8"]][["plots"]][["summary_plot"]] + ggtitle("subject.birthYear")
+scores_cmv_neg_BR1[["subject.birthYear"]][["composition"]][["layer_2"]][["CD4"]][["plots"]][["summary_plot"]] + ggtitle("subject.birthYear")
+
+scores_cmv_neg_BR1[["subject.ageAtFirstDraw"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("subject.ageAtFirstDraw")
+# ggsave(file.path(path_plots, "subject.ageAtFirstDraw.pdf"), width = 12, height = 12)
+scores_cmv_neg_BR1[["sample.subjectAgeAtDraw"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("sample.subjectAgeAtDraw")
+# ggsave(file.path(path_plots, "sample.subjectAgeAtDraw.pdf"), width = 12, height = 12)
+
+scores_cmv_neg_BR1[["sample.visitName"]][["composition"]][["layer_1"]][["plots"]][["summary_plot"]] + ggtitle("sample.visitName")
+# ggsave(file.path(path_plots, "sample.visitName.pdf"), width = 12, height = 12)
+```
+
+
+```{r fig.height=15, fig.width=15}
+scores_cmv_neg_BR1[["subject.biologicalSex"]][["composition"]][["layer_2"]][["CD8"]][["plots"]][["summary_plot"]]
+scores_cmv_neg_BR1[["subject.biologicalSex"]][["composition"]][["layer_2"]][["CD4"]][["plots"]][["summary_plot"]]
+scores_cmv_neg_BR1[["subject.biologicalSex"]][["composition"]][["layer_2"]][["gdT"]][["plots"]][["summary_plot"]]
+scores_cmv_neg_BR1[["subject.biologicalSex"]][["composition"]][["layer_2"]][["NK"]][["plots"]][["summary_plot"]]
+scores_cmv_neg_BR1[["subject.biologicalSex"]][["composition"]][["layer_2"]][["DC"]][["plots"]][["summary_plot"]]
+scores_cmv_neg_BR1[["subject.biologicalSex"]][["composition"]][["layer_2"]][["Mono"]][["plots"]][["summary_plot"]]
+scores_cmv_neg_BR1[["subject.biologicalSex"]][["composition"]][["layer_2"]][["B_cell"]][["plots"]][["summary_plot"]]
+scores_cmv_neg_BR1[["subject.biologicalSex"]][["composition"]][["layer_2"]][["Progenitor"]][["plots"]][["summary_plot"]]
+```
+
+```{r fig.height=15, fig.width=15}
+scores_cmv_neg_BR1[["subject.bmi"]][["composition"]][["layer_2"]][["gdT"]][["plots"]][["summary_plot"]]
+scores_cmv_neg_BR1[["subject.bmi"]][["composition"]][["layer_2"]][["NK"]][["plots"]][["summary_plot"]]
+scores_cmv_neg_BR1[["subject.bmi"]][["composition"]][["layer_2"]][["DC"]][["plots"]][["summary_plot"]]
+scores_cmv_neg_BR1[["subject.bmi"]][["composition"]][["layer_2"]][["Mono"]][["plots"]][["summary_plot"]]
+scores_cmv_neg_BR1[["subject.bmi"]][["composition"]][["layer_2"]][["B_cell"]][["plots"]][["summary_plot"]]
+scores_cmv_neg_BR1[["subject.bmi"]][["composition"]][["layer_2"]][["Progenitor"]][["plots"]][["summary_plot"]]
+```
+
+## 3D PCA
+
+```{r}
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_samples,]
+
+# Subset to CMV negative
+
+# Drop samples with zero subtype cells
+df_counts <- df_counts[!rowSums(df_counts) == 0,] + 1
+
+
+# Calculate freq and clr for each ct
+df_freq <- na.omit(df_counts/rowSums(df_counts) * 100)
+df_clr <- Hotelling::clr(df_freq)
+
+
+
+res.pca <- prcomp(df_counts)
+
+# Extract principal component scores
+pca_scores <- as.data.frame(res.pca$x)  # Convert to data frame if necessary
+
+clust_labels <- scoot_summary_L3_authors_cmv_neg_BR1@metadata[match(row.names(df_clr), scoot_summary_L3_authors_cmv_neg_BR1@metadata$scoot_sample), ]$subject.biologicalSex
+
+# Plotting with plotly
+plot_ly(data = pca_scores, x = ~PC1, y = ~PC2, z = ~PC3, type = "scatter3d",
+        color = factor(clust_labels),
+        mode = "markers", marker = list(size = 5)) %>%
+  layout(scene = list(xaxis = list(title = "PC1"),
+                      yaxis = list(title = "PC2"),
+                      zaxis = list(title = "PC3")))
+
+
+res.pca <- prcomp(df_clr)
+
+# Extract principal component scores
+pca_scores <- as.data.frame(res.pca$x)  # Convert to data frame if necessary
+
+clust_labels <- scoot_summary_L3_authors_cmv_neg_BR1@metadata[match(row.names(df_clr), scoot_summary_L3_authors_cmv_neg_BR1@metadata$scoot_sample), ]$subject.biologicalSex
+
+# Plotting with plotly
+plot_ly(data = pca_scores, x = ~PC1, y = ~PC2, z = ~PC3, type = "scatter3d",
+        color = factor(clust_labels),
+        mode = "markers", marker = list(size = 5)) %>%
+  layout(scene = list(xaxis = list(title = "PC1"),
+                      yaxis = list(title = "PC2"),
+                      zaxis = list(title = "PC3")))
+```
+
+
+# Save scores
+
+```{r}
+cache_filename <- file.path(path_output, sprintf("%s.scoot_scores_cmv_neg_BR1.rds", ds_name))
+saveRDS(scores_cmv_neg_BR1, cache_filename)
+```
+
+
+# ---------------------------------------------------------------
+
+# FOR PUBLICATION
+
+# Sensitivity: freq vs clr vs alr vs ilr
+
+CMV negative BR1 female samples are used, as the biggest sources of variation has been removed (subset to specific groups according to major axis of variance).
+Subsequently, one or multiple cell types will be artificially increased/decreased to simulate differential abundance.
+
+
+## L1 anotations
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L1"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+# Drop samples with zero subtype cells and impute zeros
+df_counts <- df_counts[!rowSums(df_counts) == 0,] + 1
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+perc_diffs <- c(1, 5, 10, 20, 50, 100, 200)
+n_ct_to_select <- c(1, 2, 3)
+
+results <- datrans(count_mat, perc_diffs, n_ct_to_select)
+                   
+```
+
+### Summarized results
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, perc_diff) %>%
+    mutate(silhouette = mean(silhouette),
+           modularity = mean(modularity),
+           clustering = mean(clustering)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, perc_diff), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = silhouette, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = silhouette, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = modularity, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = clustering, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+### Show example PCA
+
+```{r}
+nct <- 3
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before)) + 1
+df_freq <- na.omit(df_counts_temp/rowSums(df_counts_temp))
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+
+plot_pca(df_counts_temp, labels)
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels)
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq))
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv)
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+
+
+## L2 anotations
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L2"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+# Drop samples with zero subtype cells and impute zeros
+df_counts <- df_counts[!rowSums(df_counts) == 0,] + 1
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+perc_diffs <- c(5, 10, 20, 50, 100, 200, 300)
+n_ct_to_select <- c(1, 3, 5, 10)
+reps <- 1:20
+
+results <- datrans(count_mat, perc_diffs, n_ct_to_select)
+```
+
+```{r}
+nct <- 10
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before)) + 1
+df_freq <- na.omit(df_counts_temp/rowSums(df_counts_temp))
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+```
+
+
+### Mean-variance relationship
+
+```{r}
+df_freq_unperturbed <- na.omit(df_counts/rowSums(df_counts))
+plot(colMeans(df_freq_unperturbed), main = "colMeans(df_freq_unperturbed)")
+plot(colMeans(df_freq), main = "colMeans(df_freq)")
+plot(Rfast::colVars(df_freq_unperturbed), main = "colVars(df_freq_unperturbed)")
+plot(Rfast::colVars(df_freq), main = "colVars(df_freq)")
+plot(colMeans(df_freq_unperturbed), Rfast::colVars(df_freq_unperturbed))
+plot(colMeans(df_freq), Rfast::colVars(df_freq))
+plot(colMeans(df_freq_unperturbed) / Rfast::colVars(df_freq_unperturbed))
+plot(colMeans(df_freq) / Rfast::colVars(df_freq))
+
+means <- colMeans(clr(df_freq))
+vars <- Rfast::colVars(data.frame(clr(df_freq)))
+
+df1 <- data.frame(mean = means, variance = vars)
+labs <- ct_da
+idx <- which(row.names(df1) %in% labs)
+
+ggplot(df1, aes(x = mean, y = variance)) +
+  geom_point() +
+  geom_text(data = df1[idx, ], aes(label = labs), vjust = -0.5)
+
+
+means <- colMeans(clr(df_freq_unperturbed))
+vars <- Rfast::colVars(data.frame(clr(df_freq_unperturbed)))
+
+df2 <- data.frame(mean = means, variance = vars)
+labs <- ct_da
+idx <- which(row.names(df2) %in% labs)
+
+ggplot(df2, aes(x = mean, y = variance)) +
+  geom_point() +
+  geom_text(data = df2[idx, ], aes(label = labs), vjust = -0.5)
+
+
+df1$group <- factor("perturbed")
+df1$ct <- row.names(df1)
+df2$group <- factor("original")
+df2$ct <- row.names(df2)
+df3 <- rbind(df1, df2)
+idx <- which(df3$ct %in% labs)
+
+ggplot(df3, aes(x = mean, y = variance, color = group)) +
+  geom_point() +
+  geom_text(data = df3[idx, ], aes(label = c(labs, labs)), vjust = -0.5)
+
+
+
+means <- colMeans(asin(sqrt(df_freq_unperturbed)))
+vars <- Rfast::colVars(data.frame(asin(sqrt(df_freq_unperturbed))))
+
+df3 <- data.frame(mean = means, variance = vars)
+labs <- ct_da
+idx <- which(row.names(df2) %in% labs)
+
+ggplot(df3, aes(x = mean, y = variance)) +
+  geom_point() +
+  geom_text(data = df3[idx, ], aes(label = labs), vjust = -0.5)
+```
+
+### Summarized results
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, perc_diff) %>%
+    mutate(silhouette = mean(silhouette),
+           modularity = mean(modularity),
+           clustering = mean(clustering)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, perc_diff), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = silhouette, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = silhouette, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = modularity, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = clustering, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+### Show example PCA
+
+```{r}
+plot_pca(df_counts_temp, labels)
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels)
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq))
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv)
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+
+
+## L3 annotations
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+# Drop samples with zero subtype cells and impute zeros
+df_counts <- df_counts[!rowSums(df_counts) == 0,] + 1
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+perc_diffs <- c(5, 10, 20, 50, 100, 200, 300)
+n_ct_to_select <- c(1, 3, 5, 10, 20)
+
+results <- datrans(count_mat, perc_diffs, n_ct_to_select)
+
+```
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, perc_diff) %>%
+    mutate(silhouette = mean(silhouette),
+           modularity = mean(modularity),
+           clustering = mean(clustering)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, perc_diff), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = silhouette, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = silhouette, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = modularity, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = clustering, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+### Show example PCA
+
+```{r}
+nct <- 10
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before)) + 1
+df_freq <- na.omit(df_counts_temp/rowSums(df_counts_temp))
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+```
+
+
+```{r}
+plot_pca(df_counts_temp, labels)
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels)
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq))
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv)
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+
+## L3 annotations unbalanced counts
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+# Drop samples with zero subtype cells and impute zeros
+df_counts <- df_counts[!rowSums(df_counts) == 0,] + 1
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+
+# Generate random numbers between -1 and 1 for each row
+random_numbers <- runif(nrow(df_counts), min = -1, max = 1)
+
+# Exponentiate 10 with each random number
+multiplier <- 10^random_numbers
+
+# Multiply each row by the corresponding multiplier
+df_counts <- sweep(df_counts, 1, multiplier, `*`)
+
+df_counts <- round(df_counts)
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+perc_diffs <- c(5, 10, 20, 50, 100, 200, 300)
+n_ct_to_select <- c(1, 3, 5, 10, 20)
+
+results <- datrans(count_mat, perc_diffs, n_ct_to_select)
+
+```
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, perc_diff) %>%
+    mutate(silhouette = mean(silhouette),
+           modularity = mean(modularity),
+           clustering = mean(clustering)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, perc_diff), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = silhouette, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = silhouette, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = modularity, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = clustering, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+### Show example PCA
+
+```{r}
+nct <- 20
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before)) + 1
+df_freq <- na.omit(df_counts_temp/rowSums(df_counts_temp))
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+plot_pca(df_counts_temp, labels)
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels)
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq))
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv)
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+
+## L3 annotations only low abundant cell types DA
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+# Drop samples with zero subtype cells and impute zeros
+df_counts <- df_counts[!rowSums(df_counts) == 0,] + 1
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+
+# Generate random numbers between -1 and 1 for each row
+random_numbers <- runif(nrow(df_counts), min = -1, max = 1)
+
+# Exponentiate 10 with each random number
+multiplier <- 10^random_numbers
+
+# Multiply each row by the corresponding multiplier
+df_counts <- sweep(df_counts, 1, multiplier, `*`)
+
+df_counts <- round(df_counts)
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+perc_diffs <- c(5, 10, 20, 50, 100, 200, 300)
+n_ct_to_select <- c(1, 3, 5, 10, 20)
+
+ct_counts <- colMeans(df_counts)
+# Find the threshold for the lowest fourth
+threshold <- quantile(ct_counts, 1/4)
+
+# Get the column names with means below the threshold
+cts <- colnames(df_counts)[ct_counts < threshold]
+
+n_ct_to_select[n_ct_to_select >= length(cts)] <- length(cts)
+
+results <- datrans(count_mat, perc_diffs, n_ct_to_select, cts = cts)
+
+```
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, perc_diff) %>%
+    mutate(silhouette = mean(silhouette),
+           modularity = mean(modularity),
+           clustering = mean(clustering)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, perc_diff), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = silhouette, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = silhouette, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = modularity, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = clustering, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+### Show example PCA
+
+```{r}
+nct <- 10
+pd <- 300
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+
+ct_da <- sample(cts, size = nct)
+
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before)) + 1
+df_freq <- na.omit(df_counts_temp/rowSums(df_counts_temp))
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+plot_pca(df_counts_temp, labels)
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels)
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq))
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv)
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+
+## L3 annotations only highly abundant cell types DA
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+# Drop samples with zero subtype cells and impute zeros
+df_counts <- df_counts[!rowSums(df_counts) == 0,] + 1
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+
+# Generate random numbers between -1 and 1 for each row
+random_numbers <- runif(nrow(df_counts), min = -1, max = 1)
+
+# Exponentiate 10 with each random number
+multiplier <- 10^random_numbers
+
+# Multiply each row by the corresponding multiplier
+df_counts <- sweep(df_counts, 1, multiplier, `*`)
+
+df_counts <- round(df_counts)
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+perc_diffs <- c(5, 10, 20, 50, 100, 200, 300)
+n_ct_to_select <- c(1, 3, 5, 10, 20)
+
+ct_counts <- colMeans(df_counts)
+# Find the threshold for the lowest fourth
+threshold <- quantile(ct_counts, 3/4)
+
+# Get the column names with means below the threshold
+cts <- colnames(df_counts)[ct_counts >= threshold]
+
+n_ct_to_select[n_ct_to_select >= length(cts)] <- length(cts)
+
+results <- datrans(count_mat, perc_diffs, n_ct_to_select, cts = cts)
+```
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, perc_diff) %>%
+    mutate(silhouette = mean(silhouette),
+           modularity = mean(modularity),
+           clustering = mean(clustering)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, perc_diff), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = silhouette, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = silhouette, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = modularity, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = clustering, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+### Show example PCA
+
+```{r}
+nct <- 1
+pd <- 300
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+
+ct_da <- sample(cts, size = nct)
+
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before)) + 1
+df_freq <- na.omit(df_counts_temp/rowSums(df_counts_temp))
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+plot_pca(df_counts_temp, labels)
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels)
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq))
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv)
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+# ---------------------------------------------------------------
+
+# FOR PUBLICATION
+
+## Compare deconvolution cell type composition vs scRNA-seq composition
+
+```{r}
+deconv_ct_comps <- readRDS(file = file.path(path_data, "deconv_ct_comps.rds"))
+
+deconv_ct_comps_harmonized <- deconv_ct_comps %>%
+  rename("Bcells" = "B_cell") %>%
+  mutate(T_cell = CD4_Tcells + CD8_Tcells) %>% dplyr::select(-CD4_Tcells, -CD8_Tcells) %>%
+  rename("Monocytes" = "Monocyte") %>%
+  rename("NKcells" = "NK_cell") %>%
+  mutate(otherCells = otherCells + Neutrophils) %>% dplyr::select(-Neutrophils)
+
+dproc_harmonized <- dproc$L1$freq %>%
+  mutate(otherCells = DC + ILC + Progenitor_cell) %>% dplyr::select(-DC, -ILC, -Progenitor_cell)
+
+dproc_harmonized <- dproc_harmonized %>%
+  dplyr::select(all_of(names(deconv_ct_comps_harmonized)))
+
+ct_comp_diff <- deconv_ct_comps_harmonized - dproc_harmonized
+
+# Combine the two data frames and add a new column to differentiate them
+df_combined <- bind_rows(
+  deconv_ct_comps_harmonized %>% mutate(dataset = "pseudobulk_deconv"),
+  dproc_harmonized %>% mutate(dataset = "scrnaseq")
+)
+
+for (ct in names(ct_comp_diff)) {
+  # Plot the histograms
+  p <- ggplot(df_combined, aes(x = !!sym(ct), fill = dataset)) +
+    geom_histogram(alpha = 0.5, position = "identity", bins = 30) +
+    labs(title = "Histograms from Two Dataframes", x = "Value", y = "Count") +
+    scale_fill_manual(values = c("blue", "red")) +
+    theme_minimal() +
+    ggtitle(ct)
+  print(p)
+  
+  ratio_pb_vs_scrna <- mean(deconv_ct_comps_harmonized[, ct]) / mean(dproc_harmonized[, ct])
+  hist(ct_comp_diff[, ct], main = paste0("ct\nRatio of pseudobulk abundance vs scRNA-seq: ", round(ratio_pb_vs_scrna, 2)))
+}
+
+
+```
+
+
+
+# ---------------------------------------------------------------
+# ---------------------------------------------------------------
+
+# Method Benchmark
+
+## All CMV
+
+### Load seurat object
+
+```{r}
+seurat <- load_seurat_object("gongsharma_all.h5ad")
+seurat$Sample <- seurat$specimen.specimenGuid
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+hvg <- seurat@assays[["RNA"]]@var.features
+```
+
+### Create plots
+
+```{r}
+label_condition <- "subject.cmv"
+low_res_ct_col <- "AIFI_L1"
+hi_res_ct_col <- "AIFI_L3"
+
+plot_list <- list()
+labels <- get_labels(seurat, label_condition)
+
+# Pseudobulk
+pseudobulk <- as.matrix(AggregateExpression(seurat_object, group.by = "Sample", assays = "RNA")[["RNA"]])
+pseudobulk_hvg <- pseudobulk[hvg,]
+plot_list[["pseudobulk"]] <- process_pseudobulk_fig(pseudobulk_hvg, labels, hvg)
+
+
+# Deconvolute using EPIC
+plot_list[["deconv"]] <- process_deconv_fig(pseudobulk, labels)
+
+# CoDA
+## layer1: low res. cell types
+plot_list[["coda_lowres"]] <- process_coda_fig(seurat, labels, low_res_ct_col, title = "Cell type composition - low res. cell types")
+
+## layer2: high res. cell types
+plot_list[["coda_hires"]] <- process_coda_fig(seurat, labels, hi_res_ct_col, title = "Cell type composition - high res. cell types")
+
+# MOFA
+plot_list[["mofa"]] <- process_mofa_fig(seurat, labels, hvg, pseudobulk_hvg, file.path("gongsharma_all_mofa_object.rds"))
+
+# scITD
+plot_list[["scitd"]] <- process_scitd_fig(seurat, low_res_ct_col, label_condition, hvg)
+
+# MrVI
+plot_list[["mrvi"]] <- process_mrvi_fig(seurat, "./gongsharma_all_dists.nc", low_res_ct_col, label_condition)
+
+
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, "PUBLICATION_PCAs_benchmark_gongsharma_all_cmv.pdf"),
+       plot = p,
+       width = 15,
+       height = 10)
+```
+
+
+## All gender
+
+### Create plots
+
+```{r}
+label_condition <- "subject.biologicalSex"
+low_res_ct_col <- "AIFI_L1"
+hi_res_ct_col <- "AIFI_L3"
+
+plot_list <- list()
+labels <- get_labels(seurat, label_condition)
+
+# Pseudobulk
+pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
+pseudobulk_hvg <- pseudobulk[hvg,]
+plot_list[["pseudobulk"]] <- process_pseudobulk_fig(pseudobulk_hvg, labels, hvg)
+
+
+# Deconvolute using EPIC
+plot_list[["deconv"]] <- process_deconv_fig(pseudobulk, labels)
+
+# CoDA
+## layer1: low res. cell types
+plot_list[["coda_lowres"]] <- process_coda_fig(seurat, labels, low_res_ct_col, title = "Cell type composition - low res. cell types")
+
+## layer2: high res. cell types
+plot_list[["coda_hires"]] <- process_coda_fig(seurat, labels, hi_res_ct_col, title = "Cell type composition - high res. cell types")
+
+# MOFA
+plot_list[["mofa"]] <- process_mofa_fig(seurat, labels, hvg, pseudobulk_hvg, file.path("gongsharma_all_mofa_object.rds"))
+
+# scITD
+plot_list[["scitd"]] <- process_scitd_fig(seurat, low_res_ct_col, label_condition, hvg)
+
+# MrVI
+plot_list[["mrvi"]] <- process_mrvi_fig(seurat, "./gongsharma_all_dists.nc", low_res_ct_col, label_condition)
+
+
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, "PUBLICATION_PCAs_benchmark_gongsharma_all_gender.pdf"),
+       plot = p,
+       width = 15,
+       height = 10)
+```
+
+
+
+
+## Gender (CMV negative)
+
+### Load seurat objects
+
+```{r}
+seurat <- load_seurat_object("gongsharma_gender_cmvneg.h5ad")
+seurat$Sample <- seurat$specimen.specimenGuid
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+hvg <- seurat@assays[["RNA"]]@var.features
+```
+
+
+### Create plots
+
+```{r}
+label_condition <- "subject.biologicalSex"
+low_res_ct_col <- "AIFI_L1"
+hi_res_ct_col <- "AIFI_L3"
+
+plot_list <- list()
+labels <- get_labels(seurat, label_condition)
+
+# Pseudobulk
+pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
+pseudobulk_hvg <- pseudobulk[hvg,]
+plot_list[["pseudobulk"]] <- process_pseudobulk_fig(pseudobulk_hvg, labels, hvg)
+
+
+# Deconvolute using EPIC
+plot_list[["deconv"]] <- process_deconv_fig(pseudobulk, labels)
+
+# CoDA
+## layer1: low res. cell types
+plot_list[["coda_lowres"]] <- process_coda_fig(seurat, labels, low_res_ct_col, title = "Cell type composition - low res. cell types")
+
+## layer2: high res. cell types
+plot_list[["coda_hires"]] <- process_coda_fig(seurat, labels, hi_res_ct_col, title = "Cell type composition - high res. cell types")
+
+# MOFA
+plot_list[["mofa"]] <- process_mofa_fig(seurat, labels, hvg, pseudobulk_hvg, file.path("gongsharma_gender_cmvneg_mofa_object.rds"))
+
+# scITD
+plot_list[["scitd"]] <- process_scitd_fig(seurat, low_res_ct_col, label_condition, hvg)
+
+# MrVI
+plot_list[["mrvi"]] <- process_mrvi_fig(seurat, "./gongsharma_gender_cmvneg_dists.nc", low_res_ct_col, label_condition)
+
+
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, "PUBLICATION_PCAs_benchmark_gongsharma_gender_cmvneg.pdf"),
+       plot = p,
+       width = 15,
+       height = 10)
+```
+
+
+## CMV (females)
+
+### Load seurat objects
+
+```{r}
+seurat <- load_seurat_object("gongsharma_cmv_females.h5ad")
+
+seurat$Sample <- seurat$specimen.specimenGuid
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+hvg <- seurat@assays[["RNA"]]@var.features
+```
+
+
+
+### Create plots
+
+```{r}
+label_condition <- "subject.cmv"
+low_res_ct_col <- "AIFI_L1"
+hi_res_ct_col <- "AIFI_L3"
+
+plot_list <- list()
+labels <- get_labels(seurat, label_condition)
+
+# Pseudobulk
+pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
+pseudobulk_hvg <- pseudobulk[hvg,]
+plot_list[["pseudobulk"]] <- process_pseudobulk_fig(pseudobulk_hvg, labels, hvg)
+
+# Deconvolute using EPIC
+plot_list[["deconv"]] <- process_deconv_fig(pseudobulk, labels)
+
+# CoDA
+## layer1: low res. cell types
+plot_list[["coda_lowres"]] <- process_coda_fig(seurat, labels, low_res_ct_col, title = "Cell type composition - low res. cell types")
+
+## layer2: high res. cell types
+plot_list[["coda_hires"]] <- process_coda_fig(seurat, labels, hi_res_ct_col, title = "Cell type composition - high res. cell types")
+
+# MOFA
+seurat <- UpdateSeuratObject(seurat)
+plot_list[["mofa"]] <- process_mofa_fig(seurat, labels, hvg, pseudobulk_hvg, file.path("gongsharma_cmv_females_mofa_object.rds"))
+
+# scITD
+plot_list[["scitd"]] <- process_scitd_fig(seurat, low_res_ct_col, label_condition, hvg)
+
+# MrVI
+plot_list[["mrvi"]] <- process_mrvi_fig(seurat, "./gongsharma_cmv_females_dists.nc", low_res_ct_col, label_condition)
+
+
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, "PUBLICATION_PCAs_benchmark_gongsharma_cmv_females.pdf"),
+       plot = p,
+       width = 15,
+       height = 10)
+```
+
+
+## Age (females cmvneg)
+
+### Load seurat objects
+
+```{r}
+seurat <- load_seurat_object("gongsharma_age_females_cmvneg.h5ad")
+seurat$Sample <- seurat$specimen.specimenGuid
+seurat$age <- as.factor(ifelse(seurat$sample.subjectAgeAtDraw < 50, "young", "old"))
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+hvg <- seurat@assays[["RNA"]]@var.features
+```
+
+
+
+### Create plots
+
+```{r}
+label_condition <- "age"
+low_res_ct_col <- "AIFI_L1"
+hi_res_ct_col <- "AIFI_L3"
+
+plot_list <- list()
+labels <- get_labels(seurat, label_condition)
+
+# Pseudobulk
+pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
+pseudobulk_hvg <- pseudobulk[hvg,]
+plot_list[["pseudobulk"]] <- process_pseudobulk_fig(pseudobulk_hvg, labels, hvg)
+
+
+# Deconvolute using EPIC
+plot_list[["deconv"]] <- process_deconv_fig(pseudobulk, labels)
+
+# CoDA
+## layer1: low res. cell types
+plot_list[["coda_lowres"]] <- process_coda_fig(seurat, labels, low_res_ct_col, title = "Cell type composition - low res. cell types")
+
+## layer2: high res. cell types
+plot_list[["coda_hires"]] <- process_coda_fig(seurat, labels, hi_res_ct_col, title = "Cell type composition - high res. cell types")
+
+# MOFA
+seurat <- UpdateSeuratObject(seurat)
+plot_list[["mofa"]] <- process_mofa_fig(seurat, labels, hvg, pseudobulk_hvg, file.path("gongsharma_age_females_cmvneg_mofa_object.rds"))
+
+# scITD
+plot_list[["scitd"]] <- process_scitd_fig(seurat, low_res_ct_col, label_condition, hvg)
+
+# MrVI
+plot_list[["mrvi"]] <- process_mrvi_fig(seurat, "./gongsharma_age_females_cmvneg_dists.nc", low_res_ct_col, label_condition)
+
+
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, "PUBLICATION_PCAs_benchmark_gongsharma_age_females_cmvneg.pdf"),
+       plot = p,
+       width = 15,
+       height = 10)
+```
