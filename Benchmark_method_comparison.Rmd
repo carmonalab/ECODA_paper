@@ -54,44 +54,135 @@ library(scITD)
 library(ncdf4)
 library(arrow)
 
+# remotes::install_github("carmonalab/scooter", ref="f31eab3")
+library(scooter)
+
 my_seed <- 123
 set.seed(my_seed)
-```
-
 
 
 # Set path to save plots
-
-```{r}
 path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
 ```
 
 
-# ---------------------------------------------------------------
+
 # ---------------------------------------------------------------
 
 # Zhang et al. dataset
 
 ## Set paths
 
+```{r}
+ds_name <- "ZhangY_2022_34653365"
 
-# ---------------------------------------------------------------
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+path_output_samples <- file.path(path_output, "samples")
+```
+
+
+### Load seurat object
+
+```{r}
+obj.list <- read_objs(path_output_samples)
+
+# Exclude samples that consist mainly of one cell type as outliers
+samples_exclude <- c("Pre_P012_b", "Pre_P013_t")
+obj.list <- obj.list[!names(obj.list) %in% samples_exclude]
+
+samples_clearcut <- c()
+
+for (i in names(obj.list)) {
+  if (obj.list[[i]]@meta.data$Treatment[1] %in% c("Pre") &
+      !(obj.list[[i]]@meta.data$Clinical.efficacy.[1] %in% c("-"))) {
+    samples_clearcut <- c(samples_clearcut, i)
+  }
+}
+
+metacols_to_keep <- c("Sample", "Tissue", "layer1", "layer2")
+
+for (i in samples_clearcut) {
+  print(i)
+  
+  obj <- obj.list[[i]]
+  Idents(obj) <- "Sample"
+  obj@meta.data <- obj@meta.data[colnames(obj@assays$RNA$counts), metacols_to_keep]
+
+  if (i == samples_clearcut[1]) {
+    seurat <- obj
+  } else {
+    seurat <- merge(seurat, obj)
+  }
+}
+
+rm(obj.list); gc()
+
+
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+hvg <- seurat@assays[["RNA"]]@var.features
+
+label_condition <- "Tissue"
+low_res_ct_col <- "layer1"
+hi_res_ct_col <- "layer2"
+
+# Convert Seurat object to anndata for interoperability with python
+SaveH5Seurat(seurat, filename = "zhang_clearcut.h5Seurat")
+Convert("zhang_clearcut.h5Seurat", dest = "h5ad")
+```
+
+
+### Create plots
+
+```{r}
+plot_list <- list()
+labels <- get_labels(seurat, label_condition)
+
+# Pseudobulk
+pseudobulk <- as.matrix(AggregateExpression(seurat_object, group.by = "Sample", assays = "RNA")[["RNA"]])
+pseudobulk_hvg <- pseudobulk[hvg,]
+plot_list[["pseudobulk"]] <- process_pseudobulk_fig(pseudobulk_hvg, labels, hvg)
+
+
+# Deconvolute using EPIC
+plot_list[["deconv"]] <- process_deconv_fig(pseudobulk, labels)
+
+# CoDA
+## layer1: low res. cell types
+plot_list[["coda_lowres"]] <- process_coda_fig(seurat, labels, low_res_ct_col, title = "Cell type composition - low res. cell types")
+
+## layer2: high res. cell types
+plot_list[["coda_hires"]] <- process_coda_fig(seurat, labels, hi_res_ct_col, title = "Cell type composition - high res. cell types")
+
+# MOFA
+plot_list[["mofa"]] <- process_mofa_fig(seurat, labels, hvg, pseudobulk_hvg, file.path("gongsharma_all_mofa_object.rds"))
+
+# scITD
+plot_list[["scitd"]] <- process_scitd_fig(seurat, low_res_ct_col, label_condition, hvg)
+
+# MrVI
+plot_list[["mrvi"]] <- process_mrvi_fig(seurat, "./zhang_dists.nc", low_res_ct_col, label_condition)
+
+
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, "benchmark_pca_zhang.pdf"),
+       plot = p,
+       width = 15,
+       height = 10)
+```
+
+
 # ---------------------------------------------------------------
 
 # Stephenson et al. dataset
 
 ## Set paths
 
-
-# Set paths
-
 ```{r}
 ds_name <- "MitchelJ_2023_PrePrintTBD"
-ID <- "MitJ"
-species <- "human"
 
 path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
-path_data <- file.path(path_root, "data")
 path_output <- file.path(path_root, "output")
 ```
 
@@ -106,7 +197,8 @@ seurat$Days_from_onset <- as.numeric(seurat$Days_from_onset)
 seurat <- subset(seurat, subset = Days_from_onset < 10)
 
 seurat$sample_id <- as.character(seurat$sample_id)
-samples_subset <- unique(seurat$sample_id[!seurat$sample_id %in% c("BGCV10_CV0198", "MH8919230")])
+samples_exclude <- c("BGCV10_CV0198", "MH8919230")
+samples_subset <- unique(seurat$sample_id[!seurat$sample_id %in% samples_exclude])
 seurat <- subset(seurat, subset = sample_id %in% samples_subset)
 
 seurat$Sample <- seurat$sample_id
@@ -164,7 +256,6 @@ ggsave(file.path(path_plots, "benchmark_pca_mitchel.pdf"),
 
 
 # ---------------------------------------------------------------
-# ---------------------------------------------------------------
 
 # Gong and Sharma et al. dataset
 
@@ -172,17 +263,9 @@ ggsave(file.path(path_plots, "benchmark_pca_mitchel.pdf"),
 
 ```{r}
 ds_name <- "GongSharma_2024_PrePrintTBD"
-ID <- "GoSH"
-species <- "human"
 
 path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
-dir.create(path_root, showWarnings = F)
-path_data <- file.path(path_root, "data")
-dir.create(path_data, showWarnings = F)
-path_plots <- file.path(path_root, "plots")
-dir.create(path_plots, showWarnings = F)
 path_output <- file.path(path_root, "output")
-dir.create(path_output, showWarnings = F)
 ```
 
 
