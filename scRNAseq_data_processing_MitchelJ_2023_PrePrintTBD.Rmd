@@ -1,0 +1,595 @@
+---
+title: Standardized Processing of scRNA-seq datasets
+author: "M. Andreatta <massimo.andreatta at unil.ch>, S. Carmona <santiago.carmona at unil.ch>, J. Garnica <josep.garnicacaparros at unil.ch>"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+## IMPORTANT!
+
+**When the processing is finished, please make an entry to the
+[Standardized SingleCell
+Datasets](https://docs.google.com/spreadsheets/d/1THNE4TSbL6pa6ulCA9xsX1L7fzUCgyHpK-mgEOaUCko/edit?usp=drive_link)
+by filling this [form](https://forms.gle/drtCUXZyvTQYU9ih8).**
+
+------------------------------------------------------------------------
+# Set parameters
+
+Dataset name: Author_Year_PBMID_cohortID (eg. ZhangY_2022_34653365)
+
+Dataset ID should have 3 letters from Author (Aaa) followed by
+additional uniquifying letter (A). If multiple cohort, followed by 1
+letter from cohort ID separated by dot (e.g. AndA.H; AndB.M; And.C,
+etc.)
+
+```{r dataset_name}
+ds_name <- "MitchelJ_2023_PrePrintTBD"
+ID <- "MitJ"
+species <- "human"
+my_seed <- 123
+set.seed(my_seed)
+
+```
+
+Meta-data timestamp: 11/30/2022 17:37:18 (to create a new entry, use
+<https://forms.gle/drtCUXZyvTQYU9ih8>) \*\*\*
+
+# Set paths
+```{r}
+path_root <- file.path("~/Dropbox/CSI/Standardized_SingleCell_Datasets",ds_name)
+dir.create(file.path(path_root))
+path_data <- file.path("~/Dropbox/CSI/Datasets",ds_name)
+dir.create(file.path(path_data))
+path_output <- file.path(path_root, "output")
+dir.create(file.path(path_output))
+path_plots <- file.path(path_root, "plots")
+dir.create(file.path(path_plots))
+```
+
+**CHECK**: Make sure the input data and metadata are available in our
+repository.
+
+If not already in the shared Dropbox folder
+[Standardized_SingleCell_Datasets](https://www.dropbox.com/scl/fo/uv9er8tqd23vngyzjgqd6/h?rlkey=onviske2cxev8t61ewt1hjwmq&dl=0),
+create a new folder for this particular dataset and download the
+publicly available data, then **store it in
+"\~/Dropbox/CSI/Standardized_SingleCell_Datasets/*your_study*/data/"**.
+Here we offer tools to download data directly from GEO (package
+`GEOquery`) and Zenodo (package `Zen4R`).
+
+# Prepare packages and environtment
+
+```{r load_packages_functions, message=FALSE}
+# remotes::install_github("carmonalab/UCell",ref="5f12a9d")
+# remotes::install_github("carmonalab/scGate",ref="17a4ce6")
+# remotes::install_github("carmonalab/STACAS",ref="bd73fff")
+# remotes::install_github("carmonalab/ProjecTILs",ref="cc73b97")
+# remotes::install_github("carmonalab/SignatuR",ref="54bc3e8")
+
+library(Seurat) # v5
+library(limma)
+# devtools::install_github("immunogenomics/presto")
+#library(presto)
+#library(SeuratData)
+library(SeuratDisk)
+
+library(ggplot2)
+library(UCell)
+library(scGate)
+library(SingleCellExperiment)
+library(viridis)
+library(Matrix)
+library(patchwork)
+library(GEOquery)
+library(dplyr)
+library(data.table)
+library(STACAS)
+library(SignatuR)
+
+# load custom functions
+source("Rutils/functions.R")
+```
+
+Also, increase memory parameters to allocate large vectors, otherwise R
+might crash
+
+```{bash create_Renviron}
+#include vector max size
+max_size=200Gb
+
+# create .Renviron file if not present
+if ! [ -a ".Renviron" ]
+then
+  touch .Renviron
+  echo R_MAX_VSIZE=$max_size > .Renviron
+  echo New .Renviron file created!
+else
+  echo .Renviron already present!
+  echo Check size of the allowed vector:
+  cat .Renviron
+fi
+```
+
+
+# Download data
+
+If not done before, download data eg from GEO or Zenodo.
+
+If not already in the shared Dropbox folder
+[Standardized_SingleCell_Datasets](https://www.dropbox.com/scl/fo/uv9er8tqd23vngyzjgqd6/h?rlkey=onviske2cxev8t61ewt1hjwmq&dl=0),
+create a new folder for this particular dataset and download the
+publicly available data, then **store it in
+"\~/Dropbox/CSI/Standardized_SingleCell_Datasets/*your_study*/data/"**.
+Here we offer tools to download data directly from GEO (package
+`GEOquery`) and Zenodo (package `Zen4R`).
+
+# Download data
+```{r, eval=FALSE}
+# options(timeout = max(10000, getOption("timeout")))
+# options(download.file.method.GEOquery = "curl")
+# 
+# # Systemic lupus erythematosus (SLE) dataset
+# geo_acc <- 'GSE137029'
+# gse <- getGEO(geo_acc)
+# getGEOSuppFiles(geo_acc)
+# dir.create(file.path(path_data, geo_acc))
+# download_dir <- file.path(getwd(), geo_acc)
+# for (file in list.files(download_dir)){
+#   file.rename(from = file.path(download_dir, file),
+#               to = file.path(path_data, geo_acc, file))
+# }
+# 
+# # Pediatric SLE dataset
+# geo_acc <- 'GSE135779'
+# gse <- getGEO(geo_acc)
+# getGEOSuppFiles(geo_acc)
+# dir.create(file.path(path_data, geo_acc))
+# download_dir <- file.path(getwd(), geo_acc)
+# file.rename(from = file.path(download_dir, "GSE135779_genes.tsv.gz"),
+#             to = file.path(path_data, geo_acc, "GSE135779_genes.tsv.gz"))
+# system(sprintf("tar -xvf %s/%s_RAW.tar -C %s", geo_acc, geo_acc, file.path(path_data, geo_acc)))
+
+# The Stephenson et al. COVID-19 dataset is publicly available at
+# https://www.covid19cellatlas.org/index.patient.html, titled “COVID-19 PBMC Ncl-Cambridge-UCL” (select the only non-TCR non-BCR dataset)
+
+# The van der Wijst et al. COVID-19 dataset can be found at
+# https://cellxgene.cziscience.com/collections/7d7cabfd-1d1f-40af-96b7-26a0825a306d.
+```
+
+# Load Data
+
+Depending on the data format at GEO or Zenodo, use different tools to
+load the datasets into the environment.
+
+For now, only using the Stephenson dataset, as its the largest one and has well-annotated metadata
+```{r}
+# datmats <- list()
+# datmats[["GSE137029"]] <- list()
+# datmats[["GSE137029"]][["flare"]] <- ReadMtx(mtx = file.path(path_data, 'GSE137029', "GSE137029_flare.mtx.gz"),
+#                                              cells = file.path(path_data, 'GSE137029', "GSE137029_flare.barcodes.txt.gz"),
+#                                              features = file.path(path_data, 'GSE137029', "GSE137029_flare.genes.txt.gz"),
+#                                              cell.column = 1, feature.column = 1, mtx.transpose = T)
+# datmats[["GSE137029"]][["sle"]] <- ReadMtx(mtx = file.path(path_data, 'GSE137029', "GSE137029_sle.mtx.gz"),
+#                                            cells = file.path(path_data, 'GSE137029', "GSE137029_sle.barcodes.txt.gz"),
+#                                            features = file.path(path_data, 'GSE137029', "GSE137029_sle.genes.txt.gz"),
+#                                            cell.column = 1, feature.column = 1, mtx.transpose = T)
+# 
+# datmats[["GSE135779"]] <- list()
+# files <- list.files(file.path(path_data, geo_acc))
+# files_barcodes <- files[grepl("barcodes", files)]
+# files_matrices <- files[grepl("matrix", files)]
+# for (i in 1:length(files_barcodes)){
+#   datmats[["GSE135779"]][[paste(strsplit(files_barcodes[1], "_")[[1]][1:2], collapse = "_")]] <-
+#     ReadMtx(mtx = file.path(path_data, 'GSE135779', files_matrices[i]),
+#             cells = file.path(path_data, 'GSE135779', files_barcodes[i]),
+#             features = file.path(path_data, 'GSE135779', "GSE135779_genes.tsv.gz"),
+#             cell.column = 1, feature.column = 1)
+# }
+# 
+# saveRDS(datmats, file = file.path(path_data, "datmats.rds"), compress = F)
+# rm(datmats)
+# gc()
+
+# Convert(file.path(path_data, "COVID19_Stephenson.h5ad"), dest = file.path(path_data, "COVID19_Stephenson.h5seurat"), overwrite = TRUE)
+# obj_COVID19_Stephenson <- LoadH5Seurat(file.path(path_data, "COVID19_Stephenson.h5seurat"))
+# saveRDS(obj_COVID19_Stephenson, file = file.path(path_data, "COVID19_Stephenson.rds"), compress = T)
+obj <- readRDS(file.path(path_data, "COVID19_Stephenson.rds"))
+
+# obj_COVID19_van_der_Wijst <- readRDS(file.path(path_data, "COVID19_van_der_Wijst.rds"))
+# # convert v4 assay to v5 assay
+# obj_COVID19_van_der_Wijst[["RNA"]] <- as(object = obj_COVID19_van_der_Wijst[["RNA"]], Class = "Assay5")
+```
+
+# Update Seurat object to newest version (v5)
+
+```{r}
+obj@version
+obj <- CreateSeuratObject(obj@assays$raw$counts,
+                          meta.data = obj@meta.data)
+obj@version
+```
+
+
+**CHECK**:
+
+1.  Assess available assays: Are raw counts available or only
+    pre-normalized (eg log2TMP); if pre-normalized, specify how was the
+    normalization performed!
+
+2.  Make sure data matrix has genes as rows and cells as columns
+
+3.  Include, adapt and standarize cell metadata
+
+4.  Modify cell identifiers (`orig.ident`)
+
+5.  Standardize gene symbols
+
+6.  Add features/genes metadata
+
+## 1. Assess available assays
+
+Asses whether raw counts are available or only pre-normalized (eg
+log2TMP), if pre-normalized, specify how was the normalization performed
+at the entry form (`Expression data type`). If some datasets not include
+raw counts consider discarding them, or if normalization approach is
+known, de-normalize and normalize data on all datasets. *Data input
+format**: e.g. pre-normalized, "by total counts, as described in
+<https://doi.org/10.1016/j.cell.2015.04.044>"***
+
+## 2. Make sure data matrix has genes as rows and cells as columns
+
+# Metadata info
+```{r}
+head(colnames(obj))
+paste("Number of genes:", dim(obj)[1])
+paste("Number of cells:", dim(obj)[2])
+paste("Number of samples:", length(unique(obj$sample_id)))
+paste("Number of patients:", length(unique(obj$patient_id)))
+paste("Sites:", unique(obj$Site))
+paste("Number of cells per sex:")
+paste(names(table(obj$Sex)), table(obj$Sex))
+paste("Outcome labels:")
+paste(unique(obj$Worst_Clinical_Status))
+```
+
+## 3. Include, adapt and standarize cell metadata
+
+Generate a metadata dataframe including the following variables for each
+cell in the dataset. If some are not present include NA. If needed adapt
+metadata (factorize...).
+
++---------------------------+-------------------------------------+
+| Variable                  | Example                             |
++===========================+=====================================+
+| Original_cell_names       | AAACCTGAGGTTACCT.Pre_P007_b         |
++---------------------------+-------------------------------------+
+| Barcode                   | AAACCTGAGGTTACCT                    |
++---------------------------+-------------------------------------+
+| Study                     | Author_Year_PBMID_cohortID          |
+|                           |                                     |
+|                           | (e.g. ZhangY_2022_34653365)         |
++---------------------------+-------------------------------------+
+| Sample                    | Pre_P007_b                          |
++---------------------------+-------------------------------------+
+| Treatment                 | Pre                                 |
++---------------------------+-------------------------------------+
+| Individual                | P007                                |
++---------------------------+-------------------------------------+
+| Tissue                    | blood, tumor, adjacent, LN, other   |
++---------------------------+-------------------------------------+
+| O                         | CD4T                                |
+| riginalAnnotationLevel{n} |                                     |
++---------------------------+-------------------------------------+
+
+
+```{r adapt_meta}
+# Some barcodes contain the site as a prefix, e.g. site_ATGCATGC... or some other unknown identifier
+# IMPORTANT: needs to be left in, otherwise duplicate names
+# Maybe some samples were sequenced multiple times?
+
+# Explore data and modifiy this code accordingly to fill the metadata slots
+cell_names <- colnames(obj)
+obj@meta.data$Original_cell_names <- cell_names
+cell_names[grepl("_", cell_names)] <- sapply(strsplit(cell_names[grepl("_", cell_names)], "_"), function(x) x[[2]])
+cell_names.split <- strsplit(cell_names, "-")
+obj@meta.data$Barcode <- sapply(cell_names.split, function(x) x[[1]])
+
+messy_barcodes <- grepl("_", obj@meta.data$Barcode)
+obj@meta.data$Barcode[messy_barcodes] <- sapply(strsplit(obj@meta.data$Barcode[messy_barcodes], "_"), function(x) x[[2]])
+
+obj@meta.data$Study <- ds_name
+obj@meta.data$Sample <- obj$sample_id
+obj@meta.data$Individual <- obj$patient_id
+obj@meta.data$Tissue <- "blood"
+rm(cell_names, cell_names.split)
+gc()
+```
+
+Clarify metadata "Status" and "Swab_results"
+```{r}
+table(obj$Status, obj$Swab_result)
+
+unique(obj$sample_id[obj$Status == "Covid" & obj$Swab_result == "Negative"])
+# Covid are Positive. One sample (BGCV01_CV0025) is Negative but labelled as Covid (maybe other test tested positive for Covid?) -> check label later (re-assign to Non_covid?)
+# Healthy are Healthy or tested Negative
+# LPS are LPS
+# Non_covid are presumably sick but tested Negative (e.g. flu or false negative covid test?)
+```
+
+
+## 4. Modify cell identifiers (`orig.ident`)
+
+To make cell ids compatible with other datasets, append the study ID at
+the beginning of the original cell name. If available, also add other
+metadata elements such as Individual, tissue or treatment.
+
+```{r modify_cellID}
+#fields in prefix are separated by dots
+prefix <- paste(obj$Sample, "blood", obj$Sex, obj$Status_on_day_collection_summary, obj$Site, sep=".")  #fields in prefix are separated by dots
+cell_ids <- paste(prefix, obj$Original_cell_names, sep = '_') #underscore delimits end of prefix
+colnames(obj) <- cell_ids
+obj[1:10,1:2]
+head(colnames(obj))
+rm(prefix)
+gc()
+```
+
+## 5. Standardize gene symbols
+
+Map gene ids with our reference gene symbols using
+`STACAS::StandardizeGeneSymbols()`. Load EnsemblGenes105_Hsa_GRCh38.p13
+and EnsemblGenes105_Mmu_GRCm39 retrieved at 14.02.2022 from
+[aux](https://github.com/carmonalab/scRNAseq_data_processing/master/aux),
+or already in you local directory if you cloned the repository.
+
+```{r load_geneRef}
+# load gene symbols dataset
+if (species == "mouse") {
+   geneRef_file <- "aux/EnsemblGenes105_Mmu_GRCm39.txt.gz"
+} else if (species == "human") {
+   geneRef_file <- "aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+}
+geneRef <- fread(geneRef_file)
+```
+
+```{r Standar_gene_Symbol}
+# Standarize gene symbols using STACAS
+obj <- STACAS::StandardizeGeneSymbols(obj, geneRef, assay = "RNA", slots = "counts")
+```
+
+
+### Clean cell metadata (custom)
+
+CHECK: cell metadata fields: Sample, Individual, Tissue
+c("blood","tumor","adjacent","LN","other"), Study,
+OriginalAnnotationLevel1, OriginalAnnotationLevel2,
+OriginalAnnotationLevel3... Factorize or change labels if needed.
+
+```{r clean_metadata}
+obj$orig.ident <- cell_ids
+obj$OriginalAnnotationLevel1 <- obj$initial_clustering
+obj$OriginalAnnotationLevel2 <- obj$full_clustering
+```
+
+## 6. Normalize data
+
+```{r norm_Data}
+obj <- NormalizeData(obj) 
+```
+
+# Quality control measurement and filtering
+
+## 1. Ribosomal and mitochondrial content, and sequencing complexity
+
+Use `SignatuR` package, including ribosomal and mitochondrial gene sets,
+to compute their relative content. Also, compute the sequencing
+complexity by computing the log10 ratio of genes detected per UMI.
+
+```{r define_qc_metrics}
+#Get mitochondrial and ribosomal signatures
+ribo.genes <- GetSignature(SignatuR$Hs$Compartments$Ribo)
+mito.genes <- GetSignature(SignatuR$Hs$Compartments$Mito)
+
+# Compute ribosomal and mitochondrial content and add to Seurat object metadata
+obj <- AddMetaData(obj, metadata = PercentageFeatureSet(obj, features = ribo.genes[ribo.genes %in% rownames(obj)]), col.name = "percent.ribo")
+obj <- AddMetaData(obj, metadata = PercentageFeatureSet(obj, features = mito.genes[mito.genes %in% rownames(obj)]), col.name = "percent.mito")
+
+# Compute the ratio of number of genes/features and number of counts/UMIs
+obj$log10GenesPerUmi <- log10(obj$nFeature_RNA) / 
+                                log10(obj$nCount_RNA)
+```
+
+## 2. Evaluate QC metrics and filter dataset
+
+QC-based metric is mostly done manually by inspecting the distribution
+of the QC metrics. QC metrics can largely change between samples, cell
+types included (heterogeneity), sequencing technology, and batch. Take
+into account that number of reads (`nCount`) are only informative if raw
+counts are available, otherwise they cannot be used of QC filtering.
+
+Here are shown some guidelines for QC-based filtering:
+
+\|--------------------------------------\|---------------------------------------------------------------------\|
+\| QC metric \| Guidelines for filtering \|
+\|--------------------------------------\|---------------------------------------------------------------------\|
+\| Ribosomal content \| \> 0.5% & \< 60% \| \| Mitochondrial content \|
+\< 10-20% \| \| Number of genes/features (nFeatures) \| \>400 and custom
+upper limit based on your data \| \| Numbrer of counts/UMI (nCount) \|
+\>800 and customand custom upper limit based on your data \| \| Ratio
+Features/Counts \| \> 0.6 \| \| Special genes \| Custom: Consider remove
+some of these genes for downstream analysis \|
+\|--------------------------------------\|---------------------------------------------------------------------\|
+
+### CHECK: distributions across samples
+
+```{r qc_plots0, fig.height= 10}
+Idents(obj) <- "Sample"
+VlnPlot(obj,
+        features = c("nFeature_RNA", "nCount_RNA",
+                     "percent.ribo","percent.mito",
+                     "PTPRC","MALAT1"),
+        ncol = 3, pt.size=0)
+```
+
+### Custom thresholds
+
+# Standard check
+```{r}
+probs <- list()
+probs$percent.ribo <- quantile(obj$percent.ribo, probs=c(0.001, 0.005, 0.01, 0.02, 0.05, 0.95, 0.98, 0.99, 0.995, 0.999))
+probs$percent.mito <- quantile(obj$percent.mito, probs=c(0.001, 0.005, 0.01, 0.02, 0.05, 0.95, 0.98, 0.99, 0.995, 0.999))
+probs$nFeature_RNA <- quantile(obj$nFeature_RNA, probs=c(0.001, 0.005, 0.01, 0.02, 0.05, 0.95, 0.98, 0.99, 0.995, 0.999))
+probs$nCount_RNA <- quantile(obj$nCount_RNA, probs=c(0.001, 0.005, 0.01, 0.02, 0.05, 0.95, 0.98, 0.99, 0.995, 0.999))
+probs$log10GenesPerUmi <- quantile(obj$log10GenesPerUmi, probs=c(0.001, 0.005, 0.01, 0.02, 0.05, 0.95, 0.98, 0.99, 0.995, 0.999))
+probs
+```
+
+Review after assessing the plots!
+
+```{r set_cutoffs}
+cutoffs <- list()
+cutoffs[["percent.ribo"]] <- c(min=3,max=60)
+cutoffs[["percent.mito"]] <- c(min=0,max=9)
+cutoffs[["nFeature_RNA"]] <- c(min=500,max=6000) 
+cutoffs[["nCount_RNA"]] <- c(min=600,max=40000)
+cutoffs[["log10GenesPerUmi"]] <- 0.75
+print(cutoffs)
+```
+
+```{r fig.height= 15}
+p1 <- VlnPlot(obj, features = "nFeature_RNA", pt.size=0) & geom_hline(yintercept = cutoffs[["nFeature_RNA"]]) & NoLegend()
+p2 <- VlnPlot(obj, features = "nCount_RNA", pt.size=0) & geom_hline(yintercept = cutoffs[["nCount_RNA"]]) & NoLegend()
+p3 <- VlnPlot(obj, features = "percent.ribo", pt.size=0) & geom_hline(yintercept = cutoffs[["percent.ribo"]]) & NoLegend()
+p4 <- VlnPlot(obj, features = "percent.mito", pt.size=0) & geom_hline(yintercept = cutoffs[["percent.mito"]]) & NoLegend()
+p5 <- VlnPlot(obj, features = "log10GenesPerUmi", pt.size=0) & geom_hline(yintercept = cutoffs[["log10GenesPerUmi"]]) & NoLegend()
+wrap_plots(p1, p2, p3, p4, p5, ncol = 2)
+rm(p1, p2, p3, p4, p5)
+```
+
+How many cells per sample?
+```{r}
+sample.size.pre <- sort(table(obj$Sample))
+sample.size.pre
+barplot(sort(sample.size.pre), las=2)
+```
+
+### Filter out outliers & low quality cells (custom)
+
+
+### Standard check
+
+```{r probs}
+for(va in names(cutoffs)){
+  cat(va, "\n")
+  print(quantile(obj@meta.data[[va]],
+                 probs=c(0.001, 0.005, 0.01, 0.02,
+                         0.98, 0.99, 0.995, 0.999))
+        )
+}
+```
+
+After having evaluated the QC metrics values and distribution, modify
+cutoffs if needed and then proceed to subset your data based on those.
+Also, evaluate how many cells are being removed based on your cutoffs.
+
+```{r subset_seurat fig.height= 10}
+# store initial number of cells
+initialCellNum <- ncol(obj)
+message(paste("Original number of cells:", initialCellNum))
+
+# Perform subsetting using cutoffs list and qc metrics considered
+obj <- subset(obj, subset = 
+                        nFeature_RNA >= cutoffs[["nFeature_RNA"]]["min"] &
+                        nFeature_RNA < cutoffs[["nFeature_RNA"]]["max"] & 
+                        nCount_RNA   >= cutoffs[["nCount_RNA"]]["min"]   & 
+                        nCount_RNA   < cutoffs[["nCount_RNA"]]["max"]   &  
+                        percent.ribo >= cutoffs[["percent.ribo"]]["min"] & 
+                        percent.ribo < cutoffs[["percent.ribo"]]["max"] &
+                        percent.mito >= cutoffs[["percent.mito"]]["min"] &
+                        percent.mito < cutoffs[["percent.mito"]]["max"] &
+                        log10GenesPerUmi > cutoffs[["log10GenesPerUmi"]]
+                      )
+
+# Print and evaluate the cell drop out after filtering
+l <- ncol(obj)
+message(sprintf("Number of cells after QC: %i (%.2f %% of input)", l, 100*l/initialCellNum))
+```
+
+How many cells per sample after QC?
+```{r, fig.height = 8, fig.width = 20}
+barplot(sort(sample.size.pre), las=2)
+
+sample.size.post <- table(obj$Sample)[names(sample.size.pre)]
+sample.size.post
+barplot((sample.size.post), las=2)
+barplot(sort(sample.size.post), las=2)
+
+sample.size.filterRatio <- round((sample.size.pre - sample.size.post)/sample.size.pre*100,2)
+sample.size.filterRatio
+barplot(sample.size.filterRatio[names(sort(sample.size.post))], las=2)
+```
+
+# Downsample, process dataset and make diagnostic plots
+
+At this point we should only have in our datasets high quality cells. We
+will remove samples with very few cells and downsample large ones, in
+order to have a similar contribution from all patients and samples.
+Downsampling large samples also speeds up downstream computations.
+
+We will save the datasets with all high-quality cells (whole) and
+datasets without small samples and downsampling large ones (light).
+
+```{r remove_small_samples}
+min.cells.perSample <- 500
+max.cells.perSample <- 10000
+cells.perSample <- table(obj$Sample)
+barplot(sort(cells.perSample))
+abline(h=min.cells.perSample)
+abline(h=max.cells.perSample)
+
+# Remove small samples
+tab <- table(obj$Sample)
+keep <- names(tab)[tab > min.cells.perSample]
+obj <- subset(obj, Sample %in% keep)
+
+# Print number of samples removed
+cat(length(tab[tab <= min.cells.perSample]), "samples removed out of a total of ", length(tab) )
+
+# Print and evaluate the cell drop out after this step
+l <- ncol(obj)
+message(sprintf("Number of cells after removing low cell count samples: %i (%.2f %% of input)",
+                l, 100*l/sum(sample.size.pre)))
+```
+
+```{r downsample}
+# Downsample
+Idents(obj) <- "Sample"
+# Set seed for downsampling
+set.seed(my_seed)
+obj <- subset(obj, downsample = max.cells.perSample)
+
+# Explore the number of cells per sample
+cells.perSample <- table(obj$Sample)
+barplot(sort(cells.perSample))
+
+# Print and evaluate the cell drop out after this step
+l <- ncol(obj)
+message(sprintf("Number of cells after QC and removing low cell count samples and downsampling high cell count samples: %i (%.2f %% of input)",
+                l, 100*l/sum(sample.size.pre)))
+```
+
+# Export standardized datasets
+
+```{r}
+saveRDS(obj,file.path(path_output, paste0(ds_name, "_Stephenson_preprocessed.rds")))
+```
+
+
+**IMPORTANT** CHECK: after running this workflow (on a fresh session);
+commit/push final version and record in the Google form
+(<https://forms.gle/drtCUXZyvTQYU9ih8>) the Github SHA/commit ref (eg
+5815f1be791ecef1e0e8dffed12ef3879074a412)
