@@ -1,6 +1,6 @@
 ---
-title: "ZhangY_2022_34653365 dataset - broad cell type clustering with scGate"
-author: "Massimo Andreatta, Santiago Carmona"
+title: "Benchmark of exploratory data analysis methods for scRNA-seq data"
+author: "Christian Halter"
 date: "`r format(Sys.Date(),'%e de %B, %Y')`"
 output: 
   rmdformats::downcute:
