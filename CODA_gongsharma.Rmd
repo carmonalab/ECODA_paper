@@ -1,0 +1,325 @@
+---
+title: "Compositional data analysis of the Gong & Sharma et al. dataset"
+author: "Christian Halter"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+Using exploratory compositional data analysis on large healthy data set
+
+paper: <https://www.biorxiv.org/content/10.1101/2024.09.10.612119v1> accession: TBD
+
+This script takes output of "<https://apps.allenimmunology.org/aifi/insights/dynamics-imm-health-age/downloads/>" see "Cell type frequency data"
+
+
+# For additional sample metadata see: "<https://apps.allenimmunology.org/aifi/insights/dynamics-imm-health-age/downloads/>"
+
+# General study description from authors:
+```{r}
+# Immune aging is a dynamic process driven by complex internal and external interactions. We examined the healthy human immune system across age using deep molecular profiling .
+
+# To do so, we used our Human Immune Health Atlas to label peripheral blood mononuclear cells (PBMCs) from a prospective, longitudinally sampled cohort of healthy young adults (n=49, 25-35 years) and older adults (n=47, 55-65 years) followed over the course of 2-3 years. This cohort was observed under homeostatic conditions, as well as prior to, and at 7 and 90 days following, annual influenza vaccinations, resulting in a scRNA-seq dataset with over 13.5 million PBMCs.
+
+# Our study highlights that gradual, age-related alterations in the homeostatic transcriptional networks of immune cells lead to shifts in immune responsiveness as we age.
+```
+
+# Cell type data description
+```{r}
+# Cell type frequency data
+# After labeling cell types, we tabulated the cell count for each of the 868 samples utilized in our study at each level of resolution in our Immune Health Atlas. Below, we provide these cell counts, the fraction of counts for each sample, and the centered log ratio (CLR) transformation of those fractions that we utilized for our analyses.
+
+# In addition, we utilized the absolute lymphocyte counts (ALC) provided in our clinical blood count lab results for each sample (available below) to compute estimated cell type abundance based on normalization to ALC. For more details, see our Data Analysis Methods.
+```
+
+# Metadata columns description
+```{r}
+# cohort.cohortGuid: Cohort ID (BR1 or BR2)
+# subject.subjectGuid: Subject ID
+# subject.biologicalSex: Subject Sex (Female or Male)
+# subject.cmv: Subject CMV Status (Negative or Positive)
+# subject.bmi: Subject BMI (integer)
+# subject.race: Subject race
+# subject.ethnicity: Subject ethnicity
+# subject.birthYear: Subject Birth Year
+# subject.ageAtFirstDraw: Subject Age at earliest blood draw in study
+# sample.sampleKitGuid: Sample Kit ID
+# sample.visitName: Sample Visit Name
+# sample.drawDate: Sample Draw Date (Year-Month)
+# sample.subjectAgeAtDraw: Subject age at time of draw, based on year of Draw Date and Birth Year
+# specimen.specimenGuid: Specimen ID (pbmc_sample_id in .h5 files)
+
+# Frequency-related columns
+# (for AIFI_L1 as an example; AIFI_L1 is replaced with AIFI_L2 and AIFI_L3 for those levels)
+
+# AIFI_L1: Cell Type assignment
+# AIFI_L1_count: Count of cells within this sample with cell type assignment
+# total_cells: Total cells within this sample
+# scrna.lymphocyte_count: Sum of T, NK, and B cells
+# bc.lymphocyte_count: Absolute Lymphocyte Count (ALC) from clinical Blood Counts (bc.)
+# alc_ratio: ALC per scRNA Lymphocyte Count
+# AIFI_L1_frac_total: Fraction of cells with cell type assignment divided by Total cells for this sample
+# AIFI_L1_alc: ALC estimate for this cell type assignment
+# AIFI_L1_clr: Centered Log Ratio computed using AIFI_L1_frac_total for all types within this sample
+```
+
+
+
+# Load libraries
+
+```{r, include=FALSE, fig.width=16, fig.height=12}
+# renv::init()
+# renv::snapshot()
+
+# install.packages("/Users/christianhalter/Desktop/scooter_1.0.0.tar.gz", repos = NULL, type = "source")
+
+library(scooter)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(factoextra)
+library(plotly)
+library(Hotelling)
+library(compositions)
+library(pROC)
+source("functions.R")
+
+library(Seurat)
+# devtools::install_github('satijalab/seurat-data')
+library(SeuratData)
+# install.packages("hdf5r")
+# remotes::install_github("mojaveazure/seurat-disk")
+library(SeuratDisk)
+
+# install.packages("devtools")
+# devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
+library(EPIC)
+# BiocManager::install("MOFA2")
+library(reticulate)
+library(basilisk)
+library("MOFA2")
+# BiocManager::install("fgsea")
+# BiocManager::install("sva")
+# devtools::install_github("kharchenkolab/scITD")
+library(scITD)
+# install.packages("ncdf4")
+library(ncdf4)
+library(arrow)
+
+my_seed <- 123
+set.seed(my_seed)
+```
+
+# Set paths
+
+```{r}
+ds_name <- "GongSharma_2024_PrePrintTBD"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_data <- file.path(path_root, "data")
+path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
+```
+
+
+# Load dataset
+Manually downloaded from:
+"<https://apps.allenimmunology.org/aifi/insights/dynamics-imm-health-age/downloads/>"
+
+```{r}
+files <- list(L1 = file.path(path_data, "sound_life_AIFI_L1_frequencies.csv"),
+              L2 = file.path(path_data, "sound_life_AIFI_L2_frequencies.csv"),
+              L3 = file.path(path_data, "sound_life_AIFI_L3_frequencies.csv"))
+
+data <- list()
+
+for (f in names(files)) {
+  data[[f]] <- read.csv(files[[f]])
+}
+```
+
+
+# Cell types per layer
+
+```{r}
+t1 <- as.data.frame.matrix(t(table(data$L3$AIFI_L1, data$L3$AIFI_L2)))
+
+for (i in ncol(t1):1) {
+  t1 <- t1[order(t1[, i], decreasing = TRUE), ]
+}
+
+colnames(t1) <- str_replace_all(colnames(t1), " ", "_")
+row.names(t1) <- str_replace_all(row.names(t1), " ", "_")
+
+t2 <- as.data.frame.matrix(t(table(data$L3$AIFI_L2, data$L3$AIFI_L3)))
+
+for (i in ncol(t2):1) {
+  t2 <- t2[order(t2[, i], decreasing = TRUE), ]
+}
+
+colnames(t2) <- str_replace_all(colnames(t2), " ", "_")
+row.names(t2) <- str_replace_all(row.names(t2), " ", "_")
+```
+
+
+# Plot number of cells per sample
+
+```{r}
+for (layer in names(data)) {
+  df <- data[[layer]] %>%
+    select(paste0("AIFI_", layer),
+           paste0("AIFI_", layer, "_frac_total"),
+           paste0("total_cells"),
+           "specimen.specimenGuid") %>%
+    group_by(specimen.specimenGuid) %>%
+    reframe(cells_sum = min(total_cells),
+            annotated_cells_perc = sum(!!sym(paste0("AIFI_", layer, "_frac_total"))))
+  
+  p <- ggplot(data = df, aes(x = reorder(specimen.specimenGuid, cells_sum), y = cells_sum)) +
+    geom_bar(stat="identity", fill="steelblue") +
+    xlab("") +
+    ylab("Cells") +
+    theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    ggtitle(paste("Cell counts per sample - Layer: ", layer))
+  print(p)
+  
+  p <- ggplot(data = df, aes(x = reorder(specimen.specimenGuid, cells_sum), y = annotated_cells_perc)) +
+    geom_bar(stat="identity", fill="steelblue") +
+    xlab("") +
+    ylab("Cells") +
+    theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    scale_y_continuous(breaks = scales::pretty_breaks(n = 10)) +
+    ggtitle(paste("Percent annotated cells - Layer: ", layer))
+  print(p)
+}
+```
+
+# Process data into wide dataframe
+
+```{r}
+dproc <- list()
+
+for (layer in names(data)) {
+
+  dproc$meta <- data[[layer]] %>%
+    select(c(1:14)) %>%
+    unique() %>% 
+    mutate_at(1:14, as.factor)
+  
+  ctable <- data[[layer]] %>%
+    select(c(14,
+             !!sym(paste0("AIFI_", layer)),
+             !!sym(paste0("AIFI_", layer, "_count")),
+             !!sym(paste0("AIFI_", layer, "_frac_total")),
+             !!sym(paste0("AIFI_", layer, "_clr")))) %>%
+    pivot_wider(names_from = !!sym(paste0("AIFI_", layer)),
+                values_from = c(!!sym(paste0("AIFI_", layer, "_count")),
+                                !!sym(paste0("AIFI_", layer, "_frac_total")),
+                                !!sym(paste0("AIFI_", layer, "_clr")))) %>% 
+    column_to_rownames(var = "specimen.specimenGuid")
+  
+  i <- 1
+  n_cts <- length(unique(data[[layer]][[paste0("AIFI_", layer)]]))
+  
+  dproc[[layer]]$cell_counts <- ctable[, i:(i + n_cts - 1)] %>%
+    mutate_all(~replace_na(., 0)) %>%
+    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_count_"), "") %>%
+                 str_replace_all(., " ", "_")) %>%
+    select(-Platelet, -Erythrocyte)
+
+  i <- i + n_cts
+  dproc[[layer]]$freq <- ctable[, i:(i + n_cts - 1)] %>%
+    mutate_all(~replace_na(., 0)) %>%
+    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_frac_total_"), "") %>%
+                 str_replace_all(., " ", "_")) %>%
+    select(-Platelet, -Erythrocyte)
+  i <- i + n_cts
+  dproc[[layer]]$clr_authors <- ctable[, i:(i + n_cts - 1)] %>%
+    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_clr_"), "") %>%
+                 str_replace_all(., " ", "_")) %>%
+    select(-Platelet, -Erythrocyte)
+  
+  df_counts <- dproc[[layer]]$cell_counts
+  df_counts[df_counts == 0] <- 1
+  
+  # Calculate freq and clr for each ct
+  df_freq <- df_counts/rowSums(df_counts) * 100
+  dproc[[layer]]$clr_1count_zero <- Hotelling::clr(df_freq)
+  
+  df_counts <- dproc[[layer]]$cell_counts + 1
+  
+  # Calculate freq and clr for each ct
+  df_freq <- df_counts/rowSums(df_counts) * 100
+  dproc[[layer]]$clr_1count_all <- Hotelling::clr(df_freq)
+  
+  dproc[[layer]]$clr_0.01perc <- Hotelling::clr(dproc[[layer]]$freq + 0.01)
+}
+
+saveRDS(dproc, file.path(path_data, "cell_type_compositions.rds"))
+```
+
+# ---------------------------------------------------------------
+
+# FOR PUBLICATION
+
+# Plot number of samples and cell types lost per granularity
+
+```{r}
+# Apply function to each dataframe
+df1 <- dproc[["L1"]][["cell_counts"]]
+df2 <- dproc[["L2"]][["cell_counts"]]
+df3 <- dproc[["L3"]][["cell_counts"]]
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Assume df1, df2, df3 are your three dataframes
+dfs <- list(Low = df1, Medium = df2, High = df3)
+
+
+# Function to calculate percentage of rows/columns with at least one zero
+compute_zero_percentage <- function(df, granularity) {
+  total_samples <- nrow(df)
+  total_celltypes <- ncol(df)
+  
+  samples_with_zeros <- sum(rowSums(df == 0) > 0) / total_samples * 100
+  celltypes_with_zeros <- sum(colSums(df == 0) > 0) / total_celltypes * 100
+  
+  granularity_labels <- paste0(granularity, "\n(", total_celltypes, " cell types)")
+  
+  data.frame(
+    Granularity = factor(granularity_labels, levels = granularity_labels),
+    Category = c("Samples", "Cell Types"),
+    Percentage = c(samples_with_zeros, celltypes_with_zeros)
+  )
+}
+
+# Compute percentages for all dataframes
+zero_percentages <- bind_rows(
+  lapply(names(dfs), function(n) compute_zero_percentage(dfs[[n]], n))
+)
+
+# Plot
+ggplot(zero_percentages, aes(x = Granularity, y = Percentage, group = Category, color = Category, label = round(Percentage, 1))) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  geom_text(vjust=-1, show.legend  = F) +
+  theme_minimal() +
+  labs(title = "Percentage of samples or cell types\nwith at least one zero",
+       x = "Granularity",
+       y = "Percentage (%)",
+       color = "Category") +
+  theme(text = element_text(size = 14)) +
+  ylim(0,100)
+ggsave(file.path(path_plots, "coda_numberzeros.pdf"), width = 6, height = 4)
+```
+
