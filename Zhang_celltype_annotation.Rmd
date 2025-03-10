@@ -1,6 +1,6 @@
 ---
-title: "ZhangY_2022_34653365 dataset - broad cell type clustering with scGate"
-author: "Massimo Andreatta, Santiago Carmona"
+title: "Zhang et al. dataset cell type annotation"
+author: "Christian Halter"
 date: "`r format(Sys.Date(),'%e de %B, %Y')`"
 output: 
   rmdformats::downcute:
@@ -18,7 +18,7 @@ Zhang Yuanyuan Cancer Cell 2021; CD45+ cells; primary or metastatic tumor tissue
 paper: https://www.sciencedirect.com/science/article/pii/S1535610821004992?via%3Dihub
 accession:https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE169246
 
-This script takes output of "https://github.com/carmonalab/scRNAseq_data_processing/blob/master/scRNAseq_data_processing_ZhangY_2022_34653365.Rmd"
+This script takes output of "scRNAseq_data_processing_ZhangY_2022_34653365.Rmd"
 
 # Load libraries
 
