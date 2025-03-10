@@ -543,7 +543,8 @@ get_ct_comp_df_seurat <- function(seurat, sample_col, ct_col) {
     as.data.frame.matrix() %>%
     t() %>%
     as.data.frame()
-
+  ct_comp_df <- ct_comp_df[rowSums(ct_comp_df) != 0, ]
+  
   return(ct_comp_df)
 }
 
@@ -561,27 +562,19 @@ clr <- function(df,
     stop("clr_zero_impute_method not found")
   }
   
-  # Check if clr_zero_impute_method is valid
-  if (!clr_zero_impute_method %in% c("percentage_zeros", "percentage_all", "counts_zeros", "counts_all")) {
-    stop("clr_zero_impute_method not found")
-  }
-  
   # Apply specified zero imputation method
   if (clr_zero_impute_method == "percentage_zeros") {
     for(row in 1:nrow(df)){
-      df[row,][df[row,] == 0] <- sum(df[row,])/100
+      df[row,][df[row,] == 0] <- sum(df[row,])/100 * clr_zero_impute_num
     }
-  }
-  if (clr_zero_impute_method == "percentage_all") {
+  } else if (clr_zero_impute_method == "percentage_all") {
     for(row in 1:nrow(df)){
-      df[row,] <- sum(df[row,])/100
+      df[row,] <- df[row,] + sum(df[row,])/100 * clr_zero_impute_num
     }
-  }
-  if (clr_zero_impute_method == "counts_zeros") {
+  } else if (clr_zero_impute_method == "counts_zeros") {
     # Impute zeros by replacing them with a small non-zero value (1 in this case)
     df[df == 0] <- clr_zero_impute_num
-  }
-  if (clr_zero_impute_method == "counts_all") {
+  } else if (clr_zero_impute_method == "counts_all") {
     # Impute by adding a fixed count to all values
     df <- df + clr_zero_impute_num
   }
@@ -589,7 +582,7 @@ clr <- function(df,
   percentage_df <- calc_perc_df(df)
   
   geometric_mean <- apply(percentage_df, 1, function(row) exp(mean(log(row))))
-  clr_transformed <- apply(percentage_df, 2, function(row) log(row) - log(geometric_mean)) %>%
+  clr_df <- apply(percentage_df, 2, function(row) log(row) - log(geometric_mean)) %>%
     as.data.frame()
 
   return(clr_df)
@@ -599,7 +592,6 @@ clr <- function(df,
 
 calc_sep_score <- function(df,
                            labels,
-                           ct_col,
                            knn_k = 5) {
   sil_score <- round(calc_sil(df, labels), 3)
   mod_score <- unlist(round(calc_modularity(df, labels, knn_k), 3))
