@@ -63,17 +63,11 @@ library(dplyr)
 my_seed <- 321
 set.seed(my_seed)
 ds_name <- "ZhangY_2022_34653365"
-ID <- "ZhyA"
-species <- "human"
 
 path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
-path_data <- file.path(path_root, "data")
-path_plots <- file.path(path_root, "plots")
+path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
 path_output <- file.path(path_root, "output")
 path_output_samples <- file.path(path_output, "samples")
-dir.create(path_output_samples, showWarnings = F)
-path_output_samples_sketched <- file.path(path_output, "samples_sketched")
-dir.create(path_output_samples_sketched, showWarnings = F)
 ```
 
 

@@ -58,7 +58,6 @@ calc_modularity <- function(feat_mat,
                          knn = knn)
   # Compute modularity
   modularity_score <- igraph::modularity(g, membership = as.numeric(factor(labels)))
-  names(modularity_score) <- "global"
   return(modularity_score)
 }
 
@@ -535,4 +534,78 @@ process_mrvi_fig <- function(seurat,
   fig <- plot_pca(dist_sum, labels, title = "MrVI")
   
   return(fig)
+}
+
+
+get_ct_comp_df_seurat <- function(seurat, sample_col, ct_col) {
+  ct_comp_df <- table(seurat@meta.data[[sample_col]], seurat@meta.data[[ct_col]]) %>%
+    t() %>%
+    as.data.frame.matrix() %>%
+    t() %>%
+    as.data.frame()
+
+  return(ct_comp_df)
+}
+
+
+calc_perc_df <- function(df) {
+  df <- t(apply(df, 1, function(row) (row / sum(row)) * 100)) %>% as.data.frame()
+  return(df)
+}
+
+
+clr <- function(df,
+                clr_zero_impute_method = c("percentage_zeros", "percentage_all", "counts_zeros", "counts_all"),
+                clr_zero_impute_num = 1) {
+  if (!clr_zero_impute_method %in% c("percentage_zeros", "percentage_all", "counts_zeros", "counts_all")) {
+    stop("clr_zero_impute_method not found")
+  }
+  
+  # Check if clr_zero_impute_method is valid
+  if (!clr_zero_impute_method %in% c("percentage_zeros", "percentage_all", "counts_zeros", "counts_all")) {
+    stop("clr_zero_impute_method not found")
+  }
+  
+  # Apply specified zero imputation method
+  if (clr_zero_impute_method == "percentage_zeros") {
+    for(row in 1:nrow(df)){
+      df[row,][df[row,] == 0] <- sum(df[row,])/100
+    }
+  }
+  if (clr_zero_impute_method == "percentage_all") {
+    for(row in 1:nrow(df)){
+      df[row,] <- sum(df[row,])/100
+    }
+  }
+  if (clr_zero_impute_method == "counts_zeros") {
+    # Impute zeros by replacing them with a small non-zero value (1 in this case)
+    df[df == 0] <- clr_zero_impute_num
+  }
+  if (clr_zero_impute_method == "counts_all") {
+    # Impute by adding a fixed count to all values
+    df <- df + clr_zero_impute_num
+  }
+  
+  percentage_df <- calc_perc_df(df)
+  
+  geometric_mean <- apply(percentage_df, 1, function(row) exp(mean(log(row))))
+  clr_transformed <- apply(percentage_df, 2, function(row) log(row) - log(geometric_mean)) %>%
+    as.data.frame()
+
+  return(clr_df)
+}
+
+
+
+calc_sep_score <- function(df,
+                           labels,
+                           ct_col,
+                           knn_k = 5) {
+  sil_score <- round(calc_sil(df, labels), 3)
+  mod_score <- unlist(round(calc_modularity(df, labels, knn_k), 3))
+  
+  res <- list(sil_score = sil_score,
+              mod_score = mod_score)
+  
+  return(res)
 }

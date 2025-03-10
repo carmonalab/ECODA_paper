@@ -1,0 +1,199 @@
+---
+title: "clr-transform - How to handle zeros"
+author: "Christian Halter"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+# Load libraries
+
+```{r}
+library(ggplot2)
+source("functions.R")
+
+# Set paths
+path_plots <- path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
+```
+
+
+# Different methods of zero imputation
+
+## Synthetic example
+
+```{r fig.height=8, fig.width=25}
+library(gridExtra)
+
+# calculate_geometric_mean <- function(row) {
+#   exp(mean(log(row)))
+# }
+
+a <- t(data.frame(low = c( 0, 0,  0,   10),
+                  medium = c( 0, 0,  2,  100),
+                  high = c( 0, 1, 20, 1000) #, one_low = c( 0, 2, 20, 1000)
+                  ))
+colnames(a) <- c("ct1", "ct2", "ct3", "ct4")
+a_plot <- as.data.frame(a)
+# a_plot$geom <- round(apply(a_plot, 1, calculate_geometric_mean),2)
+
+b <- a
+b[b==0] <- 1
+b_plot <- as.data.frame(b)
+# b_plot$geom <- round(apply(b_plot, 1, calculate_geometric_mean),2)
+for(row in 1:dim(a)[1]){
+  b[row,] <- Hotelling::clr(t(b[row,] / sum(b[row,]) * 100))
+}
+b_clr_plot <- round(b, 2)
+b <- cbind(rownames(a), rep("+1", dim(a)[1]), b)
+df <- b
+
+b1 <- a
+b1 <- b1+1
+b1_plot <- as.data.frame(b1)
+# b1_plot$geom <- round(apply(b1_plot, 1, calculate_geometric_mean),2)
+for(row in 1:dim(a)[1]){
+  b1[row,] <- Hotelling::clr(t(b1[row,] / sum(b1[row,]) * 100))
+}
+b1_clr_plot <- round(b1, 2)
+b1 <- cbind(rownames(a), rep("+1 to all", dim(a)[1]), b1)
+df <- rbind(df, b1)
+
+c <- a
+for(row in 1:dim(a)[1]){
+  c[row,][c[row,] == 0] <- sum(c[row,]/100)
+}
+c_plot <- as.data.frame(c)
+# c_plot$geom <- round(apply(c_plot, 1, calculate_geometric_mean),2)
+for(row in 1:dim(a)[1]){
+  c[row,] <- Hotelling::clr(t(c[row,] / sum(c[row,]) * 100))
+}
+c_clr_plot <- round(c, 2)
+c <- cbind(rownames(a), rep("+1%", dim(a)[1]), c)
+df <- rbind(df, c)
+
+d <- a
+for(row in 1:dim(a)[1]){
+  d[row,] <- d[row,] + sum(d[row,]/100)
+}
+d_plot <- as.data.frame(d)
+# d_plot$geom <- round(apply(d_plot, 1, calculate_geometric_mean),2)
+for(row in 1:dim(a)[1]){
+  d[row,] <- Hotelling::clr(t(d[row,] / sum(d[row,]) * 100))
+}
+d_clr_plot <- round(d, 2)
+d <- cbind(rownames(a), rep("+1% to all", dim(a)[1]), d)
+df <- rbind(df, d)
+
+d1 <- a
+for(row in 1:dim(a)[1]){
+  d1[row,] <- d1[row,] + sum(d1[row,]/1000)
+}
+d1_plot <- round(as.data.frame(d1), 2)
+# d1_plot$geom <- round(apply(d1_plot, 1, calculate_geometric_mean),2)
+for(row in 1:dim(a)[1]){
+  d1[row,] <- Hotelling::clr(t(d1[row,] / sum(d1[row,]) * 100))
+}
+d1_clr_plot <- round(d1, 2)
+d1 <- cbind(rownames(a), rep("+0.1% to all", dim(a)[1]), d1)
+df <- rbind(df, d1)
+
+
+df <- data.frame(df)
+df$V1 <- factor(df$V1, levels = c("low", "medium", "high", "one_low"))
+df$V2 <- factor(df$V2, levels = c("+1", "+1 to all", "+1%", "+1% to all", "+0.1% to all"))
+
+
+df_long <- reshape2::melt(df, id = c("V1", "V2"))
+df_long$value <- as.numeric(df_long$value)
+
+p1 <- ggplot(df_long, aes(x = V1, y = value, color = V1)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position=position_jitterdodge(dodge.width = 1), size = 1) +
+  theme_classic() + xlab("") + ylab("") +
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1)) +
+  facet_grid(~V2, scale = "free") + NoLegend()
+print(p1)
+
+
+p2 <- ggplot(df_long, aes(x = V1, y = value, fill = variable)) +
+  geom_col(position=position_dodge()) +
+  theme_classic(base_size = 16) +
+  xlab("") + ylab("") +
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust=1)) +
+  facet_grid(~V2, scale = "free") +
+  guides(fill=guide_legend(title="Cell types"))
+print(p2)
+
+# Extract legend from p2
+legend <- ggpubr::get_legend(p2)
+
+# Remove legend from p2
+p2 <- p2 + theme(legend.position = "none")
+
+#Plot your table with table Grob in the library(gridExtra)
+a_grob <- tableGrob(a_plot)
+b_grob <- tableGrob(b_plot)
+b1_grob <- tableGrob(b1_plot)
+c_grob <- tableGrob(c_plot)
+d_grob <- tableGrob(d_plot)
+d1_grob <- tableGrob(d1_plot)
+
+b_clr_grob <- tableGrob(b_clr_plot)
+b1_clr_grob <- tableGrob(b1_clr_plot)
+c_clr_grob <- tableGrob(c_clr_plot)
+d_clr_grob <- tableGrob(d_clr_plot)
+d1_clr_grob <- tableGrob(d1_clr_plot)
+
+#Arrange them as you want with grid.arrange
+lay <- rbind(c(1,2,2,2,2,2),
+             c(1,2,2,2,2,2),
+             c(1,2,2,2,2,2),
+             c(1,2,2,2,2,2),
+             c(3:8),
+             c(NA, 9:13))
+
+grid.arrange(
+  legend,
+  p2,
+  a_grob,
+  b_grob,
+  b1_grob,
+  c_grob,
+  d_grob,
+  d1_grob,
+  b_clr_grob,
+  b1_clr_grob,
+  c_clr_grob,
+  d_clr_grob,
+  d1_clr_grob,
+  layout_matrix = lay
+)
+
+pdf(file = file.path(path_plots, "zero_imputation_synthetic.pdf"),   # The directory you want to save the file in
+    width = 22, # The width of the plot in inches
+    height = 9) # The height of the plot in inches
+grid.arrange(
+  legend,
+  p2,
+  a_grob,
+  b_grob,
+  b1_grob,
+  c_grob,
+  d_grob,
+  d1_grob,
+  b_clr_grob,
+  b1_clr_grob,
+  c_clr_grob,
+  d_clr_grob,
+  d1_clr_grob,
+  layout_matrix = lay
+)
+dev.off()
+```
