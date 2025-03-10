@@ -193,6 +193,9 @@ path_output <- file.path(path_root, "output")
 seurat <- readRDS(file.path(path_output, sprintf("%s_Stephenson_preprocessed.rds", ds_name)))
 
 seurat <- subset(seurat, subset = Site == "Ncl")
+seurat <- subset(seurat, subset = Status %in% c("Healthy", "Covid"))
+seurat$Days_from_onset <- as.character(seurat$Days_from_onset)
+seurat$Days_from_onset[seurat$Days_from_onset == "Healthy"] <- 0
 seurat$Days_from_onset <- as.numeric(seurat$Days_from_onset)
 seurat <- subset(seurat, subset = Days_from_onset < 10)
 
