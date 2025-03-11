@@ -16,6 +16,7 @@ output:
 # Load libraries
 
 ```{r}
+library(dplyr)
 library(ggplot2)
 source("functions.R")
 
@@ -25,36 +26,6 @@ path_plots <- path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", 
 
 
 # Synthetic data
-
-## functions
-
-```{r}
-library(dplyr)
-calc_sil <- function(feat_mat,
-                     labels,
-                     return_mean = TRUE) {
-  
-  dist_mat <- dist(feat_mat)
-
-  sils <- cluster::silhouette(x = as.numeric(factor(labels)),
-                              dist = as.data.frame(dist_mat)) %>%
-    as.data.frame() %>%
-    dplyr::rename(group = cluster) %>%
-    dplyr::mutate(group = labels) %>%
-    dplyr::group_by(group) %>%
-    dplyr::arrange(dplyr::desc(sil_width), .by_group = TRUE) %>%
-    dplyr::ungroup() %>%
-    dplyr::mutate(rowid = dplyr::row_number())
-
-  if (return_mean) {
-    avg_sil <- mean(sils[["sil_width"]])
-    return(avg_sil)
-  } else {
-    return(sils)
-  }
-}
-```
-
 
 ## Counts vs freq vs clr
 

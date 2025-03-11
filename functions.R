@@ -555,9 +555,9 @@ calc_perc_df <- function(df) {
 }
 
 
-clr <- function(df,
-                clr_zero_impute_method = c("percentage_zeros", "percentage_all", "counts_zeros", "counts_all"),
-                clr_zero_impute_num = 1) {
+impute_zeros <- function(df,
+                         clr_zero_impute_method = c("percentage_zeros", "percentage_all", "counts_zeros", "counts_all"),
+                         clr_zero_impute_num = 1) {
   if (!clr_zero_impute_method %in% c("percentage_zeros", "percentage_all", "counts_zeros", "counts_all")) {
     stop("clr_zero_impute_method not found")
   }
@@ -579,12 +579,17 @@ clr <- function(df,
     df <- df + clr_zero_impute_num
   }
   
+  return(df)
+}
+
+
+clr <- function(df) {
   percentage_df <- calc_perc_df(df)
   
   geometric_mean <- apply(percentage_df, 1, function(row) exp(mean(log(row))))
   clr_df <- apply(percentage_df, 2, function(row) log(row) - log(geometric_mean)) %>%
     as.data.frame()
-
+  
   return(clr_df)
 }
 
