@@ -20,6 +20,10 @@ library(gtable)
 library(gridExtra)
 library(grid)
 library(ggplot2)
+library(tidyr)
+library(zCompositions)
+library(Seurat)
+library(ggpubr)
 source("functions.R")
 
 # Set paths
@@ -32,15 +36,13 @@ path_plots <- path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", 
 ## Synthetic example
 
 ```{r fig.height=8, fig.width=25}
-library(gridExtra)
-
 # calculate_geometric_mean <- function(row) {
 #   exp(mean(log(row)))
 # }
 
 a <- t(data.frame(low = c( 0, 0,  0,   10),
-                  medium = c( 0, 0,  2,  100),
-                  high = c( 0, 1, 20, 1000) #, one_low = c( 0, 2, 20, 1000)
+                  medium = c( 0, 0,  1,  100),
+                  high = c( 0, 1, 10, 1000) #, one_low = c( 0, 2, 20, 1000)
                   ))
 colnames(a) <- c("ct1", "ct2", "ct3", "ct4")
 a_plot <- as.data.frame(a)
@@ -139,7 +141,7 @@ df <- rbind(df, d2)
 
 df <- data.frame(df)
 df$V1 <- factor(df$V1, levels = c("low", "medium", "high", "one_low"))
-df$V2 <- factor(df$V2, levels = c("+1", "+1 to all", "+1%", "+1% to all", "+0.1% to all"))
+df$V2 <- factor(df$V2, levels = c("+1", "+1 to all", "+1%", "+1% to all", "+0.1% to all", "+0.1% to all multRepl"))
 
 
 df_long <- reshape2::melt(df, id = c("V1", "V2"))
@@ -170,6 +172,10 @@ legend <- ggpubr::get_legend(p2)
 p2 <- p2 + theme(legend.position = "none")
 
 #Plot your table with table Grob in the library(gridExtra)
+counts_grob_title <- text_grob("Cell counts:", size = 16, just = "left", face = "bold")
+freq_grob_title <- text_grob("Frequencies:", size = 16, just = "left", face = "bold")
+clr_grob_title <- text_grob("CLR:", size = 16, just = "left", face = "bold")
+
 a_grob <- tableGrob(a_plot)
 b_grob <- tableGrob(b_plot)
 b1_grob <- tableGrob(b1_plot)
@@ -192,18 +198,25 @@ d_clr_grob <- tableGrob(d_clr_plot)
 d1_clr_grob <- tableGrob(d1_clr_plot)
 d2_clr_grob <- tableGrob(d2_clr_plot)
 
+np <- length(unique(df$V2))
+np2 <- rep(2, np)
+tn <- 6
+
 #Arrange them as you want with grid.arrange
-lay <- rbind(c(1,2,2,2,2,2,2),
-             c(1,2,2,2,2,2,2),
-             c(1,2,2,2,2,2,2),
-             c(1,2,2,2,2,2,2),
-             c(3:8, NA),
-             c(NA, 9:14),
-             c(NA, 15:20))
+lay <- rbind(c(NA, 1,np2),
+             c(NA, 1,np2),
+             c(NA, 1,np2),
+             c(NA, 1,np2),
+             c(3, tn:(tn+1*(np)-1), NA),
+             c(4, NA, (tn+1*(np)):(tn+2*(np)-1)),
+             c(5, NA, (tn+2*(np)):(tn+3*(np)-1)))
 
 grid.arrange(
   legend,
   p2,
+  counts_grob_title,
+  freq_grob_title,
+  clr_grob_title,
   a_grob,
   b_grob,
   b1_grob,
@@ -227,10 +240,13 @@ grid.arrange(
 
 pdf(file = file.path(path_plots, "zero_imputation_synthetic.pdf"),   # The directory you want to save the file in
     width = 26, # The width of the plot in inches
-    height = 9) # The height of the plot in inches
+    height = 12) # The height of the plot in inches
 grid.arrange(
   legend,
   p2,
+  counts_grob_title,
+  freq_grob_title,
+  clr_grob_title,
   a_grob,
   b_grob,
   b1_grob,
