@@ -16,6 +16,9 @@ output:
 # Load libraries
 
 ```{r}
+library(gtable)
+library(gridExtra)
+library(grid)
 library(ggplot2)
 source("functions.R")
 
@@ -41,68 +44,97 @@ a <- t(data.frame(low = c( 0, 0,  0,   10),
                   ))
 colnames(a) <- c("ct1", "ct2", "ct3", "ct4")
 a_plot <- as.data.frame(a)
+a_perc_plot <- calc_perc_df(a) %>% round(2)
 # a_plot$geom <- round(apply(a_plot, 1, calculate_geometric_mean),2)
 
 b <- a
 b[b==0] <- 1
 b_plot <- as.data.frame(b)
+b_perc_plot <- calc_perc_df(b) %>% round(2)
+b <- calc_perc_df(b)
 # b_plot$geom <- round(apply(b_plot, 1, calculate_geometric_mean),2)
-for(row in 1:dim(a)[1]){
-  b[row,] <- Hotelling::clr(t(b[row,] / sum(b[row,]) * 100))
+for(row in 1:nrow(a)){
+  b[row,] <- Hotelling::clr(b[row,]/100)
 }
 b_clr_plot <- round(b, 2)
-b <- cbind(rownames(a), rep("+1", dim(a)[1]), b)
+b <- cbind(rownames(a), rep("+1", nrow(a)), b)
+colnames(b) <- c("V1", "V2", colnames(a))
 df <- b
 
 b1 <- a
 b1 <- b1+1
 b1_plot <- as.data.frame(b1)
+b1_perc_plot <- calc_perc_df(b1) %>% round(2)
+b1 <- calc_perc_df(b1)
 # b1_plot$geom <- round(apply(b1_plot, 1, calculate_geometric_mean),2)
-for(row in 1:dim(a)[1]){
-  b1[row,] <- Hotelling::clr(t(b1[row,] / sum(b1[row,]) * 100))
+for(row in 1:nrow(a)){
+  b1[row,] <- Hotelling::clr(b1[row,]/100)
 }
 b1_clr_plot <- round(b1, 2)
-b1 <- cbind(rownames(a), rep("+1 to all", dim(a)[1]), b1)
+b1 <- cbind(rownames(a), rep("+1 to all", nrow(a)), b1)
+colnames(b1) <- c("V1", "V2", colnames(a))
 df <- rbind(df, b1)
 
 c <- a
-for(row in 1:dim(a)[1]){
+for(row in 1:nrow(a)){
   c[row,][c[row,] == 0] <- sum(c[row,]/100)
 }
 c_plot <- as.data.frame(c)
+c_perc_plot <- calc_perc_df(c) %>% round(2)
+c <- calc_perc_df(c)
 # c_plot$geom <- round(apply(c_plot, 1, calculate_geometric_mean),2)
-for(row in 1:dim(a)[1]){
-  c[row,] <- Hotelling::clr(t(c[row,] / sum(c[row,]) * 100))
+for(row in 1:nrow(a)){
+  c[row,] <- Hotelling::clr(c[row,]/100)
 }
 c_clr_plot <- round(c, 2)
-c <- cbind(rownames(a), rep("+1%", dim(a)[1]), c)
+c <- cbind(rownames(a), rep("+1%", nrow(a)), c)
+colnames(c) <- c("V1", "V2", colnames(a))
 df <- rbind(df, c)
 
 d <- a
-for(row in 1:dim(a)[1]){
+for(row in 1:nrow(a)){
   d[row,] <- d[row,] + sum(d[row,]/100)
 }
 d_plot <- as.data.frame(d)
+d_perc_plot <- calc_perc_df(d) %>% round(2)
+d <- calc_perc_df(d)
 # d_plot$geom <- round(apply(d_plot, 1, calculate_geometric_mean),2)
-for(row in 1:dim(a)[1]){
-  d[row,] <- Hotelling::clr(t(d[row,] / sum(d[row,]) * 100))
+for(row in 1:nrow(a)){
+  d[row,] <- Hotelling::clr(d[row,]/100)
 }
 d_clr_plot <- round(d, 2)
-d <- cbind(rownames(a), rep("+1% to all", dim(a)[1]), d)
+d <- cbind(rownames(a), rep("+1% to all", nrow(a)), d)
+colnames(d) <- c("V1", "V2", colnames(a))
 df <- rbind(df, d)
 
 d1 <- a
-for(row in 1:dim(a)[1]){
+for(row in 1:nrow(a)){
   d1[row,] <- d1[row,] + sum(d1[row,]/1000)
 }
 d1_plot <- round(as.data.frame(d1), 2)
+d1_perc_plot <- calc_perc_df(d1) %>% round(2)
+d1 <- calc_perc_df(d1)
 # d1_plot$geom <- round(apply(d1_plot, 1, calculate_geometric_mean),2)
-for(row in 1:dim(a)[1]){
-  d1[row,] <- Hotelling::clr(t(d1[row,] / sum(d1[row,]) * 100))
+for(row in 1:nrow(a)){
+  d1[row,] <- Hotelling::clr(d1[row,]/100)
 }
 d1_clr_plot <- round(d1, 2)
-d1 <- cbind(rownames(a), rep("+0.1% to all", dim(a)[1]), d1)
+d1 <- cbind(rownames(a), rep("+0.1% to all", nrow(a)), d1)
+colnames(d1) <- c("V1", "V2", colnames(a))
 df <- rbind(df, d1)
+
+d2 <- a
+d2 <- d2 %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(d2)), z.warning = 1, frac = 1)
+rownames(d2) <- rownames(a)
+d2_perc_plot <- round(as.data.frame(d2), 2)
+# d1_plot$geom <- round(apply(d1_plot, 1, calculate_geometric_mean),2)
+for(row in 1:nrow(a)){
+  d2[row,] <- Hotelling::clr(d2[row,]/100)
+}
+d2_clr_plot <- round(d2, 2)
+d2 <- cbind(rownames(a), rep("+0.1% to all multRepl", nrow(a)), d2)
+colnames(d2) <- c("V1", "V2", colnames(a))
+df <- rbind(df, d2)
 
 
 df <- data.frame(df)
@@ -145,19 +177,29 @@ c_grob <- tableGrob(c_plot)
 d_grob <- tableGrob(d_plot)
 d1_grob <- tableGrob(d1_plot)
 
+a_perc_grob <- tableGrob(a_perc_plot)
+b_perc_grob <- tableGrob(b_perc_plot)
+b1_perc_grob <- tableGrob(b1_perc_plot)
+c_perc_grob <- tableGrob(c_perc_plot)
+d_perc_grob <- tableGrob(d_perc_plot)
+d1_perc_grob <- tableGrob(d1_perc_plot)
+d2_perc_grob <- tableGrob(d2_perc_plot)
+
 b_clr_grob <- tableGrob(b_clr_plot)
 b1_clr_grob <- tableGrob(b1_clr_plot)
 c_clr_grob <- tableGrob(c_clr_plot)
 d_clr_grob <- tableGrob(d_clr_plot)
 d1_clr_grob <- tableGrob(d1_clr_plot)
+d2_clr_grob <- tableGrob(d2_clr_plot)
 
 #Arrange them as you want with grid.arrange
-lay <- rbind(c(1,2,2,2,2,2),
-             c(1,2,2,2,2,2),
-             c(1,2,2,2,2,2),
-             c(1,2,2,2,2,2),
-             c(3:8),
-             c(NA, 9:13))
+lay <- rbind(c(1,2,2,2,2,2,2),
+             c(1,2,2,2,2,2,2),
+             c(1,2,2,2,2,2,2),
+             c(1,2,2,2,2,2,2),
+             c(3:8, NA),
+             c(NA, 9:14),
+             c(NA, 15:20))
 
 grid.arrange(
   legend,
@@ -168,16 +210,23 @@ grid.arrange(
   c_grob,
   d_grob,
   d1_grob,
+  b_perc_grob,
+  b1_perc_grob,
+  c_perc_grob,
+  d_perc_grob,
+  d1_perc_grob,
+  d2_perc_grob,
   b_clr_grob,
   b1_clr_grob,
   c_clr_grob,
   d_clr_grob,
   d1_clr_grob,
+  d2_clr_grob,
   layout_matrix = lay
 )
 
 pdf(file = file.path(path_plots, "zero_imputation_synthetic.pdf"),   # The directory you want to save the file in
-    width = 22, # The width of the plot in inches
+    width = 26, # The width of the plot in inches
     height = 9) # The height of the plot in inches
 grid.arrange(
   legend,
@@ -188,11 +237,18 @@ grid.arrange(
   c_grob,
   d_grob,
   d1_grob,
+  b_perc_grob,
+  b1_perc_grob,
+  c_perc_grob,
+  d_perc_grob,
+  d1_perc_grob,
+  d2_perc_grob,
   b_clr_grob,
   b1_clr_grob,
   c_clr_grob,
   d_clr_grob,
   d1_clr_grob,
+  d2_clr_grob,
   layout_matrix = lay
 )
 dev.off()
