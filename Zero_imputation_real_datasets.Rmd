@@ -98,11 +98,10 @@ res_list[[paste0(ds, "_perc_all_1")]] <- df %>% impute_zeros(clr_zero_impute_met
 res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_asinsqrt")]] <- df %>% calc_perc_df() %>% mutate(across(everything(), ~ . / 100)) %>% sqrt() %>% asin() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_impRZilr")]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multLN_z0.9")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_0.01")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_z0.9_perc_all_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multLN")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_0.01")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
 ```
 
 
@@ -154,11 +153,10 @@ res_list[[paste0(ds, "_perc_all_1")]] <- df %>% impute_zeros(clr_zero_impute_met
 res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_asinsqrt")]] <- df %>% calc_perc_df() %>% mutate(across(everything(), ~ . / 100)) %>% sqrt() %>% asin() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_impRZilr")]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multLN_z0.9")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_0.01")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_z0.9_perc_all_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multLN")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_0.01")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
 ```
 
 
@@ -171,7 +169,7 @@ ds_name <- "GongSharma_2024_PrePrintTBD"
 path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
 path_output <- file.path(path_root, "output")
 
-seurat <- load_seurat_object("gongsharma_all.h5ad")
+seurat <- load_seurat_object("data/gongsharma_all.h5ad")
 seurat$Sample <- seurat$specimen.specimenGuid
 
 
@@ -196,11 +194,10 @@ res_list[[paste0(ds, "_perc_all_1")]] <- df %>% impute_zeros(clr_zero_impute_met
 res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_asinsqrt")]] <- df %>% calc_perc_df() %>% mutate(across(everything(), ~ . / 100)) %>% sqrt() %>% asin() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_impRZilr")]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multLN_z0.9")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_0.01")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_z0.9_perc_all_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multLN")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_0.01")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
 ```
 
 
@@ -208,7 +205,7 @@ res_list[[paste0(ds, "_multRepl_z0.9_perc_all_0.1")]] <- df %>% calc_perc_df() %
 
 
 ```{r}
-seurat <- load_seurat_object("gongsharma_cmv_females.h5ad")
+seurat <- load_seurat_object("data/gongsharma_cmv_females.h5ad")
 seurat$Sample <- seurat$specimen.specimenGuid
 
 label_condition <- "subject.cmv"
@@ -232,11 +229,10 @@ res_list[[paste0(ds, "_perc_all_1")]] <- df %>% impute_zeros(clr_zero_impute_met
 res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_asinsqrt")]] <- df %>% calc_perc_df() %>% mutate(across(everything(), ~ . / 100)) %>% sqrt() %>% asin() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_impRZilr")]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multLN_z0.9")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_0.01")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_z0.9_perc_all_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multLN")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_0.01")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
 ```
 
 
@@ -244,7 +240,7 @@ res_list[[paste0(ds, "_multRepl_z0.9_perc_all_0.1")]] <- df %>% calc_perc_df() %
 
 
 ```{r}
-seurat <- load_seurat_object("gongsharma_age_females_cmvneg.h5ad")
+seurat <- load_seurat_object("data/gongsharma_age_females_cmvneg.h5ad")
 seurat$Sample <- seurat$specimen.specimenGuid
 seurat$age <- as.factor(ifelse(seurat$sample.subjectAgeAtDraw < 50, "young", "old"))
 
@@ -269,11 +265,10 @@ res_list[[paste0(ds, "_perc_all_1")]] <- df %>% impute_zeros(clr_zero_impute_met
 res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_asinsqrt")]] <- df %>% calc_perc_df() %>% mutate(across(everything(), ~ . / 100)) %>% sqrt() %>% asin() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_impRZilr")]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multLN_z0.9")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_0.01")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_perc_all_1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_z0.9_perc_all_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multLN")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_0.01")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
 ```
 
 
@@ -303,6 +298,13 @@ df_results <- df_results %>%
     values_to = "values"
   ) %>%
   as.data.frame()
+
+levels <- names(res_list)[grepl("zhang", names(res_list))]
+levels <- sub("zhang_", "", levels)
+
+df_results$imputation_method <- factor(df_results$imputation_method, levels = levels)
+
+
 
 ggplot(df_results, aes(x = imputation_method, y = values)) +
   geom_bar(stat = "identity", position = position_dodge()) +
@@ -341,10 +343,12 @@ ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_barplot_sepa
        height = 7)
 
 
+
 df_results %>%
   filter(score_method == "cluster_score") %>%
   group_by(imputation_method) %>%
-  summarise(mean = mean(values), sem = sd(values) / sqrt(length(values))) %>%
+  summarize(mean = mean(values), sem = sd(values) / sqrt(length(values))) %>%
+  
   ggplot(aes(x = imputation_method, y = mean)) + 
   geom_bar(stat = "identity", position = position_dodge()) +
   # stat_summary(fun.y = mean, geom = "bar") +
@@ -355,10 +359,16 @@ df_results %>%
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
   NoLegend()
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_barplot.pdf"),
-       width = 5,
-       height = 4)
+       width = 4,
+       height = 3)
 
+```
 
+# Test for statistical significance
+
+To few data points for statistical significance
+
+```{r}
 library(rstatix)
 
 df_results_cluster <- df_results %>% filter(score_method == "cluster_score")
@@ -380,59 +390,6 @@ rstatix::get_anova_table(res)
 
 pair <- df_results_cluster %>%
   rstatix::pairwise_t_test(values~imputation_method, paired=TRUE, p.adjust.method = "BH" ) 
-data.frame(pair) 
-```
-
-```{r fig.height=5, fig.width=16}
-df_plot <- data.frame(values = unlist(res_list),
-                      dataset = dataset,
-                      imputation_method = imputation_method,
-                      score = sapply(str_split(names(unlist(res_list)), "\\."), function(x) x[length(x)]))
-
-ggplot(df_plot, aes(x = imputation_method, y = values)) +
-  geom_bar(stat = "identity", position = "stack") +
-  # labs(title = "Grouped Bar Plot",
-  #      x = "Dataset",
-  #      y = "Values",
-  #      fill = "Score") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
-        legend.position = "none") +
-  facet_grid(~dataset,
-             space  = "free",
-             scales = "free")
-
-ggplot(df_plot, aes(x = imputation_method, y = values, group = score, color = score)) +
-  geom_line() +
-  geom_point(aes(shape=score)) +
-  # labs(title = "Grouped Bar Plot",
-  #      x = "Dataset",
-  #      y = "Values",
-  #      fill = "Score") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-  facet_grid(~dataset,
-             space  = "free",
-             scales = "free")
-
-df_plot <- data.frame(values = unlist(res_list),
-                      dataset = dataset,
-                      imputation_method = middle_parts,
-                      score = sapply(str_split(names(unlist(res_list)), "\\."), function(x) x[length(x)]))
-df_plot$imputation_method <- gsub("\\.sil_score|\\.mod_score", "", df_plot$imputation_method)
-df_plot$ds_row <- factor(ifelse(grepl(pattern = "gongsharma", df_plot$dataset), 1, 2))
-ggplot(df_plot, aes(x = imputation_method, y = values, fill = score)) +
-  geom_bar(stat = "identity", position = position_dodge(), width = 0.7) +
-  # labs(title = "Grouped Bar Plot",
-  #      x = "Dataset",
-  #      y = "Values",
-  #      fill = "Score") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.position = "none") +
-  facet_grid(scales = "free",
-             rows = vars(score), cols = vars(dataset))
-ggsave(file.path(path_plots, "zero_imputation_real_datasets_detailed_barplot.pdf"),
-       width = 12,
-       height = 7)
+data.frame(pair)
 ```
 
