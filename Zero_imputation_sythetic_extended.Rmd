@@ -18,6 +18,10 @@ output:
 ```{r}
 library(dplyr)
 library(ggplot2)
+library(factoextra)
+library(simstudy)
+library(easyCODA)
+
 source("functions.R")
 
 # Set paths
@@ -32,10 +36,6 @@ path_plots <- path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", 
 Why not use counts?
 
 ```{r fig.height=3, fig.width=5}
-library(simstudy)
-library(factoextra)
-library(easyCODA)
-
 # Define group
 def <- defData(varname = "group", formula = "1;1;1", dist = "trtAssign")
 def <- defRepeat(def, 2, "ct_const_", formula = "10", variance = 0.1,
@@ -107,10 +107,6 @@ fviz_pca(prcomp(df_clr[,3:5]),
 Why not use freq?
 
 ```{r}
-library(simstudy)
-library(factoextra)
-library(easyCODA)
-
 # Define group
 def <- defData(varname = "group", formula = "1;1;1", dist = "trtAssign")
 def <- defRepeat(def, 1, "ct_const_low_", formula = "3", variance = 0,
@@ -171,10 +167,6 @@ fviz_pca(prcomp(df_clr[,3:df_cols]),
 Why not use freq?
 
 ```{r}
-library(simstudy)
-library(factoextra)
-library(easyCODA)
-
 # Define group
 def <- defData(varname = "group", formula = "1;1;1", dist = "trtAssign")
 def <- defRepeat(def, 1, "ct_zero_imputed", formula = "3", variance = 0,
@@ -229,7 +221,6 @@ fviz_pca(prcomp(df_clr[,3:df_cols]),
          # label = "none",
          mean.point = FALSE)
 ```
-
 
 
 show example why ratios matter
