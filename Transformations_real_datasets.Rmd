@@ -1,0 +1,1501 @@
+---
+title: "Compositional data analysis of the Gong & Sharma et al. dataset"
+author: "Christian Halter"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+
+# Load libraries
+
+```{r, include=FALSE, fig.width=16, fig.height=12}
+# renv::init()
+# renv::snapshot()
+
+# install.packages("/Users/christianhalter/Desktop/scooter_1.0.0.tar.gz", repos = NULL, type = "source")
+
+library(scooter)
+library(tidyverse)
+library(plotly)
+library(ggplot2)
+library(ggpubr)
+library(factoextra)
+library(compositions)
+library(pROC)
+library(mclust)
+source("functions.R")
+
+library(Seurat)
+# devtools::install_github('satijalab/seurat-data')
+library(SeuratData)
+# install.packages("hdf5r")
+# remotes::install_github("mojaveazure/seurat-disk")
+library(SeuratDisk)
+
+# install.packages("devtools")
+# devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
+library(EPIC)
+# BiocManager::install("MOFA2")
+library(reticulate)
+library(basilisk)
+library("MOFA2")
+# BiocManager::install("fgsea")
+# BiocManager::install("sva")
+# devtools::install_github("kharchenkolab/scITD")
+library(scITD)
+# install.packages("ncdf4")
+library(ncdf4)
+library(arrow)
+
+library(dplyr)
+
+my_seed <- 123
+set.seed(my_seed)
+```
+
+# Set paths
+
+```{r}
+ds_name <- "GongSharma_2024_PrePrintTBD"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_data <- file.path(path_root, "data")
+path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
+```
+
+
+# Load dataset
+Manually downloaded from:
+"<https://apps.allenimmunology.org/aifi/insights/dynamics-imm-health-age/downloads/>"
+
+```{r}
+files <- list(L1 = file.path(path_data, "sound_life_AIFI_L1_frequencies.csv"),
+              L2 = file.path(path_data, "sound_life_AIFI_L2_frequencies.csv"),
+              L3 = file.path(path_data, "sound_life_AIFI_L3_frequencies.csv"))
+
+data <- list()
+
+for (f in names(files)) {
+  data[[f]] <- read.csv(files[[f]])
+}
+```
+
+
+
+# Process data into wide dataframe
+
+```{r}
+dproc <- list()
+
+for (layer in names(data)) {
+
+  dproc$meta <- data[[layer]] %>%
+    select(c(1:14)) %>%
+    unique() %>% 
+    mutate_at(1:14, as.factor)
+  
+  ctable <- data[[layer]] %>%
+    select(c(14,
+             !!sym(paste0("AIFI_", layer)),
+             !!sym(paste0("AIFI_", layer, "_count")),
+             !!sym(paste0("AIFI_", layer, "_frac_total")),
+             !!sym(paste0("AIFI_", layer, "_clr")))) %>%
+    pivot_wider(names_from = !!sym(paste0("AIFI_", layer)),
+                values_from = c(!!sym(paste0("AIFI_", layer, "_count")),
+                                !!sym(paste0("AIFI_", layer, "_frac_total")),
+                                !!sym(paste0("AIFI_", layer, "_clr")))) %>% 
+    column_to_rownames(var = "specimen.specimenGuid")
+  
+  i <- 1
+  n_cts <- length(unique(data[[layer]][[paste0("AIFI_", layer)]]))
+  
+  dproc[[layer]]$cell_counts <- ctable[, i:(i + n_cts - 1)] %>%
+    mutate_all(~replace_na(., 0)) %>%
+    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_count_"), "") %>%
+                 str_replace_all(., " ", "_")) %>%
+    select(-Platelet, -Erythrocyte)
+
+  i <- i + n_cts
+  dproc[[layer]]$freq <- ctable[, i:(i + n_cts - 1)] %>%
+    mutate_all(~replace_na(., 0)) %>%
+    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_frac_total_"), "") %>%
+                 str_replace_all(., " ", "_")) %>%
+    select(-Platelet, -Erythrocyte)
+  i <- i + n_cts
+  dproc[[layer]]$clr_authors <- ctable[, i:(i + n_cts - 1)] %>%
+    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_clr_"), "") %>%
+                 str_replace_all(., " ", "_")) %>%
+    select(-Platelet, -Erythrocyte)
+  
+  df_counts <- dproc[[layer]]$cell_counts
+
+  df_counts_1count_zero <- df_counts
+  df_counts_1count_zero[df_counts_1count_zero == 0] <- 1
+  dproc[[layer]]$clr_1count_zero <- df_counts_1count_zero %>% calc_perc_df() %>% clr()
+  
+  dproc[[layer]]$clr_1count_all <- (df_counts + 1) %>% calc_perc_df() %>% clr()
+  
+  dproc[[layer]]$clr_0.1perc <- df_counts %>%
+    impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+    calc_perc_df() %>%
+    clr()
+}
+
+saveRDS(dproc, file.path(path_data, "cell_type_compositions.rds"))
+```
+
+
+## Create scoot objects based on author annotation
+
+```{r}
+for (layer in names(data)) {
+  df_counts <- dproc[[layer]]$cell_counts
+  df_freq <- dproc[[layer]]$freq * 100
+  df_clr <- dproc[[layer]]$clr_0.1perc
+  
+  cols <- colnames(df_counts)
+  
+  df_counts$scoot_sample <- rownames(df_counts)
+  df_freq$scoot_sample <- rownames(df_freq)
+  df_clr$scoot_sample <- rownames(df_clr)
+
+  df_counts_long <- df_counts %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "cell_counts")
+  df_freq_long <- df_freq %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "freq")
+  df_clr_long <- df_clr %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "clr")
+  df_long <- dplyr::left_join(df_counts_long,
+                              df_freq_long,
+                              by = c("scoot_sample", "celltype"))
+  df_long <- dplyr::left_join(df_long,
+                              df_clr_long,
+                              by = c("scoot_sample", "celltype"))
+  
+  ctable <- list(layer_1 = df_long)
+  
+  meta <- dproc$meta
+  colnames(meta)[colnames(meta) == "specimen.specimenGuid"] <- "scoot_sample"
+  
+  assign(paste0("scoot_summary_", layer, "_authors"),
+         methods::new("scoot",
+                      data = list(composition = ctable),
+                      metadata = meta,
+                      version = packageVersion("scooter"))
+  )
+}
+```
+
+# ---------------------------------------------------------------
+
+# Introduction schematic
+GongSharma highest resolution -> best clustering example so far
+
+```{r}
+feat_mat <- dproc$L3$clr_0.1perc
+res.pca <- prcomp(feat_mat)
+
+eigenvalues <- res.pca$sdev^2
+round(eigenvalues/sum(eigenvalues),3)
+plot(cumsum(eigenvalues/sum(eigenvalues)))
+
+# Create a scree plot
+plot(eigenvalues, type = "b",
+     xlab = "Principal Component",
+     ylab = "Eigenvalue")
+plot(eigenvalues/sum(eigenvalues)*100, type = "b",
+     xlab = "Principal Component",
+     ylab = "Percentage of Variance Explained")
+
+
+feat_mat <- res.pca$x[, 1:3]
+
+dist_mat <- dist(feat_mat)
+# Perform hierarchical clustering
+hc <- stats::hclust(dist_mat, method = "ward.D2")
+labels <- stats::cutree(hc, k = 4)
+
+# labels <- kmeans(feat_mat, 2)$cluster
+# labels <- cluster::pam(feat_mat, k = 2)$cluster
+
+# adj_graph <- igraph::as.undirected(cccd::nng(feat_mat, k = 2))
+# r <- quantile(igraph::strength(adj_graph))[2] / (igraph::gorder(adj_graph) - 1) / 4
+# r <- 0.0000000001
+# labels <- igraph::cluster_leiden(adj_graph, resolution = r)$membership
+# 
+# dbscan_clustres <- dbscan::hdbscan(feat_mat, minPts = 20)
+# plot(dbscan_clustres, show_flat = TRUE)
+# labels <- dbscan_clustres$cluster
+
+factoextra::fviz_pca(res.pca,
+                     habillage = labels,
+                     # addEllipses = TRUE,
+                     label = "var",
+                     pointsize = 1,
+                     invisible = c("var", "quali"),
+                     geom = "point") +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+  guides(shape=guide_legend(title="Cluster"), color=guide_legend(title="Cluster")) +
+  ggtitle("Unsupervised clustering")
+ggsave(file.path(path_plots, "workflow_schema_clustering_unsupervised.pdf"),
+       width = 4,
+       height = 3)
+
+factoextra::fviz_pca(res.pca,
+                     habillage = dproc$meta$subject.cmv,
+                     # addEllipses = TRUE,
+                     label = "var",
+                     pointsize = 1,
+                     invisible = c("var", "quali"),
+                     geom = "point") +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+  guides(shape=guide_legend(title="CMV"), color=guide_legend(title="CMV")) +
+  ggtitle("Biological variable 1\nCMV infection status")
+ggsave(file.path(path_plots, "workflow_schema_clustering_CMV.pdf"),
+       width = 4,
+       height = 3)
+
+factoextra::fviz_pca(res.pca,
+                     habillage = factor(ifelse(dproc$meta$cohort.cohortGuid == "BR1", "Young", "Advanced"), levels = c("Young", "Advanced")),
+                     # addEllipses = TRUE,
+                     label = "var",
+                     pointsize = 1,
+                     invisible = c("var", "quali"),
+                     geom = "point") +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+  guides(shape=guide_legend(title="Age"), color=guide_legend(title="Age")) +
+  ggtitle("Biological variable 2\nAge")
+ggsave(file.path(path_plots, "workflow_schema_clustering_age.pdf"),
+       width = 4,
+       height = 3)
+```
+
+```{r fig.height=6, fig.width=16}
+composition_boxplot(scoot_object = scoot_summary_L3_authors)
+composition_boxplot(scoot_object = scoot_summary_L3_authors,
+                    group_by = "subject.cmv")
+composition_boxplot(scoot_object = scoot_summary_L3_authors,
+                    group_by = "cohort.cohortGuid")
+composition_boxplot(scoot_object = scoot_summary_L3_authors,
+                    group_by = "cohort.cohortGuid",
+                    facet_by = "subject.cmv")
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Plot number of samples and cell types lost per granularity
+
+```{r}
+# Apply function to each dataframe
+df1 <- dproc[["L1"]][["cell_counts"]]
+df2 <- dproc[["L2"]][["cell_counts"]]
+df3 <- dproc[["L3"]][["cell_counts"]]
+
+# Assume df1, df2, df3 are your three dataframes
+dfs <- list(Low = df1, Medium = df2, High = df3)
+
+
+# Function to calculate percentage of rows/columns with at least one zero
+compute_zero_percentage <- function(df, granularity) {
+  total_samples <- nrow(df)
+  total_celltypes <- ncol(df)
+  
+  samples_with_zeros <- sum(rowSums(df == 0) > 0) / total_samples * 100
+  celltypes_with_zeros <- sum(colSums(df == 0) > 0) / total_celltypes * 100
+  
+  granularity_labels <- paste0(granularity, "\n(", total_celltypes, " cell types)")
+  
+  data.frame(
+    Granularity = factor(granularity_labels, levels = granularity_labels),
+    Category = c("Samples", "Cell Types"),
+    Percentage = c(samples_with_zeros, celltypes_with_zeros)
+  )
+}
+
+# Compute percentages for all dataframes
+zero_percentages <- bind_rows(
+  lapply(names(dfs), function(n) compute_zero_percentage(dfs[[n]], n))
+)
+
+# Plot
+ggplot(zero_percentages, aes(x = Granularity, y = Percentage, group = Category, color = Category, label = round(Percentage, 1))) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  geom_text(vjust=-1, show.legend  = F) +
+  theme_minimal() +
+  labs(title = "Percentage of samples or cell types\nwith at least one zero",
+       x = "Granularity",
+       y = "Percentage (%)",
+       color = "Category") +
+  theme(text = element_text(size = 14)) +
+  ylim(0,100)
+ggsave(file.path(path_plots, "coda_numberzeros.pdf"), width = 6, height = 4)
+```
+
+# ---------------------------------------------------------------
+
+
+## Test on real datasets
+
+```{r}
+results_list <- list()
+```
+
+
+### Zhang et al. dataset
+
+```{r}
+ds_name <- "ZhangY_2022_34653365"
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+path_output_samples <- file.path(path_output, "samples")
+
+obj.list <- read_objs(path_output_samples)
+
+# Exclude samples that consist mainly of one cell type as outliers
+samples_exclude <- c("Pre_P012_b", "Pre_P013_t")
+obj.list <- obj.list[!names(obj.list) %in% samples_exclude]
+
+samples_clearcut <- c()
+
+for (i in names(obj.list)) {
+  if (obj.list[[i]]@meta.data$Treatment[1] %in% c("Pre") &
+      !(obj.list[[i]]@meta.data$Clinical.efficacy.[1] %in% c("-"))) {
+    samples_clearcut <- c(samples_clearcut, i)
+  }
+}
+
+metacols_to_keep <- c("Sample", "Tissue", "layer1", "layer2")
+
+for (i in samples_clearcut) {
+  print(i)
+  
+  obj <- obj.list[[i]]
+  Idents(obj) <- "Sample"
+  obj@meta.data <- obj@meta.data[colnames(obj@assays$RNA$counts), metacols_to_keep]
+
+  if (i == samples_clearcut[1]) {
+    seurat <- obj
+  } else {
+    seurat <- merge(seurat, obj)
+  }
+}
+
+rm(obj.list); gc()
+
+label_condition <- "Tissue"
+low_res_ct_col <- "layer1"
+hi_res_ct_col <- "layer2"
+
+
+count_mat <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
+labels <- as.factor(get_labels(seurat, label_condition))
+
+ds <- "zhang"
+results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
+                                   methods = c(
+                                     "counts",
+                                     "freq",
+                                     "asin_sqrt",
+                                     "alr_randref",
+                                     "alr_mincvref",
+                                     "clr"
+                                   ))
+results_list[[ds]] <- results_list[[ds]] %>%
+  group_by(method) %>%
+  summarize(silhouette = mean(silhouette),
+            modularity = mean(modularity),
+            clustering = mean(clustering)) %>%
+  ungroup()
+results_list[[ds]]$dataset <- ds
+```
+
+
+
+### Stephenson et al. dataset
+
+
+```{r}
+# Set paths
+ds_name <- "MitchelJ_2023_PrePrintTBD"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+
+seurat <- readRDS(file.path(path_output, sprintf("%s_Stephenson_preprocessed.rds", ds_name)))
+
+seurat <- subset(seurat, subset = Site == "Ncl")
+seurat <- subset(seurat, subset = Status %in% c("Healthy", "Covid"))
+seurat$Days_from_onset <- as.character(seurat$Days_from_onset)
+seurat$Days_from_onset[seurat$Days_from_onset == "Healthy"] <- 0
+seurat$Days_from_onset <- as.numeric(seurat$Days_from_onset)
+seurat <- subset(seurat, subset = Days_from_onset < 10)
+
+seurat$sample_id <- as.character(seurat$sample_id)
+samples_exclude <- c("BGCV10_CV0198", "MH8919230")
+samples_subset <- unique(seurat$sample_id[!seurat$sample_id %in% samples_exclude])
+seurat <- subset(seurat, subset = sample_id %in% samples_subset)
+
+
+label_condition <- "Status"
+low_res_ct_col <- "initial_clustering"
+hi_res_ct_col <- "full_clustering"
+
+
+count_mat <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
+labels <- as.factor(get_labels(seurat, label_condition))
+
+ds <- "stephenson"
+results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
+                                   methods = c(
+                                     "counts",
+                                     "freq",
+                                     "asin_sqrt",
+                                     "alr_randref",
+                                     "alr_mincvref",
+                                     "clr"
+                                   ))
+results_list[[ds]] <- results_list[[ds]] %>%
+  group_by(method) %>%
+  summarize(silhouette = mean(silhouette),
+            modularity = mean(modularity),
+            clustering = mean(clustering)) %>%
+  ungroup()
+results_list[[ds]]$dataset <- ds
+```
+
+
+### Gong and Sharma et al. dataset (all CMV)
+
+
+```{r}
+# Set paths
+ds_name <- "GongSharma_2024_PrePrintTBD"
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+
+seurat <- load_seurat_object("data/gongsharma_all.h5ad")
+seurat$Sample <- seurat$specimen.specimenGuid
+
+
+label_condition <- "subject.cmv"
+low_res_ct_col <- "AIFI_L1"
+hi_res_ct_col <- "AIFI_L3"
+
+count_mat <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
+labels <- as.factor(get_labels(seurat, label_condition))
+
+ds <- "gongsharma_allcmv"
+results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
+                                   methods = c(
+                                     "counts",
+                                     "freq",
+                                     "asin_sqrt",
+                                     "alr_randref",
+                                     "alr_mincvref",
+                                     "clr"
+                                   ))
+results_list[[ds]] <- results_list[[ds]] %>%
+  group_by(method) %>%
+  summarize(silhouette = mean(silhouette),
+            modularity = mean(modularity),
+            clustering = mean(clustering)) %>%
+  ungroup()
+results_list[[ds]]$dataset <- ds
+```
+
+
+#### CMV (females)
+
+
+```{r}
+seurat <- load_seurat_object("data/gongsharma_cmv_females.h5ad")
+seurat$Sample <- seurat$specimen.specimenGuid
+
+label_condition <- "subject.cmv"
+low_res_ct_col <- "AIFI_L1"
+hi_res_ct_col <- "AIFI_L3"
+
+count_mat <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
+labels <- as.factor(get_labels(seurat, label_condition))
+
+ds <- "gongsharma_cmvfemales"
+results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
+                                   methods = c(
+                                     "counts",
+                                     "freq",
+                                     "asin_sqrt",
+                                     "alr_randref",
+                                     "alr_mincvref",
+                                     "clr"
+                                   ))
+results_list[[ds]] <- results_list[[ds]] %>%
+  group_by(method) %>%
+  summarize(silhouette = mean(silhouette),
+            modularity = mean(modularity),
+            clustering = mean(clustering)) %>%
+  ungroup()
+results_list[[ds]]$dataset <- ds
+```
+
+
+#### Age (females cmvneg)
+
+
+```{r}
+seurat <- load_seurat_object("data/gongsharma_age_females_cmvneg.h5ad")
+seurat$Sample <- seurat$specimen.specimenGuid
+seurat$age <- as.factor(ifelse(seurat$sample.subjectAgeAtDraw < 50, "young", "old"))
+
+label_condition <- "age"
+low_res_ct_col <- "AIFI_L1"
+hi_res_ct_col <- "AIFI_L3"
+
+count_mat <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
+labels <- as.factor(get_labels(seurat, label_condition))
+
+ds <- "gongsharma_agefemalescmvneg"
+results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
+                                   methods = c(
+                                     "counts",
+                                     "freq",
+                                     "asin_sqrt",
+                                     "alr_randref",
+                                     "alr_mincvref",
+                                     "clr"
+                                   ))
+results_list[[ds]] <- results_list[[ds]] %>%
+  group_by(method) %>%
+  summarize(silhouette = mean(silhouette),
+            modularity = mean(modularity),
+            clustering = mean(clustering)) %>%
+  ungroup()
+results_list[[ds]]$dataset <- ds
+```
+
+
+## Plot all
+
+```{r}
+# df_plot <- data.frame(values = unlist(res_list) / length(unique(dataset)) / length(unique(scores)),
+#                       dataset = dataset,
+#                       imputation_method = middle_parts,
+#                       score = sapply(str_split(names(unlist(res_list)), "\\."), function(x) x[length(x)]))
+# summarized_df <- df_plot %>%
+#   group_by(imputation_method) %>%
+#   summarize(values = sum(values))
+# summarized_df$score <- factor(sapply(str_split(summarized_df$imputation_method, "\\."), function(x) x[length(x)]))
+# summarized_df$imputation_method <- gsub("\\.sil_score|\\.mod_score", "", summarized_df$imputation_method)
+
+summarized_df <- Reduce(rbind, results_list)
+summarized_df <- summarized_df %>%
+  pivot_longer(
+    cols = c(silhouette, modularity, clustering),
+    names_to = "score_method",
+    values_to = "values"
+  )
+
+ggplot(summarized_df, aes(x = method, y = values, fill = score_method)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(x = "Imputation method",
+       y = "Separation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  facet_grid(scales = "free",
+             rows = vars(score_method), cols = vars(dataset))
+ggsave(file.path(path_plots, "transformations_real_datasets_detailed_barplot_separatescores.pdf"),
+       width = 6,
+       height = 4)
+
+
+
+summarized_df <- summarized_df %>%
+  group_by(score_method, method) %>%
+  summarize(values = mean(values)) %>%
+  ungroup()
+
+ggplot(summarized_df, aes(x = method, y = values, fill = score_method)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(x = "Imputation method",
+       y = "Separation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+ggplot(summarized_df, aes(x = method, y = values, fill = score_method)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(x = "Imputation method",
+       y = "Separation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  facet_grid(scales = "free",
+             rows = vars(score_method))
+ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot_separatescores.pdf"),
+       width = 4,
+       height = 4)
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Sensitivity: freq vs clr vs alr vs ilr
+
+CMV negative BR1 female samples are used, as the biggest sources of variation has been removed (subset to specific groups according to major axis of variance).
+Subsequently, one or multiple cell types will be artificially increased/decreased to simulate differential abundance.
+
+
+## L1 anotations
+
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L1"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+perc_diffs <- c(10, 25, 50, 75, 100, 200, 300, 500)
+n_ct_to_select <- c(1, 2, 3)
+
+results <- datrans(count_mat = df_counts, labels = NULL, perc_diffs = perc_diffs, n_ct_to_select = n_ct_to_select)
+```
+
+### Summarized results
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, perc_diff) %>%
+    mutate(silhouette = mean(silhouette),
+           modularity = mean(modularity),
+           clustering = mean(clustering)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, perc_diff), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = silhouette, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = silhouette, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = modularity, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = clustering, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+
+
+### Show example PCA
+
+```{r}
+nct <- 3
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+
+plot_pca(df_counts_temp, labels, title = "Counts")
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels, title = "Freq")
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq/100))
+plot_pca(data, labels, title = "asinsqrt")
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels, title = "CLR")
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels, title = "CLR PCA")
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+
+
+## L2 anotations
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L2"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+perc_diffs <- c(10, 25, 50, 75, 100, 200, 300, 500)
+n_ct_to_select <- c(1, 3, 5, 10)
+reps <- 1:20
+
+results <- datrans(count_mat = df_counts, labels = NULL, perc_diffs = perc_diffs, n_ct_to_select = n_ct_to_select)
+```
+
+
+### Summarized results
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, perc_diff) %>%
+    mutate(silhouette = mean(silhouette),
+           modularity = mean(modularity),
+           clustering = mean(clustering)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, perc_diff), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = silhouette, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = silhouette, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = modularity, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = clustering, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+
+### Show example PCA
+
+```{r}
+nct <- 10
+pd <- 100
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+
+plot_pca(df_counts_temp, labels, title = "Counts")
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels, title = "Freq")
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq/100))
+plot_pca(data, labels, title = "asinsqrt")
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels, title = "CLR")
+plot_roc_pcad1(data, labels)
+
+res.pca <- prcomp(data)
+p <- factoextra::fviz_pca(res.pca,
+                          habillage = labels,
+                          label = "var",
+                          addEllipses = TRUE,
+                          pointsize = 3,
+                          invisible = c("var", "quali"),
+                          geom = "point") +
+  scale_shape_manual(values = rep(19, length(unique(labels)))) +
+  coord_equal() + NoLegend() + ggtitle("")
+ggsave(file.path(path_plots, "workflow_schema_clustering_example.pdf"), width = 3, height = 3)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels, title = "CLR PCA")
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+
+### Mean-variance relationship
+
+```{r}
+df_freq_unperturbed <- df_counts %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+plot(colMeans(df_freq_unperturbed), main = "colMeans(df_freq_unperturbed)")
+plot(Rfast::colVars(df_freq_unperturbed), main = "colVars(df_freq_unperturbed)")
+plot(colMeans(df_freq_unperturbed), Rfast::colVars(df_freq_unperturbed))
+
+means <- colMeans(clr(df_freq))
+vars <- Rfast::colVars(data.frame(clr(df_freq)))
+
+df1 <- data.frame(mean = means, variance = vars)
+
+ggplot(df1, aes(x = mean, y = variance)) +
+  geom_point() +
+  geom_text(data = df1, aes(label = row.names(df1)), vjust = -0.5)
+
+```
+
+
+
+## L3 annotations
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+perc_diffs <- c(10, 25, 50, 75, 100, 200, 300, 500)
+n_ct_to_select <- c(1, 3, 5, 10, 20)
+
+results <- datrans(count_mat = df_counts, labels = NULL, perc_diffs = perc_diffs, n_ct_to_select = n_ct_to_select)
+
+```
+
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, perc_diff) %>%
+    mutate(silhouette = mean(silhouette),
+           modularity = mean(modularity),
+           clustering = mean(clustering)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, perc_diff), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = silhouette, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = silhouette, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = modularity, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = clustering, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+
+### Show example PCA
+
+```{r}
+nct <- 10
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+
+plot_pca(df_counts_temp, labels, title = "Counts")
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels, title = "Freq")
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq/100))
+plot_pca(data, labels, title = "asinsqrt")
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels, title = "CLR")
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels, title = "CLR PCA")
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+
+## L3 annotations unbalanced counts
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# Generate random numbers between -1 and 1 for each row
+random_numbers <- runif(nrow(df_counts), min = -1, max = 1)
+
+# Exponentiate 10 with each random number
+multiplier <- 10^random_numbers
+
+# Multiply each row by the corresponding multiplier
+df_counts <- sweep(df_counts, 1, multiplier, `*`)
+
+df_counts <- round(df_counts)
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+perc_diffs <- c(10, 25, 50, 75, 100, 200, 300, 500)
+n_ct_to_select <- c(1, 3, 5, 10, 20)
+
+results <- datrans(count_mat = df_counts, labels = NULL, perc_diffs = perc_diffs, n_ct_to_select = n_ct_to_select)
+
+```
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, perc_diff) %>%
+    mutate(silhouette = mean(silhouette),
+           modularity = mean(modularity),
+           clustering = mean(clustering)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, perc_diff), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = silhouette, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = silhouette, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = modularity, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = clustering, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+### Show example PCA
+
+```{r}
+nct <- 20
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+
+plot_pca(df_counts_temp, labels, title = "Counts")
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels, title = "Freq")
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq/100))
+plot_pca(data, labels, title = "asinsqrt")
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels, title = "CLR")
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels, title = "CLR PCA")
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+
+## L3 annotations only low abundant cell types DA
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+perc_diffs <- c(100, 200, 300, 500, 1000)
+n_ct_to_select <- c(1, 3, 5, 10, 20)
+
+ct_counts <- colMeans(df_counts)
+# Find the threshold for the lowest fourth
+threshold <- quantile(ct_counts, 1/4)
+
+# Get the column names with means below the threshold
+cts <- colnames(df_counts)[ct_counts < threshold]
+
+n_ct_to_select[n_ct_to_select >= length(cts)] <- length(cts)
+
+results <- datrans(count_mat = df_counts, labels = NULL, perc_diffs = perc_diffs, n_ct_to_select = n_ct_to_select, cts = cts)
+
+```
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, perc_diff) %>%
+    mutate(silhouette = mean(silhouette),
+           modularity = mean(modularity),
+           clustering = mean(clustering)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, perc_diff), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = silhouette, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = silhouette, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = modularity, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = clustering, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+### Show example PCA
+
+```{r}
+nct <- 5
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+
+plot_pca(df_counts_temp, labels, title = "Counts")
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels, title = "Freq")
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq/100))
+plot_pca(data, labels, title = "asinsqrt")
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels, title = "CLR")
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels, title = "CLR PCA")
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+```{r}
+ct_da
+data <- clr(df_freq)
+library(corrplot)
+test <- cor(data)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = test, col = col, symm = TRUE)
+
+test <- cor(t(data))
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = test, col = col, symm = TRUE)
+```
+
+
+```{r}
+data <- clr(df_freq)
+library(corrplot)
+cor_matrix <- cor(data)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = test, col = col, symm = TRUE)
+
+# 2. Variance Filtering
+variances <- apply(data, 2, var)
+plot(variances)
+hist(variances, breaks = 20)
+threshold <- quantile(variances, 0.8) # Example threshold
+filtered_df <- data[, variances > threshold]
+
+plot_pca(data, labels)
+plot_pca(filtered_df, labels)
+
+
+
+data <- df_counts_temp
+library(corrplot)
+cor_matrix <- cor(data)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = test, col = col, symm = TRUE)
+
+# 2. Variance Filtering
+variances <- apply(data, 2, var)
+plot(variances)
+hist(variances, breaks = 20)
+threshold <- quantile(variances, 0.8) # Example threshold
+filtered_df <- data[, variances > threshold]
+
+plot_pca(data, labels)
+plot_pca(filtered_df, labels)
+
+```
+
+
+
+
+## L3 annotations only highly abundant cell types DA
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+perc_diffs <- c(10, 25, 50, 75, 100, 200, 300, 500)
+n_ct_to_select <- c(1, 3, 5, 10, 20)
+
+ct_counts <- colMeans(df_counts)
+# Find the threshold for the lowest fourth
+threshold <- quantile(ct_counts, 3/4)
+
+# Get the column names with means above the threshold
+cts <- colnames(df_counts)[ct_counts >= threshold]
+
+n_ct_to_select[n_ct_to_select >= length(cts)] <- length(cts)
+
+results <- datrans(count_mat = df_counts, labels = NULL, perc_diffs = perc_diffs, n_ct_to_select = n_ct_to_select, cts = cts)
+```
+
+
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, perc_diff) %>%
+    mutate(silhouette = mean(silhouette),
+           modularity = mean(modularity),
+           clustering = mean(clustering)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, perc_diff), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = silhouette, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = silhouette, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = modularity, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = perc_diff, y = clustering, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = perc_diff, y = modularity, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+### Show example PCA
+
+```{r}
+nct <- 5
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+
+plot_pca(df_counts_temp, labels, title = "Counts")
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels, title = "Freq")
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq/100))
+plot_pca(data, labels, title = "asinsqrt")
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels, title = "CLR")
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels, title = "CLR PCA")
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+```{r}
+cohens_d <- function(x, group) {
+  mean_a <- mean(x[group == levels(group)[1]])
+  mean_b <- mean(x[group == levels(group)[2]])
+  sd_a <- sd(x[group == levels(group)[1]])
+  sd_b <- sd(x[group == levels(group)[2]])
+  pooled_sd <- sqrt((sd_a^2 + sd_b^2) / 2)
+  (mean_b - mean_a) / pooled_sd
+}
+
+
+data <- df_freq[, ct_da[1]]
+hist(data)
+data <- data.frame(values = data,
+                   groups = factor(labels))
+p <- ggplot(data, aes(x = values, fill = groups)) +
+  geom_density(alpha=0.4) + 
+  geom_histogram(aes(y=..density..), alpha=0.3, colour="black", 
+                 position="identity") +
+  labs(title = "Density Plot of PC1 Scores",
+       x = "PC1 Scores",
+       y = "Density") +
+  theme_classic()
+print(p)
+
+d_value <- cohens_d(data$values, data$groups)
+print(paste("Cohen's d:", d_value))
+
+wilcox_result <- wilcox.test(values ~ groups, data = data)
+print(paste("Wilcoxon p-value:", wilcox_result$p.value))
+
+
+data <- clr(df_freq)[, ct_da[1]]
+hist(data)
+data <- data.frame(values = data,
+                   groups = factor(labels))
+p <- ggplot(data, aes(x = values, fill = groups)) +
+  geom_density(alpha=0.4) + 
+  geom_histogram(aes(y=..density..), alpha=0.3, colour="black", 
+                 position="identity") +
+  labs(title = "Density Plot of PC1 Scores",
+       x = "PC1 Scores",
+       y = "Density") +
+  theme_classic()
+print(p)
+
+d_value <- cohens_d(data$values, data$groups)
+print(paste("Cohen's d:", d_value))
+
+wilcox_result <- wilcox.test(values ~ groups, data = data)
+print(paste("Wilcoxon p-value:", wilcox_result$p.value))
+```
+
+
+
+```{r}
+data <- clr(df_freq)
+plot_pca(data, labels)
+plot_pca(data, labels, scale. = TRUE)
+
+plot_roc_pcad1(data, labels)
+```
+
+
+```{r}
+ct_da
+
+data <- clr(df_freq)
+library(corrplot)
+cor_matrix <- cor(data)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix, col = col)
+hist(data[, ct_da[1]])
+diptest::dip.test(data[, ct_da[1]])
+
+# 2. Variance Filtering
+variances <- apply(data, 2, var)
+plot(variances)
+hist(variances, breaks = 20)
+threshold <- quantile(variances, 0.8) # Example threshold
+filtered_df <- data[, variances > threshold]
+
+plot_pca(data, labels)
+plot_pca(filtered_df, labels)
+
+plot_pca(data[,ct_da], labels)
+
+
+
+data <- df_counts_temp
+library(corrplot)
+cor_matrix <- cor(data)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix, col = col)
+hist(data[, ct_da[1]])
+diptest::dip.test(data[, ct_da[1]])
+
+
+# 2. Variance Filtering
+variances <- apply(data, 2, var)
+plot(variances)
+hist(variances, breaks = 20)
+threshold <- quantile(variances, 0.8) # Example threshold
+filtered_df <- data[, variances > threshold]
+
+plot_pca(data, labels)
+plot_pca(filtered_df, labels)
+
+
+plot_pca(data[,ct_da], labels)
+
+```

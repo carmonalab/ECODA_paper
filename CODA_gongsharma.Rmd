@@ -82,14 +82,13 @@ This script takes output of "<https://apps.allenimmunology.org/aifi/insights/dyn
 
 library(scooter)
 library(tidyverse)
-library(dplyr)
+library(plotly)
 library(ggplot2)
 library(ggpubr)
 library(factoextra)
-library(plotly)
-library(Hotelling)
 library(compositions)
 library(pROC)
+library(mclust)
 source("functions.R")
 
 library(Seurat)
@@ -113,6 +112,8 @@ library(scITD)
 # install.packages("ncdf4")
 library(ncdf4)
 library(arrow)
+
+library(dplyr)
 
 my_seed <- 123
 set.seed(my_seed)
@@ -248,27 +249,167 @@ for (layer in names(data)) {
     select(-Platelet, -Erythrocyte)
   
   df_counts <- dproc[[layer]]$cell_counts
-  df_counts[df_counts == 0] <- 1
+
+  df_counts_1count_zero <- df_counts
+  df_counts_1count_zero[df_counts_1count_zero == 0] <- 1
+  dproc[[layer]]$clr_1count_zero <- df_counts_1count_zero %>% calc_perc_df() %>% clr()
   
-  # Calculate freq and clr for each ct
-  df_freq <- df_counts/rowSums(df_counts) * 100
-  dproc[[layer]]$clr_1count_zero <- Hotelling::clr(df_freq)
+  dproc[[layer]]$clr_1count_all <- (df_counts + 1) %>% calc_perc_df() %>% clr()
   
-  df_counts <- dproc[[layer]]$cell_counts + 1
-  
-  # Calculate freq and clr for each ct
-  df_freq <- df_counts/rowSums(df_counts) * 100
-  dproc[[layer]]$clr_1count_all <- Hotelling::clr(df_freq)
-  
-  dproc[[layer]]$clr_0.01perc <- Hotelling::clr(dproc[[layer]]$freq + 0.01)
+  dproc[[layer]]$clr_0.1perc <- df_counts %>%
+    impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+    calc_perc_df() %>%
+    clr()
 }
 
 saveRDS(dproc, file.path(path_data, "cell_type_compositions.rds"))
 ```
 
+## Create scoot objects based on author annotation
+
+```{r}
+for (layer in names(data)) {
+  df_counts <- dproc[[layer]]$cell_counts
+  df_freq <- dproc[[layer]]$freq * 100
+  df_clr <- dproc[[layer]]$clr_0.1perc
+  
+  cols <- colnames(df_counts)
+  
+  df_counts$scoot_sample <- rownames(df_counts)
+  df_freq$scoot_sample <- rownames(df_freq)
+  df_clr$scoot_sample <- rownames(df_clr)
+
+  df_counts_long <- df_counts %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "cell_counts")
+  df_freq_long <- df_freq %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "freq")
+  df_clr_long <- df_clr %>%
+    pivot_longer(cols = cols,
+                 names_to = "celltype",
+                 values_to = "clr")
+  df_long <- dplyr::left_join(df_counts_long,
+                              df_freq_long,
+                              by = c("scoot_sample", "celltype"))
+  df_long <- dplyr::left_join(df_long,
+                              df_clr_long,
+                              by = c("scoot_sample", "celltype"))
+  
+  ctable <- list(layer_1 = df_long)
+  
+  meta <- dproc$meta
+  colnames(meta)[colnames(meta) == "specimen.specimenGuid"] <- "scoot_sample"
+  
+  assign(paste0("scoot_summary_", layer, "_authors"),
+         methods::new("scoot",
+                      data = list(composition = ctable),
+                      metadata = meta,
+                      version = packageVersion("scooter"))
+  )
+}
+```
+
 # ---------------------------------------------------------------
 
-# FOR PUBLICATION
+# Introduction schematic
+GongSharma highest resolution -> best clustering example so far
+
+```{r}
+feat_mat <- dproc$L3$clr_0.1perc
+res.pca <- prcomp(feat_mat)
+
+eigenvalues <- res.pca$sdev^2
+round(eigenvalues/sum(eigenvalues),3)
+plot(cumsum(eigenvalues/sum(eigenvalues)))
+
+# Create a scree plot
+plot(eigenvalues, type = "b",
+     xlab = "Principal Component",
+     ylab = "Eigenvalue")
+plot(eigenvalues/sum(eigenvalues)*100, type = "b",
+     xlab = "Principal Component",
+     ylab = "Percentage of Variance Explained")
+
+
+feat_mat <- res.pca$x[, 1:3]
+
+dist_mat <- dist(feat_mat)
+# Perform hierarchical clustering
+hc <- stats::hclust(dist_mat, method = "ward.D2")
+labels <- stats::cutree(hc, k = 4)
+
+# labels <- kmeans(feat_mat, 2)$cluster
+# labels <- cluster::pam(feat_mat, k = 2)$cluster
+
+# adj_graph <- igraph::as.undirected(cccd::nng(feat_mat, k = 2))
+# r <- quantile(igraph::strength(adj_graph))[2] / (igraph::gorder(adj_graph) - 1) / 4
+# r <- 0.0000000001
+# labels <- igraph::cluster_leiden(adj_graph, resolution = r)$membership
+# 
+# dbscan_clustres <- dbscan::hdbscan(feat_mat, minPts = 20)
+# plot(dbscan_clustres, show_flat = TRUE)
+# labels <- dbscan_clustres$cluster
+
+factoextra::fviz_pca(res.pca,
+                     habillage = labels,
+                     # addEllipses = TRUE,
+                     label = "var",
+                     pointsize = 1,
+                     invisible = c("var", "quali"),
+                     geom = "point") +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+  guides(shape=guide_legend(title="Cluster"), color=guide_legend(title="Cluster")) +
+  ggtitle("Unsupervised clustering")
+ggsave(file.path(path_plots, "workflow_schema_clustering_unsupervised.pdf"),
+       width = 4,
+       height = 3)
+
+factoextra::fviz_pca(res.pca,
+                     habillage = dproc$meta$subject.cmv,
+                     # addEllipses = TRUE,
+                     label = "var",
+                     pointsize = 1,
+                     invisible = c("var", "quali"),
+                     geom = "point") +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+  guides(shape=guide_legend(title="CMV"), color=guide_legend(title="CMV")) +
+  ggtitle("Biological variable 1\nCMV infection status")
+ggsave(file.path(path_plots, "workflow_schema_clustering_CMV.pdf"),
+       width = 4,
+       height = 3)
+
+factoextra::fviz_pca(res.pca,
+                     habillage = factor(ifelse(dproc$meta$cohort.cohortGuid == "BR1", "Young", "Advanced"), levels = c("Young", "Advanced")),
+                     # addEllipses = TRUE,
+                     label = "var",
+                     pointsize = 1,
+                     invisible = c("var", "quali"),
+                     geom = "point") +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+  guides(shape=guide_legend(title="Age"), color=guide_legend(title="Age")) +
+  ggtitle("Biological variable 2\nAge")
+ggsave(file.path(path_plots, "workflow_schema_clustering_age.pdf"),
+       width = 4,
+       height = 3)
+```
+
+```{r fig.height=6, fig.width=16}
+composition_boxplot(scoot_object = scoot_summary_L3_authors)
+composition_boxplot(scoot_object = scoot_summary_L3_authors,
+                    group_by = "subject.cmv")
+composition_boxplot(scoot_object = scoot_summary_L3_authors,
+                    group_by = "cohort.cohortGuid")
+composition_boxplot(scoot_object = scoot_summary_L3_authors,
+                    group_by = "cohort.cohortGuid",
+                    facet_by = "subject.cmv")
+```
+
+
+
+# ---------------------------------------------------------------
 
 # Plot number of samples and cell types lost per granularity
 
@@ -277,10 +418,6 @@ saveRDS(dproc, file.path(path_data, "cell_type_compositions.rds"))
 df1 <- dproc[["L1"]][["cell_counts"]]
 df2 <- dproc[["L2"]][["cell_counts"]]
 df3 <- dproc[["L3"]][["cell_counts"]]
-
-library(ggplot2)
-library(dplyr)
-library(tidyr)
 
 # Assume df1, df2, df3 are your three dataframes
 dfs <- list(Low = df1, Medium = df2, High = df3)
@@ -321,5 +458,189 @@ ggplot(zero_percentages, aes(x = Granularity, y = Percentage, group = Category, 
   theme(text = element_text(size = 14)) +
   ylim(0,100)
 ggsave(file.path(path_plots, "coda_numberzeros.pdf"), width = 6, height = 4)
+```
+
+
+
+# ---------------------------------------------------------------
+
+
+```{r}
+cor_matrix <- cor(dproc[["L1"]][["clr_0.01perc"]])
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix)
+
+cor_matrix <- cor(dproc[["L2"]][["clr_0.01perc"]])
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix)
+
+cor_matrix <- cor(dproc[["L3"]][["clr_0.01perc"]])
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix)
+
+variances <- apply(dproc[["L3"]][["clr_0.01perc"]], 2, var)
+plot(variances)
+hist(variances, breaks = 20)
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Example plot of normalization for schema
+
+```{r}
+
+layer <- "L1"
+hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
+hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
+
+layer <- "L2"
+hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
+hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
+
+
+
+layer <- "L3"
+hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
+hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
+
+df <- dproc[[layer]]$cell_counts %>% unlist() %>% as.data.frame()
+p1 <- ggplot(df, aes(.))+
+  geom_histogram(color="darkblue", fill="lightblue") +
+  xlab("Counts") + ylab("") + ggtitle("Cell counts") +
+  theme_classic() +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+df <- dproc[[layer]]$freq %>% unlist() %>% as.data.frame() %>% mutate(across(everything(), ~ . * 100))
+p2 <- ggplot(df, aes(.))+
+  geom_histogram(color="darkblue", fill="lightblue") +
+  xlab("%") + ylab("") + ggtitle("Frequency") +
+  theme_classic() +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+df <- dproc[[layer]]$clr_1count_all %>% unlist() %>% as.data.frame()
+p3 <- ggplot(df, aes(.))+
+  geom_histogram(color="darkblue", fill="lightblue") +
+  xlab("CLR") + ylab("") + ggtitle("Centered\nlogratio") +
+  theme_classic() +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+patchwork::wrap_plots(p1, p2, p3, nrow = 1)
+
+ggsave(file.path(path_plots, "workflow_schema_normalization_example.pdf"),
+       width = 4,
+       height = 2.5)
+```
+
+# ---------------------------------------------------------------
+
+
+# Variance
+
+```{r fig.height=8, fig.width=10}
+
+ggplotRegression <- function (data, title) {
+  
+  require(ggplot2)
+  require(ggrepel)
+  
+  lmod <- lm(Standard_deviation ~ Relative_abundance, data = data)
+  
+  ggplot(data, aes(x = Relative_abundance, y = Standard_deviation)) + 
+    geom_point() +
+    # geom_smooth(method=lm , color="red", fill="#69b3a2", se=TRUE) +
+    labs(title = paste(title,
+                       "\nAdj R2 = ",signif(summary(lmod)$adj.r.squared, 2),
+                       "Intercept =",signif(lmod$coef[[1]], 2),
+                       " Slope =",signif(lmod$coef[[2]], 2),
+                       " P =",signif(summary(lmod)$coef[2,4], 2))) +
+    theme_classic() +
+    # geom_text_repel(
+    #   aes(label = celltype),
+    #   family = "Poppins",
+    #   size = 3,
+    #   min.segment.length = 0, 
+    #   seed = 42, 
+    #   box.padding = 0.5,
+    #   max.overlaps = Inf,
+    #   # arrow = arrow(length = unit(0.010, "npc")),
+    #   # nudge_x = .15,
+    #   # nudge_y = .5,
+    #   color = "grey50"
+    # ) +
+    xlab("CLR-transformed relative abundance") + ylab("Standard deviation")
+}
+
+
+plot_list <- list()
+
+df <- dproc$L1$clr_0.1perc %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "celltype",
+    values_to = "values"
+  )
+
+df1 <- df %>%
+    group_by(celltype) %>%
+    dplyr::summarize(
+      Relative_abundance = mean(values, na.rm=TRUE),
+      Standard_deviation = sd(values, na.rm=TRUE)
+    )
+
+p <- ggplotRegression(df1, "L1")
+print(p)
+plot_list <- append(plot_list, list(p))
+
+df <- dproc$L2$clr_0.1perc %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "celltype",
+    values_to = "values"
+  )
+
+df1 <- df %>%
+    group_by(celltype) %>%
+    dplyr::summarize(
+      Relative_abundance = mean(values, na.rm=TRUE),
+      Standard_deviation = sd(values, na.rm=TRUE)
+    )
+
+p <- ggplotRegression(df1, "L2")
+print(p)
+plot_list <- append(plot_list, list(p))
+
+
+
+df <- dproc$L3$clr_0.1perc %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "celltype",
+    values_to = "values"
+  )
+
+df1 <- df %>%
+    group_by(celltype) %>%
+    dplyr::summarize(
+      Relative_abundance = mean(values, na.rm=TRUE),
+      Standard_deviation = sd(values, na.rm=TRUE)
+    )
+
+p <- ggplotRegression(df1, "L3")
+print(p)
+plot_list <- append(plot_list, list(p))
+
+
+patchwork::wrap_plots(plot_list, ncol = 2)
+ggsave(file.path(path_plots, "variance_gongsharma.pdf"), width = 6, height = 4)
+
+
 ```
 
