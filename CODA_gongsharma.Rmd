@@ -408,6 +408,59 @@ composition_boxplot(scoot_object = scoot_summary_L3_authors,
 ```
 
 
+# Example plot of normalization for schema
+
+```{r}
+
+layer <- "L1"
+hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
+hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
+
+layer <- "L2"
+hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
+hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
+
+
+
+layer <- "L3"
+hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
+hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
+
+df <- dproc[[layer]]$cell_counts %>% unlist() %>% as.data.frame()
+p1 <- ggplot(df, aes(.))+
+  geom_histogram(color="darkblue", fill="lightblue") +
+  xlab("Counts") + ylab("") + ggtitle("Cell counts") +
+  theme_classic() +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+df <- dproc[[layer]]$freq %>% unlist() %>% as.data.frame() %>% mutate(across(everything(), ~ . * 100))
+p2 <- ggplot(df, aes(.))+
+  geom_histogram(color="darkblue", fill="lightblue") +
+  xlab("%") + ylab("") + ggtitle("Frequency") +
+  theme_classic() +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+df <- dproc[[layer]]$clr_1count_all %>% unlist() %>% as.data.frame()
+p3 <- ggplot(df, aes(.))+
+  geom_histogram(color="darkblue", fill="lightblue") +
+  xlab("CLR") + ylab("") + ggtitle("Centered\nlogratio") +
+  theme_classic() +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+patchwork::wrap_plots(p1, p2, p3, nrow = 1)
+
+ggsave(file.path(path_plots, "workflow_schema_normalization_example.pdf"),
+       width = 4,
+       height = 2.5)
+```
+
+
 
 # ---------------------------------------------------------------
 
@@ -484,60 +537,6 @@ hist(variances, breaks = 20)
 ```
 
 
-
-# ---------------------------------------------------------------
-
-# Example plot of normalization for schema
-
-```{r}
-
-layer <- "L1"
-hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
-hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
-hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
-hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
-
-layer <- "L2"
-hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
-hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
-hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
-hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
-
-
-
-layer <- "L3"
-hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
-hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
-hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
-hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
-
-df <- dproc[[layer]]$cell_counts %>% unlist() %>% as.data.frame()
-p1 <- ggplot(df, aes(.))+
-  geom_histogram(color="darkblue", fill="lightblue") +
-  xlab("Counts") + ylab("") + ggtitle("Cell counts") +
-  theme_classic() +
-  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
-
-df <- dproc[[layer]]$freq %>% unlist() %>% as.data.frame() %>% mutate(across(everything(), ~ . * 100))
-p2 <- ggplot(df, aes(.))+
-  geom_histogram(color="darkblue", fill="lightblue") +
-  xlab("%") + ylab("") + ggtitle("Frequency") +
-  theme_classic() +
-  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
-
-df <- dproc[[layer]]$clr_1count_all %>% unlist() %>% as.data.frame()
-p3 <- ggplot(df, aes(.))+
-  geom_histogram(color="darkblue", fill="lightblue") +
-  xlab("CLR") + ylab("") + ggtitle("Centered\nlogratio") +
-  theme_classic() +
-  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
-
-patchwork::wrap_plots(p1, p2, p3, nrow = 1)
-
-ggsave(file.path(path_plots, "workflow_schema_normalization_example.pdf"),
-       width = 4,
-       height = 2.5)
-```
 
 # ---------------------------------------------------------------
 
