@@ -521,42 +521,7 @@ results_list[[ds]]$dataset <- ds
 ```
 
 
-#### CMV (females)
-
-
-```{r}
-seurat <- load_seurat_object("data/gongsharma_cmv_females.h5ad")
-seurat$Sample <- seurat$specimen.specimenGuid
-
-label_condition <- "subject.cmv"
-low_res_ct_col <- "AIFI_L1"
-hi_res_ct_col <- "AIFI_L3"
-
-count_mat <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
-labels <- as.factor(get_labels(seurat, label_condition))
-
-ds <- "gongsharma_cmvfemales"
-results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
-                                   methods = c(
-                                     "counts",
-                                     "freq",
-                                     "asin_sqrt",
-                                     "alr_randref",
-                                     "alr_mincvref",
-                                     "clr"
-                                   ))
-results_list[[ds]] <- results_list[[ds]] %>%
-  group_by(method) %>%
-  summarize(silhouette = mean(silhouette),
-            modularity = mean(modularity),
-            clustering = mean(clustering)) %>%
-  ungroup()
-results_list[[ds]]$dataset <- ds
-```
-
-
 #### Age (females cmvneg)
-
 
 ```{r}
 seurat <- load_seurat_object("data/gongsharma_age_females_cmvneg.h5ad")
@@ -587,6 +552,103 @@ results_list[[ds]] <- results_list[[ds]] %>%
             clustering = mean(clustering)) %>%
   ungroup()
 results_list[[ds]]$dataset <- ds
+```
+
+## Plot results
+
+```{r}
+df_results <- Reduce(rbind, results_list)
+
+df_results <- df_results %>%
+  pivot_longer(
+    cols = c(silhouette, modularity, clustering),
+    names_to = "score_method",
+    values_to = "values"
+  ) %>%
+  as.data.frame()
+
+df_results_clustering <- df_results %>%
+  filter(score_method == "clustering") %>%
+  group_by(method) %>%
+  summarize(mean = mean(values), sem = sd(values) / sqrt(length(values)))
+
+df_results_clustering <- df_results_clustering %>%
+  arrange(desc(mean))
+
+df_results_clustering$method <- factor(df_results_clustering$method, levels = df_results_clustering$method)
+df_results$method <- factor(df_results$method, levels = df_results_clustering$method)
+
+
+
+# New facet label names for dose variable
+score.labs <- c("Adjusted rand index", "Modularity score", "Silhouette score")
+names(score.labs) <- sort(unique(df_results$score_method))
+
+# New facet label names for supp variable
+datas.labs <- c(
+  "Gong & Sharma\nSubset: all\nSeparation by: CMV infection",
+  "Gong & Sharma\nSubset: CMV negative females\nSeparation by: age",
+  "Stephenson",
+  "Zhang")
+names(datas.labs) <- sort(unique(df_results$dataset))
+
+
+
+ggplot(df_results, aes(x = method, y = values)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(x = "Imputation method",
+       y = "Separation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        legend.position = "none") +
+  facet_grid(score_method ~ dataset,
+             scales = "free",
+             labeller = labeller(score = score.labs, dataset = datas.labs))
+  # facet_grid(scales = "free",
+  #            rows = vars(score_method), cols = vars(dataset))
+ggsave(file.path(path_plots, "transformations_real_datasets_detailed_barplot.pdf"),
+       width = 8,
+       height = 7)
+
+
+
+df_results %>%
+  group_by(score_method, method) %>%
+  summarize(mean = mean(values), sem = sd(values) / sqrt(length(values))) %>%
+  ungroup() %>%
+  
+  ggplot(aes(x = method, y = mean)) + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  # stat_summary(fun.y = mean, geom = "bar") +
+  geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  facet_grid(scales = "free",
+             rows = vars(score_method),
+             labeller = labeller(score_method = score.labs))
+
+ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot_separatescores.pdf"),
+       width = 5,
+       height = 7)
+
+
+
+df_results_clustering %>%
+  ggplot(aes(x = method, y = mean)) + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  # stat_summary(fun.y = mean, geom = "bar") +
+  geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Adjusted Rand Index") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  NoLegend()
+ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot.pdf"),
+       width = 2.5,
+       height = 2.5)
+
 ```
 
 
