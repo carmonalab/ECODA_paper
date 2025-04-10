@@ -356,8 +356,11 @@ DESeq2.normalize <- function(matrix,
       
       matrix <- DESeq2::estimateSizeFactors(matrix)
       
+      # Set minimum number of counts per gene
+      nsub <- min(1000, sum(rowMeans(BiocGenerics::counts(matrix, normalized=TRUE)) > 10 ))
+      
       # transform counts using vst
-      matrix <- DESeq2::vst(matrix, blind = T)
+      matrix <- DESeq2::vst(matrix, blind = T, nsub = nsub)
       matrix <- SummarizedExperiment::assay(matrix)
       
       # get top variable genes
@@ -702,39 +705,4 @@ calc_sep_score <- function(df,
               cluster_score = cluster_score)
   
   return(res)
-}
-
-
-DESeq2.normalize <- function(matrix,
-                             metadata,
-                             nvar_genes = 2000) {
-  
-  suppressMessages({
-    suppressWarnings({
-      
-      # Normalize pseudobulk data using DESeq2
-      # do formula for design with the cluster_by elements in order
-      dformula <-  stats::formula(paste("~"))
-      matrix <- DESeq2::DESeqDataSetFromMatrix(countData = matrix,
-                                               colData = metadata,
-                                               design = dformula)
-      matrix <- DESeq2::estimateSizeFactors(matrix)
-      
-      nsub <- min(1000, sum(rowMeans(BiocGenerics::counts(matrix, normalized=TRUE)) > 10 ))
-      
-      # transform counts using vst
-      matrix <- DESeq2::vst(matrix, blind = T, nsub = nsub)
-      matrix <- SummarizedExperiment::assay(matrix)
-      
-      # get top variable genes
-      rv <- MatrixGenerics::rowVars(matrix)
-      select <- order(rv, decreasing=TRUE)[seq_len(min(nvar_genes, length(rv)))]
-      select <- row.names(matrix)[select]
-      
-      matrix <- matrix[select[select %in% row.names(matrix)],]
-      
-    })
-  })
-  
-  return(matrix)
 }
