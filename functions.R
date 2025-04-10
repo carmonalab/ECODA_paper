@@ -6,7 +6,7 @@ library(doParallel)
 cv <- function(x) {
   sd_x <- sd(x)  # Standard deviation
   mean_x <- mean(x)  # Mean
-  cv_value <- sd_x / mean_x * 100  # Coefficient of variation (%)
+  cv_value <- abs(sd_x / mean_x) * 100  # Coefficient of variation (%)
   return(cv_value)
 }
 
@@ -23,17 +23,16 @@ calc_sil <- function(feat_mat,
 
 
 
-compute_KNN <- function(dist, KNNGraph_k){
+compute_KNN <- function(dist, knn_k){
   # Compute KNN
-  knn <- RANN::nn2(as.matrix(dist), k = KNNGraph_k + 1)$nn.idx
+  knn <- RANN::nn2(as.matrix(dist), k = knn_k + 1)$nn.idx
   knn <- knn[, -1]  # Remove self-neighbor
   return(knn)
 }
 # moudularity
-compute_snn_graph <- function(dist, KNNGraph_k = 5, knn = NULL) {
-  if(is.null(knn)){
-    knn <- compute_KNN(dist = dist, KNNGraph_k = KNNGraph_k)
-  }
+compute_snn_graph <- function(dist, knn_k) {
+  
+  knn <- compute_KNN(dist = dist, knn_k = knn_k)
   # Initialize adjacency matrix
   n <- nrow(as.matrix(dist))
   adj_matrix <- matrix(0, n, n)
@@ -54,12 +53,13 @@ compute_snn_graph <- function(dist, KNNGraph_k = 5, knn = NULL) {
 }
 calc_modularity <- function(feat_mat,
                             labels,
-                            KNNGraph_k = 5,
-                            knn = NULL) {
+                            knn_k = NULL) {
+  if (is.null(knn_k)) {
+    knn_k <- round(nrow(feat_mat) / 4)
+  }
+  
   # Create a graph object
-  g <- compute_snn_graph(dist = feat_mat,
-                         KNNGraph_k = KNNGraph_k,
-                         knn = knn)
+  g <- compute_snn_graph(dist = feat_mat, knn_k = knn_k)
   # Compute modularity
   modularity_score <- igraph::modularity(g, membership = as.numeric(factor(labels)))
   return(modularity_score)
@@ -232,23 +232,37 @@ datrans <- function(count_mat,
 plot_pca <- function(feat_mat,
                      labels,
                      scale. = FALSE,
-                     knn_k = 5,
+                     knn_k = NULL,
                      title = NULL,
+                     sil_score = TRUE,
+                     mod_score = TRUE,
+                     cluster_score = TRUE,
+                     pointsize = 3,
                      coord_equal = TRUE,
-                     plotly_3d = TRUE) {
+                     plotly_3d = FALSE) {
   
   res.pca <- prcomp(feat_mat, scale. = scale.)
   
-  sil_score <- round(calc_sil(feat_mat, labels), 3)
-  mod_score <- round(calc_modularity(feat_mat, labels, knn_k), 3)
+  if (sil_score) {
+    sil_score <- round(calc_sil(feat_mat, labels), 3)
+    title <- paste0(title, "\nSilhouette score: ", sil_score)
+  }
+  if (mod_score) {
+    mod_score <- round(calc_modularity(feat_mat, labels, knn_k), 3)
+    title <- paste0(title, "\nModularity score: ", mod_score)
+  }
+  if (cluster_score) {
+    cluster_score <- clust_eval(feat_mat, labels)
+    title <- paste0(title, "\nCluster score: ", cluster_score)
+  }
   
   p <- factoextra::fviz_pca(res.pca,
                             habillage = labels,
                             label = "var",
-                            pointsize = 3,
+                            pointsize = pointsize,
                             invisible = c("var", "quali"),
                             geom = "point") +
-    ggtitle(paste(title, "\nSilhouette score: ", sil_score, "\nModularity score: ", mod_score)) +
+    ggtitle(title) +
     scale_shape_manual(values = rep(19, length(unique(labels))))
   if (coord_equal) {
     p <- p + coord_equal()
@@ -330,7 +344,7 @@ clust_eval <- function(matrix,
 
 DESeq2.normalize <- function(matrix,
                              metadata,
-                             nvar_genes = 1500) {
+                             nvar_genes = 2000) {
   suppressMessages({
     suppressWarnings({
       
@@ -338,7 +352,7 @@ DESeq2.normalize <- function(matrix,
       # do formula for design with the cluster_by elements in order
       matrix <- DESeq2::DESeqDataSetFromMatrix(countData = matrix,
                                                colData = metadata,
-                                               design = ~1)
+                                               design = stats::formula(paste("~ 1")))
       
       matrix <- DESeq2::estimateSizeFactors(matrix)
       
@@ -346,6 +360,12 @@ DESeq2.normalize <- function(matrix,
       matrix <- DESeq2::vst(matrix, blind = T)
       matrix <- SummarizedExperiment::assay(matrix)
       
+      # get top variable genes
+      rv <- MatrixGenerics::rowVars(matrix)
+      select <- order(rv, decreasing=TRUE)[seq_len(min(nvar_genes, length(rv)))]
+      select <- row.names(matrix)[select]
+      
+      matrix <- matrix[select[select %in% row.names(matrix)],]
     })
   })
   
@@ -402,7 +422,7 @@ process_pseudobulk_fig <- function(pseudobulk_hvg,
 
 process_deconv_fig <- function(pseudobulk,
                                labels,
-                               title = "Pseudobulk - deconvoluted cell type composition") {
+                               title = "Deconvoluted cell type composition") {
   out <- EPIC(pseudobulk, BRef)
   deconv_ct_comps <- as.data.frame(out[["mRNAProportions"]])
   row.names(deconv_ct_comps) <- colnames(pseudobulk)
@@ -423,7 +443,7 @@ process_coda_fig <- function(seurat,
                              labels,
                              ct_col,
                              title,
-                             knn_k = 5) {
+                             knn_k = NULL) {
   
   df_counts <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = ct_col)
   
@@ -449,7 +469,10 @@ process_mofa_fig <- function(seurat,
                              save_file_path,
                              title = "MOFA",
                              num_factors = 5,
+                             log_abs_transform = FALSE,
                              maxiter = 22) {
+  title <- paste0(title, " (", num_factors, " factors)")
+  
   if (!file.exists(save_file_path)) {
     MOFAobject <- create_mofa(seurat, assays = "RNA", features = hvg)
     
@@ -473,7 +496,7 @@ process_mofa_fig <- function(seurat,
       training_options = train_opts
     )
     
-    MOFAobject <- run_mofa(MOFAobject, use_basilisk = TRUE, save_data = FALSE)
+    MOFAobject <- run_mofa(MOFAobject, use_basilisk = FALSE, save_data = FALSE)
     
     saveRDS(MOFAobject, save_file_path)
   } else {
@@ -481,6 +504,10 @@ process_mofa_fig <- function(seurat,
   }
   
   feat_mat <- t(t(MOFAobject@expectations[["W"]]$RNA) %*% pseudobulk_hvg)
+  
+  if (log_abs_transform) {
+    feat_mat <- log(abs(feat_mat))
+  }
 
   res <- list()
   res[["plot"]] <- plot_pca(feat_mat, labels, plotly_3d = FALSE, title = title, coord_equal = FALSE)
@@ -496,7 +523,10 @@ process_scitd_fig <- function(seurat,
                               ct_col,
                               label_col,
                               hvg,
+                              num_factors = 5,
                               title = "scITD") {
+  title <- paste0(title, " (", num_factors, " factors)")
+  
   seurat$donors <- seurat$Sample
   seurat$ctypes <- as.character(seurat[[ct_col]])
   
@@ -518,7 +548,7 @@ process_scitd_fig <- function(seurat,
   
   # create project container
   pbmc_container <- make_new_container(count_data = seurat@assays$RNA$counts,
-                                       meta_data = seurat@meta.data[, c("donors", "ctypes", label_condition, "Sample")],
+                                       meta_data = seurat@meta.data[, c("donors", "ctypes", label_col, "Sample")],
                                        gn_convert = NULL,
                                        params = param_list)
   
@@ -529,7 +559,7 @@ process_scitd_fig <- function(seurat,
                                 scale_var = TRUE, var_scale_power = 2)
   
   # run the tensor decomposition
-  pbmc_container <- run_tucker_ica(pbmc_container, ranks=c(5,10),
+  pbmc_container <- run_tucker_ica(pbmc_container, ranks=c(num_factors, num_factors + 5),
                                    tucker_type = 'regular', rotation_type = 'hybrid')
   
   # get donor scores-metadata associations
@@ -662,7 +692,7 @@ clr <- function(df) {
 
 calc_sep_score <- function(df,
                            labels,
-                           knn_k = 5) {
+                           knn_k = NULL) {
   sil_score <- round(calc_sil(df, labels), 3)
   mod_score <- unlist(round(calc_modularity(df, labels, knn_k), 3))
   cluster_score <- clust_eval(matrix = df, labels = labels)
@@ -672,4 +702,39 @@ calc_sep_score <- function(df,
               cluster_score = cluster_score)
   
   return(res)
+}
+
+
+DESeq2.normalize <- function(matrix,
+                             metadata,
+                             nvar_genes = 2000) {
+  
+  suppressMessages({
+    suppressWarnings({
+      
+      # Normalize pseudobulk data using DESeq2
+      # do formula for design with the cluster_by elements in order
+      dformula <-  stats::formula(paste("~"))
+      matrix <- DESeq2::DESeqDataSetFromMatrix(countData = matrix,
+                                               colData = metadata,
+                                               design = dformula)
+      matrix <- DESeq2::estimateSizeFactors(matrix)
+      
+      nsub <- min(1000, sum(rowMeans(BiocGenerics::counts(matrix, normalized=TRUE)) > 10 ))
+      
+      # transform counts using vst
+      matrix <- DESeq2::vst(matrix, blind = T, nsub = nsub)
+      matrix <- SummarizedExperiment::assay(matrix)
+      
+      # get top variable genes
+      rv <- MatrixGenerics::rowVars(matrix)
+      select <- order(rv, decreasing=TRUE)[seq_len(min(nvar_genes, length(rv)))]
+      select <- row.names(matrix)[select]
+      
+      matrix <- matrix[select[select %in% row.names(matrix)],]
+      
+    })
+  })
+  
+  return(matrix)
 }
