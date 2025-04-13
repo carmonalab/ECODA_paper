@@ -510,13 +510,14 @@ compute_zero_percentage <- function(df, granularity) {
   
   samples_with_zeros <- sum(rowSums(df == 0) > 0) / total_samples * 100
   celltypes_with_zeros <- sum(colSums(df == 0) > 0) / total_celltypes * 100
+  total_zeros <- sum(df == 0) / (nrow(df) * ncol(df)) * 100
   
   granularity_labels <- paste0(granularity, "\n(", total_celltypes, " cell types)")
   
   data.frame(
     Granularity = factor(granularity_labels, levels = granularity_labels),
-    Category = c("Samples", "Cell Types"),
-    Percentage = c(samples_with_zeros, celltypes_with_zeros)
+    Category = c("Samples", "Cell Types", "Total"),
+    Percentage = c(samples_with_zeros, celltypes_with_zeros, total_zeros)
   )
 }
 
@@ -531,10 +532,10 @@ ggplot(zero_percentages, aes(x = Granularity, y = Percentage, group = Category, 
   geom_point(size = 3) +
   geom_text(vjust=-1, show.legend  = F) +
   theme_minimal() +
-  labs(title = "Percentage of samples or cell types\nwith at least one zero",
+  labs(title = "",
        x = "Granularity",
        y = "Percentage (%)",
-       color = "Category") +
+       color = "Number of zeros") +
   theme(text = element_text(size = 14)) +
   ylim(0,100)
 ggsave(file.path(path_plots, "coda_numberzeros.pdf"), width = 6, height = 4)
@@ -654,16 +655,21 @@ ggsave(file.path(path_plots, "pca_ctcomp_females_age.pdf"),
 dist_mat <- dist(feat_mat_females)
 # Perform hierarchical clustering
 hc <- stats::hclust(dist_mat, method = "ward.D2")
-clust_labels <- stats::cutree(hc, k = 4)
+clust_labels <- as.factor(stats::cutree(hc, k = 4))
 p_pca(res.pca, clust_labels, title = "hclust")
 
 # Perform PAM clustering
 clust_labels <- cluster::pam(feat_mat_females, k = 4)$cluster
 p_pca(res.pca, clust_labels, title = "pamclust")
 
+clust_labels_reordered <- clust_labels
+clust_labels_reordered[clust_labels == 3] <- 1
+clust_labels_reordered[clust_labels == 1] <- 2
+clust_labels_reordered[clust_labels == 2] <- 3
+
 factoextra::fviz_pca(res.pca,
-                     habillage = clust_labels,
-                     # addEllipses = TRUE,
+                     habillage = clust_labels_reordered,
+                     # addEllipses = TRUE, , ellipse.level=0.80,
                      label = "none",
                      pointsize = 1,
                      invisible = c("var", "quali"),
@@ -783,6 +789,17 @@ ggsave(file.path(path_plots, "pca_ctcomp_all_ground_truth.pdf"),
 
 clust_labels <- cluster::pam(feat_mat_females, k = 4)$cluster
 
+get_label <- function(string) {
+  if (grepl("Immune Variation|Stand|Day 90", string)) {
+    return("Baseline")
+  } else {
+    match <- "Vax"
+    # match <- regmatches(string, regexpr("Day \\d+", string))
+    return(match)
+  }
+}
+meta$flu_vax_day <- as.character(meta$sample.visitName)
+meta$flu_vax_day <- sapply(meta$flu_vax_day, get_label)
 
 df_heatmap <- feat_mat_females %>% scale(center = TRUE, scale = FALSE)
 df_heatmap <- df_heatmap %>% t() %>% as.data.frame()
@@ -790,8 +807,7 @@ my_sample_col <- list(
   Immune_type = clust_labels,
   CMV = meta_females$subject.cmv,
   Age = meta_females$age,
-  BMI = ifelse(na.aggregate(as.numeric(as.character(meta_females$subject.bmi)), FUN = mean) >30, ">30", "<30"),
-  Vaccination_day = meta_females$sample.visitName
+  BMI = ifelse(na.aggregate(as.numeric(as.character(meta_females$subject.bmi)), FUN = mean) >30, ">30", "<30")
 ) %>% as.data.frame()
 
 pheatmap(df_heatmap, annotation_col = my_sample_col, scale = "none", clustering_method = "ward.D2")
@@ -827,13 +843,33 @@ hc <- stats::hclust(dist_mat, method = "ward.D2")
 clust_labels <- stats::cutree(hc, k = 4)
 # clust_labels <- cluster::pam(df1, k = 4)$cluster
 
+clust_labels_reordered <- clust_labels
+clust_labels_reordered[clust_labels == 4] <- 1
+clust_labels_reordered[clust_labels == 1] <- 2
+clust_labels_reordered[clust_labels == 2] <- 4
+clust_labels_reordered <- as.factor(clust_labels_reordered)
+
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+gg_colors <- gg_color_hue(4)
+
+ann_colors = list(
+    # Vaccination_day = c(Vax = "red", Baseline = "black")
+  # BMI = c(Adipose = "red", Lean = "black")
+  Immune_type = c("1" = gg_colors[1], "2" = gg_colors[2], "3" = gg_colors[3], "4" = gg_colors[4])
+)
+
 df_heatmap <- df1 %>% scale(center = TRUE, scale = FALSE)
 df_heatmap <- df_heatmap %>% t() %>% as.data.frame()
 my_sample_col <- list(
-  Immune_type = clust_labels,
-  CMV = meta$subject.cmv,
+  # Race = meta$subject.race,
+  # BMI = ifelse(na.aggregate(as.numeric(as.character(meta$subject.bmi)), FUN = mean) >30, "Adipose", "Lean"),
+  # Vaccination_day = meta$flu_vax_day,
   Age = meta$age,
-  Sex = meta$subject.biologicalSex
+  CMV = meta$subject.cmv,
+  Immune_type = clust_labels_reordered
 ) %>% as.data.frame()
 
 p <- pheatmap(
@@ -841,10 +877,12 @@ p <- pheatmap(
   annotation_col = my_sample_col,
   scale = "none",
   clustering_method = "ward.D2",
-  annotation_legend = FALSE,
+  treeheight_row = 0,
   show_colnames = FALSE,
   cutree_rows = 4,
-  cutree_cols = 4)
+  cutree_cols = 4 ,
+  annotation_colors = ann_colors
+  )
 pdf(file.path(path_plots, "heatmap_gongsharma_ctcomp_full.pdf"), width=10, height=10)
 grid::grid.newpage()
 grid::grid.draw(p$gtable)
@@ -852,9 +890,43 @@ dev.off()
 
 
 
+df_heatmap <- df1 %>% scale(center = TRUE, scale = FALSE)
+df_heatmap <- df_heatmap %>% t() %>% as.data.frame()
+my_sample_col <- list(
+  # Race = meta$subject.race,
+  # BMI = ifelse(na.aggregate(as.numeric(as.character(meta$subject.bmi)), FUN = mean) >30, "Adipose", "Lean"),
+  # Vaccination_day = meta$flu_vax_day,
+  Age = meta$age,
+  CMV = meta$subject.cmv,
+  Immune_type = clust_labels_reordered
+) %>% as.data.frame()
 
-df1 <- feat_mat
-df1 <- df1[ , sqrt(colVars(feat_mat)) > 0.5]
+p <- pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  scale = "none",
+  clustering_method = "ward.D2",
+  # treeheight_row = 0,
+  show_colnames = FALSE,
+  cutree_rows = 4,
+  cutree_cols = 4 ,
+  annotation_colors = ann_colors
+  )
+pdf(file.path(path_plots, "heatmap_gongsharma_ctcomp_full_withrowclustering.pdf"), width=10, height=10)
+grid::grid.newpage()
+grid::grid.draw(p$gtable)
+dev.off()
+
+
+
+row_order <- p[["tree_row"]][["order"]]
+col_order <- p[["tree_col"]][["order"]]
+cts <- p[["tree_row"]][["labels"]][row_order]
+
+
+df1 <- feat_mat[col_order, cts[1:17]]
+# df1 <- df1[ , sqrt(colVars(feat_mat)) > 0.5]
+
 
 df1 %>%
   prcomp() %>%
@@ -875,9 +947,10 @@ my_sample_col <- list(
 p <- pheatmap(
   df_heatmap,
   annotation_col = my_sample_col,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
   scale = "none",
   clustering_method = "ward.D2",
-  annotation_legend = FALSE,
   show_colnames = FALSE,
   cutree_rows = 3,
   cutree_cols = 4)
@@ -1012,7 +1085,7 @@ factoextra::fviz_pca(res.pca_females,
                      geom = "point",
                      axes.linetype = NA) +
     scale_shape_manual(values = rep(19, length(unique(clust_labels)))) +
-  guides(shape=guide_legend(title="Cluster"), color=guide_legend(title="Cluster")) +
+  guides(shape=guide_legend(title="Pseudobulk\ncluster"), color=guide_legend(title="Pseudobulk\ncluster")) +
   ggtitle("") +
   theme_classic() +
   theme(
