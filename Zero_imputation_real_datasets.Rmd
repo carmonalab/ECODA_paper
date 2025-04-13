@@ -28,6 +28,10 @@ source("functions.R")
 
 # Set paths
 path_plots <- path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
+
+
+res_list <- list()
+
 ```
 
 
@@ -79,23 +83,21 @@ low_res_ct_col <- "layer1"
 hi_res_ct_col <- "layer2"
 
 
-res_list <- list()
-
 df <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
 labels <- as.factor(get_labels(seurat, label_condition))
 
-ds <- "zhang"
+ds <- "Zhang"
 df <- df %>% select_if(colSums(.) != 0) %>% mutate_all(as.numeric)
 res_list[[paste0(ds, "_counts_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_counts_all_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_counts_all_0.5")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_0.0001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.0001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_counts_all_0.5")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_all_0.0001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.0001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.01")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.01) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_asinsqrt")]] <- df %>% calc_perc_df() %>% mutate(across(everything(), ~ . / 100)) %>% sqrt() %>% asin() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_impRZilr")]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_multLN")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
@@ -139,18 +141,18 @@ hi_res_ct_col <- "full_clustering"
 df <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
 labels <- as.factor(get_labels(seurat, label_condition))
 
-ds <- "stephenson"
+ds <- "Stephenson"
 df <- df %>% select_if(colSums(.) != 0) %>% mutate_all(as.numeric)
 res_list[[paste0(ds, "_counts_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_counts_all_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_counts_all_0.5")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_0.0001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.0001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_counts_all_0.5")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_all_0.0001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.0001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.01")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.01) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_asinsqrt")]] <- df %>% calc_perc_df() %>% mutate(across(everything(), ~ . / 100)) %>% sqrt() %>% asin() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_impRZilr")]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_multLN")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
@@ -168,41 +170,28 @@ ds_name <- "LeeA_2021_34836966"
 path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
 path_output <- file.path(path_root, "output")
 
-seurat <- readRDS(file.path(path_output, sprintf("%s_Stephenson_preprocessed.rds", ds_name)))
+seurat <- readRDS(file.path(path_output, sprintf("%sp_tumor_seurat.rds", ds_name)))
 
-seurat <- subset(seurat, subset = Site == "Ncl")
-seurat <- subset(seurat, subset = Status %in% c("Healthy", "Covid"))
-seurat$Days_from_onset <- as.character(seurat$Days_from_onset)
-seurat$Days_from_onset[seurat$Days_from_onset == "Healthy"] <- 0
-seurat$Days_from_onset <- as.numeric(seurat$Days_from_onset)
-seurat <- subset(seurat, subset = Days_from_onset < 10)
-
-seurat$sample_id <- as.character(seurat$sample_id)
-samples_exclude <- c("BGCV10_CV0198", "MH8919230")
-samples_subset <- unique(seurat$sample_id[!seurat$sample_id %in% samples_exclude])
-seurat <- subset(seurat, subset = sample_id %in% samples_subset)
-
-
-label_condition <- "Status"
-low_res_ct_col <- "initial_clustering"
-hi_res_ct_col <- "full_clustering"
+label_condition <- "condition"
+low_res_ct_col <- "scGate_multi"
+hi_res_ct_col <- "functional.cluster"
 
 
 df <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
 labels <- as.factor(get_labels(seurat, label_condition))
 
-ds <- "stephenson"
+ds <- "Lee"
 df <- df %>% select_if(colSums(.) != 0) %>% mutate_all(as.numeric)
 res_list[[paste0(ds, "_counts_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_counts_all_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_counts_all_0.5")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_0.0001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.0001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_counts_all_0.5")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_all_0.0001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.0001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.01")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.01) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_asinsqrt")]] <- df %>% calc_perc_df() %>% mutate(across(everything(), ~ . / 100)) %>% sqrt() %>% asin() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_impRZilr")]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_multLN")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
@@ -213,8 +202,10 @@ res_list[[paste0(ds, "_multRepl_1")]] <- df %>% calc_perc_df() %>% multRepl(labe
 
 
 
-### Gong and Sharma et al. dataset (all CMV)
+### Gong and Sharma et al. dataset
 
+
+#### CMV (all)
 
 ```{r}
 # Set paths
@@ -237,14 +228,14 @@ ds <- "gongsharma_allcmv"
 df <- df %>% select_if(colSums(.) != 0) %>% mutate_all(as.numeric)
 res_list[[paste0(ds, "_counts_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_counts_all_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_counts_all_0.5")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_0.0001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.0001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_counts_all_0.5")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_all_0.0001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.0001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.01")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.01) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_asinsqrt")]] <- df %>% calc_perc_df() %>% mutate(across(everything(), ~ . / 100)) %>% sqrt() %>% asin() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_impRZilr")]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_multLN")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
@@ -254,7 +245,7 @@ res_list[[paste0(ds, "_multRepl_1")]] <- df %>% calc_perc_df() %>% multRepl(labe
 ```
 
 
-## Age (females cmvneg)
+#### Age (females cmvneg)
 
 
 ```{r}
@@ -273,14 +264,14 @@ ds <- "gongsharma_agefemalescmvneg"
 df <- df %>% select_if(colSums(.) != 0) %>% mutate_all(as.numeric)
 res_list[[paste0(ds, "_counts_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_counts_all_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_counts_all_0.5")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_0.0001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.0001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_counts_all_0.5")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_all_0.0001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.0001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.01")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.01) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_0.1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_perc_all_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+# res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_asinsqrt")]] <- df %>% calc_perc_df() %>% mutate(across(everything(), ~ . / 100)) %>% sqrt() %>% asin() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_impRZilr")]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_multLN")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
@@ -317,8 +308,8 @@ df_results <- df_results %>%
   ) %>%
   as.data.frame()
 
-levels <- names(res_list)[grepl("zhang", names(res_list))]
-levels <- sub("zhang_", "", levels)
+levels <- names(res_list)[grepl("Zhang", names(res_list))]
+levels <- sub("Zhang_", "", levels)
 
 df_results$imputation_method <- factor(df_results$imputation_method, levels = levels)
 
@@ -331,6 +322,7 @@ names(score.labs) <- sort(unique(df_results$score_method))
 datas.labs <- c(
   "Gong & Sharma\nSubset: all\nSeparation by: CMV infection",
   "Gong & Sharma\nSubset: CMV negative females\nSeparation by: age",
+  "Lee",
   "Stephenson",
   "Zhang")
 names(datas.labs) <- sort(unique(df_results$dataset))
@@ -345,12 +337,12 @@ ggplot(df_results, aes(x = imputation_method, y = values)) +
         legend.position = "none") +
   facet_grid(score_method ~ dataset,
              scales = "free",
-             labeller = labeller(score = score.labs, dataset = datas.labs))
+             labeller = labeller(score_method = score.labs, dataset = datas.labs))
   # facet_grid(scales = "free",
   #            rows = vars(score_method), cols = vars(dataset))
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_detailed_barplot.pdf"),
-       width = 12,
-       height = 7)
+       width = 10,
+       height = 6)
 
 
 
@@ -359,8 +351,8 @@ df_results %>%
   group_by(score_method, imputation_method) %>%
   summarize(mean = mean(values), sem = sd(values) / sqrt(length(values))) %>%
   ungroup() %>%
-  
-  ggplot(aes(x = imputation_method, y = mean)) + 
+
+  ggplot(aes(x = imputation_method, y = mean)) +
   geom_bar(stat = "identity", position = position_dodge()) +
   # stat_summary(fun.y = mean, geom = "bar") +
   geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
@@ -372,9 +364,19 @@ df_results %>%
              rows = vars(score_method),
              labeller = labeller(score_method = score.labs))
 
+ggplot(df_results, aes(x = imputation_method, y = values)) + 
+  geom_boxplot() +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  facet_grid(scales = "free",
+             rows = vars(score_method),
+             labeller = labeller(score_method = score.labs)) +
+  NoLegend()
+
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_barplot_separatescores.pdf"),
        width = 5,
-       height = 7)
+       height = 6)
 
 
 
@@ -392,6 +394,16 @@ df_results %>%
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
   NoLegend()
+
+df_results %>%
+  filter(score_method == "cluster_score") %>%
+  ggplot(aes(x = imputation_method, y = values)) +
+  geom_boxplot() +
+  stat_compare_means(method = "anova", label.x.npc = 0.05, label.y.npc = 0.05) +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Adjusted Rand Index") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_barplot.pdf"),
        width = 4,
        height = 3)
@@ -419,18 +431,32 @@ data.frame(normality)
 cat(paste("All groups normally ditributed?", all(normality$p > 0.05),
             "\nNot normally distributed:", normality$imputation_method[normality$p <= 0.05]))
 
-res <- rstatix::anova_test(data = df_results_cluster, dv = values, wid = dataset, within = imputation_method) 
-rstatix::get_anova_table(res)
+# res <- rstatix::anova_test(data = df_results_cluster, dv = values, wid = dataset, within = imputation_method) 
+# rstatix::get_anova_table(res)
+# 
+# pair_t <- df_results_cluster %>%
+#   rstatix::pairwise_t_test(values~imputation_method, paired=TRUE, p.adjust.method = "BH" )
+# data.frame(pair_t)
 
-pair_t <- df_results_cluster %>%
-  rstatix::pairwise_t_test(values~imputation_method, paired=TRUE, p.adjust.method = "BH" )
-data.frame(pair_t)
-unpair_t <- df_results_cluster %>%
-  rstatix::pairwise_t_test(values~imputation_method, paired=FALSE, p.adjust.method = "BH" )
-data.frame(pair_t)
+# Example assuming 'data' is your dataframe
+anova_result <- aov(values ~ imputation_method, data = df_results_cluster)
+summary(anova_result)
 
-pair_wilcoxon <- df_results_cluster %>%
-  rstatix::pairwise_wilcox_test(values~imputation_method, paired=TRUE, p.adjust.method = "BH" )
-data.frame(pair_wilcoxon)
+
+
+
+df_results_cluster <- df_results %>% filter(score_method == "mod_score")
+
+# Example assuming 'data' is your dataframe
+anova_result <- aov(values ~ imputation_method, data = df_results_cluster)
+summary(anova_result)
+
+
+
+df_results_cluster <- df_results %>% filter(score_method == "sil_score")
+
+# Example assuming 'data' is your dataframe
+anova_result <- aov(values ~ imputation_method, data = df_results_cluster)
+summary(anova_result)
 ```
 

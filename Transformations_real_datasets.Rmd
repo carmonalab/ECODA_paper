@@ -407,7 +407,7 @@ hi_res_ct_col <- "layer2"
 count_mat <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
 labels <- as.factor(get_labels(seurat, label_condition))
 
-ds <- "zhang"
+ds <- "Zhang"
 results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
                                    methods = c(
                                      "counts",
@@ -461,7 +461,7 @@ hi_res_ct_col <- "full_clustering"
 count_mat <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
 labels <- as.factor(get_labels(seurat, label_condition))
 
-ds <- "stephenson"
+ds <- "Stephenson"
 results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
                                    methods = c(
                                      "counts",
@@ -481,7 +481,50 @@ results_list[[ds]]$dataset <- ds
 ```
 
 
-### Gong and Sharma et al. dataset (all CMV)
+
+### Lee et al. dataset
+
+
+```{r}
+# Set paths
+ds_name <- "LeeA_2021_34836966"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+
+seurat <- readRDS(file.path(path_output, sprintf("%sp_tumor_seurat.rds", ds_name)))
+
+label_condition <- "condition"
+low_res_ct_col <- "scGate_multi"
+hi_res_ct_col <- "functional.cluster"
+
+
+count_mat <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
+labels <- as.factor(get_labels(seurat, label_condition))
+
+ds <- "Lee"
+results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
+                                   methods = c(
+                                     "counts",
+                                     "freq",
+                                     "asin_sqrt",
+                                     "alr_randref",
+                                     "alr_mincvref",
+                                     "clr"
+                                   ))
+results_list[[ds]] <- results_list[[ds]] %>%
+  group_by(method) %>%
+  summarize(silhouette = mean(silhouette),
+            modularity = mean(modularity),
+            clustering = mean(clustering)) %>%
+  ungroup()
+results_list[[ds]]$dataset <- ds
+```
+
+
+### Gong and Sharma et al. dataset
+
+#### CMV
 
 
 ```{r}
@@ -588,6 +631,7 @@ names(score.labs) <- sort(unique(df_results$score_method))
 datas.labs <- c(
   "Gong & Sharma\nSubset: all\nSeparation by: CMV infection",
   "Gong & Sharma\nSubset: CMV negative females\nSeparation by: age",
+  "Lee",
   "Stephenson",
   "Zhang")
 names(datas.labs) <- sort(unique(df_results$dataset))
@@ -596,14 +640,14 @@ names(datas.labs) <- sort(unique(df_results$dataset))
 
 ggplot(df_results, aes(x = method, y = values)) +
   geom_bar(stat = "identity", position = position_dodge()) +
-  labs(x = "Imputation method",
-       y = "Separation") +
+  labs(x = "",
+       y = "Separation score") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
         legend.position = "none") +
   facet_grid(score_method ~ dataset,
              scales = "free",
-             labeller = labeller(score = score.labs, dataset = datas.labs))
+             labeller = labeller(score_method = score.labs, dataset = datas.labs))
   # facet_grid(scales = "free",
   #            rows = vars(score_method), cols = vars(dataset))
 ggsave(file.path(path_plots, "transformations_real_datasets_detailed_barplot.pdf"),
@@ -629,9 +673,20 @@ df_results %>%
              rows = vars(score_method),
              labeller = labeller(score_method = score.labs))
 
+
+ggplot(df_results, aes(x = method, y = values)) + 
+  geom_boxplot() +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  facet_grid(scales = "free",
+             rows = vars(score_method),
+             labeller = labeller(score_method = score.labs)) +
+  NoLegend()
+
 ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot_separatescores.pdf"),
-       width = 5,
-       height = 7)
+       width = 3,
+       height = 5)
 
 
 
@@ -645,71 +700,64 @@ df_results_clustering %>%
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
   NoLegend()
+
+
+df_results_clustering <- df_results %>%
+  filter(score_method == "clustering")
+
+# Example assuming 'data' is your dataframe
+anova_result <- aov(values ~ method, data = df_results_clustering)
+summary(anova_result)
+stat.test <- tukey_hsd(anova_result)
+stat.test
+stat.test$p.adj <- round(stat.test$p.adj, 3)
+# stat.test <- stat.test[["method"]] %>% as.data.frame()
+# 
+# # Extract row names where p adj < 0.05
+# significant_comparisons <- rownames(stat.test)[stat.test[["p adj"]] < 0.05]
+# 
+# # Initialize an empty list to store results
+# my_comparisons <- list()
+# 
+# # Split and store each comparison in the list
+# for (comparison in significant_comparisons) {
+#   parts <- strsplit(comparison, "-")[[1]]
+#   my_comparisons <- c(my_comparisons, list(parts))
+# }
+
+ggplot(df_results_clustering, aes(x = method, y = values)) + 
+  geom_boxplot() +
+  labs(x = "", y = "Adjusted Rand Index") +
+  stat_compare_means(method = "anova", label.x.npc = 0.05, label.y.npc = 0.05) +
+  # stat_compare_means(
+  #   comparisons = my_comparisons,
+  #   method = "t.test", 
+  #   paired = F,
+  #   p.adjust.method = "BH" #,
+  #   # symnum.args = list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols = c("****", "***", "**", "*", "ns"))
+  # ) +
+  stat_pvalue_manual(stat.test, label = "p.adj", 
+    y.position = c(max(df_results_clustering$values)+0.1, max(df_results_clustering$values)+0.2), hide.ns = TRUE) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  NoLegend()
+
 ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot.pdf"),
-       width = 2.5,
-       height = 2.5)
+       width = 4,
+       height = 4)
 
 ```
 
-
-## Plot all
+# Statistical comparison
 
 ```{r}
-# df_plot <- data.frame(values = unlist(res_list) / length(unique(dataset)) / length(unique(scores)),
-#                       dataset = dataset,
-#                       imputation_method = middle_parts,
-#                       score = sapply(str_split(names(unlist(res_list)), "\\."), function(x) x[length(x)]))
-# summarized_df <- df_plot %>%
-#   group_by(imputation_method) %>%
-#   summarize(values = sum(values))
-# summarized_df$score <- factor(sapply(str_split(summarized_df$imputation_method, "\\."), function(x) x[length(x)]))
-# summarized_df$imputation_method <- gsub("\\.sil_score|\\.mod_score", "", summarized_df$imputation_method)
+df_results_clustering <- df_results %>%
+  filter(score_method == "clustering")
 
-summarized_df <- Reduce(rbind, results_list)
-summarized_df <- summarized_df %>%
-  pivot_longer(
-    cols = c(silhouette, modularity, clustering),
-    names_to = "score_method",
-    values_to = "values"
-  )
+# Example assuming 'data' is your dataframe
+anova_result <- aov(values ~ method, data = df_results_clustering)
+summary(anova_result)
 
-ggplot(summarized_df, aes(x = method, y = values, fill = score_method)) +
-  geom_bar(stat = "identity", position = position_dodge()) +
-  labs(x = "Imputation method",
-       y = "Separation") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-  facet_grid(scales = "free",
-             rows = vars(score_method), cols = vars(dataset))
-ggsave(file.path(path_plots, "transformations_real_datasets_detailed_barplot_separatescores.pdf"),
-       width = 6,
-       height = 4)
-
-
-
-summarized_df <- summarized_df %>%
-  group_by(score_method, method) %>%
-  summarize(values = mean(values)) %>%
-  ungroup()
-
-ggplot(summarized_df, aes(x = method, y = values, fill = score_method)) +
-  geom_bar(stat = "identity", position = position_dodge()) +
-  labs(x = "Imputation method",
-       y = "Separation") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-
-ggplot(summarized_df, aes(x = method, y = values, fill = score_method)) +
-  geom_bar(stat = "identity", position = position_dodge()) +
-  labs(x = "Imputation method",
-       y = "Separation") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-  facet_grid(scales = "free",
-             rows = vars(score_method))
-ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot_separatescores.pdf"),
-       width = 4,
-       height = 4)
+TukeyHSD(aov(df_results_clustering$values ~ df_results_clustering$method))
 ```
 
 
