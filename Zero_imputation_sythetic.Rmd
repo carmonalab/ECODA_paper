@@ -77,21 +77,21 @@ b1 <- cbind(rownames(a), rep("+1 to all", nrow(a)), b1)
 colnames(b1) <- c("V1", "V2", colnames(a))
 df <- rbind(df, b1)
 
-c <- a
-for(row in 1:nrow(a)){
-  c[row,][c[row,] == 0] <- sum(c[row,]/100)
-}
-c_plot <- as.data.frame(c)
-c_perc_plot <- calc_perc_df(c) %>% round(2)
-c <- calc_perc_df(c)
-# c_plot$geom <- round(apply(c_plot, 1, calculate_geometric_mean),2)
-for(row in 1:nrow(a)){
-  c[row,] <- Hotelling::clr(c[row,]/100)
-}
-c_clr_plot <- round(c, 2)
-c <- cbind(rownames(a), rep("+1%", nrow(a)), c)
-colnames(c) <- c("V1", "V2", colnames(a))
-df <- rbind(df, c)
+# c <- a
+# for(row in 1:nrow(a)){
+#   c[row,][c[row,] == 0] <- sum(c[row,]/100)
+# }
+# c_plot <- as.data.frame(c)
+# c_perc_plot <- calc_perc_df(c) %>% round(2)
+# c <- calc_perc_df(c)
+# # c_plot$geom <- round(apply(c_plot, 1, calculate_geometric_mean),2)
+# for(row in 1:nrow(a)){
+#   c[row,] <- Hotelling::clr(c[row,]/100)
+# }
+# c_clr_plot <- round(c, 2)
+# c <- cbind(rownames(a), rep("+1%", nrow(a)), c)
+# colnames(c) <- c("V1", "V2", colnames(a))
+# df <- rbind(df, c)
 
 d <- a
 for(row in 1:nrow(a)){
@@ -134,14 +134,16 @@ for(row in 1:nrow(a)){
   d2[row,] <- Hotelling::clr(d2[row,]/100)
 }
 d2_clr_plot <- round(d2, 2)
-d2 <- cbind(rownames(a), rep("+0.1% to all multRepl", nrow(a)), d2)
+d2 <- cbind(rownames(a), rep("+0.1% multRepl", nrow(a)), d2)
 colnames(d2) <- c("V1", "V2", colnames(a))
 df <- rbind(df, d2)
 
 
 df <- data.frame(df)
 df$V1 <- factor(df$V1, levels = c("low", "medium", "high", "one_low"))
-df$V2 <- factor(df$V2, levels = c("+1", "+1 to all", "+1%", "+1% to all", "+0.1% to all", "+0.1% to all multRepl"))
+df$V2 <- factor(df$V2, levels = c("+1", "+1 to all",
+                                  # "+1%",
+                                  "+1% to all", "+0.1% to all", "+0.1% multRepl"))
 
 
 df_long <- reshape2::melt(df, id = c("V1", "V2"))
@@ -179,21 +181,21 @@ clr_grob_title <- text_grob("CLR:", size = 16, just = "left", face = "bold")
 a_grob <- tableGrob(a_plot)
 b_grob <- tableGrob(b_plot)
 b1_grob <- tableGrob(b1_plot)
-c_grob <- tableGrob(c_plot)
+# c_grob <- tableGrob(c_plot)
 d_grob <- tableGrob(d_plot)
 d1_grob <- tableGrob(d1_plot)
 
 a_perc_grob <- tableGrob(a_perc_plot)
 b_perc_grob <- tableGrob(b_perc_plot)
 b1_perc_grob <- tableGrob(b1_perc_plot)
-c_perc_grob <- tableGrob(c_perc_plot)
+# c_perc_grob <- tableGrob(c_perc_plot)
 d_perc_grob <- tableGrob(d_perc_plot)
 d1_perc_grob <- tableGrob(d1_perc_plot)
 d2_perc_grob <- tableGrob(d2_perc_plot)
 
 b_clr_grob <- tableGrob(b_clr_plot)
 b1_clr_grob <- tableGrob(b1_clr_plot)
-c_clr_grob <- tableGrob(c_clr_plot)
+# c_clr_grob <- tableGrob(c_clr_plot)
 d_clr_grob <- tableGrob(d_clr_plot)
 d1_clr_grob <- tableGrob(d1_clr_plot)
 d2_clr_grob <- tableGrob(d2_clr_plot)
@@ -220,18 +222,18 @@ grid.arrange(
   a_grob,
   b_grob,
   b1_grob,
-  c_grob,
+  # c_grob,
   d_grob,
   d1_grob,
   b_perc_grob,
   b1_perc_grob,
-  c_perc_grob,
+  # c_perc_grob,
   d_perc_grob,
   d1_perc_grob,
   d2_perc_grob,
   b_clr_grob,
   b1_clr_grob,
-  c_clr_grob,
+  # c_clr_grob,
   d_clr_grob,
   d1_clr_grob,
   d2_clr_grob,
@@ -250,18 +252,18 @@ grid.arrange(
   a_grob,
   b_grob,
   b1_grob,
-  c_grob,
+  # c_grob,
   d_grob,
   d1_grob,
   b_perc_grob,
   b1_perc_grob,
-  c_perc_grob,
+  # c_perc_grob,
   d_perc_grob,
   d1_perc_grob,
   d2_perc_grob,
   b_clr_grob,
   b1_clr_grob,
-  c_clr_grob,
+  # c_clr_grob,
   d_clr_grob,
   d1_clr_grob,
   d2_clr_grob,
