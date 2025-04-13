@@ -243,17 +243,17 @@ plot_pca <- function(feat_mat,
   
   res.pca <- prcomp(feat_mat, scale. = scale.)
   
-  if (sil_score) {
-    sil_score <- round(calc_sil(feat_mat, labels), 3)
-    title <- paste0(title, "\nSilhouette score: ", sil_score)
+  if (cluster_score) {
+    cluster_score <- clust_eval(feat_mat, labels)
+    title <- paste0(title, "\nCluster score: ", cluster_score)
   }
   if (mod_score) {
     mod_score <- round(calc_modularity(feat_mat, labels, knn_k), 3)
     title <- paste0(title, "\nModularity score: ", mod_score)
   }
-  if (cluster_score) {
-    cluster_score <- clust_eval(feat_mat, labels)
-    title <- paste0(title, "\nCluster score: ", cluster_score)
+  if (sil_score) {
+    sil_score <- round(calc_sil(feat_mat, labels), 3)
+    title <- paste0(title, "\nSilhouette score: ", sil_score)
   }
   
   p <- factoextra::fviz_pca(res.pca,
@@ -699,6 +699,7 @@ calc_sep_score <- function(df,
   sil_score <- round(calc_sil(df, labels), 3)
   mod_score <- unlist(round(calc_modularity(df, labels, knn_k), 3))
   cluster_score <- clust_eval(matrix = df, labels = labels)
+  anosim_score <- vegan::anosim(x = df, grouping = labels, distance = "euclidean")[["statistic"]]
   
   res <- list(sil_score = sil_score,
               mod_score = mod_score,
