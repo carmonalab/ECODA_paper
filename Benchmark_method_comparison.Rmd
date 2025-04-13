@@ -74,7 +74,7 @@ path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
 ```{r}
 result_list <- list()
 
-factors_test <- c(2, 5, 10, 25)
+factors_test <- c(2, 5, 10)
 ```
 
 
@@ -167,7 +167,7 @@ for (i in factors_test) {
   # MOFA
   result_list[[ds]][[paste0("mofa_", i, "_factors")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, save_file_path = file.path(paste0("data/zhang_mofa_object_", i, "factors.rds")))
   
-  result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/zhang_mofa_object_", i, "factors.rds")))
+  # result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/zhang_mofa_object_", i, "factors.rds")))
   
   # scITD
   result_list[[ds]][[paste0("scitd_", i, "_factors")]] <- process_scitd_fig(seurat = seurat, ct_col = low_res_ct_col, label_col = label_col, hvg = hvg, num_factors = i)
@@ -258,7 +258,7 @@ for (i in factors_test) {
   # MOFA
   result_list[[ds]][[paste0("mofa_", i, "_factors")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, save_file_path = file.path(paste0("data/mitchel_mofa_object_", i, "factors.rds")))
   
-  result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/mitchel_mofa_object_", i, "factors.rds")))
+  # result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/mitchel_mofa_object_", i, "factors.rds")))
   
   # scITD
   result_list[[ds]][[paste0("scitd_", i, "_factors")]] <- process_scitd_fig(seurat = seurat, ct_col = low_res_ct_col, label_col = label_col, hvg = hvg, num_factors = i)
@@ -278,6 +278,94 @@ ggsave(file.path(path_plots, "benchmark_pca_mitchel.pdf"),
 ```
 
 
+
+# ---------------------------------------------------------------
+
+# Lee et al. dataset
+
+## Set paths
+
+```{r}
+ds <- "Lee"
+
+ds_name <- "LeeA_2021_34836966"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+```
+
+
+### Load seurat object
+
+```{r}
+seurat <- readRDS(file.path(path_output, sprintf("%sp_tumor_seurat.rds", ds_name)))
+
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
+hvg <- varf[!is.na(varf)]
+
+label_col <- "condition"
+low_res_ct_col <- "scGate_multi"
+hi_res_ct_col <- "functional.cluster"
+
+# Convert Seurat object to anndata for interoperability with python
+object <- seurat
+object[["RNA3"]] <- as(object = object[["RNA"]], Class = "Assay")
+DefaultAssay(object) <- "RNA3"
+object[["RNA"]] <- NULL
+object <- RenameAssays(object = object, RNA3 = 'RNA')
+# SaveH5Seurat(object, filename = "lee.h5Seurat")
+# Convert("lee.h5Seurat", dest = "h5ad")
+# rm(object); gc()
+```
+
+### Create plots
+
+```{r}
+result_list[[ds]] <- list()
+labels <- get_labels(seurat, label_col)
+
+# Pseudobulk
+pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
+pseudobulk_hvg <- pseudobulk[hvg,]
+result_list[[ds]][["pseudobulk"]] <- process_pseudobulk_fig(pseudobulk_hvg = pseudobulk_hvg, labels = labels, hvg = hvg)
+
+
+# Deconvolute using EPIC
+result_list[[ds]][["deconv"]] <- process_deconv_fig(pseudobulk = pseudobulk, labels = labels)
+
+# CoDA
+## layer1: low res. cell types
+result_list[[ds]][["coda_lowres"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = low_res_ct_col, title = "Cell type composition - low res. cell types")
+
+## layer2: high res. cell types
+result_list[[ds]][["coda_hires"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = hi_res_ct_col, title = "Cell type composition - high res. cell types")
+
+for (i in factors_test) {
+  # MOFA
+  result_list[[ds]][[paste0("mofa_", i, "_factors")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, save_file_path = file.path(paste0("data/lee_mofa_object_", i, "factors.rds")))
+  
+  # result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/lee_mofa_object_", i, "factors.rds")))
+  
+  # scITD
+  result_list[[ds]][[paste0("scitd_", i, "_factors")]] <- process_scitd_fig(seurat = seurat, ct_col = low_res_ct_col, label_col = label_col, hvg = hvg, num_factors = i)
+}
+
+# MrVI
+result_list[[ds]][["mrvi"]] <- process_mrvi_fig(seurat = seurat, dist_file = "data/lee_dists.nc", "scGate_multi", label_col)
+
+
+plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, "benchmark_pca_lee.pdf"),
+       plot = p,
+       width = 15,
+       height = 10)
+```
+
+
+
 # ---------------------------------------------------------------
 
 # Gong and Sharma et al. dataset
@@ -294,66 +382,68 @@ path_output <- file.path(path_root, "output")
 ```
 
 
-## All CMV
+# ----> removed
+
+## CMV (all)
 
 ### Load seurat object
 
 ```{r}
-seurat <- load_seurat_object("data/gongsharma_all.h5ad")
-seurat$Sample <- seurat$specimen.specimenGuid
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-hvg <- seurat@assays[["RNA"]]@var.features
-
-seurat@version <- obj@version
+# seurat <- load_seurat_object("data/gongsharma_all.h5ad")
+# seurat$Sample <- seurat$specimen.specimenGuid
+# seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+# hvg <- seurat@assays[["RNA"]]@var.features
+# 
+# seurat@version <- obj@version
 ```
 
 ### Create plots
 
 ```{r}
-label_col <- "subject.cmv"
-low_res_ct_col <- "AIFI_L1"
-hi_res_ct_col <- "AIFI_L3"
-
-result_list[[ds]] <- list()
-labels <- get_labels(seurat, label_col)
-
-# Pseudobulk
-pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
-pseudobulk_hvg <- pseudobulk[hvg,]
-result_list[[ds]][["pseudobulk"]] <- process_pseudobulk_fig(pseudobulk_hvg = pseudobulk_hvg, labels = labels, hvg = hvg)
-
-
-# Deconvolute using EPIC
-result_list[[ds]][["deconv"]] <- process_deconv_fig(pseudobulk = pseudobulk, labels = labels)
-
-# CoDA
-## layer1: low res. cell types
-result_list[[ds]][["coda_lowres"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = low_res_ct_col, title = "Cell type composition - low res. cell types")
-
-## layer2: high res. cell types
-result_list[[ds]][["coda_hires"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = hi_res_ct_col, title = "Cell type composition - high res. cell types")
-
-for (i in factors_test) {
-  # MOFA
-  result_list[[ds]][[paste0("mofa_", i, "_factors")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, save_file_path = file.path(paste0("data/gongsharma_all_cmv_mofa_object_", i, "factors.rds")))
-  
-  result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/gongsharma_all_cmv_mofa_object_", i, "factors.rds")))
-  
-  # scITD
-  result_list[[ds]][[paste0("scitd_", i, "_factors")]] <- process_scitd_fig(seurat = seurat, ct_col = low_res_ct_col, label_col = label_col, hvg = hvg, num_factors = i)
-}
-
-# MrVI
-result_list[[ds]][["mrvi"]] <- process_mrvi_fig(seurat = seurat, dist_file = "data/gongsharma_all_dists.nc", ct_col = low_res_ct_col, label_col = label_col)
-
-
-plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
-p <- cowplot::plot_grid(plotlist = plot_list)
-p
-ggsave(file.path(path_plots, "benchmark_pca_gongsharma_all_cmv.pdf"),
-       plot = p,
-       width = 15,
-       height = 10)
+# label_col <- "subject.cmv"
+# low_res_ct_col <- "AIFI_L1"
+# hi_res_ct_col <- "AIFI_L3"
+# 
+# result_list[[ds]] <- list()
+# labels <- get_labels(seurat, label_col)
+# 
+# # Pseudobulk
+# pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
+# pseudobulk_hvg <- pseudobulk[hvg,]
+# result_list[[ds]][["pseudobulk"]] <- process_pseudobulk_fig(pseudobulk_hvg = pseudobulk_hvg, labels = labels, hvg = hvg)
+# 
+# 
+# # Deconvolute using EPIC
+# result_list[[ds]][["deconv"]] <- process_deconv_fig(pseudobulk = pseudobulk, labels = labels)
+# 
+# # CoDA
+# ## layer1: low res. cell types
+# result_list[[ds]][["coda_lowres"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = low_res_ct_col, title = "Cell type composition - low res. cell types")
+# 
+# ## layer2: high res. cell types
+# result_list[[ds]][["coda_hires"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = hi_res_ct_col, title = "Cell type composition - high res. cell types")
+# 
+# for (i in factors_test) {
+#   # MOFA
+#   result_list[[ds]][[paste0("mofa_", i, "_factors")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, save_file_path = file.path(paste0("data/gongsharma_all_cmv_mofa_object_", i, "factors.rds")))
+#   
+#   result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/gongsharma_all_cmv_mofa_object_", i, "factors.rds")))
+#   
+#   # scITD
+#   result_list[[ds]][[paste0("scitd_", i, "_factors")]] <- process_scitd_fig(seurat = seurat, ct_col = low_res_ct_col, label_col = label_col, hvg = hvg, num_factors = i)
+# }
+# 
+# # MrVI
+# result_list[[ds]][["mrvi"]] <- process_mrvi_fig(seurat = seurat, dist_file = "data/gongsharma_all_dists.nc", ct_col = low_res_ct_col, label_col = label_col)
+# 
+# 
+# plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
+# p <- cowplot::plot_grid(plotlist = plot_list)
+# p
+# ggsave(file.path(path_plots, "benchmark_pca_gongsharma_all_cmv.pdf"),
+#        plot = p,
+#        width = 15,
+#        height = 10)
 ```
 
 
@@ -362,52 +452,52 @@ ggsave(file.path(path_plots, "benchmark_pca_gongsharma_all_cmv.pdf"),
 ### Create plots
 
 ```{r}
-ds <- "GongSharma_all_gender"
-
-label_col <- "subject.biologicalSex"
-low_res_ct_col <- "AIFI_L1"
-hi_res_ct_col <- "AIFI_L3"
-
-result_list[[ds]] <- list()
-labels <- get_labels(seurat, label_col)
-
-# Pseudobulk
-pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
-pseudobulk_hvg <- pseudobulk[hvg,]
-result_list[[ds]][["pseudobulk"]] <- process_pseudobulk_fig(pseudobulk_hvg = pseudobulk_hvg, labels = labels, hvg = hvg)
-
-
-# Deconvolute using EPIC
-result_list[[ds]][["deconv"]] <- process_deconv_fig(pseudobulk = pseudobulk, labels = labels)
-
-# CoDA
-## layer1: low res. cell types
-result_list[[ds]][["coda_lowres"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = low_res_ct_col, title = "Cell type composition - low res. cell types")
-
-## layer2: high res. cell types
-result_list[[ds]][["coda_hires"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = hi_res_ct_col, title = "Cell type composition - high res. cell types")
-
-for (i in factors_test) {
-  # MOFA
-  result_list[[ds]][[paste0("mofa_", i, "_factors")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, save_file_path = file.path(paste0("data/gongsharma_all_gender_mofa_object_", i, "factors.rds")))
-  
-  result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/gongsharma_all_gender_mofa_object_", i, "factors.rds")))
-  
-  # scITD
-  result_list[[ds]][[paste0("scitd_", i, "_factors")]] <- process_scitd_fig(seurat = seurat, ct_col = low_res_ct_col, label_col = label_col, hvg = hvg, num_factors = i)
-}
-
-# MrVI
-result_list[[ds]][["mrvi"]] <- process_mrvi_fig(seurat = seurat, dist_file = "data/gongsharma_all_dists.nc", ct_col = low_res_ct_col, label_col = label_col)
-
-
-plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
-p <- cowplot::plot_grid(plotlist = plot_list)
-p
-ggsave(file.path(path_plots, "benchmark_pca_gongsharma_all_gender.pdf"),
-       plot = p,
-       width = 15,
-       height = 10)
+# ds <- "GongSharma_all_gender"
+# 
+# label_col <- "subject.biologicalSex"
+# low_res_ct_col <- "AIFI_L1"
+# hi_res_ct_col <- "AIFI_L3"
+# 
+# result_list[[ds]] <- list()
+# labels <- get_labels(seurat, label_col)
+# 
+# # Pseudobulk
+# pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
+# pseudobulk_hvg <- pseudobulk[hvg,]
+# result_list[[ds]][["pseudobulk"]] <- process_pseudobulk_fig(pseudobulk_hvg = pseudobulk_hvg, labels = labels, hvg = hvg)
+# 
+# 
+# # Deconvolute using EPIC
+# result_list[[ds]][["deconv"]] <- process_deconv_fig(pseudobulk = pseudobulk, labels = labels)
+# 
+# # CoDA
+# ## layer1: low res. cell types
+# result_list[[ds]][["coda_lowres"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = low_res_ct_col, title = "Cell type composition - low res. cell types")
+# 
+# ## layer2: high res. cell types
+# result_list[[ds]][["coda_hires"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = hi_res_ct_col, title = "Cell type composition - high res. cell types")
+# 
+# for (i in factors_test) {
+#   # MOFA
+#   result_list[[ds]][[paste0("mofa_", i, "_factors")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, save_file_path = file.path(paste0("data/gongsharma_all_gender_mofa_object_", i, "factors.rds")))
+#   
+#   result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/gongsharma_all_gender_mofa_object_", i, "factors.rds")))
+#   
+#   # scITD
+#   result_list[[ds]][[paste0("scitd_", i, "_factors")]] <- process_scitd_fig(seurat = seurat, ct_col = low_res_ct_col, label_col = label_col, hvg = hvg, num_factors = i)
+# }
+# 
+# # MrVI
+# result_list[[ds]][["mrvi"]] <- process_mrvi_fig(seurat = seurat, dist_file = "data/gongsharma_all_dists.nc", ct_col = low_res_ct_col, label_col = label_col)
+# 
+# 
+# plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
+# p <- cowplot::plot_grid(plotlist = plot_list)
+# p
+# ggsave(file.path(path_plots, "benchmark_pca_gongsharma_all_gender.pdf"),
+#        plot = p,
+#        width = 15,
+#        height = 10)
 ```
 
 
@@ -418,66 +508,67 @@ ggsave(file.path(path_plots, "benchmark_pca_gongsharma_all_gender.pdf"),
 ### Load seurat objects
 
 ```{r}
-ds <- "GongSharma_cmvneg_gender"
-
-seurat <- load_seurat_object("data/gongsharma_gender_cmvneg.h5ad")
-seurat$Sample <- seurat$specimen.specimenGuid
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-hvg <- seurat@assays[["RNA"]]@var.features
-
-seurat@version <- obj@version
+# ds <- "GongSharma_cmvneg_gender"
+# 
+# seurat <- load_seurat_object("data/gongsharma_gender_cmvneg.h5ad")
+# seurat$Sample <- seurat$specimen.specimenGuid
+# seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+# hvg <- seurat@assays[["RNA"]]@var.features
+# 
+# seurat@version <- obj@version
 ```
 
 
 ### Create plots
 
 ```{r}
-label_col <- "subject.biologicalSex"
-low_res_ct_col <- "AIFI_L1"
-hi_res_ct_col <- "AIFI_L3"
-
-result_list[[ds]] <- list()
-labels <- get_labels(seurat, label_col)
-
-# Pseudobulk
-pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
-pseudobulk_hvg <- pseudobulk[hvg,]
-result_list[[ds]][["pseudobulk"]] <- process_pseudobulk_fig(pseudobulk_hvg = pseudobulk_hvg, labels = labels, hvg = hvg)
-
-
-# Deconvolute using EPIC
-result_list[[ds]][["deconv"]] <- process_deconv_fig(pseudobulk = pseudobulk, labels = labels)
-
-# CoDA
-## layer1: low res. cell types
-result_list[[ds]][["coda_lowres"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = low_res_ct_col, title = "Cell type composition - low res. cell types")
-
-## layer2: high res. cell types
-result_list[[ds]][["coda_hires"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = hi_res_ct_col, title = "Cell type composition - high res. cell types")
-
-for (i in factors_test) {
-  # MOFA
-  result_list[[ds]][[paste0("mofa_", i, "_factors")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, save_file_path = file.path(paste0("data/gongsharma_cmvneg_gender_mofa_object_", i, "factors.rds")))
-  
-  result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/gongsharma_cmvneg_gender_mofa_object_", i, "factors.rds")))
-  
-  # scITD
-  result_list[[ds]][[paste0("scitd_", i, "_factors")]] <- process_scitd_fig(seurat = seurat, ct_col = low_res_ct_col, label_col = label_col, hvg = hvg, num_factors = i)
-}
-
-# MrVI
-result_list[[ds]][["mrvi"]] <- process_mrvi_fig(seurat = seurat, dist_file = "data/gongsharma_gender_cmvneg_dists.nc", ct_col = low_res_ct_col, label_col = label_col)
-
-
-plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
-p <- cowplot::plot_grid(plotlist = plot_list)
-p
-ggsave(file.path(path_plots, "benchmark_pca_gongsharma_cmvneg_gender.pdf"),
-       plot = p,
-       width = 15,
-       height = 10)
+# label_col <- "subject.biologicalSex"
+# low_res_ct_col <- "AIFI_L1"
+# hi_res_ct_col <- "AIFI_L3"
+# 
+# result_list[[ds]] <- list()
+# labels <- get_labels(seurat, label_col)
+# 
+# # Pseudobulk
+# pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
+# pseudobulk_hvg <- pseudobulk[hvg,]
+# result_list[[ds]][["pseudobulk"]] <- process_pseudobulk_fig(pseudobulk_hvg = pseudobulk_hvg, labels = labels, hvg = hvg)
+# 
+# 
+# # Deconvolute using EPIC
+# result_list[[ds]][["deconv"]] <- process_deconv_fig(pseudobulk = pseudobulk, labels = labels)
+# 
+# # CoDA
+# ## layer1: low res. cell types
+# result_list[[ds]][["coda_lowres"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = low_res_ct_col, title = "Cell type composition - low res. cell types")
+# 
+# ## layer2: high res. cell types
+# result_list[[ds]][["coda_hires"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = hi_res_ct_col, title = "Cell type composition - high res. cell types")
+# 
+# for (i in factors_test) {
+#   # MOFA
+#   result_list[[ds]][[paste0("mofa_", i, "_factors")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, save_file_path = file.path(paste0("data/gongsharma_cmvneg_gender_mofa_object_", i, "factors.rds")))
+#   
+#   result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/gongsharma_cmvneg_gender_mofa_object_", i, "factors.rds")))
+#   
+#   # scITD
+#   result_list[[ds]][[paste0("scitd_", i, "_factors")]] <- process_scitd_fig(seurat = seurat, ct_col = low_res_ct_col, label_col = label_col, hvg = hvg, num_factors = i)
+# }
+# 
+# # MrVI
+# result_list[[ds]][["mrvi"]] <- process_mrvi_fig(seurat = seurat, dist_file = "data/gongsharma_gender_cmvneg_dists.nc", ct_col = low_res_ct_col, label_col = label_col)
+# 
+# 
+# plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
+# p <- cowplot::plot_grid(plotlist = plot_list)
+# p
+# ggsave(file.path(path_plots, "benchmark_pca_gongsharma_cmvneg_gender.pdf"),
+#        plot = p,
+#        width = 15,
+#        height = 10)
 ```
 
+# <---- removed
 
 ## CMV (females)
 
@@ -526,7 +617,7 @@ for (i in factors_test) {
   # MOFA
   result_list[[ds]][[paste0("mofa_", i, "_factors")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, save_file_path = file.path(paste0("data/gongsharma_females_cmv_mofa_object_", i, "factors.rds")))
   
-  result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/gongsharma_females_cmv_mofa_object_", i, "factors.rds")))
+  # result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/gongsharma_females_cmv_mofa_object_", i, "factors.rds")))
   
   # scITD
   result_list[[ds]][[paste0("scitd_", i, "_factors")]] <- process_scitd_fig(seurat = seurat, ct_col = low_res_ct_col, label_col = label_col, hvg = hvg, num_factors = i)
@@ -594,7 +685,7 @@ for (i in factors_test) {
   # MOFA
   result_list[[ds]][[paste0("mofa_", i, "_factors")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, save_file_path = file.path(paste0("data/gongsharma_females_cmvneg_age_mofa_object_", i, "factors.rds")))
   
-  result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/gongsharma_females_cmvneg_age_mofa_object_", i, "factors.rds")))
+  # result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/gongsharma_females_cmvneg_age_mofa_object_", i, "factors.rds")))
   
   # scITD
   result_list[[ds]][[paste0("scitd_", i, "_factors")]] <- process_scitd_fig(seurat = seurat, ct_col = low_res_ct_col, label_col = label_col, hvg = hvg, num_factors = i)
@@ -644,7 +735,16 @@ df_results <- imap_dfr(result_list, ~ {
 
 # Plot results
 
-```{r fig.height=6, fig.width=16}
+```{r fig.height=10, fig.width=14}
+df_results$method[df_results$method == "pseudobulk"] <- "Pseudobulk"
+df_results$method[df_results$method == "mrvi"] <- "MrVI"
+df_results$method[df_results$method == "deconv"] <- "ECODA_deconv"
+df_results$method[df_results$method == "coda_lowres"] <- "ECODA_low_res"
+df_results$method[df_results$method == "coda_hires"] <- "ECODA_high_res"
+df_results <- df_results %>%
+  mutate(method = gsub("mofa", "MOFA", method)) %>%
+  mutate(method = gsub("scitd", "scITD", method))
+
 df_results_clustering <- df_results %>%
   filter(score == "cluster_score") %>%
   group_by(method) %>%
@@ -674,11 +774,9 @@ names(score.labs) <- sort(unique(df_results$score))
 
 # New facet label names for supp variable
 datas.labs <- c(
-  "Gong & Sharma\nSubset: all\nSeparation by: CMV infection",
-  "Gong & Sharma\nSubset: all\nSeparation by: gender",
   "Gong & Sharma\nSubset: females\nSeparation by: CMV infection",
   "Gong & Sharma\nSubset: CMV negative females\nSeparation by: age",
-  "Gong & Sharma\nSubset: CMV negative\nSeparation by: gender",
+  "Lee",
   "Stephenson",
   "Zhang")
 names(datas.labs) <- sort(unique(df_results$dataset))
@@ -698,8 +796,8 @@ ggplot(df_results, aes(x = method, y = value)) +
   #            labeller = labeller(score = score.labs, dataset = datas.labs),
   #            rows = vars(score), cols = vars(dataset))
 ggsave(file.path(path_plots, "benchmark_detailed_barplot.pdf"),
-       width = 14,
-       height = 5)
+       width = 10,
+       height = 6)
 
 
 df_results %>%
@@ -743,9 +841,18 @@ df_results %>%
              rows = vars(score),
              labeller = labeller(score = score.labs))
 
+ggplot(df_results, aes(x = method, y = value)) + 
+  geom_boxplot() +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  facet_grid(scales = "free",
+             rows = vars(score),
+             labeller = labeller(score = score.labs)) +
+  NoLegend()
 ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores.pdf"),
-       width = 5,
-       height = 7)
+       width = 3,
+       height = 5)
 
 
 
@@ -759,10 +866,37 @@ df_results_clustering %>%
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
   NoLegend()
-ggsave(file.path(path_plots, "benchmark_summary_barplot_clustering.pdf"),
-       width = 2.5,
-       height = 2.5)
 
+
+df_results_clustering <- df_results %>%
+  filter(score == "cluster_score" & !grepl("10_factors", method))
+
+# Example assuming 'data' is your dataframe
+anova_result <- aov(value ~ method, data = df_results_clustering)
+summary(anova_result)
+stat.test <- rstatix::tukey_hsd(anova_result)
+stat.test
+stat.test$p.adj <- round(stat.test$p.adj, 3)
+
+
+ggplot(df_results_clustering, aes(x = method, y = value)) + 
+  geom_boxplot() +
+  labs(x = "", y = "Adjusted Rand Index") +
+  stat_compare_means(method = "anova", label.x.npc = 0.7, label.y.npc = 0.9) +
+  # stat_compare_means(
+  #   comparisons = my_comparisons,
+  #   method = "t.test", 
+  #   paired = F,
+  #   p.adjust.method = "BH" #,
+  #   # symnum.args = list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols = c("****", "***", "**", "*", "ns"))
+  # ) +
+  # stat_pvalue_manual(stat.test, label = "p.adj", 
+  #   y.position = c(max(df_results_clustering$values)+0.1, max(df_results_clustering$values)+0.2), hide.ns = TRUE) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  NoLegend()
+ggsave(file.path(path_plots, "benchmark_summary_barplot_clustering.pdf"),
+       width = 3.5,
+       height = 3.5)
 
 df_results_modularity %>%
   ggplot(aes(x = method, y = mean)) + 
@@ -779,5 +913,4 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_modularity.pdf"),
        height = 2.5)
 
 ```
-
 
