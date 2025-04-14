@@ -1,0 +1,1003 @@
+---
+title: "Compositional data analysis of the Gong & Sharma et al. dataset"
+author: "Christian Halter"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+
+# Load libraries
+
+```{r, include=FALSE, fig.width=16, fig.height=12}
+# renv::init()
+# renv::snapshot()
+
+# install.packages("/Users/christianhalter/Desktop/scooter_1.0.0.tar.gz", repos = NULL, type = "source")
+
+library(scooter)
+library(tidyverse)
+library(plotly)
+library(ggplot2)
+library(ggpubr)
+library(factoextra)
+library(compositions)
+library(pROC)
+library(mclust)
+source("functions.R")
+
+library(Seurat)
+# devtools::install_github('satijalab/seurat-data')
+library(SeuratData)
+# install.packages("hdf5r")
+# remotes::install_github("mojaveazure/seurat-disk")
+library(SeuratDisk)
+
+# install.packages("devtools")
+# devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
+library(EPIC)
+# BiocManager::install("MOFA2")
+library(reticulate)
+library(basilisk)
+library("MOFA2")
+# BiocManager::install("fgsea")
+# BiocManager::install("sva")
+# devtools::install_github("kharchenkolab/scITD")
+library(scITD)
+# install.packages("ncdf4")
+library(ncdf4)
+library(arrow)
+
+library(dplyr)
+
+my_seed <- 123
+set.seed(my_seed)
+```
+
+# Set paths
+
+```{r}
+ds_name <- "GongSharma_2024_PrePrintTBD"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_data <- file.path(path_root, "data")
+path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
+```
+
+
+# Load dataset
+Manually downloaded from:
+"<https://apps.allenimmunology.org/aifi/insights/dynamics-imm-health-age/downloads/>"
+
+```{r}
+files <- list(L1 = file.path(path_data, "sound_life_AIFI_L1_frequencies.csv"),
+              L2 = file.path(path_data, "sound_life_AIFI_L2_frequencies.csv"),
+              L3 = file.path(path_data, "sound_life_AIFI_L3_frequencies.csv"))
+
+data <- list()
+
+for (f in names(files)) {
+  data[[f]] <- read.csv(files[[f]])
+}
+```
+
+
+
+# Process data into wide dataframe
+
+```{r}
+dproc <- list()
+
+for (layer in names(data)) {
+
+  dproc$meta <- data[[layer]] %>%
+    select(c(1:14)) %>%
+    unique() %>% 
+    mutate_at(1:14, as.factor)
+  
+  ctable <- data[[layer]] %>%
+    select(c(14,
+             !!sym(paste0("AIFI_", layer)),
+             !!sym(paste0("AIFI_", layer, "_count")),
+             !!sym(paste0("AIFI_", layer, "_frac_total")),
+             !!sym(paste0("AIFI_", layer, "_clr")))) %>%
+    pivot_wider(names_from = !!sym(paste0("AIFI_", layer)),
+                values_from = c(!!sym(paste0("AIFI_", layer, "_count")),
+                                !!sym(paste0("AIFI_", layer, "_frac_total")),
+                                !!sym(paste0("AIFI_", layer, "_clr")))) %>% 
+    column_to_rownames(var = "specimen.specimenGuid")
+  
+  i <- 1
+  n_cts <- length(unique(data[[layer]][[paste0("AIFI_", layer)]]))
+  
+  dproc[[layer]]$cell_counts <- ctable[, i:(i + n_cts - 1)] %>%
+    mutate_all(~replace_na(., 0)) %>%
+    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_count_"), "") %>%
+                 str_replace_all(., " ", "_")) %>%
+    select(-Platelet, -Erythrocyte)
+
+  i <- i + n_cts
+  dproc[[layer]]$freq <- ctable[, i:(i + n_cts - 1)] %>%
+    mutate_all(~replace_na(., 0)) %>%
+    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_frac_total_"), "") %>%
+                 str_replace_all(., " ", "_")) %>%
+    select(-Platelet, -Erythrocyte)
+  i <- i + n_cts
+  dproc[[layer]]$clr_authors <- ctable[, i:(i + n_cts - 1)] %>%
+    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_clr_"), "") %>%
+                 str_replace_all(., " ", "_")) %>%
+    select(-Platelet, -Erythrocyte)
+  
+  df_counts <- dproc[[layer]]$cell_counts
+
+  df_counts_1count_zero <- df_counts
+  df_counts_1count_zero[df_counts_1count_zero == 0] <- 1
+  dproc[[layer]]$clr_1count_zero <- df_counts_1count_zero %>% calc_perc_df() %>% clr()
+  
+  dproc[[layer]]$clr_1count_all <- (df_counts + 1) %>% calc_perc_df() %>% clr()
+  
+  dproc[[layer]]$clr_0.1perc <- df_counts %>%
+    impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+    calc_perc_df() %>%
+    clr()
+}
+
+saveRDS(dproc, file.path(path_data, "cell_type_compositions.rds"))
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Sensitivity: freq vs clr vs alr vs ilr
+
+CMV negative BR1 female samples are used, as the biggest sources of variation has been removed (subset to specific groups according to major axis of variance).
+Subsequently, one or multiple cell types will be artificially increased/decreased to simulate differential abundance.
+
+
+## L1 anotations
+
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L1"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+Percent_difference <- c(10, 25, 50, 75, 100, 200, 300, 500)
+n_ct_to_select <- c(1, 2, 3)
+
+results <- datrans(count_mat = df_counts, labels = NULL, Percent_difference = Percent_difference, n_ct_to_select = n_ct_to_select)
+```
+
+### Summarized results
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, Percent_difference) %>%
+    mutate(Silhouette_score = mean(Silhouette_score),
+           Modularity_score = mean(Modularity_score),
+           Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, Percent_difference), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+
+
+### Show example PCA
+
+```{r}
+nct <- 3
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+
+plot_pca(df_counts_temp, labels, title = "Counts")
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels, title = "Freq")
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq/100))
+plot_pca(data, labels, title = "asinsqrt")
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels, title = "CLR")
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels, title = "CLR PCA")
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+
+
+## L2 anotations
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L2"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+Percent_difference <- c(10, 25, 50, 75, 100, 200, 300, 500)
+n_ct_to_select <- c(1, 3, 5, 10)
+reps <- 1:20
+
+results <- datrans(count_mat = df_counts, labels = NULL, Percent_difference = Percent_difference, n_ct_to_select = n_ct_to_select)
+```
+
+
+### Summarized results
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, Percent_difference) %>%
+    mutate(Silhouette_score = mean(Silhouette_score),
+           Modularity_score = mean(Modularity_score),
+           Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, Percent_difference), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+
+### Show example PCA
+
+```{r}
+nct <- 10
+pd <- 100
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+
+plot_pca(df_counts_temp, labels, title = "Counts")
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels, title = "Freq")
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq/100))
+plot_pca(data, labels, title = "asinsqrt")
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels, title = "CLR")
+plot_roc_pcad1(data, labels)
+
+res.pca <- prcomp(data)
+p <- factoextra::fviz_pca(res.pca,
+                          habillage = labels,
+                          label = "var",
+                          addEllipses = TRUE,
+                          pointsize = 3,
+                          invisible = c("var", "quali"),
+                          geom = "point") +
+  scale_shape_manual(values = rep(19, length(unique(labels)))) +
+  coord_equal() + NoLegend() + ggtitle("")
+ggsave(file.path(path_plots, "workflow_schema_Adjusted_Rand_Index_example.pdf"), width = 3, height = 3)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels, title = "CLR PCA")
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+
+### Mean-variance relationship
+
+```{r}
+df_freq_unperturbed <- df_counts %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+plot(colMeans(df_freq_unperturbed), main = "colMeans(df_freq_unperturbed)")
+plot(Rfast::colVars(df_freq_unperturbed), main = "colVars(df_freq_unperturbed)")
+plot(colMeans(df_freq_unperturbed), Rfast::colVars(df_freq_unperturbed))
+
+means <- colMeans(clr(df_freq))
+vars <- Rfast::colVars(data.frame(clr(df_freq)))
+
+df1 <- data.frame(mean = means, variance = vars)
+
+ggplot(df1, aes(x = mean, y = variance)) +
+  geom_point() +
+  geom_text(data = df1, aes(label = row.names(df1)), vjust = -0.5)
+
+```
+
+
+
+## L3 annotations
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+Percent_difference <- c(10, 25, 50, 75, 100, 200, 300, 500)
+n_ct_to_select <- c(1, 3, 5, 10, 20)
+
+results <- datrans(count_mat = df_counts, labels = NULL, Percent_difference = Percent_difference, n_ct_to_select = n_ct_to_select)
+
+```
+
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, Percent_difference) %>%
+    mutate(Silhouette_score = mean(Silhouette_score),
+           Modularity_score = mean(Modularity_score),
+           Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, Percent_difference), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+
+### Show example PCA
+
+```{r}
+nct <- 10
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+
+plot_pca(df_counts_temp, labels, title = "Counts")
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels, title = "Freq")
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq/100))
+plot_pca(data, labels, title = "asinsqrt")
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels, title = "CLR")
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels, title = "CLR PCA")
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+
+## L3 annotations unbalanced counts
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# Generate random numbers between -1 and 1 for each row
+random_numbers <- runif(nrow(df_counts), min = -1, max = 1)
+
+# Exponentiate 10 with each random number
+multiplier <- 10^random_numbers
+
+# Multiply each row by the corresponding multiplier
+df_counts <- sweep(df_counts, 1, multiplier, `*`)
+
+df_counts <- round(df_counts)
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+Percent_difference <- c(10, 25, 50, 75, 100, 200, 300, 500)
+n_ct_to_select <- c(1, 3, 5, 10, 20)
+
+results <- datrans(count_mat = df_counts, labels = NULL, Percent_difference = Percent_difference, n_ct_to_select = n_ct_to_select)
+
+```
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, Percent_difference) %>%
+    mutate(Silhouette_score = mean(Silhouette_score),
+           Modularity_score = mean(Modularity_score),
+           Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, Percent_difference), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+### Show example PCA
+
+```{r}
+nct <- 20
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+
+plot_pca(df_counts_temp, labels, title = "Counts")
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels, title = "Freq")
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq/100))
+plot_pca(data, labels, title = "asinsqrt")
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels, title = "CLR")
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels, title = "CLR PCA")
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+
+
+## L3 annotations only low abundant cell types DA
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+Percent_difference <- c(100, 200, 300, 500, 1000)
+n_ct_to_select <- c(1, 3, 5, 10, 20)
+
+ct_counts <- colMeans(df_counts)
+# Find the threshold for the lowest fourth
+threshold <- quantile(ct_counts, 1/4)
+
+# Get the column names with means below the threshold
+cts <- colnames(df_counts)[ct_counts < threshold]
+
+n_ct_to_select[n_ct_to_select >= length(cts)] <- length(cts)
+
+results <- datrans(count_mat = df_counts, labels = NULL, Percent_difference = Percent_difference, n_ct_to_select = n_ct_to_select, cts = cts)
+
+```
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, Percent_difference) %>%
+    mutate(Silhouette_score = mean(Silhouette_score),
+           Modularity_score = mean(Modularity_score),
+           Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, Percent_difference), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+### Show example PCA
+
+```{r}
+nct <- 5
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+
+plot_pca(df_counts_temp, labels, title = "Counts")
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels, title = "Freq")
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq/100))
+plot_pca(data, labels, title = "asinsqrt")
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels, title = "CLR")
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels, title = "CLR PCA")
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+```{r}
+ct_da
+data <- clr(df_freq)
+library(corrplot)
+test <- cor(data)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = test, col = col, symm = TRUE)
+
+test <- cor(t(data))
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = test, col = col, symm = TRUE)
+```
+
+
+```{r}
+data <- clr(df_freq)
+library(corrplot)
+cor_matrix <- cor(data)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = test, col = col, symm = TRUE)
+
+# 2. Variance Filtering
+variances <- apply(data, 2, var)
+plot(variances)
+hist(variances, breaks = 20)
+threshold <- quantile(variances, 0.8) # Example threshold
+filtered_df <- data[, variances > threshold]
+
+plot_pca(data, labels)
+plot_pca(filtered_df, labels)
+
+
+
+data <- df_counts_temp
+library(corrplot)
+cor_matrix <- cor(data)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = test, col = col, symm = TRUE)
+
+# 2. Variance Filtering
+variances <- apply(data, 2, var)
+plot(variances)
+hist(variances, breaks = 20)
+threshold <- quantile(variances, 0.8) # Example threshold
+filtered_df <- data[, variances > threshold]
+
+plot_pca(data, labels)
+plot_pca(filtered_df, labels)
+
+```
+
+
+
+
+## L3 annotations only highly abundant cell types DA
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+Percent_difference <- c(10, 25, 50, 75, 100, 200, 300, 500)
+n_ct_to_select <- c(1, 3, 5, 10, 20)
+
+ct_counts <- colMeans(df_counts)
+# Find the threshold for the lowest fourth
+threshold <- quantile(ct_counts, 3/4)
+
+# Get the column names with means above the threshold
+cts <- colnames(df_counts)[ct_counts >= threshold]
+
+n_ct_to_select[n_ct_to_select >= length(cts)] <- length(cts)
+
+results <- datrans(count_mat = df_counts, labels = NULL, Percent_difference = Percent_difference, n_ct_to_select = n_ct_to_select, cts = cts)
+```
+
+
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(method, Percent_difference) %>%
+    mutate(Silhouette_score = mean(Silhouette_score),
+           Modularity_score = mean(Modularity_score),
+           Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
+    ungroup() %>% 
+    distinct(interaction(method, Percent_difference), .keep_all=TRUE)
+  
+  p_sil <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
+  p_mod <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
+  p_clust <- ggplot() +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = method), size = 1.2) +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+### Show example PCA
+
+```{r}
+nct <- 5
+pd <- 200
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+
+plot_pca(df_counts_temp, labels, title = "Counts")
+plot_roc_pcad1(df_counts_temp, labels)
+
+plot_pca(df_freq, labels, title = "Freq")
+plot_roc_pcad1(df_freq, labels)
+
+data <- asin(sqrt(df_freq/100))
+plot_pca(data, labels, title = "asinsqrt")
+plot_roc_pcad1(data, labels)
+
+data <- clr(df_freq)
+plot_pca(data, labels, title = "CLR")
+plot_roc_pcad1(data, labels)
+
+data <- prcomp(data)$x[, 1:3]
+plot_pca(data, labels, title = "CLR PCA")
+plot_roc_pcad1(data, labels)
+
+data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
+plot_pca(data, labels)
+plot_roc_pcad1(data, labels)
+```
+
+```{r}
+cohens_d <- function(x, group) {
+  mean_a <- mean(x[group == levels(group)[1]])
+  mean_b <- mean(x[group == levels(group)[2]])
+  sd_a <- sd(x[group == levels(group)[1]])
+  sd_b <- sd(x[group == levels(group)[2]])
+  pooled_sd <- sqrt((sd_a^2 + sd_b^2) / 2)
+  (mean_b - mean_a) / pooled_sd
+}
+
+
+data <- df_freq[, ct_da[1]]
+hist(data)
+data <- data.frame(values = data,
+                   groups = factor(labels))
+p <- ggplot(data, aes(x = values, fill = groups)) +
+  geom_density(alpha=0.4) + 
+  geom_histogram(aes(y=..density..), alpha=0.3, colour="black", 
+                 position="identity") +
+  labs(title = "Density Plot of PC1 Scores",
+       x = "PC1 Scores",
+       y = "Density") +
+  theme_classic()
+print(p)
+
+d_value <- cohens_d(data$values, data$groups)
+print(paste("Cohen's d:", d_value))
+
+wilcox_result <- wilcox.test(values ~ groups, data = data)
+print(paste("Wilcoxon p-value:", wilcox_result$p.value))
+
+
+data <- clr(df_freq)[, ct_da[1]]
+hist(data)
+data <- data.frame(values = data,
+                   groups = factor(labels))
+p <- ggplot(data, aes(x = values, fill = groups)) +
+  geom_density(alpha=0.4) + 
+  geom_histogram(aes(y=..density..), alpha=0.3, colour="black", 
+                 position="identity") +
+  labs(title = "Density Plot of PC1 Scores",
+       x = "PC1 Scores",
+       y = "Density") +
+  theme_classic()
+print(p)
+
+d_value <- cohens_d(data$values, data$groups)
+print(paste("Cohen's d:", d_value))
+
+wilcox_result <- wilcox.test(values ~ groups, data = data)
+print(paste("Wilcoxon p-value:", wilcox_result$p.value))
+```
+
+
+
+```{r}
+data <- clr(df_freq)
+plot_pca(data, labels)
+plot_pca(data, labels, scale. = TRUE)
+
+plot_roc_pcad1(data, labels)
+```
+
+
+```{r}
+ct_da
+
+data <- clr(df_freq)
+library(corrplot)
+cor_matrix <- cor(data)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix, col = col)
+hist(data[, ct_da[1]])
+diptest::dip.test(data[, ct_da[1]])
+
+# 2. Variance Filtering
+variances <- apply(data, 2, var)
+plot(variances)
+hist(variances, breaks = 20)
+threshold <- quantile(variances, 0.8) # Example threshold
+filtered_df <- data[, variances > threshold]
+
+plot_pca(data, labels)
+plot_pca(filtered_df, labels)
+
+plot_pca(data[,ct_da], labels)
+
+
+
+data <- df_counts_temp
+library(corrplot)
+cor_matrix <- cor(data)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix, col = col)
+hist(data[, ct_da[1]])
+diptest::dip.test(data[, ct_da[1]])
+
+
+# 2. Variance Filtering
+variances <- apply(data, 2, var)
+plot(variances)
+hist(variances, breaks = 20)
+threshold <- quantile(variances, 0.8) # Example threshold
+filtered_df <- data[, variances > threshold]
+
+plot_pca(data, labels)
+plot_pca(filtered_df, labels)
+
+
+plot_pca(data[,ct_da], labels)
+
+```
