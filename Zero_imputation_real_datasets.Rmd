@@ -24,6 +24,7 @@ library(robCompositions)
 library(zCompositions)
 library(stringr)
 library(tidyr)
+library(rstatix)
 source("functions.R")
 
 # Set paths
@@ -308,6 +309,11 @@ df_results <- df_results %>%
   ) %>%
   as.data.frame()
 
+
+df_results$dataset[df_results$dataset == "gongsharma_allcmv"] <- "GongSharma_cmv"
+df_results$dataset[df_results$dataset == "gongsharma_agefemalescmvneg"] <- "GongSharma_age"
+
+
 levels <- names(res_list)[grepl("Zhang", names(res_list))]
 levels <- sub("Zhang_", "", levels)
 
@@ -364,18 +370,20 @@ df_results %>%
              rows = vars(score_method),
              labeller = labeller(score_method = score.labs))
 
-ggplot(df_results, aes(x = imputation_method, y = values)) + 
-  geom_boxplot() +
+ggplot(df_results, aes(x = imputation_method, y = values)) +
+  # geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(shape=dataset)) + 
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
   # geom_point(position = position_jitterdodge()) +
   labs(x = "", y = "Separation score") +
+  theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
   facet_grid(scales = "free",
              rows = vars(score_method),
-             labeller = labeller(score_method = score.labs)) +
-  NoLegend()
+             labeller = labeller(score_method = score.labs))
 
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_barplot_separatescores.pdf"),
-       width = 5,
+       width = 7,
        height = 6)
 
 
@@ -398,14 +406,16 @@ df_results %>%
 df_results %>%
   filter(score_method == "cluster_score") %>%
   ggplot(aes(x = imputation_method, y = values)) +
-  geom_boxplot() +
+  geom_point(aes(shape=dataset)) + 
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
   stat_compare_means(method = "anova", label.x.npc = 0.05, label.y.npc = 0.05) +
   # geom_point(position = position_jitterdodge()) +
   labs(x = "", y = "Adjusted Rand Index") +
+  theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_barplot.pdf"),
-       width = 4,
+       width = 5,
        height = 3)
 
 ```

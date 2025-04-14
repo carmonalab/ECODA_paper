@@ -84,7 +84,7 @@ calc_modularity <- function(feat_mat,
 # Test data transformation methods for ECODA
 datrans <- function(count_mat,
                     labels = NULL,
-                    perc_diffs, # Percent cell abundance difference (e.g. 100 equals one cell type being twice as abundant)
+                    Percent_difference, # Percent cell abundance difference (e.g. 100 equals one cell type being twice as abundant)
                     n_ct_to_select, # Number of randomly selected cell types to be differentially abundant
                     cts = NULL, # Cell types to be differentially abundant. If NULL, randomly select a specified number of cell types (n_ct_to_select)
                     reps = 20, # Number of random shuffling to calculate separation using different cell types and samples for DA
@@ -121,7 +121,7 @@ datrans <- function(count_mat,
   cluster <- makeCluster(n_cores)
   registerDoParallel(cluster)
   
-  rets <- foreach (pd = perc_diffs,
+  rets <- foreach (pd = Percent_difference,
                    .export = c(
                      "calc_perc_df",
                      "impute_zeros",
@@ -136,10 +136,10 @@ datrans <- function(count_mat,
                      res <- data.frame(
                        method = character(),
                        n_celltypes = numeric(),
-                       perc_diff = numeric(),
-                       silhouette = numeric(),
-                       modularity = numeric(),
-                       clustering = numeric()
+                       Percent_difference = numeric(),
+                       Silhouette_score = numeric(),
+                       Modularity_score = numeric(),
+                       Adjusted_Rand_Index = numeric()
                      )
                      
                      print(paste0("pd: ", pd))
@@ -209,10 +209,10 @@ datrans <- function(count_mat,
                            new_row <- list(
                              method = met,
                              n_celltypes = nct,
-                             perc_diff = pd,
-                             silhouette = avg_sil,
-                             modularity = mod,
-                             clustering = cluster_score
+                             Percent_difference = pd,
+                             Silhouette_score = avg_sil,
+                             Modularity_score = mod,
+                             Adjusted_Rand_Index = cluster_score
                            )
                            res <- rbind(res, new_row)
                          }
@@ -391,27 +391,35 @@ load_seurat_object <- function(file_name) {
   return(seurat)
 }
 
-
-get_labels <- function(seurat, label_col) {
+get_metadata <- function(seurat) {
   metadata <- seurat@meta.data %>%
     group_by(Sample) %>%
     slice(1)
+
+  return(metadata)
+}
+
+get_labels <- function(seurat, label_col) {
+  metadata <- get_metadata(seurat)
   labels <- metadata[[label_col]]
   
   return(labels)
 }
 
 
-process_pseudobulk_fig <- function(pseudobulk_hvg,
+process_pseudobulk_fig <- function(pb_norm,
                                    labels,
-                                   hvg,
+                                   pca_dims = NULL,
                                    title = "Pseudobulk gene expression",
-                                   knn_k = 5) {
-  metadata <- seurat@meta.data %>%
-    group_by(Sample) %>%
-    slice(1)
+                                   knn_k = NULL) {
+  metadata <- get_metadata(seurat)
   
-  feat_mat <- t(DESeq2.normalize(pseudobulk_hvg, metadata))
+  if (!is.null(pca_dims)) {
+    res.pca <- prcomp(pb_norm, center = TRUE, scale. = FALSE)
+    feat_mat <- res.pca[["x"]][, 1:pca_dims]
+  } else {
+    feat_mat <- pb_norm
+  }
   
   res <- list()
   res[["plot"]] <- plot_pca(feat_mat, labels, plotly_3d = FALSE, knn_k = knn_k, title = title)
@@ -444,6 +452,7 @@ process_deconv_fig <- function(pseudobulk,
 
 process_coda_fig <- function(seurat,
                              labels,
+                             pca_dims = NULL,
                              ct_col,
                              title,
                              knn_k = NULL) {
@@ -455,6 +464,11 @@ process_coda_fig <- function(seurat,
     calc_perc_df() %>%
     clr()
   
+  if (!is.null(pca_dims)) {
+    res.pca <- prcomp(feat_mat, center = TRUE, scale. = FALSE)
+    feat_mat <- res.pca[["x"]][, 1:pca_dims]
+  }
+  
   res <- list()
   res[["plot"]] <- plot_pca(feat_mat, labels, plotly_3d = FALSE, knn_k = knn_k, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
@@ -465,52 +479,45 @@ process_coda_fig <- function(seurat,
 }
 
 
-process_mofa_fig <- function(seurat,
-                             labels,
-                             hvg,
-                             pseudobulk_hvg,
-                             save_file_path,
-                             title = "MOFA",
-                             num_factors = 5,
-                             log_abs_transform = FALSE,
-                             maxiter = 22) {
+process_mofa_bulk_fig <- function(pb_norm,
+                                  metadata,
+                                  labels,
+                                  title = "MOFA",
+                                  num_factors = 5,
+                                  maxiter = 1000) {
   title <- paste0(title, " (", num_factors, " factors)")
   
-  if (!file.exists(save_file_path)) {
-    MOFAobject <- create_mofa(seurat, assays = "RNA", features = hvg)
-    
-    # Default data options
-    data_opts <- get_default_data_options(MOFAobject)
-    
-    # Default model options
-    model_opts <- get_default_model_options(MOFAobject)
-    model_opts$num_factors <- num_factors
-    
-    # Training options
-    train_opts <- get_default_training_options(MOFAobject)
-    train_opts$convergence_mode <- "fast"
-    train_opts$seed <- 42
-    train_opts$maxiter <- maxiter
-    
-    MOFAobject <- prepare_mofa(
-      object = MOFAobject,
-      data_options = data_opts,
-      model_options = model_opts,
-      training_options = train_opts
-    )
-    
-    MOFAobject <- run_mofa(MOFAobject, use_basilisk = FALSE, save_data = FALSE)
-    
-    saveRDS(MOFAobject, save_file_path)
-  } else {
-    MOFAobject <- readRDS(save_file_path)
-  }
+  pb_list <- list(pb = t(pb_norm))
   
-  feat_mat <- t(t(MOFAobject@expectations[["W"]]$RNA) %*% pseudobulk_hvg)
+  MOFAobject <- create_mofa(pb_list)
   
-  if (log_abs_transform) {
-    feat_mat <- log(abs(feat_mat))
-  }
+  metadata$sample <- metadata$Sample
+  
+  samples_metadata(MOFAobject) <- metadata
+  
+  # Default data options
+  data_opts <- get_default_data_options(MOFAobject)
+  
+  # Default model options
+  model_opts <- get_default_model_options(MOFAobject)
+  model_opts$num_factors <- num_factors
+  
+  # Training options
+  train_opts <- get_default_training_options(MOFAobject)
+  train_opts$convergence_mode <- "fast"
+  train_opts$seed <- 42
+  train_opts$maxiter <- maxiter
+  
+  MOFAobject <- prepare_mofa(
+    object = MOFAobject,
+    data_options = data_opts,
+    model_options = model_opts,
+    training_options = train_opts
+  )
+  
+  MOFAobject <- run_mofa(MOFAobject, use_basilisk = FALSE, save_data = FALSE)
+  
+  feat_mat <- as.data.frame(MOFAobject@expectations[["Z"]])
 
   res <- list()
   res[["plot"]] <- plot_pca(feat_mat, labels, plotly_3d = FALSE, title = title, coord_equal = FALSE)
@@ -520,6 +527,62 @@ process_mofa_fig <- function(seurat,
   
   return(res)
 }
+
+# process_mofa_fig <- function(seurat,
+#                              labels,
+#                              hvg,
+#                              pseudobulk_hvg,
+#                              save_file_path,
+#                              title = "MOFA",
+#                              num_factors = 5,
+#                              log_abs_transform = FALSE,
+#                              maxiter = 22) {
+#   title <- paste0(title, " (", num_factors, " factors)")
+#   
+#   if (!file.exists(save_file_path)) {
+#     MOFAobject <- create_mofa(seurat, assays = "RNA", features = hvg)
+#     
+#     # Default data options
+#     data_opts <- get_default_data_options(MOFAobject)
+#     
+#     # Default model options
+#     model_opts <- get_default_model_options(MOFAobject)
+#     model_opts$num_factors <- num_factors
+#     
+#     # Training options
+#     train_opts <- get_default_training_options(MOFAobject)
+#     train_opts$convergence_mode <- "fast"
+#     train_opts$seed <- 42
+#     train_opts$maxiter <- maxiter
+#     
+#     MOFAobject <- prepare_mofa(
+#       object = MOFAobject,
+#       data_options = data_opts,
+#       model_options = model_opts,
+#       training_options = train_opts
+#     )
+#     
+#     MOFAobject <- run_mofa(MOFAobject, use_basilisk = FALSE, save_data = FALSE)
+#     
+#     saveRDS(MOFAobject, save_file_path)
+#   } else {
+#     MOFAobject <- readRDS(save_file_path)
+#   }
+#   
+#   feat_mat <- t(t(MOFAobject@expectations[["W"]]$RNA) %*% pseudobulk_hvg)
+#   
+#   if (log_abs_transform) {
+#     feat_mat <- log(abs(feat_mat))
+#   }
+# 
+#   res <- list()
+#   res[["plot"]] <- plot_pca(feat_mat, labels, plotly_3d = FALSE, title = title, coord_equal = FALSE)
+#   res[["scores"]] <- calc_sep_score(feat_mat, labels)
+#   res[["feat_mat"]] <- feat_mat
+#   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+#   
+#   return(res)
+# }
 
 
 process_scitd_fig <- function(seurat,
