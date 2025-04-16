@@ -2,12 +2,46 @@ library(foreach)
 library(doParallel)
 
 
+clr <- function(df) {
+  percentage_df <- calc_perc_df(df)
+  
+  geometric_mean <- apply(percentage_df, 1, function(row) exp(mean(log(row))))
+  clr_df <- apply(percentage_df, 2, function(row) log(row) - log(geometric_mean)) %>%
+    as.data.frame()
+  
+  return(clr_df)
+}
+
+
 # Calculate coefficient of variation
 cv <- function(x) {
   sd_x <- sd(x)  # Standard deviation
   mean_x <- mean(x)  # Mean
   cv_value <- abs(sd_x / mean_x) * 100  # Coefficient of variation (%)
   return(cv_value)
+}
+
+
+
+calc_perc_df <- function(df) {
+  df <- t(apply(df, 1, function(row) (row / sum(row)) * 100)) %>% as.data.frame()
+  return(df)
+}
+
+
+calc_sep_score <- function(df,
+                           labels,
+                           knn_k = NULL) {
+  sil_score <- round(calc_sil(df, labels), 3)
+  mod_score <- unlist(round(calc_modularity(df, labels, knn_k), 3))
+  cluster_score <- clust_eval(matrix = df, labels = labels)
+  anosim_score <- vegan::anosim(x = df, grouping = labels, distance = "euclidean")[["statistic"]]
+  
+  res <- list(sil_score = sil_score,
+              mod_score = mod_score,
+              cluster_score = cluster_score)
+  
+  return(res)
 }
 
 
@@ -22,6 +56,21 @@ calc_sil <- function(feat_mat,
 }
 
 
+#----------------------------------------------------------->
+calc_modularity <- function(feat_mat,
+                            labels,
+                            knn_k = NULL) {
+  if (is.null(knn_k)) {
+    knn_k <- round(nrow(feat_mat) / 4)
+  }
+  
+  # Create a graph object
+  g <- compute_snn_graph(dist = feat_mat, knn_k = knn_k)
+  # Compute modularity
+  modularity_score <- igraph::modularity(g, membership = as.numeric(factor(labels)))
+  return(modularity_score)
+}
+
 
 compute_KNN <- function(dist, knn_k){
   # Compute KNN
@@ -29,9 +78,9 @@ compute_KNN <- function(dist, knn_k){
   knn <- knn[, -1]  # Remove self-neighbor
   return(knn)
 }
-# moudularity
+
+
 compute_snn_graph <- function(dist, knn_k) {
-  
   knn <- compute_KNN(dist = dist, knn_k = knn_k)
   # Initialize adjacency matrix
   n <- nrow(as.matrix(dist))
@@ -51,33 +100,49 @@ compute_snn_graph <- function(dist, knn_k) {
                                            diag = FALSE)
   return(g)
 }
-calc_modularity <- function(feat_mat,
-                            labels,
-                            knn_k = NULL) {
-  if (is.null(knn_k)) {
-    knn_k <- round(nrow(feat_mat) / 4)
-  }
+
+#-----------------------------------------------------------<
+
+
+# Cluster samples and compare to original annotation
+clust_eval <- function(matrix,
+                       labels,
+                       nclusts = 2,
+                       digits = 3,
+                       return_mean = TRUE) {
+  results <- list()
+  dist_mat <- dist(matrix)
   
-  # Create a graph object
-  g <- compute_snn_graph(dist = feat_mat, knn_k = knn_k)
-  # Compute modularity
-  modularity_score <- igraph::modularity(g, membership = as.numeric(factor(labels)))
-  return(modularity_score)
+  # Perform hierarchical clustering
+  hc <- stats::hclust(dist_mat, method = "ward.D2")
+  clust_labels <- stats::cutree(hc, k = nclusts)
+  results[["hclust_accuracy"]] <- mclust::adjustedRandIndex(as.numeric(as.factor(labels)), clust_labels)
+  
+  # Perform PAM clustering
+  clust_labels <- cluster::pam(matrix, k = nclusts)$cluster
+  results[["pamclust_accuracy"]] <- mclust::adjustedRandIndex(as.numeric(as.factor(labels)), clust_labels)
+  
+  if (return_mean) {
+    return(round(mean(unlist(results)), digits))
+  } else {
+    results[["hclust_accuracy"]] <- round(results[["hclust_accuracy"]], digits)
+    results[["pamclust_accuracy"]] <- round(results[["pamclust_accuracy"]], digits)
+    return(results)
+  }
 }
 
 
-# # Calculate modularity score
-# calc_modularity <- function(feat_mat,
-#                             labels,
-#                             d = 5) {
-#   graph <- scran::buildKNNGraph(as.matrix(feat_mat),
-#                                 d = d,
-#                                 transposed = TRUE,
-#                                 k = 5)
-#   score <- igraph::modularity(graph, membership = as.numeric(factor(labels)))
-#   return(score)
-# }
-
+convert_seurat_to_h5ad <- function(seurat,
+                                   ds) {
+  file_path <- file.path(getwd(), "data", paste0(ds, ".h5ad"))
+  if (!file.exists(file_path)) {
+    SaveH5Seurat(seurat, filename = paste0(ds, ".h5Seurat"))
+    Convert(paste0(ds, ".h5Seurat"), dest = "h5ad")
+    print(paste0("File saved to: ", file_path))
+  } else {
+    print("File exists already")
+  }
+}
 
 
 
@@ -228,120 +293,6 @@ datrans <- function(count_mat,
 }
 
 
-# Plot 2D and 3D PCA from feature matrix and calculate silhouette and modularity score
-plot_pca <- function(feat_mat,
-                     labels,
-                     scale. = FALSE,
-                     knn_k = NULL,
-                     title = NULL,
-                     sil_score = TRUE,
-                     mod_score = TRUE,
-                     cluster_score = TRUE,
-                     pointsize = 3,
-                     coord_equal = TRUE,
-                     plotly_3d = FALSE) {
-  
-  res.pca <- prcomp(feat_mat, scale. = scale.)
-  
-  if (cluster_score) {
-    cluster_score <- clust_eval(feat_mat, labels)
-    title <- paste0(title, "\nCluster score: ", cluster_score)
-  }
-  if (mod_score) {
-    mod_score <- round(calc_modularity(feat_mat, labels, knn_k), 3)
-    title <- paste0(title, "\nModularity score: ", mod_score)
-  }
-  if (sil_score) {
-    sil_score <- round(calc_sil(feat_mat, labels), 3)
-    title <- paste0(title, "\nSilhouette score: ", sil_score)
-  }
-  
-  p <- factoextra::fviz_pca(res.pca,
-                            habillage = labels,
-                            label = "var",
-                            pointsize = pointsize,
-                            invisible = c("var", "quali"),
-                            geom = "point") +
-    ggtitle(title) +
-    scale_shape_manual(values = rep(19, length(unique(labels))))
-  if (coord_equal) {
-    p <- p + coord_equal()
-  }
-  print(p)
-  
-  if (plotly_3d) {
-    df <- as.data.frame(res.pca$x)
-    df$id <- seq_len(nrow(df))
-    df$vs <- factor(labels)
-    ms <- replicate(2, df, simplify = F)
-    ms[[2]]$PC3 <- min(df$PC3)
-    m <- ms %>%
-      bind_rows() %>%
-      group2NA("id", "vs")
-    # Plotting with plotly
-    plotly <- plot_ly(color = ~vs) %>%
-      add_markers(data = df, x = ~PC1, y = ~PC2, z = ~PC3) %>%
-      add_paths(data = m, x = ~PC1, y = ~PC2, z = ~PC3, opacity=0.2)
-    print(plotly)
-  }
-  
-  return(p)
-}
-
-
-# Plot rocauc curve separating samples by PCA loading 1
-plot_roc_pcad1 <- function(feat_mat, labels) {
-  
-  res.pca <- prcomp(feat_mat)
-  
-  pca_scores_pc1 <- data.frame(PC1 = data.frame(res.pca$x)$PC1,
-                               label = factor(labels))
-  p <- ggplot(pca_scores_pc1, aes(x = PC1, fill = label)) +
-    geom_density(alpha=0.4) + 
-    geom_histogram(aes(y=..density..), alpha=0.3, colour="black", 
-                   position="identity") +
-    labs(title = "Density Plot of PC1 Scores",
-         x = "PC1 Scores",
-         y = "Density") +
-    theme_classic()
-  print(p)
-  
-  # Calculate the ROC curve
-  roc_curve <- roc(pca_scores_pc1$label, ifelse(pca_scores_pc1$PC1 > 0, 1, 0))
-  
-  # Plot the ROC curve
-  plot(roc_curve, col = "blue", main = "ROC Curve", print.auc = TRUE)
-}
-
-
-# Cluster samples and compare to original annotation
-clust_eval <- function(matrix,
-                       labels,
-                       nclusts = 2,
-                       digits = 3,
-                       return_mean = TRUE) {
-  results <- list()
-  dist_mat <- dist(matrix)
-  
-  # Perform hierarchical clustering
-  hc <- stats::hclust(dist_mat, method = "ward.D2")
-  clust_labels <- stats::cutree(hc, k = nclusts)
-  results[["hclust_accuracy"]] <- mclust::adjustedRandIndex(as.numeric(as.factor(labels)), clust_labels)
-  
-  # Perform PAM clustering
-  clust_labels <- cluster::pam(matrix, k = nclusts)$cluster
-  results[["pamclust_accuracy"]] <- mclust::adjustedRandIndex(as.numeric(as.factor(labels)), clust_labels)
-  
-  if (return_mean) {
-    return(round(mean(unlist(results)), digits))
-  } else {
-    results[["hclust_accuracy"]] <- round(results[["hclust_accuracy"]], digits)
-    results[["pamclust_accuracy"]] <- round(results[["pamclust_accuracy"]], digits)
-    return(results)
-  }
-}
-
-
 DESeq2.normalize <- function(matrix,
                              metadata,
                              nvar_genes = 2000) {
@@ -376,6 +327,65 @@ DESeq2.normalize <- function(matrix,
 }
 
 
+get_ct_comp_df_seurat <- function(seurat, sample_col, ct_col) {
+  ct_comp_df <- table(seurat@meta.data[[sample_col]], seurat@meta.data[[ct_col]]) %>%
+    t() %>%
+    as.data.frame.matrix() %>%
+    t() %>%
+    as.data.frame()
+  ct_comp_df <- ct_comp_df[rowSums(ct_comp_df) != 0, ]
+  
+  return(ct_comp_df)
+}
+
+
+get_metadata <- function(seurat) {
+  metadata <- seurat@meta.data %>%
+    group_by(Sample) %>%
+    slice(1)
+  
+  return(metadata)
+}
+
+get_labels <- function(seurat, label_col) {
+  metadata <- get_metadata(seurat)
+  labels <- metadata[[label_col]]
+  
+  return(labels)
+}
+
+
+impute_zeros <- function(df,
+                         clr_zero_impute_method = c("percentage_zeros", "percentage_all", "counts_zeros", "counts_all"),
+                         clr_zero_impute_num = 1) {
+  if (!clr_zero_impute_method %in% c("percentage_zeros", "percentage_all", "counts_zeros", "counts_all")) {
+    stop("clr_zero_impute_method not found")
+  }
+  
+  # Apply specified zero imputation method
+  if (clr_zero_impute_method == "percentage_zeros") {
+    for(row in 1:nrow(df)){
+      df[row,][df[row,] == 0] <- sum(df[row,])/100 * clr_zero_impute_num
+    }
+  }
+  else if (clr_zero_impute_method == "percentage_all") {
+    for(row in 1:nrow(df)){
+      df[row,] <- df[row,] + sum(df[row,])/100 * clr_zero_impute_num
+    }
+  }
+  else if (clr_zero_impute_method == "counts_zeros") {
+    # Impute zeros by replacing them with a small non-zero value (1 in this case)
+    df[df == 0] <- clr_zero_impute_num
+  }
+  else if (clr_zero_impute_method == "counts_all") {
+    # Impute by adding a fixed count to all values
+    df <- df + clr_zero_impute_num
+  }
+  
+  return(df)
+}
+
+
 load_seurat_object <- function(file_name) {
   file_name_short <- strsplit(file_name, "\\.")[[1]][1]
   file_name_seurat <- paste0(file_name_short, ".h5seurat")
@@ -391,21 +401,57 @@ load_seurat_object <- function(file_name) {
   return(seurat)
 }
 
-get_metadata <- function(seurat) {
-  metadata <- seurat@meta.data %>%
-    group_by(Sample) %>%
-    slice(1)
 
-  return(metadata)
-}
-
-get_labels <- function(seurat, label_col) {
+process_all_figs <- function(seurat,
+                             label_col,
+                             low_res_ct_col,
+                             hi_res_ct_col,
+                             factors_test,
+                             mrvi_dist_file) {
+  result <- list()
   metadata <- get_metadata(seurat)
-  labels <- metadata[[label_col]]
+  labels <- get_labels(seurat, label_col)
   
-  return(labels)
+  # Pseudobulk
+  pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
+  pseudobulk_hvg <- pseudobulk[hvg,]
+  pb_norm <- t(DESeq2.normalize(pseudobulk_hvg, metadata))
+  result_list[["Pseudobulk"]] <- process_pseudobulk_fig(pb_norm = pb_norm, labels = labels)
+  
+  # Deconvolute using EPIC
+  result_list[["ECODA_deconv"]] <- process_deconv_fig(pseudobulk = pseudobulk, labels = labels)
+  
+  # CoDA
+  ## layer1: low res. cell types
+  result_list[["ECODA_low_res"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = low_res_ct_col, title = "Cell type composition\nlow res.")
+  
+  ## layer2: high res. cell types
+  result_list[["ECODA_high_res"]] <- process_coda_fig(seurat = seurat, labels = labels, ct_col = hi_res_ct_col, title = "Cell type composition\nhigh res.")
+  
+  
+  for (i in factors_test) {
+    # Pseudobulk with PCA
+    result_list[[paste0("Pseudobulk_", i, "_PCA_dims")]] <- process_pseudobulk_fig(pb_norm = pb_norm, labels = labels, pca_dims = i, title = paste0("Pseudobulk gene expression\n+ PCA (", i, " dims)"))
+    
+    # Hires CODA with PCA
+    result_list[[paste0("ECODA_high_res_", i, "_PCA_dims")]] <- process_coda_fig(seurat = seurat, labels = labels, pca_dims = i, ct_col = hi_res_ct_col, title = paste0("Cell type composition\nhigh res. + PCA (", i, " dims)"))
+    
+    # MOFA
+    result_list[[paste0("MOFA_", i, "_factors")]] <- process_mofa_bulk_fig(pb_norm = pb_norm, metadata = metadata, labels = labels, num_factors = i)
+    
+    # result_list[[ds]][[paste0("MOFA_", i, "_factors")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, save_file_path = file.path(paste0("data/lee_mofa_object_", i, "factors.rds")))
+    
+    # result_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat = seurat, labels = labels, hvg = hvg, pseudobulk_hvg = pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/lee_mofa_object_", i, "factors.rds")))
+    
+    # scITD
+    result_list[[paste0("scITD_", i, "_factors")]] <- process_scitd_fig(seurat = seurat, ct_col = low_res_ct_col, label_col = label_col, hvg = hvg, num_factors = i)
+  }
+  
+  # MrVI
+  result_list[["MrVI"]] <- process_mrvi_fig(seurat = seurat, dist_file = mrvi_dist_file, ct_col = low_res_ct_col, label_col)
+  
+  reutnr(result_list)
 }
-
 
 process_pseudobulk_fig <- function(pb_norm,
                                    labels,
@@ -695,78 +741,89 @@ process_mrvi_fig <- function(seurat,
 }
 
 
-get_ct_comp_df_seurat <- function(seurat, sample_col, ct_col) {
-  ct_comp_df <- table(seurat@meta.data[[sample_col]], seurat@meta.data[[ct_col]]) %>%
-    t() %>%
-    as.data.frame.matrix() %>%
-    t() %>%
-    as.data.frame()
-  ct_comp_df <- ct_comp_df[rowSums(ct_comp_df) != 0, ]
+
+
+# Plot 2D and 3D PCA from feature matrix and calculate silhouette and modularity score
+plot_pca <- function(feat_mat,
+                     labels,
+                     scale. = FALSE,
+                     knn_k = NULL,
+                     title = NULL,
+                     sil_score = TRUE,
+                     mod_score = TRUE,
+                     cluster_score = TRUE,
+                     pointsize = 3,
+                     coord_equal = TRUE,
+                     plotly_3d = FALSE) {
   
-  return(ct_comp_df)
+  res.pca <- prcomp(feat_mat, scale. = scale.)
+  
+  if (cluster_score) {
+    cluster_score <- clust_eval(feat_mat, labels)
+    title <- paste0(title, "\nCluster score: ", cluster_score)
+  }
+  if (mod_score) {
+    mod_score <- round(calc_modularity(feat_mat, labels, knn_k), 3)
+    title <- paste0(title, "\nModularity score: ", mod_score)
+  }
+  if (sil_score) {
+    sil_score <- round(calc_sil(feat_mat, labels), 3)
+    title <- paste0(title, "\nSilhouette score: ", sil_score)
+  }
+  
+  p <- factoextra::fviz_pca(res.pca,
+                            habillage = labels,
+                            label = "var",
+                            pointsize = pointsize,
+                            invisible = c("var", "quali"),
+                            geom = "point") +
+    ggtitle(title) +
+    scale_shape_manual(values = rep(19, length(unique(labels))))
+  if (coord_equal) {
+    p <- p + coord_equal()
+  }
+  print(p)
+  
+  if (plotly_3d) {
+    df <- as.data.frame(res.pca$x)
+    df$id <- seq_len(nrow(df))
+    df$vs <- factor(labels)
+    ms <- replicate(2, df, simplify = F)
+    ms[[2]]$PC3 <- min(df$PC3)
+    m <- ms %>%
+      bind_rows() %>%
+      group2NA("id", "vs")
+    # Plotting with plotly
+    plotly <- plot_ly(color = ~vs) %>%
+      add_markers(data = df, x = ~PC1, y = ~PC2, z = ~PC3) %>%
+      add_paths(data = m, x = ~PC1, y = ~PC2, z = ~PC3, opacity=0.2)
+    print(plotly)
+  }
+  
+  return(p)
 }
 
 
-calc_perc_df <- function(df) {
-  df <- t(apply(df, 1, function(row) (row / sum(row)) * 100)) %>% as.data.frame()
-  return(df)
-}
-
-
-impute_zeros <- function(df,
-                         clr_zero_impute_method = c("percentage_zeros", "percentage_all", "counts_zeros", "counts_all"),
-                         clr_zero_impute_num = 1) {
-  if (!clr_zero_impute_method %in% c("percentage_zeros", "percentage_all", "counts_zeros", "counts_all")) {
-    stop("clr_zero_impute_method not found")
-  }
+# Plot rocauc curve separating samples by PCA loading 1
+plot_roc_pcad1 <- function(feat_mat, labels) {
   
-  # Apply specified zero imputation method
-  if (clr_zero_impute_method == "percentage_zeros") {
-    for(row in 1:nrow(df)){
-      df[row,][df[row,] == 0] <- sum(df[row,])/100 * clr_zero_impute_num
-    }
-  }
-  else if (clr_zero_impute_method == "percentage_all") {
-    for(row in 1:nrow(df)){
-      df[row,] <- df[row,] + sum(df[row,])/100 * clr_zero_impute_num
-    }
-  }
-  else if (clr_zero_impute_method == "counts_zeros") {
-    # Impute zeros by replacing them with a small non-zero value (1 in this case)
-    df[df == 0] <- clr_zero_impute_num
-  }
-  else if (clr_zero_impute_method == "counts_all") {
-    # Impute by adding a fixed count to all values
-    df <- df + clr_zero_impute_num
-  }
+  res.pca <- prcomp(feat_mat)
   
-  return(df)
-}
-
-
-clr <- function(df) {
-  percentage_df <- calc_perc_df(df)
+  pca_scores_pc1 <- data.frame(PC1 = data.frame(res.pca$x)$PC1,
+                               label = factor(labels))
+  p <- ggplot(pca_scores_pc1, aes(x = PC1, fill = label)) +
+    geom_density(alpha=0.4) + 
+    geom_histogram(aes(y=..density..), alpha=0.3, colour="black", 
+                   position="identity") +
+    labs(title = "Density Plot of PC1 Scores",
+         x = "PC1 Scores",
+         y = "Density") +
+    theme_classic()
+  print(p)
   
-  geometric_mean <- apply(percentage_df, 1, function(row) exp(mean(log(row))))
-  clr_df <- apply(percentage_df, 2, function(row) log(row) - log(geometric_mean)) %>%
-    as.data.frame()
+  # Calculate the ROC curve
+  roc_curve <- roc(pca_scores_pc1$label, ifelse(pca_scores_pc1$PC1 > 0, 1, 0))
   
-  return(clr_df)
-}
-
-
-
-calc_sep_score <- function(df,
-                           labels,
-                           knn_k = NULL) {
-  sil_score <- round(calc_sil(df, labels), 3)
-  mod_score <- unlist(round(calc_modularity(df, labels, knn_k), 3))
-  cluster_score <- clust_eval(matrix = df, labels = labels)
-  anosim_score <- vegan::anosim(x = df, grouping = labels, distance = "euclidean")[["statistic"]]
-  
-  res <- list(sil_score = sil_score,
-              mod_score = mod_score,
-              cluster_score = cluster_score)
-  
-  return(res)
+  # Plot the ROC curve
+  plot(roc_curve, col = "blue", main = "ROC Curve", print.auc = TRUE)
 }
