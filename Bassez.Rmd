@@ -1,0 +1,537 @@
+---
+title: "Benchmark of exploratory data analysis methods for scRNA-seq data"
+author: "Christian Halter"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+This script prepares datasets for downstream analysis
+
+
+# Load libraries and set parameters
+
+```{r message=FALSE, warning=FALSE}
+library(rstatix)
+
+source("functions.R")
+
+# Set path to save plots
+path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
+```
+
+
+# ---------------------------------------------------------------
+
+# Bassez
+
+```{r}
+ds <- "Bassez"
+
+ds_name <- "BassezA_2021_33958794"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+
+seurat_bassez <- readRDS(file.path(path_output, sprintf("%swhole.rds", ds_name)))
+
+# seurat <- subset(seurat, subset = timepoint == "Pre")
+
+seurat_bassez$Sample <- seurat_bassez$sample
+seurat_bassez$cellSubType[is.na(seurat_bassez$cellSubType)] <- seurat_bassez$cellType[is.na(seurat_bassez$cellSubType)]
+```
+
+
+```{r fig.height=10, fig.width=10}
+df0 <- get_ct_comp_df_seurat(seurat_bassez, sample_col = "Sample", ct_col = "cellSubType")
+df0 <- df0[, !colnames(df0) %in% c("Cancer", "Endothelial_cell", "Fibroblast")]
+colnames(df0) <- gsub("^C\\d{1,2}_", "MoMac_", colnames(df0))
+
+df0 <- df0 %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr()
+meta <- get_metadata(seurat_bassez)
+meta$Timepoint <- meta$timepoint
+meta$Expansion <- meta$expansion
+meta$Timepoint <- factor(meta$Timepoint, levels = c("Pre", "On"))
+
+df0 <- df0[meta$Expansion != "n/a", ]
+meta <- meta[meta$Expansion != "n/a", ]
+meta$Expansion[meta$Expansion == "E"] <- "Expanders"
+meta$Expansion[meta$Expansion == "NE"] <- "Non-expanders"
+
+ct_cols <- colnames(df0)
+df <- df0[, !colnames(df0) %in% c("Cancer_cell", "Endothelial_cell", "Fibroblast")]
+
+res.pca <- prcomp(df)
+
+
+# Extract PCA results
+pca_data <- as.data.frame(res.pca$x)
+pca_data$cohort <- meta$cohort
+pca_data$Timepoint <- meta$Timepoint
+pca_data$patient_id <- meta$patient_id
+pca_data$Expansion <- meta$Expansion
+pca_variances <- res.pca$sdev^2
+pca_variances_percent <- pca_variances / sum(pca_variances) * 100
+
+# Create PCA plot
+pca_data %>% arrange(Timepoint, patient_id) %>%
+  ggplot(aes(x = PC1, y = PC2, color = Expansion, shape = Timepoint)) +
+  geom_point(size = 3) +
+  scale_shape_manual(values = c(16, 17, 18)) +  # Adjust shapes as needed
+  labs(x = paste0("PC1 (", round(pca_variances_percent[1], 1), "%)"),
+       y = paste0("PC2 (", round(pca_variances_percent[2], 1), "%)")) +
+  theme_minimal() +
+  geom_path(aes(group = patient_id),
+            arrow = arrow(length = unit(0.5, "cm")),
+            size = 0.5)
+
+
+plot_pca(df[sub, ],
+         labels = meta[sub, ]$patient_id,
+         # sil_score = FALSE,
+         # mod_score = FALSE,
+         # cluster_score = FALSE,
+         invisible = "none", repel = TRUE, labelsize = 0.5, plotly_3d = TRUE)
+
+plot_pca(df,
+         labels = meta$cohort,
+         invisible = "none", repel = TRUE, labelsize = 0.5, plotly_3d = TRUE)
+
+
+
+
+sub <- meta$cohort == "treatment_naive" & !meta$patient_id %in% c("BIOKEY_3", "BIOKEY_4")
+res.pca <- prcomp(df[sub, ])
+
+# Extract PCA results
+pca_data <- as.data.frame(res.pca$x)
+pca_data$cohort <- meta[sub, ]$cohort
+pca_data$Timepoint <- meta[sub, ]$Timepoint
+pca_data$patient_id <- meta[sub, ]$patient_id
+pca_data$Expansion <- meta[sub, ]$Expansion
+pca_variances <- res.pca$sdev^2
+pca_variances_percent <- pca_variances / sum(pca_variances) * 100
+
+average_points <- pca_data %>%
+  group_by(Expansion) %>%
+  summarise(avg_PC1 = mean(PC1),
+            avg_PC2 = mean(PC2))
+
+# Create PCA plot
+pca_data %>% arrange(Timepoint, patient_id) %>%
+  ggplot(aes(x = PC1, y = PC2, color = Expansion, shape = Timepoint)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("#7CAE00", "#C77CFF")) +  # Adjust colors as needed
+  scale_shape_manual(values = c(16, 17, 18)) +  # Adjust shapes as needed
+  labs(x = paste0("PC1 (", round(pca_variances_percent[1], 1), "%)"),
+       y = paste0("PC2 (", round(pca_variances_percent[2], 1), "%)")) +
+  theme_minimal() +
+  # Add the average points
+  geom_point(data = average_points,
+             aes(x = avg_PC1, y = avg_PC2, color = Expansion),
+             size = 5,
+             stroke = 1,
+             inherit.aes = FALSE) +
+  geom_path(aes(group = patient_id),
+            arrow = arrow(length = unit(0.5, "cm")),
+            size = 0.5)
+
+ggsave(file.path(path_plots, "bioexample_bassez_arrows.pdf"),
+       width = 7,
+       height = 7)
+
+plot_pca(df[sub, ],
+         labels = meta[sub, ]$Expansion,
+         sil_score = FALSE,
+         mod_score = FALSE,
+         cluster_score = FALSE,
+         knn_k = 4,
+         invisible = "quali", repel = TRUE, labelsize = 0.5, plotly_3d = TRUE) +
+  scale_color_manual(values = c("#7CAE00", "#C77CFF")) # Adjust colors as needed
+ggsave(file.path(path_plots, "bioexample_bassez_cts.pdf"),
+       width = 7,
+       height = 7)
+
+
+
+
+
+
+sub <- meta$cohort == "neoadjuvant_chemo" & !meta$patient_id %in% c("BIOKEY_32", "BIOKEY_40")
+res.pca <- prcomp(df[sub, ])
+
+# Extract PCA results
+pca_data <- as.data.frame(res.pca$x)
+pca_data$cohort <- meta[sub, ]$cohort
+pca_data$Timepoint <- meta[sub, ]$Timepoint
+pca_data$patient_id <- meta[sub, ]$patient_id
+pca_data$Expansion <- meta[sub, ]$Expansion
+pca_variances <- res.pca$sdev^2
+pca_variances_percent <- pca_variances / sum(pca_variances) * 100
+
+# Create PCA plot
+pca_data %>% arrange(Timepoint, patient_id) %>%
+  ggplot(aes(x = PC1, y = PC2, color = Expansion, shape = factor(Timepoint))) +
+  geom_point(size = 3) +
+  # scale_color_manual(values = c("blue", "red", "green")) +  # Adjust colors as needed
+  scale_shape_manual(values = c(16, 17, 18)) +  # Adjust shapes as needed
+  labs(x = paste0("PC1 (", round(pca_variances_percent[1], 1), "%)"),
+       y = paste0("PC2 (", round(pca_variances_percent[2], 1), "%)")) +
+  theme_minimal() +
+  geom_path(aes(group = patient_id),
+            arrow = arrow(length = unit(0.5, "cm")),
+            size = 0.5)
+
+plot_pca(df[sub, ],
+         labels = meta[sub, ]$Expansion,
+         sil_score = FALSE,
+         mod_score = FALSE,
+         cluster_score = FALSE,
+         invisible = "none", repel = TRUE, labelsize = 0.5, plotly_3d = TRUE)
+```
+
+
+
+
+# Zhang
+
+```{r}
+ds <- "Zhang"
+
+# Set paths
+ds_name <- "ZhangY_2022_34653365"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+path_output_samples <- file.path(path_output, "samples")
+
+
+# Load data
+obj.list <- read_objs(path_output_samples)
+
+# Exclude samples that consist mainly of one cell type as outliers
+samples_exclude <- c("Pre_P012_b", "Pre_P013_t")
+obj.list <- obj.list[!names(obj.list) %in% samples_exclude]
+
+samples_clearcut <- c()
+
+for (i in names(obj.list)) {
+  if (!(obj.list[[i]]@meta.data$Clinical.efficacy.[1] %in% c("-"))) {
+    samples_clearcut <- c(samples_clearcut, i)
+  }
+}
+
+metacols_to_keep <- c("Sample", "Tissue", "layer1", "layer2", "Treatment", "Treatment_type", "Age", "Clinical.efficacy.", "Individual")
+
+for (i in samples_clearcut) {
+  print(i)
+  
+  obj <- obj.list[[i]]
+  Idents(obj) <- "Sample"
+  obj@meta.data <- obj@meta.data[colnames(obj@assays$RNA$counts), metacols_to_keep]
+  
+  if (i == samples_clearcut[1]) {
+    seurat <- obj
+  } else {
+    seurat <- merge(seurat, obj)
+  }
+}
+
+# rm(obj.list); gc()
+
+```
+
+
+# Zhang all
+
+```{r fig.height=10, fig.width=10}
+df_zhang0 <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = "layer2")
+df_zhang0 <- df_zhang0[, !colnames(df_zhang0) %in% c("Neutrophils", "Platelet", "Fibroblast")]
+df_zhang0 <- df_zhang0 %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr()
+meta_zhang0 <- get_metadata(seurat)
+
+meta_zhang0$Timepoint <- meta_zhang0$Treatment
+meta_zhang0$Timepoint[meta_zhang0$Timepoint == "Pre"] <- "Pre-treatment"
+meta_zhang0$Timepoint[meta_zhang0$Timepoint == "Post"] <- "Post-treatment"
+meta_zhang0$Timepoint[meta_zhang0$Timepoint == "Prog"] <- "Progression"
+meta_zhang0$Timepoint <- factor(meta_zhang0$Timepoint, levels = c("Pre-treatment", "Post-treatment", "Progression"))
+
+meta_zhang0$Clinical.efficacy.[meta_zhang0$Clinical.efficacy. == "PD"] <- "Progressive"
+meta_zhang0$Clinical.efficacy.[meta_zhang0$Clinical.efficacy. == "SD"] <- "Stable"
+meta_zhang0$Clinical.efficacy.[meta_zhang0$Clinical.efficacy. == "PR"] <- "Partial remission"
+meta_zhang0$Clinical.efficacy. <- factor(meta_zhang0$Clinical.efficacy., levels = c("Progressive", "Partial remission", "Stable"))
+
+
+plot_pca(df_zhang0,
+         labels = meta_zhang0$Tissue,
+         # invisible = "quali",
+         sil_score = FALSE,
+         mod_score = FALSE,
+         cluster_score = FALSE, coord_equal = FALSE, labelsize = 3, plotly_3d = FALSE)
+
+ggsave(file.path(path_plots, "bioexample_zhang_all.pdf"),
+       width = 9,
+       height = 7)
+
+
+
+plot_pca(df_zhang0,
+         labels = meta_zhang0$Tissue,
+         invisible = "quali",
+         sil_score = FALSE,
+         mod_score = FALSE,
+         cluster_score = FALSE, coord_equal = FALSE, labelsize = 3, plotly_3d = FALSE)
+
+ggsave(file.path(path_plots, "bioexample_zhang_all_arrows.pdf"),
+       width = 9,
+       height = 7)
+
+```
+
+
+
+# Zhang blood
+
+```{r fig.height=10, fig.width=10}
+df_zhang0 <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = "layer2")
+df_zhang0 <- df_zhang0[, !colnames(df_zhang0) %in% c("Neutrophils", "Platelet", "Fibroblast")]
+df_zhang0 <- df_zhang0 %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr()
+meta_zhang0 <- get_metadata(seurat)
+
+meta_zhang0$Timepoint <- meta_zhang0$Treatment
+meta_zhang0$Timepoint[meta_zhang0$Timepoint == "Pre"] <- "Pre-treatment"
+meta_zhang0$Timepoint[meta_zhang0$Timepoint == "Post"] <- "Post-treatment"
+meta_zhang0$Timepoint[meta_zhang0$Timepoint == "Prog"] <- "Progression"
+meta_zhang0$Timepoint <- factor(meta_zhang0$Timepoint, levels = c("Pre-treatment", "Post-treatment", "Progression"))
+
+meta_zhang0$Clinical.efficacy.[meta_zhang0$Clinical.efficacy. == "PD"] <- "Progressive"
+meta_zhang0$Clinical.efficacy.[meta_zhang0$Clinical.efficacy. == "SD"] <- "Stable"
+meta_zhang0$Clinical.efficacy.[meta_zhang0$Clinical.efficacy. == "PR"] <- "Partial remission"
+meta_zhang0$Clinical.efficacy. <- factor(meta_zhang0$Clinical.efficacy., levels = c("Progressive", "Partial remission", "Stable"))
+
+
+df_zhang <- df_zhang0[meta_zhang0$Tissue == "blood", ]
+meta_zhang <- meta_zhang0[meta_zhang0$Tissue == "blood", ]
+
+res.pca <- prcomp(df_zhang)
+
+# Extract PCA results
+pca_data <- as.data.frame(res.pca$x)
+pca_data$Tissue <- meta_zhang$Tissue
+pca_data$Timepoint <- meta_zhang$Timepoint
+pca_data$Treatment_type <- meta_zhang$Treatment_type
+pca_data$Clinical.efficacy. <- meta_zhang$Clinical.efficacy.
+pca_data$Sample <- meta_zhang$Sample
+pca_data$Individual <- meta_zhang$Individual
+pca_variances <- res.pca$sdev^2
+pca_variances_percent <- pca_variances / sum(pca_variances) * 100
+
+# Create PCA plot
+pca_data %>% arrange(Timepoint, Individual) %>%
+  ggplot(aes(x = PC1, y = PC2, color = Treatment_type, shape = Timepoint)) +
+  geom_point(size = 3) +
+  # scale_color_manual(values = c("blue", "red", "green")) +  # Adjust colors as needed
+  scale_shape_manual(values = c(16, 17, 18)) +  # Adjust shapes as needed
+  labs(x = paste0("PC1 (", round(pca_variances_percent[1], 1), "%)"),
+       y = paste0("PC2 (", round(pca_variances_percent[2], 1), "%)")) +
+  geom_path(aes(group = Individual),
+            arrow = arrow(length = unit(0.5, "cm")),
+            size = 0.5) +
+  theme_minimal()
+
+
+# Create PCA plot
+pca_data %>% arrange(Timepoint, Individual) %>%
+  ggplot(aes(x = PC1, y = PC2, color = Clinical.efficacy., shape = Timepoint)) +
+  geom_point(size = 3) +
+  # scale_color_manual(values = c("blue", "red", "green")) +  # Adjust colors as needed
+  scale_shape_manual(values = c(16, 17, 18)) +  # Adjust shapes as needed
+  labs(x = paste0("PC1 (", round(pca_variances_percent[1], 1), "%)"),
+       y = paste0("PC2 (", round(pca_variances_percent[2], 1), "%)")) +
+  geom_path(aes(group = Individual),
+            arrow = arrow(length = unit(0.5, "cm")),
+            size = 0.5) +
+  theme_minimal()
+
+
+
+# Create PCA plot
+# Calculate the average PC1 and PC2 for each Treatment group
+average_points <- pca_data %>%
+  group_by(Timepoint) %>%
+  summarise(avg_PC1 = mean(PC1),
+            avg_PC2 = mean(PC2))
+average_points$group <- 1
+
+average_points_ce <- pca_data %>%
+  group_by(Clinical.efficacy.) %>%
+  summarise(avg_PC1 = mean(PC1),
+            avg_PC2 = mean(PC2))
+average_points_ce$group <- 1
+
+# Create PCA plot
+p <- pca_data %>% arrange(Timepoint, Individual) %>%
+  ggplot(aes(x = PC1, y = PC2, color = Clinical.efficacy., shape = Timepoint)) +
+  geom_point(size = 3) +
+  # scale_color_manual(values = c("blue", "red", "green")) +  # Adjust colors as needed
+  scale_shape_manual(values = c(16, 17, 18)) +  # Adjust shapes as needed
+  labs(x = paste0("PC1 (", round(pca_variances_percent[1], 1), "%)"),
+       y = paste0("PC2 (", round(pca_variances_percent[2], 1), "%)")) +
+  geom_path(aes(group = Individual),
+            arrow = arrow(length = unit(0.5, "cm")),
+            size = 0.5) +
+  theme_minimal()
+
+ggsave(file.path(path_plots, "bioexample_zhang_blood_arrows.pdf"),
+       plot = p,
+       width = 7,
+       height = 7)
+
+# Create PCA plot
+p +
+  # Add the average points
+  geom_point(data = average_points,
+             aes(x = avg_PC1, y = avg_PC2, shape = Timepoint),
+             color = "black",  # Or any color you prefer for the averages
+             size = 5,
+             stroke = 1) +    # Add a border to the shape for better visibility
+  geom_path(data = average_points, aes(x = avg_PC1, y = avg_PC2, group = group),
+            arrow = arrow(length = unit(0.5, "cm")),
+            inherit.aes = FALSE) +
+  # Add the average points
+  geom_point(data = average_points_ce,
+             aes(x = avg_PC1, y = avg_PC2, color = Clinical.efficacy.),
+             size = 5,
+             stroke = 1,
+             inherit.aes = FALSE) +
+  theme_minimal()
+
+ggsave(file.path(path_plots, "bioexample_zhang_blood_arrows_with_average.pdf"),
+       width = 7,
+       height = 7)
+
+
+plot_pca(df_zhang,
+         labels = meta_zhang$Clinical.efficacy.,
+         invisible = "quali",
+         sil_score = FALSE,
+         mod_score = FALSE,
+         cluster_score = FALSE,
+         repel = TRUE, labelsize = 0.5, plotly_3d = FALSE) +
+  # Add the average points
+  geom_point(data = average_points,
+             aes(x = avg_PC1, y = avg_PC2, shape = Timepoint),
+             # color = "black",  # Or any color you prefer for the averages
+             size = 5,
+             stroke = 1) +    # Add a border to the shape for better visibility
+  geom_path(data = average_points, aes(x = avg_PC1, y = avg_PC2, group = group),
+            arrow = arrow(length = unit(0.5, "cm")),
+            inherit.aes = FALSE) +
+    scale_shape_manual(values = c(20,20,20,19,17,18))
+
+ggsave(file.path(path_plots, "bioexample_zhang_blood_cts.pdf"),
+       width = 9,
+       height = 9)
+
+
+```
+
+
+
+# Zhang tumor
+
+```{r fig.height=10, fig.width=10}
+df_zhang0 <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = "layer2")
+df_zhang0 <- df_zhang0[, !colnames(df_zhang0) %in% c("Neutrophils", "Platelet", "Fibroblast")]
+df_zhang0 <- df_zhang0 %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr()
+# meta_zhang0 <- get_metadata(seurat)
+
+df_zhang <- df_zhang0[meta_zhang0$Tissue == "tumor", ]
+meta_zhang <- meta_zhang0[meta_zhang0$Tissue == "tumor", ]
+
+res.pca <- prcomp(df_zhang)
+
+# Extract PCA results
+pca_data <- as.data.frame(res.pca$x)
+pca_data$Tissue <- meta_zhang$Tissue
+pca_data$Timepoint <- meta_zhang$Timepoint
+pca_data$Clinical.efficacy. <- meta_zhang$Clinical.efficacy.
+pca_data$Sample <- meta_zhang$Sample
+pca_data$Individual <- meta_zhang$Individual
+pca_variances <- res.pca$sdev^2
+pca_variances_percent <- pca_variances / sum(pca_variances) * 100
+
+# Create PCA plot
+pca_data %>% arrange(Timepoint, Individual) %>%
+  ggplot(aes(x = PC1, y = PC2, color = Clinical.efficacy., shape = Timepoint)) +
+  geom_point(size = 3) +
+  # scale_color_manual(values = c("blue", "red", "green")) +  # Adjust colors as needed
+  scale_shape_manual(values = c(16, 17, 18)) +  # Adjust shapes as needed
+  labs(x = paste0("PC1 (", round(pca_variances_percent[1], 1), "%)"),
+       y = paste0("PC2 (", round(pca_variances_percent[2], 1), "%)")) +
+  geom_path(aes(group = Individual),
+            arrow = arrow(length = unit(0.5, "cm")),
+            size = 0.5) +
+  theme_minimal()
+
+
+plot_pca(df_zhang,
+         labels = meta_zhang$Clinical.efficacy.,
+         invisible = "quali", repel = TRUE, labelsize = 0.5, plotly_3d = TRUE, coord_equal = FALSE) +
+  ggtitle("Tumor")
+
+ggsave(file.path(path_plots, "bioexample_zhang_tumor.pdf"),
+       width = 7,
+       height = 7)
+```
+
+
+# Lee
+
+```{r}
+df_lee0 <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = "celltype_subset")
+# df_lee0 <- df_lee0[, !colnames(df_lee0) %in% c("Neutrophils", "Erythrocyte", "Fibroblast", "Endothelial", "Epithelial")]
+df_lee0 <- df_lee0 %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr()
+meta_lee0 <- get_metadata(seurat)
+
+# meta_lee0$Timepoint <- meta_lee0$condition
+# meta_lee0$Timepoint[meta_lee0$Timepoint == "Pre"] <- "Pre-treatment"
+# meta_lee0$Timepoint[meta_lee0$Timepoint == "Post"] <- "Post-treatment"
+# meta_lee0$Timepoint[meta_lee0$Timepoint == "Prog"] <- "Progression"
+# meta_lee0$Timepoint <- factor(meta_lee0$Timepoint, levels = c("Pre-treatment", "Post-treatment", "Progression"))
+
+# meta_lee0$Clinical.efficacy.[meta_lee0$Clinical.efficacy. == "PD"] <- "Progressive"
+# meta_lee0$Clinical.efficacy.[meta_lee0$Clinical.efficacy. == "SD"] <- "Stable"
+# meta_lee0$Clinical.efficacy.[meta_lee0$Clinical.efficacy. == "PR"] <- "Partial remission"
+# meta_lee0$Clinical.efficacy. <- factor(meta_lee0$Clinical.efficacy., levels = c("Progressive", "Partial remission", "Stable"))
+
+
+plot_pca(df_lee0,
+         labels = meta_lee0$subtype,
+         # invisible = "quali",
+         sil_score = FALSE,
+         mod_score = FALSE,
+         cluster_score = FALSE, coord_equal = FALSE, labelsize = 3, plotly_3d = FALSE)
+
+# ggsave(file.path(path_plots, "bioexample_zhang_all.pdf"),
+#        width = 9,
+#        height = 7)
+
+
+
+plot_pca(df_lee0,
+         labels = meta_lee0$subtype,
+         invisible = "quali",
+         sil_score = FALSE,
+         mod_score = FALSE,
+         cluster_score = FALSE, coord_equal = FALSE, labelsize = 3, plotly_3d = FALSE)
+
+```
+
