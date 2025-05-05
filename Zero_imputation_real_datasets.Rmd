@@ -16,14 +16,6 @@ output:
 # Load libraries
 
 ```{r}
-library(scooter)
-library(Seurat)
-library(dplyr)
-library(ggplot2)
-library(robCompositions)
-library(zCompositions)
-library(stringr)
-library(tidyr)
 library(rstatix)
 source("functions.R")
 
@@ -91,20 +83,16 @@ ds <- "Zhang"
 df <- df %>% select_if(colSums(.) != 0) %>% mutate_all(as.numeric)
 res_list[[paste0(ds, "_counts_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_counts_all_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-# res_list[[paste0(ds, "_counts_all_0.5")]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-# res_list[[paste0(ds, "_perc_zeros_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-# res_list[[paste0(ds, "_perc_all_0.0001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.0001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_0.001")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_0.01")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.01) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_0.1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_perc_all_1")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-# res_list[[paste0(ds, "_perc_all_10")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 10) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_perc_all_0.001%")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_perc_all_0.01%")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.01) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_perc_all_0.1%")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_perc_all_1%")]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_asinsqrt")]] <- df %>% calc_perc_df() %>% mutate(across(everything(), ~ . / 100)) %>% sqrt() %>% asin() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_impRZilr")]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
 res_list[[paste0(ds, "_multLN")]] <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_0.01")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_0.1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-res_list[[paste0(ds, "_multRepl_1")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_0.01%")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_0.1%")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+res_list[[paste0(ds, "_multRepl_1%")]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
 ```
 
 

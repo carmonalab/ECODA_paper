@@ -22,43 +22,8 @@ This script compares different methods for exploratory data analysis of scRNA-se
 # renv::init()
 # renv::snapshot()
 
-library(tidyverse)
-library(dplyr)
-library(ggplot2)
-library(ggpubr)
-library(factoextra)
-library(plotly)
-library(Hotelling)
-library(compositions)
 library(rstatix)
 source("functions.R")
-
-library(Seurat)
-# devtools::install_github('satijalab/seurat-data')
-library(SeuratData)
-# install.packages("hdf5r")
-# remotes::install_github("mojaveazure/seurat-disk")
-library(SeuratDisk)
-
-# install.packages("devtools")
-# devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
-library(EPIC)
-# BiocManager::install("MOFA2")
-library(reticulate)
-py_install("mofapy2", envname = "my_env", method="auto")
-import("mofapy2")
-library(basilisk)
-library("MOFA2")
-# BiocManager::install("fgsea")
-# BiocManager::install("sva")
-# devtools::install_github("kharchenkolab/scITD")
-library(scITD)
-# install.packages("ncdf4")
-library(ncdf4)
-library(arrow)
-
-# remotes::install_github("carmonalab/scooter", ref="f31eab3")
-library(scooter)
 
 my_seed <- 123
 set.seed(my_seed)
@@ -130,6 +95,8 @@ for (i in samples_clearcut) {
 
 rm(obj.list); gc()
 
+# Convert Seurat object to anndata for interoperability with python
+convert_seurat_to_h5ad(seurat, ds)
 
 seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
 hvg <- seurat@assays[["RNA"]]@var.features
@@ -137,9 +104,6 @@ hvg <- seurat@assays[["RNA"]]@var.features
 label_col <- "Tissue"
 low_res_ct_col <- "layer1"
 hi_res_ct_col <- "layer2"
-
-# Convert Seurat object to anndata for interoperability with python
-convert_seurat_to_h5ad(seurat, ds)
 ```
 
 
@@ -147,18 +111,15 @@ convert_seurat_to_h5ad(seurat, ds)
 
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
-
-result_list[[ds]] <- process_all_figs(seurat,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                       label_col,
                                       low_res_ct_col,
                                       hi_res_ct_col,
                                       factors_test,
                                       mrvi_dist_file)
-
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
-p
-ggsave(file.path(path_plots, "benchmark_pca_", ds, ".pdf"),
+ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
        plot = p,
        width = 15,
        height = 10)
@@ -166,6 +127,8 @@ ggsave(file.path(path_plots, "benchmark_pca_", ds, ".pdf"),
 
 
 # ---------------------------------------------------------------
+
+# TODO MRVI
 
 # Stephenson et al. dataset
 
@@ -199,15 +162,26 @@ samples_subset <- unique(seurat$sample_id[!seurat$sample_id %in% samples_exclude
 seurat <- subset(seurat, subset = sample_id %in% samples_subset)
 
 seurat$Sample <- seurat$sample_id
+
 seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
 hvg <- seurat@assays[["RNA"]]@var.features
+
+# Convert Seurat object to anndata for interoperability with python
+# var_genes <- VariableFeatures(seurat)
+# seurat_df <- GetAssayData(seurat)[var_genes,]
+object <- CreateSeuratObject(counts = seurat@assays$RNA$counts, meta.data = seurat@meta.data[, c("Sample", "initial_clustering")])
+object <- object |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+object[["RNA3"]] <- as(object = object[["RNA"]], Class = "Assay")
+DefaultAssay(object) <- "RNA3"
+object[["RNA"]] <- NULL
+object <- RenameAssays(object = object, RNA3 = 'RNA')
+convert_seurat_to_h5ad(object, ds)
+rm(object); gc()
+
 
 label_col <- "Status"
 low_res_ct_col <- "initial_clustering"
 hi_res_ct_col <- "full_clustering"
-
-# Convert Seurat object to anndata for interoperability with python
-convert_seurat_to_h5ad(seurat, ds)
 ```
 
 ## Create plots
@@ -215,7 +189,68 @@ convert_seurat_to_h5ad(seurat, ds)
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- process_all_figs(seurat,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
+                                      label_col,
+                                      low_res_ct_col,
+                                      hi_res_ct_col,
+                                      factors_test,
+                                      mrvi_dist_file)
+
+plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
+       plot = p,
+       width = 15,
+       height = 10)
+```
+
+
+# ---------------------------------------------------------------
+
+# Gong and Sharma et al. dataset
+
+## Set paths
+
+```{r}
+ds <- "GongSharma_all_cmv"
+
+ds_name <- "GongSharma_2024_PrePrintTBD"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+```
+
+
+
+## CMV (females)
+
+### Load seurat objects
+
+```{r}
+ds <- "GongSharma_females_cmv"
+
+seurat <- load_seurat_object("data/gongsharma_cmv_females.h5ad")
+
+seurat$Sample <- seurat$specimen.specimenGuid
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+hvg <- seurat@assays[["RNA"]]@var.features
+
+seurat@version <- obj@version
+
+label_col <- "subject.cmv"
+low_res_ct_col <- "AIFI_L1"
+hi_res_ct_col <- "AIFI_L3"
+```
+
+
+
+### Create plots
+
+```{r}
+mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
+
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                       label_col,
                                       low_res_ct_col,
                                       hi_res_ct_col,
@@ -231,6 +266,49 @@ ggsave(file.path(path_plots, "benchmark_pca_", ds, ".pdf"),
        height = 10)
 ```
 
+
+## Age (females cmvneg)
+
+### Load seurat objects
+
+```{r}
+ds <- "GongSharma_females_cmvneg_age"
+
+seurat <- load_seurat_object("data/gongsharma_age_females_cmvneg.h5ad")
+seurat$Sample <- seurat$specimen.specimenGuid
+seurat$age <- as.factor(ifelse(seurat$sample.subjectAgeAtDraw < 50, "young", "old"))
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+hvg <- seurat@assays[["RNA"]]@var.features
+
+seurat@version <- obj@version
+
+label_col <- "age"
+low_res_ct_col <- "AIFI_L1"
+hi_res_ct_col <- "AIFI_L3"
+```
+
+
+
+### Create plots
+
+```{r}
+mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
+
+result_list[[ds]] <- run_benchmark_analysis(seurat,
+                                      label_col,
+                                      low_res_ct_col,
+                                      hi_res_ct_col,
+                                      factors_test,
+                                      mrvi_dist_file)
+
+plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
+       plot = p,
+       width = 15,
+       height = 10)
+```
 
 
 # ---------------------------------------------------------------
@@ -278,7 +356,7 @@ hi_res_ct_col <- "functional.cluster"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- process_all_figs(seurat,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                       label_col,
                                       low_res_ct_col,
                                       hi_res_ct_col,
@@ -288,117 +366,13 @@ result_list[[ds]] <- process_all_figs(seurat,
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
 p
-ggsave(file.path(path_plots, "benchmark_pca_", ds, ".pdf"),
+ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
        plot = p,
        width = 15,
        height = 10)
 ```
 
 
-
-# ---------------------------------------------------------------
-
-# Gong and Sharma et al. dataset
-
-## Set paths
-
-```{r}
-ds <- "GongSharma_all_cmv"
-
-ds_name <- "GongSharma_2024_PrePrintTBD"
-
-path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
-path_output <- file.path(path_root, "output")
-```
-
-
-
-## CMV (females)
-
-### Load seurat objects
-
-```{r}
-ds <- "GongSharma_females_cmv"
-
-seurat <- load_seurat_object("data/gongsharma_cmv_females.h5ad")
-
-seurat$Sample <- seurat$specimen.specimenGuid
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-hvg <- seurat@assays[["RNA"]]@var.features
-
-seurat@version <- obj@version
-
-label_col <- "subject.cmv"
-low_res_ct_col <- "AIFI_L1"
-hi_res_ct_col <- "AIFI_L3"
-```
-
-
-
-### Create plots
-
-```{r}
-mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
-
-result_list[[ds]] <- process_all_figs(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
-
-plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
-p <- cowplot::plot_grid(plotlist = plot_list)
-p
-ggsave(file.path(path_plots, "benchmark_pca_", ds, ".pdf"),
-       plot = p,
-       width = 15,
-       height = 10)
-```
-
-
-## Age (females cmvneg)
-
-### Load seurat objects
-
-```{r}
-ds <- "GongSharma_females_cmvneg_age"
-
-seurat <- load_seurat_object("data/gongsharma_age_females_cmvneg.h5ad")
-seurat$Sample <- seurat$specimen.specimenGuid
-seurat$age <- as.factor(ifelse(seurat$sample.subjectAgeAtDraw < 50, "young", "old"))
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-hvg <- seurat@assays[["RNA"]]@var.features
-
-seurat@version <- obj@version
-
-label_col <- "age"
-low_res_ct_col <- "AIFI_L1"
-hi_res_ct_col <- "AIFI_L3"
-```
-
-
-
-### Create plots
-
-```{r}
-mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
-
-result_list[[ds]] <- process_all_figs(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
-
-plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
-p <- cowplot::plot_grid(plotlist = plot_list)
-p
-ggsave(file.path(path_plots, "benchmark_pca_", ds, ".pdf"),
-       plot = p,
-       width = 15,
-       height = 10)
-```
 
 
 # ---------------------------------------------------------------
@@ -422,6 +396,9 @@ path_output <- file.path(path_root, "output")
 ```{r}
 seurat <- readRDS(file.path(path_output, sprintf("%swhole.rds", ds_name)))
 
+# Convert Seurat object to anndata for interoperability with python
+convert_seurat_to_h5ad(seurat, ds)
+
 seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
 varf <- seurat@assays[["RNA"]]@var.features
 hvg <- varf[!is.na(varf)]
@@ -429,9 +406,6 @@ hvg <- varf[!is.na(varf)]
 label_col <- "Tissue"
 low_res_ct_col <- "OriginalAnnotationLevel1"
 hi_res_ct_col <- "OriginalAnnotationLevel3"
-
-# Convert Seurat object to anndata for interoperability with python
-convert_seurat_to_h5ad(seurat, ds)
 ```
 
 ## Create plots
@@ -439,7 +413,7 @@ convert_seurat_to_h5ad(seurat, ds)
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- process_all_figs(seurat,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                       label_col,
                                       low_res_ct_col,
                                       hi_res_ct_col,
@@ -449,7 +423,7 @@ result_list[[ds]] <- process_all_figs(seurat,
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
 p
-ggsave(file.path(path_plots, "benchmark_pca_", ds, ".pdf"),
+ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
        plot = p,
        width = 15,
        height = 10)
@@ -472,34 +446,36 @@ path_output <- file.path(path_root, "output")
 ```
 
 
-## Load seurat object
+## Treatment cohort
+
+### Load seurat object
 
 ```{r}
 seurat <- readRDS(file.path(path_output, sprintf("%swhole.rds", ds_name)))
+
+seurat <- subset(seurat, subset = timepoint == "Pre")
+
+seurat$Sample <- seurat$sample
+seurat$cellSubType[is.na(seurat$cellSubType)] <- seurat$cellType[is.na(seurat$cellSubType)]
+
+# Convert Seurat object to anndata for interoperability with python
+convert_seurat_to_h5ad(seurat, ds)
 
 seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
 varf <- seurat@assays[["RNA"]]@var.features
 hvg <- varf[!is.na(varf)]
 
-seurat$Sample <- seurat$sample
-seurat$cellSubType[is.na(seurat$cellSubType)] <- seurat$cellType[is.na(seurat$cellSubType)]
-seurat <- subset(seurat, subset = expansion %in% c("E", "NE"))
-
 label_col <- "cohort"
-# label_col <- "expansion"
 low_res_ct_col <- "cellType"
 hi_res_ct_col <- "cellSubType"
-
-# Convert Seurat object to anndata for interoperability with python
-convert_seurat_to_h5ad(seurat, ds)
 ```
 
-## Create plots
+### Create plots
 
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- process_all_figs(seurat,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                       label_col,
                                       low_res_ct_col,
                                       hi_res_ct_col,
@@ -509,12 +485,610 @@ result_list[[ds]] <- process_all_figs(seurat,
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
 p
-ggsave(file.path(path_plots, "benchmark_pca_", ds, ".pdf"),
+ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
        plot = p,
        width = 15,
        height = 10)
 ```
 
+
+# ---------------------------------------------------------------
+
+# Wu et al. dataset
+
+## Set paths
+
+```{r}
+ds <- "Wu"
+
+ds_name <- "WuS_2021_34493872"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+```
+
+
+## Load seurat object
+
+```{r}
+seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
+
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+varf <- seurat@assays[["RNA"]]@var.features
+hvg <- varf[!is.na(varf)]
+
+label_col <- "subtype"
+low_res_ct_col <- "celltype_major"
+hi_res_ct_col <- "celltype_subset"
+
+# # Convert Seurat object to anndata for interoperability with python
+# object <- seurat
+# object[["RNA3"]] <- as(object = object[["RNA"]], Class = "Assay")
+# DefaultAssay(object) <- "RNA3"
+# object[["RNA"]] <- NULL
+# object <- RenameAssays(object = object, RNA3 = 'RNA')
+# convert_seurat_to_h5ad(seurat, ds)
+# rm(object); gc()
+```
+
+## Create plots
+
+```{r}
+mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
+
+result_list[[ds]] <- run_benchmark_analysis(seurat,
+                                      label_col,
+                                      low_res_ct_col,
+                                      hi_res_ct_col,
+                                      factors_test,
+                                      mrvi_dist_file)
+
+plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
+       plot = p,
+       width = 15,
+       height = 10)
+```
+
+
+
+# ---------------------------------------------------------------
+
+# TODO MRVI
+
+# Smillie et al. dataset
+
+## Set paths
+
+```{r}
+ds <- "Smillie"
+
+ds_name <- "SmillieC_2019_31348891"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+```
+
+
+## Load seurat object
+
+```{r}
+seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
+
+stot <- seurat
+# seurat <- subset(stot, subset = Tissue_compartment == "Epithelial")
+# seurat <- subset(stot, subset = Tissue_compartment == "Lamina_propria")
+seurat <- subset(stot, subset = stot$OriginalAnnotationLevel1 == "Immune")
+
+# Convert Seurat object to anndata for interoperability with python
+convert_seurat_to_h5ad(seurat, ds)
+
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+varf <- seurat@assays[["RNA"]]@var.features
+hvg <- varf[!is.na(varf)]
+
+label_col <- "Tissue_compartment"
+low_res_ct_col <- "OriginalAnnotationLevel2"
+hi_res_ct_col <- "OriginalAnnotationLevel3"
+```
+
+## Create plots
+
+#### DELETE <XXXXXXXX
+
+```{r}
+label_col <- "Tissue_compartment"
+
+metadata <- get_metadata(seurat)
+labels <- get_labels(seurat, label_col)
+
+pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
+pseudobulk_hvg <- pseudobulk[hvg,]
+pb_norm <- t(DESeq2.normalize(pseudobulk_hvg, metadata))
+
+run_benchmark_analysis_test(seurat,
+                      labels,
+                      low_res_ct_col,
+                      hi_res_ct_col)
+```
+
+
+```{r}
+mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
+
+result_list[[ds]] <- run_benchmark_analysis(seurat,
+                                      label_col,
+                                      low_res_ct_col,
+                                      hi_res_ct_col,
+                                      factors_test,
+                                      mrvi_dist_file)
+
+plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
+       plot = p,
+       width = 15,
+       height = 10)
+```
+
+
+
+# ---------------------------------------------------------------
+
+# TODO MRVI
+
+# Adams et al. dataset
+# Has also other non-immune cells
+
+## Set paths
+
+```{r}
+ds <- "Adams"
+
+ds_name <- "AdamsT_2020_32832599"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+```
+
+
+## Load seurat object
+
+```{r}
+seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
+
+# Convert Seurat object to anndata for interoperability with python
+convert_seurat_to_h5ad(seurat, ds)
+
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+varf <- seurat@assays[["RNA"]]@var.features
+hvg <- varf[!is.na(varf)]
+
+label_col <- "Condition"
+low_res_ct_col <- "OriginalAnnotationLevel1"
+hi_res_ct_col <- "OriginalAnnotationLevel2"
+```
+
+## Create plots
+
+```{r}
+mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
+
+result_list[[ds]] <- run_benchmark_analysis(seurat,
+                                      label_col,
+                                      low_res_ct_col,
+                                      hi_res_ct_col,
+                                      factors_test,
+                                      mrvi_dist_file,
+                                      ECODA_deconv = FALSE)
+
+plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
+       plot = p,
+       width = 15,
+       height = 10)
+```
+
+
+# ---------------------------------------------------------------
+
+# TODO MRVI
+
+# Kfoury et al. dataset
+
+## Set paths
+
+```{r}
+ds <- "Kfoury"
+
+ds_name <- "Kfoury_2021_34719426"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+```
+
+
+## Load seurat object
+
+```{r}
+seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
+
+# stot <- seurat
+# tcells <- unique(seurat$celltype_subset)[grepl(pattern = "T_cells", x = unique(seurat$celltype_subset))]
+# seurat <- subset(stot, subset = celltype_subset %in% tcells)
+
+# Convert Seurat object to anndata for interoperability with python
+convert_seurat_to_h5ad(seurat, ds)
+
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+varf <- seurat@assays[["RNA"]]@var.features
+hvg <- varf[!is.na(varf)]
+
+label_col <- "Status"
+low_res_ct_col <- "cells"
+hi_res_ct_col <- "cells"
+```
+
+## Create plots
+
+```{r}
+mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
+
+result_list[[ds]] <- run_benchmark_analysis(seurat,
+                                      label_col,
+                                      low_res_ct_col,
+                                      hi_res_ct_col,
+                                      factors_test,
+                                      mrvi_dist_file)
+
+plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
+       plot = p,
+       width = 15,
+       height = 10)
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Nathan et al. dataset
+# Main separation by CD4 toxicity but no metadata available that correlates
+# -> study mentions correlation with European ethnicity
+# -> Corresponding author contacted
+# -> Waiting for response
+# Weak correlation with age
+
+<!-- ## Set paths -->
+
+<!-- ```{r} -->
+<!-- ds <- "Nathan" -->
+
+<!-- ds_name <- "NathanA_2021_34031617" -->
+
+<!-- path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name) -->
+<!-- path_output <- file.path(path_root, "output") -->
+<!-- ``` -->
+
+
+<!-- ## Load seurat object -->
+
+<!-- ```{r} -->
+<!-- seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name))) -->
+
+<!-- # stot <- seurat -->
+<!-- # tcells <- unique(seurat$celltype_subset)[grepl(pattern = "T_cells", x = unique(seurat$celltype_subset))] -->
+<!-- # seurat <- subset(stot, subset = celltype_subset %in% tcells) -->
+
+<!-- # Convert Seurat object to anndata for interoperability with python -->
+<!-- convert_seurat_to_h5ad(seurat, ds) -->
+
+<!-- seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000) -->
+<!-- varf <- seurat@assays[["RNA"]]@var.features -->
+<!-- hvg <- varf[!is.na(varf)] -->
+
+<!-- # label_col <- "TB_status" -->
+<!-- label_col <- "sex" -->
+<!-- low_res_ct_col <- "OriginalAnnotationLevel1" -->
+<!-- hi_res_ct_col <- "OriginalAnnotationLevel2" -->
+<!-- ``` -->
+
+<!-- ## Create plots -->
+
+<!-- #### DELETE <XXXXXXXX -->
+
+<!-- ```{r} -->
+<!-- seurat$age_binned <- ifelse(seurat$age <= 30, "young", ifelse(seurat$age >= 60, "old", "middle")) -->
+<!-- # seurat$age_binned <- ifelse(seurat$age <= 50, "young", "old") -->
+<!-- # seurat$age_binned <- ifelse(seurat$age <= 25, "very_young", -->
+<!-- #                             ifelse(seurat$age <= 50, "young", -->
+<!-- #                                    ifelse(seurat$age <= 75, "middle", "old"))) -->
+<!-- #  -->
+<!-- # seurat$age_binned <- NULL -->
+<!-- #  -->
+<!-- # meta <- seurat@meta.data -->
+<!-- #  -->
+<!-- # # 1. Get the unique ages per sample -->
+<!-- # unique_sample_ages <- meta %>% -->
+<!-- #   distinct(Sample, age) %>% -->
+<!-- #   pull(age) -->
+<!-- #  -->
+<!-- # # 2. Determine the breaks for two roughly equal sized bins based on the number of unique samples -->
+<!-- # number_of_bins <- 2 -->
+<!-- # age_breaks <- unique(quantile(unique_sample_ages, probs = seq.int(0, 1, by = 1 / number_of_bins))) -->
+<!-- #  -->
+<!-- # # 3. Assign the age bin to each unique sample -->
+<!-- # sample_age_bins <- meta %>% -->
+<!-- #   distinct(Sample, age) %>% -->
+<!-- #   mutate(age_binned_sample = cut(age, breaks = age_breaks, include.lowest = TRUE)) %>% -->
+<!-- #   dplyr::select(Sample, age_binned_sample) -->
+<!-- #  -->
+<!-- # # 4. Merge the sample-level age bins back into the Seurat object's metadata -->
+<!-- # meta <- meta %>% -->
+<!-- #   left_join(sample_age_bins, by = "Sample") %>% -->
+<!-- #   # Optional: Remove the temporary 'age' column if you only want 'age_binned_sample' -->
+<!-- #   # select(-age) -->
+<!-- #   rename(age_binned = age_binned_sample) # Rename for consistency -->
+<!-- #  -->
+<!-- # # 5. Verify the number of samples in each bin -->
+<!-- # meta %>% -->
+<!-- #   distinct(Sample, age_binned) %>% -->
+<!-- #   group_by(age_binned) %>% -->
+<!-- #   count() -->
+<!-- #  -->
+<!-- # row.names(meta) <- row.names(seurat@meta.data) -->
+<!-- # seurat@meta.data$age_binned <- meta$age_binned -->
+
+<!-- label_col <- "age_binned" -->
+
+<!-- metadata <- get_metadata(seurat) -->
+<!-- labels <- get_labels(seurat, label_col) -->
+
+<!-- pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]]) -->
+<!-- pseudobulk_hvg <- pseudobulk[hvg,] -->
+<!-- pb_norm <- t(DESeq2.normalize(pseudobulk_hvg, metadata)) -->
+
+<!-- run_benchmark_analysis_test(seurat, -->
+<!--                       labels, -->
+<!--                       low_res_ct_col, -->
+<!--                       hi_res_ct_col) -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- mrvi_dist_file <- paste0("data/", ds, "_dists.nc") -->
+
+<!-- result_list[[ds]] <- run_benchmark_analysis(seurat, -->
+<!--                                       label_col, -->
+<!--                                       low_res_ct_col, -->
+<!--                                       hi_res_ct_col, -->
+<!--                                       factors_test, -->
+<!--                                       mrvi_dist_file) -->
+
+<!-- plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]]) -->
+<!-- p <- cowplot::plot_grid(plotlist = plot_list) -->
+<!-- p -->
+<!-- ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")), -->
+<!--        plot = p, -->
+<!--        width = 15, -->
+<!--        height = 10) -->
+<!-- ``` -->
+
+
+
+
+# ---------------------------------------------------------------
+
+# TEMP et al. dataset
+
+## Set paths
+
+```{r}
+counts <- data.table::fread("data/raw.tsv")
+counts <- as.data.frame(counts)
+row.names(counts) <- counts$V1
+row.names(counts) <- gsub("-", "_", row.names(counts))
+counts$V1 <- NULL
+counts <- Matrix(as.matrix(counts), sparse = TRUE)
+
+meta <- data.table::fread("data/meta.tsv")
+meta <- as.data.frame(meta)
+meta <- meta[-1,]
+row.names(meta) <- meta$NAME
+row.names(meta) <- gsub("-", "_", row.names(meta))
+meta$NAME <- NULL
+
+seurat <- CreateSeuratObject(counts = t(counts), meta.data = meta)
+
+seurat$Sample <- seurat$biosample_id
+
+saveRDS(seurat, "data/Yasumizu.rds")
+```
+
+
+
+```{r}
+ds <- "Chu"
+
+ds_name <- "ChuY_2023_37248301"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+```
+
+
+## Load seurat object
+
+```{r}
+seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
+
+# stot <- seurat
+# tcells <- unique(seurat$celltype_subset)[grepl(pattern = "T_cells", x = unique(seurat$celltype_subset))]
+# seurat <- subset(stot, subset = celltype_subset %in% tcells)
+
+# Convert Seurat object to anndata for interoperability with python
+convert_seurat_to_h5ad(seurat, ds)
+
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+# varf <- seurat@assays[["RNA"]]@var.features
+varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
+hvg <- varf[!is.na(varf)]
+
+label_col <- "disease__ontology_label"
+low_res_ct_col <- "cell_type__ontology_custom"
+hi_res_ct_col <- "cell_type__ontology_custom"
+```
+
+## Create plots
+
+#### DELETE <XXXXXXXX
+
+```{r}
+label_col <- "disease__ontology_label"
+
+metadata <- get_metadata(seurat)
+labels <- get_labels(seurat, label_col)
+
+pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
+pseudobulk_hvg <- pseudobulk[hvg,]
+pb_norm <- t(DESeq2.normalize(pseudobulk_hvg, metadata))
+
+run_benchmark_analysis_test(seurat,
+                      labels,
+                      low_res_ct_col,
+                      hi_res_ct_col)
+```
+
+
+```{r}
+mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
+
+result_list[[ds]] <- run_benchmark_analysis(seurat,
+                                      label_col,
+                                      low_res_ct_col,
+                                      hi_res_ct_col,
+                                      factors_test,
+                                      mrvi_dist_file)
+
+plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
+       plot = p,
+       width = 15,
+       height = 10)
+```
+
+
+
+# ---------------------------------------------------------------
+
+# TEMP et al. dataset
+
+## Set paths
+
+```{r}
+counts <- data.table::fread("data/raw.tsv")
+counts <- as.data.frame(counts)
+row.names(counts) <- counts$V1
+row.names(counts) <- gsub("-", "_", row.names(counts))
+counts$V1 <- NULL
+counts <- Matrix(as.matrix(counts), sparse = TRUE)
+
+meta <- data.table::fread("data/meta.tsv")
+meta <- as.data.frame(meta)
+meta <- meta[-1,]
+row.names(meta) <- meta$NAME
+row.names(meta) <- gsub("-", "_", row.names(meta))
+meta$NAME <- NULL
+
+seurat <- CreateSeuratObject(counts = t(counts), meta.data = meta)
+
+seurat$Sample <- seurat$biosample_id
+
+saveRDS(seurat, "data/Yasumizu.rds")
+```
+
+
+
+```{r}
+ds <- "Chu"
+
+ds_name <- "ChuY_2023_37248301"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+```
+
+
+## Load seurat object
+
+```{r}
+seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
+
+# stot <- seurat
+# tcells <- unique(seurat$celltype_subset)[grepl(pattern = "T_cells", x = unique(seurat$celltype_subset))]
+# seurat <- subset(stot, subset = celltype_subset %in% tcells)
+
+# Convert Seurat object to anndata for interoperability with python
+convert_seurat_to_h5ad(seurat, ds)
+
+seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+# varf <- seurat@assays[["RNA"]]@var.features
+varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
+hvg <- varf[!is.na(varf)]
+
+label_col <- "disease__ontology_label"
+low_res_ct_col <- "cell_type__ontology_custom"
+hi_res_ct_col <- "cell_type__ontology_custom"
+```
+
+## Create plots
+
+#### DELETE <XXXXXXXX
+
+```{r}
+label_col <- "disease__ontology_label"
+
+metadata <- get_metadata(seurat)
+labels <- get_labels(seurat, label_col)
+
+pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
+pseudobulk_hvg <- pseudobulk[hvg,]
+pb_norm <- t(DESeq2.normalize(pseudobulk_hvg, metadata))
+
+run_benchmark_analysis_test(seurat,
+                      labels,
+                      low_res_ct_col,
+                      hi_res_ct_col)
+```
+
+
+```{r}
+mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
+
+result_list[[ds]] <- run_benchmark_analysis(seurat,
+                                      label_col,
+                                      low_res_ct_col,
+                                      hi_res_ct_col,
+                                      factors_test,
+                                      mrvi_dist_file)
+
+plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
+p <- cowplot::plot_grid(plotlist = plot_list)
+p
+ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
+       plot = p,
+       width = 15,
+       height = 10)
+```
 
 
 

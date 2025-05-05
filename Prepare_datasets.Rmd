@@ -1,0 +1,1707 @@
+---
+title: "Benchmark of exploratory data analysis methods for scRNA-seq data"
+author: "Christian Halter"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+This script prepares datasets for downstream analysis
+
+
+# Load libraries and set parameters
+
+```{r message=FALSE, warning=FALSE}
+library(rstatix)
+
+source("functions.R")
+
+# Set path to save plots
+path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
+```
+
+
+# Create results list to fill
+
+```{r}
+result_file <- "result_list.rds"
+
+if (file.exists(result_file)) {
+  result_list <- readRDS("result_list.rds")
+} else {
+  result_list <- list()
+}
+
+analysis_elems <- c("bmark", "trans", "zeroimp")
+```
+
+
+# ---------------------------------------------------------------
+
+# Zhang
+Was annotated with file Zhang_celltype_annotation.Rmd
+
+```{r}
+# Dataset
+ds <- "Zhang"
+
+elem_null <- c()
+for (a in analysis_elems) {
+  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
+  
+  if (is.null(result_list[[a]][[ds]])) {
+    print(paste("To be analyzed:", a, ds))
+  }
+}
+
+# If any analyses missing, process dataset for missing analyses
+if (any(elem_null)) {
+  
+  # Set paths
+  ds_name <- "ZhangY_2022_34653365"
+  
+  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_output <- file.path(path_root, "output")
+  path_output_samples <- file.path(path_output, "samples")
+  
+  
+  # Load data
+  obj.list <- read_objs(path_output_samples)
+  
+  # Exclude samples that consist mainly of one cell type as outliers
+  samples_exclude <- c("Pre_P012_b", "Pre_P013_t")
+  obj.list <- obj.list[!names(obj.list) %in% samples_exclude]
+  
+  samples_clearcut <- c()
+  
+  for (i in names(obj.list)) {
+    if (obj.list[[i]]@meta.data$Treatment[1] %in% c("Pre") &
+        !(obj.list[[i]]@meta.data$Clinical.efficacy.[1] %in% c("-"))) {
+      samples_clearcut <- c(samples_clearcut, i)
+    }
+  }
+  
+  metacols_to_keep <- c("Sample", "Tissue", "layer1", "layer2")
+  
+  for (i in samples_clearcut) {
+    print(i)
+    
+    obj <- obj.list[[i]]
+    Idents(obj) <- "Sample"
+    obj@meta.data <- obj@meta.data[colnames(obj@assays$RNA$counts), metacols_to_keep]
+    
+    if (i == samples_clearcut[1]) {
+      seurat <- obj
+    } else {
+      seurat <- merge(seurat, obj)
+    }
+  }
+  
+  rm(obj.list); gc()
+  
+  # Convert Seurat object to anndata for interoperability with python
+  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
+  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
+  if (!file.exists(mrvi_dist_file)) {
+    convert_seurat_to_h5ad(seurat, ds)
+    stop("Please process MrVI to dist file")
+  }
+  
+  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+  hvg <- seurat@assays[["RNA"]]@var.features
+  
+  
+  
+  seurat@misc$label_col <- "Tissue"
+  seurat@misc$low_res_ct_col <- "layer1"
+  seurat@misc$hi_res_ct_col <- "layer2"
+  
+  
+  
+  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+}
+```
+
+
+# ---------------------------------------------------------------
+
+# Stephenson
+
+```{r}
+ds <- "Stephenson"
+
+
+elem_null <- c()
+for (a in analysis_elems) {
+  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
+  
+  if (is.null(result_list[[a]][[ds]])) {
+    print(paste("To be analyzed:", a, ds))
+  }
+}
+
+# If any analyses missing, process dataset for missing analyses
+if (any(elem_null)) {
+  
+  ds_name <- "MitchelJ_2023_PrePrintTBD"
+  
+  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_output <- file.path(path_root, "output")
+  
+  seurat <- readRDS(file.path(path_output, sprintf("%s_Stephenson_preprocessed.rds", ds_name)))
+  
+  seurat <- subset(seurat, subset = Site == "Ncl")
+  seurat <- subset(seurat, subset = Status %in% c("Healthy", "Covid"))
+  seurat$Days_from_onset <- as.character(seurat$Days_from_onset)
+  seurat$Days_from_onset[seurat$Days_from_onset == "Healthy"] <- 0
+  seurat$Days_from_onset <- as.numeric(seurat$Days_from_onset)
+  seurat <- subset(seurat, subset = Days_from_onset < 10)
+  
+  seurat$sample_id <- as.character(seurat$sample_id)
+  samples_exclude <- c("BGCV10_CV0198", "MH8919230")
+  samples_subset <- unique(seurat$sample_id[!seurat$sample_id %in% samples_exclude])
+  seurat <- subset(seurat, subset = sample_id %in% samples_subset)
+  
+  seurat$Sample <- seurat$sample_id
+  
+  # Convert Seurat object to anndata for interoperability with python
+  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
+  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
+  if (!file.exists(mrvi_dist_file)) {
+    convert_seurat_to_h5ad(seurat, ds)
+    stop("Please process MrVI to dist file")
+  }
+  
+  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+  hvg <- seurat@assays[["RNA"]]@var.features
+
+  # # Convert Seurat object to anndata for interoperability with python
+  # # var_genes <- VariableFeatures(seurat)
+  # # seurat_df <- GetAssayData(seurat)[var_genes,]
+  # object <- CreateSeuratObject(counts = seurat@assays$RNA$counts, meta.data = seurat@meta.data[, c("Sample", "initial_clustering")])
+  # object <- object |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+  # object[["RNA3"]] <- as(object = object[["RNA"]], Class = "Assay")
+  # DefaultAssay(object) <- "RNA3"
+  # object[["RNA"]] <- NULL
+  # object <- RenameAssays(object = object, RNA3 = 'RNA')
+  # convert_seurat_to_h5ad(object, ds)
+  # rm(object); gc()
+  
+
+  
+  seurat@misc$label_col <- "Status"
+  seurat@misc$low_res_ct_col <- "initial_clustering"
+  seurat@misc$hi_res_ct_col <- "full_clustering"
+
+  
+    
+  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+}
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Gong and Sharma
+
+```{r}
+ds_name <- "GongSharma_2024_PrePrintTBD"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+```
+
+
+## CMV (females)
+
+```{r}
+ds <- "GongSharma_cmv_females"
+
+elem_null <- c()
+for (a in analysis_elems) {
+  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
+  
+  if (is.null(result_list[[a]][[ds]])) {
+    print(paste("To be analyzed:", a, ds))
+  }
+}
+
+# If any analyses missing, process dataset for missing analyses
+if (any(elem_null)) {
+  
+  seurat <- load_seurat_object("data/gongsharma_cmv_females.h5ad")
+  seurat$Sample <- seurat$specimen.specimenGuid
+  
+  # Convert Seurat object to anndata for interoperability with python
+  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
+  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
+  if (!file.exists(mrvi_dist_file)) {
+    convert_seurat_to_h5ad(seurat, ds)
+    stop("Please process MrVI to dist file")
+  }
+  
+  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+  hvg <- seurat@assays[["RNA"]]@var.features
+  
+
+  seurat@misc$label_col <- "subject.cmv"
+  seurat@misc$low_res_ct_col <- "AIFI_L1"
+  seurat@misc$hi_res_ct_col <- "AIFI_L3"
+    
+  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+}
+```
+
+
+## Age (females cmvneg)
+
+```{r}
+ds <- "GongSharma_age_females_cmvneg"
+
+elem_null <- c()
+for (a in analysis_elems) {
+  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
+  
+  if (is.null(result_list[[a]][[ds]])) {
+    print(paste("To be analyzed:", a, ds))
+  }
+}
+
+# If any analyses missing, process dataset for missing analyses
+if (any(elem_null)) {
+
+  seurat <- load_seurat_object("data/gongsharma_age_females_cmvneg.h5ad")
+  seurat$Sample <- seurat$specimen.specimenGuid
+  
+    
+  # Convert Seurat object to anndata for interoperability with python
+  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
+  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
+  if (!file.exists(mrvi_dist_file)) {
+    convert_seurat_to_h5ad(seurat, ds)
+    stop("Please process MrVI to dist file")
+  }
+  
+  seurat$age <- as.factor(ifelse(seurat$sample.subjectAgeAtDraw < 50, "young", "old"))
+  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+  hvg <- seurat@assays[["RNA"]]@var.features
+  
+  seurat@misc$label_col <- "age"
+  seurat@misc$low_res_ct_col <- "AIFI_L1"
+  seurat@misc$hi_res_ct_col <- "AIFI_L3"
+  
+  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+}
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Lee
+
+```{r}
+ds <- "Lee"
+
+
+elem_null <- c()
+for (a in analysis_elems) {
+  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
+  
+  if (is.null(result_list[[a]][[ds]])) {
+    print(paste("To be analyzed:", a, ds))
+  }
+}
+
+# If any analyses missing, process dataset for missing analyses
+if (any(elem_null)) {
+
+  ds_name <- "LeeA_2021_34836966"
+  
+  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_output <- file.path(path_root, "output")
+  
+  seurat <- readRDS(file.path(path_output, sprintf("%sp_tumor_seurat.rds", ds_name)))
+  
+  # Convert Seurat object to anndata for interoperability with python
+  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
+  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
+  if (!file.exists(mrvi_dist_file)) {
+    convert_seurat_to_h5ad(seurat, ds)
+    stop("Please process MrVI to dist file")
+  }
+  
+  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+  varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
+  hvg <- varf[!is.na(varf)]
+
+  # # Convert Seurat object to anndata for interoperability with python
+  # object <- seurat
+  # object[["RNA3"]] <- as(object = object[["RNA"]], Class = "Assay")
+  # DefaultAssay(object) <- "RNA3"
+  # object[["RNA"]] <- NULL
+  # object <- RenameAssays(object = object, RNA3 = 'RNA')
+  # SaveH5Seurat(object, filename = "lee.h5Seurat")
+  # Convert("lee.h5Seurat", dest = "h5ad")
+  # rm(object); gc()
+  
+  seurat@misc$label_col <- "condition"
+  seurat@misc$low_res_ct_col <- "scGate_multi"
+  seurat@misc$hi_res_ct_col <- "functional.cluster"
+  
+  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+}
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Pelka
+
+## Has also other non-immune cells
+
+```{r}
+ds <- "Pelka"
+
+
+elem_null <- c()
+for (a in analysis_elems) {
+  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
+
+  if (is.null(result_list[[a]][[ds]])) {
+    print(paste("To be analyzed:", a, ds))
+  }
+}
+
+# If any analyses missing, process dataset for missing analyses
+if (any(elem_null)) {
+
+  ds_name <- "PelkaK_2022_34450029"
+
+  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_output <- file.path(path_root, "output")
+
+  seurat <- readRDS(file.path(path_output, sprintf("%swhole.rds", ds_name)))
+  
+  seurat$Sample <- as.character(seurat$Sample)
+
+  # Convert Seurat object to anndata for interoperability with python
+  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
+  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
+  if (!file.exists(mrvi_dist_file)) {
+    convert_seurat_to_h5ad(seurat, ds)
+    stop("Please process MrVI to dist file")
+  }
+
+  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+  varf <- seurat@assays[["RNA"]]@var.features
+  hvg <- varf[!is.na(varf)]
+
+
+  seurat@misc$label_col <- "Tissue"
+  seurat@misc$low_res_ct_col <- "OriginalAnnotationLevel1"
+  seurat@misc$hi_res_ct_col <- "OriginalAnnotationLevel3"
+
+  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+}
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Bassez
+
+<!-- ```{r} -->
+<!-- ds <- "Bassez" -->
+
+<!-- elem_null <- c() -->
+<!-- for (a in analysis_elems) { -->
+<!--   elem_null <- c(elem_null, is.null(result_list[[a]][[ds]])) -->
+
+<!--   if (is.null(result_list[[a]][[ds]])) { -->
+<!--     print(paste("To be analyzed:", a, ds)) -->
+<!--   } -->
+<!-- } -->
+
+<!-- # If any analyses missing, process dataset for missing analyses -->
+<!-- if (any(elem_null)) { -->
+
+<!--   ds_name <- "BassezA_2021_33958794" -->
+
+<!--   path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name) -->
+<!--   path_output <- file.path(path_root, "output") -->
+
+<!--   seurat <- readRDS(file.path(path_output, sprintf("%swhole.rds", ds_name))) -->
+
+<!--   seurat <- subset(seurat, subset = timepoint == "Pre") -->
+
+<!--   seurat$Sample <- seurat$sample -->
+<!--   seurat$cellSubType[is.na(seurat$cellSubType)] <- seurat$cellType[is.na(seurat$cellSubType)] -->
+
+<!--   # Convert Seurat object to anndata for interoperability with python -->
+<!--   mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists") -->
+<!--   mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc")) -->
+<!--   if (!file.exists(mrvi_dist_file)) { -->
+<!--     convert_seurat_to_h5ad(seurat, ds) -->
+<!--     stop("Please process MrVI to dist file") -->
+<!--   } -->
+
+<!--   seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000) -->
+<!--   varf <- seurat@assays[["RNA"]]@var.features -->
+<!--   hvg <- varf[!is.na(varf)] -->
+
+
+
+<!--   seurat@misc$label_col <- "cohort" -->
+<!--   seurat@misc$low_res_ct_col <- "cellType" -->
+<!--   seurat@misc$hi_res_ct_col <- "cellSubType" -->
+
+<!--   result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file) -->
+<!-- } -->
+<!-- ``` -->
+
+
+
+
+# ---------------------------------------------------------------
+
+# Wu
+
+```{r}
+ds <- "Wu"
+
+elem_null <- c()
+for (a in analysis_elems) {
+  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
+  
+  if (is.null(result_list[[a]][[ds]])) {
+    print(paste("To be analyzed:", a, ds))
+  }
+}
+
+# If any analyses missing, process dataset for missing analyses
+if (any(elem_null)) {
+  
+  ds_name <- "WuS_2021_34493872"
+  
+  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_output <- file.path(path_root, "output")
+  
+  seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
+  
+  # Convert Seurat object to anndata for interoperability with python
+  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
+  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
+  if (!file.exists(mrvi_dist_file)) {
+    convert_seurat_to_h5ad(seurat, ds)
+    stop("Please process MrVI to dist file")
+  }
+  
+  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+  varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
+  hvg <- varf[!is.na(varf)]
+  
+  # # Convert Seurat object to anndata for interoperability with python
+  # object <- seurat
+  # object[["RNA3"]] <- as(object = object[["RNA"]], Class = "Assay")
+  # DefaultAssay(object) <- "RNA3"
+  # object[["RNA"]] <- NULL
+  # object <- RenameAssays(object = object, RNA3 = 'RNA')
+  # convert_seurat_to_h5ad(seurat, ds)
+  # rm(object); gc()
+  
+  
+  seurat@misc$label_col <- "subtype"
+  seurat@misc$low_res_ct_col <- "celltype_major"
+  seurat@misc$hi_res_ct_col <- "celltype_subset"
+  
+  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+}
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Smillie
+
+```{r}
+ds <- "Smillie"
+
+
+elem_null <- c()
+for (a in analysis_elems) {
+  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
+  
+  if (is.null(result_list[[a]][[ds]])) {
+    print(paste("To be analyzed:", a, ds))
+  }
+}
+
+# If any analyses missing, process dataset for missing analyses
+if (any(elem_null)) {
+  
+  ds_name <- "SmillieC_2019_31348891"
+  
+  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_output <- file.path(path_root, "output")
+  
+  
+  seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
+  
+  stot <- seurat
+  # seurat <- subset(stot, subset = Tissue_compartment == "Epithelial")
+  # seurat <- subset(stot, subset = Tissue_compartment == "Lamina_propria")
+  seurat <- subset(stot, subset = stot$OriginalAnnotationLevel1 == "Immune")
+  
+  # Convert Seurat object to anndata for interoperability with python
+  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
+  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
+  if (!file.exists(mrvi_dist_file)) {
+    convert_seurat_to_h5ad(seurat, ds)
+    stop("Please process MrVI to dist file")
+  }
+  
+  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+  varf <- seurat@assays[["RNA"]]@var.features
+  hvg <- varf[!is.na(varf)]
+  
+  
+  seurat@misc$label_col <- "Tissue_compartment"
+  seurat@misc$low_res_ct_col <- "OriginalAnnotationLevel2"
+  seurat@misc$hi_res_ct_col <- "OriginalAnnotationLevel3"
+  
+  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+}
+```
+
+
+
+# ---------------------------------------------------------------
+
+# TODO RERUN MRVI
+
+# Adams
+## Has also other non-immune cells
+
+```{r}
+ds <- "Adams"
+
+
+elem_null <- c()
+for (a in analysis_elems) {
+  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
+  
+  if (is.null(result_list[[a]][[ds]])) {
+    print(paste("To be analyzed:", a, ds))
+  }
+}
+
+# If any analyses missing, process dataset for missing analyses
+if (any(elem_null)) {
+  
+  ds_name <- "AdamsT_2020_32832599"
+  
+  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_output <- file.path(path_root, "output")
+  
+  seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
+  
+  seurat <- subset(seurat, subset = OriginalAnnotationLevel1 != "Multiplet")
+  
+  seurat$Sample <- paste0("g", seurat$Sample)
+  # seurat$Sample <- gsub("-", "_" seurat$Sample)
+  Idents(seurat) <- "Sample"
+  
+  # Convert Seurat object to anndata for interoperability with python
+  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
+  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
+  if (!file.exists(mrvi_dist_file)) {
+    convert_seurat_to_h5ad(seurat, ds)
+    stop("Please process MrVI to dist file")
+  }
+  
+  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+  varf <- seurat@assays[["RNA"]]@var.features
+  hvg <- varf[!is.na(varf)]
+  
+  
+  seurat@misc$label_col <- "Condition"
+  seurat@misc$low_res_ct_col <- "OriginalAnnotationLevel1"
+  seurat@misc$hi_res_ct_col <- "OriginalAnnotationLevel2"
+  
+  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+}
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Kfoury
+## Has also other non-immune cells
+
+
+```{r}
+ds <- "Kfoury"
+
+elem_null <- c()
+for (a in analysis_elems) {
+  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
+  
+  if (is.null(result_list[[a]][[ds]])) {
+    print(paste("To be analyzed:", a, ds))
+  }
+}
+
+# If any analyses missing, process dataset for missing analyses
+if (any(elem_null)) {
+  
+  ds_name <- "Kfoury_2021_34719426"
+  
+  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_output <- file.path(path_root, "output")
+  
+  seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
+  
+  seurat@misc$label_col <- "Status"
+  seurat@misc$low_res_ct_col <- "cells"
+  seurat@misc$hi_res_ct_col <- "cells"
+  
+  # Convert Seurat object to anndata for interoperability with python
+  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
+  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
+  if (!file.exists(mrvi_dist_file)) {
+    convert_seurat_to_h5ad(seurat, ds)
+    stop("Please process MrVI to dist file")
+  }
+  
+  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
+  varf <- seurat@assays[["RNA"]]@var.features
+  hvg <- varf[!is.na(varf)]
+
+
+  
+  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+}
+```
+
+## Test on immune cells only
+
+```{r}
+# cts <- unique(seurat$OriginalAnnotationLevel1)
+# cts <- cts[!cts %in% c("Osteoblasts", "Osteoclasts", "Pericytes", "Endothelial", "Tumor", "Erythroid")]
+# seurat_sub <- subset(seurat, subset = OriginalAnnotationLevel1 %in% cts)
+# 
+# test <- run_benchmark_analysis(seurat_sub,
+#                                get_labels(seurat, seurat@misc$label_col),
+#                                low_res_ct_col,
+#                                hi_res_ct_col,
+#                                factors_test = 2,
+#                                Pseudobulk = TRUE,
+#                                ECODA_deconv = FALSE,
+#                                ECODA_low_res = FALSE,
+#                                ECODA_high_res = TRUE,
+#                                Pseudobulk_PCA = FALSE,
+#                                ECODA_high_res_PCA = FALSE,
+#                                MOFA = FALSE,
+#                                scITD = FALSE,
+#                                MrVI = FALSE,
+#                                show_pca_plots = TRUE,
+#                                save_pca_plots = FALSE
+# )
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ---------------------------------------------------------------
+
+# Test new dataset (template)
+
+```{r}
+# seurat_sub <- subset(seurat, subset = OriginalAnnotationLevel1 %in% c("B", "Mast", "Myeloid", "Plasma", "TNKILC"))
+# 
+# test <- run_benchmark_analysis(seurat_sub,
+#                                get_labels(seurat_sub, seurat_sub@misc$label_col),
+#                                seurat@misc$low_res_ct_col,
+#                                seurat@misc$hi_res_ct_col,
+#                                factors_test = 2,
+#                                Pseudobulk = TRUE,
+#                                ECODA_deconv = FALSE,
+#                                ECODA_low_res = FALSE,
+#                                ECODA_high_res = TRUE,
+#                                Pseudobulk_PCA = FALSE,
+#                                ECODA_high_res_PCA = FALSE,
+#                                MOFA = FALSE,
+#                                scITD = FALSE,
+#                                MrVI = FALSE,
+#                                show_pca_plots = TRUE,
+#                                save_pca_plots = FALSE
+# )
+```
+
+
+
+
+# ---------------------------------------------------------------
+# ---------------------------------------------------------------
+
+# Plot benchmark results
+
+## Save and flatten the nested list into a DataFrame
+
+```{r}
+bmark_result_list <- result_list[["bmark"]]
+
+df_results <- imap_dfr(bmark_result_list, ~ {
+  dataset_name <- .y
+  imap_dfr(.x, ~ {
+    method_name <- .y
+    if ("scores" %in% names(.x)) {
+      imap_dfr(.x$scores, ~ {
+        tibble(
+          dataset = dataset_name,
+          method = method_name,
+          score = .y,
+          value = .x
+        )
+      })
+    } else {
+      tibble() # Return an empty tibble if "scores" is not found
+    }
+  })
+})
+```
+
+
+
+## Plot results
+
+```{r fig.height=10, fig.width=14}
+levs <- sort(as.character(unique(df_results$method)))
+levs <- c(
+  "ECODA_high_res",
+  "ECODA_high_res_2_PCA_dims",
+  "ECODA_high_res_5_PCA_dims",
+  "ECODA_high_res_10_PCA_dims",
+  "Pseudobulk",
+  "Pseudobulk_2_PCA_dims",
+  "Pseudobulk_5_PCA_dims",
+  "Pseudobulk_10_PCA_dims",
+  "MrVI",
+  "MOFA_2_factors",
+  "MOFA_5_factors",
+  "MOFA_10_factors",
+  "scITD_2_factors",
+  "scITD_5_factors",
+  "scITD_10_factors",
+  "ECODA_low_res",
+  "ECODA_deconv"
+)
+
+df_results$method <- factor(df_results$method, levels = levs)
+
+df_results$dataset[df_results$dataset == "GongSharma_females_cmv"] <- "GongSharma_cmv"
+df_results$dataset[df_results$dataset == "GongSharma_females_cmvneg_age"] <- "GongSharma_age"
+
+df_results_clustering <- df_results %>%
+  filter(score == "cluster_score") %>%
+  group_by(method) %>%
+  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value)))
+
+# df_results_clustering <- df_results_clustering %>%
+#   arrange(desc(mean))
+df_results_clustering$method <- factor(df_results_clustering$method, levels = df_results_clustering$method)
+
+df_results$method <- factor(df_results$method, levels = df_results_clustering$method)
+
+
+df_results_modularity <- df_results %>%
+  filter(score == "mod_score") %>%
+  group_by(method) %>%
+  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value)))
+
+df_results_modularity <- df_results_modularity %>%
+  arrange(desc(mean))
+df_results_modularity$method <- factor(df_results_modularity$method, levels = df_results_modularity$method)
+
+
+
+# New facet label names for dose variable
+score.labs <- c("Adjusted rand index", "Modularity score", "Silhouette score")
+names(score.labs) <- sort(unique(df_results$score))
+
+# New facet label names for supp variable
+datas.labs <- sort(unique(df_results$dataset))
+datas.labs[datas.labs == "GongSharma_cmv_females"] <- "Gong & Sharma\nSubset: females\nSeparation by: CMV infection"
+datas.labs[datas.labs == "GongSharma_age_females_cmvneg"] <- "Gong & Sharma\nSubset: CMV negative females\nSeparation by: age"
+names(datas.labs) <- sort(unique(df_results$dataset))
+
+
+ggplot(df_results, aes(x = method, y = value)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(x = "",
+       y = "Separation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        legend.position = "none") +
+  facet_grid(score ~ dataset,
+             scales = "free",
+             labeller = labeller(score = score.labs, dataset = datas.labs))
+  # facet_grid(scales = "free",
+  #            labeller = labeller(score = score.labs, dataset = datas.labs),
+  #            rows = vars(score), cols = vars(dataset))
+ggsave(file.path(path_plots, "benchmark_detailed_barplot.pdf"),
+       width = 10,
+       height = 6)
+
+
+# df_results %>%
+#   filter(score == "mod_score" | score == "cluster_score") %>%
+#   group_by(score, method) %>%
+#   summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
+#   ungroup() %>%
+#   
+#   ggplot(aes(x = method, y = mean)) + 
+#   geom_bar(stat = "identity", position = position_dodge()) +
+#   # stat_summary(fun.y = mean, geom = "bar") +
+#   geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
+#   # geom_point(position = position_jitterdodge()) +
+#   labs(x = "", y = "") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+#   facet_grid(scales = "free",
+#              rows = vars(score),
+#              labeller = labeller(score = score.labs))
+# 
+# ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores_mod_clust.pdf"),
+#        width = 2.5,
+#        height = 4)
+
+
+
+df_results %>%
+  group_by(score, method) %>%
+  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
+  ungroup() %>%
+  
+  ggplot(aes(x = method, y = mean)) + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  # stat_summary(fun.y = mean, geom = "bar") +
+  geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  facet_grid(scales = "free",
+             rows = vars(score),
+             labeller = labeller(score = score.labs))
+ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores_bars.pdf"),
+       width = 5,
+       height = 7)
+
+
+ggplot(df_results, aes(x = method, y = value)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(shape = dataset), size = 2) +
+  scale_shape_manual(values=1:length(unique((df_results$dataset)))) +
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  facet_grid(scales = "free",
+             rows = vars(score),
+             labeller = labeller(score = score.labs))
+ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores.pdf"),
+       width = 7,
+       height = 7)
+
+
+# 
+# df_results_clustering %>%
+#   ggplot(aes(x = method, y = mean)) + 
+#   geom_bar(stat = "identity", position = position_dodge()) +
+#   # stat_summary(fun.y = mean, geom = "bar") +
+#   geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
+#   # geom_point(position = position_jitterdodge()) +
+#   labs(x = "", y = "Adjusted Rand Index") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+#   NoLegend()
+
+
+df_results_clustering <- df_results %>%
+  filter(score == "cluster_score")
+
+df_results_clustering <- df_results_clustering[!grepl("2|10", df_results_clustering$method), ]
+
+for (ds in unique(df_results_clustering$dataset)) {
+  number_cts <- dim(result_list$bmark[[ds]]$ECODA_high_res$feat_mat)[2]
+  df_results_clustering[df_results_clustering$dataset == ds, "number_celltypes"] <- number_cts
+}
+
+df_results_clustering$dataset <- paste0(df_results_clustering$dataset, " (", df_results_clustering$number_celltypes, ")")
+
+# Example assuming 'data' is your dataframe
+anova_result <- aov(value ~ method, data = df_results_clustering)
+summary(anova_result)
+stat.test <- rstatix::tukey_hsd(anova_result)
+stat.test
+stat.test$p.adj <- round(stat.test$p.adj, 3)
+
+
+my_comparisons <- purrr::map(unique(as.character(df_results_clustering$method)), ~ c(.x, "Pseudobulk"))
+my_comparisons <- Filter(function(x) length(unique(x)) == 2, my_comparisons)
+my_comparisons <- my_comparisons[c(3, 5, 4, 8, 6, 7, 2, 1)]
+
+ggplot(df_results_clustering, aes(x = method, y = value)) +
+  geom_boxplot(outlier.shape = NA) +
+  stat_compare_means(
+    comparisons = my_comparisons,
+    # ref.group = "Pseudobulk",
+    method = "t.test",
+    paired = TRUE,
+    angle = 15,
+    p.adjust.method = "none",
+    aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))) + # Add pairwise comparisons p-value
+  geom_point(aes(shape = dataset), size = 2) +
+  scale_shape_manual(values=1:length(unique((df_results_clustering$dataset)))) +
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  # stat_compare_means(label.y = 1) +     # Add global p-value
+  labs(x = "", y = "Adjusted Rand Index") +
+  # stat_pvalue_manual(stat.test, label = "p.adj", 
+  #   y.position = c(max(df_results_clustering$values)+0.1, max(df_results_clustering$values)+0.2), hide.ns = TRUE) +
+  theme_classic() +
+  # ylim(c(-0.1, 1.1)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+ggsave(file.path(path_plots, "benchmark_summary_barplot_clustering.pdf"),
+       width = 7,
+       height = 6)
+
+
+
+df_results_mod <- df_results %>%
+  filter(score == "mod_score")
+
+# Example assuming 'data' is your dataframe
+anova_result <- aov(value ~ method, data = df_results_mod)
+summary(anova_result)
+stat.test <- rstatix::tukey_hsd(anova_result)
+stat.test
+stat.test$p.adj <- round(stat.test$p.adj, 3)
+
+
+
+ggplot(df_results_mod, aes(x = method, y = value)) +
+  geom_boxplot(outlier.shape = NA) +
+  stat_compare_means(
+    comparisons = my_comparisons,
+    # ref.group = "Pseudobulk",
+    method = "t.test",
+    paired = TRUE,
+    angle = 15,
+    aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
+  ) + # Add pairwise comparisons p-value
+  geom_point(aes(shape = dataset), size = 2) +
+  scale_shape_manual(values=1:length(unique((df_results_mod$dataset)))) +
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  # stat_compare_means(label.y = 1) +     # Add global p-value
+  labs(x = "", y = "Modularity score") +
+  # stat_pvalue_manual(stat.test, label = "p.adj", 
+  #   y.position = c(max(df_results_clustering$values)+0.1, max(df_results_clustering$values)+0.2), hide.ns = TRUE) +
+  theme_minimal() +
+  # ylim(c(-0.12, 2)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+ggsave(file.path(path_plots, "benchmark_summary_barplot_modularity.pdf"),
+       width = 7,
+       height = 6)
+
+# df_results_modularity %>%
+#   ggplot(aes(x = method, y = mean)) + 
+#   geom_bar(stat = "identity", position = position_dodge()) +
+#   # stat_summary(fun.y = mean, geom = "bar") +
+#   geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
+#   # geom_point(position = position_jitterdodge()) +
+#   labs(x = "", y = "Modularity") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+#   NoLegend()
+# ggsave(file.path(path_plots, "benchmark_summary_barplot_modularity.pdf"),
+#        width = 2.5,
+#        height = 2.5)
+
+```
+
+## Show example PCAs for publication
+
+```{r fig.height=6, fig.width=12}
+
+levs <- c(
+  "ECODA_high_res",
+  "ECODA_low_res",
+  "ECODA_deconv",
+  "Pseudobulk",
+  "MOFA_2_factors",
+  "scITD_2_factors",
+  "MrVI"
+)
+
+
+plot_list <- lapply(bmark_result_list[["GongSharma_cmv_females"]], function(method) method[["plot"]])
+scores <- lapply(bmark_result_list[["GongSharma_cmv_females"]], function(method) method[["scores"]])
+scores <- scores[levs]
+scores_long <- sapply(scores, unlist) %>% t() %>%  as.data.frame()
+scores_long$method <- row.names(scores_long)
+scores_long <- scores_long %>%
+  pivot_longer(
+    cols = c(sil_score, mod_score, cluster_score),
+    names_to = "score_method",
+    values_to = "values"
+  )
+scores_long$method <- factor(scores_long$method, levels = levs)
+
+score_p <- ggplot(scores_long, aes(x = method, y = values)) +
+  # geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(shape=score_method)) + 
+  geom_line(aes(group=score_method, linetype=score_method), alpha = 1, color = "steelblue") +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  ylim(c(min(scores_long$values, 0), max(scores_long$values))) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+plot_list <- plot_list[!grepl("5_factors|10_factors|dims", names(plot_list))]
+plot_list <- plot_list[c(4, 3, 2, 1, 5:7)]
+plot_list <- lapply(plot_list, function(x){x + theme(aspect.ratio=1)})
+for (p in names(plot_list)){
+  plot_list[[p]][["labels"]][["title"]] <- sub("\\nCluster score: .*", "", plot_list[[p]][["labels"]][["title"]])
+}
+plot_list[["scores"]] <- score_p
+p <- cowplot::plot_grid(plotlist = plot_list, ncol = 4)
+p
+ggsave(file.path(path_plots, "benchmark_pca_example_GongSharma_cmv_females.pdf"),
+       plot = p,
+       width = 15,
+       height = 7)
+
+
+plot_list <- lapply(bmark_result_list[["GongSharma_age_females_cmvneg"]], function(method) method[["plot"]])
+scores <- lapply(bmark_result_list[["GongSharma_age_females_cmvneg"]], function(method) method[["scores"]])
+scores <- scores[levs]
+scores_long <- sapply(scores, unlist) %>% t() %>%  as.data.frame()
+scores_long$method <- row.names(scores_long)
+scores_long <- scores_long %>%
+  pivot_longer(
+    cols = c(sil_score, mod_score, cluster_score),
+    names_to = "score_method",
+    values_to = "values"
+  )
+scores_long$method <- factor(scores_long$method, levels = levs)
+
+score_p <- ggplot(scores_long, aes(x = method, y = values)) +
+  # geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(shape=score_method)) + 
+  geom_line(aes(group=score_method, linetype=score_method), alpha = 1, color = "steelblue") +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  ylim(c(min(scores_long$values, 0), max(scores_long$values))) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+plot_list <- plot_list[!grepl("5_factors|10_factors|dims", names(plot_list))]
+plot_list <- plot_list[c(4, 3, 2, 1, 5:7)]
+plot_list <- lapply(plot_list, function(x){x + theme(aspect.ratio=1)})
+for (p in names(plot_list)){
+  plot_list[[p]][["labels"]][["title"]] <- sub("\\nCluster score: .*", "", plot_list[[p]][["labels"]][["title"]])
+}
+plot_list[["scores"]] <- score_p
+p <- cowplot::plot_grid(plotlist = plot_list, ncol = 4)
+p
+ggsave(file.path(path_plots, "benchmark_pca_example_GongSharma_age_females_cmvneg.pdf"),
+       plot = p,
+       width = 15,
+       height = 7)
+
+
+plot_list <- lapply(bmark_result_list[["Lee"]], function(method) method[["plot"]])
+scores <- lapply(bmark_result_list[["Lee"]], function(method) method[["scores"]])
+scores <- scores[levs]
+scores_long <- sapply(scores, unlist) %>% t() %>%  as.data.frame()
+scores_long$method <- row.names(scores_long)
+scores_long <- scores_long %>%
+  pivot_longer(
+    cols = c(sil_score, mod_score, cluster_score),
+    names_to = "score_method",
+    values_to = "values"
+  )
+scores_long$method <- factor(scores_long$method, levels = levs)
+
+score_p <- ggplot(scores_long, aes(x = method, y = values)) +
+  # geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(shape=score_method)) + 
+  geom_line(aes(group=score_method, linetype=score_method), alpha = 1, color = "steelblue") +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  ylim(c(min(scores_long$values, 0), max(scores_long$values))) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+plot_list <- plot_list[!grepl("5_factors|10_factors|dims", names(plot_list))]
+plot_list <- plot_list[c(4, 3, 2, 1, 5:7)]
+plot_list <- lapply(plot_list, function(x){x + theme(aspect.ratio=1)})
+for (p in names(plot_list)){
+  plot_list[[p]][["labels"]][["title"]] <- sub("\\nCluster score: .*", "", plot_list[[p]][["labels"]][["title"]])
+}
+plot_list[["scores"]] <- score_p
+p <- cowplot::plot_grid(plotlist = plot_list, ncol = 4)
+p
+ggsave(file.path(path_plots, "benchmark_pca_example_Lee.pdf"),
+       plot = p,
+       width = 15,
+       height = 7)
+
+
+plot_list <- lapply(bmark_result_list[["Zhang"]], function(method) method[["plot"]])
+scores <- lapply(bmark_result_list[["Zhang"]], function(method) method[["scores"]])
+scores <- scores[levs]
+scores_long <- sapply(scores, unlist) %>% t() %>%  as.data.frame()
+scores_long$method <- row.names(scores_long)
+scores_long <- scores_long %>%
+  pivot_longer(
+    cols = c(sil_score, mod_score, cluster_score),
+    names_to = "score_method",
+    values_to = "values"
+  )
+scores_long$method <- factor(scores_long$method, levels = levs)
+
+score_p <- ggplot(scores_long, aes(x = method, y = values)) +
+  # geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(shape=score_method)) + 
+  geom_line(aes(group=score_method, linetype=score_method), alpha = 1, color = "steelblue") +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  ylim(c(min(scores_long$values, 0), max(scores_long$values))) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+plot_list <- plot_list[!grepl("5_factors|10_factors|dims", names(plot_list))]
+plot_list <- plot_list[c(4, 3, 2, 1, 5:7)]
+plot_list <- lapply(plot_list, function(x){x + theme(aspect.ratio=1)})
+for (p in names(plot_list)){
+  plot_list[[p]][["labels"]][["title"]] <- sub("\\nCluster score: .*", "", plot_list[[p]][["labels"]][["title"]])
+}
+plot_list[["scores"]] <- score_p
+p <- cowplot::plot_grid(plotlist = plot_list, ncol = 4)
+p
+ggsave(file.path(path_plots, "benchmark_pca_example_Zhang.pdf"),
+       plot = p,
+       width = 15,
+       height = 7)
+
+
+plot_list <- lapply(bmark_result_list[["Stephenson"]], function(method) method[["plot"]])
+scores <- lapply(bmark_result_list[["Stephenson"]], function(method) method[["scores"]])
+scores <- scores[levs]
+scores_long <- sapply(scores, unlist) %>% t() %>%  as.data.frame()
+scores_long$method <- row.names(scores_long)
+scores_long <- scores_long %>%
+  pivot_longer(
+    cols = c(sil_score, mod_score, cluster_score),
+    names_to = "score_method",
+    values_to = "values"
+  )
+scores_long$method <- factor(scores_long$method, levels = levs)
+
+score_p <- ggplot(scores_long, aes(x = method, y = values)) +
+  # geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(shape=score_method)) + 
+  geom_line(aes(group=score_method, linetype=score_method), alpha = 1, color = "steelblue") +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  ylim(c(min(scores_long$values, 0), max(scores_long$values))) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+plot_list <- plot_list[!grepl("5_factors|10_factors|dims", names(plot_list))]
+plot_list <- plot_list[c(4, 3, 2, 1, 5:7)]
+plot_list <- lapply(plot_list, function(x){x + theme(aspect.ratio=1)})
+for (p in names(plot_list)){
+  plot_list[[p]][["labels"]][["title"]] <- sub("\\nCluster score: .*", "", plot_list[[p]][["labels"]][["title"]])
+}
+plot_list[["scores"]] <- score_p
+p <- cowplot::plot_grid(plotlist = plot_list, ncol = 4)
+p
+ggsave(file.path(path_plots, "benchmark_pca_example_Stephenson.pdf"),
+       plot = p,
+       width = 15,
+       height = 7)
+
+```
+
+
+# ---------------------------------------------------------------
+# ---------------------------------------------------------------
+
+# Plot transformations results
+
+## Plot results
+
+```{r}
+df_results <- Reduce(rbind, result_list[["trans"]])
+
+df_results <- df_results %>%
+  pivot_longer(
+    cols = c(Silhouette_score, Modularity_score, Adjusted_Rand_Index),
+    names_to = "score_method",
+    values_to = "values"
+  ) %>%
+  as.data.frame()
+
+df_results_clustering <- df_results %>%
+  filter(score_method == "Adjusted_Rand_Index") %>%
+  group_by(method) %>%
+  summarize(mean = mean(values), sem = sd(values) / sqrt(length(values)))
+
+df_results_clustering <- df_results_clustering %>%
+  arrange(desc(mean))
+
+df_results_clustering$method <- factor(df_results_clustering$method, levels = df_results_clustering$method)
+df_results$method <- factor(df_results$method, levels = df_results_clustering$method)
+
+
+
+# New facet label names for dose variable
+score.labs <- c("Adjusted rand index", "Modularity score", "Silhouette score")
+names(score.labs) <- sort(unique(df_results$score_method))
+
+# New facet label names for supp variable
+datas.labs <- sort(unique(df_results$dataset))
+datas.labs[datas.labs == "GongSharma_cmv_females"] <- "Gong & Sharma\nSubset: females\nSeparation by: CMV infection"
+datas.labs[datas.labs == "GongSharma_age_females_cmvneg"] <- "Gong & Sharma\nSubset: CMV negative females\nSeparation by: age"
+names(datas.labs) <- sort(unique(df_results$dataset))
+
+
+
+ggplot(df_results, aes(x = method, y = values)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(x = "",
+       y = "Separation score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        legend.position = "none") +
+  facet_grid(score_method ~ dataset,
+             scales = "free",
+             labeller = labeller(score_method = score.labs, dataset = datas.labs))
+# facet_grid(scales = "free",
+#            rows = vars(score_method), cols = vars(dataset))
+ggsave(file.path(path_plots, "transformations_real_datasets_detailed_barplot.pdf"),
+       width = 8,
+       height = 7)
+
+
+
+# df_results %>%
+#   group_by(score_method, method) %>%
+#   summarize(mean = mean(values), sem = sd(values) / sqrt(length(values))) %>%
+#   ungroup() %>%
+#   
+#   ggplot(aes(x = method, y = mean)) + 
+#   geom_bar(stat = "identity", position = position_dodge()) +
+#   # stat_summary(fun.y = mean, geom = "bar") +
+#   geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
+#   # geom_point(position = position_jitterdodge()) +
+#   labs(x = "", y = "Separation score") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+#   facet_grid(scales = "free",
+#              rows = vars(score_method),
+#              labeller = labeller(score_method = score.labs))
+
+
+ggplot(df_results, aes(x = method, y = values)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(shape=dataset)) + 
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  facet_grid(scales = "free",
+             rows = vars(score_method),
+             labeller = labeller(score_method = score.labs))
+
+ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot_separatescores.pdf"),
+       width = 5,
+       height = 5)
+
+
+
+# df_results_clustering %>%
+#   ggplot(aes(x = method, y = mean)) + 
+#   geom_bar(stat = "identity", position = position_dodge()) +
+#   # stat_summary(fun.y = mean, geom = "bar") +
+#   geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
+#   # geom_point(position = position_jitterdodge()) +
+#   labs(x = "", y = "Adjusted Rand Index") +
+#   theme_minimal() +
+#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+#   NoLegend()
+
+
+df_results_clustering <- df_results %>%
+  filter(score_method == "Adjusted_Rand_Index")
+
+# Example assuming 'data' is your dataframe
+anova_result <- aov(values ~ method, data = df_results_clustering)
+summary(anova_result)
+stat.test <- tukey_hsd(anova_result)
+stat.test
+stat.test$p.adj <- round(stat.test$p.adj, 3)
+# stat.test <- stat.test[["method"]] %>% as.data.frame()
+# 
+# # Extract row names where p adj < 0.05
+# significant_comparisons <- rownames(stat.test)[stat.test[["p adj"]] < 0.05]
+# 
+# # Initialize an empty list to store results
+# my_comparisons <- list()
+# 
+# # Split and store each comparison in the list
+# for (comparison in significant_comparisons) {
+#   parts <- strsplit(comparison, "-")[[1]]
+#   my_comparisons <- c(my_comparisons, list(parts))
+# }
+
+my_comparisons <- purrr::map(unique(as.character(df_results_clustering$method)), ~ c(.x, "freq"))
+my_comparisons <- Filter(function(x) length(unique(x)) == 2, my_comparisons)
+# my_comparisons <- c(my_comparisons, list(c("clr", "arcsine_sqrt")))
+my_comparisons <- my_comparisons[c(6,1,2,3,5,4)]
+
+# my_comparisons <- list(
+#   c("alr_mincvref", "freq"),
+#   c("alr_randref", "freq"),
+#   c("arcsine_sqrt", "freq"),
+#   c("clr", "freq"),
+#   c("clr_pca", "freq"),
+#   c("counts", "freq")
+#   )
+
+ggplot(df_results_clustering, aes(x = method, y = values)) +
+  stat_compare_means(
+    comparisons = my_comparisons,
+    # p.adjust.method = "bonferroni",
+    # ref.group = "freq",
+    method = "t.test",
+    paired = TRUE,
+    # aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
+    aes(label = after_stat(p.signif))
+  ) + # Add pairwise comparisons p-value
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(shape=dataset)) +
+  scale_shape_manual(values=1:length(unique((df_results_clustering$dataset)))) +
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  labs(x = "", y = "Adjusted Rand Index") +
+  # stat_pvalue_manual(stat.test, label = "p.adj", 
+  #                    y.position = c(max(df_results_clustering$values)+0.1, max(df_results_clustering$values)+0.2), hide.ns = TRUE) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot.pdf"),
+       width = 7,
+       height = 6)
+
+```
+
+# Statistical comparison
+
+```{r}
+df_results_clustering <- df_results %>%
+  filter(score_method == "Adjusted_Rand_Index")
+
+# Example assuming 'data' is your dataframe
+anova_result <- aov(values ~ method, data = df_results_clustering)
+summary(anova_result)
+
+TukeyHSD(aov(df_results_clustering$values ~ df_results_clustering$method))
+```
+
+
+
+
+# ---------------------------------------------------------------
+# ---------------------------------------------------------------
+
+# Plot zero imputation results
+
+```{r}
+zeroimp_result_list <- result_list[["zeroimp"]]
+```
+
+
+## Plot results
+
+```{r}
+df_results <- imap_dfr(zeroimp_result_list, ~ {
+  dataset_name <- .y
+  imap_dfr(.x, ~ {
+    method_name <- .y
+    imap_dfr(.x, ~ {
+      tibble(
+        dataset = dataset_name,
+        method = method_name,
+        score = .y,
+        value = .x
+      )
+    })
+  })
+})
+
+df_results <- df_results[df_results$method != "impRZilr", ]
+
+
+# 
+# df_results <- bind_rows(res_list, .id = "test_name") %>%
+#   mutate(test_name = as.character(test_name)) %>%
+#   dplyr::select(test_name, sil_score, mod_score, cluster_score)
+# 
+# strings <- df_results$test_name
+# 
+# # Remove the first part (split at "_") and the last part (split at "\\.")
+# first_parts <- sapply(str_split(strings, "_"), "[[", 1)
+# first_parts[grepl("gongsharma", first_parts)] <- paste0(first_parts[grepl("gongsharma", first_parts)], "_", sapply(str_split(strings[grepl("gongsharma", strings)], "_"), "[[", 2))
+# df_results$dataset <- first_parts
+# 
+# # Remove the first part (split at "_") and the last part (split at "\\.")
+# middle_parts <- str_remove(strings, "^[^_]*_")  # Remove everything up to and including the first "_"
+# middle_parts[grepl("cmv", middle_parts)] <- str_remove(middle_parts[grepl("cmv", middle_parts)], "^[^_]*_")  # Remove everything up to and including the first "_"
+# df_results$imputation_method <- middle_parts
+# 
+# df_results <- df_results %>%
+#   pivot_longer(
+#     cols = c(sil_score, mod_score, cluster_score),
+#     names_to = "score_method",
+#     values_to = "values"
+#   ) %>%
+#   as.data.frame()
+
+
+# df_results$dataset[df_results$dataset == "gongsharma_allcmv"] <- "GongSharma_cmv"
+# df_results$dataset[df_results$dataset == "gongsharma_agefemalescmvneg"] <- "GongSharma_age"
+# 
+# 
+# levels <- names(res_list)[grepl("Zhang", names(res_list))]
+# levels <- sub("Zhang_", "", levels)
+# 
+# df_results$method <- factor(df_results$method, levels = levels)
+
+
+# New facet label names for dose variable
+score.labs <- c("Adjusted rand index", "Modularity score", "Silhouette score")
+names(score.labs) <- sort(unique(df_results$score))
+
+# New facet label names for supp variable
+datas.labs <- sort(unique(df_results$dataset))
+datas.labs[datas.labs == "GongSharma_cmv_females"] <- "Gong & Sharma\nSubset: females\nSeparation by: CMV infection"
+datas.labs[datas.labs == "GongSharma_age_females_cmvneg"] <- "Gong & Sharma\nSubset: CMV negative females\nSeparation by: age"
+names(datas.labs) <- sort(unique(df_results$dataset))
+
+
+ggplot(df_results, aes(x = method, y = value)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(x = "Imputation method",
+       y = "Separation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        legend.position = "none") +
+  facet_grid(score ~ dataset,
+             scales = "free",
+             labeller = labeller(score = score.labs, dataset = datas.labs))
+  # facet_grid(scales = "free",
+  #            rows = vars(score), cols = vars(dataset))
+ggsave(file.path(path_plots, "zero_imputation_real_datasets_detailed_barplot.pdf"),
+       width = 10,
+       height = 6)
+
+
+
+
+df_results %>%
+  group_by(score, method) %>%
+  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
+  ungroup() %>%
+
+  ggplot(aes(x = method, y = mean)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  # stat_summary(fun.y = mean, geom = "bar") +
+  geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  facet_grid(scales = "free",
+             rows = vars(score),
+             labeller = labeller(score = score.labs))
+
+ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_barplot_separatescores.pdf"),
+       width = 7,
+       height = 6)
+
+ggplot(df_results, aes(x = method, y = value)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(shape=dataset)) + 
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  facet_grid(scales = "free",
+             rows = vars(score),
+             labeller = labeller(score = score.labs))
+
+ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_separatescores.pdf"),
+       width = 7,
+       height = 6)
+
+
+
+df_results %>%
+  filter(score == "cluster_score") %>%
+  group_by(method) %>%
+  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
+  
+  ggplot(aes(x = method, y = mean)) + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  # stat_summary(fun.y = mean, geom = "bar") +
+  geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Adjusted Rand Index") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  NoLegend()
+
+df_results_clustering <- df_results %>%
+  filter(score == "cluster_score")
+
+my_comparisons <- purrr::map(unique(as.character(df_results_clustering$method)), ~ c(.x, "counts_all_1"))
+my_comparisons <- Filter(function(x) length(unique(x)) == 2, my_comparisons)
+my_comparisons <- my_comparisons[c(6,1,7:10, 2:5)]
+
+ggplot(df_results_clustering, aes(x = method, y = value)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(shape=dataset)) + 
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  stat_compare_means(
+    comparisons = my_comparisons,
+    method = "t.test",
+    paired = TRUE,
+    # aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
+    aes(label = after_stat(p.signif))
+  ) + # Add pairwise comparisons p-value
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Adjusted Rand Index") +
+  scale_shape_manual(values=1:length(unique((df_results_clustering$dataset)))) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_clusterscore.pdf"),
+       width = 8,
+       height = 6)
+
+df_results_modularity <- df_results %>%
+  filter(score == "mod_score")
+
+ggplot(df_results_modularity, aes(x = method, y = value)) +
+  geom_boxplot(outlier.shape = NA) +
+  # geom_bar(stat = "identity", position = position_dodge()) +
+  geom_point(aes(shape=dataset)) + 
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  stat_compare_means(
+    comparisons = my_comparisons,
+    method = "t.test",
+    paired = TRUE,
+    # aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
+    aes(label = after_stat(p.signif))
+  ) + # Add pairwise comparisons p-value
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Adjusted Rand Index") +
+  scale_shape_manual(values=1:length(unique((df_results_clustering$dataset)))) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_modscore.pdf"),
+       width = 8,
+       height = 6)
+
+```
+
+# Test for statistical significance
+
+To few data points for statistical significance
+
+```{r}
+library(rstatix)
+
+df_results_cluster <- df_results %>% filter(score == "cluster_score")
+
+outlier <- df_results_cluster %>%
+  group_by(method) %>%
+  rstatix::identify_outliers(value)
+data.frame(outlier)
+
+normality <- df_results_cluster %>%
+  group_by(method) %>%
+  rstatix::shapiro_test(value)
+data.frame(normality)
+cat(paste("All groups normally ditributed?", all(normality$p > 0.05),
+            "\nNot normally distributed:", normality$method[normality$p <= 0.05]))
+
+# res <- rstatix::anova_test(data = df_results_cluster, dv = value, wid = dataset, within = method) 
+# rstatix::get_anova_table(res)
+# 
+# pair_t <- df_results_cluster %>%
+#   rstatix::pairwise_t_test(value~method, paired=TRUE, p.adjust.method = "BH" )
+# data.frame(pair_t)
+
+# Example assuming 'data' is your dataframe
+anova_result <- aov(value ~ method, data = df_results_cluster)
+summary(anova_result)
+
+
+
+
+df_results_cluster <- df_results %>% filter(score == "mod_score")
+
+# Example assuming 'data' is your dataframe
+anova_result <- aov(value ~ method, data = df_results_cluster)
+summary(anova_result)
+
+
+
+df_results_cluster <- df_results %>% filter(score == "sil_score")
+
+# Example assuming 'data' is your dataframe
+anova_result <- aov(value ~ method, data = df_results_cluster)
+summary(anova_result)
+```
+
