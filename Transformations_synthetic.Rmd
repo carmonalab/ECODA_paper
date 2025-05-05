@@ -20,42 +20,8 @@ output:
 # renv::init()
 # renv::snapshot()
 
-# install.packages("/Users/christianhalter/Desktop/scooter_1.0.0.tar.gz", repos = NULL, type = "source")
-
-library(scooter)
-library(tidyverse)
-library(plotly)
-library(ggplot2)
-library(ggpubr)
-library(factoextra)
-library(compositions)
 library(pROC)
-library(mclust)
 source("functions.R")
-
-library(Seurat)
-# devtools::install_github('satijalab/seurat-data')
-library(SeuratData)
-# install.packages("hdf5r")
-# remotes::install_github("mojaveazure/seurat-disk")
-library(SeuratDisk)
-
-# install.packages("devtools")
-# devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
-library(EPIC)
-# BiocManager::install("MOFA2")
-library(reticulate)
-library(basilisk)
-library("MOFA2")
-# BiocManager::install("fgsea")
-# BiocManager::install("sva")
-# devtools::install_github("kharchenkolab/scITD")
-library(scITD)
-# install.packages("ncdf4")
-library(ncdf4)
-library(arrow)
-
-library(dplyr)
 
 my_seed <- 123
 set.seed(my_seed)
@@ -98,12 +64,12 @@ dproc <- list()
 for (layer in names(data)) {
 
   dproc$meta <- data[[layer]] %>%
-    select(c(1:14)) %>%
+    dplyr::select(c(1:14)) %>%
     unique() %>% 
     mutate_at(1:14, as.factor)
   
   ctable <- data[[layer]] %>%
-    select(c(14,
+    dplyr::select(c(14,
              !!sym(paste0("AIFI_", layer)),
              !!sym(paste0("AIFI_", layer, "_count")),
              !!sym(paste0("AIFI_", layer, "_frac_total")),
@@ -121,19 +87,19 @@ for (layer in names(data)) {
     mutate_all(~replace_na(., 0)) %>%
     rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_count_"), "") %>%
                  str_replace_all(., " ", "_")) %>%
-    select(-Platelet, -Erythrocyte)
+    dplyr::select(-Platelet, -Erythrocyte)
 
   i <- i + n_cts
   dproc[[layer]]$freq <- ctable[, i:(i + n_cts - 1)] %>%
     mutate_all(~replace_na(., 0)) %>%
     rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_frac_total_"), "") %>%
                  str_replace_all(., " ", "_")) %>%
-    select(-Platelet, -Erythrocyte)
+    dplyr::select(-Platelet, -Erythrocyte)
   i <- i + n_cts
   dproc[[layer]]$clr_authors <- ctable[, i:(i + n_cts - 1)] %>%
     rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_clr_"), "") %>%
                  str_replace_all(., " ", "_")) %>%
-    select(-Platelet, -Erythrocyte)
+    dplyr::select(-Platelet, -Erythrocyte)
   
   df_counts <- dproc[[layer]]$cell_counts
 
@@ -187,24 +153,30 @@ results <- datrans(count_mat = df_counts, labels = NULL, Percent_difference = Pe
 for (nct in n_ct_to_select) {
   res_all <- results[results$n_celltypes == nct, ]
   res_avg <- res_all %>%
-    group_by(method, Percent_difference) %>%
+    group_by(trans_method, Percent_difference) %>%
     mutate(Silhouette_score = mean(Silhouette_score),
            Modularity_score = mean(Modularity_score),
            Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
     ungroup() %>% 
-    distinct(interaction(method, Percent_difference), .keep_all=TRUE)
+    distinct(interaction(trans_method, Percent_difference), .keep_all=TRUE)
   
   p_sil <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = method)) +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = trans_method), size = 1.2) +
+    ylim(c(min(res_avg$Silhouette_score), 0.6)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = trans_method)) +
     ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
   p_mod <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = trans_method), size = 1.2) +
+    ylim(c(min(res_avg$Modularity_score), 0.5)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = trans_method)) +
     ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
   p_clust <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = trans_method), size = 1.2) +
+    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = trans_method)) +
     ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
   
   p <- ggarrange(p_sil, p_mod, p_clust)
@@ -293,24 +265,30 @@ results <- datrans(count_mat = df_counts, labels = NULL, Percent_difference = Pe
 for (nct in n_ct_to_select) {
   res_all <- results[results$n_celltypes == nct, ]
   res_avg <- res_all %>%
-    group_by(method, Percent_difference) %>%
+    group_by(trans_method, Percent_difference) %>%
     mutate(Silhouette_score = mean(Silhouette_score),
            Modularity_score = mean(Modularity_score),
            Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
     ungroup() %>% 
-    distinct(interaction(method, Percent_difference), .keep_all=TRUE)
+    distinct(interaction(trans_method, Percent_difference), .keep_all=TRUE)
   
   p_sil <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = method)) +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = trans_method), size = 1.2) +
+    ylim(c(min(res_avg$Silhouette_score), 0.6)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = trans_method)) +
     ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
   p_mod <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = trans_method), size = 1.2) +
+    ylim(c(min(res_avg$Modularity_score), 0.5)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = trans_method)) +
     ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
   p_clust <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
+    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = trans_method), size = 1.2) +
+    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = trans_method)) +
     ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
   
   p <- ggarrange(p_sil, p_mod, p_clust)
@@ -425,38 +403,18 @@ results <- datrans(count_mat = df_counts, labels = NULL, Percent_difference = Pe
 ```
 
 
-```{r fig.height=12, fig.width=12}
-for (nct in n_ct_to_select) {
-  res_all <- results[results$n_celltypes == nct, ]
-  res_avg <- res_all %>%
-    group_by(method, Percent_difference) %>%
-    mutate(Silhouette_score = mean(Silhouette_score),
-           Modularity_score = mean(Modularity_score),
-           Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
-    ungroup() %>% 
-    distinct(interaction(method, Percent_difference), .keep_all=TRUE)
-  
-  p_sil <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = method)) +
-    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
-  p_mod <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
-    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
-  p_clust <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
-    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
-  
-  p <- ggarrange(p_sil, p_mod, p_clust)
-  print(p)
-}
+```{r}
+feat_mat <- df_counts %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr()
+res.pca <- prcomp(feat_mat, scale. = FALSE)
 
+factoextra::fviz_pca(res.pca,
+                          label = "var",
+                          invisible = c("var", "quali"),
+                          geom = "point") +
+  scale_shape_manual(values = rep(19, length(unique(labels)))) + ggtitle("Homogenous population\n(stratified by available metadata)")
+
+ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_1group.pdf")), width = 4, height = 4)
 ```
-
-
-### Show example PCA
 
 ```{r}
 nct <- 10
@@ -482,28 +440,259 @@ min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
 ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
 
 
+data <- clr(df_freq)
+p <- plot_pca(data, labels, title = paste0("2 groups of samples by\nadding differential abundance\n", nct, " cell types\n+", pd, " %"),
+              pointsize = 1,
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = TRUE) + theme(legend.position = "none")
 
-plot_pca(df_counts_temp, labels, title = "Counts")
+ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_2groups_weakseparation.pdf")), plot = p, width = 4, height = 4)
+
+
+nct <- 10
+pd <- 300
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+data <- clr(df_freq)
+p <- plot_pca(data, labels, title = paste0("2 groups of samples by\nadding differential abundance\n", nct, " cell types\n+", pd, " %"),
+              pointsize = 1,
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = TRUE) + theme(legend.position = "none")
+
+ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_2groups_mediumseparation.pdf")), plot = p, width = 4, height = 4)
+
+
+
+nct <- 20
+pd <- 300
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+
+data <- clr(df_freq)
+p <- plot_pca(data, labels, title = paste0("2 groups of samples by\nadding differential abundance\n", nct, " cell types\n+", pd, " %"),
+              pointsize = 1,
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = TRUE) + theme(legend.position = "none")
+
+ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_2groups_strongseparation.pdf")), plot = p, width = 4, height = 4)
+```
+
+```{r}
+nct <- 5
+pd <- 500
+df_long <- results[results$n_celltypes == nct &
+                     results$Percent_difference == pd &
+                     results$trans_method %in% c("freq", "arcsine_sqrt_pca", "clr_pca"), ]
+df_long$trans_method <- factor(df_long$trans_method, levels = c("freq", "clr_pca", "arcsine_sqrt_pca"))
+my_comparisons <- list( c("freq", "clr_pca"), c("freq", "arcsine_sqrt_pca"), c("clr_pca", "arcsine_sqrt_pca") )
+ggplot(data = df_long, aes(x = trans_method, y = Adjusted_Rand_Index)) +
+  geom_boxplot() +
+  stat_compare_means(method = "t.test", comparisons = my_comparisons, paired = TRUE, aes(label = after_stat(p.signif))) +
+  geom_point() +
+  theme_classic() +
+  ggtitle(paste0("Differential cell types: ", nct, "\nPercent difference: ", pd))
+ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_diffct", nct, "_percdiff", pd, ".pdf")), width = 3, height = 4)
+
+
+nct <- 10
+pd <- 300
+df_long <- results[results$n_celltypes == nct &
+                     results$Percent_difference == pd &
+                     results$trans_method %in% c("freq", "arcsine_sqrt_pca", "clr_pca"), ]
+df_long$trans_method <- factor(df_long$trans_method, levels = c("freq", "clr_pca", "arcsine_sqrt_pca"))
+my_comparisons <- list( c("freq", "clr_pca"), c("freq", "arcsine_sqrt_pca"), c("clr_pca", "arcsine_sqrt_pca") )
+ggplot(data = df_long, aes(x = trans_method, y = Adjusted_Rand_Index)) +
+  geom_boxplot() +
+  stat_compare_means(method = "t.test", comparisons = my_comparisons, paired = TRUE, aes(label = after_stat(p.signif))) +
+  geom_point() +
+  theme_classic() +
+  ggtitle(paste0("Differential cell types: ", nct, "\nPercent difference: ", pd))
+ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_diffct", nct, "_percdiff", pd, ".pdf")), width = 3, height = 4)
+
+
+
+nct <- 20
+pd <- 200
+df_long <- results[results$n_celltypes == nct &
+                     results$Percent_difference == pd &
+                     results$trans_method %in% c("freq", "arcsine_sqrt_pca", "clr_pca"), ]
+df_long$trans_method <- factor(df_long$trans_method, levels = c("freq", "clr_pca", "arcsine_sqrt_pca"))
+my_comparisons <- list( c("freq", "clr_pca"), c("freq", "arcsine_sqrt_pca"), c("clr_pca", "arcsine_sqrt_pca") )
+ggplot(data = df_long, aes(x = trans_method, y = Adjusted_Rand_Index)) +
+  geom_boxplot() +
+  stat_compare_means(method = "t.test", comparisons = my_comparisons, paired = TRUE, aes(label = after_stat(p.signif))) +
+  geom_point() +
+  theme_classic() +
+  ggtitle(paste0("Differential cell types: ", nct, "\nPercent difference: ", pd))
+ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_diffct", nct, "_percdiff", pd, ".pdf")), width = 3, height = 4)
+```
+
+
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(trans_method, Percent_difference) %>%
+    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
+           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
+           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
+    ungroup() %>% 
+    distinct(interaction(trans_method, Percent_difference), .keep_all=TRUE)
+  
+  res_avg$linetype <- ifelse(grepl("pca", res_avg$trans_method), "PCA_2dims", "Default")
+  res_avg$color <- gsub("_pca", "", res_avg$trans_method)
+  
+  p_sil <- ggplot(res_avg, aes(x = Percent_difference, y = Silhouette_score, color = color, linetype = linetype)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
+    ylim(c(min(res_avg$Silhouette_score), 1)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct))
+  p_mod <- ggplot(res_avg, aes(x = Percent_difference, y = Modularity_score, color = color, linetype = linetype)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
+    ylim(c(min(res_avg$Modularity_score), 0.5)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct))
+  p_clust <- ggplot(res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = color, linetype = linetype)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
+    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct))
+  
+  ggsave(filename = file.path(path_plots, paste0("transformations_semisynthetic_default", nct, "celltypesda.pdf")), plot = p_clust, width = 5, height = 5)
+  
+  if (nct == 10) {
+    ggsave(filename = file.path(path_plots, "transformations_semisynthetic_default.pdf"), plot = p_clust + ggtitle("10 random cell types"), width = 5, height = 5)
+  }
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
+
+```
+
+
+### Show example PCA
+
+```{r}
+nct <- 10
+pd <- 300
+n_half_samples <- round(dim(df_counts)[1] / 2)
+
+
+# Prepare data
+df_counts_temp <- df_counts
+ct_da <- sample(colnames(df_counts_temp), size = nct)
+half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
+labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
+
+# Simulate differential abundance
+rsums_before <- rowSums(df_counts_temp)
+df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+rsums_after <- rowSums(df_counts_temp)
+df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
+df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
+
+cvs <- apply(df_freq, 2, cv)
+min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
+ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
+
+plot_list <- list()
+
+p <- plot_pca(df_counts_temp, labels, title = "Counts",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(df_counts_temp, labels)
 
-plot_pca(df_freq, labels, title = "Freq")
+p <- plot_pca(df_freq, labels, title = "Freq",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(df_freq, labels)
 
 data <- asin(sqrt(df_freq/100))
-plot_pca(data, labels, title = "asinsqrt")
+p <- plot_pca(data, labels, title = "asinsqrt",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(data, labels)
 
 data <- clr(df_freq)
-plot_pca(data, labels, title = "CLR")
+p <- plot_pca(data, labels, title = "CLR",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(data, labels)
 
-data <- prcomp(data)$x[, 1:3]
-plot_pca(data, labels, title = "CLR PCA")
+# data <- prcomp(data)$x[, 1:3]
+# p <- plot_pca(data, labels, title = "CLR PCA",
+#               sil_score = FALSE,
+#               mod_score = FALSE,
+#               cluster_score = FALSE)
+# plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(data, labels)
 
-data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
-plot_pca(data, labels)
-plot_roc_pcad1(data, labels)
+# data <- alr(df_freq, ct_ref_mincv)
+# p <- plot_pca(data, labels, title = "ALR mincvref",
+#               sil_score = FALSE,
+#               mod_score = FALSE,
+#               cluster_score = FALSE)
+# plot_list <- append(plot_list, list(p))
+# plot_roc_pcad1(data, labels)
+
+p_wrapped <- patchwork::wrap_plots(plot_list, nrow = 2)
+ggsave(filename = file.path(path_plots, paste0("transformations_semisynthetic_default_", nct, "celltypesda_", pd, "percentdifference.pdf")), plot = p_wrapped, width = 4*2, height = 4*2)
 ```
 
 
@@ -542,25 +731,43 @@ results <- datrans(count_mat = df_counts, labels = NULL, Percent_difference = Pe
 for (nct in n_ct_to_select) {
   res_all <- results[results$n_celltypes == nct, ]
   res_avg <- res_all %>%
-    group_by(method, Percent_difference) %>%
-    mutate(Silhouette_score = mean(Silhouette_score),
-           Modularity_score = mean(Modularity_score),
-           Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
+    group_by(trans_method, Percent_difference) %>%
+    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
+           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
+           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
     ungroup() %>% 
-    distinct(interaction(method, Percent_difference), .keep_all=TRUE)
+    distinct(interaction(trans_method, Percent_difference), .keep_all=TRUE)
   
-  p_sil <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = method)) +
-    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
-  p_mod <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
-    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
-  p_clust <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
-    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  res_avg$linetype <- ifelse(grepl("pca", res_avg$trans_method), "PCA_2dims", "Default")
+  res_avg$color <- gsub("_pca", "", res_avg$trans_method)
+  
+  p_sil <- ggplot(res_avg, aes(x = Percent_difference, y = Silhouette_score, color = color, linetype = linetype)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
+    ylim(c(min(res_avg$Silhouette_score), 1)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct))
+  p_mod <- ggplot(res_avg, aes(x = Percent_difference, y = Modularity_score, color = color, linetype = linetype)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
+    ylim(c(min(res_avg$Modularity_score), 0.5)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct))
+  p_clust <- ggplot(res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = color, linetype = linetype)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
+    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct))
+  
+  if (nct == 10) {
+    ggsave(filename = file.path(path_plots, "transformations_semisynthetic_unbalanced_counts.pdf"),
+           plot = p_clust + ggtitle("10 random cell types\nUnbalanced counts:\nEach cell type's counts * 10^[-1, 1]"),
+           width = 5, height = 5)
+  }
   
   p <- ggarrange(p_sil, p_mod, p_clust)
   print(p)
@@ -571,13 +778,13 @@ for (nct in n_ct_to_select) {
 ### Show example PCA
 
 ```{r}
-nct <- 20
-pd <- 200
+nct <- 10
+pd <- 300
 n_half_samples <- round(dim(df_counts)[1] / 2)
 
 # Prepare data
 df_counts_temp <- df_counts
-ct_da <- sample(colnames(df_counts_temp), size = nct)
+# ct_da <- sample(colnames(df_counts_temp), size = nct)
 half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
 labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
 
@@ -594,27 +801,56 @@ ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
 
 
 
-plot_pca(df_counts_temp, labels, title = "Counts")
+plot_list <- list()
+
+p <- plot_pca(df_counts_temp, labels, title = "Counts",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(df_counts_temp, labels)
 
-plot_pca(df_freq, labels, title = "Freq")
+p <- plot_pca(df_freq, labels, title = "Freq",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(df_freq, labels)
 
 data <- asin(sqrt(df_freq/100))
-plot_pca(data, labels, title = "asinsqrt")
+p <- plot_pca(data, labels, title = "asinsqrt",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(data, labels)
 
 data <- clr(df_freq)
-plot_pca(data, labels, title = "CLR")
+p <- plot_pca(data, labels, title = "CLR",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(data, labels)
 
-data <- prcomp(data)$x[, 1:3]
-plot_pca(data, labels, title = "CLR PCA")
+# data <- prcomp(data)$x[, 1:3]
+# p <- plot_pca(data, labels, title = "CLR PCA",
+#               sil_score = FALSE,
+#               mod_score = FALSE,
+#               cluster_score = FALSE)
+# plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(data, labels)
 
-data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
-plot_pca(data, labels)
-plot_roc_pcad1(data, labels)
+# data <- alr(df_freq, ct_ref_mincv)
+# p <- plot_pca(data, labels, title = "ALR mincvref",
+#               sil_score = FALSE,
+#               mod_score = FALSE,
+#               cluster_score = FALSE)
+# plot_list <- append(plot_list, list(p))
+# plot_roc_pcad1(data, labels)
+
+p_wrapped <- patchwork::wrap_plots(plot_list, nrow = 2)
+ggsave(filename = file.path(path_plots, paste0("transformations_semisynthetic_unbalanced_counts_", nct, "celltypesda_", pd, "percentdifference.pdf")), plot = p_wrapped, width = 4*2, height = 4*2)
 ```
 
 
@@ -631,7 +867,7 @@ colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "min
 colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
 
 # To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
-Percent_difference <- c(100, 200, 300, 500, 1000)
+Percent_difference <- c(200, 300, 500, 1000, 2000, 3000, 5000)
 n_ct_to_select <- c(1, 3, 5, 10, 20)
 
 ct_counts <- colMeans(df_counts)
@@ -651,25 +887,41 @@ results <- datrans(count_mat = df_counts, labels = NULL, Percent_difference = Pe
 for (nct in n_ct_to_select) {
   res_all <- results[results$n_celltypes == nct, ]
   res_avg <- res_all %>%
-    group_by(method, Percent_difference) %>%
-    mutate(Silhouette_score = mean(Silhouette_score),
-           Modularity_score = mean(Modularity_score),
-           Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
+    group_by(trans_method, Percent_difference) %>%
+    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
+           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
+           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
     ungroup() %>% 
-    distinct(interaction(method, Percent_difference), .keep_all=TRUE)
+    distinct(interaction(trans_method, Percent_difference), .keep_all=TRUE)
   
-  p_sil <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = method)) +
-    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
-  p_mod <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
-    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
-  p_clust <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
-    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  res_avg$linetype <- ifelse(grepl("pca", res_avg$trans_method), "PCA_2dims", "Default")
+  res_avg$color <- gsub("_pca", "", res_avg$trans_method)
+  
+  p_sil <- ggplot(res_avg, aes(x = Percent_difference, y = Silhouette_score, color = color, linetype = linetype)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
+    ylim(c(min(res_avg$Silhouette_score), 1)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct))
+  p_mod <- ggplot(res_avg, aes(x = Percent_difference, y = Modularity_score, color = color, linetype = linetype)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
+    ylim(c(min(res_avg$Modularity_score), 0.5)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct))
+  p_clust <- ggplot(res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = color, linetype = linetype)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
+    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct))
+  
+  if (nct == 10) {
+    ggsave(filename = file.path(path_plots, "transformations_semisynthetic_lowly_abundant.pdf"), plot = p_clust + ggtitle("10 lowly abundant cell types"), width = 5, height = 5)
+  }
   
   p <- ggarrange(p_sil, p_mod, p_clust)
   print(p)
@@ -680,13 +932,13 @@ for (nct in n_ct_to_select) {
 ### Show example PCA
 
 ```{r}
-nct <- 5
-pd <- 200
+nct <- 10
+pd <- 1000
 n_half_samples <- round(dim(df_counts)[1] / 2)
 
 # Prepare data
 df_counts_temp <- df_counts
-ct_da <- sample(colnames(df_counts_temp), size = nct)
+ct_da <- sample(cts, size = nct)
 half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
 labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
 
@@ -703,27 +955,56 @@ ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
 
 
 
-plot_pca(df_counts_temp, labels, title = "Counts")
+plot_list <- list()
+
+p <- plot_pca(df_counts_temp, labels, title = "Counts",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(df_counts_temp, labels)
 
-plot_pca(df_freq, labels, title = "Freq")
+p <- plot_pca(df_freq, labels, title = "Freq",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(df_freq, labels)
 
 data <- asin(sqrt(df_freq/100))
-plot_pca(data, labels, title = "asinsqrt")
+p <- plot_pca(data, labels, title = "asinsqrt",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(data, labels)
 
 data <- clr(df_freq)
-plot_pca(data, labels, title = "CLR")
+p <- plot_pca(data, labels, title = "CLR",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(data, labels)
 
-data <- prcomp(data)$x[, 1:3]
-plot_pca(data, labels, title = "CLR PCA")
+# data <- prcomp(data)$x[, 1:3]
+# p <- plot_pca(data, labels, title = "CLR PCA",
+#               sil_score = FALSE,
+#               mod_score = FALSE,
+#               cluster_score = FALSE)
+# plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(data, labels)
 
-data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
-plot_pca(data, labels)
-plot_roc_pcad1(data, labels)
+# data <- alr(df_freq, ct_ref_mincv)
+# p <- plot_pca(data, labels, title = "ALR mincvref",
+#               sil_score = FALSE,
+#               mod_score = FALSE,
+#               cluster_score = FALSE)
+# plot_list <- append(plot_list, list(p))
+# plot_roc_pcad1(data, labels)
+
+p_wrapped <- patchwork::wrap_plots(plot_list, nrow = 2)
+ggsave(filename = file.path(path_plots, paste0("transformations_semisynthetic_lowly_abundant_", nct, "celltypesda_", pd, "percentdifference.pdf")), plot = p_wrapped, width = 4*2, height = 4*2)
 ```
 
 ```{r}
@@ -797,7 +1078,7 @@ Percent_difference <- c(10, 25, 50, 75, 100, 200, 300, 500)
 n_ct_to_select <- c(1, 3, 5, 10, 20)
 
 ct_counts <- colMeans(df_counts)
-# Find the threshold for the lowest fourth
+# Find the threshold for the highest fourth
 threshold <- quantile(ct_counts, 3/4)
 
 # Get the column names with means above the threshold
@@ -814,25 +1095,41 @@ results <- datrans(count_mat = df_counts, labels = NULL, Percent_difference = Pe
 for (nct in n_ct_to_select) {
   res_all <- results[results$n_celltypes == nct, ]
   res_avg <- res_all %>%
-    group_by(method, Percent_difference) %>%
-    mutate(Silhouette_score = mean(Silhouette_score),
-           Modularity_score = mean(Modularity_score),
-           Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
+    group_by(trans_method, Percent_difference) %>%
+    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
+           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
+           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
     ungroup() %>% 
-    distinct(interaction(method, Percent_difference), .keep_all=TRUE)
+    distinct(interaction(trans_method, Percent_difference), .keep_all=TRUE)
   
-  p_sil <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Silhouette_score, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score, color = method)) +
-    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nSilhouette score"))
-  p_mod <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Modularity_score, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
-    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nModularity score"))
-  p_clust <- ggplot() +
-    geom_line(data = res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = method), size = 1.2) +
-    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score, color = method)) +
-    ggtitle(paste0("Differentially abundant cell types: ", nct, "\nClustering score"))
+  res_avg$linetype <- ifelse(grepl("pca", res_avg$trans_method), "PCA_2dims", "Default")
+  res_avg$color <- gsub("_pca", "", res_avg$trans_method)
+  
+  p_sil <- ggplot(res_avg, aes(x = Percent_difference, y = Silhouette_score, color = color, linetype = linetype)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
+    ylim(c(min(res_avg$Silhouette_score), 1)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct))
+  p_mod <- ggplot(res_avg, aes(x = Percent_difference, y = Modularity_score, color = color, linetype = linetype)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
+    ylim(c(min(res_avg$Modularity_score), 0.5)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct))
+  p_clust <- ggplot(res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = color, linetype = linetype)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
+    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct))
+  
+  if (nct == 10) {
+    ggsave(filename = file.path(path_plots, "transformations_semisynthetic_highly_abundant.pdf"), plot = p_clust + ggtitle("10 highly abundant cell types"), width = 5, height = 5)
+  }
   
   p <- ggarrange(p_sil, p_mod, p_clust)
   print(p)
@@ -843,13 +1140,13 @@ for (nct in n_ct_to_select) {
 ### Show example PCA
 
 ```{r}
-nct <- 5
+nct <- 10
 pd <- 200
 n_half_samples <- round(dim(df_counts)[1] / 2)
 
 # Prepare data
 df_counts_temp <- df_counts
-ct_da <- sample(colnames(df_counts_temp), size = nct)
+ct_da <- sample(cts, size = nct)
 half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
 labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
 
@@ -866,27 +1163,56 @@ ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
 
 
 
-plot_pca(df_counts_temp, labels, title = "Counts")
+plot_list <- list()
+
+p <- plot_pca(df_counts_temp, labels, title = "Counts",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(df_counts_temp, labels)
 
-plot_pca(df_freq, labels, title = "Freq")
+p <- plot_pca(df_freq, labels, title = "Freq",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(df_freq, labels)
 
 data <- asin(sqrt(df_freq/100))
-plot_pca(data, labels, title = "asinsqrt")
+p <- plot_pca(data, labels, title = "asinsqrt",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(data, labels)
 
 data <- clr(df_freq)
-plot_pca(data, labels, title = "CLR")
+p <- plot_pca(data, labels, title = "CLR",
+              sil_score = FALSE,
+              mod_score = FALSE,
+              cluster_score = FALSE) + theme(legend.position = "none")
+plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(data, labels)
 
-data <- prcomp(data)$x[, 1:3]
-plot_pca(data, labels, title = "CLR PCA")
+# data <- prcomp(data)$x[, 1:3]
+# p <- plot_pca(data, labels, title = "CLR PCA",
+#               sil_score = FALSE,
+#               mod_score = FALSE,
+#               cluster_score = FALSE)
+# plot_list <- append(plot_list, list(p))
 plot_roc_pcad1(data, labels)
 
-data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
-plot_pca(data, labels)
-plot_roc_pcad1(data, labels)
+# data <- alr(df_freq, ct_ref_mincv)
+# p <- plot_pca(data, labels, title = "ALR mincvref",
+#               sil_score = FALSE,
+#               mod_score = FALSE,
+#               cluster_score = FALSE)
+# plot_list <- append(plot_list, list(p))
+# plot_roc_pcad1(data, labels)
+
+p_wrapped <- patchwork::wrap_plots(plot_list, nrow = 2)
+ggsave(filename = file.path(path_plots, paste0("transformations_semisynthetic_highly_abundant_", nct, "celltypesda_", pd, "percentdifference.pdf")), plot = p_wrapped, width = 4*2, height = 4*2)
 ```
 
 ```{r}
@@ -999,5 +1325,95 @@ plot_pca(filtered_df, labels)
 
 
 plot_pca(data[,ct_da], labels)
+
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Sensitivity: zero imputation methods
+
+```{r}
+# Subset to CMV negative BR1 female samples
+cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
+
+df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
+
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
+colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
+
+# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
+Percent_difference <- c(10, 25, 50, 75, 100, 200, 300, 500, 1000)
+# n_ct_to_select <- c(1, 3, 5, 10, 20)
+n_ct_to_select <- 10
+
+results <- datrans(count_mat = df_counts, labels = NULL, Percent_difference = Percent_difference, n_ct_to_select = n_ct_to_select,
+                   trans_method = "clr",
+                   zero_imp_method = c(
+                      "counts_zeros__1",
+                      "counts_all__1",
+                      "percentage_all__0.001",
+                      "percentage_all__0.01",
+                      "percentage_all__0.1",
+                      "percentage_all__1",
+                      # "arcsine_sqrt",
+                      # "impRZilr",
+                      "multLN",
+                      "multRepl__0.01",
+                      "multRepl__0.1",
+                      "multRepl__1"
+                   )
+)
+
+```
+
+
+```{r fig.height=12, fig.width=12}
+for (nct in n_ct_to_select) {
+  res_all <- results[results$n_celltypes == nct, ]
+  res_avg <- res_all %>%
+    group_by(zero_imp_method, Percent_difference) %>%
+    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
+           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
+           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
+    ungroup() %>% 
+    distinct(interaction(zero_imp_method, Percent_difference), .keep_all=TRUE)
+  
+  zim <- res_avg$zero_imp_method
+  zim[grepl("multRepl|percentage", zim)] <- paste0(zim[grepl("multRepl|percentage", zim)], "%")
+  res_avg$zero_imp_method <- zim
+  
+  p_sil <- ggplot(res_avg, aes(x = Percent_difference, y = Silhouette_score, color = zero_imp_method)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
+    ylim(c(min(res_avg$Silhouette_score), 1)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Silhouette_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\n(CLR-transformation)"))
+  p_mod <- ggplot(res_avg, aes(x = Percent_difference, y = Modularity_score, color = zero_imp_method)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
+    ylim(c(min(res_avg$Modularity_score), 0.5)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\n(CLR-transformation)"))
+  p_clust <- ggplot(res_avg, aes(x = Percent_difference, y = Adjusted_Rand_Index, color = zero_imp_method)) +
+    geom_line() +
+    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
+    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
+    theme_classic() +
+    # geom_point(data = res_all, aes(x = Percent_difference, y = Modularity_score)) +
+    ggtitle(paste0("Differentially abundant cell types: ", nct, "\n(CLR-transformation)"))
+  
+  ggsave(filename = file.path(path_plots, paste0("zero_imputation_semisynthetic_default", nct, "celltypesda.pdf")), plot = p_clust, width = 4, height = 4)
+  
+  if (nct == 10) {
+    ggsave(filename = file.path(path_plots, "zero_imputation_semisynthetic_default.pdf"), plot = p_clust, width = 6, height = 5)
+  }
+  
+  p <- ggarrange(p_sil, p_mod, p_clust)
+  print(p)
+}
 
 ```

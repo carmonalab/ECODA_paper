@@ -20,43 +20,10 @@ output:
 # renv::init()
 # renv::snapshot()
 
-# install.packages("/Users/christianhalter/Desktop/scooter_1.0.0.tar.gz", repos = NULL, type = "source")
-
-library(scooter)
-library(tidyverse)
-library(plotly)
-library(ggplot2)
-library(ggpubr)
-library(factoextra)
-library(compositions)
 library(pROC)
-library(mclust)
-library(rstatix)
+
 source("functions.R")
 
-library(Seurat)
-# devtools::install_github('satijalab/seurat-data')
-library(SeuratData)
-# install.packages("hdf5r")
-# remotes::install_github("mojaveazure/seurat-disk")
-library(SeuratDisk)
-
-# install.packages("devtools")
-# devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
-library(EPIC)
-# BiocManager::install("MOFA2")
-library(reticulate)
-library(basilisk)
-library("MOFA2")
-# BiocManager::install("fgsea")
-# BiocManager::install("sva")
-# devtools::install_github("kharchenkolab/scITD")
-library(scITD)
-# install.packages("ncdf4")
-library(ncdf4)
-library(arrow)
-
-library(dplyr)
 
 my_seed <- 123
 set.seed(my_seed)
@@ -114,7 +81,7 @@ for (i in samples_clearcut) {
   obj <- obj.list[[i]]
   Idents(obj) <- "Sample"
   obj@meta.data <- obj@meta.data[colnames(obj@assays$RNA$counts), metacols_to_keep]
-
+  
   if (i == samples_clearcut[1]) {
     seurat <- obj
   } else {
@@ -134,14 +101,14 @@ labels <- as.factor(get_labels(seurat, label_condition))
 
 ds <- "Zhang"
 results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
-                                   methods = c(
-                                     "counts",
-                                     "freq",
-                                     "arcsine_sqrt",
-                                     "alr_randref",
-                                     "alr_mincvref",
-                                     "clr"
-                                   ))
+                              methods = c(
+                                "counts",
+                                "freq",
+                                "arcsine_sqrt",
+                                "alr_randref",
+                                "alr_mincvref",
+                                "clr"
+                              ))
 results_list[[ds]] <- results_list[[ds]] %>%
   group_by(method) %>%
   summarize(silhouette = mean(silhouette),
@@ -188,14 +155,14 @@ labels <- as.factor(get_labels(seurat, label_condition))
 
 ds <- "Stephenson"
 results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
-                                   methods = c(
-                                     "counts",
-                                     "freq",
-                                     "arcsine_sqrt",
-                                     "alr_randref",
-                                     "alr_mincvref",
-                                     "clr"
-                                   ))
+                              methods = c(
+                                "counts",
+                                "freq",
+                                "arcsine_sqrt",
+                                "alr_randref",
+                                "alr_mincvref",
+                                "clr"
+                              ))
 results_list[[ds]] <- results_list[[ds]] %>%
   group_by(method) %>%
   summarize(silhouette = mean(silhouette),
@@ -229,14 +196,14 @@ labels <- as.factor(get_labels(seurat, label_condition))
 
 ds <- "Lee"
 results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
-                                   methods = c(
-                                     "counts",
-                                     "freq",
-                                     "arcsine_sqrt",
-                                     "alr_randref",
-                                     "alr_mincvref",
-                                     "clr"
-                                   ))
+                              methods = c(
+                                "counts",
+                                "freq",
+                                "arcsine_sqrt",
+                                "alr_randref",
+                                "alr_mincvref",
+                                "clr"
+                              ))
 results_list[[ds]] <- results_list[[ds]] %>%
   group_by(method) %>%
   summarize(silhouette = mean(silhouette),
@@ -271,14 +238,14 @@ labels <- as.factor(get_labels(seurat, label_condition))
 
 ds <- "GongSharma_cmv"
 results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
-                                   methods = c(
-                                     "counts",
-                                     "freq",
-                                     "arcsine_sqrt",
-                                     "alr_randref",
-                                     "alr_mincvref",
-                                     "clr"
-                                   ))
+                              methods = c(
+                                "counts",
+                                "freq",
+                                "arcsine_sqrt",
+                                "alr_randref",
+                                "alr_mincvref",
+                                "clr"
+                              ))
 results_list[[ds]] <- results_list[[ds]] %>%
   group_by(method) %>%
   summarize(silhouette = mean(silhouette),
@@ -305,14 +272,14 @@ labels <- as.factor(get_labels(seurat, label_condition))
 
 ds <- "GongSharma_age"
 results_list[[ds]] <- datrans(count_mat = count_mat, labels = labels, perc_diffs = 0, n_ct_to_select = 0, reps = 20, n_cores = 1,
-                                   methods = c(
-                                     "counts",
-                                     "freq",
-                                     "arcsine_sqrt",
-                                     "alr_randref",
-                                     "alr_mincvref",
-                                     "clr"
-                                   ))
+                              methods = c(
+                                "counts",
+                                "freq",
+                                "arcsine_sqrt",
+                                "alr_randref",
+                                "alr_mincvref",
+                                "clr"
+                              ))
 results_list[[ds]] <- results_list[[ds]] %>%
   group_by(method) %>%
   summarize(silhouette = mean(silhouette),
@@ -321,6 +288,10 @@ results_list[[ds]] <- results_list[[ds]] %>%
   ungroup()
 results_list[[ds]]$dataset <- ds
 ```
+
+
+
+
 
 ## Plot results
 
@@ -373,8 +344,8 @@ ggplot(df_results, aes(x = method, y = values)) +
   facet_grid(score_method ~ dataset,
              scales = "free",
              labeller = labeller(score_method = score.labs, dataset = datas.labs))
-  # facet_grid(scales = "free",
-  #            rows = vars(score_method), cols = vars(dataset))
+# facet_grid(scales = "free",
+#            rows = vars(score_method), cols = vars(dataset))
 ggsave(file.path(path_plots, "transformations_real_datasets_detailed_barplot.pdf"),
        width = 8,
        height = 7)
@@ -466,7 +437,7 @@ ggplot(df_results_clustering, aes(x = method, y = values)) +
   #   # symnum.args = list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols = c("****", "***", "**", "*", "ns"))
   # ) +
   stat_pvalue_manual(stat.test, label = "p.adj", 
-    y.position = c(max(df_results_clustering$values)+0.1, max(df_results_clustering$values)+0.2), hide.ns = TRUE) +
+                     y.position = c(max(df_results_clustering$values)+0.1, max(df_results_clustering$values)+0.2), hide.ns = TRUE) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 

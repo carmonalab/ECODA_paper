@@ -178,7 +178,7 @@ row.names(t2) <- str_replace_all(row.names(t2), " ", "_")
 ```{r}
 for (layer in names(data)) {
   df <- data[[layer]] %>%
-    select(paste0("AIFI_", layer),
+    dplyr::select(paste0("AIFI_", layer),
            paste0("AIFI_", layer, "_frac_total"),
            paste0("total_cells"),
            "specimen.specimenGuid") %>%
@@ -214,12 +214,12 @@ dproc <- list()
 for (layer in names(data)) {
 
   dproc$meta <- data[[layer]] %>%
-    select(c(1:14)) %>%
+    dplyr::select(c(1:14)) %>%
     unique() %>% 
     mutate_at(1:14, as.factor)
   
   ctable <- data[[layer]] %>%
-    select(c(14,
+    dplyr::select(c(14,
              !!sym(paste0("AIFI_", layer)),
              !!sym(paste0("AIFI_", layer, "_count")),
              !!sym(paste0("AIFI_", layer, "_frac_total")),
@@ -237,19 +237,19 @@ for (layer in names(data)) {
     mutate_all(~replace_na(., 0)) %>%
     rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_count_"), "") %>%
                  str_replace_all(., " ", "_")) %>%
-    select(-Platelet, -Erythrocyte)
+    dplyr::select(-Platelet, -Erythrocyte)
 
   i <- i + n_cts
   dproc[[layer]]$freq <- ctable[, i:(i + n_cts - 1)] %>%
     mutate_all(~replace_na(., 0)) %>%
     rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_frac_total_"), "") %>%
                  str_replace_all(., " ", "_")) %>%
-    select(-Platelet, -Erythrocyte)
+    dplyr::select(-Platelet, -Erythrocyte)
   i <- i + n_cts
   dproc[[layer]]$clr_authors <- ctable[, i:(i + n_cts - 1)] %>%
     rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_clr_"), "") %>%
                  str_replace_all(., " ", "_")) %>%
-    select(-Platelet, -Erythrocyte)
+    dplyr::select(-Platelet, -Erythrocyte)
   
   df_counts <- dproc[[layer]]$cell_counts
 
@@ -1515,5 +1515,50 @@ ggsave(file.path(path_plots, "variance_gongsharma.pdf"),
 
 ```
 
+```{r}
+clearcut_samples <- dproc$meta$specimen.specimenGuid[dproc$meta$subject.biologicalSex == "Female" & dproc$meta$subject.cmv == "Negative" & as.numeric(dproc$meta$subject.ageAtFirstDraw) < 50]
+df <- dproc$L3$clr_0.01perc[row.names(dproc$L3$clr_0.1perc) %in% clearcut_samples, ]
+df1 <- df %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "celltype",
+    values_to = "values"
+  )
+
+df1 <- df1 %>%
+    group_by(celltype) %>%
+    dplyr::summarize(
+      Relative_abundance = mean(values, na.rm=TRUE),
+      Variance = var(values, na.rm=TRUE)
+    )
+
+ggplotRegression(df1, "CLR\nZero replacement: + 0.01%")
+
+
+
+df <- dproc$L3$freq[row.names(dproc$L3$freq) %in% clearcut_samples, ] * 100
+df1 <- df %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "celltype",
+    values_to = "values"
+  )
+
+df1 <- df1 %>%
+    group_by(celltype) %>%
+    dplyr::summarize(
+      Relative_abundance = mean(values, na.rm=TRUE),
+      Variance = var(values, na.rm=TRUE)
+    )
+
+
+# lmod <- lm(Variance ~ Relative_abundance, data = df1)
+
+ggplot(df1, aes(x = Relative_abundance, y = Variance)) + 
+  geom_point() +
+  labs(title = "Frequency") +
+  theme_classic() +
+  xlab("Relative abundance (%)") + ylab("Variance")
+```
 
 
