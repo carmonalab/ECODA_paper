@@ -1,0 +1,792 @@
+---
+title: "Benchmark of exploratory data analysis methods for scRNA-seq data"
+author: "Christian Halter"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+This script prepares datasets for downstream analysis
+
+
+# Load libraries and set parameters
+
+```{r message=FALSE, warning=FALSE}
+library(rstatix)
+
+source("functions.R")
+
+# Set path to save plots
+path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
+```
+
+
+# ---------------------------------------------------------------
+
+# Load data (Kfoury)
+
+```{r}
+
+ds_name <- "Kfoury_2021_34719426"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+
+seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
+
+seurat@misc$label_col <- "Status"
+seurat@misc$low_res_ct_col <- "cells"
+seurat@misc$hi_res_ct_col <- "cells"
+
+
+seurat <- seurat |>
+  NormalizeData() |>
+  FindVariableFeatures(nfeatures = 2000) |>
+  ScaleData() |>
+  RunPCA(verbose = FALSE) |>
+  FindNeighbors() #|>
+  #RunUMAP()
+
+labels <- get_labels(seurat, seurat@misc$label_col)
+```
+
+
+# Clustering
+
+```{r}
+seurat <- FindClusters_multi(seurat)
+```
+
+
+```{r}
+
+```
+
+
+
+# Plot bio separation
+
+```{r}
+res_broad <- c(0.1, 0.5, 1, 2, 5, 10, 20, 50, 100)
+res_broad_2sub <- c() # c(0.1, 0.5)
+res_sub <- c() # c(0.1)
+
+
+res_list <- list()
+
+p <- NULL
+res_list[[paste0("authors", "_PCAdims_", p)]] <- process_coda_fig(seurat, labels = labels, ct_col = seurat@misc$hi_res_ct_col, title = "authors", pca_dims = p)
+
+pca_dims <- c(2, 3, 5, 10)
+
+for (p in pca_dims) {
+  res_list[[paste0("authors", "_PCAdims_", p)]] <- process_coda_fig(seurat, labels = labels, ct_col = seurat@misc$hi_res_ct_col, title = "authors", pca_dims = p)
+  
+  for (rb in res_broad){
+    res_list[[paste0(as.character(rb), "_PCAdims_", p)]] <- process_coda_fig(seurat, labels = labels, ct_col = paste0("RNA_snn_res.", as.character(rb)), title = paste0(as.character(rb), "_PCAdims_", p), pca_dims = p)
+    
+    if (rb %in% res_broad_2sub){
+      for (rs in res_sub) {
+        subcluster_col_name <- paste0("subcluster_broad_res", rb, "_sub_res", rs)
+        
+        res_list[[paste0(subcluster_col_name, "_PCAdims_", p)]] <- process_coda_fig(
+          seurat, labels = labels,
+          ct_col = subcluster_col_name,
+          title = paste0(subcluster_col_name, "_PCAdims_", p), pca_dims = p)
+      }
+    }
+  }
+}
+
+for (rb in res_broad){
+  res_list[[paste0(as.character(rb), "_PCAdims_", p)]] <- process_coda_fig(seurat, labels = labels, ct_col = paste0("RNA_snn_res.", as.character(rb)), title = paste0(as.character(rb), "_PCAdims_", p), pca_dims = p)
+  
+  if (rb %in% res_broad_2sub){
+    for (rs in res_sub) {
+      subcluster_col_name <- paste0("subcluster_broad_res", rb, "_sub_res", rs)
+      
+      res_list[[paste0(subcluster_col_name, "_PCAdims_", p)]] <- process_coda_fig(
+        seurat, labels = labels,
+        ct_col = subcluster_col_name,
+        title = paste0(subcluster_col_name, "_PCAdims_", p), pca_dims = p)
+    }
+  }
+}
+```
+
+# Plot results
+
+## Save and flatten the nested list into a DataFrame
+
+```{r}
+df_results <- imap_dfr(res_list, ~ {
+  method_name <- .y
+  method_content <- .x # This is the list for method1, method2, etc.
+
+  # Extract n_features here, before the inner loop
+  n_features <- NA_integer_ # Initialize with NA_integer_ (for numeric NA)
+  if ("feat_mat" %in% names(method_content)) {
+    n_features <- ncol(method_content$feat_mat)
+  }
+  
+  if ("scores" %in% names(.x)) {
+    imap_dfr(.x$scores, ~ {
+      tibble(
+        method = method_name,
+        score = .y,
+        value = .x,
+        n_features = n_features
+      )
+    })
+  } else {
+    tibble() # Return an empty tibble if "scores" is not found
+  }
+})
+
+
+
+```
+
+
+
+## Plot results
+
+```{r fig.height=8, fig.width=20}
+levs <- str_sort(as.character(unique(df_results$method)), numeric = TRUE)
+# levs <- c(
+#   "ECODA_high_res",
+#   "ECODA_high_res_2_PCA_dims",
+#   "ECODA_high_res_5_PCA_dims",
+#   "ECODA_high_res_10_PCA_dims",
+#   "ECODA_low_res"
+# )
+
+df_results$method <- factor(df_results$method, levels = levs)
+
+df_results_clustering <- df_results %>%
+  filter(score == "cluster_score") %>%
+  group_by(method) %>%
+  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value)))
+
+# df_results_clustering <- df_results_clustering %>%
+#   arrange(desc(mean))
+df_results_clustering$method <- factor(df_results_clustering$method, levels = df_results_clustering$method)
+
+df_results$method <- factor(df_results$method, levels = df_results_clustering$method)
+
+
+df_results_modularity <- df_results %>%
+  filter(score == "mod_score") %>%
+  group_by(method) %>%
+  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value)))
+
+df_results_modularity <- df_results_modularity %>%
+  arrange(desc(mean))
+df_results_modularity$method <- factor(df_results_modularity$method, levels = df_results_modularity$method)
+
+
+
+ggplot(df_results, aes(x = method, y = value)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(x = "",
+       y = "Separation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        legend.position = "none")
+
+scale_coeff <- max(df_results$n_features) / max(df_results$value)
+
+df_results %>%
+  filter(str_ends(method, "_")) %>%
+  ggplot(aes(x = method, group=score)) +
+  geom_line(aes(y = value, linetype=score), alpha = 1, color = "steelblue") +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  geom_line(aes(y = n_features / scale_coeff)) + # Divide by 10 to get the same range than the temperature
+  
+  scale_y_continuous(
+    
+    # Features of the first axis
+    name = "Separation score",
+    
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*scale_coeff, name="Number of features\n(#cell types or #PCA_dims")
+  )
+
+
+df_results %>%
+  group_by(score, method) %>%
+  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
+  ungroup() %>%
+
+  ggplot(aes(x = method, y = mean)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
+  labs(x = "", y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+
+scale_coeff <- max(df_results$n_features) / max(df_results$value)
+
+ggplot(df_results, aes(x = method, group=score)) +
+  geom_line(aes(y = value, linetype=score), alpha = 1, color = "steelblue") +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  geom_line(aes(y = n_features / scale_coeff)) + # Divide by 10 to get the same range than the temperature
+  
+  scale_y_continuous(
+    
+    # Features of the first axis
+    name = "Separation score",
+    
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*scale_coeff, name="Number of features\n(#cell types or #PCA_dims")
+  )
+
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Plot variance and correlations
+
+```{r}
+ct_col <- "RNA_snn_res.0.5"
+# ct_col <- "cells"
+
+df <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = ct_col) %>%
+    impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+    calc_perc_df() %>%
+    clr()
+
+df_var <- get_ct_var(df, plot_title = ct_col)
+```
+
+
+
+```{r}
+cor_matrix <- cor(df)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix)
+```
+
+
+
+```{r fig.height=12, fig.width=18}
+# 1. Create the confusion matrix
+conf_matrix <- table(seurat$cells, seurat$subcluster_annotation)
+
+# 2. Convert to a data frame for ggplot2
+conf_df <- as.data.frame(conf_matrix)
+
+# 3. Rename columns for clarity (optional but good practice)
+colnames(conf_df) <- c("Author_Annotation", "Seurat_Cluster", "Count")
+
+# 4. Create the heatmap plot using ggplot2
+ggplot(conf_df, aes(x = Seurat_Cluster, y = Author_Annotation, fill = Count)) +
+  geom_tile(color = "black") + # Adds borders to tiles
+  geom_text(aes(label = Count), color = "white", size = 3) + # Add counts as text on tiles
+  scale_fill_gradient(low = "white", high = "steelblue") + # Adjust color scale
+  labs(title = "Confusion Matrix: Author Annotation vs. Seurat Clustering (res=0.5)",
+       x = "Seurat Clusters (Resolution 0.5)",
+       y = "Author's Annotation",
+       fill = "Number of Cells") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), # Rotate x-axis labels
+        panel.grid.major = element_blank(), # Remove major grid lines
+        panel.grid.minor = element_blank(), # Remove minor grid lines
+        plot.title = element_text(hjust = 0.5)) # Center plot title
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Load data (Stephenson)
+
+```{r}
+
+ds_name <- "MitchelJ_2023_PrePrintTBD"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+
+seurat <- readRDS(file.path(path_output, sprintf("%s_Stephenson_preprocessed.rds", ds_name)))
+
+seurat <- subset(seurat, subset = Site == "Ncl")
+seurat <- subset(seurat, subset = Status %in% c("Healthy", "Covid"))
+seurat$Days_from_onset <- as.character(seurat$Days_from_onset)
+seurat$Days_from_onset[seurat$Days_from_onset == "Healthy"] <- 0
+seurat$Days_from_onset <- as.numeric(seurat$Days_from_onset)
+seurat <- subset(seurat, subset = Days_from_onset < 10)
+
+seurat$sample_id <- as.character(seurat$sample_id)
+samples_exclude <- c("BGCV10_CV0198", "MH8919230")
+samples_subset <- unique(seurat$sample_id[!seurat$sample_id %in% samples_exclude])
+seurat <- subset(seurat, subset = sample_id %in% samples_subset)
+
+seurat$Sample <- seurat$sample_id
+
+seurat@misc$label_col <- "Status"
+seurat@misc$low_res_ct_col <- "initial_clustering"
+seurat@misc$hi_res_ct_col <- "full_clustering"
+
+dims <- 1:30
+
+seurat <- seurat |>
+  NormalizeData() |>
+  FindVariableFeatures(nfeatures = 2000) |>
+  ScaleData() |>
+  RunPCA(verbose = FALSE) |>
+  FindNeighbors(dims = dims) |>
+  RunUMAP(dims = dims)
+
+labels <- get_labels(seurat, seurat@misc$label_col)
+```
+
+
+# Clustering
+
+```{r}
+seurat <- FindClusters_multi(seurat)
+```
+
+
+# Plot bio separation
+
+```{r}
+res_list <- list()
+
+
+pca_dims <- c(2, 3, 5, 10)
+
+for (p in pca_dims) {
+  res_list[[paste0("authors", "_PCAdims_", p)]] <- process_coda_fig(seurat, labels = labels, ct_col = seurat@misc$hi_res_ct_col, title = "authors", pca_dims = p)
+  
+  for (rb in res_broad){
+    res_list[[paste0(as.character(rb), "_PCAdims_", p)]] <- process_coda_fig(seurat, labels = labels, ct_col = paste0("RNA_snn_res.", as.character(rb)), title = paste0(as.character(rb), "_PCAdims_", p), pca_dims = p)
+    
+    if (rb %in% res_broad_2sub){
+      for (rs in res_sub) {
+        subcluster_col_name <- paste0("subcluster_broad_res", rb, "_sub_res", rs)
+        
+        res_list[[paste0(subcluster_col_name, "_PCAdims_", p)]] <- process_coda_fig(
+          seurat, labels = labels,
+          ct_col = subcluster_col_name,
+          title = paste0(subcluster_col_name, "_PCAdims_", p), pca_dims = p)
+      }
+    }
+  }
+}
+
+p <- NULL
+res_list[[paste0("authors", "_PCAdims_", p)]] <- process_coda_fig(seurat, labels = labels, ct_col = seurat@misc$hi_res_ct_col, title = "authors", pca_dims = p)
+
+for (rb in res_broad){
+  res_list[[paste0(as.character(rb), "_PCAdims_", p)]] <- process_coda_fig(seurat, labels = labels, ct_col = paste0("RNA_snn_res.", as.character(rb)), title = paste0(as.character(rb), "_PCAdims_", p), pca_dims = p)
+  
+  if (rb %in% res_broad_2sub){
+    for (rs in res_sub) {
+      subcluster_col_name <- paste0("subcluster_broad_res", rb, "_sub_res", rs)
+      
+      res_list[[paste0(subcluster_col_name, "_PCAdims_", p)]] <- process_coda_fig(
+        seurat, labels = labels,
+        ct_col = subcluster_col_name,
+        title = paste0(subcluster_col_name, "_PCAdims_", p), pca_dims = p)
+    }
+  }
+}
+```
+
+# Plot results
+
+## Save and flatten the nested list into a DataFrame
+
+```{r}
+df_results <- imap_dfr(res_list, ~ {
+  method_name <- .y
+  method_content <- .x # This is the list for method1, method2, etc.
+
+  # Extract n_features here, before the inner loop
+  n_features <- NA_integer_ # Initialize with NA_integer_ (for numeric NA)
+  if ("feat_mat" %in% names(method_content)) {
+    n_features <- ncol(method_content$feat_mat)
+  }
+  
+  if ("scores" %in% names(.x)) {
+    imap_dfr(.x$scores, ~ {
+      tibble(
+        method = method_name,
+        score = .y,
+        value = .x,
+        n_features = n_features
+      )
+    })
+  } else {
+    tibble() # Return an empty tibble if "scores" is not found
+  }
+})
+```
+
+
+
+## Plot results
+
+```{r fig.height=8, fig.width=20}
+levs <- str_sort(as.character(unique(df_results$method)), numeric = TRUE)
+
+df_results$method <- factor(df_results$method, levels = levs)
+
+
+
+
+scale_coeff <- max(df_results$n_features) / max(df_results$value)
+
+df_results %>%
+  filter(str_ends(method, "_")) %>%
+  ggplot(aes(x = method, group=score)) +
+  # geom_boxplot(outlier.shape = NA) +
+  # geom_point(aes(shape = dataset), size = 2) +
+  # scale_shape_manual(values=1:length(unique((df_results$dataset)))) +
+  geom_line(aes(y = value, linetype=score), alpha = 1, color = "steelblue") +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  geom_line(aes(y = n_features / scale_coeff)) + # Divide by 10 to get the same range than the temperature
+  
+  scale_y_continuous(
+    
+    # Features of the first axis
+    name = "Separation score",
+    
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*scale_coeff, name="Number of features\n(#cell types or #PCA_dims")
+  )
+
+
+
+scale_coeff <- max(df_results$n_features) / max(df_results$value)
+
+ggplot(df_results, aes(x = method, group=score)) +
+  geom_line(aes(y = value, linetype=score), alpha = 1, color = "steelblue") +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  geom_line(aes(y = n_features / scale_coeff)) + # Divide by 10 to get the same range than the temperature
+  
+  scale_y_continuous(
+    
+    # Features of the first axis
+    name = "Separation score",
+    
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*scale_coeff, name="Number of features\n(#cell types or #PCA_dims")
+  )
+# ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores.pdf"),
+#        width = 7,
+#        height = 7)
+```
+
+
+# ---------------------------------------------------------------
+
+# Plot variance and correlations
+
+```{r}
+# tdf <- as.data.frame.matrix(table(seurat$Sample, seurat$RNA_snn_res.200))
+
+ct_col <- "RNA_snn_res.20"
+# ct_col <- "RNA_snn_res.100"
+
+df <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = ct_col) %>%
+    impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+    calc_perc_df() %>%
+    clr()
+
+df_var <- get_ct_var(df, plot_title = ct_col)
+plot(sort(df_var$Variance))
+
+
+df <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = ct_col) %>%
+    impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+    calc_perc_df() %>%
+    clr()
+
+df_var <- get_ct_var(df, plot_title = ct_col)
+plot(sort(df_var$Variance))
+
+
+df <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = ct_col) %>%
+    impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.01) %>%
+    calc_perc_df() %>%
+    clr()
+
+df_var <- get_ct_var(df, plot_title = ct_col)
+plot(sort(df_var$Variance))
+
+
+df <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = ct_col) %>%
+    impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.001) %>%
+    calc_perc_df() %>%
+    clr()
+
+df_var <- get_ct_var(df, plot_title = ct_col)
+plot(sort(df_var$Variance))
+```
+
+```{r}
+data_points <- df1$Variance
+
+hist(data_points, breaks = 30)
+
+# Calculate 95% quantile
+quantile_95 <- quantile(data_points, 0.95)
+
+# Identify outliers (points larger than 95th percentile)
+outliers <- data_points[data_points > quantile_95]
+
+# Print outliers
+cat("Outliers (larger than 95th percentile):\n")
+print(outliers)
+
+
+# Plot histogram with outliers
+hist(data_points, breaks = 30, col = "lightblue", main = "Histogram with Outliers")
+abline(v = quantile_95, col = "red", lwd = 2)  # Add line for 95th percentile
+points(outliers, rep(0, length(outliers)), col = "red", pch = 19)  # Add points for outliers
+
+
+
+# Create a histogram with density scale
+h <- hist(data_points, breaks = 30, plot = FALSE) # First, compute histogram without plotting
+hist(data_points,
+     freq = FALSE, # Plot probability densities, not frequencies
+     breaks = 30,
+     main = "Distribution with Outliers",
+     xlab = "Value",
+     ylab = "Density",
+     col = "lightblue",
+     border = "white",
+     ylim = c(0, max(h$density) * 1.1) # Adjust ylim to make space for points
+     )
+
+# Add rug plot (small lines at the bottom indicating individual data points)
+# This helps visualize point density but doesn't show outliers distinctly
+rug(data_points)
+
+# Add a density curve (kernel density estimate)
+lines(density(data_points), col = "blue", lwd = 2)
+
+# Optional: Add a theoretical normal distribution curve for comparison
+# assuming the mean and SD of your data
+xfit <- seq(min(data_points), max(data_points), length=100)
+yfit <- dnorm(xfit, mean = mean(data_points), sd = sd(data_points))
+lines(xfit, yfit, col = "red", lty = 2, lwd = 2) # Dashed red line for normal curve
+
+legend("topright",
+       legend = c("Kernel Density", "Normal Distribution"),
+       col = c("blue", "red"),
+       lwd = 2,
+       lty = c(1, 2))
+
+
+
+data <- df1$Variance
+
+# Calculate mean and standard deviation of the data
+# For robust outlier detection, consider using robust measures like median and MAD (Median Absolute Deviation)
+# if you suspect many outliers might distort mean/sd.
+data_mean <- mean(data)
+data_sd <- sd(data)
+
+# Define significance level (e.g., alpha = 0.05 for 95% CI)
+alpha <- 0.05
+# Critical Z-score for two-tailed test
+# For 95% CI (alpha=0.05), we want the Z-score for alpha/2 = 0.025 in each tail
+z_critical_lower <- qnorm(alpha / 2, mean = data_mean, sd = data_sd)
+z_critical_upper <- qnorm(1 - (alpha / 2), mean = data_mean, sd = data_sd)
+
+# Identify outliers
+outliers_values <- data[data < z_critical_lower | data > z_critical_upper]
+outliers_indices <- which(data < z_critical_lower | data > z_critical_upper)
+
+cat("Outliers based on", (1-alpha)*100, "% confidence interval (assuming Normal Distribution):\n")
+print(outliers_values)
+cat("Indices of outliers:", outliers_indices, "\n")
+
+# --- You can also use formal outlier tests if a package is available ---
+# For example, the 'outliers' package provides Grubbs' test or Dixon's test.
+# install.packages("outliers")
+# library(outliers)
+# grubbs.test(data) # Tests for a single outlier
+
+# Or use IQR method (often used with box plots)
+Q1 <- quantile(data, 0.25)
+Q3 <- quantile(data, 0.75)
+IQR_val <- Q3 - Q1
+iqr_outliers <- data[data < (Q1 - 1.5 * IQR_val) | data > (Q3 + 1.5 * IQR_val)]
+cat("\nOutliers based on IQR method:\n")
+print(iqr_outliers)
+
+
+
+# Re-create the dataframe, adding an 'is_outlier' column
+df <- data.frame(Value = data)
+df$is_outlier <- ifelse(df$Value < z_critical_lower | df$Value > z_critical_upper,
+                        "Outlier", "Normal")
+
+# Plotting with outliers highlighted
+ggplot(df, aes(x = Value)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 binwidth = 0.2,
+                 fill = "lightblue",
+                 color = "white") +
+  geom_density(color = "blue", linewidth = 1) +
+  geom_rug(aes(color = is_outlier), alpha = 0.7) + # Color rug points based on outlier status
+  geom_point(data = filter(df, is_outlier == "Outlier"), # Plot outlier points distinctly
+             aes(x = Value, y = -0.005), # Position them slightly below the axis
+             color = "red",
+             size = 3,
+             shape = 8) + # Use a star shape for outliers
+  labs(title = paste0("Distribution with Outliers (", (1-alpha)*100, "% CI)"),
+       x = "Value",
+       y = "Density") +
+  scale_color_manual(values = c("Normal" = "darkgreen", "Outlier" = "red")) + # Define colors for rug
+  theme_minimal() +
+  theme(legend.position = "none") # Hide the rug legend if desired
+
+# Optionally, add lines for the critical thresholds
+ggplot(df, aes(x = Value)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 binwidth = 0.2,
+                 fill = "lightblue",
+                 color = "white") +
+  geom_density(color = "blue", linewidth = 1) +
+  geom_rug(alpha = 0.3) +
+  geom_point(data = filter(df, is_outlier == "Outlier"),
+             aes(x = Value, y = 0), # Place outliers on the x-axis for this plot
+             color = "red",
+             size = 3,
+             shape = 8,
+             position = position_jitter(height = 0.002)) + # Jitter to avoid overlap
+  # Add vertical lines for the critical thresholds
+  geom_vline(xintercept = z_critical_lower, linetype = "dashed", color = "purple", linewidth = 1) +
+  geom_vline(xintercept = z_critical_upper, linetype = "dashed", color = "purple", linewidth = 1) +
+  annotate("text", x = z_critical_lower, y = max(ggplot_build(ggplot(df, aes(x = Value)) + geom_histogram(aes(y = after_stat(density)), binwidth = 5))$data[[1]]$density) * 0.9,
+           label = paste0("Lower CI (", round(z_critical_lower, 2), ")"), color = "purple", hjust = 1.1) +
+  annotate("text", x = z_critical_upper, y = max(ggplot_build(ggplot(df, aes(x = Value)) + geom_histogram(aes(y = after_stat(density)), binwidth = 5))$data[[1]]$density) * 0.9,
+           label = paste0("Upper CI (", round(z_critical_upper, 2), ")"), color = "purple", hjust = -0.1) +
+  labs(title = paste0("Distribution with Outliers (", (1-alpha)*100, "% CI)"),
+       x = "Value",
+       y = "Density") +
+  theme_minimal()
+```
+
+
+
+```{r}
+ct_col <- "RNA_snn_res.20"
+# ct_col <- "subcluster_broad_res0.1_sub_res0.1"
+
+df <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = ct_col) %>%
+    impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+    calc_perc_df() %>%
+    clr()
+
+df_var <- get_ct_var(df, plot_title = ct_col)
+
+df_var <- df_var[order(df_var$Variance, decreasing = TRUE), ]
+
+feat_mat <- df[, df_var$celltype[1:100]]
+# res.pca <- prcomp(feat_mat, center = TRUE, scale. = FALSE)
+# feat_mat <- res.pca[["x"]][, 1:3]
+
+plot_pca(feat_mat, labels = get_labels(seurat, "Status"), plotly_3d = FALSE, title = "Test")
+plot_pca(feat_mat, labels = get_labels(seurat, "Status"), plotly_3d = FALSE, title = "Test", invisible = c("quali"))
+```
+
+
+
+```{r}
+process_coda_fig(
+        seurat, labels = get_labels(seurat, "Status_on_day_collection_summary"),
+        ct_col = "RNA_snn_res.20",
+        title = paste0("RNA_snn_res.20", "_PCAdims_", 2), pca_dims = 2)
+```
+
+```{r}
+length(table(seurat$subcluster_broad_res0.1_sub_res0.1))
+
+ct_col <- "subcluster_broad_res0.1_sub_res0.1"
+# ct_col <- "RNA_snn_res.100"
+# ct_col <- "RNA_snn_res.200"
+
+df <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = ct_col) %>%
+    impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+    calc_perc_df() %>%
+    clr()
+
+df_var <- get_ct_var(df, plot_title = ct_col)
+plot(sort(df_var$Variance))
+
+```
+
+
+
+# ---------------------------------------------------------------
+
+# PCA of Stephenson
+
+```{r}
+ds_name <- "MitchelJ_2023_PrePrintTBD"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_output <- file.path(path_root, "output")
+
+seurat <- readRDS(file.path(path_output, sprintf("%s_Stephenson_preprocessed.rds", ds_name)))
+
+# seurat <- subset(seurat, subset = Site == "Ncl")
+# seurat <- subset(seurat, subset = Status %in% c("Healthy", "Covid"))
+seurat$Days_from_onset <- as.character(seurat$Days_from_onset)
+seurat$Days_from_onset[seurat$Days_from_onset == "Healthy"] <- 0
+seurat$Days_from_onset <- as.numeric(seurat$Days_from_onset)
+# seurat <- subset(seurat, subset = Days_from_onset < 10)
+# 
+# seurat$sample_id <- as.character(seurat$sample_id)
+# samples_exclude <- c("BGCV10_CV0198", "MH8919230")
+# samples_subset <- unique(seurat$sample_id[!seurat$sample_id %in% samples_exclude])
+# seurat <- subset(seurat, subset = sample_id %in% samples_subset)
+
+seurat$Sample <- seurat$sample_id
+
+seurat@misc$label_col <- "Status"
+seurat@misc$low_res_ct_col <- "initial_clustering"
+seurat@misc$hi_res_ct_col <- "full_clustering"
+
+dims <- 1:30
+
+seurat <- seurat |>
+  NormalizeData() |>
+  FindVariableFeatures(nfeatures = 2000) |>
+  ScaleData()
+
+labels <- get_labels(seurat, seurat@misc$label_col)
+```
+
+```{r}
+process_coda_fig(seurat, labels = labels, ct_col = seurat@misc$hi_res_ct_col, title = "Status", pca_dims = 2)
+process_coda_fig(seurat, labels = get_labels(seurat, "Site"), ct_col = seurat@misc$hi_res_ct_col, title = "Site", pca_dims = 2)
+```
+
