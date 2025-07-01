@@ -106,31 +106,37 @@ calc_modularity <- function(feat_mat,
                             knn_k = NULL) {
   if (is.null(knn_k)) {
     # min_group_size <- min(table(labels))
-    half_group_size <- round(nrow(feat_mat) / groups / 2)
+    ngroups <- length(unique(labels))
+    half_group_size <- round(nrow(feat_mat) / ngroups / 2)
     # # knn_k is equal to half average group size or at least 3
     knn_k <- max(half_group_size, 3)
   }
   
   # Create a graph object
-  g <- compute_snn_graph(dist = feat_mat, knn_k = knn_k)
+  g <- compute_snn_graph(feat_mat = feat_mat, knn_k = knn_k)
   # Compute modularity
   modularity_score <- igraph::modularity(g, membership = as.numeric(factor(labels)))
+  
+  # NOTE:
+  # Maximum modularity depends on the number of groups: max(mod) = 1 - 1 / (number of groups)
+  # see Brandes, Ulrik, et al. On finding graph clusterings with maximum modularity.
+  
   return(modularity_score)
 }
 
 
-compute_KNN <- function(dist, knn_k){
+compute_KNN <- function(feat_mat, knn_k){
   # Compute KNN
-  knn <- RANN::nn2(as.matrix(dist), k = knn_k + 1)$nn.idx
+  knn <- RANN::nn2(as.matrix(feat_mat), k = knn_k + 1)$nn.idx
   knn <- knn[, -1]  # Remove self-neighbor
   return(knn)
 }
 
 
-compute_snn_graph <- function(dist, knn_k) {
-  knn <- compute_KNN(dist = dist, knn_k = knn_k)
+compute_snn_graph <- function(feat_mat, knn_k) {
+  knn <- compute_KNN(feat_mat = feat_mat, knn_k = knn_k)
   # Initialize adjacency matrix
-  n <- nrow(as.matrix(dist))
+  n <- nrow(as.matrix(feat_mat))
   adj_matrix <- matrix(0, n, n)
   # Count shared neighbors
   for (i in seq_len(n)) {
@@ -140,6 +146,7 @@ compute_snn_graph <- function(dist, knn_k) {
       adj_matrix[j, i] <- shared_neighbors  # Ensure symmetry
     }
   }
+  # adj_matrix <- spdep::knearneigh(feat_mat, k=5, longlat = NULL)
   # Create graph object
   g <- igraph::graph_from_adjacency_matrix(adj_matrix,
                                            mode = "undirected",
@@ -147,6 +154,8 @@ compute_snn_graph <- function(dist, knn_k) {
                                            diag = FALSE)
   return(g)
 }
+
+
 
 #-----------------------------------------------------------<
 
@@ -219,25 +228,25 @@ convert_seurat_to_h5ad <- function(seurat,
 # Test data transformation methods for ECODA
 datrans <- function(count_mat,
                     labels = NULL,
-                    Percent_difference, # Percent cell abundance difference (e.g. 100 equals one cell type being twice as abundant)
+                    Amount_of_perturbation, # Percent cell abundance difference (e.g. 100 equals one cell type being twice as abundant)
                     n_ct_to_select, # Number of randomly selected cell types to be differentially abundant
                     cts = NULL, # Cell types to be differentially abundant. If NULL, randomly select a specified number of cell types (n_ct_to_select)
                     reps = 20, # Number of random shuffling to calculate separation using different cell types and samples for DA
                     trans_method = c(
-                      "counts",
+                      # "counts",
                       # "counts_imputed",
                       "counts_pca",
-                      "freq",
+                      # "freq",
                       # "freq_imputed",
                       "freq_pca",
-                      "arcsine_sqrt",
+                      # "arcsine_sqrt",
                       "arcsine_sqrt_pca",
                       # "alr_randref",
                       "alr_randref_pca",
-                      "alr_mincvref",
+                      # "alr_mincvref",
                       "alr_mincvref_pca",
                       # "ilr", "ilr_pca",
-                      "clr",
+                      # "clr",
                       "clr_pca"
                     ),
                     zero_imp_method = "percentage_all__0.1",
@@ -258,7 +267,7 @@ datrans <- function(count_mat,
   cluster <- makeCluster(n_cores)
   registerDoParallel(cluster)
   
-  rets <- foreach (pd = Percent_difference,
+  rets <- foreach (da = Amount_of_perturbation,
                    .export = c(
                      "calc_perc_df",
                      "impute_zeros",
@@ -272,15 +281,16 @@ datrans <- function(count_mat,
                    .combine = rbind) %dopar% {
                      
                      res <- data.frame(
-                       method = character(),
+                       trans_method = character(),
+                       zero_imp_method = character(),
                        n_celltypes = numeric(),
-                       Percent_difference = numeric(),
+                       Amount_of_perturbation = numeric(),
                        Silhouette_score = numeric(),
                        Modularity_score = numeric(),
                        Adjusted_Rand_Index = numeric()
                      )
                      
-                     print(paste0("pd: ", pd))
+                     print(paste0("da: ", da))
                      for (nct in n_ct_to_select) {
                        
                        print(paste0("nct: ", nct))
@@ -301,7 +311,7 @@ datrans <- function(count_mat,
                            
                            # Simulate differential abundance
                            rsums_before <- rowSums(df_counts_temp)
-                           df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
+                           df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * da)
                            rsums_after <- rowSums(df_counts_temp)
                            df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
                          }
@@ -314,43 +324,36 @@ datrans <- function(count_mat,
                            df_arcsine_sqrt <- asin(sqrt(df_freq/100))
                            
                            if (grepl("percentage|counts|multRepl", zmet)) {
-                             zero_imp_method_split <- strsplit(zero_imp_method, "__")
+                             zero_imp_method_split <- strsplit(zmet, "__")
                              if (grepl("percentage|counts", zmet)) {
                                df_counts_temp_imputed <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = zero_imp_method_split[[1]][1], clr_zero_impute_num = as.numeric(zero_imp_method_split[[1]][2]))
                                df_freq_imputed <- df_counts_temp_imputed %>% calc_perc_df()
+                             } else if (grepl("multRepl", zmet)) {
+                               df_freq_imputed <- df_freq %>% zCompositions::multRepl(label = 0, dl = rep(as.numeric(zero_imp_method_split[[1]][2]), ncol(df_freq)), z.warning = 1, frac = 1)
                              }
-                             else if (grepl("multRepl", zmet)) {
-                               df_freq_imputed <- df_freq %>% zCompositions::multRepl(label = 0, dl = rep(as.numeric(zero_imp_method_split[[2]][2]), ncol(df_freq)), z.warning = 1, frac = 1)
-                             }
-                           }
-                           else if (zmet == "impRZilr") {
-                             df_counts_temp_imputed <- df_counts_temp %>% {robCompositions::impRZilr(.)[["x"]]}
-                             df_freq_imputed <- df_counts_temp_imputed %>% calc_perc_df()
-                           }
-                           else if (zmet == "multLN") {
+                           } else if (zmet == "multLN") {
                              df_freq_imputed <- df_freq %>% zCompositions::multLN(label = 0, dl = rep(0.1, ncol(df_freq)), z.warning = 0.9)
                            }
                            
                            for (met in trans_method) {
-                             if (grepl("counts", met)) {df <- df_counts_temp}
-                             # else if (grepl("counts_imputed", met)) {df <- df_counts_temp_imputed}
-                             else if (grepl("freq", met)) {df <- df_freq}
-                             # else if (grepl("freq_imputed", met)) {df <- df_freq_imputed}
-                             else if (grepl("arcsine_sqrt", met)) {df <- df_arcsine_sqrt}
-                             else if (grepl("alr_mincvref", met)) {
+                             if (grepl("counts", met)) {df <- df_counts_temp
+                             # } else if (grepl("counts_imputed", met)) {df <- df_counts_temp_imputed
+                             } else if (grepl("freq", met)) {df <- df_freq
+                             # } else if (grepl("freq_imputed", met)) {df <- df_freq_imputed
+                             } else if (grepl("arcsine_sqrt", met)) {df <- df_arcsine_sqrt
+                             } else if (grepl("alr_mincvref", met)) {
                                ct_ref <- sample(colnames(df_freq_imputed)[!colnames(df_freq_imputed) %in% ct_da], size = 1)
                                df <- Hotelling::alr(as.formula(paste0(ct_ref, "~.")), df_freq_imputed)
-                             }
-                             else if (grepl("alr_randref", met)) {
+                             } else if (grepl("alr_randref", met)) {
                                cvs <- apply(df_freq_imputed, 2, cv)
                                min_cv <- min(cvs[!colnames(df_freq_imputed) %in% ct_da])
                                ct_ref_mincv <- colnames(df_freq_imputed)[which(cvs == min_cv)][1]
                                df <- Hotelling::alr(as.formula(paste0(ct_ref_mincv, "~.")), df_freq_imputed)
+                             } else if (grepl("ilr", met)) {df <- compositions::ilr(df_freq)
+                             } else if (grepl("clr", met)) {df <- clr(df_freq_imputed)
+                             # } else if (met == "clr_centered") {df <- scale(clr(df_freq_imputed), center = TRUE, scale = FALSE)
+                             # } else if (met == "clr_centered_scaled") {df <- scale(clr(df_freq_imputed), center = TRUE, scale = TRUE)
                              }
-                             else if (grepl("ilr", met)) {df <- compositions::ilr(df_freq)}
-                             else if (grepl("clr", met)) {df <- clr(df_freq_imputed)}
-                             # else if (met == "clr_centered") {df <- scale(clr(df_freq_imputed), center = TRUE, scale = FALSE)}
-                             # else if (met == "clr_centered_scaled") {df <- scale(clr(df_freq_imputed), center = TRUE, scale = TRUE)}
                              
                              if (grepl("pca", met)) {df <- prcomp(df)$x[, 1:2]}
                              
@@ -366,7 +369,7 @@ datrans <- function(count_mat,
                                trans_method = met,
                                zero_imp_method = zmet,
                                n_celltypes = nct,
-                               Percent_difference = pd,
+                               Amount_of_perturbation = da,
                                Silhouette_score = avg_sil,
                                Modularity_score = mod,
                                Adjusted_Rand_Index = cluster_score,
@@ -424,6 +427,105 @@ DESeq2.normalize <- function(matrix,
 }
 
 
+FindClusters_multi <- function(seurat,
+                               res_broad = c(0.1, 0.5, 1, 2, 5, 10, 20, 50, 100),
+                               res_broad_2sub = c(), # c(0.1, 0.5),
+                               res_sub = c() #c(0.1)
+                               ) {
+  for (rb in res_broad){
+    print(paste0("Running broad clustering at resolution: ", rb))
+    Idents(seurat) <- "Sample" # Resetting Idents for initial broad clustering
+    
+    # Run broad clustering
+    seurat <- FindClusters(seurat, resolution = rb)
+    
+    broad_clus_col_name <- paste0("RNA_snn_res.", rb)
+    
+    # Sub-clustering based on res_broad_2sub
+    if (rb %in% res_broad_2sub){
+      print(paste0("Proceeding with sub-clustering for broad resolution: ", rb))
+      
+      # Get the names of your main clusters
+      main_clusters <- levels(seurat@meta.data[, broad_clus_col_name])
+      
+      # Inner loop for different sub-clustering resolutions
+      for (rs in res_sub) {
+        print(paste0("  Sub-clustering at resolution: ", rs))
+        
+        # Create a new metadata column to store the final combined subclusters for this resolution
+        subcluster_col_name <- paste0("subcluster_broad_res", rb, "_sub_res", rs)
+        seurat@meta.data[, subcluster_col_name] <- as.character(seurat@meta.data[, broad_clus_col_name]) # Initialize
+        
+        for (cluster_id in main_clusters) {
+          print(paste("    Subclustering broad cluster:", cluster_id, " / ", length(main_clusters)))
+          
+          # Subset the main Seurat object for the current broad cluster
+          Idents(seurat) <- broad_clus_col_name # Set broad clusters as active identity
+          sub_seurat <- subset(seurat, idents = cluster_id)
+          
+          # Skip if the subset is empty (e.g., a cluster might not exist after subsetting)
+          if (ncol(sub_seurat) < 50) {
+            print(paste("    Skipping subclustering for broad cluster", cluster_id, "as it contains too few cells."))
+            next
+          }
+          
+          # Re-processing for sub-clustering: FindVariableFeatures, ScaleData, RunPCA
+          # These steps should be applied to the subsetted object for optimal sub-clustering.
+          sub_seurat <- sub_seurat |>
+            FindVariableFeatures(nfeatures = 2000, verbose = FALSE) |>
+            ScaleData(verbose = FALSE) |>
+            RunPCA(dims = 1:50, verbose = FALSE)
+          
+          # Determine dimensions for sub-clustering. Ensure it doesn't exceed available PCs.
+          # It's important to check if PCA actually returned components.
+          if (is.null(sub_seurat@reductions$pca)) {
+            print(paste("    Skipping subclustering for broad cluster", cluster_id, "due to PCA failure."))
+            next
+          }
+          
+          n_pcs_available <- ncol(sub_seurat@reductions$pca@cell.embeddings)
+          if (n_pcs_available == 0) {
+            print(paste("    Skipping subclustering for broad cluster", cluster_id, "due to 0 available PCs."))
+            next
+          }
+          
+          # Run FindNeighbors and FindClusters on the subset
+          sub_seurat <- FindNeighbors(sub_seurat, dims = dims, verbose = FALSE)
+          sub_seurat <- FindClusters(sub_seurat, resolution = rs, verbose = FALSE)
+          
+          sub_cluster_idents_col <- paste0("RNA_snn_res.", rs)
+          sub_cluster_ids <- sub_seurat@meta.data[[sub_cluster_idents_col]]
+          
+          if (!is.factor(sub_cluster_ids)) {
+            sub_cluster_ids <- factor(sub_cluster_ids)
+          }
+          
+          # Rename subclusters to be unique (e.g., "BroadCluster_SubclusterID")
+          # Ensure levels are handled correctly to preserve order and avoid issues with factor conversions.
+          new_subcluster_names <- paste0(cluster_id, "_", levels(sub_cluster_ids))
+          names(new_subcluster_names) <- levels(sub_cluster_ids)
+          
+          # Map the old levels to the new names
+          mapped_sub_cluster_ids <- factor(sub_cluster_ids, levels = levels(sub_cluster_ids), labels = new_subcluster_names)
+          
+          # Store the subcluster information back into the main Seurat object's new column
+          seurat@meta.data[Cells(sub_seurat), subcluster_col_name] <- as.character(mapped_sub_cluster_ids)
+        }
+        
+        # After iterating through all broad clusters for a given 'rs',
+        # set the new subcluster annotation as the active identity for plotting this specific result
+        Idents(seurat) <- subcluster_col_name
+        
+        # Convert the new column to a factor if it's not already, for consistent plotting
+        seurat@meta.data[, subcluster_col_name] <- as.factor(seurat@meta.data[, subcluster_col_name])
+      }
+    }
+  }
+  
+  return(seurat)
+}
+
+
 get_ct_comp_df_seurat <- function(seurat, sample_col, ct_col) {
   ct_comp_df <- table(seurat@meta.data[[sample_col]], seurat@meta.data[[ct_col]]) %>%
     t() %>%
@@ -436,9 +538,47 @@ get_ct_comp_df_seurat <- function(seurat, sample_col, ct_col) {
 }
 
 
-get_metadata <- function(seurat) {
+get_ct_var <- function(df,
+                       show_plot = TRUE,
+                       plot_title = "") {
+  
+  df_var <- df %>%
+    pivot_longer(
+      cols = everything(),
+      names_to = "celltype",
+      values_to = "values"
+    ) %>%
+    group_by(celltype) %>%
+    dplyr::summarize(
+      Relative_abundance = mean(values, na.rm=TRUE),
+      Variance = var(values, na.rm=TRUE)
+    )
+  
+  if (show_plot == TRUE) {
+    p <- varmeanplot(data = df_var, title = plot_title)
+    print(p)
+  }
+  
+  return(df_var)
+}
+
+varmeanplot <- function(data, title) {
+  
+  lmod <- lm(Variance ~ Relative_abundance, data = data)
+  
+  ggplot(data, aes(x = Relative_abundance, y = Variance)) + 
+    geom_point() +
+    geom_smooth(method=lm , color="red", fill="#69b3a2", se=TRUE) +
+    labs(title = paste(title)) +
+    theme_classic() +
+    xlab("CLR-transformed relative abundance") + ylab("Variance")
+}
+
+
+
+get_metadata <- function(seurat, sample_col = "Sample") {
   metadata <- seurat@meta.data %>%
-    group_by(Sample) %>%
+    dplyr::group_by(!!sym(sample_col)) %>%
     slice(1)
   
   return(metadata)
@@ -450,6 +590,7 @@ get_labels <- function(seurat, label_col) {
   
   return(labels)
 }
+
 
 
 impute_zeros <- function(df,
@@ -514,6 +655,7 @@ plot_pca <- function(feat_mat,
                      pointsize = 3,
                      labelsize = 1,
                      coord_equal = TRUE,
+                     axes = c(1, 2),
                      plotly_3d = FALSE,
                      invisible = c("var", "quali"),
                      repel = FALSE) {
@@ -522,7 +664,7 @@ plot_pca <- function(feat_mat,
   
   if (cluster_score) {
     cluster_score <- clust_eval(feat_mat, labels)
-    title <- paste0(title, "\nARI score: ", cluster_score)
+    title <- paste0(title, "\nARI: ", cluster_score)
   }
   if (mod_score) {
     mod_score <- round(calc_modularity(feat_mat, labels, knn_k), 3)
@@ -534,6 +676,7 @@ plot_pca <- function(feat_mat,
   }
   
   p <- factoextra::fviz_pca(res.pca,
+                            axes = axes,
                             habillage = labels,
                             label = "var",
                             pointsize = pointsize,
@@ -817,12 +960,14 @@ process_coda_fig <- function(seurat,
                              pca_dims = NULL,
                              ct_col,
                              title,
-                             knn_k = NULL) {
+                             knn_k = NULL,
+                             clr_zero_impute_method = "percentage_all",
+                             clr_zero_impute_num = 0.1) {
   
   df_counts <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col)
   
   feat_mat <- df_counts %>%
-    impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+    impute_zeros(clr_zero_impute_method = clr_zero_impute_method, clr_zero_impute_num = clr_zero_impute_num) %>%
     calc_perc_df() %>%
     clr()
   
@@ -1076,7 +1221,7 @@ process_mrvi_fig <- function(seurat,
 run_transformation_analysis <- function(ct_comps, labels) {
   
   res_list <- datrans(ct_comps, labels,
-                      Percent_difference = 0,
+                      Amount_of_perturbation = 0,
                       n_ct_to_select = 0,
                       reps = 20,
                       n_cores = 1,
