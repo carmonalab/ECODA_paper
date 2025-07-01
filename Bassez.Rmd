@@ -24,13 +24,17 @@ library(rstatix)
 source("functions.R")
 
 # Set path to save plots
-path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
+path_root <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA")
+path_plots <- file.path(path_root, "plots")
+path_data <- file.path(path_root, "data")
 ```
 
 
 # ---------------------------------------------------------------
 
 # Bassez
+
+## Author annotation
 
 ```{r}
 ds <- "Bassez"
@@ -198,6 +202,12 @@ plot_pca(df[sub, ],
 ```
 
 
+## scGate annotation
+
+```{r}
+bassez.celltype.compositions <- readRDS(path_data, "BassezA_2021.celltype.compositions.all.modular.rds")
+```
+
 
 
 # Zhang
@@ -302,6 +312,7 @@ ggsave(file.path(path_plots, "bioexample_zhang_all_arrows.pdf"),
 ```{r fig.height=10, fig.width=10}
 df_zhang0 <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = "layer2")
 df_zhang0 <- df_zhang0[, !colnames(df_zhang0) %in% c("Neutrophils", "Platelet", "Fibroblast")]
+# df_zhang0 <- df_zhang0[, grepl("CD8|CD4", colnames(df_zhang0))]
 df_zhang0 <- df_zhang0 %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr()
 meta_zhang0 <- get_metadata(seurat)
 
@@ -311,14 +322,18 @@ meta_zhang0$Timepoint[meta_zhang0$Timepoint == "Post"] <- "Post-treatment"
 meta_zhang0$Timepoint[meta_zhang0$Timepoint == "Prog"] <- "Progression"
 meta_zhang0$Timepoint <- factor(meta_zhang0$Timepoint, levels = c("Pre-treatment", "Post-treatment", "Progression"))
 
-meta_zhang0$Clinical.efficacy.[meta_zhang0$Clinical.efficacy. == "PD"] <- "Progressive"
-meta_zhang0$Clinical.efficacy.[meta_zhang0$Clinical.efficacy. == "SD"] <- "Stable"
-meta_zhang0$Clinical.efficacy.[meta_zhang0$Clinical.efficacy. == "PR"] <- "Partial remission"
-meta_zhang0$Clinical.efficacy. <- factor(meta_zhang0$Clinical.efficacy., levels = c("Progressive", "Partial remission", "Stable"))
+meta_zhang0$Clinical.efficacy.[meta_zhang0$Clinical.efficacy. == "PD"] <- "Non_responder"
+meta_zhang0$Clinical.efficacy.[meta_zhang0$Clinical.efficacy. == "SD"] <- "Non_responder"
+meta_zhang0$Clinical.efficacy.[meta_zhang0$Clinical.efficacy. == "PR"] <- "Responder"
+meta_zhang0$Clinical.efficacy. <- factor(meta_zhang0$Clinical.efficacy., levels = c("Responder", "Non_responder"))
 
 
 df_zhang <- df_zhang0[meta_zhang0$Tissue == "blood", ]
 meta_zhang <- meta_zhang0[meta_zhang0$Tissue == "blood", ]
+
+
+# df_zhang <- df_zhang0[meta_zhang0$Treatment == "Pre", ]
+# meta_zhang <- meta_zhang0[meta_zhang0$Treatment == "Pre", ]
 
 res.pca <- prcomp(df_zhang)
 
@@ -443,6 +458,192 @@ ggsave(file.path(path_plots, "bioexample_zhang_blood_cts.pdf"),
 
 ```
 
+## Plot cell type correlations
+
+```{r fig.height=8, fig.width=8}
+library(pheatmap)
+
+df_heatmap <- df_zhang0
+meta_heatmap <- meta_zhang0
+
+df_heatmap <- df_heatmap[, !grepl("Mac", colnames(df_heatmap))]
+
+meta_heatmap$Age_Group <- cut_width(meta_heatmap$Age, width = 10)
+
+df_heatmap <- df_heatmap[meta_heatmap$Tissue == "blood", ]
+meta_heatmap <- meta_heatmap[meta_heatmap$Tissue == "blood", ]
+df_heatmap <- df_heatmap[meta_heatmap$Treatment == "Pre", ]
+meta_heatmap <- meta_heatmap[meta_heatmap$Treatment == "Pre", ]
+# meta_heatmap <- meta_heatmap[order(meta_heatmap$Clinical.efficacy.), ]
+# df_heatmap <- df_heatmap[order(meta_heatmap$Clinical.efficacy.), ]
+
+p <- plot_pca(df_heatmap,
+         labels = meta_heatmap$Clinical.efficacy.,
+         # invisible = "quali",
+         sil_score = FALSE,
+         mod_score = FALSE,
+         cluster_score = FALSE, coord_equal = TRUE, labelsize = 3, plotly_3d = FALSE)
+ggsave(file.path(path_plots, "pca_zhang_blood.pdf"),
+       width = 7,
+       height = 7)
+
+
+p <- plot_pca(df_heatmap,
+         labels = meta_heatmap$Clinical.efficacy.,
+         invisible = "quali",
+         sil_score = FALSE,
+         mod_score = FALSE,
+         cluster_score = FALSE, coord_equal = TRUE, labelsize = 3, plotly_3d = FALSE) +
+  scale_color_manual(values = c("#EE0000FF", "#3B4992FF"))
+ggsave(file.path(path_plots, "pca_zhang_blood_arrows.pdf"),
+       plot = p,
+       width = 7,
+       height = 7)
+
+
+
+df_plot <- df_heatmap
+cols <- colnames(df_heatmap)
+df_plot$Clinical.efficacy. <- meta_heatmap$Clinical.efficacy.
+# df_plot <- as.data.frame(t(df_plot))
+pivot_longer(df_plot, cols = cols) %>%
+ ggplot(aes(x = name, y = value, fill = Clinical.efficacy.)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  stat_compare_means(
+    # comparisons = my_comparisons,
+    method = "t.test",
+    # paired = TRUE,
+    # aes(label = sprintf("p = %5.2f", as.numeric(..p.format..))),
+    aes(label = after_stat(p.signif))
+  )
+ggsave(file.path(path_plots, "pca_zhang_blood_boxplot.pdf"),
+       width = 18,
+       height = 4)
+
+
+df_heatmap <- df_heatmap %>% scale(center = TRUE, scale = FALSE)
+df_heatmap <- df_heatmap %>% t() %>% as.data.frame()
+my_sample_col <- list(
+  # Age_bin = as.factor(meta_heatmap$Age_Group),
+  Treatment_response = as.factor(meta_heatmap$Clinical.efficacy.) #,
+  # Treatment_type = as.factor(meta_heatmap$Treatment_type) #,
+  # Timepoint = as.factor(meta_heatmap$Treatment)
+) %>% as.data.frame()
+row.names(my_sample_col) <- meta_heatmap$Sample
+
+
+ann_colors = list(
+    # Vaccination_day = c(Vax = "red", Baseline = "black")
+  # BMI = c(Adipose = "red", Lean = "black")
+  Treatment_response = c("Responder" = "#EE0000FF", "Non_responder" = "#3B4992FF")
+)
+
+p <- pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 5,
+  cutree_cols = 2,
+  annotation_colors = ann_colors
+)
+pdf(file.path(path_plots, "heatmap_zhang_blood_resp_vs_nonresp.pdf"), width=8, height=7)
+grid::grid.newpage()
+grid::grid.draw(p$gtable)
+dev.off()
+
+
+corrplot(cor(t(df_heatmap)), order="hclust")
+corrplot(cor(t(df_heatmap)), order="hclust", hclust.method = c("ward.D2"))
+corrplot(cor(t(df_heatmap)), order="AOE")
+corrplot(cor(t(df_heatmap)), order="FPC")
+```
+
+## CD8 and CD4 subset
+
+```{r fig.height=8, fig.width=8}
+library(pheatmap)
+
+df_heatmap <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = "layer2")
+df_heatmap <- df_heatmap[, !colnames(df_heatmap) %in% c("Neutrophils", "Platelet", "Fibroblast")]
+df_heatmap <- df_heatmap[, grepl("CD8|CD4|gdT", colnames(df_heatmap))]
+df_heatmap <- df_heatmap %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr()
+
+meta_heatmap <- meta_zhang0
+
+meta_heatmap$Age_Group <- cut_width(meta_heatmap$Age, width = 10)
+
+df_heatmap <- df_heatmap[meta_heatmap$Tissue == "blood", ]
+meta_heatmap <- meta_heatmap[meta_heatmap$Tissue == "blood", ]
+df_heatmap <- df_heatmap[meta_heatmap$Treatment == "Pre", ]
+meta_heatmap <- meta_heatmap[meta_heatmap$Treatment == "Pre", ]
+# meta_heatmap <- meta_heatmap[order(meta_heatmap$Clinical.efficacy.), ]
+# df_heatmap <- df_heatmap[order(meta_heatmap$Clinical.efficacy.), ]
+
+plot_pca(df_heatmap,
+         labels = meta_heatmap$Clinical.efficacy.,
+         invisible = "quali",
+         sil_score = TRUE,
+         mod_score = TRUE,
+         cluster_score = TRUE, coord_equal = FALSE, labelsize = 3, plotly_3d = FALSE)
+
+
+df_plot <- df_heatmap
+cols <- colnames(df_heatmap)
+df_plot$Clinical.efficacy. <- meta_heatmap$Clinical.efficacy.
+# df_plot <- as.data.frame(t(df_plot))
+pivot_longer(df_plot, cols = cols) %>%
+ ggplot(aes(x = name, y = value, fill = Clinical.efficacy.)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  stat_compare_means(
+    # comparisons = my_comparisons,
+    method = "t.test",
+    # paired = TRUE,
+    # aes(label = sprintf("p = %5.2f", as.numeric(..p.format..))),
+    aes(label = after_stat(p.signif))
+  )
+
+
+df_heatmap <- df_heatmap %>% scale(center = TRUE, scale = FALSE)
+df_heatmap <- df_heatmap %>% t() %>% as.data.frame()
+my_sample_col <- list(
+  # Age_bin = as.factor(meta_heatmap$Age_Group),
+  Treatment_response = as.factor(meta_heatmap$Clinical.efficacy.) #,
+  # Treatment_type = as.factor(meta_heatmap$Treatment_type) #,
+  # Timepoint = as.factor(meta_heatmap$Treatment)
+) %>% as.data.frame()
+row.names(my_sample_col) <- meta_heatmap$Sample
+
+
+
+p <- pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 4,
+  cutree_cols = 5
+)
+# pdf(file.path(path_plots, "heatmap_gongsharma_ctcomp_subset_hvc.pdf"), width=10, height=5)
+# grid::grid.newpage()
+# grid::grid.draw(p$gtable)
+# dev.off()
+
+
+corrplot(cor(t(df_heatmap)), order="hclust")
+corrplot(cor(t(df_heatmap)), order="hclust", hclust.method = c("ward.D2"))
+corrplot(cor(t(df_heatmap)), order="AOE")
+corrplot(cor(t(df_heatmap)), order="FPC")
+```
+
 
 
 # Zhang tumor
@@ -491,6 +692,192 @@ ggsave(file.path(path_plots, "bioexample_zhang_tumor.pdf"),
        width = 7,
        height = 7)
 ```
+
+
+## Plot cell type correlations
+
+```{r fig.height=8, fig.width=8}
+library(pheatmap)
+
+df_heatmap <- df_zhang0
+meta_heatmap <- meta_zhang0
+
+# df_heatmap <- df_heatmap[, !grepl("Mac", colnames(df_heatmap))]
+
+meta_heatmap$Age_Group <- cut_width(meta_heatmap$Age, width = 10)
+
+df_heatmap <- df_heatmap[meta_heatmap$Tissue == "tumor", ]
+meta_heatmap <- meta_heatmap[meta_heatmap$Tissue == "tumor", ]
+df_heatmap <- df_heatmap[meta_heatmap$Treatment == "Pre", ]
+meta_heatmap <- meta_heatmap[meta_heatmap$Treatment == "Pre", ]
+# meta_heatmap <- meta_heatmap[order(meta_heatmap$Clinical.efficacy.), ]
+# df_heatmap <- df_heatmap[order(meta_heatmap$Clinical.efficacy.), ]
+
+p <- plot_pca(df_heatmap,
+         labels = meta_heatmap$Clinical.efficacy.,
+         # invisible = "quali",
+         sil_score = FALSE,
+         mod_score = FALSE,
+         cluster_score = FALSE, coord_equal = FALSE, labelsize = 3, plotly_3d = FALSE) +
+  scale_color_manual(values = c("#EE0000FF", "#3B4992FF"))
+ggsave(file.path(path_plots, "pca_zhang_tumor.pdf"),
+       width = 5,
+       height = 5)
+
+p <- plot_pca(df_heatmap,
+         labels = meta_heatmap$Clinical.efficacy.,
+         invisible = "quali",
+         sil_score = FALSE,
+         mod_score = FALSE,
+         cluster_score = FALSE, coord_equal = FALSE, labelsize = 3, plotly_3d = FALSE) +
+  scale_color_manual(values = c("#EE0000FF", "#3B4992FF"))
+ggsave(file.path(path_plots, "pca_zhang_tumor_arrows.pdf"),
+       plot = p,
+       width = 7,
+       height = 7)
+
+
+
+df_plot <- df_heatmap
+cols <- colnames(df_heatmap)
+df_plot$Clinical.efficacy. <- meta_heatmap$Clinical.efficacy.
+# df_plot <- as.data.frame(t(df_plot))
+pivot_longer(df_plot, cols = cols) %>%
+ ggplot(aes(x = name, y = value, fill = Clinical.efficacy.)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  stat_compare_means(
+    # comparisons = my_comparisons,
+    method = "t.test",
+    # paired = TRUE,
+    # aes(label = sprintf("p = %5.2f", as.numeric(..p.format..))),
+    aes(label = after_stat(p.signif))
+  )
+ggsave(file.path(path_plots, "pca_zhang_tumor_boxplot.pdf"),
+       width = 18,
+       height = 4)
+
+df_heatmap <- df_heatmap %>% scale(center = TRUE, scale = FALSE)
+df_heatmap <- df_heatmap %>% t() %>% as.data.frame()
+my_sample_col <- list(
+  # Age_bin = as.factor(meta_heatmap$Age_Group),
+  Treatment_response = as.factor(meta_heatmap$Clinical.efficacy.) #,
+  # Treatment_type = as.factor(meta_heatmap$Treatment_type) #,
+  # Timepoint = as.factor(meta_heatmap$Treatment)
+) %>% as.data.frame()
+row.names(my_sample_col) <- meta_heatmap$Sample
+
+
+
+p <- pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 5,
+  cutree_cols = 3
+)
+pdf(file.path(path_plots, "heatmap_zhang_tumor_resp_vs_nonresp.pdf"), width=8, height=7)
+grid::grid.newpage()
+grid::grid.draw(p$gtable)
+dev.off()
+
+
+corrplot(cor(t(df_heatmap)), order="hclust")
+corrplot(cor(t(df_heatmap)), order="hclust", hclust.method = c("ward.D2"))
+corrplot(cor(t(df_heatmap)), order="AOE")
+corrplot(cor(t(df_heatmap)), order="FPC")
+```
+
+
+## CD8 and CD4 subset
+
+```{r fig.height=8, fig.width=8}
+library(pheatmap)
+
+df_heatmap <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = "layer2")
+df_heatmap <- df_heatmap[, !colnames(df_heatmap) %in% c("Neutrophils", "Platelet", "Fibroblast")]
+df_heatmap <- df_heatmap[, grepl("CD8|CD4|gdT", colnames(df_heatmap))]
+df_heatmap <- df_heatmap %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr()
+
+meta_heatmap <- meta_zhang0
+
+meta_heatmap$Age_Group <- cut_width(meta_heatmap$Age, width = 10)
+
+df_heatmap <- df_heatmap[meta_heatmap$Tissue == "tumor", ]
+meta_heatmap <- meta_heatmap[meta_heatmap$Tissue == "tumor", ]
+df_heatmap <- df_heatmap[meta_heatmap$Treatment == "Pre", ]
+meta_heatmap <- meta_heatmap[meta_heatmap$Treatment == "Pre", ]
+# meta_heatmap <- meta_heatmap[order(meta_heatmap$Clinical.efficacy.), ]
+# df_heatmap <- df_heatmap[order(meta_heatmap$Clinical.efficacy.), ]
+
+plot_pca(df_heatmap,
+         labels = meta_heatmap$Clinical.efficacy.,
+         invisible = "quali",
+         sil_score = TRUE,
+         mod_score = TRUE,
+         cluster_score = TRUE, coord_equal = FALSE, labelsize = 3, plotly_3d = FALSE)
+
+
+df_plot <- df_heatmap
+cols <- colnames(df_heatmap)
+df_plot$Clinical.efficacy. <- meta_heatmap$Clinical.efficacy.
+# df_plot <- as.data.frame(t(df_plot))
+pivot_longer(df_plot, cols = cols) %>%
+ ggplot(aes(x = name, y = value, fill = Clinical.efficacy.)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  stat_compare_means(
+    # comparisons = my_comparisons,
+    method = "t.test",
+    # paired = TRUE,
+    # aes(label = sprintf("p = %5.2f", as.numeric(..p.format..))),
+    aes(label = after_stat(p.signif))
+  )
+ggsave(file.path(path_plots, "pca_zhang_blood_cd8cd4_boxplot.pdf"),
+       width = 18,
+       height = 4)
+
+
+
+df_heatmap <- df_heatmap %>% scale(center = TRUE, scale = FALSE)
+df_heatmap <- df_heatmap %>% t() %>% as.data.frame()
+my_sample_col <- list(
+  # Age_bin = as.factor(meta_heatmap$Age_Group),
+  Treatment_response = as.factor(meta_heatmap$Clinical.efficacy.) #,
+  # Treatment_type = as.factor(meta_heatmap$Treatment_type) #,
+  # Timepoint = as.factor(meta_heatmap$Treatment)
+) %>% as.data.frame()
+row.names(my_sample_col) <- meta_heatmap$Sample
+
+
+
+p <- pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 3,
+  cutree_cols = 4
+)
+# pdf(file.path(path_plots, "heatmap_gongsharma_ctcomp_subset_hvc.pdf"), width=10, height=5)
+# grid::grid.newpage()
+# grid::grid.draw(p$gtable)
+# dev.off()
+
+
+corrplot(cor(t(df_heatmap)), order="hclust")
+corrplot(cor(t(df_heatmap)), order="hclust", hclust.method = c("ward.D2"))
+corrplot(cor(t(df_heatmap)), order="AOE")
+corrplot(cor(t(df_heatmap)), order="FPC")
+```
+
 
 
 # Lee
