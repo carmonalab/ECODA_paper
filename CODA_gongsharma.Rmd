@@ -880,7 +880,7 @@ p <- pheatmap(
   treeheight_row = 0,
   show_colnames = FALSE,
   cutree_rows = 4,
-  cutree_cols = 4 ,
+  cutree_cols = 4,
   annotation_colors = ann_colors
   )
 pdf(file.path(path_plots, "heatmap_gongsharma_ctcomp_full.pdf"), width=10, height=10)
@@ -930,10 +930,10 @@ df1 <- feat_mat[col_order, cts[1:17]]
 
 df1 %>%
   prcomp() %>%
-  p_pca(labels = meta$subject.cmv)
+  p_pca(labels = meta$subject.cmv[col_order])
 df1 %>%
   prcomp() %>%
-  p_pca(labels = meta$age)
+  p_pca(labels = meta$age[col_order])
 
 df_heatmap <- df1 %>% scale(center = TRUE, scale = FALSE)
 df_heatmap <- df_heatmap %>% t() %>% as.data.frame()
@@ -1287,13 +1287,19 @@ cor_matrix <- cor(dproc[["L2"]][["clr_0.01perc"]])
 col<- colorRampPalette(c("blue", "white", "red"))(20)
 heatmap(x = cor_matrix)
 
-cor_matrix <- cor(dproc[["L3"]][["clr_0.01perc"]])
-col<- colorRampPalette(c("blue", "white", "red"))(20)
-heatmap(x = cor_matrix)
-
 variances <- apply(dproc[["L3"]][["clr_0.01perc"]], 2, var)
 plot(variances)
+abline(mean(variances))
 hist(variances, breaks = 20)
+```
+
+```{r fig.height=14, fig.width=14}
+cor_matrix <- cor(dproc[["L3"]][["clr_0.01perc"]])
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix, margins = c(15, 15))
+
+corrplot(cor_matrix, order="hclust")
+corrplot(cor_matrix, order="hclust", hclust.method = c("ward.D2"))
 ```
 
 
@@ -1559,6 +1565,72 @@ ggplot(df1, aes(x = Relative_abundance, y = Variance)) +
   labs(title = "Frequency") +
   theme_classic() +
   xlab("Relative abundance (%)") + ylab("Variance")
+```
+
+
+# ---------------------------------------------------------------
+
+# Blood from Terekhova et al.
+
+Single-cell atlas of healthy human blood unveils age-related loss of NKG2C+GZMB−CD8+ memory T cells and accumulation of type 2 memory T cells
+Marina Terekhova1,6 ∙ Amanda Swain1,6 ∙ Pavla Bohacova1,6 ∙ Ekaterina Aladyeva1 ∙ Laura Arthur1 ∙ Anwesha Laha1 ∙ Denis A. Mogilenko1,2 ∙ Samantha Burdess1 ∙ Vladimir Sukhov1,3 ∙ Denis Kleverov1,3 ∙ Barbora Echalar1 ∙ Petr Tsurinov1,4 ∙ Roman Chernyatchik1,5 ∙ Kamila Husarcikova1 ∙ Maxim N. Artyomov1,7 martyomov@wustl.edu Show less
+
+Data from:
+https://www.cell.com/immunity/fulltext/S1074-7613(23)00453-3?_returnURL=https%3A%2F%2Flinkinghub.elsevier.com%2Fretrieve%2Fpii%2FS1074761323004533%3Fshowall%3Dtrue
+
+
+
+## Load data
+
+```{r}
+library(readxl)
+
+df_ter <- data.frame(read_xlsx(file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "data", "TerekhovaM_2023_CellImmu", "mmc7.xlsx")))
+meta_ter <- data.frame(read_xlsx(file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "data", "TerekhovaM_2023_CellImmu", "mmc2.xlsx")))
+
+df_ter <- df_ter[order(df_ter$Donor_id), ]
+meta_ter <- meta_ter[order(meta_ter$Donor_id), ]
+
+identical(df_ter$Donor_id, meta_ter$Donor_id)
+
+meta_ter <- meta_ter[, c("Donor_id", "Gender", "Ethnicity", "Age_group")]
+meta_ter$Age <- df_ter$Age
+meta_ter$BMI <- df_ter$BMI
+meta_ter$Age_bin <- ifelse(meta_ter$Age > 50, ">50", "<=50")
+
+df_ter_lowres <- df_ter[, 8:16]
+
+df_ter[, 17:20] <- df_ter[, 17:20] * df_ter_lowres$Myeloid.cells / 100
+df_ter[, 21:36] <- df_ter[, 21:36] * df_ter_lowres$CD4..T.cells / 100
+df_ter[, 37:48] <- df_ter[, 37:48] * df_ter_lowres$TRAV1.2...CD8..T.cells / 100
+df_ter[, 49:54] <- df_ter[, 49:54] * df_ter_lowres$NK.cells / 100
+df_ter[, 55:59] <- df_ter[, 55:59] * df_ter_lowres$gd.T.cells / 100
+df_ter[, 60:68] <- df_ter[, 60:68] * df_ter_lowres$B.cells / 100
+df_ter_hires <- df_ter[, c(10, 12, 16, 17:(ncol(df_ter)-2))]
+
+
+```
+
+
+```{r fig.height=9, fig.width=9}
+feat_mat <- df_ter_lowres %>%
+  impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+  clr()
+p <- plot_pca(feat_mat, labels = meta_ter$Age_group)
+
+feat_mat <- df_ter_hires %>%
+  impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+  clr()
+p <- plot_pca(feat_mat, labels = meta_ter$Age_group)
+p <- plot_pca(feat_mat, labels = meta_ter$Age_group, invisible = "var", labelsize = 4)
+p <- plot_pca(feat_mat, labels = meta_ter$Age_group, invisible = "none", labelsize = 4)
+
+p <- plot_pca(feat_mat, labels = meta_ter$Age_bin, plotly_3d = TRUE)
+
+
+p <- plot_pca(feat_mat[meta_ter$Age_group %in% c("A", "D", "E"), ], labels = meta_ter$Age_group[meta_ter$Age_group %in% c("A", "D", "E")])
+p <- plot_pca(feat_mat[meta_ter$Age_group %in% c("A", "E"), ], labels = meta_ter$Age_group[meta_ter$Age_group %in% c("A", "E")], invisible = "none", labelsize = 4)
+
 ```
 
 
