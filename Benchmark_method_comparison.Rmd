@@ -98,9 +98,6 @@ rm(obj.list); gc()
 # Convert Seurat object to anndata for interoperability with python
 convert_seurat_to_h5ad(seurat, ds)
 
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-hvg <- seurat@assays[["RNA"]]@var.features
-
 label_col <- "Tissue"
 low_res_ct_col <- "layer1"
 hi_res_ct_col <- "layer2"
@@ -111,7 +108,7 @@ hi_res_ct_col <- "layer2"
 
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
-result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                             label_col,
                                             low_res_ct_col,
                                             hi_res_ct_col,
@@ -161,14 +158,10 @@ seurat <- subset(seurat, subset = sample_id %in% samples_subset)
 
 seurat$Sample <- seurat$sample_id
 
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-hvg <- seurat@assays[["RNA"]]@var.features
-
 # Convert Seurat object to anndata for interoperability with python
 # var_genes <- VariableFeatures(seurat)
 # seurat_df <- GetAssayData(seurat)[var_genes,]
 object <- CreateSeuratObject(counts = seurat@assays$RNA$counts, meta.data = seurat@meta.data[, c("Sample", "initial_clustering")])
-object <- object |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
 object[["RNA3"]] <- as(object = object[["RNA"]], Class = "Assay")
 DefaultAssay(object) <- "RNA3"
 object[["RNA"]] <- NULL
@@ -187,7 +180,7 @@ hi_res_ct_col <- "full_clustering"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                             label_col,
                                             low_res_ct_col,
                                             hi_res_ct_col,
@@ -231,8 +224,6 @@ ds <- "GongSharma_females_cmv"
 seurat <- load_seurat_object("data/gongsharma_cmv_females.h5ad")
 
 seurat$Sample <- seurat$specimen.specimenGuid
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-hvg <- seurat@assays[["RNA"]]@var.features
 
 seurat@version <- obj@version
 
@@ -248,7 +239,7 @@ hi_res_ct_col <- "AIFI_L3"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                             label_col,
                                             low_res_ct_col,
                                             hi_res_ct_col,
@@ -275,8 +266,6 @@ ds <- "GongSharma_females_cmvneg_age"
 seurat <- load_seurat_object("data/gongsharma_age_females_cmvneg.h5ad")
 seurat$Sample <- seurat$specimen.specimenGuid
 seurat$age <- as.factor(ifelse(seurat$sample.subjectAgeAtDraw < 50, "young", "old"))
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-hvg <- seurat@assays[["RNA"]]@var.features
 
 seurat@version <- obj@version
 
@@ -292,7 +281,7 @@ hi_res_ct_col <- "AIFI_L3"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                             label_col,
                                             low_res_ct_col,
                                             hi_res_ct_col,
@@ -330,10 +319,6 @@ path_output <- file.path(path_root, "output")
 ```{r}
 seurat <- readRDS(file.path(path_output, sprintf("%sp_tumor_seurat.rds", ds_name)))
 
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
-hvg <- varf[!is.na(varf)]
-
 label_col <- "condition"
 low_res_ct_col <- "scGate_multi"
 hi_res_ct_col <- "functional.cluster"
@@ -354,7 +339,7 @@ hi_res_ct_col <- "functional.cluster"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                             label_col,
                                             low_res_ct_col,
                                             hi_res_ct_col,
@@ -397,10 +382,6 @@ seurat <- readRDS(file.path(path_output, sprintf("%swhole.rds", ds_name)))
 # Convert Seurat object to anndata for interoperability with python
 convert_seurat_to_h5ad(seurat, ds)
 
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-varf <- seurat@assays[["RNA"]]@var.features
-hvg <- varf[!is.na(varf)]
-
 label_col <- "Tissue"
 low_res_ct_col <- "OriginalAnnotationLevel1"
 hi_res_ct_col <- "OriginalAnnotationLevel3"
@@ -411,7 +392,7 @@ hi_res_ct_col <- "OriginalAnnotationLevel3"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                             label_col,
                                             low_res_ct_col,
                                             hi_res_ct_col,
@@ -459,10 +440,6 @@ seurat$cellSubType[is.na(seurat$cellSubType)] <- seurat$cellType[is.na(seurat$ce
 # Convert Seurat object to anndata for interoperability with python
 convert_seurat_to_h5ad(seurat, ds)
 
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-varf <- seurat@assays[["RNA"]]@var.features
-hvg <- varf[!is.na(varf)]
-
 label_col <- "cohort"
 low_res_ct_col <- "cellType"
 hi_res_ct_col <- "cellSubType"
@@ -473,7 +450,7 @@ hi_res_ct_col <- "cellSubType"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                             label_col,
                                             low_res_ct_col,
                                             hi_res_ct_col,
@@ -511,10 +488,6 @@ path_output <- file.path(path_root, "output")
 ```{r}
 seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
 
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-varf <- seurat@assays[["RNA"]]@var.features
-hvg <- varf[!is.na(varf)]
-
 label_col <- "subtype"
 low_res_ct_col <- "celltype_major"
 hi_res_ct_col <- "celltype_subset"
@@ -534,7 +507,7 @@ hi_res_ct_col <- "celltype_subset"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                             label_col,
                                             low_res_ct_col,
                                             hi_res_ct_col,
@@ -581,10 +554,6 @@ seurat <- subset(stot, subset = stot$OriginalAnnotationLevel1 == "Immune")
 # Convert Seurat object to anndata for interoperability with python
 convert_seurat_to_h5ad(seurat, ds)
 
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-varf <- seurat@assays[["RNA"]]@var.features
-hvg <- varf[!is.na(varf)]
-
 label_col <- "Tissue_compartment"
 low_res_ct_col <- "OriginalAnnotationLevel2"
 hi_res_ct_col <- "OriginalAnnotationLevel3"
@@ -614,7 +583,7 @@ run_benchmark_analysis_test(seurat,
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                             label_col,
                                             low_res_ct_col,
                                             hi_res_ct_col,
@@ -657,10 +626,6 @@ seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
 # Convert Seurat object to anndata for interoperability with python
 convert_seurat_to_h5ad(seurat, ds)
 
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-varf <- seurat@assays[["RNA"]]@var.features
-hvg <- varf[!is.na(varf)]
-
 label_col <- "Condition"
 low_res_ct_col <- "OriginalAnnotationLevel1"
 hi_res_ct_col <- "OriginalAnnotationLevel2"
@@ -671,7 +636,7 @@ hi_res_ct_col <- "OriginalAnnotationLevel2"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                             label_col,
                                             low_res_ct_col,
                                             hi_res_ct_col,
@@ -713,10 +678,6 @@ seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
 # Convert Seurat object to anndata for interoperability with python
 convert_seurat_to_h5ad(seurat, ds)
 
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-varf <- seurat@assays[["RNA"]]@var.features
-hvg <- varf[!is.na(varf)]
-
 label_col <- "Status"
 low_res_ct_col <- "cells"
 hi_res_ct_col <- "cells"
@@ -727,7 +688,7 @@ hi_res_ct_col <- "cells"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                             label_col,
                                             low_res_ct_col,
                                             hi_res_ct_col,
@@ -777,10 +738,6 @@ ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
 
 <!-- # Convert Seurat object to anndata for interoperability with python -->
 <!-- convert_seurat_to_h5ad(seurat, ds) -->
-
-<!-- seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000) -->
-<!-- varf <- seurat@assays[["RNA"]]@var.features -->
-<!-- hvg <- varf[!is.na(varf)] -->
 
 <!-- # label_col <- "TB_status" -->
 <!-- label_col <- "sex" -->
@@ -853,7 +810,7 @@ ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
 <!-- ```{r} -->
 <!-- mrvi_dist_file <- paste0("data/", ds, "_dists.nc") -->
 
-<!-- result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg, -->
+<!-- result_list[[ds]] <- run_benchmark_analysis(seurat, -->
 <!--                                       label_col, -->
 <!--                                       low_res_ct_col, -->
 <!--                                       hi_res_ct_col, -->
@@ -924,11 +881,6 @@ seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
 # Convert Seurat object to anndata for interoperability with python
 convert_seurat_to_h5ad(seurat, ds)
 
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-# varf <- seurat@assays[["RNA"]]@var.features
-varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
-hvg <- varf[!is.na(varf)]
-
 label_col <- "disease__ontology_label"
 low_res_ct_col <- "cell_type__ontology_custom"
 hi_res_ct_col <- "cell_type__ontology_custom"
@@ -958,7 +910,7 @@ run_benchmark_analysis_test(seurat,
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                             label_col,
                                             low_res_ct_col,
                                             hi_res_ct_col,
@@ -1028,11 +980,6 @@ seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
 # Convert Seurat object to anndata for interoperability with python
 convert_seurat_to_h5ad(seurat, ds)
 
-seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-# varf <- seurat@assays[["RNA"]]@var.features
-varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
-hvg <- varf[!is.na(varf)]
-
 label_col <- "disease__ontology_label"
 low_res_ct_col <- "cell_type__ontology_custom"
 hi_res_ct_col <- "cell_type__ontology_custom"
@@ -1062,7 +1009,7 @@ run_benchmark_analysis_test(seurat,
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+result_list[[ds]] <- run_benchmark_analysis(seurat,
                                             label_col,
                                             low_res_ct_col,
                                             hi_res_ct_col,

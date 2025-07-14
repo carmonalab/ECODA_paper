@@ -562,16 +562,18 @@ get_ct_var <- function(df,
 }
 
 
-get_pb <- function(seurat, sample_col = "Sample") {
+get_pb <- function(seurat, sample_col = "Sample", hvg = NULL) {
   pb <- as.matrix(AggregateExpression(seurat, group.by = sample_col, assays = "RNA")[["RNA"]])
   colnames(pb) <- gsub("-", "_", colnames(pb))
+  if(!is.null(hvg)) {
+    pb <- pb[hvg,]
+  }
   return(pb)
 }
 
 
 get_pb_deseq2 <- function(seurat, sample_col = "Sample", hvg) {
-  pb <- get_pb(seurat, sample_col = sample_col)
-  pb_hvg <- pb[hvg,]
+  pb <- get_pb(seurat, sample_col = sample_col, hvg = hvg)
   metadata <- get_metadata(seurat)
   metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
   pb_norm <- t(DESeq2.normalize(pb_hvg, metadata = metadata))
@@ -799,7 +801,7 @@ run_analyses <- function(result_list,
 run_benchmark_analysis <- function(seurat,
                                    sample_col = "Sample",
                                    labels,
-                                   hvg,
+                                   n_hvg = 2000,
                                    low_res_ct_col,
                                    hi_res_ct_col,
                                    factors_test,
@@ -813,12 +815,27 @@ run_benchmark_analysis <- function(seurat,
                                    MOFA = TRUE,
                                    scITD = TRUE,
                                    MrVI = TRUE,
+                                   GloScope = TRUE,
                                    show_pca_plots = FALSE,
                                    save_pca_plots = TRUE) {
   
   res_list <- list()
   metadata <- get_metadata(seurat)
   metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
+  
+  if (Pseudobulk | Pseudobulk_PCA | scITD) {
+    seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = n_hvg)
+
+    if ("var.features" %in% slotNames(seurat@assays[["RNA"]])) {
+      # This path is for older Seurat objects (primarily v2/v3)
+      hvg <- seurat@assays[["RNA"]]@var.features
+    } else if ("var.features" %in% colnames(seurat@assays[["RNA"]]@meta.data)) {
+      varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
+      hvg <- varf[!is.na(varf)]
+    } else {
+      stop("Could not find variable features in expected locations.")
+    }
+  }
   
   # As of Seurat v5, we recommend using AggregateExpression to perform pseudo-bulk analysis.
   # First group.by variable `ident` starts with a number, appending `g` to ensure valid variable names
@@ -906,49 +923,6 @@ run_benchmark_analysis <- function(seurat,
   }
   
   return(res_list)
-}
-
-
-run_benchmark_analysis_test <- function(seurat,
-                                        labels,
-                                        low_res_ct_col,
-                                        hi_res_ct_col) {
-  result_list <- list()
-  
-  # Pseudobulk
-  result_list[["Pseudobulk"]] <- process_pseudobulk_fig(pb_norm, labels)
-  
-  # Deconvolute using EPIC
-  result_list[["ECODA_deconv"]] <- process_deconv_fig(pseudobulk, labels)
-  
-  # CoDA
-  ## layer1: low res. cell types
-  result_list[["ECODA_low_res"]] <- process_coda_fig(seurat, labels, low_res_ct_col, title = "Cell type composition\nlow res.")
-  
-  ## layer2: high res. cell types
-  result_list[["ECODA_high_res"]] <- process_coda_fig(seurat, labels, hi_res_ct_col, title = "Cell type composition\nhigh res.")
-}
-
-
-process_pseudobulk_fig <- function(pb_norm,
-                                   labels,
-                                   pca_dims = NULL,
-                                   title = "Pseudobulk gene expression",
-                                   knn_k = NULL) {
-  if (!is.null(pca_dims)) {
-    res.pca <- prcomp(pb_norm, center = TRUE, scale. = FALSE)
-    feat_mat <- res.pca[["x"]][, 1:pca_dims]
-  } else {
-    feat_mat <- pb_norm
-  }
-  
-  res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, plotly_3d = FALSE, knn_k = knn_k, title = title)
-  res[["scores"]] <- calc_sep_score(feat_mat, labels)
-  res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- as.matrix(dist(feat_mat))
-  
-  return(res)
 }
 
 
