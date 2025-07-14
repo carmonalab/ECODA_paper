@@ -85,7 +85,7 @@ for (i in samples_clearcut) {
   obj <- obj.list[[i]]
   Idents(obj) <- "Sample"
   obj@meta.data <- obj@meta.data[colnames(obj@assays$RNA$counts), metacols_to_keep]
-
+  
   if (i == samples_clearcut[1]) {
     seurat <- obj
   } else {
@@ -111,12 +111,12 @@ hi_res_ct_col <- "layer2"
 
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
-result_list[[ds]] <- run_benchmark_analysis(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
+result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+                                            label_col,
+                                            low_res_ct_col,
+                                            hi_res_ct_col,
+                                            factors_test,
+                                            mrvi_dist_file)
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
 ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
@@ -127,8 +127,6 @@ ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
 
 
 # ---------------------------------------------------------------
-
-# TODO MRVI
 
 # Stephenson et al. dataset
 
@@ -189,12 +187,12 @@ hi_res_ct_col <- "full_clustering"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
+result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+                                            label_col,
+                                            low_res_ct_col,
+                                            hi_res_ct_col,
+                                            factors_test,
+                                            mrvi_dist_file)
 
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
@@ -250,12 +248,12 @@ hi_res_ct_col <- "AIFI_L3"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
+result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+                                            label_col,
+                                            low_res_ct_col,
+                                            hi_res_ct_col,
+                                            factors_test,
+                                            mrvi_dist_file)
 
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
@@ -294,12 +292,12 @@ hi_res_ct_col <- "AIFI_L3"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
+result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+                                            label_col,
+                                            low_res_ct_col,
+                                            hi_res_ct_col,
+                                            factors_test,
+                                            mrvi_dist_file)
 
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
@@ -356,12 +354,12 @@ hi_res_ct_col <- "functional.cluster"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
+result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+                                            label_col,
+                                            low_res_ct_col,
+                                            hi_res_ct_col,
+                                            factors_test,
+                                            mrvi_dist_file)
 
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
@@ -413,12 +411,12 @@ hi_res_ct_col <- "OriginalAnnotationLevel3"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
+result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+                                            label_col,
+                                            low_res_ct_col,
+                                            hi_res_ct_col,
+                                            factors_test,
+                                            mrvi_dist_file)
 
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
@@ -475,12 +473,12 @@ hi_res_ct_col <- "cellSubType"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
+result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+                                            label_col,
+                                            low_res_ct_col,
+                                            hi_res_ct_col,
+                                            factors_test,
+                                            mrvi_dist_file)
 
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
@@ -536,12 +534,12 @@ hi_res_ct_col <- "celltype_subset"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
+result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+                                            label_col,
+                                            low_res_ct_col,
+                                            hi_res_ct_col,
+                                            factors_test,
+                                            mrvi_dist_file)
 
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
@@ -555,8 +553,6 @@ ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
 
 
 # ---------------------------------------------------------------
-
-# TODO MRVI
 
 # Smillie et al. dataset
 
@@ -609,21 +605,21 @@ pseudobulk_hvg <- pseudobulk[hvg,]
 pb_norm <- t(DESeq2.normalize(pseudobulk_hvg, metadata))
 
 run_benchmark_analysis_test(seurat,
-                      labels,
-                      low_res_ct_col,
-                      hi_res_ct_col)
+                            labels,
+                            low_res_ct_col,
+                            hi_res_ct_col)
 ```
 
 
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
+result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+                                            label_col,
+                                            low_res_ct_col,
+                                            hi_res_ct_col,
+                                            factors_test,
+                                            mrvi_dist_file)
 
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
@@ -637,8 +633,6 @@ ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
 
 
 # ---------------------------------------------------------------
-
-# TODO MRVI
 
 # Adams et al. dataset
 # Has also other non-immune cells
@@ -677,13 +671,13 @@ hi_res_ct_col <- "OriginalAnnotationLevel2"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file,
-                                      ECODA_deconv = FALSE)
+result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+                                            label_col,
+                                            low_res_ct_col,
+                                            hi_res_ct_col,
+                                            factors_test,
+                                            mrvi_dist_file,
+                                            ECODA_deconv = FALSE)
 
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
@@ -696,8 +690,6 @@ ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
 
 
 # ---------------------------------------------------------------
-
-# TODO MRVI
 
 # Kfoury et al. dataset
 
@@ -718,10 +710,6 @@ path_output <- file.path(path_root, "output")
 ```{r}
 seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
 
-# stot <- seurat
-# tcells <- unique(seurat$celltype_subset)[grepl(pattern = "T_cells", x = unique(seurat$celltype_subset))]
-# seurat <- subset(stot, subset = celltype_subset %in% tcells)
-
 # Convert Seurat object to anndata for interoperability with python
 convert_seurat_to_h5ad(seurat, ds)
 
@@ -739,12 +727,12 @@ hi_res_ct_col <- "cells"
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
+result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+                                            label_col,
+                                            low_res_ct_col,
+                                            hi_res_ct_col,
+                                            factors_test,
+                                            mrvi_dist_file)
 
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
@@ -865,7 +853,7 @@ ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
 <!-- ```{r} -->
 <!-- mrvi_dist_file <- paste0("data/", ds, "_dists.nc") -->
 
-<!-- result_list[[ds]] <- run_benchmark_analysis(seurat, -->
+<!-- result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg, -->
 <!--                                       label_col, -->
 <!--                                       low_res_ct_col, -->
 <!--                                       hi_res_ct_col, -->
@@ -961,21 +949,21 @@ pseudobulk_hvg <- pseudobulk[hvg,]
 pb_norm <- t(DESeq2.normalize(pseudobulk_hvg, metadata))
 
 run_benchmark_analysis_test(seurat,
-                      labels,
-                      low_res_ct_col,
-                      hi_res_ct_col)
+                            labels,
+                            low_res_ct_col,
+                            hi_res_ct_col)
 ```
 
 
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
+result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+                                            label_col,
+                                            low_res_ct_col,
+                                            hi_res_ct_col,
+                                            factors_test,
+                                            mrvi_dist_file)
 
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
@@ -1065,21 +1053,21 @@ pseudobulk_hvg <- pseudobulk[hvg,]
 pb_norm <- t(DESeq2.normalize(pseudobulk_hvg, metadata))
 
 run_benchmark_analysis_test(seurat,
-                      labels,
-                      low_res_ct_col,
-                      hi_res_ct_col)
+                            labels,
+                            low_res_ct_col,
+                            hi_res_ct_col)
 ```
 
 
 ```{r}
 mrvi_dist_file <- paste0("data/", ds, "_dists.nc")
 
-result_list[[ds]] <- run_benchmark_analysis(seurat,
-                                      label_col,
-                                      low_res_ct_col,
-                                      hi_res_ct_col,
-                                      factors_test,
-                                      mrvi_dist_file)
+result_list[[ds]] <- run_benchmark_analysis(seurat, hvg = hvg,
+                                            label_col,
+                                            low_res_ct_col,
+                                            hi_res_ct_col,
+                                            factors_test,
+                                            mrvi_dist_file)
 
 plot_list <- lapply(result_list[[ds]], function(method) method[["plot"]])
 p <- cowplot::plot_grid(plotlist = plot_list)
@@ -1198,9 +1186,9 @@ ggplot(df_results, aes(x = method, y = value)) +
   facet_grid(score ~ dataset,
              scales = "free",
              labeller = labeller(score = score.labs, dataset = datas.labs))
-  # facet_grid(scales = "free",
-  #            labeller = labeller(score = score.labs, dataset = datas.labs),
-  #            rows = vars(score), cols = vars(dataset))
+# facet_grid(scales = "free",
+#            labeller = labeller(score = score.labs, dataset = datas.labs),
+#            rows = vars(score), cols = vars(dataset))
 ggsave(file.path(path_plots, "benchmark_detailed_barplot.pdf"),
        width = 10,
        height = 6)
