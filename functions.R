@@ -541,7 +541,6 @@ get_ct_comp_df_seurat <- function(seurat, sample_col, ct_col) {
 get_ct_var <- function(df,
                        show_plot = TRUE,
                        plot_title = "") {
-  
   df_var <- df %>%
     pivot_longer(
       cols = everything(),
@@ -561,6 +560,24 @@ get_ct_var <- function(df,
   
   return(df_var)
 }
+
+
+get_pb <- function(seurat, sample_col = "Sample") {
+  pb <- as.matrix(AggregateExpression(seurat, group.by = sample_col, assays = "RNA")[["RNA"]])
+  colnames(pb) <- gsub("-", "_", colnames(pb))
+  return(pb)
+}
+
+
+get_pb_deseq2 <- function(seurat, sample_col = "Sample", hvg) {
+  pb <- get_pb(seurat, sample_col = sample_col)
+  pb_hvg <- pb[hvg,]
+  metadata <- get_metadata(seurat)
+  metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
+  pb_norm <- t(DESeq2.normalize(pb_hvg, metadata = metadata))
+  return(pb_norm)
+}
+
 
 varmeanplot <- function(data, title) {
   
@@ -780,7 +797,9 @@ run_analyses <- function(result_list,
 
 #----------------------------------------------------------->
 run_benchmark_analysis <- function(seurat,
+                                   sample_col = "Sample",
                                    labels,
+                                   hvg,
                                    low_res_ct_col,
                                    hi_res_ct_col,
                                    factors_test,
@@ -799,24 +818,21 @@ run_benchmark_analysis <- function(seurat,
   
   res_list <- list()
   metadata <- get_metadata(seurat)
-  metadata$Sample <- gsub("-", "_", metadata$Sample)
+  metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
   
   # As of Seurat v5, we recommend using AggregateExpression to perform pseudo-bulk analysis.
   # First group.by variable `ident` starts with a number, appending `g` to ensure valid variable names
   # This message is displayed once per session.
-  sample_names_starting_with_digit <- grepl("^\\d", unique(seurat$Sample))
+  sample_names_starting_with_digit <- grepl("^\\d", unique(seurat[[sample_col]]))
   if (any(sample_names_starting_with_digit)) {
-    seurat$Sample[grepl("^\\d", seurat$Sample)] <- paste0("g", seurat$Sample[grepl("^\\d", seurat$Sample)])
+    seurat[[sample_col]][grepl("^\\d", seurat[[sample_col]])] <- paste0("g", seurat[[sample_col]][grepl("^\\d", seurat[[sample_col]])])
   }
   
   # Required for MOFA to run
   seurat@version <- package_version('3.1.5')
   
   if (Pseudobulk | Pseudobulk_PCA) {
-    pseudobulk <- as.matrix(AggregateExpression(seurat, group.by = "Sample", assays = "RNA")[["RNA"]])
-    colnames(pseudobulk) <- gsub("-", "_", colnames(pseudobulk))
-    pseudobulk_hvg <- pseudobulk[hvg,]
-    pb_norm <- t(DESeq2.normalize(pseudobulk_hvg, metadata))
+    pb_norm <- get_pb_deseq2(seurat, sample_col = "Sample", hvg = hvg)
   }
   
   if (Pseudobulk) {
@@ -956,6 +972,7 @@ process_deconv_fig <- function(pseudobulk,
 
 
 process_coda_fig <- function(seurat,
+                             feat_mat = NULL,
                              labels,
                              pca_dims = NULL,
                              ct_col,
@@ -964,12 +981,14 @@ process_coda_fig <- function(seurat,
                              clr_zero_impute_method = "percentage_all",
                              clr_zero_impute_num = 0.1) {
   
-  df_counts <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col)
-  
-  feat_mat <- df_counts %>%
-    impute_zeros(clr_zero_impute_method = clr_zero_impute_method, clr_zero_impute_num = clr_zero_impute_num) %>%
-    calc_perc_df() %>%
-    clr()
+  if (is.null(feat_mat)) {
+    df_counts <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col)
+    
+    feat_mat <- df_counts %>%
+      impute_zeros(clr_zero_impute_method = clr_zero_impute_method, clr_zero_impute_num = clr_zero_impute_num) %>%
+      calc_perc_df() %>%
+      clr()
+  }
   
   if (!is.null(pca_dims)) {
     res.pca <- prcomp(feat_mat, center = TRUE, scale. = FALSE)
