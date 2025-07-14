@@ -78,11 +78,11 @@ res_broad <- c(0.1, 0.5, 1, 2, 5, 10, 20, 50, 100)
 res_broad_2sub <- c() # c(0.1, 0.5)
 res_sub <- c() # c(0.1)
 
+# Fractions of highly variable cell types (hvc) to use. Number if int > 1, fraction if < 1
+hvc_fracs <- c(5, 10, 20, 0.1, 0.2, 0.5, 0.8, 1)
 
 res_list <- list()
 
-p <- NULL
-res_list[[paste0("authors", "_PCAdims_", p)]] <- process_coda_fig(seurat, labels = labels, ct_col = seurat@misc$hi_res_ct_col, title = "authors", pca_dims = p)
 
 pca_dims <- c(2, 3, 5, 10)
 
@@ -105,6 +105,10 @@ for (p in pca_dims) {
   }
 }
 
+p <- NULL
+res_list[[paste0("authors", "_PCAdims_", p)]] <- process_coda_fig(seurat, labels = labels, ct_col = seurat@misc$hi_res_ct_col, title = "authors", pca_dims = p)
+
+
 for (rb in res_broad){
   res_list[[paste0(as.character(rb), "_PCAdims_", p)]] <- process_coda_fig(seurat, labels = labels, ct_col = paste0("RNA_snn_res.", as.character(rb)), title = paste0(as.character(rb), "_PCAdims_", p), pca_dims = p)
   
@@ -118,7 +122,28 @@ for (rb in res_broad){
         title = paste0(subcluster_col_name, "_PCAdims_", p), pca_dims = p)
     }
   }
+  
+  df <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = paste0("RNA_snn_res.", as.character(rb))) %>%
+    impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+    calc_perc_df() %>%
+    clr()
+  df_var <- get_ct_var(df, show_plot = FALSE)
+  df_var <- df_var[order(df_var$Variance, decreasing = TRUE), ]
+  
+  for (hvcf in hvc_fracs) {
+    if (hvcf > 1) {
+      nhvc <- hvcf
+    } else if (hvcf <= 1) {
+      nhvc <- round(nrow(df_var) * hvcf)
+    }
+    if (nhvc > ncol(df) | nhvc == 1) {next}
+    
+    feat_mat <- df[, df_var$celltype[1:nhvc]]
+    
+    res_list[[paste0(as.character(rb), "nhvc", nhvc, "_PCAdims_", p)]] <- process_coda_fig(feat_mat = feat_mat, labels = labels, title = paste0(as.character(rb), "nhvc", nhvc, "_PCAdims_", p), pca_dims = NULL)
+  }
 }
+
 ```
 
 # Plot results
@@ -158,101 +183,159 @@ df_results <- imap_dfr(res_list, ~ {
 
 ## Plot results
 
-```{r fig.height=8, fig.width=20}
-levs <- str_sort(as.character(unique(df_results$method)), numeric = TRUE)
-# levs <- c(
-#   "ECODA_high_res",
-#   "ECODA_high_res_2_PCA_dims",
-#   "ECODA_high_res_5_PCA_dims",
-#   "ECODA_high_res_10_PCA_dims",
-#   "ECODA_low_res"
-# )
+```{r fig.height=6, fig.width=10}
+library(scales)
 
-df_results$method <- factor(df_results$method, levels = levs)
+df1 <- df_results %>%
+  filter(score == "cluster_score",
+         !grepl("nhvc", method)) %>%
+  mutate(PCA = ifelse(endsWith(method, "_"), "raw", "PCA")) %>%
+  separate(method, into = c("label_col", "dummy"), sep = "_", extra = "merge", remove = FALSE) %>%
+  separate(method, into = c("method1", "method2"), sep = "_", extra = "merge") %>%
+  unite(new_column, method1, "PCA", sep = "_")
+df1$new_column[grepl("raw", df1$new_column)] <- "raw"
+levs <- str_sort(as.character(unique(df1$new_column)), numeric = TRUE)
+df1$new_column <- factor(df1$new_column, levels = levs)
 
-df_results_clustering <- df_results %>%
-  filter(score == "cluster_score") %>%
-  group_by(method) %>%
-  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value)))
-
-# df_results_clustering <- df_results_clustering %>%
-#   arrange(desc(mean))
-df_results_clustering$method <- factor(df_results_clustering$method, levels = df_results_clustering$method)
-
-df_results$method <- factor(df_results$method, levels = df_results_clustering$method)
-
-
-df_results_modularity <- df_results %>%
-  filter(score == "mod_score") %>%
-  group_by(method) %>%
-  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value)))
-
-df_results_modularity <- df_results_modularity %>%
-  arrange(desc(mean))
-df_results_modularity$method <- factor(df_results_modularity$method, levels = df_results_modularity$method)
-
-
-
-ggplot(df_results, aes(x = method, y = value)) +
-  geom_bar(stat = "identity", position = position_dodge()) +
-  labs(x = "",
-       y = "Separation") +
+ggplot(df1, aes(x = n_features)) + # Remove group=score from global aes if you want lines by method1
+  geom_line(aes(y = value, color = new_column, linetype = score), alpha = 1, linewidth = 1.5) +
+    geom_text(
+    data = . %>% filter(grepl("raw", new_column)), # Filter the data here
+    aes(y = value, label = label_col, color = new_column), # Map label and color
+    vjust = -0.8, # Adjust vertical position of labels
+    hjust = 0.5,  # Adjust horizontal position
+    size = 3.5,   # Label font size
+    show.legend = FALSE # Don't add a redundant legend for the labels
+  ) +
+  labs(x = "Number of features (log2 scale)", y = "Separation score") + # Adjusted y-axis label to match primary
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
-        legend.position = "none")
+        axis.title.y.left = element_text(color = "black"), # Default color for primary axis label
+        axis.title.y.right = element_text(color = "darkgrey")) + # Match color for secondary axis label
+  scale_x_continuous(trans = "log2",
+                     breaks = trans_breaks("log2", function(x) 2^x, n=10),
+                     labels = label_number()) + # Changed to 10^exponent format
+  # Add a color scale if you mapped method1 to color
+  scale_color_discrete(name = "Method 1 Type") +
+  ggtitle("Cluster score")
 
-scale_coeff <- max(df_results$n_features) / max(df_results$value)
 
-df_results %>%
-  filter(str_ends(method, "_")) %>%
-  ggplot(aes(x = method, group=score)) +
-  geom_line(aes(y = value, linetype=score), alpha = 1, color = "steelblue") +
-  labs(x = "", y = "Separation score") +
+
+df1 <- df_results %>%
+  filter(score == "mod_score",
+         !grepl("nhvc", method)) %>%
+  mutate(PCA = ifelse(endsWith(method, "_"), "raw", "PCA")) %>%
+  separate(method, into = c("label_col", "dummy"), sep = "_", extra = "merge", remove = FALSE) %>%
+  separate(method, into = c("method1", "method2"), sep = "_", extra = "merge") %>%
+  unite(new_column, method1, "PCA", sep = "_")
+df1$new_column[grepl("raw", df1$new_column)] <- "raw"
+levs <- str_sort(as.character(unique(df1$new_column)), numeric = TRUE)
+df1$new_column <- factor(df1$new_column, levels = levs)
+
+ggplot(df1, aes(x = n_features)) + # Remove group=score from global aes if you want lines by method1
+  geom_line(aes(y = value, color = new_column, linetype = score), alpha = 1, linewidth = 1.5) +
+    geom_text(
+    data = . %>% filter(grepl("raw", new_column)), # Filter the data here
+    aes(y = value, label = label_col, color = new_column), # Map label and color
+    vjust = -0.8, # Adjust vertical position of labels
+    hjust = 0.5,  # Adjust horizontal position
+    size = 3.5,   # Label font size
+    show.legend = FALSE # Don't add a redundant legend for the labels
+  ) +
+  labs(x = "Number of features (log2 scale)", y = "Separation score") + # Adjusted y-axis label to match primary
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-  geom_line(aes(y = n_features / scale_coeff)) + # Divide by 10 to get the same range than the temperature
-  
-  scale_y_continuous(
-    
-    # Features of the first axis
-    name = "Separation score",
-    
-    # Add a second axis and specify its features
-    sec.axis = sec_axis(~.*scale_coeff, name="Number of features\n(#cell types or #PCA_dims")
-  )
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.title.y.left = element_text(color = "black"), # Default color for primary axis label
+        axis.title.y.right = element_text(color = "darkgrey")) + # Match color for secondary axis label
+  scale_x_continuous(trans = "log2",
+                     breaks = trans_breaks("log2", function(x) 2^x, n=10),
+                     labels = label_number()) + # Changed to 10^exponent format
+  # Add a color scale if you mapped method1 to color
+  scale_color_discrete(name = "Method 1 Type") +
+  ggtitle("Modularity score")
 
 
-df_results %>%
-  group_by(score, method) %>%
-  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
-  ungroup() %>%
 
-  ggplot(aes(x = method, y = mean)) +
-  geom_bar(stat = "identity", position = position_dodge()) +
-  geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
-  labs(x = "", y = "") +
+df1 <- df_results %>%
+  filter(score == "sil_score",
+         !grepl("nhvc", method)) %>%
+  mutate(PCA = ifelse(endsWith(method, "_"), "raw", "PCA")) %>%
+  separate(method, into = c("label_col", "dummy"), sep = "_", extra = "merge", remove = FALSE) %>%
+  separate(method, into = c("method1", "method2"), sep = "_", extra = "merge") %>%
+  unite(new_column, method1, "PCA", sep = "_")
+df1$new_column[grepl("raw", df1$new_column)] <- "raw"
+levs <- str_sort(as.character(unique(df1$new_column)), numeric = TRUE)
+df1$new_column <- factor(df1$new_column, levels = levs)
+
+ggplot(df1, aes(x = n_features)) + # Remove group=score from global aes if you want lines by method1
+  geom_line(aes(y = value, color = new_column, linetype = score), alpha = 1, linewidth = 1.5) +
+    geom_text(
+    data = . %>% filter(grepl("raw", new_column)), # Filter the data here
+    aes(y = value, label = label_col, color = new_column), # Map label and color
+    vjust = -0.8, # Adjust vertical position of labels
+    hjust = 0.5,  # Adjust horizontal position
+    size = 3.5,   # Label font size
+    show.legend = FALSE # Don't add a redundant legend for the labels
+  ) +
+  labs(x = "Number of features (log2 scale)", y = "Separation score") + # Adjusted y-axis label to match primary
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.title.y.left = element_text(color = "black"), # Default color for primary axis label
+        axis.title.y.right = element_text(color = "darkgrey")) + # Match color for secondary axis label
+  scale_x_continuous(trans = "log2",
+                     breaks = trans_breaks("log2", function(x) 2^x, n=10),
+                     labels = label_number()) + # Changed to 10^exponent format
+  # Add a color scale if you mapped method1 to color
+  scale_color_discrete(name = "Method 1 Type") +
+  ggtitle("Silhouette score")
 
 
-scale_coeff <- max(df_results$n_features) / max(df_results$value)
 
-ggplot(df_results, aes(x = method, group=score)) +
-  geom_line(aes(y = value, linetype=score), alpha = 1, color = "steelblue") +
-  labs(x = "", y = "Separation score") +
+df1 <- df_results %>%
+  filter(score == "cluster_score",
+         grepl("nhvc", method)) %>%
+  mutate(PCA = !endsWith(method, "_")) %>%
+  separate(method, into = c("method1", "method2"), sep = "nhvc", extra = "merge")
+levs <- str_sort(as.character(unique(df1$method1)), numeric = TRUE)
+df1$method1 <- factor(df1$method1, levels = levs)
+
+ggplot(df1, aes(x = n_features)) + # Remove group=score from global aes if you want lines by method1
+  geom_line(aes(y = value, color = method1, linetype = score), alpha = 1, linewidth = 1.5) +
+  labs(x = "Number of features (log2 scale)", y = "Separation score") + # Adjusted y-axis label to match primary
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-  geom_line(aes(y = n_features / scale_coeff)) + # Divide by 10 to get the same range than the temperature
-  
-  scale_y_continuous(
-    
-    # Features of the first axis
-    name = "Separation score",
-    
-    # Add a second axis and specify its features
-    sec.axis = sec_axis(~.*scale_coeff, name="Number of features\n(#cell types or #PCA_dims")
-  )
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.title.y.left = element_text(color = "black"), # Default color for primary axis label
+        axis.title.y.right = element_text(color = "darkgrey")) + # Match color for secondary axis label
+  scale_x_continuous(trans = "log2",
+                     breaks = trans_breaks("log2", function(x) 2^x, n=10),
+                     labels = label_number()) + # Changed to 10^exponent format
+  # Add a color scale if you mapped method1 to color
+  scale_color_discrete(name = "Method 1 Type") +
+  ggtitle("Based on highly variable cell types")
 
+
+
+df1 <- df_results %>%
+  filter(score == "mod_score",
+         grepl("nhvc", method)) %>%
+  mutate(PCA = !endsWith(method, "_")) %>%
+  separate(method, into = c("method1", "method2"), sep = "nhvc", extra = "merge")
+levs <- str_sort(as.character(unique(df1$method1)), numeric = TRUE)
+df1$method1 <- factor(df1$method1, levels = levs)
+
+ggplot(df1, aes(x = n_features)) + # Remove group=score from global aes if you want lines by method1
+  geom_line(aes(y = value, color = method1, linetype = score), alpha = 1, linewidth = 1.5) +
+  labs(x = "Number of features (log2 scale)", y = "Separation score") + # Adjusted y-axis label to match primary
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.title.y.left = element_text(color = "black"), # Default color for primary axis label
+        axis.title.y.right = element_text(color = "darkgrey")) + # Match color for secondary axis label
+  scale_x_continuous(trans = "log2",
+                     breaks = trans_breaks("log2", function(x) 2^x, n=10),
+                     labels = label_number()) + # Changed to 10^exponent format
+  # Add a color scale if you mapped method1 to color
+  scale_color_discrete(name = "Method 1 Type") +
+  ggtitle("Based on highly variable cell types")
 ```
 
 
@@ -342,15 +425,13 @@ seurat@misc$label_col <- "Status"
 seurat@misc$low_res_ct_col <- "initial_clustering"
 seurat@misc$hi_res_ct_col <- "full_clustering"
 
-dims <- 1:30
-
 seurat <- seurat |>
   NormalizeData() |>
   FindVariableFeatures(nfeatures = 2000) |>
   ScaleData() |>
   RunPCA(verbose = FALSE) |>
-  FindNeighbors(dims = dims) |>
-  RunUMAP(dims = dims)
+  FindNeighbors() # |>
+  # RunUMAP()
 
 labels <- get_labels(seurat, seurat@misc$label_col)
 ```
@@ -366,6 +447,13 @@ seurat <- FindClusters_multi(seurat)
 # Plot bio separation
 
 ```{r}
+res_broad <- c(0.1, 0.5, 1, 2, 5, 10, 20, 50, 100)
+res_broad_2sub <- c() # c(0.1, 0.5)
+res_sub <- c() # c(0.1)
+
+# Fractions of highly variable cell types (hvc) to use. Number if int > 1, fraction if < 1
+hvc_fracs <- c(5, 10, 20, 0.1, 0.2, 0.5, 0.8, 1)
+
 res_list <- list()
 
 
@@ -393,6 +481,7 @@ for (p in pca_dims) {
 p <- NULL
 res_list[[paste0("authors", "_PCAdims_", p)]] <- process_coda_fig(seurat, labels = labels, ct_col = seurat@misc$hi_res_ct_col, title = "authors", pca_dims = p)
 
+
 for (rb in res_broad){
   res_list[[paste0(as.character(rb), "_PCAdims_", p)]] <- process_coda_fig(seurat, labels = labels, ct_col = paste0("RNA_snn_res.", as.character(rb)), title = paste0(as.character(rb), "_PCAdims_", p), pca_dims = p)
   
@@ -406,8 +495,42 @@ for (rb in res_broad){
         title = paste0(subcluster_col_name, "_PCAdims_", p), pca_dims = p)
     }
   }
+  
+  df <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = paste0("RNA_snn_res.", as.character(rb))) %>%
+    impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+    calc_perc_df() %>%
+    clr()
+  df_var <- get_ct_var(df, show_plot = FALSE)
+  df_var <- df_var[order(df_var$Variance, decreasing = TRUE), ]
+  
+  for (hvcf in hvc_fracs) {
+    if (hvcf > 1) {
+      nhvc <- hvcf
+    } else if (hvcf <= 1) {
+      nhvc <- round(nrow(df_var) * hvcf)
+    }
+    if (nhvc > ncol(df) | nhvc == 1) {next}
+    
+    feat_mat <- df[, df_var$celltype[1:nhvc]]
+    
+    res_list[[paste0(as.character(rb), "nhvc", nhvc, "_PCAdims_", p)]] <- process_coda_fig(feat_mat = feat_mat, labels = labels, title = paste0(as.character(rb), "nhvc", nhvc, "_PCAdims_", p), pca_dims = NULL)
+  }
 }
+
 ```
+
+```{r}
+df <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = "RNA_snn_res.100") %>%
+  impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+  calc_perc_df() %>%
+  clr()
+
+process_coda_fig(feat_mat = df, labels = get_labels(seurat, "Status_on_day_collection_summary"), title = "", pca_dims = NULL)
+
+plot_pca(df, get_labels(seurat, "Status_on_day_collection_summary"), plotly_3d = TRUE)
+```
+
+
 
 # Plot results
 
@@ -443,62 +566,164 @@ df_results <- imap_dfr(res_list, ~ {
 
 ## Plot results
 
-```{r fig.height=8, fig.width=20}
-levs <- str_sort(as.character(unique(df_results$method)), numeric = TRUE)
+```{r fig.height=6, fig.width=10}
+library(scales)
 
-df_results$method <- factor(df_results$method, levels = levs)
+df1 <- df_results %>%
+  filter(score == "cluster_score",
+         !grepl("nhvc", method)) %>%
+  mutate(PCA = ifelse(endsWith(method, "_"), "raw", "PCA")) %>%
+  separate(method, into = c("label_col", "dummy"), sep = "_", extra = "merge", remove = FALSE) %>%
+  separate(method, into = c("method1", "method2"), sep = "_", extra = "merge") %>%
+  unite(new_column, method1, "PCA", sep = "_")
+df1$new_column[grepl("raw", df1$new_column)] <- "raw"
+levs <- str_sort(as.character(unique(df1$new_column)), numeric = TRUE)
+df1$new_column <- factor(df1$new_column, levels = levs)
 
-
-
-
-scale_coeff <- max(df_results$n_features) / max(df_results$value)
-
-df_results %>%
-  filter(str_ends(method, "_")) %>%
-  ggplot(aes(x = method, group=score)) +
-  # geom_boxplot(outlier.shape = NA) +
-  # geom_point(aes(shape = dataset), size = 2) +
-  # scale_shape_manual(values=1:length(unique((df_results$dataset)))) +
-  geom_line(aes(y = value, linetype=score), alpha = 1, color = "steelblue") +
-  # geom_point(position = position_jitterdodge()) +
-  labs(x = "", y = "Separation score") +
+ggplot(df1, aes(x = n_features)) + # Remove group=score from global aes if you want lines by method1
+  geom_line(aes(y = value, color = new_column, linetype = score), alpha = 1, linewidth = 1.5) +
+    geom_text(
+    data = . %>% filter(grepl("raw", new_column)), # Filter the data here
+    aes(y = value, label = label_col, color = new_column), # Map label and color
+    vjust = -0.8, # Adjust vertical position of labels
+    hjust = 0.5,  # Adjust horizontal position
+    size = 3.5,   # Label font size
+    show.legend = FALSE # Don't add a redundant legend for the labels
+  ) +
+  labs(x = "Number of features (log2 scale)", y = "Separation score") + # Adjusted y-axis label to match primary
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-  geom_line(aes(y = n_features / scale_coeff)) + # Divide by 10 to get the same range than the temperature
-  
-  scale_y_continuous(
-    
-    # Features of the first axis
-    name = "Separation score",
-    
-    # Add a second axis and specify its features
-    sec.axis = sec_axis(~.*scale_coeff, name="Number of features\n(#cell types or #PCA_dims")
-  )
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.title.y.left = element_text(color = "black"), # Default color for primary axis label
+        axis.title.y.right = element_text(color = "darkgrey")) + # Match color for secondary axis label
+  scale_x_continuous(trans = "log2",
+                     breaks = trans_breaks("log2", function(x) 2^x, n=10),
+                     labels = label_number()) + # Changed to 10^exponent format
+  # Add a color scale if you mapped method1 to color
+  scale_color_discrete(name = "Method 1 Type") +
+  ggtitle("Cluster score")
 
 
 
-scale_coeff <- max(df_results$n_features) / max(df_results$value)
+df1 <- df_results %>%
+  filter(score == "mod_score",
+         !grepl("nhvc", method)) %>%
+  mutate(PCA = ifelse(endsWith(method, "_"), "raw", "PCA")) %>%
+  separate(method, into = c("label_col", "dummy"), sep = "_", extra = "merge", remove = FALSE) %>%
+  separate(method, into = c("method1", "method2"), sep = "_", extra = "merge") %>%
+  unite(new_column, method1, "PCA", sep = "_")
+df1$new_column[grepl("raw", df1$new_column)] <- "raw"
+levs <- str_sort(as.character(unique(df1$new_column)), numeric = TRUE)
+df1$new_column <- factor(df1$new_column, levels = levs)
 
-ggplot(df_results, aes(x = method, group=score)) +
-  geom_line(aes(y = value, linetype=score), alpha = 1, color = "steelblue") +
-  labs(x = "", y = "Separation score") +
+ggplot(df1, aes(x = n_features)) + # Remove group=score from global aes if you want lines by method1
+  geom_line(aes(y = value, color = new_column, linetype = score), alpha = 1, linewidth = 1.5) +
+    geom_text(
+    data = . %>% filter(grepl("raw", new_column)), # Filter the data here
+    aes(y = value, label = label_col, color = new_column), # Map label and color
+    vjust = -0.8, # Adjust vertical position of labels
+    hjust = 0.5,  # Adjust horizontal position
+    size = 3.5,   # Label font size
+    show.legend = FALSE # Don't add a redundant legend for the labels
+  ) +
+  labs(x = "Number of features (log2 scale)", y = "Separation score") + # Adjusted y-axis label to match primary
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-  geom_line(aes(y = n_features / scale_coeff)) + # Divide by 10 to get the same range than the temperature
-  
-  scale_y_continuous(
-    
-    # Features of the first axis
-    name = "Separation score",
-    
-    # Add a second axis and specify its features
-    sec.axis = sec_axis(~.*scale_coeff, name="Number of features\n(#cell types or #PCA_dims")
-  )
-# ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores.pdf"),
-#        width = 7,
-#        height = 7)
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.title.y.left = element_text(color = "black"), # Default color for primary axis label
+        axis.title.y.right = element_text(color = "darkgrey")) + # Match color for secondary axis label
+  scale_x_continuous(trans = "log2",
+                     breaks = trans_breaks("log2", function(x) 2^x, n=10),
+                     labels = label_number()) + # Changed to 10^exponent format
+  # Add a color scale if you mapped method1 to color
+  scale_color_discrete(name = "Method 1 Type") +
+  ggtitle("Modularity score")
+
+
+
+df1 <- df_results %>%
+  filter(score == "sil_score",
+         !grepl("nhvc", method)) %>%
+  mutate(PCA = ifelse(endsWith(method, "_"), "raw", "PCA")) %>%
+  separate(method, into = c("label_col", "dummy"), sep = "_", extra = "merge", remove = FALSE) %>%
+  separate(method, into = c("method1", "method2"), sep = "_", extra = "merge") %>%
+  unite(new_column, method1, "PCA", sep = "_")
+df1$new_column[grepl("raw", df1$new_column)] <- "raw"
+levs <- str_sort(as.character(unique(df1$new_column)), numeric = TRUE)
+df1$new_column <- factor(df1$new_column, levels = levs)
+
+ggplot(df1, aes(x = n_features)) + # Remove group=score from global aes if you want lines by method1
+  geom_line(aes(y = value, color = new_column, linetype = score), alpha = 1, linewidth = 1.5) +
+    geom_text(
+    data = . %>% filter(grepl("raw", new_column)), # Filter the data here
+    aes(y = value, label = label_col, color = new_column), # Map label and color
+    vjust = -0.8, # Adjust vertical position of labels
+    hjust = 0.5,  # Adjust horizontal position
+    size = 3.5,   # Label font size
+    show.legend = FALSE # Don't add a redundant legend for the labels
+  ) +
+  labs(x = "Number of features (log2 scale)", y = "Separation score") + # Adjusted y-axis label to match primary
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.title.y.left = element_text(color = "black"), # Default color for primary axis label
+        axis.title.y.right = element_text(color = "darkgrey")) + # Match color for secondary axis label
+  scale_x_continuous(trans = "log2",
+                     breaks = trans_breaks("log2", function(x) 2^x, n=10),
+                     labels = label_number()) + # Changed to 10^exponent format
+  # Add a color scale if you mapped method1 to color
+  scale_color_discrete(name = "Method 1 Type") +
+  ggtitle("Silhouette score")
+
+
+
+df1 <- df_results %>%
+  filter(score == "cluster_score",
+         grepl("nhvc", method)) %>%
+  mutate(PCA = !endsWith(method, "_")) %>%
+  separate(method, into = c("method1", "method2"), sep = "nhvc", extra = "merge")
+levs <- str_sort(as.character(unique(df1$method1)), numeric = TRUE)
+df1$method1 <- factor(df1$method1, levels = levs)
+
+ggplot(df1, aes(x = n_features)) + # Remove group=score from global aes if you want lines by method1
+  geom_line(aes(y = value, color = method1, linetype = score), alpha = 1, linewidth = 1.5) +
+  labs(x = "Number of features (log2 scale)", y = "Separation score") + # Adjusted y-axis label to match primary
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.title.y.left = element_text(color = "black"), # Default color for primary axis label
+        axis.title.y.right = element_text(color = "darkgrey")) + # Match color for secondary axis label
+  scale_x_continuous(trans = "log2",
+                     breaks = trans_breaks("log2", function(x) 2^x, n=10),
+                     labels = label_number()) + # Changed to 10^exponent format
+  # Add a color scale if you mapped method1 to color
+  scale_color_discrete(name = "Method 1 Type") +
+  ggtitle("Based on highly variable cell types")
+
+
+
+df1 <- df_results %>%
+  filter(score == "mod_score",
+         grepl("nhvc", method)) %>%
+  mutate(PCA = !endsWith(method, "_")) %>%
+  separate(method, into = c("method1", "method2"), sep = "nhvc", extra = "merge")
+levs <- str_sort(as.character(unique(df1$method1)), numeric = TRUE)
+df1$method1 <- factor(df1$method1, levels = levs)
+
+ggplot(df1, aes(x = n_features)) + # Remove group=score from global aes if you want lines by method1
+  geom_line(aes(y = value, color = method1, linetype = score), alpha = 1, linewidth = 1.5) +
+  labs(x = "Number of features (log2 scale)", y = "Separation score") + # Adjusted y-axis label to match primary
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.title.y.left = element_text(color = "black"), # Default color for primary axis label
+        axis.title.y.right = element_text(color = "darkgrey")) + # Match color for secondary axis label
+  scale_x_continuous(trans = "log2",
+                     breaks = trans_breaks("log2", function(x) 2^x, n=10),
+                     labels = label_number()) + # Changed to 10^exponent format
+  # Add a color scale if you mapped method1 to color
+  scale_color_discrete(name = "Method 1 Type") +
+  ggtitle("Based on highly variable cell types")
 ```
 
+```{r}
+rstudioapi::getActiveDocumentContext()$path
+```
 
 # ---------------------------------------------------------------
 
@@ -780,13 +1005,57 @@ dims <- 1:30
 seurat <- seurat |>
   NormalizeData() |>
   FindVariableFeatures(nfeatures = 2000) |>
-  ScaleData()
+  ScaleData() |>
+  RunPCA()
+hvg <- seurat@assays[["RNA"]]@var.features
 
 labels <- get_labels(seurat, seurat@misc$label_col)
+
+pb <- get_pb_deseq2(seurat, sample_col = "Sample", hvg = hvg)
 ```
 
 ```{r}
-process_coda_fig(seurat, labels = labels, ct_col = seurat@misc$hi_res_ct_col, title = "Status", pca_dims = 2)
-process_coda_fig(seurat, labels = get_labels(seurat, "Site"), ct_col = seurat@misc$hi_res_ct_col, title = "Site", pca_dims = 2)
+process_coda_fig(seurat, labels = labels, ct_col = seurat@misc$hi_res_ct_col, title = "Status", pca_dims = NULL)
+process_coda_fig(seurat, labels = get_labels(seurat, "Site"), ct_col = seurat@misc$hi_res_ct_col, title = "Site", pca_dims = NULL)
+
+p <- plot_pca(pb, labels, plotly_3d = TRUE)
+p <- plot_pca(pb, get_labels(seurat, "Site"), plotly_3d = TRUE)
+```
+
+
+```{r}
+library(vegan)
+library(GloScope)
+library(tictoc)
+
+# print("Modularity runs for:")
+# tic()
+# calc_modularity(pb, labels)
+# toc()
+# 
+# print("ANOSIM runs for:")
+# tic()
+# anosim(pb, labels)
+# toc()
+
+
+
+unique_samples <- unique(seurat@meta.data$Sample)
+samples_to_keep <- unique_samples[1:5]
+Idents(seurat) <- "Sample"
+subset_seurat <- subset(seurat, idents = samples_to_keep)
+
+print("GloScope with kNN runs for:")
+tic()
+knn_divergence <- gloscope(subset_seurat@reductions$pca@cell.embeddings, subset_seurat@meta.data$Sample, dens="KNN", k=9)
+toc()
+
+
+
+print("GloScope with GMM runs for:")
+tic()
+gmm_divergence <- gloscope(subset_seurat@reductions$pca@cell.embeddings, subset_seurat@meta.data$Sample)
+toc()
+
 ```
 
