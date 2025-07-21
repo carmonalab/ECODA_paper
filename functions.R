@@ -9,7 +9,7 @@ suppressPackageStartupMessages({
   library(ggpubr)
   library(mclust)
   library(plotly)
-  library(robCompositions)
+  # library("robCompositions")
   library(Seurat)
   # devtools::install_github('satijalab/seurat-data')
   library(SeuratData)
@@ -19,7 +19,8 @@ suppressPackageStartupMessages({
   library(stringr)
   library(tidyr)
   library(tidyverse)
-  library(zCompositions)
+  # install.packages("zCompositions")
+  # library(zCompositions)
   
   # devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
   library(EPIC)
@@ -34,7 +35,8 @@ suppressPackageStartupMessages({
   # devtools::install_github("kharchenkolab/scITD")
   library(scITD)
   # install.packages("ncdf4")
-  library(ncdf4)
+  # install.packages("GloScope")
+  # library(GloScope)
   
   # remotes::install_github("carmonalab/scooter", ref="f31eab3")
   library(scooter)
@@ -76,14 +78,17 @@ calc_perc_df <- function(df) {
 calc_sep_score <- function(df,
                            labels,
                            knn_k = NULL) {
-  sil_score <- round(calc_sil(df, labels), 3)
+  # sil_score <- round(calc_sil(df, labels), 3)
   mod_score <- unlist(round(calc_modularity(df, labels, knn_k), 3))
   cluster_score <- clust_eval(matrix = df, labels)
   anosim_score <- vegan::anosim(x = df, grouping = labels, distance = "euclidean")[["statistic"]]
   
-  res <- list(sil_score = sil_score,
-              mod_score = mod_score,
-              cluster_score = cluster_score)
+  res <- list(
+    # sil_score = sil_score,
+    mod_score = mod_score,
+    anosim_score = anosim_score,
+    cluster_score = cluster_score
+  )
   
   return(res)
 }
@@ -208,22 +213,6 @@ convert_seurat_to_h5ad <- function(seurat,
   }
 }
 
-
-# res_list[["counts_zeros_1"]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-# res_list[["counts_all_1"]] <- df %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-# res_list[["perc_all_0.001%"]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.001) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-# res_list[["perc_all_0.01%"]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.01) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-# res_list[["perc_all_0.1%"]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-# res_list[["perc_all_1%"]] <- df %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-# res_list[["asinsqrt"]] <- df %>% calc_perc_df() %>% mutate(across(everything(), ~ . / 100)) %>% sqrt() %>% asin() %>% calc_sep_score(labels)
-# res_list[["impRZilr"]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
-# # Need to check if multLN drops samples
-# df_multLN <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9)
-# labels_multLN <- labels[row.names(df) %in% row.names(df_multLN)]
-# res_list[["multLN"]] <- df_multLN %>% clr() %>% calc_sep_score(labels_multLN)
-# res_list[["multRepl_0.01%"]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-# res_list[["multRepl_0.1%"]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-# res_list[["multRepl_1%"]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
 
 # Test data transformation methods for ECODA
 datrans <- function(count_mat,
@@ -551,7 +540,8 @@ get_ct_var <- function(df,
     dplyr::summarize(
       Relative_abundance = mean(values, na.rm=TRUE),
       Variance = var(values, na.rm=TRUE)
-    )
+    ) %>%
+    arrange(desc(Variance))
   
   if (show_plot == TRUE) {
     p <- varmeanplot(data = df_var, title = plot_title)
@@ -576,7 +566,7 @@ get_pb_deseq2 <- function(seurat, sample_col = "Sample", hvg) {
   pb <- get_pb(seurat, sample_col = sample_col, hvg = hvg)
   metadata <- get_metadata(seurat)
   metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
-  pb_norm <- t(DESeq2.normalize(pb_hvg, metadata = metadata))
+  pb_norm <- t(DESeq2.normalize(pb, metadata = metadata))
   return(pb_norm)
 }
 
@@ -666,6 +656,7 @@ load_seurat_object <- function(file_name) {
 plot_pca <- function(feat_mat,
                      labels,
                      scale. = FALSE,
+                     pca_dims = NULL,
                      knn_k = NULL,
                      title = NULL,
                      sil_score = TRUE,
@@ -679,7 +670,7 @@ plot_pca <- function(feat_mat,
                      invisible = c("var", "quali"),
                      repel = FALSE) {
   
-  res.pca <- prcomp(feat_mat, scale. = scale.)
+  res.pca <- prcomp(feat_mat, scale. = scale., rank. = pca_dims)
   
   if (cluster_score) {
     cluster_score <- clust_eval(feat_mat, labels)
@@ -800,22 +791,30 @@ run_analyses <- function(result_list,
 #----------------------------------------------------------->
 run_benchmark_analysis <- function(seurat,
                                    sample_col = "Sample",
-                                   labels,
+                                   label_col,
                                    n_hvg = 2000,
                                    low_res_ct_col,
                                    hi_res_ct_col,
                                    factors_test,
                                    mrvi_dist_file,
+                                   scpoli_emb_file,
+                                   pilot_dist_file,
                                    Pseudobulk = TRUE,
                                    ECODA_deconv = TRUE,
                                    ECODA_low_res = TRUE,
                                    ECODA_high_res = TRUE,
+                                   ECODA_ultrahigh_res = TRUE,
+                                   ECODA_ultrahigh_res_resparam = 20,
+                                   ECODA_selectg_top_hvct = TRUE,
+                                   ECODA_top_hvct = 0.25,
                                    Pseudobulk_PCA = TRUE,
                                    ECODA_high_res_PCA = TRUE,
                                    MOFA = TRUE,
                                    scITD = TRUE,
                                    MrVI = TRUE,
                                    GloScope = TRUE,
+                                   scPoli = TRUE,
+                                   PILOT = TRUE,
                                    show_pca_plots = FALSE,
                                    save_pca_plots = TRUE) {
   
@@ -823,8 +822,12 @@ run_benchmark_analysis <- function(seurat,
   metadata <- get_metadata(seurat)
   metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
   
-  if (Pseudobulk | Pseudobulk_PCA | scITD) {
-    seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = n_hvg)
+  labels <- get_labels(seurat, label_col)
+  
+  if (Pseudobulk | Pseudobulk_PCA | scITD | GloScope | ECODA_ultrahigh_res) {
+    seurat <- seurat |>
+      NormalizeData() |>
+      FindVariableFeatures(nfeatures = n_hvg)
 
     if ("var.features" %in% slotNames(seurat@assays[["RNA"]])) {
       # This path is for older Seurat objects (primarily v2/v3)
@@ -834,6 +837,13 @@ run_benchmark_analysis <- function(seurat,
       hvg <- varf[!is.na(varf)]
     } else {
       stop("Could not find variable features in expected locations.")
+    }
+    
+    if (ECODA_ultrahigh_res) {
+      seurat <- seurat |>
+        FindNeighbors() |>
+        FindClusters(resolution = ECODA_ultrahigh_res_resparam)
+      ECODA_ultrahigh_res_col_name <- paste0("RNA_snn_res.", ECODA_ultrahigh_res_resparam)
     }
   }
   
@@ -853,7 +863,6 @@ run_benchmark_analysis <- function(seurat,
   }
   
   if (Pseudobulk) {
-    # Pseudobulk
     res_list[["Pseudobulk"]] <- process_pseudobulk_fig(pb_norm, labels)
   }
   
@@ -865,12 +874,26 @@ run_benchmark_analysis <- function(seurat,
   # CoDA
   if (ECODA_low_res) {
     ## layer1: low res. cell types
-    res_list[["ECODA_low_res"]] <- process_coda_fig(seurat, labels, ct_col = low_res_ct_col, title = "Cell type composition\nlow res.")
+    res_list[["CtCompECODA_lowres"]] <- process_coda_fig(seurat, labels, ct_col = low_res_ct_col, title = "Cell type composition (CLR)\nlow res.")
   }
   
   if (ECODA_high_res) {
     ## layer2: high res. cell types
-    res_list[["ECODA_high_res"]] <- process_coda_fig(seurat, labels, ct_col = hi_res_ct_col, title = "Cell type composition\nhigh res.")
+    res_list[["CtCompECODA_highres"]] <- process_coda_fig(seurat, labels, ct_col = hi_res_ct_col, title = "Cell type composition (CLR)\nhigh res.")
+    if (ECODA_selectg_top_hvct) {
+      res_list[[paste0("CtCompECODA_highres_top", ECODA_top_hvct)]] <-
+        process_coda_fig(seurat, labels, ECODA_top_hvct, ct_col = hi_res_ct_col, title = "Cell type composition (CLR)\nhigh res. top", ECODA_top_hvct*100, "%")
+    }
+    res_list[["CtCompFreq_highres"]] <- process_coda_fig(seurat, labels, clr = FALSE, ct_col = hi_res_ct_col, title = "Cell type composition (%)\nhigh res.")
+  }
+  
+  if (ECODA_ultrahigh_res) {
+    ## Ultra high res. cell type clusters based on Leiden clustering to artificially increase the number of cell types (clusters), e.g. to 250 cell types (clusters)
+    res_list[["CtCompECODA_ultrahighres"]] <- process_coda_fig(seurat, labels, ct_col = ECODA_ultrahigh_res_col_name, title = "Cell type composition (CLR)\nultra-high res.")
+    if (ECODA_selectg_top_hvct) {
+      res_list[[paste0("CtCompECODA_ultrahighres_top", ECODA_top_hvct)]] <-
+        process_coda_fig(seurat, labels, ECODA_top_hvct, ct_col = hi_res_ct_col, title = "Cell type composition (CLR)\nultra-high res. top", ECODA_top_hvct*100, "%")
+      }
   }
   
   if (any(Pseudobulk_PCA, ECODA_high_res_PCA, MOFA, scITD)) {
@@ -902,6 +925,18 @@ run_benchmark_analysis <- function(seurat,
   if (MrVI) {
     # MrVI
     res_list[["MrVI"]] <- process_mrvi_fig(seurat, mrvi_dist_file, ct_col = low_res_ct_col, label_col = seurat@misc$label_col)
+  }
+  
+  if (GloScope) {
+    res_list[["GloScope"]] <- process_gloscope_fig(seurat, labels)
+  }
+  
+  if (scPoli) {
+    # res_list[["scPoli"]] <- process_scpoli_fig(scpoli_emb_file, labels)
+  }
+  
+  if (PILOT) {
+    # res_list[["PILOT"]] <- process_pilot_fig(pilot_dist_file, labels)
   }
   
   if (show_pca_plots | save_pca_plots) {
@@ -946,31 +981,52 @@ process_deconv_fig <- function(pseudobulk,
 
 
 process_coda_fig <- function(seurat,
-                             feat_mat = NULL,
                              labels,
+                             ECODA_top_hvct = NULL,
+                             clr = TRUE,
                              pca_dims = NULL,
                              ct_col,
                              title,
-                             knn_k = NULL,
                              clr_zero_impute_method = "percentage_all",
-                             clr_zero_impute_num = 0.1) {
+                             clr_zero_impute_num = 0.1,
+                             feat_mat = NULL) {
   
   if (is.null(feat_mat)) {
     df_counts <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col)
     
     feat_mat <- df_counts %>%
       impute_zeros(clr_zero_impute_method = clr_zero_impute_method, clr_zero_impute_num = clr_zero_impute_num) %>%
-      calc_perc_df() %>%
-      clr()
-  }
-  
-  if (!is.null(pca_dims)) {
-    res.pca <- prcomp(feat_mat, center = TRUE, scale. = FALSE)
-    feat_mat <- res.pca[["x"]][, 1:pca_dims]
+      calc_perc_df()
+    
+    if (clr) {
+      feat_mat <- feat_mat %>%
+        clr()
+    }
+    
+    if (!is.null(ECODA_top_hvct)) {
+      top_hvct <- get_ct_var(feat_mat, show_plot = FALSE) %>% slice_head(prop = ECODA_top_hvct) %>% pull(celltype)
+      feat_mat <- feat_mat[, top_hvct]
+    }
   }
   
   res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, plotly_3d = FALSE, knn_k = knn_k, title = title)
+  res[["plot"]] <- plot_pca(feat_mat, labels, pca_dims = pca_dims, title = title)
+  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["feat_mat"]] <- feat_mat
+  res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  
+  return(res)
+}
+
+
+process_pseudobulk_fig <- function(feat_mat,
+                                   labels,
+                                   pca_dims = NULL,
+                                   title = "Pseudobulk gene expression",
+                                   knn_k = NULL) {
+  
+  res <- list()
+  res[["plot"]] <- plot_pca(feat_mat, labels, pca_dims = pca_dims, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
@@ -1020,7 +1076,7 @@ process_mofa_bulk_fig <- function(pb_norm,
   feat_mat <- as.data.frame(MOFAobject@expectations[["Z"]])
   
   res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, plotly_3d = FALSE, title = title, coord_equal = FALSE)
+  res[["plot"]] <- plot_pca(feat_mat, labels, title = title, coord_equal = FALSE)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
@@ -1159,13 +1215,13 @@ process_mrvi_fig <- function(seurat,
   dist_list <- list()
   
   # Open the NetCDF file
-  dists <- nc_open(mrvi_dist_file)
+  dists <- ncdf4::nc_open(mrvi_dist_file)
   
   # List the available layers (cell types)
   ct_col <- names(dists$dim)[endsWith(names(dists$dim), "_name")]
-  layers <- ncvar_get(dists, ct_col)
+  layers <- ncdf4::ncvar_get(dists, ct_col)
   
-  samples <- ncvar_get(dists, "sample_x")
+  samples <- ncdf4::ncvar_get(dists, "sample_x")
   metadata <- seurat@meta.data %>%
     group_by(Sample) %>%
     slice(1)
@@ -1185,16 +1241,16 @@ process_mrvi_fig <- function(seurat,
     index <- which(layers == l)
     
     # If you want to get the distance matrix for "CD4T":
-    dist_mat <- ncvar_get(dists,
-                          varid = gsub("_name", "", ct_col),
-                          start = c(1, 1, index),
-                          count = c(-1, -1, 1))
+    dist_mat <- ncdf4::ncvar_get(dists,
+                                 varid = gsub("_name", "", ct_col),
+                                 start = c(1, 1, index),
+                                 count = c(-1, -1, 1))
     
     dist_list[[l]] <- dist_mat
   }
   
   # Close the NetCDF file handle when done
-  nc_close(dists)
+  ncdf4::nc_close(dists)
   
   feat_mat <- Reduce(`+`, dist_list) / length(dist_list)
   colnames(feat_mat) <- samples
@@ -1208,6 +1264,53 @@ process_mrvi_fig <- function(seurat,
   
   return(res)
 }
+
+
+process_gloscope_fig <- function(seurat,
+                                 labels,
+                                 dens = "KNN",
+                                 k = 9,
+                                 title = "GloScope") {
+  
+  feat_mat <- GloScope::gloscope(seurat@reductions$pca@cell.embeddings, seurat$Sample, dens, k)
+  
+  res <- list()
+  res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["feat_mat"]] <- feat_mat
+  res[["dist_mat"]] <- feat_mat
+  
+  return(res)
+}
+
+
+process_scpoli_fig <- function(scpoli_emb_file, labels, title = "scPoli") {
+  feat_mat <- read_csv()
+  
+  res <- list()
+  res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["feat_mat"]] <- feat_mat
+  res[["dist_mat"]] <- as.matrix(feat_mat)
+  
+  return(res)
+}
+
+
+process_pilot_fig <- function(pilot_dist_file, labels, title = "PILOT") {
+  feat_mat <- read_csv()
+
+  res <- list()
+  res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["feat_mat"]] <- feat_mat
+  res[["dist_mat"]] <- as.matrix(feat_mat)
+
+  return(res)
+}
+
+
+
 #-----------------------------------------------------------<
 
 
@@ -1256,12 +1359,12 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
   res_list[["asinsqrt"]] <- df %>% calc_perc_df() %>% mutate(across(everything(), ~ . / 100)) %>% sqrt() %>% asin() %>% calc_sep_score(labels)
   # res_list[["impRZilr"]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
   # Need to check if multLN drops samples
-  df_multLN <- df %>% calc_perc_df() %>% multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9)
+  df_multLN <- df %>% calc_perc_df() %>% zCompositions::multLN(label = 0, dl = rep(0.1, ncol(df)), z.warning = 0.9)
   labels_multLN <- labels[row.names(df) %in% row.names(df_multLN)]
   res_list[["multLN"]] <- df_multLN %>% clr() %>% calc_sep_score(labels_multLN)
-  res_list[["multRepl_0.01%"]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-  res_list[["multRepl_0.1%"]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
-  res_list[["multRepl_1%"]] <- df %>% calc_perc_df() %>% multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+  res_list[["multRepl_0.01%"]] <- df %>% calc_perc_df() %>% zCompositions::multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+  res_list[["multRepl_0.1%"]] <- df %>% calc_perc_df() %>% zCompositions::multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
+  res_list[["multRepl_1%"]] <- df %>% calc_perc_df() %>% zCompositions::multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>% clr() %>% calc_sep_score(labels)
   
   return(res_list)
 }
