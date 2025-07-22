@@ -749,16 +749,27 @@ plot_roc_pcad1 <- function(feat_mat, labels) {
 run_analyses <- function(result_list,
                          ds,
                          seurat,
-                         mrvi_dist_file,
-                         factors_test = c(2, 5, 10)) {
+                         path_data,
+                         factors_test) {
   
   label_col <- seurat@misc$label_col
   low_res_ct_col <- seurat@misc$low_res_ct_col
   hi_res_ct_col <- seurat@misc$hi_res_ct_col
   
-  if (!file.exists(mrvi_dist_file)) {
-    stop("MrVI dist file not found in location: ", mrvi_dist_file)
+  path_python_files <- file.path(path_data, "files_processed_python")
+
+  files <- list(
+    mrvi_dist_file = file.path(path_data, paste0(ds, "_mrvi_dists.nc")),
+    scpoli_emb_file = file.path(path_data, paste0(ds, "_scpoli_embs.nc")),
+    pilot_dist_file = file.path(path_data, paste0(ds, "_pilot_dists.nc"))
+  )
+  
+  for (file in files) {
+    if (!file.exists(file)) {
+      stop("File not found: ", file)
+    }
   }
+  
   
   labels <- get_labels(seurat, label_col)
   ct_comps <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
@@ -770,7 +781,7 @@ run_analyses <- function(result_list,
                                                            low_res_ct_col,
                                                            hi_res_ct_col,
                                                            factors_test,
-                                                           mrvi_dist_file)
+                                                           files)
   }
   
   if (is.null(result_list[["trans"]][[ds]])) {
@@ -796,9 +807,7 @@ run_benchmark_analysis <- function(seurat,
                                    low_res_ct_col,
                                    hi_res_ct_col,
                                    factors_test,
-                                   mrvi_dist_file,
-                                   scpoli_emb_file,
-                                   pilot_dist_file,
+                                   files,
                                    Pseudobulk = TRUE,
                                    ECODA_deconv = TRUE,
                                    ECODA_low_res = TRUE,
@@ -924,7 +933,7 @@ run_benchmark_analysis <- function(seurat,
   
   if (MrVI) {
     # MrVI
-    res_list[["MrVI"]] <- process_mrvi_fig(seurat, mrvi_dist_file, ct_col = low_res_ct_col, label_col = seurat@misc$label_col)
+    res_list[["MrVI"]] <- process_mrvi_fig(seurat, files[["mrvi_dist_file"]], ct_col = low_res_ct_col, label_col = seurat@misc$label_col)
   }
   
   if (GloScope) {
@@ -932,11 +941,11 @@ run_benchmark_analysis <- function(seurat,
   }
   
   if (scPoli) {
-    # res_list[["scPoli"]] <- process_scpoli_fig(scpoli_emb_file, labels)
+    # res_list[["scPoli"]] <- process_scpoli_fig(files[["scpoli_emb_file"]], labels)
   }
   
   if (PILOT) {
-    # res_list[["PILOT"]] <- process_pilot_fig(pilot_dist_file, labels)
+    # res_list[["PILOT"]] <- process_pilot_fig(files[["pilot_dist_file"]], labels)
   }
   
   if (show_pca_plots | save_pca_plots) {

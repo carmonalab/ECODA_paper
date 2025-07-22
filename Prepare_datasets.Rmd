@@ -23,14 +23,18 @@ library(rstatix)
 
 source("functions.R")
 
-# Set path to save plots
-path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
+# Set paths
+root <- "/Users/christianhalter/Library/CloudStorage/OneDrive-SharedLibraries-UniversitédeGenève/Santiago Carmona - CSI/LabPapers/ECODA"
+path_plots <- file.path(root, "plots")
+path_data <- file.path(getwd(), "data")
 ```
 
 
 # Create results list to fill
 
 ```{r}
+factors_test <- c(1, 2, 3, 5, 10)
+
 result_file <- "result_list.rds"
 
 if (file.exists(result_file)) {
@@ -107,16 +111,7 @@ if (any(elem_null)) {
   rm(obj.list); gc()
   
   # Convert Seurat object to anndata for interoperability with python
-  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
-  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
-  if (!file.exists(mrvi_dist_file)) {
-    convert_seurat_to_h5ad(seurat, ds)
-    stop("Please process MrVI to dist file")
-  }
-  
-  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-  hvg <- seurat@assays[["RNA"]]@var.features
-  
+  convert_seurat_to_h5ad(seurat, ds)
   
   
   seurat@misc$label_col <- "Tissue"
@@ -124,8 +119,7 @@ if (any(elem_null)) {
   seurat@misc$hi_res_ct_col <- "layer2"
   
   
-  
-  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
 }
 ```
 
@@ -171,22 +165,13 @@ if (any(elem_null)) {
   
   seurat$Sample <- seurat$sample_id
   
-  # Convert Seurat object to anndata for interoperability with python
-  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
-  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
-  if (!file.exists(mrvi_dist_file)) {
-    convert_seurat_to_h5ad(seurat, ds)
-    stop("Please process MrVI to dist file")
-  }
   
-  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-  hvg <- seurat@assays[["RNA"]]@var.features
+  # Convert Seurat object to anndata for interoperability with python
+  convert_seurat_to_h5ad(seurat, ds)
+  
 
   # # Convert Seurat object to anndata for interoperability with python
-  # # var_genes <- VariableFeatures(seurat)
-  # # seurat_df <- GetAssayData(seurat)[var_genes,]
   # object <- CreateSeuratObject(counts = seurat@assays$RNA$counts, meta.data = seurat@meta.data[, c("Sample", "initial_clustering")])
-  # object <- object |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
   # object[["RNA3"]] <- as(object = object[["RNA"]], Class = "Assay")
   # DefaultAssay(object) <- "RNA3"
   # object[["RNA"]] <- NULL
@@ -202,7 +187,7 @@ if (any(elem_null)) {
 
   
     
-  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
 }
 ```
 
@@ -241,22 +226,13 @@ if (any(elem_null)) {
   seurat$Sample <- seurat$specimen.specimenGuid
   
   # Convert Seurat object to anndata for interoperability with python
-  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
-  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
-  if (!file.exists(mrvi_dist_file)) {
-    convert_seurat_to_h5ad(seurat, ds)
-    stop("Please process MrVI to dist file")
-  }
-  
-  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-  hvg <- seurat@assays[["RNA"]]@var.features
-  
+  convert_seurat_to_h5ad(seurat, ds)
 
   seurat@misc$label_col <- "subject.cmv"
   seurat@misc$low_res_ct_col <- "AIFI_L1"
   seurat@misc$hi_res_ct_col <- "AIFI_L3"
     
-  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
 }
 ```
 
@@ -283,22 +259,15 @@ if (any(elem_null)) {
   
     
   # Convert Seurat object to anndata for interoperability with python
-  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
-  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
-  if (!file.exists(mrvi_dist_file)) {
-    convert_seurat_to_h5ad(seurat, ds)
-    stop("Please process MrVI to dist file")
-  }
+  convert_seurat_to_h5ad(seurat, ds)
   
   seurat$age <- as.factor(ifelse(seurat$sample.subjectAgeAtDraw < 50, "young", "old"))
-  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-  hvg <- seurat@assays[["RNA"]]@var.features
-  
+
   seurat@misc$label_col <- "age"
   seurat@misc$low_res_ct_col <- "AIFI_L1"
   seurat@misc$hi_res_ct_col <- "AIFI_L3"
   
-  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
 }
 ```
 
@@ -332,16 +301,7 @@ if (any(elem_null)) {
   seurat <- readRDS(file.path(path_output, sprintf("%sp_tumor_seurat.rds", ds_name)))
   
   # Convert Seurat object to anndata for interoperability with python
-  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
-  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
-  if (!file.exists(mrvi_dist_file)) {
-    convert_seurat_to_h5ad(seurat, ds)
-    stop("Please process MrVI to dist file")
-  }
-  
-  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-  varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
-  hvg <- varf[!is.na(varf)]
+  convert_seurat_to_h5ad(seurat, ds)
 
   # # Convert Seurat object to anndata for interoperability with python
   # object <- seurat
@@ -357,7 +317,7 @@ if (any(elem_null)) {
   seurat@misc$low_res_ct_col <- "scGate_multi"
   seurat@misc$hi_res_ct_col <- "functional.cluster"
   
-  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
 }
 ```
 
@@ -395,23 +355,14 @@ if (any(elem_null)) {
   seurat$Sample <- as.character(seurat$Sample)
 
   # Convert Seurat object to anndata for interoperability with python
-  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
-  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
-  if (!file.exists(mrvi_dist_file)) {
-    convert_seurat_to_h5ad(seurat, ds)
-    stop("Please process MrVI to dist file")
-  }
-
-  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-  varf <- seurat@assays[["RNA"]]@var.features
-  hvg <- varf[!is.na(varf)]
+  convert_seurat_to_h5ad(seurat, ds)
 
 
   seurat@misc$label_col <- "Tissue"
   seurat@misc$low_res_ct_col <- "OriginalAnnotationLevel1"
   seurat@misc$hi_res_ct_col <- "OriginalAnnotationLevel3"
 
-  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
 }
 ```
 
@@ -466,7 +417,7 @@ if (any(elem_null)) {
 <!--   seurat@misc$low_res_ct_col <- "cellType" -->
 <!--   seurat@misc$hi_res_ct_col <- "cellSubType" -->
 
-<!--   result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file) -->
+<!--   result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test) -->
 <!-- } -->
 <!-- ``` -->
 
@@ -500,17 +451,9 @@ if (any(elem_null)) {
   seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
   
   # Convert Seurat object to anndata for interoperability with python
-  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
-  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
-  if (!file.exists(mrvi_dist_file)) {
-    convert_seurat_to_h5ad(seurat, ds)
-    stop("Please process MrVI to dist file")
-  }
+  convert_seurat_to_h5ad(seurat, ds)
   
-  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-  varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
-  hvg <- varf[!is.na(varf)]
-  
+
   # # Convert Seurat object to anndata for interoperability with python
   # object <- seurat
   # object[["RNA3"]] <- as(object = object[["RNA"]], Class = "Assay")
@@ -525,7 +468,7 @@ if (any(elem_null)) {
   seurat@misc$low_res_ct_col <- "celltype_major"
   seurat@misc$hi_res_ct_col <- "celltype_subset"
   
-  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
 }
 ```
 
@@ -566,23 +509,14 @@ if (any(elem_null)) {
   seurat <- subset(stot, subset = stot$OriginalAnnotationLevel1 == "Immune")
   
   # Convert Seurat object to anndata for interoperability with python
-  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
-  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
-  if (!file.exists(mrvi_dist_file)) {
-    convert_seurat_to_h5ad(seurat, ds)
-    stop("Please process MrVI to dist file")
-  }
-  
-  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-  varf <- seurat@assays[["RNA"]]@var.features
-  hvg <- varf[!is.na(varf)]
+  convert_seurat_to_h5ad(seurat, ds)
   
   
   seurat@misc$label_col <- "Tissue_compartment"
   seurat@misc$low_res_ct_col <- "OriginalAnnotationLevel2"
   seurat@misc$hi_res_ct_col <- "OriginalAnnotationLevel3"
   
-  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
 }
 ```
 
@@ -623,23 +557,14 @@ if (any(elem_null)) {
   Idents(seurat) <- "Sample"
   
   # Convert Seurat object to anndata for interoperability with python
-  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
-  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
-  if (!file.exists(mrvi_dist_file)) {
-    convert_seurat_to_h5ad(seurat, ds)
-    stop("Please process MrVI to dist file")
-  }
-  
-  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-  varf <- seurat@assays[["RNA"]]@var.features
-  hvg <- varf[!is.na(varf)]
-  
+  convert_seurat_to_h5ad(seurat, ds)
+
   
   seurat@misc$label_col <- "Condition"
   seurat@misc$low_res_ct_col <- "OriginalAnnotationLevel1"
   seurat@misc$hi_res_ct_col <- "OriginalAnnotationLevel2"
   
-  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
 }
 ```
 
@@ -678,20 +603,9 @@ if (any(elem_null)) {
   seurat@misc$hi_res_ct_col <- "cells"
   
   # Convert Seurat object to anndata for interoperability with python
-  mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists")
-  mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc"))
-  if (!file.exists(mrvi_dist_file)) {
-    convert_seurat_to_h5ad(seurat, ds)
-    stop("Please process MrVI to dist file")
-  }
+  convert_seurat_to_h5ad(seurat, ds)
   
-  seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000)
-  varf <- seurat@assays[["RNA"]]@var.features
-  hvg <- varf[!is.na(varf)]
-
-
-  
-  result_list <- run_analyses(result_list, ds, seurat, mrvi_dist_file)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
 }
 ```
 
