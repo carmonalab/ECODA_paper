@@ -65,11 +65,6 @@ seurat <- FindClusters_multi(seurat)
 ```
 
 
-```{r}
-
-```
-
-
 
 # Plot bio separation
 
@@ -1021,41 +1016,3 @@ process_coda_fig(seurat, labels = get_labels(seurat, "Site"), ct_col = seurat@mi
 p <- plot_pca(pb, labels, plotly_3d = TRUE)
 p <- plot_pca(pb, get_labels(seurat, "Site"), plotly_3d = TRUE)
 ```
-
-
-```{r}
-library(vegan)
-library(GloScope)
-library(tictoc)
-
-# print("Modularity runs for:")
-# tic()
-# calc_modularity(pb, labels)
-# toc()
-# 
-# print("ANOSIM runs for:")
-# tic()
-# anosim(pb, labels)
-# toc()
-
-
-
-unique_samples <- unique(seurat@meta.data$Sample)
-samples_to_keep <- unique_samples[1:5]
-Idents(seurat) <- "Sample"
-subset_seurat <- subset(seurat, idents = samples_to_keep)
-
-print("GloScope with kNN runs for:")
-tic()
-knn_divergence <- gloscope(subset_seurat@reductions$pca@cell.embeddings, subset_seurat@meta.data$Sample, dens="KNN", k=9)
-toc()
-
-
-
-print("GloScope with GMM runs for:")
-tic()
-gmm_divergence <- gloscope(subset_seurat@reductions$pca@cell.embeddings, subset_seurat@meta.data$Sample)
-toc()
-
-```
-
