@@ -222,11 +222,8 @@ for (a in analysis_elems) {
 # If any analyses missing, process dataset for missing analyses
 if (any(elem_null)) {
   
-  seurat <- load_seurat_object("data/gongsharma_cmv_females.h5ad")
+  seurat <- load_seurat_object("data/Gongsharma_cmv_females.h5ad")
   seurat$Sample <- seurat$specimen.specimenGuid
-  
-  # Convert Seurat object to anndata for interoperability with python
-  convert_seurat_to_h5ad(seurat, ds)
 
   seurat@misc$label_col <- "subject.cmv"
   seurat@misc$low_res_ct_col <- "AIFI_L1"
@@ -254,12 +251,8 @@ for (a in analysis_elems) {
 # If any analyses missing, process dataset for missing analyses
 if (any(elem_null)) {
 
-  seurat <- load_seurat_object("data/gongsharma_age_females_cmvneg.h5ad")
+  seurat <- load_seurat_object("data/Gongsharma_age_females_cmvneg.h5ad")
   seurat$Sample <- seurat$specimen.specimenGuid
-  
-    
-  # Convert Seurat object to anndata for interoperability with python
-  convert_seurat_to_h5ad(seurat, ds)
   
   seurat$age <- as.factor(ifelse(seurat$sample.subjectAgeAtDraw < 50, "young", "old"))
 
@@ -372,54 +365,42 @@ if (any(elem_null)) {
 
 # Bassez
 
-<!-- ```{r} -->
-<!-- ds <- "Bassez" -->
+```{r}
+ds <- "Bassez"
 
-<!-- elem_null <- c() -->
-<!-- for (a in analysis_elems) { -->
-<!--   elem_null <- c(elem_null, is.null(result_list[[a]][[ds]])) -->
+elem_null <- c()
+for (a in analysis_elems) {
+  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
 
-<!--   if (is.null(result_list[[a]][[ds]])) { -->
-<!--     print(paste("To be analyzed:", a, ds)) -->
-<!--   } -->
-<!-- } -->
+  if (is.null(result_list[[a]][[ds]])) {
+    print(paste("To be analyzed:", a, ds))
+  }
+}
 
-<!-- # If any analyses missing, process dataset for missing analyses -->
-<!-- if (any(elem_null)) { -->
+# If any analyses missing, process dataset for missing analyses
+if (any(elem_null)) {
 
-<!--   ds_name <- "BassezA_2021_33958794" -->
+  ds_name <- "BassezA_2021_33958794"
 
-<!--   path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name) -->
-<!--   path_output <- file.path(path_root, "output") -->
+  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_output <- file.path(path_root, "output")
 
-<!--   seurat <- readRDS(file.path(path_output, sprintf("%swhole.rds", ds_name))) -->
+  seurat <- readRDS(file.path(path_output, sprintf("%swhole.rds", ds_name)))
 
-<!--   seurat <- subset(seurat, subset = timepoint == "Pre") -->
+  seurat <- subset(seurat, subset = timepoint == "Pre")
 
-<!--   seurat$Sample <- seurat$sample -->
-<!--   seurat$cellSubType[is.na(seurat$cellSubType)] <- seurat$cellType[is.na(seurat$cellSubType)] -->
+  seurat$Sample <- seurat$sample
+  seurat$cellSubType[is.na(seurat$cellSubType)] <- seurat$cellType[is.na(seurat$cellSubType)]
 
-<!--   # Convert Seurat object to anndata for interoperability with python -->
-<!--   mrvi_dist_file_path <- file.path("~/Dropbox/CSI/PAPERS/ECODA/data/mrvi_dists") -->
-<!--   mrvi_dist_file <- file.path(mrvi_dist_file_path, paste0(ds, "_dists.nc")) -->
-<!--   if (!file.exists(mrvi_dist_file)) { -->
-<!--     convert_seurat_to_h5ad(seurat, ds) -->
-<!--     stop("Please process MrVI to dist file") -->
-<!--   } -->
+  convert_seurat_to_h5ad(seurat, ds)
 
-<!--   seurat <- seurat |> NormalizeData() |> FindVariableFeatures(nfeatures = 2000) -->
-<!--   varf <- seurat@assays[["RNA"]]@var.features -->
-<!--   hvg <- varf[!is.na(varf)] -->
+  seurat@misc$label_col <- "cohort"
+  seurat@misc$low_res_ct_col <- "cellType"
+  seurat@misc$hi_res_ct_col <- "cellSubType"
 
-
-
-<!--   seurat@misc$label_col <- "cohort" -->
-<!--   seurat@misc$low_res_ct_col <- "cellType" -->
-<!--   seurat@misc$hi_res_ct_col <- "cellSubType" -->
-
-<!--   result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test) -->
-<!-- } -->
-<!-- ``` -->
+  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
+}
+```
 
 
 

@@ -37,6 +37,7 @@ suppressPackageStartupMessages({
   # install.packages("ncdf4")
   # install.packages("GloScope")
   # library(GloScope)
+  library(parallelly)
   
   # remotes::install_github("carmonalab/scooter", ref="f31eab3")
   library(scooter)
@@ -752,37 +753,15 @@ run_analyses <- function(result_list,
                          path_data,
                          factors_test) {
   
-  label_col <- seurat@misc$label_col
-  low_res_ct_col <- seurat@misc$low_res_ct_col
-  hi_res_ct_col <- seurat@misc$hi_res_ct_col
-  
-  path_python_files <- file.path(path_data, "files_processed_python")
-
-  files <- list(
-    mrvi_dist_file = file.path(path_data, paste0(ds, "_mrvi_dists.nc")),
-    scpoli_emb_file = file.path(path_data, paste0(ds, "_scpoli_embs.nc")),
-    pilot_dist_file = file.path(path_data, paste0(ds, "_pilot_dists.nc"))
-  )
-  
-  for (file in files) {
-    if (!file.exists(file)) {
-      stop("File not found: ", file)
-    }
-  }
-  
-  
-  labels <- get_labels(seurat, label_col)
-  ct_comps <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = hi_res_ct_col)
-  
   if (is.null(result_list[["bmark"]][[ds]])) {
     print(paste("Running benchmark analysis for dataset: ", ds))
-    result_list[["bmark"]][[ds]] <- run_benchmark_analysis(seurat,
-                                                           labels,
-                                                           low_res_ct_col,
-                                                           hi_res_ct_col,
-                                                           factors_test,
-                                                           files)
+    result_list[["bmark"]][[ds]] <- run_benchmark_analysis(seurat = seurat,
+                                                           path_data = path_data,
+                                                           factors_test = factors_test)
   }
+  
+  labels <- get_labels(seurat, seurat@misc$label_col)
+  ct_comps <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = seurat@misc$hi_res_ct_col)
   
   if (is.null(result_list[["trans"]][[ds]])) {
     print(paste("Running transformation analysis for dataset: ", ds))
@@ -802,12 +781,9 @@ run_analyses <- function(result_list,
 #----------------------------------------------------------->
 run_benchmark_analysis <- function(seurat,
                                    sample_col = "Sample",
-                                   label_col,
                                    n_hvg = 2000,
-                                   low_res_ct_col,
-                                   hi_res_ct_col,
                                    factors_test,
-                                   files,
+                                   path_data,
                                    Pseudobulk = TRUE,
                                    ECODA_deconv = TRUE,
                                    ECODA_low_res = TRUE,
@@ -828,10 +804,25 @@ run_benchmark_analysis <- function(seurat,
                                    save_pca_plots = TRUE) {
   
   res_list <- list()
+  
+  files <- list(
+    mrvi_dist_file = file.path(path_data, paste0(ds, "_mrvi_dists.feather")),
+    scpoli_emb_file = file.path(path_data, paste0(ds, "_scpoli_embs.feather")),
+    pilot_dist_file = file.path(path_data, paste0(ds, "_pilot_dists.feather"))
+  )
+  
+  for (file in files) {
+    if (!file.exists(file)) {
+      stop("File not found: ", file)
+    }
+  }
+  
+  
   metadata <- get_metadata(seurat)
   metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
   
-  labels <- get_labels(seurat, label_col)
+  labels <- get_labels(seurat, seurat@misc$label_col)
+  
   
   if (Pseudobulk | Pseudobulk_PCA | scITD | GloScope | ECODA_ultrahigh_res) {
     seurat <- seurat |>
@@ -848,11 +839,17 @@ run_benchmark_analysis <- function(seurat,
       stop("Could not find variable features in expected locations.")
     }
     
-    if (ECODA_ultrahigh_res) {
+    if (GloScope | ECODA_ultrahigh_res) {
       seurat <- seurat |>
-        FindNeighbors() |>
-        FindClusters(resolution = ECODA_ultrahigh_res_resparam)
-      ECODA_ultrahigh_res_col_name <- paste0("RNA_snn_res.", ECODA_ultrahigh_res_resparam)
+        ScaleData() |>
+        RunPCA(dims = 1:50, verbose = FALSE)
+      
+      if (ECODA_ultrahigh_res) {
+        seurat <- seurat |>
+          FindNeighbors() |>
+          FindClusters(resolution = ECODA_ultrahigh_res_resparam)
+        ECODA_ultrahigh_res_col_name <- paste0("RNA_snn_res.", ECODA_ultrahigh_res_resparam)
+      }
     }
   }
   
@@ -863,9 +860,6 @@ run_benchmark_analysis <- function(seurat,
   if (any(sample_names_starting_with_digit)) {
     seurat[[sample_col]][grepl("^\\d", seurat[[sample_col]])] <- paste0("g", seurat[[sample_col]][grepl("^\\d", seurat[[sample_col]])])
   }
-  
-  # Required for MOFA to run
-  seurat@version <- package_version('3.1.5')
   
   if (Pseudobulk | Pseudobulk_PCA) {
     pb_norm <- get_pb_deseq2(seurat, sample_col = "Sample", hvg = hvg)
@@ -883,17 +877,17 @@ run_benchmark_analysis <- function(seurat,
   # CoDA
   if (ECODA_low_res) {
     ## layer1: low res. cell types
-    res_list[["CtCompECODA_lowres"]] <- process_coda_fig(seurat, labels, ct_col = low_res_ct_col, title = "Cell type composition (CLR)\nlow res.")
+    res_list[["CtCompECODA_lowres"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$low_res_ct_col, title = "Cell type composition (CLR)\nlow res.")
   }
   
   if (ECODA_high_res) {
     ## layer2: high res. cell types
-    res_list[["CtCompECODA_highres"]] <- process_coda_fig(seurat, labels, ct_col = hi_res_ct_col, title = "Cell type composition (CLR)\nhigh res.")
+    res_list[["CtCompECODA_highres"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (CLR)\nhigh res.")
     if (ECODA_selectg_top_hvct) {
       res_list[[paste0("CtCompECODA_highres_top", ECODA_top_hvct)]] <-
-        process_coda_fig(seurat, labels, ECODA_top_hvct, ct_col = hi_res_ct_col, title = "Cell type composition (CLR)\nhigh res. top", ECODA_top_hvct*100, "%")
+        process_coda_fig(seurat, labels, ECODA_top_hvct, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (CLR)\nhigh res. top", ECODA_top_hvct*100, "%")
     }
-    res_list[["CtCompFreq_highres"]] <- process_coda_fig(seurat, labels, clr = FALSE, ct_col = hi_res_ct_col, title = "Cell type composition (%)\nhigh res.")
+    res_list[["CtCompFreq_highres"]] <- process_coda_fig(seurat, labels, clr = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (%)\nhigh res.")
   }
   
   if (ECODA_ultrahigh_res) {
@@ -901,7 +895,7 @@ run_benchmark_analysis <- function(seurat,
     res_list[["CtCompECODA_ultrahighres"]] <- process_coda_fig(seurat, labels, ct_col = ECODA_ultrahigh_res_col_name, title = "Cell type composition (CLR)\nultra-high res.")
     if (ECODA_selectg_top_hvct) {
       res_list[[paste0("CtCompECODA_ultrahighres_top", ECODA_top_hvct)]] <-
-        process_coda_fig(seurat, labels, ECODA_top_hvct, ct_col = hi_res_ct_col, title = "Cell type composition (CLR)\nultra-high res. top", ECODA_top_hvct*100, "%")
+        process_coda_fig(seurat, labels, ECODA_top_hvct, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (CLR)\nultra-high res. top", ECODA_top_hvct*100, "%")
       }
   }
   
@@ -914,39 +908,40 @@ run_benchmark_analysis <- function(seurat,
       
       if (ECODA_high_res_PCA) {
         # Hires CODA with PCA
-        res_list[[paste0("ECODA_high_res_", i, "_PCA_dims")]] <- process_coda_fig(seurat, labels, pca_dims = i, ct_col = hi_res_ct_col, title = paste0("Cell type composition\nhigh res. + PCA (", i, " dims)"))
+        res_list[[paste0("ECODA_high_res_", i, "_PCA_dims")]] <- process_coda_fig(seurat, labels, pca_dims = i, ct_col = seurat@misc$hi_res_ct_col, title = paste0("Cell type composition\nhigh res. + PCA (", i, " dims)"))
       }
 
       if (MOFA) {
         # MOFA
+        # Required for MOFA to run
+        seurat@version <- package_version('3.1.5')
         res_list[[paste0("MOFA_", i, "_factors")]] <- process_mofa_bulk_fig(pb_norm, metadata = metadata, labels, num_factors = i)
       }
-      # res_list[[ds]][[paste0("MOFA_", i, "_factors")]] <- process_mofa_fig(seurat, labels, hvg, pseudobulk_hvg, num_factors = i, save_file_path = file.path(paste0("data/lee_mofa_object_", i, "factors.rds")))
-      # res_list[[ds]][[paste0("mofa_", i, "_factors_log_abs")]] <- process_mofa_fig(seurat, labels, hvg, pseudobulk_hvg, num_factors = i, log_abs_transform = TRUE, save_file_path = file.path(paste0("data/lee_mofa_object_", i, "factors.rds")))
-      
+
       if (scITD) {
         # scITD
-        res_list[[paste0("scITD_", i, "_factors")]] <- process_scitd_fig(seurat, ct_col = low_res_ct_col, label_col = seurat@misc$label_col, hvg, num_factors = i)
+        res_list[[paste0("scITD_", i, "_factors")]] <- process_scitd_fig(seurat, ct_col = seurat@misc$low_res_ct_col, label_col = seurat@misc$label_col, hvg, num_factors = i)
       }
     }
   }
   
   if (MrVI) {
     # MrVI
-    res_list[["MrVI"]] <- process_mrvi_fig(seurat, files[["mrvi_dist_file"]], ct_col = low_res_ct_col, label_col = seurat@misc$label_col)
+    res_list[["MrVI"]] <- process_mrvi_fig(seurat, files[["mrvi_dist_file"]], metadata, label_col = seurat@misc$label_col)
+  }
+  
+  if (scPoli) {
+    res_list[["scPoli"]] <- process_scpoli_fig(files[["scpoli_emb_file"]], metadata, seurat@misc$label_col)
+  }
+  
+  if (PILOT) {
+    res_list[["PILOT"]] <- process_pilot_fig(files[["pilot_dist_file"]], metadata, seurat@misc$label_col)
   }
   
   if (GloScope) {
     res_list[["GloScope"]] <- process_gloscope_fig(seurat, labels)
   }
   
-  if (scPoli) {
-    # res_list[["scPoli"]] <- process_scpoli_fig(files[["scpoli_emb_file"]], labels)
-  }
-  
-  if (PILOT) {
-    # res_list[["PILOT"]] <- process_pilot_fig(files[["pilot_dist_file"]], labels)
-  }
   
   if (show_pca_plots | save_pca_plots) {
     plot_list <- lapply(res_list, function(method) method[["plot"]])
@@ -1013,7 +1008,9 @@ process_coda_fig <- function(seurat,
     }
     
     if (!is.null(ECODA_top_hvct)) {
-      top_hvct <- get_ct_var(feat_mat, show_plot = FALSE) %>% slice_head(prop = ECODA_top_hvct) %>% pull(celltype)
+      top_hvct <- get_ct_var(feat_mat, show_plot = FALSE) %>%
+        slice_head(prop = ECODA_top_hvct) %>%
+        pull(celltype)
       feat_mat <- feat_mat[, top_hvct]
     }
   }
@@ -1216,54 +1213,11 @@ process_scitd_fig <- function(seurat,
 }
 
 
-process_mrvi_fig <- function(seurat,
-                             mrvi_dist_file,
-                             ct_col,
-                             label_col,
-                             title = "MrVI") {
-  dist_list <- list()
+process_mrvi_fig <- function(mrvi_dist_file, metadata, label_col, title = "MrVI") {
   
-  # Open the NetCDF file
-  dists <- ncdf4::nc_open(mrvi_dist_file)
-  
-  # List the available layers (cell types)
-  ct_col <- names(dists$dim)[endsWith(names(dists$dim), "_name")]
-  layers <- ncdf4::ncvar_get(dists, ct_col)
-  
-  samples <- ncdf4::ncvar_get(dists, "sample_x")
-  metadata <- seurat@meta.data %>%
-    group_by(Sample) %>%
-    slice(1)
-  
-  # If Sample column was stored as factor
-  if (is.integer(samples)) {
-    labels <- metadata[match(samples, as.numeric(metadata$Sample)-1), ][[label_col]]
-  } else {
-    labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
-  }
-  
-  # If cell types were stored as factor
-  if (is.integer(layers)) {layers <- layers + 1}
-
-  for (l in layers) {
-    # Find the index corresponding to "CD4T"
-    index <- which(layers == l)
-    
-    # If you want to get the distance matrix for "CD4T":
-    dist_mat <- ncdf4::ncvar_get(dists,
-                                 varid = gsub("_name", "", ct_col),
-                                 start = c(1, 1, index),
-                                 count = c(-1, -1, 1))
-    
-    dist_list[[l]] <- dist_mat
-  }
-  
-  # Close the NetCDF file handle when done
-  ncdf4::nc_close(dists)
-  
-  feat_mat <- Reduce(`+`, dist_list) / length(dist_list)
-  colnames(feat_mat) <- samples
-  row.names(feat_mat) <- samples
+  feat_mat <- arrow::read_feather(mrvi_dist_file)
+  samples <- row.names(feat_mat)
+  labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
   
   res <- list()
   res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
@@ -1278,10 +1232,18 @@ process_mrvi_fig <- function(seurat,
 process_gloscope_fig <- function(seurat,
                                  labels,
                                  dens = "KNN",
+                                 dist_mat = c("KL"),
                                  k = 9,
+                                 BPPARAM = BiocParallel::MulticoreParam(workers = parallelly::availableCores() - 2, progressbar = TRUE),
                                  title = "GloScope") {
   
-  feat_mat <- GloScope::gloscope(seurat@reductions$pca@cell.embeddings, seurat$Sample, dens, k)
+  feat_mat <- GloScope::gloscope(
+    embedding_matrix = seurat@reductions$pca@cell.embeddings,
+    cell_sample_ids = seurat$Sample,
+    dens = dens,
+    dist_mat = dist_mat,
+    k = k,
+    BPPARAM = BPPARAM)
   
   res <- list()
   res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
@@ -1293,21 +1255,27 @@ process_gloscope_fig <- function(seurat,
 }
 
 
-process_scpoli_fig <- function(scpoli_emb_file, labels, title = "scPoli") {
-  feat_mat <- read_csv()
+process_scpoli_fig <- function(scpoli_emb_file, metadata, label_col, title = "scPoli") {
+  
+  feat_mat <- arrow::read_feather(scpoli_emb_file)
+  samples <- row.names(feat_mat)
+  labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
   
   res <- list()
   res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- as.matrix(feat_mat)
+  res[["dist_mat"]] <- as.matrix(dist(feat_mat))
   
   return(res)
 }
 
 
-process_pilot_fig <- function(pilot_dist_file, labels, title = "PILOT") {
-  feat_mat <- read_csv()
+process_pilot_fig <- function(pilot_dist_file, metadata, label_col, title = "PILOT") {
+  
+  feat_mat <- arrow::read_feather(pilot_dist_file)
+  samples <- row.names(feat_mat)
+  labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
 
   res <- list()
   res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
@@ -1377,3 +1345,119 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
   
   return(res_list)
 }
+
+
+#' Create an example Seurat object for single-cell data simulation.
+#'
+#' This function generates a Seurat object with random count data and
+#' simulated metadata for samples, cell types, and sample groups.
+#'
+#' @param n_samples Integer, the number of unique sample identifiers to create.
+#' @param n_cells Integer, the total number of cells in the dataset.
+#' @param n_genes Integer, the total number of genes in the dataset.
+#' @param n_cell_types Integer, the number of distinct cell types to simulate.
+#' @param n_groups Integer, the number of distinct groups to assign samples to.
+#' @param min_cells Integer, minimum number of cells a gene must be detected in
+#'   to be included in the Seurat object (passed to `CreateSeuratObject`).
+#' @param min_features Integer, minimum number of features (genes) a cell must
+#'   express to be included in the Seurat object (passed to `CreateSeuratObject`).
+#' @param project_name Character string, the name for the Seurat project.
+#' @return A Seurat object.
+#' @examples
+#' # Create a small Seurat object with groups
+#' seurat_obj_small_groups <- create_example_seurat_object(
+#'   n_samples = 4, n_cells = 200, n_genes = 50, n_cell_types = 3, n_groups = 2
+#' )
+#' print(seurat_obj_small_groups)
+#' head(seurat_obj_small_groups@meta.data)
+#' table(seurat_obj_small_groups$Sample, seurat_obj_small_groups$Group) # Check sample-group assignment
+#'
+#' # Create a larger Seurat object with groups
+#' seurat_obj_large_groups <- create_example_seurat_object(
+#'   n_samples = 10, n_cells = 1000, n_genes = 100, n_cell_types = 5, n_groups = 3,
+#'   min_cells = 5, min_features = 20
+#' )
+#' print(seurat_obj_large_groups)
+#' head(seurat_obj_large_groups@meta.data)
+#' table(seurat_obj_large_groups$Sample, seurat_obj_large_groups$Group) # Check sample-group assignment
+create_example_seurat_object <- function(
+    n_samples = 10,
+    n_cells = 1000,
+    n_genes = 100,
+    n_cell_types = 5,
+    n_groups = 2, # <--- NEW: Number of distinct groups for samples
+    min_cells = 3,
+    min_features = 200,
+    project_name = "ExampleProject"
+) {
+  
+  # Ensure n_groups is not more than n_samples, as each sample needs a group
+  if (n_groups > n_samples) {
+    warning("Number of groups (n_groups) is greater than number of samples (n_samples). Setting n_groups = n_samples.")
+    n_groups <- n_samples
+  }
+  
+  # 1. Create a random count matrix with integers between 0 and 100
+  count_matrix <- matrix(
+    sample(0:100, size = n_cells * n_genes, replace = TRUE),
+    nrow = n_genes, # Seurat expects genes as rows, cells as columns
+    ncol = n_cells,
+    dimnames = list(
+      paste0("Gene_", 1:n_genes), # Gene names
+      paste0("Cell_", 1:n_cells)  # Cell names
+    )
+  )
+  
+  # Convert the count matrix to a sparse matrix (recommended for scRNA-seq)
+  count_matrix_sparse <- as(count_matrix, "sparseMatrix")
+  
+  # 2. Create the 'Sample' metadata column
+  sample_names <- paste0("Sample_", 1:n_samples)
+  sample_assignments <- sample(sample_names, size = n_cells, replace = TRUE)
+  
+  # 3. Create cell type annotations based on n_cell_types
+  cell_type_names <- paste0("Type_", LETTERS[1:n_cell_types])
+  cell_type_assignments <- sample(cell_type_names, size = n_cells, replace = TRUE)
+  
+  # 4. Create Group assignments for each unique Sample
+  group_names <- paste0("Group_", 1:n_groups)
+  # Create a mapping from sample to group
+  sample_to_group_map <- data.frame(
+    Sample = sample_names,
+    Group = sample(group_names, size = n_samples, replace = TRUE) # Assign each unique sample to a group
+  )
+  
+  # 5. Create a data frame for the cell metadata (equivalent to AnnData's .obs)
+  # Row names must be cell names to match the count matrix columns
+  cell_metadata <- data.frame(
+    Sample = sample_assignments,
+    CellType = cell_type_assignments,
+    row.names = paste0("Cell_", 1:n_cells) # Ensure row names match cell IDs in count_matrix
+  )
+  
+  # 6. Merge the Group information into the cell_metadata based on Sample
+  cell_metadata <- dplyr::left_join(cell_metadata, sample_to_group_map, by = "Sample")
+  # Restore row names after join, as left_join often drops them
+  rownames(cell_metadata) <- paste0("Cell_", 1:n_cells)
+  
+  
+  # 7. Create the Seurat object
+  seurat_object <- CreateSeuratObject(
+    counts = count_matrix_sparse,
+    project = project_name,
+    min.cells = min_cells,
+    min.features = min_features,
+    meta.data = cell_metadata
+  )
+  
+  # Optional: Print some summary information
+  message(paste0("Created Seurat object with ", ncol(seurat_object), " cells and ",
+                 nrow(seurat_object), " genes."))
+  message(paste0("Number of unique samples: ", length(unique(seurat_object$Sample))))
+  message(paste0("Number of unique cell types: ", length(unique(seurat_object$CellType))))
+  message(paste0("Number of unique groups: ", length(unique(seurat_object$Group))))
+  
+  # Return the Seurat object
+  return(seurat_object)
+}
+
