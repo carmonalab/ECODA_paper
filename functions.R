@@ -927,7 +927,7 @@ run_benchmark_analysis <- function(seurat,
   
   if (MrVI) {
     # MrVI
-    res_list[["MrVI"]] <- process_mrvi_fig(seurat, files[["mrvi_dist_file"]], metadata, label_col = seurat@misc$label_col)
+    res_list[["MrVI"]] <- process_mrvi_fig(seurat, files[["mrvi_dist_file"]], metadata, seurat@misc$label_col)
   }
   
   if (scPoli) {
@@ -939,7 +939,7 @@ run_benchmark_analysis <- function(seurat,
   }
   
   if (GloScope) {
-    res_list[["GloScope"]] <- process_gloscope_fig(seurat, labels)
+    res_list[["GloScope"]] <- process_gloscope_fig(seurat, metadata, seurat@misc$label_col)
   }
   
   
@@ -1230,7 +1230,8 @@ process_mrvi_fig <- function(mrvi_dist_file, metadata, label_col, title = "MrVI"
 
 
 process_gloscope_fig <- function(seurat,
-                                 labels,
+                                 metadata,
+                                 label_col,
                                  dens = "KNN",
                                  dist_mat = c("KL"),
                                  k = 9,
@@ -1244,6 +1245,8 @@ process_gloscope_fig <- function(seurat,
     dist_mat = dist_mat,
     k = k,
     BPPARAM = BPPARAM)
+  samples <- row.names(feat_mat)
+  labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
   
   res <- list()
   res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
