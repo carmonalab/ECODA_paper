@@ -21,6 +21,7 @@ suppressPackageStartupMessages({
   library(tidyverse)
   # install.packages("zCompositions")
   # library(zCompositions)
+  library(rstatix)
   
   # devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
   library(EPIC)
@@ -202,16 +203,27 @@ convert_seurat_to_h5ad <- function(seurat,
                                    ds,
                                    shared_storage_path = "/Users/christianhalter/Library/CloudStorage/OneDrive-Personal/Temp") {
   temp_file_path <- file.path(getwd(), "data")
+  temp_file_path_h5ad <- file.path(temp_file_path, paste0(ds, ".h5ad"))
   file_path_h5seurat <- file.path(temp_file_path, paste0(ds, ".h5Seurat"))
   file_path_h5ad <- file.path(shared_storage_path, paste0(ds, ".h5ad"))
   if (!file.exists(file_path_h5ad)) {
     SaveH5Seurat(seurat, filename = file_path_h5seurat)
     Convert(file_path_h5seurat, dest = "h5ad")
     unlink(file_path_h5seurat)
+    file.rename(temp_file_path_h5ad, file_path_h5ad)
     print(paste0("File saved to: ", file_path_h5ad))
   } else {
     print("File already processed")
   }
+}
+
+
+create_clean_seuratv5_object <- function(suerat) {
+  # Create new v5 seurat object
+  # Remove any possible processing, only saving counts and metadata
+  seurat <- CreateSeuratObject(counts = seurat@assays$RNA$counts, meta.data = seurat@meta.data)
+  
+  return (seurat)
 }
 
 
@@ -242,8 +254,6 @@ datrans <- function(count_mat,
                     zero_imp_method = "percentage_all__0.1",
                     n_cores = 8
 ) {
-  
-  labs <- labels
   
   colnames(count_mat) <- make.names(colnames(count_mat), unique = TRUE)
   
@@ -349,9 +359,10 @@ datrans <- function(count_mat,
                              
                              
                              # Calculate scores
-                             avg_sil <- calc_sil(feat_mat = df, labs)
-                             mod <- calc_modularity(feat_mat = df, labs)
-                             cluster_score <- clust_eval(matrix = df, labs)
+                             # avg_sil <- calc_sil(feat_mat = df, labels)
+                             anosim_score <- vegan::anosim(x = df, grouping = labels, distance = "euclidean")[["statistic"]]
+                             mod <- calc_modularity(feat_mat = df, labels)
+                             cluster_score <- clust_eval(matrix = df, labels)
                              
                              
                              # Append results
@@ -360,7 +371,8 @@ datrans <- function(count_mat,
                                zero_imp_method = zmet,
                                n_celltypes = nct,
                                Amount_of_perturbation = da,
-                               Silhouette_score = avg_sil,
+                               # Silhouette_score = avg_sil,
+                               ANOSIM_score = anosim_score,
                                Modularity_score = mod,
                                Adjusted_Rand_Index = cluster_score,
                                bootstrap_id = rep
@@ -634,7 +646,8 @@ impute_zeros <- function(df,
 }
 
 
-load_seurat_object <- function(file_name) {
+# Need to load h5ad without metadata and add it manually, otherwise R errors
+load_h5ad_to_seurat <- function(file_name) {
   file_name_short <- strsplit(file_name, "\\.")[[1]][1]
   file_name_seurat <- paste0(file_name_short, ".h5seurat")
   
@@ -660,9 +673,10 @@ plot_pca <- function(feat_mat,
                      pca_dims = NULL,
                      knn_k = NULL,
                      title = NULL,
-                     sil_score = TRUE,
-                     mod_score = TRUE,
                      cluster_score = TRUE,
+                     mod_score = TRUE,
+                     # sil_score = TRUE,
+                     anosim_score = TRUE,
                      pointsize = 3,
                      labelsize = 1,
                      coord_equal = TRUE,
@@ -681,10 +695,16 @@ plot_pca <- function(feat_mat,
     mod_score <- round(calc_modularity(feat_mat, labels, knn_k), 3)
     title <- paste0(title, "\nModularity score: ", mod_score)
   }
-  if (sil_score) {
-    sil_score <- round(calc_sil(feat_mat, labels), 3)
-    title <- paste0(title, "\nSilhouette score: ", sil_score)
+  # if (sil_score) {
+  #   sil_score <- round(calc_sil(feat_mat, labels), 3)
+  #   title <- paste0(title, "\nSilhouette score: ", sil_score)
+  # }
+  if (anosim_score) {
+    anosim_score <- round(vegan::anosim(x = feat_mat, grouping = labels, distance = "euclidean")[["statistic"]], 3)
+    title <- paste0(title, "\nANOSIM score: ", anosim_score)
   }
+  
+  
   
   p <- factoextra::fviz_pca(res.pca,
                             axes = axes,
@@ -747,16 +767,35 @@ plot_roc_pcad1 <- function(feat_mat, labels) {
 }
 
 
+remove_low_cellcount_samples <- function(seurat,
+                                         min_cells_per_sample = 500,
+                                         show_plot = FALSE) {
+  Idents(seurat) <- "Sample"
+  cells_per_sample <- table(seurat$Sample)
+  seurat <- subset(seurat, idents = names(cells_per_sample[cells_per_sample > min_cells_per_sample]))
+  
+  if (show_plot) {
+    barplot(sort(cells_per_sample))
+    abline(v = min_cells_per_sample)
+  }
+  
+  return(seurat)
+}
+
+
 run_analyses <- function(result_list,
                          ds,
                          seurat,
                          path_data,
+                         path_plots,
                          factors_test) {
   
   if (is.null(result_list[["bmark"]][[ds]])) {
     print(paste("Running benchmark analysis for dataset: ", ds))
     result_list[["bmark"]][[ds]] <- run_benchmark_analysis(seurat = seurat,
+                                                           ds = ds,
                                                            path_data = path_data,
+                                                           path_plots = path_plots,
                                                            factors_test = factors_test)
   }
   
@@ -780,17 +819,17 @@ run_analyses <- function(result_list,
 
 #----------------------------------------------------------->
 run_benchmark_analysis <- function(seurat,
+                                   ds,
                                    sample_col = "Sample",
-                                   n_hvg = 2000,
                                    factors_test,
                                    path_data,
+                                   path_plots,
                                    Pseudobulk = TRUE,
                                    ECODA_deconv = TRUE,
                                    ECODA_low_res = TRUE,
                                    ECODA_high_res = TRUE,
-                                   ECODA_ultrahigh_res = TRUE,
-                                   ECODA_ultrahigh_res_resparam = 20,
-                                   ECODA_selectg_top_hvct = TRUE,
+                                   ECODA_seuratcluster_res = TRUE,
+                                   ECODA_select_top_hvct = TRUE,
                                    ECODA_top_hvct = 0.25,
                                    Pseudobulk_PCA = TRUE,
                                    ECODA_high_res_PCA = TRUE,
@@ -817,48 +856,19 @@ run_benchmark_analysis <- function(seurat,
     }
   }
   
-  
   metadata <- get_metadata(seurat)
-  metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
+  metadata[[sample_col]] <- gsub("-", "_", metadata[[sample_col]])
   
   labels <- get_labels(seurat, seurat@misc$label_col)
   
-  
-  if (Pseudobulk | Pseudobulk_PCA | scITD | GloScope | ECODA_ultrahigh_res) {
-    seurat <- seurat |>
-      NormalizeData() |>
-      FindVariableFeatures(nfeatures = n_hvg)
-
-    if ("var.features" %in% slotNames(seurat@assays[["RNA"]])) {
-      # This path is for older Seurat objects (primarily v2/v3)
-      hvg <- seurat@assays[["RNA"]]@var.features
-    } else if ("var.features" %in% colnames(seurat@assays[["RNA"]]@meta.data)) {
-      varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
-      hvg <- varf[!is.na(varf)]
-    } else {
-      stop("Could not find variable features in expected locations.")
-    }
-    
-    if (GloScope | ECODA_ultrahigh_res) {
-      seurat <- seurat |>
-        ScaleData() |>
-        RunPCA(dims = 1:50, verbose = FALSE)
-      
-      if (ECODA_ultrahigh_res) {
-        seurat <- seurat |>
-          FindNeighbors() |>
-          FindClusters(resolution = ECODA_ultrahigh_res_resparam)
-        ECODA_ultrahigh_res_col_name <- paste0("RNA_snn_res.", ECODA_ultrahigh_res_resparam)
-      }
-    }
-  }
-  
-  # As of Seurat v5, we recommend using AggregateExpression to perform pseudo-bulk analysis.
-  # First group.by variable `ident` starts with a number, appending `g` to ensure valid variable names
-  # This message is displayed once per session.
-  sample_names_starting_with_digit <- grepl("^\\d", unique(seurat[[sample_col]]))
-  if (any(sample_names_starting_with_digit)) {
-    seurat[[sample_col]][grepl("^\\d", seurat[[sample_col]])] <- paste0("g", seurat[[sample_col]][grepl("^\\d", seurat[[sample_col]])])
+  if ("var.features" %in% slotNames(seurat@assays[["RNA"]])) {
+    # This path is for older Seurat objects (primarily v2/v3)
+    hvg <- seurat@assays[["RNA"]]@var.features
+  } else if ("var.features" %in% colnames(seurat@assays[["RNA"]]@meta.data)) {
+    varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
+    hvg <- varf[!is.na(varf)]
+  } else {
+    stop("Could not find variable features in expected locations.")
   }
   
   if (Pseudobulk | Pseudobulk_PCA) {
@@ -871,7 +881,7 @@ run_benchmark_analysis <- function(seurat,
   
   if (ECODA_deconv) {
     # Deconvolute using EPIC
-    res_list[["ECODA_deconv"]] <- process_deconv_fig(pseudobulk, labels)
+    res_list[["ECODA_deconv"]] <- process_deconv_fig(t(pb_norm), labels)
   }
   
   # CoDA
@@ -883,20 +893,28 @@ run_benchmark_analysis <- function(seurat,
   if (ECODA_high_res) {
     ## layer2: high res. cell types
     res_list[["CtCompECODA_highres"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (CLR)\nhigh res.")
-    if (ECODA_selectg_top_hvct) {
+    if (ECODA_select_top_hvct) {
       res_list[[paste0("CtCompECODA_highres_top", ECODA_top_hvct)]] <-
-        process_coda_fig(seurat, labels, ECODA_top_hvct, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (CLR)\nhigh res. top", ECODA_top_hvct*100, "%")
+        process_coda_fig(seurat, labels, ECODA_top_hvct = ECODA_top_hvct, ct_col = seurat@misc$hi_res_ct_col, title = paste0("Cell type composition (CLR)\nhigh res. top ", ECODA_top_hvct*100, "%"))
     }
     res_list[["CtCompFreq_highres"]] <- process_coda_fig(seurat, labels, clr = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (%)\nhigh res.")
   }
   
-  if (ECODA_ultrahigh_res) {
+  # Analyze for all resolutions
+  
+  if (ECODA_seuratcluster_res) {
     ## Ultra high res. cell type clusters based on Leiden clustering to artificially increase the number of cell types (clusters), e.g. to 250 cell types (clusters)
-    res_list[["CtCompECODA_ultrahighres"]] <- process_coda_fig(seurat, labels, ct_col = ECODA_ultrahigh_res_col_name, title = "Cell type composition (CLR)\nultra-high res.")
-    if (ECODA_selectg_top_hvct) {
-      res_list[[paste0("CtCompECODA_ultrahighres_top", ECODA_top_hvct)]] <-
-        process_coda_fig(seurat, labels, ECODA_top_hvct, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (CLR)\nultra-high res. top", ECODA_top_hvct*100, "%")
+    # Resolutions for seurat clustering
+    res <- c(0.4, 2, 5, 20)
+    
+    for (r in res) {
+      res_col_name <- paste0("RNA_snn_res.", r)
+      res_list[[paste0("CtCompECODA_seuratres_", r)]] <- process_coda_fig(seurat, labels, ct_col = res_col_name, title = paste0("Cell type composition (CLR)\nSeurat res. ", r))
+      if (ECODA_select_top_hvct) {
+        res_list[[paste0("CtCompECODA_seuratres_", r, "_top", ECODA_top_hvct)]] <-
+          process_coda_fig(seurat, labels, ECODA_top_hvct, ct_col = res_col_name, title = paste0("Cell type composition (CLR)\nultra-high res. ", r, " top ", ECODA_top_hvct*100, "%"))
       }
+    }
   }
   
   if (any(Pseudobulk_PCA, ECODA_high_res_PCA, MOFA, scITD)) {
@@ -927,15 +945,15 @@ run_benchmark_analysis <- function(seurat,
   
   if (MrVI) {
     # MrVI
-    res_list[["MrVI"]] <- process_mrvi_fig(seurat, files[["mrvi_dist_file"]], metadata, seurat@misc$label_col)
+    res_list[["MrVI"]] <- process_mrvi_fig(files[["mrvi_dist_file"]], labels)
   }
   
   if (scPoli) {
-    res_list[["scPoli"]] <- process_scpoli_fig(files[["scpoli_emb_file"]], metadata, seurat@misc$label_col)
+    res_list[["scPoli"]] <- process_scpoli_fig(files[["scpoli_emb_file"]], labels)
   }
   
   if (PILOT) {
-    res_list[["PILOT"]] <- process_pilot_fig(files[["pilot_dist_file"]], metadata, seurat@misc$label_col)
+    res_list[["PILOT"]] <- process_pilot_fig(files[["pilot_dist_file"]], labels)
   }
   
   if (GloScope) {
@@ -950,15 +968,10 @@ run_benchmark_analysis <- function(seurat,
   }
   if (show_pca_plots) {print(p)}
   if (save_pca_plots) {
-    path <- str_split(mrvi_dist_file, "/")[[1]]
-    ds <- path[length(path)]
-    ds <- gsub(".nc", "", ds)
-    path <- path[1:(length(path)-3)]
-    path_plots <- file.path(do.call(file.path, as.list(path)), "plots")
     ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
            plot = p,
-           width = 15,
-           height = 10)
+           width = length(res_list),
+           height = length(res_list)*2/3)
   }
   
   return(res_list)
@@ -1015,8 +1028,12 @@ process_coda_fig <- function(seurat,
     }
   }
   
+  if (!is.null(pca_dims)) {
+    feat_mat <- prcomp(feat_mat, rank. = pca_dims)[["x"]]
+  }
+  
   res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, pca_dims = pca_dims, title = title)
+  res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
@@ -1031,8 +1048,12 @@ process_pseudobulk_fig <- function(feat_mat,
                                    title = "Pseudobulk gene expression",
                                    knn_k = NULL) {
   
+  if (!is.null(pca_dims)) {
+    feat_mat <- prcomp(feat_mat, rank. = pca_dims)[["x"]]
+  }
+  
   res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, pca_dims = pca_dims, title = title)
+  res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
@@ -1213,11 +1234,10 @@ process_scitd_fig <- function(seurat,
 }
 
 
-process_mrvi_fig <- function(mrvi_dist_file, metadata, label_col, title = "MrVI") {
+process_mrvi_fig <- function(mrvi_dist_file, labels, title = "MrVI") {
   
-  feat_mat <- arrow::read_feather(mrvi_dist_file)
-  samples <- row.names(feat_mat)
-  labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
+  feat_mat <- arrow::read_feather(mrvi_dist_file) %>%
+    select(-last_col())
   
   res <- list()
   res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
@@ -1246,6 +1266,12 @@ process_gloscope_fig <- function(seurat,
     k = k,
     BPPARAM = BPPARAM)
   samples <- row.names(feat_mat)
+  sample_names_starting_with_digit <- grepl("^\\d", samples)
+  if (any(sample_names_starting_with_digit)) {
+    samples[grepl("^\\d", samples)] <- paste0("g", samples[grepl("^\\d", samples)])
+  }
+  samples <- gsub("-", "_", samples)
+  
   labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
   
   res <- list()
@@ -1258,11 +1284,10 @@ process_gloscope_fig <- function(seurat,
 }
 
 
-process_scpoli_fig <- function(scpoli_emb_file, metadata, label_col, title = "scPoli") {
+process_scpoli_fig <- function(scpoli_emb_file, labels, title = "scPoli") {
   
-  feat_mat <- arrow::read_feather(scpoli_emb_file)
-  samples <- row.names(feat_mat)
-  labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
+  feat_mat <- arrow::read_feather(scpoli_emb_file) %>%
+    select(-last_col())
   
   res <- list()
   res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
@@ -1274,11 +1299,10 @@ process_scpoli_fig <- function(scpoli_emb_file, metadata, label_col, title = "sc
 }
 
 
-process_pilot_fig <- function(pilot_dist_file, metadata, label_col, title = "PILOT") {
+process_pilot_fig <- function(pilot_dist_file, labels, title = "PILOT") {
   
-  feat_mat <- arrow::read_feather(pilot_dist_file)
-  samples <- row.names(feat_mat)
-  labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
+  feat_mat <- arrow::read_feather(pilot_dist_file) %>%
+    select(-last_col())
 
   res <- list()
   res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
@@ -1301,19 +1325,20 @@ run_transformation_analysis <- function(ct_comps, labels) {
                       n_ct_to_select = 0,
                       reps = 20,
                       n_cores = 1,
-                      methods = c(
+                      trans_method = c(
                         "counts",
                         "freq",
                         "arcsine_sqrt",
-                        "arcsine_sqrt_pca",
+                        # "arcsine_sqrt_pca",
                         "alr_randref",
                         "alr_mincvref",
                         "clr",
                         "clr_pca"
                       ))
   res_list <- res_list %>%
-    group_by(method) %>%
-    summarize(Silhouette_score = mean(Silhouette_score),
+    dplyr::group_by(trans_method) %>%
+    summarize(ANOSIM_score = mean(ANOSIM_score),
+              # Silhouette_score = mean(Silhouette_score),
               Modularity_score = mean(Modularity_score),
               Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
     ungroup()
@@ -1324,8 +1349,6 @@ run_transformation_analysis <- function(ct_comps, labels) {
 
 
 run_zeroimp_analysis <- function(ct_comps, labels) {
-  
-  test <- colSums(df) == 0
   
   df <- ct_comps %>% select_if(colSums(.) != 0) %>% mutate_all(as.numeric)
   
