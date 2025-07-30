@@ -1,0 +1,302 @@
+---
+title: "Zhang et al. dataset cell type annotation"
+author: "Christian Halter"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+Zhang Yuanyuan Cancer Cell 2021; CD45+ cells; primary or metastatic tumor tissues and peripheral blood of 22 advanced TNBC patients treated with paclitaxel or its combination with atezolizumab.
+
+paper: https://www.sciencedirect.com/science/article/pii/S1535610821004992?via%3Dihub
+accession:https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE169246
+
+This script takes output of "scRNAseq_data_processing_ZhangY_2022_34653365.Rmd"
+
+# Load libraries
+
+```{r, include=FALSE, fig.width=16, fig.height=12}
+# renv::init()
+# renv::restore()
+# renv::snapshot()
+# 
+# remotes::install_github("carmonalab/UCell", ref="f6e711c")
+# remotes::install_github("carmonalab/scGate", ref="17a4ce6")
+# remotes::install_github("carmonalab/STACAS", ref="0a88c5e")
+# remotes::install_github("carmonalab/ProjecTILs", ref="fdc75e0")
+# remotes::install_github("carmonalab/SignatuR", ref="0aded1d")
+# remotes::install_github("carmonalab/HiTME", ref="73ff3ca", force = T)
+
+# remotes::install_github("carmonalab/scooter", ref="f31eab3", force = T)
+
+library(scooter)
+
+# remotes::install_github("saezlab/MOFAcellulaR")
+
+library(Seurat)
+# devtools::install_github('satijalab/seurat-data')
+library(SeuratData)
+# install.packages("hdf5r")
+# remotes::install_github("mojaveazure/seurat-disk")
+library(SeuratDisk)
+library(tidyverse)
+library(scGate)
+library(UCell)
+library(STACAS)
+library(scGate)
+library(ProjecTILs)
+library(SignatuR)
+library(HiTME)
+library(dplyr)
+```
+
+
+# Set paths
+```{r}
+my_seed <- 321
+set.seed(my_seed)
+
+path_nas <- file.path("Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
+```
+
+
+```{r}
+library(tictoc)
+
+tic()
+readRDS("/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/Kfoury_2021_34719426/output/Kfoury_2021_34719426.rds")
+toc()
+
+tic()
+readRDS("/Users/christianhalter/Desktop/ECODA_paper/Kfoury_2021_34719426.rds")
+toc()
+
+```
+
+
+
+```{r}
+datasets <- list(
+  "Adams" = list(
+    ds_dir = "AdamsT_2020_32832599",
+    ds_filename = "AdamsT_2020_32832599.rds"
+  ),
+  
+  "Bassez" = list(
+    ds_dir = "BassezA_2021_33958794",
+    ds_filename = "BassezA_2021_33958794whole.rds"
+  ),
+  
+  "GongSharma_age_females_cmvneg" = list(
+    ds_dir = "GongSharma_2024_PrePrintTBD",
+    ds_filename = "Gongsharma_age_females_cmvneg.h5ad"
+  ),
+  
+  "GongSharma_cmv_females" = list(
+    ds_dir = "GongSharma_2024_PrePrintTBD",
+    ds_filename = "Gongsharma_cmv_females.h5ad"
+  ),
+  
+  "Kfoury" = list(
+    ds_dir = "Kfoury_2021_34719426",
+    ds_filename = "Kfoury_2021_34719426.rds"
+  ),
+  
+  "Lee" = list(
+    ds_dir = "LeeA_2021_34836966",
+    ds_filename = "LeeA_2021_34836966p_tumor_seurat.rds"
+  ),
+  
+  "Pelka" = list(
+    ds_dir = "PelkaK_2022_34450029",
+    ds_filename = "PelkaK_2022_34450029whole.rds"
+  ),
+  
+  "Smillie" = list(
+    ds_dir = "SmillieC_2019_31348891",
+    ds_filename = "SmillieC_2019_31348891.rds"
+  ),
+  
+  "Stephenson" = list(
+    ds_dir = "MitchelJ_2023_PrePrintTBD",
+    ds_filename = "MitchelJ_2023_PrePrintTBD_Stephenson_preprocessed.rds"
+  ),
+  
+  "Wu" = list(
+    ds_dir = "WuS_2021_34493872",
+    ds_filename = "WuS_2021_34493872.rds"
+  ),
+  
+  "Zhang" = list(
+    ds_dir = "ZhangY_2022_34653365",
+    ds_filename = "ZhangY_2022_34653365.rds",
+    subset_vars = list(
+      Treatment = list(values = "Pre", op = "in"),
+      Clinical.efficacy. = list(values = "-", op = "notin"),
+      Sample = list(values = c("Pre_P012_b", "Pre_P013_t"), op = "notin")
+    ),
+    sample_col = "Sample"
+  )
+)
+
+`%notin%` <- Negate(`%in%`)
+
+# Number of highly variable features (genes) to select
+n_hvg <- 2000
+
+# Resolutions for seurat clustering
+res <- c(0.4, 2, 5, 20)
+### 0.4 (lowres ~ 10-15 cell types)
+### 2 (medium ~ 30-50 cell types)
+### 5 (~ 100 cell types)
+### 20 (Ultrahires ~ 250-300 cell types)
+
+for (ds in names(datasets)) {
+  di <- datasets[[ds]][[ds_dir]]
+  file_name <- datasets[[ds]][[ds_filename]]
+  file_name_no_ending <- gsub(".rds|.h5ad", "", file_name)
+  processed_file_path <- file.path(getwd(), "data", paste0(file_name_no_ending, "_ECODAprocessed.rds"))
+  
+  if (!file.exists(processed_file_name)) {
+    input_file_path <- file.path(di, file_name)
+    
+    if (endsWith(input_file_path, ".rds")) {
+      seurat <- readRDS(file = input_file_path)
+    } else if (endsWith(input_file_path, ".h5ad")) {
+      seurat <- load_h5ad_to_seurat(input_file_path)
+    }
+    
+    # Drop unnecessary metadata cols
+    todo
+    
+    # Create clean seuratv5 object
+    seurat <- create_clean_seuratv5_object(seurat)
+    
+    # Remove low cell count samples
+    seurat <- remove_low_cellcount_samples(seurat, min_cells_per_sample = 500)
+    
+    # Remove dataset specific samples
+    for (subset_var in names(datasets[[ds]][[subset_vars]])) {
+      subset_var_values <- datasets[[ds]][[subset_vars]][["op"]]
+      op <- datasets[[ds]][[subset_vars]][["op"]]
+      if (op == "in") {
+        seurat <- subset(seurat, subset = !!sym(subset_var) %in% subset_var_values)
+      } else if (op == "notin") {
+        seurat <- subset(seurat, subset = !!sym(subset_var) %notin% subset_var_values)
+      }
+    }
+    
+    # Add “Sample” metadata columns
+    seurat[["Sample"]] <- seurat[[sample_col]]
+    
+    # Sample names starting with digits are not allowed due to seurat
+    sample_names_starting_with_digit <- grepl("^\\d", unique(seurat[["Sample"]]))
+    if (any(sample_names_starting_with_digit)) {
+      seurat[["Sample"]][grepl("^\\d", seurat[["Sample"]])] <- paste0("g", seurat[["Sample"]][grepl("^\\d", seurat[["Sample"]])])
+    }
+    
+    # If not file exists: Save as h5ad
+    todo
+    
+    # Standard Seurat preprocessing part 1
+    seurat <- seurat |>
+      NormalizeData() |>
+      FindVariableFeatures(nfeatures = n_hvg)
+    
+    # Annotate cells
+    ## HiTME
+    ### Drop unnecessary metadata (keep original + annotations)
+    ### Merge
+    ## scAtomic
+    
+    # Standard Seurat preprocessing part 2
+    seurat <- seurat |>
+      ScaleData() |>
+      RunPCA(dims = 1:50, verbose = FALSE) |>
+      FindNeighbors()
+    for (r in res) {
+      seurate <- seurat |>
+        FindClusters(resolution = r)
+    }
+    
+    
+    # Save processed Seurat object
+    todo
+    saveRDS(seurat, file = processed_file_path)
+  }
+}
+
+
+```
+
+
+
+
+
+
+
+
+# Celltype annotation with HiTME
+
+```{r}
+# Get scGate database of pre-defined gating models
+scGate_models_DB <- get_scGateDB(branch = "dev", verbose = T, force_update = TRUE)
+scGate_models_blood <- scGate_models_DB$human$PBMC
+scGate_models_blood$MoMac <- scGate_models_blood$Monocyte
+scGate_models_blood$Monocyte <- NULL
+scGate_models_tumor <- scGate_models_DB$human$HiTME
+# Need to have same model names in both lists for HiTME downstream processing)
+scGate_models_blood <- c(scGate_models_blood, scGate_models_tumor[!names(scGate_models_tumor) %in% names(scGate_models_blood)])
+
+# Load ProjecTILs reference maps
+path_ref <- "~/Dropbox/CSI/reference_atlases/sketched_200ct"
+ref.maps_sketched <- list(CD8 = load.reference.map(file.path(path_ref, "sketched_CD8T_human_ref_v1.rds")),
+                          CD4 = load.reference.map(file.path(path_ref, "sketched_CD4T_human_ref_v2.rds")),
+                          DC = load.reference.map(file.path(path_ref, "sketched_DC_human_ref_v2.rds")),
+                          MoMac = load.reference.map(file.path(path_ref, "sketched_MoMac_human_v1.rds"))
+)
+
+obj.list <- SplitObject(obj, split.by = "Sample")
+rm(obj)
+gc()
+
+for (i in 1:length(obj.list)) {
+  print(i)
+  if (obj.list[[i]]$Tissue[1] == "blood") {
+    obj.list[[i]] <- Run.HiTME(object = obj.list[[i]],
+                               scGate.model = scGate_models_blood,
+                               ref.maps = ref.maps_sketched
+    )
+  } else {
+    obj.list[[i]] <- Run.HiTME(object = obj.list[[i]],
+                               scGate.model = scGate_models_tumor,
+                               ref.maps = ref.maps_sketched
+    )
+  }
+}
+
+rm(i, ref.maps_sketched)
+gc()
+
+save_objs(obj.list, path_output_samples)
+```
+
+```{r}
+annotate_samples_HiTME <- function(
+    seurat,
+    blood_samples,
+    nonblood_samples,
+    scGate_version = "latest",
+    scGate_branch = "dev") {
+  
+  
+}
+```
+
