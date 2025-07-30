@@ -19,13 +19,11 @@ This script prepares datasets for downstream analysis
 # Load libraries and set parameters
 
 ```{r message=FALSE, warning=FALSE}
-library(rstatix)
-
 source("functions.R")
 
 # Set paths
-root <- "/Users/christianhalter/Library/CloudStorage/OneDrive-SharedLibraries-UniversitédeGenève/Santiago Carmona - CSI/LabPapers/ECODA"
-path_plots <- file.path(root, "plots")
+path_nas <- file.path("Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
+path_plots <- file.path(getwd(), "plots")
 path_data <- file.path(getwd(), "data")
 ```
 
@@ -33,7 +31,7 @@ path_data <- file.path(getwd(), "data")
 # Create results list to fill
 
 ```{r}
-factors_test <- c(1, 2, 3, 5, 10)
+factors_test <- c(2, 3, 5, 10)
 
 result_file <- "result_list.rds"
 
@@ -71,7 +69,7 @@ if (any(elem_null)) {
   # Set paths
   ds_name <- "ZhangY_2022_34653365"
   
-  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_root <- file.path(path_nas, ds_name)
   path_output <- file.path(path_root, "output")
   path_output_samples <- file.path(path_output, "samples")
   
@@ -110,7 +108,6 @@ if (any(elem_null)) {
   
   rm(obj.list); gc()
   
-  # Convert Seurat object to anndata for interoperability with python
   convert_seurat_to_h5ad(seurat, ds)
   
   
@@ -119,7 +116,7 @@ if (any(elem_null)) {
   seurat@misc$hi_res_ct_col <- "layer2"
   
   
-  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
 }
 ```
 
@@ -146,7 +143,7 @@ if (any(elem_null)) {
   
   ds_name <- "MitchelJ_2023_PrePrintTBD"
   
-  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_root <- file.path(path_nas, ds_name)
   path_output <- file.path(path_root, "output")
   
   seurat <- readRDS(file.path(path_output, sprintf("%s_Stephenson_preprocessed.rds", ds_name)))
@@ -166,18 +163,7 @@ if (any(elem_null)) {
   seurat$Sample <- seurat$sample_id
   
   
-  # Convert Seurat object to anndata for interoperability with python
   convert_seurat_to_h5ad(seurat, ds)
-  
-
-  # # Convert Seurat object to anndata for interoperability with python
-  # object <- CreateSeuratObject(counts = seurat@assays$RNA$counts, meta.data = seurat@meta.data[, c("Sample", "initial_clustering")])
-  # object[["RNA3"]] <- as(object = object[["RNA"]], Class = "Assay")
-  # DefaultAssay(object) <- "RNA3"
-  # object[["RNA"]] <- NULL
-  # object <- RenameAssays(object = object, RNA3 = 'RNA')
-  # convert_seurat_to_h5ad(object, ds)
-  # rm(object); gc()
   
 
   
@@ -187,7 +173,7 @@ if (any(elem_null)) {
 
   
     
-  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
 }
 ```
 
@@ -222,16 +208,86 @@ for (a in analysis_elems) {
 # If any analyses missing, process dataset for missing analyses
 if (any(elem_null)) {
   
-  seurat <- load_seurat_object("data/Gongsharma_cmv_females.h5ad")
+  seurat <- load_h5ad_to_seurat("data/Gongsharma_cmv_females.h5ad")
   seurat$Sample <- seurat$specimen.specimenGuid
 
   seurat@misc$label_col <- "subject.cmv"
   seurat@misc$low_res_ct_col <- "AIFI_L1"
   seurat@misc$hi_res_ct_col <- "AIFI_L3"
     
-  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
 }
+
+# Error in if (!any(within)) stop("there should be replicates within groups") : 
+#   missing value where TRUE/FALSE needed
+# Error during wrapup: not that many frames on the stack
+# Error: no more error handlers available (recursive errors?); invoking 'abort' restart
 ```
+
+### Check for batch effect
+
+```{r}
+alpha <- 0.3
+
+meta_cols_plot <- c(
+  "Sample",
+  "RNA_snn_res.0.5",
+  "batch_id",
+  "pool_id",
+  "chip_id",
+  "well_id",
+  "cohort.cohortGuid",
+  "AIFI_L1",
+  "AIFI_L2",
+  "AIFI_L3",
+  "subject.cmv"
+)
+
+# Check in broad cell types (strong global batch effect)
+
+Idents(seurat) <- "Sample"
+sub <- subset(x = seurat, downsample = 100)
+
+sub <- sub |>
+  NormalizeData() |>
+  FindVariableFeatures(nfeatures = 2000) |>
+  ScaleData() |>
+  RunPCA(dims = 1:50, verbose = FALSE) |>
+  FindNeighbors() |>
+  FindClusters(resolution = 0.5) |>
+  RunUMAP(dims = 1:50)
+
+for (mc in meta_cols_plot) {
+  Idents(sub) <- mc
+  DimPlot(sub, reduction = "umap", alpha = alpha)
+}
+
+# No strong batch effect observed
+
+
+# To check for more subtle batch effect, we can subset to only T cells, where the gene expression difference between cells is smaller
+# Thus, by subseting to only T cells, we should be better able to see smaller batch effects
+
+sub <- subset(x = seurat, subset = AIFI_L1 == "T cell")
+sub <- subset(x = sub, downsample = 1000)
+
+sub <- sub |>
+  NormalizeData() |>
+  FindVariableFeatures(nfeatures = 2000) |>
+  ScaleData() |>
+  RunPCA(dims = 1:50, verbose = FALSE) |>
+  FindNeighbors() |>
+  FindClusters(resolution = 0.5) |>
+  RunUMAP(dims = 1:50)
+
+for (mc in meta_cols_plot) {
+  Idents(sub) <- mc
+  DimPlot(sub, reduction = "umap", alpha = alpha)
+}
+
+# No weak batch effect observed
+```
+
 
 
 ## Age (females cmvneg)
@@ -251,7 +307,7 @@ for (a in analysis_elems) {
 # If any analyses missing, process dataset for missing analyses
 if (any(elem_null)) {
 
-  seurat <- load_seurat_object("data/Gongsharma_age_females_cmvneg.h5ad")
+  seurat <- load_h5ad_to_seurat("data/Gongsharma_age_females_cmvneg.h5ad")
   seurat$Sample <- seurat$specimen.specimenGuid
   
   seurat$age <- as.factor(ifelse(seurat$sample.subjectAgeAtDraw < 50, "young", "old"))
@@ -260,7 +316,7 @@ if (any(elem_null)) {
   seurat@misc$low_res_ct_col <- "AIFI_L1"
   seurat@misc$hi_res_ct_col <- "AIFI_L3"
   
-  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
 }
 ```
 
@@ -288,29 +344,18 @@ if (any(elem_null)) {
 
   ds_name <- "LeeA_2021_34836966"
   
-  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_root <- file.path(path_nas, ds_name)
   path_output <- file.path(path_root, "output")
   
   seurat <- readRDS(file.path(path_output, sprintf("%sp_tumor_seurat.rds", ds_name)))
   
-  # Convert Seurat object to anndata for interoperability with python
   convert_seurat_to_h5ad(seurat, ds)
-
-  # # Convert Seurat object to anndata for interoperability with python
-  # object <- seurat
-  # object[["RNA3"]] <- as(object = object[["RNA"]], Class = "Assay")
-  # DefaultAssay(object) <- "RNA3"
-  # object[["RNA"]] <- NULL
-  # object <- RenameAssays(object = object, RNA3 = 'RNA')
-  # SaveH5Seurat(object, filename = "lee.h5Seurat")
-  # Convert("lee.h5Seurat", dest = "h5ad")
-  # rm(object); gc()
   
   seurat@misc$label_col <- "condition"
   seurat@misc$low_res_ct_col <- "scGate_multi"
   seurat@misc$hi_res_ct_col <- "functional.cluster"
   
-  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
 }
 ```
 
@@ -340,14 +385,13 @@ if (any(elem_null)) {
 
   ds_name <- "PelkaK_2022_34450029"
 
-  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_root <- file.path(path_nas, ds_name)
   path_output <- file.path(path_root, "output")
 
   seurat <- readRDS(file.path(path_output, sprintf("%swhole.rds", ds_name)))
   
   seurat$Sample <- as.character(seurat$Sample)
 
-  # Convert Seurat object to anndata for interoperability with python
   convert_seurat_to_h5ad(seurat, ds)
 
 
@@ -355,7 +399,7 @@ if (any(elem_null)) {
   seurat@misc$low_res_ct_col <- "OriginalAnnotationLevel1"
   seurat@misc$hi_res_ct_col <- "OriginalAnnotationLevel3"
 
-  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
 }
 ```
 
@@ -364,6 +408,9 @@ if (any(elem_null)) {
 # ---------------------------------------------------------------
 
 # Bassez
+
+# IMPORTANT: Needs automated annotation, as seurat$cohotr c("neoadjuvant_chemo", "treatment_naive") seem to be separately and differently annotated by the authors
+## Has also other non-immune cells
 
 ```{r}
 ds <- "Bassez"
@@ -382,23 +429,25 @@ if (any(elem_null)) {
 
   ds_name <- "BassezA_2021_33958794"
 
-  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_root <- file.path(path_nas, ds_name)
   path_output <- file.path(path_root, "output")
 
   seurat <- readRDS(file.path(path_output, sprintf("%swhole.rds", ds_name)))
 
   seurat <- subset(seurat, subset = timepoint == "Pre")
+  seurat <- subset(seurat, subset = expansion != "n/a")
+  seurat <- subset(seurat, subset = cohort == "treatment_naive")
 
   seurat$Sample <- seurat$sample
   seurat$cellSubType[is.na(seurat$cellSubType)] <- seurat$cellType[is.na(seurat$cellSubType)]
 
   convert_seurat_to_h5ad(seurat, ds)
 
-  seurat@misc$label_col <- "cohort"
+  seurat@misc$label_col <- "expansion"
   seurat@misc$low_res_ct_col <- "cellType"
   seurat@misc$hi_res_ct_col <- "cellSubType"
 
-  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
 }
 ```
 
@@ -426,30 +475,19 @@ if (any(elem_null)) {
   
   ds_name <- "WuS_2021_34493872"
   
-  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_root <- file.path(path_nas, ds_name)
   path_output <- file.path(path_root, "output")
   
   seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
   
-  # Convert Seurat object to anndata for interoperability with python
   convert_seurat_to_h5ad(seurat, ds)
-  
-
-  # # Convert Seurat object to anndata for interoperability with python
-  # object <- seurat
-  # object[["RNA3"]] <- as(object = object[["RNA"]], Class = "Assay")
-  # DefaultAssay(object) <- "RNA3"
-  # object[["RNA"]] <- NULL
-  # object <- RenameAssays(object = object, RNA3 = 'RNA')
-  # convert_seurat_to_h5ad(seurat, ds)
-  # rm(object); gc()
   
   
   seurat@misc$label_col <- "subtype"
   seurat@misc$low_res_ct_col <- "celltype_major"
   seurat@misc$hi_res_ct_col <- "celltype_subset"
   
-  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
 }
 ```
 
@@ -478,26 +516,24 @@ if (any(elem_null)) {
   
   ds_name <- "SmillieC_2019_31348891"
   
-  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_root <- file.path(path_nas, ds_name)
   path_output <- file.path(path_root, "output")
   
   
   seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
   
-  stot <- seurat
   # seurat <- subset(stot, subset = Tissue_compartment == "Epithelial")
-  # seurat <- subset(stot, subset = Tissue_compartment == "Lamina_propria")
-  seurat <- subset(stot, subset = stot$OriginalAnnotationLevel1 == "Immune")
+  seurat <- subset(seurat, subset = Tissue_compartment == "Lamina_propria")
+  seurat <- subset(seurat, subset = seurat$OriginalAnnotationLevel1 == "Immune")
   
-  # Convert Seurat object to anndata for interoperability with python
   convert_seurat_to_h5ad(seurat, ds)
   
   
-  seurat@misc$label_col <- "Tissue_compartment"
+  seurat@misc$label_col <- "Condition"
   seurat@misc$low_res_ct_col <- "OriginalAnnotationLevel2"
   seurat@misc$hi_res_ct_col <- "OriginalAnnotationLevel3"
   
-  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
 }
 ```
 
@@ -510,7 +546,6 @@ if (any(elem_null)) {
 
 ```{r}
 ds <- "Adams"
-
 
 elem_null <- c()
 for (a in analysis_elems) {
@@ -526,7 +561,7 @@ if (any(elem_null)) {
   
   ds_name <- "AdamsT_2020_32832599"
   
-  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_root <- file.path(path_nas, ds_name)
   path_output <- file.path(path_root, "output")
   
   seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
@@ -537,7 +572,6 @@ if (any(elem_null)) {
   # seurat$Sample <- gsub("-", "_" seurat$Sample)
   Idents(seurat) <- "Sample"
   
-  # Convert Seurat object to anndata for interoperability with python
   convert_seurat_to_h5ad(seurat, ds)
 
   
@@ -545,7 +579,7 @@ if (any(elem_null)) {
   seurat@misc$low_res_ct_col <- "OriginalAnnotationLevel1"
   seurat@misc$hi_res_ct_col <- "OriginalAnnotationLevel2"
   
-  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
 }
 ```
 
@@ -574,19 +608,26 @@ if (any(elem_null)) {
   
   ds_name <- "Kfoury_2021_34719426"
   
-  path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+  path_root <- file.path(path_nas, ds_name)
   path_output <- file.path(path_root, "output")
   
   seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
   
+  seurat$cells_lowres <- as.character(seurat$cells)
+  seurat$cells_lowres[seurat$cells_lowres %in% c("CD4+ Naive", "CD8+ Naive", "CTL-1", "CTL-2", "Th1/17", "Treg Active", "Treg Resting")] <- "Tcells"
+  seurat$cells_lowres[seurat$cells_lowres %in% c("NK", "NKT")] <- "NKcells"
+  seurat$cells_lowres[seurat$cells_lowres %in% c("Immature B cells", "Mature B", "Pro-B", "memBcell")] <- "Bcells"
+  seurat$cells_lowres[seurat$cells_lowres %in% c("Mono1", "Mono2", "Mono3", "Monocyte prog", "TAM", "TIM")] <- "MoMac"
+  seurat$cells_lowres[seurat$cells_lowres %in% c("mDC", "pDC")] <- "DCcells"
+  seurat$cells_lowres <- as.factor(seurat$cells_lowres)
+  
   seurat@misc$label_col <- "Status"
-  seurat@misc$low_res_ct_col <- "cells"
+  seurat@misc$low_res_ct_col <- "cells_lowres"
   seurat@misc$hi_res_ct_col <- "cells"
   
-  # Convert Seurat object to anndata for interoperability with python
   convert_seurat_to_h5ad(seurat, ds)
   
-  result_list <- run_analyses(result_list, ds, seurat, path_data, factors_test)
+  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
 }
 ```
 
@@ -615,11 +656,6 @@ if (any(elem_null)) {
 #                                save_pca_plots = FALSE
 # )
 ```
-
-
-
-
-
 
 
 
@@ -685,28 +721,44 @@ df_results <- imap_dfr(bmark_result_list, ~ {
 ```
 
 
+```{r}
+levs <- sort(as.character(unique(df_results$method)))
+levs
+```
+
+
 
 ## Plot results
 
 ```{r fig.height=10, fig.width=14}
-levs <- sort(as.character(unique(df_results$method)))
 levs <- c(
-  "ECODA_high_res",
+  "CtCompECODA_highres",
+  "CtCompECODA_highres_top0.25",
   "ECODA_high_res_2_PCA_dims",
+  "ECODA_high_res_3_PCA_dims",
   "ECODA_high_res_5_PCA_dims",
   "ECODA_high_res_10_PCA_dims",
-  "MrVI",
+  "CtCompECODA_ultrahighres",
+  "CtCompECODA_ultrahighres_top0.25",
   "Pseudobulk",
   "Pseudobulk_2_PCA_dims",
+  "Pseudobulk_3_PCA_dims",
   "Pseudobulk_5_PCA_dims",
   "Pseudobulk_10_PCA_dims",
+  "MrVI",
+  "GloScope",
+  "scPoli",
+  "PILOT",
   "MOFA_2_factors",
+  "MOFA_3_factors",
   "MOFA_5_factors",
   "MOFA_10_factors",
   "scITD_2_factors",
+  "scITD_3_factors",
   "scITD_5_factors",
   "scITD_10_factors",
-  "ECODA_low_res",
+  "CtCompFreq_highres",
+  "CtCompECODA_lowres",
   "ECODA_deconv"
 )
 
@@ -739,7 +791,7 @@ df_results_modularity$method <- factor(df_results_modularity$method, levels = df
 
 
 # New facet label names for dose variable
-score.labs <- c("Adjusted rand index", "Modularity score", "Silhouette score")
+score.labs <- c("ANOSIM score", "Adjusted rand index", "Modularity score")
 names(score.labs) <- sort(unique(df_results$score))
 
 # New facet label names for supp variable
@@ -766,28 +818,6 @@ ggsave(file.path(path_plots, "benchmark_detailed_barplot.pdf"),
        width = 10,
        height = 6)
 
-
-# df_results %>%
-#   filter(score == "mod_score" | score == "cluster_score") %>%
-#   group_by(score, method) %>%
-#   summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
-#   ungroup() %>%
-#   
-#   ggplot(aes(x = method, y = mean)) + 
-#   geom_bar(stat = "identity", position = position_dodge()) +
-#   # stat_summary(fun.y = mean, geom = "bar") +
-#   geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
-#   # geom_point(position = position_jitterdodge()) +
-#   labs(x = "", y = "") +
-#   theme_minimal() +
-#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-#   facet_grid(scales = "free",
-#              rows = vars(score),
-#              labeller = labeller(score = score.labs))
-# 
-# ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores_mod_clust.pdf"),
-#        width = 2.5,
-#        height = 4)
 
 
 
@@ -829,18 +859,6 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores.pdf"),
        height = 7)
 
 
-# 
-# df_results_clustering %>%
-#   ggplot(aes(x = method, y = mean)) + 
-#   geom_bar(stat = "identity", position = position_dodge()) +
-#   # stat_summary(fun.y = mean, geom = "bar") +
-#   geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
-#   # geom_point(position = position_jitterdodge()) +
-#   labs(x = "", y = "Adjusted Rand Index") +
-#   theme_minimal() +
-#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-#   NoLegend()
-
 
 df_results_clustering <- df_results %>%
   filter(score == "cluster_score")
@@ -848,7 +866,7 @@ df_results_clustering <- df_results %>%
 df_results_clustering <- df_results_clustering[!grepl("2|10|PCA", df_results_clustering$method), ]
 
 for (ds in unique(df_results_clustering$dataset)) {
-  number_cts <- dim(result_list$bmark[[ds]]$ECODA_high_res$feat_mat)[2]
+  number_cts <- dim(result_list$bmark[[ds]]$CtCompECODA_highres$feat_mat)[2]
   df_results_clustering[df_results_clustering$dataset == ds, "number_celltypes"] <- number_cts
 }
 
@@ -869,11 +887,11 @@ my_comparisons <- Filter(function(x) length(unique(x)) == 2, my_comparisons)
 my_comparisons <- my_comparisons[c(3, 6, 4, 5, 2, 1)]
 
 
-ggplot(df_results_clustering, aes(x = method, y = value)) +
+p <- ggplot(df_results_clustering, aes(x = method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
   stat_compare_means(
-    comparisons = my_comparisons,
-    # ref.group = "Pseudobulk",
+    # comparisons = my_comparisons,
+    ref.group = "Pseudobulk",
     method = "t.test",
     paired = TRUE,
     angle = 15,
@@ -891,6 +909,8 @@ ggplot(df_results_clustering, aes(x = method, y = value)) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
   labs(group = legend_title, linetype = legend_title, shape = legend_title) +
   theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1))
+print(p)
+print(p)
 ggsave(file.path(path_plots, "benchmark_summary_barplot_clustering.pdf"),
        width = 7,
        height = 5)
@@ -909,11 +929,12 @@ stat.test$p.adj <- round(stat.test$p.adj, 3)
 
 
 
-ggplot(df_results_mod, aes(x = method, y = value)) +
+p <- ggplot(df_results_mod, aes(x = method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
   stat_compare_means(
-    comparisons = my_comparisons,
-    # ref.group = "Pseudobulk",
+    # comparisons = my_comparisons,
+    ref.group = "Pseudobulk",
+    # hide.ns = TRUE,
     method = "t.test",
     paired = TRUE,
     angle = 15,
@@ -929,23 +950,12 @@ ggplot(df_results_mod, aes(x = method, y = value)) +
   theme_minimal() +
   # ylim(c(-0.12, 2)) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+print(p)
+print(p)
 ggsave(file.path(path_plots, "benchmark_summary_barplot_modularity.pdf"),
        width = 7,
        height = 6)
 
-# df_results_modularity %>%
-#   ggplot(aes(x = method, y = mean)) + 
-#   geom_bar(stat = "identity", position = position_dodge()) +
-#   # stat_summary(fun.y = mean, geom = "bar") +
-#   geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
-#   # geom_point(position = position_jitterdodge()) +
-#   labs(x = "", y = "Modularity") +
-#   theme_minimal() +
-#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-#   NoLegend()
-# ggsave(file.path(path_plots, "benchmark_summary_barplot_modularity.pdf"),
-#        width = 2.5,
-#        height = 2.5)
 
 ```
 
@@ -1621,8 +1631,8 @@ https://www.sciencedirect.com/science/article/pii/S0896627324008730#sec8
 ```{r}
 library(readxl)
 
-df_mac_main <- data.frame(fread(file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "data", "MacnairW_2025_Neuron", "ms_lesions_snRNAseq_col_data_2023-09-12.txt.gz")))
-df_mac_val <- data.frame(fread(file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "data", "MacnairW_2025_Neuron", "ms_lesions_snRNAseq_validation_col_data_2023-09-12.txt.gz")))
+df_mac_main <- data.frame(fread(file.path(path_data, "other", "MacnairW_2025_Neuron", "ms_lesions_snRNAseq_col_data_2023-09-12.txt.gz")))
+df_mac_val <- data.frame(fread(file.path(path_data, "other", "MacnairW_2025_Neuron", "ms_lesions_snRNAseq_validation_col_data_2023-09-12.txt.gz")))
 
 feat_mat <- as.data.frame.matrix(table(df_mac_main$sample_id_anon, df_mac_main$type_fine)) %>%
   impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
@@ -1677,7 +1687,7 @@ https://genome.cshlp.org/content/31/10/1913.long#sec-13
 ## Load data
 
 ```{r fig.height=12, fig.width=12}
-df_ni <- data.frame(fread(file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "data", "TICAtlas_metadata.csv")))
+df_ni <- data.frame(fread(file.path(path_data, "other", "TICAtlas_metadata.csv")))
 
 
 feat_mat <- as.data.frame.matrix(table(df_ni$patient, df_ni$lv1_annot)) %>%
@@ -1803,7 +1813,7 @@ https://www.cell.com/cell/fulltext/S0092-8674(25)00291-0#sec-4
 ## Load data
 
 ```{r fig.height=12, fig.width=12}
-df <- data.frame(fread(file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "data", "GSE243013_NSCLC_immune_scRNA_metadata.csv.gz")))
+df <- data.frame(fread(file.path(path_data, "other", "GSE243013_NSCLC_immune_scRNA_metadata.csv.gz")))
 
 # Keep only samples with a reasonable amount of cells
 samples_keep <- sort(table(df$sampleID)) > 1000
@@ -1952,11 +1962,11 @@ https://www.nature.com/articles/s41591-019-0522-3#data-availability
 ## Load data
 
 ```{r fig.height=12, fig.width=12}
-df1 <- data.frame(fread(file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "data", "GSE123813_bcc_all_metadata.txt.gz")))
+df1 <- data.frame(fread(file.path(path_data, "other", "GSE123813_bcc_all_metadata.txt.gz")))
 df1$sort <- NULL
 df1$type <- "bcc"
 df1$sample <- paste0(df1$patient, "_", df1$treatment)
-df2 <- data.frame(fread(file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "data", "GSE123813_scc_metadata.txt.gz")))
+df2 <- data.frame(fread(file.path(path_data, "other", "GSE123813_scc_metadata.txt.gz")))
 df2$type <- "scc"
 df2$sample <- paste0(df2$patient, "_", df2$treatment)
 
@@ -1986,10 +1996,10 @@ p <- plot_pca(feat_mat, labels = meta$type, plotly_3d = TRUE)
 p <- plot_pca(feat_mat, labels = meta$type, invisible = "none", labelsize = 4)
 p <- plot_pca(feat_mat, labels = meta$type, invisible = "none", labelsize = 4, axes = c(1,3))
 
-p <- plot_pca(feat_mat, labels = meta$radiological_response)
-p <- plot_pca(feat_mat, labels = meta$radiological_response, plotly_3d = TRUE)
-p <- plot_pca(feat_mat, labels = meta$radiological_response, invisible = "none", labelsize = 4)
-p <- plot_pca(feat_mat, labels = meta$radiological_response, invisible = "none", labelsize = 4, axes = c(1,3))
+# p <- plot_pca(feat_mat, labels = meta$radiological_response)
+# p <- plot_pca(feat_mat, labels = meta$radiological_response, plotly_3d = TRUE)
+# p <- plot_pca(feat_mat, labels = meta$radiological_response, invisible = "none", labelsize = 4)
+# p <- plot_pca(feat_mat, labels = meta$radiological_response, invisible = "none", labelsize = 4, axes = c(1,3))
 
 
 cor_matrix <- cor(feat_mat)
@@ -2070,3 +2080,34 @@ pheatmap(
 )
 
 ```
+
+
+
+# ---------------------------------------------------------------
+
+# CART from Haradhvala et al.
+
+Clonal replacement of tumor-specific T cells following PD-1 blockade
+
+Data from:
+https://www.nature.com/articles/s41591-019-0522-3#data-availability
+
+
+## Load data
+
+```{r}
+seurat <- readRDS("/Users/christianhalter/Library/CloudStorage/Dropbox/CSI/Standardized_SingleCell_Datasets/HarN_2022_36097221/output/HarN_2022_36097221whole.rds")
+
+library(HiTME)
+
+# Fetch reference maps
+ref.maps <- get.reference.maps(collection = "human")
+
+# Cell type classification on a Seurat object
+query <- Run.HiTME(query,
+                   ref.maps = ref.maps[["human"]],
+                   species = "human" # for mouse data set to "mouse"
+                   )
+
+```
+
