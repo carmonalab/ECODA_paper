@@ -142,7 +142,9 @@ datasets <- list(
       Clinical.efficacy. = list(values = "-", op = "notin"),
       Sample = list(values = c("Pre_P012_b", "Pre_P013_t"), op = "notin")
     ),
-    sample_col = "Sample"
+    tissue = "mixed",
+    sample_col = "Sample",
+    meta_cols_keep = c("Sample", "Tissue", "Clinical.efficacy.", "layer1", "layer2")
   )
 )
 
@@ -158,13 +160,39 @@ res <- c(0.4, 2, 5, 20)
 ### 5 (~ 100 cell types)
 ### 20 (Ultrahires ~ 250-300 cell types)
 
+
+# Get scGate database of pre-defined gating models
+scGate_models_DB <- get_scGateDB(branch = "dev", verbose = T, force_update = TRUE)
+scGate_models_blood <- scGate_models_DB$human$PBMC
+scGate_models_blood$MoMac <- scGate_models_blood$Monocyte
+scGate_models_blood$Monocyte <- NULL
+scGate_models_tumor <- scGate_models_DB$human$HiTME
+# Need to have same model names in both lists for HiTME downstream processing)
+scGate_models_blood <- c(scGate_models_blood, scGate_models_tumor[!names(scGate_models_tumor) %in% names(scGate_models_blood)])
+
+# Load ProjecTILs reference maps
+path_ref <- "/Users/christianhalter/Library/CloudStorage/OneDrive-SharedLibraries-UniversitédeGenève/Santiago Carmona - CSI/public/reference_atlases/sketched_200ct"
+ref.maps_sketched <- list(CD8 = load.reference.map(file.path(path_ref, "sketched_CD8T_human_ref_v1.rds")),
+                          CD4 = load.reference.map(file.path(path_ref, "sketched_CD4T_human_ref_v2.rds")),
+                          DC = load.reference.map(file.path(path_ref, "sketched_DC_human_ref_v2.rds")),
+                          MoMac = load.reference.map(file.path(path_ref, "sketched_MoMac_human_v1.rds"))
+)
+
+HiTME_cols <- c(
+  "IFN_UCell",
+  "HeatShock_UCell",
+  "cellCycle.G1S_UCell",
+  "cellCycle.G2M_UCell",
+  "layer1", "layer2", "layer3")
+
+
 for (ds in names(datasets)) {
   di <- datasets[[ds]][[ds_dir]]
   file_name <- datasets[[ds]][[ds_filename]]
   file_name_no_ending <- gsub(".rds|.h5ad", "", file_name)
   processed_file_path <- file.path(getwd(), "data", paste0(file_name_no_ending, "_ECODAprocessed.rds"))
   
-  if (!file.exists(processed_file_name)) {
+  if (!file.exists(processed_file_path)) {
     input_file_path <- file.path(di, file_name)
     
     if (endsWith(input_file_path, ".rds")) {
@@ -174,7 +202,11 @@ for (ds in names(datasets)) {
     }
     
     # Drop unnecessary metadata cols
-    todo
+    meta_cols_keep <- datasets[[ds]][[meta_cols_keep]]
+    meta_cols_keep <- c(meta_cols_keep, HiTME_cols)
+    
+    cols_keep <- intersect(meta_cols_keep, names(seurat@meta.data))
+    seurat@meta.data <- seurat@meta.data[, cols_keep, drop = FALSE]
     
     # Create clean seuratv5 object
     seurat <- create_clean_seuratv5_object(seurat)
@@ -203,7 +235,7 @@ for (ds in names(datasets)) {
     }
     
     # If not file exists: Save as h5ad
-    todo
+    convert_seurat_to_h5ad(seurat, ds)
     
     # Standard Seurat preprocessing part 1
     seurat <- seurat |>
@@ -212,9 +244,59 @@ for (ds in names(datasets)) {
     
     # Annotate cells
     ## HiTME
-    ### Drop unnecessary metadata (keep original + annotations)
-    ### Merge
+    obj.list <- SplitObject(seurat, split.by = "Sample")
+    rm(seurat)
+    gc()
+    
+    while (length(obj.list) > 0) {
+      print(length(obj.list))
+      
+      obj <- obj.list[[1]]
+      obj.list <- obj.list[-1]
+      
+      if (obj$Tissue[1] == "blood") {
+        obj <- Run.HiTME(object = obj,
+                         scGate.model = scGate_models_blood,
+                         ref.maps = ref.maps_sketched
+        )
+      } else {
+        obj <- Run.HiTME(object = obj,
+                         scGate.model = scGate_models_tumor,
+                         ref.maps = ref.maps_sketched
+        )
+      }
+      
+      # Drop unnecessary metadata cols
+      cols_keep <- intersect(meta_cols_keep, names(obj@meta.data))
+      obj@meta.data <- obj@meta.data[, cols_keep, drop = FALSE]
+      
+      if (!exists("seurat")) {
+        seurat <- obj
+      } else {
+        seurat <- merge(seurat, obj)
+      }
+    }
+    for (i in 1:length(obj.list)) {
+      print(i)
+      if (obj.list[[i]]$Tissue[1] == "blood") {
+        obj.list[[i]] <- Run.HiTME(object = obj.list[[i]],
+                                   scGate.model = scGate_models_blood,
+                                   ref.maps = ref.maps_sketched
+        )
+      } else {
+        obj.list[[i]] <- Run.HiTME(object = obj.list[[i]],
+                                   scGate.model = scGate_models_tumor,
+                                   ref.maps = ref.maps_sketched
+        )
+        
+        # Drop unnecessary metadata cols
+        cols_keep <- intersect(meta_cols_keep, names(seurat@meta.data))
+        seurat@meta.data <- seurat@meta.data[, cols_keep, drop = FALSE]
+      }
+    }
+    
     ## scAtomic
+    
     
     # Standard Seurat preprocessing part 2
     seurat <- seurat |>
@@ -222,13 +304,11 @@ for (ds in names(datasets)) {
       RunPCA(dims = 1:50, verbose = FALSE) |>
       FindNeighbors()
     for (r in res) {
-      seurate <- seurat |>
+      seurat <- seurat |>
         FindClusters(resolution = r)
     }
     
-    
     # Save processed Seurat object
-    todo
     saveRDS(seurat, file = processed_file_path)
   }
 }
