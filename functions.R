@@ -23,6 +23,12 @@ suppressPackageStartupMessages({
   # library(zCompositions)
   library(rstatix)
   
+  library(scGate)
+  library(UCell)
+  library(STACAS)
+  library(ProjecTILs)
+  library(SignatuR)
+  
   # devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
   library(EPIC)
   # BiocManager::install("MOFA2")
