@@ -21,10 +21,26 @@ This script prepares datasets for downstream analysis
 ```{r message=FALSE, warning=FALSE}
 source("functions.R")
 
+# devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
+library(EPIC)
+# BiocManager::install("MOFA2")
+library(reticulate)
+py_install("mofapy2", envname = "my_env", method="auto")
+import("mofapy2")
+library(basilisk)
+library("MOFA2")
+# BiocManager::install("fgsea")
+# BiocManager::install("sva")
+# devtools::install_github("kharchenkolab/scITD")
+library(scITD)
+# install.packages("ncdf4")
+# install.packages("GloScope")
+library(GloScope)
+
 # Set paths
-path_nas <- file.path("Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
 path_plots <- file.path(getwd(), "plots")
 path_data <- file.path(getwd(), "data")
+seurat_file_ending <- "_ECODAprocessed.rds"
 ```
 
 
@@ -47,133 +63,113 @@ analysis_elems <- c("bmark", "trans", "zeroimp")
 
 # ---------------------------------------------------------------
 
-# Zhang
-Was annotated with file Zhang_celltype_annotation.Rmd
 
+# Define datasets
 ```{r}
-# Dataset
-ds <- "Zhang"
+datasets <- list(
+  "Adams" = list(
+    ds_name = "AdamsT_2020_32832599",
+    label_col = "Disease_Identity",
+    low_res_ct_col = "OriginalAnnotationLevel1",
+    hi_res_ct_col = "OriginalAnnotationLevel2"
+  ),
+  
+  "Bassez" = list(
+    ds_name = "BassezA_2021_33958794whole",
+    label_col = "expansion",
+    low_res_ct_col = "cellType",
+    hi_res_ct_col = "cellSubType"
+  ),
+  
+  "GongSharma_age_females_cmvneg" = list(
+    ds_name = "GongSharma_age_females_cmvneg",
+    label_col = "age",
+    low_res_ct_col = "AIFI_L1",
+    hi_res_ct_col = "AIFI_L3"
+  ),
+  
+  "GongSharma_cmv_females" = list(
+    ds_name = "GongSharma_cmv_females",
+    label_col = "subject.cmv",
+    low_res_ct_col = "AIFI_L1",
+    hi_res_ct_col = "AIFI_L3"
+  ),
+  
+  "Kfoury" = list(
+    ds_name = "Kfoury_2021_34719426",
+    label_col = "Status",
+    low_res_ct_col = "cells_lowres",
+    hi_res_ct_col = "cells"
+  ),
 
-elem_null <- c()
-for (a in analysis_elems) {
-  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
+  "Lee" = list(
+    ds_name = "LeeA_2021_34836966p_tumor_seurat",
+    label_col = "condition",
+    low_res_ct_col = "layer1",
+    hi_res_ct_col = "layer2"
+  ),
   
-  if (is.null(result_list[[a]][[ds]])) {
-    print(paste("To be analyzed:", a, ds))
-  }
-}
+  "Pelka" = list(
+    ds_name = "PelkaK_2022_34450029whole",
+    label_col = "Tissue",
+    low_res_ct_col = "OriginalAnnotationLevel1",
+    hi_res_ct_col = "OriginalAnnotationLevel3"
+  ),
+  
+  "Smillie" = list(
+    ds_name = "SmillieC_2019_31348891",
+    label_col = "Condition",
+    low_res_ct_col = "OriginalAnnotationLevel2",
+    hi_res_ct_col = "OriginalAnnotationLevel3"
+  ),
+  
+  "Stephenson" = list(
+    ds_name = "MitchelJ_2023_PrePrintTBD_Stephenson_preprocessed",
+    label_col = "Status",
+    low_res_ct_col = "initial_clustering",
+    hi_res_ct_col = "full_clustering"
+  ),
 
-# If any analyses missing, process dataset for missing analyses
-if (any(elem_null)) {
+  "Wu" = list(
+    ds_name = "WuS_2021_34493872",
+    label_col = "subtype",
+    low_res_ct_col = "celltype_major",
+    hi_res_ct_col = "celltype_subset"
+  ),
   
-  # Set paths
-  ds_name <- "ZhangY_2022_34653365"
-  
-  path_root <- file.path(path_nas, ds_name)
-  path_output <- file.path(path_root, "output")
-  path_output_samples <- file.path(path_output, "samples")
-  
-  
-  # Load data
-  obj.list <- read_objs(path_output_samples)
-  
-  # Exclude samples that consist mainly of one cell type as outliers
-  samples_exclude <- c("Pre_P012_b", "Pre_P013_t")
-  obj.list <- obj.list[!names(obj.list) %in% samples_exclude]
-  
-  samples_clearcut <- c()
-  
-  for (i in names(obj.list)) {
-    if (obj.list[[i]]@meta.data$Treatment[1] %in% c("Pre") &
-        !(obj.list[[i]]@meta.data$Clinical.efficacy.[1] %in% c("-"))) {
-      samples_clearcut <- c(samples_clearcut, i)
-    }
-  }
-  
-  metacols_to_keep <- c("Sample", "Tissue", "layer1", "layer2")
-  
-  for (i in samples_clearcut) {
-    print(i)
-    
-    obj <- obj.list[[i]]
-    Idents(obj) <- "Sample"
-    obj@meta.data <- obj@meta.data[colnames(obj@assays$RNA$counts), metacols_to_keep]
-    
-    if (i == samples_clearcut[1]) {
-      seurat <- obj
-    } else {
-      seurat <- merge(seurat, obj)
-    }
-  }
-  
-  rm(obj.list); gc()
-  
-  convert_seurat_to_h5ad(seurat, ds)
-  
-  
-  seurat@misc$label_col <- "Tissue"
-  seurat@misc$low_res_ct_col <- "layer1"
-  seurat@misc$hi_res_ct_col <- "layer2"
-  
-  
-  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
-}
+  "Zhang" = list(
+    ds_name = "ZhangY_2022_34653365",
+    label_col = "Tissue",
+    low_res_ct_col = "layer1",
+    hi_res_ct_col = "layer2"
+  )
+)
 ```
 
 
-# ---------------------------------------------------------------
-
-# Stephenson
+# Process datasets
 
 ```{r}
-ds <- "Stephenson"
-
-
-elem_null <- c()
-for (a in analysis_elems) {
-  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
-  
-  if (is.null(result_list[[a]][[ds]])) {
-    print(paste("To be analyzed:", a, ds))
-  }
-}
-
-# If any analyses missing, process dataset for missing analyses
-if (any(elem_null)) {
-  
-  ds_name <- "MitchelJ_2023_PrePrintTBD"
-  
-  path_root <- file.path(path_nas, ds_name)
-  path_output <- file.path(path_root, "output")
-  
-  seurat <- readRDS(file.path(path_output, sprintf("%s_Stephenson_preprocessed.rds", ds_name)))
-  
-  seurat <- subset(seurat, subset = Site == "Ncl")
-  seurat <- subset(seurat, subset = Status %in% c("Healthy", "Covid"))
-  seurat$Days_from_onset <- as.character(seurat$Days_from_onset)
-  seurat$Days_from_onset[seurat$Days_from_onset == "Healthy"] <- 0
-  seurat$Days_from_onset <- as.numeric(seurat$Days_from_onset)
-  seurat <- subset(seurat, subset = Days_from_onset < 10)
-  
-  seurat$sample_id <- as.character(seurat$sample_id)
-  samples_exclude <- c("BGCV10_CV0198", "MH8919230")
-  samples_subset <- unique(seurat$sample_id[!seurat$sample_id %in% samples_exclude])
-  seurat <- subset(seurat, subset = sample_id %in% samples_subset)
-  
-  seurat$Sample <- seurat$sample_id
-  
-  
-  convert_seurat_to_h5ad(seurat, ds)
-  
-
-  
-  seurat@misc$label_col <- "Status"
-  seurat@misc$low_res_ct_col <- "initial_clustering"
-  seurat@misc$hi_res_ct_col <- "full_clustering"
-
-  
+for (ds in names(datasets)) {
+  elem_null <- c()
+  for (a in analysis_elems) {
+    elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
     
-  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
+    if (is.null(result_list[[a]][[ds]])) {
+      print(paste("To be analyzed:", a, ds))
+    }
+  }
+  
+  # If any analyses missing, process dataset for missing analyses
+  if (any(elem_null)) {
+    seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
+    
+    seurat@misc$label_col <- datasets[[ds]][["label_col"]]
+    seurat@misc$low_res_ct_col <- datasets[[ds]][["low_res_ct_col"]]
+    seurat@misc$hi_res_ct_col <- datasets[[ds]][["hi_res_ct_col"]]
+    
+    result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
+  }
 }
 ```
 
@@ -322,94 +318,13 @@ if (any(elem_null)) {
 
 
 
-# ---------------------------------------------------------------
-
-# Lee
-
-```{r}
-ds <- "Lee"
-
-
-elem_null <- c()
-for (a in analysis_elems) {
-  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
-  
-  if (is.null(result_list[[a]][[ds]])) {
-    print(paste("To be analyzed:", a, ds))
-  }
-}
-
-# If any analyses missing, process dataset for missing analyses
-if (any(elem_null)) {
-
-  ds_name <- "LeeA_2021_34836966"
-  
-  path_root <- file.path(path_nas, ds_name)
-  path_output <- file.path(path_root, "output")
-  
-  seurat <- readRDS(file.path(path_output, sprintf("%sp_tumor_seurat.rds", ds_name)))
-  
-  convert_seurat_to_h5ad(seurat, ds)
-  
-  seurat@misc$label_col <- "condition"
-  seurat@misc$low_res_ct_col <- "scGate_multi"
-  seurat@misc$hi_res_ct_col <- "functional.cluster"
-  
-  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
-}
-```
-
-
-
-# ---------------------------------------------------------------
-
-# Pelka
-
-## Has also other non-immune cells
-
-```{r}
-ds <- "Pelka"
-
-
-elem_null <- c()
-for (a in analysis_elems) {
-  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
-
-  if (is.null(result_list[[a]][[ds]])) {
-    print(paste("To be analyzed:", a, ds))
-  }
-}
-
-# If any analyses missing, process dataset for missing analyses
-if (any(elem_null)) {
-
-  ds_name <- "PelkaK_2022_34450029"
-
-  path_root <- file.path(path_nas, ds_name)
-  path_output <- file.path(path_root, "output")
-
-  seurat <- readRDS(file.path(path_output, sprintf("%swhole.rds", ds_name)))
-  
-  seurat$Sample <- as.character(seurat$Sample)
-
-  convert_seurat_to_h5ad(seurat, ds)
-
-
-  seurat@misc$label_col <- "Tissue"
-  seurat@misc$low_res_ct_col <- "OriginalAnnotationLevel1"
-  seurat@misc$hi_res_ct_col <- "OriginalAnnotationLevel3"
-
-  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
-}
-```
-
 
 
 # ---------------------------------------------------------------
 
 # Bassez
 
-# IMPORTANT: Needs automated annotation, as seurat$cohotr c("neoadjuvant_chemo", "treatment_naive") seem to be separately and differently annotated by the authors
+# IMPORTANT: Needs automated annotation, as seurat$cohort c("neoadjuvant_chemo", "treatment_naive") seem to be separately and differently annotated by the authors
 ## Has also other non-immune cells
 
 ```{r}
@@ -450,213 +365,6 @@ if (any(elem_null)) {
   result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
 }
 ```
-
-
-
-
-# ---------------------------------------------------------------
-
-# Wu
-
-```{r}
-ds <- "Wu"
-
-elem_null <- c()
-for (a in analysis_elems) {
-  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
-  
-  if (is.null(result_list[[a]][[ds]])) {
-    print(paste("To be analyzed:", a, ds))
-  }
-}
-
-# If any analyses missing, process dataset for missing analyses
-if (any(elem_null)) {
-  
-  ds_name <- "WuS_2021_34493872"
-  
-  path_root <- file.path(path_nas, ds_name)
-  path_output <- file.path(path_root, "output")
-  
-  seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
-  
-  convert_seurat_to_h5ad(seurat, ds)
-  
-  
-  seurat@misc$label_col <- "subtype"
-  seurat@misc$low_res_ct_col <- "celltype_major"
-  seurat@misc$hi_res_ct_col <- "celltype_subset"
-  
-  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
-}
-```
-
-
-
-
-# ---------------------------------------------------------------
-
-# Smillie
-
-```{r}
-ds <- "Smillie"
-
-
-elem_null <- c()
-for (a in analysis_elems) {
-  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
-  
-  if (is.null(result_list[[a]][[ds]])) {
-    print(paste("To be analyzed:", a, ds))
-  }
-}
-
-# If any analyses missing, process dataset for missing analyses
-if (any(elem_null)) {
-  
-  ds_name <- "SmillieC_2019_31348891"
-  
-  path_root <- file.path(path_nas, ds_name)
-  path_output <- file.path(path_root, "output")
-  
-  
-  seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
-  
-  # seurat <- subset(stot, subset = Tissue_compartment == "Epithelial")
-  seurat <- subset(seurat, subset = Tissue_compartment == "Lamina_propria")
-  seurat <- subset(seurat, subset = seurat$OriginalAnnotationLevel1 == "Immune")
-  
-  convert_seurat_to_h5ad(seurat, ds)
-  
-  
-  seurat@misc$label_col <- "Condition"
-  seurat@misc$low_res_ct_col <- "OriginalAnnotationLevel2"
-  seurat@misc$hi_res_ct_col <- "OriginalAnnotationLevel3"
-  
-  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
-}
-```
-
-
-
-# ---------------------------------------------------------------
-
-# Adams
-## Has also other non-immune cells
-
-```{r}
-ds <- "Adams"
-
-elem_null <- c()
-for (a in analysis_elems) {
-  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
-  
-  if (is.null(result_list[[a]][[ds]])) {
-    print(paste("To be analyzed:", a, ds))
-  }
-}
-
-# If any analyses missing, process dataset for missing analyses
-if (any(elem_null)) {
-  
-  ds_name <- "AdamsT_2020_32832599"
-  
-  path_root <- file.path(path_nas, ds_name)
-  path_output <- file.path(path_root, "output")
-  
-  seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
-  
-  seurat <- subset(seurat, subset = OriginalAnnotationLevel1 != "Multiplet")
-  
-  seurat$Sample <- paste0("g", seurat$Sample)
-  # seurat$Sample <- gsub("-", "_" seurat$Sample)
-  Idents(seurat) <- "Sample"
-  
-  convert_seurat_to_h5ad(seurat, ds)
-
-  
-  seurat@misc$label_col <- "Condition"
-  seurat@misc$low_res_ct_col <- "OriginalAnnotationLevel1"
-  seurat@misc$hi_res_ct_col <- "OriginalAnnotationLevel2"
-  
-  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
-}
-```
-
-
-
-# ---------------------------------------------------------------
-
-# Kfoury
-## Has also other non-immune cells
-
-
-```{r}
-ds <- "Kfoury"
-
-elem_null <- c()
-for (a in analysis_elems) {
-  elem_null <- c(elem_null, is.null(result_list[[a]][[ds]]))
-  
-  if (is.null(result_list[[a]][[ds]])) {
-    print(paste("To be analyzed:", a, ds))
-  }
-}
-
-# If any analyses missing, process dataset for missing analyses
-if (any(elem_null)) {
-  
-  ds_name <- "Kfoury_2021_34719426"
-  
-  path_root <- file.path(path_nas, ds_name)
-  path_output <- file.path(path_root, "output")
-  
-  seurat <- readRDS(file.path(path_output, sprintf("%s.rds", ds_name)))
-  
-  seurat$cells_lowres <- as.character(seurat$cells)
-  seurat$cells_lowres[seurat$cells_lowres %in% c("CD4+ Naive", "CD8+ Naive", "CTL-1", "CTL-2", "Th1/17", "Treg Active", "Treg Resting")] <- "Tcells"
-  seurat$cells_lowres[seurat$cells_lowres %in% c("NK", "NKT")] <- "NKcells"
-  seurat$cells_lowres[seurat$cells_lowres %in% c("Immature B cells", "Mature B", "Pro-B", "memBcell")] <- "Bcells"
-  seurat$cells_lowres[seurat$cells_lowres %in% c("Mono1", "Mono2", "Mono3", "Monocyte prog", "TAM", "TIM")] <- "MoMac"
-  seurat$cells_lowres[seurat$cells_lowres %in% c("mDC", "pDC")] <- "DCcells"
-  seurat$cells_lowres <- as.factor(seurat$cells_lowres)
-  
-  seurat@misc$label_col <- "Status"
-  seurat@misc$low_res_ct_col <- "cells_lowres"
-  seurat@misc$hi_res_ct_col <- "cells"
-  
-  convert_seurat_to_h5ad(seurat, ds)
-  
-  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots, factors_test)
-}
-```
-
-## Test on immune cells only
-
-```{r}
-# cts <- unique(seurat$OriginalAnnotationLevel1)
-# cts <- cts[!cts %in% c("Osteoblasts", "Osteoclasts", "Pericytes", "Endothelial", "Tumor", "Erythroid")]
-# seurat_sub <- subset(seurat, subset = OriginalAnnotationLevel1 %in% cts)
-# 
-# test <- run_benchmark_analysis(seurat_sub,
-#                                get_labels(seurat, seurat@misc$label_col),
-#                                low_res_ct_col,
-#                                hi_res_ct_col,
-#                                factors_test = 2,
-#                                Pseudobulk = TRUE,
-#                                ECODA_deconv = FALSE,
-#                                ECODA_low_res = FALSE,
-#                                ECODA_high_res = TRUE,
-#                                Pseudobulk_PCA = FALSE,
-#                                ECODA_high_res_PCA = FALSE,
-#                                MOFA = FALSE,
-#                                scITD = FALSE,
-#                                MrVI = FALSE,
-#                                show_pca_plots = TRUE,
-#                                save_pca_plots = FALSE
-# )
-```
-
 
 
 
@@ -731,36 +439,36 @@ levs
 ## Plot results
 
 ```{r fig.height=10, fig.width=14}
-levs <- c(
-  "CtCompECODA_highres",
-  "CtCompECODA_highres_top0.25",
-  "ECODA_high_res_2_PCA_dims",
-  "ECODA_high_res_3_PCA_dims",
-  "ECODA_high_res_5_PCA_dims",
-  "ECODA_high_res_10_PCA_dims",
-  "CtCompECODA_ultrahighres",
-  "CtCompECODA_ultrahighres_top0.25",
-  "Pseudobulk",
-  "Pseudobulk_2_PCA_dims",
-  "Pseudobulk_3_PCA_dims",
-  "Pseudobulk_5_PCA_dims",
-  "Pseudobulk_10_PCA_dims",
-  "MrVI",
-  "GloScope",
-  "scPoli",
-  "PILOT",
-  "MOFA_2_factors",
-  "MOFA_3_factors",
-  "MOFA_5_factors",
-  "MOFA_10_factors",
-  "scITD_2_factors",
-  "scITD_3_factors",
-  "scITD_5_factors",
-  "scITD_10_factors",
-  "CtCompFreq_highres",
-  "CtCompECODA_lowres",
-  "ECODA_deconv"
-)
+# levs <- c(
+#   "ECODA_highres",
+#   "ECODA_highres_top0.25",
+#   "ECODA_high_res_2_PCA_dims",
+#   "ECODA_high_res_3_PCA_dims",
+#   "ECODA_high_res_5_PCA_dims",
+#   "ECODA_high_res_10_PCA_dims",
+#   "ECODA_ultrahighres",
+#   "ECODA_ultrahighres_top0.25",
+#   "Pseudobulk",
+#   "Pseudobulk_2_PCA_dims",
+#   "Pseudobulk_3_PCA_dims",
+#   "Pseudobulk_5_PCA_dims",
+#   "Pseudobulk_10_PCA_dims",
+#   "MrVI",
+#   "GloScope",
+#   "scPoli",
+#   "PILOT",
+#   "MOFA_2_factors",
+#   "MOFA_3_factors",
+#   "MOFA_5_factors",
+#   "MOFA_10_factors",
+#   "scITD_2_factors",
+#   "scITD_3_factors",
+#   "scITD_5_factors",
+#   "scITD_10_factors",
+#   "Freq_highres",
+#   "ECODA_lowres",
+#   "ECODA_deconv"
+# )
 
 df_results$method <- factor(df_results$method, levels = levs)
 
@@ -833,13 +541,226 @@ df_results %>%
   # geom_point(position = position_jitterdodge()) +
   labs(x = "", y = "") +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme(axis.text.x = element_text(angle = 75, vjust = 1, hjust=1)) +
   facet_grid(scales = "free",
              rows = vars(score),
              labeller = labeller(score = score.labs))
 ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores_bars.pdf"),
        width = 5,
        height = 7)
+
+
+
+filter_methods <- c(
+  "Pseudobulk",
+  "ECODA_deconv",
+  "ECODA_lowres",
+  "ECODA_highres",
+  "ECODA_high_res_2_PCA_dims",
+  "ECODA_seuratres_0.4",
+  "MOFA_2_factors",
+  "scITD_2_factors",
+  "MrVI",
+  "scPoli",
+  "PILOT",
+  "GloScope"
+)
+
+library(forcats)
+
+df_results %>%
+  filter(score == "anosim_score") %>%
+  filter(method %in% filter_methods) %>%
+  
+  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+  
+  # Plot the bars and error bars using stat_summary()
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "gray70") +
+  
+  # Add individual data points (jittered for visibility)
+  geom_point(position = "identity", alpha = 0.6) +
+  
+  # Add the lines connecting corresponding points
+  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
+  
+  # Add the pairwise comparisons
+  stat_compare_means(
+    ref.group = "Pseudobulk",
+    method = "wilcox.test",
+    paired = TRUE, # Set to FALSE as the groups are not paired
+    angle = 25,
+    aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
+  ) +
+  
+  labs(x = "", y = "ANOSIM score") +
+  theme_minimal() +
+  ggtitle("wilcox.test") +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_refpb.pdf"),
+       width = 7,
+       height = 7)
+
+df_results %>%
+  filter(score == "anosim_score") %>%
+  filter(method %in% filter_methods) %>%
+  
+  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+  
+  # Plot the bars and error bars using stat_summary()
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "gray70") +
+  
+  # Add individual data points (jittered for visibility)
+  geom_point(position = "identity", alpha = 0.6) +
+  
+  # Add the lines connecting corresponding points
+  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
+  
+  # Add the pairwise comparisons
+  stat_compare_means(
+    ref.group = "ECODA_highres",
+    method = "wilcox.test",
+    paired = TRUE, # Set to FALSE as the groups are not paired
+    angle = 45,
+    aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
+  ) +
+  
+  labs(x = "", y = "ANOSIM score") +
+  theme_minimal() +
+  ggtitle("wilcox.test") +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_refECODAhr.pdf"),
+       width = 7,
+       height = 7)
+
+df_results %>%
+  filter(score == "anosim_score") %>%
+  filter(method %in% filter_methods) %>%
+  
+  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+  
+  # Plot the bars and error bars using stat_summary()
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "gray70") +
+  
+  # Add individual data points (jittered for visibility)
+  geom_point(position = "identity", alpha = 0.6) +
+  
+  # Add the lines connecting corresponding points
+  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
+  
+  # Add the pairwise comparisons
+  stat_compare_means(
+    ref.group = "ECODA_high_res_2_PCA_dims",
+    method = "wilcox.test",
+    paired = TRUE, # Set to FALSE as the groups are not paired
+    angle = 25,
+    aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
+  ) +
+  
+  labs(x = "", y = "ANOSIM score") +
+  theme_minimal() +
+  ggtitle("wilcox.test") +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_refECODAhr2pcadims.pdf"),
+       width = 7,
+       height = 7)
+
+
+
+df_results %>%
+  filter(score == "cluster_score") %>%
+  filter(method %in% filter_methods) %>%
+  
+  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+  
+  # Plot the bars and error bars using stat_summary()
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "gray70") +
+  
+  # Add individual data points (jittered for visibility)
+  geom_point(position = "identity", alpha = 0.6) +
+  
+  # Add the lines connecting corresponding points
+  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
+  
+  # Add the pairwise comparisons
+  stat_compare_means(
+    ref.group = "Pseudobulk",
+    method = "wilcox.test",
+    paired = TRUE, # Set to FALSE as the groups are not paired
+    angle = 45,
+    aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
+  ) +
+  
+  labs(x = "", y = "Adjusted Rand Index") +
+  theme_minimal() +
+  ggtitle("wilcox.test") +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+
+df_results %>%
+  filter(score == "cluster_score") %>%
+  filter(method %in% filter_methods) %>%
+  
+  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+  
+  # Plot the bars and error bars using stat_summary()
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "gray70") +
+  
+  # Add individual data points (jittered for visibility)
+  geom_point(position = "identity", alpha = 0.6) +
+  
+  # Add the lines connecting corresponding points
+  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
+  
+  # Add the pairwise comparisons
+  stat_compare_means(
+    ref.group = "ECODA_highres",
+    method = "wilcox.test",
+    paired = TRUE, # Set to FALSE as the groups are not paired
+    angle = 45,
+    aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
+  ) +
+  
+  labs(x = "", y = "Adjusted Rand Index") +
+  theme_minimal() +
+  ggtitle("wilcox.test") +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+
+df_results %>%
+  filter(score == "cluster_score") %>%
+  filter(method %in% filter_methods) %>%
+  
+  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+  
+  # Plot the bars and error bars using stat_summary()
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "gray70") +
+  
+  # Add individual data points (jittered for visibility)
+  geom_point(position = "identity", alpha = 0.6) +
+  
+  # Add the lines connecting corresponding points
+  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
+  
+  # Add the pairwise comparisons
+  stat_compare_means(
+    ref.group = "ECODA_high_res_2_PCA_dims",
+    method = "wilcox.test",
+    paired = TRUE, # Set to FALSE as the groups are not paired
+    angle = 45,
+    aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
+  ) +
+  
+  labs(x = "", y = "Adjusted Rand Index") +
+  theme_minimal() +
+  ggtitle("wilcox.test") +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+
+
+
 
 
 ggplot(df_results, aes(x = method, y = value)) +
@@ -859,6 +780,24 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores.pdf"),
        height = 7)
 
 
+df_results_ecoda <- df_results[df_results$method %in% c("ECODA_highres", "ECODA_highres_HiTME", "ECODA_highres_scATOMIC"), ]
+
+ggplot(df_results_ecoda, aes(x = method, y = value)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(shape = dataset), size = 2) +
+  scale_shape_manual(values=1:length(unique((df_results_ecoda$dataset)))) +
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Separation score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  facet_grid(scales = "free",
+             rows = vars(score),
+             labeller = labeller(score = score.labs))
+ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores_ecodonly.pdf"),
+       width = 5,
+       height = 10)
+
 
 df_results_clustering <- df_results %>%
   filter(score == "cluster_score")
@@ -866,7 +805,7 @@ df_results_clustering <- df_results %>%
 df_results_clustering <- df_results_clustering[!grepl("2|10|PCA", df_results_clustering$method), ]
 
 for (ds in unique(df_results_clustering$dataset)) {
-  number_cts <- dim(result_list$bmark[[ds]]$CtCompECODA_highres$feat_mat)[2]
+  number_cts <- dim(result_list$bmark[[ds]]$ECODA_highres$feat_mat)[2]
   df_results_clustering[df_results_clustering$dataset == ds, "number_celltypes"] <- number_cts
 }
 
@@ -894,8 +833,7 @@ p <- ggplot(df_results_clustering, aes(x = method, y = value)) +
     ref.group = "Pseudobulk",
     method = "t.test",
     paired = TRUE,
-    angle = 15,
-    p.adjust.method = "none",
+    angle = 45,
     aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))) + # Add pairwise comparisons p-value
   geom_point(aes(shape = dataset), size = 2) +
   scale_shape_manual(values=1:length(unique((df_results_clustering$dataset)))) +
@@ -908,8 +846,7 @@ p <- ggplot(df_results_clustering, aes(x = method, y = value)) +
   # ylim(c(-0.1, 1.1)) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
   labs(group = legend_title, linetype = legend_title, shape = legend_title) +
-  theme(axis.text.x = element_text(angle = 55, vjust = 1, hjust=1))
-print(p)
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust=1))
 print(p)
 ggsave(file.path(path_plots, "benchmark_summary_barplot_clustering.pdf"),
        width = 7,
@@ -937,7 +874,7 @@ p <- ggplot(df_results_mod, aes(x = method, y = value)) +
     # hide.ns = TRUE,
     method = "t.test",
     paired = TRUE,
-    angle = 15,
+    angle = 45,
     aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
   ) + # Add pairwise comparisons p-value
   geom_point(aes(shape = dataset), size = 2) +
@@ -951,11 +888,9 @@ p <- ggplot(df_results_mod, aes(x = method, y = value)) +
   # ylim(c(-0.12, 2)) +
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 print(p)
-print(p)
 ggsave(file.path(path_plots, "benchmark_summary_barplot_modularity.pdf"),
        width = 7,
        height = 6)
-
 
 ```
 
@@ -1176,27 +1111,27 @@ df_results <- Reduce(rbind, result_list[["trans"]])
 
 df_results <- df_results %>%
   pivot_longer(
-    cols = c(Silhouette_score, Modularity_score, Adjusted_Rand_Index),
+    cols = c(ANOSIM_score, Modularity_score, Adjusted_Rand_Index),
     names_to = "score_method",
     values_to = "values"
   ) %>%
   as.data.frame()
 
-df_results_clustering <- df_results %>%
-  filter(score_method == "Adjusted_Rand_Index") %>%
-  group_by(method) %>%
+df_results_anosim <- df_results %>%
+  filter(score_method == "ANOSIM_score") %>%
+  group_by(trans_method) %>%
   summarize(mean = mean(values), sem = sd(values) / sqrt(length(values)))
 
-df_results_clustering <- df_results_clustering %>%
+df_results_anosim <- df_results_anosim %>%
   arrange(desc(mean))
 
-df_results_clustering$method <- factor(df_results_clustering$method, levels = df_results_clustering$method)
-df_results$method <- factor(df_results$method, levels = df_results_clustering$method)
+df_results_anosim$trans_method <- factor(df_results_anosim$trans_method, levels = df_results_anosim$trans_method)
+df_results$trans_method <- factor(df_results$trans_method, levels = df_results_anosim$trans_method)
 
 
 
 # New facet label names for dose variable
-score.labs <- c("Adjusted rand index", "Modularity score", "Silhouette score")
+score.labs <- c("Adjusted rand index", "ANOSIM score", "Modularity score")
 names(score.labs) <- sort(unique(df_results$score_method))
 
 # New facet label names for supp variable
@@ -1207,7 +1142,7 @@ names(datas.labs) <- sort(unique(df_results$dataset))
 
 
 
-ggplot(df_results, aes(x = method, y = values)) +
+ggplot(df_results, aes(x = trans_method, y = values)) +
   geom_bar(stat = "identity", position = position_dodge()) +
   labs(x = "",
        y = "Separation score") +
@@ -1243,7 +1178,7 @@ ggsave(file.path(path_plots, "transformations_real_datasets_detailed_barplot.pdf
 #              labeller = labeller(score_method = score.labs))
 
 
-ggplot(df_results, aes(x = method, y = values)) +
+ggplot(df_results, aes(x = trans_method, y = values)) +
   geom_boxplot(outlier.shape = NA) +
   geom_point(aes(shape=dataset)) + 
   geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
@@ -1261,7 +1196,7 @@ ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot_sepa
 
 
 
-# df_results_clustering %>%
+# df_results_anosim %>%
 #   ggplot(aes(x = method, y = mean)) + 
 #   geom_bar(stat = "identity", position = position_dodge()) +
 #   # stat_summary(fun.y = mean, geom = "bar") +
@@ -1273,13 +1208,13 @@ ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot_sepa
 #   NoLegend()
 
 
-df_results_clustering <- df_results %>%
-  filter(score_method == "Adjusted_Rand_Index")
+df_results_anosim <- df_results %>%
+  filter(score_method == "ANOSIM_score")
 
-df_results_clustering <- df_results_clustering[!grepl("pca", df_results_clustering$method), ]
+df_results_anosim <- df_results_anosim[!grepl("pca", df_results_anosim$trans_method), ]
 
 # Example assuming 'data' is your dataframe
-anova_result <- aov(values ~ method, data = df_results_clustering)
+anova_result <- aov(values ~ trans_method, data = df_results_anosim)
 summary(anova_result)
 stat.test <- tukey_hsd(anova_result)
 stat.test
@@ -1298,7 +1233,7 @@ stat.test$p.adj <- round(stat.test$p.adj, 3)
 #   my_comparisons <- c(my_comparisons, list(parts))
 # }
 
-my_comparisons <- purrr::map(unique(as.character(df_results_clustering$method)), ~ c(.x, "freq"))
+my_comparisons <- purrr::map(unique(as.character(df_results_anosim$trans_method)), ~ c(.x, "freq"))
 my_comparisons <- Filter(function(x) length(unique(x)) == 2, my_comparisons)
 # my_comparisons <- c(my_comparisons, list(c("clr", "arcsine_sqrt")))
 my_comparisons <- my_comparisons[c(4, 3, 2, 1, 5)]
@@ -1312,23 +1247,23 @@ my_comparisons <- my_comparisons[c(4, 3, 2, 1, 5)]
 #   c("counts", "freq")
 #   )
 
-ggplot(df_results_clustering, aes(x = method, y = values)) +
+ggplot(df_results_anosim, aes(x = trans_method, y = values)) +
   stat_compare_means(
     comparisons = my_comparisons,
     # p.adjust.method = "bonferroni",
     # ref.group = "freq",
-    method = "t.test",
+    method = "wilcox.test",
     paired = TRUE,
     # aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
     aes(label = after_stat(p.signif))
   ) + # Add pairwise comparisons p-value
   geom_boxplot(outlier.shape = NA) +
   geom_point(aes(shape=dataset)) +
-  scale_shape_manual(values=1:length(unique((df_results_clustering$dataset)))) +
+  scale_shape_manual(values=1:length(unique((df_results_anosim$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
-  labs(x = "", y = "Adjusted Rand Index") +
+  labs(x = "", y = "ANOSIM score") +
   # stat_pvalue_manual(stat.test, label = "p.adj", 
-  #                    y.position = c(max(df_results_clustering$values)+0.1, max(df_results_clustering$values)+0.2), hide.ns = TRUE) +
+  #                    y.position = c(max(df_results_anosim$values)+0.1, max(df_results_anosim$values)+0.2), hide.ns = TRUE) +
   theme_classic() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 
@@ -1336,19 +1271,40 @@ ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot.pdf"
        width = 6,
        height = 4.5)
 
+
+ggplot(df_results_anosim, aes(x = trans_method, y = values)) +
+  stat_compare_means(
+    # comparisons = my_comparisons,
+    # p.adjust.method = "bonferroni",
+    ref.group = "clr",
+    method = "wilcox.test",
+    paired = TRUE,
+    # aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
+    aes(label = after_stat(p.signif))
+  ) + # Add pairwise comparisons p-value
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(aes(shape=dataset)) +
+  scale_shape_manual(values=1:length(unique((df_results_anosim$dataset)))) +
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  labs(x = "", y = "ANOSIM score") +
+  # stat_pvalue_manual(stat.test, label = "p.adj", 
+  #                    y.position = c(max(df_results_anosim$values)+0.1, max(df_results_anosim$values)+0.2), hide.ns = TRUE) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
 ```
 
 # Statistical comparison
 
 ```{r}
-df_results_clustering <- df_results %>%
-  filter(score_method == "Adjusted_Rand_Index")
+df_results_anosim <- df_results %>%
+  filter(score_method == "ANOSIM_score")
 
 # Example assuming 'data' is your dataframe
-anova_result <- aov(values ~ method, data = df_results_clustering)
+anova_result <- aov(values ~ trans_method, data = df_results_anosim)
 summary(anova_result)
 
-TukeyHSD(aov(df_results_clustering$values ~ df_results_clustering$method))
+TukeyHSD(aov(df_results_anosim$values ~ df_results_anosim$trans_method))
 ```
 
 
@@ -1422,7 +1378,7 @@ df_results <- df_results[df_results$method != "impRZilr", ]
 
 
 # New facet label names for dose variable
-score.labs <- c("Adjusted rand index", "Modularity score", "Silhouette score")
+score.labs <- c("Adjusted rand index", "Modularity score", "ANOSIM score")
 names(score.labs) <- sort(unique(df_results$score))
 
 # New facet label names for supp variable
@@ -1463,13 +1419,13 @@ df_results %>%
   # geom_point(position = position_jitterdodge()) +
   labs(x = "", y = "Separation score") +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust=1)) +
   facet_grid(scales = "free",
              rows = vars(score),
              labeller = labeller(score = score.labs))
 
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_barplot_separatescores.pdf"),
-       width = 7,
+       width = 3.5,
        height = 6)
 
 ggplot(df_results, aes(x = method, y = value)) +
@@ -1505,6 +1461,23 @@ df_results %>%
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
   NoLegend()
 
+
+df_results %>%
+  filter(score == "anosim_score") %>%
+  group_by(method) %>%
+  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
+  
+  ggplot(aes(x = method, y = mean)) + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  # stat_summary(fun.y = mean, geom = "bar") +
+  geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "ANOSIM score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
+  NoLegend()
+
+
 df_results_clustering <- df_results %>%
   filter(score == "cluster_score")
 
@@ -1513,7 +1486,7 @@ my_comparisons <- Filter(function(x) length(unique(x)) == 2, my_comparisons)
 my_comparisons <- my_comparisons[c(6,1,7:10, 2:5)]
 # my_comparisons[[length(my_comparisons) + 1]] <- c("perc_all_0.1%", "perc_all_1%")
 
-ggplot(df_results_clustering, aes(x = method, y = value)) +
+p <- ggplot(df_results_clustering, aes(x = method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
   geom_point(aes(shape=dataset)) + 
   geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
@@ -1529,7 +1502,7 @@ ggplot(df_results_clustering, aes(x = method, y = value)) +
   scale_shape_manual(values=1:length(unique((df_results_clustering$dataset)))) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-
+print(p)
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_clusterscore.pdf"),
        width = 8,
        height = 6)
@@ -1537,7 +1510,7 @@ ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_clus
 df_results_modularity <- df_results %>%
   filter(score == "mod_score")
 
-ggplot(df_results_modularity, aes(x = method, y = value)) +
+p <- ggplot(df_results_modularity, aes(x = method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
   # geom_bar(stat = "identity", position = position_dodge()) +
   geom_point(aes(shape=dataset)) + 
@@ -1550,12 +1523,38 @@ ggplot(df_results_modularity, aes(x = method, y = value)) +
     aes(label = after_stat(p.signif))
   ) + # Add pairwise comparisons p-value
   # geom_point(position = position_jitterdodge()) +
-  labs(x = "", y = "Adjusted Rand Index") +
-  scale_shape_manual(values=1:length(unique((df_results_clustering$dataset)))) +
+  labs(x = "", y = "Modularity score") +
+  scale_shape_manual(values=1:length(unique((df_results_modularity$dataset)))) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-
+print(p)
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_modscore.pdf"),
+       width = 8,
+       height = 6)
+
+
+df_results_anosim <- df_results %>%
+  filter(score == "anosim_score")
+
+p <- ggplot(df_results_anosim, aes(x = method, y = value)) +
+  geom_boxplot(outlier.shape = NA) +
+  # geom_bar(stat = "identity", position = position_dodge()) +
+  geom_point(aes(shape=dataset)) + 
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  stat_compare_means(
+    comparisons = my_comparisons,
+    method = "t.test",
+    paired = TRUE,
+    # aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
+    aes(label = after_stat(p.signif))
+  ) + # Add pairwise comparisons p-value
+  # geom_point(position = position_jitterdodge()) +
+  labs(x = "", y = "Modularity score") +
+  scale_shape_manual(values=1:length(unique((df_results_anosim$dataset)))) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+print(p)
+ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_anosimscore.pdf"),
        width = 8,
        height = 6)
 
@@ -2109,5 +2108,235 @@ query <- Run.HiTME(query,
                    species = "human" # for mouse data set to "mouse"
                    )
 
+```
+
+
+# ---------------------------------------------------------------
+
+# Explanation of negative ARI and ANOSIM scores
+
+```{r}
+# --- Load necessary packages ---
+library(vegan)
+library(mclust)
+library(ggplot2)
+
+
+# --- Main function to analyze clusters and plot results ---
+analyze_clusters <- function(n_samples, cluster_specs) {
+  # Generate the data for all clusters
+  data_list <- list()
+  true_labels <- c()
+  group_labels <- c()
+  for (i in 1:length(cluster_specs)) {
+    spec <- cluster_specs[[i]]
+    group_name <- LETTERS[i] # Assign simple group names A, B, C, ...
+    
+    # Generate the descriptive label for the legend
+    mean_str <- paste0("Mean: (", paste(spec$mean, collapse = ", "), ")")
+    sd_str <- paste0("SD: (", paste(spec$sd, collapse = ", "), ")")
+    descriptive_label <- paste(group_name, mean_str, sd_str, sep = " | ")
+
+    # Generate the data
+    if (length(spec$sd) == 1) {
+      cluster_data <- data.frame(
+        x = rnorm(n_samples, mean = spec$mean[1], sd = spec$sd),
+        y = rnorm(n_samples, mean = spec$mean[2], sd = spec$sd)
+      )
+    } else {
+      cluster_data <- data.frame(
+        x = rnorm(n_samples, mean = spec$mean[1], sd = spec$sd[1]),
+        y = rnorm(n_samples, mean = spec$mean[2], sd = spec$sd[2])
+      )
+    }
+
+    cluster_data$group <- group_name
+    data_list[[i]] <- cluster_data
+    true_labels <- c(true_labels, rep(group_name, n_samples))
+    group_labels <- c(group_labels, rep(descriptive_label, n_samples))
+  }
+  
+  # Combine data into a single data frame
+  data_df <- do.call(rbind, data_list)
+
+  # Add the descriptive labels to the dataframe
+  data_df$group_label <- factor(group_labels, levels = unique(group_labels))
+
+  # Generate shuffled labels for both statistical test and plot
+  shuffled_labels <- sample(true_labels)
+  shuffled_group_labels <- sample(group_labels) # This was the flawed part. Corrected below.
+  
+  # The fix: create a shuffled version of the descriptive labels that correctly corresponds to the shuffled simple labels
+  shuffled_labels_map <- setNames(group_labels, true_labels)
+  shuffled_group_labels <- as.character(shuffled_labels_map[shuffled_labels])
+
+  # Calculate distance matrix
+  dist_matrix <- dist(data_df[, c("x", "y")], method = "euclidean")
+  
+  # Calculate ANOSIM and ARI for correct labels
+  anosim_correct <- anosim(dist_matrix, true_labels)
+  ari_correct <- adjustedRandIndex(true_labels, true_labels)
+
+  # Calculate ANOSIM and ARI for shuffled labels
+  anosim_shuffled <- anosim(dist_matrix, shuffled_labels)
+  ari_shuffled <- adjustedRandIndex(true_labels, shuffled_labels)
+
+  # Create plot titles with rounded metrics
+  title_correct <- paste0(
+    "Correct Labels\n",
+    "ANOSIM R: ", round(anosim_correct$statistic, 4),
+    " | ARI: ", round(ari_correct, 4)
+  )
+  
+  title_shuffled <- paste0(
+    "Shuffled Labels\n",
+    "ANOSIM R: ", round(anosim_shuffled$statistic, 4),
+    " | ARI: ", round(ari_shuffled, 4)
+  )
+  
+  # Create plots
+  plot_correct <- ggplot(data_df, aes(x = x, y = y, color = group_label)) +
+    geom_point(size = 2) +
+    labs(title = title_correct, x = "Feature 1", y = "Feature 2", color = "Group Specs") +
+    theme_minimal()
+  print(plot_correct)
+  
+  # The fix: create the shuffled dataframe by re-assigning the labels to the original data points
+  data_df_shuffled_plot <- data_df
+  data_df_shuffled_plot$group_label <- factor(shuffled_group_labels, levels = unique(group_labels))
+  
+  plot_shuffled <- ggplot(data_df_shuffled_plot, aes(x = x, y = y, color = group_label)) +
+    geom_point(size = 2) +
+    labs(title = title_shuffled, x = "Feature 1", y = "Feature 2", color = "Group Specs") +
+    theme_minimal()
+  print(plot_shuffled)
+  
+  # Create a data frame to store the results
+  results_df <- data.frame(
+    Scenario = c("Correct", "Shuffled"),
+    Anosim_R = c(anosim_correct$statistic, anosim_shuffled$statistic),
+    ARI = c(ari_correct, ari_shuffled)
+  )
+  
+  return(results_df)
+}
+
+
+# --- Define Scenarios ---
+set.seed(4)
+
+
+
+# Scenario 1: Well-separated clusters
+n_samples <- 50
+cluster_specs <- list(
+  list(mean = c(0, 0), sd = 1),
+  list(mean = c(5, 5), sd = 1)
+)
+
+# --- Run and print results for each scenario ---
+cat("--- Scenario 1: Well-Separated Clusters (50 samples) ---\n")
+results1 <- analyze_clusters(n_samples, cluster_specs)
+print(results1)
+
+
+# Scenario 2: Well-separated clusters few samples
+n_samples <- 5
+cluster_specs <- list(
+  list(mean = c(0, 0), sd = 1),
+  list(mean = c(5, 5), sd = 1)
+)
+
+# --- Run and print results for each scenario ---
+cat("--- Scenario 2: Well-separated clusters (10 samples)---\n")
+results2 <- analyze_clusters(n_samples, cluster_specs)
+print(results2)
+
+
+# Scenario 3: Well-separated clusters few samples
+n_samples <- 2
+cluster_specs <- list(
+  list(mean = c(0, 0), sd = 1),
+  list(mean = c(5, 5), sd = 1)
+)
+
+# --- Run and print results for each scenario ---
+cat("--- Scenario 3: Well-separated clusters (4 samples) ---\n")
+results3 <- analyze_clusters(n_samples, cluster_specs)
+print(results3)
+
+
+```
+
+
+```{r}
+# --- Load necessary packages ---
+library(vegan)
+library(mclust)
+library(ggplot2)
+
+# --- Define scenario parameters ---
+# set.seed(42)
+n_samples <- 2 # Number of samples per cluster
+
+# Create two clearly separated Gaussian clusters
+cluster1 <- data.frame(
+  x = rnorm(n_samples, mean = 0, sd = 1),
+  y = rnorm(n_samples, mean = 0, sd = 1)
+)
+cluster2 <- data.frame(
+  x = rnorm(n_samples, mean = 5, sd = 1),
+  y = rnorm(n_samples, mean = 5, sd = 1)
+)
+
+# Combine the data
+data_df <- rbind(cluster1, cluster2)
+
+# Create the correct, true labels
+true_labels <- factor(c(rep("Cluster A", n_samples), rep("Cluster B", n_samples)))
+
+# Create the "worst-case" labels by assigning them in an alternating pattern
+worst_labels <- factor(rep(c("Worst A", "Worst B"), length.out = nrow(data_df)))
+
+# --- Plot the scenarios ---
+# Plot for Correct Labels
+plot_correct <- ggplot(data_df, aes(x = x, y = y, color = true_labels)) +
+  geom_point(size = 2) +
+  labs(title = "Data with Correct Cluster Labels", x = "Feature 1", y = "Feature 2") +
+  theme_minimal()
+print(plot_correct)
+
+# Plot for Worst-Case Labels
+plot_worst <- ggplot(data_df, aes(x = x, y = y, color = worst_labels)) +
+  geom_point(size = 2) +
+  labs(title = "Data with Worst-Case (Alternating) Labels", x = "Feature 1", y = "Feature 2") +
+  theme_minimal()
+print(plot_worst)
+
+# --- Calculate ANOSIM and ARI ---
+# Calculate Euclidean distance matrix
+dist_matrix <- dist(data_df[, c("x", "y")], method = "euclidean")
+
+# ANOSIM: Test for separation based on correct vs. worst-case groups
+cat("--- ANOSIM Results ---\n")
+anosim_correct <- anosim(dist_matrix, true_labels)
+cat("ANOSIM R-statistic (Correct Labels):", round(anosim_correct$statistic, 4), "\n")
+# A high positive value indicates strong separation.
+
+anosim_worst <- anosim(dist_matrix, worst_labels)
+cat("ANOSIM R-statistic (Worst-Case Labels):", round(anosim_worst$statistic, 4), "\n\n")
+# This value should be highly negative, indicating that the within-group
+# dissimilarity is much greater than the between-group dissimilarity.
+
+# ARI: Compare the worst-case labels to the correct labels
+cat("--- Adjusted Rand Index Results ---\n")
+# A perfect clustering (correct vs correct) gives a score of 1.
+ari_perfect <- adjustedRandIndex(true_labels, true_labels)
+cat("ARI (Perfect Match):", round(ari_perfect, 4), "\n")
+
+# Comparing the correct labels to the worst-case labels should
+# yield a highly negative score, indicating the worst possible agreement.
+ari_worst <- adjustedRandIndex(true_labels, worst_labels)
+cat("ARI (Correct vs. Worst-Case):", round(ari_worst, 4), "\n")
 ```
 
