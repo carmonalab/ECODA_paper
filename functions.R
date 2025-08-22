@@ -23,27 +23,6 @@ suppressPackageStartupMessages({
   # library(zCompositions)
   library(rstatix)
   
-  library(scGate)
-  library(UCell)
-  library(STACAS)
-  library(ProjecTILs)
-  library(SignatuR)
-  
-  # devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
-  library(EPIC)
-  # BiocManager::install("MOFA2")
-  library(reticulate)
-  py_install("mofapy2", envname = "my_env", method="auto")
-  import("mofapy2")
-  library(basilisk)
-  library("MOFA2")
-  # BiocManager::install("fgsea")
-  # BiocManager::install("sva")
-  # devtools::install_github("kharchenkolab/scITD")
-  library(scITD)
-  # install.packages("ncdf4")
-  # install.packages("GloScope")
-  # library(GloScope)
   library(parallelly)
   
   # remotes::install_github("carmonalab/scooter", ref="f31eab3")
@@ -257,7 +236,7 @@ datrans <- function(count_mat,
                       # "clr",
                       "clr_pca"
                     ),
-                    zero_imp_method = "percentage_all__0.1",
+                    zero_imp_method = "counts_all__1",
                     n_cores = 8
 ) {
   
@@ -687,6 +666,7 @@ plot_pca <- function(feat_mat,
                      labelsize = 1,
                      coord_equal = TRUE,
                      axes = c(1, 2),
+                     show_plot = FALSE,
                      plotly_3d = FALSE,
                      invisible = c("var", "quali"),
                      repel = FALSE) {
@@ -726,7 +706,9 @@ plot_pca <- function(feat_mat,
   if (coord_equal) {
     p <- p + coord_equal()
   }
-  print(p)
+  if (show_plot) {
+    print(p)
+  }
   
   if (plotly_3d) {
     df <- as.data.frame(res.pca$x)
@@ -774,10 +756,11 @@ plot_roc_pcad1 <- function(feat_mat, labels) {
 
 
 remove_low_cellcount_samples <- function(seurat,
+                                         sample_col = "Sample",
                                          min_cells_per_sample = 500,
                                          show_plot = FALSE) {
-  Idents(seurat) <- "Sample"
-  cells_per_sample <- table(seurat$Sample)
+  Idents(seurat) <- sample_col
+  cells_per_sample <- table(seurat@meta.data[[sample_col]])
   seurat <- subset(seurat, idents = names(cells_per_sample[cells_per_sample > min_cells_per_sample]))
   
   if (show_plot) {
@@ -850,6 +833,7 @@ run_benchmark_analysis <- function(seurat,
   
   res_list <- list()
   
+  # Files preprocessed with python
   files <- list(
     mrvi_dist_file = file.path(path_data, paste0(ds, "_mrvi_dists.feather")),
     scpoli_emb_file = file.path(path_data, paste0(ds, "_scpoli_embs.feather")),
@@ -860,6 +844,12 @@ run_benchmark_analysis <- function(seurat,
     if (!file.exists(file)) {
       stop("File not found: ", file)
     }
+  }
+  
+  # Sample names starting with digits are not allowed in seurat
+  sample_names_starting_with_digit <- grepl("^\\d", unique(seurat@meta.data[["Sample"]]))
+  if (any(sample_names_starting_with_digit)) {
+    seurat@meta.data[["Sample"]][grepl("^\\d", seurat@meta.data[["Sample"]])] <- paste0("g", seurat@meta.data[["Sample"]][grepl("^\\d", seurat@meta.data[["Sample"]])])
   }
   
   metadata <- get_metadata(seurat)
@@ -893,17 +883,24 @@ run_benchmark_analysis <- function(seurat,
   # CoDA
   if (ECODA_low_res) {
     ## layer1: low res. cell types
-    res_list[["CtCompECODA_lowres"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$low_res_ct_col, title = "Cell type composition (CLR)\nlow res.")
+    if (!is.null(seurat@misc$low_res_ct_col)) {
+      res_list[["ECODA_lowres"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$low_res_ct_col, title = "Cell type composition (CLR)\nlow res.")
+    }
   }
   
   if (ECODA_high_res) {
     ## layer2: high res. cell types
-    res_list[["CtCompECODA_highres"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (CLR)\nhigh res.")
-    if (ECODA_select_top_hvct) {
-      res_list[[paste0("CtCompECODA_highres_top", ECODA_top_hvct)]] <-
-        process_coda_fig(seurat, labels, ECODA_top_hvct = ECODA_top_hvct, ct_col = seurat@misc$hi_res_ct_col, title = paste0("Cell type composition (CLR)\nhigh res. top ", ECODA_top_hvct*100, "%"))
+    if (!is.null(seurat@misc$hi_res_ct_col)) {
+      res_list[["ECODA_highres"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (CLR)\nhigh res.")
+      if (ECODA_select_top_hvct) {
+        res_list[[paste0("ECODA_highres_top", ECODA_top_hvct)]] <-
+          process_coda_fig(seurat, labels, ECODA_top_hvct = ECODA_top_hvct, ct_col = seurat@misc$hi_res_ct_col, title = paste0("Cell type composition (CLR)\nhigh res. top ", ECODA_top_hvct*100, "%"))
+      }
+      res_list[["Freq_highres"]] <- process_coda_fig(seurat, labels, clr = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (%)\nhigh res.")
     }
-    res_list[["CtCompFreq_highres"]] <- process_coda_fig(seurat, labels, clr = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (%)\nhigh res.")
+    
+    res_list[["ECODA_highres_HiTME"]] <- process_coda_fig(seurat, labels, ct_col = "layer2", title = "Cell type composition (CLR)\nhigh res.")
+    res_list[["ECODA_highres_scATOMIC"]] <- process_coda_fig(seurat, labels, ct_col = "scATOMIC_pred", title = "Cell type composition (CLR)\nhigh res.")
   }
   
   # Analyze for all resolutions
@@ -915,9 +912,9 @@ run_benchmark_analysis <- function(seurat,
     
     for (r in res) {
       res_col_name <- paste0("RNA_snn_res.", r)
-      res_list[[paste0("CtCompECODA_seuratres_", r)]] <- process_coda_fig(seurat, labels, ct_col = res_col_name, title = paste0("Cell type composition (CLR)\nSeurat res. ", r))
+      res_list[[paste0("ECODA_seuratres_", r)]] <- process_coda_fig(seurat, labels, ct_col = res_col_name, title = paste0("Cell type composition (CLR)\nSeurat res. ", r))
       if (ECODA_select_top_hvct) {
-        res_list[[paste0("CtCompECODA_seuratres_", r, "_top", ECODA_top_hvct)]] <-
+        res_list[[paste0("ECODA_seuratres_", r, "_top", ECODA_top_hvct)]] <-
           process_coda_fig(seurat, labels, ECODA_top_hvct, ct_col = res_col_name, title = paste0("Cell type composition (CLR)\nultra-high res. ", r, " top ", ECODA_top_hvct*100, "%"))
       }
     }
@@ -963,7 +960,7 @@ run_benchmark_analysis <- function(seurat,
   }
   
   if (GloScope) {
-    res_list[["GloScope"]] <- process_gloscope_fig(seurat, metadata, seurat@misc$label_col)
+    res_list[["GloScope"]] <- process_gloscope_fig(seurat, metadata, seurat@misc$label_col, gloscope_dist_file = file.path(path_data, paste0(ds, "_gloscope_dists.rds")))
   }
   
   
@@ -1010,8 +1007,8 @@ process_coda_fig <- function(seurat,
                              pca_dims = NULL,
                              ct_col,
                              title,
-                             clr_zero_impute_method = "percentage_all",
-                             clr_zero_impute_num = 0.1,
+                             clr_zero_impute_method = "counts_all",
+                             clr_zero_impute_num = 1,
                              feat_mat = NULL) {
   
   if (is.null(feat_mat)) {
@@ -1258,19 +1255,26 @@ process_mrvi_fig <- function(mrvi_dist_file, labels, title = "MrVI") {
 process_gloscope_fig <- function(seurat,
                                  metadata,
                                  label_col,
+                                 gloscope_dist_file,
                                  dens = "KNN",
                                  dist_mat = c("KL"),
                                  k = 9,
                                  BPPARAM = BiocParallel::MulticoreParam(workers = parallelly::availableCores() - 2, progressbar = TRUE),
                                  title = "GloScope") {
   
-  feat_mat <- GloScope::gloscope(
-    embedding_matrix = seurat@reductions$pca@cell.embeddings,
-    cell_sample_ids = seurat$Sample,
-    dens = dens,
-    dist_mat = dist_mat,
-    k = k,
-    BPPARAM = BPPARAM)
+  if (!file.exists(gloscope_dist_file)) {
+    feat_mat <- GloScope::gloscope(
+      embedding_matrix = seurat@reductions$pca@cell.embeddings,
+      cell_sample_ids = seurat$Sample,
+      dens = dens,
+      dist_mat = dist_mat,
+      k = k,
+      BPPARAM = BPPARAM)
+    saveRDS(feat_mat, file = gloscope_dist_file)
+  } else {
+    feat_mat <- readRDS(gloscope_dist_file)
+  }
+
   samples <- row.names(feat_mat)
   sample_names_starting_with_digit <- grepl("^\\d", samples)
   if (any(sample_names_starting_with_digit)) {
