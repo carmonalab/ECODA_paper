@@ -7,6 +7,7 @@ suppressPackageStartupMessages({
   library(foreach)
   library(ggplot2)
   library(ggpubr)
+  library(ggtext)
   library(mclust)
   library(plotly)
   # library("robCompositions")
@@ -96,12 +97,15 @@ calc_sil <- function(feat_mat,
 calc_modularity <- function(feat_mat,
                             labels,
                             knn_k = NULL) {
+  ngroups <- length(unique(labels))
+  
   if (is.null(knn_k)) {
     # min_group_size <- min(table(labels))
-    ngroups <- length(unique(labels))
-    half_group_size <- round(nrow(feat_mat) / ngroups / 2)
+    # half_group_size <- round(nrow(feat_mat) / ngroups / 2)
     # # knn_k is equal to half average group size or at least 3
-    knn_k <- max(half_group_size, 3)
+    # knn_k <- max(half_group_size, 3)
+    
+    knn_k <- max(3, round(sqrt(nrow(feat_mat))))
   }
   
   # Create a graph object
@@ -113,7 +117,11 @@ calc_modularity <- function(feat_mat,
   # Maximum modularity depends on the number of groups: max(mod) = 1 - 1 / (number of groups)
   # see Brandes, Ulrik, et al. On finding graph clusterings with maximum modularity.
   
-  return(modularity_score)
+  # Adjust modularity score for number of groups
+  maximum_modularity_score <- 1 - (1 / ngroups)
+  adjusted_modularity_score <- modularity_score / maximum_modularity_score
+  
+  return(adjusted_modularity_score)
 }
 
 
@@ -220,21 +228,21 @@ datrans <- function(count_mat,
                     cts = NULL, # Cell types to be differentially abundant. If NULL, randomly select a specified number of cell types (n_ct_to_select)
                     reps = 20, # Number of random shuffling to calculate separation using different cell types and samples for DA
                     trans_method = c(
-                      # "counts",
+                      "counts",
                       # "counts_imputed",
-                      "counts_pca",
-                      # "freq",
+                      # "counts_pca",
+                      "freq",
                       # "freq_imputed",
-                      "freq_pca",
-                      # "arcsine_sqrt",
-                      "arcsine_sqrt_pca",
-                      # "alr_randref",
-                      "alr_randref_pca",
-                      # "alr_mincvref",
-                      "alr_mincvref_pca",
+                      # "freq_pca",
+                      "arcsine_sqrt",
+                      # "arcsine_sqrt_pca",
+                      "alr_randref",
+                      # "alr_randref_pca",
+                      "alr_mincvref",
+                      # "alr_mincvref_pca",
                       # "ilr", "ilr_pca",
-                      # "clr",
-                      "clr_pca"
+                      "clr" #,
+                      # "clr_pca"
                     ),
                     zero_imp_method = "counts_all__1",
                     n_cores = 8
@@ -271,8 +279,11 @@ datrans <- function(count_mat,
                        n_celltypes = numeric(),
                        Amount_of_perturbation = numeric(),
                        Silhouette_score = numeric(),
+                       ANOSIM_score = numeric(),
                        Modularity_score = numeric(),
-                       Adjusted_Rand_Index = numeric()
+                       Adjusted_Rand_Index = numeric(),
+                       bootstrap_id = numeric(),
+                       diff_abu_cts = list()
                      )
                      
                      print(paste0("da: ", da))
@@ -292,7 +303,7 @@ datrans <- function(count_mat,
                          
                          if (is.null(labels)) {
                            half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
-                           labs <- as.numeric(row.names(count_mat) %in% half_samples_da)
+                           labels_random <- as.numeric(row.names(count_mat) %in% half_samples_da)
                            
                            # Simulate differential abundance
                            rsums_before <- rowSums(df_counts_temp)
@@ -344,25 +355,41 @@ datrans <- function(count_mat,
                              
                              
                              # Calculate scores
-                             # avg_sil <- calc_sil(feat_mat = df, labels)
-                             anosim_score <- vegan::anosim(x = df, grouping = labels, distance = "euclidean")[["statistic"]]
-                             mod <- calc_modularity(feat_mat = df, labels)
-                             cluster_score <- clust_eval(matrix = df, labels)
+                             
+                             if (is.null(labels)) {
+                               avg_sil <- calc_sil(feat_mat = df, labels_random)
+                               # Reduced number of permutations to speed up calculation time
+                               anosim_score <- vegan::anosim(x = df, grouping = labels_random, distance = "euclidean", permutations = 49)[["statistic"]]
+                               mod <- calc_modularity(feat_mat = df, labels_random)
+                               cluster_score <- clust_eval(matrix = df, labels_random)
+                             } else {
+                               avg_sil <- calc_sil(feat_mat = df, labels)
+                               # Reduced number of permutations to speed up calculation time
+                               anosim_score <- vegan::anosim(x = df, grouping = labels, distance = "euclidean", permutations = 49)[["statistic"]]
+                               mod <- calc_modularity(feat_mat = df, labels)
+                               cluster_score <- clust_eval(matrix = df, labels)
+                               
+                             }
+                             
                              
                              
                              # Append results
-                             new_row <- list(
+                             new_row_df <- data.frame(
                                trans_method = met,
                                zero_imp_method = zmet,
                                n_celltypes = nct,
                                Amount_of_perturbation = da,
-                               # Silhouette_score = avg_sil,
+                               Silhouette_score = avg_sil,
                                ANOSIM_score = anosim_score,
                                Modularity_score = mod,
                                Adjusted_Rand_Index = cluster_score,
                                bootstrap_id = rep
                              )
-                             res <- rbind(res, new_row)
+                             
+                             new_row_df$diff_abu_cts <- list(ct_da)
+                             new_row_df$feat_mat <- list(df)
+                             
+                             res <- rbind(res, new_row_df)
                            }
                          }
                          
@@ -527,27 +554,89 @@ get_ct_comp_df_seurat <- function(seurat, sample_col, ct_col) {
 
 get_ct_var <- function(df,
                        show_plot = TRUE,
-                       plot_title = "") {
+                       plot_title = "",
+                       smooth_method = "lm",
+                       descending = TRUE) {
   df_var <- df %>%
-    pivot_longer(
-      cols = everything(),
+    tidyr::pivot_longer(
+      cols = dplyr::everything(),
       names_to = "celltype",
       values_to = "values"
     ) %>%
-    group_by(celltype) %>%
+    dplyr::group_by(celltype) %>%
     dplyr::summarize(
-      Relative_abundance = mean(values, na.rm=TRUE),
-      Variance = var(values, na.rm=TRUE)
-    ) %>%
-    arrange(desc(Variance))
+      Relative_abundance = mean(values, na.rm = TRUE),
+      Variance = var(values, na.rm = TRUE)
+    )
   
-  if (show_plot == TRUE) {
-    p <- varmeanplot(data = df_var, title = plot_title)
+  if (descending) {
+    df_var <- df_var %>%
+      dplyr::arrange(dplyr::desc(Variance))
+  } else {
+    df_var <- df_var %>%
+      dplyr::arrange(Variance)
+  }
+
+  if (show_plot) {
+    p <- varmeanplot(data = df_var, title = plot_title, smooth_method = smooth_method)
     print(p)
   }
-  
+
   return(df_var)
 }
+
+
+get_hvcs <- function(df_var, top_n_hvcs = NULL, variance_threshold = 0.8) {
+  if (!is.null(top_n_hvcs)) {
+    if (top_n_hvcs < 1) {
+      top_hvcs <- df_var %>%
+        slice_head(prop = top_n_hvcs) %>%
+        pull(celltype)
+    } else {
+      top_hvcs <- df_var %>%
+        slice_head(n = top_n_hvcs) %>%
+        pull(celltype)
+    }
+  } else {
+    top_hvcs <- select_by_variance_explained(df_var, variance_threshold = variance_threshold)
+  }
+  
+  # Select at least two cell types
+  if (length(top_hvcs) < 2) {
+    top_hvcs <- df_var %>%
+      slice_head(n = 2) %>%
+      pull(celltype)
+  }
+  
+  return(top_hvcs)
+}
+
+
+select_by_variance_explained <- function(df_var, variance_threshold) {
+  
+  # Ensure data is sorted by variance in descending order
+  df_var_sorted <- df_var %>%
+    dplyr::arrange(dplyr::desc(Variance))
+  
+  # Calculate the total variance
+  total_variance <- sum(df_var_sorted$Variance)
+  
+  # Calculate the cumulative variance and the percentage of variance explained
+  df_with_cumulative_var <- df_var_sorted %>%
+    dplyr::mutate(
+      cumulative_variance = cumsum(Variance),
+      variance_explained = (cumulative_variance / total_variance)
+    )
+  
+  # Select the cell types that meet the variance threshold
+  selected_celltypes <- df_with_cumulative_var %>%
+    dplyr::filter(variance_explained <= variance_threshold) %>%
+    dplyr::pull(celltype)
+  
+  return(selected_celltypes)
+}
+
+
 
 
 get_pb <- function(seurat, sample_col = "Sample", hvg = NULL) {
@@ -569,16 +658,14 @@ get_pb_deseq2 <- function(seurat, sample_col = "Sample", hvg) {
 }
 
 
-varmeanplot <- function(data, title) {
-  
-  lmod <- lm(Variance ~ Relative_abundance, data = data)
+varmeanplot <- function(data, title = "", smooth_method = "lm") {
   
   ggplot(data, aes(x = Relative_abundance, y = Variance)) + 
     geom_point() +
-    geom_smooth(method=lm , color="red", fill="#69b3a2", se=TRUE) +
+    geom_smooth(method=smooth_method, color="red", fill="#69b3a2", se=TRUE) +
     labs(title = paste(title)) +
     theme_classic() +
-    xlab("CLR-transformed relative abundance") + ylab("Variance")
+    xlab("Mean") + ylab("Variance")
 }
 
 
@@ -586,7 +673,7 @@ varmeanplot <- function(data, title) {
 get_metadata <- function(seurat, sample_col = "Sample") {
   metadata <- seurat@meta.data %>%
     dplyr::group_by(!!sym(sample_col)) %>%
-    slice(1)
+    dplyr::slice(1)
   
   return(metadata)
 }
@@ -660,7 +747,7 @@ plot_pca <- function(feat_mat,
                      title = NULL,
                      cluster_score = TRUE,
                      mod_score = TRUE,
-                     # sil_score = TRUE,
+                     sil_score = FALSE,
                      anosim_score = TRUE,
                      pointsize = 3,
                      labelsize = 1,
@@ -669,10 +756,16 @@ plot_pca <- function(feat_mat,
                      show_plot = FALSE,
                      plotly_3d = FALSE,
                      invisible = c("var", "quali"),
+                     n_ct_show = Inf,
                      repel = FALSE) {
   
   res.pca <- prcomp(feat_mat, scale. = scale., rank. = pca_dims)
   
+  
+  if (anosim_score) {
+    anosim_score <- round(vegan::anosim(x = feat_mat, grouping = labels, distance = "euclidean")[["statistic"]], 3)
+    title <- paste0(title, "\nANOSIM score: ", anosim_score)
+  }
   if (cluster_score) {
     cluster_score <- clust_eval(feat_mat, labels)
     title <- paste0(title, "\nARI: ", cluster_score)
@@ -681,13 +774,9 @@ plot_pca <- function(feat_mat,
     mod_score <- round(calc_modularity(feat_mat, labels, knn_k), 3)
     title <- paste0(title, "\nModularity score: ", mod_score)
   }
-  # if (sil_score) {
-  #   sil_score <- round(calc_sil(feat_mat, labels), 3)
-  #   title <- paste0(title, "\nSilhouette score: ", sil_score)
-  # }
-  if (anosim_score) {
-    anosim_score <- round(vegan::anosim(x = feat_mat, grouping = labels, distance = "euclidean")[["statistic"]], 3)
-    title <- paste0(title, "\nANOSIM score: ", anosim_score)
+  if (sil_score) {
+    sil_score <- round(calc_sil(feat_mat, labels), 3)
+    title <- paste0(title, "\nSilhouette score: ", sil_score)
   }
   
   
@@ -699,6 +788,7 @@ plot_pca <- function(feat_mat,
                             pointsize = pointsize,
                             labelsize = labelsize,
                             invisible = invisible,
+                            select.var = list(contrib = n_ct_show),
                             repel = repel,
                             geom = "point") +
     ggtitle(title) +
@@ -818,8 +908,9 @@ run_benchmark_analysis <- function(seurat,
                                    ECODA_low_res = TRUE,
                                    ECODA_high_res = TRUE,
                                    ECODA_seuratcluster_res = TRUE,
-                                   ECODA_select_top_hvct = TRUE,
-                                   ECODA_top_hvct = 0.25,
+                                   # ECODA_select_top_hvct = TRUE,
+                                   # ECODA_top_n_hvct = 0.25,
+                                   ECODA_top_varexp_hvct = seq(0, 0.9, 0.1),
                                    Pseudobulk_PCA = TRUE,
                                    ECODA_high_res_PCA = TRUE,
                                    MOFA = TRUE,
@@ -847,15 +938,16 @@ run_benchmark_analysis <- function(seurat,
   }
   
   # Sample names starting with digits are not allowed in seurat
-  sample_names_starting_with_digit <- grepl("^\\d", unique(seurat@meta.data[["Sample"]]))
+  sample_names_starting_with_digit <- grepl("^\\d", unique(seurat@meta.data[[sample_col]]))
   if (any(sample_names_starting_with_digit)) {
-    seurat@meta.data[["Sample"]][grepl("^\\d", seurat@meta.data[["Sample"]])] <- paste0("g", seurat@meta.data[["Sample"]][grepl("^\\d", seurat@meta.data[["Sample"]])])
+    seurat@meta.data[[sample_col]][grepl("^\\d", seurat@meta.data[[sample_col]])] <- paste0("g", seurat@meta.data[[sample_col]][grepl("^\\d", seurat@meta.data[[sample_col]])])
   }
   
   metadata <- get_metadata(seurat)
   metadata[[sample_col]] <- gsub("-", "_", metadata[[sample_col]])
   
   labels <- get_labels(seurat, seurat@misc$label_col)
+  names(labels) <- metadata[[sample_col]]
   
   if ("var.features" %in% slotNames(seurat@assays[["RNA"]])) {
     # This path is for older Seurat objects (primarily v2/v3)
@@ -868,7 +960,7 @@ run_benchmark_analysis <- function(seurat,
   }
   
   if (Pseudobulk | Pseudobulk_PCA) {
-    pb_norm <- get_pb_deseq2(seurat, sample_col = "Sample", hvg = hvg)
+    pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = hvg)
   }
   
   if (Pseudobulk) {
@@ -884,23 +976,52 @@ run_benchmark_analysis <- function(seurat,
   if (ECODA_low_res) {
     ## layer1: low res. cell types
     if (!is.null(seurat@misc$low_res_ct_col)) {
-      res_list[["ECODA_lowres"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$low_res_ct_col, title = "Cell type composition (CLR)\nlow res.")
+      res_list[["ECODA_lowres"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$low_res_ct_col, title = "ECODA\nlow res.")
     }
   }
   
   if (ECODA_high_res) {
     ## layer2: high res. cell types
     if (!is.null(seurat@misc$hi_res_ct_col)) {
-      res_list[["ECODA_highres"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (CLR)\nhigh res.")
-      if (ECODA_select_top_hvct) {
-        res_list[[paste0("ECODA_highres_top", ECODA_top_hvct)]] <-
-          process_coda_fig(seurat, labels, ECODA_top_hvct = ECODA_top_hvct, ct_col = seurat@misc$hi_res_ct_col, title = paste0("Cell type composition (CLR)\nhigh res. top ", ECODA_top_hvct*100, "%"))
+      res_list[["ECODA_highres"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\nhigh res.")
+      # if (ECODA_select_top_hvct) {
+      #   res_list[[paste0("ECODA_highres_top", ECODA_top_n_hvct)]] <-
+      #     process_coda_fig(seurat, labels, ECODA_top_n_hvct = ECODA_top_n_hvct, ct_col = seurat@misc$hi_res_ct_col, title = paste0("Cell type composition (CLR)\nhigh res. top ", ECODA_top_n_hvct*100, "%"))
+      # }
+      for (varexp_hvc in ECODA_top_varexp_hvct) {
+        res_list[[paste0("ECODA_highres_top_varexp", varexp_hvc)]] <-
+          process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = seurat@misc$hi_res_ct_col, title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc*100, "%"))
+        
+        res_list[[paste0("ECODA_highres_top_varexpRecalc", varexp_hvc)]] <-
+          process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = seurat@misc$hi_res_ct_col, title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc*100, "%"), hvct_recalc_clr = TRUE)
+        
+        
+        res_list[[paste0("ECODA_highres_HiTME_layer2_top_varexp", varexp_hvc)]] <-
+          process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = "layer2", title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc*100, "%"))
+        res_list[[paste0("ECODA_highres_HiTME_layer3_top_varexp", varexp_hvc)]] <-
+          process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = "layer3", title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc*100, "%"))
+        
+        res_list[[paste0("ECODA_highres_HiTME_layer2_top_varexpRecalc", varexp_hvc)]] <-
+          process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = "layer2", title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc*100, "%"), hvct_recalc_clr = TRUE)
+        res_list[[paste0("ECODA_highres_HiTME_layer3_top_varexpRecalc", varexp_hvc)]] <-
+          process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = "layer3", title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc*100, "%"), hvct_recalc_clr = TRUE)
       }
+      
       res_list[["Freq_highres"]] <- process_coda_fig(seurat, labels, clr = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (%)\nhigh res.")
     }
     
-    res_list[["ECODA_highres_HiTME"]] <- process_coda_fig(seurat, labels, ct_col = "layer2", title = "Cell type composition (CLR)\nhigh res.")
-    res_list[["ECODA_highres_scATOMIC"]] <- process_coda_fig(seurat, labels, ct_col = "scATOMIC_pred", title = "Cell type composition (CLR)\nhigh res.")
+    res_list[["ECODA_highres_3most_varcts"]] <-
+      process_coda_fig(seurat, labels, ECODA_top_n_hvct = 3, var_ct_desc = TRUE, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\n2 least var. cell types")
+    
+    res_list[["ECODA_highres_2least_varcts"]] <-
+      process_coda_fig(seurat, labels, ECODA_top_n_hvct = 2, var_ct_desc = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\n2 least var. cell types")
+    
+    res_list[["ECODA_highres_3least_varcts"]] <-
+      process_coda_fig(seurat, labels, ECODA_top_n_hvct = 3, var_ct_desc = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\n2 least var. cell types")
+    
+    res_list[["ECODA_highres_HiTME"]] <- process_coda_fig(seurat, labels, ct_col = "layer2", title = "ECODA\nHiTME")
+    res_list[["ECODA_highres_HiTME_layer3"]] <- process_coda_fig(seurat, labels, ct_col = "layer3", title = "ECODA\nHiTME layer3")
+    res_list[["ECODA_highres_scATOMIC"]] <- process_coda_fig(seurat, labels, ct_col = "scATOMIC_pred", title = "ECODA\nscATOMIC")
   }
   
   # Analyze for all resolutions
@@ -912,11 +1033,16 @@ run_benchmark_analysis <- function(seurat,
     
     for (r in res) {
       res_col_name <- paste0("RNA_snn_res.", r)
-      res_list[[paste0("ECODA_seuratres_", r)]] <- process_coda_fig(seurat, labels, ct_col = res_col_name, title = paste0("Cell type composition (CLR)\nSeurat res. ", r))
-      if (ECODA_select_top_hvct) {
-        res_list[[paste0("ECODA_seuratres_", r, "_top", ECODA_top_hvct)]] <-
-          process_coda_fig(seurat, labels, ECODA_top_hvct, ct_col = res_col_name, title = paste0("Cell type composition (CLR)\nultra-high res. ", r, " top ", ECODA_top_hvct*100, "%"))
+      res_list[[paste0("ECODA_seuratres_", r)]] <- process_coda_fig(seurat, labels, ct_col = res_col_name, title = paste0("ECODA\nLeiden clustering ", r))
+      # if (ECODA_select_top_hvct) {
+      #   res_list[[paste0("ECODA_seuratres_", r, "_top", ECODA_top_n_hvct)]] <-
+      #     process_coda_fig(seurat, labels, ECODA_top_n_hvct, ct_col = res_col_name, title = paste0("ECODA\nultra-high res. ", r, " top ", ECODA_top_n_hvct*100, "%"))
+      # }
+      for (varexp_hvc in ECODA_top_varexp_hvct) {
+        res_list[[paste0("ECODA_highres_top_varexp", varexp_hvc)]] <-
+          process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = seurat@misc$hi_res_ct_col, title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc*100, "%"))
       }
+      
     }
   }
   
@@ -929,7 +1055,7 @@ run_benchmark_analysis <- function(seurat,
       
       if (ECODA_high_res_PCA) {
         # Hires CODA with PCA
-        res_list[[paste0("ECODA_high_res_", i, "_PCA_dims")]] <- process_coda_fig(seurat, labels, pca_dims = i, ct_col = seurat@misc$hi_res_ct_col, title = paste0("Cell type composition\nhigh res. + PCA (", i, " dims)"))
+        res_list[[paste0("ECODA_high_res_", i, "_PCA_dims")]] <- process_coda_fig(seurat, labels, pca_dims = i, ct_col = seurat@misc$hi_res_ct_col, title = paste0("ECODA\nhigh res. + PCA (", i, " dims)"))
       }
 
       if (MOFA) {
@@ -964,18 +1090,19 @@ run_benchmark_analysis <- function(seurat,
   }
   
   
-  if (show_pca_plots | save_pca_plots) {
-    plot_list <- lapply(res_list, function(method) method[["plot"]])
-    p <- cowplot::plot_grid(plotlist = plot_list)
-    res_list[["PCA_plots"]] <- p
-  }
-  if (show_pca_plots) {print(p)}
-  if (save_pca_plots) {
-    ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
-           plot = p,
-           width = length(res_list),
-           height = length(res_list)*2/3)
-  }
+  # if (show_pca_plots | save_pca_plots) {
+  #   plot_list <- lapply(res_list, function(method) method[["plot"]])
+  #   p <- cowplot::plot_grid(plotlist = plot_list)
+  #   res_list[["PCA_plots"]] <- p
+  # }
+  # if (show_pca_plots) {print(p)}
+  # if (save_pca_plots) {
+  #   ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
+  #          plot = p,
+  #          width = length(res_list),
+  #          height = length(res_list)*2/3,
+  #          limitsize = FALSE)
+  # }
   
   return(res_list)
 }
@@ -991,7 +1118,7 @@ process_deconv_fig <- function(pseudobulk,
   feat_mat <- clr(deconv_ct_comps + 0.001)
   
   res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  #res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
@@ -1002,32 +1129,49 @@ process_deconv_fig <- function(pseudobulk,
 
 process_coda_fig <- function(seurat,
                              labels,
-                             ECODA_top_hvct = NULL,
+                             ECODA_top_n_hvct = NULL,
+                             ECODA_top_varexp_hvct = NULL,
+                             hvct_recalc_clr = FALSE,
                              clr = TRUE,
                              pca_dims = NULL,
+                             sample_col = "Sample",
                              ct_col,
                              title,
                              clr_zero_impute_method = "counts_all",
                              clr_zero_impute_num = 1,
-                             feat_mat = NULL) {
+                             feat_mat = NULL,
+                             var_ct_desc = TRUE) {
   
   if (is.null(feat_mat)) {
-    df_counts <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col)
+    df_counts <- get_ct_comp_df_seurat(seurat, sample_col = sample_col, ct_col)
     
-    feat_mat <- df_counts %>%
+    df_freq <- df_counts %>%
       impute_zeros(clr_zero_impute_method = clr_zero_impute_method, clr_zero_impute_num = clr_zero_impute_num) %>%
       calc_perc_df()
     
     if (clr) {
-      feat_mat <- feat_mat %>%
+      feat_mat <- df_freq %>%
         clr()
+    } else {
+      feat_mat <- df_freq
     }
     
-    if (!is.null(ECODA_top_hvct)) {
-      top_hvct <- get_ct_var(feat_mat, show_plot = FALSE) %>%
-        slice_head(prop = ECODA_top_hvct) %>%
-        pull(celltype)
+    if (!is.null(ECODA_top_n_hvct)) {
+      top_hvct <- get_ct_var(feat_mat, show_plot = FALSE, descending = var_ct_desc) %>%
+        get_hvcs(top_n_hvcs = ECODA_top_n_hvct, variance_threshold = NULL)
       feat_mat <- feat_mat[, top_hvct]
+    }
+    if (!is.null(ECODA_top_varexp_hvct)) {
+      top_hvct <- get_ct_var(feat_mat, show_plot = FALSE, descending = var_ct_desc) %>%
+        get_hvcs(top_n_hvcs = NULL, variance_threshold = ECODA_top_varexp_hvct)
+      feat_mat <- feat_mat[, top_hvct]
+    }
+    
+    if (hvct_recalc_clr) {
+      feat_mat <- df_counts[, top_hvct] %>%
+        impute_zeros(clr_zero_impute_method = clr_zero_impute_method, clr_zero_impute_num = clr_zero_impute_num) %>%
+        calc_perc_df() %>%
+        clr()
     }
   }
   
@@ -1036,7 +1180,7 @@ process_coda_fig <- function(seurat,
   }
   
   res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  #res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
@@ -1056,7 +1200,7 @@ process_pseudobulk_fig <- function(feat_mat,
   }
   
   res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  #res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
@@ -1228,7 +1372,7 @@ process_scitd_fig <- function(seurat,
   labels <- as.factor(labels_scITD[[label_col]])
   
   res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  #res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
@@ -1240,10 +1384,10 @@ process_scitd_fig <- function(seurat,
 process_mrvi_fig <- function(mrvi_dist_file, labels, title = "MrVI") {
   
   feat_mat <- arrow::read_feather(mrvi_dist_file) %>%
-    select(-last_col())
+    dplyr::select(-last_col())
   
   res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  #res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(feat_mat)
@@ -1285,7 +1429,7 @@ process_gloscope_fig <- function(seurat,
   labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
   
   res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  #res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- feat_mat
@@ -1297,10 +1441,10 @@ process_gloscope_fig <- function(seurat,
 process_scpoli_fig <- function(scpoli_emb_file, labels, title = "scPoli") {
   
   feat_mat <- arrow::read_feather(scpoli_emb_file) %>%
-    select(-last_col())
+    dplyr::select(-last_col())
   
   res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  #res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
@@ -1312,10 +1456,10 @@ process_scpoli_fig <- function(scpoli_emb_file, labels, title = "scPoli") {
 process_pilot_fig <- function(pilot_dist_file, labels, title = "PILOT") {
   
   feat_mat <- arrow::read_feather(pilot_dist_file) %>%
-    select(-last_col())
+    dplyr::select(-last_col())
 
   res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  #res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(feat_mat)
@@ -1339,11 +1483,9 @@ run_transformation_analysis <- function(ct_comps, labels) {
                         "counts",
                         "freq",
                         "arcsine_sqrt",
-                        # "arcsine_sqrt_pca",
                         "alr_randref",
                         "alr_mincvref",
-                        "clr",
-                        "clr_pca"
+                        "clr"
                       ))
   res_list <- res_list %>%
     dplyr::group_by(trans_method) %>%

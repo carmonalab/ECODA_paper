@@ -190,7 +190,7 @@ datasets <- list(
     subset_vars = list(
       Site = list(values = "Ncl", op = "in"),
       Status = list(values = c("Healthy", "Covid"), op = "in"),
-      Sample = list(values = c("BGCV10_CV0198", "MH8919230"), op = "notin")
+      Sample = list(values = c("BGCV10_CV0198", "MH8919230"), op = "notin") # Removed outliers that consist predominantly of one cell type
     ),
     tissue = "Blood",
     normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
@@ -220,7 +220,7 @@ datasets <- list(
     subset_vars = list(
       Treatment = list(values = "Pre", op = "in"),
       Clinical.efficacy. = list(values = "-", op = "notin"),
-      Sample = list(values = c("Pre_P012_b", "Pre_P013_t"), op = "notin")
+      Sample = list(values = c("Pre_P012_b", "Pre_P013_t"), op = "notin") # Removed outliers that consist predominantly of one cell type
     ),
     tissue = "Mixed",
     normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
@@ -276,6 +276,23 @@ seurat$cells_lowres <- as.factor(seurat$cells_lowres)
 
 saveRDS(seurat, file = input_file_path)
 ```
+
+
+
+<!-- # Subset Stephenson dataset to acute infection -->
+
+<!-- ```{r} -->
+<!-- ds <- "Stephenson" -->
+
+<!-- input_file_path <- datasets[[ds]][["file_path"]] -->
+
+<!-- seurat <- readRDS(input_file_path) -->
+
+<!-- seurat$Days_from_onset <- as.numeric(seurat$Days_from_onset) -->
+<!-- seurat <- subset(seurat, subset = Status == "Healthy" | Days_from_onset < 10) -->
+
+<!-- saveRDS(seurat, file = input_file_path) -->
+<!-- ``` -->
 
 
 
