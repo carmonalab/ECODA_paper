@@ -32,1808 +32,416 @@ set.seed(my_seed)
 ```{r}
 ds_name <- "GongSharma_2024_PrePrintTBD"
 
-path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
+path_root <- file.path(path_nas, ds_name)
 path_data <- file.path(path_root, "data")
-path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
+path_plots <- file.path(getwd(), "plots")
 ```
 
 
-# Load dataset
-Manually downloaded from:
-"<https://apps.allenimmunology.org/aifi/insights/dynamics-imm-health-age/downloads/>"
+# Create synthetic dataset
 
 ```{r}
-files <- list(L1 = file.path(path_data, "sound_life_AIFI_L1_frequencies.csv"),
-              L2 = file.path(path_data, "sound_life_AIFI_L2_frequencies.csv"),
-              L3 = file.path(path_data, "sound_life_AIFI_L3_frequencies.csv"))
+#' Simulate cell composition for multiple samples.
+#'
+#' This function generates a matrix of cell counts for different cell types across
+#' multiple samples, using either a Dirichlet-Multinomial or a simple
+#' Proportions-Multinomial model. The number of cell types is determined
+#' by the length of the provided proportion vector.
+#'
+#' @param n_samples The number of samples to simulate.
+#' @param mean_cells The mean number of cells per sample.
+#' @param min_cells_per_sample The minimum number of cells per sample.
+#' @param max_cells_per_sample The maximum number of cells per sample.
+#' @param method The method for simulating proportions: "dirichlet" (default)
+#'   or "simple_sd".
+#' @param dirichlet_alpha A numeric vector of alpha parameters for the
+#'   Dirichlet distribution. Required if method is "dirichlet".
+#' @param mean_proportions A numeric vector of mean proportions for each cell
+#'   type. Required if method is "simple_sd". These will be automatically scaled to sum to 1.
+#' @param prop_sd The relative standard deviation (coefficient of variation) for 
+#'   adding noise to proportions. For example, 0.1 means 10% relative variation.
+#'   Required if method is "simple_sd".
+#'
+#' @return A matrix with dimensions (n_samples, n_cts) containing simulated cell counts.
+#'
+#' @examples
+#' # Example 1: Use Dirichlet distribution
+#' set.seed(123)
+#' sim_dirichlet <- simulate_cell_composition(
+#'   n_samples = 5,
+#'   mean_cells = 1000,
+#'   method = "dirichlet",
+#'   dirichlet_alpha = c(5, 2, 1)
+#' )
+#' print(sim_dirichlet)
+#'
+#' # Example 2: Use simple standard deviation with unnormalized proportions
+#' set.seed(123)
+#' sim_simple <- simulate_cell_composition(
+#'   n_samples = 5,
+#'   mean_cells = 1000,
+#'   method = "simple_sd",
+#'   mean_proportions = c(0.6, 0.3, 0.1, 0.5), # Sums to 1.5, will be scaled
+#'   prop_sd = 0.05
+#' )
+#' print(sim_simple)
+simulate_cell_composition <- function(
+  n_samples,
+  mean_cells,
+  min_cells_per_sample = NULL,
+  max_cells_per_sample = NULL,
+  method = "dirichlet",
+  dirichlet_alpha = NULL,
+  mean_proportions = NULL,
+  prop_sd = NULL,
+  base_sd = 5  # numeric, e.g. 5 means ±5 cells noise
+) {
+  # --- Step 1: validation (same as before) ---
+  if (!(method %in% c("dirichlet", "simple_sd"))) {
+    stop("Invalid method. Choose 'dirichlet' or 'simple_sd'.")
+  }
 
-data <- list()
+  if (method == "dirichlet") {
+    if (is.null(dirichlet_alpha)) stop("'dirichlet_alpha' must be provided for 'dirichlet' method.")
+    if (!requireNamespace("gtools", quietly = TRUE)) {
+      install.packages("gtools")
+    }
+    library(gtools)
+    n_cts <- length(dirichlet_alpha)
+  } else {
+    if (is.null(mean_proportions) || is.null(prop_sd)) {
+      stop("'mean_proportions' and 'prop_sd' must be provided for 'simple_sd'.")
+    }
+    n_cts <- length(mean_proportions)
+    mean_proportions <- mean_proportions / sum(mean_proportions)
+    cat("Note: The provided 'mean_proportions' have been normalized to sum to 1.\n")
+  }
 
-for (f in names(files)) {
-  data[[f]] <- read.csv(files[[f]])
+  if (is.null(min_cells_per_sample)) min_cells_per_sample <- floor(0.75 * mean_cells)
+  if (is.null(max_cells_per_sample)) max_cells_per_sample <- floor(1.25 * mean_cells)
+
+  # --- Step 2: total cells per sample ---
+  total_cells_per_sample <- sample(
+    seq(min_cells_per_sample, max_cells_per_sample),
+    n_samples,
+    replace = TRUE
+  )
+
+  # --- Step 3: proportions ---
+  if (method == "dirichlet") {
+    proportions_matrix <- gtools::rdirichlet(n_samples, dirichlet_alpha)
+  } else {
+    proportions_matrix <- matrix(NA, nrow = n_samples, ncol = n_cts)
+    for (i in 1:n_samples) {
+      relative_sds <- mean_proportions * prop_sd
+      noisy_proportions <- pmax(0, rnorm(n_cts, mean = mean_proportions, sd = relative_sds))
+      proportions_matrix[i, ] <- noisy_proportions / sum(noisy_proportions)
+    }
+  }
+
+  # --- Step 4: simulate counts ---
+  cell_counts_matrix <- matrix(0, nrow = n_samples, ncol = n_cts)
+  for (i in 1:n_samples) {
+    counts <- as.vector(rmultinom(
+      1,
+      size = total_cells_per_sample[i],
+      prob = proportions_matrix[i, ]
+    ))
+
+    # Add optional noise
+    if (!is.null(base_sd) && base_sd > 0) {
+      noise <- round(rnorm(n_cts, mean = 0, sd = base_sd))
+      counts <- counts + noise
+      counts[counts < 0] <- 0  # avoid negatives
+    }
+
+    cell_counts_matrix[i, ] <- counts
+  }
+
+  # --- Step 5: names ---
+  colnames(cell_counts_matrix) <- paste0("Cell_Type_", 1:n_cts)
+  rownames(cell_counts_matrix) <- paste0("Sample_", 1:n_samples)
+
+  return(as.data.frame(cell_counts_matrix))
 }
 ```
 
 
 
-# Process data into wide dataframe
-
 ```{r}
-dproc <- list()
-
-for (layer in names(data)) {
-
-  dproc$meta <- data[[layer]] %>%
-    dplyr::select(c(1:14)) %>%
-    unique() %>% 
-    mutate_at(1:14, as.factor)
-  
-  ctable <- data[[layer]] %>%
-    dplyr::select(c(14,
-             !!sym(paste0("AIFI_", layer)),
-             !!sym(paste0("AIFI_", layer, "_count")),
-             !!sym(paste0("AIFI_", layer, "_frac_total")),
-             !!sym(paste0("AIFI_", layer, "_clr")))) %>%
-    pivot_wider(names_from = !!sym(paste0("AIFI_", layer)),
-                values_from = c(!!sym(paste0("AIFI_", layer, "_count")),
-                                !!sym(paste0("AIFI_", layer, "_frac_total")),
-                                !!sym(paste0("AIFI_", layer, "_clr")))) %>% 
-    column_to_rownames(var = "specimen.specimenGuid")
-  
-  i <- 1
-  n_cts <- length(unique(data[[layer]][[paste0("AIFI_", layer)]]))
-  
-  dproc[[layer]]$cell_counts <- ctable[, i:(i + n_cts - 1)] %>%
-    mutate_all(~replace_na(., 0)) %>%
-    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_count_"), "") %>%
-                 str_replace_all(., " ", "_")) %>%
-    dplyr::select(-Platelet, -Erythrocyte)
-
-  i <- i + n_cts
-  dproc[[layer]]$freq <- ctable[, i:(i + n_cts - 1)] %>%
-    mutate_all(~replace_na(., 0)) %>%
-    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_frac_total_"), "") %>%
-                 str_replace_all(., " ", "_")) %>%
-    dplyr::select(-Platelet, -Erythrocyte)
-  i <- i + n_cts
-  dproc[[layer]]$clr_authors <- ctable[, i:(i + n_cts - 1)] %>%
-    rename_all(~ str_replace_all(., paste0("AIFI_", layer, "_clr_"), "") %>%
-                 str_replace_all(., " ", "_")) %>%
-    dplyr::select(-Platelet, -Erythrocyte)
-  
-  df_counts <- dproc[[layer]]$cell_counts
-
-  df_counts_1count_zero <- df_counts
-  df_counts_1count_zero[df_counts_1count_zero == 0] <- 1
-  dproc[[layer]]$clr_1count_zero <- df_counts_1count_zero %>% calc_perc_df() %>% clr()
-  
-  dproc[[layer]]$clr_1count_all <- (df_counts + 1) %>% calc_perc_df() %>% clr()
-  
-  dproc[[layer]]$clr_0.1perc <- df_counts %>%
-    impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
-    calc_perc_df() %>%
-    clr()
-}
-
-saveRDS(dproc, file.path(path_data, "cell_type_compositions.rds"))
-
-n_cts_tot <- dim(dproc[[layer]]$clr_0.1perc)[2]
-```
-
-
-
-# ---------------------------------------------------------------
-
-# Sensitivity: freq vs clr vs alr vs ilr
-
-CMV negative BR1 female samples are used, as the biggest sources of variation has been removed (subset to specific groups according to major axis of variance).
-Subsequently, one or multiple cell types will be artificially increased/decreased to simulate differential abundance.
-
-
-## L1 anotations
-
-
-```{r}
-# Subset to CMV negative BR1 female samples
-cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
-
-df_counts <- dproc[["L1"]]$cell_counts[cmv_neg_BR1_female_samples,]
-
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
-
-# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
-Amount_of_perturbation <- c(1.1, 1.25, 1.5, 1.75, 2, 3, 4, 6)
-n_ct_to_select <- c(1, 2, 3)
-
-results <- datrans(count_mat = df_counts, Amount_of_perturbation = Amount_of_perturbation, n_ct_to_select = n_ct_to_select)
-```
-
-### Summarized results
-
-```{r fig.height=12, fig.width=12}
-for (nct in n_ct_to_select) {
-  res_all <- results[results$n_celltypes == nct, ]
-  res_avg <- res_all %>%
-    group_by(trans_method, Amount_of_perturbation) %>%
-    mutate(Silhouette_score = mean(Silhouette_score),
-           Modularity_score = mean(Modularity_score),
-           Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
-    ungroup() %>% 
-    distinct(interaction(trans_method, Amount_of_perturbation), .keep_all=TRUE)
-  
-  p_sil <- ggplot() +
-    geom_line(data = res_avg, aes(x = Amount_of_perturbation, y = Silhouette_score, color = trans_method), size = 1.2) +
-    ylim(c(min(res_avg$Silhouette_score), 0.6)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Silhouette_score, color = trans_method)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\nSilhouette score"))
-  p_mod <- ggplot() +
-    geom_line(data = res_avg, aes(x = Amount_of_perturbation, y = Modularity_score, color = trans_method), size = 1.2) +
-    ylim(c(min(res_avg$Modularity_score), 0.5)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score, color = trans_method)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\nModularity score"))
-  p_clust <- ggplot() +
-    geom_line(data = res_avg, aes(x = Amount_of_perturbation, y = Adjusted_Rand_Index, color = trans_method), size = 1.2) +
-    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score, color = trans_method)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\nClustering score"))
-  
-  p <- ggarrange(p_sil, p_mod, p_clust)
-  print(p)
-}
-
-```
-
-
-
-### Show example PCA
-
-```{r}
-nct <- 3
-da <- 3
-n_half_samples <- round(dim(df_counts)[1] / 2)
-
-# Prepare data
-df_counts_temp <- df_counts
-ct_da <- sample(colnames(df_counts_temp), size = nct)
-half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
-labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
-
-# Simulate differential abundance
-rsums_before <- rowSums(df_counts_temp)
-df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * da)
-rsums_after <- rowSums(df_counts_temp)
-df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
-df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
-
-cvs <- apply(df_freq, 2, cv)
-min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
-ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
-
-
-
-plot_pca(df_counts_temp, labels, title = "Counts")
-plot_roc_pcad1(df_counts_temp, labels)
-
-plot_pca(df_freq, labels, title = "Freq")
-plot_roc_pcad1(df_freq, labels)
-
-data <- asin(sqrt(df_freq/100))
-plot_pca(data, labels, title = "asinsqrt")
-plot_roc_pcad1(data, labels)
-
-data <- clr(df_freq)
-plot_pca(data, labels, title = "CLR")
-plot_roc_pcad1(data, labels)
-
-data <- prcomp(data)$x[, 1:3]
-plot_pca(data, labels, title = "CLR PCA")
-plot_roc_pcad1(data, labels)
-
-data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
-plot_pca(data, labels)
-plot_roc_pcad1(data, labels)
-```
-
-
-
-
-## L2 anotations
-
-```{r}
-# Subset to CMV negative BR1 female samples
-cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
-
-df_counts <- dproc[["L2"]]$cell_counts[cmv_neg_BR1_female_samples,]
-
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
-
-# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
-Amount_of_perturbation <- c(1.1, 1.25, 1.5, 75, 2, 3, 4, 6)
-n_ct_to_select <- c(1, 3, 5, 10)
-reps <- 1:20
-
-results <- datrans(count_mat = df_counts, Amount_of_perturbation = Amount_of_perturbation, n_ct_to_select = n_ct_to_select)
-```
-
-
-### Summarized results
-
-```{r fig.height=12, fig.width=12}
-for (nct in n_ct_to_select) {
-  res_all <- results[results$n_celltypes == nct, ]
-  res_avg <- res_all %>%
-    group_by(trans_method, Amount_of_perturbation) %>%
-    mutate(Silhouette_score = mean(Silhouette_score),
-           Modularity_score = mean(Modularity_score),
-           Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
-    ungroup() %>% 
-    distinct(interaction(trans_method, Amount_of_perturbation), .keep_all=TRUE)
-  
-  p_sil <- ggplot() +
-    geom_line(data = res_avg, aes(x = Amount_of_perturbation, y = Silhouette_score, color = trans_method), size = 1.2) +
-    ylim(c(min(res_avg$Silhouette_score), 0.6)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Silhouette_score, color = trans_method)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\nSilhouette score"))
-  p_mod <- ggplot() +
-    geom_line(data = res_avg, aes(x = Amount_of_perturbation, y = Modularity_score, color = trans_method), size = 1.2) +
-    ylim(c(min(res_avg$Modularity_score), 0.5)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score, color = trans_method)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\nModularity score"))
-  p_clust <- ggplot() +
-    geom_line(data = res_avg, aes(x = Amount_of_perturbation, y = Adjusted_Rand_Index, color = trans_method), size = 1.2) +
-    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score, color = trans_method)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\nClustering score"))
-  
-  p <- ggarrange(p_sil, p_mod, p_clust)
-  print(p)
-}
-
-```
-
-
-### Show example PCA
-
-```{r}
-nct <- 10
-da <- 2
-n_half_samples <- round(dim(df_counts)[1] / 2)
-
-
-# Prepare data
-df_counts_temp <- df_counts
-ct_da <- sample(colnames(df_counts_temp), size = nct)
-half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
-labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
-
-# Simulate differential abundance
-rsums_before <- rowSums(df_counts_temp)
-df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * da)
-rsums_after <- rowSums(df_counts_temp)
-df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
-df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
-
-cvs <- apply(df_freq, 2, cv)
-min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
-ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
-
-
-
-plot_pca(df_counts_temp, labels, title = "Counts")
-plot_roc_pcad1(df_counts_temp, labels)
-
-plot_pca(df_freq, labels, title = "Freq")
-plot_roc_pcad1(df_freq, labels)
-
-data <- asin(sqrt(df_freq/100))
-plot_pca(data, labels, title = "asinsqrt")
-plot_roc_pcad1(data, labels)
-
-data <- clr(df_freq)
-plot_pca(data, labels, title = "CLR")
-plot_roc_pcad1(data, labels)
-
-res.pca <- prcomp(data)
-p <- factoextra::fviz_pca(res.pca,
-                          habillage = labels,
-                          label = "var",
-                          addEllipses = TRUE,
-                          pointsize = 3,
-                          invisible = c("var", "quali"),
-                          geom = "point") +
-  scale_shape_manual(values = rep(19, length(unique(labels)))) +
-  coord_equal() + NoLegend() + ggtitle("")
-ggsave(file.path(path_plots, "workflow_schema_Adjusted_Rand_Index_example.pdf"), width = 3, height = 3)
-
-data <- prcomp(data)$x[, 1:3]
-plot_pca(data, labels, title = "CLR PCA")
-plot_roc_pcad1(data, labels)
-
-data <- alr(df_freq, ct_ref_mincv, title = "ALR mincvref")
-plot_pca(data, labels)
-plot_roc_pcad1(data, labels)
-```
-
-
-
-### Mean-variance relationship
-
-```{r}
-df_freq_unperturbed <- df_counts %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
-plot(colMeans(df_freq_unperturbed), main = "colMeans(df_freq_unperturbed)")
-plot(Rfast::colVars(df_freq_unperturbed), main = "colVars(df_freq_unperturbed)")
-plot(colMeans(df_freq_unperturbed), Rfast::colVars(df_freq_unperturbed))
-
-means <- colMeans(clr(df_freq))
-vars <- Rfast::colVars(data.frame(clr(df_freq)))
-
-df1 <- data.frame(mean = means, variance = vars)
-
-ggplot(df1, aes(x = mean, y = variance)) +
+# Define the start and end values for the sequence
+start_val <- 0.1
+end_val <- 50
+num_samples <- 50
+
+# 1. Generate the initial exponential sequence
+# This sequence will have a total sum greater than 100
+log_seq <- seq(log(start_val), log(end_val), length.out = num_samples)
+exponential_sequence <- exp(log_seq)
+
+# 2. Normalize the sequence to ensure the sum is 1
+# This is done by dividing each element by the current sum
+current_sum <- sum(exponential_sequence)
+normalized_sequence <- exponential_sequence / current_sum
+
+# 3. Scale the normalized sequence so its sum is 100
+# We multiply each element by the target sum
+constrained_sequence <- normalized_sequence * 100
+
+mean_props <- constrained_sequence
+
+
+
+n_samples <- 50
+test <- simulate_cell_composition(
+  n_samples = n_samples,
+  mean_cells = 15000,
+  min_cells_per_sample = 10000,
+  max_cells_per_sample = 20000,
+  mean_proportions = mean_props,
+  method = "simple_sd",
+  prop_sd = 0.4
+)
+
+plot_pca(test, labels = c(rep(1, n_samples/2), rep(2, n_samples/2)))
+get_ct_var(test)
+df_freq <- test %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df()
+get_ct_var(df_freq)
+ggsave(filename = file.path(path_plots, "semisynthetic_MeanVariance_percent_fit.pdf"), width = 3, height = 2.5)
+plot((colMeans(df_freq)), (Rfast::colVars(df_freq)))
+plot_data <- data.frame(
+  mean = log(colMeans(df_freq)),
+  variance = log(Rfast::colVars(df_freq))
+)
+# Plot using ggplot2
+ggplot(plot_data, aes(x = mean, y = variance)) +
   geom_point() +
-  geom_text(data = df1, aes(label = row.names(df1)), vjust = -0.5)
-
-```
-
-
-
-## L3 annotations
-
-```{r}
-# Subset to CMV negative BR1 female samples
-cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
-
-df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
-
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
-
-# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
-Amount_of_perturbation <- c(1.5, 2, 3, 4, 6, 10)
-n_ct_to_select <- c(1, 3, 5, 10, 20)
-
-results <- datrans(count_mat = df_counts, Amount_of_perturbation = Amount_of_perturbation, n_ct_to_select = n_ct_to_select)
-
-```
-
-## Example of homogenous samples
-
-```{r}
-feat_mat <- df_counts %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df() %>% clr()
-res.pca <- prcomp(feat_mat, scale. = FALSE)
-
-factoextra::fviz_pca(res.pca,
-                          label = "var",
-                          invisible = c("var", "quali"),
-                          geom = "point") +
-  scale_shape_manual(values = rep(19, length(unique(labels)))) + ggtitle("Homogenous population")
-
-ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_1group.pdf")), width = 4, height = 4)
-```
-
-```{r}
-nct <- 5
-da <- 3
-n_half_samples <- round(dim(df_counts)[1] / 2)
-
-
-# Prepare data
-df_counts_temp <- df_counts
-ct_da <- sample(colnames(df_counts_temp), size = nct)
-half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
-labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
-
-# Simulate differential abundance
-rsums_before <- rowSums(df_counts_temp)
-df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * da)
-rsums_after <- rowSums(df_counts_temp)
-df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
-df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
-
-cvs <- apply(df_freq, 2, cv)
-min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
-ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
-
-
-data <- clr(df_freq)
-p <- plot_pca(data, labels, title = paste0("2 groups of samples\nDifferential abundance:\n", nct, " cell types\nx ", da),
-              pointsize = 2,
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = TRUE) + theme(legend.position = "none")
-
-ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_2groups_weakseparation.pdf")), plot = p, width = 4, height = 4)
-
-
-nct <- 5
-da <- 6
-n_half_samples <- round(dim(df_counts)[1] / 2)
-
-
-# Prepare data
-df_counts_temp <- df_counts
-# ct_da <- sample(colnames(df_counts_temp), size = nct)
-# half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
-labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
-
-# Simulate differential abundance
-rsums_before <- rowSums(df_counts_temp)
-df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * (1 + pd/100))
-rsums_after <- rowSums(df_counts_temp)
-df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
-df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
-
-cvs <- apply(df_freq, 2, cv)
-min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
-ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
-
-
-data <- clr(df_freq)
-p <- plot_pca(data, labels, title = paste0("2 groups of samples\nDifferential abundance:\n", nct, " cell types\nx ", da),
-              pointsize = 2,
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = TRUE) + theme(legend.position = "none")
-
-ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_2groups_mediumseparation.pdf")), plot = p, width = 4, height = 4)
-
-
-
-nct <- 20
-da <- 6
-n_half_samples <- round(dim(df_counts)[1] / 2)
-
-
-# Prepare data
-df_counts_temp <- df_counts
-ct_da <- sample(colnames(df_counts_temp), size = nct)
-half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
-labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
-
-# Simulate differential abundance
-rsums_before <- rowSums(df_counts_temp)
-df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * da)
-rsums_after <- rowSums(df_counts_temp)
-df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
-df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
-
-cvs <- apply(df_freq, 2, cv)
-min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
-ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
-
-
-data <- clr(df_freq)
-p <- plot_pca(data, labels, title = paste0("2 groups of samples\nDifferential abundance:\n", nct, " cell types\nx ", da),
-              pointsize = 2,
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = TRUE) + theme(legend.position = "none")
-
-ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_2groups_strongseparation.pdf")), plot = p, width = 4, height = 4)
-```
-
-```{r}
-nct <- 5
-da <- 6
-df_long <- results[results$n_celltypes == nct &
-                     results$Amount_of_perturbation == da &
-                     results$trans_method %in% c("freq_pca", "arcsine_sqrt_pca", "clr_pca"), ]
-df_long$trans_method <- gsub("_pca", "", df_long$trans_method)
-
-df_long$trans_method <- factor(df_long$trans_method, levels = c("freq", "clr", "arcsine_sqrt"))
-my_comparisons <- list( c("freq", "clr"), c("freq", "arcsine_sqrt"))
-ggplot(data = df_long, aes(x = trans_method, y = Adjusted_Rand_Index)) +
-  geom_boxplot() +
-  stat_compare_means(method = "t.test", comparisons = my_comparisons, paired = TRUE, aes(label = after_stat(p.signif))) +
-  geom_jitter(width = 0.2, height = 0.05) +
-  theme_classic() +
-  theme(
-    axis.text.x = element_text(size = 12, angle = 15, hjust = 1, vjust = 1),
-    axis.title.x = element_blank()  # Remove x-axis title
+  # geom_abline(intercept = 0, slope = 1, linetype = "dotted", color = "red") +
+  labs(
+    x = "log( Mean (in %) )",
+    y = "log( Variance (in %) )"
   ) +
-  ylim(c(min(df_long$Adjusted_Rand_Index), 1.2)) +
-  ggtitle(paste0("Differential cell types: ", nct, "\nDA multiplier: ", da))
-ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_diffct", nct, "_diffabu", da, ".pdf")), width = 3, height = 3)
+  theme_classic2() # Optional: a clean theme
+ggsave(filename = file.path(path_plots, "synthetic_MeanVariance_percentLogLog.pdf"), width = 3, height = 2.5)
+get_ct_var(df_freq %>% clr())
+ggsave(filename = file.path(path_plots, "synthetic_MeanVariance_CLR_fit.pdf"), width = 3, height = 2.5)
+
+mean_props[1:round(length(mean_props) / 2)] <- mean_props[1:round(length(mean_props) / 2)] * 4
+
+test1 <- simulate_cell_composition(
+  n_samples = n_samples,
+  mean_cells = 15000,
+  min_cells_per_sample = 10000,
+  max_cells_per_sample = 20000,
+  mean_proportions = mean_props,
+  method = "simple_sd",
+  prop_sd = 0.4
+)
+rownames(test1) <- paste0(rownames(test1), "_new")
+
+plot_pca(test1, labels = c(rep(1, n_samples/2), rep(2, n_samples/2)))
 
 
-nct <- 10
-da <- 4
-df_long <- results[results$n_celltypes == nct &
-                     results$Amount_of_perturbation == da &
-                     results$trans_method %in% c("freq_pca", "arcsine_sqrt_pca", "clr_pca"), ]
-df_long$trans_method <- gsub("_pca", "", df_long$trans_method)
+test_both <- rbind(test, test1)
 
-df_long$trans_method <- factor(df_long$trans_method, levels = c("freq", "clr", "arcsine_sqrt"))
-my_comparisons <- list( c("freq", "clr"), c("freq", "arcsine_sqrt"))
-ggplot(data = df_long, aes(x = trans_method, y = Adjusted_Rand_Index)) +
-  geom_boxplot() +
-  stat_compare_means(method = "t.test", comparisons = my_comparisons, paired = TRUE, aes(label = after_stat(p.signif))) +
-  geom_jitter(width = 0.2, height = 0.05) +
-  theme_classic() +
-  theme(
-    axis.text.x = element_text(size = 12, angle = 15, hjust = 1, vjust = 1),
-    axis.title.x = element_blank()  # Remove x-axis title
+
+get_ct_var(test_both)
+df_freq <- test_both %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df()
+get_ct_var(df_freq)
+ggsave(filename = file.path(path_plots, "synthetic_MeanVariance_percent_fit_2groups.pdf"), width = 3, height = 2.5)
+plot((colMeans(df_freq)), (Rfast::colVars(df_freq)))
+plot_data <- data.frame(
+  mean = log(colMeans(df_freq)),
+  variance = log(Rfast::colVars(df_freq))
+)
+# Plot using ggplot2
+ggplot(plot_data, aes(x = mean, y = variance)) +
+  geom_point() +
+  # geom_abline(intercept = 0, slope = 1, linetype = "dotted", color = "red") +
+  labs(
+    x = "log( Mean (in %) )",
+    y = "log( Variance (in %) )"
   ) +
-  ylim(c(min(df_long$Adjusted_Rand_Index), 1.2)) +
-  ggtitle(paste0("Differential cell types: ", nct, "\nDA multiplier: ", da))
-ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_diffct", nct, "_diffabu", da, ".pdf")), width = 3, height = 3)
+  theme_classic2() # Optional: a clean theme
+ggsave(filename = file.path(path_plots, "synthetic_MeanVariance_percentLogLog_2groups.pdf"), width = 3, height = 2.5)
+get_ct_var(df_freq %>% clr())
+ggsave(filename = file.path(path_plots, "synthetic_MeanVariance_CLR_fit_2groups.pdf"), width = 3, height = 2.5)
+
+
+plot_pca(test_both, labels = c(rep(1, n_samples), rep(2, n_samples)))
+plot_pca(test_both %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df(), labels = c(rep(1, n_samples), rep(2, n_samples)))
+plot_pca(test_both %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr(), labels = c(rep(1, n_samples), rep(2, n_samples)))
+```
+
+
+```{r}
+n <- 10
+mean_props <- seq(from = 1 / (n + 1), to = n / (n + 1), length.out = n)
+
+test <- simulate_cell_composition(
+  n_samples = 20,
+  mean_cells = 10000,
+  min_cells_per_sample = 5000,
+  max_cells_per_sample = 20000,
+  mean_proportions = mean_props,
+  method = "simple_sd",
+  prop_sd = 0.5
+)
+
+plot_pca(test, labels = c(rep(1, 10), rep(2, 10)))
+get_ct_var(as.data.frame(test))
+get_ct_var(as.data.frame(test) %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr())
+
+
+test1 <- simulate_cell_composition(
+  n_samples = 20,
+  mean_cells = 10000,
+  min_cells_per_sample = 5000,
+  max_cells_per_sample = 20000,
+  mean_proportions = rev(mean_props),
+  method = "simple_sd",
+  prop_sd = 0.5
+)
+rownames(test1) <- paste0(rownames(test1), "_new")
+
+plot_pca(test1, labels = c(rep(1, 10), rep(2, 10)))
+
+
+test_both <- rbind(test, test1)
+
+plot_pca(test_both, labels = c(rep(1, 20), rep(2, 20)))
+plot_pca(test_both %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df(), labels = c(rep(1, 20), rep(2, 20)))
+plot_pca(test_both %>% impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>% calc_perc_df() %>% clr(), labels = c(rep(1, 20), rep(2, 20)))
+```
 
 
 
-nct <- 20
-da <- 3
-df_long <- results[results$n_celltypes == nct &
-                     results$Amount_of_perturbation == da &
-                     results$trans_method %in% c("freq_pca", "arcsine_sqrt_pca", "clr_pca"), ]
-df_long$trans_method <- gsub("_pca", "", df_long$trans_method)
 
-df_long$trans_method <- factor(df_long$trans_method, levels = c("freq", "clr", "arcsine_sqrt"))
-my_comparisons <- list( c("freq", "clr"), c("freq", "arcsine_sqrt"))
-ggplot(data = df_long, aes(x = trans_method, y = Adjusted_Rand_Index)) +
-  geom_boxplot() +
-  stat_compare_means(method = "t.test", comparisons = my_comparisons, paired = TRUE, aes(label = after_stat(p.signif))) +
-  geom_jitter(width = 0.2, height = 0.05) +
-  theme_classic() +
-  theme(
-    axis.text.x = element_text(size = 12, angle = 15, hjust = 1, vjust = 1),
-    axis.title.x = element_blank()  # Remove x-axis title
+
+# Define functions
+
+```{r}
+library(scales)
+
+# Function to add the log2 scale to a plot
+add_log_scale <- function(p, scale = "log2") {
+  p + scale_x_continuous(trans = scale)
+}
+
+plot_results <- function(results, n_ct_to_select, log_perturbation = FALSE) {
+  plot_list <- list()
+  for (nct in n_ct_to_select) {
+    res_all <- results[results$n_celltypes == nct, ]
+    res_avg <- res_all %>%
+      group_by(trans_method, Amount_of_perturbation) %>%
+      mutate(Silhouette_score = mean(Silhouette_score),
+             ANOSIM_score = mean(ANOSIM_score),
+             Modularity_score = mean(Modularity_score),
+             Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
+      ungroup() %>% 
+      distinct(interaction(trans_method, Amount_of_perturbation), .keep_all=TRUE)
+    
+    p_list <- list()
+    p_list[["plot_sil"]] <- ggplot() +
+      geom_line(data = res_avg, aes(x = Amount_of_perturbation, y = Silhouette_score, color = trans_method), size = 1.2) +
+      ylim(c(min(res_avg$Silhouette_score), 1)) +
+      theme_classic() +
+      # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Silhouette_score, color = trans_method)) +
+      ggtitle(paste0("Differential cell types: ", nct, "\nSilhouette score"))
+    p_list[["plot_mod"]] <- ggplot() +
+      geom_line(data = res_avg, aes(x = Amount_of_perturbation, y = Modularity_score, color = trans_method), size = 1.2) +
+      ylim(c(min(res_avg$Modularity_score), 1)) +
+      theme_classic() +
+      # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score, color = trans_method)) +
+      ggtitle(paste0("Differential cell types: ", nct, "\nModularity score"))
+    p_list[["plot_clust"]] <- ggplot() +
+      geom_line(data = res_avg, aes(x = Amount_of_perturbation, y = Adjusted_Rand_Index, color = trans_method), size = 1.2) +
+      ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
+      theme_classic() +
+      # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score, color = trans_method)) +
+      ggtitle(paste0("Differential cell types: ", nct, "\nClustering score"))
+    p_list[["plot_anosim"]] <- ggplot() +
+      geom_line(data = res_avg, aes(x = Amount_of_perturbation, y = ANOSIM_score, color = trans_method), size = 1.2) +
+      ylim(c(min(res_avg$ANOSIM_score), 1)) +
+      theme_classic() +
+      # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Silhouette_score, color = trans_method)) +
+      ggtitle(paste0("Differential cell types: ", nct, "\nANOSIM score"))
+    
+    if (log_perturbation) {
+      p_list <- lapply(p_list, add_log_scale)
+    }
+    
+    p <- ggarrange(plotlist = p_list, nrow=1, common.legend = TRUE)
+    plot_list[[as.character(nct)]] <- p
+  }
+  
+  return(plot_list)
+}
+```
+
+
+
+
+# Plot arcsin-sqrt function
+
+```{r}
+# Install and load ggplot2 if you haven't already
+# install.packages("ggplot2")
+library(ggplot2)
+
+# Create a data frame for plotting the function
+# The domain of the function is x from 0 to 1
+plot_data <- data.frame(
+  x = seq(from = 0, to = 1, length.out = 100)
+)
+
+# Calculate the arcsine square root of x
+# The R function is asin(sqrt(x))
+plot_data$y <- asin(sqrt(plot_data$x))
+
+# Create the plot with annotations
+ggplot(plot_data, aes(x = x, y = y)) +
+  # Add the line for the function
+  geom_line(color = "blue", size = 1.2) +
+  # Set the title and axis labels using LaTeX syntax
+  labs(
+    title = expression("Plot of the Arcsine Square Root Function:" * italic(y) * " = " * arcsin(sqrt(italic(x)))),
+    x = expression(italic(x)),
+    y = expression(arcsin(sqrt(italic(x))))
   ) +
-  ylim(c(min(df_long$Adjusted_Rand_Index), 1.2)) +
-  ggtitle(paste0("Differential cell types: ", nct, "\nDA multiplier: ", da))
-ggsave(filename = file.path(path_plots, paste0("semisynthetic_example_diffct", nct, "_diffabu", da, ".pdf")), width = 3, height = 3)
-```
-
-
-
-```{r fig.height=12, fig.width=12}
-for (nct in n_ct_to_select) {
-  res_all <- results[results$n_celltypes == nct, ]
-  res_avg <- res_all %>%
-    group_by(trans_method, Amount_of_perturbation) %>%
-    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
-           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
-           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
-    ungroup() %>% 
-    distinct(interaction(trans_method, Amount_of_perturbation), .keep_all=TRUE)
-  
-  # res_avg$linetype <- ifelse(grepl("pca", res_avg$trans_method), "PCA_2dims", "Default")
-  # res_avg$color <- gsub("_pca", "", res_avg$trans_method)
-  
-  p_sil <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Silhouette_score, color = trans_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
-    ylim(c(min(res_avg$Silhouette_score), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Silhouette_score)) +
-    ggtitle(paste0("Differential cell types:\n", nct, " / ", n_cts_tot))
-  p_mod <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Modularity_score, color = trans_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
-    ylim(c(min(res_avg$Modularity_score), 0.5)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types:\n", nct, " / ", n_cts_tot))
-  p_clust <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Adjusted_Rand_Index, color = trans_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
-    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types:\n", nct, " / ", n_cts_tot))
-  
-  ggsave(filename = file.path(path_plots, paste0("transformations_semisynthetic_default", nct, "celltypesda.pdf")), plot = p_clust, width = 4, height = 3)
-  
-  if (nct == 10) {
-    ggsave(filename = file.path(path_plots, "transformations_semisynthetic_default.pdf"), plot = p_clust + ggtitle("10 random cell types"), width = 4, height = 3)
-  }
-  
-  p <- ggarrange(p_sil, p_mod, p_clust)
-  print(p)
-}
-
-```
-
-
-### Show example PCA
-
-```{r}
-nct <- 10
-da <- 4
-n_half_samples <- round(dim(df_counts)[1] / 2)
-
-
-# Prepare data
-df_counts_temp <- df_counts
-ct_da <- sample(colnames(df_counts_temp), size = nct)
-half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
-labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
-
-# Simulate differential abundance
-rsums_before <- rowSums(df_counts_temp)
-df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * da)
-rsums_after <- rowSums(df_counts_temp)
-df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
-df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
-
-cvs <- apply(df_freq, 2, cv)
-min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
-ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
-
-plot_list <- list()
-
-p <- plot_pca(df_counts_temp, labels, title = "Counts",
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(df_counts_temp, labels)
-
-p <- plot_pca(df_freq, labels, title = "Freq",
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(df_freq, labels)
-
-data <- asin(sqrt(df_freq/100))
-p <- plot_pca(data, labels, title = "asinsqrt",
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(data, labels)
-
-data <- clr(df_freq)
-p <- plot_pca(data, labels, title = "CLR",
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(data, labels)
-
-# data <- prcomp(data)$x[, 1:3]
-# p <- plot_pca(data, labels, title = "CLR PCA",
-#               sil_score = FALSE,
-#               mod_score = FALSE,
-#               cluster_score = FALSE)
-# plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(data, labels)
-
-# data <- alr(df_freq, ct_ref_mincv)
-# p <- plot_pca(data, labels, title = "ALR mincvref",
-#               sil_score = FALSE,
-#               mod_score = FALSE,
-#               cluster_score = FALSE)
-# plot_list <- append(plot_list, list(p))
-# plot_roc_pcad1(data, labels)
-
-p_wrapped <- patchwork::wrap_plots(plot_list, nrow = 2)
-ggsave(filename = file.path(path_plots, paste0("transformations_semisynthetic_default_", nct, "celltypesda_", da, "diffabu.pdf")), plot = p_wrapped, width = 4*2, height = 4*2)
-```
-
-
-
-## L3 annotations unbalanced counts
-
-```{r}
-# Subset to CMV negative BR1 female samples
-cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
-
-df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
-
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
-
-# Generate random numbers between -1 and 1 for each row
-random_numbers <- runif(nrow(df_counts), min = -1, max = 1)
-
-# Exponentiate 10 with each random number
-multiplier <- 10^random_numbers
-
-# Multiply each row by the corresponding multiplier
-df_counts <- sweep(df_counts, 1, multiplier, `*`)
-
-df_counts <- round(df_counts)
-
-# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
-Amount_of_perturbation <- c(1.5, 2, 3, 4, 6, 10)
-n_ct_to_select <- c(1, 3, 5, 10, 20)
-
-results <- datrans(count_mat = df_counts, Amount_of_perturbation = Amount_of_perturbation, n_ct_to_select = n_ct_to_select)
-
-```
-
-```{r fig.height=12, fig.width=12}
-for (nct in n_ct_to_select) {
-  res_all <- results[results$n_celltypes == nct, ]
-  res_avg <- res_all %>%
-    group_by(trans_method, Amount_of_perturbation) %>%
-    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
-           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
-           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
-    ungroup() %>% 
-    distinct(interaction(trans_method, Amount_of_perturbation), .keep_all=TRUE)
-  
-  res_avg$linetype <- ifelse(grepl("pca", res_avg$trans_method), "PCA_2dims", "Default")
-  res_avg$color <- gsub("_pca", "", res_avg$trans_method)
-  
-  p_sil <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Silhouette_score, color = trans_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
-    ylim(c(min(res_avg$Silhouette_score), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Silhouette_score)) +
-    ggtitle(paste0("Differential cell types: ", nct))
-  p_mod <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Modularity_score, color = trans_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
-    ylim(c(min(res_avg$Modularity_score), 0.5)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct))
-  p_clust <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Adjusted_Rand_Index, color = trans_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
-    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct))
-  
-  if (nct == 10) {
-    ggsave(filename = file.path(path_plots, "transformations_semisynthetic_unbalanced_counts.pdf"),
-           plot = p_clust + ggtitle("10 random cell types\nUnbalanced counts:\nEach sample * rand[-10, 10]"),
-           width = 4, height = 3)
-  }
-  
-  p <- ggarrange(p_sil, p_mod, p_clust)
-  print(p)
-}
-
-```
-
-### Show example PCA
-
-```{r}
-nct <- 10
-da <- 4
-n_half_samples <- round(dim(df_counts)[1] / 2)
-
-# Prepare data
-df_counts_temp <- df_counts
-# ct_da <- sample(colnames(df_counts_temp), size = nct)
-half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
-labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
-
-# Simulate differential abundance
-rsums_before <- rowSums(df_counts_temp)
-df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * da)
-rsums_after <- rowSums(df_counts_temp)
-df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
-df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
-
-cvs <- apply(df_freq, 2, cv)
-min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
-ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
-
-
-
-plot_list <- list()
-
-p <- plot_pca(df_counts_temp, labels, title = "Counts",
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(df_counts_temp, labels)
-
-p <- plot_pca(df_freq, labels, title = "Freq",
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(df_freq, labels)
-
-data <- asin(sqrt(df_freq/100))
-p <- plot_pca(data, labels, title = "asinsqrt",
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(data, labels)
-
-data <- clr(df_freq)
-p <- plot_pca(data, labels, title = "CLR",
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(data, labels)
-
-# data <- prcomp(data)$x[, 1:3]
-# p <- plot_pca(data, labels, title = "CLR PCA",
-#               sil_score = FALSE,
-#               mod_score = FALSE,
-#               cluster_score = FALSE)
-# plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(data, labels)
-
-# data <- alr(df_freq, ct_ref_mincv)
-# p <- plot_pca(data, labels, title = "ALR mincvref",
-#               sil_score = FALSE,
-#               mod_score = FALSE,
-#               cluster_score = FALSE)
-# plot_list <- append(plot_list, list(p))
-# plot_roc_pcad1(data, labels)
-
-p_wrapped <- patchwork::wrap_plots(plot_list, nrow = 2)
-ggsave(filename = file.path(path_plots, paste0("transformations_semisynthetic_unbalanced_counts_", nct, "celltypesda_", da, "diffabu.pdf")), plot = p_wrapped, width = 4*2, height = 4*2)
-```
-
-
-
-## L3 annotations only low abundant cell types DA
-
-```{r}
-# Subset to CMV negative BR1 female samples
-cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
-
-df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
-
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
-
-# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
-Amount_of_perturbation <- c(2, 3, 5, 10, 20)
-n_ct_to_select <- c(1, 3, 5, 10, 20)
-
-ct_counts <- colMeans(df_counts)
-# Find the threshold for the lowest fourth
-threshold <- quantile(ct_counts, 1/4)
-
-# Get the column names with means below the threshold
-cts <- colnames(df_counts)[ct_counts < threshold]
-
-n_ct_to_select[n_ct_to_select >= length(cts)] <- length(cts)
-
-results <- datrans(count_mat = df_counts, Amount_of_perturbation = Amount_of_perturbation, n_ct_to_select = n_ct_to_select, cts = cts)
-
-```
-
-```{r fig.height=12, fig.width=12}
-for (nct in n_ct_to_select) {
-  res_all <- results[results$n_celltypes == nct, ]
-  res_avg <- res_all %>%
-    group_by(trans_method, Amount_of_perturbation) %>%
-    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
-           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
-           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
-    ungroup() %>% 
-    distinct(interaction(trans_method, Amount_of_perturbation), .keep_all=TRUE)
-  
-  res_avg$linetype <- ifelse(grepl("pca", res_avg$trans_method), "PCA_2dims", "Default")
-  res_avg$color <- gsub("_pca", "", res_avg$trans_method)
-  
-  p_sil <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Silhouette_score, color = trans_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
-    ylim(c(min(res_avg$Silhouette_score), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Silhouette_score)) +
-    ggtitle(paste0("Differential cell types: ", nct))
-  p_mod <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Modularity_score, color = trans_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
-    ylim(c(min(res_avg$Modularity_score), 0.5)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct))
-  p_clust <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Adjusted_Rand_Index, color = trans_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
-    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct))
-  
-  if (nct == 10) {
-    ggsave(filename = file.path(path_plots, "transformations_semisynthetic_lowly_abundant.pdf"), plot = p_clust + ggtitle("10 low abundant cell types"), width = 4, height = 3)
-  }
-  
-  p <- ggarrange(p_sil, p_mod, p_clust)
-  print(p)
-}
-
-```
-
-### Show example PCA
-
-```{r}
-nct <- 10
-da <- 10
-n_half_samples <- round(dim(df_counts)[1] / 2)
-
-# Prepare data
-df_counts_temp <- df_counts
-ct_da <- sample(cts, size = nct)
-half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
-labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
-
-# Simulate differential abundance
-rsums_before <- rowSums(df_counts_temp)
-df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * da)
-rsums_after <- rowSums(df_counts_temp)
-df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
-df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
-
-cvs <- apply(df_freq, 2, cv)
-min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
-ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
-
-
-
-plot_list <- list()
-# 
-# p <- plot_pca(df_counts_temp, labels, title = "Counts",
-#               sil_score = FALSE,
-#               mod_score = FALSE,
-#               cluster_score = FALSE) + theme(legend.position = "none")
-# plot_list <- append(plot_list, list(p))
-# plot_roc_pcad1(df_counts_temp, labels)
-# 
-# p <- plot_pca(df_freq, labels, title = "Freq",
-#               sil_score = FALSE,
-#               mod_score = FALSE,
-#               cluster_score = FALSE) + theme(legend.position = "none")
-# plot_list <- append(plot_list, list(p))
-# plot_roc_pcad1(df_freq, labels)
-
-data <- asin(sqrt(df_freq/100))
-p <- plot_pca(data, labels, title = "asinsqrt", pointsize = 2,
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(data, labels)
-
-data <- clr(df_freq)
-p <- plot_pca(data, labels, title = "CLR", pointsize = 2,
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(data, labels)
-
-# data <- prcomp(data)$x[, 1:3]
-# p <- plot_pca(data, labels, title = "CLR PCA",
-#               sil_score = FALSE,
-#               mod_score = FALSE,
-#               cluster_score = FALSE)
-# plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(data, labels)
-
-# data <- alr(df_freq, ct_ref_mincv)
-# p <- plot_pca(data, labels, title = "ALR mincvref",
-#               sil_score = FALSE,
-#               mod_score = FALSE,
-#               cluster_score = FALSE)
-# plot_list <- append(plot_list, list(p))
-# plot_roc_pcad1(data, labels)
-
-p_wrapped <- patchwork::wrap_plots(plot_list, nrow = 1)
-ggsave(filename = file.path(path_plots, paste0("transformations_semisynthetic_lowly_abundant_", nct, "celltypesda_", da, "diffabu.pdf")), plot = p_wrapped, width = 3*2, height = 3)
-```
-
-```{r}
-ct_da
-data <- clr(df_freq)
-library(corrplot)
-test <- cor(data)
-col<- colorRampPalette(c("blue", "white", "red"))(20)
-heatmap(x = test, col = col, symm = TRUE)
-
-test <- cor(t(data))
-col<- colorRampPalette(c("blue", "white", "red"))(20)
-heatmap(x = test, col = col, symm = TRUE)
-```
-
-
-```{r}
-data <- clr(df_freq)
-library(corrplot)
-cor_matrix <- cor(data)
-col<- colorRampPalette(c("blue", "white", "red"))(20)
-heatmap(x = test, col = col, symm = TRUE)
-
-# 2. Variance Filtering
-variances <- apply(data, 2, var)
-plot(variances)
-hist(variances, breaks = 20)
-threshold <- quantile(variances, 0.8) # Example threshold
-filtered_df <- data[, variances > threshold]
-
-plot_pca(data, labels)
-plot_pca(filtered_df, labels)
-
-
-
-data <- df_counts_temp
-library(corrplot)
-cor_matrix <- cor(data)
-col<- colorRampPalette(c("blue", "white", "red"))(20)
-heatmap(x = test, col = col, symm = TRUE)
-
-# 2. Variance Filtering
-variances <- apply(data, 2, var)
-plot(variances)
-hist(variances, breaks = 20)
-threshold <- quantile(variances, 0.8) # Example threshold
-filtered_df <- data[, variances > threshold]
-
-plot_pca(data, labels)
-plot_pca(filtered_df, labels)
-
-```
-
-
-
-
-## L3 annotations only highly abundant cell types DA
-
-```{r}
-# Subset to CMV negative BR1 female samples
-cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
-
-df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
-
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
-
-
-# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
-Amount_of_perturbation <- c(1.5, 1.75, 2, 3, 4, 6)
-n_ct_to_select <- c(1, 3, 5, 10, 20)
-
-ct_counts <- colMeans(df_counts)
-# Find the threshold for the highest fourth
-threshold <- quantile(ct_counts, 3/4)
-
-# Get the column names with means above the threshold
-cts <- colnames(df_counts)[ct_counts >= threshold]
-
-n_ct_to_select[n_ct_to_select >= length(cts)] <- length(cts)
-
-results <- datrans(count_mat = df_counts, Amount_of_perturbation = Amount_of_perturbation, n_ct_to_select = n_ct_to_select, cts = cts)
-```
-
-
-
-```{r fig.height=12, fig.width=12}
-for (nct in n_ct_to_select) {
-  res_all <- results[results$n_celltypes == nct, ]
-  res_avg <- res_all %>%
-    group_by(trans_method, Amount_of_perturbation) %>%
-    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
-           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
-           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
-    ungroup() %>% 
-    distinct(interaction(trans_method, Amount_of_perturbation), .keep_all=TRUE)
-  
-  res_avg$linetype <- ifelse(grepl("pca", res_avg$trans_method), "PCA_2dims", "Default")
-  res_avg$color <- gsub("_pca", "", res_avg$trans_method)
-  
-  p_sil <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Silhouette_score, color = trans_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
-    ylim(c(min(res_avg$Silhouette_score), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Silhouette_score)) +
-    ggtitle(paste0("Differential cell types: ", nct))
-  p_mod <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Modularity_score, color = trans_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
-    ylim(c(min(res_avg$Modularity_score), 0.5)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct))
-  p_clust <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Adjusted_Rand_Index, color = trans_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
-    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct))
-  
-  if (nct == 10) {
-    ggsave(filename = file.path(path_plots, "transformations_semisynthetic_highly_abundant.pdf"), plot = p_clust + ggtitle("10 high abundant cell types"), width = 4, height = 3)
-  }
-  
-  p <- ggarrange(p_sil, p_mod, p_clust)
-  print(p)
-}
-
-```
-
-### Show example PCA
-
-```{r}
-nct <- 10
-da <- 3
-n_half_samples <- round(dim(df_counts)[1] / 2)
-
-# Prepare data
-df_counts_temp <- df_counts
-ct_da <- sample(cts, size = nct)
-half_samples_da <- sample(row.names(df_counts_temp), size = n_half_samples)
-labels <- as.numeric(row.names(df_counts) %in% half_samples_da)
-
-# Simulate differential abundance
-rsums_before <- rowSums(df_counts_temp)
-df_counts_temp[half_samples_da, ct_da] <- round(df_counts_temp[half_samples_da, ct_da] * da)
-rsums_after <- rowSums(df_counts_temp)
-df_counts_temp <- round(df_counts_temp / (rsums_after / rsums_before))
-df_freq <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>% calc_perc_df()
-
-cvs <- apply(df_freq, 2, cv)
-min_cv <- min(cvs[!colnames(df_freq) %in% ct_da])
-ct_ref_mincv <- colnames(df_freq)[which(cvs == min_cv)]
-
-
-
-plot_list <- list()
-
-p <- plot_pca(df_counts_temp, labels, title = "Counts",
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(df_counts_temp, labels)
-
-p <- plot_pca(df_freq, labels, title = "Freq",
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(df_freq, labels)
-
-data <- asin(sqrt(df_freq/100))
-p <- plot_pca(data, labels, title = "asinsqrt",
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(data, labels)
-
-data <- clr(df_freq)
-p <- plot_pca(data, labels, title = "CLR",
-              sil_score = FALSE,
-              mod_score = FALSE,
-              cluster_score = FALSE) + theme(legend.position = "none")
-plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(data, labels)
-
-# data <- prcomp(data)$x[, 1:3]
-# p <- plot_pca(data, labels, title = "CLR PCA",
-#               sil_score = FALSE,
-#               mod_score = FALSE,
-#               cluster_score = FALSE)
-# plot_list <- append(plot_list, list(p))
-plot_roc_pcad1(data, labels)
-
-# data <- alr(df_freq, ct_ref_mincv)
-# p <- plot_pca(data, labels, title = "ALR mincvref",
-#               sil_score = FALSE,
-#               mod_score = FALSE,
-#               cluster_score = FALSE)
-# plot_list <- append(plot_list, list(p))
-# plot_roc_pcad1(data, labels)
-
-p_wrapped <- patchwork::wrap_plots(plot_list, nrow = 2)
-ggsave(filename = file.path(path_plots, paste0("transformations_semisynthetic_highly_abundant_", nct, "celltypesda_", da, "diffabu.pdf")), plot = p_wrapped, width = 4*2, height = 4*2)
-```
-
-```{r}
-cohens_d <- function(x, group) {
-  mean_a <- mean(x[group == levels(group)[1]])
-  mean_b <- mean(x[group == levels(group)[2]])
-  sd_a <- sd(x[group == levels(group)[1]])
-  sd_b <- sd(x[group == levels(group)[2]])
-  pooled_sd <- sqrt((sd_a^2 + sd_b^2) / 2)
-  (mean_b - mean_a) / pooled_sd
-}
-
-
-data <- df_freq[, ct_da[1]]
-hist(data)
-data <- data.frame(values = data,
-                   groups = factor(labels))
-p <- ggplot(data, aes(x = values, fill = groups)) +
-  geom_density(alpha=0.4) + 
-  geom_histogram(aes(y=..density..), alpha=0.3, colour="black", 
-                 position="identity") +
-  labs(title = "Density Plot of PC1 Scores",
-       x = "PC1 Scores",
-       y = "Density") +
-  theme_classic()
-print(p)
-
-d_value <- cohens_d(data$values, data$groups)
-print(paste("Cohen's d:", d_value))
-
-wilcox_result <- wilcox.test(values ~ groups, data = data)
-print(paste("Wilcoxon p-value:", wilcox_result$p.value))
-
-
-data <- clr(df_freq)[, ct_da[1]]
-hist(data)
-data <- data.frame(values = data,
-                   groups = factor(labels))
-p <- ggplot(data, aes(x = values, fill = groups)) +
-  geom_density(alpha=0.4) + 
-  geom_histogram(aes(y=..density..), alpha=0.3, colour="black", 
-                 position="identity") +
-  labs(title = "Density Plot of PC1 Scores",
-       x = "PC1 Scores",
-       y = "Density") +
-  theme_classic()
-print(p)
-
-d_value <- cohens_d(data$values, data$groups)
-print(paste("Cohen's d:", d_value))
-
-wilcox_result <- wilcox.test(values ~ groups, data = data)
-print(paste("Wilcoxon p-value:", wilcox_result$p.value))
-```
-
-
-
-```{r}
-data <- clr(df_freq)
-plot_pca(data, labels)
-plot_pca(data, labels, scale. = TRUE)
-
-plot_roc_pcad1(data, labels)
-```
-
-
-```{r}
-ct_da
-
-data <- clr(df_freq)
-library(corrplot)
-cor_matrix <- cor(data)
-col<- colorRampPalette(c("blue", "white", "red"))(20)
-heatmap(x = cor_matrix, col = col)
-hist(data[, ct_da[1]])
-diptest::dip.test(data[, ct_da[1]])
-
-# 2. Variance Filtering
-variances <- apply(data, 2, var)
-plot(variances)
-hist(variances, breaks = 20)
-threshold <- quantile(variances, 0.8) # Example threshold
-filtered_df <- data[, variances > threshold]
-
-plot_pca(data, labels)
-plot_pca(filtered_df, labels)
-
-plot_pca(data[,ct_da], labels)
-
-
-
-data <- df_counts_temp
-library(corrplot)
-cor_matrix <- cor(data)
-col<- colorRampPalette(c("blue", "white", "red"))(20)
-heatmap(x = cor_matrix, col = col)
-hist(data[, ct_da[1]])
-diptest::dip.test(data[, ct_da[1]])
-
-
-# 2. Variance Filtering
-variances <- apply(data, 2, var)
-plot(variances)
-hist(variances, breaks = 20)
-threshold <- quantile(variances, 0.8) # Example threshold
-filtered_df <- data[, variances > threshold]
-
-plot_pca(data, labels)
-plot_pca(filtered_df, labels)
-
-
-plot_pca(data[,ct_da], labels)
-
-```
-
-
-
-# ---------------------------------------------------------------
-
-# Sensitivity: zero imputation methods
-
-```{r}
-# Subset to CMV negative BR1 female samples
-cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
-
-df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
-
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
-
-# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
-Amount_of_perturbation <- c(1.5, 1.75, 2, 3, 4, 6)
-n_ct_to_select <- c(5, 10)
-
-results <- datrans(count_mat = df_counts, Amount_of_perturbation = Amount_of_perturbation, n_ct_to_select = n_ct_to_select,
-                   trans_method = "clr_pca",
-                   zero_imp_method = c(
-                      "counts_zeros__1",
-                      "counts_all__1",
-                      "percentage_all__0.001",
-                      "percentage_all__0.01",
-                      "percentage_all__0.1",
-                      "percentage_all__1",
-                      "multLN",
-                      "multRepl__0.01",
-                      "multRepl__0.1",
-                      "multRepl__1"
-                   )
-)
-
-```
-
-
-```{r fig.height=12, fig.width=12}
-for (nct in n_ct_to_select) {
-  res_all <- results[results$n_celltypes == nct, ]
-  res_avg <- res_all %>%
-    group_by(zero_imp_method, Amount_of_perturbation) %>%
-    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
-           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
-           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
-    ungroup() %>% 
-    distinct(interaction(zero_imp_method, Amount_of_perturbation), .keep_all=TRUE)
-  
-  zim <- res_avg$zero_imp_method
-  zim[grepl("multRepl|percentage", zim)] <- paste0(zim[grepl("multRepl|percentage", zim)], "%")
-  res_avg$zero_imp_method <- zim
-  
-  p_sil <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Silhouette_score, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
-    ylim(c(min(res_avg$Silhouette_score), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Silhouette_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  p_mod <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Modularity_score, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
-    ylim(c(min(res_avg$Modularity_score), 0.5)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  p_clust <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Adjusted_Rand_Index, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
-    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  
-  ggsave(filename = file.path(path_plots, paste0("zero_imputation_semisynthetic_default", nct, "celltypesda.pdf")), plot = p_clust, width = 4, height = 3)
-  
-  if (nct == 10) {
-    ggsave(filename = file.path(path_plots, "zero_imputation_semisynthetic_default.pdf"), plot = p_clust + ggtitle("10 random cell types"), width = 5, height = 4)
-  }
-  
-  p <- ggarrange(p_sil, p_mod, p_clust)
-  print(p)
-}
-
-```
-
-
-
-```{r}
-nct <- 10
-da <- 3
-df_long <- results[results$n_celltypes == nct &
-                     results$Amount_of_perturbation == da &
-                     results$zero_imp_method %in% c("counts_all__1", "percentage_all__0.1", "percentage_all__1"), ]
-df_long$zero_imp_method <- factor(df_long$zero_imp_method, levels = c("counts_all__1", "percentage_all__0.1", "percentage_all__1"))
-my_comparisons <- list( c("counts_all__1", "percentage_all__0.1"), c("counts_all__1", "percentage_all__1"), c("percentage_all__0.1", "percentage_all__1"))
-ggplot(data = df_long, aes(x = zero_imp_method, y = Adjusted_Rand_Index)) +
-  geom_boxplot() +
-  stat_compare_means(method = "t.test", comparisons = my_comparisons, paired = TRUE, aes(label = after_stat(p.signif))) +
-  geom_jitter(width = 0.2, height = 0.05) +
-  theme_classic() +
+  # Set the plot limits
+  xlim(c(0, 1)) +
+  ylim(c(0, pi/2)) +
+  # Add grid lines
+  theme_bw() +
   theme(
-    axis.text.x = element_text(size = 12, angle = 15, hjust = 1, vjust = 1),
-    axis.title.x = element_blank()  # Remove x-axis title
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    panel.grid.major = element_line(linetype = "dashed", color = "gray"),
+    panel.grid.minor = element_line(linetype = "dashed", color = "gray")
   ) +
-  ylim(c(-0.1, 1.3)) +
-  ggtitle(paste0("Differential cell types: ", nct, "\nDA multiplier: ", da))
-ggsave(filename = file.path(path_plots, paste0("zero_imputation_semisynthetic_example_diffct", nct, "_diffabu", da, ".pdf")), width = 4, height = 4)
-```
-
-
-
-## L3 annotations only low abundant cell types DA
-
-```{r}
-# Subset to CMV negative BR1 female samples
-cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
-
-df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
-
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
-
-# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
-Amount_of_perturbation <- c(1.5, 1.75, 2, 3, 4, 6)
-n_ct_to_select <- c(5, 10)
-
-ct_counts <- colMeans(df_counts)
-# Find the threshold for the lowest fourth
-threshold <- quantile(ct_counts, 1/4)
-
-# Get the column names with means below the threshold
-cts <- colnames(df_counts)[ct_counts < threshold]
-
-n_ct_to_select[n_ct_to_select >= length(cts)] <- length(cts)
-
-results <- datrans(count_mat = df_counts, Amount_of_perturbation = Amount_of_perturbation, n_ct_to_select = n_ct_to_select,
-                   trans_method = "clr_pca",
-                   zero_imp_method = c(
-                      "counts_zeros__1",
-                      "counts_all__1",
-                      "percentage_all__0.001",
-                      "percentage_all__0.01",
-                      "percentage_all__0.1",
-                      "percentage_all__1",
-                      "multLN",
-                      "multRepl__0.01",
-                      "multRepl__0.1",
-                      "multRepl__1"
-                   )
-)
-
-```
-
-```{r fig.height=12, fig.width=12}
-for (nct in n_ct_to_select) {
-  res_all <- results[results$n_celltypes == nct, ]
-  res_avg <- res_all %>%
-    group_by(zero_imp_method, Amount_of_perturbation) %>%
-    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
-           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
-           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
-    ungroup() %>% 
-    distinct(interaction(zero_imp_method, Amount_of_perturbation), .keep_all=TRUE)
-  
-  zim <- res_avg$zero_imp_method
-  zim[grepl("multRepl|percentage", zim)] <- paste0(zim[grepl("multRepl|percentage", zim)], "%")
-  res_avg$zero_imp_method <- zim
-  
-  p_sil <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Silhouette_score, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
-    ylim(c(min(res_avg$Silhouette_score), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Silhouette_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  p_mod <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Modularity_score, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
-    ylim(c(min(res_avg$Modularity_score), 0.5)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  p_clust <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Adjusted_Rand_Index, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
-    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  
-  ggsave(filename = file.path(path_plots, paste0("zero_imputation_semisynthetic_lowly_abu", nct, "celltypesda.pdf")), plot = p_clust, width = 4, height = 4)
-  
-  if (nct == 10) {
-    ggsave(filename = file.path(path_plots, "zero_imputation_semisynthetic_lowly_abu.pdf"), plot = p_clust + ggtitle("10 low abundant cell types"), width = 5, height = 4)
-  }
-  
-  p <- ggarrange(p_sil, p_mod, p_clust)
-  print(p)
-}
-
-```
-
-
-
-## L3 annotations only highly abundant cell types DA
-
-```{r}
-# Subset to CMV negative BR1 female samples
-cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
-
-df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
-
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
-
-
-# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
-Amount_of_perturbation <- c(1.5, 1.75, 2, 3, 4, 6)
-n_ct_to_select <- c(5, 10)
-
-ct_counts <- colMeans(df_counts)
-# Find the threshold for the highest fourth
-threshold <- quantile(ct_counts, 3/4)
-
-# Get the column names with means above the threshold
-cts <- colnames(df_counts)[ct_counts >= threshold]
-
-n_ct_to_select[n_ct_to_select >= length(cts)] <- length(cts)
-
-
-results <- datrans(count_mat = df_counts, Amount_of_perturbation = Amount_of_perturbation, n_ct_to_select = n_ct_to_select,
-                   trans_method = "clr_pca",
-                   zero_imp_method = c(
-                      "counts_zeros__1",
-                      "counts_all__1",
-                      "percentage_all__0.001",
-                      "percentage_all__0.01",
-                      "percentage_all__0.1",
-                      "percentage_all__1",
-                      "multLN",
-                      "multRepl__0.01",
-                      "multRepl__0.1",
-                      "multRepl__1"
-                   )
-)
-
-```
-
-
-
-```{r fig.height=12, fig.width=12}
-for (nct in n_ct_to_select) {
-  res_all <- results[results$n_celltypes == nct, ]
-  res_avg <- res_all %>%
-    group_by(zero_imp_method, Amount_of_perturbation) %>%
-    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
-           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
-           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
-    ungroup() %>% 
-    distinct(interaction(zero_imp_method, Amount_of_perturbation), .keep_all=TRUE)
-  
-  zim <- res_avg$zero_imp_method
-  zim[grepl("multRepl|percentage", zim)] <- paste0(zim[grepl("multRepl|percentage", zim)], "%")
-  res_avg$zero_imp_method <- zim
-  
-  p_sil <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Silhouette_score, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
-    ylim(c(min(res_avg$Silhouette_score), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Silhouette_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  p_mod <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Modularity_score, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
-    ylim(c(min(res_avg$Modularity_score), 0.5)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  p_clust <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Adjusted_Rand_Index, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
-    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  
-  ggsave(filename = file.path(path_plots, paste0("zero_imputation_semisynthetic_highly_abu", nct, "celltypesda.pdf")), plot = p_clust, width = 4, height = 4)
-  
-  if (nct == 10) {
-    ggsave(filename = file.path(path_plots, "zero_imputation_semisynthetic_highly_abu.pdf"), plot = p_clust + ggtitle("10 high abundant cell types"), width = 5, height = 4)
-  }
-  
-  p <- ggarrange(p_sil, p_mod, p_clust)
-  print(p)
-}
-
-```
-
-
-
-## L3 annotations lower number of cells
-
-```{r}
-# Subset to CMV negative BR1 female samples
-cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
-
-df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
-
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
-
-# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
-Amount_of_perturbation <- c(1.5, 1.75, 2, 3, 4, 6)
-n_ct_to_select <- c(5, 10)
-
-df_counts <- round(df_counts / 10)
-
-results <- datrans(count_mat = df_counts, Amount_of_perturbation = Amount_of_perturbation, n_ct_to_select = n_ct_to_select,
-                   trans_method = "clr_pca",
-                   zero_imp_method = c(
-                      "counts_zeros__1",
-                      "counts_all__1",
-                      "percentage_all__0.001",
-                      "percentage_all__0.01",
-                      "percentage_all__0.1",
-                      "percentage_all__1",
-                      "multLN",
-                      "multRepl__0.01",
-                      "multRepl__0.1",
-                      "multRepl__1"
-                   )
-)
-
-```
-
-```{r fig.height=12, fig.width=12}
-for (nct in n_ct_to_select) {
-  res_all <- results[results$n_celltypes == nct, ]
-  res_avg <- res_all %>%
-    group_by(zero_imp_method, Amount_of_perturbation) %>%
-    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
-           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
-           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
-    ungroup() %>% 
-    distinct(interaction(zero_imp_method, Amount_of_perturbation), .keep_all=TRUE)
-  
-  zim <- res_avg$zero_imp_method
-  zim[grepl("multRepl|percentage", zim)] <- paste0(zim[grepl("multRepl|percentage", zim)], "%")
-  res_avg$zero_imp_method <- zim
-  
-  p_sil <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Silhouette_score, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
-    ylim(c(min(res_avg$Silhouette_score), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Silhouette_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  p_mod <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Modularity_score, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
-    ylim(c(min(res_avg$Modularity_score), 0.5)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  p_clust <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Adjusted_Rand_Index, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
-    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  
-  ggsave(filename = file.path(path_plots, paste0("zero_imputation_semisynthetic_lowcells", nct, "celltypesda.pdf")), plot = p_clust, width = 4, height = 4)
-  
-  if (nct == 10) {
-    ggsave(filename = file.path(path_plots, "zero_imputation_semisynthetic_lowcells.pdf"), plot = p_clust + ggtitle("10 random cell types\nAll counts / 10"), width = 5, height = 4)
-  }
-  
-  p <- ggarrange(p_sil, p_mod, p_clust)
-  print(p)
-}
-
-```
-
-
-
-## L3 annotations unbalanced counts
-
-```{r}
-# Subset to CMV negative BR1 female samples
-cmv_neg_BR1_female_samples <- (dproc$meta$subject.cmv == "Negative") & (dproc$meta$cohort.cohortGuid == "BR1") & (dproc$meta$subject.biologicalSex == "Female")
-
-df_counts <- dproc[["L3"]]$cell_counts[cmv_neg_BR1_female_samples,]
-
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\-", "minus")
-colnames(df_counts) <- stringr::str_replace_all(colnames(df_counts), "\\+", "plus")
-
-# To one or multiple cell types, add +1%, +5%, +10%, +20%, +50%
-Amount_of_perturbation <- c(1.5, 1.75, 2, 3, 4, 6)
-n_ct_to_select <- c(5, 10)
-
-# Generate random numbers between -1 and 1 for each row
-random_numbers <- runif(nrow(df_counts), min = -1, max = 1)
-
-# Exponentiate 10 with each random number
-multiplier <- 10^random_numbers
-
-# Multiply each row by the corresponding multiplier
-df_counts <- sweep(df_counts, 1, multiplier, `*`)
-
-df_counts <- round(df_counts)
-
-results <- datrans(count_mat = df_counts, Amount_of_perturbation = Amount_of_perturbation, n_ct_to_select = n_ct_to_select,
-                   trans_method = "clr_pca",
-                   zero_imp_method = c(
-                      "counts_zeros__1",
-                      "counts_all__1",
-                      "percentage_all__0.001",
-                      "percentage_all__0.01",
-                      "percentage_all__0.1",
-                      "percentage_all__1",
-                      "multLN",
-                      "multRepl__0.01",
-                      "multRepl__0.1",
-                      "multRepl__1"
-                   )
-)
-
-```
-
-```{r fig.height=12, fig.width=12}
-for (nct in n_ct_to_select) {
-  res_all <- results[results$n_celltypes == nct, ]
-  res_avg <- res_all %>%
-    group_by(zero_imp_method, Amount_of_perturbation) %>%
-    mutate(sil_sem = sd(Silhouette_score) / sqrt(length(Silhouette_score)), Silhouette_score = mean(Silhouette_score),
-           mod_sem = sd(Modularity_score) / sqrt(length(Modularity_score)), Modularity_score = mean(Modularity_score),
-           ari_sem = sd(Adjusted_Rand_Index) / sqrt(length(Adjusted_Rand_Index)), Adjusted_Rand_Index = mean(Adjusted_Rand_Index)) %>%
-    ungroup() %>% 
-    distinct(interaction(zero_imp_method, Amount_of_perturbation), .keep_all=TRUE)
-  
-  zim <- res_avg$zero_imp_method
-  zim[grepl("multRepl|percentage", zim)] <- paste0(zim[grepl("multRepl|percentage", zim)], "%")
-  res_avg$zero_imp_method <- zim
-  
-  p_sil <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Silhouette_score, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Silhouette_score-sil_sem, ymax=Silhouette_score+sil_sem)) +
-    ylim(c(min(res_avg$Silhouette_score), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Silhouette_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  p_mod <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Modularity_score, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Modularity_score-mod_sem, ymax=Modularity_score+mod_sem)) +
-    ylim(c(min(res_avg$Modularity_score), 0.5)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  p_clust <- ggplot(res_avg, aes(x = Amount_of_perturbation, y = Adjusted_Rand_Index, color = zero_imp_method)) +
-    geom_line() +
-    geom_errorbar(aes(ymin=Adjusted_Rand_Index-ari_sem, ymax=Adjusted_Rand_Index+ari_sem)) +
-    ylim(c(min(res_avg$Adjusted_Rand_Index), 1)) +
-    theme_classic() +
-    # geom_point(data = res_all, aes(x = Amount_of_perturbation, y = Modularity_score)) +
-    ggtitle(paste0("Differential cell types: ", nct, "\n(CLR-transformation)"))
-  
-  ggsave(filename = file.path(path_plots, paste0("zero_imputation_semisynthetic_unbalancedcounts", nct, "celltypesda.pdf")), plot = p_clust, width = 4, height = 4)
-  
-  if (nct == 10) {
-    ggsave(filename = file.path(path_plots, "zero_imputation_semisynthetic_unbalancedcounts.pdf"),
-           plot = p_clust + ggtitle("10 random cell types\nUnbalanced counts:\nEach sample * rand[-10, 10]"),
-           width = 5, height = 4)
-  }
-  
-  p <- ggarrange(p_sil, p_mod, p_clust)
-  print(p)
-}
-
+  # Add annotations for the domain and range
+  annotate(
+    "text",
+    x = 0.1,
+    y = 1.5,
+    label = "x-range: [0, 1]",
+    hjust = 0,
+    vjust = 1,
+    size = 4
+  ) +
+  annotate(
+    "text",
+    x = 0.1,
+    y = 1.4,
+    label = expression(paste("y-range: [0, ", pi/2, "]")),
+    hjust = 0,
+    vjust = 1,
+    size = 4
+  )
+ggsave(file.path(path_plots, "arcsin_sqrt_function_visualized.pdf"),
+       width = 5,
+       height = 3)
 ```
 
 

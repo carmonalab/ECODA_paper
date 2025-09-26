@@ -1,0 +1,116 @@
+---
+title: "Zhang et al. dataset cell type annotation"
+author: "Christian Halter"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+Zhang Yuanyuan Cancer Cell 2021; CD45+ cells; primary or metastatic tumor tissues and peripheral blood of 22 advanced TNBC patients treated with paclitaxel or its combination with atezolizumab.
+
+paper: https://www.sciencedirect.com/science/article/pii/S1535610821004992?via%3Dihub
+accession:https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE169246
+
+This script takes output of "scRNAseq_data_processing_ZhangY_2022_34653365.Rmd"
+
+# Load libraries
+
+```{r, include=FALSE, fig.width=16, fig.height=12}
+# renv::init()
+# renv::restore()
+# renv::snapshot()
+# 
+# remotes::install_github("carmonalab/UCell", ref="f6e711c")
+# remotes::install_github("carmonalab/scGate", ref="17a4ce6")
+# remotes::install_github("carmonalab/STACAS", ref="0a88c5e")
+# remotes::install_github("carmonalab/ProjecTILs", ref="fdc75e0")
+# remotes::install_github("carmonalab/SignatuR", ref="0aded1d")
+# remotes::install_github("carmonalab/HiTME", ref="73ff3ca", force = T)
+
+# remotes::install_github("carmonalab/scooter", ref="f31eab3", force = T)
+
+library(scooter)
+
+# remotes::install_github("saezlab/MOFAcellulaR")
+
+library(Seurat)
+# devtools::install_github('satijalab/seurat-data')
+library(SeuratData)
+# install.packages("hdf5r")
+# remotes::install_github("mojaveazure/seurat-disk")
+library(SeuratDisk)
+library(tidyverse)
+library(scGate)
+library(UCell)
+library(STACAS)
+library(scGate)
+library(ProjecTILs)
+library(SignatuR)
+library(HiTME)
+library(dplyr)
+```
+
+
+# Set paths
+```{r}
+my_seed <- 321
+set.seed(my_seed)
+ds_name <- "HarN_2022_36097221"
+
+path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
+path_output <- file.path(path_root, "output")
+path_output_samples <- file.path(path_output, "samples")
+```
+
+
+# Load dataset
+```{r}
+obj <- readRDS(file.path(path_output, sprintf("%swhole.rds", ds_name)))
+```
+
+# Filter out low cell count samples
+```{r}
+sample.size <- sort(sapply(obj, function(df) ncol(df)))
+sample.size
+barplot(sample.size)
+abline(h = 1000)
+```
+
+
+# Celltype annotation with HiTME
+
+```{r}
+# Get scGate database of pre-defined gating models
+scGate_models_DB <- get_scGateDB(branch = "dev", verbose = T, force_update = TRUE)
+scGate_models <- scGate_models_DB$human$PBMC
+
+# Load ProjecTILs reference maps
+path_ref <- "~/Dropbox/CSI/reference_atlases/sketched_200ct"
+ref.maps_sketched <- list(CD8 = load.reference.map(file.path(path_ref, "sketched_CD8T_human_ref_v1.rds")),
+                          CD4 = load.reference.map(file.path(path_ref, "sketched_CD4T_human_ref_v2.rds")),
+                          DC = load.reference.map(file.path(path_ref, "sketched_DC_human_ref_v2.rds")),
+                          MoMac = load.reference.map(file.path(path_ref, "sketched_MoMac_human_v1.rds"))
+)
+ref.maps <- get.reference.maps(collection = "human")
+
+for (i in 1:length(obj)) {
+  print(i)
+  obj[[i]] <- Run.HiTME(object = obj[[i]],
+                        scGate.model = scGate_models,
+                        ref.maps = ref.maps_sketched
+  )
+}
+
+rm(i, ref.maps_sketched)
+gc()
+
+save_objs(obj, path_output_samples)
+```

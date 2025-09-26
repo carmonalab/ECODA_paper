@@ -127,9 +127,9 @@ set.seed(my_seed)
 ```{r}
 ds_name <- "GongSharma_2024_PrePrintTBD"
 
-path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
+path_root <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets", ds_name)
 path_data <- file.path(path_root, "data")
-path_plots <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "plots")
+path_plots <- file.path("/Users/christianhalter/Library/CloudStorage/OneDrive-SharedLibraries-UniversitédeGenève/Santiago Carmona - CSI/LabPapers/ECODA/plots")
 ```
 
 
@@ -1099,6 +1099,35 @@ factoextra::fviz_pca(res.pca_females,
 ggsave(file.path(path_plots, "pca_pseudobulk_females_unsupervised_clustering.pdf"),
        width = 4,
        height = 3)
+
+
+factoextra::fviz_pca(res.pca_females,
+                     # habillage = NA,
+                     # addEllipses = TRUE,
+                     label = "none",
+                     pointsize = 1,
+                     invisible = c("var", "quali"),
+                     # repel = TRUE,
+                     geom = "point",
+                     axes.linetype = NA) +
+    scale_shape_manual(values = rep(19, length(unique(clust_labels)))) +
+  guides(shape=guide_legend(title="Pseudobulk\ncluster"), color=guide_legend(title="Pseudobulk\ncluster")) +
+  ggtitle("") +
+  theme_classic() +
+  theme(
+    # axis.title.x=element_blank(),
+    axis.text.x=element_blank(),
+    axis.ticks.x=element_blank(),
+    # axis.title.y=element_blank(),
+    axis.text.y=element_blank(),
+    axis.ticks.y=element_blank()
+  )
+ggsave(file.path(path_plots, "pca_pseudobulk_females_unsupervised_clustering_nolabels.pdf"),
+       width = 3,
+       height = 3)
+
+
+
 
 labels <- meta_females$subject.cmv
 title <- "Biological variable 1"
