@@ -2913,3 +2913,62 @@ ari_worst <- adjustedRandIndex(true_labels, worst_labels)
 cat("ARI (Correct vs. Worst-Case):", round(ari_worst, 4), "\n")
 ```
 
+
+# Export cell type compositions
+
+```{r}
+get_sample_metadata <- function(cell_data_df, sample_col) {
+  # Step 1: Group the data by `sample_col` and check for uniqueness
+  distinct_counts <- cell_data_df %>%
+    dplyr::group_by(!!rlang::sym(sample_col)) %>%
+    dplyr::summarise(across(everything(), ~ n_distinct(.x))) %>%
+    dplyr::ungroup()
+
+  # Step 2: Identify columns that are constant across all samples
+  constant_cols <- distinct_counts %>%
+    dplyr::select(where(~ max(.x) == 1)) %>%
+    names()
+
+  # Step 3: Select and return the constant columns
+  metadata <- cell_data_df %>%
+    dplyr::select(all_of(c(sample_col, constant_cols))) %>%
+    dplyr::distinct() %>%
+    as.data.frame() # Convert back to data.frame
+
+  # Set row names to the sample column for easier access
+  rownames(metadata) <- metadata[[sample_col]]
+  metadata[[sample_col]] <- NULL
+
+  return(metadata)
+}
+
+
+ds_data_list <- list()
+
+for (ds in names(datasets)) {
+  print(ds)
+  
+  seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
+  seurat@misc$label_col <- datasets[[ds]][["label_col"]]
+  
+  ds_data_list[[ds]] <- list(
+    cell_counts_highresolution = get_ct_comp_df_seurat(
+      seurat,
+      sample_col = "Sample",
+      ct_col = datasets[[ds]][["hi_res_ct_col"]]
+    ),
+    cell_counts_lowresolution = get_ct_comp_df_seurat(
+      seurat,
+      sample_col = "Sample",
+      ct_col = datasets[[ds]][["low_res_ct_col"]]
+    ),
+    metadata = get_sample_metadata(seurat@meta.data, "Sample"),
+    main_biologicalcondition_columnname = datasets[[ds]][["label_col"]]
+  )
+}
+  
+saveRDS(
+  object = ds_data_list,
+  file = file.path(path_data, "example_data.rds")
+)
+```
