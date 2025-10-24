@@ -105,7 +105,7 @@ factors_test <- c(2, 3, 5, 10)
 result_file <- "result_list.rds"
 
 if (file.exists(result_file)) {
-  result_list <- readRDS("result_list.rds")
+  result_list <- readRDS(result_file)
 } else {
   result_list <- list()
 }
@@ -387,6 +387,15 @@ if (any(elem_null)) {
 # ---------------------------------------------------------------
 # ---------------------------------------------------------------
 
+# Create list to export raw data to excel
+
+```{r}
+df_results_list <- list()
+```
+
+# ---------------------------------------------------------------
+# ---------------------------------------------------------------
+
 
 # Plot benchmark results
 
@@ -418,51 +427,30 @@ df_results <- imap_dfr(bmark_result_list, ~ {
     }
   })
 })
+
+df_results$method <- gsub("ECODA_highres", "ECODA_author_HL", df_results$method)
+df_results$method <- gsub("ECODA_lowres", "ECODA_author_LR", df_results$method)
 ```
 
+## Show + sort all tested conditions
 
 ```{r}
 library(gtools)
 levs <- mixedsort(as.character(unique(df_results$method)))
 levs
-```
 
-
-
-## Plot results
-
-```{r fig.height=10, fig.width=14}
 df_results$method <- factor(df_results$method, levels = levs)
 
 df_results$dataset[df_results$dataset == "GongSharma_females_cmv"] <- "GongSharma_cmv"
 df_results$dataset[df_results$dataset == "GongSharma_females_cmvneg_age"] <- "GongSharma_age"
 
-df_results_list <- list()
 df_results_list[["Benchmark"]] <- df_results
-
-df_results_clustering <- df_results %>%
-  filter(score == "cluster_score") %>%
-  group_by(method) %>%
-  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value)))
-
-# df_results_clustering <- df_results_clustering %>%
-#   arrange(desc(mean))
-df_results_clustering$method <- factor(df_results_clustering$method, levels = df_results_clustering$method)
-
-df_results$method <- factor(df_results$method, levels = df_results_clustering$method)
+```
 
 
-df_results_modularity <- df_results %>%
-  filter(score == "mod_score") %>%
-  group_by(method) %>%
-  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value)))
+## Plot results
 
-df_results_modularity <- df_results_modularity %>%
-  arrange(desc(mean))
-df_results_modularity$method <- factor(df_results_modularity$method, levels = df_results_modularity$method)
-
-
-
+```{r fig.height=10, fig.width=14}
 # New facet label names for dose variable
 score.labs <- c("ANOSIM score", "Adjusted rand index", "Modularity score")
 names(score.labs) <- sort(unique(df_results$score))
@@ -488,8 +476,8 @@ ggplot(df_results, aes(x = method, y = value)) +
   #            labeller = labeller(score = score.labs, dataset = datas.labs),
   #            rows = vars(score), cols = vars(dataset))
 ggsave(file.path(path_plots, "benchmark_detailed_barplot.pdf"),
-       width = 40,
-       height = 7)
+       width = 150,
+       height = 7, limitsize = FALSE)
 
 
 
@@ -509,7 +497,7 @@ df_results %>%
              rows = vars(score),
              labeller = labeller(score = score.labs))
 ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores_bars.pdf"),
-       width = 7,
+       width = 14,
        height = 7)
 
 
@@ -518,8 +506,8 @@ filter_methods <- c(
   "Pseudobulk",
   "Freq_highres",
   "ECODA_deconv",
-  "ECODA_lowres",
-  "ECODA_highres",
+  "ECODA_author_LR",
+  "ECODA_author_HR",
   "ECODA_high_res_2_PCA_dims",
   "ECODA_highres_top_varexp0.7",
   # "ECODA_seuratres_0.4",
@@ -539,7 +527,7 @@ df_results %>%
   
   ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
-  stat_summary(fun = mean, geom = "bar", fill = "gray70") +
+  stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
   geom_point(position = "identity", alpha = 0.6) +
   geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
   stat_compare_means(
@@ -550,11 +538,13 @@ df_results %>%
     aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
   ) +
   labs(x = "", y = "ANOSIM score") +
-  theme_minimal() +
+  theme_classic() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_refpb.pdf"),
        width = 7,
        height = 7)
+
+
 
 
 
@@ -575,9 +565,6 @@ filter_methods <- c(
   "GloScope"
 )
 
-# my_comparisons <- purrr::map(unique(as.character(df_results_clustering$method)), ~ c(.x, "Pseudobulk"))
-# my_comparisons <- Filter(function(x) length(unique(x)) == 2, my_comparisons)
-# my_comparisons <- my_comparisons[c(3, 6, 4, 5, 2, 1)]
 
 p <- df_results %>%
   filter(score == "anosim_score") %>%
@@ -622,9 +609,6 @@ filter_methods <- c(
   "ECODA_highres_top_varexp0.1"
 )
 
-# my_comparisons <- purrr::map(unique(as.character(df_results_clustering$method)), ~ c(.x, "Pseudobulk"))
-# my_comparisons <- Filter(function(x) length(unique(x)) == 2, my_comparisons)
-# my_comparisons <- my_comparisons[c(3, 6, 4, 5, 2, 1)]
 
 p <- df_results %>%
   filter(score == "anosim_score") %>%
@@ -1278,7 +1262,7 @@ p1 <- df_results_sub %>%
     label.y = 0.93,
     aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
   ) +
-  ylim(c(0, 1)) +
+  # ylim(c(0, 1)) +
   labs(x = "Variance explained (%)", y = "ANOSIM score") +
   theme_classic2() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
