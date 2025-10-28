@@ -1,3 +1,10 @@
+# Big data files
+*.rds
+*.feather
+*.h5ad
+*.h5seurat
+*.nc
+
 # History files
 .Rhistory
 .Rapp.history
