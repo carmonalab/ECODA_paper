@@ -409,7 +409,7 @@ datrans <- function(count_mat,
 
 DESeq2.normalize <- function(matrix,
                              metadata,
-                             nvar_genes = 2000) {
+                             n_hvg = 2000) {
   suppressMessages({
     suppressWarnings({
       # Normalize pseudobulk data using DESeq2
@@ -431,7 +431,7 @@ DESeq2.normalize <- function(matrix,
 
       # get top variable genes
       rv <- MatrixGenerics::rowVars(matrix)
-      select <- order(rv, decreasing = TRUE)[seq_len(min(nvar_genes, length(rv)))]
+      select <- order(rv, decreasing = TRUE)[seq_len(min(n_hvg, length(rv)))]
       select <- row.names(matrix)[select]
 
       matrix <- matrix[select[select %in% row.names(matrix)], ]
@@ -647,11 +647,11 @@ get_pb <- function(seurat, sample_col = "Sample", hvg = NULL) {
 }
 
 
-get_pb_deseq2 <- function(seurat, sample_col = "Sample", hvg = NULL) {
+get_pb_deseq2 <- function(seurat, sample_col = "Sample", hvg = NULL, n_hvg = 2000) {
   pb <- get_pb(seurat, sample_col = sample_col, hvg = hvg)
   metadata <- get_metadata(seurat)
   metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
-  pb_norm <- t(DESeq2.normalize(pb, metadata = metadata))
+  pb_norm <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = n_hvg))
   return(pb_norm)
 }
 
@@ -955,12 +955,12 @@ run_benchmark_analysis <- function(seurat,
 
   if (Pseudobulk | Pseudobulk_PCA) {
     pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = hvg)
-    pb_norm_unsup_hvg <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL)
+    pb_norm_unsup_hvg <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = 2000)
   }
 
   if (Pseudobulk) {
-    res_list[["Pseudobulk"]] <- process_pseudobulk_fig(pb_norm, labels)
-    res_list[["Pseudobulk_unsup_hvg"]] <- process_pseudobulk_fig(pb_norm_unsup_hvg, labels)
+    res_list[["Pseudobulk_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
+    res_list[["Pseudobulk_unsup_hvg2000"]] <- process_pseudobulk_fig(pb_norm_unsup_hvg, labels)
   }
 
   if (ECODA_deconv) {
@@ -972,44 +972,42 @@ run_benchmark_analysis <- function(seurat,
   if (ECODA_low_res) {
     ## layer1: low res. cell types
     if (!is.null(seurat@misc$low_res_ct_col)) {
-      res_list[["ECODA_lowres"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$low_res_ct_col, title = "ECODA\nlow res.")
+      res_list[["ECODA_authors_LR"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$low_res_ct_col, title = "ECODA\nlow res.")
     }
   }
 
   if (ECODA_high_res) {
     ## layer2: high res. cell types
     if (!is.null(seurat@misc$hi_res_ct_col)) {
-      res_list[["ECODA_highres"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\nhigh res.")
-      # if (ECODA_select_top_hvct) {
-      #   res_list[[paste0("ECODA_highres_top", ECODA_top_n_hvct)]] <-
-      #     process_coda_fig(seurat, labels, ECODA_top_n_hvct = ECODA_top_n_hvct, ct_col = seurat@misc$hi_res_ct_col, title = paste0("Cell type composition (CLR)\nhigh res. top ", ECODA_top_n_hvct*100, "%"))
-      # }
+      res_list[["ECODA_authors_HR"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\nhigh res.")
+      res_list[["ECODA_authors_HR_NULL"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\nhigh res.", shuffle_labels = TRUE)
+
       for (varexp_hvc in ECODA_top_varexp_hvct) {
-        res_list[[paste0("ECODA_highres_top_varexp", varexp_hvc)]] <-
+        res_list[[paste0("ECODA_authors_HR_top_varexp", varexp_hvc)]] <-
           process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = seurat@misc$hi_res_ct_col, title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%"))
 
-        res_list[[paste0("ECODA_highres_HiTME_layer2_top_varexp", varexp_hvc)]] <-
+        res_list[[paste0("ECODA_HiTME_HR_layer2_top_varexp", varexp_hvc)]] <-
           process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = "layer2", title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%"))
-        res_list[[paste0("ECODA_highres_HiTME_layer3_top_varexp", varexp_hvc)]] <-
+        res_list[[paste0("ECODA_HiTME_HR_layer3_top_varexp", varexp_hvc)]] <-
           process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = "layer3", title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%"))
       }
 
       res_list[["Freq_highres"]] <- process_coda_fig(seurat, labels, clr = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (%)\nhigh res.")
     }
 
-    res_list[["ECODA_highres_3most_varcts"]] <-
+    res_list[["ECODA_authors_HR_3most_varcts"]] <-
       process_coda_fig(seurat, labels, ECODA_top_n_hvct = 3, var_ct_desc = TRUE, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\n2 least var. cell types")
 
-    res_list[["ECODA_highres_2least_varcts"]] <-
+    res_list[["ECODA_authors_HR_2least_varcts"]] <-
       process_coda_fig(seurat, labels, ECODA_top_n_hvct = 2, var_ct_desc = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\n2 least var. cell types")
 
-    res_list[["ECODA_highres_3least_varcts"]] <-
+    res_list[["ECODA_authors_HR_3least_varcts"]] <-
       process_coda_fig(seurat, labels, ECODA_top_n_hvct = 3, var_ct_desc = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\n2 least var. cell types")
 
-    res_list[["ECODA_highres_HiTME"]] <- process_coda_fig(seurat, labels, ct_col = "layer2", title = "ECODA\nHiTME")
-    res_list[["ECODA_highres_HiTME_layer2"]] <- process_coda_fig(seurat, labels, ct_col = "layer2", title = "ECODA\nHiTME layer2")
-    res_list[["ECODA_highres_HiTME_layer3"]] <- process_coda_fig(seurat, labels, ct_col = "layer3", title = "ECODA\nHiTME layer3")
-    res_list[["ECODA_highres_scATOMIC"]] <- process_coda_fig(seurat, labels, ct_col = "scATOMIC_pred", title = "ECODA\nscATOMIC")
+    res_list[["ECODA_HiTME_HR"]] <- process_coda_fig(seurat, labels, ct_col = "layer2", title = "ECODA\nHiTME")
+    res_list[["ECODA_HiTME_HR_layer2"]] <- process_coda_fig(seurat, labels, ct_col = "layer2", title = "ECODA\nHiTME layer2")
+    res_list[["ECODA_HiTME_HR_layer3"]] <- process_coda_fig(seurat, labels, ct_col = "layer3", title = "ECODA\nHiTME layer3")
+    res_list[["ECODA_scATOMIC_HR"]] <- process_coda_fig(seurat, labels, ct_col = "scATOMIC_pred", title = "ECODA\nscATOMIC")
   }
 
   # Analyze for all resolutions
@@ -1042,14 +1040,14 @@ run_benchmark_analysis <- function(seurat,
 
       if (ECODA_high_res_PCA) {
         # Hires CODA with PCA
-        res_list[[paste0("ECODA_high_res_", i, "_PCA_dims")]] <- process_coda_fig(seurat, labels, pca_dims = i, ct_col = seurat@misc$hi_res_ct_col, title = paste0("ECODA\nhigh res. + PCA (", i, " dims)"))
+        res_list[[paste0("ECODA_authors_HR_", i, "_PCA_dims")]] <- process_coda_fig(seurat, labels, pca_dims = i, ct_col = seurat@misc$hi_res_ct_col, title = paste0("ECODA\nhigh res. + PCA (", i, " dims)"))
       }
 
       if (MOFA) {
         # MOFA
         # Required for MOFA to run
         seurat@version <- package_version("3.1.5")
-        res_list[[paste0("MOFA_", i, "_factors")]] <- process_mofa_bulk_fig(pb_norm, metadata = metadata, labels, num_factors = i)
+        res_list[[paste0("MOFA_hvg2000_", i, "_factors")]] <- process_mofa_bulk_fig(pb_norm, metadata = metadata, labels, num_factors = i)
       }
 
       if (scITD) {
@@ -1057,6 +1055,12 @@ run_benchmark_analysis <- function(seurat,
         res_list[[paste0("scITD_", i, "_factors")]] <- process_scitd_fig(seurat, ct_col = seurat@misc$low_res_ct_col, label_col = seurat@misc$label_col, hvg, num_factors = i)
       }
     }
+  }
+
+  for (i in c(1000, 5000)) {
+    pb_norm_unsup_hvg <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = i)
+    res_list[[paste0("MOFA_unsup_hvg", i, "_15_factors")]] <- process_mofa_bulk_fig(pb_norm_unsup_hvg, metadata = metadata, labels, num_factors = 15)
+    res_list[[paste0("Pseudobulk_unsup_hvg", i)]] <- process_pseudobulk_fig(pb_norm_unsup_hvg, labels)
   }
 
   if (MrVI) {
@@ -1127,7 +1131,8 @@ process_coda_fig <- function(seurat,
                              clr_zero_impute_method = "counts_all",
                              clr_zero_impute_num = 1,
                              feat_mat = NULL,
-                             var_ct_desc = TRUE) {
+                             var_ct_desc = TRUE,
+                             shuffle_labels = FALSE) {
   if (is.null(feat_mat)) {
     df_counts <- get_ct_comp_df_seurat(seurat, sample_col = sample_col, ct_col)
 
@@ -1163,6 +1168,11 @@ process_coda_fig <- function(seurat,
 
   if (!is.null(pca_dims)) {
     feat_mat <- prcomp(feat_mat, rank. = pca_dims)[["x"]]
+  }
+
+  if (shuffle_labels) {
+    set.seed(123)
+    labels <- sample(labels)
   }
 
   res <- list()
