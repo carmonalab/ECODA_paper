@@ -100,7 +100,7 @@ replace_HiTMElayer3_annot <- function(seurat, thresh = 0.1) {
 # Create results list to fill
 
 ```{r}
-factors_test <- c(2, 3, 5, 10)
+factors_test <- c(2, 3, 5, 10, 15)
 
 result_file <- "result_list.rds"
 
