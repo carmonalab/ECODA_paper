@@ -15,7 +15,6 @@ output:
 
 This script prepares datasets for downstream analysis
 
-
 # Load libraries and set parameters
 
 ```{r message=FALSE, warning=FALSE}
@@ -44,6 +43,8 @@ path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_
 path_data <- file.path(getwd(), "data")
 path_plots <- file.path(getwd(), "plots")
 seurat_file_ending <- "_ECODAprocessed.rds"
+
+set.seed(123)
 ```
 
 
@@ -914,6 +915,7 @@ df_results_sub <- df_results %>%
     method
   )) %>%
   mutate(method = gsub("ECODA_highres", "100", method)) %>%
+  mutate(method = gsub("top_varexp0", "2most_varcts", method)) %>%
   mutate(method = fct_relevel(method)) %>%
   mutate(method = factor(method, levels = mixedsort(levels(method))))
 
@@ -998,8 +1000,7 @@ temp_list <- list()
 
 for (ds in names(result_list[["bmark"]])) {
   feat_mat <- result_list[["bmark"]][[ds]]$ECODA_highres$feat_mat
-  labels <- result_list[["bmark"]][[ds]]$ECODA_highres$plot[["data"]][["Groups"]]
-  
+  labels <- label_list[[ds]]
   ncts <- 2
   
   # Calculate separation score for most highly variable cell types (HVC)
@@ -1048,14 +1049,14 @@ ggplot(df_plot_long, aes(x = dataset, y = anosim_score, fill = group)) +
     fill = "Cell Type Group" # Legend title
   ) +
   scale_fill_manual(values = c("most" = "darkred", "least" = "steelblue")) +
-  theme_minimal()
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```
 
-
 ## Most highly variable cell types per dataset
 
-```{r}
+```{r fig.height=8, fig.width=12}
 print("Most highly variable cell types per dataset:")
 for (ds in names(result_list[["bmark"]])) {
   print(ds)
@@ -1065,8 +1066,31 @@ for (ds in names(result_list[["bmark"]])) {
   print(paste(colnames(result_list[["bmark"]][[ds]][["ECODA_highres_top_varexp0"]][["feat_mat"]])))
   print("Most highly variable cell types (HiTME annotation):\n")
   print(paste(colnames(result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer3_top_varexp0"]] [["feat_mat"]])))
+  
+  p <- result_list[["bmark"]][[ds]][["ECODA_highres"]][["feat_mat"]] %>%
+    get_ct_var() %>%
+    varmeanplot(title = ds, label_points = TRUE)
+  print(p)
+  
+  p <- plot_pca(result_list[["bmark"]][[ds]][["ECODA_highres_2least_varcts"]][["feat_mat"]], labels = label_list[[ds]], title = paste0(ds, ": Least variable cts"), invisible = "quali", labelsize = 4)
+  print(p)
+  p <- plot_pca(result_list[["bmark"]][[ds]][["ECODA_highres_top_varexp0"]][["feat_mat"]], labels = label_list[[ds]], title = paste0(ds, ": Most highly variable cts "), invisible = "quali", labelsize = 4)
+  print(p)
 }
 ```
+
+```{r fig.height=8, fig.width=12}
+print("Most highly variable cell types per dataset:")
+for (ds in names(result_list[["bmark"]])) {
+  print(ds)
+  print("Most highly variable cell types (HiTME annotation):\n")
+  print(paste(colnames(result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer2_top_varexp0.5"]][["feat_mat"]])))
+  print(paste(colnames(result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer3_top_varexp0.5"]][["feat_mat"]])))
+}
+```
+
+
+
 
 ### Check IFN expression in Stephenson dataset
 
@@ -1225,28 +1249,29 @@ ggplot(ds_diffs, aes(x = reorder(dataset, diff), y = diff)) +
 
 ## Plot feature selection (HiTME layer3)
 
-```{r}
+```{r fig.height=8, fig.width=12}
 df_results_sub <- df_results %>%
   filter(score == "anosim_score") %>%
   filter(grepl("ECODA_hi", method) & !grepl("scATOMIC|PCA", method)) %>%
   mutate(method = gsub("ECODA_highres_", "", method)) %>%
-  mutate(method = if_else(
-    grepl("^top_varexp0\\.\\d", method),
-    paste0(as.integer(gsub("top_varexp0\\.", "", method)) * 10),
-    method
-  )) %>%
-  mutate(method = gsub("ECODA_highres", "100", method)) %>%
-  mutate(method = if_else(
-    grepl("HiTME_layer3_top_varexp0\\.\\d", method),
-    paste0("HiTME_layer3_", as.integer(gsub("HiTME_layer3_top_varexp0\\.", "", method)) * 10),
-    method
-  )) %>%
-  mutate(method = gsub("^HiTME_layer3$", "HiTME_layer3_100", method)) %>%
-  mutate(method = gsub("^HiTME$", "HiTME_layer2_100", method)) %>%
+  # mutate(method = if_else(
+  #   grepl("^top_varexp0\\.\\d", method),
+  #   paste0(as.integer(gsub("top_varexp0\\.", "", method)) * 10),
+  #   method
+  # )) %>%
+  # mutate(method = gsub("ECODA_highres", "100", method)) %>%
+  # mutate(method = if_else(
+  #   grepl("HiTME_layer3_top_varexp0\\.\\d", method),
+  #   paste0("HiTME_layer3_", as.integer(gsub("HiTME_layer3_top_varexp0\\.", "", method)) * 10),
+  #   method
+  # )) %>%
+  # mutate(method = gsub("^HiTME_layer3$", "HiTME_layer3_100", method)) %>%
+  mutate(method = gsub("^HiTME$", "HiTME_layer2", method)) %>%
   mutate(method = fct_relevel(method)) %>%
   mutate(method = factor(method, levels = mixedsort(levels(method)))) %>%
-  mutate(method = fct_relevel(method, "HiTME_layer2_100", after = Inf)) %>%
-  filter(!grepl("varexp0|varcts", method))
+  # mutate(method = fct_relevel(method, "HiTME_layer2_100", after = Inf)) %>%
+  mutate(method = fct_relevel(method, "HiTME_layer3", after = 5)) #%>%
+  # filter(!grepl("varexp0|varcts", method))
 
 p1 <- df_results_sub %>%
   ggplot(aes(x = method, y = value)) +
