@@ -1562,27 +1562,33 @@ plot_pca(result_list[["bmark"]][["Adams"]][["ECODA_highres_HiTME_layer3_top_vare
          )
 ```
 
+```{r}
+test <- plist_layer2[[1]]
+```
+
 
 ```{r}
 plist_layer2 <- list()
 for (ds in names(result_list$bmark)) {
   plist_layer2[[ds]] <- plot_pca(
-    result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer2_top_varexp0.2"]][["feat_mat"]],
-    labels = result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer2_top_varexp0.2"]][["plot"]][["data"]][["Groups"]],
+    result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer2_top_varexp0.5"]][["feat_mat"]],
+    labels = label_list[[ds]],
     invisible = "quali",
     labelsize = 4,
-    title = ds
+    title = ds,
+    n_ct_show = 5
   )
 }
 
 plist_layer3 <- list()
 for (ds in names(result_list$bmark)) {
   plist_layer3[[ds]] <- plot_pca(
-    result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer3_top_varexp0.2"]][["feat_mat"]],
-    labels = result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer3_top_varexp0.2"]][["plot"]][["data"]][["Groups"]],
+    result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer3_top_varexp0.5"]][["feat_mat"]],
+    labels = label_list[[ds]],
     invisible = "quali",
     labelsize = 4,
-    title = ds
+    title = ds,
+    n_ct_show = 5
   )
 }
 ```
@@ -1590,6 +1596,55 @@ for (ds in names(result_list$bmark)) {
 ```{r}
 ggsave("pca_layer2.pdf", cowplot::plot_grid(plotlist = plist_layer2, ncol = 3), width = 20, height = 20)
 ggsave("pca_layer3.pdf", cowplot::plot_grid(plotlist = plist_layer3, ncol = 3), width = 20, height = 20)
+```
+
+
+```{r fig.height=8, fig.width=16}
+plist_vcts <- list()
+for (ds in names(result_list$bmark)) {
+  p1 <- result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer2"]][["feat_mat"]]%>%
+    get_ct_var() %>%
+    varmeanplot(title = paste0(ds, " Layer2"), label_points = TRUE)
+  p2 <- result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer3"]][["feat_mat"]]%>%
+    get_ct_var() %>%
+    varmeanplot(title = paste0(ds, " Layer3"), label_points = TRUE)
+  plist_vcts[[ds]] <- p1 | p2
+  print(p1 | p2)
+}
+
+
+```
+
+```{r}
+ggsave(filename = "test.pdf", plot = cowplot::plot_grid(plotlist = plist_vcts, ncol = 1), width = 20, height = 100, limitsize = FALSE)
+```
+
+
+## Compare layer2 and layer3 by scores
+
+```{r fig.height=8, fig.width=2.5}
+filter_methods <- c(
+  "ECODA_highres",
+  "ECODA_highres_HiTME_layer2_top_varexp0.5",
+  "ECODA_highres_HiTME_layer3_top_varexp0.5"
+)
+
+for (s in c("anosim_score", "mod_score", "cluster_score")) {
+  p <- df_results %>%
+    filter(score == s) %>%
+    filter(method %in% filter_methods) %>%
+    
+    ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+    stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+    stat_summary(fun = mean, geom = "bar", fill = "gray70") +
+    geom_point(position = "identity", alpha = 0.6) +
+    geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
+    labs(x = "", y = s) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1)) +
+    ggtitle(s)
+  print(p)
+}
 ```
 
 
