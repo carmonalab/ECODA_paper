@@ -2997,3 +2997,29 @@ saveRDS(
   file = file.path(path_data, "example_data.rds")
 )
 ```
+
+# ---------------------------------------------------------------
+
+# Create Zhang subset seurat object for scECODA package
+
+```{r}
+ds <- "Zhang"
+seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
+
+counts <- seurat@assays[["RNA"]]@layers[["counts"]]
+
+metadata <- seurat@meta.data
+metadata$celltype_annotations_lowres <- metadata$layer1
+metadata$celltype_annotations_highres <- metadata$layer2
+metadata <- metadata[ , c("Sample",
+                          "Tissue",
+                          "Clinical.efficacy.",
+                          "celltype_annotations_lowres",
+                          "celltype_annotations_highres")
+]
+
+
+
+saveRDS(seurat, file.path(path_data, paste0(datasets[[ds]][["ds_name"]], "_SUBSET", seurat_file_ending)))
+```
+
