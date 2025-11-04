@@ -209,7 +209,7 @@ convert_seurat_to_h5ad <- function(seurat,
 }
 
 
-create_clean_seuratv5_object <- function(suerat) {
+create_clean_seuratv5_object <- function(seurat) {
   # Create new v5 seurat object
   # Remove any possible processing, only saving counts and metadata
   seurat <- CreateSeuratObject(counts = seurat@assays$RNA$counts, meta.data = seurat@meta.data)
@@ -630,7 +630,7 @@ select_by_variance_explained <- function(df_var, variance_threshold) {
 
   # Select the cell types that meet the variance threshold
   selected_celltypes <- df_with_cumulative_var %>%
-    dplyr::filter(variance_explained >= variance_threshold) %>%
+    dplyr::filter(variance_explained <= variance_threshold) %>%
     dplyr::pull(celltype)
 
   return(selected_celltypes)
@@ -912,6 +912,7 @@ run_benchmark_analysis <- function(seurat,
                                    scITD = TRUE,
                                    MrVI = TRUE,
                                    GloScope = TRUE,
+                                   gloscope_n_pca_dims = c(10, 30, 50),
                                    scPoli = TRUE,
                                    PILOT = TRUE,
                                    show_pca_plots = FALSE,
@@ -919,15 +920,26 @@ run_benchmark_analysis <- function(seurat,
   res_list <- list()
 
   # Files preprocessed with python
-  files <- list(
-    mrvi_dist_file = file.path(path_data, paste0(ds, "_mrvi_dists.feather")),
-    scpoli_emb_file = file.path(path_data, paste0(ds, "_scpoli_embs.feather")),
-    pilot_dist_file = file.path(path_data, paste0(ds, "_pilot_dists.feather"))
-  )
+  for (i in c(1000, 2000, 5000)) {
+    if (grepl("GongSharma", ds)) {
+      ds_unif <- "GongSharma_all"
+      files <- list(
+        mrvi_dist_file = file.path(path_data, paste0(ds_unif, "_hvg", i, "_mrvi_dists.feather")),
+        scpoli_emb_file = file.path(path_data, paste0(ds_unif, "_hvg", i, "_scpoli_embs.feather")),
+        pilot_dist_file = file.path(path_data, paste0(ds_unif, "_hvg", i, "_pilot_dists.feather"))
+      )
+    } else {
+      files <- list(
+        mrvi_dist_file = file.path(path_data, paste0(ds, "_hvg", i, "_mrvi_dists.feather")),
+        scpoli_emb_file = file.path(path_data, paste0(ds, "_hvg", i, "_scpoli_embs.feather")),
+        pilot_dist_file = file.path(path_data, paste0(ds, "_hvg", i, "_pilot_dists.feather"))
+      )
+    }
 
-  for (file in files) {
-    if (!file.exists(file)) {
-      stop("File not found: ", file)
+    for (file in files) {
+      if (!file.exists(file)) {
+        stop("File not found: ", file)
+      }
     }
   }
 
@@ -953,19 +965,24 @@ run_benchmark_analysis <- function(seurat,
     stop("Could not find variable features in expected locations.")
   }
 
-  if (Pseudobulk | Pseudobulk_PCA) {
-    pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = hvg)
-    pb_norm_unsup_hvg <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = 2000)
-  }
-
   if (Pseudobulk) {
-    res_list[["Pseudobulk_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
-    res_list[["Pseudobulk_unsup_hvg2000"]] <- process_pseudobulk_fig(pb_norm_unsup_hvg, labels)
+    exec_time_1 <- exec_time(
+      pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = hvg)
+    )
+    exec_time_2 <- exec_time(
+      res_list[["Pseudobulk_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
+    )
+    res_list[["Pseudobulk_hvg2000"]][["exec_time"]] <- exec_time_1 + exec_time_2
+
+    pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = 2000)
+    res_list[["Pseudobulk_unsup_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
   }
 
   if (ECODA_deconv) {
     # Deconvolute using EPIC
-    res_list[["ECODA_deconv"]] <- process_deconv_fig(t(pb_norm), labels)
+    res_list[["ECODA_deconv"]][["exec_time"]] <- exec_time(
+      res_list[["ECODA_deconv"]] <- process_deconv_fig(t(pb_norm), labels)
+    )
   }
 
   # CoDA
@@ -979,7 +996,9 @@ run_benchmark_analysis <- function(seurat,
   if (ECODA_high_res) {
     ## layer2: high res. cell types
     if (!is.null(seurat@misc$hi_res_ct_col)) {
-      res_list[["ECODA_authors_HR"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\nhigh res.")
+      res_list[["ECODA_authors_HR"]][["exec_time"]] <- exec_time(
+        res_list[["ECODA_authors_HR"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\nhigh res.")
+      )
       res_list[["ECODA_authors_HR_NULL"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\nhigh res.", shuffle_labels = TRUE)
 
       for (varexp_hvc in ECODA_top_varexp_hvct) {
@@ -1020,14 +1039,6 @@ run_benchmark_analysis <- function(seurat,
     for (r in res) {
       res_col_name <- paste0("RNA_snn_res.", r)
       res_list[[paste0("ECODA_seuratres_", r)]] <- process_coda_fig(seurat, labels, ct_col = res_col_name, title = paste0("ECODA\nLeiden clustering ", r))
-      # if (ECODA_select_top_hvct) {
-      #   res_list[[paste0("ECODA_seuratres_", r, "_top", ECODA_top_n_hvct)]] <-
-      #     process_coda_fig(seurat, labels, ECODA_top_n_hvct, ct_col = res_col_name, title = paste0("ECODA\nultra-high res. ", r, " top ", ECODA_top_n_hvct*100, "%"))
-      # }
-      for (varexp_hvc in ECODA_top_varexp_hvct) {
-        res_list[[paste0("ECODA_highres_top_varexp", varexp_hvc)]] <-
-          process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = seurat@misc$hi_res_ct_col, title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%"))
-      }
     }
   }
 
@@ -1047,53 +1058,108 @@ run_benchmark_analysis <- function(seurat,
         # MOFA
         # Required for MOFA to run
         seurat@version <- package_version("3.1.5")
-        res_list[[paste0("MOFA_hvg2000_", i, "_factors")]] <- process_mofa_bulk_fig(pb_norm, metadata = metadata, labels, num_factors = i)
+        res_list[[paste0("MOFA_hvg2000_factors", i)]][["exec_time"]] <- exec_time(
+          res_list[[paste0("MOFA_hvg2000_", "factors", i)]] <- process_mofa_bulk_fig(pb_norm, metadata = metadata, labels, num_factors = i)
+        )
       }
 
       if (scITD) {
         # scITD
-        res_list[[paste0("scITD_", i, "_factors")]] <- process_scitd_fig(seurat, ct_col = seurat@misc$low_res_ct_col, label_col = seurat@misc$label_col, hvg, num_factors = i)
+        res_list[[paste0("scITD_hvg2000_factors", i)]][["exec_time"]] <- exec_time(
+          res_list[[paste0("scITD_hvg2000_factors", i)]] <- process_scitd_fig(seurat, ct_col = seurat@misc$low_res_ct_col, label_col = seurat@misc$label_col, hvg, num_factors = i)
+        )
       }
     }
   }
 
-  for (i in c(1000, 5000)) {
-    pb_norm_unsup_hvg <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = i)
-    res_list[[paste0("MOFA_unsup_hvg", i, "_15_factors")]] <- process_mofa_bulk_fig(pb_norm_unsup_hvg, metadata = metadata, labels, num_factors = 15)
-    res_list[[paste0("Pseudobulk_unsup_hvg", i)]] <- process_pseudobulk_fig(pb_norm_unsup_hvg, labels)
-  }
-
-  if (MrVI) {
-    # MrVI
-    res_list[["MrVI"]] <- process_mrvi_fig(files[["mrvi_dist_file"]], labels)
-  }
-
-  if (scPoli) {
-    res_list[["scPoli"]] <- process_scpoli_fig(files[["scpoli_emb_file"]], labels)
-  }
-
-  if (PILOT) {
-    res_list[["PILOT"]] <- process_pilot_fig(files[["pilot_dist_file"]], labels)
-  }
-
   if (GloScope) {
-    res_list[["GloScope"]] <- process_gloscope_fig(seurat, metadata, seurat@misc$label_col, gloscope_dist_file = file.path(path_data, paste0(ds, "_gloscope_dists.rds")))
+    for (n_pca_dims in gloscope_n_pca_dims) {
+      gloscope_dist_file <- file.path(path_data, paste0(ds, "_gloscope_hvg2000_pcadims", n_pca_dims, "_dists.rds"))
+
+      res_list[[paste0("GloScope_hvg2000_pcadims", n_pca_dims)]][["exec_time"]] <- exec_time(
+        res_list[[paste0("GloScope_hvg2000_pcadims", n_pca_dims)]] <- process_gloscope_fig(seurat, metadata, seurat@misc$label_col, gloscope_dist_file = gloscope_dist_file, n_pca_dims = n_pca_dims)
+      )
+      res_list[[paste0("GloScope_hvg2000_pcadims", n_pca_dims, "_sqrtmat")]] <- process_gloscope_sqrtmat_fig(metadata, seurat@misc$label_col, gloscope_dist_file = gloscope_dist_file)
+    }
   }
 
 
-  # if (show_pca_plots | save_pca_plots) {
-  #   plot_list <- lapply(res_list, function(method) method[["plot"]])
-  #   p <- cowplot::plot_grid(plotlist = plot_list)
-  #   res_list[["PCA_plots"]] <- p
-  # }
-  # if (show_pca_plots) {print(p)}
-  # if (save_pca_plots) {
-  #   ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
-  #          plot = p,
-  #          width = length(res_list),
-  #          height = length(res_list)*2/3,
-  #          limitsize = FALSE)
-  # }
+  for (i in c(1000, 5000)) {
+    if (i > 2000) {
+      # Memory critical steps
+      gc()
+      seurat <- create_clean_seuratv5_object(seurat)
+      gc()
+      seurat <- NormalizeData(seurat)
+      gc()
+      seurat <- FindVariableFeatures(seurat, nfeatures = i)
+      gc()
+      seurat <- ScaleData(seurat)
+      gc()
+      # Needs a lot of memory for 5000 HVGs
+      seurat <- RunPCA(seurat, dims = 1:50, verbose = FALSE)
+      gc()
+    }
+
+    if ("var.features" %in% slotNames(seurat@assays[["RNA"]])) {
+      # This path is for older Seurat objects (primarily v2/v3)
+      hvg <- seurat@assays[["RNA"]]@var.features
+    } else if ("var.features" %in% colnames(seurat@assays[["RNA"]]@meta.data)) {
+      varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
+      hvg <- varf[!is.na(varf)]
+    } else {
+      stop("Could not find variable features in expected locations.")
+    }
+
+    pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = hvg)
+    res_list[[paste0("Pseudobulk_hvg", i)]] <- process_pseudobulk_fig(pb_norm, labels)
+
+    pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = i)
+    res_list[[paste0("Pseudobulk_unsup_hvg", i)]] <- process_pseudobulk_fig(pb_norm, labels)
+
+    res_list[[paste0("MOFA_hvg", i, "_15_factors")]] <- process_mofa_bulk_fig(pb_norm, metadata = metadata, labels, num_factors = 15)
+
+    if (GloScope) {
+      gloscope_dist_file <- file.path(path_data, paste0(ds, "_gloscope_hvg", i, "_pcadims50_dists.rds"))
+
+      res_list[[paste0("GloScope_hvg", i, "_pcadims50")]][["exec_time"]] <- exec_time(
+        res_list[[paste0("GloScope_hvg", i, "_pcadims50")]] <- process_gloscope_fig(seurat, metadata, seurat@misc$label_col, gloscope_dist_file = gloscope_dist_file)
+      )
+      res_list[[paste0("GloScope_hvg", i, "_pcadims50", "_sqrtmat")]] <- process_gloscope_sqrtmat_fig(metadata, seurat@misc$label_col, gloscope_dist_file = gloscope_dist_file)
+    }
+  }
+
+
+  for (i in c(1000, 2000, 5000)) {
+    if (grepl("GongSharma", ds)) {
+      ds_unif <- "GongSharma_all"
+      files <- list(
+        mrvi_dist_file = file.path(path_data, paste0(ds_unif, "_hvg", i, "_mrvi_dists.feather")),
+        scpoli_emb_file = file.path(path_data, paste0(ds_unif, "_hvg", i, "_scpoli_embs.feather")),
+        pilot_dist_file = file.path(path_data, paste0(ds_unif, "_hvg", i, "_pilot_dists.feather"))
+      )
+    } else {
+      files <- list(
+        mrvi_dist_file = file.path(path_data, paste0(ds, "_hvg", i, "_mrvi_dists.feather")),
+        scpoli_emb_file = file.path(path_data, paste0(ds, "_hvg", i, "_scpoli_embs.feather")),
+        pilot_dist_file = file.path(path_data, paste0(ds, "_hvg", i, "_pilot_dists.feather"))
+      )
+    }
+
+    if (MrVI) {
+      # MrVI
+      res_list[[paste0("MrVI_hvg", i)]] <- process_mrvi_fig(files[["mrvi_dist_file"]], labels)
+    }
+
+    if (scPoli) {
+      res_list[[paste0("scPoli_hvg", i)]] <- process_scpoli_fig(files[["scpoli_emb_file"]], labels)
+    }
+
+    if (PILOT) {
+      res_list[[paste0("PILOT_hvg", i)]] <- process_pilot_fig(files[["pilot_dist_file"]], labels)
+    }
+  }
+
 
   return(res_list)
 }
@@ -1147,6 +1213,7 @@ process_coda_fig <- function(seurat,
       feat_mat <- df_freq
     }
 
+    top_hvct <- NULL
     if (!is.null(ECODA_top_n_hvct)) {
       top_hvct <- get_ct_var(feat_mat, show_plot = FALSE, descending = var_ct_desc) %>%
         get_hvcs(top_n_hvcs = ECODA_top_n_hvct, variance_threshold = NULL)
@@ -1158,7 +1225,7 @@ process_coda_fig <- function(seurat,
       feat_mat <- feat_mat[, top_hvct]
     }
 
-    if (hvct_recalc_clr) {
+    if (hvct_recalc_clr & !is.null(top_hvct)) {
       feat_mat <- df_counts[, top_hvct] %>%
         impute_zeros(clr_zero_impute_method = clr_zero_impute_method, clr_zero_impute_num = clr_zero_impute_num) %>%
         calc_perc_df() %>%
@@ -1349,20 +1416,16 @@ process_scitd_fig <- function(seurat,
 
   # form the tensor from the data
   pbmc_container <- form_tensor(pbmc_container,
-    donor_min_cells = 5,
-    norm_method = "trim", scale_factor = 10000,
-    custom_genes = hvg,
-    scale_var = TRUE, var_scale_power = 2
+    custom_genes = hvg
   )
 
   # run the tensor decomposition
   pbmc_container <- run_tucker_ica(pbmc_container,
-    ranks = c(num_factors, num_factors + 5),
-    tucker_type = "regular", rotation_type = "hybrid"
+    ranks = c(num_factors, num_factors + 5)
   )
 
   # get donor scores-metadata associations
-  pbmc_container <- get_meta_associations(pbmc_container, vars_test = c("Sample"), stat_use = "pval")
+  pbmc_container <- get_meta_associations(pbmc_container, vars_test = c("Sample"))
 
   # get significant genes
   # pbmc_container <- get_lm_pvals(pbmc_container)
@@ -1402,14 +1465,15 @@ process_gloscope_fig <- function(seurat,
                                  metadata,
                                  label_col,
                                  gloscope_dist_file,
+                                 n_pca_dims = ncol(seurat@reductions$pca@cell.embeddings),
                                  dens = "KNN",
                                  dist_mat = c("KL"),
-                                 k = 9,
+                                 k = 25,
                                  BPPARAM = BiocParallel::MulticoreParam(workers = parallelly::availableCores() - 2, progressbar = TRUE),
                                  title = "GloScope") {
   if (!file.exists(gloscope_dist_file)) {
     feat_mat <- GloScope::gloscope(
-      embedding_matrix = seurat@reductions$pca@cell.embeddings,
+      embedding_matrix = seurat@reductions$pca@cell.embeddings[, 1:n_pca_dims],
       cell_sample_ids = seurat$Sample,
       dens = dens,
       dist_mat = dist_mat,
@@ -1420,6 +1484,41 @@ process_gloscope_fig <- function(seurat,
   } else {
     feat_mat <- readRDS(gloscope_dist_file)
   }
+
+  samples <- row.names(feat_mat)
+  sample_names_starting_with_digit <- grepl("^\\d", samples)
+  if (any(sample_names_starting_with_digit)) {
+    samples[grepl("^\\d", samples)] <- paste0("g", samples[grepl("^\\d", samples)])
+  }
+  samples <- gsub("-", "_", samples)
+
+  labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
+
+  res <- list()
+  # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["feat_mat"]] <- feat_mat
+  res[["dist_mat"]] <- feat_mat
+
+  return(res)
+}
+
+
+process_gloscope_sqrtmat_fig <- function(metadata,
+                                         label_col,
+                                         gloscope_dist_file,
+                                         title = "GloScope") {
+  if (!file.exists(gloscope_dist_file)) {
+    stop(paste(gloscope_dist_file, "not found!"))
+  } else {
+    feat_mat <- readRDS(gloscope_dist_file)
+  }
+
+  feat_mat <- sqrt(feat_mat)
+
+  # As suggested here:
+  # https://github.com/epurdom/GloScope/issues/3
+  feat_mat[is.na(feat_mat)] <- 0
 
   samples <- row.names(feat_mat)
   sample_names_starting_with_digit <- grepl("^\\d", samples)
@@ -1685,4 +1784,14 @@ create_example_seurat_object <- function(
 
   # Return the Seurat object
   return(seurat_object)
+}
+
+
+exec_time <- function(fun) {
+  start_time <- Sys.time()
+  fun
+  end_time <- Sys.time()
+  time_taken <- end_time - start_time
+  time_taken
+  return(time_taken)
 }
