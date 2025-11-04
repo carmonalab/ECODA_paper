@@ -146,7 +146,6 @@ for (ds in names(datasets)) {
 ```
 
 
-
 ```{r}
 label_list <- list()
 for (ds in names(datasets)) {
@@ -394,6 +393,7 @@ if (any(elem_null)) {
 df_results_list <- list()
 ```
 
+
 # ---------------------------------------------------------------
 # ---------------------------------------------------------------
 
@@ -428,9 +428,6 @@ df_results <- imap_dfr(bmark_result_list, ~ {
     }
   })
 })
-
-df_results$method <- gsub("ECODA_highres", "ECODA_author_HL", df_results$method)
-df_results$method <- gsub("ECODA_lowres", "ECODA_author_LR", df_results$method)
 ```
 
 ## Show + sort all tested conditions
@@ -1647,6 +1644,48 @@ for (s in c("anosim_score", "mod_score", "cluster_score")) {
 }
 ```
 
+# ---------------------------------------------------------------
+# ---------------------------------------------------------------
+
+# Plot execution times
+
+## Read execution times from python
+
+```{r}
+p_exec_times <- read.table(
+  file.path(getwd(), "data", "execution_times.txt"),
+  sep = " ",
+  skip = 2
+)
+p_exec_times
+```
+
+
+```{r}
+# df_exec_time <- imap_dfr(bmark_result_list, ~ {
+#   dataset_name <- .y
+#   imap_dfr(.x, ~ {
+#     method_name <- .y
+#     if ("exec_time" %in% names(.x)) {
+#       n_samples <- nrow(.x$feat_mat)
+#       n_features <- ncol(.x$feat_mat)
+#       
+#       imap_dfr(.x$scores, ~ {
+#         tibble(
+#           dataset = dataset_name,
+#           method = method_name,
+#           score = .y,
+#           value = .x,
+#           n_samples = n_samples,
+#           n_features = n_features
+#         )
+#       })
+#     } else {
+#       tibble() # Return an empty tibble if "scores" is not found
+#     }
+#   })
+# })
+```
 
 
 # ---------------------------------------------------------------
