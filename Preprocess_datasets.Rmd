@@ -104,30 +104,44 @@ datasets <- list(
     )
   ),
   
-  "GongSharma_age_females_cmvneg" = list(
-    file_path = file.path(path_nas, "GongSharma_2024_PrePrintTBD", "output", "Gongsharma_age_females_cmvneg.h5ad"),
+    "GongSharma_all" = list(
+    file_path = file.path(path_nas, "GongSharma_2024_PrePrintTBD", "output", "Gongsharma_all.h5ad"),
     tissue = "Blood",
     normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
     sample_col = "Sample",
     meta_cols_keep = c(
       "Sample", # Sample identifier
       "sample.subjectAgeAtDraw", # Main biological grouping
+      "subject.cmv", # Main biological grouping
+      "subject.biologicalSex", # Main biological grouping
       "AIFI_L1", "AIFI_L3" # Author annotations
     )
   ),
   
-  "GongSharma_cmv_females" = list(
-    file_path = file.path(path_nas, "GongSharma_2024_PrePrintTBD", "output", "Gongsharma_cmv_females.h5ad"),
-    tissue = "Blood",
-    normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
-    sample_col = "Sample",
-    meta_cols_keep = c(
-      "Sample", # Sample identifier
-      "subject.cmv", # Main biological grouping
-      "sample.subjectAgeAtDraw", # Additional biological groupings
-      "AIFI_L1", "AIFI_L3" # Author annotations
-    )
-  ),
+  # "GongSharma_age_females_cmvneg" = list(
+  #   file_path = file.path(path_nas, "GongSharma_2024_PrePrintTBD", "output", "Gongsharma_age_females_cmvneg.h5ad"),
+  #   tissue = "Blood",
+  #   normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
+  #   sample_col = "Sample",
+  #   meta_cols_keep = c(
+  #     "Sample", # Sample identifier
+  #     "sample.subjectAgeAtDraw", # Main biological grouping
+  #     "AIFI_L1", "AIFI_L3" # Author annotations
+  #   )
+  # ),
+  # 
+  # "GongSharma_cmv_females" = list(
+  #   file_path = file.path(path_nas, "GongSharma_2024_PrePrintTBD", "output", "Gongsharma_cmv_females.h5ad"),
+  #   tissue = "Blood",
+  #   normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
+  #   sample_col = "Sample",
+  #   meta_cols_keep = c(
+  #     "Sample", # Sample identifier
+  #     "subject.cmv", # Main biological grouping
+  #     "sample.subjectAgeAtDraw", # Additional biological groupings
+  #     "AIFI_L1", "AIFI_L3" # Author annotations
+  #   )
+  # ),
   
   "Kfoury" = list(
     file_path = file.path(path_nas, "Kfoury_2021_34719426", "output", "Kfoury_2021_34719426.rds"),
@@ -342,7 +356,7 @@ for (ds in names(datasets)) {
     if (endsWith(input_file_path, ".rds")) {
       seurat <- readRDS(file = input_file_path)
     } else if (endsWith(input_file_path, ".h5ad")) {
-      seurat <- load_h5ad_to_seurat(input_file_path)
+      seurat <- load_h5ad_to_seurat(file_name = input_file_path)
     }
     
     
@@ -435,7 +449,7 @@ for (ds in names(datasets)) {
             NULL # Return NULL to signify a failure
           }, error = function(er) {
             # This block runs if an error occurs
-            cat("  Error occurred, retrying...\n")
+            cat(er, "  Error occurred, retrying...\n")
             NULL # Return NULL to signify a failure
           })
           
@@ -584,7 +598,7 @@ df_updated <- left_join(df_large, df_small, by = "sample_id", suffix = c("", "_n
 # Create clearcut age for GongSharma
 
 ```{r}
-ds <- "GongSharma_age_females_cmvneg"
+ds <- "GongSharma_all"
 
 input_file_path <- datasets[[ds]][["file_path"]]
 
@@ -597,6 +611,22 @@ seurat$age <- as.factor(ifelse(seurat$sample.subjectAgeAtDraw < 50, "young", "ol
 
 saveRDS(seurat, file = processed_file_path)
 ```
+
+
+<!-- # ```{r} -->
+<!-- # ds <- "GongSharma_age_females_cmvneg" -->
+<!-- # -->
+<!-- # input_file_path <- datasets[[ds]][["file_path"]] -->
+<!-- # -->
+<!-- # file_name_no_ending <- gsub(".rds|.h5ad", "", basename(input_file_path)) -->
+<!-- # processed_file_path <- file.path(getwd(), "data", paste0(file_name_no_ending, "_ECODAprocessed.rds")) -->
+<!-- # -->
+<!-- # seurat <- readRDS(processed_file_path) -->
+<!-- # -->
+<!-- # seurat$age <- as.factor(ifelse(seurat$sample.subjectAgeAtDraw < 50, "young", "old")) -->
+<!-- # -->
+<!-- # saveRDS(seurat, file = processed_file_path) -->
+<!-- # ``` -->
 
 
 # Export datasets without author annotation
