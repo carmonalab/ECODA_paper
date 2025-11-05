@@ -920,7 +920,7 @@ run_benchmark_analysis <- function(seurat,
   res_list <- list()
 
   # Files preprocessed with python
-  for (i in c(1000, 2000, 5000)) {
+  for (i in c(1000, 2000, 3000)) {
     if (grepl("GongSharma", ds)) {
       ds_unif <- "GongSharma_all"
       files <- list(
@@ -952,7 +952,8 @@ run_benchmark_analysis <- function(seurat,
   metadata <- get_metadata(seurat)
   metadata[[sample_col]] <- gsub("-", "_", metadata[[sample_col]])
 
-  labels <- get_labels(seurat, seurat@misc$label_col)
+  label_col <- label_col
+  labels <- get_labels(seurat, label_col)
   names(labels) <- metadata[[sample_col]]
 
   if ("var.features" %in% slotNames(seurat@assays[["RNA"]])) {
@@ -1066,7 +1067,7 @@ run_benchmark_analysis <- function(seurat,
       if (scITD) {
         # scITD
         res_list[[paste0("scITD_hvg2000_factors", i)]][["exec_time"]] <- exec_time(
-          res_list[[paste0("scITD_hvg2000_factors", i)]] <- process_scitd_fig(seurat, ct_col = seurat@misc$low_res_ct_col, label_col = seurat@misc$label_col, hvg, num_factors = i)
+          res_list[[paste0("scITD_hvg2000_factors", i)]] <- process_scitd_fig(seurat, ct_col = seurat@misc$low_res_ct_col, label_col = label_col, hvg, num_factors = i)
         )
       }
     }
@@ -1074,17 +1075,22 @@ run_benchmark_analysis <- function(seurat,
 
   if (GloScope) {
     for (n_pca_dims in gloscope_n_pca_dims) {
-      gloscope_dist_file <- file.path(path_data, paste0(ds, "_gloscope_hvg2000_pcadims", n_pca_dims, "_dists.rds"))
+      if (grepl("GongSharma", ds)) {
+        ds_unif <- "GongSharma_all"
+        gloscope_dist_file <- file.path(path_data, paste0(ds, "_gloscope_hvg2000_pcadims", n_pca_dims, "_dists.rds"))
+      } else {
+        gloscope_dist_file <- file.path(path_data, paste0(ds, "_gloscope_hvg2000_pcadims", n_pca_dims, "_dists.rds"))
+      }
 
       res_list[[paste0("GloScope_hvg2000_pcadims", n_pca_dims)]][["exec_time"]] <- exec_time(
-        res_list[[paste0("GloScope_hvg2000_pcadims", n_pca_dims)]] <- process_gloscope_fig(seurat, metadata, seurat@misc$label_col, gloscope_dist_file = gloscope_dist_file, n_pca_dims = n_pca_dims)
+        res_list[[paste0("GloScope_hvg2000_pcadims", n_pca_dims)]] <- process_gloscope_fig(seurat, metadata, label_col, gloscope_dist_file = gloscope_dist_file, n_pca_dims = n_pca_dims)
       )
-      res_list[[paste0("GloScope_hvg2000_pcadims", n_pca_dims, "_sqrtmat")]] <- process_gloscope_sqrtmat_fig(metadata, seurat@misc$label_col, gloscope_dist_file = gloscope_dist_file)
+      res_list[[paste0("GloScope_hvg2000_pcadims", n_pca_dims, "_sqrtmat")]] <- process_gloscope_sqrtmat_fig(metadata, label_col, gloscope_dist_file = gloscope_dist_file)
     }
   }
 
 
-  for (i in c(1000, 5000)) {
+  for (i in c(1000, 3000)) {
     if (i > 2000) {
       # Memory critical steps
       gc()
@@ -1096,7 +1102,7 @@ run_benchmark_analysis <- function(seurat,
       gc()
       seurat <- ScaleData(seurat)
       gc()
-      # Needs a lot of memory for 5000 HVGs
+      # Needs a lot of memory for 3000 HVGs
       seurat <- RunPCA(seurat, dims = 1:50, verbose = FALSE)
       gc()
     }
@@ -1120,17 +1126,22 @@ run_benchmark_analysis <- function(seurat,
     res_list[[paste0("MOFA_hvg", i, "_15_factors")]] <- process_mofa_bulk_fig(pb_norm, metadata = metadata, labels, num_factors = 15)
 
     if (GloScope) {
-      gloscope_dist_file <- file.path(path_data, paste0(ds, "_gloscope_hvg", i, "_pcadims50_dists.rds"))
+      if (grepl("GongSharma", ds)) {
+        ds_unif <- "GongSharma_all"
+        gloscope_dist_file <- file.path(path_data, paste0(ds_unif, "_gloscope_hvg", i, "_pcadims50_dists.rds"))
+      } else {
+        gloscope_dist_file <- file.path(path_data, paste0(ds, "_gloscope_hvg", i, "_pcadims50_dists.rds"))
+      }
 
       res_list[[paste0("GloScope_hvg", i, "_pcadims50")]][["exec_time"]] <- exec_time(
-        res_list[[paste0("GloScope_hvg", i, "_pcadims50")]] <- process_gloscope_fig(seurat, metadata, seurat@misc$label_col, gloscope_dist_file = gloscope_dist_file)
+        res_list[[paste0("GloScope_hvg", i, "_pcadims50")]] <- process_gloscope_fig(seurat, metadata, label_col, gloscope_dist_file = gloscope_dist_file)
       )
-      res_list[[paste0("GloScope_hvg", i, "_pcadims50", "_sqrtmat")]] <- process_gloscope_sqrtmat_fig(metadata, seurat@misc$label_col, gloscope_dist_file = gloscope_dist_file)
+      res_list[[paste0("GloScope_hvg", i, "_pcadims50", "_sqrtmat")]] <- process_gloscope_sqrtmat_fig(metadata, label_col, gloscope_dist_file = gloscope_dist_file)
     }
   }
 
 
-  for (i in c(1000, 2000, 5000)) {
+  for (i in c(1000, 2000, 3000)) {
     if (grepl("GongSharma", ds)) {
       ds_unif <- "GongSharma_all"
       files <- list(
