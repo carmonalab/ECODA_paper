@@ -160,6 +160,88 @@ for (ds in names(datasets)) {
 ```
 
 
+# DELETE!!!
+
+```{r}
+result_list1 <- result_list
+result_list <- result_list1
+```
+
+
+```{r}
+sample_col <- "Sample"
+
+for (ds in names(datasets)) {
+  print(ds)
+  
+  seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
+  
+  seurat <- replace_HiTMElayer3_annot(seurat, thresh = 0.1)
+  
+  seurat@misc$label_col <- datasets[[ds]][["label_col"]]
+  seurat@misc$low_res_ct_col <- datasets[[ds]][["low_res_ct_col"]]
+  seurat@misc$hi_res_ct_col <- datasets[[ds]][["hi_res_ct_col"]]
+  
+  
+  # Sample names starting with digits are not allowed in seurat
+  sample_names_starting_with_digit <- grepl("^\\d", unique(seurat@meta.data[[sample_col]]))
+  if (any(sample_names_starting_with_digit)) {
+    seurat@meta.data[[sample_col]][grepl("^\\d", seurat@meta.data[[sample_col]])] <- paste0("g", seurat@meta.data[[sample_col]][grepl("^\\d", seurat@meta.data[[sample_col]])])
+  }
+  
+  metadata <- get_metadata(seurat)
+  metadata[[sample_col]] <- gsub("-", "_", metadata[[sample_col]])
+  
+  label_col <- seurat@misc$label_col
+  labels <- get_labels(seurat, label_col)
+  names(labels) <- metadata[[sample_col]]
+  
+  if ("var.features" %in% slotNames(seurat@assays[["RNA"]])) {
+    # This path is for older Seurat objects (primarily v2/v3)
+    hvg <- seurat@assays[["RNA"]]@var.features
+  } else if ("var.features" %in% colnames(seurat@assays[["RNA"]]@meta.data)) {
+    varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
+    hvg <- varf[!is.na(varf)]
+  } else {
+    stop("Could not find variable features in expected locations.")
+  }
+  
+  
+  metadata <- get_metadata(seurat)
+  metadata[[sample_col]] <- gsub("-", "_", metadata[[sample_col]])
+  
+  label_col <- seurat@misc$label_col
+  labels <- get_labels(seurat, label_col)
+  names(labels) <- metadata[[sample_col]]
+  
+  pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = 2000)
+  result_list[["bmark"]][[ds]][["Pseudobulk_unsup_hvg2000"]][["hvgs_sc"]] <- hvg
+  result_list[["bmark"]][[ds]][["Pseudobulk_unsup_hvg2000"]][["hvgs_pb"]] <- colnames(pb_norm)
+  result_list[["bmark"]][[ds]][["Pseudobulk_unsup_hvg2000"]][["hvgs_sc_pb_intersect"]] <- sum(hvg %in% colnames(pb_norm))
+  
+  result_list[[ds]][["Avg_PCA_embedding"]] <- process_avg_pca_embedding_fig(seurat, labels)
+}
+```
+
+```{r}
+for (ds in names(datasets)) {
+  result_list[["bmark"]][[ds]][["Pseudobulk_unsup_hvg2000"]][["hvgs_sc"]] <- result_list[[ds]][["Pseudobulk_unsup_hvg2000"]][["hvgs_sc"]]
+  result_list[["bmark"]][[ds]][["Pseudobulk_unsup_hvg2000"]][["hvgs_pb"]] <- result_list[[ds]][["Pseudobulk_unsup_hvg2000"]][["hvgs_pb"]]
+  result_list[["bmark"]][[ds]][["Pseudobulk_unsup_hvg2000"]][["hvgs_sc_pb_intersect"]] <- result_list[[ds]][["Pseudobulk_unsup_hvg2000"]][["hvgs_sc_pb_intersect"]]
+  
+  result_list[[ds]] <- NULL
+  
+  result_list[["bmark"]][[ds]][["Avg_PCA_embedding"]] <- result_list[[ds]][["Avg_PCA_embedding"]]
+}
+
+
+for (ds in names(datasets)) {
+  result_list[[ds]] <- NULL
+}
+```
+
+
+
 
 # ---------------------------------------------------------------
 
@@ -448,7 +530,9 @@ df_results_list[["Benchmark"]] <- df_results
 
 ## Plot results
 
-```{r fig.height=10, fig.width=14}
+### All methods (overview)
+
+```{r}
 # New facet label names for dose variable
 score.labs <- c("ANOSIM score", "Adjusted rand index", "Modularity score")
 names(score.labs) <- sort(unique(df_results$score))
@@ -478,8 +562,6 @@ ggsave(file.path(path_plots, "benchmark_detailed_barplot.pdf"),
        height = 7, limitsize = FALSE)
 
 
-
-
 df_results %>%
   group_by(score, method) %>%
   summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
@@ -497,54 +579,320 @@ df_results %>%
 ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores_bars.pdf"),
        width = 14,
        height = 7)
+```
 
+### Main methods (benchmark)
 
-
+```{r fig.height=5, fig.width=4}
 filter_methods <- c(
-  "Pseudobulk",
+  "ECODA_authors_HR",
+  "ECODA_authors_HR_NULL",
+  "ECODA_HiTME_HR_layer2",
+  # "ECODA_authors_LR",
+  "Avg_PCA_embedding",
   "Freq_highres",
-  "ECODA_deconv",
-  "ECODA_author_LR",
-  "ECODA_author_HR",
-  "ECODA_high_res_2_PCA_dims",
-  "ECODA_highres_top_varexp0.7",
+  # "ECODA_deconv",
+  "Pseudobulk_10_PCA_dims",
   # "ECODA_seuratres_0.4",
-  "MOFA_2_factors",
-  "scITD_2_factors",
-  "MrVI",
-  "scPoli",
-  "PILOT",
-  "GloScope"
+  "MOFA_hvg2000_factors15",
+  "scITD_hvg2000_factors5",
+  "MrVI_hvg2000",
+  "scPoli_hvg2000",
+  "PILOT_hvg2000",
+  "GloScope_hvg2000_pcadims30_sqrtmat"
 )
 
 library(forcats)
 
-df_results %>%
+df_plot <- df_results %>%
   filter(score == "anosim_score") %>%
   filter(method %in% filter_methods) %>%
-  
+  mutate(method = recode(method,
+                         "ECODA_authors_HR" = "ECODA_authors",
+                         "ECODA_HiTME_HR_layer2" = "ECODA_automated",
+                         "ECODA_authors_HR_NULL" = "ECODA_NULL",
+                         "Pseudobulk_10_PCA_dims" = "Pseudobulk",
+                         "Freq_highres" = "Cell_type_composition_%",
+                         "MOFA_hvg2000_factors15" = "MOFA",
+                         "scITD_hvg2000_factors5" = "scITD",
+                         "MrVI_hvg2000" = "MrVI",
+                         "scPoli_hvg2000" = "scPoli",
+                         "scITD_2_factors" = "scITD",
+                         "PILOT_hvg2000" = "PILOT",
+                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope"))
+
+df_plot %>%
+  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
+  geom_point(position = "identity", alpha = 0.6, size = 0.8) +
+  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
+  stat_compare_means(
+    ref.group = "ECODA_authors",
+    method = "wilcox.test",
+    paired = TRUE,
+    angle = 25,
+    aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
+  ) +
+  ylim(c(min(df_plot$value), max(df_plot$value) + 0.05)) +
+  labs(x = "", y = "ANOSIM score") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_refpb.pdf"),
+       width = 4.5,
+       height = 5.5)
+
+
+
+
+df_plot <- df_results %>%
+  filter(score == "cluster_score") %>%
+  filter(method %in% filter_methods) %>%
+  mutate(method = recode(method,
+                         "ECODA_authors_HR" = "ECODA",
+                         "Pseudobulk_10_PCA_dims" = "Pseudobulk",
+                         "Freq_highres" = "Cell_type_composition_%",
+                         "MOFA_hvg2000_factors15" = "MOFA",
+                         "scITD_hvg2000_factors5" = "scITD",
+                         "MrVI_hvg2000" = "MrVI",
+                         "scPoli_hvg2000" = "scPoli",
+                         "scITD_2_factors" = "scITD",
+                         "PILOT_hvg2000" = "PILOT",
+                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope"))
+
+df_plot %>%  
   ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
   geom_point(position = "identity", alpha = 0.6) +
   geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
   stat_compare_means(
-    ref.group = "Pseudobulk",
+    ref.group = "ECODA",
     method = "wilcox.test",
     paired = TRUE,
     angle = 25,
-    aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
+    aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
   ) +
-  labs(x = "", y = "ANOSIM score") +
+  ylim(c(min(df_plot$value), max(df_plot$value) + 0.05)) +
+  labs(x = "", y = "ARI score") +
   theme_classic() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
-ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_refpb.pdf"),
-       width = 7,
-       height = 7)
+
+
+df_plot <- df_results %>%
+  filter(score == "mod_score") %>%
+  filter(method %in% filter_methods) %>%
+  mutate(method = recode(method,
+                         "ECODA_authors_HR" = "ECODA",
+                         "Pseudobulk_10_PCA_dims" = "Pseudobulk",
+                         "Freq_highres" = "Cell_type_composition_%",
+                         "MOFA_hvg2000_factors15" = "MOFA",
+                         "scITD_hvg2000_factors5" = "scITD",
+                         "MrVI_hvg2000" = "MrVI",
+                         "scPoli_hvg2000" = "scPoli",
+                         "scITD_2_factors" = "scITD",
+                         "PILOT_hvg2000" = "PILOT",
+                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope"))
+
+df_plot %>%  
+  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
+  geom_point(position = "identity", alpha = 0.6) +
+  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
+  stat_compare_means(
+    ref.group = "ECODA",
+    method = "wilcox.test",
+    paired = TRUE,
+    angle = 25,
+    aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
+  ) +
+  ylim(c(min(df_plot$value), max(df_plot$value) + 0.05)) +
+  labs(x = "", y = "Modularity score") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+```
+
+
+### ECODA annotation method comparison
+
+```{r fig.height=6, fig.width=5}
+filter_methods <- c(
+  "ECODA_authors_HR",
+  "ECODA_HiTME_HR_layer2",
+  "ECODA_scATOMIC_HR",
+  "ECODA_seuratres_0.4"
+)
+
+df_plot <- df_results %>%
+  filter(score == "anosim_score") %>%
+  filter(method %in% filter_methods) %>%
+  mutate(method = recode(method,
+                         "ECODA_HiTME_HR_layer2" = "ECODA_HiTME",
+                         "ECODA_scATOMIC_HR" = "ECODA_scATOMIC",
+                         "ECODA_seuratres_0.4" = "ECODA_Leiden"))
+  
+p <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
+  geom_point(aes(shape = dataset), size = 2) +
+  scale_shape_manual(values=1:length(unique((df_plot$dataset)))) +
+  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  labs(x = "", y = "Separation score (ANOSIM)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+print(p)
+ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores_ecodaonly.pdf"),
+       width = 4,
+       height = 5)
+
+
+# For appendix
+filter_methods <- c(
+  "ECODA_authors_HR",
+  "ECODA_authors_LR",
+  "ECODA_deconv",
+  "ECODA_HiTME_HR_layer2",
+  "ECODA_HiTME_HR_layer3",
+  "ECODA_scATOMIC_HR",
+  "ECODA_seuratres_0.4",
+  "ECODA_seuratres_2",
+  "ECODA_seuratres_5",
+  "ECODA_seuratres_20"
+)
+
+
+df_plot <- df_results %>%
+  filter(score == "anosim_score") %>%
+  filter(method %in% filter_methods) %>%
+  mutate(method = recode(method,
+                         "ECODA_seuratres_0.4" = "ECODA_leiden_res_0.4",
+                         "ECODA_seuratres_2" = "ECODA_leiden_res_2",
+                         "ECODA_seuratres_5" = "ECODA_leiden_res_5",
+                         "ECODA_seuratres_20" = "ECODA_leiden_res_20"))
+  
+p <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
+  geom_point(position = "identity", alpha = 0.6, size = 1) +
+  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
+  stat_compare_means(
+    ref.group = "ECODA_authors_HR",
+    method = "wilcox.test",
+    paired = TRUE, # Set to FALSE as the groups are not paired
+    angle = 25,
+    label.y = 1,
+    aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
+  ) +
+  labs(x = "", y = "Separation score (ANOSIM)") +
+  ylim(c(min(df_plot$value), max(df_plot$value) + 0.15)) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+print(p)
+ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_refECODAhr.pdf"),
+       width = 4,
+       height = 4.5)
+
+```
+
+### Method parameter tests
+
+```{r fig.height=8, fig.width=14}
+filter_methods <- c(
+  "ECODA_authors_HR",
+  "ECODA_authors_LR",
+  "ECODA_deconv",
+  "ECODA_HiTME_HR_layer2",
+  "ECODA_HiTME_HR_layer3",
+  "ECODA_scATOMIC_HR",
+  "ECODA_seuratres_0.4",
+  "ECODA_seuratres_2",
+  "ECODA_seuratres_5",
+  "ECODA_seuratres_20"
+)
+
+default_methods <- c(
+    "ECODA_authors_HR\\b", 
+    "MOFA_hvg2000_factors15", 
+    "Pseudobulk_10_PCA_dims",
+    "PILOT_hvg2000",
+    "scITD_hvg2000_factors5",
+    "scPoli_hvg2000",
+    "GloScope_hvg2000_pcadims30_sqrtmat",
+    "MrVI_hvg2000"
+)
+default_methods_regex <- paste(default_methods, collapse = "|")
+
+df_results %>%
+  # filter(score == "anosim_score") %>%
+  filter(!grepl("HiTME|scATOMIC|seuratres|ECODA_authors_HR_NULL|ECODA_authors_LR|ECODA_deconv|Freq_highres|varexp|varcts|Avg_PCA", method)) %>%
+  # filter(method %in% filter_methods) %>%
+  # mutate(method = recode(method,
+  #                        "MOFA_2_factors" = "MOFA",
+  #                        "scITD_2_factors" = "scITD",
+  #                        "ECODA_highres" = "ECODA")) %>%
+  
+  # CREATE THE FACETING GROUP COLUMN
+  mutate(
+    method_plot = case_when(
+      grepl("^ECODA_", method) ~ "ECODA",
+      grepl("^MOFA_", method) ~ "MOFA",
+      grepl("^MrVI_", method) ~ "MrVI",
+      grepl("^scITD_", method) ~ "scITD",
+      grepl("^GloScope_", method) ~ "GloScope",
+      grepl("^PILOT_", method) ~ "PILOT",
+      grepl("^scPoli_", method) ~ "scPoli",
+      grepl("^Pseudobulk_", method) ~ "Pseudobulk",
+      TRUE ~ method # Keep any other simple names as they are
+    ),
+    
+    method_plot = factor(method_plot, 
+                         levels = c("ECODA", "Pseudobulk", "MrVI", "GloScope",
+                                    "MOFA", "scITD", "scPoli", "PILOT"))
+  ) %>%
+  
+  group_by(method, score) %>%
+  mutate(mean_value = mean(value[score == "anosim_score"])) %>%
+  ungroup() %>%
+  
+  ggplot(aes(x = fct_reorder(method, mean_value, .desc = TRUE),
+             y = value, 
+             fill = ifelse(grepl(default_methods_regex, method), "cornflowerblue", "gray70"))) +
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar") +
+  labs(x = "", y = "") +
+  theme_classic2(base_size = 12) +
+  theme(axis.text.x = element_markdown(angle = 90, vjust = 1, hjust = 1),
+  panel.grid.major.y = element_line(size = 0.25, linetype = 'solid',
+                                colour = "lightgrey"), 
+  panel.grid.minor.y = element_line(size = 0.25, linetype = 'solid',
+                                colour = "lightgrey")) +
+  scale_fill_identity() +
+  # Highlight default methods
+  scale_x_discrete(labels = function(x) highlight(
+    x,
+    default_methods_regex,
+    "black")
+  ) +
+  # ylim(c(-0.4, 1)) +
+  facet_grid(scales = "free_x",
+             space='free',
+             rows = vars(score),
+             cols = vars(method_plot), # Use the new grouping column for column faceting
+             labeller = labeller(score = score.labs))
+
+
+ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_refECODAhr.pdf"),
+       width = 14,
+       height = 8)
+```
 
 
 
+### Poster figures
 
+```{r fig.height=10, fig.width=14}
+# Poster figure (highlighted)
 
 filter_methods <- c(
   "Pseudobulk",
@@ -562,7 +910,6 @@ filter_methods <- c(
   "PILOT",
   "GloScope"
 )
-
 
 p <- df_results %>%
   filter(score == "anosim_score") %>%
@@ -597,7 +944,6 @@ print(p)
 ggsave(file.path(path_plots, "POSTER_benchmark_summary_barplot_anosim_mainmethods_refECODA.pdf"),
        width = 3.5,
        height = 4)
-
 
 
 
@@ -640,7 +986,6 @@ print(p)
 ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_ECODAvs2HVCvsBULK_refECODA.pdf"),
        width = 2,
        height = 6)
-
 
 
 
@@ -695,84 +1040,11 @@ print(p)
 ggsave(file.path(path_plots, "POSTER_benchmark_summary_barplot_anosim_ecodamethods_refECODA_highres.pdf"),
        width = 3,
        height = 5)
+```
 
+### Other figures (not shown)
 
-
-
-
-p <- df_results %>%
-  filter(score == "anosim_score") %>%
-  filter(method %in% filter_methods) %>%
-  
-  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
-  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
-  stat_summary(fun = mean, geom = "bar", fill = "gray70") +
-  geom_point(position = "identity", alpha = 0.6, size = 1) +
-  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
-  stat_compare_means(
-    ref.group = "ECODA_highres",
-    method = "wilcox.test",
-    paired = TRUE, # Set to FALSE as the groups are not paired
-    angle = 25,
-    label.y = 0.88,
-    aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
-  ) +
-  ylim(c(-0.1, 0.9)) +
-  labs(x = "", y = "Separation score (ANOSIM)") +
-  theme_classic2() +
-  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
-print(p)
-ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_refECODAhr.pdf"),
-       width = 3.5,
-       height = 4)
-
-
-
-
-
-df_results %>%
-  filter(score == "cluster_score") %>%
-  filter(method %in% filter_methods) %>%
-  
-  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
-  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
-  stat_summary(fun = mean, geom = "bar", fill = "gray70") +
-  geom_point(position = "identity", alpha = 0.6) +
-  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
-  stat_compare_means(
-    ref.group = "Pseudobulk",
-    method = "wilcox.test",
-    paired = TRUE,
-    angle = 25,
-    aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
-  ) +
-  labs(x = "", y = "Adjusted Rand Index") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
-
-df_results %>%
-  filter(score == "cluster_score") %>%
-  filter(method %in% filter_methods) %>%
-  
-  ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
-  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
-  stat_summary(fun = mean, geom = "bar", fill = "gray70") +
-  geom_point(position = "identity", alpha = 0.6) +
-  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
-  stat_compare_means(
-    ref.group = "ECODA_highres",
-    method = "wilcox.test",
-    paired = TRUE,
-    angle = 25,
-    aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
-  ) +
-  labs(x = "", y = "Adjusted Rand Index") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
-
-
-
-
+```{r}
 ggplot(df_results, aes(x = method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
   geom_point(aes(shape = dataset), size = 2) +
@@ -788,25 +1060,6 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores.pdf"),
        width = 7,
        height = 7)
 
-
-df_results_ecoda <- df_results[df_results$method %in% c("ECODA_highres", "ECODA_highres_HiTME", "ECODA_highres_HiTME_layer3", "ECODA_highres_scATOMIC"), ]
-
-
-df_results_ecoda %>%
-  filter(score == "anosim_score") %>%
-  
-  ggplot(aes(x = method, y = value)) +
-  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
-  stat_summary(fun = mean, geom = "bar", fill = "gray70") +
-  geom_point(aes(shape = dataset), size = 2) +
-  scale_shape_manual(values=1:length(unique((df_results_ecoda$dataset)))) +
-  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
-  labs(x = "", y = "Separation score (ANOSIM)") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores_ecodaonly.pdf"),
-       width = 5,
-       height = 6)
 
 
 df_results_clustering <- df_results %>%
@@ -863,15 +1116,6 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_clustering.pdf"),
 df_results_mod <- df_results %>%
   filter(score == "mod_score")
 
-# Example assuming 'data' is your dataframe
-anova_result <- aov(value ~ method, data = df_results_mod)
-summary(anova_result)
-stat.test <- rstatix::tukey_hsd(anova_result)
-stat.test
-stat.test$p.adj <- round(stat.test$p.adj, 3)
-
-
-
 p <- ggplot(df_results_mod, aes(x = method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
   stat_compare_means(
@@ -892,8 +1136,8 @@ print(p)
 ggsave(file.path(path_plots, "benchmark_summary_barplot_modularity.pdf"),
        width = 7,
        height = 6)
-
 ```
+
 
 
 ## Plot feature selection
@@ -904,17 +1148,21 @@ Different daatasets can do with a different number of highly variable cell types
 ```{r}
 df_results_sub <- df_results %>%
   filter(score == "anosim_score") %>%
-  filter(grepl("ECODA_hi", method) & !grepl("HiTME|scATOMIC|PCA", method)) %>%
-  mutate(method = gsub("ECODA_highres_", "", method)) %>%
+  filter(grepl("ECODA_authors_HR", method) & !grepl("HiTME|scATOMIC|PCA|NULL|most", method)) %>%
+  mutate(method = recode(method,
+                         "ECODA_authors_HR" = "100",
+                         "ECODA_authors_HR_top_varexp0" = "2most_varcts")) %>%
   mutate(method = if_else(
     grepl("^top_varexp0\\.\\d", method),
     paste0(as.integer(gsub("top_varexp0\\.", "", method)) * 10),
     method
   )) %>%
-  mutate(method = gsub("ECODA_highres", "100", method)) %>%
+  mutate(method = gsub("ECODA_authors_HR", "", method)) %>%
   mutate(method = gsub("top_varexp0", "2most_varcts", method)) %>%
   mutate(method = fct_relevel(method)) %>%
   mutate(method = factor(method, levels = mixedsort(levels(method))))
+
+unique(df_results_sub$method)
 
 p1 <- df_results_sub %>%
   ggplot(aes(x = method, y = value)) +
@@ -1644,47 +1892,185 @@ for (s in c("anosim_score", "mod_score", "cluster_score")) {
 }
 ```
 
+
+## Overlap between HVGs from single-cell and bulk
+```{r}
+# test <- c()
+test_int <- c()
+test_anosim <- c()
+for (ds in names(datasets)) {
+  # test <- c(test, result_list[[ds]][["Pseudobulk_unsup_hvg2000"]][["hvgs_sc_pb_intersect"]])
+  test_int <- c(test_int, result_list[["bmark"]][[ds]][["Pseudobulk_unsup_hvg2000"]]$hvgs_sc_pb_intersect)
+  test_anosim <- c(test_anosim, result_list[["bmark"]][[ds]][["Pseudobulk_unsup_hvg2000"]]$scores$anosim_score)
+}
+# plot(test)
+plot(test_int, test_anosim)
+```
+
 # ---------------------------------------------------------------
 # ---------------------------------------------------------------
 
 # Plot execution times
 
-## Read execution times from python
+## Get execution times from R
 
 ```{r}
-p_exec_times <- read.table(
-  file.path(getwd(), "data", "execution_times.txt"),
-  sep = " ",
-  skip = 2
-)
-p_exec_times
+r_exec_times_path <- file.path(getwd(), "data", "r_execution_times.txt")
+
+if (!file.exists(r_exec_time_path)) {
+  r_exec_times <- data.frame(
+    dataset = character(),
+    method = character(),
+    time_secs = numeric(),
+    n_samples = numeric(),
+    n_features = numeric()
+  )
+  
+  bmark_result_list <- result_list[["bmark"]]
+  
+  ds_test <- names(bmark_result_list)
+  
+  # Exclude GongSharma_all_cmv and GongSharma_all_sex because they are the same 
+  # dataset as GongSharma_all_age (so would just be replicated)
+  ds_test <- ds_test[!ds_test %in% c("GongSharma_all_cmv", "GongSharma_all_sex")]
+  
+  for (ds in ds_test) {
+    for (met in names(bmark_result_list[[ds]])) {
+      if ("exec_time" %in% names(bmark_result_list[[ds]][[met]])) {
+        temp <- data.frame(
+          dataset = ds,
+          method = met,
+          time_secs = as.numeric(bmark_result_list[[ds]][[met]][["exec_time"]], units = "secs"),
+          n_samples = nrow(bmark_result_list[[ds]][[met]][["feat_mat"]]),
+          n_features = ncol(bmark_result_list[[ds]][[met]][["feat_mat"]])
+        )
+        
+        r_exec_times <- rbind(r_exec_times, temp)
+      }
+    }
+  }
+  
+  r_exec_times$dataset[r_exec_times$dataset == "GongSharma_all_age"] <- "GongSharma_all"
+  
+  saveRDS(object = r_exec_times, r_exec_times_path)
+} else {
+  r_exec_times <- readRDS(r_exec_times_path)
+}
 ```
 
 
+## Read execution times from python
+
 ```{r}
-# df_exec_time <- imap_dfr(bmark_result_list, ~ {
-#   dataset_name <- .y
-#   imap_dfr(.x, ~ {
-#     method_name <- .y
-#     if ("exec_time" %in% names(.x)) {
-#       n_samples <- nrow(.x$feat_mat)
-#       n_features <- ncol(.x$feat_mat)
-#       
-#       imap_dfr(.x$scores, ~ {
-#         tibble(
-#           dataset = dataset_name,
-#           method = method_name,
-#           score = .y,
-#           value = .x,
-#           n_samples = n_samples,
-#           n_features = n_features
-#         )
-#       })
-#     } else {
-#       tibble() # Return an empty tibble if "scores" is not found
-#     }
-#   })
-# })
+p_exec_times_path <- file.path(getwd(), "data", "p_execution_times.txt")
+
+if (!file.exists(p_exec_times_path)) {
+  p_exec_times <- read.table(
+    file.path(getwd(), "data", "execution_times_formatted.txt"),
+    header = TRUE
+  )
+  p_exec_times$n_samples <- 0
+  p_exec_times$n_features <- 0
+  
+  for (ds in unique(p_exec_times$dataset)) {
+    p_exec_times$n_samples[p_exec_times$dataset == ds] <- r_exec_times$n_samples[r_exec_times$dataset == ds][1]
+    p_exec_times$n_features[p_exec_times$dataset == ds] <- r_exec_times$n_features[r_exec_times$dataset == ds][1]
+  }
+  
+  saveRDS(object = p_exec_times, p_exec_times_path)
+} else {
+  p_exec_times <- readRDS(p_exec_times_path)
+}
+```
+
+
+## Combine and get actual cell numbers used per dataset
+
+```{r}
+exec_times_path <- file.path(getwd(), "data", "exec_times.rds")
+
+if (!file.exists(exec_times_path)) {
+  exec_times <- rbind(r_exec_times, p_exec_times)
+  exec_times$n_cells <- 0
+  
+  dss <- names(datasets)
+  dss <- dss[!dss %in% c("GongSharma_all_cmv", "GongSharma_all_sex")]
+  
+  for (ds in dss) {
+    seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
+    
+    if (ds == "GongSharma_all_age") ds <- "GongSharma_all"
+    
+    exec_times$n_cells[exec_times$dataset == ds] <- nrow(seurat@meta.data)
+  }
+  
+    saveRDS(object = exec_times, exec_times_path)
+} else {
+  exec_times <- readRDS(exec_times_path)
+}
+```
+
+```{r}
+unique(exec_times$method)
+```
+
+## Plot
+
+```{r}
+
+filter_methods <- c(
+  "ECODA_authors_HR",
+  "Pseudobulk_hvg2000",
+  "MOFA_hvg2000_factors15",
+  "scITD_hvg2000_factors15",
+  "GloScope_hvg2000_pcadims50",
+  "MrVI_hvg2000",
+  "scPoli_hvg2000",
+  "PILOT_hvg2000"
+)
+
+library(scales)
+library(directlabels)
+
+scientific_A_10n <- function(x) {
+  s <- scales::scientific_format(digits = 2)(x)  # get scientific notation
+  s_converted <- gsub("e\\+", " %*% 10^", s)  # replace 'e' with plotmath notation
+  return(parse(text = s_converted))  # return as plotmath expression
+}
+
+df %>%
+  filter(method %in% filter_methods) %>%
+  mutate(method = recode(method,
+                         "ECODA_authors_HR" = "ECODA",
+                         "Pseudobulk_hvg2000" = "Pseudobulk",
+                         "MOFA_hvg2000_factors15" = "MOFA",
+                         "scITD_hvg2000_factors15" = "scITD",
+                         "GloScope_hvg2000_pcadims50" = "GloScope",
+                         "MrVI_hvg2000" = "MrVI",
+                         "scPoli_hvg2000" = "scPoli",
+                         "PILOT_hvg2000" = "PILOT")) %>%
+  ggplot(aes(x = n_cells, y = time_secs, color = method)) +
+  # geom_line() +
+  geom_smooth(method = "lm", se = FALSE, size = 0.7) +
+  geom_point(shape = 4, size = 1, stroke = 1.25) +
+  labs(x = "Number of cells",
+       y = "Time (s)") +
+  theme_minimal() +
+  scale_x_continuous(
+    breaks = scales::pretty_breaks(n = 5),  # Generate breaks
+    labels = function(x) sapply(x, scientific_A_10n),  # Apply custom label function to breaks
+    limits = c(min(exec_times$n_cells), max(exec_times$n_cells) * 1.15)
+  ) +
+  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
+                labels = trans_format("log10", math_format(10^.x))) +
+  geom_dl(aes(label = method),
+          method = list(dl.combine("last.points"), hjust = -0.1, cex = 0.8),
+          cex = 1) +
+  # xlim(min(exec_times$n_cells), max(exec_times$n_cells) * 1.15) +
+  NoLegend()
+ggsave(file.path(path_plots, "benchmark_exec_times.pdf"),
+       width = 6,
+       height = 3.5, limitsize = FALSE)
 ```
 
 
