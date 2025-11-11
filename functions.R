@@ -891,6 +891,7 @@ run_analyses <- function(result_list,
   return(result_list)
 }
 
+
 #----------------------------------------------------------->
 run_benchmark_analysis <- function(seurat,
                                    ds,
@@ -952,7 +953,7 @@ run_benchmark_analysis <- function(seurat,
   metadata <- get_metadata(seurat)
   metadata[[sample_col]] <- gsub("-", "_", metadata[[sample_col]])
 
-  label_col <- label_col
+  label_col <- seurat@misc$label_col
   labels <- get_labels(seurat, label_col)
   names(labels) <- metadata[[sample_col]]
 
@@ -978,6 +979,8 @@ run_benchmark_analysis <- function(seurat,
     pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = 2000)
     res_list[["Pseudobulk_unsup_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
   }
+
+  res_list[["Avg_PCA_embedding"]] <- process_avg_pca_embedding_fig(seurat, labels)
 
   if (ECODA_deconv) {
     # Deconvolute using EPIC
@@ -1077,7 +1080,7 @@ run_benchmark_analysis <- function(seurat,
     for (n_pca_dims in gloscope_n_pca_dims) {
       if (grepl("GongSharma", ds)) {
         ds_unif <- "GongSharma_all"
-        gloscope_dist_file <- file.path(path_data, paste0(ds, "_gloscope_hvg2000_pcadims", n_pca_dims, "_dists.rds"))
+        gloscope_dist_file <- file.path(path_data, paste0(ds_unif, "_gloscope_hvg2000_pcadims", n_pca_dims, "_dists.rds"))
       } else {
         gloscope_dist_file <- file.path(path_data, paste0(ds, "_gloscope_hvg2000_pcadims", n_pca_dims, "_dists.rds"))
       }
@@ -1282,6 +1285,30 @@ process_pseudobulk_fig <- function(feat_mat,
 }
 
 
+process_avg_pca_embedding_fig <- function(seurat,
+                                          labels,
+                                          sample_col = "Sample",
+                                          title = "Avg_PCA_embedding") {
+  feat_mat <- as.data.frame(seurat@reductions$pca@cell.embeddings)
+  feat_mat$Sample <- seurat@meta.data[[sample_col]]
+
+  feat_mat <- feat_mat %>%
+    group_by(Sample) %>%
+    summarise(across(starts_with("PC_"), mean)) %>%
+    ungroup() %>%
+    column_to_rownames(var = "Sample")
+
+  res <- list()
+  # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["feat_mat"]] <- feat_mat
+  res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+
+  return(res)
+}
+
+
+
 process_mofa_bulk_fig <- function(pb_norm,
                                   metadata,
                                   labels,
@@ -1320,6 +1347,7 @@ process_mofa_bulk_fig <- function(pb_norm,
 
   MOFAobject <- run_mofa(MOFAobject, use_basilisk = FALSE, save_data = FALSE)
 
+  # feat_mat <- get_factors(MOFAobject, as.data.frame = T)
   feat_mat <- as.data.frame(MOFAobject@expectations[["Z"]])
 
   res <- list()
