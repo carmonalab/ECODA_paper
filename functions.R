@@ -64,12 +64,14 @@ calc_sep_score <- function(df,
                            knn_k = NULL) {
   # sil_score <- round(calc_sil(df, labels), 3)
   mod_score <- unlist(round(calc_modularity(df, labels, knn_k), 3))
+  mod_knn3_score <- unlist(round(calc_modularity(df, labels, 3), 3))
   cluster_score <- clust_eval(matrix = df, labels)
   anosim_score <- vegan::anosim(x = df, grouping = labels, distance = "euclidean")[["statistic"]]
 
   res <- list(
     # sil_score = sil_score,
     mod_score = mod_score,
+    mod_knn3_score = mod_knn3_score,
     anosim_score = anosim_score,
     cluster_score = cluster_score
   )
@@ -442,6 +444,20 @@ DESeq2.normalize <- function(matrix,
 }
 
 
+
+
+exec_time <- function(fun) {
+  start_time <- Sys.time()
+  fun
+  end_time <- Sys.time()
+  time_taken <- end_time - start_time
+  time_taken
+  return(time_taken)
+}
+
+
+
+
 FindClusters_multi <- function(seurat,
                                res_broad = c(0.1, 0.5, 1, 2, 5, 10, 20, 50, 100),
                                res_broad_2sub = c(), # c(0.1, 0.5),
@@ -553,6 +569,9 @@ get_ct_comp_df_seurat <- function(seurat, sample_col, ct_col) {
 }
 
 
+# get_ct_var and helpers ----
+
+
 get_ct_var <- function(df,
                        show_plot = TRUE,
                        plot_title = "",
@@ -637,24 +656,6 @@ select_by_variance_explained <- function(df_var, variance_threshold) {
 }
 
 
-get_pb <- function(seurat, sample_col = "Sample", hvg = NULL) {
-  pb <- as.matrix(AggregateExpression(seurat, group.by = sample_col, assays = "RNA")[["RNA"]])
-  colnames(pb) <- gsub("-", "_", colnames(pb))
-  if (!is.null(hvg)) {
-    pb <- pb[hvg, ]
-  }
-  return(pb)
-}
-
-
-get_pb_deseq2 <- function(seurat, sample_col = "Sample", hvg = NULL, n_hvg = 2000) {
-  pb <- get_pb(seurat, sample_col = sample_col, hvg = hvg)
-  metadata <- get_metadata(seurat)
-  metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
-  pb_norm <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = n_hvg))
-  return(pb_norm)
-}
-
 
 varmeanplot <- function(data, plot_title = "", smooth_method = "lm", label_points = FALSE) {
   p <- ggplot(data, aes(x = Relative_abundance, y = Variance)) +
@@ -673,6 +674,29 @@ varmeanplot <- function(data, plot_title = "", smooth_method = "lm", label_point
 }
 
 
+# ----
+
+
+get_pb <- function(seurat, sample_col = "Sample", hvg = NULL) {
+  pb <- as.matrix(AggregateExpression(seurat, group.by = sample_col, assays = "RNA")[["RNA"]])
+  colnames(pb) <- gsub("-", "_", colnames(pb))
+  if (!is.null(hvg)) {
+    pb <- pb[hvg, ]
+  }
+  return(pb)
+}
+
+
+get_pb_deseq2 <- function(seurat, sample_col = "Sample", hvg = NULL, n_hvg = 2000) {
+  pb <- get_pb(seurat, sample_col = sample_col, hvg = hvg)
+  metadata <- get_metadata(seurat, sample_col = sample_col)
+  metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
+  pb_norm <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = n_hvg))
+  return(pb_norm)
+}
+
+
+
 get_metadata <- function(seurat, sample_col = "Sample") {
   metadata <- seurat@meta.data %>%
     dplyr::group_by(!!sym(sample_col)) %>%
@@ -687,6 +711,16 @@ get_labels <- function(seurat, label_col) {
 
   return(labels)
 }
+
+
+
+
+# For ggplot x-axis label bolding (and optionally color)
+library(glue)
+highlight <- function(x, pat, color = "black", family = "") {
+  ifelse(grepl(pat, x), glue("<b style='font-family:{family}; color:{color}'>{x}</b>"), x)
+}
+
 
 
 impute_zeros <- function(df,
@@ -856,6 +890,49 @@ remove_low_cellcount_samples <- function(seurat,
 }
 
 
+
+
+# To replace HiTME layer3 annotation based on other UCell score threshold
+replace_HiTMElayer3_annot <- function(seurat, thresh = 0.1) {
+  seurat$layer3 <- gsub(pattern = "_resting|_IFN|_cellCycle.G1S|_cellCycle.G2M|_HeatShock|_Heatshock|_Prolif", replacement = "", seurat$layer3)
+
+  # Define the simple conditions to loop through
+  simple_conditions <- list(
+    IFN_UCell = list(threshold = thresh, suffix = "_IFN") # ,
+    # HeatShock_UCell = list(threshold = thresh, suffix = "_Heatshock")
+  )
+
+  # Loop through the simple conditions
+  for (cond_col in names(simple_conditions)) {
+    threshold <- simple_conditions[[cond_col]]$threshold
+    suffix <- simple_conditions[[cond_col]]$suffix
+
+    seurat@meta.data <- seurat@meta.data %>%
+      mutate(
+        layer3 = if_else(
+          !is.na(layer3) & .data[[cond_col]] > threshold,
+          paste0(layer3, suffix),
+          layer3
+        )
+      )
+  }
+
+  # Now, handle the combined "Proliferation" condition separately
+  seurat@meta.data <- seurat@meta.data %>%
+    mutate(
+      layer3 = if_else(
+        !is.na(layer3) & (cellCycle.G1S_UCell > thresh | cellCycle.G2M_UCell > thresh),
+        paste0(layer3, "_Prolif"),
+        layer3
+      )
+    )
+
+  return(seurat)
+}
+
+
+# run_analyses and helpers ----
+
 run_analyses <- function(result_list,
                          ds,
                          seurat,
@@ -874,6 +951,7 @@ run_analyses <- function(result_list,
   }
 
   labels <- get_labels(seurat, seurat@misc$label_col)
+  result_list[["labels"]][[ds]] <- labels
   ct_comps <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = seurat@misc$hi_res_ct_col)
 
   if (is.null(result_list[["trans"]][[ds]])) {
@@ -1463,12 +1541,6 @@ process_scitd_fig <- function(seurat,
     ranks = c(num_factors, num_factors + 5)
   )
 
-  # get donor scores-metadata associations
-  pbmc_container <- get_meta_associations(pbmc_container, vars_test = c("Sample"))
-
-  # get significant genes
-  # pbmc_container <- get_lm_pvals(pbmc_container)
-
   feat_mat <- pbmc_container[["tucker_results"]][[1]]
   labels_scITD <- seurat@meta.data %>%
     filter(donors %in% row.names(feat_mat)) %>%
@@ -1707,130 +1779,4 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
     calc_sep_score(labels)
 
   return(res_list)
-}
-
-
-#' Create an example Seurat object for single-cell data simulation.
-#'
-#' This function generates a Seurat object with random count data and
-#' simulated metadata for samples, cell types, and sample groups.
-#'
-#' @param n_samples Integer, the number of unique sample identifiers to create.
-#' @param n_cells Integer, the total number of cells in the dataset.
-#' @param n_genes Integer, the total number of genes in the dataset.
-#' @param n_cell_types Integer, the number of distinct cell types to simulate.
-#' @param n_groups Integer, the number of distinct groups to assign samples to.
-#' @param min_cells Integer, minimum number of cells a gene must be detected in
-#'   to be included in the Seurat object (passed to `CreateSeuratObject`).
-#' @param min_features Integer, minimum number of features (genes) a cell must
-#'   express to be included in the Seurat object (passed to `CreateSeuratObject`).
-#' @param project_name Character string, the name for the Seurat project.
-#' @return A Seurat object.
-#' @examples
-#' # Create a small Seurat object with groups
-#' seurat_obj_small_groups <- create_example_seurat_object(
-#'   n_samples = 4, n_cells = 200, n_genes = 50, n_cell_types = 3, n_groups = 2
-#' )
-#' print(seurat_obj_small_groups)
-#' head(seurat_obj_small_groups@meta.data)
-#' table(seurat_obj_small_groups$Sample, seurat_obj_small_groups$Group) # Check sample-group assignment
-#'
-#' # Create a larger Seurat object with groups
-#' seurat_obj_large_groups <- create_example_seurat_object(
-#'   n_samples = 10, n_cells = 1000, n_genes = 100, n_cell_types = 5, n_groups = 3,
-#'   min_cells = 5, min_features = 20
-#' )
-#' print(seurat_obj_large_groups)
-#' head(seurat_obj_large_groups@meta.data)
-#' table(seurat_obj_large_groups$Sample, seurat_obj_large_groups$Group) # Check sample-group assignment
-create_example_seurat_object <- function(
-  n_samples = 10,
-  n_cells = 1000,
-  n_genes = 100,
-  n_cell_types = 5,
-  n_groups = 2, # <--- NEW: Number of distinct groups for samples
-  min_cells = 3,
-  min_features = 200,
-  project_name = "ExampleProject"
-) {
-  # Ensure n_groups is not more than n_samples, as each sample needs a group
-  if (n_groups > n_samples) {
-    warning("Number of groups (n_groups) is greater than number of samples (n_samples). Setting n_groups = n_samples.")
-    n_groups <- n_samples
-  }
-
-  # 1. Create a random count matrix with integers between 0 and 100
-  count_matrix <- matrix(
-    sample(0:100, size = n_cells * n_genes, replace = TRUE),
-    nrow = n_genes, # Seurat expects genes as rows, cells as columns
-    ncol = n_cells,
-    dimnames = list(
-      paste0("Gene_", 1:n_genes), # Gene names
-      paste0("Cell_", 1:n_cells) # Cell names
-    )
-  )
-
-  # Convert the count matrix to a sparse matrix (recommended for scRNA-seq)
-  count_matrix_sparse <- as(count_matrix, "sparseMatrix")
-
-  # 2. Create the 'Sample' metadata column
-  sample_names <- paste0("Sample_", 1:n_samples)
-  sample_assignments <- sample(sample_names, size = n_cells, replace = TRUE)
-
-  # 3. Create cell type annotations based on n_cell_types
-  cell_type_names <- paste0("Type_", LETTERS[1:n_cell_types])
-  cell_type_assignments <- sample(cell_type_names, size = n_cells, replace = TRUE)
-
-  # 4. Create Group assignments for each unique Sample
-  group_names <- paste0("Group_", 1:n_groups)
-  # Create a mapping from sample to group
-  sample_to_group_map <- data.frame(
-    Sample = sample_names,
-    Group = sample(group_names, size = n_samples, replace = TRUE) # Assign each unique sample to a group
-  )
-
-  # 5. Create a data frame for the cell metadata (equivalent to AnnData's .obs)
-  # Row names must be cell names to match the count matrix columns
-  cell_metadata <- data.frame(
-    Sample = sample_assignments,
-    CellType = cell_type_assignments,
-    row.names = paste0("Cell_", 1:n_cells) # Ensure row names match cell IDs in count_matrix
-  )
-
-  # 6. Merge the Group information into the cell_metadata based on Sample
-  cell_metadata <- dplyr::left_join(cell_metadata, sample_to_group_map, by = "Sample")
-  # Restore row names after join, as left_join often drops them
-  rownames(cell_metadata) <- paste0("Cell_", 1:n_cells)
-
-
-  # 7. Create the Seurat object
-  seurat_object <- CreateSeuratObject(
-    counts = count_matrix_sparse,
-    project = project_name,
-    min.cells = min_cells,
-    min.features = min_features,
-    meta.data = cell_metadata
-  )
-
-  # Optional: Print some summary information
-  message(paste0(
-    "Created Seurat object with ", ncol(seurat_object), " cells and ",
-    nrow(seurat_object), " genes."
-  ))
-  message(paste0("Number of unique samples: ", length(unique(seurat_object$Sample))))
-  message(paste0("Number of unique cell types: ", length(unique(seurat_object$CellType))))
-  message(paste0("Number of unique groups: ", length(unique(seurat_object$Group))))
-
-  # Return the Seurat object
-  return(seurat_object)
-}
-
-
-exec_time <- function(fun) {
-  start_time <- Sys.time()
-  fun
-  end_time <- Sys.time()
-  time_taken <- end_time - start_time
-  time_taken
-  return(time_taken)
 }
