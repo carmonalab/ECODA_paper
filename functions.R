@@ -59,14 +59,14 @@ calc_perc_df <- function(df) {
 }
 
 
-calc_sep_score <- function(df,
+calc_sep_score <- function(feat_mat,
                            labels,
                            knn_k = NULL) {
   # sil_score <- round(calc_sil(df, labels), 3)
-  mod_score <- unlist(round(calc_modularity(df, labels, knn_k), 3))
-  mod_knn3_score <- unlist(round(calc_modularity(df, labels, 3), 3))
-  cluster_score <- clust_eval(matrix = df, labels)
-  anosim_score <- vegan::anosim(x = df, grouping = labels, distance = "euclidean")[["statistic"]]
+  mod_score <- unlist(round(calc_modularity(feat_mat, labels, knn_k), 3))
+  mod_knn3_score <- unlist(round(calc_modularity(feat_mat, labels, 3), 3))
+  cluster_score <- clust_eval(matrix = feat_mat, labels)
+  anosim_score <- vegan::anosim(x = feat_mat, grouping = labels, distance = "euclidean")[["statistic"]]
 
   res <- list(
     # sil_score = sil_score,
@@ -708,11 +708,10 @@ get_metadata <- function(seurat, sample_col = "Sample") {
 get_labels <- function(seurat, label_col) {
   metadata <- get_metadata(seurat)
   labels <- as.factor(metadata[[label_col]])
+  names(labels) <- metadata[["Sample"]]
 
   return(labels)
 }
-
-
 
 
 # For ggplot x-axis label bolding (and optionally color)
@@ -951,7 +950,6 @@ run_analyses <- function(result_list,
   }
 
   labels <- get_labels(seurat, seurat@misc$label_col)
-  result_list[["labels"]][[ds]] <- labels
   ct_comps <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = seurat@misc$hi_res_ct_col)
 
   if (is.null(result_list[["trans"]][[ds]])) {
@@ -1022,18 +1020,15 @@ run_benchmark_analysis <- function(seurat,
     }
   }
 
+
   # Sample names starting with digits are not allowed in seurat
-  sample_names_starting_with_digit <- grepl("^\\d", unique(seurat@meta.data[[sample_col]]))
-  if (any(sample_names_starting_with_digit)) {
-    seurat@meta.data[[sample_col]][grepl("^\\d", seurat@meta.data[[sample_col]])] <- paste0("g", seurat@meta.data[[sample_col]][grepl("^\\d", seurat@meta.data[[sample_col]])])
-  }
+  seurat@meta.data[[sample_col]] <- standardize_sample_names(seurat@meta.data[[sample_col]])
 
   metadata <- get_metadata(seurat)
-  metadata[[sample_col]] <- gsub("-", "_", metadata[[sample_col]])
 
   label_col <- seurat@misc$label_col
   labels <- get_labels(seurat, label_col)
-  names(labels) <- metadata[[sample_col]]
+
 
   if ("var.features" %in% slotNames(seurat@assays[["RNA"]])) {
     # This path is for older Seurat objects (primarily v2/v3)
@@ -1093,7 +1088,7 @@ run_benchmark_analysis <- function(seurat,
           process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = "layer3", title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%"))
       }
 
-      res_list[["Freq_highres"]] <- process_coda_fig(seurat, labels, clr = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (%)\nhigh res.")
+      res_list[["Freq_highres"]] <- process_coda_fig(seurat, labels, calc_clr = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (%)\nhigh res.")
     }
 
     res_list[["ECODA_authors_HR_3most_varcts"]] <-
@@ -1257,6 +1252,16 @@ run_benchmark_analysis <- function(seurat,
 }
 
 
+standardize_sample_names <- function(sample_names) {
+  # Sample names starting with digits are not allowed in seurat
+  sample_names_starting_with_digit <- grepl("^\\d", unique(sample_names))
+  if (any(sample_names_starting_with_digit)) {
+    sample_names[sample_names_starting_with_digit] <- paste0("g", sample_names[sample_names_starting_with_digit])
+  }
+  sample_names <- gsub("-", "_", sample_names)
+}
+
+
 process_deconv_fig <- function(pseudobulk,
                                labels,
                                title = "Deconvoluted cell type composition") {
@@ -1265,12 +1270,14 @@ process_deconv_fig <- function(pseudobulk,
   row.names(deconv_ct_comps) <- colnames(pseudobulk)
 
   feat_mat <- clr(deconv_ct_comps + 0.001)
+  labels <- labels[rownames(feat_mat)]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["labels"]] <- labels
 
   return(res)
 }
@@ -1281,7 +1288,7 @@ process_coda_fig <- function(seurat,
                              ECODA_top_n_hvct = NULL,
                              ECODA_top_varexp_hvct = NULL,
                              hvct_recalc_clr = TRUE,
-                             clr = TRUE,
+                             calc_clr = TRUE,
                              pca_dims = NULL,
                              sample_col = "Sample",
                              ct_col,
@@ -1294,15 +1301,17 @@ process_coda_fig <- function(seurat,
   if (is.null(feat_mat)) {
     df_counts <- get_ct_comp_df_seurat(seurat, sample_col = sample_col, ct_col)
 
-    df_freq <- df_counts %>%
-      impute_zeros(clr_zero_impute_method = clr_zero_impute_method, clr_zero_impute_num = clr_zero_impute_num) %>%
-      calc_perc_df()
+    df_imp <- df_counts %>%
+      impute_zeros(
+        clr_zero_impute_method = clr_zero_impute_method,
+        clr_zero_impute_num = clr_zero_impute_num
+      )
 
-    if (clr) {
-      feat_mat <- df_freq %>%
+    if (calc_clr) {
+      feat_mat <- df_imp %>%
         clr()
     } else {
-      feat_mat <- df_freq
+      feat_mat <- df_imp
     }
 
     top_hvct <- NULL
@@ -1329,6 +1338,8 @@ process_coda_fig <- function(seurat,
     feat_mat <- prcomp(feat_mat, rank. = pca_dims)[["x"]]
   }
 
+  labels <- labels[rownames(feat_mat)]
+
   if (shuffle_labels) {
     set.seed(123)
     labels <- sample(labels)
@@ -1339,6 +1350,7 @@ process_coda_fig <- function(seurat,
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["labels"]] <- labels
 
   return(res)
 }
@@ -1352,12 +1364,14 @@ process_pseudobulk_fig <- function(feat_mat,
   if (!is.null(pca_dims)) {
     feat_mat <- prcomp(feat_mat, rank. = pca_dims)[["x"]]
   }
+  labels <- labels[rownames(feat_mat)]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["labels"]] <- labels
 
   return(res)
 }
@@ -1375,12 +1389,14 @@ process_avg_pca_embedding_fig <- function(seurat,
     summarise(across(starts_with("PC_"), mean)) %>%
     ungroup() %>%
     column_to_rownames(var = "Sample")
+  labels <- labels[rownames(feat_mat)]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["labels"]] <- labels
 
   return(res)
 }
@@ -1427,71 +1443,18 @@ process_mofa_bulk_fig <- function(pb_norm,
 
   # feat_mat <- get_factors(MOFAobject, as.data.frame = T)
   feat_mat <- as.data.frame(MOFAobject@expectations[["Z"]])
+  labels <- labels[rownames(feat_mat)]
 
   res <- list()
   res[["plot"]] <- plot_pca(feat_mat, labels, title = title, coord_equal = FALSE)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["labels"]] <- labels
 
   return(res)
 }
 
-# process_mofa_fig <- function(seurat,
-#                              labels,
-#                              hvg,
-#                              pseudobulk_hvg,
-#                              save_file_path,
-#                              title = "MOFA",
-#                              num_factors = 5,
-#                              log_abs_transform = FALSE,
-#                              maxiter = 22) {
-#   title <- paste0(title, " (", num_factors, " factors)")
-#
-#   if (!file.exists(save_file_path)) {
-#     MOFAobject <- create_mofa(seurat, assays = "RNA", features = hvg)
-#
-#     # Default data options
-#     data_opts <- get_default_data_options(MOFAobject)
-#
-#     # Default model options
-#     model_opts <- get_default_model_options(MOFAobject)
-#     model_opts$num_factors <- num_factors
-#
-#     # Training options
-#     train_opts <- get_default_training_options(MOFAobject)
-#     train_opts$convergence_mode <- "fast"
-#     train_opts$seed <- 42
-#     train_opts$maxiter <- maxiter
-#
-#     MOFAobject <- prepare_mofa(
-#       object = MOFAobject,
-#       data_options = data_opts,
-#       model_options = model_opts,
-#       training_options = train_opts
-#     )
-#
-#     MOFAobject <- run_mofa(MOFAobject, use_basilisk = FALSE, save_data = FALSE)
-#
-#     saveRDS(MOFAobject, save_file_path)
-#   } else {
-#     MOFAobject <- readRDS(save_file_path)
-#   }
-#
-#   feat_mat <- t(t(MOFAobject@expectations[["W"]]$RNA) %*% pseudobulk_hvg)
-#
-#   if (log_abs_transform) {
-#     feat_mat <- log(abs(feat_mat))
-#   }
-#
-#   res <- list()
-#   res[["plot"]] <- plot_pca(feat_mat, labels, plotly_3d = FALSE, title = title, coord_equal = FALSE)
-#   res[["scores"]] <- calc_sep_score(feat_mat, labels)
-#   res[["feat_mat"]] <- feat_mat
-#   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
-#
-#   return(res)
-# }
 
 
 process_scitd_fig <- function(seurat,
@@ -1553,6 +1516,7 @@ process_scitd_fig <- function(seurat,
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["labels"]] <- labels
 
   return(res)
 }
@@ -1560,13 +1524,18 @@ process_scitd_fig <- function(seurat,
 
 process_mrvi_fig <- function(mrvi_dist_file, labels, title = "MrVI") {
   feat_mat <- arrow::read_feather(mrvi_dist_file) %>%
-    dplyr::select(-last_col())
+    tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
+    as.data.frame()
+
+  rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
+  labels <- labels[rownames(feat_mat)]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(feat_mat)
+  res[["labels"]] <- labels
 
   return(res)
 }
@@ -1597,11 +1566,7 @@ process_gloscope_fig <- function(seurat,
   }
 
   samples <- row.names(feat_mat)
-  sample_names_starting_with_digit <- grepl("^\\d", samples)
-  if (any(sample_names_starting_with_digit)) {
-    samples[grepl("^\\d", samples)] <- paste0("g", samples[grepl("^\\d", samples)])
-  }
-  samples <- gsub("-", "_", samples)
+  samples <- standardize_sample_names(samples)
 
   labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
 
@@ -1610,6 +1575,7 @@ process_gloscope_fig <- function(seurat,
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- feat_mat
+  res[["labels"]] <- labels
 
   return(res)
 }
@@ -1632,11 +1598,7 @@ process_gloscope_sqrtmat_fig <- function(metadata,
   feat_mat[is.na(feat_mat)] <- 0
 
   samples <- row.names(feat_mat)
-  sample_names_starting_with_digit <- grepl("^\\d", samples)
-  if (any(sample_names_starting_with_digit)) {
-    samples[grepl("^\\d", samples)] <- paste0("g", samples[grepl("^\\d", samples)])
-  }
-  samples <- gsub("-", "_", samples)
+  samples <- standardize_sample_names(samples)
 
   labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
 
@@ -1645,6 +1607,7 @@ process_gloscope_sqrtmat_fig <- function(metadata,
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- feat_mat
+  res[["labels"]] <- labels
 
   return(res)
 }
@@ -1652,13 +1615,18 @@ process_gloscope_sqrtmat_fig <- function(metadata,
 
 process_scpoli_fig <- function(scpoli_emb_file, labels, title = "scPoli") {
   feat_mat <- arrow::read_feather(scpoli_emb_file) %>%
-    dplyr::select(-last_col())
+    tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
+    as.data.frame()
+
+  rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
+  labels <- labels[rownames(feat_mat)]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["labels"]] <- labels
 
   return(res)
 }
@@ -1666,13 +1634,18 @@ process_scpoli_fig <- function(scpoli_emb_file, labels, title = "scPoli") {
 
 process_pilot_fig <- function(pilot_dist_file, labels, title = "PILOT") {
   feat_mat <- arrow::read_feather(pilot_dist_file) %>%
-    dplyr::select(-last_col())
+    tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
+    as.data.frame()
+
+  rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
+  labels <- labels[rownames(feat_mat)]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(feat_mat)
+  res[["labels"]] <- labels
 
   return(res)
 }
