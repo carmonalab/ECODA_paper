@@ -64,6 +64,7 @@ my_seed <- 321
 set.seed(my_seed)
 
 path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
+# path_nas <- file.path(getwd(), "data")
 ```
 
 
@@ -98,8 +99,8 @@ datasets <- list(
     sample_col = "sample", # Sample identifier
     meta_cols_keep = c(
       "sample",  # Sample identifier
-      "timepoint", # Main biological grouping
-      "expansion", "BC_type", "cohort", # Additional biological groupings
+      "expansion", # Main biological grouping
+      "timepoint", "BC_type", "cohort", # Additional biological groupings
       "cellType", "cellSubType" # Author annotations
     )
   ),
@@ -142,6 +143,20 @@ datasets <- list(
   #     "AIFI_L1", "AIFI_L3" # Author annotations
   #   )
   # ),
+  
+  "Joanito" = list(
+    file_path = file.path(path_nas, "JoaI_2022_35773407", "output", "JoaI_2022_35773407_Nofilt_whole.rds"),
+    tissue = "Colon",
+    normal_tissue = FALSE, # Whether the dataset contains cancer cells or only normal cells
+    sample_col = "sample.ID",
+    meta_cols_keep = c(
+      "sample.ID", # Sample identifier
+      "sample.origin", # Main biological grouping
+      "patient.ID", "iCMS", "dataset", "Gender", "Site", # Additional biological groupings
+      "cell.type", # Author annotations
+      "cell.type" # Additional low res annotation based on author annotation
+    )
+  ),
   
   "Kfoury" = list(
     file_path = file.path(path_nas, "Kfoury_2021_34719426", "output", "Kfoury_2021_34719426.rds"),
@@ -308,6 +323,12 @@ saveRDS(seurat, file = input_file_path)
 <!-- saveRDS(seurat, file = input_file_path) -->
 <!-- ``` -->
 
+```{r}
+# load gene symbols dataset
+geneRef_file <- "aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+geneRef <- data.table::fread(geneRef_file)
+```
+
 
 
 # Pre-process datasets
@@ -399,6 +420,13 @@ for (ds in names(datasets)) {
     # Ensure it's a seurat v5 object
     seurat <- create_clean_seuratv5_object(seurat)
     
+        # Standardize gene symbols
+    if (ds %in% c("Sikkema")) {
+      # Standarize gene symbols using STACAS
+      seurat <- STACAS::StandardizeGeneSymbols(seurat, geneRef, assay = "RNA", slots = "counts")
+    }
+    
+    
     # v5 seurat object not supported for SeuratDisk's SaveH5Seurat
     # https://github.com/satijalab/seurat/issues/9154
     object <- seurat
@@ -418,6 +446,7 @@ for (ds in names(datasets)) {
     obj.list <- SplitObject(seurat, split.by = "Sample")
     rm(seurat)
     gc()
+
 
     ## scAtomic
     
@@ -449,7 +478,7 @@ for (ds in names(datasets)) {
             NULL # Return NULL to signify a failure
           }, error = function(er) {
             # This block runs if an error occurs
-            cat(er, "  Error occurred, retrying...\n")
+            cat(er$message, "  Error occurred, retrying...\n")
             NULL # Return NULL to signify a failure
           })
           
@@ -502,7 +531,7 @@ for (ds in names(datasets)) {
                                bparam = BiocParallel::MulticoreParam(workers = ncores,
                                                                      progressbar = TRUE,
                                                                      timeout = timeout_core))
-            } else if (datasets[[ds]][["tissue"]] == "Mixed" &
+            } else if (datasets[[ds]][["tissue"]] == "Mixed" &&
                        obj$Tissue[1] == "blood") {
               obj <- Run.HiTME(object = obj,
                                scGate.model = scGate_models_blood,
@@ -524,7 +553,7 @@ for (ds in names(datasets)) {
           }, error = function(er) {
             warning(er)
             # This block runs if a timeout occurs
-            cat("Timeout or error occurred, retrying...\n")
+            cat(er$message, "Timeout or error occurred, retrying...\n")
             NULL # Return NULL to signify a failure
           })
           
@@ -587,11 +616,6 @@ for (ds in names(datasets)) {
 
 
 ```
-
-
-
-df_updated <- left_join(df_large, df_small, by = "sample_id", suffix = c("", "_new"))
-
 
 
 
