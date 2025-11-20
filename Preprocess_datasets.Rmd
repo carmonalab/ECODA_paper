@@ -408,14 +408,7 @@ for (ds in names(datasets)) {
       min_cells_per_sample = 500)
     
     # Add “Sample” metadata columns
-    seurat@meta.data[["Sample"]] <- seurat@meta.data[[datasets[[ds]][["sample_col"]]]]
-    
-    # Sample names starting with digits are not allowed in seurat
-    sample_names_starting_with_digit <- grepl("^\\d", unique(seurat@meta.data[["Sample"]]))
-    if (any(sample_names_starting_with_digit)) {
-      seurat@meta.data[["Sample"]][grepl("^\\d", seurat@meta.data[["Sample"]])] <- paste0("g", seurat@meta.data[["Sample"]][grepl("^\\d", seurat@meta.data[["Sample"]])])
-    }
-    
+    seurat@meta.data[["Sample"]] <- standardize_sample_names(seurat@meta.data[[datasets[[ds]][["sample_col"]]]])
     
     # Ensure it's a seurat v5 object
     seurat <- create_clean_seuratv5_object(seurat)
