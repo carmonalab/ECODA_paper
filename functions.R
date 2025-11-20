@@ -772,7 +772,7 @@ plot_pca <- function(feat_mat,
                      labels,
                      scale. = FALSE,
                      pca_dims = NULL,
-                     knn_k = NULL,
+                     knn_k = 3,
                      title = NULL,
                      cluster_score = TRUE,
                      mod_score = TRUE,
@@ -936,18 +936,15 @@ run_analyses <- function(result_list,
                          ds,
                          seurat,
                          path_data,
-                         path_plots,
-                         factors_test) {
-  if (is.null(result_list[["bmark"]][[ds]])) {
-    print(paste("Running benchmark analysis for dataset: ", ds))
-    result_list[["bmark"]][[ds]] <- run_benchmark_analysis(
-      seurat = seurat,
-      ds = ds,
-      path_data = path_data,
-      path_plots = path_plots,
-      factors_test = factors_test
-    )
-  }
+                         path_plots) {
+  print(paste("Running benchmark analysis for dataset: ", ds))
+  result_list[["bmark"]][[ds]] <- run_benchmark_analysis(
+    res_list = result_list[["bmark"]][[ds]],
+    ds = ds,
+    seurat = seurat,
+    path_data = path_data,
+    path_plots = path_plots
+  )
 
   labels <- get_labels(seurat, seurat@misc$label_col)
   ct_comps <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = seurat@misc$hi_res_ct_col)
@@ -969,54 +966,42 @@ run_analyses <- function(result_list,
 
 
 #----------------------------------------------------------->
-run_benchmark_analysis <- function(seurat,
+run_benchmark_analysis <- function(res_list,
                                    ds,
+                                   seurat,
                                    sample_col = "Sample",
-                                   factors_test,
+                                   factors_test = c(2, 3, 5, 10, 15),
                                    path_data,
                                    path_plots,
-                                   Pseudobulk = TRUE,
-                                   ECODA_deconv = TRUE,
-                                   ECODA_low_res = TRUE,
-                                   ECODA_high_res = TRUE,
-                                   ECODA_seuratcluster_res = TRUE,
+                                   seurat_res = c(0.4, 2, 5, 20),
+                                   HVGs = c(1000, 2000, 3000),
                                    # ECODA_select_top_hvct = TRUE,
                                    # ECODA_top_n_hvct = 0.25,
                                    ECODA_top_varexp_hvct = seq(0, 0.9, 0.1),
-                                   Pseudobulk_PCA = TRUE,
-                                   ECODA_high_res_PCA = TRUE,
-                                   MOFA = TRUE,
-                                   scITD = TRUE,
-                                   MrVI = TRUE,
-                                   GloScope = TRUE,
-                                   gloscope_n_pca_dims = c(10, 30, 50),
-                                   scPoli = TRUE,
-                                   PILOT = TRUE,
-                                   show_pca_plots = FALSE,
-                                   save_pca_plots = TRUE) {
-  res_list <- list()
+                                   gloscope_n_pca_dims = c(10, 30, 50)) {
+  if (grepl("GongSharma", ds)) {
+    ds_filename <- "GongSharma_all"
+  } else {
+    ds_filename <- ds
+  }
 
   # Files preprocessed with python
-  for (i in c(1000, 2000, 3000)) {
-    if (grepl("GongSharma", ds)) {
-      ds_unif <- "GongSharma_all"
-      files <- list(
-        mrvi_dist_file = file.path(path_data, paste0(ds_unif, "_hvg", i, "_mrvi_dists.feather")),
-        scpoli_emb_file = file.path(path_data, paste0(ds_unif, "_hvg", i, "_scpoli_embs.feather")),
-        pilot_dist_file = file.path(path_data, paste0(ds_unif, "_hvg", i, "_pilot_dists.feather"))
-      )
+  for (i in HVGs) {
+    if (i == 2000) {
+      scpoli_dims <- factors_test
     } else {
-      files <- list(
-        mrvi_dist_file = file.path(path_data, paste0(ds, "_hvg", i, "_mrvi_dists.feather")),
-        scpoli_emb_file = file.path(path_data, paste0(ds, "_hvg", i, "_scpoli_embs.feather")),
-        pilot_dist_file = file.path(path_data, paste0(ds, "_hvg", i, "_pilot_dists.feather"))
-      )
+      scpoli_dims <- 5
     }
 
-    for (file in files) {
-      if (!file.exists(file)) {
-        stop("File not found: ", file)
-      }
+    file_mrvi <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_mrvi_dists.feather"))
+    file_pilot <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_pilot_dists.feather"))
+    files_scpoli <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_scpoli_dims", scpoli_dims, "_embs.feather"))
+
+    files_to_check <- c(file_mrvi, file_pilot, files_scpoli)
+    missing_files <- files_to_check[!file.exists(files_to_check)]
+
+    if (length(missing_files) > 0) {
+      stop("The following file(s) are missing:\n", paste(missing_files, collapse = "\n"))
     }
   }
 
@@ -1029,18 +1014,10 @@ run_benchmark_analysis <- function(seurat,
   label_col <- seurat@misc$label_col
   labels <- get_labels(seurat, label_col)
 
+  hvg <- get_current_hvgs(seurat)
 
-  if ("var.features" %in% slotNames(seurat@assays[["RNA"]])) {
-    # This path is for older Seurat objects (primarily v2/v3)
-    hvg <- seurat@assays[["RNA"]]@var.features
-  } else if ("var.features" %in% colnames(seurat@assays[["RNA"]]@meta.data)) {
-    varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
-    hvg <- varf[!is.na(varf)]
-  } else {
-    stop("Could not find variable features in expected locations.")
-  }
 
-  if (Pseudobulk) {
+  if (!"Pseudobulk_hvg2000" %in% names(res_list)) {
     exec_time_1 <- exec_time(
       pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = hvg)
     )
@@ -1048,126 +1025,246 @@ run_benchmark_analysis <- function(seurat,
       res_list[["Pseudobulk_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
     )
     res_list[["Pseudobulk_hvg2000"]][["exec_time"]] <- exec_time_1 + exec_time_2
+  }
 
+
+  # These methods need pb_norm (with unsupervised HVGs)
+  test_items <- c(
+    "ECODA_deconv",
+    paste0("Pseudobulk_", factors_test, "_PCA_dims"),
+    paste0("MOFA_hvg2000_factors", factors_test)
+  )
+  # So need to check if any of those methods need to be run
+  # (mainly whether to calculate pb_norm or not)
+  if (any(!test_items %in% names(res_list))) {
     pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = 2000)
     res_list[["Pseudobulk_unsup_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
   }
 
-  res_list[["Avg_PCA_embedding"]] <- process_avg_pca_embedding_fig(seurat, labels)
 
-  if (ECODA_deconv) {
-    # Deconvolute using EPIC
+  if (!"Pseudobulk_hvg2000" %in% names(res_list)) {
+    res_list[["Avg_PCA_embedding"]] <- process_avg_pca_embedding_fig(seurat, labels)
+  }
+
+  # Deconvolute using EPIC
+  if (!"ECODA_deconv" %in% names(res_list)) {
     res_list[["ECODA_deconv"]][["exec_time"]] <- exec_time(
       res_list[["ECODA_deconv"]] <- process_deconv_fig(t(pb_norm), labels)
     )
   }
 
+
   # CoDA
-  if (ECODA_low_res) {
-    ## layer1: low res. cell types
-    if (!is.null(seurat@misc$low_res_ct_col)) {
-      res_list[["ECODA_authors_LR"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$low_res_ct_col, title = "ECODA\nlow res.")
-    }
+
+  ## layer1: low res. cell types
+  if (!is.null(seurat@misc$low_res_ct_col)) {
+    res_list[["ECODA_authors_LR"]] <- process_coda_fig(
+      seurat, labels,
+      ct_col = seurat@misc$low_res_ct_col,
+      title = "ECODA\nlow res."
+    )
   }
 
-  if (ECODA_high_res) {
-    ## layer2: high res. cell types
-    if (!is.null(seurat@misc$hi_res_ct_col)) {
-      res_list[["ECODA_authors_HR"]][["exec_time"]] <- exec_time(
-        res_list[["ECODA_authors_HR"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\nhigh res.")
+  ## layer2: high res. cell types
+  if (!is.null(seurat@misc$hi_res_ct_col)) {
+    res_list[["ECODA_authors_HR"]][["exec_time"]] <- exec_time(
+      res_list[["ECODA_authors_HR"]] <- process_coda_fig(
+        seurat, labels,
+        ct_col = seurat@misc$hi_res_ct_col,
+        title = "ECODA\nhigh res."
       )
-      res_list[["ECODA_authors_HR_NULL"]] <- process_coda_fig(seurat, labels, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\nhigh res.", shuffle_labels = TRUE)
+    )
+    res_list[["ECODA_authors_HR_NULL"]] <- process_coda_fig(
+      seurat, labels,
+      ct_col = seurat@misc$hi_res_ct_col,
+      title = "ECODA\nhigh res.", shuffle_labels = TRUE
+    )
 
-      for (varexp_hvc in ECODA_top_varexp_hvct) {
-        res_list[[paste0("ECODA_authors_HR_top_varexp", varexp_hvc)]] <-
-          process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = seurat@misc$hi_res_ct_col, title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%"))
+    for (varexp_hvc in ECODA_top_varexp_hvct) {
+      res_list[[paste0("ECODA_authors_HR_top_varexp", varexp_hvc)]] <-
+        process_coda_fig(
+          seurat, labels,
+          ECODA_top_varexp_hvct = varexp_hvc,
+          ct_col = seurat@misc$hi_res_ct_col,
+          title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%")
+        )
 
-        res_list[[paste0("ECODA_HiTME_HR_layer2_top_varexp", varexp_hvc)]] <-
-          process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = "layer2", title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%"))
-        res_list[[paste0("ECODA_HiTME_HR_layer3_top_varexp", varexp_hvc)]] <-
-          process_coda_fig(seurat, labels, ECODA_top_varexp_hvct = varexp_hvc, ct_col = "layer3", title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%"))
-      }
-
-      res_list[["Freq_highres"]] <- process_coda_fig(seurat, labels, calc_clr = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "Cell type composition (%)\nhigh res.")
+      res_list[[paste0("ECODA_HiTME_HR_layer2_top_varexp", varexp_hvc)]] <-
+        process_coda_fig(
+          seurat, labels,
+          ECODA_top_varexp_hvct = varexp_hvc,
+          ct_col = "layer2",
+          title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%")
+        )
+      res_list[[paste0("ECODA_HiTME_HR_layer3_top_varexp", varexp_hvc)]] <-
+        process_coda_fig(
+          seurat, labels,
+          ECODA_top_varexp_hvct = varexp_hvc,
+          ct_col = "layer3",
+          title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%")
+        )
     }
 
-    res_list[["ECODA_authors_HR_3most_varcts"]] <-
-      process_coda_fig(seurat, labels, ECODA_top_n_hvct = 3, var_ct_desc = TRUE, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\n2 least var. cell types")
-
-    res_list[["ECODA_authors_HR_2least_varcts"]] <-
-      process_coda_fig(seurat, labels, ECODA_top_n_hvct = 2, var_ct_desc = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\n2 least var. cell types")
-
-    res_list[["ECODA_authors_HR_3least_varcts"]] <-
-      process_coda_fig(seurat, labels, ECODA_top_n_hvct = 3, var_ct_desc = FALSE, ct_col = seurat@misc$hi_res_ct_col, title = "ECODA\n2 least var. cell types")
-
-    res_list[["ECODA_HiTME_HR"]] <- process_coda_fig(seurat, labels, ct_col = "layer2", title = "ECODA\nHiTME")
-    res_list[["ECODA_HiTME_HR_layer2"]] <- process_coda_fig(seurat, labels, ct_col = "layer2", title = "ECODA\nHiTME layer2")
-    res_list[["ECODA_HiTME_HR_layer3"]] <- process_coda_fig(seurat, labels, ct_col = "layer3", title = "ECODA\nHiTME layer3")
-    res_list[["ECODA_scATOMIC_HR"]] <- process_coda_fig(seurat, labels, ct_col = "scATOMIC_pred", title = "ECODA\nscATOMIC")
+    res_list[["Freq_highres"]] <- process_coda_fig(
+      seurat, labels,
+      calc_clr = FALSE,
+      ct_col = seurat@misc$hi_res_ct_col,
+      title = "Cell type composition (%)\nhigh res."
+    )
   }
+
+  res_list[["ECODA_authors_HR_3most_varcts"]] <-
+    process_coda_fig(
+      seurat, labels,
+      ECODA_top_n_hvct = 3,
+      var_ct_desc = TRUE, ct_col = seurat@misc$hi_res_ct_col,
+      title = "ECODA\n2 least var. cell types"
+    )
+
+  res_list[["ECODA_authors_HR_2least_varcts"]] <-
+    process_coda_fig(
+      seurat, labels,
+      ECODA_top_n_hvct = 2,
+      var_ct_desc = FALSE, ct_col = seurat@misc$hi_res_ct_col,
+      title = "ECODA\n2 least var. cell types"
+    )
+
+  res_list[["ECODA_authors_HR_3least_varcts"]] <-
+    process_coda_fig(
+      seurat, labels,
+      ECODA_top_n_hvct = 3,
+      var_ct_desc = FALSE, ct_col = seurat@misc$hi_res_ct_col,
+      title = "ECODA\n2 least var. cell types"
+    )
+
+  res_list[["ECODA_HiTME_HR_layer2"]] <-
+    process_coda_fig(
+      seurat, labels,
+      ct_col = "layer2",
+      title = "ECODA\nHiTME layer2"
+    )
+  res_list[["ECODA_HiTME_HR_layer3"]] <-
+    process_coda_fig(
+      seurat, labels,
+      ct_col = "layer3",
+      title = "ECODA\nHiTME layer3"
+    )
+  res_list[["ECODA_scATOMIC_HR"]] <-
+    process_coda_fig(
+      seurat, labels,
+      ct_col = "scATOMIC_pred",
+      title = "ECODA\nscATOMIC"
+    )
+
 
   # Analyze for all resolutions
 
-  if (ECODA_seuratcluster_res) {
-    ## Ultra high res. cell type clusters based on Leiden clustering to artificially increase the number of cell types (clusters), e.g. to 250 cell types (clusters)
-    # Resolutions for seurat clustering
-    res <- c(0.4, 2, 5, 20)
-
-    for (r in res) {
-      res_col_name <- paste0("RNA_snn_res.", r)
-      res_list[[paste0("ECODA_seuratres_", r)]] <- process_coda_fig(seurat, labels, ct_col = res_col_name, title = paste0("ECODA\nLeiden clustering ", r))
-    }
-  }
-
-  if (any(Pseudobulk_PCA, ECODA_high_res_PCA, MOFA, scITD)) {
-    for (i in factors_test) {
-      if (Pseudobulk_PCA) {
-        # Pseudobulk with PCA
-        res_list[[paste0("Pseudobulk_", i, "_PCA_dims")]] <- process_pseudobulk_fig(pb_norm, labels, pca_dims = i, title = paste0("Pseudobulk gene expression\n+ PCA (", i, " dims)"))
-      }
-
-      if (ECODA_high_res_PCA) {
-        # Hires CODA with PCA
-        res_list[[paste0("ECODA_authors_HR_", i, "_PCA_dims")]] <- process_coda_fig(seurat, labels, pca_dims = i, ct_col = seurat@misc$hi_res_ct_col, title = paste0("ECODA\nhigh res. + PCA (", i, " dims)"))
-      }
-
-      if (MOFA) {
-        # MOFA
-        # Required for MOFA to run
-        seurat@version <- package_version("3.1.5")
-        res_list[[paste0("MOFA_hvg2000_factors", i)]][["exec_time"]] <- exec_time(
-          res_list[[paste0("MOFA_hvg2000_", "factors", i)]] <- process_mofa_bulk_fig(pb_norm, metadata = metadata, labels, num_factors = i)
-        )
-      }
-
-      if (scITD) {
-        # scITD
-        res_list[[paste0("scITD_hvg2000_factors", i)]][["exec_time"]] <- exec_time(
-          res_list[[paste0("scITD_hvg2000_factors", i)]] <- process_scitd_fig(seurat, ct_col = seurat@misc$low_res_ct_col, label_col = label_col, hvg, num_factors = i)
-        )
-      }
-    }
-  }
-
-  if (GloScope) {
-    for (n_pca_dims in gloscope_n_pca_dims) {
-      if (grepl("GongSharma", ds)) {
-        ds_unif <- "GongSharma_all"
-        gloscope_dist_file <- file.path(path_data, paste0(ds_unif, "_gloscope_hvg2000_pcadims", n_pca_dims, "_dists.rds"))
-      } else {
-        gloscope_dist_file <- file.path(path_data, paste0(ds, "_gloscope_hvg2000_pcadims", n_pca_dims, "_dists.rds"))
-      }
-
-      res_list[[paste0("GloScope_hvg2000_pcadims", n_pca_dims)]][["exec_time"]] <- exec_time(
-        res_list[[paste0("GloScope_hvg2000_pcadims", n_pca_dims)]] <- process_gloscope_fig(seurat, metadata, label_col, gloscope_dist_file = gloscope_dist_file, n_pca_dims = n_pca_dims)
+  ## Ultra high res. cell type clusters based on Leiden clustering to artificially increase the number of cell types (clusters), e.g. to 250 cell types (clusters)
+  for (r in seurat_res) {
+    res_col_name <- paste0("RNA_snn_res.", r)
+    res_list[[paste0("ECODA_seuratres_", r)]] <-
+      process_coda_fig(
+        seurat, labels,
+        ct_col = res_col_name,
+        title = paste0("ECODA\nLeiden clustering ", r)
       )
-      res_list[[paste0("GloScope_hvg2000_pcadims", n_pca_dims, "_sqrtmat")]] <- process_gloscope_sqrtmat_fig(metadata, label_col, gloscope_dist_file = gloscope_dist_file)
+  }
+
+
+  # Methods that use different number of factors (e.g. PCA or dims)
+
+  ### Required for MOFA to run
+  seurat@version <- package_version("3.1.5")
+
+  for (i in factors_test) {
+    # Pseudobulk with PCA
+    pb_pca_i <- paste0("Pseudobulk_", i, "_PCA_dims")
+    if (!pb_pca_i %in% names(res_list)) {
+      res_list[[pb_pca_i]] <-
+        process_pseudobulk_fig(
+          pb_norm, labels,
+          pca_dims = i,
+          title = paste0("Pseudobulk gene expression\n+ PCA (", i, " dims)")
+        )
+    }
+
+    # Hires CODA with PCA
+    ecoda_pca_i <- paste0("ECODA_authors_HR_", i, "_PCA_dims")
+    if (!ecoda_pca_i %in% names(res_list)) {
+      res_list[[ecoda_pca_i]] <-
+        process_coda_fig(
+          seurat, labels,
+          pca_dims = i,
+          ct_col = seurat@misc$hi_res_ct_col,
+          title = paste0("ECODA\nhigh res. + PCA (", i, " dims)")
+        )
+    }
+
+    # MOFA
+    mofa_factor_i <- paste0("MOFA_hvg2000_factors", i)
+    if (!mofa_factor_i %in% names(res_list)) {
+      res_list[[mofa_factor_i]][["exec_time"]] <- exec_time(
+        res_list[[mofa_factor_i]] <-
+          process_mofa_bulk_fig(
+            pb_norm,
+            metadata = metadata, labels,
+            num_factors = i
+          )
+      )
+    }
+
+    # scITD
+    scitd_factor_i <- paste0("scITD_hvg2000_factors", i)
+    if (!scitd_factor_i %in% names(res_list)) {
+      res_list[[scitd_factor_i]][["exec_time"]] <- exec_time(
+        res_list[[scitd_factor_i]] <-
+          process_scitd_fig(
+            seurat,
+            ct_col = seurat@misc$low_res_ct_col,
+            label_col = label_col, hvg,
+            num_factors = i
+          )
+      )
+    }
+  }
+
+  # GloScope
+  ## With different numbers of PCA dims
+
+  for (i in gloscope_n_pca_dims) {
+    gloscope_dist_file <- file.path(path_data, paste0(ds_filename, "_gloscope_hvg2000_pcadims", i, "_dists.rds"))
+    gloscope_pca_i <- paste0("GloScope_hvg2000_pcadims", i)
+    if (!gloscope_pca_i %in% names(res_list)) {
+      res_list[[gloscope_pca_i]][["exec_time"]] <- exec_time(
+        res_list[[gloscope_pca_i]] <-
+          process_gloscope_fig(
+            seurat, metadata, label_col,
+            gloscope_dist_file = gloscope_dist_file,
+            n_pca_dims = i
+          )
+      )
+      res_list[[paste0(gloscope_pca_i, "_sqrtmat")]] <-
+        process_gloscope_sqrtmat_fig(
+          metadata, label_col,
+          gloscope_dist_file = gloscope_dist_file
+        )
     }
   }
 
 
-  for (i in c(1000, 3000)) {
-    if (i > 2000) {
+  # Methods that use different number of HVGs
+
+  ### Do only for non-default HVGs (default = 2000)
+  for (i in HVGs[!HVGs %in% 2000]) {
+    test_items <- c(
+      paste0("Pseudobulk_hvg", i),
+      paste0("Pseudobulk_unsup_hvg", i),
+      paste0("MOFA_hvg", i, "_15_factors"),
+      paste0("GloScope_hvg", i, "_pcadims50"),
+      paste0("GloScope_hvg", i, "_pcadims50", "_sqrtmat")
+    )
+
+    if (any(!test_items %in% names(res_list))) {
       # Memory critical steps
       gc()
       seurat <- create_clean_seuratv5_object(seurat)
@@ -1181,74 +1278,87 @@ run_benchmark_analysis <- function(seurat,
       # Needs a lot of memory for 3000 HVGs
       seurat <- RunPCA(seurat, dims = 1:50, verbose = FALSE)
       gc()
-    }
+      hvg <- get_current_hvgs(seurat)
 
-    if ("var.features" %in% slotNames(seurat@assays[["RNA"]])) {
-      # This path is for older Seurat objects (primarily v2/v3)
-      hvg <- seurat@assays[["RNA"]]@var.features
-    } else if ("var.features" %in% colnames(seurat@assays[["RNA"]]@meta.data)) {
-      varf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
-      hvg <- varf[!is.na(varf)]
-    } else {
-      stop("Could not find variable features in expected locations.")
-    }
-
-    pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = hvg)
-    res_list[[paste0("Pseudobulk_hvg", i)]] <- process_pseudobulk_fig(pb_norm, labels)
-
-    pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = i)
-    res_list[[paste0("Pseudobulk_unsup_hvg", i)]] <- process_pseudobulk_fig(pb_norm, labels)
-
-    res_list[[paste0("MOFA_hvg", i, "_15_factors")]] <- process_mofa_bulk_fig(pb_norm, metadata = metadata, labels, num_factors = 15)
-
-    if (GloScope) {
-      if (grepl("GongSharma", ds)) {
-        ds_unif <- "GongSharma_all"
-        gloscope_dist_file <- file.path(path_data, paste0(ds_unif, "_gloscope_hvg", i, "_pcadims50_dists.rds"))
-      } else {
-        gloscope_dist_file <- file.path(path_data, paste0(ds, "_gloscope_hvg", i, "_pcadims50_dists.rds"))
+      if (!paste0("Pseudobulk_hvg", i) %in% names(res_list)) {
+        pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = hvg)
+        res_list[[paste0("Pseudobulk_hvg", i)]] <- process_pseudobulk_fig(pb_norm, labels)
       }
 
-      res_list[[paste0("GloScope_hvg", i, "_pcadims50")]][["exec_time"]] <- exec_time(
-        res_list[[paste0("GloScope_hvg", i, "_pcadims50")]] <- process_gloscope_fig(seurat, metadata, label_col, gloscope_dist_file = gloscope_dist_file)
+      test_items <- c(
+        paste0("Pseudobulk_unsup_hvg", i),
+        paste0("MOFA_hvg", i, "_15_factors")
       )
-      res_list[[paste0("GloScope_hvg", i, "_pcadims50", "_sqrtmat")]] <- process_gloscope_sqrtmat_fig(metadata, label_col, gloscope_dist_file = gloscope_dist_file)
+      if (any(!test_items %in% names(res_list))) {
+        pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = i)
+        res_list[[paste0("Pseudobulk_unsup_hvg", i)]] <- process_pseudobulk_fig(pb_norm, labels)
+
+        res_list[[paste0("MOFA_hvg", i, "_15_factors")]] <-
+          process_mofa_bulk_fig(
+            pb_norm,
+            metadata = metadata, labels,
+            num_factors = 15
+          )
+      }
+
+      test_items <- c(
+        paste0("GloScope_hvg", i, "_pcadims50"),
+        paste0("GloScope_hvg", i, "_pcadims50")
+      )
+      if (any(!test_items %in% names(res_list))) {
+        gloscope_dist_file <- file.path(path_data, paste0(ds_filename, "_gloscope_hvg", i, "_pcadims50_dists.rds"))
+        res_list[[paste0("GloScope_hvg", i, "_pcadims50")]][["exec_time"]] <- exec_time(
+          res_list[[paste0("GloScope_hvg", i, "_pcadims50")]] <-
+            process_gloscope_fig(
+              seurat, metadata, label_col,
+              gloscope_dist_file = gloscope_dist_file
+            )
+        )
+        res_list[[paste0("GloScope_hvg", i, "_pcadims50", "_sqrtmat")]] <-
+          process_gloscope_sqrtmat_fig(
+            metadata, label_col,
+            gloscope_dist_file = gloscope_dist_file
+          )
+      }
     }
   }
 
 
-  for (i in c(1000, 2000, 3000)) {
-    if (grepl("GongSharma", ds)) {
-      ds_unif <- "GongSharma_all"
-      files <- list(
-        mrvi_dist_file = file.path(path_data, paste0(ds_unif, "_hvg", i, "_mrvi_dists.feather")),
-        scpoli_emb_file = file.path(path_data, paste0(ds_unif, "_hvg", i, "_scpoli_embs.feather")),
-        pilot_dist_file = file.path(path_data, paste0(ds_unif, "_hvg", i, "_pilot_dists.feather"))
-      )
+  for (i in HVGs) {
+    # --- MrVI (Runs once per HVG) ---
+    mrvi_dist_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_mrvi_dists.feather"))
+    res_list[[paste0("MrVI_hvg", i)]] <- process_mrvi_fig(mrvi_dist_file = mrvi_dist_file, labels)
+
+    # --- PILOT (Runs once per HVG) ---
+    pilot_dist_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_pilot_dists.feather"))
+    res_list[[paste0("PILOT_hvg", i)]] <- process_pilot_fig(pilot_dist_file = pilot_dist_file, labels)
+
+    # --- scPoli (Runs once OR multiple times depending on HVG) ---
+    if (i == 2000) {
+      target_dims <- factors_test
     } else {
-      files <- list(
-        mrvi_dist_file = file.path(path_data, paste0(ds, "_hvg", i, "_mrvi_dists.feather")),
-        scpoli_emb_file = file.path(path_data, paste0(ds, "_hvg", i, "_scpoli_embs.feather")),
-        pilot_dist_file = file.path(path_data, paste0(ds, "_hvg", i, "_pilot_dists.feather"))
-      )
+      target_dims <- 5
     }
 
-    if (MrVI) {
-      # MrVI
-      res_list[[paste0("MrVI_hvg", i)]] <- process_mrvi_fig(files[["mrvi_dist_file"]], labels)
-    }
-
-    if (scPoli) {
-      res_list[[paste0("scPoli_hvg", i)]] <- process_scpoli_fig(files[["scpoli_emb_file"]], labels)
-    }
-
-    if (PILOT) {
-      res_list[[paste0("PILOT_hvg", i)]] <- process_pilot_fig(files[["pilot_dist_file"]], labels)
+    for (f in target_dims) {
+      scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_scpoli_dims", f, "_embs.feather"))
+      res_list[[paste0("scPoli_hvg", i, "_dims", f)]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
     }
   }
-
 
   return(res_list)
+}
+
+
+get_current_hvgs <- function(seurat) {
+  if ("var.features" %in% slotNames(seurat@assays[["RNA"]])) {
+    return(seurat@assays[["RNA"]]@var.features)
+  } else if ("var.features" %in% colnames(seurat@assays[["RNA"]]@meta.data)) {
+    vf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
+    return(vf[!is.na(vf)])
+  } else {
+    stop("Could not find variable features.")
+  }
 }
 
 
@@ -1510,6 +1620,7 @@ process_scitd_fig <- function(seurat,
     distinct(donors, .keep_all = TRUE) %>%
     dplyr::select(donors, !!sym(label_col))
   labels <- as.factor(labels_scITD[[label_col]])
+  names(labels) <- labels_scITD[["donors"]]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
