@@ -11,6 +11,7 @@ suppressPackageStartupMessages({
   library(plotly)
   # library("robCompositions")
   library(Seurat)
+  library(limma)
   # devtools::install_github('satijalab/seurat-data')
   library(SeuratData)
   # install.packages("hdf5r")
@@ -1260,8 +1261,8 @@ run_benchmark_analysis <- function(res_list,
       paste0("Pseudobulk_hvg", i),
       paste0("Pseudobulk_unsup_hvg", i),
       paste0("MOFA_hvg", i, "_15_factors"),
-      paste0("GloScope_hvg", i, "_pcadims50"),
-      paste0("GloScope_hvg", i, "_pcadims50", "_sqrtmat")
+      paste0("GloScope_hvg", i, "_pcadims30"),
+      paste0("GloScope_hvg", i, "_pcadims30", "_sqrtmat")
     )
 
     if (any(!test_items %in% names(res_list))) {
@@ -1302,19 +1303,19 @@ run_benchmark_analysis <- function(res_list,
       }
 
       test_items <- c(
-        paste0("GloScope_hvg", i, "_pcadims50"),
-        paste0("GloScope_hvg", i, "_pcadims50")
+        paste0("GloScope_hvg", i, "_pcadims30"),
+        paste0("GloScope_hvg", i, "_pcadims30")
       )
       if (any(!test_items %in% names(res_list))) {
         gloscope_dist_file <- file.path(path_data, paste0(ds_filename, "_gloscope_hvg", i, "_pcadims50_dists.rds"))
-        res_list[[paste0("GloScope_hvg", i, "_pcadims50")]][["exec_time"]] <- exec_time(
-          res_list[[paste0("GloScope_hvg", i, "_pcadims50")]] <-
+        res_list[[paste0("GloScope_hvg", i, "_pcadims30")]][["exec_time"]] <- exec_time(
+          res_list[[paste0("GloScope_hvg", i, "_pcadims30")]] <-
             process_gloscope_fig(
               seurat, metadata, label_col,
               gloscope_dist_file = gloscope_dist_file
             )
         )
-        res_list[[paste0("GloScope_hvg", i, "_pcadims50", "_sqrtmat")]] <-
+        res_list[[paste0("GloScope_hvg", i, "_pcadims30", "_sqrtmat")]] <-
           process_gloscope_sqrtmat_fig(
             metadata, label_col,
             gloscope_dist_file = gloscope_dist_file
@@ -1345,6 +1346,18 @@ run_benchmark_analysis <- function(res_list,
       res_list[[paste0("scPoli_hvg", i, "_dims", f)]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
     }
   }
+
+
+  # ECODA + PB
+  for (i in c(0, 0.25, 0.5, 0.75, 1)) {
+    res_list[[paste0("ECODA_PB_combo_ecodaweight", i)]] <- process_ecodapb_fig(
+      dist_mat_ecoda = res_list[["ECODA_authors_HR"]][["dist_mat"]],
+      dist_mat_pb = res_list[["Pseudobulk_unsup_hvg2000"]][["dist_mat"]],
+      ecoda_weight = i,
+      labels = res_list[["ECODA_authors_HR"]][["labels"]]
+    )
+  }
+
 
   return(res_list)
 }
@@ -1656,7 +1669,7 @@ process_gloscope_fig <- function(seurat,
                                  metadata,
                                  label_col,
                                  gloscope_dist_file,
-                                 n_pca_dims = ncol(seurat@reductions$pca@cell.embeddings),
+                                 n_pca_dims = 30,
                                  dens = "KNN",
                                  dist_mat = c("KL"),
                                  k = 25,
@@ -1680,6 +1693,7 @@ process_gloscope_fig <- function(seurat,
   samples <- standardize_sample_names(samples)
 
   labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
+  names(labels) <- metadata[match(samples, metadata$Sample), ][["Sample"]]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
@@ -1712,6 +1726,7 @@ process_gloscope_sqrtmat_fig <- function(metadata,
   samples <- standardize_sample_names(samples)
 
   labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
+  names(labels) <- metadata[match(samples, metadata$Sample), ][["Sample"]]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
@@ -1750,6 +1765,28 @@ process_pilot_fig <- function(pilot_dist_file, labels, title = "PILOT") {
 
   rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
   labels <- labels[rownames(feat_mat)]
+
+  res <- list()
+  # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["feat_mat"]] <- feat_mat
+  res[["dist_mat"]] <- as.matrix(feat_mat)
+  res[["labels"]] <- labels
+
+  return(res)
+}
+
+
+process_ecodapb_fig <- function(
+  dist_mat_ecoda,
+  dist_mat_pb,
+  ecoda_weight = 0.5,
+  labels
+) {
+  dist_mat_ecoda_normed <- dist_mat_ecoda / max(dist_mat_ecoda)
+  dist_mat_pb_normed <- dist_mat_pb / max(dist_mat_pb)
+
+  feat_mat <- dist_mat_ecoda_normed * ecoda_weight + dist_mat_pb_normed * (1 - ecoda_weight)
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
