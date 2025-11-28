@@ -1303,7 +1303,7 @@ run_benchmark_analysis <- function(res_list,
     Pseudobulk_unsup_hvg_i <- paste0("Pseudobulk_unsup_hvg", i)
     MOFA_hvg_i_15_factors <- paste0("MOFA_hvg", i, "_15_factors")
     GloScope_hvg_i_pcadims30 <- paste0("GloScope_hvg", i, "_pcadims30")
-    GloScope_hvg_i_pcadims30_sqrtmat <- paste0(GloScope_hvg_i_pcadims30, , "_sqrtmat")
+    GloScope_hvg_i_pcadims30_sqrtmat <- paste0(GloScope_hvg_i_pcadims30, "_sqrtmat")
     test_items <- c(
       Pseudobulk_hvg_i,
       Pseudobulk_unsup_hvg_i,
@@ -1409,7 +1409,7 @@ run_benchmark_analysis <- function(res_list,
 
   # ECODA + PB
   for (i in c(0, 0.25, 0.5, 0.75, 1)) {
-    for (norm in c("max", "median", "zscore", "kernel")) {
+    for (norm in c("max", "median", "zscore", "quantile")) {
       res_list[[paste0("ECODA_PB_combo_norm", norm, "_ecodaweight", i)]] <- process_ecodapb_fig(
         dist_mat_ecoda = res_list[["ECODA_authors_HR"]][["dist_mat"]],
         dist_mat_pb = res_list[["Pseudobulk_unsup_hvg2000"]][["dist_mat"]],
