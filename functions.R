@@ -1019,13 +1019,12 @@ run_benchmark_analysis <- function(res_list,
 
 
   if (!"Pseudobulk_hvg2000" %in% names(res_list)) {
-    exec_time_1 <- exec_time(
+    exec_time_pb_norm <- exec_time(
       pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = hvg)
     )
-    exec_time_2 <- exec_time(
+    res_list[["Pseudobulk_hvg2000"]][["exec_time"]] <- exec_time(
       res_list[["Pseudobulk_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
-    )
-    res_list[["Pseudobulk_hvg2000"]][["exec_time"]] <- exec_time_1 + exec_time_2
+    ) + exec_time_pb_norm
   }
 
 
@@ -1035,16 +1034,22 @@ run_benchmark_analysis <- function(res_list,
     paste0("Pseudobulk_", factors_test, "_PCA_dims"),
     paste0("MOFA_hvg2000_factors", factors_test)
   )
+  exec_time_pb_norm <- exec_time(
+    pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = 2000)
+  )
   # So need to check if any of those methods need to be run
   # (mainly whether to calculate pb_norm or not)
   if (any(!test_items %in% names(res_list))) {
-    pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = 2000)
-    res_list[["Pseudobulk_unsup_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
+    res_list[["Pseudobulk_unsup_hvg2000"]][["exec_time"]] <- exec_time(
+      res_list[["Pseudobulk_unsup_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
+    ) + exec_time_pb_norm
   }
 
 
   if (!"Pseudobulk_hvg2000" %in% names(res_list)) {
-    res_list[["Avg_PCA_embedding"]] <- process_avg_pca_embedding_fig(seurat, labels)
+    res_list[["Avg_PCA_embedding"]][["exec_time"]] <- exec_time(
+      res_list[["Avg_PCA_embedding"]] <- process_avg_pca_embedding_fig(seurat, labels)
+    ) + exec_time_pb_norm
   }
 
   # Deconvolute using EPIC
@@ -1059,10 +1064,12 @@ run_benchmark_analysis <- function(res_list,
 
   ## layer1: low res. cell types
   if (!is.null(seurat@misc$low_res_ct_col)) {
-    res_list[["ECODA_authors_LR"]] <- process_coda_fig(
-      seurat, labels,
-      ct_col = seurat@misc$low_res_ct_col,
-      title = "ECODA\nlow res."
+    res_list[["ECODA_authors_LR"]][["exec_time"]] <- exec_time(
+      res_list[["ECODA_authors_LR"]] <- process_coda_fig(
+        seurat, labels,
+        ct_col = seurat@misc$low_res_ct_col,
+        title = "ECODA\nlow res."
+      )
     )
   }
 
@@ -1075,87 +1082,113 @@ run_benchmark_analysis <- function(res_list,
         title = "ECODA\nhigh res."
       )
     )
-    res_list[["ECODA_authors_HR_NULL"]] <- process_coda_fig(
-      seurat, labels,
-      ct_col = seurat@misc$hi_res_ct_col,
-      title = "ECODA\nhigh res.", shuffle_labels = TRUE
+    res_list[["ECODA_authors_HR_NULL"]][["exec_time"]] <- exec_time(
+      res_list[["ECODA_authors_HR_NULL"]] <- process_coda_fig(
+        seurat, labels,
+        ct_col = seurat@misc$hi_res_ct_col,
+        title = "ECODA\nhigh res.", shuffle_labels = TRUE
+      )
     )
 
     for (varexp_hvc in ECODA_top_varexp_hvct) {
-      res_list[[paste0("ECODA_authors_HR_top_varexp", varexp_hvc)]] <-
-        process_coda_fig(
-          seurat, labels,
-          ECODA_top_varexp_hvct = varexp_hvc,
-          ct_col = seurat@misc$hi_res_ct_col,
-          title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%")
-        )
+      ECODA_authors_HR_top_varexp_hvc <- paste0("ECODA_authors_HR_top_varexp", varexp_hvc)
+      res_list[[ECODA_authors_HR_top_varexp_hvc]][["exec_time"]] <- exec_time(
+        res_list[[ECODA_authors_HR_top_varexp_hvc]] <-
+          process_coda_fig(
+            seurat, labels,
+            ECODA_top_varexp_hvct = varexp_hvc,
+            ct_col = seurat@misc$hi_res_ct_col,
+            title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%")
+          )
+      )
 
-      res_list[[paste0("ECODA_HiTME_HR_layer2_top_varexp", varexp_hvc)]] <-
-        process_coda_fig(
-          seurat, labels,
-          ECODA_top_varexp_hvct = varexp_hvc,
-          ct_col = "layer2",
-          title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%")
-        )
-      res_list[[paste0("ECODA_HiTME_HR_layer3_top_varexp", varexp_hvc)]] <-
-        process_coda_fig(
-          seurat, labels,
-          ECODA_top_varexp_hvct = varexp_hvc,
-          ct_col = "layer3",
-          title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%")
-        )
+      ECODA_HiTME_HR_layer2_top_varexp_hvc <- paste0("ECODA_HiTME_HR_layer2_top_varexp", varexp_hvc)
+      res_list[[ECODA_HiTME_HR_layer2_top_varexp_hvc]][["exec_time"]] <- exec_time(
+        res_list[[ECODA_HiTME_HR_layer2_top_varexp_hvc]] <-
+          process_coda_fig(
+            seurat, labels,
+            ECODA_top_varexp_hvct = varexp_hvc,
+            ct_col = "layer2",
+            title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%")
+          )
+      )
+
+      ECODA_HiTME_HR_layer3_top_varexp_hvc <- paste0("ECODA_HiTME_HR_layer3_top_varexp", varexp_hvc)
+      res_list[[ECODA_HiTME_HR_layer3_top_varexp_hvc]][["exec_time"]] <- exec_time(
+        res_list[[ECODA_HiTME_HR_layer3_top_varexp_hvc]] <-
+          process_coda_fig(
+            seurat, labels,
+            ECODA_top_varexp_hvct = varexp_hvc,
+            ct_col = "layer3",
+            title = paste0("ECODA\nhigh res. var. exp. ", varexp_hvc * 100, "%")
+          )
+      )
     }
 
-    res_list[["Freq_highres"]] <- process_coda_fig(
-      seurat, labels,
-      calc_clr = FALSE,
-      ct_col = seurat@misc$hi_res_ct_col,
-      title = "Cell type composition (%)\nhigh res."
+    res_list[["Freq_highres"]][["exec_time"]] <- exec_time(
+      res_list[["Freq_highres"]] <- process_coda_fig(
+        seurat, labels,
+        calc_clr = FALSE,
+        ct_col = seurat@misc$hi_res_ct_col,
+        title = "Cell type composition (%)\nhigh res."
+      )
     )
   }
 
-  res_list[["ECODA_authors_HR_3most_varcts"]] <-
-    process_coda_fig(
-      seurat, labels,
-      ECODA_top_n_hvct = 3,
-      var_ct_desc = TRUE, ct_col = seurat@misc$hi_res_ct_col,
-      title = "ECODA\n2 least var. cell types"
-    )
+  res_list[["ECODA_authors_HR_3most_varcts"]][["exec_time"]] <- exec_time(
+    res_list[["ECODA_authors_HR_3most_varcts"]] <-
+      process_coda_fig(
+        seurat, labels,
+        ECODA_top_n_hvct = 3,
+        var_ct_desc = TRUE, ct_col = seurat@misc$hi_res_ct_col,
+        title = "ECODA\n2 least var. cell types"
+      )
+  )
 
-  res_list[["ECODA_authors_HR_2least_varcts"]] <-
-    process_coda_fig(
-      seurat, labels,
-      ECODA_top_n_hvct = 2,
-      var_ct_desc = FALSE, ct_col = seurat@misc$hi_res_ct_col,
-      title = "ECODA\n2 least var. cell types"
-    )
+  res_list[["ECODA_authors_HR_2least_varcts"]][["exec_time"]] <- exec_time(
+    res_list[["ECODA_authors_HR_2least_varcts"]] <-
+      process_coda_fig(
+        seurat, labels,
+        ECODA_top_n_hvct = 2,
+        var_ct_desc = FALSE, ct_col = seurat@misc$hi_res_ct_col,
+        title = "ECODA\n2 least var. cell types"
+      )
+  )
 
-  res_list[["ECODA_authors_HR_3least_varcts"]] <-
-    process_coda_fig(
-      seurat, labels,
-      ECODA_top_n_hvct = 3,
-      var_ct_desc = FALSE, ct_col = seurat@misc$hi_res_ct_col,
-      title = "ECODA\n2 least var. cell types"
-    )
+  res_list[["ECODA_authors_HR_3least_varcts"]][["exec_time"]] <- exec_time(
+    res_list[["ECODA_authors_HR_3least_varcts"]] <-
+      process_coda_fig(
+        seurat, labels,
+        ECODA_top_n_hvct = 3,
+        var_ct_desc = FALSE, ct_col = seurat@misc$hi_res_ct_col,
+        title = "ECODA\n2 least var. cell types"
+      )
+  )
 
-  res_list[["ECODA_HiTME_HR_layer2"]] <-
-    process_coda_fig(
-      seurat, labels,
-      ct_col = "layer2",
-      title = "ECODA\nHiTME layer2"
-    )
-  res_list[["ECODA_HiTME_HR_layer3"]] <-
-    process_coda_fig(
-      seurat, labels,
-      ct_col = "layer3",
-      title = "ECODA\nHiTME layer3"
-    )
-  res_list[["ECODA_scATOMIC_HR"]] <-
-    process_coda_fig(
-      seurat, labels,
-      ct_col = "scATOMIC_pred",
-      title = "ECODA\nscATOMIC"
-    )
+  res_list[["ECODA_HiTME_HR_layer2"]][["exec_time"]] <- exec_time(
+    res_list[["ECODA_HiTME_HR_layer2"]] <-
+      process_coda_fig(
+        seurat, labels,
+        ct_col = "layer2",
+        title = "ECODA\nHiTME layer2"
+      )
+  )
+  res_list[["ECODA_HiTME_HR_layer3"]][["exec_time"]] <- exec_time(
+    res_list[["ECODA_HiTME_HR_layer3"]] <-
+      process_coda_fig(
+        seurat, labels,
+        ct_col = "layer3",
+        title = "ECODA\nHiTME layer3"
+      )
+  )
+  res_list[["ECODA_scATOMIC_HR"]][["exec_time"]] <- exec_time(
+    res_list[["ECODA_scATOMIC_HR"]] <-
+      process_coda_fig(
+        seurat, labels,
+        ct_col = "scATOMIC_pred",
+        title = "ECODA\nscATOMIC"
+      )
+  )
 
 
   # Analyze for all resolutions
@@ -1163,12 +1196,15 @@ run_benchmark_analysis <- function(res_list,
   ## Ultra high res. cell type clusters based on Leiden clustering to artificially increase the number of cell types (clusters), e.g. to 250 cell types (clusters)
   for (r in seurat_res) {
     res_col_name <- paste0("RNA_snn_res.", r)
-    res_list[[paste0("ECODA_seuratres_", r)]] <-
-      process_coda_fig(
-        seurat, labels,
-        ct_col = res_col_name,
-        title = paste0("ECODA\nLeiden clustering ", r)
-      )
+    ECODA_seuratres_r <- paste0("ECODA_seuratres_", r)
+    res_list[[ECODA_seuratres_r]][["exec_time"]] <- exec_time(
+      res_list[[ECODA_seuratres_r]] <-
+        process_coda_fig(
+          seurat, labels,
+          ct_col = res_col_name,
+          title = paste0("ECODA\nLeiden clustering ", r)
+        )
+    )
   }
 
 
@@ -1181,24 +1217,28 @@ run_benchmark_analysis <- function(res_list,
     # Pseudobulk with PCA
     pb_pca_i <- paste0("Pseudobulk_", i, "_PCA_dims")
     if (!pb_pca_i %in% names(res_list)) {
-      res_list[[pb_pca_i]] <-
-        process_pseudobulk_fig(
-          pb_norm, labels,
-          pca_dims = i,
-          title = paste0("Pseudobulk gene expression\n+ PCA (", i, " dims)")
-        )
+      res_list[[pb_pca_i]][["exec_time"]] <- exec_time(
+        res_list[[pb_pca_i]] <-
+          process_pseudobulk_fig(
+            pb_norm, labels,
+            pca_dims = i,
+            title = paste0("Pseudobulk gene expression\n+ PCA (", i, " dims)")
+          )
+      ) + exec_time_pb_norm
     }
 
     # Hires CODA with PCA
     ecoda_pca_i <- paste0("ECODA_authors_HR_", i, "_PCA_dims")
     if (!ecoda_pca_i %in% names(res_list)) {
-      res_list[[ecoda_pca_i]] <-
-        process_coda_fig(
-          seurat, labels,
-          pca_dims = i,
-          ct_col = seurat@misc$hi_res_ct_col,
-          title = paste0("ECODA\nhigh res. + PCA (", i, " dims)")
-        )
+      res_list[[ecoda_pca_i]][["exec_time"]] <- exec_time(
+        res_list[[ecoda_pca_i]] <-
+          process_coda_fig(
+            seurat, labels,
+            pca_dims = i,
+            ct_col = seurat@misc$hi_res_ct_col,
+            title = paste0("ECODA\nhigh res. + PCA (", i, " dims)")
+          )
+      )
     }
 
     # MOFA
@@ -1211,7 +1251,7 @@ run_benchmark_analysis <- function(res_list,
             metadata = metadata, labels,
             num_factors = i
           )
-      )
+      ) + exec_time_pb_norm
     }
 
     # scITD
@@ -1244,11 +1284,13 @@ run_benchmark_analysis <- function(res_list,
             n_pca_dims = i
           )
       )
-      res_list[[paste0(gloscope_pca_i, "_sqrtmat")]] <-
-        process_gloscope_sqrtmat_fig(
-          metadata, label_col,
-          gloscope_dist_file = gloscope_dist_file
-        )
+      res_list[[gloscope_pca_i]][["exec_time"]] <- exec_time(
+        res_list[[paste0(gloscope_pca_i, "_sqrtmat")]] <-
+          process_gloscope_sqrtmat_fig(
+            metadata, label_col,
+            gloscope_dist_file = gloscope_dist_file
+          )
+      ) + res_list[[gloscope_pca_i]][["exec_time"]]
     }
   }
 
@@ -1257,10 +1299,13 @@ run_benchmark_analysis <- function(res_list,
 
   ### Do only for non-default HVGs (default = 2000)
   for (i in HVGs[!HVGs %in% 2000]) {
+    Pseudobulk_hvg_i <- paste0("Pseudobulk_hvg", i)
+    Pseudobulk_unsup_hvg_i <- paste0("Pseudobulk_unsup_hvg", i)
+    MOFA_hvg_i_15_factors <- paste0("MOFA_hvg", i, "_15_factors")
     test_items <- c(
-      paste0("Pseudobulk_hvg", i),
-      paste0("Pseudobulk_unsup_hvg", i),
-      paste0("MOFA_hvg", i, "_15_factors"),
+      Pseudobulk_hvg_i,
+      Pseudobulk_unsup_hvg_i,
+      MOFA_hvg_i_15_factors,
       paste0("GloScope_hvg", i, "_pcadims30"),
       paste0("GloScope_hvg", i, "_pcadims30", "_sqrtmat")
     )
@@ -1281,25 +1326,35 @@ run_benchmark_analysis <- function(res_list,
       gc()
       hvg <- get_current_hvgs(seurat)
 
-      if (!paste0("Pseudobulk_hvg", i) %in% names(res_list)) {
-        pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = hvg)
-        res_list[[paste0("Pseudobulk_hvg", i)]] <- process_pseudobulk_fig(pb_norm, labels)
+      if (!Pseudobulk_hvg_i %in% names(res_list)) {
+        exec_time_pb_norm <- exec_time(
+          pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = hvg)
+        )
+        res_list[[Pseudobulk_hvg_i]][["exec_time"]] <- exec_time(
+          res_list[[Pseudobulk_hvg_i]] <- process_pseudobulk_fig(pb_norm, labels)
+        ) + exec_time_pb_norm
       }
 
       test_items <- c(
-        paste0("Pseudobulk_unsup_hvg", i),
-        paste0("MOFA_hvg", i, "_15_factors")
+        Pseudobulk_unsup_hvg_i,
+        MOFA_hvg_i_15_factors
       )
       if (any(!test_items %in% names(res_list))) {
-        pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = i)
-        res_list[[paste0("Pseudobulk_unsup_hvg", i)]] <- process_pseudobulk_fig(pb_norm, labels)
+        exec_time_pb_norm <- exec_time(
+          pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = i)
+        )
+        res_list[[Pseudobulk_unsup_hvg_i]][["exec_time"]] <- exec_time(
+          res_list[[Pseudobulk_unsup_hvg_i]] <- process_pseudobulk_fig(pb_norm, labels)
+        ) + exec_time_pb_norm
 
-        res_list[[paste0("MOFA_hvg", i, "_15_factors")]] <-
-          process_mofa_bulk_fig(
-            pb_norm,
-            metadata = metadata, labels,
-            num_factors = 15
-          )
+        res_list[[MOFA_hvg_i_15_factors]][["exec_time"]] <- exec_time(
+          res_list[[MOFA_hvg_i_15_factors]] <-
+            process_mofa_bulk_fig(
+              pb_norm,
+              metadata = metadata, labels,
+              num_factors = 15
+            )
+        ) + exec_time_pb_norm
       }
 
       test_items <- c(
@@ -1315,11 +1370,13 @@ run_benchmark_analysis <- function(res_list,
               gloscope_dist_file = gloscope_dist_file
             )
         )
-        res_list[[paste0("GloScope_hvg", i, "_pcadims30", "_sqrtmat")]] <-
-          process_gloscope_sqrtmat_fig(
-            metadata, label_col,
-            gloscope_dist_file = gloscope_dist_file
-          )
+        res_list[[paste0("GloScope_hvg", i, "_pcadims30")]][["exec_time"]] <- exec_time(
+          res_list[[paste0("GloScope_hvg", i, "_pcadims30", "_sqrtmat")]] <-
+            process_gloscope_sqrtmat_fig(
+              metadata, label_col,
+              gloscope_dist_file = gloscope_dist_file
+            )
+        ) + res_list[[paste0("GloScope_hvg", i, "_pcadims30")]][["exec_time"]]
       }
     }
   }
@@ -1350,12 +1407,17 @@ run_benchmark_analysis <- function(res_list,
 
   # ECODA + PB
   for (i in c(0, 0.25, 0.5, 0.75, 1)) {
-    res_list[[paste0("ECODA_PB_combo_ecodaweight", i)]] <- process_ecodapb_fig(
-      dist_mat_ecoda = res_list[["ECODA_authors_HR"]][["dist_mat"]],
-      dist_mat_pb = res_list[["Pseudobulk_unsup_hvg2000"]][["dist_mat"]],
-      ecoda_weight = i,
-      labels = res_list[["ECODA_authors_HR"]][["labels"]]
-    )
+    for (norm in c("max", "median", "zscore", "kernel")) {
+      res_list[[paste0("ECODA_PB_combo_norm", norm, "_ecodaweight", i)]] <- process_ecodapb_fig(
+        dist_mat_ecoda = res_list[["ECODA_authors_HR"]][["dist_mat"]],
+        dist_mat_pb = res_list[["Pseudobulk_unsup_hvg2000"]][["dist_mat"]],
+        norm_method = norm,
+        ecoda_weight = i,
+        labels = res_list[["ECODA_authors_HR"]][["labels"]],
+      )
+      res_list[[paste0("ECODA_PB_combo_norm", norm, "_ecodaweight", i)]][["exec_time"]] <-
+        res_list[["ECODA_authors_HR"]][["exec_time"]] + res_list[["Pseudobulk_unsup_hvg2000"]][["exec_time"]]
+    }
   }
 
 
@@ -1780,11 +1842,35 @@ process_pilot_fig <- function(pilot_dist_file, labels, title = "PILOT") {
 process_ecodapb_fig <- function(
   dist_mat_ecoda,
   dist_mat_pb,
+  feat_mat_ecoda = NULL,
+  feat_mat_pb = NULL,
   ecoda_weight = 0.5,
+  norm_method = c("max", "median", "zscore", "quantile"),
   labels
 ) {
-  dist_mat_ecoda_normed <- dist_mat_ecoda / max(dist_mat_ecoda)
-  dist_mat_pb_normed <- dist_mat_pb / max(dist_mat_pb)
+  norm_method <- match.arg(norm_method)
+
+  if (!is.null(feat_mat_ecoda) & !is.null(feat_mat_pb)) {
+    # Cosine distance matrix
+    dist_mat_ecoda_normed <- proxy::dist(feat_mat_ecoda, method = "cosine")
+    dist_mat_pb_normed <- proxy::dist(feat_mat_pb, method = "cosine")
+  } else {
+    # Euclidian distance matrix
+    if (norm_method == "max") {
+      dist_mat_ecoda_normed <- dist_mat_ecoda / max(dist_mat_ecoda)
+      dist_mat_pb_normed <- dist_mat_pb / max(dist_mat_pb)
+    } else if (norm_method == "median") {
+      dist_mat_ecoda_normed <- dist_mat_ecoda / median(dist_mat_ecoda)
+      dist_mat_pb_normed <- dist_mat_pb / median(dist_mat_pb)
+    } else if (norm_method == "zscore") {
+      dist_mat_ecoda_normed <- zscore_transform(dist_mat_ecoda)
+      dist_mat_pb_normed <- zscore_transform(dist_mat_pb)
+    } else if (norm_method == "quantile") {
+      dist_mat_ecoda_normed <- global_quantile_norm_gaussian(dist_mat_ecoda)
+      dist_mat_pb_normed <- global_quantile_norm_gaussian(dist_mat_pb)
+    }
+  }
+
 
   feat_mat <- dist_mat_ecoda_normed * ecoda_weight + dist_mat_pb_normed * (1 - ecoda_weight)
 
@@ -1798,6 +1884,38 @@ process_ecodapb_fig <- function(
   return(res)
 }
 
+
+zscore_transform <- function(dist_mat) {
+  mu <- mean(dist_mat)
+  sigma <- sd(dist_mat)
+  z_score_matrix <- (dist_mat - mu) / sigma
+
+  return(z_score_matrix)
+}
+
+
+global_quantile_norm_gaussian <- function(dist_mat) {
+  # 1. Flatten the matrix to a single vector
+  v <- as.vector(dist_mat)
+
+  # 2. Calculate ranks (handling ties by averaging)
+  r <- rank(v, ties.method = "average")
+
+  # 3. Convert ranks to probabilities (Blom's method to avoid Inf)
+  # (r - 0.5) / n is a standard formula to center probabilities
+  probs <- (r - 0.5) / length(v)
+
+  # 4. Apply Inverse Normal CDF (qnorm)
+  v_norm <- qnorm(probs)
+
+  # 5. Reshape back to original matrix dimensions
+  mat_norm <- matrix(v_norm, nrow = nrow(dist_mat), ncol = ncol(dist_mat))
+
+  # Restore names if they existed
+  dimnames(mat_norm) <- dimnames(dist_mat)
+
+  return(mat_norm)
+}
 
 #-----------------------------------------------------------<
 
