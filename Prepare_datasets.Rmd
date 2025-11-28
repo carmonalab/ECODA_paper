@@ -84,7 +84,6 @@ for (ds in names(datasets)) {
 ```
 
 
-
 # ---------------------------------------------------------------
 
 # Gong and Sharma
@@ -342,67 +341,6 @@ df_results_list[["Benchmark"]] <- df_results
 
 
 ## Plot results
-
-
-### Main plot (with funkyheatmap)
-
-#### STUMP (TBD)
-
-```{r}
-library(funkyheatmap)
-library(dplyr)
-library(tibble)
-
-# --- 1. Create Dummy Data (Mimicking your image) ---
-set.seed(123)
-data <- tibble(
-  id = c("Perfect embedding", "Embed cell types", "scANVI", "Combat", "scVI", "Harmony", "LIGER", "No integration"),
-  overall_score = c(0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.6, 0.2),
-  # Dataset scores (Blue scale)
-  ds_kidney = runif(8, 0.5, 1),
-  ds_lung = runif(8, 0.5, 1),
-  ds_pancreas = runif(8, 0.5, 1),
-  # Metric scores (Red/Orange scale)
-  m_ari = runif(8, 0, 1),
-  m_nmi = runif(8, 0, 1),
-  m_sil = runif(8, 0, 1),
-  m_kbet = runif(8, 0, 1),
-  # Resources (Text/Heatmap)
-  res_cpu = sample(10:90, 8),
-  res_time = paste0(sample(1:60, 8), "m")
-)
-
-# --- 2. Create Column Metadata ---
-# This tells the plot how to group and style each column
-col_info <- tribble(
-  ~id,             ~group,      ~name,           ~geom,      ~palette,      ~options,
-  "id",            NA,          "Name",          "text",     NA,            list(hjust = 0, width = 4),
-  "overall_score", "Overall",   "Score",         "bar",      "palette1",    list(width = 2),
-  "ds_kidney",     "Datasets",  "Kidney",        "circle",   "palette2",    NA,
-  "ds_lung",       "Datasets",  "Lung",          "circle",   "palette2",    NA,
-  "ds_pancreas",   "Datasets",  "Pancreas",      "circle",   "palette2",    NA,
-  "m_ari",         "Metrics",   "ARI",           "circle",   "palette3",    NA,
-  "m_nmi",         "Metrics",   "NMI",           "circle",   "palette3",    NA,
-  "m_sil",         "Metrics",   "Silhouette",    "circle",   "palette3",    NA,
-  "m_kbet",        "Metrics",   "kBET",          "circle",   "palette3",    NA,
-  "res_cpu",       "Resources", "% CPU",         "funkyrect","palette4",    NA,
-  "res_time",      "Resources", "Time",          "text",     NA,            NA
-)
-
-# --- 3. Generate the Plot ---
-funky_heatmap(
-  data = data,
-  column_info = col_info,
-  column_groups = tribble(
-    ~group,      ~palette,
-    "Overall",   "overall",
-    "Datasets",  "datasets",
-    "Metrics",   "metrics",
-    "Resources", "resources"
-  )
-)
-```
-
 
 
 
@@ -1048,26 +986,73 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_refEC
 result_list1 <- result_list
 
 ecoda_weights <- c(0, 0.25, 0.5, 0.75, 1)
+norm_methods <- c("max", "median", "zscore", "quantile")
 
 for (ds in names(result_list$bmark)) {
   for (i in ecoda_weights) {
-    result_list$bmark[[ds]][[paste0("ECODA_PB_combo_ecodaweight", i)]] <- process_ecodapb_fig(
-      dist_mat_ecoda = result_list$bmark[[ds]][["ECODA_authors_HR"]][["dist_mat"]],
-      dist_mat_pb = result_list$bmark[[ds]][["Pseudobulk_unsup_hvg2000"]][["dist_mat"]],
-      ecoda_weight = i,
-      labels = result_list$bmark[[ds]][["ECODA_authors_HR"]][["labels"]]
+    for (norm in norm_methods) {
+      result_list$bmark[[ds]][[paste0("ECODA_PB_combo_norm", norm, "_ecodaweight", i)]] <- process_ecodapb_fig(
+        dist_mat_ecoda = result_list$bmark[[ds]][["ECODA_authors_HR"]][["dist_mat"]],
+        dist_mat_pb = result_list$bmark[[ds]][["Pseudobulk_unsup_hvg2000"]][["dist_mat"]],
+        ecoda_weight = i,
+        norm_method = norm,
+        labels = result_list$bmark[[ds]][["ECODA_authors_HR"]][["labels"]]
+      )
+    }
+
+    result_list$bmark[[ds]][[paste0("ECODA_PB_combo_normcosine_ecodaweight", i)]] <- process_ecodapb_fig(
+        feat_mat_ecoda = result_list$bmark[[ds]][["ECODA_authors_HR"]][["feat_mat"]],
+        feat_mat_pb = result_list$bmark[[ds]][["Pseudobulk_unsup_hvg2000"]][["feat_mat"]],
+        ecoda_weight = i,
+        # norm_method = norm,
+        labels = result_list$bmark[[ds]][["ECODA_authors_HR"]][["labels"]]
     )
   }
 }
-
 ```
 
+
+#### Plot distance distribution after different normalization methods applied
+
+```{r}
+ecoda <- result_list$bmark$Pelka$ECODA_authors_HR$dist_mat
+pb <- result_list$bmark$Pelka$Pseudobulk_hvg2000$dist_mat
+
+hist(ecoda)
+hist(pb)
+
+test1 <- ecoda / max(ecoda)
+test2 <- pb / max(pb)
+hist(test1, main = "ecoda max")
+hist(test2, main = "pb max")
+
+test1 <- ecoda / median(ecoda)
+test2 <- pb / median(pb)
+hist(test1, main = "ecoda median")
+hist(test2, main = "pb median")
+
+test1 <- global_quantile_norm_gaussian(ecoda)
+test2 <- global_quantile_norm_gaussian(pb)
+hist(test1, main = "ecoda quantiles")
+hist(test2, main = "pb quantiles")
+
+test1 <- zscore_transform(ecoda)
+test2 <- zscore_transform(pb)
+hist(test1, main = "ecoda zscore")
+hist(test2, main = "pb zscore")
+```
+
+
+#### Plot benchmark including ECODA+PB (overview)
 
 ```{r fig.height=9, fig.width=7}
 filter_methods <- c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
-  paste0("ECODA_PB_combo_ecodaweight", ecoda_weights),
+  
+  paste0("ECODA_PB_combo_norm", norm_methods, "_ecodaweight0.5"),
+  "ECODA_PB_combo_normcosine_ecodaweight0.5",
+  
   "ECODA_HiTME_HR_layer2",
   "ECODA_seuratres_2",
   # "ECODA_authors_LR",
@@ -1112,7 +1097,7 @@ df_results %>%
   stat_summary(fun = mean, geom = "bar") +
   labs(x = "", y = "") +
   theme_classic2(base_size = 12) +
-  theme(axis.text.x = element_markdown(angle = 75, vjust = 1, hjust = 1),
+  theme(axis.text.x = element_markdown(angle = 80, vjust = 1, hjust = 1),
   panel.grid.major.y = element_line(size = 0.25, linetype = 'solid',
                                 colour = "lightgrey"), 
   panel.grid.minor.y = element_line(size = 0.25, linetype = 'solid',
@@ -1126,11 +1111,13 @@ df_results %>%
 ```
 
 
+#### Plot benchmark including ECODA+PB (detailed)
+
 ```{r fig.height=7, fig.width=6}
 filter_methods <- c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
-  paste0("ECODA_PB_combo_ecodaweight", ecoda_weights),
+  paste0("ECODA_PB_combo_norm", norm_methods, "_ecodaweight0.5"),
   "ECODA_HiTME_HR_layer2",
   "ECODA_seuratres_2",
   # "ECODA_authors_LR",
@@ -1183,7 +1170,7 @@ df_plot %>%
   ylim(c(min(df_plot$value), max(df_plot$value) + 0.05)) +
   labs(x = "", y = "ANOSIM score") +
   theme_classic() +
-  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+  theme(axis.text.x = element_text(angle = 80, vjust = 1, hjust = 1))
 
 
 
@@ -2260,9 +2247,9 @@ plot(test_int, test_anosim)
 ## Get execution times from R
 
 ```{r}
-r_exec_times_path <- file.path(getwd(), "data", "r_execution_times.txt")
+r_exec_times_path <- file.path(getwd(), "data", "r_execution_times.rds")
 
-if (!file.exists(r_exec_time_path)) {
+if (!file.exists(r_exec_times_path)) {
   r_exec_times <- data.frame(
     dataset = character(),
     method = character(),
@@ -2304,10 +2291,11 @@ if (!file.exists(r_exec_time_path)) {
 ```
 
 
+
 ## Read execution times from python
 
 ```{r}
-p_exec_times_path <- file.path(getwd(), "data", "p_execution_times.txt")
+p_exec_times_path <- file.path(getwd(), "data", "p_execution_times.rds")
 
 if (!file.exists(p_exec_times_path)) {
   p_exec_times <- read.table(
@@ -2341,7 +2329,10 @@ if (!file.exists(exec_times_path)) {
   dss <- names(datasets)
   dss <- dss[!dss %in% c("GongSharma_all_cmv", "GongSharma_all_sex")]
   
+  exec_times <- exec_times[!exec_times$dataset %in% c("Gongsharma_sex_young_cmvneg", "Gongsharma_cmv_females_young", "Gongsharma_age_females_cmvneg"), ]
+  
   for (ds in dss) {
+    print(ds)
     seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
     
     if (ds == "GongSharma_all_age") ds <- "GongSharma_all"
@@ -2349,7 +2340,7 @@ if (!file.exists(exec_times_path)) {
     exec_times$n_cells[exec_times$dataset == ds] <- nrow(seurat@meta.data)
   }
   
-    saveRDS(object = exec_times, exec_times_path)
+  saveRDS(object = exec_times, exec_times_path)
 } else {
   exec_times <- readRDS(exec_times_path)
 }
@@ -2362,7 +2353,6 @@ unique(exec_times$method)
 ## Plot
 
 ```{r}
-
 filter_methods <- c(
   "ECODA_authors_HR",
   "Pseudobulk_hvg2000",
@@ -2383,7 +2373,7 @@ scientific_A_10n <- function(x) {
   return(parse(text = s_converted))  # return as plotmath expression
 }
 
-df %>%
+exec_times %>%
   filter(method %in% filter_methods) %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA",
@@ -2417,6 +2407,213 @@ ggsave(file.path(path_plots, "benchmark_exec_times.pdf"),
        width = 6,
        height = 3.5, limitsize = FALSE)
 ```
+
+
+
+
+# ---------------------------------------------------------------
+# ---------------------------------------------------------------
+
+# Plot benchmark results
+
+## Main plot (with funkyheatmap)
+
+```{r fig.height=6, fig.width=16}
+library(funkyheatmap)
+
+# --- 1. SETUP & CLEANING (Same as before) ---
+filter_methods <- c(
+  "ECODA_authors_HR",
+  "ECODA_authors_HR_NULL",
+  "ECODA_HiTME_HR_layer2",
+  "ECODA_HiTME_HR_layer3",
+  "ECODA_seuratres_2",
+  "ECODA_PB_combo_normquantile_ecodaweight0.5",
+  # "ECODA_authors_LR",
+  "Avg_PCA_embedding",
+  "Freq_highres",
+  # "ECODA_deconv",
+  "Pseudobulk_10_PCA_dims",
+  "MOFA_hvg2000_factors15",
+  "scITD_hvg2000_factors5",
+  "MrVI_hvg2000",
+  "scPoli_hvg2000",
+  "PILOT_hvg2000",
+  "GloScope_hvg2000_pcadims30_sqrtmat"
+)
+
+min_max <- function(x) {
+  if (all(is.na(x))) return(x)
+  if (max(x, na.rm=T) == min(x, na.rm=T)) return(x)
+  (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+}
+
+df_results_bmark <- df_results
+df_results_bmark$temp <- paste0(df_results_bmark$dataset, df_results_bmark$method)
+exec_times$temp <- paste0(exec_times$dataset, exec_times$method)
+
+df_results_bmark <- merge(df_results_bmark,
+                          exec_times[, c("temp", "time_secs")], 
+                          by = "temp", 
+                          all.x = TRUE)
+
+df_results_bmark$temp <- NULL
+exec_times$temp <- NULL
+
+
+clean_data <- df_results_bmark %>%
+  filter(method %in% filter_methods) %>%
+  mutate(method = recode(method,
+                         "ECODA_authors_HR" = "ECODA_authors",
+                         "ECODA_authors_HR_NULL" = "ECODA_NULL",
+                         # "ECODA_HiTME_HR_layer2" = "ECODA_automated_(HiTME_layer2)",
+                         # "ECODA_HiTME_HR_layer3" = "ECODA_automated_(HiTME_layer3)",
+                         "ECODA_seuratres_2" = "ECODA_unsupervised",
+                         "ECODA_PB_combo_normquantile_ecodaweight0.5" = "ECODA+Pseudobulk",
+                         "Pseudobulk_10_PCA_dims" = "Pseudobulk",
+                         "Freq_highres" = "ECODA_Freq%",
+                         "MOFA_hvg2000_factors15" = "MOFA",
+                         "scITD_hvg2000_factors5" = "scITD",
+                         "MrVI_hvg2000" = "MrVI",
+                         "scPoli_hvg2000" = "scPoli",
+                         "scITD_2_factors" = "scITD",
+                         "PILOT_hvg2000" = "PILOT",
+                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
+  mutate(score = recode(score,
+                        "anosim_score" = "ANOSIM",
+                        "mod_knn3_score" = "Modularity",
+                        "cluster_score" = "ARI")) %>%
+  mutate(dataset = recode(dataset,
+                          "GongSharma_all_age" = "GongSharma_age",
+                          "GongSharma_all_cmv" = "GongSharma_cmv",
+                          "GongSharma_all_sex" = "GongSharma_sex"))
+
+# --- 2. CALCULATE GEOMETRIC MEAN OF RANKS (NEW STEP) ---
+df_ranks <- clean_data %>%
+  # Group by specific test case
+  group_by(dataset, score) %>% 
+  # Rank: Higher Value = Better Rank (1). Ties get the minimum rank.
+  mutate(rank = rank(-value, ties.method = "min")) %>% 
+  ungroup() %>%
+  # Now aggregate per method
+  group_by(method) %>% 
+  # Calculate Geometric Mean: exp(mean(log(x)))
+  summarise(geo_mean_rank = exp(mean(log(rank), na.rm = TRUE))) %>%
+  ungroup() %>%
+  # Normalize so it plots nicely (0 to 1). 
+  # We INVERT it so Best Rank (lowest number) = 1.0 (biggest bar)
+  mutate(Rank_Score = (max(geo_mean_rank) - geo_mean_rank) / 
+           (max(geo_mean_rank) - min(geo_mean_rank))) %>%
+  select(method, Rank_Score)
+
+# --- 3. SCALE DATA (0-1) FOR HEATMAP VISUALS ---
+scaled_data <- clean_data %>%
+  group_by(dataset, score) %>%
+  mutate(value = min_max(value)) %>%
+  ungroup()
+
+# --- 4. AGGREGATE SCORES ---
+
+# A. Overall Score (Arithmetic Mean of Scaled Values)
+df_overall <- scaled_data %>%
+  group_by(method) %>%
+  summarise(Overall_Score = mean(value, na.rm = TRUE)) 
+
+# B. Dataset Scores
+df_datasets_wide <- scaled_data %>%
+  group_by(method, dataset) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(id_cols = method, names_from = dataset, values_from = value, names_prefix = "Dataset__")
+
+# C. Metric Scores
+df_metrics_wide <- scaled_data %>%
+  group_by(method, score) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(id_cols = method, names_from = score, values_from = value, names_prefix = "Metric__")
+
+# D. Execution times
+df_runtime <- clean_data %>%
+  # distinct() is crucial! clean_data has 3 rows per dataset (one per score).
+  # We only want to count the execution time once per dataset.
+  distinct(method, dataset, time_secs) %>% 
+  group_by(method) %>%
+  summarise(value = mean(time_secs, na.rm = TRUE), .groups = "drop") %>%
+  # IMPORTANT: We must scale this 0-1 because your funkyheatmap has scale_column = FALSE
+  mutate(value = min_max(value)) %>% 
+  rename(Runtime = value)
+
+# --- 5. MERGE EVERYTHING ---
+final_data <- df_overall %>%
+  left_join(df_ranks, by = "method") %>% # <--- Join the new Rank Score
+  left_join(df_datasets_wide, by = "method") %>%
+  left_join(df_metrics_wide, by = "method") %>%
+  left_join(df_runtime, by = "method") %>%
+  arrange(desc(Rank_Score)) # Optional: sort by the new Rank Score instead
+
+# --- 6. BUILD COLUMN INFO ---
+
+# 1. Fixed Columns (Updated to include Rank_Score)
+info_fixed <- tribble(
+  ~id,             ~group,    ~name,           ~geom,  ~palette,        ~options,
+  "method",        "",        "",              "text", NA,              list(hjust = 0, width = 8),
+  "Rank_Score",    "Overall", "GeoMean Rank",  "bar",  "palette_avg_rank",   list(width = 4, legend = FALSE),
+  "Overall_Score", "Overall", "Overall Score", "bar",  "palette_avg_mean",   list(width = 4, legend = FALSE)
+)
+
+# 2. Dataset Columns
+dataset_cols <- colnames(final_data)[startsWith(colnames(final_data), "Dataset__")]
+info_datasets <- tibble(id = dataset_cols) %>%
+  mutate(
+    group = "Datasets",
+    name = str_remove(id, "Dataset__"), 
+    geom = "funkyrect",
+    palette = "palette_A",
+    options = list(list())
+  ) %>% arrange(name)
+
+# 3. Metric Columns
+metric_cols <- colnames(final_data)[startsWith(colnames(final_data), "Metric__")]
+target_metric_order <- c("ANOSIM", "Modularity", "ARI")
+info_metrics <- tibble(id = metric_cols) %>%
+  mutate(
+    group = "Metrics",
+    name = str_remove(id, "Metric__"),
+    geom = "funkyrect",
+    palette = "palette_B",
+    options = list(list()),
+    name_f = factor(name, levels = target_metric_order)
+  ) %>% arrange(name_f) %>% select(-name_f)
+
+# 4. Runtime Column (Manually added since it's just one column now)
+info_runtime <- tribble(
+  ~id,       ~group,      ~name,         ~geom,       ~palette,     ~options,
+  "Runtime", "Resources", "Runtime (s)", "funkyrect", "palette_C",  list(legend = FALSE)
+)
+
+# Combine
+column_info <- bind_rows(info_fixed, info_datasets, info_metrics, info_runtime)
+
+# --- 7. PLOT ---
+funky_heatmap(
+  final_data,
+  column_info = column_info,
+  scale_column = FALSE, 
+  column_groups = tibble(
+    group = c("Overall", "Datasets", "Metrics", "Resources")
+  ),
+  palettes = list(
+    palette_avg_rank = "Greys",
+    palette_avg_mean = "Greys",
+    palette_A = "Blues",
+    palette_B = "Reds",
+    palette_C = "YlOrBr"),
+  position_args = position_arguments(
+    col_width = 1.5,
+    col_space = 0.2
+  )
+)
+```
+
 
 
 # ---------------------------------------------------------------
@@ -3040,30 +3237,303 @@ write_xlsx(df_results_list, path = file.path(path_data, "raw_data_for_publicatio
 
 File was downloaded and pre-processed with script "Preprocess_sikkema.ipynb"
 
-## Load/preprocess Sikkema dataset
+## Sikkema dataset
+
+### Load/preprocess
 
 ```{r}
-sikkema_processed_file <- file.path(path_data, "Sikkema_ECODAprocessed.rds")
-
-if (!file.exists())
-sikkema_ds = list(
-  file_path = file.path(path_data, "Sikkema.h5ad"),
-  tissue = "Airway_Lung",
-  normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
-  sample_col = "Sample",
-  meta_cols_keep = c(
-    "Sample", # Sample identifier
-    "tissue", # Main biological grouping
-    "suspension_type", "BMI", "age_or_mean_of_age_range", "dataset", "fresh_or_frozen", "lung_condition", # Additional biological groupings
-    "study", "tissue_dissociation_protocol", "tissue_sampling_method", "assay", "tissue_level_2", "sex", # Additional biological groupings
-    "ann_finest_level", "ann_level_1", "ann_level_2", "ann_level_3", "ann_level_4", "ann_level_5", "original_ann_nonharmonized" # Author annotations
-  )
-)
-seurat <- load_h5ad_to_seurat(file_name = sikkema_ds$file_path)
-
+sikkema_processed_file <- file.path(path_data, "Sikkema.h5ad")
+# 
+# if (!file.exists())
+# sikkema_ds = list(
+#   file_path = file.path(path_data, "Sikkema.h5ad"),
+#   tissue = "Airway_Lung",
+#   normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
+#   sample_col = "Sample",
+#   meta_cols_keep = c(
+#     "Sample", # Sample identifier
+#     "tissue", # Main biological grouping
+#     "suspension_type", "BMI", "age_or_mean_of_age_range", "dataset", "fresh_or_frozen", "lung_condition", # Additional biological groupings
+#     "study", "tissue_dissociation_protocol", "tissue_sampling_method", "assay", "tissue_level_2", "sex", # Additional biological groupings
+#     "ann_finest_level", "ann_level_1", "ann_level_2", "ann_level_3", "ann_level_4", "ann_level_5", "original_ann_nonharmonized" # Author annotations
+#   )
+# )
+seurat <- load_h5ad_to_seurat(file_name = sikkema_processed_file)
 ```
 
-## Load/preprocess Joanito dataset
+
+```{r}
+tissues <- as.data.frame.matrix(table(seurat@meta.data$study, seurat@meta.data$tissue_level_2))
+tissues
+
+diss_prot <- as.data.frame.matrix(table(seurat@meta.data$study, seurat@meta.data$tissue_dissociation_protocol))
+diss_prot
+
+# Possible combinations:
+# Barbry_Leroy_2020
+# Jain_Misharin_2021
+# 
+# Meyer_2019
+# Misharin_Budinger_2018
+# Teichmann_Meyer_2019
+```
+
+
+### Plot PCA
+
+#### ECODA
+
+```{r}
+metadata <- get_metadata(seurat)
+
+df_counts <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = "ann_finest_level")
+
+df_imp <- df_counts %>%
+  impute_zeros(
+    clr_zero_impute_method = "counts_all",
+    clr_zero_impute_num = 1
+  )
+
+feat_mat <- clr(df_imp)
+```
+
+```{r}
+label_cols <- c(
+  "tissue",
+  # "suspension_type",
+  "dataset",
+  "BMI",
+  "age_or_mean_of_age_range",
+  "fresh_or_frozen",
+  "lung_condition",
+  "study",
+  "tissue_dissociation_protocol",
+  "tissue_sampling_method",
+  "assay",
+  "tissue_level_2",
+  "sex"
+)
+
+for (label_col in label_cols) {
+  labels <- get_labels(seurat, label_col = label_col)
+  labels <- as.character(labels)
+  labels[is.na(labels)] <- "NA"
+  p <- plot_pca(feat_mat, labels, title = label_col)
+  print(p)
+}
+```
+
+```{r}
+samples <- metadata$donor_id[metadata$study %in% c("Barbry_Leroy_2020", "Jain_Misharin_2021")]
+
+meta <- metadata[metadata$donor_id %in% samples, ]
+fmat <- feat_mat[rownames(feat_mat) %in% samples, ]
+
+label_cols <- c(
+  "tissue",
+  "suspension_type",
+  "dataset",
+  # "BMI",
+  "age_or_mean_of_age_range",
+  "fresh_or_frozen",
+  "lung_condition",
+  "study",
+  "tissue_dissociation_protocol",
+  "tissue_sampling_method",
+  "assay",
+  "tissue_level_2",
+  "sex"
+)
+
+for (label_col in label_cols) {
+  labels <- meta[[label_col]]
+  if (length(unique(labels)) == 1) {
+    next
+  }
+  labels <- as.character(labels)
+  labels[is.na(labels)] <- "NA"
+  p <- plot_pca(fmat, labels, title = label_col)
+  print(p)
+}
+```
+
+
+```{r}
+samples <- metadata$donor_id[metadata$study %in% c("Meyer_2019", "Misharin_Budinger_2018", "Teichmann_Meyer_2019")]
+
+meta <- metadata[metadata$donor_id %in% samples, ]
+fmat <- feat_mat[rownames(feat_mat) %in% samples, ]
+
+label_cols <- c(
+  "tissue",
+  "dataset",
+  # "BMI",
+  "age_or_mean_of_age_range",
+  "fresh_or_frozen",
+  "lung_condition",
+  "study",
+  "tissue_dissociation_protocol",
+  "tissue_sampling_method",
+  "assay",
+  "tissue_level_2",
+  "sex"
+)
+
+for (label_col in label_cols) {
+  labels <- meta[[label_col]]
+  if (length(unique(labels)) == 1) {
+    next
+  }
+  labels <- as.character(labels)
+  labels[is.na(labels)] <- "NA"
+  p <- plot_pca(fmat, labels, title = label_col)
+  print(p)
+}
+```
+
+
+#### PB
+
+```{r}
+pb_norm <- get_pb_deseq2(seurat, sample_col = "Sample", hvg = NULL, n_hvg = 2000)
+```
+
+```{r}
+label_cols <- c(
+  "tissue",
+  # "suspension_type",
+  "dataset",
+  "BMI",
+  "age_or_mean_of_age_range",
+  "fresh_or_frozen",
+  "lung_condition",
+  "study",
+  "tissue_dissociation_protocol",
+  "tissue_sampling_method",
+  "assay",
+  "tissue_level_2",
+  "sex"
+)
+
+for (label_col in label_cols) {
+  labels <- get_labels(seurat, label_col = label_col)
+  labels <- as.character(labels)
+  labels[is.na(labels)] <- "NA"
+  p <- plot_pca(pb_norm, labels, title = label_col)
+  print(p)
+}
+```
+
+
+
+
+## Joanito dataset
+
+### Load/preprocess
+
+```{r}
+seurat <- readRDS(file.path(path_data, "JoaI_2022_35773407_Nofilt_whole_ECODAprocessed.rds"))
+
+
+seurat@meta.data$cell.type_new <- seurat@meta.data$cell.type
+iCMS <- !is.na(seurat@meta.data$iCMS)
+seurat@meta.data$cell.type_new[iCMS] <- paste0(seurat@meta.data$cell.type[iCMS], "_", ifelse(seurat@meta.data$iCMS[iCMS] == "Normal", "Normal", "Cancer"))
+
+meta <- seurat@meta.data %>%
+  group_by(sample.ID) %>%
+  slice(1) %>%
+  as.data.frame()
+row.names(meta) <- meta$sample.ID
+meta$sample.origin <- gsub("-2", "", meta$sample.origin)
+
+
+pb <- get_pb(seurat, sample_col = "sample.ID")
+metadata <- get_metadata(seurat, sample_col = "sample.ID")
+pb_norm <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = 2000))
+```
+
+
+### Plot PCA
+
+#### ECODA
+
+```{r}
+feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$cell.type_new)) %>%
+  # select(-contains("Epithelial")) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  clr()
+
+plot_pca(feat_mat, labels = meta$sample.origin, title = "Authors annotation")
+plot_pca(feat_mat, labels = meta$dataset, title = "Authors annotation")
+
+feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$layer2)) %>%
+  # select(-contains("Epithelial")) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  clr()
+
+plot_pca(feat_mat, labels = meta$sample.origin, title = "HiTME annotation")
+plot_pca(feat_mat, labels = meta$dataset, title = "HiTME annotation")
+
+feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$layer_6)) %>%
+  # select(-contains("Epithelial")) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  clr()
+
+plot_pca(feat_mat, labels = meta$sample.origin, title = "scATOMIC annotation")
+plot_pca(feat_mat, labels = meta$dataset, title = "scATOMIC annotation")
+```
+
+
+#### PB
+
+```{r}
+plot_pca(pb_norm, labels = meta$sample.origin)
+plot_pca(pb_norm, labels = meta$dataset)
+# plot_pca(pb_norm, labels = meta$Gender)
+```
+
+
+#### Split by seq technology
+
+```{r}
+feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$cell.type_new)) %>%
+  # select(-contains("Epithelial")) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  clr()
+
+prime3 <- meta$dataset %in% c("SMC", "KUL3", "CRC-SG2")
+prime5 <- meta$dataset %in% c("CRC-SG1", "KUL5")
+plot_pca(pb_norm[prime3, ], labels = meta$sample.origin[prime3])
+plot_pca(pb_norm[prime5, ], labels = meta$sample.origin[prime5])
+
+plot_pca(feat_mat[prime3, ], labels = meta$sample.origin[prime3])
+plot_pca(feat_mat[prime5, ], labels = meta$sample.origin[prime5])
+```
+
+#### Scores bio vs batch
+
+```{r}
+feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$cell.type_new)) %>%
+  # select(-contains("Epithelial")) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  clr()
+
+labels <- meta$sample.origin
+scores_ecoda_bio <- calc_sep_score(feat_mat, labels)
+scores_pb_bio <- calc_sep_score(pb_norm, labels)
+
+labels <- meta$dataset
+scores_ecoda_batch <- calc_sep_score(feat_mat, labels)
+scores_pb_batch <- calc_sep_score(pb_norm, labels)
+
+print(paste("ECODA: Bio ANOSIM", round(scores_ecoda_bio$anosim_score, 3),
+            "/ Batch ANOSIM", round(scores_ecoda_batch$anosim_score, 3),
+            "=", round(scores_ecoda_bio$anosim_score / scores_ecoda_batch$anosim_score, 3)))
+print(paste("PB: Bio ANOSIM", round(scores_pb_bio$anosim_score, 3),
+            "/ Batch ANOSIM", round(scores_pb_batch$anosim_score, 3),
+            "=", round(scores_pb_bio$anosim_score / scores_pb_batch$anosim_score, 3)))
+```
+
 
 
 # ---------------------------------------------------------------
@@ -3084,7 +3554,7 @@ https://www.nature.com/articles/s41588-022-01100-4
 
 ## Load data
 
-```{r fig.height=12, fig.width=12}
+```{r fig.height=8, fig.width=8}
 seurat <- readRDS("/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/JoaI_2022_35773407/output/JoaI_2022_35773407_Nofilt_whole.rds")
 
 seurat@meta.data$cell.type_new <- seurat@meta.data$cell.type
@@ -3104,18 +3574,10 @@ metadata <- get_metadata(seurat, sample_col = "sample.ID")
 pb_norm <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = 2000))
 
 
-# feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$cell.type)) %>%
-#   impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
-#   clr()
-# plot_pca(feat_mat, labels = meta$sample.origin)
-# plot_pca(feat_mat, labels = meta$dataset)
-
-
 feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$cell.type_new)) %>%
   # select(-contains("Epithelial")) %>%
   impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
   clr()
-
 
 plot_pca(feat_mat, labels = meta$sample.origin)
 plot_pca(feat_mat, labels = meta$dataset)
@@ -3129,7 +3591,6 @@ prime3 <- meta$dataset %in% c("SMC", "KUL3", "CRC-SG2")
 prime5 <- meta$dataset %in% c("CRC-SG1", "KUL5")
 plot_pca(pb_norm[prime3, ], labels = meta$sample.origin[prime3])
 plot_pca(pb_norm[prime5, ], labels = meta$sample.origin[prime5])
-
 
 plot_pca(feat_mat[prime3, ], labels = meta$sample.origin[prime3])
 plot_pca(feat_mat[prime5, ], labels = meta$sample.origin[prime5])
