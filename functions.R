@@ -1302,12 +1302,14 @@ run_benchmark_analysis <- function(res_list,
     Pseudobulk_hvg_i <- paste0("Pseudobulk_hvg", i)
     Pseudobulk_unsup_hvg_i <- paste0("Pseudobulk_unsup_hvg", i)
     MOFA_hvg_i_15_factors <- paste0("MOFA_hvg", i, "_15_factors")
+    GloScope_hvg_i_pcadims30 <- paste0("GloScope_hvg", i, "_pcadims30")
+    GloScope_hvg_i_pcadims30_sqrtmat <- paste0(GloScope_hvg_i_pcadims30, , "_sqrtmat")
     test_items <- c(
       Pseudobulk_hvg_i,
       Pseudobulk_unsup_hvg_i,
       MOFA_hvg_i_15_factors,
-      paste0("GloScope_hvg", i, "_pcadims30"),
-      paste0("GloScope_hvg", i, "_pcadims30", "_sqrtmat")
+      GloScope_hvg_i_pcadims30,
+      GloScope_hvg_i_pcadims30_sqrtmat
     )
 
     if (any(!test_items %in% names(res_list))) {
@@ -1358,25 +1360,25 @@ run_benchmark_analysis <- function(res_list,
       }
 
       test_items <- c(
-        paste0("GloScope_hvg", i, "_pcadims30"),
-        paste0("GloScope_hvg", i, "_pcadims30")
+        GloScope_hvg_i_pcadims30,
+        GloScope_hvg_i_pcadims30_sqrtmat
       )
       if (any(!test_items %in% names(res_list))) {
         gloscope_dist_file <- file.path(path_data, paste0(ds_filename, "_gloscope_hvg", i, "_pcadims50_dists.rds"))
-        res_list[[paste0("GloScope_hvg", i, "_pcadims30")]][["exec_time"]] <- exec_time(
-          res_list[[paste0("GloScope_hvg", i, "_pcadims30")]] <-
+        res_list[[GloScope_hvg_i_pcadims30]][["exec_time"]] <- exec_time(
+          res_list[[GloScope_hvg_i_pcadims30]] <-
             process_gloscope_fig(
               seurat, metadata, label_col,
               gloscope_dist_file = gloscope_dist_file
             )
         )
-        res_list[[paste0("GloScope_hvg", i, "_pcadims30")]][["exec_time"]] <- exec_time(
-          res_list[[paste0("GloScope_hvg", i, "_pcadims30", "_sqrtmat")]] <-
+        res_list[[GloScope_hvg_i_pcadims30_sqrtmat]][["exec_time"]] <- exec_time(
+          res_list[[GloScope_hvg_i_pcadims30_sqrtmat]] <-
             process_gloscope_sqrtmat_fig(
               metadata, label_col,
               gloscope_dist_file = gloscope_dist_file
             )
-        ) + res_list[[paste0("GloScope_hvg", i, "_pcadims30")]][["exec_time"]]
+        ) + res_list[[GloScope_hvg_i_pcadims30]][["exec_time"]]
       }
     }
   }
