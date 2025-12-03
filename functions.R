@@ -1039,14 +1039,14 @@ run_benchmark_analysis <- function(res_list,
   )
   # So need to check if any of those methods need to be run
   # (mainly whether to calculate pb_norm or not)
-  if (any(!test_items %in% names(res_list))) {
+  if (any(!"Pseudobulk_unsup_hvg2000" %in% names(res_list))) {
     res_list[["Pseudobulk_unsup_hvg2000"]][["exec_time"]] <- exec_time(
       res_list[["Pseudobulk_unsup_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
     ) + exec_time_pb_norm
   }
 
 
-  if (!"Pseudobulk_hvg2000" %in% names(res_list)) {
+  if (!"Avg_PCA_embedding" %in% names(res_list)) {
     res_list[["Avg_PCA_embedding"]][["exec_time"]] <- exec_time(
       res_list[["Avg_PCA_embedding"]] <- process_avg_pca_embedding_fig(seurat, labels)
     ) + exec_time_pb_norm
@@ -1633,7 +1633,7 @@ process_mofa_bulk_fig <- function(pb_norm,
   labels <- labels[rownames(feat_mat)]
 
   res <- list()
-  res[["plot"]] <- plot_pca(feat_mat, labels, title = title, coord_equal = FALSE)
+  # res[["plot"]] <- plot_pca(feat_mat, labels, title = title, coord_equal = FALSE)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- as.matrix(dist(feat_mat))
