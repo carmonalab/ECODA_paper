@@ -2291,7 +2291,6 @@ if (!file.exists(r_exec_times_path)) {
 ```
 
 
-
 ## Read execution times from python
 
 ```{r}
