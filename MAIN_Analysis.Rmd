@@ -405,16 +405,17 @@ filter_methods <- c(
   "ECODA_HiTME_HR_layer2",
   "ECODA_seuratres_2",
   # "ECODA_authors_LR",
-  "Avg_PCA_embedding",
+  # "Avg_PCA_embedding",
   "Freq_highres",
   # "ECODA_deconv",
+  "Pseudobulk_unsup_hvg2000",
   "Pseudobulk_10_PCA_dims",
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors5",
   "MrVI_hvg2000",
   "scPoli_hvg2000",
   "PILOT_hvg2000",
-  "GloScope_hvg2000_pcadims30_sqrtmat"
+  "GloScope_hvg2000_pcadims30"
 )
 
 
@@ -425,15 +426,16 @@ df_plot <- df_results %>%
                          "ECODA_authors_HR_NULL" = "ECODA_NULL",
                          "ECODA_HiTME_HR_layer2" = "ECODA_automated",
                          "ECODA_seuratres_2" = "ECODA_unsupervised",
+                         "Pseudobulk_unsup_hvg2000" = "Pseudobulk_unsup",
                          "Pseudobulk_10_PCA_dims" = "Pseudobulk",
-                         "Freq_highres" = "Cell_type_composition_%",
+                         "Freq_highres" = "ECODA_Freq%",
                          "MOFA_hvg2000_factors15" = "MOFA",
                          "scITD_hvg2000_factors5" = "scITD",
                          "MrVI_hvg2000" = "MrVI",
-                         "scPoli_hvg2000" = "scPoli",
+                         "scPoli_hvg2000_dims5" = "scPoli",
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope"))
+                         "GloScope_hvg2000_pcadims30" = "GloScope"))
 
 
 df_plot %>%
@@ -534,6 +536,85 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_modularityknn3_mainmetho
        width = 4.5,
        height = 5.5)
 ```
+
+
+```{r fig.height=4, fig.width=4}
+filter_methods <- c(
+  "ECODA_authors_HR",
+  "ECODA_authors_HR_NULL",
+  "ECODA_HiTME_HR_layer2",
+  "ECODA_seuratres_2",
+  "Avg_PCA_embedding",
+  "Freq_highres",
+  "Pseudobulk_10_PCA_dims",
+  "MOFA_hvg2000_factors15",
+  "scITD_hvg2000_factors5",
+  "MrVI_hvg2000",
+  "scPoli_hvg2000_dims5",
+  "PILOT_hvg2000",
+  "GloScope_hvg2000_pcadims30"
+)
+
+
+df_plot_scaled <- df_results %>%
+  filter(method %in% filter_methods) %>%
+  # -- Recoding names --
+  mutate(method = recode(method,
+                         "ECODA_authors_HR" = "ECODA_authors",
+                         "ECODA_authors_HR_NULL" = "ECODA_NULL",
+                         "ECODA_HiTME_HR_layer2" = "ECODA_automated",
+                         "ECODA_seuratres_2" = "ECODA_Leiden_clustering",
+                         "Pseudobulk_10_PCA_dims" = "Pseudobulk",
+                         "Freq_highres" = "ECODA_Freq%",
+                         "MOFA_hvg2000_factors15" = "MOFA",
+                         "scITD_hvg2000_factors5" = "scITD",
+                         "MrVI_hvg2000" = "MrVI",
+                         "scPoli_hvg2000_dims5" = "scPoli",
+                         "PILOT_hvg2000" = "PILOT",
+                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
+  # -- CRITICAL STEP: Min-Max Scaling per Dataset and Score --
+  group_by(dataset, score) %>% 
+  mutate(scaled_value = min_max(value)) %>% 
+  ungroup()
+
+# 4. Generate the Plot
+# We filter for ANOSIM and use 'scaled_value' instead of 'value'
+df_plot_scaled %>%
+  filter(score == "anosim_score") %>%
+  ggplot(aes(x = fct_reorder(method, scaled_value, .desc = TRUE, .fun = mean), 
+             y = scaled_value)) + # Use the scaled column
+  
+  # Error bars and Mean Bar
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
+  
+  # Individual Points and connecting lines (Paired data)
+  geom_point(position = "identity", alpha = 0.6, size = 0.8) +
+  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
+  
+  # Statistical Test
+  stat_compare_means(
+    ref.group = "ECODA_authors",
+    method = "wilcox.test",
+    paired = TRUE,
+    angle = 25,
+    vjust = 1,
+    aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
+  ) +
+  
+  # Adjust Y-axis (Since data is 0-1, we set limit slightly higher for p-values)
+  ylim(c(0, 1.15)) + 
+  
+  labs(x = "", y = "Separation score\n(Scaled ANOSIM score)") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+ggsave(file.path(path_plots, "benchmark_summary_barplot_ANOSIM_minmaxscaled_mainmethods_refECODA.pdf"),
+       width = 4.5,
+       height = 4.5)
+```
+
+
+
 
 #### Extended methods
 
@@ -701,6 +782,7 @@ wrap_plots(plot_list) +
 
 
 
+
 ```{r fig.height=12, fig.width=12}
 methods <- list(
   "ECODA_authors_HR" = "ECODA",
@@ -746,22 +828,127 @@ for (ds in names(result_list[["bmark"]])) {
 
 ### Compare PCA based on features vs dist
 
-```{r fig.height=12, fig.width=12}
-ds <- "Pelka"
+```{r fig.height=6, fig.width=18}
+library(patchwork)
+
+ds <- "Stephenson"
 plot_list <- list()
 
 methods <- list(
-  "ECODA_authors_HR" = "ECODA",
+  "ECODA_authors_HR" = "ECODA_authors",
   "ECODA_authors_HR_NULL" = "ECODA_NULL",
-  "Pseudobulk_10_PCA_dims" = "Pseudobulk",
+  "Freq_highres" = "ECODA_Freq%",
+  "ECODA_seuratres_2" = "ECODA_unsupervised",
+  "ECODA_HiTME_HR_layer2" = "ECODA_automated",
+  "Pseudobulk_hvg2000" = "Pseudobulk",
   "MOFA_hvg2000_factors15" = "MOFA",
   "scITD_hvg2000_factors5" = "scITD",
   "MrVI_hvg2000" = "MrVI",
   "scPoli_hvg2000_dims5" = "scPoli",
   "PILOT_hvg2000" = "PILOT",
-  "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope"
+  "GloScope_hvg2000_pcadims30" = "GloScope"
 )
 
+for (m in names(methods)) {
+  feat_mat <- result_list[["bmark"]][[ds]][[m]][["feat_mat"]]
+  labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
+  if (ds == "Pelka") {
+    labels <- as.character(labels)
+    labels[labels == "N"] <- "Normal"
+    labels[labels == "T"] <- "Tumor"
+  }
+  if (ds == "Bassez") {
+    labels <- as.character(labels)
+    labels[labels == "E"] <- "Expanders"
+    labels[labels == "NE"] <- "Non-expanders"
+  }
+  
+  if (m == "ECODA_authors_HR_NULL") {
+    labels <- sample(labels)
+  }
+  
+  avg_sep_score <- result_list[["bmark"]][[ds]][[m]]$scores[c("mod_knn3_score", "anosim_score", "cluster_score")] %>%
+    unlist() %>%
+    mean() %>%
+    round(2)
+  
+  plot_list[[m]] <- plot_pca(
+    feat_mat = feat_mat,
+    cluster_score = F, mod_score = F, anosim_score = F,
+    labels = labels,
+    coord_equal = FALSE,
+    title = paste0(methods[[m]], "\nSeparation score: ", sprintf("%.2f", avg_sep_score))
+  )
+}
+
+wrap_plots(plot_list) +
+  plot_layout(nrow = 2, guides = "collect") +
+  plot_annotation(title = ds)
+ggsave(file.path(path_plots, paste0("PCA_", ds, ".pdf")),
+       width = 18,
+       height = 6)
+
+```
+
+```{r}
+for (m in names(methods)) {
+  dist_mat <- result_list[["bmark"]][[ds]][[m]][["dist_mat"]]
+  labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
+  if (ds == "Pelka") {
+    labels <- as.character(labels)
+    labels[labels == "N"] <- "Normal"
+    labels[labels == "T"] <- "Tumor"
+  }
+  
+  if (m == "ECODA_authors_HR_NULL") {
+    labels <- sample(labels)
+  }
+  
+  plot_list[[m]] <- plot_pca(
+    feat_mat = dist_mat,
+    cluster_score = F, mod_score = F, anosim_score = F,
+    labels = labels,
+    coord_equal = FALSE,
+    title = methods[[m]]
+  )
+}
+
+wrap_plots(plot_list) +
+  plot_layout(nrow = 2, guides = "collect") +
+  plot_annotation(title = ds)
+
+
+for (m in names(methods)) {
+  dist_mat <- result_list[["bmark"]][[ds]][[m]][["dist_mat"]]
+  labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
+  if (ds == "Pelka") {
+    labels <- as.character(labels)
+    labels[labels == "N"] <- "Normal"
+    labels[labels == "T"] <- "Tumor"
+  }
+  
+  if (m == "ECODA_authors_HR_NULL") {
+    labels <- sample(labels)
+  }
+  
+  plot_list[[m]] <- plot_pca(
+    feat_mat = dist_mat,
+    labels = labels,
+    coord_equal = FALSE,
+    title = methods[[m]],
+    cluster_score = FALSE,
+    mod_score = FALSE,
+    anosim_score = FALSE
+  )
+}
+
+wrap_plots(plot_list) +
+  plot_layout(nrow = 2, guides = "collect") +
+  plot_annotation(title = ds)
+```
+
+
+```{r fig.height=12, fig.width=12}
 for (m in names(methods)) {
   feat_mat <- result_list[["bmark"]][[ds]][[m]][["feat_mat"]]
   labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
@@ -773,6 +960,8 @@ for (m in names(methods)) {
   plot_list[[m]] <- plot_pca(
     feat_mat = feat_mat,
     labels = labels,
+    n_ct_show = 5,
+    invisible = "quali",
     coord_equal = FALSE,
     title = methods[[m]]
   )
@@ -781,25 +970,53 @@ for (m in names(methods)) {
 wrap_plots(plot_list) +
   plot_layout(nrow = 3, guides = "collect")
 
+```
 
-for (m in names(methods)) {
-  dist_mat <- result_list[["bmark"]][[ds]][[m]][["dist_mat"]]
-  labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
-  
-  if (m == "ECODA_authors_HR_NULL") {
-    labels <- sample(labels)
-  }
-  
-  plot_list[[m]] <- plot_pca(
-    feat_mat = dist_mat,
+
+### Show example heatmap
+
+```{r fig.height=7, fig.width=7}
+library(pheatmap)
+
+ds <- "Bassez"
+
+feat_mat <- result_list[["bmark"]][[ds]]$ECODA_authors_HR$feat_mat
+labels <- result_list[["bmark"]][[ds]]$ECODA_authors_HR$labels
+
+df_heatmap <- feat_mat %>% scale(center = TRUE, scale = FALSE) %>% t() %>% as.data.frame()
+my_sample_col <- list(
+  subtype = as.factor(labels)
+) %>% as.data.frame()
+row.names(my_sample_col) <- colnames(df_heatmap)
+
+pdf(file = file.path(path_plots, paste0("Heatmap_", ds, ".pdf")),
+    width = 6,
+    height = 6)
+pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 4,
+  cutree_cols = 4
+)
+dev.off()
+
+plot_pca(
+    feat_mat = feat_mat,
     labels = labels,
+    n_ct_show = 5,
+    invisible = "quali",
     coord_equal = FALSE,
-    title = methods[[m]]
-  )
-}
-
-wrap_plots(plot_list) +
-  plot_layout(nrow = 3, guides = "collect")
+    title = "",
+    repel = TRUE
+)
+ggsave(file.path(path_plots, paste0("PCA_arrows_", ds, ".pdf")),
+       width = 6,
+       height = 6)
 ```
 
 
@@ -981,36 +1198,6 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_refEC
 
 
 ### Combined ECODA and PB
-
-```{r}
-result_list1 <- result_list
-
-ecoda_weights <- c(0, 0.25, 0.5, 0.75, 1)
-norm_methods <- c("max", "median", "zscore", "quantile")
-
-for (ds in names(result_list$bmark)) {
-  for (i in ecoda_weights) {
-    for (norm in norm_methods) {
-      result_list$bmark[[ds]][[paste0("ECODA_PB_combo_norm", norm, "_ecodaweight", i)]] <- process_ecodapb_fig(
-        dist_mat_ecoda = result_list$bmark[[ds]][["ECODA_authors_HR"]][["dist_mat"]],
-        dist_mat_pb = result_list$bmark[[ds]][["Pseudobulk_unsup_hvg2000"]][["dist_mat"]],
-        ecoda_weight = i,
-        norm_method = norm,
-        labels = result_list$bmark[[ds]][["ECODA_authors_HR"]][["labels"]]
-      )
-    }
-
-    result_list$bmark[[ds]][[paste0("ECODA_PB_combo_normcosine_ecodaweight", i)]] <- process_ecodapb_fig(
-        feat_mat_ecoda = result_list$bmark[[ds]][["ECODA_authors_HR"]][["feat_mat"]],
-        feat_mat_pb = result_list$bmark[[ds]][["Pseudobulk_unsup_hvg2000"]][["feat_mat"]],
-        ecoda_weight = i,
-        # norm_method = norm,
-        labels = result_list$bmark[[ds]][["ECODA_authors_HR"]][["labels"]]
-    )
-  }
-}
-```
-
 
 #### Plot distance distribution after different normalization methods applied
 
@@ -2301,8 +2488,12 @@ if (!file.exists(p_exec_times_path)) {
     file.path(getwd(), "data", "execution_times_formatted.txt"),
     header = TRUE
   )
+  
   p_exec_times$n_samples <- 0
   p_exec_times$n_features <- 0
+  
+  p_exec_times$dataset[p_exec_times$dataset == "Gongsharma_all"] <- "GongSharma_all"
+  p_exec_times <- p_exec_times[!p_exec_times$dataset %in% c("Gongsharma_sex_young_cmvneg", "Gongsharma_cmv_females_young", "Gongsharma_age_females_cmvneg"), ]
   
   for (ds in unique(p_exec_times$dataset)) {
     p_exec_times$n_samples[p_exec_times$dataset == ds] <- r_exec_times$n_samples[r_exec_times$dataset == ds][1]
@@ -2314,6 +2505,7 @@ if (!file.exists(p_exec_times_path)) {
   p_exec_times <- readRDS(p_exec_times_path)
 }
 ```
+
 
 
 ## Combine and get actual cell numbers used per dataset
@@ -2349,12 +2541,29 @@ if (!file.exists(exec_times_path)) {
 unique(exec_times$method)
 ```
 
+
+```{r}
+for (ds in unique(exec_times$dataset)) {
+  for (m in unique(exec_times$method[exec_times$dataset == ds])) {
+    if (grepl("GloScope", m)) {
+      gt <- exec_times1$time_secs[exec_times1$dataset == ds & exec_times1$method == m]
+      exec_times$time_secs[exec_times$dataset == ds & exec_times$method == m] <- gt
+    }
+  }
+}
+```
+
+
+
 ## Plot
 
 ```{r}
 filter_methods <- c(
   "ECODA_authors_HR",
-  "Pseudobulk_hvg2000",
+
+  # "Pseudobulk_hvg2000",
+  "Pseudobulk_unsup_hvg2000",
+  
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors15",
   "GloScope_hvg2000_pcadims50",
@@ -2364,46 +2573,97 @@ filter_methods <- c(
 )
 
 library(scales)
-library(directlabels)
+library(ggrepel)
 
 scientific_A_10n <- function(x) {
-  s <- scales::scientific_format(digits = 2)(x)  # get scientific notation
-  s_converted <- gsub("e\\+", " %*% 10^", s)  # replace 'e' with plotmath notation
-  return(parse(text = s_converted))  # return as plotmath expression
+  s <- scales::scientific_format(digits = 2)(x) 
+  s_converted <- gsub("e\\+", " %*% 10^", s) 
+  return(parse(text = s_converted)) 
 }
 
-exec_times %>%
+# --- 1. Clean Data ---
+plot_data <- exec_times %>%
   filter(method %in% filter_methods) %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA",
-                         "Pseudobulk_hvg2000" = "Pseudobulk",
+                         "Pseudobulk_unsup_hvg2000" = "Pseudobulk",
                          "MOFA_hvg2000_factors15" = "MOFA",
                          "scITD_hvg2000_factors15" = "scITD",
                          "GloScope_hvg2000_pcadims50" = "GloScope",
                          "MrVI_hvg2000" = "MrVI",
                          "scPoli_hvg2000" = "scPoli",
-                         "PILOT_hvg2000" = "PILOT")) %>%
-  ggplot(aes(x = n_cells, y = time_secs, color = method)) +
-  # geom_line() +
+                         "PILOT_hvg2000" = "PILOT"))
+
+# --- 2. Calculate the End of the Regression Line ---
+line_ends <- plot_data %>%
+  group_by(method) %>%
+  summarise(
+    max_x = max(n_cells),
+    model = list(lm(log10(time_secs) ~ n_cells)),
+    pred_log_y = stats::predict(model[[1]], newdata = data.frame(n_cells = max_x))
+  ) %>%
+  mutate(
+    pred_y = 10^pred_log_y 
+  )
+
+# --- NEW STEP: Create Ranked Color Palette ---
+
+# A. Sort methods by predicted time (Fastest/Lowest -> Slowest/Highest)
+ranked_methods <- line_ends %>%
+  arrange(pred_y) %>%
+  pull(method)
+
+# B. Create a gradient function (Green -> Black -> Red)
+# I used "forestgreen" and "firebrick" as they are usually more readable than neon green/red
+grad_func <- colorRampPalette(c("dodgerblue3", "grey50", "red"))
+
+# C. Generate the exact number of colors needed
+method_colors <- grad_func(length(ranked_methods))
+
+# D. Assign the method names to the colors so ggplot maps them correctly
+names(method_colors) <- ranked_methods
+
+
+# --- 3. Plot ---
+ggplot(plot_data, aes(x = n_cells, y = time_secs, color = method)) +
+  # --- The Actual Data ---
+  geom_point(shape = 4, size = 1, stroke = 1.25, alpha = 0.5) +
   geom_smooth(method = "lm", se = FALSE, size = 0.7) +
-  geom_point(shape = 4, size = 1, stroke = 1.25) +
-  labs(x = "Number of cells",
-       y = "Time (s)") +
+  
+  # --- The Labels ---
+  geom_text_repel(
+    data = line_ends, 
+    aes(x = max_x, y = pred_y, label = method), 
+    size = 4,
+    direction = "y",
+    hjust = 0,
+    nudge_x = max(plot_data$n_cells) * 0.05,
+    segment.size = 0.2,
+    segment.color = "grey50",
+    show.legend = FALSE,
+    bg.color = "white", # Optional: adds a white halo around text for readability
+    bg.r = 0.15
+  ) +
+  
+  # --- NEW: Apply the Custom Colors ---
+  scale_color_manual(values = method_colors) +
+  
+  # --- Theme & Scales ---
+  labs(x = "Number of cells", y = "Time (s)") +
   theme_minimal() +
   scale_x_continuous(
-    breaks = scales::pretty_breaks(n = 5),  # Generate breaks
-    labels = function(x) sapply(x, scientific_A_10n),  # Apply custom label function to breaks
-    limits = c(min(exec_times$n_cells), max(exec_times$n_cells) * 1.15)
+    breaks = scales::pretty_breaks(n = 3),
+    labels = function(x) sapply(x, scientific_A_10n),
+    limits = c(min(plot_data$n_cells), max(plot_data$n_cells) * 1.4)
   ) +
-  scale_y_log10(breaks = trans_breaks("log10", function(x) 10^x),
-                labels = trans_format("log10", math_format(10^.x))) +
-  geom_dl(aes(label = method),
-          method = list(dl.combine("last.points"), hjust = -0.1, cex = 0.8),
-          cex = 1) +
-  # xlim(min(exec_times$n_cells), max(exec_times$n_cells) * 1.15) +
-  NoLegend()
+  scale_y_log10(
+    breaks = trans_breaks("log10", function(x) 10^x),
+    labels = trans_format("log10", math_format(10^.x))
+  ) +
+  theme(legend.position = "none")
+
 ggsave(file.path(path_plots, "benchmark_exec_times.pdf"),
-       width = 6,
+       width = 3.5,
        height = 3.5, limitsize = FALSE)
 ```
 
@@ -2419,33 +2679,28 @@ ggsave(file.path(path_plots, "benchmark_exec_times.pdf"),
 
 ```{r fig.height=6, fig.width=16}
 library(funkyheatmap)
+library(RColorBrewer)
 
 # --- 1. SETUP & CLEANING (Same as before) ---
 filter_methods <- c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
   "ECODA_HiTME_HR_layer2",
-  "ECODA_HiTME_HR_layer3",
+  # "ECODA_HiTME_HR_layer3",
   "ECODA_seuratres_2",
-  "ECODA_PB_combo_normquantile_ecodaweight0.5",
+  # "ECODA_PB_combo_normquantile_ecodaweight0.5",
   # "ECODA_authors_LR",
-  "Avg_PCA_embedding",
+  # "Avg_PCA_embedding",
   "Freq_highres",
   # "ECODA_deconv",
   "Pseudobulk_10_PCA_dims",
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors5",
   "MrVI_hvg2000",
-  "scPoli_hvg2000",
+  "scPoli_hvg2000_dims5",
   "PILOT_hvg2000",
-  "GloScope_hvg2000_pcadims30_sqrtmat"
+  "GloScope_hvg2000_pcadims30"
 )
-
-min_max <- function(x) {
-  if (all(is.na(x))) return(x)
-  if (max(x, na.rm=T) == min(x, na.rm=T)) return(x)
-  (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
-}
 
 df_results_bmark <- df_results
 df_results_bmark$temp <- paste0(df_results_bmark$dataset, df_results_bmark$method)
@@ -2465,8 +2720,8 @@ clean_data <- df_results_bmark %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA_authors",
                          "ECODA_authors_HR_NULL" = "ECODA_NULL",
-                         # "ECODA_HiTME_HR_layer2" = "ECODA_automated_(HiTME_layer2)",
-                         # "ECODA_HiTME_HR_layer3" = "ECODA_automated_(HiTME_layer3)",
+                         "ECODA_HiTME_HR_layer2" = "ECODA_automated",
+                         "ECODA_HiTME_HR_layer3" = "ECODA_automated_(HiTME_layer3)",
                          "ECODA_seuratres_2" = "ECODA_unsupervised",
                          "ECODA_PB_combo_normquantile_ecodaweight0.5" = "ECODA+Pseudobulk",
                          "Pseudobulk_10_PCA_dims" = "Pseudobulk",
@@ -2474,10 +2729,10 @@ clean_data <- df_results_bmark %>%
                          "MOFA_hvg2000_factors15" = "MOFA",
                          "scITD_hvg2000_factors5" = "scITD",
                          "MrVI_hvg2000" = "MrVI",
-                         "scPoli_hvg2000" = "scPoli",
+                         "scPoli_hvg2000_dims5" = "scPoli",
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
+                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
   mutate(score = recode(score,
                         "anosim_score" = "ANOSIM",
                         "mod_knn3_score" = "Modularity",
@@ -2555,8 +2810,8 @@ final_data <- df_overall %>%
 info_fixed <- tribble(
   ~id,             ~group,    ~name,           ~geom,  ~palette,        ~options,
   "method",        "",        "",              "text", NA,              list(hjust = 0, width = 8),
-  "Rank_Score",    "Overall", "GeoMean Rank",  "bar",  "palette_avg_rank",   list(width = 4, legend = FALSE),
-  "Overall_Score", "Overall", "Overall Score", "bar",  "palette_avg_mean",   list(width = 4, legend = FALSE)
+  "Rank_Score",    "Overall", "Rank GeoMean",  "bar",  "palette_avg_rank",   list(width = 4, legend = FALSE),
+  "Overall_Score", "Overall", "Score Avg", "bar",  "palette_avg_mean",   list(width = 4, legend = FALSE)
 )
 
 # 2. Dataset Columns
@@ -2565,8 +2820,8 @@ info_datasets <- tibble(id = dataset_cols) %>%
   mutate(
     group = "Datasets",
     name = str_remove(id, "Dataset__"), 
-    geom = "funkyrect",
-    palette = "palette_A",
+    geom = "circle",
+    palette = "Datasets",
     options = list(list())
   ) %>% arrange(name)
 
@@ -2577,20 +2832,17 @@ info_metrics <- tibble(id = metric_cols) %>%
   mutate(
     group = "Metrics",
     name = str_remove(id, "Metric__"),
-    geom = "funkyrect",
-    palette = "palette_B",
-    options = list(list()),
+    geom = "bar",
+    palette = "Metrics",
+    options = list(list(width = 2)),
     name_f = factor(name, levels = target_metric_order)
   ) %>% arrange(name_f) %>% select(-name_f)
 
-# 4. Runtime Column (Manually added since it's just one column now)
-info_runtime <- tribble(
-  ~id,       ~group,      ~name,         ~geom,       ~palette,     ~options,
-  "Runtime", "Resources", "Runtime (s)", "funkyrect", "palette_C",  list(legend = FALSE)
-)
 
 # Combine
-column_info <- bind_rows(info_fixed, info_datasets, info_metrics, info_runtime)
+column_info <- bind_rows(info_fixed, info_datasets, info_metrics)
+
+ncolors <- 11
 
 # --- 7. PLOT ---
 funky_heatmap(
@@ -2598,21 +2850,46 @@ funky_heatmap(
   column_info = column_info,
   scale_column = FALSE, 
   column_groups = tibble(
-    group = c("Overall", "Datasets", "Metrics", "Resources")
+    group = c("Overall", "Datasets", "Metrics")
   ),
   palettes = list(
-    palette_avg_rank = "Greys",
-    palette_avg_mean = "Greys",
-    palette_A = "Blues",
-    palette_B = "Reds",
-    palette_C = "YlOrBr"),
+    palette_avg_rank = brewer.pal(n = ncolors, name = "RdBu"),
+    palette_avg_mean = brewer.pal(n = ncolors, name = "RdBu"),
+    # Define Red (low) -> White -> Blue (high)
+    # You can remove "white" if you want a direct Red-to-Blue gradient
+    Datasets = brewer.pal(n = ncolors, name = "RdBu"), # brewer.pal(30, "Greys"),  #  #c("#D73027", "white", "#4575B4"), 
+    Metrics = brewer.pal(n = ncolors, name = "RdBu")
+  ),
+  legends = list(
+    list(
+      palette = "palette_avg_rank",
+      enabled = FALSE
+    ),
+    list(
+      palette = "palette_avg_mean",
+      enabled = TRUE,
+      title = " ",
+      labels = c(".     Low", rep("", ncolors-2), "High   .")
+    ),
+    list(
+      palette = "Datasets",
+      enabled = TRUE,
+      title = " "
+    ),
+    list(
+      palette = "Metrics",
+      enabled = FALSE
+    )
+  ),
   position_args = position_arguments(
     col_width = 1.5,
     col_space = 0.2
   )
 )
+ggsave(file.path(path_plots, "benchmark_summary_funkyheatmap_mainmethods.pdf"),
+       width = 10,
+       height = 5.5)
 ```
-
 
 
 # ---------------------------------------------------------------
