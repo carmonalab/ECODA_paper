@@ -1,0 +1,461 @@
+---
+title: "Benchmark of exploratory data analysis methods for scRNA-seq data"
+author: "Christian Halter"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+This script prepares datasets for downstream analysis
+
+# Load libraries and set parameters
+
+```{r message=FALSE, warning=FALSE}
+source("functions.R")
+source("Processed_dataset_metadata.R")
+
+library(forcats)
+
+# devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
+library(EPIC)
+# BiocManager::install("MOFA2")
+library(reticulate)
+py_install("mofapy2", envname = "my_env", method="auto")
+import("mofapy2")
+library(basilisk)
+library("MOFA2")
+# BiocManager::install("fgsea")
+# BiocManager::install("sva")
+# devtools::install_github("kharchenkolab/scITD")
+library(scITD)
+# install.packages("ncdf4")
+# install.packages("GloScope")
+library(GloScope)
+
+# Set paths
+path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
+# path_data <- file.path(path_root, "data")
+path_data <- file.path(getwd(), "data")
+path_plots <- file.path(getwd(), "plots")
+seurat_file_ending <- "_ECODAprocessed.rds"
+
+set.seed(123)
+```
+
+
+
+# Batch effect in gene expression and cell type composition
+
+File was downloaded and pre-processed with script "Preprocess_sikkema.ipynb"
+
+## Sikkema dataset
+
+### Load/preprocess
+
+```{r}
+sikkema_processed_file <- file.path(path_data, "Sikkema.h5ad")
+# 
+# if (!file.exists())
+# sikkema_ds = list(
+#   file_path = file.path(path_data, "Sikkema.h5ad"),
+#   tissue = "Airway_Lung",
+#   normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
+#   sample_col = "Sample",
+#   meta_cols_keep = c(
+#     "Sample", # Sample identifier
+#     "tissue", # Main biological grouping
+#     "suspension_type", "BMI", "age_or_mean_of_age_range", "dataset", "fresh_or_frozen", "lung_condition", # Additional biological groupings
+#     "study", "tissue_dissociation_protocol", "tissue_sampling_method", "assay", "tissue_level_2", "sex", # Additional biological groupings
+#     "ann_finest_level", "ann_level_1", "ann_level_2", "ann_level_3", "ann_level_4", "ann_level_5", "original_ann_nonharmonized" # Author annotations
+#   )
+# )
+seurat <- load_h5ad_to_seurat(file_name = sikkema_processed_file)
+```
+
+
+```{r}
+tissues <- as.data.frame.matrix(table(seurat@meta.data$study, seurat@meta.data$tissue_level_2))
+tissues
+
+diss_prot <- as.data.frame.matrix(table(seurat@meta.data$study, seurat@meta.data$tissue_dissociation_protocol))
+diss_prot
+
+# Possible combinations:
+# Barbry_Leroy_2020
+# Jain_Misharin_2021
+# 
+# Meyer_2019
+# Misharin_Budinger_2018
+# Teichmann_Meyer_2019
+```
+
+
+### Plot PCA
+
+#### ECODA
+
+```{r}
+metadata <- get_metadata(seurat)
+
+df_counts <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = "ann_finest_level")
+
+df_imp <- df_counts %>%
+  impute_zeros(
+    clr_zero_impute_method = "counts_all",
+    clr_zero_impute_num = 1
+  )
+
+feat_mat <- clr(df_imp)
+```
+
+```{r}
+label_cols <- c(
+  "tissue",
+  # "suspension_type",
+  "dataset",
+  "BMI",
+  "age_or_mean_of_age_range",
+  "fresh_or_frozen",
+  "lung_condition",
+  "study",
+  "tissue_dissociation_protocol",
+  "tissue_sampling_method",
+  "assay",
+  "tissue_level_2",
+  "sex"
+)
+
+for (label_col in label_cols) {
+  labels <- get_labels(seurat, label_col = label_col)
+  labels <- as.character(labels)
+  labels[is.na(labels)] <- "NA"
+  p <- plot_pca(feat_mat, labels, title = label_col)
+  print(p)
+}
+```
+
+```{r}
+samples <- metadata$donor_id[metadata$study %in% c("Barbry_Leroy_2020", "Jain_Misharin_2021")]
+
+meta <- metadata[metadata$donor_id %in% samples, ]
+fmat <- feat_mat[rownames(feat_mat) %in% samples, ]
+
+label_cols <- c(
+  "tissue",
+  "suspension_type",
+  "dataset",
+  # "BMI",
+  "age_or_mean_of_age_range",
+  "fresh_or_frozen",
+  "lung_condition",
+  "study",
+  "tissue_dissociation_protocol",
+  "tissue_sampling_method",
+  "assay",
+  "tissue_level_2",
+  "sex"
+)
+
+for (label_col in label_cols) {
+  labels <- meta[[label_col]]
+  if (length(unique(labels)) == 1) {
+    next
+  }
+  labels <- as.character(labels)
+  labels[is.na(labels)] <- "NA"
+  p <- plot_pca(fmat, labels, title = label_col)
+  print(p)
+}
+```
+
+
+```{r}
+samples <- metadata$donor_id[metadata$study %in% c("Meyer_2019", "Misharin_Budinger_2018", "Teichmann_Meyer_2019")]
+
+meta <- metadata[metadata$donor_id %in% samples, ]
+fmat <- feat_mat[rownames(feat_mat) %in% samples, ]
+
+label_cols <- c(
+  "tissue",
+  "dataset",
+  # "BMI",
+  "age_or_mean_of_age_range",
+  "fresh_or_frozen",
+  "lung_condition",
+  "study",
+  "tissue_dissociation_protocol",
+  "tissue_sampling_method",
+  "assay",
+  "tissue_level_2",
+  "sex"
+)
+
+for (label_col in label_cols) {
+  labels <- meta[[label_col]]
+  if (length(unique(labels)) == 1) {
+    next
+  }
+  labels <- as.character(labels)
+  labels[is.na(labels)] <- "NA"
+  p <- plot_pca(fmat, labels, title = label_col)
+  print(p)
+}
+```
+
+
+#### PB
+
+```{r}
+pb_norm <- get_pb_deseq2(seurat, sample_col = "Sample", hvg = NULL, n_hvg = 2000)
+```
+
+```{r}
+label_cols <- c(
+  "tissue",
+  # "suspension_type",
+  "dataset",
+  "BMI",
+  "age_or_mean_of_age_range",
+  "fresh_or_frozen",
+  "lung_condition",
+  "study",
+  "tissue_dissociation_protocol",
+  "tissue_sampling_method",
+  "assay",
+  "tissue_level_2",
+  "sex"
+)
+
+for (label_col in label_cols) {
+  labels <- get_labels(seurat, label_col = label_col)
+  labels <- as.character(labels)
+  labels[is.na(labels)] <- "NA"
+  p <- plot_pca(pb_norm, labels, title = label_col)
+  print(p)
+}
+```
+
+
+
+
+## Joanito dataset
+
+### Load/preprocess
+
+```{r}
+seurat <- readRDS(file.path(path_data, "JoaI_2022_35773407_Nofilt_whole_ECODAprocessed.rds"))
+
+
+seurat@meta.data$cell.type_new <- seurat@meta.data$cell.type
+iCMS <- !is.na(seurat@meta.data$iCMS)
+seurat@meta.data$cell.type_new[iCMS] <- paste0(seurat@meta.data$cell.type[iCMS], "_", ifelse(seurat@meta.data$iCMS[iCMS] == "Normal", "Normal", "Cancer"))
+
+meta <- seurat@meta.data %>%
+  group_by(sample.ID) %>%
+  slice(1) %>%
+  as.data.frame()
+row.names(meta) <- meta$sample.ID
+meta$sample.origin <- gsub("-2", "", meta$sample.origin)
+meta$seqtec <- ifelse(meta$dataset %in% c("CRC-SG1", "KUL5"), "5' seq", "3' seq")
+
+pb <- get_pb(seurat, sample_col = "sample.ID")
+metadata <- get_metadata(seurat, sample_col = "sample.ID")
+pb_norm <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = 2000))
+```
+
+
+### Plot PCA
+
+#### ECODA
+
+```{r}
+feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$cell.type_new)) %>%
+  # select(-contains("Epithelial")) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  clr()
+
+plot_pca(feat_mat, labels = meta$sample.origin, title = "Authors annotation")
+ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_ECODA_bio.pdf"),
+       width = 4,
+       height = 4)
+plot_pca(feat_mat, labels = meta$dataset, title = "Authors annotation")
+plot_pca(feat_mat, labels = meta$seqtec, title = "Authors annotation")
+ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_ECODA_batch.pdf"),
+       width = 4,
+       height = 4)
+
+feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$layer2)) %>%
+  # select(-contains("Epithelial")) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  clr()
+
+plot_pca(feat_mat, labels = meta$sample.origin, title = "HiTME annotation")
+plot_pca(feat_mat, labels = meta$dataset, title = "HiTME annotation")
+
+feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$layer_6)) %>%
+  # select(-contains("Epithelial")) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  clr()
+
+plot_pca(feat_mat, labels = meta$sample.origin, title = "scATOMIC annotation")
+plot_pca(feat_mat, labels = meta$dataset, title = "scATOMIC annotation")
+```
+
+
+#### PB
+
+```{r}
+plot_pca(pb_norm, labels = meta$sample.origin)
+ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_PB_bio.pdf"),
+       width = 4,
+       height = 4)
+plot_pca(pb_norm, labels = meta$dataset)
+plot_pca(pb_norm, labels = meta$seqtec)
+ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_PB_batch.pdf"),
+       width = 4,
+       height = 4)
+# plot_pca(pb_norm, labels = meta$Gender)
+```
+
+
+#### Split by seq technology
+
+```{r}
+feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$cell.type_new)) %>%
+  # select(-contains("Epithelial")) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  clr()
+
+prime3 <- meta$dataset %in% c("SMC", "KUL3", "CRC-SG2")
+prime5 <- meta$dataset %in% c("CRC-SG1", "KUL5")
+plot_pca(pb_norm[prime3, ], labels = meta$sample.origin[prime3])
+plot_pca(pb_norm[prime5, ], labels = meta$sample.origin[prime5])
+
+plot_pca(feat_mat[prime3, ], labels = meta$sample.origin[prime3])
+plot_pca(feat_mat[prime5, ], labels = meta$sample.origin[prime5])
+```
+
+#### Scores bio vs batch
+
+```{r}
+feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$cell.type_new)) %>%
+  # select(-contains("Epithelial")) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  clr()
+
+labels <- meta$sample.origin
+scores_ecoda_bio <- calc_sep_score(feat_mat, labels)
+scores_pb_bio <- calc_sep_score(pb_norm, labels)
+
+labels <- meta$dataset
+scores_ecoda_batch <- calc_sep_score(feat_mat, labels)
+scores_pb_batch <- calc_sep_score(pb_norm, labels)
+
+print(paste("ECODA: Bio ANOSIM", round(scores_ecoda_bio$anosim_score, 3),
+            "/ Batch ANOSIM", round(scores_ecoda_batch$anosim_score, 3),
+            "=", round(scores_ecoda_bio$anosim_score / scores_ecoda_batch$anosim_score, 3)))
+print(paste("PB: Bio ANOSIM", round(scores_pb_bio$anosim_score, 3),
+            "/ Batch ANOSIM", round(scores_pb_batch$anosim_score, 3),
+            "=", round(scores_pb_bio$anosim_score / scores_pb_batch$anosim_score, 3)))
+```
+
+
+
+
+
+## Stephenson dataset
+
+### Load/preprocess
+
+```{r}
+path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
+p <- file.path(path_nas, "StephensonE_2021_39313646", "output", "StephensonE_2021_33879890_preprocessed.rds")
+
+seurat <- readRDS(p)
+
+seurat <- subset(seurat, subset = Status %in% c("Healthy", "Covid"))
+
+seurat$Days_from_onset <- as.character(seurat$Days_from_onset)
+seurat$Days_from_onset[seurat$Days_from_onset == "Healthy"] <- 0
+seurat$Days_from_onset[seurat$Days_from_onset == "nan"] <- 999
+seurat$Days_from_onset[seurat$Days_from_onset == "Not_known"] <- 999
+seurat$Days_from_onset <- as.numeric(seurat$Days_from_onset)
+seurat <- subset(seurat, subset = Days_from_onset < 10)
+
+
+meta <- seurat@meta.data %>%
+  group_by(Sample) %>%
+  slice(1) %>%
+  as.data.frame()
+row.names(meta) <- meta$Sample
+
+pb <- get_pb(seurat, sample_col = "Sample")
+metadata <- get_metadata(seurat, sample_col = "Sample")
+pb_norm <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = 2000))
+
+bio_col <- "Status"
+batch_col <- "Site"
+```
+
+
+### Plot PCA
+
+#### ECODA
+
+```{r}
+feat_mat <- as.data.frame.matrix(table(seurat@meta.data$Sample, seurat@meta.data$full_clustering)) %>%
+  # select(-contains("Epithelial")) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  clr()
+
+avg_sep_score <- calc_avg_sep_score(feat_mat, labels = meta[[bio_col]])
+plot_pca(feat_mat, labels = meta[[bio_col]],
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+# ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_ECODA_bio.pdf"),
+#        width = 4,
+#        height = 4)
+
+
+avg_sep_score <- calc_avg_sep_score(feat_mat, labels = meta[[batch_col]])
+plot_pca(feat_mat, labels = meta[[batch_col]],
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+# ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_ECODA_batch.pdf"),
+#        width = 4,
+#        height = 4)
+```
+
+
+#### PB
+
+```{r}
+avg_sep_score <- calc_avg_sep_score(pb_norm, labels = meta[[bio_col]])
+plot_pca(pb_norm, labels = meta[[bio_col]],
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+# ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_PB_bio.pdf"),
+#        width = 4,
+#        height = 4)
+
+avg_sep_score <- calc_avg_sep_score(pb_norm, labels = meta[[batch_col]])
+plot_pca(pb_norm, labels = meta[[batch_col]],
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+# ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_PB_batch.pdf"),
+#        width = 4,
+#        height = 4)
+```
+
+

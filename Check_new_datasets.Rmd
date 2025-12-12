@@ -1,0 +1,895 @@
+---
+title: "Benchmark of exploratory data analysis methods for scRNA-seq data"
+author: "Christian Halter"
+date: "`r format(Sys.Date(),'%e de %B, %Y')`"
+output: 
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+  pkgdown:
+    as_is: true
+---
+
+This script prepares datasets for downstream analysis
+
+# Load libraries and set parameters
+
+```{r message=FALSE, warning=FALSE}
+source("functions.R")
+source("Processed_dataset_metadata.R")
+
+library(forcats)
+
+# devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
+library(EPIC)
+# BiocManager::install("MOFA2")
+library(reticulate)
+py_install("mofapy2", envname = "my_env", method="auto")
+import("mofapy2")
+library(basilisk)
+library("MOFA2")
+# BiocManager::install("fgsea")
+# BiocManager::install("sva")
+# devtools::install_github("kharchenkolab/scITD")
+library(scITD)
+# install.packages("ncdf4")
+# install.packages("GloScope")
+library(GloScope)
+
+# Set paths
+path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
+# path_data <- file.path(path_root, "data")
+path_data <- file.path(getwd(), "data")
+path_plots <- file.path(getwd(), "plots")
+seurat_file_ending <- "_ECODAprocessed.rds"
+
+set.seed(123)
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Colorectal cancer from Joanito et al.
+
+Single-cell and bulk transcriptome sequencing identifies two epithelial tumor cell states and refines the consensus molecular classification of colorectal cancer
+
+Data from:
+https://www.nature.com/articles/s41588-022-01100-4
+
+
+## Load data
+
+```{r fig.height=8, fig.width=8}
+seurat <- readRDS("/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/JoaI_2022_35773407/output/JoaI_2022_35773407_Nofilt_whole.rds")
+
+seurat@meta.data$cell.type_new <- seurat@meta.data$cell.type
+iCMS <- !is.na(seurat@meta.data$iCMS)
+seurat@meta.data$cell.type_new[iCMS] <- paste0(seurat@meta.data$cell.type[iCMS], "_", ifelse(seurat@meta.data$iCMS[iCMS] == "Normal", "Normal", "Cancer"))
+
+meta <- seurat@meta.data %>%
+  group_by(sample.ID) %>%
+  slice(1) %>%
+  as.data.frame()
+row.names(meta) <- meta$sample.ID
+meta$sample.origin <- gsub("-2", "", meta$sample.origin)
+
+
+pb <- get_pb(seurat, sample_col = "sample.ID")
+metadata <- get_metadata(seurat, sample_col = "sample.ID")
+pb_norm <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = 2000))
+
+
+feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$cell.type_new)) %>%
+  # select(-contains("Epithelial")) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  clr()
+
+plot_pca(feat_mat, labels = meta$sample.origin)
+plot_pca(feat_mat, labels = meta$dataset)
+
+
+plot_pca(pb_norm, labels = meta$sample.origin)
+plot_pca(pb_norm, labels = meta$dataset)
+# plot_pca(pb_norm, labels = meta$Gender)
+
+prime3 <- meta$dataset %in% c("SMC", "KUL3", "CRC-SG2")
+prime5 <- meta$dataset %in% c("CRC-SG1", "KUL5")
+plot_pca(pb_norm[prime3, ], labels = meta$sample.origin[prime3])
+plot_pca(pb_norm[prime5, ], labels = meta$sample.origin[prime5])
+
+plot_pca(feat_mat[prime3, ], labels = meta$sample.origin[prime3])
+plot_pca(feat_mat[prime5, ], labels = meta$sample.origin[prime5])
+```
+
+
+
+
+# ---------------------------------------------------------------
+
+# Brain from Macnair et al.
+
+snRNA-seq stratifies multiple sclerosis patients into distinct white matter glial responses
+
+Data from:
+https://www.sciencedirect.com/science/article/pii/S0896627324008730#sec8
+
+
+
+## Load data
+
+```{r}
+library(readxl)
+
+df_mac_main <- data.frame(fread(file.path(path_data, "other", "MacnairW_2025_Neuron", "ms_lesions_snRNAseq_col_data_2023-09-12.txt.gz")))
+df_mac_val <- data.frame(fread(file.path(path_data, "other", "MacnairW_2025_Neuron", "ms_lesions_snRNAseq_validation_col_data_2023-09-12.txt.gz")))
+
+feat_mat <- as.data.frame.matrix(table(df_mac_main$sample_id_anon, df_mac_main$type_fine)) %>%
+  impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+  calc_perc_df() %>%
+  clr()
+  
+meta <- df_mac_main %>%
+    group_by(sample_id_anon) %>%
+    slice(1)
+row.names(meta) <- meta$sample_id_anon
+
+p <- plot_pca(feat_mat, labels = meta$matter)
+
+
+rsub <- meta$matter == "GM"
+feat_mat_gm <- feat_mat[rsub, ]
+meta_gm <- meta[rsub, ]
+
+p <- plot_pca(feat_mat_gm, labels = meta_gm$lesion_type)
+# p <- plot_pca(feat_mat_gm, labels = meta_gm$seq_pool)
+# p <- plot_pca(feat_mat_gm, labels = meta_gm$sex)
+# p <- plot_pca(feat_mat_gm, labels = meta_gm$sample_source)
+# p <- plot_pca(feat_mat_gm, labels = meta_gm$diagnosis)
+# p <- plot_pca(feat_mat_gm, labels = meta_gm$age_cat)
+# p <- plot_pca(feat_mat_gm, labels = meta_gm$pmi_cat)
+
+
+rsub <- meta$matter == "WM"
+feat_mat_wm <- feat_mat[rsub, ]
+meta_wm <- meta[rsub, ]
+
+p <- plot_pca(feat_mat_wm, labels = meta_wm$lesion_type)
+# p <- plot_pca(feat_mat_wm, labels = meta_wm$seq_pool)
+# p <- plot_pca(feat_mat_wm, labels = meta_wm$sex)
+# p <- plot_pca(feat_mat_wm, labels = meta_wm$sample_source)
+# p <- plot_pca(feat_mat_wm, labels = meta_wm$diagnosis)
+# p <- plot_pca(feat_mat_wm, labels = meta_wm$age_cat)
+# p <- plot_pca(feat_mat_wm, labels = meta_wm$pmi_cat)
+```
+
+
+# ---------------------------------------------------------------
+
+# Tumor immune cell atlas from Nieto et al.
+
+A single-cell tumor immune atlas for precision oncology
+
+Data from:
+https://genome.cshlp.org/content/31/10/1913.long#sec-13
+
+
+## Load data
+
+```{r fig.height=12, fig.width=12}
+df_ni <- data.frame(fread(file.path(path_data, "other", "TICAtlas_metadata.csv")))
+
+
+feat_mat <- as.data.frame.matrix(table(df_ni$patient, df_ni$lv1_annot)) %>%
+  impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+  calc_perc_df() %>%
+  clr()
+  
+meta <- df_ni %>%
+    group_by(patient) %>%
+    slice(1) %>%
+  as.data.frame()
+row.names(meta) <- meta$patient
+
+meta$kmeans_cluster[is.na(meta$kmeans_cluster)] <- 7
+
+p <- plot_pca(feat_mat, labels = meta$source)
+# p <- plot_pca(feat_mat, labels = meta$subtype, plotly_3d = TRUE)
+
+
+p <- plot_pca(feat_mat, labels = meta$subtype, invisible = "none", labelsize = 4)
+
+
+cor_matrix <- cor(feat_mat)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix, margins = c(15, 15))
+
+corrplot(cor_matrix, order="hclust")
+corrplot(cor_matrix, order="hclust", hclust.method = c("ward.D2"))
+
+
+
+library(pheatmap)
+
+df_heatmap <- feat_mat %>% scale(center = TRUE, scale = FALSE) %>% t() %>% as.data.frame()
+my_sample_col <- list(
+  subtype = as.factor(meta$subtype),
+  dataset = as.factor(meta$source)
+) %>% as.data.frame()
+row.names(my_sample_col) <- colnames(df_heatmap)
+
+pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 6,
+  cutree_cols = 6
+)
+
+
+
+
+
+
+feat_mat <- as.data.frame.matrix(table(df_ni$patient, df_ni$lv2_annot)) %>%
+  impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+  calc_perc_df() %>%
+  clr()
+  
+meta <- df_ni %>%
+    group_by(patient) %>%
+    slice(1) %>%
+  as.data.frame()
+row.names(meta) <- meta$patient
+
+meta$kmeans_cluster[is.na(meta$kmeans_cluster)] <- 7
+
+p <- plot_pca(feat_mat, labels = meta$source)
+# p <- plot_pca(feat_mat, labels = meta$subtype, plotly_3d = TRUE)
+
+
+p <- plot_pca(feat_mat, labels = meta$subtype, invisible = "none", labelsize = 4)
+
+
+cor_matrix <- cor(feat_mat)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix, margins = c(15, 15))
+
+corrplot(cor_matrix, order="hclust")
+corrplot(cor_matrix, order="hclust", hclust.method = c("ward.D2"))
+
+
+
+library(pheatmap)
+
+df_heatmap <- feat_mat %>% scale(center = TRUE, scale = FALSE) %>% t() %>% as.data.frame()
+my_sample_col <- list(
+  subtype = as.factor(meta$subtype),
+  dataset = as.factor(meta$source)
+) %>% as.data.frame()
+row.names(my_sample_col) <- colnames(df_heatmap)
+
+pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 6,
+  cutree_cols = 6
+)
+
+```
+
+
+
+
+# ---------------------------------------------------------------
+
+# NSCLC response atlas from Liu et al.
+
+A single-cell atlas reveals immune heterogeneity in anti-PD-1-treated non-small cell lung cancer
+
+Data from:
+https://www.cell.com/cell/fulltext/S0092-8674(25)00291-0#sec-4
+
+
+## Load data
+
+```{r fig.height=12, fig.width=12}
+df <- data.frame(fread(file.path(path_data, "other", "GSE243013_NSCLC_immune_scRNA_metadata.csv.gz")))
+
+# Keep only samples with a reasonable amount of cells
+samples_keep <- sort(table(df$sampleID)) > 1000
+samples_keep_names <- names(samples_keep[samples_keep])
+df <- df[df$sampleID %in% samples_keep_names, ]
+
+feat_mat <- as.data.frame.matrix(table(df$sampleID, df$sub_cell_type)) %>%
+  impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+  # impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  calc_perc_df() %>%
+  clr()
+
+meta <- df %>%
+  group_by(sampleID) %>%
+  slice(1) %>%
+  as.data.frame()
+row.names(meta) <- meta$sampleID
+
+p <- plot_pca(feat_mat, labels = meta$gender, plotly_3d = TRUE)
+
+p <- plot_pca(feat_mat, labels = meta$pathological_response)
+p <- plot_pca(feat_mat, labels = meta$pathological_response, plotly_3d = TRUE)
+p <- plot_pca(feat_mat, labels = meta$pathological_response, invisible = "none", labelsize = 4)
+p <- plot_pca(feat_mat, labels = meta$pathological_response, invisible = "none", labelsize = 4, axes = c(1,3))
+
+p <- plot_pca(feat_mat, labels = meta$radiological_response)
+p <- plot_pca(feat_mat, labels = meta$radiological_response, plotly_3d = TRUE)
+p <- plot_pca(feat_mat, labels = meta$radiological_response, invisible = "none", labelsize = 4)
+p <- plot_pca(feat_mat, labels = meta$radiological_response, invisible = "none", labelsize = 4, axes = c(1,3))
+
+
+cor_matrix <- cor(feat_mat)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix, margins = c(15, 15))
+
+corrplot(cor_matrix, order="hclust")
+corrplot(cor_matrix, order="hclust", hclust.method = c("ward.D2"))
+
+
+
+library(pheatmap)
+
+df_heatmap <- feat_mat %>% scale(center = TRUE, scale = FALSE) %>% t() %>% as.data.frame()
+my_sample_col <- list(
+  response = as.factor(meta$pathological_response),
+  cancer_type = as.factor(meta$cancer_type),
+  gender = as.factor(meta$gender),
+  stage = as.factor(meta$pre_treatment_staging),
+  smoking = as.factor(meta$smoking_history)
+) %>% as.data.frame()
+row.names(my_sample_col) <- colnames(df_heatmap)
+
+pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 6,
+  cutree_cols = 6
+)
+
+
+feat_mat_sub <- feat_mat[, grepl("CD4|CD8", colnames(feat_mat))]
+df_heatmap <- feat_mat_sub %>% scale(center = TRUE, scale = FALSE) %>% t() %>% as.data.frame()
+pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 6,
+  cutree_cols = 6
+)
+
+feat_mat_sub <- feat_mat[, startsWith(colnames(feat_mat), "B")]
+df_heatmap <- feat_mat_sub %>% scale(center = TRUE, scale = FALSE) %>% t() %>% as.data.frame()
+pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 6,
+  cutree_cols = 6
+)
+
+
+feat_mat_sub <- feat_mat[, startsWith(colnames(feat_mat), "M")]
+df_heatmap <- feat_mat_sub %>% scale(center = TRUE, scale = FALSE) %>% t() %>% as.data.frame()
+pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 6,
+  cutree_cols = 6
+)
+
+```
+
+
+```{r fig.width=18}
+df_plot <- feat_mat
+df_plot$sampleID <- meta$sampleID
+df_plot$pathological_response <- meta$pathological_response
+df_plot <- df_plot %>%
+  pivot_longer(
+    cols = colnames(feat_mat),
+    names_to = "cts",
+    values_to = "values"
+  )
+ggplot(df_plot, aes(x = cts, y = values, fill = pathological_response)) +
+  geom_boxplot(outlier.shape = NA) +
+  # stat_compare_means(
+  #   # comparisons = my_comparisons,
+  #   # ref.group = "Pseudobulk",
+  #   method = "t.test",
+  #   # paired = TRUE,
+  #   angle = 15) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+
+
+# ---------------------------------------------------------------
+
+# BCC and SCC response from Yost et al.
+
+Clonal replacement of tumor-specific T cells following PD-1 blockade
+
+Data from:
+https://www.nature.com/articles/s41591-019-0522-3#data-availability
+
+
+## Load data
+
+```{r fig.height=12, fig.width=12}
+df1 <- data.frame(fread(file.path(path_data, "other", "GSE123813_bcc_all_metadata.txt.gz")))
+df1$sort <- NULL
+df1$type <- "bcc"
+df1$sample <- paste0(df1$patient, "_", df1$treatment)
+df2 <- data.frame(fread(file.path(path_data, "other", "GSE123813_scc_metadata.txt.gz")))
+df2$type <- "scc"
+df2$sample <- paste0(df2$patient, "_", df2$treatment)
+
+df <- rbind(df1, df2)
+
+sort(table(df$sample))
+
+table(df$sample, df$cluster)
+
+feat_mat <- as.data.frame.matrix(table(df$sample, df$cluster)) %>%
+  impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
+  # impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  calc_perc_df() %>%
+  clr()
+
+meta <- df %>%
+  group_by(sample) %>%
+  slice(1) %>%
+  as.data.frame()
+row.names(meta) <- meta$sample
+
+
+p <- plot_pca(feat_mat, labels = meta$type)
+p <- plot_pca(feat_mat, labels = meta$treatment)
+
+p <- plot_pca(feat_mat, labels = meta$type, plotly_3d = TRUE)
+p <- plot_pca(feat_mat, labels = meta$type, invisible = "none", labelsize = 4)
+p <- plot_pca(feat_mat, labels = meta$type, invisible = "none", labelsize = 4, axes = c(1,3))
+
+# p <- plot_pca(feat_mat, labels = meta$radiological_response)
+# p <- plot_pca(feat_mat, labels = meta$radiological_response, plotly_3d = TRUE)
+# p <- plot_pca(feat_mat, labels = meta$radiological_response, invisible = "none", labelsize = 4)
+# p <- plot_pca(feat_mat, labels = meta$radiological_response, invisible = "none", labelsize = 4, axes = c(1,3))
+
+
+cor_matrix <- cor(feat_mat)
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix, margins = c(15, 15))
+
+corrplot(cor_matrix, order="hclust")
+corrplot(cor_matrix, order="hclust", hclust.method = c("ward.D2"))
+
+
+
+library(pheatmap)
+
+df_heatmap <- feat_mat %>% scale(center = TRUE, scale = FALSE) %>% t() %>% as.data.frame()
+my_sample_col <- list(
+  response = as.factor(meta$pathological_response),
+  cancer_type = as.factor(meta$cancer_type),
+  gender = as.factor(meta$gender),
+  stage = as.factor(meta$pre_treatment_staging),
+  smoking = as.factor(meta$smoking_history)
+) %>% as.data.frame()
+row.names(my_sample_col) <- colnames(df_heatmap)
+
+pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 6,
+  cutree_cols = 6
+)
+
+
+feat_mat_sub <- feat_mat[, grepl("CD4|CD8", colnames(feat_mat))]
+df_heatmap <- feat_mat_sub %>% scale(center = TRUE, scale = FALSE) %>% t() %>% as.data.frame()
+pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 6,
+  cutree_cols = 6
+)
+
+feat_mat_sub <- feat_mat[, startsWith(colnames(feat_mat), "B")]
+df_heatmap <- feat_mat_sub %>% scale(center = TRUE, scale = FALSE) %>% t() %>% as.data.frame()
+pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 6,
+  cutree_cols = 6
+)
+
+
+feat_mat_sub <- feat_mat[, startsWith(colnames(feat_mat), "M")]
+df_heatmap <- feat_mat_sub %>% scale(center = TRUE, scale = FALSE) %>% t() %>% as.data.frame()
+pheatmap(
+  df_heatmap,
+  annotation_col = my_sample_col,
+  # cluster_rows = FALSE,
+  # cluster_cols = FALSE,
+  scale = "none",
+  clustering_method = "ward.D2",
+  show_colnames = FALSE,
+  cutree_rows = 6,
+  cutree_cols = 6
+)
+
+```
+
+
+
+# ---------------------------------------------------------------
+
+# CART from Haradhvala et al.
+
+Clonal replacement of tumor-specific T cells following PD-1 blockade
+
+Data from:
+https://www.nature.com/articles/s41591-019-0522-3#data-availability
+
+
+## Load data
+
+```{r}
+seurat <- readRDS("/Users/christianhalter/Library/CloudStorage/Dropbox/CSI/Standardized_SingleCell_Datasets/HarN_2022_36097221/output/HarN_2022_36097221whole.rds")
+
+library(HiTME)
+
+# Fetch reference maps
+ref.maps <- get.reference.maps(collection = "human")
+
+# Cell type classification on a Seurat object
+query <- Run.HiTME(query,
+                   ref.maps = ref.maps[["human"]],
+                   species = "human" # for mouse data set to "mouse"
+                   )
+
+```
+
+
+# ---------------------------------------------------------------
+
+# Explanation of negative ARI and ANOSIM scores
+
+```{r}
+# --- Load necessary packages ---
+library(vegan)
+library(mclust)
+library(ggplot2)
+
+
+# --- Main function to analyze clusters and plot results ---
+analyze_clusters <- function(n_samples, cluster_specs) {
+  # Generate the data for all clusters
+  data_list <- list()
+  true_labels <- c()
+  group_labels <- c()
+  for (i in 1:length(cluster_specs)) {
+    spec <- cluster_specs[[i]]
+    group_name <- LETTERS[i] # Assign simple group names A, B, C, ...
+    
+    # Generate the descriptive label for the legend
+    mean_str <- paste0("Mean: (", paste(spec$mean, collapse = ", "), ")")
+    sd_str <- paste0("SD: (", paste(spec$sd, collapse = ", "), ")")
+    descriptive_label <- paste(group_name, mean_str, sd_str, sep = " | ")
+
+    # Generate the data
+    if (length(spec$sd) == 1) {
+      cluster_data <- data.frame(
+        x = rnorm(n_samples, mean = spec$mean[1], sd = spec$sd),
+        y = rnorm(n_samples, mean = spec$mean[2], sd = spec$sd)
+      )
+    } else {
+      cluster_data <- data.frame(
+        x = rnorm(n_samples, mean = spec$mean[1], sd = spec$sd[1]),
+        y = rnorm(n_samples, mean = spec$mean[2], sd = spec$sd[2])
+      )
+    }
+
+    cluster_data$group <- group_name
+    data_list[[i]] <- cluster_data
+    true_labels <- c(true_labels, rep(group_name, n_samples))
+    group_labels <- c(group_labels, rep(descriptive_label, n_samples))
+  }
+  
+  # Combine data into a single data frame
+  data_df <- do.call(rbind, data_list)
+
+  # Add the descriptive labels to the dataframe
+  data_df$group_label <- factor(group_labels, levels = unique(group_labels))
+
+  # Generate shuffled labels for both statistical test and plot
+  shuffled_labels <- sample(true_labels)
+  shuffled_group_labels <- sample(group_labels) # This was the flawed part. Corrected below.
+  
+  # The fix: create a shuffled version of the descriptive labels that correctly corresponds to the shuffled simple labels
+  shuffled_labels_map <- setNames(group_labels, true_labels)
+  shuffled_group_labels <- as.character(shuffled_labels_map[shuffled_labels])
+
+  # Calculate distance matrix
+  dist_matrix <- dist(data_df[, c("x", "y")], method = "euclidean")
+  
+  # Calculate ANOSIM and ARI for correct labels
+  anosim_correct <- anosim(dist_matrix, true_labels)
+  ari_correct <- adjustedRandIndex(true_labels, true_labels)
+
+  # Calculate ANOSIM and ARI for shuffled labels
+  anosim_shuffled <- anosim(dist_matrix, shuffled_labels)
+  ari_shuffled <- adjustedRandIndex(true_labels, shuffled_labels)
+
+  # Create plot titles with rounded metrics
+  title_correct <- paste0(
+    "Correct Labels\n",
+    "ANOSIM R: ", round(anosim_correct$statistic, 4),
+    " | ARI: ", round(ari_correct, 4)
+  )
+  
+  title_shuffled <- paste0(
+    "Shuffled Labels\n",
+    "ANOSIM R: ", round(anosim_shuffled$statistic, 4),
+    " | ARI: ", round(ari_shuffled, 4)
+  )
+  
+  # Create plots
+  plot_correct <- ggplot(data_df, aes(x = x, y = y, color = group_label)) +
+    geom_point(size = 2) +
+    labs(title = title_correct, x = "Feature 1", y = "Feature 2", color = "Group Specs") +
+    theme_minimal()
+  print(plot_correct)
+  
+  # The fix: create the shuffled dataframe by re-assigning the labels to the original data points
+  data_df_shuffled_plot <- data_df
+  data_df_shuffled_plot$group_label <- factor(shuffled_group_labels, levels = unique(group_labels))
+  
+  plot_shuffled <- ggplot(data_df_shuffled_plot, aes(x = x, y = y, color = group_label)) +
+    geom_point(size = 2) +
+    labs(title = title_shuffled, x = "Feature 1", y = "Feature 2", color = "Group Specs") +
+    theme_minimal()
+  print(plot_shuffled)
+  
+  # Create a data frame to store the results
+  results_df <- data.frame(
+    Scenario = c("Correct", "Shuffled"),
+    Anosim_R = c(anosim_correct$statistic, anosim_shuffled$statistic),
+    ARI = c(ari_correct, ari_shuffled)
+  )
+  
+  return(results_df)
+}
+
+
+# --- Define Scenarios ---
+set.seed(4)
+
+
+
+# Scenario 1: Well-separated clusters
+n_samples <- 50
+cluster_specs <- list(
+  list(mean = c(0, 0), sd = 1),
+  list(mean = c(5, 5), sd = 1)
+)
+
+# --- Run and print results for each scenario ---
+cat("--- Scenario 1: Well-Separated Clusters (50 samples) ---\n")
+results1 <- analyze_clusters(n_samples, cluster_specs)
+print(results1)
+
+
+# Scenario 2: Well-separated clusters few samples
+n_samples <- 5
+cluster_specs <- list(
+  list(mean = c(0, 0), sd = 1),
+  list(mean = c(5, 5), sd = 1)
+)
+
+# --- Run and print results for each scenario ---
+cat("--- Scenario 2: Well-separated clusters (10 samples)---\n")
+results2 <- analyze_clusters(n_samples, cluster_specs)
+print(results2)
+
+
+# Scenario 3: Well-separated clusters few samples
+n_samples <- 2
+cluster_specs <- list(
+  list(mean = c(0, 0), sd = 1),
+  list(mean = c(5, 5), sd = 1)
+)
+
+# --- Run and print results for each scenario ---
+cat("--- Scenario 3: Well-separated clusters (4 samples) ---\n")
+results3 <- analyze_clusters(n_samples, cluster_specs)
+print(results3)
+
+
+```
+
+
+```{r}
+# --- Load necessary packages ---
+library(vegan)
+library(mclust)
+library(ggplot2)
+
+# --- Define scenario parameters ---
+# set.seed(42)
+n_samples <- 2 # Number of samples per cluster
+
+# Create two clearly separated Gaussian clusters
+cluster1 <- data.frame(
+  x = rnorm(n_samples, mean = 0, sd = 1),
+  y = rnorm(n_samples, mean = 0, sd = 1)
+)
+cluster2 <- data.frame(
+  x = rnorm(n_samples, mean = 5, sd = 1),
+  y = rnorm(n_samples, mean = 5, sd = 1)
+)
+
+# Combine the data
+data_df <- rbind(cluster1, cluster2)
+
+# Create the correct, true labels
+true_labels <- factor(c(rep("Cluster A", n_samples), rep("Cluster B", n_samples)))
+
+# Create the "worst-case" labels by assigning them in an alternating pattern
+worst_labels <- factor(rep(c("Worst A", "Worst B"), length.out = nrow(data_df)))
+
+# --- Plot the scenarios ---
+# Plot for Correct Labels
+plot_correct <- ggplot(data_df, aes(x = x, y = y, color = true_labels)) +
+  geom_point(size = 2) +
+  labs(title = "Data with Correct Cluster Labels", x = "Feature 1", y = "Feature 2") +
+  theme_minimal()
+print(plot_correct)
+
+# Plot for Worst-Case Labels
+plot_worst <- ggplot(data_df, aes(x = x, y = y, color = worst_labels)) +
+  geom_point(size = 2) +
+  labs(title = "Data with Worst-Case (Alternating) Labels", x = "Feature 1", y = "Feature 2") +
+  theme_minimal()
+print(plot_worst)
+
+# --- Calculate ANOSIM and ARI ---
+# Calculate Euclidean distance matrix
+dist_matrix <- dist(data_df[, c("x", "y")], method = "euclidean")
+
+# ANOSIM: Test for separation based on correct vs. worst-case groups
+cat("--- ANOSIM Results ---\n")
+anosim_correct <- anosim(dist_matrix, true_labels)
+cat("ANOSIM R-statistic (Correct Labels):", round(anosim_correct$statistic, 4), "\n")
+# A high positive value indicates strong separation.
+
+anosim_worst <- anosim(dist_matrix, worst_labels)
+cat("ANOSIM R-statistic (Worst-Case Labels):", round(anosim_worst$statistic, 4), "\n\n")
+# This value should be highly negative, indicating that the within-group
+# dissimilarity is much greater than the between-group dissimilarity.
+
+# ARI: Compare the worst-case labels to the correct labels
+cat("--- Adjusted Rand Index Results ---\n")
+# A perfect clustering (correct vs correct) gives a score of 1.
+ari_perfect <- adjustedRandIndex(true_labels, true_labels)
+cat("ARI (Perfect Match):", round(ari_perfect, 4), "\n")
+
+# Comparing the correct labels to the worst-case labels should
+# yield a highly negative score, indicating the worst possible agreement.
+ari_worst <- adjustedRandIndex(true_labels, worst_labels)
+cat("ARI (Correct vs. Worst-Case):", round(ari_worst, 4), "\n")
+```
+
+
+# Export cell type compositions
+
+```{r}
+get_sample_metadata <- function(cell_data_df, sample_col) {
+  # Step 1: Group the data by `sample_col` and check for uniqueness
+  distinct_counts <- cell_data_df %>%
+    dplyr::group_by(!!rlang::sym(sample_col)) %>%
+    dplyr::summarise(across(everything(), ~ n_distinct(.x))) %>%
+    dplyr::ungroup()
+
+  # Step 2: Identify columns that are constant across all samples
+  constant_cols <- distinct_counts %>%
+    dplyr::select(where(~ max(.x) == 1)) %>%
+    names()
+
+  # Step 3: Select and return the constant columns
+  metadata <- cell_data_df %>%
+    dplyr::select(all_of(c(sample_col, constant_cols))) %>%
+    dplyr::distinct() %>%
+    as.data.frame() # Convert back to data.frame
+
+  # Set row names to the sample column for easier access
+  rownames(metadata) <- metadata[[sample_col]]
+  metadata[[sample_col]] <- NULL
+
+  return(metadata)
+}
+
+
+ds_data_list <- list()
+
+for (ds in names(datasets)) {
+  print(ds)
+  
+  seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
+  seurat@misc$label_col <- datasets[[ds]][["label_col"]]
+  
+  ds_data_list[[ds]] <- list(
+    cell_counts_highresolution = get_ct_comp_df_seurat(
+      seurat,
+      sample_col = "Sample",
+      ct_col = datasets[[ds]][["hi_res_ct_col"]]
+    ),
+    cell_counts_lowresolution = get_ct_comp_df_seurat(
+      seurat,
+      sample_col = "Sample",
+      ct_col = datasets[[ds]][["low_res_ct_col"]]
+    ),
+    metadata = get_sample_metadata(seurat@meta.data, "Sample"),
+    main_biologicalcondition_columnname = datasets[[ds]][["label_col"]]
+  )
+}
+  
+saveRDS(
+  object = ds_data_list,
+  file = file.path(path_data, "example_data.rds")
+)
+```
