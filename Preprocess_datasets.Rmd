@@ -215,7 +215,7 @@ datasets <- list(
   ),
   
   "Stephenson" = list(
-    file_path = file.path(path_nas, "MitchelJ_2023_PrePrintTBD", "output", "MitchelJ_2023_PrePrintTBD_Stephenson_preprocessed.rds"),
+    file_path = file.path(path_nas, "StephensonE_2021_39313646", "output", "StephensonE_2021_33879890_preprocessed.rds"),
     subset_vars = list(
       Site = list(values = "Ncl", op = "in"),
       Status = list(values = c("Healthy", "Covid"), op = "in"),
