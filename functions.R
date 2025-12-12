@@ -17,6 +17,7 @@ suppressPackageStartupMessages({
   # install.packages("hdf5r")
   # remotes::install_github("mojaveazure/seurat-disk")
   library(SeuratDisk)
+  library(SignatuR)
   library(stringr)
   library(tidyr)
   library(tidyverse)
@@ -123,6 +124,15 @@ calc_modularity <- function(feat_mat,
   adjusted_modularity_score <- modularity_score / maximum_modularity_score
 
   return(adjusted_modularity_score)
+}
+
+
+calc_avg_sep_score <- function(feat_mat, labels, digits = 2) {
+  sep_scores <- calc_sep_score(feat_mat = feat_mat, labels = labels)
+  avg_sep_score <- sep_scores[c("mod_knn3_score", "anosim_score", "cluster_score")] %>%
+    unlist() %>%
+    mean() %>%
+    round(digits)
 }
 
 
@@ -688,8 +698,17 @@ get_pb <- function(seurat, sample_col = "Sample", hvg = NULL) {
 }
 
 
-get_pb_deseq2 <- function(seurat, sample_col = "Sample", hvg = NULL, n_hvg = 2000) {
+get_pb_deseq2 <- function(seurat, sample_col = "Sample", hvg = NULL, n_hvg = 2000, black_list = "none") {
   pb <- get_pb(seurat, sample_col = sample_col, hvg = hvg)
+
+  if (is.null(hvg) & black_list == "default") {
+    black_list <- default_black_list # From SignatuR package
+    black_list <- black_list[!names(black_list) %in% c("Xgenes", "Ygenes")]
+    black_list <- unlist(black_list)
+
+    pb <- pb[!rownames(pb) %in% black_list, ]
+  }
+
   metadata <- get_metadata(seurat, sample_col = sample_col)
   metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
   pb_norm <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = n_hvg))
@@ -765,6 +784,18 @@ load_h5ad_to_seurat <- function(file_name) {
   seurat <- Seurat::AddMetaData(seurat, meta)
 
   return(seurat)
+}
+
+
+# Min-max-scaling score metrics
+min_max <- function(x) {
+  if (all(is.na(x))) {
+    return(x)
+  }
+  if (max(x, na.rm = T) == min(x, na.rm = T)) {
+    return(x)
+  }
+  (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
 }
 
 
@@ -1043,6 +1074,17 @@ run_benchmark_analysis <- function(res_list,
     res_list[["Pseudobulk_unsup_hvg2000"]][["exec_time"]] <- exec_time(
       res_list[["Pseudobulk_unsup_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
     ) + exec_time_pb_norm
+  }
+
+  exec_time_pb_norm_bl <- exec_time(
+    pb_norm_bl <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = 2000)
+  )
+  # So need to check if any of those methods need to be run
+  # (mainly whether to calculate pb_norm or not)
+  if (any(!"Pseudobulk_unsup_hvg2000_bl" %in% names(res_list))) {
+    res_list[["Pseudobulk_unsup_hvg2000_bl"]][["exec_time"]] <- exec_time(
+      res_list[["Pseudobulk_unsup_hvg2000_bl"]] <- process_pseudobulk_fig(pb_norm_bl, labels)
+    ) + exec_time_pb_norm_bl
   }
 
 
@@ -1492,7 +1534,8 @@ process_coda_fig <- function(seurat,
       impute_zeros(
         clr_zero_impute_method = clr_zero_impute_method,
         clr_zero_impute_num = clr_zero_impute_num
-      )
+      ) %>%
+      calc_perc_df()
 
     if (calc_clr) {
       feat_mat <- df_imp %>%
