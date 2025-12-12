@@ -28,13 +28,13 @@ set.seed(my_seed)
 # Set paths
 
 ```{r}
-path_root <- file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA")
-path_data <- file.path(path_root, "data")
+path_root <- getwd()
+path_data <- file.path(path_root, "data", "other")
 path_plots <- file.path(path_root, "plots")
 ```
 
 ```{r}
-df <- fread(file.path(path_data, "Svensson_sc_database_20250508.txt"), sep = "\t")
+df <- data.table::fread(file.path(path_data, "Svensson_sc_database_20250508.txt"), sep = "\t")
 
 # Convert Date to date format
 df <- df %>%
@@ -64,16 +64,20 @@ mean_data <- df %>%
     )
 
 
-width <- 4
-height <- 4
+width <- 3
+height <- 3
 
-
+point_size <- 0.5
+point_color <- "lightgrey"
 
 ggplot(df, aes(x = Date, y = `Number individuals`)) +
-  geom_point() +
+  geom_point(size = point_size, color = point_color) +
   geom_smooth(method = "lm") +
-  scale_y_continuous(trans='log2', n.breaks = 10) +
-  ylab("Number of individuals") +
+  scale_y_log10(
+    breaks = 10^(0:8),
+    labels = trans_format("log10", math_format(10^.x))
+  ) +
+  ylab("Individuals") +
   ggtitle("Individuals per study") +
   theme_classic()
 # ggplot(data = mean_data, aes(x = Year, y = number_individuals)) +
@@ -90,14 +94,14 @@ ggsave(file.path(path_plots, "literature_datasets_number_individuals.pdf"),
 
 
 ggplot(df, aes(x = Date, y = `Reported cells total`)) +
-  geom_point() +
+  geom_point(size = point_size, color = point_color) +
   geom_smooth(method = "lm") +
   scale_y_log10(
     breaks = 10^(0:8),
     labels = trans_format("log10", math_format(10^.x))
   ) +
   # annotation_logticks() +
-  ylab("Number of cells per dataset") +
+  ylab("Cells") +
   ggtitle("Cells per study") +
   theme_classic()
 # ggplot(data = mean_data, aes(x = Year, y = mean_cells)) +
@@ -117,10 +121,14 @@ ggsave(file.path(path_plots, "literature_datasets_number_cells_per_dataset.pdf")
 
 
 ggplot(df, aes(x = Date, y = `Number of reported cell types or clusters`)) +
-  geom_point() +
+  geom_point(size = point_size, color = point_color) +
   geom_smooth(method = "lm") +
-  scale_y_continuous(trans='log10', n.breaks = 10) +
-  ggtitle("Cell types annotated per study") +
+  scale_y_log10(
+    breaks = 10^(0:8),
+    labels = trans_format("log10", math_format(10^.x))
+  ) +
+  ggtitle("Cell types per study") +
+  ylab("Cell types") +
   theme_classic()
 # ggplot(data = mean_data, aes(x = Year, y = mean_cell_types)) +
 #   # geom_point(data = df, aes(x = Year, y = `Reported cells total`), size = 3, alpha = 0.7) +  # Original points
