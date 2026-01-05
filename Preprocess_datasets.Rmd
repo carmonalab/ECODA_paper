@@ -259,6 +259,16 @@ datasets <- list(
       "Tissue", # Main biological grouping
       "Clinical.efficacy." # Additional biological groupings
     )
+  ),
+  
+  "Zhu" = list(
+    file_path = file.path(path_nas, "ZhuH_2023_37379396", "output", "ZhuH_2023_37379396whole.rds"),
+    tissue = "Blood",
+    normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
+    sample_col = "Sample",
+    meta_cols_keep = c(
+      "Sample" # Sample identifier
+    )
   )
 )
 ```
@@ -348,7 +358,8 @@ HiTME_cols_keep <- c(
   "HeatShock_UCell",
   "cellCycle.G1S_UCell",
   "cellCycle.G2M_UCell",
-  "layer1", "layer2", "layer3")
+  "layer1", "layer2", "layer3"
+)
 
 scATOMIC_cols <- c(
   "layer_1",
