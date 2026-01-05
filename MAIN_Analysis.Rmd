@@ -2554,6 +2554,16 @@ for (ds in unique(exec_times$dataset)) {
 ```
 
 
+```{r}
+for (ds in unique(exec_times$dataset)) {
+  ds_rows <- exec_times$dataset == ds
+  mofa_methods <- grepl("MOFA", exec_times$method)
+  pb_norm_time <- exec_times$time_secs[ds_rows & grepl("Pseudobulk_unsup_hvg2000", exec_times$method)]
+  exec_times$time_secs[ds_rows & mofa_methods] <- exec_times$time_secs[ds_rows & mofa_methods] + pb_norm_time
+}
+```
+
+
 
 ## Plot
 
@@ -2568,7 +2578,7 @@ filter_methods <- c(
   "scITD_hvg2000_factors15",
   "GloScope_hvg2000_pcadims50",
   "MrVI_hvg2000",
-  "scPoli_hvg2000",
+  "scPoli_dims5_hvg2000",
   "PILOT_hvg2000"
 )
 
@@ -2591,7 +2601,7 @@ plot_data <- exec_times %>%
                          "scITD_hvg2000_factors15" = "scITD",
                          "GloScope_hvg2000_pcadims50" = "GloScope",
                          "MrVI_hvg2000" = "MrVI",
-                         "scPoli_hvg2000" = "scPoli",
+                         "scPoli_dims5_hvg2000" = "scPoli",
                          "PILOT_hvg2000" = "PILOT"))
 
 # --- 2. Calculate the End of the Regression Line ---
@@ -2646,7 +2656,7 @@ ggplot(plot_data, aes(x = n_cells, y = time_secs, color = method)) +
   ) +
   
   # --- NEW: Apply the Custom Colors ---
-  scale_color_manual(values = method_colors) +
+  # scale_color_manual(values = method_colors) +
   
   # --- Theme & Scales ---
   labs(x = "Number of cells", y = "Time (s)") +
@@ -2677,7 +2687,7 @@ ggsave(file.path(path_plots, "benchmark_exec_times.pdf"),
 
 ## Main plot (with funkyheatmap)
 
-```{r fig.height=6, fig.width=16}
+```{r fig.height=6, fig.width=12}
 library(funkyheatmap)
 library(RColorBrewer)
 
@@ -2787,14 +2797,16 @@ df_metrics_wide <- scaled_data %>%
 
 # D. Execution times
 df_runtime <- clean_data %>%
-  # distinct() is crucial! clean_data has 3 rows per dataset (one per score).
-  # We only want to count the execution time once per dataset.
   distinct(method, dataset, time_secs) %>% 
   group_by(method) %>%
-  summarise(value = mean(time_secs, na.rm = TRUE), .groups = "drop") %>%
-  # IMPORTANT: We must scale this 0-1 because your funkyheatmap has scale_column = FALSE
-  mutate(value = min_max(value)) %>% 
-  rename(Runtime = value)
+  summarise(raw_time = mean(time_secs, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    log_time = log10(raw_time + 1),
+    # Inverting so SHORTER time (faster) = BIGGER bar/BETTER score
+    # Remove '1 -' if you want long bars to mean slow
+    Runtime = min_max(log_time) 
+  ) %>% 
+  select(method, Runtime)
 
 # --- 5. MERGE EVERYTHING ---
 final_data <- df_overall %>%
@@ -2838,9 +2850,14 @@ info_metrics <- tibble(id = metric_cols) %>%
     name_f = factor(name, levels = target_metric_order)
   ) %>% arrange(name_f) %>% select(-name_f)
 
+# 4. Runtime (The Rightmost column)
+info_runtime <- tribble(
+  ~id,       ~group,    ~name,         ~geom, ~palette,          ~options,
+  "Runtime", "Runtime", "Runtime", "bar", "palette_runtime", list(width = 3)
+)
 
 # Combine
-column_info <- bind_rows(info_fixed, info_datasets, info_metrics)
+column_info <- bind_rows(info_fixed, info_datasets, info_metrics, info_runtime)
 
 ncolors <- 11
 
@@ -2850,35 +2867,45 @@ funky_heatmap(
   column_info = column_info,
   scale_column = FALSE, 
   column_groups = tibble(
-    group = c("Overall", "Datasets", "Metrics")
+    group = c("Overall", "Datasets", "Metrics", "Runtime")
   ),
   palettes = list(
     palette_avg_rank = brewer.pal(n = ncolors, name = "RdBu"),
     palette_avg_mean = brewer.pal(n = ncolors, name = "RdBu"),
-    # Define Red (low) -> White -> Blue (high)
-    # You can remove "white" if you want a direct Red-to-Blue gradient
-    Datasets = brewer.pal(n = ncolors, name = "RdBu"), # brewer.pal(30, "Greys"),  #  #c("#D73027", "white", "#4575B4"), 
-    Metrics = brewer.pal(n = ncolors, name = "RdBu")
+    Datasets = brewer.pal(n = ncolors, name = "RdBu"),
+    Metrics = brewer.pal(n = ncolors, name = "RdBu"),
+    palette_runtime = rev(brewer.pal(n = ncolors, name = "RdYlGn"))
   ),
   legends = list(
     list(
       palette = "palette_avg_rank",
-      enabled = FALSE
+      enabled = TRUE,
+      title = "REMOVE PLACEHOLDER"
     ),
     list(
       palette = "palette_avg_mean",
       enabled = TRUE,
-      title = " ",
+      title = "Overall",
       labels = c(".     Low", rep("", ncolors-2), "High   .")
     ),
     list(
       palette = "Datasets",
       enabled = TRUE,
-      title = " "
+      # title = " ",
+      labels = c(". 0", "", "", "", "", "0.5", "", "", "", "", "1")
     ),
     list(
       palette = "Metrics",
-      enabled = FALSE
+      enabled = TRUE,
+      labels = c(". 0", rep("", round((ncolors-2)/2)), " 0.5", rep("", round((ncolors-2)/2)), "1")
+    ),
+    list(
+      palette = "palette_runtime",
+      enabled = TRUE,
+      title = "Runtime log10(s)",
+      # Manually mapping log-scale milestones to the 0-1 bar
+      # These labels correspond to the min, mid, and max of your actual data
+      labels = c("secs", "mins", "hours") 
     )
   ),
   position_args = position_arguments(
