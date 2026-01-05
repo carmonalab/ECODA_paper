@@ -455,8 +455,6 @@ DESeq2.normalize <- function(matrix,
 }
 
 
-
-
 exec_time <- function(fun) {
   start_time <- Sys.time()
   fun
@@ -465,8 +463,6 @@ exec_time <- function(fun) {
   time_taken
   return(time_taken)
 }
-
-
 
 
 FindClusters_multi <- function(seurat,
@@ -667,7 +663,6 @@ select_by_variance_explained <- function(df_var, variance_threshold) {
 }
 
 
-
 varmeanplot <- function(data, plot_title = "", smooth_method = "lm", label_points = FALSE) {
   p <- ggplot(data, aes(x = Relative_abundance, y = Variance)) +
     geom_point() +
@@ -703,6 +698,11 @@ get_pb_deseq2 <- function(seurat, sample_col = "Sample", hvg = NULL, n_hvg = 200
 
   if (is.null(hvg) & black_list == "default") {
     black_list <- default_black_list # From SignatuR package
+    black_list <- unlist(black_list)
+
+    pb <- pb[!rownames(pb) %in% black_list, ]
+  } else if (is.null(hvg) & black_list == "default_without_sex_genes") {
+    black_list <- default_black_list # From SignatuR package
     black_list <- black_list[!names(black_list) %in% c("Xgenes", "Ygenes")]
     black_list <- unlist(black_list)
 
@@ -714,7 +714,6 @@ get_pb_deseq2 <- function(seurat, sample_col = "Sample", hvg = NULL, n_hvg = 200
   pb_norm <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = n_hvg))
   return(pb_norm)
 }
-
 
 
 get_metadata <- function(seurat, sample_col = "Sample") {
@@ -739,7 +738,6 @@ library(glue)
 highlight <- function(x, pat, color = "black", family = "") {
   ifelse(grepl(pat, x), glue("<b style='font-family:{family}; color:{color}'>{x}</b>"), x)
 }
-
 
 
 impute_zeros <- function(df,
@@ -921,8 +919,6 @@ remove_low_cellcount_samples <- function(seurat,
 }
 
 
-
-
 # To replace HiTME layer3 annotation based on other UCell score threshold
 replace_HiTMElayer3_annot <- function(seurat, thresh = 0.1) {
   seurat$layer3 <- gsub(pattern = "_resting|_IFN|_cellCycle.G1S|_cellCycle.G2M|_HeatShock|_Heatshock|_Prolif", replacement = "", seurat$layer3)
@@ -1077,7 +1073,7 @@ run_benchmark_analysis <- function(res_list,
   }
 
   exec_time_pb_norm_bl <- exec_time(
-    pb_norm_bl <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = 2000)
+    pb_norm_bl <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = 2000, black_list = "default_without_sex_genes")
   )
   # So need to check if any of those methods need to be run
   # (mainly whether to calculate pb_norm or not)
@@ -1632,7 +1628,6 @@ process_avg_pca_embedding_fig <- function(seurat,
 }
 
 
-
 process_mofa_bulk_fig <- function(pb_norm,
                                   metadata,
                                   labels,
@@ -1684,7 +1679,6 @@ process_mofa_bulk_fig <- function(pb_norm,
 
   return(res)
 }
-
 
 
 process_scitd_fig <- function(seurat,
