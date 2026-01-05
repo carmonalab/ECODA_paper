@@ -259,6 +259,11 @@ for (layer in names(data)) {
   
   dproc[[layer]]$clr_1count_all <- (df_counts + 1) %>% calc_perc_df() %>% clr()
   
+  dproc[[layer]]$clr_1count <- df_counts %>%
+    impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+    calc_perc_df() %>%
+    clr()
+  
   dproc[[layer]]$clr_0.1perc <- df_counts %>%
     impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
     calc_perc_df() %>%
@@ -279,7 +284,7 @@ saveRDS(dproc, file.path(path_data, "cell_type_compositions.rds"))
 for (layer in names(data)) {
   df_counts <- dproc[[layer]]$cell_counts
   df_freq <- dproc[[layer]]$freq * 100
-  df_clr <- dproc[[layer]]$clr_0.1perc
+  df_clr <- dproc[[layer]]$clr_1count
   
   cols <- colnames(df_counts)
   
@@ -328,7 +333,7 @@ for (layer in names(data)) {
 GongSharma highest resolution -> best clustering example so far
 
 ```{r}
-feat_mat <- dproc$L3$clr_0.1perc
+feat_mat <- dproc$L3$clr_1count
 res.pca <- prcomp(feat_mat)
 
 eigenvalues <- res.pca$sdev^2
