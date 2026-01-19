@@ -47,6 +47,8 @@ path_plots <- file.path(getwd(), "plots")
 seurat_file_ending <- "_ECODAprocessed.rds"
 
 set.seed(123)
+
+`%notin%` <- Negate(`%in%`)
 ```
 
 
@@ -302,9 +304,10 @@ meta$seqtec <- ifelse(meta$dataset %in% c("CRC-SG1", "KUL5"), "5' seq", "3' seq"
 
 pb_norm <- get_pb_deseq2(seurat, sample_col = "sample.ID", black_list = "default")
 
-# pb <- get_pb(seurat, sample_col = "sample.ID")
-# metadata <- get_metadata(seurat, sample_col = "sample.ID")
-# pb_norm <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = 2000))
+bio_col <- "sample.origin"
+batch_col <- "seqtec"
+
+plot_list <- list()
 ```
 
 
@@ -318,22 +321,38 @@ feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.d
   impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
   clr()
 
-plot_pca(feat_mat, labels = meta$sample.origin, title = "Authors annotation")
+avg_sep_score <- calc_avg_sep_score(feat_mat, labels = meta[[bio_col]])
+plot_list[["p_ecoda_bio"]] <- plot_pca(feat_mat, labels = meta[[bio_col]],
+         cluster_score = F, mod_score = F, anosim_score = F, invisible = "quali", n_ct_show = 5, repel = TRUE,
+         title = paste("Separation score:", avg_sep_score)
+)
+print(plot_list[["p_ecoda_bio"]])
 ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_ECODA_bio.pdf"),
        width = 4,
        height = 4)
-plot_pca(feat_mat, labels = meta$dataset, title = "Authors annotation")
-plot_pca(feat_mat, labels = meta$seqtec, title = "Authors annotation")
+
+
+avg_sep_score <- calc_avg_sep_score(feat_mat, labels = meta[[batch_col]])
+plot_list[["p_ecoda_batch"]] <- plot_pca(feat_mat, labels = meta[[batch_col]],
+         cluster_score = F, mod_score = F, anosim_score = F, invisible = "quali", n_ct_show = 5, repel = TRUE,
+         title = paste("Separation score:", avg_sep_score)
+)
+print(plot_list[["p_ecoda_batch"]])
 ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_ECODA_batch.pdf"),
        width = 4,
        height = 4)
+
+
+
+plot_pca(feat_mat, labels = meta$dataset, title = "Authors annotation")
+
 
 feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$layer2)) %>%
   # select(-contains("Epithelial")) %>%
   impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
   clr()
 
-plot_pca(feat_mat, labels = meta$sample.origin, title = "HiTME annotation")
+plot_pca(feat_mat, labels = meta[[bio_col]], title = "HiTME annotation")
 plot_pca(feat_mat, labels = meta$dataset, title = "HiTME annotation")
 
 feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$layer_6)) %>%
@@ -341,24 +360,69 @@ feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.d
   impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
   clr()
 
-plot_pca(feat_mat, labels = meta$sample.origin, title = "scATOMIC annotation")
+plot_pca(feat_mat, labels = meta[[bio_col]], title = "scATOMIC annotation")
 plot_pca(feat_mat, labels = meta$dataset, title = "scATOMIC annotation")
 ```
 
 
 ### PB
 
+
+#### Without blacklist
+
 ```{r}
-plot_pca(pb_norm, labels = meta$sample.origin)
+pb_norm <- get_pb_deseq2(seurat, sample_col = "sample.ID", black_list = "none")
+
+avg_sep_score <- calc_avg_sep_score(pb_norm, labels = meta[[bio_col]])
+plot_list[["p_pb_bio"]] <- plot_pca(pb_norm, labels = meta[[bio_col]],
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+print(plot_list[["p_pb_bio"]])
 ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_PB_bio.pdf"),
        width = 4,
-       height = 4)
-plot_pca(pb_norm, labels = meta$dataset)
-plot_pca(pb_norm, labels = meta$seqtec)
+       height = 3)
+
+avg_sep_score <- calc_avg_sep_score(pb_norm, labels = meta[[batch_col]])
+plot_list[["p_pb_batch"]] <- plot_pca(pb_norm, labels = meta[[batch_col]],
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+print(plot_list[["p_pb_batch"]])
 ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_PB_batch.pdf"),
        width = 4,
-       height = 4)
-# plot_pca(pb_norm, labels = meta$Gender)
+       height = 3)
+
+
+plot_pca(pb_norm, labels = meta$dataset)
+```
+
+
+#### With blacklist
+
+```{r}
+pb_norm <- get_pb_deseq2(seurat, sample_col = "sample.ID", black_list = "default")
+
+avg_sep_score <- calc_avg_sep_score(pb_norm, labels = meta[[bio_col]])
+plot_pca(pb_norm, labels = meta[[bio_col]],
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+# ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_PB_bio.pdf"),
+#        width = 4,
+#        height = 3)
+
+avg_sep_score <- calc_avg_sep_score(pb_norm, labels = meta[[batch_col]])
+plot_pca(pb_norm, labels = meta[[batch_col]],
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+# ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_PB_batch.pdf"),
+#        width = 4,
+#        height = 3)
+
+
+plot_pca(pb_norm, labels = meta$dataset)
 ```
 
 
@@ -404,6 +468,22 @@ print(paste("PB: Bio ANOSIM", round(scores_pb_bio$anosim_score, 3),
 ```
 
 
+# Combine all plots
+
+```{r fig.height=6.5, fig.width=10}
+wrap_plots(plot_list) +
+  plot_layout(nrow = 2)+
+  plot_annotation(tag_levels = 'A') &
+  theme(
+    # legend.position='bottom',
+    plot.tag = element_text(size = 16, face = "bold")
+  )
+ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_combined.pdf"),
+       width = 10,
+       height = 6.5)
+```
+
+
 # ---------------------------------------------------------------
 
 
@@ -440,6 +520,21 @@ pb_norm <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = 2000))
 
 bio_col <- "Status"
 batch_col <- "Site"
+
+
+ct_remove <- c(
+  "Platelets",
+  "RBC",
+  "C1_CD16_mono",
+  "CD14_mono",
+  "CD16_mono"
+)
+seurat_sub <- subset(seurat, subset = full_clustering %notin% ct_remove)
+pb <- get_pb(seurat_sub, sample_col = "Sample")
+metadata <- get_metadata(seurat, sample_col = "Sample")
+pb_norm_sub <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = 2000))
+
+plot_list <- list()
 ```
 
 
@@ -454,128 +549,58 @@ feat_mat <- as.data.frame.matrix(table(seurat@meta.data$Sample, seurat@meta.data
   clr()
 
 avg_sep_score <- calc_avg_sep_score(feat_mat, labels = meta[[bio_col]])
-plot_pca(feat_mat, labels = meta[[bio_col]],
+plot_list[["p_ecoda_bio"]] <- plot_pca(feat_mat, labels = meta[[bio_col]],
          cluster_score = F, mod_score = F, anosim_score = F, invisible = "quali", n_ct_show = 5, repel = TRUE,
          title = paste("Separation score:", avg_sep_score)
 )
+print(plot_list[["p_ecoda_bio"]])
 ggsave(file.path(path_plots, "batcheffect_Stephenson_PCA_ECODA_bio.pdf"),
        width = 4,
        height = 4)
 
 
 avg_sep_score <- calc_avg_sep_score(feat_mat, labels = meta[[batch_col]])
-plot_pca(feat_mat, labels = meta[[batch_col]],
+plot_list[["p_ecoda_batch"]] <- plot_pca(feat_mat, labels = meta[[batch_col]],
          cluster_score = F, mod_score = F, anosim_score = F, invisible = "quali", n_ct_show = 5, repel = TRUE,
          title = paste("Separation score:", avg_sep_score)
 )
+print(plot_list[["p_ecoda_batch"]])
 ggsave(file.path(path_plots, "batcheffect_Stephenson_PCA_ECODA_batch.pdf"),
        width = 4,
        height = 4)
 ```
 
-```{r fig.height=8, fig.width=16}
-library(scECODA)
 
-ecoda_object <- ecoda(
-  seurat,
-  sample_col = "Sample",
-  celltype_col = "full_clustering"
+#### Subset to remove batch effect cell types
+
+```{r}
+feat_mat <- as.data.frame.matrix(table(seurat_sub@meta.data$Sample, seurat_sub@meta.data$full_clustering)) %>%
+  # select(-contains("Epithelial")) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  clr()
+
+avg_sep_score <- calc_avg_sep_score(feat_mat, labels = meta[[bio_col]])
+plot_list[["p_ecoda_bio_sub"]] <- plot_pca(feat_mat, labels = meta[[bio_col]],
+         cluster_score = F, mod_score = F, anosim_score = F, invisible = "quali", n_ct_show = 5, repel = TRUE,
+         title = paste("Separation score:", avg_sep_score)
 )
-
-plot_boxplot(ecoda_object = ecoda_object, label_col = bio_col)
-plot_boxplot(ecoda_object = ecoda_object, label_col = batch_col)
-
-scECODA::plot_pca(
-  ecoda_object,
-  label_col = bio_col,
-  title = paste0("Bio - Separation score: ", calc_avg_sep_score(feat_mat = ecoda_object@clr, labels = ecoda_object@metadata[[bio_col]])),
-  n_hv_feat_show = 5 # Shows the most highly variable features (cell types)
-)
-scECODA::plot_pca(
-  ecoda_object,
-  label_col = batch_col,
-  title = paste0("Batch - Separation score: ", calc_avg_sep_score(feat_mat = ecoda_object@clr, labels = ecoda_object@metadata[[batch_col]])),
-  n_hv_feat_show = 5 # Shows the most highly variable features (cell types)
-)
-```
-
-
-```{r fig.height=8, fig.width=8}
-counts <- ecoda_object@counts
-ct_remove <- c(
-  "Platelets",
-  "RBC",
-  "C1_CD16_mono",
-  "CD14_mono",
-  "CD16_mono"
-)
-counts <- counts[, !colnames(counts) %in% ct_remove]
-
-ecoda_object_sub <- ecoda(
-  counts,
-  metadata = ecoda_object@metadata
-)
-
-plot_boxplot(ecoda_object = ecoda_object_sub, label_col = bio_col)
-plot_boxplot(ecoda_object = ecoda_object_sub, label_col = batch_col)
-
-scECODA::plot_pca(
-  ecoda_object_sub,
-  label_col = bio_col,
-  cluster_score = F, mod_score = F, anosim_score = F,
-  title = paste0("Bio - Separation score: ", calc_avg_sep_score(feat_mat = ecoda_object_sub@clr, labels = ecoda_object_sub@metadata[[bio_col]])),
-  n_hv_feat_show = 5 # Shows the most highly variable features (cell types)
-)
+print(plot_list[["p_ecoda_bio_sub"]])
 ggsave(file.path(path_plots, "batcheffect_Stephenson_PCA_ECODA_subset_bio.pdf"),
        width = 4,
-       height = 4)
-scECODA::plot_pca(
-  ecoda_object_sub,
-  label_col = batch_col,
-  cluster_score = F, mod_score = F, anosim_score = F,
-  title = paste0("Batch - Separation score: ", calc_avg_sep_score(feat_mat = ecoda_object_sub@clr, labels = ecoda_object_sub@metadata[[batch_col]])),
-  n_hv_feat_show = 5 # Shows the most highly variable features (cell types)
+       height = 3)
+
+
+avg_sep_score <- calc_avg_sep_score(feat_mat, labels = meta[[batch_col]])
+plot_list[["p_ecoda_batch_sub"]] <- plot_pca(feat_mat, labels = meta[[batch_col]],
+         cluster_score = F, mod_score = F, anosim_score = F, invisible = "quali", n_ct_show = 5, repel = TRUE,
+         title = paste("Separation score:", avg_sep_score)
 )
+print(plot_list[["p_ecoda_batch_sub"]])
 ggsave(file.path(path_plots, "batcheffect_Stephenson_PCA_ECODA_subset_batch.pdf"),
        width = 4,
-       height = 4)
-
-# ecoda_object_sub@metadata$Age_interval <- ecoda_object_sub@metadata$Age_interval %>%
-#   str_split(",") %>%
-#   sapply(function(x) x[[1]]) %>%
-#   gsub("\\(", "", .) %>%
-#   as.numeric()
-# scECODA::plot_pca(
-#   ecoda_object_sub,
-#   label_col = "Age_interval",
-#   title = paste0("Bio by age - Separation score: ", calc_avg_sep_score(feat_mat = ecoda_object_sub@clr, labels = ecoda_object_sub@metadata[[bio_col]])),
-#   n_hv_feat_show = 5 # Shows the most highly variable features (cell types)
-# )
-
-scECODA::plot_pca(
-  ecoda_object_sub,
-  label_col = bio_col, axes = c(2, 3),
-  title = "Bio - PCA dim2 vs dim3",
-  n_hv_feat_show = 10 # Shows the most highly variable features (cell types)
-)
-
-scECODA::plot_pca(
-  ecoda_object_sub,
-  label_col = batch_col, axes = c(2, 3),
-  title = "Batch - PCA dim2 vs dim3",
-  n_hv_feat_show = 10 # Shows the most highly variable features (cell types)
-)
-
-
-scECODA::plot_pca(
-  ecoda_object_sub,
-  label_col = bio_col, plotly_3d = TRUE
-)
-scECODA::plot_pca(
-  ecoda_object_sub,
-  label_col = batch_col, plotly_3d = TRUE
-)
+       height = 3)
 ```
+
 
 
 
@@ -583,22 +608,91 @@ scECODA::plot_pca(
 
 ```{r}
 avg_sep_score <- calc_avg_sep_score(pb_norm, labels = meta[[bio_col]])
-plot_pca(pb_norm, labels = meta[[bio_col]],
+plot_list[["p_pb_bio"]] <- plot_pca(pb_norm, labels = meta[[bio_col]],
          cluster_score = F, mod_score = F, anosim_score = F,
          title = paste("Separation score:", avg_sep_score)
 )
+print(plot_list[["p_pb_bio"]])
 ggsave(file.path(path_plots, "batcheffect_Stephenson_PCA_PB_bio.pdf"),
        width = 4,
-       height = 4)
+       height = 3)
 
 avg_sep_score <- calc_avg_sep_score(pb_norm, labels = meta[[batch_col]])
-plot_pca(pb_norm, labels = meta[[batch_col]],
+plot_list[["p_pb_batch"]] <- plot_pca(pb_norm, labels = meta[[batch_col]],
          cluster_score = F, mod_score = F, anosim_score = F,
          title = paste("Separation score:", avg_sep_score)
 )
+print(plot_list[["p_pb_batch"]])
 ggsave(file.path(path_plots, "batcheffect_Stephenson_PCA_PB_batch.pdf"),
        width = 4,
-       height = 4)
+       height = 3)
+```
+
+#### Subset to remove batch effect cell types
+
+```{r}
+avg_sep_score <- calc_avg_sep_score(pb_norm_sub, labels = meta[[bio_col]])
+plot_list[["p_pb_bio_sub"]] <- plot_pca(pb_norm_sub, labels = meta[[bio_col]],
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+print(plot_list[["p_pb_bio_sub"]])
+ggsave(file.path(path_plots, "batcheffect_Stephenson_PCA_PB_subset_bio.pdf"),
+       width = 4,
+       height = 3)
+
+avg_sep_score <- calc_avg_sep_score(pb_norm_sub, labels = meta[[batch_col]])
+plot_list[["p_pb_batch_sub"]] <- plot_pca(pb_norm_sub, labels = meta[[batch_col]],
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+print(plot_list[["p_pb_batch_sub"]])
+ggsave(file.path(path_plots, "batcheffect_Stephenson_PCA_PB_subset_batch.pdf"),
+       width = 4,
+       height = 3)
+```
+
+
+#### With blacklist
+
+```{r}
+pb_norm_sub <- get_pb_deseq2(seurat_sub, sample_col = "Sample", black_list = "default")
+
+avg_sep_score <- calc_avg_sep_score(pb_norm_sub, labels = meta[[bio_col]])
+plot_pca(pb_norm_sub, labels = meta[[bio_col]],
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+# ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_PB_bio.pdf"),
+#        width = 4,
+#        height = 3)
+
+avg_sep_score <- calc_avg_sep_score(pb_norm_sub, labels = meta[[batch_col]])
+plot_pca(pb_norm_sub, labels = meta[[batch_col]],
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+# ggsave(file.path(path_plots, "batcheffect_Joanito_PCA_PB_batch.pdf"),
+#        width = 4,
+#        height = 3)
+
+
+plot_pca(pb_norm, labels = meta$dataset)
+```
+
+# Combine all plots
+
+```{r fig.height=15, fig.width=10}
+wrap_plots(plot_list) +
+  plot_layout(nrow = 4)+
+  plot_annotation(tag_levels = 'A') &
+  theme(
+    # legend.position='bottom',
+    plot.tag = element_text(size = 16, face = "bold")
+  )
+ggsave(file.path(path_plots, "batcheffect_Stephenson_PCA_combined.pdf"),
+       width = 10,
+       height = 13)
 ```
 
 
@@ -628,6 +722,21 @@ fmat_zhu <- get_ct_comp_df_seurat(seurat, sample_col = sample_col, ct_col = "lay
 pb_zhu <- get_pb(seurat, sample_col = sample_col, hvg = NULL)
 metadata <- get_metadata(seurat, sample_col = sample_col)
 metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
+```
+
+
+```{r}
+for (ds in names(datasets)) {
+  seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
+  
+  seurat <- replace_HiTMElayer3_annot(seurat, thresh = 0.1)
+  
+  seurat@misc$label_col <- datasets[[ds]][["label_col"]]
+  seurat@misc$low_res_ct_col <- datasets[[ds]][["low_res_ct_col"]]
+  seurat@misc$hi_res_ct_col <- datasets[[ds]][["hi_res_ct_col"]]
+  
+  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots)
+}
 ```
 
 
