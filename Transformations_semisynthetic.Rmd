@@ -2407,6 +2407,14 @@ for (nct in n_ct_to_select) {
 # Mean-variance across all datasets
 
 ```{r}
+result_list <- readRDS("result_list.rds")
+
+
+```
+
+
+
+```{r}
 ctcomp_file <- "ctcomp_list.rds"
 
 if (file.exists(ctcomp_file)) {
@@ -2558,8 +2566,8 @@ p1_overlay <- ggplot(final_data_plot1, aes(x = mean, y = variance, color = datas
   geom_point() +
   labs(
     title = "Mean-Variance: All Datasets (Percent)",
-    x = "Mean (in %)",
-    y = "Variance (in %)"
+    x = "Mean in %",
+    y = "Variance in %"
   ) +
   theme_classic() +
   guides(color = guide_legend(title = "Dataset"))
@@ -2572,8 +2580,8 @@ p2_overlay <- ggplot(final_data_plot2, aes(x = mean, y = variance, color = datas
   geom_point() +
   labs(
     title = "Mean-Variance: All Datasets (Log-Log)",
-    x = "log(Mean (in %))",
-    y = "log(Variance (in %))"
+    x = "log(Mean in %)",
+    y = "log(Variance in %)"
   ) +
   theme_classic() +
   guides(color = guide_legend(title = "Dataset"))
@@ -2586,8 +2594,8 @@ p3_overlay <- ggplot(final_data_plot3, aes(x = mean, y = variance, color = datas
   geom_point() +
   labs(
     title = "Mean-Variance: All Datasets (CLR)",
-    x = "Mean (in CLR)",
-    y = "Variance (in CLR)"
+    x = "Mean in CLR",
+    y = "Variance in CLR"
   ) +
   theme_classic() +
   guides(color = guide_legend(title = "Dataset"))
