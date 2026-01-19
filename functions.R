@@ -663,11 +663,11 @@ select_by_variance_explained <- function(df_var, variance_threshold) {
 }
 
 
-varmeanplot <- function(data, plot_title = "", smooth_method = "lm", label_points = FALSE) {
+varmeanplot <- function(data, title = "", smooth_method = "lm", label_points = FALSE) {
   p <- ggplot(data, aes(x = Relative_abundance, y = Variance)) +
     geom_point() +
     geom_smooth(method = smooth_method, color = "red", fill = "#69b3a2", se = TRUE) +
-    labs(title = paste(plot_title)) +
+    labs(title = paste(title)) +
     theme_classic() +
     xlab("Mean") +
     ylab("Variance")
@@ -1087,7 +1087,7 @@ run_benchmark_analysis <- function(res_list,
   if (!"Avg_PCA_embedding" %in% names(res_list)) {
     res_list[["Avg_PCA_embedding"]][["exec_time"]] <- exec_time(
       res_list[["Avg_PCA_embedding"]] <- process_avg_pca_embedding_fig(seurat, labels)
-    ) + exec_time_pb_norm
+    )
   }
 
   # Deconvolute using EPIC
@@ -1339,13 +1339,15 @@ run_benchmark_analysis <- function(res_list,
   for (i in HVGs[!HVGs %in% 2000]) {
     Pseudobulk_hvg_i <- paste0("Pseudobulk_hvg", i)
     Pseudobulk_unsup_hvg_i <- paste0("Pseudobulk_unsup_hvg", i)
-    MOFA_hvg_i_15_factors <- paste0("MOFA_hvg", i, "_15_factors")
+    MOFA_hvg_i_factors15 <- paste0("MOFA_hvg", i, "_factors15")
+    scITD_hvg_i_factors5 <- paste0("scITD_hvg", i, "_factors5")
     GloScope_hvg_i_pcadims30 <- paste0("GloScope_hvg", i, "_pcadims30")
     GloScope_hvg_i_pcadims30_sqrtmat <- paste0(GloScope_hvg_i_pcadims30, "_sqrtmat")
     test_items <- c(
       Pseudobulk_hvg_i,
       Pseudobulk_unsup_hvg_i,
-      MOFA_hvg_i_15_factors,
+      MOFA_hvg_i_factors15,
+      scITD_hvg_i_factors5,
       GloScope_hvg_i_pcadims30,
       GloScope_hvg_i_pcadims30_sqrtmat
     )
@@ -1353,18 +1355,22 @@ run_benchmark_analysis <- function(res_list,
     if (any(!test_items %in% names(res_list))) {
       # Memory critical steps
       gc()
+      misc <- seurat@misc
       seurat <- create_clean_seuratv5_object(seurat)
+      seurat@misc <- misc
       gc()
       seurat <- NormalizeData(seurat)
       gc()
       seurat <- FindVariableFeatures(seurat, nfeatures = i)
-      gc()
-      seurat <- ScaleData(seurat)
-      gc()
-      # Needs a lot of memory for 3000 HVGs
-      seurat <- RunPCA(seurat, dims = 1:50, verbose = FALSE)
-      gc()
       hvg <- get_current_hvgs(seurat)
+      gc()
+      if (any(!c(GloScope_hvg_i_pcadims30, GloScope_hvg_i_pcadims30_sqrtmat) %in% names(res_list))) {
+        seurat <- ScaleData(seurat)
+        gc()
+        # Needs a lot of memory for 3000 HVGs
+        seurat <- RunPCA(seurat, dims = 1:50, verbose = FALSE)
+        gc()
+      }
 
       if (!Pseudobulk_hvg_i %in% names(res_list)) {
         exec_time_pb_norm <- exec_time(
@@ -1377,7 +1383,7 @@ run_benchmark_analysis <- function(res_list,
 
       test_items <- c(
         Pseudobulk_unsup_hvg_i,
-        MOFA_hvg_i_15_factors
+        MOFA_hvg_i_factors15
       )
       if (any(!test_items %in% names(res_list))) {
         exec_time_pb_norm <- exec_time(
@@ -1387,14 +1393,25 @@ run_benchmark_analysis <- function(res_list,
           res_list[[Pseudobulk_unsup_hvg_i]] <- process_pseudobulk_fig(pb_norm, labels)
         ) + exec_time_pb_norm
 
-        res_list[[MOFA_hvg_i_15_factors]][["exec_time"]] <- exec_time(
-          res_list[[MOFA_hvg_i_15_factors]] <-
+        res_list[[MOFA_hvg_i_factors15]][["exec_time"]] <- exec_time(
+          res_list[[MOFA_hvg_i_factors15]] <-
             process_mofa_bulk_fig(
               pb_norm,
               metadata = metadata, labels,
               num_factors = 15
             )
         ) + exec_time_pb_norm
+      }
+
+      if (!scITD_hvg_i_factors5 %in% names(res_list)) {
+        res_list[[scITD_hvg_i_factors5]][["exec_time"]] <- exec_time(
+          res_list[[scITD_hvg_i_factors5]] <- process_scitd_fig(
+            seurat,
+            ct_col = seurat@misc$low_res_ct_col,
+            label_col = label_col, hvg,
+            num_factors = 5
+          )
+        )
       }
 
       test_items <- c(
