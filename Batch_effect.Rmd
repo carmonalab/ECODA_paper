@@ -22,6 +22,7 @@ source("functions.R")
 source("Processed_dataset_metadata.R")
 
 library(forcats)
+library(patchwork)
 
 # devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
 library(EPIC)
@@ -51,232 +52,6 @@ set.seed(123)
 `%notin%` <- Negate(`%in%`)
 ```
 
-
-
-# Batch effect in gene expression and cell type composition
-
-# ---------------------------------------------------------------
-
-# Sikkema dataset
-
-File was downloaded and pre-processed with script "Preprocess_sikkema.ipynb"
-
-
-## Load/preprocess
-
-```{r}
-sikkema_processed_file <- file.path(path_data, "Sikkema.h5ad")
-# 
-# if (!file.exists())
-# sikkema_ds = list(
-#   file_path = file.path(path_data, "Sikkema.h5ad"),
-#   tissue = "Airway_Lung",
-#   normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
-#   sample_col = "Sample",
-#   meta_cols_keep = c(
-#     "Sample", # Sample identifier
-#     "tissue", # Main biological grouping
-#     "suspension_type", "BMI", "age_or_mean_of_age_range", "dataset", "fresh_or_frozen", "lung_condition", # Additional biological groupings
-#     "study", "tissue_dissociation_protocol", "tissue_sampling_method", "assay", "tissue_level_2", "sex", # Additional biological groupings
-#     "ann_finest_level", "ann_level_1", "ann_level_2", "ann_level_3", "ann_level_4", "ann_level_5", "original_ann_nonharmonized" # Author annotations
-#   )
-# )
-seurat <- load_h5ad_to_seurat(file_name = sikkema_processed_file)
-```
-
-
-```{r}
-tissues <- as.data.frame.matrix(table(seurat@meta.data$study, seurat@meta.data$tissue_level_2))
-tissues
-
-diss_prot <- as.data.frame.matrix(table(seurat@meta.data$study, seurat@meta.data$tissue_dissociation_protocol))
-diss_prot
-
-# Possible combinations:
-# Barbry_Leroy_2020
-# Jain_Misharin_2021
-# 
-# Meyer_2019
-# Misharin_Budinger_2018
-# Teichmann_Meyer_2019
-```
-
-
-## Plot PCA
-
-### ECODA
-
-```{r}
-metadata <- get_metadata(seurat)
-
-df_counts <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = "ann_finest_level")
-
-df_imp <- df_counts %>%
-  impute_zeros(
-    clr_zero_impute_method = "counts_all",
-    clr_zero_impute_num = 1
-  )
-
-feat_mat <- clr(df_imp)
-```
-
-```{r}
-label_cols <- c(
-  "tissue",
-  # "suspension_type",
-  "dataset",
-  "BMI",
-  "age_or_mean_of_age_range",
-  "fresh_or_frozen",
-  "lung_condition",
-  "study",
-  "tissue_dissociation_protocol",
-  "tissue_sampling_method",
-  "assay",
-  "tissue_level_2",
-  "sex"
-)
-
-for (label_col in label_cols) {
-  labels <- get_labels(seurat, label_col = label_col)
-  labels <- as.character(labels)
-  labels[is.na(labels)] <- "NA"
-  p <- plot_pca(feat_mat, labels, title = label_col)
-  print(p)
-}
-```
-
-
-```{r}
-label_cols <- c(
-  "tissue",
-  "suspension_type",
-  "dataset",
-  # "BMI",
-  "age_or_mean_of_age_range",
-  "fresh_or_frozen",
-  "lung_condition",
-  "study",
-  "tissue_dissociation_protocol",
-  "tissue_sampling_method",
-  "assay",
-  "tissue_level_2",
-  "sex"
-)
-
-for (label_col in label_cols) {
-  labels <- meta[[label_col]]
-  if (length(unique(labels)) == 1) {
-    next
-  }
-  labels <- as.character(labels)
-  labels[is.na(labels)] <- "NA"
-  p <- plot_pca(fmat, labels, title = label_col)
-  print(p)
-}
-```
-
-
-```{r}
-samples <- metadata$donor_id[metadata$study %in% c("Barbry_Leroy_2020", "Jain_Misharin_2021")]
-
-meta <- metadata[metadata$donor_id %in% samples, ]
-fmat <- feat_mat[rownames(feat_mat) %in% samples, ]
-
-label_cols <- c(
-  "tissue",
-  "suspension_type",
-  "dataset",
-  # "BMI",
-  "age_or_mean_of_age_range",
-  "fresh_or_frozen",
-  "lung_condition",
-  "study",
-  "tissue_dissociation_protocol",
-  "tissue_sampling_method",
-  "assay",
-  "tissue_level_2",
-  "sex"
-)
-
-for (label_col in label_cols) {
-  labels <- meta[[label_col]]
-  if (length(unique(labels)) == 1) {
-    next
-  }
-  labels <- as.character(labels)
-  labels[is.na(labels)] <- "NA"
-  p <- plot_pca(fmat, labels, title = label_col)
-  print(p)
-}
-```
-
-
-```{r}
-samples <- metadata$donor_id[metadata$study %in% c("Meyer_2019", "Misharin_Budinger_2018", "Teichmann_Meyer_2019")]
-
-meta <- metadata[metadata$donor_id %in% samples, ]
-fmat <- feat_mat[rownames(feat_mat) %in% samples, ]
-
-label_cols <- c(
-  "tissue",
-  "dataset",
-  # "BMI",
-  "age_or_mean_of_age_range",
-  "fresh_or_frozen",
-  "lung_condition",
-  "study",
-  "tissue_dissociation_protocol",
-  "tissue_sampling_method",
-  "assay",
-  "tissue_level_2",
-  "sex"
-)
-
-for (label_col in label_cols) {
-  labels <- meta[[label_col]]
-  if (length(unique(labels)) == 1) {
-    next
-  }
-  labels <- as.character(labels)
-  labels[is.na(labels)] <- "NA"
-  p <- plot_pca(fmat, labels, title = label_col)
-  print(p)
-}
-```
-
-
-### PB
-
-```{r}
-pb_norm <- get_pb_deseq2(seurat, sample_col = "Sample", hvg = NULL, n_hvg = 2000)
-```
-
-```{r}
-label_cols <- c(
-  "tissue",
-  # "suspension_type",
-  "dataset",
-  "BMI",
-  "age_or_mean_of_age_range",
-  "fresh_or_frozen",
-  "lung_condition",
-  "study",
-  "tissue_dissociation_protocol",
-  "tissue_sampling_method",
-  "assay",
-  "tissue_level_2",
-  "sex"
-)
-
-for (label_col in label_cols) {
-  labels <- get_labels(seurat, label_col = label_col)
-  labels <- as.character(labels)
-  labels[is.na(labels)] <- "NA"
-  p <- plot_pca(pb_norm, labels, title = label_col)
-  print(p)
-}
-```
 
 
 # ---------------------------------------------------------------
@@ -318,7 +93,7 @@ plot_list <- list()
 ```{r}
 feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$cell.type_new)) %>%
   # select(-contains("Epithelial")) %>%
-  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2/3) %>%
   clr()
 
 avg_sep_score <- calc_avg_sep_score(feat_mat, labels = meta[[bio_col]])
@@ -349,7 +124,7 @@ plot_pca(feat_mat, labels = meta$dataset, title = "Authors annotation")
 
 feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$layer2)) %>%
   # select(-contains("Epithelial")) %>%
-  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2/3) %>%
   clr()
 
 plot_pca(feat_mat, labels = meta[[bio_col]], title = "HiTME annotation")
@@ -357,7 +132,7 @@ plot_pca(feat_mat, labels = meta$dataset, title = "HiTME annotation")
 
 feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$layer_6)) %>%
   # select(-contains("Epithelial")) %>%
-  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2/3) %>%
   clr()
 
 plot_pca(feat_mat, labels = meta[[bio_col]], title = "scATOMIC annotation")
@@ -431,7 +206,7 @@ plot_pca(pb_norm, labels = meta$dataset)
 ```{r}
 feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$cell.type_new)) %>%
   # select(-contains("Epithelial")) %>%
-  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2/3) %>%
   clr()
 
 prime3 <- meta$dataset %in% c("SMC", "KUL3", "CRC-SG2")
@@ -448,7 +223,7 @@ plot_pca(feat_mat[prime5, ], labels = meta$sample.origin[prime5])
 ```{r}
 feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$cell.type_new)) %>%
   # select(-contains("Epithelial")) %>%
-  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2/3) %>%
   clr()
 
 labels <- meta$sample.origin
@@ -545,7 +320,7 @@ plot_list <- list()
 ```{r}
 feat_mat <- as.data.frame.matrix(table(seurat@meta.data$Sample, seurat@meta.data$full_clustering)) %>%
   # select(-contains("Epithelial")) %>%
-  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2/3) %>%
   clr()
 
 avg_sep_score <- calc_avg_sep_score(feat_mat, labels = meta[[bio_col]])
@@ -576,7 +351,7 @@ ggsave(file.path(path_plots, "batcheffect_Stephenson_PCA_ECODA_batch.pdf"),
 ```{r}
 feat_mat <- as.data.frame.matrix(table(seurat_sub@meta.data$Sample, seurat_sub@meta.data$full_clustering)) %>%
   # select(-contains("Epithelial")) %>%
-  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
+  impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2/3) %>%
   clr()
 
 avg_sep_score <- calc_avg_sep_score(feat_mat, labels = meta[[bio_col]])
@@ -676,8 +451,6 @@ plot_pca(pb_norm_sub, labels = meta[[batch_col]],
 #        width = 4,
 #        height = 3)
 
-
-plot_pca(pb_norm, labels = meta$dataset)
 ```
 
 # Combine all plots
@@ -700,81 +473,166 @@ ggsave(file.path(path_plots, "batcheffect_Stephenson_PCA_combined.pdf"),
 
 # Combined PBMC (Stephenson, GongSharma, Zhu)
 
-## Load result_list from MAIN_Analysis.Rmd
+## Aggregate pseudobulk
+
+### Stephenson
 
 ```{r}
-result_file <- "result_list.rds"
-result_list <- readRDS(result_file)
+ds <- "Stephenson"
+seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
+
+pb_stephenson <- get_pb(seurat, sample_col = "Sample")
+metadata_stephenson <- get_metadata(seurat, sample_col = "Sample")
+
+feat_mat_stephenson <- as.data.frame.matrix(table(seurat@meta.data$Sample, seurat@meta.data$layer2)) %>%
+  impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2/3) %>%
+  clr()
 ```
+
+### GongSharma
+
+```{r}
+ds <- "GongSharma_all_age"
+seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
+
+pb_gs <- get_pb(seurat, sample_col = "Sample")
+metadata_gs <- get_metadata(seurat, sample_col = "Sample")
+
+feat_mat_gs <- as.data.frame.matrix(table(seurat@meta.data$Sample, seurat@meta.data$layer2)) %>%
+  impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2/3) %>%
+  clr()
+```
+
+### Zhu
 
 ```{r}
 seurat <- readRDS("/Users/christianhalter/Desktop/ECODA_paper/data/ZhuH_2023_37379396whole_ECODAprocessed.rds")
 
 sample_col <- "Sample"
 
-fmat_zhu <- get_ct_comp_df_seurat(seurat, sample_col = sample_col, ct_col = "layer2") %>%
-  impute_zeros(
-    clr_zero_impute_method = "counts_all",
-    clr_zero_impute_num = 1
-  ) %>%
+feat_mat_zhu <- get_ct_comp_df_seurat(seurat, sample_col = sample_col, ct_col = "layer2") %>%
+  impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2/3) %>%
   clr()
 
 pb_zhu <- get_pb(seurat, sample_col = sample_col, hvg = NULL)
-metadata <- get_metadata(seurat, sample_col = sample_col)
-metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
+metadata_zhu <- get_metadata(seurat, sample_col = sample_col)
+```
+
+## Combine pb matrices
+
+```{r}
+# 1. Put your three matrices into a list
+matrix_list <- list(pb_stephenson, pb_gs, pb_zhu)
+
+# 2. Find the intersection of all row names
+common_genes <- Reduce(intersect, lapply(matrix_list, rownames))
+
+# 3. Subset and combine in one step
+# This ensures rows are in the exact same order before binding
+combined_pseudobulk <- do.call(cbind, lapply(matrix_list, function(x) {
+  x[common_genes, , drop = FALSE]
+}))
+print(dim(combined_pseudobulk))
+
+metadata_stephenson$ds <- "Stephenson"
+metadata_stephenson$cond <- metadata_stephenson$Status
+metadata_gs$ds <- "GongSharma"
+metadata_gs$cond <- "Healthy"
+metadata_zhu$ds <- "Zhu"
+metadata_zhu$cond <- "Healthy"
+
+metadata_list <- list(
+  metadata_stephenson,
+  metadata_gs,
+  metadata_zhu
+)
+combined_metadata <- do.call(rbind, lapply(metadata_list, function(x) {
+  x
+}))
+
+pb_norm <- t(DESeq2.normalize(combined_pseudobulk, metadata = combined_metadata, n_hvg = 2000))
+
+feat_mat_list <- list(
+  feat_mat_stephenson,
+  feat_mat_gs,
+  feat_mat_zhu
+)
+# 1. Find columns common to all dataframes
+common_cols <- Reduce(intersect, lapply(feat_mat_list, colnames))
+
+# 2. Subset each and rbind
+combined_feat_mat <- do.call(rbind, lapply(feat_mat_list, function(x) {
+  x[, common_cols, drop = FALSE]
+}))
+
 ```
 
 
+# ECODA
+
 ```{r}
-for (ds in names(datasets)) {
-  seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
-  
-  seurat <- replace_HiTMElayer3_annot(seurat, thresh = 0.1)
-  
-  seurat@misc$label_col <- datasets[[ds]][["label_col"]]
-  seurat@misc$low_res_ct_col <- datasets[[ds]][["low_res_ct_col"]]
-  seurat@misc$hi_res_ct_col <- datasets[[ds]][["hi_res_ct_col"]]
-  
-  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots)
-}
+plot_list <- list()
+
+avg_sep_score <- calc_avg_sep_score(combined_feat_mat, labels = combined_metadata$cond)
+plot_list[["p_ecoda_bio"]] <- plot_pca(combined_feat_mat, labels = combined_metadata$cond,
+         cluster_score = F, mod_score = F, anosim_score = F, invisible = "quali", n_ct_show = 5, repel = TRUE,
+         title = paste("Separation score:", avg_sep_score)
+)
+print(plot_list[["p_ecoda_bio"]])
+ggsave(file.path(path_plots, "batcheffect_combined_PCA_ECODA_bio.pdf"),
+       width = 4,
+       height = 4)
+
+
+avg_sep_score <- calc_avg_sep_score(combined_feat_mat, labels = combined_metadata$ds)
+plot_list[["p_ecoda_batch"]] <- plot_pca(combined_feat_mat, labels = combined_metadata$ds,
+         cluster_score = F, mod_score = F, anosim_score = F, invisible = "quali", n_ct_show = 5, repel = TRUE,
+         title = paste("Separation score:", avg_sep_score)
+)
+print(plot_list[["p_ecoda_batch"]])
+ggsave(file.path(path_plots, "batcheffect_combined_PCA_ECODA_batch.pdf"),
+       width = 4,
+       height = 4)
+```
+
+# PB
+
+```{r}
+avg_sep_score <- calc_avg_sep_score(pb_norm, labels = combined_metadata$cond)
+plot_list[["p_pb_bio"]] <- plot_pca(pb_norm, labels = combined_metadata$cond,
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+print(plot_list[["p_pb_bio"]])
+ggsave(file.path(path_plots, "batcheffect_combined_PCA_PB_bio.pdf"),
+       width = 4,
+       height = 3)
+
+avg_sep_score <- calc_avg_sep_score(pb_norm, labels = combined_metadata$ds)
+plot_list[["p_pb_batch"]] <- plot_pca(pb_norm, labels = combined_metadata$ds,
+         cluster_score = F, mod_score = F, anosim_score = F,
+         title = paste("Separation score:", avg_sep_score)
+)
+print(plot_list[["p_pb_batch"]])
+ggsave(file.path(path_plots, "batcheffect_combined_PCA_PB_batch.pdf"),
+       width = 4,
+       height = 3)
 ```
 
 
 
-```{r}
-labels_ds <- c()
-labels_covid <- c()
-temp_list <- list()
+# Combine all plots
 
-for (ds in c("GongSharma_all_age", "Stephenson")) {
-  temp_list[[ds]] <- as.data.frame(result_list$bmark[[ds]]$ECODA_HiTME_HR_layer2$feat_mat)
-  # temp_list[[ds]] <- as.data.frame(result_list$bmark[[ds]]$Pseudobulk_hvg2000$feat_mat)
-  labels_ds <- c(labels_ds, rep(ds, nrow(temp_list[[ds]])))
-  
-  if (ds == "Stephenson") {
-    labels_covid <- c(labels_covid, as.character(result_list$bmark[[ds]]$ECODA_HiTME_HR_layer2$labels))
-  } else {
-    labels_covid <- c(labels_covid, rep("Healthy", nrow(temp_list[[ds]])))
-  }
-}
-
-ds <- "Zhu"
-temp_list[[ds]] <- as.data.frame(fmat_zhu)
-labels_ds <- c(labels_ds, rep(ds, nrow(temp_list[[ds]])))
-labels_covid <- c(labels_covid, rep("Healthy", nrow(temp_list[[ds]])))
-
-feat_mat <- plyr::rbind.fill(temp_list)
-feat_mat <- feat_mat[ , colSums(is.na(feat_mat)) == 0]
-
-plot_pca(feat_mat = feat_mat, labels = labels_ds, n_ct_show = 5, invisible = "quali")
-ggsave(file.path(path_plots, "batcheffect_CombinedPBMC_PCA_ECODA_batch.pdf"),
-       width = 4,
-       height = 4)
-plot_pca(feat_mat = feat_mat, labels = labels_covid, n_ct_show = 5, invisible = "quali")
-ggsave(file.path(path_plots, "batcheffect_CombinedPBMC_PCA_ECODA_bio.pdf"),
-       width = 4,
-       height = 4)
-plot_pca(feat_mat = feat_mat, labels = labels_ds, plotly_3d = T)
-plot_pca(feat_mat = feat_mat, labels = labels_covid, plotly_3d = T)
+```{r fig.height=6.5, fig.width=10}
+wrap_plots(plot_list) +
+  plot_layout(nrow = 2) +
+  plot_annotation(tag_levels = 'A') &
+  theme(
+    # legend.position='bottom',
+    plot.tag = element_text(size = 16, face = "bold")
+  )
+ggsave(file.path(path_plots, "batcheffect_combined_PCA_combined.pdf"),
+       width = 10,
+       height = 6.5)
 ```
 
