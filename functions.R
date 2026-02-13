@@ -28,7 +28,7 @@ suppressPackageStartupMessages({
   library(parallelly)
 
   # remotes::install_github("carmonalab/scooter", ref="f31eab3")
-  library(scooter)
+  # library(scooter)
 
   # Import at the end, otherwise the "select" function gets re-assigned by another package
   library(dplyr)
@@ -255,7 +255,7 @@ datrans <- function(count_mat,
                       "clr" # ,
                       # "clr_pca"
                     ),
-                    zero_imp_method = "counts_all__1",
+                    zero_imp_method = "counts_zeros__2/3",
                     n_cores = 8) {
   colnames(count_mat) <- make.names(colnames(count_mat), unique = TRUE)
 
@@ -280,7 +280,7 @@ datrans <- function(count_mat,
       "cv",
       "clr"
     ),
-    .packages = c("dplyr", "robCompositions", "zCompositions"),
+    .packages = c("dplyr", "mclust", "robCompositions", "zCompositions"),
     .errorhandling = "pass",
     .combine = rbind
   ) %dopar% {
@@ -301,6 +301,7 @@ datrans <- function(count_mat,
     for (nct in n_ct_to_select) {
       print(paste0("nct: ", nct))
       for (rep in 1:reps) {
+        print(paste0("rep: ", rep))
         # Prepare data
         df_counts_temp <- count_mat
 
@@ -333,7 +334,7 @@ datrans <- function(count_mat,
           if (grepl("percentage|counts|multRepl", zmet)) {
             zero_imp_method_split <- strsplit(zmet, "__")
             if (grepl("percentage|counts", zmet)) {
-              df_counts_temp_imputed <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = zero_imp_method_split[[1]][1], clr_zero_impute_num = as.numeric(zero_imp_method_split[[1]][2]))
+              df_counts_temp_imputed <- df_counts_temp %>% impute_zeros(clr_zero_impute_method = zero_imp_method_split[[1]][1], clr_zero_impute_num = as.numeric(eval(parse(text = zero_imp_method_split[[1]][2]))))
               df_freq_imputed <- df_counts_temp_imputed %>% calc_perc_df()
             } else if (grepl("multRepl", zmet)) {
               df_freq_imputed <- df_freq %>% zCompositions::multRepl(label = 0, dl = rep(as.numeric(zero_imp_method_split[[1]][2]), ncol(df_freq)), z.warning = 1, frac = 1)
@@ -343,6 +344,7 @@ datrans <- function(count_mat,
           }
 
           for (met in trans_method) {
+            print(paste0("met: ", met))
             if (grepl("counts", met)) {
               df <- df_counts_temp
               # } else if (grepl("counts_imputed", met)) {df <- df_counts_temp_imputed
@@ -1001,7 +1003,7 @@ run_benchmark_analysis <- function(res_list,
                                    factors_test = c(2, 3, 5, 10, 15),
                                    path_data,
                                    path_plots,
-                                   seurat_res = c(0.4, 2, 5, 20),
+                                   seurat_res = c(0.1, 0.4, 2, 5, 20),
                                    HVGs = c(1000, 2000, 3000),
                                    # ECODA_select_top_hvct = TRUE,
                                    # ECODA_top_n_hvct = 0.25,
@@ -1045,12 +1047,12 @@ run_benchmark_analysis <- function(res_list,
   hvg <- get_current_hvgs(seurat)
 
 
-  if (!"Pseudobulk_hvg2000" %in% names(res_list)) {
+  if (!"Pseudobulk_schvg2000" %in% names(res_list)) {
     exec_time_pb_norm <- exec_time(
       pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = hvg)
     )
-    res_list[["Pseudobulk_hvg2000"]][["exec_time"]] <- exec_time(
-      res_list[["Pseudobulk_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
+    res_list[["Pseudobulk_schvg2000"]][["exec_time"]] <- exec_time(
+      res_list[["Pseudobulk_schvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
     ) + exec_time_pb_norm
   }
 
@@ -1066,9 +1068,9 @@ run_benchmark_analysis <- function(res_list,
   )
   # So need to check if any of those methods need to be run
   # (mainly whether to calculate pb_norm or not)
-  if (any(!"Pseudobulk_unsup_hvg2000" %in% names(res_list))) {
-    res_list[["Pseudobulk_unsup_hvg2000"]][["exec_time"]] <- exec_time(
-      res_list[["Pseudobulk_unsup_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
+  if (any(!"Pseudobulk_hvg2000" %in% names(res_list))) {
+    res_list[["Pseudobulk_hvg2000"]][["exec_time"]] <- exec_time(
+      res_list[["Pseudobulk_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
     ) + exec_time_pb_norm
   }
 
@@ -1077,9 +1079,9 @@ run_benchmark_analysis <- function(res_list,
   )
   # So need to check if any of those methods need to be run
   # (mainly whether to calculate pb_norm or not)
-  if (any(!"Pseudobulk_unsup_hvg2000_bl" %in% names(res_list))) {
-    res_list[["Pseudobulk_unsup_hvg2000_bl"]][["exec_time"]] <- exec_time(
-      res_list[["Pseudobulk_unsup_hvg2000_bl"]] <- process_pseudobulk_fig(pb_norm_bl, labels)
+  if (any(!"Pseudobulk_hvg2000_bl" %in% names(res_list))) {
+    res_list[["Pseudobulk_hvg2000_bl"]][["exec_time"]] <- exec_time(
+      res_list[["Pseudobulk_hvg2000_bl"]] <- process_pseudobulk_fig(pb_norm_bl, labels)
     ) + exec_time_pb_norm_bl
   }
 
@@ -1337,15 +1339,15 @@ run_benchmark_analysis <- function(res_list,
 
   ### Do only for non-default HVGs (default = 2000)
   for (i in HVGs[!HVGs %in% 2000]) {
+    Pseudobulk_hvg_i <- paste0("Pseudobulk_schvg", i)
     Pseudobulk_hvg_i <- paste0("Pseudobulk_hvg", i)
-    Pseudobulk_unsup_hvg_i <- paste0("Pseudobulk_unsup_hvg", i)
     MOFA_hvg_i_factors15 <- paste0("MOFA_hvg", i, "_factors15")
     scITD_hvg_i_factors5 <- paste0("scITD_hvg", i, "_factors5")
     GloScope_hvg_i_pcadims30 <- paste0("GloScope_hvg", i, "_pcadims30")
     GloScope_hvg_i_pcadims30_sqrtmat <- paste0(GloScope_hvg_i_pcadims30, "_sqrtmat")
     test_items <- c(
       Pseudobulk_hvg_i,
-      Pseudobulk_unsup_hvg_i,
+      Pseudobulk_hvg_i,
       MOFA_hvg_i_factors15,
       scITD_hvg_i_factors5,
       GloScope_hvg_i_pcadims30,
@@ -1382,15 +1384,15 @@ run_benchmark_analysis <- function(res_list,
       }
 
       test_items <- c(
-        Pseudobulk_unsup_hvg_i,
+        Pseudobulk_hvg_i,
         MOFA_hvg_i_factors15
       )
       if (any(!test_items %in% names(res_list))) {
         exec_time_pb_norm <- exec_time(
           pb_norm <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = i)
         )
-        res_list[[Pseudobulk_unsup_hvg_i]][["exec_time"]] <- exec_time(
-          res_list[[Pseudobulk_unsup_hvg_i]] <- process_pseudobulk_fig(pb_norm, labels)
+        res_list[[Pseudobulk_hvg_i]][["exec_time"]] <- exec_time(
+          res_list[[Pseudobulk_hvg_i]] <- process_pseudobulk_fig(pb_norm, labels)
         ) + exec_time_pb_norm
 
         res_list[[MOFA_hvg_i_factors15]][["exec_time"]] <- exec_time(
@@ -1467,13 +1469,13 @@ run_benchmark_analysis <- function(res_list,
     for (norm in c("max", "median", "zscore", "quantile")) {
       res_list[[paste0("ECODA_PB_combo_norm", norm, "_ecodaweight", i)]] <- process_ecodapb_fig(
         dist_mat_ecoda = res_list[["ECODA_authors_HR"]][["dist_mat"]],
-        dist_mat_pb = res_list[["Pseudobulk_unsup_hvg2000"]][["dist_mat"]],
+        dist_mat_pb = res_list[["Pseudobulk_hvg2000"]][["dist_mat"]],
         norm_method = norm,
         ecoda_weight = i,
         labels = res_list[["ECODA_authors_HR"]][["labels"]],
       )
       res_list[[paste0("ECODA_PB_combo_norm", norm, "_ecodaweight", i)]][["exec_time"]] <-
-        res_list[["ECODA_authors_HR"]][["exec_time"]] + res_list[["Pseudobulk_unsup_hvg2000"]][["exec_time"]]
+        res_list[["ECODA_authors_HR"]][["exec_time"]] + res_list[["Pseudobulk_hvg2000"]][["exec_time"]]
     }
   }
 
@@ -1511,7 +1513,10 @@ process_deconv_fig <- function(pseudobulk,
   deconv_ct_comps <- as.data.frame(out[["mRNAProportions"]])
   row.names(deconv_ct_comps) <- colnames(pseudobulk)
 
-  feat_mat <- clr(deconv_ct_comps + 0.001)
+  deconv_ct_comps[deconv_ct_comps == 0] <-
+    deconv_ct_comps[deconv_ct_comps == 0] + (2 / 3) * min(deconv_ct_comps)
+
+  feat_mat <- clr(deconv_ct_comps)
   labels <- labels[rownames(feat_mat)]
 
   res <- list()
@@ -1535,8 +1540,8 @@ process_coda_fig <- function(seurat,
                              sample_col = "Sample",
                              ct_col,
                              title,
-                             clr_zero_impute_method = "counts_all",
-                             clr_zero_impute_num = 1,
+                             clr_zero_impute_method = "counts_zeros",
+                             clr_zero_impute_num = 2 / 3,
                              feat_mat = NULL,
                              var_ct_desc = TRUE,
                              shuffle_labels = FALSE) {
@@ -2012,6 +2017,11 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
     mutate_all(as.numeric)
 
   res_list <- list()
+  res_list[["counts_zeros_2/3min"]] <- df %>%
+    impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2 / 3) %>%
+    calc_perc_df() %>%
+    clr() %>%
+    calc_sep_score(labels)
   res_list[["counts_zeros_1"]] <- df %>%
     impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 1) %>%
     calc_perc_df() %>%

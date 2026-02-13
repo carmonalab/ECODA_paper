@@ -347,7 +347,7 @@ geneRef <- data.table::fread(geneRef_file)
 n_hvg <- 2000
 
 # Resolutions for seurat clustering
-res <- c(0.4, 2, 5, 20)
+res <- c(0.1, 0.4, 2, 5, 20)
 ### 0.4 (lowres ~ 10-15 cell types)
 ### 2 (medium ~ 30-50 cell types)
 ### 5 (~ 100 cell types)
