@@ -78,13 +78,12 @@ This script takes output of "<https://apps.allenimmunology.org/aifi/insights/dyn
 # renv::init()
 # renv::snapshot()
 
-# install.packages("/Users/christianhalter/Desktop/scooter_1.0.0.tar.gz", repos = NULL, type = "source")
-
-library(scooter)
 library(tidyverse)
 library(plotly)
 library(ggplot2)
 library(ggpubr)
+library(forcats)
+library(patchwork)
 library(factoextra)
 library(compositions)
 library(pROC)
@@ -129,7 +128,7 @@ ds_name <- "GongSharma_2024_PrePrintTBD"
 
 path_root <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets", ds_name)
 path_data <- file.path(path_root, "data")
-path_plots <- file.path("/Users/christianhalter/Library/CloudStorage/OneDrive-SharedLibraries-UniversitédeGenève/Santiago Carmona - CSI/LabPapers/ECODA/plots")
+path_plots <- file.path(getwd(), "plots")
 ```
 
 
@@ -275,56 +274,16 @@ for (layer in names(data)) {
     clr()
 }
 
+dproc$meta$age <- factor(ifelse(dproc$meta$cohort.cohortGuid == "BR1", "Young", "Old"), levels = c("Young", "Old"))
+dproc$meta$combined_cmv_age <- factor(paste0("CMV", ifelse(as.character(dproc$meta$subject.cmv) == "Positive", "+", "-"), " ", as.character(dproc$meta$age)),
+                                      levels = c("CMV- Old",
+                                                 "CMV+ Old",
+                                                 "CMV- Young",
+                                                 "CMV+ Young")
+)
+
 saveRDS(dproc, file.path(path_data, "cell_type_compositions.rds"))
 ```
-
-## Create scoot objects based on author annotation
-
-```{r}
-for (layer in names(data)) {
-  df_counts <- dproc[[layer]]$cell_counts
-  df_freq <- dproc[[layer]]$freq * 100
-  df_clr <- dproc[[layer]]$clr_1count
-  
-  cols <- colnames(df_counts)
-  
-  df_counts$scoot_sample <- rownames(df_counts)
-  df_freq$scoot_sample <- rownames(df_freq)
-  df_clr$scoot_sample <- rownames(df_clr)
-
-  df_counts_long <- df_counts %>%
-    pivot_longer(cols = cols,
-                 names_to = "celltype",
-                 values_to = "cell_counts")
-  df_freq_long <- df_freq %>%
-    pivot_longer(cols = cols,
-                 names_to = "celltype",
-                 values_to = "freq")
-  df_clr_long <- df_clr %>%
-    pivot_longer(cols = cols,
-                 names_to = "celltype",
-                 values_to = "clr")
-  df_long <- dplyr::left_join(df_counts_long,
-                              df_freq_long,
-                              by = c("scoot_sample", "celltype"))
-  df_long <- dplyr::left_join(df_long,
-                              df_clr_long,
-                              by = c("scoot_sample", "celltype"))
-  
-  ctable <- list(layer_1 = df_long)
-  
-  meta <- dproc$meta
-  colnames(meta)[colnames(meta) == "specimen.specimenGuid"] <- "scoot_sample"
-  
-  assign(paste0("scoot_summary_", layer, "_authors"),
-         methods::new("scoot",
-                      data = list(composition = ctable),
-                      metadata = meta,
-                      version = packageVersion("scooter"))
-  )
-}
-```
-
 
 
 # ---------------------------------------------------------------
@@ -334,6 +293,27 @@ GongSharma highest resolution -> best clustering example so far
 
 ```{r}
 feat_mat <- dproc$L3$clr_1count
+
+# Create a mapping vector: "Old Name" = "New Name"
+cell_map <- c(
+  "SOX4+_naive_CD4_T_cell"          = "CD4+ Naive (SOX4+)",
+  "SOX4+_naive_CD8_T_cell"          = "CD8+ Naive (SOX4+)",
+  "Adaptive_NK_cell"                = "NK Adaptive",
+  "KLRF1-_GZMB+_CD27-_EM_CD8_T_cell" = "CD8+ EM",
+  "KLRF1+_effector_Vd1_gdT"         = "Vd1 Effector",
+  # "KLRF1+_effector_Vd1_gdT"         = "Vd1 Effector (KLRF1+)",
+  # "KLRF1-_effector_Vd1_gdT"         = "Vd1 Effector (KLRF1-)",
+  "KLRF1-_GZMB+_CD27-_memory_CD4_T_cell" = "CD4+ Memory",
+  "Naive_Vd1_gdT"                   = "Vd1 Naive",
+  "SOX4+_Vd1_gdT"                   = "Vd1 SOX4+",
+  "CD8aa"                           = "CD8aa"
+)
+
+# Apply to your feature matrix
+colnames(feat_mat) <- ifelse(colnames(feat_mat) %in% names(cell_map), 
+                             cell_map[colnames(feat_mat)], 
+                             colnames(feat_mat))
+
 res.pca <- prcomp(feat_mat)
 
 eigenvalues <- res.pca$sdev^2
@@ -356,8 +336,9 @@ feat_mat <- res.pca$x[, 1:3]
 # hc <- stats::hclust(dist_mat, method = "ward.D2")
 # labels <- stats::cutree(hc, k = 4)
 
-# labels <- kmeans(feat_mat, 2)$cluster
-labels <- cluster::pam(feat_mat, k = 4)$cluster
+set.seed(1)
+labels <- factor(kmeans(feat_mat, 4)$cluster)
+# labels <- cluster::pam(feat_mat, k = 4)$cluster
 
 # adj_graph <- igraph::as.undirected(cccd::nng(feat_mat, k = 2))
 # r <- quantile(igraph::strength(adj_graph))[2] / (igraph::gorder(adj_graph) - 1) / 4
@@ -367,6 +348,20 @@ labels <- cluster::pam(feat_mat, k = 4)$cluster
 # dbscan_clustres <- dbscan::hdbscan(feat_mat, minPts = 20)
 # plot(dbscan_clustres, show_flat = TRUE)
 # labels <- dbscan_clustres$cluster
+
+levels(labels) <- c("2", "3", "4", "1")
+labels <- factor(labels, levels = c("1", "2", "3", "4"))
+
+my_colors <- c(
+  "1" = "#F8766D",
+  "2" = "#7CAE00",
+  "3" = "#00BFC4",
+  "4" = "#C77CFF",
+  "CMV- Old" = "#F8766D",
+  "CMV+ Old" = "#7CAE00",
+  "CMV- Young" = "#00BFC4",
+  "CMV+ Young" = "#C77CFF"
+)
 
 factoextra::fviz_pca(res.pca,
                      habillage = labels,
@@ -379,20 +374,29 @@ factoextra::fviz_pca(res.pca,
     scale_shape_manual(values = rep(19, length(unique(labels)))) +
   guides(shape=guide_legend(title="Cluster"), color=guide_legend(title="Cluster")) +
   ggtitle("Unsupervised clustering")
-ggsave(file.path(path_plots, "workflow_schema_clustering_unsupervised.pdf"),
-       width = 12,
-       height = 10)
+# ggsave(file.path(path_plots, "workflow_schema_clustering_unsupervised.pdf"),
+#        width = 12,
+#        height = 10)
 
-factoextra::fviz_pca(res.pca,
+p1 <- factoextra::fviz_pca(res.pca,
                      habillage = labels,
                      # addEllipses = TRUE,
-                     label = "var",
+                     # label = "var",
                      pointsize = 1,
-                     invisible = c("var", "quali"),
-                     geom = "point") +
+                     invisible = c("quali"),
+                     geom = "point",
+                     select.var = list(contrib = 4),
+                     labelsize = 3,
+                     repel = TRUE,
+                     axes.linetype = "blank") +
     scale_shape_manual(values = rep(19, length(unique(labels)))) +
   guides(shape=guide_legend(title="Cluster"), color=guide_legend(title="Cluster")) +
-  ggtitle("Unsupervised clustering")
+  ggtitle("Unsupervised clustering") +
+  scale_color_manual(values = my_colors) +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+          axis.ticks = element_blank())
+print(p1)
 ggsave(file.path(path_plots, "workflow_schema_clustering_unsupervised.pdf"),
        width = 4,
        height = 3)
@@ -412,7 +416,7 @@ ggsave(file.path(path_plots, "workflow_schema_clustering_CMV.pdf"),
        height = 3)
 
 factoextra::fviz_pca(res.pca,
-                     habillage = factor(ifelse(dproc$meta$cohort.cohortGuid == "BR1", "Young", "Old"), levels = c("Young", "Old")),
+                     habillage = dproc$meta$age,
                      # addEllipses = TRUE,
                      label = "var",
                      pointsize = 1,
@@ -424,19 +428,30 @@ factoextra::fviz_pca(res.pca,
 ggsave(file.path(path_plots, "workflow_schema_clustering_age.pdf"),
        width = 4,
        height = 3)
-```
 
-```{r fig.height=6, fig.width=16}
-composition_boxplot(scoot_object = scoot_summary_L3_authors)
-composition_boxplot(scoot_object = scoot_summary_L3_authors,
-                    group_by = "subject.cmv")
-composition_boxplot(scoot_object = scoot_summary_L3_authors,
-                    group_by = "cohort.cohortGuid")
-composition_boxplot(scoot_object = scoot_summary_L3_authors,
-                    group_by = "cohort.cohortGuid",
-                    facet_by = "subject.cmv")
-```
+p2 <-factoextra::fviz_pca(res.pca,
+                     habillage = dproc$meta$combined_cmv_age,
+                     # addEllipses = TRUE,
+                     label = "var",
+                     pointsize = 1,
+                     invisible = c("var", "quali"),
+                     geom = "point",
+                     axes.linetype = "blank") +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+  guides(shape=guide_legend(title="Bio group"), color=guide_legend(title="Bio group")) +
+  ggtitle("Known biological groups") +
+  scale_color_manual(values = my_colors) +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+          axis.ticks = element_blank())
+print(p2)
+ggsave(file.path(path_plots, "workflow_schema_clustering_both.pdf"),
+       width = 4,
+       height = 3)
 
+aligned_plots <- p1 + p2 + plot_layout(ncol = 2)
+ggsave(file.path(path_plots, "workflow_schema_clustering_combined_plots.pdf"), aligned_plots, width = 8, height = 3)
+```
 
 
 # Example plot of normalization for schema
@@ -1053,7 +1068,64 @@ pb_normed <- t(pb_normed)
 row.names(pb_normed) <- pseudobulk$specimen.specimenGuid
 
 res.pca <- prcomp(pb_normed, scale. = FALSE)
+
+set.seed(1)
+labels <- factor(kmeans(pb_normed, 2)$cluster)
+
+levels(labels) <- c("2", "1") # Swap these if the colors are inverted
+labels <- factor(labels, levels = c("1", "2")) # Force order 1 then 2
+
+# Ensure these are in your my_colors
+my_colors <- c(
+  "1" = "orange",
+  "2" = "skyblue",
+  "Female" = "orange",
+  "Male" = "skyblue"
+)
+
+p3 <- factoextra::fviz_pca(res.pca,
+                     habillage = labels,
+                     # addEllipses = TRUE,
+                     label = "var",
+                     pointsize = 1,
+                     invisible = c("quali"),
+                     geom = "point",
+                     select.var = list(contrib = 4),
+                     labelsize = 3,
+                     repel = TRUE,
+                     axes.linetype = "blank") +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+  guides(shape=guide_legend(title="Cluster"), color=guide_legend(title="Cluster")) +
+  ggtitle("Unsupervised clustering") +
+  scale_color_manual(values = my_colors) +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+          axis.ticks = element_blank())
+print(p3)
+
 labels <- meta$subject.biologicalSex
+
+p4 <-factoextra::fviz_pca(res.pca,
+                     habillage = labels,
+                     # addEllipses = TRUE,
+                     label = "var",
+                     pointsize = 1,
+                     invisible = c("var", "quali"),
+                     geom = "point",
+                     axes.linetype = "blank") +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+  guides(shape=guide_legend(title="Bio group"), color=guide_legend(title="Bio group")) +
+  ggtitle("Known biological groups") +
+  scale_color_manual(values = my_colors) +
+  theme_classic() +
+  theme(axis.text = element_blank(),
+          axis.ticks = element_blank())
+print(p4)
+
+aligned_plots <- p1 + p2 + p3 + p4 + plot_layout(ncol = 2)
+ggsave(file.path(path_plots, "workflow_schema_clustering_PB_combined_plots.pdf"), aligned_plots, width = 8, height = 6)
+
+
 p_pca(res.pca, labels, title = "Sex")
 ggsave(file.path(path_plots, "pca_pseudobulk_by_sex.pdf"),
        width = 4,
@@ -1140,7 +1212,7 @@ mod_score <- round(calc_modularity(pb_normed_females, labels), 3)
 title <- paste0(title, "\nModularity score: ", mod_score)
 sil_score <- round(calc_sil(pb_normed_females, labels), 3)
 title <- paste0(title, "\nSilhouette score: ", sil_score)
-factoextra::fviz_pca(res.pca_females,
+p_f_cmv <- factoextra::fviz_pca(res.pca_females,
                      habillage = labels,
                      # addEllipses = TRUE,
                      label = "none",
@@ -1153,12 +1225,13 @@ factoextra::fviz_pca(res.pca_females,
   guides(shape=guide_legend(title="CMV"), color=guide_legend(title="CMV")) +
   ggtitle("") +
   theme_classic() +
-  theme(axis.title.x=element_blank(),
+  theme(# axis.title.x=element_blank(),
         axis.text.x=element_blank(),
         axis.ticks.x=element_blank(),
-        axis.title.y=element_blank(),
+        # axis.title.y=element_blank(),
         axis.text.y=element_blank(),
         axis.ticks.y=element_blank())
+print(p_f_cmv)
 ggsave(file.path(path_plots, "pca_pseudobulk_females_by_cmv.pdf"),
        width = 4,
        height = 3)
@@ -1169,7 +1242,7 @@ mod_score <- round(calc_modularity(pb_normed_females, labels), 3)
 title <- paste0(title, "\nModularity score: ", mod_score)
 sil_score <- round(calc_sil(pb_normed_females, labels), 3)
 title <- paste0(title, "\nSilhouette score: ", sil_score)
-factoextra::fviz_pca(res.pca_females,
+p_f_age <- factoextra::fviz_pca(res.pca_females,
                      habillage = labels,
                      # addEllipses = TRUE,
                      label = "none",
@@ -1182,16 +1255,19 @@ factoextra::fviz_pca(res.pca_females,
   guides(shape=guide_legend(title="Age"), color=guide_legend(title="Age")) +
   ggtitle("") +
   theme_classic() +
-  theme(axis.title.x=element_blank(),
+  theme(# axis.title.x=element_blank(),
         axis.text.x=element_blank(),
         axis.ticks.x=element_blank(),
-        axis.title.y=element_blank(),
+        # axis.title.y=element_blank(),
         axis.text.y=element_blank(),
         axis.ticks.y=element_blank())
+print(p_f_age)
 ggsave(file.path(path_plots, "pca_pseudobulk_females_by_age.pdf"),
        width = 4,
        height = 3)
 
+aligned_plots <- p_f_cmv + p_f_age + plot_layout(ncol = 2)
+ggsave(file.path(path_plots, "workflow_schema_clustering_PB_strat_combined_plots_appendix.pdf"), aligned_plots, width = 8, height = 3)
 
 
 df_clust <- as.data.frame(cbind(as.character(meta_females$subject.cmv), meta_females$age, clust_labels))
