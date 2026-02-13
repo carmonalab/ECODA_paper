@@ -34,11 +34,12 @@ library("MOFA2")
 # devtools::install_github("kharchenkolab/scITD")
 library(scITD)
 # install.packages("ncdf4")
-# install.packages("GloScope")
+# BiocManager::install("GloScope")
 library(GloScope)
 
 library(forcats)
 library(patchwork)
+library(gtools)
 
 # Set paths
 path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
@@ -49,8 +50,6 @@ seurat_file_ending <- "_ECODAprocessed.rds"
 
 set.seed(123)
 ```
-
-
 
 # Create results list to fill
 
@@ -64,8 +63,6 @@ if (file.exists(result_file)) {
 }
 ```
 
-
-
 # ---------------------------------------------------------------
 
 # Process datasets
@@ -73,7 +70,7 @@ if (file.exists(result_file)) {
 ```{r message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
 for (ds in names(datasets)) {
   seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
-  
+  # seurat <- FindClusters(seurat, resolution = 0.1)
   seurat <- replace_HiTMElayer3_annot(seurat, thresh = 0.1)
   
   seurat@misc$label_col <- datasets[[ds]][["label_col"]]
@@ -83,7 +80,6 @@ for (ds in names(datasets)) {
   result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots)
 }
 ```
-
 
 # ---------------------------------------------------------------
 
@@ -95,8 +91,6 @@ ds_name <- "GongSharma_2024_PrePrintTBD"
 path_root <- file.path("~", "Dropbox", "CSI", "Standardized_SingleCell_Datasets", ds_name)
 path_output <- file.path(path_root, "output")
 ```
-
-
 
 ### Check for batch effect
 
@@ -162,8 +156,6 @@ for (mc in meta_cols_plot) {
 # No weak batch effect observed
 ```
 
-
-
 ## Age (females cmvneg)
 
 ```{r}
@@ -194,15 +186,12 @@ if (any(elem_null)) {
 }
 ```
 
-
-
-
-
 # ---------------------------------------------------------------
 
 # Bassez
 
-# IMPORTANT: Needs automated annotation, as seurat$cohort c("neoadjuvant_chemo", "treatment_naive") seem to be separately and differently annotated by the authors
+# IMPORTANT: Needs automated annotation, as seurat\$cohort c("neoadjuvant_chemo", "treatment_naive") seem to be separately and differently annotated by the authors
+
 ## Has also other non-immune cells
 
 ```{r}
@@ -245,37 +234,6 @@ if (any(elem_null)) {
 ```
 
 
-
-
-# ---------------------------------------------------------------
-
-# Test new dataset (template)
-
-```{r}
-# seurat_sub <- subset(seurat, subset = OriginalAnnotationLevel1 %in% c("B", "Mast", "Myeloid", "Plasma", "TNKILC"))
-# 
-# test <- run_benchmark_analysis(seurat_sub,
-#                                get_labels(seurat_sub, seurat_sub@misc$label_col),
-#                                seurat@misc$low_res_ct_col,
-#                                seurat@misc$hi_res_ct_col,
-#                                factors_test = 2,
-#                                Pseudobulk = TRUE,
-#                                ECODA_deconv = FALSE,
-#                                ECODA_low_res = FALSE,
-#                                ECODA_high_res = TRUE,
-#                                Pseudobulk_PCA = FALSE,
-#                                ECODA_high_res_PCA = FALSE,
-#                                MOFA = FALSE,
-#                                scITD = FALSE,
-#                                MrVI = FALSE,
-#                                show_pca_plots = TRUE,
-#                                save_pca_plots = FALSE
-# )
-```
-
-
-
-
 # ---------------------------------------------------------------
 # ---------------------------------------------------------------
 
@@ -285,10 +243,9 @@ if (any(elem_null)) {
 df_results_list <- list()
 ```
 
-
-# ---------------------------------------------------------------
 # ---------------------------------------------------------------
 
+# ---------------------------------------------------------------
 
 # Plot benchmark results
 
@@ -340,10 +297,7 @@ df_results$dataset[df_results$dataset == "GongSharma_females_cmvneg_age"] <- "Go
 df_results_list[["Benchmark"]] <- df_results
 ```
 
-
 ## Plot results
-
-
 
 ### All methods (overview)
 
@@ -395,7 +349,6 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores_bars.pdf"
        width = 14,
        height = 7)
 ```
-
 
 ### Main methods (benchmark)
 
@@ -457,7 +410,7 @@ p1 <- df_plot %>%
 
 # Plot 2: Modularity
 p2 <- df_plot %>%
-  filter(score == "mod_knn3_score") %>%
+  filter(grepl(pattern = "mod", score)) %>%
   ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
@@ -494,7 +447,6 @@ ggsave(file.path(path_plots, "benchmark_summary_combined_perdataset.pdf"),
        width = 12, # Increased width to fit 3 plots
        height = 5)
 ```
-
 
 ```{r fig.height=5, fig.width=4}
 filter_methods <- c(
@@ -632,8 +584,6 @@ df_plot %>%
 #        height = 5.5)
 ```
 
-
-
 ```{r fig.height=4, fig.width=4}
 filter_methods <- c(
   "ECODA_authors_HR",
@@ -709,9 +659,6 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_ANOSIM_minmaxscaled_main
        height = 4.5)
 ```
 
-
-
-
 #### Extended methods
 
 ```{r fig.height=5, fig.width=4}
@@ -773,7 +720,6 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_with_
        height = 5.5)
 ```
 
-
 #### Plot all separation metrics together
 
 ```{r fig.height=6, fig.width=5}
@@ -824,19 +770,77 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_allmetricscombined_mainm
 #### Plot PCA for selected datasets and main methods
 
 ```{r}
-m <- "ECODA_HiTME_HR_layer2"
-# ds <- names(result_list[["bmark"]])[1]
-ds <- "Lee"
+ds <- "Kfoury"
 
-p <- plot_pca(
+m <- "ECODA_authors_HR"
+p1 <- plot_pca(
     result_list[["bmark"]][[ds]][[m]][["feat_mat"]],
     labels = result_list[["bmark"]][[ds]][[m]][["labels"]],
-    coord_equal = FALSE,
+    coord_equal = FALSE, repel = TRUE, cluster_score = FALSE, mod_score = FALSE,
     title = m, n_ct_show = 5, invisible = c("quali")
   )
-print(p)
-```
+print(p1)
 
+m <- "ECODA_HiTME_HR_layer2"
+p2 <- plot_pca(
+    result_list[["bmark"]][[ds]][[m]][["feat_mat"]],
+    labels = result_list[["bmark"]][[ds]][[m]][["labels"]],
+    coord_equal = FALSE, repel = TRUE, cluster_score = FALSE, mod_score = FALSE,
+    title = "ECODA_HiTME", n_ct_show = 5, invisible = c("quali")
+  )
+print(p2)
+
+m <- "ECODA_scATOMIC_HR"
+p3 <- plot_pca(
+    result_list[["bmark"]][[ds]][[m]][["feat_mat"]],
+    labels = result_list[["bmark"]][[ds]][[m]][["labels"]],
+    coord_equal = FALSE, repel = TRUE, cluster_score = FALSE, mod_score = FALSE,
+    title = "ECODA_scATOMIC", n_ct_show = 5, invisible = c("quali")
+  )
+print(p3)
+
+wrap_plots(list(p1, p2, p3)) +
+  plot_layout(nrow = 1, guides = "collect")
+ggsave(file.path(path_plots, paste0("PCA_authors_vs_auto_", ds, ".pdf")),
+       width = 15,
+       height = 6)
+
+
+ds <- "Wu"
+
+m <- "ECODA_authors_HR"
+p1 <- plot_pca(
+    result_list[["bmark"]][[ds]][[m]][["feat_mat"]],
+    labels = result_list[["bmark"]][[ds]][[m]][["labels"]],
+    coord_equal = FALSE, repel = TRUE, cluster_score = FALSE, mod_score = FALSE,
+    title = m, n_ct_show = 5, invisible = c("quali")
+  )
+print(p1)
+
+m <- "ECODA_HiTME_HR_layer2"
+p2 <- plot_pca(
+    result_list[["bmark"]][[ds]][[m]][["feat_mat"]],
+    labels = result_list[["bmark"]][[ds]][[m]][["labels"]],
+    coord_equal = FALSE, repel = TRUE, cluster_score = FALSE, mod_score = FALSE,
+    title = "ECODA_HiTME", n_ct_show = 5, invisible = c("quali")
+  )
+print(p2)
+
+m <- "ECODA_scATOMIC_HR"
+p3 <- plot_pca(
+    result_list[["bmark"]][[ds]][[m]][["feat_mat"]],
+    labels = result_list[["bmark"]][[ds]][[m]][["labels"]],
+    coord_equal = FALSE, repel = TRUE, cluster_score = FALSE, mod_score = FALSE,
+    title = "ECODA_scATOMIC", n_ct_show = 5, invisible = c("quali")
+  )
+print(p3)
+
+wrap_plots(list(p1, p2, p3)) +
+  plot_layout(nrow = 1, guides = "collect")
+ggsave(file.path(path_plots, paste0("PCA_authors_vs_auto_", ds, ".pdf")),
+       width = 15,
+       height = 6)
+```
 
 ```{r fig.height=12, fig.width=12}
 ds <- "Pelka"
@@ -875,8 +879,73 @@ wrap_plots(plot_list) +
 ```
 
 
-### Plot PCoA for all datasets
+### Plot PCA for all datasets (PB and ECODA)
 
+```{r fig.height=4, fig.width=8}
+methods <- list(
+  "Pseudobulk_hvg2000" = "Pseudobulk",
+  # "ECODA_HiTME_HR_layer2" = "ECODA_automated",
+  "ECODA_authors_HR" = "ECODA"
+)
+
+for (ds in names(result_list[["bmark"]])) {
+  plot_list <- list()
+  
+  for (m in names(methods)) {
+    feat_mat <- result_list[["bmark"]][[ds]][[m]][["feat_mat"]]
+    labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
+    
+    if (ds=="Bassez") levels(labels) <- c("Responders", "Non-responders")
+    if (ds=="Zhang") levels(labels) <- tools::toTitleCase(levels(labels))
+    
+    if (methods[[m]] == "ECODA") title <- "Cell type composition (ECODA)" else title <- methods[[m]]
+    
+    plot_list[[m]] <- plot_pca(
+      feat_mat = feat_mat,
+      labels = labels,
+      cluster_score = FALSE, mod_score = FALSE, anosim_score = FALSE,
+      coord_equal = FALSE,
+      n_ct_show = 5, invisible = "quali", repel = TRUE,
+      title = title
+    )
+    
+    if (ds=="Bassez") {
+      plot_list[[m]] <- plot_list[[m]] +
+        scale_color_discrete(
+          name = "Treatment response", 
+          labels = labels
+        ) +
+        scale_shape_discrete(
+          name = "Treatment response",
+          labels = labels
+        )
+    }
+    if (ds=="Zhang") {
+      plot_list[[m]] <- plot_list[[m]] +
+        scale_color_discrete(
+          name = "Tissue", 
+          labels = labels
+        ) +
+        scale_shape_discrete(
+          name = "Tissue", 
+          labels = labels
+        )
+    }
+    
+  }
+  
+  wrap_plots(plot_list) +
+    plot_layout(nrow = 1, guides = "collect")
+  
+  ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
+         width = 8,
+         height = 3.5)
+}
+
+```
+
+
+### Plot PCoA for all datasets
 
 ```{r fig.height=12, fig.width=12}
 methods <- list(
@@ -923,13 +992,10 @@ for (ds in names(result_list[["bmark"]])) {
 
 ```
 
-
-
-
 ### Compare PCA based on features vs dist
 
 ```{r fig.height=6, fig.width=18}
-ds <- "Stephenson"
+ds <- "Pelka"
 plot_list <- list()
 
 methods <- list(
@@ -972,7 +1038,8 @@ for (m in names(methods)) {
   
   plot_list[[m]] <- plot_pca(
     feat_mat = feat_mat,
-    cluster_score = F, mod_score = F, anosim_score = F,
+    # cluster_score = F, mod_score = F, anosim_score = F,
+    # knn_k = NULL,
     labels = labels,
     coord_equal = FALSE,
     title = paste0(methods[[m]], "\nSeparation score: ", sprintf("%.2f", avg_sep_score))
@@ -982,9 +1049,9 @@ for (m in names(methods)) {
 wrap_plots(plot_list) +
   plot_layout(nrow = 2, guides = "collect") +
   plot_annotation(title = ds)
-ggsave(file.path(path_plots, paste0("PCA_", ds, ".pdf")),
-       width = 18,
-       height = 6)
+# ggsave(file.path(path_plots, paste0("PCA_", ds, ".pdf")),
+#        width = 18,
+#        height = 6)
 
 ```
 
@@ -1045,7 +1112,6 @@ wrap_plots(plot_list) +
   plot_annotation(title = ds)
 ```
 
-
 ```{r fig.height=12, fig.width=12}
 for (m in names(methods)) {
   feat_mat <- result_list[["bmark"]][[ds]][[m]][["feat_mat"]]
@@ -1069,7 +1135,6 @@ wrap_plots(plot_list) +
   plot_layout(nrow = 3, guides = "collect")
 
 ```
-
 
 ### Show example heatmap
 
@@ -1128,8 +1193,6 @@ ggsave(file.path(path_plots, paste0("PCA_arrows_", ds, ".pdf")),
        height = 6)
 ```
 
-
-
 ### ECODA annotation method comparison
 
 ```{r fig.height=6, fig.width=5}
@@ -1171,6 +1234,7 @@ filter_methods <- c(
   "ECODA_HiTME_HR_layer2",
   # "ECODA_HiTME_HR_layer3",
   "ECODA_scATOMIC_HR",
+  "ECODA_seuratres_0.1",
   "ECODA_seuratres_0.4",
   "ECODA_seuratres_2",
   "ECODA_seuratres_5",
@@ -1183,10 +1247,11 @@ df_plot <- df_results %>%
   filter(!grepl("Zhang|Lee", dataset)) %>% # Exclude Zhang and Lee, as they do not have high-resolution author annotation
   filter(method %in% filter_methods) %>%
   mutate(method = recode(method,
-                         "ECODA_seuratres_0.4" = "ECODA_leiden_res_0.4",
-                         "ECODA_seuratres_2" = "ECODA_leiden_res_2",
-                         "ECODA_seuratres_5" = "ECODA_leiden_res_5",
-                         "ECODA_seuratres_20" = "ECODA_leiden_res_20",
+                         "ECODA_seuratres_0.1" = "ECODA_Leiden_res_0.1",
+                         "ECODA_seuratres_0.4" = "ECODA_Leiden_res_0.4",
+                         "ECODA_seuratres_2" = "ECODA_Leiden_res_2",
+                         "ECODA_seuratres_5" = "ECODA_Leiden_res_5",
+                         "ECODA_seuratres_20" = "ECODA_Leiden_res_20",
                          "ECODA_HiTME_HR_layer2" = "ECODA_HiTME",
                          "ECODA_scATOMIC_HR" = "ECODA_scATOMIC"
   ))
@@ -1194,8 +1259,9 @@ df_plot <- df_results %>%
 p <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
-  geom_point(position = "identity", alpha = 0.6, size = 0.8) +
-  geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
+  geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
+  scale_shape_manual(values=1:length(unique((df_plot$dataset)))) +
+  geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
   stat_compare_means(
     ref.group = "ECODA_authors_HR",
     method = "wilcox.test",
@@ -1209,10 +1275,172 @@ p <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mea
   theme_classic() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 print(p)
-ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_refECODAhr.pdf"),
+ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_annotationmethods_refECODAhr.pdf"),
+       width = 5,
+       height = 5)
+
+
+
+df_plot <- df_results %>%
+  filter(score == "mod_knn3_score") %>%
+  filter(!grepl("Zhang|Lee", dataset)) %>% # Exclude Zhang and Lee, as they do not have high-resolution author annotation
+  filter(method %in% filter_methods) %>%
+  mutate(method = recode(method,
+                         "ECODA_seuratres_0.1" = "ECODA_Leiden_res_0.1",
+                         "ECODA_seuratres_0.4" = "ECODA_Leiden_res_0.4",
+                         "ECODA_seuratres_2" = "ECODA_Leiden_res_2",
+                         "ECODA_seuratres_5" = "ECODA_Leiden_res_5",
+                         "ECODA_seuratres_20" = "ECODA_Leiden_res_20",
+                         "ECODA_HiTME_HR_layer2" = "ECODA_HiTME",
+                         "ECODA_scATOMIC_HR" = "ECODA_scATOMIC"
+  ))
+  
+p_mod <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
+  geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
+  scale_shape_manual(values=1:length(unique((df_plot$dataset)))) +
+  geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
+  stat_compare_means(
+    ref.group = "ECODA_authors_HR",
+    method = "wilcox.test",
+    paired = TRUE, # Set to FALSE as the groups are not paired
+    aes(label = after_stat(p.signif)),
+    size = 3,
+    label.y = 1.1
+  ) +
+  labs(x = "", y = "Separation score (Modularity)") +
+  ylim(c(min(df_plot$value), max(df_plot$value) + 0.15)) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+print(p_mod)
+ggsave(file.path(path_plots, "benchmark_summary_barplot_modularity_annotationmethods_refECODAhr.pdf"),
        width = 2.5,
        height = 4)
 
+
+df_plot <- df_results %>%
+  filter(score == "cluster_score") %>%
+  filter(!grepl("Zhang|Lee", dataset)) %>% # Exclude Zhang and Lee, as they do not have high-resolution author annotation
+  filter(method %in% filter_methods) %>%
+  mutate(method = recode(method,
+                         "ECODA_seuratres_0.1" = "ECODA_Leiden_res_0.1",
+                         "ECODA_seuratres_0.4" = "ECODA_Leiden_res_0.4",
+                         "ECODA_seuratres_2" = "ECODA_Leiden_res_2",
+                         "ECODA_seuratres_5" = "ECODA_Leiden_res_5",
+                         "ECODA_seuratres_20" = "ECODA_Leiden_res_20",
+                         "ECODA_HiTME_HR_layer2" = "ECODA_HiTME",
+                         "ECODA_scATOMIC_HR" = "ECODA_scATOMIC"
+  ))
+  
+p_ari <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
+  geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
+  scale_shape_manual(values=1:length(unique((df_plot$dataset)))) +
+  geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
+  stat_compare_means(
+    ref.group = "ECODA_authors_HR",
+    method = "wilcox.test",
+    paired = TRUE, # Set to FALSE as the groups are not paired
+    aes(label = after_stat(p.signif)),
+    size = 3,
+    label.y = 1.1
+  ) +
+  labs(x = "", y = "Separation score (ARI)") +
+  ylim(c(min(df_plot$value), max(df_plot$value) + 0.15)) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+print(p_ari)
+ggsave(file.path(path_plots, "benchmark_summary_barplot_ari_annotationmethods_refECODAhr.pdf"),
+       width = 2.5,
+       height = 4)
+
+
+wrap_plots(list(p_mod, p_ari)) +
+  plot_layout(nrow = 1, guides = "collect")
+ggsave(file.path(path_plots, "benchmark_summary_barplot_combined_annotationmethods_refECODAhr.pdf"),
+       width = 9,
+       height = 5)
+```
+
+#### Plot PCA for selected annot. methods (Adams)
+
+```{r fig.height=8, fig.width=8}
+ds <- "Adams"
+
+methods <- list(
+  "ECODA_authors_HR" = "ECODA_authors_HR",
+  "ECODA_seuratres_5" = "ECODA_Leiden_res_5",
+  # "ECODA_authors_LR" = "ECODA_authors_LR",
+  "ECODA_HiTME_HR_layer2" = "ECODA_automated",
+  # "ECODA_scATOMIC_HR" = "ECODA_scATOMIC",
+  "ECODA_deconv" = "ECODA_deconv"
+  # "ECODA_seuratres_0.1" = "ECODA_Leiden_res_0.1"
+)
+
+plot_list <- list()
+
+for (m in names(methods)) {
+  feat_mat <- result_list[["bmark"]][[ds]][[m]][["feat_mat"]]
+  labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
+  
+  plot_list[[m]] <- plot_pca(
+    feat_mat = feat_mat,
+    labels = labels,
+    cluster_score = FALSE,mod_score = FALSE, anosim_score = FALSE,
+    coord_equal = FALSE, pointsize = 2,
+    n_ct_show = 5, invisible = "quali", repel = TRUE,
+    title = methods[[m]]
+  )
+}
+
+wrap_plots(plot_list) +
+  plot_layout(nrow = 2, guides = "collect")
+
+ggsave(file.path(path_plots, paste0("annotmethods_pca_", ds, ".pdf")),
+       width = 8,
+       height = 8)
+```
+
+
+#### Plot PCA for selected annot. methods (GongSharma)
+
+```{r fig.height=8, fig.width=16}
+ds <- "GongSharma_all_age"
+
+methods <- list(
+  "ECODA_authors_HR" = "ECODA_authors_HR",
+  # "ECODA_authors_LR" = "ECODA_authors_LR",
+  # "ECODA_HiTME_HR_layer2" = "ECODA_HiTME"
+  "ECODA_scATOMIC_HR" = "ECODA_scATOMIC"
+  # "ECODA_deconv" = "ECODA_deconv",
+  # "ECODA_seuratres_5" = "ECODA_Leiden_res_5",
+  # "ECODA_seuratres_0.1" = "ECODA_Leiden_res_0.1"
+)
+
+plot_list <- list()
+
+for (m in names(methods)) {
+  feat_mat <- result_list[["bmark"]][[ds]][[m]][["feat_mat"]]
+  labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
+  
+  plot_list[[m]] <- plot_pca(
+    feat_mat = feat_mat,
+    labels = labels,
+    cluster_score = FALSE,mod_score = FALSE, anosim_score = FALSE,
+    coord_equal = FALSE,
+    n_ct_show = 10, invisible = "quali", repel = TRUE,
+    title = methods[[m]]
+  )
+}
+
+wrap_plots(plot_list) +
+  plot_layout(nrow = 1, guides = "collect")
+
+ggsave(file.path(path_plots, paste0("annotmethods_pca_", ds, ".pdf")),
+       width = 12,
+       height = 5)
 ```
 
 
@@ -1235,7 +1463,7 @@ filter_methods <- c(
 default_methods <- c(
     "ECODA_authors_HR\\b", 
     "MOFA_hvg2000_factors15", 
-    "Pseudobulk_10_PCA_dims",
+    "Pseudobulk_hvg2000\\b",
     "PILOT_hvg2000",
     "scITD_hvg2000_factors5",
     "scPoli_hvg2000_dims5",
@@ -1244,6 +1472,8 @@ default_methods <- c(
 )
 default_methods_regex <- paste(default_methods, collapse = "|")
 
+score.labs <- c("ANOSIM score", "Adjusted rand index", "Modularity score")
+names(score.labs) <- sort(unique(df_results$score))
 
 df_results %>%
   # filter(score == "anosim_score") %>%
@@ -1311,7 +1541,6 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_mainmethods_refEC
        height = 8)
 ```
 
-
 ### Combined ECODA and PB
 
 #### Plot distance distribution after different normalization methods applied
@@ -1343,7 +1572,6 @@ test2 <- zscore_transform(pb)
 hist(test1, main = "ecoda zscore")
 hist(test2, main = "pb zscore")
 ```
-
 
 #### Plot benchmark including ECODA+PB (overview)
 
@@ -1413,7 +1641,6 @@ df_results %>%
              rows = vars(score),
              labeller = labeller(score = score.labs))
 ```
-
 
 #### Plot benchmark including ECODA+PB (detailed)
 
@@ -1521,9 +1748,6 @@ df_plot %>%
   theme_classic() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 ```
-
-
-
 
 ### Poster figures
 
@@ -1774,12 +1998,9 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_modularity.pdf"),
        height = 6)
 ```
 
-
-
 ## Plot feature selection
 
-Surprisingly, even at the lowest number highly variable cell types (i.e. variance explained of 10% -> >=2 cell types) the average biological separation is quite very high.
-Different daatasets can do with a different number of highly variable cell types (separation plateaus out at different levels of variance explained % and number of cell types retained).
+Surprisingly, even at the lowest number highly variable cell types (i.e. variance explained of 10% -\> \>=2 cell types) the average biological separation is quite very high. Different daatasets can do with a different number of highly variable cell types (separation plateaus out at different levels of variance explained % and number of cell types retained).
 
 ```{r}
 df_results_sub <- df_results %>%
@@ -1808,7 +2029,7 @@ p1 <- df_results_sub %>%
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
   geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
-  scale_shape_manual(values=1:length(unique((df_plot$dataset)))) +
+  scale_shape_manual(values=1:length(unique((df_results_sub$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
   stat_compare_means(
     ref.group = "All cell types",
@@ -1818,22 +2039,22 @@ p1 <- df_results_sub %>%
     label.y = 0.93,
     aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
   ) +
-  ylim(c(-0.1, 1)) +
+  # ylim(c(-0.1, 1)) +
   labs(x = "Variance explained (%)", y = "Separation score (ANOSIM)") +
   theme_classic2() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1),
         legend.position = "none")
 print(p1)
-ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_ECODAfeatureselectionHVC.pdf"),
-       width = 4,
-       height = 4)
+# ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_ECODAfeatureselectionHVC.pdf"),
+#        width = 4,
+#        height = 4)
 
 p2 <- df_results_sub %>%
   ggplot(aes(x = method, y = n_features)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
   geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
-  scale_shape_manual(values=1:length(unique((df_plot$dataset)))) +
+  scale_shape_manual(values=1:length(unique((df_results_sub$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
   labs(x = "Variance explained (%)", y = "Number of cell types") +
   theme_classic2() +
@@ -1848,15 +2069,19 @@ p1_clean <- p1 + theme(axis.title.x = element_blank(),
 
 # Combine the plots vertically
 combined_plot <- (p2 / p1) + 
-  plot_layout(guides = "collect") & 
-  theme(legend.position = "right")&
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = 'A') & 
+  theme(
+    plot.tag = element_text(size = 16, face = "bold"),
+    legend.position = "right"
+  ) &
   labs(color = "Dataset", 
        shape = "Dataset", 
        linetype = "Dataset")
 print(combined_plot)
-ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_ECODAfeatureselectionHVC_withNumCT.pdf"),
-       width = 5,
-       height = 5)
+ggsave(file.path(path_plots, "featureselectionHVC_summary_barplot_anosim_ECODA_withNumCT.pdf"),
+       width = 5.5,
+       height = 6)
 
 
 library(ggbreak)
@@ -1880,9 +2105,124 @@ df_results %>%
   labs(x = "", y = "Number of cell types") +
   theme_classic2() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
-ggsave(file.path(path_plots, "benchmark_summary_barplot_nfeatures.pdf"),
-       width = 1.4,
-       height = 4)
+# ggsave(file.path(path_plots, "benchmark_summary_barplot_nfeatures.pdf"),
+#        width = 1.4,
+#        height = 4)
+```
+
+### Show example PCAs
+
+#### NOTE: CLR of two parts vs simple log-ratio
+
+The CLR of the first part is exactly half of the log-ratio of the two parts.
+
+```{r}
+test <- result_list$bmark[[ds]]$Freq_highres$feat_mat[, colnames(feat_mat_recalc)]
+test_clr <- clr(test)
+test_lr <- log(test$`Immature B cells` / test$TIM)
+```
+
+```{r}
+test_clr[, 1]
+```
+
+```{r}
+test_lr
+```
+
+```{r}
+test_clr[, 1] * 2 - test_lr
+```
+
+#### Adams
+
+```{r fig.height=3, fig.width=7}
+ds <- "Adams"
+
+feat_mat_recalc <- result_list$bmark[[ds]]$ECODA_authors_HR_top_varexp0$feat_mat
+feat_mat <- result_list$bmark[[ds]]$ECODA_authors_HR$feat_mat[, colnames(feat_mat_recalc)]
+
+labels <- result_list$bmark[[ds]]$ECODA_authors_HR$labels
+df_logr <- feat_mat_recalc[, 1, drop = FALSE] * 2
+df_logr$Groups <- labels
+avg_sep_score <- calc_avg_sep_score(feat_mat, labels = labels, digits = 3)
+
+p1 <- plot_pca(
+  feat_mat = feat_mat,
+  labels = labels,
+  cluster_score = FALSE,mod_score = FALSE, anosim_score = TRUE,
+  coord_equal = TRUE,
+  # title = paste("Separation score:", avg_sep_score),
+  n_ct_show = 4, invisible = "quali", repel = TRUE, pointsize = 2
+)
+
+p2 <- ggplot(df_logr, aes(x = Groups, y = !!sym(colnames(df_logr)[1]), fill = Groups)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +  # Standard boxplot
+  geom_jitter(width = 0.2, size = 1, alpha = 0.5) + # Optional: adds points to see distribution
+  theme_classic() +
+  # theme_cleveland() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + # Rotate labels if group names are long
+  labs(
+    x = NULL,
+    y = paste0(
+      "Log ratio\n",
+      colnames(feat_mat_recalc)[1], " / ", colnames(feat_mat_recalc)[2]
+    )
+  ) +
+  ggtitle(paste0("ANOSIM: ", round(result_list$bmark[[ds]]$ECODA_authors_HR_top_varexp0$scores$anosim_score, 3))) &
+  NoLegend()
+
+
+wrap_plots(list(p1, p2)) +
+  plot_layout(nrow = 1, widths = c(2.5, 1))
+ggsave(file.path(path_plots, "featureselectionHVC_PCA_adams.pdf"),
+       width = 7,
+       height = 3)
+```
+
+#### Kfoury
+
+```{r fig.height=3, fig.width=7}
+ds <- "Kfoury"
+
+feat_mat_recalc <- result_list$bmark[[ds]]$ECODA_authors_HR_top_varexp0$feat_mat
+feat_mat <- result_list$bmark[[ds]]$ECODA_authors_HR$feat_mat[, colnames(feat_mat_recalc)]
+
+labels <- result_list$bmark[[ds]]$ECODA_authors_HR$labels
+df_logr <- feat_mat_recalc[, 1, drop = FALSE] * 2
+df_logr$Groups <- labels
+avg_sep_score <- calc_avg_sep_score(feat_mat, labels = labels, digits = 3)
+
+p1 <- plot_pca(
+  feat_mat = feat_mat,
+  labels = labels,
+  cluster_score = FALSE,mod_score = FALSE, anosim_score = TRUE,
+  coord_equal = TRUE,
+  # title = paste("Separation score:", avg_sep_score),
+  n_ct_show = 4, invisible = "quali", repel = TRUE, pointsize = 2
+)
+
+p2 <- ggplot(df_logr, aes(x = Groups, y = !!sym(colnames(df_logr)[1]), fill = Groups)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +  # Standard boxplot
+  geom_jitter(width = 0.2, size = 1, alpha = 0.5) + # Optional: adds points to see distribution
+  theme_classic() +
+  # theme_cleveland() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + # Rotate labels if group names are long
+  labs(
+    x = NULL,
+    y = paste0(
+      "Log ratio\n",
+      colnames(feat_mat_recalc)[1], " / ", colnames(feat_mat_recalc)[2]
+    )
+  ) +
+  ggtitle(paste0("ANOSIM: ", round(result_list$bmark[[ds]]$ECODA_authors_HR_top_varexp0$scores$anosim_score, 3))) &
+  NoLegend()
+
+wrap_plots(list(p1, p2)) +
+  plot_layout(nrow = 1, widths = c(2.5, 1))
+ggsave(file.path(path_plots, "featureselectionHVC_PCA_kfoury.pdf"),
+       width = 7,
+       height = 3)
 ```
 
 ## Separation based on least variable cell types (sanity check)
@@ -1947,6 +2287,20 @@ ggplot(df_plot_long, aes(x = dataset, y = anosim_score, fill = group)) +
 
 ```
 
+## Plot cell type variances per dataset
+
+```{r}
+library(scECODA)
+for (ds in names(result_list$bmark)) {
+  feat_mat <- result_list$bmark[[ds]]$ECODA_authors_HR$feat_mat
+  metadata <- result_list$bmark[[ds]]$ECODA_authors_HR$labels
+  metadata <- as.data.frame(metadata)
+  
+  
+}
+```
+
+
 ## Most highly variable cell types per dataset
 
 ```{r fig.height=8, fig.width=12}
@@ -1980,7 +2334,6 @@ for (ds in names(result_list[["bmark"]])) {
 }
 ```
 
-
 ```{r fig.height=8, fig.width=12}
 print("Most highly variable cell types per dataset:")
 for (ds in names(result_list[["bmark"]])) {
@@ -1990,9 +2343,6 @@ for (ds in names(result_list[["bmark"]])) {
   print(paste(colnames(result_list[["bmark"]][[ds]]$ECODA_HiTME_HR_layer3_top_varexp0.5$feat_mat)))
 }
 ```
-
-
-
 
 ### Check IFN expression in Stephenson dataset
 
@@ -2017,7 +2367,6 @@ ggplot(plot_data, aes(x = expression, fill = status)) +
   theme_minimal() +
   scale_fill_manual(values = c("Healthy" = "steelblue", "Covid" = "darkred"))
 ```
-
 
 ```{r}
 metadata <- get_metadata(seurat)
@@ -2073,16 +2422,11 @@ get_ct_var(feat_mat, show_plot = FALSE, descending = TRUE) %>%
         get_hvcs(top_n_hvcs = 10, variance_threshold = NULL)
 ```
 
-
-
 ## Reduced separation with fewer cell types?
-Why do some datasets show reduced separability when using fewer highly variable cell types while other still show good separation even with just 2 cell types?
-Are there any comonalities between these datasets?
 
-In general, datasets with HIGH ANOSIM score (~ >0.5) when using all cell types also show still good separability with very low number of cell types.
--> Maybe these biological conditions are more distinct and are easier to separate?
-Datasets with LOW ANOSIM score (~ <0.5) when using all cell types also show decreasing separability when reducing the number of cell types.
--> The minimum number of cell types for maximal separability depends on the dataset
+Why do some datasets show reduced separability when using fewer highly variable cell types while other still show good separation even with just 2 cell types? Are there any comonalities between these datasets?
+
+In general, datasets with HIGH ANOSIM score (\~ \>0.5) when using all cell types also show still good separability with very low number of cell types. -\> Maybe these biological conditions are more distinct and are easier to separate? Datasets with LOW ANOSIM score (\~ \<0.5) when using all cell types also show decreasing separability when reducing the number of cell types. -\> The minimum number of cell types for maximal separability depends on the dataset
 
 ```{r}
 df_results_sub <- df_results %>%
@@ -2113,7 +2457,6 @@ ggplot(ds_diffs, aes(x = reorder(dataset, diff), y = diff)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
   ggtitle("Which datasets have lower separation when using less cell types?\nVar. exp. 10% - Var. exp. 70%")
 ```
-
 
 ## Which datasets HiTME annotation underperforms?
 
@@ -2146,8 +2489,6 @@ ggplot(ds_diffs, aes(x = reorder(dataset, diff), y = diff)) +
   theme(axis.text.x = element_text(angle = 65, hjust = 1)) +
   ggtitle("For each dataset, how does ECODA perform based on\nHiTME annotation vs Author annotation?")
 ```
-
-
 
 ## Plot feature selection (HiTME layer3)
 
@@ -2222,9 +2563,6 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_ECODAandHiTMEfeat
        height = 8)
 ```
 
-
-
-
 ## Show example PCAs for publication
 
 ```{r fig.height=7, fig.width=7}
@@ -2249,7 +2587,6 @@ plot_pca(
 ) + ggtitle(ds)
 
 ```
-
 
 ```{r fig.height=6, fig.width=12}
 
@@ -2455,7 +2792,6 @@ ggsave(file.path(path_plots, "benchmark_pca_example_Stephenson.pdf"),
 
 ## Example PCAs for HiTME layer2 vs layer3
 
-
 ```{r}
 plot_pca(result_list[["bmark"]][["Adams"]][["ECODA_highres_HiTME_layer3_top_varexp0.1"]][["feat_mat"]],
          labels = result_list[["bmark"]][["Adams"]][["ECODA_highres_HiTME_layer3_top_varexp0.1"]][["plot"]][["data"]][["Groups"]],
@@ -2467,7 +2803,6 @@ plot_pca(result_list[["bmark"]][["Adams"]][["ECODA_highres_HiTME_layer3_top_vare
 ```{r}
 test <- plist_layer2[[1]]
 ```
-
 
 ```{r}
 plist_layer2 <- list()
@@ -2500,7 +2835,6 @@ ggsave("pca_layer2.pdf", cowplot::plot_grid(plotlist = plist_layer2, ncol = 3), 
 ggsave("pca_layer3.pdf", cowplot::plot_grid(plotlist = plist_layer3, ncol = 3), width = 20, height = 20)
 ```
 
-
 ```{r fig.height=8, fig.width=16}
 plist_vcts <- list()
 for (ds in names(result_list$bmark)) {
@@ -2520,7 +2854,6 @@ for (ds in names(result_list$bmark)) {
 ```{r}
 ggsave(filename = "test.pdf", plot = cowplot::plot_grid(plotlist = plist_vcts, ncol = 1), width = 20, height = 100, limitsize = FALSE)
 ```
-
 
 ## Compare layer2 and layer3 by scores
 
@@ -2549,8 +2882,8 @@ for (s in c("anosim_score", "mod_score", "cluster_score")) {
 }
 ```
 
-
 ## Overlap between HVGs from single-cell and bulk
+
 ```{r}
 # test <- c()
 test_int <- c()
@@ -2565,6 +2898,7 @@ plot(test_int, test_anosim)
 ```
 
 # ---------------------------------------------------------------
+
 # ---------------------------------------------------------------
 
 # Plot execution times
@@ -2611,7 +2945,6 @@ if (!file.exists(r_exec_times_path)) {
 }
 ```
 
-
 ## Read execution times from python
 
 ```{r}
@@ -2639,7 +2972,6 @@ if (!file.exists(p_exec_times_path)) {
   p_exec_times <- readRDS(p_exec_times_path)
 }
 ```
-
 
 ## Combine and get actual cell numbers used per dataset
 
@@ -2674,7 +3006,6 @@ if (!file.exists(exec_times_path)) {
 unique(exec_times$method)
 ```
 
-
 ```{r}
 for (ds in unique(exec_times$dataset)) {
   for (m in unique(exec_times$method[exec_times$dataset == ds])) {
@@ -2686,7 +3017,6 @@ for (ds in unique(exec_times$dataset)) {
 }
 ```
 
-
 ```{r}
 for (ds in unique(exec_times$dataset)) {
   ds_rows <- exec_times$dataset == ds
@@ -2695,8 +3025,6 @@ for (ds in unique(exec_times$dataset)) {
   exec_times$time_secs[ds_rows & mofa_methods] <- exec_times$time_secs[ds_rows & mofa_methods] + pb_norm_time
 }
 ```
-
-
 
 ## Plot
 
@@ -2711,7 +3039,7 @@ filter_methods <- c(
   "scITD_hvg2000_factors15",
   "GloScope_hvg2000_pcadims50",
   "MrVI_hvg2000",
-  "scPoli_dims5_hvg2000",
+  "scPoli_hvg2000_dims5",
   "PILOT_hvg2000"
 )
 
@@ -2735,7 +3063,7 @@ plot_data <- exec_times %>%
                          "scITD_hvg2000_factors15" = "scITD",
                          "GloScope_hvg2000_pcadims50" = "GloScope",
                          "MrVI_hvg2000" = "MrVI",
-                         "scPoli_dims5_hvg2000" = "scPoli",
+                         "scPoli_hvg2000_dims5" = "scPoli",
                          "PILOT_hvg2000" = "PILOT"))
 
 # --- 2. Calculate the End of the Regression Line ---
@@ -2811,10 +3139,8 @@ ggsave(file.path(path_plots, "benchmark_exec_times.pdf"),
        height = 3.5, limitsize = FALSE)
 ```
 
-
-
-
 # ---------------------------------------------------------------
+
 # ---------------------------------------------------------------
 
 # Plot benchmark results
@@ -2829,17 +3155,19 @@ library(RColorBrewer)
 filter_methods <- c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
-  "ECODA_HiTME_HR_layer2",
+  # "ECODA_HiTME_HR_layer2",
   # "ECODA_HiTME_HR_layer3",
-  "ECODA_seuratres_2",
-  "ECODA_PB_combo_normquantile_ecodaweight0.5",
+  # "ECODA_seuratres_2",
+  # "ECODA_PB_combo_normquantile_ecodaweight0.5",
   # paste0("ECODA_PB_combo_norm", norm_methods, "_ecodaweight0.5"),
   # "ECODA_authors_LR",
-  "Avg_PCA_embedding",
-  "Freq_highres",
+  # "Avg_PCA_embedding",
+  # "Freq_highres",
   # "ECODA_deconv",
   # "Pseudobulk_10_PCA_dims",
-  "Pseudobulk_unsup_hvg2000",
+  "Pseudobulk_hvg2000",
+  # "Pseudobulk_hvg2000_bl",
+  # "Pseudobulk_schvg2000",
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors5",
   "MrVI_hvg2000",
@@ -2864,15 +3192,16 @@ exec_times$temp <- NULL
 clean_data <- df_results_bmark %>%
   filter(method %in% filter_methods) %>%
   mutate(method = recode(method,
-                         "ECODA_authors_HR" = "ECODA_authors",
-                         "ECODA_authors_HR_NULL" = "ECODA_NULL",
-                         "ECODA_HiTME_HR_layer2" = "ECODA_automated",
-                         "ECODA_HiTME_HR_layer3" = "ECODA_automated_(HiTME_layer3)",
-                         "ECODA_seuratres_2" = "ECODA_unsupervised",
+                         "ECODA_authors_HR" = "ECODA",
+                         "ECODA_authors_HR_NULL" = "Random_shuffled",
+                         # "ECODA_HiTME_HR_layer2" = "ECODA_automated",
+                         # "ECODA_HiTME_HR_layer3" = "ECODA_automated_(HiTME_layer3)",
+                         # "ECODA_seuratres_2" = "ECODA_unsupervised",
                          "ECODA_PB_combo_normquantile_ecodaweight0.5" = "ECODA+Pseudobulk",
-                         "Pseudobulk_10_PCA_dims" = "Pseudobulk_PCA",
-                         "Pseudobulk_unsup_hvg2000" = "Pseudobulk",
-                         "Freq_highres" = "ECODA_Freq%",
+                         # "Pseudobulk_10_PCA_dims" = "Pseudobulk_PCA",
+                         "Pseudobulk_hvg2000" = "Pseudobulk",
+                         # "Pseudobulk_schvg2000" = "Pseudobulk_schvg",
+                         # "Freq_highres" = "ECODA_Freq%",
                          "MOFA_hvg2000_factors15" = "MOFA",
                          "scITD_hvg2000_factors5" = "scITD",
                          "MrVI_hvg2000" = "MrVI",
@@ -2883,6 +3212,7 @@ clean_data <- df_results_bmark %>%
   mutate(score = recode(score,
                         "anosim_score" = "ANOSIM",
                         "mod_knn3_score" = "Modularity",
+                        "mod_score" = "Modularity",
                         "cluster_score" = "ARI")) %>%
   mutate(dataset = recode(dataset,
                           "GongSharma_all_age" = "GongSharma_age",
@@ -3060,6 +3390,255 @@ funky_heatmap(
 )
 ggsave(file.path(path_plots, "benchmark_summary_funkyheatmap_mainmethods.pdf"),
        width = 10,
+       height = 5)
+```
+
+### Extended figure
+
+## Main plot (with funkyheatmap)
+
+```{r fig.height=6, fig.width=12}
+library(funkyheatmap)
+library(RColorBrewer)
+
+# --- 1. SETUP & CLEANING (Same as before) ---
+filter_methods <- c(
+  "ECODA_authors_HR",
+  "ECODA_authors_HR_NULL",
+  "ECODA_HiTME_HR_layer2",
+  "ECODA_scATOMIC_HR",
+  # "ECODA_HiTME_HR_layer3",
+  "ECODA_seuratres_2",
+  # "ECODA_PB_combo_normquantile_ecodaweight0.5",
+  # paste0("ECODA_PB_combo_norm", norm_methods, "_ecodaweight0.5"),
+  # "ECODA_authors_LR",
+  "Avg_PCA_embedding",
+  "Freq_highres",
+  # "ECODA_deconv",
+  # "Pseudobulk_10_PCA_dims",
+  "Pseudobulk_hvg2000",
+  "MOFA_hvg2000_factors15",
+  "scITD_hvg2000_factors5",
+  "MrVI_hvg2000",
+  "scPoli_hvg2000_dims5",
+  "PILOT_hvg2000",
+  "GloScope_hvg2000_pcadims30_sqrtmat"
+)
+
+df_results_bmark <- df_results
+df_results_bmark$temp <- paste0(df_results_bmark$dataset, df_results_bmark$method)
+exec_times$temp <- paste0(exec_times$dataset, exec_times$method)
+
+df_results_bmark <- merge(df_results_bmark,
+                          exec_times[, c("temp", "time_secs")], 
+                          by = "temp",
+                          all.x = TRUE)
+
+df_results_bmark$temp <- NULL
+exec_times$temp <- NULL
+
+
+clean_data <- df_results_bmark %>%
+  filter(method %in% filter_methods) %>%
+  mutate(method = recode(method,
+                         "ECODA_authors_HR" = "ECODA_authors",
+                         "ECODA_authors_HR_NULL" = "Random_shuffled",
+                         "ECODA_HiTME_HR_layer2" = "ECODA_automated_HiTME",
+                         "ECODA_HiTME_HR_layer3" = "ECODA_automated_(HiTME_layer3)",
+                         "ECODA_scATOMIC_HR" = "ECODA_automated_scATOMIC",
+                         "ECODA_seuratres_2" = "ECODA_unsupervised",
+                         # "ECODA_PB_combo_normquantile_ecodaweight0.5" = "ECODA+Pseudobulk",
+                         "Pseudobulk_10_PCA_dims" = "Pseudobulk_PCA",
+                         "Pseudobulk_hvg2000" = "Pseudobulk",
+                         "Freq_highres" = "ECODA_Freq%",
+                         "MOFA_hvg2000_factors15" = "MOFA",
+                         "scITD_hvg2000_factors5" = "scITD",
+                         "MrVI_hvg2000" = "MrVI",
+                         "scPoli_hvg2000_dims5" = "scPoli",
+                         "scITD_2_factors" = "scITD",
+                         "PILOT_hvg2000" = "PILOT",
+                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
+  mutate(score = recode(score,
+                        "anosim_score" = "ANOSIM",
+                        "mod_knn3_score" = "Modularity",
+                        "mod_score" = "Modularity",
+                        "cluster_score" = "ARI")) %>%
+  mutate(dataset = recode(dataset,
+                          "GongSharma_all_age" = "GongSharma_age",
+                          "GongSharma_all_cmv" = "GongSharma_cmv",
+                          "GongSharma_all_sex" = "GongSharma_sex"))
+
+# --- 2. CALCULATE GEOMETRIC MEAN OF RANKS (NEW STEP) ---
+df_ranks <- clean_data %>%
+  # Group by specific test case
+  group_by(dataset, score) %>% 
+  # Rank: Higher Value = Better Rank (1). Ties get the minimum rank.
+  mutate(rank = rank(-value, ties.method = "min")) %>% 
+  ungroup() %>%
+  # Now aggregate per method
+  group_by(method) %>% 
+  # Calculate Geometric Mean: exp(mean(log(x)))
+  summarise(geo_mean_rank = exp(mean(log(rank), na.rm = TRUE))) %>%
+  ungroup() %>%
+  # Normalize so it plots nicely (0 to 1). 
+  # We INVERT it so Best Rank (lowest number) = 1.0 (biggest bar)
+  mutate(Rank_Score = (max(geo_mean_rank) - geo_mean_rank) / 
+           (max(geo_mean_rank) - min(geo_mean_rank))) %>%
+  select(method, Rank_Score)
+
+# --- 3. SCALE DATA (0-1) FOR HEATMAP VISUALS ---
+scaled_data <- clean_data %>%
+  group_by(dataset, score) %>%
+  mutate(value = min_max(value)) %>%
+  ungroup()
+
+# --- 4. AGGREGATE SCORES ---
+
+# A. Overall Score (Arithmetic Mean of Scaled Values)
+df_overall <- scaled_data %>%
+  group_by(method) %>%
+  summarise(Overall_Score = mean(value, na.rm = TRUE)) 
+
+# B. Dataset Scores
+df_datasets_wide <- scaled_data %>%
+  group_by(method, dataset) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(id_cols = method, names_from = dataset, values_from = value, names_prefix = "Dataset__")
+
+# C. Metric Scores
+df_metrics_wide <- scaled_data %>%
+  group_by(method, score) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(id_cols = method, names_from = score, values_from = value, names_prefix = "Metric__")
+
+# D. Execution times
+df_runtime <- clean_data %>%
+  distinct(method, dataset, time_secs) %>% 
+  group_by(method) %>%
+  summarise(raw_time = mean(time_secs, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    log_time = log10(raw_time + 1),
+    # Inverting so SHORTER time (faster) = BIGGER bar/BETTER score
+    # Remove '1 -' if you want long bars to mean slow
+    Runtime = min_max(log_time) 
+  ) %>% 
+  select(method, Runtime)
+
+# --- 5. MERGE EVERYTHING ---
+final_data <- df_overall %>%
+  left_join(df_ranks, by = "method") %>% # <--- Join the new Rank Score
+  left_join(df_datasets_wide, by = "method") %>%
+  left_join(df_metrics_wide, by = "method") %>%
+  left_join(df_runtime, by = "method") %>%
+  arrange(desc(Rank_Score)) # Optional: sort by the new Rank Score instead
+
+# --- 6. BUILD COLUMN INFO ---
+
+# 1. Fixed Columns (Now ONLY method and Rank_Score)
+info_left <- tribble(
+  ~id,             ~group,    ~name,           ~geom,  ~palette,          ~options,
+  "method",        "",        "",              "text", NA,                list(hjust = 0, width = 9),
+  "Rank_Score",    "Overall", "Rank GeoMean",  "bar",  "palette_avg_rank", list(width = 4, legend = FALSE)
+)
+
+# 2. Dataset Columns
+dataset_cols <- colnames(final_data)[startsWith(colnames(final_data), "Dataset__")]
+info_datasets <- tibble(id = dataset_cols) %>%
+  mutate(
+    group = "Datasets",
+    name = str_remove(id, "Dataset__"), 
+    geom = "circle",
+    palette = "Datasets",
+    options = list(list())
+  ) %>% arrange(name)
+
+# 3. Metric Columns (INCLUDING Score Avg at the start)
+metric_cols <- colnames(final_data)[startsWith(colnames(final_data), "Metric__")]
+target_metric_order <- c("ANOSIM", "Modularity", "ARI")
+
+# Create the specific Metric entries
+info_metrics_main <- tibble(id = metric_cols) %>%
+  mutate(
+    group = "Metrics",
+    name = str_remove(id, "Metric__"),
+    geom = "bar",
+    palette = "Metrics",
+    options = list(list(width = 2)),
+    name_f = factor(name, levels = target_metric_order)
+  ) %>% arrange(name_f) %>% select(-name_f)
+
+# Define Score Avg as a Metric entry
+info_score_avg <- tribble(
+  ~id,             ~group,    ~name,       ~geom, ~palette,           ~options,
+  "Overall_Score", "Metrics", "Mean", "bar", "palette_avg_mean", list(width = 4, legend = FALSE)
+)
+
+# Combine metrics: Score Avg comes FIRST
+info_metrics <- bind_rows(info_score_avg, info_metrics_main)
+
+# 4. Runtime (The Rightmost column)
+info_runtime <- tribble(
+  ~id,       ~group,    ~name,     ~geom, ~palette,          ~options,
+  "Runtime", "Runtime", "Runtime", "bar", "palette_runtime", list(width = 3)
+)
+
+# Combine everything in the final order
+column_info <- bind_rows(info_left, info_datasets, info_metrics, info_runtime)
+
+ncolors <- 11
+
+# --- 7. PLOT ---
+funky_heatmap(
+  final_data,
+  column_info = column_info,
+  scale_column = FALSE, 
+  column_groups = tibble(
+    group = c("Overall", "Datasets", "Metrics", "Runtime")
+  ),
+  palettes = list(
+    palette_avg_rank = brewer.pal(n = ncolors, name = "RdBu"),
+    palette_avg_mean = brewer.pal(n = ncolors, name = "RdBu"),
+    Datasets = brewer.pal(n = ncolors, name = "RdBu"),
+    Metrics = brewer.pal(n = ncolors, name = "RdBu"),
+    palette_runtime = rev(brewer.pal(n = ncolors, name = "RdYlGn"))
+  ),
+  legends = list(
+    list(
+      palette = "palette_avg_rank",
+      enabled = FALSE,
+      title = "REMOVE PLACEHOLDER"
+    ),
+    list(
+      palette = "palette_avg_mean",
+      enabled = TRUE,
+      title = "Rank",
+      labels = c(".         Lowest", rep("", ncolors-2), "Highest       .")
+    ),
+    list(
+      palette = "Datasets",
+      enabled = TRUE,
+      title = "Dataset separation",
+      labels = c(".     Min", rep("", ncolors-2), "Max   .")
+    ),
+    list(
+      palette = "Metrics",
+      enabled = TRUE,
+      labels = c(". 0", rep("", round((ncolors-2)/2)+1), "0.5", rep("", round((ncolors-2)/2)), "1")
+    ),
+    list(
+      palette = "palette_runtime",
+      enabled = TRUE,
+      title = "Runtime log10(s)",
+      labels = c("secs", "mins", "hours") 
+    )
+  ),
+  position_args = position_arguments(
+    col_width = 1.5,
+    col_space = 0.2
+  )
+)
+ggsave(file.path(path_plots, "benchmark_summary_funkyheatmap_mainmethods_extended.pdf"),
+       width = 12,
        height = 6)
 ```
 
@@ -3118,9 +3697,8 @@ ggsave(file.path(path_plots, "metrics_correlation.pdf"),
        height = 6)
 ```
 
-
-
 # ---------------------------------------------------------------
+
 # ---------------------------------------------------------------
 
 # Plot normalization results
@@ -3432,22 +4010,17 @@ summary(anova_result)
 TukeyHSD(aov(df_results_anosim$values ~ df_results_anosim$trans_method))
 ```
 
-
-
-
 # ---------------------------------------------------------------
+
 # ---------------------------------------------------------------
 
 # Plot zero imputation results
 
-```{r}
-zeroimp_result_list <- result_list[["zeroimp"]]
-```
-
-
 ## Plot results
 
 ```{r}
+zeroimp_result_list <- result_list[["zeroimp"]]
+
 df_results <- imap_dfr(zeroimp_result_list, ~ {
   dataset_name <- .y
   imap_dfr(.x, ~ {
@@ -3463,9 +4036,23 @@ df_results <- imap_dfr(zeroimp_result_list, ~ {
   })
 })
 
-df_results <- df_results[df_results$method != "impRZilr", ]
+df_results <- df_results[!grepl("impRZilr", df_results$method), ]
+df_results <- df_results[!df_results$score == "mod_score", ]
 
 df_results_list[["Zero_imputation"]] <- df_results
+
+df_results_anosim <- df_results %>%
+  filter(score == "anosim_score") %>%
+  group_by(method) %>%
+  summarize(mean = mean(value), sem = sd(value) / sqrt(length(value)))
+
+df_results_anosim <- df_results_anosim %>%
+  arrange(desc(mean))
+
+df_results_anosim$method <- factor(df_results_anosim$method, levels = df_results_anosim$method)
+df_results$method <- factor(df_results$method, levels = df_results_anosim$method)
+
+
 
 df_results %>%
   filter(score == "anosim_score") %>%
@@ -3478,7 +4065,7 @@ df_results %>%
   geom_point(position = "identity", alpha = 0.6, size = 0.8) +
   geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
   stat_compare_means(
-    ref.group = "counts_all_1",
+    ref.group = "counts_zeros_2/3min",
     method = "wilcox.test",
     paired = TRUE,
     # angle = 25,
@@ -3493,7 +4080,7 @@ df_results %>%
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_barplot_ANOSIM.pdf"),
        width = 2.5,
-       height = 3.5)
+       height = 4)
 
 
 # New facet label names for dose variable
@@ -3738,4 +4325,44 @@ summary(anova_result)
 library(writexl)
 write_xlsx(df_results_list, path = file.path(path_data, "raw_data_for_publication.xlsx"))
 ```
+
+
+# ---------------------------------------------------------------
+# ---------------------------------------------------------------
+
+# Info about datasets
+
+```{r}
+for (ds in names(result_list$bmark)) {
+  print("-----------------------------------------")
+  print(ds)
+  feat_mat <- result_list$bmark[[ds]]$ECODA_authors_HR$feat_mat
+  print(paste("Number of cell types:", ncol(feat_mat)))
+  print(paste("Number of samples:", nrow(feat_mat)))
+  print(paste("Number of cells:", exec_times[exec_times$dataset == ds, "n_cells"][1]))
+  
+  print(paste("ANOSIM using all cell types:", round(result_list$bmark[[ds]]$ECODA_authors_HR$scores$anosim_score, 3)))
+  print(paste("ANOSIM at 10% HVC:", round(result_list$bmark[[ds]]$ECODA_authors_HR_top_varexp0.1$scores$anosim_score, 3)))
+  print(paste("Number of HVC at 10% HVC:", ncol(result_list$bmark[[ds]]$ECODA_authors_HR_top_varexp0.1$feat_mat)))
+  cat("Most highly variable cell types:", colnames(result_list$bmark[[ds]]$ECODA_authors_HR_top_varexp0$feat_mat), "\n")
+  
+  cat("Cell types:", colnames(feat_mat), "\n")
+}
+```
+
+## Number of cells, total, per sample
+
+```{r}
+for (ds in names(datasets)) {
+  print("-----------------------------------------")
+  print(ds)
+  seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
+  print(paste("Number of samples:", length(unique(seurat@meta.data$Sample))))
+  print(paste("Number of cells:", nrow(seurat@meta.data)))
+  print(paste("Number of cells per sample:", round(mean(table((seurat@meta.data$Sample)))), "+-", round(sd(table((seurat@meta.data$Sample))))))
+}
+```
+
+# ---------------------------------------------------------------
+# ---------------------------------------------------------------
 
