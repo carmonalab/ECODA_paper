@@ -386,7 +386,6 @@ p1 <- factoextra::fviz_pca(res.pca,
                      invisible = c("quali"),
                      geom = "point",
                      select.var = list(contrib = 4),
-                     labelsize = 3,
                      repel = TRUE,
                      axes.linetype = "blank") +
     scale_shape_manual(values = rep(19, length(unique(labels)))) +
@@ -434,8 +433,13 @@ p2 <-factoextra::fviz_pca(res.pca,
                      # addEllipses = TRUE,
                      label = "var",
                      pointsize = 1,
-                     invisible = c("var", "quali"),
+                     invisible = c("quali"),
+                     col.var = "white",
+                     arrowsize = 0,
+                     labelsize = 0,
+                     alpha.var = 0,
                      geom = "point",
+                     select.var = list(contrib = 4),
                      axes.linetype = "blank") +
     scale_shape_manual(values = rep(19, length(unique(labels)))) +
   guides(shape=guide_legend(title="Bio group"), color=guide_legend(title="Bio group")) +
@@ -1110,7 +1114,12 @@ p4 <-factoextra::fviz_pca(res.pca,
                      # addEllipses = TRUE,
                      label = "var",
                      pointsize = 1,
-                     invisible = c("var", "quali"),
+                     invisible = c("quali"),
+                     col.var = "white",
+                     arrowsize = 0,
+                     labelsize = 0,
+                     alpha.var = 0,
+                     select.var = list(contrib = 4),
                      geom = "point",
                      axes.linetype = "blank") +
     scale_shape_manual(values = rep(19, length(unique(labels)))) +
