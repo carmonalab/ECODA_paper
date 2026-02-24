@@ -9,7 +9,6 @@ suppressPackageStartupMessages({
   library(ggtext)
   library(mclust)
   library(plotly)
-  # library("robCompositions")
   library(Seurat)
   library(limma)
   # devtools::install_github('satijalab/seurat-data')
@@ -17,12 +16,13 @@ suppressPackageStartupMessages({
   # install.packages("hdf5r")
   # remotes::install_github("mojaveazure/seurat-disk")
   library(SeuratDisk)
-  library(SignatuR)
+  library(HiTME) # for default_black_list
   library(stringr)
   library(tidyr)
   library(tidyverse)
   # install.packages("zCompositions")
   # library(zCompositions)
+  # library(robCompositions)
   library(rstatix)
 
   library(parallelly)
@@ -61,14 +61,14 @@ calc_perc_df <- function(df) {
 }
 
 
-calc_sep_score <- function(feat_mat,
+calc_sep_score <- function(dist_mat,
                            labels,
                            knn_k = NULL) {
   # sil_score <- round(calc_sil(df, labels), 3)
-  mod_score <- unlist(round(calc_modularity(feat_mat, labels, knn_k), 3))
-  mod_knn3_score <- unlist(round(calc_modularity(feat_mat, labels, 3), 3))
-  cluster_score <- clust_eval(matrix = feat_mat, labels)
-  anosim_score <- vegan::anosim(x = feat_mat, grouping = labels, distance = "euclidean")[["statistic"]]
+  mod_score <- unlist(round(calc_modularity(dist_mat, labels, knn_k), 3))
+  mod_knn3_score <- unlist(round(calc_modularity(dist_mat, labels, 3), 3))
+  cluster_score <- clust_eval(dist_mat, labels)
+  anosim_score <- vegan::anosim(x = dist_mat, grouping = labels, distance = "euclidean")[["statistic"]]
 
   res <- list(
     # sil_score = sil_score,
@@ -83,11 +83,11 @@ calc_sep_score <- function(feat_mat,
 
 
 # Calculate average silhouette width
-calc_sil <- function(feat_mat,
+calc_sil <- function(dist_mat,
                      labels) {
   sils <- cluster::silhouette(
     x = as.numeric(factor(labels)),
-    dist = dist(feat_mat)
+    dist = dist_mat
   ) %>%
     as.data.frame()
   score <- mean(sils[["sil_width"]])
@@ -96,7 +96,7 @@ calc_sil <- function(feat_mat,
 
 
 #----------------------------------------------------------->
-calc_modularity <- function(feat_mat,
+calc_modularity <- function(dist_mat,
                             labels,
                             knn_k = NULL) {
   ngroups <- length(unique(labels))
@@ -107,11 +107,13 @@ calc_modularity <- function(feat_mat,
     # # knn_k is equal to half average group size or at least 3
     # knn_k <- max(half_group_size, 3)
 
-    knn_k <- max(3, round(sqrt(nrow(feat_mat))))
+    knn_k <- max(3, round(sqrt(attr(dist_mat, "Size"))))
   }
 
   # Create a graph object
-  g <- compute_snn_graph(feat_mat = feat_mat, knn_k = knn_k)
+  # knn <- compute_KNN(feat_mat = feat_mat, knn_k = knn_k)
+  knn <- compute_KNN_from_dist(dist_mat, knn_k)
+  g <- compute_snn_graph(knn)
   # Compute modularity
   modularity_score <- igraph::modularity(g, membership = as.numeric(factor(labels)))
 
@@ -127,8 +129,8 @@ calc_modularity <- function(feat_mat,
 }
 
 
-calc_avg_sep_score <- function(feat_mat, labels, digits = 2) {
-  sep_scores <- calc_sep_score(feat_mat = feat_mat, labels = labels)
+calc_avg_sep_score <- function(dist_mat, labels, digits = 2) {
+  sep_scores <- calc_sep_score(dist_mat = dist_mat, labels = labels)
   avg_sep_score <- sep_scores[c("mod_knn3_score", "anosim_score", "cluster_score")] %>%
     unlist() %>%
     mean() %>%
@@ -144,10 +146,9 @@ compute_KNN <- function(feat_mat, knn_k) {
 }
 
 
-compute_snn_graph <- function(feat_mat, knn_k) {
-  knn <- compute_KNN(feat_mat = feat_mat, knn_k = knn_k)
+compute_snn_graph <- function(knn) {
   # Initialize adjacency matrix
-  n <- nrow(as.matrix(feat_mat))
+  n <- nrow(knn)
   adj_matrix <- matrix(0, n, n)
   # Count shared neighbors
   for (i in seq_len(n)) {
@@ -167,18 +168,31 @@ compute_snn_graph <- function(feat_mat, knn_k) {
   return(g)
 }
 
+compute_KNN_from_dist <- function(dist_mat, knn_k) {
+  # dist_mat should be a square matrix or 'dist' object
+  dist_mat <- as.matrix(dist_mat)
+  n <- nrow(dist_mat)
+  knn <- matrix(0, nrow = n, ncol = knn_k)
+
+  for (i in 1:n) {
+    # Sort distances in row i, get indices of the 2nd to (k+1)th closest
+    # (index 1 is always the node itself)
+    knn[i, ] <- order(dist_mat[i, ])[2:(knn_k + 1)]
+  }
+  return(knn)
+}
+
 
 #-----------------------------------------------------------<
 
 
 # Cluster samples and compare to original annotation
-clust_eval <- function(matrix,
+clust_eval <- function(dist_mat,
                        labels,
                        nclusts = NULL,
                        digits = 3,
                        return_mean = TRUE) {
   results <- list()
-  dist_mat <- dist(matrix)
 
   if (is.null(nclusts)) {
     nclusts <- length(unique(labels))
@@ -190,7 +204,7 @@ clust_eval <- function(matrix,
   results[["hclust_accuracy"]] <- mclust::adjustedRandIndex(as.numeric(as.factor(labels)), clust_labels)
 
   # Perform PAM clustering
-  clust_labels <- cluster::pam(matrix, k = nclusts)$cluster
+  clust_labels <- cluster::pam(dist_mat, k = nclusts)$cluster
   results[["pamclust_accuracy"]] <- mclust::adjustedRandIndex(as.numeric(as.factor(labels)), clust_labels)
 
   if (return_mean) {
@@ -275,7 +289,7 @@ datrans <- function(count_mat,
       "calc_perc_df",
       "impute_zeros",
       "calc_sil",
-      "calc_modularity", "compute_snn_graph", "compute_KNN",
+      "calc_modularity", "compute_snn_graph", "compute_KNN_from_dist",
       "clust_eval", "adjustedRandIndex",
       "cv",
       "clr"
@@ -369,25 +383,25 @@ datrans <- function(count_mat,
               # } else if (met == "clr_centered_scaled") {df <- scale(clr(df_freq_imputed), center = TRUE, scale = TRUE)
             }
 
-            if (grepl("pca", met)) {
-              df <- prcomp(df)$x[, 1:2]
-            }
-
+            # if (grepl("pca", met)) {
+            #   df <- prcomp(df)$x[, 1:2]
+            # }
+            dist_mat <- dist(df)
 
             # Calculate scores
 
             if (is.null(labels)) {
-              avg_sil <- calc_sil(feat_mat = df, labels_random)
+              avg_sil <- calc_sil(dist_mat = dist_mat, labels_random)
               # Reduced number of permutations to speed up calculation time
-              anosim_score <- vegan::anosim(x = df, grouping = labels_random, distance = "euclidean", permutations = 49)[["statistic"]]
-              mod <- calc_modularity(feat_mat = df, labels_random)
-              cluster_score <- clust_eval(matrix = df, labels_random)
+              anosim_score <- vegan::anosim(x = dist_mat, grouping = labels_random, distance = "euclidean", permutations = 99)[["statistic"]]
+              mod <- calc_modularity(dist_mat = dist_mat, labels_random)
+              cluster_score <- clust_eval(dist_mat = dist_mat, labels_random)
             } else {
-              avg_sil <- calc_sil(feat_mat = df, labels)
+              avg_sil <- calc_sil(dist_mat = dist_mat, labels)
               # Reduced number of permutations to speed up calculation time
-              anosim_score <- vegan::anosim(x = df, grouping = labels, distance = "euclidean", permutations = 49)[["statistic"]]
-              mod <- calc_modularity(feat_mat = df, labels)
-              cluster_score <- clust_eval(matrix = df, labels)
+              anosim_score <- vegan::anosim(x = dist_mat, grouping = labels, distance = "euclidean", permutations = 99)[["statistic"]]
+              mod <- calc_modularity(dist_mat = dist_mat, labels)
+              cluster_score <- clust_eval(dist_mat = dist_mat, labels)
             }
 
 
@@ -405,7 +419,7 @@ datrans <- function(count_mat,
             )
 
             new_row_df$diff_abu_cts <- list(ct_da)
-            new_row_df$feat_mat <- list(df)
+            new_row_df$dist_mat <- list(df)
 
             res <- rbind(res, new_row_df)
           }
@@ -698,15 +712,16 @@ get_pb <- function(seurat, sample_col = "Sample", hvg = NULL) {
 get_pb_deseq2 <- function(seurat, sample_col = "Sample", hvg = NULL, n_hvg = 2000, black_list = "none") {
   pb <- get_pb(seurat, sample_col = sample_col, hvg = hvg)
 
-  if (is.null(hvg) & black_list == "default") {
-    black_list <- default_black_list # From SignatuR package
-    black_list <- unlist(black_list)
+  data("default_black_list")
+  default_black_list <- black.list
 
-    pb <- pb[!rownames(pb) %in% black_list, ]
+  if (is.null(hvg) & black_list == "default") {
+    default_black_list <- unlist(default_black_list)
+
+    pb <- pb[!rownames(pb) %in% default_black_list, ]
   } else if (is.null(hvg) & black_list == "default_without_sex_genes") {
-    black_list <- default_black_list # From SignatuR package
-    black_list <- black_list[!names(black_list) %in% c("Xgenes", "Ygenes")]
-    black_list <- unlist(black_list)
+    default_black_list <- default_black_list[!names(default_black_list) %in% c("Xgenes", "Ygenes")]
+    default_black_list <- unlist(default_black_list)
 
     pb <- pb[!rownames(pb) %in% black_list, ]
   }
@@ -819,22 +834,23 @@ plot_pca <- function(feat_mat,
                      n_ct_show = Inf,
                      repel = FALSE) {
   res.pca <- prcomp(feat_mat, scale. = scale., rank. = pca_dims)
+  dist_mat <- dist(feat_mat)
 
 
   if (anosim_score) {
-    anosim_score <- round(vegan::anosim(x = feat_mat, grouping = labels, distance = "euclidean")[["statistic"]], 3)
+    anosim_score <- round(vegan::anosim(x = dist_mat, grouping = labels, distance = "euclidean")[["statistic"]], 3)
     title <- paste0(title, "\nANOSIM score: ", anosim_score)
   }
   if (cluster_score) {
-    cluster_score <- clust_eval(feat_mat, labels)
+    cluster_score <- clust_eval(dist_mat, labels)
     title <- paste0(title, "\nARI: ", cluster_score)
   }
   if (mod_score) {
-    mod_score <- round(calc_modularity(feat_mat, labels, knn_k), 3)
+    mod_score <- round(calc_modularity(dist_mat, labels, knn_k), 3)
     title <- paste0(title, "\nModularity score: ", mod_score)
   }
   if (sil_score) {
-    sil_score <- round(calc_sil(feat_mat, labels), 3)
+    sil_score <- round(calc_sil(dist_mat, labels), 3)
     title <- paste0(title, "\nSilhouette score: ", sil_score)
   }
 
@@ -852,6 +868,10 @@ plot_pca <- function(feat_mat,
       plotly::add_markers(data = df, x = ~PC1, y = ~PC2, z = ~PC3) %>%
       plotly::add_paths(data = m, x = ~PC1, y = ~PC2, z = ~PC3, opacity = 0.2)
   } else {
+    eig.val <- factoextra::get_eig(res.pca)
+    pc1_var <- round(eig.val[1, 2], 1)
+    pc2_var <- round(eig.val[2, 2], 1)
+
     p <- factoextra::fviz_pca(res.pca,
       axes = axes,
       habillage = labels,
@@ -861,13 +881,96 @@ plot_pca <- function(feat_mat,
       invisible = invisible,
       select.var = list(contrib = n_ct_show),
       repel = repel,
-      geom = "point"
+      geom = "point",
+      axes.linetype = NA
     ) +
       ggtitle(title) +
+      theme_classic() +
+      theme(
+        # axis.title.x=element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        # axis.title.y=element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank()
+      ) +
+      labs(x = paste0("PCA dim1 (", pc1_var, "%)"), y = paste0("PCA dim2 (", pc2_var, "%)")) +
       scale_shape_manual(values = rep(19, length(unique(labels))))
     if (coord_equal) {
       p <- p + coord_equal()
     }
+  }
+
+  return(p)
+}
+
+
+plot_mds <- function(dist_mat,
+                     labels,
+                     knn_k = 3,
+                     title = NULL,
+                     cluster_score = TRUE,
+                     mod_score = TRUE,
+                     sil_score = FALSE,
+                     anosim_score = TRUE,
+                     pointsize = 3,
+                     labelsize = 4,
+                     coord_equal = TRUE,
+                     axes = c(1, 2)) {
+  mds_res <- cmdscale(dist_mat, k = max(axes), eig = TRUE)
+
+  # Create a data frame for ggplot
+  mds_df <- data.frame(
+    Dim1 = mds_res$points[, axes[1]],
+    Dim2 = mds_res$points[, axes[2]],
+    Cluster = labels
+  )
+
+  if (anosim_score) {
+    anosim_score <- round(vegan::anosim(x = dist_mat, grouping = labels, distance = "euclidean")[["statistic"]], 3)
+    title <- paste0(title, "\nANOSIM score: ", anosim_score)
+  }
+  if (cluster_score) {
+    cluster_score <- clust_eval(dist_mat, labels)
+    title <- paste0(title, "\nARI: ", cluster_score)
+  }
+  if (mod_score) {
+    mod_score <- round(calc_modularity(dist_mat, labels, knn_k), 3)
+    title <- paste0(title, "\nModularity score: ", mod_score)
+  }
+  if (sil_score) {
+    sil_score <- round(calc_sil(dist_mat, labels), 3)
+    title <- paste0(title, "\nSilhouette score: ", sil_score)
+  }
+
+  # 3. Calculate "Variance Explained" for MDS axes (GoF)
+  # This is the equivalent of PCA percentages
+  eig <- mds_res$eig
+  perc_var <- round(100 * eig / sum(eig[eig > 0]), 1)
+  lab_x <- paste0("MDS dim", axes[1], " (", perc_var[axes[1]], "%)")
+  lab_y <- paste0("MDS dim", axes[2], " (", perc_var[axes[2]], "%)")
+
+  # 4. Plotting with ggplot2
+  p <- ggplot2::ggplot(mds_df, aes(x = Dim1, y = Dim2, color = Cluster, shape = Cluster)) +
+    geom_point(size = pointsize) +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+    labs(
+      x = lab_x,
+      y = lab_y,
+      title = title,
+      color = "Groups", # Changes the color legend title
+      shape = "Groups" # Changes the shape legend title to match
+    ) +
+    theme_classic() +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank()
+    )
+
+  if (coord_equal) {
+    p <- p + coord_equal()
   }
 
   return(p)
@@ -1464,20 +1567,20 @@ run_benchmark_analysis <- function(res_list,
   }
 
 
-  # ECODA + PB
-  for (i in c(0, 0.25, 0.5, 0.75, 1)) {
-    for (norm in c("max", "median", "zscore", "quantile")) {
-      res_list[[paste0("ECODA_PB_combo_norm", norm, "_ecodaweight", i)]] <- process_ecodapb_fig(
-        dist_mat_ecoda = res_list[["ECODA_authors_HR"]][["dist_mat"]],
-        dist_mat_pb = res_list[["Pseudobulk_hvg2000"]][["dist_mat"]],
-        norm_method = norm,
-        ecoda_weight = i,
-        labels = res_list[["ECODA_authors_HR"]][["labels"]],
-      )
-      res_list[[paste0("ECODA_PB_combo_norm", norm, "_ecodaweight", i)]][["exec_time"]] <-
-        res_list[["ECODA_authors_HR"]][["exec_time"]] + res_list[["Pseudobulk_hvg2000"]][["exec_time"]]
-    }
-  }
+  # # ECODA + PB
+  # for (i in c(0, 0.25, 0.5, 0.75, 1)) {
+  #   for (norm in c("max", "median", "zscore", "quantile")) {
+  #     res_list[[paste0("ECODA_PB_combo_norm", norm, "_ecodaweight", i)]] <- process_ecodapb_fig(
+  #       dist_mat_ecoda = res_list[["ECODA_authors_HR"]][["dist_mat"]],
+  #       dist_mat_pb = res_list[["Pseudobulk_hvg2000"]][["dist_mat"]],
+  #       norm_method = norm,
+  #       ecoda_weight = i,
+  #       labels = res_list[["ECODA_authors_HR"]][["labels"]],
+  #     )
+  #     res_list[[paste0("ECODA_PB_combo_norm", norm, "_ecodaweight", i)]][["exec_time"]] <-
+  #       res_list[["ECODA_authors_HR"]][["exec_time"]] + res_list[["Pseudobulk_hvg2000"]][["exec_time"]]
+  #   }
+  # }
 
 
   return(res_list)
@@ -1517,13 +1620,14 @@ process_deconv_fig <- function(pseudobulk,
     deconv_ct_comps[deconv_ct_comps == 0] + (2 / 3) * min(deconv_ct_comps)
 
   feat_mat <- clr(deconv_ct_comps)
+  dist_mat <- dist(feat_mat)
   labels <- labels[rownames(feat_mat)]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
-  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["scores"]] <- calc_sep_score(dist_mat, labels)
   res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["dist_mat"]] <- dist_mat
   res[["labels"]] <- labels
 
   return(res)
@@ -1540,8 +1644,8 @@ process_coda_fig <- function(seurat,
                              sample_col = "Sample",
                              ct_col,
                              title,
-                             clr_zero_impute_method = "counts_zeros",
-                             clr_zero_impute_num = 2 / 3,
+                             clr_zero_impute_method = "counts_all",
+                             clr_zero_impute_num = 0.5,
                              feat_mat = NULL,
                              var_ct_desc = TRUE,
                              shuffle_labels = FALSE) {
@@ -1586,6 +1690,7 @@ process_coda_fig <- function(seurat,
     feat_mat <- prcomp(feat_mat, rank. = pca_dims)[["x"]]
   }
 
+  dist_mat <- dist(feat_mat)
   labels <- labels[rownames(feat_mat)]
 
   if (shuffle_labels) {
@@ -1595,9 +1700,9 @@ process_coda_fig <- function(seurat,
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
-  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["scores"]] <- calc_sep_score(dist_mat, labels)
   res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["dist_mat"]] <- dist_mat
   res[["labels"]] <- labels
 
   return(res)
@@ -1612,13 +1717,14 @@ process_pseudobulk_fig <- function(feat_mat,
   if (!is.null(pca_dims)) {
     feat_mat <- prcomp(feat_mat, rank. = pca_dims)[["x"]]
   }
+  dist_mat <- dist(feat_mat)
   labels <- labels[rownames(feat_mat)]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
-  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["scores"]] <- calc_sep_score(dist_mat, labels)
   res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["dist_mat"]] <- dist_mat
   res[["labels"]] <- labels
 
   return(res)
@@ -1637,13 +1743,14 @@ process_avg_pca_embedding_fig <- function(seurat,
     summarise(across(starts_with("PC_"), mean)) %>%
     ungroup() %>%
     column_to_rownames(var = "Sample")
+  dist_mat <- dist(feat_mat)
   labels <- labels[rownames(feat_mat)]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
-  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["scores"]] <- calc_sep_score(dist_mat, labels)
   res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["dist_mat"]] <- dist_mat
   res[["labels"]] <- labels
 
   return(res)
@@ -1690,13 +1797,14 @@ process_mofa_bulk_fig <- function(pb_norm,
 
   # feat_mat <- get_factors(MOFAobject, as.data.frame = T)
   feat_mat <- as.data.frame(MOFAobject@expectations[["Z"]])
+  dist_mat <- dist(feat_mat)
   labels <- labels[rownames(feat_mat)]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title, coord_equal = FALSE)
-  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["scores"]] <- calc_sep_score(dist_mat, labels)
   res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["dist_mat"]] <- dist_mat
   res[["labels"]] <- labels
 
   return(res)
@@ -1751,6 +1859,7 @@ process_scitd_fig <- function(seurat,
   )
 
   feat_mat <- pbmc_container[["tucker_results"]][[1]]
+  dist_mat <- dist(feat_mat)
   labels_scITD <- seurat@meta.data %>%
     filter(donors %in% row.names(feat_mat)) %>%
     distinct(donors, .keep_all = TRUE) %>%
@@ -1760,9 +1869,9 @@ process_scitd_fig <- function(seurat,
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
-  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["scores"]] <- calc_sep_score(dist_mat, labels)
   res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["dist_mat"]] <- dist_mat
   res[["labels"]] <- labels
 
   return(res)
@@ -1773,15 +1882,15 @@ process_mrvi_fig <- function(mrvi_dist_file, labels, title = "MrVI") {
   feat_mat <- arrow::read_feather(mrvi_dist_file) %>%
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
-
   rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
+  dist_mat <- as.dist(feat_mat)
   labels <- labels[rownames(feat_mat)]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
-  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["scores"]] <- calc_sep_score(dist_mat, labels)
   res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- as.matrix(feat_mat)
+  res[["dist_mat"]] <- dist_mat
   res[["labels"]] <- labels
 
   return(res)
@@ -1812,17 +1921,17 @@ process_gloscope_fig <- function(seurat,
     feat_mat <- readRDS(gloscope_dist_file)
   }
 
-  samples <- row.names(feat_mat)
-  samples <- standardize_sample_names(samples)
+  row.names(feat_mat) <- standardize_sample_names(row.names(feat_mat))
+  dist_mat <- as.dist(feat_mat)
 
-  labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
-  names(labels) <- metadata[match(samples, metadata$Sample), ][["Sample"]]
+  labels <- metadata[match(row.names(feat_mat), metadata$Sample), ][[label_col]]
+  names(labels) <- metadata[match(row.names(feat_mat), metadata$Sample), ][["Sample"]]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
-  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["scores"]] <- calc_sep_score(dist_mat, labels)
   res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- feat_mat
+  res[["dist_mat"]] <- dist_mat
   res[["labels"]] <- labels
 
   return(res)
@@ -1845,17 +1954,17 @@ process_gloscope_sqrtmat_fig <- function(metadata,
   # https://github.com/epurdom/GloScope/issues/3
   feat_mat[is.na(feat_mat)] <- 0
 
-  samples <- row.names(feat_mat)
-  samples <- standardize_sample_names(samples)
+  row.names(feat_mat) <- standardize_sample_names(row.names(feat_mat))
+  dist_mat <- as.dist(feat_mat)
 
-  labels <- metadata[match(samples, metadata$Sample), ][[label_col]]
-  names(labels) <- metadata[match(samples, metadata$Sample), ][["Sample"]]
+  labels <- metadata[match(row.names(feat_mat), metadata$Sample), ][[label_col]]
+  names(labels) <- metadata[match(row.names(feat_mat), metadata$Sample), ][["Sample"]]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
-  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["scores"]] <- calc_sep_score(dist_mat, labels)
   res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- feat_mat
+  res[["dist_mat"]] <- dist_mat
   res[["labels"]] <- labels
 
   return(res)
@@ -1868,13 +1977,14 @@ process_scpoli_fig <- function(scpoli_emb_file, labels, title = "scPoli") {
     as.data.frame()
 
   rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
+  dist_mat <- dist(feat_mat)
   labels <- labels[rownames(feat_mat)]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
-  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["scores"]] <- calc_sep_score(dist_mat, labels)
   res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- as.matrix(dist(feat_mat))
+  res[["dist_mat"]] <- dist_mat
   res[["labels"]] <- labels
 
   return(res)
@@ -1887,13 +1997,14 @@ process_pilot_fig <- function(pilot_dist_file, labels, title = "PILOT") {
     as.data.frame()
 
   rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
+  dist_mat <- dist(feat_mat)
   labels <- labels[rownames(feat_mat)]
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
-  res[["scores"]] <- calc_sep_score(feat_mat, labels)
+  res[["scores"]] <- calc_sep_score(dist_mat, labels)
   res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- as.matrix(feat_mat)
+  res[["dist_mat"]] <- dist_mat
   res[["labels"]] <- labels
 
   return(res)
@@ -1939,7 +2050,7 @@ process_ecodapb_fig <- function(
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
   res[["scores"]] <- calc_sep_score(feat_mat, labels)
   res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- as.matrix(feat_mat)
+  res[["dist_mat"]] <- as.dist(feat_mat)
   res[["labels"]] <- labels
 
   return(res)
@@ -2021,42 +2132,62 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
     impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2 / 3) %>%
     calc_perc_df() %>%
     clr() %>%
+    dist() %>%
     calc_sep_score(labels)
   res_list[["counts_zeros_1"]] <- df %>%
     impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 1) %>%
     calc_perc_df() %>%
     clr() %>%
+    dist() %>%
     calc_sep_score(labels)
   res_list[["counts_all_1"]] <- df %>%
     impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
     calc_perc_df() %>%
     clr() %>%
+    dist() %>%
+    calc_sep_score(labels)
+  res_list[["counts_zeros_0.5"]] <- df %>%
+    impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 0.5) %>%
+    calc_perc_df() %>%
+    clr() %>%
+    dist() %>%
+    calc_sep_score(labels)
+  res_list[["counts_all_0.5"]] <- df %>%
+    impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>%
+    calc_perc_df() %>%
+    clr() %>%
+    dist() %>%
     calc_sep_score(labels)
   res_list[["perc_all_0.001%"]] <- df %>%
     impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.001) %>%
     calc_perc_df() %>%
     clr() %>%
+    dist() %>%
     calc_sep_score(labels)
   res_list[["perc_all_0.01%"]] <- df %>%
     impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.01) %>%
     calc_perc_df() %>%
     clr() %>%
+    dist() %>%
     calc_sep_score(labels)
   res_list[["perc_all_0.1%"]] <- df %>%
     impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
     calc_perc_df() %>%
     clr() %>%
+    dist() %>%
     calc_sep_score(labels)
   res_list[["perc_all_1%"]] <- df %>%
     impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 1) %>%
     calc_perc_df() %>%
     clr() %>%
+    dist() %>%
     calc_sep_score(labels)
   res_list[["asinsqrt"]] <- df %>%
     calc_perc_df() %>%
     mutate(across(everything(), ~ . / 100)) %>%
     sqrt() %>%
     asin() %>%
+    dist() %>%
     calc_sep_score(labels)
   # res_list[["impRZilr"]] <- df %>% {impRZilr(.)[["x"]]} %>% calc_perc_df() %>% clr() %>% calc_sep_score(labels)
   # Need to check if multLN drops samples
@@ -2066,21 +2197,25 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
   labels_multLN <- labels[row.names(df) %in% row.names(df_multLN)]
   res_list[["multLN"]] <- df_multLN %>%
     clr() %>%
+    dist() %>%
     calc_sep_score(labels_multLN)
   res_list[["multRepl_0.01%"]] <- df %>%
     calc_perc_df() %>%
     zCompositions::multRepl(label = 0, dl = rep(0.01, ncol(df)), z.warning = 1, frac = 1) %>%
     clr() %>%
+    dist() %>%
     calc_sep_score(labels)
   res_list[["multRepl_0.1%"]] <- df %>%
     calc_perc_df() %>%
     zCompositions::multRepl(label = 0, dl = rep(0.1, ncol(df)), z.warning = 1, frac = 1) %>%
     clr() %>%
+    dist() %>%
     calc_sep_score(labels)
   res_list[["multRepl_1%"]] <- df %>%
     calc_perc_df() %>%
     zCompositions::multRepl(label = 0, dl = rep(1, ncol(df)), z.warning = 1, frac = 1) %>%
     clr() %>%
+    dist() %>%
     calc_sep_score(labels)
 
   return(res_list)
