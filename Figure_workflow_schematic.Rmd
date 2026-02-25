@@ -288,8 +288,175 @@ saveRDS(dproc, file.path(path_data, "cell_type_compositions.rds"))
 
 # ---------------------------------------------------------------
 
-# Introduction schematic
-GongSharma highest resolution -> best clustering example so far
+# Figure 1 A
+
+## UMAP exmple
+
+```{r}
+source("Processed_dataset_metadata.R")
+
+ds <- "Zhang"
+seurat <- readRDS(file.path(file.path(getwd(), "data"), paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
+seurat_sub <- subset(seurat, downsample = 500)
+
+seurat_sub <- RunUMAP(seurat_sub, dims = 1:10)
+Idents(seurat_sub) <- "RNA_snn_res.0.1"
+DimPlot(seurat_sub, reduction = "umap") + theme_void() & NoLegend()
+ggsave(file.path(path_plots, "Figure_1_A_umap.pdf"),
+       width = 4,
+       height = 4)
+
+df <- table(seurat_sub$Sample, seurat_sub$RNA_snn_res.0.1) %>%
+  as.data.frame.matrix() %>%
+  calc_perc_df()
+
+# 1. Transform data to long format
+df_long <- df[1:5, ] %>%
+  rownames_to_column("Sample") %>% 
+  pivot_longer(cols = -Sample, 
+               names_to = "Cluster", 
+               values_to = "Percentage")
+
+# 2. Create the plot
+ggplot(df_long, aes(x = Sample, y = Percentage, fill = Cluster)) +
+  geom_bar(stat = "identity") +
+  theme_light() +
+  theme(
+    # 1. Remove the legend
+    legend.position = "none",
+    
+    # 2. Remove X-axis title
+    axis.title.x = element_blank(),
+    
+    # 3. Remove X-axis text (labels) and ticks
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    
+    # Optional: Styling the Y-axis to match your previous plot
+    axis.title.y = element_text(face = "bold"),
+    panel.grid.major.x = element_blank()
+  ) +
+  labs(y = "Relative abundance (%)")
+
+ggsave(file.path(path_plots, "Figure_1_A_ctcomposition.pdf"),
+       width = 2.5,
+       height = 2.5)
+```
+
+
+## Normalization
+
+```{r}
+
+layer <- "L1"
+hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
+hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
+
+layer <- "L2"
+hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
+hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
+
+
+
+layer <- "L3"
+hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
+hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
+hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
+
+df <- dproc[[layer]]$cell_counts %>% unlist() %>% as.data.frame()
+p1 <- ggplot(df, aes(.))+
+  geom_histogram(color="darkblue", fill="lightblue", bins = 15) +
+  xlab("Counts") + ylab("") + ggtitle("Cell counts") +
+  theme_classic() +
+  scale_x_continuous(trans='sqrt') +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+df <- dproc[[layer]]$freq %>% unlist() %>% as.data.frame() %>% mutate(across(everything(), ~ . * 100))
+p2 <- ggplot(df, aes(.))+
+  geom_histogram(color="darkblue", fill="lightblue", bins = 15) +
+  xlab("%") + ylab("") + ggtitle("Frequency") +
+  theme_classic() +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+df <- dproc[[layer]]$clr_1count_all %>% unlist() %>% as.data.frame()
+p3 <- ggplot(df, aes(.))+
+  geom_histogram(color="darkblue", fill="lightblue", bins = 15) +
+  xlab("CLR") + ylab("") + ggtitle("Centered\nlogratio") +
+  theme_classic() +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
+
+patchwork::wrap_plots(p2, p3, nrow = 1)
+
+ggsave(file.path(path_plots, "Figure_1_A_normalization_example.pdf"),
+       width = 3,
+       height = 2.5)
+```
+
+
+
+# ---------------------------------------------------------------
+
+# Plot number of samples and cell types lost per granularity
+
+```{r}
+# Apply function to each dataframe
+df1 <- dproc[["L1"]][["cell_counts"]]
+df2 <- dproc[["L2"]][["cell_counts"]]
+df3 <- dproc[["L3"]][["cell_counts"]]
+
+# Assume df1, df2, df3 are your three dataframes
+dfs <- list(Low = df1, Medium = df2, High = df3)
+
+
+# Function to calculate percentage of rows/columns with at least one zero
+compute_zero_percentage <- function(df, granularity) {
+  total_samples <- nrow(df)
+  total_celltypes <- ncol(df)
+  
+  samples_with_zeros <- sum(rowSums(df == 0) > 0) / total_samples * 100
+  celltypes_with_zeros <- sum(colSums(df == 0) > 0) / total_celltypes * 100
+  total_zeros <- sum(df == 0) / (nrow(df) * ncol(df)) * 100
+  
+  granularity_labels <- paste0(granularity, "\n(", total_celltypes, " cell types)")
+  
+  data.frame(
+    Granularity = factor(granularity_labels, levels = granularity_labels),
+    Category = c("Samples", "Cell Types", "Total"),
+    Percentage = c(samples_with_zeros, celltypes_with_zeros, total_zeros)
+  )
+}
+
+# Compute percentages for all dataframes
+zero_percentages <- bind_rows(
+  lapply(names(dfs), function(n) compute_zero_percentage(dfs[[n]], n))
+)
+
+# Plot
+ggplot(zero_percentages, aes(x = Granularity, y = Percentage, group = Category, color = Category, label = round(Percentage, 1))) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  geom_text(vjust=-1, show.legend  = F) +
+  theme_minimal() +
+  labs(title = "",
+       x = "Granularity",
+       y = "Percentage (%)",
+       color = "Number of zeros") +
+  theme(text = element_text(size = 14)) +
+  ylim(0,100)
+ggsave(file.path(path_plots, "coda_numberzeros.pdf"), width = 6, height = 4)
+```
+
+
+
+
+# ---------------------------------------------------------------
+
+# Figure 1 B: Based on cell type composition
 
 ```{r}
 feat_mat <- dproc$L3$clr_1count
@@ -394,7 +561,7 @@ p1 <- factoextra::fviz_pca(res.pca,
   scale_color_manual(values = my_colors) +
   theme_classic() +
   theme(axis.text = element_blank(),
-          axis.ticks = element_blank())
+          axis.ticks = element_blank()) + coord_equal()
 print(p1)
 ggsave(file.path(path_plots, "workflow_schema_clustering_unsupervised.pdf"),
        width = 4,
@@ -447,7 +614,7 @@ p2 <-factoextra::fviz_pca(res.pca,
   scale_color_manual(values = my_colors) +
   theme_classic() +
   theme(axis.text = element_blank(),
-          axis.ticks = element_blank())
+          axis.ticks = element_blank()) + coord_equal()
 print(p2)
 ggsave(file.path(path_plots, "workflow_schema_clustering_both.pdf"),
        width = 4,
@@ -455,355 +622,6 @@ ggsave(file.path(path_plots, "workflow_schema_clustering_both.pdf"),
 
 aligned_plots <- p1 + p2 + plot_layout(ncol = 2)
 ggsave(file.path(path_plots, "workflow_schema_clustering_combined_plots.pdf"), aligned_plots, width = 8, height = 3)
-```
-
-
-# Example plot of normalization for schema
-
-```{r}
-
-layer <- "L1"
-hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
-hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
-hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
-hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
-
-layer <- "L2"
-hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
-hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
-hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
-hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
-
-
-
-layer <- "L3"
-hist(dproc[[layer]]$cell_counts %>% unlist(), breaks=50)
-hist(dproc[[layer]]$freq %>% unlist() * 100, breaks=50, main="", xlab="")
-hist(dproc[[layer]]$clr_1count_all %>% unlist(), breaks=50, main="", xlab="")
-hist(dproc[[layer]]$clr_0.1perc %>% unlist(), breaks=50, main="", xlab="")
-
-df <- dproc[[layer]]$cell_counts %>% unlist() %>% as.data.frame()
-p1 <- ggplot(df, aes(.))+
-  geom_histogram(color="darkblue", fill="lightblue", bins = 15) +
-  xlab("Counts") + ylab("") + ggtitle("Cell counts") +
-  theme_classic() +
-  scale_x_continuous(trans='sqrt') +
-  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
-
-df <- dproc[[layer]]$freq %>% unlist() %>% as.data.frame() %>% mutate(across(everything(), ~ . * 100))
-p2 <- ggplot(df, aes(.))+
-  geom_histogram(color="darkblue", fill="lightblue", bins = 15) +
-  xlab("%") + ylab("") + ggtitle("Frequency") +
-  theme_classic() +
-  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
-
-df <- dproc[[layer]]$clr_1count_all %>% unlist() %>% as.data.frame()
-p3 <- ggplot(df, aes(.))+
-  geom_histogram(color="darkblue", fill="lightblue", bins = 15) +
-  xlab("CLR") + ylab("") + ggtitle("Centered\nlogratio") +
-  theme_classic() +
-  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
-
-patchwork::wrap_plots(p1, p2, p3, nrow = 1)
-
-ggsave(file.path(path_plots, "workflow_schema_normalization_example.pdf"),
-       width = 4,
-       height = 2.5)
-```
-
-
-
-# ---------------------------------------------------------------
-
-# Plot number of samples and cell types lost per granularity
-
-```{r}
-# Apply function to each dataframe
-df1 <- dproc[["L1"]][["cell_counts"]]
-df2 <- dproc[["L2"]][["cell_counts"]]
-df3 <- dproc[["L3"]][["cell_counts"]]
-
-# Assume df1, df2, df3 are your three dataframes
-dfs <- list(Low = df1, Medium = df2, High = df3)
-
-
-# Function to calculate percentage of rows/columns with at least one zero
-compute_zero_percentage <- function(df, granularity) {
-  total_samples <- nrow(df)
-  total_celltypes <- ncol(df)
-  
-  samples_with_zeros <- sum(rowSums(df == 0) > 0) / total_samples * 100
-  celltypes_with_zeros <- sum(colSums(df == 0) > 0) / total_celltypes * 100
-  total_zeros <- sum(df == 0) / (nrow(df) * ncol(df)) * 100
-  
-  granularity_labels <- paste0(granularity, "\n(", total_celltypes, " cell types)")
-  
-  data.frame(
-    Granularity = factor(granularity_labels, levels = granularity_labels),
-    Category = c("Samples", "Cell Types", "Total"),
-    Percentage = c(samples_with_zeros, celltypes_with_zeros, total_zeros)
-  )
-}
-
-# Compute percentages for all dataframes
-zero_percentages <- bind_rows(
-  lapply(names(dfs), function(n) compute_zero_percentage(dfs[[n]], n))
-)
-
-# Plot
-ggplot(zero_percentages, aes(x = Granularity, y = Percentage, group = Category, color = Category, label = round(Percentage, 1))) +
-  geom_line(linewidth = 1.2) +
-  geom_point(size = 3) +
-  geom_text(vjust=-1, show.legend  = F) +
-  theme_minimal() +
-  labs(title = "",
-       x = "Granularity",
-       y = "Percentage (%)",
-       color = "Number of zeros") +
-  theme(text = element_text(size = 14)) +
-  ylim(0,100)
-ggsave(file.path(path_plots, "coda_numberzeros.pdf"), width = 6, height = 4)
-```
-
-
-
-
-# ---------------------------------------------------------------
-
-# Example PCAs
-
-## Based on cell type composition
-
-### Figure 2
-
-```{r}
-p_pca <- function(res.pca, labels, title = "") {
-  p <- factoextra::fviz_pca(res.pca,
-                            habillage = labels,
-                            label = "var",
-                            pointsize = 3,
-                            invisible = c("var", "quali"),
-                            geom = "point") +
-    ggtitle(title) +
-    scale_shape_manual(values = rep(19, length(unique(labels)))) +
-    coord_equal()
-  print(p)
-}
-
-feat_mat <- dproc[["L3"]]$clr_0.1perc
-meta <- dproc$meta
-meta$age <- ifelse(as.numeric(as.character(meta$sample.subjectAgeAtDraw)) < 50, "young", "old")
-res.pca <- prcomp(feat_mat, scale. = FALSE)
-
-labels <- meta$subject.cmv
-p_pca(res.pca, labels, title = "CMV")
-
-labels <- meta$age
-p_pca(res.pca, labels, title = "Age")
-
-# Perform hierarchical clustering
-dist_mat <- dist(feat_mat)
-hc <- stats::hclust(dist_mat, method = "ward.D2")
-clust_labels <- stats::cutree(hc, k = 4)
-p_pca(res.pca, clust_labels, title = "hclust")
-
-# Perform PAM clustering
-clust_labels <- cluster::pam(feat_mat, k = 4)$cluster
-p_pca(res.pca, clust_labels, title = "pamclust")
-
-p_pca(res.pca, meta$subject.subjectGuid, title = "Individual")
-
-
-feat_mat_females <- feat_mat[meta$subject.biologicalSex == "Female", ]
-meta_females <- meta[meta$subject.biologicalSex == "Female", ]
-res.pca <- prcomp(feat_mat_females, scale. = FALSE)
-
-labels <- meta_females$subject.cmv
-title <- "Biological variable 1"
-mod_score <- round(calc_modularity(feat_mat_females, labels), 3)
-title <- paste0(title, "\nModularity score: ", mod_score)
-sil_score <- round(calc_sil(feat_mat_females, labels), 3)
-title <- paste0(title, "\nSilhouette score: ", sil_score)
-factoextra::fviz_pca(res.pca,
-                     habillage = labels,
-                     # addEllipses = TRUE,
-                     label = "none",
-                     pointsize = 1,
-                     invisible = c("var", "quali"),
-                     # repel = TRUE,
-                     geom = "point",
-                     axes.linetype = NA) +
-    scale_shape_manual(values = rep(19, length(unique(labels)))) +
-  guides(shape=guide_legend(title="CMV"), color=guide_legend(title="CMV")) +
-  ggtitle("") +
-  theme_classic() +
-  theme(axis.title.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank(),
-        axis.title.y=element_blank(),
-        axis.text.y=element_blank(),
-        axis.ticks.y=element_blank())
-ggsave(file.path(path_plots, "pca_ctcomp_females_cmv.pdf"),
-       width = 4,
-       height = 3)
-
-labels <- ifelse(as.numeric(as.character(meta_females$sample.subjectAgeAtDraw)) < 50, "young", "old")
-title <- "Biological variable 2"
-mod_score <- round(calc_modularity(feat_mat_females, labels), 3)
-title <- paste0(title, "\nModularity score: ", mod_score)
-sil_score <- round(calc_sil(feat_mat_females, labels), 3)
-title <- paste0(title, "\nSilhouette score: ", sil_score)
-factoextra::fviz_pca(res.pca,
-                     habillage = labels,
-                     # addEllipses = TRUE,
-                     label = "none",
-                     pointsize = 1,
-                     invisible = c("var", "quali"),
-                     # repel = TRUE,
-                     geom = "point",
-                     axes.linetype = NA) +
-    scale_shape_manual(values = rep(19, length(unique(labels)))) +
-  guides(shape=guide_legend(title="Age"), color=guide_legend(title="Age")) +
-  ggtitle("") +
-  theme_classic() +
-  theme(axis.title.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank(),
-        axis.title.y=element_blank(),
-        axis.text.y=element_blank(),
-        axis.ticks.y=element_blank())
-ggsave(file.path(path_plots, "pca_ctcomp_females_age.pdf"),
-       width = 4,
-       height = 3)
-
-dist_mat <- dist(feat_mat_females)
-# Perform hierarchical clustering
-hc <- stats::hclust(dist_mat, method = "ward.D2")
-clust_labels <- as.factor(stats::cutree(hc, k = 4))
-p_pca(res.pca, clust_labels, title = "hclust")
-
-# Perform PAM clustering
-clust_labels <- cluster::pam(feat_mat_females, k = 4)$cluster
-p_pca(res.pca, clust_labels, title = "pamclust")
-
-clust_labels_reordered <- clust_labels
-clust_labels_reordered[clust_labels == 3] <- 1
-clust_labels_reordered[clust_labels == 1] <- 2
-clust_labels_reordered[clust_labels == 2] <- 3
-
-factoextra::fviz_pca(res.pca,
-                     habillage = clust_labels_reordered,
-                     # addEllipses = TRUE, , ellipse.level=0.80,
-                     label = "none",
-                     pointsize = 1,
-                     invisible = c("var", "quali"),
-                     # repel = TRUE,
-                     geom = "point",
-                     axes.linetype = NA) +
-    scale_shape_manual(values = rep(19, length(unique(clust_labels)))) +
-  guides(shape=guide_legend(title="Immune type"), color=guide_legend(title="Immune type")) +
-  ggtitle("") +
-  theme_classic() +
-  theme(
-    # axis.title.x=element_blank(),
-    axis.text.x=element_blank(),
-    axis.ticks.x=element_blank(),
-    # axis.title.y=element_blank(),
-    axis.text.y=element_blank(),
-    axis.ticks.y=element_blank()
-  )
-ggsave(file.path(path_plots, "pca_ctcomp_females_unsupervised_clustering.pdf"),
-       width = 4,
-       height = 3)
-
-
-df_clust <- as.data.frame(cbind(as.character(meta_females$subject.cmv), meta_females$age, clust_labels))
-colnames(df_clust) <- c("cmv", "age", "cluster")
-
-cmv_counts <- df_clust %>%
-  group_by(cluster, cmv) %>%
-  summarise(count = n(), .groups = "drop") %>%
-  group_by(cluster) %>%
-  mutate(percentage = count / sum(count)) %>%
-  ungroup()
-
-# Calculate counts for age (V2) and percentage within each cluster
-age_counts <- df_clust %>%
-  group_by(cluster, age) %>%
-  summarise(count = n(), .groups = "drop") %>%
-  group_by(cluster) %>%
-  mutate(percentage = count / sum(count)) %>%
-  ungroup()
-
-# Plot CMV percentages
-cmv_plot <- ggplot(cmv_counts, aes(x = factor(cluster), y = percentage, fill = cmv)) +
-  geom_bar(stat = "identity", position = "stack") +
-  labs(x = "Cluster", y = "Percentage", fill = "CMV Status", title = "CMV Status by Cluster (Percentage)") +
-  scale_y_continuous(labels = scales::percent) + # Format y-axis as percentages
-  theme_minimal()
-
-# Plot age percentages
-age_plot <- ggplot(age_counts, aes(x = factor(cluster), y = percentage, fill = age)) +
-  geom_bar(stat = "identity", position = "stack") +
-  labs(x = "Cluster", y = "Percentage", fill = "Age", title = "Age by Cluster (Percentage)") +
-  scale_y_continuous(labels = scales::percent) + # Format y-axis as percentages
-  theme_minimal()
-
-# Display the plots
-print(cmv_plot)
-ggsave(file.path(path_plots, "pca_ctcomp_females_unsupervised_clustering_barplot_cmv.pdf"),
-       width = 4,
-       height = 3)
-print(age_plot)
-ggsave(file.path(path_plots, "pca_ctcomp_females_unsupervised_clustering_barplot_age.pdf"),
-       width = 4,
-       height = 3)
-
-
-df1 <- feat_mat
-df1 <- df1[ , sqrt(colVars(feat_mat)) > 0.5]
-df1 %>%
-  prcomp() %>%
-  p_pca(labels = meta$subject.cmv)
-df1 %>%
-  prcomp() %>%
-  p_pca(labels = meta$age)
-```
-
-
-### Figure 3
-
-```{r}
-feat_mat <- dproc[["L3"]]$clr_0.1perc
-res.pca <- prcomp(feat_mat, scale. = FALSE)
-
-
-labels <- paste0("CMV ", meta$subject.cmv, " ", ifelse(as.numeric(as.character(meta$sample.subjectAgeAtDraw)) < 50, "young", "old"))
-factoextra::fviz_pca(res.pca,
-                     habillage = labels,
-                     # addEllipses = TRUE,
-                     label = "all",
-                     pointsize = 1,
-                     labelsize = 2,
-                     # invisible = c("var", "quali"),
-                     repel = F,
-                     geom = "point",
-                     axes.linetype = NA) +
-    scale_shape_manual(values = rep(19, length(unique(labels)))) +
-  guides(shape=guide_legend(title="Ground truth"), color=guide_legend(title="Ground truth")) +
-  ggtitle("") +
-  theme_classic() +
-  theme(
-    # axis.title.x=element_blank(),
-    axis.text.x=element_blank(),
-    axis.ticks.x=element_blank(),
-    # axis.title.y=element_blank(),
-    axis.text.y=element_blank(),
-    axis.ticks.y=element_blank()
-  )
-ggsave(file.path(path_plots, "pca_ctcomp_all_ground_truth.pdf"),
-       width = 6,
-       height = 4)
 ```
 
 
@@ -986,79 +804,7 @@ dev.off()
 ```
 
 
-
-
-### Calculate variance for compositions across bio conditions
-
-```{r}
-df <- dproc[["L3"]]$clr_0.01perc
-meta <- mutate_all(dproc$meta, as.character)
-meta$age <- ifelse(as.numeric(as.character(dproc$meta$sample.subjectAgeAtDraw)) < 50, "young", "old")
-meta$all <- 1
-
-list_vars <- list()
-
-cond_cols <- c(
-  "subject.subjectGuid",
-  # "subject.cmv",
-  # "age",
-  "all"
-)
-for (cond in cond_cols) {
-  col_vars <- c()
-  for (i in unique(meta[[cond]])) {
-    cond_rows <- which(meta[[cond]] == i)
-    for (col in 1:ncol(df)) {
-      if(length(cond_rows) >= 2) {
-        # col_vars <- c(col_vars, cv(df[cond_rows, col]))
-        col_vars <- c(col_vars, var(df[cond_rows, col]))
-      }
-    }
-  }
-  list_vars[[cond]] <- col_vars
-}
-
-
-
-# Find the maximum length of the vectors
-max_length <- max(lengths(list_vars))
-
-# Pad shorter vectors with NA to match the maximum length
-padded_list <- lapply(list_vars, function(x) {
-  length(x) <- max_length
-  return(x)
-})
-
-# Convert the padded list to a data frame
-df_vars <- as.data.frame(padded_list)
-
-median(df_vars$subject.subjectGuid, na.rm = TRUE)
-median(df_vars$all, na.rm = TRUE)
-median(df_vars$subject.subjectGuid, na.rm = TRUE) / median(df_vars$all, na.rm = TRUE)
-mean(df_vars$subject.subjectGuid, na.rm = TRUE)
-mean(df_vars$all, na.rm = TRUE)
-
-new_names <- c("Inter-sample", "Across all samples")
-colnames(df_vars) <- new_names
-
-df_vars %>%
-  pivot_longer(cols = new_names) %>%
-  
-  ggplot(aes(x=name, y=value)) + 
-  geom_violin(trim=FALSE, fill="gray")+
-  labs(title="",x="", y = "Variance (in CLR)")+
-  geom_boxplot(width = 0.1, outlier.shape=NA)+
-  theme_classic() +
-  stat_compare_means() +
-  scale_fill_brewer(palette="Blues") +
-  scale_y_continuous(limits = c(0, 1)) +
-  theme_classic()
-ggsave(file.path(path_plots, "gongsharma_variance_violinplot.pdf"),
-       width = 3,
-       height = 3)
-```
-
-## Based on pseudobulk
+# Figure 1 B: Based on pseudobulk
 
 ```{r}
 pseudobulk <- readRDS(file.path(path_data, "all_bulk_sample.rds"))
@@ -1104,7 +850,7 @@ p3 <- factoextra::fviz_pca(res.pca,
   scale_color_manual(values = my_colors) +
   theme_classic() +
   theme(axis.text = element_blank(),
-          axis.ticks = element_blank())
+          axis.ticks = element_blank()) + coord_equal()
 print(p3)
 
 labels <- meta$subject.biologicalSex
@@ -1128,563 +874,85 @@ p4 <-factoextra::fviz_pca(res.pca,
   scale_color_manual(values = my_colors) +
   theme_classic() +
   theme(axis.text = element_blank(),
-          axis.ticks = element_blank())
+          axis.ticks = element_blank()) + coord_equal()
 print(p4)
 
 aligned_plots <- p1 + p2 + p3 + p4 + plot_layout(ncol = 2)
-ggsave(file.path(path_plots, "workflow_schema_clustering_PB_combined_plots.pdf"), aligned_plots, width = 8, height = 6)
-
-
-p_pca(res.pca, labels, title = "Sex")
-ggsave(file.path(path_plots, "pca_pseudobulk_by_sex.pdf"),
-       width = 4,
-       height = 3)
-
-labels <- meta$subject.cmv
-p_pca(res.pca, labels, title = "CMV")
-ggsave(file.path(path_plots, "pca_pseudobulk_by_cmv.pdf"),
-       width = 4,
-       height = 3)
-
-labels <- meta$age
-p_pca(res.pca, labels, title = "Age")
-ggsave(file.path(path_plots, "pca_pseudobulk_by_age.pdf"),
-       width = 4,
-       height = 3)
-
-
-pb_normed_females <- pb_normed[meta$subject.biologicalSex == "Female", ]
-meta_females <- meta[meta$subject.biologicalSex == "Female"]
-
-res.pca_females <- prcomp(pb_normed_females, scale. = FALSE)
-
-# Perform PAM clustering
-clust_labels <- cluster::pam(pb_normed_females, k = 4)$cluster
-p_pca(res.pca_females, clust_labels, title = "pamclust")
-factoextra::fviz_pca(res.pca_females,
-                     habillage = clust_labels,
-                     # addEllipses = TRUE,
-                     label = "none",
-                     pointsize = 1,
-                     invisible = c("var", "quali"),
-                     # repel = TRUE,
-                     geom = "point",
-                     axes.linetype = NA) +
-    scale_shape_manual(values = rep(19, length(unique(clust_labels)))) +
-  guides(shape=guide_legend(title="Pseudobulk\ncluster"), color=guide_legend(title="Pseudobulk\ncluster")) +
-  ggtitle("") +
-  theme_classic() +
-  theme(
-    # axis.title.x=element_blank(),
-    axis.text.x=element_blank(),
-    axis.ticks.x=element_blank(),
-    # axis.title.y=element_blank(),
-    axis.text.y=element_blank(),
-    axis.ticks.y=element_blank()
-  )
-ggsave(file.path(path_plots, "pca_pseudobulk_females_unsupervised_clustering.pdf"),
-       width = 4,
-       height = 3)
-
-
-factoextra::fviz_pca(res.pca_females,
-                     # habillage = NA,
-                     # addEllipses = TRUE,
-                     label = "none",
-                     pointsize = 1,
-                     invisible = c("var", "quali"),
-                     # repel = TRUE,
-                     geom = "point",
-                     axes.linetype = NA) +
-    scale_shape_manual(values = rep(19, length(unique(clust_labels)))) +
-  guides(shape=guide_legend(title="Pseudobulk\ncluster"), color=guide_legend(title="Pseudobulk\ncluster")) +
-  ggtitle("") +
-  theme_classic() +
-  theme(
-    # axis.title.x=element_blank(),
-    axis.text.x=element_blank(),
-    axis.ticks.x=element_blank(),
-    # axis.title.y=element_blank(),
-    axis.text.y=element_blank(),
-    axis.ticks.y=element_blank()
-  )
-ggsave(file.path(path_plots, "pca_pseudobulk_females_unsupervised_clustering_nolabels.pdf"),
-       width = 3,
-       height = 3)
-
-
-
-
-labels <- meta_females$subject.cmv
-title <- "Biological variable 1"
-mod_score <- round(calc_modularity(pb_normed_females, labels), 3)
-title <- paste0(title, "\nModularity score: ", mod_score)
-sil_score <- round(calc_sil(pb_normed_females, labels), 3)
-title <- paste0(title, "\nSilhouette score: ", sil_score)
-p_f_cmv <- factoextra::fviz_pca(res.pca_females,
-                     habillage = labels,
-                     # addEllipses = TRUE,
-                     label = "none",
-                     pointsize = 1,
-                     invisible = c("var", "quali"),
-                     # repel = TRUE,
-                     geom = "point",
-                     axes.linetype = NA) +
-    scale_shape_manual(values = rep(19, length(unique(labels)))) +
-  guides(shape=guide_legend(title="CMV"), color=guide_legend(title="CMV")) +
-  ggtitle("") +
-  theme_classic() +
-  theme(# axis.title.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank(),
-        # axis.title.y=element_blank(),
-        axis.text.y=element_blank(),
-        axis.ticks.y=element_blank())
-print(p_f_cmv)
-ggsave(file.path(path_plots, "pca_pseudobulk_females_by_cmv.pdf"),
-       width = 4,
-       height = 3)
-
-labels <- meta_females$age
-title <- "Biological variable 2"
-mod_score <- round(calc_modularity(pb_normed_females, labels), 3)
-title <- paste0(title, "\nModularity score: ", mod_score)
-sil_score <- round(calc_sil(pb_normed_females, labels), 3)
-title <- paste0(title, "\nSilhouette score: ", sil_score)
-p_f_age <- factoextra::fviz_pca(res.pca_females,
-                     habillage = labels,
-                     # addEllipses = TRUE,
-                     label = "none",
-                     pointsize = 1,
-                     invisible = c("var", "quali"),
-                     # repel = TRUE,
-                     geom = "point",
-                     axes.linetype = NA) +
-    scale_shape_manual(values = rep(19, length(unique(labels)))) +
-  guides(shape=guide_legend(title="Age"), color=guide_legend(title="Age")) +
-  ggtitle("") +
-  theme_classic() +
-  theme(# axis.title.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank(),
-        # axis.title.y=element_blank(),
-        axis.text.y=element_blank(),
-        axis.ticks.y=element_blank())
-print(p_f_age)
-ggsave(file.path(path_plots, "pca_pseudobulk_females_by_age.pdf"),
-       width = 4,
-       height = 3)
-
-aligned_plots <- p_f_cmv + p_f_age + plot_layout(ncol = 2)
-ggsave(file.path(path_plots, "workflow_schema_clustering_PB_strat_combined_plots_appendix.pdf"), aligned_plots, width = 8, height = 3)
-
-
-df_clust <- as.data.frame(cbind(as.character(meta_females$subject.cmv), meta_females$age, clust_labels))
-colnames(df_clust) <- c("cmv", "age", "cluster")
-
-cmv_counts <- df_clust %>%
-  group_by(cluster, cmv) %>%
-  summarise(count = n(), .groups = "drop") %>%
-  group_by(cluster) %>%
-  mutate(percentage = count / sum(count)) %>%
-  ungroup()
-
-# Calculate counts for age (V2) and percentage within each cluster
-age_counts <- df_clust %>%
-  group_by(cluster, age) %>%
-  summarise(count = n(), .groups = "drop") %>%
-  group_by(cluster) %>%
-  mutate(percentage = count / sum(count)) %>%
-  ungroup()
-
-# Plot CMV percentages
-cmv_plot <- ggplot(cmv_counts, aes(x = factor(cluster), y = percentage, fill = cmv)) +
-  geom_bar(stat = "identity", position = "stack") +
-  labs(x = "Cluster", y = "Percentage", fill = "CMV Status", title = "CMV Status by Cluster (Percentage)") +
-  scale_y_continuous(labels = scales::percent) + # Format y-axis as percentages
-  theme_minimal()
-
-# Plot age percentages
-age_plot <- ggplot(age_counts, aes(x = factor(cluster), y = percentage, fill = age)) +
-  geom_bar(stat = "identity", position = "stack") +
-  labs(x = "Cluster", y = "Percentage", fill = "Age", title = "Age by Cluster (Percentage)") +
-  scale_y_continuous(labels = scales::percent) + # Format y-axis as percentages
-  theme_minimal()
-
-# Display the plots
-print(cmv_plot)
-ggsave(file.path(path_plots, "pca_pb_females_unsupervised_clustering_barplot_cmv.pdf"),
-       width = 4,
-       height = 3)
-print(age_plot)
-ggsave(file.path(path_plots, "pca_pb_females_unsupervised_clustering_barplot_age.pdf"),
-       width = 4,
-       height = 3)
+ggsave(file.path(path_plots, "Figure_1_B_GongSharma_clustering.pdf"), aligned_plots, width = 8, height = 6)
 ```
 
-
-### Calculate variance for expression across bio conditions
+# Supp Fig 1: GongSharma PB per sex
 
 ```{r}
-df <- pb_normed
-meta <- mutate_all(dproc$meta, as.character)
-meta$age <- ifelse(as.numeric(as.character(dproc$meta$sample.subjectAgeAtDraw)) < 50, "young", "old")
-meta$all <- 1
-
-list_vars <- list()
-
-cond_cols <- c(
-  "subject.subjectGuid",
-  # "subject.cmv",
-  # "age",
-  "all"
-)
-for (cond in cond_cols) {
-  col_vars <- c()
-  for (i in unique(meta[[cond]])) {
-    cond_rows <- which(meta[[cond]] == i)
-    for (col in 1:ncol(df)) {
-      if(length(cond_rows) >= 2) {
-        # col_vars <- c(col_vars, cv(df[cond_rows, col]))
-        col_vars <- c(col_vars, var(df[cond_rows, col]))
-      }
-    }
-  }
-  list_vars[[cond]] <- col_vars
-}
-
-
-
-# Find the maximum length of the vectors
-max_length <- max(lengths(list_vars))
-
-# Pad shorter vectors with NA to match the maximum length
-padded_list <- lapply(list_vars, function(x) {
-  length(x) <- max_length
-  return(x)
-})
-
-# Convert the padded list to a data frame
-df_vars <- as.data.frame(padded_list)
-
-median(df_vars$subject.subjectGuid, na.rm = TRUE)
-median(df_vars$all, na.rm = TRUE)
-median(df_vars$subject.subjectGuid, na.rm = TRUE) / median(df_vars$all, na.rm = TRUE)
-mean(df_vars$subject.subjectGuid, na.rm = TRUE)
-mean(df_vars$all, na.rm = TRUE)
-
-new_names <- c("Inter-sample", "Across all samples")
-colnames(df_vars) <- new_names
-
-df_vars %>%
-  pivot_longer(cols = new_names) %>%
-  
-  ggplot(aes(x=name, y=value)) + 
-  geom_violin(trim=FALSE, fill="gray")+
-  labs(title="",x="", y = "Variance (in noramlized counts)")+
-  geom_boxplot(width = 0.1, outlier.shape=NA)+
-  theme_classic() +
-  stat_compare_means() +
-  scale_fill_brewer(palette="Blues") +
-  scale_y_continuous(limits = c(0, 1)) +
-  theme_classic()
-ggsave(file.path(path_plots, "gongsharma_variance_violinplot_expression.pdf"),
-       width = 3,
-       height = 3)
-```
-
-# ---------------------------------------------------------------
-
-# Correlation plot (ct comp)
-
-```{r}
-cor_matrix <- cor(dproc[["L1"]][["clr_0.01perc"]])
-col<- colorRampPalette(c("blue", "white", "red"))(20)
-heatmap(x = cor_matrix)
-
-cor_matrix <- cor(dproc[["L2"]][["clr_0.01perc"]])
-col<- colorRampPalette(c("blue", "white", "red"))(20)
-heatmap(x = cor_matrix)
-
-variances <- apply(dproc[["L3"]][["clr_0.01perc"]], 2, var)
-plot(variances)
-abline(mean(variances))
-hist(variances, breaks = 20)
-```
-
-```{r fig.height=14, fig.width=14}
-cor_matrix <- cor(dproc[["L3"]][["clr_0.01perc"]])
-col<- colorRampPalette(c("blue", "white", "red"))(20)
-heatmap(x = cor_matrix, margins = c(15, 15))
-
-corrplot(cor_matrix, order="hclust")
-corrplot(cor_matrix, order="hclust", hclust.method = c("ward.D2"))
-```
-
-
-
-# ---------------------------------------------------------------
-
-
-# Variance
-
-```{r fig.height=8, fig.width=10}
-
-ggplotRegression <- function (data, title, ylim = c(0.01, 5)) {
-  
-  require(ggplot2)
-  require(ggrepel)
-  
-  lmod <- lm(Variance ~ Relative_abundance, data = data)
-  
-  ggplot(data, aes(x = Relative_abundance, y = Variance)) + 
-    geom_point() +
-    # geom_smooth(method=lm , color="red", fill="#69b3a2", se=TRUE) +
-    labs(title = paste(
-      title #,
-      # "\nAdj R2 = ",signif(summary(lmod)$adj.r.squared, 2),
-      # "Intercept =",signif(lmod$coef[[1]], 2),
-      # " Slope =",signif(lmod$coef[[2]], 2),
-      # " P =",signif(summary(lmod)$coef[2,4], 2)
-    )) +
-    theme_classic() +
-    # geom_text_repel(
-    #   aes(label = celltype),
-    #   family = "Poppins",
-    #   size = 3,
-    #   min.segment.length = 0, 
-    #   seed = 42, 
-    #   box.padding = 0.5,
-    #   max.overlaps = Inf,
-    #   # arrow = arrow(length = unit(0.010, "npc")),
-    #   # nudge_x = .15,
-    #   # nudge_y = .5,
-    #   color = "grey50"
-    # ) +
-    xlab("CLR-transformed relative abundance") + ylab("Variance")
-}
-
-
 plot_list <- list()
 
+for (gender in unique(meta$subject.biologicalSex)) {
+  pb_normed_sub <- pb_normed[meta$subject.biologicalSex == gender, ]
+  meta_sub <- meta[meta$subject.biologicalSex == gender]
+  
+  res.pca_sub <- prcomp(pb_normed_sub, scale. = FALSE)
+  
+  eig.val <- factoextra::get_eig(res.pca_sub)
+  pc1_var <- round(eig.val[1, 2], 1)
+  pc2_var <- round(eig.val[2, 2], 1)
+  
+  labels <- meta_sub$subject.cmv
+  condition <- "CMV"
+  title <- "Biological variable 1"
+  plot_list[[paste0(gender, "_", condition)]] <- factoextra::fviz_pca(
+    res.pca_sub,
+    habillage = labels,
+    # addEllipses = TRUE,
+    label = "none",
+    pointsize = 1,
+    invisible = c("var", "quali"),
+    # repel = TRUE,
+    geom = "point",
+    axes.linetype = NA) +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+    guides(shape=guide_legend(title=condition), color=guide_legend(title=condition)) +
+    ggtitle(paste(gender, "-", condition)) +
+    labs(x = paste0("PCA dim1 (", pc1_var, "%)"), y = paste0("PCA dim2 (", pc2_var, "%)")) +
+    theme_classic() +
+    theme(# axis.title.x=element_blank(),
+      axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      # axis.title.y=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks.y=element_blank()) + coord_equal()
+  print(plot_list[[paste0(gender, "_", condition)]])
+  
+  labels <- meta_sub$age
+  condition <- "Age"
+  plot_list[[paste0(gender, "_", condition)]] <- factoextra::fviz_pca(
+    res.pca_sub,
+    habillage = labels,
+    # addEllipses = TRUE,
+    label = "none",
+    pointsize = 1,
+    invisible = c("var", "quali"),
+    # repel = TRUE,
+    geom = "point",
+    axes.linetype = NA) +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+    guides(shape=guide_legend(title=condition), color=guide_legend(title=condition)) +
+    ggtitle(paste(gender, "-", condition)) +
+    labs(x = paste0("PCA dim1 (", pc1_var, "%)"), y = paste0("PCA dim2 (", pc2_var, "%)")) +
+    theme_classic() +
+    theme(# axis.title.x=element_blank(),
+      axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      # axis.title.y=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks.y=element_blank()) + coord_equal()
+  print(plot_list[[paste0(gender, "_", condition)]])
+}
 
-# 
-# df <- dproc$L3$cell_counts %>%
-#   log() %>%
-#   pivot_longer(
-#     cols = everything(),
-#     names_to = "celltype",
-#     values_to = "values"
-#   )
-# 
-# df1 <- df %>%
-#     group_by(celltype) %>%
-#     dplyr::summarize(
-#       Relative_abundance = mean(values, na.rm=TRUE),
-#       Variance = var(values, na.rm=TRUE)
-#     )
-# 
-# p <- ggplotRegression(df1, "High granularity annotation counts")
-# print(p)
-# plot_list <- append(plot_list, list(p))
-# 
-# 
-# df <- dproc$L3$freq %>%
-#   log() %>%
-#   pivot_longer(
-#     cols = everything(),
-#     names_to = "celltype",
-#     values_to = "values"
-#   )
-# 
-# df1 <- df %>%
-#     group_by(celltype) %>%
-#     dplyr::summarize(
-#       Relative_abundance = mean(values, na.rm=TRUE),
-#       Variance = var(values, na.rm=TRUE)
-#     )
-# 
-# p <- ggplotRegression(df1, "High granularity annotation freq")
-# print(p)
-# plot_list <- append(plot_list, list(p))
-
-
-
-df <- dproc$L1$clr_0.01perc %>%
-  pivot_longer(
-    cols = everything(),
-    names_to = "celltype",
-    values_to = "values"
-  )
-
-df1 <- df %>%
-    group_by(celltype) %>%
-    dplyr::summarize(
-      Relative_abundance = mean(values, na.rm=TRUE),
-      Variance = var(values, na.rm=TRUE)
-    )
-
-p <- ggplotRegression(df1, "Low granularity annotation\nZero replacement: + 0.01%")
-print(p)
-plot_list <- append(plot_list, list(p))
-
-df <- dproc$L2$clr_0.01perc %>%
-  pivot_longer(
-    cols = everything(),
-    names_to = "celltype",
-    values_to = "values"
-  )
-
-df1 <- df %>%
-    group_by(celltype) %>%
-    dplyr::summarize(
-      Relative_abundance = mean(values, na.rm=TRUE),
-      Variance = var(values, na.rm=TRUE)
-    )
-
-p <- ggplotRegression(df1, "Medium granularity annotation\nZero replacement: + 0.01%")
-print(p)
-plot_list <- append(plot_list, list(p))
-
-
-
-df <- dproc$L3$clr_0.01perc %>%
-  pivot_longer(
-    cols = everything(),
-    names_to = "celltype",
-    values_to = "values"
-  )
-
-df1 <- df %>%
-    group_by(celltype) %>%
-    dplyr::summarize(
-      Relative_abundance = mean(values, na.rm=TRUE),
-      Variance = var(values, na.rm=TRUE)
-    )
-
-ggplotRegression(df1, "High granularity annotation\nZero replacement: + 0.01%") +
-  geom_text(aes(label=celltype), hjust=0, vjust=0)
-p <- ggplotRegression(df1, "High granularity annotatio\nZero replacement: + 0.01%")
-print(p)
-plot_list <- append(plot_list, list(p))
-
-
-df <- dproc$L3$clr_1count_zero %>%
-  pivot_longer(
-    cols = everything(),
-    names_to = "celltype",
-    values_to = "values"
-  )
-
-df1 <- df %>%
-    group_by(celltype) %>%
-    dplyr::summarize(
-      Relative_abundance = mean(values, na.rm=TRUE),
-      Variance = var(values, na.rm=TRUE)
-    )
-
-p <- ggplotRegression(df1, "High granularity annotation\nZero replacement: +1 zeros")
-print(p)
-plot_list <- append(plot_list, list(p))
-
-
-df <- dproc$L3$cell_counts %>%
-  mutate_all(~ ./10) %>%
-  round() %>%
-  calc_perc_df() %>%
-  impute_zeros("counts_zeros") %>%
-  clr() %>%
-  pivot_longer(
-    cols = everything(),
-    names_to = "celltype",
-    values_to = "values"
-  )
-
-df1 <- df %>%
-    group_by(celltype) %>%
-    dplyr::summarize(
-      Relative_abundance = mean(values, na.rm=TRUE),
-      Variance = var(values, na.rm=TRUE)
-    )
-
-p <- ggplotRegression(df1, "High granularity annotation\n(low cell counts)\nZero replacement: +1 zeros")
-print(p)
-plot_list <- append(plot_list, list(p))
-
-
-df <- dproc$L3$clr_0.1perc %>%
-  pivot_longer(
-    cols = everything(),
-    names_to = "celltype",
-    values_to = "values"
-  )
-
-df1 <- df %>%
-    group_by(celltype) %>%
-    dplyr::summarize(
-      Relative_abundance = mean(values, na.rm=TRUE),
-      Variance = var(values, na.rm=TRUE)
-    )
-
-ggplotRegression(df1, "High granularity annotation\nZero replacement: + 0.1%") +
-  geom_text(aes(label=celltype), hjust=0, vjust=0)
-p <- ggplotRegression(df1, "High granularity annotation\nZero replacement: + 0.1%")
-print(p)
-plot_list <- append(plot_list, list(p))
-
-patchwork::wrap_plots(plot_list, ncol = 3)
-ggsave(file.path(path_plots, "variance_gongsharma.pdf"),
-       width = 12,
-       height = 8)
-
-
+patchwork::wrap_plots(plot_list, nrow = 2)
+ggsave(file.path(path_plots, "Supp_fig_1_GongSharma_PB_CMV_Age.pdf"), width = 7, height = 5)
 ```
 
-```{r}
-clearcut_samples <- dproc$meta$specimen.specimenGuid[dproc$meta$subject.biologicalSex == "Female" & dproc$meta$subject.cmv == "Negative" & as.numeric(dproc$meta$subject.ageAtFirstDraw) < 50]
-df <- dproc$L3$clr_0.01perc[row.names(dproc$L3$clr_0.1perc) %in% clearcut_samples, ]
-df1 <- df %>%
-  pivot_longer(
-    cols = everything(),
-    names_to = "celltype",
-    values_to = "values"
-  )
 
-df1 <- df1 %>%
-    group_by(celltype) %>%
-    dplyr::summarize(
-      Relative_abundance = mean(values, na.rm=TRUE),
-      Variance = var(values, na.rm=TRUE)
-    )
-
-ggplotRegression(df1, "CLR\nZero replacement: + 0.01%")
-
-
-
-df <- dproc$L3$freq[row.names(dproc$L3$freq) %in% clearcut_samples, ] * 100
-df1 <- df %>%
-  pivot_longer(
-    cols = everything(),
-    names_to = "celltype",
-    values_to = "values"
-  )
-
-df1 <- df1 %>%
-    group_by(celltype) %>%
-    dplyr::summarize(
-      Relative_abundance = mean(values, na.rm=TRUE),
-      Variance = var(values, na.rm=TRUE)
-    )
-
-
-# lmod <- lm(Variance ~ Relative_abundance, data = df1)
-
-ggplot(df1, aes(x = Relative_abundance, y = Variance)) + 
-  geom_point() +
-  labs(title = "Frequency") +
-  theme_classic() +
-  xlab("Relative abundance (%)") + ylab("Variance")
-```
 
 
 # ---------------------------------------------------------------
@@ -1704,8 +972,8 @@ https://www.cell.com/immunity/fulltext/S1074-7613(23)00453-3?_returnURL=https%3A
 ```{r}
 library(readxl)
 
-df_ter <- data.frame(read_xlsx(file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "data", "TerekhovaM_2023_CellImmu", "mmc7.xlsx")))
-meta_ter <- data.frame(read_xlsx(file.path("~", "Dropbox", "CSI", "PAPERS", "ECODA", "data", "TerekhovaM_2023_CellImmu", "mmc2.xlsx")))
+df_ter <- data.frame(read_xlsx(file.path(getwd(), "data", "other", "TerekhovaM_2023_CellImmu", "mmc7.xlsx")))
+meta_ter <- data.frame(read_xlsx(file.path(getwd(), "data", "other", "TerekhovaM_2023_CellImmu", "mmc2.xlsx")))
 
 df_ter <- df_ter[order(df_ter$Donor_id), ]
 meta_ter <- meta_ter[order(meta_ter$Donor_id), ]
