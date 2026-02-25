@@ -825,6 +825,7 @@ plot_pca <- function(feat_mat,
                      mod_score = TRUE,
                      sil_score = FALSE,
                      anosim_score = TRUE,
+                     digits = 3,
                      pointsize = 3,
                      labelsize = 4,
                      coord_equal = TRUE,
@@ -836,22 +837,23 @@ plot_pca <- function(feat_mat,
   res.pca <- prcomp(feat_mat, scale. = scale., rank. = pca_dims)
   dist_mat <- dist(feat_mat)
 
+  format_str <- paste0("%.", digits, "f")
 
   if (anosim_score) {
     anosim_score <- round(vegan::anosim(x = dist_mat, grouping = labels, distance = "euclidean")[["statistic"]], 3)
-    title <- paste0(title, "\nANOSIM score: ", anosim_score)
+    title <- paste0(title, "\nANOSIM score: ", sprintf(format_str, anosim_score))
   }
   if (cluster_score) {
     cluster_score <- clust_eval(dist_mat, labels)
-    title <- paste0(title, "\nARI: ", cluster_score)
+    title <- paste0(title, "\nARI: ", sprintf(format_str, cluster_score))
   }
   if (mod_score) {
     mod_score <- round(calc_modularity(dist_mat, labels, knn_k), 3)
-    title <- paste0(title, "\nModularity score: ", mod_score)
+    title <- paste0(title, "\nModularity score: ", sprintf(format_str, mod_score))
   }
   if (sil_score) {
     sil_score <- round(calc_sil(dist_mat, labels), 3)
-    title <- paste0(title, "\nSilhouette score: ", sil_score)
+    title <- paste0(title, "\nSilhouette score: ", sprintf(format_str, sil_score))
   }
 
   if (plotly_3d) {
@@ -913,11 +915,14 @@ plot_mds <- function(dist_mat,
                      mod_score = TRUE,
                      sil_score = FALSE,
                      anosim_score = TRUE,
+                     digits = 3,
                      pointsize = 3,
                      labelsize = 4,
                      coord_equal = TRUE,
                      axes = c(1, 2)) {
   mds_res <- cmdscale(dist_mat, k = max(axes), eig = TRUE)
+
+  format_str <- paste0("%.", digits, "f")
 
   # Create a data frame for ggplot
   mds_df <- data.frame(
@@ -928,19 +933,19 @@ plot_mds <- function(dist_mat,
 
   if (anosim_score) {
     anosim_score <- round(vegan::anosim(x = dist_mat, grouping = labels, distance = "euclidean")[["statistic"]], 3)
-    title <- paste0(title, "\nANOSIM score: ", anosim_score)
+    title <- paste0(title, "\nANOSIM score: ", sprintf(format_str, anosim_score))
   }
   if (cluster_score) {
     cluster_score <- clust_eval(dist_mat, labels)
-    title <- paste0(title, "\nARI: ", cluster_score)
+    title <- paste0(title, "\nARI: ", sprintf(format_str, cluster_score))
   }
   if (mod_score) {
     mod_score <- round(calc_modularity(dist_mat, labels, knn_k), 3)
-    title <- paste0(title, "\nModularity score: ", mod_score)
+    title <- paste0(title, "\nModularity score: ", sprintf(format_str, mod_score))
   }
   if (sil_score) {
     sil_score <- round(calc_sil(dist_mat, labels), 3)
-    title <- paste0(title, "\nSilhouette score: ", sil_score)
+    title <- paste0(title, "\nSilhouette score: ", sprintf(format_str, sil_score))
   }
 
   # 3. Calculate "Variance Explained" for MDS axes (GoF)
