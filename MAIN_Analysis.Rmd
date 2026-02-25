@@ -2324,7 +2324,7 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_modularity.pdf"),
        height = 6)
 ```
 
-## Figure 4 A: Plot feature selection
+## Figure 4 AB: Plot feature selection
 
 Surprisingly, even at the lowest number highly variable cell types (i.e. variance explained of 10% -\> \>=2 cell types) the average biological separation is quite very high. Different daatasets can do with a different number of highly variable cell types (separation plateaus out at different levels of variance explained % and number of cell types retained).
 
@@ -2371,9 +2371,6 @@ p1 <- df_results_sub %>%
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1),
         legend.position = "none")
 print(p1)
-# ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_ECODAfeatureselectionHVC.pdf"),
-#        width = 4,
-#        height = 4)
 
 p2 <- df_results_sub %>%
   ggplot(aes(x = method, y = n_features)) +
@@ -2405,7 +2402,7 @@ combined_plot <- (p2 / p1) +
        shape = "Dataset", 
        linetype = "Dataset")
 print(combined_plot)
-ggsave(file.path(path_plots, "Figure_4_A_featureselectionHVC_barplot_anosim.pdf"),
+ggsave(file.path(path_plots, "Figure_4_AB_featureselectionHVC_barplot_anosim.pdf"),
        width = 5.5,
        height = 6)
 ```
@@ -2434,7 +2431,7 @@ test_lr
 test_clr[, 1] * 2 - test_lr
 ```
 
-#### Adams
+#### Figure 4 C: Adams
 
 ```{r fig.height=3, fig.width=7}
 ds <- "Adams"
@@ -2444,15 +2441,16 @@ feat_mat <- result_list$bmark[[ds]]$ECODA_authors_HR$feat_mat[, colnames(feat_ma
 
 labels <- result_list$bmark[[ds]]$ECODA_authors_HR$labels
 df_logr <- feat_mat_recalc[, 1, drop = FALSE] * 2
+
 df_logr$Groups <- labels
-avg_sep_score <- calc_avg_sep_score(feat_mat, labels = labels, digits = 3)
+avg_sep_score <- calc_avg_sep_score(dist(feat_mat), labels = labels, digits = 3)
 
 p1 <- plot_pca(
   feat_mat = feat_mat,
   labels = labels,
-  cluster_score = FALSE,mod_score = FALSE, anosim_score = TRUE,
+  cluster_score = FALSE,mod_score = FALSE, anosim_score = FALSE,
   coord_equal = TRUE,
-  # title = paste("Separation score:", avg_sep_score),
+  title = "Adams",
   n_ct_show = 4, invisible = "quali", repel = TRUE, pointsize = 2
 )
 
@@ -2468,19 +2466,18 @@ p2 <- ggplot(df_logr, aes(x = Groups, y = !!sym(colnames(df_logr)[1]), fill = Gr
       "Log ratio\n",
       colnames(feat_mat_recalc)[1], " / ", colnames(feat_mat_recalc)[2]
     )
-  ) +
-  ggtitle(paste0("ANOSIM: ", round(result_list$bmark[[ds]]$ECODA_authors_HR_top_varexp0$scores$anosim_score, 3))) &
+  ) &
   NoLegend()
 
 
 wrap_plots(list(p1, p2)) +
   plot_layout(nrow = 1, widths = c(2.5, 1))
-ggsave(file.path(path_plots, "featureselectionHVC_PCA_adams.pdf"),
+ggsave(file.path(path_plots, "Figure_4_C_featureselectionHVC_PCA_adams.pdf"),
        width = 7,
        height = 3)
 ```
 
-#### Kfoury
+#### Figure 4 D: Kfoury
 
 ```{r fig.height=3, fig.width=7}
 ds <- "Kfoury"
@@ -2491,14 +2488,14 @@ feat_mat <- result_list$bmark[[ds]]$ECODA_authors_HR$feat_mat[, colnames(feat_ma
 labels <- result_list$bmark[[ds]]$ECODA_authors_HR$labels
 df_logr <- feat_mat_recalc[, 1, drop = FALSE] * 2
 df_logr$Groups <- labels
-avg_sep_score <- calc_avg_sep_score(feat_mat, labels = labels, digits = 3)
+avg_sep_score <- calc_avg_sep_score(dist(feat_mat), labels = labels, digits = 3)
 
 p1 <- plot_pca(
   feat_mat = feat_mat,
   labels = labels,
-  cluster_score = FALSE,mod_score = FALSE, anosim_score = TRUE,
+  cluster_score = FALSE,mod_score = FALSE, anosim_score = FALSE,
   coord_equal = TRUE,
-  # title = paste("Separation score:", avg_sep_score),
+  title = "Kfoury",
   n_ct_show = 4, invisible = "quali", repel = TRUE, pointsize = 2
 )
 
@@ -2514,13 +2511,12 @@ p2 <- ggplot(df_logr, aes(x = Groups, y = !!sym(colnames(df_logr)[1]), fill = Gr
       "Log ratio\n",
       colnames(feat_mat_recalc)[1], " / ", colnames(feat_mat_recalc)[2]
     )
-  ) +
-  ggtitle(paste0("ANOSIM: ", round(result_list$bmark[[ds]]$ECODA_authors_HR_top_varexp0$scores$anosim_score, 3))) &
+  ) &
   NoLegend()
 
 wrap_plots(list(p1, p2)) +
   plot_layout(nrow = 1, widths = c(2.5, 1))
-ggsave(file.path(path_plots, "featureselectionHVC_PCA_kfoury.pdf"),
+ggsave(file.path(path_plots, "Figure_4_D_featureselectionHVC_PCA_kfoury.pdf"),
        width = 7,
        height = 3)
 ```
@@ -4924,6 +4920,101 @@ df_results_cluster <- df_results %>% filter(score == "sil_score")
 anova_result <- aov(value ~ method, data = df_results_cluster)
 summary(anova_result)
 ```
+
+
+# ---------------------------------------------------------------
+# ---------------------------------------------------------------
+
+# Batch effect
+
+## Joanito dataset
+
+## Load/preprocess
+
+```{r}
+seurat <- readRDS(file.path(path_data, "JoaI_2022_35773407_Nofilt_whole_ECODAprocessed.rds"))
+
+
+seurat@meta.data$cell.type_new <- seurat@meta.data$cell.type
+iCMS <- !is.na(seurat@meta.data$iCMS)
+seurat@meta.data$cell.type_new[iCMS] <- paste0(seurat@meta.data$cell.type[iCMS], "_", ifelse(seurat@meta.data$iCMS[iCMS] == "Normal", "Normal", "Cancer"))
+
+meta <- seurat@meta.data %>%
+  group_by(sample.ID) %>%
+  slice(1) %>%
+  as.data.frame()
+row.names(meta) <- meta$sample.ID
+meta$sample.origin <- gsub("-2", "", meta$sample.origin)
+meta$seqtec <- ifelse(meta$dataset %in% c("CRC-SG1", "KUL5"), "5' seq", "3' seq")
+
+bio_col <- "sample.origin"
+batch_col <- "seqtec"
+
+plot_list <- list()
+```
+
+
+## Plot PCA
+
+### ECODA
+
+```{r}
+feat_mat <- as.data.frame.matrix(table(seurat@meta.data$sample.ID, seurat@meta.data$cell.type_new)) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>%
+  clr()
+
+plot_list[["p_ecoda_bio"]] <- plot_pca(feat_mat, labels = meta[[bio_col]],
+         cluster_score = F, mod_score = F, anosim_score = T,
+         title = "ECODA - Biological groups"
+)
+print(plot_list[["p_ecoda_bio"]])
+
+
+plot_list[["p_ecoda_batch"]] <- plot_pca(feat_mat, labels = meta[[batch_col]],
+         cluster_score = F, mod_score = F, anosim_score = T,
+         title = "ECODA - Batch groups"
+)
+print(plot_list[["p_ecoda_batch"]])
+```
+
+
+### PB
+
+
+#### Without blacklist
+
+```{r}
+pb_norm <- get_pb_deseq2(seurat, sample_col = "sample.ID", black_list = "none")
+
+plot_list[["p_pb_bio"]] <- plot_pca(pb_norm, labels = meta[[bio_col]],
+         cluster_score = F, mod_score = F, anosim_score = T,
+         title = "Pseudobulk - Biological groups"
+)
+print(plot_list[["p_pb_bio"]])
+
+plot_list[["p_pb_batch"]] <- plot_pca(pb_norm, labels = meta[[batch_col]],
+         cluster_score = F, mod_score = F, anosim_score = T,
+         title = "Pseudobulk - Batch groups"
+)
+print(plot_list[["p_pb_batch"]])
+```
+
+# Combine all plots
+
+```{r fig.height=6.5, fig.width=10}
+wrap_plots(plot_list) +
+  plot_layout(nrow = 2)
+  # plot_annotation(tag_levels = 'A') &
+  # theme(
+  #   # legend.position='bottom',
+  #   plot.tag = element_text(size = 16, face = "bold")
+  # )
+ggsave(file.path(path_plots, "Figure_5_batcheffect_Joanito_PCA.pdf"),
+       width = 10,
+       height = 6.5)
+```
+
+
 
 # ---------------------------------------------------------------
 # ---------------------------------------------------------------
