@@ -1,0 +1,482 @@
+---
+title: Standardized Processing of scRNA-seq datasets
+author: "M. Andreatta <massimo.andreatta at unil.ch>, S. Carmona <santiago.carmona at unil.ch>, C. Halter <christian.halter at unil.ch>, J. Garnica <josep.garnicacaparros at unil.ch>"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+---
+
+***
+Dataset name:   Author_Year_PBMID_cohortID (eg. ZhangY_2022_34653365)
+```{r dataset_name}
+ds_name <- "LeeA_2021_34836966"
+```
+***
+
+Set root directory for processing
+```{r set_dir}
+# Set path to the directory were
+# Set path to the directory were to get input and output
+home.path <- file.path("~/Dropbox/CSI/Standardized_SingleCell_Datasets", ds_name)
+
+knitr::opts_chunk$set(echo = T, warning = F,include=T, message=F)
+```
+
+**CHECK**: Make sure the input data and metadata are available in our repository. 
+
+
+# Prepare packages and environtment
+```{r load_packages_functions, message=FALSE}
+# restore packages versions with renv.lock file from github repository
+# renv::activate()
+# renv::restore()
+
+# remotes::install_github("carmonalab/UCell",ref="8e15b1e")
+# remotes::install_github("carmonalab/scGate",ref="c182cc9")
+# remotes::install_github("carmonalab/STACAS",ref="bd73fff")
+# remotes::install_github("carmonalab/ProjecTILs",ref="636a040")
+# remotes::install_github("carmonalab/SignatuR",ref="0aded1d")
+
+library(Seurat) # v5
+library(limma)
+# devtools::install_github("immunogenomics/presto")
+#library(presto)
+#library(SeuratData)
+# library(SeuratDisk)
+
+library(ggplot2)
+library(UCell)
+library(scGate)
+library(SingleCellExperiment)
+library(viridis)
+library(Matrix)
+library(patchwork)
+library(GEOquery)
+library(dplyr)
+library(data.table)
+library(STACAS)
+library(SignatuR)
+
+# load custom functions
+source("Rutils/functions.R")
+
+options(timeout=4000) # increase time out for downloading
+```
+
+Also, increase memory parameters to allocate large vectors, otherwise R might crash
+```{bash create_Renviron}
+#include vector max size
+max_size=200Gb
+
+# create .Renviron file if not present
+if ! [ -a ".Renviron" ]
+then
+  touch .Renviron
+  echo R_MAX_VSIZE=$max_size > .Renviron
+  echo New .Renviron file created!
+else
+  echo .Renviron already present!
+  echo Check size of the allowed vector:
+  cat .Renviron
+fi
+```
+
+
+# Set parameters
+Dataset ID should have 3 letters from Author (Aaa) followed by additional uniquifying letter (A). If multiple cohort, followed by 1 letter from cohort ID separated by dot (e.g. AndA.H; AndB.M; And.C, etc.)
+```{r define_parameters}
+# Assign a short id for this data source
+ID <- "LeeA"
+
+# Assign species of the data
+species <- "human"
+
+#set seed
+my_seed <- 321
+set.seed(my_seed)
+
+# max number of cells per sample (if higher, they will downsampled)
+# make sure to set seed for this step
+ds <- 1000
+
+# Optional: min number of cells per sample, samples with lower number will be discarded
+min.cells <- 200 
+```
+
+
+# Set paths
+Declare the paths in your directory or Dropbox
+```{r}
+# Create directory to store input, output and plots
+dir.create(home.path)
+
+# Create directories for input, output and plots
+input_data_path_root <- file.path(home.path, "data")
+dir.create(file.path(input_data_path_root))
+output_data_path <- file.path(home.path, "output")
+dir.create(file.path(output_data_path))
+output_plots_path <- file.path(home.path,"plots")
+dir.create(file.path(output_plots_path))
+```
+
+# Download data
+If not done before, download data eg from GEO or Zenodo.
+
+* GEO
+```{r download_GEO}
+options(download.file.method.GEOquery = "curl")
+
+require(GEOquery)
+# Set the GEO accession of the data
+geo_acc <- 'GSE154795'
+if(length(list.files(file.path(input_data_path_root,geo_acc)))==0){
+  gse <- getGEO(geo_acc)
+  getGEOSuppFiles(geo_acc, baseDir = input_data_path_root)
+}
+```
+
+
+
+# Load Data
+Depending on the data format at GEO or Zenodo, use different tools to load the datasets into the environment.
+
+RDS files
+```{r load_rds, eval=F}
+fpath <- file.path(input_data_path_root, geo_acc)
+files <- list.files(fpath)
+
+for (file in files) {
+  gunzip(file.path(fpath, file))
+  file_unzipped <- file.path(fpath, gsub(".gz", "", file))
+  if (grepl(".rds", file)) {
+    old_seurat3.1.5_obj <- readRDS(file_unzipped)
+  }
+}
+
+old_seurat3.1.5_obj@version
+
+obj <- CreateSeuratObject(counts = old_seurat3.1.5_obj@assays$RNA$counts,
+                          meta.data = old_seurat3.1.5_obj@meta.data)
+names(obj@meta.data)[names(obj@meta.data) == 'ID'] <- 'Sample'
+obj$Tissue <- "tumor"
+
+rm(old_seurat3.1.5_obj)
+gc()
+```
+
+## Load additional blood samples provided separately by author here: (need to download manually)
+
+https://uclahs.account.box.com/signup/collab/h8aguiiazq?box_source=legacy-external_collab_email&amp;box_action=click_button
+
+```{r}
+h5files <- list.files(file.path(input_data_path_root), pattern = ".h5")
+
+obj.list <- list()
+
+# To match tumor and blood samples, we need to remove the last character from the sample name
+# PBMC sample with an ID LBXXXXP is from the same patient with the tumor with ID LBXXXXT.
+# Not all patients have matching PBMC. There were two healthy donors included in the set,
+patient_ids_tumor_obj <- substr(obj$Sample, 1, nchar(obj$Sample)-1)
+
+for (i in 1:length(h5files)) {
+  print(i)
+  sample_name <- strsplit(h5files[i], "_")[[1]][1]
+  mat <- Read10X_h5(file.path(input_data_path_root, h5files[i]))
+  obj.list[[sample_name]] <- CreateSeuratObject(mat)
+  obj.list[[sample_name]]$Sample <- sample_name
+  obj.list[[sample_name]]$Tissue <- "blood"
+  if (grepl("Donor", sample_name)) {
+    obj.list[[sample_name]]$condition <- "healthy"
+  } else {
+    rows_sample_match <- patient_ids_tumor_obj == substr(sample_name, 1, nchar(sample_name)-1)
+    first_row_sample_match <- which(rows_sample_match)[1]
+    obj.list[[sample_name]]$condition <- as.character(obj$condition[first_row_sample_match])
+    obj.list[[sample_name]]$IDH_status <- as.character(obj$IDH_status[first_row_sample_match])
+    obj.list[[sample_name]]$MGMT <- as.character(obj$MGMT[first_row_sample_match])
+  }
+}
+
+
+obj.blood <- obj.list[[1]]
+
+for (i in 2:length(obj.list)) {
+  print(i)
+  obj.blood <- merge(obj.blood, obj.list[[i]])
+}
+
+obj.blood$condition <- as.factor(obj.blood$condition)
+obj.blood$IDH_status <- as.factor(obj.blood$IDH_status)
+obj.blood$MGMT <- as.factor(obj.blood$MGMT)
+
+obj <- merge(obj, obj.blood)
+
+obj <- JoinLayers(obj)
+
+rm(obj.list, obj.blood, mat)
+gc()
+```
+
+
+**CHECK**:
+
+1. Assess available assays: Are raw counts available or only pre-normalized (eg log2TMP); if pre-normalized, specify how was the normalization performed!
+
+2. Make sure data matrix has genes as rows and cells as columns
+
+3. Include, adapt and standarize cell metadata
+
+4. Modify cell identifiers (`orig.ident`)
+
+5. Standardize gene symbols
+
+6. Add features/genes metadata
+
+
+## 1. Assess available assays
+Asses whether raw counts are available or only pre-normalized (eg log2TMP), if pre-normalized, specify how was the normalization performed at the entry form (`Expression data type`). If some datasets not include raw counts consider discarding them, or if normalization approach is known, de-normalize and normalize data on all datasets.
+***
+**Data input format**: e.g.  pre-normalized, "by total counts, as described in https://doi.org/10.1016/j.cell.2015.04.044"
+***
+
+## 2.  Make sure data matrix has genes as rows and cells as columns
+```{r check_mtx}
+dim(obj)
+obj[1:10,1:10]
+head(colnames(obj))
+```
+
+## 3. Include, adapt and standarize cell metadata
+
+Generate a metadata dataframe including the following variables for each cell in the dataset. If some are not present include NA. If needed adapt metadata (factorize...).
+
++----------------------------+--------------------------------------+
+| Variable                   | Example                              |
++============================+======================================+
+| Original_cell_names        | AAACCTGAGGTTACCT.Pre_P007_b          |
++----------------------------+--------------------------------------+
+| Barcode                    | AAACCTGAGGTTACCT                     |
++----------------------------+--------------------------------------+
+| Study                      | Author_Year_PBMID_cohortID           |
+|                            |                                      |
+|                            | (e.g. ZhangY_2022_34653365)          |
++----------------------------+--------------------------------------+
+| Sample                     | Pre_P007_b                           |
++----------------------------+--------------------------------------+
+| Treatment                  | Pre                                  |
++----------------------------+--------------------------------------+
+| Individual                 | P007                                 |
++----------------------------+--------------------------------------+
+| Tissue                     | blood, tumor, adjacent, LN, other    |
++----------------------------+--------------------------------------+
+| OriginalAnnotationLevel{n} | CD4T                                 |
++----------------------------+--------------------------------------+
+
+```{r adapt_meta}
+# Explore data and modifiy this code accordinly to fill the metadata slots
+cell_names <- colnames(obj)
+cell_names.split <- strsplit(cell_names,"-")
+obj@meta.data[["Original_cell_names"]] <- cell_names
+obj@meta.data[["Barcode"]] <- sapply(cell_names.split,function(x) x[[1]])
+```
+
+## 4. Modify cell identifiers (`orig.ident`)
+To make cell ids compatible with other datasets, append the study ID at the beginning of the original cell name. If available, also add other metadata elements such as Individual, tissue or treatment.
+
+```{r modify_cellID}
+#fields in prefix are separated by dots
+prefix <- paste(obj@meta.data$Sample, obj@meta.data$condition, sep=".")
+
+# underscore delimits end of prefix
+cell_ids <- paste(prefix, obj@meta.data$Barcode, sep = '_') 
+obj <- RenameCells(obj, new.names = cell_ids)
+```
+
+## 5. Standardize gene symbols 
+Map gene ids with our reference gene symbols using `STACAS::StandardizeGeneSymbols()`. Load EnsemblGenes105_Hsa_GRCh38.p13 and EnsemblGenes105_Mmu_GRCm39 retrieved at 14.02.2022 from [aux](https://github.com/carmonalab/scRNAseq_data_processing/master/aux), or already in you local directory if you cloned the repository.
+
+```{r load_geneRef}
+# load gene symbols dataset
+if (species == "mouse") {
+   geneRef_file <- "aux/EnsemblGenes105_Mmu_GRCm39.txt.gz"
+} else if (species == "human") {
+   geneRef_file <- "aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+}
+geneRef <- fread(geneRef_file)
+```
+
+
+```{r Standar_gene_Symbol}
+# Standarize gene symbols using STACAS
+obj <- STACAS::StandardizeGeneSymbols(obj, geneRef, assay = "RNA", slots = "counts")
+
+# adapt metafeatures
+# there incompatibilites with newer version of STACAS and Seurat v5
+obj[["RNA"]]@meta.features <- data.frame(row.names = rownames(obj))
+```
+
+CHECK slots
+TODO If data pre-normalized, apply inverse of NormalizeData() into "counts" slot. Then we can run NormalizeData() routinely
+
+```{r}
+head(obj@meta.data)
+```
+
+
+CHECK are data pre-normalized? decide whether to Normalize
+
+```{r norm_Data}
+obj <- NormalizeData(obj)
+```
+
+
+
+# Quality control measurement and filtering
+
+## 1. Ribosomal and mitochondrial content, and sequencing complexity
+Use `SignatuR` package, including ribosomal and mitochondrial gene sets, to compute their relative content. Also, compute the sequencing complexity by computing the log10 ratio of genes detected per UMI.
+
+
+```{r define_qc_metrics}
+#Get mitochondrial and ribosomal signatures
+ribo.genes <- GetSignature(SignatuR$Hs$Compartments$Ribo)$Ribo
+mito.genes <- GetSignature(SignatuR$Hs$Compartments$Mito)$Mito
+
+# Compute ribosomal and mitochondrial content and add to Seurat object metadata
+obj <- AddMetaData(obj, metadata = PercentageFeatureSet(obj, features = ribo.genes[ribo.genes %in% rownames(obj)]), col.name = "percent.ribo")
+obj <- AddMetaData(obj, metadata = PercentageFeatureSet(obj, features = mito.genes[mito.genes %in% rownames(obj)]), col.name = "percent.mito")
+
+# Compute the ratio of number of genes/features and number of counts/UMIs
+obj$log10GenesPerUmi <- log10(obj$nFeature_RNA) / 
+                                log10(obj$nCount_RNA)
+```
+
+## 2. Evaluate QC metrics and filter dataset
+QC-based metric is mostly done manually by inspecting the distribution of the QC metrics. QC metrics can largely change between samples, cell types included (heterogeneity), sequencing technology, and batch. Take into account that number of reads (`nCount`) are only informative if raw counts are available, otherwise they cannot be used of QC filtering.
+
+Here are shown some guidelines for QC-based filtering:
+
+|--------------------------------------|---------------------------------------------------------------------|
+| QC metric                            | Guidelines for filtering                                            |
+|--------------------------------------|---------------------------------------------------------------------|
+| Ribosomal content                    | \> 0.5% & \< 60%                                                    |
+| Mitochondrial content                | \< 10-20%                                                           |
+| Number of genes/features (nFeatures) | \>400 and custom upper limit based on your data                     |
+| Number of counts/UMI (nCount)        | \>800 and custom and custom upper limit based on your data          |
+| Ratio Features/Counts                | \> 0.6                                                              |
+| Special genes                        | Custom: Consider remove some of these genes for downstream analysis |
+| Special genes                        | E.g. MALAT1                                                         |
+|--------------------------------------|---------------------------------------------------------------------|
+
+For MALAT1 as a QC criterion, see:
+https://www.biorxiv.org/content/10.1101/2024.04.18.590104v1
+
+### How many cells per sample?
+```{r}
+sample.size.pre <- sort(table(obj$Sample))
+sample.size.pre
+barplot(sort(sample.size.pre), las=2)
+```
+
+
+### CHECK: distributions across samples
+```{r qc_plots0, fig.height= 10}
+Idents(obj) <- "Sample"
+VlnPlot(obj,
+        features = c("nFeature_RNA", "nCount_RNA",
+                     "percent.ribo","percent.mito",
+                     "PTPRC","MALAT1"),
+        ncol = 3, pt.size=0)
+```
+
+### Custom thresholds
+Review after assessing the plots!
+
+```{r set_cutoffs}
+cutoffs <- list()
+cutoffs[["percent.ribo"]] <- c(min=0.5,max=60)
+cutoffs[["percent.mito"]] <- c(min=0,max=20)
+cutoffs[["nFeature_RNA"]] <- c(min=0,max=10000) 
+cutoffs[["nCount_RNA"]] <- c(min=200,max=60000) # raw counts present??
+cutoffs[["log10GenesPerUmi"]] <- 0.6
+cutoffs[["MALAT1"]] <- 2
+print(cutoffs)
+```
+
+
+### Standard check
+
+```{r probs}
+probs <- c(0.001, 0.005, 0.01, 0.02,
+           0.98, 0.99, 0.995, 0.999)
+for (va in names(cutoffs)) {
+  cat(va, "\n")
+  if (va %in% names(obj@meta.data)) {
+    print(quantile(obj@meta.data[[va]],
+                   probs = probs)
+    )
+  } else {
+    print(quantile(FetchData(obj, vars = va)[[1]],
+                   probs = probs))
+  }
+}
+```
+
+After having evaluated the QC metrics values and distribution, modify cutoffs if needed and then proceed to subset your data based on those. Also, evaluate how many cells are being removed based on your cutoffs.
+
+```{r subset_seurat fig.height= 10}
+# store initial number of cells
+initialCellNum <- ncol(obj)
+message(paste("Original number of cells:", initialCellNum))
+
+# Perform subsetting using cutoffs list and qc metrics considered
+obj <- subset(obj, subset = 
+                        nFeature_RNA >= cutoffs[["nFeature_RNA"]]["min"] &
+                        nFeature_RNA < cutoffs[["nFeature_RNA"]]["max"] & 
+                        # raw counts present??
+                        nCount_RNA   >= cutoffs[["nCount_RNA"]]["min"]   & 
+                        nCount_RNA   < cutoffs[["nCount_RNA"]]["max"]   &  
+                        percent.ribo >= cutoffs[["percent.ribo"]]["min"] & 
+                        percent.ribo < cutoffs[["percent.ribo"]]["max"] &
+                        percent.mito >= cutoffs[["percent.mito"]]["min"] &
+                        percent.mito < cutoffs[["percent.mito"]]["max"] &
+                        log10GenesPerUmi > cutoffs[["log10GenesPerUmi"]] &
+                        MALAT1 > cutoffs[["MALAT1"]]
+                      )
+
+# Print and evaluate the cell drop out after filtering
+l <- ncol(obj)
+message(sprintf("Number of cells after QC: %i (%.2f %% of input)", l, 100*l/initialCellNum))
+```
+
+
+# Downsample, process dataset and make diagnostic plots
+
+At this point we should only have in our datasets high quality cells. We will remove samples with very few cells and downsample large ones, in order to have a similar contribution from all patients and samples. Downsampling large samples also speeds up downstream computations.
+
+We will save the datasets with all high-quality cells (whole) and datasets without small samples and downsampling large ones (light).
+
+
+### How many cells per sample after QC?
+```{r, fig.height = 8, fig.width = 20}
+barplot(sort(sample.size.pre), las=2)
+
+sample.size.post <- table(obj$Sample)[names(sample.size.pre)]
+sample.size.post
+barplot((sample.size.post), las=2)
+barplot(sort(sample.size.post), las=2)
+
+sample.size.filterRatio <- round((sample.size.pre - sample.size.post)/sample.size.pre*100,2)
+sample.size.filterRatio
+barplot(sample.size.filterRatio[names(sort(sample.size.post))], las=2)
+```
+
+
+# Export standardized datasets
+```{r}
+saveRDS(obj,file.path(output_data_path,paste0(ds_name,"whole.rds")))
+# saveRDS(obj,file.path(output_data_path,paste0(ds_name,"light.rds")))
+```
+
+# Consider saving as H5 (https://github.com/mojaveazure/seurat-disk) for interoperability with Bioconductor and Python; eg SaveH5Seurat() 

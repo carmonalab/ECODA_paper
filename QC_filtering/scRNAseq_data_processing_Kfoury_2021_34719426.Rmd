@@ -1,0 +1,263 @@
+---
+title: Standardized Processing of scRNA-seq datasets
+author: "M. Andreatta <massimo.andreatta at unil.ch>, S. Carmona <santiago.carmona at unil.ch>, C. Halter <christian.halter at unil.ch>, J. Garnica <josep.garnicacaparros at unil.ch>"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+---
+
+***
+Dataset name:   Author_Year_PBMID_cohortID (eg. ZhangY_2022_34653365)
+```{r dataset_name}
+ds_name <- "Kfoury_2021_34719426"
+```
+***
+
+Set root directory for processing
+```{r set_dir}
+# Set path to the directory were
+# Set path to the directory were to get input and output
+home.path <- file.path("~/Dropbox/CSI/Standardized_SingleCell_Datasets", ds_name)
+
+knitr::opts_chunk$set(echo = T, warning = F,include=T, message=F)
+```
+
+**CHECK**: Make sure the input data and metadata are available in our repository. 
+
+# Prepare packages and environtment
+```{r load_packages_functions, message=FALSE}
+# restore packages versions with renv.lock file from github repository
+renv::activate()
+renv::restore()
+
+# load packages
+pckgs <- c("tidyverse", "Seurat", "UCell", "scGate",
+           "SingleCellExperiment","Matrix", "patchwork",
+           "data.table", "STACAS", "SignatuR")
+for(package in pckgs){
+  library(package, character.only = T)
+}
+
+# load custom functions
+source("Rutils/functions.R")
+
+options(timeout=4000) # increase time out for downloading
+```
+
+Also, increase memory parameters to allocate large vectors, otherwise R might crash
+```{bash create_Renviron}
+#include vector max size
+max_size=200Gb
+
+# create .Renviron file if not present
+if ! [ -a ".Renviron" ]
+then
+  touch .Renviron
+  echo R_MAX_VSIZE=$max_size > .Renviron
+  echo New .Renviron file created!
+else
+  echo .Renviron already present!
+  echo Check size of the allowed vector:
+  cat .Renviron
+fi
+```
+
+
+# Set parameters
+Dataset ID should have 3 letters from Author (Aaa) followed by additional uniquifying letter (A). If multiple cohort, followed by 1 letter from cohort ID separated by dot (e.g. AndA.H; AndB.M; And.C, etc.)
+```{r define_parameters}
+# Assign a short id for this data source
+ID <- "KfoY"
+
+# Assign species of the data
+species <- "human"
+
+#set seed
+my_seed <- 321
+set.seed(my_seed)
+
+# max number of cells per sample (if higher, they will downsampled)
+# make sure to set seed for this step
+ds <- 1000
+
+# Optional: min number of cells per sample, samples with lower number will be discarded
+min.cells <- 500 
+```
+
+
+# Set paths
+Declare the paths in your directory or Dropbox
+```{r}
+# Create directory to store input, output and plots
+dir.create(home.path)
+
+# Create directories for input, output and plots
+input_data_path_root <- file.path(home.path, "data")
+dir.create(file.path(input_data_path_root))
+output_data_path <- file.path(home.path, "output")
+dir.create(file.path(output_data_path))
+output_plots_path <- file.path(home.path,"plots")
+dir.create(file.path(output_plots_path))
+```
+
+# Download data
+
+```{r download_GEO}
+download.file(url = "https://ghoffman-cdn.s3.us-east-2.amazonaws.com/dreamlet_analysis/data/Kfoury_CancerCell_2021.h5ad")
+```
+
+
+
+# Load Data
+Depending on the data format at GEO or Zenodo, use different tools to load the datasets into the environment.
+
+RDS files
+```{r load_rds, eval=F}
+install.packages("anndata")
+library(anndata)
+data <- read_h5ad(file.path(input_data_path_root, "Kfoury_CancerCell_2021.h5ad"))
+data_seurat <- CreateSeuratObject(counts = t(as.matrix(data$X)), meta.data = data$obs, min.features = 1, min.cells = 1)
+```
+
+**CHECK**:
+
+1. Assess available assays: Are raw counts available or only pre-normalized (eg log2TMP); if pre-normalized, specify how was the normalization performed!
+
+2. Make sure data matrix has genes as rows and cells as columns
+
+3. Include, adapt and standarize cell metadata
+
+4. Modify cell identifiers (`orig.ident`)
+
+5. Standardize gene symbols
+
+6. Add features/genes metadata
+
+
+## 3. Include, adapt and standarize cell metadata
+
+Generate a metadata dataframe including the following variables for each cell in the dataset. If some are not present include NA. If needed adapt metadata (factorize...).
+
++----------------------------+--------------------------------------+
+| Variable                   | Example                              |
++============================+======================================+
+| Original_cell_names        | AAACCTGAGGTTACCT.Pre_P007_b          |
++----------------------------+--------------------------------------+
+| Barcode                    | AAACCTGAGGTTACCT                     |
++----------------------------+--------------------------------------+
+| Study                      | Author_Year_PBMID_cohortID           |
+|                            |                                      |
+|                            | (e.g. ZhangY_2022_34653365)          |
++----------------------------+--------------------------------------+
+| Sample                     | Pre_P007_b                           |
++----------------------------+--------------------------------------+
+| Treatment                  | Pre                                  |
++----------------------------+--------------------------------------+
+| Individual                 | P007                                 |
++----------------------------+--------------------------------------+
+| Tissue                     | blood, tumor, adjacent, LN, other    |
++----------------------------+--------------------------------------+
+| OriginalAnnotationLevel{n} | CD4T                                 |
++----------------------------+--------------------------------------+
+
+```{r adapt_meta}
+# Explore data and modifiy this code accordinly to fill the metadata slots
+
+data_seurat[["Original_cell_names"]] <- row.names(data_seurat@meta.data)
+names(data_seurat@meta.data)[names(data_seurat@meta.data) == 'tissue'] <- 'Tissue'
+names(data_seurat@meta.data)[names(data_seurat@meta.data) == 'subject.id'] <- 'Individual'
+names(data_seurat@meta.data)[names(data_seurat@meta.data) == 'geoid'] <- 'Sample'
+names(data_seurat@meta.data)[names(data_seurat@meta.data) == 'barcode'] <- 'Barcode'
+data_seurat$Barcode <- sapply(strsplit(data_seurat$Barcode, "_"),function(x) x[[2]])
+
+head(data_seurat@meta.data)
+```
+
+## 4. Modify cell identifiers (`orig.ident`)
+To make cell ids compatible with other datasets, append the study ID at the beginning of the original cell name. If available, also add other metadata elements such as Individual, tissue or treatment.
+
+```{r modify_cellID}
+#fields in prefix are separated by dots
+prefix <- paste(ID, data_seurat$Individual, data_seurat$Tissue, data_seurat$Status,sep=".")
+
+# underscore delimits end of prefix
+cell_ids <- paste(prefix, data_seurat$Barcode, sep = '_') 
+colnames(data_seurat) <- cell_ids
+data_seurat[1:10,1:2]
+```
+
+## 5. Standardize gene symbols 
+Map gene ids with our reference gene symbols using `STACAS::StandardizeGeneSymbols()`. Load EnsemblGenes105_Hsa_GRCh38.p13 and EnsemblGenes105_Mmu_GRCm39 retrieved at 14.02.2022 from [aux](https://github.com/carmonalab/scRNAseq_data_processing/master/aux), or already in you local directory if you cloned the repository.
+
+```{r load_geneRef}
+# load gene symbols dataset
+if (species == "mouse") {
+   geneRef_file <- "aux/EnsemblGenes105_Mmu_GRCm39.txt.gz"
+} else if (species == "human") {
+   geneRef_file <- "aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+}
+geneRef <- fread(geneRef_file)
+```
+
+
+```{r Standar_gene_Symbol}
+# Standarize gene symbols using STACAS
+data_seurat <- STACAS::StandardizeGeneSymbols(data_seurat, geneRef, assay = "RNA", slots = "counts")
+
+# adapt metafeatures
+# there incompatibilites with newer version of STACAS and Seurat v5
+data_seurat[["RNA"]]@meta.features <- data.frame(row.names = rownames(data_seurat))
+```
+
+CHECK slots
+TODO If data pre-normalized, apply inverse of NormalizeData() into "counts" slot. Then we can run NormalizeData() routinely
+
+```{r}
+head(data_seurat@meta.data)
+```
+
+### Clean cell metadata  (custom)
+
+CHECK: cell metadata fields: 
+Sample, Individual, Tissue c("blood","tumor","adjacent","LN","other"), Study, OriginalAnnotationLevel1, OriginalAnnotationLevel2, OriginalAnnotationLevel3...
+Factorize or change labels if needed.
+
+```{r clean_metadata}
+data_seurat$orig.ident <- cell_ids
+
+data_seurat$OriginalAnnotationLevel1 <- data_seurat$cells
+#data_seurat$OriginalAnnotationLevel2 <- 
+#data_seurat$OriginalAnnotationLevel3 <- 
+head(data_seurat)
+```
+
+## 6. Add features/genes metadata
+```{r add_gene_metadata}
+# Remove duplicates from Gene symbols reference
+features_meta_data <- geneRef[!duplicated(geneRef$`Gene name`),]
+# Convert to dataframe
+setDF(features_meta_data)
+
+rownames(features_meta_data) <- features_meta_data$`Gene name`
+# in Seurat, underscores ('_'), are replaced with dashes ('-')
+# in gene names; 5S_rRNA; but these just a few
+rownames(features_meta_data) <- gsub("_","-",rownames(features_meta_data)) 
+features_meta_data <- features_meta_data[rownames(data_seurat),]
+
+if ( all.equal(rownames(features_meta_data),
+               as.character(rownames(data_seurat))) ) {
+  data_seurat[["RNA"]] <- AddMetaData(data_seurat[["RNA"]],
+                                      metadata = features_meta_data)
+  rm(geneRef,features_meta_data)
+}
+```
+
+
+
+# Export standardized datasets
+```{r}
+saveRDS(data_seurat,file.path(output_data_path,paste0(ds_name,".rds")))
+# saveRDS(data_seurat,file.path(output_data_path,paste0(ds_name,"light.rds")))
+```

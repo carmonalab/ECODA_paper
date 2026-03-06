@@ -1,0 +1,348 @@
+---
+title: Standardized Processing of scRNA-seq datasets, WuS_2021_34493872
+author: "M. Andreatta <massimo.andreatta at unil.ch>"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+---
+
+***
+Dataset name: WuS_2021_34493872 (Author_Year_PBMID_cohortID)
+***
+
+scRNA-Seq (Chromium, 10X Genomics) on 26 primary tumors from three major clinical subtypes of breast cancer, including 11 ER+, 5 HER2+ and 10 TNBC.
+
+```{r, message=FALSE}
+renv::activate()
+renv::restore()
+
+#remotes::install_github("carmonalab/scGate",ref="v1.2.0")
+#remotes::install_github("carmonalab/SignatuR",ref="716d829")
+#renv::snapshot()
+
+library(ggplot2)
+library(Seurat)
+library(UCell)
+library(scGate)
+library(SingleCellExperiment)
+library(viridis)
+library(Matrix)
+library(patchwork)
+library(R.utils)
+library(data.table)
+source("functions.R")
+my_seed <- 321
+```
+
+# Set paths
+```{r}
+set.seed(my_seed)
+ds_name <- "WuS_2021_34493872"
+ID <- "WuS"
+species <- "human"
+
+input_data_path_root <- file.path("~/Dropbox/CSI/Standardized_SingleCell_Datasets",ds_name,"data")
+
+output_data_path <- file.path("~/Dropbox/CSI/Standardized_SingleCell_Datasets",ds_name,"output")
+dir.create(file.path(output_data_path), recursive = T)
+
+output_plots_path <- file.path("~/Dropbox/CSI/Standardized_SingleCell_Datasets",ds_name,"plots")
+dir.create(file.path(output_plots_path), recursive = T)
+```
+
+
+#Load data
+
+GEO entry: GSE176078
+
+```{r}
+data.files <- list()
+fpath <- file.path(input_data_path_root,"BrCa_Atlas_Count_out")
+
+aggr <- ReadMtx(mtx=sprintf("%s/matrix.mtx.gz", fpath),
+               cells=sprintf("%s/barcodes.tsv.gz", fpath),
+               features=sprintf("%s/features.tsv.gz", fpath)
+               )
+```
+
+**CHECK**:
+* Make sure data matrix has genes as rows and cells as columns
+
+* Map gene ids with our reference gene symbols. EnsemblGenes105_Hsa_GRCh38.p13 and EnsemblGenes105_Mmu_GRCm39 retreived 14.02.2022 and stored in EnsemblGenes105_Mmu_GRCm39.rds (only unique Gene stable ID)
+
+* To make cell ids compatible with other datasets, append the study ID at the beginning of cell name
+
+* Are raw counts available or only pre-normalized (eg log2TMP); if pre-normalize specify how was the normalization performed
+
+***
+Data input format:   pre-normalized, "by total counts, as described in https://doi.org/10.1016/j.cell.2015.04.044"
+***
+
+
+
+# Standardize gene symbols in expression matrix  (custom)
+```{r}
+if (species == "mouse") {
+   geneRef_file <- "aux/EnsemblGenes105_Mmu_GRCm39.txt.gz"
+} else {
+   geneRef_file <- "aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+}
+geneRef <- data.table::fread(geneRef_file)
+
+aggr <- standardizeGeneSymbols(aggr, EnsemblGeneTable=geneRef)
+```
+
+# Create Seurat objects (custom)
+```{r}
+data_seurat<- CreateSeuratObject(counts=aggr, project=ds_name, 
+                                 assay="RNA", min.cells = 0, min.features = 0)
+
+```
+
+# Add metadata (if available)
+```{r}
+mpath <- file.path(input_data_path_root,"Whole_miniatlas_meta.csv")
+
+meta <- read.csv(mpath)
+#first row is an extra header
+meta <- meta[-1,]
+
+rownames(meta) <- meta$NAME
+
+#check barcodes are consistent
+identical(rownames(meta), rownames(data_seurat@meta.data))
+
+data_seurat <- AddMetaData(data_seurat, metadata=meta)
+```
+
+# append the study ID at the beginning of cell name  (custom)
+```{r}
+#We do it on the Seurat object, after adding metadata
+
+data_seurat <- RenameCells(data_seurat, add.cell.id = 'WuS')
+```
+
+CHECK slots
+
+TODO If data pre-normalized apply inverse of NormalizeData() into "counts" slot
+
+```{r}
+head(data_seurat@meta.data$nCount_RNA)
+```
+
+# Clean cell metadata  (custom)
+
+CHECK: cell metadata fields: 
+Sample, Individual, Tissue c("blood","tumor","adjacent","LN","other"), Study, OriginalAnnotationLevel1, OriginalAnnotationLevel2, OriginalAnnotationLevel3
+```{r}
+colnames(data_seurat@meta.data)
+
+table(data_seurat@meta.data$celltype_major)
+table(data_seurat@meta.data$celltype_minor)
+
+data_seurat$Study <- ID
+data_seurat$Tissue <- "tumor"
+data_seurat$Sample <- data_seurat$Patient
+
+data_seurat$OriginalAnnotationLevel1 <- data_seurat@meta.data$celltype_major
+data_seurat$OriginalAnnotationLevel2 <- data_seurat@meta.data$celltype_minor
+data_seurat$OriginalAnnotationLevel3 <- NA
+
+data_seurat$nCount_RNA <- as.numeric(data_seurat$nCount_RNA)
+data_seurat$nFeature_RNA <- as.numeric(data_seurat$nFeature_RNA)
+
+head(data_seurat@meta.data)
+```
+
+
+CHECK are data pre-normalized? decide whether to Normalize
+```{r}
+data_seurat <- NormalizeData(data_seurat) 
+```
+
+# Calculate variable genes
+
+```{r}
+#Get blocklists from SignatuR
+library(SignatuR)
+
+#genesBlocklist <- readRDS("aux/genes.blocklist.rds")
+if (species == "mouse") {
+   sig <- SignatuR$Mm
+   
+   genesBlocklist <- GetSignature(sig$Programs)
+   genesBlocklist <- c(genesBlocklist, GetSignature(sig$Compartments))
+} else {
+   sig <- SignatuR$Hs
+   
+   genesBlocklist <- GetSignature(sig$Programs)
+   genesBlocklist <- c(genesBlocklist, GetSignature(sig$Compartments))
+   genesBlocklist <- c(genesBlocklist, GetSignature(sig$Blocklists))
+}
+
+set.seed(my_seed)
+data_seurat <- select.variable.genes(data_seurat,
+                                 nfeat=1000,
+                                 blacklist=genesBlocklist,
+                                 plot=TRUE)
+
+paste("# variable genes",length(data_seurat@assays$RNA@var.features))
+
+```
+
+
+# Calculate Ribosomal and mitochondrial content
+```{r}
+if (species == "mouse") {
+  patterns <- c("^Rp","^mt-")
+} else {
+  patterns <- c("^RP[LS]","^MT-")
+}
+
+pc.ribo <- PercentageFeatureSet(data_seurat, pattern = patterns[1])
+pc.mito <- PercentageFeatureSet(data_seurat, pattern = patterns[2])
+
+data_seurat <- AddMetaData(data_seurat, metadata = pc.ribo, col.name = "percent.ribo")
+data_seurat <- AddMetaData(data_seurat, metadata = pc.mito, col.name = "percent.mito")
+```
+
+
+# Filter out outliers & low quality cells (custom)
+```{r fig.height= 5}
+Idents(data_seurat) <- "Sample"
+VlnPlot(data_seurat, features = c("nFeature_RNA", "nCount_RNA","percent.ribo","percent.mito"), ncol = 2, pt.size=0.01)
+```
+# Standard check
+```{r}
+probs <- list()
+
+probs$percent.ribo <- quantile(data_seurat$percent.ribo, probs=c(0.001, 0.005, 0.01, 0.02, 0.98, 0.99, 0.995, 0.999))
+probs$percent.mito <- quantile(data_seurat$percent.mito, probs=c(0.001, 0.005, 0.01, 0.02, 0.98, 0.99, 0.995, 0.999))
+probs$nFeature_RNA <- quantile(data_seurat$nFeature_RNA, probs=c(0.001, 0.005, 0.01, 0.02, 0.98, 0.99, 0.995, 0.999))
+probs$nCount_RNA <- quantile(data_seurat$nCount_RNA, probs=c(0.001, 0.005, 0.01, 0.02, 0.98, 0.99, 0.995, 0.999))
+
+as.data.frame(probs)
+```
+
+# Custom thresholds
+```{r}
+cutoffs <- list()
+cutoffs[["percent.ribo"]] <- c(min=0,max=50)
+cutoffs[["percent.mito"]] <- c(min=0,max=20)
+cutoffs[["nFeature_RNA"]] <- c(min=200,max=7500) 
+cutoffs[["nCount_RNA"]] <- c(min=300,max=50000)
+print(cutoffs)
+```
+
+# (custom)
+
+CHECK: if pre-processed nCount_RNA makes no sense
+
+```{r fig.height= 10}
+
+initialCellNum <- ncol(data_seurat)
+message(paste("Original number of cells:",ncol(data_seurat)))
+data_seurat <- subset(data_seurat, subset = 
+                        nFeature_RNA > cutoffs[["nFeature_RNA"]]["min"] & nFeature_RNA < cutoffs[["nFeature_RNA"]]["max"] & 
+                        nCount_RNA   > cutoffs[["nCount_RNA"]]["min"]   & nCount_RNA   < cutoffs[["nCount_RNA"]]["max"]   &
+                        percent.ribo > cutoffs[["percent.ribo"]]["min"] & percent.ribo < cutoffs[["percent.ribo"]]["max"] &
+                        percent.mito > cutoffs[["percent.mito"]]["min"] & percent.mito < cutoffs[["percent.mito"]]["max"] 
+                      )
+
+l <- ncol(data_seurat)
+
+message(sprintf("Number of cells after QC: %i (%.2f %% of input)", l, 100*l/initialCellNum))
+```
+
+
+```{r fig.height= 10}
+Idents(data_seurat) <- "Sample"
+VlnPlot(data_seurat, features = c("nFeature_RNA", "nCount_RNA","percent.ribo","percent.mito","PTPRC","CD2"), ncol = 3, pt.size=0.01)
+ggsave(file.path(output_plots_path,"QC_Vln.png"),width = 10, height = 8)
+```
+
+# Scale data; run default PCA & UMAP
+```{r}
+set.seed(my_seed)
+ndim <- 30
+
+data_seurat <- ScaleData(data_seurat)
+data_seurat <- RunPCA(data_seurat, npcs = ndim, ndims.print = 1:5, nfeatures.print = 5)
+data_seurat <- RunUMAP(data_seurat, reduction = "pca", dims = 1:ndim, seed.use=my_seed)
+```
+
+# UMAP plots
+```{r fig.height=5}
+pll <- list()
+pll[[1]] <- DimPlot(data_seurat, reduction = "umap", group.by = "Patient") + theme(aspect.ratio=1)
+pll[[2]] <- DimPlot(data_seurat, reduction = "umap", group.by = "OriginalAnnotationLevel1", label=T) + 
+  theme(aspect.ratio=1) + NoLegend()
+pll[[3]] <- DimPlot(data_seurat, reduction = "umap", group.by = "OriginalAnnotationLevel2", label=T) + 
+  theme(aspect.ratio=1) + NoLegend()
+
+wrap_plots(pll)
+ggsave(file.path(output_plots_path,"UMAP_meta.png"),width = 14, height = 4)
+```
+
+
+
+```{r fig.height=6}
+myFeatures <- c("PTPRC","EPCAM","CSF1R","CD68","CD2","CD3D","MS4A1","BANK1","JCHAIN","PECAM1","PDGFRB","KLRD1","FAP","PDGFRA","COL1A1")
+
+FeaturePlot(data_seurat, reduction = "umap", features = myFeatures, coord.fixed=T, ncol=5) 
+
+ggsave(file.path(output_plots_path,"UMAP_features.png"),width = 20, height = 10)
+```
+
+
+# (optional) run scGate
+```{r, eval=T}
+set.seed(my_seed)
+#Load default models from DB
+models.DB <- scGate::get_scGateDB(version="v0.7")  ### Specifying a version ensure reproducibility of signatures
+
+if (species=="mouse") {
+   models <- models.DB$mouse$generic
+} else {
+   models <- models.DB$human$generic  ## Pre-compiled list of models for human cell types
+}
+names(models)
+
+models <- models[c("Bcell","Tcell","Erythrocyte","Megakaryocyte","MoMacDC","NK","Plasma_cell")]
+
+
+models$CAF <- scGate::gating_model(name="CAF",signature = c("FAP","PDGFRB","PDGFRA","COL1A1","PTPRC-"))
+models$Endothelial <- scGate::gating_model(name="Endothelial",signature = c("CD34","PECAM1","PTPRC-"))
+models$Epithelial <- scGate::gating_model(name="Epith",signature = c("EPCAM","PTPRC-"))
+
+data_seurat <- scGate(data_seurat, model = models, ncores = 8, reduction = "pca", verbose = T)
+```
+
+See "multi" classification
+```{r}
+DimPlot(data_seurat, reduction="umap", group.by = "scGate_multi", label = T)
+
+ggsave(file.path(output_plots_path,"UMAP_scGate_multi.png"),width = 9, height = 5)
+```
+
+```{r , eval=T, fig.height=4}
+pll2 <- list()
+for(gate in names(models)){
+    cname <- paste0("is.pure_", gate)
+    pll2[[gate]] <- DimPlot(data_seurat, reduction = "umap", group.by = cname,
+                            cols = c(list(Impure = "gray", Pure = "green"))) + 
+      theme(aspect.ratio=1)
+}
+wrap_plots(pll2)
+ggsave(file.path(output_plots_path,"UMAP_scGate_single.png"),width = 12, height = 8)
+```
+
+
+
+# Export standardized dataset
+```{r}
+saveRDS(data_seurat,file.path(output_data_path,paste0(ds_name,".rds")))
+```
+
