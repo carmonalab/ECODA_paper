@@ -1,0 +1,444 @@
+---
+title: Standardized Processing of scRNA-seq datasets
+author: "M. Andreatta <massimo.andreatta at unil.ch>, S. Carmona <santiago.carmona at unil.ch>, C. Halter <christian.halter at unil.ch>, J. Garnica <josep.garnicacaparros at unil.ch>"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+---
+
+***
+Dataset name:   Author_Year_PBMID_cohortID (eg. ZhangY_2022_34653365)
+```{r dataset_name}
+ds_name <- "SmillieC_2019_31348891"
+```
+***
+
+Set root directory for processing
+```{r set_dir}
+# Set path to the directory were
+# Set path to the directory were to get input and output
+home.path <- file.path("~/Dropbox/CSI/Standardized_SingleCell_Datasets", ds_name)
+
+knitr::opts_chunk$set(echo = T, warning = F,include=T, message=F)
+```
+
+# Prepare packages and environtment
+```{r load_packages_functions, message=FALSE}
+# restore packages versions with renv.lock file from github repository
+renv::activate()
+renv::restore()
+
+# load packages
+pckgs <- c("tidyverse", "Seurat", "UCell", "scGate",
+           "SingleCellExperiment","Matrix", "patchwork",
+           "data.table", "STACAS", "SignatuR")
+for(package in pckgs){
+  library(package, character.only = T)
+}
+
+# load custom functions
+source("Rutils/functions.R")
+
+options(timeout=4000) # increase time out for downloading
+```
+
+Also, increase memory parameters to allocate large vectors, otherwise R might crash
+```{bash create_Renviron}
+#include vector max size
+max_size=200Gb
+
+# create .Renviron file if not present
+if ! [ -a ".Renviron" ]
+then
+  touch .Renviron
+  echo R_MAX_VSIZE=$max_size > .Renviron
+  echo New .Renviron file created!
+else
+  echo .Renviron already present!
+  echo Check size of the allowed vector:
+  cat .Renviron
+fi
+```
+
+
+# Set parameters
+Dataset ID should have 3 letters from Author (Aaa) followed by additional uniquifying letter (A). If multiple cohort, followed by 1 letter from cohort ID separated by dot (e.g. AndA.H; AndB.M; And.C, etc.)
+```{r define_parameters}
+# Assign a short id for this data source
+ID <- "SmiC"
+
+# Assign species of the data
+species <- "human"
+
+#set seed
+my_seed <- 321
+set.seed(my_seed)
+
+# max number of cells per sample (if higher, they will downsampled)
+# make sure to set seed for this step
+ds <- 1000
+
+# Optional: min number of cells per sample, samples with lower number will be discarded
+min.cells <- 500 
+```
+
+
+# Set paths
+Declare the paths in your directory or Dropbox
+```{r}
+# Create directory to store input, output and plots
+dir.create(home.path)
+
+# Create directories for input, output and plots
+input_data_path_root <- file.path(home.path, "data")
+dir.create(file.path(input_data_path_root))
+output_data_path <- file.path(home.path, "output")
+dir.create(file.path(output_data_path))
+output_plots_path <- file.path(home.path,"plots")
+dir.create(file.path(output_plots_path))
+```
+
+# Download data
+If not done before, download data eg from GEO or Zenodo.
+
+Data downloaded from:
+https://singlecell.broadinstitute.org/single_cell/study/SCP259/intra-and-inter-cellular-rewiring-of-the-human-colon-during-ulcerative-colitis#study-download
+
+
+
+# Load Data
+Depending on the data format at GEO or Zenodo, use different tools to load the datasets into the environment.
+
+Matrices
+```{r load_mtx}
+epi_counts <- ReadMtx(mtx = sprintf("%s/gene_sorted-Epi.matrix.mtx", input_data_path_root), features = sprintf("%s/Epi.genes.tsv", input_data_path_root), cells = sprintf("%s/Epi.barcodes2.tsv", input_data_path_root),
+                      cell.column = 1, feature.column = 1)
+fib_counts <- ReadMtx(mtx = sprintf("%s/gene_sorted-Fib.matrix.mtx", input_data_path_root), features = sprintf("%s/Fib.genes.tsv", input_data_path_root), cells = sprintf("%s/Fib.barcodes2.tsv", input_data_path_root),
+                      cell.column = 1, feature.column = 1)
+imm_counts <- ReadMtx(mtx = sprintf("%s/gene_sorted-Imm.matrix.mtx", input_data_path_root), features = sprintf("%s/Imm.genes.tsv", input_data_path_root), cells = sprintf("%s/Imm.barcodes2.tsv", input_data_path_root),
+                      cell.column = 1, feature.column = 1)
+
+# Need to merge the sparse matrices
+# However, each has different number of genes, so we need to account for that when combining them
+
+merge.sparse <- function(...) {
+  
+  cnnew <- character()
+  rnnew <- character()
+  x <- vector()
+  i <- numeric()
+  j <- numeric()
+  
+  for (M in list(...)) {
+  
+  cnold <- colnames(M)
+  rnold <- rownames(M)
+  
+  cnnew <- union(cnnew,cnold)
+  rnnew <- union(rnnew,rnold)
+  
+  cindnew <- match(cnold,cnnew)
+  rindnew <- match(rnold,rnnew)
+  ind <- summary(M)
+  i <- c(i,rindnew[ind[,1]])
+  j <- c(j,cindnew[ind[,2]])
+  x <- c(x,ind[,3])
+  }
+  
+  sparseMatrix(i=i,j=j,x=x,dims=c(length(rnnew),length(cnnew)),dimnames=list(rnnew,cnnew))
+}
+
+data_matrix <- merge.sparse(epi_counts, fib_counts, imm_counts)
+
+rm(epi_counts, fib_counts, imm_counts); gc()
+```
+
+
+
+**CHECK**:
+
+1. Assess available assays: Are raw counts available or only pre-normalized (eg log2TMP); if pre-normalized, specify how was the normalization performed!
+
+2. Make sure data matrix has genes as rows and cells as columns
+
+3. Include, adapt and standarize cell metadata
+
+4. Modify cell identifiers (`orig.ident`)
+
+5. Standardize gene symbols
+
+6. Add features/genes metadata
+
+
+## 1. Assess available assays
+Asses whether raw counts are available or only pre-normalized (eg log2TMP), if pre-normalized, specify how was the normalization performed at the entry form (`Expression data type`). If some datasets not include raw counts consider discarding them, or if normalization approach is known, de-normalize and normalize data on all datasets.
+***
+**Data input format**: e.g.  pre-normalized, "by total counts, as described in https://doi.org/10.1016/j.cell.2015.04.044"
+***
+
+## 2.  Make sure data matrix has genes as rows and cells as columns
+```{r check_mtx}
+dim(data_matrix)
+data_matrix[1:10,1:10]
+head(colnames(data_matrix))
+```
+
+## 3. Include, adapt and standarize cell metadata
+
+Generate a metadata dataframe including the following variables for each cell in the dataset. If some are not present include NA. If needed adapt metadata (factorize...).
+
++----------------------------+--------------------------------------+
+| Variable                   | Example                              |
++============================+======================================+
+| Original_cell_names        | AAACCTGAGGTTACCT.Pre_P007_b          |
++----------------------------+--------------------------------------+
+| Barcode                    | AAACCTGAGGTTACCT                     |
++----------------------------+--------------------------------------+
+| Study                      | Author_Year_PBMID_cohortID           |
+|                            |                                      |
+|                            | (e.g. ZhangY_2022_34653365)          |
++----------------------------+--------------------------------------+
+| Sample                     | Pre_P007_b                           |
++----------------------------+--------------------------------------+
+| Treatment                  | Pre                                  |
++----------------------------+--------------------------------------+
+| Individual                 | P007                                 |
++----------------------------+--------------------------------------+
+| Tissue                     | blood, tumor, adjacent, LN, other    |
++----------------------------+--------------------------------------+
+| OriginalAnnotationLevel{n} | CD4T                                 |
++----------------------------+--------------------------------------+
+
+```{r adapt_meta}
+meta <- as.data.frame(read_tsv(file.path(input_data_path_root, "all.meta2.txt")))
+meta <- meta[-1, ]
+row.names(meta) <- meta$NAME
+meta$NAME <- NULL
+
+# Explore data and modifiy this code accordinly to fill the metadata slots
+
+# Extract pattern "Epi" or "LP" and split into two columns
+meta[["Original_cell_names"]] <- cell_names
+meta[["Barcode"]] <- sub("^N\\d+\\.(Epi|LP)(.*)", "\\2", rownames(meta), perl = TRUE)
+meta[["Condition"]] <- gsub(pattern = "-", "", meta$Health)
+meta[["Individual"]] <- sapply(strsplit(meta$Sample,"\\."),function(x) x[[1]])
+meta[["Tissue"]] <- "Colon"
+meta[["Tissue_compartment"]] <- ifelse(meta$Location == "Epi", "Epithelial", "Lamina_propria")
+
+head(meta)
+```
+
+## 4. Modify cell identifiers (`orig.ident`)
+To make cell ids compatible with other datasets, append the study ID at the beginning of the original cell name. If available, also add other metadata elements such as Individual, tissue or treatment.
+
+```{r modify_cellID}
+paste("colnames(data_matrix) and row.names(meta) identical?",
+      identical(colnames(data_matrix), row.names(meta)))
+
+#fields in prefix are separated by dots
+prefix <- paste(ID, meta$Individual, meta$Tissue, meta$Tissue_compartment, meta$Condition, sep=".")
+
+# underscore delimits end of prefix
+cell_ids <- paste(prefix, meta$Barcode, sep = '_')
+colnames(data_matrix) <- cell_ids
+data_matrix[1:10,1:2]
+```
+
+Add new cells ids to metadata
+```{r add_ID}
+rownames(meta) <- cell_ids
+head(meta)
+```
+
+
+## Create Seurat object (custom)
+```{r Create_Seurat}
+data_seurat <- CreateSeuratObject(counts=data_matrix,
+                                  project=ds_name,
+                                  meta.data = meta,
+                                  assay="RNA",
+                                  min.cells = 0,
+                                  min.features = 0)
+rm(data_matrix,meta,cell_ids)
+# free up rstudio memory
+gc() 
+```
+
+## 5. Standardize gene symbols 
+Map gene ids with our reference gene symbols using `STACAS::StandardizeGeneSymbols()`. Load EnsemblGenes105_Hsa_GRCh38.p13 and EnsemblGenes105_Mmu_GRCm39 retrieved at 14.02.2022 from [aux](https://github.com/carmonalab/scRNAseq_data_processing/master/aux), or already in you local directory if you cloned the repository.
+
+```{r load_geneRef}
+# load gene symbols dataset
+if (species == "mouse") {
+   geneRef_file <- "aux/EnsemblGenes105_Mmu_GRCm39.txt.gz"
+} else if (species == "human") {
+   geneRef_file <- "aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+}
+geneRef <- fread(geneRef_file)
+```
+
+
+```{r Standar_gene_Symbol}
+# Standarize gene symbols using STACAS
+data_seurat <- STACAS::StandardizeGeneSymbols(data_seurat, geneRef, assay = "RNA", slots = "counts")
+
+# adapt metafeatures
+# there incompatibilites with newer version of STACAS and Seurat v5
+data_seurat[["RNA"]]@meta.features <- data.frame(row.names = rownames(data_seurat))
+```
+
+CHECK slots
+TODO If data pre-normalized, apply inverse of NormalizeData() into "counts" slot. Then we can run NormalizeData() routinely
+
+```{r}
+head(data_seurat@meta.data)
+```
+
+### Clean cell metadata  (custom)
+
+CHECK: cell metadata fields: 
+Sample, Individual, Tissue c("blood","tumor","adjacent","LN","other"), Study, OriginalAnnotationLevel1, OriginalAnnotationLevel2, OriginalAnnotationLevel3...
+Factorize or change labels if needed.
+
+```{r clean_metadata}
+Epithelial_cells <- unique(data_seurat$Cluster)[1:15]
+Fibroblasts <- unique(data_seurat$Cluster)[c(16:21, 25, 28)]
+Endothelial <- unique(data_seurat$Cluster)[c(22:24, 26, 27)]
+B_cells <- c("Plasma", "Follicular", "GC", "Cycling B")
+Myeloid_cells <- unique(data_seurat$Cluster)[grepl("Macro|DC|Mast|Monocytes", unique(data_seurat$Cluster))]
+T_cells <- unique(data_seurat$Cluster)[!unique(data_seurat$Cluster) %in% c(Epithelial_cells, Fibroblasts, Endothelial, B_cells, Myeloid_cells)]
+
+data_seurat$OriginalAnnotationLevel1 <- "Immune"
+data_seurat$OriginalAnnotationLevel1[data_seurat$Cluster %in% Epithelial_cells] <- "Epithelial"
+data_seurat$OriginalAnnotationLevel1[data_seurat$Cluster %in% c(Fibroblasts, Endothelial)] <- "Stromal_glia"
+
+data_seurat$OriginalAnnotationLevel2 <- "Epithelial"
+data_seurat$OriginalAnnotationLevel2[data_seurat$Cluster %in% Fibroblasts] <- "Fibroblasts"
+data_seurat$OriginalAnnotationLevel2[data_seurat$Cluster %in% Endothelial] <- "Endothelial"
+data_seurat$OriginalAnnotationLevel2[data_seurat$Cluster %in% B_cells] <- "B_cells"
+data_seurat$OriginalAnnotationLevel2[data_seurat$Cluster %in% Myeloid_cells] <- "Myeloid_cells"
+data_seurat$OriginalAnnotationLevel2[data_seurat$Cluster %in% T_cells] <- "T_cells"
+
+data_seurat$OriginalAnnotationLevel3 <- data_seurat$Cluster
+head(data_seurat)
+```
+
+## 6. Add features/genes metadata
+```{r add_gene_metadata}
+# Remove duplicates from Gene symbols reference
+features_meta_data <- geneRef[!duplicated(geneRef$`Gene name`),]
+# Convert to dataframe
+setDF(features_meta_data)
+
+rownames(features_meta_data) <- features_meta_data$`Gene name`
+# in Seurat, underscores ('_'), are replaced with dashes ('-')
+# in gene names; 5S_rRNA; but these just a few
+rownames(features_meta_data) <- gsub("_","-",rownames(features_meta_data)) 
+features_meta_data <- features_meta_data[rownames(data_seurat),]
+
+if ( all.equal(rownames(features_meta_data),
+               as.character(rownames(data_seurat))) ) {
+  data_seurat[["RNA"]] <- AddMetaData(data_seurat[["RNA"]],
+                                      metadata = features_meta_data)
+  rm(geneRef,features_meta_data)
+}
+```
+
+
+
+
+# Quality control measurement and filtering
+
+## 1. Ribosomal and mitochondrial content, and sequencing complexity
+Use `SignatuR` package, including ribosomal and mitochondrial gene sets, to compute their relative content. Also, compute the sequencing complexity by computing the log10 ratio of genes detected per UMI.
+
+
+```{r define_qc_metrics}
+#Get mitochondrial and ribosomal signatures
+ribo.genes <- GetSignature(SignatuR$Hs$Compartments$Ribo)$Ribo
+mito.genes <- GetSignature(SignatuR$Hs$Compartments$Mito)$Mito
+
+# Compute ribosomal and mitochondrial content and add to Seurat object metadata
+data_seurat <- AddMetaData(data_seurat, metadata = PercentageFeatureSet(data_seurat, features = ribo.genes[ribo.genes %in% rownames(data_seurat)]), col.name = "percent.ribo")
+data_seurat <- AddMetaData(data_seurat, metadata = PercentageFeatureSet(data_seurat, features = mito.genes[mito.genes %in% rownames(data_seurat)]), col.name = "percent.mito")
+
+# Compute the ratio of number of genes/features and number of counts/UMIs
+data_seurat$log10GenesPerUmi <- log10(data_seurat$nFeature_RNA) / 
+                                log10(data_seurat$nCount_RNA)
+```
+
+## 2. Evaluate QC metrics and filter dataset
+QC-based metric is mostly done manually by inspecting the distribution of the QC metrics. QC metrics can largely change between samples, cell types included (heterogeneity), sequencing technology, and batch. Take into account that number of reads (`nCount`) are only informative if raw counts are available, otherwise they cannot be used of QC filtering.
+
+Here are shown some guidelines for QC-based filtering:
+
+|--------------------------------------|---------------------------------------------------------------------|
+| QC metric                            | Guidelines for filtering                                            |
+|--------------------------------------|---------------------------------------------------------------------|
+| Ribosomal content                    | \> 0.5% & \< 60%                                                    |
+| Mitochondrial content                | \< 10-20%                                                           |
+| Number of genes/features (nFeatures) | \>400 and custom upper limit based on your data                     |
+| Number of counts/UMI (nCount)        | \>800 and custom and custom upper limit based on your data          |
+| Ratio Features/Counts                | \> 0.6                                                              |
+| Special genes                        | Custom: Consider remove some of these genes for downstream analysis |
+| Special genes                        | E.g. MALAT1                                                         |
+|--------------------------------------|---------------------------------------------------------------------|
+
+For MALAT1 as a QC criterion, see:
+https://www.biorxiv.org/content/10.1101/2024.04.18.590104v1
+
+### How many cells per sample?
+```{r}
+sample.size.pre <- sort(table(data_seurat$Sample))
+sample.size.pre
+barplot(sort(sample.size.pre), las=2)
+```
+
+
+### CHECK: distributions across samples
+```{r qc_plots0, fig.height= 10}
+Idents(data_seurat) <- "Sample"
+VlnPlot(data_seurat,
+        features = c("nFeature_RNA", "nCount_RNA",
+                     "percent.ribo","percent.mito",
+                     "PTPRC","MALAT1"),
+        ncol = 3, pt.size=0)
+```
+
+
+# Downsample, process dataset and make diagnostic plots
+
+At this point we should only have in our datasets high quality cells. We will remove samples with very few cells and downsample large ones, in order to have a similar contribution from all patients and samples. Downsampling large samples also speeds up downstream computations.
+
+We will save the datasets with all high-quality cells (whole) and datasets without small samples and downsampling large ones (light).
+
+```{r remove_small_samples}
+# # Viasualize cell number cutoffs
+# cells.perSample <- table(data_seurat$Sample)
+# barplot(sort(cells.perSample))
+# abline(h=min.cells)
+# abline(h=ds)
+
+
+# Remove small samples
+tab <- table(data_seurat$Sample)
+keep <- names(tab)[tab > min.cells]
+data_seurat <- subset(data_seurat, Sample %in% keep)
+
+# Print number of samples removed
+cat(length(tab[tab <= min.cells]), "samples removed out of a total of ", length(tab) )
+
+# # Print and evaluate the cell drop out after this step
+# l <- ncol(data_seurat.ds)
+# message(sprintf("Number of cells after QC: %i (%.2f %% of input)",
+#                 l, 100*l/initialCellNum))
+```
+
+
+# Export standardized datasets
+```{r}
+saveRDS(data_seurat,file.path(output_data_path,paste0(ds_name,".rds")))
+# saveRDS(data_seurat,file.path(output_data_path,paste0(ds_name,"light.rds")))
+```

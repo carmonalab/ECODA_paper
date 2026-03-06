@@ -1,0 +1,532 @@
+---
+title: All cells processing of Bassez Breast cancer dataset
+author: "J. Garnica <josep.garnicacaparros at unil.ch>"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+---
+
+***
+Dataset name:   Author_Year_PBMID_cohortID (eg. ZhangY_2022_34653365)
+```{r dataset_name}
+ds_name <- "BassezA_2021_33958794"
+```
+***
+
+Set root directory for processing
+```{r set_dir}
+# Set path to the directory were
+# Set path to the directory were to get input and output
+home.path <- file.path("~/Dropbox/CSI/Standardized_SingleCell_Datasets", ds_name)
+
+knitr::opts_chunk$set(echo = T, warning = F, include=T, message=F)
+```
+
+# Prepare packages and environtment
+```{r load_packages_functions, message=FALSE}
+# restore packages versions with renv.lock file from github repository
+renv::restore()
+
+# load packages
+pckgs <- c("tidyverse", "Seurat", "UCell", "scGate",
+           "SingleCellExperiment","Matrix", "patchwork",
+           "data.table", "STACAS", "SignatuR")
+for(package in pckgs){
+  library(package, character.only = T)
+}
+
+# load custom functions
+source("Rutils/functions.R")
+
+options(timeout=4000) # increase time out for downloading
+```
+
+Also, increase memory parameters to allocate large vectors, otherwise R might crash
+```{bash create_Renviron}
+#include vector max size
+max_size=200Gb
+
+# create .Renviron file if not present
+if ! [ -a ".Renviron" ]
+then
+  touch .Renviron
+  echo R_MAX_VSIZE=$max_size > .Renviron
+  echo New .Renviron file created!
+else
+  echo .Renviron already present!
+  echo Check size of the allowed vector:
+  cat .Renviron
+fi
+```
+
+
+# Set parameters
+Dataset ID should have 3 letters from Author (Aaa) followed by additional uniquifying letter (A). If multiple cohort, followed by 1 letter from cohort ID separated by dot (e.g. AndA.H; AndB.M; And.C, etc.)
+```{r define_parameters}
+# Assign a short id for this data source
+ID <- "Bassez"
+
+# Assign species of the data
+species <- "human"
+
+#set seed
+my_seed <- 321
+set.seed(my_seed)
+
+# max number of cells per sample (if higher, they will downsampled)
+# make sure to set seed for this step
+ds <- 1000
+
+# Optional: min number of cells per sample, samples with lower number will be discarded
+min.cells <- 200 
+```
+
+
+# Set paths
+Declare the paths in your directory or Dropbox
+```{r}
+# Create directory to store input, output and plots
+dir.create(home.path)
+
+# Create directories for input, output and plots
+input_data_path_root <- file.path(home.path, "data")
+dir.create(file.path(input_data_path_root))
+output_data_path <- file.path(home.path, "output")
+dir.create(file.path(output_data_path))
+output_plots_path <- file.path(home.path,"plots")
+dir.create(file.path(output_plots_path))
+```
+
+# Fetch data
+Raw data and metadata had been previously downloaded by Massimo/Santiago on May 2021 and saved in dropbox ("~/Dropbox/CSI/Datasets/Bassez/"). Here it is included metadata and counts.
+
+# Load Data
+
+## Load counts
+```{r load_rds, eval=T}
+# directory
+dir <- "~/Dropbox/CSI/Datasets/Bassez/data"
+
+# load counts
+c1 <- readRDS(file.path(dir, "1863-counts_cells_cohort1.rds"))
+c2 <- readRDS(file.path(dir, "1867-counts_cells_cohort2.rds"))
+
+# are names repeated between cohorts?
+table(colnames(c1) %in% colnames(c2))
+
+```
+
+## Load metadata
+There are different metadata files, i.e. 1872-BIOKEY_metaData_cohort1_web.csv file contain general information of cohort 1 but only broad classification. Then, metadata for each cell type is inclued (with respective cell barcode) with finer classification by authors. This is not the case for cohort2, where only broad classification is provided.
+Let's try to put togehter all the metadata.
+### Cohort1
+```{r}
+list.meta.files <- list.files(dir, "[.]csv$") %>% 
+                    # exclude clonotypes combined
+                  grep("clonotypes_combined", ., invert = T, value = T)
+
+# read coarase metadata cohort1
+meta1 <- read.csv(file.path(dir, "1872-BIOKEY_metaData_cohort1_web.csv"))
+
+# now add the finer cell type prediction of other files
+ct <- list.meta.files %>% grep("cohort1", ., value = T)
+fine.meta <- list()
+for(a in ct){
+  tmp <- read.csv(file.path(dir, a))
+  # for clonotype info the first column is not named Cell, but barcode...
+  if(grepl("vdj", a)){
+  names(tmp)[1] <- "Cell"
+  # add also suffix not included in vdj metadata
+  tmp$Cell <- paste0(tmp$Cell, "-1")
+  }
+  # only get different name columns
+  sel <- c("Cell", names(tmp)[!names(tmp) %in% names(meta1)])
+  cat(a, " :  ", sel, "##############\n")
+
+  
+  if(length(sel)>1){
+    fine.meta[[a]] <- tmp[,sel]
+  }
+}
+
+# join metadata
+# we can rbind the subtypes, but need to left_join the clonotype info
+fine <- data.table::rbindlist(fine.meta[1:3], fill = T)
+fine.meta <- left_join(fine, fine.meta$`1879-BIOKEY_barcodes_vdj_combined_cohort1.csv`,
+                       by = "Cell")
+#join with rest of metadata
+meta1 <- left_join(meta1, fine.meta, by="Cell")
+
+# how many cells are in count names?
+table(meta1$Cell %in% colnames(c1))
+
+# convert Cell to rownames
+meta1 <- meta1 %>% column_to_rownames("Cell")
+
+rm(fine.meta, fine, tmp)
+gc()
+```
+
+### Cohort2
+```{r}
+list.meta.files %>% grep("cohort2", ., value = T)
+# read coarase metadata cohort1
+meta2 <- read.csv(file.path(dir, "1871-BIOKEY_metaData_cohort2_web.csv"))
+
+# add VDJ data, we don't have fine prediction by authors for cohort2
+vdj <- read.csv(file.path(dir, "1880-BIOKEY_barcodes_vdj_combined_cohort2.csv"))
+names(vdj)[1] <- "Cell"
+# add also suffix not included in vdj metadata
+vdj$Cell <- paste0(vdj$Cell, "-1")
+
+meta2 <- left_join(meta2, vdj, by="Cell")
+
+table(duplicated(meta2$Cell))
+
+# how many cells are in count names?
+table(meta2$Cell %in% colnames(c2))
+
+# convert Cell to rownames
+meta2 <- meta2 %>% column_to_rownames("Cell")
+
+rm(vdj)
+gc()
+```
+
+
+
+
+**CHECK**:
+
+1. Assess available assays: Are raw counts available or only pre-normalized (eg log2TMP); if pre-normalized, specify how was the normalization performed!
+
+2. Make sure data matrix has genes as rows and cells as columns
+
+3. Include, adapt and standarize cell metadata
+
+4. Modify cell identifiers (`orig.ident`)
+
+5. Standardize gene symbols
+
+6. Add features/genes metadata
+
+
+## 1. Assess available assays
+Asses whether raw counts are available or only pre-normalized (eg log2TMP), if pre-normalized, specify how was the normalization performed at the entry form (`Expression data type`). If some datasets not include raw counts consider discarding them, or if normalization approach is known, de-normalize and normalize data on all datasets.
+***
+**Data input format**: e.g.  pre-normalized, "by total counts, as described in https://doi.org/10.1016/j.cell.2015.04.044"
+***
+
+## 2.  Make sure data matrix has genes as rows and cells as columns
+```{r check_mtx}
+dim(c1)
+c1[1:10,1:10]
+head(colnames(c1))
+
+dim(c2)
+c2[1:10,1:10]
+head(colnames(c2))
+```
+
+
+## 3. Modify cell identifiers (`orig.ident`)
+To make cell ids compatible with other datasets, append the study ID at the beginning of the original cell name. If available, also add other metadata elements such as Individual, tissue or treatment.
+
+```{r modify_cellID}
+identical(rownames(meta1), colnames(c1))
+
+# underscore delimits end of prefix
+cell_ids <- paste(ds_name, rownames(meta1), sep = '_') 
+colnames(c1) <- cell_ids
+rownames(meta1) <- cell_ids
+c1[1:10,1:2]
+
+
+identical(rownames(meta2), colnames(c2))
+
+# underscore delimits end of prefix
+cell_ids <- paste(ds_name, rownames(meta2), sep = '_') 
+colnames(c2)<- cell_ids
+rownames(meta2) <- cell_ids
+c2[1:10,1:2]
+```
+
+
+## Create Seurat object (custom)
+```{r Create_Seurat}
+seu.list <- list()
+
+seu.list[["cohort1"]] <- CreateSeuratObject(counts=c1,
+                                            project=ds_name,
+                                            meta.data = meta1,
+                                            assay="RNA",
+                                            min.cells = 0,
+                                            min.features = 0)
+
+seu.list[["cohort2"]] <- CreateSeuratObject(counts=c2,
+                                            project=ds_name,
+                                            meta.data = meta2,
+                                            assay="RNA",
+                                            min.cells = 0,
+                                            min.features = 0)
+rm(cell_ids, c1, c2, meta1, meta2)
+# free up rstudio memory
+gc() 
+```
+
+Merge files into Seurat object
+```{r}
+seu <- merge(seu.list$cohort1, seu.list$cohort2)
+rm(seu.list)
+gc()
+
+# agreement of metafeatures??
+table(rownames(seu[["RNA"]]@data) == rownames(seu[["RNA"]]@meta.features))
+table(rownames(seu[["RNA"]]@counts) == rownames(seu[["RNA"]]@meta.features))
+```
+
+## Define samples
+There are samples from different patietns (`patient_id`) but each patient have 2 samples, `pre` and `on`. Hence, there are 2 samples per patients to be separated.
+
+```{r}
+seu$sample <- paste(seu$patient_id, seu$timepoint, sep = "_")
+
+```
+
+
+
+## 4. Standardize gene symbols 
+Map gene ids with our reference gene symbols using `STACAS::StandardizeGeneSymbols()`. Load EnsemblGenes105_Hsa_GRCh38.p13 and EnsemblGenes105_Mmu_GRCm39 retrieved at 14.02.2022 from [aux](https://github.com/carmonalab/scRNAseq_data_processing/master/aux), or already in you local directory if you cloned the repository.
+
+```{r load_geneRef}
+# load gene symbols dataset
+if (species == "mouse") {
+   geneRef_file <- "aux/EnsemblGenes105_Mmu_GRCm39.txt.gz"
+} else if (species == "human") {
+   geneRef_file <- "aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+}
+geneRef <- fread(geneRef_file)
+```
+
+
+```{r Standar_gene_Symbol}
+# Standarize gene symbols using STACAS
+seu <- STACAS::StandardizeGeneSymbols(seu, EnsemblGeneTable =  geneRef)
+
+
+# adapt metafeatures
+seu[["RNA"]]@meta.features <- data.frame(row.names = rownames(seu))
+
+# agreement of metafeatures??
+table(rownames(seu[["RNA"]]@data) == rownames(seu[["RNA"]]@meta.features))
+table(rownames(seu[["RNA"]]@counts) == rownames(seu[["RNA"]]@meta.features))
+```
+
+
+CHECK are data pre-normalized? decide whether to Normalize
+
+```{r norm_Data}
+seu <- NormalizeData(seu) 
+```
+
+
+
+# 5. Quality control measurement and filtering
+
+## 5.1. Ribosomal and mitochondrial content, and sequencing complexity
+Use `SignatuR` package, including ribosomal and mitochondrial gene sets, to compute their relative content. Also, compute the sequencing complexity by computing the log10 ratio of genes detected per UMI.
+
+
+```{r define_qc_metrics}
+#Get mitochondrial and ribosomal signatures
+ribo.genes <- GetSignature(SignatuR$Hs$Compartments$Ribo)
+mito.genes <- GetSignature(SignatuR$Hs$Compartments$Mito)
+
+# Compute ribosomal and mitochondrial content and add to Seurat object metadata
+seu <- AddMetaData(seu, metadata = PercentageFeatureSet(seu, features = ribo.genes[ribo.genes %in% rownames(seu)]), col.name = "percent.ribo")
+seu <- AddMetaData(seu, metadata = PercentageFeatureSet(seu, features = mito.genes[mito.genes %in% rownames(seu)]), col.name = "percent.mito")
+
+# Compute the ratio of number of genes/features and number of counts/UMIs
+seu$log10GenesPerUmi <- log10(seu$nFeature_RNA) / 
+                                log10(seu$nCount_RNA)
+```
+
+## 2. Evaluate QC metrics and filter dataset
+QC-based metric is mostly done manually by inspecting the distribution of the QC metrics. QC metrics can largely change between samples, cell types included (heterogeneity), sequencing technology, and batch. Take into account that number of reads (`nCount`) are only informative if raw counts are available, otherwise they cannot be used of QC filtering.
+
+Here are shown some guidelines for QC-based filtering:
+
+|--------------------------------------|---------------------------------------------------------------------|
+| QC metric                            | Guidelines for filtering                                            |
+|--------------------------------------|---------------------------------------------------------------------|
+| Ribosomal content                    | \> 0.5% & \< 60%                                                    |
+| Mitochondrial content                | \< 10-20%                                                           |
+| Number of genes/features (nFeatures) | \>400 and custom upper limit based on your data                     |
+| Numbrer of counts/UMI (nCount)       | \>800 and customand custom upper limit based on your data           |
+| Ratio Features/Counts                | \> 0.6                                                              |
+| Special genes                        | Custom: Consider remove some of these genes for downstream analysis |
+|--------------------------------------|---------------------------------------------------------------------|
+
+### CHECK: distributions across samples
+#### Custom thresholds
+Review after assessing the plots!
+
+```{r set_cutoffs}
+cutoffs <- list()
+cutoffs[["percent.ribo"]] <- c(min=0.5,max=60)
+cutoffs[["percent.mito"]] <- c(min=0,max=17)
+cutoffs[["nFeature_RNA"]] <- c(min=600,max=6000) 
+cutoffs[["nCount_RNA"]] <- c(min=1300,max=45000) # raw counts present??
+cutoffs[["log10GenesPerUmi"]] <- 0.7
+print(cutoffs)
+```
+
+#### Filter out outliers & low quality cells (custom)
+```{r qc_plots}
+# When using qc_plot cutoffs should be a list with the same names for 
+# QC metrics as in the metadata
+qclist <- lapply(names(cutoffs), # names of QC metrics to evaluate
+                 qc_plot, # qc_plot function on functions.R script
+                 metadata = seu@meta.data,
+                 cutoffs = cutoffs,
+                 fill = "sample",
+                 split = F) # Seurat metadata
+
+pdf(file.path(output_plots_path, "QC_metrics_sample.pdf"), width = 12, height = 10)
+lapply(qclist, print)
+dev.off()
+```
+
+```{r}
+qclist <- lapply(names(cutoffs), # names of QC metrics to evaluate
+                 qc_plot, # qc_plot function on functions.R script
+                 metadata = seu@meta.data %>%
+                   filter(grepl("myeloid", cellType, ignore.case = T)),
+                 cutoffs = cutoffs,
+                 fill = "sample",
+                 split = T)
+```
+
+
+### Standard check
+
+```{r probs}
+for(va in names(cutoffs)){
+  cat(va, "\n")
+  print(quantile(seu@meta.data[[va]],
+                 probs=c(0.001, 0.005, 0.01, 0.02,
+                         0.98, 0.99, 0.995, 0.999))
+        )
+}
+```
+
+After having evaluated the QC metrics values and distribution, modify cutoffs if needed and then proceed to subset your data based on those. Also, evaluate how many cells are being removed based on your cutoffs.
+
+```{r subset_seurat, eval = F}
+# store initial number of cells
+initialCellNum <- ncol(seu)
+message(paste("Original number of cells:", initialCellNum))
+
+# Perform subsetting using cutoffs list and qc metrics considered
+seuqc <- subset(seu, subset = 
+                        nFeature_RNA >= cutoffs[["nFeature_RNA"]]["min"] &
+                        nFeature_RNA < cutoffs[["nFeature_RNA"]]["max"] & 
+                        # raw counts present??
+                        nCount_RNA   >= cutoffs[["nCount_RNA"]]["min"]   & 
+                        nCount_RNA   < cutoffs[["nCount_RNA"]]["max"]   &  
+                        percent.ribo >= cutoffs[["percent.ribo"]]["min"] & 
+                        percent.ribo < cutoffs[["percent.ribo"]]["max"] &
+                        percent.mito >= cutoffs[["percent.mito"]]["min"] &
+                        percent.mito < cutoffs[["percent.mito"]]["max"] &
+                        log10GenesPerUmi > cutoffs[["log10GenesPerUmi"]]
+                      )
+
+# Print and evaluate the cell drop out after filtering
+l <- ncol(seuqc)
+message(sprintf("Number of cells after QC: %i (%.2f %% of input)", l, 100*l/initialCellNum))
+```
+
+
+# Downsample, process dataset and make diagnostic plots
+
+At this point we should only have in our datasets high quality cells. We will remove samples with very few cells and downsample large ones, in order to have a similar contribution from all patients and samples. Downsampling large samples also speeds up downstream computations.
+
+We will save the datasets with all high-quality cells (whole) and datasets without small samples and downsampling large ones (light).
+
+```{r remove_small_samples}
+initialCellNum <- ncol(seu)
+# Check distribution of samples cell number
+hist(table(seu$sample))
+
+# Remove small samples
+tab <- table(seu$sample)
+keep <- names(tab)[tab > min.cells]
+seu <- subset(seu, sample %in% keep)
+
+# Print number of samples removed
+cat(length(tab[tab <= min.cells]), "samples removed out of a total of ", length(tab) )
+
+# Print and evaluate the cell drop out after this step
+l <- ncol(seu)
+message(sprintf("Number of cells after QC: %i (%.2f %% of input)",
+                l, 100*l/initialCellNum))
+```
+
+
+```{r downsample}
+# Downsample
+
+Idents(seu) <- "sample"
+set.seed(my_seed)
+seu.ds <- subset(seu, downsample = ds)
+
+# Explore the number of cells per sample
+table(seu.ds$sample)
+
+# Print and evaluate the cell drop out after this step
+l <- ncol(seu.ds)
+message(sprintf("Number of cells after QC: %i (%.2f %% of input)",
+                l, 100*l/initialCellNum))
+```
+
+
+
+
+# Export standardized datasets
+```{r}
+saveRDS(seu.ds, file.path(output_data_path,paste0(ds_name,"_downsampled.rds")))
+saveRDS(seu, file.path(output_data_path,paste0(ds_name,"whole.rds")))
+```
+
+# Consider saving as H5 (https://github.com/mojaveazure/seurat-disk) for interoperability with Bioconductor and Python; eg SaveH5Seurat() 
+
+
+
+# Export 3 patients subset for HiTME demo
+```{r}
+# load whole samples (not downsampled)
+whole <- readRDS(file.path(output_data_path, "BassezA_2021_33958794whole.rds"))
+
+# selection based on low cancer cells
+cc <- whole@meta.data %>% 
+  # only keep sample from cohort 1
+  filter(cohort == "treatment_naive") %>% 
+  # only keep large samples
+  group_by(sample) %>% 
+  filter(n() > 1000) %>% 
+  {table(.$cellType == "Cancer_cell", .$sample)} %>%
+  prop.table(margin = 2) %>% 
+  as.data.frame() %>% 
+  filter(Var1 == "TRUE" &
+           grepl("Pre", Var2)) %>% 
+  arrange(Freq)
+(sel <- cc[1:3, "Var2"])
+
+# subset seurat object
+sv <- whole[,whole$sample %in% sel]
+
+# save rds
+saveRDS(sv, file.path(output_data_path,paste0(ds_name,"_3patients.rds")))
+```

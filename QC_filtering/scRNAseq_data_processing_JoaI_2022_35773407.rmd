@@ -1,0 +1,678 @@
+---
+title: Joanito et al., 2022 processing (Nature genetics)
+author: "M. Andreatta <massimo.andreatta at unil.ch>, S. Carmona <santiago.carmona at unil.ch>, J. Garnica <josep.garnicacaparros at unil.ch>"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+---
+
+***
+Dataset name:   Author_Year_PBMID_cohortID (eg. ZhangY_2022_34653365)
+```{r dataset_name}
+ds_name <- "JoaI_2022_35773407"
+```
+***
+
+Set root directory for processing
+```{r set_dir}
+# Set path to the directory were
+# Set path to the directory were to get input and output
+home.path <- file.path("~/Dropbox/CSI/Standardized_SingleCell_Datasets", ds_name)
+
+```
+
+
+# Prepare packages and environtment
+```{r load_packages_functions, message=FALSE}
+# restore packages versions with renv.lock file from github repository
+renv::restore()
+
+# load packages
+pckgs <- c("tidyverse", "Seurat", "rhdf5",
+           "Matrix", "patchwork",
+           "data.table")
+for(package in pckgs){
+  library(package, character.only = T)
+}
+
+# load custom functions
+source("Rutils/functions.R")
+
+options(timeout=4000) # increase time out for downloading
+```
+
+Also, increase memory parameters to allocate large vectors, otherwise R might crash
+```{bash create_Renviron}
+#include vector max size
+max_size=200Gb
+
+# create .Renviron file if not present
+if ! [ -a ".Renviron" ]
+then
+  touch .Renviron
+  echo R_MAX_VSIZE=$max_size > .Renviron
+  echo New .Renviron file created!
+else
+  echo .Renviron already present!
+  echo Check size of the allowed vector:
+  cat .Renviron
+fi
+```
+
+
+# Set parameters
+Dataset ID should have 3 letters from Author (Aaa) followed by additional uniquifying letter (A). If multiple cohort, followed by 1 letter from cohort ID separated by dot (e.g. AndA.H; AndB.M; And.C, etc.)
+```{r define_parameters}
+# Assign a short id for this data source
+ID <- "JoaI"
+
+# Assign species of the data
+species <- "human"
+
+#set seed
+my_seed <- 321
+set.seed(my_seed)
+
+# max number of cells per sample (if higher, they will downsampled)
+# make sure to set seed for this step
+ds <- 1000
+
+# Optional: min number of cells per sample, samples with lower number will be discarded
+min.cells <- 200 
+```
+
+
+# Set paths
+Declare the paths in your directory or Dropbox
+```{r set_directories}
+# Create directory to store input, output and plots
+dir.create(home.path)
+
+# Create directories for input, output and plots
+input_data_path_root <- file.path(home.path, "data")
+dir.create(file.path(input_data_path_root))
+output_data_path <- file.path(home.path, "output")
+dir.create(file.path(output_data_path))
+output_plots_path <- file.path(home.path,"plots")
+dir.create(file.path(output_plots_path))
+```
+
+# Download data
+If not done before, download data 
+
+The processed data can be found at https://www.synapse.org/#!Synapse:syn26844071/wiki/615389
+
+## Download from synapse 
+
+
+
+# Load Data
+
+HDF5 files
+```{r load_rds}
+list.h5 <- list.files(input_data_path_root,
+                       "matrix[.]h5$",
+                       recursive = T,
+                       full.names = T)
+names.h5 <- list.files(input_data_path_root,
+                       "matrix[.]h5$",
+                       recursive = T,
+                       full.names = F) %>% 
+              gsub("_Count_matrix[.]h5", "", .) %>% 
+              strsplit(., "/", fixed = T) %>% 
+              sapply("[", 2 )
+list.meta <- list.files(input_data_path_root,
+                       "metadata[.]csv$",
+                       recursive = T,
+                       full.names = T)
+
+
+clin.meta <- read.csv(file.path(input_data_path_root, "patient_clinical_information.csv"))
+```
+
+Load data in a list of 2 for epithelial and non-epithelial cells
+```{r, eval = F}
+list.seurat <- list()
+for(r in seq_along(list.h5)){
+  mat <- Read10X_h5(list.h5[[r]])
+  dim(mat)
+  meta <- read.csv(list.meta[r]) %>% 
+    # join with clinical metadata
+        left_join(., clin.meta[,-1],
+                  by = "patient.ID") %>% 
+    column_to_rownames("cell.ID") 
+  dim(meta)
+  
+  if(identical(rownames(meta), colnames(mat))){
+    list.seurat[[names.h5[r]]] <- CreateSeuratObject(counts = mat,
+                                      project = names.h5[r],
+                                      assay = "RNA",
+                                      meta.data = meta,
+                                      min.cells = 0,
+                                      min.features = 0)
+  } else {
+    message("Discrepancies between count matrix and metadata")
+  }
+}
+```
+
+## Load matrix with all genes
+
+```{r}
+nofilt.h5 <- list.files(input_data_path_root,
+                       "Filtered[.]h5$",
+                       recursive = T,
+                       full.names = T)
+
+mat.full <- Read10X_h5(nofilt.h5)
+```
+
+## Load metadata 
+Load both metadata files and rbind
+```{r}
+meta.list <- list()
+for(r in seq_along(list.meta)){
+  meta.list[[names.h5[r]]] <- read.csv(list.meta[r]) %>% 
+                          # join with clinical metadata
+                              left_join(., clin.meta[,-1],
+                                        by = "patient.ID")
+}
+
+# 2 columns in epithelial metadata is not present in nonepithelial
+setdiff(names(meta.list$Epithelial),
+        names(meta.list$NonEpithelial))
+# let's add them as NA
+
+meta <- data.table::rbindlist(meta.list,
+                              use.names = T, fill = T) %>% 
+          column_to_rownames("cell.ID")
+rm(meta.list)
+```
+
+## Creat seurat object
+```{r}
+if(identical(sort(rownames(meta)), sort(colnames(mat.full)))){
+  seurat <- CreateSeuratObject(counts = mat.full,
+                                    project = ds_name,
+                                    assay = "RNA",
+                                    meta.data = meta,
+                                    min.cells = 0,
+                                    min.features = 0)
+  rm(mat.full)
+  rm(meta)
+} else {
+  message("Discrepancies between count matrix and metadata")
+}
+
+dim(seurat)
+```
+Check mitochondrial and ribosomal genes
+```{r}
+grep("^MT-", rownames(seurat), value = T)
+grep("^RP[LS]", rownames(seurat), value = T)
+```
+
+
+
+**CHECK**:
+
+1. Assess available assays: Are raw counts available or only pre-normalized (eg log2TMP); if pre-normalized, specify how was the normalization performed!
+
+2. Make sure data matrix has genes as rows and cells as columns
+
+3. Include, adapt and standarize cell metadata
+
+4. Modify cell identifiers (`orig.ident`)
+
+5. Standardize gene symbols
+
+6. Add features/genes metadata
+
+
+## 1. Assess available assays
+Asses whether raw counts are available or only pre-normalized (eg log2TMP), if pre-normalized, specify how was the normalization performed at the entry form (`Expression data type`). If some datasets not include raw counts consider discarding them, or if normalization approach is known, de-normalize and normalize data on all datasets.
+***
+**Data input format**: e.g.  pre-normalized, "by total counts, as described in https://doi.org/10.1016/j.cell.2015.04.044"
+***
+
+
+Both CD4 and CD8 datasets contain count matrix!
+
+
+
+## 2.  Make sure data matrix has genes as rows and cells as columns
+```{r check_mtx, eval = F}
+dim(seurat@assays$RNA@counts)
+seurat@assays$RNA@counts[1:10,1:10]
+head(colnames(seurat@assays$RNA@counts))
+```
+
+## 3. Include, adapt and standarize cell metadata
+
+Generate a metadata dataframe including the following variables for each cell in the dataset. If some are not present include NA. If needed adapt metadata (factorize...).
+
++----------------------------+--------------------------------------+
+| Variable                   | Example                              |
++============================+======================================+
+| Original_cell_names        | AAACCTGAGGTTACCT.Pre_P007_b          |
++----------------------------+--------------------------------------+
+| Barcode                    | AAACCTGAGGTTACCT                     |
++----------------------------+--------------------------------------+
+| Study                      | Author_Year_PBMID_cohortID           |
+|                            |                                      |
+|                            | (e.g. ZhangY_2022_34653365)          |
++----------------------------+--------------------------------------+
+| Sample                     | Pre_P007_b                           |
++----------------------------+--------------------------------------+
+| Treatment                  | Pre                                  |
++----------------------------+--------------------------------------+
+| Individual                 | P007                                 |
++----------------------------+--------------------------------------+
+| Tissue                     | blood, tumor, adjacent, LN, other    |
++----------------------------+--------------------------------------+
+| OriginalAnnotationLevel{n} | CD4T                                 |
++----------------------------+--------------------------------------+
+
+```{r inspect_metadata}
+seurat@meta.data
+
+```
+Adapt metada and modify cell identifiers
+As all cells are labeled with cell[Number] to define unequivocally each cell, we will just add as a prefix the name of the dataset, and the rest of metadata.
+
+```{r adapt_meta}
+# Explore data and modifiy this code accordinly to fill the metadata slots
+meta <- seurat@meta.data %>% 
+            mutate(new.names = paste(ID,
+                                rownames(.),
+                                patient.ID,
+                                sample.origin,
+                                dataset,
+                                sep = ".")
+                   )
+          
+  # rename cells accordingly
+seurat <- RenameCells(seurat, new.names = meta$new.names)
+
+rm(meta)
+gc()
+
+```
+
+
+
+
+## 4. MERGE DATA
+At this point we won't merge the data.
+
+
+
+
+## 5. Standardize gene symbols 
+Map gene ids with our reference gene symbols using `STACAS::StandardizeGeneSymbols()`. Load EnsemblGenes105_Hsa_GRCh38.p13 and EnsemblGenes105_Mmu_GRCm39 retrieved at 14.02.2022 from [aux](https://github.com/carmonalab/scRNAseq_data_processing/master/aux), or already in you local directory if you cloned the repository.
+
+```{r load_geneRef}
+# load gene symbols dataset
+if (species == "mouse") {
+   geneRef_file <- "aux/EnsemblGenes105_Mmu_GRCm39.txt.gz"
+} else if (species == "human") {
+   geneRef_file <- "aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+}
+geneRef <- fread(geneRef_file)
+
+#change names with _ to -, as only accepted by seurat object features
+geneRef <- geneRef %>% mutate(`Gene name` = gsub("_", "-", `Gene name`))
+```
+
+
+```{r Standar_gene_Symbol}
+# Standarize gene symbols using STACAS
+# store in a list genes exluded in CD4 and CD8
+diff <- list()
+
+# split by dataset, to avoid get rid of synonims 
+li <- SplitObject(seurat, split.by = "dataset")
+sli <- list()
+diff <- list()
+for(a in names(li)){
+  sli[[a]] <- STACAS::StandardizeGeneSymbols(li[[a]],
+                                            geneRef)
+  # different genes
+  diff[[a]] <- setdiff(rownames(li[[a]]), rownames(sli[[a]]))
+}
+
+seurat <- scCustomize::Merge_Seurat_List(sli)
+  
+rm(li)
+rm(sli)
+gc()
+```
+
+
+
+
+CHECK slots
+TODO If data pre-normalized, apply inverse of NormalizeData() into "counts" slot. Then we can run NormalizeData() routinely
+
+```{r, eval = F}
+head(seurat)
+```
+
+
+
+## 6. Add features/genes metadata
+```{r add_gene_metadata}
+# Remove duplicates from Gene symbols reference
+features_meta_data <- geneRef[!duplicated(geneRef$`Gene name`)]
+# Convert to dataframe
+setDF(features_meta_data)
+
+rownames(features_meta_data) <- features_meta_data$`Gene name`
+
+# in Seurat, underscores ('_'), are replaced with dashes ('-')
+# in gene names; 5S_rRNA; but these just a few
+
+rownames(features_meta_data) <- gsub("_","-",rownames(features_meta_data)) 
+
+# add genes metadata
+features_meta_data <- features_meta_data[rownames(seurat),]
+
+rownames(features_meta_data)[!rownames(features_meta_data) %in% rownames(seurat)]
+rownames(seurat)[!rownames(seurat) %in% rownames(features_meta_data)]
+
+if ( all.equal(rownames(features_meta_data),rownames(seurat)) ) {
+  seurat[["RNA"]] <- AddMetaData(seurat[["RNA"]],
+                                      metadata = features_meta_data)
+}
+
+rm(geneRef,features_meta_data)
+```
+
+
+
+## 7. Load and store patient metadata
+This data is already in the metadata.
+
+
+
+## NORMALIZE DATA 
+CHECK are data pre-normalized? decide whether to Normalize
+
+In this case we have both counts (unnormalized) and normalized data (data slot). 
+
+We will normalize the count slot using `NormalizeData`.
+
+```{r norm_Data}
+seurat <- NormalizeData(seurat) 
+
+```
+
+
+# Quality control measurement and filtering
+
+## 1. Ribosomal and mitochondrial content, and sequencing complexity
+Use `SignatuR` package, including ribosomal and mitochondrial gene sets, to compute their relative content. Also, compute the sequencing complexity by computing the log10 ratio of genes detected per UMI.
+
+
+```{r define_qc_metrics}
+require(SignatuR)
+#Get mitochondrial and ribosomal signatures
+ribo.genes <- GetSignature(SignatuR$Hs$Compartments$Ribo)
+mito.genes <- GetSignature(SignatuR$Hs$Compartments$Mito)
+
+
+
+# Compute ribosomal and mitochondrial content and add to Seurat object metadata
+seurat <- AddMetaData(seurat, metadata = PercentageFeatureSet(seurat,
+                                  features = ribo.genes[ribo.genes %in% rownames(seurat)]),
+                      col.name = "percent.ribo")
+seurat <- AddMetaData(seurat,
+                      metadata = PercentageFeatureSet(seurat,
+                                  features = mito.genes[mito.genes %in% rownames(seurat)]),
+                      col.name = "percent.mito")
+
+# Compute the ratio of number of genes/features and number of counts/UMIs
+seurat$log10GenesPerUmi <- log10(seurat$nFeature_RNA) / 
+                                log10(seurat$nCount_RNA)
+
+```
+
+## 2. Evaluate QC metrics and filter dataset
+QC-based metric is mostly done manually by inspecting the distribution of the QC metrics. QC metrics can largely change between samples, cell types included (heterogeneity), sequencing technology, and batch. Take into account that number of reads (`nCount`) are only informative if raw counts are available, otherwise they cannot be used of QC filtering.
+
+Here are shown some guidelines for QC-based filtering:
+
+|--------------------------------------|---------------------------------------------------------------------|
+| QC metric                            | Guidelines for filtering                                            |
+|--------------------------------------|---------------------------------------------------------------------|
+| Ribosomal content                    | \> 0.5% & \< 60%                                                    |
+| Mitochondrial content                | \< 10-20%                                                           |
+| Number of genes/features (nFeatures) | \>400 and custom upper limit based on your data                     |
+| Numbrer of counts/UMI (nCount)       | \>800 and customand custom upper limit based on your data           |
+| Ratio Features/Counts                | \> 0.6                                                              |
+| Special genes                        | Custom: Consider remove some of these genes for downstream analysis |
+|--------------------------------------|---------------------------------------------------------------------|
+
+### CHECK: distributions across samples
+```{r qc_plots0, fig.height= 10}
+
+Idents(seurat) <- "dataset"
+print(VlnPlot(seurat,
+              features = c("nFeature_RNA", "nCount_RNA",
+                           "percent.ribo","percent.mito",
+                           "PTPRC","MALAT1"),
+                ncol = 3, pt.size=0)
+    )
+
+```
+
+### Custom thresholds
+Review after assessing the plots!
+
+```{r set_cutoffs}
+cutoffs <- list()
+cutoffs[["percent.ribo"]] <- c(min=0.5,max=60)
+cutoffs[["percent.mito"]] <- c(min=0,max=20)
+cutoffs[["nFeature_RNA"]] <- c(min=400,max=6000) 
+cutoffs[["nCount_RNA"]] <- c(min=800,max=40000) # raw counts present??
+cutoffs[["log10GenesPerUmi"]] <- 0.6
+print(cutoffs)
+```
+
+### Filter out outliers & low quality cells (custom)
+```{r qc_plots}
+
+# When using qc_plot cutoffs should be a list with the same names for 
+# QC metrics as in the metadata
+qclist <- lapply(names(cutoffs), # names of QC metrics to evaluate
+                 qc_plot, # qc_plot function on functions.R script
+                 metadata = seurat@meta.data,
+                 cutoffs = cutoffs,
+                 fill = "cell.type", 
+                 show.legend =T) # seurat metadata
+
+# Join all plots into a single one
+require(ggpubr)
+qclistgg <- ggarrange(plotlist = qclist,
+                      common.legend = T,
+                      legend = "bottom")
+
+
+qclistgg
+```
+
+```{r}
+var <- "percent.mito"
+fill <- "cell.type"
+nc <- seurat@meta.data %>%
+    ggplot(aes(.data[[var]])) +
+    {if(is.null(fill)){
+      geom_density(fill = "grey30",
+                   color = "grey10")
+    } else {
+      geom_density(aes(fill = .data[[fill]]),
+                   color = "grey10",
+                   alpha = 0.5,
+                   show.legend = F)
+    }}+
+    {if(max(seurat@meta.data[[var]])>100){
+          scale_x_log10()}} +
+    {if(!all(is.na(cutoffs[[var]]))){
+      geom_vline(xintercept = cutoffs[[var]],
+                 color = "red",
+                 linetype="dashed")}} +
+    facet_wrap(~cell.type, ncol = 4) +
+    theme_bw() +
+    theme(aspect.ratio = 1)
+```
+
+
+### Standard check
+
+```{r probs, eval = F}
+for(va in names(cutoffs)){
+  cat(va, "\n")
+  print(quantile(seurat@meta.data[[va]],
+                 probs=c(0.001, 0.005, 0.01, 0.02,
+                         0.98, 0.99, 0.995, 0.999))
+        )
+}
+```
+
+After having evaluated the QC metrics values and distribution, modify cutoffs if needed and then proceed to subset your data based on those. Also, evaluate how many cells are being removed based on your cutoffs.
+
+IMPORTANT
+I decided to not filter out cells based on QC metrics. 
+1) QC metrics seem acceptable
+2) in order to better compare with original paper annotation
+
+*in this case we won't filter out cells, we will keep them all, trusting authors QC metrics*
+
+
+```{r subset_seurat, fig.height= 10, eval = F}
+# store initial number of cells
+initialCellNum <- ncol(seurat)
+message(paste("Original number of cells:", initialCellNum))
+
+# Perform subsetting using cutoffs list and qc metrics considered
+seurat <- subset(seurat, subset = 
+                        nFeature_RNA >= cutoffs[["nFeature_RNA"]]["min"] &
+                        nFeature_RNA < cutoffs[["nFeature_RNA"]]["max"] & 
+                        # raw counts present??
+                        nCount_RNA   >= cutoffs[["nCount_RNA"]]["min"]   & 
+                        nCount_RNA   < cutoffs[["nCount_RNA"]]["max"]   &  
+                        percent.ribo >= cutoffs[["percent.ribo"]]["min"] & 
+                        percent.ribo < cutoffs[["percent.ribo"]]["max"] &
+                        percent.mito >= cutoffs[["percent.mito"]]["min"] &
+                        percent.mito < cutoffs[["percent.mito"]]["max"] &
+                        log10GenesPerUmi > cutoffs[["log10GenesPerUmi"]]
+                      )
+
+# Print and evaluate the cell drop out after filtering
+l <- ncol(seurat)
+message(sprintf("Number of cells after QC: %i (%.2f %% of input)", l, 100*l/initialCellNum))
+```
+
+
+# Downsample, process dataset and make diagnostic plots
+
+We will save the datasets with all cells (whole) and datasets without small samples and downsampling large ones (light).
+
+## Small samples
+```{r}
+col.meta <- c("sample.ID")
+pl.list <- list()
+
+for(a in col.meta){
+  pl <- seurat@meta.data %>% 
+    ggplot(aes( y = .data[[a]], fill = .data[[a]])) +
+    geom_bar(show.legend = F) +
+    geom_vline(xintercept = 200,
+               color = "black",
+               linetype="dashed") +
+    scale_x_log10() +
+    labs(x = "Number of cells pre QC filtering") +
+    ggprism::theme_prism()
+  pl.list[[a]] <- pl
+}
+
+wrap_plots(pl.list, ncol = 1)
+
+```
+We will remove sample below `r min.cells` (200)
+
+```{r remove_small_samples, eval = F}
+# Check distribution of samples cell number
+hist(table(seurat$sample.ID))
+
+# Remove small samples
+tab <- table(seurat$sample.ID)
+keep <- names(tab)[tab > min.cells]
+seurat.ds <- subset(seurat, sample.ID %in% keep)
+
+# Print number of samples removed
+cat(length(tab[tab <= min.cells]), "samples removed out of a total of ", length(tab) )
+
+# Print and evaluate the cell drop out after this step
+l <- ncol(seurat.ds)
+message(sprintf("Number of cells after QC: %i (%.2f %% of input)",
+                l, 100*l/ncol(seurat)))
+```
+
+We keep most of the cells: Number of cells after QC: 372200 (99.77 % of input)
+Removed a total of 8 samples out of 189.
+
+## Downsample data
+We will downsample based on sample.id
+
+```{r downsample, eval = T}
+(initial <- ncol(seurat.ds))
+# Downsample
+Idents(seurat.ds) <- "sample.ID"
+# Set seed for downsampling
+set.seed(my_seed)
+seurat.ds <- subset(seurat.ds,
+                       downsample = ds)
+
+l <- ncol(seurat.ds)
+message(sprintf("Number of cells after QC: %i (%.2f %% of input)",
+                l, 100*l/initial))
+```
+
+We kept: Number of cells after QC: 166586 (44.76 % of input)
+
+
+
+# Export standardized datasets
+At this point we save the file without QC filtering, removing small samples nor downsampling. 
+```{r}
+saveRDS(seurat,
+        file.path(output_data_path,paste0(ds_name,"_Nofilt_whole.rds")))
+
+saveRDS(seurat.ds,
+        file.path(output_data_path,paste0(ds_name,"_Nofilt_Downsampled_light.rds")))
+```
+
+# Consider saving as H5 (https://github.com/mojaveazure/seurat-disk) for interoperability with Bioconductor and Python; eg SaveH5Seurat() 
+
+## Save H5 file
+SaveH5Seurat save the whole seurat object, including metadata. For tools such as CellBender we require only the matrix count to be saved in a .h5 file, not a .h5Seurat.
+
+```{r, eval = F}
+for(e in names(list.seurat)){
+filename <- paste0(ds_name,"_Nofilt_Downsampled")
+write_dgCMatrix_h5(GetAssayData(object = list.ds[[e]], slot = "counts"),
+                    cols_are = "sample_names",
+                    h5_target = paste0(filename, ".h5"),
+                    ref_name = ds_name)
+
+filename <- paste0(ds_name,"_Nofilt_whole")
+write_dgCMatrix_h5(GetAssayData(object = list.seurat[[e]], slot = "counts"),
+                    cols_are = "sample_names",
+                    h5_target = paste0(filename, ".h5"),
+                    ref_name = ds_name)
+
+}
+```

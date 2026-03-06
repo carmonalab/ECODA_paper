@@ -1,0 +1,337 @@
+---
+title: Standardized Processing of scRNA-seq datasets
+author: "M. Andreatta <massimo.andreatta at unil.ch>, S. Carmona <santiago.carmona at unil.ch>, J. Garnica <josep.garnicacaparros at unil.ch>"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+------------------------------------------------------------------------
+# Set parameters
+
+Dataset name: Author_Year_PBMID_cohortID (eg. ZhangY_2022_34653365)
+
+Dataset ID should have 3 letters from Author (Aaa) followed by
+additional uniquifying letter (A). If multiple cohort, followed by 1
+letter from cohort ID separated by dot (e.g. AndA.H; AndB.M; And.C,
+etc.)
+
+```{r dataset_name}
+ds_name <- "StephensonE_2021_33879890"
+ID <- "SteE"
+species <- "human"
+my_seed <- 123
+set.seed(my_seed)
+
+```
+
+# Set paths
+```{r}
+path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets", ds_name)
+dir.create(file.path(path_nas))
+path_data <- file.path(path_nas, "data")
+dir.create(file.path(path_data))
+path_output <- file.path(path_nas, "output")
+dir.create(file.path(path_output))
+path_plots <- file.path(path_nas, "plots")
+dir.create(file.path(path_plots))
+```
+
+**CHECK**: Make sure the input data and metadata are available in our
+repository.
+
+
+# Prepare packages and environtment
+
+```{r load_packages_functions, message=FALSE}
+# remotes::install_github("carmonalab/UCell",ref="5f12a9d")
+# remotes::install_github("carmonalab/scGate",ref="17a4ce6")
+# remotes::install_github("carmonalab/STACAS",ref="bd73fff")
+# remotes::install_github("carmonalab/ProjecTILs",ref="cc73b97")
+# remotes::install_github("carmonalab/SignatuR",ref="54bc3e8")
+
+library(Seurat) # v5
+library(limma)
+# devtools::install_github("immunogenomics/presto")
+#library(presto)
+#library(SeuratData)
+# library(SeuratDisk)
+
+library(ggplot2)
+library(UCell)
+library(scGate)
+library(SingleCellExperiment)
+library(viridis)
+library(Matrix)
+library(patchwork)
+library(GEOquery)
+library(dplyr)
+library(data.table)
+library(STACAS)
+library(SignatuR)
+
+# load custom functions
+source("Rutils/functions.R")
+```
+
+Also, increase memory parameters to allocate large vectors, otherwise R
+might crash
+
+```{bash create_Renviron}
+#include vector max size
+max_size=200Gb
+
+# create .Renviron file if not present
+if ! [ -a ".Renviron" ]
+then
+  touch .Renviron
+  echo R_MAX_VSIZE=$max_size > .Renviron
+  echo New .Renviron file created!
+else
+  echo .Renviron already present!
+  echo Check size of the allowed vector:
+  cat .Renviron
+fi
+```
+
+
+# Download data
+
+# Load Data
+
+Depending on the data format at GEO or Zenodo, use different tools to
+load the datasets into the environment.
+
+For now, only using the Stephenson dataset, as its the largest one and has well-annotated metadata
+```{r}
+
+# File "haniffa21.processed.h5ad" downloaded from:
+# https://www.covid19cellatlas.org/index.patient.html
+# -> COVID-19 PBMC Ncl-Cambridge-UCL
+
+Convert(file.path(path_data, "haniffa21.processed.h5ad"), dest = file.path(path_data, "COVID19_Stephenson.h5seurat"))
+obj_COVID19_Stephenson <- LoadH5Seurat(file.path(path_data, "COVID19_Stephenson.h5seurat"))
+saveRDS(obj_COVID19_Stephenson, file = file.path(path_data, "COVID19_Stephenson.rds"), compress = T)
+obj <- readRDS(file.path(path_data, "COVID19_Stephenson.rds"))
+
+# obj_COVID19_van_der_Wijst <- readRDS(file.path(path_data, "COVID19_van_der_Wijst.rds"))
+# # convert v4 assay to v5 assay
+# obj_COVID19_van_der_Wijst[["RNA"]] <- as(object = obj_COVID19_van_der_Wijst[["RNA"]], Class = "Assay5")
+```
+
+# Update Seurat object to newest version (v5)
+
+```{r}
+obj@version
+obj <- CreateSeuratObject(obj@assays$raw$counts,
+                          meta.data = obj@meta.data)
+obj@version
+```
+
+
+**CHECK**:
+
+1.  Assess available assays: Are raw counts available or only
+    pre-normalized (eg log2TMP); if pre-normalized, specify how was the
+    normalization performed!
+
+2.  Make sure data matrix has genes as rows and cells as columns
+
+3.  Include, adapt and standarize cell metadata
+
+4.  Modify cell identifiers (`orig.ident`)
+
+5.  Standardize gene symbols
+
+6.  Add features/genes metadata
+
+## 1. Assess available assays
+
+Asses whether raw counts are available or only pre-normalized (eg
+log2TMP), if pre-normalized, specify how was the normalization performed
+at the entry form (`Expression data type`). If some datasets not include
+raw counts consider discarding them, or if normalization approach is
+known, de-normalize and normalize data on all datasets. *Data input
+format**: e.g. pre-normalized, "by total counts, as described in
+<https://doi.org/10.1016/j.cell.2015.04.044>"***
+
+## 2. Make sure data matrix has genes as rows and cells as columns
+
+# Metadata info
+```{r}
+head(colnames(obj))
+paste("Number of genes:", dim(obj)[1])
+paste("Number of cells:", dim(obj)[2])
+paste("Number of samples:", length(unique(obj$sample_id)))
+paste("Number of patients:", length(unique(obj$patient_id)))
+paste("Sites:", unique(obj$Site))
+paste("Number of cells per sex:")
+paste(names(table(obj$Sex)), table(obj$Sex))
+paste("Outcome labels:")
+paste(unique(obj$Worst_Clinical_Status))
+```
+
+## 3. Include, adapt and standarize cell metadata
+
+Generate a metadata dataframe including the following variables for each
+cell in the dataset. If some are not present include NA. If needed adapt
+metadata (factorize...).
+
++---------------------------+-------------------------------------+
+| Variable                  | Example                             |
++===========================+=====================================+
+| Original_cell_names       | AAACCTGAGGTTACCT.Pre_P007_b         |
++---------------------------+-------------------------------------+
+| Barcode                   | AAACCTGAGGTTACCT                    |
++---------------------------+-------------------------------------+
+| Study                     | Author_Year_PBMID_cohortID          |
+|                           |                                     |
+|                           | (e.g. ZhangY_2022_34653365)         |
++---------------------------+-------------------------------------+
+| Sample                    | Pre_P007_b                          |
++---------------------------+-------------------------------------+
+| Treatment                 | Pre                                 |
++---------------------------+-------------------------------------+
+| Individual                | P007                                |
++---------------------------+-------------------------------------+
+| Tissue                    | blood, tumor, adjacent, LN, other   |
++---------------------------+-------------------------------------+
+| O                         | CD4T                                |
+| riginalAnnotationLevel{n} |                                     |
++---------------------------+-------------------------------------+
+
+
+```{r adapt_meta}
+# Some barcodes contain the site as a prefix, e.g. site_ATGCATGC... or some other unknown identifier
+# IMPORTANT: needs to be left in, otherwise duplicate names
+# Maybe some samples were sequenced multiple times?
+
+# Explore data and modifiy this code accordingly to fill the metadata slots
+cell_names <- colnames(obj)
+obj@meta.data$Original_cell_names <- cell_names
+cell_names[grepl("_", cell_names)] <- sapply(strsplit(cell_names[grepl("_", cell_names)], "_"), function(x) x[[2]])
+cell_names.split <- strsplit(cell_names, "-")
+obj@meta.data$Barcode <- sapply(cell_names.split, function(x) x[[1]])
+
+messy_barcodes <- grepl("_", obj@meta.data$Barcode)
+obj@meta.data$Barcode[messy_barcodes] <- sapply(strsplit(obj@meta.data$Barcode[messy_barcodes], "_"), function(x) x[[2]])
+
+obj@meta.data$Study <- ds_name
+obj@meta.data$Sample <- obj$sample_id
+obj@meta.data$Sample <- gsub("-", ".", obj@meta.data$Sample)
+obj@meta.data$Individual <- obj$patient_id
+obj@meta.data$Tissue <- "blood"
+rm(cell_names, cell_names.split)
+gc()
+```
+
+Clarify metadata "Status" and "Swab_results"
+```{r}
+table(obj$Status, obj$Swab_result)
+
+unique(obj$sample_id[obj$Status == "Covid" & obj$Swab_result == "Negative"])
+```
+
+
+## 4. Modify cell identifiers (`orig.ident`)
+
+To make cell ids compatible with other datasets, append the study ID at
+the beginning of the original cell name. If available, also add other
+metadata elements such as Individual, tissue or treatment.
+
+```{r modify_cellID}
+#fields in prefix are separated by dots
+prefix <- paste(obj$Sample, "blood", obj$Sex, obj$Status_on_day_collection_summary, obj$Site, sep=".")  #fields in prefix are separated by dots
+cell_ids <- paste(prefix, gsub("-", ".", obj$Original_cell_names), sep = '_') #underscore delimits end of prefix
+colnames(obj) <- cell_ids
+obj[1:10,1:2]
+head(colnames(obj))
+rm(prefix)
+gc()
+```
+
+## 5. Standardize gene symbols
+
+Map gene ids with our reference gene symbols using
+`STACAS::StandardizeGeneSymbols()`. Load EnsemblGenes105_Hsa_GRCh38.p13
+and EnsemblGenes105_Mmu_GRCm39 retrieved at 14.02.2022 from
+[aux](https://github.com/carmonalab/scRNAseq_data_processing/master/aux),
+or already in you local directory if you cloned the repository.
+
+```{r load_geneRef}
+# load gene symbols dataset
+if (species == "mouse") {
+   geneRef_file <- "aux/EnsemblGenes105_Mmu_GRCm39.txt.gz"
+} else if (species == "human") {
+   geneRef_file <- "aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+}
+geneRef <- fread(geneRef_file)
+```
+
+```{r Standar_gene_Symbol}
+# Standarize gene symbols using STACAS
+obj <- STACAS::StandardizeGeneSymbols(obj, geneRef, assay = "RNA", slots = "counts")
+```
+
+
+### Clean cell metadata (custom)
+
+CHECK: cell metadata fields: Sample, Individual, Tissue
+c("blood","tumor","adjacent","LN","other"), Study,
+OriginalAnnotationLevel1, OriginalAnnotationLevel2,
+OriginalAnnotationLevel3... Factorize or change labels if needed.
+
+```{r clean_metadata}
+obj$orig.ident <- cell_ids
+obj$OriginalAnnotationLevel1 <- obj$initial_clustering
+obj$OriginalAnnotationLevel2 <- obj$full_clustering
+```
+
+How many cells per sample?
+```{r}
+sample.size.pre <- sort(table(obj$Sample))
+sample.size.pre
+barplot(sort(sample.size.pre), las=2)
+```
+
+# Downsample, process dataset and make diagnostic plots
+
+At this point we should only have in our datasets high quality cells. We
+will remove samples with very few cells and downsample large ones, in
+order to have a similar contribution from all patients and samples.
+Downsampling large samples also speeds up downstream computations.
+
+We will save the datasets with all high-quality cells (whole) and
+datasets without small samples and downsampling large ones (light).
+
+```{r remove_small_samples}
+min.cells.perSample <- 500
+# max.cells.perSample <- 10000
+cells.perSample <- table(obj$Sample)
+barplot(sort(cells.perSample))
+abline(h=min.cells.perSample)
+# abline(h=max.cells.perSample)
+
+# Remove small samples
+tab <- table(obj$Sample)
+keep <- names(tab)[tab > min.cells.perSample]
+obj <- subset(obj, Sample %in% keep)
+
+# Print number of samples removed
+cat(length(tab[tab <= min.cells.perSample]), "samples removed out of a total of ", length(tab) )
+
+# # Print and evaluate the cell drop out after this step
+# l <- ncol(obj)
+# message(sprintf("Number of cells after removing low cell count samples: %i (%.2f %% of input)",
+#                 l, 100*l/sum(sample.size.pre)))
+```
+
+
+# Export standardized datasets
+
+```{r}
+saveRDS(obj,file.path(path_output, paste0(ds_name, "_Stephenson_preprocessed.rds")))
+```
