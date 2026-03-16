@@ -29,7 +29,7 @@ This script takes output of "scRNAseq_data_processing_ZhangY_2022_34653365.Rmd"
 
 source("functions.R")
 
-library(scooter)
+# library(scooter)
 
 library(scGate)
 library(UCell)
@@ -53,8 +53,8 @@ library(scATOMIC)
 warnings <- import("warnings")
 warnings$simplefilter("ignore")
 library(R.utils)
-
-`%notin%` <- Negate(`%in%`)
+# BiocManager::install("anndataR")
+library(anndataR)
 ```
 
 
@@ -65,6 +65,7 @@ set.seed(my_seed)
 
 path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
 # path_nas <- file.path(getwd(), "data")
+shared_storage_path <- "/Users/christianhalter/Library/CloudStorage/OneDrive-Personal/Temp"
 ```
 
 
@@ -105,8 +106,8 @@ datasets <- list(
     )
   ),
   
-    "GongSharma_all" = list(
-    file_path = file.path(path_nas, "GongSharma_2024_PrePrintTBD", "output", "Gongsharma_all.h5ad"),
+  "Gongsharma_cmv_young_males" = list(
+    file_path = file.path(path_nas, "GongSharma_2024_PrePrintTBD", "output", "Gongsharma_cmv_young_males.h5ad"),
     tissue = "Blood",
     normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
     sample_col = "Sample",
@@ -118,6 +119,20 @@ datasets <- list(
       "AIFI_L1", "AIFI_L3" # Author annotations
     )
   ),
+  
+  # "GongSharma_all" = list(
+  #   file_path = file.path(path_nas, "GongSharma_2024_PrePrintTBD", "output", "Gongsharma_all.h5ad"),
+  #   tissue = "Blood",
+  #   normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
+  #   sample_col = "Sample",
+  #   meta_cols_keep = c(
+  #     "Sample", # Sample identifier
+  #     "sample.subjectAgeAtDraw", # Main biological grouping
+  #     "subject.cmv", # Main biological grouping
+  #     "subject.biologicalSex", # Main biological grouping
+  #     "AIFI_L1", "AIFI_L3" # Author annotations
+  #   )
+  # ),
   
   # "GongSharma_age_females_cmvneg" = list(
   #   file_path = file.path(path_nas, "GongSharma_2024_PrePrintTBD", "output", "Gongsharma_age_females_cmvneg.h5ad"),
@@ -169,6 +184,20 @@ datasets <- list(
       "subject.status", # Additional biological groupings
       "cells", # Author annotations
       "cells_lowres" # Additional low res annotation based on author annotation
+    )
+  ),
+  
+  "Kim" = list(
+    file_path = file.path(path_nas, "KimN_2020_32385277", "output", "KimN_2020_32385277whole.rds"),
+    tissue = "Lung",
+    normal_tissue = FALSE, # Whether the dataset contains cancer cells or only normal cells
+    sample_col = "Sample",
+    meta_cols_keep = c(
+      "Sample", # Sample identifier
+      "Tissue", # Main biological grouping
+      "Individual", "Sex", "Age", "Histology", "Smoking", "Pathology", "EGFR", "Stages", # Additional biological groupings
+      "Cell_subtype", # Author annotations
+      "Cell_type" # Additional low res annotation based on author annotation
     )
   ),
   
@@ -340,7 +369,6 @@ geneRef <- data.table::fread(geneRef_file)
 ```
 
 
-
 # Pre-process datasets
 ```{r}
 # Number of highly variable features (genes) to select
@@ -424,19 +452,19 @@ for (ds in names(datasets)) {
     # Ensure it's a seurat v5 object
     seurat <- create_clean_seuratv5_object(seurat)
     
-        # Standardize gene symbols
+    # Standardize gene symbols
     if (ds %in% c("Sikkema")) {
       # Standarize gene symbols using STACAS
       seurat <- STACAS::StandardizeGeneSymbols(seurat, geneRef, assay = "RNA", slots = "counts")
     }
     
-    
-    # v5 seurat object not supported for SeuratDisk's SaveH5Seurat
-    # https://github.com/satijalab/seurat/issues/9154
-    object <- seurat
-    object[["RNA"]] <- CreateAssayObject(counts = object[["RNA"]]$counts)
-    convert_seurat_to_h5ad(object, ds)
-    rm(object);gc()
+    # Write h5ad for use in python
+    file_path_h5ad <- file.path(shared_storage_path, paste0(ds, ".h5ad"))
+    if (!file.exists(file_path_h5ad)) {
+      seurat@assays$RNA@data <- seurat@assays$RNA@counts
+      write_h5ad(seurat, file_path_h5ad)
+      seurat@assays$RNA@data <- NULL
+    }
     
     
     # Standard Seurat preprocessing part 1
@@ -446,12 +474,11 @@ for (ds in names(datasets)) {
     
     
     # Annotate cells
-    
     obj.list <- SplitObject(seurat, split.by = "Sample")
     rm(seurat)
     gc()
-
-
+    
+    
     ## scAtomic
     
     for (i in 1:length(obj.list)) {
@@ -506,21 +533,21 @@ for (ds in names(datasets)) {
         print(round(execution_time, 1))
       }
     }
-
+    
     
     ## HiTME
     while (length(obj.list) > 0) {
       print(paste(ds, "Samples remaining:", length(obj.list)))
       
       obj <- obj.list[[1]]
-
+      
       if ("layer3" %notin% colnames(obj@meta.data)) {
         
         # On a MacBook Pro with M1 chip, it takes roughly 60 sec to process a sample with 10'000 cells
         # The timeout is per process (so ~ 60 / 6 = ~ 10 sec)
         # So, giving 60 sec per 10'000 cells for a process/core to finish is plenty
-        ncores <- parallelly::availableCores() - 2
-        timeout_core <- max(20, dim(obj)[2] / 10000 * 60)
+        ncores <- 1 # parallelly::availableCores() - 2
+        timeout_core <- 600 # max(20, dim(obj)[2] / 10000 * 60)
         start_time <- Sys.time()  # Start measuring time
         
         # Retry 5 times

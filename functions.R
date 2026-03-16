@@ -9,6 +9,7 @@ suppressPackageStartupMessages({
   library(ggtext)
   library(mclust)
   library(plotly)
+  # remotes::install_version(package = "SeuratObject", version = "5.2.0")
   library(Seurat)
   library(limma)
   # devtools::install_github('satijalab/seurat-data')
@@ -26,15 +27,13 @@ suppressPackageStartupMessages({
   library(rstatix)
 
   library(parallelly)
-
-  # remotes::install_github("carmonalab/scooter", ref="f31eab3")
-  # library(scooter)
+  library(patchwork) # To combine the plots
 
   # Import at the end, otherwise the "select" function gets re-assigned by another package
   library(dplyr)
-
-  # library(arrow)
 })
+
+`%notin%` <- Negate(`%in%`)
 
 
 clr <- function(df) {
@@ -135,6 +134,7 @@ calc_avg_sep_score <- function(dist_mat, labels, digits = 2) {
     unlist() %>%
     mean() %>%
     round(digits)
+  return(avg_sep_score)
 }
 
 
@@ -213,25 +213,6 @@ clust_eval <- function(dist_mat,
     results[["hclust_accuracy"]] <- round(results[["hclust_accuracy"]], digits)
     results[["pamclust_accuracy"]] <- round(results[["pamclust_accuracy"]], digits)
     return(results)
-  }
-}
-
-
-convert_seurat_to_h5ad <- function(seurat,
-                                   ds,
-                                   shared_storage_path = "/Users/christianhalter/Library/CloudStorage/OneDrive-Personal/Temp") {
-  temp_file_path <- file.path(getwd(), "data")
-  temp_file_path_h5ad <- file.path(temp_file_path, paste0(ds, ".h5ad"))
-  file_path_h5seurat <- file.path(temp_file_path, paste0(ds, ".h5Seurat"))
-  file_path_h5ad <- file.path(shared_storage_path, paste0(ds, ".h5ad"))
-  if (!file.exists(file_path_h5ad)) {
-    SaveH5Seurat(seurat, filename = file_path_h5seurat)
-    Convert(file_path_h5seurat, dest = "h5ad")
-    unlink(file_path_h5seurat)
-    file.rename(temp_file_path_h5ad, file_path_h5ad)
-    print(paste0("File saved to: ", file_path_h5ad))
-  } else {
-    print("File already processed")
   }
 }
 
@@ -786,17 +767,39 @@ impute_zeros <- function(df,
 
 
 # Need to load h5ad without metadata and add it manually, otherwise R errors
-load_h5ad_to_seurat <- function(file_name) {
-  file_name_short <- strsplit(file_name, "\\.")[[1]][1]
-  file_name_seurat <- paste0(file_name_short, ".h5seurat")
+# load_h5ad_to_seurat <- function(file_name) {
+#   file_name_short <- strsplit(file_name, "\\.")[[1]][1]
+#   file_name_seurat <- paste0(file_name_short, ".h5seurat")
+#
+#   if (file.exists(file_name) & !file.exists(file_name_seurat)) {
+#     Convert(file_name, dest = "h5seurat", overwrite = TRUE)
+#   }
+#
+#   seurat <- SeuratDisk::LoadH5Seurat(file_name_seurat, meta.data = F)
+#   meta <- arrow::read_feather(paste0(file_name_short, ".feather"))
+#   seurat <- Seurat::AddMetaData(seurat, meta)
+#
+#   return(seurat)
+# }
 
-  if (file.exists(file_name) & !file.exists(file_name_seurat)) {
-    Convert(file_name, dest = "h5seurat", overwrite = TRUE)
+
+load_h5ad_to_seurat <- function(file_name) {
+  seurat <- read_h5ad(file_name, as = "Seurat")
+
+  if (!is.null(seurat@assays$RNA$X)) {
+    seurat[["RNA"]]$counts <- seurat[["RNA"]]$X
+    seurat[["RNA"]]$X <- NULL
+    gc()
   }
 
-  seurat <- SeuratDisk::LoadH5Seurat(file_name_seurat, meta.data = F)
-  meta <- arrow::read_feather(paste0(file_name_short, ".feather"))
-  seurat <- Seurat::AddMetaData(seurat, meta)
+  file_name_short <- tools::file_path_sans_ext(file_name)
+  feather_path <- paste0(file_name_short, ".feather")
+
+  if (file.exists(feather_path)) {
+    meta <- arrow::read_feather(feather_path)
+    # Ensure row names match if necessary, but AddMetaData usually handles joins
+    seurat <- Seurat::AddMetaData(seurat, metadata = as.data.frame(meta))
+  }
 
   return(seurat)
 }
@@ -904,6 +907,97 @@ plot_pca <- function(feat_mat,
   }
 
   return(p)
+}
+
+
+plot_pca_contributions_horizontal <- function(res.pca, pcs = c("PC1", "PC2"), n = 3, absolute = TRUE) {
+  # 1. Input Validation
+  loadings <- as.data.frame(res.pca$rotation)
+
+  missing_pcs <- setdiff(pcs, colnames(loadings))
+  if (length(missing_pcs) > 0) {
+    stop(paste(
+      "The following PCs are missing from the PCA object:",
+      paste(missing_pcs, collapse = ", ")
+    ))
+  }
+
+  # 2. Extract and Process Data
+  plot_data <- lapply(pcs, function(pc) {
+    df <- loadings %>%
+      rownames_to_column(var = "Feature") %>%
+      select(Feature, Loading = !!sym(pc))
+
+    # Conditional logic based on 'absolute' argument
+    if (absolute) {
+      df <- df %>%
+        mutate(Loading = abs(Loading)) %>%
+        arrange(desc(Loading))
+
+      # Grab top N
+      top_bottom <- head(df, n) %>%
+        mutate(PC = pc)
+    } else {
+      df <- df %>%
+        arrange(desc(Loading))
+
+      # Grab top N and bottom N
+      top_bottom <- bind_rows(head(df, n), tail(df, n)) %>%
+        distinct() %>%
+        mutate(PC = pc)
+    }
+
+    return(top_bottom)
+  }) %>%
+    bind_rows()
+
+  # 3. The Sorting Trick for Facets
+  # Use a unique separator "___" so we don't accidentally split natural underscores
+  plot_data <- plot_data %>%
+    mutate(Feature_PC = factor(paste(Feature, PC, sep = "___"))) %>%
+    # Sort ascending so highest values are at the top of the plot
+    arrange(PC, Loading) %>%
+    mutate(Feature_PC = factor(Feature_PC, levels = Feature_PC))
+
+  # 4. Dynamic text for the plot labels
+  sub_text <- if (absolute) {
+    paste("Showing top", n, "absolute loadings")
+  } else {
+    paste("Showing top", n, "positive and bottom", n, "negative loadings")
+  }
+
+  x_label <- if (absolute) {
+    "Absolute PCA Loading"
+  } else {
+    "PCA Loading"
+  }
+
+  # 5. Create the Plot
+  ggplot(plot_data, aes(y = Feature_PC, x = Loading)) +
+    # Use a neutral fill with a clean black border for publication
+    geom_col(fill = "gray70", color = "black", linewidth = 0.4) +
+
+    # Only remove our unique separator and everything after it
+    scale_y_discrete(labels = function(x) gsub("___.*", "", x)) +
+    facet_wrap(~PC, nrow = length(pcs), scales = "free_y") +
+
+    # theme_classic() is standard for scientific plots (removes gridlines, adds axis lines)
+    theme_classic() +
+    labs(
+      title = "Main Contributing Features",
+      # subtitle = sub_text,
+      y = "Feature",
+      x = x_label
+    ) +
+    theme(
+      strip.text = element_text(size = 12, face = "bold", color = "black"),
+      strip.background = element_blank(), # Removes the box around facet labels
+      panel.spacing = unit(1.5, "lines"),
+      axis.text.y = element_text(size = 10, color = "black"),
+      axis.text.x = element_text(size = 10, color = "black"),
+      axis.title = element_text(size = 11, face = "bold", color = "black"),
+      plot.title = element_text(face = "bold")
+    )
 }
 
 
@@ -1075,14 +1169,14 @@ run_analyses <- function(result_list,
                          seurat,
                          path_data,
                          path_plots) {
-  print(paste("Running benchmark analysis for dataset: ", ds))
-  result_list[["bmark"]][[ds]] <- run_benchmark_analysis(
-    res_list = result_list[["bmark"]][[ds]],
-    ds = ds,
-    seurat = seurat,
-    path_data = path_data,
-    path_plots = path_plots
-  )
+  # print(paste("Running benchmark analysis for dataset: ", ds))
+  # result_list[["bmark"]][[ds]] <- run_benchmark_analysis(
+  #   res_list = result_list[["bmark"]][[ds]],
+  #   ds = ds,
+  #   seurat = seurat,
+  #   path_data = path_data,
+  #   path_plots = path_plots
+  # )
 
   labels <- get_labels(seurat, seurat@misc$label_col)
   ct_comps <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = seurat@misc$hi_res_ct_col)
@@ -1132,10 +1226,12 @@ run_benchmark_analysis <- function(res_list,
     }
 
     file_mrvi <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_mrvi_dists.feather"))
-    file_pilot <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_pilot_dists.feather"))
-    files_scpoli <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_scpoli_dims", scpoli_dims, "_embs.feather"))
+    file_pilot <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_pilot_dists.feather"))
+    files_scpoli <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_lowres_scpoli_dims", scpoli_dims, "_embs.feather"))
+    file_lowres_pilot <- file.path(path_data, paste0(ds_filename, "_hvg2000_lowres_pilot_dists.feather"))
+    files_highres_scpoli <- file.path(path_data, paste0(ds_filename, "_hvg2000_highres_scpoli_dims5_embs.feather"))
 
-    files_to_check <- c(file_mrvi, file_pilot, files_scpoli)
+    files_to_check <- c(file_mrvi, file_pilot, files_scpoli, file_lowres_pilot, files_highres_scpoli)
     missing_files <- files_to_check[!file.exists(files_to_check)]
 
     if (length(missing_files) > 0) {
@@ -1200,6 +1296,36 @@ run_benchmark_analysis <- function(res_list,
     )
   }
 
+  # Calculate ct pseudobulks
+  if (!"Pseudobulk_ct_LR_hvg2000" %in% names(res_list)) {
+    if (!is.null(seurat@misc$low_res_ct_col)) {
+      res_list[["Pseudobulk_ct_LR_hvg2000"]][["exec_time"]] <- exec_time(
+        res_list[["Pseudobulk_ct_LR_hvg2000"]] <- process_pseudobulk_ct_fig(
+          seurat, labels,
+          ct_col = seurat@misc$low_res_ct_col,
+          sample_col = sample_col,
+          hvg = 2000,
+          title = "Pseudobulk_ct_LR_hvg2000"
+        )
+      )
+    }
+  }
+
+  if (!"Pseudobulk_ct_HR_hvg2000" %in% names(res_list)) {
+    if (!is.null(seurat@misc$hi_res_ct_col)) {
+      res_list[["Pseudobulk_ct_HR_hvg2000"]][["exec_time"]] <- exec_time(
+        res_list[["Pseudobulk_ct_HR_hvg2000"]] <- process_pseudobulk_ct_fig(
+          seurat, labels,
+          ct_col = seurat@misc$hi_res_ct_col,
+          sample_col = sample_col,
+          hvg = 2000,
+          title = "Pseudobulk_ct_HR_hvg2000"
+        )
+      )
+    }
+  }
+
+
   # Deconvolute using EPIC
   if (!"ECODA_deconv" %in% names(res_list)) {
     res_list[["ECODA_deconv"]][["exec_time"]] <- exec_time(
@@ -1235,6 +1361,16 @@ run_benchmark_analysis <- function(res_list,
         seurat, labels,
         ct_col = seurat@misc$hi_res_ct_col,
         title = "ECODA\nhigh res.", shuffle_labels = TRUE
+      )
+    )
+
+    res_list[["GloProp"]][["exec_time"]] <- exec_time(
+      res_list[["GloProp"]] <- process_gloprop_fig(
+        seurat = seurat,
+        metadata = metadata,
+        label_col = label_col,
+        ct_col = seurat@misc$hi_res_ct_col,
+        title = "GloProp"
       )
     )
 
@@ -1555,18 +1691,24 @@ run_benchmark_analysis <- function(res_list,
     res_list[[paste0("MrVI_hvg", i)]] <- process_mrvi_fig(mrvi_dist_file = mrvi_dist_file, labels)
 
     # --- PILOT (Runs once per HVG) ---
-    pilot_dist_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_pilot_dists.feather"))
+    pilot_dist_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_pilot_dists.feather"))
     res_list[[paste0("PILOT_hvg", i)]] <- process_pilot_fig(pilot_dist_file = pilot_dist_file, labels)
 
     # --- scPoli (Runs once OR multiple times depending on HVG) ---
     if (i == 2000) {
       target_dims <- factors_test
+
+      scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_scpoli_dims", f, "_embs.feather"))
+      res_list[[paste0("scPoli_hvg", i, "_dims", f, "_highres")]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
+
+      pilot_dist_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_lowres_pilot_dists.feather"))
+      res_list[[paste0("PILOT_hvg", i, "_lowres")]] <- process_pilot_fig(pilot_dist_file = pilot_dist_file, labels)
     } else {
       target_dims <- 5
     }
 
     for (f in target_dims) {
-      scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_scpoli_dims", f, "_embs.feather"))
+      scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_lowres_scpoli_dims", f, "_embs.feather"))
       res_list[[paste0("scPoli_hvg", i, "_dims", f)]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
     }
   }
@@ -1709,6 +1851,7 @@ process_coda_fig <- function(seurat,
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- dist_mat
   res[["labels"]] <- labels
+  res[["counts"]] <- df_imp
 
   return(res)
 }
@@ -1730,6 +1873,75 @@ process_pseudobulk_fig <- function(feat_mat,
   res[["scores"]] <- calc_sep_score(dist_mat, labels)
   res[["feat_mat"]] <- feat_mat
   res[["dist_mat"]] <- dist_mat
+  res[["labels"]] <- labels
+
+  return(res)
+}
+
+
+process_pseudobulk_ct_fig <- function(seurat,
+                                      labels,
+                                      hvg = 2000,
+                                      sample_col = "Sample",
+                                      ct_col,
+                                      title = "Cell type pseudobulks") {
+  # 1. Identify all possible samples
+  all_samples <- sort(unique(seurat[[sample_col, drop = TRUE]]))
+  n_samples <- length(all_samples)
+
+  # 2. Instantiate accumulator matrices
+  total_dist <- matrix(0,
+    nrow = n_samples, ncol = n_samples,
+    dimnames = list(all_samples, all_samples)
+  )
+  count_mat <- matrix(0,
+    nrow = n_samples, ncol = n_samples,
+    dimnames = list(all_samples, all_samples)
+  )
+
+  cell_types <- unique(seurat[[ct_col, drop = TRUE]])
+  cell_types <- cell_types[!is.na(cell_types)]
+
+  for (ct in cell_types) {
+    # Subset to cell type
+    sub <- subset(x = seurat, subset = !!sym(ct_col) == ct)
+
+    # Check if we have enough samples to even calculate distances (need at least 2)
+    current_samples <- unique(sub[[sample_col, drop = TRUE]])
+    if (length(current_samples) < 2) next
+
+    # Get pseudobulk (Assuming this returns a matrix where rows = samples)
+    pb_norm <- get_pb_deseq2(sub, sample_col = sample_col, n_hvg = hvg)
+
+    # Calculate distance for this cell type
+    # as.matrix converts the 'dist' object so we can do math with it
+    dist_mat_ct <- as.matrix(dist(pb_norm))
+
+    # Map the current distance matrix into the master matrix
+    # We only update the rows/cols present in this cell type
+    total_dist[rownames(dist_mat_ct), colnames(dist_mat_ct)] <-
+      total_dist[rownames(dist_mat_ct), colnames(dist_mat_ct)] + dist_mat_ct
+
+    # Increment the counter for these specific sample-to-sample pairs
+    count_mat[rownames(dist_mat_ct), colnames(dist_mat_ct)] <-
+      count_mat[rownames(dist_mat_ct), colnames(dist_mat_ct)] + 1
+  }
+
+  # 3. Final Averaging (Element-wise division)
+  # Use an ifelse to handle cases where count is 0 (though rare if samples exist)
+  final_dist_mat <- total_dist / count_mat
+  final_dist_mat[is.nan(final_dist_mat)] <- 0
+
+  # Convert back to 'dist' object for downstream compatibility if needed
+  final_dist <- as.dist(final_dist_mat)
+
+  # Re-align labels to the distance matrix order
+  labels <- labels[rownames(final_dist_mat)]
+
+  res <- list()
+  res[["scores"]] <- calc_sep_score(final_dist, labels)
+  res[["feat_mat"]] <- final_dist_mat
+  res[["dist_mat"]] <- final_dist
   res[["labels"]] <- labels
 
   return(res)
@@ -1964,6 +2176,41 @@ process_gloscope_sqrtmat_fig <- function(metadata,
 
   labels <- metadata[match(row.names(feat_mat), metadata$Sample), ][[label_col]]
   names(labels) <- metadata[match(row.names(feat_mat), metadata$Sample), ][["Sample"]]
+
+  res <- list()
+  # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
+  res[["scores"]] <- calc_sep_score(dist_mat, labels)
+  res[["feat_mat"]] <- feat_mat
+  res[["dist_mat"]] <- dist_mat
+  res[["labels"]] <- labels
+
+  return(res)
+}
+
+
+process_gloprop_fig <- function(seurat,
+                                metadata,
+                                ct_col,
+                                label_col,
+                                sample_col = "Sample",
+                                dist_metric = c("KL"),
+                                title = "GloProp") {
+  sample_id <- seurat@meta.data[[sample_col]]
+  cluster_id <- seurat@meta.data[[ct_col]]
+  dist_result <- gloscopeProp(
+    sample_id,
+    cluster_id,
+    ep = 0.5,
+    dist_metric = dist_metric
+  )
+
+  feat_mat <- sqrt(dist_result)
+  row.names(feat_mat) <- standardize_sample_names(row.names(feat_mat))
+
+  labels <- metadata[match(row.names(feat_mat), metadata$Sample), ][[label_col]]
+  names(labels) <- metadata[match(row.names(feat_mat), metadata$Sample), ][["Sample"]]
+
+  dist_mat <- as.dist(feat_mat)
 
   res <- list()
   # res[["plot"]] <- plot_pca(feat_mat, labels, title = title)
