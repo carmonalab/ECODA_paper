@@ -13,27 +13,33 @@ datasets <- list(
     low_res_ct_col = "cellType",
     hi_res_ct_col = "cellSubType"
   ),
-  "GongSharma_all_age" = list(
-    ds_name = "GongSharma_all",
-    label_col = "age",
-    low_res_ct_col = "AIFI_L1",
-    hi_res_ct_col = "AIFI_L3"
-  ),
-  "GongSharma_all_cmv" = list(
-    ds_name = "GongSharma_all",
+  "Gongsharma_cmv_young_males" = list(
+    ds_name = "Gongsharma_cmv_young_males",
     label_col = "subject.cmv",
     low_res_ct_col = "AIFI_L1",
     hi_res_ct_col = "AIFI_L3"
   ),
-  "GongSharma_all_sex" = list(
-    ds_name = "GongSharma_all",
-    label_col = "subject.biologicalSex",
-    low_res_ct_col = "AIFI_L1",
-    hi_res_ct_col = "AIFI_L3"
-  ),
+  # "GongSharma_all_cmv" = list(
+  #   ds_name = "GongSharma_all",
+  #   label_col = "subject.cmv",
+  #   low_res_ct_col = "AIFI_L1",
+  #   hi_res_ct_col = "AIFI_L3"
+  # ),
+  # "GongSharma_all_sex" = list(
+  #   ds_name = "GongSharma_all",
+  #   label_col = "subject.biologicalSex",
+  #   low_res_ct_col = "AIFI_L1",
+  #   hi_res_ct_col = "AIFI_L3"
+  # ),
   # "GongSharma_age_females_cmvneg" = list(
   #   ds_name = "GongSharma_age_females_cmvneg",
   #   label_col = "age",
+  #   low_res_ct_col = "AIFI_L1",
+  #   hi_res_ct_col = "AIFI_L3"
+  # ),
+  # "GongSharma_cmv_females" = list(
+  #   ds_name = "GongSharma_cmv_females",
+  #   label_col = "subject.cmv",
   #   low_res_ct_col = "AIFI_L1",
   #   hi_res_ct_col = "AIFI_L3"
   # ),
@@ -48,6 +54,12 @@ datasets <- list(
     label_col = "Status",
     low_res_ct_col = "cells_lowres",
     hi_res_ct_col = "cells"
+  ),
+  "Kim" = list(
+    ds_name = "KimN_2020_32385277whole",
+    label_col = "Tissue",
+    low_res_ct_col = "Cell_type",
+    hi_res_ct_col = "Cell_subtype"
   ),
   "Lee" = list(
     ds_name = "LeeA_2021_34836966p_tumor_seurat",

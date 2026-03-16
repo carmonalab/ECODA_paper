@@ -290,7 +290,7 @@ saveRDS(dproc, file.path(path_data, "cell_type_compositions.rds"))
 
 # Figure 1 A
 
-## UMAP exmple
+## UMAP example
 
 ```{r}
 source("Processed_dataset_metadata.R")
@@ -458,13 +458,14 @@ ggsave(file.path(path_plots, "coda_numberzeros.pdf"), width = 6, height = 4)
 
 # Figure 1 B: Based on cell type composition
 
+
 ```{r}
 feat_mat <- dproc$L3$clr_1count
 
 # Create a mapping vector: "Old Name" = "New Name"
 cell_map <- c(
-  "SOX4+_naive_CD4_T_cell"          = "CD4+ Naive (SOX4+)",
-  "SOX4+_naive_CD8_T_cell"          = "CD8+ Naive (SOX4+)",
+  "SOX4+_naive_CD4_T_cell"          = "CD4+ Naive",
+  "SOX4+_naive_CD8_T_cell"          = "CD8+ Naive",
   "Adaptive_NK_cell"                = "NK Adaptive",
   "KLRF1-_GZMB+_CD27-_EM_CD8_T_cell" = "CD8+ EM",
   "KLRF1+_effector_Vd1_gdT"         = "Vd1 Effector",
@@ -483,38 +484,13 @@ colnames(feat_mat) <- ifelse(colnames(feat_mat) %in% names(cell_map),
 
 res.pca <- prcomp(feat_mat)
 
-eigenvalues <- res.pca$sdev^2
-round(eigenvalues/sum(eigenvalues),3)
-plot(cumsum(eigenvalues/sum(eigenvalues)))
-
-# Create a scree plot
-plot(eigenvalues, type = "b",
-     xlab = "Principal Component",
-     ylab = "Eigenvalue")
-plot(eigenvalues/sum(eigenvalues)*100, type = "b",
-     xlab = "Principal Component",
-     ylab = "Percentage of Variance Explained")
-
 
 feat_mat <- res.pca$x[, 1:3]
 
-# dist_mat <- dist(feat_mat)
-# # Perform hierarchical clustering
-# hc <- stats::hclust(dist_mat, method = "ward.D2")
-# labels <- stats::cutree(hc, k = 4)
 
 set.seed(1)
 labels <- factor(kmeans(feat_mat, 4)$cluster)
-# labels <- cluster::pam(feat_mat, k = 4)$cluster
 
-# adj_graph <- igraph::as.undirected(cccd::nng(feat_mat, k = 2))
-# r <- quantile(igraph::strength(adj_graph))[2] / (igraph::gorder(adj_graph) - 1) / 4
-# r <- 0.0000000001
-# labels <- igraph::cluster_leiden(adj_graph, resolution = r)$membership
-# 
-# dbscan_clustres <- dbscan::hdbscan(feat_mat, minPts = 20)
-# plot(dbscan_clustres, show_flat = TRUE)
-# labels <- dbscan_clustres$cluster
 
 levels(labels) <- c("2", "3", "4", "1")
 labels <- factor(labels, levels = c("1", "2", "3", "4"))
@@ -530,26 +506,18 @@ my_colors <- c(
   "CMV+ Young" = "#C77CFF"
 )
 
-factoextra::fviz_pca(res.pca,
-                     habillage = labels,
-                     # addEllipses = TRUE,
-                     # label = "none",
-                     pointsize = 1,
-                     # invisible = c("var", "quali"),
-                     # repel = TRUE,
-                     geom = "point") +
-    scale_shape_manual(values = rep(19, length(unique(labels)))) +
-  guides(shape=guide_legend(title="Cluster"), color=guide_legend(title="Cluster")) +
-  ggtitle("Unsupervised clustering")
-# ggsave(file.path(path_plots, "workflow_schema_clustering_unsupervised.pdf"),
-#        width = 12,
-#        height = 10)
+eig.val <- factoextra::get_eig(res.pca)
+pc1_var <- round(eig.val[1, 2], 1)
+pc2_var <- round(eig.val[2, 2], 1)
+
 
 p1 <- factoextra::fviz_pca(res.pca,
-                     habillage = labels,
+                     # habillage = labels,
                      # addEllipses = TRUE,
                      # label = "var",
+                     col.ind = "grey80",
                      pointsize = 1,
+                     labelsize = 3,
                      invisible = c("quali"),
                      geom = "point",
                      select.var = list(contrib = 4),
@@ -557,43 +525,14 @@ p1 <- factoextra::fviz_pca(res.pca,
                      axes.linetype = "blank") +
     scale_shape_manual(values = rep(19, length(unique(labels)))) +
   guides(shape=guide_legend(title="Cluster"), color=guide_legend(title="Cluster")) +
-  ggtitle("Unsupervised clustering") +
-  scale_color_manual(values = my_colors) +
+  ggtitle("PCA - ECODA sample representation") +
+  # scale_color_manual(values = my_colors) +
+  coord_equal() +
   theme_classic() +
-  theme(axis.text = element_blank(),
-          axis.ticks = element_blank()) + coord_equal()
+  labs(x = paste0("PCA dim1 (", pc1_var, "%)"), y = paste0("PCA dim2 (", pc2_var, "%)"))  #+
+  # theme(axis.text = element_blank(),
+  #         axis.ticks = element_blank())
 print(p1)
-ggsave(file.path(path_plots, "workflow_schema_clustering_unsupervised.pdf"),
-       width = 4,
-       height = 3)
-
-factoextra::fviz_pca(res.pca,
-                     habillage = dproc$meta$subject.cmv,
-                     # addEllipses = TRUE,
-                     label = "var",
-                     pointsize = 1,
-                     invisible = c("var", "quali"),
-                     geom = "point") +
-    scale_shape_manual(values = rep(19, length(unique(labels)))) +
-  guides(shape=guide_legend(title="CMV"), color=guide_legend(title="CMV")) +
-  ggtitle("Biological variable 1\nCMV infection status")
-ggsave(file.path(path_plots, "workflow_schema_clustering_CMV.pdf"),
-       width = 4,
-       height = 3)
-
-factoextra::fviz_pca(res.pca,
-                     habillage = dproc$meta$age,
-                     # addEllipses = TRUE,
-                     label = "var",
-                     pointsize = 1,
-                     invisible = c("var", "quali"),
-                     geom = "point") +
-    scale_shape_manual(values = rep(19, length(unique(labels)))) +
-  guides(shape=guide_legend(title="Age"), color=guide_legend(title="Age")) +
-  ggtitle("Biological variable 2\nAge")
-ggsave(file.path(path_plots, "workflow_schema_clustering_age.pdf"),
-       width = 4,
-       height = 3)
 
 p2 <-factoextra::fviz_pca(res.pca,
                      habillage = dproc$meta$combined_cmv_age,
@@ -611,17 +550,262 @@ p2 <-factoextra::fviz_pca(res.pca,
     scale_shape_manual(values = rep(19, length(unique(labels)))) +
   guides(shape=guide_legend(title="Bio group"), color=guide_legend(title="Bio group")) +
   ggtitle("Known biological groups") +
-  scale_color_manual(values = my_colors) +
+  scale_color_manual(values = my_colors) + coord_equal() +
   theme_classic() +
-  theme(axis.text = element_blank(),
-          axis.ticks = element_blank()) + coord_equal()
+  labs(x = paste0("PCA dim1 (", pc1_var, "%)"), y = paste0("PCA dim2 (", pc2_var, "%)"))  #+
+  # theme(axis.text = element_blank(),
+  #         axis.ticks = element_blank())
 print(p2)
-ggsave(file.path(path_plots, "workflow_schema_clustering_both.pdf"),
-       width = 4,
-       height = 3)
+```
 
-aligned_plots <- p1 + p2 + plot_layout(ncol = 2)
-ggsave(file.path(path_plots, "workflow_schema_clustering_combined_plots.pdf"), aligned_plots, width = 8, height = 3)
+
+```{r}
+# 1. Run PCA
+res.pca <- prcomp(feat_mat, center = TRUE, scale. = FALSE)
+
+# 2. Get the eigenvalues (variances)
+# prcomp returns standard deviations; square them to get eigenvalues
+eig <- (res.pca$sdev)^2
+
+# 3. Calculate Variable Coordinates (Correlations)
+# Formula: Loading * Standard Deviation of the PC
+# This transforms the rotation matrix into the 'coordinates' used in biplots
+variable_coords <- t(t(res.pca$rotation) * res.pca$sdev)
+
+# 4. Calculate Squared Cosines (Quality of representation)
+# For variables on a correlation PCA, this is just the squared coordinate
+var_cos2 <- variable_coords^2
+
+# 5. Calculate Contributions
+# Formula: (cos2 / eigenvalue) * 100
+# We divide each column of squared coordinates by its eigenvalue
+var_contrib <- as.data.frame(t(t(var_cos2) / eig) * 100)
+
+# Check: The sum of any column in var_contrib should be 100
+colSums(var_contrib)
+
+
+library(factoextra)
+res.var <- get_pca_var(res.pca)
+
+max(var_contrib - res.var$contrib)
+```
+
+# Figure 1 B: Based on pseudobulk
+
+```{r}
+pseudobulk <- readRDS(file.path(path_data, "all_bulk_sample.rds"))
+meta <- readRDS(file.path(path_data, "all_bulk_meta.rds"))
+meta <- meta %>%
+  arrange((specimen.specimenGuid))
+meta$age <- ifelse(as.numeric(as.character(meta$sample.subjectAgeAtDraw)) < 50, "young", "old")
+
+pb_normed <- DESeq2.normalize(t(as.data.frame(pseudobulk)[, 2:ncol(pseudobulk)]), meta)
+pb_normed <- t(pb_normed)
+row.names(pb_normed) <- pseudobulk$specimen.specimenGuid
+
+res.pca <- prcomp(pb_normed, scale. = FALSE)
+
+eig.val <- factoextra::get_eig(res.pca)
+pc1_var <- round(eig.val[1, 2], 1)
+pc2_var <- round(eig.val[2, 2], 1)
+
+set.seed(1)
+labels <- factor(kmeans(pb_normed, 2)$cluster)
+
+levels(labels) <- c("2", "1") # Swap these if the colors are inverted
+labels <- factor(labels, levels = c("1", "2")) # Force order 1 then 2
+
+# Ensure these are in your my_colors
+my_colors <- c(
+  "1" = "orange",
+  "2" = "skyblue",
+  "Female" = "orange",
+  "Male" = "skyblue"
+)
+
+p3 <- factoextra::fviz_pca(res.pca,
+                     # habillage = labels,
+                     # addEllipses = TRUE,
+                     col.ind = "grey80",
+                     label = "var",
+                     pointsize = 1,
+                     invisible = c("quali"),
+                     geom = "point",
+                     select.var = list(contrib = 4),
+                     labelsize = 3,
+                     repel = TRUE,
+                     axes.linetype = "blank") +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+  guides(shape=guide_legend(title="Cluster"), color=guide_legend(title="Cluster")) +
+  ggtitle("PCA - Pseudobulk sample representation") +
+  scale_color_manual(values = my_colors) + coord_equal() +
+  theme_classic() +
+  labs(x = paste0("PCA dim1 (", pc1_var, "%)"), y = paste0("PCA dim2 (", pc2_var, "%)")) #+
+  # theme(axis.text = element_blank(),
+  #         axis.ticks = element_blank())
+p3 <- p3 + 
+  scale_x_continuous(breaks = seq(-60, 60, by = 20)) + 
+  scale_y_continuous(breaks = seq(-40, 40, by = 20))
+print(p3)
+
+labels <- meta$subject.biologicalSex
+
+p4 <-factoextra::fviz_pca(res.pca,
+                     habillage = labels,
+                     # addEllipses = TRUE,
+                     label = "var",
+                     pointsize = 1,
+                     invisible = c("quali"),
+                     col.var = "white",
+                     arrowsize = 0,
+                     labelsize = 0,
+                     alpha.var = 0,
+                     select.var = list(contrib = 4),
+                     geom = "point",
+                     axes.linetype = "blank") +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+  guides(shape=guide_legend(title="Bio group"), color=guide_legend(title="Bio group")) +
+  ggtitle("Known biological groups") +
+  scale_color_manual(values = my_colors) + coord_equal() +
+  theme_classic() +
+  labs(x = paste0("PCA dim1 (", pc1_var, "%)"), y = paste0("PCA dim2 (", pc2_var, "%)")) #+
+  # theme(axis.text = element_blank(),
+  #         axis.ticks = element_blank())
+p4 <- p4 + 
+  scale_x_continuous(breaks = seq(-60, 60, by = 20)) + 
+  scale_y_continuous(breaks = seq(-40, 40, by = 20))
+print(p4)
+
+
+# p5 <- factoextra::fviz_pca(res.pca,
+#                      habillage = labels,
+#                      # addEllipses = TRUE,
+#                      # label = "var",
+#                      pointsize = 1,
+#                      invisible = c("quali", "var"),
+#                      geom = "point",
+#                      # select.var = list(contrib = 4),
+#                      labelsize = 3,
+#                      repel = TRUE,
+#                      axes.linetype = "blank") +
+#     scale_shape_manual(values = rep(19, length(unique(labels)))) +
+#   guides(shape=guide_legend(title="Cluster"), color=guide_legend(title="Cluster")) +
+#   ggtitle("Unsupervised clustering") +
+#   scale_color_manual(values = my_colors) + coord_equal() +
+#   theme_classic() #+
+#   # theme(axis.text = element_blank(),
+#   #         axis.ticks = element_blank())
+# p5 <- p5 + 
+#   scale_x_continuous(breaks = seq(-60, 60, by = 20)) + 
+#   scale_y_continuous(breaks = seq(-20, 20, by = 20))
+# print(p5)
+# 
+# labels <- meta$subject.biologicalSex
+# 
+# p6 <-factoextra::fviz_pca(res.pca,
+#                      habillage = labels,
+#                      # addEllipses = TRUE,
+#                      # label = "var",
+#                      pointsize = 1,
+#                      invisible = c("quali", "var"),
+#                      col.var = "white",
+#                      arrowsize = 0,
+#                      labelsize = 0,
+#                      alpha.var = 0,
+#                      # select.var = list(contrib = 4),
+#                      geom = "point",
+#                      axes.linetype = "blank") +
+#     scale_shape_manual(values = rep(19, length(unique(labels)))) +
+#   guides(shape=guide_legend(title="Bio group"), color=guide_legend(title="Bio group")) +
+#   ggtitle("Known biological groups") +
+#   scale_color_manual(values = my_colors) + coord_equal() +
+#   theme_classic() #+
+#   # theme(axis.text = element_blank(),
+#   #         axis.ticks = element_blank())
+# p6 <- p6 + 
+#   scale_x_continuous(breaks = seq(-60, 60, by = 20)) + 
+#   scale_y_continuous(breaks = seq(-20, 20, by = 20))
+# print(p6)
+
+aligned_plots <- p1 + p2 + p3 + p4 + plot_layout(ncol = 2)
+ggsave(file.path(path_plots, "Figure_1_B_GongSharma_clustering.pdf"), aligned_plots, width = 8, height = 6)
+
+# aligned_plots <- p1 + p2 + p3 + p4 + p5 + p6 + plot_layout(ncol = 2)
+# ggsave(file.path(path_plots, "TEST.pdf"), aligned_plots, width = 8, height = 8)
+```
+
+
+
+# Supp Fig 1: GongSharma PB per sex
+
+```{r}
+plot_list <- list()
+
+for (gender in unique(meta$subject.biologicalSex)) {
+  pb_normed_sub <- pb_normed[meta$subject.biologicalSex == gender, ]
+  meta_sub <- meta[meta$subject.biologicalSex == gender]
+  
+  res.pca_sub <- prcomp(pb_normed_sub, scale. = FALSE)
+  
+  eig.val <- factoextra::get_eig(res.pca_sub)
+  pc1_var <- round(eig.val[1, 2], 1)
+  pc2_var <- round(eig.val[2, 2], 1)
+  
+  labels <- meta_sub$subject.cmv
+  condition <- "CMV"
+  title <- "Biological variable 1"
+  plot_list[[paste0(gender, "_", condition)]] <- factoextra::fviz_pca(
+    res.pca_sub,
+    habillage = labels,
+    # addEllipses = TRUE,
+    label = "none",
+    pointsize = 1,
+    invisible = c("var", "quali"),
+    # repel = TRUE,
+    geom = "point",
+    axes.linetype = NA) +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+    guides(shape=guide_legend(title=condition), color=guide_legend(title=condition)) +
+    ggtitle(paste(gender, "-", condition)) +
+    labs(x = paste0("PCA dim1 (", pc1_var, "%)"), y = paste0("PCA dim2 (", pc2_var, "%)")) +
+    theme_classic() +
+    theme(# axis.title.x=element_blank(),
+      axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      # axis.title.y=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks.y=element_blank()) + coord_equal()
+  print(plot_list[[paste0(gender, "_", condition)]])
+  
+  labels <- meta_sub$age
+  condition <- "Age"
+  plot_list[[paste0(gender, "_", condition)]] <- factoextra::fviz_pca(
+    res.pca_sub,
+    habillage = labels,
+    # addEllipses = TRUE,
+    label = "none",
+    pointsize = 1,
+    invisible = c("var", "quali"),
+    # repel = TRUE,
+    geom = "point",
+    axes.linetype = NA) +
+    scale_shape_manual(values = rep(19, length(unique(labels)))) +
+    guides(shape=guide_legend(title=condition), color=guide_legend(title=condition)) +
+    ggtitle(paste(gender, "-", condition)) +
+    labs(x = paste0("PCA dim1 (", pc1_var, "%)"), y = paste0("PCA dim2 (", pc2_var, "%)")) +
+    theme_classic() +
+    theme(# axis.title.x=element_blank(),
+      axis.text.x=element_blank(),
+      axis.ticks.x=element_blank(),
+      # axis.title.y=element_blank(),
+      axis.text.y=element_blank(),
+      axis.ticks.y=element_blank()) + coord_equal()
+  print(plot_list[[paste0(gender, "_", condition)]])
+}
+
+patchwork::wrap_plots(plot_list, nrow = 2)
+ggsave(file.path(path_plots, "Supp_fig_1_GongSharma_PB_CMV_Age.pdf"), width = 7, height = 5)
 ```
 
 
@@ -803,155 +987,94 @@ dev.off()
 
 ```
 
+# ---------------------------------------------------------------
 
-# Figure 1 B: Based on pseudobulk
-
-```{r}
-pseudobulk <- readRDS(file.path(path_data, "all_bulk_sample.rds"))
-meta <- readRDS(file.path(path_data, "all_bulk_meta.rds"))
-meta <- meta %>%
-  arrange((specimen.specimenGuid))
-meta$age <- ifelse(as.numeric(as.character(meta$sample.subjectAgeAtDraw)) < 50, "young", "old")
-
-pb_normed <- DESeq2.normalize(t(as.data.frame(pseudobulk)[, 2:ncol(pseudobulk)]), meta)
-pb_normed <- t(pb_normed)
-row.names(pb_normed) <- pseudobulk$specimen.specimenGuid
-
-res.pca <- prcomp(pb_normed, scale. = FALSE)
-
-set.seed(1)
-labels <- factor(kmeans(pb_normed, 2)$cluster)
-
-levels(labels) <- c("2", "1") # Swap these if the colors are inverted
-labels <- factor(labels, levels = c("1", "2")) # Force order 1 then 2
-
-# Ensure these are in your my_colors
-my_colors <- c(
-  "1" = "orange",
-  "2" = "skyblue",
-  "Female" = "orange",
-  "Male" = "skyblue"
-)
-
-p3 <- factoextra::fviz_pca(res.pca,
-                     habillage = labels,
-                     # addEllipses = TRUE,
-                     label = "var",
-                     pointsize = 1,
-                     invisible = c("quali"),
-                     geom = "point",
-                     select.var = list(contrib = 4),
-                     labelsize = 3,
-                     repel = TRUE,
-                     axes.linetype = "blank") +
-    scale_shape_manual(values = rep(19, length(unique(labels)))) +
-  guides(shape=guide_legend(title="Cluster"), color=guide_legend(title="Cluster")) +
-  ggtitle("Unsupervised clustering") +
-  scale_color_manual(values = my_colors) +
-  theme_classic() +
-  theme(axis.text = element_blank(),
-          axis.ticks = element_blank()) + coord_equal()
-print(p3)
-
-labels <- meta$subject.biologicalSex
-
-p4 <-factoextra::fviz_pca(res.pca,
-                     habillage = labels,
-                     # addEllipses = TRUE,
-                     label = "var",
-                     pointsize = 1,
-                     invisible = c("quali"),
-                     col.var = "white",
-                     arrowsize = 0,
-                     labelsize = 0,
-                     alpha.var = 0,
-                     select.var = list(contrib = 4),
-                     geom = "point",
-                     axes.linetype = "blank") +
-    scale_shape_manual(values = rep(19, length(unique(labels)))) +
-  guides(shape=guide_legend(title="Bio group"), color=guide_legend(title="Bio group")) +
-  ggtitle("Known biological groups") +
-  scale_color_manual(values = my_colors) +
-  theme_classic() +
-  theme(axis.text = element_blank(),
-          axis.ticks = element_blank()) + coord_equal()
-print(p4)
-
-aligned_plots <- p1 + p2 + p3 + p4 + plot_layout(ncol = 2)
-ggsave(file.path(path_plots, "Figure_1_B_GongSharma_clustering.pdf"), aligned_plots, width = 8, height = 6)
-```
-
-# Supp Fig 1: GongSharma PB per sex
+# Test of PCA scaling (factoextra vs vegan)
 
 ```{r}
-plot_list <- list()
+library(vegan)
+feat_mat <- dproc$L3$clr_1count
+x <- vegan::pca(feat_mat)
+biplot(x, scaling = "none")
+biplot(x, scaling = "species")
+biplot(x, scaling = "site")
 
-for (gender in unique(meta$subject.biologicalSex)) {
-  pb_normed_sub <- pb_normed[meta$subject.biologicalSex == gender, ]
-  meta_sub <- meta[meta$subject.biologicalSex == gender]
-  
-  res.pca_sub <- prcomp(pb_normed_sub, scale. = FALSE)
-  
-  eig.val <- factoextra::get_eig(res.pca_sub)
-  pc1_var <- round(eig.val[1, 2], 1)
-  pc2_var <- round(eig.val[2, 2], 1)
-  
-  labels <- meta_sub$subject.cmv
-  condition <- "CMV"
-  title <- "Biological variable 1"
-  plot_list[[paste0(gender, "_", condition)]] <- factoextra::fviz_pca(
-    res.pca_sub,
-    habillage = labels,
-    # addEllipses = TRUE,
-    label = "none",
-    pointsize = 1,
-    invisible = c("var", "quali"),
-    # repel = TRUE,
-    geom = "point",
-    axes.linetype = NA) +
-    scale_shape_manual(values = rep(19, length(unique(labels)))) +
-    guides(shape=guide_legend(title=condition), color=guide_legend(title=condition)) +
-    ggtitle(paste(gender, "-", condition)) +
-    labs(x = paste0("PCA dim1 (", pc1_var, "%)"), y = paste0("PCA dim2 (", pc2_var, "%)")) +
-    theme_classic() +
-    theme(# axis.title.x=element_blank(),
-      axis.text.x=element_blank(),
-      axis.ticks.x=element_blank(),
-      # axis.title.y=element_blank(),
-      axis.text.y=element_blank(),
-      axis.ticks.y=element_blank()) + coord_equal()
-  print(plot_list[[paste0(gender, "_", condition)]])
-  
-  labels <- meta_sub$age
-  condition <- "Age"
-  plot_list[[paste0(gender, "_", condition)]] <- factoextra::fviz_pca(
-    res.pca_sub,
-    habillage = labels,
-    # addEllipses = TRUE,
-    label = "none",
-    pointsize = 1,
-    invisible = c("var", "quali"),
-    # repel = TRUE,
-    geom = "point",
-    axes.linetype = NA) +
-    scale_shape_manual(values = rep(19, length(unique(labels)))) +
-    guides(shape=guide_legend(title=condition), color=guide_legend(title=condition)) +
-    ggtitle(paste(gender, "-", condition)) +
-    labs(x = paste0("PCA dim1 (", pc1_var, "%)"), y = paste0("PCA dim2 (", pc2_var, "%)")) +
-    theme_classic() +
-    theme(# axis.title.x=element_blank(),
-      axis.text.x=element_blank(),
-      axis.ticks.x=element_blank(),
-      # axis.title.y=element_blank(),
-      axis.text.y=element_blank(),
-      axis.ticks.y=element_blank()) + coord_equal()
-  print(plot_list[[paste0(gender, "_", condition)]])
-}
 
-patchwork::wrap_plots(plot_list, nrow = 2)
-ggsave(file.path(path_plots, "Supp_fig_1_GongSharma_PB_CMV_Age.pdf"), width = 7, height = 5)
+# 2. Extract scores for different scalings
+# 'sites' refers to your samples/rows
+s1 <- as.data.frame(scores(x, display = "sites", scaling = "none"))
+s2 <- as.data.frame(scores(x, display = "sites", scaling = "sites"))
+s3 <- as.data.frame(scores(x, display = "sites", scaling = "species"))
+
+s1 <- s1 * 15
+s2 <- s2 * 2.3
+s3 <- s3 * 1.045
+
+# 3. Add a label so we can tell them apart
+s1$type <- "none"
+s2$type <- "sites"
+s3$type <- "species"
+
+# 4. Combine and Plot
+all_scales <- rbind(s1, s2, s3)
+
+ggplot(all_scales, aes(x = PC1, y = PC2, color = type)) +
+  geom_point(alpha = 0.5, size = 2) + 
+  theme_minimal() +
+  labs(title = "Overlay of PCA Scalings",
+       subtitle = "If points overlap perfectly, the scaling didn't shift their relative positions")
+
+# 1. Generate the factoextra plot object
+# (Assuming 'res.pca' is your prcomp or FactoMineR object)
+p_fviz <- fviz_pca_ind(res.pca, geom = "point")
+
+# 2. Extract the coordinates factoextra calculated
+# These are stored in p_fviz$data
+fviz_points <- p_fviz$data[, c("x", "y")] /6.2
+colnames(fviz_points) <- c("PC1", "PC2")
+fviz_points$type <- "factoextra_default"
+
+# 3. Combine with your existing data
+all_scales_plus_fviz <- rbind(all_scales, fviz_points)
+
+# 4. Plot everything together
+ggplot(all_scales_plus_fviz, aes(x = PC1, y = PC2, color = type)) +
+  geom_point(alpha = 0.5, size = 2) + 
+  theme_minimal() +
+  scale_color_manual(values = c("none" = "black", 
+                                "sites" = "blue", 
+                                "species" = "green", 
+                                "factoextra_default" = "red")) +
+  labs(title = "Overlay: Vegan Scalings vs. Factoextra",
+       subtitle = "Note: Red points show the factoextra default 'Symmetric' scaling")
 ```
 
+```{r}
+# Update your plot code with these specific shapes
+ggplot(all_scales_plus_fviz, aes(x = PC1, y = PC2, color = type, shape = type)) +
+  geom_point(size = 3, stroke = 1) +  # Stroke makes the lines thicker
+  theme_minimal() +
+  scale_shape_manual(values = c(
+    "none" = 1,               # Hollow circle
+    "sites" = 3,              # Plus sign
+    "species" = 4,            # Cross (X)
+    "factoextra_default" = 21 # Filled circle (use a different size for this)
+  )) +
+  scale_color_manual(values = c(
+    "none" = "black", 
+    "sites" = "blue", 
+    "species" = "green3", 
+    "factoextra_default" = "red"
+  ))
+```
+
+```{r}
+ggplot(all_scales_plus_fviz, aes(x = PC1, y = PC2, color = type)) +
+  geom_point(alpha = 0.6, size = 1) +
+  facet_wrap(~type) + # This creates 4 separate plots
+  theme_bw() +
+  labs(title = "Faceted Comparison of Scalings")
+```
 
 
 
