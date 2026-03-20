@@ -18,8 +18,8 @@ This script prepares datasets for downstream analysis
 # Load libraries and set parameters
 
 ```{r message=FALSE, warning=FALSE}
-renv::init()
-renv::snapshot()
+# renv::init()
+# renv::snapshot()
 
 source("functions.R")
 source("Processed_dataset_metadata.R")
@@ -260,6 +260,9 @@ df_results_list <- list()
 ```{r}
 bmark_result_list <- result_list[["bmark"]]
 
+bmark_result_list$GongSharma <- bmark_result_list$Gongsharma_cmv_young_males
+bmark_result_list$Gongsharma_cmv_young_males <- NULL
+
 df_results <- imap_dfr(bmark_result_list, ~ {
   dataset_name <- .y
   imap_dfr(.x, ~ {
@@ -355,7 +358,7 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores_bars.pdf"
        height = 7)
 ```
 
-### Supp fig 18: Benchmark unscaled metrics
+### Supp fig 17: Benchmark unscaled metrics
 
 ```{r fig.width=12, fig.height=5}
 filter_methods <- c(
@@ -451,7 +454,7 @@ combined_plot <- (p1 | p2 | p3) +
 combined_plot
 
 # Save the combined plot
-ggsave(file.path(path_plots, "Supp_fig_18_benchmark_unscaled_metrics_perdataset.pdf"), 
+ggsave(file.path(path_plots, "Supp_fig_17_benchmark_unscaled_metrics_perdataset.pdf"), 
        plot = combined_plot,
        width = 12, # Increased width to fit 3 plots
        height = 5)
@@ -580,7 +583,7 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_allmetricscombined_mainm
        height = 6.5)
 ```
 
-#### Supp fig 20: Plot PCA for selected datasets and main methods
+#### Supp fig 19: Plot PCA for selected datasets and main methods
 
 ```{r}
 ds <- "Kfoury"
@@ -621,7 +624,7 @@ print(p3)
 
 wrap_plots(list(p1, p2, p3)) +
   plot_layout(nrow = 1, guides = "collect")
-ggsave(file.path(path_plots, paste0("Supp_fig_20_Kfoury_PCA_authors_vs_auto_", ds, ".pdf")),
+ggsave(file.path(path_plots, paste0("Supp_fig_19_Kfoury_PCA_authors_vs_auto_", ds, ".pdf")),
        width = 15,
        height = 6)
 
@@ -657,7 +660,7 @@ print(p3)
 
 wrap_plots(list(p1, p2, p3)) +
   plot_layout(nrow = 1, guides = "collect")
-ggsave(file.path(path_plots, paste0("Supp_fig_20_Wu_PCA_authors_vs_auto_", ds, ".pdf")),
+ggsave(file.path(path_plots, paste0("Supp_fig_19_Wu_PCA_authors_vs_auto_", ds, ".pdf")),
        width = 15,
        height = 6)
 ```
@@ -765,7 +768,7 @@ for (ds in names(result_list[["bmark"]])) {
 ```
 
 
-### Supp fig 3-14: MDS for all datasets
+### Supp fig 3-13: MDS for all datasets
 
 ```{r fig.height=9, fig.width=11}
 methods <- list(
@@ -1036,7 +1039,7 @@ ggsave(file.path(path_plots, paste0("PCA_arrows_", ds, ".pdf")),
 ```
 
 ### Figure 3 A: ECODA annotation method comparison
-### and Supp fig 19
+### and Supp fig 18
 
 ```{r fig.height=6, fig.width=5}
 pointsize <- 1.5
@@ -1173,7 +1176,7 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_ari_annotationmethods_re
 
 wrap_plots(list(p_mod, p_ari)) +
   plot_layout(nrow = 1, guides = "collect")
-ggsave(file.path(path_plots, "Supp_fig_19_annotationmethods_barplot_mod_ari.pdf"),
+ggsave(file.path(path_plots, "Supp_fig_18_annotationmethods_barplot_mod_ari.pdf"),
        width = 9,
        height = 5)
 ```
@@ -1258,7 +1261,7 @@ ggsave(file.path(path_plots, paste0("annotmethods_pca_", ds, ".pdf")),
 ```
 
 
-### Supp fig 23: Method parameter screening
+### Supp fig 22: Method parameter screening
 
 ```{r fig.height=8, fig.width=14}
 filter_methods <- c(
@@ -1352,7 +1355,7 @@ df_results %>%
              labeller = labeller(score = score.labs))
 
 
-ggsave(file.path(path_plots, "Supp_fig_23_methodparameter_screening.pdf"),
+ggsave(file.path(path_plots, "Supp_fig_22_methodparameter_screening.pdf"),
        width = 14,
        height = 8)
 ```
@@ -1912,7 +1915,7 @@ ggsave(file.path(path_plots, "Figure_4_AB_featureselectionHVC_barplot_anosim.pdf
        height = 6)
 ```
 
-#### Supp fig 21: HVC Mod + ARI
+#### Supp fig 20: HVC Mod + ARI
 
 ```{r fig.height=3.5, fig.width=8}
 p3 <- df_results_sub %>%
@@ -1974,7 +1977,7 @@ combined_plot <- (p3 + p4) +
        shape = "Dataset", 
        linetype = "Dataset")
 print(combined_plot)
-ggsave(file.path(path_plots, "Supp_fig_21_featureselectionHVC_barplot_mod_ari.pdf"),
+ggsave(file.path(path_plots, "Supp_fig_20_featureselectionHVC_barplot_mod_ari.pdf"),
        width = 8,
        height = 3.5)
 ```
@@ -2806,6 +2809,13 @@ plot(test_int, test_anosim)
 ## Get execution times from R
 
 ```{r}
+for (ds in names(result_list$bmark)) {
+  result_list[["bmark"]][[ds]][["GloScope_hvg2000_pcadims30_sqrtmat"]]$exec_time <- result_list[["bmark"]][[ds]][["GloScope_hvg2000_pcadims30"]]$exec_time
+}
+```
+
+
+```{r}
 r_exec_times_path <- file.path(getwd(), "data", "r_execution_times.rds")
 
 if (!file.exists(r_exec_times_path)) {
@@ -2851,16 +2861,19 @@ if (!file.exists(r_exec_times_path)) {
 p_exec_times_path <- file.path(getwd(), "data", "p_execution_times.rds")
 
 if (!file.exists(p_exec_times_path)) {
-  p_exec_times <- read.table(
-    file.path(getwd(), "data", "execution_times_formatted.txt"),
-    header = TRUE
-  )
+  p_exec_times <- arrow::read_feather(
+    file.path(getwd(), "data", "execution_times.feather")
+  ) %>%
+    as.data.frame()
   
   p_exec_times$n_samples <- 0
   p_exec_times$n_features <- 0
   
   p_exec_times$dataset[p_exec_times$dataset == "Gongsharma_all"] <- "GongSharma_all"
   p_exec_times <- p_exec_times[!p_exec_times$dataset %in% c("Gongsharma_sex_young_cmvneg", "Gongsharma_cmv_females_young", "Gongsharma_age_females_cmvneg"), ]
+  
+  p_exec_times$method[p_exec_times$method == "scPoli_hvg2000_dims5_lowres"] <- "scPoli_hvg2000_dims5"
+  p_exec_times$method[p_exec_times$method == "PILOT_hvg2000_highres"] <- "PILOT_hvg2000"
   
   for (ds in unique(p_exec_times$dataset)) {
     p_exec_times$n_samples[p_exec_times$dataset == ds] <- r_exec_times$n_samples[r_exec_times$dataset == ds][1]
@@ -2903,18 +2916,18 @@ if (!file.exists(exec_times_path)) {
 ```
 
 
-## Supp fig 15: Plot
+## Supp fig 14: Plot
 
 ```{r}
 filter_methods <- c(
   "ECODA_authors_HR",
 
   # "Pseudobulk_hvg2000",
-  "Pseudobulk_unsup_hvg2000",
+  "Pseudobulk_hvg2000",
   
   "MOFA_hvg2000_factors15",
-  "scITD_hvg2000_factors15",
-  "GloScope_hvg2000_pcadims50",
+  "scITD_hvg2000_factors5",
+  "GloScope_hvg2000_pcadims30",
   "GloProp",
   "MrVI_hvg2000",
   "scPoli_hvg2000_dims5",
@@ -2933,13 +2946,13 @@ scientific_A_10n <- function(x) {
 # --- 1. Clean Data ---
 plot_data <- exec_times %>%
   filter(method %in% filter_methods) %>%
-  filter(!dataset %in% c("GongSharma_all_cmv", "GongSharma_all_sex")) %>%
+  # filter(!dataset %in% c("GongSharma_all_cmv", "GongSharma_all_sex")) %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA",
-                         "Pseudobulk_unsup_hvg2000" = "Pseudobulk",
+                         "Pseudobulk_hvg2000" = "Pseudobulk",
                          "MOFA_hvg2000_factors15" = "MOFA",
-                         "scITD_hvg2000_factors15" = "scITD",
-                         "GloScope_hvg2000_pcadims50" = "GloScope",
+                         "scITD_hvg2000_factors5" = "scITD",
+                         "GloScope_hvg2000_pcadims30" = "GloScope",
                          "MrVI_hvg2000" = "MrVI",
                          "scPoli_hvg2000_dims5" = "scPoli",
                          "PILOT_hvg2000" = "PILOT"))
@@ -3004,7 +3017,7 @@ ggplot(plot_data, aes(x = n_cells, y = time_secs, color = method)) +
   scale_x_continuous(
     breaks = scales::pretty_breaks(n = 3),
     labels = function(x) sapply(x, scientific_A_10n),
-    limits = c(min(plot_data$n_cells), max(plot_data$n_cells) * 1.4)
+    limits = c(1e5, max(plot_data$n_cells) * 1.4)
   ) +
   scale_y_log10(
     breaks = trans_breaks("log10", function(x) 10^x),
@@ -3012,7 +3025,7 @@ ggplot(plot_data, aes(x = n_cells, y = time_secs, color = method)) +
   ) +
   theme(legend.position = "none")
 
-ggsave(file.path(path_plots, "Supp_fig_15_benchmark_exec_times.pdf"),
+ggsave(file.path(path_plots, "Supp_fig_14_benchmark_exec_times.pdf"),
        width = 3.5,
        height = 3.5, limitsize = FALSE)
 ```
@@ -3106,10 +3119,12 @@ clean_data <- df_results_bmark %>%
   mutate(dataset = recode(dataset,
                           "Adams" = "Adams (pulmonary fibrosis)",
                           "Bassez" = "Bassez (ICB treatment response)",
+                          "GongSharma" = "GongSharma (healthy, CMV)",
                           "GongSharma_all_age" = "GongSharma (healthy, age)",
                           "GongSharma_all_cmv" = "GongSharma (healthy, CMV)",
                           "GongSharma_all_sex" = "GongSharma (healthy, sex)",
                           "Kfoury" = "Kfoury (prostate metastasis)",
+                          "Kim" = "Kim (metastatic lung adenocarcinoma)",
                           "Lee" = "Lee (ICB treatment vs naive)",
                           "Pelka" = "Pelka (colon cancer vs control)",
                           "Smillie" = "Smillie (ulcerative colitis)",
@@ -3311,6 +3326,9 @@ plot_list <- list()
 for (m in names(methods)) {
   dist_mat <- result_list[["bmark"]][[ds]][[m]][["dist_mat"]]
   labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
+  labels <- as.character(labels)
+  labels[labels == "E"] <- "Responders"
+  labels[labels == "NE"] <- "Non-responders"
   
   plot_list[[m]] <- plot_mds(
     dist_mat,
@@ -3514,7 +3532,7 @@ ggsave(file.path(path_plots, "benchmark_summary_funkyheatmap_mainmethods_ranks.p
 
 
 
-## Supp fig 16: Extended benchmark (with avg rank)
+## Supp fig 15: Extended benchmark (with avg rank)
 
 ```{r fig.height=8, fig.width=14}
 # --- 1. SETUP & CLEANING (Same as before) ---
@@ -3559,7 +3577,6 @@ exec_times$temp <- NULL
 
 clean_data <- df_results_bmark %>%
   filter(method %in% filter_methods) %>%
-  filter(!grepl("Gong", dataset)) %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA_authors",
                          "ECODA_authors_HR_NULL" = "Shuffled_baseline",
@@ -3570,6 +3587,8 @@ clean_data <- df_results_bmark %>%
                          # "ECODA_PB_combo_normquantile_ecodaweight0.5" = "ECODA+Pseudobulk",
                          "Pseudobulk_10_PCA_dims" = "Pseudobulk_PCA",
                          "Pseudobulk_hvg2000" = "Pseudobulk",
+                         "Pseudobulk_ct_LR_hvg2000" = "Pseudobulk_CT_LR",
+                         "Pseudobulk_ct_HR_hvg2000" = "Pseudobulk_CT_HR",
                          "Freq_highres" = "CellType_Frequency%",
                          "MOFA_hvg2000_factors15" = "MOFA",
                          "scITD_hvg2000_factors5" = "scITD",
@@ -3586,10 +3605,12 @@ clean_data <- df_results_bmark %>%
   mutate(dataset = recode(dataset,
                           "Adams" = "Adams (pulmonary fibrosis)",
                           "Bassez" = "Bassez (ICB treatment response)",
+                          "GongSharma" = "GongSharma (healthy, cmv)",
                           "GongSharma_all_age" = "GongSharma (healthy, age)",
                           "GongSharma_all_cmv" = "GongSharma (healthy, CMV)",
                           "GongSharma_all_sex" = "GongSharma (healthy, sex)",
                           "Kfoury" = "Kfoury (prostate metastasis)",
+                          "Kim" = "Kim (metastatic lung adenocarcinoma)",
                           "Lee" = "Lee (ICB treatment vs naive)",
                           "Pelka" = "Pelka (colon cancer vs control)",
                           "Smillie" = "Smillie (ulcerative colitis)",
@@ -3822,9 +3843,9 @@ funky_heatmap(
     col_space = 0.2, col_annot_offset = 5
   )
 )
-# ggsave(file.path(path_plots, "Supp_fig_16_benchmark_extended.pdf"),
-#        width = 14,
-#        height = 8)
+ggsave(file.path(path_plots, "Supp_fig_15_benchmark_extended.pdf"),
+       width = 14,
+       height = 8)
 ```
 
 
@@ -3890,7 +3911,7 @@ ggsave(file.path(path_plots, "Supp_fig_2_metrics_correlation.pdf"),
 
 # ---------------------------------------------------------------
 
-# Supp fig 17 A: Plot normalization results
+# Supp fig 16 A: Plot normalization results
 
 ## Plot results
 
@@ -3931,7 +3952,7 @@ names(score.labs) <- sort(unique(df_results$score))
 df_results_list[["Normalization"]] <- df_results
 
 
-df_results %>%
+p1 <- df_results %>%
   filter(score == "ANOSIM_score") %>%
   
   ggplot(aes(x = trans_method, y = value)) +
@@ -3948,13 +3969,14 @@ df_results %>%
     # aes(label = sprintf("%5.2f", as.numeric(..p.format..))),
     aes(label = after_stat(p.signif)),
     size = 3,
-    label.y = 0.9
+    label.y = 0.95
   ) +
   labs(x = "", y = "Separation score (ANOSIM)") +
   theme_classic2() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1)) +
-  ylim(c(-0.1, 0.9))
-ggsave(file.path(path_plots, "Supp_fig_17A_transformations_anosim.pdf"),
+  ylim(c(-0.1, 1))
+print(p1)
+ggsave(file.path(path_plots, "Supp_fig_16A_transformations_anosim.pdf"),
        width = 2.5,
        height = 3.5)
 
@@ -4205,7 +4227,7 @@ TukeyHSD(aov(df_results_anosim$values ~ df_results_anosim$trans_method))
 
 # ---------------------------------------------------------------
 
-# Supp fig 17 B: Plot zero imputation results
+# Supp fig 16 B: Plot zero imputation results
 
 ## Plot results
 
@@ -4245,7 +4267,7 @@ df_results$method <- factor(df_results$method, levels = df_results_anosim$method
 
 
 
-df_results %>%
+p2 <- df_results %>%
   filter(score == "anosim_score") %>%
   filter(method != "asinsqrt") %>%
   filter(!grepl("perc", method)) %>%
@@ -4260,7 +4282,7 @@ df_results %>%
     method = "wilcox.test",
     paired = TRUE,
     # angle = 25,
-    label.y = 0.9,
+    label.y = 0.95,
     size = 3,
     aes(label = after_stat(p.signif))
     # aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
@@ -4269,7 +4291,8 @@ df_results %>%
   labs(x = "", y = "Separation score (ANOSIM)") +
   theme_classic2() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
-ggsave(file.path(path_plots, "Supp_fig_17B_zero_replacement_anosim.pdf"),
+print(p2)
+ggsave(file.path(path_plots, "Supp_fig_16B_zero_replacement_anosim.pdf"),
        width = 2.5,
        height = 4)
 
@@ -4547,6 +4570,19 @@ ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_anos
        height = 6)
 
 ```
+
+# Supp fig 16AB plot
+
+```{r}
+wrap_plots(list(p1, p2)) +
+  plot_layout(nrow = 1) +
+  plot_annotation(tag_levels = "A") &
+  theme(plot.tag = element_text(face = "bold"))
+ggsave(file.path(path_plots, "Supp_fig_16AB_trans_zero_anosim.pdf"),
+       width = 6,
+       height = 4.5)
+```
+
 
 # ---------------------------------------------------------------
 # ---------------------------------------------------------------
