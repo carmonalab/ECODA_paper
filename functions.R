@@ -1227,11 +1227,10 @@ run_benchmark_analysis <- function(res_list,
 
     file_mrvi <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_mrvi_dists.feather"))
     file_pilot <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_pilot_dists.feather"))
-    files_scpoli <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_lowres_scpoli_dims", scpoli_dims, "_embs.feather"))
-    file_lowres_pilot <- file.path(path_data, paste0(ds_filename, "_hvg2000_lowres_pilot_dists.feather"))
-    files_highres_scpoli <- file.path(path_data, paste0(ds_filename, "_hvg2000_highres_scpoli_dims5_embs.feather"))
+    files_scpoli <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_scpoli_dims", scpoli_dims, "_embs.feather"))
+    file_highres_pilot <- file.path(path_data, paste0(ds_filename, "_hvg2000_highres_pilot_dists.feather"))
 
-    files_to_check <- c(file_mrvi, file_pilot, files_scpoli, file_lowres_pilot, files_highres_scpoli)
+    files_to_check <- c(file_mrvi, file_pilot, files_scpoli, file_highres_pilot)
     missing_files <- files_to_check[!file.exists(files_to_check)]
 
     if (length(missing_files) > 0) {
@@ -1568,7 +1567,7 @@ run_benchmark_analysis <- function(res_list,
             n_pca_dims = i
           )
       )
-      res_list[[gloscope_pca_i]][["exec_time"]] <- exec_time(
+      res_list[[paste0(gloscope_pca_i, "_sqrtmat")]][["exec_time"]] <- exec_time(
         res_list[[paste0(gloscope_pca_i, "_sqrtmat")]] <-
           process_gloscope_sqrtmat_fig(
             metadata, label_col,
@@ -1694,22 +1693,22 @@ run_benchmark_analysis <- function(res_list,
     pilot_dist_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_pilot_dists.feather"))
     res_list[[paste0("PILOT_hvg", i)]] <- process_pilot_fig(pilot_dist_file = pilot_dist_file, labels)
 
+    scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_scpoli_dims15_embs.feather"))
+    res_list[[paste0("scPoli_hvg", i, "_dims15_highres")]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
+
     # --- scPoli (Runs once OR multiple times depending on HVG) ---
     if (i == 2000) {
       target_dims <- factors_test
-
-      scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_scpoli_dims", f, "_embs.feather"))
-      res_list[[paste0("scPoli_hvg", i, "_dims", f, "_highres")]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
+      for (f in target_dims) {
+        scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_scpoli_dims", f, "_embs.feather"))
+        res_list[[paste0("scPoli_hvg", i, "_dims", f, "_highres")]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
+      }
 
       pilot_dist_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_lowres_pilot_dists.feather"))
       res_list[[paste0("PILOT_hvg", i, "_lowres")]] <- process_pilot_fig(pilot_dist_file = pilot_dist_file, labels)
-    } else {
-      target_dims <- 5
-    }
 
-    for (f in target_dims) {
-      scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_lowres_scpoli_dims", f, "_embs.feather"))
-      res_list[[paste0("scPoli_hvg", i, "_dims", f)]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
+      scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_lowres_scpoli_dims15_embs.feather"))
+      res_list[[paste0("scPoli_hvg", i, "_dims15_lowres")]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
     }
   }
 
@@ -2054,7 +2053,7 @@ process_scitd_fig <- function(seurat,
   # set up project parameters
   param_list <- initialize_params(
     ctypes_use = as.character(ctypes),
-    ncores = 6, rand_seed = 10
+    ncores = parallelly::availableCores() - 2, rand_seed = 10
   )
 
   # create project container
