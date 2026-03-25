@@ -1169,14 +1169,14 @@ run_analyses <- function(result_list,
                          seurat,
                          path_data,
                          path_plots) {
-  # print(paste("Running benchmark analysis for dataset: ", ds))
-  # result_list[["bmark"]][[ds]] <- run_benchmark_analysis(
-  #   res_list = result_list[["bmark"]][[ds]],
-  #   ds = ds,
-  #   seurat = seurat,
-  #   path_data = path_data,
-  #   path_plots = path_plots
-  # )
+  print(paste("Running benchmark analysis for dataset: ", ds))
+  result_list[["bmark"]][[ds]] <- run_benchmark_analysis(
+    res_list = result_list[["bmark"]][[ds]],
+    ds = ds,
+    seurat = seurat,
+    path_data = path_data,
+    path_plots = path_plots
+  )
 
   labels <- get_labels(seurat, seurat@misc$label_col)
   ct_comps <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = seurat@misc$hi_res_ct_col)
@@ -1222,7 +1222,7 @@ run_benchmark_analysis <- function(res_list,
     if (i == 2000) {
       scpoli_dims <- factors_test
     } else {
-      scpoli_dims <- 5
+      scpoli_dims <- 15
     }
 
     file_mrvi <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_mrvi_dists.feather"))
