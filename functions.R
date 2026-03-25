@@ -1296,29 +1296,57 @@ run_benchmark_analysis <- function(res_list,
   }
 
   # Calculate ct pseudobulks
-  if (!"Pseudobulk_ct_LR_hvg2000" %in% names(res_list)) {
+  if (!"Pseudobulk_CT_LR_hvg2000" %in% names(res_list)) {
     if (!is.null(seurat@misc$low_res_ct_col)) {
-      res_list[["Pseudobulk_ct_LR_hvg2000"]][["exec_time"]] <- exec_time(
-        res_list[["Pseudobulk_ct_LR_hvg2000"]] <- process_pseudobulk_ct_fig(
+      res_list[["Pseudobulk_CT_LR_hvg2000"]][["exec_time"]] <- exec_time(
+        res_list[["Pseudobulk_CT_LR_hvg2000"]] <- process_pseudobulk_ct_fig(
           seurat, labels,
           ct_col = seurat@misc$low_res_ct_col,
           sample_col = sample_col,
           hvg = 2000,
-          title = "Pseudobulk_ct_LR_hvg2000"
+          title = "Pseudobulk_CT_LR_hvg2000"
         )
       )
     }
   }
 
-  if (!"Pseudobulk_ct_HR_hvg2000" %in% names(res_list)) {
+  if (!"Pseudobulk_CT_HR_hvg2000" %in% names(res_list)) {
     if (!is.null(seurat@misc$hi_res_ct_col)) {
-      res_list[["Pseudobulk_ct_HR_hvg2000"]][["exec_time"]] <- exec_time(
-        res_list[["Pseudobulk_ct_HR_hvg2000"]] <- process_pseudobulk_ct_fig(
+      res_list[["Pseudobulk_CT_HR_hvg2000"]][["exec_time"]] <- exec_time(
+        res_list[["Pseudobulk_CT_HR_hvg2000"]] <- process_pseudobulk_ct_fig(
           seurat, labels,
           ct_col = seurat@misc$hi_res_ct_col,
           sample_col = sample_col,
           hvg = 2000,
-          title = "Pseudobulk_ct_HR_hvg2000"
+          title = "Pseudobulk_CT_HR_hvg2000"
+        )
+      )
+    }
+  }
+
+  if (!"Pseudobulk_CT_LR_hvg500" %in% names(res_list)) {
+    if (!is.null(seurat@misc$low_res_ct_col)) {
+      res_list[["Pseudobulk_CT_LR_hvg500"]][["exec_time"]] <- exec_time(
+        res_list[["Pseudobulk_CT_LR_hvg500"]] <- process_pseudobulk_ct_fig(
+          seurat, labels,
+          ct_col = seurat@misc$low_res_ct_col,
+          sample_col = sample_col,
+          hvg = 500,
+          title = "Pseudobulk_CT_LR_hvg500"
+        )
+      )
+    }
+  }
+
+  if (!"Pseudobulk_CT_HR_hvg500" %in% names(res_list)) {
+    if (!is.null(seurat@misc$hi_res_ct_col)) {
+      res_list[["Pseudobulk_CT_HR_hvg500"]][["exec_time"]] <- exec_time(
+        res_list[["Pseudobulk_CT_HR_hvg500"]] <- process_pseudobulk_ct_fig(
+          seurat, labels,
+          ct_col = seurat@misc$hi_res_ct_col,
+          sample_col = sample_col,
+          hvg = 500,
+          title = "Pseudobulk_CT_HR_hvg500"
         )
       )
     }
@@ -1880,9 +1908,10 @@ process_pseudobulk_fig <- function(feat_mat,
 
 process_pseudobulk_ct_fig <- function(seurat,
                                       labels,
-                                      hvg = 2000,
+                                      hvg = 500,
                                       sample_col = "Sample",
                                       ct_col,
+                                      min_cells = 5,
                                       title = "Cell type pseudobulks") {
   # 1. Identify all possible samples
   all_samples <- sort(unique(seurat[[sample_col, drop = TRUE]]))
@@ -1905,9 +1934,19 @@ process_pseudobulk_ct_fig <- function(seurat,
     # Subset to cell type
     sub <- subset(x = seurat, subset = !!sym(ct_col) == ct)
 
-    # Check if we have enough samples to even calculate distances (need at least 2)
-    current_samples <- unique(sub[[sample_col, drop = TRUE]])
-    if (length(current_samples) < 2) next
+    # Filter out low cell count samples
+    # 1. Count cells per sample for this specific cell type
+    counts_per_sample <- table(sub@meta.data[, sample_col])
+
+    # 2. Identify samples that meet the minimum threshold
+    keep_samples <- names(counts_per_sample)[counts_per_sample >= min_cells]
+
+    # 3. Filter the subsetted Seurat object to only include these samples
+    if (length(keep_samples) < 2) next
+
+    # Remove cells belonging to "low-count" samples
+    sub <- subset(sub, subset = !!sym(sample_col) %in% keep_samples)
+
 
     # Get pseudobulk (Assuming this returns a matrix where rows = samples)
     pb_norm <- get_pb_deseq2(sub, sample_col = sample_col, n_hvg = hvg)
