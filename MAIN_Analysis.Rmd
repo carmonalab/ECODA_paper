@@ -1349,10 +1349,10 @@ default_methods <- c(
     "ECODA_authors_HR\\b", 
     "MOFA_hvg2000_factors15", 
     "Pseudobulk_hvg2000\\b",
-    "PILOT_hvg2000\\b",
+    "PILOT_hvg2000_HR\\b",
     "scITD_hvg2000_factors5",
-    "scPoli_hvg2000_dims15_highres\\b",
-    "GloScope_hvg2000_pcadims30_sqrtmat",
+    "scPoli_hvg2000_dims15_HR\\b",
+    "GloScope_hvg2000_pcadims30",
     "GloProp",
     "MrVI_hvg2000"
 )
@@ -1363,7 +1363,7 @@ names(score.labs) <- sort(unique(df_results$score))
 
 df_results %>%
   # filter(score == "anosim_score") %>%
-  filter(!grepl("HiTME|scATOMIC|seuratres|ECODA_authors_HR_NULL|ECODA_authors_LR|ECODA_deconv|Freq_highres|varexp|varcts|Avg_PCA|combo|PILOT_hvg2000_highres", method),
+  filter(!grepl("HiTME|scATOMIC|seuratres|ECODA_authors_HR_NULL|ECODA_authors_LR|ECODA_deconv|Freq_highres|varexp|varcts|Avg_PCA|combo", method),
          !grepl("GloScope", method) | grepl("sqrtmat", method)
   ) %>%
   filter(
@@ -1393,6 +1393,15 @@ df_results %>%
     method_plot = factor(method_plot, 
                          levels = c("ECODA", "Pseudobulk", "MrVI", "GloScope", "GloProp",
                                     "scPoli", "MOFA", "PILOT", "scITD"))
+  ) %>%
+  
+  mutate(method = method %>%
+           # Remove _sqrtmat and swap highres/lowres
+           stringr::str_replace_all(c("_sqrtmat" = "", 
+                                      "highres"  = "HR", 
+                                      "lowres"   = "LR")) %>%
+           # Transform Pseudobulk_x_PCA_dims -> Pseudobulk_hvg2000_pcadimsx
+           stringr::str_replace("Pseudobulk_(\\d+)_PCA_dims", "Pseudobulk_hvg2000_pcadims\\1")
   ) %>%
   
   group_by(method, score) %>%
