@@ -18,19 +18,52 @@ This script prepares datasets for downstream analysis
 # Load libraries and set parameters
 
 ```{r message=FALSE, warning=FALSE}
-renv::init()
-renv::snapshot()
+# renv::init()
+# renv::snapshot()
 
 source("functions.R")
 source("Processed_dataset_metadata.R")
 
+
 # devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
 library(EPIC)
 # BiocManager::install("MOFA2")
+
+# reticulate::virtualenv_create(envname = "C:/R_Envs/my_env", version = "3.11.9")
+# # Define the path first
+# my_path <- "C:/R_Envs/my_env"
+# 
+# # Install BEFORE the environment is loaded into the R session memory
+# reticulate::py_install(
+#     packages = "pandas==2.0.3",
+#     envname = my_path,
+#     method = "virtualenv",
+#     pip = TRUE
+# )
+# reticulate::py_install(
+#     packages = "h5py==3.12.1",
+#     envname = my_path,
+#     method = "virtualenv",
+#     pip = TRUE
+# )
+# reticulate::py_install(
+#     packages = "numpy==1.26.4",
+#     envname = my_path,
+#     method = "virtualenv",
+#     pip = TRUE
+# )
+# reticulate::py_install(
+#     packages = "mofapy2",
+#     envname = my_path,
+#     method = "virtualenv",
+#     pip = TRUE
+# )
 library(reticulate)
-py_install("mofapy2", envname = "my_env", method="auto")
+use_virtualenv("C:/R_Envs/my_env", required = TRUE)
+py_config()
+# py_install("mofapy2")
 import("mofapy2")
-library(basilisk)
+# library(basilisk)
 library("MOFA2")
 # BiocManager::install("fgsea")
 # BiocManager::install("sva")
@@ -54,7 +87,6 @@ seurat_file_ending <- "_ECODAprocessed.rds"
 
 set.seed(123)
 ```
-
 
 # Create results list to fill
 

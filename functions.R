@@ -12,7 +12,7 @@ suppressPackageStartupMessages({
   # remotes::install_version(package = "SeuratObject", version = "5.2.0")
   library(Seurat)
   library(limma)
-  # devtools::install_github('satijalab/seurat-data')
+  # remotes::install_github('satijalab/seurat-data')
   library(SeuratData)
   # install.packages("hdf5r")
   # remotes::install_github("mojaveazure/seurat-disk")
@@ -796,7 +796,11 @@ load_h5ad_to_seurat <- function(file_name) {
   feather_path <- paste0(file_name_short, ".feather")
 
   if (file.exists(feather_path)) {
+    # Need to set arrow::set_cpu_count(1)
+    # Otherwise arrow crashes on windows due to possible interactino with reticulate / MOFA
+    arrow::set_cpu_count(1)
     meta <- arrow::read_feather(feather_path)
+    arrow::set_cpu_count(parallelly::availableCores() - 2)
     # Ensure row names match if necessary, but AddMetaData usually handles joins
     seurat <- Seurat::AddMetaData(seurat, metadata = as.data.frame(meta))
   }
@@ -1169,14 +1173,14 @@ run_analyses <- function(result_list,
                          seurat,
                          path_data,
                          path_plots) {
-  # print(paste("Running benchmark analysis for dataset: ", ds))
-  # result_list[["bmark"]][[ds]] <- run_benchmark_analysis(
-  #   res_list = result_list[["bmark"]][[ds]],
-  #   ds = ds,
-  #   seurat = seurat,
-  #   path_data = path_data,
-  #   path_plots = path_plots
-  # )
+  print(paste("Running benchmark analysis for dataset: ", ds))
+  result_list[["bmark"]][[ds]] <- run_benchmark_analysis(
+    res_list = result_list[["bmark"]][[ds]],
+    ds = ds,
+    seurat = seurat,
+    path_data = path_data,
+    path_plots = path_plots
+  )
 
   labels <- get_labels(seurat, seurat@misc$label_col)
   ct_comps <- get_ct_comp_df_seurat(seurat, sample_col = "Sample", ct_col = seurat@misc$hi_res_ct_col)
@@ -1665,7 +1669,7 @@ run_benchmark_analysis <- function(res_list,
         GloScope_hvg_i_pcadims30_sqrtmat
       )
       if (any(!test_items %in% names(res_list))) {
-        gloscope_dist_file <- file.path(path_data, paste0(ds_filename, "_gloscope_hvg", i, "_pcadims50_dists.rds"))
+        gloscope_dist_file <- file.path(path_data, paste0(ds_filename, "_gloscope_hvg", i, "_pcadims30_dists.rds"))
         res_list[[GloScope_hvg_i_pcadims30]][["exec_time"]] <- exec_time(
           res_list[[GloScope_hvg_i_pcadims30]] <-
             process_gloscope_fig(
@@ -2096,9 +2100,14 @@ process_scitd_fig <- function(seurat,
 
 
 process_mrvi_fig <- function(mrvi_dist_file, labels, title = "MrVI") {
+  # Need to set arrow::set_cpu_count(1)
+  # Otherwise arrow crashes on windows due to possible interactino with reticulate / MOFA
+  arrow::set_cpu_count(1)
   feat_mat <- arrow::read_feather(mrvi_dist_file) %>%
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
+  arrow::set_cpu_count(parallelly::availableCores() - 2)
+
   rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
   dist_mat <- as.dist(feat_mat)
   labels <- labels[rownames(feat_mat)]
@@ -2120,16 +2129,30 @@ process_gloscope_fig <- function(seurat,
                                  gloscope_dist_file,
                                  n_pca_dims = 30,
                                  dens = "KNN",
-                                 dist_mat = c("KL"),
+                                 dist_metric = c("KL"),
                                  k = 25,
-                                 BPPARAM = BiocParallel::MulticoreParam(workers = parallelly::availableCores() - 2, progressbar = TRUE),
+                                 BPPARAM,
                                  title = "GloScope") {
+  if (.Platform$OS.type == "windows") {
+    # Windows-friendly multi-core
+    BPPARAM <- BiocParallel::SnowParam(
+      workers = parallelly::availableCores() - 2,
+      progressbar = TRUE
+    )
+  } else {
+    # macOS/Linux-friendly multi-core
+    BPPARAM <- BiocParallel::MulticoreParam(
+      workers = parallelly::availableCores() - 2,
+      progressbar = TRUE
+    )
+  }
+
   if (!file.exists(gloscope_dist_file)) {
     feat_mat <- GloScope::gloscope(
       embedding_matrix = seurat@reductions$pca@cell.embeddings[, 1:n_pca_dims],
       cell_sample_ids = seurat$Sample,
       dens = dens,
-      dist_mat = dist_mat,
+      dist_metric = dist_metric,
       k = k,
       BPPARAM = BPPARAM
     )
@@ -2224,9 +2247,13 @@ process_gloprop_fig <- function(seurat,
 
 
 process_scpoli_fig <- function(scpoli_emb_file, labels, title = "scPoli") {
+  # Need to set arrow::set_cpu_count(1)
+  # Otherwise arrow crashes on windows due to possible interactino with reticulate / MOFA
+  arrow::set_cpu_count(1)
   feat_mat <- arrow::read_feather(scpoli_emb_file) %>%
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
+  arrow::set_cpu_count(parallelly::availableCores() - 2)
 
   rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
   dist_mat <- dist(feat_mat)
@@ -2244,9 +2271,13 @@ process_scpoli_fig <- function(scpoli_emb_file, labels, title = "scPoli") {
 
 
 process_pilot_fig <- function(pilot_dist_file, labels, title = "PILOT") {
+  # Need to set arrow::set_cpu_count(1)
+  # Otherwise arrow crashes on windows due to possible interactino with reticulate / MOFA
+  arrow::set_cpu_count(1)
   feat_mat <- arrow::read_feather(pilot_dist_file) %>%
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
+  arrow::set_cpu_count(parallelly::availableCores() - 2)
 
   rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
   dist_mat <- dist(feat_mat)
