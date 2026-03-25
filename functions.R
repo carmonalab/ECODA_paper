@@ -1226,16 +1226,15 @@ run_benchmark_analysis <- function(res_list,
     if (i == 2000) {
       scpoli_dims <- factors_test
     } else {
-      scpoli_dims <- 5
+      scpoli_dims <- 15
     }
 
     file_mrvi <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_mrvi_dists.feather"))
     file_pilot <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_pilot_dists.feather"))
-    files_scpoli <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_lowres_scpoli_dims", scpoli_dims, "_embs.feather"))
-    file_lowres_pilot <- file.path(path_data, paste0(ds_filename, "_hvg2000_lowres_pilot_dists.feather"))
-    files_highres_scpoli <- file.path(path_data, paste0(ds_filename, "_hvg2000_highres_scpoli_dims5_embs.feather"))
+    files_scpoli <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_scpoli_dims", scpoli_dims, "_embs.feather"))
+    file_highres_pilot <- file.path(path_data, paste0(ds_filename, "_hvg2000_highres_pilot_dists.feather"))
 
-    files_to_check <- c(file_mrvi, file_pilot, files_scpoli, file_lowres_pilot, files_highres_scpoli)
+    files_to_check <- c(file_mrvi, file_pilot, files_scpoli, file_highres_pilot)
     missing_files <- files_to_check[!file.exists(files_to_check)]
 
     if (length(missing_files) > 0) {
@@ -1301,29 +1300,57 @@ run_benchmark_analysis <- function(res_list,
   }
 
   # Calculate ct pseudobulks
-  if (!"Pseudobulk_ct_LR_hvg2000" %in% names(res_list)) {
+  if (!"Pseudobulk_CT_LR_hvg2000" %in% names(res_list)) {
     if (!is.null(seurat@misc$low_res_ct_col)) {
-      res_list[["Pseudobulk_ct_LR_hvg2000"]][["exec_time"]] <- exec_time(
-        res_list[["Pseudobulk_ct_LR_hvg2000"]] <- process_pseudobulk_ct_fig(
+      res_list[["Pseudobulk_CT_LR_hvg2000"]][["exec_time"]] <- exec_time(
+        res_list[["Pseudobulk_CT_LR_hvg2000"]] <- process_pseudobulk_ct_fig(
           seurat, labels,
           ct_col = seurat@misc$low_res_ct_col,
           sample_col = sample_col,
           hvg = 2000,
-          title = "Pseudobulk_ct_LR_hvg2000"
+          title = "Pseudobulk_CT_LR_hvg2000"
         )
       )
     }
   }
 
-  if (!"Pseudobulk_ct_HR_hvg2000" %in% names(res_list)) {
+  if (!"Pseudobulk_CT_HR_hvg2000" %in% names(res_list)) {
     if (!is.null(seurat@misc$hi_res_ct_col)) {
-      res_list[["Pseudobulk_ct_HR_hvg2000"]][["exec_time"]] <- exec_time(
-        res_list[["Pseudobulk_ct_HR_hvg2000"]] <- process_pseudobulk_ct_fig(
+      res_list[["Pseudobulk_CT_HR_hvg2000"]][["exec_time"]] <- exec_time(
+        res_list[["Pseudobulk_CT_HR_hvg2000"]] <- process_pseudobulk_ct_fig(
           seurat, labels,
           ct_col = seurat@misc$hi_res_ct_col,
           sample_col = sample_col,
           hvg = 2000,
-          title = "Pseudobulk_ct_HR_hvg2000"
+          title = "Pseudobulk_CT_HR_hvg2000"
+        )
+      )
+    }
+  }
+
+  if (!"Pseudobulk_CT_LR_hvg500" %in% names(res_list)) {
+    if (!is.null(seurat@misc$low_res_ct_col)) {
+      res_list[["Pseudobulk_CT_LR_hvg500"]][["exec_time"]] <- exec_time(
+        res_list[["Pseudobulk_CT_LR_hvg500"]] <- process_pseudobulk_ct_fig(
+          seurat, labels,
+          ct_col = seurat@misc$low_res_ct_col,
+          sample_col = sample_col,
+          hvg = 500,
+          title = "Pseudobulk_CT_LR_hvg500"
+        )
+      )
+    }
+  }
+
+  if (!"Pseudobulk_CT_HR_hvg500" %in% names(res_list)) {
+    if (!is.null(seurat@misc$hi_res_ct_col)) {
+      res_list[["Pseudobulk_CT_HR_hvg500"]][["exec_time"]] <- exec_time(
+        res_list[["Pseudobulk_CT_HR_hvg500"]] <- process_pseudobulk_ct_fig(
+          seurat, labels,
+          ct_col = seurat@misc$hi_res_ct_col,
+          sample_col = sample_col,
+          hvg = 500,
+          title = "Pseudobulk_CT_HR_hvg500"
         )
       )
     }
@@ -1572,7 +1599,7 @@ run_benchmark_analysis <- function(res_list,
             n_pca_dims = i
           )
       )
-      res_list[[gloscope_pca_i]][["exec_time"]] <- exec_time(
+      res_list[[paste0(gloscope_pca_i, "_sqrtmat")]][["exec_time"]] <- exec_time(
         res_list[[paste0(gloscope_pca_i, "_sqrtmat")]] <-
           process_gloscope_sqrtmat_fig(
             metadata, label_col,
@@ -1698,22 +1725,22 @@ run_benchmark_analysis <- function(res_list,
     pilot_dist_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_pilot_dists.feather"))
     res_list[[paste0("PILOT_hvg", i)]] <- process_pilot_fig(pilot_dist_file = pilot_dist_file, labels)
 
+    scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_scpoli_dims15_embs.feather"))
+    res_list[[paste0("scPoli_hvg", i, "_dims15_highres")]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
+
     # --- scPoli (Runs once OR multiple times depending on HVG) ---
     if (i == 2000) {
       target_dims <- factors_test
-
-      scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_scpoli_dims", f, "_embs.feather"))
-      res_list[[paste0("scPoli_hvg", i, "_dims", f, "_highres")]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
+      for (f in target_dims) {
+        scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_highres_scpoli_dims", f, "_embs.feather"))
+        res_list[[paste0("scPoli_hvg", i, "_dims", f, "_highres")]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
+      }
 
       pilot_dist_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_lowres_pilot_dists.feather"))
       res_list[[paste0("PILOT_hvg", i, "_lowres")]] <- process_pilot_fig(pilot_dist_file = pilot_dist_file, labels)
-    } else {
-      target_dims <- 5
-    }
 
-    for (f in target_dims) {
-      scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_lowres_scpoli_dims", f, "_embs.feather"))
-      res_list[[paste0("scPoli_hvg", i, "_dims", f)]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
+      scpoli_emb_file <- file.path(path_data, paste0(ds_filename, "_hvg", i, "_lowres_scpoli_dims15_embs.feather"))
+      res_list[[paste0("scPoli_hvg", i, "_dims15_lowres")]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
     }
   }
 
@@ -1885,9 +1912,10 @@ process_pseudobulk_fig <- function(feat_mat,
 
 process_pseudobulk_ct_fig <- function(seurat,
                                       labels,
-                                      hvg = 2000,
+                                      hvg = 500,
                                       sample_col = "Sample",
                                       ct_col,
+                                      min_cells = 5,
                                       title = "Cell type pseudobulks") {
   # 1. Identify all possible samples
   all_samples <- sort(unique(seurat[[sample_col, drop = TRUE]]))
@@ -1910,9 +1938,19 @@ process_pseudobulk_ct_fig <- function(seurat,
     # Subset to cell type
     sub <- subset(x = seurat, subset = !!sym(ct_col) == ct)
 
-    # Check if we have enough samples to even calculate distances (need at least 2)
-    current_samples <- unique(sub[[sample_col, drop = TRUE]])
-    if (length(current_samples) < 2) next
+    # Filter out low cell count samples
+    # 1. Count cells per sample for this specific cell type
+    counts_per_sample <- table(sub@meta.data[, sample_col])
+
+    # 2. Identify samples that meet the minimum threshold
+    keep_samples <- names(counts_per_sample)[counts_per_sample >= min_cells]
+
+    # 3. Filter the subsetted Seurat object to only include these samples
+    if (length(keep_samples) < 2) next
+
+    # Remove cells belonging to "low-count" samples
+    sub <- subset(sub, subset = !!sym(sample_col) %in% keep_samples)
+
 
     # Get pseudobulk (Assuming this returns a matrix where rows = samples)
     pb_norm <- get_pb_deseq2(sub, sample_col = sample_col, n_hvg = hvg)
@@ -2058,7 +2096,7 @@ process_scitd_fig <- function(seurat,
   # set up project parameters
   param_list <- initialize_params(
     ctypes_use = as.character(ctypes),
-    ncores = 6, rand_seed = 10
+    ncores = parallelly::availableCores() - 2, rand_seed = 10
   )
 
   # create project container
