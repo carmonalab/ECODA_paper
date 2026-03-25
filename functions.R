@@ -432,11 +432,8 @@ DESeq2.normalize <- function(matrix,
 
       matrix <- DESeq2::estimateSizeFactors(matrix)
 
-      # Set minimum number of counts per gene
-      nsub <- min(1000, sum(rowMeans(BiocGenerics::counts(matrix, normalized = TRUE)) > 10))
-
       # transform counts using vst
-      matrix <- DESeq2::vst(matrix, blind = T, nsub = nsub)
+      matrix <- DESeq2::vst(matrix)
       matrix <- SummarizedExperiment::assay(matrix)
 
       # get top variable genes
