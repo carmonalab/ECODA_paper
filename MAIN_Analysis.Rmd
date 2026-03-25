@@ -3070,6 +3070,7 @@ names(method_colors) <- ranked_methods
 
 # --- 3. Plot ---
 ggplot(plot_data, aes(x = n_cells, y = time_secs, color = method)) +
+  annotation_logticks(sides = "l", color = "grey80") +
   # --- The Actual Data ---
   geom_point(shape = 4, size = 1, stroke = 1.25, alpha = 0.5) +
   geom_smooth(method = "lm", se = FALSE, size = 0.7) +
