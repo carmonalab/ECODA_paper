@@ -70,23 +70,46 @@ pb_stephenson <- get_pb(seurat, sample_col = "Sample")
 metadata_stephenson <- get_metadata(seurat, sample_col = "Sample")
 
 feat_mat_stephenson <- as.data.frame.matrix(table(seurat@meta.data$Sample, seurat@meta.data$layer2)) %>%
-  impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2/3) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>%
   clr()
 ```
+
+#### Number of cells, total, per sample
+
+```{r}
+print(paste("Number of samples:", length(unique(seurat@meta.data$Sample))))
+print(paste("Number of cells:", nrow(seurat@meta.data)))
+print(paste("Number of cells per sample:", round(mean(table((seurat@meta.data$Sample)))), "+-", round(sd(table((seurat@meta.data$Sample))))))
+print(paste("Number of cell types:", length(unique(seurat@meta.data$layer2))))
+```
+
 
 ### GongSharma
 
 ```{r}
-ds <- "GongSharma_all_age"
+ds <- "Gongsharma_cmv_young_males"
 seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
+set.seed(123)
+subsample <- sample(unique(seurat$Sample), size = 15, replace = FALSE, prob = NULL)
+seurat <- subset(seurat, subset = Sample %in% subsample)
 
 pb_gs <- get_pb(seurat, sample_col = "Sample")
 metadata_gs <- get_metadata(seurat, sample_col = "Sample")
 
 feat_mat_gs <- as.data.frame.matrix(table(seurat@meta.data$Sample, seurat@meta.data$layer2)) %>%
-  impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2/3) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>%
   clr()
 ```
+
+#### Number of cells, total, per sample
+
+```{r}
+print(paste("Number of samples:", length(unique(seurat@meta.data$Sample))))
+print(paste("Number of cells:", nrow(seurat@meta.data)))
+print(paste("Number of cells per sample:", round(mean(table((seurat@meta.data$Sample)))), "+-", round(sd(table((seurat@meta.data$Sample))))))
+print(paste("Number of cell types:", length(unique(seurat@meta.data$layer2))))
+```
+
 
 ### Zhu
 
@@ -96,12 +119,22 @@ seurat <- readRDS("/Users/christianhalter/Desktop/ECODA_paper/data/ZhuH_2023_373
 sample_col <- "Sample"
 
 feat_mat_zhu <- get_ct_comp_df_seurat(seurat, sample_col = sample_col, ct_col = "layer2") %>%
-  impute_zeros(clr_zero_impute_method = "counts_zeros", clr_zero_impute_num = 2/3) %>%
+  impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5) %>%
   clr()
 
 pb_zhu <- get_pb(seurat, sample_col = sample_col, hvg = NULL)
 metadata_zhu <- get_metadata(seurat, sample_col = sample_col)
 ```
+
+#### Number of cells, total, per sample
+
+```{r}
+print(paste("Number of samples:", length(unique(seurat@meta.data$Sample))))
+print(paste("Number of cells:", nrow(seurat@meta.data)))
+print(paste("Number of cells per sample:", round(mean(table((seurat@meta.data$Sample)))), "+-", round(sd(table((seurat@meta.data$Sample))))))
+print(paste("Number of cell types:", length(unique(seurat@meta.data$layer2))))
+```
+
 
 ## Combine pb matrices
 
@@ -153,6 +186,13 @@ combined_feat_mat <- do.call(rbind, lapply(feat_mat_list, function(x) {
 ```
 
 
+# Number of cell types (combined)
+
+```{r}
+print(paste("Number of cell types:", ncol(combined_feat_mat)))
+```
+
+
 # ECODA
 
 ```{r}
@@ -198,7 +238,7 @@ ggsave(file.path(path_plots, "batcheffect_combined_PCA_PB_batch.pdf"),
 
 
 
-# Combine all plots
+# Supp fig 21: Combine all plots
 
 ```{r fig.height=6.5, fig.width=10}
 wrap_plots(plot_list) +
@@ -208,7 +248,7 @@ wrap_plots(plot_list) +
     # legend.position='bottom',
     plot.tag = element_text(size = 16, face = "bold")
   )
-ggsave(file.path(path_plots, "Supp_fig_23_batcheffect_multistudy.pdf"),
+ggsave(file.path(path_plots, "Supp_fig_21_batcheffect_multistudy.pdf"),
        width = 10,
        height = 6.5)
 ```
