@@ -220,7 +220,11 @@ clust_eval <- function(dist_mat,
 create_clean_seuratv5_object <- function(seurat) {
   # Create new v5 seurat object
   # Remove any possible processing, only saving counts and metadata
-  seurat <- CreateSeuratObject(counts = seurat@assays$RNA$counts, meta.data = seurat@meta.data)
+  if (!is.null(seurat@assays$RNA$counts)) {
+    seurat <- CreateSeuratObject(counts = seurat@assays$RNA$counts, meta.data = seurat@meta.data)
+  } else if (!is.null(seurat@assays[["RNA"]]@layers[["X"]])) {
+    seurat <- CreateSeuratObject(counts = seurat@assays$RNA$counts, meta.data = seurat@meta.data)
+  }
 
   return(seurat)
 }
@@ -1276,6 +1280,17 @@ run_benchmark_analysis <- function(res_list,
     res_list[["Pseudobulk_hvg2000"]][["exec_time"]] <- exec_time(
       res_list[["Pseudobulk_hvg2000"]] <- process_pseudobulk_fig(pb_norm, labels)
     ) + exec_time_pb_norm
+  }
+
+  exec_time_pb_norm_hvg500 <- exec_time(
+    pb_norm_hvg500 <- get_pb_deseq2(seurat, sample_col = sample_col, hvg = NULL, n_hvg = 2000)
+  )
+  # So need to check if any of those methods need to be run
+  # (mainly whether to calculate pb_norm or not)
+  if (any(!"Pseudobulk_hvg500" %in% names(res_list))) {
+    res_list[["Pseudobulk_hvg500"]][["exec_time"]] <- exec_time(
+      res_list[["Pseudobulk_hvg500"]] <- process_pseudobulk_fig(pb_norm_hvg500, labels)
+    ) + exec_time_pb_norm_hvg500
   }
 
   exec_time_pb_norm_bl <- exec_time(

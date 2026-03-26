@@ -866,6 +866,52 @@ for (ds in names(result_list[["bmark"]])) {
 
 ```
 
+
+
+### DELETE
+
+```{r fig.height=9, fig.width=11}
+methods <- list(
+  "ECODA_authors_HR" = "ECODA",
+  "Pseudobulk_hvg2000" = "Pseudobulk",
+  "MrVI_hvg2000" = "MrVI",
+  "Pseudobulk_CT_LR_hvg2000" = "Pseudobulk_CT_LR_hvg2000",
+  "Pseudobulk_CT_HR_hvg2000" = "Pseudobulk_CT_HR_hvg2000",
+  "Pseudobulk_CT_LR_hvg500" = "Pseudobulk_CT_LR_hvg500",
+  "Pseudobulk_CT_HR_hvg500" = "Pseudobulk_CT_HR_hvg500"
+)
+
+idx <- 3
+
+for (ds in names(result_list[["bmark"]])) {
+  plot_list <- list()
+  
+  for (m in names(methods)) {
+    dist_mat <- result_list[["bmark"]][[ds]][[m]][["dist_mat"]]
+    labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
+    
+    plot_list[[m]] <- plot_mds(
+      dist_mat,
+      labels,
+      cluster_score = FALSE,mod_score = FALSE, anosim_score = TRUE,
+      coord_equal = TRUE,
+      title = methods[[m]]
+    )
+  }
+  
+  wrap_plots(plot_list) +
+    plot_layout(nrow = 3, guides = "collect")
+  
+  ggsave(file.path(path_plots, paste0("DELETE_", idx, "_benchmark_mds_", ds, ".pdf")),
+         width = 11,
+         height = 9)
+  
+  idx <- idx + 1
+}
+
+```
+
+
 ```{r fig.height=6, fig.width=6}
 m <- "PILOT_hvg2000"
 ds <- "Zhang"
@@ -2890,13 +2936,6 @@ plot(test_int, test_anosim)
 ## Get execution times from R
 
 ```{r}
-for (ds in names(result_list$bmark)) {
-  result_list[["bmark"]][[ds]][["GloScope_hvg2000_pcadims30_sqrtmat"]]$exec_time <- result_list[["bmark"]][[ds]][["GloScope_hvg2000_pcadims30"]]$exec_time
-}
-```
-
-
-```{r}
 r_exec_times_path <- file.path(getwd(), "data", "r_execution_times.rds")
 
 if (!file.exists(r_exec_times_path)) {
@@ -3099,7 +3138,7 @@ ggplot(plot_data, aes(x = n_cells, y = time_secs, color = method)) +
   scale_x_continuous(
     breaks = scales::pretty_breaks(n = 3),
     labels = function(x) sapply(x, scientific_A_10n),
-    limits = c(1e5, max(plot_data$n_cells) * 1.4)
+    limits = c(min(plot_data$n_cells), max(plot_data$n_cells) * 1.4)
   ) +
   scale_y_log10(
     breaks = trans_breaks("log10", function(x) 10^x),
@@ -3107,7 +3146,7 @@ ggplot(plot_data, aes(x = n_cells, y = time_secs, color = method)) +
   ) +
   theme(legend.position = "none")
 
-ggsave(file.path(path_plots, "Supp_fig_13_benchmark_exec_times.pdf"),
+ggsave(file.path(path_plots, "Supp_fig_15_benchmark_exec_times.pdf"),
        width = 3.5,
        height = 3.5, limitsize = FALSE)
 ```
@@ -3629,13 +3668,15 @@ filter_methods <- c(
   # "ECODA_PB_combo_normquantile_ecodaweight0.5",
   # paste0("ECODA_PB_combo_norm", norm_methods, "_ecodaweight0.5"),
   # "ECODA_authors_LR",
-  "Avg_PCA_embedding",
+  # "Avg_PCA_embedding",
   "Freq_highres",
   # "ECODA_deconv",
   # "Pseudobulk_10_PCA_dims",
   "Pseudobulk_hvg2000",
-  "Pseudobulk_ct_LR_hvg2000",
-  "Pseudobulk_ct_HR_hvg2000",
+  "Pseudobulk_CT_LR_hvg2000",
+  "Pseudobulk_CT_HR_hvg2000",
+  "Pseudobulk_CT_LR_hvg500",
+  "Pseudobulk_CT_HR_hvg500",
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors5",
   "MrVI_hvg2000",
