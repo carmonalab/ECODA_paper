@@ -25,6 +25,7 @@ suppressPackageStartupMessages({
   # library(zCompositions)
   # library(robCompositions)
   library(rstatix)
+  # library(peakRAM)
 
   library(parallelly)
   library(patchwork) # To combine the plots
@@ -264,7 +265,7 @@ datrans <- function(count_mat,
                       "clr" # ,
                       # "clr_pca"
                     ),
-                    zero_imp_method = "counts_zeros__2/3",
+                    zero_imp_method = "counts_all__1",
                     n_cores = 8) {
   colnames(count_mat) <- make.names(colnames(count_mat), unique = TRUE)
 
