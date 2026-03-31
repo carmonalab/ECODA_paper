@@ -150,32 +150,32 @@ compute_KNN <- function(feat_mat, knn_k) {
 compute_snn_graph <- function(knn) {
   n <- nrow(knn)
   k <- ncol(knn)
-  
+
   # 1. Create a binary sparse matrix (A)
   # Row i has a 1 at column j if j is a neighbor of i
   i_idx <- rep(1:n, each = k)
   j_idx <- as.vector(t(knn))
-  
+
   adj_bin <- Matrix::sparseMatrix(
-    i = i_idx, 
-    j = j_idx, 
-    x = 1, 
+    i = i_idx,
+    j = j_idx,
+    x = 1,
     dims = c(n, n)
   )
-  
+
   # 2. Compute SNN weights for ALL pairs using Matrix Multiplication
   # The dot product of row i and row j equals the count of shared '1's
   snn_matrix <- adj_bin %*% t(adj_bin)
-  
+
   # 3. Convert to igraph
   # weighted = TRUE treats the shared neighbor count as the edge weight
   g <- igraph::graph_from_adjacency_matrix(
-    snn_matrix, 
-    mode = "undirected", 
-    weighted = TRUE, 
+    snn_matrix,
+    mode = "undirected",
+    weighted = TRUE,
     diag = FALSE
   )
-  
+
   return(g)
 }
 
