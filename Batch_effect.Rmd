@@ -238,7 +238,7 @@ ggsave(file.path(path_plots, "batcheffect_combined_PCA_PB_batch.pdf"),
 
 
 
-# Supp fig 21: Combine all plots
+# Supp fig 22: Combine all plots
 
 ```{r fig.height=6.5, fig.width=10}
 wrap_plots(plot_list) +
@@ -248,7 +248,7 @@ wrap_plots(plot_list) +
     # legend.position='bottom',
     plot.tag = element_text(size = 16, face = "bold")
   )
-ggsave(file.path(path_plots, "Supp_fig_21_batcheffect_multistudy.pdf"),
+ggsave(file.path(path_plots, "Supp_fig_22_batcheffect_multistudy.pdf"),
        width = 10,
        height = 6.5)
 ```
