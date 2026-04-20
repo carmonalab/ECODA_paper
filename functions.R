@@ -689,6 +689,93 @@ varmeanplot <- function(data, title = "", smooth_method = "lm", label_points = F
 }
 
 
+plot_varmean <- function(df_var,
+                         highlight_celltypes = NULL,
+                         plot_title = "",
+                         highlight_hvcs = TRUE,
+                         labels = c("only_hvc", "all", "none"),
+                         plot_fit_line = FALSE,
+                         smooth_method = "lm") {
+  labels <- match.arg(labels)
+
+  # --- 1. Create a highlighting factor column ---
+  if (highlight_hvcs) {
+    df_var <- df_var %>%
+      mutate(
+        is_highlighted = if_else(
+          .data$celltype %in% highlight_celltypes,
+          "HVC selected",
+          "Not selected"
+        )
+      )
+    color_map <- c("HVC selected" = "red", "Not selected" = "black")
+
+    p <- ggplot(
+      df_var,
+      aes(
+        x = Relative_abundance,
+        y = Variance,
+        color = is_highlighted
+      )
+    ) +
+      scale_color_manual(values = color_map, name = "Cell Type Group")
+  } else {
+    p <- ggplot(df_var, aes(x = avg_clr_abundance, y = Variance))
+  }
+
+  p <- p +
+    geom_point() +
+    labs(title = paste(plot_title)) +
+    theme_classic() +
+    xlab("Mean (CLR)") +
+    ylab("Variance (CLR)")
+
+  if (plot_fit_line) {
+    p <- p +
+      geom_smooth(
+        method = smooth_method,
+        color = "red",
+        fill = "#69b3a2",
+        se = TRUE
+      )
+  }
+
+  # Ensure the legend is not shown if we are not highlighting anything
+  if (!highlight_hvcs) p <- p + theme(legend.position = "none")
+
+  if (labels != "none") {
+    # Filter data for labeling based on user choice
+    label_df <- df_var
+    if (labels == "only_hvc") {
+      label_df <- df_var %>%
+        dplyr::filter(.data$celltype %in% highlight_celltypes)
+    }
+
+    # Use the color aesthetic inside ggrepel so
+    # highlighted labels match the point color
+    if (highlight_hvcs) {
+      p <- p +
+        geom_text_repel(
+          data = label_df,
+          aes(label = celltype, color = is_highlighted),
+          size = 3,
+          show.legend = FALSE
+        )
+    } else {
+      p <- p +
+        geom_text_repel(
+          data = label_df,
+          aes(label = celltype),
+          size = 3,
+          color = "black"
+        )
+    }
+  }
+
+  return(p)
+}
+
+
 # ----
 
 
