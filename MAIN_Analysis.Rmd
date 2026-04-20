@@ -881,67 +881,6 @@ for (ds in names(result_list[["bmark"]])) {
 
 
 
-### DELETE
-
-```{r fig.height=9, fig.width=11}
-methods <- list(
-  "ECODA_authors_HR" = "ECODA",
-  "Pseudobulk_hvg2000" = "Pseudobulk",
-  "MrVI_hvg2000" = "MrVI",
-  "Pseudobulk_CT_LR_hvg2000" = "Pseudobulk_CT_LR_hvg2000",
-  "Pseudobulk_CT_HR_hvg2000" = "Pseudobulk_CT_HR_hvg2000",
-  "Pseudobulk_CT_LR_hvg500" = "Pseudobulk_CT_LR_hvg500",
-  "Pseudobulk_CT_HR_hvg500" = "Pseudobulk_CT_HR_hvg500"
-)
-
-idx <- 3
-
-for (ds in names(result_list[["bmark"]])) {
-  plot_list <- list()
-  
-  for (m in names(methods)) {
-    dist_mat <- result_list[["bmark"]][[ds]][[m]][["dist_mat"]]
-    labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
-    
-    plot_list[[m]] <- plot_mds(
-      dist_mat,
-      labels,
-      cluster_score = FALSE,mod_score = FALSE, anosim_score = TRUE,
-      coord_equal = TRUE,
-      title = methods[[m]]
-    )
-  }
-  
-  wrap_plots(plot_list) +
-    plot_layout(nrow = 3, guides = "collect")
-  
-  ggsave(file.path(path_plots, paste0("DELETE_", idx, "_benchmark_mds_", ds, ".pdf")),
-         width = 11,
-         height = 9)
-  
-  idx <- idx + 1
-}
-
-```
-
-
-```{r fig.height=6, fig.width=6}
-m <- "PILOT_hvg2000"
-ds <- "Zhang"
-dist_mat <- result_list[["bmark"]][[ds]][[m]][["dist_mat"]]
-labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
-
-plot_mds(
-  dist_mat,
-  labels,
-  cluster_score = FALSE,mod_score = FALSE, anosim_score = FALSE,
-  coord_equal = TRUE,
-  axes = c(10,11),
-  title = methods[[m]]
-)
-```
-
-
 # Plot MDS of selected datasets and methods
 
 ## For presentation
@@ -996,13 +935,24 @@ for (ds in datas) {
     )
   }
   
-  wrap_plots(plot_list) +
+  p <- wrap_plots(plot_list) +
     plot_layout(nrow = 2, guides = "collect") +
     plot_annotation(title = ds)
+  print(p)
+  
+  if (ds == "Adams" | ds == "Bassez") {
+    width <- 18
+    height <- 6
+  } else if (ds == "Gongsharma_cmv_young_males") {
+    width <- 22
+    height <- 7
+  }
+  
+  ggsave(file.path(path_plots, paste0("MDS_", ds, ".pdf")),
+       width = width,
+       height = height)
 }
-# ggsave(file.path(path_plots, paste0("PCA_", ds, ".pdf")),
-#        width = 18,
-#        height = 6)
+
 
 ```
 
@@ -2412,6 +2362,87 @@ plot_pca_contributions_horizontal(prcomp(ec_plot@clr), pcs = c("PC1", "PC2"), n 
 ```
 
 
+# For presentation: Mean-var freq vs clr
+
+```{r}
+library(ggrepel)
+
+df <- result_list$bmark$Gongsharma_cmv_young_males$ECODA_authors_HR$feat_mat
+# df_long <- pivot_longer(df,
+#                         cols = everything(),   # Selects all columns
+#                         names_to = "column",   # Where the old headers go
+#                         values_to = "value")
+# ggplot(df_long, aes(x = value)) +
+#   geom_histogram(bins = 10, 
+#                  fill = "#D1E5F0", 
+#                  color = "#003366") +
+#   labs(x = "CLR", y = "") +
+#   theme_classic() + # Gives the clean L-shaped axes
+#   theme(
+#     axis.title = element_text(size = 12),
+#     plot.title = element_blank()
+#   )
+df_var <- get_ct_var(df, show_plot = F)
+p1 <- ggplot(df_var, aes(x = Relative_abundance)) +
+  geom_histogram(bins = 10, 
+                 fill = "#D1E5F0", 
+                 color = "#003366") +
+  labs(x = "Mean (CLR)", y = "") +
+  theme_classic() + # Gives the clean L-shaped axes
+  theme(
+    axis.title = element_text(size = 12),
+    plot.title = element_blank()
+  )
+p2 <- plot_varmean(df_var, plot_fit_line = T) & NoLegend()
+plot_varmean(df_var, highlight_celltypes = df_var$celltype[1:3]) & NoLegend()
+
+df <- result_list$bmark$Gongsharma_cmv_young_males$Freq_highres$feat_mat
+# df_long <- pivot_longer(df,
+#                         cols = everything(),   # Selects all columns
+#                         names_to = "column",   # Where the old headers go
+#                         values_to = "value")
+# ggplot(df_long, aes(x = value)) +
+#   geom_histogram(bins = 10, 
+#                  fill = "#D1E5F0", 
+#                  color = "#003366") +
+#   labs(x = "CLR", y = "") +
+#   theme_classic() + # Gives the clean L-shaped axes
+#   theme(
+#     axis.title = element_text(size = 12),
+#     plot.title = element_blank()
+#   )
+df_var <- get_ct_var(df, show_plot = F)
+p3 <- ggplot(df_var, aes(x = Relative_abundance)) +
+  geom_histogram(bins = 10, 
+                 fill = "#D1E5F0", 
+                 color = "#003366") +
+  labs(x = "Mean (%)", y = "") +
+  theme_classic() + # Gives the clean L-shaped axes
+  theme(
+    axis.title = element_text(size = 12),
+    plot.title = element_blank()
+  )
+p4 <- plot_varmean(df_var, plot_fit_line = T) + xlab("Mean (%)") + ylab("Variance (%)") & NoLegend()
+# plot_varmean(df_var) + scale_x_log10() + scale_y_log10() + xlab("Mean (%)") + ylab("Variance (%)")
+
+wrap_plots(list(p4, p2, p3, p1)) +
+  plot_layout(nrow = 2, guides = "collect")
+
+ggsave(file.path(path_plots, "Presentation_freq_clr_HVCs.pdf"),
+       width = 5,
+       height = 5)
+```
+
+```{r}
+df <- result_list$bmark$Gongsharma_cmv_young_males$ECODA_authors_HR$feat_mat
+labels <- result_list$bmark$Gongsharma_cmv_young_males$ECODA_authors_HR$labels
+
+plot_pca(df, labels, n_ct_show = 3, invisible = "quali", repel = TRUE)
+```
+
+
+
+
 
 ```{r fig.height=8, fig.width=12}
 print("Most highly variable cell types per dataset:")
@@ -2673,339 +2704,6 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_anosim_ECODAandHiTMEfeat
        height = 8)
 ```
 
-## Show example PCAs for publication
-
-```{r fig.height=7, fig.width=7}
-for (ds in names(result_list[["bmark"]])) {
-  p <- plot_pca(
-    result_list[["bmark"]][[ds]][["ECODA_highres"]][["feat_mat"]],
-    labels = result_list[["bmark"]][[ds]][["ECODA_highres"]][["plot"]][["data"]][["Groups"]],
-    n_ct_show = 5,
-    invisible = "quali",
-    labelsize = 5
-  ) + ggtitle(ds)
-  print(p)
-}
-
-ds <- "Stephenson"
-plot_pca(
-    result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer3_top_varexp0.9"]][["feat_mat"]],
-    labels = result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer3_top_varexp0.9"]][["plot"]][["data"]][["Groups"]],
-    n_ct_show = 50,
-    invisible = "quali",
-    labelsize = 3
-) + ggtitle(ds)
-
-```
-
-```{r fig.height=6, fig.width=12}
-
-levs <- c(
-  "ECODA_high_res",
-  "ECODA_low_res",
-  "ECODA_deconv",
-  "Pseudobulk",
-  "MOFA_2_factors",
-  "scITD_2_factors",
-  "MrVI"
-)
-
-
-plot_list <- lapply(bmark_result_list[["GongSharma_cmv_females"]], function(method) method[["plot"]])
-scores <- lapply(bmark_result_list[["GongSharma_cmv_females"]], function(method) method[["scores"]])
-scores <- scores[levs]
-scores_long <- sapply(scores, unlist) %>% t() %>%  as.data.frame()
-scores_long$method <- row.names(scores_long)
-scores_long <- scores_long %>%
-  pivot_longer(
-    cols = c(sil_score, mod_score, cluster_score),
-    names_to = "score_method",
-    values_to = "values"
-  )
-scores_long$method <- factor(scores_long$method, levels = levs)
-
-score_p <- ggplot(scores_long, aes(x = method, y = values)) +
-  # geom_boxplot(outlier.shape = NA) +
-  geom_point(aes(shape=score_method)) + 
-  geom_line(aes(group=score_method, linetype=score_method), alpha = 1, color = "steelblue") +
-  # geom_point(position = position_jitterdodge()) +
-  labs(x = "", y = "Separation score") +
-  theme_minimal() +
-  ylim(c(min(scores_long$values, 0), max(scores_long$values))) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-
-plot_list <- plot_list[!grepl("5_factors|10_factors|dims", names(plot_list))]
-plot_list <- plot_list[c(4, 3, 2, 1, 5:7)]
-plot_list <- lapply(plot_list, function(x){x + theme(aspect.ratio=1)})
-for (p in names(plot_list)){
-  plot_list[[p]][["labels"]][["title"]] <- sub("\\nCluster score: .*", "", plot_list[[p]][["labels"]][["title"]])
-}
-plot_list[["scores"]] <- score_p
-p <- cowplot::plot_grid(plotlist = plot_list, ncol = 4)
-p
-ggsave(file.path(path_plots, "benchmark_pca_example_GongSharma_cmv_females.pdf"),
-       plot = p,
-       width = 15,
-       height = 7)
-
-
-plot_list <- lapply(bmark_result_list[["GongSharma_age_females_cmvneg"]], function(method) method[["plot"]])
-scores <- lapply(bmark_result_list[["GongSharma_age_females_cmvneg"]], function(method) method[["scores"]])
-scores <- scores[levs]
-scores_long <- sapply(scores, unlist) %>% t() %>%  as.data.frame()
-scores_long$method <- row.names(scores_long)
-scores_long <- scores_long %>%
-  pivot_longer(
-    cols = c(sil_score, mod_score, cluster_score),
-    names_to = "score_method",
-    values_to = "values"
-  )
-scores_long$method <- factor(scores_long$method, levels = levs)
-
-score_p <- ggplot(scores_long, aes(x = method, y = values)) +
-  # geom_boxplot(outlier.shape = NA) +
-  geom_point(aes(shape=score_method)) + 
-  geom_line(aes(group=score_method, linetype=score_method), alpha = 1, color = "steelblue") +
-  # geom_point(position = position_jitterdodge()) +
-  labs(x = "", y = "Separation score") +
-  theme_minimal() +
-  ylim(c(min(scores_long$values, 0), max(scores_long$values))) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-plot_list <- plot_list[!grepl("5_factors|10_factors|dims", names(plot_list))]
-plot_list <- plot_list[c(4, 3, 2, 1, 5:7)]
-plot_list <- lapply(plot_list, function(x){x + theme(aspect.ratio=1)})
-for (p in names(plot_list)){
-  plot_list[[p]][["labels"]][["title"]] <- sub("\\nCluster score: .*", "", plot_list[[p]][["labels"]][["title"]])
-}
-plot_list[["scores"]] <- score_p
-p <- cowplot::plot_grid(plotlist = plot_list, ncol = 4)
-p
-ggsave(file.path(path_plots, "benchmark_pca_example_GongSharma_age_females_cmvneg.pdf"),
-       plot = p,
-       width = 15,
-       height = 7)
-
-
-plot_list <- lapply(bmark_result_list[["Lee"]], function(method) method[["plot"]])
-scores <- lapply(bmark_result_list[["Lee"]], function(method) method[["scores"]])
-scores <- scores[levs]
-scores_long <- sapply(scores, unlist) %>% t() %>%  as.data.frame()
-scores_long$method <- row.names(scores_long)
-scores_long <- scores_long %>%
-  pivot_longer(
-    cols = c(sil_score, mod_score, cluster_score),
-    names_to = "score_method",
-    values_to = "values"
-  )
-scores_long$method <- factor(scores_long$method, levels = levs)
-
-score_p <- ggplot(scores_long, aes(x = method, y = values)) +
-  # geom_boxplot(outlier.shape = NA) +
-  geom_point(aes(shape=score_method)) + 
-  geom_line(aes(group=score_method, linetype=score_method), alpha = 1, color = "steelblue") +
-  # geom_point(position = position_jitterdodge()) +
-  labs(x = "", y = "Separation score") +
-  theme_minimal() +
-  ylim(c(min(scores_long$values, 0), max(scores_long$values))) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-plot_list <- plot_list[!grepl("5_factors|10_factors|dims", names(plot_list))]
-plot_list <- plot_list[c(4, 3, 2, 1, 5:7)]
-plot_list <- lapply(plot_list, function(x){x + theme(aspect.ratio=1)})
-for (p in names(plot_list)){
-  plot_list[[p]][["labels"]][["title"]] <- sub("\\nCluster score: .*", "", plot_list[[p]][["labels"]][["title"]])
-}
-plot_list[["scores"]] <- score_p
-p <- cowplot::plot_grid(plotlist = plot_list, ncol = 4)
-p
-ggsave(file.path(path_plots, "benchmark_pca_example_Lee.pdf"),
-       plot = p,
-       width = 15,
-       height = 7)
-
-
-plot_list <- lapply(bmark_result_list[["Zhang"]], function(method) method[["plot"]])
-scores <- lapply(bmark_result_list[["Zhang"]], function(method) method[["scores"]])
-scores <- scores[levs]
-scores_long <- sapply(scores, unlist) %>% t() %>%  as.data.frame()
-scores_long$method <- row.names(scores_long)
-scores_long <- scores_long %>%
-  pivot_longer(
-    cols = c(sil_score, mod_score, cluster_score),
-    names_to = "score_method",
-    values_to = "values"
-  )
-scores_long$method <- factor(scores_long$method, levels = levs)
-
-score_p <- ggplot(scores_long, aes(x = method, y = values)) +
-  # geom_boxplot(outlier.shape = NA) +
-  geom_point(aes(shape=score_method)) + 
-  geom_line(aes(group=score_method, linetype=score_method), alpha = 1, color = "steelblue") +
-  # geom_point(position = position_jitterdodge()) +
-  labs(x = "", y = "Separation score") +
-  theme_minimal() +
-  ylim(c(min(scores_long$values, 0), max(scores_long$values))) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-
-plot_list <- plot_list[!grepl("5_factors|10_factors|dims", names(plot_list))]
-plot_list <- plot_list[c(4, 3, 2, 1, 5:7)]
-plot_list <- lapply(plot_list, function(x){x + theme(aspect.ratio=1)})
-for (p in names(plot_list)){
-  plot_list[[p]][["labels"]][["title"]] <- sub("\\nCluster score: .*", "", plot_list[[p]][["labels"]][["title"]])
-}
-plot_list[["scores"]] <- score_p
-p <- cowplot::plot_grid(plotlist = plot_list, ncol = 4)
-p
-ggsave(file.path(path_plots, "benchmark_pca_example_Zhang.pdf"),
-       plot = p,
-       width = 15,
-       height = 7)
-
-
-plot_list <- lapply(bmark_result_list[["Stephenson"]], function(method) method[["plot"]])
-scores <- lapply(bmark_result_list[["Stephenson"]], function(method) method[["scores"]])
-scores <- scores[levs]
-scores_long <- sapply(scores, unlist) %>% t() %>%  as.data.frame()
-scores_long$method <- row.names(scores_long)
-scores_long <- scores_long %>%
-  pivot_longer(
-    cols = c(sil_score, mod_score, cluster_score),
-    names_to = "score_method",
-    values_to = "values"
-  )
-scores_long$method <- factor(scores_long$method, levels = levs)
-
-score_p <- ggplot(scores_long, aes(x = method, y = values)) +
-  # geom_boxplot(outlier.shape = NA) +
-  geom_point(aes(shape=score_method)) + 
-  geom_line(aes(group=score_method, linetype=score_method), alpha = 1, color = "steelblue") +
-  # geom_point(position = position_jitterdodge()) +
-  labs(x = "", y = "Separation score") +
-  theme_minimal() +
-  ylim(c(min(scores_long$values, 0), max(scores_long$values))) +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
-
-plot_list <- plot_list[!grepl("5_factors|10_factors|dims", names(plot_list))]
-plot_list <- plot_list[c(4, 3, 2, 1, 5:7)]
-plot_list <- lapply(plot_list, function(x){x + theme(aspect.ratio=1)})
-for (p in names(plot_list)){
-  plot_list[[p]][["labels"]][["title"]] <- sub("\\nCluster score: .*", "", plot_list[[p]][["labels"]][["title"]])
-}
-plot_list[["scores"]] <- score_p
-p <- cowplot::plot_grid(plotlist = plot_list, ncol = 4)
-p
-ggsave(file.path(path_plots, "benchmark_pca_example_Stephenson.pdf"),
-       plot = p,
-       width = 15,
-       height = 7)
-
-```
-
-## Example PCAs for HiTME layer2 vs layer3
-
-```{r}
-plot_pca(result_list[["bmark"]][["Adams"]][["ECODA_highres_HiTME_layer3_top_varexp0.1"]][["feat_mat"]],
-         labels = result_list[["bmark"]][["Adams"]][["ECODA_highres_HiTME_layer3_top_varexp0.1"]][["plot"]][["data"]][["Groups"]],
-         invisible = "quali",
-         labelsize = 4
-         )
-```
-
-```{r}
-test <- plist_layer2[[1]]
-```
-
-```{r}
-plist_layer2 <- list()
-for (ds in names(result_list$bmark)) {
-  plist_layer2[[ds]] <- plot_pca(
-    result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer2_top_varexp0.5"]][["feat_mat"]],
-    labels = result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer2_top_varexp0.5"]]$labels,
-    invisible = "quali",
-    labelsize = 4,
-    title = ds,
-    n_ct_show = 5
-  )
-}
-
-plist_layer3 <- list()
-for (ds in names(result_list$bmark)) {
-  plist_layer3[[ds]] <- plot_pca(
-    result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer3_top_varexp0.5"]][["feat_mat"]],
-    labels = result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer3_top_varexp0.5"]]$labels,
-    invisible = "quali",
-    labelsize = 4,
-    title = ds,
-    n_ct_show = 5
-  )
-}
-```
-
-```{r}
-ggsave("pca_layer2.pdf", cowplot::plot_grid(plotlist = plist_layer2, ncol = 3), width = 20, height = 20)
-ggsave("pca_layer3.pdf", cowplot::plot_grid(plotlist = plist_layer3, ncol = 3), width = 20, height = 20)
-```
-
-```{r fig.height=8, fig.width=16}
-plist_vcts <- list()
-for (ds in names(result_list$bmark)) {
-  p1 <- result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer2"]][["feat_mat"]]%>%
-    get_ct_var() %>%
-    varmeanplot(title = paste0(ds, " Layer2"), label_points = TRUE)
-  p2 <- result_list[["bmark"]][[ds]][["ECODA_highres_HiTME_layer3"]][["feat_mat"]]%>%
-    get_ct_var() %>%
-    varmeanplot(title = paste0(ds, " Layer3"), label_points = TRUE)
-  plist_vcts[[ds]] <- p1 | p2
-  print(p1 | p2)
-}
-
-
-```
-
-```{r}
-ggsave(filename = "test.pdf", plot = cowplot::plot_grid(plotlist = plist_vcts, ncol = 1), width = 20, height = 100, limitsize = FALSE)
-```
-
-## Compare layer2 and layer3 by scores
-
-```{r fig.height=8, fig.width=2.5}
-filter_methods <- c(
-  "ECODA_highres",
-  "ECODA_highres_HiTME_layer2_top_varexp0.5",
-  "ECODA_highres_HiTME_layer3_top_varexp0.5"
-)
-
-for (s in c("anosim_score", "mod_score", "cluster_score")) {
-  p <- df_results %>%
-    filter(score == s) %>%
-    filter(method %in% filter_methods) %>%
-    
-    ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
-    stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
-    stat_summary(fun = mean, geom = "bar", fill = "gray70") +
-    geom_point(position = "identity", alpha = 0.6) +
-    geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
-    labs(x = "", y = s) +
-    theme_minimal() +
-    theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1)) +
-    ggtitle(s)
-  print(p)
-}
-```
-
-## Overlap between HVGs from single-cell and bulk
-
-```{r}
-# test <- c()
-test_int <- c()
-test_anosim <- c()
-for (ds in names(datasets)) {
-  # test <- c(test, result_list[[ds]][["Pseudobulk_unsup_hvg2000"]][["hvgs_sc_pb_intersect"]])
-  test_int <- c(test_int, result_list[["bmark"]][[ds]][["Pseudobulk_unsup_hvg2000"]]$hvgs_sc_pb_intersect)
-  test_anosim <- c(test_anosim, result_list[["bmark"]][[ds]][["Pseudobulk_unsup_hvg2000"]]$scores$anosim_score)
-}
-# plot(test)
-plot(test_int, test_anosim)
-```
 
 # ---------------------------------------------------------------
 
@@ -3230,6 +2928,11 @@ ggsave(file.path(path_plots, "Supp_fig_14_benchmark_exec_times.pdf"),
        width = 3.5,
        height = 3.5, limitsize = FALSE)
 ```
+
+
+
+
+
 
 # ---------------------------------------------------------------
 
@@ -4052,6 +3755,7 @@ ggsave(file.path(path_plots, "Supp_fig_15_benchmark_extended.pdf"),
 ```
 
 
+
 ## Difference between Pseudobulk_hvg2000 and Pseudobulk_CT_HR
 
 ```{r}
@@ -4087,6 +3791,323 @@ avg_ct_500  <- get_global_avg(pb_ct_hr_500_scores)
 
 cat("Pseudobulk_CT_HR_hvg2000 vs Pseudobulk_hvg2000: ", round(avg_ct_2000 / avg_pb2000, 2), "\n")
 cat("Pseudobulk_CT_HR_hvg500 vs Pseudobulk_hvg2000: ", round(avg_ct_500 / avg_pb2000, 2))
+```
+
+
+## For presentation: Extended benchmark
+
+```{r fig.height=8, fig.width=14}
+# --- 1. SETUP & CLEANING (Same as before) ---
+filter_methods <- c(
+  "ECODA_authors_HR",
+  "ECODA_authors_HR_NULL",
+  "ECODA_HiTME_HR_layer2",
+  # "ECODA_scATOMIC_HR",
+  # "ECODA_HiTME_HR_layer3",
+  "ECODA_seuratres_2",
+  # "ECODA_PB_combo_normquantile_ecodaweight0.5",
+  # paste0("ECODA_PB_combo_norm", norm_methods, "_ecodaweight0.5"),
+  # "ECODA_authors_LR",
+  # "Avg_PCA_embedding",
+  # "Freq_highres",
+  # "ECODA_deconv",
+  # "Pseudobulk_10_PCA_dims",
+  "Pseudobulk_hvg2000",
+  # "Pseudobulk_CT_LR_hvg2000",
+  "Pseudobulk_CT_HR_hvg2000",
+  # "Pseudobulk_CT_LR_hvg500",
+  # "Pseudobulk_CT_HR_hvg500",
+  "MOFA_hvg2000_factors15",
+  "scITD_hvg2000_factors5",
+  "MrVI_hvg2000",
+  "scPoli_hvg2000_dims15_highres",
+  "PILOT_hvg2000",
+  "GloScope_hvg2000_pcadims30_sqrtmat",
+  "GloProp"
+)
+
+df_results_bmark <- df_results
+df_results_bmark$temp <- paste0(df_results_bmark$dataset, df_results_bmark$method)
+exec_times$temp <- paste0(exec_times$dataset, exec_times$method)
+
+df_results_bmark <- merge(df_results_bmark,
+                          exec_times[, c("temp", "time_secs")], 
+                          by = "temp",
+                          all.x = TRUE)
+
+df_results_bmark$temp <- NULL
+exec_times$temp <- NULL
+
+
+clean_data <- df_results_bmark %>%
+  filter(method %in% filter_methods) %>%
+  mutate(method = recode(method,
+                         "ECODA_authors_HR" = "ECODA_authors",
+                         "ECODA_authors_HR_NULL" = "Shuffled_baseline",
+                         "ECODA_HiTME_HR_layer2" = "ECODA_automated",
+                         "ECODA_scATOMIC_HR" = "ECODA_automated_scATOMIC",
+                         "ECODA_seuratres_2" = "ECODA_unsupervised",
+                         # "ECODA_PB_combo_normquantile_ecodaweight0.5" = "ECODA+Pseudobulk",
+                         "Pseudobulk_10_PCA_dims" = "Pseudobulk_PCA",
+                         "Pseudobulk_hvg2000" = "Pseudobulk",
+                         "Pseudobulk_CT_HR_hvg2000" = "Pseudobulk_CT_HR",
+                         "Freq_highres" = "CellType_Frequency%",
+                         "MOFA_hvg2000_factors15" = "MOFA",
+                         "scITD_hvg2000_factors5" = "scITD",
+                         "MrVI_hvg2000" = "MrVI",
+                         "scPoli_hvg2000_dims15_highres" = "scPoli",
+                         "scITD_2_factors" = "scITD",
+                         "PILOT_hvg2000" = "PILOT",
+                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
+  mutate(score = recode(score,
+                        "anosim_score" = "ANOSIM",
+                        "mod_knn3_score" = "Modularity",
+                        "mod_score" = "Modularity",
+                        "cluster_score" = "ARI")) %>%
+  mutate(dataset = recode(dataset,
+                          "Adams" = "Adams (pulmonary fibrosis)",
+                          "Bassez" = "Bassez (ICB treatment response)",
+                          "GongSharma" = "GongSharma (healthy, cmv)",
+                          "GongSharma_all_age" = "GongSharma (healthy, age)",
+                          "GongSharma_all_cmv" = "GongSharma (healthy, CMV)",
+                          "GongSharma_all_sex" = "GongSharma (healthy, sex)",
+                          "Kfoury" = "Kfoury (prostate metastasis)",
+                          "Kim" = "Kim (metastatic lung adenocarcinoma)",
+                          "Lee" = "Lee (ICB treatment vs naive)",
+                          "Pelka" = "Pelka (colon cancer vs control)",
+                          "Smillie" = "Smillie (ulcerative colitis)",
+                          "Stephenson" = "Stephenson (COVID-19)",
+                          "Wu" = "Wu (breast cancer subtype)",
+                          "Zhang" = "Zhang (tissue)"))
+
+# --- 2. CALCULATE GEOMETRIC MEAN OF RANKS (NEW STEP) ---
+df_ranks <- clean_data %>%
+  # Group by specific test case
+  group_by(dataset, score) %>% 
+  # Rank: Higher Value = Better Rank (1). Ties get the minimum rank.
+  mutate(rank = rank(-value, ties.method = "min")) %>% 
+  ungroup() %>%
+  # Now aggregate per method
+  group_by(method) %>% 
+  # # Calculate Geometric Mean: exp(mean(log(x)))
+  # summarise(geo_mean_rank = exp(mean(log(rank), na.rm = TRUE))) %>%
+  summarise(mean_rank = mean(rank, na.rm = TRUE)) %>%
+  ungroup() %>%
+  # Normalize so it plots nicely (0 to 1). 
+  # We INVERT it so Best Rank (lowest number) = 1.0 (biggest bar)
+  mutate(Rank_Score = (max(mean_rank) - mean_rank) / 
+           (max(mean_rank) - min(mean_rank))) %>%
+  select(method, Rank_Score)
+
+# --- 3. SCALE DATA (0-1) FOR HEATMAP VISUALS ---
+scaled_data <- clean_data %>%
+  group_by(dataset, score) %>%
+  mutate(value = min_max(value)) %>%
+  ungroup()
+
+# --- 4. AGGREGATE SCORES ---
+
+# A. Overall Score (Arithmetic Mean of Scaled Values)
+df_overall <- scaled_data %>%
+  group_by(method) %>%
+  summarise(Overall_Score = mean(value, na.rm = TRUE)) 
+
+# B. Dataset Scores
+df_datasets_wide <- scaled_data %>%
+  group_by(method, dataset) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(id_cols = method, names_from = dataset, values_from = value, names_prefix = "Dataset__")
+
+# C. Metric Scores
+df_metrics_wide <- scaled_data %>%
+  group_by(method, score) %>%
+  summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(id_cols = method, names_from = score, values_from = value, names_prefix = "Metric__")
+
+# D. Execution times
+df_runtime <- clean_data %>%
+  distinct(method, dataset, time_secs) %>% 
+  group_by(method) %>%
+  summarise(raw_time = mean(time_secs, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    log_time = log10(raw_time + 1),
+    # Inverting so SHORTER time (faster) = BIGGER bar/BETTER score
+    # Remove '1 -' if you want long bars to mean slow
+    Runtime = min_max(log_time) 
+  ) %>% 
+  select(method, Runtime)
+
+# --- 5. MERGE EVERYTHING ---
+final_data <- df_overall %>%
+  left_join(df_ranks, by = "method") %>% # <--- Join the new Rank Score
+  left_join(df_datasets_wide, by = "method") %>%
+  left_join(df_metrics_wide, by = "method") %>%
+  left_join(df_runtime, by = "method") %>%
+  arrange(desc(Overall_Score))
+  # arrange(desc(Rank_Score)) # Optional: sort by the new Rank Score instead
+
+# --- 6. BUILD COLUMN INFO ---
+
+# 1. Method Column (The Label)
+info_method <- tribble(
+  ~id,      ~group, ~name, ~geom,  ~palette, ~options,
+  "method", "",     "",    "text", NA,       list(hjust = 0, width = 8)
+)
+
+# 2.1 Score Avg
+info_score_avg <- tribble(
+  ~id,             ~group,    ~name,  ~geom, ~palette,           ~options,
+  "Overall_Score", "Overall", "Metrics Mean", "bar", "palette_avg_mean", list(width = 4)
+)
+
+# 2.2 Rank Avg
+info_rank_avg <- tribble(
+  ~id,             ~group,    ~name,           ~geom,  ~palette,          ~options,
+  "Rank_Score",    "Overall", "Rank Mean",  "bar",  "palette_avg_rank", list(width = 4, legend = FALSE)
+)
+
+# 3. Dataset Columns
+dataset_cols <- colnames(final_data)[startsWith(colnames(final_data), "Dataset__")]
+info_datasets <- tibble(id = dataset_cols) %>%
+  mutate(
+    group = "Datasets",
+    name = str_remove(id, "Dataset__"), 
+    geom = "circle",
+    palette = "Datasets",
+    options = list(list())
+  ) %>% arrange(name)
+
+# 4. Metric Columns (Individual metrics)
+metric_cols <- colnames(final_data)[startsWith(colnames(final_data), "Metric__")]
+target_metric_order <- c("ANOSIM", "Modularity", "ARI")
+
+info_metrics_main <- tibble(id = metric_cols) %>%
+  mutate(
+    group = "Metrics",
+    name = str_remove(id, "Metric__"),
+    geom = "bar",
+    palette = "Metrics",
+    options = list(list(width = 2)),
+    name_f = factor(name, levels = target_metric_order)
+  ) %>% arrange(name_f) %>% select(-name_f)
+
+# 5. Runtime (The Rightmost column)
+info_runtime <- tribble(
+  ~id,       ~group,    ~name,     ~geom, ~palette,          ~options,
+  "Runtime", "Runtime", "Runtime", "bar", "palette_runtime", list(width = 3)
+)
+
+# --- KEY CHANGE: Re-order the bind_rows to define horizontal placement ---
+# This order determines the columns from left to right.
+column_info <- bind_rows(
+  info_method,      # 1st: Method Name
+  info_score_avg,   # 2.1: Mean Metric Score
+  info_rank_avg,    # 2.2: Mean rank
+  info_datasets,    # 3rd: Dataset Circles
+  info_metrics_main,# 4th: Individual Metric Bars
+  info_runtime      # 5th: Runtime Bar
+)
+
+# 
+# # 2. Dataset Columns
+# dataset_cols <- colnames(final_data)[startsWith(colnames(final_data), "Dataset__")]
+# info_datasets <- tibble(id = dataset_cols) %>%
+#   mutate(
+#     group = "Datasets",
+#     name = str_remove(id, "Dataset__"), 
+#     geom = "circle",
+#     palette = "Datasets",
+#     options = list(list())
+#   ) %>% arrange(name)
+# 
+# # 3. Metric Columns (INCLUDING Score Avg at the start)
+# metric_cols <- colnames(final_data)[startsWith(colnames(final_data), "Metric__")]
+# target_metric_order <- c("ANOSIM", "Modularity", "ARI")
+# 
+# # Create the specific Metric entries
+# info_metrics_main <- tibble(id = metric_cols) %>%
+#   mutate(
+#     group = "Metrics",
+#     name = str_remove(id, "Metric__"),
+#     geom = "bar",
+#     palette = "Metrics",
+#     options = list(list(width = 2)),
+#     name_f = factor(name, levels = target_metric_order)
+#   ) %>% arrange(name_f) %>% select(-name_f)
+# 
+# # Define Score Avg as a Metric entry
+# info_score_avg <- tribble(
+#   ~id,             ~group,    ~name,       ~geom, ~palette,           ~options,
+#   "Overall_Score", "Metrics", "Mean", "bar", "palette_avg_mean", list(width = 4, legend = FALSE)
+# )
+# 
+# # Combine metrics: Score Avg comes FIRST
+# info_metrics <- bind_rows(info_score_avg, info_metrics_main)
+# 
+# # 4. Runtime (The Rightmost column)
+# info_runtime <- tribble(
+#   ~id,       ~group,    ~name,     ~geom, ~palette,          ~options,
+#   "Runtime", "Runtime", "Runtime", "bar", "palette_runtime", list(width = 3)
+# )
+# 
+# # Combine everything in the final order
+# column_info <- bind_rows(info_left, info_datasets, info_metrics, info_runtime)
+
+ncolors <- 11
+
+# --- 7. PLOT ---
+funky_heatmap(
+  final_data,
+  column_info = column_info,
+  scale_column = FALSE, 
+  column_groups = tibble(
+    group = c("Overall", "Datasets", "Metrics", "Runtime")
+  ),
+  palettes = list(
+    palette_avg_rank = brewer.pal(n = ncolors, name = "RdBu"),
+    palette_avg_mean = brewer.pal(n = ncolors, name = "RdBu"),
+    Datasets = brewer.pal(n = ncolors, name = "RdBu"),
+    Metrics = brewer.pal(n = ncolors, name = "RdBu"),
+    palette_runtime = rev(brewer.pal(n = ncolors, name = "RdYlGn"))
+  ),
+  legends = list(
+    list(
+      palette = "palette_avg_rank",
+      enabled = FALSE,
+      title = "REMOVE PLACEHOLDER"
+    ),
+    list(
+      palette = "palette_avg_mean",
+      enabled = TRUE,
+      title = "Overall",
+      labels = c(".         Worst", rep("", ncolors-2), "Best       .")
+    ),
+    list(
+      palette = "Datasets",
+      enabled = TRUE,
+      title = "Dataset separation",
+      labels = c(".     Min", rep("", ncolors-2), "Max   .")
+    ),
+    list(
+      palette = "Metrics",
+      enabled = TRUE,
+      labels = c(". 0", rep("", round((ncolors-2)/2)+1), "0.5", rep("", round((ncolors-2)/2)), "1")
+    ),
+    list(
+      palette = "palette_runtime",
+      enabled = TRUE,
+      title = "Runtime log10(s)",
+      labels = c("secs", "mins", "hours") 
+    )
+  ),
+  position_args = position_arguments(
+    col_width = 1.5,
+    col_space = 0.2, col_annot_offset = 5
+  )
+)
+ggsave(file.path(path_plots, "Presentation_benchmark_extended.pdf"),
+       width = 14,
+       height = 8)
 ```
 
 
