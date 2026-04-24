@@ -111,7 +111,6 @@ calc_modularity <- function(dist_mat,
   }
 
   # Create a graph object
-  # knn <- compute_KNN(feat_mat = feat_mat, knn_k = knn_k)
   knn <- compute_KNN_from_dist(dist_mat, knn_k)
   g <- compute_snn_graph(knn)
   # Compute modularity
@@ -136,14 +135,6 @@ calc_avg_sep_score <- function(dist_mat, labels, digits = 2) {
     mean() %>%
     round(digits)
   return(avg_sep_score)
-}
-
-
-compute_KNN <- function(feat_mat, knn_k) {
-  # Compute KNN
-  knn <- RANN::nn2(as.matrix(feat_mat), k = knn_k + 1)$nn.idx
-  knn <- knn[, -1] # Remove self-neighbor
-  return(knn)
 }
 
 
