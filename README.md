@@ -1,4 +1,4 @@
-[![bioRxiv](https://img.shields.io/badge/bioRxiv-10.1101%2F2026.03.27.714811-b31b1b.svg)](https://doi.org/10.64898/2026.03.27.714811)
+[![bioRxiv](https://img.shields.io/badge/bioRxiv-10.1101%2F2026.03.27.714811-brightgreen.svg)](https://doi.org/10.64898/2026.03.27.714811)
 
 # ECODA: Exploratory Compositional Data Analysis for scRNA-seq Cohorts
 
