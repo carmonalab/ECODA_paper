@@ -28,11 +28,14 @@ simple baseline: **ECODA (Exploratory Compositional Data Analysis)**.
     insights.
 
 ### **Repository Contents**
-
--   `MAIN_Analysis.Rmd`: Core script to run the benchmark and generate paper
-    figures.
+-   Pre-filtering and quality controlled for performed individually for each
+    dataset with the respective scripts in `./QC_filtering/`
 -   `Preprocess_datasets.Rmd`: Standardized preprocessing and automated
     annotation for all cohorts used in the study.
+-   `Process_data.ipynb`: This script is used to run the benchmarked methods
+    that run in python.
+-   `MAIN_Analysis.Rmd`: Core script to run the benchmark and generate paper
+    figures.
 -   `functions.R`: Underlying R functions for ECODA, CLR transformations, and
     separation metric calculations (ANOSIM, ARI, Modularity). The **scECODA** R
     package for scalable cohort-level analysis is available at
