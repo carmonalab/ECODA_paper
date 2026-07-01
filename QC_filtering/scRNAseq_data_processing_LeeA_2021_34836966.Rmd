@@ -59,9 +59,6 @@ library(data.table)
 library(STACAS)
 library(SignatuR)
 
-# load custom functions
-source("Rutils/functions.R")
-
 options(timeout=4000) # increase time out for downloading
 ```
 
