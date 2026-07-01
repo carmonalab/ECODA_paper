@@ -32,7 +32,6 @@ library(Matrix)
 library(patchwork)
 library(R.utils)
 library(data.table)
-source("functions.R")
 my_seed <- 321
 ```
 

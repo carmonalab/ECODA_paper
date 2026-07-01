@@ -72,9 +72,6 @@ library(dplyr)
 library(data.table)
 library(STACAS)
 library(SignatuR)
-
-# load custom functions
-source("Rutils/functions.R")
 ```
 
 Also, increase memory parameters to allocate large vectors, otherwise R

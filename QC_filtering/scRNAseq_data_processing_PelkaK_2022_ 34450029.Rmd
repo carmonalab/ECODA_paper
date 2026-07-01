@@ -38,8 +38,6 @@ for(package in pckgs){
   library(package, character.only = T)
 }
 
-# load custom functions
-source("Rutils/functions.R")
 
 options(timeout=4000) # increase time out for downloading
 ```
