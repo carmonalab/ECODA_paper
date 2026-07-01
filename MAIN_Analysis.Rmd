@@ -14,14 +14,16 @@ output:
 ---
 
 # Description
+
 Core script to run the benchmark and generate paper figures.
 
 ## Inputs
+
 -   The resulting preprocessed `.rds` files from the script `Preprocess_datasets.Rmd`.
--   The `.feather` files containing sample distances or sample embeddings from
-    the benchmarked methods that run in python, produced with `Process_data.ipynb`.
+-   The `.feather` files containing sample distances or sample embeddings from the benchmarked methods that run in python, produced with `Process_data.ipynb`.
 
 ## Outputs
+
 -   Figures for the manuscript
 -   Summarized raw data for appendix (e.g. cell type compositions)
 
@@ -118,6 +120,8 @@ if (file.exists(result_file)) {
 # ---------------------------------------------------------------
 
 # Process datasets
+
+NOTE: Pre-processed (e.g. including cell type annotation, clustering, etc.) dataset .rds files (with shortened names) are deposited online at: <https://doi.org/10.6084/m9.figshare.31456522> . They can be used as input for the following code (after adapting the names according to the names defined in `"Processed_dataset_metadata.R"`):
 
 ```{r message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
 for (ds in names(datasets)) {
