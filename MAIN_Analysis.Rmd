@@ -32,68 +32,22 @@ Core script to run the benchmark and generate paper figures.
 # Load libraries and set parameters
 
 ```{r message=FALSE, warning=FALSE}
-# renv::init()
-# renv::snapshot()
+# Setup: See README.md for initial environment setup
+# renv::init() && renv::restore() for dependency management
 
 source("functions.R")
 source("Processed_dataset_metadata.R")
 
-
-# devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
 library(EPIC)
-# BiocManager::install("MOFA2")
-
-# reticulate::virtualenv_create(envname = "C:/R_Envs/my_env", version = "3.11.9")
-# # Define the path first
-# my_path <- "C:/R_Envs/my_env"
-# 
-# # Install BEFORE the environment is loaded into the R session memory
-# reticulate::py_install(
-#     packages = "pandas==2.0.3",
-#     envname = my_path,
-#     method = "virtualenv",
-#     pip = TRUE
-# )
-# reticulate::py_install(
-#     packages = "h5py==3.12.1",
-#     envname = my_path,
-#     method = "virtualenv",
-#     pip = TRUE
-# )
-# reticulate::py_install(
-#     packages = "numpy==1.26.4",
-#     envname = my_path,
-#     method = "virtualenv",
-#     pip = TRUE
-# )
-# reticulate::py_install(
-#     packages = "mofapy2",
-#     envname = my_path,
-#     method = "virtualenv",
-#     pip = TRUE
-# )
 library(reticulate)
-# use_virtualenv("C:/R_Envs/my_env", required = TRUE)
-# py_config()
-# py_install("mofapy2")
-# import("mofapy2")
-# library(basilisk)
 library("MOFA2")
-# BiocManager::install("fgsea")
-# BiocManager::install("sva")
-# devtools::install_github("kharchenkolab/scITD")
 library(scITD)
-# install.packages("ncdf4")
-# BiocManager::install("GloScope")
 library(GloScope)
 library(funkyheatmap)
 library(RColorBrewer)
-
 library(forcats)
 library(gtools)
-
 library(scECODA)
-
 
 # Set paths
 path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
@@ -138,15 +92,11 @@ for (ds in names(datasets)) {
 
 # ---------------------------------------------------------------
 
-# ---------------------------------------------------------------
-
 # Create list to export raw data to excel
 
 ```{r}
 df_results_list <- list()
 ```
-
-# ---------------------------------------------------------------
 
 # ---------------------------------------------------------------
 
@@ -2062,8 +2012,6 @@ ggsave(file.path(path_plots, "Supp_fig_14_benchmark_exec_times.pdf"),
 
 # ---------------------------------------------------------------
 
-# ---------------------------------------------------------------
-
 # Figure 2 A: Plot benchmark results
 
 ## Main plot (with funkyheatmap)
@@ -2095,18 +2043,7 @@ filter_methods <- c(
   "GloProp"
 )
 
-df_results_bmark <- df_results
-df_results_bmark$temp <- paste0(df_results_bmark$dataset, df_results_bmark$method)
-exec_times$temp <- paste0(exec_times$dataset, exec_times$method)
-
-df_results_bmark <- merge(df_results_bmark,
-                          exec_times[, c("temp", "time_secs")], 
-                          by = "temp", 
-                          all.x = TRUE)
-
-df_results_bmark$temp <- NULL
-exec_times$temp <- NULL
-
+df_results_bmark <- merge_exec_times(df_results, exec_times)
 
 clean_data <- df_results_bmark %>%
   filter(method %in% filter_methods) %>%
@@ -2405,18 +2342,7 @@ filter_methods <- c(
   "GloScope_hvg2000_pcadims30_sqrtmat"
 )
 
-df_results_bmark <- df_results
-df_results_bmark$temp <- paste0(df_results_bmark$dataset, df_results_bmark$method)
-exec_times$temp <- paste0(exec_times$dataset, exec_times$method)
-
-df_results_bmark <- merge(df_results_bmark,
-                          exec_times[, c("temp", "time_secs")], 
-                          by = "temp", 
-                          all.x = TRUE)
-
-df_results_bmark$temp <- NULL
-exec_times$temp <- NULL
-
+df_results_bmark <- merge_exec_times(df_results, exec_times)
 
 clean_data <- df_results_bmark %>%
   filter(method %in% filter_methods) %>%
@@ -2590,18 +2516,7 @@ filter_methods <- c(
   "GloProp"
 )
 
-df_results_bmark <- df_results
-df_results_bmark$temp <- paste0(df_results_bmark$dataset, df_results_bmark$method)
-exec_times$temp <- paste0(exec_times$dataset, exec_times$method)
-
-df_results_bmark <- merge(df_results_bmark,
-                          exec_times[, c("temp", "time_secs")], 
-                          by = "temp",
-                          all.x = TRUE)
-
-df_results_bmark$temp <- NULL
-exec_times$temp <- NULL
-
+df_results_bmark <- merge_exec_times(df_results, exec_times)
 
 clean_data <- df_results_bmark %>%
   filter(method %in% filter_methods) %>%
@@ -2944,18 +2859,7 @@ filter_methods <- c(
   "GloProp"
 )
 
-df_results_bmark <- df_results
-df_results_bmark$temp <- paste0(df_results_bmark$dataset, df_results_bmark$method)
-exec_times$temp <- paste0(exec_times$dataset, exec_times$method)
-
-df_results_bmark <- merge(df_results_bmark,
-                          exec_times[, c("temp", "time_secs")], 
-                          by = "temp",
-                          all.x = TRUE)
-
-df_results_bmark$temp <- NULL
-exec_times$temp <- NULL
-
+df_results_bmark <- merge_exec_times(df_results, exec_times)
 
 clean_data <- df_results_bmark %>%
   filter(method %in% filter_methods) %>%
@@ -3230,8 +3134,6 @@ ggsave(file.path(path_plots, "Presentation_benchmark_extended.pdf"),
 
 # ---------------------------------------------------------------
 
-# ---------------------------------------------------------------
-
 # Supp fig 1: Correlation between metrics
 
 ```{r}
@@ -3284,8 +3186,6 @@ ggsave(file.path(path_plots, "Supp_fig_1_metrics_correlation.pdf"),
        width = 7.5,
        height = 5)
 ```
-
-# ---------------------------------------------------------------
 
 # ---------------------------------------------------------------
 
@@ -3556,8 +3456,6 @@ ggplot(df_results_anosim, aes(x = trans_method, y = value)) +
   theme_classic() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 ```
-
-# ---------------------------------------------------------------
 
 # ---------------------------------------------------------------
 
@@ -3919,8 +3817,6 @@ ggsave(file.path(path_plots, "Supp_fig_16AB_trans_zero_anosim.pdf"),
 
 # ---------------------------------------------------------------
 
-# ---------------------------------------------------------------
-
 # Batch effect
 
 ## Joanito dataset
@@ -4184,16 +4080,12 @@ ggsave(file.path(path_plots, "Supp_fig_22_batcheffect_Stephenson_PCA_combined.pd
 
 # ---------------------------------------------------------------
 
-# ---------------------------------------------------------------
-
 # Export tables with raw data for paper
 
 ```{r}
 library(writexl)
 write_xlsx(df_results_list, path = file.path(path_data, "raw_data_for_publication.xlsx"))
 ```
-
-# ---------------------------------------------------------------
 
 # ---------------------------------------------------------------
 
