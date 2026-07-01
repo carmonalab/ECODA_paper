@@ -2349,14 +2349,14 @@ process_coda_fig <- function(
       impute_zeros(
         clr_zero_impute_method = clr_zero_impute_method,
         clr_zero_impute_num = clr_zero_impute_num
-      ) %>%
-      calc_perc_df()
+      )
 
     if (calc_clr) {
       feat_mat <- df_imp %>%
         clr()
     } else {
-      feat_mat <- df_imp
+      feat_mat <- df_imp %>%
+        calc_perc_df()
     }
 
     top_hvct <- NULL
@@ -2385,7 +2385,6 @@ process_coda_fig <- function(
           clr_zero_impute_method = clr_zero_impute_method,
           clr_zero_impute_num = clr_zero_impute_num
         ) %>%
-        calc_perc_df() %>%
         clr()
     }
   }
@@ -2911,7 +2910,6 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
       clr_zero_impute_method = "counts_zeros",
       clr_zero_impute_num = 2 / 3
     ) %>%
-    calc_perc_df() %>%
     clr() %>%
     dist() %>%
     calc_sep_score(labels)
@@ -2920,7 +2918,6 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
       clr_zero_impute_method = "counts_zeros",
       clr_zero_impute_num = 1
     ) %>%
-    calc_perc_df() %>%
     clr() %>%
     dist() %>%
     calc_sep_score(labels)
@@ -2929,7 +2926,6 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
       clr_zero_impute_method = "counts_all",
       clr_zero_impute_num = 1
     ) %>%
-    calc_perc_df() %>%
     clr() %>%
     dist() %>%
     calc_sep_score(labels)
@@ -2938,7 +2934,6 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
       clr_zero_impute_method = "counts_zeros",
       clr_zero_impute_num = 0.5
     ) %>%
-    calc_perc_df() %>%
     clr() %>%
     dist() %>%
     calc_sep_score(labels)
@@ -2947,7 +2942,6 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
       clr_zero_impute_method = "counts_all",
       clr_zero_impute_num = 0.5
     ) %>%
-    calc_perc_df() %>%
     clr() %>%
     dist() %>%
     calc_sep_score(labels)
@@ -2956,7 +2950,6 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
       clr_zero_impute_method = "percentage_all",
       clr_zero_impute_num = 0.001
     ) %>%
-    calc_perc_df() %>%
     clr() %>%
     dist() %>%
     calc_sep_score(labels)
@@ -2965,7 +2958,6 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
       clr_zero_impute_method = "percentage_all",
       clr_zero_impute_num = 0.01
     ) %>%
-    calc_perc_df() %>%
     clr() %>%
     dist() %>%
     calc_sep_score(labels)
@@ -2974,7 +2966,6 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
       clr_zero_impute_method = "percentage_all",
       clr_zero_impute_num = 0.1
     ) %>%
-    calc_perc_df() %>%
     clr() %>%
     dist() %>%
     calc_sep_score(labels)
@@ -2983,7 +2974,6 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
       clr_zero_impute_method = "percentage_all",
       clr_zero_impute_num = 1
     ) %>%
-    calc_perc_df() %>%
     clr() %>%
     dist() %>%
     calc_sep_score(labels)

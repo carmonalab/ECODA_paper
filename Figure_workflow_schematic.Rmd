@@ -254,23 +254,20 @@ for (layer in names(data)) {
 
   df_counts_1count_zero <- df_counts
   df_counts_1count_zero[df_counts_1count_zero == 0] <- 1
-  dproc[[layer]]$clr_1count_zero <- df_counts_1count_zero %>% calc_perc_df() %>% clr()
+  dproc[[layer]]$clr_1count_zero <- df_counts_1count_zero %>% clr()
   
-  dproc[[layer]]$clr_1count_all <- (df_counts + 1) %>% calc_perc_df() %>% clr()
+  dproc[[layer]]$clr_1count_all <- (df_counts + 1) %>% clr()
   
   dproc[[layer]]$clr_1count <- df_counts %>%
     impute_zeros(clr_zero_impute_method = "counts_all", clr_zero_impute_num = 1) %>%
-    calc_perc_df() %>%
     clr()
   
   dproc[[layer]]$clr_0.1perc <- df_counts %>%
     impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.1) %>%
-    calc_perc_df() %>%
     clr()
   
   dproc[[layer]]$clr_0.01perc <- df_counts %>%
     impute_zeros(clr_zero_impute_method = "percentage_all", clr_zero_impute_num = 0.01) %>%
-    calc_perc_df() %>%
     clr()
 }
 
