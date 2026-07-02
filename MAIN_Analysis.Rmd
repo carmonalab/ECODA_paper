@@ -157,17 +157,6 @@ df_results_list[["Benchmark"]] <- df_results
 ### All methods (overview)
 
 ```{r fig.height=8, fig.width=16}
-# New facet label names for dose variable
-score.labs <- c("ANOSIM score", "Adjusted rand index", "Modularity score")
-names(score.labs) <- sort(unique(df_results$score))
-
-# New facet label names for supp variable
-datas.labs <- sort(unique(df_results$dataset))
-datas.labs[datas.labs == "GongSharma_cmv_females"] <- "Gong & Sharma\nSubset: females\nSeparation by: CMV infection"
-datas.labs[datas.labs == "GongSharma_age_females_cmvneg"] <- "Gong & Sharma\nSubset: CMV negative females\nSeparation by: age"
-names(datas.labs) <- sort(unique(df_results$dataset))
-
-
 ggplot(df_results, aes(x = method, y = value)) +
   geom_bar(stat = "identity", position = position_dodge()) +
   labs(x = "",
@@ -177,10 +166,7 @@ ggplot(df_results, aes(x = method, y = value)) +
         legend.position = "none") +
   facet_grid(score ~ dataset,
              scales = "free",
-             labeller = labeller(score = score.labs, dataset = datas.labs))
-  # facet_grid(scales = "free",
-  #            labeller = labeller(score = score.labs, dataset = datas.labs),
-  #            rows = vars(score), cols = vars(dataset))
+             labeller = labeller(score = as_labeller(score_facet_labels), dataset = as_labeller(gs_dataset_facet_labels)))
 ggsave(file.path(path_plots, "benchmark_detailed_barplot.pdf"),
        width = 150,
        height = 7, limitsize = FALSE)
@@ -199,7 +185,7 @@ df_results %>%
   theme(axis.text.x = element_text(angle = 75, vjust = 1, hjust=1)) +
   facet_grid(scales = "free",
              rows = vars(score),
-             labeller = labeller(score = score.labs))
+             labeller = labeller(score = as_labeller(score_facet_labels)))
 ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores_bars.pdf"),
        width = 14,
        height = 7)
@@ -423,7 +409,7 @@ df_results %>%
   facet_grid(scales = "free_x",
              space='free',
              rows = vars(score),
-             labeller = labeller(score = score.labs))
+             labeller = as_labeller(score_facet_labels))
 ggsave(file.path(path_plots, "benchmark_summary_barplot_allmetricscombined_mainmethods_with_bad_baselines.pdf"),
        width = 4.5,
        height = 6.5)
@@ -917,15 +903,7 @@ df_plot <- df_results %>%
   filter(score == "anosim_score") %>%
   filter(!grepl("Zhang|Lee", dataset)) %>% # Exclude Zhang and Lee, as they do not have high-resolution author annotation
   filter(method %in% filter_methods) %>%
-  mutate(method = recode(method,
-                         "ECODA_seuratres_0.1" = "ECODA_Leiden_res_0.1",
-                         "ECODA_seuratres_0.4" = "ECODA_Leiden_res_0.4",
-                         "ECODA_seuratres_2" = "ECODA_Leiden_res_2",
-                         "ECODA_seuratres_5" = "ECODA_Leiden_res_5",
-                         "ECODA_seuratres_20" = "ECODA_Leiden_res_20",
-                         "ECODA_HiTME_HR_layer2" = "ECODA_HiTME",
-                         "ECODA_scATOMIC_HR" = "ECODA_scATOMIC"
-  ))
+  apply_method_labels(method_label_map_annotation)
   
 p <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
@@ -956,15 +934,7 @@ df_plot <- df_results %>%
   filter(score == "mod_knn3_score") %>%
   filter(!grepl("Zhang|Lee", dataset)) %>% # Exclude Zhang and Lee, as they do not have high-resolution author annotation
   filter(method %in% filter_methods) %>%
-  mutate(method = recode(method,
-                         "ECODA_seuratres_0.1" = "ECODA_Leiden_res_0.1",
-                         "ECODA_seuratres_0.4" = "ECODA_Leiden_res_0.4",
-                         "ECODA_seuratres_2" = "ECODA_Leiden_res_2",
-                         "ECODA_seuratres_5" = "ECODA_Leiden_res_5",
-                         "ECODA_seuratres_20" = "ECODA_Leiden_res_20",
-                         "ECODA_HiTME_HR_layer2" = "ECODA_HiTME",
-                         "ECODA_scATOMIC_HR" = "ECODA_scATOMIC"
-  ))
+  apply_method_labels(method_label_map_annotation)
   
 p_mod <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
@@ -994,15 +964,7 @@ df_plot <- df_results %>%
   filter(score == "cluster_score") %>%
   filter(!grepl("Zhang|Lee", dataset)) %>% # Exclude Zhang and Lee, as they do not have high-resolution author annotation
   filter(method %in% filter_methods) %>%
-  mutate(method = recode(method,
-                         "ECODA_seuratres_0.1" = "ECODA_Leiden_res_0.1",
-                         "ECODA_seuratres_0.4" = "ECODA_Leiden_res_0.4",
-                         "ECODA_seuratres_2" = "ECODA_Leiden_res_2",
-                         "ECODA_seuratres_5" = "ECODA_Leiden_res_5",
-                         "ECODA_seuratres_20" = "ECODA_Leiden_res_20",
-                         "ECODA_HiTME_HR_layer2" = "ECODA_HiTME",
-                         "ECODA_scATOMIC_HR" = "ECODA_scATOMIC"
-  ))
+  apply_method_labels(method_label_map_annotation)
   
 p_ari <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
@@ -1164,9 +1126,6 @@ default_methods <- c(
 )
 default_methods_regex <- paste(default_methods, collapse = "|")
 
-score.labs <- c("ANOSIM score", "Adjusted rand index", "Modularity score")
-names(score.labs) <- sort(unique(df_results$score))
-
 df_results %>%
   # filter(score == "anosim_score") %>%
   filter(!grepl("HiTME|scATOMIC|seuratres|ECODA_authors_HR_NULL|ECODA_authors_LR|ECODA_deconv|Freq_highres|varexp|varcts|Avg_PCA|combo|CT_LR|schvg", method),
@@ -1240,7 +1199,7 @@ df_results %>%
              space='free',
              rows = vars(score),
              cols = vars(method_plot), # Use the new grouping column for column faceting
-             labeller = labeller(score = score.labs))
+             labeller = labeller(score = as_labeller(score_facet_labels)))
 
 
 ggsave(file.path(path_plots, "Supp_fig_2_methodparameter_screening.pdf"),
@@ -1346,7 +1305,7 @@ df_results %>%
   facet_grid(scales = "free_x",
              space='free',
              rows = vars(score),
-             labeller = labeller(score = score.labs))
+             labeller = labeller(score = as_labeller(score_facet_labels)))
 ```
 
 #### Plot benchmark including ECODA+PB (detailed)
@@ -1657,7 +1616,6 @@ labels <- result_list$bmark[[ds]]$ECODA_authors_HR$labels
 df_logr <- feat_mat_recalc[, 1, drop = FALSE] * 2
 
 df_logr$Groups <- labels
-avg_sep_score <- calc_avg_sep_score(dist(feat_mat), labels = labels, digits = 3)
 
 p1 <- plot_pca(
   feat_mat = feat_mat,
@@ -1702,7 +1660,6 @@ feat_mat <- result_list$bmark[[ds]]$ECODA_authors_HR$feat_mat[, colnames(feat_ma
 labels <- result_list$bmark[[ds]]$ECODA_authors_HR$labels
 df_logr <- feat_mat_recalc[, 1, drop = FALSE] * 2
 df_logr$Groups <- labels
-avg_sep_score <- calc_avg_sep_score(dist(feat_mat), labels = labels, digits = 3)
 
 p1 <- plot_pca(
   feat_mat = feat_mat,
@@ -2065,39 +2022,8 @@ clean_data <- df_results_bmark %>%
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
                          "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
-  mutate(score = recode(score,
-                        "anosim_score" = "ANOSIM",
-                        "mod_knn3_score" = "Modularity",
-                        "mod_score" = "Modularity",
-                        "cluster_score" = "ARI")) %>%
-  # mutate(dataset = recode(dataset,
-  #                         "Adams" = "Adams (pulmonary fibrosis, disease type)",
-  #                         "Bassez" = "Bassez (breast cancer, treatment response)",
-  #                         "GongSharma_all_age" = "GongSharma (healthy, age group)",
-  #                         "GongSharma_all_cmv" = "GongSharma (healthy, CMV-infection status)",
-  #                         "GongSharma_all_sex" = "GongSharma (healthy, sex)",
-  #                         "Kfoury" = "Kfoury (prostate metastasis, location)",
-  #                         "Lee" = "Lee (primary glioblastoma, treatment status)",
-  #                         "Pelka" = "Pelka (colon cancer, tumor or healthy)",
-  #                         "Smillie" = "Smillie (ulcerative colitis, inflammation status)",
-  #                         "Stephenson" = "Stephenson (COVID-19, infection status)",
-  #                         "Wu" = "Wu (breast cancer, subtype)",
-  #                         "Zhang" = "Zhang (breast cancer, tissue)"))
-  mutate(dataset = recode(dataset,
-                          "Adams" = "Adams (pulmonary fibrosis)",
-                          "Bassez" = "Bassez (ICB treatment response)",
-                          "GongSharma" = "GongSharma (healthy, CMV)",
-                          "GongSharma_all_age" = "GongSharma (healthy, age)",
-                          "GongSharma_all_cmv" = "GongSharma (healthy, CMV)",
-                          "GongSharma_all_sex" = "GongSharma (healthy, sex)",
-                          "Kfoury" = "Kfoury (prostate metastasis)",
-                          "Kim" = "Kim (metastatic lung adenocarcinoma)",
-                          "Lee" = "Lee (ICB treatment vs naive)",
-                          "Pelka" = "Pelka (colon cancer vs control)",
-                          "Smillie" = "Smillie (ulcerative colitis)",
-                          "Stephenson" = "Stephenson (COVID-19)",
-                          "Wu" = "Wu (breast cancer subtype)",
-                          "Zhang" = "Zhang (tissue)"))
+  mutate(score = recode(score, !!!score_label_map),
+  dataset = recode(dataset, !!!dataset_label_map))
 
 # --- 2. CALCULATE GEOMETRIC MEAN OF RANKS (NEW STEP) ---
 df_ranks <- clean_data %>%
@@ -2364,11 +2290,7 @@ clean_data <- df_results_bmark %>%
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
                          "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
-  mutate(score = recode(score,
-                        "anosim_score" = "ANOSIM",
-                        "mod_knn3_score" = "Modularity",
-                        "mod_score" = "Modularity",
-                        "cluster_score" = "ARI")) %>%
+  mutate(score = recode(score, !!!score_label_map)) %>%
   mutate(dataset = recode(dataset,
                           "GongSharma_all_age" = "GongSharma_age",
                           "GongSharma_all_cmv" = "GongSharma_cmv",
@@ -2539,26 +2461,8 @@ clean_data <- df_results_bmark %>%
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
                          "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
-  mutate(score = recode(score,
-                        "anosim_score" = "ANOSIM",
-                        "mod_knn3_score" = "Modularity",
-                        "mod_score" = "Modularity",
-                        "cluster_score" = "ARI")) %>%
-  mutate(dataset = recode(dataset,
-                          "Adams" = "Adams (pulmonary fibrosis)",
-                          "Bassez" = "Bassez (ICB treatment response)",
-                          "GongSharma" = "GongSharma (healthy, cmv)",
-                          "GongSharma_all_age" = "GongSharma (healthy, age)",
-                          "GongSharma_all_cmv" = "GongSharma (healthy, CMV)",
-                          "GongSharma_all_sex" = "GongSharma (healthy, sex)",
-                          "Kfoury" = "Kfoury (prostate metastasis)",
-                          "Kim" = "Kim (metastatic lung adenocarcinoma)",
-                          "Lee" = "Lee (ICB treatment vs naive)",
-                          "Pelka" = "Pelka (colon cancer vs control)",
-                          "Smillie" = "Smillie (ulcerative colitis)",
-                          "Stephenson" = "Stephenson (COVID-19)",
-                          "Wu" = "Wu (breast cancer subtype)",
-                          "Zhang" = "Zhang (tissue)"))
+  mutate(score = recode(score, !!!score_label_map),
+  dataset = recode(dataset, !!!dataset_label_map))
 
 # --- 2. CALCULATE GEOMETRIC MEAN OF RANKS (NEW STEP) ---
 df_ranks <- clean_data %>%
@@ -2881,26 +2785,8 @@ clean_data <- df_results_bmark %>%
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
                          "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
-  mutate(score = recode(score,
-                        "anosim_score" = "ANOSIM",
-                        "mod_knn3_score" = "Modularity",
-                        "mod_score" = "Modularity",
-                        "cluster_score" = "ARI")) %>%
-  mutate(dataset = recode(dataset,
-                          "Adams" = "Adams (pulmonary fibrosis)",
-                          "Bassez" = "Bassez (ICB treatment response)",
-                          "GongSharma" = "GongSharma (healthy, cmv)",
-                          "GongSharma_all_age" = "GongSharma (healthy, age)",
-                          "GongSharma_all_cmv" = "GongSharma (healthy, CMV)",
-                          "GongSharma_all_sex" = "GongSharma (healthy, sex)",
-                          "Kfoury" = "Kfoury (prostate metastasis)",
-                          "Kim" = "Kim (metastatic lung adenocarcinoma)",
-                          "Lee" = "Lee (ICB treatment vs naive)",
-                          "Pelka" = "Pelka (colon cancer vs control)",
-                          "Smillie" = "Smillie (ulcerative colitis)",
-                          "Stephenson" = "Stephenson (COVID-19)",
-                          "Wu" = "Wu (breast cancer subtype)",
-                          "Zhang" = "Zhang (tissue)"))
+  mutate(score = recode(score, !!!score_label_map),
+  dataset = recode(dataset, !!!dataset_label_map))
 
 # --- 2. CALCULATE GEOMETRIC MEAN OF RANKS (NEW STEP) ---
 df_ranks <- clean_data %>%
@@ -3195,13 +3081,17 @@ ggsave(file.path(path_plots, "Supp_fig_1_metrics_correlation.pdf"),
 
 ```{r}
 df_results <- Reduce(rbind, result_list[["trans"]]) %>%
-  mutate(trans_method = recode(trans_method,
-                         "clr" = "CLR",
-                         "alr_mincvref" = "ALR_minCVref",
-                         "alr_randref" = "ALR_randref",
-                         "arcsine_sqrt" = "Arcsine_sqrt",
-                         "counts" = "Counts",
-                         "freq" = "Frequency%"))
+  mutate(
+    trans_method = recode(
+      trans_method,
+      "clr" = "CLR",
+      "alr_mincvref" = "ALR_minCVref",
+      "alr_randref" = "ALR_randref",
+      "arcsine_sqrt" = "Arcsine_sqrt",
+      "counts" = "Counts",
+      "freq" = "Frequency%"
+    )
+  )
 
 df_results <- df_results %>%
   pivot_longer(
@@ -3220,11 +3110,14 @@ df_results_anosim <- df_results %>%
 df_results_anosim <- df_results_anosim %>%
   arrange(desc(mean))
 
-df_results_anosim$trans_method <- factor(df_results_anosim$trans_method, levels = df_results_anosim$trans_method)
-df_results$trans_method <- factor(df_results$trans_method, levels = df_results_anosim$trans_method)
-
-score.labs <- c("ANOSIM score", "Adjusted rand index", "Modularity score")
-names(score.labs) <- sort(unique(df_results$score))
+df_results_anosim$trans_method <- factor(
+  df_results_anosim$trans_method,
+  levels = df_results_anosim$trans_method
+)
+df_results$trans_method <- factor(
+  df_results$trans_method,
+  levels = df_results_anosim$trans_method
+)
 
 
 df_results_list[["Normalization"]] <- df_results
@@ -3232,13 +3125,13 @@ df_results_list[["Normalization"]] <- df_results
 
 p1 <- df_results %>%
   filter(score == "ANOSIM_score") %>%
-  
+
   ggplot(aes(x = trans_method, y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
   geom_point(position = "identity", alpha = 0.6, size = 0.8) +
   geom_line(aes(group = dataset), color = "grey20", alpha = 0.2) +
-  
+
   stat_compare_means(
     ref.group = "CLR",
     method = "wilcox.test",
@@ -3254,42 +3147,58 @@ p1 <- df_results %>%
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1)) +
   ylim(c(-0.1, 1))
 print(p1)
-ggsave(file.path(path_plots, "Supp_fig_16A_transformations_anosim.pdf"),
-       width = 2.5,
-       height = 3.5)
-
+ggsave(
+  file.path(path_plots, "Supp_fig_16A_transformations_anosim.pdf"),
+  width = 2.5,
+  height = 3.5
+)
 
 
 df_results %>%
   group_by(score, trans_method) %>%
   summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
   ungroup() %>%
-  
-  ggplot(aes(x = trans_method, y = mean)) + 
+
+  ggplot(aes(x = trans_method, y = mean)) +
   geom_bar(stat = "identity", position = position_dodge()) +
-  geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
+  geom_errorbar(
+    aes(ymin = mean - sem, ymax = mean + sem),
+    width = 0.2,
+    colour = "black",
+    alpha = 0.9
+  ) +
   labs(x = "", y = "") +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 75, vjust = 1, hjust=1)) +
-  facet_grid(scales = "free",
-             rows = vars(score),
-             labeller = labeller(score = score.labs))
-ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot_separatescores_bars.pdf"),
-       width = 7,
-       height = 7)
-
+  theme(axis.text.x = element_text(angle = 75, vjust = 1, hjust = 1)) +
+  facet_grid(
+    scales = "free",
+    rows = vars(score),
+    labeller = labeller(score = as_labeller(score_facet_labels))
+  )
+ggsave(
+  file.path(
+    path_plots,
+    "transformations_real_datasets_summary_barplot_separatescores_bars.pdf"
+  ),
+  width = 7,
+  height = 7
+)
 
 
 my_comparisons <- list(
   c("CLR", "Frequency(%)"),
   c("CLR", "Counts")
-  )
+)
 
 df_results %>%
   filter(score == "ANOSIM_score") %>%
   filter(trans_method %in% c("Counts", "Frequency(%)", "CLR")) %>%
-  
-  ggplot(aes(x = fct_reorder(trans_method, value, .desc = FALSE, .fun = mean), y = value, fill = ifelse(trans_method == "CLR", "lightgreen", "gray70"))) +
+
+  ggplot(aes(
+    x = fct_reorder(trans_method, value, .desc = FALSE, .fun = mean),
+    y = value,
+    fill = ifelse(trans_method == "CLR", "lightgreen", "gray70")
+  )) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar") +
   geom_point(position = "identity", alpha = 0.6, size = 0.7) +
@@ -3305,93 +3214,86 @@ df_results %>%
   ) +
   labs(x = "", y = "Separation of biological groups\n(ANOSIM score)") +
   theme_classic2(base_size = 12) +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 12),
-        axis.text.y = element_text(size = 12),
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank()) +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1, size = 12),
+    axis.text.y = element_text(size = 12),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
   ylim(c(-0.05, 1)) +
   scale_fill_identity() +
-  scale_x_discrete(labels = c(
-    "Counts",
-    "Frequency(%)",
-    expression(bold("CLR")) # Make label bold
-  ))
-ggsave(file.path(path_plots, "POSTER_transformations_real_datasets_summary_barplot_anosim_refCLR.pdf"),
-       width = 2,
-       height = 3.5)
-
-
-
-
-
-# New facet label names for dose variable
-score.labs <- c("Adjusted rand index", "ANOSIM score", "Modularity score")
-names(score.labs) <- sort(unique(df_results$score))
-
-# New facet label names for supp variable
-datas.labs <- sort(unique(df_results$dataset))
-datas.labs[datas.labs == "GongSharma_cmv_females"] <- "Gong & Sharma\nSubset: females\nSeparation by: CMV infection"
-datas.labs[datas.labs == "GongSharma_age_females_cmvneg"] <- "Gong & Sharma\nSubset: CMV negative females\nSeparation by: age"
-names(datas.labs) <- sort(unique(df_results$dataset))
-
+  scale_x_discrete(
+    labels = c(
+      "Counts",
+      "Frequency(%)",
+      expression(bold("CLR")) # Make label bold
+    )
+  )
+ggsave(
+  file.path(
+    path_plots,
+    "POSTER_transformations_real_datasets_summary_barplot_anosim_refCLR.pdf"
+  ),
+  width = 2,
+  height = 3.5
+)
 
 
 ggplot(df_results, aes(x = trans_method, y = value)) +
   geom_bar(stat = "identity", position = position_dodge()) +
-  labs(x = "",
-       y = "Separation score") +
+  labs(x = "", y = "Separation score") +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
-        legend.position = "none") +
-  facet_grid(score ~ dataset,
-             scales = "free",
-             labeller = labeller(score = score.labs, dataset = datas.labs))
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+    legend.position = "none"
+  ) +
+  facet_grid(
+    score ~ dataset,
+    scales = "free",
+    labeller = labeller(
+      score = as_labeller(score_facet_labels),
+      dataset = as_labeller(gs_dataset_facet_labels)
+    )
+  )
 # facet_grid(scales = "free",
 #            rows = vars(score_method), cols = vars(dataset))
-ggsave(file.path(path_plots, "transformations_real_datasets_detailed_barplot.pdf"),
-       width = 8,
-       height = 7)
-
-
-
-# df_results %>%
-#   group_by(score_method, method) %>%
-#   summarize(mean = mean(values), sem = sd(values) / sqrt(length(values))) %>%
-#   ungroup() %>%
-#   
-#   ggplot(aes(x = method, y = mean)) + 
-#   geom_bar(stat = "identity", position = position_dodge()) +
-#   # stat_summary(fun.y = mean, geom = "bar") +
-#   geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
-#   # geom_point(position = position_jitterdodge()) +
-#   labs(x = "", y = "Separation score") +
-#   theme_minimal() +
-#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-#   facet_grid(scales = "free",
-#              rows = vars(score_method),
-#              labeller = labeller(score_method = score.labs))
+ggsave(
+  file.path(path_plots, "transformations_real_datasets_detailed_barplot.pdf"),
+  width = 8,
+  height = 7
+)
 
 
 ggplot(df_results, aes(x = trans_method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
-  geom_point(aes(shape=dataset)) + 
-  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  geom_point(aes(shape = dataset)) +
+  geom_line(
+    aes(group = dataset, linetype = dataset),
+    alpha = 1,
+    color = "steelblue"
+  ) +
   # geom_point(position = position_jitterdodge()) +
   labs(x = "", y = "Separation score") +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-  facet_grid(scales = "free",
-             rows = vars(score),
-             labeller = labeller(score = score.labs))
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)) +
+  facet_grid(
+    scales = "free",
+    rows = vars(score),
+    labeller = labeller(score = as_labeller(score_facet_labels))
+  )
 
-ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot_separatescores.pdf"),
-       width = 5,
-       height = 5)
-
+ggsave(
+  file.path(
+    path_plots,
+    "transformations_real_datasets_summary_barplot_separatescores.pdf"
+  ),
+  width = 5,
+  height = 5
+)
 
 
 # df_results_anosim %>%
-#   ggplot(aes(x = method, y = mean)) + 
+#   ggplot(aes(x = method, y = mean)) +
 #   geom_bar(stat = "identity", position = position_dodge()) +
 #   # stat_summary(fun.y = mean, geom = "bar") +
 #   geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
@@ -3401,13 +3303,17 @@ ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot_sepa
 #   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
 #   NoLegend()
 
-
 df_results_anosim <- df_results %>%
   filter(score == "ANOSIM_score")
 
-df_results_anosim <- df_results_anosim[!grepl("pca", df_results_anosim$trans_method), ]
+df_results_anosim <- df_results_anosim[
+  !grepl("pca", df_results_anosim$trans_method),
+]
 
-my_comparisons <- purrr::map(unique(as.character(df_results_anosim$trans_method)), ~ c(.x, "Frequency(%)"))
+my_comparisons <- purrr::map(
+  unique(as.character(df_results_anosim$trans_method)),
+  ~ c(.x, "Frequency(%)")
+)
 my_comparisons <- Filter(function(x) length(unique(x)) == 2, my_comparisons)
 # my_comparisons <- c(my_comparisons, list(c("clr", "arcsine_sqrt")))
 my_comparisons <- my_comparisons[c(4, 3, 2, 1, 5)]
@@ -3424,16 +3330,22 @@ ggplot(df_results_anosim, aes(x = trans_method, y = value)) +
     aes(label = after_stat(p.signif))
   ) + # Add pairwise comparisons p-value
   geom_boxplot(outlier.shape = NA) +
-  geom_point(aes(shape=dataset)) +
-  scale_shape_manual(values=1:length(unique((df_results_anosim$dataset)))) +
-  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  geom_point(aes(shape = dataset)) +
+  scale_shape_manual(values = 1:length(unique((df_results_anosim$dataset)))) +
+  geom_line(
+    aes(group = dataset, linetype = dataset),
+    alpha = 1,
+    color = "steelblue"
+  ) +
   labs(x = "", y = "ANOSIM score") +
   theme_classic() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
 
-ggsave(file.path(path_plots, "transformations_real_datasets_summary_barplot.pdf"),
-       width = 6,
-       height = 4.5)
+ggsave(
+  file.path(path_plots, "transformations_real_datasets_summary_barplot.pdf"),
+  width = 6,
+  height = 4.5
+)
 
 
 ggplot(df_results_anosim, aes(x = trans_method, y = value)) +
@@ -3447,14 +3359,18 @@ ggplot(df_results_anosim, aes(x = trans_method, y = value)) +
     aes(label = after_stat(p.signif))
   ) + # Add pairwise comparisons p-value
   geom_boxplot(outlier.shape = NA) +
-  geom_point(aes(shape=dataset)) +
-  scale_shape_manual(values=1:length(unique((df_results_anosim$dataset)))) +
-  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
+  geom_point(aes(shape = dataset)) +
+  scale_shape_manual(values = 1:length(unique((df_results_anosim$dataset)))) +
+  geom_line(
+    aes(group = dataset, linetype = dataset),
+    alpha = 1,
+    color = "steelblue"
+  ) +
   labs(x = "", y = "ANOSIM score") +
-  # stat_pvalue_manual(stat.test, label = "p.adj", 
+  # stat_pvalue_manual(stat.test, label = "p.adj",
   #                    y.position = c(max(df_results_anosim$values)+0.1, max(df_results_anosim$values)+0.2), hide.ns = TRUE) +
   theme_classic() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
 ```
 
 # ---------------------------------------------------------------
@@ -3583,20 +3499,6 @@ df_results %>%
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 
 
-
-
-# New facet label names for dose variable
-score.labs <- c("ANOSIM score", "Adjusted rand index", "Modularity score")
-names(score.labs) <- sort(unique(df_results$score))
-
-# New facet label names for supp variable
-datas.labs <- sort(unique(df_results$dataset))
-datas.labs[datas.labs == "GongSharma_cmv_females"] <- "Gong & Sharma\nSubset: females\nSeparation by: CMV infection"
-datas.labs[datas.labs == "GongSharma_age_females_cmvneg"] <- "Gong & Sharma\nSubset: CMV negative females\nSeparation by: age"
-names(datas.labs) <- sort(unique(df_results$dataset))
-
-
-
 df_results %>%
   filter(method != "asinsqrt") %>%
   filter(!grepl("perc", method)) %>%
@@ -3622,7 +3524,7 @@ df_results %>%
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1)) +
   facet_grid(scales = "free",
              rows = vars(score),
-             labeller = labeller(score = score.labs))
+             labeller = as_labeller(score_facet_labels))
 
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_separatescores.pdf"),
        width = 3,
@@ -3640,9 +3542,10 @@ ggplot(df_results, aes(x = method, y = value)) +
         legend.position = "none") +
   facet_grid(score ~ dataset,
              scales = "free",
-             labeller = labeller(score = score.labs, dataset = datas.labs))
-  # facet_grid(scales = "free",
-  #            rows = vars(score), cols = vars(dataset))
+             labeller = labeller(
+      score   = as_labeller(score_facet_labels), 
+      dataset = as_labeller(gs_dataset_facet_labels)
+    ))
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_detailed_barplot.pdf"),
        width = 10,
        height = 6)
@@ -3665,7 +3568,7 @@ df_results %>%
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust=1)) +
   facet_grid(scales = "free",
              rows = vars(score),
-             labeller = labeller(score = score.labs))
+             labeller = labeller(score = as_labeller(score_facet_labels)))
 
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_barplot_separatescores.pdf"),
        width = 3.5,
@@ -3681,7 +3584,7 @@ ggplot(df_results, aes(x = method, y = value)) +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
   facet_grid(scales = "free",
              rows = vars(score),
-             labeller = labeller(score = score.labs))
+             labeller = labeller(score = as_labeller(score_facet_labels)))
 
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_separatescores.pdf"),
        width = 7,
