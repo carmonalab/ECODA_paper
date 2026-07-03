@@ -27,7 +27,7 @@ This script takes output of "scRNAseq_data_processing_ZhangY_2022_34653365.Rmd"
 # renv::restore()
 # renv::snapshot()
 
-source("functions.R")
+source("R/load_all_functions.R")
 
 # library(scooter)
 
