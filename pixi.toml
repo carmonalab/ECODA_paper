@@ -1,0 +1,79 @@
+[workspace]
+authors = ["halterc <chalterbio@gmail.com>"]
+channels = ["conda-forge", "bioconda"]
+name = "ECODA_paper"
+platforms = ["osx-arm64", "win-64", "linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+r-base = "4.5.2"
+python = "3.11.11"
+
+# ==========================================
+# FEATURE 1: The Standalone Python Stack
+# ==========================================
+[feature.py-standalone.dependencies]
+scanpy = "1.9.6"
+anndata = "0.11.3"
+mudata = "0.3.1"
+muon = "0.1.7"
+pilotpy = "2.0.6"
+scvi-tools = "1.2.2.post2"
+scarches = "0.6.1"
+jupyterlab = "4.3.5"
+lightning = "2.5.0.post0"
+numba = "0.61.0"
+numpy = "1.26.4"
+
+matplotlib = "3.8.0"
+pandas = "2.3.1"
+psutil = "6.1.1"
+scikit-misc = "0.5.1"
+
+# OS-Specific GPU Handling for Python
+# Windows & Linux get CUDA 12.1 support
+[feature.py-standalone.target.linux-64.dependencies]
+jax = { version = "0.5.0", extras = ["cuda12"] }
+pytorch = {version = "*", build="*cuda*"}
+pytorch-cuda = "12.1.*"
+
+[feature.py-standalone.target.win-64.dependencies]
+jax = "0.5.0"
+pytorch = {version = "*", build="*cuda*"}
+pytorch-cuda = "12.1.*"
+
+# macOS gets the standard CPU/MPS build
+[feature.py-standalone.target.osx-arm64.dependencies]
+jax = "0.5.0"
+pytorch = "*"
+
+# Fallback for packages only available on PyPI
+[feature.py-standalone.pypi-dependencies]
+# Only add packages here if they absolutely fail to install via conda-forge above
+# e.g., gprofiler-official = "*"
+
+# ==========================================
+# FEATURE 2: The R and Reticulate Stack
+# ==========================================
+[feature.r-bridge.dependencies]
+r-base = "4.3.*"
+r-reticulate = "*"
+r-seurat = "*"
+# Add your other top-level R packages here:
+# r-ggplot2 = "*"
+# bioconductor-singlecellexperiment = "*"
+
+# ==========================================
+# ENVIRONMENTS & TASKS
+# ==========================================
+[environments]
+py-tools = ["py-standalone"]
+r-tools = ["r-bridge"]
+
+[tasks]
+# Task to launch your IDE in the R environment
+ide-r = "pixi run -e r-tools positron ."
+# Task to launch Jupyter in the Python environment
+jupyter = "pixi run -e py-tools jupyter lab"
