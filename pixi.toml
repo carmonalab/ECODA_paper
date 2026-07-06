@@ -7,33 +7,15 @@ channel-priority = "disabled"
 
 [dependencies]
 r-base = "==4.5.2"
-python = "==3.11.11"
+python = "3.14.*"
 
 # ==========================================
-# FEATURE 1: The Standalone Python Stack
+# FEATURE 1: Core Python Stack
 # ==========================================
 [feature.py-standalone.dependencies]
 scanpy = "==1.12.2"
 anndata = "==0.12.19"
 
-
-# OS-Specific GPU Handling for Python
-# ------------------------------------------
-[feature.py-standalone.target.linux-64.dependencies]
-pytorch = { version = "*", build = "*cuda*" }
-pytorch-cuda = { version = "*" }
-
-# Linux gets CUDA 12 PyPI Wheels
-[feature.py-standalone.target.linux-64.pypi-dependencies]
-jax = { version = "*", extras = ["cuda12"] }
-
-# macOS gets the standard Conda CPU/MPS build
-[feature.py-standalone.target.osx-arm64.dependencies]
-jax = "*"
-pytorch = "*"
-
-# Fallback for packages only available on PyPI
-# ------------------------------------------
 [feature.py-standalone.pypi-dependencies]
 scHPL = "==1.0.0" # see https://github.com/theislab/scarches/issues/262
 pilotpy = "==2.0.15"
@@ -41,15 +23,32 @@ scikit-misc = "==0.5.1"
 scvi-tools = "==1.2.2.post2"
 scarches = "==0.6.1"
 
+
 # ==========================================
-# FEATURE 2: The R and Reticulate Stack
+# HARDWARE TARGETS (Overlapping Features)
+# ==========================================
+
+# 1. CPU-Only Target (for MacBook)
+[feature.cpu.target.osx-arm64.dependencies]
+pytorch = "*"
+jax = "*"
+
+# 2. CUDA 13 Target (for HPC)
+[feature.cuda13.target.linux-64.dependencies]
+pytorch-cuda = { version = "*" }
+[feature.cuda13.target.linux-64.pypi-dependencies]
+jax = { version = "*", extras = ["cuda13"] }
+
+# ==========================================
+# FEATURE 2: Core R Stack
 # ==========================================
 [feature.r-bridge.dependencies]
-# Add your R packages here (e.g., r-seurat = "*")
+# Add your R packages here
 
 # ==========================================
 # ENVIRONMENTS 
 # ==========================================
 [environments]
-py-tools = ["py-standalone"]
+py-cpu = ["py-standalone", "cpu"]
+py-cuda13 = ["py-standalone", "cuda13"]
 r-tools = ["r-bridge"]
