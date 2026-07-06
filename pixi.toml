@@ -13,8 +13,8 @@ python = "==3.11.11"
 # FEATURE 1: The Standalone Python Stack
 # ==========================================
 [feature.py-standalone.dependencies]
-scanpy = "==1.9.6"
-anndata = "==0.11.3"
+scanpy = "==1.12.2"
+anndata = "==0.12.19"
 
 
 # OS-Specific GPU Handling for Python
