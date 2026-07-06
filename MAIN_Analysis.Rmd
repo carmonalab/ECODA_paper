@@ -35,7 +35,7 @@ Core script to run the benchmark and generate paper figures.
 # Setup: See README.md for initial environment setup
 # renv::init() && renv::restore() for dependency management
 
-source("R/load_all_functions.R")
+source("src/R/load_all_functions.R")
 source("Processed_dataset_metadata.R")
 
 # Set paths

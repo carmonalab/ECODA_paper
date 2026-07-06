@@ -78,7 +78,7 @@ This script takes output of "<https://apps.allenimmunology.org/aifi/insights/dyn
 # renv::init()
 # renv::snapshot()
 
-source("R/load_all_functions.R")
+source("src/R/load_all_functions.R")
 
 my_seed <- 123
 set.seed(my_seed)
