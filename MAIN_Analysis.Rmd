@@ -80,6 +80,10 @@ NOTE: Pre-processed (e.g. including cell type annotation, clustering, etc.) data
 ```{r message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
 for (ds in names(datasets)) {
   seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
+  if (ds == "Stephenson") {
+    seurat <- subset(seurat, subset = Site == "Ncl")
+  }
+
   seurat <- replace_HiTMElayer3_annot(seurat, thresh = 0.1)
   
   seurat@misc$label_col <- datasets[[ds]][["label_col"]]
