@@ -60,3 +60,7 @@ rsconnect/
 # Folders
 data/
 plots/
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml
