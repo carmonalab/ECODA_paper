@@ -78,44 +78,7 @@ This script takes output of "<https://apps.allenimmunology.org/aifi/insights/dyn
 # renv::init()
 # renv::snapshot()
 
-library(tidyverse)
-library(plotly)
-library(ggplot2)
-library(ggpubr)
-library(forcats)
-library(patchwork)
-library(factoextra)
-library(compositions)
-library(pROC)
-library(mclust)
-library(Rfast)
-library(zoo)
-library(pheatmap)
-source("functions.R")
-
-library(Seurat)
-# devtools::install_github('satijalab/seurat-data')
-library(SeuratData)
-# install.packages("hdf5r")
-# remotes::install_github("mojaveazure/seurat-disk")
-library(SeuratDisk)
-
-# install.packages("devtools")
-# devtools::install_github("GfellerLab/EPIC", build_vignettes=TRUE)
-library(EPIC)
-# BiocManager::install("MOFA2")
-library(reticulate)
-library(basilisk)
-library("MOFA2")
-# BiocManager::install("fgsea")
-# BiocManager::install("sva")
-# devtools::install_github("kharchenkolab/scITD")
-library(scITD)
-# install.packages("ncdf4")
-library(ncdf4)
-library(arrow)
-
-library(dplyr)
+source("R/load_all_functions.R")
 
 my_seed <- 123
 set.seed(my_seed)
@@ -528,7 +491,6 @@ var_contrib <- as.data.frame(t(t(var_cos2) / eig) * 100)
 colSums(var_contrib)
 
 
-library(factoextra)
 res.var <- get_pca_var(res.pca)
 
 max(var_contrib - res.var$contrib)
