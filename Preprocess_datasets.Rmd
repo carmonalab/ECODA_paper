@@ -27,7 +27,7 @@ This script takes output of "scRNAseq_data_processing_ZhangY_2022_34653365.Rmd"
 # renv::restore()
 # renv::snapshot()
 
-source("R/load_all_functions.R")
+source("src/R/load_all_functions.R")
 
 # library(scooter)
 
@@ -63,7 +63,13 @@ library(anndataR)
 my_seed <- 321
 set.seed(my_seed)
 
-path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
+path_nas <- file.path(
+  "",
+  "Volumes",
+  "Shared",
+  "DataCollections",
+  "Standardized_SingleCell_Datasets"
+)
 # path_nas <- file.path(getwd(), "data")
 shared_storage_path <- "/Users/christianhalter/Library/CloudStorage/OneDrive-Personal/Temp"
 ```
@@ -73,7 +79,12 @@ shared_storage_path <- "/Users/christianhalter/Library/CloudStorage/OneDrive-Per
 ```{r}
 datasets <- list(
   "Adams" = list(
-    file_path = file.path(path_nas, "AdamsT_2020_32832599", "output", "AdamsT_2020_32832599.rds"),
+    file_path = file.path(
+      path_nas,
+      "AdamsT_2020_32832599",
+      "output",
+      "AdamsT_2020_32832599.rds"
+    ),
     subset_vars = list(
       OriginalAnnotationLevel1 = list(values = "Multiplet", op = "notin")
     ),
@@ -84,12 +95,18 @@ datasets <- list(
       "Sample", # Sample identifier
       "Tissue", # Main biological grouping
       "Disease_Identity", # Additional biological groupings
-      "OriginalAnnotationLevel1", "OriginalAnnotationLevel2" # Author annotations
+      "OriginalAnnotationLevel1",
+      "OriginalAnnotationLevel2" # Author annotations
     )
   ),
-  
+
   "Bassez" = list(
-    file_path = file.path(path_nas, "BassezA_2021_33958794", "output", "BassezA_2021_33958794whole.rds"),
+    file_path = file.path(
+      path_nas,
+      "BassezA_2021_33958794",
+      "output",
+      "BassezA_2021_33958794whole.rds"
+    ),
     subset_vars = list(
       timepoint = list(values = "Pre", op = "in"),
       expansion = list(values = "n/a", op = "notin"),
@@ -99,15 +116,23 @@ datasets <- list(
     normal_tissue = FALSE, # Whether the dataset contains only normal cells (= TRUE) or also cancer cells (= FALSE)
     sample_col = "sample", # Sample identifier
     meta_cols_keep = c(
-      "sample",  # Sample identifier
+      "sample", # Sample identifier
       "expansion", # Main biological grouping
-      "timepoint", "BC_type", "cohort", # Additional biological groupings
-      "cellType", "cellSubType" # Author annotations
+      "timepoint",
+      "BC_type",
+      "cohort", # Additional biological groupings
+      "cellType",
+      "cellSubType" # Author annotations
     )
   ),
-  
+
   "Gongsharma_cmv_young_males" = list(
-    file_path = file.path(path_nas, "GongSharma_2024_PrePrintTBD", "output", "Gongsharma_cmv_young_males.h5ad"),
+    file_path = file.path(
+      path_nas,
+      "GongSharma_2024_PrePrintTBD",
+      "output",
+      "Gongsharma_cmv_young_males.h5ad"
+    ),
     tissue = "Blood",
     normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
     sample_col = "Sample",
@@ -116,10 +141,11 @@ datasets <- list(
       "sample.subjectAgeAtDraw", # Main biological grouping
       "subject.cmv", # Main biological grouping
       "subject.biologicalSex", # Main biological grouping
-      "AIFI_L1", "AIFI_L3" # Author annotations
+      "AIFI_L1",
+      "AIFI_L3" # Author annotations
     )
   ),
-  
+
   # "GongSharma_all" = list(
   #   file_path = file.path(path_nas, "GongSharma_2024_PrePrintTBD", "output", "Gongsharma_all.h5ad"),
   #   tissue = "Blood",
@@ -133,7 +159,7 @@ datasets <- list(
   #     "AIFI_L1", "AIFI_L3" # Author annotations
   #   )
   # ),
-  
+
   # "GongSharma_age_females_cmvneg" = list(
   #   file_path = file.path(path_nas, "GongSharma_2024_PrePrintTBD", "output", "Gongsharma_age_females_cmvneg.h5ad"),
   #   tissue = "Blood",
@@ -145,7 +171,7 @@ datasets <- list(
   #     "AIFI_L1", "AIFI_L3" # Author annotations
   #   )
   # ),
-  # 
+  #
   # "GongSharma_cmv_females" = list(
   #   file_path = file.path(path_nas, "GongSharma_2024_PrePrintTBD", "output", "Gongsharma_cmv_females.h5ad"),
   #   tissue = "Blood",
@@ -158,23 +184,37 @@ datasets <- list(
   #     "AIFI_L1", "AIFI_L3" # Author annotations
   #   )
   # ),
-  
+
   "Joanito" = list(
-    file_path = file.path(path_nas, "JoaI_2022_35773407", "output", "JoaI_2022_35773407_Nofilt_whole.rds"),
+    file_path = file.path(
+      path_nas,
+      "JoaI_2022_35773407",
+      "output",
+      "JoaI_2022_35773407_Nofilt_whole.rds"
+    ),
     tissue = "Colon",
     normal_tissue = FALSE, # Whether the dataset contains cancer cells or only normal cells
     sample_col = "sample.ID",
     meta_cols_keep = c(
       "sample.ID", # Sample identifier
       "sample.origin", # Main biological grouping
-      "patient.ID", "iCMS", "dataset", "Gender", "Site", # Additional biological groupings
+      "patient.ID",
+      "iCMS",
+      "dataset",
+      "Gender",
+      "Site", # Additional biological groupings
       "cell.type", # Author annotations
       "cell.type" # Additional low res annotation based on author annotation
     )
   ),
-  
+
   "Kfoury" = list(
-    file_path = file.path(path_nas, "Kfoury_2021_34719426", "output", "Kfoury_2021_34719426.rds"),
+    file_path = file.path(
+      path_nas,
+      "Kfoury_2021_34719426",
+      "output",
+      "Kfoury_2021_34719426.rds"
+    ),
     tissue = "Bone marrow",
     normal_tissue = FALSE, # Whether the dataset contains cancer cells or only normal cells
     sample_col = "Sample",
@@ -186,48 +226,84 @@ datasets <- list(
       "cells_lowres" # Additional low res annotation based on author annotation
     )
   ),
-  
+
   "Kim" = list(
-    file_path = file.path(path_nas, "KimN_2020_32385277", "output", "KimN_2020_32385277whole.rds"),
+    file_path = file.path(
+      path_nas,
+      "KimN_2020_32385277",
+      "output",
+      "KimN_2020_32385277whole.rds"
+    ),
     tissue = "Lung",
     normal_tissue = FALSE, # Whether the dataset contains cancer cells or only normal cells
     sample_col = "Sample",
     meta_cols_keep = c(
       "Sample", # Sample identifier
       "Tissue", # Main biological grouping
-      "Individual", "Sex", "Age", "Histology", "Smoking", "Pathology", "EGFR", "Stages", # Additional biological groupings
+      "Individual",
+      "Sex",
+      "Age",
+      "Histology",
+      "Smoking",
+      "Pathology",
+      "EGFR",
+      "Stages", # Additional biological groupings
       "Cell_subtype", # Author annotations
       "Cell_type" # Additional low res annotation based on author annotation
     )
   ),
-  
+
   "Lee" = list(
-    file_path = file.path(path_nas, "LeeA_2021_34836966", "output", "LeeA_2021_34836966p_tumor_seurat.rds"),
+    file_path = file.path(
+      path_nas,
+      "LeeA_2021_34836966",
+      "output",
+      "LeeA_2021_34836966p_tumor_seurat.rds"
+    ),
     tissue = "Brain tumor",
     normal_tissue = FALSE, # Whether the dataset contains cancer cells or only normal cells
     sample_col = "Sample",
     meta_cols_keep = c(
       "Sample", # Sample identifier
       "condition", # Main biological grouping
-      "MGMT", "IDH_status" # Additional biological groupings
+      "MGMT",
+      "IDH_status" # Additional biological groupings
     )
   ),
-  
+
   "Pelka" = list(
-    file_path = file.path(path_nas, "PelkaK_2022_34450029", "output", "PelkaK_2022_34450029whole.rds"),
+    file_path = file.path(
+      path_nas,
+      "PelkaK_2022_34450029",
+      "output",
+      "PelkaK_2022_34450029whole.rds"
+    ),
     tissue = "Colon cancer",
     normal_tissue = FALSE, # Whether the dataset contains cancer cells or only normal cells
     sample_col = "Sample",
     meta_cols_keep = c(
       "Sample", # Sample identifier
       "Tissue", # Main biological grouping
-      "HistologicTypeSimple", "TissueSite_detailed", "TissueSiteSimple", "Age", "TumorStage", "HistologicTypeSimple", "HistologicGrade_detailed", "HistologicGradeSimple", # Additional biological groupings
-      "OriginalAnnotationLevel1",  "OriginalAnnotationLevel3" # Author annotations
+      "HistologicTypeSimple",
+      "TissueSite_detailed",
+      "TissueSiteSimple",
+      "Age",
+      "TumorStage",
+      "HistologicTypeSimple",
+      "HistologicGrade_detailed",
+      "HistologicGradeSimple", # Additional biological groupings
+      "OriginalAnnotationLevel1",
+      "OriginalAnnotationLevel3" # Author annotations
     )
   ),
-  
+
   "Smillie" = list(
-    file_path = file.path(path_nas, "SmillieC_2019_31348891", "output", "SmillieC_2019_31348891.rds"),
+    file_path = file.path(
+      path_nas,
+      "SmillieC_2019_31348891",
+      "output",
+      "SmillieC_2019_31348891.rds"
+    ),
     subset_vars = list(
       Tissue_compartment = list(values = "Lamina_propria", op = "in"),
       OriginalAnnotationLevel1 = list(values = "Immune", op = "in")
@@ -239,12 +315,19 @@ datasets <- list(
       "Sample", # Sample identifier
       "Condition", # Main biological grouping
       "Tissue_compartment", # Additional biological groupings
-      "OriginalAnnotationLevel1", "OriginalAnnotationLevel2", "OriginalAnnotationLevel3" # Author annotations
+      "OriginalAnnotationLevel1",
+      "OriginalAnnotationLevel2",
+      "OriginalAnnotationLevel3" # Author annotations
     )
   ),
-  
+
   "Stephenson" = list(
-    file_path = file.path(path_nas, "StephensonE_2021_39313646", "output", "StephensonE_2021_33879890_preprocessed.rds"),
+    file_path = file.path(
+      path_nas,
+      "StephensonE_2021_39313646",
+      "output",
+      "StephensonE_2021_33879890_preprocessed.rds"
+    ),
     subset_vars = list(
       # Site = list(values = "Ncl", op = "in"),
       Status = list(values = c("Healthy", "Covid"), op = "in"),
@@ -256,25 +339,38 @@ datasets <- list(
     meta_cols_keep = c(
       "Sample", # Sample identifier
       "Status", # Main biological grouping
-      "Status_on_day_collection_summary", "Days_from_onset", # Additional biological groupings
-      "initial_clustering", "full_clustering" # Author annotations
+      "Status_on_day_collection_summary",
+      "Days_from_onset", # Additional biological groupings
+      "initial_clustering",
+      "full_clustering" # Author annotations
     )
   ),
-  
+
   "Wu" = list(
-    file_path = file.path(path_nas, "WuS_2021_34493872", "output", "WuS_2021_34493872.rds"),
+    file_path = file.path(
+      path_nas,
+      "WuS_2021_34493872",
+      "output",
+      "WuS_2021_34493872.rds"
+    ),
     tissue = "Breast tumor",
     normal_tissue = FALSE, # Whether the dataset contains cancer cells or only normal cells
     sample_col = "Sample",
     meta_cols_keep = c(
       "Sample", # Sample identifier
       "subtype", # Main biological grouping
-      "celltype_major", "celltype_subset" # Author annotations
+      "celltype_major",
+      "celltype_subset" # Author annotations
     )
   ),
-  
+
   "Zhang" = list(
-    file_path = file.path(path_nas, "ZhangY_2022_34653365", "output", "ZhangY_2022_34653365.rds"),
+    file_path = file.path(
+      path_nas,
+      "ZhangY_2022_34653365",
+      "output",
+      "ZhangY_2022_34653365.rds"
+    ),
     subset_vars = list(
       Treatment = list(values = "Pre", op = "in"),
       Clinical.efficacy. = list(values = "-", op = "notin"),
@@ -289,9 +385,14 @@ datasets <- list(
       "Clinical.efficacy." # Additional biological groupings
     )
   ),
-  
+
   "Zhu" = list(
-    file_path = file.path(path_nas, "ZhuH_2023_37379396", "output", "ZhuH_2023_37379396whole.rds"),
+    file_path = file.path(
+      path_nas,
+      "ZhuH_2023_37379396",
+      "output",
+      "ZhuH_2023_37379396whole.rds"
+    ),
     tissue = "Blood",
     normal_tissue = TRUE, # Whether the dataset contains cancer cells or only normal cells
     sample_col = "Sample",
@@ -307,20 +408,36 @@ datasets <- list(
 # Load scGate models and ProjecTILs reference maps
 ```{r message=FALSE, warning=FALSE}
 # Get scGate database of pre-defined gating models
-scGate_models_DB <- get_scGateDB(branch = "dev", verbose = T, force_update = TRUE)
+scGate_models_DB <- get_scGateDB(
+  branch = "dev",
+  verbose = T,
+  force_update = TRUE
+)
 scGate_models_blood <- scGate_models_DB$human$PBMC
 scGate_models_blood$MoMac <- scGate_models_blood$Monocyte
 scGate_models_blood$Monocyte <- NULL
 scGate_models_tumor <- scGate_models_DB$human$HiTME
 # Need to have same model names in both lists for HiTME downstream processing)
-scGate_models_blood <- c(scGate_models_blood, scGate_models_tumor[!names(scGate_models_tumor) %in% names(scGate_models_blood)])
+scGate_models_blood <- c(
+  scGate_models_blood,
+  scGate_models_tumor[
+    !names(scGate_models_tumor) %in% names(scGate_models_blood)
+  ]
+)
 
 # Load ProjecTILs reference maps
 path_ref <- "/Users/christianhalter/Library/CloudStorage/OneDrive-SharedLibraries-UniversitédeGenève/Santiago Carmona - CSI/public/reference_atlases/sketched_200ct"
-ref.maps_sketched <- list(CD8 = load.reference.map(file.path(path_ref, "sketched_CD8T_human_ref_v1.rds")),
-                          CD4 = load.reference.map(file.path(path_ref, "sketched_CD4T_human_ref_v2.rds")),
-                          DC = load.reference.map(file.path(path_ref, "sketched_DC_human_ref_v2.rds")),
-                          MoMac = load.reference.map(file.path(path_ref, "sketched_MoMac_human_v1.rds"))
+ref.maps_sketched <- list(
+  CD8 = load.reference.map(file.path(
+    path_ref,
+    "sketched_CD8T_human_ref_v1.rds"
+  )),
+  CD4 = load.reference.map(file.path(
+    path_ref,
+    "sketched_CD4T_human_ref_v2.rds"
+  )),
+  DC = load.reference.map(file.path(path_ref, "sketched_DC_human_ref_v2.rds")),
+  MoMac = load.reference.map(file.path(path_ref, "sketched_MoMac_human_v1.rds"))
 )
 ```
 
@@ -335,10 +452,27 @@ input_file_path <- datasets[[ds]][["file_path"]]
 seurat <- readRDS(input_file_path)
 
 seurat$cells_lowres <- as.character(seurat$cells)
-seurat$cells_lowres[seurat$cells_lowres %in% c("CD4+ Naive", "CD8+ Naive", "CTL-1", "CTL-2", "Th1/17", "Treg Active", "Treg Resting")] <- "Tcells"
+seurat$cells_lowres[
+  seurat$cells_lowres %in%
+    c(
+      "CD4+ Naive",
+      "CD8+ Naive",
+      "CTL-1",
+      "CTL-2",
+      "Th1/17",
+      "Treg Active",
+      "Treg Resting"
+    )
+] <- "Tcells"
 seurat$cells_lowres[seurat$cells_lowres %in% c("NK", "NKT")] <- "NKcells"
-seurat$cells_lowres[seurat$cells_lowres %in% c("Immature B cells", "Mature B", "Pro-B", "memBcell")] <- "Bcells"
-seurat$cells_lowres[seurat$cells_lowres %in% c("Mono1", "Mono2", "Mono3", "Monocyte prog", "TAM", "TIM")] <- "MoMac"
+seurat$cells_lowres[
+  seurat$cells_lowres %in%
+    c("Immature B cells", "Mature B", "Pro-B", "memBcell")
+] <- "Bcells"
+seurat$cells_lowres[
+  seurat$cells_lowres %in%
+    c("Mono1", "Mono2", "Mono3", "Monocyte prog", "TAM", "TIM")
+] <- "MoMac"
 seurat$cells_lowres[seurat$cells_lowres %in% c("mDC", "pDC")] <- "DCcells"
 seurat$cells_lowres <- as.factor(seurat$cells_lowres)
 
@@ -386,7 +520,9 @@ HiTME_cols_keep <- c(
   "HeatShock_UCell",
   "cellCycle.G1S_UCell",
   "cellCycle.G2M_UCell",
-  "layer1", "layer2", "layer3"
+  "layer1",
+  "layer2",
+  "layer3"
 )
 
 scATOMIC_cols <- c(
@@ -400,64 +536,85 @@ scATOMIC_cols <- c(
   "S.Score",
   "G2M.Score",
   "Phase",
-  "classification_confidence" 
+  "classification_confidence"
 )
 
 
 for (ds in names(datasets)) {
   input_file_path <- datasets[[ds]][["file_path"]]
-  
+
   file_name_no_ending <- gsub(".rds|.h5ad", "", basename(input_file_path))
-  processed_file_path <- file.path(getwd(), "data", paste0(file_name_no_ending, "_ECODAprocessed.rds"))
-  
+  processed_file_path <- file.path(
+    getwd(),
+    "data",
+    paste0(file_name_no_ending, "_ECODAprocessed.rds")
+  )
+
   if (!file.exists(processed_file_path)) {
     print(ds)
-    
+
     if (endsWith(input_file_path, ".rds")) {
       seurat <- readRDS(file = input_file_path)
     } else if (endsWith(input_file_path, ".h5ad")) {
       seurat <- load_h5ad_to_seurat(file_name = input_file_path)
     }
-    
-    
+
     # Remove dataset specific samples
     if (!is.null(names(datasets[[ds]][["subset_vars"]]))) {
       for (subset_var in names(datasets[[ds]][["subset_vars"]])) {
-        subset_var_values <- datasets[[ds]][["subset_vars"]][[subset_var]][["values"]]
+        subset_var_values <- datasets[[ds]][["subset_vars"]][[subset_var]][[
+          "values"
+        ]]
         op <- datasets[[ds]][["subset_vars"]][[subset_var]][["op"]]
         if (op == "in") {
-          seurat <- subset(seurat, subset = !!sym(subset_var) %in% subset_var_values)
+          seurat <- subset(
+            seurat,
+            subset = !!sym(subset_var) %in% subset_var_values
+          )
         } else if (op == "notin") {
-          seurat <- subset(seurat, subset = !!sym(subset_var) %notin% subset_var_values)
+          seurat <- subset(
+            seurat,
+            subset = !!sym(subset_var) %notin% subset_var_values
+          )
         }
       }
     }
-    
+
     # Drop unnecessary metadata cols
     meta_cols_keep <- datasets[[ds]][["meta_cols_keep"]]
     meta_cols_keep <- c(meta_cols_keep, HiTME_cols_keep, scATOMIC_cols)
-    
+
     cols_keep <- intersect(meta_cols_keep, names(seurat@meta.data))
     seurat@meta.data <- seurat@meta.data[, cols_keep, drop = FALSE]
-    
+
     # Remove low cell count samples
     seurat <- remove_low_cellcount_samples(
       seurat,
       sample_col = datasets[[ds]][["sample_col"]],
-      min_cells_per_sample = 500)
-    
+      min_cells_per_sample = 500
+    )
+
     # Add “Sample” metadata columns
-    seurat@meta.data[["Sample"]] <- standardize_sample_names(seurat@meta.data[[datasets[[ds]][["sample_col"]]]])
-    
+    seurat@meta.data[[
+      "Sample"
+    ]] <- standardize_sample_names(seurat@meta.data[[datasets[[ds]][[
+      "sample_col"
+    ]]]])
+
     # Ensure it's a seurat v5 object
     seurat <- create_clean_seuratv5_object(seurat)
-    
+
     # Standardize gene symbols
     if (ds %in% c("Sikkema")) {
       # Standarize gene symbols using STACAS
-      seurat <- STACAS::StandardizeGeneSymbols(seurat, geneRef, assay = "RNA", slots = "counts")
+      seurat <- STACAS::StandardizeGeneSymbols(
+        seurat,
+        geneRef,
+        assay = "RNA",
+        slots = "counts"
+      )
     }
-    
+
     # Write h5ad for use in python
     file_path_h5ad <- file.path(shared_storage_path, paste0(ds, ".h5ad"))
     if (!file.exists(file_path_h5ad)) {
@@ -465,54 +622,68 @@ for (ds in names(datasets)) {
       write_h5ad(seurat, file_path_h5ad)
       seurat@assays$RNA@data <- NULL
     }
-    
-    
+
     # Standard Seurat preprocessing part 1
     seurat <- seurat |>
       NormalizeData() |>
       FindVariableFeatures(nfeatures = n_hvg)
-    
-    
+
     # Annotate cells
     obj.list <- SplitObject(seurat, split.by = "Sample")
     rm(seurat)
     gc()
-    
-    
+
     ## scAtomic
-    
+
     for (i in 1:length(obj.list)) {
       print(paste(ds, "Sample", names(obj.list)[i], i, "/", length(obj.list)))
-      
+
       if ("layer_1" %notin% colnames(obj.list[[i]]@meta.data)) {
-        start_time <- Sys.time()  # Start measuring time
-        
+        start_time <- Sys.time() # Start measuring time
+
         # On a MacBook Pro with M1 chip, it takes roughly a total of 2.5 min (= 2.5 * 60 sec) to process a sample with 10'000 cells
         # So, set a timeout of twice that
         timeout <- max(60, dim(obj.list[[i]])[2] / 10000 * 2.5 * 60 * 4)
-        
+
         # Retry 5 times
         for (a in 1:5) {
-          cat(paste("Attempt to run scATOMIC", a, "in", timeout, "seconds, starting at:", Sys.time(), " ...\n"))
-          result <- tryCatch({
-            # The 'withTimeout' function will stop the execution after x seconds
-            withTimeout({
-              sca_preds <- run_scATOMIC(obj.list[[i]]@assays$RNA$counts)
-              sca_results <- create_summary_matrix(prediction_list = sca_preds,
-                                                   raw_counts = obj.list[[i]]@assays$RNA$counts,
-                                                   normal_tissue = datasets[[ds]][["normal_tissue"]])
-              "Complete"
-            }, timeout = timeout)
-          }, TimeoutException = function(te) {
-            # This block runs if a timeout occurs
-            cat("  Timeout occurred, retrying...\n")
-            NULL # Return NULL to signify a failure
-          }, error = function(er) {
-            # This block runs if an error occurs
-            cat(er$message, "  Error occurred, retrying...\n")
-            NULL # Return NULL to signify a failure
-          })
-          
+          cat(paste(
+            "Attempt to run scATOMIC",
+            a,
+            "in",
+            timeout,
+            "seconds, starting at:",
+            Sys.time(),
+            " ...\n"
+          ))
+          result <- tryCatch(
+            {
+              # The 'withTimeout' function will stop the execution after x seconds
+              withTimeout(
+                {
+                  sca_preds <- run_scATOMIC(obj.list[[i]]@assays$RNA$counts)
+                  sca_results <- create_summary_matrix(
+                    prediction_list = sca_preds,
+                    raw_counts = obj.list[[i]]@assays$RNA$counts,
+                    normal_tissue = datasets[[ds]][["normal_tissue"]]
+                  )
+                  "Complete"
+                },
+                timeout = timeout
+              )
+            },
+            TimeoutException = function(te) {
+              # This block runs if a timeout occurs
+              cat("  Timeout occurred, retrying...\n")
+              NULL # Return NULL to signify a failure
+            },
+            error = function(er) {
+              # This block runs if an error occurs
+              cat(er$message, "  Error occurred, retrying...\n")
+              NULL # Return NULL to signify a failure
+            }
+          )
+
           # If the result is not NULL, the function finished successfully
           if (!is.null(result)) {
             cat(paste("  Success on attempt", a, "with result:", result, "\n"))
@@ -520,74 +691,95 @@ for (ds in names(datasets)) {
             break # Exit the loop
           }
         }
-        
+
         # Drop unnecessary metadata columns
         cols_keep <- intersect(meta_cols_keep, names(sca_results))
         sca_results <- sca_results[, cols_keep, drop = FALSE]
-        
+
         obj.list[[i]] <- AddMetaData(obj.list[[i]], sca_results)
-        
-        end_time <- Sys.time()  # End measuring time
+
+        end_time <- Sys.time() # End measuring time
         execution_time <- end_time - start_time
         cat(paste("Sample", i, "completed in", "\n"))
         print(round(execution_time, 1))
       }
     }
-    
-    
+
     ## HiTME
     while (length(obj.list) > 0) {
       print(paste(ds, "Samples remaining:", length(obj.list)))
-      
+
       obj <- obj.list[[1]]
-      
+
       if ("layer3" %notin% colnames(obj@meta.data)) {
-        
         # On a MacBook Pro with M1 chip, it takes roughly 60 sec to process a sample with 10'000 cells
         # The timeout is per process (so ~ 60 / 6 = ~ 10 sec)
         # So, giving 60 sec per 10'000 cells for a process/core to finish is plenty
         ncores <- 1 # parallelly::availableCores() - 2
         timeout_core <- 600 # max(20, dim(obj)[2] / 10000 * 60)
-        start_time <- Sys.time()  # Start measuring time
-        
+        start_time <- Sys.time() # Start measuring time
+
         # Retry 5 times
         for (a in 1:5) {
-          cat(paste("Attempt", a, "to Run.HiTME, starting at:", Sys.time(), " ...\n"))
-          result <- tryCatch({
-            if (datasets[[ds]][["tissue"]] == "Blood") {
-              obj <- Run.HiTME(object = obj,
-                               scGate.model = scGate_models_blood,
-                               ref.maps = ref.maps_sketched,
-                               verbose = FALSE,
-                               bparam = BiocParallel::MulticoreParam(workers = ncores,
-                                                                     progressbar = TRUE,
-                                                                     timeout = timeout_core))
-            } else if (datasets[[ds]][["tissue"]] == "Mixed" &&
-                       obj$Tissue[1] == "blood") {
-              obj <- Run.HiTME(object = obj,
-                               scGate.model = scGate_models_blood,
-                               ref.maps = ref.maps_sketched,
-                               verbose = FALSE,
-                               bparam = BiocParallel::MulticoreParam(workers = ncores,
-                                                                     progressbar = TRUE,
-                                                                     timeout = timeout_core))
-            } else {
-              obj <- Run.HiTME(object = obj,
-                               scGate.model = scGate_models_tumor,
-                               ref.maps = ref.maps_sketched,
-                               verbose = FALSE,
-                               bparam = BiocParallel::MulticoreParam(workers = ncores,
-                                                                     progressbar = TRUE,
-                                                                     timeout = timeout_core))
+          cat(paste(
+            "Attempt",
+            a,
+            "to Run.HiTME, starting at:",
+            Sys.time(),
+            " ...\n"
+          ))
+          result <- tryCatch(
+            {
+              if (datasets[[ds]][["tissue"]] == "Blood") {
+                obj <- Run.HiTME(
+                  object = obj,
+                  scGate.model = scGate_models_blood,
+                  ref.maps = ref.maps_sketched,
+                  verbose = FALSE,
+                  bparam = BiocParallel::MulticoreParam(
+                    workers = ncores,
+                    progressbar = TRUE,
+                    timeout = timeout_core
+                  )
+                )
+              } else if (
+                datasets[[ds]][["tissue"]] == "Mixed" &&
+                  obj$Tissue[1] == "blood"
+              ) {
+                obj <- Run.HiTME(
+                  object = obj,
+                  scGate.model = scGate_models_blood,
+                  ref.maps = ref.maps_sketched,
+                  verbose = FALSE,
+                  bparam = BiocParallel::MulticoreParam(
+                    workers = ncores,
+                    progressbar = TRUE,
+                    timeout = timeout_core
+                  )
+                )
+              } else {
+                obj <- Run.HiTME(
+                  object = obj,
+                  scGate.model = scGate_models_tumor,
+                  ref.maps = ref.maps_sketched,
+                  verbose = FALSE,
+                  bparam = BiocParallel::MulticoreParam(
+                    workers = ncores,
+                    progressbar = TRUE,
+                    timeout = timeout_core
+                  )
+                )
+              }
+              "Complete"
+            },
+            error = function(er) {
+              warning(er)
+              # This block runs if a timeout occurs
+              cat(er$message, "Timeout or error occurred, retrying...\n")
+              NULL # Return NULL to signify a failure
             }
-            "Complete"
-          }, error = function(er) {
-            warning(er)
-            # This block runs if a timeout occurs
-            cat(er$message, "Timeout or error occurred, retrying...\n")
-            NULL # Return NULL to signify a failure
-          })
-          
+          )
+
           # If the result is not NULL, the function finished successfully
           if (!is.null(result)) {
             cat(paste("  Success on attempt", a, "with result:", result, "\n"))
@@ -595,39 +787,39 @@ for (ds in names(datasets)) {
             break # Exit the loop
           }
         }
-        
-        end_time <- Sys.time()  # End measuring time
+
+        end_time <- Sys.time() # End measuring time
         execution_time <- end_time - start_time
         cat(paste("Sample", length(obj.list), "completed in\n"))
         print(round(execution_time, 1))
-        
+
         # Drop unnecessary metadata cols
         cols_keep <- intersect(meta_cols_keep, names(obj@meta.data))
         obj@meta.data <- obj@meta.data[, cols_keep, drop = FALSE]
-        
       }
-      
+
       Idents(obj) <- "Sample"
-      
+
       # Sometimes seurat produces this error:
       # invalid class “Seurat” object: all cells in assays must be in the same order as the Seurat object
       # This resolves it:
-      if (!identical(colnames(obj@assays$RNA$counts), rownames(obj@meta.data))) {
+      if (
+        !identical(colnames(obj@assays$RNA$counts), rownames(obj@meta.data))
+      ) {
         obj <- JoinLayers(obj)
       }
-      
+
       if (!exists("seurat")) {
         seurat <- obj
       } else {
         seurat <- merge(seurat, obj)
       }
-      
+
       obj.list <- obj.list[-1]
     }
-    
+
     seurat <- JoinLayers(seurat)
-    
-    
+
     # Standard Seurat preprocessing part 2
     seurat <- seurat |>
       ScaleData() |>
@@ -637,15 +829,13 @@ for (ds in names(datasets)) {
       seurat <- seurat |>
         FindClusters(resolution = r)
     }
-    
+
     # Save processed Seurat object
     saveRDS(seurat, file = processed_file_path)
   } else {
     print(paste("Dataset already processed:", ds))
   }
 }
-
-
 ```
 
 
@@ -658,11 +848,19 @@ ds <- "GongSharma_all"
 input_file_path <- datasets[[ds]][["file_path"]]
 
 file_name_no_ending <- gsub(".rds|.h5ad", "", basename(input_file_path))
-processed_file_path <- file.path(getwd(), "data", paste0(file_name_no_ending, "_ECODAprocessed.rds"))
+processed_file_path <- file.path(
+  getwd(),
+  "data",
+  paste0(file_name_no_ending, "_ECODAprocessed.rds")
+)
 
 seurat <- readRDS(processed_file_path)
 
-seurat$age <- as.factor(ifelse(seurat$sample.subjectAgeAtDraw < 50, "young", "old"))
+seurat$age <- as.factor(ifelse(
+  seurat$sample.subjectAgeAtDraw < 50,
+  "young",
+  "old"
+))
 
 saveRDS(seurat, file = processed_file_path)
 ```
@@ -694,23 +892,31 @@ ds_export <- c("Lee", "Zhang")
 
 for (ds in ds_export) {
   input_file_path <- datasets[[ds]][["file_path"]]
-  
-  input_file_path <- file.path(getwd(), "untitled folder", basename(datasets[[ds]][["file_path"]]))
-  
+
+  input_file_path <- file.path(
+    getwd(),
+    "untitled folder",
+    basename(datasets[[ds]][["file_path"]])
+  )
+
   file_name_no_ending <- gsub(".rds|.h5ad", "", basename(input_file_path))
-  processed_file_path <- file.path(getwd(), "data", paste0(file_name_no_ending, "_ECODAprocessed.rds"))
-  
+  processed_file_path <- file.path(
+    getwd(),
+    "data",
+    paste0(file_name_no_ending, "_ECODAprocessed.rds")
+  )
+
   seurat <- readRDS(file = processed_file_path)
-  
-  
+
   # Ensure it's a seurat v5 object
   seurat <- create_clean_seuratv5_object(seurat)
-  
+
   # v5 seurat object not supported for SeuratDisk's SaveH5Seurat
   # https://github.com/satijalab/seurat/issues/9154
   seurat[["RNA"]] <- CreateAssayObject(counts = seurat[["RNA"]]$counts)
   convert_seurat_to_h5ad(seurat, ds)
-  rm(seurat);gc()
+  rm(seurat)
+  gc()
 }
 ```
 
