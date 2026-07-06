@@ -38,17 +38,6 @@ Core script to run the benchmark and generate paper figures.
 source("R/load_all_functions.R")
 source("Processed_dataset_metadata.R")
 
-library(EPIC)
-library(reticulate)
-library("MOFA2")
-library(scITD)
-library(GloScope)
-library(funkyheatmap)
-library(RColorBrewer)
-library(forcats)
-library(gtools)
-library(scECODA)
-
 # Set paths
 path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
 # path_data <- file.path(path_root, "data")
@@ -827,8 +816,6 @@ wrap_plots(plot_list) +
 ### Show example heatmap
 
 ```{r fig.height=7, fig.width=7}
-library(pheatmap)
-
 ds <- "Bassez"
 
 feat_mat <- result_list[["bmark"]][[ds]]$ECODA_authors_HR$feat_mat
@@ -1873,9 +1860,6 @@ filter_methods <- c(
   "scPoli_hvg2000_dims15_highres",
   "PILOT_hvg2000"
 )
-
-library(scales)
-library(ggrepel)
 
 scientific_A_10n <- function(x) {
   s <- scales::scientific_format(digits = 2)(x) 
@@ -4031,3 +4015,7 @@ for (ds in names(datasets)) {
   print(paste("Number of cell types:", length(unique(seurat@meta.data[[datasets[[ds]][["hi_res_ct_col"]]]]))))
 }
 ```
+
+
+# ---------------------------------------------------------------
+
