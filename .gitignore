@@ -15,7 +15,6 @@
 
 # User-specific files
 .Ruserdata
-.Rprofile
 .Rversion
 
 # Example code in package build process
@@ -44,9 +43,6 @@ vignettes/*.pdf
 # Temporary files created by R markdown
 *.utf8.md
 *.knit.md
-
-# R Environment Variables
-.Renviron
 
 # pkgdown site
 docs/

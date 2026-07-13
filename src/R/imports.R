@@ -3,7 +3,6 @@
 # ============================================================
 
 my_packages <- c(
-  "pak",
   "doParallel",
   "factoextra",
   "foreach",
@@ -14,10 +13,10 @@ my_packages <- c(
   "mclust",
   "plotly",
   "scales",
+  "anndataR",
   "Seurat",
   "limma",
-  "SeuratData",
-  "SeuratDisk",
+  "Matrix",
   "HiTME",
   "stringr",
   "tidyr",
@@ -50,29 +49,23 @@ load_my_packages <- function(pkgs) {
     # require() returns a logical vector (TRUE for success, FALSE for failure)
     loaded <- sapply(pkgs, require, character.only = TRUE, quietly = TRUE)
   })
-  return(all(loaded)) # Returns TRUE only if ALL packages loaded successfully
-}
 
-# 1. Attempt to load packages
-all_loaded <- load_my_packages(my_packages)
+  # Identify which packages failed to load
+  missing_pkgs <- pkgs[!loaded]
 
-# 2. If any fail, run renv::restore() and try again
-if (!all_loaded) {
-  message("One or more packages are missing. Running renv::restore()...")
-
-  # prompt = FALSE ensures scripts don't hang waiting for a user to type 'y'
-  renv::restore(prompt = FALSE)
-
-  # 3. Try loading again
-  if (!load_my_packages(my_packages)) {
+  if (length(missing_pkgs) > 0) {
     stop(
-      "renv::restore() finished, but some packages still could not be loaded. Please check for installation errors."
+      "The following packages are missing from the pixi environment: \n",
+      paste(missing_pkgs, collapse = ", "),
+      "\n\nPlease add them to your pixi.toml (e.g., as 'r-packagename') and run `pixi install`."
     )
-  } else {
-    message("Successfully restored and loaded all packages.")
   }
-} else {
-  # message("All packages successfully loaded.")
+
+  return(TRUE)
 }
 
+# 1. Attempt to load packages (will stop execution if any are missing)
+invisible(load_my_packages(my_packages))
+
+# Custom Negate operator
 `%notin%` <- Negate(`%in%`)
