@@ -65,15 +65,70 @@ jax = { version = "*", extras = ["cuda13"] }
 py-cpu = ["py-standalone", "cpu"]
 py-cuda13 = ["py-standalone", "cuda13"]
 
+
 # ==========================================
 # TASKS
 # ==========================================
-[tasks]
-install-seurat = "Rscript -e \"remotes::install_github('satijalab/seurat@e4cc89238b233e46e2cef4a2b866896cf0cb093c')\""
-install-anndatar = { cmd = "Rscript -e \"remotes::install_github('scverse/anndataR@07612e4f0e5c7efff05265eb916ae9ed94bf78b9')\"", depends-on = ["install-seurat"] }
-install-signatur = { cmd = "Rscript -e \"remotes::install_github('carmonalab/SignatuR@0aded1db20d14f47b5b6074fcf5fc9f9c2e6279e')\"", depends-on = ["install-anndatar"] }
-install-scatomic-deps = { cmd = "Rscript -e \"remotes::install_cran('dlm', repos='https://packagemanager.posit.co/cran/latest', upgrade='never'); remotes::install_version('Rmagic', version='2.0.3', repos='http://cran.us.r-project.org'); remotes::install_github('inofechm/cutoff.scATOMIC@d332cd5cf6a1ecef7c32d0adc4a862a4c47bcd95')\"", depends-on = ["install-signatur"] }
-install-scitd-deps = { cmd = "Rscript -e \"BiocManager::install(c('edgeR', 'sva'), ask=FALSE, update=FALSE); remotes::install_version('scITD', version='1.0.4', repos='https://cloud.r-project.org', upgrade='never')\"", depends-on = ["install-scatomic-deps"] }
-install-hitme-deps = { cmd = "Rscript -e \"remotes::install_github('carmonalab/STACAS@ea34e824e17df6316823db0a9b6322af0833e501'); remotes::install_github('carmonalab/ProjecTILs@1159e1778820180fd0233bbfc0d7f296e35bd25f'); remotes::install_github('carmonalab/HiTME@87f8d4147aaa468438df33f50cabf2005ac518bf')\"", depends-on = ["install-scitd-deps"] }
-install-r-methods = { cmd = "Rscript -e \"options(timeout=9999999); remotes::install_version('MOFA2', version='1.20.2', repos=BiocManager::repositories(), upgrade='never'); remotes::install_version('GloScope', version='2.0.1', repos=BiocManager::repositories(), upgrade='never'); remotes::install_github('GfellerLab/EPIC@50a4f404f96c2842b2891b517b4e3bfaa6c64b8f'); remotes::install_github('carmonalab/scECODA@055bc5efb51cac7c3b6e0ea7eae84420f0a8d21a', ref='compatibility-R-4.4'); remotes::install_github('funkyheatmap/funkyheatmap@d66dd6d65b4e29fb3f6a300627a4db367ad9db0c')\"", depends-on = ["install-hitme-deps"] }
-setup = { depends-on = ["install-r-methods"] }
+
+[tasks.install-seurat]
+cmd = "Rscript -e \"remotes::install_github('satijalab/seurat@e4cc89238b233e46e2cef4a2b866896cf0cb093c')\""
+
+[tasks.install-anndatar]
+depends-on = ["install-seurat"]
+cmd = "Rscript -e \"remotes::install_github('scverse/anndataR@07612e4f0e5c7efff05265eb916ae9ed94bf78b9')\""
+
+[tasks.install-signatur]
+depends-on = ["install-anndatar"]
+cmd = "Rscript -e \"remotes::install_github('carmonalab/SignatuR@0aded1db20d14f47b5b6074fcf5fc9f9c2e6279e')\""
+
+[tasks.install-scatomic-deps]
+depends-on = ["install-signatur"]
+cmd = """
+Rscript -e "
+  if (!requireNamespace('dlm', quietly = TRUE)) remotes::install_cran('dlm', repos='https://packagemanager.posit.co/cran/latest', upgrade='never')
+  if (!requireNamespace('Rmagic', quietly = TRUE)) remotes::install_version('Rmagic', version='2.0.3', repos='http://cran.us.r-project.org')
+  remotes::install_github('inofechm/cutoff.scATOMIC@d332cd5cf6a1ecef7c32d0adc4a862a4c47bcd95')
+"
+"""
+
+[tasks.install-scitd-deps]
+depends-on = ["install-scatomic-deps"]
+cmd = """
+Rscript -e "
+  if (!requireNamespace('edgeR', quietly = TRUE) || !requireNamespace('sva', quietly = TRUE)) {
+    BiocManager::install(c('edgeR', 'sva'), ask=FALSE, update=FALSE)
+  }
+  if (!requireNamespace('scITD', quietly = TRUE)) {
+    remotes::install_version('scITD', version='1.0.4', repos='https://cloud.r-project.org', upgrade='never')
+  }
+"
+"""
+
+[tasks.install-hitme-deps]
+depends-on = ["install-scitd-deps"]
+cmd = """
+Rscript -e "
+  remotes::install_github('carmonalab/STACAS@ea34e824e17df6316823db0a9b6322af0833e501')
+  remotes::install_github('carmonalab/ProjecTILs@1159e1778820180fd0233bbfc0d7f296e35bd25f')
+  remotes::install_github('carmonalab/HiTME@87f8d4147aaa468438df33f50cabf2005ac518bf')
+"
+"""
+
+[tasks.install-r-methods]
+depends-on = ["install-hitme-deps"]
+cmd = """
+Rscript -e "
+  options(timeout=9999999)
+  
+  if (!requireNamespace('MOFA2', quietly = TRUE)) remotes::install_version('MOFA2', version='1.20.2', repos=BiocManager::repositories(), upgrade='never')
+  if (!requireNamespace('GloScope', quietly = TRUE)) remotes::install_version('GloScope', version='2.0.1', repos=BiocManager::repositories(), upgrade='never')
+  if (!requireNamespace('thisutils', quietly = TRUE)) remotes::install_cran('thisutils', repos='https://packagemanager.posit.co/cran/latest', upgrade='never')
+  
+  remotes::install_github('GfellerLab/EPIC@50a4f404f96c2842b2891b517b4e3bfaa6c64b8f')
+  remotes::install_github('carmonalab/scECODA@055bc5efb51cac7c3b6e0ea7eae84420f0a8d21a', ref='compatibility-R-4.4')
+  remotes::install_github('funkyheatmap/funkyheatmap@d66dd6d65b4e29fb3f6a300627a4db367ad9db0c')
+"
+"""
+
+[tasks.setup]
+depends-on = ["install-r-methods"]
