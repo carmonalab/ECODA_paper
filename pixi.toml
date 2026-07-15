@@ -29,6 +29,7 @@ r-rfast = ">=2.1.5.2,<3"
 
 # Required for reticulate to detect pixi python
 conda = ">=26.5.3,<27"
+r-ggally = ">=2.4.0,<3"
 
 # ==========================================
 # FEATURE 1: Core Python Stack

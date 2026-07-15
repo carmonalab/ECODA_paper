@@ -33,9 +33,11 @@ method_label_map_annotation <- c(
 
 # Score label mappings
 score_label_map <- c(
+  "sil_score" = "Silhouette",
   "anosim_score" = "ANOSIM",
   "mod_knn3_score" = "Modularity",
-  "cluster_score" = "ARI"
+  "cluster_score" = "ARI",
+  "lisi_score" = "LISI"
 )
 
 # Score facet labels

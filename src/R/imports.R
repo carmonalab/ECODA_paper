@@ -10,6 +10,7 @@ my_packages <- c(
   "ggpubr",
   "ggrepel",
   "ggtext",
+  "GGally",
   "mclust",
   "plotly",
   "scales",
