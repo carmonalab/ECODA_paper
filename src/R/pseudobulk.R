@@ -2,33 +2,45 @@
 # PSEUDOBULK FUNCTIONS
 # ============================================================
 
-# DESeq2 normalization for pseudobulk data
-DESeq2.normalize <- function(matrix, metadata, n_hvg = 2000) {
+# DESeq2 normalization for pseudobulk data WITH batch correction
+DESeq2.normalize <- function(matrix, metadata, n_hvg = 2000, batch_col = NULL) {
   suppressMessages({
     suppressWarnings({
-      # Normalize pseudobulk data using DESeq2
-      matrix <- DESeq2::DESeqDataSetFromMatrix(
+      
+      # 1. Setup design formula based on whether batch is provided
+      design_formula <- if (!is.null(batch_col)) paste("~", batch_col) else "~ 1"
+      
+      # 2. Create DESeq object
+      dds <- DESeq2::DESeqDataSetFromMatrix(
         countData = matrix,
         colData = metadata,
-        design = stats::formula(paste("~ 1"))
+        design = stats::formula(design_formula)
       )
 
-      matrix <- DESeq2::estimateSizeFactors(matrix)
+      dds <- DESeq2::estimateSizeFactors(dds)
 
-      # transform counts using vst
-      matrix <- DESeq2::vst(matrix)
-      matrix <- SummarizedExperiment::assay(matrix)
+      # 3. Transform counts using vst
+      vst_data <- DESeq2::vst(dds, blind = FALSE)
+      norm_matrix <- SummarizedExperiment::assay(vst_data)
 
-      # get top variable genes
-      rv <- MatrixGenerics::rowVars(matrix)
+      # 4. Remove the batch effect from the matrix
+      if (!is.null(batch_col) && batch_col %in% colnames(metadata)) {
+        norm_matrix <- limma::removeBatchEffect(
+          x = norm_matrix, 
+          batch = metadata[[batch_col]]
+        )
+      }
+
+      # 5. Get top variable genes
+      rv <- MatrixGenerics::rowVars(norm_matrix)
       select <- order(rv, decreasing = TRUE)[seq_len(min(n_hvg, length(rv)))]
-      select <- row.names(matrix)[select]
+      select <- row.names(norm_matrix)[select]
 
-      matrix <- matrix[select[select %in% row.names(matrix)], ]
+      final_matrix <- norm_matrix[select[select %in% row.names(norm_matrix)], ]
     })
   })
 
-  return(matrix)
+  return(final_matrix)
 }
 
 
