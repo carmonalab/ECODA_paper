@@ -176,6 +176,7 @@ calc_lisi <- function(labels, features = NULL, dist_mat = NULL) {
   }
 
   # 3. Dynamically set perplexity for small datasets
+  # To calibrate a Gaussian kernel to have a perplexity of 30, LISI typically needs to search at least 3 * perplexity = 90 neighbors.
   # Default is 30. For small n, we cap perplexity at 10% of samples (minimum of 2 to keep it valid)
   dynamic_perplexity <- max(2, min(30, floor(0.10 * n_samples)))
 
@@ -210,10 +211,9 @@ calc_lisi <- function(labels, features = NULL, dist_mat = NULL) {
 
   # 7. Transform to 0-1 Separation Score: (N - LISI) / (N - 1)
   # 1 = perfect separation, 0 = perfect mixing
-  # Transform to 0-1 Separation Score: (N - LISI) / (N - 1)
   raw_scores <- (N - standard_lisi$label) / (N - 1)
-  
-  # OPTIMIZATION: Enforce physical boundaries [0, 1] to handle numerical float drift
+
+  # Enforce physical boundaries [0, 1] to handle numerical float drift
   separation_scores <- pmax(0, pmin(1, raw_scores))
 
   return(mean(separation_scores, na.rm = TRUE))
