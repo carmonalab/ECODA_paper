@@ -210,7 +210,11 @@ calc_lisi <- function(labels, features = NULL, dist_mat = NULL) {
 
   # 7. Transform to 0-1 Separation Score: (N - LISI) / (N - 1)
   # 1 = perfect separation, 0 = perfect mixing
-  separation_scores <- (N - standard_lisi$label) / (N - 1)
+  # Transform to 0-1 Separation Score: (N - LISI) / (N - 1)
+  raw_scores <- (N - standard_lisi$label) / (N - 1)
+  
+  # OPTIMIZATION: Enforce physical boundaries [0, 1] to handle numerical float drift
+  separation_scores <- pmax(0, pmin(1, raw_scores))
 
   return(mean(separation_scores, na.rm = TRUE))
 }
