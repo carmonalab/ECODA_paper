@@ -152,7 +152,7 @@ def base_preprocessing(adata):
 # ---------------------------------------------------------------------------
 BATCH_VIEW_N_HVG = 2000
 BATCH_VIEW_RES = []
- 
+
 def process_view(
     adata, view_name, batch_key, n_hvg_sizes, resolutions, use_harmony, flavor="seurat_v3"
 ):
@@ -176,7 +176,7 @@ def process_view(
         key_suffix = f"{view_name}_nobatch_hvg{n}"
         adata = run_downstream_for_gene_set(
             adata, genes=genes, key_suffix=key_suffix, resolutions=resolutions,
-            batch_key="Sample", use_harmony=False,
+            batch_key=None, use_harmony=False,
         )
  
     return adata
