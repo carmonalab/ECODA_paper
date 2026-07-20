@@ -33,6 +33,8 @@ my_packages <- c(
   "forcats",
   "gtools",
   "scECODA",
+  "Hotelling",
+  "zCompositions",
   "pheatmap",
   "ncdf4",
   "arrow",
