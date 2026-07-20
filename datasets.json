@@ -1,0 +1,346 @@
+{
+  "datasets": {
+    "Adams": {
+      "display_name": "Adams (pulmonary fibrosis)",
+      "folder_name": "AdamsT_2020_32832599",
+      "file_name": "AdamsT_2020_32832599.rds",
+      "tissue": "Lung",
+      "normal_tissue": true,
+      "use_for_benchmark": true,
+      "use_for_batch_effect": false,
+      "columns": {
+        "sample": "Sample",
+        "label": "Disease_Identity",
+        "cell_type_low_res": "OriginalAnnotationLevel1",
+        "cell_type_high_res": "OriginalAnnotationLevel2"
+      },
+      "meta_cols_keep": [
+        "Sample", "Tissue", "Disease_Identity", 
+        "OriginalAnnotationLevel1", "OriginalAnnotationLevel2"
+      ],
+      "views": {
+        "benchmark_analysis": {
+          "subset_vars": {
+            "OriginalAnnotationLevel1": {"values": ["Multiplet"], "op": "notin"}
+          }
+        }
+      }
+    },
+    "Bassez": {
+      "display_name": "Bassez (ICB treatment response)",
+      "folder_name": "BassezA_2021_33958794",
+      "file_name": "BassezA_2021_33958794whole.rds",
+      "tissue": "Breast tumor",
+      "normal_tissue": false,
+      "use_for_benchmark": true,
+      "use_for_batch_effect": false,
+      "columns": {
+        "sample": "sample",
+        "label": "expansion",
+        "cell_type_low_res": "cellType",
+        "cell_type_high_res": "cellSubType"
+      },
+      "meta_cols_keep": [
+        "sample", "expansion", "timepoint", "BC_type", "cohort", 
+        "cellType", "cellSubType"
+      ],
+      "views": {
+        "benchmark_analysis": {
+          "subset_vars": {
+            "timepoint": {"values": ["Pre"], "op": "in"},
+            "expansion": {"values": ["n/a"], "op": "notin"},
+            "cohort": {"values": ["treatment_naive"], "op": "in"}
+          }
+        }
+      }
+    },
+    "Gongsharma": {
+      "display_name": "GongSharma (healthy, CMV)",
+      "folder_name": "GongSharma_2024_PrePrintTBD",
+      "file_name": null, 
+      "tissue": "Blood",
+      "normal_tissue": true,
+      "use_for_benchmark": true,
+      "use_for_batch_effect": true,
+      "columns": {
+        "sample": "Sample",
+        "label": "subject.cmv",
+        "cell_type_low_res": "AIFI_L1",
+        "cell_type_high_res": "AIFI_L3"
+      },
+      "meta_cols_keep": [
+        "Sample", "sample.subjectAgeAtDraw", "subject.cmv", 
+        "subject.biologicalSex", "AIFI_L1", "AIFI_L3"
+      ],
+      "views": {
+        "benchmark_analysis": {
+          "file_name": [
+            "Sound_Life_YoungAdult_Male_CMVneg.h5ad",
+            "Sound_Life_YoungAdult_Male_CMVpos.h5ad"
+          ],
+          "subset_vars": {}
+        },
+        "batch_effect_analysis": {
+          "file_name": [
+            "Sound_Life_YoungAdult_Male_CMVneg.h5ad",
+            "Sound_Life_YoungAdult_Male_CMVpos.h5ad"
+          ],
+          "subset_vars": {}
+        }
+      }
+    },
+    "Joanito": {
+      "display_name": "Joanito",
+      "folder_name": "JoaI_2022_35773407",
+      "file_name": "JoaI_2022_35773407_Nofilt_whole.rds",
+      "tissue": "Colon",
+      "normal_tissue": false,
+      "use_for_benchmark": false,
+      "use_for_batch_effect": true,
+      "columns": {
+        "sample": "sample.ID",
+        "label": "sample.origin",
+        "cell_type_low_res": "cell.type",
+        "cell_type_high_res": "cell.type"
+      },
+      "meta_cols_keep": [
+        "sample.ID", "sample.origin", "patient.ID", "iCMS", 
+        "dataset", "Gender", "Site", "cell.type"
+      ],
+      "views": {
+        "batch_effect_analysis": {
+          "subset_vars": {}
+        }
+      }
+    },
+    "Kfoury": {
+      "display_name": "Kfoury (prostate metastasis)",
+      "folder_name": "Kfoury_2021_34719426",
+      "file_name": "Kfoury_2021_34719426.rds",
+      "tissue": "Bone marrow",
+      "normal_tissue": false,
+      "use_for_benchmark": true,
+      "use_for_batch_effect": false,
+      "columns": {
+        "sample": "Sample",
+        "label": "Status",
+        "cell_type_low_res": "cells_lowres",
+        "cell_type_high_res": "cells"
+      },
+      "meta_cols_keep": [
+        "Sample", "Status", "subject.status", "cells", "cells_lowres"
+      ],
+      "views": {
+        "benchmark_analysis": {
+          "subset_vars": {}
+        }
+      }
+    },
+    "Kim": {
+      "display_name": "Kim (metastatic lung adenocarcinoma)",
+      "folder_name": "KimN_2020_32385277",
+      "file_name": "KimN_2020_32385277whole.rds",
+      "tissue": "Lung",
+      "normal_tissue": false,
+      "use_for_benchmark": true,
+      "use_for_batch_effect": false,
+      "columns": {
+        "sample": "Sample",
+        "label": "Tissue",
+        "cell_type_low_res": "Cell_type",
+        "cell_type_high_res": "Cell_subtype"
+      },
+      "meta_cols_keep": [
+        "Sample", "Tissue", "Individual", "Sex", "Age", "Histology", 
+        "Smoking", "Pathology", "EGFR", "Stages", "Cell_subtype", "Cell_type"
+      ],
+      "views": {
+        "benchmark_analysis": {
+          "subset_vars": {}
+        }
+      }
+    },
+    "Lee": {
+      "display_name": "Lee (ICB treatment vs naive)",
+      "folder_name": "LeeA_2021_34836966",
+      "file_name": "LeeA_2021_34836966p_tumor_seurat.rds",
+      "tissue": "Brain tumor",
+      "normal_tissue": false,
+      "use_for_benchmark": true,
+      "use_for_batch_effect": false,
+      "columns": {
+        "sample": "Sample",
+        "label": "condition",
+        "cell_type_low_res": "layer1",
+        "cell_type_high_res": "layer2"
+      },
+      "meta_cols_keep": [
+        "Sample", "condition", "MGMT", "IDH_status"
+      ],
+      "views": {
+        "benchmark_analysis": {
+          "subset_vars": {}
+        }
+      }
+    },
+    "Pelka": {
+      "display_name": "Pelka (colon cancer vs control)",
+      "folder_name": "PelkaK_2022_34450029",
+      "file_name": "PelkaK_2022_34450029whole.rds",
+      "tissue": "Colon cancer",
+      "normal_tissue": false,
+      "use_for_benchmark": true,
+      "use_for_batch_effect": false,
+      "columns": {
+        "sample": "Sample",
+        "label": "Tissue",
+        "cell_type_low_res": "OriginalAnnotationLevel1",
+        "cell_type_high_res": "OriginalAnnotationLevel3"
+      },
+      "meta_cols_keep": [
+        "Sample", "Tissue", "HistologicTypeSimple", "TissueSite_detailed", 
+        "TissueSiteSimple", "Age", "TumorStage", "HistologicGrade_detailed", 
+        "HistologicGradeSimple", "OriginalAnnotationLevel1", "OriginalAnnotationLevel3"
+      ],
+      "views": {
+        "benchmark_analysis": {
+          "subset_vars": {}
+        }
+      }
+    },
+    "Smillie": {
+      "display_name": "Smillie (ulcerative colitis)",
+      "folder_name": "SmillieC_2019_31348891",
+      "file_name": "SmillieC_2019_31348891.rds",
+      "tissue": "Colon",
+      "normal_tissue": true,
+      "use_for_benchmark": true,
+      "use_for_batch_effect": false,
+      "columns": {
+        "sample": "Sample",
+        "label": "Condition",
+        "cell_type_low_res": "OriginalAnnotationLevel2",
+        "cell_type_high_res": "OriginalAnnotationLevel3"
+      },
+      "meta_cols_keep": [
+        "Sample", "Condition", "Tissue_compartment", 
+        "OriginalAnnotationLevel1", "OriginalAnnotationLevel2", "OriginalAnnotationLevel3"
+      ],
+      "views": {
+        "benchmark_analysis": {
+          "subset_vars": {
+            "Tissue_compartment": {"values": ["Lamina_propria"], "op": "in"},
+            "OriginalAnnotationLevel1": {"values": ["Immune"], "op": "in"}
+          }
+        }
+      }
+    },
+    "Stephenson": {
+      "display_name": "Stephenson (COVID-19)",
+      "folder_name": "StephensonE_2021_39313646",
+      "file_name": "StephensonE_2021_33879890_preprocessed.rds",
+      "tissue": "Blood",
+      "normal_tissue": true,
+      "use_for_benchmark": true,
+      "use_for_batch_effect": true,
+      "columns": {
+        "sample": "Sample",
+        "label": "Status",
+        "cell_type_low_res": "initial_clustering",
+        "cell_type_high_res": "full_clustering"
+      },
+      "meta_cols_keep": [
+        "Sample", "Status", "Status_on_day_collection_summary", 
+        "Days_from_onset", "initial_clustering", "full_clustering"
+      ],
+      "views": {
+        "benchmark_analysis": {
+          "subset_vars": {
+            "Site": {"values": ["Ncl"], "op": "in"},
+            "Status": {"values": ["Healthy", "Covid"], "op": "in"},
+            "Sample": {"values": ["BGCV10_CV0198", "MH8919230"], "op": "notin"}
+          }
+        },
+        "batch_effect_analysis": {
+          "subset_vars": {
+            "Status": {"values": ["Healthy", "Covid"], "op": "in"},
+            "Sample": {"values": ["BGCV10_CV0198", "MH8919230"], "op": "notin"}
+          }
+        }
+      }
+    },
+    "Wu": {
+      "display_name": "Wu (breast cancer subtype)",
+      "folder_name": "WuS_2021_34493872",
+      "file_name": "WuS_2021_34493872.rds",
+      "tissue": "Breast tumor",
+      "normal_tissue": false,
+      "use_for_benchmark": true,
+      "use_for_batch_effect": false,
+      "columns": {
+        "sample": "Sample",
+        "label": "subtype",
+        "cell_type_low_res": "celltype_major",
+        "cell_type_high_res": "celltype_subset"
+      },
+      "meta_cols_keep": [
+        "Sample", "subtype", "celltype_major", "celltype_subset"
+      ],
+      "views": {
+        "benchmark_analysis": {
+          "subset_vars": {}
+        }
+      }
+    },
+    "Zhang": {
+      "display_name": "Zhang (tissue)",
+      "folder_name": "ZhangY_2022_34653365",
+      "file_name": "ZhangY_2022_34653365.rds",
+      "tissue": "Mixed",
+      "normal_tissue": true,
+      "use_for_benchmark": true,
+      "use_for_batch_effect": false,
+      "columns": {
+        "sample": "Sample",
+        "label": "Tissue",
+        "cell_type_low_res": "layer1",
+        "cell_type_high_res": "layer2"
+      },
+      "meta_cols_keep": [
+        "Sample", "Tissue", "Clinical.efficacy."
+      ],
+      "views": {
+        "benchmark_analysis": {
+          "subset_vars": {
+            "Treatment": {"values": ["Pre"], "op": "in"},
+            "Clinical.efficacy.": {"values": ["-"], "op": "notin"},
+            "Sample": {"values": ["Pre_P012_b", "Pre_P013_t"], "op": "notin"}
+          }
+        }
+      }
+    },
+    "Zhu": {
+      "display_name": "Zhu",
+      "folder_name": "ZhuH_2023_37379396",
+      "file_name": "ZhuH_2023_37379396whole.rds",
+      "tissue": "Blood",
+      "normal_tissue": true,
+      "use_for_benchmark": false,
+      "use_for_batch_effect": true,
+      "columns": {
+        "sample": "Sample",
+        "label": "Sample",
+        "cell_type_low_res": null,
+        "cell_type_high_res": null
+      },
+      "meta_cols_keep": [
+        "Sample"
+      ],
+      "views": {
+        "batch_effect_analysis": {
+          "subset_vars": {}
+        }
+      }
+    }
+  }
+}
