@@ -7,6 +7,23 @@
     - Filter out blacklisted genes before HVG calculation
 - if is_batch_view don't do clustering (not needed in this case)
 
+
+# Process_data.ipynb
+Requires complete overhaul
+- Possibly convert ipynb to quarto for better reproducibility and agentic workflow
+- remove redundant preprocessing step (e.g. sc.pp.normalize_total(adata)
+        sc.pp.log1p(adata)
+        sc.pp.highly_variable_genes(adata, n_top_genes=2000, subset=True, flavor="seurat")
+        sc.pp.scale(adata, max_value=10)
+        sc.pp.pca(adata, n_comps=50), etc.)
+    - Make sure that every method gets the correct input (counts, or specific embedding)
+    - Double-check whether this works with the current preprocess.py workflow (because scanpy overwrites adata.X at every pre-processing step!)
+- Add batch effect mitigation strategies
+    - MrVI has native "nuisance variable" that handles batch effect (see here: https://docs.scvi-tools.org/en/1.3.3/tutorials/notebooks/scrna/MrVI_tutorial.html)
+        - Possibly just add batch_col argument to MrVI constructor: MRVI.setup_anndata(adata, sample_key="Sample", batch_key=batch_col) ?
+    - scPoli will not be used for batch effect analysis
+    - PILOT (and PILOT-GM-VAE) takes either the PCA embedding or the Harmony integrated space
+
 # Batch effect
 Should it be done once without batch correction, and once with? -> probably more important to only do WITH batch correction.
 
