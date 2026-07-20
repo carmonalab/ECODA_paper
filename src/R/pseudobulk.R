@@ -19,7 +19,7 @@ DESeq2.normalize <- function(matrix, metadata, n_hvg = 2000, batch_col = NULL) {
 
       dds <- DESeq2::estimateSizeFactors(dds)
 
-      # 3. Transform counts using vst
+      # 3. Transform counts using batch-aware vst
       vst_data <- DESeq2::vst(dds, blind = FALSE)
       norm_matrix <- SummarizedExperiment::assay(vst_data)
 
@@ -69,6 +69,7 @@ get_pb_deseq2 <- function(
 ) {
   pb <- get_pb(seurat, sample_col = sample_col, hvg = hvg)
 
+  # Get default black list from STACAS
   data("default_black_list")
   default_black_list <- black.list
 
