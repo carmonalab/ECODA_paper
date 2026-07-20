@@ -36,6 +36,7 @@ r-ggally = ">=2.4.0,<3"
 anndata = "==0.12.19"
 scanpy = "==1.12.2"
 pathlib = ">=1.0.1,<2"
+rpy2 = ">=3.6.7,<4"
 
 [pypi-dependencies]
 harmonypy = ">=2.0.0, <3"
