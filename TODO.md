@@ -1,3 +1,31 @@
+# General
+- check README.md and update if necessary:
+    - README.md is intended mainly for human readers, e.g.:
+    - how to install and run the repo
+    - General workflow (data processing pipeline, analysis steps, output generation)
+        - Overview of data sources and preprocessing steps
+        - Description of analysis methods and batch effect correction strategies
+        - Expected outputs and figure generation process
+        - Add this in very concise form also to AGENTS.md
+- read the paper related to this repository (https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full)
+    - get the purpose of this analysis, hypothesis, goal and methodology
+    - get key findings and understand the methodology
+- based on the above, check AGENTS.md and suggest a plan how to improve it (AGENTS.md was just created with minimal information, mainly only with key info on datasets.json and info on the specific HPC cluster it will be run on)
+    - it should give necessary context to an agentic coding model but not bloat it, so keep it concise
+    - as you read the paper, note any domain-specific terminology that needs to be defined for the agent
+        - Highlight any hard-to-understand mathematical transformations (e.g., clr, impute_zeros)
+    - as kilo code uses code base indexing, the following points might not be necessary but double-check if they are actually needed or not or how minimal additional information added to AGENTS.md might improve the agent's performance, given it has a code base indexing from kilo code:
+        - Ensure it explains the project folder structure and covers all functions in src/
+        - Include key function signatures and expected inputs/outputs
+        - Reference the modular structure and dependencies between files
+        - Add brief explanations of core concepts (ECODA, CLR, batch correction strategies)
+- suggest improvements, e.g:
+    - Clearer folder structure and/or organization
+    - Standardize file naming conventions for consistency
+    - Update README.md
+    - Consolidate duplicate or redundant scripts into single, well-documented modules (explained in further details below)
+- Iterate on the above suggestions until README.md and AGENTS.md are complete and a general repo structure was found that is clear and organized
+
 # preprocess.py
 - hvgs: for non-batch views, make sure that sc.pp.highly_variable_genes(batch_key="Sample") is used
 - for non-batch views
@@ -6,16 +34,29 @@
         - Maybe save blacklist file to this repo for clarity and add explanation
     - Filter out blacklisted genes before HVG calculation
 - if is_batch_view don't do clustering (not needed in this case)
-
+- check strategy to handle gongsharma dataset. it's huge, that's why the authors provided the datasets in smaller chunks of .h5ad files subsetted by gender, cmv and age
+    - convert Preprocess_gongsharma.ipynb to qmd
+    - cleanup Preprocess_gongsharma if necessary (still contains legacy code for other conditions that are not used in the current analysis (see datasets.json for most up-to-date list of datasets used and conditions))
+    - it does not make sense to combine into one file, so keep it separate
+    - check which files need to be actually pre-processed (in datasets.json, do not change this file)
+    - 
 
 # Process_data.ipynb
 Requires complete overhaul
-- Possibly convert ipynb to quarto for better reproducibility and agentic workflow
+- First step: Possibly convert ipynb to quarto for better reproducibility and agentic workflow
+- Major point: Process_data should be able to be run on the hpc cluster
+    - Add bash script to submit jobs to cluster scheduler
+        - separate scripts can be saved to src/bash/run_python_sample_embedding_methods/ folder
+        - Create SLURM submission script with appropriate resource requests (memory, time, nodes)
+        - Use array jobs for each dataset or dataset-method combination
+- Keep Process_data.qmd at first
+- datasets (including batching strategy) now defined in datasets.json
 - remove redundant preprocessing step (e.g. sc.pp.normalize_total(adata)
         sc.pp.log1p(adata)
         sc.pp.highly_variable_genes(adata, n_top_genes=2000, subset=True, flavor="seurat")
         sc.pp.scale(adata, max_value=10)
         sc.pp.pca(adata, n_comps=50), etc.)
+    - see preprocess.py for the correct implementation
     - Make sure that every method gets the correct input (counts, or specific embedding)
     - Double-check whether this works with the current preprocess.py workflow (because scanpy overwrites adata.X at every pre-processing step!)
 - Add batch effect mitigation strategies
@@ -23,6 +64,14 @@ Requires complete overhaul
         - Possibly just add batch_col argument to MrVI constructor: MRVI.setup_anndata(adata, sample_key="Sample", batch_key=batch_col) ?
     - scPoli will not be used for batch effect analysis
     - PILOT (and PILOT-GM-VAE) takes either the PCA embedding or the Harmony integrated space
+- peak_memory was previously implemented but not running correctly in wsl2 on windows desktop
+    - check online for reasons why it might not have worked correctly
+    - might work if run on hpc cluster
+        - because of different memory allocation and file system handling
+        - if each dataset (or dataset-method combination) is run in separate instance
+    - otherwise comment out or drop completely (probably cleaner and still backed up in git history)
+- double-check def log_execution_time_and_memory() output format and if it conforms with the expected input in MAIN_Analysis.rmd at p_exec_times (which needs to be combined also with r_exec_times)
+    - Suggest plan to harmonize, if necessary
 
 # Batch effect
 Should it be done once without batch correction, and once with? -> probably more important to only do WITH batch correction.
