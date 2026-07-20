@@ -260,3 +260,132 @@ get_labels <- function(seurat, label_col) {
 
   return(labels)
 }
+
+
+# Wrapper to execute the conversion logic for a specific dataset
+convert_rds_to_raw_h5ad <- function(input_path, output_path) {
+  seurat <- readRDS(input_path)
+  seurat <- create_clean_seuratv5_object(seurat)
+
+  if (!file.exists(output_path)) {
+    seurat@assays$RNA@data <- seurat@assays$RNA@counts
+    write_h5ad(seurat, output_path)
+    seurat@assays$RNA@data <- NULL
+  }
+}
+
+
+get_seurat_obj_from_h5ad <- function(
+  adata,
+  r_obs,
+  target_samples,
+  sample_colname = "Sample",
+  counts_layer = NULL, # Default: Do not extract counts
+  data_layer = NULL, # Default: Do not extract normalized data
+  fetch_embedding = NULL # Default: Do not extract embeddings
+) {
+  # 1. Get indices for target sample (-1 for 0-based Python indexing)
+  sample_indices <- which(r_obs[[sample_colname]] %in% target_samples) - 1
+  subset_py <- adata[as.integer(sample_indices)]
+
+  # 2. Extract shared metadata & names
+  meta_data <- as.data.frame(py_to_r(subset_py$obs))
+  cell_names <- as.character(py_to_r(subset_py$obs_names$values))
+  gene_names <- as.character(py_to_r(subset_py$var_names$values))
+  rownames(meta_data) <- cell_names
+
+  # Helper function to extract and format matrices from AnnData
+  extract_matrix <- function(layer_name) {
+    if (layer_name == "X") {
+      py_mat <- subset_py$X
+    } else {
+      layer_keys <- py_to_r(subset_py$layers$keys())
+      if (!layer_name %in% layer_keys) {
+        stop(paste("Layer", layer_name, "not found in adata.layers"))
+      }
+      py_mat <- subset_py$layers[[layer_name]]
+    }
+
+    # Cast to float64 and convert to CSC format
+    py_mat <- py_mat$astype("float64")$tocsc()
+
+    # Convert to R, transpose, and assign dimnames
+    r_mat <- t(py_to_r(py_mat))
+    rownames(r_mat) <- gene_names
+    colnames(r_mat) <- cell_names
+    return(r_mat)
+  }
+
+  # 3. Handle Counts & Initialize Object
+  if (!is.null(counts_layer)) {
+    counts_matrix <- extract_matrix(counts_layer)
+  } else {
+    # If no counts are requested, create a 0-byte empty sparse matrix
+    # to safely satisfy Seurat's initialization requirements
+    counts_matrix <- Matrix::sparseMatrix(
+      i = integer(0),
+      j = integer(0),
+      dims = c(length(gene_names), length(cell_names)),
+      dimnames = list(gene_names, cell_names)
+    )
+  }
+
+  seurat_obj <- CreateSeuratObject(
+    counts = counts_matrix,
+    meta.data = meta_data
+  )
+
+  # 4. Handle Normalized Data
+  if (!is.null(data_layer)) {
+    data_matrix <- extract_matrix(data_layer)
+
+    # Version check to handle Seurat v4 vs v5 syntax
+    if (packageVersion("Seurat") >= "5.0.0") {
+      seurat_obj <- SetAssayData(
+        seurat_obj,
+        layer = "data",
+        new.data = data_matrix
+      )
+    } else {
+      seurat_obj <- SetAssayData(
+        seurat_obj,
+        slot = "data",
+        new.data = data_matrix
+      )
+    }
+  }
+
+  # 5. Handle Embeddings
+  if (!is.null(fetch_embedding)) {
+    obsm_keys <- py_to_r(subset_py$obsm$keys())
+
+    for (emb in fetch_embedding) {
+      if (emb %in% obsm_keys) {
+        emb_matrix <- py_to_r(subset_py$obsm[[emb]])
+        rownames(emb_matrix) <- cell_names
+
+        # Determine Seurat reduction name and key
+        seurat_emb_name <- gsub("^X_", "", emb)
+        if (seurat_emb_name == "pca") {
+          seurat_key <- "PC_"
+        } else {
+          seurat_key <- paste0(toupper(seurat_emb_name), "_")
+        }
+
+        colnames(emb_matrix) <- paste0(seurat_key, 1:ncol(emb_matrix))
+
+        dim_reduc <- CreateDimReducObject(
+          embeddings = emb_matrix,
+          key = seurat_key,
+          assay = "RNA"
+        )
+
+        seurat_obj[[seurat_emb_name]] <- dim_reduc
+      } else {
+        warning(paste("Embedding", emb, "not found in adata.obsm. Skipping."))
+      }
+    }
+  }
+
+  return(seurat_obj)
+}
