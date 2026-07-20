@@ -7,15 +7,15 @@ channel-priority = "disabled"
 
 [dependencies]
 r-base = "==4.5.2"
-python = "3.14.*"
-
-# Python Single-Cell Stack
-anndata = "==0.12.19"
-scanpy = "==1.12.2"
+python = "3.13.*"
 
 # ==========================================
 # CORE R STACK (Conda-Forge / Bioconda)
 # ==========================================
+
+# Required for reticulate to detect pixi python
+conda = ">=26.5.3,<27"
+
 r-remotes = "*"
 r-biocmanager = "*"
 r-locfit = "*"
@@ -26,22 +26,25 @@ r-tidyverse = ">=2.0.0,<3"
 r-ncdf4 = ">=1.24,<2"
 r-arrow = ">=24.0.0,<25"
 r-rfast = ">=2.1.5.2,<3"
-
-# Required for reticulate to detect pixi python
-conda = ">=26.5.3,<27"
 r-ggally = ">=2.4.0,<3"
 
 # ==========================================
 # FEATURE 1: Core Python Stack
 # ==========================================
-[feature.py-standalone.dependencies]
 
-[feature.py-standalone.pypi-dependencies]
+# Python Single-Cell Stack
+anndata = "==0.12.19"
+scanpy = "==1.12.2"
+pathlib = ">=1.0.1,<2"
+
+[pypi-dependencies]
+harmonypy = ">=2.0.0, <3"
 scHPL = "==1.0.0" # see https://github.com/theislab/scarches/issues/262
 pilotpy = "==2.0.15"
 scikit-misc = "==0.5.1"
 scvi-tools = "==1.2.2.post2"
 scarches = "==0.6.1"
+bionty = ">=1.0.0, <3"
 
 
 # ==========================================
@@ -63,8 +66,8 @@ jax = { version = "*", extras = ["cuda13"] }
 # ENVIRONMENTS 
 # ==========================================
 [environments]
-py-cpu = ["py-standalone", "cpu"]
-py-cuda13 = ["py-standalone", "cuda13"]
+py-cpu = ["cpu"]
+py-cuda13 = ["cuda13"]
 
 
 # ==========================================
@@ -121,6 +124,7 @@ cmd = """
 Rscript -e "
   options(timeout=9999999)
   
+  if (!requireNamespace('limma', quietly = TRUE)) remotes::install_version('limma', version='3.68.4', repos=BiocManager::repositories(), upgrade='never')
   if (!requireNamespace('MOFA2', quietly = TRUE)) remotes::install_version('MOFA2', version='1.20.2', repos=BiocManager::repositories(), upgrade='never')
   if (!requireNamespace('GloScope', quietly = TRUE)) remotes::install_version('GloScope', version='2.0.1', repos=BiocManager::repositories(), upgrade='never')
   if (!requireNamespace('thisutils', quietly = TRUE)) remotes::install_cran('thisutils', repos='https://packagemanager.posit.co/cran/latest', upgrade='never')
