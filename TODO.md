@@ -36,7 +36,21 @@
 - Iterate on the above suggestions until README.md and AGENTS.md are complete and a general repo structure was found that is clear and organized
 
 ## New datasets to be added:
-- 
+- batch effect analysis:
+    - Whole Stephenson by batch/center (n = 143)
+    - From PILOT-GM-VAE paper:
+        - KPMP Kidney (subset used in PILOT-GM-VAE paper)(needs to be checked for batch effects first) (n = 45)(alternatively with full dataset)
+        - Breast cancer (n = 126)
+        - Covid-19 PBMC (n = 151)
+        - Diabetes (n = 52)
+        - Possibly: Sikkema Lung (n = 165)
+- benchmark analysis:
+    - From PILOT-GM-VAE paper:
+        - Alzheimer (n = 83)
+        - Lupus PBMC (n = 261)
+        - Myocardial infarction (n = 23)
+        - Possibly: Kidney KPMP (subset used in PILOT-GM-VAE paper)(needs to be checked for batch effects first) (n = 45)
+
 
 ## New methods to be added:
 - PILOT-GM-VAE (very similar to PILOT, needs to be added by agent to Process_data.ipynb)
