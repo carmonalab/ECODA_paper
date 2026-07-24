@@ -1,0 +1,281 @@
+---
+title: Description
+jupyter: python3
+---
+
+This script is used to process the data with the methods that run in python.
+
+### Inputs
+As input, it uses the output from `Preprocess_datasets.Rmd`, specifically the `.h5ad` files created.
+These dataset files have to be put in `"./data/"`.
+
+### Outputs
+The output are dataframes for each dataset and method, respectively, containing either a distance matrix (dist) or a dataframe of the sample embeddings (emb). The tables are stored as `.feather` files created in `"./data/"`. The file name indicates dataset, method parameters, method and output.
+
+Additionally, a log file `execution_times.feather` is created, containing the execution times of all the methods (for every dataset and method parameter setting, respectively) is created.
+
+
+# Imports
+
+```{python}
+# Imports
+import os
+import gc
+import time
+import psutil
+import re
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import scanpy as sc
+import anndata as ad
+import scvi
+import seaborn as sns
+from scvi.external import MRVI
+# scarches will throw some warnings and an error. Please just ignore and run the import section again.
+# After the second import, no warnings and errors are shown and it works.
+from scarches.models.scpoli import scPoli
+import pilotpy as pl
+from scipy.sparse import csr_matrix
+
+import torch, jax; print(torch.cuda.is_available()); print(jax.devices())
+
+scvi.settings.seed = 0  # optional: ensures reproducibility
+print("Last run with scvi-tools version:", scvi.__version__)
+```
+
+# Define functions
+
+```{python}
+def log_execution_time(
+    dataset_name,
+    method,
+    n_hvg,
+    execution_time,
+    path_data='.',
+    suffix='',
+    log_file_name='execution_times.feather'
+):
+    log_file = os.path.join(path_data, log_file_name)
+    
+    # 1. Format the method string to match your preference
+    method_str = f"{method}_hvg{n_hvg}{suffix}"
+    
+    # 2. Prepare the new data row
+    new_data = {
+        'dataset': [dataset_name],
+        'method': [method_str],
+        'time_secs': [float(execution_time)]
+    }
+    df_new = pd.DataFrame(new_data)
+
+    # 3. Load existing log or create a new one
+    if os.path.exists(log_file):
+        df_existing = pd.read_feather(log_file)
+        
+        # Check if this dataset/method combo already exists
+        mask = (df_existing['dataset'] == dataset_name) & (df_existing['method'] == method_str)
+        
+        if mask.any():
+            # Update the existing row (overwrites time)
+            df_existing.loc[mask, ['time_secs']] = [float(execution_time)]
+            df_final = df_existing
+        else:
+            # Append the new row
+            df_final = pd.concat([df_existing, df_new], ignore_index=True)
+    else:
+        df_final = df_new
+
+    # 4. Save back to Feather
+    df_final.reset_index(drop=True).to_feather(log_file)
+
+
+def process_data(dataset_name, ct_annotation, n_hvg, res_label, path_data = os.path.join(os.getcwd(), "data")):
+    path_adata = os.path.join(path_data, dataset_name + ".h5ad")
+
+    # --- 1. Determine scPoli Dimensions for this specific run ---
+    scpoli_dims = []
+    if res_label == "_highres":
+        if n_hvg == 2000:
+            scpoli_dims = [2, 3, 5, 10, 15]
+        else: # 1000 or 3000
+            scpoli_dims = [15]
+    elif res_label == "_lowres" and n_hvg == 2000:
+        scpoli_dims = [15]
+
+    scpoli_paths = {dim: os.path.join(path_data, f"{dataset_name}_hvg{n_hvg}{res_label}_scpoli_dims{dim}_embs.feather") 
+                    for dim in scpoli_dims}
+
+    # --- 2. Determine if PILOT should run for this run ---
+    run_pilot = False
+    path_pilot_dists = os.path.join(path_data, f"{dataset_name}_hvg{n_hvg}{res_label}_pilot_dists.feather")
+    
+    if res_label == "_highres":
+        run_pilot = not os.path.exists(path_pilot_dists) # Run for 1k, 2k, 3k
+    elif res_label == "_lowres" and n_hvg == 2000:
+        run_pilot = not os.path.exists(path_pilot_dists) # Run only for 2k
+
+    # --- 3. Check for MrVI (only lowres) ---
+    path_mrvi_dists = os.path.join(path_data, f"{dataset_name}_hvg{n_hvg}_mrvi_dists.feather")
+    run_mrvi = (res_label == "_lowres" and not os.path.exists(path_mrvi_dists))
+
+    # Determine what scPoli dims are actually missing
+    missing_scpoli = [dim for dim, path in scpoli_paths.items() if not os.path.exists(path)]
+
+    if not run_mrvi and not missing_scpoli and not run_pilot:
+        return # Nothing to do for this combination
+    
+    adata = sc.read_h5ad(path_adata, backed='r+')
+    adata = adata.to_memory() # Make sure the data is fully loaded into memory
+    
+    sc.pp.highly_variable_genes(adata, n_top_genes=n_hvg, subset=True, flavor="seurat_v3")
+
+    if not os.path.exists(path_mrvi_dists) and res_label == "_lowres":
+        print('Processing MrVI')
+        start_time = time.time()
+        
+        adata.obs['dummy_col'] = np.zeros(adata.n_obs)
+        MRVI.setup_anndata(adata, sample_key="Sample")
+        model = MRVI(adata)
+        model.train(max_epochs=50, accelerator="cpu")
+        dists = model.get_local_sample_distances(keep_cell=False, groupby="dummy_col", batch_size=32)
+        da = dists['dummy_col']
+        df_dists = da.isel(dummy_col_name=0)
+        df_dists = df_dists.to_pandas()
+        df_dists.to_feather(path_mrvi_dists)
+        
+        end_time = time.time()
+        execution_time = end_time - start_time
+        
+        log_execution_time(
+            dataset_name = dataset_name,
+            n_hvg = n_hvg,
+            execution_time = execution_time,
+            path_data = path_data,
+            method = "MrVI"
+        )
+
+    if missing_scpoli:
+        # Required to speed up scpoli
+        adata.X = adata.X.todense()
+        adata.X = adata.X.astype('float32')
+
+        for dim in missing_scpoli:
+            print(f'Processing scPoli dim {dim}')
+            start_time = time.time()
+            early_stopping_kwargs = {
+                "early_stopping_metric": "val_prototype_loss",
+                "mode": "min",
+                "threshold": 0,
+                "patience": 20,
+                "reduce_lr": True,
+                "lr_patience": 13,
+                "lr_factor": 0.1,
+            }
+            scpoli_model = scPoli(
+                adata=adata,
+                condition_keys='Sample',
+                cell_type_keys=ct_annotation,
+                embedding_dims=dim,
+                recon_loss='nb',
+            )
+            scpoli_model.train(
+                n_epochs=50,
+                pretraining_epochs=40,
+                early_stopping_kwargs=early_stopping_kwargs,
+                eta=5,
+            )
+            adata_emb = scpoli_model.get_conditional_embeddings()
+            df_embs = pd.DataFrame(adata_emb.X, index=adata_emb.obs_names)
+            df_embs.columns = [f"Dim_{i+1}" for i in range(df_embs.shape[1])]
+            df_embs.to_feather(scpoli_paths[dim])
+            
+            end_time = time.time()
+            execution_time = end_time - start_time
+            
+            log_execution_time(
+                dataset_name = dataset_name,
+                n_hvg = n_hvg,
+                execution_time = execution_time,
+                path_data = path_data,
+                method = "scPoli",
+                suffix = f'_dims{dim}{res_label}'
+            )
+
+    if run_pilot:
+        print('Processing PILOT')
+        adata = sc.read_h5ad(path_adata, backed='r+')
+        adata = adata.to_memory() # Make sure the data is fully loaded into memory
+
+        sc.pp.highly_variable_genes(adata, n_top_genes=n_hvg, flavor="seurat_v3")
+        sc.pp.normalize_total(adata)
+        sc.pp.log1p(adata)
+        sc.pp.scale(adata, max_value=10)
+        sc.pp.pca(adata, n_comps=50)
+
+        start_time = time.time()
+        
+        pl.tl.wasserstein_distance(
+            adata,
+            emb_matrix = 'X_pca',
+            clusters_col = ct_annotation,
+            sample_col = 'Sample',
+            status = 'Sample',
+        )
+        df_dists = adata.uns['EMD_df']
+        df_dists.to_feather(path_pilot_dists)
+        
+        end_time = time.time()
+        execution_time = (end_time - start_time)
+        
+        log_execution_time(
+            dataset_name = dataset_name,
+            n_hvg = n_hvg,
+            execution_time = execution_time,
+            path_data = path_data,
+            method = "PILOT",
+            suffix = res_label
+        )
+```
+
+# Define dataset details and run pipeline
+
+```{python}
+datasets = {
+    'Adams': ['OriginalAnnotationLevel1', 'OriginalAnnotationLevel2'],
+    'Bassez': ['cellType', 'cellSubType'],
+    'Gongsharma_cmv_young_males': ['AIFI_L1', 'AIFI_L3'],
+    # 'GongSharma_all': ['AIFI_L1', 'AIFI_L3'],
+    'Kfoury': ['cells_lowres', 'cells'],
+    'Kim': ['Cell_type', 'Cell_subtype'],
+    'Lee': ['layer1', 'layer2'],
+    'Pelka': ['OriginalAnnotationLevel1', 'OriginalAnnotationLevel3'],
+    'Smillie': ['OriginalAnnotationLevel2', 'OriginalAnnotationLevel3'],
+    'Stephenson': ['initial_clustering', 'full_clustering'],
+    'Wu': ['celltype_major', 'celltype_subset'],
+    'Zhang': ['layer1', 'layer2'],
+}
+
+# Nested loop to handle datasets, resolutions, and HVG counts
+hvg_settings = [1000, 2000, 3000]
+for dataset_name, annotations in datasets.items():
+    for i, ct_annotation in enumerate(annotations):
+        # annotations[0] is lowres, annotations[1] is highres
+        res_suffix = "_lowres" if i == 0 else "_highres"
+
+        for n in hvg_settings:
+            # The function will now automatically skip PILOT/scPoli if the 
+            # combination isn't requested in your requirements.
+            process_data(
+                dataset_name=dataset_name, 
+                ct_annotation=ct_annotation, 
+                n_hvg=n, 
+                res_label=res_suffix
+            )
+            gc.collect()
+
+print("Processing complete!")
+```
+
+

@@ -1,0 +1,215 @@
+---
+title: Description
+jupyter: python3
+---
+
+This code was used to subset the Gong & Sharma dataset.
+
+### Inputs
+As input, it uses the scRNA-seq `.h5ad` files downloaded from https://apps.allenimmunology.org/aifi/insights/dynamics-imm-health-age/downloads/scrna/.
+These downloaded files are expected to be located in `"./GongSharma_data/"`.
+
+### Outputs
+The output are subsetted `.h5ad` files.
+
+
+# Imports
+
+```{python}
+import os
+
+import scanpy as sc
+import anndata as ad
+import scvi
+
+import scanpy as sc
+import numpy as np
+```
+
+```{python}
+def downsample_by_group(adata, group_key='specimen.specimenGuid', max_cells=5000, seed=42):
+    np.random.seed(seed)
+    new_indices = []
+    
+    for group in adata.obs[group_key].unique():
+        group_indices = np.where(adata.obs[group_key] == group)[0]
+        if len(group_indices) > max_cells:
+            sampled_indices = np.random.choice(group_indices, size=max_cells, replace=False)
+            new_indices.extend(sampled_indices)
+        else:
+            new_indices.extend(group_indices)
+            
+    return adata[new_indices, :].copy()
+```
+
+# Subset GongSharma data
+
+```{python}
+folder_path = os.path.join(os.getcwd(), "GongSharma_data")
+files_in_folder = os.listdir(folder_path)
+files_in_folder.remove(".ipynb_checkpoints")
+files_in_folder
+```
+
+```{python}
+young_males_files = [s for s in files_in_folder if "SoundLife_YoungAdult_Male_CMVneg" in s or "SoundLife_YoungAdult_Male_CMVpos" in s]
+young_males_files
+```
+
+```{python}
+output_file_name = os.path.join(os.getcwd(), "data", "Gongsharma_cmv_young_males")
+
+if not os.path.exists(output_file_name):
+    for h5ad_file in young_males_files:
+        adata_path = os.path.join(folder_path, h5ad_file)
+        adata = sc.read_h5ad(adata_path, backed='r').to_memory()
+    
+        # Downsample
+        adata = downsample_by_group(adata)
+    
+        # Append bdata to combined_adata
+        if h5ad_file == young_males_files[0]:
+            combined_adata = adata
+        else:
+            combined_adata = ad.concat([combined_adata, adata])
+
+    combined_adata.obs['Sample'] = combined_adata.obs['specimen.specimenGuid']
+    
+    combined_adata.write_h5ad(output_file_name + '.h5ad')
+    combined_adata.obs.to_feather(output_file_name + '.feather')
+```
+
+```{python}
+# Subset samples for comparison CMV pos vs neg (~30 samples, so 4 from 8 total groups)
+num_samples = 4
+
+output_file_name = os.path.join(os.getcwd(), "data", "Gongsharma_all")
+
+if not os.path.exists(output_file_name):
+    for h5ad_file in files_in_folder:
+        adata_path = os.path.join(folder_path, h5ad_file)
+        adata = sc.read_h5ad(adata_path, backed='r')
+    
+        # Group by individual and select the first unique sample name
+        first_sample_per_individual = adata.obs.groupby('subject.subjectGuid')['specimen.specimenGuid'].first()
+    
+        # Subset
+        mask = adata.obs["specimen.specimenGuid"].isin(first_sample_per_individual[:num_samples])
+    
+        # Append bdata to combined_adata
+        if h5ad_file == files_in_folder[0]:
+            combined_adata = adata[mask]
+        else:
+            combined_adata = ad.concat([combined_adata, adata[mask]])
+
+    combined_adata.obs['Sample'] = combined_adata.obs['specimen.specimenGuid']
+    
+    combined_adata.write_h5ad(output_file_name + '.h5ad')
+    combined_adata.obs.to_feather(output_file_name + '.feather')
+```
+
+```{python}
+young_cmvneg_files = [s for s in files_in_folder if "YoungAdult_Male_CMVneg" in s or "YoungAdult_Female_CMVneg" in s]
+young_cmvneg_files
+```
+
+```{python}
+# Subset samples for comparison CMV pos vs neg (~30 samples, so 8 from 4 total groups)
+num_samples = 16
+
+output_file_name = os.path.join(os.getcwd(), "data", "Gongsharma_sex_young_cmvneg")
+
+if not os.path.exists(output_file_name):
+    for h5ad_file in young_cmvneg_files:
+        adata_path = os.path.join(folder_path, h5ad_file)
+        adata = sc.read_h5ad(adata_path, backed='r')
+    
+        # Group by individual and select the first unique sample name
+        first_sample_per_individual = adata.obs.groupby('subject.subjectGuid')['specimen.specimenGuid'].first()
+    
+        # Subset
+        mask = adata.obs["specimen.specimenGuid"].isin(first_sample_per_individual[:num_samples])
+    
+        # Append bdata to combined_adata
+        if h5ad_file == young_cmvneg_files[0]:
+            combined_adata = adata[mask]
+        else:
+            combined_adata = ad.concat([combined_adata, adata[mask]])
+
+    combined_adata.obs['Sample'] = combined_adata.obs['specimen.specimenGuid']
+    
+    combined_adata.write_h5ad(output_file_name + '.h5ad')
+    combined_adata.obs.to_feather(output_file_name + '.feather')
+```
+
+```{python}
+female_young_files = [s for s in files_in_folder if "YoungAdult_Female" in s]
+female_young_files
+```
+
+```{python}
+#| scrolled: true
+# Subset samples for comparison CMV pos vs neg (~30 samples, so 8 from 4 total groups)
+num_samples = 16
+
+output_file_name = os.path.join(os.getcwd(), "data", "Gongsharma_cmv_females_young")
+
+if not os.path.exists(output_file_name):
+    for h5ad_file in female_young_files:
+        adata_path = os.path.join(folder_path, h5ad_file)
+        adata = sc.read_h5ad(adata_path, backed='r')
+    
+        # Group by individual and select the first unique sample name
+        first_sample_per_individual = adata.obs.groupby('subject.subjectGuid')['specimen.specimenGuid'].first()
+    
+        # Subset
+        mask = adata.obs["specimen.specimenGuid"].isin(first_sample_per_individual[:num_samples])
+    
+        # Append bdata to combined_adata
+        if h5ad_file == female_young_files[0]:
+            combined_adata = adata[mask]
+        else:
+            combined_adata = ad.concat([combined_adata, adata[mask]])
+
+    combined_adata.obs['Sample'] = combined_adata.obs['specimen.specimenGuid']
+    
+    combined_adata.write_h5ad(output_file_name + '.h5ad')
+    combined_adata.obs.to_feather(output_file_name + '.feather')
+```
+
+```{python}
+female_cmvneg_files = [s for s in files_in_folder if "Female_CMVneg" in s]
+female_cmvneg_files
+```
+
+```{python}
+#| scrolled: true
+# Subset samples for comparison CMV pos vs neg (~30 samples, so 16 from 2 total groups)
+num_samples = 16
+
+output_file_name = os.path.join(os.getcwd(), "data", "Gongsharma_age_females_cmvneg")
+
+if not os.path.exists(output_file_name):
+    for h5ad_file in female_cmvneg_files:
+        adata_path = os.path.join(folder_path, h5ad_file)
+        adata = sc.read_h5ad(adata_path, backed='r')
+    
+        # Group by individual and select the first unique sample name
+        first_sample_per_individual = adata.obs.groupby('subject.subjectGuid')['specimen.specimenGuid'].first()
+    
+        # Subset
+        mask = adata.obs["specimen.specimenGuid"].isin(first_sample_per_individual[:num_samples])
+    
+        # Append bdata to combined_adata
+        if h5ad_file == female_cmvneg_files[0]:
+            combined_adata = adata[mask]
+        else:
+            combined_adata = ad.concat([combined_adata, adata[mask]])
+
+    combined_adata.obs['Sample'] = combined_adata.obs['specimen.specimenGuid']
+    
+    combined_adata.write_h5ad(output_file_name + '.h5ad')
+    combined_adata.obs.to_feather(output_file_name + '.feather')
+```
+
+
