@@ -29,7 +29,7 @@ Do not change this file without asking.
 - Most datasets are monolithic h5ad files with a batch_col, e.g.:
     - Stephenson has batch effect by batch_col "Site" (both, in terms of gene expression (major) and cell type composition (minor, just one or a few monocyte subtypes))
 - A "combined PBMC" dataset was created from multiple other available datasets (included for method benchmark analysis and or batch effect analysis):
-    - Combined PBMC (Stephenson, GongSharma, Zhu) (see Batch_effect.rmd, see also TODO.md)
+    - Combined PBMC (Stephenson, GongSharma, Zhu) (see batch_effect_analysis.rmd, see also TODO.md)
 
 
 # HPC
