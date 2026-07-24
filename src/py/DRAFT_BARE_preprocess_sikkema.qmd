@@ -1,0 +1,140 @@
+---
+title: Imports
+jupyter: python3
+---
+
+
+
+```{python}
+import os
+
+import scanpy as sc
+import anndata as ad
+import scvi
+```
+
+# Subset GongSharma data
+
+```{python}
+folder_path = os.path.join(os.getcwd(), "Sikkema_data")
+files_in_folder = os.listdir(folder_path)
+files_in_folder
+```
+
+```{python}
+adata_path = os.path.join(folder_path, files_in_folder[0])
+adata = sc.read_h5ad(adata_path, backed='r')
+```
+
+```{python}
+adata
+```
+
+```{python}
+print(adata.X[:5, :5].toarray())
+# scVI noramlized values are in X but we want the raw counts
+```
+
+```{python}
+if adata.raw is not None:
+    print("Raw counts found in adata.raw")
+    # To access the first 5x5 of raw data:
+    print(adata.raw.X[:5, :5].toarray()) 
+else:
+    print("No data in adata.raw")
+```
+
+```{python}
+sc.pl.umap(adata, color="ann_level_1")
+```
+
+```{python}
+len(adata.obs.donor_id.unique())
+```
+
+```{python}
+adata.obs['Sample'] = adata.obs['donor_id']
+
+var_names = adata.var_names
+
+# Create clean adata object
+adata = ad.AnnData(
+    X = adata.raw[:, adata.var_names].X,
+    obs = adata.obs
+)
+adata.var_names = var_names
+```
+
+```{python}
+print("Preview of new X (should be counts):")
+print(adata.X[:5, :5].toarray())
+```
+
+```{python}
+output_file_name = os.path.join(os.getcwd(), "data", "Sikkema")
+
+adata.write_h5ad(output_file_name + '.h5ad', compression="gzip")
+adata.obs.to_feather(output_file_name + '.feather')
+```
+
+```{python}
+adata
+```
+
+```{python}
+adata.var_names[:5].tolist()
+```
+
+```{python}
+sample_column = 'sample' 
+
+# Use value_counts() to get the count for each sample
+cell_counts = adata.obs[sample_column].value_counts().reset_index()
+cell_counts.columns = [sample_column, 'cell_count']
+
+print("Cell Counts per Sample:")
+print(cell_counts)
+```
+
+```{python}
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Check if the cell_counts DataFrame was successfully created
+if 'cell_count' in cell_counts.columns:
+    # Set plot style
+    sns.set_style("whitegrid")
+    plt.figure(figsize=(10, 6))
+
+    # Create the bar plot
+    sns.barplot(
+        x=sample_column,
+        y='cell_count',
+        data=cell_counts,
+        palette='viridis' # Choose a nice color palette
+    )
+
+    # Customize plot labels and title
+    plt.title('Number of Cells per Sample', fontsize=16)
+    plt.xlabel('Sample ID', fontsize=12)
+    plt.ylabel('Number of Cells', fontsize=12)
+    
+    # Rotate x-axis labels if sample names are long
+    plt.xticks(rotation=45, ha='right') 
+    
+    # Add the count numbers on top of the bars
+    for index, row in cell_counts.iterrows():
+        plt.text(
+            index, 
+            row['cell_count'] + max(cell_counts['cell_count']) * 0.01, # Position slightly above the bar
+            f"{row['cell_count']:,}", # Format number with comma
+            color='black', 
+            ha='center', 
+            fontsize=10
+        )
+
+    plt.tight_layout() # Adjust layout to prevent labels from being cut off
+    plt.show()
+```
+
+
