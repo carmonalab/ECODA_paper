@@ -13,5 +13,5 @@ source("src/R/pseudobulk.R")        # Pseudobulk & DESeq2 functions
 source("src/R/hvcs.R")              # Highly Variable Cell Type functions
 source("src/R/seurat_utils.R")      # Seurat object utilities
 source("src/R/plotting.R")          # PCA, MDS plotting functions
-source("src/R/benchmark_methods.R") # Individual method processing functions
+source("src/R/benchmark_methods_r.R") # Individual method processing functions
 source("src/R/benchmark_pipeline.R") # Pipeline orchestration (run_benchmark, run_transformation_analysis, etc.)
