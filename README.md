@@ -29,16 +29,18 @@ simple baseline: **ECODA (Exploratory Compositional Data Analysis)**.
 
 ### **Repository Contents**
 
--   `Preprocess_datasets.Rmd`: Standardized preprocessing and automated
-    annotation for all cohorts used in the study.
--   `Process_data.ipynb`: This script is used to run the benchmarked methods
-    that run in python.
--   `MAIN_Analysis.Rmd`: Core script to run the benchmark and generate paper
-    figures.
--   `functions.R`: Underlying R functions for ECODA, CLR transformations, and
-    separation metric calculations (ANOSIM, ARI, Modularity). The **scECODA** R
-    package for scalable cohort-level analysis is available at
-    [github.com/carmonalab/scECODA](https://github.com/carmonalab/scECODA). ---
+-   `datasets.json`: Centralized dataset metadata (sample/label columns, subsetting rules, batch information).
+-   `QC_filtering/`: Per-dataset R Markdown notebooks for standard scRNA-seq QC.
+-   `src/py/preprocess.py`: Standardized preprocessing pipeline (Python/Scanpy) — sample/gene name standardization, HVG selection, unsupervised clustering, Harmony integration.
+-   `src/py/benchmark_methods_py.qmd`: Python benchmark methods (MrVI, PILOT, scPoli).
+-   `src/R/`: Modular R functions (12 files) — benchmark pipeline orchestration, scoring metrics, pseudobulk processing, HVC selection, math utilities, plotting.
+-   `benchmark_analysis.rmd`: Core analysis script orchestrating the benchmark pipeline and generating paper figures.
+-   `batch_effect_analysis.rmd`: Batch effect analysis and correction evaluation.
+-   `src/bash/`: SLURM submission scripts for HPC parallel execution (preprocessing, cell type annotation, benchmark methods).
+-   `docs/ARCHITECTURE.md`: Full pipeline architecture, call flow, and module documentation.
+
+The **scECODA** R package for scalable cohort-level analysis is available at
+[github.com/carmonalab/scECODA](https://github.com/carmonalab/scECODA). ---
 
 ## Reference
 
