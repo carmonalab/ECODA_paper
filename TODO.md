@@ -35,6 +35,23 @@
     - Consolidate duplicate or redundant scripts into single, well-documented modules (explained in further details below)
 - Iterate on the above suggestions until README.md and AGENTS.md are complete and a general repo structure was found that is clear and organized
 
+## Explain new cell type annotation pipeline
+Was adopted from another project because previous workflow was in r but parallelization constantly kept freezing workers and no approach was found that could prevent it.
+Thus, a new cell type annotation was adopted that can be run on the HPC cluster in parallel for any number of datasets and any number of samples for scalability.
+- Moved from Preprocess_datasets.Rmd to ./src/bash/cell_type_annotation/ (added from another project, so needs to be adapted and polished)
+    - Add documentation explaining the new pipeline structure and usage
+    - Ensure compatibility with current preprocessing outputs (preprocessed h5ad files)
+    - Update any hardcoded paths or dataset references to use standardized sample names from preprocess step
+
+## Explain migration from R pre-processing in Preprocess_datasets.Rmd to Python in src/py/preprocess.py
+- Compare the R-based preprocessing workflow (remove_low_cellcount_samples, standardize_sample_names, create_clean_seuratv5_object, gene standardization) with the Python implementation using Scanpy
+- Document the mapping of R Seurat functions to Scanpy equivalents (e.g., sc.pp.filter_cells -> remove_low_cellcount_samples, sc.pp.highly_variable_genes -> standardize variable genes)
+- Explain how the gene standardization step (STACAS in R) is handled in Python (bionty's Gene.standardize)
+- Detail the data format conversions (Seurat v5 to AnnData) and how metadata columns are preserved (previously metadata had to be subset as the obj.list <- SplitObject(seurat, split.by = "Sample") was used to split by sample to process each sample separately and then re-merge everything and JoinLayers (which every additional metadata column added degrades speed exponentially the more samples there are (with too many columns this never finished for some datasets)) -> problem solved by using .h5ad anndata objects that can be queried (already implemented))
+- Note any functional differences or improvements made during the migration
+
+
+
 ## New datasets to be added:
 - batch effect analysis:
     - Whole Stephenson by batch/center (n = 143)
@@ -50,7 +67,6 @@
         - Lupus PBMC (n = 261)
         - Myocardial infarction (n = 23)
         - Possibly: Kidney KPMP (subset used in PILOT-GM-VAE paper)(needs to be checked for batch effects first) (n = 45)
-
 
 ## New methods to be added:
 - PILOT-GM-VAE (very similar to PILOT, needs to be added by agent to Process_data.ipynb)
