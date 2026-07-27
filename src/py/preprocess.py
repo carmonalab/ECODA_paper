@@ -256,7 +256,7 @@ def main(config_path="datasets.json", base_path="data", output_dir="data",
                 view_name=view_name,
                 batch_key=batch_key,
                 n_hvg_sizes=n_hvg_sizes,
-                resolutions=(0.1, 0.4, 2, 5, 20),
+                resolutions=(0.1, 0.4, 2, 5, 20, 50, 100),
                 use_harmony=use_harmony and batch_key is not None,
             )
  
