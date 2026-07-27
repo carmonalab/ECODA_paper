@@ -1,21 +1,7 @@
 # General
 
-> All items in this section have been addressed. See commit history for details.
-
-- [x] README.md updated: Installation, Usage/Workflow, Expected Outputs, paper context (Overview, Key Findings)
-- [x] Paper read and incorporated into documentation
-- [x] AGENTS.md updated: Pipeline Overview, R Module Table, Domain Terminology, reviewer priorities, HPC notes, kilo code indexing note
-- [x] File naming conventions audited; critical issues fixed (spaces removed from 2 QC_filtering filenames)
-- [x] Information partitioning strategy defined: README (human), AGENTS (agent), TODO (actionable)
-- [x] Script consolidation audited:
-  - No duplicate R functions across 12 modules
-  - No duplicate Python scripts (preprocess_gongsharma.qmd is dataset-specific; benchmark_methods_py.qmd is general)
-  - `Preprocess_datasets.Rmd` orphaned (superseded by `src/py/preprocess.py`) — safe to remove
-  - `Process_data.ipynb` does not exist (replaced by `benchmark_methods_py.qmd`)
-  - `src/py/DRAFT_BARE_preprocess_sikkema.qmd` draft/exploratory — clean up when finalized
-  - `Figure_workflow_schematic.Rmd` orphaned (figure gen, unreferenced) — document or move
-  - `Processed_dataset_metadata.R` overlaps `datasets.json` — consolidate if needed
-  - 22 `plots/DELETE_*` files are stale — safe to remove
+- `Preprocess_datasets.Rmd` is superseded by `src/py/preprocess.py`, which still needs to be implemented
+- `Processed_dataset_metadata.R` is superseded by `datasets.json` — implement new datasets.json where possible
 
 ## Explain new cell type annotation pipeline
 Was adopted from another project because previous workflow was in r but parallelization constantly kept freezing workers and no approach was found that could prevent it.
@@ -43,6 +29,7 @@ Thus, a new cell type annotation was adopted that can be run on the HPC cluster 
         - Covid-19 PBMC (n = 151)
         - Diabetes (n = 52)
         - Possibly: Sikkema Lung (n = 165)
+    - `src/py/DRAFT_BARE_preprocess_sikkema.qmd` draft/exploratory
 - benchmark analysis:
     - From PILOT-GM-VAE paper:
         - Alzheimer (n = 83)

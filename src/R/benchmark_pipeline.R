@@ -196,13 +196,12 @@ datrans <- function(
   return(rets)
 }
 
-run_analyses <- function(result_list, ds, seurat, path_data, path_plots) {
+run_analyses <- function(result_list, ds, seurat, path_data) {
   result_list[["bmark"]][[ds]] <- run_benchmark_analysis(
     res_list = result_list[["bmark"]][[ds]],
     ds = ds,
     seurat = seurat,
-    path_data = path_data,
-    path_plots = path_plots
+    path_data = path_data
   )
   labels <- get_labels(seurat, seurat@misc$label_col)
   ct_comps <- get_ct_comp_df_seurat(
@@ -230,7 +229,6 @@ run_benchmark_analysis <- function(
   sample_col = "Sample",
   factors_test = c(2, 3, 5, 10, 15),
   path_data,
-  path_plots,
   seurat_res = c(0.1, 0.4, 2, 5, 20),
   HVGs = c(1000, 2000, 3000),
   ECODA_top_varexp_hvct = seq(0, 0.9, 0.1),
