@@ -2,6 +2,10 @@
 This repo is about: ECODA: Exploratory Compositional Data Analysis for scRNA-seq Cohorts
 Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
 
+> Kilo Code indexes code structure and function signatures automatically.
+> AGENTS.md focuses on domain concepts, pipeline logic, and project
+> conventions that indexing cannot infer.
+
 ## Major reviewer points to be addressed
 - Extend batch effect analysis
     - More datasets have to be added

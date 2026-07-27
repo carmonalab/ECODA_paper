@@ -6,13 +6,16 @@ This repository contains the code to reproduce the results and figures from the
 paper: **"Cell type composition drives patient stratification in single-cell
 RNA-seq cohorts"**.
 
-### **Overview** Single-cell RNA
+### **Overview**
 
-sequencing (scRNA-seq) enables high-resolution characterization of cellular
-heterogeneity, but summarizing this data for cohort-level analysis remains a
-challenge. We benchmarked several state-of-the-art sample representation
-methods—including deep generative models and factor decomposition—against a
-simple baseline: **ECODA (Exploratory Compositional Data Analysis)**.
+Single-cell RNA sequencing (scRNA-seq) enables high-resolution characterization
+of cellular heterogeneity, but summarizing this data for cohort-level analysis
+remains a challenge. Using **11 scRNA-seq cohorts** (697 samples) across
+different biological conditions, we benchmarked seven state-of-the-art sample
+representation methods—**MOFA+, scITD, GloScope, GloProp, MrVI, PILOT,
+scPoli**—plus two baselines (**Pseudobulk** and cell-type composition via
+**ECODA**). The benchmark evaluates their ability to recover known biological
+groupings in a fully unsupervised setting.
 
 ### **Key Findings**
 
@@ -22,7 +25,10 @@ simple baseline: **ECODA (Exploratory Compositional Data Analysis)**.
 -   **Efficiency:** ECODA requires orders of magnitude fewer computational
     resources and produces embeddings in seconds.
 -   **Robustness:** The approach is highly robust to technical batch effects and
-    various cell-type annotation strategies.
+    various cell-type annotation strategies. On the Joanito dataset, ECODA
+    achieved a batch ANOSIM of 0.041 (effectively no batch separation) while
+    preserving biological signal (biological ANOSIM = 0.640); in contrast,
+    pseudobulk showed strong batch separation (batch ANOSIM = 0.706).
 -   **Interpretability:** Biological stratification is often driven by a small
     subset of highly variable cell types (HVCs), providing direct mechanistic
     insights.
@@ -40,7 +46,66 @@ simple baseline: **ECODA (Exploratory Compositional Data Analysis)**.
 -   `docs/ARCHITECTURE.md`: Full pipeline architecture, call flow, and module documentation.
 
 The **scECODA** R package for scalable cohort-level analysis is available at
-[github.com/carmonalab/scECODA](https://github.com/carmonalab/scECODA). ---
+[github.com/carmonalab/scECODA](https://github.com/carmonalab/scECODA).
+
+### **Installation**
+
+1. Install [Pixi](https://pixi.sh) — the project's package and environment manager.
+2. Clone the repository:
+   ```bash
+   git clone <repo-url> && cd ECODA_paper
+   ```
+3. Install dependencies:
+   ```bash
+   pixi install
+   ```
+   This creates the default `py-cpu` environment (macOS / development). For HPC
+   with CUDA, use the `py-cuda13` environment instead:
+   ```bash
+   pixi install --environment py-cuda13
+   ```
+4. Install R packages (Seurat, anndataR, SignatuR, scATOMIC deps, scITD deps,
+   HiTME deps, and all benchmark method packages) via the chained setup task:
+   ```bash
+   pixi run setup
+   ```
+
+### **Usage / Workflow**
+
+The analysis proceeds through four stages:
+
+- **Stage 1 — QC Filtering:** Open the per-dataset `.Rmd` notebooks in
+  `QC_filtering/` and render in RStudio.
+- **Stage 2 — Preprocessing:** Standardized sample/gene name standardization,
+  HVG selection, clustering, and Harmony integration:
+  ```bash
+  pixi run -e py-cpu python src/py/preprocess.py
+  ```
+  Dataset metadata (sample columns, subsetting rules, batch info) is driven by
+  `datasets.json`.
+- **Stage 3 — Benchmark Analysis:** Render `benchmark_analysis.rmd` in RStudio.
+  Python benchmark methods (MrVI, PILOT, scPoli) are invoked automatically via
+  rpy2. The R pipeline orchestrates all method processors, scoring metrics, and
+  figure generation.
+- **Stage 4 — Batch Effect Analysis:** Render `batch_effect_analysis.rmd` in
+  RStudio.
+
+**HPC execution:** Submit SLURM array jobs for cell-type annotation via
+`src/bash/cell_type_annotation/`. Stage data from the shared NAS to local
+scratch before processing:
+```bash
+sbatch src/bash/copy_data_from_nas_to_hpc_scratch.sh
+```
+
+### **Expected Outputs**
+
+- `.feather` files — cross-language distance matrices and embeddings produced
+  by Python benchmark methods and consumed by R processors.
+- Publication figures — MDS plots, PCA biplots, benchmark bar charts,
+  separation metric heatmaps, and transformation analysis panels.
+- Execution time logs documenting per-method and per-dataset runtime.
+
+---
 
 ## Reference
 
