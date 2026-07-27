@@ -1,39 +1,21 @@
 # General
-- check README.md and update if necessary:
-    - README.md is intended mainly for human readers, e.g.:
-    - how to install and run the repo
-    - General workflow (data processing pipeline, analysis steps, output generation)
-        - Overview of data sources and preprocessing steps
-        - Description of analysis methods and batch effect correction strategies (see also below on initial minimal batch effect analysis implemented in the preprint and major point to be addressed as per reviewers)
-        - Expected outputs and figure generation process
-        - Add this in very concise form also to AGENTS.md
-- read the paper related to this repository (https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full)
-    - get the purpose of this analysis, hypothesis, goal and methodology
-    - get key findings and understand the methodology
-- based on the above, check AGENTS.md and suggest a plan how to improve it (AGENTS.md was just created with minimal information, mainly only with key info on datasets.json and info on the specific HPC cluster it will be run on)
-    - it should give necessary context to an agentic coding model but not bloat it, so keep it concise
-    - as you read the paper, note any domain-specific terminology that needs to be defined for the agent
-        - Highlight any hard-to-understand mathematical transformations (e.g., clr, impute_zeros)
-    - as kilo code uses code base indexing, the following points might not be necessary but double-check if they are actually needed or not or how minimal additional information added to AGENTS.md might improve the agent's performance, given it has a code base indexing from kilo code:
-        - Ensure it explains the project folder structure and covers all functions in src/
-        - Include key function signatures and expected inputs/outputs
-        - Reference the modular structure and dependencies between files
-        - Add brief explanations of core concepts (ECODA, CLR, batch correction strategies)
-- suggest improvements, e.g:
-    - Clearer folder structure and/or organization
-    - Standardize file naming conventions for consistency
-    - Propose best strategy on how to structure README.md, AGENTS.md and TODO.md:
-        - Check online for current reccomendations and guidelines on how to structure the AGENTS.md file, e.g.:
-            - Structure
-            - Critical information and what it should contain
-            - How to keep it concise to prevent bloat filling up the agents context window
-        - Which information has to be in both or can redundancy be reduced? Redundant info might still be necessary, as README.md is for humans and might need more or other information than AGENTS.md which possibly could be more concise.
-        - Some information in the AGENTS.md might need to be moved to TODO.md and vice versa. Check and suggest best habits.
-    - Update README.md
-    - Update AGENTS.md
-    - Update TODO.md
-    - Consolidate duplicate or redundant scripts into single, well-documented modules (explained in further details below)
-- Iterate on the above suggestions until README.md and AGENTS.md are complete and a general repo structure was found that is clear and organized
+
+> All items in this section have been addressed. See commit history for details.
+
+- [x] README.md updated: Installation, Usage/Workflow, Expected Outputs, paper context (Overview, Key Findings)
+- [x] Paper read and incorporated into documentation
+- [x] AGENTS.md updated: Pipeline Overview, R Module Table, Domain Terminology, reviewer priorities, HPC notes, kilo code indexing note
+- [x] File naming conventions audited; critical issues fixed (spaces removed from 2 QC_filtering filenames)
+- [x] Information partitioning strategy defined: README (human), AGENTS (agent), TODO (actionable)
+- [x] Script consolidation audited:
+  - No duplicate R functions across 12 modules
+  - No duplicate Python scripts (preprocess_gongsharma.qmd is dataset-specific; benchmark_methods_py.qmd is general)
+  - `Preprocess_datasets.Rmd` orphaned (superseded by `src/py/preprocess.py`) — safe to remove
+  - `Process_data.ipynb` does not exist (replaced by `benchmark_methods_py.qmd`)
+  - `src/py/DRAFT_BARE_preprocess_sikkema.qmd` draft/exploratory — clean up when finalized
+  - `Figure_workflow_schematic.Rmd` orphaned (figure gen, unreferenced) — document or move
+  - `Processed_dataset_metadata.R` overlaps `datasets.json` — consolidate if needed
+  - 22 `plots/DELETE_*` files are stale — safe to remove
 
 ## Explain new cell type annotation pipeline
 Was adopted from another project because previous workflow was in r but parallelization constantly kept freezing workers and no approach was found that could prevent it.
@@ -71,6 +53,13 @@ Thus, a new cell type annotation was adopted that can be run on the HPC cluster 
 ## New methods to be added:
 - PILOT-GM-VAE (very similar to PILOT, needs to be added by agent to Process_data.ipynb)
 - MOFAcellular
+    - MOFAcellular needs to be tested for requirements
+
+
+# Add small test dataset for debugging `preprocess.py` and HPC pipeline
+- Subset the Joanito dataset to a small number of samples (e.g., 5, covering both biological conditions and batches (sequencing technologies)) for testing and subset to 500 cells per sample (using random subsetting)
+- Make it so that the output creates a non-batch as well as a batch view (think about how to best implement this. possibly it should not be added to data.json, but instead only be used in the pipeline)
+- check resulting file size of.h5ad file and decide whether to store in the repo or on the nas (and where on the nas)
 
 
 # preprocess.py
@@ -128,13 +117,19 @@ Requires complete overhaul
 
 # Batch effect analysis dataset info
 
-Should it be done once without batch correction, and once with? -> probably more important to only do WITH batch correction.
+Should it be done once without batch correction, and once with?
+- It is more important to do WITH batch correction
+- Show biological of non-batch corrected results for paper appendix?
 
 The final analysis for batch effect correction needs to be run on the following methods and batch effect mitigation strategies:
 - ECODA: remove cell types that are significantly different across batches
     - Possibly re-use process_coda_fig() with added argument batch_col = NULL?
-    - Use metadata column batch_col to test for batch-associated cell types (after clr-transformation), remove them and re-calculate clr-transformed cell type composition
+    - Use metadata column batch_col to test for batch-associated cell types (after clr-transformation)
+        - Possible methods:
+            - Simplest method: remove them and re-calculate clr-transformed cell type composition
+            - More complex method: batch correct applying something like a (mixed) linear model or similar method. Could limma be used?
         - Which statistical method to use and which threshold to use for significant difference between batches? -> Print warning naming cell types and Significance. -> Possibly depends on the number of batches:
+            - Test every cell type separately or, possibly better, check global variance of cell type composition across batches and see if it is different.
             - If 2 batches: use t-test or Wilcoxon rank-sum test, p-value < 0.05
             - If >2 batches: use ANOVA or Kruskal-Wallis test, p-value < 0.05
 - Pseudobulk (DESeq2 + limma)
