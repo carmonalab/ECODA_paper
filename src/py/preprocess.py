@@ -13,9 +13,21 @@ import re
 # R interop
 # ---------------------------------------------------------------------------
 ro.r('source("src/R/load_all_functions.R")')
+ro.r('''
+convert_rds_to_raw_h5ad <- function(input_path, output_path) {
+  seurat <- readRDS(input_path)
+  seurat <- create_clean_seuratv5_object(seurat)
+
+  if (!file.exists(output_path)) {
+    seurat@assays$RNA@data <- seurat@assays$RNA@counts
+    write_h5ad(seurat, output_path)
+    seurat@assays$RNA@data <- NULL
+  }
+}
+''')
 convert_rds_to_raw_h5ad_r = ro.globalenv["convert_rds_to_raw_h5ad"]
- 
- 
+
+
 # ---------------------------------------------------------------------------
 # Cell (row) subsetting for views
 # ---------------------------------------------------------------------------
