@@ -10,7 +10,7 @@ export PROJECT_ROOT="$2"
 CHUNK_FILE="$3"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../../slurm_bash_config.env"
+source "${SCRIPT_DIR}/../slurm_bash_config.env"
 
 log_msg() {
   local msg="$1"

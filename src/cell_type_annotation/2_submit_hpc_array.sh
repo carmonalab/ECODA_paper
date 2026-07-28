@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-source "$(dirname "${BASH_SOURCE[0]}")/../../slurm_bash_config.env"
+source "$(dirname "${BASH_SOURCE[0]}")/../slurm_bash_config.env"
 cd "${PROJECT_ROOT}"
 
 HOME_CHUNKS_DIR="${HOME}/${DS_NAME}/output/chunks"
