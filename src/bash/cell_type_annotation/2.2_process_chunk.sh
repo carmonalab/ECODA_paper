@@ -9,7 +9,8 @@ TASK_ID="$1"
 export PROJECT_ROOT="$2"
 CHUNK_FILE="$3"
 
-source "${PROJECT_ROOT}/config.env"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../../slurm_bash_config.env"
 
 log_msg() {
   local msg="$1"

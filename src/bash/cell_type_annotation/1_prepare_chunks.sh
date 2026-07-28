@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # 1. Load central config
-source "$(dirname "${BASH_SOURCE[0]}")/config.env"
+source "$(dirname "${BASH_SOURCE[0]}")/../../slurm_bash_config.env"
 cd "${PROJECT_ROOT}"
 mkdir -p "${PROJECT_ROOT}/logs"
 

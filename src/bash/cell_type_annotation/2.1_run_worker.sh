@@ -10,7 +10,8 @@
 
 set -euo pipefail
 
-source "./config.env"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../../slurm_bash_config.env"
 cd "${PROJECT_ROOT}"
 
 CHUNK_FILE="${HOME_CHUNKS_DIR}/chunk_${SLURM_ARRAY_TASK_ID}.txt"

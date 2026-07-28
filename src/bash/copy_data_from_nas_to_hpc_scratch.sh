@@ -5,7 +5,7 @@
 # Purpose: Parse datasets.json and copy corresponding dataset files from NAS to HPC
 # ==============================================================================
 
-source "$(dirname "${BASH_SOURCE[0]}")/config.env"
+source "$(dirname "${BASH_SOURCE[0]}")/../slurm_bash_config.env"
 
 # Check if jq is installed (required for JSON parsing)
 module load GCCcore/12.2.0
