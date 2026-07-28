@@ -152,21 +152,6 @@ df_results_list[["Benchmark"]] <- df_results
 ### All methods (overview)
 
 ```{r fig.height=8, fig.width=16}
-ggplot(df_results, aes(x = method, y = value)) +
-  geom_bar(stat = "identity", position = position_dodge()) +
-  labs(x = "",
-       y = "Separation") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
-        legend.position = "none") +
-  facet_grid(score ~ dataset,
-             scales = "free",
-             labeller = labeller(score = as_labeller(score_facet_labels), dataset = as_labeller(gs_dataset_facet_labels)))
-ggsave(file.path(path_plots, "benchmark_detailed_barplot.pdf"),
-       width = 150,
-       height = 7, limitsize = FALSE)
-
-
 df_results %>%
   group_by(score, method) %>%
   summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
@@ -3229,31 +3214,6 @@ ggsave(
 
 
 ggplot(df_results, aes(x = trans_method, y = value)) +
-  geom_bar(stat = "identity", position = position_dodge()) +
-  labs(x = "", y = "Separation score") +
-  theme_minimal() +
-  theme(
-    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
-    legend.position = "none"
-  ) +
-  facet_grid(
-    score ~ dataset,
-    scales = "free",
-    labeller = labeller(
-      score = as_labeller(score_facet_labels),
-      dataset = as_labeller(gs_dataset_facet_labels)
-    )
-  )
-# facet_grid(scales = "free",
-#            rows = vars(score_method), cols = vars(dataset))
-ggsave(
-  file.path(path_plots, "transformations_real_datasets_detailed_barplot.pdf"),
-  width = 8,
-  height = 7
-)
-
-
-ggplot(df_results, aes(x = trans_method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
   geom_point(aes(shape = dataset)) +
   geom_line(
@@ -3518,27 +3478,6 @@ df_results %>%
 ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_separatescores.pdf"),
        width = 3,
        height = 8)
-
-
-
-
-ggplot(df_results, aes(x = method, y = value)) +
-  geom_bar(stat = "identity", position = position_dodge()) +
-  labs(x = "Imputation method",
-       y = "Separation") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
-        legend.position = "none") +
-  facet_grid(score ~ dataset,
-             scales = "free",
-             labeller = labeller(
-      score   = as_labeller(score_facet_labels), 
-      dataset = as_labeller(gs_dataset_facet_labels)
-    ))
-ggsave(file.path(path_plots, "zero_imputation_real_datasets_detailed_barplot.pdf"),
-       width = 10,
-       height = 6)
-
 
 
 

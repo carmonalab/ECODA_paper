@@ -47,12 +47,6 @@ score_facet_labels <- c(
   "mod_knn3_score" = "Modularity score"
 )
 
-# GongSharma dataset facet labels
-gs_dataset_facet_labels <- c(
-  "GongSharma_cmv_females"         = "Gong & Sharma\nSubset: females\nSeparation by: CMV infection",
-  "GongSharma_age_females_cmvneg"  = "Gong & Sharma\nSubset: CMV negative females\nSeparation by: age"
-)
-
 # Dataset display label mappings
 dataset_label_map <- c(
   "Adams" = "Adams (pulmonary fibrosis)",
