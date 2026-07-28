@@ -36,7 +36,7 @@ Core script to run the benchmark and generate paper figures.
 # renv::init() && renv::restore() for dependency management
 
 source("src/R/load_all_functions.R")
-source("Processed_dataset_metadata.R")
+datasets <- read_datasets_json(view = "benchmark_analysis")
 
 # Set paths
 path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
@@ -64,10 +64,12 @@ if (file.exists(result_file)) {
 
 # Process datasets
 
-NOTE: Pre-processed (e.g. including cell type annotation, clustering, etc.) dataset .rds files (with shortened names) are deposited online at: <https://doi.org/10.6084/m9.figshare.31456522> . They can be used as input for the following code (after adapting the names according to the names defined in `"Processed_dataset_metadata.R"`):
+NOTE: Pre-processed (e.g. including cell type annotation, clustering, etc.) dataset .rds files (with shortened names) are deposited online at: <https://doi.org/10.6084/m9.figshare.31456522> . They can be used as input for the following code (after adapting the names according to the names defined in `"datasets.json"`):
 
 ```{r message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
 for (ds in names(datasets)) {
+  # h5ad_file <- file.path(path_data, datasets[[ds]]$output_file)
+  # Loading mechanism TBD — see TODO.md for h5ad loading task
   seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
   if (ds == "Stephenson") {
     seurat <- subset(seurat, subset = Site == "Ncl")
@@ -1824,15 +1826,10 @@ if (!file.exists(exec_times_path)) {
   exec_times$n_cells <- 0
   
   dss <- names(datasets)
-  dss <- dss[!dss %in% c("GongSharma_all_cmv", "GongSharma_all_sex")]
-  
-  exec_times <- exec_times[!exec_times$dataset %in% c("Gongsharma_sex_young_cmvneg", "Gongsharma_cmv_females_young", "Gongsharma_age_females_cmvneg"), ]
   
   for (ds in dss) {
     print(ds)
     seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
-    
-    if (ds == "GongSharma_all_age") ds <- "GongSharma_all"
     
     exec_times$n_cells[exec_times$dataset == ds] <- nrow(seurat@meta.data)
   }

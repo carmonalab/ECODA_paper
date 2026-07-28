@@ -112,15 +112,15 @@ Benchmarking:
 
 ### LAYER 6: Configuration & Data
 ```
-Processed_dataset_metadata.R
-└── datasets (list)
-    ├── "Adams" → {ds_name, label_col, low_res_ct_col, hi_res_ct_col}
-    ├── "Bassez"
-    ├── "Kfoury"
-    ├── "Kim"
-    ├── ... (12 datasets total)
+datasets.json (read by src/R/datasets_io.R::read_datasets_json())
+└── per-view entries
+    ├── "Adams" → benchmark_analysis view
+    │   ├── output_file: AdamsT_2020_32832599_benchmark_analysis_ECODAprocessed.h5ad
+    │   ├── label_col, low_res_ct_col, hi_res_ct_col (from dataset-level columns)
+    ├── ...
 ```
-Each dataset defines: source name, condition label column, low/high resolution cell type columns.
+Each view declares input_file_name (raw input) and output_file_name (preprocessed output).
+Dataset-level metadata (columns, display_name, tissue) is shared across views.
 
 ---
 

@@ -19,7 +19,7 @@ This script prepares datasets for downstream analysis
 
 ```{r message=FALSE, warning=FALSE}
 source("src/R/load_all_functions.R")
-source("Processed_dataset_metadata.R")
+datasets <- read_datasets_json(view = "batch_effect_analysis")
 
 # Set paths
 path_nas <- file.path(
@@ -428,6 +428,8 @@ ggsave(
 
 ```{r}
 ds <- "Stephenson"
+# h5ad_file <- file.path(path_data, datasets[[ds]]$output_file)
+# Loading mechanism TBD — see TODO.md for h5ad loading task
 seurat <- readRDS(file.path(
   path_data,
   paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)
@@ -466,6 +468,8 @@ print(paste("Number of cell types:", length(unique(seurat@meta.data$layer2))))
 
 ```{r}
 ds <- "Gongsharma_cmv_young_males"
+# h5ad_file <- file.path(path_data, datasets[[ds]]$output_file)
+# Loading mechanism TBD — see TODO.md for h5ad loading task
 seurat <- readRDS(file.path(
   path_data,
   paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)
