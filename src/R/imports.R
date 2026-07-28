@@ -43,7 +43,8 @@ my_packages <- c(
   "zoo",
   "parallelly",
   "patchwork",
-  "dplyr"
+  "dplyr",
+  "jsonlite"
 )
 
 # Function to attempt loading all packages quietly

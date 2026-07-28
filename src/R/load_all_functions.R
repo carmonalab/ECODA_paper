@@ -5,6 +5,7 @@
 
 # Load all modules in dependency order
 source("src/R/imports.R")           # Package imports
+source("src/R/datasets_io.R")       # datasets.json reader
 source("src/R/constants.R")         # Constants & configurations
 source("src/R/helpers.R")           # Utility helpers (exec_time, etc.)
 source("src/R/math_utils.R")        # Math/statistics utilities (clr, cv, impute_zeros)

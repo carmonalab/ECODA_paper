@@ -1,11 +1,42 @@
-# Implement new `datasets.json`
-- `Processed_dataset_metadata.R` is superseded by `datasets.json` — implement new datasets.json where possible (e.g. benchmark_analysis.rmd, preprocess.py, cell_type_annotation folder scripts, etc.)
-- After all scripts are updated, check and update `README.md`, `AGENTS.md` and `docs/ARCHITECTURE.md` if necessary
-- After all scripts are updated, delete `Processed_dataset_metadata.R` and check and update `TODO.md` (replace any references to Processed_dataset_metadata.R with the new datasets.json file)
+# Simplify constants.R dataset_label_map (not needed anymore as it is in datasets.json)
+- check where it is used (probably benchmark_analysis.rmd and batch_effect_analysis.rmd)
+- can be replaced by using display_name in datasets.json
+- clean up constants.R (remove `dataset_label_map`)
+
+# Implement new `datasets.json` [DONE]
+- `Processed_dataset_metadata.R` has been superseded by `datasets.json` with per-view file names.
+- See `.kilo/plans/1785183685924-implement-datasets-json.md` for implementation details.
+- Consumers: benchmark_analysis.rmd, batch_effect_analysis.rmd updated.
+- `Processed_dataset_metadata.R` deleted.
+- `preprocess.py` needs updating for the new structure (flat root, `input_file_name`/`output_file_name` fields) — deferred to HPC overhaul (see TBD below).
+
+# TBD (HPC cluster overhaul — out of scope for initial per-view migration)
+- Update `preprocess.py` to read flat datasets.json (no `["datasets"]` wrapper), use `input_file_name`/`output_file_name` per view, and handle array `input_file_name` for multi-file datasets (e.g. Gongsharma).
+    - Currently preprocess.py reads `json.load(f)["datasets"]` (KeyError) and `ds_info.get("file_name")` (None), so it crashes on the new datasets.json.
+    - The new bash wrappers (`run_worker_preprocess.sh`, `submit_job.sh`) need to be implemented as part of this overhaul (see "Update preprocessing" below).
+- Update `copy_data_from_nas_to_hpc_scratch.sh` to use the new `datasets.json` structure.
+
+# Implement h5ad loading in R (for preprocessed .h5ad files produced by preprocess.py)
+- Evaluate and implement the best approach to load h5ad files in benchmark_analysis.rmd and batch_effect_analysis.rmd:
+  - anndataR (R package for native AnnData loading)
+  - reticulate (Python anndata via rpy2)
+  - Convert h5ad to Seurat object (since some benchmarked R methods may need Seurat objects)
+- Update the loading code in both .rmd files once the approach is chosen
+- Additionally, the old `datasets[[ds]][["ds_name"]]` (file stem) field no longer exists in the new `read_datasets_json()` output. The RDS file-path construction in both .rmd files (5 references: benchmark_analysis.rmd lines 73, 1832, 3749; batch_effect_analysis.rmd lines 435, 475) needs to be updated as part of the migration to preprocessed .h5ad files.
+
+
+# Integrate multi-file preprocessing (e.g. Gongsharma h5ad files) into preprocess.py
+- Move the downsample_by_group() logic from preprocess_gongsharma.qmd into preprocess.py
+- Support array input_file_name in datasets.json views
+- This may require additional fields in datasets.json (out of scope for the initial per-view migration)
 
 
 # Check and compare gene name standardization for STACAS and bionty (see preprocess.py on how bionty is used in the pipeline)
 - Check how the gene standardization step (STACAS in R) is handled in Python (bionty's Gene.standardize) and what the gene nomenclature is in both and whether they are compatible with e.g. scATOMIC and HiTME (is bionty's gene nomenclature the same as STACAS?) (previously, the whole pipeline ran on STACAS-based gene names and it worked fine)
+
+
+# How to get the final number of cells and samples and cell type annotations?
+- Might be easiest to simply get them from .h5ad files (is this possible without loading the full object into memory?) (instead of adding them to the datasets.json file, which would cause it to bload and outdate)
 
 
 # Update repo structure
@@ -221,9 +252,10 @@ The final analysis for batch effect correction needs to be run on the following 
 
 ## Preprocessing
 - handle hvg calculation using correct batch_key
-    - datasets.json: add "columns" "batch"
-         - Joanito batch was manually defined at the end of batch_effect_analysis.rmd
-    - update datasets with batch column mapping
+    - datasets.json: add "columns" "batch" to batch_effect_analysis views
+    - For Joanito, the batch column must be created BEFORE preprocessing in preprocess.py (currently defined manually at end of batch_effect_analysis.rmd). The column needs to exist in the input data so preprocess.py can use it as batch_key for HVG selection and harmony integration.
+        - Approach: create batch column (e.g. combining sequencing technology/metadata fields) as part of data preparation, before preprocess.py runs.
+    - update datasets with batch column mapping in datasets.json
     - handle case where multiple datasets are combined (e.g. in batch_effect_analysis.rmd at "# Combined PBMC (Stephenson, GongSharma, Zhu)")
 
 ## Down-stream
