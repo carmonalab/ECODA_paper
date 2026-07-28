@@ -20,7 +20,7 @@ module load jq/1.6
 DATASET_NAMES=()
 while IFS= read -r name; do
   DATASET_NAMES+=("$name")
-done < <(jq -r '.datasets | keys[]' "${DATASETS_JSON_FILE}")
+done < <(jq -r 'keys[]' "${DATASETS_JSON_FILE}")
 
 IDX=$((SLURM_ARRAY_TASK_ID - 1))
 DS_NAME="${DATASET_NAMES[$IDX]}"

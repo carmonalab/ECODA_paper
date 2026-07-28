@@ -93,12 +93,13 @@
     "columns": {
       "sample": "sample.ID",
       "label": "sample.origin",
+      "batch": "seqtec",
       "cell_type_low_res": "cell.type",
       "cell_type_high_res": "cell.type"
     },
     "meta_cols_keep": [
       "sample.ID", "sample.origin", "patient.ID", "iCMS",
-      "dataset", "Gender", "Site", "cell.type"
+      "dataset", "Gender", "Site", "cell.type", "seqtec"
     ],
     "views": {
       "batch_effect_analysis": {
@@ -245,11 +246,12 @@
     "columns": {
       "sample": "Sample",
       "label": "Status",
+      "batch": "Site",
       "cell_type_low_res": "initial_clustering",
       "cell_type_high_res": "full_clustering"
     },
     "meta_cols_keep": [
-      "Sample", "Status", "Status_on_day_collection_summary",
+      "Sample", "Status", "Site", "Status_on_day_collection_summary",
       "Days_from_onset", "initial_clustering", "full_clustering"
     ],
     "views": {
@@ -324,26 +326,25 @@
       }
     }
   },
-  "Zhu": {
-    "display_name": "Zhu",
-    "folder_name": "ZhuH_2023_37379396",
+  "CombinedPBMC": {
+    "display_name": "Combined PBMC (Stephenson, GongSharma, Zhu)",
+    "folder_name": null,
     "tissue": "Blood",
     "normal_tissue": true,
     "use_for_benchmark": false,
     "use_for_batch_effect": true,
     "columns": {
       "sample": "Sample",
-      "label": "Sample",
+      "label": "cond",
+      "batch": "batch",
       "cell_type_low_res": null,
       "cell_type_high_res": null
     },
-    "meta_cols_keep": [
-      "Sample"
-    ],
+    "meta_cols_keep": ["Sample", "cond", "batch"],
     "views": {
       "batch_effect_analysis": {
-        "input_file_name": "ZhuH_2023_37379396whole.rds",
-        "output_file_name": "ZhuH_2023_37379396whole_batch_effect_analysis_ECODAprocessed.h5ad",
+        "input_file_name": "combined_pbmc_batch_effect_analysis.h5ad",
+        "output_file_name": "combined_pbmc_batch_effect_analysis_batch_effect_analysis_ECODAprocessed.h5ad",
         "subset_vars": {}
       }
     }

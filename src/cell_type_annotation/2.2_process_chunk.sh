@@ -63,11 +63,11 @@ source(file.path(project_root, "config_helper.R"))
 paths <- get_pipeline_config()
 
 library(scGate)
-library(STACAS)
 library(ProjecTILs)
 library(SignatuR)
 library(HiTME)
 library(Seurat)
+library(arrow)
 
 # Import anndata WITHOUT automatic R conversion
 library(reticulate)
@@ -111,14 +111,12 @@ get_sample_seurat_obj <- function(adata, r_obs, target_sample, sample_colname) {
 # Parse custom environment entries (falling back to original configurations if empty)
 env_sample_col  <- Sys.getenv("SAMPLE_COLNAME")
 env_tissue      <- Sys.getenv("TISSUE_TYPE")
-env_get_comp    <- Sys.getenv("GET_CELLTYPE_COMP")
 env_auth_annots <- Sys.getenv("AUTHOR_ANNOT_COLNAMES")
 
 defaults <- list(
-  chunk_file            = NULL, 
-  sample_colname        = if (env_sample_col != "") env_sample_col else "sample", 
-  tissue_type           = if (env_tissue != "") env_tissue else "Tumor", 
-  get_celltype_comp     = if (env_get_comp != "") as.logical(env_get_comp) else TRUE,
+  chunk_file            = NULL,
+  sample_colname        = if (env_sample_col != "") env_sample_col else "sample",
+  tissue_type           = if (env_tissue != "") env_tissue else "Tumor",
   author_annot_colnames = if (env_auth_annots != "") unlist(strsplit(env_auth_annots, ",")) else character()
 )
 
@@ -162,9 +160,6 @@ ref.maps_sketched <- list(
   MoMac = load.reference.map(file.path(paths$path_ref, "sketched_MoMac_human_v1.rds"))
 )
 
-### Load gene symbols ref ####
-geneRef <- data.table::fread(paths$gene_ref)
-
 
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 ## Process data ######
@@ -187,91 +182,56 @@ if (!args$sample_colname %in% colnames(obs)) {
 # PROCESSING LOOP
 # ==============================================================================
 message(paste("--- Starting processing for chunk file:", args$chunk_file, "---"))
-for (target_sample in samples_to_process) {
-  message(paste("--- Processing sample:", target_sample, "---"))
 
-  processed_file_path <- file.path(paths$path_output_samples, paste0(target_sample, ".rds"))
-  if (file.exists(processed_file_path)) {
-    message("Sample already processed. Skipping.")
-    next
-  }
+chunk_id <- Sys.getenv("SLURM_ARRAY_TASK_ID")
+annot_file <- file.path(paths$path_output, paste0("annotations_chunk_", chunk_id, ".feather"))
+if (file.exists(annot_file)) {
+  message(paste("Chunk already processed. Annotations exist at:", annot_file))
+} else {
+  annotations_list <- list()
+  for (target_sample in samples_to_process) {
+    message(paste("--- Processing sample:", target_sample, "---"))
 
-  seurat_obj <- get_sample_seurat_obj(
-    adata, obs, target_sample, args$sample_colname
-  )
-
-  ### Standardize gene symbols ####
-  seurat_obj <- STACAS::StandardizeGeneSymbols(
-    seurat_obj, geneRef,
-    assay = "RNA", slots = "counts"
-  )
-
-  ### Annotate cells ####
-  if (args$tissue_type == "Blood") {
-    seurat_obj <- Run.HiTME(
-      object = seurat_obj,
-      scGate.model = scGate_models_blood,
-      ref.maps = ref.maps_sketched,
-      verbose = FALSE,
-      ncores = 1
+    seurat_obj <- get_sample_seurat_obj(
+      adata, obs, target_sample, args$sample_colname
     )
-  } else {
-    seurat_obj <- Run.HiTME(
-      object = seurat_obj,
-      scGate.model = scGate_models_tumor,
-      ref.maps = ref.maps_sketched,
-      verbose = FALSE,
-      ncores = 1
-    )
-  }
 
-  saveRDS(seurat_obj, file = processed_file_path)
-
-  if (args$get_celltype_comp) {
-    meta <- seurat_obj@meta.data
-    meta <- meta[, !grepl("_UCell|is.pure_|.pseudocounts", colnames(meta))]
-    
-    # --- Part A: Constant Metadata ---
-    # Identify columns where there is only 1 unique value
-    is_constant <- sapply(meta, function(x) length(unique(x)) == 1)
-    constant_df <- meta[1, is_constant, drop = FALSE]
-    constant_df$sample <- target_sample
-
-    # --- Part B: Cell Type Composition ---
-    # HiTME
-    # Calculate counts for layer1, layer2 and layer3
-    # Convert to a dataframe for easier merging later
-    comp_1 <- as.data.frame(table(layer1 = meta$layer1))
-    comp_2 <- as.data.frame(table(layer2 = meta$layer2))
-    comp_3 <- as.data.frame(table(layer3 = meta$layer3))
-
-    ecoda <- list(
-      metadata = constant_df,
-      cell_counts = list(
-        HiTME = list(
-          layer1 = comp_1,
-          layer2 = comp_2,
-          layer3 = comp_3
-        )
+    ### Annotate cells ####
+    if (args$tissue_type == "Blood") {
+      seurat_obj <- Run.HiTME(
+        object = seurat_obj,
+        scGate.model = scGate_models_blood,
+        ref.maps = ref.maps_sketched,
+        verbose = FALSE,
+        ncores = 1
       )
-    )
-
-    # Optional: author annotations
-    if (length(args$author_annot_colnames) > 0) {
-      for (annot_col in args$author_annot_colnames) {
-        if (annot_col %in% colnames(meta)) {
-          comp <- as.data.frame(table(temp_name = meta[, annot_col]))
-          colnames(comp)[1] <- paste0("authors_", annot_col)
-          ecoda$cell_counts[[annot_col]] <- comp
-        }
-      }
+    } else {
+      seurat_obj <- Run.HiTME(
+        object = seurat_obj,
+        scGate.model = scGate_models_tumor,
+        ref.maps = ref.maps_sketched,
+        verbose = FALSE,
+        ncores = 1
+      )
     }
-    saveRDS(ecoda, file = file.path(paths$path_output_ecoda, paste0(target_sample, ".rds")))
+
+    ### Extract annotations ####
+    meta <- seurat_obj@meta.data
+    annot <- meta[, c("layer1", "layer2", "layer3"), drop = FALSE]
+    annot$cell_barcode <- rownames(annot)
+    annot$sample <- target_sample
+    annotations_list[[target_sample]] <- annot
+
+    rm(seurat_obj)
+    gc()
   }
 
-  rm(seurat_obj)
-  gc()
+  annotations_df <- do.call(rbind, annotations_list)
+  rownames(annotations_df) <- NULL
+  write_feather(annotations_df, annot_file)
+  message(paste("Wrote annotations to:", annot_file))
 }
+
 message(paste("---", args$chunk_file, "processing complete! ---"))
 RS
 

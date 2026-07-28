@@ -10,14 +10,23 @@ cd "${PROJECT_ROOT}"
 echo "=== Phase 1: Staging data from NAS to HPC scratch ==="
 mkdir -p "${HPC_SCRATCH_DIR}"
 
-jq -r '.datasets | to_entries[] | "\(.value.folder_name) \(.value.file_name)"' "${DATASETS_JSON_FILE}" | \
-while read -r DS_NAME RAW_FILE_NAME; do
-    if [ "$DS_NAME" == "null" ] || [ -z "$DS_NAME" ]; then
+jq -r '
+  to_entries[] |
+  .key as $key |
+  .value.folder_name as $folder |
+  .value.views |
+  to_entries[] |
+  .value.input_file_name |
+  if type == "array" then .[] else . end |
+  "\($folder) \(.)"
+' "${DATASETS_JSON_FILE}" | sort -u | \
+while read -r FOLDER_NAME RAW_FILE_NAME; do
+    if [ "$FOLDER_NAME" == "null" ] || [ -z "$FOLDER_NAME" ]; then
         continue
     fi
 
-    NAS_FILE_PATH="${NAS_SC_DIR}/${DS_NAME}/output/${RAW_FILE_NAME}"
-    echo "Dataset: ${DS_NAME}"
+    NAS_FILE_PATH="${NAS_SC_DIR}/${FOLDER_NAME}/output/${RAW_FILE_NAME}"
+    echo "Dataset folder: ${FOLDER_NAME}, file: ${RAW_FILE_NAME}"
 
     if [ -f "$NAS_FILE_PATH" ]; then
         rsync -ah --progress "$NAS_FILE_PATH" "$HPC_SCRATCH_DIR"
@@ -40,7 +49,7 @@ module load jq/1.6
 DATASET_NAMES=()
 while IFS= read -r name; do
   DATASET_NAMES+=("$name")
-done < <(jq -r '.datasets | keys[]' "${DATASETS_JSON_FILE}")
+done < <(jq -r 'keys[]' "${DATASETS_JSON_FILE}")
 
 NUM_DATASETS=${#DATASET_NAMES[@]}
 if [[ ${NUM_DATASETS} -eq 0 ]]; then
