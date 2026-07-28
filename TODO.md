@@ -3,13 +3,6 @@
 - can be replaced by using display_name in datasets.json
 - clean up constants.R (remove `dataset_label_map`)
 
-# Implement new `datasets.json` [DONE]
-- `Processed_dataset_metadata.R` has been superseded by `datasets.json` with per-view file names.
-- See `.kilo/plans/1785183685924-implement-datasets-json.md` for implementation details.
-- Consumers: benchmark_analysis.rmd, batch_effect_analysis.rmd updated.
-- `Processed_dataset_metadata.R` deleted.
-- `preprocess.py` needs updating for the new structure (flat root, `input_file_name`/`output_file_name` fields) — deferred to HPC overhaul (see TBD below).
-
 # TBD (HPC cluster overhaul — out of scope for initial per-view migration)
 - Update `preprocess.py` to read flat datasets.json (no `["datasets"]` wrapper), use `input_file_name`/`output_file_name` per view, and handle array `input_file_name` for multi-file datasets (e.g. Gongsharma).
     - Currently preprocess.py reads `json.load(f)["datasets"]` (KeyError) and `ds_info.get("file_name")` (None), so it crashes on the new datasets.json.
