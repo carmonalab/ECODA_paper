@@ -267,6 +267,9 @@ Or more precisely, the view-specific output filename from datasets.json.
 
 ## Step 5 — Downstream Python Benchmarks & Batch Mitigation
 
+Re-purpose `benchmark_methods_py.qmd` (and rename) to process py methods for benchmark and batch effect analyses, respectively.
+Methods need to be adapted whether they run on benchmark view or batch effect view.
+
 ### 5a. Convert benchmark_methods_py.qmd to .py
 
 The .qmd file (Quarto notebook) needs to be converted to a standalone .py script suitable for SLURM batch submission.
@@ -282,12 +285,13 @@ Changes:
   - `sc.pp.pca()`
   → These are already applied in the preprocessed .h5ad; just load and use `adata.obsm["X_pca"]` etc.
 
-### 5b. Add batch correction parameters per method
+### 5b. Add batch correction parameters per method (only for batch effect analysis views)
 
-- **MrVI**: pass `batch_key` to `MRVI.setup_anndata(adata, sample_key="Sample", batch_key=batch_col)`
-- **PILOT-GM-VAE**: read `X_pca_harmony` from preprocessed .h5ad as input embeddings
+- **MrVI**: pass `batch_key` to `MRVI.setup_anndata(adata, sample_key="Sample", batch_key=batch_col)` (for batch effect analysis, use current setup for benchmark view)
+- **PILOT-GM-VAE**: Needs to be implemented. read `X_pca_harmony` from preprocessed .h5ad as input embeddings (for batch effect analysis, use current setup from PILOT (use uncorrected PCA) for benchmark view)
 - **scPoli**: no batch correction (used for benchmark only, not batch effect)
 - **PILOT**: keep as-is (uses uncorrected PCA)
+- Add QOT, PULSAR
 
 ### 5c. Write SLURM wrappers
 
