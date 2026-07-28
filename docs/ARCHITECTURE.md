@@ -127,7 +127,7 @@ Dataset-level metadata (columns, display_name, tissue) is shared across views.
 ## Complete Call Flow (Simplified)
 
 ```
-MAIN_Analysis.Rmd / Preprocess_datasets.Rmd
+notebooks/benchmark_analysis.rmd
     │
     ▼
 run_analyses(ds, seurat)
@@ -169,7 +169,7 @@ run_analyses(ds, seurat)
 
 3. **Pipeline Pattern**: Data flows linearly: Raw Seurat Object → Pseudobulk → Feature Matrix → Distance Matrix → Scores.
 
-4. **Centralized Label Mapping**: Method/score/dataset label mappings are defined once at the top of `functions.R` and reused via `apply_method_labels()`.
+4. **Centralized Label Mapping**: Method/score/dataset label mappings are defined once in `src/utils/constants.R` and reused via `apply_method_labels()`.
 
 5. **Caching/Skip Logic**: `if (!method_name %in% names(res_list))` checks prevent re-running already-computed methods.
 
@@ -177,7 +177,7 @@ run_analyses(ds, seurat)
 
 ## Dependency Summary
 
-- **42 named functions** in `functions.R`
+- **42 named functions** in `src/benchmark/benchmark_pipeline.R` and `src/benchmark/benchmark_methods_r.R`
 - **`create_result_bundle`** has the most callers (12) — it's the central evaluation hub
 - **`calc_sep_score`** has 5 callers
 - **`process_coda_fig`** is the most frequently invoked method processor (called ~20+ times with different parameters)
