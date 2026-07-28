@@ -1,3 +1,10 @@
+# -- RESOLVED: Gene name standardization --
+# bionty was replaced with a flat-file Ensembl 105 reference
+# (aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz), the same reference used by
+# STACAS. No compatibility concerns with scATOMIC/HiTME.
+# See _load_ensembl105_map() + standardize_gene_symbols() in src/py/preprocess.py.
+
+
 # TBD (HPC cluster overhaul — out of scope for initial per-view migration)
 - Update `preprocess.py` to read flat datasets.json (no `["datasets"]` wrapper), use `input_file_name`/`output_file_name` per view, and handle array `input_file_name` for multi-file datasets (e.g. Gongsharma).
     - Currently preprocess.py reads `json.load(f)["datasets"]` (KeyError) and `ds_info.get("file_name")` (None), so it crashes on the new datasets.json.
@@ -19,8 +26,6 @@
 - This may require additional fields in datasets.json (out of scope for the initial per-view migration)
 
 
-# Check and compare gene name standardization for STACAS and bionty (see preprocess.py on how bionty is used in the pipeline)
-- Check how the gene standardization step (STACAS in R) is handled in Python (bionty's Gene.standardize) and what the gene nomenclature is in both and whether they are compatible with e.g. scATOMIC and HiTME (is bionty's gene nomenclature the same as STACAS?) (previously, the whole pipeline ran on STACAS-based gene names and it worked fine)
 
 
 # How to get the final number of cells and samples and cell type annotations?

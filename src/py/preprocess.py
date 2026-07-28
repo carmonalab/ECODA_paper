@@ -3,7 +3,6 @@ import json
 import scanpy as sc
 import rpy2.robjects as ro
 import scipy.sparse as sp
-import bionty as bt
 from pathlib import Path
 import pandas as pd
 import re
@@ -135,13 +134,46 @@ def run_downstream_for_gene_set(
  
  
 # ---------------------------------------------------------------------------
+# Ensembl 105 gene name standardization (replaces bionty)
+# ---------------------------------------------------------------------------
+_ENSEMBL105_MAP = None
+
+def _load_ensembl105_map():
+    global _ENSEMBL105_MAP
+    if _ENSEMBL105_MAP is not None:
+        return _ENSEMBL105_MAP
+    project_root = Path(__file__).resolve().parents[2]
+    path = project_root / "aux" / "EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+    df = pd.read_csv(path, sep="\t")
+
+    identity = df[["Gene name", "Gene name"]].drop_duplicates()
+    identity.columns = ["key", "value"]
+
+    aliases = df[["Gene Synonym", "Gene name"]].copy()
+    aliases.columns = ["key", "value"]
+    aliases = aliases.dropna(subset=["key"])
+    aliases = aliases[aliases["key"] != ""]
+
+    combined = pd.concat([identity, aliases], ignore_index=True)
+    combined = combined[~combined["key"].duplicated(keep="first")]
+
+    _ENSEMBL105_MAP = dict(zip(combined["key"], combined["value"]))
+    return _ENSEMBL105_MAP
+
+
+def standardize_gene_symbols(adata):
+    gene_map = _load_ensembl105_map()
+    adata.var_names = [gene_map.get(g, g) for g in adata.var_names]
+
+
+# ---------------------------------------------------------------------------
 # Shared setup: gene standardization + counts vaulting + normalize/log
 # ---------------------------------------------------------------------------
 def base_preprocessing(adata):
     sc.pp.filter_cells(adata, min_genes=100)
     sc.pp.filter_genes(adata, min_cells=3)
 
-    adata.var_names = bt.Gene.standardize(adata.var_names, organism="human")
+    standardize_gene_symbols(adata)
     adata.var_names_make_unique()
  
     if "counts" not in adata.layers:
