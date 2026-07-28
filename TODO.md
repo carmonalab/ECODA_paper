@@ -5,6 +5,9 @@
 - the output path in `src/preprocess/_create_combinedpbmc_dataset.py` is fine. However, at the end of the preprocessing and cell type annotation, files should be synced back to the NAS for backup and long-term storage. Also all the results created from `benchmark_methods_r.R` and `benchmark_methods_py.R` (significant data processing) should be synced back to the NAS.
 - Update TODO.md (see below)
 - Added back config_helper.R (legacy file for the cell type annotation pipeline bash scripts that were imported from another repo. Needs to be checked if still needed and also adapted, including the whole SLURM pipeline major overhaul, standardization and centralization (e.g. of environment variables and possibly bash scripts))
+- check run_worker.sh scripts for memory usage:
+    - `src/cell_type_annotation/2.1_run_worker.sh` Using fixed #SBATCH --mem=8G might be enough for most samples but should be checked. Possibly add check if it ran and if not, rerun with 16GB (or 32GB)
+    - `src/preprocess/1.1_run_worker.sh` Using fixed #SBATCH --mem=8G is for sure not enough for most datasets. Needs some RAM allocation logic to estimate required RAM or fallback logic to increase if needed.
 
 # Pipeline Overhaul Execution Plan
 
