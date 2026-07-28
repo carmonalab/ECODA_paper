@@ -1,8 +1,3 @@
-# Simplify constants.R dataset_label_map (not needed anymore as it is in datasets.json)
-- check where it is used (probably benchmark_analysis.rmd and batch_effect_analysis.rmd)
-- can be replaced by using display_name in datasets.json
-- clean up constants.R (remove `dataset_label_map`)
-
 # TBD (HPC cluster overhaul — out of scope for initial per-view migration)
 - Update `preprocess.py` to read flat datasets.json (no `["datasets"]` wrapper), use `input_file_name`/`output_file_name` per view, and handle array `input_file_name` for multi-file datasets (e.g. Gongsharma).
     - Currently preprocess.py reads `json.load(f)["datasets"]` (KeyError) and `ds_info.get("file_name")` (None), so it crashes on the new datasets.json.
@@ -246,6 +241,7 @@ The final analysis for batch effect correction needs to be run on the following 
 ## Preprocessing
 - handle hvg calculation using correct batch_key
     - datasets.json: add "columns" "batch" to batch_effect_analysis views
+    - Create low res cell types for Kfoury dataset (see Preprocess_datasets.Rmd for details)
     - For Joanito, the batch column must be created BEFORE preprocessing in preprocess.py (currently defined manually at end of batch_effect_analysis.rmd). The column needs to exist in the input data so preprocess.py can use it as batch_key for HVG selection and harmony integration.
         - Approach: create batch column (e.g. combining sequencing technology/metadata fields) as part of data preparation, before preprocess.py runs.
     - update datasets with batch column mapping in datasets.json

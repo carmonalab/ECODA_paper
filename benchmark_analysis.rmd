@@ -37,6 +37,8 @@ Core script to run the benchmark and generate paper figures.
 
 source("src/R/load_all_functions.R")
 datasets <- read_datasets_json(view = "benchmark_analysis")
+dataset_display_map <- sapply(datasets, `[[`, "display_name")
+dataset_display_map[["GongSharma"]] <- dataset_display_map[["Gongsharma_cmv_young_males"]]
 
 # Set paths
 path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
@@ -1993,7 +1995,7 @@ clean_data <- df_results_bmark %>%
                          "PILOT_hvg2000" = "PILOT",
                          "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
   mutate(score = recode(score, !!!score_label_map),
-  dataset = recode(dataset, !!!dataset_label_map))
+  dataset = recode(dataset, !!!dataset_display_map))
 
 # --- 2. CALCULATE GEOMETRIC MEAN OF RANKS (NEW STEP) ---
 df_ranks <- clean_data %>%
@@ -2432,7 +2434,7 @@ clean_data <- df_results_bmark %>%
                          "PILOT_hvg2000" = "PILOT",
                          "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
   mutate(score = recode(score, !!!score_label_map),
-  dataset = recode(dataset, !!!dataset_label_map))
+  dataset = recode(dataset, !!!dataset_display_map))
 
 # --- 2. CALCULATE GEOMETRIC MEAN OF RANKS (NEW STEP) ---
 df_ranks <- clean_data %>%
@@ -2756,7 +2758,7 @@ clean_data <- df_results_bmark %>%
                          "PILOT_hvg2000" = "PILOT",
                          "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
   mutate(score = recode(score, !!!score_label_map),
-  dataset = recode(dataset, !!!dataset_label_map))
+  dataset = recode(dataset, !!!dataset_display_map))
 
 # --- 2. CALCULATE GEOMETRIC MEAN OF RANKS (NEW STEP) ---
 df_ranks <- clean_data %>%

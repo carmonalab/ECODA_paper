@@ -46,21 +46,3 @@ score_facet_labels <- c(
   "cluster_score" = "Adjusted rand index",
   "mod_knn3_score" = "Modularity score"
 )
-
-# Dataset display label mappings
-dataset_label_map <- c(
-  "Adams" = "Adams (pulmonary fibrosis)",
-  "Bassez" = "Bassez (ICB treatment response)",
-  "GongSharma" = "GongSharma (healthy, CMV)",
-  "GongSharma_all_age" = "GongSharma (healthy, age)",
-  "GongSharma_all_cmv" = "GongSharma (healthy, CMV)",
-  "GongSharma_all_sex" = "GongSharma (healthy, sex)",
-  "Kfoury" = "Kfoury (prostate metastasis)",
-  "Kim" = "Kim (metastatic lung adenocarcinoma)",
-  "Lee" = "Lee (ICB treatment vs naive)",
-  "Pelka" = "Pelka (colon cancer vs control)",
-  "Smillie" = "Smillie (ulcerative colitis)",
-  "Stephenson" = "Stephenson (COVID-19)",
-  "Wu" = "Wu (breast cancer subtype)",
-  "Zhang" = "Zhang (tissue)"
-)
