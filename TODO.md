@@ -9,75 +9,79 @@ Five ordered steps to modernize the ECODA_paper pipeline: foundation restructure
 ## Step 1 — Foundation: SLURM Config & Directory Restructure
 
 ### 1a. Centralize SLURM environment variables
-- [!] Create `src/slurm_bash_config.env` from `src/bash/config.env`
-- [!] Add: `SLURM_ACCOUNT`, `SLURM_PARTITION`, `MAX_NUM_CHUNKS_PARALLEL`, `USER_EMAIL`, `NAS_TARGET_DIR`, `SCRATCH_OUTPUT_DIR`, `HOME_CHUNKS_DIR`
-- [!] Source this file from all bash scripts that need it
-- [!] Remove `src/bash/config.env` (replaced by centralized file)
+- [x] Create `src/slurm_bash_config.env` from `src/bash/config.env`
+- [x] Add: `SLURM_ACCOUNT`, `SLURM_PARTITION`, `MAX_NUM_CHUNKS_PARALLEL`, `USER_EMAIL`, `NAS_TARGET_DIR`, `SCRATCH_OUTPUT_DIR`, `HOME_CHUNKS_DIR`
+- [x] Source this file from all bash scripts that need it
+- [x] Remove `src/bash/config.env` (replaced by centralized file)
 
 ### 1b. Move files to target structure
 
-Target layout (from TODO.md):
+Current layout (after Step 1b):
 
 ```
 ECODA_paper/
+├── Figure_workflow_schematic.Rmd   # remains at root
+├── Preprocess_datasets.Rmd          # remains at root
+├── datasets.json
 ├── notebooks/
-│   ├── QC_filtering/               # entire folder + contents
+│   ├── QC_filtering/               # moved from root
 │   ├── batch_effect_analysis.rmd
 │   └── benchmark_analysis.rmd
-└── src/
-    ├── slurm_bash_config.env
-    ├── utils/                      # R files: constants.R, helpers.R, hvcs.R, ...
-    ├── preprocess/
-    │   ├── 1_copy_data_from_nas_to_hpc_scratch.sh
-    │   ├── TODO_STUMP_2_submit_hpc_array.sh → 2_submit_hpc_array.sh
-    │   ├── TODO_STUMP_2.1_run_worker.sh → 2.1_run_worker.sh
-    │   ├── 2.2_preprocess.py       # moved from src/py/preprocess.py
-    │   ├── TODO_STUMP_preprocess_sikkema.qmd
-    │   └── preprocess_gongsharma.qmd
-    ├── cell_type_annotation/       # stays as-is (already in src/bash/)
-    └── benchmark/
-        ├── benchmark_methods_r.R
-        ├── benchmark_pipeline.R
-        └── run_python_sample_embedding_methods/
-            ├── TODO_STUMP_1_submit_hpc_array.sh
-            ├── TODO_STUMP_1.1_run_worker.sh
-            └── 1.2_benchmark_methods_py.qmd
+├── src/
+│   ├── slurm_bash_config.env       # from src/bash/config.env
+│   ├── utils/                      # R files from src/R/
+│   ├── preprocess/
+│   │   ├── 1_submit_hpc_array.sh   # new (stages data + submits array)
+│   │   ├── 1.1_run_worker.sh       # new (worker script)
+│   │   ├── 1.2_preprocess.py       # from src/py/preprocess.py (renumbered)
+│   │   ├── TODO_STUMP_preprocess_sikkema.qmd
+│   │   └── preprocess_gongsharma.qmd
+│   ├── cell_type_annotation/       # from src/bash/cell_type_annotation/
+│   └── benchmark/
+│       ├── benchmark_methods_r.R   # from src/R/
+│       ├── benchmark_pipeline.R    # from src/R/
+│       └── run_python_sample_embedding_methods/
+│           ├── TODO_STUMP_1_submit_hpc_array.sh
+│           ├── TODO_STUMP_1.1_run_worker.sh
+│           └── 1.2_benchmark_methods_py.qmd
 ```
 
 Move operations (git mv):
 1. `QC_filtering/` → `notebooks/QC_filtering/`
 2. `batch_effect_analysis.rmd` → `notebooks/batch_effect_analysis.rmd`
 3. `benchmark_analysis.rmd` → `notebooks/benchmark_analysis.rmd`
-4. `src/R/*.R` → `src/utils/*.R` (each of the 13 .R files)
-5. `src/py/preprocess.py` → `src/preprocess/2.2_preprocess.py`
+4. `src/R/*.R` → `src/utils/*.R` (11 files: imports, constants, helpers, math_utils, scoring_metrics, pseudobulk, hvcs, seurat_utils, plotting, datasets_io, load_all_functions)
+5. `src/py/preprocess.py` → `src/preprocess/1.2_preprocess.py` (renumbered from planned 2.2 → 1.2)
 6. `src/py/DRAFT_BARE_preprocess_sikkema.qmd` → `src/preprocess/TODO_STUMP_preprocess_sikkema.qmd`
 7. `src/py/preprocess_gongsharma.qmd` → `src/preprocess/preprocess_gongsharma.qmd`
-8. `src/bash/copy_data_from_nas_to_hpc_scratch.sh` → `src/preprocess/1_copy_data_from_nas_to_hpc_scratch.sh`
-9. `src/bash/preprocess/submit_job.sh` → `src/preprocess/2_submit_hpc_array.sh` (rename + implement)
-10. `src/bash/preprocess/run_worker_preprocess.sh` → `src/preprocess/2.1_run_worker.sh` (rename + implement)
-11. `src/bash/config.env` → `src/slurm_bash_config.env` (rename + extend)
-12. `src/bash/cell_type_annotation/*` → `src/cell_type_annotation/*` (move up one level)
-13. `src/R/load_all_functions.R` → `src/utils/load_all_functions.R`
-14. `src/R/benchmark_pipeline.R` → `src/benchmark/benchmark_pipeline.R`
-15. `src/R/benchmark_methods_r.R` → `src/benchmark/benchmark_methods_r.R`
-16. `src/py/benchmark_methods_py.qmd` → `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd`
+8. `src/py/benchmark_methods_py.qmd` → `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd`
+9. `src/bash/config.env` → `src/slurm_bash_config.env` (rename + extend)
+10. `src/bash/cell_type_annotation/*` → `src/cell_type_annotation/*` (move up one level)
+11. `src/R/load_all_functions.R` → `src/utils/load_all_functions.R`
+12. `src/R/benchmark_pipeline.R` → `src/benchmark/benchmark_pipeline.R`
+13. `src/R/benchmark_methods_r.R` → `src/benchmark/benchmark_methods_r.R`
+
+Additional changes:
+- `src/bash/copy_data_from_nas_to_hpc_scratch.sh` **deleted** — copy logic absorbed into `src/preprocess/1_submit_hpc_array.sh` (runs on login node before sbatch)
+- `src/bash/preprocess/submit_job.sh` **deleted** (empty/stale) — replaced by `src/preprocess/1_submit_hpc_array.sh`
+- `src/bash/preprocess/run_worker_preprocess.sh` **deleted** (empty/stale) — replaced by `src/preprocess/1.1_run_worker.sh`
+- `src/R/` and `src/bash/` directories removed after migration
 
 ### 1c. Update all internal path references
-- `src/R/load_all_functions.R` sources → `src/utils/`
-- `preprocess.py` line 14: `ro.r('source("src/R/load_all_functions.R")')` → `src/utils/load_all_functions.R`
-- `src/bash/cell_type_annotation/*` hardcoded paths → use `src/slurm_bash_config.env`
-- `notebooks/batch_effect_analysis.rmd` and `benchmark_analysis.rmd` source calls → `src/utils/`
-- `copy_data_from_nas_to_hpc_scratch.sh` dataset iteration → use new datasets.json schema
+- [x] `src/utils/load_all_functions.R` sources → `src/utils/` + `src/benchmark/`
+- [x] `preprocess.py` line 14: `ro.r('source("src/utils/load_all_functions.R")')`
+- [x] `src/cell_type_annotation/` scripts: source depth `../../` → `../`; `config.env` → `src/slurm_bash_config.env`
+- [x] `notebooks/batch_effect_analysis.rmd` and `benchmark_analysis.rmd` source calls → `src/utils/load_all_functions.R`
 
 ### 1d. Update documentation
-- `docs/ARCHITECTURE.md`: update file paths, module table, call graph
-- `AGENTS.md`: update "Pipeline Overview" directory paths, "R Modules" table
-- `README.md` if needed
+- [x] `docs/ARCHITECTURE.md`: update file paths, module table, call graph
+- [x] `AGENTS.md`: update "Pipeline Overview" directory paths, "R Modules" table
+- [x] `README.md` path updates
 
 ### Validation
-- `source("src/utils/load_all_functions.R")` executes without error in R
-- `ls` confirms all target directories exist with correct files
-- All stale files at old locations are removed
+- [x] `source("src/utils/load_all_functions.R")` executes without error in R
+- [x] `ls` confirms all target directories exist with correct files
+- [x] All stale files at old locations removed
 
 ---
 
@@ -316,26 +320,30 @@ Changes:
 
 ---
 
-## Quick Reference: Files to Create vs Modify
+## Quick Reference: Files Created vs Modified (Step 1 completed)
 
-| File | Action |
-|---|---|
-| `src/slurm_bash_config.env` | **Create** (from config.env + new vars) |
-| `src/preprocess/2.2_preprocess.py` | **Move + rewrite** (from src/py/preprocess.py) |
-| `src/preprocess/2_submit_hpc_array.sh` | **Create** (empty → full implementation) |
-| `src/preprocess/2.1_run_worker.sh` | **Create** (empty → full implementation) |
-| `src/preprocess/1_copy_data_from_nas_to_hpc_scratch.sh` | **Move + rewrite** (from src/bash/) |
-| `src/preprocess/_create_debug_dataset.R` | **Create** |
-| `aux/genes_blocklist.txt` | **Create** (extract from genes.blocklist.rds) |
-| `datasets.json` | **Modify** (add `columns.batch`, add debug entry) |
-| `notebooks/benchmark_analysis.rmd` | **Move + modify** |
-| `notebooks/batch_effect_analysis.rmd` | **Move + modify** |
-| `src/benchmark/benchmark_methods_r.R` | **Move** (from src/R/) |
-| `src/benchmark/benchmark_pipeline.R` | **Move** (from src/R/) |
-| `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd` | **Move + convert to .py** |
-| Remaining `src/R/*.R` → `src/utils/*.R` | **Move** (13 files) |
-| `docs/ARCHITECTURE.md` | **Modify** |
-| `AGENTS.md` | **Modify** |
+| File | Action | Status |
+|---|---|---|
+| `src/slurm_bash_config.env` | **Create** (from config.env + new vars) | Done |
+| `src/preprocess/1.2_preprocess.py` | **Move** (from src/py/preprocess.py, renumbered) | Done |
+| `src/preprocess/1_submit_hpc_array.sh` | **Create** (new — stages data + submits array) | Done |
+| `src/preprocess/1.1_run_worker.sh` | **Create** (new — worker script) | Done |
+| `src/preprocess/_create_debug_dataset.R` | **Create** | Pending (Step 2) |
+| `aux/genes_blocklist.txt` | **Create** (extract from genes.blocklist.rds) | Pending (Step 3c) |
+| `datasets.json` | **Modify** (add `columns.batch`, add debug entry) | Pending (Step 3d) |
+| `notebooks/benchmark_analysis.rmd` | **Move** (from root) | Done |
+| `notebooks/batch_effect_analysis.rmd` | **Move** (from root) | Done |
+| `src/benchmark/benchmark_methods_r.R` | **Move** (from src/R/) | Done |
+| `src/benchmark/benchmark_pipeline.R` | **Move** (from src/R/) | Done |
+| `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd` | **Move** (from src/py/) | Done |
+| Remaining `src/R/*.R` → `src/utils/*.R` | **Move** (11 files) | Done |
+| `docs/ARCHITECTURE.md` | **Modify** | Done |
+| `AGENTS.md` | **Modify** | Done |
+| `README.md` | **Modify** | Done |
+| `src/bash/config.env` | **Delete** (replaced by slurm_bash_config.env) | Done |
+| `src/bash/copy_data_from_nas_to_hpc_scratch.sh` | **Delete** (absorbed into submit script) | Done |
+| `src/bash/preprocess/` | **Delete** (stale empty files) | Done |
+| `src/bash/cell_type_annotation/*` | **Move** → `src/cell_type_annotation/` | Done |
 
 
 
@@ -345,9 +353,9 @@ Changes:
 
 # TBD (HPC cluster overhaul — out of scope for initial per-view migration)
 - Update `preprocess.py` to read flat datasets.json (no `["datasets"]` wrapper), use `input_file_name`/`output_file_name` per view, and handle array `input_file_name` for multi-file datasets (e.g. Gongsharma).
-    - Currently preprocess.py reads `json.load(f)["datasets"]` (KeyError) and `ds_info.get("file_name")` (None), so it crashes on the new datasets.json.
-    - The new bash wrappers (`run_worker_preprocess.sh`, `submit_job.sh`) need to be implemented as part of this overhaul (see "Update preprocessing" below).
-- Update `copy_data_from_nas_to_hpc_scratch.sh` to use the new `datasets.json` structure.
+    - Currently preprocess.py reads `json.load(f)["datasets"]` (KeyError) and `ds_info.get("file_name")` (None), so it crashes on the new datasets.json. → **Pending (Step 3a)**
+    - [x] New bash wrappers implemented: `1_submit_hpc_array.sh` / `1.1_run_worker.sh`
+    - [x] `copy_data_from_nas_to_hpc_scratch.sh` logic absorbed into `1_submit_hpc_array.sh` (no separate copy script)
 
 ## Integrate multi-file preprocessing (e.g. Gongsharma h5ad files) into preprocess.py
 - Move the downsample_by_group() logic from preprocess_gongsharma.qmd into preprocess.py
@@ -373,66 +381,65 @@ Changes:
 
 
 # Update repo structure
-Final structure:
+Current structure (after Step 1):
 ECODA_paper/
+├── Figure_workflow_schematic.Rmd
+├── Preprocess_datasets.Rmd                 # Still at root (legacy, superseded by preprocess.py)
+├── datasets.json
 ├── notebooks/                              
-│   ├── QC_filtering/                       # Move whole QC_filtering folder here (including all files it contains)
+│   ├── QC_filtering/                       # Moved from root
 │   ├── batch_effect_analysis.rmd
 │   └── benchmark_analysis.rmd
 └── src/
-    ├── slurm_bash_config.env               # Renamed from config.env, contains only the SLURM environment variables for all the bash scripts (e.g. paths). -> Pull out paths from src/bash/cell_type_annotation .sh bash scripts into this centralized file (later to also be used for the other .sh bash scripts)
-    ├── utils/
+    ├── slurm_bash_config.env               # Centralized SLURM vars
+    ├── utils/                              # R modules from src/R/
     │   ├── constants.R
+    │   ├── datasets_io.R
     │   ├── helpers.R
     │   ├── hvcs.R
+    │   ├── imports.R
     │   ├── load_all_functions.R
     │   ├── math_utils.R
     │   ├── plotting.R
     │   ├── pseudobulk.R
     │   ├── scoring_metrics.R
-    │   └── seurat_utils.R
+    │   ├── seurat_utils.R
     ├── preprocess/                         # Self-contained preprocessing
-    │   ├── 1_copy_data_from_nas_to_hpc_scratch.sh
-    │   ├── TODO_STUMP_2_submit_hpc_array.sh
-    │   ├── TODO_STUMP_2.1_run_worker.sh
-    │   ├── 2.2_preprocess.py
+    │   ├── 1_submit_hpc_array.sh           # Created (stages data + submits array)
+    │   ├── 1.1_run_worker.sh               # Created
+    │   ├── 1.2_preprocess.py               # From src/py/preprocess.py
     │   ├── TODO_STUMP_preprocess_sikkema.qmd
     │   └── preprocess_gongsharma.qmd
-    ├── cell_type_annotation/               # Self-contained annotation
-    │   ├── 1.1_prepare_chunks.r
-    │   ├── 1.2_prepare_chunks.sh
+    ├── cell_type_annotation/               # From src/bash/cell_type_annotation/
+    │   ├── 1_prepare_chunks.r
+    │   ├── 1_prepare_chunks.sh
     │   ├── 2_submit_hpc_array.sh
     │   ├── 2.1_run_worker.sh
     │   └── 2.2_process_chunk.sh
     └── benchmark/                          # Self-contained benchmark
-        ├── benchmark_methods_r.R
-        ├── benchmark_pipeline.R
+        ├── benchmark_methods_r.R           # From src/R/
+        ├── benchmark_pipeline.R            # From src/R/
         └── run_python_sample_embedding_methods/
-                ├── TODO_STUMP_1_submit_hpc_array.sh # Needs to be created (only empty file, implementation follows later)
-                ├── TODO_STUMP_1.1_run_worker.sh # Needs to be created  (only empty file, implementation follows later)
-                └── 1.2_benchmark_methods_py.qmd # (for now, only move this file here)(-> Needs to be converted to .py file and adapted to run on the HPC cluster to be run per dataset per method)
-
-## IMPORTANT
-- For every file or folder that needs to be moved:
-    - check if it is used in any of the other files, then move it and update the code (path/dependencies) accordingly
-    - Update docs/ARCHITECTURE.md, AGENTS.md and README.md if necessary
-    - After moving the file/folder, double-check again that the code (path/dependencies) is updated correctly everywhere
+                ├── TODO_STUMP_1_submit_hpc_array.sh # Empty, implementation pending
+                ├── TODO_STUMP_1.1_run_worker.sh     # Empty, implementation pending
+                └── 1.2_benchmark_methods_py.qmd     # From src/py/
 
 
 
 # HPC cluster implementation
-- Centralize SLURM environment variables in `src/slurm_bash_config.env`
+- [x] Centralize SLURM environment variables in `src/slurm_bash_config.env`
 
 ## Update cell type annotation
-- Cell type annotation bash scripts need to be updated to accomodate:
-    - the new preprocessing workflow
+- [x] Cell type annotation bash scripts updated for:
+    - the new preprocessing workflow (paths adjusted for src/preprocess/1.2_preprocess.py)
     - pixi environment
-    - updated paths
+    - `src/slurm_bash_config.env` sourced for paths
 
 ## Update preprocessing
-- `Preprocess_datasets.Rmd` is superseded by `src/py/preprocess.py`, which still needs to be implemented with bash scripts to be run on the HPC cluster
-    - `src/preprocess/TODO_STUMP_2_submit_hpc_array.sh` needs to be adapted to run on the HPC cluster
-    - `src/preprocess/TODO_STUMP_2.1_run_worker.sh` needs to be adapted to run on the HPC cluster
+- [x] `Preprocess_datasets.Rmd` superseded by `src/preprocess/1.2_preprocess.py`
+- [x] Implemented `src/preprocess/1_submit_hpc_array.sh` (stages data + submits array)
+- [x] Implemented `src/preprocess/1.1_run_worker.sh` (worker script)
+- Data copy from NAS to scratch absorbed into `1_submit_hpc_array.sh` (runs on login node)
 
 ## Update benchmark methods that need to be run in python (does not affect benchmark_methods_r.R)
 
@@ -469,10 +476,10 @@ ECODA_paper/
 ## Explain new cell type annotation pipeline
 Was adopted from another project because previous workflow was in r but parallelization constantly kept freezing workers and no approach was found that could prevent it.
 Thus, a new cell type annotation was adopted that can be run on the HPC cluster in parallel for any number of datasets and any number of samples for scalability.
-- Moved from Preprocess_datasets.Rmd to ./src/bash/cell_type_annotation/ (added from another project, so needs to be adapted and polished)
-    - Add documentation explaining the new pipeline structure and usage
-    - Ensure compatibility with current preprocessing outputs (preprocessed h5ad files)
-    - Update any hardcoded paths or dataset references to use standardized sample names from preprocess step
+- [x] Moved from Preprocess_datasets.Rmd to `src/cell_type_annotation/` (added from another project, adapted and polished)
+    - [x] Paths updated for new structure (source depth `../../` → `../`)
+    - [x] Hardcoded paths replaced with `src/slurm_bash_config.env`
+    - [x] Source calls updated for new `src/` layout
 
 ## Add small test dataset for debugging `preprocess.py` and other HPC pipelines
 - Subset the Joanito dataset to a small number of samples (e.g., 5, covering both biological conditions and batches (sequencing technologies)) for testing and subset to 500 cells per sample (using random subsetting)
@@ -491,7 +498,7 @@ Implement new datasets (mainly check QC filtering, column names and check for po
         - Covid-19 PBMC (n = 151)
         - Diabetes (n = 52)
         - Possibly: Sikkema Lung (n = 165)
-    - `src/py/DRAFT_BARE_preprocess_sikkema.qmd` draft/exploratory
+    - `src/preprocess/TODO_STUMP_preprocess_sikkema.qmd` draft/exploratory
 - benchmark analysis:
     - From PILOT-GM-VAE paper:
         - Alzheimer (n = 83)
@@ -513,7 +520,7 @@ Implement new datasets (mainly check QC filtering, column names and check for po
 
 # preprocess.py
 - Add blacklist as default for filtering genes
-    - Load gene blacklist from file (e.g. from STACAS, see call to `default_black_list` in get_pb_deseq2 in src/R/pseudobulk.R)
+    - Load gene blacklist from file (e.g. from STACAS, see call to `default_black_list` in get_pb_deseq2 in `src/utils/pseudobulk.R`)
         - Maybe save blacklist file to this repo for clarity and add explanation
     - Filter out blacklisted genes before HVG calculation
 Possible solutions (but using the blacklist from STACAS):
