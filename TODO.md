@@ -152,6 +152,28 @@ Implement new datasets (mainly check QC filtering, column names and check for po
     - Load gene blacklist from file (e.g. from STACAS, see call to `default_black_list` in get_pb_deseq2 in src/R/pseudobulk.R)
         - Maybe save blacklist file to this repo for clarity and add explanation
     - Filter out blacklisted genes before HVG calculation
+Possible solutions (but using the blacklist from STACAS):
+# Example: Identify mitochondrial genes
+is_mito = adata.var_names.str.startswith('MT-')
+# Invert the mask to keep non-blacklisted features
+adata = adata[:, ~is_mito].copy()
+--------------------------------------------------
+# Define your blacklisted features
+blacklisted_features = ['MALAT1', 'HBB-BS', 'HBZ']  # example genes
+
+# Create a boolean mask for features NOT in the blacklist
+keep_features = ~adata.var_names.isin(blacklisted_features)
+
+# Subset the AnnData object
+adata = adata[:, keep_features].copy()
+--------------------------------------------------
+# Mark blacklisted genes in var dataframe
+adata.var['blacklisted'] = adata.var_names.isin(blacklisted_features)
+
+# Subset to keep only those where 'blacklisted' is False
+adata = adata[:, ~adata.var['blacklisted']].copy()
+--------------------------------------------------
+
 - hvgs: for non-batch views, make sure that sc.pp.highly_variable_genes(batch_key="Sample") is used
 - need to run and create new harmony embeddings (integrated by samlpe) based on pca embeddings for the "benchmark_analysis" views and create cell type annotations based on unsupervised clustering based on pca and additionally also based on harmony embeddings
 - for Batch_effect.Rmd, ensure it uses the updated preprocessing pipeline with batch-aware HVG calculation and new harmony embeddings
