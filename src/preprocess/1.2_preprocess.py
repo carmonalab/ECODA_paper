@@ -11,7 +11,7 @@ import re
 # ---------------------------------------------------------------------------
 # R interop
 # ---------------------------------------------------------------------------
-ro.r('source("src/R/load_all_functions.R")')
+ro.r('source("src/utils/load_all_functions.R")')
 ro.r('''
 convert_rds_to_raw_h5ad <- function(input_path, output_path) {
   seurat <- readRDS(input_path)

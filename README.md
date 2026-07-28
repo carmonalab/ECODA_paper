@@ -36,13 +36,13 @@ groupings in a fully unsupervised setting.
 ### **Repository Contents**
 
 -   `datasets.json`: Centralized dataset metadata (sample/label columns, subsetting rules, batch information).
--   `QC_filtering/`: Per-dataset R Markdown notebooks for standard scRNA-seq QC.
--   `src/py/preprocess.py`: Standardized preprocessing pipeline (Python/Scanpy) — sample/gene name standardization, HVG selection, unsupervised clustering, Harmony integration.
--   `src/py/benchmark_methods_py.qmd`: Python benchmark methods (MrVI, PILOT, scPoli).
--   `src/R/`: Modular R functions (12 files) — benchmark pipeline orchestration, scoring metrics, pseudobulk processing, HVC selection, math utilities, plotting.
--   `benchmark_analysis.rmd`: Core analysis script orchestrating the benchmark pipeline and generating paper figures.
--   `batch_effect_analysis.rmd`: Batch effect analysis and correction evaluation.
--   `src/bash/`: SLURM submission scripts for HPC parallel execution (preprocessing, cell type annotation, benchmark methods).
+-   `notebooks/QC_filtering/`: Per-dataset R Markdown notebooks for standard scRNA-seq QC.
+-   `src/preprocess/1.2_preprocess.py`: Standardized preprocessing pipeline (Python/Scanpy) — sample/gene name standardization, HVG selection, unsupervised clustering, Harmony integration.
+-   `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd`: Python benchmark methods (MrVI, PILOT, scPoli).
+-   `src/utils/` + `src/benchmark/`: Modular R functions — benchmark pipeline orchestration, scoring metrics, pseudobulk processing, HVC selection, math utilities, plotting.
+-   `notebooks/benchmark_analysis.rmd`: Core analysis script orchestrating the benchmark pipeline and generating paper figures.
+-   `notebooks/batch_effect_analysis.rmd`: Batch effect analysis and correction evaluation.
+-   `src/`: SLURM submission scripts for HPC parallel execution (preprocessing, cell type annotation, benchmark methods).
 -   `docs/ARCHITECTURE.md`: Full pipeline architecture, call flow, and module documentation.
 
 The **scECODA** R package for scalable cohort-level analysis is available at
@@ -75,26 +75,25 @@ The **scECODA** R package for scalable cohort-level analysis is available at
 The analysis proceeds through four stages:
 
 - **Stage 1 — QC Filtering:** Open the per-dataset `.Rmd` notebooks in
-  `QC_filtering/` and render in RStudio.
+  `notebooks/QC_filtering/` and render in RStudio.
 - **Stage 2 — Preprocessing:** Standardized sample/gene name standardization,
   HVG selection, clustering, and Harmony integration:
   ```bash
-  pixi run -e py-cpu python src/py/preprocess.py
+  pixi run -e py-cpu python src/preprocess/1.2_preprocess.py
   ```
   Dataset metadata (sample columns, subsetting rules, batch info) is driven by
   `datasets.json`.
-- **Stage 3 — Benchmark Analysis:** Render `benchmark_analysis.rmd` in RStudio.
+- **Stage 3 — Benchmark Analysis:** Render `notebooks/benchmark_analysis.rmd` in RStudio.
   Python benchmark methods (MrVI, PILOT, scPoli) are invoked automatically via
   rpy2. The R pipeline orchestrates all method processors, scoring metrics, and
   figure generation.
-- **Stage 4 — Batch Effect Analysis:** Render `batch_effect_analysis.rmd` in
+- **Stage 4 — Batch Effect Analysis:** Render `notebooks/batch_effect_analysis.rmd` in
   RStudio.
 
 **HPC execution:** Submit SLURM array jobs for cell-type annotation via
-`src/bash/cell_type_annotation/`. Stage data from the shared NAS to local
-scratch before processing:
+`src/cell_type_annotation/`. Preprocessing via `src/preprocess/1_submit_hpc_array.sh` (stages data + submits array + syncs results):
 ```bash
-sbatch src/bash/copy_data_from_nas_to_hpc_scratch.sh
+sbatch src/preprocess/1_submit_hpc_array.sh
 ```
 
 ### **Expected Outputs**

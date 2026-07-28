@@ -9,9 +9,10 @@ Five ordered steps to modernize the ECODA_paper pipeline: foundation restructure
 ## Step 1 — Foundation: SLURM Config & Directory Restructure
 
 ### 1a. Centralize SLURM environment variables
-- Create `src/slurm_bash_config.env` from `src/bash/config.env`
-- Add: `SLURM_ACCOUNT`, `SLURM_PARTITION`, `MAX_NUM_CHUNKS_PARALLEL`, `USER_EMAIL`, `NAS_TARGET_DIR`, `SCRATCH_OUTPUT_DIR`, `HOME_CHUNKS_DIR`
-- Source this file from all bash scripts that need it
+- [!] Create `src/slurm_bash_config.env` from `src/bash/config.env`
+- [!] Add: `SLURM_ACCOUNT`, `SLURM_PARTITION`, `MAX_NUM_CHUNKS_PARALLEL`, `USER_EMAIL`, `NAS_TARGET_DIR`, `SCRATCH_OUTPUT_DIR`, `HOME_CHUNKS_DIR`
+- [!] Source this file from all bash scripts that need it
+- [!] Remove `src/bash/config.env` (replaced by centralized file)
 
 ### 1b. Move files to target structure
 

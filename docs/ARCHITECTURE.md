@@ -112,7 +112,7 @@ Benchmarking:
 
 ### LAYER 6: Configuration & Data
 ```
-datasets.json (read by src/R/datasets_io.R::read_datasets_json())
+datasets.json (read by src/utils/datasets_io.R::read_datasets_json())
 └── per-view entries
     ├── "Adams" → benchmark_analysis view
     │   ├── output_file: AdamsT_2020_32832599_benchmark_analysis_ECODAprocessed.h5ad

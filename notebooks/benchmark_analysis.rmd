@@ -35,7 +35,7 @@ Core script to run the benchmark and generate paper figures.
 # Setup: See README.md for initial environment setup
 # renv::init() && renv::restore() for dependency management
 
-source("src/R/load_all_functions.R")
+source("src/utils/load_all_functions.R")
 datasets <- read_datasets_json(view = "benchmark_analysis")
 dataset_display_map <- sapply(datasets, `[[`, "display_name")
 dataset_display_map[["GongSharma"]] <- dataset_display_map[["Gongsharma_cmv_young_males"]]
