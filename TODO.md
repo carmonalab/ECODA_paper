@@ -1,3 +1,11 @@
+# Follow-up on Step 3d.
+- check if .kilo/plans/1785270333881-batch-column-support.md was properly implemented
+- apply DRY to `preprocess.py` and `src/preprocess/_create_combinedpbmc_dataset.py` (repeated function definitions)
+- check `src/preprocess/_create_combinedpbmc_dataset.py` as RAM memory usage might be too high and could be reduced (not a big problem, should be fine if run on HPC, as those datasets are not excessive but still, would be nice to have)
+- the output path in `src/preprocess/_create_combinedpbmc_dataset.py` is fine. However, at the end of the preprocessing and cell type annotation, files should be synced back to the NAS for backup and long-term storage. Also all the results created from `benchmark_methods_r.R` and `benchmark_methods_py.R` (significant data processing) should be synced back to the NAS.
+- Update TODO.md (see below)
+- Added back config_helper.R (legacy file for the cell type annotation pipeline bash scripts that were imported from another repo. Needs to be checked if still needed and also adapted, including the whole SLURM pipeline major overhaul, standardization and centralization (e.g. of environment variables and possibly bash scripts))
+
 # Pipeline Overhaul Execution Plan
 
 ## Overview
