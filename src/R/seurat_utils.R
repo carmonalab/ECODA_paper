@@ -263,18 +263,6 @@ get_labels <- function(seurat, label_col) {
 
 
 # Wrapper to execute the conversion logic for a specific dataset
-convert_rds_to_raw_h5ad <- function(input_path, output_path) {
-  seurat <- readRDS(input_path)
-  seurat <- create_clean_seuratv5_object(seurat)
-
-  if (!file.exists(output_path)) {
-    seurat@assays$RNA@data <- seurat@assays$RNA@counts
-    write_h5ad(seurat, output_path)
-    seurat@assays$RNA@data <- NULL
-  }
-}
-
-
 get_seurat_obj_from_h5ad <- function(
   adata,
   r_obs,
