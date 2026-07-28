@@ -35,7 +35,7 @@ def apply_subset_vars(adata, subset_vars):
 # ---------------------------------------------------------------------------
 # HVG selection
 # ---------------------------------------------------------------------------
-def compute_hvgs(adata, n_top_genes, batch_key=None, flavor="seurat_v3"):
+def compute_hvgs(adata, n_top_genes, batch_key=None, flavor="seurat_v3_paper"):
     """
     One-shot HVG selection: returns the gene names directly.
     Use this when only a single, fixed HVG size is ever needed (e.g. the
@@ -53,7 +53,7 @@ def compute_hvgs(adata, n_top_genes, batch_key=None, flavor="seurat_v3"):
     return adata.var_names[hvg_df["highly_variable"].values]
  
  
-def select_hvgs_ranked(adata, n_top_genes, flavor="seurat_v3"):
+def select_hvgs_ranked(adata, n_top_genes, flavor="seurat_v3_paper"):
     """
     Runs HVG selection once and stores per-gene ranks, so multiple
     n_top_genes subsets can later be sliced out correctly via
@@ -154,7 +154,7 @@ BATCH_VIEW_N_HVG = 2000
 BATCH_VIEW_RES = []
 
 def process_view(
-    adata, view_name, batch_key, n_hvg_sizes, resolutions, use_harmony, flavor="seurat_v3"
+    adata, view_name, batch_key, n_hvg_sizes, resolutions, use_harmony, flavor="seurat_v3_paper"
 ):
     adata = base_preprocessing(adata)
  
