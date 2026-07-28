@@ -19,6 +19,7 @@ read_datasets_json <- function(path = "datasets.json", view = NULL) {
       entry <- list(
         output_file = output_file,
         label_col = ds[["columns"]][["label"]],
+        batch_col = ds[["columns"]][["batch"]],
         low_res_ct_col = ds[["columns"]][["cell_type_low_res"]],
         hi_res_ct_col = ds[["columns"]][["cell_type_high_res"]],
         display_name = ds[["display_name"]],

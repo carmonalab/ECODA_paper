@@ -1,11 +1,15 @@
 import os
 import json
+import sys
 import scanpy as sc
 import rpy2.robjects as ro
 import scipy.sparse as sp
 from pathlib import Path
 import pandas as pd
 import re
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src.gene_utils import standardize_gene_symbols
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +32,29 @@ convert_rds_to_raw_h5ad_r = ro.globalenv["convert_rds_to_raw_h5ad"]
 
 
 # ---------------------------------------------------------------------------
+# Loading helpers
+# ---------------------------------------------------------------------------
+def _load_single_input(input_file_name, base_path, output_dir):
+    input_file_path = base_path / input_file_name
+    if str(input_file_name).endswith(".rds"):
+        stem = Path(input_file_name).stem
+        raw_h5ad_path = output_dir / f"{stem}_raw.h5ad"
+        convert_rds_to_raw_h5ad_r(str(input_file_path), str(raw_h5ad_path))
+        return sc.read_h5ad(raw_h5ad_path)
+    elif str(input_file_name).endswith(".h5ad"):
+        return sc.read_h5ad(input_file_path)
+    else:
+        raise ValueError(f"Unsupported file format: {input_file_name}")
+
+
+def _load_input(input_file_name, base_path, output_dir):
+    if isinstance(input_file_name, list):
+        adatas = [_load_single_input(f, base_path, output_dir) for f in input_file_name]
+        return sc.concat(adatas, index_unique="_") if len(adatas) > 1 else adatas[0]
+    return _load_single_input(input_file_name, base_path, output_dir)
+
+
+# ---------------------------------------------------------------------------
 # Cell (row) subsetting for views
 # ---------------------------------------------------------------------------
 def apply_subset_vars(adata, subset_vars):
@@ -42,7 +69,7 @@ def apply_subset_vars(adata, subset_vars):
         mask &= col_mask if spec.get("op", "in") == "in" else ~col_mask
     return adata[mask].copy()
  
- 
+
 # ---------------------------------------------------------------------------
 # HVG selection
 # ---------------------------------------------------------------------------
@@ -63,7 +90,7 @@ def compute_hvgs(adata, n_top_genes, batch_key=None, flavor="seurat_v3_paper"):
     )
     return adata.var_names[hvg_df["highly_variable"].values]
  
- 
+
 def select_hvgs_ranked(adata, n_top_genes, flavor="seurat_v3_paper"):
     """
     Runs HVG selection once and stores per-gene ranks, so multiple
@@ -82,7 +109,7 @@ def select_hvgs_ranked(adata, n_top_genes, flavor="seurat_v3_paper"):
     adata.var["hvg_rank"] = hvg_df["highly_variable_rank"].values
     return adata
  
- 
+
 def top_n_hvg_genes(adata, n):
     """Recover the true top-n genes by sorting on the stored rank."""
     ranks = adata.var["hvg_rank"].dropna().sort_values()
@@ -93,7 +120,7 @@ def top_n_hvg_genes(adata, n):
         )
     return ranks.index[:n]
  
- 
+
 # ---------------------------------------------------------------------------
 # PCA -> (optional Harmony) -> neighbors -> Leiden, for one gene set
 # ---------------------------------------------------------------------------
@@ -132,39 +159,6 @@ def run_downstream_for_gene_set(
  
     return adata
  
- 
-# ---------------------------------------------------------------------------
-# Ensembl 105 gene name standardization (replaces bionty)
-# ---------------------------------------------------------------------------
-_ENSEMBL105_MAP = None
-
-def _load_ensembl105_map():
-    global _ENSEMBL105_MAP
-    if _ENSEMBL105_MAP is not None:
-        return _ENSEMBL105_MAP
-    project_root = Path(__file__).resolve().parents[2]
-    path = project_root / "aux" / "EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
-    df = pd.read_csv(path, sep="\t")
-
-    identity = df[["Gene name", "Gene name"]].drop_duplicates()
-    identity.columns = ["key", "value"]
-
-    aliases = df[["Gene Synonym", "Gene name"]].copy()
-    aliases.columns = ["key", "value"]
-    aliases = aliases.dropna(subset=["key"])
-    aliases = aliases[aliases["key"] != ""]
-
-    combined = pd.concat([identity, aliases], ignore_index=True)
-    combined = combined[~combined["key"].duplicated(keep="first")]
-
-    _ENSEMBL105_MAP = dict(zip(combined["key"], combined["value"]))
-    return _ENSEMBL105_MAP
-
-
-def standardize_gene_symbols(adata):
-    gene_map = _load_ensembl105_map()
-    adata.var_names = [gene_map.get(g, g) for g in adata.var_names]
-
 
 # ---------------------------------------------------------------------------
 # Shared setup: gene standardization + counts vaulting + normalize/log
@@ -190,7 +184,7 @@ def base_preprocessing(adata):
     sc.pp.log1p(adata)
     return adata
  
- 
+
 # ---------------------------------------------------------------------------
 # Orchestration for a single view
 # ---------------------------------------------------------------------------
@@ -203,8 +197,6 @@ def process_view(
     adata = base_preprocessing(adata)
  
     if batch_key is not None:
-        # Batch view: only ever needs one fixed HVG size, so skip the
-        # rank-storage machinery entirely and go straight to downstream.
         genes = compute_hvgs(adata, n_top_genes=BATCH_VIEW_N_HVG, batch_key=batch_key, flavor=flavor)
         key_suffix = f"{view_name}_batch_hvg{BATCH_VIEW_N_HVG}"
         adata = run_downstream_for_gene_set(
@@ -213,7 +205,6 @@ def process_view(
         )
         return adata
  
-    # Standard (non-batch) view: compute ranks once, slice multiple HVG sizes.
     adata = select_hvgs_ranked(adata, n_top_genes=max(n_hvg_sizes), flavor=flavor)
     for n in n_hvg_sizes:
         genes = top_n_hvg_genes(adata, n=n)
@@ -225,18 +216,16 @@ def process_view(
  
     return adata
  
- 
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main(config_path="datasets.json", base_path="data", output_dir="data",
          n_hvg_sizes=(3000, 2000, 1000), use_harmony=True):
     
-    # Get the project root
     project_root = Path(__file__).resolve().parents[2]
 
     if config_path is not None:
-        # If config_path is already absolute, the '/' operator ignores project_root
         config_path = project_root / config_path
     
     base_path = project_root / base_path
@@ -245,55 +234,57 @@ def main(config_path="datasets.json", base_path="data", output_dir="data",
     os.makedirs(output_dir, exist_ok=True)
  
     with open(config_path) as f:
-        config = json.load(f)["datasets"]
+        config = json.load(f)
  
     for ds_name, ds_info in config.items():
-        input_filename = ds_info.get("file_name")
-        if not input_filename:
-            print(f"Skipping {ds_name}: No primary file_name specified.")
-            continue
- 
-        input_file_path = os.path.join(base_path, input_filename)
-        file_name_no_ext = os.path.splitext(input_filename)[0]
-        raw_h5ad_path = os.path.join(output_dir, f"{file_name_no_ext}_raw.h5ad")
         sample_col = ds_info.get("columns", {}).get("sample", "Sample")
         batch_col = ds_info.get("columns", {}).get("batch", sample_col)
- 
-        # --- load / convert once, reused across views -----------------
-        if input_filename.endswith(".rds"):
-            convert_rds_to_raw_h5ad_r(input_file_path, raw_h5ad_path)
-            adata_full = sc.read_h5ad(raw_h5ad_path)
-        elif input_filename.endswith(".h5ad"):
-            adata_full = sc.read_h5ad(input_file_path)
-        else:
-            print(f"  -> Unsupported file format for {input_filename}")
+
+        views = ds_info.get("views")
+        if not views:
+            print(f"Skipping {ds_name}: No views defined.")
             continue
 
-        if sample_col in adata_full.obs.columns:
-            adata_full.obs["Sample"] = [
-                f"g{s}" if re.match(r"^\d", str(s)) else str(s).replace("-", "_")
-                for s in adata_full.obs[sample_col]
-            ]
-        else:
-            raise ValueError(f"Cannot find {sample_col} in {input_file_path}")
- 
-        views = ds_info.get("views") or {"default": {"subset_vars": {}}}
- 
         for view_name, view_info in views.items():
-            processed_file_path = os.path.join(
-                output_dir, f"{file_name_no_ext}_{view_name}_ECODAprocessed.h5ad"
-            )
-            if os.path.exists(processed_file_path):
+            input_file_name = view_info.get("input_file_name")
+            if not input_file_name:
+                print(f"Skipping {ds_name} / {view_name}: No input_file_name.")
+                continue
+
+            output_file_name = view_info.get("output_file_name")
+            if not output_file_name:
+                print(f"Skipping {ds_name} / {view_name}: No output_file_name.")
+                continue
+
+            processed_file_path = output_dir / output_file_name
+            if processed_file_path.exists():
                 print(f"Already processed: {ds_name} / {view_name}")
                 continue
- 
+
+            print(f"Loading {ds_name} / {view_name} ...")
+            adata_full = _load_input(input_file_name, base_path, output_dir)
+
+            if sample_col in adata_full.obs.columns:
+                adata_full.obs["Sample"] = [
+                    f"g{s}" if re.match(r"^\d", str(s)) else str(s).replace("-", "_")
+                    for s in adata_full.obs[sample_col]
+                ]
+            else:
+                raise ValueError(f"Cannot find {sample_col} in obs for {ds_name} / {view_name}")
+
             is_batch_view = view_name == "batch_effect_analysis" and ds_info.get(
                 "use_for_batch_effect", False
             )
             batch_key = batch_col if is_batch_view else None
- 
+
+            if is_batch_view and batch_col not in adata_full.obs.columns:
+                raise ValueError(
+                    f"batch_col '{batch_col}' not found in obs for {ds_name} / {view_name}. "
+                    f"Available columns: {list(adata_full.obs.columns)}"
+                )
+
             print(f"Processing {ds_name} / {view_name} (batch_key={batch_key})...")
- 
+
             adata_view = apply_subset_vars(adata_full, view_info.get("subset_vars", {}))
             adata_view = process_view(
                 adata_view,
@@ -303,8 +294,8 @@ def main(config_path="datasets.json", base_path="data", output_dir="data",
                 resolutions=(0.1, 0.4, 2, 5, 20, 50),
                 use_harmony=use_harmony and batch_key is not None,
             )
- 
-            adata_view.write_h5ad(processed_file_path)
+
+            adata_view.write_h5ad(str(processed_file_path))
             print(f"  -> Saved: {processed_file_path}\n")
 
 
