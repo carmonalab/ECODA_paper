@@ -3,11 +3,11 @@
 - [x] DRY applied: shared loading/R-interop/subset utils extracted to `src/preprocess/_preprocess_utils.py`
 - [x] RAM optimized in combine script: in-place gene subsetting, early obs column trimming, explicit `del`/`gc` after concat
 - [x] NAS syncing confirmed: preprocessing and cell type annotation `submit_hpc_array.sh` scripts both sync after array completion. Benchmark SLURM wrappers still pending.
-- [x] `config_helper.R` fixed: removed `readRenviron("config.env")` (deleted file), `PROJECT_ROOT`/`NAS_PREFIX` now exported from `slurm_bash_config.env`
+- [x] `config_helper.R` fixed: removed `readRenviron("config.env")` (deleted file), `PROJECT_ROOT`/`NAS_PREFIX` now exported from `slurm_config.sh`
 - [x] `run_worker.sh` memory: both bumped to 16G baseline with inline documentation for per-dataset increases
-- Cell type annotation with HiTME and scATOMIC create a lot of unneded metadata columns. Check legacy `Preprocess_datasets.Rmd` on which HiTME_cols_keep and scATOMIC_cols to keep. But please keep all previously  existing metadata columns (unlike in the legacy code).
-- convert `slurm_bash_config.env` to `slurm_config.sh` (replaced by centralized file). Replace all references to `slurm_bash_config.env` with `slurm_config.sh`.
-    - Check if `slurm_config.sh` can be run once or whether it needs to be sourced in all the job submission and run_worker bash scripts.
+- [x] Cell type annotation with HiTME and scATOMIC create a lot of unneded metadata columns. Check legacy `Preprocess_datasets.Rmd` on which HiTME_cols_keep and scATOMIC_cols to keep. Implement scATOMIC annotation in `2.2_process_chunk.sh` and `3_merge_annotations.py` and subset to the correct columns.
+- [x] Convert `slurm_bash_config.env` to `slurm_config.sh` (replaced by centralized file). Replace all references to `slurm_bash_config.env` with `slurm_config.sh`.
+    - [x] Check if `slurm_config.sh` can be run once or whether it needs to be sourced in all the job submission and run_worker bash scripts. Resolved: must be sourced in every script.
 
 # Pipeline Overhaul Execution Plan
 
@@ -20,7 +20,7 @@ Five ordered steps to modernize the ECODA_paper pipeline: foundation restructure
 ## Step 1 — Foundation: SLURM Config & Directory Restructure
 
 ### 1a. Centralize SLURM environment variables
-- [x] Create `src/slurm_bash_config.env` from `src/bash/config.env`
+- [x] Create `src/slurm_config.sh` from `src/bash/config.env`
 - [x] Add: `SLURM_ACCOUNT`, `SLURM_PARTITION`, `MAX_NUM_CHUNKS_PARALLEL`, `USER_EMAIL`, `NAS_TARGET_DIR`, `SCRATCH_OUTPUT_DIR`, `HOME_CHUNKS_DIR`
 - [x] Source this file from all bash scripts that need it
 - [x] Remove `src/bash/config.env` (replaced by centralized file)
@@ -39,7 +39,7 @@ ECODA_paper/
 │   ├── batch_effect_analysis.rmd
 │   └── benchmark_analysis.rmd
 ├── src/
-│   ├── slurm_bash_config.env       # from src/bash/config.env
+│   ├── slurm_config.sh       # from src/bash/config.env
 │   ├── utils/                      # R files from src/R/
 │   ├── preprocess/
 │   │   ├── 1_submit_hpc_array.sh   # new (stages data + submits array)
@@ -66,7 +66,7 @@ Move operations (git mv):
 6. `src/py/DRAFT_BARE_preprocess_sikkema.qmd` → `src/preprocess/TODO_STUMP_preprocess_sikkema.qmd`
 7. `src/py/preprocess_gongsharma.qmd` → `src/preprocess/preprocess_gongsharma.qmd`
 8. `src/py/benchmark_methods_py.qmd` → `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd`
-9. `src/bash/config.env` → `src/slurm_bash_config.env` (rename + extend)
+9. `src/bash/config.env` → `src/slurm_config.sh` (rename + extend)
 10. `src/bash/cell_type_annotation/*` → `src/cell_type_annotation/*` (move up one level)
 11. `src/R/load_all_functions.R` → `src/utils/load_all_functions.R`
 12. `src/R/benchmark_pipeline.R` → `src/benchmark/benchmark_pipeline.R`
@@ -81,7 +81,7 @@ Additional changes:
 ### 1c. Update all internal path references
 - [x] `src/utils/load_all_functions.R` sources → `src/utils/` + `src/benchmark/`
 - [x] `preprocess.py` line 14: `ro.r('source("src/utils/load_all_functions.R")')`
-- [x] `src/cell_type_annotation/` scripts: source depth `../../` → `../`; `config.env` → `src/slurm_bash_config.env`
+- [x] `src/cell_type_annotation/` scripts: source depth `../../` → `../`; `config.env` → `src/slurm_config.sh`
 - [x] `notebooks/batch_effect_analysis.rmd` and `benchmark_analysis.rmd` source calls → `src/utils/load_all_functions.R`
 
 ### 1d. Update documentation
@@ -186,7 +186,7 @@ Changes:
 The two wrapper files are currently empty:
 
 `src/preprocess/2_submit_hpc_array.sh`:
-- Source `src/slurm_bash_config.env`
+- Source `src/slurm_config.sh`
 - Iterate over datasets from datasets.json (using jq or a Python helper)
 - For each dataset+view pair, submit `2.1_run_worker.sh` as an array job
 - Each array task = one view of one dataset
@@ -194,7 +194,7 @@ The two wrapper files are currently empty:
 
 `src/preprocess/2.1_run_worker.sh`:
 - `#SBATCH` headers (shared-cpu, 8G, 2h, etc.)
-- Source `src/slurm_bash_config.env`
+- Source `src/slurm_config.sh`
 - Copy data from NAS to scratch (`1_copy_data_from_nas_to_hpc_scratch.sh` or inline)
 - Run `2.2_preprocess.py` with the dataset/view as argument
 - After completion, copy result back to NAS
@@ -299,7 +299,7 @@ Changes:
 ### 5c. Write SLURM wrappers
 
 `src/benchmark/run_python_sample_embedding_methods/TODO_STUMP_1_submit_hpc_array.sh`:
-- Source `src/slurm_bash_config.env`
+- Source `src/slurm_config.sh`
 - For each dataset+view combination that needs Python methods, submit an array job
 - Job concurrency controlled by `MAX_NUM_CHUNKS_PARALLEL`
 
@@ -339,7 +339,7 @@ Changes:
 
 | File | Action | Status |
 |---|---|---|
-| `src/slurm_bash_config.env` | **Create** (from config.env + new vars) | Done |
+| `src/slurm_config.sh` | **Create** (from config.env + new vars) | Done |
 | `src/preprocess/1.2_preprocess.py` | **Move** (from src/py/preprocess.py, renumbered) | Done |
 | `src/preprocess/1_submit_hpc_array.sh` | **Create** (new — stages data + submits array) | Done |
 | `src/preprocess/1.1_run_worker.sh` | **Create** (new — worker script) | Done |
@@ -355,7 +355,7 @@ Changes:
 | `docs/ARCHITECTURE.md` | **Modify** | Done |
 | `AGENTS.md` | **Modify** | Done |
 | `README.md` | **Modify** | Done |
-| `src/bash/config.env` | **Delete** (replaced by slurm_bash_config.env) | Done |
+| `src/bash/config.env` | **Delete** (replaced by slurm_config.sh) | Done |
 | `src/bash/copy_data_from_nas_to_hpc_scratch.sh` | **Delete** (absorbed into submit script) | Done |
 | `src/bash/preprocess/` | **Delete** (stale empty files) | Done |
 | `src/bash/cell_type_annotation/*` | **Move** → `src/cell_type_annotation/` | Done |
@@ -406,7 +406,7 @@ ECODA_paper/
 │   ├── batch_effect_analysis.rmd
 │   └── benchmark_analysis.rmd
 └── src/
-    ├── slurm_bash_config.env               # Centralized SLURM vars
+    ├── slurm_config.sh               # Centralized SLURM vars
     ├── utils/                              # R modules from src/R/
     │   ├── constants.R
     │   ├── datasets_io.R
@@ -442,13 +442,13 @@ ECODA_paper/
 
 
 # HPC cluster implementation
-- [x] Centralize SLURM environment variables in `src/slurm_bash_config.env`
+- [x] Centralize SLURM environment variables in `src/slurm_config.sh`
 
 ## Update cell type annotation
 - [x] Cell type annotation bash scripts updated for:
     - the new preprocessing workflow (paths adjusted for src/preprocess/1.2_preprocess.py)
     - pixi environment
-    - `src/slurm_bash_config.env` sourced for paths
+    - `src/slurm_config.sh` sourced for paths
 
 ## Update preprocessing
 - [x] `Preprocess_datasets.Rmd` superseded by `src/preprocess/1.2_preprocess.py`
@@ -493,7 +493,7 @@ Was adopted from another project because previous workflow was in r but parallel
 Thus, a new cell type annotation was adopted that can be run on the HPC cluster in parallel for any number of datasets and any number of samples for scalability.
 - [x] Moved from Preprocess_datasets.Rmd to `src/cell_type_annotation/` (added from another project, adapted and polished)
     - [x] Paths updated for new structure (source depth `../../` → `../`)
-    - [x] Hardcoded paths replaced with `src/slurm_bash_config.env`
+    - [x] Hardcoded paths replaced with `src/slurm_config.sh`
     - [x] Source calls updated for new `src/` layout
 
 ## Add small test dataset for debugging `preprocess.py` and other HPC pipelines

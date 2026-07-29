@@ -3,7 +3,7 @@
 # Centralized SLURM and project environment variables
 #
 # Source this from any bash script that needs project paths or SLURM config:
-#   source "$(dirname "${BASH_SOURCE[0]}")/../slurm_bash_config.env"
+#   source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
 # (adjust relative path based on script depth)
 #
 

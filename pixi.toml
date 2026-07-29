@@ -93,6 +93,7 @@ cmd = """
 Rscript -e "
   if (!requireNamespace('dlm', quietly = TRUE)) remotes::install_cran('dlm', repos='https://packagemanager.posit.co/cran/latest', upgrade='never')
   if (!requireNamespace('Rmagic', quietly = TRUE)) remotes::install_version('Rmagic', version='2.0.3', repos='http://cran.us.r-project.org')
+  if (!requireNamespace('scATOMIC', quietly = TRUE)) remotes::install_github('abelson-lab/scATOMIC')
   remotes::install_github('inofechm/cutoff.scATOMIC@d332cd5cf6a1ecef7c32d0adc4a862a4c47bcd95')
 "
 """
