@@ -208,9 +208,11 @@ if (file.exists(annot_file)) {
       adata, obs, target_sample, args$sample_colname
     )
 
+    # About 10 minutes per 10,000 cells
+    timeout <- max(60, ncol(seurat_obj) / 10000 * 60 * 10)
+
     ### scATOMIC annotation ####
     if (is.null(seurat_obj@meta.data[["layer_1"]])) {
-      timeout <- max(60, ncol(seurat_obj) / 10000 * 2.5 * 60 * 4)
       for (a in 1:5) {
         message(paste("  scATOMIC attempt", a, "with", round(timeout), "s timeout"))
         result <- tryCatch({
@@ -239,7 +241,6 @@ if (file.exists(annot_file)) {
     }
 
     ### HiTME annotation ####
-    timeout <- 600
     for (a in 1:5) {
       message(paste("  HiTME attempt", a, "with", timeout, "s timeout"))
       result <- tryCatch({
