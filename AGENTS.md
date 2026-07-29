@@ -48,6 +48,13 @@ Do not change this file without asking.
 - Heavy scripts are run on the HPC cluster, specifically located in these folders:
     - `src/preprocess`
     - `src/cell_type_annotation`
+- These HPC pipelines are not finished yet and need to be updated to be finalized:
+    - `src/preprocess`
+    - Not implemented yet: HPC pipeline bash scripts for `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd` (needs to be adapted, e.g. converted to .py and run on the cluster by calling from a bash script)
+    - `src/cell_type_annotation`
+        - IMPORTANT: The cell type annotation HPC pipeline in `src/cell_type_annotation/` was originally set up in another project repo. The code and scripts are very drafty and not optimized, not well structured and not well documented and possibly deprecated in themselves in parts.
+        - I added the previous, heavily deprecated legacy code (that i copied from the other repo into this current repo), cell type annotation script files into the folder `src/cell_type_annotation/DEPRECATED_LEGACY_CODE`, for reference only.
+        - The current cell type annotation script files are in `src/cell_type_annotation/` and have been updated to a certain degree but are not finalized yet.
 - slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
 - bash SLURM submission scripts are run on the login node, spawning worker nodes
 - only login node has access to the shared NAS file system
