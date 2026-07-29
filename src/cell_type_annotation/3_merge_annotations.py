@@ -41,6 +41,16 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
     merged_count = adata.obs["layer1"].notna().sum()
     print(f"Rows with annotations after merge: {merged_count} / {original_n_obs}")
 
+    # Subset obs to only whitelisted annotation columns
+    hitme_cols_keep = ["IFN_UCell", "HeatShock_UCell", "cellCycle.G1S_UCell",
+                       "cellCycle.G2M_UCell", "layer1", "layer2", "layer3"]
+    scatomic_cols = ["layer_1", "layer_2", "layer_3", "layer_4", "layer_5", "layer_6",
+                     "scATOMIC_pred", "S.Score", "G2M.Score", "Phase", "classification_confidence"]
+    annot_cols = set(hitme_cols_keep + scatomic_cols)
+    orig_cols = [c for c in adata.obs.columns if c not in annot_cols]
+    existing_annot = [c for c in annot_cols if c in adata.obs.columns]
+    adata.obs = adata.obs[orig_cols + existing_annot]
+
     adata.write_h5ad(output_path)
     print(f"Saved annotated .h5ad to: {output_path}")
 

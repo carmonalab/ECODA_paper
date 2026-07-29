@@ -10,7 +10,7 @@ export PROJECT_ROOT="$2"
 CHUNK_FILE="$3"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../slurm_bash_config.env"
+source "${SCRIPT_DIR}/../slurm_config.sh"
 
 log_msg() {
   local msg="$1"
@@ -68,6 +68,8 @@ library(SignatuR)
 library(HiTME)
 library(Seurat)
 library(arrow)
+library(scATOMIC)
+library(cutoff.scATOMIC)
 
 # Import anndata WITHOUT automatic R conversion
 library(reticulate)
@@ -109,16 +111,25 @@ get_sample_seurat_obj <- function(adata, r_obs, target_sample, sample_colname) {
 }
 
 # Parse custom environment entries (falling back to original configurations if empty)
-env_sample_col  <- Sys.getenv("SAMPLE_COLNAME")
-env_tissue      <- Sys.getenv("TISSUE_TYPE")
-env_auth_annots <- Sys.getenv("AUTHOR_ANNOT_COLNAMES")
+env_sample_col    <- Sys.getenv("SAMPLE_COLNAME")
+env_tissue        <- Sys.getenv("TISSUE_TYPE")
+env_auth_annots   <- Sys.getenv("AUTHOR_ANNOT_COLNAMES")
+env_normal_tissue <- Sys.getenv("NORMAL_TISSUE")
 
 defaults <- list(
   chunk_file            = NULL,
   sample_colname        = if (env_sample_col != "") env_sample_col else "sample",
   tissue_type           = if (env_tissue != "") env_tissue else "Tumor",
-  author_annot_colnames = if (env_auth_annots != "") unlist(strsplit(env_auth_annots, ",")) else character()
+  author_annot_colnames = if (env_auth_annots != "") unlist(strsplit(env_auth_annots, ",")) else character(),
+  normal_tissue         = if (env_normal_tissue != "") as.logical(env_normal_tissue) else TRUE
 )
+
+# Column whitelists for annotation output
+hitme_cols_keep <- c("IFN_UCell", "HeatShock_UCell", "cellCycle.G1S_UCell",
+                     "cellCycle.G2M_UCell", "layer1", "layer2", "layer3")
+scatomic_cols <- c("layer_1", "layer_2", "layer_3", "layer_4", "layer_5", "layer_6",
+                   "scATOMIC_pred", "S.Score", "G2M.Score", "Phase", "classification_confidence")
+annot_cols <- c(hitme_cols_keep, scatomic_cols)
 
 # Merge with incoming workflow command-line overrides if present
 raw_args <- commandArgs(trailingOnly = TRUE)
@@ -196,6 +207,18 @@ if (file.exists(annot_file)) {
       adata, obs, target_sample, args$sample_colname
     )
 
+    ### scATOMIC annotation ####
+    if (is.null(seurat_obj@meta.data[["layer_1"]])) {
+      sca_preds <- run_scATOMIC(seurat_obj@assays$RNA$counts)
+      sca_results <- create_summary_matrix(
+        prediction_list = sca_preds,
+        raw_counts = seurat_obj@assays$RNA$counts,
+        normal_tissue = args$normal_tissue
+      )
+      sca_cols <- intersect(scatomic_cols, colnames(sca_results))
+      seurat_obj <- AddMetaData(seurat_obj, sca_results[, sca_cols, drop = FALSE])
+    }
+
     ### Annotate cells ####
     if (args$tissue_type == "Blood") {
       seurat_obj <- Run.HiTME(
@@ -217,7 +240,8 @@ if (file.exists(annot_file)) {
 
     ### Extract annotations ####
     meta <- seurat_obj@meta.data
-    annot <- meta[, c("layer1", "layer2", "layer3"), drop = FALSE]
+    keep_cols <- intersect(annot_cols, colnames(meta))
+    annot <- meta[, keep_cols, drop = FALSE]
     annot$cell_barcode <- rownames(annot)
     annot$sample <- target_sample
     annotations_list[[target_sample]] <- annot

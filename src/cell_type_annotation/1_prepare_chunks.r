@@ -1,7 +1,7 @@
 project_root <- getwd() # Since the bash script changes directory to PROJECT_ROOT
 
 # Load central config into R's environment
-readRenviron(file.path(project_root, "src", "slurm_bash_config.env"))
+readRenviron(file.path(project_root, "src", "slurm_config.sh"))
 
 r_mm <- paste0(R.version$major, ".", sub("\\..*$", "", R.version$minor))
 renv_lib <- file.path(project_root, "renv", "library", paste0("R-", r_mm), R.version$platform)
@@ -35,7 +35,7 @@ RUN_AS_TEST <- as.logical(args$test)
 
 # Fetch dataset name dynamically from config.env
 ds_name <- Sys.getenv("DS_NAME")
-if (ds_name == "") stop("CRITICAL Error: DS_NAME not found in slurm_bash_config.env")
+if (ds_name == "") stop("CRITICAL Error: DS_NAME not found in slurm_config.sh")
 
 source("config_helper.R")
 paths <- get_pipeline_config(ds_name, force_overwrite = TRUE, test_mode = RUN_AS_TEST)

@@ -13,7 +13,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "${SCRIPT_DIR}/../slurm_bash_config.env"
+source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
 module load GCCcore/12.2.0
