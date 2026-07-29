@@ -1,7 +1,10 @@
+readRenviron("config.env")
+
 # --- ROBUST ENVIRONMENT & LIBRARY RESOLUTION ---
 # If running inside an isolated cluster worker, renv's sandbox might mask packages.
 # We explicitly ensure the project library and the Pixi system library are exposed.
-project_root <- Sys.getenv("PROJECT_ROOT", getwd())
+project_root <- Sys.getenv("PROJECT_ROOT")
+if (project_root == "") project_root <- getwd()
 r_version_major_minor <- paste0(R.version$major, ".", sub("\\..*$", "", R.version$minor))
 
 # Ensure renv paths are properly exposed on worker nodes
