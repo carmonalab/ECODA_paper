@@ -24,6 +24,14 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
             - PILOT-GM-VAE can be added by agent
             - PULSAR needs to be tested for requirements
 
+# Documentation
+
+- README.md
+- ARCHITECTURE.md
+- AGENTS.md
+- Todo list in TODO.md
+- Should be kept up-to-date upon any changes
+
 
 # datasets.json
 This acts as ground truth for the datasets evaluated in this study. See datasets.json for most up-to-date list of datasets used and conditions.
@@ -37,6 +45,10 @@ Do not change this file without asking.
 
 
 # HPC
+- Heavy scripts are run on the HPC cluster, specifically located in these folders:
+    - `src/preprocess`
+    - `src/cell_type_annotation`
+- slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
 - bash SLURM submission scripts are run on the login node, spawning worker nodes
 - only login node has access to the shared NAS file system
 - worker nodes do NOT have access to NAS
