@@ -1,100 +1,4 @@
-# Step 3d Follow-up — Completed
-- [x] Plan implementation verified: all 7 tasks (A–G) properly implemented
-- [x] DRY applied: shared loading/R-interop/subset utils extracted to `src/preprocess/_preprocess_utils.py`
-- [x] RAM optimized in combine script: in-place gene subsetting, early obs column trimming, explicit `del`/`gc` after concat
-- [x] NAS syncing confirmed: preprocessing and cell type annotation `submit_hpc_array.sh` scripts both sync after array completion. Benchmark SLURM wrappers still pending.
-- [x] `config_helper.R` fixed: removed `readRenviron("config.env")` (deleted file), `PROJECT_ROOT`/`NAS_PREFIX` now exported from `slurm_config.sh`
-- [x] `run_worker.sh` memory: both bumped to 16G baseline with inline documentation for per-dataset increases
-- [x] Cell type annotation with HiTME and scATOMIC create a lot of unneded metadata columns. Check legacy `Preprocess_datasets.Rmd` on which HiTME_cols_keep and scATOMIC_cols to keep. Implement scATOMIC annotation in `2.2_process_chunk.sh` and `3_merge_annotations.py` and subset to the correct columns.
-- [x] Convert `slurm_bash_config.env` to `slurm_config.sh` (replaced by centralized file). Replace all references to `slurm_bash_config.env` with `slurm_config.sh`.
-    - [x] Check if `slurm_config.sh` can be run once or whether it needs to be sourced in all the job submission and run_worker bash scripts. Resolved: must be sourced in every script.
-
 # Pipeline Overhaul Execution Plan
-
-## Overview
-
-Five ordered steps to modernize the ECODA_paper pipeline: foundation restructure → debug dataset → preprocess.py rewrite → R downstream adaptations → Python benchmark wrappers. Each step is validated before the next begins.
-
----
-
-## Step 1 — Foundation: SLURM Config & Directory Restructure
-
-### 1a. Centralize SLURM environment variables
-- [x] Create `src/slurm_config.sh` from `src/bash/config.env`
-- [x] Add: `SLURM_ACCOUNT`, `SLURM_PARTITION`, `MAX_NUM_CHUNKS_PARALLEL`, `USER_EMAIL`, `NAS_TARGET_DIR`, `SCRATCH_OUTPUT_DIR`, `HOME_CHUNKS_DIR`
-- [x] Source this file from all bash scripts that need it
-- [x] Remove `src/bash/config.env` (replaced by centralized file)
-
-### 1b. Move files to target structure
-
-Current layout (after Step 1b):
-
-```
-ECODA_paper/
-├── Figure_workflow_schematic.Rmd   # remains at root
-├── Preprocess_datasets.Rmd          # remains at root
-├── datasets.json
-├── notebooks/
-│   ├── QC_filtering/               # moved from root
-│   ├── batch_effect_analysis.rmd
-│   └── benchmark_analysis.rmd
-├── src/
-│   ├── slurm_config.sh       # from src/bash/config.env
-│   ├── utils/                      # R files from src/R/
-│   ├── preprocess/
-│   │   ├── 1_submit_hpc_array.sh   # new (stages data + submits array)
-│   │   ├── 1.1_run_worker.sh       # new (worker script)
-│   │   ├── 1.2_preprocess.py       # from src/py/preprocess.py (renumbered)
-│   │   ├── TODO_STUMP_preprocess_sikkema.qmd
-│   │   └── preprocess_gongsharma.qmd
-│   ├── cell_type_annotation/       # from src/bash/cell_type_annotation/
-│   └── benchmark/
-│       ├── benchmark_methods_r.R   # from src/R/
-│       ├── benchmark_pipeline.R    # from src/R/
-│       └── run_python_sample_embedding_methods/
-│           ├── TODO_STUMP_1_submit_hpc_array.sh
-│           ├── TODO_STUMP_1.1_run_worker.sh
-│           └── 1.2_benchmark_methods_py.qmd
-```
-
-Move operations (git mv):
-1. `QC_filtering/` → `notebooks/QC_filtering/`
-2. `batch_effect_analysis.rmd` → `notebooks/batch_effect_analysis.rmd`
-3. `benchmark_analysis.rmd` → `notebooks/benchmark_analysis.rmd`
-4. `src/R/*.R` → `src/utils/*.R` (11 files: imports, constants, helpers, math_utils, scoring_metrics, pseudobulk, hvcs, seurat_utils, plotting, datasets_io, load_all_functions)
-5. `src/py/preprocess.py` → `src/preprocess/1.2_preprocess.py` (renumbered from planned 2.2 → 1.2)
-6. `src/py/DRAFT_BARE_preprocess_sikkema.qmd` → `src/preprocess/TODO_STUMP_preprocess_sikkema.qmd`
-7. `src/py/preprocess_gongsharma.qmd` → `src/preprocess/preprocess_gongsharma.qmd`
-8. `src/py/benchmark_methods_py.qmd` → `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd`
-9. `src/bash/config.env` → `src/slurm_config.sh` (rename + extend)
-10. `src/bash/cell_type_annotation/*` → `src/cell_type_annotation/*` (move up one level)
-11. `src/R/load_all_functions.R` → `src/utils/load_all_functions.R`
-12. `src/R/benchmark_pipeline.R` → `src/benchmark/benchmark_pipeline.R`
-13. `src/R/benchmark_methods_r.R` → `src/benchmark/benchmark_methods_r.R`
-
-Additional changes:
-- `src/bash/copy_data_from_nas_to_hpc_scratch.sh` **deleted** — copy logic absorbed into `src/preprocess/1_submit_hpc_array.sh` (runs on login node before sbatch)
-- `src/bash/preprocess/submit_job.sh` **deleted** (empty/stale) — replaced by `src/preprocess/1_submit_hpc_array.sh`
-- `src/bash/preprocess/run_worker_preprocess.sh` **deleted** (empty/stale) — replaced by `src/preprocess/1.1_run_worker.sh`
-- `src/R/` and `src/bash/` directories removed after migration
-
-### 1c. Update all internal path references
-- [x] `src/utils/load_all_functions.R` sources → `src/utils/` + `src/benchmark/`
-- [x] `preprocess.py` line 14: `ro.r('source("src/utils/load_all_functions.R")')`
-- [x] `src/cell_type_annotation/` scripts: source depth `../../` → `../`; `config.env` → `src/slurm_config.sh`
-- [x] `notebooks/batch_effect_analysis.rmd` and `benchmark_analysis.rmd` source calls → `src/utils/load_all_functions.R`
-
-### 1d. Update documentation
-- [x] `docs/ARCHITECTURE.md`: update file paths, module table, call graph
-- [x] `AGENTS.md`: update "Pipeline Overview" directory paths, "R Modules" table
-- [x] `README.md` path updates
-
-### Validation
-- [x] `source("src/utils/load_all_functions.R")` executes without error in R
-- [x] `ls` confirms all target directories exist with correct files
-- [x] All stale files at old locations removed
-
----
 
 ## Step 2 — Debug Dataset (Joanito 5-sample)
 
@@ -154,13 +58,21 @@ Approach (no R dependency for this in Python):
 2. In preprocess.py, add a `load_blacklist(path, exclude_sex=True)` function
 3. Apply before HVG selection: `adata = adata[:, ~adata.var_names.isin(blacklist)].copy()`
 
+Also:
+- For non-batch views, ensure `sc.pp.highly_variable_genes(batch_key="Sample")` is used
+- For batch views, `batch_key=batch_col` (from datasets.json)
+- Create harmony embeddings for both view types (integrated by sample for benchmark, by batch_col for batch effect)
+- Check strategy to handle Gongsharma dataset (huge, provided in chunks)
+- Cleanup preprocess_gongsharma.qmd if necessary
+- Determine which Gongsharma files need pre-processing (per datasets.json)
+
 ### 3d. Batch column support
 
 Currently `preprocess.py:260` looks for `columns.batch` in datasets.json, which doesn't exist for any dataset.
 
 Changes:
 - Add `"batch"` key to `datasets.json` for relevant datasets:
-  - Stephenson: `"Site"` (line 10)
+  - Stephenson: `"Site"`
   - Joanito: `"Site"` (needs to be constructed from metadata — was done manually in batch_effect_analysis.rmd)
   - Zhu: `null` or leave absent (single batch)
 - In `process_view()`: pass `batch_key` correctly based on view type:
@@ -169,13 +81,10 @@ Changes:
 
 ### 3e. HVG & Harmony improvements
 
-The TODO specifies:
 - Non-batch views (benchmark_analysis): `batch_key="Sample"` for HVG selection
 - Batch views (batch_effect_analysis): `batch_key=batch_col` (from datasets.json)
 - Harmony embeddings always computed for batch views (`X_pca_harmony`)
 - For benchmark views, also compute harmony embeddings for cell type annotation (not used by benchmark methods directly)
-
-Changes:
 - Change `process_view()` call for `benchmark_analysis` views to use `batch_key="Sample"` (from `columns.sample`)
 - Remove the old distinction where only batch views use `batch_key`
 - In `run_downstream_for_gene_set()`: always compute `X_pca_harmony` when `batch_key` is set (harmony integration by sample/batch)
@@ -287,11 +196,13 @@ Changes:
   - `sc.pp.scale()`
   - `sc.pp.pca()`
   → These are already applied in the preprocessed .h5ad; just load and use `adata.obsm["X_pca"]` etc.
+- Make sure every method gets the correct input (counts, or specific embedding)
+- Double-check compatibility with current preprocess.py workflow (scanpy overwrites adata.X at every step)
 
 ### 5b. Add batch correction parameters per method (only for batch effect analysis views)
 
 - **MrVI**: pass `batch_key` to `MRVI.setup_anndata(adata, sample_key="Sample", batch_key=batch_col)` (for batch effect analysis, use current setup for benchmark view)
-- **PILOT-GM-VAE**: Needs to be implemented. read `X_pca_harmony` from preprocessed .h5ad as input embeddings (for batch effect analysis, use current setup from PILOT (use uncorrected PCA) for benchmark view)
+- **PILOT-GM-VAE**: Needs to be implemented. Read `X_pca_harmony` from preprocessed .h5ad as input embeddings (for batch effect analysis, use current setup from PILOT (use uncorrected PCA) for benchmark view)
 - **scPoli**: no batch correction (used for benchmark only, not batch effect)
 - **PILOT**: keep as-is (uses uncorrected PCA)
 - Add QOT, PULSAR
@@ -313,13 +224,62 @@ Changes:
 
 - Check if Python's `log_execution_time_and_memory()` output format matches what `benchmark_analysis.rmd` expects at `p_exec_times`
 - If mismatch, align Python output to match R's `exec_time()` format
-- Peak memory may be unreliable; consider dropping it entirely
+- Peak memory may be unreliable; consider dropping it or check if it works on HPC
 
 ### Validation
 - Python benchmark script runs on debug dataset output .h5ad for each method (MrVI, PILOT, scPoli, PILOT-GM-VAE)
 - Output `.feather` files are produced and R can read them via `arrow::read_feather()`
 - Execution time format matches R's expected input
 - SLURM wrappers parse correctly
+
+---
+
+## New Datasets to Be Added
+
+- **Batch effect analysis:**
+  - Whole Stephenson by batch/center (n = 143)
+  - From PILOT-GM-VAE paper:
+    - KPMP Kidney subset (n = 45) — needs batch effect check first
+    - Breast cancer (n = 126)
+    - Covid-19 PBMC (n = 151)
+    - Diabetes (n = 52)
+    - Possibly: Sikkema Lung (n = 165) — `src/preprocess/TODO_STUMP_preprocess_sikkema.qmd`
+- **Benchmark analysis:**
+  - From PILOT-GM-VAE paper:
+    - Alzheimer (n = 83)
+    - Lupus PBMC (n = 261)
+    - Myocardial infarction (n = 23)
+    - Possibly: Kidney KPMP subset (n = 45)
+  - Appendix: GongSharma for other subsetting conditions (author annotations only, no preprocessing needed)
+
+## New Methods to Be Added
+
+- **PILOT-GM-VAE**: very similar to PILOT; add to `benchmark_methods_py.qmd`, `benchmark_methods_r.R`, and `constants.R`
+- **QOT**: check https://github.com/PennShenLab/QOT (no package, `qot_utils_re.py` script; read dependencies from `QOT_PDAC_Example.ipynb`)
+- **PULSAR**: check https://github.com/snap-stanford/PULSAR/ — does it require UCE? Needs HPC GPU, may exceed resources for larger datasets
+
+---
+
+## Batch Effect Analysis
+
+### Preprocessing
+- Handle HVG calculation using correct `batch_key`
+- `datasets.json`: add `"columns"` `"batch"` to `batch_effect_analysis` views
+- Create low-res cell types for Kfoury dataset (see `Preprocess_datasets.Rmd`)
+- For Joanito, create batch column BEFORE preprocessing (from sequencing technology/metadata) so `preprocess.py` can use it as `batch_key`
+- Update datasets with batch column mapping in `datasets.json`
+- Handle case where multiple datasets are combined (e.g. Combined PBMC in `batch_effect_analysis.rmd`)
+
+### Downstream
+- `DESeq2.normalize()`: check `batch_col` is correctly implemented
+- `get_pb_deseq2()`: add `batch_col` argument, implement batch correction
+
+### Analysis methods
+- **ECODA**: remove cell types significantly different across batches (t-test/Wilcoxon for 2 batches, ANOVA/Kruskal-Wallis for >2 batches)
+- **Pseudobulk** (DESeq2 + limma): re-use `process_pseudobulk_fig()` with added `batch_col` argument
+- **MrVI**: native batch effect correction
+- **GloScope**: run on Harmony-integrated space
+- **PILOT-GM-VAE**: run on Harmony-integrated space
 
 ---
 
@@ -335,295 +295,19 @@ Changes:
 
 ---
 
-## Quick Reference: Files Created vs Modified (Step 1 completed)
+## Ideas for Later
 
-| File | Action | Status |
-|---|---|---|
-| `src/slurm_config.sh` | **Create** (from config.env + new vars) | Done |
-| `src/preprocess/1.2_preprocess.py` | **Move** (from src/py/preprocess.py, renumbered) | Done |
-| `src/preprocess/1_submit_hpc_array.sh` | **Create** (new — stages data + submits array) | Done |
-| `src/preprocess/1.1_run_worker.sh` | **Create** (new — worker script) | Done |
-| `src/preprocess/_create_debug_dataset.R` | **Create** | Pending (Step 2) |
-| `aux/genes_blocklist.txt` | **Create** (extract from genes.blocklist.rds) | Pending (Step 3c) |
-| `datasets.json` | **Modify** (add `columns.batch`, add debug entry) | Pending (Step 3d) |
-| `notebooks/benchmark_analysis.rmd` | **Move** (from root) | Done |
-| `notebooks/batch_effect_analysis.rmd` | **Move** (from root) | Done |
-| `src/benchmark/benchmark_methods_r.R` | **Move** (from src/R/) | Done |
-| `src/benchmark/benchmark_pipeline.R` | **Move** (from src/R/) | Done |
-| `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd` | **Move** (from src/py/) | Done |
-| Remaining `src/R/*.R` → `src/utils/*.R` | **Move** (11 files) | Done |
-| `docs/ARCHITECTURE.md` | **Modify** | Done |
-| `AGENTS.md` | **Modify** | Done |
-| `README.md` | **Modify** | Done |
-| `src/bash/config.env` | **Delete** (replaced by slurm_config.sh) | Done |
-| `src/bash/copy_data_from_nas_to_hpc_scratch.sh` | **Delete** (absorbed into submit script) | Done |
-| `src/bash/preprocess/` | **Delete** (stale empty files) | Done |
-| `src/bash/cell_type_annotation/*` | **Move** → `src/cell_type_annotation/` | Done |
+- Possibly run GloScope on the HPC cluster
+- Implement MOFAcellular? Needs requirements testing
+- How to get final cell/sample/annotation counts from .h5ad (without loading full object into memory)?
 
+---
 
+# Completed
 
-
----------------------------------------------------
-
-
-# TBD (HPC cluster overhaul — out of scope for initial per-view migration)
-- Update `preprocess.py` to read flat datasets.json (no `["datasets"]` wrapper), use `input_file_name`/`output_file_name` per view, and handle array `input_file_name` for multi-file datasets (e.g. Gongsharma).
-    - Currently preprocess.py reads `json.load(f)["datasets"]` (KeyError) and `ds_info.get("file_name")` (None), so it crashes on the new datasets.json. → **Pending (Step 3a)**
-    - [x] New bash wrappers implemented: `1_submit_hpc_array.sh` / `1.1_run_worker.sh`
-    - [x] `copy_data_from_nas_to_hpc_scratch.sh` logic absorbed into `1_submit_hpc_array.sh` (no separate copy script)
-
-## Integrate multi-file preprocessing (e.g. Gongsharma h5ad files) into preprocess.py
-- Move the downsample_by_group() logic from preprocess_gongsharma.qmd into preprocess.py
-- Support array input_file_name in datasets.json views
-- This may require additional fields in datasets.json (out of scope for the initial per-view migration)
-
-
-
-# Implement h5ad loading in R (for preprocessed .h5ad files produced by preprocess.py)
-- Evaluate and implement the best approach to load h5ad files in benchmark_analysis.rmd and batch_effect_analysis.rmd:
-  - anndataR (R package for native AnnData loading)
-  - reticulate (Python anndata via rpy2)
-  - Convert h5ad to Seurat object (since some benchmarked R methods may need Seurat objects)
-- Update the loading code in both .rmd files once the approach is chosen
-- Additionally, the old `datasets[[ds]][["ds_name"]]` (file stem) field no longer exists in the new `read_datasets_json()` output. The RDS file-path construction in both .rmd files (5 references: benchmark_analysis.rmd lines 73, 1832, 3749; batch_effect_analysis.rmd lines 435, 475) needs to be updated as part of the migration to preprocessed .h5ad files.
-
-
-
-
-
-# How to get the final number of cells and samples and cell type annotations?
-- Might be easiest to simply get them from .h5ad files (is this possible without loading the full object into memory?) (instead of adding them to the datasets.json file, which would cause it to bload and outdate)
-
-
-# Update repo structure
-Current structure (after Step 1):
-ECODA_paper/
-├── Figure_workflow_schematic.Rmd
-├── Preprocess_datasets.Rmd                 # Still at root (legacy, superseded by preprocess.py)
-├── datasets.json
-├── notebooks/                              
-│   ├── QC_filtering/                       # Moved from root
-│   ├── batch_effect_analysis.rmd
-│   └── benchmark_analysis.rmd
-└── src/
-    ├── slurm_config.sh               # Centralized SLURM vars
-    ├── utils/                              # R modules from src/R/
-    │   ├── constants.R
-    │   ├── datasets_io.R
-    │   ├── helpers.R
-    │   ├── hvcs.R
-    │   ├── imports.R
-    │   ├── load_all_functions.R
-    │   ├── math_utils.R
-    │   ├── plotting.R
-    │   ├── pseudobulk.R
-    │   ├── scoring_metrics.R
-    │   ├── seurat_utils.R
-    ├── preprocess/                         # Self-contained preprocessing
-    │   ├── 1_submit_hpc_array.sh           # Created (stages data + submits array)
-    │   ├── 1.1_run_worker.sh               # Created
-    │   ├── 1.2_preprocess.py               # From src/py/preprocess.py
-    │   ├── TODO_STUMP_preprocess_sikkema.qmd
-    │   └── preprocess_gongsharma.qmd
-    ├── cell_type_annotation/               # From src/bash/cell_type_annotation/
-    │   ├── 1_prepare_chunks.r
-    │   ├── 1_prepare_chunks.sh
-    │   ├── 2_submit_hpc_array.sh
-    │   ├── 2.1_run_worker.sh
-    │   └── 2.2_process_chunk.sh
-    └── benchmark/                          # Self-contained benchmark
-        ├── benchmark_methods_r.R           # From src/R/
-        ├── benchmark_pipeline.R            # From src/R/
-        └── run_python_sample_embedding_methods/
-                ├── TODO_STUMP_1_submit_hpc_array.sh # Empty, implementation pending
-                ├── TODO_STUMP_1.1_run_worker.sh     # Empty, implementation pending
-                └── 1.2_benchmark_methods_py.qmd     # From src/py/
-
-
-
-# HPC cluster implementation
-- [x] Centralize SLURM environment variables in `src/slurm_config.sh`
-
-## Update cell type annotation
-- [x] Cell type annotation bash scripts updated for:
-    - the new preprocessing workflow (paths adjusted for src/preprocess/1.2_preprocess.py)
-    - pixi environment
-    - `src/slurm_config.sh` sourced for paths
-
-## Update preprocessing
-- [x] `Preprocess_datasets.Rmd` superseded by `src/preprocess/1.2_preprocess.py`
-- [x] Implemented `src/preprocess/1_submit_hpc_array.sh` (stages data + submits array)
-- [x] Implemented `src/preprocess/1.1_run_worker.sh` (worker script)
-- Data copy from NAS to scratch absorbed into `1_submit_hpc_array.sh` (runs on login node)
-
-## Update benchmark methods that need to be run in python (does not affect benchmark_methods_r.R)
-
-- `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd` Needs to be converted to .py file and adapted to run on the HPC cluster to be run per dataset per method
-    - `src/benchmark/run_python_sample_embedding_methods/TODO_STUMP_1_submit_hpc_array.sh` needs to be adapted to run on the HPC cluster
-    - `src/benchmark/run_python_sample_embedding_methods/TODO_STUMP_1.1_run_worker.sh` needs to be adapted to run on the HPC cluster
-
-- datasets (including batching strategy) now defined in datasets.json
-- remove redundant preprocessing step (e.g. sc.pp.normalize_total(adata)
-        sc.pp.log1p(adata)
-        sc.pp.highly_variable_genes(adata, n_top_genes=2000, subset=True, flavor="seurat")
-        sc.pp.scale(adata, max_value=10)
-        sc.pp.pca(adata, n_comps=50), etc.)
-    - noew implemented already in preprocess.py
-    - Make sure that every method gets the correct input (counts, or specific embedding)
-    - Double-check whether and how this works with the current preprocess.py workflow (because scanpy overwrites adata.X at every pre-processing step!)
-- Make it compatible with the benchmark pipeline (current script is only built for this)
-    - Either adapt to also incorporate the batch effect analysis datasets and files or create completely separate script)
-        - Batch effect analysis will only be run for MrVI and PILOT-GM-VAE python methods (and some other methods in R)
-    - Add batch effect mitigation strategies (e.g. MrVI provides this with a parameter, PILOT_GM_VAE needs X_pca_harmony as input)
-        - MrVI has native "nuisance variable" that handles batch effect (see here: https://docs.scvi-tools.org/en/1.3.3/tutorials/notebooks/scrna/MrVI_tutorial.html)
-        - Possibly just add batch_col argument to MrVI constructor: MRVI.setup_anndata(adata, sample_key="Sample", batch_key=batch_col) ?
-        - scPoli will not be used for batch effect analysis
-        - PILOT and PILOT-GM-VAE take as input the X_pca_harmony embeddings
-- double-check def log_execution_time_and_memory() output format and if it conforms with the expected input in benchmark_analysis.rmd at p_exec_times (which needs to be combined also with r_exec_times)
-    - Suggest plan to harmonize, if necessary
-- peak_memory was previously implemented but not running correctly in wsl2 on windows desktop
-    - check online for reasons why it might not have worked correctly
-    - might work if run on hpc cluster
-        - because of different memory allocation and file system handling
-        - if each dataset (or dataset-method combination) is run in separate instance
-    - otherwise comment out or drop completely (probably cleaner and still backed up in git history)
-
-## Explain new cell type annotation pipeline
-Was adopted from another project because previous workflow was in r but parallelization constantly kept freezing workers and no approach was found that could prevent it.
-Thus, a new cell type annotation was adopted that can be run on the HPC cluster in parallel for any number of datasets and any number of samples for scalability.
-- [x] Moved from Preprocess_datasets.Rmd to `src/cell_type_annotation/` (added from another project, adapted and polished)
-    - [x] Paths updated for new structure (source depth `../../` → `../`)
-    - [x] Hardcoded paths replaced with `src/slurm_config.sh`
-    - [x] Source calls updated for new `src/` layout
-
-## Add small test dataset for debugging `preprocess.py` and other HPC pipelines
-- Subset the Joanito dataset to a small number of samples (e.g., 5, covering both biological conditions and batches (sequencing technologies)) for testing and subset to 500 cells per sample (using random subsetting)
-- Make it so that the output creates a non-batch as well as a batch view (think about how to best implement this. possibly it should not be added to data.json, but instead only be used in the pipeline)
-- check resulting file size of.h5ad file and decide whether to store in the repo or on the nas (and where on the nas)
-
-
-
-# New datasets to be added:
-Implement new datasets (mainly check QC filtering, column names and check for possible batch effects on UMAP, the rest will run in pipeline)
-- batch effect analysis:
-    - Whole Stephenson by batch/center (n = 143)
-    - From PILOT-GM-VAE paper:
-        - KPMP Kidney (subset used in PILOT-GM-VAE paper)(needs to be checked for batch effects first) (n = 45)(alternatively with full dataset)
-        - Breast cancer (n = 126)
-        - Covid-19 PBMC (n = 151)
-        - Diabetes (n = 52)
-        - Possibly: Sikkema Lung (n = 165)
-    - `src/preprocess/TODO_STUMP_preprocess_sikkema.qmd` draft/exploratory
-- benchmark analysis:
-    - From PILOT-GM-VAE paper:
-        - Alzheimer (n = 83)
-        - Lupus PBMC (n = 261)
-        - Myocardial infarction (n = 23)
-        - Possibly: Kidney KPMP (subset used in PILOT-GM-VAE paper)(needs to be checked for batch effects first) (n = 45)
-    - For appendix:
-        - GongSharma dataset for other subsetting conditions for ECODA based on author annotations only (does not need pre-processing)
-
-# New methods to be added:
-- PILOT-GM-VAE (very similar to PILOT, needs to be added by benchmark_methods_py.qmd and benchmark_methods_r.R and constants.R)
-- Check if possible:
-    - QOT (https://github.com/PennShenLab/QOT, no package, just qot_utils_re.py script file. Dependencies need to be read out from e.g. QOT_PDAC_Example.ipynb)
-    - PULSAR (https://github.com/snap-stanford/PULSAR/, does it require UCE (https://github.com/snap-stanford/UniversalCellEmbedding)?)
-        - Needs to be run on the HPC cluster, possibly exceeding GPU requirements for larger datasets
-
-
-
-
-# preprocess.py
-- Add blacklist as default for filtering genes
-    - Load gene blacklist from file (e.g. from STACAS, see call to `default_black_list` in get_pb_deseq2 in `src/utils/pseudobulk.R`)
-        - Maybe save blacklist file to this repo for clarity and add explanation
-    - Filter out blacklisted genes before HVG calculation
-Possible solutions (but using the blacklist from STACAS):
-# Example: Identify mitochondrial genes
-is_mito = adata.var_names.str.startswith('MT-')
-# Invert the mask to keep non-blacklisted features
-adata = adata[:, ~is_mito].copy()
---------------------------------------------------
-# Define your blacklisted features
-blacklisted_features = ['MALAT1', 'HBB-BS', 'HBZ']  # example genes
-
-# Create a boolean mask for features NOT in the blacklist
-keep_features = ~adata.var_names.isin(blacklisted_features)
-
-# Subset the AnnData object
-adata = adata[:, keep_features].copy()
---------------------------------------------------
-# Mark blacklisted genes in var dataframe
-adata.var['blacklisted'] = adata.var_names.isin(blacklisted_features)
-
-# Subset to keep only those where 'blacklisted' is False
-adata = adata[:, ~adata.var['blacklisted']].copy()
---------------------------------------------------
-
-- hvgs: for non-batch views, make sure that sc.pp.highly_variable_genes(batch_key="Sample") is used
-- need to run and create new harmony embeddings (integrated by samlpe) based on pca embeddings for the "benchmark_analysis" views and create cell type annotations based on unsupervised clustering based on pca and additionally also based on harmony embeddings
-- for Batch_effect.Rmd, ensure it uses the updated preprocessing pipeline with batch-aware HVG calculation and new harmony embeddings
-- check strategy to handle gongsharma dataset. it's huge, that's why the authors provided the datasets in smaller chunks of .h5ad files subsetted by gender, cmv and age
-    - cleanup preprocess_gongsharma.qmd if necessary (still contains legacy code for other conditions that are not used in the current analysis (see datasets.json for most up-to-date list of datasets used and conditions))
-    - it does not make sense to combine into one file, so keep it separate
-    - check which files need to be actually pre-processed (in datasets.json, do not change this file)
-
-
-
-# Batch effect
-- Double-check and updated if necessary:
-    - "views": "benchmark_analysis" also requires HVGs to be calculated using batch_key="Sample"
-    - "views": "benchmark_analysis" also requires to calculate harmony embeddings (but benchmark methods will use uncorrected embeddings or counts. "X_pca_harmony" is only required for a new additional analysis for unsupervised clustering cell type annotation (to be added to benchmark_analysis.rmd. The goal is to compare unsupervised clustering methods on both corrected and uncorrected embeddings).)
-    - "views": "batch_effect" requires HVGs to be calculated using batch_key="batch"
-
-## Background information
-- For the preprint, the batch effect analysis was minimal (including only the Joanito dataset and the "Combined PBMC (Stephenson, GongSharma, Zhu)").
-- The code implementation was drafty, partly because it was just two datasets and partly because we did not make it a major point. However, now the code and batch effect analysis needs to be expanded and handled more cleanly.
-- The reviewers raised this as a major point (probably the most important point) to be improve added after reviewing the preprint.
-
-# Batch effect analysis dataset info
-
-Should it be done once without batch correction, and once with?
-- It is more important to do WITH batch correction
-- Show biological of non-batch corrected results for paper appendix?
-
-The final analysis for batch effect correction needs to be run on the following methods and batch effect mitigation strategies:
-- ECODA: remove cell types that are significantly different across batches
-    - Possibly re-use process_coda_fig() with added argument batch_col = NULL?
-    - Use metadata column batch_col to test for batch-associated cell types (after clr-transformation)
-        - Possible methods:
-            - Simplest method: remove them and re-calculate clr-transformed cell type composition
-            - More complex method: batch correct applying something like a (mixed) linear model or similar method. Could limma be used?
-        - Which statistical method to use and which threshold to use for significant difference between batches? -> Print warning naming cell types and Significance. -> Possibly depends on the number of batches:
-            - Test every cell type separately or, possibly better, check global variance of cell type composition across batches and see if it is different.
-            - If 2 batches: use t-test or Wilcoxon rank-sum test, p-value < 0.05
-            - If >2 batches: use ANOVA or Kruskal-Wallis test, p-value < 0.05
-- Pseudobulk (DESeq2 + limma)
-    - Possibly re-use `process_pseudobulk_fig()` with added argument `batch_col`?
-- MrVI (native batch effect correction)
-- GloScope (run on harmony integrated space)
-- PILOT-GM-VAE (run on harmony integrated space)
-
-
-## Preprocessing
-- handle hvg calculation using correct batch_key
-    - datasets.json: add "columns" "batch" to batch_effect_analysis views
-    - Create low res cell types for Kfoury dataset (see Preprocess_datasets.Rmd for details)
-    - For Joanito, the batch column must be created BEFORE preprocessing in preprocess.py (currently defined manually at end of batch_effect_analysis.rmd). The column needs to exist in the input data so preprocess.py can use it as batch_key for HVG selection and harmony integration.
-        - Approach: create batch column (e.g. combining sequencing technology/metadata fields) as part of data preparation, before preprocess.py runs.
-    - update datasets with batch column mapping in datasets.json
-    - handle case where multiple datasets are combined (e.g. in batch_effect_analysis.rmd at "# Combined PBMC (Stephenson, GongSharma, Zhu)")
-
-## Down-stream
-- DESeq2.normalize():
-    - check batch_col is correctly implemented
-    - check that it does not get "Sample" as a batch column
-- get_pb_deseq2(): add argument batch_col, implement batch_col
-
-## Analysis
-
-
-# Ideas for later:
-- Possibly run GloScope on the HPC cluster? Leave it for now
-- Imp,ement MOFAcellular?
-    - MOFAcellular needs to be tested for requirements
+- [x] **Step 1 Foundation**: SLURM config centralized (`src/slurm_config.sh`), files restructured (notebooks/, src/utils/, src/preprocess/, src/benchmark/), all internal paths updated, docs (ARCHITECTURE.md, AGENTS.md, README.md) updated
+- [x] **Cell type annotation pipeline**: Adopted from another project (HPC-parallelized), path-adjusted for new src/ structure, HiTME/scATOMIC column whitelisting from Preprocess_datasets.Rmd, scATOMIC added to `2.2_process_chunk.sh` and `3_merge_annotations.py`, retry loops with timeout for R worker
+- [x] **SLURM config migration**: `src/bash/config.env` → `src/slurm_config.sh`, all bash scripts updated to source centralized file, `config.env` deleted
+- [x] **HPC wrappers**: `src/preprocess/1_submit_hpc_array.sh` / `1.1_run_worker.sh` implemented, data copy from NAS to scratch absorbed into submit script, `copy_data_from_nas_to_hpc_scratch.sh` deleted
+- [x] **File migration**: QC_filtering/ → notebooks/, .rmd files moved, `src/R/` → `src/utils/` (11 files), `src/bash/cell_type_annotation/` → `src/cell_type_annotation/`, stale files deleted
+- [x] **Step 3d Follow-up**: Plan verified, DRY `_preprocess_utils.py` extracted, RAM optimization (in-place gene subsetting, early obs trimming, `del`/`gc`), NAS syncing confirmed for preprocessing and cell type annotation, `config_helper.R` fixed, `run_worker.sh` memory bumped to 16G baseline
