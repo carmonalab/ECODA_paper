@@ -5,8 +5,10 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1                  
-#SBATCH --mem=8G                           
+#SBATCH --mem=16G                          
 #SBATCH --mail-type=END,FAIL
+# NOTE: 16G should be sufficient for 5 samples/chunk (each subset from h5ad).
+# If OOM occurs, bump to 32G and resubmit the failed chunk only.
 
 set -euo pipefail
 

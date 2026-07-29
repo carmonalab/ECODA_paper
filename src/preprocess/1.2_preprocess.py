@@ -2,7 +2,6 @@ import os
 import json
 import sys
 import scanpy as sc
-import rpy2.robjects as ro
 import scipy.sparse as sp
 from pathlib import Path
 import pandas as pd
@@ -10,64 +9,7 @@ import re
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.gene_utils import standardize_gene_symbols
-
-
-# ---------------------------------------------------------------------------
-# R interop
-# ---------------------------------------------------------------------------
-ro.r('source("src/utils/load_all_functions.R")')
-ro.r('''
-convert_rds_to_raw_h5ad <- function(input_path, output_path) {
-  seurat <- readRDS(input_path)
-  seurat <- create_clean_seuratv5_object(seurat)
-
-  if (!file.exists(output_path)) {
-    seurat@assays$RNA@data <- seurat@assays$RNA@counts
-    write_h5ad(seurat, output_path)
-    seurat@assays$RNA@data <- NULL
-  }
-}
-''')
-convert_rds_to_raw_h5ad_r = ro.globalenv["convert_rds_to_raw_h5ad"]
-
-
-# ---------------------------------------------------------------------------
-# Loading helpers
-# ---------------------------------------------------------------------------
-def _load_single_input(input_file_name, base_path, output_dir):
-    input_file_path = base_path / input_file_name
-    if str(input_file_name).endswith(".rds"):
-        stem = Path(input_file_name).stem
-        raw_h5ad_path = output_dir / f"{stem}_raw.h5ad"
-        convert_rds_to_raw_h5ad_r(str(input_file_path), str(raw_h5ad_path))
-        return sc.read_h5ad(raw_h5ad_path)
-    elif str(input_file_name).endswith(".h5ad"):
-        return sc.read_h5ad(input_file_path)
-    else:
-        raise ValueError(f"Unsupported file format: {input_file_name}")
-
-
-def _load_input(input_file_name, base_path, output_dir):
-    if isinstance(input_file_name, list):
-        adatas = [_load_single_input(f, base_path, output_dir) for f in input_file_name]
-        return sc.concat(adatas, index_unique="_") if len(adatas) > 1 else adatas[0]
-    return _load_single_input(input_file_name, base_path, output_dir)
-
-
-# ---------------------------------------------------------------------------
-# Cell (row) subsetting for views
-# ---------------------------------------------------------------------------
-def apply_subset_vars(adata, subset_vars):
-    """Apply {"col": {"values": [...], "op": "in"/"notin"}} filters."""
-    if not subset_vars:
-        return adata
-    mask = pd.Series(True, index=adata.obs_names)
-    for col, spec in subset_vars.items():
-        if col not in adata.obs.columns:
-            raise KeyError(f"subset_vars references missing obs column: {col}")
-        col_mask = adata.obs[col].isin(spec["values"])
-        mask &= col_mask if spec.get("op", "in") == "in" else ~col_mask
-    return adata[mask].copy()
+from src.preprocess._preprocess_utils import load_input, apply_subset_vars
  
 
 # ---------------------------------------------------------------------------
@@ -262,7 +204,7 @@ def main(config_path="datasets.json", base_path="data", output_dir="data",
                 continue
 
             print(f"Loading {ds_name} / {view_name} ...")
-            adata_full = _load_input(input_file_name, base_path, output_dir)
+            adata_full = load_input(input_file_name, base_path, output_dir)
 
             if sample_col in adata_full.obs.columns:
                 adata_full.obs["Sample"] = [
