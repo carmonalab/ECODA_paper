@@ -1,13 +1,13 @@
-# Follow-up on Step 3d.
-- check if .kilo/plans/1785270333881-batch-column-support.md was properly implemented
-- apply DRY to `preprocess.py` and `src/preprocess/_create_combinedpbmc_dataset.py` (repeated function definitions)
-- check `src/preprocess/_create_combinedpbmc_dataset.py` as RAM memory usage might be too high and could be reduced (not a big problem, should be fine if run on HPC, as those datasets are not excessive but still, would be nice to have)
-- the output path in `src/preprocess/_create_combinedpbmc_dataset.py` is fine. However, at the end of the preprocessing and cell type annotation, files should be synced back to the NAS for backup and long-term storage. Also all the results created from `benchmark_methods_r.R` and `benchmark_methods_py.R` (significant data processing) should be synced back to the NAS.
-- Update TODO.md (see below)
-- Added back config_helper.R (legacy file for the cell type annotation pipeline bash scripts that were imported from another repo. Needs to be checked if still needed and also adapted, including the whole SLURM pipeline major overhaul, standardization and centralization (e.g. of environment variables and possibly bash scripts))
-- check run_worker.sh scripts for memory usage:
-    - `src/cell_type_annotation/2.1_run_worker.sh` Using fixed #SBATCH --mem=8G might be enough for most samples but should be checked. Possibly add check if it ran and if not, rerun with 16GB (or 32GB)
-    - `src/preprocess/1.1_run_worker.sh` Using fixed #SBATCH --mem=8G is for sure not enough for most datasets. Needs some RAM allocation logic to estimate required RAM or fallback logic to increase if needed.
+# Step 3d Follow-up — Completed
+- [x] Plan implementation verified: all 7 tasks (A–G) properly implemented
+- [x] DRY applied: shared loading/R-interop/subset utils extracted to `src/preprocess/_preprocess_utils.py`
+- [x] RAM optimized in combine script: in-place gene subsetting, early obs column trimming, explicit `del`/`gc` after concat
+- [x] NAS syncing confirmed: preprocessing and cell type annotation `submit_hpc_array.sh` scripts both sync after array completion. Benchmark SLURM wrappers still pending.
+- [x] `config_helper.R` fixed: removed `readRenviron("config.env")` (deleted file), `PROJECT_ROOT`/`NAS_PREFIX` now exported from `slurm_bash_config.env`
+- [x] `run_worker.sh` memory: both bumped to 16G baseline with inline documentation for per-dataset increases
+- Cell type annotation with HiTME and scATOMIC create a lot of unneded metadata columns. Check legacy `Preprocess_datasets.Rmd` on which HiTME_cols_keep and scATOMIC_cols to keep. But please keep all previously  existing metadata columns (unlike in the legacy code).
+- convert `slurm_bash_config.env` to `slurm_config.sh` (replaced by centralized file). Replace all references to `slurm_bash_config.env` with `slurm_config.sh`.
+    - Check if `slurm_config.sh` can be run once or whether it needs to be sourced in all the job submission and run_worker bash scripts.
 
 # Pipeline Overhaul Execution Plan
 

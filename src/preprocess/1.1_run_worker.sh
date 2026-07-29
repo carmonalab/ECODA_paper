@@ -7,6 +7,8 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --mail-type=END,FAIL
+# NOTE: 16G is the baseline. Datasets with >100k cells may need 32-64G.
+# If a dataset OOMs, increase --mem for that specific dataset's worker.
 
 set -euo pipefail
 
