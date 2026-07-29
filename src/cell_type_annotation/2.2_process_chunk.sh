@@ -70,6 +70,7 @@ library(Seurat)
 library(arrow)
 library(scATOMIC)
 library(cutoff.scATOMIC)
+library(R.utils)
 
 # Import anndata WITHOUT automatic R conversion
 library(reticulate)
@@ -209,33 +210,67 @@ if (file.exists(annot_file)) {
 
     ### scATOMIC annotation ####
     if (is.null(seurat_obj@meta.data[["layer_1"]])) {
-      sca_preds <- run_scATOMIC(seurat_obj@assays$RNA$counts)
-      sca_results <- create_summary_matrix(
-        prediction_list = sca_preds,
-        raw_counts = seurat_obj@assays$RNA$counts,
-        normal_tissue = args$normal_tissue
-      )
-      sca_cols <- intersect(scatomic_cols, colnames(sca_results))
-      seurat_obj <- AddMetaData(seurat_obj, sca_results[, sca_cols, drop = FALSE])
+      timeout <- max(60, ncol(seurat_obj) / 10000 * 2.5 * 60 * 4)
+      for (a in 1:5) {
+        message(paste("  scATOMIC attempt", a, "with", round(timeout), "s timeout"))
+        result <- tryCatch({
+          withTimeout({
+            sca_preds <- run_scATOMIC(seurat_obj@assays$RNA$counts)
+            sca_results <- create_summary_matrix(
+              prediction_list = sca_preds,
+              raw_counts = seurat_obj@assays$RNA$counts,
+              normal_tissue = args$normal_tissue
+            )
+            "Complete"
+          }, timeout = timeout)
+        }, TimeoutException = function(te) {
+          message("  scATOMIC timeout, retrying...")
+          NULL
+        }, error = function(er) {
+          message(paste("  scATOMIC error:", er$message, "- retrying..."))
+          NULL
+        })
+        if (!is.null(result)) {
+          sca_cols <- intersect(scatomic_cols, colnames(sca_results))
+          seurat_obj <- AddMetaData(seurat_obj, sca_results[, sca_cols, drop = FALSE])
+          break
+        }
+      }
     }
 
-    ### Annotate cells ####
-    if (args$tissue_type == "Blood") {
-      seurat_obj <- Run.HiTME(
-        object = seurat_obj,
-        scGate.model = scGate_models_blood,
-        ref.maps = ref.maps_sketched,
-        verbose = FALSE,
-        ncores = 1
-      )
-    } else {
-      seurat_obj <- Run.HiTME(
-        object = seurat_obj,
-        scGate.model = scGate_models_tumor,
-        ref.maps = ref.maps_sketched,
-        verbose = FALSE,
-        ncores = 1
-      )
+    ### HiTME annotation ####
+    timeout <- 600
+    for (a in 1:5) {
+      message(paste("  HiTME attempt", a, "with", timeout, "s timeout"))
+      result <- tryCatch({
+        withTimeout({
+          if (args$tissue_type == "Blood") {
+            seurat_obj <- Run.HiTME(
+              object = seurat_obj,
+              scGate.model = scGate_models_blood,
+              ref.maps = ref.maps_sketched,
+              verbose = FALSE,
+              ncores = 1
+            )
+          } else {
+            seurat_obj <- Run.HiTME(
+              object = seurat_obj,
+              scGate.model = scGate_models_tumor,
+              ref.maps = ref.maps_sketched,
+              verbose = FALSE,
+              ncores = 1
+            )
+          }
+          "Complete"
+        }, timeout = timeout)
+      }, TimeoutException = function(te) {
+        message("  HiTME timeout, retrying...")
+        NULL
+      }, error = function(er) {
+        message(paste("  HiTME error:", er$message, "- retrying..."))
+        NULL
+      })
+      if (!is.null(result)) break
     }
 
     ### Extract annotations ####
