@@ -24,7 +24,7 @@ RUN_AS_TEST <- as.logical(args$test)
 # ###### Set paths ######
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-# Fetch dataset name dynamically from config.env
+# Fetch dataset name dynamically from config.env # TODO: legacy code (config.env is deprecated, this should be slurm_config.sh). Double-check if this actually works or needs to be implemented differently (e.g. from config_helper.R)
 ds_name <- Sys.getenv("DS_NAME")
 if (ds_name == "") stop("CRITICAL Error: DS_NAME not set. Ensure it is exported before calling this script.")
 
