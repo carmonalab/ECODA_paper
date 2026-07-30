@@ -54,9 +54,6 @@ dir.create(paths$path_output_ecoda, showWarnings = FALSE)
 # Import anndata WITHOUT automatic R conversion
 library(reticulate)
 
-# # Use pixi python # TODO: check if this is still needed
-# pixi_python <- file.path(getwd(), ".pixi", "envs", "default", "bin", "python")
-# reticulate::use_python(pixi_python, required = TRUE)
 py_require("anndata")
 ad <- import("anndata", convert = FALSE)
 
