@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# 2.2_process_chunk.sh — Thin wrapper that calls 2.2_process_chunk.R via pixi
+# 2.1.1_process_chunk.sh — Thin wrapper that calls 2.1.1.1_process_chunk.R via pixi
 #
 
 set -euo pipefail
@@ -30,7 +30,7 @@ fi
 cd "${PROJECT_ROOT}"
 
 "${HOME}/.pixi/bin/pixi" run Rscript --vanilla \
-  "${SCRIPT_DIR}/2.2_process_chunk.R" \
+  "${SCRIPT_DIR}/2.1.1.1_process_chunk.R" \
   "chunk_file__${CHUNK_FILE}"
 
 log_msg "Chunk ${TASK_ID} processing complete."

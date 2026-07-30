@@ -83,6 +83,6 @@ srun --partition=shared-cpu \
      --mem=4G \
      --output="${LOG_FILE}" \
      --error="${LOG_FILE}" \
-     "${ENV_RSCRIPT}" --vanilla 1_prepare_chunks.r "${R_PASS_ARG}"
+     "${ENV_RSCRIPT}" --vanilla 1.1_prepare_chunks.r "${R_PASS_ARG}"
 
 echo "✓ Chunk generation script finished executing. Log saved to: logs/prepare_chunks_${MODE_ARG}.log"

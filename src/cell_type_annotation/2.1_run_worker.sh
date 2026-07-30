@@ -21,4 +21,4 @@ cd "${PROJECT_ROOT}"
 
 CHUNK_FILE="${HOME_CHUNKS_DIR}/chunk_${SLURM_ARRAY_TASK_ID}.txt"
 
-bash "./2.2_process_chunk.sh" "${SLURM_ARRAY_TASK_ID}" "${PROJECT_ROOT}" "${CHUNK_FILE}"
+bash "./2.1.1_process_chunk.sh" "${SLURM_ARRAY_TASK_ID}" "${PROJECT_ROOT}" "${CHUNK_FILE}"

@@ -29,7 +29,7 @@ NAS_REF_DIR="${NAS_PREFIX}/DataCollections/reference_atlases/sketched_200ct/"
 HOME_REF_DIR="${HOME}/reference_atlases/sketched_200ct/"
 
 # --- Gene reference (cell type annotation) ---
-# Used for gene standardization with STACAS; now implemented in src/preprocess/1.2_preprocess.py
+# Used for gene standardization with STACAS; now implemented in src/preprocess/1.1.1_preprocess.py
 # which runs before cell type annotation. Kept for potential fallback.
 GENE_REF_FILE="${PROJECT_ROOT}/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
 GENE_REF_URL="https://raw.githubusercontent.com/carmonalab/scRNAseq_data_processing/master/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
