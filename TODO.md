@@ -256,16 +256,6 @@ SLURM_PARTITION="shared-cpu"
     - `src/benchmark/run_python_sample_embedding_methods/`
     - `src/benchmark/benchmark_pipeline.R`
 
-### Step 6b. Check this is still needed and reticulate gets pointed to the correct python environment (see pixi.toml)
-src/cell_type_annotation/1_prepare_chunks.r:56-60
-```
-# # Use pixi python # TODO: check if this is still needed
-# pixi_python <- file.path(getwd(), ".pixi", "envs", "default", "bin", "python")
-# reticulate::use_python(pixi_python, required = TRUE)
-py_require("anndata")
-ad <- import("anndata", convert = FALSE)
-```
-
 ### Step 6c.
 src/cell_type_annotation/1_prepare_chunks.r:37-45
 ```
