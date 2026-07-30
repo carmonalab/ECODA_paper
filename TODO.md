@@ -7,7 +7,7 @@
 
 ## Step 1 - Check if cell type annotation pipeline can be simplified
 - Is `config_helper.R` still needed or should this better be handled in `slurm_config.sh`?
-  - If `config_helper.R` is easier and cleaner, then check `1_prepare_chunks.r` and `2.2_process_chunk.R` to see if they can be simplified
+  - If `config_helper.R` is easier and cleaner, then check `1.1_prepare_chunks.r` and `2.1.1.1_process_chunk.R` to see if they can be simplified
 - Check if any `*_prepare_chunks.sh` and `*_process_chunk.sh` can be simplified by moving more into `slurm_config.sh`
 
 ## Step 2 — Debug Dataset (Joanito 5-sample)
@@ -340,7 +340,7 @@ SLURM_PARTITION="shared-cpu"
 # Completed
 
 - [x] **Step 1 Foundation**: SLURM config centralized (`src/slurm_config.sh`), files restructured (notebooks/, src/utils/, src/preprocess/, src/benchmark/), all internal paths updated, docs (ARCHITECTURE.md, AGENTS.md, README.md) updated
-- [x] **Cell type annotation pipeline**: Adopted from another project (HPC-parallelized), path-adjusted for new src/ structure, HiTME/scATOMIC column whitelisting from Preprocess_datasets.Rmd, scATOMIC added to `2.2_process_chunk.sh` and `3_merge_annotations.py`, retry loops with timeout for R worker
+- [x] **Cell type annotation pipeline**: Adopted from another project (HPC-parallelized), path-adjusted for new src/ structure, HiTME/scATOMIC column whitelisting from Preprocess_datasets.Rmd, scATOMIC added to `2.1.1_process_chunk.sh` and `3_merge_annotations.py`, retry loops with timeout for R worker
 - [x] **SLURM config migration**: `src/bash/config.env` → `src/slurm_config.sh`, all bash scripts updated to source centralized file, `config.env` deleted
 - [x] **HPC wrappers**: `src/preprocess/1_submit_hpc_array.sh` / `1.1_run_worker.sh` implemented, data copy from NAS to scratch absorbed into submit script, `copy_data_from_nas_to_hpc_scratch.sh` deleted
 - [x] **File migration**: QC_filtering/ → notebooks/, .rmd files moved, `src/R/` → `src/utils/` (11 files), `src/bash/cell_type_annotation/` → `src/cell_type_annotation/`, stale files deleted

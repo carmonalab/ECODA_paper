@@ -1,7 +1,7 @@
 # ==============================================================================
-# 2.2_process_chunk.R — Process one chunk of samples for cell type annotation
+# 2.1.1.1_process_chunk.R — Process one chunk of samples for cell type annotation
 # ==============================================================================
-# Called by 2.2_process_chunk.sh (pixi run Rscript --vanilla)
+# Called by 2.1.1_process_chunk.sh (pixi run Rscript --vanilla)
 # Expects a single argument: chunk_file__<path_to_chunk_txt>
 # ==============================================================================
 

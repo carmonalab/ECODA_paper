@@ -57,7 +57,7 @@ Do not change this file without asking.
     - Not implemented yet: HPC pipeline bash scripts for `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd` (needs to be adapted, e.g. converted to .py and run on the cluster by calling from a bash script)
     - `src/cell_type_annotation` — HPC-parallelized scATOMIC + HiTME cell type annotation.
         - renv remnants removed; R environment fully managed by pixi (`pixi run Rscript`).
-        - R code extracted from bash heredoc into standalone `2.2_process_chunk.R`.
+        - R code extracted from bash heredoc into standalone `2.1.1.1_process_chunk.R`.
         - `config_helper.R` moved from `DEPRECATED_LEGACY_CODE/` to project root (env-var based).
         - See [ARCHITECTURE.md](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-stage-2b) for full pipeline documentation.
 - `slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
@@ -74,7 +74,7 @@ Do not change this file without asking.
 Four-stage end-to-end pipeline:
 
 - **Stage 1 — QC Filtering** (`notebooks/QC_filtering/`): Per-dataset R Markdown notebooks (12 cohorts). Standard scRNA-seq QC: mitochondrial genes, gene/transcript count thresholds, doublet removal. Produces QC-filtered input for Stage 2.
-- **Stage 2 — Preprocessing** (`src/preprocess/1.2_preprocess.py` + `src/cell_type_annotation/`): Python/Scanpy pipeline. Sample/gene name standardization, sample subsetting (driven by `datasets.json`), low cell-count removal, HVG selection (batch-aware and non-batch modes, multiple sizes), unsupervised clustering (multiple Leiden resolutions), Harmony integration. Cell type annotation via scATOMIC + HiTME (HPC-parallelized, borrowed from another project, not yet polished).
+- **Stage 2 — Preprocessing** (`src/preprocess/1.1.1_preprocess.py` + `src/cell_type_annotation/`): Python/Scanpy pipeline. Sample/gene name standardization, sample subsetting (driven by `datasets.json`), low cell-count removal, HVG selection (batch-aware and non-batch modes, multiple sizes), unsupervised clustering (multiple Leiden resolutions), Harmony integration. Cell type annotation via scATOMIC + HiTME (HPC-parallelized, borrowed from another project, not yet polished).
 - **Stage 3 — Benchmark Analysis** (`notebooks/benchmark_analysis.rmd` + `src/utils/` + `src/benchmark/` + `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd`): `run_analyses()` orchestrates three sub-pipelines: (3.1) benchmark methods (R-native: ECODA, Pseudobulk, MOFA, scITD, GloScope, GloProp, Avg PCA, Deconvolution; Python: MrVI, PILOT, scPoli — output `.feather` files ingested by R processors), (3.2) transformation analysis comparing ECODA transformations via `datrans()` parallel engine, (3.3) zero imputation analysis (4 strategies + multiLN/multiRepl).
 - **Stage 4 — Batch Effect Analysis** (`notebooks/batch_effect_analysis.rmd`): Under expansion per reviewer comments. Methods: ECODA (batch-associated CT removal), Pseudobulk (DESeq2 + limma), MrVI (native batch handling), GloScope (Harmony space), PILOT-GM-VAE (Harmony space).
 - **HPC wrappers** (`src/`): SLURM scripts for parallel per-dataset execution. `slurm_config.sh`, `preprocess/1_submit_hpc_array.sh` (stages data + submits array), `cell_type_annotation/` (array job pipeline). Planned: `submit_benchmark_methods_py.sh`.
@@ -113,5 +113,5 @@ See `docs/ARCHITECTURE.md` for the full call flow, function-level documentation,
   - **Silhouette**: `calc_sil()`
   - **Modularity**: `calc_modularity()` with multiple KNN variants (sqrt(n), 3, 6, 9)
   - **LISI**: Local Inverse Simpson's Index (`calc_lisi()`, :159)
-- **Harmony integration**: Batch correction by integrating PCA embeddings across samples/batches. Computed in `src/preprocess/1.2_preprocess.py`.
+- **Harmony integration**: Batch correction by integrating PCA embeddings across samples/batches. Computed in `src/preprocess/1.1.1_preprocess.py`.
 - **`.feather` files**: Apache Arrow format for cross-language data exchange. Python methods in `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd` output distance matrices/embeddings as `.feather`; R method processors in `src/benchmark/benchmark_methods_r.R` ingest them.

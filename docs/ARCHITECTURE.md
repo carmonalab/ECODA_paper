@@ -32,7 +32,7 @@ Cell type annotation runs as a **separate HPC-parallelized pipeline** on SLURM, 
 ```
 [ Monolithic h5ad Files on NAS ]
                │
-               ▼ (1_prepare_chunks.sh + 1_prepare_chunks.r)
+                ▼ (1_prepare_chunks.sh + 1.1_prepare_chunks.r)
      [ chunk_1.txt ]  [ chunk_2.txt ]  ...  [ chunk_N.txt ]  (5 samples each)
                │               │
                ▼ (SLURM Array) ▼ (SLURM Array)
@@ -49,14 +49,14 @@ Cell type annotation runs as a **separate HPC-parallelized pipeline** on SLURM, 
 
 | File | Role |
 |---|---|
-| `1_prepare_chunks.sh` | Thin bash wrapper: sources `slurm_config.sh`, stages data + ref maps from NAS → scratch, calls `1_prepare_chunks.r` via `srun` (4G, 10min). Supports `test` mode (`./1_prepare_chunks.sh test` → 1 sample/chunk). |
-| `1_prepare_chunks.r` | Reads each .h5ad in backed mode (reticulate + anndata), extracts unique sample IDs from `sample_col` (env var `SAMPLE_COLNAME`), groups them into chunks of 5 (or 1 in test mode), writes `chunk_N.txt` files (1st line = h5ad path, subsequent lines = sample IDs). |
+| `1_prepare_chunks.sh` | Thin bash wrapper: sources `slurm_config.sh`, stages data + ref maps from NAS → scratch, calls `1.1_prepare_chunks.r` via \`srun\` (4G, 10min). Supports `test` mode (`./1_prepare_chunks.sh test` → 1 sample/chunk). |
+| `1.1_prepare_chunks.r` | Reads each .h5ad in backed mode (reticulate + anndata), extracts unique sample IDs from `sample_col` (env var `SAMPLE_COLNAME`), groups them into chunks of 5 (or 1 in test mode), writes `chunk_N.txt` files (1st line = h5ad path, subsequent lines = sample IDs). |
 | `2_submit_hpc_array.sh` | Reads chunk count from scratch, submits a SLURM array job (`--array=1-N`, `MAX_NUM_CHUNKS_PARALLEL` concurrency), monitors for completion, then syncs results back to NAS via rsync. |
-| `2.1_run_worker.sh` | `#SBATCH` worker (shared-cpu, 16G, 2h). Sources `slurm_config.sh`, reads `CHUNK_FILE` from `SLURM_ARRAY_TASK_ID`, calls `2.2_process_chunk.sh`. |
-| `2.2_process_chunk.sh` | Thin wrapper that calls `2.2_process_chunk.R` via `pixi run Rscript --vanilla`. |
-| `2.2_process_chunk.R` | Core annotation logic: reads the chunk's h5ad file, iterates per sample, extracts sample-level Seurat objects, runs **scATOMIC** (5 attempts with timeout) then **HiTME** (5 attempts with timeout). Writes per-chunk `.feather` file with annotation columns. Dual annotation: scATOMIC provides layer-1..6 predictions + confidence; HiTME provides layer1/2/3 UCell signatures + scGate/ProjecTILs refinement. Only annotation columns are kept (not full Seurat objects). |
+| `2.1_run_worker.sh` | `#SBATCH` worker (shared-cpu, 16G, 2h). Sources `slurm_config.sh`, reads `CHUNK_FILE` from `SLURM_ARRAY_TASK_ID`, calls `2.1.1_process_chunk.sh`. |
+| `2.1.1_process_chunk.sh` | Thin wrapper that calls `2.1.1.1_process_chunk.R` via `pixi run Rscript --vanilla`. |
+| `2.1.1.1_process_chunk.R` | Core annotation logic: reads the chunk's h5ad file, iterates per sample, extracts sample-level Seurat objects, runs **scATOMIC** (5 attempts with timeout) then **HiTME** (5 attempts with timeout). Writes per-chunk `.feather` file with annotation columns. Dual annotation: scATOMIC provides layer-1..6 predictions + confidence; HiTME provides layer1/2/3 UCell signatures + scGate/ProjecTILs refinement. Only annotation columns are kept (not full Seurat objects). |
 | `3_merge_annotations.py` | Reads all `annotations_chunk_*.feather` files, joins them into the input `.h5ad`'s `obs` by cell barcode, keeps only the whitelisted annotation columns, writes annotated `.h5ad`. |
-| `config_helper.R` | (Project root) Builds path config from env vars exported by `slurm_config.sh`. Called by both `1_prepare_chunks.r` and `2.2_process_chunk.R`. |
+| `config_helper.R` | (Project root) Builds path config from env vars exported by `slurm_config.sh`. Called by both `1.1_prepare_chunks.r` and `2.1.1.1_process_chunk.R`. |
 
 #### Key design details
 
