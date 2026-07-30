@@ -34,7 +34,6 @@ paths <- get_pipeline_config(ds_name, force_overwrite = TRUE, test_mode = RUN_AS
 message(paste("Path is:", paths$path_data))
 message(paste("Files found:", paste(list.files(paths$path_data), collapse = ", ")))
 
-# TODO: should this be moved to config_helper.R or an upstream bash script?
 dir.create(paths$path_output, showWarnings = FALSE)
 dir.create(paths$path_output_samples, showWarnings = FALSE)
 # Delete chunk file folder recursively to ensure a perfectly clean start
