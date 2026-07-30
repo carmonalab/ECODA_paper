@@ -256,20 +256,6 @@ SLURM_PARTITION="shared-cpu"
     - `src/benchmark/run_python_sample_embedding_methods/`
     - `src/benchmark/benchmark_pipeline.R`
 
-### Step 6c.
-src/cell_type_annotation/1_prepare_chunks.r:37-45
-```
-# TODO: should this be moved to config_helper.R or an upstream bash script?
-dir.create(paths$path_output, showWarnings = FALSE)
-dir.create(paths$path_output_samples, showWarnings = FALSE)
-# Delete chunk file folder recursively to ensure a perfectly clean start
-if (dir.exists(paths$path_output_chunks)) {
-  unlink(paths$path_output_chunks, recursive = TRUE, force = TRUE)
-}
-dir.create(paths$path_output_chunks, showWarnings = FALSE)
-dir.create(paths$path_output_ecoda, showWarnings = FALSE)
-```
-
 
 ---
 
