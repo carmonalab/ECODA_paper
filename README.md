@@ -6,7 +6,7 @@ This repository contains the code to reproduce the results and figures from the
 paper: **"Cell type composition drives patient stratification in single-cell
 RNA-seq cohorts"**.
 
-### **Overview**
+## **Overview**
 
 Single-cell RNA sequencing (scRNA-seq) enables high-resolution characterization
 of cellular heterogeneity, but summarizing this data for cohort-level analysis
@@ -33,20 +33,32 @@ groupings in a fully unsupervised setting.
     subset of highly variable cell types (HVCs), providing direct mechanistic
     insights.
 
-### **Repository Contents**
-
--   `datasets.json`: Centralized dataset metadata (sample/label columns, subsetting rules, batch information).
--   `notebooks/QC_filtering/`: Per-dataset R Markdown notebooks for standard scRNA-seq QC.
--   `src/preprocess/1.2_preprocess.py`: Standardized preprocessing pipeline (Python/Scanpy) — sample/gene name standardization, HVG selection, unsupervised clustering, Harmony integration.
--   `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd`: Python benchmark methods (MrVI, PILOT, scPoli).
--   `src/utils/` + `src/benchmark/`: Modular R functions — benchmark pipeline orchestration, scoring metrics, pseudobulk processing, HVC selection, math utilities, plotting.
--   `notebooks/benchmark_analysis.rmd`: Core analysis script orchestrating the benchmark pipeline and generating paper figures.
--   `notebooks/batch_effect_analysis.rmd`: Batch effect analysis and correction evaluation.
--   `src/`: SLURM submission scripts for HPC parallel execution (preprocessing, cell type annotation, benchmark methods).
--   `docs/ARCHITECTURE.md`: Full pipeline architecture, call flow, and module documentation.
-
 The **scECODA** R package for scalable cohort-level analysis is available at
 [github.com/carmonalab/scECODA](https://github.com/carmonalab/scECODA).
+
+
+## **Usage**
+
+This section explains how to reproduce this paper's results and figures and the general workflow of the analysis.
+
+### **Repository Contents**
+
+- `docs/ARCHITECTURE.md`: Full pipeline architecture, call flow, and module documentation.
+
+- `datasets.json`: Centralized dataset metadata (sample/label columns, subsetting rules, batch information).
+
+- `notebooks/`: .rmd notebooks for:
+  - Benchmark analysis (`notebooks/benchmark_analysis.rmd`)
+  - Batch effect analysis (`notebooks/batch_effect_analysis.rmd`)
+  - Per-dataset QC filtering (`notebooks/QC_filtering/`)
+
+- `src`: Source code for:
+  - Standardized scRNA-seq preprocessing pipeline (Python/Scanpy) (`src/preprocess/`)
+  - Cell type annotation with scATOMIC + HiTME (`src/cell_type_annotation/`)
+  - Scripts to run the benchmarked methods (`src/benchmark/`)
+  - Various utility functions (`src/utils/`), mainly for the benchmark pipeline analysis
+  - HPC SLURM configuration, e.g. paths (`src/slurm_config.sh`)
+
 
 ### **Installation**
 
@@ -70,19 +82,24 @@ The **scECODA** R package for scalable cohort-level analysis is available at
    pixi run setup
    ```
 
-### **Usage / Workflow**
+
+### **Workflow**
 
 The analysis proceeds through four stages:
 
-- **Stage 1 — QC Filtering:** Open the per-dataset `.Rmd` notebooks in
-  `notebooks/QC_filtering/` and render in RStudio.
-- **Stage 2 — Preprocessing:** Standardized sample/gene name standardization,
-  HVG selection, clustering, and Harmony integration:
-  ```bash
-  pixi run -e py-cpu python src/preprocess/1.2_preprocess.py
-  ```
-  Dataset metadata (sample columns, subsetting rules, batch info) is driven by
-  `datasets.json`.
+- **Stage 1 — QC Filtering:** Done manually in per-dataset .rmd notebooks in
+  `notebooks/QC_filtering/`.
+- **Stage 2 — Preprocessing + Cell Type Annotation:**
+  - **Preprocessing** (`src/preprocess/`): Standardized preprocessing pipeline (Python/Scanpy):
+    - Filter cells (min_genes=100) and genes (min_cells=3)
+    — Sample/gene name standardization
+    - Normalize counts and log1p
+    - HVG selection
+    - Scale and run PCA
+    - Harmony integration
+    - Leiden clustering
+  - **Cell Type Annotation** (`src/cell_type_annotation/`): HPC-parallelized scATOMIC + HiTME
+    annotation via SLURM array jobs.
 - **Stage 3 — Benchmark Analysis:** Render `notebooks/benchmark_analysis.rmd` in RStudio.
   Python benchmark methods (MrVI, PILOT, scPoli) are invoked automatically via
   rpy2. The R pipeline orchestrates all method processors, scoring metrics, and
@@ -90,13 +107,23 @@ The analysis proceeds through four stages:
 - **Stage 4 — Batch Effect Analysis:** Render `notebooks/batch_effect_analysis.rmd` in
   RStudio.
 
-**HPC execution:** Submit SLURM array jobs for cell-type annotation via
-`src/cell_type_annotation/`. Preprocessing via `src/preprocess/1_submit_hpc_array.sh` (stages data + submits array + syncs results):
-```bash
-sbatch src/preprocess/1_submit_hpc_array.sh
-```
+**HPC execution:** Submit SLURM array jobs for:
+- **Preprocessing** via `src/preprocess/1_submit_hpc_array.sh` (stages data + submits array + syncs results):
+  ```bash
+  sbatch src/preprocess/1_submit_hpc_array.sh
+  ```
+- **Cell type annotation** via `src/cell_type_annotation/`:
+  ```bash
+  export DS_NAME="Stephenson"
+  ./src/cell_type_annotation/1_prepare_chunks.sh
+  ./src/cell_type_annotation/2_submit_hpc_array.sh
+  ```
+- **Benchmark methods** via `src/benchmark/run_python_sample_embedding_methods/1_submit_hpc_array.sh` (stages data + submits array + syncs results):
 
-### **Expected Outputs**
+See the [Architecture documentation](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-stage-2b)
+for more details on workflow and usage.
+
+#### **Expected Outputs**
 
 - `.feather` files — cross-language distance matrices and embeddings produced
   by Python benchmark methods and consumed by R processors.
@@ -104,7 +131,6 @@ sbatch src/preprocess/1_submit_hpc_array.sh
   separation metric heatmaps, and transformation analysis panels.
 - Execution time logs documenting per-method and per-dataset runtime.
 
----
 
 ## Reference
 

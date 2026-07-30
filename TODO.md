@@ -1,5 +1,10 @@
 # Pipeline Overhaul Execution Plan
 
+## Major goals
+- Preprocessing and subsequently cell type annotation should be run calling a single script for each.
+- After the pipelines are finished, update the documentation and write up the execution plan for the new pipelines.
+
+
 ## Step 1 - Check if cell type annotation pipeline can be simplified
 - Is `config_helper.R` still needed or should this better be handled in `slurm_config.sh`?
   - If `config_helper.R` is easier and cleaner, then check `1_prepare_chunks.r` and `2.2_process_chunk.R` to see if they can be simplified
@@ -256,6 +261,8 @@ SLURM_PARTITION="shared-cpu"
     - `src/benchmark/run_python_sample_embedding_methods/`
     - `src/benchmark/benchmark_pipeline.R`
 
+## Step 7 Update README.md section **Usage / Workflow**
+- Update `README.md` with new steps from `cell_type_annotation`
 
 ---
 
