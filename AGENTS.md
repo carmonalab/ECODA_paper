@@ -55,12 +55,11 @@ Do not change this file without asking.
 - These HPC pipelines are not finished yet and need to be updated to be finalized:
     - `src/preprocess`
     - Not implemented yet: HPC pipeline bash scripts for `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd` (needs to be adapted, e.g. converted to .py and run on the cluster by calling from a bash script)
-    - `src/cell_type_annotation`
-        - The cell type annotation pipeline has been cleaned up and simplified (see cleanup plan).
-        - renv remnants removed; R environment is fully managed by pixi (`pixi run Rscript`).
-        - R code extracted from bash heredoc in `2.2_process_chunk.sh` into a standalone `2.2_process_chunk.R` file.
-        - `config_helper.R` moved from `DEPRECATED_LEGACY_CODE/` to project root. It relies on env vars (exported by bash wrappers that source `slurm_config.sh`) instead of `readRenviron()`.
-        - Legacy code remains in `src/cell_type_annotation/DEPRECATED_LEGACY_CODE/` for reference.
+    - `src/cell_type_annotation` — HPC-parallelized scATOMIC + HiTME cell type annotation.
+        - renv remnants removed; R environment fully managed by pixi (`pixi run Rscript`).
+        - R code extracted from bash heredoc into standalone `2.2_process_chunk.R`.
+        - `config_helper.R` moved from `DEPRECATED_LEGACY_CODE/` to project root (env-var based).
+        - See [ARCHITECTURE.md](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-stage-2b) for full pipeline documentation.
 - `slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
 - bash SLURM submission scripts are run on the login node, spawning worker nodes
 - only login node has access to the shared NAS file system
