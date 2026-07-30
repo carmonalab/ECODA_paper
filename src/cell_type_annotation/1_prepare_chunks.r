@@ -1,13 +1,4 @@
-project_root <- getwd() # Since the bash script changes directory to PROJECT_ROOT
-
-# Load central config into R's environment
-readRenviron(file.path(project_root, "src", "slurm_config.sh"))
-
-r_mm <- paste0(R.version$major, ".", sub("\\..*$", "", R.version$minor))
-renv_lib <- file.path(project_root, "renv", "library", paste0("R-", r_mm), R.version$platform)
-if (dir.exists(renv_lib)) {
-  .libPaths(unique(c(renv_lib, .libPaths())))
-}
+project_root <- getwd() # TODO: better get this from bash script or `slurm_config.sh` or `config_helper.R`
 
 raw_args <- commandArgs(trailingOnly = TRUE)
 
@@ -35,7 +26,7 @@ RUN_AS_TEST <- as.logical(args$test)
 
 # Fetch dataset name dynamically from config.env
 ds_name <- Sys.getenv("DS_NAME")
-if (ds_name == "") stop("CRITICAL Error: DS_NAME not found in slurm_config.sh")
+if (ds_name == "") stop("CRITICAL Error: DS_NAME not set. Ensure it is exported before calling this script.")
 
 source("config_helper.R")
 paths <- get_pipeline_config(ds_name, force_overwrite = TRUE, test_mode = RUN_AS_TEST)
@@ -43,6 +34,7 @@ paths <- get_pipeline_config(ds_name, force_overwrite = TRUE, test_mode = RUN_AS
 message(paste("Path is:", paths$path_data))
 message(paste("Files found:", paste(list.files(paths$path_data), collapse = ", ")))
 
+# TODO: should this be moved to config_helper.R or an upstream bash script?
 dir.create(paths$path_output, showWarnings = FALSE)
 dir.create(paths$path_output_samples, showWarnings = FALSE)
 # Delete chunk file folder recursively to ensure a perfectly clean start
@@ -62,7 +54,7 @@ dir.create(paths$path_output_ecoda, showWarnings = FALSE)
 # Import anndata WITHOUT automatic R conversion
 library(reticulate)
 
-# # Use pixi python
+# # Use pixi python # TODO: check if this is still needed
 # pixi_python <- file.path(getwd(), ".pixi", "envs", "default", "bin", "python")
 # reticulate::use_python(pixi_python, required = TRUE)
 py_require("anndata")

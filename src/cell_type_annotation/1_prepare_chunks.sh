@@ -25,17 +25,25 @@ else
   echo ">>> CONFIGURING PIPELINE IN PRODUCTION MODE <<<"
 fi
 
+# DS_NAME must be set (exported by 2_submit_hpc_array.sh or set manually)
+if [[ -z "${DS_NAME:-}" ]]; then
+  echo "ERROR: DS_NAME is not set. Export it before running this script."
+  exit 1
+fi
+
+HOME_DATA_DIR="${HPC_SCRATCH_DIR}/data"
+NAS_DATA_DIR="${NAS_SC_DIR}/${DS_NAME}/data/"
+
 # -------------------------------------------------------------------------
 # STAGE DATA: Copy raw files from UNIGE NAS to Cluster Scratch
 # -------------------------------------------------------------------------
 
-# Check if directory exists and is not empty
 if [ -d "${HOME_DATA_DIR}" ] && [ "$(ls -A "${HOME_DATA_DIR}" 2>/dev/null)" ]; then
   echo ">>> Data files already exist in ${HOME_DATA_DIR}. Skipping rsync file transfer. <<<"
 else
   echo "Staging raw files from NAS to home directory..."
   mkdir -p "${HOME_DATA_DIR}"
-  rsync -av --progress "${NAS_DATA_DIR}" "${HOME_DATA_DIR}"
+  rsync -av --progress "${NAS_DATA_DIR}" "${HOME_DATA_DIR}/"
 fi
 
 # -------------------------------------------------------------------------
@@ -47,7 +55,7 @@ if [ -d "${HOME_REF_DIR}" ] && [ "$(ls -A "${HOME_REF_DIR}" 2>/dev/null)" ]; the
 else
   echo "Staging reference maps from NAS to home directory..."
   mkdir -p "${HOME_REF_DIR}"
-  rsync -av --progress "${NAS_REF_DIR}" "${HOME_REF_DIR}"
+  rsync -av --progress "${NAS_REF_DIR}" "${HOME_REF_DIR}/"
 fi
 
 # -------------------------------------------------------------------------
@@ -66,11 +74,6 @@ echo "Allocating short-lived compute session to build dataset chunks..."
 LOG_FILE="${PROJECT_ROOT}/logs/prepare_chunks_${MODE_ARG}.log"
 ENV_RSCRIPT="${PROJECT_ROOT}/.pixi/envs/default/bin/Rscript"
 
-# Dynamically construct the Pixi library path using your config variables
-PIXI_R_LIB="${PROJECT_ROOT}/.pixi/envs/default/lib/R/library"
-
-# Export variables so renv and R recognize the Pixi environment during srun
-export RENV_CONFIG_EXTERNAL_LIBRARIES="${PIXI_R_LIB}"
 export R_LIBS_SITE="${PIXI_R_LIB}:${R_LIBS_SITE:-}"
 
 srun --partition=shared-cpu \
