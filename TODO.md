@@ -1,5 +1,10 @@
 # Pipeline Overhaul Execution Plan
 
+## Step 1 - Check if cell type annotation pipeline can be simplified
+- Is `config_helper.R` still needed or should this better be handled in `slurm_config.sh`?
+  - If `config_helper.R` is easier and cleaner, then check `1_prepare_chunks.r` and `2.2_process_chunk.R` to see if they can be simplified
+- Check if any `*_prepare_chunks.sh` and `*_process_chunk.sh` can be simplified by moving more into `slurm_config.sh`
+
 ## Step 2 — Debug Dataset (Joanito 5-sample)
 
 ### 2a. Locate source
@@ -16,8 +21,8 @@
   - Creates minimal obs columns: `sample.ID`, `sample.origin`, `patient.ID`, `Site`, `cell.type`
 
 ### 2c. Add debug dataset reference
-- Temporarily register in `datasets.json` a `"_debug"` entry with a single `benchmark_analysis` view pointing to the debug .h5ad file
-- OR keep the debug entry in a separate `debug_datasets.json` to avoid cluttering the real config
+- Temporarily register in `datasets.json` a `"_debug"` entry with a `benchmark_analysis` and a `batch_effect_analysis` view pointing to the debug .h5ad file
+- OR keep the debug entry in a separate `debug_datasets.json` to avoid cluttering the real config?
 
 ### Validation
 - Output .h5ad loads in `sc.read_h5ad()` without error
@@ -107,6 +112,7 @@ The two wrapper files are currently empty:
 - Copy data from NAS to scratch (`1_copy_data_from_nas_to_hpc_scratch.sh` or inline)
 - Run `2.2_preprocess.py` with the dataset/view as argument
 - After completion, copy result back to NAS
+
 
 ### 3g. Fix copy_data_from_nas_to_hpc_scratch.sh
 
@@ -230,9 +236,54 @@ Changes:
 - Python benchmark script runs on debug dataset output .h5ad for each method (MrVI, PILOT, scPoli, PILOT-GM-VAE)
 - Output `.feather` files are produced and R can read them via `arrow::read_feather()`
 - Execution time format matches R's expected input
-- SLURM wrappers parse correctly
+- SLURM wrappers parse correctly (needs access to HPC cluster. See `AGENTS.md` for details)
+  - Debug dataset (subsetted Joanito) dataset can be used for validation
+
+
+## Step 6 — Update SLURM config
+
+### Step 6a. Update `slurm_config.sh`
+Needs to be adjusted:
+src/slurm_config.sh:39-39
+```
+SLURM_PARTITION="shared-cpu"
+```
+- shared-cpu for:
+  - cell_type_annotation
+  - preprocess
+- specified infrastructure (including gpu for some methods) for:
+  - benchmark_analysis (includes a runtime check, so needs clearly defined infrastructure used across all methods), used for:
+    - `src/benchmark/run_python_sample_embedding_methods/`
+    - `src/benchmark/benchmark_pipeline.R`
+
+### Step 6b. Check this is still needed and reticulate gets pointed to the correct python environment (see pixi.toml)
+src/cell_type_annotation/1_prepare_chunks.r:56-60
+```
+# # Use pixi python # TODO: check if this is still needed
+# pixi_python <- file.path(getwd(), ".pixi", "envs", "default", "bin", "python")
+# reticulate::use_python(pixi_python, required = TRUE)
+py_require("anndata")
+ad <- import("anndata", convert = FALSE)
+```
+
+### Step 6c.
+src/cell_type_annotation/1_prepare_chunks.r:37-45
+```
+# TODO: should this be moved to config_helper.R or an upstream bash script?
+dir.create(paths$path_output, showWarnings = FALSE)
+dir.create(paths$path_output_samples, showWarnings = FALSE)
+# Delete chunk file folder recursively to ensure a perfectly clean start
+if (dir.exists(paths$path_output_chunks)) {
+  unlink(paths$path_output_chunks, recursive = TRUE, force = TRUE)
+}
+dir.create(paths$path_output_chunks, showWarnings = FALSE)
+dir.create(paths$path_output_ecoda, showWarnings = FALSE)
+```
+
 
 ---
+
+
 
 ## New Datasets to Be Added
 

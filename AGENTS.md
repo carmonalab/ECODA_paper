@@ -24,8 +24,8 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
             - PILOT-GM-VAE can be added by agent
             - PULSAR needs to be tested for requirements
 
-# Documentation
 
+# Documentation
 - README.md
 - ARCHITECTURE.md
 - AGENTS.md
@@ -45,6 +45,10 @@ Do not change this file without asking.
 
 
 # HPC
+- Current repo lives on a local MacOS computer.
+- If you need to test HPC cluster bash scripts:
+    - The HPC cluster is only available if logged in to the UNIGE network (user might work from home (needs to connect to VPN) or from the office (has access to UNIGE network)).
+        - If in the UNIGE network, you can log in with `ssh halterc@login1.bamboo.hpc.unige.ch` (user might need to enter a password).
 - Heavy scripts are run on the HPC cluster, specifically located in these folders:
     - `src/preprocess`
     - `src/cell_type_annotation`
@@ -52,15 +56,17 @@ Do not change this file without asking.
     - `src/preprocess`
     - Not implemented yet: HPC pipeline bash scripts for `src/benchmark/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd` (needs to be adapted, e.g. converted to .py and run on the cluster by calling from a bash script)
     - `src/cell_type_annotation`
-        - IMPORTANT: The cell type annotation HPC pipeline in `src/cell_type_annotation/` was originally set up in another project repo. The code and scripts are very drafty and not optimized, not well structured and not well documented and possibly deprecated in themselves in parts.
-        - I added the previous, heavily deprecated legacy code (that i copied from the other repo into this current repo), cell type annotation script files into the folder `src/cell_type_annotation/DEPRECATED_LEGACY_CODE`, for reference only.
-        - The current cell type annotation script files are in `src/cell_type_annotation/` and have been updated to a certain degree but are not finalized yet.
-- slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
+        - The cell type annotation pipeline has been cleaned up and simplified (see cleanup plan).
+        - renv remnants removed; R environment is fully managed by pixi (`pixi run Rscript`).
+        - R code extracted from bash heredoc in `2.2_process_chunk.sh` into a standalone `2.2_process_chunk.R` file.
+        - `config_helper.R` moved from `DEPRECATED_LEGACY_CODE/` to project root. It relies on env vars (exported by bash wrappers that source `slurm_config.sh`) instead of `readRenviron()`.
+        - Legacy code remains in `src/cell_type_annotation/DEPRECATED_LEGACY_CODE/` for reference.
+- `slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
 - bash SLURM submission scripts are run on the login node, spawning worker nodes
 - only login node has access to the shared NAS file system
 - worker nodes do NOT have access to NAS
 - data must be copied to local scratch before processing (done with ./src/preprocess/1_submit_hpc_array.sh)
-- results must be copied back to NAS after processing
+- results must be copied back to NAS after processing (typically implemented in `*_submit_hpc_array.sh` scripts upon completion of the HPC jobs)
 - If more information is needed, documentation for the HPC can be found here: https://doc.eresearch.unige.ch/hpc/start
 
 

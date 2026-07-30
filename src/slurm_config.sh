@@ -21,9 +21,22 @@ NAS_TARGET_DIR="${NAS_BASE_DIR}/AnalysisResults/ECODA"
 HPC_SCRATCH_DIR="${HOME}/scratch/ECODA_paper"
 SCRATCH_OUTPUT_DIR="${HPC_SCRATCH_DIR}/output"
 
+# --- Pixi R library path ---
+PIXI_R_LIB="${PROJECT_ROOT}/.pixi/envs/default/lib/R/library"
+
+# --- Reference atlas paths (cell type annotation) ---
+NAS_REF_DIR="${NAS_PREFIX}/DataCollections/reference_atlases/sketched_200ct/"
+HOME_REF_DIR="${HOME}/reference_atlases/sketched_200ct/"
+
+# --- Gene reference (cell type annotation) ---
+# Used for gene standardization with STACAS; now implemented in src/preprocess/1.2_preprocess.py
+# which runs before cell type annotation. Kept for potential fallback.
+GENE_REF_FILE="${PROJECT_ROOT}/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+GENE_REF_URL="https://raw.githubusercontent.com/carmonalab/scRNAseq_data_processing/master/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+
 # --- SLURM Configuration ---
 SLURM_ACCOUNT=""
-SLURM_PARTITION="shared-cpu"
+SLURM_PARTITION="shared-cpu" # TODO: Adapt for specific pipelines
 
 # --- User Info ---
 USER_EMAIL="${USER}@unige.ch"
