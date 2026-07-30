@@ -2,6 +2,9 @@
 
 ## Major goals
 - Preprocessing and subsequently cell type annotation should be run calling a single script for each.
+  - Check if a single unified `1_submit_hpc_array.sh` can be used for `src/preprocess/` and `src/cell_type_annotation/`
+    - The script should simply read `slurm_config.sh` and pass the correct arguments to run a pipeline across all (or the specified) datasets to `1.1_run_worker.sh` and `2.1.1_run_worker.sh`
+    - Can also be used subsequently for other pipelines, e.g. `src/benchmark/run_python_sample_embedding_methods/` (TBD)
 - After the pipelines are finished, update the documentation and write up the execution plan for the new pipelines.
 
 
@@ -11,6 +14,12 @@
 - Check if any `*_prepare_chunks.sh` and `*_process_chunk.sh` can be simplified by moving more into `slurm_config.sh`
 
 ## Step 2 — Debug Dataset (Joanito 5-sample)
+
+---
+Stale:
+- Should also be able to test the preprocessing pipeline
+  - This should start from the Joanito input dataset (see datasets.json, "input_file_name": "JoaI_2022_35773407_Nofilt_whole.rds")
+  - Should be done after running `src/preprocess/_create_joanito_batch_col.R`, as the batch metadata column is needed for debugging.
 
 ### 2a. Locate source
 - Existing file: `data/JoaI_2022_35773407_Nofilt_whole_ECODAprocessed.rds` (old-pipeline Seurat output, already QC-filtered)
