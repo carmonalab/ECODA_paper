@@ -34,6 +34,7 @@ fi
 HOME_DATA_DIR="${HPC_SCRATCH_DIR}/data"
 NAS_DATA_DIR="${NAS_SC_DIR}/${DS_NAME}/data/"
 
+# TODO: Redundant raw data (dataset .h5ad)staging, remove (but keep ref maps and gene annotations staging)
 # -------------------------------------------------------------------------
 # STAGE DATA: Copy raw files from UNIGE NAS to Cluster Scratch
 # -------------------------------------------------------------------------
