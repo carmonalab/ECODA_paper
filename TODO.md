@@ -7,6 +7,9 @@
     - Can also be used subsequently for other pipelines, e.g. `src/benchmark/run_python_sample_embedding_methods/` (TBD)
 - After the pipelines are finished, update the documentation and write up the execution plan for the new pipelines.
 
+## TODO:
+- Staging of raw data should be handled in `preprocess/1_submit_hpc_array.sh`, as this is the first HPC pipeline script to be run, and it should not be part of `cell_type_annotation/` (remove it there)
+
 
 ## Step 1 - Check if cell type annotation pipeline can be simplified
 - Is `config_helper.R` still needed or should this better be handled in `slurm_config.sh`?
