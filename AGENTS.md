@@ -34,8 +34,15 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
 - Documentation files should be kept up-to-date upon any changes
 
 ## datasets.json
-This acts as ground truth for the datasets evaluated in this study. See datasets.json for most up-to-date list of datasets used and conditions.
-Do not change this file without asking.
+- This acts as ground truth for the datasets evaluated in this study
+    - See datasets.json for most up-to-date list of datasets used and conditions.
+- Do not change this file without asking
+- Files defined in datasets.json are stored on the NAS
+    - The user and agents exclusively work on the user's computer, so the NAS is only accessed by the user from the computer
+    - The user and agents can work on the HPC but always connecting from the user's computer
+    - NAS dataset path called from user computer (needs user to connect to NAS server first, ask him to connect if needed): `/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets`
+    - NAS dataset path called from HPC (needs user to connect to NAS server first, ask him to connect if needed; no need to connect to additionally connect NAS server but can only be called from login node, see section "# HPC general information" below): `/srv/smednas515.unige.ch/carmona_smb/DataCollections/Standardized_SingleCell_Datasets`
+
 
 ## Pipeline Overview
 Four-stage end-to-end pipeline:
@@ -90,7 +97,8 @@ Four-stage end-to-end pipeline:
 11 utility files loaded by `src/utils/load_all_functions.R`, plus 2 benchmark-specific files in `src/benchmark/`
 
 # HPC general information
-- Current repo lives on a local MacOS computer.
+- Current repo lives on a local MacOS computer
+- The user and agents can work on the HPC but always connecting from the user's computer
 - If you need to test HPC cluster bash scripts:
     - The HPC cluster is only available if logged in to the UNIGE network (user might work from home (needs to connect to VPN) or from the office (has access to UNIGE network)).
         - If in the UNIGE network, you can log in with `ssh [REDACTED_HOST]` (user needs to enter the password).
