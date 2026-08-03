@@ -31,22 +31,6 @@ if [[ -z "${DS_NAME:-}" ]]; then
   exit 1
 fi
 
-HOME_DATA_DIR="${HPC_SCRATCH_DIR}/data"
-NAS_DATA_DIR="${NAS_SC_DIR}/${DS_NAME}/data/"
-
-# TODO: Redundant raw data (dataset .h5ad)staging, remove (but keep ref maps and gene annotations staging)
-# -------------------------------------------------------------------------
-# STAGE DATA: Copy raw files from UNIGE NAS to Cluster Scratch
-# -------------------------------------------------------------------------
-
-if [ -d "${HOME_DATA_DIR}" ] && [ "$(ls -A "${HOME_DATA_DIR}" 2>/dev/null)" ]; then
-  echo ">>> Data files already exist in ${HOME_DATA_DIR}. Skipping rsync file transfer. <<<"
-else
-  echo "Staging raw files from NAS to home directory..."
-  mkdir -p "${HOME_DATA_DIR}"
-  rsync -av --progress "${NAS_DATA_DIR}" "${HOME_DATA_DIR}/"
-fi
-
 # -------------------------------------------------------------------------
 # STAGE REFERENCE MAPS: Copy ref files from UNIGE NAS to Cluster Scratch
 # -------------------------------------------------------------------------
