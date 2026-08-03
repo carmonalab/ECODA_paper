@@ -15,7 +15,6 @@
 
 ## TODO:
 - Staging of raw data should be handled in `preprocess/1_submit_hpc_array.sh`, as this is the first HPC pipeline script to be run, and it should not be part of `cell_type_annotation/` (remove it there)
-- Fix syntax error in `src/benchmark/benchmark_pipeline.R` (~line 957): `calc_sep_score(labels` is missing a closing parenthesis. This breaks `load_all_functions.R` sourcing, which in turn blocks the rpy2-based module load in `_preprocess_utils.py` (module-level `ro.r('source(...)')`), i.e. any local run of the preprocess or combine scripts.
 - Run the CombinedPBMC combine script (`src/preprocess/_create_combinedpbmc_dataset.py`) once the raw sources are staged from NAS into `data/` (GongSharma `Sound_Life_*.h5ad` files, `ZhuH_2023_37379396whole.rds`, `StephensonE_2021_33879890_preprocessed.rds`). Verify the Zhu raw file has a `Sample` obs column and raw counts before the run.
 - Optional cleanup: exclude view-less datasets (e.g. Zhu) from the preprocess HPC array in `1.1_run_worker.sh` (currently harmless — the worker exits immediately with "Skipping ... No views defined.").
 
