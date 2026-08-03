@@ -1,10 +1,13 @@
 # Pipeline Overhaul Execution Plan
 
-## Replace base_path
-- `src/preprocess/` and `src/cell_type_annotation/` should not use `base_path` or `project_root` anymore, but instead use `NAS_SC_DIR` and `PROJECT_ROOT` (and `SCRATCH_OUTPUT_DIR` for processed output files) from `slurm_config.sh`
-  - Check also all other files that might use `base_path` or `project_root`
-  - Check how to implement this (is it easy to replace all instances of `base_path` with `NAS_SC_DIR` and `project_root` with `PROJECT_ROOT` from the `slurm_config.sh`, e.g. in python and R scripts? And where does it make sense to replace it, e.g. it the user decides to still run the benchmark notebook locally (would need to be added to TODO.md for a later task)?)
-- Whether `src/benchmark/` should use `NAS_SC_DIR` and `SCRATCH_OUTPUT_DIR` or not (i.e. whether it will be run locally) needs to be checked later and decided by user. Probably on HPC but that would need another SLURM wrapper script and additional messages, warnings and ways to store exploratory figures or intermediate visualizations to be added so that the user can view them locally on his computer (e.g. saving them to the scratch directory and syncing to his computer or the NAS)
+## Rename folders to represent sequence of pipelines to be run
+- src/1_stage_data (extract code from `src/preprocess/1_submit_hpc_array.sh`)
+- src/2_dataset_specific_preprocessing (move `src/preprocess/_create_combined_dataset.py` and `src/preprocess/_create_joanito_batch_col.py` there)
+- src/3_scrnaseq_preprocessing
+- src/4_cell_type_annotation
+- src/5_run_benchmark_methods
+- Update documentation (e.g. ARCHITECTURE.md, AGENTS.md, README.md, TODO.md, etc.)
+
 
 ## Major goals
 - Preprocessing and subsequently cell type annotation should be run calling a single script for each.
@@ -13,13 +16,35 @@
     - Can also be used subsequently for other pipelines, e.g. `src/benchmark/run_python_sample_embedding_methods/` (TBD)
 - After the pipelines are finished, update the documentation and write up the execution plan for the new pipelines.
 
+
+## Open reviewer points (to be addressed)
+- **Centralise all hardcoded paths in the pipeline to `slurm_config.sh`**: sweep ALL scripts for hardcoded paths (incl. `src/benchmark/`, notebooks, `src/utils/`); preprocess + cell type annotation are done, `src/benchmark/` decision pending (see `## TODO:`)
+- **`SAMPLE_COLNAME`**: `1.1.1_preprocess.py` already standardizes the sample column to `"Sample"` for every dataset — decide whether the env var export is needed at all or hardcode `"Sample"` in the R scripts instead
+- **Can `config_helper.R` be replaced?** → see `## Step 1`
+- **Remove fallback code** (see bottom of TODO.md, Completed entry): drop the `getwd()` fallbacks (`project_root <- ... getwd()` in `1.1_prepare_chunks.r` / `2.1.1.1_process_chunk.R`, `gene_ref` default in `config_helper.R`) and rely on exported env vars with `stop()` guards only
+- **NAS back-sync target**: `NAS_TARGET_DIR` should be `/Volumes/Shared/Projects/ECODA_paper` (local) = `/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper` (HPC), not `.../DataCollections/AnalysisResults/ECODA`; affects `src/preprocess/1_submit_hpc_array.sh` + `src/cell_type_annotation/2_submit_hpc_array.sh` rsync steps
+- **Re-write `src/preprocess/_create_combinedpbmc_dataset.py`** → see `## TODO:`
+- **Re-write `src/preprocess/1.1.1_preprocess.py`** → see `## TODO:`
+
+### Suggested order / priority
+1. `NAS_TARGET_DIR` → `Projects/ECODA_paper` (config-only, unblocks correct result syncing)
+2. `SAMPLE_COLNAME` decision (env var vs hardcoded `"Sample"`)
+3. Re-write `1.1.1_preprocess.py` (explicit CLI parsing + env-driven path resolution) — unblocks HPC preprocessing
+4. Re-write `_create_combinedpbmc_dataset.py` (HPC-capable; run before the preprocess array)
+5. Remove `getwd()` fallbacks (once env vars are guaranteed)
+6. `config_helper.R` replacement decision + `## Step 1` simplification
+7. Centralisation sweep of remaining hardcoded paths (incl. `src/benchmark/` decision) + docs update
+
+
 ## TODO:
-- Run the CombinedPBMC combine script (`src/preprocess/_create_combinedpbmc_dataset.py`) once the raw sources are staged from NAS into `data/` (GongSharma `Sound_Life_*.h5ad` files, `ZhuH_2023_37379396whole.rds`, `StephensonE_2021_33879890_preprocessed.rds`). Verify the Zhu raw file has a `Sample` obs column and raw counts before the run.
+- **Pending decision**: whether `src/benchmark/` should use `NAS_SC_DIR`/`SCRATCH_OUTPUT_DIR` or run locally (would need another SLURM wrapper script + ways to store exploratory figures/intermediate visualizations for local viewing, e.g. scratch dir synced to the local computer or NAS)
+- **Re-write `src/preprocess/1.1.1_preprocess.py`**: explicit CLI parsing (`--config_path`/`--base_path`/`--output_dir`, currently silently ignored by `main()`), env-driven `PROJECT_ROOT`, join relative args against `PROJECT_ROOT` only, keep absolute args as-is
+- **Re-write `src/preprocess/_create_combinedpbmc_dataset.py`** (HPC-capable): env-driven defaults (`HPC_SCRATCH_DIR` set → per-dataset layout: sources at `${HPC_SCRATCH_DIR}/<ds>/data`, output `${HPC_SCRATCH_DIR}/CombinedPBMC/data`; local fallback → `PROJECT_ROOT/data` flat), explicit CLI args. Then run it on the HPC **before** `src/preprocess/1_submit_hpc_array.sh`: from `${PROJECT_ROOT}` with `module load GCCcore/12.2.0` (R interop). Verify the Zhu raw file has a `Sample` obs column and raw counts before the run. GongSharma is huge — if OOM on the login node, run via a single `sbatch` job instead.
 - Optional cleanup: exclude view-less datasets (e.g. Zhu) from the preprocess HPC array in `1.1_run_worker.sh` (currently harmless — the worker exits immediately with "Skipping ... No views defined.").
 
 
 ## Step 1 - Check if cell type annotation pipeline can be simplified
-- Is `config_helper.R` still needed or should this better be handled in `slurm_config.sh`?
+- Is `config_helper.R` still needed or should this better be handled in `slurm_config.sh`? (open reviewer point — see `## Open reviewer points`)
   - If `config_helper.R` is easier and cleaner, then check `1.1_prepare_chunks.r` and `2.1.1.1_process_chunk.R` to see if they can be simplified
 - Check if any `*_prepare_chunks.sh` and `*_process_chunk.sh` can be simplified by moving more into `slurm_config.sh`
 
@@ -366,3 +391,11 @@ SLURM_PARTITION="shared-cpu"
 - [x] **Step 3d Follow-up**: Plan verified, DRY `_preprocess_utils.py` extracted, RAM optimization (in-place gene subsetting, early obs trimming, `del`/`gc`), NAS syncing confirmed for preprocessing and cell type annotation, `config_helper.R` fixed, `run_worker.sh` memory bumped to 16G baseline
 - [x] **Shared datasets.json reader**: Python `src/datasets_io.py::read_datasets_json()` (stdlib-only) + enriched `src/utils/datasets_io.R::read_datasets_json()` (harmonized key structure, backward compatible), `file_names` added to all datasets.json entries, Zhu re-added (view-less raw source for CombinedPBMC), preprocess + combine scripts refactored to use the shared reader, Stephenson combine source switched to `benchmark_analysis` view (Site = Ncl)
 - [x] Raw-data staging consolidated in `src/preprocess/1_submit_hpc_array.sh` (per-dataset dirs, jq module loads moved to top); redundant staging removed from `src/cell_type_annotation/1_prepare_chunks.sh`
+- [x] **Replace base_path / project_root with slurm_config.sh env vars** (per-dataset layout):
+    - `src/slurm_config.sh` now exports all core env vars (`DATASETS_JSON_FILE`, `NAS_SC_DIR`, `NAS_TARGET_DIR`, `NAS_REF_DIR`, `HOME_REF_DIR`, `GENE_REF_FILE`, `PIXI_R_LIB`, `HPC_SCRATCH_DIR`, `SCRATCH_OUTPUT_DIR`) + new `SAMPLE_COLNAME="Sample"` so they reach R (`Sys.getenv()`) and Python (`os.environ`) through `srun`/`sbatch`
+    - Decision: the TODO example's flat `SCRATCH_DATA_DIR=${HPC_SCRATCH_DIR}/data` / `SCRATCH_CHUNKS_DIR=${HPC_SCRATCH_DIR}/chunks` were NOT added — they conflict with the per-dataset convention; dataset-specific dirs are derived per script (`${HPC_SCRATCH_DIR}/${DS_NAME}/data`, `${SCRATCH_OUTPUT_DIR}/${DS_NAME}/chunks`)
+    - `config_helper.R` paths are now per-dataset under `${SCRATCH_OUTPUT_DIR}/${DS_NAME}` (annotation pipeline functional end-to-end, matches `2_submit_hpc_array.sh` HOME_CHUNKS_DIR)
+    - R scripts (`1.1_prepare_chunks.r`, `2.1.1.1_process_chunk.R`) resolve `project_root` from `PROJECT_ROOT` env (getwd() fallback), source `config_helper.R` explicitly, SAMPLE_COLNAME guard added
+    - `1.1.1_preprocess.py`: explicit absolute-vs-relative path resolution + argparse for `--config_path/--base_path/--output_dir` (was silently ignoring CLI args)
+    - `_create_combinedpbmc_dataset.py` is now HPC-capable (`--layout per-dataset` default when `HPC_SCRATCH_DIR` set; must run before the preprocess array, from `${PROJECT_ROOT}` with `module load GCCcore/12.2.0`)
+    - `2_submit_hpc_array.sh` auto-exports per-dataset `TISSUE_TYPE`/`NORMAL_TISSUE` from `datasets.json`; `2.1_run_worker.sh`/`2.1.1_process_chunk.sh` no longer pass PROJECT_ROOT as an arg (sourced from slurm_config.sh)

@@ -5,7 +5,8 @@
 # Expects a single argument: chunk_file__<path_to_chunk_txt>
 # ==============================================================================
 
-project_root <- getwd()
+project_root <- Sys.getenv("PROJECT_ROOT")
+if (project_root == "") project_root <- getwd()
 
 source(file.path(project_root, "config_helper.R"))
 paths <- get_pipeline_config()

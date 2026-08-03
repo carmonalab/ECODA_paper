@@ -6,8 +6,7 @@
 set -euo pipefail
 
 TASK_ID="$1"
-export PROJECT_ROOT="$2"
-CHUNK_FILE="$3"
+CHUNK_FILE="$2"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"

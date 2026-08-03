@@ -25,12 +25,14 @@ get_pipeline_config <- function(
     test_mode           = test_mode,
     chunk_size          = ifelse(test_mode, 1, 5),
     max_test_array_jobs = 3,
-    path_data           = file.path(hpc_scratch_dir, "data"),
-    path_plots          = file.path(hpc_scratch_dir, "plots"),
-    path_output         = scratch_output_dir,
-    path_output_samples = file.path(scratch_output_dir, "samples"),
-    path_output_chunks  = file.path(scratch_output_dir, "chunks"),
-    path_output_ecoda   = file.path(scratch_output_dir, "ecoda"),
+    # All per-dataset dirs live under SCRATCH_OUTPUT_DIR/<DS_NAME> (preprocessed
+    # output = annotation input). Matches 2_submit_hpc_array.sh HOME_CHUNKS_DIR.
+    path_data           = file.path(scratch_output_dir, ds_name),
+    path_plots          = file.path(scratch_output_dir, ds_name, "plots"),
+    path_output         = file.path(scratch_output_dir, ds_name),
+    path_output_samples = file.path(scratch_output_dir, ds_name, "samples"),
+    path_output_chunks  = file.path(scratch_output_dir, ds_name, "chunks"),
+    path_output_ecoda   = file.path(scratch_output_dir, ds_name, "ecoda"),
     path_ref            = if (home_ref_dir != "") home_ref_dir else file.path(Sys.getenv("HOME"), "reference_atlases", "sketched_200ct"),
     gene_ref            = if (gene_ref_file != "") gene_ref_file else file.path(getwd(), "EnsemblGenes105_Hsa_GRCh38.p13.txt.gz")
   )
