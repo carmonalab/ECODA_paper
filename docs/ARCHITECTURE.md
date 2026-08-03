@@ -6,15 +6,22 @@ This is an **R-based bioinformatics pipeline** for benchmarking batch effect cor
 
 ## Datasets and Analysis Definitions (Benchmark and/or Batch Effect Analysis)
 ```
-datasets.json (read by src/utils/datasets_io.R::read_datasets_json())
-└── per-view entries
+datasets.json (read by src/utils/datasets_io.R::read_datasets_json() and
+               src/datasets_io.py::read_datasets_json())
+└── per-dataset entries
     ├── "Adams" → benchmark_analysis view
     │   ├── output_file: AdamsT_2020_32832599_benchmark_analysis_ECODAprocessed.h5ad
     │   ├── label_col, low_res_ct_col, hi_res_ct_col (from dataset-level columns)
     ├── ...
 ```
-Each view declares input_file_name (raw input) and output_file_name (preprocessed output).
-Dataset-level metadata (columns, display_name, tissue) is shared across views.
+Each entry carries dataset-level metadata (columns, display_name, tissue,
+file_names) plus one or more views. `file_names` holds the dataset's raw
+input file(s) (string or list), independent of views; view-level
+`input_file_name` / `output_file_name` declare raw input and preprocessed
+output per view. Both readers return all dataset-level fields plus the
+matching views. R keeps skipping view-less datasets (callers always pass a
+view filter); the Python reader includes them (e.g. `Zhu`, a view-less raw
+source for the CombinedPBMC dataset that is never preprocessed standalone).
 
 
 ## Preprocessing Pipeline

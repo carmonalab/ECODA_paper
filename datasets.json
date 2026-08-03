@@ -1,6 +1,7 @@
 {
   "Adams": {
     "display_name": "Adams (pulmonary fibrosis)",
+    "file_names": "AdamsT_2020_32832599.rds",
     "folder_name": "AdamsT_2020_32832599",
     "tissue": "Lung",
     "normal_tissue": true,
@@ -28,6 +29,7 @@
   },
   "Bassez": {
     "display_name": "Bassez (ICB treatment response)",
+    "file_names": "BassezA_2021_33958794whole.rds",
     "folder_name": "BassezA_2021_33958794",
     "tissue": "Breast tumor",
     "normal_tissue": false,
@@ -57,6 +59,10 @@
   },
   "Gongsharma_cmv_young_males": {
     "display_name": "GongSharma (healthy young males, CMV)",
+    "file_names": [
+      "Sound_Life_YoungAdult_Male_CMVneg.h5ad",
+      "Sound_Life_YoungAdult_Male_CMVpos.h5ad"
+    ],
     "folder_name": "GongSharma_2024_PrePrintTBD",
     "tissue": "Blood",
     "normal_tissue": true,
@@ -85,6 +91,7 @@
   },
   "Joanito": {
     "display_name": "Joanito",
+    "file_names": "JoaI_2022_35773407_Nofilt_whole.rds",
     "folder_name": "JoaI_2022_35773407",
     "tissue": "Colon",
     "normal_tissue": false,
@@ -111,6 +118,7 @@
   },
   "Kfoury": {
     "display_name": "Kfoury (prostate metastasis)",
+    "file_names": "Kfoury_2021_34719426.rds",
     "folder_name": "Kfoury_2021_34719426",
     "tissue": "Bone marrow",
     "normal_tissue": false,
@@ -135,6 +143,7 @@
   },
   "Kim": {
     "display_name": "Kim (metastatic lung adenocarcinoma)",
+    "file_names": "KimN_2020_32385277whole.rds",
     "folder_name": "KimN_2020_32385277",
     "tissue": "Lung",
     "normal_tissue": false,
@@ -160,6 +169,7 @@
   },
   "Lee": {
     "display_name": "Lee (ICB treatment vs naive)",
+    "file_names": "LeeA_2021_34836966p_tumor_seurat.rds",
     "folder_name": "LeeA_2021_34836966",
     "tissue": "Brain tumor",
     "normal_tissue": false,
@@ -184,6 +194,7 @@
   },
   "Pelka": {
     "display_name": "Pelka (colon cancer vs control)",
+    "file_names": "PelkaK_2022_34450029whole.rds",
     "folder_name": "PelkaK_2022_34450029",
     "tissue": "Colon cancer",
     "normal_tissue": false,
@@ -210,6 +221,7 @@
   },
   "Smillie": {
     "display_name": "Smillie (ulcerative colitis)",
+    "file_names": "SmillieC_2019_31348891.rds",
     "folder_name": "SmillieC_2019_31348891",
     "tissue": "Colon",
     "normal_tissue": true,
@@ -238,6 +250,7 @@
   },
   "Stephenson": {
     "display_name": "Stephenson (COVID-19)",
+    "file_names": "StephensonE_2021_33879890_preprocessed.rds",
     "folder_name": "StephensonE_2021_39313646",
     "tissue": "Blood",
     "normal_tissue": true,
@@ -276,6 +289,7 @@
   },
   "Wu": {
     "display_name": "Wu (breast cancer subtype)",
+    "file_names": "WuS_2021_34493872.rds",
     "folder_name": "WuS_2021_34493872",
     "tissue": "Breast tumor",
     "normal_tissue": false,
@@ -300,6 +314,7 @@
   },
   "Zhang": {
     "display_name": "Zhang (tissue)",
+    "file_names": "ZhangY_2022_34653365.rds",
     "folder_name": "ZhangY_2022_34653365",
     "tissue": "Mixed",
     "normal_tissue": true,
@@ -326,8 +341,26 @@
       }
     }
   },
+  "Zhu": {
+    "display_name": "Zhu",
+    "file_names": "ZhuH_2023_37379396whole.rds",
+    "folder_name": "ZhuH_2023_37379396",
+    "tissue": "Blood",
+    "normal_tissue": true,
+    "use_for_benchmark": false,
+    "use_for_batch_effect": false,
+    "columns": {
+      "sample": "Sample",
+      "label": "Sample",
+      "cell_type_low_res": null,
+      "cell_type_high_res": null
+    },
+    "meta_cols_keep": ["Sample"],
+    "views": {}
+  },
   "CombinedPBMC": {
     "display_name": "Combined PBMC (Stephenson, GongSharma, Zhu)",
+    "file_names": "combined_pbmc_batch_effect_analysis.h5ad",
     "folder_name": null,
     "tissue": "Blood",
     "normal_tissue": true,

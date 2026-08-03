@@ -11,7 +11,6 @@ early and releasing source objects before concat.
 """
 
 import sys
-import json
 import gc
 import numpy as np
 import pandas as pd
@@ -20,17 +19,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.gene_utils import standardize_gene_symbols
+from src.datasets_io import read_datasets_json
 from src.preprocess._preprocess_utils import load_input, apply_subset_vars
 
 
-def load_and_prepare_source(ds_name, view_info, base_path, output_dir):
-    input_names = view_info.get("input_file_name")
+def load_and_prepare_source(ds_name, entry, base_path, output_dir, view_name=None):
+    input_names = entry.get("file_names")
     if not input_names:
-        raise ValueError(f"No input_file_name for {ds_name}")
+        raise ValueError(f"No file_names for {ds_name}")
 
     adata = load_input(input_names, base_path, output_dir)
 
-    subset_vars = view_info.get("subset_vars", {})
+    subset_vars = {}
+    if view_name:
+        subset_vars = entry["views"].get(view_name, {}).get("subset_vars", {})
     if subset_vars:
         adata = apply_subset_vars(adata, subset_vars)
 
@@ -52,33 +54,28 @@ def main():
     base_path = project_root / "data"
     output_dir = project_root / "data"
 
-    with open(config_path) as f:
-        config = json.load(f)
+    config = read_datasets_json(config_path)
 
-    source_configs = {
-        "Stephenson": {},
-        "Gongsharma_cmv_young_males": {},
-        "Zhu": {},
-    }
-
-    for ds_name, cfg in source_configs.items():
-        ds_info = config[ds_name]
-        view_info = ds_info["views"]["batch_effect_analysis"]
-        cfg["view_info"] = view_info
-        cfg["sample_col"] = ds_info.get("columns", {}).get("sample", "Sample")
-        cfg["label_col"] = ds_info.get("columns", {}).get("label", "Sample")
+    source_names = ["Stephenson", "Gongsharma_cmv_young_males", "Zhu"]
+    missing = [n for n in source_names if n not in config]
+    if missing:
+        raise KeyError(
+            f"Missing sources in datasets.json (required for CombinedPBMC): {missing}"
+        )
 
     keep_base = ["Sample", "batch", "cond"]
 
     # ---- Stephenson ----
+    # Subset to the benchmark_analysis view (Site = Ncl only), consistent
+    # with previous code.
     print("Loading Stephenson...")
+    entry_s = config["Stephenson"]
     adata_s = load_and_prepare_source(
-        "Stephenson", source_configs["Stephenson"]["view_info"],
-        base_path, output_dir
+        "Stephenson", entry_s, base_path, output_dir, view_name="benchmark_analysis"
     )
     adata_s.obs["batch"] = "Stephenson"
-    adata_s.obs["cond"] = adata_s.obs[source_configs["Stephenson"]["label_col"]].values
-    sample_col_s = source_configs["Stephenson"]["sample_col"]
+    adata_s.obs["cond"] = adata_s.obs[entry_s["label_col"]].values
+    sample_col_s = entry_s["sample_col"]
     if sample_col_s != "Sample" and sample_col_s in adata_s.obs.columns:
         adata_s.obs["Sample"] = adata_s.obs[sample_col_s].values
     keep_only_cols(adata_s, keep_base)
@@ -86,11 +83,9 @@ def main():
 
     # ---- GongSharma ----
     print("Loading GongSharma...")
-    view_g = source_configs["Gongsharma_cmv_young_males"]["view_info"]
-    adata_g = load_and_prepare_source(
-        "Gongsharma_cmv_young_males", view_g, base_path, output_dir
-    )
-    sample_col_g = source_configs["Gongsharma_cmv_young_males"]["sample_col"]
+    entry_g = config["Gongsharma_cmv_young_males"]
+    adata_g = load_and_prepare_source("Gongsharma_cmv_young_males", entry_g, base_path, output_dir)
+    sample_col_g = entry_g["sample_col"]
     unique_samples = adata_g.obs[sample_col_g].unique().tolist()
     rng = np.random.default_rng(123)
     chosen = rng.choice(unique_samples, size=min(15, len(unique_samples)), replace=False)
@@ -105,13 +100,11 @@ def main():
 
     # ---- Zhu ----
     print("Loading Zhu...")
-    view_z = source_configs["Zhu"]["view_info"]
-    adata_z = load_and_prepare_source(
-        "Zhu", view_z, base_path, output_dir
-    )
+    entry_z = config["Zhu"]
+    adata_z = load_and_prepare_source("Zhu", entry_z, base_path, output_dir)
     adata_z.obs["batch"] = "Zhu"
     adata_z.obs["cond"] = "Healthy"
-    sample_col_z = source_configs["Zhu"]["sample_col"]
+    sample_col_z = entry_z["sample_col"]
     if sample_col_z != "Sample" and sample_col_z in adata_z.obs.columns:
         adata_z.obs["Sample"] = adata_z.obs[sample_col_z].values
     keep_only_cols(adata_z, keep_base)

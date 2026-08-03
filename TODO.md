@@ -1,5 +1,11 @@
 # Pipeline Overhaul Execution Plan
 
+## Replace base_path
+- `src/preprocess/` and `src/cell_type_annotation/` should not use `base_path` or `project_root` anymore, but instead use `NAS_SC_DIR` and `PROJECT_ROOT` (and `SCRATCH_OUTPUT_DIR` for processed output files) from `slurm_config.sh`
+  - Check also all other files that might use `base_path` or `project_root`
+  - Check how to implement this (is it easy to replace all instances of `base_path` with `NAS_SC_DIR` and `project_root` with `PROJECT_ROOT` from the `slurm_config.sh`, e.g. in python and R scripts? And where does it make sense to replace it, e.g. it the user decides to still run the benchmark notebook locally (would need to be added to TODO.md for a later task)?)
+- Whether `src/benchmark/` should use `NAS_SC_DIR` and `SCRATCH_OUTPUT_DIR` or not (i.e. whether it will be run locally) needs to be checked later and decided by user. Probably on HPC but that would need another SLURM wrapper script and additional messages, warnings and ways to store exploratory figures or intermediate visualizations to be added so that the user can view them locally on his computer (e.g. saving them to the scratch directory and syncing to his computer or the NAS)
+
 ## Major goals
 - Preprocessing and subsequently cell type annotation should be run calling a single script for each.
   - Check if a single unified `1_submit_hpc_array.sh` can be used for `src/preprocess/` and `src/cell_type_annotation/`
@@ -9,6 +15,9 @@
 
 ## TODO:
 - Staging of raw data should be handled in `preprocess/1_submit_hpc_array.sh`, as this is the first HPC pipeline script to be run, and it should not be part of `cell_type_annotation/` (remove it there)
+- Fix syntax error in `src/benchmark/benchmark_pipeline.R` (~line 957): `calc_sep_score(labels` is missing a closing parenthesis. This breaks `load_all_functions.R` sourcing, which in turn blocks the rpy2-based module load in `_preprocess_utils.py` (module-level `ro.r('source(...)')`), i.e. any local run of the preprocess or combine scripts.
+- Run the CombinedPBMC combine script (`src/preprocess/_create_combinedpbmc_dataset.py`) once the raw sources are staged from NAS into `data/` (GongSharma `Sound_Life_*.h5ad` files, `ZhuH_2023_37379396whole.rds`, `StephensonE_2021_33879890_preprocessed.rds`). Verify the Zhu raw file has a `Sample` obs column and raw counts before the run.
+- Optional cleanup: exclude view-less datasets (e.g. Zhu) from the preprocess HPC array in `1.1_run_worker.sh` (currently harmless — the worker exits immediately with "Skipping ... No views defined.").
 
 
 ## Step 1 - Check if cell type annotation pipeline can be simplified
@@ -357,3 +366,4 @@ SLURM_PARTITION="shared-cpu"
 - [x] **HPC wrappers**: `src/preprocess/1_submit_hpc_array.sh` / `1.1_run_worker.sh` implemented, data copy from NAS to scratch absorbed into submit script, `copy_data_from_nas_to_hpc_scratch.sh` deleted
 - [x] **File migration**: QC_filtering/ → notebooks/, .rmd files moved, `src/R/` → `src/utils/` (11 files), `src/bash/cell_type_annotation/` → `src/cell_type_annotation/`, stale files deleted
 - [x] **Step 3d Follow-up**: Plan verified, DRY `_preprocess_utils.py` extracted, RAM optimization (in-place gene subsetting, early obs trimming, `del`/`gc`), NAS syncing confirmed for preprocessing and cell type annotation, `config_helper.R` fixed, `run_worker.sh` memory bumped to 16G baseline
+- [x] **Shared datasets.json reader**: Python `src/datasets_io.py::read_datasets_json()` (stdlib-only) + enriched `src/utils/datasets_io.R::read_datasets_json()` (harmonized key structure, backward compatible), `file_names` added to all datasets.json entries, Zhu re-added (view-less raw source for CombinedPBMC), preprocess + combine scripts refactored to use the shared reader, Stephenson combine source switched to `benchmark_analysis` view (Site = Ncl)
