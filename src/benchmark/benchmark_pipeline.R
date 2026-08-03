@@ -953,7 +953,7 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
       impute_zeros("counts_all", i) %>%
       clr() %>%
       dist() %>%
-      calc_sep_score(labels
+      calc_sep_score(labels)
   }
 
   for (i in c(0.001, 0.01, 0.1, 1, 2, 5)) {
