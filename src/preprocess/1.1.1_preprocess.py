@@ -1,5 +1,4 @@
 import os
-import json
 import sys
 import scanpy as sc
 import scipy.sparse as sp
@@ -9,6 +8,7 @@ import re
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.gene_utils import standardize_gene_symbols
+from src.datasets_io import read_datasets_json
 from src.preprocess._preprocess_utils import load_input, apply_subset_vars
  
 
@@ -175,25 +175,25 @@ def main(config_path="datasets.json", base_path="data", output_dir="data",
  
     os.makedirs(output_dir, exist_ok=True)
  
-    with open(config_path) as f:
-        config = json.load(f)
- 
-    for ds_name, ds_info in config.items():
-        sample_col = ds_info.get("columns", {}).get("sample", "Sample")
-        batch_col = ds_info.get("columns", {}).get("batch", sample_col)
+    config = read_datasets_json(config_path)
 
-        views = ds_info.get("views")
+    for ds_name, entry in config.items():
+        sample_col = entry["sample_col"]
+        batch_col = entry["batch_col"] or entry["sample_col"]
+        use_for_batch_effect = entry["use_for_batch_effect"]
+
+        views = entry["views"]
         if not views:
             print(f"Skipping {ds_name}: No views defined.")
             continue
 
         for view_name, view_info in views.items():
-            input_file_name = view_info.get("input_file_name")
+            input_file_name = view_info.get("input_file")
             if not input_file_name:
                 print(f"Skipping {ds_name} / {view_name}: No input_file_name.")
                 continue
 
-            output_file_name = view_info.get("output_file_name")
+            output_file_name = view_info.get("output_file")
             if not output_file_name:
                 print(f"Skipping {ds_name} / {view_name}: No output_file_name.")
                 continue
@@ -214,9 +214,7 @@ def main(config_path="datasets.json", base_path="data", output_dir="data",
             else:
                 raise ValueError(f"Cannot find {sample_col} in obs for {ds_name} / {view_name}")
 
-            is_batch_view = view_name == "batch_effect_analysis" and ds_info.get(
-                "use_for_batch_effect", False
-            )
+            is_batch_view = view_name == "batch_effect_analysis" and use_for_batch_effect
             batch_key = batch_col if is_batch_view else None
 
             if is_batch_view and batch_col not in adata_full.obs.columns:
