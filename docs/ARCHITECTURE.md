@@ -28,6 +28,15 @@ source for the CombinedPBMC dataset that is never preprocessed standalone).
 
 ### Standard scRNA-seq preprocessing pipeline (`src/preprocess/`)
 
+#### Workflow # TODO
+
+#### Files # TODO
+
+| File | Role |
+|---|---|
+| `1_submit_hpc_array.sh` | Thin bash wrapper: sources `slurm_config.sh`, stages data from NAS → scratch, calls `1.1_run_worker.sh`.
+
+- **NAS ↔ Scratch data flow**: Raw-data staging from NAS to scratch happens in `src/preprocess/1_submit_hpc_array.sh` (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`); Worker nodes only access scratch. After array completes, login node rsyncs results back to NAS.
 
 
 ### Cell Type Annotation Pipeline (`src/cell_type_annotation/`)
@@ -56,7 +65,7 @@ Cell type annotation runs as a **separate HPC-parallelized pipeline** on SLURM, 
 
 | File | Role |
 |---|---|
-| `1_prepare_chunks.sh` | Thin bash wrapper: sources `slurm_config.sh`, stages data + ref maps from NAS → scratch, calls `1.1_prepare_chunks.r` via \`srun\` (4G, 10min). Supports `test` mode (`./1_prepare_chunks.sh test` → 1 sample/chunk). |
+| `1_prepare_chunks.sh` | Thin bash wrapper: sources `slurm_config.sh`, stages ref maps from NAS → scratch (raw data is staged by `src/preprocess/1_submit_hpc_array.sh`), calls `1.1_prepare_chunks.r` via \`srun\` (4G, 10min). Supports `test` mode (`./1_prepare_chunks.sh test` → 1 sample/chunk). |
 | `1.1_prepare_chunks.r` | Reads each .h5ad in backed mode (reticulate + anndata), extracts unique sample IDs from `sample_col` (env var `SAMPLE_COLNAME`), groups them into chunks of 5 (or 1 in test mode), writes `chunk_N.txt` files (1st line = h5ad path, subsequent lines = sample IDs). |
 | `2_submit_hpc_array.sh` | Reads chunk count from scratch, submits a SLURM array job (`--array=1-N`, `MAX_NUM_CHUNKS_PARALLEL` concurrency), monitors for completion, then syncs results back to NAS via rsync. |
 | `2.1_run_worker.sh` | `#SBATCH` worker (shared-cpu, 16G, 2h). Sources `slurm_config.sh`, reads `CHUNK_FILE` from `SLURM_ARRAY_TASK_ID`, calls `2.1.1_process_chunk.sh`. |
@@ -69,7 +78,7 @@ Cell type annotation runs as a **separate HPC-parallelized pipeline** on SLURM, 
 
 - **scATOMIC + HiTME dual annotation**: scATOMIC provides hierarchical cell-type predictions (layer_1..6) with confidence scores; HiTME annotates using scGate models + ProjecTILs reference maps, producing layer1/2/3 labels. Both are run on each sample independently (i.e. independent from the rest of the dataset).
 - **Retry loops**: Both annotation methods have up to 5 retry attempts with dynamic timeouts (max(60s, n_cells/10000 × 600s)) to handle HPC node variability.
-- **NAS ↔ Scratch data flow**: Login node copies data from NAS to scratch before array starts. Worker nodes only access scratch. After array completes, login node rsyncs results back to NAS.
+- **NAS ↔ Scratch data flow**: Raw-data staging from NAS to scratch happens only in `src/preprocess/1_submit_hpc_array.sh` (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`); cell type annotation consumes the preprocessed output of that pipeline. `1_prepare_chunks.sh` only stages reference maps and gene annotations. Worker nodes only access scratch. After array completes, login node rsyncs results back to NAS.
 - **Output format**: Per-chunk `.feather` files (Apache Arrow, cross-language) → merged into original `.h5ad` by `3_merge_annotations.py`.
 
 #### Usage

@@ -4,11 +4,13 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
+module load GCCcore/12.2.0
+module load jq/1.6
+
 # ---------------------------------------------------------------------------
 # Phase 1: Stage data from NAS to HPC scratch (login node has NAS access)
 # ---------------------------------------------------------------------------
 echo "=== Phase 1: Staging data from NAS to HPC scratch ==="
-mkdir -p "${HPC_SCRATCH_DIR}"
 
 jq -r '
   to_entries[] |
@@ -18,18 +20,20 @@ jq -r '
   to_entries[] |
   .value.input_file_name |
   if type == "array" then .[] else . end |
-  "\($folder) \(.)"
+  "\($key) \($folder) \(.)"
 ' "${DATASETS_JSON_FILE}" | sort -u | \
-while read -r FOLDER_NAME RAW_FILE_NAME; do
+while read -r KEY FOLDER_NAME RAW_FILE_NAME; do
     if [ "$FOLDER_NAME" == "null" ] || [ -z "$FOLDER_NAME" ]; then
         continue
     fi
 
     NAS_FILE_PATH="${NAS_SC_DIR}/${FOLDER_NAME}/output/${RAW_FILE_NAME}"
+    DEST_DIR="${HPC_SCRATCH_DIR}/${KEY}/data"
     echo "Dataset folder: ${FOLDER_NAME}, file: ${RAW_FILE_NAME}"
 
     if [ -f "$NAS_FILE_PATH" ]; then
-        rsync -ah --progress "$NAS_FILE_PATH" "$HPC_SCRATCH_DIR"
+        mkdir -p "${DEST_DIR}"
+        rsync -ah --progress "$NAS_FILE_PATH" "${DEST_DIR}/"
     else
         echo "  -> [WARNING] Source not found: ${NAS_FILE_PATH}"
     fi
@@ -42,9 +46,6 @@ echo ""
 # Phase 2: Submit preprocessing array job
 # ---------------------------------------------------------------------------
 echo "=== Phase 2: Submitting preprocessing array job ==="
-
-module load GCCcore/12.2.0
-module load jq/1.6
 
 DATASET_NAMES=()
 while IFS= read -r name; do
