@@ -23,6 +23,10 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
             - PILOT-GM-VAE can be added by agent
             - PULSAR needs to be tested for requirements
 
+# General rules
+- Do not run pipeline scripts (e.g. .R, .py or .sh) for validation checks after implementing new code, unless the user asks for.
+    - Validation of HPC pipeline scripts (e.g. .R, .py or .sh) will be run once the pipeline has been fully implemented, using a small debugging dataset (e.g. derived from the Joanito dataset)
+
 
 # Repo structure
 
@@ -113,6 +117,7 @@ Four-stage end-to-end pipeline:
         - renv remnants removed; R environment fully managed by pixi (`pixi run Rscript`).
         - R code extracted from bash heredoc into standalone `2.1.1.1_process_chunk.R`.
         - `config_helper.R` moved from `DEPRECATED_LEGACY_CODE/` to project root (env-var based).
+        - Annotation paths are per-dataset under `${SCRATCH_OUTPUT_DIR}/${DS_NAME}` (see `config_helper.R`); `SAMPLE_COLNAME="Sample"` is exported by `slurm_config.sh` (preprocess standardizes the sample column), and `TISSUE_TYPE`/`NORMAL_TISSUE` are auto-exported per dataset from `datasets.json` by `2_submit_hpc_array.sh`.
         - See [ARCHITECTURE.md](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-stage-2b) for full pipeline documentation.
 - `slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
 - bash SLURM submission scripts are run on the login node, spawning worker nodes

@@ -22,6 +22,17 @@ if [[ ${NUM_CHUNKS} -eq 0 ]]; then
   exit 1
 fi
 
+# Auto-export per-dataset tissue settings from datasets.json (read via
+# Sys.getenv() by 2.1.1.1_process_chunk.R). If jq is unavailable, leave unset
+# and the R defaults apply.
+if command -v jq >/dev/null 2>&1; then
+  export TISSUE_TYPE="$(jq -r --arg ds "${DS_NAME}" '.[$ds].tissue // empty' "${DATASETS_JSON_FILE}")"
+  export NORMAL_TISSUE="$(jq -r --arg ds "${DS_NAME}" '.[$ds].normal_tissue // empty' "${DATASETS_JSON_FILE}")"
+  echo "Exported TISSUE_TYPE=${TISSUE_TYPE}, NORMAL_TISSUE=${NORMAL_TISSUE} for ${DS_NAME}"
+else
+  echo "WARNING: jq not found; TISSUE_TYPE/NORMAL_TISSUE not auto-exported (R defaults apply)."
+fi
+
 echo "Found ${NUM_CHUNKS} chunks. Submitting job array range 1-${NUM_CHUNKS} to SLURM..."
 SUBMIT_MSG=$(sbatch \
     --array=1-${NUM_CHUNKS}%${MAX_NUM_CHUNKS_PARALLEL} \

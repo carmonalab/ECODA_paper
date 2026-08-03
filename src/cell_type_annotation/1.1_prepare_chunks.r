@@ -1,4 +1,5 @@
-project_root <- getwd() # TODO: better get this from bash script or `slurm_config.sh` or `config_helper.R`
+project_root <- Sys.getenv("PROJECT_ROOT")
+if (project_root == "") project_root <- getwd()
 
 raw_args <- commandArgs(trailingOnly = TRUE)
 
@@ -24,11 +25,11 @@ RUN_AS_TEST <- as.logical(args$test)
 # ###### Set paths ######
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-# Fetch dataset name dynamically from config.env # TODO: legacy code (config.env is deprecated, this should be slurm_config.sh). Double-check if this actually works or needs to be implemented differently (e.g. from config_helper.R)
+# Fetch dataset name from environment (exported by slurm_config.sh / caller)
 ds_name <- Sys.getenv("DS_NAME")
 if (ds_name == "") stop("CRITICAL Error: DS_NAME not set. Ensure it is exported before calling this script.")
 
-source("config_helper.R")
+source(file.path(project_root, "config_helper.R"))
 paths <- get_pipeline_config(ds_name, force_overwrite = TRUE, test_mode = RUN_AS_TEST)
 
 message(paste("Path is:", paths$path_data))
@@ -63,6 +64,7 @@ chunk_size <- if (RUN_AS_TEST) 1 else 5
 global_chunk_counter <- 1
 
 sample_col <- Sys.getenv("SAMPLE_COLNAME")
+if (sample_col == "") stop("CRITICAL Error: SAMPLE_COLNAME not set. Ensure it is exported before calling this script.")
 
 # Loop through each file individually
 for (f in h5ad_files) {

@@ -8,31 +8,37 @@
 #
 
 # --- Project Paths ---
+# NOTE: All path/env vars below are exported so that srun/sbatch children and
+# Sys.getenv()/os.environ consumers (R config_helper.R, Python scripts) see them.
 export PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DATASETS_JSON_FILE="${PROJECT_ROOT}/datasets.json"
+export DATASETS_JSON_FILE="${PROJECT_ROOT}/datasets.json"
 
 # --- NAS Paths ---
 export NAS_PREFIX="/srv/smednas515.unige.ch/carmona_smb"
 NAS_BASE_DIR="${NAS_PREFIX}/DataCollections"
-NAS_SC_DIR="${NAS_BASE_DIR}/Standardized_SingleCell_Datasets"
-NAS_TARGET_DIR="${NAS_BASE_DIR}/AnalysisResults/ECODA"
+export NAS_SC_DIR="${NAS_BASE_DIR}/Standardized_SingleCell_Datasets"
+export NAS_TARGET_DIR="${NAS_BASE_DIR}/AnalysisResults/ECODA"
 
 # --- HPC Scratch Paths ---
-HPC_SCRATCH_DIR="${HOME}/scratch/ECODA_paper"
-SCRATCH_OUTPUT_DIR="${HPC_SCRATCH_DIR}/output"
+export HPC_SCRATCH_DIR="${HOME}/scratch/ECODA_paper"
+export SCRATCH_OUTPUT_DIR="${HPC_SCRATCH_DIR}/output"
 
 # --- Pixi R library path ---
-PIXI_R_LIB="${PROJECT_ROOT}/.pixi/envs/default/lib/R/library"
+export PIXI_R_LIB="${PROJECT_ROOT}/.pixi/envs/default/lib/R/library"
 
 # --- Reference atlas paths (cell type annotation) ---
-NAS_REF_DIR="${NAS_PREFIX}/DataCollections/reference_atlases/sketched_200ct/"
-HOME_REF_DIR="${HOME}/reference_atlases/sketched_200ct/"
+export NAS_REF_DIR="${NAS_PREFIX}/DataCollections/reference_atlases/sketched_200ct/"
+export HOME_REF_DIR="${HOME}/reference_atlases/sketched_200ct/"
 
 # --- Gene reference (cell type annotation) ---
 # Used for gene standardization with STACAS; now implemented in src/preprocess/1.1.1_preprocess.py
 # which runs before cell type annotation. Kept for potential fallback.
-GENE_REF_FILE="${PROJECT_ROOT}/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+export GENE_REF_FILE="${PROJECT_ROOT}/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
 GENE_REF_URL="https://raw.githubusercontent.com/carmonalab/scRNAseq_data_processing/master/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+
+# --- Sample column name (cell type annotation) ---
+# 1.1.1_preprocess.py standardizes every dataset's sample column to "Sample".
+export SAMPLE_COLNAME="Sample"
 
 # --- SLURM Configuration ---
 SLURM_ACCOUNT=""
