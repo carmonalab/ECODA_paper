@@ -37,7 +37,7 @@ if [[ -z "${MANIFEST_LINE}" ]]; then
 fi
 IFS=$'\t' read -r DS_NAME CHUNK_FILE <<< "${MANIFEST_LINE}"
 
-# Per-dataset env for 2.1.1.1_process_chunk.R (read via Sys.getenv()). If jq
+# Per-dataset env for 2.1.1_process_chunk.R (read via Sys.getenv()). If jq
 # finds no tissue key for the dataset, the R defaults apply.
 export DS_NAME
 export HOME_CHUNKS_DIR="$(dirname "${CHUNK_FILE}")"
@@ -46,5 +46,13 @@ export NORMAL_TISSUE="$(jq -r --arg ds "${DS_NAME}" '.[$ds].normal_tissue // emp
 echo "Task ${SLURM_ARRAY_TASK_ID}: DS_NAME=${DS_NAME}, chunk=${CHUNK_FILE}"
 echo "Exported TISSUE_TYPE=${TISSUE_TYPE}, NORMAL_TISSUE=${NORMAL_TISSUE} for ${DS_NAME}"
 
-# PROJECT_ROOT is sourced (and exported) by 2.1.1_process_chunk.sh via slurm_config.sh
-bash "${SCRIPT_DIR}/2.1.1_process_chunk.sh" "${SLURM_ARRAY_TASK_ID}" "${CHUNK_FILE}"
+if [[ ! -f "${CHUNK_FILE}" ]]; then
+  echo "Task ${SLURM_ARRAY_TASK_ID}: ERROR: Chunk file ${CHUNK_FILE} not found."
+  exit 1
+fi
+
+echo "Task ${SLURM_ARRAY_TASK_ID}: running annotation (pixi run Rscript --vanilla)"
+"${HOME}/.pixi/bin/pixi" run Rscript --vanilla \
+  "${SCRIPT_DIR}/2.1.1_process_chunk.R" \
+  "${CHUNK_FILE}"
+echo "Task ${SLURM_ARRAY_TASK_ID}: chunk processing complete."
