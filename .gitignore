@@ -1,7 +1,5 @@
 # Big data files
 *.rds
-!aux/scGateDB.rds
-!aux/genes.blocklist.rds
 *.feather
 *.h5ad
 *.h5seurat
@@ -56,6 +54,7 @@ rsconnect/
 data/
 plots/
 ProjectTILs_references/
+!aux/*
 
 # pixi environments
 .pixi/*
