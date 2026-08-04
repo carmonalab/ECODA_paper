@@ -133,12 +133,14 @@ Four-stage end-to-end pipeline:
         - R code extracted from bash heredoc into standalone `2.1.1_process_chunk.R`.
         - `config_helper.R` moved from `DEPRECATED_LEGACY_CODE/` (deleted) to project root (env-var based).
         - Annotation paths are per-dataset under `${HPC_SCRATCH_DIR}/${DS_NAME}/output` (see `config_helper.R`); annotation feathers go to `${HPC_SCRATCH_DIR}/${DS_NAME}/output` directly — `samples/`, `ecoda/`, `plots/` dirs are no longer created. `SAMPLE_COLNAME="Sample"` is exported by `slurm_config.sh` (preprocess standardizes the sample column), and `TISSUE_TYPE`/`NORMAL_TISSUE` are auto-exported per array task from `datasets.json` by `2.1_run_worker.sh` (via jq, `module load jq/1.6` on the worker).
+        - `2.1.1_process_chunk.R` builds Seurat objects from the raw counts layer via `get_seurat_obj_from_h5ad()` (`src/utils/seurat_utils.R`; `layers["counts"]`, X fallback with warning) — NOT from log-normalized `X`; feather names derive from the chunk file (`chunk_<N>.txt` → `annotations_chunk_<N>.feather`), not `SLURM_ARRAY_TASK_ID`; scGate models load from the shared `${SCGATE_DB_PATH}` cache created by `0.1_create_scgate_db.R` (run via `1_prepare_chunks.sh`).
+        - Python is invoked via `PYTHON_BIN` (`${PROJECT_ROOT}/.pixi/envs/default/bin/python`) and R via `PIXI_RSCRIPT` from `slurm_config.sh` — never bare `python` (worker nodes may not have scanpy/anndata).
         - See [ARCHITECTURE.md](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-stage-2b) for full pipeline documentation.
 - `slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
 
 ### HPC folder layout
-- `$HOME/scratch/ECODA_paper` (`HPC_SCRATCH_DIR`): `<DS_NAME>/data/` (staged raw inputs), `<DS_NAME>/output/` (preprocessed .h5ad per view, `chunks/` during annotation, `annotations_chunk_*.feather`, annotated .h5ad), `CombinedPBMC/data/` (combine output + rds→h5ad cache), `chunks_manifest.txt` (global chunk manifest)
-- `$HOME/reference_atlases/sketched_200ct/` (`HOME_REF_DIR`); `$PROJECT_ROOT/logs`, `aux/`, `.pixi/`
+- `$HOME/scratch/ECODA_paper` (`HPC_SCRATCH_DIR`): `<DS_NAME>/data/` (staged raw inputs), `<DS_NAME>/output/` (preprocessed .h5ad per view + `<stem>_raw.h5ad` rds→h5ad caches, `chunks/` during annotation, `annotations_chunk_*.feather`, annotated .h5ad), `CombinedPBMC/data/` (combine output + rds→h5ad cache), `chunks_manifest.txt` (global chunk manifest)
+- `$HOME/reference_atlases/sketched_200ct/` (`HOME_REF_DIR`); `$PROJECT_ROOT/logs`, `aux/` (incl. `scGateDB.rds` scGate model cache, `SCGATE_DB_PATH`; model DB version pinned by `SCGATE_DB_BRANCH`), `.pixi/`
 - NAS: `NAS_SC_DIR` (raw source), `NAS_REF_DIR`; `NAS_TARGET_DIR` = `Projects/ECODA_paper/` with `<DS_NAME>/output/` (rsynced per-dataset from `${HPC_SCRATCH_DIR}/<DS_NAME>/output`), `benchmark/{embeddings,plots}/` and `batch_effect_analysis/{embeddings,plots}/` (targets for method .feathers + notebook plots; filled once the `5_run_benchmark_methods` decision is made — TODO)
 - See [ARCHITECTURE.md](docs/ARCHITECTURE.md#hpc-folder-layout) for the full layout
 - bash SLURM submission scripts are run on the login node, spawning worker nodes

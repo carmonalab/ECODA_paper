@@ -409,8 +409,7 @@ datasets <- list(
 ```{r message=FALSE, warning=FALSE}
 # Get scGate database of pre-defined gating models
 scGate_models_DB <- get_scGateDB(
-  branch = "dev",
-  verbose = T,
+  branch = "41a45cd3f8bb5f5a7daf21ec276f6a726f6ee0d4",
   force_update = TRUE
 )
 scGate_models_blood <- scGate_models_DB$human$PBMC

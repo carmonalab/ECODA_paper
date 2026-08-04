@@ -1,7 +1,6 @@
 get_pipeline_config <- function(
   ds_name = Sys.getenv("DS_NAME"),
-  force_overwrite = FALSE,
-  test_mode = FALSE
+  force_overwrite = FALSE
 ) {
   if (ds_name == "") {
     stop("CRITICAL: DS_NAME not set. Ensure it is exported before calling R.")
@@ -21,9 +20,6 @@ get_pipeline_config <- function(
 
   config_data <- list(
     ds_name             = ds_name,
-    test_mode           = test_mode,
-    chunk_size          = ifelse(test_mode, 1, 5),
-    max_test_array_jobs = 3,
     # All per-dataset dirs live under HPC_SCRATCH_DIR/<DS_NAME>/output
     # (preprocessed output = annotation input). Matches 2_submit_hpc_array.sh
     # CHUNKS_DIR.

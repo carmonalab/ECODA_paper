@@ -40,7 +40,6 @@ IFS=$'\t' read -r DS_NAME CHUNK_FILE <<< "${MANIFEST_LINE}"
 # Per-dataset env for 2.1.1_process_chunk.R (read via Sys.getenv()). If jq
 # finds no tissue key for the dataset, the R defaults apply.
 export DS_NAME
-export HOME_CHUNKS_DIR="$(dirname "${CHUNK_FILE}")"
 export TISSUE_TYPE="$(jq -r --arg ds "${DS_NAME}" '.[$ds].tissue // empty' "${DATASETS_JSON_FILE}")"
 export NORMAL_TISSUE="$(jq -r --arg ds "${DS_NAME}" '.[$ds].normal_tissue // empty' "${DATASETS_JSON_FILE}")"
 echo "Task ${SLURM_ARRAY_TASK_ID}: DS_NAME=${DS_NAME}, chunk=${CHUNK_FILE}"
@@ -52,7 +51,7 @@ if [[ ! -f "${CHUNK_FILE}" ]]; then
 fi
 
 echo "Task ${SLURM_ARRAY_TASK_ID}: running annotation (pixi run Rscript --vanilla)"
-"${HOME}/.pixi/bin/pixi" run Rscript --vanilla \
+${PIXI_RSCRIPT} \
   "${SCRIPT_DIR}/2.1.1_process_chunk.R" \
   "${CHUNK_FILE}"
 echo "Task ${SLURM_ARRAY_TASK_ID}: chunk processing complete."

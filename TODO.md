@@ -35,6 +35,34 @@
   - Move this data-processing step out of `notebooks/benchmark_analysis.rmd`
   - NAS targets: `benchmark/{embeddings,plots}/` and `batch_effect_analysis/{embeddings,plots}/` (see `NAS_TARGET_DIR`, HPC folder layout in ARCHITECTURE.md)
 
+## HPC pipeline review — Phase 1 fixes (DONE)
+- [x] `1.1_prepare_chunks.py` skips `*_raw.h5ad` rds→h5ad caches + deletes stale `annotations_chunk_*.feather` on rerun (production mode, after successful chunk generation)
+- [x] `2.1.1_process_chunk.R` uses `get_seurat_obj_from_h5ad()` (`layers["counts"]`, X fallback with warning; `src/utils/seurat_utils.R` sourced directly); feather names derived from the chunk file name (stable across array task renumbering)
+- [x] scGate DB cached once: new `0.1_create_scgate_db.R` (run via srun in `1_prepare_chunks.sh`) → `aux/scGateDB.rds` (`SCGATE_DB_PATH`); worker loads the cache with download+persist fallback
+- [x] `3_merge_annotations.py` joins on (sample, barcode) via a `_key` column; reads `SAMPLE_COLNAME` from env
+- [x] Dead `HOME_CHUNKS_DIR` export removed (`2.1_run_worker.sh`); unused `test_mode`/`chunk_size`/`max_test_array_jobs` removed from `config_helper.R`
+- [x] `slurm_config.sh` adds `PYTHON_BIN`/`PIXI_RSCRIPT` (+ `SCGATE_DB_PATH`); bare `python` replaced in `1.1_submit_combinedpbmc.sh`, `1.1_run_worker.sh`, `1_prepare_chunks.sh`
+- [x] Step-script logs: `1_submit_hpc.sh` passes `--output/--error` per step into `${LOGS_DIR}`; Joanito step `--mem` 8G→32G
+- [x] Array submit scripts (`3_scrnaseq_preprocessing/1_submit_hpc_array.sh`, `4_cell_type_annotation/2_submit_hpc_array.sh`): `mkdir -p "${LOGS_DIR}"`, sacct failure check before NAS sync; annotation submit syncs only the requested dataset in single-dataset mode
+- [x] `1.1.1_preprocess.py`: `apply_subset_vars` before sample-col standardization + empty-subset guard
+- [x] Stale `TODO_STUMP_*` refs fixed; local `__pycache__` deleted
+
+## HPC pipeline review — Phase 2 (open items)
+### Item A — Debug/test execution mode with subsetted Joanito debug dataset (revive Step 2)
+Status: Step 2 is stale; debug dataset NOT implemented (no `_create_debug_dataset.R`, no `data/debug/`, no `_debug` entry in datasets.json). Existing partial support: `1_prepare_chunks.sh test` → `1.1_prepare_chunks.py --test` (1 sample/chunk); preprocess `--ds_name`; single-dataset args in chunk prep + annotation submit.
+- Implement `src/2_dataset_specific_preprocessing/_create_debug_dataset.R` per old Step 2b (5 Joanito samples, 500 cells/sample, minimal obs cols) → `data/debug/*.rds` + `*.h5ad`
+- Register as `_debug` in datasets.json (or separate `debug_datasets.json`; decide) with `batch_effect_analysis` + `benchmark_analysis` views
+- Wire test mode end-to-end: preprocess array `--ds_name _debug` (+ view filter), chunk prep `test`, annotation array on the debug dataset; validation checklist (h5ad loads, keys `X_pca`/`X_pca_harmony`, runtime < 30s locally)
+- Coverage matrix: which scripts support test/single-dataset mode today vs. which need adaptions (`1_submit_hpc_array.sh`, `1.1_run_worker.sh`, `2_submit_hpc_array.sh`, `2.1_run_worker.sh`)
+
+### Item B — Centralize SLURM partition (extends existing Step 6)
+- Decide: pass `--partition="${SLURM_PARTITION}"` at submit time (sbatch directives don't expand vars); remove `#SBATCH --partition` lines from step scripts + workers and the `srun --partition=shared-cpu` in `1_prepare_chunks.sh`
+- Note per-pipeline partition needs (shared-cpu for preprocess/annotation; GPU for some benchmark methods)
+
+### Item C — Integrate `3_merge_annotations.py` into the pipeline
+- Decide: add a `3.1_submit_merge.sh` wrapper (per-dataset, after array completion) or document it as an explicit manual step in ARCHITECTURE.md (currently an orphan: no bash wrapper calls it, but ARCHITECTURE.md presents it as a pipeline stage)
+- Consider implementing it in `2_submit_hpc_array.sh` after all workers complete, or keep it separate
+
 ## Completed (HPC layout + TODO verification plan)
 - [x] **TODO 3e — unified per-view pipeline** (`1.1.1_preprocess.py`): benchmark views now use batch-aware HVG (`batch_key="Sample"` from `SAMPLE_COLNAME`) and harmony-based Leiden; batch views get Leiden on `X_pca_harmony` too (`BATCH_VIEW_RES` removed); `X_pca` stored for every HVG size; Harmony + neighbors + Leiden (6 resolutions) only at the 2000-HVG pass
 - [x] **Preprocess array fix**: `--ds_name` filter added to `1.1.1_preprocess.py`; `1.1_run_worker.sh` passes its `DS_NAME` (previously every worker looped over all datasets with its own dirs → guaranteed missing-file failure). View-less datasets (Zhu) still exit cleanly via "No views defined."
@@ -278,12 +306,12 @@ Changes:
 
 ### 5c. Write SLURM wrappers
 
-`src/5_run_benchmark_methods/run_python_sample_embedding_methods/TODO_STUMP_1_submit_hpc_array.sh`:
+`src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh`:
 - Source `src/slurm_config.sh`
 - For each dataset+view combination that needs Python methods, submit an array job
 - Job concurrency controlled by `MAX_NUM_CHUNKS_PARALLEL`
 
-`src/5_run_benchmark_methods/run_python_sample_embedding_methods/TODO_STUMP_1.1_run_worker.sh`:
+`src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh`:
 - `#SBATCH` headers (shared-cpu, 16G, 4h or GPU if needed for PILOT-GM-VAE)
 - Copy preprocessed .h5ad to scratch
 - Run converted .py script with dataset/view/method arguments

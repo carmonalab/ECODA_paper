@@ -5,8 +5,10 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=8G
+#SBATCH --mem=32G
 #SBATCH --mail-type=END,FAIL
+# NOTE: 32G baseline — the whole Joanito .rds is read via readRDS + saveRDS
+# in a single process; 8G was too tight for the full object.
 
 set -euo pipefail
 
@@ -14,4 +16,4 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-"${HOME}/.pixi/bin/pixi" run Rscript --vanilla "${SCRIPT_DIR}/_create_joanito_batch_col.R"
+${PIXI_RSCRIPT} "${SCRIPT_DIR}/_create_joanito_batch_col.R"

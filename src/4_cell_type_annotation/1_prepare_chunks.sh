@@ -70,8 +70,30 @@ else
   rsync -av --progress "${NAS_REF_DIR}" "${HOME_REF_DIR}/"
 fi
 
-ENV_PYTHON="${PROJECT_ROOT}/.pixi/envs/default/bin/python"
+# -------------------------------------------------------------------------
+# STAGE scGate MODEL DB CACHE: Download the scGate model DB once into aux/ so
+# the annotation array workers load it from disk instead of downloading in
+# parallel (up to MAX_NUM_CHUNKS_PARALLEL concurrent downloads).
+# -------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${SCGATE_DB_PATH}" ]]; then
+  echo ">>> scGate DB cache already exists at ${SCGATE_DB_PATH}. Skipping. <<<"
+else
+  echo "Creating scGate DB cache at ${SCGATE_DB_PATH} (one-time download)..."
+  if ! srun --partition=shared-cpu \
+       --time=00:30:00 \
+       --ntasks=1 \
+       --cpus-per-task=1 \
+       --mem=4G \
+       --output="${LOGS_DIR}/prepare_scgatedb.log" \
+       --error="${LOGS_DIR}/prepare_scgatedb.log" \
+       ${PIXI_RSCRIPT} "${SCRIPT_DIR}/0.1_create_scgate_db.R"; then
+    echo "WARNING: scGate DB cache creation failed (see ${LOGS_DIR}/prepare_scgatedb.log)."
+    echo "         Continuing: annotation workers will download the model DB themselves (slower)."
+  else
+    echo "✓ scGate DB cache created. Log saved to: ${LOGS_DIR}/prepare_scgatedb.log"
+  fi
+fi
 
 # 4. Build chunks per dataset (sequential, one short-lived compute session each;
 #    --time=00:30:00 covers the full dataset loop, per-dataset runs are usually
@@ -101,7 +123,7 @@ for DS_NAME in "${DATASET_NAMES[@]}"; do
        --mem=4G \
        --output="${LOG_FILE}" \
        --error="${LOG_FILE}" \
-       "${ENV_PYTHON}" "${SCRIPT_DIR}/1.1_prepare_chunks.py" ${PY_ARGS}; then
+       "${PYTHON_BIN}" "${SCRIPT_DIR}/1.1_prepare_chunks.py" ${PY_ARGS}; then
     echo "ERROR: Chunk generation failed for ${DS_NAME}. See ${LOG_FILE}."
     FAILED_DATASETS+=("${DS_NAME}")
     continue

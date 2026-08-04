@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import anndata as ad
 import glob
@@ -30,14 +31,36 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
     annotations = pd.concat(
         [pd.read_feather(f) for f in annot_files], ignore_index=True
     )
-    annotations = annotations.set_index("cell_barcode")
+    # Barcodes repeat across samples, and multi-view datasets produce one
+    # feather set per view in the same dir; join on (sample, barcode) instead
+    # of cell_barcode alone to avoid duplicate-index row explosion.
+    sample_col = os.environ.get("SAMPLE_COLNAME", "Sample")
+    if "sample" not in annotations.columns:
+        print(f"'sample' column missing in annotation feathers of {annot_dir}")
+        return
+    annotations["_key"] = (
+        annotations["sample"].astype(str) + "_" + annotations["cell_barcode"].astype(str)
+    )
+    n_dup = annotations["_key"].duplicated().sum()
+    if n_dup:
+        print(f"WARNING: {n_dup} duplicate (sample, barcode) keys across chunk feathers; keeping first.")
+        annotations = annotations.drop_duplicates("_key", keep="first")
+    annotations = annotations.set_index("_key").drop(columns=["cell_barcode", "sample"])
     print(f"Total annotation entries: {len(annotations)}")
 
     adata = ad.read_h5ad(h5ad_path)
     print(f"h5ad obs entries before merge: {adata.n_obs}")
 
+    obs = adata.obs.copy()
+    if sample_col not in obs.columns:
+        raise ValueError(
+            f"Sample column '{sample_col}' not found in obs of {h5ad_path}. "
+            f"Available columns: {list(obs.columns)}"
+        )
+    obs["_key"] = obs[sample_col].astype(str) + "_" + adata.obs_names.astype(str)
+
     original_n_obs = adata.n_obs
-    adata.obs = adata.obs.join(annotations, how="left")
+    adata.obs = obs.join(annotations, how="left", on="_key").drop(columns="_key")
     merged_count = adata.obs["layer1"].notna().sum()
     print(f"Rows with annotations after merge: {merged_count} / {original_n_obs}")
 

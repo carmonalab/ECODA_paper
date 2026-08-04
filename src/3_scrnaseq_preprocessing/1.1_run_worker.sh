@@ -36,7 +36,7 @@ DATA_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/data"
 OUTPUT_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/output"
 mkdir -p "${DATA_DIR}" "${OUTPUT_DIR}"
 
-python "${SCRIPT_DIR}/1.1.1_preprocess.py" \
+"${PYTHON_BIN}" "${SCRIPT_DIR}/1.1.1_preprocess.py" \
     --config_path "${DATASETS_JSON_FILE}" \
     --input_dir "${DATA_DIR}" \
     --output_dir "${OUTPUT_DIR}" \

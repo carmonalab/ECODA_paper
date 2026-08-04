@@ -26,9 +26,23 @@ export HPC_SCRATCH_DIR="${HOME}/scratch/ECODA_paper"
 # --- Pixi R library path ---
 export PIXI_R_LIB="${PROJECT_ROOT}/.pixi/envs/default/lib/R/library"
 
+# --- Pixi-managed interpreter commands ---
+# PYTHON_BIN: pixi python (has scanpy/anndata etc.); plain `python` on worker
+# nodes may resolve to a bare system python without these packages.
+# PIXI_RSCRIPT: pixi Rscript entry point (word-splits into the pixi command).
+export PYTHON_BIN="${PROJECT_ROOT}/.pixi/envs/default/bin/python"
+export PIXI_RSCRIPT="${HOME}/.pixi/bin/pixi run Rscript --vanilla"
+
 # --- Reference atlas paths (cell type annotation) ---
 export NAS_REF_DIR="${NAS_PREFIX}/DataCollections/reference_atlases/sketched_200ct/"
 export HOME_REF_DIR="${HOME}/reference_atlases/sketched_200ct/"
+
+# --- scGate model DB cache (cell type annotation) ---
+# Created once by 0.1_create_scgate_db.R (via 1_prepare_chunks.sh); loaded by
+# 2.1.1_process_chunk.R workers so they do not download in parallel.
+# SCGATE_DB_BRANCH is the single source of truth for the model DB version.
+export SCGATE_DB_PATH="${PROJECT_ROOT}/aux/scGateDB.rds"
+export SCGATE_DB_BRANCH="41a45cd3f8bb5f5a7daf21ec276f6a726f6ee0d4"
 
 # --- Sample column name (cell type annotation) ---
 # 1.1.1_preprocess.py standardizes every dataset's sample column to "Sample".

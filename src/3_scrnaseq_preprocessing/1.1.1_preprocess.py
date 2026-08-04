@@ -210,11 +210,21 @@ def main(config_path, input_dir, output_dir, ds_name=None):
             print(f"Loading {current_ds} / {view_name} ...")
             adata_full = load_input(input_file_name, input_dir, output_dir)
 
-            if sample_col in adata_full.obs.columns:
+            # Subset on ORIGINAL sample/label values, before the sample column
+            # is standardized (standardization can alter '-' or leading digits
+            # that subset values may contain).
+            adata_view = apply_subset_vars(adata_full, view_info.get("subset_vars", {}))
+            if adata_view.n_obs == 0:
+                raise ValueError(
+                    f"Subset for {current_ds} / {view_name} is empty after "
+                    f"apply_subset_vars. Check subset_vars: {view_info.get('subset_vars', {})}"
+                )
+
+            if sample_col in adata_view.obs.columns:
                 sample_col_out = os.environ.get("SAMPLE_COLNAME", "Sample")
-                adata_full.obs[sample_col_out] = [
+                adata_view.obs[sample_col_out] = [
                     f"g{s}" if re.match(r"^\d", str(s)) else str(s).replace("-", "_")
-                    for s in adata_full.obs[sample_col]
+                    for s in adata_view.obs[sample_col]
                 ]
             else:
                 raise ValueError(f"Cannot find {sample_col} in obs for {current_ds} / {view_name}")
@@ -227,15 +237,14 @@ def main(config_path, input_dir, output_dir, ds_name=None):
                 batch_key = os.environ.get("SAMPLE_COLNAME", "Sample")
                 n_hvg_sizes = BENCHMARK_VIEW_N_HVG_SIZES
 
-            if is_batch_view and batch_col not in adata_full.obs.columns:
+            if is_batch_view and batch_col not in adata_view.obs.columns:
                 raise ValueError(
                     f"batch_col '{batch_col}' not found in obs for {current_ds} / {view_name}. "
-                    f"Available columns: {list(adata_full.obs.columns)}"
+                    f"Available columns: {list(adata_view.obs.columns)}"
                 )
 
             print(f"Processing {current_ds} / {view_name} (batch_key={batch_key})...")
 
-            adata_view = apply_subset_vars(adata_full, view_info.get("subset_vars", {}))
             adata_view = process_view(
                 adata_view,
                 view_name=view_name,
