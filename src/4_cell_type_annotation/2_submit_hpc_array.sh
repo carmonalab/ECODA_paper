@@ -36,7 +36,7 @@ fi
 # SLURM_ARRAY_TASK_ID maps 1:1 to manifest line numbers, so task IDs are
 # globally unique and per-chunk feather names never collide across datasets.
 # The manifest is regenerated on every run; chunk dirs are recreated fresh by
-# 1.1_prepare_chunks.r, so a stale manifest cannot be misread.
+# 1.1_prepare_chunks.py, so a stale manifest cannot be misread.
 # ---------------------------------------------------------------------------
 export CHUNKS_MANIFEST="${SCRATCH_OUTPUT_DIR}/chunks_manifest.txt"
 : > "${CHUNKS_MANIFEST}"

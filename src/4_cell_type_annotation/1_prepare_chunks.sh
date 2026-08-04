@@ -19,11 +19,11 @@ mkdir -p "${LOGS_DIR}"
 # 2. Parse arguments: MODE (production/test) + optional single dataset
 MODE_ARG="${1:-production}"
 DS_NAME_ARG="${2:-}"
-R_PASS_ARG="test__false"
+PY_ARGS=""
 
 if [ "$MODE_ARG" = "test" ]; then
   echo ">>> CONFIGURING PIPELINE IN TEST MODE <<<"
-  R_PASS_ARG="test__true"
+  PY_ARGS="--test"
 elif [ "$MODE_ARG" = "production" ]; then
   echo ">>> CONFIGURING PIPELINE IN PRODUCTION MODE <<<"
 else
@@ -70,10 +70,8 @@ else
   rsync -av --progress "${NAS_REF_DIR}" "${HOME_REF_DIR}/"
 fi
 
-ENV_RSCRIPT="${PROJECT_ROOT}/.pixi/envs/default/bin/Rscript"
+ENV_PYTHON="${PROJECT_ROOT}/.pixi/envs/default/bin/python"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-export R_LIBS_SITE="${PIXI_R_LIB}:${R_LIBS_SITE:-}"
 
 # 4. Build chunks per dataset (sequential, one short-lived compute session each;
 #    --time=00:30:00 covers the full dataset loop, per-dataset runs are usually
@@ -103,7 +101,7 @@ for DS_NAME in "${DATASET_NAMES[@]}"; do
        --mem=4G \
        --output="${LOG_FILE}" \
        --error="${LOG_FILE}" \
-       "${ENV_RSCRIPT}" --vanilla "${SCRIPT_DIR}/1.1_prepare_chunks.r" "${R_PASS_ARG}"; then
+       "${ENV_PYTHON}" "${SCRIPT_DIR}/1.1_prepare_chunks.py" ${PY_ARGS}; then
     echo "ERROR: Chunk generation failed for ${DS_NAME}. See ${LOG_FILE}."
     FAILED_DATASETS+=("${DS_NAME}")
     continue
