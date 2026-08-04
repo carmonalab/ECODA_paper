@@ -129,10 +129,10 @@ The analysis proceeds through four stages:
   ```bash
   sbatch src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh
   ```
-- **Cell type annotation** via `src/4_cell_type_annotation/`:
+- **Cell type annotation** via `src/4_cell_type_annotation/` (all datasets by default; an optional dataset name restricts to one dataset):
   ```bash
-  export DS_NAME="Stephenson"
-  ./src/4_cell_type_annotation/1_prepare_chunks.sh
+  ./src/4_cell_type_annotation/1_prepare_chunks.sh             # production: 5 samples/chunk
+  ./src/4_cell_type_annotation/1_prepare_chunks.sh test        # test: 1 sample/chunk
   ./src/4_cell_type_annotation/2_submit_hpc_array.sh
   ```
 - **Benchmark methods** via `src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh` (stages data + submits array + syncs results):

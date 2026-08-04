@@ -16,10 +16,35 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-# HOME_CHUNKS_DIR is exported by 2_submit_hpc_array.sh; set a fallback if missing
-: "${HOME_CHUNKS_DIR:=${SCRATCH_OUTPUT_DIR}/chunks}"
+# jq module loads in the submit script do not propagate to workers; load here.
+module load jq/1.6 >/dev/null 2>&1 || true
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: jq not available on worker node; cannot read manifest/datasets.json."
+  exit 1
+fi
 
-CHUNK_FILE="${HOME_CHUNKS_DIR}/chunk_${SLURM_ARRAY_TASK_ID}.txt"
+if [[ -z "${CHUNKS_MANIFEST:-}" ]]; then
+  echo "ERROR: CHUNKS_MANIFEST is not set. Export it before submitting the array."
+  exit 1
+fi
+
+# Read this task's line from the global manifest (written by
+# 2_submit_hpc_array.sh):  DS_NAME<TAB>absolute_chunk_path
+MANIFEST_LINE="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${CHUNKS_MANIFEST}")"
+if [[ -z "${MANIFEST_LINE}" ]]; then
+  echo "ERROR: No manifest entry for array task ${SLURM_ARRAY_TASK_ID} in ${CHUNKS_MANIFEST}."
+  exit 1
+fi
+IFS=$'\t' read -r DS_NAME CHUNK_FILE <<< "${MANIFEST_LINE}"
+
+# Per-dataset env for 2.1.1.1_process_chunk.R (read via Sys.getenv()). If jq
+# finds no tissue key for the dataset, the R defaults apply.
+export DS_NAME
+export HOME_CHUNKS_DIR="$(dirname "${CHUNK_FILE}")"
+export TISSUE_TYPE="$(jq -r --arg ds "${DS_NAME}" '.[$ds].tissue // empty' "${DATASETS_JSON_FILE}")"
+export NORMAL_TISSUE="$(jq -r --arg ds "${DS_NAME}" '.[$ds].normal_tissue // empty' "${DATASETS_JSON_FILE}")"
+echo "Task ${SLURM_ARRAY_TASK_ID}: DS_NAME=${DS_NAME}, chunk=${CHUNK_FILE}"
+echo "Exported TISSUE_TYPE=${TISSUE_TYPE}, NORMAL_TISSUE=${NORMAL_TISSUE} for ${DS_NAME}"
 
 # PROJECT_ROOT is sourced (and exported) by 2.1.1_process_chunk.sh via slurm_config.sh
 bash "${SCRIPT_DIR}/2.1.1_process_chunk.sh" "${SLURM_ARRAY_TASK_ID}" "${CHUNK_FILE}"

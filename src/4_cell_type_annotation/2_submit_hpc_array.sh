@@ -1,42 +1,85 @@
 #!/bin/bash
 set -euo pipefail
 
-# IMPORTANT: DS_NAME must be exported before calling this script, e.g.:
-#   export DS_NAME="Stephenson"
-#   ./2_submit_hpc_array.sh
+# Usage:
+#   ./2_submit_hpc_array.sh                # all datasets with chunks
+#   ./2_submit_hpc_array.sh <DS_NAME>      # single dataset (must have chunks)
 
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-if [[ -z "${DS_NAME:-}" ]]; then
-  echo "ERROR: DS_NAME is not set. Export it before running this script."
-  echo "Usage: export DS_NAME=\"DatasetName\" && $0"
-  exit 1
-fi
+DS_NAME_ARG="${1:-}"
 
-export HOME_CHUNKS_DIR="${SCRATCH_OUTPUT_DIR}/${DS_NAME}/chunks"
-NUM_CHUNKS=$(ls -1 "${HOME_CHUNKS_DIR}"/chunk_*.txt 2>/dev/null | wc -l)
-
-if [[ ${NUM_CHUNKS} -eq 0 ]]; then
-  echo "ERROR: No chunk files found in ${HOME_CHUNKS_DIR}! Run 1_prepare_chunks.sh first."
-  exit 1
-fi
-
-# Auto-export per-dataset tissue settings from datasets.json (read via
-# Sys.getenv() by 2.1.1.1_process_chunk.R). If jq is unavailable, leave unset
-# and the R defaults apply.
 module load jq/1.6
-if command -v jq >/dev/null 2>&1; then
-  export TISSUE_TYPE="$(jq -r --arg ds "${DS_NAME}" '.[$ds].tissue // empty' "${DATASETS_JSON_FILE}")"
-  export NORMAL_TISSUE="$(jq -r --arg ds "${DS_NAME}" '.[$ds].normal_tissue // empty' "${DATASETS_JSON_FILE}")"
-  echo "Exported TISSUE_TYPE=${TISSUE_TYPE}, NORMAL_TISSUE=${NORMAL_TISSUE} for ${DS_NAME}"
-else
-  echo "WARNING: jq not found; TISSUE_TYPE/NORMAL_TISSUE not auto-exported (R defaults apply)."
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: jq not available; cannot read ${DATASETS_JSON_FILE}."
+  exit 1
 fi
 
-echo "Found ${NUM_CHUNKS} chunks. Submitting job array range 1-${NUM_CHUNKS} to SLURM..."
+# Build the list of datasets (all keys of datasets.json, or a single validated key)
+DATASET_NAMES=()
+if [[ -n "${DS_NAME_ARG}" ]]; then
+  if ! jq -e --arg ds "${DS_NAME_ARG}" 'has($ds)' "${DATASETS_JSON_FILE}" >/dev/null 2>&1; then
+    echo "ERROR: '${DS_NAME_ARG}' is not a dataset in ${DATASETS_JSON_FILE}."
+    exit 1
+  fi
+  DATASET_NAMES+=("${DS_NAME_ARG}")
+else
+  while IFS= read -r name; do
+    DATASET_NAMES+=("$name")
+  done < <(jq -r 'keys[]' "${DATASETS_JSON_FILE}")
+fi
+
+# ---------------------------------------------------------------------------
+# Build the global chunk manifest: one tab-separated line per chunk across all
+# datasets:  DS_NAME<TAB>absolute_chunk_path
+# SLURM_ARRAY_TASK_ID maps 1:1 to manifest line numbers, so task IDs are
+# globally unique and per-chunk feather names never collide across datasets.
+# The manifest is regenerated on every run; chunk dirs are recreated fresh by
+# 1.1_prepare_chunks.r, so a stale manifest cannot be misread.
+# ---------------------------------------------------------------------------
+export CHUNKS_MANIFEST="${SCRATCH_OUTPUT_DIR}/chunks_manifest.txt"
+: > "${CHUNKS_MANIFEST}"
+
+shopt -s nullglob
+
+SKIPPED_DATASETS=()
+TOTAL_CHUNKS=0
+
+for DS_NAME in "${DATASET_NAMES[@]}"; do
+  CHUNKS_DIR="${SCRATCH_OUTPUT_DIR}/${DS_NAME}/chunks"
+  CHUNK_FILES=("${CHUNKS_DIR}"/chunk_*.txt)
+  NUM_CHUNKS=${#CHUNK_FILES[@]}
+
+  if [[ ${NUM_CHUNKS} -eq 0 ]]; then
+    if [[ -n "${DS_NAME_ARG}" ]]; then
+      echo "ERROR: No chunk files found in ${CHUNKS_DIR}! Run 1_prepare_chunks.sh first."
+      exit 1
+    fi
+    echo "WARNING: No chunk files found in ${CHUNKS_DIR}; skipping ${DS_NAME}."
+    SKIPPED_DATASETS+=("${DS_NAME}")
+    continue
+  fi
+
+  for CHUNK_FILE in "${CHUNK_FILES[@]}"; do
+    printf '%s\t%s\n' "${DS_NAME}" "${CHUNK_FILE}" >> "${CHUNKS_MANIFEST}"
+  done
+  TOTAL_CHUNKS=$((TOTAL_CHUNKS + NUM_CHUNKS))
+done
+
+if [[ ${TOTAL_CHUNKS} -eq 0 ]]; then
+  echo "ERROR: No chunk files found in any dataset. Run 1_prepare_chunks.sh first."
+  exit 1
+fi
+
+echo "Manifest written to ${CHUNKS_MANIFEST} with ${TOTAL_CHUNKS} chunks."
+if [[ ${#SKIPPED_DATASETS[@]} -gt 0 ]]; then
+  echo "Skipped datasets (no chunks): ${SKIPPED_DATASETS[*]}"
+fi
+
+echo "Found ${TOTAL_CHUNKS} chunks. Submitting job array range 1-${TOTAL_CHUNKS} to SLURM..."
 SUBMIT_MSG=$(sbatch \
-    --array=1-${NUM_CHUNKS}%${MAX_NUM_CHUNKS_PARALLEL} \
+    --array=1-${TOTAL_CHUNKS}%${MAX_NUM_CHUNKS_PARALLEL} \
     --output="${LOGS_DIR}/4_cell_type_annotation_%A_%a.log" \
     --error="${LOGS_DIR}/4_cell_type_annotation_%A_%a.err" \
     --mail-user="${USER_EMAIL}" \

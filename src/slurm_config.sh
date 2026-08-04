@@ -44,8 +44,3 @@ USER_EMAIL="${USER}@unige.ch"
 
 # --- Parallelism ---
 MAX_NUM_CHUNKS_PARALLEL=500
-
-# --- Per-dataset Chunk Directory ---
-# HOME_CHUNKS_DIR is dataset-specific; set it before calling array submission scripts.
-# Typically: HOME_CHUNKS_DIR="${SCRATCH_OUTPUT_DIR}/${DS_NAME}/chunks" (see 2_submit_hpc_array.sh)
-HOME_CHUNKS_DIR=""
