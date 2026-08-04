@@ -22,9 +22,9 @@ HPC notes:
   src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh (staging skips datasets
   with folder_name: null, and the preprocess array task reads the combined file
   from ${HPC_SCRATCH_DIR}/CombinedPBMC/data).
-- Must run from ${PROJECT_ROOT} (cd ${PROJECT_ROOT}) because preprocess_utils.py
-  sources src/utils/load_all_functions.R relative to the CWD, and needs
-  `module load GCCcore/12.2.0` for the R interop.
+- Requires `module load GCCcore/12.2.0` for the R interop (rds->h5ad conversion).
+  CWD-independent: preprocess_utils.py pins the embedded R working directory to
+  ${PROJECT_ROOT} at import time.
 - Heavy loads (GongSharma is huge) may warrant running via a single sbatch job
   instead of interactively on the login node if OOM occurs.
 
