@@ -121,10 +121,10 @@ Cell type annotation runs as a **separate HPC-parallelized pipeline** on SLURM, 
 
 | File | Role |
 |---|---|
-| `1_prepare_chunks.sh` | Thin bash wrapper: sources `slurm_config.sh`, stages ref maps from NAS → scratch (raw data is staged by `src/1_stage_data/1_stage_data.sh`), calls `1.1_prepare_chunks.r` via \`srun\` (4G, 10min). Supports `test` mode (`./1_prepare_chunks.sh test` → 1 sample/chunk). |
+| `1_prepare_chunks.sh` | Thin bash wrapper: sources `slurm_config.sh`, stages ref maps from NAS → scratch (raw data is staged by `src/1_stage_data/1_stage_data.sh`), then iterates over all datasets in `datasets.json` (or a single dataset passed as 2nd positional arg) calling `1.1_prepare_chunks.r` via `srun` (4G, 30min) per dataset. Datasets without preprocessed `.h5ad` input are skipped with a warning. Supports `test` mode (`./1_prepare_chunks.sh test` → 1 sample/chunk). |
 | `1.1_prepare_chunks.r` | Reads each .h5ad in backed mode (reticulate + anndata), extracts unique sample IDs from `sample_col` (env var `SAMPLE_COLNAME`), groups them into chunks of 5 (or 1 in test mode), writes `chunk_N.txt` files (1st line = h5ad path, subsequent lines = sample IDs). |
-| `2_submit_hpc_array.sh` | Reads chunk count from scratch, submits a SLURM array job (`--array=1-N`, `MAX_NUM_CHUNKS_PARALLEL` concurrency), monitors for completion, then syncs results back to NAS via rsync. |
-| `2.1_run_worker.sh` | `#SBATCH` worker (shared-cpu, 16G, 2h). Sources `slurm_config.sh`, reads `CHUNK_FILE` from `SLURM_ARRAY_TASK_ID`, calls `2.1.1_process_chunk.sh`. |
+| `2_submit_hpc_array.sh` | Builds a global chunk manifest (`${SCRATCH_OUTPUT_DIR}/chunks_manifest.txt`, one tab-separated `DS_NAME<TAB>chunk_path` line per chunk across all datasets or a single dataset passed as positional arg), submits a single SLURM array job (`--array=1-TOTAL_CHUNKS`, `MAX_NUM_CHUNKS_PARALLEL` concurrency), monitors for completion, then syncs results back to NAS via rsync. |
+| `2.1_run_worker.sh` | `#SBATCH` worker (shared-cpu, 16G, 2h). Sources `slurm_config.sh`, loads jq (module loads do not propagate from the submit script), reads its `DS_NAME`/`CHUNK_FILE` from the global manifest line matching `SLURM_ARRAY_TASK_ID` (`sed -n`), auto-exports per-dataset `TISSUE_TYPE`/`NORMAL_TISSUE` from `datasets.json`, then calls `2.1.1_process_chunk.sh`. |
 | `2.1.1_process_chunk.sh` | Thin wrapper that calls `2.1.1.1_process_chunk.R` via `pixi run Rscript --vanilla`. |
 | `2.1.1.1_process_chunk.R` | Core annotation logic: reads the chunk's h5ad file, iterates per sample, extracts sample-level Seurat objects, runs **scATOMIC** (5 attempts with timeout) then **HiTME** (5 attempts with timeout). Writes per-chunk `.feather` file with annotation columns. Dual annotation: scATOMIC provides layer-1..6 predictions + confidence; HiTME provides layer1/2/3 UCell signatures + scGate/ProjecTILs refinement. Only annotation columns are kept (not full Seurat objects). |
 | `3_merge_annotations.py` | Reads all `annotations_chunk_*.feather` files, joins them into the input `.h5ad`'s `obs` by cell barcode, keeps only the whitelisted annotation columns, writes annotated `.h5ad`. |
@@ -135,19 +135,20 @@ Cell type annotation runs as a **separate HPC-parallelized pipeline** on SLURM, 
 - **scATOMIC + HiTME dual annotation**: scATOMIC provides hierarchical cell-type predictions (layer_1..6) with confidence scores; HiTME annotates using scGate models + ProjecTILs reference maps, producing layer1/2/3 labels. Both are run on each sample independently (i.e. independent from the rest of the dataset).
 - **Retry loops**: Both annotation methods have up to 5 retry attempts with dynamic timeouts (max(60s, n_cells/10000 × 600s)) to handle HPC node variability.
 - **NAS ↔ Scratch data flow**: Raw-data staging from NAS to scratch happens only in `src/1_stage_data/1_stage_data.sh` (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`); cell type annotation consumes the preprocessed output of that pipeline (`${SCRATCH_OUTPUT_DIR}/${DS_NAME}` per dataset, matching `config_helper.R`). `1_prepare_chunks.sh` only stages reference maps (gene standardization moved into `1.1.1_preprocess.py`; the `GENE_REF_FILE` staging block was removed). Worker nodes only access scratch. After array completes, login node rsyncs results back to NAS.
-- **Environment propagation**: `slurm_config.sh` `export`s all core vars (`PROJECT_ROOT`, `DATASETS_JSON_FILE`, `HPC_SCRATCH_DIR`, `SCRATCH_OUTPUT_DIR`, `SAMPLE_COLNAME`, ref/gene files, ...) so they reach R via `Sys.getenv()` through both `srun` (`1_prepare_chunks.sh`) and `sbatch` (`2_submit_hpc_array.sh`). `2_submit_hpc_array.sh` additionally auto-exports per-dataset `TISSUE_TYPE`/`NORMAL_TISSUE` from `datasets.json`; `AUTHOR_ANNOT_COLNAMES` must be exported manually by the user.
+- **Environment propagation**: `slurm_config.sh` `export`s all core vars (`PROJECT_ROOT`, `DATASETS_JSON_FILE`, `HPC_SCRATCH_DIR`, `SCRATCH_OUTPUT_DIR`, `SAMPLE_COLNAME`, ref/gene files, ...) so they reach R via `Sys.getenv()` through both `srun` (`1_prepare_chunks.sh`) and `sbatch` (`2_submit_hpc_array.sh`). Bash arrays do not propagate through `sbatch`, so workers derive `DS_NAME` from `datasets.json` (via jq, loaded on the worker — module loads do not propagate either); `2.1_run_worker.sh` auto-exports per-task `TISSUE_TYPE`/`NORMAL_TISSUE` from `datasets.json`; `AUTHOR_ANNOT_COLNAMES` must be exported manually by the user.
 - **Output format**: Per-chunk `.feather` files (Apache Arrow, cross-language) → merged into original `.h5ad` by `3_merge_annotations.py`.
 
 #### Usage
 
 ```bash
 # 1. Prepare chunks (stages data + generates chunk files)
-export DS_NAME="Stephenson"
-./1_prepare_chunks.sh                     # production: 5 samples/chunk
-./1_prepare_chunks.sh test                # test: 1 sample/chunk
+./1_prepare_chunks.sh                     # production, all datasets: 5 samples/chunk
+./1_prepare_chunks.sh test                # test, all datasets: 1 sample/chunk
+./1_prepare_chunks.sh production Stephenson   # production, single dataset
 
 # 2. Submit SLURM array (monitors + syncs to NAS after completion)
-./2_submit_hpc_array.sh
+./2_submit_hpc_array.sh                   # all datasets with chunks
+./2_submit_hpc_array.sh Stephenson        # single dataset
 
 # 3. (Optional) Merge annotations into .h5ad if not done automatically
 python 3_merge_annotations.py <path/to/input.h5ad> <path/to/annot_dir>

@@ -128,7 +128,7 @@ Four-stage end-to-end pipeline:
         - renv remnants removed; R environment fully managed by pixi (`pixi run Rscript`).
         - R code extracted from bash heredoc into standalone `2.1.1.1_process_chunk.R`.
         - `config_helper.R` moved from `DEPRECATED_LEGACY_CODE/` (deleted) to project root (env-var based).
-        - Annotation paths are per-dataset under `${SCRATCH_OUTPUT_DIR}/${DS_NAME}` (see `config_helper.R`); annotation feathers go to `${SCRATCH_OUTPUT_DIR}/${DS_NAME}` directly — `samples/`, `ecoda/`, `plots/` dirs are no longer created. `SAMPLE_COLNAME="Sample"` is exported by `slurm_config.sh` (preprocess standardizes the sample column), and `TISSUE_TYPE`/`NORMAL_TISSUE` are auto-exported per dataset from `datasets.json` by `2_submit_hpc_array.sh` (via jq, `module load jq/1.6`).
+        - Annotation paths are per-dataset under `${SCRATCH_OUTPUT_DIR}/${DS_NAME}` (see `config_helper.R`); annotation feathers go to `${SCRATCH_OUTPUT_DIR}/${DS_NAME}` directly — `samples/`, `ecoda/`, `plots/` dirs are no longer created. `SAMPLE_COLNAME="Sample"` is exported by `slurm_config.sh` (preprocess standardizes the sample column), and `TISSUE_TYPE`/`NORMAL_TISSUE` are auto-exported per array task from `datasets.json` by `2.1_run_worker.sh` (via jq, `module load jq/1.6` on the worker).
         - See [ARCHITECTURE.md](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-stage-2b) for full pipeline documentation.
 - `slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
 
