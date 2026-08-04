@@ -1,5 +1,7 @@
 # Big data files
 *.rds
+!aux/scGateDB.rds
+!aux/genes.blocklist.rds
 *.feather
 *.h5ad
 *.h5seurat
