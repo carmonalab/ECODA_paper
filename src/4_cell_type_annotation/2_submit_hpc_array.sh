@@ -38,7 +38,7 @@ fi
 # The manifest is regenerated on every run; chunk dirs are recreated fresh by
 # 1.1_prepare_chunks.py, so a stale manifest cannot be misread.
 # ---------------------------------------------------------------------------
-export CHUNKS_MANIFEST="${SCRATCH_OUTPUT_DIR}/chunks_manifest.txt"
+export CHUNKS_MANIFEST="${HPC_SCRATCH_DIR}/chunks_manifest.txt"
 : > "${CHUNKS_MANIFEST}"
 
 shopt -s nullglob
@@ -47,7 +47,7 @@ SKIPPED_DATASETS=()
 TOTAL_CHUNKS=0
 
 for DS_NAME in "${DATASET_NAMES[@]}"; do
-  CHUNKS_DIR="${SCRATCH_OUTPUT_DIR}/${DS_NAME}/chunks"
+  CHUNKS_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/output/chunks"
   CHUNK_FILES=("${CHUNKS_DIR}"/chunk_*.txt)
   NUM_CHUNKS=${#CHUNK_FILES[@]}
 
@@ -98,10 +98,20 @@ while squeue -u "$USER" 2>/dev/null | grep -q "${ARRAY_JOB_ID}"; do
 done
 
 echo "Array Job ${ARRAY_JOB_ID} finished. Starting local sync to NAS from login node..."
-
+SYNCED_COUNT=0
 if ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
-    mkdir -p "${NAS_TARGET_DIR}/output"
-    rsync -rlptDv "${SCRATCH_OUTPUT_DIR}/" "${NAS_TARGET_DIR}/output/"
+    for DS_DIR in "${HPC_SCRATCH_DIR}"/*/output; do
+      [[ -d "${DS_DIR}" ]] || continue
+      DS_NAME="$(basename "$(dirname "${DS_DIR}")")"
+      mkdir -p "${NAS_TARGET_DIR}/${DS_NAME}/output"
+      rsync -rlptDv "${DS_DIR}/" "${NAS_TARGET_DIR}/${DS_NAME}/output/"
+      SYNCED_COUNT=$((SYNCED_COUNT + 1))
+    done
+    if [[ ${SYNCED_COUNT} -eq 0 ]]; then
+        echo "ERROR: No dataset output dirs found under ${HPC_SCRATCH_DIR}; nothing to sync."
+        exit 1
+    fi
+    echo "Results synchronized to ${NAS_TARGET_DIR}/<DS_NAME>/output/ (${SYNCED_COUNT} datasets)"
     echo "Success: Data safely synchronized to the NAS."
 else
     echo "ERROR: NAS path ${NAS_TARGET_DIR} is unreachable even from this login node."

@@ -12,26 +12,24 @@ get_pipeline_config <- function(
     stop("CRITICAL: HPC_SCRATCH_DIR not set. Source slurm_config.sh before calling R.")
   }
 
-  scratch_output_dir <- Sys.getenv("SCRATCH_OUTPUT_DIR")
-  if (scratch_output_dir == "") {
-    scratch_output_dir <- file.path(hpc_scratch_dir, "output")
-  }
-
   home_ref_dir <- Sys.getenv("HOME_REF_DIR")
   if (home_ref_dir == "") {
     stop("CRITICAL: HOME_REF_DIR not set. Source slurm_config.sh before calling R.")
   }
+
+  scratch_output_dir <- file.path(hpc_scratch_dir, ds_name, "output")
 
   config_data <- list(
     ds_name             = ds_name,
     test_mode           = test_mode,
     chunk_size          = ifelse(test_mode, 1, 5),
     max_test_array_jobs = 3,
-    # All per-dataset dirs live under SCRATCH_OUTPUT_DIR/<DS_NAME> (preprocessed
-    # output = annotation input). Matches 2_submit_hpc_array.sh HOME_CHUNKS_DIR.
-    path_data           = file.path(scratch_output_dir, ds_name),
-    path_output         = file.path(scratch_output_dir, ds_name),
-    path_output_chunks  = file.path(scratch_output_dir, ds_name, "chunks"),
+    # All per-dataset dirs live under HPC_SCRATCH_DIR/<DS_NAME>/output
+    # (preprocessed output = annotation input). Matches 2_submit_hpc_array.sh
+    # CHUNKS_DIR.
+    path_data           = scratch_output_dir,
+    path_output         = scratch_output_dir,
+    path_output_chunks  = file.path(scratch_output_dir, "chunks"),
     path_ref            = home_ref_dir
   )
 

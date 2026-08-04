@@ -6,7 +6,7 @@
 # Reads each preprocessed .h5ad in backed mode, extracts unique sample IDs from
 # the SAMPLE_COLNAME column, groups them into consecutive chunks of 5 (or 1 in
 # --test mode) and writes chunk_<N>.txt files under
-# ${SCRATCH_OUTPUT_DIR}/${DS_NAME}/chunks. Line 1 of each chunk file is the
+# ${HPC_SCRATCH_DIR}/${DS_NAME}/output/chunks. Line 1 of each chunk file is the
 # absolute .h5ad path, subsequent lines are sample IDs.
 
 import argparse
@@ -44,9 +44,7 @@ def main():
     if not hpc_scratch_dir:
         sys.exit("CRITICAL Error: HPC_SCRATCH_DIR not set. Source slurm_config.sh before calling this script.")
 
-    scratch_output_dir = os.environ.get("SCRATCH_OUTPUT_DIR") or os.path.join(hpc_scratch_dir, "output")
-
-    path_data = Path(scratch_output_dir) / ds_name
+    path_data = Path(hpc_scratch_dir) / ds_name / "output"
     path_output_chunks = path_data / "chunks"
 
     print(f"Path is: {path_data}")

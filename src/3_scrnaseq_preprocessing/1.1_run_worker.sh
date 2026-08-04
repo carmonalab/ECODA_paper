@@ -33,7 +33,7 @@ fi
 echo "Processing dataset: ${DS_NAME} (array task ${SLURM_ARRAY_TASK_ID})"
 
 DATA_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/data"
-OUTPUT_DIR="${SCRATCH_OUTPUT_DIR}/${DS_NAME}"
+OUTPUT_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/output"
 mkdir -p "${DATA_DIR}" "${OUTPUT_DIR}"
 
 python "${SCRIPT_DIR}/1.1.1_preprocess.py" \
