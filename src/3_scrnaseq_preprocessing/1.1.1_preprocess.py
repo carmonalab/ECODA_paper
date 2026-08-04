@@ -173,20 +173,7 @@ def process_view(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def resolve_path(project_root, path):
-    """Join against project_root only for relative paths; keep absolute as-is."""
-    p = Path(path)
-    return p if p.is_absolute() else project_root / p
-
-
-def main(config_path="datasets.json", base_path="data", output_dir="data", ds_name=None):
-    project_root = Path(os.environ.get("PROJECT_ROOT") or Path(__file__).resolve().parents[2])
-
-    if config_path is not None:
-        config_path = resolve_path(project_root, config_path)
-    base_path = resolve_path(project_root, base_path)
-    output_dir = resolve_path(project_root, output_dir)
- 
+def main(config_path, input_dir, output_dir, ds_name=None):
     os.makedirs(output_dir, exist_ok=True)
 
     config = read_datasets_json(config_path)
@@ -221,7 +208,7 @@ def main(config_path="datasets.json", base_path="data", output_dir="data", ds_na
                 continue
 
             print(f"Loading {current_ds} / {view_name} ...")
-            adata_full = load_input(input_file_name, base_path, output_dir)
+            adata_full = load_input(input_file_name, input_dir, output_dir)
 
             if sample_col in adata_full.obs.columns:
                 sample_col_out = os.environ.get("SAMPLE_COLNAME", "Sample")
@@ -264,14 +251,14 @@ def main(config_path="datasets.json", base_path="data", output_dir="data", ds_na
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Standardized scRNA-seq preprocessing")
-    parser.add_argument("--config_path", default="datasets.json",
-                        help="Path to datasets.json (relative to PROJECT_ROOT unless absolute)")
-    parser.add_argument("--base_path", default="data",
-                        help="Directory with raw input files (relative to PROJECT_ROOT unless absolute)")
-    parser.add_argument("--output_dir", default="data",
-                        help="Output directory for processed .h5ad files (relative to PROJECT_ROOT unless absolute)")
+    parser.add_argument("--config_path", required=True,
+                        help="Path to datasets.json")
+    parser.add_argument("--input_dir", required=True,
+                        help="Directory with raw input files")
+    parser.add_argument("--output_dir", required=True,
+                        help="Output directory for processed .h5ad files")
     parser.add_argument("--ds_name", default=None,
                         help="Only process this dataset (skip all others; default: all datasets)")
     args = parser.parse_args()
-    main(config_path=args.config_path, base_path=args.base_path,
+    main(config_path=args.config_path, input_dir=args.input_dir,
          output_dir=args.output_dir, ds_name=args.ds_name)

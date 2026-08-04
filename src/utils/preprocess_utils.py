@@ -27,8 +27,8 @@ convert_rds_to_raw_h5ad_r = ro.globalenv["convert_rds_to_raw_h5ad"]
 # ---------------------------------------------------------------------------
 # Loading helpers
 # ---------------------------------------------------------------------------
-def load_single_input(input_name, base_path, output_dir):
-    input_path = base_path / input_name
+def load_single_input(input_name, input_dir, output_dir):
+    input_path = input_dir / input_name
     if str(input_name).endswith(".rds"):
         stem = Path(input_name).stem
         raw_h5ad_path = output_dir / f"{stem}_raw.h5ad"
@@ -40,11 +40,11 @@ def load_single_input(input_name, base_path, output_dir):
         raise ValueError(f"Unsupported file format: {input_name}")
 
 
-def load_input(input_names, base_path, output_dir):
+def load_input(input_names, input_dir, output_dir):
     if isinstance(input_names, list):
-        adatas = [load_single_input(n, base_path, output_dir) for n in input_names]
+        adatas = [load_single_input(n, input_dir, output_dir) for n in input_names]
         return sc.concat(adatas, index_unique="_") if len(adatas) > 1 else adatas[0]
-    return load_single_input(input_names, base_path, output_dir)
+    return load_single_input(input_names, input_dir, output_dir)
 
 
 # ---------------------------------------------------------------------------

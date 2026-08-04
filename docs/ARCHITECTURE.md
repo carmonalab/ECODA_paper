@@ -78,7 +78,7 @@ The preprocessing stage is split across three `src/` folders run in sequence:
 | File | Role |
 |---|---|
 | `1_submit_hpc_array.sh` | Thin bash wrapper: sources `slurm_config.sh`, submits the preprocess array (`1.1_run_worker.sh`), monitors completion, rsyncs results back to NAS (login node). Raw-data staging no longer lives here — see `src/1_stage_data/1_stage_data.sh`. |
-| `1.1_run_worker.sh` | `#SBATCH` worker: sources `slurm_config.sh`, resolves its dataset from `SLURM_ARRAY_TASK_ID`, calls `1.1.1_preprocess.py` with `--config_path/--base_path/--output_dir/--ds_name`. |
+| `1.1_run_worker.sh` | `#SBATCH` worker: sources `slurm_config.sh`, resolves its dataset from `SLURM_ARRAY_TASK_ID`, calls `1.1.1_preprocess.py` with `--config_path/--input_dir/--output_dir/--ds_name`. |
 | `1.1.1_preprocess.py` | Standardized preprocessing: filtering, gene/sample name standardization, sample subsetting (from `datasets.json`), batch-aware HVG selection, PCA, Harmony integration, Leiden clustering. Writes one .h5ad per view. |
 
 - **View output keys** (unified per-view pipeline, `1.1.1_preprocess.py`): both view types get the same treatment; only the HVG `batch_key` differs (benchmark views: standardized sample column from `SAMPLE_COLNAME`; batch-effect views: the dataset's `batch_col`).
