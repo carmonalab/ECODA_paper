@@ -46,10 +46,20 @@ while squeue -u "$USER" 2>/dev/null | grep -q "${ARRAY_JOB_ID}"; do
 done
 
 echo "Array Job ${ARRAY_JOB_ID} finished. Syncing results to NAS..."
+SYNCED_COUNT=0
 if ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
-    mkdir -p "${NAS_TARGET_DIR}/output"
-    rsync -rlptDv "${SCRATCH_OUTPUT_DIR}/" "${NAS_TARGET_DIR}/output/"
-    echo "Results synchronized to ${NAS_TARGET_DIR}/output/"
+    for DS_DIR in "${HPC_SCRATCH_DIR}"/*/output; do
+      [[ -d "${DS_DIR}" ]] || continue
+      DS_NAME="$(basename "$(dirname "${DS_DIR}")")"
+      mkdir -p "${NAS_TARGET_DIR}/${DS_NAME}/output"
+      rsync -rlptDv "${DS_DIR}/" "${NAS_TARGET_DIR}/${DS_NAME}/output/"
+      SYNCED_COUNT=$((SYNCED_COUNT + 1))
+    done
+    if [[ ${SYNCED_COUNT} -eq 0 ]]; then
+        echo "ERROR: No dataset output dirs found under ${HPC_SCRATCH_DIR}; nothing to sync."
+        exit 1
+    fi
+    echo "Results synchronized to ${NAS_TARGET_DIR}/<DS_NAME>/output/ (${SYNCED_COUNT} datasets)"
 else
     echo "ERROR: NAS path ${NAS_TARGET_DIR} is unreachable."
     exit 1

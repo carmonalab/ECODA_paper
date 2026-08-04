@@ -128,14 +128,14 @@ Four-stage end-to-end pipeline:
         - renv remnants removed; R environment fully managed by pixi (`pixi run Rscript`).
         - R code extracted from bash heredoc into standalone `2.1.1.1_process_chunk.R`.
         - `config_helper.R` moved from `DEPRECATED_LEGACY_CODE/` (deleted) to project root (env-var based).
-        - Annotation paths are per-dataset under `${SCRATCH_OUTPUT_DIR}/${DS_NAME}` (see `config_helper.R`); annotation feathers go to `${SCRATCH_OUTPUT_DIR}/${DS_NAME}` directly — `samples/`, `ecoda/`, `plots/` dirs are no longer created. `SAMPLE_COLNAME="Sample"` is exported by `slurm_config.sh` (preprocess standardizes the sample column), and `TISSUE_TYPE`/`NORMAL_TISSUE` are auto-exported per array task from `datasets.json` by `2.1_run_worker.sh` (via jq, `module load jq/1.6` on the worker).
+        - Annotation paths are per-dataset under `${HPC_SCRATCH_DIR}/${DS_NAME}/output` (see `config_helper.R`); annotation feathers go to `${HPC_SCRATCH_DIR}/${DS_NAME}/output` directly — `samples/`, `ecoda/`, `plots/` dirs are no longer created. `SAMPLE_COLNAME="Sample"` is exported by `slurm_config.sh` (preprocess standardizes the sample column), and `TISSUE_TYPE`/`NORMAL_TISSUE` are auto-exported per array task from `datasets.json` by `2.1_run_worker.sh` (via jq, `module load jq/1.6` on the worker).
         - See [ARCHITECTURE.md](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-stage-2b) for full pipeline documentation.
 - `slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
 
 ### HPC folder layout
-- `$HOME/scratch/ECODA_paper` (`HPC_SCRATCH_DIR`): `<DS_NAME>/data/` (staged raw inputs), `CombinedPBMC/data/` (combine output + rds→h5ad cache), `output/<DS_NAME>/` (`SCRATCH_OUTPUT_DIR`: preprocessed .h5ad per view, `chunks/` during annotation, `annotations_chunk_*.feather`, annotated .h5ad)
+- `$HOME/scratch/ECODA_paper` (`HPC_SCRATCH_DIR`): `<DS_NAME>/data/` (staged raw inputs), `<DS_NAME>/output/` (preprocessed .h5ad per view, `chunks/` during annotation, `annotations_chunk_*.feather`, annotated .h5ad), `CombinedPBMC/data/` (combine output + rds→h5ad cache), `chunks_manifest.txt` (global chunk manifest)
 - `$HOME/reference_atlases/sketched_200ct/` (`HOME_REF_DIR`); `$PROJECT_ROOT/logs`, `aux/`, `.pixi/`
-- NAS: `NAS_SC_DIR` (raw source), `NAS_REF_DIR`; `NAS_TARGET_DIR` = `Projects/ECODA_paper/` with `output/` (rsynced from `SCRATCH_OUTPUT_DIR`), `benchmark/{embeddings,plots}/` and `batch_effect_analysis/{embeddings,plots}/` (targets for method .feathers + notebook plots; filled once the `5_run_benchmark_methods` decision is made — TODO)
+- NAS: `NAS_SC_DIR` (raw source), `NAS_REF_DIR`; `NAS_TARGET_DIR` = `Projects/ECODA_paper/` with `<DS_NAME>/output/` (rsynced per-dataset from `${HPC_SCRATCH_DIR}/<DS_NAME>/output`), `benchmark/{embeddings,plots}/` and `batch_effect_analysis/{embeddings,plots}/` (targets for method .feathers + notebook plots; filled once the `5_run_benchmark_methods` decision is made — TODO)
 - See [ARCHITECTURE.md](docs/ARCHITECTURE.md#hpc-folder-layout) for the full layout
 - bash SLURM submission scripts are run on the login node, spawning worker nodes
 - only login node has access to the shared NAS file system

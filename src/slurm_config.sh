@@ -22,7 +22,6 @@ export NAS_TARGET_DIR="${NAS_PREFIX}/Projects/ECODA_paper"
 
 # --- HPC Scratch Paths ---
 export HPC_SCRATCH_DIR="${HOME}/scratch/ECODA_paper"
-export SCRATCH_OUTPUT_DIR="${HPC_SCRATCH_DIR}/output"
 
 # --- Pixi R library path ---
 export PIXI_R_LIB="${PROJECT_ROOT}/.pixi/envs/default/lib/R/library"

@@ -84,8 +84,8 @@ for DS_NAME in "${DATASET_NAMES[@]}"; do
   echo ">>> Building chunks for dataset: ${DS_NAME} <<<"
 
   # Skip datasets without preprocessed .h5ad input (e.g. Zhu has no views)
-  if ! ls "${SCRATCH_OUTPUT_DIR}/${DS_NAME}"/*.h5ad >/dev/null 2>&1; then
-    echo "WARNING: No preprocessed .h5ad files in ${SCRATCH_OUTPUT_DIR}/${DS_NAME}; skipping ${DS_NAME}."
+  if ! ls "${HPC_SCRATCH_DIR}/${DS_NAME}/output"/*.h5ad >/dev/null 2>&1; then
+    echo "WARNING: No preprocessed .h5ad files in ${HPC_SCRATCH_DIR}/${DS_NAME}/output; skipping ${DS_NAME}."
     SKIPPED_DATASETS+=("${DS_NAME}")
     continue
   fi

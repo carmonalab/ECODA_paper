@@ -58,3 +58,6 @@ ProjectTILs_references/
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+# Python bytecode
+__pycache__/
