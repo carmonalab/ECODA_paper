@@ -6,7 +6,7 @@
 # ==============================================================================
 
 project_root <- Sys.getenv("PROJECT_ROOT")
-if (project_root == "") project_root <- getwd()
+if (project_root == "") stop("CRITICAL Error: PROJECT_ROOT not set. Source slurm_config.sh before calling this script.")
 
 source(file.path(project_root, "config_helper.R"))
 paths <- get_pipeline_config()

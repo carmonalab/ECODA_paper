@@ -8,44 +8,10 @@ module load GCCcore/12.2.0
 module load jq/1.6
 
 # ---------------------------------------------------------------------------
-# Phase 1: Stage data from NAS to HPC scratch (login node has NAS access)
+# Submit preprocessing array job
+# (Raw-data staging now lives in src/1_stage_data/1_stage_data.sh)
 # ---------------------------------------------------------------------------
-echo "=== Phase 1: Staging data from NAS to HPC scratch ==="
-
-jq -r '
-  to_entries[] |
-  .key as $key |
-  .value.folder_name as $folder |
-  .value.views |
-  to_entries[] |
-  .value.input_file_name |
-  if type == "array" then .[] else . end |
-  "\($key) \($folder) \(.)"
-' "${DATASETS_JSON_FILE}" | sort -u | \
-while read -r KEY FOLDER_NAME RAW_FILE_NAME; do
-    if [ "$FOLDER_NAME" == "null" ] || [ -z "$FOLDER_NAME" ]; then
-        continue
-    fi
-
-    NAS_FILE_PATH="${NAS_SC_DIR}/${FOLDER_NAME}/output/${RAW_FILE_NAME}"
-    DEST_DIR="${HPC_SCRATCH_DIR}/${KEY}/data"
-    echo "Dataset folder: ${FOLDER_NAME}, file: ${RAW_FILE_NAME}"
-
-    if [ -f "$NAS_FILE_PATH" ]; then
-        mkdir -p "${DEST_DIR}"
-        rsync -ah --progress "$NAS_FILE_PATH" "${DEST_DIR}/"
-    else
-        echo "  -> [WARNING] Source not found: ${NAS_FILE_PATH}"
-    fi
-done
-
-echo "Data staging complete."
-echo ""
-
-# ---------------------------------------------------------------------------
-# Phase 2: Submit preprocessing array job
-# ---------------------------------------------------------------------------
-echo "=== Phase 2: Submitting preprocessing array job ==="
+echo "=== Submitting preprocessing array job ==="
 
 DATASET_NAMES=()
 while IFS= read -r name; do
@@ -63,8 +29,8 @@ echo "Datasets: ${DATASET_NAMES[*]}"
 
 SUBMIT_MSG=$(sbatch \
     --array=1-${NUM_DATASETS}%${MAX_NUM_CHUNKS_PARALLEL} \
-    --output="${PROJECT_ROOT}/logs/preprocess_%A_%a.log" \
-    --error="${PROJECT_ROOT}/logs/preprocess_%A_%a.err" \
+    --output="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.log" \
+    --error="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.err" \
     --mail-user="${USER_EMAIL}" \
     "$(dirname "${BASH_SOURCE[0]}")/1.1_run_worker.sh")
 
@@ -72,9 +38,9 @@ ARRAY_JOB_ID=$(echo "${SUBMIT_MSG}" | grep -oE '[0-9]+')
 echo "Array Job ID allocated: ${ARRAY_JOB_ID}"
 
 # ---------------------------------------------------------------------------
-# Phase 3: Monitor & sync results back to NAS
+# Monitor & sync results back to NAS
 # ---------------------------------------------------------------------------
-echo "=== Phase 3: Monitoring job completion ==="
+echo "=== Monitoring job completion ==="
 while squeue -u "$USER" 2>/dev/null | grep -q "${ARRAY_JOB_ID}"; do
     sleep 60
 done

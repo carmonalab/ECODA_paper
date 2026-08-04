@@ -53,9 +53,11 @@ This section explains how to reproduce this paper's results and figures and the 
   - Per-dataset QC filtering (`notebooks/QC_filtering/`)
 
 - `src`: Source code for:
-  - Standardized scRNA-seq preprocessing pipeline (Python/Scanpy) (`src/preprocess/`)
-  - Cell type annotation with scATOMIC + HiTME (`src/cell_type_annotation/`)
-  - Scripts to run the benchmarked methods (`src/benchmark/`)
+  - Raw-data staging from NAS to HPC scratch (`src/1_stage_data/`)
+  - Dataset-specific preprocessing scripts (`src/2_dataset_specific_preprocessing/`)
+  - Standardized scRNA-seq preprocessing pipeline (Python/Scanpy) (`src/3_scrnaseq_preprocessing/`)
+  - Cell type annotation with scATOMIC + HiTME (`src/4_cell_type_annotation/`)
+  - Scripts to run the benchmarked methods (`src/5_run_benchmark_methods/`)
   - Various utility functions (`src/utils/`), mainly for the benchmark pipeline analysis
   - HPC SLURM configuration, e.g. paths (`src/slurm_config.sh`)
 
@@ -90,7 +92,13 @@ The analysis proceeds through four stages:
 - **Stage 1 — QC Filtering:** Done manually in per-dataset .rmd notebooks in
   `notebooks/QC_filtering/`.
 - **Stage 2 — Preprocessing + Cell Type Annotation:**
-  - **Preprocessing** (`src/preprocess/`): Standardized preprocessing pipeline (Python/Scanpy):
+  - **Raw-data staging** (`src/1_stage_data/`): login-node script that stages raw
+    inputs from NAS to HPC scratch (`./src/1_stage_data/1_stage_data.sh`).
+  - **Dataset-specific preprocessing** (`src/2_dataset_specific_preprocessing/`):
+    per-step sbatch jobs (e.g. `_create_combinedpbmc_dataset.py`,
+    `_create_joanito_batch_col.R`) submitted in parallel via the `1_submit_hpc.sh`
+    dispatcher, run after staging and before the preprocess array.
+  - **Preprocessing** (`src/3_scrnaseq_preprocessing/`): Standardized preprocessing pipeline (Python/Scanpy):
     - Filter cells (min_genes=100) and genes (min_cells=3)
     — Sample/gene name standardization
     - Normalize counts and log1p
@@ -98,7 +106,7 @@ The analysis proceeds through four stages:
     - Scale and run PCA
     - Harmony integration
     - Leiden clustering
-  - **Cell Type Annotation** (`src/cell_type_annotation/`): HPC-parallelized scATOMIC + HiTME
+  - **Cell Type Annotation** (`src/4_cell_type_annotation/`): HPC-parallelized scATOMIC + HiTME
     annotation via SLURM array jobs.
 - **Stage 3 — Benchmark Analysis:** Render `notebooks/benchmark_analysis.rmd` in RStudio.
   Python benchmark methods (MrVI, PILOT, scPoli) are invoked automatically via
@@ -108,17 +116,26 @@ The analysis proceeds through four stages:
   RStudio.
 
 **HPC execution:** Submit SLURM array jobs for:
-- **Preprocessing** via `src/preprocess/1_submit_hpc_array.sh` (stages data + submits array + syncs results):
+- **Raw-data staging** via `src/1_stage_data/1_stage_data.sh` (login node, NAS → scratch):
   ```bash
-  sbatch src/preprocess/1_submit_hpc_array.sh
+  ./src/1_stage_data/1_stage_data.sh
   ```
-- **Cell type annotation** via `src/cell_type_annotation/`:
+- **Dataset-specific preprocessing** via `src/2_dataset_specific_preprocessing/1_submit_hpc.sh`
+  (submits all per-step sbatch jobs in parallel, waits, reports via sacct):
+  ```bash
+  sbatch src/2_dataset_specific_preprocessing/1_submit_hpc.sh
+  ```
+- **Preprocessing** via `src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh` (submits array + syncs results):
+  ```bash
+  sbatch src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh
+  ```
+- **Cell type annotation** via `src/4_cell_type_annotation/`:
   ```bash
   export DS_NAME="Stephenson"
-  ./src/cell_type_annotation/1_prepare_chunks.sh
-  ./src/cell_type_annotation/2_submit_hpc_array.sh
+  ./src/4_cell_type_annotation/1_prepare_chunks.sh
+  ./src/4_cell_type_annotation/2_submit_hpc_array.sh
   ```
-- **Benchmark methods** via `src/benchmark/run_python_sample_embedding_methods/1_submit_hpc_array.sh` (stages data + submits array + syncs results):
+- **Benchmark methods** via `src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh` (stages data + submits array + syncs results):
 
 See the [Architecture documentation](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-stage-2b)
 for more details on workflow and usage.

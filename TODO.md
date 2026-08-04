@@ -1,52 +1,64 @@
 # Pipeline Overhaul Execution Plan
 
-## Rename folders to represent sequence of pipelines to be run
-- src/1_stage_data (extract code from `src/preprocess/1_submit_hpc_array.sh`)
-- src/2_dataset_specific_preprocessing (move `src/preprocess/_create_combined_dataset.py` and `src/preprocess/_create_joanito_batch_col.py` there)
-- src/3_scrnaseq_preprocessing
-- src/4_cell_type_annotation
-- src/5_run_benchmark_methods
-- Update documentation (e.g. ARCHITECTURE.md, AGENTS.md, README.md, TODO.md, etc.)
+## Rename folders to represent sequence of pipelines to be run — DONE
+- [x] src/1_stage_data (extracted staging code from `src/preprocess/1_submit_hpc_array.sh` into `src/1_stage_data/1_stage_data.sh`)
+- [x] src/2_dataset_specific_preprocessing (moved `src/preprocess/_create_combinedpbmc_dataset.py` and `src/preprocess/_create_joanito_batch_col.R` there)
+- [x] src/3_scrnaseq_preprocessing
+- [x] src/4_cell_type_annotation
+- [x] src/5_run_benchmark_methods
+- [x] Update documentation (ARCHITECTURE.md, AGENTS.md, README.md, TODO.md)
 
+## Open reviewer points (to be addressed) — DONE except noted
+- [x] **Centralise all hardcoded paths in the pipeline to `slurm_config.sh`**: sweep ALL scripts for hardcoded paths (incl. `src/5_run_benchmark_methods/`, notebooks, `src/utils/`); preprocess + cell type annotation are done, `src/5_run_benchmark_methods/` decision pending (see `## TODO:`) — pipeline scripts done; notebooks stay `getwd()`-based (local analysis); `src/5_run_benchmark_methods/` decision still pending
+- [x] **`SAMPLE_COLNAME`**: decided — keep the env var export and additionally read it in `1.1.1_preprocess.py` (`os.environ.get("SAMPLE_COLNAME", "Sample")`), so the constant lives only in `slurm_config.sh` for both R and Python
+- [x] **Can `config_helper.R` be replaced?** → see `## Step 1` — decided: keep `config_helper.R` at project root (R cannot source `slurm_config.sh` natively; the env-var-based `get_pipeline_config()` is the R-facing equivalent)
+- [x] **Remove fallback code**: `getwd()` fallbacks dropped in `1.1_prepare_chunks.r` / `2.1.1.1_process_chunk.R` (now `stop()` guards on `PROJECT_ROOT`); `home_ref_dir`/`gene_ref` fallbacks dropped in `config_helper.R` (now `stop()` guards); `GENE_REF_FILE`/`GENE_REF_URL` removed from `slurm_config.sh` and the gene-annotation staging block removed from `1_prepare_chunks.sh` (unused — gene standardization lives in `gene_utils.py` via `aux/EnsemblGenes...`)
+- [x] **NAS back-sync target**: `NAS_TARGET_DIR` now `/Volumes/Shared/Projects/ECODA_paper` (local) = `/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper` (HPC); rsync steps use the var, no script edits needed
+- [x] **Re-write `src/2_dataset_specific_preprocessing/_create_combinedpbmc_dataset.py`** → see `## TODO:` — done (HPC-capable per-dataset layout default when `HPC_SCRATCH_DIR` set, explicit CLI); per-step sbatch wrapper added: `1.1_submit_combinedpbmc.sh` (later superseded by the `1_submit_hpc.sh` dispatcher)
+- [x] **Re-write `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py`** → see `## TODO:` — done (argparse `--config_path`/`--base_path`/`--output_dir` honored, absolute-vs-relative path resolution)
 
-## Major goals
-- Preprocessing and subsequently cell type annotation should be run calling a single script for each.
-  - Check if a single unified `1_submit_hpc_array.sh` can be used for `src/preprocess/` and `src/cell_type_annotation/`
-    - The script should simply read `slurm_config.sh` and pass the correct arguments to run a pipeline across all (or the specified) datasets to `1.1_run_worker.sh` and `2.1.1_run_worker.sh`
-    - Can also be used subsequently for other pipelines, e.g. `src/benchmark/run_python_sample_embedding_methods/` (TBD)
-- After the pipelines are finished, update the documentation and write up the execution plan for the new pipelines.
-
-
-## Open reviewer points (to be addressed)
-- **Centralise all hardcoded paths in the pipeline to `slurm_config.sh`**: sweep ALL scripts for hardcoded paths (incl. `src/benchmark/`, notebooks, `src/utils/`); preprocess + cell type annotation are done, `src/benchmark/` decision pending (see `## TODO:`)
-- **`SAMPLE_COLNAME`**: `1.1.1_preprocess.py` already standardizes the sample column to `"Sample"` for every dataset — decide whether the env var export is needed at all or hardcode `"Sample"` in the R scripts instead
-- **Can `config_helper.R` be replaced?** → see `## Step 1`
-- **Remove fallback code** (see bottom of TODO.md, Completed entry): drop the `getwd()` fallbacks (`project_root <- ... getwd()` in `1.1_prepare_chunks.r` / `2.1.1.1_process_chunk.R`, `gene_ref` default in `config_helper.R`) and rely on exported env vars with `stop()` guards only
-- **NAS back-sync target**: `NAS_TARGET_DIR` should be `/Volumes/Shared/Projects/ECODA_paper` (local) = `/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper` (HPC), not `.../DataCollections/AnalysisResults/ECODA`; affects `src/preprocess/1_submit_hpc_array.sh` + `src/cell_type_annotation/2_submit_hpc_array.sh` rsync steps
-- **Re-write `src/preprocess/_create_combinedpbmc_dataset.py`** → see `## TODO:`
-- **Re-write `src/preprocess/1.1.1_preprocess.py`** → see `## TODO:`
-
-### Suggested order / priority
+### Suggested order / priority — DONE
 1. `NAS_TARGET_DIR` → `Projects/ECODA_paper` (config-only, unblocks correct result syncing)
 2. `SAMPLE_COLNAME` decision (env var vs hardcoded `"Sample"`)
 3. Re-write `1.1.1_preprocess.py` (explicit CLI parsing + env-driven path resolution) — unblocks HPC preprocessing
 4. Re-write `_create_combinedpbmc_dataset.py` (HPC-capable; run before the preprocess array)
 5. Remove `getwd()` fallbacks (once env vars are guaranteed)
 6. `config_helper.R` replacement decision + `## Step 1` simplification
-7. Centralisation sweep of remaining hardcoded paths (incl. `src/benchmark/` decision) + docs update
+7. Centralisation sweep of remaining hardcoded paths (incl. `src/5_run_benchmark_methods/` decision) + docs update
 
 
 ## TODO:
-- **Pending decision**: whether `src/benchmark/` should use `NAS_SC_DIR`/`SCRATCH_OUTPUT_DIR` or run locally (would need another SLURM wrapper script + ways to store exploratory figures/intermediate visualizations for local viewing, e.g. scratch dir synced to the local computer or NAS)
-- **Re-write `src/preprocess/1.1.1_preprocess.py`**: explicit CLI parsing (`--config_path`/`--base_path`/`--output_dir`, currently silently ignored by `main()`), env-driven `PROJECT_ROOT`, join relative args against `PROJECT_ROOT` only, keep absolute args as-is
-- **Re-write `src/preprocess/_create_combinedpbmc_dataset.py`** (HPC-capable): env-driven defaults (`HPC_SCRATCH_DIR` set → per-dataset layout: sources at `${HPC_SCRATCH_DIR}/<ds>/data`, output `${HPC_SCRATCH_DIR}/CombinedPBMC/data`; local fallback → `PROJECT_ROOT/data` flat), explicit CLI args. Then run it on the HPC **before** `src/preprocess/1_submit_hpc_array.sh`: from `${PROJECT_ROOT}` with `module load GCCcore/12.2.0` (R interop). Verify the Zhu raw file has a `Sample` obs column and raw counts before the run. GongSharma is huge — if OOM on the login node, run via a single `sbatch` job instead.
-- Optional cleanup: exclude view-less datasets (e.g. Zhu) from the preprocess HPC array in `1.1_run_worker.sh` (currently harmless — the worker exits immediately with "Skipping ... No views defined.").
+- **`src/5_run_benchmark_methods/` (later)**: decision made — run on the HPC cluster:
+  - `run_python_sample_embedding_methods/` in parallel across datasets (SLURM array, per-method+dataset workers)
+  - `benchmark_methods_r.R` + `benchmark_pipeline.R` run on HPC sequentially via a simple single-worker bash script (e.g. `5_run_benchmark_methods/1_run_worker.sh`, subfolder structure TBD)
+  - Move this data-processing step out of `notebooks/benchmark_analysis.rmd`
+  - NAS targets: `benchmark/{embeddings,plots}/` and `batch_effect_analysis/{embeddings,plots}/` (see `NAS_TARGET_DIR`, HPC folder layout in ARCHITECTURE.md)
 
+## Completed (HPC layout + TODO verification plan)
+- [x] **TODO 3e — unified per-view pipeline** (`1.1.1_preprocess.py`): benchmark views now use batch-aware HVG (`batch_key="Sample"` from `SAMPLE_COLNAME`) and harmony-based Leiden; batch views get Leiden on `X_pca_harmony` too (`BATCH_VIEW_RES` removed); `X_pca` stored for every HVG size; Harmony + neighbors + Leiden (6 resolutions) only at the 2000-HVG pass
+- [x] **Preprocess array fix**: `--ds_name` filter added to `1.1.1_preprocess.py`; `1.1_run_worker.sh` passes its `DS_NAME` (previously every worker looped over all datasets with its own dirs → guaranteed missing-file failure). View-less datasets (Zhu) still exit cleanly via "No views defined."
+- [x] **Joanito HPC step**: `_create_joanito_batch_col.R` is HPC-capable (input from `HPC_SCRATCH_DIR`, in-place idempotent `seqtec` recompute); new `1.2_submit_joanito_batch_col.sh` (`pixi run Rscript`); must run after `1_stage_data.sh`, before the preprocess array
+- [x] **Dataset-specific preprocessing dispatcher**: `1_submit_hpc.sh` submits all `1.*_submit_*.sh` steps in parallel (`sbatch --parsable`), waits for all, reports per-job state via `sacct`, exits non-zero on failure; old single-step script renamed `1.1_submit_combinedpbmc.sh` (steps must be mutually independent)
+- [x] **Dead dirs removed**: `path_plots`, `path_output_samples`, `path_output_ecoda` deleted from `config_helper.R` + `1.1_prepare_chunks.r` (created but never written to; annotation feathers go to `${SCRATCH_OUTPUT_DIR}/${DS_NAME}` directly)
+- [x] **`DEPRECATED_LEGACY_CODE/` deleted** (`src/4_cell_type_annotation/`)
+- [x] **jq module fix**: `2_submit_hpc_array.sh` loads `module load jq/1.6` before the `TISSUE_TYPE`/`NORMAL_TISSUE` export block (`command -v jq` fallback retained)
+- [x] **HPC layout documented**: new "HPC Folder Layout" section in `docs/ARCHITECTURE.md` (tree + per-folder table incl. `CombinedPBMC/data/` dual role, `output/<DS_NAME>/` contents, NAS targets) + summary in `AGENTS.md`
 
 ## Step 1 - Check if cell type annotation pipeline can be simplified
 - Is `config_helper.R` still needed or should this better be handled in `slurm_config.sh`? (open reviewer point — see `## Open reviewer points`)
   - If `config_helper.R` is easier and cleaner, then check `1.1_prepare_chunks.r` and `2.1.1.1_process_chunk.R` to see if they can be simplified
-- Check if any `*_prepare_chunks.sh` and `*_process_chunk.sh` can be simplified by moving more into `slurm_config.sh`
+- Check if any `*_prepare_chunks.sh` and `*_process_chunk.sh` can be simplified by centralizing any more paths into `slurm_config.sh`
+
+
+
+## Other major goals
+- Preprocessing and subsequently cell type annotation should be run calling a single script for each.
+  - Check if a single unified `1_submit_hpc_array.sh` can be used for `src/3_scrnaseq_preprocessing/` and `src/4_cell_type_annotation/`
+    - The script should simply read `slurm_config.sh` and pass the correct arguments to run a pipeline across all (or the specified) datasets to `1.1_run_worker.sh` and `2.1.1_run_worker.sh`
+    - Can also be used subsequently for other pipelines, e.g. `src/5_run_benchmark_methods/run_python_sample_embedding_methods/` (TBD)
+- After the pipelines are finished, update the documentation and write up the execution plan for the new pipelines.
+
+
 
 ## Step 2 — Debug Dataset (Joanito 5-sample)
 
@@ -54,13 +66,13 @@
 Stale:
 - Should also be able to test the preprocessing pipeline
   - This should start from the Joanito input dataset (see datasets.json, "input_file_name": "JoaI_2022_35773407_Nofilt_whole.rds")
-  - Should be done after running `src/preprocess/_create_joanito_batch_col.R`, as the batch metadata column is needed for debugging.
+  - Should be done after running `src/2_dataset_specific_preprocessing/_create_joanito_batch_col.R`, as the batch metadata column is needed for debugging.
 
 ### 2a. Locate source
 - Existing file: `data/JoaI_2022_35773407_Nofilt_whole_ECODAprocessed.rds` (old-pipeline Seurat output, already QC-filtered)
 
 ### 2b. Create subset script
-- Write `src/preprocess/_create_debug_dataset.R` that:
+- Write `src/2_dataset_specific_preprocessing/_create_debug_dataset.R` that:
   - Reads the .rds file
   - Selects 5 samples covering both biological conditions and batches
   - Subsets to 500 cells per sample (random)
@@ -133,7 +145,7 @@ Changes:
   - `batch_effect_analysis` views → use dataset-level `columns.batch`
   - Keep current logic where `batch_key = None` for `benchmark_analysis` views (will be changed to `"Sample"` in 3e)
 
-### 3e. HVG & Harmony improvements
+### 3e. HVG & Harmony improvements — DONE (see "Completed (HPC layout + TODO verification plan)")
 
 - Non-batch views (benchmark_analysis): `batch_key="Sample"` for HVG selection
 - Batch views (batch_effect_analysis): `batch_key=batch_col` (from datasets.json)
@@ -148,14 +160,14 @@ Changes:
 
 The two wrapper files are currently empty:
 
-`src/preprocess/2_submit_hpc_array.sh`:
+`src/3_scrnaseq_preprocessing/2_submit_hpc_array.sh`:
 - Source `src/slurm_config.sh`
 - Iterate over datasets from datasets.json (using jq or a Python helper)
 - For each dataset+view pair, submit `2.1_run_worker.sh` as an array job
 - Each array task = one view of one dataset
 - After all array jobs complete, sync back to NAS
 
-`src/preprocess/2.1_run_worker.sh`:
+`src/3_scrnaseq_preprocessing/2.1_run_worker.sh`:
 - `#SBATCH` headers (shared-cpu, 8G, 2h, etc.)
 - Source `src/slurm_config.sh`
 - Copy data from NAS to scratch (`1_copy_data_from_nas_to_hpc_scratch.sh` or inline)
@@ -264,12 +276,12 @@ Changes:
 
 ### 5c. Write SLURM wrappers
 
-`src/benchmark/run_python_sample_embedding_methods/TODO_STUMP_1_submit_hpc_array.sh`:
+`src/5_run_benchmark_methods/run_python_sample_embedding_methods/TODO_STUMP_1_submit_hpc_array.sh`:
 - Source `src/slurm_config.sh`
 - For each dataset+view combination that needs Python methods, submit an array job
 - Job concurrency controlled by `MAX_NUM_CHUNKS_PARALLEL`
 
-`src/benchmark/run_python_sample_embedding_methods/TODO_STUMP_1.1_run_worker.sh`:
+`src/5_run_benchmark_methods/run_python_sample_embedding_methods/TODO_STUMP_1.1_run_worker.sh`:
 - `#SBATCH` headers (shared-cpu, 16G, 4h or GPU if needed for PILOT-GM-VAE)
 - Copy preprocessed .h5ad to scratch
 - Run converted .py script with dataset/view/method arguments
@@ -302,8 +314,8 @@ SLURM_PARTITION="shared-cpu"
   - preprocess
 - specified infrastructure (including gpu for some methods) for:
   - benchmark_analysis (includes a runtime check, so needs clearly defined infrastructure used across all methods), used for:
-    - `src/benchmark/run_python_sample_embedding_methods/`
-    - `src/benchmark/benchmark_pipeline.R`
+    - `src/5_run_benchmark_methods/run_python_sample_embedding_methods/`
+    - `src/5_run_benchmark_methods/benchmark_pipeline.R`
 
 ## Step 7 Update README.md section **Usage / Workflow**
 - Update `README.md` with new steps from `cell_type_annotation`
@@ -321,7 +333,7 @@ SLURM_PARTITION="shared-cpu"
     - Breast cancer (n = 126)
     - Covid-19 PBMC (n = 151)
     - Diabetes (n = 52)
-    - Possibly: Sikkema Lung (n = 165) — `src/preprocess/TODO_STUMP_preprocess_sikkema.qmd`
+    - Possibly: Sikkema Lung (n = 165) — `src/3_scrnaseq_preprocessing/TODO_STUMP_preprocess_sikkema.qmd`
 - **Benchmark analysis:**
   - From PILOT-GM-VAE paper:
     - Alzheimer (n = 83)
@@ -344,7 +356,7 @@ SLURM_PARTITION="shared-cpu"
 - Handle HVG calculation using correct `batch_key`
 - `datasets.json`: add `"columns"` `"batch"` to `batch_effect_analysis` views
 - Create low-res cell types for Kfoury dataset (see `Preprocess_datasets.Rmd`)
-- For Joanito, create batch column BEFORE preprocessing (from sequencing technology/metadata) so `preprocess.py` can use it as `batch_key`
+- For Joanito, create batch column BEFORE preprocessing (from sequencing technology/metadata) so `preprocess.py` can use it as `batch_key` — DONE (`_create_joanito_batch_col.R` + `1.2_submit_joanito_batch_col.sh`)
 - Update datasets with batch column mapping in `datasets.json`
 - Handle case where multiple datasets are combined (e.g. Combined PBMC in `batch_effect_analysis.rmd`)
 
@@ -386,11 +398,20 @@ SLURM_PARTITION="shared-cpu"
 - [x] **Step 1 Foundation**: SLURM config centralized (`src/slurm_config.sh`), files restructured (notebooks/, src/utils/, src/preprocess/, src/benchmark/), all internal paths updated, docs (ARCHITECTURE.md, AGENTS.md, README.md) updated
 - [x] **Cell type annotation pipeline**: Adopted from another project (HPC-parallelized), path-adjusted for new src/ structure, HiTME/scATOMIC column whitelisting from Preprocess_datasets.Rmd, scATOMIC added to `2.1.1_process_chunk.sh` and `3_merge_annotations.py`, retry loops with timeout for R worker
 - [x] **SLURM config migration**: `src/bash/config.env` → `src/slurm_config.sh`, all bash scripts updated to source centralized file, `config.env` deleted
-- [x] **HPC wrappers**: `src/preprocess/1_submit_hpc_array.sh` / `1.1_run_worker.sh` implemented, data copy from NAS to scratch absorbed into submit script, `copy_data_from_nas_to_hpc_scratch.sh` deleted
+- [x] **HPC wrappers**: `src/preprocess/1_submit_hpc_array.sh` / `1.1_run_worker.sh` implemented (now `src/3_scrnaseq_preprocessing/`), data copy from NAS to scratch absorbed into submit script, `copy_data_from_nas_to_hpc_scratch.sh` deleted
 - [x] **File migration**: QC_filtering/ → notebooks/, .rmd files moved, `src/R/` → `src/utils/` (11 files), `src/bash/cell_type_annotation/` → `src/cell_type_annotation/`, stale files deleted
-- [x] **Step 3d Follow-up**: Plan verified, DRY `_preprocess_utils.py` extracted, RAM optimization (in-place gene subsetting, early obs trimming, `del`/`gc`), NAS syncing confirmed for preprocessing and cell type annotation, `config_helper.R` fixed, `run_worker.sh` memory bumped to 16G baseline
+- [x] **Step 3d Follow-up**: Plan verified, DRY `_preprocess_utils.py` extracted (now `src/utils/preprocess_utils.py`), RAM optimization (in-place gene subsetting, early obs trimming, `del`/`gc`), NAS syncing confirmed for preprocessing and cell type annotation, `config_helper.R` fixed, `run_worker.sh` memory bumped to 16G baseline
 - [x] **Shared datasets.json reader**: Python `src/datasets_io.py::read_datasets_json()` (stdlib-only) + enriched `src/utils/datasets_io.R::read_datasets_json()` (harmonized key structure, backward compatible), `file_names` added to all datasets.json entries, Zhu re-added (view-less raw source for CombinedPBMC), preprocess + combine scripts refactored to use the shared reader, Stephenson combine source switched to `benchmark_analysis` view (Site = Ncl)
 - [x] Raw-data staging consolidated in `src/preprocess/1_submit_hpc_array.sh` (per-dataset dirs, jq module loads moved to top); redundant staging removed from `src/cell_type_annotation/1_prepare_chunks.sh`
+- [x] **Folder rename to pipeline sequence** (`src/1_stage_data`, `src/2_dataset_specific_preprocessing`, `src/3_scrnaseq_preprocessing`, `src/4_cell_type_annotation`, `src/5_run_benchmark_methods`): `git mv` (history preserved), staging extracted from `1_submit_hpc_array.sh` into `src/1_stage_data/1_stage_data.sh`, `_preprocess_utils.py` → `src/utils/preprocess_utils.py`, all imports/references/docs updated (AGENTS.md, README.md, docs/ARCHITECTURE.md, TODO.md)
+- [x] **Reviewer points (priority order, in final locations)**:
+    - `NAS_TARGET_DIR` → `${NAS_PREFIX}/Projects/ECODA_paper` (`slurm_config.sh`); rsync steps in `3_scrnaseq_preprocessing/1_submit_hpc_array.sh` + `4_cell_type_annotation/2_submit_hpc_array.sh` unchanged (use the var)
+    - `SAMPLE_COLNAME` kept as env var in `slurm_config.sh`; `1.1.1_preprocess.py` now writes `os.environ.get("SAMPLE_COLNAME", "Sample")` (was hardcoded `"Sample"`)
+    - `1.1.1_preprocess.py` CLI verified (argparse `--config_path`/`--base_path`/`--output_dir` honored by `main()`, relative args joined against `PROJECT_ROOT`, absolute kept)
+    - `_create_combinedpbmc_dataset.py` verified HPC-capable (per-dataset layout default when `HPC_SCRATCH_DIR` set); optional single-`sbatch` wrapper added: `src/2_dataset_specific_preprocessing/1_submit_hpc.sh`
+    - `getwd()` fallbacks removed: `1.1_prepare_chunks.r` + `2.1.1.1_process_chunk.R` use `stop()` guards on `PROJECT_ROOT`; `config_helper.R` `home_ref_dir`/`gene_ref` fallbacks → `stop()` guards; `GENE_REF_FILE`/`GENE_REF_URL` removed from `slurm_config.sh` (unused; gene standardization is in `src/gene_utils.py` via `aux/EnsemblGenes...`), gene-annotation staging block removed from `1_prepare_chunks.sh`
+    - `config_helper.R` kept at project root (R-facing env-based config; R cannot source `slurm_config.sh`); `LOGS_DIR` added to `slurm_config.sh`, all `logs/` references routed through it; cell type annotation array logs renamed to `4_cell_type_annotation_%A_%a.{log,err}`
+    - Fixed pre-existing relative-script-reference bugs in `4_cell_type_annotation/2_submit_hpc_array.sh` (`sbatch` worker path) and `2.1_run_worker.sh` (`bash` chunk-processor path) — now resolved via `${SCRIPT_DIR}`/`dirname ${BASH_SOURCE[0]}`
 - [x] **Replace base_path / project_root with slurm_config.sh env vars** (per-dataset layout):
     - `src/slurm_config.sh` now exports all core env vars (`DATASETS_JSON_FILE`, `NAS_SC_DIR`, `NAS_TARGET_DIR`, `NAS_REF_DIR`, `HOME_REF_DIR`, `GENE_REF_FILE`, `PIXI_R_LIB`, `HPC_SCRATCH_DIR`, `SCRATCH_OUTPUT_DIR`) + new `SAMPLE_COLNAME="Sample"` so they reach R (`Sys.getenv()`) and Python (`os.environ`) through `srun`/`sbatch`
     - Decision: the TODO example's flat `SCRATCH_DATA_DIR=${HPC_SCRATCH_DIR}/data` / `SCRATCH_CHUNKS_DIR=${HPC_SCRATCH_DIR}/chunks` were NOT added — they conflict with the per-dataset convention; dataset-specific dirs are derived per script (`${HPC_SCRATCH_DIR}/${DS_NAME}/data`, `${SCRATCH_OUTPUT_DIR}/${DS_NAME}/chunks`)

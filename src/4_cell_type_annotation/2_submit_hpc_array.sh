@@ -25,6 +25,7 @@ fi
 # Auto-export per-dataset tissue settings from datasets.json (read via
 # Sys.getenv() by 2.1.1.1_process_chunk.R). If jq is unavailable, leave unset
 # and the R defaults apply.
+module load jq/1.6
 if command -v jq >/dev/null 2>&1; then
   export TISSUE_TYPE="$(jq -r --arg ds "${DS_NAME}" '.[$ds].tissue // empty' "${DATASETS_JSON_FILE}")"
   export NORMAL_TISSUE="$(jq -r --arg ds "${DS_NAME}" '.[$ds].normal_tissue // empty' "${DATASETS_JSON_FILE}")"
@@ -36,10 +37,10 @@ fi
 echo "Found ${NUM_CHUNKS} chunks. Submitting job array range 1-${NUM_CHUNKS} to SLURM..."
 SUBMIT_MSG=$(sbatch \
     --array=1-${NUM_CHUNKS}%${MAX_NUM_CHUNKS_PARALLEL} \
-    --output="${PROJECT_ROOT}/logs/chunk_%A_%a.log" \
-    --error="${PROJECT_ROOT}/logs/chunk_%A_%a.err" \
+    --output="${LOGS_DIR}/4_cell_type_annotation_%A_%a.log" \
+    --error="${LOGS_DIR}/4_cell_type_annotation_%A_%a.err" \
     --mail-user="${USER_EMAIL}" \
-    2.1_run_worker.sh)
+    "$(dirname "${BASH_SOURCE[0]}")/2.1_run_worker.sh")
 
 ARRAY_JOB_ID=$(echo "${SUBMIT_MSG}" | grep -oE '[0-9]+')
 echo "Array Job ID allocated: ${ARRAY_JOB_ID}"

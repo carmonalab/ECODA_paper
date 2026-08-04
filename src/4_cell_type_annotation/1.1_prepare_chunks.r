@@ -1,5 +1,5 @@
 project_root <- Sys.getenv("PROJECT_ROOT")
-if (project_root == "") project_root <- getwd()
+if (project_root == "") stop("CRITICAL Error: PROJECT_ROOT not set. Source slurm_config.sh before calling this script.")
 
 raw_args <- commandArgs(trailingOnly = TRUE)
 
@@ -36,13 +36,11 @@ message(paste("Path is:", paths$path_data))
 message(paste("Files found:", paste(list.files(paths$path_data), collapse = ", ")))
 
 dir.create(paths$path_output, showWarnings = FALSE)
-dir.create(paths$path_output_samples, showWarnings = FALSE)
 # Delete chunk file folder recursively to ensure a perfectly clean start
 if (dir.exists(paths$path_output_chunks)) {
   unlink(paths$path_output_chunks, recursive = TRUE, force = TRUE)
 }
 dir.create(paths$path_output_chunks, showWarnings = FALSE)
-dir.create(paths$path_output_ecoda, showWarnings = FALSE)
 
 
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
