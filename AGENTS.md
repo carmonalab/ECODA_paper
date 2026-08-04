@@ -45,6 +45,7 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
 - This acts as ground truth for the datasets evaluated in this study
     - See datasets.json for most up-to-date list of datasets used and conditions.
 - Do not change this file without asking
+- The `_debug` entry (Joanito 5-sample subset, built by `1.3.1_create_debug_dataset.R` into `data/debug/`) is registered here with both views; default-all script loops (`1_stage_data.sh`, `1_submit_hpc_array.sh`) skip keys starting with `_` unless explicitly requested via `--ds_name _debug`. Its raw files must be placed on the NAS under `Standardized_SingleCell_Datasets/debug/output/` (folder_name `debug`) before staging.
 - Files defined in datasets.json are stored on the NAS
     - The user and agents exclusively work on the user's computer, so the NAS is only accessed by the user from the computer
     - The user and agents can work on the HPC but always connecting from the user's computer
@@ -57,10 +58,11 @@ Four-stage end-to-end pipeline:
 
 - **Stage 1 — QC Filtering** (`notebooks/QC_filtering/`): Per-dataset R Markdown notebooks (12 cohorts). Standard scRNA-seq QC: mitochondrial genes, gene/transcript count thresholds. Produces QC-filtered input for Stage 2.
 - **Stage 2 — Preprocessing**:
-    - Needs to be run first: Dataset-specific preprocessing steps in `src/2_dataset_specific_preprocessing/`, submitted via the `1_submit_hpc.sh` dispatcher (parallel per-step sbatch jobs: `1.1_submit_combinedpbmc.sh` → `1.1.1_create_combinedpbmc_dataset.py`, `1.2_submit_joanito_batch_col.sh` → `1.2.1_create_joanito_batch_col.R`; the Joanito step computes the `seqtec` batch column and must run before the preprocess array)
-    - Raw-data staging from NAS to HPC scratch: `src/1_stage_data/1_stage_data.sh` (login-node script, run before dataset-specific preprocessing and the preprocess array)
+    - Needs to be run first: Dataset-specific preprocessing steps in `src/2_dataset_specific_preprocessing/`, submitted via the `1_submit_hpc.sh` dispatcher (parallel per-step sbatch jobs: `1.1_submit_combinedpbmc.sh` → `1.1.1_create_combinedpbmc_dataset.py`, `1.2_submit_joanito_batch_col.sh` → `1.2.1_create_joanito_batch_col.R`, `1.4_submit_kfoury_lowres_ct.sh` → `1.4.1_create_kfoury_lowres_ct.R`; the Joanito step computes the `seqtec` batch column and the Kfoury step creates `cells_lowres`, both must run before the preprocess array).
+        - `1.3.1_create_debug_dataset.R` is a LOCAL script (NOT part of the dispatcher glob `1.*_submit_*.sh`): builds the 5-sample Joanito `_debug` subset into `data/debug/`. The user must place those files on the NAS under `Standardized_SingleCell_Datasets/debug/output/` before staging `_debug` on the HPC.
+    - Raw-data staging from NAS to HPC scratch: `src/1_stage_data/1_stage_data.sh` (login-node script, run before dataset-specific preprocessing and the preprocess array; supports `--ds_name <DS>` single-dataset mode; default-all runs skip `_*` keys)
     - HPC pipelines for `src/3_scrnaseq_preprocessing/` + `src/4_cell_type_annotation/`, both run arrays across datasets (spawning one worker node per dataset):
-        - `src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh`: bash script to run standardized scRNA-seq preprocessing Python/Scanpy pipeline on the HPC cluster:
+        - `src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh`: bash script to run standardized scRNA-seq preprocessing Python/Scanpy pipeline on the HPC cluster (`--ds_name <DS>` submits a 1-task array at the dataset's sorted-index position; `--force` recomputes existing outputs; default-all skips `_*` keys):
             - Filter cells (min_genes=100) and genes (min_cells=3) + low cell-count sample removal
             - Sample/gene name standardization, sample subsetting (driven by `datasets.json`)
             - HVG selection (batch-aware and non-batch modes, multiple sizes)
@@ -69,10 +71,11 @@ Four-stage end-to-end pipeline:
             - Preprocessed .h5ad files are **CSR-on-disk by construction** (`1.1.1_preprocess.py` forces `tocsr()` on `X` and `layers/counts` unconditionally; the on-disk format is preserved at write time). This makes backed-mode per-sample subsets in cell type annotation selective reads (anndata only overrides row-indexing for backed CSR; CSC falls back to a full in-memory read per subset → OOM); `obs` is metadata-only (small) and never triggers matrix I/O.
         - **Drafts (keep, not dead code)**: `preprocess_gongsharma.qmd` (GongSharma other-subsetting conditions) and `TODO_STUMP_preprocess_sikkema.qmd` (future Sikkema Lung dataset) in `src/3_scrnaseq_preprocessing/` are intentional drafts for future implementation — do NOT delete.
         - `src/4_cell_type_annotation/`: HPC-parallelized scATOMIC + HiTME cell type annotation via SLURM array jobs
-            - `src/4_cell_type_annotation/1_prepare_chunks.sh`: bash script that reads the preprocessed .h5ad files and creates multiple chunk files, one chunk file per 5 samples.
-                - Each chunk `chunk_*.txt` file contains the information to run per cpu core (file and samples).
+            - `src/4_cell_type_annotation/1_prepare_chunks.sh`: bash script that creates one chunk set per DATASET (`test <DS>` + `--test` modes supported). `1.1_prepare_chunks.py` first builds a per-dataset union h5ad (concat all view h5ads, dedup on `(sample, barcode)`) at `${HPC_SCRATCH_DIR}/${DS_NAME}/annotation_union/union.h5ad` — OUTSIDE the synced output dir so NAS-sync globs stay clean; single-view datasets skip the union entirely. One chunk file per 5 samples.
+                - Each chunk `chunk_*.txt` contains the union h5ad path (line 1) and the samples to process; annotations run ONCE per dataset (not per view) and are merged into every view h5ad afterwards.
             - `src/4_cell_type_annotation/2_submit_hpc_array.sh`: bash script to run cell type annotation via scATOMIC + HiTME (HPC-parallelized, borrowed from another project, not yet polished). Creates the scGate model DB cache (if missing) via `srun` before submitting.
                 - Spawns workers, one worker per chunk file, to process samples in parallel.
+            - `src/4_cell_type_annotation/3.1_submit_merge.sh <DS_NAME>`: after the annotation array completes, merges `annotations_chunk_*.feather` into EACH view h5ad of the dataset (`3_merge_annotations.py`, `(sample, barcode)` join), deletes `annotation_union/` + the stale `output/chunks/`, and rsyncs the annotated h5ads to NAS.
 - **Stage 3 — Benchmark Analysis** (`notebooks/benchmark_analysis.rmd` + `src/utils/` + `src/5_run_benchmark_methods/` + `src/5_run_benchmark_methods/run_python_sample_embedding_methods/`):
     - TODO:
         - `run_python_sample_embedding_methods/`: SLURM bash scripts to run Python sample embedding methods on the HPC cluster. To bo done:
@@ -98,10 +101,11 @@ Four-stage end-to-end pipeline:
     - `slurm_config.sh` provides basic configuration (e.g. paths)
     - SLURM scripts:
         - `*_submit_hpc_array.sh` submits job arrays, spawning one worker node with `*_run_worker.sh` per chunk file or dataset or (method and dataset). Planned:
-            - `1_stage_data/1_stage_data.sh` (stages raw data from NAS to HPC scratch folder, login node)
-            - `3_scrnaseq_preprocessing/1_submit_hpc_array.sh` (submits array to preprocess datasets in parallel)
-            - `4_cell_type_annotation/1_prepare_chunks.sh` (reads preprocessed .h5ad files and creates multiple chunk files, one chunk file per 5 samples)
+            - `1_stage_data/1_stage_data.sh` (stages raw data from NAS to HPC scratch folder, login node; `--ds_name` single-dataset mode)
+            - `3_scrnaseq_preprocessing/1_submit_hpc_array.sh` (submits array to preprocess datasets in parallel; `--ds_name` single-dataset mode)
+            - `4_cell_type_annotation/1_prepare_chunks.sh` (reads preprocessed .h5ad files and creates multiple chunk files, one chunk file per 5 samples, on the per-dataset union)
             - `4_cell_type_annotation/2_submit_hpc_array.sh` (creates the scGate model DB cache if missing, submits array to process chunk files in parallel (one chunk file contains ~5 samples) to annotate cells per sample)
+            - `4_cell_type_annotation/3.1_submit_merge.sh` (merges annotation feathers into every view h5ad of one dataset, then rsyncs to NAS)
             - `5_run_benchmark_methods/run_python_sample_embedding_methods/`, planned to run python benchmark methods in parallel across all datasets.
 
 ## R Modules for benchmark analysis (`src/5_run_benchmark_methods/` and `src/utils/`)
@@ -136,12 +140,12 @@ Four-stage end-to-end pipeline:
         - `config_helper.R` moved from `DEPRECATED_LEGACY_CODE/` (deleted) to project root (env-var based).
         - Annotation paths are per-dataset under `${HPC_SCRATCH_DIR}/${DS_NAME}/output` (see `config_helper.R`); annotation feathers go to `${HPC_SCRATCH_DIR}/${DS_NAME}/output` directly — `samples/`, `ecoda/`, `plots/` dirs are no longer created. `SAMPLE_COLNAME="Sample"` is exported by `slurm_config.sh` (preprocess standardizes the sample column), and `TISSUE_TYPE`/`NORMAL_TISSUE` are auto-exported per array task from `datasets.json` by `2.1_run_worker.sh` (via jq, `module load jq/1.6` on the worker).
         - `2.1.1_process_chunk.R` builds Seurat objects from the raw counts layer via `get_seurat_obj_from_h5ad()` (`src/utils/seurat_utils.R`; `layers["counts"]`, X fallback with warning) — NOT from log-normalized `X`; feather names derive from the chunk file (`chunk_<N>.txt` → `annotations_chunk_<N>.feather`), not `SLURM_ARRAY_TASK_ID`; scGate models load from the shared `${SCGATE_DB_PATH}` cache created by `2.0_create_scgate_db.R` (run via `2_submit_hpc_array.sh`).
-        - Python is invoked via `PYTHON_BIN` (`${PROJECT_ROOT}/.pixi/envs/default/bin/python`) and R via `PIXI_RSCRIPT` from `slurm_config.sh` — never bare `python` (worker nodes may not have scanpy/anndata).
+        - Python is invoked via `PYTHON_BIN` (`${PROJECT_ROOT}/.pixi/envs/default/bin/python`) and R via `PIXI_RSCRIPT` from `slurm_config.sh` — never bare `python` (worker nodes may not have scanpy/anndata). `RETICULATE_PYTHON` is also exported from `slurm_config.sh` so R workers' reticulate always uses the pixi python (its own discovery may otherwise pick a stray `~/.virtualenvs/r-reticulate`); this mirrors the project-root `.Rprofile`, which only applies to non-vanilla R sessions (`PIXI_RSCRIPT` uses `--vanilla`).
         - See [ARCHITECTURE.md](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-stage-2b) for full pipeline documentation.
 - `slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
 
 ### HPC folder layout
-- `$HOME/scratch/ECODA_paper` (`HPC_SCRATCH_DIR`): `<DS_NAME>/data/` (staged raw inputs), `<DS_NAME>/output/` (preprocessed .h5ad per view + `<stem>_raw.h5ad` rds→h5ad caches, `chunks/` during annotation, `annotations_chunk_*.feather`, annotated .h5ad), `CombinedPBMC/data/` (combine output + rds→h5ad cache), `chunks_manifest.txt` (global chunk manifest)
+- `$HOME/scratch/ECODA_paper` (`HPC_SCRATCH_DIR`): `<DS_NAME>/data/` (staged raw inputs), `<DS_NAME>/output/` (preprocessed .h5ad per view + `<stem>_raw.h5ad` rds→h5ad caches, `chunks/` during annotation, `annotations_chunk_*.feather`, annotated .h5ad), `<DS_NAME>/annotation_union/` (per-dataset union h5ad for annotation, OUTSIDE the synced output dir; deleted by `3.1_submit_merge.sh` after merging), `CombinedPBMC/data/` (combine output + rds→h5ad cache), `chunks_manifest.txt` (global chunk manifest)
 - `$HOME/reference_atlases/sketched_200ct/` (`HOME_REF_DIR`); `$PROJECT_ROOT/logs`, `aux/` (incl. `scGateDB.rds` scGate model cache, `SCGATE_DB_PATH`; model DB version pinned by `SCGATE_DB_BRANCH`), `.pixi/`
 - NAS: `NAS_SC_DIR` (raw source), `NAS_REF_DIR`; `NAS_TARGET_DIR` = `Projects/ECODA_paper/` with `<DS_NAME>/output/` (rsynced per-dataset from `${HPC_SCRATCH_DIR}/<DS_NAME>/output`), `benchmark/{embeddings,plots}/` and `batch_effect_analysis/{embeddings,plots}/` (targets for method .feathers + notebook plots; filled once the `5_run_benchmark_methods` decision is made — TODO)
 - See [ARCHITECTURE.md](docs/ARCHITECTURE.md#hpc-folder-layout) for the full layout

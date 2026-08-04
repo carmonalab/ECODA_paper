@@ -30,6 +30,14 @@ export HPC_SCRATCH_DIR="${HOME}/scratch/ECODA_paper"
 export PYTHON_BIN="${PROJECT_ROOT}/.pixi/envs/default/bin/python"
 export PIXI_RSCRIPT="${HOME}/.pixi/bin/pixi run Rscript --vanilla"
 
+# --- reticulate python (R workers) ---
+# Pinned explicitly so R (2.1.1_process_chunk.R, imports.R) always uses the
+# pixi python: reticulate's own discovery may otherwise pick a stray
+# ~/.virtualenvs/r-reticulate or system python on the worker. Exported so it
+# propagates through sbatch/srun. Mirrors .Rprofile (project root), which only
+# applies to non-vanilla R sessions (.Rprofile is not read with --vanilla).
+export RETICULATE_PYTHON="${PROJECT_ROOT}/.pixi/envs/default/bin/python"
+
 # --- Reference atlas paths (cell type annotation) ---
 export NAS_REF_DIR="${NAS_PREFIX}/DataCollections/reference_atlases/sketched_200ct/"
 export HOME_REF_DIR="${HOME}/reference_atlases/sketched_200ct/"
