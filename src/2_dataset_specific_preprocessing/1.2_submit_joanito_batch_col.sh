@@ -16,4 +16,4 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-${PIXI_RSCRIPT} "${SCRIPT_DIR}/_create_joanito_batch_col.R"
+${PIXI_RSCRIPT} "${SCRIPT_DIR}/1.2.1_create_joanito_batch_col.R"

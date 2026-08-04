@@ -103,8 +103,8 @@ The analysis proceeds through four stages:
   - **Raw-data staging** (`src/1_stage_data/`): login-node script that stages raw
     inputs from NAS to HPC scratch (`./src/1_stage_data/1_stage_data.sh`).
   - **Dataset-specific preprocessing** (`src/2_dataset_specific_preprocessing/`):
-    per-step sbatch jobs (e.g. `_create_combinedpbmc_dataset.py`,
-    `_create_joanito_batch_col.R`) submitted in parallel via the `1_submit_hpc.sh`
+    per-step sbatch jobs (e.g. `1.1.1_create_combinedpbmc_dataset.py`,
+    `1.2.1_create_joanito_batch_col.R`) submitted in parallel via the `1_submit_hpc.sh`
     dispatcher, run after staging and before the preprocess array.
   - **Preprocessing** (`src/3_scrnaseq_preprocessing/`): Standardized preprocessing pipeline (Python/Scanpy):
     - Filter cells (min_genes=100) and genes (min_cells=3)

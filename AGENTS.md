@@ -57,7 +57,7 @@ Four-stage end-to-end pipeline:
 
 - **Stage 1 — QC Filtering** (`notebooks/QC_filtering/`): Per-dataset R Markdown notebooks (12 cohorts). Standard scRNA-seq QC: mitochondrial genes, gene/transcript count thresholds. Produces QC-filtered input for Stage 2.
 - **Stage 2 — Preprocessing**:
-    - Needs to be run first: Dataset-specific preprocessing steps in `src/2_dataset_specific_preprocessing/`, submitted via the `1_submit_hpc.sh` dispatcher (parallel per-step sbatch jobs: `1.1_submit_combinedpbmc.sh` → `_create_combinedpbmc_dataset.py`, `1.2_submit_joanito_batch_col.sh` → `_create_joanito_batch_col.R`; the Joanito step computes the `seqtec` batch column and must run before the preprocess array)
+    - Needs to be run first: Dataset-specific preprocessing steps in `src/2_dataset_specific_preprocessing/`, submitted via the `1_submit_hpc.sh` dispatcher (parallel per-step sbatch jobs: `1.1_submit_combinedpbmc.sh` → `1.1.1_create_combinedpbmc_dataset.py`, `1.2_submit_joanito_batch_col.sh` → `1.2.1_create_joanito_batch_col.R`; the Joanito step computes the `seqtec` batch column and must run before the preprocess array)
     - Raw-data staging from NAS to HPC scratch: `src/1_stage_data/1_stage_data.sh` (login-node script, run before dataset-specific preprocessing and the preprocess array)
     - HPC pipelines for `src/3_scrnaseq_preprocessing/` + `src/4_cell_type_annotation/`, both run arrays across datasets (spawning one worker node per dataset):
         - `src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh`: bash script to run standardized scRNA-seq preprocessing Python/Scanpy pipeline on the HPC cluster:
