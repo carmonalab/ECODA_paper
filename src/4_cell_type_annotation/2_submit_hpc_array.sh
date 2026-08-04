@@ -7,6 +7,8 @@ set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+mkdir -p "${LOGS_DIR}"
 
 DS_NAME_ARG="${1:-}"
 
@@ -28,6 +30,32 @@ else
   while IFS= read -r name; do
     DATASET_NAMES+=("$name")
   done < <(jq -r 'keys[]' "${DATASETS_JSON_FILE}")
+fi
+
+# -------------------------------------------------------------------------
+# STAGE scGate MODEL DB CACHE: Download the scGate model DB once into aux/ so
+# the annotation array workers load it from disk instead of downloading in
+# parallel (up to MAX_NUM_CHUNKS_PARALLEL concurrent downloads). Failure is
+# non-fatal: workers fall back to download + persist themselves (see
+# 2.1.1_process_chunk.R).
+# -------------------------------------------------------------------------
+if [[ -f "${SCGATE_DB_PATH}" ]]; then
+  echo ">>> scGate DB cache already exists at ${SCGATE_DB_PATH}. Skipping. <<<"
+else
+  echo "Creating scGate DB cache at ${SCGATE_DB_PATH} (one-time download)..."
+  if ! srun --partition=shared-cpu \
+       --time=00:30:00 \
+       --ntasks=1 \
+       --cpus-per-task=1 \
+       --mem=4G \
+       --output="${LOGS_DIR}/prepare_scgatedb.log" \
+       --error="${LOGS_DIR}/prepare_scgatedb.log" \
+       ${PIXI_RSCRIPT} "${SCRIPT_DIR}/2.0_create_scgate_db.R"; then
+    echo "WARNING: scGate DB cache creation failed (see ${LOGS_DIR}/prepare_scgatedb.log)."
+    echo "         Continuing: annotation workers will download the model DB themselves (slower)."
+  else
+    echo "✓ scGate DB cache created. Log saved to: ${LOGS_DIR}/prepare_scgatedb.log"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -78,13 +106,12 @@ if [[ ${#SKIPPED_DATASETS[@]} -gt 0 ]]; then
 fi
 
 echo "Found ${TOTAL_CHUNKS} chunks. Submitting job array range 1-${TOTAL_CHUNKS} to SLURM..."
-mkdir -p "${LOGS_DIR}"
 SUBMIT_MSG=$(sbatch \
     --array=1-${TOTAL_CHUNKS}%${MAX_NUM_CHUNKS_PARALLEL} \
     --output="${LOGS_DIR}/4_cell_type_annotation_%A_%a.log" \
     --error="${LOGS_DIR}/4_cell_type_annotation_%A_%a.err" \
     --mail-user="${USER_EMAIL}" \
-    "$(dirname "${BASH_SOURCE[0]}")/2.1_run_worker.sh")
+    "${SCRIPT_DIR}/2.1_run_worker.sh")
 
 ARRAY_JOB_ID=$(echo "${SUBMIT_MSG}" | grep -oE '[0-9]+')
 echo "Array Job ID allocated: ${ARRAY_JOB_ID}"

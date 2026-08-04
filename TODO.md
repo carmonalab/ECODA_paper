@@ -38,7 +38,7 @@
 ## HPC pipeline review — Phase 1 fixes (DONE)
 - [x] `1.1_prepare_chunks.py` skips `*_raw.h5ad` rds→h5ad caches + deletes stale `annotations_chunk_*.feather` on rerun (production mode, after successful chunk generation)
 - [x] `2.1.1_process_chunk.R` uses `get_seurat_obj_from_h5ad()` (`layers["counts"]`, X fallback with warning; `src/utils/seurat_utils.R` sourced directly); feather names derived from the chunk file name (stable across array task renumbering)
-- [x] scGate DB cached once: new `0.1_create_scgate_db.R` (run via srun in `1_prepare_chunks.sh`) → `aux/scGateDB.rds` (`SCGATE_DB_PATH`); worker loads the cache with download+persist fallback
+- [x] scGate DB cached once: new `2.0_create_scgate_db.R` (run via srun in `2_submit_hpc_array.sh`) → `aux/scGateDB.rds` (`SCGATE_DB_PATH`); worker loads the cache with download+persist fallback
 - [x] `3_merge_annotations.py` joins on (sample, barcode) via a `_key` column; reads `SAMPLE_COLNAME` from env
 - [x] Dead `HOME_CHUNKS_DIR` export removed (`2.1_run_worker.sh`); unused `test_mode`/`chunk_size`/`max_test_array_jobs` removed from `config_helper.R`
 - [x] `slurm_config.sh` adds `PYTHON_BIN`/`PIXI_RSCRIPT` (+ `SCGATE_DB_PATH`); bare `python` replaced in `1.1_submit_combinedpbmc.sh`, `1.1_run_worker.sh`, `1_prepare_chunks.sh`

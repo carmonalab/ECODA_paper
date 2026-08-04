@@ -1,7 +1,7 @@
 # ==============================================================================
-# 0.1_create_scgate_db.R — One-time scGate model DB download / cache creation
+# 2.0_create_scgate_db.R — One-time scGate model DB download / cache creation
 # ==============================================================================
-# Called by 1_prepare_chunks.sh (srun compute session, pixi run Rscript
+# Called by 2_submit_hpc_array.sh (srun compute session, pixi run Rscript
 # --vanilla) BEFORE the annotation array, so that 2.1.1_process_chunk.R workers
 # load the scGate model DB from a local cache instead of downloading it in
 # parallel (up to MAX_NUM_CHUNKS_PARALLEL concurrent downloads).

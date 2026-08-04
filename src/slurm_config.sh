@@ -38,7 +38,7 @@ export NAS_REF_DIR="${NAS_PREFIX}/DataCollections/reference_atlases/sketched_200
 export HOME_REF_DIR="${HOME}/reference_atlases/sketched_200ct/"
 
 # --- scGate model DB cache (cell type annotation) ---
-# Created once by 0.1_create_scgate_db.R (via 1_prepare_chunks.sh); loaded by
+# Created once by 2.0_create_scgate_db.R (via 2_submit_hpc_array.sh); loaded by
 # 2.1.1_process_chunk.R workers so they do not download in parallel.
 # SCGATE_DB_BRANCH is the single source of truth for the model DB version.
 export SCGATE_DB_PATH="${PROJECT_ROOT}/aux/scGateDB.rds"

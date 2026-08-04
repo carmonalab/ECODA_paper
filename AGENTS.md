@@ -69,7 +69,7 @@ Four-stage end-to-end pipeline:
         - `src/4_cell_type_annotation/`: HPC-parallelized scATOMIC + HiTME cell type annotation via SLURM array jobs
             - `src/4_cell_type_annotation/1_prepare_chunks.sh`: bash script that reads the preprocessed .h5ad files and creates multiple chunk files, one chunk file per 5 samples.
                 - Each chunk `chunk_*.txt` file contains the information to run per cpu core (file and samples).
-            - `src/4_cell_type_annotation/2_submit_hpc_array.sh`: bash script to run cell type annotation via scATOMIC + HiTME (HPC-parallelized, borrowed from another project, not yet polished).
+            - `src/4_cell_type_annotation/2_submit_hpc_array.sh`: bash script to run cell type annotation via scATOMIC + HiTME (HPC-parallelized, borrowed from another project, not yet polished). Creates the scGate model DB cache (if missing) via `srun` before submitting.
                 - Spawns workers, one worker per chunk file, to process samples in parallel.
 - **Stage 3 — Benchmark Analysis** (`notebooks/benchmark_analysis.rmd` + `src/utils/` + `src/5_run_benchmark_methods/` + `src/5_run_benchmark_methods/run_python_sample_embedding_methods/`):
     - TODO:
@@ -99,7 +99,7 @@ Four-stage end-to-end pipeline:
             - `1_stage_data/1_stage_data.sh` (stages raw data from NAS to HPC scratch folder, login node)
             - `3_scrnaseq_preprocessing/1_submit_hpc_array.sh` (submits array to preprocess datasets in parallel)
             - `4_cell_type_annotation/1_prepare_chunks.sh` (reads preprocessed .h5ad files and creates multiple chunk files, one chunk file per 5 samples)
-            - `4_cell_type_annotation/2_submit_hpc_array.sh` (submits array to process chunk files in parallel (one chunk file contains ~5 samples) to annotate cells per sample)
+            - `4_cell_type_annotation/2_submit_hpc_array.sh` (creates the scGate model DB cache if missing, submits array to process chunk files in parallel (one chunk file contains ~5 samples) to annotate cells per sample)
             - `5_run_benchmark_methods/run_python_sample_embedding_methods/`, planned to run python benchmark methods in parallel across all datasets.
 
 ## R Modules for benchmark analysis (`src/5_run_benchmark_methods/` and `src/utils/`)
@@ -133,7 +133,7 @@ Four-stage end-to-end pipeline:
         - R code extracted from bash heredoc into standalone `2.1.1_process_chunk.R`.
         - `config_helper.R` moved from `DEPRECATED_LEGACY_CODE/` (deleted) to project root (env-var based).
         - Annotation paths are per-dataset under `${HPC_SCRATCH_DIR}/${DS_NAME}/output` (see `config_helper.R`); annotation feathers go to `${HPC_SCRATCH_DIR}/${DS_NAME}/output` directly — `samples/`, `ecoda/`, `plots/` dirs are no longer created. `SAMPLE_COLNAME="Sample"` is exported by `slurm_config.sh` (preprocess standardizes the sample column), and `TISSUE_TYPE`/`NORMAL_TISSUE` are auto-exported per array task from `datasets.json` by `2.1_run_worker.sh` (via jq, `module load jq/1.6` on the worker).
-        - `2.1.1_process_chunk.R` builds Seurat objects from the raw counts layer via `get_seurat_obj_from_h5ad()` (`src/utils/seurat_utils.R`; `layers["counts"]`, X fallback with warning) — NOT from log-normalized `X`; feather names derive from the chunk file (`chunk_<N>.txt` → `annotations_chunk_<N>.feather`), not `SLURM_ARRAY_TASK_ID`; scGate models load from the shared `${SCGATE_DB_PATH}` cache created by `0.1_create_scgate_db.R` (run via `1_prepare_chunks.sh`).
+        - `2.1.1_process_chunk.R` builds Seurat objects from the raw counts layer via `get_seurat_obj_from_h5ad()` (`src/utils/seurat_utils.R`; `layers["counts"]`, X fallback with warning) — NOT from log-normalized `X`; feather names derive from the chunk file (`chunk_<N>.txt` → `annotations_chunk_<N>.feather`), not `SLURM_ARRAY_TASK_ID`; scGate models load from the shared `${SCGATE_DB_PATH}` cache created by `2.0_create_scgate_db.R` (run via `2_submit_hpc_array.sh`).
         - Python is invoked via `PYTHON_BIN` (`${PROJECT_ROOT}/.pixi/envs/default/bin/python`) and R via `PIXI_RSCRIPT` from `slurm_config.sh` — never bare `python` (worker nodes may not have scanpy/anndata).
         - See [ARCHITECTURE.md](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-stage-2b) for full pipeline documentation.
 - `slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
