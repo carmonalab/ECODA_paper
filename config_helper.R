@@ -1,6 +1,5 @@
 get_pipeline_config <- function(
-  ds_name = Sys.getenv("DS_NAME"),
-  force_overwrite = FALSE
+  ds_name = Sys.getenv("DS_NAME")
 ) {
   if (ds_name == "") {
     stop("CRITICAL: DS_NAME not set. Ensure it is exported before calling R.")
@@ -25,7 +24,6 @@ get_pipeline_config <- function(
     # CHUNKS_DIR.
     path_data           = scratch_output_dir,
     path_output         = scratch_output_dir,
-    path_output_chunks  = file.path(scratch_output_dir, "chunks"),
     path_ref            = home_ref_dir
   )
 

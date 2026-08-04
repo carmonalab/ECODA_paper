@@ -55,6 +55,15 @@ def load_and_prepare_source(ds_name, entry, base_path, output_dir, view_name=Non
     if not input_names:
         raise ValueError(f"No file_names for {ds_name}")
 
+    if layout == "per-dataset":
+        input_names_list = input_names if isinstance(input_names, list) else [input_names]
+        missing = [n for n in input_names_list if not (base_path / n).exists()]
+        if missing:
+            raise FileNotFoundError(
+                f"Raw input(s) not staged for {ds_name}: {missing}. "
+                f"Run src/1_stage_data/1_stage_data.sh first (expected in {base_path})."
+            )
+
     adata = load_input(input_names, base_path, output_dir)
 
     subset_vars = {}

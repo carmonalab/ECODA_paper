@@ -35,17 +35,17 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
     # feather set per view in the same dir; join on (sample, barcode) instead
     # of cell_barcode alone to avoid duplicate-index row explosion.
     sample_col = os.environ.get("SAMPLE_COLNAME", "Sample")
-    if "sample" not in annotations.columns:
-        print(f"'sample' column missing in annotation feathers of {annot_dir}")
+    if sample_col not in annotations.columns:
+        print(f"'{sample_col}' column missing in annotation feathers of {annot_dir}")
         return
     annotations["_key"] = (
-        annotations["sample"].astype(str) + "_" + annotations["cell_barcode"].astype(str)
+        annotations[sample_col].astype(str) + "_" + annotations["cell_barcode"].astype(str)
     )
     n_dup = annotations["_key"].duplicated().sum()
     if n_dup:
         print(f"WARNING: {n_dup} duplicate (sample, barcode) keys across chunk feathers; keeping first.")
         annotations = annotations.drop_duplicates("_key", keep="first")
-    annotations = annotations.set_index("_key").drop(columns=["cell_barcode", "sample"])
+    annotations = annotations.set_index("_key").drop(columns=["cell_barcode", sample_col])
     print(f"Total annotation entries: {len(annotations)}")
 
     adata = ad.read_h5ad(h5ad_path)

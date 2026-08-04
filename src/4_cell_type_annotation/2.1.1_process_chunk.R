@@ -40,7 +40,7 @@ env_normal_tissue <- Sys.getenv("NORMAL_TISSUE")
 
 defaults <- list(
   chunk_file            = NULL,
-  sample_colname        = if (env_sample_col != "") env_sample_col else "sample",
+  sample_colname        = if (env_sample_col != "") env_sample_col else "Sample",
   tissue_type           = if (env_tissue != "") env_tissue else "Tumor",
   normal_tissue         = if (env_normal_tissue != "") as.logical(env_normal_tissue) else TRUE
 )
@@ -232,7 +232,7 @@ if (file.exists(annot_file)) {
     keep_cols <- intersect(annot_cols, colnames(meta))
     annot <- meta[, keep_cols, drop = FALSE]
     annot$cell_barcode <- rownames(annot)
-    annot$sample <- target_sample
+    annot[[args$sample_colname]] <- target_sample
     annotations_list[[target_sample]] <- annot
 
     rm(seurat_obj)

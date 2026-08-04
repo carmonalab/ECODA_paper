@@ -143,7 +143,9 @@ The analysis proceeds through four stages:
   ./src/4_cell_type_annotation/1_prepare_chunks.sh test        # test: 1 sample/chunk
   ./src/4_cell_type_annotation/2_submit_hpc_array.sh
   ```
-- **Benchmark methods** via `src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh` (stages data + submits array + syncs results):
+- **Benchmark methods** via `src/5_run_benchmark_methods/run_python_sample_embedding_methods/` — PLANNED, not yet implemented:
+  the SLURM submit script `1_submit_hpc_array.sh` does not exist yet; the folder currently contains only the method notebook
+  `1.2_benchmark_methods_py.qmd` (to be converted to `.py`). See TODO.md.
 
 See the [Architecture documentation](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-stage-2b)
 for more details on workflow and usage.
