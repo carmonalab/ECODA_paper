@@ -24,23 +24,78 @@ view filter); the Python reader includes them (e.g. `Zhu`, a view-less raw
 source for the CombinedPBMC dataset that is never preprocessed standalone).
 
 
+## HPC Folder Layout
+
+Repo lives at `~/ECODA_paper` on the HPC (only affects docs; `PROJECT_ROOT`
+derives automatically via `slurm_config.sh`). Worker nodes only access local
+scratch; the NAS is reachable from the login node only.
+
+```
+# HPC home (Bamboo cluster)
+$HOME/ECODA_paper                       # repo clone (PROJECT_ROOT): logs/, aux/, .pixi/
+$HOME/scratch/ECODA_paper               # HPC_SCRATCH_DIR
+├── <DS_NAME>/data/                     # staged raw inputs per dataset (1_stage_data.sh)
+├── CombinedPBMC/data/                  # combine output + rds→h5ad cache
+└── output/                             # SCRATCH_OUTPUT_DIR
+    └── <DS_NAME>/                      # preprocessed .h5ad per view, chunks/, annotations, annotated .h5ad
+$HOME/reference_atlases/sketched_200ct/ # HOME_REF_DIR (HiTME reference maps)
+
+# NAS (carmona_smb; login node only)
+DataCollections/Standardized_SingleCell_Datasets/   # NAS_SC_DIR — raw source datasets
+DataCollections/reference_atlases/sketched_200ct/   # NAS_REF_DIR
+Projects/ECODA_paper/                               # NAS_TARGET_DIR — results back-sync target
+├── output/                            # rsynced from SCRATCH_OUTPUT_DIR
+├── benchmark/{embeddings,plots}/      # method .feathers + notebook plots (TODO: 5_run_benchmark_methods decision)
+└── batch_effect_analysis/{embeddings,plots}/   # same, for batch effect analysis
+```
+
+| Path | Env var | What goes here |
+|---|---|---|
+| `${HPC_SCRATCH_DIR}/<DS_NAME>/data/` | `HPC_SCRATCH_DIR` | Staged raw inputs per dataset (`1_stage_data.sh` rsyncs from `NAS_SC_DIR`) |
+| `${HPC_SCRATCH_DIR}/CombinedPBMC/data/` | `HPC_SCRATCH_DIR` | Dual role: output of the CombinedPBMC combine step and rds→h5ad cache; input to the preprocess array |
+| `${SCRATCH_OUTPUT_DIR}/<DS_NAME>/` | `SCRATCH_OUTPUT_DIR` | Preprocessed .h5ad per view (keys `X_pca_{view}_hvg{n}`, ...); during annotation additionally `chunks/chunk_*.txt`, `annotations_chunk_*.feather`, merged annotated .h5ad |
+| `${HOME_REF_DIR}` | `HOME_REF_DIR` | HiTME reference maps (staged from `NAS_REF_DIR` by `1_prepare_chunks.sh`) |
+| `${PROJECT_ROOT}/logs`, `aux/`, `.pixi/` | `PROJECT_ROOT` | SLURM logs (`LOGS_DIR`), auxiliary files (gene maps), pixi env |
+| `${NAS_SC_DIR}` | `NAS_SC_DIR` | Raw source datasets (`folder_name` in `datasets.json`) |
+| `${NAS_REF_DIR}` | `NAS_REF_DIR` | Reference atlas source (HiTME) |
+| `${NAS_TARGET_DIR}` | `NAS_TARGET_DIR` | Results back-sync target: `output/` (rsynced from `SCRATCH_OUTPUT_DIR`), `benchmark/{embeddings,plots}/`, `batch_effect_analysis/{embeddings,plots}/` (targets for method `.feather`s + notebook plots; filled once the `5_run_benchmark_methods` decision is made — TODO) |
+
+
 ## Preprocessing Pipeline
 
-### Standard scRNA-seq preprocessing pipeline (`src/preprocess/`)
+### Standard scRNA-seq preprocessing pipeline (`src/3_scrnaseq_preprocessing/`)
 
-#### Workflow # TODO
+The preprocessing stage is split across three `src/` folders run in sequence:
+
+| Folder | Role |
+|---|---|
+| `src/1_stage_data/` | `1_stage_data.sh` — login-node script: sources `slurm_config.sh`, stages raw inputs from NAS to HPC scratch (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`) via jq over `datasets.json` + rsync. |
+| `src/2_dataset_specific_preprocessing/` | `1_submit_hpc.sh` dispatcher submits all per-step sbatch jobs in this folder in parallel (`1.1_submit_combinedpbmc.sh`, `1.2_submit_joanito_batch_col.sh`), waits for all, reports per-job state via `sacct`. Steps must be mutually independent. Run after staging, before the preprocess array. |
+| `src/3_scrnaseq_preprocessing/` | `1_submit_hpc_array.sh` (array submit + monitor + rsync back to NAS), `1.1_run_worker.sh`, `1.1.1_preprocess.py`. |
 
 #### Files # TODO
 
 | File | Role |
 |---|---|
-| `1_submit_hpc_array.sh` | Thin bash wrapper: sources `slurm_config.sh`, stages data from NAS → scratch, calls `1.1_run_worker.sh`.
+| `1_submit_hpc_array.sh` | Thin bash wrapper: sources `slurm_config.sh`, submits the preprocess array (`1.1_run_worker.sh`), monitors completion, rsyncs results back to NAS (login node). Raw-data staging no longer lives here — see `src/1_stage_data/1_stage_data.sh`. |
+| `1.1_run_worker.sh` | `#SBATCH` worker: sources `slurm_config.sh`, resolves its dataset from `SLURM_ARRAY_TASK_ID`, calls `1.1.1_preprocess.py` with `--config_path/--base_path/--output_dir/--ds_name`. |
+| `1.1.1_preprocess.py` | Standardized preprocessing: filtering, gene/sample name standardization, sample subsetting (from `datasets.json`), batch-aware HVG selection, PCA, Harmony integration, Leiden clustering. Writes one .h5ad per view. |
 
-- **NAS ↔ Scratch data flow**: Raw-data staging from NAS to scratch happens in `src/preprocess/1_submit_hpc_array.sh` (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`); Worker nodes only access scratch. After array completes, login node rsyncs results back to NAS.
-- **CombinedPBMC combine script** (`_create_combinedpbmc_dataset.py`): HPC-capable. With `HPC_SCRATCH_DIR` set it defaults to `--layout per-dataset` (sources at `${HPC_SCRATCH_DIR}/<ds>/data`, output `${HPC_SCRATCH_DIR}/CombinedPBMC/data`); locally it defaults to the flat `PROJECT_ROOT/data` layout. It must run **before** `1_submit_hpc_array.sh` (staging skips `folder_name: null` datasets, and the preprocess array task reads the combined file), from `${PROJECT_ROOT}` with `module load GCCcore/12.2.0` (R interop). Heavy loads may require a single `sbatch` job instead of the login node.
+- **View output keys** (unified per-view pipeline, `1.1.1_preprocess.py`): both view types get the same treatment; only the HVG `batch_key` differs (benchmark views: standardized sample column from `SAMPLE_COLNAME`; batch-effect views: the dataset's `batch_col`).
+  - `X_pca_{view}_hvg{n}` — stored for **every** HVG size (`benchmark_analysis`: 3000/2000/1000; `batch_effect_analysis`: 2000).
+  - Harmony + unsupervised clustering (neighbors + Leiden) run **only at the 2000-HVG pass** (`CLUSTER_N_HVG`), on both embeddings:
+    - `X_pca_harmony_{view}_hvg2000`, `neighbors_{view}_hvg2000`, `leiden_res_{r}_{view}_hvg2000`
+    - `neighbors_{view}_hvg2000_harmony`, `leiden_res_{r}_{view}_hvg2000_harmony` (on the harmony-corrected embedding)
+  - Example (benchmark view): `X_pca_benchmark_analysis_hvg3000`, `X_pca_benchmark_analysis_hvg2000`, `X_pca_benchmark_analysis_hvg1000`, plus `X_pca_harmony_benchmark_analysis_hvg2000`, `leiden_res_0.1_benchmark_analysis_hvg2000`, `leiden_res_0.1_benchmark_analysis_hvg2000_harmony`, ... (batch views analogously with `batch_effect_analysis_hvg2000`).
+
+- **NAS ↔ Scratch data flow**: Raw-data staging from NAS to scratch happens in `src/1_stage_data/1_stage_data.sh` (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`); Worker nodes only access scratch. After array completes, login node rsyncs results back to NAS.
+- **Dataset-specific preprocessing steps** (all submitted via the `1_submit_hpc.sh` dispatcher, in parallel):
+  - **CombinedPBMC combine** (`1.1_submit_combinedpbmc.sh` → `_create_combinedpbmc_dataset.py`): HPC-capable. With `HPC_SCRATCH_DIR` set it defaults to `--layout per-dataset` (sources at `${HPC_SCRATCH_DIR}/<ds>/data`, output `${HPC_SCRATCH_DIR}/CombinedPBMC/data`); locally it defaults to the flat `PROJECT_ROOT/data` layout. 64G baseline — GongSharma is huge and may need more.
+  - **Joanito batch column** (`1.2_submit_joanito_batch_col.sh` → `_create_joanito_batch_col.R`): computes the `seqtec` batch column in place (idempotent) from `${HPC_SCRATCH_DIR}/Joanito/data/JoaI_2022_35773407_Nofilt_whole.rds`. Required before the preprocess array (the `batch_effect_analysis` view uses it as `batch_col`).
+  - Both must run **after** `1_stage_data.sh` and **before** `1_submit_hpc_array.sh` (staging skips `folder_name: null` datasets, and the preprocess array task reads the combined file).
 
 
-### Cell Type Annotation Pipeline (`src/cell_type_annotation/`)
+### Cell Type Annotation Pipeline (`src/4_cell_type_annotation/`)
 
 Cell type annotation runs as a **separate HPC-parallelized pipeline** on SLURM, independent of the benchmark analysis call graph above. It takes monolithic `.h5ad` files from preprocessing and annotates them cell-by-cell using **scATOMIC + HiTME** in parallel array jobs.
 
@@ -66,20 +121,20 @@ Cell type annotation runs as a **separate HPC-parallelized pipeline** on SLURM, 
 
 | File | Role |
 |---|---|
-| `1_prepare_chunks.sh` | Thin bash wrapper: sources `slurm_config.sh`, stages ref maps from NAS → scratch (raw data is staged by `src/preprocess/1_submit_hpc_array.sh`), calls `1.1_prepare_chunks.r` via \`srun\` (4G, 10min). Supports `test` mode (`./1_prepare_chunks.sh test` → 1 sample/chunk). |
+| `1_prepare_chunks.sh` | Thin bash wrapper: sources `slurm_config.sh`, stages ref maps from NAS → scratch (raw data is staged by `src/1_stage_data/1_stage_data.sh`), calls `1.1_prepare_chunks.r` via \`srun\` (4G, 10min). Supports `test` mode (`./1_prepare_chunks.sh test` → 1 sample/chunk). |
 | `1.1_prepare_chunks.r` | Reads each .h5ad in backed mode (reticulate + anndata), extracts unique sample IDs from `sample_col` (env var `SAMPLE_COLNAME`), groups them into chunks of 5 (or 1 in test mode), writes `chunk_N.txt` files (1st line = h5ad path, subsequent lines = sample IDs). |
 | `2_submit_hpc_array.sh` | Reads chunk count from scratch, submits a SLURM array job (`--array=1-N`, `MAX_NUM_CHUNKS_PARALLEL` concurrency), monitors for completion, then syncs results back to NAS via rsync. |
 | `2.1_run_worker.sh` | `#SBATCH` worker (shared-cpu, 16G, 2h). Sources `slurm_config.sh`, reads `CHUNK_FILE` from `SLURM_ARRAY_TASK_ID`, calls `2.1.1_process_chunk.sh`. |
 | `2.1.1_process_chunk.sh` | Thin wrapper that calls `2.1.1.1_process_chunk.R` via `pixi run Rscript --vanilla`. |
 | `2.1.1.1_process_chunk.R` | Core annotation logic: reads the chunk's h5ad file, iterates per sample, extracts sample-level Seurat objects, runs **scATOMIC** (5 attempts with timeout) then **HiTME** (5 attempts with timeout). Writes per-chunk `.feather` file with annotation columns. Dual annotation: scATOMIC provides layer-1..6 predictions + confidence; HiTME provides layer1/2/3 UCell signatures + scGate/ProjecTILs refinement. Only annotation columns are kept (not full Seurat objects). |
 | `3_merge_annotations.py` | Reads all `annotations_chunk_*.feather` files, joins them into the input `.h5ad`'s `obs` by cell barcode, keeps only the whitelisted annotation columns, writes annotated `.h5ad`. |
-| `config_helper.R` | (Project root) Builds path config from env vars exported by `slurm_config.sh` (`DS_NAME`, `HPC_SCRATCH_DIR`, `SCRATCH_OUTPUT_DIR`). All dataset-specific paths are per-dataset under `${SCRATCH_OUTPUT_DIR}/${DS_NAME}` (`path_data`, `path_output`, `path_output_samples`, `path_output_chunks`, `path_output_ecoda`); `path_ref`/`gene_ref` are repo/home resources. Called by both `1.1_prepare_chunks.r` and `2.1.1.1_process_chunk.R`. |
+| `config_helper.R` | (Project root) Builds path config from env vars exported by `slurm_config.sh` (`DS_NAME`, `HPC_SCRATCH_DIR`, `SCRATCH_OUTPUT_DIR`). All dataset-specific paths are per-dataset under `${SCRATCH_OUTPUT_DIR}/${DS_NAME}` (`path_data`, `path_output`, `path_output_chunks`); `path_ref` is a home resource (`HOME_REF_DIR`). Annotation feathers go to `${SCRATCH_OUTPUT_DIR}/${DS_NAME}` directly (`path_output`) — the old `samples/`, `ecoda/`, `plots/` dirs are no longer created. Missing env vars raise `stop()` errors (no silent fallbacks). Called by both `1.1_prepare_chunks.r` and `2.1.1.1_process_chunk.R`. |
 
 #### Key design details
 
 - **scATOMIC + HiTME dual annotation**: scATOMIC provides hierarchical cell-type predictions (layer_1..6) with confidence scores; HiTME annotates using scGate models + ProjecTILs reference maps, producing layer1/2/3 labels. Both are run on each sample independently (i.e. independent from the rest of the dataset).
 - **Retry loops**: Both annotation methods have up to 5 retry attempts with dynamic timeouts (max(60s, n_cells/10000 × 600s)) to handle HPC node variability.
-- **NAS ↔ Scratch data flow**: Raw-data staging from NAS to scratch happens only in `src/preprocess/1_submit_hpc_array.sh` (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`); cell type annotation consumes the preprocessed output of that pipeline (`${SCRATCH_OUTPUT_DIR}/${DS_NAME}` per dataset, matching `config_helper.R`). `1_prepare_chunks.sh` only stages reference maps and gene annotations. Worker nodes only access scratch. After array completes, login node rsyncs results back to NAS.
+- **NAS ↔ Scratch data flow**: Raw-data staging from NAS to scratch happens only in `src/1_stage_data/1_stage_data.sh` (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`); cell type annotation consumes the preprocessed output of that pipeline (`${SCRATCH_OUTPUT_DIR}/${DS_NAME}` per dataset, matching `config_helper.R`). `1_prepare_chunks.sh` only stages reference maps (gene standardization moved into `1.1.1_preprocess.py`; the `GENE_REF_FILE` staging block was removed). Worker nodes only access scratch. After array completes, login node rsyncs results back to NAS.
 - **Environment propagation**: `slurm_config.sh` `export`s all core vars (`PROJECT_ROOT`, `DATASETS_JSON_FILE`, `HPC_SCRATCH_DIR`, `SCRATCH_OUTPUT_DIR`, `SAMPLE_COLNAME`, ref/gene files, ...) so they reach R via `Sys.getenv()` through both `srun` (`1_prepare_chunks.sh`) and `sbatch` (`2_submit_hpc_array.sh`). `2_submit_hpc_array.sh` additionally auto-exports per-dataset `TISSUE_TYPE`/`NORMAL_TISSUE` from `datasets.json`; `AUTHOR_ANNOT_COLNAMES` must be exported manually by the user.
 - **Output format**: Per-chunk `.feather` files (Apache Arrow, cross-language) → merged into original `.h5ad` by `3_merge_annotations.py`.
 

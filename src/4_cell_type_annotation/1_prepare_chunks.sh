@@ -12,7 +12,7 @@ set -euo pipefail
 # 1. Load central config
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
-mkdir -p "${PROJECT_ROOT}/logs"
+mkdir -p "${LOGS_DIR}"
 
 # Check if the user requested test mode
 MODE_ARG="${1:-"production"}"
@@ -43,21 +43,10 @@ else
   rsync -av --progress "${NAS_REF_DIR}" "${HOME_REF_DIR}/"
 fi
 
-# -------------------------------------------------------------------------
-# STAGE GENE ANNOTATIONS: Download Ensembl gene reference if missing
-# -------------------------------------------------------------------------
-
-if [ -f "${GENE_REF_FILE}" ]; then
-  echo ">>> Gene reference file already exists. Skipping download. <<<"
-else
-  echo "Downloading gene reference annotations from GitHub..."
-  curl -sSL "${GENE_REF_URL}" -o "${GENE_REF_FILE}"
-fi
-# -------------------------------------------------------------------------
-
 echo "Allocating short-lived compute session to build dataset chunks..."
-LOG_FILE="${PROJECT_ROOT}/logs/prepare_chunks_${MODE_ARG}.log"
+LOG_FILE="${LOGS_DIR}/prepare_chunks_${MODE_ARG}.log"
 ENV_RSCRIPT="${PROJECT_ROOT}/.pixi/envs/default/bin/Rscript"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 export R_LIBS_SITE="${PIXI_R_LIB}:${R_LIBS_SITE:-}"
 
@@ -68,6 +57,6 @@ srun --partition=shared-cpu \
      --mem=4G \
      --output="${LOG_FILE}" \
      --error="${LOG_FILE}" \
-     "${ENV_RSCRIPT}" --vanilla 1.1_prepare_chunks.r "${R_PASS_ARG}"
+     "${ENV_RSCRIPT}" --vanilla "${SCRIPT_DIR}/1.1_prepare_chunks.r" "${R_PASS_ARG}"
 
 echo "✓ Chunk generation script finished executing. Log saved to: logs/prepare_chunks_${MODE_ARG}.log"

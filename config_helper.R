@@ -18,7 +18,9 @@ get_pipeline_config <- function(
   }
 
   home_ref_dir <- Sys.getenv("HOME_REF_DIR")
-  gene_ref_file <- Sys.getenv("GENE_REF_FILE")
+  if (home_ref_dir == "") {
+    stop("CRITICAL: HOME_REF_DIR not set. Source slurm_config.sh before calling R.")
+  }
 
   config_data <- list(
     ds_name             = ds_name,
@@ -28,13 +30,9 @@ get_pipeline_config <- function(
     # All per-dataset dirs live under SCRATCH_OUTPUT_DIR/<DS_NAME> (preprocessed
     # output = annotation input). Matches 2_submit_hpc_array.sh HOME_CHUNKS_DIR.
     path_data           = file.path(scratch_output_dir, ds_name),
-    path_plots          = file.path(scratch_output_dir, ds_name, "plots"),
     path_output         = file.path(scratch_output_dir, ds_name),
-    path_output_samples = file.path(scratch_output_dir, ds_name, "samples"),
     path_output_chunks  = file.path(scratch_output_dir, ds_name, "chunks"),
-    path_output_ecoda   = file.path(scratch_output_dir, ds_name, "ecoda"),
-    path_ref            = if (home_ref_dir != "") home_ref_dir else file.path(Sys.getenv("HOME"), "reference_atlases", "sketched_200ct"),
-    gene_ref            = if (gene_ref_file != "") gene_ref_file else file.path(getwd(), "EnsemblGenes105_Hsa_GRCh38.p13.txt.gz")
+    path_ref            = home_ref_dir
   )
 
   return(config_data)

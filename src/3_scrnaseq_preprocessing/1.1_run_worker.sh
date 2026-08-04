@@ -35,6 +35,7 @@ mkdir -p "${DATA_DIR}" "${OUTPUT_DIR}"
 python "${SCRIPT_DIR}/1.1.1_preprocess.py" \
     --config_path "${DATASETS_JSON_FILE}" \
     --base_path "${DATA_DIR}" \
-    --output_dir "${OUTPUT_DIR}"
+    --output_dir "${OUTPUT_DIR}" \
+    --ds_name "${DS_NAME}"
 
 echo "Preprocessing complete for ${DS_NAME}"
