@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Stage raw data from NAS to HPC scratch (login node has NAS access).
-# Run this BEFORE src/2_dataset_specific_preprocessing/_create_combinedpbmc_dataset.py
+# Run this BEFORE src/2_dataset_specific_preprocessing/1.1.1_create_combinedpbmc_dataset.py
 # and src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
