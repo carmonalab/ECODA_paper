@@ -111,6 +111,18 @@ samples_to_process <- chunk_lines[-1]
 adata <- ad$read_h5ad(h5ad_file, backed = "r")
 obs <- py_to_r(adata$obs)
 
+# Hardening: warn (not stop) if the on-disk X format is not CSR. anndata only
+# overrides selective row-indexing for backed CSR matrices; a backed CSC matrix
+# falls back to a full in-memory read per-sample subset (silent OOM).
+# Files produced by 1.1.1_preprocess.py are CSR by construction, so a non-CSR
+# file here means preprocessing output was replaced/regenerated elsewhere.
+x_format <- tryCatch(py_to_r(adata$X$format), error = function(e) NULL)
+if (!is.null(x_format) && x_format != "csr") {
+  warning("On-disk X format is '", x_format, "' (expected 'csr'); backed per-sample ",
+          "subsetting will fully load the matrix into memory. Re-run preprocessing ",
+          "(1.1.1_preprocess.py) to force CSR on-disk.")
+}
+
 if (!args$sample_colname %in% colnames(obs)) {
   stop(args$sample_colname, " not found in h5ad obs colnames!")
 }

@@ -113,10 +113,17 @@ def base_preprocessing(adata):
             adata.raw.X.copy() if adata.raw is not None else adata.X.copy()
         )
 
-    if not sp.issparse(adata.X):
-        adata.X = sp.csr_matrix(adata.X)
-    if not sp.issparse(adata.layers["counts"]):
-        adata.layers["counts"] = sp.csr_matrix(adata.layers["counts"])
+    # Force CSR unconditionally (not only for dense inputs): the on-disk sparse
+    # format is preserved at write time, and backed-mode per-sample subsets in
+    # cell type annotation are only selective for CSR (CSC falls back to a full
+    # in-memory read per subset -> OOM). tocsr() on an already-CSR matrix is a
+    # no-op (no copy). scanpy ops after this preserve CSR.
+    adata.X = adata.X.tocsr() if sp.issparse(adata.X) else sp.csr_matrix(adata.X)
+    adata.layers["counts"] = (
+        adata.layers["counts"].tocsr()
+        if sp.issparse(adata.layers["counts"])
+        else sp.csr_matrix(adata.layers["counts"])
+    )
 
     sc.pp.normalize_total(adata)
     sc.pp.log1p(adata)
