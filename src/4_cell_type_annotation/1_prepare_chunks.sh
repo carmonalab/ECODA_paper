@@ -14,6 +14,7 @@ set -euo pipefail
 # 1. Load central config
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${LOGS_DIR}"
 
 # 2. Parse arguments: MODE (production/test) + optional single dataset
@@ -68,31 +69,6 @@ else
   echo "Staging reference maps from NAS to home directory..."
   mkdir -p "${HOME_REF_DIR}"
   rsync -av --progress "${NAS_REF_DIR}" "${HOME_REF_DIR}/"
-fi
-
-# -------------------------------------------------------------------------
-# STAGE scGate MODEL DB CACHE: Download the scGate model DB once into aux/ so
-# the annotation array workers load it from disk instead of downloading in
-# parallel (up to MAX_NUM_CHUNKS_PARALLEL concurrent downloads).
-# -------------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "${SCGATE_DB_PATH}" ]]; then
-  echo ">>> scGate DB cache already exists at ${SCGATE_DB_PATH}. Skipping. <<<"
-else
-  echo "Creating scGate DB cache at ${SCGATE_DB_PATH} (one-time download)..."
-  if ! srun --partition=shared-cpu \
-       --time=00:30:00 \
-       --ntasks=1 \
-       --cpus-per-task=1 \
-       --mem=4G \
-       --output="${LOGS_DIR}/prepare_scgatedb.log" \
-       --error="${LOGS_DIR}/prepare_scgatedb.log" \
-       ${PIXI_RSCRIPT} "${SCRIPT_DIR}/0.1_create_scgate_db.R"; then
-    echo "WARNING: scGate DB cache creation failed (see ${LOGS_DIR}/prepare_scgatedb.log)."
-    echo "         Continuing: annotation workers will download the model DB themselves (slower)."
-  else
-    echo "✓ scGate DB cache created. Log saved to: ${LOGS_DIR}/prepare_scgatedb.log"
-  fi
 fi
 
 # 4. Build chunks per dataset (sequential, one short-lived compute session each;

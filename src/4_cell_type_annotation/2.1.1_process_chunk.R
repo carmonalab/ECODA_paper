@@ -65,8 +65,8 @@ if (is.null(args$chunk_file) || !file.exists(args$chunk_file)) {
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 ### Load scGate models ####
-# Load from a shared cache (created by 0.1_create_scgate_db.R via
-# 1_prepare_chunks.sh) so array workers do not all download the model DB in
+# Load from a shared cache (created by 2.0_create_scgate_db.R via
+# 2_submit_hpc_array.sh) so array workers do not all download the model DB in
 # parallel. If the cache is missing, download once and persist it.
 scgate_db_path <- Sys.getenv("SCGATE_DB_PATH", unset = file.path(project_root, "aux", "scGateDB.rds"))
 scgate_db_branch <- Sys.getenv("SCGATE_DB_BRANCH", unset = "41a45cd3f8bb5f5a7daf21ec276f6a726f6ee0d4")
