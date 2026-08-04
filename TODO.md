@@ -47,21 +47,47 @@
 - [x] `1.1.1_preprocess.py`: `apply_subset_vars` before sample-col standardization + empty-subset guard
 - [x] Stale `TODO_STUMP_*` refs fixed; local `__pycache__` deleted
 
+## HPC pipeline review — Round 2 Phase 1 fixes (DONE)
+- [x] **Zhu staging bug**: `1_stage_data.sh` jq program now falls back to dataset-level `file_names` for view-less datasets (`"views": {}`, e.g. Zhu); CombinedPBMC still skipped via the `folder_name == null` guard; `sort -u` dedups files shared across views. Also: `1.1.1_create_combinedpbmc_dataset.py` raises a clear "run 1_stage_data.sh first" error in per-dataset layout when a raw input is missing
+- [x] **Draft qmds kept + documented**: `preprocess_gongsharma.qmd` and `TODO_STUMP_preprocess_sikkema.qmd` are intentional drafts for future work (not dead code) — see notes in AGENTS.md repo-structure section; regenerated `__pycache__/` deleted
+- [x] **Dead variables removed**: `PIXI_R_LIB` + `SLURM_ACCOUNT` deleted from `slurm_config.sh`; `force_overwrite` parameter + `path_output_chunks` entry removed from `config_helper.R` (no consumers)
+- [x] **SLURM partition centralized** (closes Item B): `#SBATCH --partition=shared-cpu` removed from step scripts + workers; `--partition="${SLURM_PARTITION}"` passed at submit time from `1_submit_hpc.sh`, `3_scrnaseq_preprocessing/1_submit_hpc_array.sh`, `4_cell_type_annotation/2_submit_hpc_array.sh` (array + scGate DB srun) and the `srun` in `1_prepare_chunks.sh`
+- [x] **Feather sample column aligned**: `2.1.1_process_chunk.R` writes `annot[[args$sample_colname]]` (env-driven `SAMPLE_COLNAME`); `3_merge_annotations.py` reads the annotations column from `os.environ.get("SAMPLE_COLNAME", "Sample")` on both the feather and h5ad sides — join key consistent on both sides
+- [x] README.md benchmark-methods step marked as planned (scripts not yet implemented); ARCHITECTURE.md updated for partition centralization, Zhu staging, feather column naming
+
 ## HPC pipeline review — Phase 2 (open items)
 ### Item A — Debug/test execution mode with subsetted Joanito debug dataset (revive Step 2)
 Status: Step 2 is stale; debug dataset NOT implemented (no `_create_debug_dataset.R`, no `data/debug/`, no `_debug` entry in datasets.json). Existing partial support: `1_prepare_chunks.sh test` → `1.1_prepare_chunks.py --test` (1 sample/chunk); preprocess `--ds_name`; single-dataset args in chunk prep + annotation submit.
-- Implement `src/2_dataset_specific_preprocessing/_create_debug_dataset.R` per old Step 2b (5 Joanito samples, 500 cells/sample, minimal obs cols) → `data/debug/*.rds` + `*.h5ad`
-- Register as `_debug` in datasets.json (or separate `debug_datasets.json`; decide) with `batch_effect_analysis` + `benchmark_analysis` views
-- Wire test mode end-to-end: preprocess array `--ds_name _debug` (+ view filter), chunk prep `test`, annotation array on the debug dataset; validation checklist (h5ad loads, keys `X_pca`/`X_pca_harmony`, runtime < 30s locally)
-- Coverage matrix: which scripts support test/single-dataset mode today vs. which need adaptions (`1_submit_hpc_array.sh`, `1.1_run_worker.sh`, `2_submit_hpc_array.sh`, `2.1_run_worker.sh`)
+- Implement `src/2_dataset_specific_preprocessing/_create_debug_dataset.R` per old Step 2b (5 Joanito samples, 500 cells/sample, minimal obs cols incl. `seqtec`) → `data/debug/*.rds` + `*.h5ad`
+- Register as `_debug` in datasets.json (or separate `debug_datasets.json`; decide — NOTE: `_debug` in datasets.json pollutes every `keys[]` loop: staging, both submit arrays, NAS sync) with `batch_effect_analysis` + `benchmark_analysis` views
+- Wire test mode end-to-end: preprocess array `--ds_name _debug` (+ view filter), chunk prep `test`, annotation array on the debug dataset; validation checklist (h5ad loads, keys `X_pca`/`X_pca_harmony`, shape ~2500 × genes, runtime < 30s)
+- Coverage matrix:
+  | Script | Test support today | Gap for debug run |
+  |---|---|---|
+  | `1_stage_data/1_stage_data.sh` | none (stages all, NAS-only) | dataset filter; debug file must exist on NAS or be staged manually (scp/rsync from `data/debug/`) |
+  | `2_dataset_specific_preprocessing/*` | none (full datasets) | debug subset is standalone; Joanito seqtec step still processes full Joanito — decide skip vs run |
+  | `3_scrnaseq_preprocessing/1_submit_hpc_array.sh` | none (all datasets) | single-dataset/`--ds_name` array mode (maps DS→jq index, 1-task array) |
+  | `3_scrnaseq_preprocessing/1.1_run_worker.sh` | `--ds_name` via preprocess.py | none |
+  | `4_cell_type_annotation/1_prepare_chunks.sh` | `test <DS>` + `--test` (1 sample/chunk) | none |
+  | `4_cell_type_annotation/2_submit_hpc_array.sh` | `<DS>` single-dataset | none |
+  | `3_merge_annotations.py` | manual | none |
 
-### Item B — Centralize SLURM partition (extends existing Step 6)
-- Decide: pass `--partition="${SLURM_PARTITION}"` at submit time (sbatch directives don't expand vars); remove `#SBATCH --partition` lines from step scripts + workers and the `srun --partition=shared-cpu` in `1_prepare_chunks.sh`
-- Note per-pipeline partition needs (shared-cpu for preprocess/annotation; GPU for some benchmark methods)
+### Item B — Centralize SLURM partition — DONE (see "Round 2 Phase 1 fixes")
+- Per-pipeline partition needs remain: shared-cpu for preprocess/annotation; GPU for some benchmark methods (`SLURM_PARTITION` override in the benchmark-methods submit script, see Step 6)
 
 ### Item C — Integrate `3_merge_annotations.py` into the pipeline
-- Decide: add a `3.1_submit_merge.sh` wrapper (per-dataset, after array completion) or document it as an explicit manual step in ARCHITECTURE.md (currently an orphan: no bash wrapper calls it, but ARCHITECTURE.md presents it as a pipeline stage)
+- Decide: add a `3.1_submit_merge.sh` wrapper (per-dataset, `--ds_name` arg, srun compute node, `PYTHON_BIN`, run after the annotation array completes) or hook it into `2_submit_hpc_array.sh` after the sync gate; alternative is documenting it as an explicit manual step in ARCHITECTURE.md (currently an orphan: no bash wrapper calls it, but ARCHITECTURE.md presents it as a pipeline stage)
+- Note the Item D interaction (per-view feather sets): `3_merge_annotations.py` globs `annotations_chunk_*.feather` from the dir passed (default: h5ad's parent) and merges ALL views' feathers into whichever h5ad is given — safe via the `(sample, barcode)` join + `drop_duplicates(keep="first")`, but wasteful/confusing
 - Consider implementing it in `2_submit_hpc_array.sh` after all workers complete, or keep it separate
+
+### Item D (new) — Annotation scope decision: per-view vs per-dataset
+`1.1_prepare_chunks.py` chunks every preprocessed .h5ad in the output dir (e.g. Stephenson has benchmark + batch-effect views; the batch view is a cell superset of the benchmark view) → overlapping samples are annotated twice, and `3_merge_annotations.py` merges both views' feathers into EACH h5ad (safe but wasteful/confusing). Decide: keep per-view (simple, current) vs annotate once per dataset on the union and reuse across views.
+
+### Item E (new, optional) — Preprocess idempotency
+`1.1.1_preprocess.py` skips views whose output file already exists ("Already processed" shortcut, ~line 213) — partial/corrupt/stale outputs (killed mid-write, or regenerated after a code change) are silently never recomputed. Add a `--force` flag or write via temp file + rename so partial outputs are never skipped.
+
+### Verify items (cluster)
+CombinedPBMC step 64G baseline; preprocess worker 16G (GongSharma >100k cells); annotation worker `--time=02:00:00` vs 5×2 retry timeouts; `aux/scGateDB.rds` is committed to git (8.8 KB) so the `2_submit_hpc_array.sh` "download once" srun path is mostly bypassed — update that comment/flow to mention the committed cache.
 
 ## Completed (HPC layout + TODO verification plan)
 - [x] **Dataset-specific preprocessing script rename**: processing scripts in `src/2_dataset_specific_preprocessing/` renamed to the decimal call-depth convention (`1.1.1_create_combinedpbmc_dataset.py`, `1.2.1_create_joanito_batch_col.R`); step scripts `1.1_submit_combinedpbmc.sh`/`1.2_submit_joanito_batch_col.sh` already conformed; docs updated
@@ -160,7 +186,7 @@ Also:
 - For batch views, `batch_key=batch_col` (from datasets.json)
 - Create harmony embeddings for both view types (integrated by sample for benchmark, by batch_col for batch effect)
 - Check strategy to handle Gongsharma dataset (huge, provided in chunks)
-- Cleanup preprocess_gongsharma.qmd if necessary
+- `src/3_scrnaseq_preprocessing/preprocess_gongsharma.qmd` is a KEPT DRAFT (not dead code) for the GongSharma other-subsetting conditions (author annotations only); implement/clean it up when those conditions are added (see "New Datasets to Be Added" → Appendix)
 - Determine which Gongsharma files need pre-processing (per datasets.json)
 
 ### 3d. Batch column support
@@ -364,7 +390,7 @@ SLURM_PARTITION="shared-cpu"
     - Breast cancer (n = 126)
     - Covid-19 PBMC (n = 151)
     - Diabetes (n = 52)
-    - Possibly: Sikkema Lung (n = 165) — `src/3_scrnaseq_preprocessing/TODO_STUMP_preprocess_sikkema.qmd`
+    - Possibly: Sikkema Lung (n = 165) — draft in `src/3_scrnaseq_preprocessing/TODO_STUMP_preprocess_sikkema.qmd` (KEPT DRAFT, to be implemented)
 - **Benchmark analysis:**
   - From PILOT-GM-VAE paper:
     - Alzheimer (n = 83)
@@ -444,7 +470,7 @@ SLURM_PARTITION="shared-cpu"
     - `config_helper.R` kept at project root (R-facing env-based config; R cannot source `slurm_config.sh`); `LOGS_DIR` added to `slurm_config.sh`, all `logs/` references routed through it; cell type annotation array logs renamed to `4_cell_type_annotation_%A_%a.{log,err}`
     - Fixed pre-existing relative-script-reference bugs in `4_cell_type_annotation/2_submit_hpc_array.sh` (`sbatch` worker path) and `2.1_run_worker.sh` (`bash` chunk-processor path) — now resolved via `${SCRIPT_DIR}`/`dirname ${BASH_SOURCE[0]}`
 - [x] **Replace base_path / project_root with slurm_config.sh env vars** (per-dataset layout):
-    - `src/slurm_config.sh` now exports all core env vars (`DATASETS_JSON_FILE`, `NAS_SC_DIR`, `NAS_TARGET_DIR`, `NAS_REF_DIR`, `HOME_REF_DIR`, `GENE_REF_FILE`, `PIXI_R_LIB`, `HPC_SCRATCH_DIR`) + new `SAMPLE_COLNAME="Sample"` so they reach R (`Sys.getenv()`) and Python (`os.environ`) through `srun`/`sbatch`
+    - `src/slurm_config.sh` now exports all core env vars (`DATASETS_JSON_FILE`, `NAS_SC_DIR`, `NAS_TARGET_DIR`, `NAS_REF_DIR`, `HOME_REF_DIR`, `GENE_REF_FILE`, `HPC_SCRATCH_DIR`) + new `SAMPLE_COLNAME="Sample"` so they reach R (`Sys.getenv()`) and Python (`os.environ`) through `srun`/`sbatch`
     - Decision: the TODO example's flat `SCRATCH_DATA_DIR=${HPC_SCRATCH_DIR}/data` / `SCRATCH_CHUNKS_DIR=${HPC_SCRATCH_DIR}/chunks` were NOT added — they conflict with the per-dataset convention; dataset-specific dirs are derived per script (`${HPC_SCRATCH_DIR}/${DS_NAME}/data`, `${HPC_SCRATCH_DIR}/${DS_NAME}/output/chunks`)
     - `config_helper.R` paths are now per-dataset under `${HPC_SCRATCH_DIR}/${DS_NAME}/output` (annotation pipeline functional end-to-end, matches `2_submit_hpc_array.sh` CHUNKS_DIR)
     - R scripts (`1.1_prepare_chunks.r`, `2.1.1.1_process_chunk.R`) resolve `project_root` from `PROJECT_ROOT` env (getwd() fallback), source `config_helper.R` explicitly, SAMPLE_COLNAME guard added

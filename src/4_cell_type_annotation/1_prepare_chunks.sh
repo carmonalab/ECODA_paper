@@ -92,7 +92,7 @@ for DS_NAME in "${DATASET_NAMES[@]}"; do
   export DS_NAME
 
   echo "Allocating short-lived compute session to build ${DS_NAME} chunks..."
-  if ! srun --partition=shared-cpu \
+  if ! srun --partition="${SLURM_PARTITION}" \
        --time=00:30:00 \
        --ntasks=1 \
        --cpus-per-task=1 \

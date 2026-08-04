@@ -43,7 +43,7 @@ if [[ -f "${SCGATE_DB_PATH}" ]]; then
   echo ">>> scGate DB cache already exists at ${SCGATE_DB_PATH}. Skipping. <<<"
 else
   echo "Creating scGate DB cache at ${SCGATE_DB_PATH} (one-time download)..."
-  if ! srun --partition=shared-cpu \
+  if ! srun --partition="${SLURM_PARTITION}" \
        --time=00:30:00 \
        --ntasks=1 \
        --cpus-per-task=1 \
@@ -108,6 +108,7 @@ fi
 echo "Found ${TOTAL_CHUNKS} chunks. Submitting job array range 1-${TOTAL_CHUNKS} to SLURM..."
 SUBMIT_MSG=$(sbatch \
     --array=1-${TOTAL_CHUNKS}%${MAX_NUM_CHUNKS_PARALLEL} \
+    --partition="${SLURM_PARTITION}" \
     --output="${LOGS_DIR}/4_cell_type_annotation_%A_%a.log" \
     --error="${LOGS_DIR}/4_cell_type_annotation_%A_%a.err" \
     --mail-user="${USER_EMAIL}" \

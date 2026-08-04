@@ -13,13 +13,14 @@ module load jq/1.6
 
 echo "=== Staging data from NAS to HPC scratch ==="
 
+# Datasets with views emit each view's input_file_name; view-less datasets
+# (e.g. Zhu) fall back to the dataset-level file_names (string or array).
+# The later `sort -u` dedups files shared across views.
 jq -r '
   to_entries[] |
   .key as $key |
   .value.folder_name as $folder |
-  .value.views |
-  to_entries[] |
-  .value.input_file_name |
+  (if (.value.views | length) > 0 then .value.views | to_entries[] | .value.input_file_name else .value.file_names end) |
   if type == "array" then .[] else . end |
   "\($key) \($folder) \(.)"
 ' "${DATASETS_JSON_FILE}" | sort -u | \

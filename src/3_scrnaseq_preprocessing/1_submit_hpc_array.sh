@@ -30,6 +30,7 @@ echo "Datasets: ${DATASET_NAMES[*]}"
 mkdir -p "${LOGS_DIR}"
 SUBMIT_MSG=$(sbatch \
     --array=1-${NUM_DATASETS}%${MAX_NUM_CHUNKS_PARALLEL} \
+    --partition="${SLURM_PARTITION}" \
     --output="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.log" \
     --error="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.err" \
     --mail-user="${USER_EMAIL}" \

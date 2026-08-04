@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH --job-name=preprocess
-#SBATCH --partition=shared-cpu
 #SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

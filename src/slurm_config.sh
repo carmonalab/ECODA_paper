@@ -23,9 +23,6 @@ export NAS_TARGET_DIR="${NAS_PREFIX}/Projects/ECODA_paper"
 # --- HPC Scratch Paths ---
 export HPC_SCRATCH_DIR="${HOME}/scratch/ECODA_paper"
 
-# --- Pixi R library path ---
-export PIXI_R_LIB="${PROJECT_ROOT}/.pixi/envs/default/lib/R/library"
-
 # --- Pixi-managed interpreter commands ---
 # PYTHON_BIN: pixi python (has scanpy/anndata etc.); plain `python` on worker
 # nodes may resolve to a bare system python without these packages.
@@ -49,7 +46,8 @@ export SCGATE_DB_BRANCH="41a45cd3f8bb5f5a7daf21ec276f6a726f6ee0d4"
 export SAMPLE_COLNAME="Sample"
 
 # --- SLURM Configuration ---
-SLURM_ACCOUNT=""
+# Passed at submit time via `--partition="${SLURM_PARTITION}"` (sbatch
+# directives do not expand variables). Override per pipeline if needed.
 SLURM_PARTITION="shared-cpu" # TODO: Adapt for specific pipelines
 
 # --- User Info ---

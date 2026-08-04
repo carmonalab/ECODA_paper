@@ -1,6 +1,5 @@
 #!/bin/bash
 #SBATCH --job-name=joanito_batch_col
-#SBATCH --partition=shared-cpu
 #SBATCH --time=01:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
