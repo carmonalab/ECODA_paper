@@ -97,7 +97,7 @@ The preprocessing stage is split across three `src/` folders run in sequence:
   - **CombinedPBMC combine** (`1.1_submit_combinedpbmc.sh` → `1.1.1_create_combinedpbmc_dataset.py`): HPC-capable. With `HPC_SCRATCH_DIR` set it defaults to `--layout per-dataset` (sources at `${HPC_SCRATCH_DIR}/<ds>/data`, output `${HPC_SCRATCH_DIR}/CombinedPBMC/data`); locally it defaults to the flat `PROJECT_ROOT/data` layout. 64G baseline — GongSharma is huge and may need more. Script is CWD-independent; still submitted via the `1_submit_hpc.sh` dispatcher.
   - **Joanito batch column** (`1.2_submit_joanito_batch_col.sh` → `1.2.1_create_joanito_batch_col.R`): computes the `seqtec` batch column in place (idempotent) from `${HPC_SCRATCH_DIR}/Joanito/data/JoaI_2022_35773407_Nofilt_whole.rds`. 32G mem baseline — the whole .rds is read and re-saved in a single process. Required before the preprocess array (the `batch_effect_analysis` view uses it as `batch_col`).
   - **Kfoury low-res cell types** (`1.4_submit_kfoury_lowres_ct.sh` → `1.4.1_create_kfoury_lowres_ct.R`): ported from `Preprocess_datasets.Rmd` — collapses the author `cells` annotations into `cells_lowres` (Tcells/NKcells/Bcells/MoMac/DCcells, other labels kept) in place (idempotent) from `${HPC_SCRATCH_DIR}/Kfoury/data/Kfoury_2021_34719426.rds`. 32G mem baseline. Required before the preprocess array (`columns.cell_type_low_res = "cells_lowres"` for Kfoury).
-  - **Debug subset build** (`1.3.1_create_debug_dataset.R`): LOCAL script (NOT in the `1.*_submit_*.sh` dispatcher glob — no `1.3_submit_*.sh` wrapper). Reads the Joanito raw input, selects 5 samples covering conditions/batches/sites, subsets 500 cells/sample (seeded), keeps minimal obs cols (incl. `seqtec`, `Site`), writes `data/debug/JoaI_2022_35773407_debug_5samples.{rds,h5ad}`. The user places these on the NAS under `Standardized_SingleCell_Datasets/debug/output/` before staging `_debug` on the HPC.
+  - **Debug subset build** (`1.3.1_create_debug_dataset.R`): LOCAL script (NOT in the `1.*_submit_*.sh` dispatcher glob — no `1.3_submit_*.sh` wrapper). Reads the Joanito raw input, selects 5 samples covering conditions/batches/sites, subsets 500 cells/sample (seeded), keeps minimal obs cols (incl. `seqtec`, `Site`), writes `data/debug/JoaI_2022_35773407_debug_5samples.{rds,h5ad}` — a gitignored folder in the project root (NOT on the NAS). Before the Phase 2 debug run, the files are staged to HPC scratch manually (e.g. `rsync data/debug/ ${HPC_SCRATCH_DIR}/_debug/data/`); `1_stage_data.sh --ds_name _debug` can still be used if the files are additionally placed under `Standardized_SingleCell_Datasets/debug/output/` on the NAS (the `_debug` entry keeps `folder_name: debug`).
   - Steps must run **after** `1_stage_data.sh` and **before** `1_submit_hpc_array.sh` (staging skips `folder_name: null` datasets, and the preprocess array task reads the combined file). Processing scripts follow the decimal depth convention (`N.N.N_<action>.<ext>`, mirroring `1.1.1_preprocess.py`/`2.1.1_process_chunk.R`).
 
 
@@ -347,8 +347,9 @@ Data analysis is performed in a single notebook, `notebooks/benchmark_analysis.r
 
 ## Legacy pipeline notes
 
-- `Preprocess_datasets.Rmd` (repo root, 905 lines) is the superseded legacy
-  Seurat preprocessing pipeline. Its steps are ported as follows:
+- `Preprocess_datasets.Rmd` (repo root, 905 lines) was the superseded legacy
+  Seurat preprocessing pipeline; it was deleted after the audit (git history
+  preserves it). Its steps are ported as follows:
   - scGate models + ProjecTILs ref maps → `2.0_create_scgate_db.R` /
     `${SCGATE_DB_PATH}` + `2.1.1_process_chunk.R` (`HOME_REF_DIR`).
   - Kfoury `cells_lowres` creation → `src/2_dataset_specific_preprocessing/1.4.1_create_kfoury_lowres_ct.R`.
@@ -363,4 +364,3 @@ Data analysis is performed in a single notebook, `notebooks/benchmark_analysis.r
     legacy pipeline Lee and Zhang were exported WITHOUT author annotation
     (scPoli was trained on them); this context explains certain decisions in
     `notebooks/benchmark_analysis.rmd` and in the paper.
-- Deletion of `Preprocess_datasets.Rmd` itself is pending user confirmation.

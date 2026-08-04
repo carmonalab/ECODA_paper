@@ -14,10 +14,13 @@
 #   data/debug/JoaI_2022_35773407_debug_5samples.h5ad  (anndata, X=None +
 #       layers["counts"] — handled by 1.1.1_preprocess.py's X=None promotion)
 #
-# Before the HPC debug run (Phase 2), the user must place these files on the
-# NAS under Standardized_SingleCell_Datasets/debug/output/ (the _debug entry's
-# folder_name), or scp/rsync them to ${HPC_SCRATCH_DIR}/_debug/data/ manually,
-# because 1_stage_data.sh reads only from the NAS.
+# Before the HPC debug run (Phase 2), the files stay in the gitignored
+# project-root folder data/debug/ (NOT on the NAS) and are staged to HPC
+# scratch manually, e.g.:
+#   rsync data/debug/ ${HPC_SCRATCH_DIR}/_debug/data/
+# (1_stage_data.sh --ds_name _debug still works if the files are additionally
+# placed under Standardized_SingleCell_Datasets/debug/output/ on the NAS —
+# the _debug entry's folder_name.)
 #
 # Usage:
 #   pixi run Rscript src/2_dataset_specific_preprocessing/1.3.1_create_debug_dataset.R

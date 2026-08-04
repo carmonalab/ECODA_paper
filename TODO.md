@@ -4,48 +4,118 @@ Implementation plan for the remaining pipeline work. Phases are ordered:
 **Phase 1** (agent, done) → **Phase 2** (debug run on HPC, requires user) →
 **Phase 3** (benchmark methods, agent + HPC) → **Phase 4** (batch effect
 analysis) → human-managed tasks. Completed history is preserved in git; see
-`git log` (one-line changelog pointer, see bottom).
+`git log` and the changelog at the bottom.
 
 ## Phase 1 — Complete pipelines src/1–4 (DONE, agent)
 
 ### 1.1 Debug/test execution mode
-- [x] `src/2_dataset_specific_preprocessing/1.3.1_create_debug_dataset.R`: LOCAL script (NOT part of the `1_submit_hpc.sh` dispatcher glob `1.*_submit_*.sh` — no `1.3_submit_*.sh` wrapper). Reads the Joanito raw input (per datasets.json `input_file_name`), selects 5 samples covering both biological conditions (sample.origin), batches (seqtec) and sites, subsets 500 cells/sample (seeded random), keeps minimal obs cols (incl. `seqtec`, `Site`, sample/patient cols), writes `data/debug/JoaI_2022_35773407_debug_5samples.{rds,h5ad}` (h5ad via anndataR: X=None + layers["counts"], handled by the preprocess X-promotion).
-- [x] datasets.json: added `_debug` entry (batch col `Site`, label/sample cols following Joanito conventions, `use_for_benchmark` + `use_for_batch_effect`, both views → the debug h5ad). Convention: default-all script loops skip `_*` keys unless explicitly requested via `--ds_name`.
-- [x] `src/1_stage_data/1_stage_data.sh`: `--ds_name <DS>` filter; default-all skips `_*` keys. Documented that the debug files must exist on the NAS (`Standardized_SingleCell_Datasets/debug/output/`, folder_name `debug`) or be staged manually.
-- [x] `src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh`: `--ds_name` single-dataset mode (1-task array at the dataset's position in the sorted jq key list, so `1.1_run_worker.sh`'s `sed -n ${SLURM_ARRAY_TASK_ID}p` mapping needs no change); default-all skips `_*`; single-dataset NAS sync syncs only the requested dataset; sacct fail-closed gate holds for 1-task arrays.
-- [x] `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py`: `--force` flag bypassing the "Already processed" skip; additionally promotes `X=None` inputs with a `counts` layer to `X` (anndataR-written files, e.g. the debug h5ad) before any X-dependent step.
+- `src/2_dataset_specific_preprocessing/1.3.1_create_debug_dataset.R`: LOCAL script
+  (NOT part of the `1_submit_hpc.sh` dispatcher glob `1.*_submit_*.sh` — no
+  `1.3_submit_*.sh` wrapper). Reads the Joanito raw input (per datasets.json
+  `input_file_name`), selects 5 samples covering both biological conditions
+  (sample.origin), batches (seqtec) and sites, subsets 500 cells/sample (seeded
+  random), keeps minimal obs cols (incl. `seqtec`, `Site`, sample/patient cols),
+  writes `data/debug/JoaI_2022_35773407_debug_5samples.{rds,h5ad}` (h5ad via
+  anndataR: X=None + layers["counts"], handled by the preprocess X-promotion).
+- datasets.json: `_debug` entry added (batch col `Site`, label/sample cols
+  following Joanito conventions, `use_for_benchmark` + `use_for_batch_effect`,
+  both views → the debug h5ad). Convention: default-all script loops skip `_*`
+  keys unless explicitly requested via `--ds_name`.
+- **Debug dataset location (decision): created in a gitignored project-root
+  folder `data/debug/` (explicit `data/debug/` entry in `.gitignore`) — NOT on
+  the NAS under `Standardized_SingleCell_Datasets/debug/output/`. Staging to
+  HPC scratch is manual (`rsync data/debug/ ${HPC_SCRATCH_DIR}/_debug/data/`);
+  `1_stage_data.sh --ds_name _debug` still works if the files are additionally
+  placed on the NAS (`_debug` entry keeps `folder_name: debug`).**
+- `src/1_stage_data/1_stage_data.sh`: `--ds_name <DS>` filter; default-all skips
+  `_*` keys.
+- `src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh`: `--ds_name` single-dataset
+  mode (1-task array at the dataset's position in the sorted jq key list, so
+  `1.1_run_worker.sh`'s `sed -n ${SLURM_ARRAY_TASK_ID}p` mapping needs no change);
+  `--force` recomputes existing outputs (forwarded via `FORCE_PREPROCESS`);
+  default-all skips `_*`; single-dataset NAS sync syncs only the requested
+  dataset; sacct fail-closed gate holds for 1-task arrays.
+- `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py`: `--force` flag bypassing the
+  "Already processed" skip; additionally promotes `X=None` inputs with a `counts`
+  layer to `X` (anndataR-written files, e.g. the debug h5ad) before any
+  X-dependent step.
 
 ### 1.2 Per-dataset annotation + merge-back (replaces per-view)
-- [x] `src/4_cell_type_annotation/1.1_prepare_chunks.py`: one chunk set per DATASET — builds a union h5ad (concat all view h5ads, dedup `(sample, barcode)`) at `${HPC_SCRATCH_DIR}/${DS_NAME}/annotation_union/union.h5ad` (outside the synced output dir). Memory-lean: single view → chunked directly; a view equal to the union (e.g. Stephenson benchmark ⊂ batch-effect) → plain file copy; partial-overlap views only → in-memory concat + dedup (warning). `--test` mode kept (1 sample/chunk).
-- [x] `src/4_cell_type_annotation/3_merge_annotations.py`: CLI polished to argparse (`--h5ad-path` required, `--annot-dir` defaults to the h5ad's parent, `--output-path` defaults to in-place); join logic unchanged.
-- [x] `src/4_cell_type_annotation/3.1_submit_merge.sh` (new, per-dataset `<DS>`): loops over the dataset's view h5ads, merges the (per-dataset) feathers into each via `srun` (64G baseline), fails if no feathers exist, deletes `annotation_union/` + stale `output/chunks/`, rsyncs annotated h5ads to `${NAS_TARGET_DIR}/${DS}/output/`.
-- [x] `2_submit_hpc_array.sh` / `2.1_run_worker.sh`: unchanged (chunk-file driven); chunk manifest + feather naming verified consistent (global counter across datasets, feather names derive from chunk file names).
-- [x] Docs: ARCHITECTURE.md (union + `3.1_submit_merge.sh` as wrapped stages; HPC layout incl. `annotation_union/`), AGENTS.md (repo-structure notes, `_debug` convention).
+- `src/4_cell_type_annotation/1.1_prepare_chunks.py`: one chunk set per DATASET —
+  builds a union h5ad (concat all view h5ads, dedup `(sample, barcode)`) at
+  `${HPC_SCRATCH_DIR}/${DS_NAME}/annotation_union/union.h5ad` (outside the synced
+  output dir). Memory-lean: single view → chunked directly; a view equal to the
+  union (e.g. Stephenson benchmark ⊂ batch-effect) → hardlink (copy fallback);
+  partial-overlap views only → in-memory concat + dedup (warning). `--test` mode
+  kept (1 sample/chunk).
+- `src/4_cell_type_annotation/3_merge_annotations.py`: argparse CLI
+  (`--h5ad-path` required, `--annot-dir` defaults to the h5ad's parent,
+  `--output-path` defaults to in-place); idempotent re-merge (drops existing
+  annotation columns before the join); atomic write (temp file + `os.replace`).
+- `src/4_cell_type_annotation/3.1_submit_merge.sh` (new, per-dataset `<DS>`):
+  coverage gate against the chunk manifest (fails on partial annotation arrays),
+  NAS reachability check BEFORE any destructive step, merges feathers into each
+  view h5ad via `srun` (64G baseline), deletes `annotation_union/` + stale
+  `output/chunks/`, rsyncs annotated h5ads to `${NAS_TARGET_DIR}/${DS}/output/`.
+- `2_submit_hpc_array.sh` / `2.1_run_worker.sh`: unchanged (chunk-file driven);
+  chunk manifest + feather naming verified consistent (global counter across
+  datasets, feather names derive from chunk file names).
+- Docs: ARCHITECTURE.md (union + `3.1_submit_merge.sh` as wrapped stages; HPC
+  layout incl. `annotation_union/`), AGENTS.md (repo-structure notes, `_debug`
+  convention).
 
-### 1.3 Legacy `Preprocess_datasets.Rmd` audit (repo root)
-- [x] Legacy steps mapped to the new pipeline (draft checklist below):
-  - scGate models + ProjecTILs loading (lines 408–427) → ported (scGate DB cache `aux/scGateDB.rds` in `4_cell_type_annotation`; ProjecTILs ref maps via `HOME_REF_DIR` in `2.1.1_process_chunk.R`).
-  - "Create low res cell types for Kfoury" (line 444) → **port per user decision**: `src/2_dataset_specific_preprocessing/1.4.1_create_kfoury_lowres_ct.R` + `1.4_submit_kfoury_lowres_ct.sh` (dataset-specific step via `1_submit_hpc.sh`, in-place idempotent saveRDS; collapses author `cells` → `cells_lowres` Tcells/NKcells/Bcells/MoMac/DCcells).
-  - gene symbols (line 483) → `src/gene_utils.py`; preprocess loop (line 489) → `1.1.1_preprocess.py`; HiTME/scATOMIC whitelist (lines 501–518) → `3_merge_annotations.py` + `2.1.1_process_chunk.R`.
-  - "Create clearcut age for GongSharma" (line 826) → **dropped (user decision)**: deferred to the kept draft `src/3_scrnaseq_preprocessing/preprocess_gongsharma.qmd` (future other-subsetting conditions).
-  - "Export datasets without author annotation" (line 868; Lee/Zhang for scPoli) → **dropped as a pipeline step (user decision)**: new pipeline annotates all datasets; the legacy context (Lee/Zhang exported without author annotation for scPoli) is noted in ARCHITECTURE.md ("Legacy pipeline notes") since it explains decisions in `notebooks/benchmark_analysis.rmd` and the paper.
-- [ ] Delete `Preprocess_datasets.Rmd` after user confirmation (audit complete; deletion pending OK).
-- [x] `Figure_workflow_schematic.Rmd` untouched (out of scope).
+### 1.3 Legacy `Preprocess_datasets.Rmd` audit — DONE, file deleted
+- `Preprocess_datasets.Rmd` (repo root, 905 lines) audited, ported, and
+  **deleted** (git history preserves it). Mapping of its steps:
+  - scGate models + ProjecTILs loading → ported (scGate DB cache
+    `aux/scGateDB.rds` in `4_cell_type_annotation`; ProjecTILs ref maps via
+    `HOME_REF_DIR` in `2.1.1_process_chunk.R`).
+  - "Create low res cell types for Kfoury" → ported:
+    `src/2_dataset_specific_preprocessing/1.4.1_create_kfoury_lowres_ct.R` +
+    `1.4_submit_kfoury_lowres_ct.sh` (dataset-specific step via `1_submit_hpc.sh`,
+    in-place idempotent saveRDS; collapses author `cells` → `cells_lowres`
+    Tcells/NKcells/Bcells/MoMac/DCcells).
+  - gene symbols → `src/gene_utils.py`; preprocess loop → `1.1.1_preprocess.py`;
+    HiTME/scATOMIC whitelist → `3_merge_annotations.py` + `2.1.1_process_chunk.R`.
+  - "Create clearcut age for GongSharma" → dropped (user decision): deferred to
+    the kept draft `src/3_scrnaseq_preprocessing/preprocess_gongsharma.qmd`
+    (future other-subsetting conditions).
+  - "Export datasets without author annotation" (Lee/Zhang for scPoli) → dropped
+    as a pipeline step (user decision); the legacy context is noted in
+    ARCHITECTURE.md ("Legacy pipeline notes") since it explains decisions in
+    `notebooks/benchmark_analysis.rmd` and the paper.
+- `Figure_workflow_schematic.Rmd` untouched (out of scope).
 
 ### 1.4 `.Rprofile` / `.Renviron` audit
-- [x] `.Rprofile`: KEPT — but fixed a real bug: the file had NO trailing newline, so R's startup profile loader silently dropped the final line and the profile was never applied under `pixi run Rscript` (RETICULATE_PYTHON stayed unset). Verified after the fix: under `pixi run Rscript`, `Sys.which("python")` → pixi env python and `RETICULATE_PYTHON` gets set.
-- [x] `src/slurm_config.sh`: exports `RETICULATE_PYTHON="${PROJECT_ROOT}/.pixi/envs/default/bin/python"` — under `PIXI_RSCRIPT` (`--vanilla`) the `.Rprofile` is NOT read, and reticulate's own discovery was observed to pick a stray `~/.virtualenvs/r-reticulate` (local Mac artifact; anndata import failed). The export pins the pixi python deterministically on HPC workers.
-- [x] `.Renviron` (`R_MAX_VSIZE=200Gb`): KEPT + commented (user decision). Verified that `--vanilla` (--no-environ) means it does NOT apply to HPC pipeline workers — it only affects interactive/notebook R sessions.
+- `.Rprofile`: KEPT — fixed a real bug: the file had NO trailing newline, so R's
+  startup profile loader silently dropped the final line and the profile was
+  never applied under `pixi run Rscript` (RETICULATE_PYTHON stayed unset).
+  Verified after the fix: under `pixi run Rscript`, `Sys.which("python")` → pixi
+  env python and `RETICULATE_PYTHON` gets set.
+- `src/slurm_config.sh`: exports `RETICULATE_PYTHON="${PROJECT_ROOT}/.pixi/envs/default/bin/python"`
+  — under `PIXI_RSCRIPT` (`--vanilla`) the `.Rprofile` is NOT read, and
+  reticulate's own discovery was observed to pick a stray
+  `~/.virtualenvs/r-reticulate` (local Mac artifact; anndata import failed). The
+  export pins the pixi python deterministically on HPC workers.
+- `.Renviron` (`R_MAX_VSIZE=200Gb`): KEPT + commented (user decision). Verified
+  that `--vanilla` (--no-environ) means it does NOT apply to HPC pipeline
+  workers — it only affects interactive/notebook R sessions.
 
 ## Phase 2 — Debug run on HPC [REQUIRES USER: connect NAS + log in to HPC]
 
-Prereqs (explicitly user): mount NAS
-(`/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets`), place
-`data/debug/` files on NAS under `Standardized_SingleCell_Datasets/debug/output/`,
-`ssh halterc@login1.bamboo.hpc.unige.ch` (password entry). All sbatch/srun
-execution on compute nodes (never login node).
+Prereqs (explicitly user):
+1. Build the debug subset locally: `pixi run Rscript src/2_dataset_specific_preprocessing/1.3.1_create_debug_dataset.R`
+   → `data/debug/JoaI_2022_35773407_debug_5samples.{rds,h5ad}` (gitignored
+   project-root folder, NOT on the NAS).
+2. Stage to HPC scratch manually, e.g.
+   `rsync data/debug/ ${HPC_SCRATCH_DIR}/_debug/data/`
+   (or additionally place the files under
+   `Standardized_SingleCell_Datasets/debug/output/` and use
+   `1_stage_data.sh --ds_name _debug`).
+3. `ssh halterc@login1.bamboo.hpc.unige.ch` (password entry). All sbatch/srun
+   execution on compute nodes (never login node).
 
-- [ ] Stage: `src/1_stage_data/1_stage_data.sh --ds_name _debug`.
+- [ ] Stage the debug files to HPC scratch (manual rsync, or NAS + `1_stage_data.sh --ds_name _debug`).
 - [ ] Dataset-specific preprocessing: Joanito `seqtec` step — skip (debug subset already carries `seqtec` from `1.3.1_create_debug_dataset.R`); run `1_submit_hpc.sh` only if the full datasets are staged.
 - [ ] Preprocess: `1_submit_hpc_array.sh --ds_name _debug`; validation: h5ad loads, `X_pca`/`X_pca_harmony` present, ~2500 cells, runtime < 30s.
 - [ ] Chunks: `1_prepare_chunks.sh test _debug` (per-dataset union, 1 sample/chunk).
@@ -91,7 +161,9 @@ execution on compute nodes (never login node).
   (n=126), Covid-19 PBMC (n=151), diabetes (n=52), possibly Sikkema Lung.
 - Benchmark datasets: Alzheimer (n=83), Lupus PBMC (n=261), myocardial infarction
   (n=23), possibly KPMP (n=45); GongSharma other subsetting conditions.
-- Place `data/debug/` files on NAS before Phase 2.
+- Run `1.3.1_create_debug_dataset.R` to build the debug subset into `data/debug/`
+  (gitignored project-root folder; NOT on the NAS) and stage it to HPC scratch
+  manually before Phase 2.
 
 ## Ideas for later
 
@@ -109,3 +181,6 @@ execution on compute nodes (never login node).
 - Phase 1 (debug mode, per-dataset annotation + merge, legacy audit, .Rprofile/.Renviron
   audit) implemented — details preserved in git history (see previous TODO.md versions
   in `git log`).
+- `Preprocess_datasets.Rmd` deleted after the legacy audit (user-confirmed); debug
+  dataset location decision: gitignored project-root `data/debug/` instead of NAS
+  `Standardized_SingleCell_Datasets/debug/output/`.

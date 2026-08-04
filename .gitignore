@@ -52,6 +52,7 @@ rsconnect/
 
 # Folders
 data/
+data/debug/
 plots/
 ProjectTILs_references/
 !aux/*
