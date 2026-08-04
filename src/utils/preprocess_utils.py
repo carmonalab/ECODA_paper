@@ -8,6 +8,11 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # R interop — convert .rds to cached raw .h5ad
 # ---------------------------------------------------------------------------
+# load_all_functions.R sources its module files via repo-relative paths, so pin
+# the embedded R working directory to PROJECT_ROOT at import time. All R
+# interop calls below use absolute paths; this makes callers CWD-independent.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ro.r('setwd')(str(PROJECT_ROOT))
 ro.r('source("src/utils/load_all_functions.R")')
 ro.r('''
 convert_rds_to_raw_h5ad <- function(input_path, output_path) {

@@ -26,6 +26,10 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
 # General rules
 - Do not run pipeline scripts (e.g. .R, .py or .sh) for validation checks after implementing new code, unless the user asks for.
     - Validation of HPC pipeline scripts (e.g. .R, .py or .sh) will be run once the pipeline has been fully implemented, using a small debugging dataset (e.g. derived from the Joanito dataset)
+- All HPC bash scripts must run with the working directory set to ${PROJECT_ROOT}:
+  source `src/slurm_config.sh`, then `cd "${PROJECT_ROOT}"`. This is the established
+  convention in every existing script — keep it for any new script (Python/R interop
+  resolves repo-relative paths; see docs/ARCHITECTURE.md).
 
 
 # Repo structure
