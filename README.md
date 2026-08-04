@@ -61,6 +61,14 @@ This section explains how to reproduce this paper's results and figures and the 
   - Various utility functions (`src/utils/`), mainly for the benchmark pipeline analysis
   - HPC SLURM configuration, e.g. paths (`src/slurm_config.sh`)
 
+### **Reference data**
+
+- `aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz`: Ensembl 105 human gene reference
+  (GRCh38.p13) used for gene-name standardization in the preprocessing pipeline
+  (`src/gene_utils.py`). Originally retrieved on 14.02.2022 from the `aux/` folder
+  of the carmonalab `scRNAseq_data_processing` repository:
+  https://raw.githubusercontent.com/carmonalab/scRNAseq_data_processing/master/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz
+
 
 ### **Installation**
 
