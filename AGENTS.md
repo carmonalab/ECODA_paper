@@ -66,6 +66,7 @@ Four-stage end-to-end pipeline:
             - HVG selection (batch-aware and non-batch modes, multiple sizes)
             - PCA and Harmony integration
             - Unsupervised cell clustering (multiple Leiden resolutions)
+            - Preprocessed .h5ad files are **CSR-on-disk by construction** (`1.1.1_preprocess.py` forces `tocsr()` on `X` and `layers/counts` unconditionally; the on-disk format is preserved at write time). This makes backed-mode per-sample subsets in cell type annotation selective reads (anndata only overrides row-indexing for backed CSR; CSC falls back to a full in-memory read per subset → OOM); `obs` is metadata-only (small) and never triggers matrix I/O.
         - `src/4_cell_type_annotation/`: HPC-parallelized scATOMIC + HiTME cell type annotation via SLURM array jobs
             - `src/4_cell_type_annotation/1_prepare_chunks.sh`: bash script that reads the preprocessed .h5ad files and creates multiple chunk files, one chunk file per 5 samples.
                 - Each chunk `chunk_*.txt` file contains the information to run per cpu core (file and samples).
