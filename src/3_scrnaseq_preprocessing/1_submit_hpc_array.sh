@@ -27,6 +27,7 @@ fi
 echo "Found ${NUM_DATASETS} datasets."
 echo "Datasets: ${DATASET_NAMES[*]}"
 
+mkdir -p "${LOGS_DIR}"
 SUBMIT_MSG=$(sbatch \
     --array=1-${NUM_DATASETS}%${MAX_NUM_CHUNKS_PARALLEL} \
     --output="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.log" \
@@ -45,7 +46,23 @@ while squeue -u "$USER" 2>/dev/null | grep -q "${ARRAY_JOB_ID}"; do
     sleep 60
 done
 
-echo "Array Job ${ARRAY_JOB_ID} finished. Syncing results to NAS..."
+# Give sacct a moment to record final states (mirrors 1_submit_hpc.sh)
+sleep 30
+
+echo "Array Job ${ARRAY_JOB_ID} finished. Checking task states..."
+STATES="$(sacct -j "${ARRAY_JOB_ID}" --format=State -n 2>/dev/null || true)"
+if [[ -z "${STATES//[[:space:]]/}" ]]; then
+    echo "ERROR: sacct returned no states for Array Job ${ARRAY_JOB_ID}; NOT syncing to NAS."
+    exit 1
+fi
+# Fail-closed: every row (array master + tasks + batch steps) must be COMPLETED.
+if grep -qvE '^ *COMPLETED *$' <<< "${STATES}"; then
+    echo "ERROR: Array Job ${ARRAY_JOB_ID} had non-COMPLETED tasks; NOT syncing to NAS."
+    sacct -j "${ARRAY_JOB_ID}" --format=JobID,JobName,State,ExitCode
+    exit 1
+fi
+
+echo "All tasks completed successfully. Syncing results to NAS..."
 SYNCED_COUNT=0
 if ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
     for DS_DIR in "${HPC_SCRATCH_DIR}"/*/output; do

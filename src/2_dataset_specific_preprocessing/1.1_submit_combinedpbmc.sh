@@ -17,4 +17,4 @@ cd "${PROJECT_ROOT}"
 
 module load GCCcore/12.2.0
 
-python "${SCRIPT_DIR}/_create_combinedpbmc_dataset.py"
+"${PYTHON_BIN}" "${SCRIPT_DIR}/_create_combinedpbmc_dataset.py"

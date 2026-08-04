@@ -28,10 +28,18 @@ if [[ ${#STEP_SCRIPTS[@]} -eq 0 ]]; then
   exit 1
 fi
 
+mkdir -p "${LOGS_DIR}"
+
 JOB_IDS=()
 for step_script in "${STEP_SCRIPTS[@]}"; do
   echo "=== Submitting $(basename "${step_script}") ==="
-  JOB_IDS+=("$(sbatch --parsable "${step_script}")")
+  # --output/--error passed on the sbatch command line (not #SBATCH lines):
+  # SLURM directives do not expand environment variables.
+  STEP_LOG_STEM="${LOGS_DIR}/$(basename "${step_script}" .sh)_%j"
+  JOB_IDS+=("$(sbatch --parsable \
+      --output="${STEP_LOG_STEM}.log" \
+      --error="${STEP_LOG_STEM}.err" \
+      "${step_script}")")
 done
 
 echo "Submitted jobs: ${JOB_IDS[*]}"

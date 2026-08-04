@@ -49,7 +49,12 @@ def main():
 
     print(f"Path is: {path_data}")
 
-    h5ad_files = sorted(path_data.glob("*.h5ad"))
+    # Skip rds->h5ad conversion caches written into the output dir by
+    # preprocess_utils.load_single_input() (they lack the standardized sample
+    # column and are not preprocessed views).
+    h5ad_files = sorted(
+        f for f in path_data.glob("*.h5ad") if not f.name.endswith("_raw.h5ad")
+    )
     print(f"Files found: {', '.join(f.name for f in h5ad_files)}")
 
     # Delete chunk file folder recursively to ensure a perfectly clean start
@@ -87,6 +92,16 @@ def main():
             global_chunk_counter += 1
 
     print(f"Successfully generated {global_chunk_counter - 1} total chunk files.")
+
+    # Delete stale per-chunk annotation feathers from earlier runs (chunk
+    # numbering is per-dataset and changes with chunk size / sample set, so a
+    # rerun must not merge leftovers from a previous numbering). Only after
+    # all chunks were generated successfully, and never in --test mode
+    # (test runs must not destroy production annotation results).
+    if not args.test:
+        for stale in path_data.glob("annotations_chunk_*.feather"):
+            stale.unlink()
+            print(f"Removed stale annotations file: {stale.name}")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,10 @@ if (project_root == "") stop("CRITICAL Error: PROJECT_ROOT not set. Source slurm
 source(file.path(project_root, "config_helper.R"))
 paths <- get_pipeline_config()
 
+# Sourcing: seurat_utils.R (get_seurat_obj_from_h5ad) — lighter than
+# load_all_functions.R (no package re-imports / conflicts with scGate & HiTME).
+source(file.path(project_root, "src/utils/seurat_utils.R"))
+
 library(scGate)
 library(ProjecTILs)
 library(SignatuR)
@@ -29,35 +33,15 @@ set.seed(123)
 # ==============================================================================
 # HELPER FUNCTIONS & PARAMETER PARSING
 # ==============================================================================
-get_sample_seurat_obj <- function(adata, r_obs, target_sample, sample_colname) {
-  sample_indices <- which(r_obs[[sample_colname]] == target_sample) - 1
-
-  subset_py <- adata[as.integer(sample_indices)]
-  raw_X_py <- subset_py$X$astype("float64")$tocsc()
-
-  counts_matrix <- py_to_r(raw_X_py)
-
-  counts_matrix <- t(counts_matrix)
-  rownames(counts_matrix) <- as.character(py_to_r(subset_py$var_names$values))
-  colnames(counts_matrix) <- as.character(py_to_r(subset_py$obs_names$values))
-
-  seurat_obj <- CreateSeuratObject(
-    counts = counts_matrix,
-    meta.data = as.data.frame(py_to_r(subset_py$obs))
-  )
-  return(seurat_obj)
-}
 
 env_sample_col    <- Sys.getenv("SAMPLE_COLNAME")
 env_tissue        <- Sys.getenv("TISSUE_TYPE")
-env_auth_annots   <- Sys.getenv("AUTHOR_ANNOT_COLNAMES")
 env_normal_tissue <- Sys.getenv("NORMAL_TISSUE")
 
 defaults <- list(
   chunk_file            = NULL,
   sample_colname        = if (env_sample_col != "") env_sample_col else "sample",
   tissue_type           = if (env_tissue != "") env_tissue else "Tumor",
-  author_annot_colnames = if (env_auth_annots != "") unlist(strsplit(env_auth_annots, ",")) else character(),
   normal_tissue         = if (env_normal_tissue != "") as.logical(env_normal_tissue) else TRUE
 )
 
@@ -81,7 +65,25 @@ if (is.null(args$chunk_file) || !file.exists(args$chunk_file)) {
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 ### Load scGate models ####
-scGate_models_DB <- get_scGateDB(branch = "dev", verbose = TRUE, force_update = TRUE)
+# Load from a shared cache (created by 0.1_create_scgate_db.R via
+# 1_prepare_chunks.sh) so array workers do not all download the model DB in
+# parallel. If the cache is missing, download once and persist it.
+scgate_db_path <- Sys.getenv("SCGATE_DB_PATH", unset = file.path(project_root, "aux", "scGateDB.rds"))
+scgate_db_branch <- Sys.getenv("SCGATE_DB_BRANCH", unset = "41a45cd3f8bb5f5a7daf21ec276f6a726f6ee0d4")
+if (scgate_db_path != "" && file.exists(scgate_db_path)) {
+  scGate_models_DB <- readRDS(scgate_db_path)
+  message("Loaded scGate DB from cache: ", scgate_db_path)
+} else {
+  message("scGate DB cache not found; downloading models (force_update=TRUE)...")
+  scGate_models_DB <- get_scGateDB(branch = scgate_db_branch, force_update = TRUE)
+  if (scgate_db_path != "") {
+    dir.create(dirname(scgate_db_path), showWarnings = FALSE, recursive = TRUE)
+    tmp_path <- paste0(scgate_db_path, ".tmp.", Sys.getpid())
+    saveRDS(scGate_models_DB, tmp_path)
+    file.rename(tmp_path, scgate_db_path)
+    message("Saved scGate DB cache to: ", scgate_db_path)
+  }
+}
 scGate_models_blood <- scGate_models_DB$human$PBMC
 scGate_models_blood$MoMac <- scGate_models_blood$Monocyte
 scGate_models_blood$Monocyte <- NULL
@@ -118,8 +120,16 @@ if (!args$sample_colname %in% colnames(obs)) {
 # ==============================================================================
 message(paste("--- Starting processing for chunk file:", args$chunk_file, "---"))
 
-chunk_id <- Sys.getenv("SLURM_ARRAY_TASK_ID")
-annot_file <- file.path(paths$path_output, paste0("annotations_chunk_", chunk_id, ".feather"))
+# Feather name is derived from the chunk file (chunk_<N>.txt ->
+# annotations_chunk_<N>.feather), NOT from SLURM_ARRAY_TASK_ID: task IDs are
+# global across datasets and renumber on reruns, which would merge stale
+# feathers. Chunk numbers are per-dataset and stable as long as the input
+# files/samples do not change; 1.1_prepare_chunks.py deletes leftover feathers
+# on every rerun.
+annot_file <- file.path(
+  paths$path_output,
+  paste0("annotations_", sub("\\.txt$", ".feather", basename(args$chunk_file)))
+)
 if (file.exists(annot_file)) {
   message(paste("Chunk already processed. Annotations exist at:", annot_file))
 } else {
@@ -127,8 +137,17 @@ if (file.exists(annot_file)) {
   for (target_sample in samples_to_process) {
     message(paste("--- Processing sample:", target_sample, "---"))
 
-    seurat_obj <- get_sample_seurat_obj(
-      adata, obs, target_sample, args$sample_colname
+    layer_keys <- py_to_r(adata$layers$keys())
+    counts_layer <- if ("counts" %in% layer_keys) "counts" else "X"
+    if (counts_layer == "X") {
+      warning("Layer 'counts' not found in ", h5ad_file,
+              "; falling back to X as counts input for scATOMIC/HiTME.")
+    }
+
+    seurat_obj <- get_seurat_obj_from_h5ad(
+      adata, obs, target_sample,
+      sample_colname = args$sample_colname,
+      counts_layer = counts_layer
     )
 
     timeout <- max(60, ncol(seurat_obj) / 10000 * 60 * 10)
