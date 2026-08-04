@@ -126,7 +126,7 @@ Four-stage end-to-end pipeline:
     - Not implemented yet: HPC pipeline bash scripts for `src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.2_benchmark_methods_py.qmd` (needs to be adapted, e.g. converted to .py and run on the cluster by calling from a bash script)
     - `src/4_cell_type_annotation` — HPC-parallelized scATOMIC + HiTME cell type annotation.
         - renv remnants removed; R environment fully managed by pixi (`pixi run Rscript`).
-        - R code extracted from bash heredoc into standalone `2.1.1.1_process_chunk.R`.
+        - R code extracted from bash heredoc into standalone `2.1.1_process_chunk.R`.
         - `config_helper.R` moved from `DEPRECATED_LEGACY_CODE/` (deleted) to project root (env-var based).
         - Annotation paths are per-dataset under `${HPC_SCRATCH_DIR}/${DS_NAME}/output` (see `config_helper.R`); annotation feathers go to `${HPC_SCRATCH_DIR}/${DS_NAME}/output` directly — `samples/`, `ecoda/`, `plots/` dirs are no longer created. `SAMPLE_COLNAME="Sample"` is exported by `slurm_config.sh` (preprocess standardizes the sample column), and `TISSUE_TYPE`/`NORMAL_TISSUE` are auto-exported per array task from `datasets.json` by `2.1_run_worker.sh` (via jq, `module load jq/1.6` on the worker).
         - See [ARCHITECTURE.md](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-stage-2b) for full pipeline documentation.

@@ -46,8 +46,9 @@
 - [x] **HPC layout documented**: new "HPC Folder Layout" section in `docs/ARCHITECTURE.md` (tree + per-folder table incl. `CombinedPBMC/data/` dual role, `output/<DS_NAME>/` contents, NAS targets) + summary in `AGENTS.md`
 
 ## Step 1 - Check if cell type annotation pipeline can be simplified
+- [x] **Wrapper chain collapsed to 3 levels** (mirrors `src/3_scrnaseq_preprocessing/`): `2.1.1_process_chunk.sh` merged into `2.1_run_worker.sh`; `2.1.1.1_process_chunk.R` renamed to `2.1.1_process_chunk.R`; legacy `chunk_file__` arg encoding removed (R script now takes the chunk path as its single positional arg)
 - Is `config_helper.R` still needed or should this better be handled in `slurm_config.sh`? (open reviewer point — see `## Open reviewer points`)
-  - If `config_helper.R` is easier and cleaner, then check `1.1_prepare_chunks.r` and `2.1.1.1_process_chunk.R` to see if they can be simplified
+  - If `config_helper.R` is easier and cleaner, then check `1.1_prepare_chunks.r` and `2.1.1_process_chunk.R` to see if they can be simplified
 - Check if any `*_prepare_chunks.sh` and `*_process_chunk.sh` can be simplified by centralizing any more paths into `slurm_config.sh`
 
 

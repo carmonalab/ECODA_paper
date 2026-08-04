@@ -1,8 +1,8 @@
 # ==============================================================================
-# 2.1.1.1_process_chunk.R — Process one chunk of samples for cell type annotation
+# 2.1.1_process_chunk.R — Process one chunk of samples for cell type annotation
 # ==============================================================================
-# Called by 2.1.1_process_chunk.sh (pixi run Rscript --vanilla)
-# Expects a single argument: chunk_file__<path_to_chunk_txt>
+# Called by 2.1_run_worker.sh (pixi run Rscript --vanilla)
+# Expects a single argument: <path_to_chunk_txt>
 # ==============================================================================
 
 project_root <- Sys.getenv("PROJECT_ROOT")
@@ -69,16 +69,7 @@ annot_cols <- c(hitme_cols_keep, scatomic_cols)
 
 raw_args <- commandArgs(trailingOnly = TRUE)
 args <- defaults
-
-if (length(raw_args) > 0) {
-  parsed_args_list <- unlist(strsplit(raw_args[1], "__"))
-  keys <- parsed_args_list[seq(1, length(parsed_args_list), by = 2)]
-  vals <- parsed_args_list[seq(2, length(parsed_args_list), by = 2)]
-
-  args_list <- as.list(vals)
-  names(args_list) <- keys
-  args <- modifyList(defaults, args_list)
-}
+if (length(raw_args) > 0) args$chunk_file <- raw_args[1]
 
 if (is.null(args$chunk_file) || !file.exists(args$chunk_file)) {
   stop("Valid 'chunk_file' parameter not parsed from execution context!")
