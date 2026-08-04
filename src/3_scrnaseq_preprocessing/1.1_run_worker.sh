@@ -35,10 +35,18 @@ DATA_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/data"
 OUTPUT_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/output"
 mkdir -p "${DATA_DIR}" "${OUTPUT_DIR}"
 
+# FORCE_PREPROCESS is exported by 1_submit_hpc_array.sh (--force); forward it
+# to 1.1.1_preprocess.py so existing outputs are recomputed (debug re-runs).
+FORCE_FLAG=""
+if [[ "${FORCE_PREPROCESS:-0}" == "1" ]]; then
+  FORCE_FLAG="--force"
+fi
+
 "${PYTHON_BIN}" "${SCRIPT_DIR}/1.1.1_preprocess.py" \
     --config_path "${DATASETS_JSON_FILE}" \
     --input_dir "${DATA_DIR}" \
     --output_dir "${OUTPUT_DIR}" \
-    --ds_name "${DS_NAME}"
+    --ds_name "${DS_NAME}" \
+    ${FORCE_FLAG}
 
 echo "Preprocessing complete for ${DS_NAME}"

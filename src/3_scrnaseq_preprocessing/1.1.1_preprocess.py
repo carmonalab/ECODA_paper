@@ -102,6 +102,19 @@ def run_clustering(adata, rep_key, key_suffix, resolutions):
 # Shared setup: gene standardization + counts vaulting + normalize/log
 # ---------------------------------------------------------------------------
 def base_preprocessing(adata):
+    # anndataR-produced inputs (e.g. the _debug h5ad) can have X=None with the
+    # raw counts in layers["counts"]; promote the counts layer to X before any
+    # X-dependent step (filter_cells etc.).
+    if adata.X is None:
+        if "counts" in adata.layers:
+            adata.X = adata.layers["counts"].copy()
+        elif adata.raw is not None:
+            adata.X = adata.raw.X.copy()
+        else:
+            raise ValueError(
+                "Input has neither X, nor a counts layer, nor raw counts; cannot preprocess."
+            )
+
     sc.pp.filter_cells(adata, min_genes=100)
     sc.pp.filter_genes(adata, min_cells=3)
 
@@ -180,7 +193,7 @@ def process_view(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def main(config_path, input_dir, output_dir, ds_name=None):
+def main(config_path, input_dir, output_dir, ds_name=None, force=False):
     os.makedirs(output_dir, exist_ok=True)
 
     config = read_datasets_json(config_path)
@@ -210,7 +223,7 @@ def main(config_path, input_dir, output_dir, ds_name=None):
                 continue
 
             processed_file_path = output_dir / output_file_name
-            if processed_file_path.exists():
+            if processed_file_path.exists() and not force:
                 print(f"Already processed: {current_ds} / {view_name}")
                 continue
 
@@ -275,6 +288,10 @@ if __name__ == "__main__":
                         help="Output directory for processed .h5ad files")
     parser.add_argument("--ds_name", default=None,
                         help="Only process this dataset (skip all others; default: all datasets)")
+    parser.add_argument("--force", action="store_true", default=False,
+                        help="Recompute views whose output .h5ad already exists "
+                             "(bypasses the 'Already processed' skip; needed for "
+                             "debug re-runs or after code changes)")
     args = parser.parse_args()
     main(config_path=args.config_path, input_dir=args.input_dir,
-         output_dir=args.output_dir, ds_name=args.ds_name)
+         output_dir=args.output_dir, ds_name=args.ds_name, force=args.force)

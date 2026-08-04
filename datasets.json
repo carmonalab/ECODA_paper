@@ -1,4 +1,36 @@
 {
+  "_debug": {
+    "display_name": "Debug (Joanito 5-sample subset)",
+    "file_names": "JoaI_2022_35773407_debug_5samples.h5ad",
+    "folder_name": "debug",
+    "tissue": "Colon",
+    "normal_tissue": false,
+    "use_for_benchmark": true,
+    "use_for_batch_effect": true,
+    "columns": {
+      "sample": "sample.ID",
+      "label": "sample.origin",
+      "batch": "Site",
+      "cell_type_low_res": "cell.type",
+      "cell_type_high_res": "cell.type"
+    },
+    "meta_cols_keep": [
+      "sample.ID", "sample.origin", "patient.ID", "iCMS",
+      "dataset", "Gender", "Site", "cell.type", "seqtec"
+    ],
+    "views": {
+      "benchmark_analysis": {
+        "input_file_name": "JoaI_2022_35773407_debug_5samples.h5ad",
+        "output_file_name": "JoaI_2022_35773407_debug_5samples_benchmark_analysis_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      },
+      "batch_effect_analysis": {
+        "input_file_name": "JoaI_2022_35773407_debug_5samples.h5ad",
+        "output_file_name": "JoaI_2022_35773407_debug_5samples_batch_effect_analysis_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      }
+    }
+  },
   "Adams": {
     "display_name": "Adams (pulmonary fibrosis)",
     "file_names": "AdamsT_2020_32832599.rds",

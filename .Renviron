@@ -1,1 +1,6 @@
+# Unix virtual-memory cap for R.
+# NOTE: only applies to NON-vanilla R sessions (interactive use, IDEs,
+# notebook knitting). HPC pipeline workers run `pixi run Rscript --vanilla`
+# (--no-environ), so .Renviron is NOT read there — worker memory is governed
+# by their SLURM --mem allocations in slurm_config.sh / #SBATCH headers.
 R_MAX_VSIZE=200Gb

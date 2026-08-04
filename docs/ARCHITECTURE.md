@@ -36,6 +36,7 @@ $HOME/ECODA_paper                       # repo clone (PROJECT_ROOT): logs/, aux/
 $HOME/scratch/ECODA_paper               # HPC_SCRATCH_DIR
 ├── <DS_NAME>/data/                     # staged raw inputs per dataset (1_stage_data.sh)
 ├── <DS_NAME>/output/                   # preprocessed .h5ad per view, chunks/, annotations, annotated .h5ad
+├── <DS_NAME>/annotation_union/         # per-dataset union h5ad for annotation (outside synced output dir)
 ├── CombinedPBMC/data/                  # combine output + rds→h5ad cache (CombinedPBMC/output/ holds its preprocessed output)
 └── chunks_manifest.txt                 # global chunk manifest (2_submit_hpc_array.sh)
 $HOME/reference_atlases/sketched_200ct/ # HOME_REF_DIR (HiTME reference maps)
@@ -53,6 +54,7 @@ batch_effect_analysis/{embeddings,plots}/           # same, for batch effect ana
 |---|---|---|
 | `${HPC_SCRATCH_DIR}/<DS_NAME>/data/` | `HPC_SCRATCH_DIR` | Staged raw inputs per dataset (`1_stage_data.sh` rsyncs from `NAS_SC_DIR`) |
 | `${HPC_SCRATCH_DIR}/<DS_NAME>/output/` | `HPC_SCRATCH_DIR` | Preprocessed .h5ad per view (keys `X_pca_{view}_hvg{n}`, ...); during annotation additionally `chunks/chunk_*.txt`, `annotations_chunk_*.feather`, merged annotated .h5ad |
+| `${HPC_SCRATCH_DIR}/<DS_NAME>/annotation_union/` | `HPC_SCRATCH_DIR` | Per-dataset union h5ad (`union.h5ad`, concat of all views, dedup on `(sample, barcode)`), chunked + annotated ONCE per dataset; OUTSIDE the synced `output/` dir so NAS-sync globs stay clean; deleted by `3.1_submit_merge.sh` after merging |
 | `${HPC_SCRATCH_DIR}/CombinedPBMC/data/` | `HPC_SCRATCH_DIR` | Dual role: output of the CombinedPBMC combine step and rds→h5ad cache; input to the preprocess array (`CombinedPBMC/output/` holds its preprocessed output) |
 | `${HPC_SCRATCH_DIR}/chunks_manifest.txt` | `HPC_SCRATCH_DIR` | Global chunk manifest (one `DS_NAME<TAB>chunk_path` line per chunk), rebuilt by `2_submit_hpc_array.sh` on every run |
 | `${HOME_REF_DIR}` | `HOME_REF_DIR` | HiTME reference maps (staged from `NAS_REF_DIR` by `1_prepare_chunks.sh`) |
@@ -70,17 +72,17 @@ The preprocessing stage is split across three `src/` folders run in sequence:
 
 | Folder | Role |
 |---|---|
-| `src/1_stage_data/` | `1_stage_data.sh` — login-node script: sources `slurm_config.sh`, stages raw inputs from NAS to HPC scratch (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`) via jq over `datasets.json` + rsync. Datasets with views emit each view's `input_file_name`; view-less datasets (`"views": {}`, e.g. Zhu) fall back to the dataset-level `file_names`; `sort -u` dedups files shared across views and datasets with `folder_name: null` (CombinedPBMC) are skipped. |
-| `src/2_dataset_specific_preprocessing/` | `1_submit_hpc.sh` dispatcher submits all per-step sbatch jobs in this folder in parallel (`1.1_submit_combinedpbmc.sh`, `1.2_submit_joanito_batch_col.sh`), passing per-step `--partition`/`--output`/`--error` on the sbatch command line (SLURM directives cannot expand env vars, so the flags are given on the sbatch command line; partition comes from `${SLURM_PARTITION}` in `slurm_config.sh`), waits for all, reports per-job state via `sacct` and exits non-zero on any failure. Steps must be mutually independent. Run after staging, before the preprocess array. |
+| `src/1_stage_data/` | `1_stage_data.sh` — login-node script: sources `slurm_config.sh`, stages raw inputs from NAS to HPC scratch (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`) via jq over `datasets.json` + rsync. Datasets with views emit each view's `input_file_name`; view-less datasets (`"views": {}`, e.g. Zhu) fall back to the dataset-level `file_names`; `sort -u` dedups files shared across views and datasets with `folder_name: null` (CombinedPBMC) are skipped. Supports `--ds_name <DS>` single-dataset mode; default-all runs skip keys starting with `_` (e.g. the `_debug` entry) unless explicitly requested. |
+| `src/2_dataset_specific_preprocessing/` | `1_submit_hpc.sh` dispatcher submits all per-step sbatch jobs in this folder in parallel (`1.1_submit_combinedpbmc.sh`, `1.2_submit_joanito_batch_col.sh`, `1.4_submit_kfoury_lowres_ct.sh`), passing per-step `--partition`/`--output`/`--error` on the sbatch command line (SLURM directives cannot expand env vars, so the flags are given on the sbatch command line; partition comes from `${SLURM_PARTITION}` in `slurm_config.sh`), waits for all, reports per-job state via `sacct` and exits non-zero on any failure. Steps must be mutually independent. Run after staging, before the preprocess array. `1.3.1_create_debug_dataset.R` is a LOCAL script (not in the `1.*_submit_*.sh` glob) that builds the `_debug` subset. |
 | `src/3_scrnaseq_preprocessing/` | `1_submit_hpc_array.sh` (array submit + monitor + rsync back to NAS), `1.1_run_worker.sh`, `1.1.1_preprocess.py`. |
 
 #### Files # TODO
 
 | File | Role |
 |---|---|
-| `1_submit_hpc_array.sh` | Thin bash wrapper: sources `slurm_config.sh`, submits the preprocess array (`1.1_run_worker.sh`; `--partition="${SLURM_PARTITION}"` passed on the sbatch command line — SLURM directives do not expand env vars), monitors completion, verifies via `sacct` that every task state is `COMPLETED` (fail-closed: aborts without syncing on any non-COMPLETED state or empty sacct output), rsyncs results back to NAS (login node). Raw-data staging no longer lives here — see `src/1_stage_data/1_stage_data.sh`. |
-| `1.1_run_worker.sh` | `#SBATCH` worker: sources `slurm_config.sh`, resolves its dataset from `SLURM_ARRAY_TASK_ID`, calls `1.1.1_preprocess.py` (via `${PYTHON_BIN}`) with `--config_path/--input_dir/--output_dir/--ds_name`. |
-| `1.1.1_preprocess.py` | Standardized preprocessing: filtering, gene/sample name standardization, sample subsetting (from `datasets.json`; subsetting runs on original values BEFORE the sample column is standardized, and errors out if the subset is empty), batch-aware HVG selection, PCA, Harmony integration, Leiden clustering. Writes one .h5ad per view. **CSR-on-disk by construction**: `base_preprocessing()` forces `tocsr()` on `X` and `layers["counts"]` unconditionally (not only dense inputs); scanpy ops afterwards (normalize_total, log1p, HVG selection, subsetting) preserve CSR and `write_h5ad()` preserves the in-memory format, so the written files are always CSR. |
+| `1_submit_hpc_array.sh` | Thin bash wrapper: sources `slurm_config.sh`, submits the preprocess array (`1.1_run_worker.sh`; `--partition="${SLURM_PARTITION}"` passed on the sbatch command line — SLURM directives do not expand env vars), monitors completion, verifies via `sacct` that every task state is `COMPLETED` (fail-closed: aborts without syncing on any non-COMPLETED state or empty sacct output), rsyncs results back to NAS (login node; single-dataset mode syncs only the requested dataset). Supports `--ds_name <DS>` single-dataset mode (1-task array at the dataset's position in the sorted jq key list, so the worker's `sed -n ${SLURM_ARRAY_TASK_ID}p` mapping needs no change) and `--force` (recomputes existing outputs; forwarded to the workers via the `FORCE_PREPROCESS` env var); default-all runs skip `_*` keys — this relies on `_` sorting after all uppercase-initial dataset keys, making the non-`_` keys a prefix of the sorted keys. Raw-data staging no longer lives here — see `src/1_stage_data/1_stage_data.sh`. |
+| `1.1_run_worker.sh` | `#SBATCH` worker: sources `slurm_config.sh`, resolves its dataset from `SLURM_ARRAY_TASK_ID`, calls `1.1.1_preprocess.py` (via `${PYTHON_BIN}`) with `--config_path/--input_dir/--output_dir/--ds_name` (+ `--force` when `FORCE_PREPROCESS=1`). |
+| `1.1.1_preprocess.py` | Standardized preprocessing: filtering, gene/sample name standardization, sample subsetting (from `datasets.json`; subsetting runs on original values BEFORE the sample column is standardized, and errors out if the subset is empty), batch-aware HVG selection, PCA, Harmony integration, Leiden clustering. Writes one .h5ad per view. Promotes an `X=None` input with a `counts` layer to `X` (anndataR-written files, e.g. the `_debug` h5ad). `--force` bypasses the "Already processed" skip (needed for debug re-runs). **CSR-on-disk by construction**: `base_preprocessing()` forces `tocsr()` on `X` and `layers["counts"]` unconditionally (not only dense inputs); scanpy ops afterwards (normalize_total, log1p, HVG selection, subsetting) preserve CSR and `write_h5ad()` preserves the in-memory format, so the written files are always CSR. |
 
 - **View output keys** (unified per-view pipeline, `1.1.1_preprocess.py`): both view types get the same treatment; only the HVG `batch_key` differs (benchmark views: standardized sample column from `SAMPLE_COLNAME`; batch-effect views: the dataset's `batch_col`).
   - `X_pca_{view}_hvg{n}` — stored for **every** HVG size (`benchmark_analysis`: 3000/2000/1000; `batch_effect_analysis`: 2000).
@@ -94,7 +96,9 @@ The preprocessing stage is split across three `src/` folders run in sequence:
 - **Dataset-specific preprocessing steps** (all submitted via the `1_submit_hpc.sh` dispatcher, in parallel):
   - **CombinedPBMC combine** (`1.1_submit_combinedpbmc.sh` → `1.1.1_create_combinedpbmc_dataset.py`): HPC-capable. With `HPC_SCRATCH_DIR` set it defaults to `--layout per-dataset` (sources at `${HPC_SCRATCH_DIR}/<ds>/data`, output `${HPC_SCRATCH_DIR}/CombinedPBMC/data`); locally it defaults to the flat `PROJECT_ROOT/data` layout. 64G baseline — GongSharma is huge and may need more. Script is CWD-independent; still submitted via the `1_submit_hpc.sh` dispatcher.
   - **Joanito batch column** (`1.2_submit_joanito_batch_col.sh` → `1.2.1_create_joanito_batch_col.R`): computes the `seqtec` batch column in place (idempotent) from `${HPC_SCRATCH_DIR}/Joanito/data/JoaI_2022_35773407_Nofilt_whole.rds`. 32G mem baseline — the whole .rds is read and re-saved in a single process. Required before the preprocess array (the `batch_effect_analysis` view uses it as `batch_col`).
-  - Both must run **after** `1_stage_data.sh` and **before** `1_submit_hpc_array.sh` (staging skips `folder_name: null` datasets, and the preprocess array task reads the combined file). Processing scripts follow the decimal depth convention (`N.N.N_<action>.<ext>`, mirroring `1.1.1_preprocess.py`/`2.1.1_process_chunk.R`).
+  - **Kfoury low-res cell types** (`1.4_submit_kfoury_lowres_ct.sh` → `1.4.1_create_kfoury_lowres_ct.R`): ported from `Preprocess_datasets.Rmd` — collapses the author `cells` annotations into `cells_lowres` (Tcells/NKcells/Bcells/MoMac/DCcells, other labels kept) in place (idempotent) from `${HPC_SCRATCH_DIR}/Kfoury/data/Kfoury_2021_34719426.rds`. 32G mem baseline. Required before the preprocess array (`columns.cell_type_low_res = "cells_lowres"` for Kfoury).
+  - **Debug subset build** (`1.3.1_create_debug_dataset.R`): LOCAL script (NOT in the `1.*_submit_*.sh` dispatcher glob — no `1.3_submit_*.sh` wrapper). Reads the Joanito raw input, selects 5 samples covering conditions/batches/sites, subsets 500 cells/sample (seeded), keeps minimal obs cols (incl. `seqtec`, `Site`), writes `data/debug/JoaI_2022_35773407_debug_5samples.{rds,h5ad}`. The user places these on the NAS under `Standardized_SingleCell_Datasets/debug/output/` before staging `_debug` on the HPC.
+  - Steps must run **after** `1_stage_data.sh` and **before** `1_submit_hpc_array.sh` (staging skips `folder_name: null` datasets, and the preprocess array task reads the combined file). Processing scripts follow the decimal depth convention (`N.N.N_<action>.<ext>`, mirroring `1.1.1_preprocess.py`/`2.1.1_process_chunk.R`).
 
 
 ### Cell Type Annotation Pipeline (`src/4_cell_type_annotation/`)
@@ -106,30 +110,38 @@ Cell type annotation runs as a **separate HPC-parallelized pipeline** on SLURM, 
 ```
 [ Monolithic h5ad Files on NAS ]
                │
-                ▼ (1_prepare_chunks.sh → 1.1_prepare_chunks.py)
-     [ chunk_1.txt ]  [ chunk_2.txt ]  ...  [ chunk_N.txt ]  (5 samples each)
+               ▼ (1_prepare_chunks.sh → 1.1_prepare_chunks.py)
+   [ per-dataset union.h5ad (annotation_union/, dedup (sample, barcode)) ]
+               │
+               ▼
+      [ chunk_1.txt ]  [ chunk_2.txt ]  ...  [ chunk_N.txt ]  (5 samples each)
                │               │
                ▼ (SLURM Array) ▼ (SLURM Array)
           [ Worker 1 ]     [ Worker 2 ]  ...              (2.1_run_worker.sh)
                │               │
                ▼               ▼
-     [ chunk_1.feather ] ... [ chunk_N.feather ]           (annotations on scratch)
+      [ chunk_1.feather ] ... [ chunk_N.feather ]           (annotations on scratch)
                │               │
-               ▼  (3_merge_annotations.py)  ▼
-     [ annotated .h5ad on NAS ]
+               ▼  (3.1_submit_merge.sh → 3_merge_annotations.py, per view h5ad) ▼
+      [ annotated .h5ad on NAS ]   (union.h5ad + chunks deleted after merge)
 ```
+
+Annotations run ONCE per dataset (on the union); the merge step joins the same
+feather set into EVERY view h5ad of the dataset on the `(sample, barcode)` key.
+For single-view datasets the union is the view file itself (no copy).
 
 #### Files
 
 | File | Role |
 |---|---|
-| `1_prepare_chunks.sh` | Thin bash wrapper: sources `slurm_config.sh`, stages ref maps from NAS → scratch (raw data is staged by `src/1_stage_data/1_stage_data.sh`), then iterates over all datasets in `datasets.json` (or a single dataset passed as 2nd positional arg) calling `1.1_prepare_chunks.py` (`${PYTHON_BIN}`) via `srun` (4G, 30min, `--partition="${SLURM_PARTITION}"` at submit time) per dataset. Datasets without preprocessed `.h5ad` input are skipped with a warning. Supports `test` mode (`./1_prepare_chunks.sh test` → 1 sample/chunk). |
-| `1.1_prepare_chunks.py` | Native Python (anndata, no reticulate): reads each .h5ad in backed mode (skipping `*_raw.h5ad` rds→h5ad conversion caches left by `preprocess_utils.load_single_input()`), extracts unique sample IDs from `sample_col` (env var `SAMPLE_COLNAME`), groups them into chunks of 5 (or 1 in test mode), writes `chunk_N.txt` files (1st line = h5ad path, subsequent lines = sample IDs). In production mode only, deletes stale `annotations_chunk_*.feather` from the output dir AFTER all chunks were generated successfully, so reruns cannot merge leftover annotations from an earlier chunk numbering (test mode leaves production feathers untouched). |
+| `1_prepare_chunks.sh` | Thin bash wrapper: sources `slurm_config.sh`, stages ref maps from NAS → scratch (raw data is staged by `src/1_stage_data/1_stage_data.sh`), then iterates over all datasets in `datasets.json` (or a single dataset passed as 2nd positional arg) calling `1.1_prepare_chunks.py` (`${PYTHON_BIN}`) via `srun` (4G, 30min, `--partition="${SLURM_PARTITION}"` at submit time) per dataset. Datasets without preprocessed `.h5ad` input are skipped with a warning. Supports `test` mode (`./1_prepare_chunks.sh test <DS>` → 1 sample/chunk). |
+| `1.1_prepare_chunks.py` | Native Python (anndata, no reticulate): builds ONE chunk set per DATASET. For multi-view datasets it first constructs the per-dataset union h5ad at `${HPC_SCRATCH_DIR}/${DS_NAME}/annotation_union/union.h5ad` (dedup on `(sample, barcode)`): if a single view already equals the union (e.g. Stephenson, benchmark ⊂ batch-effect view) the union is a hardlink to that view (file-copy fallback; backed obs-only reads); only truly partial-overlap views fall back to an in-memory `sc.concat` + dedup (warning printed; needs a raised srun `--mem`). Reads the union in backed mode (skipping `*_raw.h5ad` rds→h5ad conversion caches), extracts unique sample IDs from `sample_col` (env var `SAMPLE_COLNAME`), groups them into chunks of 5 (or 1 in test mode), writes `chunk_N.txt` files (1st line = union h5ad path, subsequent lines = sample IDs). In production mode only, deletes stale `annotations_chunk_*.feather` from the output dir AFTER all chunks were generated successfully, so reruns cannot merge leftover annotations from an earlier chunk numbering (test mode leaves production feathers untouched). |
 | `2.0_create_scgate_db.R` | One-time download of the scGate model DB (`get_scGateDB(..., force_update=TRUE)`), persisted to `${SCGATE_DB_PATH}` (`aux/scGateDB.rds`). Run from `2_submit_hpc_array.sh` before the annotation array so workers do not download in parallel. Idempotent (exits early if the cache exists). |
 | `2_submit_hpc_array.sh` | Creates the scGate model DB cache once via `srun` (`2.0_create_scgate_db.R` → `${SCGATE_DB_PATH}`; `--partition="${SLURM_PARTITION}"`; failure is non-fatal, workers download + persist themselves), builds a global chunk manifest (`${HPC_SCRATCH_DIR}/chunks_manifest.txt`, one tab-separated `DS_NAME<TAB>chunk_path` line per chunk across all datasets or a single dataset passed as positional arg), submits a single SLURM array job (`--array=1-TOTAL_CHUNKS`, `MAX_NUM_CHUNKS_PARALLEL` concurrency, `--partition="${SLURM_PARTITION}"`), monitors for completion, verifies via `sacct` that EVERY task state is `COMPLETED` (fail-closed: aborts without syncing on any non-COMPLETED state or empty sacct output), then syncs results back to NAS via rsync (per-dataset `${NAS_TARGET_DIR}/${DS_NAME}/output`; in single-dataset mode only that dataset is synced). |
 | `2.1_run_worker.sh` | `#SBATCH` worker (16G, 2h; partition from `${SLURM_PARTITION}` at submit time). Sources `slurm_config.sh`, loads jq (module loads do not propagate from the submit script), reads its `DS_NAME`/`CHUNK_FILE` from the global manifest line matching `SLURM_ARRAY_TASK_ID` (`sed -n`), auto-exports per-dataset `TISSUE_TYPE`/`NORMAL_TISSUE` from `datasets.json`, checks the chunk file exists, then calls `2.1.1_process_chunk.R` directly via `${PIXI_RSCRIPT}`. |
-| `2.1.1_process_chunk.R` | Core annotation logic: reads the chunk's h5ad file **in backed mode** (`read_h5ad(..., backed="r")`; `obs` is metadata-only — read once via `py_to_r(adata$obs)` and reused for every sample), warns (not stops) if the on-disk X format is not `csr` (`adata$X$format`; anndata only overrides selective row-indexing for backed CSR — CSC would fall back to a full in-memory read per subset, i.e. silent OOM), then iterates per sample, extracts sample-level Seurat objects from the raw counts layer (`get_seurat_obj_from_h5ad()`, `counts_layer="counts"` with `X` fallback + warning; sourced from `src/utils/seurat_utils.R`), runs **scATOMIC** (5 attempts with timeout) then **HiTME** (5 attempts with timeout). scGate models load from the shared `${SCGATE_DB_PATH}` cache (download + persist fallback). Writes per-chunk `.feather` named after the chunk file (`chunk_1.txt` → `annotations_chunk_1.feather`), so reruns are stable regardless of array task renumbering. Dual annotation: scATOMIC provides layer-1..6 predictions + confidence; HiTME provides layer1/2/3 UCell signatures + scGate/ProjecTILs refinement. Only annotation columns are kept (not full Seurat objects). |
-| `3_merge_annotations.py` | Reads all `annotations_chunk_*.feather` files, joins them into the input `.h5ad`'s `obs` on a `(sample, barcode)` composite key (barcodes repeat across samples and views; duplicate keys are dropped with a warning; `SAMPLE_COLNAME` read from env, default "Sample", on BOTH sides — the feather annotations column and the h5ad obs sample column — keeping the join key consistent), keeps only the whitelisted annotation columns, writes annotated `.h5ad`. |
+| `2.1.1_process_chunk.R` | Core annotation logic: reads the chunk's h5ad file (the per-dataset union) **in backed mode** (`read_h5ad(..., backed="r")`; `obs` is metadata-only — read once via `py_to_r(adata$obs)` and reused for every sample), warns (not stops) if the on-disk X format is not `csr` (`adata$X$format`; anndata only overrides selective row-indexing for backed CSR — CSC would fall back to a full in-memory read per subset, i.e. silent OOM), then iterates per sample, extracts sample-level Seurat objects from the raw counts layer (`get_seurat_obj_from_h5ad()`, `counts_layer="counts"` with `X` fallback + warning; sourced from `src/utils/seurat_utils.R`), runs **scATOMIC** (5 attempts with timeout) then **HiTME** (5 attempts with timeout). scGate models load from the shared `${SCGATE_DB_PATH}` cache (download + persist fallback). Writes per-chunk `.feather` named after the chunk file (`chunk_1.txt` → `annotations_chunk_1.feather`), so reruns are stable regardless of array task renumbering. Dual annotation: scATOMIC provides layer-1..6 predictions + confidence; HiTME provides layer1/2/3 UCell signatures + scGate/ProjecTILs refinement. Only annotation columns are kept (not full Seurat objects). |
+| `3.1_submit_merge.sh` | Per-dataset merge wrapper (`./3.1_submit_merge.sh <DS_NAME>`): fails if no `annotations_chunk_*.feather` exist or if the feather count does not match the chunk manifest (`chunks_manifest.txt`, regenerated per annotation run — guards against merging a partially failed annotation array), verifies NAS reachability BEFORE any destructive step, loops over the dataset's view h5ads in `${HPC_SCRATCH_DIR}/${DS_NAME}/output`, runs `3_merge_annotations.py` per view via `srun` (64G baseline — big views like Stephenson's batch-effect view may need more; `--partition` at submit time), then deletes the stale `annotation_union/` dir and `output/chunks/` (both are regenerated by the next `1_prepare_chunks.sh` run; the chunk files pin the deleted union path and must not be reused), and rsyncs the annotated h5ads to `${NAS_TARGET_DIR}/${DS_NAME}/output/`. Re-runs are safe (idempotent merge). |
+| `3_merge_annotations.py` | Reads all `annotations_chunk_*.feather` files (argparse CLI: `--h5ad-path` required, `--annot-dir` defaults to the .h5ad's parent, `--output-path` defaults to overwriting the input), joins them into the input `.h5ad`'s `obs` on a `(sample, barcode)` composite key (barcodes repeat across samples and views; duplicate keys are dropped with a warning; `SAMPLE_COLNAME` read from env, default "Sample", on BOTH sides — the feather annotations column and the h5ad obs sample column — keeping the join key consistent), drops existing whitelisted annotation columns first (idempotent re-merge), keeps only the whitelisted annotation columns, writes the annotated `.h5ad` atomically (temp file + `os.replace`). |
 | `config_helper.R` | (Project root) Builds path config from env vars exported by `slurm_config.sh` (`DS_NAME`, `HPC_SCRATCH_DIR`). All dataset-specific paths are per-dataset under `${HPC_SCRATCH_DIR}/${DS_NAME}/output` (`path_data`, `path_output`); `path_ref` is a home resource (`HOME_REF_DIR`). Annotation feathers go to `${HPC_SCRATCH_DIR}/${DS_NAME}/output` directly (`path_output`) — the old `samples/`, `ecoda/`, `plots/` dirs are no longer created. Missing env vars raise `stop()` errors (no silent fallbacks). Called by `2.1.1_process_chunk.R`. |
 
 #### Key design details
@@ -137,7 +149,7 @@ Cell type annotation runs as a **separate HPC-parallelized pipeline** on SLURM, 
 - **scATOMIC + HiTME dual annotation**: scATOMIC provides hierarchical cell-type predictions (layer_1..6) with confidence scores; HiTME annotates using scGate models + ProjecTILs reference maps, producing layer1/2/3 labels. Both are run on each sample independently (i.e. independent from the rest of the dataset).
 - **Retry loops**: Both annotation methods have up to 5 retry attempts with dynamic timeouts (max(60s, n_cells/10000 × 600s)) to handle HPC node variability.
 - **NAS ↔ Scratch data flow**: Raw-data staging from NAS to scratch happens only in `src/1_stage_data/1_stage_data.sh` (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`); cell type annotation consumes the preprocessed output of that pipeline (`${HPC_SCRATCH_DIR}/${DS_NAME}/output` per dataset, matching `config_helper.R`). `1_prepare_chunks.sh` stages reference maps; `2_submit_hpc_array.sh` creates the scGate model DB cache (gene standardization moved into `1.1.1_preprocess.py`; the `GENE_REF_FILE` staging block was removed). The gene reference is committed to the repo at `aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz` (Ensembl 105, GRCh38.p13), originally downloaded 14.02.2022 from https://raw.githubusercontent.com/carmonalab/scRNAseq_data_processing/master/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz; it is consumed by `src/gene_utils.py`. Worker nodes only access scratch. After array completes, login node rsyncs results back to NAS.
-- **Environment propagation**: `slurm_config.sh` `export`s all core vars (`PROJECT_ROOT`, `DATASETS_JSON_FILE`, `HPC_SCRATCH_DIR`, `SAMPLE_COLNAME`, ref/gene files, `PYTHON_BIN`, `PIXI_RSCRIPT`, `SCGATE_DB_PATH`, ...) so they reach R via `Sys.getenv()` and Python via `os.environ` through both `srun` (`1_prepare_chunks.sh`, `2_submit_hpc_array.sh`) and `sbatch` (`2_submit_hpc_array.sh`). Bash arrays do not propagate through `sbatch`, so workers derive `DS_NAME` from `datasets.json` (via jq, loaded on the worker — module loads do not propagate either); `2.1_run_worker.sh` auto-exports per-task `TISSUE_TYPE`/`NORMAL_TISSUE` from `datasets.json`.
+- **Environment propagation**: `slurm_config.sh` `export`s all core vars (`PROJECT_ROOT`, `DATASETS_JSON_FILE`, `HPC_SCRATCH_DIR`, `SAMPLE_COLNAME`, ref/gene files, `PYTHON_BIN`, `PIXI_RSCRIPT`, `RETICULATE_PYTHON`, `SCGATE_DB_PATH`, ...) so they reach R via `Sys.getenv()` and Python via `os.environ` through both `srun` (`1_prepare_chunks.sh`, `2_submit_hpc_array.sh`) and `sbatch` (`2_submit_hpc_array.sh`). `RETICULATE_PYTHON` pins R's reticulate to the pixi python (reticulate's own discovery may otherwise pick a stray `~/.virtualenvs/r-reticulate` on the worker); the project-root `.Rprofile` mirrors this but only applies to non-vanilla R sessions (`PIXI_RSCRIPT` uses `--vanilla`). Bash arrays do not propagate through `sbatch`, so workers derive `DS_NAME` from `datasets.json` (via jq, loaded on the worker — module loads do not propagate either); `2.1_run_worker.sh` auto-exports per-task `TISSUE_TYPE`/`NORMAL_TISSUE` from `datasets.json`.
 - **Counts input**: scATOMIC/HiTME receive the raw counts from `layers["counts"]` (vaulted by `base_preprocessing`), not the log-normalized `X`; if the layer is missing, `X` is used with a warning.
 - **Backed per-sample reads are selective**: preprocessed `.h5ad` files are CSR-on-disk for both `X` and `layers["counts"]` (see `1.1.1_preprocess.py` above), so `get_seurat_obj_from_h5ad()`'s per-sample row subset (`adata[cell_indices]`) reads only the selected rows' segments (`backed_csr_matrix` selective indexing); `obs` is metadata-only and never triggers matrix I/O. On a CSC-on-disk file the same subset would materialize the full matrix in memory per sample (anndata has no selective row-indexing override for CSC) — `2.1.1_process_chunk.R` warns on non-CSR input.
 - **Output format**: Per-chunk `.feather` files (Apache Arrow, cross-language), named after the chunk file (`annotations_chunk_<N>.feather`) → merged into original `.h5ad` by `3_merge_annotations.py` on a `(sample, barcode)` composite key.
@@ -145,7 +157,7 @@ Cell type annotation runs as a **separate HPC-parallelized pipeline** on SLURM, 
 #### Usage
 
 ```bash
-# 1. Prepare chunks (stages data + generates chunk files)
+# 1. Prepare chunks (stages data + generates chunk files on the per-dataset union)
 ./1_prepare_chunks.sh                     # production, all datasets: 5 samples/chunk
 ./1_prepare_chunks.sh test                # test, all datasets: 1 sample/chunk
 ./1_prepare_chunks.sh production Stephenson   # production, single dataset
@@ -154,13 +166,16 @@ Cell type annotation runs as a **separate HPC-parallelized pipeline** on SLURM, 
 ./2_submit_hpc_array.sh                   # all datasets with chunks
 ./2_submit_hpc_array.sh Stephenson        # single dataset
 
-# 3. (Optional) Merge annotations into .h5ad if not done automatically
-python 3_merge_annotations.py <path/to/input.h5ad> <path/to/annot_dir>
+# 3. Merge annotations into every view h5ad of the dataset + sync to NAS
+./3.1_submit_merge.sh Stephenson
 ```
 
 #### Test mode
 
-`1_prepare_chunks.sh test` sets chunk_size = 1 (vs 5 for production). This means each chunk contains only 1 sample, producing more but smaller array jobs. Useful for quick validation. In the future, this will be replaced by the Joanito 5-sample debug dataset (see TODO.md).
+`1_prepare_chunks.sh test <DS>` sets chunk_size = 1 (vs 5 for production). This
+means each chunk contains only 1 sample, producing more but smaller array jobs.
+Useful for quick validation together with the Joanito 5-sample `_debug`
+dataset (see datasets.json + TODO.md).
 
 
 ---
@@ -329,3 +344,23 @@ Data analysis is performed in a single notebook, `notebooks/benchmark_analysis.r
 ---
 
 ## Batch Effect Analysis # TODO
+
+## Legacy pipeline notes
+
+- `Preprocess_datasets.Rmd` (repo root, 905 lines) is the superseded legacy
+  Seurat preprocessing pipeline. Its steps are ported as follows:
+  - scGate models + ProjecTILs ref maps → `2.0_create_scgate_db.R` /
+    `${SCGATE_DB_PATH}` + `2.1.1_process_chunk.R` (`HOME_REF_DIR`).
+  - Kfoury `cells_lowres` creation → `src/2_dataset_specific_preprocessing/1.4.1_create_kfoury_lowres_ct.R`.
+  - Gene symbol standardization + preprocess loop → `src/gene_utils.py` /
+    `1.1.1_preprocess.py`; HiTME/scATOMIC column whitelist →
+    `3_merge_annotations.py`.
+  - GongSharma "clearcut age" split → dropped; deferred to the kept draft
+    `src/3_scrnaseq_preprocessing/preprocess_gongsharma.qmd` (other-subsetting
+    conditions).
+  - "Export datasets without author annotation" (Lee/Zhang for scPoli) →
+    dropped as a pipeline step. NOTE for benchmark interpretation: in the
+    legacy pipeline Lee and Zhang were exported WITHOUT author annotation
+    (scPoli was trained on them); this context explains certain decisions in
+    `notebooks/benchmark_analysis.rmd` and in the paper.
+- Deletion of `Preprocess_datasets.Rmd` itself is pending user confirmation.
