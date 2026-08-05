@@ -52,6 +52,10 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
     - NAS dataset path called from user computer (needs user to connect to NAS server first, ask him to connect if needed): `/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets`
     - NAS dataset path called from HPC (needs user to connect to NAS server first, ask him to connect if needed; no need to connect to additionally connect NAS server but can only be called from login node, see section "# HPC general information" below): `/srv/smednas515.unige.ch/carmona_smb/DataCollections/Standardized_SingleCell_Datasets`
 
+## data/
+- `data/ARCHIVE_LEGACY_DATA/`: legacy data from previous workflow (was run locally and datasets were stored as seurat objects in  .rds files)
+    - Do not use the data in this folder, it will most likely not work with the current pipeline or match the current workflow
+
 
 ## Pipeline Overview
 Four-stage end-to-end pipeline:
