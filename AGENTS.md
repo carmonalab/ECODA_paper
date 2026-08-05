@@ -46,6 +46,14 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
     - See datasets.json for most up-to-date list of datasets used and conditions.
 - Do not change this file without asking
 - The `_debug` entry (Joanito 5-sample subset, built by `1.3.1_create_debug_dataset.R` into `data/debug/`) is registered here with both views; default-all script loops (`1_stage_data.sh`, `1_submit_hpc_array.sh`) skip keys starting with `_` unless explicitly requested via `--ds_name _debug`. The debug files live in the gitignored project-root folder `data/debug/` (NOT on the NAS) and are staged to HPC scratch manually (e.g. `rsync data/debug/ ${HPC_SCRATCH_DIR}/_debug/data/`); `1_stage_data.sh --ds_name _debug` still works if the files are additionally placed under `Standardized_SingleCell_Datasets/debug/output/`.
+    - The _debug dataset is used for:
+        - debugging the following pipelines:
+            - `3_scrnaseq_preprocessing/`
+            - `4_cell_type_annotation/`
+            - `5_benchmark_methods/`
+        - it is not used for the following pipelines (because they are relatively simple and not very ressource intensive):
+            - `1_stage_data/`
+            - `2_dataset_specific_preprocessing/`
 - Files defined in datasets.json are stored on the NAS
     - The user and agents exclusively work on the user's computer, so the NAS is only accessed by the user from the computer
     - The user and agents can work on the HPC but always connecting from the user's computer
