@@ -104,8 +104,10 @@ The analysis proceeds through four stages:
     inputs from NAS to HPC scratch (`./src/1_stage_data/1_stage_data.sh`).
   - **Dataset-specific preprocessing** (`src/2_dataset_specific_preprocessing/`):
     per-step sbatch jobs (e.g. `1.1.1_create_combinedpbmc_dataset.py`,
-    `1.2.1_create_joanito_batch_col.R`) submitted in parallel via the `1_submit_hpc.sh`
-    dispatcher, run after staging and before the preprocess array.
+    `1.2.1_prepare_joanito.R`) submitted in parallel via the `1_submit_hpc.sh`
+    dispatcher, run after staging and before the preprocess array. The Joanito
+    step also builds the `_debug` 5-sample subset into
+    `${HPC_SCRATCH_DIR}/_debug/data/`.
   - **Preprocessing** (`src/3_scrnaseq_preprocessing/`): Standardized preprocessing pipeline (Python/Scanpy):
     - Filter cells (min_genes=100) and genes (min_cells=3)
     — Sample/gene name standardization

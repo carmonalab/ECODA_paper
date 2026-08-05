@@ -11,11 +11,10 @@ set -euo pipefail
 #
 # Convention: default-all loops skip datasets whose key starts with "_" (e.g.
 # the _debug entry) unless explicitly requested via --ds_name. The _debug raw
-# files live in the gitignored project-root folder data/debug/ (NOT on the NAS;
-# built by 1.3.1_create_debug_dataset.R) and are normally staged to HPC scratch
-# manually (rsync data/debug/ ${HPC_SCRATCH_DIR}/_debug/data/); this script
-# still works if the files are additionally placed on the NAS under
-# Standardized_SingleCell_Datasets/debug/output/ (the _debug entry's folder_name).
+# subset is NOT staged here: `_debug.folder_name` is null, so the null-folder
+# guard below skips it — the subset is built on HPC scratch by the Joanito
+# step (1.2.1_prepare_joanito.R, into ${HPC_SCRATCH_DIR}/_debug/data/);
+# `--ds_name _debug` is therefore a clean no-op.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
 cd "${PROJECT_ROOT}"

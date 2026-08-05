@@ -2,7 +2,7 @@
   "_debug": {
     "display_name": "Debug (Joanito 5-sample subset)",
     "file_names": "JoaI_2022_35773407_debug_5samples.h5ad",
-    "folder_name": "debug",
+    "folder_name": null,
     "tissue": "Colon",
     "normal_tissue": false,
     "use_for_benchmark": true,
