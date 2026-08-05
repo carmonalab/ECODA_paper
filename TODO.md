@@ -9,26 +9,26 @@ analysis) → human-managed tasks. Completed history is preserved in git; see
 ## Phase 1 — Complete pipelines src/1–4 (DONE, agent)
 
 ### 1.1 Debug/test execution mode
-- `src/2_dataset_specific_preprocessing/1.3.1_create_debug_dataset.R`: LOCAL script
-  (NOT part of the `1_submit_hpc.sh` dispatcher glob `1.*_submit_*.sh` — no
-  `1.3_submit_*.sh` wrapper). Reads the Joanito raw input (per datasets.json
-  `input_file_name`), selects 5 samples covering both biological conditions
-  (sample.origin), batches (seqtec) and sites, subsets 500 cells/sample (seeded
-  random), keeps minimal obs cols (incl. `seqtec`, `Site`, sample/patient cols),
-  writes `data/debug/JoaI_2022_35773407_debug_5samples.{rds,h5ad}` (h5ad via
-  anndataR: X=None + layers["counts"], handled by the preprocess X-promotion).
-- datasets.json: `_debug` entry added (batch col `Site`, label/sample cols
+- Joanito dataset-specific step (renamed `1.2_submit_joanito.sh` →
+  `1.2.1_prepare_joanito.R`): computes the `seqtec` batch column in place
+  (single source of truth for the batch definition) and, from the SAME
+  in-memory object, builds the `_debug` 5-sample subset into
+  `${HPC_SCRATCH_DIR}/_debug/data/JoaI_2022_35773407_debug_5samples.h5ad` —
+  5 samples covering both biological conditions (sample.origin), batches
+  (seqtec) and sites, 500 cells/sample (seeded random, seed 321), minimal obs
+  cols (incl. `seqtec`, `Site`, sample/patient cols); h5ad via anndataR:
+  X=None + layers["counts"], handled by the preprocess X-promotion. No local
+  script, no manual rsync, no NAS fallback — the raw subset only ever lives on
+  HPC scratch (built by the step; never staged).
+- datasets.json: `_debug` entry (batch col `Site`, label/sample cols
   following Joanito conventions, `use_for_benchmark` + `use_for_batch_effect`,
-  both views → the debug h5ad). Convention: default-all script loops skip `_*`
-  keys unless explicitly requested via `--ds_name`.
-- **Debug dataset location (decision): created in a gitignored project-root
-  folder `data/debug/` (explicit `data/debug/` entry in `.gitignore`) — NOT on
-  the NAS under `Standardized_SingleCell_Datasets/debug/output/`. Staging to
-  HPC scratch is manual (`rsync data/debug/ ${HPC_SCRATCH_DIR}/_debug/data/`);
-  `1_stage_data.sh --ds_name _debug` still works if the files are additionally
-  placed on the NAS (`_debug` entry keeps `folder_name: debug`).**
+  both views → the debug h5ad). `_debug.folder_name` is `null` (CombinedPBMC
+  precedent) so `1_stage_data.sh` skips staging the raw subset; `_debug`
+  *outputs* (preprocessed/annotated h5ads) sync to NAS as usual via the
+  preprocess-array and merge syncs. Convention: default-all script loops skip
+  `_*` keys unless explicitly requested via `--ds_name`.
 - `src/1_stage_data/1_stage_data.sh`: `--ds_name <DS>` filter; default-all skips
-  `_*` keys.
+  `_*` keys; `folder_name: null` datasets (incl. `_debug`) are skipped.
 - `src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh`: `--ds_name` single-dataset
   mode (1-task array at the dataset's position in the sorted jq key list, so
   `1.1_run_worker.sh`'s `sed -n ${SLURM_ARRAY_TASK_ID}p` mapping needs no change);
@@ -104,19 +104,18 @@ analysis) → human-managed tasks. Completed history is preserved in git; see
 ## Phase 2 — Debug run on HPC [REQUIRES USER: connect NAS + log in to HPC]
 
 Prereqs (explicitly user):
-1. Build the debug subset locally: `pixi run Rscript src/2_dataset_specific_preprocessing/1.3.1_create_debug_dataset.R`
-   → `data/debug/JoaI_2022_35773407_debug_5samples.{rds,h5ad}` (gitignored
-   project-root folder, NOT on the NAS).
-2. Stage to HPC scratch manually, e.g.
-   `rsync data/debug/ ${HPC_SCRATCH_DIR}/_debug/data/`
-   (or additionally place the files under
-   `Standardized_SingleCell_Datasets/debug/output/` and use
-   `1_stage_data.sh --ds_name _debug`).
-3. `ssh [REDACTED_HOST]` (password entry). All sbatch/srun
+1. Connect NAS + log in to HPC:
+   `ssh [REDACTED_HOST]` (password entry). All sbatch/srun
    execution on compute nodes (never login node).
+2. Stage the full datasets (incl. the Joanito raw .rds):
+   `src/1_stage_data/1_stage_data.sh` on the login node (`_debug` is skipped —
+   its raw subset never lives on the NAS; the Joanito step builds it).
 
-- [ ] Stage the debug files to HPC scratch (manual rsync, or NAS + `1_stage_data.sh --ds_name _debug`).
-- [ ] Dataset-specific preprocessing: Joanito `seqtec` step — skip (debug subset already carries `seqtec` from `1.3.1_create_debug_dataset.R`); run `1_submit_hpc.sh` only if the full datasets are staged.
+- [ ] Dataset-specific preprocessing: `1_submit_hpc.sh` — the Joanito step
+      (`1.2_submit_joanito.sh` → `1.2.1_prepare_joanito.R`) computes `seqtec`
+      AND builds the `_debug` subset into `${HPC_SCRATCH_DIR}/_debug/data/`;
+      verify the h5ad exists after the step. Run `1_submit_hpc.sh` only if the
+      full datasets are staged.
 - [ ] Preprocess: `1_submit_hpc_array.sh --ds_name _debug`; validation: h5ad loads, `X_pca`/`X_pca_harmony` present, ~2500 cells, runtime < 30s.
 - [ ] Chunks: `1_prepare_chunks.sh test _debug` (per-dataset union, 1 sample/chunk).
 - [ ] Annotation: `2_submit_hpc_array.sh _debug`.
@@ -152,7 +151,7 @@ Prereqs (explicitly user):
   Pseudobulk DESeq2+limma with `batch_col`; MrVI native `batch_key`; GloScope on
   `X_pca_harmony`; PILOT-GM-VAE on `X_pca_harmony`; CombinedPBMC (Stephenson,
   GongSharma, Zhu) dataset handling; `columns.batch` in datasets.json (Joanito `seqtec`
-  DONE via `1.2.1_create_joanito_batch_col.R`; Kfoury `cells_lowres` DONE via
+  DONE via `1.2.1_prepare_joanito.R`; Kfoury `cells_lowres` DONE via
   `1.4.1_create_kfoury_lowres_ct.R`).
 
 ## Human-managed tasks (not agent)
@@ -161,9 +160,6 @@ Prereqs (explicitly user):
   (n=126), Covid-19 PBMC (n=151), diabetes (n=52), possibly Sikkema Lung.
 - Benchmark datasets: Alzheimer (n=83), Lupus PBMC (n=261), myocardial infarction
   (n=23), possibly KPMP (n=45); GongSharma other subsetting conditions.
-- Run `1.3.1_create_debug_dataset.R` to build the debug subset into `data/debug/`
-  (gitignored project-root folder; NOT on the NAS) and stage it to HPC scratch
-  manually before Phase 2.
 
 ## Ideas for later
 
@@ -184,3 +180,10 @@ Prereqs (explicitly user):
 - `Preprocess_datasets.Rmd` deleted after the legacy audit (user-confirmed); debug
   dataset location decision: gitignored project-root `data/debug/` instead of NAS
   `Standardized_SingleCell_Datasets/debug/output/`.
+- Debug subset workflow simplified (user-approved): the local
+  `1.3.1_create_debug_dataset.R` + manual rsync / NAS fallback are replaced by the
+  merged Joanito step `1.2_submit_joanito.sh` → `1.2.1_prepare_joanito.R`, which
+  computes `seqtec` (single source of truth) and builds the `_debug` 5-sample subset
+  into `${HPC_SCRATCH_DIR}/_debug/data/` from the same in-memory object;
+  `_debug.folder_name` is now `null` (raw subset never on NAS; `_debug` outputs sync
+  to NAS as usual). `data/debug/` removed from `.gitignore`.
