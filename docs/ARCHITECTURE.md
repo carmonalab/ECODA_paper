@@ -1,7 +1,7 @@
 # ECODA_paper Architecture & Call Graph
 
 ## Overview
-This is an **R-based bioinformatics pipeline** for benchmarking batch effect correction methods in single-cell RNA-seq data. The code is organized as a **multi-layered, top-down architecture** with clear separation between orchestration, method processing, evaluation, and utilities.
+This is a **multi-layered, top-down architecture** for exploratory compositional data analysis of scRNA-seq cohorts: it benchmarks sample-representation methods (MOFA+, scITD, GloScope, GloProp, MrVI, PILOT, scPoli, Pseudobulk, ECODA) for recovering known biological groupings, with batch effect analysis as one stage. The code is organized with clear separation between orchestration, method processing, evaluation, and utilities.
 
 
 ## Datasets and Analysis Definitions (Benchmark and/or Batch Effect Analysis)
@@ -76,7 +76,7 @@ The preprocessing stage is split across three `src/` folders run in sequence:
 | `src/2_dataset_specific_preprocessing/` | `1_submit_hpc.sh` dispatcher submits all per-step sbatch jobs in this folder in parallel (`1.1_submit_combinedpbmc.sh`, `1.2_submit_joanito.sh`, `1.4_submit_kfoury_lowres_ct.sh`), passing per-step `--partition`/`--output`/`--error` on the sbatch command line (SLURM directives cannot expand env vars, so the flags are given on the sbatch command line; partition comes from `${SLURM_PARTITION}` in `slurm_config.sh`), waits for all, reports per-job state via `sacct` and exits non-zero on any failure. Steps must be mutually independent. Run after staging, before the preprocess array. The Joanito step (`1.2.1_prepare_joanito.R`) additionally builds the `_debug` 5-sample subset into `${HPC_SCRATCH_DIR}/_debug/data/`. |
 | `src/3_scrnaseq_preprocessing/` | `1_submit_hpc_array.sh` (array submit + monitor + rsync back to NAS), `1.1_run_worker.sh`, `1.1.1_preprocess.py`. |
 
-#### Files # TODO
+#### Files
 
 | File | Role |
 |---|---|
@@ -148,7 +148,7 @@ For single-view datasets the union is the view file itself (no copy).
 
 - **scATOMIC + HiTME dual annotation**: scATOMIC provides hierarchical cell-type predictions (layer_1..6) with confidence scores; HiTME annotates using scGate models + ProjecTILs reference maps, producing layer1/2/3 labels. Both are run on each sample independently (i.e. independent from the rest of the dataset).
 - **Retry loops**: Both annotation methods have up to 5 retry attempts with dynamic timeouts (max(60s, n_cells/10000 × 600s)) to handle HPC node variability.
-- **NAS ↔ Scratch data flow**: Raw-data staging from NAS to scratch happens only in `src/1_stage_data/1_stage_data.sh` (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`); cell type annotation consumes the preprocessed output of that pipeline (`${HPC_SCRATCH_DIR}/${DS_NAME}/output` per dataset, matching `config_helper.R`). `1_prepare_chunks.sh` stages reference maps; `2_submit_hpc_array.sh` creates the scGate model DB cache (gene standardization moved into `1.1.1_preprocess.py`; the `GENE_REF_FILE` staging block was removed). The gene reference is committed to the repo at `aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz` (Ensembl 105, GRCh38.p13), originally downloaded 14.02.2022 from https://raw.githubusercontent.com/carmonalab/scRNAseq_data_processing/master/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz; it is consumed by `src/gene_utils.py`. Worker nodes only access scratch. After array completes, login node rsyncs results back to NAS.
+- **NAS ↔ Scratch data flow**: Raw-data staging from NAS to scratch happens only in `src/1_stage_data/1_stage_data.sh` (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`); cell type annotation consumes the preprocessed output of that pipeline (`${HPC_SCRATCH_DIR}/${DS_NAME}/output` per dataset, matching `config_helper.R`). `1_prepare_chunks.sh` stages reference maps; `2_submit_hpc_array.sh` creates the scGate model DB cache (gene standardization moved into `1.1.1_preprocess.py`; the `GENE_REF_FILE` staging block was removed). The gene reference is committed to the repo at `aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz`, consumed by `src/gene_utils.py` (see README "Reference data" for provenance). Worker nodes only access scratch. After array completes, login node rsyncs results back to NAS.
 - **Environment propagation**: `slurm_config.sh` `export`s all core vars (`PROJECT_ROOT`, `DATASETS_JSON_FILE`, `HPC_SCRATCH_DIR`, `SAMPLE_COLNAME`, ref/gene files, `PYTHON_BIN`, `PIXI_RSCRIPT`, `RETICULATE_PYTHON`, `SCGATE_DB_PATH`, ...) so they reach R via `Sys.getenv()` and Python via `os.environ` through both `srun` (`1_prepare_chunks.sh`, `2_submit_hpc_array.sh`) and `sbatch` (`2_submit_hpc_array.sh`). `RETICULATE_PYTHON` pins R's reticulate to the pixi python (reticulate's own discovery may otherwise pick a stray `~/.virtualenvs/r-reticulate` on the worker); the project-root `.Rprofile` mirrors this but only applies to non-vanilla R sessions (`PIXI_RSCRIPT` uses `--vanilla`). Bash arrays do not propagate through `sbatch`, so workers derive `DS_NAME` from `datasets.json` (via jq, loaded on the worker — module loads do not propagate either); `2.1_run_worker.sh` auto-exports per-task `TISSUE_TYPE`/`NORMAL_TISSUE` from `datasets.json`.
 - **Counts input**: scATOMIC/HiTME receive the raw counts from `layers["counts"]` (vaulted by `base_preprocessing`), not the log-normalized `X`; if the layer is missing, `X` is used with a warning.
 - **Backed per-sample reads are selective**: preprocessed `.h5ad` files are CSR-on-disk for both `X` and `layers["counts"]` (see `1.1.1_preprocess.py` above), so `get_seurat_obj_from_h5ad()`'s per-sample row subset (`adata[cell_indices]`) reads only the selected rows' segments (`backed_csr_matrix` selective indexing); `obs` is metadata-only and never triggers matrix I/O. On a CSC-on-disk file the same subset would materialize the full matrix in memory per sample (anndata has no selective row-indexing override for CSC) — `2.1.1_process_chunk.R` warns on non-CSR input.
@@ -181,6 +181,10 @@ dataset (see datasets.json + TODO.md).
 ---
 
 ## Benchmark, ECODA Transformation and ECODA Zero Imputation Analyses
+
+Note: the Layers 1–5 call flow below documents the current notebook-based
+pipeline and will be restructured by the planned HPC benchmark pipeline
+(TODO.md Phase 3).
 
 ### Data Processing
 
@@ -343,7 +347,14 @@ Data analysis is performed in a single notebook, `notebooks/benchmark_analysis.r
 
 ---
 
-## Batch Effect Analysis # TODO
+## Batch Effect Analysis
+
+Analysis lives in `notebooks/batch_effect_analysis.rmd` (notebook-based, under
+expansion per reviewer comments). Methods to implement — with per-method batch
+mitigation strategy — are tracked in TODO.md Phase 4: ECODA batch-associated
+cell-type removal, Pseudobulk (DESeq2 + limma), MrVI (native `batch_key`), and
+GloScope / PILOT-GM-VAE on `adata.obsm["X_pca_harmony"]` (the Harmony space
+created in `1.1.1_preprocess.py`).
 
 ## Legacy pipeline notes
 
