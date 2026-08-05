@@ -10,12 +10,13 @@ RNA-seq cohorts"**.
 
 Single-cell RNA sequencing (scRNA-seq) enables high-resolution characterization
 of cellular heterogeneity, but summarizing this data for cohort-level analysis
-remains a challenge. Using **11 scRNA-seq cohorts** (697 samples) across
-different biological conditions, we benchmarked seven state-of-the-art sample
-representation methods—**MOFA+, scITD, GloScope, GloProp, MrVI, PILOT,
-scPoli**—plus two baselines (**Pseudobulk** and cell-type composition via
-**ECODA**). The benchmark evaluates their ability to recover known biological
-groupings in a fully unsupervised setting.
+remains a challenge. Using **14 scRNA-seq datasets** (11 benchmark +
+batch-effect cohorts; see [datasets.json](datasets.json) for the authoritative
+list), we benchmarked seven state-of-the-art sample representation
+methods—**MOFA+, scITD, GloScope, GloProp, MrVI, PILOT, scPoli**—plus two
+baselines (**Pseudobulk** and cell-type composition via **ECODA**). The
+benchmark evaluates their ability to recover known biological groupings in a
+fully unsupervised setting.
 
 ### **Key Findings**
 
@@ -39,27 +40,12 @@ The **scECODA** R package for scalable cohort-level analysis is available at
 
 ## **Usage**
 
-This section explains how to reproduce this paper's results and figures and the general workflow of the analysis.
-
 ### **Repository Contents**
 
 - `docs/ARCHITECTURE.md`: Full pipeline architecture, call flow, and module documentation.
-
 - `datasets.json`: Centralized dataset metadata (sample/label columns, subsetting rules, batch information).
-
-- `notebooks/`: .rmd notebooks for:
-  - Benchmark analysis (`notebooks/benchmark_analysis.rmd`)
-  - Batch effect analysis (`notebooks/batch_effect_analysis.rmd`)
-  - Per-dataset QC filtering (`notebooks/QC_filtering/`)
-
-- `src`: Source code for:
-  - Raw-data staging from NAS to HPC scratch (`src/1_stage_data/`)
-  - Dataset-specific preprocessing scripts (`src/2_dataset_specific_preprocessing/`)
-  - Standardized scRNA-seq preprocessing pipeline (Python/Scanpy) (`src/3_scrnaseq_preprocessing/`)
-  - Cell type annotation with scATOMIC + HiTME (`src/4_cell_type_annotation/`)
-  - Scripts to run the benchmarked methods (`src/5_run_benchmark_methods/`)
-  - Various utility functions (`src/utils/`), mainly for the benchmark pipeline analysis
-  - HPC SLURM configuration, e.g. paths (`src/slurm_config.sh`)
+- `notebooks/`: benchmark analysis, batch effect analysis, and per-dataset QC filtering notebooks (`.rmd`).
+- `src`: Source code for the pipeline stages — staging (`src/1_stage_data/`), dataset-specific preprocessing (`src/2_dataset_specific_preprocessing/`), standardized preprocessing (`src/3_scrnaseq_preprocessing/`), cell type annotation (`src/4_cell_type_annotation/`), benchmark methods (`src/5_run_benchmark_methods/`), utilities (`src/utils/`), and HPC SLURM config (`src/slurm_config.sh`).
 
 ### **Reference data**
 
@@ -82,12 +68,9 @@ This section explains how to reproduce this paper's results and figures and the 
    pixi install
    ```
    This creates the default `py-cpu` environment (macOS / development). For HPC
-   with CUDA, use the `py-cuda13` environment instead:
-   ```bash
-   pixi install --environment py-cuda13
-   ```
-4. Install R packages (Seurat, anndataR, SignatuR, scATOMIC deps, scITD deps,
-   HiTME deps, and all benchmark method packages) via the chained setup task:
+   with CUDA, use `pixi install --environment py-cuda13` instead.
+4. Install R packages (Seurat, anndataR, SignatuR, scATOMIC/scITD/HiTME deps,
+   and all benchmark method packages) via the chained setup task:
    ```bash
    pixi run setup
    ```
@@ -95,70 +78,46 @@ This section explains how to reproduce this paper's results and figures and the 
 
 ### **Workflow**
 
-The analysis proceeds through four stages:
+The analysis proceeds through four stages. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#preprocessing-pipeline) for the
+full pipeline call flow, file-role tables, and HPC folder layout.
 
-- **Stage 1 — QC Filtering:** Done manually in per-dataset .rmd notebooks in
+- **Stage 1 — QC Filtering:** Per-dataset .rmd notebooks in
   `notebooks/QC_filtering/`.
-- **Stage 2 — Preprocessing + Cell Type Annotation:**
-  - **Raw-data staging** (`src/1_stage_data/`): login-node script that stages raw
-    inputs from NAS to HPC scratch (`./src/1_stage_data/1_stage_data.sh`).
-  - **Dataset-specific preprocessing** (`src/2_dataset_specific_preprocessing/`):
-    per-step sbatch jobs (e.g. `1.1.1_create_combinedpbmc_dataset.py`,
-    `1.2.1_prepare_joanito.R`) submitted in parallel via the `1_submit_hpc.sh`
-    dispatcher, run after staging and before the preprocess array. The Joanito
-    step also builds the `_debug` 5-sample subset into
-    `${HPC_SCRATCH_DIR}/_debug/data/`.
-  - **Preprocessing** (`src/3_scrnaseq_preprocessing/`): Standardized preprocessing pipeline (Python/Scanpy):
-    - Filter cells (min_genes=100) and genes (min_cells=3)
-    — Sample/gene name standardization
-    - Normalize counts and log1p
-    - HVG selection
-    - Scale and run PCA
-    - Harmony integration
-    - Leiden clustering
-  - **Cell Type Annotation** (`src/4_cell_type_annotation/`): HPC-parallelized scATOMIC + HiTME
-    annotation via SLURM array jobs.
-- **Stage 3 — Benchmark Analysis:** Render `notebooks/benchmark_analysis.rmd` in RStudio.
-  Python benchmark methods (MrVI, PILOT, scPoli) are invoked automatically via
-  rpy2. The R pipeline orchestrates all method processors, scoring metrics, and
-  figure generation.
-- **Stage 4 — Batch Effect Analysis:** Render `notebooks/batch_effect_analysis.rmd` in
-  RStudio.
+- **Stage 2 — Preprocessing + Cell Type Annotation:** Stage raw data from NAS
+  to HPC scratch, run dataset-specific preprocessing steps, then the
+  standardized Python/Scanpy preprocessing pipeline and HPC-parallelized
+  scATOMIC + HiTME annotation (see
+  [ARCHITECTURE.md](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-src4_cell_type_annotation)).
+- **Stage 3 — Benchmark Analysis:** Render `notebooks/benchmark_analysis.rmd`
+  in RStudio (current local flow, to be superseded by the planned HPC benchmark
+  pipeline — see TODO.md). R-native methods run in the notebook; Python methods
+  (MrVI, PILOT, scPoli) run separately and exchange data via `.feather` files.
+- **Stage 4 — Batch Effect Analysis:** Render
+  `notebooks/batch_effect_analysis.rmd` in RStudio (under expansion — see
+  TODO.md).
 
-**HPC execution:** Submit SLURM array jobs for:
-- **Raw-data staging** via `src/1_stage_data/1_stage_data.sh` (login node, NAS → scratch):
-  ```bash
-  ./src/1_stage_data/1_stage_data.sh
-  ```
-- **Dataset-specific preprocessing** via `src/2_dataset_specific_preprocessing/1_submit_hpc.sh`
-  (submits all per-step sbatch jobs in parallel, waits, reports via sacct):
-  ```bash
-  sbatch src/2_dataset_specific_preprocessing/1_submit_hpc.sh
-  ```
-- **Preprocessing** via `src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh` (submits array + syncs results):
-  ```bash
-  sbatch src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh
-  ```
-- **Cell type annotation** via `src/4_cell_type_annotation/` (all datasets by default; an optional dataset name restricts to one dataset):
-  ```bash
-  ./src/4_cell_type_annotation/1_prepare_chunks.sh             # production: 5 samples/chunk
-  ./src/4_cell_type_annotation/1_prepare_chunks.sh test        # test: 1 sample/chunk
-  ./src/4_cell_type_annotation/2_submit_hpc_array.sh
-  ```
-- **Benchmark methods** via `src/5_run_benchmark_methods/run_python_sample_embedding_methods/` — PLANNED, not yet implemented:
-  the SLURM submit script `1_submit_hpc_array.sh` does not exist yet; the folder currently contains only the method notebook
-  `1.2_benchmark_methods_py.qmd` (to be converted to `.py`). See TODO.md.
+**HPC execution** (SLURM; see
+[ARCHITECTURE.md](docs/ARCHITECTURE.md#hpc-folder-layout) for the folder layout):
 
-See the [Architecture documentation](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-stage-2b)
-for more details on workflow and usage.
+```bash
+./src/1_stage_data/1_stage_data.sh                            # stage raw data (NAS → scratch, login node)
+sbatch src/2_dataset_specific_preprocessing/1_submit_hpc.sh   # dataset-specific preprocessing steps
+sbatch src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh     # standardized preprocessing + sync to NAS
+./src/4_cell_type_annotation/1_prepare_chunks.sh              # production: 5 samples/chunk (test: 1)
+./src/4_cell_type_annotation/2_submit_hpc_array.sh            # scATOMIC + HiTME annotation array
+./src/4_cell_type_annotation/3.1_submit_merge.sh <DS>         # merge annotations into every view + sync to NAS
+```
+
+- **Benchmark methods** (`src/5_run_benchmark_methods/run_python_sample_embedding_methods/`) — PLANNED, not yet implemented: no SLURM submit script exists yet; the folder contains only the method notebook `1.2_benchmark_methods_py.qmd` (to be converted to `.py`). See TODO.md.
 
 #### **Expected Outputs**
 
 - `.feather` files — cross-language distance matrices and embeddings produced
   by Python benchmark methods and consumed by R processors.
-- Publication figures — MDS plots, PCA biplots, benchmark bar charts,
-  separation metric heatmaps, and transformation analysis panels.
-- Execution time logs documenting per-method and per-dataset runtime.
+- Publication figures (MDS plots, PCA biplots, benchmark bar charts, separation
+  metric heatmaps, transformation analysis panels) and per-method/per-dataset
+  execution-time logs.
 
 
 ## Reference
