@@ -207,7 +207,7 @@ run_analyses <- function(result_list, ds, seurat, path_data) {
   ct_comps <- get_ct_comp_df_seurat(
     seurat,
     sample_col = "Sample",
-    ct_col = seurat@misc$hi_res_ct_col
+    ct_col = seurat@misc$cell_type_high_res
   )
   if (is.null(result_list[["trans"]][[ds]])) {
     result_list[["trans"]][[ds]] <- run_transformation_analysis(
@@ -373,13 +373,13 @@ run_benchmark_analysis <- function(
   # Calculate ct pseudobulks
   if (
     !"Pseudobulk_CT_LR_hvg2000" %in% names(res_list) &&
-      !is.null(seurat@misc$low_res_ct_col)
+      !is.null(seurat@misc$cell_type_low_res)
   ) {
     res_list[["Pseudobulk_CT_LR_hvg2000"]][["exec_time"]] <- exec_time(
       res_list[["Pseudobulk_CT_LR_hvg2000"]] <- process_pseudobulk_ct_fig(
         seurat,
         labels,
-        ct_col = seurat@misc$low_res_ct_col,
+        ct_col = seurat@misc$cell_type_low_res,
         sample_col = sample_col,
         hvg = 2000
       )
@@ -387,13 +387,13 @@ run_benchmark_analysis <- function(
   }
   if (
     !"Pseudobulk_CT_HR_hvg2000" %in% names(res_list) &&
-      !is.null(seurat@misc$hi_res_ct_col)
+      !is.null(seurat@misc$cell_type_high_res)
   ) {
     res_list[["Pseudobulk_CT_HR_hvg2000"]][["exec_time"]] <- exec_time(
       res_list[["Pseudobulk_CT_HR_hvg2000"]] <- process_pseudobulk_ct_fig(
         seurat,
         labels,
-        ct_col = seurat@misc$hi_res_ct_col,
+        ct_col = seurat@misc$cell_type_high_res,
         sample_col = sample_col,
         hvg = 2000
       )
@@ -402,13 +402,13 @@ run_benchmark_analysis <- function(
 
   if (
     !"Pseudobulk_CT_LR_hvg500" %in% names(res_list) &&
-      !is.null(seurat@misc$hi_res_ct_col)
+      !is.null(seurat@misc$cell_type_high_res)
   ) {
     res_list[["Pseudobulk_CT_LR_hvg500"]][["exec_time"]] <- exec_time(
       res_list[["Pseudobulk_CT_LR_hvg500"]] <- process_pseudobulk_ct_fig(
         seurat,
         labels,
-        ct_col = seurat@misc$low_res_ct_col,
+        ct_col = seurat@misc$cell_type_low_res,
         sample_col = sample_col,
         hvg = 500
       )
@@ -417,13 +417,13 @@ run_benchmark_analysis <- function(
 
   if (
     !"Pseudobulk_CT_HR_hvg500" %in% names(res_list) &&
-      !is.null(seurat@misc$hi_res_ct_col)
+      !is.null(seurat@misc$cell_type_high_res)
   ) {
     res_list[["Pseudobulk_CT_HR_hvg500"]][["exec_time"]] <- exec_time(
       res_list[["Pseudobulk_CT_HR_hvg500"]] <- process_pseudobulk_ct_fig(
         seurat,
         labels,
-        ct_col = seurat@misc$hi_res_ct_col,
+        ct_col = seurat@misc$cell_type_high_res,
         sample_col = sample_col,
         hvg = 500
       )
@@ -440,30 +440,30 @@ run_benchmark_analysis <- function(
   # CoDA
 
   ## layer1: low res. cell types
-  if (!is.null(seurat@misc$low_res_ct_col)) {
+  if (!is.null(seurat@misc$cell_type_low_res)) {
     res_list[["ECODA_authors_LR"]][["exec_time"]] <- exec_time(
       res_list[["ECODA_authors_LR"]] <- process_coda_fig(
         seurat,
         labels,
-        ct_col = seurat@misc$low_res_ct_col
+        ct_col = seurat@misc$cell_type_low_res
       )
     )
   }
 
   ## layer2: high res. cell types
-  if (!is.null(seurat@misc$hi_res_ct_col)) {
+  if (!is.null(seurat@misc$cell_type_high_res)) {
     res_list[["ECODA_authors_HR"]][["exec_time"]] <- exec_time(
       res_list[["ECODA_authors_HR"]] <- process_coda_fig(
         seurat,
         labels,
-        ct_col = seurat@misc$hi_res_ct_col
+        ct_col = seurat@misc$cell_type_high_res
       )
     )
     res_list[["ECODA_authors_HR_NULL"]][["exec_time"]] <- exec_time(
       res_list[["ECODA_authors_HR_NULL"]] <- process_coda_fig(
         seurat,
         labels,
-        ct_col = seurat@misc$hi_res_ct_col,
+        ct_col = seurat@misc$cell_type_high_res,
         shuffle_labels = TRUE
       )
     )
@@ -471,7 +471,7 @@ run_benchmark_analysis <- function(
       res_list[["GloProp"]] <- process_gloprop_fig(
         seurat,
         metadata,
-        ct_col = seurat@misc$hi_res_ct_col
+        ct_col = seurat@misc$cell_type_high_res
       )
     )
 
@@ -486,7 +486,7 @@ run_benchmark_analysis <- function(
             seurat,
             labels,
             ECODA_top_varexp_hvct = varexp_hvc,
-            ct_col = seurat@misc$hi_res_ct_col
+            ct_col = seurat@misc$cell_type_high_res
           )
       )
 
@@ -528,7 +528,7 @@ run_benchmark_analysis <- function(
         seurat,
         labels,
         calc_clr = FALSE,
-        ct_col = seurat@misc$hi_res_ct_col
+        ct_col = seurat@misc$cell_type_high_res
       )
     )
   }
@@ -538,7 +538,7 @@ run_benchmark_analysis <- function(
       labels,
       ECODA_top_n_hvct = 3,
       var_ct_desc = TRUE,
-      ct_col = seurat@misc$hi_res_ct_col
+      ct_col = seurat@misc$cell_type_high_res
     )
   )
   res_list[["ECODA_authors_HR_2least_varcts"]][["exec_time"]] <- exec_time(
@@ -547,7 +547,7 @@ run_benchmark_analysis <- function(
       labels,
       ECODA_top_n_hvct = 2,
       var_ct_desc = FALSE,
-      ct_col = seurat@misc$hi_res_ct_col,
+      ct_col = seurat@misc$cell_type_high_res,
     )
   )
 
@@ -558,7 +558,7 @@ run_benchmark_analysis <- function(
         labels,
         ECODA_top_n_hvct = 3,
         var_ct_desc = FALSE,
-        ct_col = seurat@misc$hi_res_ct_col,
+        ct_col = seurat@misc$cell_type_high_res,
         title = "ECODA\n2 least var. cell types"
       )
   )
@@ -616,7 +616,7 @@ run_benchmark_analysis <- function(
           seurat,
           labels,
           pca_dims = i,
-          ct_col = seurat@misc$hi_res_ct_col
+          ct_col = seurat@misc$cell_type_high_res
         )
       )
     }
@@ -639,7 +639,7 @@ run_benchmark_analysis <- function(
       res_list[[nm4]][["exec_time"]] <- exec_time(
         res_list[[nm4]] <- process_scitd_fig(
           seurat,
-          ct_col = seurat@misc$low_res_ct_col,
+          ct_col = seurat@misc$cell_type_low_res,
           label_col = label_col,
           hvg,
           num_factors = i
@@ -773,7 +773,7 @@ run_benchmark_analysis <- function(
         res_list[[scITD_hvg_i_factors5]][["exec_time"]] <- exec_time(
           res_list[[scITD_hvg_i_factors5]] <- process_scitd_fig(
             seurat,
-            ct_col = seurat@misc$low_res_ct_col,
+            ct_col = seurat@misc$cell_type_low_res,
             label_col = label_col,
             hvg,
             num_factors = 5
@@ -973,7 +973,7 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
     )
 
     try(
-      res_list[[paste0("multRepl_", i, "%"]] <- perc_df %>%
+      res_list[[paste0("multRepl_", i, "%")]] <- perc_df %>%
         zCompositions::multRepl(
           label = 0,
           dl = rep(i, ncol(df)),

@@ -44,8 +44,8 @@ read_datasets_json <- function(path = "datasets.json", view = NULL) {
       sample_col = columns[["sample"]],
       label_col = columns[["label"]],
       batch_col = columns[["batch"]],
-      low_res_ct_col = columns[["cell_type_low_res"]],
-      hi_res_ct_col = columns[["cell_type_high_res"]],
+      cell_type_low_res = columns[["cell_type_low_res"]],
+      cell_type_high_res = columns[["cell_type_high_res"]],
       meta_cols_keep = ds[["meta_cols_keep"]],
       # first-matching-view summary (R-compat; mirrors view entry order)
       view_name = first_v_name,

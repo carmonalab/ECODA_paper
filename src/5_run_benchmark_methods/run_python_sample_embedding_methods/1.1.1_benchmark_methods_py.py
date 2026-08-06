@@ -14,7 +14,7 @@ the preprocessed benchmark view h5ad produced by
   scPoli densifies the small HVG subset to float32
   (`layers["counts"].toarray().astype("float32", copy=False)`);
 - cell type annotation columns come from datasets.json
-  (`low_res_ct_col` / `hi_res_ct_col`).
+  (`cell_type_low_res` / `cell_type_high_res`).
 
 Feather naming, method-string format and data layout are preserved exactly
 from the qmd (the R ingest functions `process_mrvi_fig` /
@@ -253,15 +253,15 @@ def process_dataset(args, ds_name, entry):
     if not input_path.exists():
         raise FileNotFoundError(f"Input h5ad not found: {input_path}")
 
-    lowres_col = entry.get("low_res_ct_col")
-    highres_col = entry.get("hi_res_ct_col")
+    lowres_col = entry.get("cell_type_low_res")
+    highres_col = entry.get("cell_type_high_res")
 
     # combo: (n_hvg, res_label, ct_col, payload, run_fn, out_name)
     combos = []
 
     if args.method == "mrvi":
         if lowres_col is None:
-            print(f"WARNING: {ds_name}: low_res_ct_col is None; skipping MrVI.")
+            print(f"WARNING: {ds_name}: cell_type_low_res is None; skipping MrVI.")
             return
         for n in args.hvg:
             out_name = f"{ds_name}_hvg{n}_mrvi_dists.feather"
