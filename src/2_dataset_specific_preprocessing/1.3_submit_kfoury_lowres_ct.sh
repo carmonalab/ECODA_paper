@@ -13,4 +13,4 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-${PIXI_RSCRIPT} "${SCRIPT_DIR}/1.4.1_create_kfoury_lowres_ct.R"
+${PIXI_RSCRIPT} "${SCRIPT_DIR}/1.3.1_create_kfoury_lowres_ct.R"

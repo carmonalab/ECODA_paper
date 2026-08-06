@@ -70,7 +70,7 @@ Prereqs (explicitly user):
   `X_pca_harmony`; PILOT-GM-VAE on `X_pca_harmony`; CombinedPBMC (Stephenson,
   GongSharma, Zhu) dataset handling; `columns.batch` in datasets.json (Joanito `seqtec`
   DONE via `1.2.1_prepare_joanito.R`; Kfoury `cells_lowres` DONE via
-  `1.4.1_create_kfoury_lowres_ct.R`).
+  `1.3.1_create_kfoury_lowres_ct.R`).
 
 ## Human-managed tasks (not agent)
 
