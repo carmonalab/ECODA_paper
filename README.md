@@ -6,7 +6,7 @@ This repository contains the code to reproduce the results and figures from the
 paper: **"Cell type composition drives patient stratification in single-cell
 RNA-seq cohorts"**.
 
-## **Overview**
+## Overview
 
 Single-cell RNA sequencing (scRNA-seq) enables high-resolution characterization
 of cellular heterogeneity, but summarizing this data for cohort-level analysis
@@ -18,7 +18,7 @@ baselines (**Pseudobulk** and cell-type composition via **ECODA**). The
 benchmark evaluates their ability to recover known biological groupings in a
 fully unsupervised setting.
 
-### **Key Findings**
+### Key Findings
 
 -   **Performance:** Centered log-ratio (CLR)-transformed cell-type proportions
     (ECODA) consistently match or outperform more complex methods in recovering
@@ -38,51 +38,42 @@ The **scECODA** R package for scalable cohort-level analysis is available at
 [github.com/carmonalab/scECODA](https://github.com/carmonalab/scECODA).
 
 
-## **Usage**
+## Usage
 
-### **Repository Contents**
+### Repository Contents
 
 - `docs/ARCHITECTURE.md`: Full pipeline architecture, call flow, and module documentation.
 - `datasets.json`: Centralized dataset metadata (sample/label columns, subsetting rules, batch information).
 - `notebooks/`: benchmark analysis, batch effect analysis, and per-dataset QC filtering notebooks (`.rmd`).
 - `src`: Source code for the pipeline stages — staging (`src/1_stage_data/`), dataset-specific preprocessing (`src/2_dataset_specific_preprocessing/`), standardized preprocessing (`src/3_scrnaseq_preprocessing/`), cell type annotation (`src/4_cell_type_annotation/`), benchmark methods (`src/5_run_benchmark_methods/`), utilities (`src/utils/`), and HPC SLURM config (`src/slurm_config.sh`).
 
-### **Reference data**
 
-- `aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz`: Ensembl 105 human gene reference
-  (GRCh38.p13) used for gene-name standardization in the preprocessing pipeline
-  (`src/gene_utils.py`). Originally retrieved on 14.02.2022 from the `aux/` folder
-  of the carmonalab `scRNAseq_data_processing` repository:
-  https://raw.githubusercontent.com/carmonalab/scRNAseq_data_processing/master/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz
+### Installation
 
+1. Clone the repository:
+    ```bash
+    git clone https://github.com/carmonalab/ECODA_paper
+    ```
+2. Install [Pixi](https://pixi.sh) — the project's package and environment manager.
+    ```bash
+    curl -fsSL https://pixi.sh/install.sh | bash
+    export PATH="${HOME}/.pixi/bin:${PATH}"
+    ```
+3. Setup your environment:
+    ```bash
+    cd ~/ECODA_paper
 
-### **Installation**
+    # Local / macOS (Default environment):
+    # pixi install
+    # pixi run setup
 
-1. Install [Pixi](https://pixi.sh) — the project's package and environment manager.
-2. Clone the repository:
-   ```bash
-   git clone <repo-url> && cd ECODA_paper
-   ```
-3. Install dependencies:
-   ```bash
-   pixi install
-   ```
-   This creates the default `pixi` environment (macOS / development). For HPC
-   with CUDA, use `pixi install --environment py-cuda13` instead.
-4. Install R packages (Seurat, anndataR, SignatuR, scATOMIC/scITD/HiTME deps,
-   and all benchmark method packages) via the chained setup task:
-   ```bash
-   pixi run setup                       # local (default env)
-   pixi run -e py-cuda13 setup          # HPC (py-cuda13 env)
-   ```
-   On HPC, R packages must be installed into the `py-cuda13` env — all
-   interpreter pointers in `src/slurm_config.sh` (`PYTHON_BIN`,
-   `PIXI_RSCRIPT`, `RETICULATE_PYTHON`) resolve to `.pixi/envs/py-cuda13/`
-   there. Note: `py-cuda13` is a several-GB install (pytorch-cuda, jax cuda13);
-   check your HPC home quota before installing.
+    # HPC / CUDA 13 (py-cuda13 environment):
+    pixi install -e py-cuda13
+    pixi run -e py-cuda13 setup # Installs R packages that are not availble pre-compiled (e.g. from GitHub)
+    ```
 
 
-### **Workflow**
+### Workflow
 
 The analysis proceeds through four stages. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#preprocessing-pipeline) for the
@@ -103,36 +94,23 @@ full pipeline call flow, file-role tables, and HPC folder layout.
   `notebooks/batch_effect_analysis.rmd` in RStudio (under expansion — see
   TODO.md).
 
-**HPC execution** (SLURM; see
-[ARCHITECTURE.md](docs/ARCHITECTURE.md#hpc-folder-layout) for the folder layout):
+#### HPC execution
+Uses SLURM; see [ARCHITECTURE.md](docs/ARCHITECTURE.md#hpc-folder-layout) for the folder layout:
 
-**First-time HPC setup** (once per HPC account; do not run on the login node —
-submit as a job on `shared-cpu` with e.g. `--mem=32G` and a long `--time`):
-
-```bash
-# pixi is a user-space binary on HPC — no module exists
-curl -fsSL https://pixi.sh/install.sh | bash
-export PATH="${HOME}/.pixi/bin:${PATH}"
-cd ~/ECODA_paper
-git pull                                   # must succeed; see core.fileMode note in AGENTS.md
-pixi install --environment py-cuda13       # heavy: pytorch-cuda + jax cuda13, several GB
-pixi run -e py-cuda13 setup                # installs R packages into the py-cuda13 env
-```
-
-Then the usual pipeline:
+Running the pipeline:
 
 ```bash
-./src/1_stage_data/1_stage_data.sh                            # stage raw data (NAS → scratch, login node)
-sbatch src/2_dataset_specific_preprocessing/1_submit_hpc.sh   # dataset-specific preprocessing steps
-sbatch src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh     # standardized preprocessing + sync to NAS
-./src/4_cell_type_annotation/1_prepare_chunks.sh              # production: 5 samples/chunk (test: 1)
-./src/4_cell_type_annotation/2_submit_hpc_array.sh            # scATOMIC + HiTME annotation array
-./src/4_cell_type_annotation/3.1_submit_merge.sh <DS>         # merge annotations into every view + sync to NAS
+./src/1_stage_data/1_stage_data.sh                         # stage raw data (NAS → scratch, login node)
+./src/2_dataset_specific_preprocessing/1_submit_hpc.sh     # dataset-specific preprocessing steps
+./src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh       # standardized preprocessing + sync to NAS
+./src/4_cell_type_annotation/1_prepare_chunks.sh           # prepares chunk files required for the next step. See docs/ARCHITECTURE.md for details.
+./src/4_cell_type_annotation/2_submit_hpc_array.sh         # scATOMIC + HiTME annotation array
+./src/4_cell_type_annotation/3.1_submit_merge.sh           # merge annotations back to h5ad + sync to NAS
 ```
 
 - **Benchmark methods** (`src/5_run_benchmark_methods/run_python_sample_embedding_methods/`) — PLANNED, not yet implemented: no SLURM submit script exists yet; the folder contains only the method notebook `1.2_benchmark_methods_py.qmd` (to be converted to `.py`). See TODO.md.
 
-#### **Expected Outputs**
+#### Expected Outputs
 
 - `.feather` files — cross-language distance matrices and embeddings produced
   by Python benchmark methods and consumed by R processors.
@@ -149,3 +127,12 @@ preprint:
 **Cell type composition drives patient stratification in single-cell RNA-seq
 cohorts.** Halter, C., Andreatta, M., & Carmona, S. J. (2026). *bioRxiv*. doi:
 [10.64898/2026.03.27.714811v1](https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1)
+
+
+## Reference data
+
+- `aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz`: Ensembl 105 human gene reference
+  (GRCh38.p13) used for gene-name standardization in the preprocessing pipeline
+  (`src/gene_utils.py`). Originally retrieved on 14.02.2022 from the `aux/` folder
+  of the carmonalab `scRNAseq_data_processing` repository:
+  https://raw.githubusercontent.com/carmonalab/scRNAseq_data_processing/master/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz
