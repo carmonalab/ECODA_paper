@@ -3,8 +3,8 @@
 #SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=128G
 #SBATCH --mail-type=END,FAIL
 # NOTE: 16G is the baseline. Datasets with >100k cells may need 32-64G.
 # If a dataset OOMs, increase --mem for that specific dataset's worker.

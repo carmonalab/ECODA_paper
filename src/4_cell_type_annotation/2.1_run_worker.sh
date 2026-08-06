@@ -1,13 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=scrna_worker
-#SBATCH --time=02:00:00                    
+#SBATCH --time=02:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1                  
-#SBATCH --mem=16G                          
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
 #SBATCH --mail-type=END,FAIL
-# NOTE: 16G should be sufficient for 5 samples/chunk (each subset from h5ad).
-# If OOM occurs, bump to 32G and resubmit the failed chunk only.
 
 set -euo pipefail
 
