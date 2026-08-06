@@ -5,9 +5,9 @@
 # the staged Joanito raw .rds into memory once and:
 #
 #   1. Computes the `seqtec` batch column and saves the full object back in
-#      place (idempotent — recomputes seqtec each run). Must run AFTER
-#      1_stage_data.sh and BEFORE the preprocess array (the batch_effect_analysis
-#      view uses seqtec as batch_col).
+#      place (only when the column is absent — on re-runs the in-place save is
+#      skipped). Must run AFTER 1_stage_data.sh and BEFORE the preprocess array
+#      (the batch_effect_analysis view uses seqtec as batch_col).
 #
 #   2. Derives the _debug 5-sample subset from the SAME in-memory object:
 #      5 samples covering (sample.origin x seqtec x Site) combos (candidates
@@ -50,16 +50,19 @@ message("Input has ", ncol(seurat), " cells in ",
 # -----------------------------------------------------------------------------
 # 1. seqtec batch column (single source of truth — see header note)
 # -----------------------------------------------------------------------------
-seurat$seqtec <- ifelse(
-  seurat$dataset %in% c("CRC-SG1", "KUL5"),
-  "5' seq",
-  "3' seq"
-)
-
-# In-place save is idempotent (recomputes seqtec each run).
-# Must run AFTER 1_stage_data.sh and BEFORE the preprocess array.
-saveRDS(seurat, input)
-message("Saved seqtec back to: ", input)
+if (!"seqtec" %in% colnames(seurat@meta.data)) {
+  seurat$seqtec <- ifelse(
+    seurat$dataset %in% c("CRC-SG1", "KUL5"),
+    "5' seq",
+    "3' seq"
+  )
+  # In-place save is idempotent. Must run AFTER 1_stage_data.sh and BEFORE
+  # the preprocess array.
+  saveRDS(seurat, input)
+  message("Saved seqtec back to: ", input)
+} else {
+  message("seqtec already present — skipping recompute and in-place save.")
+}
 
 # -----------------------------------------------------------------------------
 # 2. _debug 5-sample subset (same in-memory object, no extra read)
