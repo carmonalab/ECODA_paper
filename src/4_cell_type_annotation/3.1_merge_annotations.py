@@ -1,4 +1,5 @@
 import os
+import sys
 import argparse
 import pandas as pd
 import anndata as ad
@@ -32,7 +33,7 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
     annot_files = sorted(glob.glob(f"{annot_dir}/annotations_chunk_*.feather"))
     if not annot_files:
         print(f"No annotation feather files found in {annot_dir}")
-        return
+        sys.exit(1)
 
     print(f"Found {len(annot_files)} annotation chunk files")
     annotations = pd.concat(
@@ -45,15 +46,15 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
     sample_col = os.environ.get("SAMPLE_COLNAME", "Sample")
     if sample_col not in annotations.columns:
         print(f"'{sample_col}' column missing in annotation feathers of {annot_dir}")
-        return
-    annotations["_key"] = (
+        sys.exit(1)
+    annotations["__annot_key"] = (
         annotations[sample_col].astype(str) + "_" + annotations["cell_barcode"].astype(str)
     )
-    n_dup = annotations["_key"].duplicated().sum()
+    n_dup = annotations["__annot_key"].duplicated().sum()
     if n_dup:
         print(f"WARNING: {n_dup} duplicate (sample, barcode) keys across chunk feathers; keeping first.")
-        annotations = annotations.drop_duplicates("_key", keep="first")
-    annotations = annotations.set_index("_key").drop(columns=["cell_barcode", sample_col])
+        annotations = annotations.drop_duplicates("__annot_key", keep="first")
+    annotations = annotations.set_index("__annot_key").drop(columns=["cell_barcode", sample_col])
     print(f"Total annotation entries: {len(annotations)}")
 
     adata = ad.read_h5ad(h5ad_path)
@@ -75,18 +76,37 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
         print(f"Dropping {len(existing)} existing annotation columns before re-merge: {existing}")
         obs = obs.drop(columns=existing)
 
-    obs["_key"] = obs[sample_col].astype(str) + "_" + adata.obs_names.astype(str)
+    obs["__annot_key"] = obs[sample_col].astype(str) + "_" + adata.obs_names.astype(str)
 
     original_n_obs = adata.n_obs
-    adata.obs = obs.join(annotations, how="left", on="_key").drop(columns="_key")
+    adata.obs = obs.join(annotations, how="left", on="__annot_key").drop(columns="__annot_key")
 
     # Subset obs to only whitelisted annotation columns
     orig_cols = [c for c in adata.obs.columns if c not in annot_cols]
     existing_annot = [c for c in annot_cols if c in adata.obs.columns]
     adata.obs = adata.obs[orig_cols + existing_annot]
 
-    merged_count = int(adata.obs[existing_annot].notna().any(axis=1).sum()) if existing_annot else 0
+    if not existing_annot:
+        print(
+            f"ERROR: no whitelisted annotation columns in the merged obs of "
+            f"{h5ad_path} — the annotation run produced no results (all "
+            f"scATOMIC/HiTME attempts failed in 2.1.1_process_chunk.R, so the "
+            f"feathers only hold cell barcodes). Not saving an unannotated h5ad."
+        )
+        sys.exit(1)
+
+    merged_count = int(adata.obs[existing_annot].notna().any(axis=1).sum())
     print(f"Rows with annotations after merge: {merged_count} / {original_n_obs}")
+    if merged_count == 0:
+        print(
+            f"ERROR: merge matched 0/{original_n_obs} cells. This indicates "
+            f"(sample, barcode) key drift between the view h5ad and the "
+            f"annotation feathers — check that SAMPLE_COLNAME "
+            f"('{os.environ.get('SAMPLE_COLNAME', 'Sample')}') is consistent "
+            f"between slurm_config.sh and 2.1.1_process_chunk.R."
+        )
+        sys.exit(1)
+    print(f"Match rate: {merged_count / original_n_obs:.2%} of cells matched")
 
     # Atomic write: write to a temp file in the same directory, then rename —
     # an interrupted run must not truncate the only scratch copy of the view.
