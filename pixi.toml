@@ -87,6 +87,7 @@ py-cuda13 = ["cuda13"]
 cmd = """
 Rscript -e "
   options(timeout = 9999999, repos = c(CRAN = 'https://packagemanager.posit.co/cran/latest'))
+
   # Keep pre-compiled conda-forge versions (r-igraph, r-leidenbase, ...) and only install
   # missing packages. Without this, remotes upgrades the whole dependency closure from CRAN
   # source (e.g. tries leidenbase 0.1.36 -> 0.1.37 even though Seurat has no version
@@ -109,7 +110,7 @@ Rscript -e "
   # scATOMIC
   if (!requireNamespace('dlm', quietly = TRUE)) remotes::install_version('dlm', version = '1.1-6.1', upgrade = 'never')
   if (!requireNamespace('Rmagic', quietly = TRUE)) remotes::install_version('Rmagic', version = '2.0.3', upgrade = 'never')
-  remotes::install_github('inofechm/cutoff.scATOMIC@d332cd5cf6a1ecef7c32d0adc4a862a4c47bcd95')
+  remotes::install_github('inofechm/cutoff.scATOMIC@a43fd5e1e8f0e3b71ec446970e4316f305939a17')
   remotes::install_github('abelson-lab/scATOMIC@d332cd5cf6a1ecef7c32d0adc4a862a4c47bcd95')
 
   # scITD
