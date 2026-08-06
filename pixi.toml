@@ -50,7 +50,7 @@ harmonypy = ">=2.0.0, <3"
 scHPL = "==1.0.0" # see https://github.com/theislab/scarches/issues/262
 pilotpy = "==2.0.15"
 scikit-misc = "==0.5.1"
-scvi-tools = "==1.2.2.post2"
+scvi-tools = "==1.5.0.post1"
 scarches = "==0.6.1"
 
 

@@ -11,7 +11,7 @@ analysis) → human-managed tasks. Completed history is preserved in git; see
 Implemented: debug/test execution mode (`--ds_name`/`--force`/`--test`, `_debug`
 5-sample subset built by the Joanito step `1.2.1_prepare_joanito.R` into
 `${HPC_SCRATCH_DIR}/_debug/data/`), per-dataset annotation + merge-back (union
-h5ad, `3.1_submit_merge.sh` coverage gate), legacy `Preprocess_datasets.Rmd`
+h5ad, `3_submit_merge.sh` coverage gate), legacy `Preprocess_datasets.Rmd`
 audit (deleted), `.Rprofile`/`.Renviron`/`RETICULATE_PYTHON` fixes. Details are
 preserved in git history (see previous TODO.md versions in `git log`).
 
@@ -33,7 +33,7 @@ Prereqs (explicitly user):
 - [ ] Preprocess: `1_submit_hpc_array.sh --ds_name _debug`; validation: h5ad loads, `X_pca`/`X_pca_harmony` present, ~2500 cells, runtime < 30s.
 - [ ] Chunks: `1_prepare_chunks.sh test _debug` (per-dataset union, 1 sample/chunk).
 - [ ] Annotation: `2_submit_hpc_array.sh _debug`.
-- [ ] Merge: `3.1_submit_merge.sh _debug`; validation: each view h5ad obs gains layer1–3 / scATOMIC cols (NA where absent), counts layer intact, annotated h5ad loads in R/Python.
+- [ ] Merge: `3_submit_merge.sh _debug`; validation: each view h5ad obs gains layer1–3 / scATOMIC cols (NA where absent), counts layer intact, annotated h5ad loads in R/Python.
 - [ ] Cluster verify items: CombinedPBMC 64G baseline; preprocess 16G (GongSharma); annotation 2h/16G vs 5×2 retries; `aux/scGateDB.rds` committed-cache note in `2_submit_hpc_array.sh` comment.
 - [ ] After debug passes: run one real dataset (e.g. Kim) before full rollout.
 
