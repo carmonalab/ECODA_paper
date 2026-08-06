@@ -10,12 +10,9 @@ r-base = "==4.5.2"
 python = "3.13.*"
 
 # ==========================================
-# CORE R STACK (Conda-Forge / Bioconda)
+# CORE R STACK
 # ==========================================
-
-# Required for reticulate to detect pixi python
-conda = ">=26.5.3,<27"
-
+conda = ">=26.5.3,<27" # Required for reticulate to detect pixi python
 r-remotes = "*"
 r-biocmanager = "*"
 r-locfit = "*"
@@ -30,14 +27,15 @@ r-ggally = ">=2.4.0,<3"
 r-hotelling = ">=1.0_8,<2"
 r-zcompositions = ">=1.6.2,<2"
 
-# ==========================================
-# FEATURE 1: Core Python Stack
-# ==========================================
+# Need to use pre-compiled versions, as source compilation might fail
+r-igraph = ">=2.3.3,<3"
+r-leidenbase = ">=0.1.36,<0.2"
 
-# Python Single-Cell Stack
+# ==========================================
+# CORE PYTHON STACK
+# ==========================================
 anndata = "==0.12.19"
 scanpy = "==1.12.2"
-pathlib = ">=1.0.1,<2"
 rpy2 = ">=3.6.7,<4"
 
 [pypi-dependencies]
@@ -50,7 +48,7 @@ scarches = "==0.6.1"
 
 
 # ==========================================
-# HARDWARE TARGETS (Overlapping Features)
+# HARDWARE TARGETS
 # ==========================================
 
 # 1. CPU-Only Target (for MacBook)
@@ -61,6 +59,7 @@ jax = "*"
 # 2. CUDA 13 Target (for HPC)
 [feature.cuda13.target.linux-64.dependencies]
 pytorch-cuda = { version = "*" }
+
 [feature.cuda13.target.linux-64.pypi-dependencies]
 jax = { version = "*", extras = ["cuda13"] }
 
@@ -73,70 +72,44 @@ py-cuda13 = ["cuda13"]
 
 
 # ==========================================
-# TASKS
+# INSTALL OTHER R PACKAGES
 # ==========================================
 
-[tasks.install-seurat]
-cmd = "Rscript -e \"remotes::install_github('satijalab/seurat@e4cc89238b233e46e2cef4a2b866896cf0cb093c')\""
-
-[tasks.install-anndatar]
-depends-on = ["install-seurat"]
-cmd = "Rscript -e \"remotes::install_github('scverse/anndataR@07612e4f0e5c7efff05265eb916ae9ed94bf78b9')\""
-
-[tasks.install-signatur]
-depends-on = ["install-anndatar"]
-cmd = "Rscript -e \"remotes::install_github('carmonalab/SignatuR@0aded1db20d14f47b5b6074fcf5fc9f9c2e6279e')\""
-
-[tasks.install-scatomic-deps]
-depends-on = ["install-signatur"]
+[tasks.setup]
 cmd = """
 Rscript -e "
-  if (!requireNamespace('dlm', quietly = TRUE)) remotes::install_cran('dlm', repos='https://packagemanager.posit.co/cran/latest', upgrade='never')
-  if (!requireNamespace('Rmagic', quietly = TRUE)) remotes::install_version('Rmagic', version='2.0.3', repos='http://cran.us.r-project.org')
-  if (!requireNamespace('scATOMIC', quietly = TRUE)) remotes::install_github('abelson-lab/scATOMIC')
-  remotes::install_github('inofechm/cutoff.scATOMIC@d332cd5cf6a1ecef7c32d0adc4a862a4c47bcd95')
-"
-"""
+  options(timeout = 9999999, repos = c(CRAN = 'https://packagemanager.posit.co/cran/latest'))
+  bioc_repos <- BiocManager::repositories()
 
-[tasks.install-scitd-deps]
-depends-on = ["install-scatomic-deps"]
-cmd = """
-Rscript -e "
-  if (!requireNamespace('edgeR', quietly = TRUE) || !requireNamespace('sva', quietly = TRUE)) {
-    BiocManager::install(c('edgeR', 'sva'), ask=FALSE, update=FALSE)
-  }
-  if (!requireNamespace('scITD', quietly = TRUE)) {
-    remotes::install_version('scITD', version='1.0.4', repos='https://cloud.r-project.org', upgrade='never')
-  }
-"
-"""
+  # SHA-pinned GitHub packages (installed directly; remotes checks installed SHA and skips if matching)
 
-[tasks.install-hitme-deps]
-depends-on = ["install-scitd-deps"]
-cmd = """
-Rscript -e "
+  # Basics
+  remotes::install_github('satijalab/seurat@e4cc89238b233e46e2cef4a2b866896cf0cb093c')
+  remotes::install_github('scverse/anndataR@07612e4f0e5c7efff05265eb916ae9ed94bf78b9')
+
+  # HiTME
+  remotes::install_github('carmonalab/SignatuR@0aded1db20d14f47b5b6074fcf5fc9f9c2e6279e')
   remotes::install_github('carmonalab/STACAS@ea34e824e17df6316823db0a9b6322af0833e501')
   remotes::install_github('carmonalab/ProjecTILs@1159e1778820180fd0233bbfc0d7f296e35bd25f')
   remotes::install_github('carmonalab/HiTME@87f8d4147aaa468438df33f50cabf2005ac518bf')
-"
-"""
 
-[tasks.install-r-methods]
-depends-on = ["install-hitme-deps"]
-cmd = """
-Rscript -e "
-  options(timeout=9999999)
-  
-  if (!requireNamespace('limma', quietly = TRUE)) remotes::install_version('limma', version='3.68.4', repos=BiocManager::repositories(), upgrade='never')
-  if (!requireNamespace('MOFA2', quietly = TRUE)) remotes::install_version('MOFA2', version='1.20.2', repos=BiocManager::repositories(), upgrade='never')
-  if (!requireNamespace('GloScope', quietly = TRUE)) remotes::install_version('GloScope', version='2.0.1', repos=BiocManager::repositories(), upgrade='never')
-  if (!requireNamespace('thisutils', quietly = TRUE)) remotes::install_cran('thisutils', repos='https://packagemanager.posit.co/cran/latest', upgrade='never')
-  
+  # scATOMIC
+  if (!requireNamespace('dlm', quietly = TRUE)) remotes::install_version('dlm', version = '1.1-6.1', upgrade = 'never')
+  if (!requireNamespace('Rmagic', quietly = TRUE)) remotes::install_version('Rmagic', version = '2.0.3', upgrade = 'never')
+  remotes::install_github('inofechm/cutoff.scATOMIC@d332cd5cf6a1ecef7c32d0adc4a862a4c47bcd95')
+  remotes::install_github('abelson-lab/scATOMIC@d332cd5cf6a1ecef7c32d0adc4a862a4c47bcd95')
+
+  # scITD
+  if (!requireNamespace('edgeR', quietly = TRUE)) remotes::install_version('edgeR', version = '4.8.2', repos = bioc_repos, upgrade = 'never')
+  if (!requireNamespace('sva', quietly = TRUE)) remotes::install_version('sva', version = '3.58.0', repos = bioc_repos, upgrade = 'never')
+  if (!requireNamespace('scITD', quietly = TRUE)) remotes::install_version('scITD', version = '1.0.4', upgrade = 'never')
+
+  if (!requireNamespace('limma', quietly = TRUE)) remotes::install_version('limma', version = '3.68.4', repos = bioc_repos, upgrade = 'never')
+  if (!requireNamespace('MOFA2', quietly = TRUE)) remotes::install_version('MOFA2', version = '1.20.2', repos = bioc_repos, upgrade = 'never')
+  if (!requireNamespace('GloScope', quietly = TRUE)) remotes::install_version('GloScope', version = '2.0.1', repos = bioc_repos, upgrade = 'never')
+  if (!requireNamespace('thisutils', quietly = TRUE)) remotes::install_version('thisutils', version = '0.4.9', upgrade = 'never')
   remotes::install_github('GfellerLab/EPIC@50a4f404f96c2842b2891b517b4e3bfaa6c64b8f')
-  remotes::install_github('carmonalab/scECODA@055bc5efb51cac7c3b6e0ea7eae84420f0a8d21a', ref='compatibility-R-4.4')
+  remotes::install_github('carmonalab/scECODA@055bc5efb51cac7c3b6e0ea7eae84420f0a8d21a')
   remotes::install_github('funkyheatmap/funkyheatmap@d66dd6d65b4e29fb3f6a300627a4db367ad9db0c')
 "
 """
-
-[tasks.setup]
-depends-on = ["install-r-methods"]
