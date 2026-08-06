@@ -67,6 +67,7 @@ Four-stage end-to-end pipeline; file-level details live in docs/ARCHITECTURE.md.
     - The HPC cluster is only available if logged in to the UNIGE network (user might work from home (needs to connect to VPN) or from the office (has access to UNIGE network)).
         - If in the UNIGE network, you can log in with `ssh [REDACTED_HOST]` (user needs to enter the password).
     - By default, some scripts might need to be given the rights to be executed first, e.g. `chmod +x src/1_stage_data/1_stage_data.sh` or, for the whole repo: `find src -name "*.sh" -exec chmod +x {} \;1_stage_data.sh`
+    - All `src/*.sh` are committed with the executable bit set (`100755`), so fresh clones are ready to run. If your HPC working copy predates that commit, set `git config core.fileMode false` (already done on the current HPC clone) instead of chmod-ing — otherwise mode-change noise blocks `git pull`.
 - Heavy scripts are run on the HPC cluster, specifically located in these folders:
     - `src/1_stage_data`
     - `src/2_dataset_specific_preprocessing`
@@ -74,8 +75,9 @@ Four-stage end-to-end pipeline; file-level details live in docs/ARCHITECTURE.md.
     - `src/4_cell_type_annotation`
     - `src/5_run_benchmark_methods/run_python_sample_embedding_methods`
 - `slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
+- pixi is a user-space binary on HPC at `~/.pixi/bin/pixi` (no module exists); the `py-cuda13` env lives at `.pixi/envs/py-cuda13/`. First-time env setup (pixi binary + `pixi install --environment py-cuda13` + `pixi run -e py-cuda13 setup`) runs via the sbatch job in README.md (heavy installs must NOT run on the login node).
 - **Worker environment invariants** (details in ARCHITECTURE.md):
-    - Python is invoked via `PYTHON_BIN` and R via `PIXI_RSCRIPT` from `slurm_config.sh` — never bare `python`/`Rscript` (worker nodes may not have scanpy/anndata); `RETICULATE_PYTHON` is also exported so R workers' reticulate always uses the pixi python (mirrors the project-root `.Rprofile`, which only applies to non-vanilla sessions).
+    - Python is invoked via `PYTHON_BIN` and R via `PIXI_RSCRIPT` from `slurm_config.sh` — never bare `python`/`Rscript` (worker nodes may not have scanpy/anndata); on HPC all three interpreter pointers (`PYTHON_BIN`, `PIXI_RSCRIPT`, `RETICULATE_PYTHON`) come from the `py-cuda13` pixi env; any `pixi run`/`pixi run setup` on HPC must use `-e py-cuda13`. `RETICULATE_PYTHON` is also exported so R workers' reticulate always uses the pixi python (mirrors the project-root `.Rprofile`, which only applies to non-vanilla sessions; the `.Rprofile` fallback targets `.pixi/envs/default` on macOS only — `py-cuda13` is linux-64-scoped and does not exist on osx-arm64).
     - Annotation (`2.1.1_process_chunk.R`) builds Seurat objects from the raw counts layer via `get_seurat_obj_from_h5ad()` (`layers["counts"]`, X fallback with warning) — NOT from log-normalized `X`; feather names derive from the chunk file (`chunk_<N>.txt` → `annotations_chunk_<N>.feather`), not `SLURM_ARRAY_TASK_ID`; scGate models load from the shared `${SCGATE_DB_PATH}` cache (`aux/scGateDB.rds`) created by `2.0_create_scgate_db.R`.
     - Annotation paths are per-dataset under `${HPC_SCRATCH_DIR}/${DS_NAME}/output` (see `config_helper.R`); `SAMPLE_COLNAME="Sample"` is exported by `slurm_config.sh`; `TISSUE_TYPE`/`NORMAL_TISSUE` are auto-exported per array task from `datasets.json` by `2.1_run_worker.sh` (via jq, `module load jq/1.6` on the worker).
 
