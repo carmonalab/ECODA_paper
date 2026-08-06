@@ -70,6 +70,11 @@ The **scECODA** R package for scalable cohort-level analysis is available at
     # HPC / CUDA 13 GPU available (py-cuda13 environment):
     pixi install -e py-cuda13 && pixi run -e py-cuda13 setup
     ```
+    **HPC note**: after pulling changes to `pixi.toml`/`pixi.lock` onto the HPC
+    clone, re-run `pixi install -e py-cuda13` on the login node *before*
+    submitting jobs. Concurrent `pixi run` re-syncs from parallel jobs can race
+    (observed: `failed to remove directory ... os error 2`); a serial login-node
+    re-sync avoids this.
 
 
 ### Workflow

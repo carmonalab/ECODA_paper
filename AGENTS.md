@@ -17,6 +17,20 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
   source `src/slurm_config.sh`, then `cd "${PROJECT_ROOT}"`. This is the established
   convention in every existing script — keep it for any new script (Python/R interop
   resolves repo-relative paths; see docs/ARCHITECTURE.md).
+- sbatch-submitted scripts must NOT resolve `src/slurm_config.sh` from
+  `BASH_SOURCE`: Slurm copies submitted scripts to
+  `/var/spool/slurmd/job<id>/slurm_script`, so `BASH_SOURCE` points at the spool
+  dir. The 6 sbatch workers (`1.1_submit_combinedpbmc.sh`,
+  `1.2_submit_joanito.sh`, `1.3_submit_kfoury_lowres_ct.sh`,
+  `3_scrnaseq_preprocessing/1.1_run_worker.sh`,
+  `4_cell_type_annotation/2.1_run_worker.sh`, and the benchmark worker
+  `5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh`)
+  recover `SCRIPT_DIR` from the job record via `scontrol show job`
+  (`Command=` field) when `SLURM_JOB_ID` is set, with the `BASH_SOURCE` fallback
+  for login-node execution. Keep this block in any new sbatch-submitted script.
+- `slurm_config.sh` prepends the py-cuda13 env bin
+  (`.pixi/envs/py-cuda13/bin`) to `PATH` so rpy2 (`src/utils/preprocess_utils.py`)
+  finds R/Rscript when workers invoke `${PYTHON_BIN}` directly.
 - Search code with the built-in Grep/semantic-search tools or `git grep` (tracked files
   only). Never run raw `grep -rn "..." .` — it scans the gitignored 97 GB `data/` and
   `.pixi/` and will time out. If plain `grep` must be used, scope the path and exclude
