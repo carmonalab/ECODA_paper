@@ -16,6 +16,22 @@ ${HPC_SCRATCH_DIR}/<ds>/data, e.g. Stephenson/data, Gongsharma_cmv_young_males/d
 Zhu/data); otherwise the local flat layout (PROJECT_ROOT/data) is used.
 output_dir doubles as the rds->h5ad conversion cache ({stem}_raw.h5ad).
 
+Parallel workers:
+- The three sources are loaded concurrently in 3 fork worker processes
+  (ProcessPoolExecutor, max_workers=3); wall time is ~max(source) instead of the
+  sum. Each worker writes a trimmed per-source intermediate to
+  output_dir/_intermediates/ (<source>_subset.h5ad, overwritten on rerun); the
+  main process then loads the small intermediates for the shared final steps
+  (common-gene intersection with <5000 union fallback, Sample prefixing,
+  concat, write).
+- Stephenson and Zhu load via the R interop (rds -> cached {stem}_raw.h5ad).
+  rpy2 is imported lazily INSIDE the worker functions only, so the parent
+  process never initializes R before forking.
+- GongSharma is read in backed mode (sc.read_h5ad(..., backed="r")): non-counts
+  layers are dropped on disk and only the HDF5 chunks covering the ~15 picked
+  samples are materialized via to_memory() (identical rng(123) pick logic as
+  before); on any failure it falls back to the full in-memory load.
+
 HPC notes:
 - Must run AFTER src/1_stage_data/1_stage_data.sh (which stages raw inputs per
   dataset to ${HPC_SCRATCH_DIR}/<ds>/data) and BEFORE
@@ -27,27 +43,28 @@ HPC notes:
   ${PROJECT_ROOT} at import time.
 - Heavy loads (GongSharma is huge) may warrant running via a single sbatch job
   instead of interactively on the login node if OOM occurs.
-
-Loads each source sequentially, keeps memory in check by trimming obs columns
-early and releasing source objects before concat.
 """
 
 import os
 import sys
 import gc
 import argparse
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
 import numpy as np
-import pandas as pd
 import scanpy as sc
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.gene_utils import standardize_gene_symbols
 from src.datasets_io import read_datasets_json
-from src.utils.preprocess_utils import load_input, apply_subset_vars
+
+KEEP_BASE = ["Sample", "batch", "cond"]
+GONGSHARMA_N_SAMPLES = 15
+SAMPLE_RNG_SEED = 123
 
 
-def load_and_prepare_source(ds_name, entry, base_path, output_dir, view_name=None, layout="flat"):
+def _resolve_source_paths(ds_name, entry, base_path, layout):
     if layout == "per-dataset":
         base_path = base_path / ds_name / "data"
 
@@ -64,7 +81,16 @@ def load_and_prepare_source(ds_name, entry, base_path, output_dir, view_name=Non
                 f"Run src/1_stage_data/1_stage_data.sh first (expected in {base_path})."
             )
 
-    adata = load_input(input_names, base_path, output_dir)
+    return input_names, base_path
+
+
+def load_and_prepare_source(ds_name, entry, base_path, output_dir, view_name=None, layout="flat"):
+    # Lazy import: preprocess_utils.py initializes rpy2 (embedded R session) at
+    # module import time. Only worker processes (post-fork) may trigger it.
+    from src.utils.preprocess_utils import load_input, apply_subset_vars
+
+    input_names, src_path = _resolve_source_paths(ds_name, entry, base_path, layout)
+    adata = load_input(input_names, src_path, output_dir)
 
     subset_vars = {}
     if view_name:
@@ -82,6 +108,90 @@ def keep_only_cols(adata, cols):
     existing = [c for c in cols if c in adata.obs.columns]
     adata.obs = adata.obs[existing]
     return adata
+
+
+def finalize_and_write_intermediate(adata, sample_col, batch_label, cond_value, intermediate_path):
+    adata.obs["batch"] = batch_label
+    adata.obs["cond"] = cond_value
+    if sample_col != "Sample" and sample_col in adata.obs.columns:
+        adata.obs["Sample"] = adata.obs[sample_col].values
+    keep_only_cols(adata, KEEP_BASE)
+    print(f"  -> {adata.n_obs} cells", flush=True)
+    adata.write_h5ad(str(intermediate_path))
+    return adata.n_obs, str(intermediate_path)
+
+
+def worker_stephenson(entry, base_path, output_dir, view_name, layout, intermediate_path):
+    # Subset to the benchmark_analysis view (Site = Ncl only), consistent
+    # with previous code.
+    print("Loading Stephenson...", flush=True)
+    adata = load_and_prepare_source(
+        "Stephenson", entry, base_path, output_dir,
+        view_name=view_name, layout=layout,
+    )
+    cond = adata.obs[entry["label_col"]].values
+    return finalize_and_write_intermediate(
+        adata, entry["sample_col"], "Stephenson", cond, intermediate_path
+    )
+
+
+def worker_gongsharma(entry, base_path, output_dir, layout, intermediate_path):
+    print("Loading GongSharma...", flush=True)
+    sample_col = entry["sample_col"]
+    input_names, src_path = _resolve_source_paths(
+        "Gongsharma_cmv_young_males", entry, base_path, layout
+    )
+    names = input_names if isinstance(input_names, list) else [input_names]
+    try:
+        backed = []
+        unique_samples = []
+        for name in names:
+            adata = sc.read_h5ad(str(src_path / name), backed="r")
+            backed.append(adata)
+            for s in adata.obs[sample_col].unique().tolist():
+                if s not in unique_samples:
+                    unique_samples.append(s)
+        rng = np.random.default_rng(SAMPLE_RNG_SEED)
+        chosen = rng.choice(unique_samples, size=min(GONGSHARMA_N_SAMPLES, len(unique_samples)), replace=False)
+        print(f"  GongSharma: {len(unique_samples)} total samples, picking {len(chosen)}", flush=True)
+        subsets = []
+        for adata in backed:
+            # Backed layer deletion drops the HDF5 dataset without loading X;
+            # keeps heavy scaled layers from being materialized.
+            for layer_name in list(adata.layers.keys()):
+                if layer_name != "counts":
+                    del adata.layers[layer_name]
+            mask = adata.obs[sample_col].isin(chosen)
+            subsets.append(adata[mask].to_memory())
+            try:
+                adata.file.close()
+            except Exception:
+                pass
+        adata = sc.concat(subsets, index_unique="_") if len(subsets) > 1 else subsets[0]
+    except Exception as exc:
+        print(
+            f"  Warning: backed-mode GongSharma read failed ({exc!r}); "
+            "falling back to full in-memory load.",
+            flush=True,
+        )
+        adata = load_and_prepare_source(
+            "Gongsharma_cmv_young_males", entry, base_path, output_dir, layout=layout
+        )
+        unique_samples = adata.obs[sample_col].unique().tolist()
+        rng = np.random.default_rng(SAMPLE_RNG_SEED)
+        chosen = rng.choice(unique_samples, size=min(GONGSHARMA_N_SAMPLES, len(unique_samples)), replace=False)
+        print(f"  GongSharma: {len(unique_samples)} total samples, picking {len(chosen)}", flush=True)
+        adata = adata[adata.obs[sample_col].isin(chosen)].copy()
+
+    standardize_gene_symbols(adata)
+    adata.var_names_make_unique()
+    return finalize_and_write_intermediate(adata, sample_col, "GongSharma", "Healthy", intermediate_path)
+
+
+def worker_zhu(entry, base_path, output_dir, layout, intermediate_path):
+    print("Loading Zhu...", flush=True)
+    adata = load_and_prepare_source("Zhu", entry, base_path, output_dir, layout=layout)
+    return finalize_and_write_intermediate(adata, entry["sample_col"], "Zhu", "Healthy", intermediate_path)
 
 
 def main():
@@ -132,55 +242,41 @@ def main():
             f"Missing sources in datasets.json (required for CombinedPBMC): {missing}"
         )
 
-    keep_base = ["Sample", "batch", "cond"]
+    # ---- Load the three sources concurrently (3 fork workers) ----
+    # Each worker writes its own small intermediate into output_dir/_intermediates/.
+    # The parent never imports src.utils.preprocess_utils, so rpy2/R init happens
+    # only inside the R workers, after forking.
+    intermediate_dir = output_dir / "_intermediates"
+    os.makedirs(intermediate_dir, exist_ok=True)
+    mp_context = multiprocessing.get_context("fork")
+    with ProcessPoolExecutor(max_workers=3, mp_context=mp_context) as executor:
+        futures = {
+            "Stephenson": executor.submit(
+                worker_stephenson, config["Stephenson"], base_path, output_dir,
+                view_name="benchmark_analysis", layout=layout,
+                intermediate_path=intermediate_dir / "Stephenson_subset.h5ad",
+            ),
+            "GongSharma": executor.submit(
+                worker_gongsharma, config["Gongsharma_cmv_young_males"], base_path,
+                output_dir, layout=layout,
+                intermediate_path=intermediate_dir / "GongSharma_subset.h5ad",
+            ),
+            "Zhu": executor.submit(
+                worker_zhu, config["Zhu"], base_path, output_dir, layout=layout,
+                intermediate_path=intermediate_dir / "Zhu_subset.h5ad",
+            ),
+        }
+        results = {name: future.result() for name, future in futures.items()}
 
-    # ---- Stephenson ----
-    # Subset to the benchmark_analysis view (Site = Ncl only), consistent
-    # with previous code.
-    print("Loading Stephenson...")
-    entry_s = config["Stephenson"]
-    adata_s = load_and_prepare_source(
-        "Stephenson", entry_s, base_path, output_dir,
-        view_name="benchmark_analysis", layout=layout,
-    )
-    adata_s.obs["batch"] = "Stephenson"
-    adata_s.obs["cond"] = adata_s.obs[entry_s["label_col"]].values
-    sample_col_s = entry_s["sample_col"]
-    if sample_col_s != "Sample" and sample_col_s in adata_s.obs.columns:
-        adata_s.obs["Sample"] = adata_s.obs[sample_col_s].values
-    keep_only_cols(adata_s, keep_base)
-    print(f"  -> {adata_s.n_obs} cells")
+    path_s = results["Stephenson"][1]
+    path_g = results["GongSharma"][1]
+    path_z = results["Zhu"][1]
 
-    # ---- GongSharma ----
-    print("Loading GongSharma...")
-    entry_g = config["Gongsharma_cmv_young_males"]
-    adata_g = load_and_prepare_source(
-        "Gongsharma_cmv_young_males", entry_g, base_path, output_dir, layout=layout
-    )
-    sample_col_g = entry_g["sample_col"]
-    unique_samples = adata_g.obs[sample_col_g].unique().tolist()
-    rng = np.random.default_rng(123)
-    chosen = rng.choice(unique_samples, size=min(15, len(unique_samples)), replace=False)
-    print(f"  GongSharma: {len(unique_samples)} total samples, picking {len(chosen)}")
-    adata_g = adata_g[adata_g.obs[sample_col_g].isin(chosen)].copy()
-    adata_g.obs["batch"] = "GongSharma"
-    adata_g.obs["cond"] = "Healthy"
-    if sample_col_g != "Sample" and sample_col_g in adata_g.obs.columns:
-        adata_g.obs["Sample"] = adata_g.obs[sample_col_g].values
-    keep_only_cols(adata_g, keep_base)
-    print(f"  -> {adata_g.n_obs} cells")
-
-    # ---- Zhu ----
-    print("Loading Zhu...")
-    entry_z = config["Zhu"]
-    adata_z = load_and_prepare_source("Zhu", entry_z, base_path, output_dir, layout=layout)
-    adata_z.obs["batch"] = "Zhu"
-    adata_z.obs["cond"] = "Healthy"
-    sample_col_z = entry_z["sample_col"]
-    if sample_col_z != "Sample" and sample_col_z in adata_z.obs.columns:
-        adata_z.obs["Sample"] = adata_z.obs[sample_col_z].values
-    keep_only_cols(adata_z, keep_base)
-    print(f"  -> {adata_z.n_obs} cells")
+    # ---- Reload the small per-source intermediates ----
+    print("Loading per-source intermediates...")
+    adata_s = sc.read_h5ad(path_s)
+    adata_g = sc.read_h5ad(path_g)
+    adata_z = sc.read_h5ad(path_z)
 
     # ---- Compute common genes from standardized var_names ----
     gene_sets = [set(adata.var_names) for adata in [adata_s, adata_g, adata_z]]
