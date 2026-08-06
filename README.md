@@ -119,7 +119,7 @@ Running the pipeline:
   execution-time logs.
 
 
-## Reference
+## How to Cite
 
 If you use ECODA or this benchmark code in your research, please cite our
 preprint:
@@ -131,8 +131,9 @@ cohorts.** Halter, C., Andreatta, M., & Carmona, S. J. (2026). *bioRxiv*. doi:
 
 ## Reference data
 
-- `aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz`: Ensembl 105 human gene reference
-  (GRCh38.p13) used for gene-name standardization in the preprocessing pipeline
-  (`src/gene_utils.py`). Originally retrieved on 14.02.2022 from the `aux/` folder
-  of the carmonalab `scRNAseq_data_processing` repository:
-  https://raw.githubusercontent.com/carmonalab/scRNAseq_data_processing/master/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz
+- Ensembl 105 human gene reference (GRCh38.p13) used for gene-name standardization in the preprocessing pipeline
+    - Retrieved from: https://raw.githubusercontent.com/carmonalab/scRNAseq_data_processing/master/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz
+- Reference maps for cell type annotation were obtained from the Carmona Lab
+  light reference atlases (Garnica et al., 2024)
+    - Hosted on Figshare: [https://doi.org/10.6084/m9.figshare.26310994](https://doi.org/10.6084/m9.figshare.26310994).
+    - Associated GitHub Code Repository: [carmonalab/Reference_maps](https://github.com/carmonalab/Reference_maps)
