@@ -58,7 +58,7 @@ The **scECODA** R package for scalable cohort-level analysis is available at
     ```bash
     curl -fsSL https://pixi.sh/install.sh | bash
     echo 'export PATH="${HOME}/.pixi/bin:${PATH}"' >> ~/.bashrc
-    source ~/.bashrc
+    echo '[ -f ~/.bashrc ] && source ~/.bashrc' >> ~/.bash_profile
     ```
 3. Setup your environment:
     ```bash
