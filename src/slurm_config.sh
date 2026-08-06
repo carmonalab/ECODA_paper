@@ -24,19 +24,24 @@ export NAS_TARGET_DIR="${NAS_PREFIX}/Projects/ECODA_paper"
 export HPC_SCRATCH_DIR="${HOME}/scratch/ECODA_paper"
 
 # --- Pixi-managed interpreter commands ---
-# PYTHON_BIN: pixi python (has scanpy/anndata etc.); plain `python` on worker
-# nodes may resolve to a bare system python without these packages.
-# PIXI_RSCRIPT: pixi Rscript entry point (word-splits into the pixi command).
-export PYTHON_BIN="${PROJECT_ROOT}/.pixi/envs/default/bin/python"
-export PIXI_RSCRIPT="${HOME}/.pixi/bin/pixi run Rscript --vanilla"
+# HPC interpreters come from the py-cuda13 pixi env; plain `python` on worker
+# nodes may resolve to a bare system python without scanpy/anndata etc.
+# PYTHON_BIN: py-cuda13 python (has scanpy/anndata/torch etc.).
+# PIXI_RSCRIPT: pixi Rscript entry point for the py-cuda13 env (word-splits
+# into `pixi run -e py-cuda13 Rscript --vanilla`; the -e flag must stay between
+# `run` and `Rscript` — pixi run without -e uses the default env instead).
+export PYTHON_BIN="${PROJECT_ROOT}/.pixi/envs/py-cuda13/bin/python"
+export PIXI_RSCRIPT="${HOME}/.pixi/bin/pixi run -e py-cuda13 Rscript --vanilla"
 
 # --- reticulate python (R workers) ---
 # Pinned explicitly so R (2.1.1_process_chunk.R, imports.R) always uses the
-# pixi python: reticulate's own discovery may otherwise pick a stray
+# py-cuda13 python: reticulate's own discovery may otherwise pick a stray
 # ~/.virtualenvs/r-reticulate or system python on the worker. Exported so it
 # propagates through sbatch/srun. Mirrors .Rprofile (project root), which only
 # applies to non-vanilla R sessions (.Rprofile is not read with --vanilla).
-export RETICULATE_PYTHON="${PROJECT_ROOT}/.pixi/envs/default/bin/python"
+# Note: .Rprofile points at .pixi/envs/default on macOS only (py-cuda13 is
+# linux-64-target-scoped and does not exist on osx-arm64).
+export RETICULATE_PYTHON="${PROJECT_ROOT}/.pixi/envs/py-cuda13/bin/python"
 
 # --- Reference atlas paths (cell type annotation) ---
 export NAS_REF_DIR="${NAS_PREFIX}/DataCollections/reference_atlases/sketched_200ct/"

@@ -67,13 +67,19 @@ The **scECODA** R package for scalable cohort-level analysis is available at
    ```bash
    pixi install
    ```
-   This creates the default `py-cpu` environment (macOS / development). For HPC
+   This creates the default `pixi` environment (macOS / development). For HPC
    with CUDA, use `pixi install --environment py-cuda13` instead.
 4. Install R packages (Seurat, anndataR, SignatuR, scATOMIC/scITD/HiTME deps,
    and all benchmark method packages) via the chained setup task:
    ```bash
-   pixi run setup
+   pixi run setup                       # local (default env)
+   pixi run -e py-cuda13 setup          # HPC (py-cuda13 env)
    ```
+   On HPC, R packages must be installed into the `py-cuda13` env — all
+   interpreter pointers in `src/slurm_config.sh` (`PYTHON_BIN`,
+   `PIXI_RSCRIPT`, `RETICULATE_PYTHON`) resolve to `.pixi/envs/py-cuda13/`
+   there. Note: `py-cuda13` is a several-GB install (pytorch-cuda, jax cuda13);
+   check your HPC home quota before installing.
 
 
 ### **Workflow**
@@ -99,6 +105,21 @@ full pipeline call flow, file-role tables, and HPC folder layout.
 
 **HPC execution** (SLURM; see
 [ARCHITECTURE.md](docs/ARCHITECTURE.md#hpc-folder-layout) for the folder layout):
+
+**First-time HPC setup** (once per HPC account; do not run on the login node —
+submit as a job on `shared-cpu` with e.g. `--mem=32G` and a long `--time`):
+
+```bash
+# pixi is a user-space binary on HPC — no module exists
+curl -fsSL https://pixi.sh/install.sh | bash
+export PATH="${HOME}/.pixi/bin:${PATH}"
+cd ~/ECODA_paper
+git pull                                   # must succeed; see core.fileMode note in AGENTS.md
+pixi install --environment py-cuda13       # heavy: pytorch-cuda + jax cuda13, several GB
+pixi run -e py-cuda13 setup                # installs R packages into the py-cuda13 env
+```
+
+Then the usual pipeline:
 
 ```bash
 ./src/1_stage_data/1_stage_data.sh                            # stage raw data (NAS → scratch, login node)
