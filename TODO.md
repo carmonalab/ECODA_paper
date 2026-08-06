@@ -48,6 +48,10 @@ Prereqs (explicitly user):
   HPC debug validation PENDING — smoke test:
   `./1_submit_hpc_array.sh --ds_name _debug --methods mrvi` (then scpoli, pilot);
   check `benchmark/embeddings/` feathers + `execution_times.feather`.
+  Combos run defaults-first (MrVI_hvg2000, scPoli_hvg2000_dims15_highres,
+  PILOT_hvg2000_highres) so the main methods' `mem_GB`/`time_secs` are measured
+  before in-process memory bloat (peak RSS is monotonic within a process;
+  non-default combos keep their relative order via stable sort).
 - [ ] **3.2 R methods**: run `benchmark_methods_r.R` + `benchmark_pipeline.R` on HPC via
   a single-worker bash script; NAS targets `benchmark/{embeddings,plots}/`.
 - [ ] **3.3 New methods**: PILOT-GM-VAE (add to py script + `constants.R` + R ingest;
@@ -92,6 +96,10 @@ Prereqs (explicitly user):
 
 ## Changelog
 
+- `1.1.1_benchmark_methods_py.py`: combos now run defaults-first (stable sort on the
+  fully-built combos list) so the main-method rows (MrVI_hvg2000,
+  scPoli_hvg2000_dims15_highres, PILOT_hvg2000_highres) report unbloated `mem_GB`
+  (`ru_maxrss` is monotonic within a process; no CLI/worker/submitter changes).
 - Documentation cleanup (README / ARCHITECTURE / AGENTS / TODO): single-source-of-truth
   per file type — README (usage + reference data), ARCHITECTURE (pipeline details, the
   authority), AGENTS (short, pointer-heavy), TODO (task tracking). Fixed: stale rpy2
