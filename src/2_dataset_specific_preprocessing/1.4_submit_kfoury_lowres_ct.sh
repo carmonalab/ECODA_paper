@@ -3,11 +3,9 @@
 #SBATCH --time=01:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=64G
 #SBATCH --mail-type=END,FAIL
-# NOTE: 32G baseline — the whole Kfoury .rds is read via readRDS + saveRDS
-# in a single process.
 
 set -euo pipefail
 

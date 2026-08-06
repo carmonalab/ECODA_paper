@@ -4,9 +4,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 #SBATCH --mail-type=END,FAIL
-# NOTE: 64G baseline — GongSharma is huge and may need more.
 
 set -euo pipefail
 
