@@ -15,6 +15,7 @@ python = "3.13.*"
 conda = ">=26.5.3,<27" # Required for reticulate to detect pixi python
 r-remotes = "*"
 r-biocmanager = "*"
+r-reticulate = "1.45.0.*"
 r-locfit = "*"
 r-factoextra = ">=2.1.0,<3"
 r-ggtext = ">=0.1.2,<0.2"
@@ -26,6 +27,9 @@ r-rfast = ">=2.1.5.2,<3"
 r-ggally = ">=2.4.0,<3"
 r-hotelling = ">=1.0_8,<2"
 r-zcompositions = ">=1.6.2,<2"
+# For scITD
+bioconductor-edger = "4.8.2.*"
+bioconductor-sva = "3.58.0.*"
 
 # Need to use pre-compiled versions, as source compilation might fail
 r-igraph = ">=2.3.3,<3"
