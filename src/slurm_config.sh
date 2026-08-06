@@ -58,6 +58,21 @@ export SCGATE_DB_BRANCH="41a45cd3f8bb5f5a7daf21ec276f6a726f6ee0d4"
 # 1.1.1_preprocess.py standardizes every dataset's sample column to "Sample".
 export SAMPLE_COLNAME="Sample"
 
+# --- Benchmark methods (src/5_run_benchmark_methods) ---
+# Hardware PINNED for runtime comparability (same model/cores/RAM within each
+# resource class). GPU methods (MrVI, scPoli): shared-gpu, H200
+# (nvidia_h200_nvl, gpu[005-006]), 8 cores, 128G. CPU method (PILOT):
+# shared-cpu, EPYC-7742 (V8, cpu[001-052]), 16 cores, 128G. All env-overridable.
+SLURM_PARTITION_BENCHMARK_GPU="shared-gpu"
+SLURM_PARTITION_BENCHMARK_CPU="shared-cpu"
+BENCHMARK_GPU_CONSTRAINT="nvidia_h200_nvl"
+BENCHMARK_CPU_CONSTRAINT="EPYC-7742"
+BENCHMARK_GPU_COUNT=1
+BENCHMARK_GPU_CPUS_PER_TASK=8
+BENCHMARK_CPU_CPUS_PER_TASK=16
+BENCHMARK_MEM="128G"
+BENCHMARK_GPU_ARRAY_THROTTLE=4   # 4 H200s on gpu006
+
 # --- SLURM Configuration ---
 # Passed at submit time via `--partition="${SLURM_PARTITION}"` (sbatch
 # directives do not expand variables). Override per pipeline if needed.

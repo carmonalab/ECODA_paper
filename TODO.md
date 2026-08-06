@@ -39,11 +39,15 @@ Prereqs (explicitly user):
 
 ## Phase 3 — src/5_run_benchmark_methods [agent implements; HPC runs]
 
-- [ ] **3.1 Python methods**: rename + convert `1.2_benchmark_methods_py.qmd` →
+- [x] **3.1 Python methods**: rename + convert `1.2_benchmark_methods_py.qmd` →
   `1.1.1_benchmark_methods_py.py` (strip quarto; CLI dataset/view/method; consume
   preprocessed obsm/layers/counts; output `.feather`); add `1_submit_hpc_array.sh`
   (per method+dataset array, `SLURM_PARTITION` override incl. GPU) + `1.1_run_worker.sh`
   (`PYTHON_BIN`); align exec-time/memory logging to R `exec_time()` format.
+  CODE COMPLETE (slurm_config.sh benchmark vars + ARCHITECTURE.md updated);
+  HPC debug validation PENDING — smoke test:
+  `./1_submit_hpc_array.sh --ds_name _debug --methods mrvi` (then scpoli, pilot);
+  check `benchmark/embeddings/` feathers + `execution_times.feather`.
 - [ ] **3.2 R methods**: run `benchmark_methods_r.R` + `benchmark_pipeline.R` on HPC via
   a single-worker bash script; NAS targets `benchmark/{embeddings,plots}/`.
 - [ ] **3.3 New methods**: PILOT-GM-VAE (add to py script + `constants.R` + R ingest;

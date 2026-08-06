@@ -38,6 +38,8 @@ $HOME/scratch/ECODA_paper               # HPC_SCRATCH_DIR
 ├── <DS_NAME>/output/                   # preprocessed .h5ad per view, chunks/, annotations, annotated .h5ad
 ├── <DS_NAME>/annotation_union/         # per-dataset union h5ad for annotation (outside synced output dir)
 ├── CombinedPBMC/data/                  # combine output + rds→h5ad cache (CombinedPBMC/output/ holds its preprocessed output)
+├── benchmark/embeddings/               # method .feathers + per-task exec logs (Python benchmark arrays)
+├── benchmark_manifest_<method>.txt     # per-method benchmark manifests (1_submit_hpc_array.sh, rebuilt every run)
 └── chunks_manifest.txt                 # global chunk manifest (2_submit_hpc_array.sh)
 $HOME/reference_atlases/sketched_200ct/ # HOME_REF_DIR (HiTME reference maps)
 
@@ -46,7 +48,7 @@ DataCollections/Standardized_SingleCell_Datasets/   # NAS_SC_DIR — raw source 
 DataCollections/reference_atlases/sketched_200ct/   # NAS_REF_DIR
 Projects/ECODA_paper/                               # NAS_TARGET_DIR — results back-sync target
 └── <DS_NAME>/output/                   # rsynced per-dataset from ${HPC_SCRATCH_DIR}/<DS_NAME>/output
-benchmark/{embeddings,plots}/           # method .feathers + notebook plots (TODO: 5_run_benchmark_methods decision)
+benchmark/{embeddings,plots}/           # method .feathers (embeddings/ filled by Phase 3.1; plots/ by the notebook) + merged execution_times.feather
 batch_effect_analysis/{embeddings,plots}/           # same, for batch effect analysis
 ```
 
@@ -61,7 +63,7 @@ batch_effect_analysis/{embeddings,plots}/           # same, for batch effect ana
 | `${PROJECT_ROOT}/logs`, `aux/`, `.pixi/` | `PROJECT_ROOT` | SLURM logs (`LOGS_DIR`), auxiliary files (gene maps), pixi envs (HPC: `.pixi/envs/py-cuda13/`) |
 | `${NAS_SC_DIR}` | `NAS_SC_DIR` | Raw source datasets (`folder_name` in `datasets.json`) |
 | `${NAS_REF_DIR}` | `NAS_REF_DIR` | Reference atlas source (HiTME) |
-| `${NAS_TARGET_DIR}/<DS_NAME>/output/` | `NAS_TARGET_DIR` | Results back-sync target: rsynced per-dataset from `${HPC_SCRATCH_DIR}/<DS_NAME>/output`; `benchmark/{embeddings,plots}/`, `batch_effect_analysis/{embeddings,plots}/` (targets for method `.feather`s + notebook plots; filled once the `5_run_benchmark_methods` decision is made — TODO) |
+| `${NAS_TARGET_DIR}/<DS_NAME>/output/` | `NAS_TARGET_DIR` | Results back-sync target: rsynced per-dataset from `${HPC_SCRATCH_DIR}/<DS_NAME>/output`; `benchmark/{embeddings,plots}/` (method `.feather`s + merged `execution_times.feather` from Phase 3.1; `plots/` filled by the notebook), `batch_effect_analysis/{embeddings,plots}/` (Phase 4) |
 
 
 ## Preprocessing Pipeline
@@ -184,7 +186,102 @@ dataset (see datasets.json + TODO.md).
 
 Note: the Layers 1–5 call flow below documents the current notebook-based
 pipeline and will be restructured by the planned HPC benchmark pipeline
-(TODO.md Phase 3).
+(TODO.md Phase 3). Phase 3.1 (Python methods) is already HPC-based — see
+"Python benchmark methods on HPC" below.
+
+### Python benchmark methods on HPC (`src/5_run_benchmark_methods/run_python_sample_embedding_methods/`)
+
+The Python benchmark methods (MrVI, scPoli on GPU; PILOT on CPU) run as SLURM
+arrays on the preprocessed benchmark view h5ad (inputs under
+`${HPC_SCRATCH_DIR}/<DS_NAME>/output`, per `datasets.json` view output files).
+The legacy notebook `1.2_benchmark_methods_py.qmd` is kept as an archive (do
+NOT delete) — `1.1.1_benchmark_methods_py.py` preserves its feather naming,
+method-string format and data layout exactly (R ingest
+`process_mrvi_fig`/`process_scpoli_fig`/`process_pilot_fig`,
+`constants.R` label map and notebook recodes depend on them).
+
+#### Workflow
+
+```
+1_submit_hpc_array.sh (login; per method: manifest + sbatch array;
+  GPU: shared-gpu/H200/8 cores, CPU: shared-cpu/EPYC-7742/16 cores — pinned
+  for runtime comparability, see slurm_config.sh benchmark vars)
+   └─ 1.1_run_worker.sh (worker; METHOD + benchmark_manifest_<method>_<pid>.txt -> DS_NAME)
+        └─ 1.1.1_benchmark_methods_py.py (CLI; one (method, dataset) task)
+             input:  ${HPC_SCRATCH_DIR}/<DS_NAME>/output/<view output_file> h5ad
+                     (obsm X_pca_{view}_hvg{n} for PILOT; var["hvg_rank"] +
+                      layers["counts"] raw counts + Sample obs col + ct
+                      annotation cols for MrVI/scPoli)
+             output: ${HPC_SCRATCH_DIR}/benchmark/embeddings/
+                     {ds}_hvg{n}[_lowres|_highres]_{mrvi_dists,scpoli_dims<d>_embs,pilot_dists}.feather
+                     execution_times_task_<JOBID>_<TASKID>.feather  (per-task exec log)
+   └─ NAS reachability check -> sacct gate (fail-closed) ->
+      merge (--no-cleanup --job_ids <ids> [--existing-log NAS log]; login)
+        -> execution_times.feather (keeps NAS log continuity across partial runs)
+   └─ rsync -> ${NAS_TARGET_DIR}/benchmark/  (embeddings/ + execution_times.feather)
+   └─ only then: delete this run's per-task logs
+```
+
+#### Files
+
+| File | Role |
+|---|---|
+| `1_submit_hpc_array.sh` | Login-node submitter: `[--ds_name <DS>] [--methods mrvi,scpoli,pilot] [--partition <P>] [--force]`. Resolves benchmark datasets from `datasets.json` (jq: `use_for_benchmark == true` AND a `benchmark_analysis` view; skips `_*` keys unless `--ds_name` is given). Submits ONE array per method with hardware pinned on the **sbatch command line** (SLURM directives do not expand env vars): mrvi/scpoli → `${SLURM_PARTITION_BENCHMARK_GPU}` + `--gpus=${BENCHMARK_GPU_COUNT}` + `--constraint=${BENCHMARK_GPU_CONSTRAINT}` + `${BENCHMARK_GPU_CPUS_PER_TASK}`; pilot → `${SLURM_PARTITION_BENCHMARK_CPU}` + `--constraint=${BENCHMARK_CPU_CONSTRAINT}` + `${BENCHMARK_CPU_CPUS_PER_TASK}`; all with `--mem=${BENCHMARK_MEM}`. `--partition <P>` overrides the per-method partition (debug/private partitions). Writes `${HPC_SCRATCH_DIR}/benchmark_manifest_<method>_$$.txt` (one dataset per line, rebuilt every run; PID suffix prevents an overlapping second submission from clobbering queued arrays' manifests) and exports `METHOD` + `BENCHMARK_MANIFEST` + `FORCE_BENCHMARK` per submission (sbatch propagates only the exported environment). Array throttle: `${BENCHMARK_GPU_ARRAY_THROTTLE}` (4 = the 4 H200s on gpu006) for GPU methods, `${MAX_NUM_CHUNKS_PARALLEL}` for CPU. Logs to `${LOGS_DIR}/5_benchmark_<method>_%A_%a.log/.err`. After all arrays complete: monitors `squeue` per job, **NAS reachability check FIRST** (fail before doing any destructive merge work), then a **fail-closed sacct gate** per job (every state row must be `COMPLETED`, else prints `sacct --format=JobID,JobName,State,ExitCode` and exits 1 without syncing), then merges exec logs via `1.1.2_merge_execution_times.py` on the login node (`${PYTHON_BIN}`) scoped to this run's job ids with `--no-cleanup` and `--existing-log` pointing at the NAS log (keeps full-log continuity across `--ds_name` partial runs), then rsyncs `${HPC_SCRATCH_DIR}/benchmark/` → `${NAS_TARGET_DIR}/benchmark/`, and ONLY after the rsync succeeds deletes this run's per-task logs (`execution_times_task_<jobid>_*.feather`). |
+| `1.1_run_worker.sh` | `#SBATCH` worker (defaults overridden at submit time): 12h (`shared-*` partition max), 8 cores, 128G. Sources `slurm_config.sh`, `cd "${PROJECT_ROOT}"`; requires `METHOD` + `BENCHMARK_MANIFEST` env (error if unset); reads its `DS_NAME` from the manifest via `sed -n "${SLURM_ARRAY_TASK_ID}p"`. Output dir `${HPC_SCRATCH_DIR}/benchmark/embeddings` (created), per-task log `execution_times_task_<ARRAY_JOB_ID>_<ARRAY_TASK_ID>.feather` (job id in the name: the three concurrent arrays all use task ids 1..N and must not share a file). Forwards `--force` when `FORCE_BENCHMARK=1`. Calls `1.1.1_benchmark_methods_py.py` via `${PYTHON_BIN}`. |
+| `1.1.1_benchmark_methods_py.py` | CLI py script (replaces the qmd logic): `--config_path --ds_name --view benchmark_analysis --method {mrvi,scpoli,pilot} --input_dir --output_dir --log_file --hvg {1000,2000,3000} --force --device {auto,cpu,cuda}`. Reads datasets.json via `src/datasets_io.read_datasets_json` (repo-root import, like `1.1.1_preprocess.py`). **Input resolution**: view output h5ad via `sc.read_h5ad` + `.to_memory()`; ct columns from datasets.json (`low_res_ct_col`/`hi_res_ct_col`); sample column `obs["Sample"]`; HVG subset via stored `var["hvg_rank"]` (`top_n_hvg_genes`, sorted ranks — no recomputation), **subset FIRST, then point X at the raw counts layer** (`layers["counts"]`; X is log-normalized — MrVI keeps the sparse counts, scPoli densifies only the small HVG subset via `layers["counts"].toarray().astype("float32", copy=False)`; warning + log-normalized X fallback if the layer is missing). **Combos** (legacy rules; skipped if the output feather exists unless `--force`): MrVI on the lowres resolution for every HVG size → `{ds}_hvg{n}_mrvi_dists.feather`; scPoli highres (n=2000 → dims 2,3,5,10,15; n=1000/3000 → dim 15) + lowres (n=2000 → dim 15) → `{ds}_hvg{n}{_lowres|_highres}_scpoli_dims{d}_embs.feather`; PILOT highres every HVG size + lowres n=2000 → `{ds}_hvg{n}{_lowres|_highres}_pilot_dists.feather`. h5ad loaded ONCE per task. **Method bodies** (qmd semantics preserved): MrVI `setup_anndata(sample_key="Sample")` + `train(max_epochs=50, accelerator=<device>)` (default `auto` → GPU on shared-gpu nodes; qmd hard-coded CPU) + `get_local_sample_distances(keep_cell=False, groupby="dummy_col", batch_size=32)`; scPoli with qmd `early_stopping_kwargs` + `recon_loss="nb"`, `get_conditional_embeddings()` → `DataFrame` indexed by sample names; PILOT consumes the **preprocessed obsm** (`emb_matrix=f"X_pca_{view}_hvg{n}"`, qmd recomputed PCA) → `adata.uns["EMD_df"]`. Feathers are plain `DataFrame.to_feather()` with the pandas index (sample names) kept — index becomes the last feather column, matching R's `column_to_rownames(ncol)`. **Exec-time/memory logging**: per combo, `time.time()` around the method body only (excludes h5ad loading) + `ru_maxrss` (Linux KB / macOS bytes → GB); exact legacy method strings `MrVI_hvg{n}` / `scPoli_hvg{n}_dims{d}{res}` / `PILOT_hvg{n}{res}`; row `{dataset, method, time_secs, mem_GB}` appended (read-modify-write) to the per-task `--log_file` (one process per file). `scvi.settings.seed = 0`; prints `scvi.__version__` + `torch.cuda.is_available()`; `jax` dropped (MrVI is pytorch now). |
+| `1.1.2_merge_execution_times.py` | Login-node merge: `--output_dir` (default `benchmark/embeddings`) + `--job_ids <ids>` (scope the task-log glob `execution_times_task_<jobid>_*.feather` to the given arrays — stale logs from previous failed runs never leak in) + `--existing-log <path>` (e.g. the NAS `execution_times.feather`: this run's rows win via `drop_duplicates(keep="last")`, untouched historical rows are preserved, so partial `--ds_name` runs extend the full log instead of overwriting it) + `--cleanup`/`--no-cleanup` (default on; the submit script passes `--no-cleanup` and deletes the logs itself after the rsync). Dedup on (dataset, method) keep=last matches qmd overwrite-on-rerun semantics. The notebook's `rbind(r_exec_times, p_exec_times)` tolerates the extra `mem_GB` column (NA for R rows; only `time_secs` is plotted). |
+
+#### Key design details
+
+- **Hardware pinned for runtime comparability**: same GPU model (H200,
+  `nvidia_h200_nvl`, gpu[005-006]) for all GPU tasks, same CPU model (EPYC-7742,
+  cpu[001-052]) + core count + RAM for all CPU tasks — see the benchmark block
+  in `slurm_config.sh` (all env-overridable; formal partition strategy is
+  TODO Phase 3.5).
+- **Feather layout is contractual**: R ingest (`process_*_fig` + `constants.R`
+  label map + notebook recodes) requires the qmd's exact file names, method
+  strings and index-as-last-column layout — do not change.
+- **PILOT input change**: the qmd recomputed normalize/log1p/scale/PCA from
+  scratch; the HPC version consumes the preprocessed obsm
+  `X_pca_{view}_hvg{n}` (TODO 3.1 "consume preprocessed obsm" requirement).
+- **Counts input for MrVI/scPoli**: both models need the raw counts (not the
+  log-normalized X) — HVG-subset first (`var["hvg_rank"]`), then point X at
+  `layers["counts"]`; scPoli densifies only the small subset
+  (`toarray().astype("float32", copy=False)`) to keep memory bounded.
+- **Per-task exec logs**: one feather per (array job, task) — named with the
+  job id because the three arrays run concurrently with overlapping task
+  ids (single process per file, so no concurrency issue). Merged on the
+  login node after the sacct gate, scoped to this run's job ids (stale logs
+  from failed runs never leak in), with `--existing-log` preserving the NAS
+  log across partial runs; per-task logs are deleted only after the NAS
+  rsync succeeded.
+- **`--device auto`**: MrVI uses the allocated GPU on `shared-gpu` nodes
+  (`torch.cuda.is_available()` is printed for verification).
+- **Skip semantics**: combos whose output feather exists are skipped unless
+  `--force` (qmd skip logic); ct columns missing from datasets.json skip the
+  affected resolution with a warning (MrVI without `low_res_ct_col` skips
+  entirely).
+
+#### Usage
+
+```bash
+# 1. (prereq) preprocess + annotate the benchmark datasets (stages 2-4)
+
+# 2. Run Python benchmark methods (all benchmark datasets; arrays monitored
+#    + sacct-gated + exec logs merged + NAS-synced by the script)
+./1_submit_hpc_array.sh                                  # mrvi, scpoli, pilot
+./1_submit_hpc_array.sh --ds_name _debug --methods mrvi  # debug single (then scpoli, pilot)
+./1_submit_hpc_array.sh --methods mrvi,scpoli --force    # recompute existing feathers
+./1_submit_hpc_array.sh --partition debug-cpu            # override partitions
+```
+
+#### Test mode
+
+The Phase 3.1 debug smoke test runs `./1_submit_hpc_array.sh --ds_name _debug
+--methods mrvi` (then scpoli, pilot) against the preprocessed `_debug`
+benchmark h5ad; check the feathers + exec log; R-ingest compatibility is
+exercised by Phase 3.4. Heavy Python deps (scvi-tools/scarches/pilotpy/torch)
+live in the `py-cuda13` pixi env (`PYTHON_BIN`).
 
 ### Data Processing
 
