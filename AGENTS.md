@@ -17,6 +17,12 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
   source `src/slurm_config.sh`, then `cd "${PROJECT_ROOT}"`. This is the established
   convention in every existing script — keep it for any new script (Python/R interop
   resolves repo-relative paths; see docs/ARCHITECTURE.md).
+- Search code with the built-in Grep/semantic-search tools or `git grep` (tracked files
+  only). Never run raw `grep -rn "..." .` — it scans the gitignored 97 GB `data/` and
+  `.pixi/` and will time out. If plain `grep` must be used, scope the path and exclude
+  heavy dirs, e.g. `grep -rn "pattern" --exclude-dir={data,.pixi} src notebooks docs`.
+  Note: `--exclude-dir` only prunes dirs found during traversal — the positional roots
+  (`src`, `notebooks`, `docs`) are always searched.
 
 
 # Repo structure
