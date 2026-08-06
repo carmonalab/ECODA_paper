@@ -55,8 +55,8 @@ def read_datasets_json(path="datasets.json", view=None):
             "sample_col": columns.get("sample"),
             "label_col": columns.get("label"),
             "batch_col": columns.get("batch"),
-            "low_res_ct_col": columns.get("cell_type_low_res"),
-            "hi_res_ct_col": columns.get("cell_type_high_res"),
+            "cell_type_low_res": columns.get("cell_type_low_res"),
+            "cell_type_high_res": columns.get("cell_type_high_res"),
             "meta_cols_keep": ds.get("meta_cols_keep"),
             # first-matching-view summary (R-compat; mirrors view entry order)
             "view_name": first_name,

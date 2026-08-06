@@ -80,8 +80,8 @@ for (ds in names(datasets)) {
   seurat <- replace_HiTMElayer3_annot(seurat, thresh = 0.1)
   
   seurat@misc$label_col <- datasets[[ds]][["label_col"]]
-  seurat@misc$low_res_ct_col <- datasets[[ds]][["low_res_ct_col"]]
-  seurat@misc$hi_res_ct_col <- datasets[[ds]][["hi_res_ct_col"]]
+  seurat@misc$cell_type_low_res <- datasets[[ds]][["cell_type_low_res"]]
+  seurat@misc$cell_type_high_res <- datasets[[ds]][["cell_type_high_res"]]
   
   result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots)
 }
@@ -3691,7 +3691,7 @@ for (ds in names(datasets)) {
   print(paste("Number of samples:", length(unique(seurat@meta.data$Sample))))
   print(paste("Number of cells:", nrow(seurat@meta.data)))
   print(paste("Number of cells per sample:", round(mean(table((seurat@meta.data$Sample)))), "+-", round(sd(table((seurat@meta.data$Sample))))))
-  print(paste("Number of cell types:", length(unique(seurat@meta.data[[datasets[[ds]][["hi_res_ct_col"]]]]))))
+  print(paste("Number of cell types:", length(unique(seurat@meta.data[[datasets[[ds]][["cell_type_high_res"]]]]))))
 }
 ```
 
