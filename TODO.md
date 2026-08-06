@@ -34,7 +34,7 @@ Prereqs (explicitly user):
 - [ ] Chunks: `1_prepare_chunks.sh test _debug` (per-dataset union, 1 sample/chunk).
 - [ ] Annotation: `2_submit_hpc_array.sh _debug`.
 - [ ] Merge: `3_submit_merge.sh _debug`; validation: each view h5ad obs gains layer1–3 / scATOMIC cols (NA where absent), counts layer intact, annotated h5ad loads in R/Python.
-- [ ] Cluster verify items: CombinedPBMC 64G baseline; preprocess 16G (GongSharma); annotation 2h/16G vs 5×2 retries; `aux/scGateDB.rds` committed-cache note in `2_submit_hpc_array.sh` comment.
+- [ ] Cluster verify items: CombinedPBMC parallelized (3 in-job fork workers, backed GongSharma read, `_intermediates/` per-source outputs; expect ~20-25 min first run vs ~40-60 min serial, faster on reruns via the `_raw.h5ad` cache; 128G/16 cpus sbatch); preprocess 16G (GongSharma); annotation 2h/16G vs 5×2 retries; `aux/scGateDB.rds` committed-cache note in `2_submit_hpc_array.sh` comment.
 - [ ] After debug passes: run one real dataset (e.g. Kim) before full rollout.
 
 ## Phase 3 — src/5_run_benchmark_methods [agent implements; HPC runs]

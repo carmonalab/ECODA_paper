@@ -108,7 +108,7 @@ Rscript -e "
   remotes::install_github('carmonalab/HiTME@87f8d4147aaa468438df33f50cabf2005ac518bf')
 
   # scATOMIC
-  if (!requireNamespace('set', quietly = TRUE)) remotes::install_version('set', version = '1.2', upgrade = 'never')
+  remotes::install_github('Gyikeshu0611/set@5360f0b85f0a618d9a05009b8553d397c4add828')
   if (!requireNamespace('dlm', quietly = TRUE)) remotes::install_version('dlm', version = '1.1-6.1', upgrade = 'never')
   if (!requireNamespace('Rmagic', quietly = TRUE)) remotes::install_version('Rmagic', version = '2.0.3', upgrade = 'never')
   remotes::install_github('inofechm/cutoff.scATOMIC@a43fd5e1e8f0e3b71ec446970e4316f305939a17')
