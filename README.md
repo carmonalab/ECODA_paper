@@ -57,19 +57,18 @@ The **scECODA** R package for scalable cohort-level analysis is available at
 2. Install [Pixi](https://pixi.sh) — the project's package and environment manager.
     ```bash
     curl -fsSL https://pixi.sh/install.sh | bash
-    export PATH="${HOME}/.pixi/bin:${PATH}"
+    echo 'export PATH="${HOME}/.pixi/bin:${PATH}"' >> ~/.bashrc
+    source ~/.bashrc
     ```
 3. Setup your environment:
     ```bash
     cd ~/ECODA_paper
 
-    # Local / macOS (Default environment):
-    # pixi install
-    # pixi run setup
+    # Local / macOS / no GPU (Default environment):
+    # pixi install && pixi run setup
 
-    # HPC / CUDA 13 (py-cuda13 environment):
-    pixi install -e py-cuda13
-    pixi run -e py-cuda13 setup # Installs R packages that are not availble pre-compiled (e.g. from GitHub)
+    # HPC / CUDA 13 GPU available (py-cuda13 environment):
+    pixi install -e py-cuda13 && pixi run -e py-cuda13 setup
     ```
 
 

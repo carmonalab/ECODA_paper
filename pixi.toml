@@ -31,6 +31,9 @@ r-zcompositions = ">=1.6.2,<2"
 r-igraph = ">=2.3.3,<3"
 r-leidenbase = ">=0.1.36,<0.2"
 
+# Use same version as Seurat 5.2.0
+r-seuratobject = "5.2.0.*"
+
 # ==========================================
 # CORE PYTHON STACK
 # ==========================================
@@ -74,11 +77,17 @@ py-cuda13 = ["cuda13"]
 # ==========================================
 # INSTALL OTHER R PACKAGES
 # ==========================================
+# Installs R packages that are not available pre-compiled (e.g. from GitHub)
 
 [tasks.setup]
 cmd = """
 Rscript -e "
   options(timeout = 9999999, repos = c(CRAN = 'https://packagemanager.posit.co/cran/latest'))
+  # Keep pre-compiled conda-forge versions (r-igraph, r-leidenbase, ...) and only install
+  # missing packages. Without this, remotes upgrades the whole dependency closure from CRAN
+  # source (e.g. tries leidenbase 0.1.36 -> 0.1.37 even though Seurat has no version
+  # requirement on it), which fails on the HPC due to missing system dev libs.
+  Sys.setenv(R_REMOTES_UPGRADE = 'never')
   bioc_repos <- BiocManager::repositories()
 
   # SHA-pinned GitHub packages (installed directly; remotes checks installed SHA and skips if matching)
