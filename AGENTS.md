@@ -66,6 +66,7 @@ Four-stage end-to-end pipeline; file-level details live in docs/ARCHITECTURE.md.
 - If you need to test HPC cluster bash scripts:
     - The HPC cluster is only available if logged in to the UNIGE network (user might work from home (needs to connect to VPN) or from the office (has access to UNIGE network)).
         - If in the UNIGE network, you can log in with `ssh [REDACTED_HOST]` (user needs to enter the password).
+    - By default, some scripts might need to be given the rights to be executed first, e.g. `chmod +x src/1_stage_data/1_stage_data.sh` or, for the whole repo: `find src -name "*.sh" -exec chmod +x {} \;1_stage_data.sh`
 - Heavy scripts are run on the HPC cluster, specifically located in these folders:
     - `src/1_stage_data`
     - `src/2_dataset_specific_preprocessing`
