@@ -149,7 +149,10 @@ if (file.exists(annot_file)) {
   for (target_sample in samples_to_process) {
     message(paste("--- Processing sample:", target_sample, "---"))
 
-    layer_keys <- py_to_r(adata$layers$keys())
+    # Python 3 keys() returns a view object (dict_keys/KeysView) that py_to_r()
+    # does NOT convert; materialize it to a Python list first so py_to_r returns
+    # an R character vector usable with %in%.
+    layer_keys <- py_to_r(import_builtins(convert = FALSE)$list(adata$layers$keys()))
     counts_layer <- if ("counts" %in% layer_keys) "counts" else "X"
     if (counts_layer == "X") {
       warning("Layer 'counts' not found in ", h5ad_file,
