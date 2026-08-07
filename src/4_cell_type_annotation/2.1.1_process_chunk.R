@@ -166,13 +166,14 @@ if (file.exists(annot_file)) {
     )
 
     # HiTME (via scGate/UCell/ProjecTILs) requires the log-normalized "data"
-    # layer, but Seurat v5 CreateSeuratObject only populates "counts" — without
-    # this, Run.HiTME fails with "Cannot find layer data in assay RNA" on every
-    # sample. NormalizeData leaves the counts layer untouched (scATOMIC input).
-    if (!"data" %in% Seurat::Layers(seurat_obj, assay = "RNA")) {
-      message("  Adding log-normalized 'data' layer (NormalizeData) for HiTME...")
-      seurat_obj <- NormalizeData(seurat_obj)
-    }
+    # layer, but CreateSeuratObject only populates "counts" — without it,
+    # Run.HiTME fails with "Cannot find layer data in assay RNA" on every
+    # sample. The worker object always comes fresh from CreateSeuratObject, so
+    # normalize unconditionally (a v5-only Layers() guard would crash on the
+    # pinned Seurat 4.4.x build, which does not export it). NormalizeData
+    # leaves the counts layer untouched (scATOMIC input).
+    message("  Adding log-normalized 'data' layer (NormalizeData) for HiTME...")
+    seurat_obj <- NormalizeData(seurat_obj)
 
     timeout <- max(60, ncol(seurat_obj) / 10000 * 60 * 10)
 
