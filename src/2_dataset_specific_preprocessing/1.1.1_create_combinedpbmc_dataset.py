@@ -30,7 +30,10 @@ Parallel workers:
 - GongSharma is read in backed mode (sc.read_h5ad(..., backed="r")): non-counts
   layers are dropped on disk and only the HDF5 chunks covering the ~15 picked
   samples are materialized via to_memory() (identical rng(123) pick logic as
-  before); on any failure it falls back to the full in-memory load.
+  before); on any failure it falls back to the full in-memory load. The raw
+  GongSharma sample column (specimen.specimenGuid, datasets.json columns.sample)
+  is standardized to "Sample" by finalize_and_write_intermediate, consistent
+  with src/3_scrnaseq_preprocessing/1.1.1_preprocess.py.
 
 HPC notes:
 - Must run AFTER src/1_stage_data/1_stage_data.sh (which stages raw inputs per
