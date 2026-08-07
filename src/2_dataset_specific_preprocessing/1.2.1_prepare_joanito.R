@@ -142,7 +142,7 @@ seurat <- CreateSeuratObject(
 debug_dir <- file.path(scratch_dir, "_debug", "data")
 dir.create(debug_dir, showWarnings = FALSE, recursive = TRUE)
 h5ad_path <- file.path(debug_dir, "JoaI_2022_35773407_debug_5samples.h5ad")
-write_h5ad(seurat, h5ad_path)
+write_h5ad(seurat, h5ad_path, mode = "w")
 message("Saved: ", h5ad_path)
 
 # -----------------------------------------------------------------------------
