@@ -243,7 +243,9 @@ def run_pilot(adata, ct_col, view, n_hvg, output_path):
     # the preprocess step stores scanpy's plain ndarray instead.
     if not hasattr(emb, "columns"):
         emb = pd.DataFrame(
-            emb, columns=[f"PCA_{i + 1}" for i in range(emb.shape[1])]
+            emb,
+            index=adata.obs_names,
+            columns=[f"PCA_{i + 1}" for i in range(emb.shape[1])],
         )
     adata.obsm[emb_key] = emb
     pl.tl.wasserstein_distance(
