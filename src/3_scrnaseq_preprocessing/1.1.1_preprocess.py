@@ -1,5 +1,6 @@
 import os
 import sys
+import numpy as np
 import scanpy as sc
 import scipy.sparse as sp
 from pathlib import Path
@@ -75,10 +76,18 @@ def compute_harmony_and_store(adata, sub, batch_key, key_suffix):
     """
     if batch_key is None:
         raise ValueError("Harmony integration requires a batch_key.")
-    sc.external.pp.harmony_integrate(
-        sub, key=batch_key, basis="X_pca", adjusted_basis="X_pca_harmony"
-    )
-    adata.obsm[f"X_pca_harmony_{key_suffix}"] = sub.obsm["X_pca_harmony"]
+    import harmonypy
+
+    x = sub.obsm["X_pca"].astype(np.float64)
+    harmony_out = harmonypy.run_harmony(x, sub.obs, batch_key)
+    z_corr = np.asarray(harmony_out.Z_corr)
+    # harmonypy <2 returns Z_corr as (d, N) [PCs x cells]; harmonypy >=2 returns
+    # (N, d) [cells x PCs]. scanpy's wrapper assumes the former and applies .T,
+    # which breaks with 2.x — call harmonypy directly and normalize here.
+    if z_corr.shape[0] != sub.n_obs:
+        z_corr = z_corr.T
+    sub.obsm["X_pca_harmony"] = z_corr
+    adata.obsm[f"X_pca_harmony_{key_suffix}"] = z_corr
 
 
 def run_clustering(adata, rep_key, key_suffix, resolutions):
