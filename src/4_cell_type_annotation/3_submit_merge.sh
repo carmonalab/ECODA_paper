@@ -31,7 +31,10 @@ if [[ -z "${DS_NAME}" ]]; then
   exit 1
 fi
 
-module load jq/1.6 >/dev/null 2>&1 || true
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: jq not available; cannot read ${DATASETS_JSON_FILE}."
+  exit 1
+fi
 if ! jq -e --arg ds "${DS_NAME}" 'has($ds)' "${DATASETS_JSON_FILE}" > /dev/null 2>&1; then
   echo "ERROR: '${DS_NAME}' is not a dataset in ${DATASETS_JSON_FILE}."
   exit 1

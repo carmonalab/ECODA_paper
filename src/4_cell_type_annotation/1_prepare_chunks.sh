@@ -32,7 +32,6 @@ else
   exit 1
 fi
 
-module load jq/1.6
 if ! command -v jq >/dev/null 2>&1; then
   echo "ERROR: jq not available; cannot read ${DATASETS_JSON_FILE}."
   exit 1

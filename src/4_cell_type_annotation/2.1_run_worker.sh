@@ -19,8 +19,6 @@ fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-# jq module loads in the submit script do not propagate to workers; load here.
-module load jq/1.6 >/dev/null 2>&1 || true
 if ! command -v jq >/dev/null 2>&1; then
   echo "ERROR: jq not available on worker node; cannot read manifest/datasets.json."
   exit 1
