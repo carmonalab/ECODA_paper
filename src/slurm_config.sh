@@ -68,6 +68,11 @@ export SAMPLE_COLNAME="Sample"
 # resource class). GPU methods (MrVI, scPoli): shared-gpu, H200
 # (nvidia_h200_nvl, gpu[005-006]), 8 cores, 128G. CPU method (PILOT):
 # shared-cpu, EPYC-7742 (V8, cpu[001-052]), 16 cores, 128G. All env-overridable.
+# The private-carmona-gpu node is DELIBERATELY excluded here (different CPU
+# model would flaw cross-method runtime comparisons; its GPU is H100, not H200,
+# so BENCHMARK_GPU_CONSTRAINT would never match). _debug runs may target it via
+# --partition ${SLURM_PARTITION_PRIVATE} — the benchmark submitter drops the
+# --constraint pin on any --partition override.
 SLURM_PARTITION_BENCHMARK_GPU="shared-gpu"
 SLURM_PARTITION_BENCHMARK_CPU="shared-cpu"
 BENCHMARK_GPU_CONSTRAINT="nvidia_h200_nvl"
@@ -77,11 +82,17 @@ BENCHMARK_GPU_CPUS_PER_TASK=8
 BENCHMARK_CPU_CPUS_PER_TASK=16
 BENCHMARK_MEM="128G"
 BENCHMARK_GPU_ARRAY_THROTTLE=4   # 4 H200s on gpu006
+# Private node for _debug benchmark runs (not part of the pinned benchmark
+# hardware): pass --partition "${SLURM_PARTITION_PRIVATE}" to the submitter.
+SLURM_PARTITION_PRIVATE="private-carmona-gpu"
 
 # --- SLURM Configuration ---
 # Passed at submit time via `--partition="${SLURM_PARTITION}"` (sbatch
-# directives do not expand variables). Override per pipeline if needed.
-SLURM_PARTITION="shared-cpu" # TODO: Adapt for specific pipelines
+# directives do not expand variables). Comma list: jobs may land on either
+# partition (whichever frees resources first; order is not a preference).
+# Used by the stages 2-4 submit scripts; the benchmark submitter uses its own
+# pinned vars above and is NOT part of this list.
+SLURM_PARTITION="shared-cpu,private-carmona-gpu" # TODO: Adapt for specific pipelines
 
 # --- User Info ---
 USER_EMAIL="${USER}@unige.ch"

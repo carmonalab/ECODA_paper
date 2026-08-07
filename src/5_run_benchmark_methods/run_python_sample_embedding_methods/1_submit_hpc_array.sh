@@ -7,7 +7,7 @@ set -euo pipefail
 #   ./1_submit_hpc_array.sh                                    # all methods, all benchmark datasets
 #   ./1_submit_hpc_array.sh --ds_name _debug --methods mrvi    # single dataset, single method
 #   ./1_submit_hpc_array.sh --methods mrvi,scpoli --force      # recompute existing feathers
-#   ./1_submit_hpc_array.sh --partition debug-cpu              # override per-method partitions
+#   ./1_submit_hpc_array.sh --partition debug-cpu              # override per-method partitions (drops the constraint pin)
 #
 # One SLURM array per method; array task IDs map 1:1 to lines of the
 # per-method manifest ${HPC_SCRATCH_DIR}/benchmark_manifest_<method>_<pid>.txt
@@ -17,7 +17,12 @@ set -euo pipefail
 # (mrvi, scpoli) on ${SLURM_PARTITION_BENCHMARK_GPU} with
 # ${BENCHMARK_GPU_CONSTRAINT}, PILOT on ${SLURM_PARTITION_BENCHMARK_CPU} with
 # ${BENCHMARK_CPU_CONSTRAINT}. Flags are passed on the sbatch command line
-# (SLURM directives do not expand env vars). After all arrays complete:
+# (SLURM directives do not expand env vars). An explicit --partition <P>
+# override (e.g. --partition ${SLURM_PARTITION_PRIVATE} for _debug runs on the
+# private node) DROPS the method's --constraint flag — an explicit partition
+# choice means the user accepts non-pinned hardware; keeping the constraint
+# would otherwise hang jobs PENDING forever on nodes whose CPU/GPU differ.
+# After all arrays complete:
 # NAS reachability check -> fail-closed sacct gate -> merge per-task exec
 # logs (job-id scoped, existing-log continuity) -> sync to NAS -> only then
 # delete this run's per-task logs.
@@ -136,6 +141,22 @@ for METHOD in "${METHODS[@]}"; do
   esac
   if [[ -n "${PARTITION_ARG}" ]]; then
     PARTITION="${PARTITION_ARG}"
+    # Explicit partition choice = user accepts non-pinned hardware: drop the
+    # --constraint pin (kept: --gpus/--cpus-per-task/--mem). Without this,
+    # e.g. --partition private-carmona-gpu would sit PENDING forever — its
+    # CPU/GPU never match the pinned BENCHMARK_*_CONSTRAINT.
+    FILTERED_FLAGS=()
+    for FLAG in "${EXTRA_FLAGS[@]}"; do
+      case "${FLAG}" in
+        --constraint|--constraint=*)
+          ;;
+        *)
+          FILTERED_FLAGS+=("${FLAG}")
+          ;;
+      esac
+    done
+    EXTRA_FLAGS=("${FILTERED_FLAGS[@]}")
+    echo "  NOTE: --partition override drops the --constraint hardware pin"
   fi
 
   # Per-method manifest: one dataset per line; rebuilt every run. The name
