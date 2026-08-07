@@ -165,6 +165,15 @@ if (file.exists(annot_file)) {
       counts_layer = counts_layer
     )
 
+    # HiTME (via scGate/UCell/ProjecTILs) requires the log-normalized "data"
+    # layer, but Seurat v5 CreateSeuratObject only populates "counts" — without
+    # this, Run.HiTME fails with "Cannot find layer data in assay RNA" on every
+    # sample. NormalizeData leaves the counts layer untouched (scATOMIC input).
+    if (!"data" %in% Seurat::Layers(seurat_obj, assay = "RNA")) {
+      message("  Adding log-normalized 'data' layer (NormalizeData) for HiTME...")
+      seurat_obj <- NormalizeData(seurat_obj)
+    }
+
     timeout <- max(60, ncol(seurat_obj) / 10000 * 60 * 10)
 
     ### scATOMIC annotation ####
