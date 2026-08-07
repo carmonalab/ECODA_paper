@@ -2,8 +2,8 @@
 
 ## Goal & decisions (confirmed with user)
 
-- **Stages 2–4** (`src/2_dataset_specific_preprocessing`, `src/3_scrnaseq_preprocessing`, `src/4_cell_type_annotation`): default `SLURM_PARTITION="shared-cpu,private-carmona-gpu"` (comma list — jobs may land on either partition, whichever frees resources first; order is not a strict preference).
-- **Stage 5 (benchmark)**: private node must NOT be used for real benchmark runs (different CPU model would flaw cross-method runtime comparisons; its GPU ≠ H200 breaks the pinned GPU constraint). It stays usable for `_debug` testing via the existing `--partition <P>` override — which requires dropping the `--constraint` flags on override, otherwise jobs hang PENDING forever (constraint unsatisfiable on the private node).
+- **Stages 2–4** (`src/2_dataset_specific_preprocessing`, `src/3_scrnaseq_preprocessing`, `src/4_cell_type_annotation`): default `SLURM_PARTITION="shared-cpu,shared-gpu,private-carmona-gpu"` (comma list — jobs may land on any partition, whichever frees resources first; order is not a strict preference; `shared-gpu` added on 2026-08-07 per user request).
+- **Stage 5 (benchmark)**: private node must NOT be used for real benchmark runs (different CPU model would flaw cross-method runtime comparisons; its GPU ≠ H200 breaks the pinned GPU constraint). It stays usable for `_debug` testing via the existing `--partition <P>` override — which requires dropping the `--constraint` flags on override, otherwise jobs hang PENDING forever (constraint unsatisfiable on the private node). `shared-gpu` is the pinned GPU benchmark partition (real runs) and additionally usable as a debug-only `--partition` override (constraint dropped).
 - All partitions are passed on the sbatch/srun **command line** (no `#SBATCH --partition` directives exist anywhere), so `slurm_config.sh` is the single source of truth.
 
 ## Prerequisite (user-run on HPC login node — agents cannot SSH)
@@ -58,7 +58,7 @@ If the partition requires an account/QoS, carry out step 4 below as well.
 
 ### 1. `src/slurm_config.sh`
 
-- Line 84: `SLURM_PARTITION="shared-cpu,private-carmona-gpu"` — update the comment: comma list = jobs can land on either partition (used by stages 2–4 submit scripts); benchmark uses its own pinned vars below.
+- Line 84: `SLURM_PARTITION="shared-cpu,shared-gpu,private-carmona-gpu"` — update the comment: comma list = jobs can land on any of the three partitions (used by stages 2–4 submit scripts); benchmark uses its own pinned vars below.
 - Add after the benchmark block: `SLURM_PARTITION_PRIVATE="private-carmona-gpu"` (documented constant for `_debug` benchmark runs via `--partition ${SLURM_PARTITION_PRIVATE}`).
 - Update the benchmark comment block (lines 66–79): note the private node is deliberately excluded from `SLURM_PARTITION_BENCHMARK_*` (CPU model differs → flawed runtime comparisons; GPU ≠ H200 → constraint mismatch). Keep the benchmark var values unchanged.
 - Keep partition vars unexported plain assignments (existing style).
@@ -88,7 +88,7 @@ Only if the prerequisite `scontrol show partition` output shows `AllowAccounts`/
 
 ## Validation (user-run on HPC login node)
 
-1. Smoke test: `sbatch --partition="shared-cpu,private-carmona-gpu" --wrap "echo ok; scontrol show job \$SLURM_JOB_ID"` → confirm the job lands on a valid node and `sacct -j <id> -o Partition` shows one of the two partitions.
+1. Smoke test: `sbatch --partition="shared-cpu,shared-gpu,private-carmona-gpu" --wrap "echo ok; scontrol show job \$SLURM_JOB_ID"` → confirm the job lands on a valid node and `sacct -j <id> -o Partition` shows one of the three partitions.
 2. Preprocess: `./1_submit_hpc_array.sh --ds_name _debug` → tasks COMPLETED, NAS sync ok.
 3. Annotation spot-check: `./1_prepare_chunks.sh test <DS>` and/or `2_submit_hpc_array.sh --ds_name _debug`.
 4. Benchmark debug on private node: `./1_submit_hpc_array.sh --ds_name _debug --methods pilot --partition private-carmona-gpu` → job RUNNING (not PENDING on constraint), feathers + exec log produced.

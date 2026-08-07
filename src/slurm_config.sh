@@ -72,7 +72,9 @@ export SAMPLE_COLNAME="Sample"
 # model would flaw cross-method runtime comparisons; its GPU is H100, not H200,
 # so BENCHMARK_GPU_CONSTRAINT would never match). _debug runs may target it via
 # --partition ${SLURM_PARTITION_PRIVATE} — the benchmark submitter drops the
-# --constraint pin on any --partition override.
+# --constraint pin on any --partition override. shared-gpu is the pinned GPU
+# benchmark partition (real runs); ad-hoc --partition shared-gpu overrides are
+# for debugging only (non-pinned, constraint dropped).
 SLURM_PARTITION_BENCHMARK_GPU="shared-gpu"
 SLURM_PARTITION_BENCHMARK_CPU="shared-cpu"
 BENCHMARK_GPU_CONSTRAINT="nvidia_h200_nvl"
@@ -88,11 +90,13 @@ SLURM_PARTITION_PRIVATE="private-carmona-gpu"
 
 # --- SLURM Configuration ---
 # Passed at submit time via `--partition="${SLURM_PARTITION}"` (sbatch
-# directives do not expand variables). Comma list: jobs may land on either
-# partition (whichever frees resources first; order is not a preference).
-# Used by the stages 2-4 submit scripts; the benchmark submitter uses its own
-# pinned vars above and is NOT part of this list.
-SLURM_PARTITION="shared-cpu,private-carmona-gpu" # TODO: Adapt for specific pipelines
+# directives do not expand variables). Comma list: jobs may land on any of
+# the partitions (whichever frees resources first; order is not a preference).
+# Used by the stages 2-4 submit scripts (CPU + GPU shared nodes and the
+# private node). The benchmark submitter uses its own pinned vars above and
+# is NOT part of this list; there shared-gpu appears only as the pinned GPU
+# benchmark partition or a debug-only --partition override.
+SLURM_PARTITION="shared-cpu,shared-gpu,private-carmona-gpu" # TODO: Adapt for specific pipelines
 
 # --- User Info ---
 USER_EMAIL="${USER}@unige.ch"
