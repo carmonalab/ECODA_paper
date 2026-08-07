@@ -90,10 +90,13 @@ full pipeline call flow, file-role tables, and HPC folder layout.
   standardized Python/Scanpy preprocessing pipeline and HPC-parallelized
   scATOMIC + HiTME annotation (see
   [ARCHITECTURE.md](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-src4_cell_type_annotation)).
-- **Stage 3 — Benchmark Analysis:** Render `notebooks/benchmark_analysis.rmd`
-  in RStudio (current local flow, to be superseded by the planned HPC benchmark
-  pipeline — see TODO.md). R-native methods run in the notebook; Python methods
-  (MrVI, PILOT, scPoli) run separately and exchange data via `.feather` files.
+- **Stage 3 — Benchmark Analysis:** The heavy R methods (GloScope, MOFA,
+  Pseudobulk, scITD) and the ECODA transformation/zero-imputation analyses run
+  on HPC (see the benchmark pipelines below); `notebooks/benchmark_analysis.rmd`
+  loads their result bundles from the NAS (`load_hpc_benchmark_results()`) and
+  runs the fast, composition-based methods (ECODA variants, GloProp, EPIC
+  deconvolution, Avg_PCA_embedding, Freq_highres) locally. Python methods
+  (MrVI, PILOT, scPoli) also run on HPC and exchange data via `.feather` files.
 - **Stage 4 — Batch Effect Analysis:** Render
   `notebooks/batch_effect_analysis.rmd` in RStudio (under expansion — see
   TODO.md).
@@ -112,15 +115,47 @@ Running the pipeline:
 ./src/4_cell_type_annotation/3_submit_merge.sh             # merge annotations back to h5ad + sync to NAS
 ```
 
-- **Benchmark methods** (`src/5_run_benchmark_methods/run_python_sample_embedding_methods/`) — PLANNED, not yet implemented: no SLURM submit script exists yet; the folder contains only the method notebook `1.2_benchmark_methods_py.qmd` (to be converted to `.py`). See TODO.md.
+- **Benchmark methods** (`src/5_run_benchmark_methods/`):
+  - **Python methods** (`run_python_sample_embedding_methods/`): MrVI, scPoli
+    (GPU), PILOT (CPU).
+    ```bash
+    ./src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh                 # all methods, all datasets
+    ./src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh --ds_name _debug --methods mrvi
+    ```
+  - **R methods** (`run_r_sample_embedding_methods/`): GloScope, MOFA,
+    Pseudobulk, scITD (CPU benchmark class, pinned like PILOT for runtime
+    comparability); `mofa`/`pseudobulk` auto-prepend the `prepare_pseudobulk`
+    prep step.
+    ```bash
+    ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh                       # all methods, all datasets
+    ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh --ds_name _debug --methods prepare_pseudobulk,pseudobulk
+    ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh --methods mofa --force
+    ```
+  - **Transformation + zero-imputation analyses** (`run_transformation_zeroimp_analysis/`):
+    two arrays (`trans`, `zeroimp`).
+    ```bash
+    ./src/5_run_benchmark_methods/run_transformation_zeroimp_analysis/1_submit_hpc_array.sh                   # both analyses, all datasets
+    ./src/5_run_benchmark_methods/run_transformation_zeroimp_analysis/1_submit_hpc_array.sh --ds_name _debug --analysis trans,zeroimp
+    ```
+  All benchmark submitters monitor their arrays, verify every task via `sacct`
+  (fail-closed), merge the per-task execution-time logs into
+  `benchmark/execution_times.feather` and rsync results to
+  `Projects/ECODA_paper/benchmark/` on the NAS; the notebook
+  (`notebooks/benchmark_analysis.rmd`) loads the R result bundles via
+  `load_hpc_benchmark_results()` (path: `path_nas_benchmark` in the setup
+  chunk).
 
 #### Expected Outputs
 
 - `.feather` files — cross-language distance matrices and embeddings produced
   by Python benchmark methods and consumed by R processors.
+- `.rds` result bundles — per-method/per-combo benchmark results (GloScope,
+  MOFA, Pseudobulk, scITD) + transformation/zero-imputation results, computed
+  on HPC and loaded by the notebook (`benchmark/{results,pseudobulks,
+  gloscope_dists}/` on the NAS).
 - Publication figures (MDS plots, PCA biplots, benchmark bar charts, separation
   metric heatmaps, transformation analysis panels) and per-method/per-dataset
-  execution-time logs.
+  execution-time logs (`benchmark/execution_times.feather`).
 
 
 ## How to Cite

@@ -1,0 +1,95 @@
+# ==============================================================================
+# 1.1.1_prepare_pseudobulk.R — Precompute the shared DESeq2 pseudobulks for
+# one dataset (prepare_pseudobulk array of Pipeline A).
+#
+# Called by 1.1_run_worker.sh via ${PIXI_RSCRIPT} with:
+#   --config_path --ds_name --view benchmark_analysis --input_dir
+#   --pseudobulk_dir --log_file [--force]
+# Loads the preprocessed benchmark view h5ad (raw counts + var["hvg_rank"]
+# only; no embeddings), runs prepare_pseudobulks_hpc() and writes
+# pseudobulks/<ds>_pseudobulk_<variant>.rds atomically (list(pb, time_secs)),
+# with one exec-log row per variant (method "prepare_pseudobulk_<variant>").
+# Skip-if-exists per variant unless --force.
+# ==============================================================================
+
+project_root <- Sys.getenv("PROJECT_ROOT")
+if (project_root == "") {
+  stop("PROJECT_ROOT not set. Source slurm_config.sh before calling this script.")
+}
+
+source(file.path(project_root, "src/utils/load_all_functions.R"))
+source(file.path(project_root, "src/5_run_benchmark_methods/benchmark_hpc_utils.R"))
+
+library(reticulate)
+
+raw_args <- commandArgs(trailingOnly = TRUE)
+args <- parse_flags(raw_args)
+
+for (req in c("config_path", "ds_name", "view", "input_dir",
+              "pseudobulk_dir", "log_file")) {
+  if (is.null(args[[req]]) || identical(args[[req]], TRUE)) {
+    stop("Missing required --", req, " argument")
+  }
+}
+force <- isTRUE(args[["force"]]) || identical(args[["force"]], "TRUE")
+
+config <- read_datasets_json(args$config_path, view = args$view)
+ds <- args$ds_name
+entry <- config[[ds]]
+if (is.null(entry)) {
+  stop("Dataset '", ds, "' not found in ", args$config_path)
+}
+
+h5ad_path <- get_h5ad_path(config, ds, args$view, args$input_dir)
+if (!file.exists(h5ad_path)) {
+  stop("Input h5ad not found: ", h5ad_path)
+}
+dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
+
+ad <- import("anndata", convert = FALSE)
+adata <- ad$read_h5ad(h5ad_path, backed = "r")
+obs <- py_to_r(adata$obs)
+
+sample_col <- "Sample"
+if (!sample_col %in% colnames(obs)) {
+  stop(sample_col, " not found in obs columns of ", h5ad_path)
+}
+
+seurat <- load_benchmark_seurat(adata, obs, sample_col = sample_col,
+                                fetch_embedding = NULL)
+seurat@meta.data[[sample_col]] <- standardize_sample_names(
+  seurat@meta.data[[sample_col]]
+)
+hvg_rank_genes <- get_hvg_rank_genes(adata)
+
+pending <- pb_variants_missing(args$pseudobulk_dir, ds, force)
+
+if (length(pending) > 0) {
+  message("Computing pseudobulk variants: ", paste(pending, collapse = ", "))
+  variants <- prepare_pseudobulks_hpc(
+    seurat,
+    sample_col = sample_col,
+    hvg_rank_genes = hvg_rank_genes,
+    variants = pending
+  )
+  for (v in names(variants)) {
+    f <- file.path(args$pseudobulk_dir, paste0(ds, "_pseudobulk_", v, ".rds"))
+    save_rds_atomic(variants[[v]], f)
+    log_exec_row(ds, paste0("prepare_pseudobulk_", v),
+                 variants[[v]]$time_secs, args$log_file)
+    message("  Saved: ", f, " (", round(variants[[v]]$time_secs, 1), "s)")
+  }
+} else {
+  # Everything cached: re-emit the stored timings so a resume after an
+  # aborted run does not lose the prep exec-log rows (the merge is scoped to
+  # the current run's job ids).
+  for (v in PB_VARIANT_NAMES) {
+    f <- file.path(args$pseudobulk_dir, paste0(ds, "_pseudobulk_", v, ".rds"))
+    cached <- readRDS(f)
+    log_exec_row(ds, paste0("prepare_pseudobulk_", v),
+                 cached$time_secs, args$log_file)
+    message("Pseudobulk variant already exists: ", f)
+  }
+}
+
+message("--- prepare_pseudobulk for ", ds, " complete ---")

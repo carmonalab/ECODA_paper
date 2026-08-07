@@ -20,11 +20,13 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
 - sbatch-submitted scripts must NOT resolve `src/slurm_config.sh` from
   `BASH_SOURCE`: Slurm copies submitted scripts to
   `/var/spool/slurmd/job<id>/slurm_script`, so `BASH_SOURCE` points at the spool
-  dir. The 6 sbatch workers (`1.1_submit_combinedpbmc.sh`,
+  dir. The 8 sbatch workers (`1.1_submit_combinedpbmc.sh`,
   `1.2_submit_joanito.sh`, `1.3_submit_kfoury_lowres_ct.sh`,
   `3_scrnaseq_preprocessing/1.1_run_worker.sh`,
-  `4_cell_type_annotation/2.1_run_worker.sh`, and the benchmark worker
-  `5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh`)
+  `4_cell_type_annotation/2.1_run_worker.sh`,
+  `5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh`,
+  `5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh`, and
+  `5_run_benchmark_methods/run_transformation_zeroimp_analysis/1.1_run_worker.sh`)
   recover `SCRIPT_DIR` from the job record via `scontrol show job`
   (`Command=` field) when `SLURM_JOB_ID` is set, with the `BASH_SOURCE` fallback
   for login-node execution. Keep this block in any new sbatch-submitted script.
@@ -66,12 +68,12 @@ Four-stage end-to-end pipeline; file-level details live in docs/ARCHITECTURE.md.
     - Staging (`src/1_stage_data/`) → dataset-specific steps (`src/2_dataset_specific_preprocessing/`, e.g. `1.2.1_prepare_joanito.R` builds the `_debug` subset + `seqtec` batch column; `1.3.1_create_kfoury_lowres_ct.R` creates `cells_lowres`) → preprocess array (`src/3_scrnaseq_preprocessing/`) → annotation chunks + array + merge (`src/4_cell_type_annotation/`; `3_submit_merge.sh <DS>` merges `annotations_chunk_*.feather` into every view h5ad and syncs to NAS).
     - Preprocessed .h5ad files are **CSR-on-disk by construction** — required for selective backed-mode per-sample reads in annotation (details in ARCHITECTURE.md).
     - **Drafts (keep, not dead code)**: `preprocess_gongsharma.qmd` (GongSharma other-subsetting conditions) and `TODO_STUMP_preprocess_sikkema.qmd` (future Sikkema Lung dataset) in `src/3_scrnaseq_preprocessing/` are intentional drafts for future implementation — do NOT delete.
-- **Stage 3 — Benchmark Analysis** (see [ARCHITECTURE.md](docs/ARCHITECTURE.md#benchmark-ecoda-transformation-and-ecoda-zero-imputation-analyses)): `notebooks/benchmark_analysis.rmd`'s `run_analyses()` orchestrates 3.1 benchmark methods (R-native + Python via `.feather`), 3.2 transformation analysis (`datrans()`), 3.3 zero imputation. Pending pipeline work (Python methods on HPC, PILOT-GM-VAE, QOT/PULSAR): see TODO.md Phase 3.
+- **Stage 3 — Benchmark Analysis** (see [ARCHITECTURE.md](docs/ARCHITECTURE.md#benchmark-ecoda-transformation-and-ecoda-zero-imputation-analyses)): heavy R methods (GloScope, MOFA, Pseudobulk, scITD) on HPC via `run_r_sample_embedding_methods/` (pinned CPU class, `prepare_pseudobulk` prep array gated first); transformation/zero-imputation analyses on HPC via `run_transformation_zeroimp_analysis/` (two arrays: `trans`, `zeroimp`); Python methods (MrVI/scPoli/PILOT) on HPC via `run_python_sample_embedding_methods/`. `notebooks/benchmark_analysis.rmd` loads the HPC bundles via `load_hpc_benchmark_results()` and runs the fast composition-based methods (ECODA variants, GloProp, EPIC deconv, Avg_PCA, Freq_highres). Pending pipeline work (PILOT-GM-VAE, QOT/PULSAR): see TODO.md Phase 3.
 - **Stage 4 — Batch Effect Analysis** (see [ARCHITECTURE.md](docs/ARCHITECTURE.md#batch-effect-analysis)): `notebooks/batch_effect_analysis.rmd`, under expansion (methods: ECODA batch-associated CT removal, Pseudobulk DESeq2+limma, MrVI, GloScope, PILOT-GM-VAE): see TODO.md Phase 4.
 
 ## R Modules for benchmark analysis (`src/5_run_benchmark_methods/` and `src/utils/`)
 
-11 utility files loaded by `src/utils/load_all_functions.R`, plus 2 benchmark-specific files in `src/5_run_benchmark_methods/` (details in ARCHITECTURE.md).
+11 utility files loaded by `src/utils/load_all_functions.R`, plus 3 benchmark-specific files in `src/5_run_benchmark_methods/` (`benchmark_methods_r.R`, `benchmark_pipeline.R` — both in `load_all_functions.R` — and `benchmark_hpc_utils.R`, which is HPC-only and sourced explicitly by the HPC worker scripts; details in ARCHITECTURE.md).
 
 # HPC general information
 
@@ -94,6 +96,8 @@ Four-stage end-to-end pipeline; file-level details live in docs/ARCHITECTURE.md.
     - `src/3_scrnaseq_preprocessing`
     - `src/4_cell_type_annotation`
     - `src/5_run_benchmark_methods/run_python_sample_embedding_methods`
+    - `src/5_run_benchmark_methods/run_r_sample_embedding_methods`
+    - `src/5_run_benchmark_methods/run_transformation_zeroimp_analysis`
 - `slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
 - pixi is a user-space binary on HPC at `~/.pixi/bin/pixi` (no module exists); the `py-cuda13` env lives at `.pixi/envs/py-cuda13/`. First-time env setup (pixi binary + `pixi install --environment py-cuda13` + `pixi run -e py-cuda13 setup`) runs via the sbatch job in README.md (installs are okay to run on the login node).
 - **Worker environment invariants** (details in ARCHITECTURE.md):

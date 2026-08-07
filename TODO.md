@@ -54,6 +54,16 @@ Prereqs (explicitly user):
   non-default combos keep their relative order via stable sort).
 - [ ] **3.2 R methods**: run `benchmark_methods_r.R` + `benchmark_pipeline.R` on HPC via
   a single-worker bash script; NAS targets `benchmark/{embeddings,plots}/`.
+  CODE COMPLETE (R benchmark pipeline `run_r_sample_embedding_methods/` — GloScope,
+  MOFA, Pseudobulk, scITD + `prepare_pseudobulk` prep step — plus the
+  transformation/zero-imputation pipeline `run_transformation_zeroimp_analysis/`;
+  `benchmark_pipeline.R` split into `run_benchmark_analysis` (fast,
+  composition-based, notebook-side) + `load_hpc_benchmark_results` + HPC drivers;
+  GloScope `_sqrtmat` variant merged; shared exec-log schema + NAS `benchmark/`
+  target; see ARCHITECTURE.md). HPC debug validation PENDING — smoke test:
+  Pipeline B first (`--ds_name _debug --analysis trans,zeroimp`), then Pipeline A
+  `--ds_name _debug --methods prepare_pseudobulk,pseudobulk`; check
+  `benchmark/results/`, `benchmark/pseudobulks/`, `execution_times.feather` on NAS.
 - [ ] **3.3 New methods**: PILOT-GM-VAE (add to py script + `constants.R` + R ingest;
   Harmony `X_pca_harmony` input for batch-effect views); QOT (feasibility test, deps
   from `QOT_PDAC_Example.ipynb`, no package); PULSAR (requirements test: UCE input,
@@ -96,6 +106,23 @@ Prereqs (explicitly user):
 
 ## Changelog
 
+- Phase 3.2 code-complete (HPC debug validation pending): R benchmark methods
+  (GloScope, MOFA, Pseudobulk, scITD) moved to the HPC pipeline
+  `src/5_run_benchmark_methods/run_r_sample_embedding_methods/` (per-method SLURM
+  arrays on the pinned CPU benchmark class, `prepare_pseudobulk` prep array gated
+  first, shared exec-log merge + NAS `benchmark/` target); transformation/zero-
+  imputation analyses moved to `src/5_run_benchmark_methods/run_transformation_zeroimp_analysis/`
+  (two arrays: `trans`, `zeroimp`); `benchmark_pipeline.R` split (notebook-side
+  `run_benchmark_analysis` keeps ECODA/GloProp/deconv/Avg_PCA/Freq_highres +
+  python-feather ingest; `run_analyses` replaced by `load_hpc_benchmark_results`;
+  new HPC drivers `prepare_pseudobulks_hpc`/`run_gloscope_hpc`/`run_mofa_hpc`/
+  `run_pseudobulk_hpc`/`run_scitd_hpc`); GloScope `_sqrtmat` variant merged into
+  `GloScope_hvg2000_pcadims30`; workers consume preprocessed obsm +
+  `var["hvg_rank"]` (no R-side PCA/FindVariableFeatures recomputation); pixi.toml
+  gains r-vegan, r-robcompositions, bioconductor-deseq2, r-doparallel, r-plotly,
+  r-pheatmap; notebook loads HPC bundles via `load_hpc_benchmark_results()` and
+  filters its python exec-times rows to MrVI/scPoli/PILOT; docs (README/
+  ARCHITECTURE/AGENTS) updated.
 - `1.1.1_benchmark_methods_py.py`: combos now run defaults-first (stable sort on the
   fully-built combos list) so the main-method rows (MrVI_hvg2000,
   scPoli_hvg2000_dims15_highres, PILOT_hvg2000_highres) report unbloated `mem_GB`
