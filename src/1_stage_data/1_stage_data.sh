@@ -19,8 +19,10 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-module load GCCcore/12.2.0
-module load jq/1.6
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: jq not available; cannot read ${DATASETS_JSON_FILE}."
+  exit 1
+fi
 
 DS_NAME_ARG=""
 while [[ $# -gt 0 ]]; do

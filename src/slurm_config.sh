@@ -38,6 +38,18 @@ export PIXI_RSCRIPT="${HOME}/.pixi/bin/pixi run -e py-cuda13 Rscript --vanilla"
 # consistent across login node and workers).
 export PATH="${PROJECT_ROOT}/.pixi/envs/py-cuda13/bin:${PATH}"
 
+# --- jq (JSON parsing) ---
+# Lmod's hierarchical tree on UNIGE clusters hides jq/1.6 behind its toolchain
+# prerequisite GCCcore/12.2.0 (verified via `module spider jq` on bamboo, 2026-08-07).
+# Both loads are guarded: a failing module load must never abort a `set -e` script
+# nor print noise — the `command -v jq` guards in each consumer script are the
+# fail-closed backstop. If the module tree updates (jq 1.6 no longer builds on newer
+# GCCcore; EasyBuild pairs jq/1.7.1-1.8.1 with GCCcore/13.x and jq/1.8.1 with
+# GCCcore/14.x), re-run `module spider jq` and bump both lines — or add jq to the
+# py-cuda13 pixi env to drop the module dependency entirely.
+module load GCCcore/12.2.0 >/dev/null 2>&1 || true
+module load jq/1.6 >/dev/null 2>&1 || true
+
 # --- reticulate python (R workers) ---
 # Pinned explicitly so R (2.1.1_process_chunk.R, imports.R) always uses the
 # py-cuda13 python: reticulate's own discovery may otherwise pick a stray

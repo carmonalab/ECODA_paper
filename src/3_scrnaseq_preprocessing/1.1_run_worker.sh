@@ -21,8 +21,6 @@ fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-module load GCCcore/12.2.0
-module load jq/1.6
 if ! command -v jq >/dev/null 2>&1; then
   echo "ERROR: jq not available on worker node; cannot derive DS_NAME from ${DATASETS_JSON_FILE}."
   exit 1
