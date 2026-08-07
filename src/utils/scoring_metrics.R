@@ -110,6 +110,11 @@ compute_KNN_from_dist <- function(dist_mat, knn_k) {
   # dist_mat should be a square matrix or 'dist' object
   dist_mat <- as.matrix(dist_mat)
   n <- nrow(dist_mat)
+  # Clamp k to n - 1: a sample can have at most n - 1 neighbors.
+  # Without this, fixed knn_k values (6, 9) exceed n - 1 on small datasets
+  # (e.g. the 5-sample _debug subset), and order()[2:(knn_k + 1)] returns NAs
+  # that crash Matrix::sparseMatrix in compute_snn_graph().
+  knn_k <- max(1, min(knn_k, n - 1))
   knn <- matrix(0, nrow = n, ncol = knn_k)
 
   for (i in 1:n) {
