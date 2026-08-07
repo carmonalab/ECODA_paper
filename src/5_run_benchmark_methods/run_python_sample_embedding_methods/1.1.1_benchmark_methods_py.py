@@ -236,9 +236,19 @@ def run_scpoli(adata, ct_col, dim, output_path):
 
 def run_pilot(adata, ct_col, view, n_hvg, output_path):
     """PILOT Wasserstein sample distances on the preprocessed obsm PCA."""
+    emb_key = f"X_pca_{view}_hvg{n_hvg}"
+    emb = adata.obsm[emb_key]
+    # PILOT (pilotpy>=2.0.x) requires a named-columns pandas DataFrame in
+    # obsm (Trajectory.extract_data_anno_scRNA_from_h5ad accesses .columns);
+    # the preprocess step stores scanpy's plain ndarray instead.
+    if not hasattr(emb, "columns"):
+        emb = pd.DataFrame(
+            emb, columns=[f"PCA_{i + 1}" for i in range(emb.shape[1])]
+        )
+    adata.obsm[emb_key] = emb
     pl.tl.wasserstein_distance(
         adata,
-        emb_matrix=f"X_pca_{view}_hvg{n_hvg}",
+        emb_matrix=emb_key,
         clusters_col=ct_col,
         sample_col="Sample",
         status="Sample",
