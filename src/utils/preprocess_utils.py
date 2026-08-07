@@ -31,6 +31,8 @@ convert_rds_to_raw_h5ad_r = ro.globalenv["convert_rds_to_raw_h5ad"]
 # Loading helpers
 # ---------------------------------------------------------------------------
 def load_single_input(input_name, input_dir, output_dir):
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
     input_path = input_dir / input_name
     if str(input_name).endswith(".rds"):
         stem = Path(input_name).stem

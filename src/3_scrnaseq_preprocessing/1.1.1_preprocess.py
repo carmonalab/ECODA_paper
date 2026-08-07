@@ -194,6 +194,8 @@ def process_view(
 # Main
 # ---------------------------------------------------------------------------
 def main(config_path, input_dir, output_dir, ds_name=None, force=False):
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
     config = read_datasets_json(config_path)
