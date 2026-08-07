@@ -44,6 +44,10 @@ r-seuratobject = "5.2.0.*"
 anndata = "==0.12.19"
 scanpy = "==1.12.2"
 rpy2 = ">=3.6.7,<4"
+# Required by pd.read_feather()/to_feather() in 3.1_merge_annotations.py and
+# the benchmark Python workers (1.1.1_benchmark_methods_py.py,
+# 1.1.2_merge_execution_times.py); version-aligned with the pinned r-arrow.
+pyarrow = ">=24,<26"
 
 [pypi-dependencies]
 harmonypy = ">=2.0.0, <3"
