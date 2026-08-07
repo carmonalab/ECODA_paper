@@ -49,11 +49,26 @@ import scanpy as sc
 import scipy.sparse as sp
 import scvi
 from scvi.external import MRVI
-from scarches.models.scpoli import scPoli
 import pilotpy as pl
 import torch
 
 from src.datasets_io import read_datasets_json
+
+
+# scPoli is imported lazily (get_scpoli) so that MrVI/PILOT runs never touch
+# scarches: scarches 0.6.1 (its final release) does `from anndata import
+# AnnData, read`, but `anndata.read` was removed in anndata >= 0.12 (the
+# pinned 0.12.19). The shim below restores it as the documented alias
+# `read_h5ad` — scarches only calls `read()` on .h5ad files, so this is a
+# faithful drop-in. See https://github.com/theislab/scarches.
+def get_scpoli():
+    import anndata as ad
+
+    if not hasattr(ad, "read"):
+        ad.read = ad.read_h5ad  # scarches compat (anndata >= 0.12 removed `read`)
+    from scarches.models.scpoli import scPoli
+
+    return scPoli
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +206,7 @@ def run_mrvi(adata, device, output_path):
 
 def run_scpoli(adata, ct_col, dim, output_path):
     """scPoli conditional sample embeddings for one embedding dim."""
+    scPoli = get_scpoli()
     scpoli_model = scPoli(
         adata=adata,
         condition_keys="Sample",
