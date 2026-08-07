@@ -298,7 +298,9 @@ get_seurat_obj_from_h5ad <- function(
     if (layer_name == "X") {
       py_mat <- subset_py$X
     } else {
-      layer_keys <- py_to_r(subset_py$layers$keys())
+      # Materialize Python 3 keys() view (dict_keys/KeysView) into a Python list
+      # first: py_to_r() leaves the view object unconverted, breaking %in%.
+      layer_keys <- py_to_r(import_builtins(convert = FALSE)$list(subset_py$layers$keys()))
       if (!layer_name %in% layer_keys) {
         stop(paste("Layer", layer_name, "not found in adata.layers"))
       }
@@ -356,7 +358,9 @@ get_seurat_obj_from_h5ad <- function(
 
   # 5. Handle Embeddings
   if (!is.null(fetch_embedding)) {
-    obsm_keys <- py_to_r(subset_py$obsm$keys())
+    # Materialize Python 3 keys() view (dict_keys/KeysView) into a Python list
+    # first: py_to_r() leaves the view object unconverted, breaking %in%.
+    obsm_keys <- py_to_r(import_builtins(convert = FALSE)$list(subset_py$obsm$keys()))
 
     for (emb in fetch_embedding) {
       if (emb %in% obsm_keys) {
