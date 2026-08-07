@@ -15,7 +15,7 @@ method_label_map_main <- c(
   "MrVI_hvg2000" = "MrVI",
   "scPoli_hvg2000_dims15_highres" = "scPoli",
   "PILOT_hvg2000" = "PILOT",
-  "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope",
+  "GloScope_hvg2000_pcadims30" = "GloScope",
   "GloProp" = "GloProp",
   "Freq_highres" = "CellType_Frequency%"
 )

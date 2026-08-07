@@ -38,7 +38,11 @@ $HOME/scratch/ECODA_paper               # HPC_SCRATCH_DIR
 ├── <DS_NAME>/output/                   # preprocessed .h5ad per view, chunks/, annotations, annotated .h5ad
 ├── <DS_NAME>/annotation_union/         # per-dataset union h5ad for annotation (outside synced output dir)
 ├── CombinedPBMC/data/                  # combine output + rds→h5ad cache (CombinedPBMC/output/ holds its preprocessed output)
-├── benchmark/embeddings/               # method .feathers + per-task exec logs (Python benchmark arrays)
+├── benchmark/embeddings/               # method .feathers + per-task exec logs (Python + R benchmark arrays)
+├── benchmark/results/                  # per-method/per-combo R result bundles (<ds>_<method>.rds, <ds>_<method>_<combo>.rds, <ds>_trans.rds, <ds>_zeroimp.rds)
+├── benchmark/pseudobulks/              # shared DESeq2 pseudobulks (<ds>_pseudobulk_<variant>.rds, prepare_pseudobulk worker)
+├── benchmark/gloscope_dists/           # raw GloScope distance cache (<ds>_gloscope_hvg<n>_pcadims<d>_dists.rds)
+├── benchmark/checksums.md5             # md5 sidecar over the RDS bundles (written by benchmark_merge_sync_cleanup; verified by the notebook before readRDS)
 ├── benchmark_manifest_<method>.txt     # per-method benchmark manifests (1_submit_hpc_array.sh, rebuilt every run)
 └── chunks_manifest.txt                 # global chunk manifest (2_submit_hpc_array.sh)
 $HOME/reference_atlases/sketched_200ct/ # HOME_REF_DIR (HiTME reference maps)
@@ -48,7 +52,7 @@ DataCollections/Standardized_SingleCell_Datasets/   # NAS_SC_DIR — raw source 
 DataCollections/reference_atlases/sketched_200ct/   # NAS_REF_DIR
 Projects/ECODA_paper/                               # NAS_TARGET_DIR — results back-sync target
 └── <DS_NAME>/output/                   # rsynced per-dataset from ${HPC_SCRATCH_DIR}/<DS_NAME>/output
-benchmark/{embeddings,plots}/           # method .feathers (embeddings/ filled by Phase 3.1; plots/ by the notebook) + merged execution_times.feather
+benchmark/{embeddings,results,pseudobulks,gloscope_dists,plots}/   # method .feathers (embeddings/) + R result bundles (results/, pseudobulks/, gloscope_dists/) + merged execution_times.feather, all filled by the benchmark pipelines; plots/ by the notebook
 batch_effect_analysis/{embeddings,plots}/           # same, for batch effect analysis
 ```
 
@@ -63,7 +67,7 @@ batch_effect_analysis/{embeddings,plots}/           # same, for batch effect ana
 | `${PROJECT_ROOT}/logs`, `aux/`, `.pixi/` | `PROJECT_ROOT` | SLURM logs (`LOGS_DIR`), auxiliary files (gene maps), pixi envs (HPC: `.pixi/envs/py-cuda13/`) |
 | `${NAS_SC_DIR}` | `NAS_SC_DIR` | Raw source datasets (`folder_name` in `datasets.json`) |
 | `${NAS_REF_DIR}` | `NAS_REF_DIR` | Reference atlas source (HiTME) |
-| `${NAS_TARGET_DIR}/<DS_NAME>/output/` | `NAS_TARGET_DIR` | Results back-sync target: rsynced per-dataset from `${HPC_SCRATCH_DIR}/<DS_NAME>/output`; `benchmark/{embeddings,plots}/` (method `.feather`s + merged `execution_times.feather` from Phase 3.1; `plots/` filled by the notebook), `batch_effect_analysis/{embeddings,plots}/` (Phase 4) |
+| `${NAS_TARGET_DIR}/<DS_NAME>/output/` | `NAS_TARGET_DIR` | Results back-sync target: rsynced per-dataset from `${HPC_SCRATCH_DIR}/<DS_NAME>/output`; `benchmark/{embeddings,results,pseudobulks,gloscope_dists,plots}/` (method `.feather`s + R result bundles + merged `execution_times.feather` from the benchmark pipelines; `plots/` filled by the notebook), `batch_effect_analysis/{embeddings,plots}/` (Phase 4) |
 
 
 ## Preprocessing Pipeline
@@ -94,7 +98,7 @@ The preprocessing stage is split across three `src/` folders run in sequence:
   - Example (benchmark view): `X_pca_benchmark_analysis_hvg3000`, `X_pca_benchmark_analysis_hvg2000`, `X_pca_benchmark_analysis_hvg1000`, plus `X_pca_harmony_benchmark_analysis_hvg2000`, `leiden_res_0.1_benchmark_analysis_hvg2000`, `leiden_res_0.1_benchmark_analysis_hvg2000_harmony`, ... (batch views analogously with `batch_effect_analysis_hvg2000`).
 
 - **NAS ↔ Scratch data flow**: Raw-data staging from NAS to scratch happens in `src/1_stage_data/1_stage_data.sh` (per-dataset dirs `${HPC_SCRATCH_DIR}/${DS_NAME}/data`); Worker nodes only access scratch. After array completes, login node rsyncs results back to NAS (per-dataset `${NAS_TARGET_DIR}/${DS_NAME}/output`).
-- **Working-directory convention**: every HPC bash script sources `src/slurm_config.sh` and then `cd "${PROJECT_ROOT}"` (all existing scripts do this; keep it for any new script). `preprocess_utils.py` pins the embedded R working directory to `${PROJECT_ROOT}` at import time (its rpy2 interop sources `src/utils/load_all_functions.R` + 11 module files via repo-relative paths), so Python callers are CWD-independent — the `cd` remains belt-and-braces and required by convention. **sbatch-submitted scripts must not resolve `slurm_config.sh` from `BASH_SOURCE`**: Slurm copies submitted scripts to `/var/spool/slurmd/job<id>/slurm_script`, so `BASH_SOURCE` points at the spool dir. The 6 sbatch workers (`1.1_submit_combinedpbmc.sh`, `1.2_submit_joanito.sh`, `1.3_submit_kfoury_lowres_ct.sh`, `1.1_run_worker.sh`, `4_cell_type_annotation/2.1_run_worker.sh`, `5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh`) recover `SCRIPT_DIR` from the job record via `scontrol show job` (`Command=` field) when `SLURM_JOB_ID` is set, with the `BASH_SOURCE` fallback for login-node execution (`srun`-based scripts such as `1_prepare_chunks.sh` run without `SLURM_JOB_ID` and are unaffected).
+- **Working-directory convention**: every HPC bash script sources `src/slurm_config.sh` and then `cd "${PROJECT_ROOT}"` (all existing scripts do this; keep it for any new script). `preprocess_utils.py` pins the embedded R working directory to `${PROJECT_ROOT}` at import time (its rpy2 interop sources `src/utils/load_all_functions.R` + 11 module files via repo-relative paths), so Python callers are CWD-independent — the `cd` remains belt-and-braces and required by convention. **sbatch-submitted scripts must not resolve `slurm_config.sh` from `BASH_SOURCE`**: Slurm copies submitted scripts to `/var/spool/slurmd/job<id>/slurm_script`, so `BASH_SOURCE` points at the spool dir. The 8 sbatch workers (`1.1_submit_combinedpbmc.sh`, `1.2_submit_joanito.sh`, `1.3_submit_kfoury_lowres_ct.sh`, `1.1_run_worker.sh`, `4_cell_type_annotation/2.1_run_worker.sh`, `5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh`, `5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh`, `5_run_benchmark_methods/run_transformation_zeroimp_analysis/1.1_run_worker.sh`) recover `SCRIPT_DIR` from the job record via `scontrol show job` (`Command=` field) when `SLURM_JOB_ID` is set, with the `BASH_SOURCE` fallback for login-node execution (`srun`-based scripts such as `1_prepare_chunks.sh` run without `SLURM_JOB_ID` and are unaffected).
 - **Dataset-specific preprocessing steps** (all submitted via the `1_submit_hpc.sh` dispatcher, in parallel):
   - **CombinedPBMC combine** (`1.1_submit_combinedpbmc.sh` → `1.1.1_create_combinedpbmc_dataset.py`): HPC-capable. With `HPC_SCRATCH_DIR` set it defaults to `--layout per-dataset` (sources at `${HPC_SCRATCH_DIR}/<ds>/data`, output `${HPC_SCRATCH_DIR}/CombinedPBMC/data`); locally it defaults to the flat `PROJECT_ROOT/data` layout. Parallel in-job: the three sources load concurrently in 3 fork workers (`ProcessPoolExecutor`); each worker writes a trimmed per-source intermediate to `output_dir/_intermediates/<source>_subset.h5ad` (overwritten on rerun), and the main process reloads those small intermediates for the common-gene intersection (with `<5000` union fallback), Sample prefixing, `sc.concat(join="outer")` and write. rpy2 is imported lazily inside the two R workers (Stephenson, Zhu) only — the parent never initializes R before forking. GongSharma is read in backed mode (`sc.read_h5ad(..., backed='r')`): non-counts layers dropped on disk, only the HDF5 chunks covering the rng(123)-picked ~15 samples materialized via `to_memory()` (full in-memory load fallback on failure). 16 cpus / 128G sbatch baseline (rds→h5ad cache `{stem}_raw.h5ad` makes reruns faster). Script is CWD-independent; still submitted via the `1_submit_hpc.sh` dispatcher.
   - **Joanito prepare** (`1.2_submit_joanito.sh` → `1.2.1_prepare_joanito.R`): computes the `seqtec` batch column in place (idempotent; single source of truth for the batch mapping) from `${HPC_SCRATCH_DIR}/Joanito/data/JoaI_2022_35773407_Nofilt_whole.rds` (path from `datasets.json` via `DATASETS_JSON_FILE`), then builds the `_debug` 5-sample subset from the same in-memory object (see "Debug subset build" below). 32G mem baseline — the whole .rds is read in a single process. On re-runs, if `seqtec` already exists in the staged `.rds`, both the recompute and the in-place `saveRDS` are skipped (fast path). Required before the preprocess array (the `batch_effect_analysis` view uses it as `batch_col`).
@@ -184,10 +188,15 @@ dataset (see datasets.json + TODO.md).
 
 ## Benchmark, ECODA Transformation and ECODA Zero Imputation Analyses
 
-Note: the Layers 1–5 call flow below documents the current notebook-based
-pipeline and will be restructured by the planned HPC benchmark pipeline
-(TODO.md Phase 3). Phase 3.1 (Python methods) is already HPC-based — see
-"Python benchmark methods on HPC" below.
+Note: the Layers 1–5 call flow below documents the notebook-based pipeline
+and is now SUPERSEDED for the R side: the heavy R benchmark methods (GloScope,
+MOFA, Pseudobulk, scITD) and the transformation/zero-imputation analyses run
+on HPC (see "R benchmark methods on HPC" and "Transformation and
+zero-imputation analyses on HPC" below); the notebook only runs the fast,
+composition-based methods (ECODA variants, GloProp, EPIC deconv,
+Avg_PCA_embedding, Freq_highres) and loads the HPC bundles via
+`load_hpc_benchmark_results()`. Phase 3.1 (Python methods) is already
+HPC-based — see "Python benchmark methods on HPC" below.
 
 ### Python benchmark methods on HPC (`src/5_run_benchmark_methods/run_python_sample_embedding_methods/`)
 
@@ -294,6 +303,191 @@ benchmark h5ad; check the feathers + exec log; R-ingest compatibility is
 exercised by Phase 3.4. Heavy Python deps (scvi-tools/scarches/pilotpy/torch)
 live in the `py-cuda13` pixi env (`PYTHON_BIN`).
 
+### R benchmark methods on HPC (`src/5_run_benchmark_methods/run_r_sample_embedding_methods/`)
+
+The heavy R benchmark methods (GloScope, MOFA, Pseudobulk, scITD) run as SLURM
+arrays on the preprocessed benchmark view h5ad (inputs under
+`${HPC_SCRATCH_DIR}/<DS_NAME>/output`, per `datasets.json` view output files),
+mirroring the Python pipeline (per-method manifests, `sed -n
+${SLURM_ARRAY_TASK_ID}p`, fail-closed sacct gates, shared exec-log schema +
+merge script + NAS `benchmark/` target). Workers run R via `${PIXI_RSCRIPT}`
+(exported by `slurm_config.sh`), source `src/utils/load_all_functions.R` +
+`benchmark_hpc_utils.R`, and read the preprocessed h5ad through reticulate
+(obs-only backed read; raw counts from `layers["counts"]` + stored obsm
+`X_pca_benchmark_analysis_hvg{n}` embeddings + `var["hvg_rank"]` gene ranks —
+no PCA/FindVariableFeatures recomputation, consistent with how
+PILOT/MrVI/scPoli consume preprocessing). All methods are pinned to the CPU
+benchmark class (`${SLURM_PARTITION_BENCHMARK_CPU}` EPYC-7742,
+`${BENCHMARK_CPU_CPUS_PER_TASK}` cpus, `${BENCHMARK_MEM}`) — the same class as
+PILOT, so cross-method runtime comparisons stay valid; an explicit
+`--partition <P>` override drops the constraint pin.
+
+#### Workflow
+
+```
+1_submit_hpc_array.sh (login; per method: manifest + sbatch array on the
+  pinned CPU class shared-cpu/EPYC-7742/16 cores/128G; --partition override
+  drops the constraint pin; mofa/pseudobulk auto-prepend prepare_pseudobulk)
+   ├─ prepare_pseudobulk array FIRST — polled to completion + sacct gate
+   │    └─ 1.1_run_worker.sh -> 1.1.1_prepare_pseudobulk.R
+   │         input:  h5ad (counts + var["hvg_rank"] only; no embeddings)
+   │         output: ${HPC_SCRATCH_DIR}/benchmark/pseudobulks/<ds>_pseudobulk_<variant>.rds
+   │                 (list(pb, time_secs) per variant; exec-log rows
+   │                 prepare_pseudobulk_<variant>)
+   └─ gloscope/mofa/pseudobulk/scitd arrays (after the gate) — poll + gate
+        └─ 1.1_run_worker.sh -> 1.1.1_run_benchmark_methods_r.R
+             input:  h5ad -> Seurat (counts + obsm pca_benchmark_analysis_hvg{n}
+                     reductions + hvg_rank VariableFeatures); mofa/pseudobulk
+                     reuse the precomputed pseudobulks/ (on-the-fly fallback);
+                     mofa skips the counts/embeddings materialization unless
+                     the fallback triggers (metadata/labels from obs)
+             output: ${HPC_SCRATCH_DIR}/benchmark/results/
+                     <ds>_<method>_<combo>.rds (per-combo bundles)
+                     <ds>_<method>.rds (named list of bundles, each with exec_time)
+                     gloscope_dists/<ds>_gloscope_hvg<n>_pcadims<d>_dists.rds
+                     (raw GloScope distance cache; sqrt applied at processing)
+                     execution_times_task_<JOBID>_<TASKID>.feather (per-task exec log)
+   └─ NAS reachability check -> checksums.md5 RDS integrity sidecar ->
+      sacct gate (fail-closed) ->
+      merge (shared 1.1.2_merge_execution_times.py, --no-cleanup --job_ids
+      <ids> [--existing-log NAS log]) -> execution_times.feather
+   └─ rsync -> ${NAS_TARGET_DIR}/benchmark/
+   └─ only then: delete this run's per-task logs
+```
+
+#### Files
+
+| File | Role |
+|---|---|
+| `1_submit_hpc_array.sh` | Login-node submitter: `[--ds_name <DS>] [--methods prepare_pseudobulk,gloscope,mofa,pseudobulk,scitd] [--partition <P>] [--force]`. Same dataset resolution as the Python submitter (jq: `use_for_benchmark == true` + `benchmark_analysis` view; `_*` keys skipped unless `--ds_name`) — via the shared `benchmark_submit_common.sh` helpers. Validates `--methods` (error on unknown), dedupes, and auto-prepends `prepare_pseudobulk` when `mofa`/`pseudobulk` is requested without it. Submit order: `prepare_pseudobulk` array first, polled to completion with a fail-closed sacct gate, then the other arrays, polled + gated the same way. All methods pinned to the CPU benchmark class on the sbatch command line (`--constraint=${BENCHMARK_CPU_CONSTRAINT}` + `--cpus-per-task=${BENCHMARK_CPU_CPUS_PER_TASK}` + `--mem=${BENCHMARK_MEM}`); `--partition <P>` override drops the constraint pin. Per-method manifest `${HPC_SCRATCH_DIR}/benchmark_manifest_<method>_$$.txt` (PID suffix; rebuilt every run); exports `METHOD` + `BENCHMARK_MANIFEST` + `FORCE_BENCHMARK`. The shared merge/sync/cleanup tail (NAS check → `checksums.md5` RDS integrity sidecar → sacct gates → exec-log merge → rsync → per-task log cleanup) runs via `benchmark_merge_sync_cleanup`. |
+| `1.1_run_worker.sh` | `#SBATCH` worker (defaults overridden at submit time: 12h, 16 cpus, 128G). Same boilerplate as the Python worker (scontrol `Command=` SCRIPT_DIR recovery, `slurm_config.sh` + `cd ${PROJECT_ROOT}`); requires `METHOD` + `BENCHMARK_MANIFEST`; `DS_NAME` from the manifest via `sed -n ${SLURM_ARRAY_TASK_ID}p`. Per-task exec log `execution_times_task_<ARRAY_JOB_ID>_<ARRAY_TASK_ID>.feather` (job id in the name: the concurrent arrays all use task ids 1..N). Calls `1.1.1_prepare_pseudobulk.R` (for `prepare_pseudobulk`) or `1.1.1_run_benchmark_methods_r.R` via `${PIXI_RSCRIPT}` with `--config_path --ds_name --view benchmark_analysis --method --input_dir --results_dir --pseudobulk_dir --gloscope_cache_dir --log_file` (+ `--force` when `FORCE_BENCHMARK=1`). |
+| `1.1.1_run_benchmark_methods_r.R` | Method worker: sources `load_all_functions.R` + `benchmark_hpc_utils.R`; loads the h5ad → Seurat via `load_benchmark_seurat()` (reticulate: raw counts layer with X fallback + `X_pca_benchmark_analysis_hvg{1000,2000,3000}` obsm → reductions named `pca_benchmark_analysis_hvg{n}`), sets `VariableFeatures(seurat)` from the top-2000 `hvg_rank` genes and `seurat@misc$cell_type_low_res`/`label_col` from datasets.json. Memory: mofa skips the counts/embeddings materialization (metadata/labels from obs) and builds the Seurat only when the on-the-fly pb fallback triggers; gloscope fetches the embeddings, pseudobulk/scitd the counts. Dispatches on `--method` to the T2 drivers in `benchmark_pipeline.R` (`run_gloscope_hpc`/`run_mofa_hpc`/`run_pseudobulk_hpc`/`run_scitd_hpc`); mofa/pseudobulk load the precomputed pb variants via `load_pb_variants()` (on-the-fly computation of ONLY the missing variants + atomic save if a variant RDS is missing). Skip-if-exists: the method RDS exists → re-emits its exec-log rows (failure-resume must not lose timing from an aborted run) and skips all unless `--force`; else per-combo cache files are reused (also re-logged). Writes per-combo bundles + the method-level RDS + per-combo exec-log rows. |
+| `1.1.1_prepare_pseudobulk.R` | Prep worker: loads the Seurat (counts + `var["hvg_rank"]` only; no embeddings), runs `prepare_pseudobulks_hpc()` (variants `schvg2000`/`hvg2000`/`hvg500`/`hvg2000_bl`/`hvg1000`/`hvg3000`), writes `pseudobulks/<ds>_pseudobulk_<variant>.rds` atomically (tmp+rename) and one exec-log row per variant (`prepare_pseudobulk_<variant>`). Skip-if-exists per variant unless `--force`. |
+| `benchmark_hpc_utils.R` | (Not in `load_all_functions.R`; sourced explicitly by the HPC scripts.) Tiny `--flag value` arg parser (`parse_flags`), `get_h5ad_path()` (reuses `read_datasets_json`, which already maps `columns.label` → `label_col`/`output_file_name` → `output_file`), hvg_rank gene helpers (`get_hvg_rank_genes`, `make_hvg_sets`), the single source of truth for the pseudobulk variant names (`PB_VARIANT_NAMES`, `pb_variants_missing`), `load_benchmark_seurat()` (full Seurat build via `get_seurat_obj_from_h5ad`, counts layer + obsm embeddings), `load_pb_variants()` (read, or on-the-fly-compute only the missing variants, of the shared pseudobulks), `save_rds_atomic()` (tmp+rename), `log_exec_row()` (shared exec-log feather schema `dataset, method, time_secs, mem_GB` with `mem_GB = NA_real_` (nullable double, matching the Python writer's float64), read-modify-write append + dedup on (dataset, method) keep=last — mirrors `log_execution_time()` in `1.1.1_benchmark_methods_py.py`) and `run_ct_comps_analysis_worker()` (shared Pipeline B worker driver). |
+| `benchmark_submit_common.sh` | Shared helper sourced by the three benchmark submitters (python, R, trans/zeroimp) after `slurm_config.sh`: `benchmark_resolve_datasets <ds_name_arg>` (jq dataset resolution + `_*` skip convention), `benchmark_wait_for_array <job_id> <label>` (squeue poll + fail-closed sacct gate), `benchmark_merge_sync_cleanup <job_ids...>` (NAS reachability check → writes the `checksums.md5` RDS integrity sidecar → merges per-task exec logs via the shared `1.1.2_merge_execution_times.py` → rsyncs `${HPC_SCRATCH_DIR}/benchmark/` → `${NAS_TARGET_DIR}/benchmark/` → deletes this run's per-task logs). |
+
+#### Key design details
+
+- **Combo lists and result names are the legacy ones** (minus the GloScope
+  `_sqrtmat` suffix, which is merged into `GloScope_hvg2000_pcadims30`):
+  GloScope `hvg2000 × pcadims {10,30,50}` + `hvg{1000,3000} × pcadims30`;
+  MOFA `hvg2000_factors{2,3,5,10,15}` + `hvg{1000,3000}_factors15`; Pseudobulk
+  `schvg2000/hvg2000/hvg500/hvg2000_bl/hvg1000/hvg3000` + `CT_LR/HR_hvg{2000,500}`
+  (each CT variant gated on its own ct col) + `{2,3,5,10,15}_PCA_dims`;
+  scITD `hvg2000_factors{2,3,5,10,15}` + `hvg{1000,3000}_factors5`.
+- **Method timing includes the shared pseudobulk creation**: MOFA/Pseudobulk
+  combo times = `pb_variant$time_secs` + method runtime (as the legacy code
+  did with `exec_time(method) + exec_time_pb_norm`); GloScope combo times
+  include the distance computation on a cache miss and are sqrt+read only on
+  a hit (legacy `path_data` dist-cache semantics).
+- **Sample-count guards** (make `_debug` usable): MOFA combos with
+  `num_factors >= n_samples` are skipped (warning); scITD combos with
+  `num_factors + 5 >= n_samples` are skipped (the tucker rank `c(f, f+5)`
+  must be `< n_samples` — the 5-sample `_debug` dataset cannot run scITD at
+  all); GloScope clamps `k` to `min(k, n_samples - 1)` and `n_pca_dims` to
+  `min(n_pca_dims, ncol(embedding_matrix))` (the obsm stores
+  `min(50, n_vars-1, n_obs-1)` PCs, so `_debug`'s 4 PCs would crash pcadims
+  10/30/50 without the clamp).
+- **The stored obsm + `var["hvg_rank"]` replace the legacy R-side
+  recomputation**: `schvg2000` uses the top-2000 `hvg_rank` genes and scITD
+  hvg1000/hvg3000 use the ranked sets; gene sets may differ slightly from the
+  legacy Seurat `var.features` (expected; the new run is internally
+  consistent).
+- **`Pseudobulk_hvg2000_bl` behavior is preserved for legacy-result
+  equivalence**, including the pre-existing `%in% black_list` no-op typo in
+  `get_pb_deseq2` (pseudobulk.R:84) — flagged to the user, not silently
+  fixed.
+- **Result bundles keep the exact legacy names**; the notebook's exec-time
+  section (reads bundle `exec_time`, numeric seconds) and all plot code work
+  unchanged on the loaded bundles. RDS files use the default R serialization
+  (R 4.5.x on both HPC and the user's Mac — compatible).
+- **Bundle integrity sidecar**: the submit tail writes `benchmark/checksums.md5`
+  (GNU md5sum over the RDS bundles); the notebook's `load_hpc_benchmark_results()`
+  verifies listed files before `readRDS()` (RDS deserialization can execute
+  code) and fails on mismatch — files not listed (pre-sidecar results) are
+  read unverified.
+- **Failure-resume re-logs timings**: cache hits (method RDS, per-combo
+  bundles, prep variants) re-emit their stored `exec_time` rows into the
+  current run's per-task log, so timing computed in an aborted run is not
+  lost (the merge is scoped to the current run's job ids).
+- **Skip semantics**: per-combo cache files + method-level RDS; `--force`
+  recomputes everything.
+
+#### Usage
+
+```bash
+# 1. (prereq) preprocess + annotate the benchmark datasets (stages 2-4)
+
+# 2. Run the R benchmark methods (all benchmark datasets; prep array gated
+#    first; arrays monitored + sacct-gated + exec logs merged + NAS-synced
+#    by the script). mofa/pseudobulk auto-prepend prepare_pseudobulk.
+./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh
+./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh \
+  --ds_name _debug --methods prepare_pseudobulk,pseudobulk   # debug smoke test
+./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh \
+  --methods mofa --force                                     # recompute MOFA
+./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh \
+  --ds_name _debug --methods gloscope --partition private-carmona-gpu  # constraint pin dropped
+```
+
+#### Test mode
+
+Debug smoke tests (`_debug`, 5 samples): Pipeline B first
+(`--ds_name _debug --analysis trans,zeroimp`), then Pipeline A
+`--ds_name _debug --methods prepare_pseudobulk,pseudobulk`. GloScope works via
+the k-adjust + `n_pca_dims` clamp, but `_debug` has only 4 PCs — validate
+pcadims 10/30/50 on a real dataset; MOFA runs only factors 2,3 (5+ skipped by
+the `n_samples` guard); scITD cannot run on 5 samples (tucker ranks) —
+validate on a real dataset (e.g. Kim). Check `benchmark/results/`,
+`benchmark/pseudobulks/` and the merged `execution_times.feather` on the NAS.
+
+### Transformation and zero-imputation analyses on HPC (`src/5_run_benchmark_methods/run_transformation_zeroimp_analysis/`)
+
+The (fast) ECODA transformation analysis (`run_transformation_analysis` →
+`datrans`) and zero-imputation analysis (`run_zeroimp_analysis`) run as two
+SLURM arrays (one per analysis) submitted by one script — two workers per
+dataset. Not part of the pinned runtime comparisons: partition
+`${SLURM_PARTITION}` (default shared-cpu), 4 cpus, 32G, `--time=02:00:00`, no
+constraint pin.
+
+#### Workflow
+
+```
+1_submit_hpc_array.sh (login; [--ds_name <DS>] [--analysis trans,zeroimp]
+  [--partition <P>] [--force]; two arrays, manifests
+  benchmark_manifest_<analysis>_<pid>.txt, exports ANALYSIS +
+  BENCHMARK_MANIFEST + FORCE_BENCHMARK)
+   └─ 1.1_run_worker.sh (worker; branches on ANALYSIS)
+        ├─ 1.1.1_run_transformation_analysis.R  (trans array)
+        └─ 1.1.1_run_zeroimp_analysis.R         (zeroimp array)
+             input:  h5ad obs-only backed read (reticulate, no counts matrix)
+             output: ${HPC_SCRATCH_DIR}/benchmark/results/<ds>_trans.rds
+                     ${HPC_SCRATCH_DIR}/benchmark/results/<ds>_zeroimp.rds
+                     execution_times_task_<JOBID>_<TASKID>.feather
+                     (one row per dataset: trans_analysis / zeroimp_analysis)
+   └─ NAS reachability check -> sacct gate (fail-closed) ->
+      merge (shared 1.1.2_merge_execution_times.py) -> rsync -> delete logs
+```
+
+#### Files
+
+| File | Role |
+|---|---|
+| `1_submit_hpc_array.sh` | Login-node submitter: `[--ds_name <DS>] [--analysis trans,zeroimp] [--partition <P>] [--force]`. Same dataset resolution as the other benchmark submitters; validates + dedupes the analyses; submits one array per analysis (`--partition=${SLURM_PARTITION}` default shared-cpu, `--cpus-per-task=4`, `--mem=32G`, `--time=02:00:00`, `MAX_NUM_CHUNKS_PARALLEL` throttle); same monitor/gate/merge/sync/cleanup tail as the other benchmark submitters. |
+| `1.1_run_worker.sh` | `#SBATCH` worker (2h, 4 cpus, 32G): same boilerplate (scontrol `Command=` SCRIPT_DIR recovery, `slurm_config.sh` + `cd ${PROJECT_ROOT}`); requires `ANALYSIS` (trans or zeroimp) + `BENCHMARK_MANIFEST`; `DS_NAME` via `sed -n ${SLURM_ARRAY_TASK_ID}p`; per-task exec log named with the array job id; calls the per-analysis R script via `${PIXI_RSCRIPT}` with `--config_path --ds_name --view benchmark_analysis --input_dir --output_dir --log_file` (+ `--force`). |
+| `1.1.1_run_transformation_analysis.R` | obs-only backed read; `ct_comps = as.data.frame.matrix(table(Sample, obs[[cell_type_high_res]]))` with the `rowSums != 0` filter (as `get_ct_comp_df_seurat`; a plain data.frame so the dplyr verbs in `run_transformation_analysis` work); `labels` = `get_labels`-equivalent (per-sample slice(1) of `label_col`, names = Sample); calls `run_transformation_analysis()`; saves `<ds>_trans.rds` atomically; one exec-log row (`trans_analysis`). Skip-if-exists unless `--force`. |
+| `1.1.1_run_zeroimp_analysis.R` | Same shape, calling `run_zeroimp_analysis()`; saves `<ds>_zeroimp.rds`; one exec-log row (`zeroimp_analysis`). |
+
+#### Usage
+
+```bash
+./src/5_run_benchmark_methods/run_transformation_zeroimp_analysis/1_submit_hpc_array.sh            # both analyses, all datasets
+./src/5_run_benchmark_methods/run_transformation_zeroimp_analysis/1_submit_hpc_array.sh \
+  --ds_name _debug --analysis trans,zeroimp    # debug smoke test
+./src/5_run_benchmark_methods/run_transformation_zeroimp_analysis/1_submit_hpc_array.sh \
+  --analysis trans --force                     # recompute the trans analysis
+```
+
 ### Data Processing
 
 #### Complete Call Flow (Simplified)
@@ -302,33 +496,44 @@ live in the `py-cuda13` pixi env (`PYTHON_BIN`).
 notebooks/benchmark_analysis.rmd
     │
     ▼
-run_analyses(ds, seurat)
+load_hpc_benchmark_results(result_list, ds, path_nas_benchmark)
+    │   reads NAS benchmark/results/<ds>_{gloscope,mofa,pseudobulk,scitd}.rds
+    │   (HPC Pipeline A) + <ds>_{trans,zeroimp}.rds (HPC Pipeline B);
+    │   keeps entries already present in result_list (legacy rerun semantics)
     │
-    ├──► run_benchmark_analysis()
-    │       │
-    │       ├──► get_pb_deseq2() ──► DESeq2.normalize()
-    │       ├──► process_coda_fig() ──► datrans() ──► clr()
-    │       ├──► process_pseudobulk_fig()
-    │       ├──► process_mofa_bulk_fig()
-    │       ├──► process_scitd_fig()
-    │       ├──► process_gloscope_fig()
-    │       └──► ... (15+ process_* functions)
-    │                │
-    │                └──► create_result_bundle()
-    │                    ├──► calc_sep_score()
-    │                    │   ├──► calc_modularity() ──► compute_KNN_from_dist()
-    │                    │   │                              compute_snn_graph()
-    │                    │   ├──► calc_sil()
-    │                    │   ├──► clust_eval()
-    │                    │   └──► anosim()
-    │                    └──► plot_mds() ──► calc_modularity(), clust_eval()
+    ▼
+run_benchmark_analysis()   (fast, composition-based methods only)
     │
-    ├──► run_transformation_analysis()
-    │       └──► datrans() ──► clr(), impute_zeros()
-    │                          └──► create_result_bundle()
-    │
-    └──► run_zeroimp_analysis()
-            └──► impute_zeros() ──► create_result_bundle()
+    ├──► process_coda_fig() ──► datrans() ──► clr()     (ECODA variants)
+    ├──► process_gloprop_fig()                          (GloProp)
+    ├──► process_deconv_fig()  ◄── get_pb_deseq2()      (EPIC deconv; local
+    │                                                     untimed pseudobulk)
+    ├──► process_avg_pca_embedding_fig()                (Avg_PCA_embedding)
+    ├──► process_mrvi_fig() / process_pilot_fig() /
+    │    process_scpoli_fig()   ◄── .feather files (HPC Python pipeline)
+    └──► ... (create_result_bundle() -> calc_sep_score())
+
+HPC Pipeline A (run_r_sample_embedding_methods/, SLURM arrays on
+${HPC_SCRATCH_DIR}/benchmark/, synced to NAS benchmark/):
+  prepare_pseudobulk -> prepare_pseudobulks_hpc() -> pseudobulks/<ds>_*.rds
+  gloscope  -> run_gloscope_hpc()  -> process_gloscope_fig()  -> GloScope_*
+  mofa      -> run_mofa_hpc()      -> process_mofa_bulk_fig() -> MOFA_*
+  pseudobulk-> run_pseudobulk_hpc()-> process_pseudobulk_fig()/…ct_fig() -> Pseudobulk_*
+  scitd     -> run_scitd_hpc()     -> process_scitd_fig()    -> scITD_*
+
+HPC Pipeline B (run_transformation_zeroimp_analysis/, 2 arrays):
+  trans   -> run_transformation_analysis() -> datrans() -> <ds>_trans.rds
+  zeroimp -> run_zeroimp_analysis()                       -> <ds>_zeroimp.rds
+
+Shared scoring core (used by both notebook and HPC bundles):
+  create_result_bundle()
+      ├──► calc_sep_score()
+      │   ├──► calc_modularity() ──► compute_KNN_from_dist()
+      │   │                              compute_snn_graph()
+      │   ├──► calc_sil()
+      │   ├──► clust_eval()
+      │   └──► anosim()
+      └──► plot_mds() ──► calc_modularity(), clust_eval()
 ```
 
 
@@ -340,45 +545,68 @@ run_analyses(ds, seurat)
 
 3. **Pipeline Pattern**: Data flows linearly: AnnData object → Benchmark method data processing (Py/R) → Feature Matrix → Distance Matrix → Scores.
 Note:
-- Some methods are run in python before resulting in a distance matrix that is then read in notebooks/benchmark_analysis.rmd
-- R methods are directly run in notebooks/benchmark_analysis.rmd
+- Python methods (MrVI, scPoli, PILOT) and the heavy R methods (GloScope,
+  MOFA, Pseudobulk, scITD) + the transformation/zero-imputation analyses run
+  on HPC and are read back into notebooks/benchmark_analysis.rmd via
+  `load_hpc_benchmark_results()` (R bundles) or the `.feather` ingest
+  functions (`process_mrvi_fig` etc.)
+- The remaining fast R methods (ECODA variants, GloProp, EPIC deconv,
+  Avg_PCA_embedding, Freq_highres) are directly run in the notebook
 - Since not all methods provide a feature matrix, some directly output a distance matrix.
 
-4. **Caching/Skip Logic**: `if (!method_name %in% names(res_list))` checks prevent re-running already-computed methods.
+4. **Caching/Skip Logic**: `if (!method_name %in% names(res_list))` checks prevent re-running already-computed methods; HPC workers additionally skip per-combo cache files / method-level RDS unless `--force`.
 
 ---
 
 #### LAYER 1: Entry Point / Orchestration
 ```
-run_analyses(ds, seurat, ...)
-├── run_benchmark_analysis(...)
-├── run_transformation_analysis(ct_comps, labels)
-└── run_zeroimp_analysis(ct_comps, labels)
+load_hpc_benchmark_results(result_list, ds, path_nas_benchmark)  [notebook]
+├── reads HPC Pipeline A bundles (<ds>_{gloscope,mofa,pseudobulk,scitd}.rds)
+├── reads HPC Pipeline B results (<ds>_{trans,zeroimp}.rds)
+└── keeps entries already present in result_list (legacy rerun semantics)
 ```
-**`run_analyses`** is the main entry point. For each dataset it dispatches three separate analysis pipelines:
-- **Benchmark analysis**: Runs the benchmarking method to calculate separation scores
-- **Transformation analysis**: Tests different data transformations for ECODA (like CLR)
-- **Zero imputation analysis**: Tests different zero-handling strategies for ECODA
+**`load_hpc_benchmark_results`** is the notebook entry point. For each dataset
+it loads the three analysis outputs (benchmark separation scores,
+transformation analysis, zero-imputation analysis) from the NAS
+`benchmark/results/` directory; `run_benchmark_analysis()` (fast
+composition-based methods only) and `run_transformation_analysis()` /
+`run_zeroimp_analysis()` (now only called by the HPC Pipeline B workers)
+provide the computation behind them.
 
 ---
 
 #### LAYER 2: Benchmark Analysis Dispatcher
 ```
-run_benchmark_analysis(...)
-├── get_pb_deseq2(...)           → Pseudobulk preprocessing
-├── process_pseudobulk_fig(...)  → Pseudobulk
+run_benchmark_analysis(...)   (notebook; fast composition-based methods only)
+├── get_pb_deseq2(...)           → local untimed pseudobulk (EPIC deconv input only)
 ├── process_coda_fig(...)        → ECODA variants (using different cell type annotations: LR, HR, shuffled, HiTME, scATOMIC, Leiden)
 ├── process_gloprop_fig(...)     → GloProp
 ├── process_deconv_fig(...)      → EPIC deconvolution
-├── process_mofa_bulk_fig(...)   → MOFA
-├── process_scitd_fig(...)       → scITD
-├── process_gloscope_fig(...)    → GloScope
 ├── process_scpoli_fig(...)      → scPoli
 ├── process_mrvi_fig(...)        → MrVI
 ├── process_pilot_fig(...)       → PILOT
 └── process_avg_pca_embedding(...) → Average PCA embedding as used by the authors of MrVI for their "Pseudobulk baseline"
 ```
-This is the **largest function** (~500+ lines). It iteratively runs **dozens of method variants** by looping over parameters (HVG counts, factor numbers, resolution values, PCA dimensions). Each method is wrapped in `exec_time()` to track execution time.
+HPC Pipeline A drivers (in `benchmark_pipeline.R`, called by the
+`run_r_sample_embedding_methods/` workers; result names preserved):
+```
+prepare_pseudobulks_hpc(...) → shared DESeq2 pseudobulks (schvg2000/hvg2000/
+                                hvg500/hvg2000_bl/hvg1000/hvg3000), per-variant
+                                list(pb, time_secs)
+run_gloscope_hpc(...)        → GloScope_hvg2000_pcadims{10,30,50},
+                                GloScope_hvg{1000,3000}_pcadims30
+run_mofa_hpc(...)            → MOFA_hvg2000_factors{2,3,5,10,15},
+                                MOFA_hvg{1000,3000}_factors15
+run_pseudobulk_hpc(...)      → Pseudobulk_schvg2000/hvg2000/hvg500/hvg2000_bl/
+                                hvg1000/hvg3000, CT_LR/HR_hvg{2000,500},
+                                {2,3,5,10,15}_PCA_dims
+run_scitd_hpc(...)           → scITD_hvg2000_factors{2,3,5,10,15},
+                                scITD_hvg{1000,3000}_factors5
+```
+Each driver times every combo with `exec_time()` (MOFA/Pseudobulk include the
+shared pseudobulk creation time) and returns bundles carrying a numeric
+`exec_time`; the workers write per-combo cache files, method-level RDS and
+exec-log rows.
 
 ---
 

@@ -42,6 +42,10 @@ dataset_display_map[["GongSharma"]] <- dataset_display_map[["Gongsharma_cmv_youn
 
 # Set paths
 path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
+# HPC-computed R benchmark results (Pipeline A methods + trans/zeroimp,
+# rsynced by the submit scripts to ${NAS_TARGET_DIR}/benchmark/). Adapt the
+# mount point if the NAS is mounted elsewhere on this computer.
+path_nas_benchmark <- file.path("", "Volumes", "Shared", "Projects", "ECODA_paper", "benchmark", "results")
 # path_data <- file.path(path_root, "data")
 path_data <- file.path(getwd(), "data")
 path_plots <- file.path(getwd(), "plots")
@@ -69,6 +73,25 @@ if (file.exists(result_file)) {
 NOTE: Pre-processed (e.g. including cell type annotation, clustering, etc.) dataset .rds files (with shortened names) are deposited online at: <https://doi.org/10.6084/m9.figshare.31456522> . They can be used as input for the following code (after adapting the names according to the names defined in `"datasets.json"`):
 
 ```{r message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
+# Fail fast if the HPC benchmark results are unavailable: the chunk below
+# suppresses warnings, and silently missing bundles would render the whole
+# notebook without GloScope/MOFA/Pseudobulk/scITD/trans/zeroimp AND overwrite
+# result_list.rds with the partial list.
+if (!dir.exists(path_nas_benchmark)) {
+  stop(
+    "HPC benchmark results dir not found: ", path_nas_benchmark,
+    "\nRun the HPC benchmark pipelines first (src/5_run_benchmark_methods/",
+    "run_r_sample_embedding_methods/ and run_transformation_zeroimp_analysis/)",
+    " and make sure the NAS is mounted."
+  )
+}
+if (length(list.files(path_nas_benchmark, pattern = "\\.rds$")) == 0) {
+  stop(
+    "No RDS result bundles found in ", path_nas_benchmark,
+    "\nRun the HPC benchmark pipelines first (see TODO.md Phase 3.2)."
+  )
+}
+
 for (ds in names(datasets)) {
   # h5ad_file <- file.path(path_data, datasets[[ds]]$output_file)
   # Loading mechanism TBD — see TODO.md for h5ad loading task
@@ -83,7 +106,21 @@ for (ds in names(datasets)) {
   seurat@misc$cell_type_low_res <- datasets[[ds]][["cell_type_low_res"]]
   seurat@misc$cell_type_high_res <- datasets[[ds]][["cell_type_high_res"]]
   
-  result_list <- run_analyses(result_list, ds, seurat, path_data, path_plots)
+  # Heavy R methods (GloScope, MOFA, Pseudobulk, scITD) + the transformation
+  # and zero-imputation analyses run on HPC (src/5_run_benchmark_methods/
+  # run_r_sample_embedding_methods/ and run_transformation_zeroimp_analysis/);
+  # load their result bundles from the NAS. Entries already present in
+  # result_list are kept (legacy rerun semantics); only missing methods are
+  # read from ${path_nas_benchmark}/<ds>_<method>.rds.
+  result_list <- load_hpc_benchmark_results(result_list, ds, path_nas_benchmark)
+  
+  # Remaining (fast, composition-based) benchmark methods run locally.
+  result_list[["bmark"]][[ds]] <- run_benchmark_analysis(
+    res_list = result_list[["bmark"]][[ds]],
+    ds = ds,
+    seurat = seurat,
+    path_data = path_data
+  )
 }
 ```
 
@@ -197,7 +234,7 @@ filter_methods <- c(
   "MrVI_hvg2000",
   "scPoli_hvg2000_dims15_highres",
   "PILOT_hvg2000",
-  "GloScope_hvg2000_pcadims30_sqrtmat",
+  "GloScope_hvg2000_pcadims30",
   "GloProp"
 )
 
@@ -218,7 +255,7 @@ df_plot <- df_results %>%
                          "MrVI_hvg2000" = "MrVI",
                          "scPoli_hvg2000_dims15_highres" = "scPoli",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope"))
+                         "GloScope_hvg2000_pcadims30" = "GloScope"))
 
 pointsize <- 1.5
 
@@ -368,7 +405,7 @@ df_results %>%
                          "scPoli_hvg2000" = "scPoli",
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
+                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
   
   group_by(method, score) %>%
   mutate(mean_value = mean(value[score == "anosim_score"])) %>%
@@ -499,7 +536,7 @@ methods <- list(
   "MrVI_hvg2000" = "MrVI",
   "scPoli_hvg2000_dims5" = "scPoli",
   "PILOT_hvg2000" = "PILOT",
-  "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope"
+  "GloScope_hvg2000_pcadims30" = "GloScope"
 )
 
 for (m in names(methods)) {
@@ -599,7 +636,7 @@ methods <- list(
   "Pseudobulk_hvg2000" = "Pseudobulk",
   # "Avg_PCA_embedding" = "Avg_PCA_embedding",
   
-  "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope",
+  "GloScope_hvg2000_pcadims30" = "GloScope",
   "GloProp" = "GloProp",
   "MrVI_hvg2000" = "MrVI",
   "scPoli_hvg2000_dims15_highres" = "scPoli",
@@ -1108,8 +1145,7 @@ default_methods_regex <- paste(default_methods, collapse = "|")
 
 df_results %>%
   # filter(score == "anosim_score") %>%
-  filter(!grepl("HiTME|scATOMIC|seuratres|ECODA_authors_HR_NULL|ECODA_authors_LR|ECODA_deconv|Freq_highres|varexp|varcts|Avg_PCA|combo|CT_LR|schvg", method),
-         !grepl("GloScope", method) | grepl("sqrtmat", method)
+  filter(!grepl("HiTME|scATOMIC|seuratres|ECODA_authors_HR_NULL|ECODA_authors_LR|ECODA_deconv|Freq_highres|varexp|varcts|Avg_PCA|combo|CT_LR|schvg", method)
   ) %>%
   filter(
     if_else(grepl("scPoli", method), grepl("highres|lowres", method), TRUE)
@@ -1141,9 +1177,8 @@ df_results %>%
   ) %>%
   
   mutate(method = method %>%
-           # Remove _sqrtmat and swap highres/lowres
-           stringr::str_replace_all(c("_sqrtmat" = "", 
-                                      "highres"  = "HR", 
+           # Swap highres/lowres
+           stringr::str_replace_all(c("highres"  = "HR", 
                                       "lowres"   = "LR",
                                       "0_dims"    = "0_embdims")) %>%
            stringr::str_replace("Pseudobulk_(\\d+)_PCA_dims", "Pseudobulk_hvg2000_pcadims\\1") %>%
@@ -1243,7 +1278,7 @@ filter_methods <- c(
   "MrVI_hvg2000",
   "scPoli_hvg2000",
   "PILOT_hvg2000",
-  "GloScope_hvg2000_pcadims30_sqrtmat"
+  "GloScope_hvg2000_pcadims30"
 )
 
 
@@ -1262,7 +1297,7 @@ df_results %>%
                          "scPoli_hvg2000" = "scPoli",
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
+                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
   
   group_by(method, score) %>%
   mutate(mean_value = mean(value[score == "anosim_score"])) %>%
@@ -1307,7 +1342,7 @@ filter_methods <- c(
   "MrVI_hvg2000",
   "scPoli_hvg2000",
   "PILOT_hvg2000",
-  "GloScope_hvg2000_pcadims30_sqrtmat"
+  "GloScope_hvg2000_pcadims30"
 )
 
 
@@ -1326,7 +1361,7 @@ df_plot <- df_results %>%
                          "scPoli_hvg2000" = "scPoli",
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope"))
+                         "GloScope_hvg2000_pcadims30" = "GloScope"))
 
 
 df_plot %>%
@@ -1781,7 +1816,14 @@ if (!file.exists(p_exec_times_path)) {
   p_exec_times <- arrow::read_feather(
     file.path(getwd(), "data", "execution_times.feather")
   ) %>%
-    as.data.frame()
+    as.data.frame() %>%
+    # The merged execution_times.feather now also carries R-method rows
+    # (gloscope/mofa/pseudobulk/scitd/prepare_pseudobulk_*, trans_analysis,
+    # zeroimp_analysis) whose timing is reported in the R bundles
+    # (r_exec_times above). Keep only the python-method rows here, otherwise
+    # R methods appear twice (bundle-derived + feather rows), double-counting
+    # points and skewing the Supp-fig-14 lm fits.
+    filter(grepl("^(MrVI|scPoli|PILOT)", method))
   
   p_exec_times$n_samples <- 0
   p_exec_times$n_features <- 0
@@ -1968,7 +2010,7 @@ filter_methods <- c(
   "MrVI_hvg2000",
   "scPoli_hvg2000_dims15_highres",
   "PILOT_hvg2000",
-  "GloScope_hvg2000_pcadims30_sqrtmat",
+  "GloScope_hvg2000_pcadims30",
   "GloProp"
 )
 
@@ -1993,7 +2035,7 @@ clean_data <- df_results_bmark %>%
                          "scPoli_hvg2000_dims15_highres" = "scPoli",
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
+                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
   mutate(score = recode(score, !!!score_label_map),
   dataset = recode(dataset, !!!dataset_display_map))
 
@@ -2177,7 +2219,7 @@ ds <- "Bassez"
 methods <- list(
   "ECODA_authors_HR" = "ECODA",
   "GloProp" = "GloProp",
-  "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope",
+  "GloScope_hvg2000_pcadims30" = "GloScope",
   "Pseudobulk_hvg2000" = "Pseudobulk",
   "Freq_highres" = "CellType_Frequency%",
   "MrVI_hvg2000" = "MrVI",
@@ -2237,7 +2279,7 @@ filter_methods <- c(
   "MrVI_hvg2000",
   "scPoli_hvg2000_dims5",
   "PILOT_hvg2000",
-  "GloScope_hvg2000_pcadims30_sqrtmat"
+  "GloScope_hvg2000_pcadims30"
 )
 
 df_results_bmark <- merge_exec_times(df_results, exec_times)
@@ -2261,7 +2303,7 @@ clean_data <- df_results_bmark %>%
                          "scPoli_hvg2000_dims5" = "scPoli",
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
+                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
   mutate(score = recode(score, !!!score_label_map)) %>%
   mutate(dataset = recode(dataset,
                           "GongSharma_all_age" = "GongSharma_age",
@@ -2406,7 +2448,7 @@ filter_methods <- c(
   "MrVI_hvg2000",
   "scPoli_hvg2000_dims15_highres",
   "PILOT_hvg2000",
-  "GloScope_hvg2000_pcadims30_sqrtmat",
+  "GloScope_hvg2000_pcadims30",
   "GloProp"
 )
 
@@ -2432,7 +2474,7 @@ clean_data <- df_results_bmark %>%
                          "scPoli_hvg2000_dims15_highres" = "scPoli",
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
+                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
   mutate(score = recode(score, !!!score_label_map),
   dataset = recode(dataset, !!!dataset_display_map))
 
@@ -2731,7 +2773,7 @@ filter_methods <- c(
   "MrVI_hvg2000",
   "scPoli_hvg2000_dims15_highres",
   "PILOT_hvg2000",
-  "GloScope_hvg2000_pcadims30_sqrtmat",
+  "GloScope_hvg2000_pcadims30",
   "GloProp"
 )
 
@@ -2756,7 +2798,7 @@ clean_data <- df_results_bmark %>%
                          "scPoli_hvg2000_dims15_highres" = "scPoli",
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30_sqrtmat" = "GloScope")) %>%
+                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
   mutate(score = recode(score, !!!score_label_map),
   dataset = recode(dataset, !!!dataset_display_map))
 

@@ -231,16 +231,10 @@ load_h5ad_to_seurat <- function(file_name) {
 }
 
 # Get current variable features from seurat object
-get_current_hvgs <- function(seurat) {
-  if ("var.features" %in% slotNames(seurat@assays[["RNA"]])) {
-    return(seurat@assays[["RNA"]]@var.features)
-  } else if ("var.features" %in% colnames(seurat@assays[["RNA"]]@meta.data)) {
-    vf <- seurat@assays[["RNA"]]@meta.data[["var.features"]]
-    return(vf[!is.na(vf)])
-  } else {
-    stop("Could not find variable features.")
-  }
-}
+# NOTE: get_current_hvgs was removed with the HPC benchmark refactor (its
+# only callers, the Pseudobulk_schvg2000 and non-default-HVG blocks of
+# run_benchmark_analysis, were deleted); the HPC workers consume the stored
+# var["hvg_rank"] instead (get_hvg_rank_genes in benchmark_hpc_utils.R).
 
 # Standardize sample names (prevent leading digits, replace hyphens)
 standardize_sample_names <- function(sample_names) {

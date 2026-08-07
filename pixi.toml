@@ -38,6 +38,18 @@ r-leidenbase = ">=0.1.36,<0.2"
 # Use same version as Seurat 5.2.0
 r-seuratobject = "5.2.0.*"
 
+# HPC benchmark pipeline (src/5_run_benchmark_methods/run_r_sample_embedding_methods/):
+# full load_all_functions.R set + DESeq2 for the R workers. Unversioned so
+# bioconda resolves the r-base 4.5.2-compatible "r45" build for DESeq2.
+# NOTE: r-robcompositions is linux-64-only on conda-forge (no osx-arm64
+# build); it is used only by datrans() (transformation analysis, HPC-only
+# since Phase 3.2) and therefore scoped to the cuda13 linux-64 feature.
+r-vegan = "*"
+bioconductor-deseq2 = "*"
+r-doparallel = "*"
+r-plotly = "*"
+r-pheatmap = "*"
+
 # ==========================================
 # CORE PYTHON STACK
 # ==========================================
@@ -75,6 +87,8 @@ jax = "*"
 # 2. CUDA 13 Target (for HPC)
 [feature.cuda13.target.linux-64.dependencies]
 pytorch-cuda = { version = "*" }
+# linux-64-only (no osx-arm64 build); used by datrans() on the HPC workers
+r-robcompositions = "*"
 
 [feature.cuda13.target.linux-64.pypi-dependencies]
 jax = { version = "*", extras = ["cuda13"] }

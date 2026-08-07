@@ -78,8 +78,11 @@ export SAMPLE_COLNAME="Sample"
 # --- Benchmark methods (src/5_run_benchmark_methods) ---
 # Hardware PINNED for runtime comparability (same model/cores/RAM within each
 # resource class). GPU methods (MrVI, scPoli): shared-gpu, H200
-# (nvidia_h200_nvl, gpu[005-006]), 8 cores, 128G. CPU method (PILOT):
-# shared-cpu, EPYC-7742 (V8, cpu[001-052]), 16 cores, 128G. All env-overridable.
+# (nvidia_h200_nvl, gpu[005-006]), 8 cores, 128G. CPU methods (PILOT, and the
+# R benchmark pipeline — GloScope, MOFA, Pseudobulk, scITD via
+# run_r_sample_embedding_methods/, which reuses this CPU class so cross-method
+# runtime comparisons stay valid): shared-cpu, EPYC-7742 (V8, cpu[001-052]),
+# 16 cores, 128G. All env-overridable.
 # The private-carmona-gpu node is DELIBERATELY excluded here (different CPU
 # model would flaw cross-method runtime comparisons; its GPU is H100, not H200,
 # so BENCHMARK_GPU_CONSTRAINT would never match). _debug runs may target it via

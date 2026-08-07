@@ -255,9 +255,11 @@ process_mrvi_fig <- function(mrvi_dist_file, labels) {
   return(create_result_bundle(feat_mat, labels, dist_mat = as.dist(feat_mat)))
 }
 
-# GloScope processing
+# GloScope processing (sqrtmat variant merged; the sqrt transform + NA->0 is
+# now always applied, matching the legacy GloScope_*_sqrtmat results)
 process_gloscope_fig <- function(
-  seurat,
+  embedding_matrix,
+  sample_ids,
   metadata,
   label_col,
   gloscope_dist_file,
@@ -266,6 +268,22 @@ process_gloscope_fig <- function(
   dist_metric = c("KL"),
   k = 25
 ) {
+  n_samples <- length(unique(sample_ids))
+  if (k >= n_samples) {
+    k <- min(k, n_samples - 1)
+    warning(paste(
+      "GloScope: k adjusted to", k,
+      "(n_samples - 1 =", n_samples - 1, ") for the", n_samples,
+      "sample dataset."
+    ))
+  }
+  if (n_pca_dims > ncol(embedding_matrix)) {
+    warning(paste(
+      "GloScope: n_pca_dims adjusted to", ncol(embedding_matrix),
+      "(available PCs) for the requested", n_pca_dims, "dims."
+    ))
+    n_pca_dims <- ncol(embedding_matrix)
+  }
   if (.Platform$OS.type == "windows") {
     BPPARAM <- BiocParallel::SnowParam(
       workers = parallelly::availableCores() - 2,
@@ -279,8 +297,8 @@ process_gloscope_fig <- function(
   }
   if (!file.exists(gloscope_dist_file)) {
     feat_mat <- GloScope::gloscope(
-      embedding_matrix = seurat@reductions$pca@cell.embeddings[, 1:n_pca_dims],
-      cell_sample_ids = seurat$Sample,
+      embedding_matrix = embedding_matrix[, 1:n_pca_dims],
+      cell_sample_ids = sample_ids,
       dens = dens,
       dist_metric = dist_metric,
       k = k,
@@ -290,24 +308,6 @@ process_gloscope_fig <- function(
   } else {
     feat_mat <- readRDS(gloscope_dist_file)
   }
-  row.names(feat_mat) <- standardize_sample_names(row.names(feat_mat))
-  labels <- metadata[match(row.names(feat_mat), metadata$Sample), ][[label_col]]
-  names(labels) <- metadata[match(row.names(feat_mat), metadata$Sample), ][[
-    "Sample"
-  ]]
-  return(create_result_bundle(feat_mat, labels, dist_mat = as.dist(feat_mat)))
-}
-
-# GloScope sqrt matrix processing
-process_gloscope_sqrtmat_fig <- function(
-  metadata,
-  label_col,
-  gloscope_dist_file
-) {
-  if (!file.exists(gloscope_dist_file)) {
-    stop(paste(gloscope_dist_file, "not found!"))
-  }
-  feat_mat <- readRDS(gloscope_dist_file)
   feat_mat <- sqrt(feat_mat)
   feat_mat[is.na(feat_mat)] <- 0
   row.names(feat_mat) <- standardize_sample_names(row.names(feat_mat))
