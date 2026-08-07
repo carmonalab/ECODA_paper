@@ -20,9 +20,7 @@ convert_rds_to_raw_h5ad <- function(input_path, output_path) {
   seurat <- create_clean_seuratv5_object(seurat)
 
   if (!file.exists(output_path)) {
-    seurat@assays$RNA@data <- seurat@assays$RNA@counts
     write_h5ad(seurat, output_path)
-    seurat@assays$RNA@data <- NULL
   }
 }
 ''')
@@ -38,7 +36,12 @@ def load_single_input(input_name, input_dir, output_dir):
         stem = Path(input_name).stem
         raw_h5ad_path = output_dir / f"{stem}_raw.h5ad"
         convert_rds_to_raw_h5ad_r(str(input_path), str(raw_h5ad_path))
-        return sc.read_h5ad(raw_h5ad_path)
+        adata = sc.read_h5ad(raw_h5ad_path)
+        # anndataR writes X=None with the raw counts in layers["counts"];
+        # promote the counts layer to X (mirror of base_preprocessing).
+        if adata.X is None and "counts" in adata.layers:
+            adata.X = adata.layers["counts"].copy()
+        return adata
     elif str(input_name).endswith(".h5ad"):
         return sc.read_h5ad(input_path)
     else:

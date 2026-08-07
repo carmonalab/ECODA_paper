@@ -3,15 +3,20 @@
 # ============================================================
 
 # Create clean v5 seurat object (only counts + metadata)
+# GetAssayData returns a 0x0 empty matrix (not NULL) for absent layers, so
+# "missing" is detected via nrow == 0 as well as NULL.
 create_clean_seuratv5_object <- function(seurat) {
-  if (!is.null(seurat@assays$RNA$counts)) {
+  rna <- seurat@assays$RNA
+  counts <- GetAssayData(seurat, assay = "RNA", layer = "counts")
+  if ((is.null(counts) || nrow(counts) == 0) && inherits(rna, "Assay5")) {
+    counts <- rna@layers[["X"]]
+  }
+  if (is.null(counts) || nrow(counts) == 0) {
+    counts <- GetAssayData(seurat, assay = "RNA", layer = "data")
+  }
+  if (!is.null(counts) && nrow(counts) > 0) {
     seurat <- CreateSeuratObject(
-      counts = seurat@assays$RNA$counts,
-      meta.data = seurat@meta.data
-    )
-  } else if (!is.null(seurat@assays[["RNA"]]@layers[["X"]])) {
-    seurat <- CreateSeuratObject(
-      counts = seurat@assays$RNA$counts,
+      counts = counts,
       meta.data = seurat@meta.data
     )
   }
