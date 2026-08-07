@@ -249,7 +249,7 @@ def main():
     intermediate_dir = output_dir / "_intermediates"
     os.makedirs(intermediate_dir, exist_ok=True)
     mp_context = multiprocessing.get_context("fork")
-    with ProcessPoolExecutor(max_workers=3, mp_context=mp_context) as executor:
+    with ProcessPoolExecutor(max_workers=4, mp_context=mp_context) as executor:
         futures = {
             "Stephenson": executor.submit(
                 worker_stephenson, config["Stephenson"], base_path, output_dir,
