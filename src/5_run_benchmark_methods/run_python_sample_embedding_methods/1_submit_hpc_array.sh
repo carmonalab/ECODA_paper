@@ -19,7 +19,8 @@ set -euo pipefail
 # ${BENCHMARK_CPU_CONSTRAINT}. Flags are passed on the sbatch command line
 # (SLURM directives do not expand env vars). An explicit --partition <P>
 # override (e.g. --partition ${SLURM_PARTITION_PRIVATE} for _debug runs on the
-# private node) DROPS the method's --constraint flag — an explicit partition
+# private node, or an ad-hoc --partition shared-gpu for debug) DROPS the
+# method's --constraint flag — an explicit partition
 # choice means the user accepts non-pinned hardware; keeping the constraint
 # would otherwise hang jobs PENDING forever on nodes whose CPU/GPU differ.
 # After all arrays complete:
