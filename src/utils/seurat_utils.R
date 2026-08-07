@@ -15,10 +15,16 @@ create_clean_seuratv5_object <- function(seurat) {
     counts <- GetAssayData(seurat, assay = "RNA", layer = "data")
   }
   if (!is.null(counts) && nrow(counts) > 0) {
-    seurat <- CreateSeuratObject(
-      counts = counts,
-      meta.data = seurat@meta.data
-    )
+    md <- seurat@meta.data
+    list_cols <- names(md)[vapply(md, is.list, logical(1))]
+    if (length(list_cols) > 0) {
+      print(paste0(
+        "create_clean_seuratv5_object: dropping list column(s) from meta.data: ",
+        paste(list_cols, collapse = ", ")
+      ))
+      md[list_cols] <- NULL
+    }
+    seurat <- CreateSeuratObject(counts = counts, meta.data = md)
   }
   return(seurat)
 }
