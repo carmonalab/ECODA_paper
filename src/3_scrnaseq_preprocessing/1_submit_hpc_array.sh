@@ -2,6 +2,7 @@
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../utils/bash/sync_status_email.sh"
 cd "${PROJECT_ROOT}"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -17,6 +18,8 @@ fi
 #   ./1_submit_hpc_array.sh                  # all datasets (skips keys starting with _)
 #   ./1_submit_hpc_array.sh --ds_name _debug # single dataset (explicitly allowed)
 #   ./1_submit_hpc_array.sh --ds_name _debug --force   # recompute existing outputs
+#   ./1_submit_hpc_array.sh --sync-only <job-id>       # resume: skip submission, re-check + sync
+#                                                    # (repeat the original --ds_name flag)
 #
 # Array task IDs map 1:1 to jq 'keys[]' line numbers (see 1.1_run_worker.sh).
 # Convention: default-all skips keys starting with "_" (e.g. _debug) unless
@@ -33,6 +36,7 @@ echo "=== Submitting preprocessing array job ==="
 
 DS_NAME_ARG=""
 FORCE_ARG=0
+SYNC_ONLY_IDS=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ds_name)
@@ -47,12 +51,33 @@ while [[ $# -gt 0 ]]; do
       FORCE_ARG=1
       shift
       ;;
+    --sync-only)
+      SYNC_ONLY_IDS="${2:-}"
+      if [[ -z "${SYNC_ONLY_IDS}" ]]; then
+        echo "ERROR: --sync-only requires a job id."
+        exit 1
+      fi
+      shift 2
+      ;;
+    --sync-only=*)
+      SYNC_ONLY_IDS="${1#*=}"
+      if [[ -z "${SYNC_ONLY_IDS}" ]]; then
+        echo "ERROR: --sync-only requires a job id."
+        exit 1
+      fi
+      shift
+      ;;
     *)
       echo "ERROR: Unknown argument: $1"
       exit 1
       ;;
   esac
 done
+
+if [[ -n "${SYNC_ONLY_IDS}" && ${FORCE_ARG} -eq 1 ]]; then
+  echo "ERROR: --sync-only cannot be combined with --force."
+  exit 1
+fi
 
 # Passed to workers via the environment (sbatch propagates the submit script's
 # environment); 1.1_run_worker.sh forwards it to 1.1.1_preprocess.py --force.
@@ -90,17 +115,22 @@ else
 fi
 echo "Array specification: ${ARRAY_SPEC}"
 
-mkdir -p "${LOGS_DIR}"
-SUBMIT_MSG=$(sbatch \
-    --array="${ARRAY_SPEC}%${MAX_NUM_CHUNKS_PARALLEL}" \
-    --partition="${SLURM_PARTITION}" \
-    --output="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.log" \
-    --error="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.err" \
-    --mail-user="${USER_EMAIL}" \
-    "$(dirname "${BASH_SOURCE[0]}")/1.1_run_worker.sh")
+if [[ -n "${SYNC_ONLY_IDS}" ]]; then
+  echo "=== Sync-only resume mode: job ${SYNC_ONLY_IDS} (no submission) ==="
+  ARRAY_JOB_ID="${SYNC_ONLY_IDS}"
+else
+  mkdir -p "${LOGS_DIR}"
+  SUBMIT_MSG=$(sbatch \
+      --array="${ARRAY_SPEC}%${MAX_NUM_CHUNKS_PARALLEL}" \
+      --partition="${SLURM_PARTITION}" \
+      --output="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.log" \
+      --error="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.err" \
+      --mail-user="${USER_EMAIL}" \
+      "$(dirname "${BASH_SOURCE[0]}")/1.1_run_worker.sh")
 
-ARRAY_JOB_ID=$(echo "${SUBMIT_MSG}" | grep -oE '[0-9]+')
-echo "Array Job ID allocated: ${ARRAY_JOB_ID}"
+  ARRAY_JOB_ID=$(echo "${SUBMIT_MSG}" | grep -oE '[0-9]+')
+  echo "Array Job ID allocated: ${ARRAY_JOB_ID}"
+fi
 
 # ---------------------------------------------------------------------------
 # Monitor & sync results back to NAS
@@ -128,12 +158,19 @@ echo "Array Job ${ARRAY_JOB_ID} finished. Checking task states..."
 STATES="$(sacct -j "${ARRAY_JOB_ID}" --format=State -n 2>/dev/null || true)"
 if [[ -z "${STATES//[[:space:]]/}" ]]; then
     echo "ERROR: sacct returned no states for Array Job ${ARRAY_JOB_ID}; NOT syncing to NAS."
+    notify_sync_status \
+        "ECODA: preprocess NOT synced (job ${ARRAY_JOB_ID})" \
+        "Preprocess sync to NAS failed for job ${ARRAY_JOB_ID} (datasets: ${DATASET_NAMES[*]}): sacct returned no states (job purged or unknown id)."
     exit 1
 fi
 # Fail-closed: every row (array master + tasks + batch steps) must be COMPLETED.
 if grep -qvE '^ *COMPLETED *$' <<< "${STATES}"; then
     echo "ERROR: Array Job ${ARRAY_JOB_ID} had non-COMPLETED tasks; NOT syncing to NAS."
     sacct -j "${ARRAY_JOB_ID}" --format=JobID,JobName,State,ExitCode
+    notify_sync_status \
+        "ECODA: preprocess NOT synced (job ${ARRAY_JOB_ID})" \
+        "Preprocess sync to NAS failed for job ${ARRAY_JOB_ID} (datasets: ${DATASET_NAMES[*]}): non-COMPLETED tasks.
+$(sacct -j "${ARRAY_JOB_ID}" --format=JobID,JobName,State,ExitCode -n 2>/dev/null || true)"
     exit 1
 fi
 
@@ -155,10 +192,19 @@ if ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
     done
     if [[ ${SYNCED_COUNT} -eq 0 ]]; then
         echo "ERROR: No dataset output dirs found under ${HPC_SCRATCH_DIR}; nothing to sync."
+        notify_sync_status \
+            "ECODA: preprocess NOT synced (job ${ARRAY_JOB_ID})" \
+            "Preprocess sync to NAS failed for job ${ARRAY_JOB_ID}: no dataset output dirs found under ${HPC_SCRATCH_DIR}."
         exit 1
     fi
     echo "Results synchronized to ${NAS_TARGET_DIR}/<DS_NAME>/output/ (${SYNCED_COUNT} datasets)"
+    notify_sync_status \
+        "ECODA: preprocess synced to NAS (job ${ARRAY_JOB_ID})" \
+        "Preprocess results for job ${ARRAY_JOB_ID} synced to NAS (${SYNCED_COUNT} datasets: ${DATASET_NAMES[*]})."
 else
     echo "ERROR: NAS path ${NAS_TARGET_DIR} is unreachable."
+    notify_sync_status \
+        "ECODA: preprocess NOT synced (job ${ARRAY_JOB_ID})" \
+        "Preprocess sync to NAS failed for job ${ARRAY_JOB_ID}: NAS path ${NAS_TARGET_DIR} is unreachable (check VPN/NAS mount)."
     exit 1
 fi

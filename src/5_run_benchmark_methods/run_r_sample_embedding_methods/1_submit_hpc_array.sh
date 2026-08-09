@@ -8,6 +8,8 @@ set -euo pipefail
 #   ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh --ds_name _debug --methods prepare_pseudobulk,pseudobulk
 #   ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh --methods mofa --force
 #   ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh --partition debug-cpu
+#   ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh --sync-only 12345,12346   # resume: skip submission, re-check + sync
+#                                                                                                              # (repeat the original --ds_name/--methods flags)
 #
 # One SLURM array per method; array task IDs map 1:1 to lines of the
 # per-method manifest ${HPC_SCRATCH_DIR}/benchmark_manifest_<method>_<pid>.txt
@@ -41,6 +43,7 @@ DS_NAME_ARG=""
 METHODS_ARG=""
 PARTITION_ARG=""
 FORCE_ARG=0
+SYNC_ONLY_IDS=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ds_name)
@@ -71,12 +74,33 @@ while [[ $# -gt 0 ]]; do
       FORCE_ARG=1
       shift
       ;;
+    --sync-only)
+      SYNC_ONLY_IDS="${2:-}"
+      if [[ -z "${SYNC_ONLY_IDS}" ]]; then
+        echo "ERROR: --sync-only requires at least one job id (comma-separated)."
+        exit 1
+      fi
+      shift 2
+      ;;
+    --sync-only=*)
+      SYNC_ONLY_IDS="${1#*=}"
+      if [[ -z "${SYNC_ONLY_IDS}" ]]; then
+        echo "ERROR: --sync-only requires at least one job id (comma-separated)."
+        exit 1
+      fi
+      shift
+      ;;
     *)
       echo "ERROR: Unknown argument: $1"
       exit 1
       ;;
   esac
 done
+
+if [[ -n "${SYNC_ONLY_IDS}" && ${FORCE_ARG} -eq 1 ]]; then
+  echo "ERROR: --sync-only cannot be combined with --force."
+  exit 1
+fi
 
 # Passed to workers via the environment (sbatch propagates the submit
 # script's environment); 1.1_run_worker.sh forwards it to the R scripts.
@@ -158,6 +182,10 @@ mkdir -p "${LOGS_DIR}"
 # ---------------------------------------------------------------------------
 # Submit one array per method (prepare_pseudobulk first, then the rest)
 # ---------------------------------------------------------------------------
+if [[ -n "${SYNC_ONLY_IDS}" ]]; then
+  echo "=== Sync-only resume mode: jobs ${SYNC_ONLY_IDS} (no submission, no prepare_pseudobulk wait) ==="
+  IFS=',' read -r -a ARRAY_JOB_IDS <<< "${SYNC_ONLY_IDS}"
+else
 echo "=== Submitting R benchmark method arrays ==="
 
 # Prints ONLY the array job id on stdout (progress goes to stderr) so the
@@ -216,6 +244,7 @@ for METHOD in "${METHODS[@]}"; do
   fi
   ARRAY_JOB_IDS+=("$(submit_method_array "${METHOD}")")
 done
+fi
 
 # ---------------------------------------------------------------------------
 # Monitor & verify & sync results back to NAS (shared tail)

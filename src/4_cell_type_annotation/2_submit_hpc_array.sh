@@ -4,13 +4,42 @@ set -euo pipefail
 # Usage:
 #   ./2_submit_hpc_array.sh                # all datasets with chunks
 #   ./2_submit_hpc_array.sh <DS_NAME>      # single dataset (must have chunks)
+#   ./2_submit_hpc_array.sh <DS_NAME> --sync-only <job-id>  # resume: skip submission, re-check + sync
 
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../utils/bash/sync_status_email.sh"
 mkdir -p "${LOGS_DIR}"
 
 DS_NAME_ARG="${1:-}"
+shift 2>/dev/null || true
+
+SYNC_ONLY_IDS=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --sync-only)
+      SYNC_ONLY_IDS="${2:-}"
+      if [[ -z "${SYNC_ONLY_IDS}" ]]; then
+        echo "ERROR: --sync-only requires a job id."
+        exit 1
+      fi
+      shift 2
+      ;;
+    --sync-only=*)
+      SYNC_ONLY_IDS="${1#*=}"
+      if [[ -z "${SYNC_ONLY_IDS}" ]]; then
+        echo "ERROR: --sync-only requires a job id."
+        exit 1
+      fi
+      shift
+      ;;
+    *)
+      echo "ERROR: Unknown argument: $1"
+      exit 1
+      ;;
+  esac
+done
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "ERROR: jq not available; cannot read ${DATASETS_JSON_FILE}."
@@ -31,6 +60,10 @@ else
   done < <(jq -r 'keys[]' "${DATASETS_JSON_FILE}")
 fi
 
+if [[ -n "${SYNC_ONLY_IDS}" ]]; then
+  echo "=== Sync-only resume mode: job ${SYNC_ONLY_IDS} (no scGate cache, no manifest, no submission) ==="
+  ARRAY_JOB_ID="${SYNC_ONLY_IDS}"
+else
 # -------------------------------------------------------------------------
 # STAGE scGate MODEL DB CACHE: Download the scGate model DB once into aux/ so
 # the annotation array workers load it from disk instead of downloading in
@@ -115,6 +148,7 @@ SUBMIT_MSG=$(sbatch \
 
 ARRAY_JOB_ID=$(echo "${SUBMIT_MSG}" | grep -oE '[0-9]+')
 echo "Array Job ID allocated: ${ARRAY_JOB_ID}"
+fi
 
 # ==============================================================================
 # Post-Pipeline Sync: Run locally on Login Node because compute nodes lack NAS access
@@ -143,12 +177,19 @@ echo "Array Job ${ARRAY_JOB_ID} finished. Checking task states..."
 STATES="$(sacct -j "${ARRAY_JOB_ID}" --format=State -n 2>/dev/null || true)"
 if [[ -z "${STATES//[[:space:]]/}" ]]; then
     echo "ERROR: sacct returned no states for Array Job ${ARRAY_JOB_ID}; NOT syncing to NAS."
+    notify_sync_status \
+        "ECODA: annotation NOT synced (job ${ARRAY_JOB_ID})" \
+        "Annotation sync to NAS failed for job ${ARRAY_JOB_ID} (datasets: ${DATASET_NAMES[*]}): sacct returned no states (job purged or unknown id)."
     exit 1
 fi
 # Fail-closed: every row (array master + tasks + batch steps) must be COMPLETED.
 if grep -qvE '^ *COMPLETED *$' <<< "${STATES}"; then
     echo "ERROR: Array Job ${ARRAY_JOB_ID} had non-COMPLETED tasks; NOT syncing to NAS."
     sacct -j "${ARRAY_JOB_ID}" --format=JobID,JobName,State,ExitCode
+    notify_sync_status \
+        "ECODA: annotation NOT synced (job ${ARRAY_JOB_ID})" \
+        "Annotation sync to NAS failed for job ${ARRAY_JOB_ID} (datasets: ${DATASET_NAMES[*]}): non-COMPLETED tasks.
+$(sacct -j "${ARRAY_JOB_ID}" --format=JobID,JobName,State,ExitCode -n 2>/dev/null || true)"
     exit 1
 fi
 
@@ -170,11 +211,20 @@ if ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
     done
     if [[ ${SYNCED_COUNT} -eq 0 ]]; then
         echo "ERROR: No dataset output dirs found under ${HPC_SCRATCH_DIR}; nothing to sync."
+        notify_sync_status \
+            "ECODA: annotation NOT synced (job ${ARRAY_JOB_ID})" \
+            "Annotation sync to NAS failed for job ${ARRAY_JOB_ID}: no dataset output dirs found under ${HPC_SCRATCH_DIR}."
         exit 1
     fi
     echo "Results synchronized to ${NAS_TARGET_DIR}/<DS_NAME>/output/ (${SYNCED_COUNT} datasets)"
     echo "Success: Data safely synchronized to the NAS."
+    notify_sync_status \
+        "ECODA: annotation synced to NAS (job ${ARRAY_JOB_ID})" \
+        "Annotation results for job ${ARRAY_JOB_ID} synced to NAS (${SYNCED_COUNT} datasets: ${DATASET_NAMES[*]})."
 else
     echo "ERROR: NAS path ${NAS_TARGET_DIR} is unreachable even from this login node."
+    notify_sync_status \
+        "ECODA: annotation NOT synced (job ${ARRAY_JOB_ID})" \
+        "Annotation sync to NAS failed for job ${ARRAY_JOB_ID}: NAS path ${NAS_TARGET_DIR} is unreachable (check VPN/NAS mount)."
     exit 1
 fi

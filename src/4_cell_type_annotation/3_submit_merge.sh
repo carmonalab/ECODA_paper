@@ -23,6 +23,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../utils/bash/sync_status_email.sh"
 mkdir -p "${LOGS_DIR}"
 
 DS_NAME="${1:-}"
@@ -81,6 +82,9 @@ if [[ ${EXPECTED_CHUNKS} -ne ${#ANNOT_FILES[@]} ]]; then
   echo "ERROR: Annotation coverage mismatch for ${DS_NAME}:"
   echo "       ${#ANNOT_FILES[@]} feathers found, but ${EXPECTED_CHUNKS} chunks were submitted"
   echo "       (see ${CHUNKS_MANIFEST}). Re-run 2_submit_hpc_array.sh ${DS_NAME} first."
+  notify_sync_status \
+    "ECODA: annotation merge NOT synced (${DS_NAME})" \
+    "Annotation merge + NAS sync failed for ${DS_NAME}: coverage mismatch (${#ANNOT_FILES[@]} feathers found, ${EXPECTED_CHUNKS} chunks submitted). Re-run 2_submit_hpc_array.sh ${DS_NAME} first."
   exit 1
 fi
 echo "Found ${#ANNOT_FILES[@]} annotation feather files (matching ${EXPECTED_CHUNKS} chunks) and ${#VIEW_FILES_CLEAN[@]} view h5ads."
@@ -89,6 +93,9 @@ echo "Found ${#ANNOT_FILES[@]} annotation feather files (matching ${EXPECTED_CHU
 # unreachable NAS (e.g. no VPN) must not destroy scratch artifacts.
 if ! ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
   echo "ERROR: NAS path ${NAS_TARGET_DIR} is unreachable (check VPN/NAS mount)."
+  notify_sync_status \
+    "ECODA: annotation merge NOT synced (${DS_NAME})" \
+    "Annotation merge + NAS sync failed for ${DS_NAME}: NAS path ${NAS_TARGET_DIR} is unreachable (check VPN/NAS mount)."
   exit 1
 fi
 
@@ -109,6 +116,9 @@ for VIEW_FILE in "${VIEW_FILES_CLEAN[@]}"; do
          --h5ad-path "${VIEW_FILE}" \
          --annot-dir "${OUTPUT_DIR}"; then
     echo "ERROR: Merge failed for ${VIEW_NAME}. See ${LOG_FILE}."
+    notify_sync_status \
+      "ECODA: annotation merge NOT synced (${DS_NAME})" \
+      "Annotation merge + NAS sync failed for ${DS_NAME}: merge failed for ${VIEW_NAME} (see ${LOG_FILE})."
     exit 1
   fi
   echo "✓ Merged ${VIEW_NAME}. Log saved to: ${LOG_FILE}"
@@ -140,3 +150,6 @@ if (( ${#NAS_ANNOT_FEATHERS[@]} > 0 )); then
 fi
 rm -rf "${NAS_TARGET_DIR}/${DS_NAME}/output/chunks"
 echo "Success: annotated h5ads synchronized to ${NAS_TARGET_DIR}/${DS_NAME}/output/"
+notify_sync_status \
+  "ECODA: annotations merged + synced (${DS_NAME})" \
+  "Annotations for ${DS_NAME} merged into all view h5ads and synced to ${NAS_TARGET_DIR}/${DS_NAME}/output/."

@@ -31,11 +31,22 @@
 #       ${NAS_TARGET_DIR}/benchmark/, and only then deletes this run's
 #       per-task logs (scoped to the run's label x dataset cross product,
 #       plus a separate legacy execution_times_task_* sweep).
+#
+# The three submitters also support `--sync-only <id1,id2,...>` resume mode
+# (skip the sbatch submission loops, re-check the provided job ids via
+# benchmark_wait_for_array, then run benchmark_merge_sync_cleanup): these
+# helpers are reused as-is; the submitters only branch on the flag.
+# Sync-status emails are sent by the helpers via notify_sync_status
+# (src/utils/bash/sync_status_email.sh, sourced below) — one per gate
+# failure ("NOT synced — reason") and one after a successful rsync.
 # ============================================================================
 
 # Path to the shared exec-log merge script, resolved from THIS file's location
 # (BASH_SOURCE[0] inside a sourced file is the sourced file's path).
 BENCHMARK_MERGE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_python_sample_embedding_methods/1.1.2_merge_execution_times.py"
+
+# Sync-status email helper (best-effort; requires USER_EMAIL from slurm_config.sh).
+source "$(dirname "${BASH_SOURCE[0]}")/../utils/bash/sync_status_email.sh"
 
 # ---------------------------------------------------------------------------
 # Dataset resolution (see header)
@@ -96,12 +107,19 @@ benchmark_wait_for_array() {
   STATES="$(sacct -j "${JOB_ID}" --format=State -n 2>/dev/null || true)"
   if [[ -z "${STATES//[[:space:]]/}" ]]; then
     echo "ERROR: sacct returned no states for Array Job ${JOB_ID}; NOT syncing to NAS."
+    notify_sync_status \
+      "ECODA: benchmark NOT synced (job ${JOB_ID})" \
+      "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID} (datasets: ${DATASET_NAMES[*]}): sacct returned no states (job purged or unknown id)."
     exit 1
   fi
   # Fail-closed: every row (array master + tasks + batch steps) must be COMPLETED.
   if grep -qvE '^ *COMPLETED *$' <<< "${STATES}"; then
     echo "ERROR: Array Job ${JOB_ID} had non-COMPLETED tasks; NOT syncing to NAS."
     sacct -j "${JOB_ID}" --format=JobID,JobName,State,ExitCode
+    notify_sync_status \
+      "ECODA: benchmark NOT synced (job ${JOB_ID})" \
+      "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID} (datasets: ${DATASET_NAMES[*]}): non-COMPLETED tasks.
+$(sacct -j "${JOB_ID}" --format=JobID,JobName,State,ExitCode -n 2>/dev/null || true)"
     exit 1
   fi
   echo "Array Job ${JOB_ID} (${LABEL}): all tasks COMPLETED."
@@ -120,6 +138,9 @@ benchmark_merge_sync_cleanup() {
   echo "Checking NAS reachability..."
   if ! ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
       echo "ERROR: NAS path ${NAS_TARGET_DIR} is unreachable."
+      notify_sync_status \
+        "ECODA: benchmark NOT synced (no NAS access)" \
+        "Benchmark sync to NAS skipped (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]}): NAS path ${NAS_TARGET_DIR} is unreachable (check VPN/NAS mount)."
       exit 1
   fi
   mkdir -p "${NAS_TARGET_DIR}/benchmark"
@@ -162,6 +183,9 @@ benchmark_merge_sync_cleanup() {
   echo "Merged logs. Syncing results to NAS..."
   rsync -rlptDv "${HPC_SCRATCH_DIR}/benchmark/" "${NAS_TARGET_DIR}/benchmark/"
   echo "Results synchronized to ${NAS_TARGET_DIR}/benchmark/"
+  notify_sync_status \
+    "ECODA: benchmark synced to NAS" \
+    "Benchmark results synced to ${NAS_TARGET_DIR}/benchmark/ (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]})."
 
   # Per-task logs may be deleted only now that the sync has succeeded.
   # Scoped to THIS run's (label x dataset) cross product so an overlapping

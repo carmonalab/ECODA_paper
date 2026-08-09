@@ -15,6 +15,15 @@ set -euo pipefail
 #
 # Run AFTER src/1_stage_data/1_stage_data.sh and BEFORE
 # src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh.
+#
+# Usage:
+#   ./1_submit_hpc.sh                    # submit + wait + report
+#   ./1_submit_hpc.sh --sync-only <id1,id2,...>   # resume: skip submission, re-check the given jobs
+#
+# NOTE: This dispatcher never syncs to NAS (dataset-specific preprocessing
+# writes to scratch only; the preprocess array syncs afterwards), so
+# --sync-only here only re-runs the wait + sacct gate + summary — no status
+# email is sent.
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,7 +32,33 @@ cd "${PROJECT_ROOT}"
 
 STEP_SCRIPTS=( "${SCRIPT_DIR}"/1.*_submit_*.sh )
 
-if [[ ${#STEP_SCRIPTS[@]} -eq 0 ]]; then
+SYNC_ONLY_IDS=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --sync-only)
+      SYNC_ONLY_IDS="${2:-}"
+      if [[ -z "${SYNC_ONLY_IDS}" ]]; then
+        echo "ERROR: --sync-only requires at least one job id (comma-separated)."
+        exit 1
+      fi
+      shift 2
+      ;;
+    --sync-only=*)
+      SYNC_ONLY_IDS="${1#*=}"
+      if [[ -z "${SYNC_ONLY_IDS}" ]]; then
+        echo "ERROR: --sync-only requires at least one job id (comma-separated)."
+        exit 1
+      fi
+      shift
+      ;;
+    *)
+      echo "ERROR: Unknown argument: $1"
+      exit 1
+      ;;
+  esac
+done
+
+if [[ ${#STEP_SCRIPTS[@]} -eq 0 && -z "${SYNC_ONLY_IDS}" ]]; then
   echo "ERROR: No step scripts found in ${SCRIPT_DIR}."
   exit 1
 fi
@@ -31,6 +66,10 @@ fi
 mkdir -p "${LOGS_DIR}"
 
 JOB_IDS=()
+if [[ -n "${SYNC_ONLY_IDS}" ]]; then
+  echo "=== Sync-only resume mode: jobs ${SYNC_ONLY_IDS} (no submission) ==="
+  IFS=',' read -r -a JOB_IDS <<< "${SYNC_ONLY_IDS}"
+else
 for step_script in "${STEP_SCRIPTS[@]}"; do
   echo "=== Submitting $(basename "${step_script}") ==="
   # --output/--error/--partition passed on the sbatch command line (not
@@ -42,6 +81,7 @@ for step_script in "${STEP_SCRIPTS[@]}"; do
       --error="${STEP_LOG_STEM}.err" \
       "${step_script}")")
 done
+fi
 
 echo "Submitted jobs: ${JOB_IDS[*]}"
 
