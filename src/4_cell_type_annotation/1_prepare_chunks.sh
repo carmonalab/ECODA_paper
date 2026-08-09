@@ -3,7 +3,7 @@
 # 1_prepare_chunks.sh — Build dataset chunks (Supports production or test modes)
 #
 # Usage:
-#   ./1_prepare_chunks.sh                        # production, all datasets (chunk_size = 5)
+#   ./1_prepare_chunks.sh                        # production, all datasets (chunk_size = 2)
 #   ./1_prepare_chunks.sh test                   # test mode, all datasets (chunk_size = 1)
 #   ./1_prepare_chunks.sh production <DS_NAME>   # production, single dataset
 #   ./1_prepare_chunks.sh test <DS_NAME>         # test mode, single dataset

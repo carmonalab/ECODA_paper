@@ -126,4 +126,4 @@ else
 fi
 
 # --- Parallelism ---
-MAX_NUM_CHUNKS_PARALLEL=500
+MAX_NUM_CHUNKS_PARALLEL=1000

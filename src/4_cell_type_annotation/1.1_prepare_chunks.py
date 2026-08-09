@@ -9,15 +9,28 @@
 # (deduplicated on (sample, barcode)), written OUTSIDE the output dir to
 # ${HPC_SCRATCH_DIR}/${DS_NAME}/annotation_union/union.h5ad so the NAS sync
 # glob over output/*.h5ad stays clean. Samples are grouped into consecutive
-# chunks of 5 (or 1 in --test mode) and chunk_<N>.txt files are written under
+# chunks of 2 (or 1 in --test mode) and chunk_<N>.txt files are written under
 # ${HPC_SCRATCH_DIR}/${DS_NAME}/output/chunks. Line 1 of each chunk file is the
 # absolute union .h5ad path, subsequent lines are sample IDs.
 #
+# The union is ALWAYS written as a minimal h5ad (even for single-view datasets,
+# whose preprocessed view keeps log-norm X + layers["counts"] and must not be
+# chunked directly): X = raw counts (float64 CSR), obs + var only, no
+# layers/obsp/obsm/uns/varm/varp. anndata's read_h5ad(backed="r") eagerly
+# materializes the entire `layers` group into RAM at open (verified in anndata
+# 0.12.10 and the HPC-pinned 0.12.19), so a union that kept counts in layers
+# would add a full-matrix memory floor per annotation worker (Kfoury:
+# +1.31 GB; a GongSharma-class union: 26-40 GB — OOM at any chunk size). With
+# counts in X the backed open costs ~10 MB; X stays lazy and per-sample backed
+# subsetting stays selective (CSR-on-disk). The annotation worker
+# (2.1.1_process_chunk.R) treats the counts-absent -> X fallback as the
+# designed primary path for union files (message, not warning).
+#
 # Union construction is memory-lean for the common case:
-#   - exactly one view  -> chunk that file directly (no copy)
+#   - exactly one view  -> streaming h5py copy (obs/var groups + counts as X)
 #   - multiple views, one of which already contains the full union (e.g.
 #     Stephenson: benchmark view is a cell subset of the batch-effect view)
-#     -> the union is a plain file copy of that view (obs-only reads)
+#     -> same streaming copy of that view (backed obs-only reads)
 #   - otherwise (partial overlaps between views) -> full in-memory concat +
 #     dedup; this path needs a large srun allocation and prints a warning.
 
@@ -28,6 +41,7 @@ import sys
 from pathlib import Path
 
 import anndata as ad
+import h5py
 import numpy as np
 import scipy.sparse as sp
 import scanpy as sc
@@ -39,20 +53,89 @@ def cell_keys(adata, sample_col):
     return np.char.add(np.char.add(samples, "_"), adata.obs_names.astype(str).values)
 
 
+def verify_annotation_union(union_path, expected_nnz, sample_col):
+    """
+    Backed-mode self-check of a written annotation union: X must be a lazy
+    backed CSR dataset (not eagerly materialized), its nnz must equal the
+    source counts nnz, the file must carry no layers/obsp/obsm data, and the
+    sample column must be present. Raises on any mismatch.
+    """
+    adata = ad.read_h5ad(union_path, backed="r")
+    try:
+        if type(adata.X).__name__ != "_CSRDataset":
+            raise RuntimeError(
+                f"Union X is '{type(adata.X).__name__}' (expected lazy backed "
+                "CSR) — on-disk layout is not the minimal union."
+            )
+        if len(adata.layers) or len(adata.obsp) or len(adata.obsm):
+            raise RuntimeError("Union unexpectedly contains layers/obsp/obsm data.")
+        if sample_col not in adata.obs.columns:
+            raise KeyError(f"Sample column '{sample_col}' not found in union obs.")
+        with h5py.File(union_path, "r") as f:
+            nnz = int(f["X/indptr"][-1])
+        if nnz != expected_nnz:
+            raise RuntimeError(
+                f"Union X nnz ({nnz}) != source counts nnz ({expected_nnz})."
+            )
+    finally:
+        adata.file.close()
+    print(f"  Union self-check OK: lazy X ({nnz} nnz), no layers/obsp/obsm, "
+          f"'{sample_col}' present.")
+
+
+def write_annotation_union(source_path, union_path, sample_col):
+    """
+    Streaming, memory-lean annotation-union writer: copies the obs/var groups
+    (datasets + attrs) from `source_path` and re-writes the raw counts as X
+    (float64 CSR, same dtype as today's layers["counts"]), so the worker's
+    astype("float64") path is a no-op. No layers/obsp/obsm/uns/varm/varp are
+    copied. Writes atomically (tmp + os.replace) and self-verifies the result.
+    """
+    union_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = union_path.with_name(union_path.name + ".tmp")
+    try:
+        with h5py.File(source_path, "r") as src, h5py.File(tmp_path, "w") as dst:
+            dst.attrs["encoding-type"] = src.attrs.get("encoding-type", "anndata")
+            dst.attrs["encoding-version"] = src.attrs.get("encoding-version", "0.1.0")
+            for grp in ("obs", "var"):
+                src.copy(src[grp], dst, name=grp)
+            if "layers/counts" in src:
+                counts = src["layers/counts"]
+            else:
+                print(f"  No layers/counts in {source_path.name}; using its X as "
+                      "the counts source (preprocessed views should always "
+                      "carry a counts layer).")
+                counts = src["X"]
+            x = dst.create_group("X")
+            x.attrs["encoding-type"] = "csr_matrix"
+            x.attrs["encoding-version"] = "0.1.0"
+            x.attrs["shape"] = counts.attrs["shape"]
+            for ds_name in ("data", "indices", "indptr"):
+                src.copy(counts[ds_name], x, name=ds_name)
+            expected_nnz = int(counts["indptr"][-1])
+        os.replace(tmp_path, union_path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    verify_annotation_union(union_path, expected_nnz, sample_col)
+
+
 def build_union(h5ad_files, union_path, sample_col):
     """
     Build the per-dataset union h5ad (dedup on (sample, barcode)).
-    Returns the path of the file to chunk (the union, or a single-view file).
+    Always writes the minimal annotation union and returns `union_path`.
     """
     if len(h5ad_files) == 1:
-        print(f"Single view: chunking {h5ad_files[0].name} directly (no union file).")
-        return h5ad_files[0]
+        print(f"Single view: writing annotation union from {h5ad_files[0].name} "
+              "(streaming copy; the view itself keeps its full layout).")
+        write_annotation_union(h5ad_files[0], union_path, sample_col)
+        return union_path
 
     print(f"Building union from {len(h5ad_files)} views: "
           + ", ".join(f.name for f in h5ad_files))
 
     # 1. Compare (sample, barcode) key sets using backed obs-only reads (no
-    #    matrix I/O). If one view already equals the union, copy it.
+    #    matrix I/O). If one view already equals the union, stream it.
     key_sets = []
     for f in h5ad_files:
         adata = ad.read_h5ad(f, backed="r")
@@ -66,15 +149,9 @@ def build_union(h5ad_files, union_path, sample_col):
     print(f"Union: {len(union_keys)} cells")
 
     if len(key_sets[largest_idx]) == len(union_keys):
-        print(f"  Union == view {h5ad_files[largest_idx].name}; hardlinking file "
-              "(no in-memory concat, no full copy).")
-        union_path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.link(h5ad_files[largest_idx], union_path)
-        except OSError:
-            # cross-device or unsupported FS: fall back to a plain copy
-            print("  Hardlink failed; falling back to file copy.")
-            shutil.copyfile(h5ad_files[largest_idx], union_path)
+        print(f"  Union == view {h5ad_files[largest_idx].name}; streaming copy "
+              "(no in-memory concat).")
+        write_annotation_union(h5ad_files[largest_idx], union_path, sample_col)
         return union_path
 
     # 2. Partial-overlap views: concat in memory and dedup. Memory-heavy; the
@@ -91,23 +168,33 @@ def build_union(h5ad_files, union_path, sample_col):
     _, first_idx = np.unique(keys, return_index=True)
     adata = adata[np.sort(first_idx)]
 
-    # Force CSR on-disk (backed per-sample subsets in annotation are only
-    # selective for CSR), mirroring 1.1.1_preprocess.py::base_preprocessing().
-    for mat_name in ("X", "counts"):
-        mat = adata.X if mat_name == "X" else adata.layers.get("counts")
-        if mat is None:
-            continue
-        if not sp.issparse(mat):
-            mat = sp.csr_matrix(mat)
-        else:
-            mat = mat.tocsr()
-        if mat_name == "X":
-            adata.X = mat
-        else:
-            adata.layers["counts"] = mat
+    # Minimal union layout: X = raw counts (CSR), obs/var only — mirrors the
+    # streaming writer. anndata writes empty group stubs for emptied mappings,
+    # so strip them on disk afterwards.
+    counts = adata.layers.get("counts")
+    if counts is None:
+        counts = adata.X
+        if counts is None:
+            raise RuntimeError("No counts layer or X to use as the union's X.")
+    if not sp.isspmatrix_csr(counts):
+        counts = sp.csr_matrix(counts)
+    adata.X = counts
+    adata.layers = {}
+    adata.obsm = {}
+    adata.obsp = {}
+    adata.uns = {}
+    adata.varm = {}
+    adata.varp = {}
+    expected_nnz = int(counts.nnz)
 
     union_path.parent.mkdir(parents=True, exist_ok=True)
     adata.write_h5ad(str(union_path))
+    del adata
+    with h5py.File(union_path, "r+") as f:
+        for grp in ("layers", "obsm", "obsp", "uns", "varm", "varp"):
+            if grp in f:
+                del f[grp]
+    verify_annotation_union(union_path, expected_nnz, sample_col)
     return union_path
 
 
@@ -117,7 +204,7 @@ def main():
         "--test",
         action="store_true",
         default=False,
-        help="Test mode: 1 sample per chunk (production default: 5).",
+        help="Test mode: 1 sample per chunk (production default: 2).",
     )
     args = parser.parse_args()
 
@@ -165,9 +252,9 @@ def main():
     path_union_dir.mkdir(parents=True, exist_ok=True)
 
     # Number of samples per chunk
-    chunk_size = 1 if args.test else 5
+    chunk_size = 1 if args.test else 2
 
-    # Build the per-dataset union (or fall back to the single view file)
+    # Build the per-dataset minimal annotation union
     union_file = build_union(h5ad_files, path_union_dir / "union.h5ad", sample_col)
 
     # Read the union file in backed mode and extract its unique samples

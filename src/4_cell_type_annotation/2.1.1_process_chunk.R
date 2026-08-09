@@ -155,8 +155,12 @@ if (file.exists(annot_file)) {
     layer_keys <- py_to_r(import_builtins(convert = FALSE)$list(adata$layers$keys()))
     counts_layer <- if ("counts" %in% layer_keys) "counts" else "X"
     if (counts_layer == "X") {
-      warning("Layer 'counts' not found in ", h5ad_file,
-              "; falling back to X as counts input for scATOMIC/HiTME.")
+      # Annotation-union files carry the raw counts in X by design (minimal
+      # layout: no layers group — see 1.1_prepare_chunks.py), so this is the
+      # designed primary path for unions, not a warning case. Preprocessed
+      # view files still carry layers["counts"] and take the "counts" branch.
+      message("Union carries counts in X by design (no 'counts' layer in ", h5ad_file,
+              "); using X as counts input for scATOMIC/HiTME.")
     }
 
     seurat_obj <- get_seurat_obj_from_h5ad(
