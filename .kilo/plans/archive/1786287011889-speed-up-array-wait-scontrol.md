@@ -1,5 +1,20 @@
 # Speed up SLURM array-wait in submit scripts (scontrol wait + poll-until-terminal)
 
+> **Correction (2026-08-09)**: this plan's core premise was wrong. `scontrol`
+> has **no** plain `wait` command in any Slurm release — verified in the
+> scontrol source dispatch tables for 19.05, 20.02, 20.11, 21.08, 22.05,
+> 23.02, 23.11 and 26.05.1: only `wait_job` is dispatched, and it waits for
+> node-ready (not completion) and is documented as unusable with
+> `SLURM_ARRAY_JOB_ID`. `scontrol wait <id>` always prints
+> `invalid keyword: wait` and exits 1, silently swallowed by `|| true`, so
+> the "event-driven" block never blocked — monitoring was always just the
+> bounded sacct poll, silent for up to 15+5 min while SlurmDBD lagged
+> (observed: squeue empty, script still silent, user confused; the fix below).
+> The smoke test in "Validation" (array variant) was never actually run.
+> **Replacement**: exact-id `squeue -h -o "%A" | grep -qx` poll (60s) +
+> the same bounded sacct poll, with phase-progress echoes (commit
+> "Replace no-op scontrol wait with squeue poll in submit monitors").
+
 ## Goal
 
 Replace the `sleep 60` squeue polling loop + fixed `sleep 30` sacct buffer in the 4 login-node submit scripts with:

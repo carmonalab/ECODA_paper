@@ -55,7 +55,7 @@
 ## Edge cases
 
 - `--sync-only` with unknown/purged job id → empty sacct → fail-closed `exit 1`, no sync, failure email sent.
-- `--sync-only` used while the array is still running → `scontrol wait` blocks until completion, then gates (safe).
+- `--sync-only` used while the array is still running → the submit script's squeue poll blocks until the job leaves the scheduler, then gates (safe).
 - No mail binary on the login node → email skipped with a stdout note; `--sync-only` output remains the source of truth.
 - Email body includes: script + dataset(s)/method(s) + job id(s) + outcome (+ sacct excerpt on gate failure).
 - Overlapping submissions unaffected (benchmark manifests already carry the submit `$$` PID).

@@ -85,10 +85,17 @@ fi
 
 echo "Submitted jobs: ${JOB_IDS[*]}"
 
-# Wait for all jobs to leave the queue (event-driven; exit codes ignored —
-# the per-job sacct COMPLETED check below is the authoritative gate).
+# Wait for all jobs to leave the queue (squeue poll, 60s interval; exit
+# codes ignored — the per-job sacct COMPLETED check below is the
+# authoritative gate). scontrol has no plain `wait` command (only
+# `wait_job`, which waits for node-ready — not completion), so poll squeue
+# for the exact job id (`-o %A` prints the array master id for every task,
+# or the job id for plain jobs).
 for job_id in "${JOB_IDS[@]}"; do
-  scontrol wait "${job_id}" > /dev/null 2>&1 || true
+  while squeue -u "$USER" -h -o "%A" 2>/dev/null | grep -qx "${job_id}"; do
+    sleep 60
+  done
+  echo "Job ${job_id} left the scheduler."
 done
 
 # sacct may lag a few seconds behind jobs leaving the scheduler; poll
@@ -97,6 +104,7 @@ done
 # The 180-iteration cap (15 min) plus a 60-iteration grace window (5 min)
 # covers pathological SlurmDBD accounting lag (scheduler said done, sacct
 # still reports RUNNING); the per-job COMPLETED gate below is unchanged.
+echo "Waiting for sacct to record terminal states (bounded, max 20 min)..."
 TAIL_ITER=0
 while (( TAIL_ITER < 180 )); do  # max 15 min at 5s
   settled=1

@@ -25,8 +25,9 @@ set -euo pipefail
 # on nodes whose CPU differs).
 #
 # Submit order: prepare_pseudobulk array FIRST, waited to completion
-# (`scontrol wait` + bounded sacct poll-until-terminal) with a fail-closed
-# sacct gate, BEFORE the mofa/pseudobulk arrays that consume its outputs;
+# (squeue poll until it leaves the scheduler + bounded sacct
+# poll-until-terminal) with a fail-closed sacct gate, BEFORE the
+# mofa/pseudobulk arrays that consume its outputs;
 # then the remaining arrays, waited + gated the same way. If mofa or
 # pseudobulk is requested without prepare_pseudobulk it is auto-prepended.
 # After all arrays complete the shared merge/sync/cleanup tail runs (NAS

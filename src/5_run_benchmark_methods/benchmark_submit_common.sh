@@ -15,9 +15,11 @@
 #       skipped unless explicitly requested). Errors out on unknown --ds_name
 #       or zero datasets.
 #   benchmark_wait_for_array <job_id> <label>
-#       Blocks on `scontrol wait <job_id>` (event-driven; exit code ignored),
-#       then polls sacct (bounded, 5s interval) until every state row is
-#       terminal, then runs a fail-closed sacct gate (every state row must be
+#       Blocks on a `squeue` poll of `<job_id>` (exact id match via `-o %A`,
+#       60s interval; `scontrol` has no plain `wait` command — only
+#       `wait_job`, which is node-ready, not completion), then polls sacct
+#       (bounded, 5s interval) until every state row is terminal, then runs a
+#       fail-closed sacct gate (every state row must be
 #       COMPLETED; aborts without syncing on any non-COMPLETED state or empty
 #       sacct output).
 #   benchmark_merge_sync_cleanup <labels...>
@@ -85,16 +87,22 @@ benchmark_wait_for_array() {
   local JOB_ID="$1"
   local LABEL="$2"
   echo "=== Monitoring ${LABEL} array ${JOB_ID} ==="
-  # Event-driven block until the job leaves the scheduler (no polling).
-  # Exit code deliberately ignored: the fail-closed sacct gate below is the
-  # authoritative check (covers cancellation, failure, purged controller
-  # records).
-  scontrol wait "${JOB_ID}" > /dev/null 2>&1 || true
+  # Block until the job leaves the scheduler. scontrol has NO plain `wait`
+  # command (only `wait_job`, which waits for node-ready — not completion —
+  # and is documented as unusable with SLURM_ARRAY_JOB_ID), so poll squeue
+  # for the exact job id (`-o %A` prints the array master id for every task).
+  # The fail-closed sacct gate below is the authoritative check (covers
+  # cancellation, failure, purged controller records).
+  while squeue -u "$USER" -h -o "%A" 2>/dev/null | grep -qx "${JOB_ID}"; do
+    sleep 60
+  done
+  echo "${LABEL} array ${JOB_ID} left the scheduler."
   # sacct may lag a few seconds behind the job leaving the scheduler; poll
   # (bounded) until every state row is terminal instead of a blind fixed sleep.
   # The 180-iteration cap (15 min) plus a 60-iteration grace window (5 min)
   # covers pathological SlurmDBD accounting lag (scheduler said done, sacct
   # still reports RUNNING); the fail-closed gate below is unchanged.
+  echo "Waiting for sacct to record terminal states for job ${JOB_ID} (bounded, max 20 min)..."
   local TAIL_ITER=0
   local STATES=""
   while (( TAIL_ITER < 180 )); do  # max 15 min at 5s
