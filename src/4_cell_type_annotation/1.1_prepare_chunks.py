@@ -144,7 +144,7 @@ def main():
     print(f"Path is: {path_data}")
 
     # Skip rds->h5ad conversion caches written into the output dir by
-    # preprocess_utils.load_single_input() (they lack the standardized sample
+    # src.utils.py.preprocess_utils.load_single_input() (they lack the standardized sample
     # column and are not preprocessed views). The union h5ad lives in
     # annotation_union/, outside this glob.
     h5ad_files = sorted(

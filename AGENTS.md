@@ -31,7 +31,7 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
   (`Command=` field) when `SLURM_JOB_ID` is set, with the `BASH_SOURCE` fallback
   for login-node execution. Keep this block in any new sbatch-submitted script.
 - `slurm_config.sh` prepends the py-cuda13 env bin
-  (`.pixi/envs/py-cuda13/bin`) to `PATH` so rpy2 (`src/utils/preprocess_utils.py`)
+  (`.pixi/envs/py-cuda13/bin`) to `PATH` so rpy2 (`src/utils/py/preprocess_utils.py`)
   finds R/Rscript when workers invoke `${PYTHON_BIN}` directly.
 - Search code with the built-in Grep/semantic-search tools or `git grep` (tracked files
   only). Never run raw `grep -rn "..." .` — it scans the gitignored 97 GB `data/` and

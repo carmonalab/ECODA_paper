@@ -8,9 +8,9 @@ import pandas as pd
 import re
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.gene_utils import standardize_gene_symbols
-from src.datasets_io import read_datasets_json
-from src.utils.preprocess_utils import load_input, apply_subset_vars
+from src.utils.py.gene_utils import standardize_gene_symbols
+from src.utils.py.datasets_io import read_datasets_json
+from src.utils.py.preprocess_utils import load_input, apply_subset_vars
 
 
 # ---------------------------------------------------------------------------

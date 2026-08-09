@@ -8,7 +8,7 @@ def _load_ensembl105_map():
     global _ENSEMBL105_MAP
     if _ENSEMBL105_MAP is not None:
         return _ENSEMBL105_MAP
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = Path(__file__).resolve().parents[3]
     path = project_root / "aux" / "EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
     df = pd.read_csv(path, sep="\t")
 

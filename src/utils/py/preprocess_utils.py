@@ -11,7 +11,7 @@ from pathlib import Path
 # load_all_functions.R sources its module files via repo-relative paths, so pin
 # the embedded R working directory to PROJECT_ROOT at import time. All R
 # interop calls below use absolute paths; this makes callers CWD-independent.
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ro.r('setwd')(str(PROJECT_ROOT))
 ro.r('source("src/utils/load_all_functions.R")')
 ro.r('''

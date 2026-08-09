@@ -33,7 +33,7 @@ export HPC_SCRATCH_DIR="${HOME}/scratch/ECODA_paper"
 export PYTHON_BIN="${PROJECT_ROOT}/.pixi/envs/py-cuda13/bin/python"
 export PIXI_RSCRIPT="${HOME}/.pixi/bin/pixi run -e py-cuda13 Rscript --vanilla"
 
-# rpy2 (imported by src/utils/preprocess_utils.py) needs R/Rscript on PATH;
+# rpy2 (imported by src/utils/py/preprocess_utils.py) needs R/Rscript on PATH;
 # workers run PYTHON_BIN directly, so prepend the env bin (keeps python/R
 # consistent across login node and workers).
 export PATH="${PROJECT_ROOT}/.pixi/envs/py-cuda13/bin:${PATH}"

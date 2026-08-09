@@ -42,8 +42,8 @@ HPC notes:
   with folder_name: null, and the preprocess array task reads the combined file
   from ${HPC_SCRATCH_DIR}/CombinedPBMC/data).
 - Requires `module load GCCcore/12.2.0` for the R interop (rds->h5ad conversion).
-  CWD-independent: preprocess_utils.py pins the embedded R working directory to
-  ${PROJECT_ROOT} at import time.
+  CWD-independent: src/utils/py/preprocess_utils.py pins the embedded R working
+  directory to ${PROJECT_ROOT} at import time.
 - Heavy loads (GongSharma is huge) may warrant running via a single sbatch job
   instead of interactively on the login node if OOM occurs.
 """
@@ -59,8 +59,8 @@ import scanpy as sc
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from src.gene_utils import standardize_gene_symbols
-from src.datasets_io import read_datasets_json
+from src.utils.py.gene_utils import standardize_gene_symbols
+from src.utils.py.datasets_io import read_datasets_json
 
 KEEP_BASE = ["Sample", "batch", "cond"]
 GONGSHARMA_N_SAMPLES = 15
@@ -90,7 +90,7 @@ def _resolve_source_paths(ds_name, entry, base_path, layout):
 def load_and_prepare_source(ds_name, entry, base_path, output_dir, view_name=None, layout="flat"):
     # Lazy import: preprocess_utils.py initializes rpy2 (embedded R session) at
     # module import time. Only worker processes (post-fork) may trigger it.
-    from src.utils.preprocess_utils import load_input, apply_subset_vars
+    from src.utils.py.preprocess_utils import load_input, apply_subset_vars
 
     input_names, src_path = _resolve_source_paths(ds_name, entry, base_path, layout)
     adata = load_input(input_names, src_path, output_dir)
@@ -247,7 +247,7 @@ def main():
 
     # ---- Load the three sources concurrently (3 fork workers) ----
     # Each worker writes its own small intermediate into output_dir/_intermediates/.
-    # The parent never imports src.utils.preprocess_utils, so rpy2/R init happens
+    # The parent never imports src.utils.py.preprocess_utils, so rpy2/R init happens
     # only inside the R workers, after forking.
     intermediate_dir = output_dir / "_intermediates"
     os.makedirs(intermediate_dir, exist_ok=True)

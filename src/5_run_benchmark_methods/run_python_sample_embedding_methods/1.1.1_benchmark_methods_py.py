@@ -52,7 +52,7 @@ from scvi.external import MRVI
 import pilotpy as pl
 import torch
 
-from src.datasets_io import read_datasets_json
+from src.utils.py.datasets_io import read_datasets_json
 
 
 # scPoli is imported lazily (get_scpoli) so that MrVI/PILOT runs never touch
