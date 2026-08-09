@@ -230,7 +230,13 @@ if ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
       [[ -d "${DS_DIR}" ]] || continue
       DS_NAME="$(basename "$(dirname "${DS_DIR}")")"
       mkdir -p "${NAS_TARGET_DIR}/${DS_NAME}/output"
-      rsync -rlptDv "${DS_DIR}/" "${NAS_TARGET_DIR}/${DS_NAME}/output/"
+      # Exclude annotation intermediates: nothing consumes annotations_chunk_*.feather
+      # or chunks/ from NAS — the merge reads local scratch only, and the merge
+      # script's post-sync NAS cleanup (3_submit_merge.sh) proves they are unwanted
+      # there. With the merge skip, that cleanup no longer fires for already-merged
+      # datasets, so excluding here is the root-cause fix. No --delete: pre-existing
+      # NAS artifacts from older runs are intentionally left in place.
+      rsync -rlptDv --exclude='annotations_chunk_*.feather' --exclude='chunks/' "${DS_DIR}/" "${NAS_TARGET_DIR}/${DS_NAME}/output/"
       SYNCED_COUNT=$((SYNCED_COUNT + 1))
     done
     if [[ ${SYNCED_COUNT} -eq 0 ]]; then

@@ -112,7 +112,7 @@ Running the pipeline:
 ./src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh       # standardized preprocessing + sync to NAS
 ./src/4_cell_type_annotation/1_prepare_chunks.sh           # prepares chunk files required for the next step. See docs/ARCHITECTURE.md for details.
 ./src/4_cell_type_annotation/2_submit_hpc_array.sh         # scATOMIC + HiTME annotation array
-./src/4_cell_type_annotation/3_submit_merge.sh             # merge annotations back to h5ad + sync to NAS
+./src/4_cell_type_annotation/3_submit_merge.sh             # merge annotations back to h5ad + sync to NAS (all datasets; per-dataset: ./3_submit_merge.sh <DS> [--force])
 ```
 
 - **Benchmark methods** (`src/5_run_benchmark_methods/`):
