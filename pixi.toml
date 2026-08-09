@@ -73,6 +73,12 @@ scarches = "==0.6.1"
 # (2.1.1_process_chunk.R). Without it every scATOMIC attempt fails with
 # "ModuleNotFoundError: No module named 'magic'".
 magic-impute = "*"
+# Python backend of MOFA2 (run_mofa with use_basilisk = FALSE in
+# benchmark_methods_r.R::process_mofa_bulk_fig). MOFA2 1.20.2 requires
+# mofapy2 0.7.3 in the python binary reticulate uses (py-cuda13 env on HPC);
+# without it MOFA runs fail with "mofapy2_0.7.3 is not detected in the
+# specified python binary".
+mofapy2 = "==0.7.3"
 
 
 # ==========================================
