@@ -51,6 +51,22 @@ if [[ ! -f "${CHUNK_FILE}" ]]; then
   exit 1
 fi
 
+# Skip chunks whose annotation feather already exists (re-runs of
+# 2_submit_hpc_array.sh on an annotated-but-not-yet-merged dataset; same
+# chunk_N.txt -> annotations_chunk_N.feather mapping as the merge). The chunk
+# manifest stays unfiltered, so the 3_submit_merge.sh coverage gate
+# (manifest lines vs feather count) is unchanged; 1.1_prepare_chunks.py
+# deletes stale feathers on every chunk rebuild (production), so an existing
+# feather always matches the current chunk set.
+CHUNK_NUM="$(basename "${CHUNK_FILE}")"
+CHUNK_NUM="${CHUNK_NUM#chunk_}"
+CHUNK_NUM="${CHUNK_NUM%.txt}"
+FEATHER_FILE="${HPC_SCRATCH_DIR}/${DS_NAME}/output/annotations_chunk_${CHUNK_NUM}.feather"
+if [[ -f "${FEATHER_FILE}" ]]; then
+  echo "Task ${SLURM_ARRAY_TASK_ID}: ${FEATHER_FILE} already exists — annotation already done, skipping."
+  exit 0
+fi
+
 echo "Task ${SLURM_ARRAY_TASK_ID}: running annotation (pixi run Rscript --vanilla)"
 ${PIXI_RSCRIPT} \
   "${SCRIPT_DIR}/2.1.1_process_chunk.R" \

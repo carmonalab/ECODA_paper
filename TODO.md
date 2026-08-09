@@ -3,8 +3,9 @@
 Implementation plan for the remaining pipeline work. Phases are ordered:
 **Phase 1** (agent, done) → **Phase 2** (debug run on HPC, requires user) →
 **Phase 3** (benchmark methods, agent + HPC) → **Phase 4** (batch effect
-analysis) → human-managed tasks. Completed history is preserved in git; see
-`git log` and the changelog at the bottom.
+analysis) → **Phase 5** (pipeline robustness fixes, agent) → human-managed
+tasks. Completed history is preserved in git; see `git log` and the changelog
+at the bottom.
 
 ## Phase 2 — Debug run on HPC [REQUIRES USER: connect NAS + log in to HPC]
 
@@ -78,6 +79,29 @@ Prereqs (explicitly user):
   GongSharma, Zhu) dataset handling; `columns.batch` in datasets.json (Joanito `seqtec`
   DONE via `1.2.1_prepare_joanito.R`; Kfoury `cells_lowres` DONE via
   `1.3.1_create_kfoury_lowres_ct.R`).
+
+## Phase 5 — Annotation completeness guard [agent]
+
+- [x] `1_prepare_chunks.sh` / `1.1_prepare_chunks.py`: guard against building the
+      annotation union from a PARTIALLY preprocessed dataset. The current skip
+      predicate only checks for ≥1 `output/*.h5ad`; for multi-view datasets
+      (Stephenson, `_debug`) a still-running preprocess task can
+      have written only one of its views, so the union/chunks are built from an
+      incomplete view set — and the dataset is then marked "already annotated"
+      and skipped forever by later runs (silent incomplete annotations; only
+      `--force` repairs). Done via (b): `1_prepare_chunks.sh` verifies every
+      expected view from `datasets.json` exists (missing → WARNING-skip into a
+      `SKIPPED_INCOMPLETE` summary bucket, exit 0, picked up on re-run;
+      no-views datasets like Zhu keep the plain h5ad check), and
+      `1.1_prepare_chunks.py` repeats the check fail-closed (CRITICAL exit →
+      `FAILED_DATASETS`) as a bypass/drift guard.
+- [x] Optional: `2_submit_hpc_array.sh` per-chunk skip (feather already present)
+      so re-runs on annotated-but-not-yet-merged datasets don't redo work (no
+      skip logic today; redundancy is only prevented by 1_prepare's skip + the
+      merge deleting `output/chunks/`). Done in `2.1_run_worker.sh`:
+      a chunk whose `annotations_chunk_<N>.feather` already exists exits 0
+      (task COMPLETED in sacct); the chunk manifest stays unfiltered so the
+      `3_submit_merge.sh` coverage gate is unchanged.
 
 ## Human-managed tasks (not agent)
 

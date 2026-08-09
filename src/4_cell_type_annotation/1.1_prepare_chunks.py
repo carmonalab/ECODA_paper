@@ -35,6 +35,7 @@
 #     dedup; this path needs a large srun allocation and prints a warning.
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -252,6 +253,31 @@ def main():
     if not h5ad_files:
         sys.exit(f"CRITICAL Error: No preprocessed .h5ad files found in {path_data} "
                  "(run the preprocess array first).")
+
+    # Defensive fail-closed completeness check (mirrors the bash guard in
+    # 1_prepare_chunks.sh, mirroring 1.1.1_preprocess.py skip semantics):
+    # every view output the preprocess array is expected to produce must
+    # already exist. Catches bypasses/drift of the bash check — the dataset
+    # lands in FAILED_DATASETS instead of building a partial union.
+    datasets_json = os.environ.get("DATASETS_JSON_FILE")
+    if not datasets_json:
+        print("WARNING: DATASETS_JSON_FILE not set; skipping the expected-view "
+              "check (source slurm_config.sh on HPC).")
+    else:
+        with open(datasets_json) as f:
+            ds_entry = json.load(f).get(ds_name, {})
+        expected = {
+            v.get("output_file_name")
+            for v in ds_entry.get("views", {}).values()
+            if v.get("input_file_name") is not None and v.get("output_file_name")
+        }
+        missing = expected - {f.name for f in h5ad_files}
+        if missing:
+            sys.exit(
+                f"CRITICAL Error: preprocessing incomplete for {ds_name}: missing "
+                f"expected view file(s) {sorted(missing)} in {path_data} "
+                "(run the preprocess array first)."
+            )
 
     # Delete chunk file folder recursively to ensure a perfectly clean start
     shutil.rmtree(path_output_chunks, ignore_errors=True)

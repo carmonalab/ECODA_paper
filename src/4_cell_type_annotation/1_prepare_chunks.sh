@@ -187,6 +187,7 @@ fi
 FAILED_DATASETS=()
 SKIPPED_DATASETS=()
 SKIPPED_ANNOTATED=()
+SKIPPED_INCOMPLETE=()
 
 for DS_NAME in "${DATASET_NAMES[@]}"; do
   echo ""
@@ -232,8 +233,36 @@ for DS_NAME in "${DATASET_NAMES[@]}"; do
     fi
   fi
 
-  # Skip datasets without preprocessed .h5ad input (e.g. Zhu has no views)
-  if ! ls "${HPC_SCRATCH_DIR}/${DS_NAME}/output"/*.h5ad >/dev/null 2>&1; then
+  # Preprocessing-completeness guard: for datasets with expected views
+  # (datasets.json `views.*` carrying input/output file names, mirroring the
+  # 1.1.1_preprocess.py skip semantics), ALL expected output .h5ad files must
+  # already exist in output/ before chunking. A still-running preprocess array
+  # can have written only some of a multi-view dataset's views; chunking on a
+  # partial view set would mark the dataset "already annotated" and silently
+  # stay incomplete forever.
+  EXPECTED_VIEW_FILES=()
+  while IFS= read -r view_file; do
+    EXPECTED_VIEW_FILES+=("${view_file}")
+  done < <(jq -r --arg ds "${DS_NAME}" \
+    '.[$ds].views | to_entries[] | select(.value.input_file_name != null) | select(.value.output_file_name != null) | .value.output_file_name' \
+    "${DATASETS_JSON_FILE}")
+
+  MISSING_VIEW_FILES=()
+  for view_file in "${EXPECTED_VIEW_FILES[@]}"; do
+    if [[ ! -f "${HPC_SCRATCH_DIR}/${DS_NAME}/output/${view_file}" ]]; then
+      MISSING_VIEW_FILES+=("${view_file}")
+    fi
+  done
+
+  if [[ ${#MISSING_VIEW_FILES[@]} -gt 0 ]]; then
+    echo "WARNING: preprocessing incomplete for ${DS_NAME}: missing view file(s): ${MISSING_VIEW_FILES[*]} — re-run this script after the preprocess array finishes."
+    SKIPPED_INCOMPLETE+=("${DS_NAME}")
+    continue
+  fi
+
+  # Datasets with no expected views (e.g. Zhu, "views": {}) fall back to the
+  # plain "any preprocessed .h5ad" check (Zhu path unchanged).
+  if [[ ${#EXPECTED_VIEW_FILES[@]} -eq 0 ]] && ! ls "${HPC_SCRATCH_DIR}/${DS_NAME}/output"/*.h5ad >/dev/null 2>&1; then
     echo "WARNING: No preprocessed .h5ad files in ${HPC_SCRATCH_DIR}/${DS_NAME}/output; skipping ${DS_NAME}."
     SKIPPED_DATASETS+=("${DS_NAME}")
     continue
@@ -269,6 +298,10 @@ fi
 echo "Skipped (no preprocessed .h5ad): ${#SKIPPED_DATASETS[@]}"
 if [[ ${#SKIPPED_DATASETS[@]} -gt 0 ]]; then
   echo "  ${SKIPPED_DATASETS[*]}"
+fi
+echo "Skipped (preprocessing incomplete): ${#SKIPPED_INCOMPLETE[@]}"
+if [[ ${#SKIPPED_INCOMPLETE[@]} -gt 0 ]]; then
+  echo "  ${SKIPPED_INCOMPLETE[*]}"
 fi
 echo "Failed: ${#FAILED_DATASETS[@]}"
 if [[ ${#FAILED_DATASETS[@]} -gt 0 ]]; then
