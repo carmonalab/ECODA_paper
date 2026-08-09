@@ -192,3 +192,4 @@ cohorts.** Halter, C., Andreatta, M., & Carmona, S. J. (2026). *bioRxiv*. doi:
   light reference atlases (Garnica et al., 2024)
     - Hosted on Figshare: [https://doi.org/10.6084/m9.figshare.26310994](https://doi.org/10.6084/m9.figshare.26310994).
     - Associated GitHub Code Repository: [carmonalab/Reference_maps](https://github.com/carmonalab/Reference_maps)
+    - The pipeline auto-stages the 4 sketched maps (`sketched_CD8T_human_ref_v1.rds`, `sketched_CD4T_human_ref_v2.rds`, `sketched_DC_human_ref_v2.rds`, `sketched_MoMac_human_v1.rds`) into `HOME_REF_DIR` (`${HOME}/reference_atlases/sketched_200ct/`), from the NAS when available, otherwise downloaded from the Figshare article above; the local repo no longer carries a mirror.

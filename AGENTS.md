@@ -41,6 +41,15 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
   (`src`, `notebooks`, `docs`) are always searched.
 
 
+## Task Completion Workflow
+
+Whenever you finish implementing a plan located in `.kilo/plans/`:
+1. Move the completed plan file into `.kilo/plans/archive/` (create the directory if it doesn't exist).
+2. Stage all changed files, including the archived plan (`git add .`).
+3. Create a git commit summarizing the work done.
+4. Push the commit to the remote repository.
+
+
 # Repo structure
 
 ## Documentation

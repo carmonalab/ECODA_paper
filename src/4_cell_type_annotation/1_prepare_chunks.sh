@@ -62,12 +62,98 @@ echo "Datasets to process: ${DATASET_NAMES[*]}"
 # STAGE REFERENCE MAPS: Copy ref files from UNIGE NAS to Cluster Scratch
 # -------------------------------------------------------------------------
 
-if [ -d "${HOME_REF_DIR}" ] && [ "$(ls -A "${HOME_REF_DIR}" 2>/dev/null)" ]; then
-  echo ">>> Reference maps already exist in ${HOME_REF_DIR}. Skipping rsync. <<<"
+# Reference maps for cell type annotation (light reference atlases in blood
+# and tumors, Garnica et al. 2024; carmonalab/Reference_maps):
+# https://doi.org/10.6084/m9.figshare.26310994
+# Staged NAS-first with a Figshare download fallback. Every file is MD5-
+# verified against the manifest regardless of source (NAS, Figshare, or
+# pre-existing); fails closed if any of the 4 files is missing or corrupt
+# after both attempts.
+REF_MAP_NAMES=(
+  "sketched_CD8T_human_ref_v1.rds"
+  "sketched_CD4T_human_ref_v2.rds"
+  "sketched_DC_human_ref_v2.rds"
+  "sketched_MoMac_human_v1.rds"
+)
+declare -A REF_MAP_FILE_IDS=(
+  ["sketched_CD8T_human_ref_v1.rds"]="47714158"
+  ["sketched_CD4T_human_ref_v2.rds"]="47714155"
+  ["sketched_DC_human_ref_v2.rds"]="47714161"
+  ["sketched_MoMac_human_v1.rds"]="47714164"
+)
+declare -A REF_MAP_MD5S=(
+  ["sketched_CD8T_human_ref_v1.rds"]="be86058ddafdd0154faf0485286b86e7"
+  ["sketched_CD4T_human_ref_v2.rds"]="5540a0ee287e291528c96d476794b194"
+  ["sketched_DC_human_ref_v2.rds"]="033d491ba7ca9bbf0badcae828e55b2c"
+  ["sketched_MoMac_human_v1.rds"]="3043cd9058a8746d972c7be195b18e36"
+)
+
+mkdir -p "${HOME_REF_DIR}"
+
+# Sweep temp files orphaned by interrupted runs (login-node SSH drops; the
+# PID-suffixed temp names are never re-targeted by later runs).
+rm -f "${HOME_REF_DIR}"/.*.tmp.*
+
+ref_map_md5_ok() {
+  local f="$1" path="$2"
+  [[ "$(md5sum "${path}" | awk '{print $1}')" == "${REF_MAP_MD5S[$f]}" ]]
+}
+
+ref_maps_staged() {
+  local f
+  for f in "${REF_MAP_NAMES[@]}"; do
+    [[ -f "${HOME_REF_DIR}/${f}" ]] || return 1
+    ref_map_md5_ok "$f" "${HOME_REF_DIR}/${f}" || return 1
+  done
+  return 0
+}
+
+drop_bad_ref_files() {
+  local f
+  for f in "${REF_MAP_NAMES[@]}"; do
+    if [[ -e "${HOME_REF_DIR}/${f}" ]] && ! ref_map_md5_ok "$f" "${HOME_REF_DIR}/${f}"; then
+      echo "WARNING: ${HOME_REF_DIR}/${f} failed MD5 verification; removing for re-staging."
+      rm -f "${HOME_REF_DIR}/${f}"
+    fi
+  done
+}
+
+if ref_maps_staged; then
+  echo ">>> Reference maps already staged and MD5-verified in ${HOME_REF_DIR}. Skipping staging. <<<"
 else
+  drop_bad_ref_files
   echo "Staging reference maps from NAS to home directory..."
-  mkdir -p "${HOME_REF_DIR}"
-  rsync -av --progress "${NAS_REF_DIR}" "${HOME_REF_DIR}/"
+  if rsync -a "${NAS_REF_DIR}" "${HOME_REF_DIR}/"; then
+    echo "Reference maps staged from NAS."
+  else
+    echo "WARNING: NAS rsync of reference maps failed (${NAS_REF_DIR} unavailable?); falling back to Figshare download."
+  fi
+  drop_bad_ref_files
+
+  for f in "${REF_MAP_NAMES[@]}"; do
+    if [[ -f "${HOME_REF_DIR}/${f}" ]]; then
+      continue
+    fi
+    url="https://ndownloader.figshare.com/files/${REF_MAP_FILE_IDS[$f]}"
+    tmp="${HOME_REF_DIR}/.${f}.tmp.$$"
+    echo "Downloading ${f} from Figshare (${url})..."
+    if ! curl -f -L --retry 3 -o "${tmp}" "${url}"; then
+      rm -f "${tmp}"
+      echo "ERROR: Download of ${f} from Figshare failed."
+      exit 1
+    fi
+    if ! ref_map_md5_ok "$f" "${tmp}"; then
+      rm -f "${tmp}"
+      echo "ERROR: MD5 checksum mismatch for ${f}; expected ${REF_MAP_MD5S[$f]}."
+      exit 1
+    fi
+    mv "${tmp}" "${HOME_REF_DIR}/${f}"
+  done
+
+  if ! ref_maps_staged; then
+    echo "ERROR: Reference maps incomplete or failing MD5 checks in ${HOME_REF_DIR}; need all of: ${REF_MAP_NAMES[*]}."
+    exit 1
+  fi
 fi
 
 # 4. Build chunks per dataset (sequential, one short-lived compute session each;
