@@ -7,6 +7,11 @@
 #   ./1_prepare_chunks.sh test                   # test mode, all datasets (chunk_size = 1)
 #   ./1_prepare_chunks.sh production <DS_NAME>   # production, single dataset
 #   ./1_prepare_chunks.sh test <DS_NAME>         # test mode, single dataset
+#   [--force]                                    # recompute chunks even if the dataset is
+#                                                # already annotated (accepted in any position)
+#
+# Datasets that are already annotated are skipped (see the skip predicate in
+# the per-dataset loop below) unless --force is given.
 #
 
 set -euo pipefail
@@ -17,9 +22,29 @@ cd "${PROJECT_ROOT}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${LOGS_DIR}"
 
-# 2. Parse arguments: MODE (production/test) + optional single dataset
-MODE_ARG="${1:-production}"
-DS_NAME_ARG="${2:-}"
+# 2. Parse arguments: MODE (production/test) + optional single dataset + optional
+#    --force flag (accepted in any position; errors on unknown flags)
+FORCE_ARG=0
+POS_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force)
+      FORCE_ARG=1
+      shift
+      ;;
+    -*)
+      echo "ERROR: Unknown argument: $1"
+      exit 1
+      ;;
+    *)
+      POS_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+MODE_ARG="${POS_ARGS[0]:-production}"
+DS_NAME_ARG="${POS_ARGS[1]:-}"
 PY_ARGS=""
 
 if [ "$MODE_ARG" = "test" ]; then
@@ -161,10 +186,51 @@ fi
 #    much shorter)
 FAILED_DATASETS=()
 SKIPPED_DATASETS=()
+SKIPPED_ANNOTATED=()
 
 for DS_NAME in "${DATASET_NAMES[@]}"; do
   echo ""
   echo ">>> Building chunks for dataset: ${DS_NAME} <<<"
+
+  # Skip datasets that are already annotated, unless --force. Two done states:
+  #   Branch 1 — annotated, not yet merged: >=1 chunk_*.txt in output/chunks/
+  #     and every chunk_N.txt has its matching annotations_chunk_N.feather in
+  #     output/ (mapping: chunk_3.txt -> annotations_chunk_3.feather).
+  #   Branch 2 — already merged (3_submit_merge.sh is the only step that
+  #     deletes these dirs): output/chunks/ absent AND annotation_union/ absent
+  #     AND >=1 annotations_chunk_*.feather exists in output/.
+  # Partial feather coverage (some chunks missing their feather) is the "not
+  # done" state and falls through to the rebuild below.
+  shopt -s nullglob
+  CHUNK_FILES=("${HPC_SCRATCH_DIR}/${DS_NAME}/output/chunks"/chunk_*.txt)
+  ANNOT_FILES=("${HPC_SCRATCH_DIR}/${DS_NAME}/output"/annotations_chunk_*.feather)
+  shopt -u nullglob
+
+  ANNOTATED=0
+  if [[ ${#CHUNK_FILES[@]} -gt 0 ]]; then
+    ANNOTATED=1
+    for chunk_file in "${CHUNK_FILES[@]}"; do
+      chunk_name=$(basename "${chunk_file}")
+      chunk_num="${chunk_name#chunk_}"
+      chunk_num="${chunk_num%.txt}"
+      if [[ ! -f "${HPC_SCRATCH_DIR}/${DS_NAME}/output/annotations_chunk_${chunk_num}.feather" ]]; then
+        ANNOTATED=0
+        break
+      fi
+    done
+  elif [[ ! -d "${HPC_SCRATCH_DIR}/${DS_NAME}/annotation_union" && ${#ANNOT_FILES[@]} -gt 0 ]]; then
+    ANNOTATED=1
+  fi
+
+  if [[ ${ANNOTATED} -eq 1 ]]; then
+    if [[ ${FORCE_ARG} -eq 1 ]]; then
+      echo "NOTE: ${DS_NAME} is already annotated; --force given, rebuilding chunks."
+    else
+      echo "Already annotated: ${DS_NAME} — skipping chunk generation (use --force to recompute)"
+      SKIPPED_ANNOTATED+=("${DS_NAME}")
+      continue
+    fi
+  fi
 
   # Skip datasets without preprocessed .h5ad input (e.g. Zhu has no views)
   if ! ls "${HPC_SCRATCH_DIR}/${DS_NAME}/output"/*.h5ad >/dev/null 2>&1; then
@@ -196,6 +262,10 @@ done
 echo ""
 echo "=== Chunk preparation summary ==="
 echo "Processed: ${#DATASET_NAMES[@]} datasets"
+echo "Skipped (already annotated): ${#SKIPPED_ANNOTATED[@]}"
+if [[ ${#SKIPPED_ANNOTATED[@]} -gt 0 ]]; then
+  echo "  ${SKIPPED_ANNOTATED[*]}"
+fi
 echo "Skipped (no preprocessed .h5ad): ${#SKIPPED_DATASETS[@]}"
 if [[ ${#SKIPPED_DATASETS[@]} -gt 0 ]]; then
   echo "  ${SKIPPED_DATASETS[*]}"

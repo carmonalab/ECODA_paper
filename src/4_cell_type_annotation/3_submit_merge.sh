@@ -8,7 +8,8 @@ set -euo pipefail
 # Run AFTER 2_submit_hpc_array.sh <DS_NAME> completed for the same dataset.
 #
 # Usage:
-#   ./3_submit_merge.sh <DS_NAME>
+#   ./3_submit_merge.sh <DS_NAME>          # merge + NAS sync (skips if already merged)
+#   ./3_submit_merge.sh <DS_NAME> --force  # force re-merge (coverage gate still applies)
 #
 # Pipeline stage: annotation runs once per DATASET on the per-dataset union
 # h5ad (see 1.1_prepare_chunks.py); the resulting annotations_chunk_*.feather
@@ -26,9 +27,28 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../utils/bash/sync_status_email.sh"
 mkdir -p "${LOGS_DIR}"
 
-DS_NAME="${1:-}"
+FORCE_ARG=0
+POS_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force)
+      FORCE_ARG=1
+      shift
+      ;;
+    -*)
+      echo "ERROR: Unknown argument: $1"
+      exit 1
+      ;;
+    *)
+      POS_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+DS_NAME="${POS_ARGS[0]:-}"
 if [[ -z "${DS_NAME}" ]]; then
-  echo "ERROR: Usage: ./3_submit_merge.sh <DS_NAME>"
+  echo "ERROR: Usage: ./3_submit_merge.sh <DS_NAME> [--force]"
   exit 1
 fi
 
@@ -46,6 +66,19 @@ UNION_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/annotation_union"
 # Memory per merge srun; overridable for the largest views (e.g. Stephenson's
 # batch-effect view may OOM on the 64G default).
 MERGE_MEM="${MERGE_MEM:-64G}"
+
+# Post-merge skip: this script is the only step that deletes output/chunks/ and
+# annotation_union/, so a dataset with both absent and >=1 feather still in
+# output/ was already merged (feathers are kept deliberately for the coverage
+# gate on re-runs). Nothing to merge or sync — exit 0 (no srun, no NAS sync,
+# no sync-status email) unless --force.
+shopt -s nullglob
+ANNOT_FILES=("${OUTPUT_DIR}"/annotations_chunk_*.feather)
+shopt -u nullglob
+if [[ ${FORCE_ARG} -eq 0 && ! -d "${OUTPUT_DIR}/chunks" && ! -d "${UNION_DIR}" && ${#ANNOT_FILES[@]} -gt 0 ]]; then
+  echo "Already merged: ${DS_NAME} — skipping merge + NAS sync (use --force to re-merge)"
+  exit 0
+fi
 
 # View h5ads to annotate (exclude rds->h5ad conversion caches). Annotation
 # feathers live directly in OUTPUT_DIR (written there by 2.1.1_process_chunk.R).
