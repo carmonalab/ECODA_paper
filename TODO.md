@@ -6,15 +6,6 @@ Implementation plan for the remaining pipeline work. Phases are ordered:
 analysis) → human-managed tasks. Completed history is preserved in git; see
 `git log` and the changelog at the bottom.
 
-## Phase 1 — Complete pipelines src/1–4 (DONE, agent)
-
-Implemented: debug/test execution mode (`--ds_name`/`--force`/`--test`, `_debug`
-5-sample subset built by the Joanito step `1.2.1_prepare_joanito.R` into
-`${HPC_SCRATCH_DIR}/_debug/data/`), per-dataset annotation + merge-back (union
-h5ad, `3_submit_merge.sh` coverage gate), legacy `Preprocess_datasets.Rmd`
-audit (deleted), `.Rprofile`/`.Renviron`/`RETICULATE_PYTHON` fixes. Details are
-preserved in git history (see previous TODO.md versions in `git log`).
-
 ## Phase 2 — Debug run on HPC [REQUIRES USER: connect NAS + log in to HPC]
 
 Prereqs (explicitly user):
@@ -72,9 +63,11 @@ Prereqs (explicitly user):
   read preprocessed h5ad (Step 4a approach: `ReadH5AD`/reticulate — benchmark on debug
   dataset), paths from datasets.json view outputs, ingest `.feather` from NAS; strip
   data-processing steps moved to HPC scripts.
-- [ ] **3.5 SLURM config**: per-pipeline partition strategy (GPU for some methods;
-  runtime check) in `slurm_config.sh`.
 - [ ] **3.6 Docs**: README usage/workflow, ARCHITECTURE.md, AGENTS.md.
+- [ ] **3.7 SLURM config cleanup**: resolve or drop the leftover
+      `# TODO: Adapt for specific pipelines` comment on `SLURM_PARTITION`
+      (`src/slurm_config.sh:114`) — decide per-stage partitions for stages 2–4
+      or remove the comment.
 - [ ] Validation: `bash -n`/`py_compile`/R parse; debug-dataset run on HPC once implemented.
 
 ## Phase 4 — Batch effect analysis (later)
@@ -95,8 +88,21 @@ Prereqs (explicitly user):
 
 ## Ideas for later
 
-- GloScope on HPC; MOFAcellular; cell/sample/annotation counts from h5ad without full
-  load.
+- MOFAcellular; cell/sample/annotation counts from h5ad without full load.
+- Gene blacklist before HVG selection: dump `aux/genes.blocklist.rds` (STACAS
+  default_black_list) to a text file (one gene per line; `full` and `no_sex`
+  variants), add `load_blacklist(path, exclude_sex=True)` to
+  `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py`, apply before HVG selection
+  (`adata = adata[:, ~adata.var_names.isin(blacklist)].copy()`).
+- Batch effect analysis: decide whether to run with and/or without batch
+  correction — more important to only do WITH batch correction; non-corrected
+  results possibly in the paper appendix.
+- Phase 4 details: verify `DESeq2.normalize()` `batch_col` is correctly
+  implemented and does not get `"Sample"` as batch column; ECODA batch-associated
+  CT removal should print a warning naming the significant cell types
+  (t-test/Wilcoxon for 2 batches, ANOVA/Kruskal-Wallis for >2, p < 0.05); test
+  each cell type separately vs. checking global variance of cell type
+  composition across batches.
 
 ## Keep-draft notes
 
@@ -106,6 +112,15 @@ Prereqs (explicitly user):
 
 ## Changelog
 
+- TODO.md cleanup: removed implemented items (Phase 1 section — details preserved
+  in git history; Phase 3.5 SLURM per-pipeline partition strategy, fully in
+  `src/slurm_config.sh` + used by all 3 benchmark submitters; "GloScope on HPC"
+  idea, done in Phase 3.2); restored three lost points (pre-`0beea53` wording)
+  under *Ideas for later*: gene blacklist before HVG selection in `preprocess.py`,
+  batch-effect analysis with/without batch correction, Phase 4 DESeq2/ECODA
+  details; added Phase 3.7 tracking the leftover
+  `# TODO: Adapt for specific pipelines` comment on `SLURM_PARTITION`
+  (`src/slurm_config.sh:114`).
 - Phase 3.2 code-complete (HPC debug validation pending): R benchmark methods
   (GloScope, MOFA, Pseudobulk, scITD) moved to the HPC pipeline
   `src/5_run_benchmark_methods/run_r_sample_embedding_methods/` (per-method SLURM
