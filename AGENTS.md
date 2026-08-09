@@ -41,7 +41,7 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
   (`src`, `notebooks`, `docs`) are always searched.
 
 ## Documentation organization
-- Project Summary & Citation → README.md (primary home)
+- Project Summary & Citation → README.md (primary home) (keep it short and concise! no details! ask user if unsure)
 - Pipeline Call Graphs & HPC Layout → docs/ARCHITECTURE.md (keep here; remove detailed file-by-file logic trees from AGENTS.md)
 - Agent Guardrails & Domain Terms → AGENTS.md (high-level rules; reference ARCHITECTURE.md for step details)
 - Pending Tasks & Method Extensions → TODO.md (centralize planned conversions, script additions, reviewer extensions)
