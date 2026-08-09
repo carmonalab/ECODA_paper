@@ -114,7 +114,16 @@ SLURM_PARTITION_PRIVATE="private-carmona-gpu"
 SLURM_PARTITION="shared-cpu,shared-gpu,private-carmona-gpu" # TODO: Adapt for specific pipelines
 
 # --- User Info ---
-USER_EMAIL="${USER}@unige.ch"
+# USER_EMAIL is the recipient for Slurm --mail-user and sync-status emails
+# (notify_sync_status). It must be set by the user in their HPC shell profile
+# (e.g. ~/.bashrc) — personal addresses must NOT be hardcoded in this repo.
+# The default below is a best-effort guess and may be non-deliverable.
+if [[ -z "${USER_EMAIL:-}" ]]; then
+  export USER_EMAIL="${USER}@unige.ch"
+  echo "WARNING: USER_EMAIL unset — falling back to ${USER_EMAIL}. Set USER_EMAIL in your HPC ~/.bashrc to receive Slurm + sync-status emails." >&2
+else
+  export USER_EMAIL
+fi
 
 # --- Parallelism ---
 MAX_NUM_CHUNKS_PARALLEL=500

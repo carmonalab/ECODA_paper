@@ -55,6 +55,9 @@ r-pheatmap = "*"
 # ==========================================
 anndata = "==0.12.19"
 scanpy = "==1.12.2"
+# Python igraph backend for sc.tl.leiden(flavor="igraph"); r-igraph above is
+# the R package (unrelated)
+python-igraph = ">=0.11,<1"
 rpy2 = ">=3.6.7,<4"
 # Required by pd.read_feather()/to_feather() in 3.1_merge_annotations.py and
 # the benchmark Python workers (1.1.1_benchmark_methods_py.py,

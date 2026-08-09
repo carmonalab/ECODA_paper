@@ -143,8 +143,11 @@ scontrol wait "${ARRAY_JOB_ID}" > /dev/null 2>&1 || true
 
 # sacct may lag a few seconds behind the job leaving the scheduler; poll
 # (bounded) until every state row is terminal instead of a blind fixed sleep.
+# The 180-iteration cap (15 min) plus a 60-iteration grace window (5 min)
+# covers pathological SlurmDBD accounting lag (scheduler said done, sacct
+# still reports RUNNING); the fail-closed gate below is unchanged.
 TAIL_ITER=0
-while (( TAIL_ITER < 60 )); do  # max 5 min at 5s
+while (( TAIL_ITER < 180 )); do  # max 15 min at 5s
     STATES="$(sacct -j "${ARRAY_JOB_ID}" --format=State -n 2>/dev/null || true)"
     if [[ -n "${STATES//[[:space:]]/}" ]] \
        && ! grep -qE 'PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING' <<< "${STATES}"; then
@@ -153,6 +156,19 @@ while (( TAIL_ITER < 60 )); do  # max 5 min at 5s
     sleep 5
     TAIL_ITER=$((TAIL_ITER + 1))
 done
+if (( TAIL_ITER >= 180 )); then
+    echo "WARNING: sacct still reporting non-terminal states after 15 min; extending wait by a 5 min grace window..." >&2
+    TAIL_ITER=0
+    while (( TAIL_ITER < 60 )); do
+        STATES="$(sacct -j "${ARRAY_JOB_ID}" --format=State -n 2>/dev/null || true)"
+        if [[ -n "${STATES//[[:space:]]/}" ]] \
+           && ! grep -qE 'PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING' <<< "${STATES}"; then
+            break
+        fi
+        sleep 5
+        TAIL_ITER=$((TAIL_ITER + 1))
+    done
+fi
 
 echo "Array Job ${ARRAY_JOB_ID} finished. Checking task states..."
 STATES="$(sacct -j "${ARRAY_JOB_ID}" --format=State -n 2>/dev/null || true)"

@@ -104,6 +104,7 @@ def run_clustering(adata, rep_key, key_suffix, resolutions):
         sc.tl.leiden(
             adata, resolution=r, key_added=f"leiden_res_{r}_{key_suffix}",
             neighbors_key=neighbors_key,
+            flavor="igraph", n_iterations=2, directed=False,
         )
 
 

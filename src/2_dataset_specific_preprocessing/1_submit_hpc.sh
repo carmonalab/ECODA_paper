@@ -94,8 +94,11 @@ done
 # sacct may lag a few seconds behind jobs leaving the scheduler; poll
 # (bounded) until every job's master state is terminal instead of a blind
 # fixed sleep (same -X master-only granularity as the COMPLETED check below).
+# The 180-iteration cap (15 min) plus a 60-iteration grace window (5 min)
+# covers pathological SlurmDBD accounting lag (scheduler said done, sacct
+# still reports RUNNING); the per-job COMPLETED gate below is unchanged.
 TAIL_ITER=0
-while (( TAIL_ITER < 60 )); do  # max 5 min at 5s
+while (( TAIL_ITER < 180 )); do  # max 15 min at 5s
   settled=1
   for job_id in "${JOB_IDS[@]}"; do
     state="$(sacct -j "${job_id}" -X -n -o "State" 2>/dev/null | tr -d ' \n' || true)"
@@ -109,6 +112,24 @@ while (( TAIL_ITER < 60 )); do  # max 5 min at 5s
   sleep 5
   TAIL_ITER=$((TAIL_ITER + 1))
 done
+if (( TAIL_ITER >= 180 )); then
+  echo "WARNING: sacct still reporting non-terminal states after 15 min; extending wait by a 5 min grace window..." >&2
+  TAIL_ITER=0
+  while (( TAIL_ITER < 60 )); do
+    settled=1
+    for job_id in "${JOB_IDS[@]}"; do
+      state="$(sacct -j "${job_id}" -X -n -o "State" 2>/dev/null | tr -d ' \n' || true)"
+      if [[ -z "${state}" ]] || [[ "${state}" =~ PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING ]]; then
+        settled=0
+      fi
+    done
+    if [[ ${settled} -eq 1 ]]; then
+      break
+    fi
+    sleep 5
+    TAIL_ITER=$((TAIL_ITER + 1))
+  done
+fi
 
 echo "=== Job summary ==="
 sacct -j "$(IFS=,; echo "${JOB_IDS[*]}")" --format=JobID,JobName,State,ExitCode

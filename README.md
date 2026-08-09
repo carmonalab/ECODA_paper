@@ -129,7 +129,10 @@ fail closed (exit 1, no sync). You receive Slurm job emails
 (`--mail-user`) plus a best-effort script email "synced to NAS" / "NOT
 synced — reason" sent by the login node's mail CLI (`mailx`/`mail`/`sendmail`;
 silently skipped if none exists — the script output remains the source of
-truth).
+truth). To receive these emails, export your address in the HPC shell profile
+(e.g. `export USER_EMAIL="you@example.com"` in `~/.bashrc` on the login node;
+sbatch propagates it to submit scripts and workers). Without it, Slurm falls
+back to `${USER}@unige.ch`, which may be non-deliverable.
 
 - **Benchmark methods** (`src/5_run_benchmark_methods/`):
   - **Python methods** (`run_python_sample_embedding_methods/`): MrVI, scPoli
