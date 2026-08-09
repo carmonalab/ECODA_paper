@@ -10,9 +10,10 @@
 # X_pca_benchmark_analysis_hvg{n} obsm embeddings via reticulate), sets
 # seurat@misc$cell_type_low_res / label_col from datasets.json, dispatches on
 # --method to the T2 driver (benchmark_pipeline.R), writes the per-combo
-# bundle files (<ds>_<method>_<combo>.rds) + the method-level RDS
-# (<ds>_<method>.rds, a named list of result bundles) + per-combo exec-log
-# rows. Skip-if-exists: the method RDS exists -> re-emit its exec-log rows
+# bundle files (<ds>_<combo>.rds; combo names are method-prefixed) + the
+# method-level RDS (<ds>_<method>.rds, a named list of result bundles) +
+# per-combo exec-log rows. Skip-if-exists: the method RDS exists -> re-emit
+# its exec-log rows
 # (failure-resume must not lose timing from an aborted run) and skip all
 # unless --force; otherwise per-combo cache files are reused.
 #

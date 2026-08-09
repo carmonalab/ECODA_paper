@@ -82,7 +82,7 @@ if (length(pending) > 0) {
 } else {
   # Everything cached: re-emit the stored timings so a resume after an
   # aborted run does not lose the prep exec-log rows (the merge is scoped to
-  # the current run's job ids).
+  # the current run's labels x datasets).
   for (v in PB_VARIANT_NAMES) {
     f <- file.path(args$pseudobulk_dir, paste0(ds, "_pseudobulk_", v, ".rds"))
     cached <- readRDS(f)

@@ -1,21 +1,24 @@
 """Merge per-task benchmark execution-time logs into one feather.
 
-Concatenates the per-task logs matching the given array job ids (default:
-all `execution_times_task_*.feather`) from the benchmark embeddings output
-dir into `execution_times.feather`, deduplicating on (dataset, method) with
-the last occurrence kept (matches the qmd's overwrite-on-rerun semantics).
-Runs on the login node after the benchmark arrays complete.
+Concatenates the per-task logs matching the given (label x dataset) cross
+product (labels are the benchmark method names or 'trans'/'zeroimp'
+analyses; each log file is `execution_times_<label>_<ds>.feather`) from the
+benchmark embeddings output dir into `execution_times.feather`, deduplicating
+on (dataset, method) with the last occurrence kept (matches the qmd's
+overwrite-on-rerun semantics). Runs on the login node after the benchmark
+arrays complete.
 
-Scoping to job ids keeps stale logs from previous failed runs out of the
-merge; `--existing-log` preserves the NAS log across partial runs (e.g.
-`--ds_name _debug`), so a subset run extends the full log instead of
-overwriting it. Per-task log deletion is `--cleanup` (default on); the
-submit script passes `--no-cleanup` and deletes the logs itself only after
-the NAS rsync has succeeded.
+Scoping to the run's label x dataset cross product keeps stale logs from
+previous failed runs out of the merge; `--existing-log` preserves the NAS log
+across partial runs (e.g. `--ds_name _debug`), so a subset run extends the
+full log instead of overwriting it. Per-task log deletion is `--cleanup`
+(default on); the submit script passes `--no-cleanup` and deletes the logs
+itself only after the NAS rsync has succeeded.
 
 Usage:
     python 1.1.2_merge_execution_times.py [--output_dir <dir>]
-        [--job_ids <id>...] [--existing-log <path>] [--no-cleanup]
+        [--labels <name>... --datasets <ds>...] [--existing-log <path>]
+        [--no-cleanup]
 """
 
 import argparse
@@ -41,12 +44,19 @@ def main():
              "(default: benchmark/embeddings)",
     )
     parser.add_argument(
-        "--job_ids",
+        "--labels",
         nargs="+",
-        type=int,
         default=None,
-        help="Array job ids whose per-task logs (execution_times_task_"
-             "<jobid>_*.feather) to merge (default: all task logs)",
+        help="Method/analysis labels whose per-task logs "
+             "(execution_times_<label>_<ds>.feather) to merge "
+             "(default: all task logs)",
+    )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        help="Dataset names to merge logs for, crossed with --labels "
+             "(default: all datasets)",
     )
     parser.add_argument(
         "--existing-log",
@@ -69,21 +79,35 @@ def main():
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
-    if args.job_ids is not None:
+    if args.datasets is not None and args.labels is None:
+        parser.error("--datasets requires --labels")
+    if args.labels is not None:
         task_logs = []
-        for job_id in sorted(set(args.job_ids)):
-            task_logs.extend(
-                sorted(glob.glob(str(output_dir / f"execution_times_task_{job_id}_*.feather")))
-            )
+        for label in args.labels:
+            if args.datasets is not None:
+                for ds in args.datasets:
+                    task_logs.extend(
+                        sorted(
+                            glob.glob(
+                                str(output_dir / f"execution_times_{label}_{ds}.feather")
+                            )
+                        )
+                    )
+            else:
+                task_logs.extend(
+                    sorted(glob.glob(str(output_dir / f"execution_times_{label}_*.feather")))
+                )
         task_logs = sorted(set(task_logs))
     else:
-        task_logs = sorted(glob.glob(str(output_dir / "execution_times_task_*.feather")))
+        # Per-task logs are execution_times_<label>_<ds>.feather; the merged
+        # execution_times.feather has no "_" suffix and is never matched.
+        task_logs = sorted(glob.glob(str(output_dir / "execution_times_*.feather")))
 
     out_path = output_dir / "execution_times.feather"
 
     if not task_logs:
         print(f"WARNING: No per-task execution logs found in {output_dir} "
-              f"for the requested job ids; nothing new to merge.")
+              f"for the requested labels/datasets; nothing new to merge.")
         if args.existing_log and os.path.exists(args.existing_log):
             existing = pd.read_feather(args.existing_log)
             existing.reset_index(drop=True).to_feather(out_path)

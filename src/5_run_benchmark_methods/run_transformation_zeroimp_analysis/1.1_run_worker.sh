@@ -47,10 +47,11 @@ echo "Task ${SLURM_ARRAY_TASK_ID}: ANALYSIS=${ANALYSIS}, DS_NAME=${DS_NAME}"
 
 OUT_DIR="${HPC_SCRATCH_DIR}/benchmark/embeddings"
 mkdir -p "${OUT_DIR}"
-# Log name carries the array JOB id: the trans/zeroimp arrays run
-# concurrently and both use task ids 1..N — without the job id they would
-# read-modify-write the same file. The merge script globs per job id.
-LOG_FILE="${OUT_DIR}/execution_times_task_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.feather"
+# Log name is deterministic per (ANALYSIS, DS_NAME): the trans and zeroimp
+# arrays each have a distinct ANALYSIS, so there is no read-modify-write
+# collision, and re-runs overwrite the same file. The merge script globs
+# the (analysis x dataset) cross product.
+LOG_FILE="${OUT_DIR}/execution_times_${ANALYSIS}_${DS_NAME}.feather"
 
 # FORCE_BENCHMARK is exported by 1_submit_hpc_array.sh (--force); forward it
 # to the R scripts so existing outputs are recomputed.

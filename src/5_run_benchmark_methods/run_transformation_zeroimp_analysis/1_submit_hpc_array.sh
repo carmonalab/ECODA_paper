@@ -144,4 +144,5 @@ for JOB_ID in "${ARRAY_JOB_IDS[@]}"; do
   benchmark_wait_for_array "${JOB_ID}" "analysis"
 done
 
-benchmark_merge_sync_cleanup "${ARRAY_JOB_IDS[@]}"
+# Labels for the exec-log merge = the analyses (trans/zeroimp).
+benchmark_merge_sync_cleanup "${ANALYSES[@]}"

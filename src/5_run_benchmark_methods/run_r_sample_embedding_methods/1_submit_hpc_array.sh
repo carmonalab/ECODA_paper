@@ -29,8 +29,8 @@ set -euo pipefail
 # pseudobulk is requested without prepare_pseudobulk it is auto-prepended.
 # After all arrays complete the shared merge/sync/cleanup tail runs (NAS
 # reachability check -> RDS integrity sidecar -> fail-closed sacct gate ->
-# merge per-task exec logs -> sync to NAS -> only then delete this run's
-# per-task logs) — see benchmark_submit_common.sh.
+# merge per-task exec logs -> sync to NAS -> only then delete per-task
+# logs) — see benchmark_submit_common.sh.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../slurm_config.sh"
@@ -224,10 +224,6 @@ for JOB_ID in "${ARRAY_JOB_IDS[@]}"; do
   benchmark_wait_for_array "${JOB_ID}" "benchmark"
 done
 
-ALL_JOB_IDS=()
-if [[ -n "${PREP_JOB_ID}" ]]; then
-  ALL_JOB_IDS+=("${PREP_JOB_ID}")
-fi
-ALL_JOB_IDS+=("${ARRAY_JOB_IDS[@]}")
-
-benchmark_merge_sync_cleanup "${ALL_JOB_IDS[@]}"
+# Labels for the exec-log merge = the submitted methods (includes the
+# auto-prepended prepare_pseudobulk, whose worker also writes a per-task log).
+benchmark_merge_sync_cleanup "${METHODS[@]}"

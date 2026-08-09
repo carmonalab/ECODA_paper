@@ -20,15 +20,17 @@
 #       terminal, then runs a fail-closed sacct gate (every state row must be
 #       COMPLETED; aborts without syncing on any non-COMPLETED state or empty
 #       sacct output).
-#   benchmark_merge_sync_cleanup <job_ids...>
+#   benchmark_merge_sync_cleanup <labels...>
 #       NAS reachability check FIRST (fail before any destructive merge
 #       work), then writes the RDS integrity sidecar (benchmark/checksums.md5
 #       over results/, pseudobulks/, gloscope_dists/ — verified by the
 #       notebook's load_hpc_benchmark_results() before readRDS), merges the
 #       per-task exec logs via 1.1.2_merge_execution_times.py (--no-cleanup,
-#       --job_ids-scoped, --existing-log NAS continuity), rsyncs
-#       ${HPC_SCRATCH_DIR}/benchmark/ -> ${NAS_TARGET_DIR}/benchmark/, and
-#       only then deletes this run's per-task logs.
+#       --labels/--datasets-scoped over DATASET_NAMES, --existing-log NAS
+#       continuity), rsyncs ${HPC_SCRATCH_DIR}/benchmark/ ->
+#       ${NAS_TARGET_DIR}/benchmark/, and only then deletes this run's
+#       per-task logs (scoped to the run's label x dataset cross product,
+#       plus a separate legacy execution_times_task_* sweep).
 # ============================================================================
 
 # Path to the shared exec-log merge script, resolved from THIS file's location
@@ -109,7 +111,7 @@ benchmark_wait_for_array() {
 # NAS check -> RDS integrity sidecar -> merge exec logs -> rsync -> cleanup
 # ---------------------------------------------------------------------------
 benchmark_merge_sync_cleanup() {
-  local JOB_IDS=("$@")
+  local LABELS=("$@")
 
   # NAS must be reachable BEFORE the merge: the merge with --no-cleanup keeps
   # the per-task logs until after the rsync, but a merge-then-fail would
@@ -139,13 +141,16 @@ benchmark_merge_sync_cleanup() {
 
   echo "All tasks completed successfully. Merging execution-time logs..."
   # --no-cleanup: per-task logs are deleted only AFTER the rsync below
-  # succeeds. --job_ids scopes the merge to THIS run's arrays (task ids are
-  # per-array, job ids are unique) so stale logs from previous failed runs
-  # never leak in. --existing-log preserves the NAS log across partial
-  # (e.g. --ds_name _debug) runs instead of overwriting it with subset rows.
+  # succeeds. --labels x --datasets scopes the merge to THIS run's
+  # (method/analysis x dataset) cross product so stale logs from previous
+  # failed runs never leak in. --existing-log preserves the NAS log across
+  # partial (e.g. --ds_name _debug) runs instead of overwriting it with
+  # subset rows. DATASET_NAMES is filled by benchmark_resolve_datasets
+  # (called before this function by every submitter).
   local MERGE_ARGS=(--output_dir "${HPC_SCRATCH_DIR}/benchmark/embeddings"
                     --no-cleanup
-                    --job_ids "${JOB_IDS[@]}")
+                    --labels "${LABELS[@]}"
+                    --datasets "${DATASET_NAMES[@]}")
   # The rsync below copies ${HPC_SCRATCH_DIR}/benchmark/ wholesale, so the
   # merged log lives at benchmark/embeddings/execution_times.feather.
   local EXISTING_LOG="${NAS_TARGET_DIR}/benchmark/embeddings/execution_times.feather"
@@ -159,8 +164,16 @@ benchmark_merge_sync_cleanup() {
   echo "Results synchronized to ${NAS_TARGET_DIR}/benchmark/"
 
   # Per-task logs may be deleted only now that the sync has succeeded.
-  for JOB_ID in "${JOB_IDS[@]}"; do
-      rm -f "${HPC_SCRATCH_DIR}/benchmark/embeddings"/execution_times_task_${JOB_ID}_*.feather
+  # Scoped to THIS run's (label x dataset) cross product so an overlapping
+  # submission's not-yet-merged logs are never deleted; the legacy
+  # execution_times_task_* sweep is a separate glob (no current worker
+  # produces that naming, so it can only hit stale files). Neither glob
+  # matches the merged execution_times.feather (no "_" suffix).
+  for LABEL in "${LABELS[@]}"; do
+    for DS in "${DATASET_NAMES[@]}"; do
+      rm -f "${HPC_SCRATCH_DIR}/benchmark/embeddings"/"execution_times_${LABEL}_${DS}.feather"
+    done
   done
-  echo "Deleted per-task execution-time logs for job ids: ${JOB_IDS[*]}"
+  rm -f "${HPC_SCRATCH_DIR}/benchmark/embeddings"/execution_times_task_*.feather
+  echo "Deleted per-task execution-time logs."
 }

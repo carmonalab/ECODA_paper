@@ -43,10 +43,11 @@ echo "Task ${SLURM_ARRAY_TASK_ID}: METHOD=${METHOD}, DS_NAME=${DS_NAME}"
 
 OUT_DIR="${HPC_SCRATCH_DIR}/benchmark/embeddings"
 mkdir -p "${OUT_DIR}"
-# Log name carries the array JOB id: the mrvi/scpoli/pilot arrays run
-# concurrently and all use task ids 1..N — without the job id they would
-# read-modify-write the same file. The merge script globs per job id.
-LOG_FILE="${OUT_DIR}/execution_times_task_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.feather"
+# Log name is deterministic per (METHOD, DS_NAME): concurrent per-method
+# arrays each have a distinct METHOD, so there is no read-modify-write
+# collision, and re-runs overwrite the same file. The merge script globs
+# the (method x dataset) cross product.
+LOG_FILE="${OUT_DIR}/execution_times_${METHOD}_${DS_NAME}.feather"
 
 # FORCE_BENCHMARK is exported by 1_submit_hpc_array.sh (--force); forward it
 # to 1.1.1_benchmark_methods_py.py so existing feathers are recomputed.

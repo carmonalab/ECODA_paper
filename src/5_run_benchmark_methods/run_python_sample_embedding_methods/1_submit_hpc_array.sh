@@ -180,4 +180,5 @@ for JOB_ID in "${ARRAY_JOB_IDS[@]}"; do
   benchmark_wait_for_array "${JOB_ID}" "benchmark"
 done
 
-benchmark_merge_sync_cleanup "${ARRAY_JOB_IDS[@]}"
+# Labels for the exec-log merge = the submitted methods.
+benchmark_merge_sync_cleanup "${METHODS[@]}"

@@ -669,8 +669,9 @@ run_benchmark_analysis <- function(
 #
 # Each driver computes its combos, times every combo with exec_time(),
 # appends the numeric-seconds exec_time to each result bundle, handles the
-# per-combo cache files (<ds>_<method>_<combo>.rds, skip-if-exists unless
-# --force) and writes per-combo exec-log rows. Returns a named list of
+# per-combo cache files (<ds>_<combo>.rds, skip-if-exists unless
+# --force; combo names are method-prefixed, so no method infix) and writes
+# per-combo exec-log rows. Returns a named list of
 # result bundles (legacy result names, minus the GloScope _sqrtmat suffix).
 # ============================================================
 
@@ -769,14 +770,14 @@ run_gloscope_hpc <- function(
     nm <- paste0("GloScope_hvg", n_hvg, "_pcadims", n_pca_dims)
     bundle_file <- file.path(
       results_dir,
-      paste0(ds, "_gloscope_", nm, ".rds")
+      paste0(ds, "_", nm, ".rds")
     )
     if (file.exists(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's job ids).
+      # scoped to the current run's labels x datasets).
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file)
       }
@@ -847,14 +848,14 @@ run_mofa_hpc <- function(
 
     bundle_file <- file.path(
       results_dir,
-      paste0(ds, "_mofa_", nm, ".rds")
+      paste0(ds, "_", nm, ".rds")
     )
     if (file.exists(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's job ids).
+      # scoped to the current run's labels x datasets).
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file)
       }
@@ -930,13 +931,13 @@ run_pseudobulk_hpc <- function(
     if (is.null(pb_variant)) {
       stop("Pseudobulk variant '", plain_combos[[nm]], "' missing for ", nm)
     }
-    bundle_file <- file.path(results_dir, paste0(ds, "_pseudobulk_", nm, ".rds"))
+    bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (file.exists(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's job ids).
+      # scoped to the current run's labels x datasets).
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file)
       }
@@ -958,13 +959,13 @@ run_pseudobulk_hpc <- function(
   }
   for (nm in pca_combos) {
     n_pca_dims <- as.integer(sub("Pseudobulk_(\\d+)_PCA_dims", "\\1", nm))
-    bundle_file <- file.path(results_dir, paste0(ds, "_pseudobulk_", nm, ".rds"))
+    bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (file.exists(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's job ids).
+      # scoped to the current run's labels x datasets).
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file)
       }
@@ -990,13 +991,13 @@ run_pseudobulk_hpc <- function(
       warning(nm, " skipped: ct column is null for this dataset")
       next
     }
-    bundle_file <- file.path(results_dir, paste0(ds, "_pseudobulk_", nm, ".rds"))
+    bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (file.exists(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's job ids).
+      # scoped to the current run's labels x datasets).
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file)
       }
@@ -1056,13 +1057,13 @@ run_scitd_hpc <- function(
       stop("HVG set 'hvg", n_hvg, "' missing for ", nm)
     }
 
-    bundle_file <- file.path(results_dir, paste0(ds, "_scitd_", nm, ".rds"))
+    bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (file.exists(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's job ids).
+      # scoped to the current run's labels x datasets).
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file)
       }
