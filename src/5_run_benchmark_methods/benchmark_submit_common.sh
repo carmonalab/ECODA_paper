@@ -15,9 +15,11 @@
 #       skipped unless explicitly requested). Errors out on unknown --ds_name
 #       or zero datasets.
 #   benchmark_wait_for_array <job_id> <label>
-#       Polls squeue until the array is gone, then runs a fail-closed sacct
-#       gate (every state row must be COMPLETED; aborts without syncing on
-#       any non-COMPLETED state or empty sacct output).
+#       Blocks on `scontrol wait <job_id>` (event-driven; exit code ignored),
+#       then polls sacct (bounded, 5s interval) until every state row is
+#       terminal, then runs a fail-closed sacct gate (every state row must be
+#       COMPLETED; aborts without syncing on any non-COMPLETED state or empty
+#       sacct output).
 #   benchmark_merge_sync_cleanup <job_ids...>
 #       NAS reachability check FIRST (fail before any destructive merge
 #       work), then writes the RDS integrity sidecar (benchmark/checksums.md5
@@ -70,13 +72,25 @@ benchmark_wait_for_array() {
   local JOB_ID="$1"
   local LABEL="$2"
   echo "=== Monitoring ${LABEL} array ${JOB_ID} ==="
-  while squeue -u "$USER" 2>/dev/null | grep -q "${JOB_ID}"; do
-    sleep 60
+  # Event-driven block until the job leaves the scheduler (no polling).
+  # Exit code deliberately ignored: the fail-closed sacct gate below is the
+  # authoritative check (covers cancellation, failure, purged controller
+  # records).
+  scontrol wait "${JOB_ID}" > /dev/null 2>&1 || true
+  # sacct may lag a few seconds behind the job leaving the scheduler; poll
+  # (bounded) until every state row is terminal instead of a blind fixed sleep.
+  local TAIL_ITER=0
+  local STATES=""
+  while (( TAIL_ITER < 60 )); do  # max 5 min at 5s
+    STATES="$(sacct -j "${JOB_ID}" --format=State -n 2>/dev/null || true)"
+    if [[ -n "${STATES//[[:space:]]/}" ]] \
+       && ! grep -qE 'PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING' <<< "${STATES}"; then
+      break
+    fi
+    sleep 5
+    TAIL_ITER=$((TAIL_ITER + 1))
   done
-  # Give sacct a moment to record final states (mirrors 1_submit_hpc.sh)
-  sleep 30
   echo "${LABEL} array ${JOB_ID} finished. Checking task states..."
-  local STATES
   STATES="$(sacct -j "${JOB_ID}" --format=State -n 2>/dev/null || true)"
   if [[ -z "${STATES//[[:space:]]/}" ]]; then
     echo "ERROR: sacct returned no states for Array Job ${JOB_ID}; NOT syncing to NAS."

@@ -121,12 +121,23 @@ echo "Array Job ID allocated: ${ARRAY_JOB_ID}"
 # ==============================================================================
 echo "Monitoring Array Job ${ARRAY_JOB_ID} for completion..."
 
-while squeue -u "$USER" 2>/dev/null | grep -q "${ARRAY_JOB_ID}"; do
-    sleep 60
-done
+# Event-driven block until the job leaves the scheduler (no polling).
+# Exit code deliberately ignored: the fail-closed sacct gate below is the
+# authoritative check (covers cancellation, failure, purged controller records).
+scontrol wait "${ARRAY_JOB_ID}" > /dev/null 2>&1 || true
 
-# Give sacct a moment to record final states (mirrors 1_submit_hpc.sh)
-sleep 30
+# sacct may lag a few seconds behind the job leaving the scheduler; poll
+# (bounded) until every state row is terminal instead of a blind fixed sleep.
+TAIL_ITER=0
+while (( TAIL_ITER < 60 )); do  # max 5 min at 5s
+    STATES="$(sacct -j "${ARRAY_JOB_ID}" --format=State -n 2>/dev/null || true)"
+    if [[ -n "${STATES//[[:space:]]/}" ]] \
+       && ! grep -qE 'PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING' <<< "${STATES}"; then
+        break
+    fi
+    sleep 5
+    TAIL_ITER=$((TAIL_ITER + 1))
+done
 
 echo "Array Job ${ARRAY_JOB_ID} finished. Checking task states..."
 STATES="$(sacct -j "${ARRAY_JOB_ID}" --format=State -n 2>/dev/null || true)"

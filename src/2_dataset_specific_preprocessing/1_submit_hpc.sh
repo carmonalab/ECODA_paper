@@ -45,22 +45,30 @@ done
 
 echo "Submitted jobs: ${JOB_IDS[*]}"
 
-# Wait for all jobs to leave the queue
-while :; do
-  pending=0
-  for job_id in "${JOB_IDS[@]}"; do
-    if squeue -u "$USER" -j "${job_id}" -h -o "%i" 2>/dev/null | grep -q "${job_id}"; then
-      pending=1
-    fi
-  done
-  if [[ ${pending} -eq 0 ]]; then
-    break
-  fi
-  sleep 60
+# Wait for all jobs to leave the queue (event-driven; exit codes ignored —
+# the per-job sacct COMPLETED check below is the authoritative gate).
+for job_id in "${JOB_IDS[@]}"; do
+  scontrol wait "${job_id}" > /dev/null 2>&1 || true
 done
 
-# Give sacct a moment to record final states
-sleep 30
+# sacct may lag a few seconds behind jobs leaving the scheduler; poll
+# (bounded) until every job's master state is terminal instead of a blind
+# fixed sleep (same -X master-only granularity as the COMPLETED check below).
+TAIL_ITER=0
+while (( TAIL_ITER < 60 )); do  # max 5 min at 5s
+  settled=1
+  for job_id in "${JOB_IDS[@]}"; do
+    state="$(sacct -j "${job_id}" -X -n -o "State" 2>/dev/null | tr -d ' \n' || true)"
+    if [[ -z "${state}" ]] || [[ "${state}" =~ PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING ]]; then
+      settled=0
+    fi
+  done
+  if [[ ${settled} -eq 1 ]]; then
+    break
+  fi
+  sleep 5
+  TAIL_ITER=$((TAIL_ITER + 1))
+done
 
 echo "=== Job summary ==="
 sacct -j "$(IFS=,; echo "${JOB_IDS[*]}")" --format=JobID,JobName,State,ExitCode
