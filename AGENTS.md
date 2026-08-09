@@ -40,6 +40,12 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
   Note: `--exclude-dir` only prunes dirs found during traversal — the positional roots
   (`src`, `notebooks`, `docs`) are always searched.
 
+## Documentation organization
+- Project Summary & Citation → README.md (primary home)
+- Pipeline Call Graphs & HPC Layout → docs/ARCHITECTURE.md (keep here; remove detailed file-by-file logic trees from AGENTS.md)
+- Agent Guardrails & Domain Terms → AGENTS.md (high-level rules; reference ARCHITECTURE.md for step details)
+- Pending Tasks & Method Extensions → TODO.md (centralize planned conversions, script additions, reviewer extensions)
+
 
 ## Task Completion Workflow
 
@@ -107,7 +113,7 @@ Four-stage end-to-end pipeline; file-level details live in docs/ARCHITECTURE.md.
     - `src/5_run_benchmark_methods/run_python_sample_embedding_methods`
     - `src/5_run_benchmark_methods/run_r_sample_embedding_methods`
     - `src/5_run_benchmark_methods/run_transformation_zeroimp_analysis`
-- The blocking submit-script tails (monitor → sacct gate → NAS rsync) are login-bound by design (NAS is login-node-only): an SSH drop never kills a running pipeline. Disconnect recovery = re-run the same command with `--sync-only <job-id>` (repeat the original `--ds_name`/`--methods`/`--analysis` flags) — never a bare re-submit; unknown/purged ids fail closed (exit 1, no sync). Sync-status emails are best-effort via the login node's mail CLI (`src/utils/bash/sync_status_email.sh`, `notify_sync_status`): "synced to NAS" / "NOT synced — reason", skipped silently if no mailx/mail/sendmail exists.
+- The blocking submit-script tails (monitor → sacct gate → NAS rsync) are login-bound by design (NAS is login-node-only): an SSH drop never kills a running pipeline. Disconnect recovery = re-run the same command with `--sync-only <job-id>` (repeat the original `--ds_name`/`--methods`/`--analysis` flags) — never a bare re-submit; unknown/purged ids fail closed (exit 1, no sync). Sync-status emails are best-effort via the login node's mail CLI (`src/utils/bash/sync_status_email.sh`, `notify_sync_status`): "synced to NAS" / "NOT synced — reason", skipped silently if no mailx/mail/sendmail exists. `--sync-only` is supported by `1_submit_hpc.sh`, `3_scrnaseq_preprocessing/1_submit_hpc_array.sh`, `4_cell_type_annotation/2_submit_hpc_array.sh`, and the three benchmark submitters (one comma-separated id per submitted array). To receive the emails, `export USER_EMAIL="you@example.com"` in the login-node shell profile (`~/.bashrc`); sbatch propagates it — without it, Slurm falls back to `${USER}@unige.ch`, which may be non-deliverable.
 - `slurm_config.sh` is the HPC config file, used by all bash scripts, containing paths to the HPC cluster and other settings.
 - pixi is a user-space binary on HPC at `~/.pixi/bin/pixi` (no module exists); the `py-cuda13` env lives at `.pixi/envs/py-cuda13/`. First-time env setup (pixi binary + `pixi install --environment py-cuda13` + `pixi run -e py-cuda13 setup`) runs via the sbatch job in README.md (installs are okay to run on the login node).
 - **Worker environment invariants** (details in ARCHITECTURE.md):

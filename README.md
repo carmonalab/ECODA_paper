@@ -115,25 +115,6 @@ Running the pipeline:
 ./src/4_cell_type_annotation/3_submit_merge.sh             # merge annotations back to h5ad + sync to NAS
 ```
 
-**SSH disconnects are safe:** the tails of the submit scripts (monitoring,
-sacct gate, NAS rsync) run on the login node by design — the NAS is
-login-node-only, so the sync cannot be a Slurm job. If your SSH connection
-drops, the pipeline keeps running on the HPC; on reconnect, re-run the same
-command with `--sync-only <job-id>` (same flags as the original run, e.g.
-`--ds_name _debug`) to skip submission, re-check the job, and sync without
-re-running any compute. This works for `1_submit_hpc.sh` (stage-2
-dispatcher), `3_scrnaseq_preprocessing/1_submit_hpc_array.sh`,
-`4_cell_type_annotation/2_submit_hpc_array.sh`, and the three benchmark
-submitters (one comma-separated id per submitted array). Unknown/purged ids
-fail closed (exit 1, no sync). You receive Slurm job emails
-(`--mail-user`) plus a best-effort script email "synced to NAS" / "NOT
-synced — reason" sent by the login node's mail CLI (`mailx`/`mail`/`sendmail`;
-silently skipped if none exists — the script output remains the source of
-truth). To receive these emails, export your address in the HPC shell profile
-(e.g. `export USER_EMAIL="you@example.com"` in `~/.bashrc` on the login node;
-sbatch propagates it to submit scripts and workers). Without it, Slurm falls
-back to `${USER}@unige.ch`, which may be non-deliverable.
-
 - **Benchmark methods** (`src/5_run_benchmark_methods/`):
   - **Python methods** (`run_python_sample_embedding_methods/`): MrVI, scPoli
     (GPU), PILOT (CPU).
