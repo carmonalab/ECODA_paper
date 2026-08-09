@@ -106,6 +106,17 @@ def write_annotation_union(source_path, union_path, sample_col):
                       "the counts source (preprocessed views should always "
                       "carry a counts layer).")
                 counts = src["X"]
+            # Fail closed on non-CSR sources: preprocessed views are CSR by
+            # construction (1.1.1_preprocess.py), so anything else means the
+            # file was replaced/regenerated elsewhere. Copying a CSC layout
+            # under the csr_matrix encoding-type below would silently corrupt
+            # the union (the nnz/shape self-check cannot catch it).
+            counts_enc = str(counts.attrs.get("encoding-type"))
+            if counts_enc != "csr_matrix":
+                raise RuntimeError(
+                    f"{source_path.name}: counts source encoding-type is "
+                    f"'{counts_enc}', expected 'csr_matrix'."
+                )
             x = dst.create_group("X")
             x.attrs["encoding-type"] = "csr_matrix"
             x.attrs["encoding-version"] = "0.1.0"
