@@ -615,6 +615,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/0d/9c/15595ef2944c7f6c6740dc2501409972082ef1d512f9a9f9b24e091207a2/harmonypy-2.0.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/12/ff/94bc1aea7cba8bd6559469732408d6699c71077a495068141fcf9eb1f0dc/pydeseq2-0.5.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/14/57/cadae518579a25ce6f68e71a9570c7063fc23b26d7e8c51f57f777713b85/scvi_tools-1.5.0.post1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/15/83/b4617dfea3c55b3ad810ab5f9e5b1874b9248d8fcbbe2747111e3b217c5e/mofapy2-0.7.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/1b/d7/9f8c46f619b9e38a60fb453d67c1d522f3be5cb8ab8476e100eb50750443/gseapy-1.3.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/23/cd/066e86230ae37ed0be70aae89aabf03ca8d9f39c8aea0dec8029455b5540/opt_einsum-3.4.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/24/18/d8544811ab076f876c4892b3714f5b0dad335e1dc33aef826df431b8325d/plotly-6.9.0-py3-none-any.whl
@@ -1322,6 +1323,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/12/ff/94bc1aea7cba8bd6559469732408d6699c71077a495068141fcf9eb1f0dc/pydeseq2-0.5.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/14/57/cadae518579a25ce6f68e71a9570c7063fc23b26d7e8c51f57f777713b85/scvi_tools-1.5.0.post1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/14/f6/109a66238f204d5c27955a1ca9be46352de9bbcaf8e9106405d4a58ca92b/pot-0.9.7-cp313-cp313-macosx_11_0_arm64.whl
+      - pypi: https://files.pythonhosted.org/packages/15/83/b4617dfea3c55b3ad810ab5f9e5b1874b9248d8fcbbe2747111e3b217c5e/mofapy2-0.7.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/19/d1/b020cb524513496d046a9711ec466c0fdd479b722c09ceb1162c138d0db7/shap-0.52.0-cp312-abi3-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/1d/7d/669a9c9a12bc6224645d5fa6f87108819a46879cd08ae29f2bbfedbe9d5d/harmonypy-2.0.0-cp313-cp313-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/23/cd/066e86230ae37ed0be70aae89aabf03ca8d9f39c8aea0dec8029455b5540/opt_einsum-3.4.0-py3-none-any.whl
@@ -2004,6 +2006,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/0d/9c/15595ef2944c7f6c6740dc2501409972082ef1d512f9a9f9b24e091207a2/harmonypy-2.0.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/12/ff/94bc1aea7cba8bd6559469732408d6699c71077a495068141fcf9eb1f0dc/pydeseq2-0.5.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/14/57/cadae518579a25ce6f68e71a9570c7063fc23b26d7e8c51f57f777713b85/scvi_tools-1.5.0.post1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/15/83/b4617dfea3c55b3ad810ab5f9e5b1874b9248d8fcbbe2747111e3b217c5e/mofapy2-0.7.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/1b/d7/9f8c46f619b9e38a60fb453d67c1d522f3be5cb8ab8476e100eb50750443/gseapy-1.3.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/1f/13/ee4e00f30e676b66ae65b4f08cb5bcbb8392c03f54f2d5413ea99a5d1c80/nvidia_cufft_cu12-11.3.3.83-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/23/cd/066e86230ae37ed0be70aae89aabf03ca8d9f39c8aea0dec8029455b5540/opt_einsum-3.4.0-py3-none-any.whl
@@ -2724,6 +2727,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/10/17/b448f2265e4927188425c0b09fb943c39b50f7f53fbead644b44ccdf834b/grpcio-1.82.0-cp313-cp313-macosx_11_0_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/12/ff/94bc1aea7cba8bd6559469732408d6699c71077a495068141fcf9eb1f0dc/pydeseq2-0.5.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/14/57/cadae518579a25ce6f68e71a9570c7063fc23b26d7e8c51f57f777713b85/scvi_tools-1.5.0.post1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/15/83/b4617dfea3c55b3ad810ab5f9e5b1874b9248d8fcbbe2747111e3b217c5e/mofapy2-0.7.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/19/d1/b020cb524513496d046a9711ec466c0fdd479b722c09ceb1162c138d0db7/shap-0.52.0-cp312-abi3-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/1d/7d/669a9c9a12bc6224645d5fa6f87108819a46879cd08ae29f2bbfedbe9d5d/harmonypy-2.0.0-cp313-cp313-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/24/99/4772b8e00a136f3e01236de33b0efda31ee7077203ba5967fcc76da94d65/texttable-1.7.0-py2.py3-none-any.whl
@@ -3469,6 +3473,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/11/92/7e3b6ed7f830deea2069be2497c123839114dab565bf2f160924e90a9235/jax_cuda13_plugin-0.10.2-cp313-cp313-manylinux_2_27_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/12/ff/94bc1aea7cba8bd6559469732408d6699c71077a495068141fcf9eb1f0dc/pydeseq2-0.5.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/14/57/cadae518579a25ce6f68e71a9570c7063fc23b26d7e8c51f57f777713b85/scvi_tools-1.5.0.post1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/15/83/b4617dfea3c55b3ad810ab5f9e5b1874b9248d8fcbbe2747111e3b217c5e/mofapy2-0.7.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/1b/d7/9f8c46f619b9e38a60fb453d67c1d522f3be5cb8ab8476e100eb50750443/gseapy-1.3.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/1c/3a/23e46a0919ba5ecf1a864400542a6c78d18c76893a0a77e1856e7033af31/nvidia_cusolver-12.2.6.9-py3-none-manylinux_2_27_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/1f/13/ee4e00f30e676b66ae65b4f08cb5bcbb8392c03f54f2d5413ea99a5d1c80/nvidia_cufft_cu12-11.3.3.83-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
@@ -4192,6 +4197,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/10/17/b448f2265e4927188425c0b09fb943c39b50f7f53fbead644b44ccdf834b/grpcio-1.82.0-cp313-cp313-macosx_11_0_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/12/ff/94bc1aea7cba8bd6559469732408d6699c71077a495068141fcf9eb1f0dc/pydeseq2-0.5.4-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/14/57/cadae518579a25ce6f68e71a9570c7063fc23b26d7e8c51f57f777713b85/scvi_tools-1.5.0.post1-py3-none-any.whl
+      - pypi: https://files.pythonhosted.org/packages/15/83/b4617dfea3c55b3ad810ab5f9e5b1874b9248d8fcbbe2747111e3b217c5e/mofapy2-0.7.3-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/19/d1/b020cb524513496d046a9711ec466c0fdd479b722c09ceb1162c138d0db7/shap-0.52.0-cp312-abi3-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/1d/7d/669a9c9a12bc6224645d5fa6f87108819a46879cd08ae29f2bbfedbe9d5d/harmonypy-2.0.0-cp313-cp313-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/23/cd/066e86230ae37ed0be70aae89aabf03ca8d9f39c8aea0dec8029455b5540/opt_einsum-3.4.0-py3-none-any.whl
@@ -23230,6 +23236,17 @@ packages:
   - matplotlib ; extra == 'all'
   - geomloss ; extra == 'all'
   requires_python: '>=3.7'
+- pypi: https://files.pythonhosted.org/packages/15/83/b4617dfea3c55b3ad810ab5f9e5b1874b9248d8fcbbe2747111e3b217c5e/mofapy2-0.7.3-py3-none-any.whl
+  name: mofapy2
+  version: 0.7.3
+  sha256: 2b17804b044d67e91d991654086634dbe84866c535038460dc704ba50f8b0d82
+  requires_dist:
+  - h5py>=3,<4
+  - numpy
+  - pandas
+  - scikit-learn>=1,<2
+  - scipy>=1,<2
+  requires_python: '>=3.8,<4.0'
 - pypi: https://files.pythonhosted.org/packages/19/d1/b020cb524513496d046a9711ec466c0fdd479b722c09ceb1162c138d0db7/shap-0.52.0-cp312-abi3-macosx_11_0_arm64.whl
   name: shap
   version: 0.52.0
