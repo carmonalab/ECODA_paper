@@ -8,12 +8,20 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # R interop — convert .rds to cached raw .h5ad
 # ---------------------------------------------------------------------------
-# load_all_functions.R sources its module files via repo-relative paths, so pin
-# the embedded R working directory to PROJECT_ROOT at import time. All R
-# interop calls below use absolute paths; this makes callers CWD-independent.
+# The R import is pinned to PROJECT_ROOT at import time (setwd) so the
+# repo-relative source() below works regardless of caller CWD. All R interop
+# calls use absolute paths; this makes callers CWD-independent.
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ro.r('setwd')(str(PROJECT_ROOT))
-ro.r('source("src/utils/load_all_functions.R")')
+ro.r('''
+# Lighter than load_all_functions.R: preprocessing only converts .rds -> h5ad
+# (readRDS -> create_clean_seuratv5_object -> write_h5ad); the benchmark-only
+# packages (HiTME, MOFA2, scITD, GloScope, scECODA, ...) must not be pulled in
+# (same pattern as the annotation worker 2.1.1_process_chunk.R).
+source("src/utils/seurat_utils.R")
+library(Seurat)
+library(anndataR)
+''')
 ro.r('''
 convert_rds_to_raw_h5ad <- function(input_path, output_path) {
   seurat <- readRDS(input_path)

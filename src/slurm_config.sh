@@ -50,6 +50,16 @@ export PATH="${PROJECT_ROOT}/.pixi/envs/py-cuda13/bin:${PATH}"
 module load GCCcore/12.2.0 >/dev/null 2>&1 || true
 module load jq/1.6 >/dev/null 2>&1 || true
 
+# --- R dynamic library resolution (rpy2 workers) ---
+# R package .so files built by `pixi run setup` resolve their dependencies
+# via LD_LIBRARY_PATH, which pixi's activation sets automatically but bare
+# ${PYTHON_BIN} execution (rpy2 workers, e.g. 1.1.1_preprocess.py) does not.
+# Without the env lib dir first, dyn.load() resolves against module (GCCcore)
+# or node-system libs, and packages built with newer conda toolchains fail to
+# attach on node images with older libstdc++/GLIBCXX (preprocessing array
+# 4294806). Must come AFTER the module loads so the env lib dir wins.
+export LD_LIBRARY_PATH="${PROJECT_ROOT}/.pixi/envs/py-cuda13/lib:${LD_LIBRARY_PATH:-}"
+
 # --- reticulate python (R workers) ---
 # Pinned explicitly so R (2.1.1_process_chunk.R, imports.R) always uses the
 # py-cuda13 python: reticulate's own discovery may otherwise pick a stray

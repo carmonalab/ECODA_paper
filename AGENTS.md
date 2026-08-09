@@ -32,7 +32,10 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
   for login-node execution. Keep this block in any new sbatch-submitted script.
 - `slurm_config.sh` prepends the py-cuda13 env bin
   (`.pixi/envs/py-cuda13/bin`) to `PATH` so rpy2 (`src/utils/py/preprocess_utils.py`)
-  finds R/Rscript when workers invoke `${PYTHON_BIN}` directly.
+  finds R/Rscript when workers invoke `${PYTHON_BIN}` directly, and exports
+  `LD_LIBRARY_PATH` with the env lib dir first (after the module loads) so R
+  package `.so` deps resolve against the conda toolchain, mirroring what
+  `pixi run` does automatically for `PIXI_RSCRIPT` workers.
 - Search code with the built-in Grep/semantic-search tools or `git grep` (tracked files
   only). Never run raw `grep -rn "..." .` — it scans the gitignored 97 GB `data/` and
   `.pixi/` and will time out. If plain `grep` must be used, scope the path and exclude
