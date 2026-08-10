@@ -63,23 +63,38 @@ The **scECODA** R package for scalable cohort-level analysis is available at
 3. Setup your environment:
     ```bash
     cd ~/ECODA_paper
-
-    # Local / macOS / no GPU (Default environment):
-    # pixi install && pixi run setup
-
-    # HPC / CUDA 13 GPU available (py-cuda13 environment):
-    pixi install -e py-cuda13 && pixi run -e py-cuda13 setup
     ```
-    **HPC note**: after pulling changes to `pixi.toml`/`pixi.lock` onto the HPC
-    clone, re-run `pixi install -e py-cuda13` on the login node *before*
-    submitting jobs. Concurrent `pixi run` re-syncs from parallel jobs can race
-    (observed: `failed to remove directory ... os error 2`); a serial login-node
-    re-sync avoids this. Use `src/utils/bash/refresh_env.sh` (run inside `tmux`,
-    with no jobs active) — it refuses to run while `squeue -u $USER` is
-    non-empty and the `setup` task verifies the R library integrity
-    (Meta/package.rds + critical packages load). `pixi install` does NOT detect
-    corrupt package files; if a job reports a missing R package, repair with:
+    **HPC (recommended — main focus).** Build the `py-cuda13` environment on a
+    worker node via sbatch (16 cpus / 64 GB / 2 h defaults; overridable, e.g.
+    `sbatch --cpus-per-task=32 --mem=128G ...`). R source packages compile in
+    parallel (`MAKEFLAGS=-jN`), so it is far faster and more robust than a
+    login-node install:
+    ```bash
+    sbatch src/utils/bash/setup_env_sbatch.sh
+    ```
+    Never submit it while other jobs are active or a manual `refresh_env.sh`
+    run is in progress — both entry points serialize on the shared
+    `logs/env_refresh.lock` and refuse to start otherwise. Watch the build
+    with `tail -f logs/setup_env_<jobid>.out`; success prints
+    "R library integrity check OK" then "All critical packages load OK".
+    For small re-runs on the login node: `tmux new -s env-refresh` →
+    `src/utils/bash/refresh_env.sh`. After pulling changes to
+    `pixi.toml`/`pixi.lock` onto the HPC clone, re-sync the env before
+    submitting jobs — concurrent `pixi run` re-syncs from parallel jobs can
+    race (observed: `failed to remove directory ... os error 2`); a serial
+    re-sync avoids this. `pixi install` does NOT detect corrupt package files;
+    if a job reports a missing R package, repair with:
     `rm -rf .pixi/envs/py-cuda13 && pixi install -e py-cuda13 && pixi run -e py-cuda13 setup`.
+
+    **Local macOS (optional — lightweight notebooks only):**
+    ```bash
+    pixi install && pixi run setup
+    ```
+    The first `setup` also compiles the R packages (Seurat, anndataR, ...) from
+    source and takes a while. Only `notebooks/benchmark_analysis.rmd` and
+    `notebooks/batch_effect_analysis.rmd` (which run on precomputed
+    distance-matrix results) are intended to run locally; the heavy pipeline
+    stages are HPC-only.
 
 
 ### Workflow

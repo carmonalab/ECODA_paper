@@ -27,7 +27,34 @@ cd "${PROJECT_ROOT}"
 
 PIXI_BIN="${HOME}/.pixi/bin/pixi"
 
+# --- Lock guard: serialize env mutations (shared with setup_env_sbatch.sh) ---
+# Both entry points write into .pixi/envs/py-cuda13 (conda + R library); the
+# lock (PID + timestamp) is stale if the holding process died or is > 24 h old.
+ENV_LOCK_FILE="${LOGS_DIR}/env_refresh.lock"
+
+acquire_env_lock() {
+  if [[ -f "${ENV_LOCK_FILE}" ]]; then
+    local lock_pid lock_ts now
+    read -r lock_pid lock_ts < "${ENV_LOCK_FILE}" || true
+    now="$(date +%s)"
+    if [[ -n "${lock_pid}" ]] && kill -0 "${lock_pid}" 2>/dev/null && (( now - lock_ts < 86400 )); then
+      echo "ERROR: env lock held by PID ${lock_pid} (acquired at epoch ${lock_ts}) —" >&2
+      echo "       another refresh (refresh_env.sh) or sbatch build (setup_env_sbatch.sh) is running. Refusing to run concurrently." >&2
+      exit 1
+    fi
+    echo "WARNING: stale env lock (PID ${lock_pid:-?}, acquired at epoch ${lock_ts:-?}, dead or > 24 h old) — removing." >&2
+    rm -f "${ENV_LOCK_FILE}"
+  fi
+  echo "$$ $(date +%s)" > "${ENV_LOCK_FILE}"
+  trap 'release_env_lock' EXIT
+}
+
+release_env_lock() {
+  rm -f "${ENV_LOCK_FILE}"
+}
+
 # --- Guard: no active jobs while mutating the env ---------------------------
+acquire_env_lock
 ACTIVE_JOBS="$(squeue -u "${USER}" -h -o "%j" 2>/dev/null || true)"
 if [[ -n "${ACTIVE_JOBS}" ]]; then
   echo "ERROR: active Slurm jobs detected — env refresh must run while no jobs are running" >&2

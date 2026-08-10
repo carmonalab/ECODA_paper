@@ -98,6 +98,11 @@ jax = "*"
 pytorch-cuda = { version = "*" }
 # linux-64-only (no osx-arm64 build); used by datrans() on the HPC workers
 r-robcompositions = "*"
+# Hermetic C/C++/Fortran build toolchain for the R source-package compilation
+# in [tasks.setup]: worker nodes may not have system gcc/make, and conda
+# compilers make R CMD INSTALL node-independent (login node or worker).
+compilers = "*"
+make = "*"
 
 [feature.cuda13.target.linux-64.pypi-dependencies]
 jax = { version = "*", extras = ["cuda13"] }
@@ -119,6 +124,18 @@ py-cuda13 = ["cuda13"]
 cmd = """
 Rscript -e "
   options(timeout = 9999999, repos = c(CRAN = 'https://packagemanager.posit.co/cran/latest'))
+
+  # Parallel source compilation: R CMD INSTALL builds with make; MAKEFLAGS=-jN
+  # compiles translation units in parallel. Without it every Rcpp-heavy package
+  # (Seurat, MOFA2, GloScope, ...) compiles single-threaded and setup takes
+  # 15-30+ min regardless of node cores. Cap at 8 on the shared login node;
+  # override with the R_SETUP_JOBS env var (e.g. 16 on a dedicated worker).
+  setup_jobs <- suppressWarnings(as.integer(Sys.getenv('R_SETUP_JOBS', unset = '')))
+  if (is.na(setup_jobs) || setup_jobs < 1) {
+    setup_jobs <- min(8, max(2, parallel::detectCores() - 1))
+  }
+  Sys.setenv(MAKEFLAGS = paste0('-j', setup_jobs))
+  cat('Using', setup_jobs, 'parallel compile jobs (MAKEFLAGS)')
 
   # Keep pre-compiled conda-forge versions (r-igraph, r-leidenbase, ...) and only install
   # missing packages. Without this, remotes upgrades the whole dependency closure from CRAN

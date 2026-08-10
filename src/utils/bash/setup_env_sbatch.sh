@@ -1,0 +1,126 @@
+#!/bin/bash
+#SBATCH --job-name=setup_env
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+#SBATCH --time=02:00:00
+#SBATCH --partition=shared-cpu
+#SBATCH --mail-type=END,FAIL
+# Logs: hardcoded to the current HPC repo location (single-user repo). SLURM
+# does NOT expand ${HOME} inside #SBATCH lines; the script mkdir -p's LOGS_DIR.
+#SBATCH --output=[REDACTED_PATH]/ECODA_paper/logs/setup_env_%j.out
+#SBATCH --error=[REDACTED_PATH]/ECODA_paper/logs/setup_env_%j.err
+# ============================================================
+# setup_env_sbatch.sh — full py-cuda13 env build on a worker node
+# ============================================================
+# Submit from the HPC login node (defaults: 16 cpus / 64G / 2h, overridable):
+#   sbatch src/utils/bash/setup_env_sbatch.sh
+#   sbatch --cpus-per-task=32 --mem=128G src/utils/bash/setup_env_sbatch.sh
+#
+# Worker nodes share $HOME/scratch and have internet; R source packages are
+# compiled with parallel make (MAKEFLAGS=-jN via R_SETUP_JOBS) so the build is
+# much faster than on the 2-core login node and survives SSH drops.
+#
+# Serialization contract with src/utils/bash/refresh_env.sh (login-node path):
+# both acquire the shared lockfile ${LOGS_DIR}/env_refresh.lock (PID +
+# timestamp; stale if the PID is dead or older than 24 h) and both refuse to
+# start while other jobs are active — a mutation racing with running array
+# tasks corrupts the shared R library (observed: digest/Meta/package.rds
+# missing, mime lazyload DB missing).
+# ============================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Under sbatch the script is copied to /var/spool/slurmd/job<id>/slurm_script,
+# so BASH_SOURCE no longer points at the repo. Recover the real path from the
+# job record (Command= field); BASH_SOURCE fallback for login-node execution.
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+  SCRIPT_DIR="$(dirname "$(scontrol show job "${SLURM_JOB_ID}" -o | grep -o 'Command=[^ ]*' | head -1 | cut -d= -f2)")"
+fi
+source "${SCRIPT_DIR}/../../slurm_config.sh"
+cd "${PROJECT_ROOT}"
+mkdir -p "${LOGS_DIR}"
+
+PIXI_BIN="${HOME}/.pixi/bin/pixi"
+
+# [tasks.setup] reads this for MAKEFLAGS=-jN (parallel R source compilation).
+export R_SETUP_JOBS="${SLURM_CPUS_PER_TASK:-16}"
+
+# --- Lock guard: serialize env mutations (shared with refresh_env.sh) --------
+ENV_LOCK_FILE="${LOGS_DIR}/env_refresh.lock"
+
+acquire_env_lock() {
+  if [[ -f "${ENV_LOCK_FILE}" ]]; then
+    local lock_pid lock_ts now
+    read -r lock_pid lock_ts < "${ENV_LOCK_FILE}" || true
+    now="$(date +%s)"
+    if [[ -n "${lock_pid}" ]] && kill -0 "${lock_pid}" 2>/dev/null && (( now - lock_ts < 86400 )); then
+      echo "ERROR: env lock held by PID ${lock_pid} (acquired at epoch ${lock_ts}) —" >&2
+      echo "       another refresh (refresh_env.sh) or sbatch build is running. Refusing to run concurrently." >&2
+      exit 1
+    fi
+    echo "WARNING: stale env lock (PID ${lock_pid:-?}, acquired at epoch ${lock_ts:-?}, dead or > 24 h old) — removing." >&2
+    rm -f "${ENV_LOCK_FILE}"
+  fi
+  echo "$$ $(date +%s)" > "${ENV_LOCK_FILE}"
+  trap 'release_env_lock' EXIT
+}
+
+release_env_lock() {
+  rm -f "${ENV_LOCK_FILE}"
+}
+
+# --- Guard: no other active jobs while mutating the env ----------------------
+check_no_active_jobs() {
+  ACTIVE_JOBS="$(squeue -u "${USER}" -h -o "%i" 2>/dev/null || true)"
+  ACTIVE_JOBS="$(printf '%s\n' "${ACTIVE_JOBS}" | awk -v me="${SLURM_JOB_ID:-}" '{ if ($1 != me) print }')"
+  if [[ -n "${ACTIVE_JOBS}" ]]; then
+    echo "ERROR: active Slurm jobs detected (other than this one) — env build must run" >&2
+    echo "       while no jobs are running (concurrent installs corrupt the shared R library)." >&2
+    squeue -u "${USER}" >&2
+    exit 1
+  fi
+}
+
+# --- Toolchain preflight (conda compilers, GCCcore module fallback) ----------
+check_toolchain() {
+  if "${PIXI_BIN}" run -e py-cuda13 bash -c 'command -v gcc >/dev/null 2>&1 && command -v make >/dev/null 2>&1'; then
+    echo "OK: gcc and make available in the py-cuda13 env (conda compilers)."
+    return 0
+  fi
+  echo "WARNING: gcc/make not found in the py-cuda13 env — falling back to the GCCcore module..." >&2
+  module load GCCcore/12.2.0 >/dev/null 2>&1 || true
+  if command -v gcc >/dev/null 2>&1 && command -v make >/dev/null 2>&1; then
+    echo "OK: gcc and make found via the GCCcore/12.2.0 module."
+    return 0
+  fi
+  echo "ERROR: no C/C++ toolchain available for R source compilation." >&2
+  echo "       Run src/utils/bash/refresh_env.sh once on the login node, or verify" >&2
+  echo "       the compilers/make pixi deps were installed into the py-cuda13 env." >&2
+  return 1
+}
+
+echo "=== [0/4] guards (env lock + no other active jobs) ==="
+acquire_env_lock
+check_no_active_jobs
+echo "OK: env lock acquired, no other jobs active."
+
+start="$(date +%s)"
+
+echo "=== [1/4] pixi install -e py-cuda13 (conda + pypi deps) ==="
+"${PIXI_BIN}" install --environment py-cuda13
+echo "pixi install done: $(( $(date +%s) - start ))s elapsed."
+
+echo "=== [2/4] toolchain preflight (gcc/make for R source compilation) ==="
+check_toolchain
+
+echo "=== [3/4] pixi run -e py-cuda13 setup (R source packages, R_SETUP_JOBS=${R_SETUP_JOBS} parallel make) ==="
+"${PIXI_BIN}" run -e py-cuda13 setup
+echo "setup done: $(( $(date +%s) - start ))s elapsed."
+
+echo "=== [4/4] smoke check: critical packages load ==="
+"${PIXI_BIN}" run -e py-cuda13 Rscript --vanilla -e '
+  invisible(lapply(c("digest", "SeuratObject", "Seurat", "anndataR"), library, character.only = TRUE))
+  cat("All critical packages load OK\n")
+'
+
+echo "Environment build complete ($(( $(date +%s) - start ))s total). You can now submit jobs."

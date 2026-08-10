@@ -27,7 +27,7 @@ Prereqs (explicitly user):
 - [X] Annotation: `2_submit_hpc_array.sh _debug`.
 - [X] Merge: `3_submit_merge.sh _debug`; validation: each view h5ad obs gains layer1–3 / scATOMIC cols (NA where absent), counts layer intact, annotated h5ad loads in R/Python.
 - [X] Cluster verify items: CombinedPBMC parallelized (3 in-job fork workers, backed GongSharma read, `_intermediates/` per-source outputs; expect ~20-25 min first run vs ~40-60 min serial, faster on reruns via the `_raw.h5ad` cache; 128G/16 cpus sbatch); preprocess 16G (GongSharma); annotation 2h/16G vs 5×2 retries; `aux/scGateDB.rds` committed-cache note in `2_submit_hpc_array.sh` comment.
-- [ ] After debug passes: run one real dataset (e.g. Kfoury) before full rollout. (partly done, src/5_run_benchmark_methods/run_python_sample_embedding_methods is waiting in the HPC queue)(started running the full pipeline on all datasets, see phase 6, still some debugging necessary, currenltly running src/3_scrnaseq_preprocessing and debugging)
+- [ ] After debug passes: run one real dataset (e.g. Kfoury) before full rollout. (partly done, src/5_run_benchmark_methods/run_r_sample_embedding_methods has now to be run on HPC after re-installing a clean environment (after fix))(started running the full pipeline on all datasets, see phase 6, still some debugging necessary, currenltly running src/3_scrnaseq_preprocessing and debugging)
 
 ## Phase 3 — src/5_run_benchmark_methods [agent implements; HPC runs]
 
@@ -163,7 +163,7 @@ HPC manual steps [REQUIRES USER — agents cannot run HPC]:
       `ls "${HOME}/scratch/ECODA_paper/Stephenson/output/"`; re-run
       `--ds_name Stephenson` if outputs missing.  -> Stephenson COMPLETED.
 - [ ] Re-run failed datasets individually (each run syncs its own outputs):
-      `--ds_name` Joanito, Smillie, Wu, Zhang, Stephenson. (currently running)
+      `--ds_name` Joanito, Smillie, Wu, Zhang, Stephenson. (needs re-running after fixes)
 - [ ] Sync the 9 COMPLETED-but-unsynced datasets by re-running their `--ds_name`
       (already-processed outputs are skipped, then synced): Adams, Bassez,
       CombinedPBMC, Kfoury, Kim, Lee, Pelka.
