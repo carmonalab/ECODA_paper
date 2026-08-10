@@ -51,11 +51,14 @@ File: `src/utils/py/preprocess_utils.py` (`ro.r` block defining
   (anndataR records `encoding='ascii'` regardless of content; any non-ASCII byte
   then breaks `sc.read_h5ad`. NBSP → space; other non-ASCII → space. Clinical/
   sample metadata is ASCII-safe; lossy replacement is deliberate.)
-- Cache note: the guard `if (!file.exists(output_path))` means the BROKEN cached
-  `JoaI_…_raw.h5ad` on scratch must be deleted (HPC manual step, below) so it
-  regenerates. Optional hardening (later): in `load_single_input`, on
-  `UnicodeDecodeError` while reading a cached `*_raw.h5ad`, delete it and
-  re-convert once.
+- Cache note: the guard `if (!file.exists(output_path))` means a BROKEN cached
+  `JoaI_…_raw.h5ad` on scratch would block regeneration. Hardening implemented
+  in the fix commit (review follow-up): `load_single_input` catches
+  `UnicodeDecodeError` on a cached `*_raw.h5ad`, deletes it and re-converts
+  once — the manual HPC `rm` below is now belt-and-braces (keep it anyway).
+  Sanitization covers character AND factor/ordered meta.data columns
+  (factor-ness preserved), and the sanitize/align blocks only run when the
+  cache is missing.
 
 ## Fix C — Wu: defensive layer alignment + diagnostics [agent]
 

@@ -116,9 +116,13 @@ Agent code fixes:
       original error if the retry fails. (Validated locally with pinned
       scanpy 1.12.2.)
 - [X] `convert_rds_to_raw_h5ad` (`src/utils/py/preprocess_utils.py`): sanitize
-      character meta.data columns to ASCII (`iconv(from="latin1", to="ASCII",
-      sub=" ")`) before `write_h5ad` — anndataR writes `encoding='ascii'` even
-      for non-ASCII bytes (Joanito `Stage.TNM` NBSP → UnicodeDecodeError).
+      meta.data to ASCII (`iconv(from="latin1", to="ASCII", sub=" ")`) before
+      `write_h5ad` — anndataR writes `encoding='ascii'` even for non-ASCII
+      bytes (Joanito `Stage.TNM` NBSP → UnicodeDecodeError). Covers character
+      AND factor/ordered columns (factor-ness preserved). Sanitize/align run
+      only when the cache is missing; `load_single_input` auto-repairs a
+      cached `*_raw.h5ad` that raises `UnicodeDecodeError` (delete +
+      re-convert once), so the manual Joanito cache `rm` is belt-and-braces.
 - [X] `convert_rds_to_raw_h5ad` (same file): defensively reindex Assay5 layer
       rownames to the assay features before writing (Wu `validate_aligned_mapping`
       mismatch), with a diagnostic message naming the differing genes. Note:
@@ -137,7 +141,7 @@ HPC manual steps [REQUIRES USER — agents cannot run HPC]:
 - [X] Check Stephenson task 11 (stale RUNNING at gate):
       `sacct -j 4294824_11 --format=JobID,State,Elapsed,End -X` +
       `ls "${HOME}/scratch/ECODA_paper/Stephenson/output/"`; re-run
-      `--ds_name Stephenson` if outputs missing.
+      `--ds_name Stephenson` if outputs missing.  -> Stephenson COMPLETED.
 - [ ] Re-run failed datasets individually (each run syncs its own outputs):
       `--ds_name` Joanito, Smillie, Wu, Zhang, Stephenson.
 - [ ] Sync the 9 COMPLETED-but-unsynced datasets by re-running their `--ds_name`
