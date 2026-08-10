@@ -17,16 +17,16 @@ Prereqs (explicitly user):
    `src/1_stage_data/1_stage_data.sh` on the login node (`_debug` is skipped —
    its raw subset never lives on the NAS; the Joanito step builds it).
 
-- [ ] Dataset-specific preprocessing: `1_submit_hpc.sh` — the Joanito step
+- [X] Dataset-specific preprocessing: `1_submit_hpc.sh` — the Joanito step
       (`1.3_submit_joanito.sh` → `1.3.1_prepare_joanito.R`) computes `seqtec`
       AND builds the `_debug` subset into `${HPC_SCRATCH_DIR}/_debug/data/`;
       verify the h5ad exists after the step. Run `1_submit_hpc.sh` only if the
-      full datasets are staged. (Joanito preprocessing needs to be run again, see Phase 6)
+      full datasets are staged. ([X] Joanito preprocessing needs to be run again, see Phase 6)
 - [X] Preprocess: `1_submit_hpc_array.sh --ds_name _debug`; validation: h5ad loads, `X_pca`/`X_pca_harmony` present, ~2500 cells, runtime < 30s.
 - [X] Chunks: `1_prepare_chunks.sh test _debug` (per-dataset union, 1 sample/chunk).
 - [X] Annotation: `2_submit_hpc_array.sh _debug`.
 - [X] Merge: `3_submit_merge.sh _debug`; validation: each view h5ad obs gains layer1–3 / scATOMIC cols (NA where absent), counts layer intact, annotated h5ad loads in R/Python.
-- [ ] Cluster verify items: CombinedPBMC parallelized (3 in-job fork workers, backed GongSharma read, `_intermediates/` per-source outputs; expect ~20-25 min first run vs ~40-60 min serial, faster on reruns via the `_raw.h5ad` cache; 128G/16 cpus sbatch); preprocess 16G (GongSharma); annotation 2h/16G vs 5×2 retries; `aux/scGateDB.rds` committed-cache note in `2_submit_hpc_array.sh` comment.
+- [X] Cluster verify items: CombinedPBMC parallelized (3 in-job fork workers, backed GongSharma read, `_intermediates/` per-source outputs; expect ~20-25 min first run vs ~40-60 min serial, faster on reruns via the `_raw.h5ad` cache; 128G/16 cpus sbatch); preprocess 16G (GongSharma); annotation 2h/16G vs 5×2 retries; `aux/scGateDB.rds` committed-cache note in `2_submit_hpc_array.sh` comment.
 - [ ] After debug passes: run one real dataset (e.g. Kfoury) before full rollout. (partly done, src/5_run_benchmark_methods/run_python_sample_embedding_methods is waiting in the HPC queue)(started running the full pipeline on all datasets, see phase 6, still some debugging necessary, currenltly running src/3_scrnaseq_preprocessing and debugging)
 
 ## Phase 3 — src/5_run_benchmark_methods [agent implements; HPC runs]
@@ -143,7 +143,7 @@ HPC manual steps [REQUIRES USER — agents cannot run HPC]:
       `ls "${HOME}/scratch/ECODA_paper/Stephenson/output/"`; re-run
       `--ds_name Stephenson` if outputs missing.  -> Stephenson COMPLETED.
 - [ ] Re-run failed datasets individually (each run syncs its own outputs):
-      `--ds_name` Joanito, Smillie, Wu, Zhang, Stephenson.
+      `--ds_name` Joanito, Smillie, Wu, Zhang, Stephenson. (currently running)
 - [ ] Sync the 9 COMPLETED-but-unsynced datasets by re-running their `--ds_name`
       (already-processed outputs are skipped, then synced): Adams, Bassez,
       CombinedPBMC, Kfoury, Kim, Lee, Pelka.

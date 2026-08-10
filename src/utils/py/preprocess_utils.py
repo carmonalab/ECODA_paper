@@ -115,6 +115,29 @@ def load_single_input(input_name, input_dir, output_dir):
         # promote the counts layer to X (mirror of base_preprocessing).
         if adata.X is None and "counts" in adata.layers:
             adata.X = adata.layers["counts"].copy()
+        # Cache auto-repair (2): a *raw.h5ad cache left behind by a write_h5ad
+        # crash in an earlier run reads fine but has neither X nor a counts
+        # layer (anndataR always writes counts into layers["counts"], X=None).
+        # The R converter only writes when the cache file is missing, so such a
+        # stale partial cache blocks regeneration and surfaces as
+        # base_preprocessing's "Input has neither X, nor a counts layer, nor
+        # raw counts". Delete and re-convert once (same pattern as the
+        # UnicodeDecodeError repair above).
+        if adata.X is None and "counts" not in adata.layers and adata.raw is None:
+            print(
+                f"Cached {raw_h5ad_path.name} has no X/counts/raw (partial write "
+                "from an earlier run); deleting and re-converting."
+            )
+            raw_h5ad_path.unlink(missing_ok=True)
+            convert_rds_to_raw_h5ad_r(str(input_path), str(raw_h5ad_path))
+            adata = sc.read_h5ad(raw_h5ad_path)
+            if adata.X is None and "counts" not in adata.layers and adata.raw is None:
+                raise ValueError(
+                    f"Re-converted {raw_h5ad_path.name} still has no X, counts "
+                    "layer, or raw; the source RDS appears to carry no count data."
+                )
+            if adata.X is None and "counts" in adata.layers:
+                adata.X = adata.layers["counts"].copy()
         return adata
     elif str(input_name).endswith(".h5ad"):
         return sc.read_h5ad(input_path)
@@ -125,8 +148,19 @@ def load_single_input(input_name, input_dir, output_dir):
 def load_input(input_names, input_dir, output_dir):
     if isinstance(input_names, list):
         adatas = [load_single_input(n, input_dir, output_dir) for n in input_names]
-        return sc.concat(adatas, index_unique="_") if len(adatas) > 1 else adatas[0]
-    return load_single_input(input_names, input_dir, output_dir)
+        adata = sc.concat(adatas, index_unique="_") if len(adatas) > 1 else adatas[0]
+    else:
+        adata = load_single_input(input_names, input_dir, output_dir)
+
+    # anndata's write_h5ad rejects obs.index.name colliding with an obs column
+    # whose values differ. sc.concat(index_unique="_") de-duplicates the index
+    # with _N suffixes when inputs share barcode values, which breaks an
+    # index==column equality that held per-file (e.g. the GongSharma SoundLife
+    # files' redundant 'barcodes' column). The index holds the canonical cell
+    # barcodes; drop the redundant duplicate column if present.
+    if adata.obs.index.name is not None and adata.obs.index.name in adata.obs.columns:
+        del adata.obs[adata.obs.index.name]
+    return adata
 
 
 # ---------------------------------------------------------------------------
