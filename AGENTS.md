@@ -10,6 +10,21 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
     - Additional datasets will be added by the user (human) — not by agents.
     - Pipeline/code work, method feasibility (PILOT-GM-VAE, QOT, PULSAR) and implementation drafts: see TODO.md (Phase 3 + Phase 4).
 
+# Agent Guardrails & Domain Terms
+
+## No-leakage (central premise)
+- Bio labels (Status, sample.origin, cond, …) are ground truth **only**: they
+  must NEVER be passed as a design covariate, batch key, or any other input to
+  preprocessing, DESeq2 normalization, batch correction, HVG selection, or
+  embedding steps. Batch correction is batch-only (no `design` argument in
+  `removeBatchEffect`). Violation = supervised analysis, invalidates the
+  paper's premise.
+- `DESeq2.normalize()` semantics: defaults `blind=TRUE`, `batch_col=NULL`,
+  `correct_batch=FALSE` → benchmark mode (design `~ 1`, legacy-equivalent, no
+  correction). Batch-effect analysis uses `batch_col` + `blind=FALSE` +
+  `correct_batch=TRUE` (batch-only `limma::removeBatchEffect`, no design
+  protection). `get_pb_deseq2()` passes the same three params through.
+
 # General rules
 - Do not run pipeline scripts (e.g. .R, .py or .sh) for validation checks after implementing new code, unless the user asks for.
     - Validation of HPC pipeline scripts (e.g. .R, .py or .sh) will be run once the pipeline has been fully implemented, using a small debugging dataset (e.g. derived from the Joanito dataset)

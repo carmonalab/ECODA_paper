@@ -124,7 +124,16 @@ print(plot_list[["p_ecoda_batch"]])
 #### Without blacklist
 
 ```{r}
-pb_norm <- get_pb_deseq2(seurat, sample_col = "sample.ID", black_list = "none")
+# batch-only correction (no bio labels in the normalization — no leakage);
+# bio labels below are evaluation-only
+pb_norm <- get_pb_deseq2(
+  seurat,
+  sample_col = "sample.ID",
+  black_list = "none",
+  batch_col = "seqtec",
+  blind = FALSE,
+  correct_batch = TRUE
+)
 
 plot_list[["p_pb_bio"]] <- plot_mds(
   dist(pb_norm),
@@ -215,7 +224,15 @@ row.names(meta) <- meta$Sample
 
 pb <- get_pb(seurat, sample_col = "Sample")
 metadata <- get_metadata(seurat, sample_col = "Sample")
-pb_norm <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = 2000))
+# batch-only correction (batch_col = "Site"); bio labels are evaluation-only (no leakage)
+pb_norm <- t(DESeq2.normalize(
+  pb,
+  metadata = metadata,
+  n_hvg = 2000,
+  batch_col = "Site",
+  blind = FALSE,
+  correct_batch = TRUE
+))
 
 bio_col <- "Status"
 batch_col <- "Site"
@@ -231,7 +248,15 @@ ct_remove <- c(
 seurat_sub <- subset(seurat, subset = full_clustering %notin% ct_remove)
 pb <- get_pb(seurat_sub, sample_col = "Sample")
 metadata <- get_metadata(seurat, sample_col = "Sample")
-pb_norm_sub <- t(DESeq2.normalize(pb, metadata = metadata, n_hvg = 2000))
+# batch-only correction (batch_col = "Site"); bio labels are evaluation-only (no leakage)
+pb_norm_sub <- t(DESeq2.normalize(
+  pb,
+  metadata = metadata,
+  n_hvg = 2000,
+  batch_col = "Site",
+  blind = FALSE,
+  correct_batch = TRUE
+))
 
 plot_list <- list()
 ```
@@ -371,10 +396,14 @@ ggsave(
 #### With blacklist
 
 ```{r}
+# batch-only correction (batch_col = "Site"); bio labels are evaluation-only (no leakage)
 pb_norm_sub <- get_pb_deseq2(
   seurat_sub,
   sample_col = "Sample",
-  black_list = "default"
+  black_list = "default",
+  batch_col = "Site",
+  blind = FALSE,
+  correct_batch = TRUE
 )
 
 plot_mds(
@@ -589,10 +618,15 @@ combined_metadata <- do.call(
   })
 )
 
+# batch-only correction: batch is the study column `ds` (Site is confounded
+# with study); bio labels are evaluation-only (no leakage)
 pb_norm <- t(DESeq2.normalize(
   combined_pseudobulk,
   metadata = combined_metadata,
-  n_hvg = 2000
+  n_hvg = 2000,
+  batch_col = "ds",
+  blind = FALSE,
+  correct_batch = TRUE
 ))
 
 feat_mat_list <- list(

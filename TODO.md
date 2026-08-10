@@ -74,7 +74,10 @@ Prereqs (explicitly user):
 ## Phase 4 — Batch effect analysis (later)
 
 - Methods: ECODA batch-associated CT removal (t-test/Wilcoxon, ANOVA/Kruskal-Wallis);
-  Pseudobulk DESeq2+limma with `batch_col`; MrVI native `batch_key`; GloScope on
+  Pseudobulk DESeq2+limma with `batch_col` (DONE for the batch-effect notebook:
+  `DESeq2.normalize()`/`get_pb_deseq2()` take `batch_col`/`blind`/`correct_batch`,
+  wired batch-only at all 4 `batch_effect_analysis.rmd` call sites; benchmark
+  defaults unchanged); MrVI native `batch_key`; GloScope on
   `X_pca_harmony`; PILOT-GM-VAE on `X_pca_harmony`; CombinedPBMC (Stephenson,
   GongSharma, Zhu) dataset handling; `columns.batch` in datasets.json (Joanito `seqtec`
   DONE via `1.3.1_prepare_joanito.R`; Kfoury `cells_lowres` DONE via
@@ -200,8 +203,9 @@ HPC manual steps [REQUIRES USER — agents cannot run HPC]:
 - Batch effect analysis: decide whether to run with and/or without batch
   correction — more important to only do WITH batch correction; non-corrected
   results possibly in the paper appendix.
-- Phase 4 details: verify `DESeq2.normalize()` `batch_col` is correctly
-  implemented and does not get `"Sample"` as batch column; ECODA batch-associated
+- Phase 4 details: `DESeq2.normalize()` `batch_col` is now correctly implemented
+  and wired (batch-only, never `"Sample"` as batch column; no-leakage — see
+  AGENTS.md); ECODA batch-associated
   CT removal should print a warning naming the significant cell types
   (t-test/Wilcoxon for 2 batches, ANOVA/Kruskal-Wallis for >2, p < 0.05); test
   each cell type separately vs. checking global variance of cell type

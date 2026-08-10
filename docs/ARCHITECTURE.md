@@ -678,7 +678,11 @@ ECODA zero imputation, data transformation and Pseudobulk preprocessing:
 ├── impute_zeros(df, method, num)  → Zero imputation (4 strategies)
 ├── calc_perc_df(df)               → Row-wise percentages
 ├── datrans(feat_mat, method, ...) → Main transformation dispatcher
-├── DESeq2.normalize(matrix, ...)  → DESeq2-like normalization
+├── DESeq2.normalize(matrix, metadata, n_hvg, batch_col, blind, correct_batch)
+│                       → DESeq2-like normalization (defaults `blind=TRUE`, no
+│                         batch; batch-effect mode: `batch_col` + `blind=FALSE` +
+│                         `correct_batch=TRUE` for batch-only limma removal; vst
+│                         sparsity fallback chain for <1000 genes > mean 5)
 └── standardize_sample_names()     → Fix digit-prefixed names
 
 Visualization:

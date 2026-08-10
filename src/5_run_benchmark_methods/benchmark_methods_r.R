@@ -141,7 +141,21 @@ process_pseudobulk_ct_fig <- function(
       next
     }
     sub <- subset(sub, subset = !!sym(sample_col) %in% keep_samples)
-    pb_norm <- get_pb_deseq2(sub, sample_col = sample_col, n_hvg = hvg)
+    # One sparse CT must never kill the whole method: skip on error
+    # (label alignment is centralized in create_result_bundle()).
+    pb_norm <- tryCatch(
+      get_pb_deseq2(sub, sample_col = sample_col, n_hvg = hvg),
+      error = function(e) {
+        warning(
+          "process_pseudobulk_ct_fig: pseudobulk failed for cell type '", ct,
+          "': ", conditionMessage(e)
+        )
+        NULL
+      }
+    )
+    if (is.null(pb_norm)) {
+      next
+    }
     dist_mat_ct <- as.matrix(dist(pb_norm))
     total_dist[rownames(dist_mat_ct), colnames(dist_mat_ct)] <-
       total_dist[rownames(dist_mat_ct), colnames(dist_mat_ct)] + dist_mat_ct
