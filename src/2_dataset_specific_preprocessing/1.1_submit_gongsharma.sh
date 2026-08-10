@@ -10,7 +10,7 @@
 # ---------------------------------------------------------------------------
 # GongSharma per-sample 5000-cell cap step.
 #
-# Runs 1.4.1_subset_gongsharma.py, which caps each sample
+# Runs 1.1.1_subset_gongsharma.py, which caps each sample
 # (specimen.specimenGuid) at 5000 cells in the two STAGED SoundLife h5ads and
 # OVERWRITES THEM IN PLACE (atomic temp-file write + os.replace):
 #   ${HPC_SCRATCH_DIR}/Gongsharma_cmv_young_males/data/
@@ -25,10 +25,13 @@
 # originals back over the capped files — re-run this step (via 1_submit_hpc.sh)
 # before the preprocess array after any re-stage.
 #
-# ORDERING: 1_submit_hpc.sh submits this step FIRST and gates the CombinedPBMC
-# step (1.1_submit_combinedpbmc.sh) behind it via --dependency=afterok: that
-# step reads the SAME staged files in backed mode, so an in-place overwrite
-# racing its read would nondeterminize the CombinedPBMC dataset.
+# ORDERING: although numbered 1.1, this step is submitted FIRST by
+# 1_submit_hpc.sh's explicit cap block (the loop skips it by name) and gates
+# the CombinedPBMC step (1.2_submit_combinedpbmc.sh) behind it via
+# --dependency=afterok: that step reads the SAME staged files in backed mode,
+# so an in-place overwrite racing its read would nondeterminize the CombinedPBMC
+# dataset. The serialization comes from the dispatcher's pre-submit + skip
+# logic, not from the numbering.
 # ---------------------------------------------------------------------------
 
 set -euo pipefail
@@ -43,4 +46,4 @@ fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-"${PYTHON_BIN}" "${SCRIPT_DIR}/1.4.1_subset_gongsharma.py"
+"${PYTHON_BIN}" "${SCRIPT_DIR}/1.1.1_subset_gongsharma.py"

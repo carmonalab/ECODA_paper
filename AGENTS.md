@@ -20,9 +20,9 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
 - sbatch-submitted scripts must NOT resolve `src/slurm_config.sh` from
   `BASH_SOURCE`: Slurm copies submitted scripts to
   `/var/spool/slurmd/job<id>/slurm_script`, so `BASH_SOURCE` points at the spool
-  dir. The 9 sbatch workers (`1.1_submit_combinedpbmc.sh`,
-  `1.2_submit_joanito.sh`, `1.3_submit_kfoury_lowres_ct.sh`,
-  `1.4_submit_gongsharma.sh`,
+  dir. The 9 sbatch workers (`1.1_submit_gongsharma.sh`,
+  `1.2_submit_combinedpbmc.sh`, `1.3_submit_joanito.sh`,
+  `1.4_submit_kfoury_lowres_ct.sh`,
   `3_scrnaseq_preprocessing/1.1_run_worker.sh`,
   `4_cell_type_annotation/2.1_run_worker.sh`,
   `5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh`,
@@ -69,7 +69,7 @@ Whenever you finish implementing a plan located in `.kilo/plans/`:
 - This acts as ground truth for the datasets evaluated in this study
     - See datasets.json for most up-to-date list of datasets used and conditions.
 - Do not change this file without asking
-- The `_debug` entry (Joanito 5-sample subset, built by the Joanito step `1.2.1_prepare_joanito.R` into `${HPC_SCRATCH_DIR}/_debug/data/`) is registered here with both views. Convention: default-all script loops (`1_stage_data.sh`, `1_submit_hpc_array.sh`) skip `_*` keys unless explicitly requested via `--ds_name _debug`; `_debug.folder_name` is `null`, so staging skips it — the raw subset never lives on the NAS, only `_debug` *outputs* sync to NAS (`${NAS_TARGET_DIR}/_debug/output/`). Used for debugging `3_scrnaseq_preprocessing/`, `4_cell_type_annotation/`, `5_benchmark_methods/` (not the simple `1_stage_data/` / `2_dataset_specific_preprocessing/`). Details: see ARCHITECTURE.md.
+- The `_debug` entry (Joanito 5-sample subset, built by the Joanito step `1.3.1_prepare_joanito.R` into `${HPC_SCRATCH_DIR}/_debug/data/`) is registered here with both views. Convention: default-all script loops (`1_stage_data.sh`, `1_submit_hpc_array.sh`) skip `_*` keys unless explicitly requested via `--ds_name _debug`; `_debug.folder_name` is `null`, so staging skips it — the raw subset never lives on the NAS, only `_debug` *outputs* sync to NAS (`${NAS_TARGET_DIR}/_debug/output/`). Used for debugging `3_scrnaseq_preprocessing/`, `4_cell_type_annotation/`, `5_benchmark_methods/` (not the simple `1_stage_data/` / `2_dataset_specific_preprocessing/`). Details: see ARCHITECTURE.md.
 - Files defined in datasets.json are stored on the NAS
     - The user and agents exclusively work on the user's computer, so the NAS is only accessed by the user from the computer
     - NAS dataset path from user computer (connect to NAS server first, ask user if needed): `/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets`
@@ -84,7 +84,7 @@ Four-stage end-to-end pipeline; file-level details live in docs/ARCHITECTURE.md.
 
 - **Stage 1 — QC Filtering** (`notebooks/QC_filtering/`): per-dataset R Markdown notebooks.
 - **Stage 2 — Preprocessing + Cell Type Annotation** (see [ARCHITECTURE.md](docs/ARCHITECTURE.md#preprocessing-pipeline) and [annotation section](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-src4_cell_type_annotation)):
-    - Staging (`src/1_stage_data/`) → dataset-specific steps (`src/2_dataset_specific_preprocessing/`, e.g. `1.2.1_prepare_joanito.R` builds the `_debug` subset + `seqtec` batch column; `1.3.1_create_kfoury_lowres_ct.R` creates `cells_lowres`) → preprocess array (`src/3_scrnaseq_preprocessing/`) → annotation chunks + array + merge (`src/4_cell_type_annotation/`; `3_submit_merge.sh <DS>` merges `annotations_chunk_*.feather` into every view h5ad and syncs to NAS).
+    - Staging (`src/1_stage_data/`) → dataset-specific steps (`src/2_dataset_specific_preprocessing/`, e.g. `1.3.1_prepare_joanito.R` builds the `_debug` subset + `seqtec` batch column; `1.4.1_create_kfoury_lowres_ct.R` creates `cells_lowres`) → preprocess array (`src/3_scrnaseq_preprocessing/`) → annotation chunks + array + merge (`src/4_cell_type_annotation/`; `3_submit_merge.sh <DS>` merges `annotations_chunk_*.feather` into every view h5ad and syncs to NAS).
     - Preprocessed .h5ad files are **CSR-on-disk by construction** — required for selective backed-mode per-sample reads in annotation (details in ARCHITECTURE.md).
     - **Drafts (keep, not dead code)**: `preprocess_gongsharma.qmd` (GongSharma other-subsetting conditions) and `TODO_STUMP_preprocess_sikkema.qmd` (future Sikkema Lung dataset) in `src/3_scrnaseq_preprocessing/` are intentional drafts for future implementation — do NOT delete.
 - **Stage 3 — Benchmark Analysis** (see [ARCHITECTURE.md](docs/ARCHITECTURE.md#benchmark-ecoda-transformation-and-ecoda-zero-imputation-analyses)): heavy R methods (GloScope, MOFA, Pseudobulk, scITD) on HPC via `run_r_sample_embedding_methods/` (pinned CPU class, `prepare_pseudobulk` prep array gated first); transformation/zero-imputation analyses on HPC via `run_transformation_zeroimp_analysis/` (two arrays: `trans`, `zeroimp`); Python methods (MrVI/scPoli/PILOT) on HPC via `run_python_sample_embedding_methods/`. `notebooks/benchmark_analysis.rmd` loads the HPC bundles via `load_hpc_benchmark_results()` and runs the fast composition-based methods (ECODA variants, GloProp, EPIC deconv, Avg_PCA, Freq_highres). Pending pipeline work (PILOT-GM-VAE, QOT/PULSAR): see TODO.md Phase 3.

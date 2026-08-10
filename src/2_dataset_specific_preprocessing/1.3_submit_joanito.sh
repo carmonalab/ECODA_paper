@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=kfoury_lowres_ct
+#SBATCH --job-name=joanito_prep
 #SBATCH --time=01:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -19,4 +19,4 @@ fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-${PIXI_RSCRIPT} "${SCRIPT_DIR}/1.3.1_create_kfoury_lowres_ct.R"
+${PIXI_RSCRIPT} "${SCRIPT_DIR}/1.3.1_prepare_joanito.R"

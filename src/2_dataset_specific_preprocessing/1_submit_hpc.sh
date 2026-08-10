@@ -10,10 +10,10 @@ set -euo pipefail
 #
 # IMPORTANT: Steps are submitted in parallel and therefore MUST be mutually
 # independent. The one exception is wired explicitly via --dependency: the
-# GongSharma cap step (1.4_submit_gongsharma.sh, when present) is submitted
-# first and the CombinedPBMC step (1.1) is gated behind it with
-# --dependency=afterok (1.4 overwrites the staged SoundLife h5ads IN PLACE,
-# which 1.1 reads in backed mode — a race would nondeterminize the CombinedPBMC
+# GongSharma cap step (1.1_submit_gongsharma.sh, when present) is submitted
+# first and the CombinedPBMC step (1.2) is gated behind it with
+# --dependency=afterok (1.1 overwrites the staged SoundLife h5ads IN PLACE,
+# which 1.2 reads in backed mode — a race would nondeterminize the CombinedPBMC
 # dataset). For any future step dependency, use the same pattern (submit first
 # + --dependency) — do NOT rely on submission order alone.
 #
@@ -74,13 +74,13 @@ if [[ -n "${SYNC_ONLY_IDS}" ]]; then
   echo "=== Sync-only resume mode: jobs ${SYNC_ONLY_IDS} (no submission) ==="
   IFS=',' read -r -a JOB_IDS <<< "${SYNC_ONLY_IDS}"
 else
-  # GongSharma cap step (1.4) must finish before the CombinedPBMC step (1.1):
-  # 1.4 overwrites the staged SoundLife h5ads IN PLACE and 1.1 reads the same
+  # GongSharma cap step (1.1) must finish before the CombinedPBMC step (1.2):
+  # 1.1 overwrites the staged SoundLife h5ads IN PLACE and 1.2 reads the same
   # staged files in backed mode — running them in parallel would nondeterminize
-  # the CombinedPBMC dataset. Submit 1.4 first, then gate 1.1 behind it with
-  # --dependency=afterok (fail-closed: a failed cap means 1.1 is never
+  # the CombinedPBMC dataset. Submit 1.1 first, then gate 1.2 behind it with
+  # --dependency=afterok (fail-closed: a failed cap means 1.2 is never
   # submitted and the sacct gate below reports non-COMPLETED).
-  CAP_STEP_SCRIPT="${SCRIPT_DIR}/1.4_submit_gongsharma.sh"
+  CAP_STEP_SCRIPT="${SCRIPT_DIR}/1.1_submit_gongsharma.sh"
   if [[ -f "${CAP_STEP_SCRIPT}" ]]; then
     echo "=== Submitting $(basename "${CAP_STEP_SCRIPT}") (prerequisite for CombinedPBMC) ==="
     STEP_LOG_STEM="${LOGS_DIR}/$(basename "${CAP_STEP_SCRIPT}" .sh)_%j"
@@ -93,6 +93,15 @@ else
   fi
   for step_script in "${STEP_SCRIPTS[@]}"; do
     step_name="$(basename "${step_script}")"
+    # Skip the cap step in the loop: the glob above (1.*_submit_*.sh) matches
+    # 1.1_submit_gongsharma.sh, which was ALREADY submitted as the cap
+    # prerequisite (two concurrent cap jobs would race on the deterministic
+    # *.capped_tmp.h5ad temp path + os.replace, and CombinedPBMC would be
+    # gated only on the first).
+    if [[ "${step_name}" == "1.1_submit_gongsharma.sh" ]]; then
+      echo "=== Skipping ${step_name} (already submitted as cap prerequisite above) ==="
+      continue
+    fi
     echo "=== Submitting ${step_name} ==="
     # --output/--error/--partition passed on the sbatch command line (not
     # #SBATCH lines): SLURM directives do not expand environment variables.
@@ -102,7 +111,7 @@ else
       --output="${STEP_LOG_STEM}.log"
       --error="${STEP_LOG_STEM}.err"
     )
-    if [[ "${step_name}" == "1.1_submit_combinedpbmc.sh" && -n "${CAP_JOB_ID}" ]]; then
+    if [[ "${step_name}" == "1.2_submit_combinedpbmc.sh" && -n "${CAP_JOB_ID}" ]]; then
       SBATCH_ARGS+=(--dependency="afterok:${CAP_JOB_ID}")
     fi
     JOB_IDS+=("$(sbatch --parsable "${SBATCH_ARGS[@]}" "${step_script}")")

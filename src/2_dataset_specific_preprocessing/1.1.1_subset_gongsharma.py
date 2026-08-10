@@ -28,13 +28,13 @@ Semantics / caveats:
   over the capped files — re-run `src/2_dataset_specific_preprocessing/1_submit_hpc.sh`
   (which runs this step again) before the preprocess array after any re-stage.
 - ORDERING (race hazard): `1_submit_hpc.sh` submits this step FIRST and gates
-  the CombinedPBMC step (`1.1_submit_combinedpbmc.sh`) behind it via
+  the CombinedPBMC step (`1.2_submit_combinedpbmc.sh`) behind it via
   `--dependency=afterok`, because that step reads the SAME staged files in
   backed mode — an in-place overwrite racing that read would nondeterminize
   the CombinedPBMC dataset.
 
-Usage (HPC, via 1.4_submit_gongsharma.sh; pure Python, no R interop):
-    ${PYTHON_BIN} 1.4.1_subset_gongsharma.py [--config_path ...] [--data_dir ...]
+Usage (HPC, via 1.1_submit_gongsharma.sh; pure Python, no R interop):
+    ${PYTHON_BIN} 1.1.1_subset_gongsharma.py [--config_path ...] [--data_dir ...]
 """
 
 import argparse

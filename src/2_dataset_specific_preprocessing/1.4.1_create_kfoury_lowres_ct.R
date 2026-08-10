@@ -1,5 +1,5 @@
 # ==============================================================================
-# 1.3.1_create_kfoury_lowres_ct.R — Create the Kfoury `cells_lowres` column
+# 1.4.1_create_kfoury_lowres_ct.R — Create the Kfoury `cells_lowres` column
 # ==============================================================================
 # Ported from Preprocess_datasets.Rmd ("Create low res cell types for Kfoury"):
 # collapses the author `cells` annotations into the low-res groups declared in

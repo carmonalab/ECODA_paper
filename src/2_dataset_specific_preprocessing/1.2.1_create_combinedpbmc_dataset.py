@@ -2,8 +2,8 @@
 Create the Combined PBMC dataset (Stephenson + GongSharma + Zhu) for batch effect analysis.
 
 Usage:
-    Local (default):      python 1.1.1_create_combinedpbmc_dataset.py
-    HPC (per-dataset):    python 1.1.1_create_combinedpbmc_dataset.py --layout per-dataset
+    Local (default):      python 1.2.1_create_combinedpbmc_dataset.py
+    HPC (per-dataset):    python 1.2.1_create_combinedpbmc_dataset.py --layout per-dataset
                           [--base-path ${HPC_SCRATCH_DIR} --output-dir ${HPC_SCRATCH_DIR}/CombinedPBMC/data]
 
 Output:

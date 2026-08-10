@@ -18,7 +18,7 @@ Prereqs (explicitly user):
    its raw subset never lives on the NAS; the Joanito step builds it).
 
 - [ ] Dataset-specific preprocessing: `1_submit_hpc.sh` — the Joanito step
-      (`1.2_submit_joanito.sh` → `1.2.1_prepare_joanito.R`) computes `seqtec`
+      (`1.3_submit_joanito.sh` → `1.3.1_prepare_joanito.R`) computes `seqtec`
       AND builds the `_debug` subset into `${HPC_SCRATCH_DIR}/_debug/data/`;
       verify the h5ad exists after the step. Run `1_submit_hpc.sh` only if the
       full datasets are staged. (Joanito preprocessing needs to be run again, see Phase 6)
@@ -77,8 +77,8 @@ Prereqs (explicitly user):
   Pseudobulk DESeq2+limma with `batch_col`; MrVI native `batch_key`; GloScope on
   `X_pca_harmony`; PILOT-GM-VAE on `X_pca_harmony`; CombinedPBMC (Stephenson,
   GongSharma, Zhu) dataset handling; `columns.batch` in datasets.json (Joanito `seqtec`
-  DONE via `1.2.1_prepare_joanito.R`; Kfoury `cells_lowres` DONE via
-  `1.3.1_create_kfoury_lowres_ct.R`).
+  DONE via `1.3.1_prepare_joanito.R`; Kfoury `cells_lowres` DONE via
+  `1.4.1_create_kfoury_lowres_ct.R`).
 
 ## Phase 5 — Annotation completeness guard [agent]
 
@@ -148,8 +148,8 @@ HPC manual steps [REQUIRES USER — agents cannot run HPC]:
       (already-processed outputs are skipped, then synced): Adams, Bassez,
       CombinedPBMC, Kfoury, Kim, Lee, Pelka.
 - [X] GongSharma OOM fix (task 4, 128G): implemented
-      `src/2_dataset_specific_preprocessing/1.4_submit_gongsharma.sh` +
-      `1.4.1_subset_gongsharma.py` (new step, auto-discovered by
+      `src/2_dataset_specific_preprocessing/1.1_submit_gongsharma.sh` +
+      `1.1.1_subset_gongsharma.py` (new step, auto-discovered by
       `1_submit_hpc.sh`): per-sample cap of 5000 cells
       (`specimen.specimenGuid`, `np.random.RandomState(42)`) — historical
       `downsample_by_group` strategy (git 3a4711e,

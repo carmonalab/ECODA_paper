@@ -13,7 +13,7 @@ set -euo pipefail
 # the _debug entry) unless explicitly requested via --ds_name. The _debug raw
 # subset is NOT staged here: `_debug.folder_name` is null, so the null-folder
 # guard below skips it — the subset is built on HPC scratch by the Joanito
-# step (1.2.1_prepare_joanito.R, into ${HPC_SCRATCH_DIR}/_debug/data/);
+# step (1.3.1_prepare_joanito.R, into ${HPC_SCRATCH_DIR}/_debug/data/);
 # `--ds_name _debug` is therefore a clean no-op.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
