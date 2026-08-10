@@ -31,8 +31,9 @@ set -euo pipefail
 # are removed, and the annotated view h5ads are rsynced to
 # ${NAS_TARGET_DIR}/${DS}/output/.
 #
-# Single-dataset mode sends per-event sync-status emails; default-all mode
-# sends exactly one summary email (processed/failed lists) after the loop.
+# Single-dataset mode sends per-event sync-status emails (each success email
+# carries per-view merge durations); default-all mode sends exactly one summary
+# email (processed/failed lists + per-dataset merge durations) after the loop.
 # ---------------------------------------------------------------------------
 
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
@@ -40,6 +41,16 @@ cd "${PROJECT_ROOT}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../utils/bash/sync_status_email.sh"
 mkdir -p "${LOGS_DIR}"
+
+# Merge durations for the default-all summary email: one "<DS_NAME>|<seconds>"
+# entry per processed dataset, appended by the caller loop below. Per-view
+# durations for single-dataset mode live in merge_one_ds's VIEW_DURATIONS.
+DS_DURATIONS=()
+
+fmt_seconds() {
+  local s="$1"
+  printf '%02d:%02d:%02d' "$(( s / 3600 ))" "$(( (s % 3600) / 60 ))" "$(( s % 60 ))"
+}
 
 FORCE_ARG=0
 POS_ARGS=()
@@ -81,11 +92,14 @@ fi
 # guarded by EMAIL_MODE so single-dataset behavior is preserved exactly.
 merge_one_ds() {
   local DS_NAME="$1"
+  local DS_START="$(date +%s)"
   local OUTPUT_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/output"
   local UNION_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/annotation_union"
   # Memory per merge srun; overridable for the largest views (e.g. Stephenson's
   # batch-effect view may OOM on the 64G default).
   local MERGE_MEM="${MERGE_MEM:-64G}"
+  # Per-view srun durations for the per-event email: "<VIEW_NAME>|<seconds>".
+  local VIEW_DURATIONS=()
 
   # Post-merge skip: this script is the only step that deletes output/chunks/ and
   # annotation_union/, so a dataset with both absent and >=1 feather still in
@@ -179,6 +193,7 @@ merge_one_ds() {
   for VIEW_FILE in "${VIEW_FILES_CLEAN[@]}"; do
     local VIEW_NAME="$(basename "${VIEW_FILE}")"
     local LOG_FILE="${LOGS_DIR}/merge_annotations_${DS_NAME}_${VIEW_NAME%.h5ad}.log"
+    local VIEW_START="$(date +%s)"
     echo "Merging annotations into ${VIEW_NAME}..."
     if ! srun --partition="${SLURM_PARTITION}" \
          --time=02:00:00 \
@@ -198,6 +213,7 @@ merge_one_ds() {
       fi
       return 1
     fi
+    VIEW_DURATIONS+=("${VIEW_NAME}|$(( $(date +%s) - VIEW_START ))")
     echo "✓ Merged ${VIEW_NAME}. Log saved to: ${LOG_FILE}"
   done
 
@@ -228,9 +244,20 @@ merge_one_ds() {
   rm -rf "${NAS_TARGET_DIR}/${DS_NAME}/output/chunks"
   echo "Success: annotated h5ads synchronized to ${NAS_TARGET_DIR}/${DS_NAME}/output/"
   if [[ "${EMAIL_MODE}" == "per-event" ]]; then
+    # Per-view merge durations (wall clock around each srun; login-node driven).
+    local DUR_BLOCK="Merge durations (view, elapsed):
+"
+    local line view_name view_secs
+    for line in "${VIEW_DURATIONS[@]}"; do
+      view_name="${line%%|*}"
+      view_secs="${line##*|}"
+      DUR_BLOCK+="  ${view_name}  $(fmt_seconds "${view_secs}")"$'\n'
+    done
+    DUR_BLOCK+="Total merge duration: $(fmt_seconds "$(( $(date +%s) - DS_START ))")"
     notify_sync_status \
       "ECODA: annotations merged + synced (${DS_NAME})" \
-      "Annotations for ${DS_NAME} merged into all view h5ads and synced to ${NAS_TARGET_DIR}/${DS_NAME}/output/."
+      "Annotations for ${DS_NAME} merged into all view h5ads and synced to ${NAS_TARGET_DIR}/${DS_NAME}/output/.
+${DUR_BLOCK}"
   fi
   return 0
 }
@@ -266,20 +293,30 @@ OK_DATASETS=()
 while IFS= read -r DS; do
   echo ""
   echo ">>> Merging annotations for dataset: ${DS} <<<"
+  DS_LOOP_START="$(date +%s)"
   if merge_one_ds "${DS}"; then
     OK_DATASETS+=("${DS}")
   else
     FAILED_DATASETS+=("${DS}")
   fi
+  DS_DURATIONS+=("${DS}|$(( $(date +%s) - DS_LOOP_START ))")
 done < <(jq -r 'keys[]' "${DATASETS_JSON_FILE}")
+
+DURATIONS_BLOCK="Merge durations (dataset, elapsed):
+"
+for line in "${DS_DURATIONS[@]}"; do
+  DURATIONS_BLOCK+="  ${line%%|*}  $(fmt_seconds "${line##*|}")"$'\n'
+done
 
 if (( ${#FAILED_DATASETS[@]} > 0 )); then
   notify_sync_status \
     "ECODA: annotation merge NOT synced (${#FAILED_DATASETS[@]} dataset(s) failed)" \
-    "Default-all annotation merge finished with failures. Failed: ${FAILED_DATASETS[*]}. Processed OK: ${OK_DATASETS[*]}. See the run stdout for details."
+    "Default-all annotation merge finished with failures. Failed: ${FAILED_DATASETS[*]}. Processed OK: ${OK_DATASETS[*]}. See the run stdout for details.
+${DURATIONS_BLOCK}"
   exit 1
 fi
 notify_sync_status \
   "ECODA: annotations merged + synced (all datasets)" \
-  "Default-all annotation merge finished: ${#OK_DATASETS[@]} datasets processed (merged or skipped) and synced to ${NAS_TARGET_DIR}/<DS_NAME>/output/ (${OK_DATASETS[*]})."
+  "Default-all annotation merge finished: ${#OK_DATASETS[@]} datasets processed (merged or skipped) and synced to ${NAS_TARGET_DIR}/<DS_NAME>/output/ (${OK_DATASETS[*]}).
+${DURATIONS_BLOCK}"
 exit 0

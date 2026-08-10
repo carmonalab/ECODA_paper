@@ -23,6 +23,22 @@
 #   at job END/FAIL; this one fires at sync time, potentially minutes later
 #   after the rsync) — its unique value is the answer to "did the NAS sync
 #   actually complete".
+#
+#   array_task_report <job_id>
+#       Prints per-task rows of the array job as TASKID<TAB>STATE<TAB>ELAPSED
+#       <TAB>EXITCODE (one line per task, numeric-sorted by task id), for rows
+#       matching ^<job_id>_[0-9]+ (via `sacct -j <id> -n -P
+#       --format=JobID,State,Elapsed,ExitCode`). The regex excludes the
+#       .batch/.extern/.0 step rows and the bare array master row (master
+#       Elapsed = array wall time, captured separately via array_wall_time).
+#       Prints nothing when sacct is unavailable (command -v guard) or returns
+#       no matching rows; callers embed the output in email bodies and map
+#       task ids to datasets/methods.
+#   array_wall_time <job_id>
+#       Prints the array master row's Elapsed (`sacct -j <id> -X -n
+#       --format=Elapsed`), else "n/a" (sacct unavailable/purged/unknown id).
+#   Both are safe under `set -euo pipefail` (guarded pipelines, always exit 0)
+#   and print to stdout for command substitution into email bodies.
 
 notify_sync_status() {
   local SUBJECT="$1"
@@ -66,4 +82,37 @@ notify_sync_status() {
     return 0
   fi
   echo "Sync-status email sent to ${USER_EMAIL} via ${MAIL_BIN}."
+}
+
+# ---------------------------------------------------------------------------
+# Job-duration report helpers (sacct Elapsed, HH:MM:SS as-is; see header)
+# ---------------------------------------------------------------------------
+
+array_task_report() {
+  local JOB_ID="$1"
+  if ! command -v sacct >/dev/null 2>&1; then
+    return 0
+  fi
+  sacct -j "${JOB_ID}" -n -P --format=JobID,State,Elapsed,ExitCode 2>/dev/null | \
+  awk -F'|' -v jid="${JOB_ID}" '
+    {
+      jobid = $1
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", jobid)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $3)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $4)
+      if (jobid ~ "^" jid "_[0-9]+$") {
+        printf "%s\t%s\t%s\t%s\n", substr(jobid, length(jid) + 2), $2, $3, $4
+      }
+    }' | sort -t "$(printf '\t')" -k1,1n || true
+}
+
+array_wall_time() {
+  local JOB_ID="$1"
+  local WALL="n/a"
+  if command -v sacct >/dev/null 2>&1; then
+    WALL="$(sacct -j "${JOB_ID}" -X -n --format=Elapsed 2>/dev/null | head -1 | tr -d '[:space:]' || true)"
+    [[ -n "${WALL}" ]] || WALL="n/a"
+  fi
+  printf '%s' "${WALL}"
 }

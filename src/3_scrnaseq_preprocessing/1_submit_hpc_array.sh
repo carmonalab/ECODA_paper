@@ -31,6 +31,9 @@ fi
 #     i-th non-underscore key automatically)
 #   - single mode: array INDEX..INDEX where INDEX is the dataset's position in
 #     the FULL sorted key list (worker sed -n resolves it without any change)
+# The completion/sync emails include a per-task report (task -> dataset,
+# state, elapsed, exit code) + array wall time, built from the FULL sorted key
+# list (DS_BY_TASK below) so single-dataset and _debug runs map correctly.
 # ---------------------------------------------------------------------------
 echo "=== Submitting preprocessing array job ==="
 
@@ -82,6 +85,48 @@ fi
 # Passed to workers via the environment (sbatch propagates the submit script's
 # environment); 1.1_run_worker.sh forwards it to 1.1.1_preprocess.py --force.
 export FORCE_PREPROCESS="${FORCE_ARG}"
+
+# ---------------------------------------------------------------------------
+# Task -> dataset mapping for the email reports. Task ids map 1:1 to the FULL
+# sorted jq key list (includes "_" keys, which sort last): single-dataset mode
+# submits a 1-task array at the dataset's position in this full list, so
+# building DS_BY_TASK from the non-underscore prefix only would mis-map _debug
+# tasks. Built once; used by preprocess_report below.
+# ---------------------------------------------------------------------------
+DS_BY_TASK=()
+while IFS= read -r ds_name; do
+  DS_BY_TASK+=("${ds_name}")
+done < <(jq -r 'keys[]' "${DATASETS_JSON_FILE}")
+
+task_dataset() {
+  local TASK_ID="$1"
+  if [[ ${TASK_ID} -ge 1 && ${TASK_ID} -le ${#DS_BY_TASK[@]} ]]; then
+    printf '%s' "${DS_BY_TASK[$((TASK_ID - 1))]}"
+  else
+    printf '%s' "?"
+  fi
+}
+
+# Renders the per-task report block for email bodies: task -> dataset, state,
+# elapsed, exit code (exit code only shown for non-COMPLETED tasks) + array
+# wall time. Prints an n/a line when sacct is unavailable or purged.
+preprocess_report() {
+  local JOB_ID="$1"
+  local TASKS
+  TASKS="$(array_task_report "${JOB_ID}")"
+  if [[ -z "${TASKS}" ]]; then
+    printf '%s' "Per-task report: n/a (sacct unavailable or job purged)."
+    return 0
+  fi
+  printf '%s\n' "Per-task report (task -> dataset, state, elapsed, exit code):"
+  local task state elapsed exitcode extra
+  while IFS=$'\t' read -r task state elapsed exitcode; do
+    extra=""
+    [[ "${state}" == "COMPLETED" ]] || extra=" (${exitcode})"
+    printf '  %s -> %-30s %-14s%s  %s\n' "${task}" "$(task_dataset "${task}")" "${state}" "${extra}" "${elapsed}"
+  done <<< "${TASKS}"
+  printf 'Array wall time: %s\n' "$(array_wall_time "${JOB_ID}")"
+}
 
 DATASET_NAMES=()
 if [[ -n "${DS_NAME_ARG}" ]]; then
@@ -194,7 +239,7 @@ if grep -qvE '^ *COMPLETED *$' <<< "${STATES}"; then
     notify_sync_status \
         "ECODA: preprocess NOT synced (job ${ARRAY_JOB_ID})" \
         "Preprocess sync to NAS failed for job ${ARRAY_JOB_ID} (datasets: ${DATASET_NAMES[*]}): non-COMPLETED tasks.
-$(sacct -j "${ARRAY_JOB_ID}" --format=JobID,JobName,State,ExitCode -n 2>/dev/null || true)"
+$(preprocess_report "${ARRAY_JOB_ID}")"
     exit 1
 fi
 
@@ -224,7 +269,8 @@ if ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
     echo "Results synchronized to ${NAS_TARGET_DIR}/<DS_NAME>/output/ (${SYNCED_COUNT} datasets)"
     notify_sync_status \
         "ECODA: preprocess synced to NAS (job ${ARRAY_JOB_ID})" \
-        "Preprocess results for job ${ARRAY_JOB_ID} synced to NAS (${SYNCED_COUNT} datasets: ${DATASET_NAMES[*]})."
+        "Preprocess results for job ${ARRAY_JOB_ID} synced to NAS (${SYNCED_COUNT} datasets: ${DATASET_NAMES[*]}).
+$(preprocess_report "${ARRAY_JOB_ID}")"
 else
     echo "ERROR: NAS path ${NAS_TARGET_DIR} is unreachable."
     notify_sync_status \

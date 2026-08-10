@@ -46,6 +46,106 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# Email-report helpers. Chunk arrays can be thousands of tasks, so the report
+# aggregates per dataset (chunk COMPLETED/FAILED counts + summed task elapsed)
+# instead of listing every task; failed chunk task ids are bounded to 20.
+# ---------------------------------------------------------------------------
+
+# Parse sacct Elapsed (HH:MM:SS or DD-HH:MM:SS) into seconds; 0 on anything else.
+elapsed_seconds() {
+  local e="$1"
+  if [[ "${e}" =~ ^([0-9]+)-([0-9]+):([0-9]+):([0-9]+)$ ]]; then
+    printf '%s' "$(( BASH_REMATCH[1] * 86400 + BASH_REMATCH[2] * 3600 + BASH_REMATCH[3] * 60 + BASH_REMATCH[4] ))"
+  elif [[ "${e}" =~ ^([0-9]+):([0-9]+):([0-9]+)$ ]]; then
+    printf '%s' "$(( BASH_REMATCH[1] * 3600 + BASH_REMATCH[2] * 60 + BASH_REMATCH[3] ))"
+  else
+    printf '%s' "0"
+  fi
+}
+
+fmt_seconds() {
+  local s="$1"
+  printf '%02d:%02d:%02d' "$(( s / 3600 ))" "$(( (s % 3600) / 60 ))" "$(( s % 60 ))"
+}
+
+# Renders the per-dataset aggregated report for email bodies: dataset, chunks
+# COMPLETED/FAILED, summed task elapsed, failed chunk task ids (bounded 20),
+# array wall time. Task <n> maps to dataset from chunks_manifest.txt line <n>
+# (field 1); manifest missing (e.g. --sync-only after a scratch wipe) falls
+# back to task-id-only lines. Prints an n/a line when sacct is unavailable or
+# purged.
+annotation_report() {
+  local JOB_ID="$1"
+  local TASKS
+  TASKS="$(array_task_report "${JOB_ID}")"
+  if [[ -z "${TASKS}" ]]; then
+    printf '%s' "Per-dataset report: n/a (sacct unavailable or job purged)."
+    return 0
+  fi
+  local MANIFEST="${HPC_SCRATCH_DIR}/chunks_manifest.txt"
+  if [[ ! -f "${MANIFEST}" ]]; then
+    printf '%s\n' "Per-task report (task, state, elapsed, exit code; no chunk manifest):"
+    local task state elapsed exitcode
+    while IFS=$'\t' read -r task state elapsed exitcode; do
+      printf '  %s  %-14s  %s (%s)\n' "${task}" "${state}" "${elapsed}" "${exitcode}"
+    done <<< "${TASKS}"
+    printf 'Array wall time: %s\n' "$(array_wall_time "${JOB_ID}")"
+    return 0
+  fi
+
+  # Aggregate per dataset (order of first appearance); plain indexed arrays
+  # so the report also works on bash 3.x (local dev) — no associative arrays.
+  local -a DS_NAMES=() DS_DONE=() DS_FAIL=() DS_ELAPSED=()
+  local -a FAILED_TASKS=()
+  local FAILED_TOTAL=0
+  local task state elapsed exitcode line ds_name ds_idx found i
+  while IFS=$'\t' read -r task state elapsed exitcode; do
+    line="$(sed -n "${task}p" "${MANIFEST}" 2>/dev/null || true)"
+    ds_name="${line%%$'\t'*}"
+    [[ -n "${ds_name}" ]] || ds_name="?"
+    ds_idx=0
+    found=0
+    for (( i = 0; i < ${#DS_NAMES[@]}; i++ )); do
+      if [[ "${DS_NAMES[i]}" == "${ds_name}" ]]; then
+        ds_idx=$i
+        found=1
+        break
+      fi
+    done
+    if [[ ${found} -eq 0 ]]; then
+      DS_NAMES+=("${ds_name}")
+      DS_DONE+=(0)
+      DS_FAIL+=(0)
+      DS_ELAPSED+=(0)
+      ds_idx=$(( ${#DS_NAMES[@]} - 1 ))
+    fi
+    if [[ "${state}" == "COMPLETED" ]]; then
+      DS_DONE[ds_idx]=$(( DS_DONE[ds_idx] + 1 ))
+    else
+      DS_FAIL[ds_idx]=$(( DS_FAIL[ds_idx] + 1 ))
+      FAILED_TOTAL=$((FAILED_TOTAL + 1))
+      if (( ${#FAILED_TASKS[@]} < 20 )); then
+        FAILED_TASKS+=("${task}")
+      fi
+    fi
+    DS_ELAPSED[ds_idx]=$(( DS_ELAPSED[ds_idx] + $(elapsed_seconds "${elapsed}") ))
+  done <<< "${TASKS}"
+
+  printf '%s\n' "Per-dataset report (dataset, chunks COMPLETED/FAILED, total task elapsed):"
+  for (( i = 0; i < ${#DS_NAMES[@]}; i++ )); do
+    printf '  %-30s %d completed / %d failed    %s\n' "${DS_NAMES[i]}" "${DS_DONE[i]}" "${DS_FAIL[i]}" "$(fmt_seconds "${DS_ELAPSED[i]}")"
+  done
+  if (( FAILED_TOTAL > 0 )); then
+    if (( ${#FAILED_TASKS[@]} < FAILED_TOTAL )); then
+      printf 'Failed chunk tasks (%d): %s (+ %d more)\n' "${FAILED_TOTAL}" "${FAILED_TASKS[*]}" "$(( FAILED_TOTAL - ${#FAILED_TASKS[@]} ))"
+    else
+      printf 'Failed chunk tasks (%d): %s\n' "${FAILED_TOTAL}" "${FAILED_TASKS[*]}"
+    fi
+  fi
+  printf 'Array wall time: %s\n' "$(array_wall_time "${JOB_ID}")"
+}
+
 # Build the list of datasets (all keys of datasets.json, or a single validated key)
 DATASET_NAMES=()
 if [[ -n "${DS_NAME_ARG}" ]]; then
@@ -213,7 +313,7 @@ if grep -qvE '^ *COMPLETED *$' <<< "${STATES}"; then
     notify_sync_status \
         "ECODA: annotation NOT synced (job ${ARRAY_JOB_ID})" \
         "Annotation sync to NAS failed for job ${ARRAY_JOB_ID} (datasets: ${DATASET_NAMES[*]}): non-COMPLETED tasks.
-$(sacct -j "${ARRAY_JOB_ID}" --format=JobID,JobName,State,ExitCode -n 2>/dev/null || true)"
+$(annotation_report "${ARRAY_JOB_ID}")"
     exit 1
 fi
 
@@ -250,7 +350,8 @@ if ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
     echo "Success: Data safely synchronized to the NAS."
     notify_sync_status \
         "ECODA: annotation synced to NAS (job ${ARRAY_JOB_ID})" \
-        "Annotation results for job ${ARRAY_JOB_ID} synced to NAS (${SYNCED_COUNT} datasets: ${DATASET_NAMES[*]})."
+        "Annotation results for job ${ARRAY_JOB_ID} synced to NAS (${SYNCED_COUNT} datasets: ${DATASET_NAMES[*]}).
+$(annotation_report "${ARRAY_JOB_ID}")"
 else
     echo "ERROR: NAS path ${NAS_TARGET_DIR} is unreachable even from this login node."
     notify_sync_status \

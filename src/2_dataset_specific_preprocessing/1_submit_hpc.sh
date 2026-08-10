@@ -26,12 +26,17 @@ set -euo pipefail
 #
 # NOTE: This dispatcher never syncs to NAS (dataset-specific preprocessing
 # writes to scratch only; the preprocess array syncs afterwards), so
-# --sync-only here only re-runs the wait + sacct gate + summary — no status
-# email is sent.
+# --sync-only here only re-runs the wait + sacct gate + summary. A best-effort
+# completion email (per-step state + elapsed, via
+# src/utils/bash/sync_status_email.sh) is sent at the end — success or
+# failure — and --mail-user="${USER_EMAIL}" is passed on every sbatch call so
+# Slurm's own END/FAIL job emails reach the user instead of the cluster
+# default (the step scripts only carry #SBATCH --mail-type=END,FAIL).
 # ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
+source "${SCRIPT_DIR}/../utils/bash/sync_status_email.sh"
 cd "${PROJECT_ROOT}"
 
 STEP_SCRIPTS=( "${SCRIPT_DIR}"/1.*_submit_*.sh )
@@ -88,6 +93,7 @@ else
         --partition="${SLURM_PARTITION}" \
         --output="${STEP_LOG_STEM}.log" \
         --error="${STEP_LOG_STEM}.err" \
+        --mail-user="${USER_EMAIL}" \
         "${CAP_STEP_SCRIPT}")"
     JOB_IDS+=("${CAP_JOB_ID}")
   fi
@@ -110,6 +116,7 @@ else
       --partition="${SLURM_PARTITION}"
       --output="${STEP_LOG_STEM}.log"
       --error="${STEP_LOG_STEM}.err"
+      --mail-user="${USER_EMAIL}"
     )
     if [[ "${step_name}" == "1.2_submit_combinedpbmc.sh" && -n "${CAP_JOB_ID}" ]]; then
       SBATCH_ARGS+=(--dependency="afterok:${CAP_JOB_ID}")
@@ -177,18 +184,47 @@ fi
 echo "=== Job summary ==="
 sacct -j "$(IFS=,; echo "${JOB_IDS[*]}")" --format=JobID,JobName,State,ExitCode
 
+# Per-step report for the completion email: one line per job (bare job id row
+# only — excludes .batch/.extern step rows), JobName + State + Elapsed +
+# ExitCode. Plain jobs, no task->dataset mapping needed.
+stage2_report() {
+  local job_id jid jname state elapsed exitcode
+  printf '%s\n' "Per-step report (step, state, elapsed, exit code):"
+  for job_id in "${JOB_IDS[@]}"; do
+    while IFS='|' read -r jid jname state elapsed exitcode; do
+      jid="${jid//[[:space:]]/}"
+      exitcode="${exitcode%|}"
+      [[ "${jid}" == "${job_id}" ]] || continue
+      printf '  %-40s %-14s %s (%s)\n' "${jname}" "${state}" "${elapsed}" "${exitcode}"
+    done < <(sacct -j "${job_id}" -n -P --format=JobID,JobName,State,Elapsed,ExitCode 2>/dev/null || true)
+  done
+}
+
 # Exit non-zero if any step failed
 failed=0
+FAILED_STEP_NAMES=()
 for job_id in "${JOB_IDS[@]}"; do
   state=$(sacct -j "${job_id}" -X -n -o "State" 2>/dev/null | tr -d ' \n')
   if [[ "${state}" != "COMPLETED" ]]; then
     echo "ERROR: Job ${job_id} ended in state '${state}'."
     failed=1
+    FAILED_STEP_NAME="$(sacct -j "${job_id}" -X -n -P --format=JobName 2>/dev/null | head -1 | tr -d '[:space:]|' || true)"
+    [[ -n "${FAILED_STEP_NAME}" ]] || FAILED_STEP_NAME="${job_id}"
+    FAILED_STEP_NAMES+=("${FAILED_STEP_NAME}")
   fi
 done
 
 if [[ ${failed} -ne 0 ]]; then
+  notify_sync_status \
+    "ECODA: stage-2 steps FAILED (${#FAILED_STEP_NAMES[@]}/${#JOB_IDS[@]})" \
+    "Stage-2 dataset-specific preprocessing steps FAILED (${#FAILED_STEP_NAMES[@]}/${#JOB_IDS[@]}). Failed steps: ${FAILED_STEP_NAMES[*]}.
+$(stage2_report)"
   exit 1
 fi
+
+notify_sync_status \
+  "ECODA: stage-2 steps COMPLETED (${#JOB_IDS[@]} steps)" \
+  "Stage-2 dataset-specific preprocessing completed (${#JOB_IDS[@]} steps; no NAS sync by design).
+$(stage2_report)"
 
 echo "All dataset-specific preprocessing steps completed."

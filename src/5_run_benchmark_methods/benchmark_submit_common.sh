@@ -40,12 +40,21 @@
 # helpers are reused as-is; the submitters only branch on the flag.
 # Sync-status emails are sent by the helpers via notify_sync_status
 # (src/utils/bash/sync_status_email.sh, sourced below) — one per gate
-# failure ("NOT synced — reason") and one after a successful rsync.
+# failure ("NOT synced — reason") and one after a successful rsync. Gate
+# failures carry a per-task report (task -> DATASET_NAMES[i-1], state,
+# elapsed, exit code) + array wall time; the final success/NAS-unreachable
+# emails carry a "Job durations" block (label, job id, array wall time) for
+# every array gated during this run, accumulated in the global JOB_REPORTS
+# by benchmark_wait_for_array.
 # ============================================================================
 
 # Path to the shared exec-log merge script, resolved from THIS file's location
 # (BASH_SOURCE[0] inside a sourced file is the sourced file's path).
 BENCHMARK_MERGE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_python_sample_embedding_methods/1.1.2_merge_execution_times.py"
+
+# Per-array job duration records for the final email: one "<label>|<job id>|<array wall time>"
+# entry per gated array, appended by benchmark_wait_for_array in submission order.
+JOB_REPORTS=()
 
 # Sync-status email helper (best-effort; requires USER_EMAIL from slurm_config.sh).
 source "$(dirname "${BASH_SOURCE[0]}")/../utils/bash/sync_status_email.sh"
@@ -78,6 +87,52 @@ benchmark_resolve_datasets() {
   fi
 
   echo "Found ${NUM_DATASETS} benchmark datasets."
+}
+
+# ---------------------------------------------------------------------------
+# Per-task email report for a gated array (task -> DATASET_NAMES[i-1], state,
+# elapsed, exit code) + array wall time. Prints an n/a line when sacct is
+# unavailable or purged. DATASET_NAMES must be filled (benchmark_resolve_datasets
+# runs before every wait loop, in submission AND --sync-only modes, so the
+# mapping is valid in both).
+# ---------------------------------------------------------------------------
+benchmark_task_report() {
+  local JOB_ID="$1"
+  local TASKS
+  TASKS="$(array_task_report "${JOB_ID}")"
+  if [[ -z "${TASKS}" ]]; then
+    printf '%s' "Per-task report: n/a (sacct unavailable or job purged)."
+    return 0
+  fi
+  printf '%s\n' "Per-task report (task -> dataset, state, elapsed, exit code):"
+  local task state elapsed exitcode extra
+  while IFS=$'\t' read -r task state elapsed exitcode; do
+    local ds_name="?"
+    if [[ ${task} -ge 1 && ${task} -le ${NUM_DATASETS} ]]; then
+      ds_name="${DATASET_NAMES[$((task - 1))]}"
+    fi
+    extra=""
+    [[ "${state}" == "COMPLETED" ]] || extra=" (${exitcode})"
+    printf '  %s -> %-30s %-14s%s  %s\n' "${task}" "${ds_name}" "${state}" "${extra}" "${elapsed}"
+  done <<< "${TASKS}"
+  printf 'Array wall time: %s\n' "$(array_wall_time "${JOB_ID}")"
+}
+
+# ---------------------------------------------------------------------------
+# "Job durations" block for the final emails: label, job id, array wall time
+# for every array gated during this run (JOB_REPORTS, in submission order).
+# ---------------------------------------------------------------------------
+benchmark_job_durations_block() {
+  if (( ${#JOB_REPORTS[@]} == 0 )); then
+    printf '%s' "Job durations: n/a (no gated arrays)."
+    return 0
+  fi
+  printf '%s\n' "Job durations (label, job id, array wall time):"
+  local line label jid wall
+  for line in "${JOB_REPORTS[@]}"; do
+    IFS='|' read -r label jid wall <<< "${line}"
+    printf '  %-30s %s  %s\n' "${label}" "${jid}" "${wall}"
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -143,10 +198,11 @@ benchmark_wait_for_array() {
     notify_sync_status \
       "ECODA: benchmark NOT synced (job ${JOB_ID})" \
       "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID} (datasets: ${DATASET_NAMES[*]}): non-COMPLETED tasks.
-$(sacct -j "${JOB_ID}" --format=JobID,JobName,State,ExitCode -n 2>/dev/null || true)"
+$(benchmark_task_report "${JOB_ID}")"
     exit 1
   fi
   echo "Array Job ${JOB_ID} (${LABEL}): all tasks COMPLETED."
+  JOB_REPORTS+=("${LABEL}|${JOB_ID}|$(array_wall_time "${JOB_ID}")")
 }
 
 # ---------------------------------------------------------------------------
@@ -164,7 +220,8 @@ benchmark_merge_sync_cleanup() {
       echo "ERROR: NAS path ${NAS_TARGET_DIR} is unreachable."
       notify_sync_status \
         "ECODA: benchmark NOT synced (no NAS access)" \
-        "Benchmark sync to NAS skipped (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]}): NAS path ${NAS_TARGET_DIR} is unreachable (check VPN/NAS mount)."
+        "Benchmark sync to NAS skipped (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]}): NAS path ${NAS_TARGET_DIR} is unreachable (check VPN/NAS mount).
+$(benchmark_job_durations_block)"
       exit 1
   fi
   mkdir -p "${NAS_TARGET_DIR}/benchmark"
@@ -209,7 +266,8 @@ benchmark_merge_sync_cleanup() {
   echo "Results synchronized to ${NAS_TARGET_DIR}/benchmark/"
   notify_sync_status \
     "ECODA: benchmark synced to NAS" \
-    "Benchmark results synced to ${NAS_TARGET_DIR}/benchmark/ (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]})."
+    "Benchmark results synced to ${NAS_TARGET_DIR}/benchmark/ (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]}).
+$(benchmark_job_durations_block)"
 
   # Per-task logs may be deleted only now that the sync has succeeded.
   # Scoped to THIS run's (label x dataset) cross product so an overlapping

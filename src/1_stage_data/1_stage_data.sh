@@ -9,6 +9,10 @@ set -euo pipefail
 #   ./1_stage_data.sh                  # stage all datasets (skips keys starting with _)
 #   ./1_stage_data.sh --ds_name _debug # stage only the _debug dataset
 #
+# A best-effort completion email (files staged, warnings, duration) is sent at
+# the end via src/utils/bash/sync_status_email.sh (skipped silently if no mail
+# CLI). This is a login-node script — no sbatch, no NAS sync.
+#
 # Convention: default-all loops skip datasets whose key starts with "_" (e.g.
 # the _debug entry) unless explicitly requested via --ds_name. The _debug raw
 # subset is NOT staged here: `_debug.folder_name` is null, so the null-folder
@@ -17,6 +21,7 @@ set -euo pipefail
 # `--ds_name _debug` is therefore a clean no-op.
 
 source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../utils/bash/sync_status_email.sh"
 cd "${PROJECT_ROOT}"
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -57,15 +62,10 @@ fi
 # The later `sort -u` dedups files shared across views.
 # When --ds_name is given, only that dataset's files are emitted; otherwise
 # keys starting with "_" are skipped.
-jq -r --arg only_ds "${DS_NAME_ARG}" '
-  to_entries[] |
-  (if $only_ds != "" then select(.key == $only_ds) else select(.key | startswith("_") | not) end) |
-  .key as $key |
-  .value.folder_name as $folder |
-  (if (.value.views | length) > 0 then .value.views | to_entries[] | .value.input_file_name else .value.file_names end) |
-  if type == "array" then .[] else . end |
-  "\($key) \($folder) \(.)"
-' "${DATASETS_JSON_FILE}" | sort -u | \
+# NOTE: the loop reads via process substitution (not a pipe) so the counters
+# below persist past the loop.
+STAGED_COUNT=0
+WARNINGS=()
 while read -r KEY FOLDER_NAME RAW_FILE_NAME; do
     if [ "$FOLDER_NAME" == "null" ] || [ -z "$FOLDER_NAME" ]; then
         continue
@@ -78,9 +78,31 @@ while read -r KEY FOLDER_NAME RAW_FILE_NAME; do
     if [ -f "$NAS_FILE_PATH" ]; then
         mkdir -p "${DEST_DIR}"
         rsync -ah --progress "$NAS_FILE_PATH" "${DEST_DIR}/"
+        STAGED_COUNT=$((STAGED_COUNT + 1))
     else
         echo "  -> [WARNING] Source not found: ${NAS_FILE_PATH}"
+        WARNINGS+=("${NAS_FILE_PATH}")
     fi
-done
+done < <(jq -r --arg only_ds "${DS_NAME_ARG}" '
+  to_entries[] |
+  (if $only_ds != "" then select(.key == $only_ds) else select(.key | startswith("_") | not) end) |
+  .key as $key |
+  .value.folder_name as $folder |
+  (if (.value.views | length) > 0 then .value.views | to_entries[] | .value.input_file_name else .value.file_names end) |
+  if type == "array" then .[] else . end |
+  "\($key) \($folder) \(.)"
+' "${DATASETS_JSON_FILE}" | sort -u)
 
 echo "Data staging complete."
+
+# Best-effort completion email (login-node mail CLI, skipped silently if absent).
+DURATION="$(printf '%02d:%02d:%02d' $(( SECONDS / 3600 )) $(( (SECONDS % 3600) / 60 )) $(( SECONDS % 60 )))"
+SUBJECT="ECODA: data staging completed (${STAGED_COUNT} files, ${#WARNINGS[@]} warnings, ${DURATION})"
+if [[ -n "${DS_NAME_ARG}" ]]; then
+  SUBJECT="ECODA: data staging completed (${DS_NAME_ARG}: ${STAGED_COUNT} files, ${#WARNINGS[@]} warnings, ${DURATION})"
+fi
+BODY="Data staging from NAS to HPC scratch completed in ${DURATION}: ${STAGED_COUNT} files staged, ${#WARNINGS[@]} warnings."
+if (( ${#WARNINGS[@]} > 0 )); then
+  BODY+=" Missing sources: ${WARNINGS[*]}."
+fi
+notify_sync_status "${SUBJECT}" "${BODY}"
