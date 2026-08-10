@@ -131,7 +131,7 @@ Agent code fixes:
       rowname set that is not the same gene set stops loudly.
 
 HPC manual steps [REQUIRES USER — agents cannot run HPC]:
-- [ ] Repair py-cuda13 R env (login node, installs allowed):
+- [X] Repair py-cuda13 R env (login node, installs allowed):
       `~/.pixi/bin/pixi run -e py-cuda13 Rscript -e 'install.packages("mime", repos = "https://cloud.r-project.org")'`,
       then `~/.pixi/bin/pixi run -e py-cuda13 setup` (idempotent). Fixes Zhu
       (missing `mime` lazyload DB); also protects annotation/benchmark workers.
@@ -147,18 +147,23 @@ HPC manual steps [REQUIRES USER — agents cannot run HPC]:
 - [ ] Sync the 9 COMPLETED-but-unsynced datasets by re-running their `--ds_name`
       (already-processed outputs are skipped, then synced): Adams, Bassez,
       CombinedPBMC, Kfoury, Kim, Lee, Pelka.
-- [ ] GongSharma OOM fix (task 4, 128G): implement
+- [X] GongSharma OOM fix (task 4, 128G): implemented
       `src/2_dataset_specific_preprocessing/1.4_submit_gongsharma.sh` +
       `1.4.1_subset_gongsharma.py` (new step, auto-discovered by
       `1_submit_hpc.sh`): per-sample cap of 5000 cells
       (`specimen.specimenGuid`, `np.random.RandomState(42)`) — historical
-      `downsample_by_group` strategy (git 3a4711e, `src/py/preprocess_gongsharma.qmd`).
-      Decide: (a) in-place overwrite of the two staged SoundLife h5ads (no
-      datasets.json change; re-run the step after any re-staging), or (b) write
-      a single capped h5ad + update `datasets.json` (needs explicit approval —
-      ground truth). Then re-run:
+      `downsample_by_group` strategy (git 3a4711e,
+      `src/py/preprocess_gongsharma.qmd`). Option (a) chosen (user-confirmed):
+      in-place overwrite of the two staged SoundLife h5ads — no datasets.json
+      change (NAS stays pristine); the cap step must be re-run after any
+      re-staging (see step header). `1_submit_hpc.sh` submits 1.4 first and
+      gates the CombinedPBMC step (1.1) via `--dependency=afterok` (race
+      hazard: 1.1 reads the same staged files in backed mode). Re-run:
       `./src/2_dataset_specific_preprocessing/1_submit_hpc.sh` followed by
       `./src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh --ds_name Gongsharma_cmv_young_males`.
+      (HPC validation pending: cap log must show 531,291 + 365,000 = 896,291
+      cells / max 5000 per sample; preprocess array must reach the NAS sync
+      gate.)
 
 ## Human-managed tasks (not agent)
 

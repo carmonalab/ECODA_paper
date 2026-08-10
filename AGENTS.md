@@ -20,8 +20,9 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
 - sbatch-submitted scripts must NOT resolve `src/slurm_config.sh` from
   `BASH_SOURCE`: Slurm copies submitted scripts to
   `/var/spool/slurmd/job<id>/slurm_script`, so `BASH_SOURCE` points at the spool
-  dir. The 8 sbatch workers (`1.1_submit_combinedpbmc.sh`,
+  dir. The 9 sbatch workers (`1.1_submit_combinedpbmc.sh`,
   `1.2_submit_joanito.sh`, `1.3_submit_kfoury_lowres_ct.sh`,
+  `1.4_submit_gongsharma.sh`,
   `3_scrnaseq_preprocessing/1.1_run_worker.sh`,
   `4_cell_type_annotation/2.1_run_worker.sh`,
   `5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh`,

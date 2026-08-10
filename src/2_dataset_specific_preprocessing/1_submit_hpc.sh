@@ -9,9 +9,13 @@ set -euo pipefail
 # exits non-zero if any step failed.
 #
 # IMPORTANT: Steps are submitted in parallel and therefore MUST be mutually
-# independent. If a future step depends on another step, it must be submitted
-# after the wait loop (or via `--dependency`) — do NOT rely on submission
-# order alone.
+# independent. The one exception is wired explicitly via --dependency: the
+# GongSharma cap step (1.4_submit_gongsharma.sh, when present) is submitted
+# first and the CombinedPBMC step (1.1) is gated behind it with
+# --dependency=afterok (1.4 overwrites the staged SoundLife h5ads IN PLACE,
+# which 1.1 reads in backed mode — a race would nondeterminize the CombinedPBMC
+# dataset). For any future step dependency, use the same pattern (submit first
+# + --dependency) — do NOT rely on submission order alone.
 #
 # Run AFTER src/1_stage_data/1_stage_data.sh and BEFORE
 # src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh.
@@ -70,17 +74,39 @@ if [[ -n "${SYNC_ONLY_IDS}" ]]; then
   echo "=== Sync-only resume mode: jobs ${SYNC_ONLY_IDS} (no submission) ==="
   IFS=',' read -r -a JOB_IDS <<< "${SYNC_ONLY_IDS}"
 else
-for step_script in "${STEP_SCRIPTS[@]}"; do
-  echo "=== Submitting $(basename "${step_script}") ==="
-  # --output/--error/--partition passed on the sbatch command line (not
-  # #SBATCH lines): SLURM directives do not expand environment variables.
-  STEP_LOG_STEM="${LOGS_DIR}/$(basename "${step_script}" .sh)_%j"
-  JOB_IDS+=("$(sbatch --parsable \
-      --partition="${SLURM_PARTITION}" \
-      --output="${STEP_LOG_STEM}.log" \
-      --error="${STEP_LOG_STEM}.err" \
-      "${step_script}")")
-done
+  # GongSharma cap step (1.4) must finish before the CombinedPBMC step (1.1):
+  # 1.4 overwrites the staged SoundLife h5ads IN PLACE and 1.1 reads the same
+  # staged files in backed mode — running them in parallel would nondeterminize
+  # the CombinedPBMC dataset. Submit 1.4 first, then gate 1.1 behind it with
+  # --dependency=afterok (fail-closed: a failed cap means 1.1 is never
+  # submitted and the sacct gate below reports non-COMPLETED).
+  CAP_STEP_SCRIPT="${SCRIPT_DIR}/1.4_submit_gongsharma.sh"
+  if [[ -f "${CAP_STEP_SCRIPT}" ]]; then
+    echo "=== Submitting $(basename "${CAP_STEP_SCRIPT}") (prerequisite for CombinedPBMC) ==="
+    STEP_LOG_STEM="${LOGS_DIR}/$(basename "${CAP_STEP_SCRIPT}" .sh)_%j"
+    CAP_JOB_ID="$(sbatch --parsable \
+        --partition="${SLURM_PARTITION}" \
+        --output="${STEP_LOG_STEM}.log" \
+        --error="${STEP_LOG_STEM}.err" \
+        "${CAP_STEP_SCRIPT}")"
+    JOB_IDS+=("${CAP_JOB_ID}")
+  fi
+  for step_script in "${STEP_SCRIPTS[@]}"; do
+    step_name="$(basename "${step_script}")"
+    echo "=== Submitting ${step_name} ==="
+    # --output/--error/--partition passed on the sbatch command line (not
+    # #SBATCH lines): SLURM directives do not expand environment variables.
+    STEP_LOG_STEM="${LOGS_DIR}/$(basename "${step_script}" .sh)_%j"
+    SBATCH_ARGS=(
+      --partition="${SLURM_PARTITION}"
+      --output="${STEP_LOG_STEM}.log"
+      --error="${STEP_LOG_STEM}.err"
+    )
+    if [[ "${step_name}" == "1.1_submit_combinedpbmc.sh" && -n "${CAP_JOB_ID}" ]]; then
+      SBATCH_ARGS+=(--dependency="afterok:${CAP_JOB_ID}")
+    fi
+    JOB_IDS+=("$(sbatch --parsable "${SBATCH_ARGS[@]}" "${step_script}")")
+  done
 fi
 
 echo "Submitted jobs: ${JOB_IDS[*]}"
