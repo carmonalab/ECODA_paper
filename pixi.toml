@@ -191,14 +191,22 @@ Rscript -e "
     bad <- character(0)
     for (p in list.dirs(lib, recursive = FALSE)) {
       if (!file.exists(file.path(p, 'DESCRIPTION'))) next
-      if (!file.exists(file.path(p, 'Meta', 'package.rds'))) bad <- c(bad, basename(p))
+      # R's own message-catalog component: copied at R build time, never
+      # installed via R CMD INSTALL, so no Meta/package.rds by design
+      # (false positive since the check was added).
+      if (basename(p) == 'translations') next
+      if (!file.exists(file.path(p, 'Meta', 'package.rds'))) bad <- c(bad, p)
     }
     bad
   }
   bad_pkgs <- unique(unlist(lapply(.libPaths(), check_lib_integrity)))
   if (length(bad_pkgs) > 0) {
+    for (p in bad_pkgs) {
+      pkg_line <- grep('^Package:', readLines(file.path(p, 'DESCRIPTION'), n = 20), value = TRUE)
+      cat('Missing Meta/package.rds:', p, paste(pkg_line, collapse = '; '))
+    }
     stop(sprintf(
-      'R library integrity check FAILED: %d package(s) missing Meta/package.rds (corrupt/partial install): %s. Repair: rm -rf .pixi/envs/py-cuda13 && pixi install -e py-cuda13 && pixi run -e py-cuda13 setup',
+      'R library integrity check FAILED: %d package(s) missing Meta/package.rds (corrupt/partial install): %s. The only legitimate case is .../translations (R message catalogs, false positive). Repair: rm -rf .pixi/envs/py-cuda13 && pixi install -e py-cuda13 && pixi run -e py-cuda13 setup',
       length(bad_pkgs), paste(head(bad_pkgs, 20), collapse = ', ')
     ))
   }

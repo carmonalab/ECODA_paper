@@ -63,11 +63,41 @@ if [[ -n "${ACTIVE_JOBS}" ]]; then
   exit 1
 fi
 
+# --- Failure diagnostics: printed only when pixi run setup fails ---------------
+# Identical output contract as setup_env_sbatch.sh's run_env_diagnostics, so
+# login-node and worker-node failures are consistent. Single-quoted shell block
+# -> R uses DOUBLE quotes here (opposite constraint from the pixi.toml
+# [tasks.setup] TOML block).
+run_env_diagnostics() {
+  "${PIXI_BIN}" run -e py-cuda13 Rscript --vanilla -e '
+    cat("R version:", R.version.string, "\n")
+    cat("Library paths:\n")
+    for (lib in .libPaths()) cat("  ", lib, "\n")
+    for (lib in .libPaths()) {
+      dirs <- list.dirs(lib, recursive = FALSE)
+      has_desc <- vapply(dirs, function(d) file.exists(file.path(d, "DESCRIPTION")), logical(1))
+      dirs <- dirs[has_desc]
+      cat("Library ", lib, ": ", length(dirs), " dirs with DESCRIPTION\n", sep = "")
+      for (p in dirs) {
+        if (!file.exists(file.path(p, "Meta", "package.rds"))) {
+          pkg_line <- grep("^Package:", readLines(file.path(p, "DESCRIPTION"), n = 20), value = TRUE)
+          cat("Missing Meta/package.rds:", p, paste(pkg_line, collapse = "; "), "\n")
+        }
+      }
+    }
+    cat("Hint: the only legitimate case is .../translations (R message catalogs, false positive -> update pixi.toml); anything else means the env is genuinely corrupt -> wipe-and-reinstall (rm -rf .pixi/envs/py-cuda13 && pixi install -e py-cuda13 && pixi run -e py-cuda13 setup).\n")
+  ' || true
+}
+
 echo "=== [1/3] pixi install -e py-cuda13 (conda + pypi deps) ==="
 "${PIXI_BIN}" install --environment py-cuda13
 
 echo "=== [2/3] pixi run -e py-cuda13 setup (R source packages + integrity check) ==="
-"${PIXI_BIN}" run -e py-cuda13 setup
+if ! "${PIXI_BIN}" run -e py-cuda13 setup; then
+  echo "ERROR: pixi run setup failed — running env diagnostics..." >&2
+  run_env_diagnostics
+  exit 1
+fi
 
 echo "=== [3/3] smoke check: critical packages load ==="
 "${PIXI_BIN}" run -e py-cuda13 Rscript --vanilla -e '
