@@ -27,6 +27,46 @@ convert_rds_to_raw_h5ad <- function(input_path, output_path) {
   seurat <- readRDS(input_path)
   seurat <- create_clean_seuratv5_object(seurat)
 
+  # anndataR records character columns with encoding='ascii' regardless of
+  # content; any non-ASCII byte then breaks sc.read_h5ad (UnicodeDecodeError).
+  # Lossy replacement is deliberate: clinical/sample metadata is ASCII-safe.
+  md <- seurat@meta.data
+  md[] <- lapply(md, function(x) if (is.character(x)) iconv(x, from = "latin1", to = "ASCII", sub = " ") else x)
+  seurat@meta.data <- md
+
+  # Defensive layer alignment: anndataR validates that layer colnames are
+  # identical to the assay features (order- and content-sensitive); some RDSes
+  # carry layers misaligned in the middle of the gene list (head/tail
+  # identical), which would fail the anndataR strict-identity check. Fresh
+  # Assay5 layers have no rownames (features live in @features and are
+  # resolved by anndataR), so only layers that actually carry rownames are
+  # aligned.
+  rna <- seurat[["RNA"]]
+  if (inherits(rna, "Assay5") && length(rna@layers) > 0) {
+    features <- rownames(rna)
+    for (lyr in names(rna@layers)) {
+      m <- rna@layers[[lyr]]
+      if (!is.null(rownames(m)) && !identical(rownames(m), features)) {
+        if (!setequal(rownames(m), features)) {
+          stop(sprintf(
+            "Layer '%s' rownames are not the same gene set as the assay features (%d missing, %d extra); cannot align.",
+            lyr,
+            sum(!features %in% rownames(m)),
+            sum(!rownames(m) %in% features)
+          ))
+        }
+        n_diff <- sum(rownames(m) != features)
+        first_diff <- rownames(m)[which(rownames(m) != features)[seq_len(min(20, n_diff))]]
+        message(sprintf(
+          "convert_rds_to_raw_h5ad: reindexing layer '%s' rownames to assay features (%d/%d positions differ; first diffs: %s)",
+          lyr, n_diff, length(features), paste(first_diff, collapse = ", ")
+        ))
+        rna@layers[[lyr]] <- m[features, , drop = FALSE]
+      }
+    }
+    seurat[["RNA"]] <- rna
+  }
+
   if (!file.exists(output_path)) {
     write_h5ad(seurat, output_path)
   }

@@ -13,7 +13,7 @@ Prereqs (explicitly user):
 1. Connect NAS + log in to HPC:
    `ssh [REDACTED_HOST]` (password entry). All sbatch/srun
    execution on compute nodes (never login node).
-2. Stage the full datasets (incl. the Joanito raw .rds):
+2. [X] Stage the full datasets (incl. the Joanito raw .rds):
    `src/1_stage_data/1_stage_data.sh` on the login node (`_debug` is skipped —
    its raw subset never lives on the NAS; the Joanito step builds it).
 
@@ -21,13 +21,13 @@ Prereqs (explicitly user):
       (`1.2_submit_joanito.sh` → `1.2.1_prepare_joanito.R`) computes `seqtec`
       AND builds the `_debug` subset into `${HPC_SCRATCH_DIR}/_debug/data/`;
       verify the h5ad exists after the step. Run `1_submit_hpc.sh` only if the
-      full datasets are staged.
-- [ ] Preprocess: `1_submit_hpc_array.sh --ds_name _debug`; validation: h5ad loads, `X_pca`/`X_pca_harmony` present, ~2500 cells, runtime < 30s.
-- [ ] Chunks: `1_prepare_chunks.sh test _debug` (per-dataset union, 1 sample/chunk).
-- [ ] Annotation: `2_submit_hpc_array.sh _debug`.
-- [ ] Merge: `3_submit_merge.sh _debug`; validation: each view h5ad obs gains layer1–3 / scATOMIC cols (NA where absent), counts layer intact, annotated h5ad loads in R/Python.
+      full datasets are staged. (Joanito preprocessing needs to be run again, see Phase 6)
+- [X] Preprocess: `1_submit_hpc_array.sh --ds_name _debug`; validation: h5ad loads, `X_pca`/`X_pca_harmony` present, ~2500 cells, runtime < 30s.
+- [X] Chunks: `1_prepare_chunks.sh test _debug` (per-dataset union, 1 sample/chunk).
+- [X] Annotation: `2_submit_hpc_array.sh _debug`.
+- [X] Merge: `3_submit_merge.sh _debug`; validation: each view h5ad obs gains layer1–3 / scATOMIC cols (NA where absent), counts layer intact, annotated h5ad loads in R/Python.
 - [ ] Cluster verify items: CombinedPBMC parallelized (3 in-job fork workers, backed GongSharma read, `_intermediates/` per-source outputs; expect ~20-25 min first run vs ~40-60 min serial, faster on reruns via the `_raw.h5ad` cache; 128G/16 cpus sbatch); preprocess 16G (GongSharma); annotation 2h/16G vs 5×2 retries; `aux/scGateDB.rds` committed-cache note in `2_submit_hpc_array.sh` comment.
-- [ ] After debug passes: run one real dataset (e.g. Kim) before full rollout.
+- [ ] After debug passes: run one real dataset (e.g. Kfoury) before full rollout. (partly done, src/5_run_benchmark_methods/run_python_sample_embedding_methods is waiting in the HPC queue)(started running the full pipeline on all datasets, see phase 6, still some debugging necessary, currenltly running src/3_scrnaseq_preprocessing and debugging)
 
 ## Phase 3 — src/5_run_benchmark_methods [agent implements; HPC runs]
 
@@ -102,6 +102,59 @@ Prereqs (explicitly user):
       a chunk whose `annotations_chunk_<N>.feather` already exists exits 0
       (task COMPLETED in sacct); the chunk manifest stays unfiltered so the
       `3_submit_merge.sh` coverage gate is unchanged.
+
+## Phase 6 — Preprocess array 4294824 recovery [agent code fixes + user HPC steps]
+
+Context: 9/14 tasks COMPLETED, 5 failed; gate failed closed → nothing synced to
+NAS. Full diagnosis + implementation detail: `.kilo/plans/1786319218000-preprocess-array-4294824-recovery.md`.
+
+Agent code fixes:
+- [X] `select_hvgs_ranked` (`src/3_scrnaseq_preprocessing/1.1.1_preprocess.py`):
+      catch loess `ValueError` (Smillie/Zhang) and retry once with a
+      deterministic jittered counts layer (seed 42, 1e-6 on CSR `.data`,
+      `check_values=False`); delete the jitter layer afterwards; re-raise the
+      original error if the retry fails. (Validated locally with pinned
+      scanpy 1.12.2.)
+- [X] `convert_rds_to_raw_h5ad` (`src/utils/py/preprocess_utils.py`): sanitize
+      character meta.data columns to ASCII (`iconv(from="latin1", to="ASCII",
+      sub=" ")`) before `write_h5ad` — anndataR writes `encoding='ascii'` even
+      for non-ASCII bytes (Joanito `Stage.TNM` NBSP → UnicodeDecodeError).
+- [X] `convert_rds_to_raw_h5ad` (same file): defensively reindex Assay5 layer
+      rownames to the assay features before writing (Wu `validate_aligned_mapping`
+      mismatch), with a diagnostic message naming the differing genes. Note:
+      layers without rownames (fresh Assay5 objects, the healthy path) are
+      skipped — only layers that actually carry rownames are aligned; a
+      rowname set that is not the same gene set stops loudly.
+
+HPC manual steps [REQUIRES USER — agents cannot run HPC]:
+- [ ] Repair py-cuda13 R env (login node, installs allowed):
+      `~/.pixi/bin/pixi run -e py-cuda13 Rscript -e 'install.packages("mime", repos = "https://cloud.r-project.org")'`,
+      then `~/.pixi/bin/pixi run -e py-cuda13 setup` (idempotent). Fixes Zhu
+      (missing `mime` lazyload DB); also protects annotation/benchmark workers.
+- [X] Delete broken Joanito conversion cache:
+      `rm "${HOME}/scratch/ECODA_paper/Joanito/output/JoaI_2022_35773407_Nofilt_whole_raw.h5ad"`
+      (regenerates sanitized after the converter fix).
+- [X] Check Stephenson task 11 (stale RUNNING at gate):
+      `sacct -j 4294824_11 --format=JobID,State,Elapsed,End -X` +
+      `ls "${HOME}/scratch/ECODA_paper/Stephenson/output/"`; re-run
+      `--ds_name Stephenson` if outputs missing.
+- [ ] Re-run failed datasets individually (each run syncs its own outputs):
+      `--ds_name` Joanito, Smillie, Wu, Zhang, Stephenson.
+- [ ] Sync the 9 COMPLETED-but-unsynced datasets by re-running their `--ds_name`
+      (already-processed outputs are skipped, then synced): Adams, Bassez,
+      CombinedPBMC, Kfoury, Kim, Lee, Pelka.
+- [ ] GongSharma OOM fix (task 4, 128G): implement
+      `src/2_dataset_specific_preprocessing/1.4_submit_gongsharma.sh` +
+      `1.4.1_subset_gongsharma.py` (new step, auto-discovered by
+      `1_submit_hpc.sh`): per-sample cap of 5000 cells
+      (`specimen.specimenGuid`, `np.random.RandomState(42)`) — historical
+      `downsample_by_group` strategy (git 3a4711e, `src/py/preprocess_gongsharma.qmd`).
+      Decide: (a) in-place overwrite of the two staged SoundLife h5ads (no
+      datasets.json change; re-run the step after any re-staging), or (b) write
+      a single capped h5ad + update `datasets.json` (needs explicit approval —
+      ground truth). Then re-run:
+      `./src/2_dataset_specific_preprocessing/1_submit_hpc.sh` followed by
+      `./src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh --ds_name Gongsharma_cmv_young_males`.
 
 ## Human-managed tasks (not agent)
 

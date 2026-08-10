@@ -26,15 +26,45 @@ def select_hvgs_ranked(adata, n_top_genes, batch_key=None, flavor="seurat_v3_pap
     batch_key: batch column for batch-aware HVG selection (benchmark views:
     the standardized sample column; batch-effect views: the dataset's batch_col).
     """
-    hvg_df = sc.pp.highly_variable_genes(
-        adata,
-        layer="counts",
-        n_top_genes=n_top_genes,
-        flavor=flavor,
-        batch_key=batch_key,
-        inplace=False,
-        check_values=True,
-    )
+    try:
+        hvg_df = sc.pp.highly_variable_genes(
+            adata,
+            layer="counts",
+            n_top_genes=n_top_genes,
+            flavor=flavor,
+            batch_key=batch_key,
+            inplace=False,
+            check_values=True,
+        )
+    except ValueError as e:
+        # seurat_v3_paper fits a loess of log10(var) on log10(mean) per batch;
+        # integer counts in small batches quantize log-means into tied
+        # x-values -> singular design matrix -> skmisc loess ValueError.
+        # Retry once on a deterministic jittered copy of the counts layer.
+        print(
+            f"seurat_v3 loess fit failed ({e}); retried with deterministic "
+            "jittered counts (seed 42)"
+        )
+        rng = np.random.RandomState(42)
+        cnt = adata.layers["counts"].copy()
+        cnt.data = (
+            cnt.data + rng.random_sample(cnt.data.shape).astype(np.float32) * 1e-6
+        )
+        adata.layers["counts_jittered"] = cnt
+        try:
+            hvg_df = sc.pp.highly_variable_genes(
+                adata,
+                layer="counts_jittered",
+                n_top_genes=n_top_genes,
+                flavor=flavor,
+                batch_key=batch_key,
+                inplace=False,
+                check_values=False,
+            )
+        except ValueError:
+            del adata.layers["counts_jittered"]
+            raise e
+        del adata.layers["counts_jittered"]
     adata.var["hvg_rank"] = hvg_df["highly_variable_rank"].values
     return adata
 
