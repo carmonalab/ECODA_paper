@@ -129,6 +129,23 @@ Agent code fixes:
       layers without rownames (fresh Assay5 objects, the healthy path) are
       skipped — only layers that actually carry rownames are aligned; a
       rowname set that is not the same gene set stops loudly.
+- [X] (2026-08-10, array 4295207) The Assay5/"RNA"-only alignment above did NOT
+      cover Wu — same `validate_aligned_mapping` error on re-convert (stale
+      partial cache auto-repair path). Generalized in `convert_rds_to_raw_h5ad`:
+      alignment now loops over ALL assays and also handles cell-major layers
+      whose gene names sit in the COLNAMES (transposed convention) by
+      transposing back to (features x cells) before reindexing; genuinely
+      different gene sets still fail closed. Added
+      `src/3_scrnaseq_preprocessing/diagnose_layer_alignment.R` to inspect an
+      RDS's assay/layer dimnames (raw + after `create_clean_seuratv5_object`);
+      run it on Wu's RDS on HPC to confirm the layout before the next re-run.
+- [ ] PENDING: repair py-cuda13 R env on HPC (missing/corrupted `digest`
+      `Meta/package.rds` → Stephenson load failure; SeuratObject built under
+      R 4.5.1/Matrix 1.7.4 vs current 4.5.2/1.7.5 ABI warnings): `pixi install
+      --environment py-cuda13`, then delete
+      `.pixi/envs/py-cuda13/lib/R/library/{Seurat,SeuratObject,anndataR}` and
+      `pixi run -e py-cuda13 setup` to rebuild source packages against current
+      R/Matrix. Do NOT run env installs while an array is active.
 
 HPC manual steps [REQUIRES USER — agents cannot run HPC]:
 - [X] Repair py-cuda13 R env (login node, installs allowed):

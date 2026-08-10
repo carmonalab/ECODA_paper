@@ -74,7 +74,12 @@ The **scECODA** R package for scalable cohort-level analysis is available at
     clone, re-run `pixi install -e py-cuda13` on the login node *before*
     submitting jobs. Concurrent `pixi run` re-syncs from parallel jobs can race
     (observed: `failed to remove directory ... os error 2`); a serial login-node
-    re-sync avoids this.
+    re-sync avoids this. Use `src/utils/bash/refresh_env.sh` (run inside `tmux`,
+    with no jobs active) — it refuses to run while `squeue -u $USER` is
+    non-empty and the `setup` task verifies the R library integrity
+    (Meta/package.rds + critical packages load). `pixi install` does NOT detect
+    corrupt package files; if a job reports a missing R package, repair with:
+    `rm -rf .pixi/envs/py-cuda13 && pixi install -e py-cuda13 && pixi run -e py-cuda13 setup`.
 
 
 ### Workflow

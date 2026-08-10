@@ -47,37 +47,65 @@ convert_rds_to_raw_h5ad <- function(input_path, output_path) {
     })
     seurat@meta.data <- md
 
-    # Defensive layer alignment: anndataR validates that layer colnames are
-    # identical to the assay features (order- and content-sensitive); some RDSes
-    # carry layers misaligned in the middle of the gene list (head/tail
-    # identical), which would fail the anndataR strict-identity check. Fresh
-    # Assay5 layers have no rownames (features live in @features and are
-    # resolved by anndataR), so only layers that actually carry rownames are
-    # aligned.
-    rna <- seurat[["RNA"]]
-    if (inherits(rna, "Assay5") && length(rna@layers) > 0) {
-      features <- rownames(rna)
-      for (lyr in names(rna@layers)) {
-        m <- rna@layers[[lyr]]
-        if (!is.null(rownames(m)) && !identical(rownames(m), features)) {
-          if (!setequal(rownames(m), features)) {
+    # Defensive layer alignment (generalized): anndataR validates that layer
+    # dimnames are identical to the assay features (order- and content-
+    # sensitive); some RDSes carry layers misaligned in the middle of the gene
+    # list (head/tail identical), which would fail the anndataR strict-identity
+    # check. Fresh Assay5 layers have no rownames (features live in @features
+    # and are resolved by anndataR). Covers ALL assays (not just "RNA") and
+    # cell-major layers whose gene names sit in the COLNAMES (transposed
+    # convention, e.g. Wu): those are transposed back to the Seurat
+    # (features x cells) convention first. Layers with a genuinely different
+    # gene set still fail closed.
+    align_assay_layers <- function(a, assay_name) {
+      if (!inherits(a, "Assay5") || length(a@layers) == 0) return(a)
+      features <- rownames(a)
+      for (lyr in names(a@layers)) {
+        m <- a@layers[[lyr]]
+        if (!is.null(rownames(m))) {
+          # Genes in rownames (Seurat convention)
+          if (identical(rownames(m), features)) next
+          if (setequal(rownames(m), features)) {
+            n_diff <- sum(rownames(m) != features)
+            first_diff <- rownames(m)[which(rownames(m) != features)[seq_len(min(20, n_diff))]]
+            message(sprintf(
+              "convert_rds_to_raw_h5ad: reindexing assay '%s' layer '%s' rownames to assay features (%d/%d positions differ; first diffs: %s)",
+              assay_name, lyr, n_diff, length(features), paste(first_diff, collapse = ", ")
+            ))
+            m <- m[features, , drop = FALSE]
+          } else if (!is.null(colnames(m)) && setequal(colnames(m), features)) {
+            # Cell-major layer with both dimnames: genes are in the colnames
+            message(sprintf(
+              "convert_rds_to_raw_h5ad: transposing cell-major assay '%s' layer '%s' (genes in colnames) to Seurat convention",
+              assay_name, lyr
+            ))
+            m <- Matrix::t(m)[features, , drop = FALSE]
+          } else {
             stop(sprintf(
-              "Layer '%s' rownames are not the same gene set as the assay features (%d missing, %d extra); cannot align.",
-              lyr,
+              "Layer '%s' of assay '%s' has neither rownames nor colnames equal to the assay features (%d missing, %d extra in rownames); cannot align.",
+              lyr, assay_name,
               sum(!features %in% rownames(m)),
               sum(!rownames(m) %in% features)
             ))
           }
-          n_diff <- sum(rownames(m) != features)
-          first_diff <- rownames(m)[which(rownames(m) != features)[seq_len(min(20, n_diff))]]
+        } else if (!is.null(colnames(m)) && setequal(colnames(m), features)) {
+          # Cell-major layer without rownames (e.g. Wu): transposed convention
           message(sprintf(
-            "convert_rds_to_raw_h5ad: reindexing layer '%s' rownames to assay features (%d/%d positions differ; first diffs: %s)",
-            lyr, n_diff, length(features), paste(first_diff, collapse = ", ")
+            "convert_rds_to_raw_h5ad: transposing cell-major assay '%s' layer '%s' (genes in colnames) to Seurat convention",
+            assay_name, lyr
           ))
-          rna@layers[[lyr]] <- m[features, , drop = FALSE]
+          m <- Matrix::t(m)[features, , drop = FALSE]
+        } else {
+          # Fresh layer without gene dimnames (or barcodes only): anndataR
+          # resolves features from @features
+          next
         }
+        a@layers[[lyr]] <- m
       }
-      seurat[["RNA"]] <- rna
+      return(a)
+    }
+    for (assay_name in names(seurat@assays)) {
+      seurat[[assay_name]] <- align_assay_layers(seurat[[assay_name]], assay_name)
     }
 
     write_h5ad(seurat, output_path)

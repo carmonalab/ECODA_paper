@@ -159,5 +159,40 @@ Rscript -e "
   remotes::install_github('GfellerLab/EPIC@50a4f404f96c2842b2891b517b4e3bfaa6c64b8f')
   remotes::install_github('carmonalab/scECODA@055bc5efb51cac7c3b6e0ea7eae84420f0a8d21a')
   remotes::install_github('funkyheatmap/funkyheatmap@d66dd6d65b4e29fb3f6a300627a4db367ad9db0c')
+
+  # ---------------------------------------------------------------------------
+  # Final integrity verification. pixi/conda do NOT verify installed package
+  # FILES (a corrupt/partial package dir — e.g. digest/Meta/package.rds missing
+  # after a concurrent or interrupted install — is invisible to a plain
+  # 'pixi install'), and conda (pixi install) + remotes (this task) both write
+  # into the same R library, so corruption can persist silently until a job
+  # hits it. Check every installed package has its Meta/package.rds and that
+  # the critical load path works; fail loudly with the wipe-and-reinstall
+  # repair otherwise.
+  # ---------------------------------------------------------------------------
+  check_lib_integrity <- function(lib) {
+    bad <- character(0)
+    for (p in list.dirs(lib, recursive = FALSE)) {
+      if (!file.exists(file.path(p, 'DESCRIPTION'))) next
+      if (!file.exists(file.path(p, 'Meta', 'package.rds'))) bad <- c(bad, basename(p))
+    }
+    bad
+  }
+  bad_pkgs <- unique(unlist(lapply(.libPaths(), check_lib_integrity)))
+  if (length(bad_pkgs) > 0) {
+    stop(sprintf(
+      'R library integrity check FAILED: %d package(s) missing Meta/package.rds (corrupt/partial install): %s. Repair: rm -rf .pixi/envs/py-cuda13 && pixi install -e py-cuda13 && pixi run -e py-cuda13 setup',
+      length(bad_pkgs), paste(head(bad_pkgs, 20), collapse = ', ')
+    ))
+  }
+  missing_critical <- c('digest', 'SeuratObject', 'Seurat', 'anndataR')[
+    !vapply(c('digest', 'SeuratObject', 'Seurat', 'anndataR'), requireNamespace, logical(1), quietly = TRUE)]
+  if (length(missing_critical) > 0) {
+    stop(sprintf(
+      'R library integrity check FAILED: critical package(s) do not load: %s. Repair: rm -rf .pixi/envs/py-cuda13 && pixi install -e py-cuda13 && pixi run -e py-cuda13 setup',
+      paste(missing_critical, collapse = ', ')
+    ))
+  }
+  cat('R library integrity check OK')
 "
 """
