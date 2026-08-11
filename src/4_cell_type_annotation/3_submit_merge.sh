@@ -195,7 +195,12 @@ merge_one_ds() {
     local LOG_FILE="${LOGS_DIR}/merge_annotations_${DS_NAME}_${VIEW_NAME%.h5ad}.log"
     local VIEW_START="$(date +%s)"
     echo "Merging annotations into ${VIEW_NAME}..."
-    if ! srun --partition="${SLURM_PARTITION}" \
+    # --input=none is REQUIRED here: this srun runs inside the default-all
+    # `while read` loop, and srun's stdin forwarding eagerly drains the loop's
+    # stdin (the `jq -r 'keys[]'` process-substitution pipe), making the loop
+    # terminate after the first dataset. Never remove it.
+    if ! srun --input=none \
+         --partition="${SLURM_PARTITION}" \
          --time=02:00:00 \
          --ntasks=1 \
          --cpus-per-task=1 \
