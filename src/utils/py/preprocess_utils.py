@@ -59,7 +59,11 @@ convert_rds_to_raw_h5ad <- function(input_path, output_path) {
     # gene set still fail closed.
     align_assay_layers <- function(a, assay_name) {
       if (!inherits(a, "Assay5") || length(a@layers) == 0) return(a)
-      features <- rownames(a)
+      # Canonical feature vector, stripped of any stray 'names' attribute
+      # (Wu quirk: named Assay5 features propagate names into layer dimnames,
+      # breaking anndataR's identical()-based layer validation). unname() is a
+      # no-op for clean objects.
+      features <- unname(rownames(a))
       for (lyr in names(a@layers)) {
         m <- a@layers[[lyr]]
         if (!is.null(rownames(m))) {

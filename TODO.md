@@ -149,6 +149,31 @@ Agent code fixes:
       `.pixi/envs/py-cuda13/lib/R/library/{Seurat,SeuratObject,anndataR}` and
       `pixi run -e py-cuda13 setup` to rebuild source packages against current
       R/Matrix. Do NOT run env installs while an array is active.
+- [X] (2026-08-11, array 4299048) Wu task 12 root cause: NOT a layer
+      misalignment — the Wu RDS carries a hidden `names` attribute on its
+      Assay5 features (`attr(slot(a, "features"), "dimnames")[[1]]` is a named
+      character vector), which propagates into layer rownames via
+      GetAssayData/LayerData. anndataR `from_Seurat` builds plain `var_names`
+      and compares with `identical()` (attribute-sensitive) → the
+      `validate_aligned_mapping` error despite element-wise equality (head/tail
+      identical in the cli message — the previous reindexing/transposing fixes
+      targeted the wrong hypothesis). Fix (details:
+      `.kilo/plans/1786436620815-wu-dataset-preprocess-fix.md`):
+      - [X] `create_clean_seuratv5_object()` (`src/utils/seurat_utils.R`):
+            `dimnames(counts) <- list(unname(rownames(counts)), unname(colnames(counts)))`
+            before `CreateSeuratObject` + `rownames(md) <- unname(rownames(md))`
+            (unname() is a no-op for clean objects). The rds→h5ad converter
+            calls this universally, so `write_h5ad` is protected at the source.
+      - [X] `align_assay_layers` (`src/utils/py/preprocess_utils.py`):
+            defense-in-depth — canonical `features <- unname(rownames(a))`
+            used for all comparisons/reindexing/transposing.
+      - [X] `diagnose_layer_alignment.R`: now prints whether the layer
+            rownames/colnames and the assay features dimnames carry a
+            NON-NULL `names` attribute (the quirk is invisible to element-wise
+            checks and was missed before).
+      - Kfoury task 6 is a SEPARATE failure: missing
+            `numpy/_pytesttester.py` (py-cuda13 env corruption, documented
+            class) — env repair + re-run, not a code fix.
 
 HPC manual steps [REQUIRES USER — agents cannot run HPC]:
 - [X] Repair py-cuda13 R env (login node, installs allowed):
@@ -167,6 +192,25 @@ HPC manual steps [REQUIRES USER — agents cannot run HPC]:
 - [ ] Sync the 9 COMPLETED-but-unsynced datasets by re-running their `--ds_name`
       (already-processed outputs are skipped, then synced): Adams, Bassez,
       CombinedPBMC, Kfoury, Kim, Lee, Pelka.
+
+### Array 4299048 recovery [REQUIRES USER — agents cannot run HPC]
+(2026-08-11) Wu (task 12) fixed in code (names-attribute quirk, above); Kfoury
+(task 6) = py-cuda13 numpy corruption (`numpy/_pytesttester.py` missing).
+Gate failed closed → nothing synced for this array.
+- [ ] Repair py-cuda13 env (Kfoury): `ls .pixi/envs/py-cuda13/lib/python3.13/site-packages/numpy/_pytesttester.py`
+      + `pixi run -e py-cuda13 python -c "import numpy; print(numpy.__version__)"`;
+      if missing/corrupt: `src/utils/bash/setup_env_sbatch.sh` first (definitive:
+      `rm -rf .pixi/envs/py-cuda13 && pixi install -e py-cuda13 && pixi run -e py-cuda13 setup`).
+      NEVER run env installs while an array is active.
+- [ ] Re-run Wu: `./src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh --ds_name Wu`
+      → expect COMPLETED + "synced to NAS" email; verify
+      `WuS_2021_34493872_benchmark_analysis_ECODAprocessed.h5ad` on NAS (X,
+      layers["counts"], X_pca_* / X_pca_harmony_* keys).
+- [ ] Re-run Kfoury: `--ds_name Kfoury`.
+- [ ] Re-run the 12 COMPLETED-but-unsynced datasets (each run skips existing
+      outputs and syncs): Adams, Bassez, CombinedPBMC,
+      Gongsharma_cmv_young_males, Joanito, Kim, Lee, Pelka, Smillie,
+      Stephenson, Zhang, Zhu (optionally: full array without `--ds_name`).
 - [X] GongSharma OOM fix (task 4, 128G): implemented
       `src/2_dataset_specific_preprocessing/1.1_submit_gongsharma.sh` +
       `1.1.1_subset_gongsharma.py` (new step, auto-discovered by

@@ -32,6 +32,11 @@
 #   - "colnames vs features: setequal=TRUE" with NULL rownames -> cell-major
 #     (transposed) layer; the generalized alignment transposes it back
 #     (message: "transposing cell-major").
+#   - "names attr: ... NON-NULL!" on rownames/colnames or on the assay features
+#     dimnames -> the Wu quirk: an attribute-only difference that identical()
+#     (anndataR layer validation) still fails on. Element-wise checks
+#     (setequal / identical on unname()d dimnames) cannot catch it — this
+#     script now reports it explicitly.
 #   - "setequal=FALSE" with missing/extra genes -> genuinely different gene
 #     set; alignment fails closed (stop) and the RDS needs manual inspection.
 # ============================================================
@@ -62,6 +67,14 @@ describe_layer <- function(m, features, assay_name, lyr, label) {
         setequal(rownames(m), features),
         sum(!features %in% rownames(m)),
         sum(!rownames(m) %in% features)))
+    # Wu quirk: a 'names' attribute on the dimnames makes identical() (anndataR
+    # layer validation) fail although all elements are equal; identical() on
+    # unname()d dimnames is the reliable check.
+    cat(sprintf("    names attr: rownames=%s colnames=%s\n",
+        if (is.null(names(rownames(m)))) "NULL" else "NON-NULL!",
+        if (is.null(names(colnames(m)))) "NULL" else "NON-NULL!"))
+    cat(sprintf("    unname(rownames) vs features: identical=%s\n",
+        identical(unname(rownames(m)), features)))
   }
   if (is.null(colnames(m))) {
     cat("    colnames: NULL\n")
@@ -88,6 +101,13 @@ inspect <- function(seurat, label) {
     cat(sprintf("assay '%s': class=%s n_features=%d\n",
         assay_name, class(a)[1], nrow(a)))
     if (inherits(a, "Assay5")) {
+      # Wu quirk lives here: a 'names' attribute on the features dimnames
+      # (attr(slot(a, "features"), "dimnames")[[1]]) propagates into layer
+      # rownames but is invisible to element-wise comparisons.
+      feat_dn <- attr(slot(a, "features"), "dimnames")[[1]]
+      cat(sprintf("    features dimnames names attr: rownames(a)=%s features-slot=%s\n",
+          if (is.null(names(rownames(a)))) "NULL" else "NON-NULL!",
+          if (is.null(names(feat_dn))) "NULL" else "NON-NULL!"))
       for (lyr in names(a@layers)) {
         describe_layer(a@layers[[lyr]], rownames(a), assay_name, lyr, label)
       }

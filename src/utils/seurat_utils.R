@@ -15,6 +15,12 @@ create_clean_seuratv5_object <- function(seurat) {
     counts <- GetAssayData(seurat, assay = "RNA", layer = "data")
   }
   if (!is.null(counts) && nrow(counts) > 0) {
+    # Strip stray 'names' attributes from dimnames (Wu quirk: the source RDS
+    # carries a names attribute on its Assay5 features; it propagates into
+    # layer dimnames and makes anndataR's identical() layer validation fail
+    # with a misleading validate_aligned_mapping error). unname() is a no-op
+    # when the names attribute is absent.
+    dimnames(counts) <- list(unname(rownames(counts)), unname(colnames(counts)))
     md <- seurat@meta.data
     list_cols <- names(md)[vapply(md, is.list, logical(1))]
     if (length(list_cols) > 0) {
@@ -24,6 +30,7 @@ create_clean_seuratv5_object <- function(seurat) {
       ))
       md[list_cols] <- NULL
     }
+    rownames(md) <- unname(rownames(md))
     seurat <- CreateSeuratObject(counts = counts, meta.data = md)
   }
   return(seurat)
