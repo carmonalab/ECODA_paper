@@ -28,8 +28,10 @@ library(cutoff.scATOMIC)
 # (below machine epsilon) and no iteration cap never terminates on
 # ill-conditioned score mixtures (automatic_threshold jitters scores with
 # runif, so the mle2 M-step never bit-stabilizes). See abelson-lab/scATOMIC
-# issue <NUMBER>.
-em_bounded <- function(data, D1, D2, t = 1e-4, max_iter = 200) {
+# issue <NUMBER>. t=1e-6 matches flexmix's tolerance; measured on real Pelka
+# scores it yields thresholds identical to the bit-stable fit (max_iter=200
+# bounds pathological calls; a smaller t would only cost a few iterations).
+em_bounded <- function(data, D1, D2, t = 1e-6, max_iter = 200) {
   data_name <- unlist(strsplit(deparse(match.call()), "="))[2]
   data_name <- sub(",.*$", "", gsub(" ", "", data_name))
   start <- as.list(startval(data, D1, D2))
@@ -69,7 +71,7 @@ environment(em_bounded) <- em_ns
 unlockBinding("em", em_ns)
 assignInNamespace("em", em_bounded, em_ns)
 lockBinding("em", em_ns)
-message("Patched cutoff.scATOMIC::em with bounded EM loop (t=1e-4, max_iter=200)")
+message("Patched cutoff.scATOMIC::em with bounded EM loop (t=1e-6, max_iter=200)")
 
 library(R.utils)
 
