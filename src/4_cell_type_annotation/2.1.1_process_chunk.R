@@ -382,6 +382,17 @@ if (file.exists(annot_file)) {
       file.path(tmp_dir, sprintf("sample_%02d.feather", i))
     )
   }
+  # Column-aligned assembly: a sample may legitimately lack annotation columns
+  # (e.g., scATOMIC/HiTME produced nothing for it, or a stale checkpoint from an
+  # older run); fill missing columns with NA instead of crashing the plain rbind
+  # on heterogeneous checkpoint schemas (observed on resume: "numbers of columns
+  # of arguments do not match", CombinedPBMC chunk_28 / Zhang chunk_13).
+  all_cols <- unique(unlist(lapply(annotations_list, colnames)))
+  annotations_list <- lapply(annotations_list, function(df) {
+    missing <- setdiff(all_cols, colnames(df))
+    if (length(missing) > 0) df[missing] <- NA
+    df
+  })
   annotations_df <- do.call(rbind, annotations_list)
   rownames(annotations_df) <- NULL
   annot_file_tmp <- paste0(annot_file, ".tmp.", Sys.getpid())
