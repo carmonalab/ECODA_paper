@@ -105,21 +105,15 @@ full pipeline call flow, file-role tables, and HPC folder layout.
 
 - **Stage 1 — QC Filtering:** Per-dataset .rmd notebooks in
   `notebooks/QC_filtering/`.
-- **Stage 2 — Preprocessing + Cell Type Annotation:** Stage raw data from NAS
-  to HPC scratch, run dataset-specific preprocessing steps, then the
-  standardized Python/Scanpy preprocessing pipeline and HPC-parallelized
-  scATOMIC + HiTME annotation (see
-  [ARCHITECTURE.md](docs/ARCHITECTURE.md#cell-type-annotation-pipeline-src4_cell_type_annotation)).
-- **Stage 3 — Benchmark Analysis:** The heavy R methods (GloScope, MOFA,
-  Pseudobulk, scITD) and the ECODA transformation/zero-imputation analyses run
-  on HPC (see the benchmark pipelines below); `notebooks/benchmark_analysis.rmd`
-  loads their result bundles from the NAS (`load_hpc_benchmark_results()`) and
-  runs the fast, composition-based methods (ECODA variants, GloProp, EPIC
-  deconvolution, Avg_PCA_embedding, Freq_highres) locally. Python methods
-  (MrVI, PILOT, scPoli) also run on HPC and exchange data via `.feather` files.
-- **Stage 4 — Batch Effect Analysis:** Render
-  `notebooks/batch_effect_analysis.rmd` in RStudio (under expansion — see
-  TODO.md).
+- **Stage 2 — Data Crunching:** HPC pipelines for:
+  - Dataset-specific preprocessing
+  - Standard scRNA-seq preprocessing with Python/Scanpy.
+  - Cell type annotation with scATOMIC + HiTME.
+  - Running benchmark methods (Python/R)
+  - ECODA transformation and zero-imputation analyses
+- **Stage 3 — Benchmark Analysis:** Load crunched data and summarize results 
+  in `notebooks/benchmark_analysis.rmd`.
+- **Stage 4 — Batch Effect Analysis:** In `notebooks/batch_effect_analysis.rmd`.
 
 #### HPC execution
 Uses SLURM; see [ARCHITECTURE.md](docs/ARCHITECTURE.md#hpc-folder-layout) for the folder layout:
@@ -127,7 +121,7 @@ Uses SLURM; see [ARCHITECTURE.md](docs/ARCHITECTURE.md#hpc-folder-layout) for th
 Running the pipeline:
 
 ```bash
-./src/1_stage_data/1_stage_data.sh                         # stage raw data (NAS → scratch, login node)
+./src/1_stage_data/1_stage_data.sh                         # stage raw data from cold storage (e.g. NAS → HPC scratch)
 ./src/2_dataset_specific_preprocessing/1_submit_hpc.sh     # dataset-specific preprocessing steps
 ./src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh       # standardized preprocessing + sync to NAS
 ./src/4_cell_type_annotation/1_prepare_chunks.sh           # prepares chunk files required for the next step. See docs/ARCHITECTURE.md for details.

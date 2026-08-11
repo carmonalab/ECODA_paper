@@ -53,12 +53,14 @@ fi
 # ---------------------------------------------------------------------------
 
 # Parse sacct Elapsed (HH:MM:SS or DD-HH:MM:SS) into seconds; 0 on anything else.
+# 10# forces base-10: fields like "09" would otherwise be read as (invalid)
+# octal by bash arithmetic ("value too great for base").
 elapsed_seconds() {
   local e="$1"
   if [[ "${e}" =~ ^([0-9]+)-([0-9]+):([0-9]+):([0-9]+)$ ]]; then
-    printf '%s' "$(( BASH_REMATCH[1] * 86400 + BASH_REMATCH[2] * 3600 + BASH_REMATCH[3] * 60 + BASH_REMATCH[4] ))"
+    printf '%s' "$(( 10#${BASH_REMATCH[1]} * 86400 + 10#${BASH_REMATCH[2]} * 3600 + 10#${BASH_REMATCH[3]} * 60 + 10#${BASH_REMATCH[4]} ))"
   elif [[ "${e}" =~ ^([0-9]+):([0-9]+):([0-9]+)$ ]]; then
-    printf '%s' "$(( BASH_REMATCH[1] * 3600 + BASH_REMATCH[2] * 60 + BASH_REMATCH[3] ))"
+    printf '%s' "$(( 10#${BASH_REMATCH[1]} * 3600 + 10#${BASH_REMATCH[2]} * 60 + 10#${BASH_REMATCH[3]} ))"
   else
     printf '%s' "0"
   fi
