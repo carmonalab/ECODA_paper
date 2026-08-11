@@ -62,7 +62,7 @@ fi
 # pinning (benchmark hardware is pinned for runtime comparability). Python
 # stderr lands in the Slurm .err file, so one transient-signature grep covers
 # it. Method outputs are overwritten on re-run (idempotent per-dataset files).
-source "${SCRIPT_DIR}/../../../utils/bash/worker_retry.sh"
+source "${SCRIPT_DIR}/../../utils/bash/worker_retry.sh"
 
 echo "Task ${SLURM_ARRAY_TASK_ID}: running ${METHOD} on ${DS_NAME}"
 set +e

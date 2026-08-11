@@ -72,7 +72,7 @@ fi
 # Both staging and R stderr land in the Slurm .err file, so one
 # transient-signature grep covers both. Analysis outputs are overwritten on
 # re-run (idempotent per-dataset files).
-source "${SCRIPT_DIR}/../../../utils/bash/worker_retry.sh"
+source "${SCRIPT_DIR}/../../utils/bash/worker_retry.sh"
 
 echo "Task ${SLURM_ARRAY_TASK_ID}: running ${ANALYSIS} analysis on ${DS_NAME}"
 # PIXI_RSCRIPT word-splits into `pixi run -e py-cuda13 Rscript --vanilla`;
