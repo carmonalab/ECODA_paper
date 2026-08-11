@@ -23,6 +23,54 @@ library(Seurat)
 library(arrow)
 library(scATOMIC)
 library(cutoff.scATOMIC)
+
+# Bounded cutoff.scATOMIC::em(): upstream bug — EM loop with default t=1e-64
+# (below machine epsilon) and no iteration cap never terminates on
+# ill-conditioned score mixtures (automatic_threshold jitters scores with
+# runif, so the mle2 M-step never bit-stabilizes). See abelson-lab/scATOMIC
+# issue <NUMBER>.
+em_bounded <- function(data, D1, D2, t = 1e-4, max_iter = 200) {
+  data_name <- unlist(strsplit(deparse(match.call()), "="))[2]
+  data_name <- sub(",.*$", "", gsub(" ", "", data_name))
+  start <- as.list(startval(data, D1, D2))
+  D1b <- hash[[D1]]
+  D2b <- hash[[D2]]
+  lambda0 <- 0
+  iter <- 0
+  with(start, {
+    while (abs(lambda0 - mean(lambda)) > t) {
+      iter <- iter + 1
+      if (iter >= max_iter) {
+        message(sprintf("cutoff.scATOMIC::em: EM loop capped at %d iterations (t=%g)", max_iter, t))
+        break
+      }
+      lambda <- mean(lambda)
+      lambda0 <- lambda
+      distr1 <- lambda * D1b(data, mu1, sigma1)
+      distr2 <- (1 - lambda) * D2b(data, mu2, sigma2)
+      lambda <- distr1 / (distr1 + distr2)
+      mLL2 <- function(mu1, sigma1, mu2, sigma2)
+        return(mLL(mu1, sigma1, mu2, sigma2, lambda, data, D1b, D2b))
+      start <- as.list(log(c(mu1 = mu1, sigma1 = sigma1, mu2 = mu2, sigma2 = sigma2)))
+      out <- bbmle::mle2(mLL2, start, "Nelder-Mead")
+      coef <- out@coef
+      coef_n <- names(coef)
+      names(coef) <- NULL
+      for (i in 1:4) assign(coef_n[i], exp(coef[i]))
+    }
+    out <- list(lambda = lambda, param = exp(out@coef), D1 = D1, D2 = D2,
+                deviance = out@min, data = data, data_name = data_name, out = out, t = t)
+    class(out) <- "em"
+    return(out)
+  })
+}
+em_ns <- asNamespace("cutoff.scATOMIC")
+environment(em_bounded) <- em_ns
+unlockBinding("em", em_ns)
+assignInNamespace("em", em_bounded, em_ns)
+lockBinding("em", em_ns)
+message("Patched cutoff.scATOMIC::em with bounded EM loop (t=1e-4, max_iter=200)")
+
 library(R.utils)
 
 library(reticulate)
