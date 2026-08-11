@@ -338,7 +338,7 @@ if ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
       # there. With the merge skip, that cleanup no longer fires for already-merged
       # datasets, so excluding here is the root-cause fix. No --delete: pre-existing
       # NAS artifacts from older runs are intentionally left in place.
-      rsync -rlptDv --exclude='annotations_chunk_*.feather' --exclude='chunks/' "${DS_DIR}/" "${NAS_TARGET_DIR}/${DS_NAME}/output/"
+      rsync -rlptDv --exclude='annotations_chunk_*.feather' --exclude='chunks/' --exclude='annotation_tmp/' "${DS_DIR}/" "${NAS_TARGET_DIR}/${DS_NAME}/output/"
       SYNCED_COUNT=$((SYNCED_COUNT + 1))
     done
     if [[ ${SYNCED_COUNT} -eq 0 ]]; then

@@ -431,6 +431,15 @@ def main():
             stale.unlink()
             print(f"Removed stale annotations file: {stale.name}")
 
+        # Also delete stale per-sample checkpoint intermediates
+        # (output/annotation_tmp/): chunk numbering/sample sets change on
+        # rebuild, so old intermediates must not be resumed by 2.1.1
+        # (which maps sample_<NN>.feather to positions in the chunk file).
+        stale_tmp = path_data / "annotation_tmp"
+        if stale_tmp.exists():
+            shutil.rmtree(stale_tmp, ignore_errors=True)
+            print(f"Removed stale annotation checkpoints: {stale_tmp}")
+
 
 if __name__ == "__main__":
     main()

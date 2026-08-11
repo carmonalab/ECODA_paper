@@ -56,7 +56,16 @@ if [[ "${FORCE_BENCHMARK:-0}" == "1" ]]; then
   FORCE_FLAG="--force"
 fi
 
+# Unified retry handling: transient-failure signatures (stale BeeGFS
+# client-cache views, missing imports) trigger a self-requeue, capped by
+# WORKER_MAX_RETRIES. No R library staging (python env too large), no thread
+# pinning (benchmark hardware is pinned for runtime comparability). Python
+# stderr lands in the Slurm .err file, so one transient-signature grep covers
+# it. Method outputs are overwritten on re-run (idempotent per-dataset files).
+source "${SCRIPT_DIR}/../../../utils/bash/worker_retry.sh"
+
 echo "Task ${SLURM_ARRAY_TASK_ID}: running ${METHOD} on ${DS_NAME}"
+set +e
 "${PYTHON_BIN}" "${SCRIPT_DIR}/1.1.1_benchmark_methods_py.py" \
     --config_path "${DATASETS_JSON_FILE}" \
     --ds_name "${DS_NAME}" \
@@ -66,5 +75,22 @@ echo "Task ${SLURM_ARRAY_TASK_ID}: running ${METHOD} on ${DS_NAME}"
     --output_dir "${OUT_DIR}" \
     --log_file "${LOG_FILE}" \
     ${FORCE_FLAG}
-
-echo "Task ${SLURM_ARRAY_TASK_ID}: ${METHOD} on ${DS_NAME} complete."
+RC=$?
+set -e
+if [[ ${RC} -eq 0 ]]; then
+  worker_clear_retry_count
+  echo "Task ${SLURM_ARRAY_TASK_ID}: ${METHOD} on ${DS_NAME} complete."
+  exit 0
+fi
+ERR_FILE="${LOGS_DIR}/5_benchmark_${METHOD}_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.err"
+if worker_requeue_if_transient "${ERR_FILE}" "${WORKER_MAX_RETRIES:-3}"; then
+  # pyarrow to_feather is NOT atomic: a partial feather from the failed
+  # attempt would be skipped as "already processed" by the combo skip-check
+  # (out_path.exists() in 1.1.1_benchmark_methods_py.py) on the re-run.
+  # Delete this task's per-dataset outputs (embeddings/dists + exec log all
+  # embed ${DS_NAME}) so the re-run recomputes them fresh. Filenames are
+  # per (method, dataset), so other tasks' files are untouched.
+  rm -f "${OUT_DIR}"/*"${DS_NAME}"*.feather
+  exit 0   # requeued; the script restarts, likely on another node
+fi
+exit ${RC}

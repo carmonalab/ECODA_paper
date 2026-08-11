@@ -59,6 +59,22 @@ if (is.null(args$chunk_file) || !file.exists(args$chunk_file)) {
   stop("Valid 'chunk_file' parameter not parsed from execution context!")
 }
 
+# Wall-clock budget: SLURM_TIME_LIMIT is in MINUTES (Slurm sets it as the
+# --time value, e.g. "120" for a 2h job) — multiply by 60 for the seconds
+# scale. The 7200 s fallback matches the worker's #SBATCH --time=02:00:00.
+# SLURM_JOB_START_TIME is not a standard Slurm env var, so proc.time()[3]
+# (R launch, i.e. after staging) is the actual elapsed source; it under-counts
+# wall time by the staging duration, which is a safe (conservative) direction.
+wall_limit_s <- suppressWarnings(as.numeric(Sys.getenv("SLURM_TIME_LIMIT", "")))
+if (is.na(wall_limit_s) || wall_limit_s <= 0) {
+  wall_limit_s <- 7200
+} else {
+  wall_limit_s <- wall_limit_s * 60
+}
+job_start_s <- suppressWarnings(as.numeric(Sys.getenv("SLURM_JOB_START_TIME", "")))
+wall_elapsed <- function() if (!is.na(job_start_s)) as.numeric(Sys.time()) - job_start_s else proc.time()[3]
+wall_left <- function() wall_limit_s - wall_elapsed()
+
 
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 ## Load ref maps ######
@@ -145,9 +161,27 @@ annot_file <- file.path(
 if (file.exists(annot_file)) {
   message(paste("Chunk already processed. Annotations exist at:", annot_file))
 } else {
-  annotations_list <- list()
-  for (target_sample in samples_to_process) {
+  # Per-sample checkpoints: each sample is written to
+  # output/annotation_tmp/chunk_<N>/sample_<NN>.feather as it completes, so a
+  # killed/failed chunk re-runs only the missing sample(s). The final
+  # annotations_chunk_<N>.feather is written atomically only when every sample
+  # succeeded; annotation_tmp/ is removed on success. The subdirectory name
+  # (annotation_tmp/) never matches the merge/coverage glob
+  # annotations_chunk_*.feather, and 1.1_prepare_chunks.py deletes stale
+  # annotation_tmp/ on every chunk rebuild (production mode).
+  tmp_dir <- file.path(paths$path_output, "annotation_tmp",
+                       sub("\\.txt$", "", basename(args$chunk_file)))
+  failed_samples <- character(0)
+  for (i in seq_along(samples_to_process)) {
+    target_sample <- samples_to_process[i]
+    sample_tmp <- file.path(tmp_dir, sprintf("sample_%02d.feather", i))
+    if (file.exists(sample_tmp)) {
+      message(paste("resume: sample", target_sample, "already annotated; skipping"))
+      next
+    }
     message(paste("--- Processing sample:", target_sample, "---"))
+
+    sample_ok <- tryCatch({
 
     # Python 3 keys() returns a view object (dict_keys/KeysView) that py_to_r()
     # does NOT convert; materialize it to a Python list first so py_to_r returns
@@ -180,11 +214,22 @@ if (file.exists(annot_file)) {
     seurat_obj <- NormalizeData(seurat_obj)
 
     timeout <- max(60, ncol(seurat_obj) / 10000 * 60 * 10)
+    # Per-attempt cap (wall-clock policy: 1800 s max, and only when the
+    # remaining wall time exceeds the attempt by a 300 s margin). withTimeout
+    # is best-effort — it fires at R evaluation points, not inside blocking
+    # python (reticulate) calls — so the real budget is enforced here at R
+    # level and Slurm's wall limit stays the backstop.
+    attempt_timeout <- min(timeout, 1800)
 
     ### scATOMIC annotation ####
     if (is.null(seurat_obj@meta.data[["layer_1"]])) {
       for (a in 1:5) {
-        message(paste("  scATOMIC attempt", a, "with", round(timeout), "s timeout"))
+        eff <- min(attempt_timeout, wall_left() - 300)
+        if (eff < 60) {
+          message(paste("  scATOMIC: insufficient wall time remaining (", round(wall_left()), "s); skipping attempt"))
+          break
+        }
+        message(paste("  scATOMIC attempt", a, "with", round(eff), "s timeout"))
         result <- tryCatch({
           withTimeout({
             sca_preds <- run_scATOMIC(seurat_obj@assays$RNA$counts)
@@ -194,7 +239,7 @@ if (file.exists(annot_file)) {
               normal_tissue = args$normal_tissue
             )
             "Complete"
-          }, timeout = timeout)
+          }, timeout = eff)
         }, TimeoutException = function(te) {
           message("  scATOMIC timeout, retrying...")
           NULL
@@ -212,7 +257,12 @@ if (file.exists(annot_file)) {
 
     ### HiTME annotation ####
     for (a in 1:5) {
-      message(paste("  HiTME attempt", a, "with", timeout, "s timeout"))
+      eff <- min(attempt_timeout, wall_left() - 300)
+      if (eff < 60) {
+        message(paste("  HiTME: insufficient wall time remaining (", round(wall_left()), "s); skipping attempt"))
+        break
+      }
+      message(paste("  HiTME attempt", a, "with", round(eff), "s timeout"))
       result <- tryCatch({
         withTimeout({
           if (args$tissue_type == "Blood") {
@@ -233,7 +283,7 @@ if (file.exists(annot_file)) {
             )
           }
           "Complete"
-        }, timeout = timeout)
+        }, timeout = eff)
       }, TimeoutException = function(te) {
         message("  HiTME timeout, retrying...")
         NULL
@@ -250,15 +300,44 @@ if (file.exists(annot_file)) {
     annot <- meta[, keep_cols, drop = FALSE]
     annot$cell_barcode <- rownames(annot)
     annot[[args$sample_colname]] <- target_sample
-    annotations_list[[target_sample]] <- annot
 
     rm(seurat_obj)
     gc()
+    TRUE
+    }, error = function(e) {
+      message(paste("SAMPLE FAILED (", target_sample, "): ", conditionMessage(e), " - continuing"))
+      FALSE
+    })
+
+    if (sample_ok) {
+      dir.create(tmp_dir, showWarnings = FALSE, recursive = TRUE)
+      sample_tmp_write <- paste0(sample_tmp, ".tmp.", Sys.getpid())
+      write_feather(annot, sample_tmp_write)
+      file.rename(sample_tmp_write, sample_tmp)
+      message(paste("  Checkpoint written:", sample_tmp))
+    } else {
+      failed_samples <- c(failed_samples, target_sample)
+    }
   }
 
+  if (length(failed_samples) > 0) {
+    message(paste("chunk INCOMPLETE - failed samples:", paste(failed_samples, collapse = ", ")))
+    message(paste("Sample intermediates kept in:", tmp_dir, "- a re-run resumes only the failed sample(s)."))
+    quit(status = 1)
+  }
+
+  annotations_list <- list()
+  for (i in seq_along(samples_to_process)) {
+    annotations_list[[samples_to_process[i]]] <- read_feather(
+      file.path(tmp_dir, sprintf("sample_%02d.feather", i))
+    )
+  }
   annotations_df <- do.call(rbind, annotations_list)
   rownames(annotations_df) <- NULL
-  write_feather(annotations_df, annot_file)
+  annot_file_tmp <- paste0(annot_file, ".tmp.", Sys.getpid())
+  write_feather(annotations_df, annot_file_tmp)
+  file.rename(annot_file_tmp, annot_file)
+  unlink(tmp_dir, recursive = TRUE)
   message(paste("Wrote annotations to:", annot_file))
 }
 

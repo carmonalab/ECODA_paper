@@ -46,11 +46,29 @@ if [[ "${FORCE_PREPROCESS:-0}" == "1" ]]; then
   FORCE_FLAG="--force"
 fi
 
+# Unified retry handling: transient-failure signatures (stale BeeGFS
+# client-cache views, missing imports) trigger a self-requeue, capped by
+# WORKER_MAX_RETRIES. No R library staging (python env too large) and no
+# thread pinning (preprocessing is multi-threaded by design). Python stderr
+# lands in the Slurm .err file, so one transient-signature grep covers it.
+source "${SCRIPT_DIR}/../utils/bash/worker_retry.sh"
+
+set +e
 "${PYTHON_BIN}" "${SCRIPT_DIR}/1.1.1_preprocess.py" \
     --config_path "${DATASETS_JSON_FILE}" \
     --input_dir "${DATA_DIR}" \
     --output_dir "${OUTPUT_DIR}" \
     --ds_name "${DS_NAME}" \
     ${FORCE_FLAG}
-
-echo "Preprocessing complete for ${DS_NAME}"
+RC=$?
+set -e
+if [[ ${RC} -eq 0 ]]; then
+  worker_clear_retry_count
+  echo "Preprocessing complete for ${DS_NAME}"
+  exit 0
+fi
+ERR_FILE="${LOGS_DIR}/3_scrnaseq_preprocessing_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.err"
+if worker_requeue_if_transient "${ERR_FILE}" "${WORKER_MAX_RETRIES:-3}"; then
+  exit 0   # requeued; the script restarts, likely on another node
+fi
+exit ${RC}

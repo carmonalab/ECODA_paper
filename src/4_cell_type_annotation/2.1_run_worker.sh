@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=scrna_worker
-#SBATCH --time=01:00:00
+#SBATCH --time=02:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -67,8 +67,27 @@ if [[ -f "${FEATHER_FILE}" ]]; then
   exit 0
 fi
 
-echo "Task ${SLURM_ARRAY_TASK_ID}: running annotation (pixi run Rscript --vanilla)"
-${PIXI_RSCRIPT} \
+# Staging + unified retry handling: stage the pixi R library to node-local
+# /scratch (immune to stale BeeGFS client-cache views), pin BLAS/OMP threads
+# so CPU time ~= wall time, then run the chunk. Both staging and R stderr land
+# in the Slurm .err file, so one transient-signature grep covers both. The
+# retry counter is cleared on success and only bumped on requeue.
+source "${SCRIPT_DIR}/../utils/bash/worker_retry.sh"
+export_worker_thread_env
+
+set +e
+stage_env_rlib "annotation" && ${PIXI_RSCRIPT} \
   "${SCRIPT_DIR}/2.1.1_process_chunk.R" \
   "${CHUNK_FILE}"
-echo "Task ${SLURM_ARRAY_TASK_ID}: chunk processing complete."
+RC=$?
+set -e
+if [[ ${RC} -eq 0 ]]; then
+  worker_clear_retry_count
+  echo "Task ${SLURM_ARRAY_TASK_ID}: chunk processing complete."
+  exit 0
+fi
+ERR_FILE="${LOGS_DIR}/4_cell_type_annotation_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.err"
+if worker_requeue_if_transient "${ERR_FILE}" "${WORKER_MAX_RETRIES:-3}"; then
+  exit 0   # requeued; the script restarts, likely on another node
+fi
+exit ${RC}

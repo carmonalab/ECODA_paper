@@ -137,3 +137,16 @@ fi
 
 # --- Parallelism ---
 MAX_NUM_CHUNKS_PARALLEL=1000
+
+# --- Worker self-healing (src/utils/bash/worker_retry.sh) ---
+# WORKER_STAGE_R_LIB: set to 0 to disable R library staging (R workers copy
+# .pixi/envs/py-cuda13/lib/R/library to node-local /scratch so package loads
+# are immune to stale BeeGFS client-cache views).
+# WORKER_R_LIB_MAX_MB: staging size guard; larger libraries skip staging with
+# a warning (BeeGFS fallback; transient retries still cover flakes).
+# WORKER_MAX_RETRIES: self-requeue cap on transient-failure signatures (grep
+# on the Slurm .err file + scontrol requeue from the RUNNING task; counter
+# file per (job, task) under ${HPC_SCRATCH_DIR}/_worker_retries/).
+WORKER_STAGE_R_LIB=1
+WORKER_R_LIB_MAX_MB=10240
+WORKER_MAX_RETRIES=3

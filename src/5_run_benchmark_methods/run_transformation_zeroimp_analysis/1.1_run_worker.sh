@@ -66,10 +66,19 @@ else
   R_SCRIPT="${SCRIPT_DIR}/1.1.1_run_zeroimp_analysis.R"
 fi
 
+# Staging + unified retry handling: stage the pixi R library to node-local
+# /scratch (immune to stale BeeGFS client-cache views), then run the analysis.
+# No thread pinning (benchmark hardware is pinned for runtime comparability).
+# Both staging and R stderr land in the Slurm .err file, so one
+# transient-signature grep covers both. Analysis outputs are overwritten on
+# re-run (idempotent per-dataset files).
+source "${SCRIPT_DIR}/../../../utils/bash/worker_retry.sh"
+
 echo "Task ${SLURM_ARRAY_TASK_ID}: running ${ANALYSIS} analysis on ${DS_NAME}"
 # PIXI_RSCRIPT word-splits into `pixi run -e py-cuda13 Rscript --vanilla`;
 # it must stay unquoted (established convention, see 2.1_run_worker.sh).
-${PIXI_RSCRIPT} "${R_SCRIPT}" \
+set +e
+stage_env_rlib "benchmark" && ${PIXI_RSCRIPT} "${R_SCRIPT}" \
     --config_path "${DATASETS_JSON_FILE}" \
     --ds_name "${DS_NAME}" \
     --view benchmark_analysis \
@@ -77,5 +86,15 @@ ${PIXI_RSCRIPT} "${R_SCRIPT}" \
     --output_dir "${HPC_SCRATCH_DIR}/benchmark/results" \
     --log_file "${LOG_FILE}" \
     ${FORCE_FLAG}
-
-echo "Task ${SLURM_ARRAY_TASK_ID}: ${ANALYSIS} on ${DS_NAME} complete."
+RC=$?
+set -e
+if [[ ${RC} -eq 0 ]]; then
+  worker_clear_retry_count
+  echo "Task ${SLURM_ARRAY_TASK_ID}: ${ANALYSIS} on ${DS_NAME} complete."
+  exit 0
+fi
+ERR_FILE="${LOGS_DIR}/5_transzeroimp_${ANALYSIS}_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.err"
+if worker_requeue_if_transient "${ERR_FILE}" "${WORKER_MAX_RETRIES:-3}"; then
+  exit 0   # requeued; the script restarts, likely on another node
+fi
+exit ${RC}
