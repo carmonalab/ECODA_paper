@@ -116,40 +116,60 @@ full pipeline call flow, file-role tables, and HPC folder layout.
 - **Stage 4 — Batch Effect Analysis:** In `notebooks/batch_effect_analysis.rmd`.
 
 #### HPC execution
-Uses SLURM; see [ARCHITECTURE.md](docs/ARCHITECTURE.md#hpc-folder-layout) for the folder layout:
+Uses SLURM; see [ARCHITECTURE.md](docs/ARCHITECTURE.md#hpc-folder-layout) for the folder layout.
+
+- **Important notes**
+  ```
+  `./src/2_dataset_specific_preprocessing/1_submit_hpc.sh` creates a small "_debug" dataset for testing and debugging.
+  Most pipelines have additional parameters, e.g.:
+  - --ds_name: to run only for a specific dataset
+  - --force: to overwrite existing outputs (otherwise they are typically skipped and not re-processed to safe ressources)
+
+  Example:
+  `./src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh --ds_name _debug --methods mrvi`
+  ```
 
 Running the pipeline:
 
-```bash
-./src/1_stage_data/1_stage_data.sh                         # stage raw data from cold storage (e.g. NAS → HPC scratch)
-./src/2_dataset_specific_preprocessing/1_submit_hpc.sh     # dataset-specific preprocessing steps
-./src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh       # standardized preprocessing + sync to NAS
-./src/4_cell_type_annotation/1_prepare_chunks.sh           # prepares chunk files required for the next step. See docs/ARCHITECTURE.md for details.
-./src/4_cell_type_annotation/2_submit_hpc_array.sh         # scATOMIC + HiTME annotation array
-./src/4_cell_type_annotation/3_submit_merge.sh             # merge annotations back to h5ad + sync to NAS (all datasets; per-dataset: ./3_submit_merge.sh <DS> [--force])
-```
+- **Staging** (`src/1_stage_data/`):
+  ```bash
+  ./src/1_stage_data/1_stage_data.sh                         # stage raw data from cold storage (e.g. NAS → HPC scratch)
+  ```
+
+- **Dataset-specific preprocessing** (`src/2_dataset_specific_preprocessing/`):
+  ```bash
+  ./src/2_dataset_specific_preprocessing/1_submit_hpc.sh     # dataset-specific preprocessing steps -> also creates a small "_debug" dataset for testing and debugging
+  ```
+
+- **scRNA-seq preprocessing** (`src/3_scrnaseq_preprocessing/`):
+  ```bash
+  ./src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh       # standardized preprocessing + sync to NAS
+  ```
+
+- **Cell type annotation** (`src/4_cell_type_annotation/`):
+  ```bash
+  ./src/4_cell_type_annotation/1_prepare_chunks.sh           # prepares chunk files required for the next step. See docs/ARCHITECTURE.md for details.
+  ./src/4_cell_type_annotation/2_submit_hpc_array.sh         # scATOMIC + HiTME annotation array
+  ./src/4_cell_type_annotation/3_submit_merge.sh             # merge annotations back to h5ad + sync to NAS
+  ```
 
 - **Benchmark methods** (`src/5_run_benchmark_methods/`):
   - **Python methods** (`run_python_sample_embedding_methods/`): MrVI, scPoli
     (GPU), PILOT (CPU).
     ```bash
-    ./src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh                 # all methods, all datasets
-    ./src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh --ds_name _debug --methods mrvi
+    ./src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh
     ```
   - **R methods** (`run_r_sample_embedding_methods/`): GloScope, MOFA,
     Pseudobulk, scITD (CPU benchmark class, pinned like PILOT for runtime
     comparability); `mofa`/`pseudobulk` auto-prepend the `prepare_pseudobulk`
     prep step.
     ```bash
-    ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh                       # all methods, all datasets
-    ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh --ds_name _debug --methods prepare_pseudobulk,pseudobulk
-    ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh --methods mofa --force
+    ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh
     ```
   - **Transformation + zero-imputation analyses** (`run_transformation_zeroimp_analysis/`):
     two arrays (`trans`, `zeroimp`).
     ```bash
-    ./src/5_run_benchmark_methods/run_transformation_zeroimp_analysis/1_submit_hpc_array.sh                   # both analyses, all datasets
-    ./src/5_run_benchmark_methods/run_transformation_zeroimp_analysis/1_submit_hpc_array.sh --ds_name _debug --analysis trans,zeroimp
+    ./src/5_run_benchmark_methods/run_transformation_zeroimp_analysis/1_submit_hpc_array.sh
     ```
   All benchmark submitters monitor their arrays, verify every task via `sacct`
   (fail-closed), merge the per-task execution-time logs into
