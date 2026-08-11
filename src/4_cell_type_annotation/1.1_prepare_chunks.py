@@ -30,7 +30,10 @@
 #   - exactly one view  -> streaming h5py copy (obs/var groups + counts as X)
 #   - multiple views, one of which already contains the full union (e.g.
 #     Stephenson: benchmark view is a cell subset of the batch-effect view)
-#     -> same streaming copy of that view (backed obs-only reads)
+#     -> same streaming copy of that view (h5py-only obs key-set reads — no
+#     anndata open, since backed open eagerly materializes the whole layers
+#     group into RAM on anndata 0.12.x (~6-10 GB for a full-cohort view, vs
+#     ~100-200 MB for the key-set read); keeps the 4G srun allocation valid)
 #   - otherwise (partial overlaps between views) -> full in-memory concat +
 #     dedup; this path needs a large srun allocation and prints a warning.
 
@@ -52,6 +55,103 @@ def cell_keys(adata, sample_col):
     """(sample, barcode) composite keys for the obs of `adata`."""
     samples = adata.obs[sample_col].astype(str).values
     return np.char.add(np.char.add(samples, "_"), adata.obs_names.astype(str).values)
+
+
+def _read_str_dataset(ds):
+    """
+    Read a 1-D string h5py dataset into a numpy str array. Covers the
+    encodings anndata writes for obs string columns (fixed-length bytes
+    'S', variable-length h5py string dtype 'O', and numeric columns, which
+    mirror pandas `.astype(str)` semantics). Fails closed on anything else.
+    """
+    arr = ds[:]
+    if arr.dtype.kind == "S":
+        return np.char.decode(arr, "utf-8")
+    if arr.dtype.kind == "O":
+        out = np.empty(arr.shape, dtype=object)
+        for i, x in enumerate(arr):
+            if isinstance(x, bytes):
+                out[i] = x.decode("utf-8")
+            else:
+                out[i] = str(x)
+        return out.astype(str)
+    if arr.dtype.kind in "iuf":
+        return arr.astype(str)
+    raise RuntimeError(
+        f"Unsupported dtype '{arr.dtype}' for h5py dataset '{ds.name}'."
+    )
+
+
+def _read_obs_column(obs_grp, col):
+    """
+    Read one obs column as a numpy str array, mirroring the semantics of
+    `adata.obs[col].astype(str)` for the encodings anndata 0.12 writes
+    (plain string/numeric datasets and 'categorical' groups). A missing
+    column raises KeyError like pandas; unknown encodings raise
+    RuntimeError (fail closed, never silently mis-decode).
+    """
+    ds = obs_grp[col]
+    enc = ds.attrs.get("encoding-type")
+    if isinstance(enc, bytes):
+        enc = enc.decode("utf-8")
+    if enc is None or enc in ("", "array", "string-array"):
+        return _read_str_dataset(ds)
+    if enc == "categorical":
+        categories = _read_str_dataset(ds["categories"])
+        codes = ds["codes"][:].astype(np.int64)
+        # -1 = missing category; pandas .astype(str) renders NaN as "nan".
+        # np.clip keeps -1 from ever indexing categories.
+        return np.where(codes >= 0, categories[np.clip(codes, 0, None)], "nan")
+    raise RuntimeError(
+        f"Unsupported encoding-type '{enc}' for obs column '{col}'."
+    )
+
+
+def read_obs_keys_h5py(path, sample_col):
+    """
+    Memory-lean (sample, barcode) key-set reader for one preprocessed view,
+    using h5py only — no anndata open, so the backed-open eager `layers`
+    materialization (anndata 0.12.x; ~6-10 GB for a full-cohort view) never
+    happens and the key-set comparison stays at ~100-200 MB. Reproduces
+    `cell_keys()` semantics exactly (str sample column, "_" separator, str
+    obs index). Fails closed on layout/encoding surprises and on
+    obs<->matrix row-count mismatches.
+    """
+    with h5py.File(path, "r") as f:
+        obs = f["obs"]
+        obs_enc = obs.attrs.get("encoding-type")
+        if isinstance(obs_enc, bytes):
+            obs_enc = obs_enc.decode("utf-8")
+        if str(obs_enc) != "dataframe":
+            raise RuntimeError(
+                f"{path}: obs encoding-type is '{obs_enc}', expected "
+                "'dataframe' (anndata 0.12 h5ad layout)."
+            )
+        barcodes = _read_str_dataset(obs["_index"])
+        samples = _read_obs_column(obs, sample_col)
+        # Row-count guard against the counts source, mirroring
+        # write_annotation_union's fallback (layers/counts else X) and CSR
+        # checks: a corrupt obs<->matrix mismatch must fail loudly.
+        if "layers/counts" in f:
+            counts = f["layers/counts"]
+        else:
+            counts = f["X"]
+        counts_enc = counts.attrs.get("encoding-type")
+        if isinstance(counts_enc, bytes):
+            counts_enc = counts_enc.decode("utf-8")
+        if str(counts_enc) != "csr_matrix":
+            raise RuntimeError(
+                f"{path}: counts source encoding-type is '{counts_enc}', "
+                "expected 'csr_matrix'."
+            )
+        indptr = counts["indptr"][:]
+        n_rows = len(indptr) - 1
+        if n_rows != len(barcodes):
+            raise RuntimeError(
+                f"{path}: obs/matrix row mismatch ({len(barcodes)} obs rows "
+                f"vs {n_rows} counts rows)."
+            )
+    return {f"{s}_{b}" for s, b in zip(samples, barcodes)}
 
 
 def verify_annotation_union(union_path, expected_nnz, sample_col):
@@ -146,14 +246,15 @@ def build_union(h5ad_files, union_path, sample_col):
     print(f"Building union from {len(h5ad_files)} views: "
           + ", ".join(f.name for f in h5ad_files))
 
-    # 1. Compare (sample, barcode) key sets using backed obs-only reads (no
-    #    matrix I/O). If one view already equals the union, stream it.
+    # 1. Compare (sample, barcode) key sets using h5py-only obs reads (no
+    #    anndata open: on anndata 0.12.x, backed open eagerly materializes
+    #    the whole layers group into RAM, which OOMs the 4G srun on
+    #    full-cohort views like Stephenson's batch-effect view). If one view
+    #    already equals the union, stream it.
     key_sets = []
     for f in h5ad_files:
-        adata = ad.read_h5ad(f, backed="r")
-        keys = set(cell_keys(adata, sample_col))
+        keys = read_obs_keys_h5py(f, sample_col)
         key_sets.append(keys)
-        adata.file.close()
         print(f"  {f.name}: {len(keys)} cells")
 
     union_keys = set().union(*key_sets)
