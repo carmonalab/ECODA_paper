@@ -26,6 +26,7 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
   protection). `get_pb_deseq2()` passes the same three params through.
 
 # General rules
+- Never drop defined versions in pixi.toml! This breaks reproducibility. If unsure (e.g. when removing a package or changing how it's imported, ask the user).
 - Do not run pipeline scripts (e.g. .R, .py or .sh) for validation checks after implementing new code, unless the user asks for.
     - Validation of HPC pipeline scripts (e.g. .R, .py or .sh) will be run once the pipeline has been fully implemented, using a small debugging dataset (e.g. derived from the Joanito dataset)
 - All HPC bash scripts must run with the working directory set to ${PROJECT_ROOT}:

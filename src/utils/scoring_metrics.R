@@ -90,8 +90,12 @@ compute_snn_graph <- function(knn) {
     dims = c(n, n)
   )
 
-  # 2. Compute SNN weights for ALL pairs using Matrix Multiplication
-  snn_matrix <- adj_bin %*% t(adj_bin)
+  # 2. Compute SNN weights for ALL pairs using Matrix Multiplication.
+  # NOTE: use Matrix::tcrossprod() (A %*% t(A)), NOT bare t(adj_bin): the
+  # datrans foreach worker attaches only the .packages list (not Matrix), so
+  # S4 dispatch of the primitive t() on a dgCMatrix falls through to
+  # t.default() and errors with "argument is not a matrix".
+  snn_matrix <- Matrix::tcrossprod(adj_bin)
   Matrix::diag(snn_matrix) <- 0
 
   # 3. Convert to igraph

@@ -37,12 +37,22 @@ datrans <- function(
       "compute_snn_graph",
       "compute_KNN_from_dist",
       "clust_eval",
-      "adjustedRandIndex",
       "cv",
       "clr"
     ),
-    .packages = c("dplyr", "mclust", "robCompositions", "zCompositions"),
-    .errorhandling = "pass",
+    # Only dplyr is attached in the worker: the loop body uses its bare verbs
+    # (select_if, mutate_all, %>%). Every other package is called
+    # namespace-qualified (zCompositions::, Hotelling::, vegan::, mclust::,
+    # cluster::, igraph::, Matrix::), so it loads on demand and must NOT be
+    # listed here -- attaching packages that are never called bare only adds
+    # worker startup time and failure points (e.g. the robCompositions worker
+    # abort that previously killed the whole job).
+    .packages = c("dplyr"),
+    # "stop" (default): a worker error must surface in the .err log with the
+    # real message. "pass" returned the error condition object as the result,
+    # which crashed the downstream dplyr pipe ("no applicable method for
+    # 'group_by'") and masked the actual failure.
+    .errorhandling = "stop",
     .combine = rbind
   ) %dopar%
     {
