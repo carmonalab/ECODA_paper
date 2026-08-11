@@ -147,10 +147,15 @@ if ! "${PIXI_BIN}" run -e py-cuda13 setup; then
 fi
 echo "setup done: $(( $(date +%s) - start ))s elapsed."
 
-echo "=== [4/4] smoke check: critical packages load ==="
+echo "=== [4/4] smoke check: full loader package list (src/utils/imports.R) ==="
+# Sources src/utils/imports.R, which loads every package that
+# src/utils/load_all_functions.R requires at job time; a missing or broken
+# package stops here with the same error a worker would produce (set -euo
+# pipefail turns it into a FAILED build). Run from the project root (done
+# above), so the relative source path resolves.
 "${PIXI_BIN}" run -e py-cuda13 Rscript --vanilla -e '
-  invisible(lapply(c("digest", "SeuratObject", "Seurat", "anndataR"), library, character.only = TRUE))
-  cat("All critical packages load OK\n")
+  source("src/utils/imports.R")
+  cat("All packages in src/utils/imports.R load OK\n")
 '
 
 echo "Environment build complete ($(( $(date +%s) - start ))s total). You can now submit jobs."

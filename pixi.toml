@@ -181,8 +181,8 @@ Rscript -e "
   # 'pixi install'), and conda (pixi install) + remotes (this task) both write
   # into the same R library, so corruption can persist silently until a job
   # hits it. Check every installed package has its Meta/package.rds and that
-  # the critical load path works; fail loudly with the wipe-and-reinstall
-  # repair otherwise.
+  # the FULL loader package list loads (via src/utils/imports.R); fail loudly
+  # with the wipe-and-reinstall repair otherwise.
   # ---------------------------------------------------------------------------
   check_lib_integrity <- function(lib) {
     bad <- character(0)
@@ -207,12 +207,23 @@ Rscript -e "
       length(bad_pkgs), paste(head(bad_pkgs, 20), collapse = ', ')
     ))
   }
-  missing_critical <- c('digest', 'SeuratObject', 'Seurat', 'anndataR')[
-    !vapply(c('digest', 'SeuratObject', 'Seurat', 'anndataR'), requireNamespace, logical(1), quietly = TRUE)]
-  if (length(missing_critical) > 0) {
+  # Full loader check: source src/utils/imports.R so this task validates exactly
+  # the package list that workers' load_all_functions.R requires (imports.R runs
+  # load_my_packages() at top level and stops with the same error a worker would
+  # produce). Catches failures that a plain install misses, e.g. a lockfile
+  # re-resolution pruning a conda R package that a remotes-installed package
+  # needs at load time (observed: 'there is no package called pracma' in jobs).
+  # Entry points cd to the project root before running setup (established
+  # convention), so the relative source path resolves; manual runs must also
+  # start from the project root.
+  loader_error <- tryCatch({
+    source('src/utils/imports.R')
+    NULL
+  }, error = function(e) e)
+  if (!is.null(loader_error)) {
     stop(sprintf(
-      'R library integrity check FAILED: critical package(s) do not load: %s. Repair: rm -rf .pixi/envs/py-cuda13 && pixi install -e py-cuda13 && pixi run -e py-cuda13 setup',
-      paste(missing_critical, collapse = ', ')
+      'R library integrity check FAILED: full package load check (src/utils/imports.R) errored: %s. Repair: rm -rf .pixi/envs/py-cuda13 && pixi install -e py-cuda13 && pixi run -e py-cuda13 setup',
+      conditionMessage(loader_error)
     ))
   }
   cat('R library integrity check OK')

@@ -76,7 +76,7 @@ The **scECODA** R package for scalable cohort-level analysis is available at
     run is in progress — both entry points serialize on the shared
     `logs/env_refresh.lock` and refuse to start otherwise. Watch the build
     with `tail -f logs/setup_env_<jobid>.out`; success prints
-    "R library integrity check OK" then "All critical packages load OK".
+    "R library integrity check OK" then "All packages in src/utils/imports.R load OK".
     For small re-runs on the login node: `tmux new -s env-refresh` →
     `src/utils/bash/refresh_env.sh`. After pulling changes to
     `pixi.toml`/`pixi.lock` onto the HPC clone, re-sync the env before
