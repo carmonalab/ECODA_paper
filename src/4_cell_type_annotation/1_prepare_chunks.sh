@@ -236,6 +236,9 @@ for DS_NAME in "${DATASET_NAMES[@]}"; do
       # previous annotation leaked into the views -> NOT clean -> rebuild
       # chunks and re-annotate (the worker wipe + merge tiered drop then
       # scrub them). Never use --force semantics to circumvent.
+      # DS_NAME is exported here too (not only at the chunk-generation srun
+      # below): 1.1_prepare_chunks.py requires it from the environment.
+      export DS_NAME
       echo "Already annotated: ${DS_NAME} — running clean-entry check..."
       CHECK_LOG_FILE="${LOGS_DIR}/prepare_chunks_${MODE_ARG}_${DS_NAME}_check.log"
       set +e
