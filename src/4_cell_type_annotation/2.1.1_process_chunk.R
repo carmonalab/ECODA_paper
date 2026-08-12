@@ -101,6 +101,16 @@ scatomic_cols <- c("layer_1", "layer_2", "layer_3", "layer_4", "layer_5", "layer
                    "scATOMIC_pred", "S.Score", "G2M.Score", "Phase", "classification_confidence")
 annot_cols <- c(hitme_cols_keep, scatomic_cols)
 
+# Legacy annotation columns from older annotation runs (scGate multi-model
+# scoring, ProjecTILs functional clusters) that may be carried in the source
+# Seurat rds and the annotation-union h5ad obs. They must never reach the
+# annotation steps: a stale `layer_1` would silently skip scATOMIC (guard at
+# the scATOMIC block below) and stale scGate/UCell columns confuse Run.HiTME
+# (Lee failure mode: no layer1/2/3 produced). Keep this list in sync with
+# LEGACY_ANNOT_COLS in 3.1_merge_annotations.py (legacy columns are also
+# stripped from the final obs at merge time).
+LEGACY_ANNOT_COLS <- c("scGate_multi", "functional.cluster")
+
 raw_args <- commandArgs(trailingOnly = TRUE)
 args <- defaults
 if (length(raw_args) > 0) args$chunk_file <- raw_args[1]
@@ -252,6 +262,22 @@ if (file.exists(annot_file)) {
       sample_colname = args$sample_colname,
       counts_layer = counts_layer
     )
+
+    # Re-annotation always starts fresh: drop stale annotation columns
+    # (whitelist + legacy) that survive in the union obs. Otherwise the
+    # scATOMIC layer_1 guard below would silently skip scATOMIC (stale values
+    # passed through) and Run.HiTME would see legacy scGate/UCell columns.
+    stale_cols <- intersect(union(annot_cols, LEGACY_ANNOT_COLS), colnames(seurat_obj@meta.data))
+    # Legacy scGate multi-model UCell scores (e.g. Bcell_UCell, CAF_UCell, ...)
+    # also confuse Run.HiTME; keep only the whitelisted HiTME UCell columns.
+    stale_ucell <- setdiff(grep("_UCell$", colnames(seurat_obj@meta.data), value = TRUE), hitme_cols_keep)
+    stale_cols <- union(stale_cols, stale_ucell)
+    if (length(stale_cols) > 0) {
+      message(paste("  Dropping stale annotation columns from meta.data:", paste(stale_cols, collapse = ", ")))
+      for (cc in stale_cols) {
+        seurat_obj[[cc]] <- NULL
+      }
+    }
 
     # HiTME (via scGate/UCell/ProjecTILs) requires the log-normalized "data"
     # layer, but CreateSeuratObject only populates "counts" — without it,

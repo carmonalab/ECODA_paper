@@ -30,6 +30,14 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
                      "scATOMIC_pred", "S.Score", "G2M.Score", "Phase", "classification_confidence"]
     annot_cols = set(hitme_cols_keep + scatomic_cols)
 
+    # Legacy annotation columns from older annotation runs (scGate
+    # multi-model scoring, ProjecTILs functional clusters) that may survive in
+    # the source Seurat rds / annotation-union obs. Stripped here so the final
+    # view obs carries only original study metadata + fresh standardized
+    # scATOMIC/HiTME columns. Must mirror LEGACY_ANNOT_COLS in
+    # 2.1.1_process_chunk.R.
+    legacy_annot_cols = {"scGate_multi", "functional.cluster"}
+
     annot_files = sorted(glob.glob(f"{annot_dir}/annotations_chunk_*.feather"))
     if not annot_files:
         print(f"No annotation feather files found in {annot_dir}")
@@ -61,6 +69,10 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
     print(f"h5ad obs entries before merge: {adata.n_obs}")
 
     obs = adata.obs.copy()
+    # Legacy scGate multi-model UCell scores (e.g. Bcell_UCell, CAF_UCell, ...)
+    # are stripped too; only the whitelisted HiTME UCell columns are kept.
+    legacy_ucell = {c for c in obs.columns if c.endswith("_UCell") and c not in hitme_cols_keep}
+    drop_cols = annot_cols | legacy_annot_cols | legacy_ucell
     if sample_col not in obs.columns:
         raise ValueError(
             f"Sample column '{sample_col}' not found in obs of {h5ad_path}. "
@@ -69,9 +81,10 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
 
     # Idempotency: if this view was already merged (e.g. a previous merge run
     # merged other views first and failed), drop the existing whitelisted
-    # annotation columns before the join — pandas join would otherwise raise
-    # "columns overlap but no suffix specified".
-    existing = [c for c in annot_cols if c in obs.columns]
+    # annotation columns (plus legacy annotation columns — they are replaced
+    # by fresh standardized columns) before the join — pandas join would
+    # otherwise raise "columns overlap but no suffix specified".
+    existing = [c for c in drop_cols if c in obs.columns]
     if existing:
         print(f"Dropping {len(existing)} existing annotation columns before re-merge: {existing}")
         obs = obs.drop(columns=existing)
@@ -81,8 +94,9 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
     original_n_obs = adata.n_obs
     adata.obs = obs.join(annotations, how="left", on="__annot_key").drop(columns="__annot_key")
 
-    # Subset obs to only whitelisted annotation columns
-    orig_cols = [c for c in adata.obs.columns if c not in annot_cols]
+    # Subset obs to only whitelisted annotation columns (legacy annotation
+    # columns excluded so they never survive into the output obs)
+    orig_cols = [c for c in adata.obs.columns if c not in drop_cols]
     existing_annot = [c for c in annot_cols if c in adata.obs.columns]
     adata.obs = adata.obs[orig_cols + existing_annot]
 
