@@ -73,10 +73,10 @@ fmt_seconds() {
 
 # Renders the per-dataset aggregated report for email bodies: dataset, chunks
 # COMPLETED/FAILED, summed task elapsed, failed chunk task ids (bounded 20),
-# array wall time. Task <n> maps to dataset from chunks_manifest.txt line <n>
-# (field 1); manifest missing (e.g. --sync-only after a scratch wipe) falls
-# back to task-id-only lines. Prints an n/a line when sacct is unavailable or
-# purged.
+# array wall time. Task <n> maps to dataset from ${CHUNKS_MANIFEST} line <n>
+# (field 1); manifest missing (e.g. --sync-only after a scratch wipe, or an
+# unset/unknown per-submission manifest) falls back to task-id-only lines.
+# Prints an n/a line when sacct is unavailable or purged.
 annotation_report() {
   local JOB_ID="$1"
   local TASKS
@@ -85,7 +85,7 @@ annotation_report() {
     printf '%s' "Per-dataset report: n/a (sacct unavailable or job purged)."
     return 0
   fi
-  local MANIFEST="${HPC_SCRATCH_DIR}/chunks_manifest.txt"
+  local MANIFEST="${CHUNKS_MANIFEST:-}"
   if [[ ! -f "${MANIFEST}" ]]; then
     printf '%s\n' "Per-task report (task, state, elapsed, exit code; no chunk manifest):"
     local task state elapsed exitcode
@@ -193,14 +193,21 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Build the global chunk manifest: one tab-separated line per chunk across all
-# datasets:  DS_NAME<TAB>absolute_chunk_path
+# Build the per-submission chunk manifest: one tab-separated line per chunk
+# across all datasets:  DS_NAME<TAB>absolute_chunk_path
 # SLURM_ARRAY_TASK_ID maps 1:1 to manifest line numbers, so task IDs are
 # globally unique and per-chunk feather names never collide across datasets.
 # The manifest is regenerated on every run; chunk dirs are recreated fresh by
 # 1.1_prepare_chunks.py, so a stale manifest cannot be misread.
+#
+# The filename carries a PID suffix (benchmark-submitter pattern): the file
+# is a SHARED mutable resource, and a parallel second submission (e.g. a
+# different dataset) must not truncate/replace it under a running array —
+# workers read ${CHUNKS_MANIFEST} at task start, so each sbatch submission
+# propagates ITS OWN manifest path through the environment and is immune to
+# concurrent submissions.
 # ---------------------------------------------------------------------------
-export CHUNKS_MANIFEST="${HPC_SCRATCH_DIR}/chunks_manifest.txt"
+export CHUNKS_MANIFEST="${HPC_SCRATCH_DIR}/chunks_manifest_$$.txt"
 : > "${CHUNKS_MANIFEST}"
 
 shopt -s nullglob

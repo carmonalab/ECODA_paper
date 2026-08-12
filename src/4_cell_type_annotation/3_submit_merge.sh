@@ -147,21 +147,25 @@ merge_one_ds() {
     return 0
   fi
 
-  # Coverage gate: every chunk submitted by the last 2_submit_hpc_array.sh run
-  # must have produced its feather (2.1.1_process_chunk.R writes exactly one
-  # feather per chunk file). A partial annotation array (some chunks failed)
-  # would otherwise be merged here and rsynced over good NAS data. The manifest
-  # survives merge re-runs (it is not deleted by this script), so this check
-  # also passes on legitimate re-runs.
-  local CHUNKS_MANIFEST="${HPC_SCRATCH_DIR}/chunks_manifest.txt"
+  # Coverage gate: every chunk prepared by the last 1_prepare_chunks.sh run
+  # (chunk_*.txt under output/chunks/) must have produced its feather
+  # (2.1.1_process_chunk.R writes exactly one feather per chunk file). A
+  # partial annotation array (some chunks failed) would otherwise be merged
+  # here and rsynced over good NAS data. Counting chunk FILES (not manifest
+  # lines) is race-free: chunks_manifest.txt is a shared global file that a
+  # parallel 2_submit_hpc_array.sh run (e.g. another dataset) truncates and
+  # rewrites, which made this gate misreport "0 chunks submitted" for the
+  # affected dataset. Chunk files are per-dataset and only deleted by THIS
+  # script after a successful merge, so the count is exact for re-runs too.
   local EXPECTED_CHUNKS=0
-  if [[ -f "${CHUNKS_MANIFEST}" ]]; then
-    EXPECTED_CHUNKS=$(grep -c "^${DS_NAME}[[:space:]]" "${CHUNKS_MANIFEST}" 2>/dev/null || true)
-  fi
+  shopt -s nullglob
+  local GATE_CHUNK_FILES=("${OUTPUT_DIR}/chunks"/chunk_*.txt)
+  shopt -u nullglob
+  EXPECTED_CHUNKS=${#GATE_CHUNK_FILES[@]}
   if [[ ${EXPECTED_CHUNKS} -ne ${#ANNOT_FILES[@]} ]]; then
     echo "ERROR: Annotation coverage mismatch for ${DS_NAME}:"
-    echo "       ${#ANNOT_FILES[@]} feathers found, but ${EXPECTED_CHUNKS} chunks were submitted"
-    echo "       (see ${CHUNKS_MANIFEST}). Re-run 2_submit_hpc_array.sh ${DS_NAME} first."
+    echo "       ${#ANNOT_FILES[@]} feathers found, but ${EXPECTED_CHUNKS} chunks were prepared"
+    echo "       (see ${OUTPUT_DIR}/chunks). Re-run 2_submit_hpc_array.sh ${DS_NAME} first."
     local GATE_HINT=""
     if [[ ! -d "${OUTPUT_DIR}/chunks" ]]; then
       GATE_HINT="Dataset has no chunks (already merged or never prepared); run 1_prepare_chunks.sh ${DS_NAME} --force, then 2_submit_hpc_array.sh ${DS_NAME} first."
@@ -170,7 +174,7 @@ merge_one_ds() {
     if [[ "${EMAIL_MODE}" == "per-event" ]]; then
       notify_sync_status \
         "ECODA: annotation merge NOT synced (${DS_NAME})" \
-        "Annotation merge + NAS sync failed for ${DS_NAME}: coverage mismatch (${#ANNOT_FILES[@]} feathers found, ${EXPECTED_CHUNKS} chunks submitted). Re-run 2_submit_hpc_array.sh ${DS_NAME} first.${GATE_HINT:+ ${GATE_HINT}}"
+        "Annotation merge + NAS sync failed for ${DS_NAME}: coverage mismatch (${#ANNOT_FILES[@]} feathers found, ${EXPECTED_CHUNKS} chunks prepared). Re-run 2_submit_hpc_array.sh ${DS_NAME} first.${GATE_HINT:+ ${GATE_HINT}}"
     fi
     return 1
   fi

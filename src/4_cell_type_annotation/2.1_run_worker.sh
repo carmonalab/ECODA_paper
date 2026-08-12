@@ -54,8 +54,8 @@ fi
 # Skip chunks whose annotation feather already exists (re-runs of
 # 2_submit_hpc_array.sh on an annotated-but-not-yet-merged dataset; same
 # chunk_N.txt -> annotations_chunk_N.feather mapping as the merge). The chunk
-# manifest stays unfiltered, so the 3_submit_merge.sh coverage gate
-# (manifest lines vs feather count) is unchanged; 1.1_prepare_chunks.py
+# manifest stays unfiltered, so the 3_submit_merge.sh coverage gate (chunk
+# files vs feather count) is unchanged; 1.1_prepare_chunks.py
 # deletes stale feathers on every chunk rebuild (production), so an existing
 # feather always matches the current chunk set.
 CHUNK_NUM="$(basename "${CHUNK_FILE}")"
