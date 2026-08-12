@@ -71,8 +71,9 @@ fi
 source "${SCRIPT_DIR}/../../utils/bash/worker_retry.sh"
 
 echo "Task ${SLURM_ARRAY_TASK_ID}: running ${METHOD} on ${DS_NAME}"
-# PIXI_RSCRIPT word-splits into `pixi run -e py-cuda13 Rscript --vanilla`;
-# it must stay unquoted (established convention, see 2.1_run_worker.sh).
+# PIXI_RSCRIPT word-splits into `pixi run --as-is -e py-cuda13 Rscript
+# --vanilla` (--as-is: no lockfile/env mutation from workers); it must stay
+# unquoted (established convention, see 2.1_run_worker.sh).
 set +e
 stage_env_rlib "benchmark" && ${PIXI_RSCRIPT} "${R_SCRIPT}" \
     --config_path "${DATASETS_JSON_FILE}" \

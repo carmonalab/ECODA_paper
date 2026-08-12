@@ -28,10 +28,18 @@ export HPC_SCRATCH_DIR="${HOME}/scratch/ECODA_paper"
 # nodes may resolve to a bare system python without scanpy/anndata etc.
 # PYTHON_BIN: py-cuda13 python (has scanpy/anndata/torch etc.).
 # PIXI_RSCRIPT: pixi Rscript entry point for the py-cuda13 env (word-splits
-# into `pixi run -e py-cuda13 Rscript --vanilla`; the -e flag must stay between
-# `run` and `Rscript` — pixi run without -e uses the default env instead).
+# into `pixi run --as-is -e py-cuda13 Rscript --vanilla`; the -e flag must stay
+# between `run` and `Rscript` — pixi run without -e uses the default env instead).
+# `--as-is` (= `--no-install --frozen`) is mandatory: a plain `pixi run` will
+# update the lockfile and install/repair the env when the installed prefix does
+# not match the lockfile, i.e. any worker could silently trigger a solve + env
+# install at runtime — the "prefix update via `pixi run`" mutation class behind
+# the 2026-08-11 corrupted library/ENOENT array failures. Env changes happen
+# ONLY via the guarded entry points (setup_env_sbatch.sh / refresh_env.sh).
+# Note `--frozen` alone is NOT sufficient: it freezes the lockfile but still
+# installs the prefix when it mismatches the lockfile.
 export PYTHON_BIN="${PROJECT_ROOT}/.pixi/envs/py-cuda13/bin/python"
-export PIXI_RSCRIPT="${HOME}/.pixi/bin/pixi run -e py-cuda13 Rscript --vanilla"
+export PIXI_RSCRIPT="${HOME}/.pixi/bin/pixi run --as-is -e py-cuda13 Rscript --vanilla"
 
 # rpy2 (imported by src/utils/py/preprocess_utils.py) needs R/Rscript on PATH;
 # workers run PYTHON_BIN directly, so prepend the env bin (keeps python/R
