@@ -10,8 +10,10 @@
 #   [--force]                                    # recompute chunks even if the dataset is
 #                                                # already annotated (accepted in any position)
 #
-# Datasets that are already annotated are skipped (see the skip predicate in
-# the per-dataset loop below) unless --force is given.
+# Datasets that are already annotated are skipped unless --force is given —
+# but only after a clean-entry check (1.1_prepare_chunks.py --check-clean)
+# confirms the views carry no legacy annotation columns; flagged datasets are
+# rebuilt for re-annotation (see the per-dataset loop below).
 #
 
 set -euo pipefail
@@ -188,6 +190,7 @@ FAILED_DATASETS=()
 SKIPPED_DATASETS=()
 SKIPPED_ANNOTATED=()
 SKIPPED_INCOMPLETE=()
+FLAGGED_LEGACY=()
 
 for DS_NAME in "${DATASET_NAMES[@]}"; do
   echo ""
@@ -227,9 +230,38 @@ for DS_NAME in "${DATASET_NAMES[@]}"; do
     if [[ ${FORCE_ARG} -eq 1 ]]; then
       echo "NOTE: ${DS_NAME} is already annotated; --force given, rebuilding chunks."
     else
-      echo "Already annotated: ${DS_NAME} — skipping chunk generation (use --force to recompute)"
-      SKIPPED_ANNOTATED+=("${DS_NAME}")
-      continue
+      # Clean-entry check: an annotated dataset may only be skipped if every
+      # tier-matching obs column of its views was produced by THIS pipeline
+      # (present in its own annotation feathers). Legacy columns mean a
+      # previous annotation leaked into the views -> NOT clean -> rebuild
+      # chunks and re-annotate (the worker wipe + merge tiered drop then
+      # scrub them). Never use --force semantics to circumvent.
+      echo "Already annotated: ${DS_NAME} — running clean-entry check..."
+      CHECK_LOG_FILE="${LOGS_DIR}/prepare_chunks_${MODE_ARG}_${DS_NAME}_check.log"
+      set +e
+      srun --partition="${SLURM_PARTITION}" \
+           --time=00:30:00 \
+           --ntasks=1 \
+           --cpus-per-task=1 \
+           --mem=4G \
+           --output="${CHECK_LOG_FILE}" \
+           --error="${CHECK_LOG_FILE}" \
+           "${PYTHON_BIN}" "${SCRIPT_DIR}/1.1_prepare_chunks.py" --check-clean
+      CHECK_EXIT=$?
+      set -e
+      if [[ ${CHECK_EXIT} -eq 2 ]]; then
+        echo "WARNING: ${DS_NAME} carries legacy annotation columns (see ${CHECK_LOG_FILE}); rebuilding chunks for re-annotation."
+        FLAGGED_LEGACY+=("${DS_NAME}")
+        ANNOTATED=0
+      elif [[ ${CHECK_EXIT} -eq 0 ]]; then
+        echo "Clean: ${DS_NAME} — skipping chunk generation (use --force to recompute)"
+        SKIPPED_ANNOTATED+=("${DS_NAME}")
+        continue
+      else
+        echo "ERROR: clean-entry check failed for ${DS_NAME} (exit ${CHECK_EXIT}); see ${CHECK_LOG_FILE}."
+        FAILED_DATASETS+=("${DS_NAME}")
+        continue
+      fi
     fi
   fi
 
@@ -294,6 +326,10 @@ echo "Processed: ${#DATASET_NAMES[@]} datasets"
 echo "Skipped (already annotated): ${#SKIPPED_ANNOTATED[@]}"
 if [[ ${#SKIPPED_ANNOTATED[@]} -gt 0 ]]; then
   echo "  ${SKIPPED_ANNOTATED[*]}"
+fi
+echo "Flagged (legacy annotation columns, rebuilt for re-annotation): ${#FLAGGED_LEGACY[@]}"
+if [[ ${#FLAGGED_LEGACY[@]} -gt 0 ]]; then
+  echo "  ${FLAGGED_LEGACY[*]}"
 fi
 echo "Skipped (no preprocessed .h5ad): ${#SKIPPED_DATASETS[@]}"
 if [[ ${#SKIPPED_DATASETS[@]} -gt 0 ]]; then

@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import argparse
 import pandas as pd
@@ -23,20 +24,29 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
     if output_path is None:
         output_path = h5ad_path
 
-    # Whitelisted annotation columns (must mirror 2.1.1_process_chunk.R)
-    hitme_cols_keep = ["IFN_UCell", "HeatShock_UCell", "cellCycle.G1S_UCell",
-                       "cellCycle.G2M_UCell", "layer1", "layer2", "layer3"]
-    scatomic_cols = ["layer_1", "layer_2", "layer_3", "layer_4", "layer_5", "layer_6",
-                     "scATOMIC_pred", "S.Score", "G2M.Score", "Phase", "classification_confidence"]
-    annot_cols = set(hitme_cols_keep + scatomic_cols)
-
-    # Legacy annotation columns from older annotation runs (scGate
-    # multi-model scoring, ProjecTILs functional clusters) that may survive in
-    # the source Seurat rds / annotation-union obs. Stripped here so the final
-    # view obs carries only original study metadata + fresh standardized
-    # scATOMIC/HiTME columns. Must mirror LEGACY_ANNOT_COLS in
+    # Fresh annotation output columns: the ONLY annotation columns this
+    # pipeline emits, taken fresh from the annotation feathers. NOT a
+    # keep-whitelist — pre-existing versions of these names are always
+    # dropped (see drop_cols below); obs may only carry what this annotation
+    # run freshly produced (or study metadata). Must mirror
     # 2.1.1_process_chunk.R.
-    legacy_annot_cols = {"scGate_multi", "functional.cluster"}
+    HITME_OUTPUT_COLS = ["IFN_UCell", "HeatShock_UCell", "cellCycle.G1S_UCell",
+                         "cellCycle.G2M_UCell", "layer1", "layer2", "layer3"]
+    SCATOMIC_OUTPUT_COLS = ["layer_1", "layer_2", "layer_3", "layer_4", "layer_5", "layer_6",
+                            "scATOMIC_pred", "S.Score", "G2M.Score", "Phase",
+                            "classification_confidence"]
+    ANNOT_OUTPUT_COLS = set(HITME_OUTPUT_COLS + SCATOMIC_OUTPUT_COLS)
+
+    # Legacy annotation column classification: pre-existing columns that must
+    # never survive into the final obs (the annotation worker wipes them at
+    # source; this is the merge-time backstop). Tier 1: unconditional
+    # pattern matches. Tier 2: exact-name matches, dropped with a loud
+    # warning — exact names only, so author columns like a plain "cellCycle"
+    # or "Phase_variant" never collide. Must mirror 2.1.1_process_chunk.R.
+    LEGACY_ANNOT_TIER1 = [r"^scGate", r"^functional\.cluster", r"_UCell$",
+                          r"^scATOMIC", r"^layer_?\d"]
+    LEGACY_ANNOT_TIER2 = ["S.Score", "G2M.Score", "Phase", "classification_confidence",
+                          "cellCycle.G1S_UCell", "cellCycle.G2M_UCell"]
 
     annot_files = sorted(glob.glob(f"{annot_dir}/annotations_chunk_*.feather"))
     if not annot_files:
@@ -69,16 +79,14 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
     print(f"h5ad obs entries before merge: {adata.n_obs}")
 
     obs = adata.obs.copy()
-    # Pattern-based legacy catch-all, mirroring the worker: any scGate_* or
-    # functional.cluster* column, plus legacy scGate multi-model UCell scores
-    # (e.g. Bcell_UCell, CAF_UCell, ...); only the whitelisted HiTME UCell
-    # columns are kept (they are in annot_cols and come fresh from the
-    # feathers). Existing whitelisted columns (hitme_cols_keep + scatomic_cols)
-    # are dropped too — the obs may only carry what this annotation run
-    # freshly produced (or study metadata).
-    legacy_ucell = {c for c in obs.columns if c.endswith("_UCell") and c not in hitme_cols_keep}
-    legacy_prefix = {c for c in obs.columns if c.startswith("scGate") or c.startswith("functional.cluster")}
-    drop_cols = annot_cols | legacy_annot_cols | legacy_ucell | legacy_prefix
+    # Pre-existing annotation columns are dropped unconditionally: the fresh
+    # output names (ANNOT_OUTPUT_COLS — old whitelist semantics never apply to
+    # pre-existing columns), Tier-1 pattern matches (any scGate_*,
+    # functional.cluster*, *_UCell, scATOMIC*, layer<digit>*/layer_<digit>*
+    # column), and Tier-2 exact names present in obs.
+    tier1_matches = {c for c in obs.columns if any(re.search(p, c) for p in LEGACY_ANNOT_TIER1)}
+    tier2_present = set(LEGACY_ANNOT_TIER2) & set(obs.columns)
+    drop_cols = set(ANNOT_OUTPUT_COLS) | tier1_matches | tier2_present
     if sample_col not in obs.columns:
         raise ValueError(
             f"Sample column '{sample_col}' not found in obs of {h5ad_path}. "
@@ -86,13 +94,18 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
         )
 
     # Idempotency: if this view was already merged (e.g. a previous merge run
-    # merged other views first and failed), drop the existing whitelisted
-    # annotation columns (plus legacy annotation columns — they are replaced
-    # by fresh standardized columns) before the join — pandas join would
-    # otherwise raise "columns overlap but no suffix specified".
+    # merged other views first and failed), drop the existing annotation
+    # columns (fresh-output names + legacy tiers) before the join — pandas
+    # join would otherwise raise "columns overlap but no suffix specified".
     existing = [c for c in drop_cols if c in obs.columns]
     if existing:
-        print(f"Dropping {len(existing)} existing annotation columns before re-merge: {existing}")
+        tier2_flagged = sorted(set(LEGACY_ANNOT_TIER2) & set(existing))
+        msg = (f"Dropping {len(existing)} pre-existing annotation column(s) "
+               f"before re-merge: {existing}")
+        if tier2_flagged:
+            msg += (f" — {tier2_flagged} matched Tier-2 exact names "
+                    f"(possibly author metadata, not pipeline output)")
+        print(msg)
         obs = obs.drop(columns=existing)
 
     obs["__annot_key"] = obs[sample_col].astype(str) + "_" + adata.obs_names.astype(str)
@@ -100,15 +113,16 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
     original_n_obs = adata.n_obs
     adata.obs = obs.join(annotations, how="left", on="__annot_key").drop(columns="__annot_key")
 
-    # Subset obs to only whitelisted annotation columns (legacy annotation
-    # columns excluded so they never survive into the output obs)
+    # Subset obs to the original (non-annotation) metadata plus only the
+    # fresh annotation columns produced by THIS run (all pre-existing
+    # annotation columns were dropped above; the join cannot bring back any).
     orig_cols = [c for c in adata.obs.columns if c not in drop_cols]
-    existing_annot = [c for c in annot_cols if c in adata.obs.columns]
+    existing_annot = [c for c in ANNOT_OUTPUT_COLS if c in adata.obs.columns]
     adata.obs = adata.obs[orig_cols + existing_annot]
 
     if not existing_annot:
         print(
-            f"ERROR: no whitelisted annotation columns in the merged obs of "
+            f"ERROR: no annotation output columns in the merged obs of "
             f"{h5ad_path} — the annotation run produced no results (all "
             f"scATOMIC/HiTME attempts failed in 2.1.1_process_chunk.R, so the "
             f"feathers only hold cell barcodes). Not saving an unannotated h5ad."
@@ -127,6 +141,26 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
         )
         sys.exit(1)
     print(f"Match rate: {merged_count / original_n_obs:.2%} of cells matched")
+
+    # Post-merge invariant (fail loudly): every final obs column matching the
+    # legacy tier patterns must have come fresh from THIS run's feathers —
+    # the worker wipes pre-existing columns at source, so any tier-matching
+    # column that is not in the feathers means stale data leaked in (e.g. a
+    # drop pattern was missed).
+    feather_cols = set(annotations.columns)
+    tier_matching = [c for c in adata.obs.columns
+                     if any(re.search(p, c) for p in LEGACY_ANNOT_TIER1)
+                     or c in LEGACY_ANNOT_TIER2]
+    not_from_feather = [c for c in tier_matching if c not in feather_cols]
+    if not_from_feather:
+        print("ERROR: post-merge invariant violated — obs column(s) matching "
+              "the legacy annotation patterns were NOT produced by this "
+              f"annotation run: {not_from_feather}")
+        sys.exit(1)
+
+    # Provenance marker: "annotated here" — every merged view records the
+    # annotation version that wrote its annotation columns.
+    adata.uns["ecoda_annotation_version"] = "1"
 
     # Atomic write: write to a temp file in the same directory, then rename —
     # an interrupted run must not truncate the only scratch copy of the view.

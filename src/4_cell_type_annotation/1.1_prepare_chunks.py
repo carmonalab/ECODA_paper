@@ -40,6 +40,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -47,8 +48,22 @@ from pathlib import Path
 import anndata as ad
 import h5py
 import numpy as np
+import pyarrow as pa
+import pyarrow.feather as pafeather
 import scipy.sparse as sp
 import scanpy as sc
+
+
+# Legacy annotation column classification for the clean-entry check (--check-
+# clean). Tier 1: unconditional pattern matches (any scGate_*,
+# functional.cluster*, *_UCell, scATOMIC*, layer<digit>*/layer_<digit>*
+# column — a plain `layer` column survives). Tier 2: exact names only, so
+# author columns like a plain `cellCycle` or `Phase_variant` never collide.
+# Must mirror 3.1_merge_annotations.py.
+LEGACY_ANNOT_TIER1 = [r"^scGate", r"^functional\.cluster", r"_UCell$",
+                      r"^scATOMIC", r"^layer_?\d"]
+LEGACY_ANNOT_TIER2 = ["S.Score", "G2M.Score", "Phase", "classification_confidence",
+                      "cellCycle.G1S_UCell", "cellCycle.G2M_UCell"]
 
 
 def cell_keys(adata, sample_col):
@@ -152,6 +167,90 @@ def read_obs_keys_h5py(path, sample_col):
                 f"vs {n_rows} counts rows)."
             )
     return {f"{s}_{b}" for s, b in zip(samples, barcodes)}
+
+
+def read_obs_colnames_h5py(path):
+    """
+    Memory-lean obs column-name reader (h5py only, no anndata open) for the
+    clean-entry check. Column names are the keys of the obs dataframe group
+    minus the row-index key `_index`. Fails closed on layout surprises,
+    mirroring read_obs_keys_h5py.
+    """
+    with h5py.File(path, "r") as f:
+        obs = f["obs"]
+        obs_enc = obs.attrs.get("encoding-type")
+        if isinstance(obs_enc, bytes):
+            obs_enc = obs_enc.decode("utf-8")
+        if str(obs_enc) != "dataframe":
+            raise RuntimeError(
+                f"{path}: obs encoding-type is '{obs_enc}', expected "
+                "'dataframe' (anndata 0.12 h5ad layout)."
+            )
+        return {str(k) for k in obs.keys() if k != "_index"}
+
+
+def read_feather_colnames(path):
+    """
+    Column names of one annotations feather (schema-only read). The R arrow
+    workers write feather v2 (= Arrow IPC file format), so a RecordBatchFile
+    reader exposes the schema without loading data; falls back to a full read
+    for any other layout (feathers are small).
+    """
+    try:
+        reader = pa.ipc.open_file(path)
+        names = list(reader.schema.names)
+        reader.close()
+        return names
+    except Exception:
+        return list(pafeather.read_table(path).column_names)
+
+
+def check_clean(path_data):
+    """
+    Clean-entry check for one dataset: a dataset entering annotation is
+    "clean" iff every tier-matching obs column of every view is also a column
+    of its own annotation feathers (i.e. produced by THIS pipeline); legacy
+    columns are tier matches NOT present in the feathers. Returns an exit
+    code: 0 = clean / no views, 2 = legacy found, 1 = error (raised).
+    """
+    h5ad_files = sorted(
+        f for f in path_data.glob("*.h5ad") if not f.name.endswith("_raw.h5ad")
+    )
+    feather_files = sorted(path_data.glob("annotations_chunk_*.feather"))
+    feather_cols = set()
+    for ff in feather_files:
+        feather_cols |= set(read_feather_colnames(ff))
+
+    if not h5ad_files:
+        print(f"No preprocessed .h5ad views in {path_data} (and "
+              f"{len(feather_files)} feather files); nothing to check — clean.")
+        return 0
+
+    found_legacy = False
+    for h5ad_file in h5ad_files:
+        cols = read_obs_colnames_h5py(h5ad_file)
+        tier1_matches = sorted(c for c in cols if any(re.search(p, c) for p in LEGACY_ANNOT_TIER1))
+        tier2_matches = sorted(set(LEGACY_ANNOT_TIER2) & cols)
+        legacy = sorted((set(tier1_matches) | set(tier2_matches)) - feather_cols)
+        if not legacy:
+            print(f"CLEAN: {h5ad_file.name} — {len(cols)} obs columns, "
+                  f"tier matches all present in this run's feathers "
+                  f"(T1: {len(tier1_matches)}, T2: {len(tier2_matches)})")
+            continue
+        found_legacy = True
+        prev_annot = sorted(set(tier1_matches) - feather_cols)
+        author_meta = sorted(set(tier2_matches) - feather_cols - set(tier1_matches))
+        print(f"NOT CLEAN: {h5ad_file.name} — legacy annotation column(s): "
+              f"{legacy}")
+        print(f"  of which previous-annotation-like (Tier-1): {prev_annot}")
+        print(f"  possibly author metadata (Tier-2 only): {author_meta}")
+    if found_legacy:
+        print(f"CLEAN-ENTRY CHECK FAILED for {path_data}: {len(feather_files)} "
+              "feather file(s) on record; legacy columns will leak into "
+              "annotation unless chunks are rebuilt and the dataset is "
+              "re-annotated (worker wipe + merge tiered drop then scrub them).")
+        return 2
+    return 0
 
 
 def verify_annotation_union(union_path, expected_nnz, sample_col):
@@ -319,6 +418,14 @@ def main():
         default=False,
         help="Test mode: 1 sample per chunk (production default: 2).",
     )
+    parser.add_argument(
+        "--check-clean",
+        action="store_true",
+        default=False,
+        help="Clean-entry check only: report tier-matching obs columns per "
+             "view that are NOT produced by this pipeline's feathers; exit 0 "
+             "= clean, 2 = legacy found, 1 = error. No chunk/union writes.",
+    )
     args = parser.parse_args()
 
     project_root = os.environ.get("PROJECT_ROOT")
@@ -342,6 +449,14 @@ def main():
     path_output_chunks = path_data / "chunks"
 
     print(f"Path is: {path_data}")
+
+    if args.check_clean:
+        try:
+            code = check_clean(path_data)
+        except Exception as e:
+            print(f"ERROR: clean-entry check failed for {ds_name}: {e}")
+            sys.exit(1)
+        sys.exit(code)
 
     # Skip rds->h5ad conversion caches written into the output dir by
     # src.utils.py.preprocess_utils.load_single_input() (they lack the standardized sample

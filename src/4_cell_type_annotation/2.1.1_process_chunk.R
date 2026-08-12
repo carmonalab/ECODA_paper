@@ -95,21 +95,24 @@ defaults <- list(
   normal_tissue         = if (env_normal_tissue != "") as.logical(env_normal_tissue) else TRUE
 )
 
-hitme_cols_keep <- c("IFN_UCell", "HeatShock_UCell", "cellCycle.G1S_UCell",
-                     "cellCycle.G2M_UCell", "layer1", "layer2", "layer3")
-scatomic_cols <- c("layer_1", "layer_2", "layer_3", "layer_4", "layer_5", "layer_6",
-                   "scATOMIC_pred", "S.Score", "G2M.Score", "Phase", "classification_confidence")
-annot_cols <- c(hitme_cols_keep, scatomic_cols)
+# Fresh annotation output columns: the ONLY annotation columns this pipeline
+# emits, extracted from the freshly annotated object at the end of the
+# per-sample loop. NOT a keep-whitelist — pre-existing versions never survive
+# (the obs wipe below keeps nothing but the sample column).
+HITME_OUTPUT_COLS <- c("IFN_UCell", "HeatShock_UCell", "cellCycle.G1S_UCell",
+                       "cellCycle.G2M_UCell", "layer1", "layer2", "layer3")
+SCATOMIC_OUTPUT_COLS <- c("layer_1", "layer_2", "layer_3", "layer_4", "layer_5", "layer_6",
+                          "scATOMIC_pred", "S.Score", "G2M.Score", "Phase", "classification_confidence")
+ANNOT_OUTPUT_COLS <- c(HITME_OUTPUT_COLS, SCATOMIC_OUTPUT_COLS)
 
-# Legacy annotation columns from older annotation runs (scGate multi-model
-# scoring, ProjecTILs functional clusters) that may be carried in the source
-# Seurat rds and the annotation-union h5ad obs. They must never reach the
-# annotation steps: a stale `layer_1` would silently skip scATOMIC (guard at
-# the scATOMIC block below) and stale scGate/UCell columns confuse Run.HiTME
-# (Lee failure mode: no layer1/2/3 produced). Keep this list in sync with
-# LEGACY_ANNOT_COLS in 3.1_merge_annotations.py (legacy columns are also
-# stripped from the final obs at merge time).
-LEGACY_ANNOT_COLS <- c("scGate_multi", "functional.cluster")
+# Legacy annotation column classification, enforced at merge time in
+# 3.1_merge_annotations.py (Tier 1: unconditional pattern drop; Tier 2:
+# exact-name drop + loud warning). Informational here — the obs wipe below is
+# total (Sample only), so no pattern list is needed in the worker. Must
+# mirror 3.1_merge_annotations.py.
+LEGACY_ANNOT_TIER1 <- c("^scGate", "^functional\\.cluster", "_UCell$", "^scATOMIC", "^layer_?\\d")
+LEGACY_ANNOT_TIER2 <- c("S.Score", "G2M.Score", "Phase", "classification_confidence",
+                        "cellCycle.G1S_UCell", "cellCycle.G2M_UCell")
 
 raw_args <- commandArgs(trailingOnly = TRUE)
 args <- defaults
@@ -203,6 +206,22 @@ if (!args$sample_colname %in% colnames(obs)) {
   stop(args$sample_colname, " not found in h5ad obs colnames!")
 }
 
+# Wipe ALL pre-existing obs columns except the sample column: annotation must
+# start from a minimal Seurat object. Preprocessing keeps every source-rds obs
+# column, so legacy annotation columns (scGate_*, functional.cluster, *_UCell,
+# layer_1..6, ...) would otherwise leak into the annotation object via
+# get_seurat_obj_from_h5ad's meta.data and silently skip scATOMIC (layer_1
+# guard) or confuse Run.HiTME. No pattern lists needed — nothing but the
+# sample column may enter annotation.
+wiped_cols <- setdiff(colnames(obs), args$sample_colname)
+if (length(wiped_cols) > 0) {
+  message(sprintf(
+    "Wiping %d pre-existing obs columns (%s); building minimal Seurat objects (meta.data = %s only)",
+    length(wiped_cols), paste(wiped_cols, collapse = ", "), args$sample_colname
+  ))
+}
+obs <- obs[, args$sample_colname, drop = FALSE]
+
 # ==============================================================================
 # PROCESSING LOOP
 # ==============================================================================
@@ -232,6 +251,22 @@ if (file.exists(annot_file)) {
   tmp_dir <- file.path(paths$path_output, "annotation_tmp",
                        sub("\\.txt$", "", basename(args$chunk_file)))
   failed_samples <- character(0)
+
+  # Python 3 keys() returns a view object (dict_keys/KeysView) that py_to_r()
+  # does NOT convert; materialize it to a Python list first so py_to_r returns
+  # an R character vector usable with %in%. Computed once per chunk — the
+  # layers group never changes between samples.
+  layer_keys <- py_to_r(import_builtins(convert = FALSE)$list(adata$layers$keys()))
+  counts_layer <- if ("counts" %in% layer_keys) "counts" else "X"
+  if (counts_layer == "X") {
+    # Annotation-union files carry the raw counts in X by design (minimal
+    # layout: no layers group — see 1.1_prepare_chunks.py), so this is the
+    # designed primary path for unions, not a warning case. Preprocessed
+    # view files still carry layers["counts"] and take the "counts" branch.
+    message("Union carries counts in X by design (no 'counts' layer in ", h5ad_file,
+            "); using X as counts input for scATOMIC/HiTME.")
+  }
+
   for (i in seq_along(samples_to_process)) {
     target_sample <- samples_to_process[i]
     sample_tmp <- file.path(tmp_dir, sprintf("sample_%02d.feather", i))
@@ -243,50 +278,11 @@ if (file.exists(annot_file)) {
 
     sample_ok <- tryCatch({
 
-    # Python 3 keys() returns a view object (dict_keys/KeysView) that py_to_r()
-    # does NOT convert; materialize it to a Python list first so py_to_r returns
-    # an R character vector usable with %in%.
-    layer_keys <- py_to_r(import_builtins(convert = FALSE)$list(adata$layers$keys()))
-    counts_layer <- if ("counts" %in% layer_keys) "counts" else "X"
-    if (counts_layer == "X") {
-      # Annotation-union files carry the raw counts in X by design (minimal
-      # layout: no layers group — see 1.1_prepare_chunks.py), so this is the
-      # designed primary path for unions, not a warning case. Preprocessed
-      # view files still carry layers["counts"] and take the "counts" branch.
-      message("Union carries counts in X by design (no 'counts' layer in ", h5ad_file,
-              "); using X as counts input for scATOMIC/HiTME.")
-    }
-
     seurat_obj <- get_seurat_obj_from_h5ad(
       adata, obs, target_sample,
       sample_colname = args$sample_colname,
       counts_layer = counts_layer
     )
-
-    # Re-annotation always starts fresh: drop ALL pre-existing annotation
-    # columns (whitelist + legacy + any other scGate/ProjecTILs output) that
-    # survive in the union obs. Otherwise the scATOMIC layer_1 guard below
-    # would silently skip scATOMIC (stale values passed through) and
-    # Run.HiTME would see legacy scGate/UCell columns. This includes the
-    # whitelisted hitme_cols_keep/scatomic_cols: only what this run freshly
-    # produces (or study metadata) may survive.
-    stale_cols <- intersect(union(annot_cols, LEGACY_ANNOT_COLS), colnames(seurat_obj@meta.data))
-    # Pattern-based legacy catch-all: scGate_* columns (scGate_multi,
-    # scGate_<model>, ...), ProjecTILs functional.cluster* columns
-    # (functional.cluster, functional.cluster.conf, ...), and legacy scGate
-    # multi-model UCell scores (e.g. Bcell_UCell, CAF_UCell, ...). Keep only
-    # the whitelisted HiTME UCell columns (already dropped above via
-    # annot_cols; setdiff documents the keep set).
-    stale_scgate <- grep("^scGate", colnames(seurat_obj@meta.data), value = TRUE)
-    stale_projtil <- grep("^functional\\.cluster", colnames(seurat_obj@meta.data), value = TRUE)
-    stale_ucell <- setdiff(grep("_UCell$", colnames(seurat_obj@meta.data), value = TRUE), hitme_cols_keep)
-    stale_cols <- union(stale_cols, union(stale_scgate, union(stale_projtil, stale_ucell)))
-    if (length(stale_cols) > 0) {
-      message(paste("  Dropping stale annotation columns from meta.data:", paste(stale_cols, collapse = ", ")))
-      for (cc in stale_cols) {
-        seurat_obj[[cc]] <- NULL
-      }
-    }
 
     # HiTME (via scGate/UCell/ProjecTILs) requires the log-normalized "data"
     # layer, but CreateSeuratObject only populates "counts" — without it,
@@ -333,7 +329,7 @@ if (file.exists(annot_file)) {
           NULL
         })
         if (!is.null(result)) {
-          sca_cols <- intersect(scatomic_cols, colnames(sca_results))
+          sca_cols <- intersect(SCATOMIC_OUTPUT_COLS, colnames(sca_results))
           seurat_obj <- AddMetaData(seurat_obj, sca_results[, sca_cols, drop = FALSE])
           break
         }
@@ -381,7 +377,7 @@ if (file.exists(annot_file)) {
 
     ### Extract annotations ####
     meta <- seurat_obj@meta.data
-    keep_cols <- intersect(annot_cols, colnames(meta))
+    keep_cols <- intersect(ANNOT_OUTPUT_COLS, colnames(meta))
     annot <- meta[, keep_cols, drop = FALSE]
     annot$cell_barcode <- rownames(annot)
     annot[[args$sample_colname]] <- target_sample

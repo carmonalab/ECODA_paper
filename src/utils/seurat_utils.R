@@ -285,12 +285,20 @@ get_seurat_obj_from_h5ad <- function(
   fetch_embedding = NULL # Default: Do not extract embeddings
 ) {
   # 1. Get indices for target sample (-1 for 0-based Python indexing)
-  sample_indices <- which(r_obs[[sample_colname]] %in% target_samples) - 1
+  r_indices <- which(r_obs[[sample_colname]] %in% target_samples)
+  sample_indices <- r_indices - 1
   subset_py <- adata[as.integer(sample_indices)]
 
   # 2. Extract shared metadata & names
-  meta_data <- as.data.frame(py_to_r(subset_py$obs))
-  cell_names <- as.character(py_to_r(subset_py$obs_names$values))
+  # meta_data is intentionally sourced from the R-side r_obs (not re-extracted
+  # from Python per call): annotation workers pre-wipe the obs to a minimal
+  # set before calling so legacy columns never reach the Seurat object;
+  # callers needing full metadata pass the full obs. Reticulate
+  # pandas-categorical factors keep all levels on R subsetting, matching R
+  # factor subsetting. drop = FALSE keeps a single-column obs a data.frame.
+  meta_data <- r_obs[r_indices, , drop = FALSE]
+  if (!is.data.frame(meta_data)) meta_data <- as.data.frame(meta_data)
+  cell_names <- rownames(meta_data)
   gene_names <- as.character(py_to_r(subset_py$var_names$values))
   rownames(meta_data) <- cell_names
 
@@ -308,13 +316,13 @@ get_seurat_obj_from_h5ad <- function(
       py_mat <- subset_py$layers[[layer_name]]
     }
 
-    # Cast to float64 and convert to CSC format
-    py_mat <- py_mat$astype("float64")$tocsc()
-
-    # Convert to R, transpose, and assign dimnames
-    r_mat <- t(py_to_r(py_mat))
-    rownames(r_mat) <- gene_names
-    colnames(r_mat) <- cell_names
+    # Cast to float64, then transpose on the Python side: scipy csr.T returns
+    # a CSC view (O(1)) and reticulate maps scipy CSC -> R dgCMatrix directly,
+    # avoiding an R-side copy + t(). The astype("float64") cast MUST come
+    # BEFORE .T (view layers["counts"] can be integer dtype; scATOMIC needs
+    # doubles).
+    r_mat <- py_to_r(py_mat$astype("float64")$T$tocsc())
+    dimnames(r_mat) <- list(gene_names, cell_names)
     return(r_mat)
   }
 
