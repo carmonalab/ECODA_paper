@@ -69,10 +69,16 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
     print(f"h5ad obs entries before merge: {adata.n_obs}")
 
     obs = adata.obs.copy()
-    # Legacy scGate multi-model UCell scores (e.g. Bcell_UCell, CAF_UCell, ...)
-    # are stripped too; only the whitelisted HiTME UCell columns are kept.
+    # Pattern-based legacy catch-all, mirroring the worker: any scGate_* or
+    # functional.cluster* column, plus legacy scGate multi-model UCell scores
+    # (e.g. Bcell_UCell, CAF_UCell, ...); only the whitelisted HiTME UCell
+    # columns are kept (they are in annot_cols and come fresh from the
+    # feathers). Existing whitelisted columns (hitme_cols_keep + scatomic_cols)
+    # are dropped too — the obs may only carry what this annotation run
+    # freshly produced (or study metadata).
     legacy_ucell = {c for c in obs.columns if c.endswith("_UCell") and c not in hitme_cols_keep}
-    drop_cols = annot_cols | legacy_annot_cols | legacy_ucell
+    legacy_prefix = {c for c in obs.columns if c.startswith("scGate") or c.startswith("functional.cluster")}
+    drop_cols = annot_cols | legacy_annot_cols | legacy_ucell | legacy_prefix
     if sample_col not in obs.columns:
         raise ValueError(
             f"Sample column '{sample_col}' not found in obs of {h5ad_path}. "

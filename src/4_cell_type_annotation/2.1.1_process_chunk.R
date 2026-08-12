@@ -263,15 +263,24 @@ if (file.exists(annot_file)) {
       counts_layer = counts_layer
     )
 
-    # Re-annotation always starts fresh: drop stale annotation columns
-    # (whitelist + legacy) that survive in the union obs. Otherwise the
-    # scATOMIC layer_1 guard below would silently skip scATOMIC (stale values
-    # passed through) and Run.HiTME would see legacy scGate/UCell columns.
+    # Re-annotation always starts fresh: drop ALL pre-existing annotation
+    # columns (whitelist + legacy + any other scGate/ProjecTILs output) that
+    # survive in the union obs. Otherwise the scATOMIC layer_1 guard below
+    # would silently skip scATOMIC (stale values passed through) and
+    # Run.HiTME would see legacy scGate/UCell columns. This includes the
+    # whitelisted hitme_cols_keep/scatomic_cols: only what this run freshly
+    # produces (or study metadata) may survive.
     stale_cols <- intersect(union(annot_cols, LEGACY_ANNOT_COLS), colnames(seurat_obj@meta.data))
-    # Legacy scGate multi-model UCell scores (e.g. Bcell_UCell, CAF_UCell, ...)
-    # also confuse Run.HiTME; keep only the whitelisted HiTME UCell columns.
+    # Pattern-based legacy catch-all: scGate_* columns (scGate_multi,
+    # scGate_<model>, ...), ProjecTILs functional.cluster* columns
+    # (functional.cluster, functional.cluster.conf, ...), and legacy scGate
+    # multi-model UCell scores (e.g. Bcell_UCell, CAF_UCell, ...). Keep only
+    # the whitelisted HiTME UCell columns (already dropped above via
+    # annot_cols; setdiff documents the keep set).
+    stale_scgate <- grep("^scGate", colnames(seurat_obj@meta.data), value = TRUE)
+    stale_projtil <- grep("^functional\\.cluster", colnames(seurat_obj@meta.data), value = TRUE)
     stale_ucell <- setdiff(grep("_UCell$", colnames(seurat_obj@meta.data), value = TRUE), hitme_cols_keep)
-    stale_cols <- union(stale_cols, stale_ucell)
+    stale_cols <- union(stale_cols, union(stale_scgate, union(stale_projtil, stale_ucell)))
     if (length(stale_cols) > 0) {
       message(paste("  Dropping stale annotation columns from meta.data:", paste(stale_cols, collapse = ", ")))
       for (cc in stale_cols) {
