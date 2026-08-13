@@ -79,6 +79,7 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
   Note: `--exclude-dir` only prunes dirs found during traversal — the positional roots
   (`src`, `notebooks`, `docs`) are always searched.
 - When giving code or suggestions to the user to check or run something, always provide the full copy&paste-ready code step-by-step (including e.g. if he needs to source slurm_config.sh first for paths on the hpc to be recognized).
+- The user can run several terminals, each one accessing a different HPC login node, so he can run HPC bash scripts from any one of them, also in parallel. If possible, suggest which commands on the HPC can be run in parallel.
 
 ## Documentation organization
 - Project Summary & Citation → README.md (primary home) (keep it short and concise! no details! ask user if unsure)
