@@ -206,6 +206,21 @@ def run_mrvi(adata, device, output_path):
 
 def run_scpoli(adata, ct_col, dim, output_path):
     """scPoli conditional sample embeddings for one embedding dim."""
+    # scPoli requires a cell-type label for EVERY cell, but datasets whose
+    # declared ct columns are the pipeline annotation columns (Lee/Zhang:
+    # layer1/layer2) carry NaN for cells the annotators left unclassified
+    # (HiTME covers immune subsets only, ~66-88% of cells). scarches'
+    # label_encoder runs np.unique() on the mixed str/NaN object column,
+    # which crashes under numpy 2.x ("'<' not supported between instances of
+    # 'str' and 'float'"). Fill with an explicit "Unknown" class: every cell
+    # stays in the output (per-cell embedding rows stay aligned) and
+    # unannotated cells get their own scPoli prototype. No-op on complete
+    # columns (all other datasets use fully-covered author annotations).
+    n_na = int(adata.obs[ct_col].isna().sum())
+    if n_na:
+        print(f"Filling {n_na}/{adata.n_obs} missing values in '{ct_col}' "
+              "with 'Unknown' (scPoli requires a label per cell).")
+        adata.obs[ct_col] = adata.obs[ct_col].fillna("Unknown")
     scPoli = get_scpoli()
     scpoli_model = scPoli(
         adata=adata,
