@@ -289,13 +289,11 @@ run_ct_comps_analysis_worker <- function(
          h5ad_path)
   }
 
-  # Cell-type composition per sample (as get_ct_comp_df_seurat: rows =
-  # samples, cols = cell types; rowSums != 0 filter). obs["Sample"] is
-  # already the standardized sample column; a plain data.frame keeps the
-  # dplyr verbs in run_transformation_analysis / run_zeroimp_analysis
-  # working.
-  ct_comps <- as.data.frame.matrix(table(obs[[sample_col]], obs[[ct_col]]))
-  ct_comps <- ct_comps[rowSums(ct_comps) != 0, , drop = FALSE]
+  # Cell-type composition per sample (get_ct_comp_df: rows = samples, cols =
+  # cell types; rowSums != 0 filter). obs["Sample"] is already the
+  # standardized sample column; a plain data.frame keeps the dplyr verbs in
+  # run_transformation_analysis / run_zeroimp_analysis working.
+  ct_comps <- get_ct_comp_df(obs, sample_col, ct_col)
 
   # Labels: per-sample slice(1) of label_col, names = Sample
   # (get_labels-equivalent)

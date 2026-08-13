@@ -121,7 +121,7 @@ plot_pca_contributions_horizontal <- function(
   plot_data <- lapply(pcs, function(pc) {
     df <- loadings %>%
       rownames_to_column(var = "Feature") %>%
-      select(Feature, Loading = !!sym(pc))
+      dplyr::select(Feature, Loading = !!sym(pc))
     if (absolute) {
       top_bottom <- df %>%
         mutate(Loading = abs(.data$Loading)) %>%
@@ -247,4 +247,239 @@ plot_mds <- function(
     p <- p + coord_equal()
   }
   return(p)
+}
+
+# Shared cleaning step for the funky-heatmap figures (Figure 2A, Supp fig 15,
+# "For presentation"): merge exec times, filter methods, recode method/score/
+# dataset display names. `score_set` optionally restricts to the configured
+# metric names (benchmark_metrics); NULL keeps every score column (needed by
+# Supp fig 1, whose correlation matrix includes Silhouette and LISI).
+prepare_benchmark_data <- function(
+  df_results,
+  exec_times,
+  filter_methods,
+  method_recode,
+  dataset_recode,
+  score_set = NULL
+) {
+  clean_data <- merge_exec_times(df_results, exec_times) %>%
+    filter(method %in% filter_methods) %>%
+    mutate(method = recode(method, !!!method_recode)) %>%
+    mutate(score = recode(score, !!!score_label_map)) %>%
+    mutate(dataset = recode(dataset, !!!dataset_recode))
+  if (!is.null(score_set)) {
+    # dplyr::recode keeps unmatched values, so without this filter the raw
+    # mod_knnsqrtn_score / mod_knn6_score / mod_knn9_score leftovers would
+    # leak into the metric columns of the heatmap.
+    clean_data <- clean_data %>%
+      filter(score %in% unname(score_label_map[score_set]))
+  }
+  return(clean_data)
+}
+
+# Parameterized funky-heatmap builder (refactor of the previously duplicated
+# Figure 2A / Supp fig 15 / "For presentation" blocks). Mirrors the original
+# pipeline: min-max per (dataset, score) -> rank/overall/dataset/metric/runtime
+# aggregates -> column_info -> funky_heatmap -> ggsave. Outputs are identical
+# to the legacy blocks except that only the configured `score_set` metrics
+# are ranked/displayed. Returns the funkyheatmap grob invisibly.
+build_funky_heatmap <- function(
+  df_results,
+  exec_times,
+  filter_methods,
+  method_recode,
+  dataset_recode,
+  score_set = c("anosim_score", "mod_knn3_score", "cluster_score"),
+  output_file,
+  output_dir,
+  plot_width = 10,
+  plot_height = 6,
+  method_width = 6,
+  overall_col_name = "Mean",
+  include_rank = FALSE,
+  overall_legend_title = "Overall Mean",
+  overall_legend_labels = c(". 0", rep("", 5), "0.5", rep("", 4), "1")
+) {
+  ncolors <- 11
+
+  clean_data <- prepare_benchmark_data(
+    df_results, exec_times, filter_methods, method_recode, dataset_recode,
+    score_set = score_set
+  )
+
+  # --- 2. CALCULATE GEOMETRIC MEAN OF RANKS ---
+  df_ranks <- clean_data %>%
+    group_by(dataset, score) %>%
+    mutate(rank = rank(-value, ties.method = "min")) %>%
+    ungroup() %>%
+    group_by(method) %>%
+    dplyr::summarise(geo_mean_rank = exp(mean(log(rank), na.rm = TRUE))) %>%
+    ungroup() %>%
+    # Normalize so it plots nicely (0 to 1). Invert: best rank (lowest
+    # number) = 1.0 (biggest bar).
+    mutate(Rank_Score = (max(geo_mean_rank) - geo_mean_rank) /
+             (max(geo_mean_rank) - min(geo_mean_rank))) %>%
+    dplyr::select(method, Rank_Score)
+
+  # --- 3. SCALE DATA (0-1) FOR HEATMAP VISUALS ---
+  scaled_data <- clean_data %>%
+    group_by(dataset, score) %>%
+    mutate(value = min_max(value)) %>%
+    ungroup()
+
+  # --- 4. AGGREGATE SCORES ---
+  df_overall <- scaled_data %>%
+    group_by(method) %>%
+    dplyr::summarise(Overall_Score = mean(value, na.rm = TRUE))
+
+  df_datasets_wide <- scaled_data %>%
+    group_by(method, dataset) %>%
+    dplyr::summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(
+      id_cols = method, names_from = dataset, values_from = value,
+      names_prefix = "Dataset__"
+    )
+
+  df_metrics_wide <- scaled_data %>%
+    group_by(method, score) %>%
+    dplyr::summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(
+      id_cols = method, names_from = score, values_from = value,
+      names_prefix = "Metric__"
+    )
+
+  df_runtime <- clean_data %>%
+    distinct(method, dataset, time_secs) %>%
+    group_by(method) %>%
+    dplyr::summarise(raw_time = mean(time_secs, na.rm = TRUE), .groups = "drop") %>%
+    mutate(
+      log_time = log10(raw_time + 1),
+      # Inverting so SHORTER time (faster) = BIGGER bar/BETTER score
+      Runtime = min_max(log_time)
+    ) %>%
+    dplyr::select(method, Runtime)
+
+  # --- 5. MERGE EVERYTHING ---
+  final_data <- df_overall %>%
+    left_join(df_ranks, by = "method") %>%
+    left_join(df_datasets_wide, by = "method") %>%
+    left_join(df_metrics_wide, by = "method") %>%
+    left_join(df_runtime, by = "method") %>%
+    arrange(desc(Overall_Score))
+
+  # --- 6. BUILD COLUMN INFO ---
+  info_method <- tribble(
+    ~id,      ~group, ~name, ~geom,  ~palette, ~options,
+    "method", "",     "",    "text", NA,       list(hjust = 0, width = method_width)
+  )
+
+  info_score_avg <- tribble(
+    ~id,             ~group,    ~name,            ~geom, ~palette,           ~options,
+    "Overall_Score", "Overall", overall_col_name, "bar", "palette_avg_mean", list(width = 4)
+  )
+
+  palettes <- list(palette_avg_mean = brewer.pal(n = ncolors, name = "RdBu"))
+  legends <- list()
+  column_info_parts <- list(info_method, info_score_avg)
+
+  if (include_rank) {
+    info_rank_avg <- tribble(
+      ~id,          ~group,    ~name,      ~geom, ~palette,          ~options,
+      "Rank_Score", "Overall", "Rank Mean", "bar", "palette_avg_rank", list(width = 4, legend = FALSE)
+    )
+    column_info_parts <- c(column_info_parts, list(info_rank_avg))
+    palettes[["palette_avg_rank"]] <- brewer.pal(n = ncolors, name = "RdBu")
+    legends <- c(legends, list(
+      list(palette = "palette_avg_rank", enabled = FALSE, title = "REMOVE PLACEHOLDER")
+    ))
+  }
+
+  dataset_cols <- colnames(final_data)[startsWith(colnames(final_data), "Dataset__")]
+  info_datasets <- tibble(id = dataset_cols) %>%
+    mutate(
+      group = "Datasets",
+      name = str_remove(id, "Dataset__"),
+      geom = "circle",
+      palette = "Datasets",
+      options = list(list())
+    ) %>%
+    arrange(name)
+
+  metric_cols <- colnames(final_data)[startsWith(colnames(final_data), "Metric__")]
+  target_metric_order <- unname(score_label_map[score_set])
+  info_metrics_main <- tibble(id = metric_cols) %>%
+    mutate(
+      group = "Metrics",
+      name = str_remove(id, "Metric__"),
+      geom = "bar",
+      palette = "Metrics",
+      options = list(list(width = 2)),
+      name_f = factor(name, levels = target_metric_order)
+    ) %>%
+    arrange(name_f) %>%
+    dplyr::select(-name_f)
+
+  info_runtime <- tribble(
+    ~id,       ~group,    ~name,     ~geom, ~palette,          ~options,
+    "Runtime", "Runtime", "Runtime", "bar", "palette_runtime", list(width = 3)
+  )
+
+  column_info <- bind_rows(c(
+    column_info_parts,
+    list(info_datasets),
+    list(info_metrics_main),
+    list(info_runtime)
+  ))
+
+  palettes[["Datasets"]] <- brewer.pal(n = ncolors, name = "RdBu")
+  palettes[["Metrics"]] <- brewer.pal(n = ncolors, name = "RdBu")
+  palettes[["palette_runtime"]] <- rev(brewer.pal(n = ncolors, name = "RdYlGn"))
+
+  legends <- c(legends, list(
+    list(
+      palette = "palette_avg_mean",
+      enabled = TRUE,
+      title = overall_legend_title,
+      labels = overall_legend_labels
+    ),
+    list(
+      palette = "Datasets",
+      enabled = TRUE,
+      title = "Dataset separation",
+      labels = c(".     Min", rep("", ncolors - 2), "Max   .")
+    ),
+    list(
+      palette = "Metrics",
+      enabled = TRUE,
+      labels = c(". 0", rep("", round((ncolors - 2) / 2) + 1), "0.5",
+                 rep("", round((ncolors - 2) / 2)), "1")
+    ),
+    list(
+      palette = "palette_runtime",
+      enabled = TRUE,
+      title = "Runtime log10(s)",
+      labels = c("secs", "mins", "hours")
+    )
+  ))
+
+  # --- 7. PLOT ---
+  p <- funky_heatmap(
+    final_data,
+    column_info = column_info,
+    scale_column = FALSE,
+    column_groups = tibble(
+      group = c("Overall", "Datasets", "Metrics", "Runtime")
+    ),
+    palettes = palettes,
+    legends = legends,
+    position_args = position_arguments(
+      col_width = 1.5,
+      col_space = 0.2,
+      col_annot_offset = 5
+    )
+  )
+  ggsave(file.path(output_dir, output_file),
+         width = plot_width,
+         height = plot_height)
+  return(invisible(p))
 }

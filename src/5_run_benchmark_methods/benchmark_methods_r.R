@@ -34,10 +34,15 @@ process_coda_fig <- function(
   clr_zero_impute_num = 0.5,
   feat_mat = NULL,
   var_ct_desc = TRUE,
-  shuffle_labels = FALSE
+  shuffle_labels = FALSE,
+  obs = NULL
 ) {
   if (is.null(feat_mat)) {
-    df_counts <- get_ct_comp_df_seurat(seurat, sample_col = sample_col, ct_col)
+    if (!is.null(obs)) {
+      df_counts <- get_ct_comp_df(obs, sample_col = sample_col, ct_col)
+    } else {
+      df_counts <- get_ct_comp_df_seurat(seurat, sample_col = sample_col, ct_col)
+    }
     df_imp <- df_counts %>%
       impute_zeros(
         clr_zero_impute_method = clr_zero_impute_method,
@@ -175,13 +180,39 @@ process_pseudobulk_ct_fig <- function(
 process_avg_pca_embedding_fig <- function(
   seurat,
   labels,
-  sample_col = "Sample"
+  sample_col = "Sample",
+  pca_emb = NULL,
+  obs = NULL
 ) {
-  feat_mat <- as.data.frame(seurat@reductions$pca@cell.embeddings)
-  feat_mat$Sample <- seurat@meta.data[[sample_col]]
+  if (!is.null(pca_emb)) {
+    feat_mat <- as.data.frame(pca_emb)
+    # obsm numpy arrays carry no column names; the per-sample mean step
+    # selects starts_with("PC_") (Seurat's reduction naming convention).
+    if (is.null(colnames(feat_mat))) {
+      colnames(feat_mat) <- paste0("PC_", seq_len(ncol(feat_mat)))
+    }
+    # Align the embedding cells to their sample ids via cell barcodes
+    # (rownames). Both come from the same h5ad, so positions match; a missing
+    # rownames fallback covers matrices materialized without the index.
+    if (is.null(rownames(feat_mat)) && !is.null(obs) &&
+        nrow(feat_mat) == nrow(obs)) {
+      rownames(feat_mat) <- rownames(obs)
+    }
+    if (!is.null(obs) && !is.null(rownames(feat_mat))) {
+      sample_ids <- obs[[sample_col]]
+      names(sample_ids) <- rownames(obs)
+      feat_mat$Sample <- sample_ids[rownames(feat_mat)]
+    } else {
+      stop("process_avg_pca_embedding_fig: cannot align pca_emb to obs ",
+           "(mismatched rownames/lengths)")
+    }
+  } else {
+    feat_mat <- as.data.frame(seurat@reductions$pca@cell.embeddings)
+    feat_mat$Sample <- seurat@meta.data[[sample_col]]
+  }
   feat_mat <- feat_mat %>%
     group_by(.data$Sample) %>%
-    summarise(across(starts_with("PC_"), mean)) %>%
+    dplyr::summarise(across(starts_with("PC_"), mean)) %>%
     ungroup() %>%
     column_to_rownames(var = "Sample")
   return(create_result_bundle(feat_mat, labels))
@@ -339,10 +370,16 @@ process_gloprop_fig <- function(
   ct_col,
   label_col,
   sample_col = "Sample",
-  dist_metric = c("KL")
+  dist_metric = c("KL"),
+  obs = NULL
 ) {
-  sample_id <- seurat@meta.data[[sample_col]]
-  cluster_id <- seurat@meta.data[[ct_col]]
+  if (!is.null(obs)) {
+    sample_id <- obs[[sample_col]]
+    cluster_id <- obs[[ct_col]]
+  } else {
+    sample_id <- seurat@meta.data[[sample_col]]
+    cluster_id <- seurat@meta.data[[ct_col]]
+  }
   dist_result <- gloscopeProp(
     sample_id,
     cluster_id,

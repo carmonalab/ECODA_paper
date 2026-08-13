@@ -159,6 +159,42 @@ get_ct_comp_df_seurat <- function(seurat, sample_col, ct_col) {
   return(ct_comp_df)
 }
 
+# Data.frame variant of get_ct_comp_df_seurat (identical table -> output
+# shape): rows = samples, cols = cell types, zero-cell-count samples dropped.
+# `obs` is the cell-level metadata data.frame read from a preprocessed h5ad
+# (py_to_r(adata$obs)); sample/ct columns must be present.
+get_ct_comp_df <- function(obs, sample_col, ct_col) {
+  ct_comp_df <- table(
+    obs[[sample_col]],
+    obs[[ct_col]]
+  ) %>%
+    t() %>%
+    as.data.frame.matrix() %>%
+    t() %>%
+    as.data.frame()
+  ct_comp_df <- ct_comp_df[rowSums(ct_comp_df) != 0, , drop = FALSE]
+  return(ct_comp_df)
+}
+
+# Map the new-pipeline Leiden resolution columns
+# (leiden_res_<r>_<view>_hvg2000, written by 1.1.1_preprocess.py) to the
+# legacy RNA_snn_res.<r> names used by run_benchmark_analysis' ECODA_seuratres_*
+# methods. Only columns that exist in `obs` are renamed; returns the modified
+# obs data.frame (in place when it is a data.frame/tibble).
+rename_leiden_cols <- function(
+  obs,
+  view = "benchmark_analysis",
+  resolutions = c(0.1, 0.4, 2, 5, 20, 50)
+) {
+  src <- paste0("leiden_res_", resolutions, "_", view, "_hvg2000")
+  dst <- paste0("RNA_snn_res.", resolutions)
+  present <- src[src %in% colnames(obs)]
+  if (length(present) > 0) {
+    colnames(obs)[match(present, colnames(obs))] <- dst[src %in% colnames(obs)]
+  }
+  return(obs)
+}
+
 # Remove samples with low cell counts
 remove_low_cellcount_samples <- function(
   seurat,

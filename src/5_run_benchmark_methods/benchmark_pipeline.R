@@ -317,11 +317,26 @@ run_benchmark_analysis <- function(
   path_data,
   seurat_res = c(0.1, 0.4, 2, 5, 20),
   HVGs = c(1000, 2000, 3000),
-  ECODA_top_varexp_hvct = seq(0, 0.9, 0.1)
+  ECODA_top_varexp_hvct = seq(0, 0.9, 0.1),
+  obs = NULL,          # cell-level metadata data.frame (py_to_r(adata$obs));
+                       # new-pipeline input mode: overrides the Seurat path
+  adata = NULL,        # backed anndata handle; used only to fetch pca_emb
+                       # from obsm when pca_emb is not given explicitly
+  pca_emb = NULL,      # cells x PCs matrix (obsm X_pca_<view>_hvg2000 read);
+                       # Avg_PCA_embedding input on the obs path
+  pb_norm = NULL,      # DESeq2-normalized pseudobulk (samples x genes) on the
+                       # obs path; expected from the NAS hvg2000 bundle
+                       # (<ds>_pseudobulk_hvg2000.rds$pb), which the legacy
+                       # get_pb_deseq2(seurat, n_hvg = 2000) call reproduces
+  view = "benchmark_analysis",
+  label_col = NULL,    # obs-path only (seurat path: seurat@misc$label_col)
+  ct_col_low_res = NULL,  # obs-path only (seurat path: seurat@misc$cell_type_low_res)
+  ct_col_high_res = NULL  # obs-path only (seurat path: seurat@misc$cell_type_high_res)
 ) {
   # Files preprocessed with python. Feather names always use the datasets.json
   # key (both the HPC Python pipeline and the legacy qmd write them that way),
-  # so the legacy GongSharma -> GongSharma_all remap is dropped.
+  # so the legacy GongSharma -> GongSharma_all remap is dropped. On the
+  # new-pipeline path `path_data` points at the NAS benchmark/embeddings dir.
   for (i in HVGs) {
     if (i == 2000) {
       scpoli_dims <- factors_test
@@ -364,29 +379,95 @@ run_benchmark_analysis <- function(
     }
   }
 
-  # Sample names starting with digits are not allowed in seurat
-  seurat@meta.data[[sample_col]] <- standardize_sample_names(seurat@meta.data[[
-    sample_col
-  ]])
-  metadata <- get_metadata(seurat)
-  label_col <- seurat@misc$label_col
-  labels <- get_labels(seurat, label_col)
+  # Input mode: new-pipeline obs data.frame (backed h5ad obs read, no counts
+  # access) vs legacy Seurat object. Sample names are already standardized in
+  # the preprocessed obs (1.1.1_preprocess.py), so no standardize_sample_names
+  # on the obs path.
+  use_obs <- !is.null(obs)
+  if (use_obs) {
+    if (is.null(label_col)) {
+      stop("run_benchmark_analysis: label_col is required when obs is used")
+    }
+    for (req_col in c(sample_col, label_col)) {
+      if (!req_col %in% colnames(obs)) {
+        stop("run_benchmark_analysis: column '", req_col,
+             "' not found in obs")
+      }
+    }
+    # Per-sample metadata + labels (get_metadata/get_labels equivalents on a
+    # data.frame: slice(1) per sample, names = Sample).
+    metadata <- obs %>%
+      dplyr::group_by(!!sym(sample_col)) %>%
+      dplyr::slice(1)
+    labels <- as.factor(metadata[[label_col]])
+    names(labels) <- metadata[[sample_col]]
+    # Map the new-pipeline Leiden columns
+    # (leiden_res_<r>_<view>_hvg2000) to the legacy RNA_snn_res.* names used
+    # by the ECODA_seuratres_* methods below.
+    obs <- rename_leiden_cols(obs, view = view)
+    # Pseudobulk: the HPC pipeline (prepare_pseudobulks_hpc) precomputed it;
+    # the notebook passes the NAS hvg2000 variant. No counts access here.
+    if (is.null(pb_norm)) {
+      stop("run_benchmark_analysis: pb_norm (NAS pseudobulk hvg2000 bundle ",
+           "$pb) is required when obs is used (ECODA_deconv)")
+    }
+    # Avg_PCA_embedding: per-sample means of the benchmark PCA embedding.
+    # Prefer the explicitly passed matrix; fall back to an obsm read when an
+    # adata handle is available.
+    if (is.null(pca_emb) && !is.null(adata)) {
+      obsm_keys <- py_to_r(import_builtins(convert = FALSE)$list(
+        adata$obsm$keys()
+      ))
+      emb_key <- paste0("X_pca_", view, "_hvg2000")
+      if (emb_key %in% obsm_keys) {
+        pca_emb <- py_to_r(adata$obsm[[emb_key]])
+        if (is.null(rownames(pca_emb))) rownames(pca_emb) <- rownames(obs)
+      } else {
+        warning("run_benchmark_analysis: embedding '", emb_key,
+                "' not found in adata.obsm; skipping Avg_PCA_embedding")
+      }
+    }
+  } else {
+    if (is.null(seurat)) {
+      stop("run_benchmark_analysis: either obs or seurat must be provided")
+    }
+    # Sample names starting with digits are not allowed in seurat
+    seurat@meta.data[[sample_col]] <- standardize_sample_names(seurat@meta.data[[
+      sample_col
+    ]])
+    metadata <- get_metadata(seurat)
+    label_col <- seurat@misc$label_col
+    labels <- get_labels(seurat, label_col)
 
-  # Pseudobulk is computed by the HPC pipeline (run_pseudobulk_hpc). A local
-  # DESeq2 pseudobulk is still needed by ECODA_deconv below; as in the legacy
-  # code it is NOT wrapped in exec_time.
-  pb_norm <- get_pb_deseq2(
-    seurat,
-    sample_col = sample_col,
-    hvg = NULL,
-    n_hvg = 2000
-  )
+    # Pseudobulk is computed by the HPC pipeline (run_pseudobulk_hpc). A local
+    # DESeq2 pseudobulk is still needed by ECODA_deconv below; as in the legacy
+    # code it is NOT wrapped in exec_time.
+    pb_norm <- get_pb_deseq2(
+      seurat,
+      sample_col = sample_col,
+      hvg = NULL,
+      n_hvg = 2000
+    )
+  }
+
+  if (use_obs) {
+    if (is.null(ct_col_high_res)) {
+      stop("run_benchmark_analysis: ct_col_high_res is required when obs is used")
+    }
+    ct_low_res <- ct_col_low_res
+    ct_high_res <- ct_col_high_res
+  } else {
+    ct_low_res <- seurat@misc$cell_type_low_res
+    ct_high_res <- seurat@misc$cell_type_high_res
+  }
 
   if (!"Avg_PCA_embedding" %in% names(res_list)) {
     res_list[["Avg_PCA_embedding"]][["exec_time"]] <- exec_time(
       res_list[["Avg_PCA_embedding"]] <- process_avg_pca_embedding_fig(
         seurat,
-        labels
+        labels,
+        pca_emb = pca_emb,
+        obs = obs
       )
     )
   }
@@ -401,38 +482,43 @@ run_benchmark_analysis <- function(
   # CoDA
 
   ## layer1: low res. cell types
-  if (!is.null(seurat@misc$cell_type_low_res)) {
+  if (!is.null(ct_low_res)) {
     res_list[["ECODA_authors_LR"]][["exec_time"]] <- exec_time(
       res_list[["ECODA_authors_LR"]] <- process_coda_fig(
         seurat,
         labels,
-        ct_col = seurat@misc$cell_type_low_res
+        ct_col = ct_low_res,
+        obs = obs
       )
     )
   }
 
   ## layer2: high res. cell types
-  if (!is.null(seurat@misc$cell_type_high_res)) {
+  if (!is.null(ct_high_res)) {
     res_list[["ECODA_authors_HR"]][["exec_time"]] <- exec_time(
       res_list[["ECODA_authors_HR"]] <- process_coda_fig(
         seurat,
         labels,
-        ct_col = seurat@misc$cell_type_high_res
+        ct_col = ct_high_res,
+        obs = obs
       )
     )
     res_list[["ECODA_authors_HR_NULL"]][["exec_time"]] <- exec_time(
       res_list[["ECODA_authors_HR_NULL"]] <- process_coda_fig(
         seurat,
         labels,
-        ct_col = seurat@misc$cell_type_high_res,
-        shuffle_labels = TRUE
+        ct_col = ct_high_res,
+        shuffle_labels = TRUE,
+        obs = obs
       )
     )
     res_list[["GloProp"]][["exec_time"]] <- exec_time(
       res_list[["GloProp"]] <- process_gloprop_fig(
         seurat,
         metadata,
-        ct_col = seurat@misc$cell_type_high_res
+        ct_col = ct_high_res,
+        label_col = label_col,
+        obs = obs
       )
     )
 
@@ -447,7 +533,8 @@ run_benchmark_analysis <- function(
             seurat,
             labels,
             ECODA_top_varexp_hvct = varexp_hvc,
-            ct_col = seurat@misc$cell_type_high_res
+            ct_col = ct_high_res,
+            obs = obs
           )
       )
 
@@ -463,7 +550,8 @@ run_benchmark_analysis <- function(
             seurat,
             labels,
             ECODA_top_varexp_hvct = varexp_hvc,
-            ct_col = "layer2"
+            ct_col = "layer2",
+            obs = obs
           )
       )
 
@@ -479,7 +567,8 @@ run_benchmark_analysis <- function(
             seurat,
             labels,
             ECODA_top_varexp_hvct = varexp_hvc,
-            ct_col = "layer3"
+            ct_col = "layer3",
+            obs = obs
           )
       )
     }
@@ -489,7 +578,8 @@ run_benchmark_analysis <- function(
         seurat,
         labels,
         calc_clr = FALSE,
-        ct_col = seurat@misc$cell_type_high_res
+        ct_col = ct_high_res,
+        obs = obs
       )
     )
   }
@@ -499,7 +589,8 @@ run_benchmark_analysis <- function(
       labels,
       ECODA_top_n_hvct = 3,
       var_ct_desc = TRUE,
-      ct_col = seurat@misc$cell_type_high_res
+      ct_col = ct_high_res,
+      obs = obs
     )
   )
   res_list[["ECODA_authors_HR_2least_varcts"]][["exec_time"]] <- exec_time(
@@ -508,7 +599,8 @@ run_benchmark_analysis <- function(
       labels,
       ECODA_top_n_hvct = 2,
       var_ct_desc = FALSE,
-      ct_col = seurat@misc$cell_type_high_res,
+      ct_col = ct_high_res,
+      obs = obs,
     )
   )
 
@@ -519,29 +611,32 @@ run_benchmark_analysis <- function(
         labels,
         ECODA_top_n_hvct = 3,
         var_ct_desc = FALSE,
-        ct_col = seurat@misc$cell_type_high_res,
-        title = "ECODA\n2 least var. cell types"
+        ct_col = ct_high_res,
+        obs = obs
       )
   )
   res_list[["ECODA_HiTME_HR_layer2"]][["exec_time"]] <- exec_time(
     res_list[["ECODA_HiTME_HR_layer2"]] <- process_coda_fig(
       seurat,
       labels,
-      ct_col = "layer2"
+      ct_col = "layer2",
+      obs = obs
     )
   )
   res_list[["ECODA_HiTME_HR_layer3"]][["exec_time"]] <- exec_time(
     res_list[["ECODA_HiTME_HR_layer3"]] <- process_coda_fig(
       seurat,
       labels,
-      ct_col = "layer3"
+      ct_col = "layer3",
+      obs = obs
     )
   )
   res_list[["ECODA_scATOMIC_HR"]][["exec_time"]] <- exec_time(
     res_list[["ECODA_scATOMIC_HR"]] <- process_coda_fig(
       seurat,
       labels,
-      ct_col = "scATOMIC_pred"
+      ct_col = "scATOMIC_pred",
+      obs = obs
     )
   )
 
@@ -552,7 +647,9 @@ run_benchmark_analysis <- function(
     res_col_name <- paste0("RNA_snn_res.", r)
     nm <- paste0("ECODA_seuratres_", r)
     res_list[[nm]][["exec_time"]] <- exec_time(
-      res_list[[nm]] <- process_coda_fig(seurat, labels, ct_col = res_col_name)
+      res_list[[nm]] <- process_coda_fig(
+        seurat, labels, ct_col = res_col_name, obs = obs
+      )
     )
   }
 
@@ -569,7 +666,8 @@ run_benchmark_analysis <- function(
           seurat,
           labels,
           pca_dims = i,
-          ct_col = seurat@misc$cell_type_high_res
+          ct_col = ct_high_res,
+          obs = obs
         )
       )
     }
@@ -654,21 +752,6 @@ run_benchmark_analysis <- function(
       )]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
     }
   }
-
-  # # ECODA + PB
-  # for (i in c(0, 0.25, 0.5, 0.75, 1)) {
-  #   for (norm in c("max", "median", "zscore", "quantile")) {
-  #     res_list[[paste0("ECODA_PB_combo_norm", norm, "_ecodaweight", i)]] <- process_ecodapb_fig(
-  #       dist_mat_ecoda = res_list[["ECODA_authors_HR"]][["dist_mat"]],
-  #       dist_mat_pb = res_list[["Pseudobulk_hvg2000"]][["dist_mat"]],
-  #       norm_method = norm,
-  #       ecoda_weight = i,
-  #       labels = res_list[["ECODA_authors_HR"]][["labels"]],
-  #     )
-  #     res_list[[paste0("ECODA_PB_combo_norm", norm, "_ecodaweight", i)]][["exec_time"]] <-
-  #       res_list[["ECODA_authors_HR"]][["exec_time"]] + res_list[["Pseudobulk_hvg2000"]][["exec_time"]]
-  #   }
-  # }
 
   return(res_list)
 }
@@ -1131,31 +1214,50 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
   perc_df <- df %>% calc_perc_df()
   res_list <- list()
 
-  for (i in c(0.5, 2/3, 1, 5, 10, 20, 50, 100, 200)) {
-    res_list[[paste0("counts_zeros", i)]] <- df %>%
-      impute_zeros("counts_zeros", i) %>%
+  # Method keys use underscore separators with string-formatted values
+  # (counts_all_0.5, counts_all_2/3, percentage_all_0.1%, multLN_0.1%, ...):
+  # the notebook's legacy references (counts_all_0.5, counts_all_1) match
+  # these names as-is, and the paste0-without-separator artifacts
+  # (counts_all0.666666666666667) are gone. NOTE: this is a breaking change
+  # for already-computed zeroimp bundles — re-run the zeroimp array with
+  # --force (see TODO.md).
+  counts_vals <- c(
+    "0.5" = 0.5, "2/3" = 2 / 3, "1" = 1, "5" = 5, "10" = 10,
+    "20" = 20, "50" = 50, "100" = 100, "200" = 200
+  )
+  for (i in names(counts_vals)) {
+    i_val <- unname(counts_vals[[i]])
+    res_list[[paste0("counts_zeros_", i)]] <- df %>%
+      impute_zeros("counts_zeros", i_val) %>%
       clr() %>%
       dist() %>%
       calc_sep_score(labels)
 
-    res_list[[paste0("counts_all", i)]] <- df %>%
-      impute_zeros("counts_all", i) %>%
+    res_list[[paste0("counts_all_", i)]] <- df %>%
+      impute_zeros("counts_all", i_val) %>%
       clr() %>%
       dist() %>%
       calc_sep_score(labels)
   }
 
-  for (i in c(0.001, 0.01, 0.1, 1, 2, 5)) {
-    res_list[[paste0("percentage_all", i, "%")]] <- df %>%
-      impute_zeros("percentage_all", i) %>%
+  for (i in c("0.001", "0.01", "0.1", "1", "2", "5")) {
+    i_val <- as.numeric(i)
+    res_list[[paste0("percentage_all_", i, "%")]] <- df %>%
+      impute_zeros("percentage_all", i_val) %>%
+      clr() %>%
+      dist() %>%
+      calc_sep_score(labels)
+
+    res_list[[paste0("percentage_zeros_", i, "%")]] <- df %>%
+      impute_zeros("percentage_zeros", i_val) %>%
       clr() %>%
       dist() %>%
       calc_sep_score(labels)
 
     df_multLN <- perc_df %>%
-      zCompositions::multLN(label = 0, dl = rep(i, ncol(df)), z.warning = 0.9)
+      zCompositions::multLN(label = 0, dl = rep(i_val, ncol(df)), z.warning = 0.9)
     try(
-      res_list[[paste0("multLN", i, "%")]][["multLN"]] <- df_multLN %>%
+      res_list[[paste0("multLN_", i, "%")]][["multLN"]] <- df_multLN %>%
         clr() %>%
         dist() %>%
         calc_sep_score(labels[row.names(df) %in% row.names(df_multLN)])
@@ -1165,7 +1267,7 @@ run_zeroimp_analysis <- function(ct_comps, labels) {
       res_list[[paste0("multRepl_", i, "%")]] <- perc_df %>%
         zCompositions::multRepl(
           label = 0,
-          dl = rep(i, ncol(df)),
+          dl = rep(i_val, ncol(df)),
           z.warning = 1,
           frac = 1
         ) %>%

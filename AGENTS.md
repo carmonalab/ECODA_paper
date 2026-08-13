@@ -12,6 +12,24 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
 
 # Agent Guardrails & Domain Terms
 
+## Paper figures are sacred
+- Every plot saved with a filename starting `Figure` or `Supp_fig` is a paper
+  figure: KEEP and FIX if broken — never remove it. (Figure 4 CE/DF, Supp fig
+  14, Supp fig 15, Supp fig 16AB, Supp fig 17-21, Figure 2A/B, Figure 3A/B.)
+- Benchmark figure hierarchy:
+  - Main benchmark figure (Figure 2A) = results across all datasets with only
+    the default/main parameter setting per method.
+  - Extended figure (Supp fig 15 / "For presentation") = additional
+    non-standard methods (HiTME/scATOMIC annotations, cell-type pseudobulk,
+    frequency-based composition, ...).
+  - Parameter screening (Supp fig 2) = main methods across parameter ranges
+    (robustness check that default parameters are faithful — no
+    cherry-picking).
+- `ECODA_PB_combo_*` (ECODA+Pseudobulk distance combos): legacy, kept
+  commented-out in `benchmark_analysis.rmd` for internal testing only — NOT
+  implemented in `run_benchmark_analysis` and NOT shown in publication
+  figures (see TODO.md "Ideas for later").
+
 ## No-leakage (central premise)
 - Bio labels (Status, sample.origin, cond, …) are ground truth **only**: they
   must NEVER be passed as a design covariate, batch key, or any other input to
@@ -117,6 +135,7 @@ Four-stage end-to-end pipeline; file-level details live in docs/ARCHITECTURE.md.
 - Do not use the login node to execute any code
     - If you do, you are disturbing all other users and this is unacceptable. When this happens we will most likely kill your process.
     - The login node should only be used to compile your code and submit a Slurm job. You must even use Slurm to run your tests. The debug-cpu and debug-gpu partitions are dedicated for small tests.
+    - Defer from using tmux on the login node, except for the pixi install scripts (critical for HPC setup). Later pipeline steps are not critical (i.e. syncs can be done later at any time manually).
 
 ## Additional important points:
 - Current repo lives on a local MacOS computer

@@ -19,8 +19,16 @@ Core script to run the benchmark and generate paper figures.
 
 ## Inputs
 
--   The resulting preprocessed `.rds` files from the script `Preprocess_datasets.Rmd`.
--   The `.feather` files containing sample distances or sample embeddings from the benchmarked methods that run in python, produced with `Process_data.ipynb`.
+-   Preprocessed + annotated per-view `.h5ad` files per dataset (stages 2–4:
+    `src/3_scrnaseq_preprocessing/` + `src/4_cell_type_annotation/`, synced to
+    `${NAS_TARGET_DIR}/<DS>/output/`). Read in **backed mode**: obs (metadata)
+    only, plus one obsm PCA matrix for Avg_PCA — no counts access.
+-   HPC benchmark result bundles (`${NAS_TARGET_DIR}/benchmark/results/`), the
+    python-method sample distance/embedding `.feather` files and the merged
+    `execution_times.feather` (`${NAS_TARGET_DIR}/benchmark/embeddings/`), and
+    the precomputed DESeq2 pseudobulks
+    (`${NAS_TARGET_DIR}/benchmark/pseudobulks/`), all rsynced by the benchmark
+    submit scripts from the HPC pipelines in `src/5_run_benchmark_methods/`.
 
 ## Outputs
 
@@ -37,19 +45,53 @@ Core script to run the benchmark and generate paper figures.
 
 source("src/utils/load_all_functions.R")
 datasets <- read_datasets_json(view = "benchmark_analysis")
+# Skip the _debug dataset (Joanito 5-sample subset): the `_*`-prefix
+# convention marks debug-only entries in datasets.json.
+datasets <- datasets[!grepl("^_", names(datasets))]
 dataset_display_map <- sapply(datasets, `[[`, "display_name")
+# The internal key stays Gongsharma_cmv_young_males (HPC bundle/feather file
+# names use it); figures display it as GongSharma.
 dataset_display_map[["GongSharma"]] <- dataset_display_map[["Gongsharma_cmv_young_males"]]
 
-# Set paths
-path_nas <- file.path("", "Volumes", "Shared", "DataCollections", "Standardized_SingleCell_Datasets")
+# Set paths (NAS must be mounted; adapt the mount point if needed)
+path_nas_project <- file.path("", "Volumes", "Shared", "Projects", "ECODA_paper")
 # HPC-computed R benchmark results (Pipeline A methods + trans/zeroimp,
-# rsynced by the submit scripts to ${NAS_TARGET_DIR}/benchmark/). Adapt the
-# mount point if the NAS is mounted elsewhere on this computer.
-path_nas_benchmark <- file.path("", "Volumes", "Shared", "Projects", "ECODA_paper", "benchmark", "results")
+# rsynced by the submit scripts to ${NAS_TARGET_DIR}/benchmark/).
+path_nas_benchmark <- file.path(path_nas_project, "benchmark", "results")
+# Python-method sample distance/embedding feathers (MrVI/PILOT/scPoli) and
+# the merged execution_times.feather.
+path_nas_embeddings <- file.path(path_nas_project, "benchmark", "embeddings")
+# Precomputed DESeq2 pseudobulks (<ds>_pseudobulk_hvg2000.rds =
+# list(pb = samples x genes, time_secs)).
+path_nas_pseudobulks <- file.path(path_nas_project, "benchmark", "pseudobulks")
+# Per-dataset preprocessed h5ads: file.path(path_nas_project, ds, "output")
+# with the view output_file_name from datasets.json
+# (get_view_h5ad_path(datasets, ds, "benchmark_analysis")).
 # path_data <- file.path(path_root, "data")
 path_data <- file.path(getwd(), "data")
 path_plots <- file.path(getwd(), "plots")
-seurat_file_ending <- "_ECODAprocessed.rds"
+
+# Separation metrics used in the benchmark figures. Any combination of
+# score_label_map names works, e.g. add "sil_score", "mod_knn9_score".
+benchmark_metrics <- c("anosim_score", "mod_knn3_score", "cluster_score")
+stopifnot(all(benchmark_metrics %in% names(score_label_map)))
+
+# Methods treated as "default" (highlighted in the parameter-screening
+# figures): main methods at their default parameter setting. The regex is
+# matched against the *recoded* method names in the screening figure.
+default_methods <- c(
+  "ECODA_authors_HR\\b",
+  "MOFA_hvg2000_factors15",
+  "Pseudobulk_hvg2000\\b",
+  "Pseudobulk_CT_HR_hvg2000",
+  "PILOT_hvg2000_HR\\b",
+  "scITD_hvg2000_factors5",
+  "scPoli_hvg2000_embdims15_HR\\b",
+  "GloScope_hvg2000_pcadims30",
+  "GloProp",
+  "MrVI_hvg2000"
+)
+default_methods_regex <- paste(default_methods, collapse = "|")
 
 set.seed(123)
 ```
@@ -91,21 +133,75 @@ if (length(list.files(path_nas_benchmark, pattern = "\\.rds$")) == 0) {
     "\nRun the HPC benchmark pipelines first (see TODO.md Phase 3.2)."
   )
 }
+if (!dir.exists(path_nas_embeddings)) {
+  stop(
+    "Python benchmark embeddings dir not found: ", path_nas_embeddings,
+    "\nRun the HPC python benchmark pipeline first (src/5_run_benchmark_methods/",
+    "run_python_sample_embedding_methods/) and make sure the NAS is mounted."
+  )
+}
+if (!dir.exists(path_nas_pseudobulks)) {
+  stop(
+    "Pseudobulk bundles dir not found: ", path_nas_pseudobulks,
+    "\nRun the HPC prepare_pseudobulk pipeline first (see TODO.md Phase 3.2)."
+  )
+}
+
+sample_col <- "Sample"
+# Per-dataset cell-count/statistics collected during the loop (display keys;
+# used by the exec-time figures and Supp table 1 instead of full reloads).
+n_cells_by_ds <- list()
+ds_stats_list <- list()
 
 for (ds in names(datasets)) {
-  # h5ad_file <- file.path(path_data, datasets[[ds]]$output_file)
-  # Loading mechanism TBD — see TODO.md for h5ad loading task
-  seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
-  if (ds == "Stephenson") {
-    seurat <- subset(seurat, subset = Site == "Ncl")
+  # Per-dataset inputs: preprocessed view h5ad (NAS) + shared pseudobulk.
+  h5ad_path <- file.path(
+    path_nas_project, ds, "output",
+    get_view_h5ad_path(datasets, ds, "benchmark_analysis")
+  )
+  if (!file.exists(h5ad_path)) {
+    stop(
+      "Preprocessed h5ad not found: ", h5ad_path,
+      "\nRun stages 2-4 for this dataset (src/3_scrnaseq_preprocessing/ + ",
+      "src/4_cell_type_annotation/) and make sure the NAS is mounted."
+    )
+  }
+  pb_file <- file.path(path_nas_pseudobulks, paste0(ds, "_pseudobulk_hvg2000.rds"))
+  if (!file.exists(pb_file)) {
+    stop(
+      "Pseudobulk bundle not found: ", pb_file,
+      "\nRun the HPC prepare_pseudobulk pipeline for this dataset first."
+    )
   }
 
-  seurat <- replace_HiTMElayer3_annot(seurat, thresh = 0.1)
-  
-  seurat@misc$label_col <- datasets[[ds]][["label_col"]]
-  seurat@misc$cell_type_low_res <- datasets[[ds]][["cell_type_low_res"]]
-  seurat@misc$cell_type_high_res <- datasets[[ds]][["cell_type_high_res"]]
-  
+  # Backed h5ad read (as in the HPC R workers): obs (metadata) only + one
+  # obsm PCA matrix for Avg_PCA. No counts access in the notebook — the
+  # DESeq2 pseudobulk used by ECODA_deconv is the precomputed HPC hvg2000
+  # variant (identical computation, see AGENTS.md).
+  ad <- import("anndata", convert = FALSE)
+  adata <- ad$read_h5ad(h5ad_path, backed = "r")
+  obs <- py_to_r(adata$obs)
+  # Sample column is already standardized upstream (1.1.1_preprocess.py), so
+  # no standardize_sample_names() needed here.
+  obsm_keys <- py_to_r(import_builtins(convert = FALSE)$list(adata$obsm$keys()))
+  emb_key <- "X_pca_benchmark_analysis_hvg2000"
+  if (!emb_key %in% obsm_keys) {
+    stop("Embedding '", emb_key, "' not found in adata.obsm of ", h5ad_path,
+         ". Re-run preprocessing (1.1.1_preprocess.py) for this dataset.")
+  }
+  pca_emb <- py_to_r(adata$obsm[[emb_key]])
+  rownames(pca_emb) <- rownames(obs)
+  # obsm numpy arrays carry no column names; Avg_PCA_embedding expects the
+  # Seurat PC_* convention.
+  colnames(pca_emb) <- paste0("PC_", seq_len(ncol(pca_emb)))
+  pb_norm <- readRDS(pb_file)[["pb"]]
+
+  # Legacy internal test (UCell-threshold layer3 refinement, requires
+  # IFN_UCell/cellCycle.*_UCell columns): NOT applied in the new pipeline —
+  # the annotation stage already produced the h5ad obs. The Seurat helper
+  # stays in src/utils/seurat_utils.R for the batch-effect notebook.
+  # seurat <- replace_HiTMElayer3_annot(seurat, thresh = 0.1)
+
   # Heavy R methods (GloScope, MOFA, Pseudobulk, scITD) + the transformation
   # and zero-imputation analyses run on HPC (src/5_run_benchmark_methods/
   # run_r_sample_embedding_methods/ and run_transformation_zeroimp_analysis/);
@@ -113,15 +209,44 @@ for (ds in names(datasets)) {
   # result_list are kept (legacy rerun semantics); only missing methods are
   # read from ${path_nas_benchmark}/<ds>_<method>.rds.
   result_list <- load_hpc_benchmark_results(result_list, ds, path_nas_benchmark)
-  
-  # Remaining (fast, composition-based) benchmark methods run locally.
+
+  # Remaining (fast, composition-based) benchmark methods run locally, on the
+  # obs/embedding/pseudobulk inputs (no Seurat object, no counts).
   result_list[["bmark"]][[ds]] <- run_benchmark_analysis(
     res_list = result_list[["bmark"]][[ds]],
     ds = ds,
-    seurat = seurat,
-    path_data = path_data
+    seurat = NULL,
+    path_data = path_nas_embeddings,
+    obs = obs,
+    adata = adata,
+    pca_emb = pca_emb,
+    pb_norm = pb_norm,
+    label_col = datasets[[ds]]$label_col,
+    ct_col_low_res = datasets[[ds]]$cell_type_low_res,
+    ct_col_high_res = datasets[[ds]]$cell_type_high_res
   )
+
+  # Per-dataset stats for the exec-time figures + Supp table 1.
+  ds_key_out <- if (ds == "Gongsharma_cmv_young_males") "GongSharma" else ds
+  n_cells_by_ds[[ds_key_out]] <- nrow(obs)
+  ct_per_sample <- table(obs[[sample_col]])
+  ds_stats_list[[ds_key_out]] <- data.frame(
+    dataset = ds_key_out,
+    n_samples = length(unique(obs[[sample_col]])),
+    n_cells = nrow(obs),
+    cells_per_sample_mean = mean(ct_per_sample),
+    cells_per_sample_sd = sd(ct_per_sample),
+    n_cell_types = length(unique(obs[[datasets[[ds]]$cell_type_high_res]]))
+  )
+
+  # Release the backed h5ad handle.
+  adata$file$close()
+  rm(adata, obs, pca_emb, pb_norm, ct_per_sample)
+  gc()
 }
+
+# Combined per-dataset stats (used by Supp table 1).
+ds_stats_df <- bind_rows(ds_stats_list)
 ```
 
 # ---------------------------------------------------------------
@@ -179,9 +304,6 @@ levs <- mixedsort(as.character(unique(df_results$method)))
 levs
 
 df_results$method <- factor(df_results$method, levels = levs)
-
-df_results$dataset[df_results$dataset == "GongSharma_females_cmv"] <- "GongSharma_cmv"
-df_results$dataset[df_results$dataset == "GongSharma_females_cmvneg_age"] <- "GongSharma_age"
 
 df_results_list[["Benchmark"]] <- df_results
 ```
@@ -475,7 +597,10 @@ print(p3)
 
 p_kfoury <- wrap_plots(list(p1, p2, p3)) +
   plot_layout(nrow = 1, guides = "collect")
-ggsave(file.path(path_plots, paste0("Supp_fig_18_Kfoury_PCA_authors_vs_auto_", ds, ".pdf")),
+# NOTE (review): the dataset name was previously duplicated in the filename
+# (Supp_fig_18_Kfoury_PCA_authors_vs_auto_Kfoury.pdf); fixed to drop the
+# trailing duplicate.
+ggsave(file.path(path_plots, "Supp_fig_18_Kfoury_PCA_authors_vs_auto.pdf"),
        width = 15,
        height = 6)
 
@@ -511,7 +636,7 @@ print(p3)
 
 p_wu <- wrap_plots(list(p1, p2, p3)) +
   plot_layout(nrow = 1, guides = "collect")
-ggsave(file.path(path_plots, paste0("Supp_fig_18_Wu_PCA_authors_vs_auto_", ds, ".pdf")),
+ggsave(file.path(path_plots, "Supp_fig_18_Wu_PCA_authors_vs_auto.pdf"),
        width = 15,
        height = 6)
 
@@ -752,9 +877,6 @@ for (m in names(methods)) {
 wrap_plots(plot_list) +
   plot_layout(nrow = 2, guides = "collect") +
   plot_annotation(title = ds)
-# ggsave(file.path(path_plots, paste0("PCA_", ds, ".pdf")),
-#        width = 18,
-#        height = 6)
 
 ```
 
@@ -1129,19 +1251,8 @@ filter_methods <- c(
   "ECODA_seuratres_20"
 )
 
-default_methods <- c(
-    "ECODA_authors_HR\\b", 
-    "MOFA_hvg2000_factors15", 
-    "Pseudobulk_hvg2000\\b",
-    "Pseudobulk_CT_HR_hvg2000",
-    "PILOT_hvg2000_HR\\b",
-    "scITD_hvg2000_factors5",
-    "scPoli_hvg2000_embdims15_HR\\b",
-    "GloScope_hvg2000_pcadims30",
-    "GloProp",
-    "MrVI_hvg2000"
-)
-default_methods_regex <- paste(default_methods, collapse = "|")
+# default_methods / default_methods_regex are defined once in the setup chunk
+# (highlighting of default methods in this screening figure).
 
 df_results %>%
   # filter(score == "anosim_score") %>%
@@ -1224,9 +1335,16 @@ ggsave(file.path(path_plots, "Supp_fig_2_methodparameter_screening.pdf"),
 
 ### Combined ECODA and PB
 
+LEGACY (internal testing only, NOT shown in the publication): the
+`ECODA_PB_combo_*` methods are disabled in `run_benchmark_analysis`, so the
+three chunks below would produce nothing. Kept as documentation — see TODO.md
+"Ideas for later".
+
 #### Plot distance distribution after different normalization methods applied
 
-```{r}
+```{r eval=FALSE}
+# LEGACY: ECODA+Pseudobulk distance-distribution demo (ECODA_PB_combo_*
+# methods not in the pipeline).
 ecoda <- result_list$bmark$Pelka$ECODA_authors_HR$dist_mat
 pb <- result_list$bmark$Pelka$Pseudobulk_hvg2000$dist_mat
 
@@ -1256,7 +1374,7 @@ hist(test2, main = "pb zscore")
 
 #### Plot benchmark including ECODA+PB (overview)
 
-```{r fig.height=9, fig.width=7}
+```{r fig.height=9, fig.width=7, eval=FALSE}
 norm_methods <- c("max", "median", "zscore", "quantile")
 
 filter_methods <- c(
@@ -1325,7 +1443,7 @@ df_results %>%
 
 #### Plot benchmark including ECODA+PB (detailed)
 
-```{r fig.height=7, fig.width=6}
+```{r fig.height=7, fig.width=6, eval=FALSE}
 filter_methods <- c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
@@ -1496,7 +1614,7 @@ p2 <- df_results_sub %>%
   scale_shape_manual(values=1:length(unique((df_results_sub$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
   stat_compare_means(
-    ref.group = "All cell types",
+    ref.group = "100",  # recoded ECODA_authors_HR level (was "All cell types")
     method = "wilcox.test",
     paired = TRUE,
     angle = 25,
@@ -1540,7 +1658,7 @@ p3 <- df_results_sub %>%
   scale_shape_manual(values=1:length(unique((df_results_sub$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
   stat_compare_means(
-    ref.group = "All cell types",
+    ref.group = "100",  # recoded ECODA_authors_HR level (was "All cell types")
     method = "wilcox.test",
     paired = TRUE,
     angle = 25,
@@ -1563,7 +1681,7 @@ p4 <- df_results_sub %>%
   scale_shape_manual(values=1:length(unique((df_results_sub$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
   stat_compare_means(
-    ref.group = "All cell types",
+    ref.group = "100",  # recoded ECODA_authors_HR level (was "All cell types")
     method = "wilcox.test",
     paired = TRUE,
     angle = 25,
@@ -1596,28 +1714,6 @@ ggsave(file.path(path_plots, "Supp_fig_20_featureselectionHVC_barplot_mod_ari.pd
 ```
 
 ### Show example PCAs
-
-#### NOTE: CLR of two parts vs simple log-ratio
-
-The CLR of the first part is exactly half of the log-ratio of the two parts.
-
-```{r}
-test <- result_list$bmark[[ds]]$Freq_highres$feat_mat[, colnames(feat_mat_recalc)]
-test_clr <- clr(test)
-test_lr <- log(test$`Immature B cells` / test$TIM)
-```
-
-```{r}
-test_clr[, 1]
-```
-
-```{r}
-test_lr
-```
-
-```{r}
-test_clr[, 1] * 2 - test_lr
-```
 
 #### Figure 4 CE: Adams
 
@@ -1765,107 +1861,92 @@ for (ds in names(result_list[["bmark"]])) {
 
 # Plot execution times
 
-## Get execution times from R
+## Unified execution times (HPC feather + local bundle rows)
 
 ```{r}
-r_exec_times_path <- file.path(getwd(), "data", "r_execution_times.rds")
+# Single source of execution times:
+# 1. The NAS merged feather (${NAS_TARGET_DIR}/benchmark/embeddings/
+#    execution_times.feather): HPC rows (R heavy methods, python methods,
+#    trans/zeroimp, prepare_pseudobulk_*), schema dataset/method/time_secs/
+#    mem_GB (mem_GB = sacct MaxRSS; NA for R rows).
+# 2. Bundle-derived rows for the local-only methods that the feather does
+#    not cover (ECODA_* variants, GloProp, Freq_highres, Avg_PCA_embedding,
+#    ECODA_deconv, ECODA_seuratres_*, ECODA_HiTME_*, ECODA_scATOMIC_HR) —
+#    union by (dataset, method), mem_GB = NA.
+# Cache to data/exec_times.rds; a stale cache with the old schema
+# (n_samples/n_features columns) is regenerated automatically.
+exec_times_path <- file.path(path_data, "exec_times.rds")
 
-if (!file.exists(r_exec_times_path)) {
-  r_exec_times <- data.frame(
-    dataset = character(),
-    method = character(),
-    time_secs = numeric(),
-    n_samples = numeric(),
-    n_features = numeric()
-  )
-  
-  bmark_result_list <- result_list[["bmark"]]
-  
-  ds_test <- names(bmark_result_list)
-  
-  for (ds in ds_test) {
-    for (met in names(bmark_result_list[[ds]])) {
-      if ("exec_time" %in% names(bmark_result_list[[ds]][[met]])) {
-        temp <- data.frame(
-          dataset = ds,
-          method = met,
-          time_secs = as.numeric(bmark_result_list[[ds]][[met]][["exec_time"]], units = "secs"),
-          n_samples = nrow(bmark_result_list[[ds]][[met]][["feat_mat"]]),
-          n_features = ncol(bmark_result_list[[ds]][[met]][["feat_mat"]])
+exec_times <- NULL
+if (file.exists(exec_times_path)) {
+  cached <- readRDS(exec_times_path)
+  if (all(c("dataset", "method", "time_secs", "mem_GB", "n_cells") %in%
+          colnames(cached))) {
+    exec_times <- cached
+  } else {
+    message("Stale exec_times cache (old schema); regenerating from NAS + bundles")
+    unlink(exec_times_path)
+  }
+}
+
+if (is.null(exec_times)) {
+  exec_times_feather <- file.path(path_nas_embeddings, "execution_times.feather")
+  if (!file.exists(exec_times_feather)) {
+    stop(
+      "Merged execution-times feather not found: ", exec_times_feather,
+      "\nRun the benchmark pipelines (they merge + sync execution_times.feather",
+      " to the NAS) and make sure the NAS is mounted."
+    )
+  }
+  feather_exec_times <- arrow::read_feather(exec_times_feather) %>%
+    as.data.frame()
+
+  bundle_exec_times <- imap_dfr(result_list[["bmark"]], ~ {
+    dataset_name <- .y
+    imap_dfr(.x, function(bundle, method_name) {
+      if ("exec_time" %in% names(bundle)) {
+        data.frame(
+          dataset = dataset_name,
+          method = method_name,
+          time_secs = as.numeric(bundle[["exec_time"]], units = "secs"),
+          mem_GB = NA_real_,
+          stringsAsFactors = FALSE
         )
-        
-        r_exec_times <- rbind(r_exec_times, temp)
+      } else {
+        NULL # no timing (e.g. methods that failed to compute)
       }
-    }
+    })
+  })
+
+  # Normalize keys so the merge with df_results (paste0(dataset, method)
+  # join, helpers.R::merge_exec_times) hits:
+  # - GongSharma: internal key Gongsharma_cmv_young_males is displayed as
+  #   GongSharma (same rename as bmark_result_list above);
+  # - PILOT: the feather rows are PILOT_hvg<n>_highres, the bundles
+  #   PILOT_hvg<n>.
+  normalize_exec_keys <- function(df) {
+    df %>%
+      mutate(
+        dataset = recode(dataset, "Gongsharma_cmv_young_males" = "GongSharma"),
+        method = gsub("^(PILOT_hvg[0-9]+)_highres$", "\\1", method)
+      )
   }
-  
-  # r_exec_times$dataset[grepl("GongSharma_all", r_exec_times$dataset)] <- gsub("GongSharma_all", "GongSharma", r_exec_times$dataset[grepl("GongSharma_all", r_exec_times$dataset)])
+  feather_exec_times <- normalize_exec_keys(feather_exec_times)
+  bundle_exec_times <- normalize_exec_keys(bundle_exec_times)
 
-  saveRDS(object = r_exec_times, r_exec_times_path)
-} else {
-  r_exec_times <- readRDS(r_exec_times_path)
-}
-```
+  # Feather rows win for the HPC methods; bundle rows fill the local-only
+  # methods missing from the feather.
+  exec_times <- bind_rows(
+    feather_exec_times,
+    bundle_exec_times %>%
+      anti_join(feather_exec_times, by = c("dataset", "method"))
+  )
 
-## Read execution times from python
+  # n_cells per dataset (collected during the dataset loop; display keys).
+  n_cells_lookup <- unlist(n_cells_by_ds)
+  exec_times$n_cells <- n_cells_lookup[exec_times$dataset]
 
-```{r}
-p_exec_times_path <- file.path(getwd(), "data", "p_execution_times.rds")
-
-if (!file.exists(p_exec_times_path)) {
-  p_exec_times <- arrow::read_feather(
-    file.path(getwd(), "data", "execution_times.feather")
-  ) %>%
-    as.data.frame() %>%
-    # The merged execution_times.feather now also carries R-method rows
-    # (gloscope/mofa/pseudobulk/scitd/prepare_pseudobulk_*, trans_analysis,
-    # zeroimp_analysis) whose timing is reported in the R bundles
-    # (r_exec_times above). Keep only the python-method rows here, otherwise
-    # R methods appear twice (bundle-derived + feather rows), double-counting
-    # points and skewing the Supp-fig-14 lm fits.
-    filter(grepl("^(MrVI|scPoli|PILOT)", method))
-  
-  p_exec_times$n_samples <- 0
-  p_exec_times$n_features <- 0
-  
-  p_exec_times$dataset[p_exec_times$dataset == "Gongsharma_all"] <- "GongSharma_all"
-  p_exec_times <- p_exec_times[!p_exec_times$dataset %in% c("Gongsharma_sex_young_cmvneg", "Gongsharma_cmv_females_young", "Gongsharma_age_females_cmvneg"), ]
-  
-  p_exec_times$method[p_exec_times$method == "scPoli_hvg2000_dims5_lowres"] <- "scPoli_hvg2000_dims5"
-  p_exec_times$method[p_exec_times$method == "PILOT_hvg2000_highres"] <- "PILOT_hvg2000"
-  
-  for (ds in unique(p_exec_times$dataset)) {
-    p_exec_times$n_samples[p_exec_times$dataset == ds] <- r_exec_times$n_samples[r_exec_times$dataset == ds][1]
-    p_exec_times$n_features[p_exec_times$dataset == ds] <- r_exec_times$n_features[r_exec_times$dataset == ds][1]
-  }
-  
-  saveRDS(object = p_exec_times, p_exec_times_path)
-} else {
-  p_exec_times <- readRDS(p_exec_times_path)
-}
-```
-
-## Combine and get actual cell numbers used per dataset
-
-```{r}
-exec_times_path <- file.path(getwd(), "data", "exec_times.rds")
-
-if (!file.exists(exec_times_path)) {
-  exec_times <- rbind(r_exec_times, p_exec_times)
-  exec_times$n_cells <- 0
-  
-  dss <- names(datasets)
-  
-  for (ds in dss) {
-    print(ds)
-    seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
-    
-    exec_times$n_cells[exec_times$dataset == ds] <- nrow(seurat@meta.data)
-  }
-  
   saveRDS(object = exec_times, exec_times_path)
-} else {
-  exec_times <- readRDS(exec_times_path)
 }
 ```
 
@@ -1910,7 +1991,7 @@ plot_data <- exec_times %>%
 # --- 2. Calculate the End of the Regression Line ---
 line_ends <- plot_data %>%
   group_by(method) %>%
-  summarise(
+  dplyr::summarise(
     max_x = max(n_cells),
     model = list(lm(log10(time_secs) ~ n_cells)),
     pred_log_y = stats::predict(model[[1]], newdata = data.frame(n_cells = max_x))
@@ -1981,6 +2062,45 @@ ggsave(file.path(path_plots, "Supp_fig_14_benchmark_exec_times.pdf"),
        height = 3.5, limitsize = FALSE)
 ```
 
+## Supp fig 14B: Peak RAM usage (python methods)
+
+```{r fig.width=3.5, fig.height=3.5}
+# Info-only figure: python-method rows (MrVI/scPoli/PILOT) carry sacct MaxRSS
+# in mem_GB; R-method rows have mem_GB = NA (sacct backfill for R methods is
+# a TODO, see TODO.md "Ideas for later"). Same method recoding as Supp fig 14;
+# log-log axes, points only.
+ram_data <- exec_times %>%
+  filter(!is.na(mem_GB)) %>%
+  mutate(method = recode(method,
+                         "ECODA_authors_HR" = "ECODA",
+                         "Pseudobulk_hvg2000" = "Pseudobulk",
+                         "MOFA_hvg2000_factors15" = "MOFA",
+                         "scITD_hvg2000_factors5" = "scITD",
+                         "GloScope_hvg2000_pcadims30" = "GloScope",
+                         "MrVI_hvg2000" = "MrVI",
+                         "scPoli_hvg2000_dims15_highres" = "scPoli",
+                         "PILOT_hvg2000" = "PILOT"))
+
+ggplot(ram_data, aes(x = n_cells, y = mem_GB, color = method)) +
+  annotation_logticks(sides = "bl", color = "grey80") +
+  geom_point(shape = 4, size = 1.25, stroke = 1.25, alpha = 0.5) +
+  scale_x_log10(
+    breaks = scales::pretty_breaks(n = 3),
+    labels = function(x) sapply(x, scientific_A_10n)
+  ) +
+  scale_y_log10(
+    breaks = trans_breaks("log10", function(x) 10^x),
+    labels = trans_format("log10", math_format(10^.x))
+  ) +
+  labs(x = "Number of cells", y = "Peak RAM usage (GB)") +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+ggsave(file.path(path_plots, "Supp_fig_14B_benchmark_mem_GB.pdf"),
+       width = 3.5,
+       height = 3.5, limitsize = FALSE)
+```
+
 # ---------------------------------------------------------------
 
 # Figure 2 A: Plot benchmark results
@@ -1988,23 +2108,14 @@ ggsave(file.path(path_plots, "Supp_fig_14_benchmark_exec_times.pdf"),
 ## Main plot (with funkyheatmap)
 
 ```{r fig.height=6, fig.width=12}
-# --- 1. SETUP & CLEANING (Same as before) ---
+# Parameterized funky-heatmap builder (src/utils/plotting.R): merges exec
+# times, filters/recodes, ranks + min-max scales, aggregates and plots.
+# Metrics are restricted to the notebook-level benchmark_metrics parameter
+# (default: ANOSIM / Modularity / ARI).
 filter_methods <- c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
-  # "ECODA_HiTME_HR_layer2",
-  # "ECODA_HiTME_HR_layer3",
-  # "ECODA_seuratres_2",
-  # "ECODA_PB_combo_normquantile_ecodaweight0.5",
-  # paste0("ECODA_PB_combo_norm", norm_methods, "_ecodaweight0.5"),
-  # "ECODA_authors_LR",
-  # "Avg_PCA_embedding",
-  # "Freq_highres",
-  # "ECODA_deconv",
-  # "Pseudobulk_10_PCA_dims",
   "Pseudobulk_hvg2000",
-  # "Pseudobulk_hvg2000_bl",
-  # "Pseudobulk_schvg2000",
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors5",
   "MrVI_hvg2000",
@@ -2014,201 +2125,28 @@ filter_methods <- c(
   "GloProp"
 )
 
-df_results_bmark <- merge_exec_times(df_results, exec_times)
-
-clean_data <- df_results_bmark %>%
-  filter(method %in% filter_methods) %>%
-  mutate(method = recode(method,
-                         "ECODA_authors_HR" = "ECODA",
-                         "ECODA_authors_HR_NULL" = "Shuffled_baseline",
-                         # "ECODA_HiTME_HR_layer2" = "ECODA_automated",
-                         # "ECODA_HiTME_HR_layer3" = "ECODA_automated_(HiTME_layer3)",
-                         # "ECODA_seuratres_2" = "ECODA_unsupervised",
-                         "ECODA_PB_combo_normquantile_ecodaweight0.5" = "ECODA+Pseudobulk",
-                         # "Pseudobulk_10_PCA_dims" = "Pseudobulk_PCA",
-                         "Pseudobulk_hvg2000" = "Pseudobulk",
-                         # "Pseudobulk_schvg2000" = "Pseudobulk_schvg",
-                         # "Freq_highres" = "ECODA_Freq%",
-                         "MOFA_hvg2000_factors15" = "MOFA",
-                         "scITD_hvg2000_factors5" = "scITD",
-                         "MrVI_hvg2000" = "MrVI",
-                         "scPoli_hvg2000_dims15_highres" = "scPoli",
-                         "scITD_2_factors" = "scITD",
-                         "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
-  mutate(score = recode(score, !!!score_label_map),
-  dataset = recode(dataset, !!!dataset_display_map))
-
-# --- 2. CALCULATE GEOMETRIC MEAN OF RANKS (NEW STEP) ---
-df_ranks <- clean_data %>%
-  # Group by specific test case
-  group_by(dataset, score) %>%
-  # Rank: Higher Value = Better Rank (1). Ties get the minimum rank.
-  mutate(rank = rank(-value, ties.method = "min")) %>%
-  ungroup() %>%
-  # Now aggregate per method
-  group_by(method) %>%
-  # Calculate Geometric Mean: exp(mean(log(x)))
-  summarise(geo_mean_rank = exp(mean(log(rank), na.rm = TRUE))) %>%
-  ungroup() %>%
-  # Normalize so it plots nicely (0 to 1).
-  # We INVERT it so Best Rank (lowest number) = 1.0 (biggest bar)
-  mutate(Rank_Score = (max(geo_mean_rank) - geo_mean_rank) /
-           (max(geo_mean_rank) - min(geo_mean_rank))) %>%
-  select(method, Rank_Score)
-
-# --- 3. SCALE DATA (0-1) FOR HEATMAP VISUALS ---
-scaled_data <- clean_data %>%
-  group_by(dataset, score) %>%
-  mutate(value = min_max(value)) %>%
-  ungroup()
-
-# --- 4. AGGREGATE SCORES ---
-
-# A. Overall Score (Arithmetic Mean of Scaled Values)
-df_overall <- scaled_data %>%
-  group_by(method) %>%
-  summarise(Overall_Score = mean(value, na.rm = TRUE)) 
-
-# B. Dataset Scores
-df_datasets_wide <- scaled_data %>%
-  group_by(method, dataset) %>%
-  summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
-  pivot_wider(id_cols = method, names_from = dataset, values_from = value, names_prefix = "Dataset__")
-
-# C. Metric Scores
-df_metrics_wide <- scaled_data %>%
-  group_by(method, score) %>%
-  summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
-  pivot_wider(id_cols = method, names_from = score, values_from = value, names_prefix = "Metric__")
-
-# D. Execution times
-df_runtime <- clean_data %>%
-  distinct(method, dataset, time_secs) %>% 
-  group_by(method) %>%
-  summarise(raw_time = mean(time_secs, na.rm = TRUE), .groups = "drop") %>%
-  mutate(
-    log_time = log10(raw_time + 1),
-    # Inverting so SHORTER time (faster) = BIGGER bar/BETTER score
-    # Remove '1 -' if you want long bars to mean slow
-    Runtime = min_max(log_time) 
-  ) %>% 
-  select(method, Runtime)
-
-# --- 5. MERGE EVERYTHING ---
-final_data <- df_overall %>%
-  left_join(df_ranks, by = "method") %>% # <--- Join the new Rank Score
-  left_join(df_datasets_wide, by = "method") %>%
-  left_join(df_metrics_wide, by = "method") %>%
-  left_join(df_runtime, by = "method") %>%
-  arrange(desc(Overall_Score)) # Optional: sort by the new Rank Score instead
-
-# --- 6. BUILD COLUMN INFO ---
-
-# 1. Fixed Columns (Now ONLY method and Rank_Score)
-info_method <- tribble(
-  ~id,      ~group, ~name, ~geom,  ~palette, ~options,
-  "method", "",     "",    "text", NA,       list(hjust = 0, width = 6)
-)
-
-# 2. Dataset Columns
-dataset_cols <- colnames(final_data)[startsWith(colnames(final_data), "Dataset__")]
-info_datasets <- tibble(id = dataset_cols) %>%
-  mutate(
-    group = "Datasets",
-    name = str_remove(id, "Dataset__"), 
-    geom = "circle",
-    palette = "Datasets",
-    options = list(list())
-  ) %>% arrange(name)
-
-# 3. Metric Columns (INCLUDING Score Avg at the start)
-metric_cols <- colnames(final_data)[startsWith(colnames(final_data), "Metric__")]
-target_metric_order <- c("ANOSIM", "Modularity", "ARI")
-
-info_metrics_main <- tibble(id = metric_cols) %>%
-  mutate(
-    group = "Metrics",
-    name = str_remove(id, "Metric__"),
-    geom = "bar",
-    palette = "Metrics",
-    options = list(list(width = 2)),
-    name_f = factor(name, levels = target_metric_order)
-  ) %>% arrange(name_f) %>% select(-name_f)
-
-# Define Score Avg as a Metric entry
-info_score_avg <- tribble(
-  ~id,             ~group,    ~name,  ~geom, ~palette,           ~options,
-  "Overall_Score", "Overall", "Mean", "bar", "palette_avg_mean", list(width = 4)
-)
-
-# Combine metrics: Score Avg comes FIRST
-info_metrics <- bind_rows(info_score_avg, info_metrics_main)
-
-# 4. Runtime (The Rightmost column)
-info_runtime <- tribble(
-  ~id,       ~group,    ~name,     ~geom, ~palette,          ~options,
-  "Runtime", "Runtime", "Runtime", "bar", "palette_runtime", list(width = 3)
-)
-
-# Combine everything in the final order
-column_info <- bind_rows(info_method, info_score_avg, info_datasets, info_metrics_main, info_runtime)
-
-ncolors <- 11
-
-# --- 7. PLOT ---
-funky_heatmap(
-  final_data,
-  column_info = column_info,
-  scale_column = FALSE, 
-  column_groups = tibble(
-    group = c("Overall", "Datasets", "Metrics", "Runtime")
+build_funky_heatmap(
+  df_results = df_results,
+  exec_times = exec_times,
+  filter_methods = filter_methods,
+  method_recode = c(
+    "ECODA_authors_HR" = "ECODA",
+    "ECODA_authors_HR_NULL" = "Shuffled_baseline",
+    "Pseudobulk_hvg2000" = "Pseudobulk",
+    "MOFA_hvg2000_factors15" = "MOFA",
+    "scITD_hvg2000_factors5" = "scITD",
+    "MrVI_hvg2000" = "MrVI",
+    "scPoli_hvg2000_dims15_highres" = "scPoli",
+    "PILOT_hvg2000" = "PILOT",
+    "GloScope_hvg2000_pcadims30" = "GloScope"
   ),
-  palettes = list(
-    palette_avg_mean = brewer.pal(n = ncolors, name = "RdBu"),
-    Datasets = brewer.pal(n = ncolors, name = "RdBu"),
-    Metrics = brewer.pal(n = ncolors, name = "RdBu"),
-    palette_runtime = rev(brewer.pal(n = ncolors, name = "RdYlGn"))
-  ),
-  legends = list(
-    list(
-      palette = "palette_avg_mean",
-      enabled = TRUE,
-      title = "Overall Mean",
-      labels = c(". 0", rep("", round((ncolors-2)/2)+1), "0.5", rep("", round((ncolors-2)/2)), "1")
-    ),
-    # list(
-    #   palette = "palette_avg_rank",
-    #   enabled = FALSE,
-    #   title = "REMOVE PLACEHOLDER"
-    # ),
-    list(
-      palette = "Datasets",
-      enabled = TRUE,
-      title = "Dataset separation",
-      labels = c(".     Min", rep("", ncolors-2), "Max   .")
-    ),
-    list(
-      palette = "Metrics",
-      enabled = TRUE,
-      title = "Metrics",
-      labels = c(". 0", rep("", round((ncolors-2)/2)+1), "0.5", rep("", round((ncolors-2)/2)), "1")
-    ),
-    list(
-      palette = "palette_runtime",
-      enabled = TRUE,
-      title = "Runtime log10(s)",
-      labels = c("secs", "mins", "hours") 
-    )
-  ),
-  position_args = position_arguments(
-    col_width = 1.5,
-    col_space = 0.2, col_annot_offset = 5
-  )
+  dataset_recode = dataset_display_map,
+  score_set = benchmark_metrics,
+  output_file = "Figure_2_A_benchmark_mainmethods.pdf",
+  output_dir = path_plots,
+  plot_width = 10,
+  plot_height = 6
 )
-ggsave(file.path(path_plots, "Figure_2_A_benchmark_mainmethods.pdf"),
-       width = 10,
-       height = 6)
 ```
 
 ## Figure 2 B: MDS Bassez
@@ -2319,11 +2257,11 @@ df_ranked <- clean_data %>%
 # --- 2. AGGREGATE RANK-BASED SCORES ---
 df_overall <- df_ranked %>%
   group_by(method) %>%
-  summarise(Overall_Rank = mean(rank, na.rm = TRUE))
+  dplyr::summarise(Overall_Rank = mean(rank, na.rm = TRUE))
 
 df_datasets_wide <- df_ranked %>%
   group_by(method, dataset) %>%
-  summarise(avg_rank = mean(rank, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::summarise(avg_rank = mean(rank, na.rm = TRUE), .groups = "drop") %>%
   pivot_wider(id_cols = method, names_from = dataset, 
               values_from = avg_rank, names_prefix = "Dataset__")
 
@@ -2332,7 +2270,7 @@ target_metric_order <- c("ANOSIM", "Modularity", "ARI")
 df_metrics_wide <- df_ranked %>%
   mutate(score = factor(score, levels = target_metric_order)) %>%
   group_by(method, score) %>%
-  summarise(avg_rank = mean(rank, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::summarise(avg_rank = mean(rank, na.rm = TRUE), .groups = "drop") %>%
   arrange(score) %>%
   pivot_wider(id_cols = method, names_from = score, 
               values_from = avg_rank, names_prefix = "Metric__")
@@ -2396,11 +2334,12 @@ info_metrics <- tibble(id = metric_cols) %>%
     options = list(list(width = 2))
   ) %>% 
   arrange(name_f) %>% 
-  select(-name_f)
+  dplyr::select(-name_f)
 
 column_info <- bind_rows(info_method, info_overall, info_datasets, info_metrics)
 
 # --- 5. PLOT ---
+ncolors <- 11
 funky_heatmap(
   data = final_data,
   column_info = column_info,
@@ -2423,26 +2362,17 @@ ggsave(file.path(path_plots, "benchmark_summary_funkyheatmap_mainmethods_ranks.p
 ## Supp fig 15: Extended benchmark (with avg rank)
 
 ```{r fig.height=8, fig.width=14}
-# --- 1. SETUP & CLEANING (Same as before) ---
+# Parameterized funky-heatmap builder (see Figure 2A chunk): extended method
+# set + Rank_Score column (include_rank = TRUE).
 filter_methods <- c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
   "ECODA_HiTME_HR_layer2",
   "ECODA_scATOMIC_HR",
-  # "ECODA_HiTME_HR_layer3",
   "ECODA_seuratres_2",
-  # "ECODA_PB_combo_normquantile_ecodaweight0.5",
-  # paste0("ECODA_PB_combo_norm", norm_methods, "_ecodaweight0.5"),
-  # "ECODA_authors_LR",
-  # "Avg_PCA_embedding",
   "Freq_highres",
-  # "ECODA_deconv",
-  # "Pseudobulk_10_PCA_dims",
   "Pseudobulk_hvg2000",
-  # "Pseudobulk_CT_LR_hvg2000",
   "Pseudobulk_CT_HR_hvg2000",
-  # "Pseudobulk_CT_LR_hvg500",
-  # "Pseudobulk_CT_HR_hvg500",
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors5",
   "MrVI_hvg2000",
@@ -2452,260 +2382,41 @@ filter_methods <- c(
   "GloProp"
 )
 
-df_results_bmark <- merge_exec_times(df_results, exec_times)
-
-clean_data <- df_results_bmark %>%
-  filter(method %in% filter_methods) %>%
-  mutate(method = recode(method,
-                         "ECODA_authors_HR" = "ECODA_authors",
-                         "ECODA_authors_HR_NULL" = "Shuffled_baseline",
-                         "ECODA_HiTME_HR_layer2" = "ECODA_automated_HiTME",
-                         "ECODA_HiTME_HR_layer3" = "ECODA_automated_(HiTME_layer3)",
-                         "ECODA_scATOMIC_HR" = "ECODA_automated_scATOMIC",
-                         "ECODA_seuratres_2" = "ECODA_Leiden_res_2",
-                         # "ECODA_PB_combo_normquantile_ecodaweight0.5" = "ECODA+Pseudobulk",
-                         "Pseudobulk_10_PCA_dims" = "Pseudobulk_PCA",
-                         "Pseudobulk_hvg2000" = "Pseudobulk",
-                         "Pseudobulk_CT_HR_hvg2000" = "Pseudobulk_CT_HR",
-                         "Freq_highres" = "CellType_Frequency%",
-                         "MOFA_hvg2000_factors15" = "MOFA",
-                         "scITD_hvg2000_factors5" = "scITD",
-                         "MrVI_hvg2000" = "MrVI",
-                         "scPoli_hvg2000_dims15_highres" = "scPoli",
-                         "scITD_2_factors" = "scITD",
-                         "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
-  mutate(score = recode(score, !!!score_label_map),
-  dataset = recode(dataset, !!!dataset_display_map))
-
-# --- 2. CALCULATE GEOMETRIC MEAN OF RANKS (NEW STEP) ---
-df_ranks <- clean_data %>%
-  # Group by specific test case
-  group_by(dataset, score) %>% 
-  # Rank: Higher Value = Better Rank (1). Ties get the minimum rank.
-  mutate(rank = rank(-value, ties.method = "min")) %>% 
-  ungroup() %>%
-  # Now aggregate per method
-  group_by(method) %>% 
-  # # Calculate Geometric Mean: exp(mean(log(x)))
-  # summarise(geo_mean_rank = exp(mean(log(rank), na.rm = TRUE))) %>%
-  summarise(mean_rank = mean(rank, na.rm = TRUE)) %>%
-  ungroup() %>%
-  # Normalize so it plots nicely (0 to 1). 
-  # We INVERT it so Best Rank (lowest number) = 1.0 (biggest bar)
-  mutate(Rank_Score = (max(mean_rank) - mean_rank) / 
-           (max(mean_rank) - min(mean_rank))) %>%
-  select(method, Rank_Score)
-
-# --- 3. SCALE DATA (0-1) FOR HEATMAP VISUALS ---
-scaled_data <- clean_data %>%
-  group_by(dataset, score) %>%
-  mutate(value = min_max(value)) %>%
-  ungroup()
-
-# --- 4. AGGREGATE SCORES ---
-
-# A. Overall Score (Arithmetic Mean of Scaled Values)
-df_overall <- scaled_data %>%
-  group_by(method) %>%
-  summarise(Overall_Score = mean(value, na.rm = TRUE)) 
-
-# B. Dataset Scores
-df_datasets_wide <- scaled_data %>%
-  group_by(method, dataset) %>%
-  summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
-  pivot_wider(id_cols = method, names_from = dataset, values_from = value, names_prefix = "Dataset__")
-
-# C. Metric Scores
-df_metrics_wide <- scaled_data %>%
-  group_by(method, score) %>%
-  summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
-  pivot_wider(id_cols = method, names_from = score, values_from = value, names_prefix = "Metric__")
-
-# D. Execution times
-df_runtime <- clean_data %>%
-  distinct(method, dataset, time_secs) %>% 
-  group_by(method) %>%
-  summarise(raw_time = mean(time_secs, na.rm = TRUE), .groups = "drop") %>%
-  mutate(
-    log_time = log10(raw_time + 1),
-    # Inverting so SHORTER time (faster) = BIGGER bar/BETTER score
-    # Remove '1 -' if you want long bars to mean slow
-    Runtime = min_max(log_time) 
-  ) %>% 
-  select(method, Runtime)
-
-# --- 5. MERGE EVERYTHING ---
-final_data <- df_overall %>%
-  left_join(df_ranks, by = "method") %>% # <--- Join the new Rank Score
-  left_join(df_datasets_wide, by = "method") %>%
-  left_join(df_metrics_wide, by = "method") %>%
-  left_join(df_runtime, by = "method") %>%
-  arrange(desc(Overall_Score))
-  # arrange(desc(Rank_Score)) # Optional: sort by the new Rank Score instead
-
-# --- 6. BUILD COLUMN INFO ---
-
-# 1. Method Column (The Label)
-info_method <- tribble(
-  ~id,      ~group, ~name, ~geom,  ~palette, ~options,
-  "method", "",     "",    "text", NA,       list(hjust = 0, width = 8)
-)
-
-# 2.1 Score Avg
-info_score_avg <- tribble(
-  ~id,             ~group,    ~name,  ~geom, ~palette,           ~options,
-  "Overall_Score", "Overall", "Metrics Mean", "bar", "palette_avg_mean", list(width = 4)
-)
-
-# 2.2 Rank Avg
-info_rank_avg <- tribble(
-  ~id,             ~group,    ~name,           ~geom,  ~palette,          ~options,
-  "Rank_Score",    "Overall", "Rank Mean",  "bar",  "palette_avg_rank", list(width = 4, legend = FALSE)
-)
-
-# 3. Dataset Columns
-dataset_cols <- colnames(final_data)[startsWith(colnames(final_data), "Dataset__")]
-info_datasets <- tibble(id = dataset_cols) %>%
-  mutate(
-    group = "Datasets",
-    name = str_remove(id, "Dataset__"), 
-    geom = "circle",
-    palette = "Datasets",
-    options = list(list())
-  ) %>% arrange(name)
-
-# 4. Metric Columns (Individual metrics)
-metric_cols <- colnames(final_data)[startsWith(colnames(final_data), "Metric__")]
-target_metric_order <- c("ANOSIM", "Modularity", "ARI")
-
-info_metrics_main <- tibble(id = metric_cols) %>%
-  mutate(
-    group = "Metrics",
-    name = str_remove(id, "Metric__"),
-    geom = "bar",
-    palette = "Metrics",
-    options = list(list(width = 2)),
-    name_f = factor(name, levels = target_metric_order)
-  ) %>% arrange(name_f) %>% select(-name_f)
-
-# 5. Runtime (The Rightmost column)
-info_runtime <- tribble(
-  ~id,       ~group,    ~name,     ~geom, ~palette,          ~options,
-  "Runtime", "Runtime", "Runtime", "bar", "palette_runtime", list(width = 3)
-)
-
-# --- KEY CHANGE: Re-order the bind_rows to define horizontal placement ---
-# This order determines the columns from left to right.
-column_info <- bind_rows(
-  info_method,      # 1st: Method Name
-  info_score_avg,   # 2.1: Mean Metric Score
-  info_rank_avg,    # 2.2: Mean rank
-  info_datasets,    # 3rd: Dataset Circles
-  info_metrics_main,# 4th: Individual Metric Bars
-  info_runtime      # 5th: Runtime Bar
-)
-
-# 
-# # 2. Dataset Columns
-# dataset_cols <- colnames(final_data)[startsWith(colnames(final_data), "Dataset__")]
-# info_datasets <- tibble(id = dataset_cols) %>%
-#   mutate(
-#     group = "Datasets",
-#     name = str_remove(id, "Dataset__"), 
-#     geom = "circle",
-#     palette = "Datasets",
-#     options = list(list())
-#   ) %>% arrange(name)
-# 
-# # 3. Metric Columns (INCLUDING Score Avg at the start)
-# metric_cols <- colnames(final_data)[startsWith(colnames(final_data), "Metric__")]
-# target_metric_order <- c("ANOSIM", "Modularity", "ARI")
-# 
-# # Create the specific Metric entries
-# info_metrics_main <- tibble(id = metric_cols) %>%
-#   mutate(
-#     group = "Metrics",
-#     name = str_remove(id, "Metric__"),
-#     geom = "bar",
-#     palette = "Metrics",
-#     options = list(list(width = 2)),
-#     name_f = factor(name, levels = target_metric_order)
-#   ) %>% arrange(name_f) %>% select(-name_f)
-# 
-# # Define Score Avg as a Metric entry
-# info_score_avg <- tribble(
-#   ~id,             ~group,    ~name,       ~geom, ~palette,           ~options,
-#   "Overall_Score", "Metrics", "Mean", "bar", "palette_avg_mean", list(width = 4, legend = FALSE)
-# )
-# 
-# # Combine metrics: Score Avg comes FIRST
-# info_metrics <- bind_rows(info_score_avg, info_metrics_main)
-# 
-# # 4. Runtime (The Rightmost column)
-# info_runtime <- tribble(
-#   ~id,       ~group,    ~name,     ~geom, ~palette,          ~options,
-#   "Runtime", "Runtime", "Runtime", "bar", "palette_runtime", list(width = 3)
-# )
-# 
-# # Combine everything in the final order
-# column_info <- bind_rows(info_left, info_datasets, info_metrics, info_runtime)
-
-ncolors <- 11
-
-# --- 7. PLOT ---
-funky_heatmap(
-  final_data,
-  column_info = column_info,
-  scale_column = FALSE, 
-  column_groups = tibble(
-    group = c("Overall", "Datasets", "Metrics", "Runtime")
+build_funky_heatmap(
+  df_results = df_results,
+  exec_times = exec_times,
+  filter_methods = filter_methods,
+  method_recode = c(
+    "ECODA_authors_HR" = "ECODA_authors",
+    "ECODA_authors_HR_NULL" = "Shuffled_baseline",
+    "ECODA_HiTME_HR_layer2" = "ECODA_automated_HiTME",
+    "ECODA_HiTME_HR_layer3" = "ECODA_automated_(HiTME_layer3)",
+    "ECODA_scATOMIC_HR" = "ECODA_automated_scATOMIC",
+    "ECODA_seuratres_2" = "ECODA_Leiden_res_2",
+    "Pseudobulk_10_PCA_dims" = "Pseudobulk_PCA",
+    "Pseudobulk_hvg2000" = "Pseudobulk",
+    "Pseudobulk_CT_HR_hvg2000" = "Pseudobulk_CT_HR",
+    "Freq_highres" = "CellType_Frequency%",
+    "MOFA_hvg2000_factors15" = "MOFA",
+    "scITD_hvg2000_factors5" = "scITD",
+    "MrVI_hvg2000" = "MrVI",
+    "scPoli_hvg2000_dims15_highres" = "scPoli",
+    "PILOT_hvg2000" = "PILOT",
+    "GloScope_hvg2000_pcadims30" = "GloScope"
   ),
-  palettes = list(
-    palette_avg_rank = brewer.pal(n = ncolors, name = "RdBu"),
-    palette_avg_mean = brewer.pal(n = ncolors, name = "RdBu"),
-    Datasets = brewer.pal(n = ncolors, name = "RdBu"),
-    Metrics = brewer.pal(n = ncolors, name = "RdBu"),
-    palette_runtime = rev(brewer.pal(n = ncolors, name = "RdYlGn"))
-  ),
-  legends = list(
-    list(
-      palette = "palette_avg_rank",
-      enabled = FALSE,
-      title = "REMOVE PLACEHOLDER"
-    ),
-    list(
-      palette = "palette_avg_mean",
-      enabled = TRUE,
-      title = "Overall",
-      labels = c(".         Worst", rep("", ncolors-2), "Best       .")
-    ),
-    list(
-      palette = "Datasets",
-      enabled = TRUE,
-      title = "Dataset separation",
-      labels = c(".     Min", rep("", ncolors-2), "Max   .")
-    ),
-    list(
-      palette = "Metrics",
-      enabled = TRUE,
-      labels = c(". 0", rep("", round((ncolors-2)/2)+1), "0.5", rep("", round((ncolors-2)/2)), "1")
-    ),
-    list(
-      palette = "palette_runtime",
-      enabled = TRUE,
-      title = "Runtime log10(s)",
-      labels = c("secs", "mins", "hours") 
-    )
-  ),
-  position_args = position_arguments(
-    col_width = 1.5,
-    col_space = 0.2, col_annot_offset = 5
-  )
+  dataset_recode = dataset_display_map,
+  score_set = benchmark_metrics,
+  output_file = "Supp_fig_15_benchmark_extended.pdf",
+  output_dir = path_plots,
+  plot_width = 14,
+  plot_height = 8,
+  method_width = 8,
+  overall_col_name = "Metrics Mean",
+  include_rank = TRUE,
+  overall_legend_title = "Overall",
+  overall_legend_labels = c(".         Worst", rep("", 9), "Best       .")
 )
-ggsave(file.path(path_plots, "Supp_fig_15_benchmark_extended.pdf"),
-       width = 14,
-       height = 8)
+```
 ```
 
 ## Difference between Pseudobulk_hvg2000 and Pseudobulk_CT_HR
@@ -2748,26 +2459,15 @@ cat("Pseudobulk_CT_HR_hvg500 vs Pseudobulk_hvg2000: ", round(avg_ct_500 / avg_pb
 ## For presentation: Extended benchmark
 
 ```{r fig.height=8, fig.width=14}
-# --- 1. SETUP & CLEANING (Same as before) ---
+# Parameterized funky-heatmap builder (see Figure 2A chunk): presentation
+# variant of Supp fig 15 (no scATOMIC / Freq_highres columns).
 filter_methods <- c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
   "ECODA_HiTME_HR_layer2",
-  # "ECODA_scATOMIC_HR",
-  # "ECODA_HiTME_HR_layer3",
   "ECODA_seuratres_2",
-  # "ECODA_PB_combo_normquantile_ecodaweight0.5",
-  # paste0("ECODA_PB_combo_norm", norm_methods, "_ecodaweight0.5"),
-  # "ECODA_authors_LR",
-  # "Avg_PCA_embedding",
-  # "Freq_highres",
-  # "ECODA_deconv",
-  # "Pseudobulk_10_PCA_dims",
   "Pseudobulk_hvg2000",
-  # "Pseudobulk_CT_LR_hvg2000",
   "Pseudobulk_CT_HR_hvg2000",
-  # "Pseudobulk_CT_LR_hvg500",
-  # "Pseudobulk_CT_HR_hvg500",
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors5",
   "MrVI_hvg2000",
@@ -2777,259 +2477,39 @@ filter_methods <- c(
   "GloProp"
 )
 
-df_results_bmark <- merge_exec_times(df_results, exec_times)
-
-clean_data <- df_results_bmark %>%
-  filter(method %in% filter_methods) %>%
-  mutate(method = recode(method,
-                         "ECODA_authors_HR" = "ECODA_authors",
-                         "ECODA_authors_HR_NULL" = "Shuffled_baseline",
-                         "ECODA_HiTME_HR_layer2" = "ECODA_automated",
-                         "ECODA_scATOMIC_HR" = "ECODA_automated_scATOMIC",
-                         "ECODA_seuratres_2" = "ECODA_unsupervised",
-                         # "ECODA_PB_combo_normquantile_ecodaweight0.5" = "ECODA+Pseudobulk",
-                         "Pseudobulk_10_PCA_dims" = "Pseudobulk_PCA",
-                         "Pseudobulk_hvg2000" = "Pseudobulk",
-                         "Pseudobulk_CT_HR_hvg2000" = "Pseudobulk_CT_HR",
-                         "Freq_highres" = "CellType_Frequency%",
-                         "MOFA_hvg2000_factors15" = "MOFA",
-                         "scITD_hvg2000_factors5" = "scITD",
-                         "MrVI_hvg2000" = "MrVI",
-                         "scPoli_hvg2000_dims15_highres" = "scPoli",
-                         "scITD_2_factors" = "scITD",
-                         "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
-  mutate(score = recode(score, !!!score_label_map),
-  dataset = recode(dataset, !!!dataset_display_map))
-
-# --- 2. CALCULATE GEOMETRIC MEAN OF RANKS (NEW STEP) ---
-df_ranks <- clean_data %>%
-  # Group by specific test case
-  group_by(dataset, score) %>% 
-  # Rank: Higher Value = Better Rank (1). Ties get the minimum rank.
-  mutate(rank = rank(-value, ties.method = "min")) %>% 
-  ungroup() %>%
-  # Now aggregate per method
-  group_by(method) %>% 
-  # # Calculate Geometric Mean: exp(mean(log(x)))
-  # summarise(geo_mean_rank = exp(mean(log(rank), na.rm = TRUE))) %>%
-  summarise(mean_rank = mean(rank, na.rm = TRUE)) %>%
-  ungroup() %>%
-  # Normalize so it plots nicely (0 to 1). 
-  # We INVERT it so Best Rank (lowest number) = 1.0 (biggest bar)
-  mutate(Rank_Score = (max(mean_rank) - mean_rank) / 
-           (max(mean_rank) - min(mean_rank))) %>%
-  select(method, Rank_Score)
-
-# --- 3. SCALE DATA (0-1) FOR HEATMAP VISUALS ---
-scaled_data <- clean_data %>%
-  group_by(dataset, score) %>%
-  mutate(value = min_max(value)) %>%
-  ungroup()
-
-# --- 4. AGGREGATE SCORES ---
-
-# A. Overall Score (Arithmetic Mean of Scaled Values)
-df_overall <- scaled_data %>%
-  group_by(method) %>%
-  summarise(Overall_Score = mean(value, na.rm = TRUE)) 
-
-# B. Dataset Scores
-df_datasets_wide <- scaled_data %>%
-  group_by(method, dataset) %>%
-  summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
-  pivot_wider(id_cols = method, names_from = dataset, values_from = value, names_prefix = "Dataset__")
-
-# C. Metric Scores
-df_metrics_wide <- scaled_data %>%
-  group_by(method, score) %>%
-  summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
-  pivot_wider(id_cols = method, names_from = score, values_from = value, names_prefix = "Metric__")
-
-# D. Execution times
-df_runtime <- clean_data %>%
-  distinct(method, dataset, time_secs) %>% 
-  group_by(method) %>%
-  summarise(raw_time = mean(time_secs, na.rm = TRUE), .groups = "drop") %>%
-  mutate(
-    log_time = log10(raw_time + 1),
-    # Inverting so SHORTER time (faster) = BIGGER bar/BETTER score
-    # Remove '1 -' if you want long bars to mean slow
-    Runtime = min_max(log_time) 
-  ) %>% 
-  select(method, Runtime)
-
-# --- 5. MERGE EVERYTHING ---
-final_data <- df_overall %>%
-  left_join(df_ranks, by = "method") %>% # <--- Join the new Rank Score
-  left_join(df_datasets_wide, by = "method") %>%
-  left_join(df_metrics_wide, by = "method") %>%
-  left_join(df_runtime, by = "method") %>%
-  arrange(desc(Overall_Score))
-  # arrange(desc(Rank_Score)) # Optional: sort by the new Rank Score instead
-
-# --- 6. BUILD COLUMN INFO ---
-
-# 1. Method Column (The Label)
-info_method <- tribble(
-  ~id,      ~group, ~name, ~geom,  ~palette, ~options,
-  "method", "",     "",    "text", NA,       list(hjust = 0, width = 8)
-)
-
-# 2.1 Score Avg
-info_score_avg <- tribble(
-  ~id,             ~group,    ~name,  ~geom, ~palette,           ~options,
-  "Overall_Score", "Overall", "Metrics Mean", "bar", "palette_avg_mean", list(width = 4)
-)
-
-# 2.2 Rank Avg
-info_rank_avg <- tribble(
-  ~id,             ~group,    ~name,           ~geom,  ~palette,          ~options,
-  "Rank_Score",    "Overall", "Rank Mean",  "bar",  "palette_avg_rank", list(width = 4, legend = FALSE)
-)
-
-# 3. Dataset Columns
-dataset_cols <- colnames(final_data)[startsWith(colnames(final_data), "Dataset__")]
-info_datasets <- tibble(id = dataset_cols) %>%
-  mutate(
-    group = "Datasets",
-    name = str_remove(id, "Dataset__"), 
-    geom = "circle",
-    palette = "Datasets",
-    options = list(list())
-  ) %>% arrange(name)
-
-# 4. Metric Columns (Individual metrics)
-metric_cols <- colnames(final_data)[startsWith(colnames(final_data), "Metric__")]
-target_metric_order <- c("ANOSIM", "Modularity", "ARI")
-
-info_metrics_main <- tibble(id = metric_cols) %>%
-  mutate(
-    group = "Metrics",
-    name = str_remove(id, "Metric__"),
-    geom = "bar",
-    palette = "Metrics",
-    options = list(list(width = 2)),
-    name_f = factor(name, levels = target_metric_order)
-  ) %>% arrange(name_f) %>% select(-name_f)
-
-# 5. Runtime (The Rightmost column)
-info_runtime <- tribble(
-  ~id,       ~group,    ~name,     ~geom, ~palette,          ~options,
-  "Runtime", "Runtime", "Runtime", "bar", "palette_runtime", list(width = 3)
-)
-
-# --- KEY CHANGE: Re-order the bind_rows to define horizontal placement ---
-# This order determines the columns from left to right.
-column_info <- bind_rows(
-  info_method,      # 1st: Method Name
-  info_score_avg,   # 2.1: Mean Metric Score
-  info_rank_avg,    # 2.2: Mean rank
-  info_datasets,    # 3rd: Dataset Circles
-  info_metrics_main,# 4th: Individual Metric Bars
-  info_runtime      # 5th: Runtime Bar
-)
-
-# 
-# # 2. Dataset Columns
-# dataset_cols <- colnames(final_data)[startsWith(colnames(final_data), "Dataset__")]
-# info_datasets <- tibble(id = dataset_cols) %>%
-#   mutate(
-#     group = "Datasets",
-#     name = str_remove(id, "Dataset__"), 
-#     geom = "circle",
-#     palette = "Datasets",
-#     options = list(list())
-#   ) %>% arrange(name)
-# 
-# # 3. Metric Columns (INCLUDING Score Avg at the start)
-# metric_cols <- colnames(final_data)[startsWith(colnames(final_data), "Metric__")]
-# target_metric_order <- c("ANOSIM", "Modularity", "ARI")
-# 
-# # Create the specific Metric entries
-# info_metrics_main <- tibble(id = metric_cols) %>%
-#   mutate(
-#     group = "Metrics",
-#     name = str_remove(id, "Metric__"),
-#     geom = "bar",
-#     palette = "Metrics",
-#     options = list(list(width = 2)),
-#     name_f = factor(name, levels = target_metric_order)
-#   ) %>% arrange(name_f) %>% select(-name_f)
-# 
-# # Define Score Avg as a Metric entry
-# info_score_avg <- tribble(
-#   ~id,             ~group,    ~name,       ~geom, ~palette,           ~options,
-#   "Overall_Score", "Metrics", "Mean", "bar", "palette_avg_mean", list(width = 4, legend = FALSE)
-# )
-# 
-# # Combine metrics: Score Avg comes FIRST
-# info_metrics <- bind_rows(info_score_avg, info_metrics_main)
-# 
-# # 4. Runtime (The Rightmost column)
-# info_runtime <- tribble(
-#   ~id,       ~group,    ~name,     ~geom, ~palette,          ~options,
-#   "Runtime", "Runtime", "Runtime", "bar", "palette_runtime", list(width = 3)
-# )
-# 
-# # Combine everything in the final order
-# column_info <- bind_rows(info_left, info_datasets, info_metrics, info_runtime)
-
-ncolors <- 11
-
-# --- 7. PLOT ---
-funky_heatmap(
-  final_data,
-  column_info = column_info,
-  scale_column = FALSE, 
-  column_groups = tibble(
-    group = c("Overall", "Datasets", "Metrics", "Runtime")
+build_funky_heatmap(
+  df_results = df_results,
+  exec_times = exec_times,
+  filter_methods = filter_methods,
+  method_recode = c(
+    "ECODA_authors_HR" = "ECODA_authors",
+    "ECODA_authors_HR_NULL" = "Shuffled_baseline",
+    "ECODA_HiTME_HR_layer2" = "ECODA_automated",
+    "ECODA_scATOMIC_HR" = "ECODA_automated_scATOMIC",
+    "ECODA_seuratres_2" = "ECODA_unsupervised",
+    "Pseudobulk_10_PCA_dims" = "Pseudobulk_PCA",
+    "Pseudobulk_hvg2000" = "Pseudobulk",
+    "Pseudobulk_CT_HR_hvg2000" = "Pseudobulk_CT_HR",
+    "Freq_highres" = "CellType_Frequency%",
+    "MOFA_hvg2000_factors15" = "MOFA",
+    "scITD_hvg2000_factors5" = "scITD",
+    "MrVI_hvg2000" = "MrVI",
+    "scPoli_hvg2000_dims15_highres" = "scPoli",
+    "PILOT_hvg2000" = "PILOT",
+    "GloScope_hvg2000_pcadims30" = "GloScope"
   ),
-  palettes = list(
-    palette_avg_rank = brewer.pal(n = ncolors, name = "RdBu"),
-    palette_avg_mean = brewer.pal(n = ncolors, name = "RdBu"),
-    Datasets = brewer.pal(n = ncolors, name = "RdBu"),
-    Metrics = brewer.pal(n = ncolors, name = "RdBu"),
-    palette_runtime = rev(brewer.pal(n = ncolors, name = "RdYlGn"))
-  ),
-  legends = list(
-    list(
-      palette = "palette_avg_rank",
-      enabled = FALSE,
-      title = "REMOVE PLACEHOLDER"
-    ),
-    list(
-      palette = "palette_avg_mean",
-      enabled = TRUE,
-      title = "Overall",
-      labels = c(".         Worst", rep("", ncolors-2), "Best       .")
-    ),
-    list(
-      palette = "Datasets",
-      enabled = TRUE,
-      title = "Dataset separation",
-      labels = c(".     Min", rep("", ncolors-2), "Max   .")
-    ),
-    list(
-      palette = "Metrics",
-      enabled = TRUE,
-      labels = c(". 0", rep("", round((ncolors-2)/2)+1), "0.5", rep("", round((ncolors-2)/2)), "1")
-    ),
-    list(
-      palette = "palette_runtime",
-      enabled = TRUE,
-      title = "Runtime log10(s)",
-      labels = c("secs", "mins", "hours") 
-    )
-  ),
-  position_args = position_arguments(
-    col_width = 1.5,
-    col_space = 0.2, col_annot_offset = 5
-  )
+  dataset_recode = dataset_display_map,
+  score_set = benchmark_metrics,
+  output_file = "Presentation_benchmark_extended.pdf",
+  output_dir = path_plots,
+  plot_width = 14,
+  plot_height = 8,
+  method_width = 8,
+  overall_col_name = "Metrics Mean",
+  include_rank = TRUE,
+  overall_legend_title = "Overall",
+  overall_legend_labels = c(".         Worst", rep("", 9), "Best       .")
 )
-ggsave(file.path(path_plots, "Presentation_benchmark_extended.pdf"),
-       width = 14,
-       height = 8)
 ```
 
 # ---------------------------------------------------------------
@@ -3037,6 +2517,41 @@ ggsave(file.path(path_plots, "Presentation_benchmark_extended.pdf"),
 # Supp fig 1: Correlation between metrics
 
 ```{r}
+# --- 0. CLEAN DATA (self-contained: same filter/recode as Figure 2A, built
+# locally so this chunk has no cross-chunk dependency on clean_data). All
+# score columns are kept (no score_set restriction) — the correlation matrix
+# below includes Silhouette and LISI.
+filter_methods <- c(
+  "ECODA_authors_HR",
+  "ECODA_authors_HR_NULL",
+  "Pseudobulk_hvg2000",
+  "MOFA_hvg2000_factors15",
+  "scITD_hvg2000_factors5",
+  "MrVI_hvg2000",
+  "scPoli_hvg2000_dims15_highres",
+  "PILOT_hvg2000",
+  "GloScope_hvg2000_pcadims30",
+  "GloProp"
+)
+
+clean_data <- prepare_benchmark_data(
+  df_results = df_results,
+  exec_times = exec_times,
+  filter_methods = filter_methods,
+  method_recode = c(
+    "ECODA_authors_HR" = "ECODA",
+    "ECODA_authors_HR_NULL" = "Shuffled_baseline",
+    "Pseudobulk_hvg2000" = "Pseudobulk",
+    "MOFA_hvg2000_factors15" = "MOFA",
+    "scITD_hvg2000_factors5" = "scITD",
+    "MrVI_hvg2000" = "MrVI",
+    "scPoli_hvg2000_dims15_highres" = "scPoli",
+    "PILOT_hvg2000" = "PILOT",
+    "GloScope_hvg2000_pcadims30" = "GloScope"
+  ),
+  dataset_recode = dataset_display_map
+)
+
 # --- 1. PREPARE WIDE DATA ---
 # Dynamically calculate the mean based on whatever metrics are present
 metrics <- c("ANOSIM", "Modularity", "ARI", "Silhouette", "LISI")
@@ -3045,13 +2560,13 @@ df_wide <- clean_data %>%
   pivot_wider(id_cols = c(dataset, method), 
               names_from = score, 
               values_from = value) %>%
-  mutate(Mean_Score = rowMeans(select(., all_of(metrics)), na.rm = TRUE))
+  mutate(Mean_Score = rowMeans(dplyr::select(., all_of(metrics)), na.rm = TRUE))
 
 # --- 2. REUSABLE PLOTTING FUNCTION ---
 # Updated to use tidy evaluation (.data[[]]) instead of the deprecated aes_string()
 plot_mean_corr <- function(data, metric_var) {
   # Calculate limits dynamically
-  lims <- c(min(data %>% select(all_of(metrics)), na.rm = TRUE) - 0.05, 1.2)
+  lims <- c(min(data %>% dplyr::select(all_of(metrics)), na.rm = TRUE) - 0.05, 1.2)
   
   ggplot(data, aes(x = Mean_Score, y = .data[[metric_var]])) +
     geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey50", linewidth = 0.8) +
@@ -3098,7 +2613,14 @@ ggsave(file.path(path_plots, "Supp_fig_1B_means.pdf"), mean_row, width = 10, hei
 ## Plot results
 
 ```{r}
-df_results <- Reduce(rbind, result_list[["trans"]]) %>%
+if (length(result_list[["trans"]]) == 0) {
+  stop("No transformation-analysis results found (result_list$trans is empty).",
+       "\nRun the HPC trans pipeline first (run_transformation_zeroimp_analysis/).")
+}
+
+# Per-dataset trans bundles are summarized data.frames without a dataset
+# column; add it here so the paired lines/points below can group by dataset.
+df_results <- imap_dfr(result_list[["trans"]], ~ mutate(.x, dataset = .y)) %>%
   mutate(
     trans_method = recode(
       trans_method,
@@ -3284,18 +2806,6 @@ ggsave(
   height = 5
 )
 
-
-# df_results_anosim %>%
-#   ggplot(aes(x = method, y = mean)) +
-#   geom_bar(stat = "identity", position = position_dodge()) +
-#   # stat_summary(fun.y = mean, geom = "bar") +
-#   geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), width=0.2, colour="black", alpha=0.9) +
-#   # geom_point(position = position_jitterdodge()) +
-#   labs(x = "", y = "Adjusted Rand Index") +
-#   theme_minimal() +
-#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1)) +
-#   NoLegend()
-
 df_results_anosim <- df_results %>%
   filter(score == "ANOSIM_score")
 
@@ -3374,19 +2884,35 @@ ggplot(df_results_anosim, aes(x = trans_method, y = value)) +
 
 ```{r}
 zeroimp_result_list <- result_list[["zeroimp"]]
+if (length(zeroimp_result_list) == 0) {
+  stop("No zero-imputation results found (result_list$zeroimp is empty).",
+       "\nRun the HPC zeroimp pipeline first (run_transformation_zeroimp_analysis/).")
+}
 
 df_results <- imap_dfr(zeroimp_result_list, ~ {
   dataset_name <- .y
-  imap_dfr(.x, ~ {
-    method_name <- .y
-    imap_dfr(.x, ~ {
-      tibble(
-        dataset = dataset_name,
-        method = method_name,
-        score = .y,
-        value = .x
-      )
-    })
+  imap_dfr(.x, function(method_value, method_name) {
+    # multLN bundles nest the scores one level deeper (list(multLN = <named
+    # score vector>)) than the flat count/percentage bundles: unwrap a
+    # single-element nested list; drop anything still list-valued (only
+    # scalar score rows are kept).
+    if (is.list(method_value) && !is.data.frame(method_value)) {
+      if (length(method_value) == 1 && is.numeric(method_value[[1]])) {
+        method_value <- method_value[[1]]
+      } else {
+        message(
+          "Dropping list-valued zeroimp rows for ", dataset_name, "/",
+          method_name
+        )
+        return(tibble())
+      }
+    }
+    imap_dfr(method_value, ~ tibble(
+      dataset = dataset_name,
+      method = method_name,
+      score = .y,
+      value = .x
+    ))
   })
 })
 
@@ -3625,31 +3151,8 @@ ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_clus
        width = 8,
        height = 6)
 
-df_results_modularity <- df_results %>%
-  filter(score == "mod_score")
-
-p <- ggplot(df_results_modularity, aes(x = method, y = value)) +
-  geom_boxplot(outlier.shape = NA) +
-  # geom_bar(stat = "identity", position = position_dodge()) +
-  geom_point(aes(shape=dataset)) + 
-  geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
-  stat_compare_means(
-    comparisons = my_comparisons,
-    method = "t.test",
-    paired = TRUE,
-    # aes(label = sprintf("p = %5.2f", as.numeric(..p.format..)))
-    aes(label = after_stat(p.signif))
-  ) + # Add pairwise comparisons p-value
-  # geom_point(position = position_jitterdodge()) +
-  labs(x = "", y = "Modularity score") +
-  scale_shape_manual(values=1:length(unique((df_results_modularity$dataset)))) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-print(p)
-ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_modscore.pdf"),
-       width = 8,
-       height = 6)
-
+# (removed: mod_score boxplot — mod_score rows are dropped above, so the
+# plot was always empty)
 
 df_results_anosim <- df_results %>%
   filter(score == "anosim_score")
@@ -3710,7 +3213,10 @@ for (ds in names(result_list$bmark)) {
   feat_mat <- result_list$bmark[[ds]]$ECODA_authors_HR$feat_mat
   print(paste("Number of cell types:", ncol(feat_mat)))
   print(paste("Number of samples:", nrow(feat_mat)))
-  print(paste("Number of cells:", exec_times[exec_times$dataset == ds, "n_cells"][1]))
+  # n_cells was collected during the dataset loop (display keys, e.g.
+  # GongSharma for Gongsharma_cmv_young_males).
+  ds_display <- if (ds == "Gongsharma_cmv_young_males") "GongSharma" else ds
+  print(paste("Number of cells:", n_cells_by_ds[[ds_display]]))
   
   print(paste("ANOSIM using all cell types:", round(result_list$bmark[[ds]]$ECODA_authors_HR$scores$anosim_score, 3)))
   print(paste("ANOSIM at 10% HVC:", round(result_list$bmark[[ds]]$ECODA_authors_HR_top_varexp0.1$scores$anosim_score, 3)))
@@ -3726,14 +3232,15 @@ for (ds in names(result_list$bmark)) {
 ## Number of cells, total, per sample
 
 ```{r}
-for (ds in names(datasets)) {
+# Computed from the per-dataset stats collected during the dataset loop
+# (backed obs reads; no full reloads).
+for (i in seq_len(nrow(ds_stats_df))) {
   print("-----------------------------------------")
-  print(ds)
-  seurat <- readRDS(file.path(path_data, paste0(datasets[[ds]][["ds_name"]], seurat_file_ending)))
-  print(paste("Number of samples:", length(unique(seurat@meta.data$Sample))))
-  print(paste("Number of cells:", nrow(seurat@meta.data)))
-  print(paste("Number of cells per sample:", round(mean(table((seurat@meta.data$Sample)))), "+-", round(sd(table((seurat@meta.data$Sample))))))
-  print(paste("Number of cell types:", length(unique(seurat@meta.data[[datasets[[ds]][["cell_type_high_res"]]]]))))
+  print(ds_stats_df$dataset[i])
+  print(paste("Number of samples:", ds_stats_df$n_samples[i]))
+  print(paste("Number of cells:", ds_stats_df$n_cells[i]))
+  print(paste("Number of cells per sample:", round(ds_stats_df$cells_per_sample_mean[i]), "+-", round(ds_stats_df$cells_per_sample_sd[i])))
+  print(paste("Number of cell types:", ds_stats_df$n_cell_types[i]))
 }
 ```
 

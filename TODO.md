@@ -34,10 +34,18 @@ is preserved in git; see `git log`.
   Harmony `X_pca_harmony` input for batch-effect views); QOT (feasibility test, deps
   from `QOT_PDAC_Example.ipynb`, no package); PULSAR (requirements test: UCE input,
   GPU/VRAM — may not be runnable).
-- [ ] **3.3 Notebook adaptation**: `benchmark_analysis.rmd` + `batch_effect_analysis.rmd`
+- [x] **3.3 Notebook adaptation**: `benchmark_analysis.rmd` + `batch_effect_analysis.rmd`
   read preprocessed h5ad (Step 4a approach: `ReadH5AD`/reticulate — benchmark on debug
   dataset), paths from datasets.json view outputs, ingest `.feather` from NAS; strip
   data-processing steps moved to HPC scripts.
+  - `benchmark_analysis.rmd` DONE (2026-08-12): backed h5ad obs-only reads,
+    NAS benchmark/pseudobulks/embeddings paths, unified exec times (NAS
+    feather + bundle-derived rows), RAM plot (Supp fig 14B), funky-heatmap
+    refactor (`build_funky_heatmap` in `src/utils/plotting.R`) with the
+    `benchmark_metrics` notebook parameter, zeroimp flattening fix +
+    underscore method-key rename in `run_zeroimp_analysis` (breaking change:
+    zeroimp bundles must be re-run with `--force`, see user to-dos).
+    `batch_effect_analysis.rmd` still pending (Phase 4).
 - [ ] **3.4 Docs**: README usage/workflow, ARCHITECTURE.md, AGENTS.md.
 - [ ] **3.5 SLURM config cleanup**: resolve or drop the leftover
       `# TODO: Adapt for specific pipelines` comment on `SLURM_PARTITION`
@@ -65,6 +73,15 @@ is preserved in git; see `git log`.
 
 ## Ideas for later
 
+- R-method peak RAM: backfill sacct `MaxRSS` into `execution_times.feather`
+  (R rows currently have `mem_GB = NA`; the notebook's RAM figure
+  `Supp_fig_14B_benchmark_mem_GB.pdf` shows python methods only).
+- ECODA+Pseudobulk distance combos (`ECODA_PB_combo_*`): legacy, disabled in
+  `run_benchmark_analysis`, kept commented-out in `benchmark_analysis.rmd` for
+  internal testing only — NOT shown in publication figures.
+- Optional: HPC workers dumping per-dataset `obs.rds` + PCA-mean matrix if the
+  notebook should ever avoid h5ad reads entirely (currently not needed —
+  obs/obsm backed reads are light).
 - MOFAcellular; cell/sample/annotation counts from h5ad without full load.
 - Gene blacklist before HVG selection: dump `aux/genes.blocklist.rds` (STACAS
   default_black_list) to a text file (one gene per line; `full` and `no_sex`

@@ -48,6 +48,10 @@ bioconductor-deseq2 = "1.50.2.*"
 r-doparallel = "*"
 r-plotly = "*"
 r-pheatmap = "*"
+# Notebook-only (benchmark_analysis.rmd): theme_classic2() (Supp fig 2/14/15/16,
+# Figure 4 AB) + writexl (raw_data_for_publication.xlsx export)
+r-ggthemes = ">=4.2.0,<6"
+r-writexl = ">=1.5.0,<2"
 
 # ==========================================
 # CORE PYTHON STACK

@@ -60,3 +60,24 @@ read_datasets_json <- function(path = "datasets.json", view = NULL) {
 
   return(result)
 }
+
+# Resolve the preprocessed view h5ad file name for a dataset (mirrors
+# get_h5ad_path in benchmark_hpc_utils.R, but returns the bare file name —
+# the notebook composes the full path from its own NAS mount). `datasets` is
+# the read_datasets_json(view = ...) output; `ds` the datasets.json key.
+get_view_h5ad_path <- function(datasets, ds, view) {
+  entry <- datasets[[ds]]
+  if (is.null(entry)) {
+    stop("Dataset '", ds, "' not found in datasets.json (view '", view, "').")
+  }
+  views <- entry[["views"]]
+  if (is.null(views) || is.null(views[[view]])) {
+    stop("Dataset '", ds, "' has no '", view, "' view in datasets.json.")
+  }
+  out_file <- views[[view]][["output_file"]]
+  if (is.null(out_file) || is.na(out_file) || out_file == "") {
+    stop("Dataset '", ds, "' view '", view,
+         "' has no output_file_name in datasets.json.")
+  }
+  return(out_file)
+}
