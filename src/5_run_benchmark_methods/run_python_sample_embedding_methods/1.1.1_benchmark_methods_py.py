@@ -220,7 +220,13 @@ def run_scpoli(adata, ct_col, dim, output_path):
     if n_na:
         print(f"Filling {n_na}/{adata.n_obs} missing values in '{ct_col}' "
               "with 'Unknown' (scPoli requires a label per cell).")
-        adata.obs[ct_col] = adata.obs[ct_col].fillna("Unknown")
+        col = adata.obs[ct_col]
+        # anndata stores string obs columns as pandas Categorical by default;
+        # fillna() cannot introduce an undefined category, so register
+        # 'Unknown' first.
+        if isinstance(col.dtype, pd.CategoricalDtype):
+            col = col.cat.add_categories("Unknown")
+        adata.obs[ct_col] = col.fillna("Unknown")
     scPoli = get_scpoli()
     scpoli_model = scPoli(
         adata=adata,
