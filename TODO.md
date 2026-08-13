@@ -146,26 +146,26 @@ comments) is in `new_datasets_to_implement.md` (Excel source:
 - [ ] 6.1 Ecotypes: fully unsupervised ECODA patient clustering on a large
       pre-treatment TNBC cohort (n≈100) with known chemotherapy response;
       TME-type clusters vs clinical response. Addresses Rev#1 circularity
-      (also see 6.12).
+      (also see 6.12). (skip this for now (but keep it here as open point). User will come back to this. it's crucial but user will let you know when and how to implement this)
 - [ ] 6.2 MrVI vs ECODA (Adams + Stephenson): identify the main gene program
       driving MrVI separation that ECODA missed; PCA/UMAP colored by
       gene-program UCell scores. (scPoli batch-effect observation — adjR2
       quote — is discussion context for 6.2/6.12.)
 - [ ] 6.3 Marker-cell-type stability: per-CT DE genes (padj/FC) or top-10-50
       markers; clustered Jaccard-overlap heatmap authors HR vs HiTME, then
-      authors HR vs Leiden_res_5. Plus Figure 3B shared-marker dotplot/heatmap.
+      authors HR vs Leiden_res_5. Plus Figure 3B shared-marker dotplot/heatmap. (prio 2)
 - [ ] 6.4 Downsampling sensitivity (Prio 2): separation score vs # cells per
-      cell type/cluster on two datasets; release all min.cell thresholds.
+      cell type/cluster on two datasets; release all min.cell thresholds. (prio 2, skip for now, user will come back to this)
 - [ ] 6.5 Leiden resolution scan: extend the existing ECODA_seuratres_* range
-      (currently 0.1-20) until separation drops; no min.cell filtering.
-- [ ] 6.6 Zero-handling range extension (current range too narrow).
-- [ ] 6.7 Runtime table: shuffled vs ECODA/GloProp comparison.
+      (currently 0.1-20) until separation drops; no min.cell filtering. (already done. extended range to max 50) (just leave this point here)
+- [X] 6.6 Zero-handling range extension (current range too narrow). (already implented previously by user. range already extended)
+- [ ] 6.7 Runtime table: shuffled vs ECODA/GloProp comparison. (very low prio)
 - [ ] 6.8 LASSO-penalized classification comparison (does variance-based
-      selection approximate supervised selection?).
+      selection approximate supervised selection?). (very low prio)
 - [ ] 6.9 Foundation models (PULSAR) + large-scale/multi-study scenarios
-      (OneK1K, HLCA) — discuss, benchmark where runnable.
+      (OneK1K, HLCA) — discuss, benchmark where runnable. (prio 2-3)
 - [ ] 6.10 Supp fig: separation on females<40 and males>40 (same pattern as
-      males<40 — no cherry-picking). [needs user guidance on cohorts]
+      males<40 — no cherry-picking). [needs user guidance on cohorts] (prio 2 but very easy to implement. just tap h5ad files on nas (already there), just eeds to get cell type composition. minimal computational cost. just need to add supplementary figure, showing the different combinations, all same results, whole dataset already shown in figure 1 (i think))
 - [ ] 6.11 Check how expert annotations were generated (manual vs automated
       classifiers). [needs user knowledge]
 - [ ] 6.12 Response text (no code): circularity table per dataset (condition
@@ -173,7 +173,7 @@ comments) is in `new_datasets_to_implement.md` (Excel source:
       MrVI/scPoli different objectives than unsupervised patient clustering;
       discovery of subgroups is out of scope (validated in 6.1); tone down
       translational marker-claim (multi-parameter panels not routine in
-      clinical practice).
+      clinical practice). (user did that, will be done by the user)
 
 ## Human-managed tasks (not agent)
 
