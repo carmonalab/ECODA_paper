@@ -24,12 +24,18 @@ set -euo pipefail
 # non-pinned hardware; keeping the constraint would hang jobs PENDING forever
 # on nodes whose CPU differs).
 #
-# Submit order: prepare_pseudobulk array FIRST, waited to completion
-# (squeue poll until it leaves the scheduler + bounded sacct
-# poll-until-terminal) with a fail-closed sacct gate, BEFORE the
-# mofa/pseudobulk arrays that consume its outputs;
-# then the remaining arrays, waited + gated the same way. If mofa or
-# pseudobulk is requested without prepare_pseudobulk it is auto-prepended.
+# Submit order: prepare_pseudobulk array FIRST, waited until it leaves the
+# scheduler, then gated on ARTIFACT COMPLETENESS (all PB_VARIANT_NAMES
+# variants present in benchmark/pseudobulks/ per dataset — the mofa/pseudobulk
+# workers only consume those files, with an on-the-fly fallback for missing
+# ones) instead of strict task states: a prep task that failed on a transient
+# node issue (stale BeeGFS view -> "missing from the pixi environment") must
+# not block the method arrays when its variants already exist on disk. The
+# strict fail-closed sacct gate applies only under --force (prep must
+# recompute) or when variant files are actually missing. THEN the
+# mofa/pseudobulk arrays (and gloscope/scitd) are submitted, waited + gated
+# the same way. If mofa or pseudobulk is requested without prepare_pseudobulk
+# it is auto-prepended.
 # After all arrays complete the shared merge/sync/cleanup tail runs (NAS
 # reachability check -> RDS integrity sidecar -> fail-closed sacct gate ->
 # merge per-task exec logs -> sync to NAS -> only then delete per-task
@@ -181,6 +187,69 @@ fi
 mkdir -p "${LOGS_DIR}"
 
 # ---------------------------------------------------------------------------
+# prepare_pseudobulk gate: artifact-based (soft) with strict fallback.
+#
+# The mofa/pseudobulk workers consume ONLY the shared variant files in
+# ${HPC_SCRATCH_DIR}/benchmark/pseudobulks/ (with an on-the-fly fallback for
+# missing variants), so a prep task that failed on a transient node issue
+# (stale BeeGFS view -> "missing from the pixi environment") while all its
+# variants already exist on disk must NOT block the method arrays. Wait for
+# the array to leave the scheduler (same squeue poll as
+# benchmark_wait_for_array), then check artifact completeness; if every
+# variant exists per dataset, proceed without the strict task-state gate.
+# Under --force the prep tasks MUST recompute, so the strict gate always
+# applies; it also applies (fail-closed) when variant files are missing.
+# PB_VARIANT_NAMES (benchmark_hpc_utils.R) is the single source of truth;
+# parsed here so no second list has to be maintained. The soft gate is NOT
+# used in --sync-only mode (all provided job ids are gated strictly there).
+# ---------------------------------------------------------------------------
+benchmark_wait_prep_array() {
+  local JOB_ID="$1"
+  echo "=== Monitoring prepare_pseudobulk array ${JOB_ID} ==="
+  # Block until the job leaves the scheduler (same poll as the shared gate).
+  while squeue -u "$USER" -h -o "%A" 2>/dev/null | grep -qx "${JOB_ID}"; do
+    sleep 60
+  done
+  echo "prepare_pseudobulk array ${JOB_ID} left the scheduler."
+
+  if [[ ${FORCE_ARG} -eq 1 ]]; then
+    echo "prepare_pseudobulk: --force requested; applying the strict task-state gate."
+    benchmark_wait_for_array "${JOB_ID}" "prepare_pseudobulk"
+    return 0
+  fi
+
+  local PB_DIR="${HPC_SCRATCH_DIR}/benchmark/pseudobulks"
+  local PB_VARIANTS
+  PB_VARIANTS="$(sed -n '/^PB_VARIANT_NAMES <- c(/,/^)/p' \
+    "${SCRIPT_DIR}/../benchmark_hpc_utils.R" | grep -oE '"[a-zA-Z0-9_.]+"' | tr -d '"')"
+  if [[ -z "${PB_VARIANTS}" ]]; then
+    echo "WARNING: could not parse PB_VARIANT_NAMES from benchmark_hpc_utils.R; applying the strict task-state gate."
+    benchmark_wait_for_array "${JOB_ID}" "prepare_pseudobulk"
+    return 0
+  fi
+
+  local MISSING=()
+  local DS V
+  for DS in "${DATASET_NAMES[@]}"; do
+    for V in ${PB_VARIANTS}; do
+      if [[ ! -f "${PB_DIR}/${DS}_pseudobulk_${V}.rds" ]]; then
+        MISSING+=("${DS}/${V}")
+      fi
+    done
+  done
+  if [[ ${#MISSING[@]} -eq 0 ]]; then
+    echo "prepare_pseudobulk: all $(wc -w <<< "${PB_VARIANTS}" | tr -d ' ') variants x ${NUM_DATASETS} datasets present in ${PB_DIR}; skipping the task-state gate."
+    # Visibility only: show non-COMPLETED tasks without failing (best-effort;
+    # sacct may be empty or the master line may itself be COMPLETED).
+    sacct -j "${JOB_ID}" --format=JobID,State,ExitCode -n 2>/dev/null \
+      | grep -v 'COMPLETED' | sed 's/^/  note: /' || true
+    return 0
+  fi
+  echo "prepare_pseudobulk: missing variant file(s): ${MISSING[*]}; applying the strict task-state gate."
+  benchmark_wait_for_array "${JOB_ID}" "prepare_pseudobulk"
+}
+
+# ---------------------------------------------------------------------------
 # Submit one array per method (prepare_pseudobulk first, then the rest)
 # ---------------------------------------------------------------------------
 if [[ -n "${SYNC_ONLY_IDS}" ]]; then
@@ -234,9 +303,10 @@ for METHOD in "${METHODS[@]}"; do
   fi
 done
 
-# prepare_pseudobulk must complete before the mofa/pseudobulk arrays start
+# prepare_pseudobulk must complete before the mofa/pseudobulk arrays start;
+# the gate is artifact-based (soft) with a strict fail-closed fallback.
 if [[ -n "${PREP_JOB_ID}" ]]; then
-  benchmark_wait_for_array "${PREP_JOB_ID}" "prepare_pseudobulk"
+  benchmark_wait_prep_array "${PREP_JOB_ID}"
 fi
 
 for METHOD in "${METHODS[@]}"; do

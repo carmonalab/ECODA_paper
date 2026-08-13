@@ -354,7 +354,12 @@ PILOT, so cross-method runtime comparisons stay valid; an explicit
 1_submit_hpc_array.sh (login; per method: manifest + sbatch array on the
   pinned CPU class shared-cpu/EPYC-7742/16 cores/128G; --partition override
   drops the constraint pin; mofa/pseudobulk auto-prepend prepare_pseudobulk)
-   ├─ prepare_pseudobulk array FIRST — polled to completion + sacct gate
+   ├─ prepare_pseudobulk array FIRST — polled until it leaves the scheduler,
+   │    then artifact gate: all PB_VARIANT_NAMES variants present per dataset
+   │    in benchmark/pseudobulks/ -> proceed without the strict task-state
+   │    gate (soft; strict fail-closed sacct gate applies under --force or
+   │    when variant files are missing — a stale-node prep failure with the
+   │    variants already on disk must not block the method arrays)
    │    └─ 1.1_run_worker.sh -> 1.1.1_prepare_pseudobulk.R
    │         input:  h5ad (counts + var["hvg_rank"] only; no embeddings)
    │         output: ${HPC_SCRATCH_DIR}/benchmark/pseudobulks/<ds>_pseudobulk_<variant>.rds
