@@ -1,10 +1,24 @@
 # ECODA_paper — TODO
 
 Implementation plan for the remaining pipeline work. Phases are ordered:
-**Phase 1** (agent, done) → **Phase 2** (debug run on HPC, done) →
-**Phase 3** (benchmark methods + full dataset rollout, agent + HPC) →
-**Phase 4** (batch effect analysis) → human-managed tasks. Completed history
-is preserved in git; see `git log`.
+Phase 3 (benchmark rollout) → Phase 4 (batch effect analysis) → Phase 5 (new
+datasets) → Phase 6 (additional reviewer analyses) → human-managed tasks.
+Completed history is preserved in git; see `git log`.
+Merged 2026-08-13 with TODO_revision_plan.md (now deleted) and
+new_datasets_to_implement.md (kept as appendix, linked from Phase 5).
+
+## Priority overview (from the 2026-07-29 revision plan, merged)
+
+- Prio 1: PILOT-GM-VAE (3.2); multi-batch benchmark with batch-mixing metrics
+  (4.2); Ecotypes TNBC patient clustering (6.1); MrVI-vs-ECODA signal
+  attribution (6.2); batch-correction impact on unsupervised annotation (4.5);
+  clustering-resolution impact (6.5); Figure 3B marker-gene heatmap (6.3);
+  zero-handling range extension (6.6); new datasets (Phase 5).
+- Prio 2: downsampling robustness (6.4); PULSAR/QOT/MOFA cellular (3.2);
+  batch-mixing quantification supp fig (4.2).
+- Response text only (no code): circularity per-dataset table, MrVI/scPoli
+  objective mismatch, discovery-of-subgroups scope, translational-claim
+  tone-down (6.12).
 
 ## Phase 3 — src/5_run_benchmark_methods [agent implements; HPC runs]
 
@@ -28,48 +42,146 @@ is preserved in git; see `git log`.
       max 5000 per sample) checked when its preprocess task reaches the NAS
       sync gate.
       After all datasets complete: verify NAS outputs (preprocessed h5ads +
-      benchmark bundles), then resume 3.2 (new methods), 3.3 (notebook
-      adaptation), 3.4 (docs), 3.5 (SLURM config cleanup), and Phase 4.
-- [ ] **3.2 New methods**: PILOT-GM-VAE (add to py script + `constants.R` + R ingest;
-  Harmony `X_pca_harmony` input for batch-effect views); QOT (feasibility test, deps
-  from `QOT_PDAC_Example.ipynb`, no package); PULSAR (requirements test: UCE input,
-  GPU/VRAM — may not be runnable).
+      benchmark bundles), then resume 3.2 (new methods), 3.4 (docs), 3.5
+      (SLURM config cleanup), and Phase 4.
+- [ ] **3.2 New methods**:
+      - PILOT-GM-VAE (Prio 1): add to `1.2_benchmark_methods_py.qmd` +
+        `constants.R` + R ingest; `X_pca_harmony` input for batch-effect views.
+        NOTE: the current `PILOT` method key is the plain-EMD variant
+        (`pl.tl.wasserstein_distance`, no GM-VAE) — use a distinct method key
+        (e.g. `PILOT-GM-VAE`).
+      - QOT (Prio 2; feasibility, deps from `QOT_PDAC_Example.ipynb`, no package).
+      - PULSAR (Prio 2; requirements test: UCE input, GPU/VRAM — may not be runnable).
+      - MOFA cellular (Prio 2, feasibility).
+      - Method-annotation columns for figures: "originally designed for sample
+        representation", "provides batch correction".
 - [x] **3.3 Notebook adaptation**: `benchmark_analysis.rmd` + `batch_effect_analysis.rmd`
-  read preprocessed h5ad (Step 4a approach: `ReadH5AD`/reticulate — benchmark on debug
-  dataset), paths from datasets.json view outputs, ingest `.feather` from NAS; strip
-  data-processing steps moved to HPC scripts.
-  - `benchmark_analysis.rmd` DONE (2026-08-12): backed h5ad obs-only reads,
-    NAS benchmark/pseudobulks/embeddings paths, unified exec times (NAS
-    feather + bundle-derived rows), RAM plot (Supp fig 14B), funky-heatmap
-    refactor (`build_funky_heatmap` in `src/utils/plotting.R`) with the
-    `benchmark_metrics` notebook parameter, zeroimp flattening fix +
-    underscore method-key rename in `run_zeroimp_analysis` (breaking change:
-    zeroimp bundles must be re-run with `--force`, see user to-dos).
-    `batch_effect_analysis.rmd` still pending (Phase 4).
-- [ ] **3.4 Docs**: README usage/workflow, ARCHITECTURE.md, AGENTS.md.
+      read preprocessed h5ad (Step 4a approach: `ReadH5AD`/reticulate — benchmark on debug
+      dataset), paths from datasets.json view outputs, ingest `.feather` from NAS; strip
+      data-processing steps moved to HPC scripts.
+      - `benchmark_analysis.rmd` DONE (2026-08-12): backed h5ad obs-only reads,
+        NAS benchmark/pseudobulks/embeddings paths, unified exec times (NAS
+        feather + bundle-derived rows), RAM plot (Supp fig 14B), funky-heatmap
+        refactor (`build_funky_heatmap` in `src/utils/plotting.R`) with the
+        `benchmark_metrics` notebook parameter, zeroimp flattening fix +
+        underscore method-key rename in `run_zeroimp_analysis` (breaking change:
+        zeroimp bundles must be re-run with `--force`, see user to-dos).
+        `batch_effect_analysis.rmd` still pending (Phase 4).
+- [x] Metrics in main benchmark: Silhouette + LISI included in the metrics
+      vector (`benchmark_analysis.rmd:2557`); Modularity with multiple KNN
+      variants (sqrt(n)/3/6/9) in `src/utils/scoring_metrics.R`
+      (`calc_modularity`). DONE.
+- [ ] **3.4 Docs**: README usage/workflow, ARCHITECTURE.md, AGENTS.md (also
+      update the AGENTS.md reference to the TODO phases after this restructure).
 - [ ] **3.5 SLURM config cleanup**: resolve or drop the leftover
       `# TODO: Adapt for specific pipelines` comment on `SLURM_PARTITION`
       (`src/slurm_config.sh:114`) — decide per-stage partitions for stages 2–4
       or remove the comment.
 
-## Phase 4 — Batch effect analysis (later)
+## Phase 4 — Batch effect analysis [agent + HPC]
 
-- Methods: ECODA batch-associated CT removal (t-test/Wilcoxon, ANOVA/Kruskal-Wallis);
-  Pseudobulk DESeq2+limma with `batch_col` (DONE for the batch-effect notebook:
-  `DESeq2.normalize()`/`get_pb_deseq2()` take `batch_col`/`blind`/`correct_batch`,
-  wired batch-only at all 4 `batch_effect_analysis.rmd` call sites; benchmark
-  defaults unchanged); MrVI native `batch_key`; GloScope on
-  `X_pca_harmony`; PILOT-GM-VAE on `X_pca_harmony`; CombinedPBMC (Stephenson,
-  GongSharma, Zhu) dataset handling; `columns.batch` in datasets.json (Joanito `seqtec`
-  DONE via `1.3.1_prepare_joanito.R`; Kfoury `cells_lowres` DONE via
-  `1.4.1_create_kfoury_lowres_ct.R`).
+- [x] Pseudobulk DESeq2+limma with batch-only correction (Joanito + Stephenson
+      wired via `DESeq2.normalize()`/`get_pb_deseq2()` `batch_col`/`blind`/
+      `correct_batch` at all 4 `batch_effect_analysis.rmd` call sites; benchmark
+      defaults unchanged).
+- [x] CombinedPBMC (Stephenson+GongSharma+Zhu) handling in
+      `batch_effect_analysis.rmd` (analyzed at line 594+).
+- [x] `columns.batch` in datasets.json: Joanito `seqtec`
+      (`1.3.1_prepare_joanito.R`), Kfoury `cells_lowres`
+      (`1.4.1_create_kfoury_lowres_ct.R`).
+- [ ] **4.1 ECODA generic `batch` argument**: generalize the hardcoded
+      Stephenson `ct_remove` subset (`batch_effect_analysis.rmd:244-248`) —
+      per-CT t-test/Wilcoxon (2 batches) or ANOVA/Kruskal-Wallis (>2), p<0.05;
+      print a warning naming significant cell types. No-leakage: batch input only.
+- [ ] **4.2 Multi-batch benchmark (Prio 1)**: datasets = KPMP Kidney, whole
+      Stephenson (by center, n=143), Joanito, CombinedPBMC, full GongSharma
+      (3 covariates), Covid-19 PBMC, Breast cancer, Diabetes. Separation with
+      AND without batch correction; when >1 major batch, process one
+      batch/covariate at a time (all methods except scPoli). Metrics: bio
+      separation + batch-mixing (silhouette, LISI; cLISI vs the other metrics
+      correlation on one dataset) → Supp fig.
+- [ ] **4.3 MrVI native batch_key** in the batch-effect notebook (MrVI
+      currently runs only at `_lowres` in `1.2_benchmark_methods_py.qmd`).
+- [ ] **4.4 GloScope + PILOT-GM-VAE on `X_pca_harmony`** in the batch-effect
+      notebook.
+- [ ] **4.5 Impact of batch correction on unsupervised cell type annotation for
+      ECODA (Prio 1)**.
+- [ ] **4.6 GongSharma**: run Harmony on all samples (batch = sample), Leiden
+      clustering in corrected space, compare labels uncorrected vs corrected,
+      add to Figure 3.
+
+## Phase 5 — New datasets (from the BIB benchmark study) [review task first]
+
+Reviewer asked to add datasets from the study
+https://academic.oup.com/bib/article/26/5/bbaf547/8287234 (BIB 2025). Prefer
+downloading from where that study's authors provide the data, with no or minor
+changes; whether a dataset shows batch effects decides benchmark vs batch-effect
+usage in this repo. Full extraction (counts, classes, feasibility colors,
+comments) is in `new_datasets_to_implement.md` (Excel source:
+`/Users/christianhalter/Desktop/ECODA_PAPER_DATASETS.xlsx`).
+- [ ] **5.1 Check the BIB study (bbaf547) for author-provided data locations**;
+      verify availability (cellxgene/GEO per the table) and the amount of
+      changes needed. [separate review task — not started]
+- [ ] **5.2 Benchmark candidates (green)**: Alzheimer (n=83), Lupus PBMC
+      (n=261), Myocardial infarction (n=23; has only clustering, no
+      high-granularity CTs).
+- [ ] **5.3 Batch-effect candidates (green/yellow)**: whole Stephenson by
+      center (n=143; extension of the existing batch-effect view), KPMP Kidney
+      (n=45; check batch effects first), Breast cancer (n=126; no cancer cells
+      — contralateral unaffected samples), Covid-19 PBMC (n=151; GEO), Diabetes
+      (n=52; yellow — 9 sub-datasets, many conditions).
+- [ ] **5.4 Check-before-use (orange)**: Lung (n=165; too many technical
+      conditions), Parkinson (n=97; composition dominated by brain region —
+      possible negative control), Kidney cancer (n=17; too few samples),
+      Pancreas PDAC (n=35; separates by "Ductal 2" cells only).
+- [ ] **5.5 Sikkema Lung HCA** (reviewer-mentioned, data readily available;
+      draft `src/3_scrnaseq_preprocessing/TODO_STUMP_preprocess_sikkema.qmd`
+      exists) — test sample separation by tissue.
+- [ ] **5.6 Register approved datasets in datasets.json (ASK THE USER FIRST —
+      datasets.json must not be changed without asking)**, with the appropriate
+      view(s); then stage → preprocess → annotate → benchmark/batch-effect arrays.
+
+## Phase 6 — Additional reviewer analyses [agent, Prio 1 first]
+
+- [ ] 6.1 Ecotypes: fully unsupervised ECODA patient clustering on a large
+      pre-treatment TNBC cohort (n≈100) with known chemotherapy response;
+      TME-type clusters vs clinical response. Addresses Rev#1 circularity
+      (also see 6.12).
+- [ ] 6.2 MrVI vs ECODA (Adams + Stephenson): identify the main gene program
+      driving MrVI separation that ECODA missed; PCA/UMAP colored by
+      gene-program UCell scores. (scPoli batch-effect observation — adjR2
+      quote — is discussion context for 6.2/6.12.)
+- [ ] 6.3 Marker-cell-type stability: per-CT DE genes (padj/FC) or top-10-50
+      markers; clustered Jaccard-overlap heatmap authors HR vs HiTME, then
+      authors HR vs Leiden_res_5. Plus Figure 3B shared-marker dotplot/heatmap.
+- [ ] 6.4 Downsampling sensitivity (Prio 2): separation score vs # cells per
+      cell type/cluster on two datasets; release all min.cell thresholds.
+- [ ] 6.5 Leiden resolution scan: extend the existing ECODA_seuratres_* range
+      (currently 0.1-20) until separation drops; no min.cell filtering.
+- [ ] 6.6 Zero-handling range extension (current range too narrow).
+- [ ] 6.7 Runtime table: shuffled vs ECODA/GloProp comparison.
+- [ ] 6.8 LASSO-penalized classification comparison (does variance-based
+      selection approximate supervised selection?).
+- [ ] 6.9 Foundation models (PULSAR) + large-scale/multi-study scenarios
+      (OneK1K, HLCA) — discuss, benchmark where runnable.
+- [ ] 6.10 Supp fig: separation on females<40 and males>40 (same pattern as
+      males<40 — no cherry-picking). [needs user guidance on cohorts]
+- [ ] 6.11 Check how expert annotations were generated (manual vs automated
+      classifiers). [needs user knowledge]
+- [ ] 6.12 Response text (no code): circularity table per dataset (condition
+      defined by clinical tests, not cell composition — Adams: HRCT/PFTs, etc.);
+      MrVI/scPoli different objectives than unsupervised patient clustering;
+      discovery of subgroups is out of scope (validated in 6.1); tone down
+      translational marker-claim (multi-parameter panels not routine in
+      clinical practice).
 
 ## Human-managed tasks (not agent)
 
-- Batch effect datasets: whole Stephenson (n=143), KPMP Kidney (n=45), breast cancer
-  (n=126), Covid-19 PBMC (n=151), diabetes (n=52), possibly Sikkema Lung.
-- Benchmark datasets: Alzheimer (n=83), Lupus PBMC (n=261), myocardial infarction
-  (n=23), possibly KPMP (n=45); GongSharma other subsetting conditions.
+- HPC rollout of Phase 5 datasets (stage/preprocess/annotate/benchmark arrays),
+  guided by the BIB-study check (5.1).
+- GongSharma other-subsetting conditions (draft `preprocess_gongsharma.qmd`).
+- Where user input is required: 6.10 (cohort definition), 6.11 (annotation
+  provenance), 6.12 (response text).
 
 ## Ideas for later
 
@@ -88,7 +200,8 @@ is preserved in git; see `git log`.
 - Optional: HPC workers dumping per-dataset `obs.rds` + PCA-mean matrix if the
   notebook should ever avoid h5ad reads entirely (currently not needed —
   obs/obsm backed reads are light).
-- MOFAcellular; cell/sample/annotation counts from h5ad without full load.
+- Cell/sample/annotation counts from h5ad without full load (MOFAcellular
+  moved to 3.2).
 - Gene blacklist before HVG selection: dump `aux/genes.blocklist.rds` (STACAS
   default_black_list) to a text file (one gene per line; `full` and `no_sex`
   variants), add `load_blacklist(path, exclude_sex=True)` to
@@ -96,14 +209,11 @@ is preserved in git; see `git log`.
   (`adata = adata[:, ~adata.var_names.isin(blacklist)].copy()`).
 - Batch effect analysis: decide whether to run with and/or without batch
   correction — more important to only do WITH batch correction; non-corrected
-  results possibly in the paper appendix.
+  results possibly in the paper appendix (4.2 runs both).
 - Phase 4 details: `DESeq2.normalize()` `batch_col` is now correctly implemented
   and wired (batch-only, never `"Sample"` as batch column; no-leakage — see
-  AGENTS.md); ECODA batch-associated
-  CT removal should print a warning naming the significant cell types
-  (t-test/Wilcoxon for 2 batches, ANOVA/Kruskal-Wallis for >2, p < 0.05); test
-  each cell type separately vs. checking global variance of cell type
-  composition across batches.
+  AGENTS.md); the ECODA batch-associated CT-removal warning detail (test each
+  cell type separately vs. checking global variance, p < 0.05) moved to 4.1.
 
 ## Keep-draft notes
 

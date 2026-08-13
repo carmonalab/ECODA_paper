@@ -8,7 +8,7 @@ Link to paper: https://www.biorxiv.org/content/10.64898/2026.03.27.714811v1.full
 ## Open reviewer work
 - Extend batch effect analysis and benchmark analysis (more datasets + more methods).
     - Additional datasets will be added by the user (human) — not by agents.
-    - Pipeline/code work, method feasibility (PILOT-GM-VAE, QOT, PULSAR) and implementation drafts: see TODO.md (Phase 3 + Phase 4).
+    - Pipeline/code work, method feasibility (PILOT-GM-VAE, QOT, PULSAR) and implementation drafts: see TODO.md (Phase 3-6).
 
 # Agent Guardrails & Domain Terms
 
