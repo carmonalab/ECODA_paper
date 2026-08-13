@@ -73,6 +73,12 @@ is preserved in git; see `git log`.
 
 ## Ideas for later
 
+- CPU benchmark array throttling (`BENCHMARK_CPU_ARRAY_THROTTLE`, e.g. 4) for
+  the R/transzeroimp/PILOT submitters — deferred from the 2026-08-13
+  direct-env imports work: if the slim imports still show startup metadata
+  storms on the CPU arrays, throttle concurrency as a separate design
+  (`MAX_NUM_CHUNKS_PARALLEL` stays untouched). Long-term alternative:
+  node-shared `/srv/share/users/...` staging (documented, not implemented).
 - R-method peak RAM: backfill sacct `MaxRSS` into `execution_times.feather`
   (R rows currently have `mem_GB = NA`; the notebook's RAM figure
   `Supp_fig_14B_benchmark_mem_GB.pdf` shows python methods only).

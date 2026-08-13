@@ -62,12 +62,11 @@ else
   R_SCRIPT="${SCRIPT_DIR}/1.1.1_run_benchmark_methods_r.R"
 fi
 
-# Staging + unified retry handling: stage the pixi R library to node-local
-# /scratch (immune to stale BeeGFS client-cache views), then run the method.
-# No thread pinning (benchmark hardware is pinned for runtime comparability).
-# Both staging and R stderr land in the Slurm .err file, so one
-# transient-signature grep covers both. Method outputs are overwritten on
-# re-run (idempotent per-dataset files).
+# Unified retry handling: run the method, then grep the Slurm .err for
+# transient signatures on failure. No thread pinning (benchmark hardware is
+# pinned for runtime comparability). R stderr lands in the Slurm .err file,
+# so one transient-signature grep covers it. Method outputs are overwritten
+# on re-run (idempotent per-dataset files).
 source "${SCRIPT_DIR}/../../utils/bash/worker_retry.sh"
 
 echo "Task ${SLURM_ARRAY_TASK_ID}: running ${METHOD} on ${DS_NAME}"
@@ -75,7 +74,7 @@ echo "Task ${SLURM_ARRAY_TASK_ID}: running ${METHOD} on ${DS_NAME}"
 # --vanilla` (--as-is: no lockfile/env mutation from workers); it must stay
 # unquoted (established convention, see 2.1_run_worker.sh).
 set +e
-stage_env_rlib "benchmark" && ${PIXI_RSCRIPT} "${R_SCRIPT}" \
+${PIXI_RSCRIPT} "${R_SCRIPT}" \
     --config_path "${DATASETS_JSON_FILE}" \
     --ds_name "${DS_NAME}" \
     --view benchmark_analysis \

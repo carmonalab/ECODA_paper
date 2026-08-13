@@ -17,10 +17,9 @@ if (project_root == "") {
   stop("PROJECT_ROOT not set. Source slurm_config.sh before calling this script.")
 }
 
-source(file.path(project_root, "src/utils/load_all_functions.R"))
+source(file.path(project_root, "src/utils/imports_worker_core.R"))
+source(file.path(project_root, "src/utils/load_worker_functions.R"))
 source(file.path(project_root, "src/5_run_benchmark_methods/benchmark_hpc_utils.R"))
-
-library(reticulate)
 
 raw_args <- commandArgs(trailingOnly = TRUE)
 args <- parse_flags(raw_args)

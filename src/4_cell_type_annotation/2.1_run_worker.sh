@@ -67,16 +67,15 @@ if [[ -f "${FEATHER_FILE}" ]]; then
   exit 0
 fi
 
-# Staging + unified retry handling: stage the pixi R library to node-local
-# /scratch (immune to stale BeeGFS client-cache views), pin BLAS/OMP threads
-# so CPU time ~= wall time, then run the chunk. Both staging and R stderr land
-# in the Slurm .err file, so one transient-signature grep covers both. The
-# retry counter is cleared on success and only bumped on requeue.
+# Unified retry handling: pin BLAS/OMP threads so CPU time ~= wall time, then
+# run the chunk. R stderr lands in the Slurm .err file, so one
+# transient-signature grep covers both. The retry counter is cleared on
+# success and only bumped on requeue.
 source "${SCRIPT_DIR}/../utils/bash/worker_retry.sh"
 export_worker_thread_env
 
 set +e
-stage_env_rlib "annotation" && ${PIXI_RSCRIPT} \
+${PIXI_RSCRIPT} \
   "${SCRIPT_DIR}/2.1.1_process_chunk.R" \
   "${CHUNK_FILE}"
 RC=$?
