@@ -29,6 +29,14 @@ set -euo pipefail
 # NAS reachability check -> fail-closed sacct gate -> merge per-task exec
 # logs (job-id scoped, existing-log continuity) -> sync to NAS -> only then
 # delete this run's per-task logs.
+#
+# OOM auto-escalation: an OUT_OF_MEMORY task cannot self-requeue (the task is
+# dead), so the monitor tail gates each array OOM-aware via
+# benchmark_wait_oom_retry: only the OOM'd tasks' datasets are re-submitted
+# with doubled --mem (128G -> 256G -> 512G) via submit_python_method_array_retry
+# (same per-method partition/--gpus/--constraint/throttle), up to the
+# BENCHMARK_MEM_MAX ceiling, before failing closed with an OOM report.
+# Non-OOM failures fail closed exactly as before.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../slurm_config.sh"
@@ -127,9 +135,23 @@ else
 echo "=== Submitting Python benchmark method arrays ==="
 
 mkdir -p "${LOGS_DIR}"
-ARRAY_JOB_IDS=()
 
-for METHOD in "${METHODS[@]}"; do
+# Prints ONLY the array job id on stdout (progress goes to stderr) so the
+# caller can capture the id with $(...) — a multi-line capture would break
+# the sacct gate in benchmark_wait_oom_retry.
+#
+# Retry-capable: the OOM auto-escalation loop (benchmark_wait_oom_retry)
+# re-invokes this with a comma-separated REDUCED dataset list, a doubled
+# --mem and a fresh manifest path (only the OOM'd datasets; array task ids
+# map 1:1 to its lines via the existing sed -n mechanism — no worker changes
+# needed). Per-method partition/--gpus/--constraint/throttle are recomputed
+# exactly as for the normal submission (PARTITION_ARG override included).
+submit_python_method_array_retry() {
+  local METHOD="$1"
+  local DS_CSV="$2"
+  local MEM="$3"
+  local MANIFEST="$4"
+  local PARTITION EXTRA_FLAGS=() THROTTLE
   case "${METHOD}" in
     mrvi|scpoli)
       PARTITION="${SLURM_PARTITION_BENCHMARK_GPU}"
@@ -145,7 +167,7 @@ for METHOD in "${METHODS[@]}"; do
       THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
       ;;
     *)
-      echo "ERROR: Unknown method '${METHOD}' (expected mrvi, scpoli or pilot)."
+      echo "ERROR: Unknown method '${METHOD}' (expected mrvi, scpoli or pilot)." >&2
       exit 1
       ;;
   esac
@@ -166,15 +188,15 @@ for METHOD in "${METHODS[@]}"; do
       esac
     done
     EXTRA_FLAGS=("${FILTERED_FLAGS[@]}")
-    echo "  NOTE: --partition override drops the --constraint hardware pin"
+    echo "  NOTE: --partition override drops the --constraint hardware pin" >&2
   fi
 
   # Per-method manifest: one dataset per line; rebuilt every run. The name
   # carries the submit PID so an overlapping second submission cannot
   # clobber the manifest of already-submitted (queued) arrays.
-  MANIFEST="${HPC_SCRATCH_DIR}/benchmark_manifest_${METHOD}_$$.txt"
   : > "${MANIFEST}"
-  for name in "${DATASET_NAMES[@]}"; do
+  IFS=',' read -r -a DS_LIST <<< "${DS_CSV}"
+  for name in "${DS_LIST[@]}"; do
     echo "${name}" >> "${MANIFEST}"
   done
   export BENCHMARK_MANIFEST="${MANIFEST}"
@@ -182,31 +204,50 @@ for METHOD in "${METHODS[@]}"; do
   # environment, and 1.1_run_worker.sh hard-requires it.
   export METHOD="${METHOD}"
 
-  echo "Submitting ${METHOD} array (${NUM_DATASETS} datasets, partition=${PARTITION}, "
-  echo "  flags: ${EXTRA_FLAGS[*]}, mem=${BENCHMARK_MEM}, throttle=${THROTTLE})"
+  echo "Submitting ${METHOD} array (${#DS_LIST[@]} datasets, partition=${PARTITION}, " >&2
+  echo "  flags: ${EXTRA_FLAGS[*]}, mem=${MEM}, throttle=${THROTTLE})" >&2
 
+  local SUBMIT_MSG
   SUBMIT_MSG=$(sbatch \
-      --array="1-${NUM_DATASETS}%${THROTTLE}" \
+      --array="1-${#DS_LIST[@]}%${THROTTLE}" \
       --partition="${PARTITION}" \
       "${EXTRA_FLAGS[@]}" \
-      --mem="${BENCHMARK_MEM}" \
+      --mem="${MEM}" \
       --output="${LOGS_DIR}/5_benchmark_${METHOD}_%A_%a.log" \
       --error="${LOGS_DIR}/5_benchmark_${METHOD}_%A_%a.err" \
       --mail-user="${USER_EMAIL}" \
       "${SCRIPT_DIR}/1.1_run_worker.sh")
 
+  local ARRAY_JOB_ID
   ARRAY_JOB_ID=$(echo "${SUBMIT_MSG}" | grep -oE '[0-9]+')
-  echo "  ${METHOD} array job ID: ${ARRAY_JOB_ID}"
-  ARRAY_JOB_IDS+=("${ARRAY_JOB_ID}")
+  echo "  ${METHOD} array job ID: ${ARRAY_JOB_ID}" >&2
+  echo "${ARRAY_JOB_ID}"
+}
+
+ARRAY_JOB_IDS=()
+ARRAY_JOB_METHODS=()
+for METHOD in "${METHODS[@]}"; do
+  DS_CSV=""
+  for name in "${DATASET_NAMES[@]}"; do
+    [[ -n "${DS_CSV}" ]] && DS_CSV+=","
+    DS_CSV+="${name}"
+  done
+  ARRAY_JOB_IDS+=("$(submit_python_method_array_retry "${METHOD}" "${DS_CSV}" "${BENCHMARK_MEM}" \
+    "${HPC_SCRATCH_DIR}/benchmark_manifest_${METHOD}_$$.txt")")
+  ARRAY_JOB_METHODS+=("${METHOD}")
 done
 fi
 
 # ---------------------------------------------------------------------------
-# Monitor & verify & sync results back to NAS (shared tail)
+# Monitor & verify & sync results back to NAS (shared tail).
+# Each array is gated OOM-aware: an OUT_OF_MEMORY task's dataset is
+# re-submitted with doubled --mem (submit_python_method_array_retry, ceiling
+# BENCHMARK_MEM_MAX); non-OOM failures fail closed as before.
 # ---------------------------------------------------------------------------
 echo "=== Monitoring job completion ==="
-for JOB_ID in "${ARRAY_JOB_IDS[@]}"; do
-  benchmark_wait_for_array "${JOB_ID}" "benchmark"
+for i in "${!ARRAY_JOB_IDS[@]}"; do
+  benchmark_wait_oom_retry "${ARRAY_JOB_IDS[$i]}" "${ARRAY_JOB_METHODS[$i]}" \
+    submit_python_method_array_retry "${HPC_SCRATCH_DIR}/benchmark_manifest_${ARRAY_JOB_METHODS[$i]}_$$.txt"
 done
 
 # Labels for the exec-log merge = the submitted methods.

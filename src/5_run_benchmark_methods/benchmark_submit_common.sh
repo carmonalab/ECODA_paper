@@ -22,6 +22,25 @@
 #       fail-closed sacct gate (every state row must be
 #       COMPLETED; aborts without syncing on any non-COMPLETED state or empty
 #       sacct output).
+#   benchmark_wait_oom_retry <job_id> <label> <resubmit_fn> <manifest>
+#       OOM-auto-escalating variant of the wait+gate for the benchmark
+#       submitters' own arrays: waits for the array to leave the scheduler
+#       (shared benchmark_wait_array_terminal poll), then gates on per-TASK
+#       states only (`<job_id>_<n>` rows; .batch/.extern/master rows excluded).
+#       All-COMPLETED -> JOB_REPORTS record + return 0. Any non-COMPLETED,
+#       non-OUT_OF_MEMORY state -> fail closed (task report + sync-status
+#       email, exit 1, no sync). OUT_OF_MEMORY tasks -> re-submit ONLY those
+#       tasks' datasets (mapped from <manifest> via sed -n <task>p) with
+#       doubled --mem (benchmark_bump_mem), up to the BENCHMARK_MEM_MAX
+#       ceiling, via ${resubmit_fn} <label> <comma-separated datasets> <new
+#       mem> <new manifest path> — which must write the manifest, sbatch the
+#       reduced array (same flags/throttle as the normal submission) and echo
+#       ONLY the new array job id on stdout. Loop back with the new id/manifest;
+#       belt-and-braces attempt cap (4). At the ceiling or on non-memory
+#       failures: fail closed with an OOM report incl. per-task MaxRSS.
+#   benchmark_bump_mem <mem> / benchmark_mem_ge <a> <b>
+#       Mem-string helpers for the OOM escalation: <N>G/<N>T -> 2N (same
+#       suffix; non-zero exit on unparseable input) / truthy when a >= b.
 #   benchmark_merge_sync_cleanup <labels...>
 #       NAS reachability check FIRST (fail before any destructive merge
 #       work), then writes the RDS integrity sidecar (benchmark/checksums.md5
@@ -53,7 +72,10 @@
 BENCHMARK_MERGE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_python_sample_embedding_methods/1.1.2_merge_execution_times.py"
 
 # Per-array job duration records for the final email: one "<label>|<job id>|<array wall time>"
-# entry per gated array, appended by benchmark_wait_for_array in submission order.
+# entry per gated array, appended by benchmark_wait_for_array /
+# benchmark_wait_oom_retry in submission order (only the FINAL, successful
+# retry of an OOM-escalated array is recorded — intermediate OOM'd attempts
+# are never appended).
 JOB_REPORTS=()
 
 # Sync-status email helper (best-effort; requires USER_EMAIL from slurm_config.sh).
@@ -94,10 +116,13 @@ benchmark_resolve_datasets() {
 # elapsed, exit code) + array wall time. Prints an n/a line when sacct is
 # unavailable or purged. DATASET_NAMES must be filled (benchmark_resolve_datasets
 # runs before every wait loop, in submission AND --sync-only modes, so the
-# mapping is valid in both).
+# mapping is valid in both). An optional second argument <manifest> maps task
+# ids from that file instead (used by the OOM retry loop, whose retried
+# arrays' manifests hold only the re-submitted datasets).
 # ---------------------------------------------------------------------------
 benchmark_task_report() {
   local JOB_ID="$1"
+  local MANIFEST="${2:-}"
   local TASKS
   TASKS="$(array_task_report "${JOB_ID}")"
   if [[ -z "${TASKS}" ]]; then
@@ -105,10 +130,12 @@ benchmark_task_report() {
     return 0
   fi
   printf '%s\n' "Per-task report (task -> dataset, state, elapsed, exit code):"
-  local task state elapsed exitcode extra
+  local task state elapsed exitcode extra ds_name
   while IFS=$'\t' read -r task state elapsed exitcode; do
-    local ds_name="?"
-    if [[ ${task} -ge 1 && ${task} -le ${NUM_DATASETS} ]]; then
+    ds_name="?"
+    if [[ -n "${MANIFEST}" && -f "${MANIFEST}" ]]; then
+      ds_name="$(sed -n "${task}p" "${MANIFEST}")"
+    elif [[ ${task} -ge 1 && ${task} -le ${NUM_DATASETS} ]]; then
       ds_name="${DATASET_NAMES[$((task - 1))]}"
     fi
     extra=""
@@ -136,9 +163,47 @@ benchmark_job_durations_block() {
 }
 
 # ---------------------------------------------------------------------------
-# Monitor an array to completion, then fail-closed sacct gate
+# Memory escalation helpers (OOM retry)
 # ---------------------------------------------------------------------------
-benchmark_wait_for_array() {
+
+# benchmark_bump_mem <mem>: parse <N>G/<N>T, echo 2N with the same suffix.
+# Non-zero exit on unparseable input (callers fail closed).
+benchmark_bump_mem() {
+  local MEM="$1"
+  if [[ "${MEM}" =~ ^([0-9]+)([GT])$ ]]; then
+    printf '%d%s' $(( ${BASH_REMATCH[1]} * 2 )) "${BASH_REMATCH[2]}"
+    return 0
+  fi
+  return 1
+}
+
+# benchmark_mem_ge <a> <b>: exit 0 when a >= b (G/T suffix aware), 1 otherwise
+# or on unparseable input.
+benchmark_mem_ge() {
+  local A="$1" B="$2"
+  local a_num b_num a_suf b_suf
+  [[ "${A}" =~ ^([0-9]+)([GT])$ ]] || return 1
+  a_num=${BASH_REMATCH[1]}
+  a_suf=${BASH_REMATCH[2]}
+  [[ "${B}" =~ ^([0-9]+)([GT])$ ]] || return 1
+  b_num=${BASH_REMATCH[1]}
+  b_suf=${BASH_REMATCH[2]}
+  if [[ "${a_suf}" == "${b_suf}" ]]; then
+    (( a_num >= b_num ))
+  elif [[ "${a_suf}" == "T" ]]; then
+    (( a_num * 1024 >= b_num ))
+  else
+    (( a_num >= b_num * 1024 ))
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Shared array terminal wait: squeue exact-id poll (60s) + bounded sacct
+# poll-until-terminal (max 20 min). Used by benchmark_wait_for_array (all
+# states) and benchmark_wait_oom_retry (per-task states) — behavior of the
+# wait itself is identical; the gate semantics differ per caller.
+# ---------------------------------------------------------------------------
+benchmark_wait_array_terminal() {
   local JOB_ID="$1"
   local LABEL="$2"
   echo "=== Monitoring ${LABEL} array ${JOB_ID} ==="
@@ -146,7 +211,7 @@ benchmark_wait_for_array() {
   # command (only `wait_job`, which waits for node-ready — not completion —
   # and is documented as unusable with SLURM_ARRAY_JOB_ID), so poll squeue
   # for the exact job id (`-o %A` prints the array master id for every task).
-  # The fail-closed sacct gate below is the authoritative check (covers
+  # The fail-closed gates downstream are the authoritative check (covers
   # cancellation, failure, purged controller records).
   while squeue -u "$USER" -h -o "%A" 2>/dev/null | grep -qx "${JOB_ID}"; do
     sleep 60
@@ -156,7 +221,7 @@ benchmark_wait_for_array() {
   # (bounded) until every state row is terminal instead of a blind fixed sleep.
   # The 180-iteration cap (15 min) plus a 60-iteration grace window (5 min)
   # covers pathological SlurmDBD accounting lag (scheduler said done, sacct
-  # still reports RUNNING); the fail-closed gate below is unchanged.
+  # still reports RUNNING); the fail-closed gates below are unchanged.
   echo "Waiting for sacct to record terminal states for job ${JOB_ID} (bounded, max 20 min)..."
   local TAIL_ITER=0
   local STATES=""
@@ -183,6 +248,159 @@ benchmark_wait_for_array() {
     done
   fi
   echo "${LABEL} array ${JOB_ID} finished. Checking task states..."
+}
+
+# ---------------------------------------------------------------------------
+# OOM per-task email report: task -> dataset (mapped from the run's manifest
+# when given, else DATASET_NAMES), state, MaxRSS, elapsed + array wall time.
+# Prints an n/a line when sacct is unavailable or purged.
+# ---------------------------------------------------------------------------
+benchmark_oom_task_report() {
+  local JOB_ID="$1"
+  local MANIFEST="${2:-}"
+  local ROWS
+  ROWS="$(sacct -j "${JOB_ID}" -n --parsable2 --format=JobID,State,MaxRSS,Elapsed 2>/dev/null || true)"
+  if [[ -z "${ROWS//[[:space:]]/}" ]]; then
+    printf '%s' "OOM per-task report: n/a (sacct unavailable or job purged)."
+    return 0
+  fi
+  printf '%s\n' "OOM per-task report (task -> dataset, state, MaxRSS, elapsed):"
+  local jid state maxrss elapsed task ds_name
+  while IFS='|' read -r jid state maxrss elapsed; do
+    jid="$(tr -d '[:space:]' <<< "${jid}")"
+    [[ "${jid}" =~ ^${JOB_ID}_[0-9]+$ ]] || continue
+    task="${jid#${JOB_ID}_}"
+    ds_name="?"
+    if [[ -n "${MANIFEST}" && -f "${MANIFEST}" ]]; then
+      ds_name="$(sed -n "${task}p" "${MANIFEST}")"
+    elif [[ ${task} -ge 1 && ${task} -le ${NUM_DATASETS} ]]; then
+      ds_name="${DATASET_NAMES[$((task - 1))]}"
+    fi
+    printf '  %s -> %-30s %-14s %-10s  %s\n' "${task}" "${ds_name}" "$(tr -d '[:space:]' <<< "${state}")" "${maxrss}" "${elapsed}"
+  done <<< "${ROWS}"
+  printf 'Array wall time: %s\n' "$(array_wall_time "${JOB_ID}")"
+}
+
+# ---------------------------------------------------------------------------
+# Monitor an array to completion with OOM auto-escalation (see header):
+# per-task sacct gate; OUT_OF_MEMORY tasks are re-submitted with doubled
+# --mem (ceiling BENCHMARK_MEM_MAX) via ${resubmit_fn}; all-COMPLETED passes;
+# any non-COMPLETED, non-OOM state fails closed exactly like the strict gate.
+# ---------------------------------------------------------------------------
+benchmark_wait_oom_retry() {
+  local JOB_ID="$1"
+  local LABEL="$2"
+  local RESUBMIT_FN="$3"
+  local MANIFEST="$4"
+  local MEM="${BENCHMARK_MEM}"
+  local MAX_ATTEMPTS=4
+  local ATTEMPT=0
+  local TASK_STATES OOM_TASKS=() BAD_TASK="" DS_CSV="" NEW_MEM="" NEW_MANIFEST="" NEW_ID=""
+  local JID STATE MASTER_STATE="" TASK_ROWS_FOUND=0 t ds_name
+
+  while (( ATTEMPT < MAX_ATTEMPTS )); do
+    benchmark_wait_array_terminal "${JOB_ID}" "${LABEL}"
+    # Task-row-only states: `--parsable2` (full, un-truncated values) keeps
+    # OUT_OF_MEMORY readable; rows are <job_id>_<n> (batch/extern/master rows
+    # filtered out below).
+    TASK_STATES="$(sacct -j "${JOB_ID}" -n --parsable2 --format=JobID,State 2>/dev/null || true)"
+    if [[ -z "${TASK_STATES//[[:space:]]/}" ]]; then
+      echo "ERROR: sacct returned no states for Array Job ${JOB_ID}; NOT syncing to NAS."
+      notify_sync_status \
+        "ECODA: benchmark NOT synced (job ${JOB_ID})" \
+        "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID} (datasets: ${DATASET_NAMES[*]}): sacct returned no states (job purged or unknown id)."
+      exit 1
+    fi
+    OOM_TASKS=()
+    BAD_TASK=""
+    MASTER_STATE=""
+    TASK_ROWS_FOUND=0
+    while IFS='|' read -r JID STATE; do
+      JID="$(tr -d '[:space:]' <<< "${JID}")"
+      if [[ "${JID}" == "${JOB_ID}" ]]; then
+        MASTER_STATE="$(tr -d '[:space:]' <<< "${STATE}")"
+        continue
+      fi
+      [[ "${JID}" =~ ^${JOB_ID}_[0-9]+$ ]] || continue
+      TASK_ROWS_FOUND=1
+      STATE="$(tr -d '[:space:]' <<< "${STATE}")"
+      case "${STATE}" in
+        COMPLETED)
+          ;;
+        OUT_OF_MEMORY)
+          OOM_TASKS+=("${JID#${JOB_ID}_}")
+          ;;
+        *)
+          BAD_TASK="${JID} (${STATE})"
+          break
+          ;;
+      esac
+    done <<< "${TASK_STATES}"
+    # Degenerate case: no task rows at all — rely on the master row so a
+    # non-COMPLETED (e.g. CANCELLED) empty array still fails closed.
+    if [[ ${TASK_ROWS_FOUND} -eq 0 && "${MASTER_STATE}" != "COMPLETED" ]]; then
+      BAD_TASK="${JOB_ID} (master row: ${MASTER_STATE:-unknown})"
+    fi
+    if [[ -n "${BAD_TASK}" ]]; then
+      echo "ERROR: Array Job ${JOB_ID} had non-COMPLETED, non-OOM tasks; NOT syncing to NAS."
+      sacct -j "${JOB_ID}" --format=JobID,JobName,State,ExitCode
+      notify_sync_status \
+        "ECODA: benchmark NOT synced (job ${JOB_ID})" \
+        "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID} (datasets: ${DATASET_NAMES[*]}): non-COMPLETED, non-OOM tasks.
+$(benchmark_task_report "${JOB_ID}" "${MANIFEST}")"
+      exit 1
+    fi
+    if [[ ${#OOM_TASKS[@]} -eq 0 ]]; then
+      echo "Array Job ${JOB_ID} (${LABEL}): all tasks COMPLETED."
+      JOB_REPORTS+=("${LABEL}|${JOB_ID}|$(array_wall_time "${JOB_ID}")")
+      return 0
+    fi
+    # OOM tasks: escalate memory, or fail closed at the ceiling. The
+    # MaxRSS report (sacct --format=JobID,State,MaxRSS,Elapsed) documents
+    # how far the OOM'd attempt got.
+    if benchmark_mem_ge "${MEM}" "${BENCHMARK_MEM_MAX}" || ! NEW_MEM="$(benchmark_bump_mem "${MEM}")"; then
+      echo "ERROR: Array Job ${JOB_ID} (${LABEL}) OOM'd at the ${BENCHMARK_MEM_MAX} memory ceiling; NOT syncing to NAS."
+      sacct -j "${JOB_ID}" --format=JobID,JobName,State,MaxRSS,Elapsed
+      notify_sync_status \
+        "ECODA: benchmark NOT synced (OOM at mem ceiling)" \
+        "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID}: OUT_OF_MEMORY tasks at the ${BENCHMARK_MEM_MAX} ceiling (BENCHMARK_MEM_MAX).
+$(benchmark_oom_task_report "${JOB_ID}" "${MANIFEST}")"
+      exit 1
+    fi
+    DS_CSV=""
+    for t in "${OOM_TASKS[@]}"; do
+      ds_name="$(sed -n "${t}p" "${MANIFEST}")"
+      if [[ -z "${ds_name}" ]]; then
+        echo "ERROR: No manifest entry for OOM task ${t} in ${MANIFEST}; NOT syncing to NAS." >&2
+        exit 1
+      fi
+      [[ -n "${DS_CSV}" ]] && DS_CSV+=","
+      DS_CSV+="${ds_name}"
+    done
+    echo "OOM escalation (${LABEL}): task(s) ${OOM_TASKS[*]} -> dataset(s) ${DS_CSV}; retrying with mem ${MEM} -> ${NEW_MEM} (attempt $((ATTEMPT + 1)) of ${MAX_ATTEMPTS})."
+    NEW_MANIFEST="${HPC_SCRATCH_DIR}/benchmark_manifest_${LABEL}_retry_$$.txt"
+    NEW_ID="$("${RESUBMIT_FN}" "${LABEL}" "${DS_CSV}" "${NEW_MEM}" "${NEW_MANIFEST}")"
+    if [[ -z "${NEW_ID}" ]]; then
+      echo "ERROR: ${RESUBMIT_FN} returned no array job id for the ${LABEL} retry; NOT syncing to NAS." >&2
+      exit 1
+    fi
+    JOB_ID="${NEW_ID}"
+    MANIFEST="${NEW_MANIFEST}"
+    MEM="${NEW_MEM}"
+    ATTEMPT=$((ATTEMPT + 1))
+  done
+  echo "ERROR: ${LABEL} exceeded ${MAX_ATTEMPTS} OOM retry attempts; NOT syncing to NAS." >&2
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Monitor an array to completion, then fail-closed sacct gate (all rows)
+# ---------------------------------------------------------------------------
+benchmark_wait_for_array() {
+  local JOB_ID="$1"
+  local LABEL="$2"
+  benchmark_wait_array_terminal "${JOB_ID}" "${LABEL}"
+  local STATES
   STATES="$(sacct -j "${JOB_ID}" --format=State -n 2>/dev/null || true)"
   if [[ -z "${STATES//[[:space:]]/}" ]]; then
     echo "ERROR: sacct returned no states for Array Job ${JOB_ID}; NOT syncing to NAS."

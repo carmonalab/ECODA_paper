@@ -115,7 +115,13 @@ BENCHMARK_CPU_CONSTRAINT="EPYC-7742"
 BENCHMARK_GPU_COUNT=1
 BENCHMARK_GPU_CPUS_PER_TASK=8
 BENCHMARK_CPU_CPUS_PER_TASK=16
-BENCHMARK_MEM="128G"
+BENCHMARK_MEM="${BENCHMARK_MEM:-128G}"
+# Doubling ceiling for the benchmark submitters' OOM auto-escalation: an
+# OUT_OF_MEMORY task is re-submitted with doubled --mem (128G -> 256G -> 512G)
+# up to this ceiling, then the submitter fails closed. Must fit the node RAM
+# of the pinned benchmark partitions (shared-cpu/shared-gpu). Env-overridable
+# per command, e.g. BENCHMARK_MEM_MAX=256G ./1_submit_hpc_array.sh.
+BENCHMARK_MEM_MAX="${BENCHMARK_MEM_MAX:-512G}"
 BENCHMARK_GPU_ARRAY_THROTTLE=4   # 4 H200s on gpu006
 # Private node for _debug benchmark runs (not part of the pinned benchmark
 # hardware): pass --partition "${SLURM_PARTITION_PRIVATE}" to the submitter.
