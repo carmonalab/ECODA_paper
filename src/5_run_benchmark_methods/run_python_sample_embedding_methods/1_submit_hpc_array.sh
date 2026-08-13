@@ -33,10 +33,10 @@ set -euo pipefail
 # OOM auto-escalation: an OUT_OF_MEMORY task cannot self-requeue (the task is
 # dead), so the monitor tail gates each array OOM-aware via
 # benchmark_wait_oom_retry: only the OOM'd tasks' datasets are re-submitted
-# with doubled --mem (128G -> 256G -> 512G) via submit_python_method_array_retry
-# (same per-method partition/--gpus/--constraint/throttle), up to the
-# BENCHMARK_MEM_MAX ceiling, before failing closed with an OOM report.
-# Non-OOM failures fail closed exactly as before.
+# with doubled --mem (128G -> 256G -> 500G, clamped to the BENCHMARK_MEM_MAX
+# ceiling) via submit_python_method_array_retry
+# (same per-method partition/--gpus/--constraint/throttle), before failing
+# closed with an OOM report. Non-OOM failures fail closed exactly as before.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../slurm_config.sh"

@@ -31,8 +31,9 @@
 #       non-OUT_OF_MEMORY state -> fail closed (task report + sync-status
 #       email, exit 1, no sync). OUT_OF_MEMORY tasks -> re-submit ONLY those
 #       tasks' datasets (mapped from <manifest> via sed -n <task>p) with
-#       doubled --mem (benchmark_bump_mem), up to the BENCHMARK_MEM_MAX
-#       ceiling, via ${resubmit_fn} <label> <comma-separated datasets> <new
+#       doubled --mem (benchmark_bump_mem, CLAMPED to the BENCHMARK_MEM_MAX
+#       ceiling so a retry never exceeds the nodes' RAM), via
+#       ${resubmit_fn} <label> <comma-separated datasets> <new
 #       mem> <new manifest path> — which must write the manifest, sbatch the
 #       reduced array (same flags/throttle as the normal submission) and echo
 #       ONLY the new array job id on stdout. Loop back with the new id/manifest;
@@ -296,7 +297,7 @@ benchmark_wait_oom_retry() {
   local MAX_ATTEMPTS=4
   local ATTEMPT=0
   local TASK_STATES OOM_TASKS=() BAD_TASK="" DS_CSV="" NEW_MEM="" NEW_MANIFEST="" NEW_ID=""
-  local JID STATE MASTER_STATE="" TASK_ROWS_FOUND=0 t ds_name
+  local JID STATE MASTER_STATE="" TASK_ROWS_FOUND=0 t ds_name CLAMPED=0
 
   while (( ATTEMPT < MAX_ATTEMPTS )); do
     benchmark_wait_array_terminal "${JOB_ID}" "${LABEL}"
@@ -357,8 +358,12 @@ $(benchmark_task_report "${JOB_ID}" "${MANIFEST}")"
     fi
     # OOM tasks: escalate memory, or fail closed at the ceiling. The
     # MaxRSS report (sacct --format=JobID,State,MaxRSS,Elapsed) documents
-    # how far the OOM'd attempt got.
-    if benchmark_mem_ge "${MEM}" "${BENCHMARK_MEM_MAX}" || ! NEW_MEM="$(benchmark_bump_mem "${MEM}")"; then
+    # how far the OOM'd attempt got. The doubled value is CLAMPED to the
+    # ceiling so a retry can never request more than the nodes fit (e.g.
+    # 512G = 524288 MB would never schedule on the 512000 MB shared-cpu
+    # nodes and the squeue poll has no timeout for a PENDING-forever retry);
+    # when the current mem is already at/above the ceiling, fail closed.
+    if benchmark_mem_ge "${MEM}" "${BENCHMARK_MEM_MAX}"; then
       echo "ERROR: Array Job ${JOB_ID} (${LABEL}) OOM'd at the ${BENCHMARK_MEM_MAX} memory ceiling; NOT syncing to NAS."
       sacct -j "${JOB_ID}" --format=JobID,JobName,State,MaxRSS,Elapsed
       notify_sync_status \
@@ -366,6 +371,18 @@ $(benchmark_task_report "${JOB_ID}" "${MANIFEST}")"
         "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID}: OUT_OF_MEMORY tasks at the ${BENCHMARK_MEM_MAX} ceiling (BENCHMARK_MEM_MAX).
 $(benchmark_oom_task_report "${JOB_ID}" "${MANIFEST}")"
       exit 1
+    fi
+    if ! NEW_MEM="$(benchmark_bump_mem "${MEM}")"; then
+      echo "ERROR: Array Job ${JOB_ID} (${LABEL}) has unparseable mem '${MEM}'; NOT syncing to NAS."
+      notify_sync_status \
+        "ECODA: benchmark NOT synced (unparseable mem)" \
+        "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID}: BENCHMARK_MEM '${MEM}' is not <N>G/<N>T."
+      exit 1
+    fi
+    CLAMPED=0
+    if benchmark_mem_ge "${NEW_MEM}" "${BENCHMARK_MEM_MAX}"; then
+      NEW_MEM="${BENCHMARK_MEM_MAX}"
+      CLAMPED=1
     fi
     DS_CSV=""
     for t in "${OOM_TASKS[@]}"; do
@@ -377,7 +394,11 @@ $(benchmark_oom_task_report "${JOB_ID}" "${MANIFEST}")"
       [[ -n "${DS_CSV}" ]] && DS_CSV+=","
       DS_CSV+="${ds_name}"
     done
-    echo "OOM escalation (${LABEL}): task(s) ${OOM_TASKS[*]} -> dataset(s) ${DS_CSV}; retrying with mem ${MEM} -> ${NEW_MEM} (attempt $((ATTEMPT + 1)) of ${MAX_ATTEMPTS})."
+    if [[ ${CLAMPED} -eq 1 ]]; then
+      echo "OOM escalation (${LABEL}): task(s) ${OOM_TASKS[*]} -> dataset(s) ${DS_CSV}; retrying with mem ${MEM} -> ${NEW_MEM} (clamped to BENCHMARK_MEM_MAX=${BENCHMARK_MEM_MAX}) (attempt $((ATTEMPT + 1)) of ${MAX_ATTEMPTS})."
+    else
+      echo "OOM escalation (${LABEL}): task(s) ${OOM_TASKS[*]} -> dataset(s) ${DS_CSV}; retrying with mem ${MEM} -> ${NEW_MEM} (attempt $((ATTEMPT + 1)) of ${MAX_ATTEMPTS})."
+    fi
     NEW_MANIFEST="${HPC_SCRATCH_DIR}/benchmark_manifest_${LABEL}_retry_$$.txt"
     NEW_ID="$("${RESUBMIT_FN}" "${LABEL}" "${DS_CSV}" "${NEW_MEM}" "${NEW_MANIFEST}")"
     if [[ -z "${NEW_ID}" ]]; then

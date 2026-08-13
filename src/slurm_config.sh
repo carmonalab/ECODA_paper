@@ -117,11 +117,15 @@ BENCHMARK_GPU_CPUS_PER_TASK=8
 BENCHMARK_CPU_CPUS_PER_TASK=16
 BENCHMARK_MEM="${BENCHMARK_MEM:-128G}"
 # Doubling ceiling for the benchmark submitters' OOM auto-escalation: an
-# OUT_OF_MEMORY task is re-submitted with doubled --mem (128G -> 256G -> 512G)
-# up to this ceiling, then the submitter fails closed. Must fit the node RAM
-# of the pinned benchmark partitions (shared-cpu/shared-gpu). Env-overridable
-# per command, e.g. BENCHMARK_MEM_MAX=256G ./1_submit_hpc_array.sh.
-BENCHMARK_MEM_MAX="${BENCHMARK_MEM_MAX:-512G}"
+# OUT_OF_MEMORY task is re-submitted with doubled --mem (128G -> 256G -> 500G),
+# with the doubled value CLAMPED to this ceiling — a retry never requests
+# more memory than the nodes fit (500G = 512000 MB = exactly the pinned
+# shared-cpu node RAM, so it only schedules on a fully idle big node; 512G =
+# 524288 MB would never fit and would hang the retry PENDING forever, which
+# the submitter's squeue poll has no timeout for). OOM at the ceiling fails
+# closed with a per-task MaxRSS report. Env-overridable per command, e.g.
+# BENCHMARK_MEM_MAX=256G ./1_submit_hpc_array.sh.
+BENCHMARK_MEM_MAX="${BENCHMARK_MEM_MAX:-500G}"
 BENCHMARK_GPU_ARRAY_THROTTLE=4   # 4 H200s on gpu006
 # Private node for _debug benchmark runs (not part of the pinned benchmark
 # hardware): pass --partition "${SLURM_PARTITION_PRIVATE}" to the submitter.

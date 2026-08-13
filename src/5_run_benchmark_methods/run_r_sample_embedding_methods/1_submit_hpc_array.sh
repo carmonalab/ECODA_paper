@@ -45,8 +45,8 @@ set -euo pipefail
 # via process_scitd_fig's full-matrix scITD container) can not self-requeue
 # (the task is dead), so the gates here run through
 # benchmark_wait_oom_retry: only the OOM'd tasks' datasets are re-submitted
-# with doubled --mem (128G -> 256G -> 512G) via submit_method_array_retry,
-# up to the BENCHMARK_MEM_MAX ceiling, before failing closed with an OOM
+# with doubled --mem (128G -> 256G -> 500G, clamped to the BENCHMARK_MEM_MAX
+# ceiling) via submit_method_array_retry, before failing closed with an OOM
 # report. Non-OOM failures fail closed exactly as before.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
