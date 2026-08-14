@@ -331,9 +331,11 @@ fi
 # non-OOM failures fail closed as before. The watchdog runs on a compute
 # node, so an SSH drop of this tail cannot interrupt the escalation.
 # ---------------------------------------------------------------------------
-for i in "${!ARRAY_JOB_IDS[@]}"; do
-  benchmark_wait_watchdog "${WATCHDOG_JOB_IDS[$i]}" "${ARRAY_JOB_METHODS[$i]}"
-done
+if [[ -z "${SYNC_ONLY_IDS}" ]]; then
+  for i in "${!ARRAY_JOB_IDS[@]}"; do
+    benchmark_wait_watchdog "${WATCHDOG_JOB_IDS[$i]}" "${ARRAY_JOB_METHODS[$i]}"
+  done
+fi
 
 # Labels for the exec-log merge = the submitted methods (includes the
 # auto-prepended prepare_pseudobulk, whose worker also writes a per-task log).

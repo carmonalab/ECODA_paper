@@ -290,10 +290,12 @@ fi
 # non-OOM failures fail closed as before. The watchdog runs on a compute
 # node, so an SSH drop of this tail cannot interrupt the escalation.
 # ---------------------------------------------------------------------------
-echo "=== Monitoring job completion ==="
-for i in "${!ARRAY_JOB_IDS[@]}"; do
-  benchmark_wait_watchdog "${WATCHDOG_JOB_IDS[$i]}" "${ARRAY_JOB_METHODS[$i]}"
-done
+if [[ -z "${SYNC_ONLY_IDS}" ]]; then
+  echo "=== Monitoring job completion ==="
+  for i in "${!ARRAY_JOB_IDS[@]}"; do
+    benchmark_wait_watchdog "${WATCHDOG_JOB_IDS[$i]}" "${ARRAY_JOB_METHODS[$i]}"
+  done
+fi
 
 # Labels for the exec-log merge = the submitted methods.
 benchmark_merge_sync_cleanup "${METHODS[@]}"
