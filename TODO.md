@@ -9,13 +9,13 @@ new_datasets_to_implement.md (kept as appendix, linked from Phase 5).
 
 ## Priority overview (from the 2026-07-29 revision plan, merged)
 
-- Prio 1: PILOT-GM-VAE (3.2); multi-batch benchmark with batch-mixing metrics
+- Prio 1: multi-batch benchmark with batch-mixing metrics
   (4.2); Ecotypes TNBC patient clustering (6.1); MrVI-vs-ECODA signal
   attribution (6.2); batch-correction impact on unsupervised annotation (4.5);
   clustering-resolution impact (6.5); Figure 3B marker-gene heatmap (6.3);
   zero-handling range extension (6.6); new datasets (Phase 5).
-- Prio 2: downsampling robustness (6.4); PULSAR/QOT/MOFA cellular (3.2);
-  batch-mixing quantification supp fig (4.2).
+- Prio 2: downsampling robustness (6.4); PULSAR (3.2, later step) /
+  MOFA cellular (3.2); batch-mixing quantification supp fig (4.2).
 - Response text only (no code): circularity per-dataset table, MrVI/scPoli
   objective mismatch, discovery-of-subgroups scope, translational-claim
   tone-down (6.12).
@@ -44,15 +44,27 @@ new_datasets_to_implement.md (kept as appendix, linked from Phase 5).
       After all datasets complete: verify NAS outputs (preprocessed h5ads +
       benchmark bundles), then resume 3.2 (new methods), 3.4 (docs), 3.5
       (SLURM config cleanup), and Phase 4.
-- [ ] **3.2 New methods**:
-      - PILOT-GM-VAE (Prio 1): add to `1.2_benchmark_methods_py.qmd` +
-        `constants.R` + R ingest; `X_pca_harmony` input for batch-effect views.
-        NOTE: the current `PILOT` method key is the plain-EMD variant
-        (`pl.tl.wasserstein_distance`, no GM-VAE) — use a distinct method key
-        (e.g. `PILOT-GM-VAE`).
-      - QOT (Prio 2; feasibility, deps from `QOT_PDAC_Example.ipynb`, no package).
-      - PULSAR (Prio 2; requirements test: UCE input, GPU/VRAM — may not be runnable).
-      - MOFA cellular (Prio 2, feasibility).
+- [x] **3.2 New methods** (DONE 2026-08-14, benchmark view; see
+      `.kilo/plans/1786651957910-pilotgm-qot-benchmark-implementation.md`):
+      - PILOT-GM-VAE (Prio 1) + QOT (Prio 2) implemented in
+        `1.1.1_benchmark_methods_py.py` (`--method qot|pilotgm`), vendored
+        `qot_utils_re.py` (PennShenLab/QOT @ 28cd529880c1, two hotfixes —
+        traceability in `docs/qot_hotfixes.md`), R ingest
+        (`process_qot_fig`/`process_pilotgm_fig`, keys `QOT_hvg{n}` /
+        `PILOT-GM-VAE_hvg{n}`), `constants.R` labels, HPC submitter arrays
+        (qot → CPU, pilotgm → GPU). NOTE: the current `PILOT` method key is
+        the plain-EMD variant (`pl.tl.wasserstein_distance`, no GM-VAE) —
+        `PILOT-GM-VAE` is a distinct key. Validation: `_debug` e2e on NAS
+        (both methods) + R ingest smoke test done locally; HPC validation
+        pending (see `docs/qot_hotfixes.md` / plan §6).
+      - Batch-effect view (`X_pca_harmony` input for PILOT-GM-VAE) stays
+        Phase 4 (`4.4` below).
+      - PULSAR (+UCE): LATER step, NOT included — foundation-model scale (UCE
+        1280-dim embeddings, multi-GB pretrained weights, PBMC-specific
+        pretrained checkpoints), unclear GPU/VRAM, out-of-domain for the
+        multi-tissue benchmark. Feasibility check needed; candidate for a
+        dedicated plan. See also 6.9.
+      - MOFA cellular (Prio 2, feasibility) still pending.
       - Method-annotation columns for figures: "originally designed for sample
         representation", "provides batch correction".
 - [x] **3.3 Notebook adaptation**: `benchmark_analysis.rmd` + `batch_effect_analysis.rmd`

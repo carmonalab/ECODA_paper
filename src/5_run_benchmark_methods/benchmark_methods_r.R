@@ -417,6 +417,30 @@ process_pilot_fig <- function(pilot_dist_file, labels) {
   return(create_result_bundle(feat_mat, labels))
 }
 
+# QOT processing (same layout as PILOT: sample x sample distance matrix,
+# plain DataFrame.to_feather() with the pandas index = sample names)
+process_qot_fig <- function(qot_dist_file, labels) {
+  arrow::set_cpu_count(1)
+  feat_mat <- arrow::read_feather(qot_dist_file) %>%
+    tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
+    as.data.frame()
+  arrow::set_cpu_count(parallelly::availableCores() - 2)
+  rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
+  return(create_result_bundle(feat_mat, labels))
+}
+
+# PILOT-GM-VAE processing (same layout as PILOT: sample x sample distance
+# matrix, plain DataFrame.to_feather() with the pandas index = sample names)
+process_pilotgm_fig <- function(pilotgm_dist_file, labels) {
+  arrow::set_cpu_count(1)
+  feat_mat <- arrow::read_feather(pilotgm_dist_file) %>%
+    tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
+    as.data.frame()
+  arrow::set_cpu_count(parallelly::availableCores() - 2)
+  rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
+  return(create_result_bundle(feat_mat, labels))
+}
+
 # ECODA-PB combo processing
 process_ecodapb_fig <- function(
   dist_mat_ecoda,

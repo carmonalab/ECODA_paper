@@ -1,12 +1,12 @@
-"""Python benchmark methods (MrVI, scPoli, PILOT) as a CLI script.
+"""Python benchmark methods (MrVI, scPoli, PILOT, QOT, PILOT-GM-VAE) as a CLI script.
 
 Replaces the logic of the archived notebook
 `1.2_benchmark_methods_py.qmd` (kept as reference; do NOT delete). Consumes
 the preprocessed benchmark view h5ad produced by
 `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py`:
 
-- PILOT consumes the stored obsm embedding `X_pca_{view}_hvg{n}` (the qmd
-  recomputed PCA from scratch);
+- PILOT/QOT/PILOT-GM-VAE consume the stored obsm embedding `X_pca_{view}_hvg{n}`
+  (the qmd recomputed PCA from scratch);
 - MrVI/scPoli subset genes via the stored `var["hvg_rank"]` (computed by
   `select_hvgs_ranked`, batch-aware) instead of re-running HVG selection —
   subset to HVGs FIRST, then point X at the raw counts layer
@@ -18,17 +18,30 @@ the preprocessed benchmark view h5ad produced by
 
 Feather naming, method-string format and data layout are preserved exactly
 from the qmd (the R ingest functions `process_mrvi_fig` /
-`process_scpoli_fig` / `process_pilot_fig`, `constants.R` label map and the
-notebook recodes depend on them): plain `DataFrame.to_feather()` with the
-pandas index (sample names) kept — the index is written as the last feather
-column, matching R's `column_to_rownames(ncol)`.
+`process_scpoli_fig` / `process_pilot_fig` / `process_qot_fig` /
+`process_pilotgm_fig`, `constants.R` label map and the notebook recodes
+depend on them): plain `DataFrame.to_feather()` with the pandas index (sample
+names) kept — the index is written as the last feather column, matching R's
+`column_to_rownames(ncol)`.
+
+QOT and PILOT-GM-VAE are extended methods (see the implementation plan
+`.kilo/plans/1786651957910-pilotgm-qot-benchmark-implementation.md`): QOT runs
+the vendored `qot_utils_re.py` (PennShenLab/QOT @ 28cd529880c1, one bug fix
+in `Gaussian_Mixture_Representation`), PILOT-GM-VAE runs the `pilotgm` PyPI
+package (CostaLab/PILOT-GM-VAE, BIB 2025). Both receive a distinct temp obs
+column (`_bench_prog` / `_bench_status`) instead of `"Sample"` for the
+status/progession argument: their `rename()` dicts collapse when the sample
+and status column are the same (duplicate dict key -> both columns renamed
+to 'status', no 'sampleID' survives -> KeyError in the GMM groupby). The
+temp column also keeps any bio label out of the distance path (no-leakage).
 
 Execution time (float seconds, method body only — excluding h5ad loading,
 like the qmd and R `exec_time()`) and peak RSS (`mem_GB`) are appended to a
 per-task log feather. One process per task writes the file, so no concurrency
 issues. Combos run defaults-first (MrVI_hvg2000, scPoli_hvg2000_dims15_highres,
-PILOT_hvg2000_highres) so the main-method rows are measured before any
-in-process memory bloat (peak RSS is monotonic within a process).
+PILOT_hvg2000_highres, QOT_hvg2000_highres, PILOT-GM-VAE_hvg2000_highres) so
+the main-method rows are measured before any in-process memory bloat (peak
+RSS is monotonic within a process).
 """
 
 import argparse
@@ -36,6 +49,7 @@ import gc
 import os
 import resource
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -69,6 +83,40 @@ def get_scpoli():
     from scarches.models.scpoli import scPoli
 
     return scPoli
+
+
+def get_pilotgm():
+    """Lazy import of pilotgm with a shim for its non-relative internal imports.
+
+    Upstream packaging bug (pilotgm 0.1.1): `pilotgm/model/GMVAE.py` does
+    `from networks.Networks import *` (also `losses`/`metrics`), but the
+    modules ship inside the package (`pilotgm/networks/...`), so a plain
+    `import pilotgm` fails with ModuleNotFoundError. The shim inserts the
+    pilotgm package directory into sys.path so the top-level names resolve.
+
+    The entry is left on sys.path ON PURPOSE: gmmvae_wasserstein_distance
+    dispatches `compute_emd` to loky workers via joblib, and unpickling the
+    task re-imports pilotgm in the worker. loky spawns copy the parent's
+    sys.path, so removing the entry after the import would break the worker
+    import ("failed to un-serialize" / ModuleNotFoundError: networks).
+    Collision check (py-cpu env, 2026-08-14): no other installed package
+    imports `core`, `model`, `networks`, `losses` or `metrics` top-level, so
+    the extra path entry is inert.
+    """
+    import importlib.metadata as md
+
+    pkg_dir = None
+    for f in md.files("pilotgm"):
+        if str(f).endswith("pilotgm/__init__.py"):
+            pkg_dir = f.locate().parent
+            break
+    if pkg_dir is None:
+        raise ImportError("pilotgm package files not found (importlib.metadata)")
+    if str(pkg_dir) not in sys.path:
+        sys.path.insert(0, str(pkg_dir))
+    import pilotgm
+
+    return pilotgm
 
 
 # ---------------------------------------------------------------------------
@@ -127,8 +175,9 @@ def scpoli_dims_for(n_hvg, res_label):
     return []
 
 
-def run_pilot_for(n_hvg, res_label):
-    """Whether PILOT runs for an (n_hvg, resolution) combo (qmd rules)."""
+def run_wass_combo_for(n_hvg, res_label):
+    """Whether a Wasserstein-distance method (PILOT/QOT/PILOT-GM-VAE) runs
+    for an (n_hvg, resolution) combo (qmd rules)."""
     if res_label == "_highres":
         return True
     return res_label == "_lowres" and n_hvg == 2000
@@ -136,7 +185,7 @@ def run_pilot_for(n_hvg, res_label):
 
 # Default (main-method) combos — constants.R method_label_map_main and the
 # notebook's exec-time figure: MrVI_hvg2000, scPoli_hvg2000_dims15_highres,
-# PILOT_hvg2000_highres.
+# PILOT_hvg2000_highres, QOT_hvg2000_highres, PILOT-GM-VAE_hvg2000_highres.
 DEFAULT_HVG = 2000
 DEFAULT_SCPOLI_DIM = 15
 DEFAULT_RES_LABEL = "_highres"
@@ -148,7 +197,7 @@ def is_default_combo(method, combo):
         return n == DEFAULT_HVG
     if method == "scpoli":
         return n == DEFAULT_HVG and res_label == DEFAULT_RES_LABEL and payload == DEFAULT_SCPOLI_DIM
-    if method == "pilot":
+    if method in ("pilot", "qot", "pilotgm"):
         return n == DEFAULT_HVG and res_label == DEFAULT_RES_LABEL
     return False
 
@@ -279,6 +328,146 @@ def run_pilot(adata, ct_col, view, n_hvg, output_path):
     adata.uns["EMD_df"].to_feather(output_path)
 
 
+def fill_unknown_ct(adata, ct_col, method):
+    """Fill NaN cell-type labels with an explicit "Unknown" class.
+
+    Same rationale as scPoli (see run_scpoli): the QOT script filters
+    `Cell_type != 'Unknown'` and NaN would otherwise leak into the GMM
+    groupby keys. No-op on complete columns.
+    """
+    n_na = int(adata.obs[ct_col].isna().sum())
+    if n_na:
+        print(f"Filling {n_na}/{adata.n_obs} missing values in '{ct_col}' "
+              f"with 'Unknown' ({method}).")
+        col = adata.obs[ct_col]
+        if isinstance(col.dtype, pd.CategoricalDtype):
+            col = col.cat.add_categories("Unknown")
+        adata.obs[ct_col] = col.fillna("Unknown")
+
+
+def run_qot(adata, ct_col, view, n_hvg, output_path):
+    """QOT Wasserstein sample distances on the preprocessed obsm PCA.
+
+    Runs the vendored qot_utils_re.py (PennShenLab/QOT @ 28cd529880c1, two
+    hotfixes in Gaussian_Mixture_Representation — see the file header and
+    docs/qot_hotfixes.md). Lazy import so the phate dependency is only
+    touched for QOT runs.
+    """
+    emb_key = f"X_pca_{view}_hvg{n_hvg}"
+    import qot_utils_re
+
+    fill_unknown_ct(adata, ct_col, "QOT")
+    # Distinct temp column: Extract_Info renames {type_cell, id, progession}
+    # in ONE dict — passing "Sample" for both id and progession collapses the
+    # duplicate dict key, BOTH columns get renamed to 'status', no 'sampleID'
+    # survives and the GMM groupby raises KeyError. The temp column also
+    # keeps bio labels out of the distance path.
+    adata.obs["_bench_prog"] = adata.obs["Sample"]
+    qot_utils_re.Run_QOT(
+        adata,
+        gene_matrix=emb_key,
+        type_cell=ct_col,
+        id_col="Sample",
+        progession="_bench_prog",
+        dataset_type="rna",
+        num_components_list=[1],
+        random_state=2,
+        min_samples_for_gmm=0,
+        qot_method="cosine",
+        normalized_set=False,
+    )
+    samples = adata.uns["Datafame_for_use"]["sampleID"].unique()
+    # Plain object strings: anndata obs columns are categorical by default and
+    # a categorical DataFrame index would be written to the feather as
+    # categorical (pyarrow 24/25 pandas-compat cannot read that back:
+    # "data type 'categorical' not understood"). PILOT's EMD_df index is
+    # plain object — keep the identical layout.
+    samples = np.asarray(samples, dtype=object)
+    df_dists = pd.DataFrame(
+        adata.uns["QOT_Distance"], index=samples, columns=samples
+    )
+    df_dists.to_feather(output_path)
+
+
+def run_pilotgm(adata, ct_col, view, n_hvg, output_path, ds_name, device):
+    """PILOT-GM-VAE Wasserstein sample distances on the preprocessed obsm PCA.
+
+    Runs the `pilotgm` PyPI package (CostaLab/PILOT-GM-VAE, BIB 2025):
+    `train_gmvae` (50 epochs, num_classes = n unique cell types) then
+    `gmmvae_wasserstein_distance`. The whole pilotgm block runs inside a
+    node-local tempdir: `train_gmvae` hardcodes `./trained_models/<ds>/` and
+    saves weights — running it from the repo root (worker cwd on HPC) would
+    pollute the repo, and running it from the scratch output dir would
+    pollute the NAS sync (the submit tail rsyncs benchmark/ wholesale).
+    Weights are ephemeral by design (load_weights=False; retries re-train
+    from scratch).
+    """
+    emb_key = f"X_pca_{view}_hvg{n_hvg}"
+    emb = adata.obsm[emb_key]
+    # train_gmvae needs torch.tensor(obsm[key]) (fails on a pandas
+    # DataFrame: "could not determine the shape of object type 'DataFrame'"
+    # with torch >= 2.x), while extract_data_anno_scRNA_from_h5ad (in the
+    # distance step) needs `.columns`. Store the plain ndarray for training,
+    # swap in the named-columns DataFrame only for
+    # gmmvae_wasserstein_distance — a DataFrame at that point is also
+    # joblib-picklable (a __main__-defined ndarray subclass broke loky's
+    # task serialization).
+    if hasattr(emb, "columns"):
+        emb = np.asarray(emb)
+    adata.obsm[emb_key] = emb
+
+    fill_unknown_ct(adata, ct_col, "PILOT-GM-VAE")
+    num_classes = max(2, int(adata.obs[ct_col].nunique()))
+    # Distinct temp column for `status`: same duplicate-key rename bug as QOT
+    # (gmmvae_wasserstein_distance renames the last three columns via a dict;
+    # sample_col == status == "Sample" would collapse the keys).
+    adata.obs["_bench_status"] = adata.obs["Sample"]
+
+    pilotgm = get_pilotgm()
+    # Plain `device == "cuda"` would silently run CPU on GPU nodes under the
+    # default --device auto.
+    use_cuda = device == "cuda" or (device == "auto" and torch.cuda.is_available())
+
+    cwd = os.getcwd()
+    tmp_dir = tempfile.mkdtemp(prefix="pilotgm_")
+    try:
+        os.chdir(tmp_dir)
+        pilotgm.train_gmvae(
+            adata,
+            dataset_name=ds_name,
+            pca_key=emb_key,
+            labels_column=None,
+            epochs=50,
+            num_classes=num_classes,
+            cuda=use_cuda,
+            gpuID=0,
+            load_weights=False,
+            save_model=True,
+            seed=1,
+        )
+        # Swap in the named-columns DataFrame for the distance step (see
+        # the comment at the top of this function).
+        adata.obsm[emb_key] = pd.DataFrame(
+            emb,
+            index=adata.obs_names,
+            columns=[f"PCA_{i + 1}" for i in range(emb.shape[1])],
+        )
+        # num_components is recomputed inside from `component_assignment`
+        # when wass_dis=True; keep defaults for the rest.
+        pilotgm.gmmvae_wasserstein_distance(
+            adata,
+            emb_matrix=emb_key,
+            clusters_col="component_assignment",
+            sample_col="Sample",
+            status="_bench_status",
+            wass_dis=True,
+            covariance_type="full",
+        )
+    finally:
+        os.chdir(cwd)
+    adata.uns["EMD_df"].to_feather(output_path)
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -327,14 +516,15 @@ def process_dataset(args, ds_name, entry):
                     )
                     combos.append((n, res_label, ct_col, dim, run_scpoli, out_name))
 
-    elif args.method == "pilot":
+    elif args.method in ("pilot", "qot", "pilotgm"):
+        suffix = {"pilot": "pilot", "qot": "qot", "pilotgm": "pilotgm"}[args.method]
         for res_label, ct_col in (("_lowres", lowres_col), ("_highres", highres_col)):
             if ct_col is None:
                 continue
             for n in args.hvg:
-                if run_pilot_for(n, res_label):
-                    out_name = f"{ds_name}_hvg{n}{res_label}_pilot_dists.feather"
-                    combos.append((n, res_label, ct_col, None, run_pilot, out_name))
+                if run_wass_combo_for(n, res_label):
+                    out_name = f"{ds_name}_hvg{n}{res_label}_{suffix}_dists.feather"
+                    combos.append((n, res_label, ct_col, None, None, out_name))
 
     # Defaults-first ordering: ru_maxrss peak RSS is monotonic within a
     # process, so combos run earlier report the least bloated mem_GB (memory
@@ -382,11 +572,16 @@ def process_dataset(args, ds_name, entry):
             )
 
         # Exact legacy method strings (constants.R + notebook recodes depend
-        # on them): MrVI_hvg{n}, scPoli_hvg{n}_dims{d}{res}, PILOT_hvg{n}{res}.
+        # on them): MrVI_hvg{n}, scPoli_hvg{n}_dims{d}{res},
+        # PILOT_hvg{n}{res}, QOT_hvg{n}{res}, PILOT-GM-VAE_hvg{n}{res}.
         if args.method == "mrvi":
             method_str = f"MrVI_hvg{n}"
         elif args.method == "scpoli":
             method_str = f"scPoli_hvg{n}_dims{payload}{res_label}"
+        elif args.method == "qot":
+            method_str = f"QOT_hvg{n}{res_label}"
+        elif args.method == "pilotgm":
+            method_str = f"PILOT-GM-VAE_hvg{n}{res_label}"
         else:
             method_str = f"PILOT_hvg{n}{res_label}"
 
@@ -396,6 +591,10 @@ def process_dataset(args, ds_name, entry):
             run_mrvi(sub, args.device, out_path)
         elif args.method == "scpoli":
             run_scpoli(sub, ct_col, payload, out_path)
+        elif args.method == "qot":
+            run_qot(sub, ct_col, args.view, n, out_path)
+        elif args.method == "pilotgm":
+            run_pilotgm(sub, ct_col, args.view, n, out_path, ds_name, args.device)
         else:
             run_pilot(sub, ct_col, args.view, n, out_path)
         exec_time = time.time() - start_time
@@ -408,8 +607,8 @@ def process_dataset(args, ds_name, entry):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run Python benchmark methods (MrVI/scPoli/PILOT) on a "
-                    "preprocessed benchmark view h5ad."
+        description="Run Python benchmark methods (MrVI/scPoli/PILOT/QOT/"
+                    "PILOT-GM-VAE) on a preprocessed benchmark view h5ad."
     )
     parser.add_argument("--config_path", required=True,
                         help="Path to datasets.json")
@@ -418,7 +617,7 @@ def main():
     parser.add_argument("--view", default="benchmark_analysis",
                         help="View name (default: benchmark_analysis)")
     parser.add_argument("--method", required=True,
-                        choices=["mrvi", "scpoli", "pilot"],
+                        choices=["mrvi", "scpoli", "pilot", "qot", "pilotgm"],
                         help="Benchmark method to run")
     parser.add_argument("--input_dir", required=True,
                         help="Directory holding the preprocessed view h5ad")

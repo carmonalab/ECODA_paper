@@ -61,3 +61,8 @@ plots/
 
 # Python bytecode
 __pycache__/
+
+# pilotgm's hardcoded relative model dir (train_gmvae writes
+# ./trained_models/<dataset_name>/; the benchmark wrapper chdirs into a
+# tempdir so this should never appear, belt-and-braces)
+trained_models/

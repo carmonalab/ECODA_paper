@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# Submit Python benchmark method arrays (MrVI/scPoli on GPU, PILOT on CPU)
+# Submit Python benchmark method arrays (MrVI/scPoli/PILOT-GM-VAE on GPU,
+# PILOT/QOT on CPU)
 #
 # Usage:
 #   ./1_submit_hpc_array.sh                                    # all methods, all benchmark datasets
@@ -17,8 +18,8 @@ set -euo pipefail
 # (written by this script, one dataset per line; PID suffix so overlapping
 # submissions do not clobber queued arrays' manifests). Hardware is PINNED for
 # runtime comparability (see slurm_config.sh benchmark vars): GPU methods
-# (mrvi, scpoli) on ${SLURM_PARTITION_BENCHMARK_GPU} with
-# ${BENCHMARK_GPU_CONSTRAINT}, PILOT on ${SLURM_PARTITION_BENCHMARK_CPU} with
+# (mrvi, scpoli, pilotgm) on ${SLURM_PARTITION_BENCHMARK_GPU} with
+# ${BENCHMARK_GPU_CONSTRAINT}, PILOT/QOT on ${SLURM_PARTITION_BENCHMARK_CPU} with
 # ${BENCHMARK_CPU_CONSTRAINT}. Flags are passed on the sbatch command line
 # (SLURM directives do not expand env vars). An explicit --partition <P>
 # override (e.g. --partition ${SLURM_PARTITION_PRIVATE} for _debug runs on the
@@ -125,7 +126,7 @@ export FORCE_BENCHMARK="${FORCE_ARG}"
 # ---------------------------------------------------------------------------
 benchmark_resolve_datasets "${DS_NAME_ARG}"
 
-METHODS=(mrvi scpoli pilot)
+METHODS=(mrvi scpoli pilot qot pilotgm)
 if [[ -n "${METHODS_ARG}" ]]; then
   IFS=',' read -r -a METHODS <<< "${METHODS_ARG}"
 fi
@@ -178,21 +179,21 @@ py_method_spec() {
   PY_METHOD_THROTTLE=""
   PY_METHOD_FLAGS=()
   case "${METHOD}" in
-    mrvi|scpoli)
+    mrvi|scpoli|pilotgm)
       PY_METHOD_PARTITION="${SLURM_PARTITION_BENCHMARK_GPU}"
       PY_METHOD_FLAGS=(--gpus="${BENCHMARK_GPU_COUNT}"
                        --constraint="${BENCHMARK_GPU_CONSTRAINT}"
                        --cpus-per-task="${BENCHMARK_GPU_CPUS_PER_TASK}")
       PY_METHOD_THROTTLE="${BENCHMARK_GPU_ARRAY_THROTTLE}"
       ;;
-    pilot)
+    pilot|qot)
       PY_METHOD_PARTITION="${SLURM_PARTITION_BENCHMARK_CPU}"
       PY_METHOD_FLAGS=(--constraint="${BENCHMARK_CPU_CONSTRAINT}"
                        --cpus-per-task="${BENCHMARK_CPU_CPUS_PER_TASK}")
       PY_METHOD_THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
       ;;
     *)
-      echo "ERROR: Unknown method '${METHOD}' (expected mrvi, scpoli or pilot)." >&2
+      echo "ERROR: Unknown method '${METHOD}' (expected mrvi, scpoli, pilot, qot or pilotgm)." >&2
       exit 1
       ;;
   esac

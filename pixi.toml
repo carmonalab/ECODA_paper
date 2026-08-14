@@ -85,6 +85,13 @@ magic-impute = "*"
 # without it MOFA runs fail with "mofapy2_0.7.3 is not detected in the
 # specified python binary".
 mofapy2 = "==0.7.3"
+# PILOT-GM-VAE benchmark method (CostaLab/PILOT-GM-VAE, BIB 2025); deps
+# (torch/numba/joblib/pilotpy/scanpy/sklearn) already in the lockfile.
+pilotgm = "==0.1.1"
+# Module-level import of the vendored QOT script (qot_utils_re.py,
+# PennShenLab/QOT); only used by its trajectory_analysis function, which we
+# never call, but the import must resolve.
+phate = ">=1.0,<2"
 
 
 # ==========================================

@@ -12,11 +12,11 @@ Single-cell RNA sequencing (scRNA-seq) enables high-resolution characterization
 of cellular heterogeneity, but summarizing this data for cohort-level analysis
 remains a challenge. Using **14 scRNA-seq datasets** (11 benchmark +
 batch-effect cohorts; see [datasets.json](datasets.json) for the authoritative
-list), we benchmarked seven state-of-the-art sample representation
-methods—**MOFA+, scITD, GloScope, GloProp, MrVI, PILOT, scPoli**—plus two
-baselines (**Pseudobulk** and cell-type composition via **ECODA**). The
-benchmark evaluates their ability to recover known biological groupings in a
-fully unsupervised setting.
+list), we benchmarked nine state-of-the-art sample representation
+methods—**MOFA+, scITD, GloScope, GloProp, MrVI, PILOT, PILOT-GM-VAE, QOT,
+scPoli**—plus two baselines (**Pseudobulk** and cell-type composition via
+**ECODA**). The benchmark evaluates their ability to recover known biological
+groupings in a fully unsupervised setting.
 
 ### Key Findings
 
@@ -154,8 +154,8 @@ Running the pipeline:
   ```
 
 - **Benchmark methods** (`src/5_run_benchmark_methods/`):
-  - **Python methods** (`run_python_sample_embedding_methods/`): MrVI, scPoli
-    (GPU), PILOT (CPU).
+  - **Python methods** (`run_python_sample_embedding_methods/`): MrVI, scPoli,
+    PILOT-GM-VAE (GPU), PILOT, QOT (CPU).
     ```bash
     ./src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh
     ```

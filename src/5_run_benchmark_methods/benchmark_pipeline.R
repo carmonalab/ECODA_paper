@@ -698,6 +698,26 @@ run_benchmark_analysis <- function(
       labels
     )
 
+    # --- QOT (Runs once per HVG) ---
+    qot_dist_file <- file.path(
+      path_data,
+      paste0(ds, "_hvg", i, "_highres_qot_dists.feather")
+    )
+    res_list[[paste0("QOT_hvg", i)]] <- process_qot_fig(
+      qot_dist_file = qot_dist_file,
+      labels
+    )
+
+    # --- PILOT-GM-VAE (Runs once per HVG) ---
+    pilotgm_dist_file <- file.path(
+      path_data,
+      paste0(ds, "_hvg", i, "_highres_pilotgm_dists.feather")
+    )
+    res_list[[paste0("PILOT-GM-VAE_hvg", i)]] <- process_pilotgm_fig(
+      pilotgm_dist_file = pilotgm_dist_file,
+      labels
+    )
+
     scpoli_emb_file <- file.path(
       path_data,
       paste0(ds, "_hvg", i, "_highres_scpoli_dims15_embs.feather")
@@ -738,6 +758,24 @@ run_benchmark_analysis <- function(
       )
       res_list[[paste0("PILOT_hvg", i, "_lowres")]] <- process_pilot_fig(
         pilot_dist_file = pilot_dist_file,
+        labels
+      )
+
+      qot_dist_file <- file.path(
+        path_data,
+        paste0(ds, "_hvg", i, "_lowres_qot_dists.feather")
+      )
+      res_list[[paste0("QOT_hvg", i, "_lowres")]] <- process_qot_fig(
+        qot_dist_file = qot_dist_file,
+        labels
+      )
+
+      pilotgm_dist_file <- file.path(
+        path_data,
+        paste0(ds, "_hvg", i, "_lowres_pilotgm_dists.feather")
+      )
+      res_list[[paste0("PILOT-GM-VAE_hvg", i, "_lowres")]] <- process_pilotgm_fig(
+        pilotgm_dist_file = pilotgm_dist_file,
         labels
       )
 
