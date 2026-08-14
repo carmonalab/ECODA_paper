@@ -126,6 +126,14 @@ BENCHMARK_MEM="${BENCHMARK_MEM:-128G}"
 # closed with a per-task MaxRSS report. Env-overridable per command, e.g.
 # BENCHMARK_MEM_MAX=256G ./1_submit_hpc_array.sh.
 BENCHMARK_MEM_MAX="${BENCHMARK_MEM_MAX:-500G}"
+# Compute-node watchdog jobs (watchdog_main.sh, one per method array): own the
+# terminal wait + OOM escalation so an SSH drop of the login tail cannot
+# interrupt escalation. 1 cpu / 2G jobs on the method's partition (no
+# constraint pin). WATCHDOG_TIME_LIMIT bounds them — the 12h default is the
+# shared-* partition MaxTime (the workers' #SBATCH --time=12:00:00 is the
+# partition max); a higher value is rejected by sbatch at submit time, so it
+# must never be set above the target partition's MaxTime.
+WATCHDOG_TIME_LIMIT="${WATCHDOG_TIME_LIMIT:-12:00:00}"
 BENCHMARK_GPU_ARRAY_THROTTLE=4   # 4 H200s on gpu006
 # Private node for _debug benchmark runs (not part of the pinned benchmark
 # hardware): pass --partition "${SLURM_PARTITION_PRIVATE}" to the submitter.

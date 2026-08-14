@@ -9,7 +9,8 @@ set -euo pipefail
 #   ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh --methods mofa --force
 #   ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh --partition debug-cpu
 #   ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh --sync-only 12345,12346   # resume: skip submission, re-check + sync
-#                                                                                                              # (repeat the original --ds_name/--methods flags)
+#                                                                                                              # (repeat the original --ds_name/--methods flags;
+#                                                                                                              #  watchdog ids resume via their status files)
 #
 # One SLURM array per method; array task IDs map 1:1 to lines of the
 # per-method manifest ${HPC_SCRATCH_DIR}/benchmark_manifest_<method>_<pid>.txt
@@ -24,30 +25,30 @@ set -euo pipefail
 # non-pinned hardware; keeping the constraint would hang jobs PENDING forever
 # on nodes whose CPU differs).
 #
-# Submit order: prepare_pseudobulk array FIRST, waited until it leaves the
-# scheduler, then gated on ARTIFACT COMPLETENESS (all PB_VARIANT_NAMES
-# variants present in benchmark/pseudobulks/ per dataset — the mofa/pseudobulk
-# workers only consume those files, with an on-the-fly fallback for missing
-# ones) instead of strict task states: a prep task that failed on a transient
-# node issue (stale BeeGFS view -> "missing from the pixi environment") must
-# not block the method arrays when its variants already exist on disk. The
-# strict fail-closed sacct gate applies only under --force (prep must
-# recompute) or when variant files are actually missing — both strict paths
-# are OOM-AWARE (see below). THEN the mofa/pseudobulk arrays (and
-# gloscope/scitd) are submitted, waited + gated the same way. If mofa or
-# pseudobulk is requested without prepare_pseudobulk it is auto-prepended.
-# After all arrays complete the shared merge/sync/cleanup tail runs (NAS
-# reachability check -> RDS integrity sidecar -> fail-closed sacct gate ->
-# merge per-task exec logs -> sync to NAS -> only then delete per-task
-# logs) — see benchmark_submit_common.sh.
+# Submit order: prepare_pseudobulk array FIRST with its own compute-node
+# WATCHDOG (soft-gate mode: gated on ARTIFACT COMPLETENESS — all
+# PB_VARIANT_NAMES variants present in benchmark/pseudobulks/ per dataset —
+# instead of strict task states, so a prep task that failed on a transient
+# node issue must not block the method arrays when its variants already exist
+# on disk; the strict OOM-aware sacct gate applies only under --force or when
+# variant files are actually missing), waited via its watchdog id. THEN the
+# mofa/pseudobulk arrays (and gloscope/scitd) are submitted, each with its own
+# strict watchdog, and waited the same way. If mofa or pseudobulk is requested
+# without prepare_pseudobulk it is auto-prepended. Every gate + OOM escalation
+# runs in the watchdog jobs (compute nodes) so an SSH drop of this login tail
+# can never interrupt an escalation; this tail only waits for the watchdog
+# jobs and then runs the shared merge/sync/cleanup tail (NAS reachability
+# check -> RDS integrity sidecar -> merge per-task exec logs -> sync to NAS ->
+# only then delete per-task logs) — see benchmark_submit_common.sh.
 #
 # OOM auto-escalation: an OUT_OF_MEMORY task (e.g. scitd on a large dataset
 # via process_scitd_fig's full-matrix scITD container) can not self-requeue
-# (the task is dead), so the gates here run through
-# benchmark_wait_oom_retry: only the OOM'd tasks' datasets are re-submitted
-# with doubled --mem (128G -> 256G -> 500G, clamped to the BENCHMARK_MEM_MAX
-# ceiling) via submit_method_array_retry, before failing closed with an OOM
-# report. Non-OOM failures fail closed exactly as before.
+# (the task is dead), so each watchdog (watchdog_main.sh, submitted via
+# benchmark_submit_watchdog) re-submits only the OOM'd tasks' datasets with
+# doubled --mem (128G -> 256G -> 500G, clamped to the BENCHMARK_MEM_MAX
+# ceiling), before failing closed with an OOM report in its status file; the
+# tail's benchmark_wait_watchdog reads the file and emails on FAIL.
+# Non-OOM failures fail closed exactly as before.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../slurm_config.sh"
@@ -195,91 +196,43 @@ fi
 mkdir -p "${LOGS_DIR}"
 
 # ---------------------------------------------------------------------------
-# prepare_pseudobulk gate: artifact-based (soft) with strict fallback.
-#
-# The mofa/pseudobulk workers consume ONLY the shared variant files in
-# ${HPC_SCRATCH_DIR}/benchmark/pseudobulks/ (with an on-the-fly fallback for
-# missing variants), so a prep task that failed on a transient node issue
-# (stale BeeGFS view -> "missing from the pixi environment") while all its
-# variants already exist on disk must NOT block the method arrays. Wait for
-# the array to leave the scheduler (same squeue poll as
-# benchmark_wait_for_array), then check artifact completeness; if every
-# variant exists per dataset, proceed without the strict task-state gate.
-# Under --force the prep tasks MUST recompute, so the strict gate always
-# applies; when variant files are missing (or PB_VARIANT_NAMES cannot be
-# parsed) the OOM-aware gate applies instead of the plain strict one:
-# OUT_OF_MEMORY prep tasks are re-submitted with doubled --mem (only those
-# datasets), all-COMPLETED passes, non-OOM failures fail closed. The soft
-# gate is NOT used in --sync-only mode (all provided job ids are gated
-# strictly there).
-# PB_VARIANT_NAMES (benchmark_hpc_utils.R) is the single source of truth;
-# parsed here so no second list has to be maintained.
-# ---------------------------------------------------------------------------
-benchmark_wait_prep_array() {
-  local JOB_ID="$1"
-  local PREP_MANIFEST="${HPC_SCRATCH_DIR}/benchmark_manifest_prepare_pseudobulk_$$.txt"
-  echo "=== Monitoring prepare_pseudobulk array ${JOB_ID} ==="
-  # Block until the job leaves the scheduler (same poll as the shared gate).
-  while squeue -u "$USER" -h -o "%A" 2>/dev/null | grep -qx "${JOB_ID}"; do
-    sleep 60
-  done
-  echo "prepare_pseudobulk array ${JOB_ID} left the scheduler."
-
-  if [[ ${FORCE_ARG} -eq 1 ]]; then
-    echo "prepare_pseudobulk: --force requested; applying the strict task-state gate."
-    benchmark_wait_for_array "${JOB_ID}" "prepare_pseudobulk"
-    return 0
-  fi
-
-  local PB_DIR="${HPC_SCRATCH_DIR}/benchmark/pseudobulks"
-  local PB_VARIANTS
-  PB_VARIANTS="$(sed -n '/^PB_VARIANT_NAMES <- c(/,/^)/p' \
-    "${SCRIPT_DIR}/../benchmark_hpc_utils.R" | grep -oE '"[a-zA-Z0-9_.]+"' | tr -d '"')"
-  if [[ -z "${PB_VARIANTS}" ]]; then
-    echo "WARNING: could not parse PB_VARIANT_NAMES from benchmark_hpc_utils.R; applying the OOM-aware task-state gate."
-    benchmark_wait_oom_retry "${JOB_ID}" "prepare_pseudobulk" submit_method_array_retry "${PREP_MANIFEST}"
-    return 0
-  fi
-
-  local MISSING=()
-  local DS V
-  for DS in "${DATASET_NAMES[@]}"; do
-    for V in ${PB_VARIANTS}; do
-      if [[ ! -f "${PB_DIR}/${DS}_pseudobulk_${V}.rds" ]]; then
-        MISSING+=("${DS}/${V}")
-      fi
-    done
-  done
-  if [[ ${#MISSING[@]} -eq 0 ]]; then
-    echo "prepare_pseudobulk: all $(wc -w <<< "${PB_VARIANTS}" | tr -d ' ') variants x ${NUM_DATASETS} datasets present in ${PB_DIR}; skipping the task-state gate."
-    # Visibility only: show non-COMPLETED tasks without failing (best-effort;
-    # sacct may be empty or the master line may itself be COMPLETED).
-    sacct -j "${JOB_ID}" --format=JobID,State,ExitCode -n 2>/dev/null \
-      | grep -v 'COMPLETED' | sed 's/^/  note: /' || true
-    return 0
-  fi
-  echo "prepare_pseudobulk: missing variant file(s): ${MISSING[*]}; applying the OOM-aware task-state gate."
-  benchmark_wait_oom_retry "${JOB_ID}" "prepare_pseudobulk" submit_method_array_retry "${PREP_MANIFEST}"
-}
-
-# ---------------------------------------------------------------------------
-# Submit one array per method (prepare_pseudobulk first, then the rest)
+# Submit one array per method (prepare_pseudobulk first, then the rest), each
+# with its own compute-node watchdog (benchmark_submit_watchdog): the
+# watchdog owns the terminal wait + gate + OOM escalation (survives SSH drops
+# of this login tail), and this tail gates on the watchdog id via
+# benchmark_wait_watchdog.
 # ---------------------------------------------------------------------------
 if [[ -n "${SYNC_ONLY_IDS}" ]]; then
   echo "=== Sync-only resume mode: jobs ${SYNC_ONLY_IDS} (no submission, no prepare_pseudobulk wait) ==="
   IFS=',' read -r -a ARRAY_JOB_IDS <<< "${SYNC_ONLY_IDS}"
+  # Watchdog ids resume via their status files (wait + read STATE); array ids
+  # keep the strict all-rows gate.
+  for i in "${!ARRAY_JOB_IDS[@]}"; do
+    JOB_ID="${ARRAY_JOB_IDS[$i]}"
+    STATUS_FILE="${WATCHDOG_STATUS_DIR}/${JOB_ID}.status"
+    if [[ -f "${STATUS_FILE}" ]]; then
+      SYNC_LABEL="$(grep -E '^LABEL=' "${STATUS_FILE}" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+      echo "  Job ${JOB_ID}: watchdog status file found; gating via the watchdog."
+      benchmark_wait_watchdog "${JOB_ID}" "${SYNC_LABEL:-watchdog}"
+    else
+      benchmark_wait_for_array "${JOB_ID}" ""
+    fi
+  done
 else
 echo "=== Submitting R benchmark method arrays ==="
 
 # Prints ONLY the array job id on stdout (progress goes to stderr) so the
 # caller can capture the id with $(...) — a multi-line capture would break
-# the sacct gate in benchmark_wait_oom_retry.
+# the sacct gates downstream.
 #
-# Retry-capable: the OOM auto-escalation loop (benchmark_wait_oom_retry)
-# re-invokes this with a comma-separated REDUCED dataset list, a doubled
-# --mem and a fresh manifest path (only the OOM'd datasets; array task ids
-# map 1:1 to its lines via the existing sed -n mechanism — no worker changes
-# needed). Flags/partition/throttle are identical to the normal submission.
+# Retry-capable: the OOM auto-escalation loop inside the per-method watchdog
+# (watchdog_main.sh -> benchmark_wait_oom_retry) re-invokes ITS OWN closure
+# with a comma-separated REDUCED dataset list, a doubled --mem and a fresh
+# manifest path (only the OOM'd datasets; array task ids map 1:1 to its lines
+# via the existing sed -n mechanism — no worker changes needed). This
+# submit-side function is used only for the normal full-dataset submission
+# (submit_method_array below); flags/partition/throttle mirror the watchdog's
+# forwarded spec.
 submit_method_array_retry() {
   local METHOD="$1"
   local DS_CSV="$2"
@@ -331,6 +284,7 @@ submit_method_array() {
 PREP_JOB_ID=""
 ARRAY_JOB_IDS=()
 ARRAY_JOB_METHODS=()
+WATCHDOG_JOB_IDS=()
 
 for METHOD in "${METHODS[@]}"; do
   if [[ "${METHOD}" == "prepare_pseudobulk" ]]; then
@@ -339,30 +293,46 @@ for METHOD in "${METHODS[@]}"; do
   fi
 done
 
-# prepare_pseudobulk must complete before the mofa/pseudobulk arrays start;
-# the gate is artifact-based (soft) with an OOM-aware fail-closed fallback.
+# prepare_pseudobulk must complete before the mofa/pseudobulk arrays start.
+# Its soft-gate watchdog (artifact completeness pass first, strict OOM-aware
+# fallback) owns the gate; this tail blocks on the watchdog id. FORCE_ARG is
+# exported as FORCE_BENCHMARK above, so the watchdog applies the strict gate
+# under --force.
 if [[ -n "${PREP_JOB_ID}" ]]; then
-  benchmark_wait_prep_array "${PREP_JOB_ID}"
+  PREP_WATCHDOG_ID="$(benchmark_submit_watchdog \
+    "${PREP_JOB_ID}" "prepare_pseudobulk" \
+    "${HPC_SCRATCH_DIR}/benchmark_manifest_prepare_pseudobulk_$$.txt" \
+    soft-gate "${PARTITION}" "${MAX_NUM_CHUNKS_PARALLEL}" \
+    "5_benchmark_r_prepare_pseudobulk" "${SCRIPT_DIR}/1.1_run_worker.sh" \
+    "${EXTRA_FLAGS[@]}")"
+  benchmark_wait_watchdog "${PREP_WATCHDOG_ID}" "prepare_pseudobulk"
 fi
 
 for METHOD in "${METHODS[@]}"; do
   if [[ "${METHOD}" == "prepare_pseudobulk" ]]; then
     continue
   fi
-  ARRAY_JOB_IDS+=("$(submit_method_array "${METHOD}")")
+  NEW_ARRAY_ID="$(submit_method_array "${METHOD}")"
+  ARRAY_JOB_IDS+=("${NEW_ARRAY_ID}")
   ARRAY_JOB_METHODS+=("${METHOD}")
+  WATCHDOG_JOB_IDS+=("$(benchmark_submit_watchdog \
+    "${NEW_ARRAY_ID}" "${METHOD}" \
+    "${HPC_SCRATCH_DIR}/benchmark_manifest_${METHOD}_$$.txt" \
+    strict "${PARTITION}" "${MAX_NUM_CHUNKS_PARALLEL}" \
+    "5_benchmark_r_${METHOD}" "${SCRIPT_DIR}/1.1_run_worker.sh" \
+    "${EXTRA_FLAGS[@]}")")
 done
 fi
 
 # ---------------------------------------------------------------------------
 # Monitor & verify & sync results back to NAS (shared tail).
-# Each array is gated OOM-aware: an OUT_OF_MEMORY task's dataset is
-# re-submitted with doubled --mem (submit_method_array_retry, ceiling
-# BENCHMARK_MEM_MAX); non-OOM failures fail closed as before.
+# Each array is gated via its watchdog: an OUT_OF_MEMORY task's dataset is
+# re-submitted by the watchdog with doubled --mem (ceiling BENCHMARK_MEM_MAX);
+# non-OOM failures fail closed as before. The watchdog runs on a compute
+# node, so an SSH drop of this tail cannot interrupt the escalation.
 # ---------------------------------------------------------------------------
 for i in "${!ARRAY_JOB_IDS[@]}"; do
-  benchmark_wait_oom_retry "${ARRAY_JOB_IDS[$i]}" "${ARRAY_JOB_METHODS[$i]}" \
-    submit_method_array_retry "${HPC_SCRATCH_DIR}/benchmark_manifest_${ARRAY_JOB_METHODS[$i]}_$$.txt"
+  benchmark_wait_watchdog "${WATCHDOG_JOB_IDS[$i]}" "${ARRAY_JOB_METHODS[$i]}"
 done
 
 # Labels for the exec-log merge = the submitted methods (includes the

@@ -9,7 +9,8 @@ set -euo pipefail
 #   ./1_submit_hpc_array.sh --methods mrvi,scpoli --force      # recompute existing feathers
 #   ./1_submit_hpc_array.sh --partition debug-cpu              # override per-method partitions (drops the constraint pin)
 #   ./1_submit_hpc_array.sh --sync-only 12345,12346            # resume: skip submission, re-check + sync
-#                                                              # (repeat the original --ds_name/--methods flags)
+#                                                              # (repeat the original --ds_name/--methods flags;
+#                                                              #  watchdog ids resume via their status files)
 #
 # One SLURM array per method; array task IDs map 1:1 to lines of the
 # per-method manifest ${HPC_SCRATCH_DIR}/benchmark_manifest_<method>_<pid>.txt
@@ -26,17 +27,21 @@ set -euo pipefail
 # choice means the user accepts non-pinned hardware; keeping the constraint
 # would otherwise hang jobs PENDING forever on nodes whose CPU/GPU differ.
 # After all arrays complete:
-# NAS reachability check -> fail-closed sacct gate -> merge per-task exec
-# logs (job-id scoped, existing-log continuity) -> sync to NAS -> only then
-# delete this run's per-task logs.
+# NAS reachability check -> merge per-task exec logs (job-id scoped,
+# existing-log continuity) -> sync to NAS -> only then delete this run's
+# per-task logs.
 #
-# OOM auto-escalation: an OUT_OF_MEMORY task cannot self-requeue (the task is
-# dead), so the monitor tail gates each array OOM-aware via
-# benchmark_wait_oom_retry: only the OOM'd tasks' datasets are re-submitted
-# with doubled --mem (128G -> 256G -> 500G, clamped to the BENCHMARK_MEM_MAX
-# ceiling) via submit_python_method_array_retry
-# (same per-method partition/--gpus/--constraint/throttle), before failing
-# closed with an OOM report. Non-OOM failures fail closed exactly as before.
+# Each method array gets its own compute-node WATCHDOG (watchdog_main.sh via
+# benchmark_submit_watchdog) that owns the terminal wait + per-task gate +
+# OOM auto-escalation, so an SSH drop of this login tail can never interrupt
+# an escalation chain; this tail only waits for the watchdog jobs
+# (benchmark_wait_watchdog) and then syncs. OOM escalation: an
+# OUT_OF_MEMORY task cannot self-requeue (the task is dead), so the watchdog
+# re-submits only the OOM'd tasks' datasets with doubled --mem (128G -> 256G
+# -> 500G, clamped to the BENCHMARK_MEM_MAX ceiling) via its own resubmit
+# closure (same per-method partition/--gpus/--constraint/throttle), before
+# failing closed with an OOM report in its status file; the tail emails on
+# FAIL. Non-OOM failures fail closed exactly as before.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../../slurm_config.sh"
@@ -131,6 +136,19 @@ fi
 if [[ -n "${SYNC_ONLY_IDS}" ]]; then
   echo "=== Sync-only resume mode: jobs ${SYNC_ONLY_IDS} (no submission) ==="
   IFS=',' read -r -a ARRAY_JOB_IDS <<< "${SYNC_ONLY_IDS}"
+  # Watchdog ids resume via their status files (wait + read STATE); array ids
+  # keep the strict all-rows gate.
+  for i in "${!ARRAY_JOB_IDS[@]}"; do
+    JOB_ID="${ARRAY_JOB_IDS[$i]}"
+    STATUS_FILE="${WATCHDOG_STATUS_DIR}/${JOB_ID}.status"
+    if [[ -f "${STATUS_FILE}" ]]; then
+      SYNC_LABEL="$(grep -E '^LABEL=' "${STATUS_FILE}" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+      echo "  Job ${JOB_ID}: watchdog status file found; gating via the watchdog."
+      benchmark_wait_watchdog "${JOB_ID}" "${SYNC_LABEL:-watchdog}"
+    else
+      benchmark_wait_for_array "${JOB_ID}" ""
+    fi
+  done
 else
 echo "=== Submitting Python benchmark method arrays ==="
 
@@ -138,33 +156,40 @@ mkdir -p "${LOGS_DIR}"
 
 # Prints ONLY the array job id on stdout (progress goes to stderr) so the
 # caller can capture the id with $(...) — a multi-line capture would break
-# the sacct gate in benchmark_wait_oom_retry.
+# the sacct gates downstream.
 #
-# Retry-capable: the OOM auto-escalation loop (benchmark_wait_oom_retry)
-# re-invokes this with a comma-separated REDUCED dataset list, a doubled
-# --mem and a fresh manifest path (only the OOM'd datasets; array task ids
-# map 1:1 to its lines via the existing sed -n mechanism — no worker changes
-# needed). Per-method partition/--gpus/--constraint/throttle are recomputed
-# exactly as for the normal submission (PARTITION_ARG override included).
-submit_python_method_array_retry() {
+# Retry-capable: the OOM auto-escalation loop inside the per-method watchdog
+# (watchdog_main.sh -> benchmark_wait_oom_retry) re-invokes ITS OWN closure
+# with a comma-separated REDUCED dataset list, a doubled --mem and a fresh
+# manifest path (only the OOM'd datasets; array task ids map 1:1 to its lines
+# via the existing sed -n mechanism — no worker changes needed). This
+# submit-side function is used only for the normal full-dataset submission;
+# per-method partition/--gpus/--constraint/throttle come from py_method_spec
+# below (same as the watchdog's forwarded spec, PARTITION_ARG override
+# included).
+
+# Per-method submission spec (partition/throttle/flags) into the globals
+# PY_METHOD_PARTITION/PY_METHOD_THROTTLE/PY_METHOD_FLAGS. An explicit
+# --partition override drops the --constraint pin (kept:
+# --gpus/--cpus-per-task/--mem).
+py_method_spec() {
   local METHOD="$1"
-  local DS_CSV="$2"
-  local MEM="$3"
-  local MANIFEST="$4"
-  local PARTITION EXTRA_FLAGS=() THROTTLE
+  PY_METHOD_PARTITION=""
+  PY_METHOD_THROTTLE=""
+  PY_METHOD_FLAGS=()
   case "${METHOD}" in
     mrvi|scpoli)
-      PARTITION="${SLURM_PARTITION_BENCHMARK_GPU}"
-      EXTRA_FLAGS=(--gpus="${BENCHMARK_GPU_COUNT}"
-                   --constraint="${BENCHMARK_GPU_CONSTRAINT}"
-                   --cpus-per-task="${BENCHMARK_GPU_CPUS_PER_TASK}")
-      THROTTLE="${BENCHMARK_GPU_ARRAY_THROTTLE}"
+      PY_METHOD_PARTITION="${SLURM_PARTITION_BENCHMARK_GPU}"
+      PY_METHOD_FLAGS=(--gpus="${BENCHMARK_GPU_COUNT}"
+                       --constraint="${BENCHMARK_GPU_CONSTRAINT}"
+                       --cpus-per-task="${BENCHMARK_GPU_CPUS_PER_TASK}")
+      PY_METHOD_THROTTLE="${BENCHMARK_GPU_ARRAY_THROTTLE}"
       ;;
     pilot)
-      PARTITION="${SLURM_PARTITION_BENCHMARK_CPU}"
-      EXTRA_FLAGS=(--constraint="${BENCHMARK_CPU_CONSTRAINT}"
-                   --cpus-per-task="${BENCHMARK_CPU_CPUS_PER_TASK}")
-      THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
+      PY_METHOD_PARTITION="${SLURM_PARTITION_BENCHMARK_CPU}"
+      PY_METHOD_FLAGS=(--constraint="${BENCHMARK_CPU_CONSTRAINT}"
+                       --cpus-per-task="${BENCHMARK_CPU_CPUS_PER_TASK}")
+      PY_METHOD_THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
       ;;
     *)
       echo "ERROR: Unknown method '${METHOD}' (expected mrvi, scpoli or pilot)." >&2
@@ -172,13 +197,13 @@ submit_python_method_array_retry() {
       ;;
   esac
   if [[ -n "${PARTITION_ARG}" ]]; then
-    PARTITION="${PARTITION_ARG}"
+    PY_METHOD_PARTITION="${PARTITION_ARG}"
     # Explicit partition choice = user accepts non-pinned hardware: drop the
     # --constraint pin (kept: --gpus/--cpus-per-task/--mem). Without this,
     # e.g. --partition private-carmona-gpu would sit PENDING forever — its
     # CPU/GPU never match the pinned BENCHMARK_*_CONSTRAINT.
-    FILTERED_FLAGS=()
-    for FLAG in "${EXTRA_FLAGS[@]}"; do
+    local FILTERED_FLAGS=() FLAG
+    for FLAG in "${PY_METHOD_FLAGS[@]}"; do
       case "${FLAG}" in
         --constraint|--constraint=*)
           ;;
@@ -187,9 +212,17 @@ submit_python_method_array_retry() {
           ;;
       esac
     done
-    EXTRA_FLAGS=("${FILTERED_FLAGS[@]}")
+    PY_METHOD_FLAGS=("${FILTERED_FLAGS[@]}")
     echo "  NOTE: --partition override drops the --constraint hardware pin" >&2
   fi
+}
+
+submit_python_method_array_retry() {
+  local METHOD="$1"
+  local DS_CSV="$2"
+  local MEM="$3"
+  local MANIFEST="$4"
+  py_method_spec "${METHOD}"
 
   # Per-method manifest: one dataset per line; rebuilt every run. The name
   # carries the submit PID so an overlapping second submission cannot
@@ -204,14 +237,14 @@ submit_python_method_array_retry() {
   # environment, and 1.1_run_worker.sh hard-requires it.
   export METHOD="${METHOD}"
 
-  echo "Submitting ${METHOD} array (${#DS_LIST[@]} datasets, partition=${PARTITION}, " >&2
-  echo "  flags: ${EXTRA_FLAGS[*]}, mem=${MEM}, throttle=${THROTTLE})" >&2
+  echo "Submitting ${METHOD} array (${#DS_LIST[@]} datasets, partition=${PY_METHOD_PARTITION}, " >&2
+  echo "  flags: ${PY_METHOD_FLAGS[*]}, mem=${MEM}, throttle=${PY_METHOD_THROTTLE})" >&2
 
   local SUBMIT_MSG
   SUBMIT_MSG=$(sbatch \
-      --array="1-${#DS_LIST[@]}%${THROTTLE}" \
-      --partition="${PARTITION}" \
-      "${EXTRA_FLAGS[@]}" \
+      --array="1-${#DS_LIST[@]}%${PY_METHOD_THROTTLE}" \
+      --partition="${PY_METHOD_PARTITION}" \
+      "${PY_METHOD_FLAGS[@]}" \
       --mem="${MEM}" \
       --output="${LOGS_DIR}/5_benchmark_${METHOD}_%A_%a.log" \
       --error="${LOGS_DIR}/5_benchmark_${METHOD}_%A_%a.err" \
@@ -226,28 +259,40 @@ submit_python_method_array_retry() {
 
 ARRAY_JOB_IDS=()
 ARRAY_JOB_METHODS=()
+WATCHDOG_JOB_IDS=()
 for METHOD in "${METHODS[@]}"; do
   DS_CSV=""
   for name in "${DATASET_NAMES[@]}"; do
     [[ -n "${DS_CSV}" ]] && DS_CSV+=","
     DS_CSV+="${name}"
   done
-  ARRAY_JOB_IDS+=("$(submit_python_method_array_retry "${METHOD}" "${DS_CSV}" "${BENCHMARK_MEM}" \
-    "${HPC_SCRATCH_DIR}/benchmark_manifest_${METHOD}_$$.txt")")
+  NEW_ARRAY_ID="$(submit_python_method_array_retry "${METHOD}" "${DS_CSV}" "${BENCHMARK_MEM}" \
+    "${HPC_SCRATCH_DIR}/benchmark_manifest_${METHOD}_$$.txt")"
+  ARRAY_JOB_IDS+=("${NEW_ARRAY_ID}")
   ARRAY_JOB_METHODS+=("${METHOD}")
+  # Per-method watchdog: owns the terminal wait + gate + OOM escalation on a
+  # compute node (survives SSH drops of this tail); per-method partition /
+  # throttle / GPU+CPU flags preserved for its retry-array submissions.
+  py_method_spec "${METHOD}"
+  WATCHDOG_JOB_IDS+=("$(benchmark_submit_watchdog \
+    "${NEW_ARRAY_ID}" "${METHOD}" \
+    "${HPC_SCRATCH_DIR}/benchmark_manifest_${METHOD}_$$.txt" \
+    strict "${PY_METHOD_PARTITION}" "${PY_METHOD_THROTTLE}" \
+    "5_benchmark_${METHOD}" "${SCRIPT_DIR}/1.1_run_worker.sh" \
+    "${PY_METHOD_FLAGS[@]}")")
 done
 fi
 
 # ---------------------------------------------------------------------------
 # Monitor & verify & sync results back to NAS (shared tail).
-# Each array is gated OOM-aware: an OUT_OF_MEMORY task's dataset is
-# re-submitted with doubled --mem (submit_python_method_array_retry, ceiling
-# BENCHMARK_MEM_MAX); non-OOM failures fail closed as before.
+# Each array is gated via its watchdog: an OUT_OF_MEMORY task's dataset is
+# re-submitted by the watchdog with doubled --mem (ceiling BENCHMARK_MEM_MAX);
+# non-OOM failures fail closed as before. The watchdog runs on a compute
+# node, so an SSH drop of this tail cannot interrupt the escalation.
 # ---------------------------------------------------------------------------
 echo "=== Monitoring job completion ==="
 for i in "${!ARRAY_JOB_IDS[@]}"; do
-  benchmark_wait_oom_retry "${ARRAY_JOB_IDS[$i]}" "${ARRAY_JOB_METHODS[$i]}" \
-    submit_python_method_array_retry "${HPC_SCRATCH_DIR}/benchmark_manifest_${ARRAY_JOB_METHODS[$i]}_$$.txt"
+  benchmark_wait_watchdog "${WATCHDOG_JOB_IDS[$i]}" "${ARRAY_JOB_METHODS[$i]}"
 done
 
 # Labels for the exec-log merge = the submitted methods.

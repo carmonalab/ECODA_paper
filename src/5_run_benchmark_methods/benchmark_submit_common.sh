@@ -22,7 +22,7 @@
 #       fail-closed sacct gate (every state row must be
 #       COMPLETED; aborts without syncing on any non-COMPLETED state or empty
 #       sacct output).
-#   benchmark_wait_oom_retry <job_id> <label> <resubmit_fn> <manifest>
+#   benchmark_wait_oom_retry <job_id> <label> <resubmit_fn> <manifest> [status_file]
 #       OOM-auto-escalating variant of the wait+gate for the benchmark
 #       submitters' own arrays: waits for the array to leave the scheduler
 #       (shared benchmark_wait_array_terminal poll), then gates on per-TASK
@@ -39,6 +39,31 @@
 #       ONLY the new array job id on stdout. Loop back with the new id/manifest;
 #       belt-and-braces attempt cap (4). At the ceiling or on non-memory
 #       failures: fail closed with an OOM report incl. per-task MaxRSS.
+#       Optional 5th arg <status_file>: watchdog mode — every terminal path
+#       writes the status file (STATE=OK|FAIL, LABEL=, one JOB_REPORT= line per
+#       gated array incl. the final retry id, FAIL_REASON=, REPORT=) instead of
+#       emailing (compute nodes have no mail CLI; the login tail emails from
+#       the file via benchmark_wait_watchdog) and instead of appending to the
+#       JOB_REPORTS global (the tail merges the JOB_REPORT= lines from the
+#       file). Behavior without the arg is unchanged.
+#   benchmark_submit_watchdog <array_id> <label> <manifest> <mode> <partition>
+#       <throttle> <log_prefix> <worker_script> [flags...]
+#       Submits one compute-node watchdog job (watchdog_main.sh, 1 cpu/2G/
+#       WATCHDOG_TIME_LIMIT, default partition of the method — no constraint
+#       pin) that owns the terminal wait + OOM escalation for <array_id> and
+#       writes its status file `${WATCHDOG_STATUS_DIR}/<watchdog_job_id>.status`
+#       (self-named from SLURM_JOB_ID; unknowable at submit time). <mode> is
+#       strict (method arrays) or soft-gate (prepare_pseudobulk artifact gate).
+#       <throttle>/<log_prefix>/<worker_script>/<flags> are forwarded for the
+#       watchdog's retry-array submissions. Echoes ONLY the watchdog job id.
+#   benchmark_wait_watchdog <watchdog_id> <label>
+#       Login-tail counterpart: waits for the watchdog job to leave the
+#       scheduler, polls for its status file (<=2 min grace), then parses
+#       STATE: OK -> merge its JOB_REPORT= lines into JOB_REPORTS, return 0;
+#       FAIL -> print the report, notify_sync_status, exit 1; watchdog job
+#       non-COMPLETED without a status file -> fail closed with its sacct
+#       State,ExitCode + a pointer to its logs; COMPLETED without a status
+#       file -> fail closed ("exited without a status file").
 #   benchmark_bump_mem <mem> / benchmark_mem_ge <a> <b>
 #       Mem-string helpers for the OOM escalation: <N>G/<N>T -> 2N (same
 #       suffix; non-zero exit on unparseable input) / truthy when a >= b.
@@ -72,12 +97,26 @@
 # (BASH_SOURCE[0] inside a sourced file is the sourced file's path).
 BENCHMARK_MERGE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_python_sample_embedding_methods/1.1.2_merge_execution_times.py"
 
+# Compute-node watchdog entry script (same directory as this file).
+WATCHDOG_MAIN_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/watchdog_main.sh"
+
+# Watchdog status files: one `<watchdog_job_id>.status` per watchdog, written
+# by watchdog_main.sh (self-named from SLURM_JOB_ID) and read by the login
+# tail's benchmark_wait_watchdog. Outside benchmark/ so it is never rsync'd.
+WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_benchmark_watchdog"
+
 # Per-array job duration records for the final email: one "<label>|<job id>|<array wall time>"
 # entry per gated array, appended by benchmark_wait_for_array /
 # benchmark_wait_oom_retry in submission order (only the FINAL, successful
 # retry of an OOM-escalated array is recorded — intermediate OOM'd attempts
 # are never appended).
 JOB_REPORTS=()
+
+# Same records, collected for the status file in watchdog mode: every array
+# gated by the watchdog run (original + each retry) so the login tail's final
+# email shows the whole escalation chain. Only used when benchmark_wait_oom_retry
+# is called with a status_file arg; the tail merges these into JOB_REPORTS.
+WATCHDOG_GATED_REPORTS=()
 
 # Sync-status email helper (best-effort; requires USER_EMAIL from slurm_config.sh).
 source "$(dirname "${BASH_SOURCE[0]}")/../utils/bash/sync_status_email.sh"
@@ -199,6 +238,19 @@ benchmark_mem_ge() {
 }
 
 # ---------------------------------------------------------------------------
+# PB_VARIANT_NAMES parse (benchmark_hpc_utils.R is the single source of
+# truth): extracts the c("...", ...) list via sed range + grep, one variant
+# per line on stdout; prints nothing (non-zero-ish empty output, callers fail
+# closed) when the list cannot be parsed. Used by the watchdog's soft-gate
+# mode (prepare_pseudobulk artifact gate).
+# ---------------------------------------------------------------------------
+benchmark_pb_variant_names() {
+  local HPC_UTILS="$1"
+  sed -n '/^PB_VARIANT_NAMES <- c(/,/^)/p' \
+    "${HPC_UTILS}" | grep -oE '"[a-zA-Z0-9_.]+"' | tr -d '"'
+}
+
+# ---------------------------------------------------------------------------
 # Shared array terminal wait: squeue exact-id poll (60s) + bounded sacct
 # poll-until-terminal (max 20 min). Used by benchmark_wait_for_array (all
 # states) and benchmark_wait_oom_retry (per-task states) — behavior of the
@@ -283,33 +335,83 @@ benchmark_oom_task_report() {
 }
 
 # ---------------------------------------------------------------------------
+# Watchdog status file writer (watchdog mode of benchmark_wait_oom_retry and
+# the watchdog's soft-gate OK path): atomic write (tmp + mv) of
+#   STATE=OK|FAIL
+#   LABEL=<label>
+#   JOB_REPORT=<label>|<id>|<wall>        (one per gated array, from
+#                                          WATCHDOG_GATED_REPORTS)
+#   FAIL_REASON=<reason>                  (FAIL only)
+#   REPORT=<multiline>                    (FAIL only; per-task report)
+# ---------------------------------------------------------------------------
+benchmark_write_status_file() {
+  local STATUS_FILE="$1"
+  local STATE="$2"
+  local LABEL="$3"
+  local FAIL_REASON="${4:-}"
+  local REPORT="${5:-}"
+  local TMP_FILE="${STATUS_FILE}.tmp"
+  {
+    printf 'STATE=%s\n' "${STATE}"
+    printf 'LABEL=%s\n' "${LABEL}"
+    local line
+    for line in "${WATCHDOG_GATED_REPORTS[@]}"; do
+      printf 'JOB_REPORT=%s\n' "${line}"
+    done
+    if [[ -n "${FAIL_REASON}" ]]; then
+      printf 'FAIL_REASON=%s\n' "${FAIL_REASON}"
+      printf 'REPORT=\n%s\n' "${REPORT}"
+    fi
+  } > "${TMP_FILE}"
+  mv "${TMP_FILE}" "${STATUS_FILE}"
+  echo "Watchdog status written: ${STATUS_FILE} (STATE=${STATE})." >&2
+}
+
+# ---------------------------------------------------------------------------
 # Monitor an array to completion with OOM auto-escalation (see header):
 # per-task sacct gate; OUT_OF_MEMORY tasks are re-submitted with doubled
 # --mem (ceiling BENCHMARK_MEM_MAX) via ${resubmit_fn}; all-COMPLETED passes;
 # any non-COMPLETED, non-OOM state fails closed exactly like the strict gate.
+# Optional 5th arg <status_file>: watchdog mode — every terminal path writes
+# the status file (and skips notify_sync_status + the JOB_REPORTS append; the
+# login tail emails/merges from the file).
 # ---------------------------------------------------------------------------
 benchmark_wait_oom_retry() {
   local JOB_ID="$1"
   local LABEL="$2"
   local RESUBMIT_FN="$3"
   local MANIFEST="$4"
+  local STATUS_FILE="${5:-}"
   local MEM="${BENCHMARK_MEM}"
   local MAX_ATTEMPTS=4
   local ATTEMPT=0
   local TASK_STATES OOM_TASKS=() BAD_TASK="" DS_CSV="" NEW_MEM="" NEW_MANIFEST="" NEW_ID=""
   local JID STATE MASTER_STATE="" TASK_ROWS_FOUND=0 t ds_name CLAMPED=0
 
+  if [[ -n "${STATUS_FILE}" ]]; then
+    WATCHDOG_GATED_REPORTS=()
+  fi
+
   while (( ATTEMPT < MAX_ATTEMPTS )); do
     benchmark_wait_array_terminal "${JOB_ID}" "${LABEL}"
+    if [[ -n "${STATUS_FILE}" ]]; then
+      WATCHDOG_GATED_REPORTS+=("${LABEL}|${JOB_ID}|$(array_wall_time "${JOB_ID}")")
+    fi
     # Task-row-only states: `--parsable2` (full, un-truncated values) keeps
     # OUT_OF_MEMORY readable; rows are <job_id>_<n> (batch/extern/master rows
     # filtered out below).
     TASK_STATES="$(sacct -j "${JOB_ID}" -n --parsable2 --format=JobID,State 2>/dev/null || true)"
     if [[ -z "${TASK_STATES//[[:space:]]/}" ]]; then
       echo "ERROR: sacct returned no states for Array Job ${JOB_ID}; NOT syncing to NAS."
-      notify_sync_status \
-        "ECODA: benchmark NOT synced (job ${JOB_ID})" \
-        "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID} (datasets: ${DATASET_NAMES[*]}): sacct returned no states (job purged or unknown id)."
+      if [[ -n "${STATUS_FILE}" ]]; then
+        benchmark_write_status_file "${STATUS_FILE}" FAIL "${LABEL}" \
+          "sacct returned no states for array ${JOB_ID} (job purged or unknown id)" \
+          "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID}: sacct returned no states."
+      else
+        notify_sync_status \
+          "ECODA: benchmark NOT synced (job ${JOB_ID})" \
+          "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID} (datasets: ${DATASET_NAMES[*]}): sacct returned no states (job purged or unknown id)."
+      fi
       exit 1
     fi
     OOM_TASKS=()
@@ -345,15 +447,26 @@ benchmark_wait_oom_retry() {
     if [[ -n "${BAD_TASK}" ]]; then
       echo "ERROR: Array Job ${JOB_ID} had non-COMPLETED, non-OOM tasks; NOT syncing to NAS."
       sacct -j "${JOB_ID}" --format=JobID,JobName,State,ExitCode
-      notify_sync_status \
-        "ECODA: benchmark NOT synced (job ${JOB_ID})" \
-        "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID} (datasets: ${DATASET_NAMES[*]}): non-COMPLETED, non-OOM tasks.
+      if [[ -n "${STATUS_FILE}" ]]; then
+        benchmark_write_status_file "${STATUS_FILE}" FAIL "${LABEL}" \
+          "non-COMPLETED, non-OOM tasks in array ${JOB_ID}" \
+          "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID}: non-COMPLETED, non-OOM tasks.
 $(benchmark_task_report "${JOB_ID}" "${MANIFEST}")"
+      else
+        notify_sync_status \
+          "ECODA: benchmark NOT synced (job ${JOB_ID})" \
+          "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID} (datasets: ${DATASET_NAMES[*]}): non-COMPLETED, non-OOM tasks.
+$(benchmark_task_report "${JOB_ID}" "${MANIFEST}")"
+      fi
       exit 1
     fi
     if [[ ${#OOM_TASKS[@]} -eq 0 ]]; then
       echo "Array Job ${JOB_ID} (${LABEL}): all tasks COMPLETED."
-      JOB_REPORTS+=("${LABEL}|${JOB_ID}|$(array_wall_time "${JOB_ID}")")
+      if [[ -n "${STATUS_FILE}" ]]; then
+        benchmark_write_status_file "${STATUS_FILE}" OK "${LABEL}"
+      else
+        JOB_REPORTS+=("${LABEL}|${JOB_ID}|$(array_wall_time "${JOB_ID}")")
+      fi
       return 0
     fi
     # OOM tasks: escalate memory, or fail closed at the ceiling. The
@@ -366,17 +479,30 @@ $(benchmark_task_report "${JOB_ID}" "${MANIFEST}")"
     if benchmark_mem_ge "${MEM}" "${BENCHMARK_MEM_MAX}"; then
       echo "ERROR: Array Job ${JOB_ID} (${LABEL}) OOM'd at the ${BENCHMARK_MEM_MAX} memory ceiling; NOT syncing to NAS."
       sacct -j "${JOB_ID}" --format=JobID,JobName,State,MaxRSS,Elapsed
-      notify_sync_status \
-        "ECODA: benchmark NOT synced (OOM at mem ceiling)" \
-        "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID}: OUT_OF_MEMORY tasks at the ${BENCHMARK_MEM_MAX} ceiling (BENCHMARK_MEM_MAX).
+      if [[ -n "${STATUS_FILE}" ]]; then
+        benchmark_write_status_file "${STATUS_FILE}" FAIL "${LABEL}" \
+          "OUT_OF_MEMORY tasks at the ${BENCHMARK_MEM_MAX} ceiling (BENCHMARK_MEM_MAX)" \
+          "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID}: OUT_OF_MEMORY tasks at the ${BENCHMARK_MEM_MAX} ceiling.
 $(benchmark_oom_task_report "${JOB_ID}" "${MANIFEST}")"
+      else
+        notify_sync_status \
+          "ECODA: benchmark NOT synced (OOM at mem ceiling)" \
+          "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID}: OUT_OF_MEMORY tasks at the ${BENCHMARK_MEM_MAX} ceiling (BENCHMARK_MEM_MAX).
+$(benchmark_oom_task_report "${JOB_ID}" "${MANIFEST}")"
+      fi
       exit 1
     fi
     if ! NEW_MEM="$(benchmark_bump_mem "${MEM}")"; then
       echo "ERROR: Array Job ${JOB_ID} (${LABEL}) has unparseable mem '${MEM}'; NOT syncing to NAS."
-      notify_sync_status \
-        "ECODA: benchmark NOT synced (unparseable mem)" \
-        "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID}: BENCHMARK_MEM '${MEM}' is not <N>G/<N>T."
+      if [[ -n "${STATUS_FILE}" ]]; then
+        benchmark_write_status_file "${STATUS_FILE}" FAIL "${LABEL}" \
+          "unparseable BENCHMARK_MEM '${MEM}' (not <N>G/<N>T)" \
+          "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID}: BENCHMARK_MEM '${MEM}' is not <N>G/<N>T."
+      else
+        notify_sync_status \
+          "ECODA: benchmark NOT synced (unparseable mem)" \
+          "Benchmark sync to NAS skipped for ${LABEL} job ${JOB_ID}: BENCHMARK_MEM '${MEM}' is not <N>G/<N>T."
+      fi
       exit 1
     fi
     CLAMPED=0
@@ -389,6 +515,10 @@ $(benchmark_oom_task_report "${JOB_ID}" "${MANIFEST}")"
       ds_name="$(sed -n "${t}p" "${MANIFEST}")"
       if [[ -z "${ds_name}" ]]; then
         echo "ERROR: No manifest entry for OOM task ${t} in ${MANIFEST}; NOT syncing to NAS." >&2
+        if [[ -n "${STATUS_FILE}" ]]; then
+          benchmark_write_status_file "${STATUS_FILE}" FAIL "${LABEL}" \
+            "no manifest entry for OOM task ${t} in ${MANIFEST}"
+        fi
         exit 1
       fi
       [[ -n "${DS_CSV}" ]] && DS_CSV+=","
@@ -403,6 +533,10 @@ $(benchmark_oom_task_report "${JOB_ID}" "${MANIFEST}")"
     NEW_ID="$("${RESUBMIT_FN}" "${LABEL}" "${DS_CSV}" "${NEW_MEM}" "${NEW_MANIFEST}")"
     if [[ -z "${NEW_ID}" ]]; then
       echo "ERROR: ${RESUBMIT_FN} returned no array job id for the ${LABEL} retry; NOT syncing to NAS." >&2
+      if [[ -n "${STATUS_FILE}" ]]; then
+        benchmark_write_status_file "${STATUS_FILE}" FAIL "${LABEL}" \
+          "resubmit function returned no array job id for the ${LABEL} retry"
+      fi
       exit 1
     fi
     JOB_ID="${NEW_ID}"
@@ -411,6 +545,10 @@ $(benchmark_oom_task_report "${JOB_ID}" "${MANIFEST}")"
     ATTEMPT=$((ATTEMPT + 1))
   done
   echo "ERROR: ${LABEL} exceeded ${MAX_ATTEMPTS} OOM retry attempts; NOT syncing to NAS." >&2
+  if [[ -n "${STATUS_FILE}" ]]; then
+    benchmark_write_status_file "${STATUS_FILE}" FAIL "${LABEL}" \
+      "exceeded ${MAX_ATTEMPTS} OOM retry attempts"
+  fi
   exit 1
 }
 
@@ -442,6 +580,128 @@ $(benchmark_task_report "${JOB_ID}")"
   fi
   echo "Array Job ${JOB_ID} (${LABEL}): all tasks COMPLETED."
   JOB_REPORTS+=("${LABEL}|${JOB_ID}|$(array_wall_time "${JOB_ID}")")
+}
+
+# ---------------------------------------------------------------------------
+# Submit one compute-node watchdog job (watchdog_main.sh) that owns the
+# terminal wait + OOM escalation for a method array (see header). The
+# watchdog runs on the method's partition WITHOUT the pinned constraint class
+# (modest 1 cpu/2G job; it must never compete with the pinned workers or
+# distort the benchmark resource picture) and logs to
+# ${LOGS_DIR}/5_benchmark_watchdog_<label>_<id>.log/.err. The retry arrays it
+# submits reuse the given throttle/log_prefix/worker_script/flags (the flags
+# carry the per-method --gpus/--constraint/--cpus-per-task pins). Echoes ONLY
+# the watchdog job id on stdout (progress to stderr) so the caller can capture
+# it with $(...) — a multi-line capture would break the gates downstream.
+# ---------------------------------------------------------------------------
+benchmark_submit_watchdog() {
+  local ARRAY_ID="$1"
+  local LABEL="$2"
+  local MANIFEST="$3"
+  local MODE="$4"
+  local PARTITION="$5"
+  local THROTTLE="$6"
+  local LOG_PREFIX="$7"
+  local WORKER_SCRIPT="$8"
+  shift 8
+  local WATCHDOG_FLAGS=("$@")
+
+  mkdir -p "${WATCHDOG_STATUS_DIR}"
+  echo "Submitting ${LABEL} watchdog for array ${ARRAY_ID} (mode=${MODE}, partition=${PARTITION}, " >&2
+  echo "  time=${WATCHDOG_TIME_LIMIT}, flags for retries: ${WATCHDOG_FLAGS[*]})" >&2
+
+  local SUBMIT_MSG
+  SUBMIT_MSG=$(sbatch \
+      --job-name="benchmark_watchdog_${LABEL}" \
+      --ntasks=1 --cpus-per-task=1 --mem=2G \
+      --time="${WATCHDOG_TIME_LIMIT}" \
+      --partition="${PARTITION}" \
+      --output="${LOGS_DIR}/5_benchmark_watchdog_${LABEL}_%A.log" \
+      --error="${LOGS_DIR}/5_benchmark_watchdog_${LABEL}_%A.err" \
+      --mail-user="${USER_EMAIL}" \
+      "${WATCHDOG_MAIN_SCRIPT}" \
+      "${ARRAY_ID}" "${LABEL}" "${MANIFEST}" "${MODE}" -- \
+      "${PARTITION}" "${THROTTLE}" "${LOG_PREFIX}" "${WORKER_SCRIPT}" "${WATCHDOG_FLAGS[@]}")
+
+  local WATCHDOG_ID
+  WATCHDOG_ID=$(echo "${SUBMIT_MSG}" | grep -oE '[0-9]+')
+  echo "  ${LABEL} watchdog job ID: ${WATCHDOG_ID} (status file: ${WATCHDOG_STATUS_DIR}/${WATCHDOG_ID}.status)" >&2
+  echo "${WATCHDOG_ID}"
+}
+
+# ---------------------------------------------------------------------------
+# Login-tail counterpart of the watchdog (see header): wait for the watchdog
+# job to leave the scheduler, poll for its status file (<=2 min grace), then
+# branch on its STATE:
+#   OK    -> merge the JOB_REPORT= lines into JOB_REPORTS, return 0.
+#   FAIL  -> print the report, notify_sync_status ("NOT synced — watchdog
+#            failed"), exit 1.
+#   watchdog non-COMPLETED without a status file (FAILED/TIMEOUT/PREEMPTED/
+#   CANCELLED, e.g. node panic before the file was written) -> fail closed
+#   with its sacct State,ExitCode + a pointer to its logs.
+#   COMPLETED but no status file after the grace -> fail closed ("watchdog
+#   exited without a status file").
+# ---------------------------------------------------------------------------
+benchmark_wait_watchdog() {
+  local WATCHDOG_ID="$1"
+  local LABEL="$2"
+  local STATUS_FILE="${WATCHDOG_STATUS_DIR}/${WATCHDOG_ID}.status"
+  local WSTATE REASON REPORT WD_STATE WD_EXIT line GRACE
+
+  benchmark_wait_array_terminal "${WATCHDOG_ID}" "${LABEL} watchdog"
+
+  # Grace for the status file: the watchdog writes it right before exiting;
+  # allow up to 2 min for scheduler/sacct lag and file visibility
+  # (WATCHDOG_STATUS_GRACE_ITERS overridable for tests).
+  GRACE=0
+  while [[ ! -s "${STATUS_FILE}" && ${GRACE} -lt ${WATCHDOG_STATUS_GRACE_ITERS:-24} ]]; do
+    sleep 5
+    GRACE=$((GRACE + 1))
+  done
+
+  if [[ -s "${STATUS_FILE}" ]]; then
+    WSTATE="$(grep -E '^STATE=' "${STATUS_FILE}" | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+    case "${WSTATE}" in
+      OK)
+        echo "${LABEL} watchdog ${WATCHDOG_ID}: STATE=OK."
+        while IFS= read -r line; do
+          JOB_REPORTS+=("${line#JOB_REPORT=}")
+        done < <(grep '^JOB_REPORT=' "${STATUS_FILE}" || true)
+        return 0
+        ;;
+      FAIL)
+        REASON="$(grep -E '^FAIL_REASON=' "${STATUS_FILE}" | head -1 | cut -d= -f2-)"
+        REPORT="$(sed -n '/^REPORT=$/,$p' "${STATUS_FILE}" | tail -n +2)"
+        echo "ERROR: ${LABEL} watchdog ${WATCHDOG_ID}: STATE=FAIL (${REASON:-unknown}); NOT syncing to NAS." >&2
+        notify_sync_status \
+          "ECODA: benchmark NOT synced (watchdog failed)" \
+          "Benchmark sync to NAS skipped for ${LABEL}: watchdog job ${WATCHDOG_ID} failed (${REASON:-unknown}).
+${REPORT}"
+        exit 1
+        ;;
+      *)
+        echo "ERROR: ${LABEL} watchdog ${WATCHDOG_ID}: unparseable status file (STATE='${WSTATE:-}'); NOT syncing to NAS." >&2
+        notify_sync_status \
+          "ECODA: benchmark NOT synced (unparseable watchdog status)" \
+          "Benchmark sync to NAS skipped for ${LABEL}: watchdog job ${WATCHDOG_ID} wrote an unparseable status file (${STATUS_FILE})."
+        exit 1
+        ;;
+    esac
+  fi
+
+  # No status file after the grace: fail closed on the watchdog job's own
+  # state (a non-COMPLETED watchdog — FAILED/TIMEOUT/PREEMPTED/CANCELLED, e.g.
+  # node panic before the file was written — points at its logs; a COMPLETED
+  # watchdog that wrote nothing is a bug in the status protocol).
+  WD_STATE="$(sacct -j "${WATCHDOG_ID}" -X -n --format=State 2>/dev/null | head -1 | tr -d '[:space:]' || true)"
+  WD_EXIT="$(sacct -j "${WATCHDOG_ID}" -X -n --format=ExitCode 2>/dev/null | head -1 | tr -d '[:space:]' || true)"
+  echo "ERROR: ${LABEL} watchdog ${WATCHDOG_ID} exited without a status file (sacct State=${WD_STATE:-n/a}, ExitCode=${WD_EXIT:-n/a}); NOT syncing to NAS." >&2
+  echo "  Check ${LOGS_DIR}/5_benchmark_watchdog_${LABEL}_${WATCHDOG_ID}.log/.err" >&2
+  notify_sync_status \
+    "ECODA: benchmark NOT synced (watchdog lost)" \
+    "Benchmark sync to NAS skipped for ${LABEL}: watchdog job ${WATCHDOG_ID} exited without a status file (sacct State=${WD_STATE:-n/a}, ExitCode=${WD_EXIT:-n/a}).
+Check ${LOGS_DIR}/5_benchmark_watchdog_${LABEL}_${WATCHDOG_ID}.log/.err; recover with --sync-only ${WATCHDOG_ID} or a re-run (idempotent)."
+  exit 1
 }
 
 # ---------------------------------------------------------------------------
