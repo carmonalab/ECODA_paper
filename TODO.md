@@ -226,6 +226,7 @@ comments) is in `new_datasets_to_implement.md` (Excel source:
   and wired (batch-only, never `"Sample"` as batch column; no-leakage — see
   AGENTS.md); the ECODA batch-associated CT-removal warning detail (test each
   cell type separately vs. checking global variance, p < 0.05) moved to 4.1.
+- on CUDA, torch's non-deterministic kernels (atomic reductions, cudnn autotuning) can still produce tiny run-to-run differences even with the same seed. Full GPU determinism would require torch.use_deterministic_algorithms(True) + CUBLAS_WORKSPACE_CONFIG, which scvi-tools doesn't enable.
 
 ## Keep-draft notes
 
