@@ -18,7 +18,11 @@
 #       from the pixi environment: <pkg>") via "missing from the pixi
 #       environment" — require(..., quietly=TRUE) suppresses the standard
 #       "there is no package called" message, so without this signature a
-#       stale-view package miss would never requeue.
+#       stale-view package miss would never requeue. Also covers the arrow
+#       .onLoad stale-view class (observed 2026-08-14: `Error: .onLoad failed
+#       in loadNamespace() for 'arrow' ... attempt to apply non-function` —
+#       a partially-served BeeGFS file), via "\.onLoad failed in
+#       loadNamespace" / "attempt to apply non-function".
 #   worker_retry_count_file
 #       Prints the per-task retry counter path
 #       ${HPC_SCRATCH_DIR}/_worker_retries/<jobid>_<taskid>.count (jobid =
@@ -48,7 +52,7 @@
 # standard conditional patterns (function calls in `if` conditions disable
 # errexit inside the body); every fallible command is guarded or explicit.
 
-TRANSIENT_REQEX='No such file or directory|cannot open file|cannot open shared object|package or namespace load failed|there is no package called|missing from the pixi environment|cannot open connection|failed to load|No module named'
+TRANSIENT_REQEX='No such file or directory|cannot open file|cannot open shared object|package or namespace load failed|there is no package called|missing from the pixi environment|cannot open connection|failed to load|No module named|\.onLoad failed in loadNamespace|attempt to apply non-function'
 
 worker_retry_count_file() {
   local JOB_ID="${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-unknown}}"

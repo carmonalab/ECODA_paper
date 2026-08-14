@@ -266,7 +266,23 @@ benchmark_wait_array_terminal() {
   # for the exact job id (`-o %A` prints the array master id for every task).
   # The fail-closed gates downstream are the authoritative check (covers
   # cancellation, failure, purged controller records).
-  while squeue -u "$USER" -h -o "%A" 2>/dev/null | grep -qx "${JOB_ID}"; do
+  # A transient squeue failure (non-zero exit / non-empty stderr) or a clean
+  # response still containing the id resets the miss counter; only 2
+  # CONSECUTIVE clean responses without the id count as "left the scheduler".
+  # This avoids a transient empty/error squeue response (stale BeeGFS view,
+  # scheduler hiccup) being misread as an early exit — the bounded sacct poll
+  # below is the final safety net, not the primary signal.
+  local MISS=0 OUT=""
+  while :; do
+    if ! OUT="$(squeue -u "$USER" -h -o "%A" 2>/dev/null)"; then
+      echo "WARNING: squeue query failed while waiting for ${JOB_ID}; keeping polling." >&2
+      MISS=0
+    elif grep -qx "${JOB_ID}" <<< "${OUT}"; then
+      MISS=0
+    else
+      MISS=$((MISS + 1))
+    fi
+    (( MISS >= 2 )) && break
     sleep 60
   done
   echo "${LABEL} array ${JOB_ID} left the scheduler."

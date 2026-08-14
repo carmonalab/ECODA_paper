@@ -10,9 +10,10 @@
 #     awk, then eval'd): watchdog_main (strict + soft-gate) / watchdog_resubmit
 #
 # The slurm CLI (squeue/sacct/sbatch) and notify_sync_status are stubbed:
-# squeue says "not in scheduler" (terminal immediately), sacct serves canned
-# rows from the per-test globals SACCT_ROWS/SACCT_MEM_ROWS/SACCT_XEXIT/
-# SACCT_WALL, sbatch echoes "Submitted batch job <id>" and captures its args
+# squeue returns a clean empty response ("not in scheduler" -> 2 consecutive
+# clean misses -> terminal immediately), sacct serves canned rows from the
+# per-test globals SACCT_ROWS/SACCT_MEM_ROWS/SACCT_XEXIT/SACCT_WALL, sbatch
+# echoes "Submitted batch job <id>" and captures its args
 # to ${CAPTURE_DIR}/sbatch_calls.txt, notify_sync_status appends to
 # ${CAPTURE_DIR}/notify_calls.txt. Captures live on DISK because the
 # functions under test run in subshells (their exit paths call `exit`), so
@@ -72,11 +73,12 @@ reset_captures() {
   : > "${CAPTURE_DIR}/sbatch_calls.txt"
   : > "${CAPTURE_DIR}/sbatch_env.txt"
   : > "${CAPTURE_DIR}/notify_calls.txt"
+  : > "${CAPTURE_DIR}/squeue_calls.txt"
   echo "22222" > "${CAPTURE_DIR}/resubmit_retry_id.txt"
   : > "${CAPTURE_DIR}/resubmit_capture.txt"
 }
 
-squeue() { return 1; }   # nothing in the scheduler -> terminal immediately
+squeue() { return 0; }   # clean empty response -> 2 clean misses -> terminal
 sleep() { :; }           # no real waits (poll loops otherwise take minutes)
 
 SACCT_ROWS=""            # "<jid>:<STATE>" entries (master + task rows)
@@ -275,6 +277,53 @@ PB_VARIANTS="$(benchmark_pb_variant_names "${SCRIPT_DIR}/benchmark_hpc_utils.R")
 assert_eq "PB variant count" "6" "$(wc -w <<< "${PB_VARIANTS}" | tr -d ' ')"
 assert_contains "first variant schvg2000" "schvg2000" "${PB_VARIANTS}"
 assert_contains "last variant hvg3000" "hvg3000" "${PB_VARIANTS}"
+
+echo "=== benchmark_wait_array_terminal: consecutive-clean-miss poll ==="
+# The poll exits only after 2 CONSECUTIVE clean squeue responses without the
+# id; a failing squeue (non-zero exit) resets the counter. squeue is
+# redefined inside each subshell (functions resolve at call time); invocations
+# are counted via ${CAPTURE_DIR}/squeue_calls.txt. sacct returns no rows
+# (SACCT_ROWS="") so the bounded terminal-state poll loops instantly with the
+# stubbed sleep.
+setup_oom_scenario
+(
+  squeue() { echo "call" >> "${CAPTURE_DIR}/squeue_calls.txt"; return 0; }
+  benchmark_wait_array_terminal 33333 poll-test
+) > "${CAPTURE_DIR}/poll_out.txt" 2>&1
+assert_eq "clean-empty from the start exits 0" "0" "$?"
+assert_eq "clean-empty exits after exactly 2 squeue calls" "2" "$(wc -l < "${CAPTURE_DIR}/squeue_calls.txt" | tr -d ' ')"
+assert_contains "clean-empty reports left the scheduler" "left the scheduler." "$(cat "${CAPTURE_DIR}/poll_out.txt")"
+
+setup_oom_scenario
+(
+  squeue() {
+    echo "call" >> "${CAPTURE_DIR}/squeue_calls.txt"
+    local c
+    c="$(wc -l < "${CAPTURE_DIR}/squeue_calls.txt" | tr -d ' ')"
+    [[ ${c} -eq 1 ]] && echo "33333"
+    return 0
+  }
+  benchmark_wait_array_terminal 33333 poll-test
+) > "${CAPTURE_DIR}/poll_out.txt" 2>&1
+assert_eq "id present once then clean-empty exits 0" "0" "$?"
+assert_eq "id present once then clean-empty exits after 3 calls" "3" "$(wc -l < "${CAPTURE_DIR}/squeue_calls.txt" | tr -d ' ')"
+assert_contains "id-then-clean reports left the scheduler" "left the scheduler." "$(cat "${CAPTURE_DIR}/poll_out.txt")"
+
+setup_oom_scenario
+(
+  squeue() {
+    echo "call" >> "${CAPTURE_DIR}/squeue_calls.txt"
+    local c
+    c="$(wc -l < "${CAPTURE_DIR}/squeue_calls.txt" | tr -d ' ')"
+    [[ ${c} -eq 1 ]] && return 1
+    return 0
+  }
+  benchmark_wait_array_terminal 33333 poll-test
+) > "${CAPTURE_DIR}/poll_out.txt" 2>&1
+assert_eq "one failure then clean-empty exits 0" "0" "$?"
+assert_eq "squeue failure resets the miss counter -> 3 calls" "3" "$(wc -l < "${CAPTURE_DIR}/squeue_calls.txt" | tr -d ' ')"
+assert_contains "failure warns and keeps polling" "WARNING: squeue query failed" "$(cat "${CAPTURE_DIR}/poll_out.txt")"
+assert_contains "failure-then-clean reports left the scheduler" "left the scheduler." "$(cat "${CAPTURE_DIR}/poll_out.txt")"
 
 echo "=== benchmark_wait_oom_retry: OK path with status file (OOM -> retry -> COMPLETED) ==="
 setup_oom_scenario
