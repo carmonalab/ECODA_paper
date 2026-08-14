@@ -318,6 +318,12 @@ def run_pilot(adata, ct_col, view, n_hvg, output_path):
             columns=[f"PCA_{i + 1}" for i in range(emb.shape[1])],
         )
     adata.obsm[emb_key] = emb
+    # Same NaN cell-type guard as QOT/PILOT-GM-VAE/scPoli (see run_scpoli):
+    # PILOT's cost_matrix() treats NaN labels as a pseudo-cell-type whose
+    # centroid is the median of zero cells -> NaN entries in the cost matrix
+    # -> ot.emd2 collapses (all-zero EMD distances written on HPC; segfault
+    # locally). Lee/Zhang (HiTME immune-only annotation, 12-33% NaN) hit this.
+    fill_unknown_ct(adata, ct_col, "PILOT")
     pl.tl.wasserstein_distance(
         adata,
         emb_matrix=emb_key,
