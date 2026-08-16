@@ -243,19 +243,19 @@ verify_md5_sidecar <- function(file_path, checksums) {
 }
 
 # Load HPC-computed benchmark results (Pipeline A methods + Pipeline B
-# trans/zeroimp) into the notebook's result_list, preserving the legacy rerun
-# semantics: entries already present in result_list$bmark[[ds]] are kept; only
-# missing methods are read from ${path_results_nas}/<ds>_<method>.rds (warning
-# on missing files). Bundles are verified against the checksums.md5 sidecar
-# (written by the submit scripts) before deserialization. Also reads
-# <ds>_trans.rds / <ds>_zeroimp.rds into result_list$trans[[ds]] /
-# result_list$zeroimp[[ds]] (only if not yet present). Saves result_list.rds
-# and returns the list.
+# trans/zeroimp) into the notebook's result_list. Every knit starts from a
+# fresh list() and loads ALL bundles anew (no result_list.rds persistence,
+# no "entries already present are kept" rerun semantics): the feather
+# methods recompute in seconds and the stats come from <ds>_metadata.rds,
+# so a stale session list can never silently clobber a good file. Bundles
+# are verified against the checksums.md5 sidecar (written by the submit
+# scripts) before deserialization. Missing files warn and are skipped.
+# Returns the (unmodified, in-memory) result_list.
 load_hpc_benchmark_results <- function(
   result_list,
   ds,
   path_results_nas,
-  methods = c("gloscope", "mofa", "pseudobulk", "scitd")
+  methods = c("gloscope", "mofa", "pseudobulk", "scitd", "composition")
 ) {
   if (is.null(result_list[["bmark"]])) result_list[["bmark"]] <- list()
   if (is.null(result_list[["trans"]])) result_list[["trans"]] <- list()
@@ -304,10 +304,14 @@ load_hpc_benchmark_results <- function(
     }
   }
 
-  saveRDS(result_list, file = "result_list.rds")
   return(result_list)
 }
 
+# DEPRECATED (notebook-only caller, kept for reference; no deletion): the
+# composition-based methods (ECODA_*, GloProp, Freq_highres, Avg_PCA_embedding,
+# ECODA_deconv) moved to the HPC composition worker (run_composition_methods_hpc)
+# on 2026-08-16; the python-feather methods below are now called directly by
+# benchmark_analysis.rmd with labels from the <ds>_metadata.rds bundle.
 run_benchmark_analysis <- function(
   res_list,
   ds,
@@ -699,24 +703,38 @@ run_benchmark_analysis <- function(
     )
 
     # --- QOT (Runs once per HVG) ---
+    # Pending method (TODO.md Phase 3): feathers may be absent -> skip with a
+    # message instead of failing the whole dataset.
     qot_dist_file <- file.path(
       path_data,
       paste0(ds, "_hvg", i, "_highres_qot_dists.feather")
     )
-    res_list[[paste0("QOT_hvg", i)]] <- process_qot_fig(
-      qot_dist_file = qot_dist_file,
-      labels
-    )
+    if (file.exists(qot_dist_file)) {
+      res_list[[paste0("QOT_hvg", i)]] <- process_qot_fig(
+        qot_dist_file = qot_dist_file,
+        labels
+      )
+    } else {
+      message("QOT_hvg", i, " skipped for ", ds,
+              ": feather not found (pending method, TODO.md Phase 3)")
+    }
 
     # --- PILOT-GM-VAE (Runs once per HVG) ---
+    # Pending method (TODO.md Phase 3): feathers may be absent -> skip with a
+    # message instead of failing the whole dataset.
     pilotgm_dist_file <- file.path(
       path_data,
       paste0(ds, "_hvg", i, "_highres_pilotgm_dists.feather")
     )
-    res_list[[paste0("PILOT-GM-VAE_hvg", i)]] <- process_pilotgm_fig(
-      pilotgm_dist_file = pilotgm_dist_file,
-      labels
-    )
+    if (file.exists(pilotgm_dist_file)) {
+      res_list[[paste0("PILOT-GM-VAE_hvg", i)]] <- process_pilotgm_fig(
+        pilotgm_dist_file = pilotgm_dist_file,
+        labels
+      )
+    } else {
+      message("PILOT-GM-VAE_hvg", i, " skipped for ", ds,
+              ": feather not found (pending method, TODO.md Phase 3)")
+    }
 
     scpoli_emb_file <- file.path(
       path_data,
@@ -765,19 +783,29 @@ run_benchmark_analysis <- function(
         path_data,
         paste0(ds, "_hvg", i, "_lowres_qot_dists.feather")
       )
-      res_list[[paste0("QOT_hvg", i, "_lowres")]] <- process_qot_fig(
-        qot_dist_file = qot_dist_file,
-        labels
-      )
+      if (file.exists(qot_dist_file)) {
+        res_list[[paste0("QOT_hvg", i, "_lowres")]] <- process_qot_fig(
+          qot_dist_file = qot_dist_file,
+          labels
+        )
+      } else {
+        message("QOT_hvg", i, "_lowres skipped for ", ds,
+                ": feather not found (pending method, TODO.md Phase 3)")
+      }
 
       pilotgm_dist_file <- file.path(
         path_data,
         paste0(ds, "_hvg", i, "_lowres_pilotgm_dists.feather")
       )
-      res_list[[paste0("PILOT-GM-VAE_hvg", i, "_lowres")]] <- process_pilotgm_fig(
-        pilotgm_dist_file = pilotgm_dist_file,
-        labels
-      )
+      if (file.exists(pilotgm_dist_file)) {
+        res_list[[paste0("PILOT-GM-VAE_hvg", i, "_lowres")]] <- process_pilotgm_fig(
+          pilotgm_dist_file = pilotgm_dist_file,
+          labels
+        )
+      } else {
+        message("PILOT-GM-VAE_hvg", i, "_lowres skipped for ", ds,
+                ": feather not found (pending method, TODO.md Phase 3)")
+      }
 
       scpoli_emb_file <- file.path(
         path_data,
@@ -802,12 +830,18 @@ run_benchmark_analysis <- function(
 # appends the numeric-seconds exec_time to each result bundle, handles the
 # per-combo cache files (<ds>_<combo>.rds, skip-if-exists unless
 # --force; combo names are method-prefixed, so no method infix) and writes
-# per-combo exec-log rows. Returns a named list of
-# result bundles (legacy result names, minus the GloScope _sqrtmat suffix).
+# per-combo exec-log rows. Since 2026-08-16 each bundle also stores
+# mem_GB = peak_rss_gb() (VmHWM at combo completion; NA_real_ off-Linux), so
+# the re-emit paths replay the ORIGINAL peak on cache reuse instead of the
+# live cumulative peak (which would overstate a resumed combo's RAM). Returns
+# a named list of result bundles (legacy result names, minus the GloScope
+# _sqrtmat suffix).
 # ============================================================
 
 # Precompute the shared DESeq2 pseudobulks used by MOFA and Pseudobulk.
-# Returns per-variant list(pb, time_secs). Variants (legacy combo list):
+# Returns per-variant list(pb, time_secs, mem_GB) (mem_GB = peak_rss_gb() at
+# variant completion; old bundles without it re-emit NA). Variants (legacy
+# combo list):
 #   schvg2000  get_pb_deseq2(hvg = top-2000 hvg_rank genes)
 #   hvg2000    get_pb_deseq2(n_hvg = 2000)
 #   hvg500     get_pb_deseq2(n_hvg = 500)
@@ -864,7 +898,8 @@ prepare_pseudobulks_hpc <- function(
     )
     results[[variant]] <- list(
       pb = pb,
-      time_secs = as.numeric(time_secs, units = "secs")
+      time_secs = as.numeric(time_secs, units = "secs"),
+      mem_GB = peak_rss_gb()
     )
   }
   return(results)
@@ -908,9 +943,12 @@ run_gloscope_hpc <- function(
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's labels x datasets).
+      # scoped to the current run's labels x datasets). The stored mem_GB
+      # is replayed too (the live cumulative peak would overstate the
+      # combo's RAM on a resume).
       if (!is.null(cached$exec_time)) {
-        log_exec_row(ds, nm, cached$exec_time, log_file)
+        log_exec_row(ds, nm, cached$exec_time, log_file,
+                     mem_gb = cached$mem_GB)
       }
       next
     }
@@ -936,8 +974,10 @@ run_gloscope_hpc <- function(
       )
     )
     res[["exec_time"]] <- as.numeric(time_secs, units = "secs")
+    res[["mem_GB"]] <- peak_rss_gb()
     save_rds_atomic(res, bundle_file)
-    log_exec_row(ds, nm, res[["exec_time"]], log_file)
+    log_exec_row(ds, nm, res[["exec_time"]], log_file,
+                 mem_gb = res[["mem_GB"]])
     results[[nm]] <- res
   }
   return(results)
@@ -986,9 +1026,12 @@ run_mofa_hpc <- function(
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's labels x datasets).
+      # scoped to the current run's labels x datasets). The stored mem_GB
+      # is replayed too (the live cumulative peak would overstate the
+      # combo's RAM on a resume).
       if (!is.null(cached$exec_time)) {
-        log_exec_row(ds, nm, cached$exec_time, log_file)
+        log_exec_row(ds, nm, cached$exec_time, log_file,
+                     mem_gb = cached$mem_GB)
       }
       next
     }
@@ -1003,8 +1046,10 @@ run_mofa_hpc <- function(
     )
     res[["exec_time"]] <- as.numeric(time_secs, units = "secs") +
       pb_variant$time_secs
+    res[["mem_GB"]] <- peak_rss_gb()
     save_rds_atomic(res, bundle_file)
-    log_exec_row(ds, nm, res[["exec_time"]], log_file)
+    log_exec_row(ds, nm, res[["exec_time"]], log_file,
+                 mem_gb = res[["mem_GB"]])
     results[[nm]] <- res
   }
   return(results)
@@ -1068,9 +1113,12 @@ run_pseudobulk_hpc <- function(
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's labels x datasets).
+      # scoped to the current run's labels x datasets). The stored mem_GB
+      # is replayed too (the live cumulative peak would overstate the
+      # combo's RAM on a resume).
       if (!is.null(cached$exec_time)) {
-        log_exec_row(ds, nm, cached$exec_time, log_file)
+        log_exec_row(ds, nm, cached$exec_time, log_file,
+                     mem_gb = cached$mem_GB)
       }
       next
     }
@@ -1079,8 +1127,10 @@ run_pseudobulk_hpc <- function(
     )
     res[["exec_time"]] <- as.numeric(time_secs, units = "secs") +
       pb_variant$time_secs
+    res[["mem_GB"]] <- peak_rss_gb()
     save_rds_atomic(res, bundle_file)
-    log_exec_row(ds, nm, res[["exec_time"]], log_file)
+    log_exec_row(ds, nm, res[["exec_time"]], log_file,
+                 mem_gb = res[["mem_GB"]])
     results[[nm]] <- res
   }
 
@@ -1096,9 +1146,12 @@ run_pseudobulk_hpc <- function(
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's labels x datasets).
+      # scoped to the current run's labels x datasets). The stored mem_GB
+      # is replayed too (the live cumulative peak would overstate the
+      # combo's RAM on a resume).
       if (!is.null(cached$exec_time)) {
-        log_exec_row(ds, nm, cached$exec_time, log_file)
+        log_exec_row(ds, nm, cached$exec_time, log_file,
+                     mem_gb = cached$mem_GB)
       }
       next
     }
@@ -1111,8 +1164,10 @@ run_pseudobulk_hpc <- function(
     )
     res[["exec_time"]] <- as.numeric(time_secs, units = "secs") +
       pb_hvg2000$time_secs
+    res[["mem_GB"]] <- peak_rss_gb()
     save_rds_atomic(res, bundle_file)
-    log_exec_row(ds, nm, res[["exec_time"]], log_file)
+    log_exec_row(ds, nm, res[["exec_time"]], log_file,
+                 mem_gb = res[["mem_GB"]])
     results[[nm]] <- res
   }
 
@@ -1128,9 +1183,12 @@ run_pseudobulk_hpc <- function(
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's labels x datasets).
+      # scoped to the current run's labels x datasets). The stored mem_GB
+      # is replayed too (the live cumulative peak would overstate the
+      # combo's RAM on a resume).
       if (!is.null(cached$exec_time)) {
-        log_exec_row(ds, nm, cached$exec_time, log_file)
+        log_exec_row(ds, nm, cached$exec_time, log_file,
+                     mem_gb = cached$mem_GB)
       }
       next
     }
@@ -1144,8 +1202,10 @@ run_pseudobulk_hpc <- function(
       )
     )
     res[["exec_time"]] <- as.numeric(time_secs, units = "secs")
+    res[["mem_GB"]] <- peak_rss_gb()
     save_rds_atomic(res, bundle_file)
-    log_exec_row(ds, nm, res[["exec_time"]], log_file)
+    log_exec_row(ds, nm, res[["exec_time"]], log_file,
+                 mem_gb = res[["mem_GB"]])
     results[[nm]] <- res
   }
 
@@ -1194,9 +1254,12 @@ run_scitd_hpc <- function(
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's labels x datasets).
+      # scoped to the current run's labels x datasets). The stored mem_GB
+      # is replayed too (the live cumulative peak would overstate the
+      # combo's RAM on a resume).
       if (!is.null(cached$exec_time)) {
-        log_exec_row(ds, nm, cached$exec_time, log_file)
+        log_exec_row(ds, nm, cached$exec_time, log_file,
+                     mem_gb = cached$mem_GB)
       }
       next
     }
@@ -1211,8 +1274,231 @@ run_scitd_hpc <- function(
       )
     )
     res[["exec_time"]] <- as.numeric(time_secs, units = "secs")
+    res[["mem_GB"]] <- peak_rss_gb()
     save_rds_atomic(res, bundle_file)
-    log_exec_row(ds, nm, res[["exec_time"]], log_file)
+    log_exec_row(ds, nm, res[["exec_time"]], log_file,
+                 mem_gb = res[["mem_GB"]])
+    results[[nm]] <- res
+  }
+  return(results)
+}
+
+# Composition-based benchmark methods (the former notebook-local set) as one
+# HPC method ("composition"): Avg_PCA_embedding, ECODA_deconv, the
+# ECODA_authors_* CoDA family (LR/HR, HR_NULL, top-varexp, top-n/least-varct,
+# PCA-dims, seurat-res, HiTME layer2/3, scATOMIC), GloProp and Freq_highres.
+# Obs-only: consumes the backed h5ad obs (cell-level metadata), the hvg2000
+# obsm PCA embedding (Avg_PCA_embedding) and the hvg2000 DESeq2 pseudobulk
+# variant (ECODA_deconv) — no Seurat materialization, no counts access.
+# Defaults mirror run_benchmark_analysis (factors_test, seurat_res,
+# ECODA_top_varexp_hvct). One worker process per dataset, set.seed(123) at
+# driver start -> deterministic across HPC re-runs. NOTE:
+# ECODA_authors_HR_NULL (shuffle_labels) will NOT be bit-identical to the
+# old notebook runs (the notebook consumed the RNG stream sequentially
+# before this method); it is a null control, so the difference is
+# inconsequential (documented in benchmark_analysis.rmd).
+# HiTME/scATOMIC combos are guarded: skipped with a warning when the ct
+# column is absent from obs (annotation produces them, availability varies;
+# the old notebook would crash on missing columns).
+# Also emits <ds>_metadata.rds = list(labels = named factor, n_cells,
+# n_samples, cells_per_sample = named int, n_cell_types_high_res) — replaces
+# the notebook's per-dataset obs reads (stats, Supp table 1, exec-times
+# n_cells, feather-method labels).
+run_composition_methods_hpc <- function(
+  labels,
+  metadata,
+  pca_emb,
+  pb_hvg2000,
+  obs,
+  label_col,
+  ct_col_low_res = NULL,
+  ct_col_high_res = NULL,
+  sample_col = "Sample",
+  results_dir,
+  ds,
+  force = FALSE,
+  log_file = NULL,
+  factors_test = c(2, 3, 5, 10, 15),
+  seurat_res = c(0.1, 0.4, 2, 5, 20),
+  ECODA_top_varexp_hvct = seq(0, 0.9, 0.1)
+) {
+  set.seed(123)
+
+  # Metadata bundle: written on every driver invocation (also when all
+  # combos are cached), so the notebook always finds it after a
+  # composition run.
+  cells_per_sample <- table(obs[[sample_col]])
+  metadata_bundle <- list(
+    labels = labels,
+    n_cells = nrow(obs),
+    n_samples = length(labels),
+    cells_per_sample = cells_per_sample,
+    n_cell_types_high_res = if (!is.null(ct_col_high_res) &&
+                                 ct_col_high_res %in% colnames(obs)) {
+      length(unique(obs[[ct_col_high_res]]))
+    } else {
+      NA_integer_
+    }
+  )
+  save_rds_atomic(metadata_bundle,
+                  file.path(results_dir, paste0(ds, "_metadata.rds")))
+
+  results <- list()
+  combos <- list()
+
+  combos[["Avg_PCA_embedding"]] <- function() {
+    process_avg_pca_embedding_fig(NULL, labels, pca_emb = pca_emb, obs = obs)
+  }
+
+  if (is.null(pb_hvg2000)) {
+    stop("run_composition_methods_hpc: pb_hvg2000 (hvg2000 pseudobulk ",
+         "variant) is required for ECODA_deconv")
+  }
+  combos[["ECODA_deconv"]] <- function() {
+    process_deconv_fig(t(pb_hvg2000$pb), labels)
+  }
+
+  if (!is.null(ct_col_low_res)) {
+    combos[["ECODA_authors_LR"]] <- function() {
+      process_coda_fig(NULL, labels, ct_col = ct_col_low_res, obs = obs)
+    }
+  } else {
+    warning("ECODA_authors_LR skipped: cell_type_low_res is null for ", ds)
+  }
+
+  if (!is.null(ct_col_high_res)) {
+    combos[["ECODA_authors_HR"]] <- function() {
+      process_coda_fig(NULL, labels, ct_col = ct_col_high_res, obs = obs)
+    }
+    combos[["ECODA_authors_HR_NULL"]] <- function() {
+      process_coda_fig(NULL, labels, ct_col = ct_col_high_res,
+                       shuffle_labels = TRUE, obs = obs)
+    }
+    combos[["GloProp"]] <- function() {
+      process_gloprop_fig(NULL, metadata, ct_col = ct_col_high_res,
+                          label_col = label_col, obs = obs)
+    }
+    combos[["Freq_highres"]] <- function() {
+      process_coda_fig(NULL, labels, calc_clr = FALSE,
+                       ct_col = ct_col_high_res, obs = obs)
+    }
+
+    # ECODA_authors_HR_top_varexp<v> for v in seq(0, 0.9, 0.1)
+    varexp_combos <- lapply(ECODA_top_varexp_hvct, function(v) {
+      function() {
+        process_coda_fig(NULL, labels, ECODA_top_varexp_hvct = v,
+                         ct_col = ct_col_high_res, obs = obs)
+      }
+    })
+    names(varexp_combos) <- paste0(
+      "ECODA_authors_HR_top_varexp", ECODA_top_varexp_hvct
+    )
+    combos <- c(combos, varexp_combos)
+
+    # ECODA_HiTME_HR_layer2/3_top_varexp<v>: guarded on the annotation
+    # column being present (better than the old notebook, which crashed).
+    for (hitme_ct in c("layer2", "layer3")) {
+      if (!hitme_ct %in% colnames(obs)) {
+        warning("ECODA_HiTME_HR_", hitme_ct, "* combos skipped for ", ds,
+                ": obs has no '", hitme_ct, "' column")
+        next
+      }
+      hitme_combos <- lapply(ECODA_top_varexp_hvct, function(v) {
+        function() {
+          process_coda_fig(NULL, labels, ECODA_top_varexp_hvct = v,
+                           ct_col = hitme_ct, obs = obs)
+        }
+      })
+      names(hitme_combos) <- paste0(
+        "ECODA_HiTME_HR_", hitme_ct, "_top_varexp", ECODA_top_varexp_hvct
+      )
+      combos <- c(combos, hitme_combos)
+    }
+
+    combos[["ECODA_authors_HR_3most_varcts"]] <- function() {
+      process_coda_fig(NULL, labels, ECODA_top_n_hvct = 3,
+                       var_ct_desc = TRUE, ct_col = ct_col_high_res,
+                       obs = obs)
+    }
+    combos[["ECODA_authors_HR_2least_varcts"]] <- function() {
+      process_coda_fig(NULL, labels, ECODA_top_n_hvct = 2,
+                       var_ct_desc = FALSE, ct_col = ct_col_high_res,
+                       obs = obs)
+    }
+    combos[["ECODA_authors_HR_3least_varcts"]] <- function() {
+      process_coda_fig(NULL, labels, ECODA_top_n_hvct = 3,
+                       var_ct_desc = FALSE, ct_col = ct_col_high_res,
+                       obs = obs)
+    }
+
+    for (hitme_ct in c("layer2", "layer3")) {
+      if (!hitme_ct %in% colnames(obs)) {
+        next  # already warned above
+      }
+      hitme_plain <- lapply(hitme_ct, function(ct) {
+        function() {
+          process_coda_fig(NULL, labels, ct_col = ct, obs = obs)
+        }
+      })
+      names(hitme_plain) <- paste0("ECODA_HiTME_HR_", hitme_ct)
+      combos <- c(combos, hitme_plain)
+    }
+    if ("scATOMIC_pred" %in% colnames(obs)) {
+      combos[["ECODA_scATOMIC_HR"]] <- function() {
+        process_coda_fig(NULL, labels, ct_col = "scATOMIC_pred", obs = obs)
+      }
+    } else {
+      warning("ECODA_scATOMIC_HR skipped for ", ds,
+              ": obs has no 'scATOMIC_pred' column")
+    }
+
+    # ECODA_authors_HR_{2,3,5,10,15}_PCA_dims
+    pca_combos <- lapply(factors_test, function(i) {
+      function() {
+        process_coda_fig(NULL, labels, pca_dims = i,
+                         ct_col = ct_col_high_res, obs = obs)
+      }
+    })
+    names(pca_combos) <- paste0("ECODA_authors_HR_", factors_test, "_PCA_dims")
+    combos <- c(combos, pca_combos)
+  } else {
+    warning("ECODA_authors_HR* / GloProp / Freq_highres combos skipped for ",
+            ds, ": cell_type_high_res is null")
+  }
+
+  # ECODA_seuratres_<r> (Leiden resolutions mapped to RNA_snn_res.<r> by
+  # rename_leiden_cols upstream).
+  seuratres_combos <- lapply(seurat_res, function(r) {
+    res_col_name <- paste0("RNA_snn_res.", r)
+    function() {
+      process_coda_fig(NULL, labels, ct_col = res_col_name, obs = obs)
+    }
+  })
+  names(seuratres_combos) <- paste0("ECODA_seuratres_", seurat_res)
+  combos <- c(combos, seuratres_combos)
+
+  for (nm in names(combos)) {
+    bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
+    if (file.exists(bundle_file) && !force) {
+      cached <- readRDS(bundle_file)
+      results[[nm]] <- cached
+      # Re-emit the stored timing on cache reuse: failure-resume runs must
+      # not lose exec-log rows computed in an aborted run (the merge is
+      # scoped to the current run's labels x datasets). The stored mem_GB
+      # is replayed too (the live cumulative peak would overstate the
+      # combo's RAM on a resume).
+      if (!is.null(cached$exec_time)) {
+        log_exec_row(ds, nm, cached$exec_time, log_file,
+                     mem_gb = cached$mem_GB)
+      }
+      next
+    }
+    time_secs <- exec_time(res <- combos[[nm]]())
+    res[["exec_time"]] <- as.numeric(time_secs, units = "secs")
+    res[["mem_GB"]] <- peak_rss_gb()
+    save_rds_atomic(res, bundle_file)
+    log_exec_row(ds, nm, res[["exec_time"]], log_file,
+                 mem_gb = res[["mem_GB"]])
     results[[nm]] <- res
   }
   return(results)

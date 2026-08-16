@@ -296,7 +296,8 @@ process_mrvi_fig <- function(mrvi_dist_file, labels) {
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
   arrow::set_cpu_count(parallelly::availableCores() - 2)
-  rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
+  # Feather rownames already carry the upstream-standardized sample names
+  # (written from obs); do NOT re-standardize (see process_gloprop_fig).
   return(create_result_bundle(feat_mat, labels, dist_mat = as.dist(feat_mat)))
 }
 
@@ -387,7 +388,9 @@ process_gloprop_fig <- function(
     dist_metric = dist_metric
   )
   feat_mat <- sqrt(dist_result)
-  row.names(feat_mat) <- standardize_sample_names(row.names(feat_mat))
+  # Sample names are standardized upstream (1.1.1_preprocess.py): do NOT
+  # re-standardize here (hyphen->underscore) or names diverge from the obs
+  # labels for h5ads that predate the python change (e.g. Adams).
   labels <- metadata[match(row.names(feat_mat), metadata$Sample), ][[label_col]]
   names(labels) <- metadata[match(row.names(feat_mat), metadata$Sample), ][[
     "Sample"
@@ -402,7 +405,8 @@ process_scpoli_fig <- function(scpoli_emb_file, labels) {
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
   arrow::set_cpu_count(parallelly::availableCores() - 2)
-  rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
+  # Feather rownames already carry the upstream-standardized sample names
+  # (written from obs); do NOT re-standardize (see process_gloprop_fig).
   return(create_result_bundle(feat_mat, labels))
 }
 
@@ -413,7 +417,8 @@ process_pilot_fig <- function(pilot_dist_file, labels) {
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
   arrow::set_cpu_count(parallelly::availableCores() - 2)
-  rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
+  # Feather rownames already carry the upstream-standardized sample names
+  # (written from obs); do NOT re-standardize (see process_gloprop_fig).
   return(create_result_bundle(feat_mat, labels))
 }
 
@@ -425,7 +430,8 @@ process_qot_fig <- function(qot_dist_file, labels) {
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
   arrow::set_cpu_count(parallelly::availableCores() - 2)
-  rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
+  # Feather rownames already carry the upstream-standardized sample names
+  # (written from obs); do NOT re-standardize (see process_gloprop_fig).
   return(create_result_bundle(feat_mat, labels))
 }
 
@@ -437,7 +443,8 @@ process_pilotgm_fig <- function(pilotgm_dist_file, labels) {
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
   arrow::set_cpu_count(parallelly::availableCores() - 2)
-  rownames(feat_mat) <- standardize_sample_names(rownames(feat_mat))
+  # Feather rownames already carry the upstream-standardized sample names
+  # (written from obs); do NOT re-standardize (see process_gloprop_fig).
   return(create_result_bundle(feat_mat, labels))
 }
 
@@ -495,6 +502,16 @@ create_result_bundle <- function(
     dist_mat <- as.dist(dist_mat)
   }
   labels <- labels[rownames(feat_mat)]
+  missing_samps <- names(labels)[is.na(labels)]
+  if (length(missing_samps) > 0) {
+    stop(
+      "NA labels for ", length(missing_samps), " of ", length(labels),
+      " samples (e.g. ", paste(head(missing_samps, 5), collapse = ", "),
+      "): feat_mat sample names do not match the labels vector. Check ",
+      "sample-name standardization consistency between the input artifact ",
+      "(h5ad/feather/pseudobulk) and the obs labels."
+    )
+  }
   result <- list(
     scores = calc_sep_score(dist_mat, labels),
     feat_mat = feat_mat,

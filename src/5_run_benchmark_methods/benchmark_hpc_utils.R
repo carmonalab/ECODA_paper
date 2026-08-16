@@ -187,10 +187,32 @@ save_rds_atomic <- function(object, file) {
   file.rename(tmp, file)
 }
 
+# Peak resident set size of the current R process in GB, mirroring the
+# python worker's peak_rss_gb() (getrusage().ru_maxrss: KB on Linux, bytes
+# on macOS). On Linux, VmHWM from /proc/self/status is the process peak-RSS
+# equivalent of ru_maxrss (no extra packages, base R only). Off-Linux (and
+# when /proc is unavailable) returns NA_real_.
+# Same monotonic-cumulative semantics as python: call it at each combo's
+# completion; combos running earlier report the least bloated peak.
+peak_rss_gb <- function() {
+  if (.Platform$OS.type != "unix") return(NA_real_)
+  status_file <- "/proc/self/status"
+  if (!file.exists(status_file)) return(NA_real_)
+  hwm <- grep("^VmHWM:", readLines(status_file, warn = FALSE), value = TRUE)
+  if (length(hwm) == 0) return(NA_real_)
+  kb <- suppressWarnings(
+    as.numeric(sub("^VmHWM:\\s*([0-9]+)\\s*kB\\s*$", "\\1", hwm[1]))
+  )
+  if (is.na(kb)) return(NA_real_)
+  return(kb / 1024^2)
+}
+
 # Append/overwrite one (dataset, method) row in the per-task exec log feather
-# (schema: dataset, method, time_secs, mem_GB with mem_GB = NA_real_ for R
-# rows — NA_real_ so arrow writes a nullable double column matching the
-# Python writer's float64, keeping the merged feather's dtype stable).
+# (schema: dataset, method, time_secs, mem_GB with mem_GB = NA_real_ for
+# rows measured off-Linux or without a peak measurement — NA_real_ so arrow
+# writes a nullable double column matching the Python writer's float64,
+# keeping the merged feather's dtype stable). R workers log their peak RSS
+# (peak_rss_gb(), VmHWM) since 2026-08-16, so R rows no longer default to NA.
 # Read-modify-write on the feather (single process per task); overwrites the
 # row if the (dataset, method) combo already exists — mirrors
 # log_execution_time() in 1.1.1_benchmark_methods_py.py. The merge script
@@ -200,6 +222,7 @@ log_exec_row <- function(dataset, method, time_secs, log_file,
   if (is.null(log_file) || is.na(log_file) || log_file == "") {
     return(invisible(NULL))
   }
+  if (is.null(mem_gb)) mem_gb <- NA_real_
   new_row <- data.frame(
     dataset = as.character(dataset),
     method = as.character(method),
@@ -306,7 +329,7 @@ run_ct_comps_analysis_worker <- function(
   time_secs <- exec_time(res <- run_fun(ct_comps, labels))
   save_rds_atomic(res, out_file)
   log_exec_row(ds, log_method, as.numeric(time_secs, units = "secs"),
-               args$log_file)
+               args$log_file, mem_gb = peak_rss_gb())
   message("Saved: ", out_file, " (",
           round(as.numeric(time_secs, units = "secs"), 1), "s)")
   message("--- ", analysis_label, " analysis for ", ds, " complete ---")

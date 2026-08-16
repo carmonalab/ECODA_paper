@@ -1,7 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-# Submit R benchmark method arrays (GloScope, MOFA, Pseudobulk, scITD) on CPU
+# Submit R benchmark method arrays (GloScope, MOFA, Pseudobulk, scITD,
+# composition) on CPU
 #
 # Usage:
 #   ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh   # all methods, all benchmark datasets
@@ -32,9 +33,10 @@ set -euo pipefail
 # node issue must not block the method arrays when its variants already exist
 # on disk; the strict OOM-aware sacct gate applies only under --force or when
 # variant files are actually missing), waited via its watchdog id. THEN the
-# mofa/pseudobulk arrays (and gloscope/scitd) are submitted, each with its own
-# strict watchdog, and waited the same way. If mofa or pseudobulk is requested
-# without prepare_pseudobulk it is auto-prepended. Every gate + OOM escalation
+# mofa/pseudobulk/composition arrays (and gloscope/scitd) are submitted, each
+# with its own strict watchdog, and waited the same way. If mofa, pseudobulk
+# or composition is requested without prepare_pseudobulk it is auto-prepended.
+# Every gate + OOM escalation
 # runs in the watchdog jobs (compute nodes) so an SSH drop of this login tail
 # can never interrupt an escalation; this tail only waits for the watchdog
 # jobs and then runs the shared merge/sync/cleanup tail (NAS reachability
@@ -131,11 +133,11 @@ if [[ -n "${METHODS_ARG}" ]]; then
 fi
 
 # Validate against the known method set; dedupe preserving order.
-VALID_METHODS="prepare_pseudobulk|gloscope|mofa|pseudobulk|scitd"
+VALID_METHODS="prepare_pseudobulk|gloscope|mofa|pseudobulk|scitd|composition"
 UNIQUE_METHODS=()
 for M in "${METHODS[@]}"; do
   if ! [[ "${M}" =~ ^(${VALID_METHODS})$ ]]; then
-    echo "ERROR: Unknown method '${M}' (expected prepare_pseudobulk, gloscope, mofa, pseudobulk or scitd)."
+    echo "ERROR: Unknown method '${M}' (expected prepare_pseudobulk, gloscope, mofa, pseudobulk, scitd or composition)."
     exit 1
   fi
   if [[ ! " ${UNIQUE_METHODS[*]} " =~ " ${M} " ]]; then
@@ -144,11 +146,11 @@ for M in "${METHODS[@]}"; do
 done
 METHODS=("${UNIQUE_METHODS[@]}")
 
-# mofa/pseudobulk consume the shared DESeq2 pseudobulks: auto-prepend the
-# prepare_pseudobulk prep step if not explicitly listed.
+# mofa/pseudobulk/composition consume the shared DESeq2 pseudobulks:
+# auto-prepend the prepare_pseudobulk prep step if not explicitly listed.
 NEEDS_PREP=0
 for M in "${METHODS[@]}"; do
-  if [[ "${M}" == "mofa" || "${M}" == "pseudobulk" ]]; then
+  if [[ "${M}" == "mofa" || "${M}" == "pseudobulk" || "${M}" == "composition" ]]; then
     NEEDS_PREP=1
   fi
 done
@@ -160,7 +162,7 @@ if [[ ${NEEDS_PREP} -eq 1 ]]; then
     fi
   done
   if [[ ${HAS_PREP} -eq 0 ]]; then
-    echo "NOTE: mofa/pseudobulk requested without prepare_pseudobulk; auto-prepending it."
+    echo "NOTE: mofa/pseudobulk/composition requested without prepare_pseudobulk; auto-prepending it."
     METHODS=("prepare_pseudobulk" "${METHODS[@]}")
   fi
 fi

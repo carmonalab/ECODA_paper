@@ -1,10 +1,10 @@
 # ==============================================================================
-# 1.1.1_run_benchmark_methods_r.R — Run one R benchmark method (gloscope, mofa,
-# pseudobulk or scitd) for one dataset (Pipeline A).
+# 1.1.1_run_benchmark_methods_r.R — Run one R benchmark method (gloscope,
+# mofa, pseudobulk, scitd or composition) for one dataset (Pipeline A).
 #
 # Called by 1.1_run_worker.sh via ${PIXI_RSCRIPT} with:
 #   --config_path --ds_name --view benchmark_analysis --method {gloscope,mofa,
-#   pseudobulk,scitd} --input_dir --results_dir --pseudobulk_dir
+#   pseudobulk,scitd,composition} --input_dir --results_dir --pseudobulk_dir
 #   --gloscope_cache_dir --log_file [--force]
 # Loads the preprocessed benchmark view h5ad -> Seurat (raw counts +
 # X_pca_benchmark_analysis_hvg{n} obsm embeddings via reticulate), sets
@@ -20,7 +20,9 @@
 # Memory: mofa consumes only the precomputed pseudobulks, so the full Seurat
 # object (multi-GB counts matrix) is built lazily only when a pb variant is
 # missing on disk; gloscope fetches the embeddings, pseudobulk/scitd the
-# counts (fetch_embedding = NULL).
+# counts (fetch_embedding = NULL). composition is obs-only (backed h5ad obs +
+# the hvg2000 obsm embedding + the precomputed hvg2000 pseudobulk variant):
+# no Seurat object at all.
 # ==============================================================================
 
 project_root <- Sys.getenv("PROJECT_ROOT")
@@ -44,16 +46,23 @@ for (req in c("config_path", "ds_name", "view", "method", "input_dir",
 force <- isTRUE(args[["force"]]) || identical(args[["force"]], "TRUE")
 
 method <- args$method
-if (!method %in% c("gloscope", "mofa", "pseudobulk", "scitd")) {
+if (!method %in% c("gloscope", "mofa", "pseudobulk", "scitd",
+                   "composition")) {
   stop("Unknown method '", method,
-       "' (expected gloscope, mofa, pseudobulk or scitd)")
+       "' (expected gloscope, mofa, pseudobulk, scitd or composition)")
 }
 
 # Method-specific attaches: MOFA2/scITD are needed only by their methods
 # (bare create_mofa / initialize_params + make_new_container); gloscope needs
 # only the installed namespace (GloScope::gloscope is called qualified).
+# composition calls EPIC::EPIC + GloScope::gloscopeProp BARE (as the
+# notebook does via imports.R), so both must be attached for it.
 if (method == "mofa") library(MOFA2)
 if (method == "scitd") library(scITD)
+if (method == "composition") {
+  library(EPIC)
+  library(GloScope)
+}
 
 config <- read_datasets_json(args$config_path, view = args$view)
 ds <- args$ds_name
@@ -75,7 +84,8 @@ if (file.exists(method_rds) && !force) {
   cached <- readRDS(method_rds)
   for (nm in names(cached)) {
     if (!is.null(cached[[nm]]$exec_time)) {
-      log_exec_row(ds, nm, cached[[nm]]$exec_time, args$log_file)
+      log_exec_row(ds, nm, cached[[nm]]$exec_time, args$log_file,
+                   mem_gb = cached[[nm]]$mem_GB)
     }
   }
   quit(save = "no", status = 0)
@@ -108,21 +118,54 @@ if (method == "mofa") {
     message("Building Seurat for on-the-fly pseudobulk variants...")
     seurat <- load_benchmark_seurat(adata, obs, sample_col = sample_col,
                                     fetch_embedding = NULL)
-    seurat@meta.data[[sample_col]] <- standardize_sample_names(
-      seurat@meta.data[[sample_col]]
-    )
   }
   pb_variants <- load_pb_variants(
     seurat, sample_col, hvg_rank_genes,
     pseudobulk_dir = args$pseudobulk_dir, ds = ds,
     force = force, log_file = args$log_file
   )
-  obs[[sample_col]] <- standardize_sample_names(obs[[sample_col]])
+  # Sample names are already standardized in the preprocessed obs
+  # (1.1.1_preprocess.py): no standardize_sample_names() re-application here
+  # (it would diverge the labels from the obs names for h5ads that predate
+  # the python change, e.g. Adams).
   metadata <- obs %>%
     dplyr::group_by(!!sym(sample_col)) %>%
     dplyr::slice(1)
   labels <- as.factor(metadata[[entry$label_col]])
   names(labels) <- metadata[[sample_col]]
+} else if (method == "composition") {
+  # Obs-only path: no Seurat materialization. Consumes the backed h5ad obs
+  # (cell-level metadata), the hvg2000 obsm PCA embedding (Avg_PCA_embedding)
+  # and the precomputed hvg2000 pseudobulk variant (ECODA_deconv; the submit
+  # script auto-prepends prepare_pseudobulk for composition).
+  if (is.null(args$pseudobulk_dir) || identical(args$pseudobulk_dir, TRUE)) {
+    stop("Missing required --pseudobulk_dir argument for method composition")
+  }
+  dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
+  # Map the new-pipeline Leiden resolution columns to the legacy
+  # RNA_snn_res.* names used by the ECODA_seuratres_* combos.
+  obs <- rename_leiden_cols(obs, view = "benchmark_analysis")
+  metadata <- obs %>%
+    dplyr::group_by(!!sym(sample_col)) %>%
+    dplyr::slice(1)
+  labels <- as.factor(metadata[[entry$label_col]])
+  names(labels) <- metadata[[sample_col]]
+  obsm_keys <- py_to_r(import_builtins(convert = FALSE)$list(
+    adata$obsm$keys()
+  ))
+  emb_key <- "X_pca_benchmark_analysis_hvg2000"
+  if (!emb_key %in% obsm_keys) {
+    stop("Embedding '", emb_key, "' not found in adata.obsm of ", h5ad_path,
+         ". Re-run preprocessing (1.1.1_preprocess.py) for this dataset.")
+  }
+  pca_emb <- py_to_r(adata$obsm[[emb_key]])
+  if (is.null(rownames(pca_emb))) rownames(pca_emb) <- rownames(obs)
+  colnames(pca_emb) <- paste0("PC_", seq_len(ncol(pca_emb)))
+  pb_variants <- load_pb_variants(
+    NULL, sample_col, hvg_rank_genes,
+    pseudobulk_dir = args$pseudobulk_dir, ds = ds,
+    force = force, log_file = args$log_file
+  )
 } else {
   seurat <- load_benchmark_seurat(
     adata, obs, sample_col = sample_col,
@@ -134,9 +177,9 @@ if (method == "mofa") {
       NULL
     }
   )
-  seurat@meta.data[[sample_col]] <- standardize_sample_names(
-    seurat@meta.data[[sample_col]]
-  )
+  # Sample names are already standardized in the preprocessed obs
+  # (1.1.1_preprocess.py): no standardize_sample_names() re-application
+  # (kept only in the legacy Seurat path of run_benchmark_analysis).
   if (length(hvg_rank_genes) > 0) {
     VariableFeatures(seurat) <- hvg_rank_genes[
       seq_len(min(2000, length(hvg_rank_genes)))
@@ -192,6 +235,15 @@ results <- switch(
   scitd = run_scitd_hpc(
     seurat, label_col = entry$label_col,
     hvg_sets = make_hvg_sets(hvg_rank_genes),
+    sample_col = sample_col,
+    results_dir = args$results_dir, ds = ds,
+    force = force, log_file = args$log_file
+  ),
+  composition = run_composition_methods_hpc(
+    labels, metadata, pca_emb, pb_variants[["hvg2000"]], obs,
+    label_col = entry$label_col,
+    ct_col_low_res = entry$cell_type_low_res,
+    ct_col_high_res = entry$cell_type_high_res,
     sample_col = sample_col,
     results_dir = args$results_dir, ds = ds,
     force = force, log_file = args$log_file

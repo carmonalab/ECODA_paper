@@ -56,9 +56,10 @@ if (!sample_col %in% colnames(obs)) {
 
 seurat <- load_benchmark_seurat(adata, obs, sample_col = sample_col,
                                 fetch_embedding = NULL)
-seurat@meta.data[[sample_col]] <- standardize_sample_names(
-  seurat@meta.data[[sample_col]]
-)
+# Sample names are already standardized in the preprocessed obs
+# (1.1.1_preprocess.py): do NOT re-apply standardize_sample_names() here —
+# it would diverge (hyphen -> underscore) from the obs names for h5ads that
+# predate the python change (e.g. Adams), breaking the bundle label match.
 hvg_rank_genes <- get_hvg_rank_genes(adata)
 
 pending <- pb_variants_missing(args$pseudobulk_dir, ds, force)
@@ -75,7 +76,8 @@ if (length(pending) > 0) {
     f <- file.path(args$pseudobulk_dir, paste0(ds, "_pseudobulk_", v, ".rds"))
     save_rds_atomic(variants[[v]], f)
     log_exec_row(ds, paste0("prepare_pseudobulk_", v),
-                 variants[[v]]$time_secs, args$log_file)
+                 variants[[v]]$time_secs, args$log_file,
+                 mem_gb = variants[[v]]$mem_GB)
     message("  Saved: ", f, " (", round(variants[[v]]$time_secs, 1), "s)")
   }
 } else {
@@ -86,7 +88,8 @@ if (length(pending) > 0) {
     f <- file.path(args$pseudobulk_dir, paste0(ds, "_pseudobulk_", v, ".rds"))
     cached <- readRDS(f)
     log_exec_row(ds, paste0("prepare_pseudobulk_", v),
-                 cached$time_secs, args$log_file)
+                 cached$time_secs, args$log_file,
+                 mem_gb = cached$mem_GB)
     message("Pseudobulk variant already exists: ", f)
   }
 }

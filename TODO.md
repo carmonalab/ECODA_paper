@@ -59,6 +59,18 @@ new_datasets_to_implement.md (kept as appendix, linked from Phase 5).
         pending (see `docs/qot_hotfixes.md` / plan §6).
       - Batch-effect view (`X_pca_harmony` input for PILOT-GM-VAE) stays
         Phase 4 (`4.4` below).
+      - **PILOT NaN fix (commit `c547613`, `fill_unknown_ct` in
+        `1.1.1_benchmark_methods_py.py:326`)**: HiTME `layer2` annotations on
+        Lee/Zhang contain NaN for unclassified cells, which silently produced
+        all-zero PILOT EMD distances. The fix is committed but the **Lee/Zhang
+        PILOT bundles on NAS are STALE (all-zero EMD) — re-run pending**:
+        `run_python_sample_embedding_methods/1_submit_hpc_array.sh --ds_name Lee --methods pilot --force`
+        and same for `Zhang` (parallel-friendly, one terminal each).
+      - **QOT + PILOT-GM-VAE `_debug` HPC validation**: `_debug` e2e run
+        submitted 2026-08-16; once it passes, roll both methods out to all
+        benchmark datasets (`--methods qot,pilotgm` on the python submitter;
+        qot → CPU, pilotgm → GPU arrays). The notebook already ingests their
+        feathers (skip-with-message while absent).
       - PULSAR (+UCE): LATER step, NOT included — foundation-model scale (UCE
         1280-dim embeddings, multi-GB pretrained weights, PBMC-specific
         pretrained checkpoints), unclear GPU/VRAM, out-of-domain for the
@@ -83,6 +95,20 @@ new_datasets_to_implement.md (kept as appendix, linked from Phase 5).
       vector (`benchmark_analysis.rmd:2557`); Modularity with multiple KNN
       variants (sqrt(n)/3/6/9) in `src/utils/scoring_metrics.R`
       (`calc_modularity`). DONE.
+- [x] **3.6 Composition methods moved to HPC** (DONE 2026-08-16; plan
+      `.kilo/plans/1786711296469-move-composition-methods-to-hpc.md`): the
+      notebook-local composition methods (ECODA_* family, GloProp,
+      Freq_highres, Avg_PCA_embedding, ECODA_deconv) now run as one
+      `composition` array task per dataset (obs-only worker: backed h5ad obs
+      + hvg2000 obsm + precomputed hvg2000 pseudobulk; set.seed(123) per
+      dataset; HiTME/scATOMIC combos guarded on ct-column presence). The
+      notebook reads ZERO h5ad files: bundles +
+      `<ds>_metadata.rds` (labels, cell/sample counts) + python-method
+      feathers; `result_list.rds` checkpointing dropped (fresh load every
+      knit). R workers log peak RSS (`peak_rss_gb()`, `/proc/self/status`
+      VmHWM) into the exec-log + each bundle (`mem_GB`) — R rows no longer
+      NA. Adams pseudobulk sample-name fix (hyphen/underscore mismatch, the
+      notebook silhouette crash) in the same plan (Phase 0).
 - [ ] **3.4 Docs**: README usage/workflow, ARCHITECTURE.md, AGENTS.md (also
       update the AGENTS.md reference to the TODO phases after this restructure).
 - [ ] **3.5 SLURM config cleanup**: resolve or drop the leftover
@@ -203,17 +229,17 @@ comments) is in `new_datasets_to_implement.md` (Excel source:
   storms on the CPU arrays, throttle concurrency as a separate design
   (`MAX_NUM_CHUNKS_PARALLEL` stays untouched). Long-term alternative:
   node-shared `/srv/share/users/...` staging (documented, not implemented).
-- R-method peak RAM: backfill sacct `MaxRSS` into `execution_times.feather`
-  (R rows currently have `mem_GB = NA`; the notebook's RAM figure
-  `Supp_fig_14B_benchmark_mem_GB.pdf` shows python methods only).
+- Optional (backfill): sacct `MaxRSS` backfill of `execution_times.feather`
+  `mem_GB` for R-method bundles computed BEFORE 2026-08-16 (workers only
+  started logging peak RSS then; legacy bundles keep `mem_GB = NA` until
+  their next `--force` run).
 - ECODA+Pseudobulk distance combos (`ECODA_PB_combo_*`): legacy, disabled in
   `run_benchmark_analysis`, kept commented-out in `benchmark_analysis.rmd` for
   internal testing only — NOT shown in publication figures.
-- Optional: HPC workers dumping per-dataset `obs.rds` + PCA-mean matrix if the
-  notebook should ever avoid h5ad reads entirely (currently not needed —
-  obs/obsm backed reads are light).
 - Cell/sample/annotation counts from h5ad without full load (MOFAcellular
-  moved to 3.2).
+  moved to 3.2; the benchmark notebook now gets them from
+  `<ds>_metadata.rds` — the metadata-bundle pattern could be extended to the
+  batch-effect notebook).
 - Gene blacklist before HVG selection: dump `aux/genes.blocklist.rds` (STACAS
   default_black_list) to a text file (one gene per line; `full` and `no_sex`
   variants), add `load_blacklist(path, exclude_sex=True)` to

@@ -160,9 +160,11 @@ Running the pipeline:
     ./src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh
     ```
   - **R methods** (`run_r_sample_embedding_methods/`): GloScope, MOFA,
-    Pseudobulk, scITD (CPU benchmark class, pinned like PILOT for runtime
-    comparability); `mofa`/`pseudobulk` auto-prepend the `prepare_pseudobulk`
-    prep step.
+    Pseudobulk, scITD + `composition` (the ECODA_* family, GloProp, EPIC
+    deconv, Avg_PCA_embedding, Freq_highres — obs-only worker, also emits
+    `<ds>_metadata.rds`) on the CPU benchmark class (pinned like PILOT for
+    runtime comparability); `mofa`/`pseudobulk`/`composition` auto-prepend
+    the `prepare_pseudobulk` prep step.
     ```bash
     ./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh
     ```
@@ -172,19 +174,21 @@ Running the pipeline:
     ./src/5_run_benchmark_methods/run_transformation_zeroimp_analysis/1_submit_hpc_array.sh
     ```
   All benchmark submitters monitor their arrays, verify every task via `sacct`
-  (fail-closed), merge the per-task execution-time logs into
-  `benchmark/execution_times.feather` and rsync results to
+  (fail-closed), merge the per-task execution-time logs (incl. per-worker peak
+  RAM) into `benchmark/execution_times.feather` and rsync results to
   `Projects/ECODA_paper/benchmark/` on the NAS; the notebook
   (`notebooks/benchmark_analysis.rmd`) loads the R result bundles via
   `load_hpc_benchmark_results()` (path: `path_nas_benchmark` in the setup
-  chunk).
+  chunk) and reads zero h5ad files (labels/stats from the `<ds>_metadata.rds`
+  bundles).
 
 #### Expected Outputs
 
 - `.feather` files — cross-language distance matrices and embeddings produced
   by Python benchmark methods and consumed by R processors.
 - `.rds` result bundles — per-method/per-combo benchmark results (GloScope,
-  MOFA, Pseudobulk, scITD) + transformation/zero-imputation results, computed
+  MOFA, Pseudobulk, scITD, composition incl. `<ds>_metadata.rds`) +
+  transformation/zero-imputation results, computed
   on HPC and loaded by the notebook (`benchmark/{results,pseudobulks,
   gloscope_dists}/` on the NAS).
 - Publication figures (MDS plots, PCA biplots, benchmark bar charts, separation

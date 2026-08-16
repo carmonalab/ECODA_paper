@@ -19,16 +19,14 @@ Core script to run the benchmark and generate paper figures.
 
 ## Inputs
 
--   Preprocessed + annotated per-view `.h5ad` files per dataset (stages 2–4:
-    `src/3_scrnaseq_preprocessing/` + `src/4_cell_type_annotation/`, synced to
-    `${NAS_TARGET_DIR}/<DS>/output/`). Read in **backed mode**: obs (metadata)
-    only, plus one obsm PCA matrix for Avg_PCA — no counts access.
--   HPC benchmark result bundles (`${NAS_TARGET_DIR}/benchmark/results/`), the
-    python-method sample distance/embedding `.feather` files and the merged
-    `execution_times.feather` (`${NAS_TARGET_DIR}/benchmark/embeddings/`), and
-    the precomputed DESeq2 pseudobulks
-    (`${NAS_TARGET_DIR}/benchmark/pseudobulks/`), all rsynced by the benchmark
+-   HPC benchmark result bundles (`${NAS_TARGET_DIR}/benchmark/results/`),
+    including the composition metadata bundles (`<ds>_metadata.rds`: labels,
+    cell/sample counts) and the python-method sample distance/embedding
+    `.feather` files + the merged `execution_times.feather`
+    (`${NAS_TARGET_DIR}/benchmark/embeddings/`), all rsynced by the benchmark
     submit scripts from the HPC pipelines in `src/5_run_benchmark_methods/`.
+    **No h5ad files are read anywhere in the notebook anymore** (all
+    benchmark methods — heavy and composition-based — run on HPC).
 
 ## Outputs
 
@@ -99,19 +97,13 @@ dataset_display_map[["GongSharma"]] <- dataset_display_map[["Gongsharma_cmv_youn
 # comment the line below and uncomment the /Volumes/... line.
 path_nas_project <- file.path(getwd(), "data")
 # path_nas_project <- file.path("", "Volumes", "Shared", "Projects", "ECODA_paper")
-# HPC-computed R benchmark results (Pipeline A methods + trans/zeroimp,
-# rsynced by the submit scripts to ${NAS_TARGET_DIR}/benchmark/).
+# HPC-computed R benchmark results (Pipeline A methods incl. composition,
+# <ds>_metadata.rds bundles, trans/zeroimp, rsynced by the submit scripts to
+# ${NAS_TARGET_DIR}/benchmark/).
 path_nas_benchmark <- file.path(path_nas_project, "benchmark", "results")
-# Python-method sample distance/embedding feathers (MrVI/PILOT/scPoli) and
-# the merged execution_times.feather.
+# Python-method sample distance/embedding feathers (MrVI/PILOT/scPoli/
+# QOT/PILOT-GM-VAE) and the merged execution_times.feather.
 path_nas_embeddings <- file.path(path_nas_project, "benchmark", "embeddings")
-# Precomputed DESeq2 pseudobulks (<ds>_pseudobulk_hvg2000.rds =
-# list(pb = samples x genes, time_secs)).
-path_nas_pseudobulks <- file.path(path_nas_project, "benchmark", "pseudobulks")
-# Per-dataset preprocessed h5ads: file.path(path_nas_project, ds, "output")
-# with the view output_file_name from datasets.json
-# (get_view_h5ad_path(datasets, ds, "benchmark_analysis")).
-# path_data <- file.path(path_root, "data")
 path_data <- file.path(getwd(), "data")
 path_plots <- file.path(getwd(), "plots")
 
@@ -145,13 +137,11 @@ set.seed(123)
 # Create results list to fill
 
 ```{r}
-result_file <- "result_list.rds"
-
-if (file.exists(result_file)) {
-  result_list <- readRDS(result_file)
-} else {
-  result_list <- list()
-}
+# No result_list.rds persistence (Option A): every knit starts fresh and
+# reloads all HPC bundles (fast readRDS) — a stale file on disk must not be
+# read back in, and nothing writes it anymore (the old stale-in-memory
+# clobber hazard is gone; knits are fully deterministic).
+result_list <- list()
 ```
 
 # ---------------------------------------------------------------
@@ -163,8 +153,7 @@ NOTE: Pre-processed (e.g. including cell type annotation, clustering, etc.) data
 ```{r message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
 # Fail fast if the HPC benchmark results are unavailable: the chunk below
 # suppresses warnings, and silently missing bundles would render the whole
-# notebook without GloScope/MOFA/Pseudobulk/scITD/trans/zeroimp AND overwrite
-# result_list.rds with the partial list.
+# notebook without GloScope/MOFA/Pseudobulk/scITD/composition/trans/zeroimp.
 if (!dir.exists(path_nas_benchmark)) {
   stop(
     "HPC benchmark results dir not found: ", path_nas_benchmark,
@@ -186,114 +175,251 @@ if (!dir.exists(path_nas_embeddings)) {
     "run_python_sample_embedding_methods/) and make sure the NAS is mounted."
   )
 }
-if (!dir.exists(path_nas_pseudobulks)) {
-  stop(
-    "Pseudobulk bundles dir not found: ", path_nas_pseudobulks,
-    "\nRun the HPC prepare_pseudobulk pipeline first (see TODO.md Phase 3.2)."
-  )
-}
 
 sample_col <- "Sample"
+# HVG levels / factor (PCA-dim) levels mirror run_benchmark_analysis'
+# defaults (now computed on HPC by run_composition_methods_hpc).
+HVGs <- c(1000, 2000, 3000)
+factors_test <- c(2, 3, 5, 10, 15)
 # Per-dataset cell-count/statistics collected during the loop (display keys;
 # used by the exec-time figures and Supp table 1 instead of full reloads).
 n_cells_by_ds <- list()
 ds_stats_list <- list()
 
 for (ds in names(datasets)) {
-  # Per-dataset inputs: preprocessed view h5ad (NAS) + shared pseudobulk.
-  h5ad_path <- file.path(
-    path_nas_project, ds, "output",
-    get_view_h5ad_path(datasets, ds, "benchmark_analysis")
-  )
-  if (!file.exists(h5ad_path)) {
+  # Per-dataset inputs: HPC result bundles + the composition metadata bundle
+  # (<ds>_metadata.rds, written by the composition worker: labels, n_cells,
+  # n_samples, cells_per_sample, n_cell_types_high_res). No h5ad/pseudobulk
+  # reads anywhere in the notebook anymore.
+  metadata_file <- file.path(path_nas_benchmark, paste0(ds, "_metadata.rds"))
+  if (!file.exists(metadata_file)) {
     stop(
-      "Preprocessed h5ad not found: ", h5ad_path,
-      "\nRun stages 2-4 for this dataset (src/3_scrnaseq_preprocessing/ + ",
-      "src/4_cell_type_annotation/) and make sure the NAS is mounted."
+      "Composition metadata bundle not found: ", metadata_file,
+      "\nRun the HPC composition benchmark for this dataset first ",
+      "(src/5_run_benchmark_methods/run_r_sample_embedding_methods/ ",
+      "--methods composition; auto-prepends prepare_pseudobulk)."
     )
   }
-  pb_file <- file.path(path_nas_pseudobulks, paste0(ds, "_pseudobulk_hvg2000.rds"))
-  if (!file.exists(pb_file)) {
-    stop(
-      "Pseudobulk bundle not found: ", pb_file,
-      "\nRun the HPC prepare_pseudobulk pipeline for this dataset first."
-    )
-  }
+  ds_meta <- readRDS(metadata_file)
+  labels <- ds_meta$labels
 
-  # Backed h5ad read (as in the HPC R workers): obs (metadata) only + one
-  # obsm PCA matrix for Avg_PCA. No counts access in the notebook — the
-  # DESeq2 pseudobulk used by ECODA_deconv is the precomputed HPC hvg2000
-  # variant (identical computation, see AGENTS.md).
-  ad <- import("anndata", convert = FALSE)
-  adata <- ad$read_h5ad(h5ad_path, backed = "r")
-  obs <- py_to_r(adata$obs)
-  # Sample column is already standardized upstream (1.1.1_preprocess.py), so
-  # no standardize_sample_names() needed here.
-  obsm_keys <- py_to_r(import_builtins(convert = FALSE)$list(adata$obsm$keys()))
-  emb_key <- "X_pca_benchmark_analysis_hvg2000"
-  if (!emb_key %in% obsm_keys) {
-    stop("Embedding '", emb_key, "' not found in adata.obsm of ", h5ad_path,
-         ". Re-run preprocessing (1.1.1_preprocess.py) for this dataset.")
-  }
-  pca_emb <- py_to_r(adata$obsm[[emb_key]])
-  rownames(pca_emb) <- rownames(obs)
-  # obsm numpy arrays carry no column names; Avg_PCA_embedding expects the
-  # Seurat PC_* convention.
-  colnames(pca_emb) <- paste0("PC_", seq_len(ncol(pca_emb)))
-  pb_norm <- readRDS(pb_file)[["pb"]]
-
-  # Legacy internal test (UCell-threshold layer3 refinement, requires
-  # IFN_UCell/cellCycle.*_UCell columns): NOT applied in the new pipeline —
-  # the annotation stage already produced the h5ad obs. The Seurat helper
-  # stays in src/utils/seurat_utils.R for the batch-effect notebook.
-  # seurat <- replace_HiTMElayer3_annot(seurat, thresh = 0.1)
-
-  # Heavy R methods (GloScope, MOFA, Pseudobulk, scITD) + the transformation
-  # and zero-imputation analyses run on HPC (src/5_run_benchmark_methods/
-  # run_r_sample_embedding_methods/ and run_transformation_zeroimp_analysis/);
-  # load their result bundles from the NAS. Entries already present in
-  # result_list are kept (legacy rerun semantics); only missing methods are
-  # read from ${path_nas_benchmark}/<ds>_<method>.rds.
-  result_list <- load_hpc_benchmark_results(result_list, ds, path_nas_benchmark)
-
-  # Remaining (fast, composition-based) benchmark methods run locally, on the
-  # obs/embedding/pseudobulk inputs (no Seurat object, no counts).
-  result_list[["bmark"]][[ds]] <- run_benchmark_analysis(
-    res_list = result_list[["bmark"]][[ds]],
-    ds = ds,
-    seurat = NULL,
-    path_data = path_nas_embeddings,
-    obs = obs,
-    adata = adata,
-    pca_emb = pca_emb,
-    pb_norm = pb_norm,
-    label_col = datasets[[ds]]$label_col,
-    ct_col_low_res = datasets[[ds]]$cell_type_low_res,
-    ct_col_high_res = datasets[[ds]]$cell_type_high_res
+  # All R benchmark methods — heavy (GloScope, MOFA, Pseudobulk, scITD) AND
+  # composition-based (ECODA_*, GloProp, Freq_highres, Avg_PCA_embedding,
+  # ECODA_deconv) — run on HPC (src/5_run_benchmark_methods/
+  # run_r_sample_embedding_methods/); the transformation and zero-imputation
+  # analyses too. Bundles are loaded FRESH from the NAS every knit (no
+  # result_list.rds persistence, no rerun semantics). NOTE:
+  # ECODA_authors_HR_NULL (shuffle_labels null control) is computed on HPC
+  # with set.seed(123) per dataset and is NOT bit-identical to the old
+  # notebook-local run (different RNG stream) — irrelevant for a null
+  # control.
+  result_list <- load_hpc_benchmark_results(
+    result_list, ds, path_nas_benchmark,
+    methods = c("gloscope", "mofa", "pseudobulk", "scitd", "composition")
   )
 
-  # Per-dataset stats for the exec-time figures + Supp table 1.
+  # Python-feather methods (MrVI/PILOT/scPoli/QOT/PILOT-GM-VAE): fast
+  # sample-distance/embedding feather reads + scoring, kept in the notebook
+  # (seconds, no h5ad I/O). Labels come from the metadata bundle.
+  for (i in HVGs) {
+    if (i == 2000) {
+      scpoli_dims <- factors_test
+    } else {
+      scpoli_dims <- 15
+    }
+
+    file_mrvi <- file.path(
+      path_nas_embeddings,
+      paste0(ds, "_hvg", i, "_mrvi_dists.feather")
+    )
+    file_pilot <- file.path(
+      path_nas_embeddings,
+      paste0(ds, "_hvg", i, "_highres_pilot_dists.feather")
+    )
+    files_scpoli <- file.path(
+      path_nas_embeddings,
+      paste0(
+        ds, "_hvg", i, "_highres_scpoli_dims", scpoli_dims, "_embs.feather"
+      )
+    )
+    file_highres_pilot <- file.path(
+      path_nas_embeddings,
+      paste0(ds, "_hvg2000_highres_pilot_dists.feather")
+    )
+
+    files_to_check <- c(file_mrvi, file_pilot, files_scpoli, file_highres_pilot)
+    missing_files <- files_to_check[!file.exists(files_to_check)]
+
+    if (length(missing_files) > 0) {
+      stop(
+        "The following file(s) are missing:\n",
+        paste(missing_files, collapse = "\n")
+      )
+    }
+  }
+  for (i in HVGs) {
+    # --- MrVI (Runs once per HVG) ---
+    mrvi_dist_file <- file.path(
+      path_nas_embeddings,
+      paste0(ds, "_hvg", i, "_mrvi_dists.feather")
+    )
+    result_list[["bmark"]][[ds]][[paste0("MrVI_hvg", i)]] <- process_mrvi_fig(
+      mrvi_dist_file = mrvi_dist_file,
+      labels
+    )
+
+    # --- PILOT (Runs once per HVG) ---
+    pilot_dist_file <- file.path(
+      path_nas_embeddings,
+      paste0(ds, "_hvg", i, "_highres_pilot_dists.feather")
+    )
+    result_list[["bmark"]][[ds]][[paste0("PILOT_hvg", i)]] <- process_pilot_fig(
+      pilot_dist_file = pilot_dist_file,
+      labels
+    )
+
+    # --- QOT (Runs once per HVG) ---
+    # Pending method (TODO.md Phase 3): feathers may be absent -> skip with a
+    # message instead of failing the whole dataset.
+    qot_dist_file <- file.path(
+      path_nas_embeddings,
+      paste0(ds, "_hvg", i, "_highres_qot_dists.feather")
+    )
+    if (file.exists(qot_dist_file)) {
+      result_list[["bmark"]][[ds]][[paste0("QOT_hvg", i)]] <- process_qot_fig(
+        qot_dist_file = qot_dist_file,
+        labels
+      )
+    } else {
+      message("QOT_hvg", i, " skipped for ", ds,
+              ": feather not found (pending method, TODO.md Phase 3)")
+    }
+
+    # --- PILOT-GM-VAE (Runs once per HVG) ---
+    # Pending method (TODO.md Phase 3): feathers may be absent -> skip with a
+    # message instead of failing the whole dataset.
+    pilotgm_dist_file <- file.path(
+      path_nas_embeddings,
+      paste0(ds, "_hvg", i, "_highres_pilotgm_dists.feather")
+    )
+    if (file.exists(pilotgm_dist_file)) {
+      result_list[["bmark"]][[ds]][[paste0("PILOT-GM-VAE_hvg", i)]] <-
+        process_pilotgm_fig(
+          pilotgm_dist_file = pilotgm_dist_file,
+          labels
+        )
+    } else {
+      message("PILOT-GM-VAE_hvg", i, " skipped for ", ds,
+              ": feather not found (pending method, TODO.md Phase 3)")
+    }
+
+    scpoli_emb_file <- file.path(
+      path_nas_embeddings,
+      paste0(ds, "_hvg", i, "_highres_scpoli_dims15_embs.feather")
+    )
+    result_list[["bmark"]][[ds]][[paste0(
+      "scPoli_hvg",
+      i,
+      "_dims15_highres"
+    )]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
+
+    # --- scPoli (Runs once OR multiple times depending on HVG) ---
+    if (i == 2000) {
+      target_dims <- factors_test
+      for (f in target_dims) {
+        scpoli_emb_file <- file.path(
+          path_nas_embeddings,
+          paste0(
+            ds,
+            "_hvg",
+            i,
+            "_highres_scpoli_dims",
+            f,
+            "_embs.feather"
+          )
+        )
+        result_list[["bmark"]][[ds]][[paste0(
+          "scPoli_hvg",
+          i,
+          "_dims",
+          f,
+          "_highres"
+        )]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
+      }
+
+      pilot_dist_file <- file.path(
+        path_nas_embeddings,
+        paste0(ds, "_hvg", i, "_lowres_pilot_dists.feather")
+      )
+      result_list[["bmark"]][[ds]][[paste0("PILOT_hvg", i, "_lowres")]] <-
+        process_pilot_fig(
+          pilot_dist_file = pilot_dist_file,
+          labels
+        )
+
+      qot_dist_file <- file.path(
+        path_nas_embeddings,
+        paste0(ds, "_hvg", i, "_lowres_qot_dists.feather")
+      )
+      if (file.exists(qot_dist_file)) {
+        result_list[["bmark"]][[ds]][[paste0("QOT_hvg", i, "_lowres")]] <-
+          process_qot_fig(
+            qot_dist_file = qot_dist_file,
+            labels
+          )
+      } else {
+        message("QOT_hvg", i, "_lowres skipped for ", ds,
+                ": feather not found (pending method, TODO.md Phase 3)")
+      }
+
+      pilotgm_dist_file <- file.path(
+        path_nas_embeddings,
+        paste0(ds, "_hvg", i, "_lowres_pilotgm_dists.feather")
+      )
+      if (file.exists(pilotgm_dist_file)) {
+        result_list[["bmark"]][[ds]][[paste0("PILOT-GM-VAE_hvg", i, "_lowres")]] <-
+          process_pilotgm_fig(
+            pilotgm_dist_file = pilotgm_dist_file,
+            labels
+          )
+      } else {
+        message("PILOT-GM-VAE_hvg", i, "_lowres skipped for ", ds,
+                ": feather not found (pending method, TODO.md Phase 3)")
+      }
+
+      scpoli_emb_file <- file.path(
+        path_nas_embeddings,
+        paste0(ds, "_hvg", i, "_lowres_scpoli_dims15_embs.feather")
+      )
+      result_list[["bmark"]][[ds]][[paste0(
+        "scPoli_hvg",
+        i,
+        "_dims15_lowres"
+      )]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
+    }
+  }
+
+  # Per-dataset stats for the exec-time figures + Supp table 1 (from the
+  # metadata bundle; no obs reads).
   ds_key_out <- if (ds == "Gongsharma_cmv_young_males") "GongSharma" else ds
-  n_cells_by_ds[[ds_key_out]] <- nrow(obs)
-  ct_per_sample <- table(obs[[sample_col]])
+  n_cells_by_ds[[ds_key_out]] <- ds_meta$n_cells
+  ct_per_sample <- ds_meta$cells_per_sample
   ds_stats_list[[ds_key_out]] <- data.frame(
     dataset = ds_key_out,
-    n_samples = length(unique(obs[[sample_col]])),
-    n_cells = nrow(obs),
+    n_samples = ds_meta$n_samples,
+    n_cells = ds_meta$n_cells,
     cells_per_sample_mean = mean(ct_per_sample),
     cells_per_sample_sd = sd(ct_per_sample),
-    n_cell_types = length(unique(obs[[datasets[[ds]]$cell_type_high_res]]))
+    n_cell_types = ds_meta$n_cell_types_high_res
   )
 
-  # Release the backed h5ad handle.
-  adata$file$close()
-  rm(adata, obs, pca_emb, pb_norm, ct_per_sample)
+  rm(ds_meta, labels, ct_per_sample)
   gc()
 }
 
-# Prune cached entries of excluded datasets so every later
-# names(result_list[["bmark"]]) loop is scoped (result_list.rds on disk is
-# kept intact; re-pruned in memory each run).
+# Prune any loaded entries of excluded datasets so every later
+# names(result_list[["bmark"]]) loop is scoped (nothing persists to disk;
+# pruning is in-memory only).
 result_list[["bmark"]] <- result_list[["bmark"]][names(datasets)]
 result_list[["trans"]] <- result_list[["trans"]][names(datasets)]
 result_list[["zeroimp"]] <- result_list[["zeroimp"]][names(datasets)]
@@ -1430,9 +1556,10 @@ ggsave(file.path(path_plots, "Supp_fig_2_methodparameter_screening.pdf"),
 ### Combined ECODA and PB
 
 LEGACY (internal testing only, NOT shown in the publication): the
-`ECODA_PB_combo_*` methods are disabled in `run_benchmark_analysis`, so the
-three chunks below would produce nothing. Kept as documentation — see TODO.md
-"Ideas for later".
+`ECODA_PB_combo_*` methods are not implemented in the benchmark pipeline
+(`run_benchmark_analysis` is now deprecated — the notebook loads all R
+methods from the HPC bundles), so the three chunks below would produce
+nothing. Kept as documentation — see TODO.md "Ideas for later".
 
 #### Plot distance distribution after different normalization methods applied
 
@@ -1955,95 +2082,81 @@ for (ds in names(result_list[["bmark"]])) {
 
 # Plot execution times
 
-## Unified execution times (HPC feather + local bundle rows)
+## Unified execution times (HPC feather + bundle rows)
 
 ```{r}
-# Single source of execution times:
+# Single source of execution times, regenerated fresh on EVERY knit (no
+# data/exec_times.rds cache: a stale cache would pin old rows, e.g. NA
+# mem_GB for R methods computed before the workers logged peak RAM):
 # 1. The NAS merged feather (${NAS_TARGET_DIR}/benchmark/embeddings/
-#    execution_times.feather): HPC rows (R heavy methods, python methods,
-#    trans/zeroimp, prepare_pseudobulk_*), schema dataset/method/time_secs/
-#    mem_GB (mem_GB = sacct MaxRSS; NA for R rows).
-# 2. Bundle-derived rows for the local-only methods that the feather does
-#    not cover (ECODA_* variants, GloProp, Freq_highres, Avg_PCA_embedding,
-#    ECODA_deconv, ECODA_seuratres_*, ECODA_HiTME_*, ECODA_scATOMIC_HR) —
-#    union by (dataset, method), mem_GB = NA.
-# Cache to data/exec_times.rds; a stale cache with the old schema
-# (n_samples/n_features columns) is regenerated automatically.
-exec_times_path <- file.path(path_data, "exec_times.rds")
-
-exec_times <- NULL
-if (file.exists(exec_times_path)) {
-  cached <- readRDS(exec_times_path)
-  if (all(c("dataset", "method", "time_secs", "mem_GB", "n_cells") %in%
-          colnames(cached))) {
-    exec_times <- cached
-  } else {
-    message("Stale exec_times cache (old schema); regenerating from NAS + bundles")
-    unlink(exec_times_path)
-  }
-}
-
-if (is.null(exec_times)) {
-  exec_times_feather <- file.path(path_nas_embeddings, "execution_times.feather")
-  if (!file.exists(exec_times_feather)) {
-    stop(
-      "Merged execution-times feather not found: ", exec_times_feather,
-      "\nRun the benchmark pipelines (they merge + sync execution_times.feather",
-      " to the NAS) and make sure the NAS is mounted."
-    )
-  }
-  feather_exec_times <- arrow::read_feather(exec_times_feather) %>%
-    as.data.frame()
-
-  bundle_exec_times <- imap_dfr(result_list[["bmark"]], ~ {
-    dataset_name <- .y
-    imap_dfr(.x, function(bundle, method_name) {
-      if ("exec_time" %in% names(bundle)) {
-        data.frame(
-          dataset = dataset_name,
-          method = method_name,
-          time_secs = as.numeric(bundle[["exec_time"]], units = "secs"),
-          mem_GB = NA_real_,
-          stringsAsFactors = FALSE
-        )
-      } else {
-        NULL # no timing (e.g. methods that failed to compute)
-      }
-    })
-  })
-
-  # Normalize keys so the merge with df_results (paste0(dataset, method)
-  # join, helpers.R::merge_exec_times) hits:
-  # - GongSharma: internal key Gongsharma_cmv_young_males is displayed as
-  #   GongSharma (same rename as bmark_result_list above);
-  # - PILOT/QOT/PILOT-GM-VAE: the feather rows are <method>_hvg<n>_highres,
-  #   the bundles <method>_hvg<n>.
-  normalize_exec_keys <- function(df) {
-    df %>%
-      mutate(
-        dataset = recode(dataset, "Gongsharma_cmv_young_males" = "GongSharma"),
-        method = gsub("^(PILOT_hvg[0-9]+)_highres$", "\\1", method),
-        method = gsub("^(QOT_hvg[0-9]+)_highres$", "\\1", method),
-        method = gsub("^(PILOT-GM-VAE_hvg[0-9]+)_highres$", "\\1", method)
-      )
-  }
-  feather_exec_times <- normalize_exec_keys(feather_exec_times)
-  bundle_exec_times <- normalize_exec_keys(bundle_exec_times)
-
-  # Feather rows win for the HPC methods; bundle rows fill the local-only
-  # methods missing from the feather.
-  exec_times <- bind_rows(
-    feather_exec_times,
-    bundle_exec_times %>%
-      anti_join(feather_exec_times, by = c("dataset", "method"))
+#    execution_times.feather): HPC rows (R heavy methods, composition
+#    methods, python methods, trans/zeroimp, prepare_pseudobulk_*), schema
+#    dataset/method/time_secs/mem_GB (mem_GB = worker peak RSS: python
+#    ru_maxrss, R /proc/self/status VmHWM).
+# 2. Bundle-derived rows for methods the feather does not cover — union by
+#    (dataset, method); mem_GB taken from the bundle when present.
+exec_times_feather <- file.path(path_nas_embeddings, "execution_times.feather")
+if (!file.exists(exec_times_feather)) {
+  stop(
+    "Merged execution-times feather not found: ", exec_times_feather,
+    "\nRun the benchmark pipelines (they merge + sync execution_times.feather",
+    " to the NAS) and make sure the NAS is mounted."
   )
-
-  # n_cells per dataset (collected during the dataset loop; display keys).
-  n_cells_lookup <- unlist(n_cells_by_ds)
-  exec_times$n_cells <- n_cells_lookup[exec_times$dataset]
-
-  saveRDS(object = exec_times, exec_times_path)
 }
+feather_exec_times <- arrow::read_feather(exec_times_feather) %>%
+  as.data.frame()
+
+bundle_exec_times <- imap_dfr(result_list[["bmark"]], ~ {
+  dataset_name <- .y
+  imap_dfr(.x, function(bundle, method_name) {
+    if ("exec_time" %in% names(bundle)) {
+      data.frame(
+        dataset = dataset_name,
+        method = method_name,
+        time_secs = as.numeric(bundle[["exec_time"]], units = "secs"),
+        mem_GB = if ("mem_GB" %in% names(bundle)) {
+          as.numeric(bundle[["mem_GB"]])
+        } else {
+          NA_real_
+        },
+        stringsAsFactors = FALSE
+      )
+    } else {
+      NULL # no timing (e.g. methods that failed to compute)
+    }
+  })
+})
+
+# Normalize keys so the merge with df_results (paste0(dataset, method)
+# join, helpers.R::merge_exec_times) hits:
+# - GongSharma: internal key Gongsharma_cmv_young_males is displayed as
+#   GongSharma (same rename as bmark_result_list above);
+# - PILOT/QOT/PILOT-GM-VAE: the feather rows are <method>_hvg<n>_highres,
+#   the bundles <method>_hvg<n>.
+normalize_exec_keys <- function(df) {
+  df %>%
+    mutate(
+      dataset = recode(dataset, "Gongsharma_cmv_young_males" = "GongSharma"),
+      method = gsub("^(PILOT_hvg[0-9]+)_highres$", "\\1", method),
+      method = gsub("^(QOT_hvg[0-9]+)_highres$", "\\1", method),
+      method = gsub("^(PILOT-GM-VAE_hvg[0-9]+)_highres$", "\\1", method)
+    )
+}
+feather_exec_times <- normalize_exec_keys(feather_exec_times)
+bundle_exec_times <- normalize_exec_keys(bundle_exec_times)
+
+# Feather rows win for the HPC methods; bundle rows fill the methods
+# missing from the feather.
+exec_times <- bind_rows(
+  feather_exec_times,
+  bundle_exec_times %>%
+    anti_join(feather_exec_times, by = c("dataset", "method"))
+)
+
+# n_cells per dataset (from the metadata bundles via the dataset loop;
+# display keys).
+n_cells_lookup <- unlist(n_cells_by_ds)
+exec_times$n_cells <- n_cells_lookup[exec_times$dataset]
 
 # NAS feather covers all benchmark datasets; keep only this run's datasets
 # (n_cells_by_ds keys are display keys, matching exec_times$dataset).
@@ -2166,13 +2279,14 @@ ggsave(file.path(path_plots, "Supp_fig_14_benchmark_exec_times.pdf"),
        height = 3.5, limitsize = FALSE)
 ```
 
-## Supp fig 14B: Peak RAM usage (python methods)
+## Supp fig 14B: Peak RAM usage (all HPC methods)
 
 ```{r fig.width=3.5, fig.height=3.5}
-# Info-only figure: python-method rows (MrVI/scPoli/PILOT) carry sacct MaxRSS
-# in mem_GB; R-method rows have mem_GB = NA (sacct backfill for R methods is
-# a TODO, see TODO.md "Ideas for later"). Same method recoding as Supp fig 14;
-# log-log axes, points only.
+# Info-only figure: every HPC worker logs its process peak RSS in mem_GB
+# (python: getrusage ru_maxrss; R: /proc/self/status VmHWM via
+# peak_rss_gb(), incl. prepare_pseudobulk + composition rows). Rows stay NA
+# only for bundles computed before 2026-08-16 or off-Linux. Same method
+# recoding as Supp fig 14; log-log axes, points only.
 ram_data <- exec_times %>%
   filter(!is.na(mem_GB)) %>%
   filter(method %in% analysis_methods) %>%
