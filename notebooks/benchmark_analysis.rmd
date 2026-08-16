@@ -41,20 +41,64 @@ Core script to run the benchmark and generate paper figures.
 
 ```{r message=FALSE, warning=FALSE}
 # Setup: See README.md for initial environment setup
-# renv::init() && renv::restore() for dependency management
-
+if (basename(getwd()) == "notebooks") {
+  setwd("..")
+  if (file.exists(".Rprofile")) source(".Rprofile")
+}
 source("src/utils/load_all_functions.R")
 datasets <- read_datasets_json(view = "benchmark_analysis")
-# Skip the _debug dataset (Joanito 5-sample subset): the `_*`-prefix
-# convention marks debug-only entries in datasets.json.
-datasets <- datasets[!grepl("^_", names(datasets))]
+# ============================================================
+# ANALYSIS SCOPE — select which methods + datasets the analysis includes.
+#   pipeline_version: "old" = published set (excludes the extended methods
+#                     below); "new" = everything currently in the pipeline.
+#   analysis_methods:  NULL = all methods found in the loaded results;
+#                      or exact result keys, e.g.
+#                      c("ECODA_authors_HR", "MrVI_hvg2000", "QOT_hvg2000")
+#   analysis_datasets: NULL = all non-debug datasets from datasets.json;
+#                      or dataset keys, e.g. c("Adams", "Pelka") (allows "_debug").
+# Defaults reproduce the published notebook exactly.
+# ============================================================
+pipeline_version <- "new"   # "old" | "new"
+analysis_methods <- NULL
+analysis_datasets <- NULL
+
+# Result-key regex of methods added after the published analysis (excluded
+# when pipeline_version == "old"). Convention for future methods: (a) cover
+# every recode map they appear in, (b) give main methods a default_methods
+# regex + screening branch, and (c) add them to extended_method_regex or the
+# old/new distinction silently stops covering them.
+extended_method_regex <- "^QOT_|^PILOT-GM-VAE_"
+# Dataset keys added after the published analysis (excluded when "old").
+extended_datasets <- character(0)
+
+stopifnot(pipeline_version %in% c("old", "new"))
+if (!is.null(analysis_datasets)) {
+  datasets <- datasets[names(datasets) %in% analysis_datasets]
+} else {
+  # Skip the _debug dataset (Joanito 5-sample subset): the `_*`-prefix
+  # convention marks debug-only entries in datasets.json.
+  datasets <- datasets[!grepl("^_", names(datasets))]
+}
+if (pipeline_version == "old") {
+  datasets <- datasets[!names(datasets) %in% extended_datasets]
+}
+stopifnot(length(datasets) > 0)
+
+# Scope helpers (closed over analysis_methods, resolved after df_results is
+# built; only called from figure chunks, which run later).
+methods_in_scope <- function(x) intersect(x, analysis_methods)
+methods_in_scope_named <- function(m) m[names(m) %in% analysis_methods]
 dataset_display_map <- sapply(datasets, `[[`, "display_name")
 # The internal key stays Gongsharma_cmv_young_males (HPC bundle/feather file
 # names use it); figures display it as GongSharma.
 dataset_display_map[["GongSharma"]] <- dataset_display_map[["Gongsharma_cmv_young_males"]]
 
-# Set paths (NAS must be mounted; adapt the mount point if needed)
-path_nas_project <- file.path("", "Volumes", "Shared", "Projects", "ECODA_paper")
+# Set paths. Default: LOCAL mirror of the NAS layout pulled into ./data
+# (data/benchmark/{results,embeddings,pseudobulks} + slim per-dataset h5ads
+# data/<ds>/output/...). To run against the NAS mount instead (slower),
+# comment the line below and uncomment the /Volumes/... line.
+path_nas_project <- file.path(getwd(), "data")
+# path_nas_project <- file.path("", "Volumes", "Shared", "Projects", "ECODA_paper")
 # HPC-computed R benchmark results (Pipeline A methods + trans/zeroimp,
 # rsynced by the submit scripts to ${NAS_TARGET_DIR}/benchmark/).
 path_nas_benchmark <- file.path(path_nas_project, "benchmark", "results")
@@ -89,7 +133,9 @@ default_methods <- c(
   "scPoli_hvg2000_embdims15_HR\\b",
   "GloScope_hvg2000_pcadims30",
   "GloProp",
-  "MrVI_hvg2000"
+  "MrVI_hvg2000",
+  "QOT_hvg2000_HR\\b",
+  "PILOT-GM-VAE_hvg2000_HR\\b"
 )
 default_methods_regex <- paste(default_methods, collapse = "|")
 
@@ -245,6 +291,13 @@ for (ds in names(datasets)) {
   gc()
 }
 
+# Prune cached entries of excluded datasets so every later
+# names(result_list[["bmark"]]) loop is scoped (result_list.rds on disk is
+# kept intact; re-pruned in memory each run).
+result_list[["bmark"]] <- result_list[["bmark"]][names(datasets)]
+result_list[["trans"]] <- result_list[["trans"]][names(datasets)]
+result_list[["zeroimp"]] <- result_list[["zeroimp"]][names(datasets)]
+
 # Combined per-dataset stats (used by Supp table 1).
 ds_stats_df <- bind_rows(ds_stats_list)
 ```
@@ -295,6 +348,20 @@ df_results <- imap_dfr(bmark_result_list, ~ {
 
 # Drop old modularity score method
 df_results <- df_results[!df_results$score == "mod_score", ]
+
+# Resolve the analysis scope: analysis_methods NULL = all methods found in
+# the loaded results; "old" drops the extended (post-publication) methods.
+# Runs BEFORE the factor() below so the method levels are exactly the scoped
+# set.
+if (is.null(analysis_methods)) {
+  analysis_methods <- unique(as.character(df_results$method))
+}
+if (pipeline_version == "old") {
+  analysis_methods <- analysis_methods[
+    !grepl(extended_method_regex, analysis_methods)
+  ]
+}
+df_results <- df_results[df_results$method %in% analysis_methods, ]
 ```
 
 ## Show + sort all tested conditions
@@ -334,8 +401,8 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_separatescores_bars.pdf"
 
 ### Supp fig 17: Benchmark unscaled metrics
 
-```{r fig.width=12, fig.height=5}
-filter_methods <- c(
+```{r fig.width=12, fig.height=4}
+filter_methods <- methods_in_scope(c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
   # "ECODA_HiTME_HR_layer2",
@@ -357,8 +424,10 @@ filter_methods <- c(
   "scPoli_hvg2000_dims15_highres",
   "PILOT_hvg2000",
   "GloScope_hvg2000_pcadims30",
-  "GloProp"
-)
+  "GloProp",
+  "QOT_hvg2000",
+  "PILOT-GM-VAE_hvg2000"
+))
 
 
 df_plot <- df_results %>%
@@ -377,7 +446,9 @@ df_plot <- df_results %>%
                          "MrVI_hvg2000" = "MrVI",
                          "scPoli_hvg2000_dims15_highres" = "scPoli",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30" = "GloScope"))
+                         "GloScope_hvg2000_pcadims30" = "GloScope",
+                         "QOT_hvg2000" = "QOT",
+                         "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"))
 
 pointsize <- 1.5
 
@@ -396,7 +467,7 @@ p1 <- df_plot %>%
 
 # Plot 2: Modularity
 p2 <- df_plot %>%
-  filter(grepl(pattern = "mod", score)) %>%
+  filter(grepl(pattern = "mod_knn3_score", score)) %>%
   ggplot(aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
@@ -435,7 +506,7 @@ ggsave(file.path(path_plots, "Supp_fig_17_benchmark_unscaled_metrics_perdataset.
 ```
 
 ```{r fig.height=4, fig.width=4}
-filter_methods <- c(
+filter_methods <- methods_in_scope(c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
   "ECODA_HiTME_HR_layer2",
@@ -446,10 +517,12 @@ filter_methods <- c(
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors5",
   "MrVI_hvg2000",
-  "scPoli_hvg2000_dims5",
+  "scPoli_hvg2000_dims5_highres",
   "PILOT_hvg2000",
-  "GloScope_hvg2000_pcadims30"
-)
+  "GloScope_hvg2000_pcadims30",
+  "QOT_hvg2000",
+  "PILOT-GM-VAE_hvg2000"
+))
 
 
 df_plot_scaled <- df_results %>%
@@ -465,9 +538,11 @@ df_plot_scaled <- df_results %>%
                          "MOFA_hvg2000_factors15" = "MOFA",
                          "scITD_hvg2000_factors5" = "scITD",
                          "MrVI_hvg2000" = "MrVI",
-                         "scPoli_hvg2000_dims5" = "scPoli",
+                         "scPoli_hvg2000_dims5_highres" = "scPoli",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
+                         "GloScope_hvg2000_pcadims30" = "GloScope",
+                         "QOT_hvg2000" = "QOT",
+                         "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE")) %>%
   # -- CRITICAL STEP: Min-Max Scaling per Dataset and Score --
   group_by(dataset, score) %>% 
   mutate(scaled_value = min_max(value)) %>% 
@@ -527,7 +602,9 @@ df_results %>%
                          "scPoli_hvg2000" = "scPoli",
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
+                         "GloScope_hvg2000_pcadims30" = "GloScope",
+                         "QOT_hvg2000" = "QOT",
+                         "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE")) %>%
   
   group_by(method, score) %>%
   mutate(mean_value = mean(value[score == "anosim_score"])) %>%
@@ -659,10 +736,13 @@ methods <- list(
   "MOFA_hvg2000_factors15" = "MOFA",
   "scITD_hvg2000_factors5" = "scITD",
   "MrVI_hvg2000" = "MrVI",
-  "scPoli_hvg2000_dims5" = "scPoli",
+  "scPoli_hvg2000_dims5_highres" = "scPoli",
   "PILOT_hvg2000" = "PILOT",
-  "GloScope_hvg2000_pcadims30" = "GloScope"
+  "GloScope_hvg2000_pcadims30" = "GloScope",
+  "QOT_hvg2000" = "QOT",
+  "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"
 )
+methods <- methods_in_scope_named(methods)
 
 for (m in names(methods)) {
   dist_mat <- result_list[["bmark"]][[ds]][[m]][["dist_mat"]]
@@ -692,6 +772,7 @@ methods <- list(
   # "ECODA_HiTME_HR_layer2" = "ECODA_automated",
   "ECODA_authors_HR" = "ECODA"
 )
+methods <- methods_in_scope_named(methods)
 
 for (ds in names(result_list[["bmark"]])) {
   plot_list <- list()
@@ -768,8 +849,11 @@ methods <- list(
   
   "MOFA_hvg2000_factors15" = "MOFA",
   "PILOT_hvg2000" = "PILOT",
-  "scITD_hvg2000_factors5" = "scITD"
+  "scITD_hvg2000_factors5" = "scITD",
+  "QOT_hvg2000" = "QOT",
+  "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"
 )
+methods <- methods_in_scope_named(methods)
 
 idx <- 3
 
@@ -836,10 +920,13 @@ methods <- list(
   "MOFA_hvg2000_factors15" = "MOFA",
   "scITD_hvg2000_factors5" = "scITD",
   "MrVI_hvg2000" = "MrVI",
-  "scPoli_hvg2000_dims5" = "scPoli",
+  "scPoli_hvg2000_dims5_highres" = "scPoli",
   "PILOT_hvg2000" = "PILOT",
-  "GloScope_hvg2000_pcadims30" = "GloScope"
+  "GloScope_hvg2000_pcadims30" = "GloScope",
+  "QOT_hvg2000" = "QOT",
+  "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"
 )
+methods <- methods_in_scope_named(methods)
 
 for (m in names(methods)) {
   feat_mat <- result_list[["bmark"]][[ds]][[m]][["feat_mat"]]
@@ -1150,6 +1237,7 @@ methods <- list(
   # "ECODA_deconv" = "ECODA_deconv"
   # "ECODA_seuratres_0.1" = "ECODA_Leiden_res_0.1"
 )
+methods <- methods_in_scope_named(methods)
 
 plot_list <- list()
 
@@ -1189,6 +1277,7 @@ methods <- list(
   "ECODA_seuratres_2" = "ECODA_Leiden_res_2"
   # "ECODA_seuratres_0.1" = "ECODA_Leiden_res_0.1"
 )
+methods <- methods_in_scope_named(methods)
 
 plot_list <- list()
 
@@ -1277,6 +1366,8 @@ df_results %>%
       grepl("^GloScope_", method) ~ "GloScope",
       grepl("^GloProp", method) ~ "GloScope",
       grepl("^PILOT_", method) ~ "PILOT",
+      grepl("^PILOT-GM-VAE_", method) ~ "PILOT-GM-VAE",
+      grepl("^QOT_", method) ~ "QOT",
       grepl("^scPoli_", method) ~ "scPoli",
       grepl("^Pseudobulk_", method) ~ "Pseudobulk",
       TRUE ~ method # Keep any other simple names as they are
@@ -1284,7 +1375,8 @@ df_results %>%
     
     method_plot = factor(method_plot, 
                          levels = c("ECODA", "Pseudobulk", "MrVI", "GloScope", "GloProp",
-                                    "scPoli", "MOFA", "PILOT", "scITD"))
+                                    "scPoli", "MOFA", "PILOT", "scITD", "QOT",
+                                    "PILOT-GM-VAE"))
   ) %>%
   
   mutate(method = method %>%
@@ -1294,7 +1386,9 @@ df_results %>%
                                       "0_dims"    = "0_embdims")) %>%
            stringr::str_replace("Pseudobulk_(\\d+)_PCA_dims", "Pseudobulk_hvg2000_pcadims\\1") %>%
            stringr::str_replace("(\\d+)_PCA_dims", "pcadims\\1") %>%
-           stringr::str_replace("PILOT_hvg(\\d+)", "PILOT_hvg\\1_HR")
+           stringr::str_replace("PILOT_hvg(\\d+)", "PILOT_hvg\\1_HR") %>%
+           stringr::str_replace("QOT_hvg(\\d+)", "QOT_hvg\\1_HR") %>%
+           stringr::str_replace("PILOT-GM-VAE_hvg(\\d+)", "PILOT-GM-VAE_hvg\\1_HR")
   ) %>%
   
   group_by(method, score) %>%
@@ -1922,13 +2016,15 @@ if (is.null(exec_times)) {
   # join, helpers.R::merge_exec_times) hits:
   # - GongSharma: internal key Gongsharma_cmv_young_males is displayed as
   #   GongSharma (same rename as bmark_result_list above);
-  # - PILOT: the feather rows are PILOT_hvg<n>_highres, the bundles
-  #   PILOT_hvg<n>.
+  # - PILOT/QOT/PILOT-GM-VAE: the feather rows are <method>_hvg<n>_highres,
+  #   the bundles <method>_hvg<n>.
   normalize_exec_keys <- function(df) {
     df %>%
       mutate(
         dataset = recode(dataset, "Gongsharma_cmv_young_males" = "GongSharma"),
-        method = gsub("^(PILOT_hvg[0-9]+)_highres$", "\\1", method)
+        method = gsub("^(PILOT_hvg[0-9]+)_highres$", "\\1", method),
+        method = gsub("^(QOT_hvg[0-9]+)_highres$", "\\1", method),
+        method = gsub("^(PILOT-GM-VAE_hvg[0-9]+)_highres$", "\\1", method)
       )
   }
   feather_exec_times <- normalize_exec_keys(feather_exec_times)
@@ -1948,12 +2044,16 @@ if (is.null(exec_times)) {
 
   saveRDS(object = exec_times, exec_times_path)
 }
+
+# NAS feather covers all benchmark datasets; keep only this run's datasets
+# (n_cells_by_ds keys are display keys, matching exec_times$dataset).
+exec_times <- exec_times[exec_times$dataset %in% names(n_cells_by_ds), ]
 ```
 
 ## Supp fig 14: Plot
 
 ```{r}
-filter_methods <- c(
+filter_methods <- methods_in_scope(c(
   "ECODA_authors_HR",
 
   # "Pseudobulk_hvg2000",
@@ -1965,8 +2065,10 @@ filter_methods <- c(
   "GloProp",
   "MrVI_hvg2000",
   "scPoli_hvg2000_dims15_highres",
-  "PILOT_hvg2000"
-)
+  "PILOT_hvg2000",
+  "QOT_hvg2000",
+  "PILOT-GM-VAE_hvg2000"
+))
 
 scientific_A_10n <- function(x) {
   s <- scales::scientific_format(digits = 2)(x) 
@@ -1986,7 +2088,9 @@ plot_data <- exec_times %>%
                          "GloScope_hvg2000_pcadims30" = "GloScope",
                          "MrVI_hvg2000" = "MrVI",
                          "scPoli_hvg2000_dims15_highres" = "scPoli",
-                         "PILOT_hvg2000" = "PILOT"))
+                         "PILOT_hvg2000" = "PILOT",
+                         "QOT_hvg2000" = "QOT",
+                         "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"))
 
 # --- 2. Calculate the End of the Regression Line ---
 line_ends <- plot_data %>%
@@ -2071,6 +2175,7 @@ ggsave(file.path(path_plots, "Supp_fig_14_benchmark_exec_times.pdf"),
 # log-log axes, points only.
 ram_data <- exec_times %>%
   filter(!is.na(mem_GB)) %>%
+  filter(method %in% analysis_methods) %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA",
                          "Pseudobulk_hvg2000" = "Pseudobulk",
@@ -2079,7 +2184,9 @@ ram_data <- exec_times %>%
                          "GloScope_hvg2000_pcadims30" = "GloScope",
                          "MrVI_hvg2000" = "MrVI",
                          "scPoli_hvg2000_dims15_highres" = "scPoli",
-                         "PILOT_hvg2000" = "PILOT"))
+                         "PILOT_hvg2000" = "PILOT",
+                         "QOT_hvg2000" = "QOT",
+                         "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"))
 
 ggplot(ram_data, aes(x = n_cells, y = mem_GB, color = method)) +
   annotation_logticks(sides = "bl", color = "grey80") +
@@ -2112,7 +2219,7 @@ ggsave(file.path(path_plots, "Supp_fig_14B_benchmark_mem_GB.pdf"),
 # times, filters/recodes, ranks + min-max scales, aggregates and plots.
 # Metrics are restricted to the notebook-level benchmark_metrics parameter
 # (default: ANOSIM / Modularity / ARI).
-filter_methods <- c(
+filter_methods <- methods_in_scope(c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
   "Pseudobulk_hvg2000",
@@ -2122,8 +2229,10 @@ filter_methods <- c(
   "scPoli_hvg2000_dims15_highres",
   "PILOT_hvg2000",
   "GloScope_hvg2000_pcadims30",
-  "GloProp"
-)
+  "GloProp",
+  "QOT_hvg2000",
+  "PILOT-GM-VAE_hvg2000"
+))
 
 build_funky_heatmap(
   df_results = df_results,
@@ -2138,7 +2247,9 @@ build_funky_heatmap(
     "MrVI_hvg2000" = "MrVI",
     "scPoli_hvg2000_dims15_highres" = "scPoli",
     "PILOT_hvg2000" = "PILOT",
-    "GloScope_hvg2000_pcadims30" = "GloScope"
+    "GloScope_hvg2000_pcadims30" = "GloScope",
+    "QOT_hvg2000" = "QOT",
+    "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"
   ),
   dataset_recode = dataset_display_map,
   score_set = benchmark_metrics,
@@ -2162,8 +2273,9 @@ methods <- list(
   "Freq_highres" = "CellType_Frequency%",
   "MrVI_hvg2000" = "MrVI",
   "MOFA_hvg2000_factors15" = "MOFA",
-  "scPoli_hvg2000_dims5" = "scPoli"
+  "scPoli_hvg2000_dims5_highres" = "scPoli"
 )
+methods <- methods_in_scope_named(methods)
 
 plot_list <- list()
 
@@ -2196,7 +2308,7 @@ ggsave(file.path(path_plots, "Figure_2_B_MDS_Bassez.pdf"),
 
 ```{r fig.height=6, fig.width=12}
 # --- 1. SETUP & CLEANING (Same as before) ---
-filter_methods <- c(
+filter_methods <- methods_in_scope(c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
   # "ECODA_HiTME_HR_layer2",
@@ -2215,10 +2327,12 @@ filter_methods <- c(
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors5",
   "MrVI_hvg2000",
-  "scPoli_hvg2000_dims5",
+  "scPoli_hvg2000_dims5_highres",
   "PILOT_hvg2000",
-  "GloScope_hvg2000_pcadims30"
-)
+  "GloScope_hvg2000_pcadims30",
+  "QOT_hvg2000",
+  "PILOT-GM-VAE_hvg2000"
+))
 
 df_results_bmark <- merge_exec_times(df_results, exec_times)
 
@@ -2238,10 +2352,12 @@ clean_data <- df_results_bmark %>%
                          "MOFA_hvg2000_factors15" = "MOFA",
                          "scITD_hvg2000_factors5" = "scITD",
                          "MrVI_hvg2000" = "MrVI",
-                         "scPoli_hvg2000_dims5" = "scPoli",
+                         "scPoli_hvg2000_dims5_highres" = "scPoli",
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30" = "GloScope")) %>%
+                         "GloScope_hvg2000_pcadims30" = "GloScope",
+                         "QOT_hvg2000" = "QOT",
+                         "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE")) %>%
   mutate(score = recode(score, !!!score_label_map)) %>%
   mutate(dataset = recode(dataset,
                           "GongSharma_all_age" = "GongSharma_age",
@@ -2364,7 +2480,7 @@ ggsave(file.path(path_plots, "benchmark_summary_funkyheatmap_mainmethods_ranks.p
 ```{r fig.height=8, fig.width=14}
 # Parameterized funky-heatmap builder (see Figure 2A chunk): extended method
 # set + Rank_Score column (include_rank = TRUE).
-filter_methods <- c(
+filter_methods <- methods_in_scope(c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
   "ECODA_HiTME_HR_layer2",
@@ -2379,8 +2495,10 @@ filter_methods <- c(
   "scPoli_hvg2000_dims15_highres",
   "PILOT_hvg2000",
   "GloScope_hvg2000_pcadims30",
-  "GloProp"
-)
+  "GloProp",
+  "QOT_hvg2000",
+  "PILOT-GM-VAE_hvg2000"
+))
 
 build_funky_heatmap(
   df_results = df_results,
@@ -2402,7 +2520,9 @@ build_funky_heatmap(
     "MrVI_hvg2000" = "MrVI",
     "scPoli_hvg2000_dims15_highres" = "scPoli",
     "PILOT_hvg2000" = "PILOT",
-    "GloScope_hvg2000_pcadims30" = "GloScope"
+    "GloScope_hvg2000_pcadims30" = "GloScope",
+    "QOT_hvg2000" = "QOT",
+    "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"
   ),
   dataset_recode = dataset_display_map,
   score_set = benchmark_metrics,
@@ -2461,7 +2581,7 @@ cat("Pseudobulk_CT_HR_hvg500 vs Pseudobulk_hvg2000: ", round(avg_ct_500 / avg_pb
 ```{r fig.height=8, fig.width=14}
 # Parameterized funky-heatmap builder (see Figure 2A chunk): presentation
 # variant of Supp fig 15 (no scATOMIC / Freq_highres columns).
-filter_methods <- c(
+filter_methods <- methods_in_scope(c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
   "ECODA_HiTME_HR_layer2",
@@ -2474,8 +2594,10 @@ filter_methods <- c(
   "scPoli_hvg2000_dims15_highres",
   "PILOT_hvg2000",
   "GloScope_hvg2000_pcadims30",
-  "GloProp"
-)
+  "GloProp",
+  "QOT_hvg2000",
+  "PILOT-GM-VAE_hvg2000"
+))
 
 build_funky_heatmap(
   df_results = df_results,
@@ -2496,7 +2618,9 @@ build_funky_heatmap(
     "MrVI_hvg2000" = "MrVI",
     "scPoli_hvg2000_dims15_highres" = "scPoli",
     "PILOT_hvg2000" = "PILOT",
-    "GloScope_hvg2000_pcadims30" = "GloScope"
+    "GloScope_hvg2000_pcadims30" = "GloScope",
+    "QOT_hvg2000" = "QOT",
+    "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"
   ),
   dataset_recode = dataset_display_map,
   score_set = benchmark_metrics,
@@ -2521,7 +2645,7 @@ build_funky_heatmap(
 # locally so this chunk has no cross-chunk dependency on clean_data). All
 # score columns are kept (no score_set restriction) — the correlation matrix
 # below includes Silhouette and LISI.
-filter_methods <- c(
+filter_methods <- methods_in_scope(c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
   "Pseudobulk_hvg2000",
@@ -2531,8 +2655,10 @@ filter_methods <- c(
   "scPoli_hvg2000_dims15_highres",
   "PILOT_hvg2000",
   "GloScope_hvg2000_pcadims30",
-  "GloProp"
-)
+  "GloProp",
+  "QOT_hvg2000",
+  "PILOT-GM-VAE_hvg2000"
+))
 
 clean_data <- prepare_benchmark_data(
   df_results = df_results,
@@ -2547,7 +2673,9 @@ clean_data <- prepare_benchmark_data(
     "MrVI_hvg2000" = "MrVI",
     "scPoli_hvg2000_dims15_highres" = "scPoli",
     "PILOT_hvg2000" = "PILOT",
-    "GloScope_hvg2000_pcadims30" = "GloScope"
+    "GloScope_hvg2000_pcadims30" = "GloScope",
+    "QOT_hvg2000" = "QOT",
+    "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"
   ),
   dataset_recode = dataset_display_map
 )
