@@ -1320,9 +1320,24 @@ run_composition_methods_hpc <- function(
   log_file = NULL,
   factors_test = c(2, 3, 5, 10, 15),
   seurat_res = c(0.1, 0.4, 2, 5, 20),
-  ECODA_top_varexp_hvct = seq(0, 0.9, 0.1)
+  ECODA_top_varexp_hvct = seq(0, 0.9, 0.1),
+  not_suitable_for_auto_annotation = character(0)
 ) {
   set.seed(123)
+
+  # datasets.json `not_suitable_for_auto_annotation` flag: per-dataset opt-out
+  # for the annotation-driven combos (HiTME layer2/3, scATOMIC). Absent/empty
+  # = suitable for all. Skipped combos are dropped with a warning instead of
+  # being computed from an annotation that has no biological meaning for this
+  # tissue (e.g. no immune cells for HiTME/scATOMIC).
+  skip_hitme <- "hitme" %in% not_suitable_for_auto_annotation
+  skip_scatomic <- "scatomic" %in% not_suitable_for_auto_annotation
+  if (skip_hitme || skip_scatomic) {
+    warning("Dataset '", ds, "' flagged not_suitable_for_auto_annotation = [",
+            paste(not_suitable_for_auto_annotation, collapse = ", "),
+            "]; skipping HiTME", if (!skip_hitme) "" else "+scATOMIC",
+            " combos")
+  }
 
   # Metadata bundle: written on every driver invocation (also when all
   # combos are cached), so the notebook always finds it after a
@@ -1398,6 +1413,11 @@ run_composition_methods_hpc <- function(
     # ECODA_HiTME_HR_layer2/3_top_varexp<v>: guarded on the annotation
     # column being present (better than the old notebook, which crashed).
     for (hitme_ct in c("layer2", "layer3")) {
+      if (skip_hitme) {
+        warning("ECODA_HiTME_HR_", hitme_ct, "* combos skipped for ", ds,
+                ": not_suitable_for_auto_annotation incl. 'hitme'")
+        next
+      }
       if (!hitme_ct %in% colnames(obs)) {
         warning("ECODA_HiTME_HR_", hitme_ct, "* combos skipped for ", ds,
                 ": obs has no '", hitme_ct, "' column")
@@ -1432,6 +1452,9 @@ run_composition_methods_hpc <- function(
     }
 
     for (hitme_ct in c("layer2", "layer3")) {
+      if (skip_hitme) {
+        next  # already warned above
+      }
       if (!hitme_ct %in% colnames(obs)) {
         next  # already warned above
       }
@@ -1443,7 +1466,10 @@ run_composition_methods_hpc <- function(
       names(hitme_plain) <- paste0("ECODA_HiTME_HR_", hitme_ct)
       combos <- c(combos, hitme_plain)
     }
-    if ("scATOMIC_pred" %in% colnames(obs)) {
+    if (skip_scatomic) {
+      warning("ECODA_scATOMIC_HR combos skipped for ", ds,
+              ": not_suitable_for_auto_annotation incl. 'scatomic'")
+    } else if ("scATOMIC_pred" %in% colnames(obs)) {
       combos[["ECODA_scATOMIC_HR"]] <- function() {
         process_coda_fig(NULL, labels, ct_col = "scATOMIC_pred", obs = obs)
       }

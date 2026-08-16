@@ -247,7 +247,12 @@ results <- switch(
     ct_col_high_res = entry$cell_type_high_res,
     sample_col = sample_col,
     results_dir = args$results_dir, ds = ds,
-    force = force, log_file = args$log_file
+    force = force, log_file = args$log_file,
+    not_suitable_for_auto_annotation = if (is.null(entry$not_suitable_for_auto_annotation)) {
+      character(0)
+    } else {
+      entry$not_suitable_for_auto_annotation
+    }
   )
 )
 

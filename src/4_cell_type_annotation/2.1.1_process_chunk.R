@@ -118,6 +118,58 @@ raw_args <- commandArgs(trailingOnly = TRUE)
 args <- defaults
 if (length(raw_args) > 0) args$chunk_file <- raw_args[1]
 
+# ============================= ANNOTATION SAFETY ============================
+# Phase-5 T6: a method that annotated 0 cells, <2 unique cell types, or only
+# NAs for a sample must NOT crash the worker (new tissues - brain/heart/
+# kidney/pancreas - have no scGate/HiTME/scATOMIC models). Warn + keep the
+# column NA/unclassified (the existing column-aligned chunk assembly handles
+# the NA path), and record per-method stats (n cells, n types) into a
+# per-chunk stats feather (output/annotation_stats_chunk_<N>.feather; never
+# synced to NAS -- excluded from both rsyncs, mirroring annotation_tmp/). Keep
+# the cutoff.scATOMIC::em patch and wall-time guards intact.
+METHOD_COLS <- list(
+  HiTME = c("layer1", "layer2", "layer3"),
+  scATOMIC = c("scATOMIC_pred")
+)
+
+chunk_annot_stats <- list()
+
+record_method_stats <- function(annot, sample_label) {
+  for (method in names(METHOD_COLS)) {
+    for (col in METHOD_COLS[[method]]) {
+      if (!col %in% colnames(annot)) next
+      vals <- annot[[col]]
+      n_annotated <- sum(!is.na(vals))
+      n_types <- if (n_annotated > 0) length(unique(vals[!is.na(vals)])) else 0
+      chunk_annot_stats[[length(chunk_annot_stats) + 1]] <<- data.frame(
+        sample = sample_label,
+        method = method,
+        column = col,
+        n_cells = nrow(annot),
+        n_annotated = n_annotated,
+        n_types = n_types,
+        stringsAsFactors = FALSE
+      )
+      if (n_annotated == 0) {
+        warning(sprintf(
+          "ANNOTATION SAFETY: %s column '%s' for sample %s is entirely NA (0/%d cells annotated); keeping NA (unclassified), no crash",
+          method, col, sample_label, nrow(annot)
+        ))
+      } else if (n_types < 2) {
+        warning(sprintf(
+          "ANNOTATION SAFETY: %s column '%s' for sample %s has %d/%d cells annotated with only %d unique type(s) (< 2); annotation not informative for this tissue",
+          method, col, sample_label, n_annotated, nrow(annot), n_types
+        ))
+      } else {
+        message(sprintf(
+          "ANNOTATION STATS: sample %s, %s (col '%s'): %d/%d cells, %d types",
+          sample_label, method, col, n_annotated, nrow(annot), n_types
+        ))
+      }
+    }
+  }
+}
+
 if (is.null(args$chunk_file) || !file.exists(args$chunk_file)) {
   stop("Valid 'chunk_file' parameter not parsed from execution context!")
 }
@@ -382,6 +434,11 @@ if (file.exists(annot_file)) {
     annot$cell_barcode <- rownames(annot)
     annot[[args$sample_colname]] <- target_sample
 
+    # Phase-5 T6 safety: 0-annotated/<2-types/all-NA method results warn +
+    # record stats instead of propagating silently (handled by the helper;
+    # no crash).
+    record_method_stats(annot, target_sample)
+
     rm(seurat_obj)
     gc()
     TRUE
@@ -431,6 +488,27 @@ if (file.exists(annot_file)) {
   file.rename(annot_file_tmp, annot_file)
   unlink(tmp_dir, recursive = TRUE)
   message(paste("Wrote annotations to:", annot_file))
+
+  # Per-method annotation stats (Phase-5 T6): one row per sample; feeds the
+  # post-run annotation-rate documentation step
+  # (notebooks/dataset_onboarding/annotation_summary.json). The file name
+  # must NOT match the annotations_chunk_*.feather globs (merge/coverage) and
+  # is excluded from both NAS rsyncs (2_submit_hpc_array.sh /
+  # 3_submit_merge.sh --exclude='annotation_stats_chunk_*.feather').
+  if (length(chunk_annot_stats) > 0) {
+    stats_df <- do.call(rbind, chunk_annot_stats)
+    rownames(stats_df) <- NULL
+    stats_file <- sub(
+      "^annotations_chunk_(.*)\\.feather$",
+      "annotation_stats_chunk_\\1.feather",
+      basename(annot_file)
+    )
+    stats_file <- file.path(dirname(annot_file), stats_file)
+    stats_tmp <- paste0(stats_file, ".tmp.", Sys.getpid())
+    write_feather(stats_df, stats_tmp)
+    file.rename(stats_tmp, stats_file)
+    message(paste("Wrote per-method annotation stats to:", stats_file))
+  }
 }
 
 message(paste("---", args$chunk_file, "processing complete! ---"))

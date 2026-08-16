@@ -127,6 +127,83 @@ Four-stage end-to-end pipeline; file-level details live in docs/ARCHITECTURE.md.
 - **Stage 3 — Benchmark Analysis** (see [ARCHITECTURE.md](docs/ARCHITECTURE.md#benchmark-ecoda-transformation-and-ecoda-zero-imputation-analyses)): all R benchmark methods on HPC via `run_r_sample_embedding_methods/` (pinned CPU class, `prepare_pseudobulk` prep array gated first): heavy methods (GloScope, MOFA, Pseudobulk, scITD) **and** the composition-based set (`composition` method: ECODA variants, GloProp, EPIC deconv, Avg_PCA, Freq_highres — obs-only worker, one array task per dataset, also emits `<ds>_metadata.rds`). Transformation/zero-imputation analyses on HPC via `run_transformation_zeroimp_analysis/` (two arrays: `trans`, `zeroimp`); Python methods (MrVI/scPoli/PILOT/QOT/PILOT-GM-VAE) on HPC via `run_python_sample_embedding_methods/`. `notebooks/benchmark_analysis.rmd` reads **zero h5ad files**: it loads the HPC bundles via `load_hpc_benchmark_results()` (fresh each knit, no `result_list.rds` persistence), labels/stats from the `<ds>_metadata.rds` bundles, and runs only the fast python-feather methods (MrVI/PILOT/scPoli/QOT/PILOT-GM-VAE feather reads + scoring, seconds). R workers log peak RAM (`peak_rss_gb()`, VmHWM) in the exec-log + per-bundle `mem_GB`. Pending pipeline work (PILOT-GM-VAE, QOT/PULSAR): see TODO.md Phase 3.
 - **Stage 4 — Batch Effect Analysis** (see [ARCHITECTURE.md](docs/ARCHITECTURE.md#batch-effect-analysis)): `notebooks/batch_effect_analysis.rmd`, under expansion (methods: ECODA batch-associated CT removal, Pseudobulk DESeq2+limma, MrVI, GloScope, PILOT-GM-VAE): see TODO.md Phase 4.
 
+## Onboarding new datasets
+
+Procedure for adding a new dataset to the pipeline (Phase 5 workflow, see
+`.kilo/plans/archive/1786899069337-onboard-new-datasets-phase5.md`):
+
+1. **Download the author-provided file** to the NAS folder
+   `JooM_2025_41097818/output/` via `notebooks/dataset_onboarding/download_datasets.sh`
+   (`--only <key>`; sequential + md5-verified, `curl -L -C -` resumable, logs to
+   `notebooks/dataset_onboarding/download_log.md`). Zenodo records preferred;
+   Alzheimer/Parkinson come from CellxGene (resolved by `dataset_version_id`).
+2. **Count sanity check** (`onboarding_utils.count_sanity_check`, part of the
+   per-dataset notebook): locate counts (`layers["counts"]` → `X` → `raw.X`),
+   integer-VALUE check with epsilon tolerance (float-encoded CSR is valid:
+   dtype is not required to be int), non-negative, finite, log-normalized-X flag.
+   Verdict PASS/FAIL — FAIL → fallback source table in the plan (notify user first).
+3. **Onboarding check notebook**: one `notebooks/dataset_onboarding/dataset_check_<Name>.qmd`
+   per dataset (9 current: Alzheimer, Breast_cancer, Covid19_PBMC, Diabetes,
+   Kidney_KPMP, Lupus_PBMC, Lung, Myocardial_infarction, Parkinson) + shared
+   `onboarding_utils.py` (backed-mode friendly) and `onboarding_metrics.R`.
+   These **Python** notebooks use the pixi **default** env (scanpy 1.12.2) and
+   do **NOT** source the R notebook loader (`load_all_functions.R` /
+   `imports.R` serve only `benchmark_analysis.rmd` / `batch_effect_analysis.rmd`).
+   `onboarding_metrics.R` is a standalone Rscript that sources
+   `src/utils/scoring_metrics.R` directly (needs `thisutils`/`vegan`/`cluster`/
+   `mclust` — verified in the default env) and runs the repo's min/max-bounded
+   `calc_lisi` at the cell level on the **unintegrated** PCA embedding (never
+   `X_pca_harmony*`; UMAP coords only as documented fallback) per cell type
+   (per-CT subsample cap, confounded-CT guard, single-label → NA). Render with
+   `quarto render …` using the registered `python3` kernelspec
+   (default-env python; `ipykernel` is a pixi.toml dependency).
+   Notebook sections: study summary card (agent-filled), file structure, count
+   sanity, metadata exploration (cells-per-sample bar, CT-column NaN check,
+   gene-symbol sanity mouse-vs-human, paper Table-1 comparison, bio×batch
+   confounding crosstab), unintegrated UMAP panels, LISI separation table +
+   heatmap + verdict, agent summary + recommendation.
+4. **User review** (T7): UMAPs + summaries; per-dataset decision benchmark /
+   batch-effect / negative control / exclude.
+5. **datasets.json registration** (T8): `folder_name: "JooM_2025_41097818"`,
+   exact `file_names`, `columns`, `meta_cols_keep`, `views` with `subset_vars`,
+   `tissue`/`normal_tissue`, `use_for_benchmark`/`use_for_batch_effect`, and
+   the annotation-suitability flag. **ASK THE USER FIRST — datasets.json must
+   not be changed without asking.**
+6. **Pipeline rollout** (T10, HPC): stage → preprocess → annotate →
+   benchmark/batch-effect arrays; validate on the two smallest green datasets
+   first (Kidney, MI(2)); big files (Breast 29 GB, Alzheimer/Parkinson 1.4–2.1 M
+   cells) need high-mem preprocess nodes before rollout.
+
+**Annotation-suitability flag** (`datasets.json`
+`"not_suitable_for_auto_annotation": ["hitme", "scatomic"]`, optional flat field,
+absent/empty = suitable for all): wired into `run_composition_methods_hpc`
+(`benchmark_pipeline.R` — skips the flagged method families' combos with a
+warning), `benchmark_analysis.rmd` Figure 3 A / Supp fig 19 (flagged datasets
+are dropped from the HiTME/scATOMIC bars with a documented message; the dataset
+stays in Figure 2a where author CT columns drive the methods), and the
+annotation worker (`2.1.1_process_chunk.R`) records per-method stats + never
+crashes on 0-annotated / <2-type / all-NA results (warns, keeps the column
+NA/unclassified; stats → `output/annotation_stats_chunk_<N>.feather`, excluded
+from both NAS rsyncs). Choice of methods per tissue: brain/heart/kidney likely
+lack scGate/HiTME/scATOMIC models. Fallback if annotations are unusable:
+unsupervised Leiden-derived CT column via a dataset-specific step (like
+`1.4.1_create_kfoury_lowres_ct.R`).
+
+Per-dataset documentation must record: study, PMID, biological groups (with n),
+batch-candidate variables, metadata-column description, download source + date
++ checksum (feeds `download_log.md` + the AGENTS.md provenance requirement).
+Feasibility appendix: `new_datasets_to_implement.md` (Excel source
+`/Users/christianhalter/Desktop/ECODA_PAPER_DATASETS.xlsx`). The paper's own
+dataset descriptions: Zenodo record 15575593 (`datasets.pdf`, cached during
+planning; re-fetch: `https://zenodo.org/api/records/15575593/files/datasets.pdf/content`).
+
+**Diabetes (mouse) caveat**: `standardize_gene_symbols`
+(`src/utils/py/gene_utils.py`, human Ensembl105 map) and `MT-` mitochondrial
+detection in `1.1.1_preprocess.py` are human-only — mouse symbols break them.
+Mouse support (T9) requires user sign-off and is a hard prerequisite before
+Diabetes can be registered/benchmarked; until then Diabetes stays
+unregistered.
+
 ## R Modules for benchmark analysis (`src/5_run_benchmark_methods/` and `src/utils/`)
 
 11 utility files loaded by `src/utils/load_all_functions.R` (notebook loader; also sources `src/utils/imports.R` — the notebook attach list, ~20 pkgs; repo-wide env verification via `src/utils/env_check.R` — and `src/utils/plotting.R`, notebook-only). Workers use the slim counterparts instead: `src/utils/load_worker_functions.R` (the same 11 util files minus `imports.R`/`plotting.R`) + one of `src/utils/imports_worker_core.R` (R benchmark workers: Seurat/reticulate/dplyr) or `src/utils/imports_worker_transzeroimp.R` (trans/zeroimp: doParallel/foreach/reticulate/dplyr, no Seurat) — both smoke-checked by the guarded env-refresh scripts. Plus 3 benchmark-specific files in `src/5_run_benchmark_methods/` (`benchmark_methods_r.R`, `benchmark_pipeline.R` — both in `load_all_functions.R` and `load_worker_functions.R` — and `benchmark_hpc_utils.R`, which is HPC-only and sourced explicitly by the HPC worker scripts; details in ARCHITECTURE.md).

@@ -62,6 +62,12 @@ scanpy = "==1.12.2"
 # the R package (unrelated)
 python-igraph = ">=0.11,<1"
 rpy2 = ">=3.6.7,<4"
+# Jupyter kernel for Quarto-rendered onboarding check notebooks
+# (notebooks/dataset_onboarding/dataset_check_*.qmd, `jupyter: python3`
+# front matter) and the Sikkema Python-qmd precedent. The default-env python
+# is registered as the user-level `python3` kernelspec
+# (`pixi run -e default jupyter kernelspec install ... --name python3 --user`).
+ipykernel = "*"
 # Required by pd.read_feather()/to_feather() in 3.1_merge_annotations.py and
 # the benchmark Python workers (1.1.1_benchmark_methods_py.py,
 # 1.1.2_merge_execution_times.py); version-aligned with the pinned r-arrow.

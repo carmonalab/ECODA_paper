@@ -47,6 +47,14 @@ read_datasets_json <- function(path = "datasets.json", view = NULL) {
       cell_type_low_res = columns[["cell_type_low_res"]],
       cell_type_high_res = columns[["cell_type_high_res"]],
       meta_cols_keep = ds[["meta_cols_keep"]],
+      # Optional flat flag: annotation methods this dataset is NOT suitable
+      # for (values: "hitme", "scatomic"). Absent/empty = suitable for all
+      # (see AGENTS.md "Onboarding new datasets" / benchmark_pipeline.R).
+      not_suitable_for_auto_annotation = if (is.null(ds[["not_suitable_for_auto_annotation"]])) {
+        character(0)
+      } else {
+        ds[["not_suitable_for_auto_annotation"]]
+      },
       # first-matching-view summary (R-compat; mirrors view entry order)
       view_name = first_v_name,
       input_file = first_v[["input_file"]],

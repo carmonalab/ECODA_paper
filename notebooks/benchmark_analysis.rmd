@@ -488,6 +488,34 @@ if (pipeline_version == "old") {
   ]
 }
 df_results <- df_results[df_results$method %in% analysis_methods, ]
+
+# datasets.json `not_suitable_for_auto_annotation` flag (see AGENTS.md):
+# datasets flagged for the annotation method families are dropped from the
+# HiTME/scATOMIC annotation-method figures (Figure 3 A + Supp fig 19) with
+# this documented message. The dataset stays in Figure 2a, where the author
+# CT columns drive the methods. Absent/empty flag = suitable for all.
+flag_status_for <- function(ds_key) {
+  e <- datasets[[ds_key]]
+  if (is.null(e) || is.null(e$not_suitable_for_auto_annotation)) {
+    character(0)
+  } else {
+    e$not_suitable_for_auto_annotation
+  }
+}
+hitme_flagged_ds <- names(datasets)[vapply(names(datasets), function(k) "hitme" %in% flag_status_for(k), logical(1))]
+scatomic_flagged_ds <- names(datasets)[vapply(names(datasets), function(k) "scatomic" %in% flag_status_for(k), logical(1))]
+if (length(hitme_flagged_ds) > 0 || length(scatomic_flagged_ds) > 0) {
+  message("not_suitable_for_auto_annotation: HiTME excluded for [",
+          paste(hitme_flagged_ds, collapse = ", "), "], scATOMIC excluded for [",
+          paste(scatomic_flagged_ds, collapse = ", "),
+          "] in the annotation-comparison figures")
+}
+flag_drop_annotation_methods <- function(df) {
+  df %>%
+    filter(!(dataset %in% hitme_flagged_ds &
+               method %in% c("ECODA_HiTME_HR_layer2", "ECODA_HiTME_HR_layer3"))) %>%
+    filter(!(dataset %in% scatomic_flagged_ds & method == "ECODA_scATOMIC_HR"))
+}
 ```
 
 ## Show + sort all tested conditions
@@ -1255,6 +1283,7 @@ df_plot <- df_results %>%
   filter(score == "anosim_score") %>%
   filter(!grepl("Zhang|Lee", dataset)) %>% # Exclude Zhang and Lee, as they do not have high-resolution author annotation
   filter(method %in% filter_methods) %>%
+  flag_drop_annotation_methods() %>%
   apply_method_labels(method_label_map_annotation)
   
 p <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
@@ -1286,6 +1315,7 @@ df_plot <- df_results %>%
   filter(score == "mod_knn3_score") %>%
   filter(!grepl("Zhang|Lee", dataset)) %>% # Exclude Zhang and Lee, as they do not have high-resolution author annotation
   filter(method %in% filter_methods) %>%
+  flag_drop_annotation_methods() %>%
   apply_method_labels(method_label_map_annotation)
   
 p_mod <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
@@ -1316,6 +1346,7 @@ df_plot <- df_results %>%
   filter(score == "cluster_score") %>%
   filter(!grepl("Zhang|Lee", dataset)) %>% # Exclude Zhang and Lee, as they do not have high-resolution author annotation
   filter(method %in% filter_methods) %>%
+  flag_drop_annotation_methods() %>%
   apply_method_labels(method_label_map_annotation)
   
 p_ari <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +

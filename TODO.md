@@ -157,9 +157,20 @@ changes; whether a dataset shows batch effects decides benchmark vs batch-effect
 usage in this repo. Full extraction (counts, classes, feasibility colors,
 comments) is in `new_datasets_to_implement.md` (Excel source:
 `/Users/christianhalter/Desktop/ECODA_PAPER_DATASETS.xlsx`).
-- [ ] **5.1 Check the BIB study (bbaf547) for author-provided data locations**;
-      verify availability (cellxgene/GEO per the table) and the amount of
-      changes needed. [separate review task — not started]
+Implementation plan (current authority): `.kilo/plans/archive/1786899069337-onboard-new-datasets-phase5.md`.
+
+- [x] **5.1 Check the BIB study (bbaf547) for author-provided data locations**
+      DONE (2026-08-17 planning/onboarding session): Zenodo 8370081 (Part 1,
+      latest version of the cited 7435911/7956950 — same concept record,
+      identical md5s) = `Datasets.tar.gz` + `diabetes.h5ad` (+ Kidney.h5ad,
+      follicular_lymphoma.h5ad NOT used); Zenodo 7957118 (Part 2) =
+      `lungatlas.h5ad.tar.gz`; Zenodo 14615923 (Part 3) = `BreastCncr_processed.h5ad`,
+      `Kidney_KPMP.h5ad`, `Myocardial_Infarc_2.h5ad` (+ kidney_cancer_processed.h5ad
+      EXCLUDED); CellxGene for Alzheimer (SEA-AD collection `1ca90a2d-…`,
+      dataset `c2b49431-…`, cell count exactly 1,395,601) and Parkinson
+      (collection `d5d0df8f-…`, dataset `0270e5e5-…`, 2,096,155 cells).
+      Download script: `notebooks/dataset_onboarding/download_datasets.sh`
+      (sequential, md5-verified, selective tar extraction; `download_log.md`).
 - [ ] **5.2 Benchmark candidates (green)**: Alzheimer (n=83), Lupus PBMC
       (n=261), Myocardial infarction (n=23; has only clustering, no
       high-granularity CTs).
@@ -178,6 +189,45 @@ comments) is in `new_datasets_to_implement.md` (Excel source:
 - [ ] **5.6 Register approved datasets in datasets.json (ASK THE USER FIRST —
       datasets.json must not be changed without asking)**, with the appropriate
       view(s); then stage → preprocess → annotate → benchmark/batch-effect arrays.
+- [ ] **5.7 Onboarding notebooks + metrics** (IN PROGRESS — implemented; run
+      after downloads): shared `onboarding_utils.py` (count sanity, UMAP panels,
+      confounding crosstab, metrics-input writer) + standalone `onboarding_metrics.R`
+      (cell-level `calc_lisi` separation on unintegrated PCA, per-CT caps +
+      confounded-CT guards; validated on the NAS `_debug` view 2026-08-17, bio
+      `sample.origin` vs batch `Site`/`seqtec`). One
+      `notebooks/dataset_onboarding/dataset_check_<Name>.qmd` per dataset
+      (9 files, scaffolded but NOT yet run — downloads pending user). Render:
+      `PATH="$PWD/.pixi/envs/default/bin:$PATH" quarto render …` (python3
+      kernelspec = pixi default env, ipykernel added to pixi.toml). Metrics via
+      `pixi run -e default Rscript --vanilla onboarding_metrics.R`.
+- [ ] **5.8 Per-dataset study summaries + confirmed column mapping (T4)**:
+      agent reads each original paper; confirms the `columns` for datasets.json.
+- [ ] **5.9 Usage-decision checkpoint (T7, user)**: per dataset — benchmark /
+      batch-effect / negative control / exclude.
+- [ ] **5.10 Diabetes mouse-gene pipeline support (T9, conditional)**:
+      `standardize_gene_symbols` (`src/utils/py/gene_utils.py`) +
+      `1.1.1_preprocess.py` mouse handling (ortholog map + `mt-` mito detection).
+      REQUIRES USER SIGN-OFF; blocked on T7.
+- [ ] **5.11 HPC rollout (T10, user runs)**: validate Kidney + MI(2) end-to-end
+      first (stage → preprocess → annotate → benchmark/batch-effect arrays);
+      big files (Breast 29 GB, Alzheimer/Parkinson 1.4–2.1 M cells) need
+      high-mem preprocess nodes.
+
+Phase-5 follow-ups (from the plan, mostly out-of-scope for the onboarding plan):
+- [ ] `batch_effect_analysis.rmd` funkyheatmap like Figure 2a showing separation
+      by bio_col AND batch_col(s) (multiple batch columns possible) — out of
+      scope for the onboarding plan; new datasets' batch-effect views depend on it.
+- [ ] Diabetes mouse-gene preprocessing support — see 5.10.
+- [x] Annotation edge-case safety checks + `not_suitable_for_auto_annotation`
+      flag + Figure 3 handling (DONE 2026-08-17): worker never crashes on
+      0-annotated/<2-type/all-NA results, records per-method stats; flag wired
+      into `benchmark_pipeline.R` combos, Figure 3 A / Supp fig 19, and
+      datasets.json is documented (entries added only at T8 registration).
+- [ ] Per-dataset annotation-rate documentation: after the first HPC annotation
+      run of a new dataset, %-annotated cells + n unique types per method from
+      the merged view h5ads → `notebooks/dataset_onboarding/annotation_summary.json`
+      + short rationale paragraph in the qmd section 6 (why HiTME/scATOMIC may
+      be inappropriate, e.g. no/minimal immune cells).
 
 ## Phase 6 — Additional reviewer analyses [agent, Prio 1 first]
 

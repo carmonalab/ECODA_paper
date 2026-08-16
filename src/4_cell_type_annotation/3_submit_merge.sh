@@ -238,7 +238,7 @@ merge_one_ds() {
   # the python write and os.replace would otherwise sync a stale .tmp).
   echo "Syncing annotated h5ads to NAS..."
   mkdir -p "${NAS_TARGET_DIR}/${DS_NAME}/output"
-  rsync -rlptDv --exclude='*.tmp' --exclude='annotation_tmp/' "${OUTPUT_DIR}/" "${NAS_TARGET_DIR}/${DS_NAME}/output/"
+  rsync -rlptDv --exclude='*.tmp' --exclude='annotation_tmp/' --exclude='annotation_stats_chunk_*.feather' "${OUTPUT_DIR}/" "${NAS_TARGET_DIR}/${DS_NAME}/output/"
 
   # Stale intermediates: 2_submit_hpc_array.sh already synced output/ to NAS
   # before the merge, so annotations_chunk_*.feather and chunks/ persist there
