@@ -214,7 +214,7 @@ process_avg_pca_embedding_fig <- function(
     group_by(.data$Sample) %>%
     dplyr::summarise(across(starts_with("PC_"), mean)) %>%
     ungroup() %>%
-    column_to_rownames(var = "Sample")
+    tibble::column_to_rownames(var = "Sample")
   return(create_result_bundle(feat_mat, labels))
 }
 
