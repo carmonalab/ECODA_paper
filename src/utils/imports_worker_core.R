@@ -1,12 +1,12 @@
 # ============================================================
-# LIBRARY LOADING — R benchmark workers (subset of imports.R)
+# LIBRARY LOADING — R benchmark workers
 # ============================================================
 # Slim import set for the R benchmark workers (prepare_pseudobulk and
 # gloscope/mofa/pseudobulk/scitd/composition via
 # run_r_sample_embedding_methods/): only
 # the packages these workers call BARE are attached. src/utils/imports.R
-# remains the canonical env-verification list (guarded env-refresh smoke
-# checks + notebook loader); namespace-qualified packages (DESeq2::, limma::,
+# is the notebook attach list (repo-wide env verification via
+# src/utils/env_check.R); namespace-qualified packages (DESeq2::, limma::,
 # zCompositions::, vegan::, mclust::, cluster::, igraph::, Matrix::,
 # GloScope::, arrow::, ...) load on demand and must NOT be attached here.
 # MOFA2/scITD (bare create_mofa / initialize_params + make_new_container)
@@ -15,8 +15,8 @@
 # 1.1.1_run_benchmark_methods_r.R so gloscope/
 # pseudobulk tasks never load them.
 #
-# Package order mirrors the relative order in imports.R (Seurat:18,
-# reticulate:27, dplyr:46) to avoid name-masking regressions.
+# Package order mirrors the relative order in imports.R (Seurat before
+# dplyr) to avoid name-masking regressions.
 
 my_packages <- c(
   "Seurat",

@@ -55,8 +55,9 @@ if (!method %in% c("gloscope", "mofa", "pseudobulk", "scitd",
 # Method-specific attaches: MOFA2/scITD are needed only by their methods
 # (bare create_mofa / initialize_params + make_new_container); gloscope needs
 # only the installed namespace (GloScope::gloscope is called qualified).
-# composition calls EPIC::EPIC + GloScope::gloscopeProp BARE (as the
-# notebook does via imports.R), so both must be attached for it.
+# composition calls the EPIC::EPIC + GloScope::gloscopeProp drivers BARE
+# (in benchmark_methods_r.R; EPIC/GloScope are not attached by any loader),
+# so both must be attached for it.
 if (method == "mofa") library(MOFA2)
 if (method == "scitd") library(scITD)
 if (method == "composition") {

@@ -3440,7 +3440,6 @@ ggsave(file.path(path_plots, "Supp_fig_16AB_trans_zero_anosim.pdf"),
 # Export tables with raw data for paper
 
 ```{r}
-library(writexl)
 write_xlsx(df_results_list, path = file.path(path_data, "raw_data_for_publication.xlsx"))
 ```
 

@@ -99,19 +99,22 @@ if ! "${PIXI_BIN}" run -e py-cuda13 setup; then
   exit 1
 fi
 
-echo "=== [3/3] smoke check: full + worker import lists ==="
-# Sources src/utils/imports.R (every package the notebook loader requires at
-# job time) and the slim worker subsets (imports_worker_core.R /
-# imports_worker_transzeroimp.R, attached by the R benchmark / transzeroimp
-# workers); a missing or broken package stops here with the same error a
-# worker would produce (set -euo pipefail turns it into a FAILED refresh).
-# MOFA2/scITD stay covered by the full imports.R list. Run from the project
-# root (done above), so the relative source path resolves.
+echo "=== [3/3] smoke check: notebook + worker import lists + env_check.R ==="
+# Sources src/utils/imports.R (the notebook loader attach list), the slim
+# worker subsets (imports_worker_core.R / imports_worker_transzeroimp.R,
+# attached by the R benchmark / transzeroimp workers) and the repo-wide
+# src/utils/env_check.R (requireNamespace check: attach ∪ namespaced-only ∪
+# worker/annotation packages — covers MOFA2/scITD/GloScope/annotation extras
+# no longer attached by imports.R); a missing or broken package stops here
+# with the same error a worker would produce (set -euo pipefail turns it into
+# a FAILED refresh). Run from the project root (done above), so the relative
+# source paths resolve.
 "${PIXI_BIN}" run -e py-cuda13 Rscript --vanilla -e '
   source("src/utils/imports.R")
   source("src/utils/imports_worker_core.R")
   source("src/utils/imports_worker_transzeroimp.R")
-  cat("All packages in src/utils/imports.R + worker subsets load OK\n")
+  source("src/utils/env_check.R")
+  cat("All packages in src/utils/imports.R + worker subsets + env_check.R load OK\n")
 '
 
 echo "Environment refresh complete. You can now submit jobs."

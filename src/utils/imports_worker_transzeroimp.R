@@ -1,10 +1,10 @@
 # ============================================================
-# LIBRARY LOADING — trans/zeroimp workers (subset of imports.R)
+# LIBRARY LOADING — trans/zeroimp workers
 # ============================================================
 # Slim import set for the ECODA transformation / zero-imputation workers
 # (run_transformation_zeroimp_analysis/): obs-only backed reads, no counts
-# matrix, NO Seurat. src/utils/imports.R remains the canonical
-# env-verification list (guarded env-refresh smoke checks + notebook loader);
+# matrix, NO Seurat. src/utils/imports.R is the notebook attach list (repo-
+# wide env verification via src/utils/env_check.R);
 # namespace-qualified packages (zCompositions::, Hotelling::, vegan::,
 # mclust::, cluster::, igraph::, Matrix::, arrow::, ...) load on demand and
 # must NOT be attached here. scECODA is intentionally NOT attached: the
@@ -12,10 +12,10 @@
 # not an scECODA API — scECODA has no references in any worker code path.
 # datrans() does bare-call makeCluster (parallel), registerDoParallel
 # (doParallel) and foreach, so doParallel/foreach are attached (pulling
-# parallel/iterators via Depends, exactly as the full imports.R does).
+# parallel/iterators via Depends).
 #
-# Package order mirrors the relative order in imports.R (doParallel:6,
-# foreach:8, reticulate:27, dplyr:46) to avoid name-masking regressions.
+# Attach order avoids masking regressions: doParallel/foreach before
+# reticulate/dplyr.
 
 my_packages <- c(
   "doParallel",

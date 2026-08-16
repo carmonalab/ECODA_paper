@@ -69,10 +69,11 @@ module load jq/1.6 >/dev/null 2>&1 || true
 export LD_LIBRARY_PATH="${PROJECT_ROOT}/.pixi/envs/py-cuda13/lib:${LD_LIBRARY_PATH:-}"
 
 # --- reticulate python (R workers) ---
-# Pinned explicitly so R (2.1.1_process_chunk.R, imports.R) always uses the
-# py-cuda13 python: reticulate's own discovery may otherwise pick a stray
-# ~/.virtualenvs/r-reticulate or system python on the worker. Exported so it
-# propagates through sbatch/srun. Mirrors .Rprofile (project root), which only
+# Pinned explicitly so R always uses the py-cuda13 python: the annotation
+# worker (2.1.1_process_chunk.R) and the R benchmark/transzeroimp workers
+# (imports_worker_core.R / imports_worker_transzeroimp.R) attach reticulate;
+# its own discovery may otherwise pick a stray ~/.virtualenvs/r-reticulate or
+# system python on the worker. Exported so it propagates through sbatch/srun. Mirrors .Rprofile (project root), which only
 # applies to non-vanilla R sessions (.Rprofile is not read with --vanilla).
 # Note: .Rprofile points at .pixi/envs/default on macOS only (py-cuda13 is
 # linux-64-target-scoped and does not exist on osx-arm64).

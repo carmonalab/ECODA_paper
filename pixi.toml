@@ -240,3 +240,15 @@ Rscript -e "
   cat('R library integrity check OK')
 "
 """
+
+# ==========================================
+# MANUAL DEPENDENCY CHECK
+# ==========================================
+# Repo-wide R env verification (src/utils/env_check.R: requireNamespace over
+# the notebook attach list ∪ namespaced-only ∪ worker/annotation packages —
+# no attach, no install). Manual login-node command, NOT wired into any
+# submitter (archived-plan decision): `pixi run -e py-cuda13 check-r-deps`
+# (HPC) or `pixi run -e default check-r-deps` (macOS; HPC-only packages will
+# be reported as missing — expected). Run from the project root.
+[tasks.check-r-deps]
+cmd = "Rscript -e 'source(\"src/utils/env_check.R\")'"

@@ -35,8 +35,6 @@ path_plots <- file.path(getwd(), "plots")
 seurat_file_ending <- "_ECODAprocessed.rds"
 
 set.seed(123)
-
-`%notin%` <- Negate(`%in%`)
 ```
 
 

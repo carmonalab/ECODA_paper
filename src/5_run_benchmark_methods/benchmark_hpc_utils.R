@@ -4,7 +4,7 @@
 # run_r_sample_embedding_methods/; Pipeline B:
 # run_transformation_zeroimp_analysis/). NOT added to
 # load_all_functions.R (HPC-only); scripts source this file
-# explicitly after load_all_functions.R.
+# explicitly after src/utils/load_worker_functions.R.
 # ============================================================
 
 # Single source of truth for the shared DESeq2 pseudobulk variants
