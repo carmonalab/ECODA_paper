@@ -2,13 +2,24 @@
 # ==============================================================================
 # download_datasets.sh -- download the 9 Phase-5 datasets to the NAS
 # ==============================================================================
-# Downloads the PILOT-GM-VAE study (Joodaki et al. 2025, BIB bbaf547,
-# PMID 41097818) author-provided files into the NAS folder
+# FALLBACK route ONLY (NAS-stable): downloads the PILOT-GM-VAE study (Joodaki
+# et al. 2025, BIB bbaf547, PMID 41097818) author-provided files into the NAS
+# folder
 #   JooM_2025_41097818/output/
 # i.e. the datasets.json `folder_name` target used by 1_stage_data.sh:
 #   ${NAS_SC_DIR}/JooM_2025_41097818/output/<file>
 #
-# RULES (per the Phase-5 plan, decided with the user):
+# PRIMARY ROUTE (user decision 2026-08-17): the HPC downloader
+# `download_datasets_hpc.sh` (compute-node array or login-node fallback). Use
+# this Mac->NAS script only when the NAS mount is stable and the HPC route is
+# unavailable.
+#
+# The download catalog (URLs, md5s, CellxGene sidecar handling, tar member
+# patterns) lives in download_sources.sh -- the single source of truth shared
+# with the HPC worker. "verify" md5s fetch the `.h5ad.md5` sidecar and ENFORCE
+# the checksum (same semantics as the HPC worker).
+#
+# RULES:
 #   * Sequential ONLY -- one download at a time, each md5-verified before the
 #     next (bandwidth + NAS SMB). Do NOT run two copies of this script.
 #   * `curl -L -C -` resumable; re-running the script continues where it left
@@ -32,12 +43,11 @@
 # ==============================================================================
 set -euo pipefail
 
+ONBOARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${ONBOARD_DIR}/download_sources.sh"
+
 NAS_JOO_OUTPUT_DIR="${NAS_JOO_OUTPUT_DIR:-/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/JooM_2025_41097818/output}"
-LOG_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/download_log.md"
-ZENODO_PART1="https://zenodo.org/api/records/8370081/files"
-ZENODO_PART2="https://zenodo.org/api/records/7957118/files"
-ZENODO_PART3="https://zenodo.org/api/records/14615923/files"
-CELLXGENE="https://datasets.cellxgene.cziscience.com"
+LOG_FILE="${ONBOARD_DIR}/download_log.md"
 
 mkdir -p "${NAS_JOO_OUTPUT_DIR}"
 
@@ -68,19 +78,33 @@ log_entry() {
 }
 
 fetch_and_verify() {
-  # fetch_and_verify <key> <url> <local_file> <expected_md5|verify>
-  local key="$1" url="$2" local_file="$3" expected_md5="$4"
+  # fetch_and_verify <key> -- downloads SRC_URL (from download_sources.sh) into
+  # the NAS output dir, enforcing SRC_MD5 ("verify" = fetch the .h5ad.md5
+  # sidecar and enforce it).
+  local key="$1" url="${SRC_URL}" expected="${SRC_MD5}" local_file="${SRC_FILE}"
   local dest="${NAS_JOO_OUTPUT_DIR}/${local_file}"
+
+  if [[ "${expected}" == "verify" ]]; then
+    echo "  [sidecar] fetching ${SRC_SIDECAR}"
+    local sidecar_txt got_side
+    sidecar_txt="$(curl -L --fail --silent --show-error "${SRC_SIDECAR}")"
+    expected="$(printf '%s' "${sidecar_txt}" | awk 'NR==1{print $1}')"
+    if [[ ! "${expected}" =~ ^[0-9a-f]{32}$ ]]; then
+      echo "  [FAIL] unparsable md5 sidecar: '${sidecar_txt}'" >&2
+      log_entry "FAIL (sidecar)" "${key}" "${local_file}" "" "${expected}" "" ""
+      return 1
+    fi
+  fi
 
   if [ -f "${dest}" ]; then
     local got
     got="$(md5_of "${dest}")"
-    if [ "${expected_md5}" = "verify" ] || [ "${got}" = "${expected_md5}" ]; then
+    if [ "${got}" = "${expected}" ]; then
       echo "  [skip] ${local_file} already downloaded and verified (md5 ${got})."
-      log_entry "OK (cached)" "${key}" "${local_file}" "$(du -h "${dest}" | cut -f1)" "${expected_md5}" "${got}" ""
+      log_entry "OK (cached)" "${key}" "${local_file}" "$(du -h "${dest}" | cut -f1)" "${expected}" "${got}" ""
       return 0
     fi
-    echo "  [warn] ${local_file} exists but md5 differs (expected ${expected_md5}, got ${got}); re-downloading."
+    echo "  [warn] ${local_file} exists but md5 differs (expected ${expected}, got ${got}); re-downloading."
   fi
 
   echo "  [downloading] ${url}"
@@ -92,139 +116,67 @@ fetch_and_verify() {
   [ -n "${out}" ] && echo "  [done] size: $(du -h "${dest}" | cut -f1)"
 
   local got="$(md5_of "${dest}")"
-  if [ "${expected_md5}" != "verify" ] && [ "${got}" != "${expected_md5}" ]; then
-    echo "  [FAIL] md5 mismatch for ${local_file}: expected ${expected_md5}, got ${got}" >&2
-    log_entry "FAIL (md5)" "${key}" "${local_file}" "$(du -h "${dest}" | cut -f1)" "${expected_md5}" "${got}" ""
+  if [ "${got}" != "${expected}" ]; then
+    echo "  [FAIL] md5 mismatch for ${local_file}: expected ${expected}, got ${got}" >&2
+    log_entry "FAIL (md5)" "${key}" "${local_file}" "$(du -h "${dest}" | cut -f1)" "${expected}" "${got}" ""
     return 1
   fi
   echo "  [OK] md5 verified: ${got}"
-  log_entry "OK" "${key}" "${local_file}" "$(du -h "${dest}" | cut -f1)" "${expected_md5}" "${got}" ""
+  log_entry "OK" "${key}" "${local_file}" "$(du -h "${dest}" | cut -f1)" "${expected}" "${got}" ""
 }
 
 # ---------------------------------------------------------------------------
-# Datasets.tar.gz selective extraction: pick Covid-19 (Ren 2021) + Lupus
-# (Perez 2022) h5ad members by filename pattern, canonicalize their names.
+# Selective tar extraction driven by SRC_TAR_PATTERNS ("egrep_pattern:canonical"
+# pairs; empty pattern = the only .h5ad member). Only the needed h5ads are
+# extracted; excluded members stay in the archive, then the tar is DELETED.
 # ---------------------------------------------------------------------------
-extract_covid_lupus() {
-  local tar="${NAS_JOO_OUTPUT_DIR}/Datasets.tar.gz"
-  echo "  [tar] listing members of Datasets.tar.gz (printing to download_log.md)..."
+extract_tar_members() {
+  local key="$1" tar="${NAS_JOO_OUTPUT_DIR}/${SRC_FILE}"
+  echo "  [tar] listing members of ${SRC_FILE} (printing to download_log.md)..."
   tar -tzf "${tar}" | tee -a "${LOG_FILE}" > /dev/null
+  [[ -n "${SRC_TAR_PATTERNS}" ]] || return 0
 
-  local tmp
-  extract_single_member() {
-    # extract_single_member <pattern_egrep> <canonical_name> <context_label>
-    local pattern="$1" canonical="$2" context="$3"
-    local members
-    members="$(tar -tzf "${tar}" | grep -iE '\.h5ad$' | grep -iE "${pattern}" || true)"
-    local n
-    n="$(printf '%s\n' "${members}" | grep -c . || true)"
-    if [ "${n}" -eq 0 ]; then
-      echo "  [FAIL] no h5ad member matching '${pattern}' (${context}) in Datasets.tar.gz." >&2
-      echo "  All h5ad members in the tar:" >&2
-      tar -tzf "${tar}" | grep -iE '\.h5ad$' | sed 's/^/    /' >&2
-      exit 1
+  local pair pattern canonical members n tmp extracted
+  for pair in ${SRC_TAR_PATTERNS}; do
+    pattern="${pair%%:*}"
+    canonical="${pair#*:}"
+    if [[ -n "${pattern}" ]]; then
+      members="$(tar -tzf "${tar}" | grep -iE '\.h5ad$' | grep -iE "${pattern}" || true)"
+    else
+      members="$(tar -tzf "${tar}" | grep -iE '\.h5ad$' || true)"
     fi
-    if [ "${n}" -gt 1 ]; then
-      echo "  [FAIL] ${n} members match '${pattern}' (${context}); canonical name ambiguous:" >&2
+    n="$(printf '%s\n' "${members}" | grep -c . || true)"
+    if [[ "${n}" -ne 1 ]]; then
+      echo "  [FAIL] ${n} h5ad member(s) matching '${pattern}' (${canonical}) in ${SRC_FILE}:" >&2
       printf '%s\n' "${members}" | sed 's/^/    /' >&2
       exit 1
     fi
     tmp="$(mktemp -d /tmp/onboard_tar.XXXXXX)"
-    echo "  [tar] extracting '${members}' (${context})..."
+    echo "  [tar] extracting '${members}' -> ${canonical}..."
     tar -xzf "${tar}" -C "${tmp}" "${members}"
-    local extracted
     extracted="$(find "${tmp}" -type f -name '*.h5ad' | head -1)"
     mv "${extracted}" "${NAS_JOO_OUTPUT_DIR}/${canonical}"
     echo "  [OK] extracted + canonicalized: $(basename "${extracted}") -> ${canonical} ($(du -h "${NAS_JOO_OUTPUT_DIR}/${canonical}" | cut -f1))"
     rm -rf "${tmp}"
-  }
-
-  extract_single_member 'covid|ren_|ren-|GSE158055|coron' 'Covid19_Ren2021.h5ad' 'Covid-19'
-  extract_single_member 'lupus|perez|GSE174188|SLE' 'Lupus_Perez2022.h5ad' 'Lupus'
-  echo "  [tar] deleting Datasets.tar.gz (disk space)..."
+  done
+  echo "  [tar] deleting ${SRC_FILE} (disk space)..."
   rm -f "${tar}"
-  echo "  [tar] done. MI(1)/PDAC/Kidney cancer/follicular lymphoma members left unextracted (excluded datasets)."
-}
-
-extract_lung() {
-  local tar="${NAS_JOO_OUTPUT_DIR}/lungatlas.h5ad.tar.gz"
-  echo "  [tar] listing members of lungatlas.h5ad.tar.gz (printing to download_log.md)..."
-  tar -tzf "${tar}" | tee -a "${LOG_FILE}" > /dev/null
-  local tmp
-  tmp="$(mktemp -d /tmp/onboard_lung.XXXXXX)"
-  echo "  [tar] extracting lungatlas.h5ad..."
-  tar -xzf "${tar}" -C "${tmp}"
-  local found
-  found="$(find "${tmp}" -type f -name '*.h5ad' | head -20 || true)"
-  local n
-  n="$(printf '%s\n' "${found}" | grep -c . || true)"
-  if [ "${n}" -eq 0 ]; then
-    echo "  [FAIL] no .h5ad member in lungatlas.h5ad.tar.gz" >&2
-    tar -tzf "${tar}" | sed 's/^/    /' >&2
-    exit 1
-  fi
-  if [ "${n}" -gt 1 ]; then
-    echo "  [FAIL] multiple .h5ad members in lungatlas.h5ad.tar.gz:" >&2
-    printf '%s\n' "${found}" | sed 's/^/    /' >&2
-    exit 1
-  fi
-  mv "${found}" "${NAS_JOO_OUTPUT_DIR}/lungatlas.h5ad"
-  echo "  [OK] extracted: $(basename "${found}") -> lungatlas.h5ad ($(du -h "${NAS_JOO_OUTPUT_DIR}/lungatlas.h5ad" | cut -f1))"
-  rm -rf "${tmp}"
-  echo "  [tar] deleting lungatlas.h5ad.tar.gz (disk space)..."
-  rm -f "${tar}"
+  echo "  [tar] done. Excluded members (MI(1)/PDAC/Kidney cancer/follicular lymphoma) left unextracted."
 }
 
 # ---------------------------------------------------------------------------
 run_entry() {
-  case "$1" in
-    alzheimer)
-      fetch_and_verify alzheimer \
-        "${CELLXGENE}/c2b49431-9288-4d94-8ca5-f6723b72217e.h5ad" \
-        SEAAD_Alzheimer.h5ad verify
-      ;;
-    breast)
-      fetch_and_verify breast \
-        "${ZENODO_PART3}/BreastCncr_processed.h5ad/content" \
-        BreastCncr_processed.h5ad 8b28a349c2c3638ddbfb3946a32d12ba
-      ;;
-    covid_lupus_tar)
-      fetch_and_verify covid_lupus_tar \
-        "${ZENODO_PART1}/Datasets.tar.gz/content" \
-        Datasets.tar.gz d105b52dbba38ac49c2ffe8b3cf34e24
-      extract_covid_lupus
-      ;;
-    diabetes)
-      fetch_and_verify diabetes \
-        "${ZENODO_PART1}/diabetes.h5ad/content" \
-        diabetes.h5ad 38189a381bad630fa39ce2d7ad3a0855
-      ;;
-    kidney)
-      fetch_and_verify kidney \
-        "${ZENODO_PART3}/Kidney_KPMP.h5ad/content" \
-        Kidney_KPMP.h5ad 36ceb02ba23c559f80625ec7bef6884f
-      ;;
-    lung_tar)
-      fetch_and_verify lung_tar \
-        "${ZENODO_PART2}/lungatlas.h5ad.tar.gz/content" \
-        lungatlas.h5ad.tar.gz 0d0c97924f1b7a405b6ec3b55da02882
-      extract_lung
-      ;;
-    myocardial)
-      fetch_and_verify myocardial \
-        "${ZENODO_PART3}/Myocardial_Infarc_2.h5ad/content" \
-        Myocardial_Infarc_2.h5ad 7431ae99250c99f11bf63e3034798af4
-      ;;
-    parkinson)
-      fetch_and_verify parkinson \
-        "${CELLXGENE}/0270e5e5-ce1d-4165-828e-699210189a92.h5ad" \
-        Parkinson.h5ad verify
-      ;;
-    *)
-      echo "ERROR: unknown --only key '$1'." >&2
-      exit 1
-      ;;
-  esac
+  local key="$1"
+  if ! source_download_key "${key}"; then
+    echo "ERROR: unknown --only key '${key}'." >&2
+    exit 1
+  fi
+  if [[ -n "${SRC_TAR_PATTERNS}" ]]; then
+    fetch_and_verify "${key}"
+    extract_tar_members "${key}"
+  else
+    fetch_and_verify "${key}"
+  fi
 }
 
 # ---------------------------------------------------------------------------

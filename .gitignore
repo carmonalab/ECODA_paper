@@ -1,5 +1,6 @@
 # Big data files
 *.rds
+*.rds.bak
 *.feather
 *.h5ad
 *.h5seurat

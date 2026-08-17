@@ -93,6 +93,72 @@ def main() -> int:
     assert um["computed"] is True, "expected computed-UMAP path on _debug"
     print("precomputed PCA candidates:", um["precomputed_pca_keys"])
 
+    print("\n=== 4.5 Sample-first subsetting (T3.1 path validation) ===")
+    import resource as _res
+    import time as _time
+
+    _t0 = _time.perf_counter()
+    sub, ssumm = ou.subset_by_samples(
+        adata,
+        sample_col=SAMPLE_COL,
+        bio_col=BIO_COL,
+        batch_cols=BATCH_COLS,
+        ct_col=CT_COL,
+        config={"MAX_SAMPLES": 4, "MAX_CELLS_PER_SAMPLE": 2000, "CELLS_TARGET": 5000},
+    )
+    _t1 = _time.perf_counter()
+    _rss = _res.getrusage(_res.RUSAGE_SELF).ru_maxrss
+    print(f"subset wall time: {_t1 - _t0:.2f}s; peak RSS: {_rss} ({_rss / 1e6:.2f} GB if bytes, {_rss / 1e3:.2f} MB if KB)")
+    print("summary:", ssumm)
+    # structural checks on the reduced config
+    assert ssumm["n_samples_selected"] <= 4, ssumm
+    assert ssumm["n_cells_total"] <= 5000, ssumm
+    assert max(ssumm["cells_per_sample"].values()) <= 2000, ssumm
+    assert ssumm["n_samples_selected"] == len(ssumm["cells_per_sample"]), ssumm
+    assert set(ssumm["cells_per_sample"]) == set(ssumm["selected_samples"]), ssumm
+    # batch signal still present structurally: seqtec stays constant on the
+    # subset (single level -> confounded, never scored) and Site has >= 2 levels
+    assert sub.obs["seqtec"].nunique(dropna=True) == 1, "seqtec should stay constant on the subset"
+    assert sub.obs["Site"].nunique(dropna=True) >= 2, "Site should keep >= 2 levels on the subset"
+    assert sub.obs["sample.origin"].nunique(dropna=True) >= 2, "bio groups should all be covered"
+    print("OK: subset ran within budget; seqtec still constant, Site/bio still multi-level")
+    print("BATCH-SIGNAL CHECK on the subset: running the LISI metrics on the subset")
+
+    info_sub = ou.write_metrics_input(
+        sub,
+        out_path=OUT / "metrics_input_subset.feather",
+        ct_col=CT_COL,
+        bio_col=BIO_COL,
+        batch_cols=BATCH_COLS,
+        sample_col=SAMPLE_COL,
+        max_cells=50_000,
+    )
+    print("pca source (subset):", info_sub["pc_source"])
+    assert "obsm" in info_sub["pc_source"], "expected the sliced-precomputed-X_pca path on the subset"
+
+    run([
+        "pixi", "run", "-e", "default", "Rscript", "--vanilla",
+        str(HERE / "onboarding_metrics.R"),
+        "--input", str(OUT / "metrics_input_subset.feather"),
+        "--ct-col", CT_COL,
+        "--bio-col", BIO_COL,
+        "--batch-cols", ",".join(BATCH_COLS),
+        "--out-csv", str(OUT / "metrics_separation_subset.csv"),
+        "--out-json", str(OUT / "metrics_separation_subset.json"),
+    ])
+    tbl_sub = pd.read_csv(OUT / "metrics_separation_subset.csv")
+    print(tbl_sub.to_string())
+    sc_col = [c for c in tbl_sub.columns if "Site_separation" in c][0]
+    st_col = [c for c in tbl_sub.columns if "Site_status" in c][0]
+    ok_mask = (tbl_sub[st_col] == "ok") & (tbl_sub["cell_type"] != "<ALL>")
+    ok_cts = tbl_sub.loc[ok_mask, :]
+    if len(ok_cts) and (ok_cts[sc_col] > 0.5).any():
+        print("OK: Site batch separation > 0.5 still detected within CT(s) on the subset")
+    else:
+        print("WARNING: no Site separation > 0.5 on the reduced 4-sample subset")
+        print("         acceptable at this small size; full-size subsets are the notebook default")
+    assert len(ok_cts) > 0, "expected at least one CT with an 'ok' Site score on the subset (metrics pipeline ran end-to-end)"
+
     print("\n=== 5. Metrics input + LISI separation (precomputed X_pca path) ===")
     info = ou.write_metrics_input(
         adata,

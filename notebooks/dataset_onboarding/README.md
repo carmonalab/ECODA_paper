@@ -12,19 +12,33 @@ for Alzheimer (SEA-AD) and Parkinson. Excluded: Kidney cancer, PDAC, MI(1)
 (duplicate of MI-2), follicular lymphoma. Full feasibility table (colors,
 comments): `new_datasets_to_implement.md` (Excel source
 `/Users/christianhalter/Desktop/ECODA_PAPER_DATASETS.xlsx`). Implementation
-plan: `.kilo/plans/archive/1786899069337-onboard-new-datasets-phase5.md`.
+plan: `.kilo/plans/1786899069337-onboard-new-datasets-phase5.md`.
 
-## Download (sequential, md5-verified — user runs)
+## Download (HPC route first — user runs; Mac→NAS script is the fallback)
+
+The Mac NAS mount is unstable and the Mac disk is tight (~108 GB free vs
+~150–180 GB of files), so downloads go over the **HPC** into BeeGFS scratch
+(`${HPC_SCRATCH_DIR}/_downloads/`, 1.1 PB, no per-user size quota) and a
+login-node tail rsyncs them to the NAS folder
+`JooM_2025_41097818/output/`:
 
 ```bash
-./notebooks/dataset_onboarding/download_datasets.sh            # all datasets
-./notebooks/dataset_onboarding/download_datasets.sh --only breast  # one entry
+cd "${HOME}/ECODA_paper" && git pull        # prerequisite: get the new scripts
+# from the HPC login node (repo root):
+./notebooks/dataset_onboarding/download_datasets_hpc.sh                  # all 8 keys (array job, 3 concurrent)
+./notebooks/dataset_onboarding/download_datasets_hpc.sh --only breast    # one key (resumable)
+./notebooks/dataset_onboarding/download_datasets_hpc.sh --sync-only <job-id>  # resume: gate + NAS sync tail only
+./notebooks/dataset_onboarding/download_datasets_hpc.sh --login-node     # fallback if compute nodes lack egress
 ```
 
-Progress + md5s are logged to `notebooks/dataset_onboarding/download_log.md`.
-Mac disk is tight (~108 GB free): the script selectively extracts only the
-needed h5ads out of the tars and deletes the tars afterwards; run one download
-at a time.
+Compute-node egress is smoke-tested first (debug-cpu curl); on failure the
+submitter automatically runs the login-node path (`nice -n 19` +
+`--limit-rate`). Tasks are `curl -L -C -` resumable and md5-verified (Zenodo
+checksums; CellxGene `.h5ad.md5` sidecar); tar entries extract only the needed
+h5ads and the tars are deleted. Progress + per-key md5s + resume commands are
+logged to `notebooks/dataset_onboarding/download_log.md` (commit from the
+Mac). The original `download_datasets.sh` (Mac→NAS, sequential) is kept as a
+NAS-stable fallback only.
 
 ## Render a check notebook (needs the downloaded file + NAS mounted)
 
@@ -32,6 +46,11 @@ at a time.
 # pixi default env on PATH so quarto finds the python3 kernelspec
 PATH="$PWD/.pixi/envs/default/bin:$PATH" quarto render notebooks/dataset_onboarding/dataset_check_Alzheimer.qmd
 ```
+
+Each notebook opens the h5ad `backed='r'`, runs the full-file count sanity +
+obs exploration, then **section 1.5 builds an in-memory sample-first subset**
+(`subset_by_samples`, ~10k cells) and UMAP + per-CT LISI metrics run on that
+subset — target wall time <2–3 min and ~1–2 GB peak RSS on the 64 GB Mac.
 
 Outputs (plots/feathers/csv) go to `data/new_dataset_checks/<Name>/` (gitignored).
 
@@ -42,15 +61,28 @@ Outputs (plots/feathers/csv) go to `data/new_dataset_checks/<Name>/` (gitignored
   (integer-VALUE check with epsilon tolerance — float-encoded CSR is valid),
   `obs_summary`, `candidate_col_detection`, `cells_per_sample_stats`,
   `paper_table_compare`, `confounding_crosstab` (bio × batch collinearity),
-  `embed_and_umap_workflow` (precomputed or computed UMAP from RAW counts,
-  unintegrated only), `write_metrics_input`.
+  `subset_by_samples` + `SUBSET_CONFIG` (sample-first, RAM-bounded subsetting
+  — select ~10–20 samples stratified by bio condition + round-robin over the
+  batch candidates, read only those samples' cells via per-sample
+  `.to_memory()` slices, cap per sample / per CT / overall ~10k (max 50k);
+  precomputed unintegrated `obsm` arrays are re-sliced to the subset rows so
+  UMAP/metrics stay in the original embedding space; diagnostic only — the
+  HPC pipeline uses full data), `embed_and_umap_workflow` (precomputed or
+  computed UMAP from RAW counts, unintegrated only), `write_metrics_input`.
 - `onboarding_metrics.R` — standalone Rscript (/ default env): cell-level,
   per-cell-type `calc_lisi` separation (repo `src/utils/scoring_metrics.R`)
   on the **unintegrated PCA embedding** (never `X_pca_harmony*`), per-CT
   subsample caps + confounded-CT guards; validated on the NAS `_debug` view
   (`_debug_validation.py`, 2026-08-17).
 - `_debug_validation.py` — T3.0 helper validation on the Joanito 5-sample
-  `_debug` batch-effect view (bio `sample.origin` vs batch `Site`/`seqtec`).
+  `_debug` batch-effect view (bio `sample.origin` vs batch `Site`/`seqtec`),
+  including the T3.1 `subset_by_samples` path (reduced config: 4 samples,
+  per-sample cap 2000, target 5000 — checks per-sample slice reads, budgeted
+  wall time/RSS, structural batch signal).
+- `run_download_worker.sh` + `download_datasets_hpc.sh` — Phase-5 HPC download
+  worker (sbatch array, one task per key: resumable `curl -L -C -`,
+  md5+sidecar verification, selective tar extraction) + login-node submitter
+  (egress smoke test, sacct gate, NAS rsync + md5 verify + log append).
 
 ## Summary table (fill as downloads + checks complete)
 

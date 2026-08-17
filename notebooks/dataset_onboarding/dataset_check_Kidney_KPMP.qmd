@@ -75,6 +75,54 @@ has_raw = adata.raw is not None
 print("has raw:", has_raw)
 ```
 
+## 1.5 Sample-first subsetting (RAM-bounded, ~10k cells)
+
+```{python}
+# Resolve effective columns: prefer the confirmed/best-guess names, fall back
+# to the first detected candidate (advisory heuristics). Moved here from
+# section 3 so the whole downstream analysis can run on the in-memory subset.
+def pick(guess, candidates):
+    if guess is not None and guess in adata.obs.columns:
+        return guess
+    return candidates[0] if candidates else None
+
+cand = ou.candidate_col_detection(adata.obs)
+SAMPLE_COL = SAMPLE_COL or pick("Sample", cand["sample"])
+BIO_COL = BIO_COL or pick(None, cand["label"])
+CT_COL = CT_COL or pick(None, cand["cell_type"])
+if not BATCH_COLS:
+    BATCH_COLS = cand["batch"][:4]
+print("effective SAMPLE_COL:", SAMPLE_COL)
+print("effective BIO_COL:", BIO_COL)
+print("effective BATCH_COLS:", BATCH_COLS)
+print("effective CT_COL:", CT_COL)
+```
+
+```{python}
+# Diagnostic subset only -- the HPC pipeline always uses the full data.
+# Sample-first, RAM-bounded: reads obs, selects ~10-20 samples stratified by
+# bio condition + batch candidates (round-robin over the batch values), reads
+# only those samples' cells (per-sample .to_memory() slices, capped), then
+# optional per-CT cap + overall target cap. Override the defaults per dataset
+# via SUBSET_CFG (see onboarding_utils.SUBSET_CONFIG).
+SUBSET_CFG = {}  # e.g. {"MAX_SAMPLES": 15, "MAX_CELLS_PER_SAMPLE": 2000}
+sub, subset_summary = ou.subset_by_samples(
+    adata,
+    sample_col=SAMPLE_COL,
+    bio_col=BIO_COL,
+    batch_cols=BATCH_COLS,
+    ct_col=CT_COL,
+    config=SUBSET_CFG,
+)
+print(
+    "subset summary: %d cells / %d samples (of %d in the full file with %d cells)"
+    % (subset_summary["n_cells_total"], subset_summary["n_samples_selected"],
+       subset_summary["n_samples_total"], subset_summary["n_cells_full"])
+)
+print("samples per bio group:", subset_summary["samples_per_bio"])
+print("cells per sample:", subset_summary["cells_per_sample"])
+```
+
 ## 2. Count sanity check (T2 verdict)
 
 ```{python}
@@ -95,19 +143,9 @@ print(json.dumps(ou.candidate_col_detection(adata.obs), indent=2))
 ```
 
 ```{python}
-# Resolve effective columns: prefer the confirmed/best-guess names, fall back
-# to the first detected candidate.
-def pick(guess, candidates):
-    if guess is not None and guess in adata.obs.columns:
-        return guess
-    return candidates[0] if candidates else None
-
-cand = ou.candidate_col_detection(adata.obs)
-SAMPLE_COL = SAMPLE_COL or pick("Sample", cand["sample"])
-BIO_COL = BIO_COL or pick(None, cand["label"])
-CT_COL = CT_COL or pick(None, cand["cell_type"])
-if not BATCH_COLS:
-    BATCH_COLS = cand["batch"][:4]
+# Effective columns were resolved in section 1.5 (the pick() helper lives
+# there); metadata exploration below still uses the full backed obs (cheap),
+# while UMAP (sec. 4) and metrics (sec. 5) run on the in-memory `sub` subset.
 print("effective SAMPLE_COL:", SAMPLE_COL)
 print("effective BIO_COL:", BIO_COL)
 print("effective BATCH_COLS:", BATCH_COLS)
@@ -191,8 +229,10 @@ label_cols
 ```
 
 ```{python}
+# UMAP on the in-memory sample-first subset (diagnostic only; unintegrated
+# space -- never Harmony/integrated)
 um = ou.embed_and_umap_workflow(
-    adata, label_cols=label_cols, out_dir=OUT, name=NAME,
+    sub, label_cols=label_cols, out_dir=OUT, name=NAME,
     sample_col=SAMPLE_COL,
 )
 print("precomputed PCA candidates:", um["precomputed_pca_keys"])
@@ -204,7 +244,7 @@ um["saved_pngs"]
 
 ```{python}
 info = ou.write_metrics_input(
-    adata, out_path=OUT / "metrics_input.feather",
+    sub, out_path=OUT / "metrics_input.feather",
     ct_col=CT_COL, bio_col=BIO_COL, batch_cols=BATCH_COLS,
     sample_col=SAMPLE_COL,
 )

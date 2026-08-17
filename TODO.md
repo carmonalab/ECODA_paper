@@ -157,7 +157,7 @@ changes; whether a dataset shows batch effects decides benchmark vs batch-effect
 usage in this repo. Full extraction (counts, classes, feasibility colors,
 comments) is in `new_datasets_to_implement.md` (Excel source:
 `/Users/christianhalter/Desktop/ECODA_PAPER_DATASETS.xlsx`).
-Implementation plan (current authority): `.kilo/plans/archive/1786899069337-onboard-new-datasets-phase5.md`.
+Implementation plan (current authority): `.kilo/plans/1786899069337-onboard-new-datasets-phase5.md`.
 
 - [x] **5.1 Check the BIB study (bbaf547) for author-provided data locations**
       DONE (2026-08-17 planning/onboarding session): Zenodo 8370081 (Part 1,

@@ -1,5 +1,29 @@
 # Onboard 9 new datasets from the PILOT-GM-VAE study (Phase 5)
 
+## Implementation status (2026-08-17)
+
+Committed `6f96aec` (T3 partial + T5/T6): `notebooks/dataset_onboarding/`
+(`download_datasets.sh`, `download_log.md`, 9 `dataset_check_<Name>.qmd`,
+`onboarding_utils.py`, `onboarding_metrics.R`, `README.md`); T3.0 `_debug`
+helper validation PASSED; T6 annotation safety + `not_suitable_for_auto_annotation`
+flag wired; AGENTS.md + TODO.md updated; `ipykernel` added to pixi.toml.
+Implemented 2026-08-17 (uncommitted working tree): **T1 HPC download scripts**
+(`download_datasets_hpc.sh` submitter — egress smoke test → 8-task array (3
+concurrent) into `${HPC_SCRATCH_DIR}/_downloads/` → sacct gate → NAS rsync +
+md5 verify + `download_log.md` append; `--sync-only <id>` / `--only <key>` /
+`--login-node` fallback — and `run_download_worker.sh` sbatch worker with the
+`/var/spool` SCRIPT_DIR recovery, resumable `curl -L -C -`, Zenodo md5s +
+CellxGene `.h5ad.md5` sidecar, selective tar extraction) and **T3.1
+sample-first subsetting** (`SUBSET_CONFIG` + `subset_by_samples()` in
+`onboarding_utils.py`; section 1.5 added to all 9 notebooks, UMAP + metrics
+now run on the in-memory subset; `_debug_validation.py` extended with the
+reduced-config subset-path check). AGENTS.md/README.md/download_log.md updated.
+**Pending**: user runs the downloader (T1 execution; `git pull` the HPC clone
+first), per-dataset count check + filled summary cards + rendered notebooks
+(T2/T4), T7 user decisions, T8 datasets.json registration, T10 rollout. This
+plan was momentarily archived by the implementing agent — it is NOT complete,
+restore location `.kilo/plans/` (already restored).
+
 ## Context & goal
 
 Reviewer asked for additional datasets. The chosen source study is PILOT-GM-VAE
@@ -18,9 +42,36 @@ out the pipeline. Excluded: Kidney cancer [29] (too few samples), Pancreas
 PDAC [31], Myocardial infarction (1) [6] (duplicate of MI-2).
 
 **Decisions already made with the user**:
-- Downloads go **directly to NAS** `JooM_2025_41097818/output/` (Mac has only
-  ~108 GB free vs ~100–150 GB of data), **sequentially**, one at a time,
-  checksum-verified.
+- Downloads now go over the **HPC, into BeeGFS scratch FIRST, then rsync to the
+  NAS** (user decision 2026-08-17, replacing the original "direct to NAS from
+  the Mac" plan): the Mac NAS mount is unstable (disconnected mid-download;
+  partial `SEAAD_Alzheimer.h5ad` ≈ 5–10 GB left on the NAS — ignorable,
+  re-downloaded on HPC), the Mac has only ~108 GB free vs ~150–180 GB of
+  files, and HPC downloads are faster AND leave the data on the HPC for later
+  pipeline use. Downloads land in `${HPC_SCRATCH_DIR}/_downloads/` (= BeeGFS
+  scratch via the `$HOME/scratch` symlink: 1.1 PB, **no per-user size quota**,
+  not backed up, HDD) — intentionally NOT `$HOME` itself (SSD, 1 TB quota,
+  backed up, and the repo/scratch already holds pipeline data). After all
+  tasks verify, a login-node tail `rsync`s scratch → NAS
+  (`${NAS_SC_DIR}/JooM_2025_41097818/output/`, where the onboarding notebooks
+  read them from the Mac), keeps the `_downloads` copy for later use, and
+  deletes the original `.tar.gz` archives.
+- **Parallel HPC downloads** (user request): one SLURM **array job with 8
+  download tasks** (one per `--only` key: alzheimer, breast, covid_lupus_tar,
+  diabetes, kidney, lung_tar, myocardial, parkinson), concurrent tasks
+  (configurable, e.g. 3–4) so Zenodo-S3 and CellxGene-S3 transfers overlap
+  and per-server limits are better used. Each task is `curl -L -C -`
+  resumable (Ctrl-C/re-queue safe; partial files persist in scratch and are
+  resumed on re-run) + md5-verified (Zenodo checksums; CellxGene `+ .md5`
+  sidecar or recorded API checksum) + tar-selective extraction for the two
+  archive entries, then archive deletion. **Compute-node internet is
+  smoke-tested first** (`srun -p debug-cpu curl -sI https://zenodo.org`);
+  HPC forum evidence says compute nodes have internet (baobab incident
+  resolved, 2024; login-node transfers remain the documented high-bandwidth
+  path). If the smoke test fails → login-node fallback: same script entry
+  run locally on the login node under `nice` + `--limit-rate` (documented
+  transfer path; heavy login use is otherwise against AGENTS.md).
+  The original Mac→NAS script stays as a fallback only (NAS mount stable).
 - Check notebooks live in **`notebooks/dataset_onboarding/`** (one
   `dataset_check_<Name>.qmd` per dataset + `README.md` summary table).
 - The repo **annotation pipeline (scGate/HiTME/scATOMIC) RUNS** for the new
@@ -62,6 +113,24 @@ PDAC [31], Myocardial infarction (1) [6] (duplicate of MI-2).
   datasets. Preprocessed `_debug` views available on the NAS at
   `/Volumes/Shared/Projects/ECODA_paper/_debug/output/`
   (`JoaI_2022_35773407_debug_5samples_{benchmark,batch_effect}_analysis_ECODAprocessed.h5ad`).
+- **Local interactive run on the 64 GB Mac — sample-first, RAM-bounded
+  subsetting (user requirement, added 2026-08-17)**: all onboarding work runs
+  on the user's macOS laptop (64 GB RAM) with **minimal computation and fast,
+  interactive turnaround**. No full-matrix loads ever: h5ad files are opened
+  `backed='r'`; obs is read first (cheap even for 2M cells); then **10–20
+  samples are selected stratified by bio condition and batch candidates**
+  (≥1 per bio group; batch values covered when possible), their cells are
+  read sample-by-sample (`.to_memory()` per sample → concat — bounded peak
+  memory regardless of file size, works for the 29 GB Breast file), and caps
+  are applied (configurable; exact numbers not critical): per-sample
+  ≤2000 cells (range 500–5000), optional per-CT ≤100 cells to (stratified by
+  batch to avoid artificial imbalance), overall target **~10,000 cells
+  (max 50,000)**. Count sanity check stays full-file but value-sampled
+  (200k values, sub-second); UMAP/PCA + per-CT metrics run on the in-memory
+  subset (10–50k cells → seconds). Notebook target: <~2–3 min wall time per
+  dataset, ~1–2 GB peak RSS. The full files remain on NAS — subsetting
+  happens at read time, no subset downloads. Subsetting is onboarding-
+  diagnostics only: the real pipeline (HPC) still uses the full data.
 
 ## Dataset inventory & sources (9 + 0 exclusions)
 
@@ -71,15 +140,19 @@ CellxGene (must be downloaded from there).
 
 | # | Dataset (short key) | Study (PMID) | Paper: cells / samples / CTs | Author-provided file | Source | Size (GB) | md5 |
 |---|---|---|---|---|---|---|---|
-| 1 | Alzheimer (SEA-AD) | Gabitto 2024 Nat Neurosci (42486312) | 1,395,601 / 83 / 18 | snRNA h5ad | CellxGene collection `1ca90a2d-2943-483d-b678-b809bf464c30` (≈50 datasets: per-region × assay; pick the 10x 3' v3 nucleus one(s) matching paper counts) | ~15–25 | verify on download |
+| 1 | Alzheimer (SEA-AD) | Gabitto 2024 Nat Neurosci (42486312) | 1,395,601 / 83 / 18 | `SEAAD_Alzheimer.h5ad` | CellxGene collection `1ca90a2d-2943-483d-b678-b809bf464c30`, dataset_version_id `c2b49431-9288-4d94-8ca5-f6723b72217e` (count matches paper exactly) | **49.5** (observed 2026-08-17) | `.h5ad.md5` sidecar |
 | 2 | Breast cancer | Kumar 2023 Nature (37380767) | 714,331 / 126 / 10 | `BreastCncr_processed.h5ad` | zenodo 14615923 | 28.9 | `8b28a349c2c3638ddbfb3946a32d12ba` |
-| 3 | Covid-19 PBMC | Ren 2021 Cell (34767776) | 993,171 / 151 / 10 | inside `Datasets.tar.gz` | zenodo 8370081 | 36.35 (tar; selective-extract) | `d105b52dbba38ac49c2ffe8b3cf34e24` |
+| 3 | Covid-19 PBMC | Ren 2021 Cell (34767776) | 993,171 / 151 / 10 | `Covid19_Ren2021.h5ad` (inside `Datasets.tar.gz`) | zenodo 8370081 | 36.35 (tar; selective-extract) | `d105b52dbba38ac49c2ffe8b3cf34e24` |
 | 4 | Diabetes | Hrovatin 2023 Nat Metab (37697055) — **mouse** | 264,235 / 52 / 13 | `diabetes.h5ad` | zenodo 8370081 | 4.1 | `38189a381bad630fa39ce2d7ad3a0855` |
 | 5 | Kidney (KPMP) | Lake 2023 Nature (41648348) | 104,314 / 45 / 14 | `Kidney_KPMP.h5ad` | zenodo 14615923 | 2.75 | `36ceb02ba23c559f80625ec7bef6884f` |
-| 6 | Lupus PBMC | Perez 2022 Science (42115607) | 1,263,676 / 261 / 11 | inside `Datasets.tar.gz` | zenodo 8370081 | (in tar) | (in tar) |
-| 7 | Lung | Sikkema 2023 Nat Med (42362693) | 941,504 / 165 / 12 | `lungatlas.h5ad` (inside tar.gz) | zenodo 7957118 | 17.2 (tar) | `0d0c97924f1b7a405b6ec3b55da02882` |
+| 6 | Lupus PBMC | Perez 2022 Science (42115607) | 1,263,676 / 261 / 11 | `Lupus_Perez2022.h5ad` (inside `Datasets.tar.gz`) | zenodo 8370081 | (in tar) | (in tar) |
+| 7 | Lung | Sikkema 2023 Nat Med (42362693) | 941,504 / 165 / 12 | `lungatlas.h5ad` (inside `lungatlas.h5ad.tar.gz`) | zenodo 7957118 | 17.2 (tar) | `0d0c97924f1b7a405b6ec3b55da02882` |
 | 8 | Myocardial infarction (2) | Kuppe 2022 Nature (41937210) | 132,888 / 23 / 11 | `Myocardial_Infarc_2.h5ad` | zenodo 14615923 | 3.6 | `7431ae99250c99f11bf63e3034798af4` |
-| 9 | Parkinson | Prashant 2024 Sci Data (39580497) | 2,096,155 / 97 / 11 | h5ad | CellxGene collection `d5d0df8f-4eee-49d8-a221-a288f50a1590` (single dataset) | ~25–40 | verify on download |
+| 9 | Parkinson | Prashant 2024 Sci Data (39580497) | 2,096,155 / 97 / 11 | `Parkinson.h5ad` | CellxGene collection `d5d0df8f-4eee-49d8-a221-a288f50a1590`, dataset_version_id `0270e5e5-ce1d-4165-828e-699210189a92` (count matches paper exactly) | ~40–60 (estimate; observed SEAAD** 49.5) | `.h5ad.md5` sidecar |
+
+\* CellxGene assets expose a **`.h5ad.md5` sidecar** at
+`https://datasets.cellxgene.cziscience.com/<dataset_version_id>.h5ad.md5` —
+fetch and verify against it (no hardcoded md5 exists for these).
 
 Excluded (NOT downloaded/registered): Kidney cancer (GEO GSE242299), PDAC
 (GSA CRA001160), MI(1) (inside the same tar — leave unextracted or move to
@@ -93,23 +166,61 @@ Parkinson (same collections).
 
 ## Tasks
 
-### T1 — Download to NAS (user executes prepared script; agent prepares it)
-- Write `notebooks/dataset_onboarding/download_datasets.sh` (bash, `curl -L -C -`
-  resumable; md5 verification against the table above after each file; log +
-  append results to `notebooks/dataset_onboarding/download_log.md`). Run
-  **sequentially** (bandwidth + NAS SMB), each verified before the next.
-- `Datasets.tar.gz` and `lungatlas.h5ad.tar.gz`: **selective extraction**
-  (`tar -xzf … <members>`) — write only the needed h5ads to
-  `JooM_2025_41097818/output/`, then delete the tars to save disk.
-- CellxGene files: resolve dataset h5ad URLs via the curation API
-  (`https://datasets.cellxgene.cziscience.com/<dataset_version_id>.h5ad`);
-  for SEA-AD pick the snRNA dataset(s) matching the paper (1,395,601 nuclei,
-  83 donors, 18 CTs); verify cell counts and document any delta vs the paper
-  (collection was updated 2026-06-10). Keep the `datasets.pdf` description
-  file in the onboarding folder for reference.
-- Save a record in the download log: source URL, date, size, md5, extraction
-  status (feeds the AGENTS.md documentation requirement "when and where it
-  was downloaded/retrieved from").
+### T1 — HPC downloads into BeeGFS scratch + NAS sync (user executes; agent prepares scripts)
+- **New scripts** (kept next to the existing Mac→NAS `download_datasets.sh`, which
+  stays as a NAS-stable fallback):
+  - `download_datasets_hpc.sh` — login-node **submitter**: sources
+    `src/slurm_config.sh` (`source "${PROJECT_ROOT}/src/slurm_config.sh"`),
+    `cd "${PROJECT_ROOT}"`, runs the **compute-node connectivity smoke test**
+    first (`srun -p debug-cpu --time=00:05:00 curl -sI https://zenodo.org`
+    and the CellxGene host; fail-closed → shortcut to login-node mode), then
+    submits **one SLURM array job, 8 tasks** (`--array=1-8`, concurrency
+    `--array` throttling ≈ 3–4, `--partition="${SLURM_PARTITION_CPU}"` i.e.
+    `shared-cpu`, 1 cpu / 2–4 G per task, generous `--time` (e.g. 10–12h,
+    resumable anyway)), waits for completion, gates every task state via
+    `sacct` (like the repo's submitter tails), then the **login-node NAS sync
+    tail**: `rsync` `${HPC_SCRATCH_DIR}/_downloads/` →
+    `${NAS_SC_DIR}/JooM_2025_41097818/output/` (canonical file names stay
+    identical), keeps the `_downloads` copy AND deletes the tar.gz archives
+    in scratch; appends the per-task status + md5s + `--sync-only <job-id>`
+    resume to `notebooks/dataset_onboarding/download_log.md` (repo log on the
+    login node; user pulls/commits from the Mac).
+  - `run_download_worker.sh` — **sbatch worker** (must not resolve
+    `slurm_config.sh` from `BASH_SOURCE` — Slurm copies scripts to the spool
+    dir; recover `SCRIPT_DIR` via `scontrol show job <SLURM_JOB_ID>`
+    `Command=` field with the `BASH_SOURCE` fallback, per AGENTS.md):
+    one task per `--only` key, `curl -L -C - --retry 5 --retry-delay 10
+    --fail` into `${HPC_SCRATCH_DIR}/_downloads/<file>`, md5-verified
+    (Zenodo checksums from the table; CellxGene via the `.h5ad.md5`
+    sidecar), tar tasks do **selective extraction** then delete the archive.
+    Partial files persist in scratch; killed/requeued tasks **resume** on
+    re-submission (idempotent, like the repo's other workers).
+- **Parallelism**: the array achieves server overlap (Zenodo-S3 vs
+  CellxGene-S3) and utilization of the HPC uplink; individual file
+  downloads must NOT be run twice (one task per key).
+- **Login-node fallback** (only if the smoke test fails): run the same worker
+  body locally on the login node under `nice -n 19` + `curl --limit-rate`
+  (documented high-bandwidth transfer path; otherwise login-node use is
+  against AGENTS.md).
+- **Storage**: `_downloads` lives on `$HOME/scratch` (→ `/srv/beegfs/scratch/`,
+  1.1 PB, NO per-user size quota, not backed up, HDD) — never `$HOME` itself
+  (SSD, 1 TB quota incl. the existing repo + scratch pipeline data; the raw
+  download volume ~150–180 GB would risk filling it). Scratch is
+  re-downloadable, so a retention purge is harmless; sync to NAS promptly ran
+  by the tail.
+- **CellxGene resolution**: SEA-AD `dataset_version_id c2b49431-…` and
+  Parkinson `0270e5e5-…` already resolved (counts match the paper exactly);
+  verify cell counts again after download + document any delta vs the paper's
+  Table 1 (SEA-AD collection was updated 2026-06-10).
+- **Log entry per file** (in `download_log.md`, also committed): source URL,
+  date, size, md5 expected + actual, extraction status — feeds the AGENTS.md
+  "when and where it was downloaded" requirement.
+- **Prerequisite**: the HPC clone must be current — user runs
+  `cd "${HOME}/ECODA_paper" && git pull` (login node, quick) after the new
+  scripts are implemented+committed, before first use.
+- **Cancel/resume**: cancellation is safe at any point (Ctrl-C / `scancel`);
+  re-running the submitter (`--only <key>` or all, or `--sync-only <id>` for
+  the tail) resumes partial files via `curl -C -`.
 
 ### T2 — Count sanity check (immediately after each download; agent runs)
 - Python (`.pixi/envs/default/bin/python`, scanpy 1.12.2 available; backed read
@@ -126,6 +237,31 @@ Parkinson (same collections).
   qmd. On FAIL → fallback source from the table above (notify user first).
 
 ### T3 — Onboarding notebooks (`notebooks/dataset_onboarding/`)
+- **T3.1 — Implement `subset_by_samples()` + `SUBSET_CONFIG` (NEW, added
+  2026-08-17 — the key local-interactive requirement)**: add to
+  `onboarding_utils.py` a RAM-bounded, sample-first subsetting routine and a
+  config dict with these defaults (overridable per notebook in the header
+  block; exact numbers NOT critical):
+  - `MAX_SAMPLES = 15` (range 10–20), `N_PER_BIO = 3–5`
+  - `MAX_CELLS_PER_SAMPLE = 2000` (range 500–5000)
+  - `MAX_CELLS_PER_CT = None` (optional; e.g. 100 — applied after concat,
+    stratified by batch to avoid artificial imbalance)
+  - `CELLS_TARGET = 10_000`, `CELLS_MAX = 50_000`, `SEED = 0`
+  Flow: (1) `sc.read_h5ad(path, backed='r')` + obs-only access; (2) select
+  10–20 samples stratified by bio condition and batch candidates (≥1 per bio
+  group; distinct batch values covered when possible — round-robin over the
+  batch-candidate values within each bio group, else random with seed); small
+  datasets (<10 samples) keep all samples; (3) read the selected samples'
+  cells **per sample**: boolean mask → slice → `.to_memory()` (bounded peak
+  memory regardless of file size; works for CSR- and CSC-on-disk, incl. the
+  29 GB Breast file) → concat; (4) apply per-sample cap (random within sample,
+  seed), optional per-CT cap, then overall target cap (stratified by sample so
+  every selected sample stays represented); (5) return the in-memory AnnData
+  + a summary dict (samples per bio group, cells per sample, total cells).
+  Notebooks get a new **section 1.5** that calls it and prints the subset
+  summary with the "diagnostic subset only — HPC pipeline uses full data"
+  note. UMAP (sec. 4) and metrics (sec. 5) then run on this subset; target
+  wall time per notebook < ~2–3 min, peak RSS ~1–2 GB on the 64 GB Mac.
 - **T3.0 — Validate the metric + embedding approach on `_debug` first**
   (before writing the 9 notebooks): run `embed_and_umap` + `onboarding_metrics.R`
   (per-cell-type LISI separation on the **unintegrated `X_pca`** — never
@@ -137,15 +273,22 @@ Parkinson (same collections).
   produced, PCA input path exercised (incl. the precomputed-`X_pca` case), and
   the result is sensible (batch separation visible within CTs; bio/batch
   expectations from the known Joanito batch structure). Fix the helper until
-  it passes, then replicate for the 9 new datasets. Plots for `_debug` also
-  serve as a sanity baseline for the UMAP + sample-bar sections.
+  it passes, then replicate for the 9 new datasets. **Subsetting-path check
+  (from T3.1)**: run `subset_by_samples` on the same `_debug` view with a
+  reduced config (e.g. `MAX_SAMPLES=4`, `MAX_CELLS_PER_SAMPLE=2000`,
+  `CELLS_TARGET=5000`) and confirm the batch signal (Site within CTs) is
+  still detected on the subset, per-sample slice reads work, and the measured
+  wall time + peak RSS stay in budget — this validates the exact code path
+  the 9 notebooks will use on the Mac. Plots for `_debug` also serve as a
+  sanity baseline for the UMAP + sample-bar sections.
 - Shared helper `onboarding_utils.py` (backed-mode friendly): `locate_counts`,
   `count_sanity_check` (**integer-VALUE check with epsilon tolerance, not
   strict dtype — float-encoded CSR like 1.0/2.0 is valid raw counts**),
   `obs_summary`, `candidate_col_detection` (heuristics for sample /
   biological-label / batch / CT columns), `paper_table_compare`,
-  `cells_per_sample_stats`, `embed_and_umap` (subsampled scanpy recipe on
-  RAW counts — unintegrated only + precomputed-obsm detection),
+  `cells_per_sample_stats`, `embed_and_umap` (unintegrated scanpy recipe on
+  RAW counts + precomputed-obsm detection),
+  `subset_by_samples` (NEW — sample-first RAM-bounded subsetting, see T3.1),
   `confounding_crosstab` (bio × batch contingency table + collinearity
   warning), `save_png` — plus a standalone R helper `onboarding_metrics.R`
   (cell-level per-cell-type `calc_lisi` on unintegrated PCA, see section 5;
@@ -153,7 +296,18 @@ Parkinson (same collections).
   `dataset_check_<Name>.qmd` per dataset (9 files; names: `Alzheimer`,
   `Breast_cancer`, `Covid19_PBMC`, `Diabetes`, `Kidney_KPMP`, `Lupus_PBMC`,
   `Lung`, `Myocardial_infarction`, `Parkinson`).
-- Notebook sections:
+- Notebook sections (add a **subsetting section** right after section 1: the
+  whole downstream analysis — sections 3–6 — operates on the in-memory
+  sample subset from `subset_by_samples`):
+  - **1.5. Sample-first subsetting (RAM-bounded, ~10k cells)**: backed
+    `obs`-only read → candidate column confirmation → select **10–20 samples
+    stratified by bio condition + batch candidates** (≥1 per bio group;
+    batch values covered when possible; seed fixed) → read those samples'
+    cells per-sample (cap ≤ per-sample cells, `.to_memory()` → concat) →
+    optional per-CT cap (stratified by batch) → overall target cap
+    (~10k, max 50k) → print the subset summary (n samples selected per bio
+    group, n cells per sample, n cells total) with a note that this is a
+    diagnostic subset only (HPC pipeline uses full data).
   0. **Study summary card** (agent-filled, from the original paper): title,
      authors, journal, PMID, DOI/link, download source + date + checksum;
      biological groups (with n per group); batch-candidate variables;
@@ -173,26 +327,27 @@ Parkinson (same collections).
      bio label (e.g. all Disease at Center 1, all Control at Center 2),
      print a loud warning: batch and bio are statistically indistinguishable
      in that dataset, and metrics/UMAP interpretation must account for it.
-  4. **UMAP** (unintegrated space ONLY — never Harmony/integrated): use
-     precomputed `X_umap` if present (subsample ≤200k for plotting), else
-     compute on a subsample ≤100k cells from RAW counts (normalize_total →
-     log1p → HVG 2000 → PCA → neighbors → UMAP). Panels: biological label,
+  4. **UMAP** (unintegrated space ONLY — never Harmony/integrated): computed
+     on the **in-memory sample subset (~10–50k cells)** — use precomputed
+     `X_umap` if present (sliced to the subset rows), else compute on the
+     subset's RAW counts (normalize_total → log1p → HVG 2000 → PCA →
+     neighbors → UMAP; seconds at this size). Panels: biological label,
      each batch candidate, CT low-res, CT high-res.
   5. **Quick separation metrics** (auxiliary, seconds): cell-level LISI-based
      separation via the repo's own functions — a standalone R helper
      `notebooks/dataset_onboarding/onboarding_metrics.R` sources
      `src/utils/scoring_metrics.R` directly (NOT the notebook loader — it is
      not sourced by these notebooks) and runs `calc_lisi()` on the
-     **unintegrated PCA embedding (top 30–50 PCs)** — NOT UMAP coords
-     (2D UMAP distorts distances; PCA is the standard input for
-     neighborhood metrics per scIB/scIntegrationMetrics) and NEVER
-     `X_pca_harmony`/integrated space. Use the global PCA (all subsampled
-     cells in the same space); UMAP coords only as documented fallback when
-     PCA is unavailable. For the whole subsample AND for **each cell type**
-     (author CT column; rand seed fixed): **subsample up to N≈1000–2000
-     cells per cell type** (balanced power across abundant and rare CTs,
-     keeps kNN/memory trivial regardless of dataset size); separation score
-     on (a) the biological label and (b) each batch candidate within the CT.
+     **unintegrated PCA embedding (top 30–50 PCs)** of the sample subset —
+     NOT UMAP coords (2D UMAP distorts distances; PCA is the standard input
+     for neighborhood metrics per scIB/scIntegrationMetrics) and NEVER
+     `X_pca_harmony`/integrated space. Use the global PCA (all subset cells
+     in the same space); UMAP coords only as documented fallback when PCA is
+     unavailable. For the whole subset AND for **each cell type** (author CT
+     column; rand seed fixed): subsample up to N≈500–1000 cells per CT
+     (balanced power across abundant and rare CTs; keeps kNN/memory trivial);
+     separation score on (a) the biological label and (b) each batch
+     candidate within the CT.
      Guards: CTs with < min_cells (e.g. 50) skipped (listed); CTs with
      >90% cells from a single batch or single bio group are NOT informative
      → tagged "confounded/uninformative" instead of a score (avoids
@@ -329,8 +484,12 @@ Parkinson (same collections).
   may be retrievable via `dataset_version_id` if a closer match is needed.
 - **Author files may lack raw counts** → T2 FAIL → fallback source table
   (above); inform the user before substituting.
-- **Huge files** (29 GB h5ad, 2 M cells): backed reads + subsampling in
-  notebooks; high-mem nodes on HPC.
+- **Huge files** (29 GB h5ad, 2 M cells): on the Mac, **never load full
+  matrices** — backed reads + `subset_by_samples` (T3.1) bound peak memory to
+  ~1–2 GB regardless of file size; per-sample `.to_memory()` slices keep the
+  per-read allocation small even for the 29 GB BreastCncr file; count check
+  is value-sampled; UMAP never exceeds the ~10–50k-cell subset. High-mem
+  nodes on HPC for the real pipeline.
 - **Annotation failure on new tissues** (brain/heart/kidney/pancreas): safety
   checks + flag (T6); tissue values in datasets.json must map to the worker's
   supported tissue dispatch — validate on Kidney/MI(2) first (T10).
@@ -341,9 +500,30 @@ Parkinson (same collections).
   disabled.
 - **Disk space**: sequential downloads, selective tar extraction, delete tars
   after verification.
+- **HPC storage quotas/limits**: downloads go to `$HOME/scratch` (BeeGFS
+  scratch, no size quota, 10M-file limit, not backed up, re-downloadable) —
+  keep them out of `$HOME` itself (SSD, 1 TB quota already loaded with the
+  repo + scratch pipeline data). Do NOT run the download tasks concurrently in
+  duplicate (one task per key) and confirm free space beforehand
+  (`df -h $HOME/scratch`); if the scratch retention policy purges idle files,
+  re-download (idempotent).
+- **Compute-node internet**: evidence OK (forum 2024 incident resolved) but
+  verify with the `debug-cpu` smoke test; if nodes have no egress, fall back
+  to quiet login-node downloads (`nice`, `--limit-rate`) — the documented
+  high-bandwidth transfer path.
+- **Mac NAS mount instability** (observed 2026-08-17): the original
+  Mac→NAS serial downloads are replaced by the HPC route; the Mac script is
+  kept only as a fallback. A partial `SEAAD_Alzheimer.h5ad` (~5–10 GB) may
+  remain on the NAS — harmless, overwritten at sync.
 
 ## Validation
-- md5 checksums verified per download (Zenodo API values in the table).
+- md5 checksums verified per download (Zenodo API values in the table;
+  CellxGene `.h5ad.md5` sidecar) — logged per file in `download_log.md`.
+- Compute-node connectivity smoke test (debug-cpu) passes → compute-node
+  downloads; else quiet login-node fallback engaged.
+- All 8 array tasks `COMPLETED` (sacct-gated), NAS sync verified:
+  `ls -lh ${NAS_SC_DIR}/JooM_2025_41097818/output/` from the Mac matches the
+  `_downloads` listing (same md5s), tar archives gone.
 - Count sanity check PASS/FAIL logged per dataset.
 - Notebooks render (quarto) with plots + summary tables; `README.md` table
   complete.
@@ -354,6 +534,10 @@ Parkinson (same collections).
   cell-type × label separation tables produced via
   `pixi run -e default Rscript` `onboarding_metrics.R` (thisutils 0.4.7
   verified present).
+- **Sample-first subsetting (T3.1) validated on `_debug` + the first real
+  download** (Kidney or MI(2) once on NAS): subset summary printed, batch
+  signal still detected at reduced sample counts, wall time < ~2–3 min and
+  peak RSS ~1–2 GB on the Mac; `SUBSET_CONFIG` tuned if out of budget.
 - User visually reviews UMAPs → usage decisions (T7) → datasets.json approved
   (T8).
 - HPC: Kidney + MI(2) end-to-end validation before full rollout (T10).

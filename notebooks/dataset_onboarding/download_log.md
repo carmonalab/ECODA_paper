@@ -1,6 +1,6 @@
 # Dataset download log (Phase 5 onboarding -- JooM_2025_41097818)
 
-Source records (see .kilo/plans/archive/1786899069337-onboard-new-datasets-phase5.md):
+Source records (see .kilo/plans/1786899069337-onboard-new-datasets-phase5.md):
 - Zenodo 8370081 (Part 1, latest version of 7435911 -> 7956950 -> 8370081):
   Datasets.tar.gz, diabetes.h5ad
 - Zenodo 7957118 (Part 2): lungatlas.h5ad.tar.gz

@@ -348,6 +348,400 @@ def confounding_crosstab(obs: pd.DataFrame, bio_col: str, batch_cols, max_uniq: 
     return pd.DataFrame(rows)
 
 
+# ---------------------------------------------------------------------------
+# T3.1 -- sample-first, RAM-bounded subsetting (onboarding diagnostics only)
+# ---------------------------------------------------------------------------
+
+SUBSET_CONFIG = {
+    # Number of samples to select (range 10-20; files with fewer keep all).
+    "MAX_SAMPLES": 15,
+    # Samples per biological group (range 3-5), before the global cap applies.
+    "N_PER_BIO": 4,
+    # Random per-sample cap (range 500-5000); bounds every per-sample read so
+    # peak memory is independent of the file size.
+    "MAX_CELLS_PER_SAMPLE": 2000,
+    # Optional per-cell-type cap applied AFTER the concat, stratified by the
+    # batch candidates (e.g. 100) to avoid artificial within-CT imbalances.
+    "MAX_CELLS_PER_CT": None,
+    # Overall soft target: the subset is trimmed (stratified by sample) when it
+    # exceeds this many cells.
+    "CELLS_TARGET": 10_000,
+    # Absolute ceiling the subset never exceeds (used when CELLS_TARGET is 0).
+    "CELLS_MAX": 50_000,
+    "SEED": 0,
+}
+
+
+def _strata_codes(obs: pd.DataFrame, strat_cols) -> np.ndarray:
+    """Combine several categorical/string columns into one dense int array."""
+    if not strat_cols:
+        return np.zeros(len(obs), dtype=int)
+    out = np.zeros(len(obs), dtype=np.int64)
+    basis = 1
+    for col in strat_cols:
+        if col not in obs.columns:
+            continue
+        codes, _ = pd.factorize(obs[col].astype(str))
+        codes = np.where(codes < 0, 0, codes)
+        out += codes * basis
+        basis *= int(codes.max()) + 1
+    return out
+
+
+def _cap_group_values(obs: pd.DataFrame, group_col, cap, strat_cols, seed) -> np.ndarray:
+    """Downsample obs rows so each value of ``group_col`` holds at most ``cap``
+    rows, distributing the cap across the ``strat_cols`` strata proportionally
+    to their within-group counts (fractional remainder filled round-robin by
+    largest fraction). Returns a boolean keep-mask over ``obs``.
+    """
+    n = len(obs)
+    if cap is None or cap <= 0:
+        return np.ones(n, dtype=bool)
+    rng = np.random.default_rng(seed)
+    gcodes, guniq = pd.factorize(obs[group_col].astype(str))
+    strat = _strata_codes(obs, strat_cols) if strat_cols else np.zeros(n, dtype=int)
+    keep = np.zeros(n, dtype=bool)
+    for g in range(len(guniq)):
+        rows = np.flatnonzero(gcodes == g)
+        total = len(rows)
+        if total <= cap:
+            keep[rows] = True
+            continue
+        strata, counts = np.unique(strat[rows], return_counts=True)
+        floors = np.floor(cap * counts / total).astype(int)
+        leftover = int(cap - floors.sum())
+        kept = np.zeros(total, dtype=bool)
+        for i in range(len(strata)):
+            sel = np.flatnonzero(strat[rows] == strata[i])
+            take = int(floors[i])
+            if take >= len(sel):
+                kept[sel] = True
+            else:
+                p = rng.choice(len(sel), size=take, replace=False)
+                kept[sel[np.sort(p)]] = True
+        if leftover > 0:
+            taken = floors.astype(int).copy()
+            frac = cap * counts / total - floors
+            order = np.argsort(-frac, kind="stable")
+            for i in order:
+                if leftover <= 0:
+                    break
+                sel = np.flatnonzero(strat[rows] == strata[i])
+                avail = sel[~kept[sel]]
+                if len(avail) == 0 or taken[i] >= len(sel):
+                    continue
+                kept[avail[rng.integers(0, len(avail))]] = True
+                taken[i] += 1
+                leftover -= 1
+        keep[rows] = kept
+    return keep
+
+
+def _cap_total_stratified(obs: pd.DataFrame, strat_col, cap, seed) -> np.ndarray:
+    """Cap the TOTAL number of rows to ``cap``, distributed across the
+    ``strat_col`` values (strata) proportionally to their counts (fractional
+    remainder filled round-robin by largest fraction) so every stratum stays
+    represented. Without a valid strat column, a plain seeded random sample.
+    Returns a boolean keep-mask over ``obs``.
+    """
+    n = len(obs)
+    if cap is None or cap <= 0 or n <= cap:
+        return np.ones(n, dtype=bool)
+    rng = np.random.default_rng(seed)
+    if strat_col is None or strat_col not in obs.columns:
+        idx = rng.choice(n, size=int(cap), replace=False)
+        keep = np.zeros(n, dtype=bool)
+        keep[np.sort(idx)] = True
+        return keep
+    codes, _ = pd.factorize(obs[strat_col].astype(str))
+    counts = np.bincount(codes, minlength=int(codes.max()) + 1)
+    floors = np.floor(cap * counts / n).astype(int)
+    leftover = int(cap - floors.sum())
+    keep = np.zeros(n, dtype=bool)
+    for s in range(len(counts)):
+        sel = np.flatnonzero(codes == s)
+        take = int(floors[s])
+        if take >= len(sel):
+            keep[sel] = True
+        elif take > 0:
+            p = rng.choice(len(sel), size=take, replace=False)
+            keep[sel[np.sort(p)]] = True
+    if leftover > 0:
+        taken = floors.astype(int).copy()
+        frac = cap * counts / n - floors
+        order = np.argsort(-frac, kind="stable")
+        for s in order:
+            if leftover <= 0:
+                break
+            sel = np.flatnonzero(codes == s)
+            avail = sel[~keep[sel]]
+            if len(avail) == 0 or taken[s] >= len(sel):
+                continue
+            keep[avail[rng.integers(0, len(avail))]] = True
+            taken[s] += 1
+            leftover -= 1
+    return keep
+
+
+def subset_by_samples(
+    adata,
+    sample_col: str | None = None,
+    bio_col: str | None = None,
+    batch_cols: list | None = None,
+    ct_col: str | None = None,
+    config: dict | None = None,
+    verbose: bool = True,
+) -> tuple:
+    """Sample-first, RAM-bounded cell subsetting for onboarding diagnostics.
+
+    Flow: ``obs``-only read -> select ``MAX_SAMPLES`` samples stratified by the
+    bio condition and (round-robin over the batch-candidate values) the batch
+    candidates -> read the selected samples' cells PER SAMPLE via
+    ``.to_memory()`` (peak memory bounded by ``MAX_CELLS_PER_SAMPLE`` regardless
+    of file size) -> optional per-CT cap (stratified by batch) -> overall
+    target cap (stratified by sample, every selected sample stays represented).
+    Small files (< 10 samples) keep all samples.
+
+    The returned AnnData is in memory (<= ``CELLS_MAX`` cells) and carries the
+    parent's precomputed UNINTEGRATED ``obsm`` arrays (``X_pca*``/``X_umap*``,
+    never harmony) re-sliced to the subset rows, so the downstream UMAP and
+    LISI metrics stay in the original global embedding space. DIAGNOSTIC ONLY
+    -- the HPC pipeline always uses the full data.
+
+    Returns ``(subset, summary_dict)`` with samples-per-bio-group,
+    cells-per-sample, selected samples and the config actually used.
+    """
+    cfg = dict(SUBSET_CONFIG)
+    if config:
+        cfg.update(config)
+    if cfg.get("CELLS_TARGET") and cfg.get("CELLS_MAX"):
+        if cfg["CELLS_TARGET"] > cfg["CELLS_MAX"]:
+            raise ValueError("SUBSET_CONFIG: CELLS_TARGET must be <= CELLS_MAX")
+    seed = int(cfg["SEED"])
+    rng = np.random.default_rng(seed)
+
+    if sample_col is None or sample_col not in adata.obs.columns:
+        cand = candidate_col_detection(adata.obs)
+        raise ValueError(
+            f"subset_by_samples: sample_col {sample_col!r} not in obs columns; "
+            f"candidate sample columns: {cand['sample']}"
+        )
+
+    obs = adata.obs
+
+    if bio_col and bio_col in obs.columns and obs[bio_col].nunique(dropna=True) >= 2:
+        bio = bio_col
+    else:
+        if bio_col:
+            warnings.warn(
+                f"subset_by_samples: bio_col {bio_col!r} missing or single-valued; "
+                f"treating all samples as one group"
+            )
+        bio = None
+
+    present_batch = [c for c in (batch_cols or []) if c in obs.columns]
+    if batch_cols and len(present_batch) != len(batch_cols):
+        warnings.warn(
+            f"subset_by_samples: batch columns not found in obs: "
+            f"{sorted(set(batch_cols) - set(present_batch))}"
+        )
+
+    # --- per-sample bookkeeping (obs only; cheap even for 2M cells) ----------
+    vc = obs[sample_col].value_counts(dropna=True)
+    n_all_samples = int(vc.size)
+    codes, uniq_samples = pd.factorize(obs[sample_col].astype(str))
+    sample_code = {str(u): i for i, u in enumerate(uniq_samples)}
+    sample_list = [str(s) for s in vc.index]
+    n_na = int((codes < 0).sum())
+    if n_na:
+        warnings.warn(
+            f"subset_by_samples: excluding {n_na} cells with missing {sample_col!r}"
+        )
+
+    valid = codes >= 0
+    smp = pd.DataFrame({"sample": obs[sample_col].astype(str).values})[valid]
+    if bio is not None:
+        smp["bio"] = obs[bio].astype(str).values[valid]
+    if present_batch:
+        for bcol in present_batch:
+            smp[bcol] = obs[bcol].astype(str).values[valid]
+
+    bio_of = (
+        smp.groupby("sample")["bio"].agg(lambda s: s.mode().iloc[0] if len(s.mode()) else "<NA>").to_dict()
+        if bio is not None
+        else {}
+    )
+    batch_tuple_of = {}
+    if present_batch:
+        modes = smp.groupby("sample")[present_batch].agg(
+            lambda s: s.mode().iloc[0] if len(s.mode()) else "<NA>"
+        )
+        batch_tuple_of = {s: tuple(row) for s, (_, row) in zip(modes.index, modes.iterrows())}
+
+    # --- sample selection: bio stratification + round-robin over batches -----
+    if bio is not None:
+        groups = sorted({bio_of.get(s, "<NA>") for s in sample_list})
+        n_group = {g: sum(1 for s in sample_list if bio_of.get(s, "<NA>") == g) for g in groups}
+        alloc = {g: min(1, n_group[g]) for g in groups}
+        remaining = int(cfg["MAX_SAMPLES"]) - sum(alloc.values())
+        order_groups = sorted(groups, key=lambda g: -n_group[g])
+        while remaining > 0:
+            advanced = False
+            for g in order_groups:
+                if alloc[g] >= min(int(cfg["N_PER_BIO"]), n_group[g]):
+                    continue
+                alloc[g] += 1
+                remaining -= 1
+                advanced = True
+                if remaining == 0:
+                    break
+            if not advanced:
+                break
+    else:
+        groups = [None]
+        alloc = {None: min(int(cfg["MAX_SAMPLES"]), len(sample_list))}
+    if sum(alloc.values()) < 1:
+        raise ValueError("subset_by_samples: no samples available to select")
+
+    def ordered_samples(grp_samples):
+        """Round-robin over the batch-value tuples so distinct batch values are
+        covered early; deterministic shuffle fallback when no batch columns."""
+        if not batch_tuple_of:
+            out = list(grp_samples)
+            rng.shuffle(out)
+            return out
+        buckets: dict = {}
+        for s in grp_samples:
+            buckets.setdefault(batch_tuple_of.get(s), []).append(s)
+        for lst in buckets.values():
+            rng.shuffle(lst)
+        keys = list(buckets)
+        out = []
+        i = 0
+        guard = 0
+        while any(buckets.values()):
+            k = keys[i % len(keys)]
+            if buckets[k]:
+                out.append(buckets[k].pop())
+            i += 1
+            guard += 1
+            if guard > (len(keys) + len(grp_samples)) * 2:
+                break
+        return out
+
+    selected = []
+    for g in groups:
+        if bio is None:
+            grp_samples = list(sample_list)
+        else:
+            grp_samples = [s for s in sample_list if bio_of.get(s, "<NA>") == g]
+        selected.extend(ordered_samples(grp_samples)[: alloc[g]])
+
+    # --- per-sample reads (bounded by MAX_CELLS_PER_SAMPLE) ------------------
+    cap_sample = int(cfg["MAX_CELLS_PER_SAMPLE"])
+    parts = []
+    parent_positions = []
+    for s in selected:
+        c = sample_code.get(s)
+        if c is None:
+            continue
+        idx = np.flatnonzero(codes == c)
+        if len(idx) > cap_sample:
+            pick = rng.choice(len(idx), size=cap_sample, replace=False)
+            idx = np.sort(idx[pick])
+        else:
+            idx = np.sort(idx)
+        parent_positions.append(idx)
+        part = adata[idx].to_memory()
+        part.obsm = {}
+        part.obsp = {}
+        parts.append(part)
+    if not parts:
+        raise ValueError("subset_by_samples: no cells selected")
+    parent_pos = np.concatenate(parent_positions)
+
+    sub = ad.concat(parts, join="outer", merge="same")
+    del parts
+
+    # Re-slice the parent's unintegrated obsm arrays to the subset rows so the
+    # downstream UMAP/metrics stay in the original (global) embedding space.
+    # Backed h5ad obsm arrays live in the file as h5py Datasets but
+    # `adata.obsm[k]` materializes the full array on access -- read the
+    # dataset directly and fancy-index it in the file (memory bounded by the
+    # subset size, independent of file size). Fall back to the plain access
+    # for in-memory parents / non-dataset (e.g. sparse) entries.
+    try:
+        import h5py
+    except ImportError:  # pragma: no cover
+        h5py = None
+    h5_obsm = None
+    if getattr(adata, "isbacked", False):
+        try:
+            h5_obsm = adata.file["obsm"]
+        except (KeyError, TypeError):
+            h5_obsm = None
+    obsm_info = detect_unintegrated_obsm(adata)
+    for k in obsm_info["pca_candidates"] + obsm_info["umap_candidates"]:
+        if h5_obsm is not None and h5py is not None:
+            ds = h5_obsm.get(k)
+            if isinstance(ds, h5py.Dataset) and ds.ndim == 2 and ds.shape[0] == adata.n_obs:
+                sub.obsm[k] = ds[parent_pos]
+                continue
+        arr = np.asarray(adata.obsm[k])
+        if arr.ndim == 2 and arr.shape[0] == adata.n_obs:
+            sub.obsm[k] = arr[parent_pos]
+
+    # --- post-concat caps -----------------------------------------------------
+    if cfg.get("MAX_CELLS_PER_CT") and ct_col and ct_col in sub.obs.columns:
+        keep = _cap_group_values(
+            sub.obs, ct_col, int(cfg["MAX_CELLS_PER_CT"]), present_batch, seed
+        )
+        sub = sub[keep]
+    cap_max = cfg.get("CELLS_MAX")
+    cap_target = cfg.get("CELLS_TARGET") or cap_max
+    if cap_max and sub.n_obs > cap_max:
+        keep = _cap_total_stratified(sub.obs, sample_col, int(cap_max), seed)
+        sub = sub[keep]
+    if cap_target and sub.n_obs > cap_target:
+        keep = _cap_total_stratified(sub.obs, sample_col, int(cap_target), seed)
+        sub = sub[keep]
+
+    # --- summary --------------------------------------------------------------
+    # Keep the keys str-normalized like every earlier stage (sample_list,
+    # bio_of, sample_code) so samples_per_bio/cells_per_sample stay consistent
+    # even for int-typed sample columns.
+    cells_per_sample = (
+        sub.obs[sample_col].astype(str).value_counts().astype(int).to_dict()
+    )
+    samples_selected = list(cells_per_sample)
+    samples_per_bio = {}
+    for g in groups:
+        if bio is None:
+            samples_per_bio["all"] = len(samples_selected)
+        else:
+            samples_per_bio[g] = sum(
+                1 for s in samples_selected if bio_of.get(s, "<NA>") == g
+            )
+    summary = {
+        "n_samples_total": n_all_samples,
+        "n_samples_selected": len(samples_selected),
+        "samples_per_bio": samples_per_bio,
+        "selected_samples": samples_selected,
+        "cells_per_sample": cells_per_sample,
+        "n_cells_total": int(sub.n_obs),
+        "n_cells_full": int(obs.shape[0]),
+        "config": dict(cfg),
+    }
+    if verbose:
+        print(
+            f"subset_by_samples: {summary['n_cells_total']} cells from "
+            f"{summary['n_samples_selected']}/{summary['n_samples_total']} samples "
+            f"(full file: {summary['n_cells_full']} cells) -- diagnostic subset "
+            f"only; the HPC pipeline uses the full data."
+        )
+    return sub, summary
+
+
 def detect_unintegrated_obsm(adata) -> dict:
     """Find precomputed non-harmony PCA and UMAP keys in obsm.
 

@@ -130,12 +130,23 @@ Four-stage end-to-end pipeline; file-level details live in docs/ARCHITECTURE.md.
 ## Onboarding new datasets
 
 Procedure for adding a new dataset to the pipeline (Phase 5 workflow, see
-`.kilo/plans/archive/1786899069337-onboard-new-datasets-phase5.md`):
+`.kilo/plans/1786899069337-onboard-new-datasets-phase5.md`):
 
 1. **Download the author-provided file** to the NAS folder
-   `JooM_2025_41097818/output/` via `notebooks/dataset_onboarding/download_datasets.sh`
-   (`--only <key>`; sequential + md5-verified, `curl -L -C -` resumable, logs to
-   `notebooks/dataset_onboarding/download_log.md`). Zenodo records preferred;
+   `JooM_2025_41097818/output/` via the **HPC route** (primary, user decision
+   2026-08-17: Mac NAS mount unstable + Mac disk tight):
+   `notebooks/dataset_onboarding/download_datasets_hpc.sh` — login-node
+   submitter that smoke-tests compute-node egress, submits one SLURM array job
+   (8 tasks, one per `--only` key, 3 concurrent) downloading into BeeGFS
+   scratch `${HPC_SCRATCH_DIR}/_downloads/` (1.1 PB, no per-user size quota;
+   never `$HOME` itself), then a login-node tail rsyncs to NAS, verifies md5s,
+   and appends the per-key report to `download_log.md`; `--sync-only <job-id>`
+   resumes the tail, `--login-node` is the fallback mode (`nice` +
+   `--limit-rate`) when compute nodes lack egress. Tasks are `curl -L -C -`
+   resumable + md5-verified (Zenodo checksums; CellxGene `.h5ad.md5` sidecar),
+   tar entries extract only the needed h5ads, tars deleted. The original
+   Mac→NAS `download_datasets.sh` is the NAS-stable fallback only
+   (sequential + md5-verified). Zenodo records preferred;
    Alzheimer/Parkinson come from CellxGene (resolved by `dataset_version_id`).
 2. **Count sanity check** (`onboarding_utils.count_sanity_check`, part of the
    per-dataset notebook): locate counts (`layers["counts"]` → `X` → `raw.X`),
@@ -158,7 +169,14 @@ Procedure for adding a new dataset to the pipeline (Phase 5 workflow, see
    `quarto render …` using the registered `python3` kernelspec
    (default-env python; `ipykernel` is a pixi.toml dependency).
    Notebook sections: study summary card (agent-filled), file structure, count
-   sanity, metadata exploration (cells-per-sample bar, CT-column NaN check,
+   sanity, **sample-first subsetting** (`onboarding_utils.subset_by_samples` /
+   `SUBSET_CONFIG`: select ~10–20 samples stratified by bio condition +
+   round-robin over batch candidates, read only those samples' cells via
+   per-sample `.to_memory()` slices, caps per sample / per CT / overall ~10k
+   (max 50k), precomputed unintegrated obsm re-sliced to the subset rows;
+   diagnostic only — the HPC pipeline always uses the full data; section 1.5,
+   UMAP + metrics run on the subset, target <2–3 min / ~1–2 GB RSS on the
+   64 GB Mac), metadata exploration (cells-per-sample bar, CT-column NaN check,
    gene-symbol sanity mouse-vs-human, paper Table-1 comparison, bio×batch
    confounding crosstab), unintegrated UMAP panels, LISI separation table +
    heatmap + verdict, agent summary + recommendation.
