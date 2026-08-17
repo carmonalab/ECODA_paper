@@ -114,7 +114,12 @@ get_pb <- function(seurat, sample_col = "Sample", hvg = NULL) {
     group.by = sample_col,
     assays = "RNA"
   )[["RNA"]])
-  colnames(pb) <- gsub("-", "_", colnames(pb))
+  # Sample names are ALWAYS kept as-is (NO gsub("-", "_", ...)): the
+  # upstream 1.1.1_preprocess.py standardizes obs sample names for all
+  # preprocessed views, and legacy h5ads (e.g. Adams) still carry hyphens
+  # there. Pseudobulk column names must match those obs names so label
+  # alignment in create_result_bundle() never returns NA (ECODA_deconv on
+  # Adams hit this: "NA labels for 58 of 100 samples"; see AGENTS.md).
   if (!is.null(hvg)) {
     pb <- pb[hvg, ]
   }
@@ -151,7 +156,9 @@ get_pb_deseq2 <- function(
   }
 
   metadata <- get_metadata(seurat, sample_col = sample_col)
-  metadata[sample_col] <- gsub("-", "_", metadata[sample_col])
+  # Keep the metadata sample column as-is: it must match the pseudobulk
+  # colnames above and the obs-derived labels (no gsub hyphen->underscore;
+  # see get_pb()).
   pb_norm <- t(DESeq2.normalize(
     pb,
     metadata = metadata,

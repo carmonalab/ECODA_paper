@@ -125,6 +125,20 @@ Four-stage end-to-end pipeline; file-level details live in docs/ARCHITECTURE.md.
     - Preprocessed .h5ad files are **CSR-on-disk by construction** — required for selective backed-mode per-sample reads in annotation (details in ARCHITECTURE.md).
     - **Drafts (keep, not dead code)**: `preprocess_gongsharma.qmd` (GongSharma other-subsetting conditions) and `TODO_STUMP_preprocess_sikkema.qmd` (future Sikkema Lung dataset) in `src/3_scrnaseq_preprocessing/` are intentional drafts for future implementation — do NOT delete.
 - **Stage 3 — Benchmark Analysis** (see [ARCHITECTURE.md](docs/ARCHITECTURE.md#benchmark-ecoda-transformation-and-ecoda-zero-imputation-analyses)): all R benchmark methods on HPC via `run_r_sample_embedding_methods/` (pinned CPU class, `prepare_pseudobulk` prep array gated first): heavy methods (GloScope, MOFA, Pseudobulk, scITD) **and** the composition-based set (`composition` method: ECODA variants, GloProp, EPIC deconv, Avg_PCA, Freq_highres — obs-only worker, one array task per dataset, also emits `<ds>_metadata.rds`). Transformation/zero-imputation analyses on HPC via `run_transformation_zeroimp_analysis/` (two arrays: `trans`, `zeroimp`); Python methods (MrVI/scPoli/PILOT/QOT/PILOT-GM-VAE) on HPC via `run_python_sample_embedding_methods/`. `notebooks/benchmark_analysis.rmd` reads **zero h5ad files**: it loads the HPC bundles via `load_hpc_benchmark_results()` (fresh each knit, no `result_list.rds` persistence), labels/stats from the `<ds>_metadata.rds` bundles, and runs only the fast python-feather methods (MrVI/PILOT/scPoli/QOT/PILOT-GM-VAE feather reads + scoring, seconds). R workers log peak RAM (`peak_rss_gb()`, VmHWM) in the exec-log + per-bundle `mem_GB`. Pending pipeline work (PILOT-GM-VAE, QOT/PULSAR): see TODO.md Phase 3.
+- **PILOT-GM-VAE runtime is an accepted method limitation, not a bug**: on
+  large datasets it can exceed the 12 h shared-gpu per-task limit (observed
+  2026-08-17: Gongsharma ~3-4 h per combo, task TIMEOUT with combos
+  unfinished). The main benchmark figure (Figure 2a) uses only the default
+  combo (`hvg2000_highres`), which completed; missing combos/datasets are
+  annotated later in `benchmark_analysis.rmd` (see TODO.md "Ideas for later").
+- **Python-method feather writes (`to_feather`) are NOT atomic**: the worker's
+  requeue-path feather deletion runs only on ITS OWN self-requeue, so a
+  scheduler kill (TIMEOUT/scancel) mid-write can leave a partial
+  `*_dists.feather` that the combo skip-check would treat as done and ship
+  corrupt. Before re-running a killed python-method task, delete its
+  per-dataset feathers from `${HPC_SCRATCH_DIR}/benchmark/embeddings/`
+  (recovery + proper-solution notes: TODO.md "Ideas for later"). Feathers are
+  tiny (<= a few hundred rows), so the window is a fraction of a second.
 - **Stage 4 — Batch Effect Analysis** (see [ARCHITECTURE.md](docs/ARCHITECTURE.md#batch-effect-analysis)): `notebooks/batch_effect_analysis.rmd`, under expansion (methods: ECODA batch-associated CT removal, Pseudobulk DESeq2+limma, MrVI, GloScope, PILOT-GM-VAE): see TODO.md Phase 4.
 
 ## Onboarding new datasets

@@ -302,7 +302,27 @@ Phase-5 follow-ups (from the plan, mostly out-of-scope for the onboarding plan):
   and wired (batch-only, never `"Sample"` as batch column; no-leakage — see
   AGENTS.md); the ECODA batch-associated CT-removal warning detail (test each
   cell type separately vs. checking global variance, p < 0.05) moved to 4.1.
-- on CUDA, torch's non-deterministic kernels (atomic reductions, cudnn autotuning) can still produce tiny run-to-run differences even with the same seed. Full GPU determinism would require torch.use_deterministic_algorithms(True) + CUBLAS_WORKSPACE_CONFIG, which scvi-tools doesn't enable.
+- on CUDA, torch's non-deterministic kernels
+
+- Python-method feather writes (`to_feather`) are NOT atomic and the worker's
+  requeue-path feather deletion (1.1_run_worker.sh) runs only on ITS OWN
+  self-requeue — a scheduler kill (TIMEOUT/scancel) mid-write can leave a
+  partial `*_dists.feather` that the combo skip-check (`out_path.exists()`)
+  would treat as done and ship corrupt. Impact is small (dists/embs feathers
+  are <= a few hundred rows, written in ~fraction of a second), but the
+  documented recovery is deleting the killed task's per-dataset feathers
+  before re-running (observed 2026-08-17: qot/pilotgm task kills). Proper
+  solution if it ever bites: atomic `to_feather` (tmp+mv) or a per-combo
+  sidecar marker.
+- PILOT-GM-VAE runtime (accepted method limitation, NOT an infrastructure
+  bug): large datasets can exceed the 12 h shared-gpu per-task limit
+  (observed 2026-08-17: Gongsharma ~3-4 h per combo, task 4318505_3 TIMEOUT
+  with combos unfinished). The main benchmark figure uses only the default
+  combo (`hvg2000_highres`), which completed for the datasets it ran on;
+  missing combos/datasets are annotated later in benchmark_analysis.rmd.
+  No method should need > 12 h on a GPU — this is a limitation of the method
+  to report, not something to optimize away.
+ (atomic reductions, cudnn autotuning) can still produce tiny run-to-run differences even with the same seed. Full GPU determinism would require torch.use_deterministic_algorithms(True) + CUBLAS_WORKSPACE_CONFIG, which scvi-tools doesn't enable.
 
 ## Keep-draft notes
 
