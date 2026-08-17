@@ -67,3 +67,4 @@ __pycache__/
 # ./trained_models/<dataset_name>/; the benchmark wrapper chdirs into a
 # tempdir so this should never appear, belt-and-braces)
 trained_models/
+notebooks/dataset_onboarding/download_log.md
