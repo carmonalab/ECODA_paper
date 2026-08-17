@@ -253,23 +253,37 @@ record_extracted() {
   write_status OK "${kvs[@]}"
 }
 
-# --- per-key dispatch (catalog-driven) -------------------------------------------
+# tar_canonicals -- canonical filenames for the tar key, one per line.
+# SRC_TAR_PATTERNS is a space-separated list of "pattern:canonical" pairs and
+# CAN hold multiple pairs (e.g. covid_lupus_tar). A single `cut -d: -f2` over
+# the whole string mis-fields multi-pair keys (the second pair's PATTERN lands
+# in the middle of field 2, corrupting the arg list for record_extracted ->
+# md5sum on a bogus "pattern" filename -> task FAIL exit 1). Derive each
+# canonical per-pair with ${pair#*:} instead.
+tar_canonicals() {
+  local pair
+  for pair in ${SRC_TAR_PATTERNS}; do
+    printf '%s\n' "${pair#*:}"
+  done
+}
+
+# --- per-key dispatch (catalog-driven) ---
 if [[ -n "${SRC_TAR_PATTERNS}" ]]; then
   # Already-extracted check: all canonical outputs present + tar gone -> done.
   nf_all=1
   nf=""
-  for nf in $(printf '%s\n' "${SRC_TAR_PATTERNS}" | cut -d: -f2); do
+  for nf in $(tar_canonicals); do
     [[ -f "${DOWNLOAD_DIR}/${nf}" ]] || nf_all=0
   done
   tar="${DOWNLOAD_DIR}/${SRC_FILE}"
   if [[ ${nf_all} -eq 1 && ! -f "${tar}" ]]; then
     log "extracted files already present and ${SRC_FILE} gone; nothing to do."
-    record_extracted $(printf '%s\n' "${SRC_TAR_PATTERNS}" | cut -d: -f2)
+    record_extracted $(tar_canonicals)
     exit 0
   fi
   fetch_and_verify "${SRC_FILE}"
   extract_tar_members "${tar}"
-  record_extracted $(printf '%s\n' "${SRC_TAR_PATTERNS}" | cut -d: -f2)
+  record_extracted $(tar_canonicals)
 else
   fetch_and_verify "${SRC_FILE}"
 fi
