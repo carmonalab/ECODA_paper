@@ -140,8 +140,25 @@ get_pb_deseq2 <- function(
 ) {
   pb <- get_pb(seurat, sample_col = sample_col, hvg = hvg)
 
-  # Get default black list from STACAS
-  data("default_black_list")
+  # Get default black list from STACAS. Plain `data("default_black_list")`
+  # only searches ATTACHED packages; on worker nodes STACAS is installed
+  # (pixi.toml, install_github) but never library()-ed, so the data set was
+  # "not found" -> `object 'black.list' not found` -> prepare_pseudobulk task
+  # crashed (observed 2026-08-17: Adams, the first dataset to recompute after
+  # the Aug-12 cache; all other datasets had cached variants and skipped).
+  # Load explicitly from the package when available; fall back to an empty
+  # list otherwise — safe because the hvg2000_bl filter is a documented no-op
+  # anyway (`pb[!rownames(pb) %in% black_list, ]` tests the literal flag
+  # string, not this object).
+  black.list <- NULL
+  if (requireNamespace("STACAS", quietly = TRUE)) {
+    suppressWarnings(
+      data("default_black_list", package = "STACAS", envir = environment())
+    )
+  } else {
+    message("get_pb_deseq2: STACAS unavailable; default_black_list fallback = empty")
+  }
+  if (is.null(black.list)) black.list <- character(0)
   default_black_list <- black.list
 
   if (is.null(hvg) & black_list == "default") {
