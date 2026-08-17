@@ -19,18 +19,20 @@
 #     transfer path) instead of submitting an array.
 #   * Submits ONE SLURM array job -- one task per requested key, concurrency
 #     throttled (DOWNLOAD_ARRAY_THROTTLE, default 3) -- onto shared-cpu. Each
-#     task runs run_download_worker.sh: `curl -L -C -` resumable + md5-verified
-#     (Zenodo checksums / CellxGene `.h5ad.md5` sidecar) + selective tar
-#     extraction + tar deletion, into ${HPC_SCRATCH_DIR}/_downloads/ (BeeGFS
-#     scratch: 1.1 PB, no per-user size quota, NOT $HOME itself).
+#     task runs run_download_worker.sh: `curl -L -C -` resumable + verified per
+#     key (Zenodo md5s / CellxGene size-verified via HEAD content-length -- no
+#     `.h5ad.md5` sidecar exists; computed md5 recorded as informational) +
+#     selective tar extraction + tar deletion, into ${HPC_SCRATCH_DIR}/_downloads/
+#     (BeeGFS scratch: 1.1 PB, no per-user size quota, NOT $HOME itself).
 #   * Waits + sacct-gates every task (fail-closed: any non-COMPLETED task, or
 #     any key without a recorded STATUS=OK, blocks the NAS sync), then
 #     rsyncs to NAS -- ONLY the files recorded in a STATUS=OK status file
 #     (leftover tars / _tar_tmp.* leaks / partial h5ads of failed keys are
 #     cleaned from scratch first and never synced; scratch copy KEPT for later
 #     pipeline use) -- verifies the NAS md5s against the worker records
-#     (CellxGene direct files: expected sidecar md5; tar-extracted files:
-#     worker-recorded MD5_<file>=), and appends the per-key report (+ tar
+#     (Zenodo files: expected md5; CellxGene files: worker-recorded
+#     MD5_RECORDED; tar-extracted files: worker-recorded MD5_<file>=), and
+#     appends the per-key report (+ tar
 #     listings + the `--sync-only <job-id>` resume command) to
 #     notebooks/dataset_onboarding/download_log.md (commit from the Mac).
 #   * Concurrency: a flock on ${DOWNLOAD_DIR}/.submit.lock serializes
@@ -150,7 +152,7 @@ append_log() {
         sz="$(grep '^SIZE=' "${sf}" | cut -d= -f2- | head -1)"
         ma="$(grep '^MD5_ACTUAL=' "${sf}" | cut -d= -f2- | head -1)"
         me="$(grep '^MD5_EXPECTED=' "${sf}" | cut -d= -f2- | head -1)"
-        note="$(grep -E '^(SKIPPED|FILES|ERROR)=' "${sf}" | cut -d= -f2- | paste -sd ', ' -)"
+        note="$(grep -E '^(SKIPPED|FILES|ERROR|VERIFY|MD5_RECORDED)=' "${sf}" | cut -d= -f2- | paste -sd ', ' -)"
         printf -- '- **Key:** %s **Status:** %s\n  - File: %s (%s)\n  - md5: %s (expected %s)\n' \
           "${k}" "${st:-?}" "${f:-?}" "${sz:-?}" "${ma:-n/a}" "${me:-n/a}"
         if [[ -n "${note}" ]]; then
@@ -189,13 +191,30 @@ elif [[ ${LOGIN_NODE} -eq 1 ]]; then
   echo "=== Login-node fallback mode (documented high-bandwidth transfer path) ==="
 else
   echo "=== Smoke-testing compute-node egress (debug-cpu) ==="
+  # NOTE: probe REAL object URLs -- a HEAD on the CellxGene bucket root
+  # returns 403 (S3 denies bucket-root HEAD), which falsely triggered the
+  # login-node fallback on 2026-08-17. The SEA-AD .h5ad object is the
+  # canonical CellxGene probe. srun stderr is NOT swallowed: a genuine
+  # srun/partition failure must be visible in the output.
   smoke_host() {
-    local url="$1" code
-    code="$(srun -p debug-cpu --time=00:05:00 curl -sI -o /dev/null -w '%{http_code}' "${url}" 2>/dev/null || true)"
+    local url="$1" out code
+    out="$(srun -p debug-cpu --time=00:05:00 curl -sIL -o /dev/null -w '%{http_code}' "${url}" 2>&1 || true)"
+    code="$(printf '%s\n' "${out}" | tail -1)"
     [[ "${code}" =~ ^(2|3)[0-9][0-9]$ ]]
   }
-  if smoke_host https://zenodo.org && smoke_host https://datasets.cellxgene.cziscience.com; then
-    echo "OK: compute nodes reach the download hosts -- submitting the download array."
+  SMOKE_URLS=(https://zenodo.org \
+    https://datasets.cellxgene.cziscience.com/c2b49431-9288-4d94-8ca5-f6723b72217e.h5ad)
+  SMOKE_FAIL=0
+  for u in "${SMOKE_URLS[@]}"; do
+    if smoke_host "${u}"; then
+      echo "OK: compute nodes reach ${u}"
+    else
+      echo "FAIL: compute nodes could not reach ${u} (see srun/curl output above)" >&2
+      SMOKE_FAIL=1
+    fi
+  done
+  if [[ ${SMOKE_FAIL} -eq 0 ]]; then
+    echo "OK: compute-node egress confirmed -- submitting the download array."
     RUN_MODE="array"
     ARRAY_JOB_ID=""
   else

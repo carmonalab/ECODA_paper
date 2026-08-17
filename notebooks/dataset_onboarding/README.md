@@ -31,10 +31,13 @@ cd "${HOME}/ECODA_paper" && git pull        # prerequisite: get the new scripts
 ./notebooks/dataset_onboarding/download_datasets_hpc.sh --login-node     # fallback if compute nodes lack egress
 ```
 
-Compute-node egress is smoke-tested first (debug-cpu curl); on failure the
+Compute-node egress is smoke-tested first (debug-cpu curl against real
+object URLs — a bucket-root HEAD would 403 and falsely fail); on failure the
 submitter automatically runs the login-node path (`nice -n 19` +
-`--limit-rate`). Tasks are `curl -L -C -` resumable and md5-verified (Zenodo
-checksums; CellxGene `.h5ad.md5` sidecar); tar entries extract only the needed
+`--limit-rate`). Tasks are `curl -L -C -` resumable and verified per key
+(Zenodo md5s; CellxGene files size-verified via HEAD content-length — no
+`.h5ad.md5` sidecar exists and the S3 ETag is a multipart digest; computed
+md5 recorded as informational); tar entries extract only the needed
 h5ads and the tars are deleted. Progress + per-key md5s + resume commands are
 logged to `notebooks/dataset_onboarding/download_log.md` (commit from the
 Mac). The original `download_datasets.sh` (Mac→NAS, sequential) is kept as a
@@ -81,7 +84,8 @@ Outputs (plots/feathers/csv) go to `data/new_dataset_checks/<Name>/` (gitignored
   wall time/RSS, structural batch signal).
 - `run_download_worker.sh` + `download_datasets_hpc.sh` — Phase-5 HPC download
   worker (sbatch array, one task per key: resumable `curl -L -C -`,
-  md5+sidecar verification, selective tar extraction) + login-node submitter
+  Zenodo md5 + CellxGene size verification via HEAD content-length, selective
+  tar extraction) + login-node submitter
   (egress smoke test, sacct gate, NAS rsync + md5 verify + log append).
 
 ## Summary table (fill as downloads + checks complete)

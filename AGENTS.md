@@ -143,7 +143,9 @@ Procedure for adding a new dataset to the pipeline (Phase 5 workflow, see
    and appends the per-key report to `download_log.md`; `--sync-only <job-id>`
    resumes the tail, `--login-node` is the fallback mode (`nice` +
    `--limit-rate`) when compute nodes lack egress. Tasks are `curl -L -C -`
-   resumable + md5-verified (Zenodo checksums; CellxGene `.h5ad.md5` sidecar),
+   resumable + verified per key (Zenodo md5s; CellxGene files size-verified
+   via HEAD content-length — no `.h5ad.md5` sidecar exists and the S3 ETag is
+   a multipart digest; computed md5 recorded as informational),
    tar entries extract only the needed h5ads, tars deleted. The original
    Mac→NAS `download_datasets.sh` is the NAS-stable fallback only
    (sequential + md5-verified). Zenodo records preferred;

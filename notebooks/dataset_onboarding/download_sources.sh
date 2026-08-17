@@ -12,9 +12,11 @@
 #   SRC_URL          full download URL
 #   SRC_FILE         canonical filename in the download dir / on the NAS
 #   SRC_MD5          expected md5, or the literal token "verify" for CellxGene
-#                    files whose checksum must be fetched from the
-#                    `<url>.md5` sidecar (SRC_SIDECAR) -- "verify" ALWAYS
-#                    means "fetch the sidecar and enforce the checksum".
+#                    files: no `.h5ad.md5` sidecar exists (403) and the S3
+#                    ETag is a multipart digest, so "verify" ALWAYS means
+#                    "check the final file SIZE against a HEAD content-length
+#                    and record the computed md5 as informational" (handled by
+#                    both scripts; no SRC_SIDECAR is set).
 #   SRC_TAR_PATTERNS for tar keys: space-separated "egrep_pattern:canonical"
 #                    pairs for selective extraction (empty pattern = the only
 #                    .h5ad member); empty for direct-file keys.
@@ -39,7 +41,6 @@ source_download_key() {
   SRC_URL=""
   SRC_FILE=""
   SRC_MD5=""
-  SRC_SIDECAR=""
   SRC_TAR_PATTERNS=""
   case "${key}" in
     alzheimer)
@@ -88,7 +89,4 @@ source_download_key() {
       return 1
       ;;
   esac
-  if [[ "${SRC_MD5}" == "verify" ]]; then
-    SRC_SIDECAR="${SRC_URL}.md5"
-  fi
 }

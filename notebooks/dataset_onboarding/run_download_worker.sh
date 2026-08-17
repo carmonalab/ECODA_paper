@@ -21,7 +21,9 @@
 #   (nice + DOWNLOAD_LIMIT_RATE).
 # * The URL/md5/tar-pattern catalog lives in download_sources.sh (single
 #   source of truth shared with the Mac->NAS fallback download_datasets.sh).
-#   "verify" md5s (CellxGene) fetch the `.h5ad.md5` sidecar and ENFORCE it.
+#   "verify" md5s (CellxGene) are SIZE-verified via HEAD content-length (no
+#   `.h5ad.md5` sidecar exists -- 403 -- and the S3 ETag is a multipart
+#   digest); the computed md5 is recorded as informational.
 # * `curl -L -C -` is resumable -- a killed/requeued task resumes from the
 #   partial file on re-submission; already-verified files are skipped.
 # * Tar entries do SELECTIVE extraction of only the needed h5ads (excluded
@@ -114,43 +116,52 @@ write_status() {
 }
 
 # fetch_and_verify <local_file> -- downloads SRC_URL into DOWNLOAD_DIR with the
-# catalog's expected md5 (or the fetched sidecar for "verify" keys).
+# catalog's expected md5; for "verify" keys (CellxGene) no md5 sidecar exists
+# (the `.h5ad.md5` URL returns 403 and the S3 ETag is a multipart digest, so
+# neither is usable) -- the final file SIZE is checked against a HEAD
+# content-length instead, and the computed md5 is recorded as informational.
 fetch_and_verify() {
   local local_file="$1"
   local url="${SRC_URL}" expected="${SRC_MD5}"
   TARGET_FILE="${local_file}"
   local dest="${DOWNLOAD_DIR}/${local_file}"
+  EXPECTED_MD5=""
+  EXPECTED_SIZE=""
 
   if [[ "${expected}" == "verify" ]]; then
-    if [[ -z "${SRC_SIDECAR}" ]]; then
-      echo "ERROR: 'verify' mode needs a sidecar URL." >&2
-      write_status FAIL "ERROR=no-sidecar-url"
+    log "resolving expected size via HEAD ${url}"
+    local hdr
+    hdr="$(curl -sIL --fail --silent --show-error "${url}" | tr -d '\r' | awk -F': ' 'tolower($1)=="content-length"{len=$2} END{print len}')"
+    EXPECTED_SIZE="$(printf '%s' "${hdr}" | tr -d ' ')"
+    if [[ ! "${EXPECTED_SIZE}" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: could not resolve content-length for ${url} ('${hdr}')" >&2
+      write_status FAIL "ERROR=no-content-length"
       exit 1
     fi
-    log "fetching md5 sidecar ${SRC_SIDECAR}"
-    local sidecar_txt
-    sidecar_txt="$(curl -L --fail --silent --show-error "${SRC_SIDECAR}")"
-    EXPECTED_MD5="$(printf '%s' "${sidecar_txt}" | awk 'NR==1{print $1}')"
-    if [[ ! "${EXPECTED_MD5}" =~ ^[0-9a-f]{32}$ ]]; then
-      echo "ERROR: unparsable md5 sidecar: '${sidecar_txt}'" >&2
-      write_status FAIL "ERROR=bad-md5-sidecar"
-      exit 1
-    fi
-    expected="${EXPECTED_MD5}"
-  else
-    EXPECTED_MD5="${expected}"
+    expected=""
   fi
 
   if [[ -f "${dest}" ]]; then
     local got
-    got="$(md5_of "${dest}")"
-    if [[ "${got}" == "${expected}" ]]; then
-      ACTUAL_MD5="${got}"
-      log "${local_file} already downloaded and verified (md5 ${got}); skipping."
-      write_status OK "SKIPPED=already-verified"
-      return 0
+    if [[ -n "${EXPECTED_SIZE}" ]]; then
+      got="$(stat -c %s "${dest}")"
+      if [[ "${got}" == "${EXPECTED_SIZE}" ]]; then
+        ACTUAL_MD5="$(md5_of "${dest}")"
+        log "${local_file} already downloaded and size-verified (${got} bytes); skipping."
+        write_status OK "SKIPPED=already-verified" "VERIFY=size-${EXPECTED_SIZE}" "MD5_RECORDED=${ACTUAL_MD5}"
+        return 0
+      fi
+      log "${local_file} exists but size differs (expected ${EXPECTED_SIZE}, got ${got}); resuming/re-downloading."
+    else
+      got="$(md5_of "${dest}")"
+      if [[ "${got}" == "${expected}" ]]; then
+        ACTUAL_MD5="${got}"
+        log "${local_file} already downloaded and verified (md5 ${got}); skipping."
+        write_status OK "SKIPPED=already-verified"
+        return 0
+      fi
+      log "${local_file} exists but md5 differs (expected ${expected}, got ${got}); resuming/re-downloading."
     fi
-    log "${local_file} exists but md5 differs (expected ${expected}, got ${got}); resuming/re-downloading."
   fi
 
   local curl_args=(-L -C - --retry 5 --retry-delay 10 --fail --silent --show-error)
@@ -169,14 +180,27 @@ fetch_and_verify() {
     exit "${RC}"
   fi
 
-  ACTUAL_MD5="$(md5_of "${dest}")"
-  if [[ "${ACTUAL_MD5}" != "${expected}" ]]; then
-    echo "ERROR: md5 mismatch for ${local_file}: expected ${expected}, got ${ACTUAL_MD5}" >&2
-    write_status FAIL "ERROR=md5-mismatch"
-    return 1
+  if [[ -n "${EXPECTED_SIZE}" ]]; then
+    local got_size
+    got_size="$(stat -c %s "${dest}")"
+    if [[ "${got_size}" != "${EXPECTED_SIZE}" ]]; then
+      echo "ERROR: size mismatch for ${local_file}: expected ${EXPECTED_SIZE}, got ${got_size}" >&2
+      write_status FAIL "ERROR=size-mismatch"
+      return 1
+    fi
+    ACTUAL_MD5="$(md5_of "${dest}")"
+    log "size verified: ${got_size} bytes; md5 (informational): ${ACTUAL_MD5}"
+    write_status OK "VERIFY=size-${EXPECTED_SIZE}" "MD5_RECORDED=${ACTUAL_MD5}"
+  else
+    ACTUAL_MD5="$(md5_of "${dest}")"
+    if [[ "${ACTUAL_MD5}" != "${expected}" ]]; then
+      echo "ERROR: md5 mismatch for ${local_file}: expected ${expected}, got ${ACTUAL_MD5}" >&2
+      write_status FAIL "ERROR=md5-mismatch"
+      return 1
+    fi
+    log "md5 verified: ${ACTUAL_MD5}"
+    write_status OK
   fi
-  log "md5 verified: ${ACTUAL_MD5}"
-  write_status OK
 }
 
 # extract_tar_members <tar> -- selective extraction driven by SRC_TAR_PATTERNS

@@ -2,27 +2,38 @@
 
 ## Implementation status (2026-08-17)
 
-Committed `6f96aec` (T3 partial + T5/T6): `notebooks/dataset_onboarding/`
-(`download_datasets.sh`, `download_log.md`, 9 `dataset_check_<Name>.qmd`,
-`onboarding_utils.py`, `onboarding_metrics.R`, `README.md`); T3.0 `_debug`
-helper validation PASSED; T6 annotation safety + `not_suitable_for_auto_annotation`
-flag wired; AGENTS.md + TODO.md updated; `ipykernel` added to pixi.toml.
-Implemented 2026-08-17 (uncommitted working tree): **T1 HPC download scripts**
+Implemented + committed (2026-08-17): `6f96aec` (T3 partial + T5/T6:
+`download_datasets.sh`, `download_log.md`, 9 `dataset_check_<Name>.qmd`,
+`onboarding_utils.py`, `onboarding_metrics.R`, `README.md`; T3.0 `_debug`
+helper validation PASSED; T6 annotation safety flag wired). Then commit
+**`579676c` (pushed to origin/master)** added: **T1 HPC download scripts**
 (`download_datasets_hpc.sh` submitter — egress smoke test → 8-task array (3
-concurrent) into `${HPC_SCRATCH_DIR}/_downloads/` → sacct gate → NAS rsync +
-md5 verify + `download_log.md` append; `--sync-only <id>` / `--only <key>` /
-`--login-node` fallback — and `run_download_worker.sh` sbatch worker with the
-`/var/spool` SCRIPT_DIR recovery, resumable `curl -L -C -`, Zenodo md5s +
-CellxGene `.h5ad.md5` sidecar, selective tar extraction) and **T3.1
-sample-first subsetting** (`SUBSET_CONFIG` + `subset_by_samples()` in
-`onboarding_utils.py`; section 1.5 added to all 9 notebooks, UMAP + metrics
-now run on the in-memory subset; `_debug_validation.py` extended with the
-reduced-config subset-path check). AGENTS.md/README.md/download_log.md updated.
-**Pending**: user runs the downloader (T1 execution; `git pull` the HPC clone
-first), per-dataset count check + filled summary cards + rendered notebooks
-(T2/T4), T7 user decisions, T8 datasets.json registration, T10 rollout. This
-plan was momentarily archived by the implementing agent — it is NOT complete,
-restore location `.kilo/plans/` (already restored).
+concurrent) into `${HPC_SCRATCH_DIR}/_downloads/` → sacct gate → NAS sync
+(filtered to STATUS=OK files) + md5 verify + `download_log.md` append;
+`--sync-only <id>` / `--only <key>` / `--login-node` fallback;
+`run_download_worker.sh` sbatch worker with `/var/spool` SCRIPT_DIR recovery,
+resumable `curl -L -C -`, Zenodo md5s, selective tar extraction, per-key
+status files, concurrency guards) + **T3.1 sample-first subsetting**
+(`SUBSET_CONFIG` + `subset_by_samples()` in `onboarding_utils.py`; section 1.5
+added to all 9 notebooks, UMAP + metrics on the in-memory subset;
+`_debug_validation.py` subset-path check) + the shared catalog
+`download_sources.sh` + review fixes (filtered rsync, `_tar_tmp.*` cleanup,
+summary dtype fix, h5-bounded obsm re-slice, worker-recorded extracted md5s,
+gitignore). AGENTS.md/README.md/TODO.md/download_log.md updated.
+
+**First HPC run (2026-08-17, user) exposed 2 download-script bugs — FIXED
+before re-running, see T1.1 below**: (1) the egress smoke test probed the
+CellxGene *bucket root* (HEAD → 403 always) → false login-node fallback
+(2 MB/s limit); (2) the `.h5ad.md5` sidecar does NOT exist (403 for everyone;
+S3 ETag is a multipart digest; curation API has no checksum) → alzheimer task
+failed. The run was aborted (would fail closed anyway); the partial
+`BreastCncr_processed.h5ad` in scratch resumes via `curl -C -`.
+
+**Pending**: T1.1 bugfixes (implement + commit), user re-runs the downloader
+(`git pull` on the HPC clone first), per-dataset count check + filled summary
+cards + rendered notebooks (T2/T4), T7 user decisions, T8 datasets.json
+registration, T10 rollout. This plan is NOT complete — it must stay at
+`.kilo/plans/` (do NOT archive).
 
 ## Context & goal
 
@@ -62,10 +73,13 @@ PDAC [31], Myocardial infarction (1) [6] (duplicate of MI-2).
   (configurable, e.g. 3–4) so Zenodo-S3 and CellxGene-S3 transfers overlap
   and per-server limits are better used. Each task is `curl -L -C -`
   resumable (Ctrl-C/re-queue safe; partial files persist in scratch and are
-  resumed on re-run) + md5-verified (Zenodo checksums; CellxGene `+ .md5`
-  sidecar or recorded API checksum) + tar-selective extraction for the two
-  archive entries, then archive deletion. **Compute-node internet is
-  smoke-tested first** (`srun -p debug-cpu curl -sI https://zenodo.org`);
+   resumed on re-run) + verified per key (Zenodo md5s; CellxGene files
+   size-verified via HEAD content-length — no `.md5` sidecar exists, see table
+   footnote + T1.1) + tar-selective extraction for the two
+   archive entries, then archive deletion. **Compute-node internet is
+   smoke-tested first** (`srun -p debug-cpu curl -sI https://zenodo.org` +
+   a real CellxGene object URL — the original bucket-root probe falsely
+   failed, fixed in T1.1);
   HPC forum evidence says compute nodes have internet (baobab incident
   resolved, 2024; login-node transfers remain the documented high-bandwidth
   path). If the smoke test fails → login-node fallback: same script entry
@@ -140,7 +154,7 @@ CellxGene (must be downloaded from there).
 
 | # | Dataset (short key) | Study (PMID) | Paper: cells / samples / CTs | Author-provided file | Source | Size (GB) | md5 |
 |---|---|---|---|---|---|---|---|
-| 1 | Alzheimer (SEA-AD) | Gabitto 2024 Nat Neurosci (42486312) | 1,395,601 / 83 / 18 | `SEAAD_Alzheimer.h5ad` | CellxGene collection `1ca90a2d-2943-483d-b678-b809bf464c30`, dataset_version_id `c2b49431-9288-4d94-8ca5-f6723b72217e` (count matches paper exactly) | **49.5** (observed 2026-08-17) | `.h5ad.md5` sidecar |
+| 1 | Alzheimer (SEA-AD) | Gabitto 2024 Nat Neurosci (42486312) | 1,395,601 / 83 / 18 | `SEAAD_Alzheimer.h5ad` | CellxGene collection `1ca90a2d-2943-483d-b678-b809bf464c30`, dataset_version_id `c2b49431-9288-4d94-8ca5-f6723b72217e` (count matches paper exactly) | **49.5** (observed 2026-08-17; HEAD content-length 53,187,995,660 B) | size-verified\* |
 | 2 | Breast cancer | Kumar 2023 Nature (37380767) | 714,331 / 126 / 10 | `BreastCncr_processed.h5ad` | zenodo 14615923 | 28.9 | `8b28a349c2c3638ddbfb3946a32d12ba` |
 | 3 | Covid-19 PBMC | Ren 2021 Cell (34767776) | 993,171 / 151 / 10 | `Covid19_Ren2021.h5ad` (inside `Datasets.tar.gz`) | zenodo 8370081 | 36.35 (tar; selective-extract) | `d105b52dbba38ac49c2ffe8b3cf34e24` |
 | 4 | Diabetes | Hrovatin 2023 Nat Metab (37697055) — **mouse** | 264,235 / 52 / 13 | `diabetes.h5ad` | zenodo 8370081 | 4.1 | `38189a381bad630fa39ce2d7ad3a0855` |
@@ -148,11 +162,17 @@ CellxGene (must be downloaded from there).
 | 6 | Lupus PBMC | Perez 2022 Science (42115607) | 1,263,676 / 261 / 11 | `Lupus_Perez2022.h5ad` (inside `Datasets.tar.gz`) | zenodo 8370081 | (in tar) | (in tar) |
 | 7 | Lung | Sikkema 2023 Nat Med (42362693) | 941,504 / 165 / 12 | `lungatlas.h5ad` (inside `lungatlas.h5ad.tar.gz`) | zenodo 7957118 | 17.2 (tar) | `0d0c97924f1b7a405b6ec3b55da02882` |
 | 8 | Myocardial infarction (2) | Kuppe 2022 Nature (41937210) | 132,888 / 23 / 11 | `Myocardial_Infarc_2.h5ad` | zenodo 14615923 | 3.6 | `7431ae99250c99f11bf63e3034798af4` |
-| 9 | Parkinson | Prashant 2024 Sci Data (39580497) | 2,096,155 / 97 / 11 | `Parkinson.h5ad` | CellxGene collection `d5d0df8f-4eee-49d8-a221-a288f50a1590`, dataset_version_id `0270e5e5-ce1d-4165-828e-699210189a92` (count matches paper exactly) | ~40–60 (estimate; observed SEAAD** 49.5) | `.h5ad.md5` sidecar |
+| 9 | Parkinson | Prashant 2024 Sci Data (39580497) | 2,096,155 / 97 / 11 | `Parkinson.h5ad` | CellxGene collection `d5d0df8f-4eee-49d8-a221-a288f50a1590`, dataset_version_id `0270e5e5-ce1d-4165-828e-699210189a92` (count matches paper exactly) | ~40–60 (estimate; observed SEAAD 49.5) | size-verified\* |
 
-\* CellxGene assets expose a **`.h5ad.md5` sidecar** at
-`https://datasets.cellxgene.cziscience.com/<dataset_version_id>.h5ad.md5` —
-fetch and verify against it (no hardcoded md5 exists for these).
+\* **CellxGene files CANNOT be md5-verified** (discovered 2026-08-17): the
+`.h5ad.md5` sidecar URL returns 403 for everyone, the S3 `ETag` is a
+multipart digest (e.g. `"72c502238a7281c1517f8b7218637949-6341"` — not the
+md5), and the curation API
+(`https://api.cellxgene.cziscience.com/curation/v1/collections/<id>`) exposes
+only `filesize`/`filetype`/`url` per asset. Verification = final file **SIZE**
+checked against a HEAD `content-length` (the object itself is publicly
+reachable: HEAD 200) + computed md5 recorded as informational. Implemented in
+T1.1.
 
 Excluded (NOT downloaded/registered): Kidney cancer (GEO GSE242299), PDAC
 (GSA CRA001160), MI(1) (inside the same tar — leave unextracted or move to
@@ -190,9 +210,10 @@ Parkinson (same collections).
     dir; recover `SCRIPT_DIR` via `scontrol show job <SLURM_JOB_ID>`
     `Command=` field with the `BASH_SOURCE` fallback, per AGENTS.md):
     one task per `--only` key, `curl -L -C - --retry 5 --retry-delay 10
-    --fail` into `${HPC_SCRATCH_DIR}/_downloads/<file>`, md5-verified
-    (Zenodo checksums from the table; CellxGene via the `.h5ad.md5`
-    sidecar), tar tasks do **selective extraction** then delete the archive.
+    --fail` into `${HPC_SCRATCH_DIR}/_downloads/<file>`, verified per key
+    (Zenodo md5s from the table; CellxGene size-verified — the `.h5ad.md5`
+    sidecar does NOT exist, see T1.1), tar tasks do **selective extraction**
+    then delete the archive.
     Partial files persist in scratch; killed/requeued tasks **resume** on
     re-submission (idempotent, like the repo's other workers).
 - **Parallelism**: the array achieves server overlap (Zenodo-S3 vs
@@ -221,6 +242,62 @@ Parkinson (same collections).
 - **Cancel/resume**: cancellation is safe at any point (Ctrl-C / `scancel`);
   re-running the submitter (`--only <key>` or all, or `--sync-only <id>` for
   the tail) resumes partial files via `curl -C -`.
+
+### T1.1 — First-run bugfixes (2026-08-17, detected on the first HPC run) — DO BEFORE RE-RUNNING
+
+Two bugs were exposed by the user's first run and verified from the Mac
+(HEAD requests + curation API). Implement these fixes in
+`notebooks/dataset_onboarding/`, commit + push, then the user re-runs.
+
+- **Bug 1 — egress smoke test probed the wrong URL (false login-node
+  fallback).** `download_datasets_hpc.sh` smoke-tested
+  `curl -sI https://datasets.cellxgene.cziscience.com` (bucket root); S3
+  answers 403 to a bucket-root HEAD **always**, so the test failed even with
+  working egress and the submitter fell into the slow `--limit-rate 2m`
+  login-node mode. Verified: HEAD on the real SEA-AD object → 200
+  (`content-length: 53187995660`). **Fix**: probe real object URLs —
+  `https://zenodo.org` and the SEA-AD `.h5ad` object — with
+  `curl -sIL -o /dev/null -w '%{http_code}'`, accept 2xx/3xx, and do NOT
+  swallow `srun` stderr (capture `2>&1`, print the failing URL + output on
+  failure) so a genuine `srun`/partition problem is visible.
+- **Bug 2 — the CellxGene `.h5ad.md5` sidecar does not exist.** The
+  planning discovery was wrong: the sidecar URL returns 403 for everyone,
+  the S3 ETag is a multipart digest (not the md5), and the curation API
+  exposes only `filesize`/`filetype`/`url` (no checksum). The alzheimer task
+  failed here (`curl: (22) ... 403`). **Fix** (size-based verification):
+  - `run_download_worker.sh` `fetch_and_verify()`: for `verify` keys,
+    resolve the expected size via `curl -sIL <url>` → last
+    `content-length` (regex-guard `^[0-9]+$`, else FAIL
+    `ERROR=no-content-length`); the "already downloaded" skip path compares
+    SIZE, not md5; after the download compare the final size
+    (`stat -c %s`, mismatch → FAIL `ERROR=size-mismatch`); compute + record
+    the md5 as informational (`MD5_RECORDED=<md5>` + `VERIFY=size-<bytes>`
+    status kvs). Update the header comment (`"verify"` = size-verified, no
+    sidecar).
+  - `download_datasets.sh` (Mac fallback): same size-based logic with a
+    portable size command (`wc -c < file`, macOS has no `stat -c`); keep
+    Zenodo md5 checks unchanged; `log_entry` statuses `OK (cached)` /
+    `FAIL (size)`.
+  - `download_sources.sh`: update the `SRC_MD5="verify"` comment to the
+    size-verification semantics; drop the now-unused `SRC_SIDECAR` lines.
+  - `download_log.md` report: the submitter's `append_log` picks up the new
+    `VERIFY`/`MD5_RECORDED` status keys (extend the note grep
+    `^(SKIPPED|FILES|ERROR)=` → include `VERIFY`), so CellxGene entries show
+    "size-verified: N bytes; md5 (informational): …".
+- **Docs** (same commit): AGENTS.md onboarding step 1 and
+  `notebooks/dataset_onboarding/README.md` — replace all `.h5ad.md5`
+  sidecar wording with the size-verification description (this plan's table
+  footnote is already updated).
+- **Validation**: `bash -n` on the 3 scripts; from the Mac, re-verify
+  HEAD-content-length parsing on the SEA-AD object; on the HPC re-run, the
+  smoke test must print `OK: compute nodes reach …` for BOTH URLs → array
+  mode (if it still fails, the printed `srun` output decides whether egress
+  is genuinely missing — then login-node mode is the correct fallback);
+  alzheimer/parkinson tasks must log `size verified: <bytes>; md5
+  (informational): …` and write `STATUS=OK` status files.
+- **User re-run** (after `git pull` on the HPC clone): Ctrl-C of the aborted
+  run is safe; `./notebooks/dataset_onboarding/download_datasets_hpc.sh`
+  resumes the partial `BreastCncr_processed.h5ad` via `curl -C -`.
 
 ### T2 — Count sanity check (immediately after each download; agent runs)
 - Python (`.pixi/envs/default/bin/python`, scanpy 1.12.2 available; backed read
@@ -510,20 +587,32 @@ Parkinson (same collections).
 - **Compute-node internet**: evidence OK (forum 2024 incident resolved) but
   verify with the `debug-cpu` smoke test; if nodes have no egress, fall back
   to quiet login-node downloads (`nice`, `--limit-rate`) — the documented
-  high-bandwidth transfer path.
+  high-bandwidth transfer path. First run (2026-08-17) falsely failed the
+  smoke test: it HEAD-ed the CellxGene bucket ROOT, which 403s always —
+  fixed in T1.1 to probe real object URLs (whether compute nodes genuinely
+  have egress is still unverified until the fixed smoke test runs).
+- **CellxGene files have no md5** (discovered 2026-08-17): the `.h5ad.md5`
+  sidecar 403s for everyone, the S3 ETag is a multipart digest, the curation
+  API has no checksum. Verification is size-based (HEAD content-length) +
+  informational md5 — a size match plus the onboarding count-sanity check
+  (T2, which verifies cell counts vs the paper) together guard integrity.
+  If the size check ever fails, re-download (idempotent, `curl -C -`).
 - **Mac NAS mount instability** (observed 2026-08-17): the original
   Mac→NAS serial downloads are replaced by the HPC route; the Mac script is
   kept only as a fallback. A partial `SEAAD_Alzheimer.h5ad` (~5–10 GB) may
   remain on the NAS — harmless, overwritten at sync.
 
 ## Validation
-- md5 checksums verified per download (Zenodo API values in the table;
-  CellxGene `.h5ad.md5` sidecar) — logged per file in `download_log.md`.
-- Compute-node connectivity smoke test (debug-cpu) passes → compute-node
-  downloads; else quiet login-node fallback engaged.
+- Downloads verified per key (Zenodo: md5 against the table values; CellxGene
+  Alzheimer/Parkinson: final SIZE vs HEAD content-length + informational md5
+  — no md5 sidecar exists, see T1.1) — logged per file in `download_log.md`.
+- Compute-node connectivity smoke test (debug-cpu) passes with the FIXED
+  URLs (zenodo.org + real CellxGene object) → compute-node downloads; else
+  quiet login-node fallback engaged (T1.1).
 - All 8 array tasks `COMPLETED` (sacct-gated), NAS sync verified:
   `ls -lh ${NAS_SC_DIR}/JooM_2025_41097818/output/` from the Mac matches the
-  `_downloads` listing (same md5s), tar archives gone.
+  `_downloads` listing (Zenodo files: same md5s; CellxGene files: NAS md5 ==
+  worker-recorded `MD5_RECORDED`), tar archives gone.
 - Count sanity check PASS/FAIL logged per dataset.
 - Notebooks render (quarto) with plots + summary tables; `README.md` table
   complete.

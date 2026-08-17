@@ -14,10 +14,11 @@
 # this Mac->NAS script only when the NAS mount is stable and the HPC route is
 # unavailable.
 #
-# The download catalog (URLs, md5s, CellxGene sidecar handling, tar member
-# patterns) lives in download_sources.sh -- the single source of truth shared
-# with the HPC worker. "verify" md5s fetch the `.h5ad.md5` sidecar and ENFORCE
-# the checksum (same semantics as the HPC worker).
+# The download catalog (URLs, md5s, CellxGene size-verification handling, tar
+# member patterns) lives in download_sources.sh -- the single source of truth
+# shared with the HPC worker. "verify" md5s (CellxGene) are size-verified via
+# a HEAD content-length (no `.h5ad.md5` sidecar exists; the S3 ETag is a
+# multipart digest) -- same semantics as the HPC worker.
 #
 # RULES:
 #   * Sequential ONLY -- one download at a time, each md5-verified before the
@@ -79,32 +80,47 @@ log_entry() {
 
 fetch_and_verify() {
   # fetch_and_verify <key> -- downloads SRC_URL (from download_sources.sh) into
-  # the NAS output dir, enforcing SRC_MD5 ("verify" = fetch the .h5ad.md5
-  # sidecar and enforce it).
+  # the NAS output dir, enforcing SRC_MD5. "verify" keys (CellxGene): no md5
+  # sidecar exists (the `.h5ad.md5` URL returns 403 and the S3 ETag is a
+  # multipart digest) -- the final file SIZE is checked against a HEAD
+  # content-length instead; the computed md5 is logged as informational.
   local key="$1" url="${SRC_URL}" expected="${SRC_MD5}" local_file="${SRC_FILE}"
   local dest="${NAS_JOO_OUTPUT_DIR}/${local_file}"
+  EXPECTED_SIZE=""
 
   if [[ "${expected}" == "verify" ]]; then
-    echo "  [sidecar] fetching ${SRC_SIDECAR}"
-    local sidecar_txt got_side
-    sidecar_txt="$(curl -L --fail --silent --show-error "${SRC_SIDECAR}")"
-    expected="$(printf '%s' "${sidecar_txt}" | awk 'NR==1{print $1}')"
-    if [[ ! "${expected}" =~ ^[0-9a-f]{32}$ ]]; then
-      echo "  [FAIL] unparsable md5 sidecar: '${sidecar_txt}'" >&2
-      log_entry "FAIL (sidecar)" "${key}" "${local_file}" "" "${expected}" "" ""
+    echo "  [size] resolving expected size via HEAD ${url}"
+    local hdr
+    hdr="$(curl -sIL --fail --silent --show-error "${url}" | tr -d '\r' | awk -F': ' 'tolower($1)=="content-length"{len=$2} END{print len}')"
+    EXPECTED_SIZE="$(printf '%s' "${hdr}" | tr -d ' ')"
+    if [[ ! "${EXPECTED_SIZE}" =~ ^[0-9]+$ ]]; then
+      echo "  [FAIL] could not resolve content-length for ${url} ('${hdr}')" >&2
+      log_entry "FAIL (size)" "${key}" "${local_file}" "" "${EXPECTED_SIZE}" "" ""
       return 1
     fi
+    expected=""
   fi
 
   if [ -f "${dest}" ]; then
-    local got
-    got="$(md5_of "${dest}")"
-    if [ "${got}" = "${expected}" ]; then
-      echo "  [skip] ${local_file} already downloaded and verified (md5 ${got})."
-      log_entry "OK (cached)" "${key}" "${local_file}" "$(du -h "${dest}" | cut -f1)" "${expected}" "${got}" ""
-      return 0
+    if [[ -n "${EXPECTED_SIZE}" ]]; then
+      local got_size
+      got_size="$(wc -c < "${dest}" | tr -d ' ')"
+      if [ "${got_size}" = "${EXPECTED_SIZE}" ]; then
+        echo "  [skip] ${local_file} already downloaded and size-verified (${got_size} bytes)."
+        log_entry "OK (cached)" "${key}" "${local_file}" "$(du -h "${dest}" | cut -f1)" "size-${EXPECTED_SIZE}" "${got_size}" ""
+        return 0
+      fi
+      echo "  [warn] ${local_file} exists but size differs (expected ${EXPECTED_SIZE}, got ${got_size}); re-downloading."
+    else
+      local got
+      got="$(md5_of "${dest}")"
+      if [ "${got}" = "${expected}" ]; then
+        echo "  [skip] ${local_file} already downloaded and verified (md5 ${got})."
+        log_entry "OK (cached)" "${key}" "${local_file}" "$(du -h "${dest}" | cut -f1)" "${expected}" "${got}" ""
+        return 0
+      fi
+      echo "  [warn] ${local_file} exists but md5 differs (expected ${expected}, got ${got}); re-downloading."
     fi
-    echo "  [warn] ${local_file} exists but md5 differs (expected ${expected}, got ${got}); re-downloading."
   fi
 
   echo "  [downloading] ${url}"
@@ -114,6 +130,21 @@ fetch_and_verify() {
 
   out="$(ls -l "${dest}" 2>/dev/null || echo '')"
   [ -n "${out}" ] && echo "  [done] size: $(du -h "${dest}" | cut -f1)"
+
+  if [[ -n "${EXPECTED_SIZE}" ]]; then
+    local got_size
+    got_size="$(wc -c < "${dest}" | tr -d ' ')"
+    if [ "${got_size}" != "${EXPECTED_SIZE}" ]; then
+      echo "  [FAIL] size mismatch for ${local_file}: expected ${EXPECTED_SIZE}, got ${got_size}" >&2
+      log_entry "FAIL (size)" "${key}" "${local_file}" "$(du -h "${dest}" | cut -f1)" "${EXPECTED_SIZE}" "${got_size}" ""
+      return 1
+    fi
+    local got_md5
+    got_md5="$(md5_of "${dest}")"
+    echo "  [OK] size verified: ${got_size} bytes (md5 informational: ${got_md5})"
+    log_entry "OK" "${key}" "${local_file}" "$(du -h "${dest}" | cut -f1)" "size-${EXPECTED_SIZE}" "${got_size}" "md5 informational: ${got_md5}"
+    return 0
+  fi
 
   local got="$(md5_of "${dest}")"
   if [ "${got}" != "${expected}" ]; then
