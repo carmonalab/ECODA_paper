@@ -68,3 +68,5 @@ __pycache__/
 # tempdir so this should never appear, belt-and-braces)
 trained_models/
 notebooks/dataset_onboarding/download_log.md
+notebooks/dataset_onboarding/*.html
+notebooks/dataset_onboarding/*_files/
