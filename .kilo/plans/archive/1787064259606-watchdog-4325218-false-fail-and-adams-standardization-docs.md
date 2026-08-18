@@ -1,7 +1,6 @@
 # Docs update: watchdog 4325218 false-fail + Adams sample-name standardization
 
-Status: ready for implementation. Read-only docs update (AGENTS.md, ARCHITECTURE.md,
-TODO.md) + a small comment fix in the watchdog — no pipeline logic changes.
+Status: Completed / Archived. Sync for array 4325217 completed in previous session; technical recovery notes and sample-name standardization facts documented.
 
 ## Context (session ses_feaf38333ffe1VGa7wsuSBdZmI, 2026-08-18)
 
