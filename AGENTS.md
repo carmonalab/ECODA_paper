@@ -34,10 +34,19 @@
 
 ## 2. HPC Execution Invariants
 
+### Cluster Access & Host Configuration
+- **Cluster Endpoint:** `login1.bamboo.hpc.unige.ch` (SSH alias: `bamboo`, user: `halterc`).
+- Remote commands and status checks can be executed directly via `ssh bamboo "<command>"`.
+
 ### Login Node Policy
 - **Never execute heavy computation, preprocessing, or benchmarks on login nodes.**
-- Login nodes are strictly for compiling, editing code, data staging (`1_stage_data.sh`), and submitting SLURM jobs/arrays.
+- Login nodes are strictly for compiling, editing code, data staging (`1_stage_data.sh`), NAS synchronization, and submitting SLURM jobs/arrays.
+- Long-running I/O operations (staging, NAS sync) should run inside persistent background sessions (`tmux` / `screen`).
 - Use `debug-cpu` or `debug-gpu` partitions for short interactive checks.
+
+### Data Protection & Safety
+- **Never run recursive deletions (`rm -rf`)** on `$HOME/scratch` or `data/` directories without explicit user confirmation.
+- **Job Monitoring:** Inspect runs with non-blocking Slurm queries (`squeue -u $USER`, `sacct -j <id> --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS`).
 
 ### Repository vs. Scratch Directory Layout
 - **The git repository clone lives at `$HOME/ECODA_paper`** — all git operations (`git pull`, `git status`, commits) and job submissions must run from `~/ECODA_paper`.
