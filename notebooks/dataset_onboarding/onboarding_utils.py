@@ -213,39 +213,49 @@ def count_sanity_check(
     return checks
 
 
+def _fast_nunique(s: pd.Series) -> int:
+    """Fast nunique check on Series avoiding full scans on categoricals."""
+    if isinstance(s.dtype, pd.CategoricalDtype):
+        return int(len(s.cat.categories))
+    return int(s.nunique(dropna=True))
+
+
 def obs_summary(adata, top_n: int = 20) -> pd.DataFrame:
     """Per-column dtype + top value counts (bounded) for obs."""
     rows = []
     for col in adata.obs.columns:
         s = adata.obs[col]
-        nunique = int(s.nunique(dropna=True))
-        if adata.obs[col].dtype.name in ("category", "object") or nunique <= 30:
-            vc = (
-                s.astype(str)
-                .value_counts(dropna=True)
-                .head(top_n)
-                .to_dict()
-            )
-            has_na = bool(s.isna().any())
-            rows.append(
-                {
-                    "column": col,
-                    "dtype": str(s.dtype),
-                    "n_unique": nunique,
-                    "na_count": int(s.isna().sum()),
-                    "top_values": json.dumps(vc, default=str)[:400],
-                }
-            )
+        nunique = _fast_nunique(s)
+        if isinstance(s.dtype, pd.CategoricalDtype):
+            vc = s.value_counts(dropna=True).head(top_n).to_dict()
+            rows.append({
+                "column": col,
+                "dtype": str(s.dtype),
+                "n_unique": nunique,
+                "na_count": int(s.isna().sum()),
+                "top_values": json.dumps(vc, default=str)[:400],
+            })
+        elif s.dtype.name == "object" or nunique <= 30:
+            if len(s) > 200_000 and nunique > 500:
+                # High-cardinality string/identifier column (e.g. cell barcodes)
+                vc = {"<unique_ids>": nunique}
+            else:
+                vc = s.value_counts(dropna=True).head(top_n).to_dict()
+            rows.append({
+                "column": col,
+                "dtype": str(s.dtype),
+                "n_unique": nunique,
+                "na_count": int(s.isna().sum()),
+                "top_values": json.dumps(vc, default=str)[:400],
+            })
         else:
-            rows.append(
-                {
-                    "column": col,
-                    "dtype": str(s.dtype),
-                    "n_unique": nunique,
-                    "na_count": int(s.isna().sum()),
-                    "top_values": "",
-                }
-            )
+            rows.append({
+                "column": col,
+                "dtype": str(s.dtype),
+                "n_unique": nunique,
+                "na_count": int(s.isna().sum()),
+                "top_values": "",
+            })
     return pd.DataFrame(rows)
 
 
@@ -265,9 +275,6 @@ def candidate_col_detection(
     cols = [str(c) for c in obs.columns]
     low = {c: c.lower() for c in cols}
 
-    # Cluster/embedding/QC-like columns are never sample/bio/batch candidates
-    # (e.g. preprocessed-leiden columns, UMAP/PCA keys, UCell scores, nCount/
-    # nFeature). Cell-type candidates may legitimately contain 'cluster'.
     noise_terms = (
         "leiden", "kmeans", "seurat_clusters", "scvi", "scanorama",
         "harmony", "umap", "pca", "phase", "ucell", "_score", "score_",
@@ -284,16 +291,15 @@ def candidate_col_detection(
         lc = low[c]
         if is_noise(c):
             continue
-        if any(t in lc for t in sample_terms) and obs[c].nunique(dropna=True) >= 2:
+        nu = _fast_nunique(obs[c])
+        if any(t in lc for t in sample_terms) and nu >= 2:
             out["sample"].append(c)
-        if any(t in lc for t in label_terms) and 2 <= obs[c].nunique(dropna=True) <= 50:
+        if any(t in lc for t in label_terms) and 2 <= nu <= 50:
             out["label"].append(c)
-        if any(t in lc for t in batch_terms) and 2 <= obs[c].nunique(dropna=True) <= 200:
+        if any(t in lc for t in batch_terms) and 2 <= nu <= 200:
             out["batch"].append(c)
-        if any(t in lc for t in ct_terms) and 2 <= obs[c].nunique(dropna=True) <= 200:
+        if any(t in lc for t in ct_terms) and 2 <= nu <= 200:
             out["cell_type"].append(c)
-    # drop exact duplicates across roles (e.g. a plain 'Sample' column matching
-    # both sample and batch terms)
     return out
 
 
@@ -713,31 +719,36 @@ def subset_by_samples(
 
     # Re-slice the parent's unintegrated obsm arrays to the subset rows so the
     # downstream UMAP/metrics stay in the original (global) embedding space.
-    # Backed h5ad obsm arrays live in the file as h5py Datasets but
-    # `adata.obsm[k]` materializes the full array on access -- read the
-    # dataset directly and fancy-index it in the file (memory bounded by the
-    # subset size, independent of file size). Fall back to the plain access
-    # for in-memory parents / non-dataset (e.g. sparse) entries.
     try:
         import h5py
     except ImportError:  # pragma: no cover
         h5py = None
-    h5_obsm = None
-    if getattr(adata, "isbacked", False):
-        try:
-            h5_obsm = adata.file["obsm"]
-        except (KeyError, TypeError):
-            h5_obsm = None
+
     obsm_info = detect_unintegrated_obsm(adata)
-    for k in obsm_info["pca_candidates"] + obsm_info["umap_candidates"]:
-        if h5_obsm is not None and h5py is not None:
-            ds = h5_obsm.get(k)
-            if isinstance(ds, h5py.Dataset) and ds.ndim == 2 and ds.shape[0] == adata.n_obs:
-                sub.obsm[k] = ds[parent_pos]
-                continue
-        arr = np.asarray(adata.obsm[k])
-        if arr.ndim == 2 and arr.shape[0] == adata.n_obs:
-            sub.obsm[k] = arr[parent_pos]
+    needed_keys = obsm_info["pca_candidates"] + obsm_info["umap_candidates"]
+
+    if needed_keys:
+        if getattr(adata, "isbacked", False) and h5py is not None:
+            fpath = getattr(adata, "filename", None)
+            if fpath and os.path.exists(fpath):
+                try:
+                    with h5py.File(fpath, "r") as hf:
+                        if "obsm" in hf:
+                            for k in needed_keys:
+                                if k in hf["obsm"]:
+                                    ds = hf["obsm"][k]
+                                    if isinstance(ds, h5py.Dataset) and ds.ndim == 2 and ds.shape[0] == adata.n_obs:
+                                        sub.obsm[k] = ds[np.sort(parent_pos)]
+                except Exception:
+                    pass
+        for k in needed_keys:
+            if k not in sub.obsm and k in adata.obsm:
+                try:
+                    arr = np.asarray(adata.obsm[k])
+                    if arr.ndim == 2 and arr.shape[0] == adata.n_obs:
+                        sub.obsm[k] = arr[parent_pos]
+                except Exception:
+                    pass
 
     # --- post-concat caps -----------------------------------------------------
     if cfg.get("MAX_CELLS_PER_CT") and ct_col and ct_col in sub.obs.columns:

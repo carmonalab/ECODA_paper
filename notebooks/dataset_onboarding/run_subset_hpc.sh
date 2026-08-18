@@ -27,9 +27,10 @@ SUBSET_LOGS_DIR="${LOGS_DIR}/onboard_subsets"
 
 ONLY=""
 PARTITION="shared-cpu"
-TIME_LIMIT="00:20:00"
+TIME_LIMIT="00:45:00"
 DIRECT=0
 SYNC_NAS=0
+SKIP_EXISTING=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -41,9 +42,17 @@ while [[ $# -gt 0 ]]; do
       PARTITION="${2:-}"
       shift 2
       ;;
+    --time)
+      TIME_LIMIT="${2:-}"
+      shift 2
+      ;;
     --debug-cpu)
       PARTITION="debug-cpu"
       TIME_LIMIT="00:15:00"
+      shift
+      ;;
+    --skip-existing)
+      SKIP_EXISTING=1
       shift
       ;;
     --direct)
@@ -55,7 +64,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      echo "ERROR: Unknown option $1 (accepted: --only <key> | --partition <p> | --debug-cpu | --direct | --sync-nas)" >&2
+      echo "ERROR: Unknown option $1 (accepted: --only <key> | --partition <p> | --time <t> | --skip-existing | --debug-cpu | --direct | --sync-nas)" >&2
       exit 1
       ;;
   esac
@@ -63,14 +72,19 @@ done
 
 mkdir -p "${OUT_DIR}" "${SUBSET_LOGS_DIR}"
 
+EXTRA_WORKER_ARG=""
+if [[ "${SKIP_EXISTING}" -eq 1 ]]; then
+  EXTRA_WORKER_ARG="--skip-existing"
+fi
+
 if [[ "${DIRECT}" -eq 1 ]]; then
   echo "=== Running direct subsetting in current shell ==="
   WORKER_SCRIPT="${SCRIPT_DIR}/run_subset_worker.sh"
   if [[ -n "${ONLY}" ]]; then
-    "${WORKER_SCRIPT}" "${IN_DIR}" "${OUT_DIR}" "${ONLY}"
+    "${WORKER_SCRIPT}" "${IN_DIR}" "${OUT_DIR}" "${ONLY}" "${EXTRA_WORKER_ARG}"
   else
     for i in "${!KEYS[@]}"; do
-      SLURM_ARRAY_TASK_ID="${i}" "${WORKER_SCRIPT}" "${IN_DIR}" "${OUT_DIR}"
+      SLURM_ARRAY_TASK_ID="${i}" "${WORKER_SCRIPT}" "${IN_DIR}" "${OUT_DIR}" "" "${EXTRA_WORKER_ARG}"
     done
   fi
   exit 0
@@ -108,6 +122,7 @@ echo "Memory:        32G per task"
 echo "Scratch dir:   ${IN_DIR}"
 echo "Subsets dir:   ${OUT_DIR}"
 echo "Logs dir:      ${SUBSET_LOGS_DIR}"
+echo "Skip existing: ${SKIP_EXISTING}"
 echo "=============================================================================="
 
 # Submit sbatch array
@@ -122,7 +137,7 @@ SBATCH_CMD=(
   --array="${ARRAY_SPEC}"
   --output="${SUBSET_LOGS_DIR}/subset_%A_%a.out"
   --error="${SUBSET_LOGS_DIR}/subset_%A_%a.err"
-  "${SCRIPT_DIR}/run_subset_worker.sh" "${IN_DIR}" "${OUT_DIR}"
+  "${SCRIPT_DIR}/run_subset_worker.sh" "${IN_DIR}" "${OUT_DIR}" "" "${EXTRA_WORKER_ARG}"
 )
 
 JOB_ID="$("${SBATCH_CMD[@]}")"

@@ -20,11 +20,17 @@ Usage (repo root on HPC):
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import sys
 import time
 from pathlib import Path
+
+# Unbuffered stdout for SLURM live log monitoring
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+print = functools.partial(print, flush=True)
 
 # Ensure onboarding_utils can be imported
 HERE = Path(__file__).resolve().parent
@@ -155,10 +161,16 @@ def pick_effective(guess: str | None, candidates: list[str], obs_cols: list[str]
     return None
 
 
-def process_dataset(ds_info: dict, in_dir: Path, out_dir: Path, cfg: dict, verbose: bool = True) -> bool:
+def process_dataset(ds_info: dict, in_dir: Path, out_dir: Path, cfg: dict, verbose: bool = True, skip_existing: bool = False) -> bool:
     name = ds_info["name"]
     fname = ds_info["file"]
     fpath = in_dir / fname
+
+    out_h5ad = out_dir / f"{name}_subset.h5ad"
+    meta_json_path = out_dir / f"{name}_meta.json"
+    if skip_existing and out_h5ad.exists() and meta_json_path.exists() and out_h5ad.stat().st_size > 1000 and meta_json_path.stat().st_size > 100:
+        print(f"[{name}] Output subset and metadata JSON already exist ({out_h5ad.name}, {meta_json_path.name}), skipping.")
+        return True
 
     if not fpath.exists():
         print(f"[{name}] ERROR: input file not found: {fpath}")
@@ -282,6 +294,8 @@ def main():
     parser.add_argument("--cells-target", type=int, default=ou.SUBSET_CONFIG["CELLS_TARGET"])
     parser.add_argument("--cells-max", type=int, default=ou.SUBSET_CONFIG["CELLS_MAX"])
     parser.add_argument("--seed", type=int, default=ou.SUBSET_CONFIG["SEED"])
+    parser.add_argument("--skip-existing", action="store_true", default=False, help="Skip datasets with existing subset files")
+
     args = parser.parse_args()
 
     cfg = {
@@ -313,7 +327,7 @@ def main():
     t_start = time.perf_counter()
 
     for ds_info in targets:
-        ok = process_dataset(ds_info, args.in_dir, args.out_dir, cfg)
+        ok = process_dataset(ds_info, args.in_dir, args.out_dir, cfg, skip_existing=args.skip_existing)
         if ok:
             successes.append(ds_info["name"])
         else:

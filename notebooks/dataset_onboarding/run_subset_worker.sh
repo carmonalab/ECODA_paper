@@ -44,11 +44,17 @@ if [[ ! -x "${PYTHON_EXEC}" ]]; then
     PYTHON_EXEC="$(which python3)"
 fi
 
+EXTRA_FLAGS=()
+if [[ "${4:-}" == "--skip-existing" ]]; then
+    EXTRA_FLAGS+=("--skip-existing")
+fi
+
 START_SEC=$(date +%s)
 "${PYTHON_EXEC}" "${PROJECT_ROOT}/notebooks/dataset_onboarding/create_subsets_hpc.py" \
     --in-dir "${IN_DIR}" \
     --out-dir "${OUT_DIR}" \
-    --only "${KEY}"
+    --only "${KEY}" \
+    "${EXTRA_FLAGS[@]}"
 END_SEC=$(date +%s)
 ELAPSED=$((END_SEC - START_SEC))
 
