@@ -1,329 +1,124 @@
-# ECODA_paper — TODO
+# ECODA_paper — Project Roadmap & Task Tracking
 
-Implementation plan for the remaining pipeline work. Phases are ordered:
-Phase 3 (benchmark rollout) → Phase 4 (batch effect analysis) → Phase 5 (new
-datasets) → Phase 6 (additional reviewer analyses) → human-managed tasks.
-Completed history is preserved in git; see `git log`.
-Merged 2026-08-13 with TODO_revision_plan.md (now deleted) and
-new_datasets_to_implement.md (kept as appendix, linked from Phase 5).
+Implementation plan and task tracking for manuscript revisions, benchmark extensions, and pipeline work.
 
-## Priority overview (from the 2026-07-29 revision plan, merged)
+---
 
-- Prio 1: multi-batch benchmark with batch-mixing metrics
-  (4.2); Ecotypes TNBC patient clustering (6.1); MrVI-vs-ECODA signal
-  attribution (6.2); batch-correction impact on unsupervised annotation (4.5);
-  clustering-resolution impact (6.5); Figure 3B marker-gene heatmap (6.3);
-  zero-handling range extension (6.6); new datasets (Phase 5).
-- Prio 2: downsampling robustness (6.4); PULSAR (3.2, later step) /
-  MOFA cellular (3.2); batch-mixing quantification supp fig (4.2).
-- Response text only (no code): circularity per-dataset table, MrVI/scPoli
-  objective mismatch, discovery-of-subgroups scope, translational-claim
-  tone-down (6.12).
+## Priority Overview
 
-## Phase 3 — src/5_run_benchmark_methods [agent implements; HPC runs]
+- **Priority 1:**
+  - Multi-batch benchmark with batch-mixing metrics (4.2).
+  - Ecotypes TNBC patient clustering (6.1).
+  - MrVI vs. ECODA signal attribution (6.2).
+  - Batch-correction impact on unsupervised cell-type annotation (4.5).
+  - Clustering-resolution scan (6.5).
+  - New dataset onboarding (Phase 5).
+- **Priority 2:**
+  - Downsampling robustness (6.4).
+  - Marker-cell-type stability and Figure 3B heatmap (6.3).
+  - Foundation models (PULSAR) feasibility (6.9).
+- **Manuscript Text Only (Author Managed):**
+  - Clinical circularity table per dataset, objective alignment (MrVI/scPoli vs. unsupervised clustering), and translational claim adjustments (6.12).
 
-- [ ] **3.1 Run pipelines for all remaining datasets** [IN PROGRESS — USER
-      RUNNING ON HPC]: (2026-08-11) `_debug` + Kfoury validated end-to-end
-      (Stage 1 → Stage 5, incl. all benchmark methods); implementation +
-      syntax/parse checks + HPC debug validation DONE (former 3.1/3.2).
-      Remaining commands (preprocess rollout currently running; then):
-      - `./src/4_cell_type_annotation/1_prepare_chunks.sh production`
-      - `./src/4_cell_type_annotation/2_submit_hpc_array.sh`
-      - `./src/4_cell_type_annotation/3_submit_merge.sh`
-      - `./src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh`
-      - `./src/5_run_benchmark_methods/run_r_sample_embedding_methods/1_submit_hpc_array.sh`
-      - `./src/5_run_benchmark_methods/run_transformation_zeroimp_analysis/1_submit_hpc_array.sh`
-      Dataset coverage — benchmark: Adams, Bassez, Gongsharma_cmv_young_males,
-      Kim, Lee, Pelka, Smillie, Stephenson (benchmark view), Wu, Zhang;
-      batch-effect: Joanito, Stephenson (batch_effect view), CombinedPBMC.
-      Zhu: no views (feeds only the CombinedPBMC stage-2 step 1.2) — stage 2
-      only, confirm participation.
-      GongSharma cap validation (cap log: 531,291 + 365,000 = 896,291 cells,
-      max 5000 per sample) checked when its preprocess task reaches the NAS
-      sync gate.
-      After all datasets complete: verify NAS outputs (preprocessed h5ads +
-      benchmark bundles), then resume 3.2 (new methods), 3.4 (docs), 3.5
-      (SLURM config cleanup), and Phase 4.
-- [x] **3.2 New methods** (DONE 2026-08-14, benchmark view; see
-      `.kilo/plans/1786651957910-pilotgm-qot-benchmark-implementation.md`):
-      - PILOT-GM-VAE (Prio 1) + QOT (Prio 2) implemented in
-        `1.1.1_benchmark_methods_py.py` (`--method qot|pilotgm`), vendored
-        `qot_utils_re.py` (PennShenLab/QOT @ 28cd529880c1, two hotfixes —
-        traceability in `docs/qot_hotfixes.md`), R ingest
-        (`process_qot_fig`/`process_pilotgm_fig`, keys `QOT_hvg{n}` /
-        `PILOT-GM-VAE_hvg{n}`), `constants.R` labels, HPC submitter arrays
-        (qot → CPU, pilotgm → GPU). NOTE: the current `PILOT` method key is
-        the plain-EMD variant (`pl.tl.wasserstein_distance`, no GM-VAE) —
-        `PILOT-GM-VAE` is a distinct key. Validation: `_debug` e2e on NAS
-        (both methods) + R ingest smoke test done locally; HPC validation
-        pending (see `docs/qot_hotfixes.md` / plan §6).
-      - Batch-effect view (`X_pca_harmony` input for PILOT-GM-VAE) stays
-        Phase 4 (`4.4` below).
-      - **PILOT NaN fix (commit `c547613`, `fill_unknown_ct` in
-        `1.1.1_benchmark_methods_py.py:326`)**: HiTME `layer2` annotations on
-        Lee/Zhang contain NaN for unclassified cells, which silently produced
-        all-zero PILOT EMD distances. The fix is committed but the **Lee/Zhang
-        PILOT bundles on NAS are STALE (all-zero EMD) — re-run pending**:
-        `run_python_sample_embedding_methods/1_submit_hpc_array.sh --ds_name Lee --methods pilot --force`
-        and same for `Zhang` (parallel-friendly, one terminal each).
-      - **QOT + PILOT-GM-VAE `_debug` HPC validation**: `_debug` e2e run
-        submitted 2026-08-16; once it passes, roll both methods out to all
-        benchmark datasets (`--methods qot,pilotgm` on the python submitter;
-        qot → CPU, pilotgm → GPU arrays). The notebook already ingests their
-        feathers (skip-with-message while absent).
-      - PULSAR (+UCE): LATER step, NOT included — foundation-model scale (UCE
-        1280-dim embeddings, multi-GB pretrained weights, PBMC-specific
-        pretrained checkpoints), unclear GPU/VRAM, out-of-domain for the
-        multi-tissue benchmark. Feasibility check needed; candidate for a
-        dedicated plan. See also 6.9.
-      - MOFA cellular (Prio 2, feasibility) still pending.
-      - Method-annotation columns for figures: "originally designed for sample
-        representation", "provides batch correction".
-- [x] **3.3 Notebook adaptation**: `benchmark_analysis.rmd` + `batch_effect_analysis.rmd`
-      read preprocessed h5ad (Step 4a approach: `ReadH5AD`/reticulate — benchmark on debug
-      dataset), paths from datasets.json view outputs, ingest `.feather` from NAS; strip
-      data-processing steps moved to HPC scripts.
-      - `benchmark_analysis.rmd` DONE (2026-08-12): backed h5ad obs-only reads,
-        NAS benchmark/pseudobulks/embeddings paths, unified exec times (NAS
-        feather + bundle-derived rows), RAM plot (Supp fig 14B), funky-heatmap
-        refactor (`build_funky_heatmap` in `src/utils/plotting.R`) with the
-        `benchmark_metrics` notebook parameter, zeroimp flattening fix +
-        underscore method-key rename in `run_zeroimp_analysis` (breaking change:
-        zeroimp bundles must be re-run with `--force`, see user to-dos).
-        `batch_effect_analysis.rmd` still pending (Phase 4).
-- [x] Metrics in main benchmark: Silhouette + LISI included in the metrics
-      vector (`benchmark_analysis.rmd:2557`); Modularity with multiple KNN
-      variants (sqrt(n)/3/6/9) in `src/utils/scoring_metrics.R`
-      (`calc_modularity`). DONE.
-- [x] **3.6 Composition methods moved to HPC** (DONE 2026-08-16; plan
-      `.kilo/plans/1786711296469-move-composition-methods-to-hpc.md`): the
-      notebook-local composition methods (ECODA_* family, GloProp,
-      Freq_highres, Avg_PCA_embedding, ECODA_deconv) now run as one
-      `composition` array task per dataset (obs-only worker: backed h5ad obs
-      + hvg2000 obsm + precomputed hvg2000 pseudobulk; set.seed(123) per
-      dataset; HiTME/scATOMIC combos guarded on ct-column presence). The
-      notebook reads ZERO h5ad files: bundles +
-      `<ds>_metadata.rds` (labels, cell/sample counts) + python-method
-      feathers; `result_list.rds` checkpointing dropped (fresh load every
-      knit). R workers log peak RSS (`peak_rss_gb()`, `/proc/self/status`
-      VmHWM) into the exec-log + each bundle (`mem_GB`) — R rows no longer
-      NA. Adams pseudobulk sample-name fix (hyphen/underscore mismatch, the
-      notebook silhouette crash) in the same plan (Phase 0).
-- [ ] **3.4 Docs**: README usage/workflow, ARCHITECTURE.md, AGENTS.md (also
-      update the AGENTS.md reference to the TODO phases after this restructure).
-- [ ] **3.5 SLURM config cleanup**: resolve or drop the leftover
-      `# TODO: Adapt for specific pipelines` comment on `SLURM_PARTITION`
-      (`src/slurm_config.sh:114`) — decide per-stage partitions for stages 2–4
-      or remove the comment.
+---
 
-## Phase 4 — Batch effect analysis [agent + HPC]
+## Phase 3 — Benchmark Pipeline Rollout (`src/5_run_benchmark_methods/`)
 
-- [x] Pseudobulk DESeq2+limma with batch-only correction (Joanito + Stephenson
-      wired via `DESeq2.normalize()`/`get_pb_deseq2()` `batch_col`/`blind`/
-      `correct_batch` at all 4 `batch_effect_analysis.rmd` call sites; benchmark
-      defaults unchanged).
-- [x] CombinedPBMC (Stephenson+GongSharma+Zhu) handling in
-      `batch_effect_analysis.rmd` (analyzed at line 594+).
-- [x] `columns.batch` in datasets.json: Joanito `seqtec`
-      (`1.3.1_prepare_joanito.R`), Kfoury `cells_lowres`
-      (`1.4.1_create_kfoury_lowres_ct.R`).
-- [ ] **4.1 ECODA generic `batch` argument**: generalize the hardcoded
-      Stephenson `ct_remove` subset (`batch_effect_analysis.rmd:244-248`) —
-      per-CT t-test/Wilcoxon (2 batches) or ANOVA/Kruskal-Wallis (>2), p<0.05;
-      print a warning naming significant cell types. No-leakage: batch input only.
-- [ ] **4.2 Multi-batch benchmark (Prio 1)**: datasets = KPMP Kidney, whole
-      Stephenson (by center, n=143), Joanito, CombinedPBMC, full GongSharma
-      (3 covariates), Covid-19 PBMC, Breast cancer, Diabetes. Separation with
-      AND without batch correction; when >1 major batch, process one
-      batch/covariate at a time (all methods except scPoli). Metrics: bio
-      separation + batch-mixing (silhouette, LISI; cLISI vs the other metrics
-      correlation on one dataset) → Supp fig.
-- [ ] **4.3 MrVI native batch_key** in the batch-effect notebook (MrVI
-      currently runs only at `_lowres` in `1.2_benchmark_methods_py.qmd`).
-- [ ] **4.4 GloScope + PILOT-GM-VAE on `X_pca_harmony`** in the batch-effect
-      notebook.
-- [ ] **4.5 Impact of batch correction on unsupervised cell type annotation for
-      ECODA (Prio 1)**.
-- [ ] **4.6 GongSharma**: run Harmony on all samples (batch = sample), Leiden
-      clustering in corrected space, compare labels uncorrected vs corrected,
-      add to Figure 3.
+- [x] **3.2 New Benchmark Methods Integration:**
+  - Implemented PILOT-GM-VAE and QOT in `1.1.1_benchmark_methods_py.py` (`--methods qot,pilotgm`).
+  - Vendored and hotfixed `qot_utils_re.py` (documented in [`docs/qot_hotfixes.md`](docs/qot_hotfixes.md)).
+  - R ingest functions (`process_qot_fig`, `process_pilotgm_fig`) and labels wired in `benchmark_analysis.rmd`.
+- [x] **3.3 Notebook Decoupling & Interactive Analysis:**
+  - `benchmark_analysis.rmd` reads zero raw `.h5ad` files directly; ingests precomputed `.feather` matrices and `.rds` bundles via `load_hpc_benchmark_results()`.
+  - Added Silhouette and LISI metrics into the core evaluation vector.
+- [x] **3.6 HPC Composition Methods Array:**
+  - Migrated notebook-local composition methods (ECODA family, GloProp, EPIC, Avg_PCA, Freq_highres) into an HPC array task (`composition` method).
+  - Added peak RSS memory logging (`peak_rss_gb()`, VmHWM) to all R workers.
+- [x] **3.4 Documentation Overhaul:**
+  - Reorganized and decluttered `README.md`, `AGENTS.md`, and `docs/ARCHITECTURE.md` with strict separation of concerns.
+- [ ] **3.1 Complete HPC Execution Across All Datasets [User Action]:**
+  - Run full benchmark arrays on HPC for all registered cohorts.
+  - Re-run stale PILOT bundles for Lee and Zhang (`1_submit_hpc_array.sh --methods pilot --force`).
+  - Execute QOT and PILOT-GM-VAE across full benchmark cohorts.
+- [ ] **3.5 SLURM Partition Config Cleanup:**
+  - Review partition defaults in `src/slurm_config.sh`.
 
-## Phase 5 — New datasets (from the BIB benchmark study) [review task first]
+---
 
-Reviewer asked to add datasets from the study
-https://academic.oup.com/bib/article/26/5/bbaf547/8287234 (BIB 2025). Prefer
-downloading from where that study's authors provide the data, with no or minor
-changes; whether a dataset shows batch effects decides benchmark vs batch-effect
-usage in this repo. Full extraction (counts, classes, feasibility colors,
-comments) is in `new_datasets_to_implement.md` (Excel source:
-`/Users/christianhalter/Desktop/ECODA_PAPER_DATASETS.xlsx`).
-Implementation plan (current authority): `.kilo/plans/1786899069337-onboard-new-datasets-phase5.md`.
+## Phase 4 — Batch Effect Analysis
 
-- [x] **5.1 Check the BIB study (bbaf547) for author-provided data locations**
-      DONE (2026-08-17 planning/onboarding session): Zenodo 8370081 (Part 1,
-      latest version of the cited 7435911/7956950 — same concept record,
-      identical md5s) = `Datasets.tar.gz` + `diabetes.h5ad` (+ Kidney.h5ad,
-      follicular_lymphoma.h5ad NOT used); Zenodo 7957118 (Part 2) =
-      `lungatlas.h5ad.tar.gz`; Zenodo 14615923 (Part 3) = `BreastCncr_processed.h5ad`,
-      `Kidney_KPMP.h5ad`, `Myocardial_Infarc_2.h5ad` (+ kidney_cancer_processed.h5ad
-      EXCLUDED); CellxGene for Alzheimer (SEA-AD collection `1ca90a2d-…`,
-      dataset `c2b49431-…`, cell count exactly 1,395,601) and Parkinson
-      (collection `d5d0df8f-…`, dataset `0270e5e5-…`, 2,096,155 cells).
-      Download script: `notebooks/dataset_onboarding/download_datasets.sh`
-      (sequential, md5-verified, selective tar extraction; `download_log.md`).
-- [ ] **5.2 Benchmark candidates (green)**: Alzheimer (n=83), Lupus PBMC
-      (n=261), Myocardial infarction (n=23; has only clustering, no
-      high-granularity CTs).
-- [ ] **5.3 Batch-effect candidates (green/yellow)**: whole Stephenson by
-      center (n=143; extension of the existing batch-effect view), KPMP Kidney
-      (n=45; check batch effects first), Breast cancer (n=126; no cancer cells
-      — contralateral unaffected samples), Covid-19 PBMC (n=151; GEO), Diabetes
-      (n=52; yellow — 9 sub-datasets, many conditions).
-- [ ] **5.4 Check-before-use (orange)**: Lung (n=165; too many technical
-      conditions), Parkinson (n=97; composition dominated by brain region —
-      possible negative control), Kidney cancer (n=17; too few samples),
-      Pancreas PDAC (n=35; separates by "Ductal 2" cells only).
-- [ ] **5.5 Sikkema Lung HCA** (reviewer-mentioned, data readily available;
-      draft `src/3_scrnaseq_preprocessing/TODO_STUMP_preprocess_sikkema.qmd`
-      exists) — test sample separation by tissue.
-- [ ] **5.6 Register approved datasets in datasets.json (ASK THE USER FIRST —
-      datasets.json must not be changed without asking)**, with the appropriate
-      view(s); then stage → preprocess → annotate → benchmark/batch-effect arrays.
-- [ ] **5.7 Onboarding notebooks + metrics** (IN PROGRESS — implemented; run
-      after downloads): shared `onboarding_utils.py` (count sanity, UMAP panels,
-      confounding crosstab, metrics-input writer) + standalone `onboarding_metrics.R`
-      (cell-level `calc_lisi` separation on unintegrated PCA, per-CT caps +
-      confounded-CT guards; validated on the NAS `_debug` view 2026-08-17, bio
-      `sample.origin` vs batch `Site`/`seqtec`). One
-      `notebooks/dataset_onboarding/dataset_check_<Name>.qmd` per dataset
-      (9 files, scaffolded but NOT yet run — downloads pending user). Render:
-      `PATH="$PWD/.pixi/envs/default/bin:$PATH" quarto render …` (python3
-      kernelspec = pixi default env, ipykernel added to pixi.toml). Metrics via
-      `pixi run -e default Rscript --vanilla onboarding_metrics.R`.
-- [ ] **5.8 Per-dataset study summaries + confirmed column mapping (T4)**:
-      agent reads each original paper; confirms the `columns` for datasets.json.
-- [ ] **5.9 Usage-decision checkpoint (T7, user)**: per dataset — benchmark /
-      batch-effect / negative control / exclude.
-- [ ] **5.10 Diabetes mouse-gene pipeline support (T9, conditional)**:
-      `standardize_gene_symbols` (`src/utils/py/gene_utils.py`) +
-      `1.1.1_preprocess.py` mouse handling (ortholog map + `mt-` mito detection).
-      REQUIRES USER SIGN-OFF; blocked on T7.
-- [ ] **5.11 HPC rollout (T10, user runs)**: validate Kidney + MI(2) end-to-end
-      first (stage → preprocess → annotate → benchmark/batch-effect arrays);
-      big files (Breast 29 GB, Alzheimer/Parkinson 1.4–2.1 M cells) need
-      high-mem preprocess nodes.
+- [x] **Pseudobulk DESeq2 + limma:** Batch-only correction implemented in `DESeq2.normalize()` / `get_pb_deseq2()`.
+- [x] **CombinedPBMC Cohort:** Staging and combination of Stephenson + GongSharma + Zhu.
+- [x] **Batch Metadata Tracking:** Integrated `columns.batch` in `datasets.json` (Joanito `seqtec`, Kfoury `cells_lowres`).
+- [ ] **4.1 Generic ECODA Batch-Associated Cell Type Removal:**
+  - Implement statistical test (t-test/Wilcoxon for 2 batches, ANOVA/Kruskal-Wallis for >2 batches, $p < 0.05$) to identify and optionally exclude batch-confounded cell types.
+- [ ] **4.2 Multi-Batch Benchmark Suite (Priority 1):**
+  - Evaluate datasets with defined technical batch structures (Stephenson, Joanito, CombinedPBMC, KPMP Kidney, Breast Cancer, Covid-19 PBMC).
+  - Quantify biological separation vs. batch-mixing metrics (Silhouette, LISI) across all methods with and without batch correction.
+- [ ] **4.3 MrVI Native `batch_key` Integration:**
+  - Wire native `batch_key` parameter in batch-effect benchmark evaluations.
+- [ ] **4.4 GloScope & PILOT-GM-VAE on Corrected Embeddings:**
+  - Benchmark on `X_pca_harmony` embeddings.
+- [ ] **4.5 Batch Correction Impact on Unsupervised Annotation:**
+  - Test the effect of batch correction prior to unsupervised Leiden clustering and ECODA stratification.
 
-Phase-5 follow-ups (from the plan, mostly out-of-scope for the onboarding plan):
-- [ ] `batch_effect_analysis.rmd` funkyheatmap like Figure 2a showing separation
-      by bio_col AND batch_col(s) (multiple batch columns possible) — out of
-      scope for the onboarding plan; new datasets' batch-effect views depend on it.
-- [ ] Diabetes mouse-gene preprocessing support — see 5.10.
-- [x] Annotation edge-case safety checks + `not_suitable_for_auto_annotation`
-      flag + Figure 3 handling (DONE 2026-08-17): worker never crashes on
-      0-annotated/<2-type/all-NA results, records per-method stats; flag wired
-      into `benchmark_pipeline.R` combos, Figure 3 A / Supp fig 19, and
-      datasets.json is documented (entries added only at T8 registration).
-- [ ] Per-dataset annotation-rate documentation: after the first HPC annotation
-      run of a new dataset, %-annotated cells + n unique types per method from
-      the merged view h5ads → `notebooks/dataset_onboarding/annotation_summary.json`
-      + short rationale paragraph in the qmd section 6 (why HiTME/scATOMIC may
-      be inappropriate, e.g. no/minimal immune cells).
+---
 
-## Phase 6 — Additional reviewer analyses [agent, Prio 1 first]
+## Phase 5 — New Dataset Onboarding (BIB Study Cohorts)
 
-- [ ] 6.1 Ecotypes: fully unsupervised ECODA patient clustering on a large
-      pre-treatment TNBC cohort (n≈100) with known chemotherapy response;
-      TME-type clusters vs clinical response. Addresses Rev#1 circularity
-      (also see 6.12). (skip this for now (but keep it here as open point). User will come back to this. it's crucial but user will let you know when and how to implement this)
-- [ ] 6.2 MrVI vs ECODA (Adams + Stephenson): identify the main gene program
-      driving MrVI separation that ECODA missed; PCA/UMAP colored by
-      gene-program UCell scores. (scPoli batch-effect observation — adjR2
-      quote — is discussion context for 6.2/6.12.)
-- [ ] 6.3 Marker-cell-type stability: per-CT DE genes (padj/FC) or top-10-50
-      markers; clustered Jaccard-overlap heatmap authors HR vs HiTME, then
-      authors HR vs Leiden_res_5. Plus Figure 3B shared-marker dotplot/heatmap. (prio 2)
-- [ ] 6.4 Downsampling sensitivity (Prio 2): separation score vs # cells per
-      cell type/cluster on two datasets; release all min.cell thresholds. (prio 2, skip for now, user will come back to this)
-- [ ] 6.5 Leiden resolution scan: extend the existing ECODA_seuratres_* range
-      (currently 0.1-20) until separation drops; no min.cell filtering. (already done. extended range to max 50) (just leave this point here)
-- [X] 6.6 Zero-handling range extension (current range too narrow). (already implented previously by user. range already extended)
-- [ ] 6.7 Runtime table: shuffled vs ECODA/GloProp comparison. (very low prio)
-- [ ] 6.8 LASSO-penalized classification comparison (does variance-based
-      selection approximate supervised selection?). (very low prio)
-- [ ] 6.9 Foundation models (PULSAR) + large-scale/multi-study scenarios
-      (OneK1K, HLCA) — discuss, benchmark where runnable. (prio 2-3)
-- [ ] 6.10 Supp fig: separation on females<40 and males>40 (same pattern as
-      males<40 — no cherry-picking). [needs user guidance on cohorts] (prio 2 but very easy to implement. just tap h5ad files on nas (already there), just eeds to get cell type composition. minimal computational cost. just need to add supplementary figure, showing the different combinations, all same results, whole dataset already shown in figure 1 (i think))
-- [ ] 6.11 Check how expert annotations were generated (manual vs automated
-      classifiers). [needs user knowledge]
-- [ ] 6.12 Response text (no code): circularity table per dataset (condition
-      defined by clinical tests, not cell composition — Adams: HRCT/PFTs, etc.);
-      MrVI/scPoli different objectives than unsupervised patient clustering;
-      discovery of subgroups is out of scope (validated in 6.1); tone down
-      translational marker-claim (multi-parameter panels not routine in
-      clinical practice). (user did that, will be done by the user)
+Reference plan: [`.kilo/plans/1786899069337-onboard-new-datasets-phase5.md`](.kilo/plans/1786899069337-onboard-new-datasets-phase5.md). Feasibility details: [`new_datasets_to_implement.md`](new_datasets_to_implement.md).
 
-## Human-managed tasks (not agent)
+- [x] **5.1 Data Sources & Catalog:**
+  - Identified Zenodo and CellxGene source locations for 9 target cohorts (Alzheimer, Breast Cancer, Covid-19 PBMC, Diabetes, Kidney KPMP, Lupus PBMC, Lung, Myocardial Infarction, Parkinson).
+- [x] **5.2 HPC Download Pipeline (T1 & T1.1):**
+  - Implemented `notebooks/dataset_onboarding/download_datasets_hpc.sh` and `run_download_worker.sh` (resumable `curl -C -`, Zenodo MD5 verification, CellxGene size checks, and automated NAS synchronization).
+- [x] **5.3 Diagnostic Onboarding Tooling (T3.1):**
+  - Scaffolded 9 per-dataset Quarto check notebooks (`dataset_check_<Name>.qmd`).
+  - Implemented `onboarding_utils.py` (sample-first subsetting, count validation, crosstabs) and standalone `onboarding_metrics.R` (cell-level LISI on unintegrated PCA).
+- [x] **5.4 Annotation Suitability Guardrails:**
+  - Added `not_suitable_for_auto_annotation` flag handling in `benchmark_pipeline.R` and Figure 3 / Supp Fig 19.
+- [ ] **5.5 Execute HPC Downloads [User Action]:**
+  - Run `download_datasets_hpc.sh` on HPC to transfer datasets to scratch and sync to NAS.
+- [ ] **5.6 Run Diagnostic Check Notebooks & Count Validation:**
+  - Render onboarding notebooks, verify raw integer count matrices, and inspect unintegrated PCA/UMAP batch separation.
+- [ ] **5.7 Dataset Review & Registration Checkpoint [User Decision]:**
+  - Decide cohort categorization (benchmark vs. batch-effect vs. negative control vs. exclude).
+  - Register approved cohorts in `datasets.json` (**ask user before editing**).
+- [ ] **5.8 Diabetes Mouse-Gene Handling (Conditional):**
+  - Add mouse gene ortholog mapping to `gene_utils.py` if Diabetes is approved for benchmark inclusion.
+- [ ] **5.9 Pipeline Rollout across Approved Cohorts:**
+  - Execute stage -> preprocess -> annotate -> benchmark array pipeline for new datasets.
 
-- HPC rollout of Phase 5 datasets (stage/preprocess/annotate/benchmark arrays),
-  guided by the BIB-study check (5.1).
-- GongSharma other-subsetting conditions (draft `preprocess_gongsharma.qmd`).
-- Where user input is required: 6.10 (cohort definition), 6.11 (annotation
-  provenance), 6.12 (response text).
+---
 
-## Ideas for later
+## Phase 6 — Additional Reviewer Analyses
 
-- CPU benchmark array throttling (`BENCHMARK_CPU_ARRAY_THROTTLE`, e.g. 4) for
-  the R/transzeroimp/PILOT submitters — deferred from the 2026-08-13
-  direct-env imports work: if the slim imports still show startup metadata
-  storms on the CPU arrays, throttle concurrency as a separate design
-  (`MAX_NUM_CHUNKS_PARALLEL` stays untouched). Long-term alternative:
-  node-shared `/srv/share/users/...` staging (documented, not implemented).
-- Optional (backfill): sacct `MaxRSS` backfill of `execution_times.feather`
-  `mem_GB` for R-method bundles computed BEFORE 2026-08-16 (workers only
-  started logging peak RSS then; legacy bundles keep `mem_GB = NA` until
-  their next `--force` run).
-- ECODA+Pseudobulk distance combos (`ECODA_PB_combo_*`): legacy, disabled in
-  `run_benchmark_analysis`, kept commented-out in `benchmark_analysis.rmd` for
-  internal testing only — NOT shown in publication figures.
-- Cell/sample/annotation counts from h5ad without full load (MOFAcellular
-  moved to 3.2; the benchmark notebook now gets them from
-  `<ds>_metadata.rds` — the metadata-bundle pattern could be extended to the
-  batch-effect notebook).
-- Gene blacklist before HVG selection: dump `aux/genes.blocklist.rds` (STACAS
-  default_black_list) to a text file (one gene per line; `full` and `no_sex`
-  variants), add `load_blacklist(path, exclude_sex=True)` to
-  `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py`, apply before HVG selection
-  (`adata = adata[:, ~adata.var_names.isin(blacklist)].copy()`).
-- Batch effect analysis: decide whether to run with and/or without batch
-  correction — more important to only do WITH batch correction; non-corrected
-  results possibly in the paper appendix (4.2 runs both).
-- Phase 4 details: `DESeq2.normalize()` `batch_col` is now correctly implemented
-  and wired (batch-only, never `"Sample"` as batch column; no-leakage — see
-  AGENTS.md); the ECODA batch-associated CT-removal warning detail (test each
-  cell type separately vs. checking global variance, p < 0.05) moved to 4.1.
-- on CUDA, torch's non-deterministic kernels (atomic reductions, cudnn autotuning) can still produce tiny run-to-run differences even with the same seed. Full GPU determinism would require torch.use_deterministic_algorithms(True) + CUBLAS_WORKSPACE_CONFIG, which scvi-tools doesn't enable.
-- Python-method feather writes (`to_feather`) are NOT atomic and the worker's
-  requeue-path feather deletion (1.1_run_worker.sh) runs only on ITS OWN
-  self-requeue — a scheduler kill (TIMEOUT/scancel) mid-write can leave a
-  partial `*_dists.feather` that the combo skip-check (`out_path.exists()`)
-  would treat as done and ship corrupt. Impact is small (dists/embs feathers
-  are <= a few hundred rows, written in ~fraction of a second), but the
-  documented recovery is deleting the killed task's per-dataset feathers
-  before re-running (observed 2026-08-17: qot/pilotgm task kills). Proper
-  solution if it ever bites: atomic `to_feather` (tmp+mv) or a per-combo
-  sidecar marker.
-- PILOT-GM-VAE runtime (accepted method limitation, NOT an infrastructure
-  bug): large datasets can exceed the 12 h shared-gpu per-task limit
-  (observed 2026-08-17: Gongsharma ~3-4 h per combo, task 4318505_3 TIMEOUT
-  with combos unfinished). The main benchmark figure uses only the default
-  combo (`hvg2000_highres`), which completed for the datasets it ran on;
-  missing combos/datasets are annotated later in benchmark_analysis.rmd.
-  No method should need > 12 h on a GPU — this is a limitation of the method
-  to report, not something to optimize away.
+- [ ] **6.1 Ecotypes TNBC Patient Clustering (Priority 1):**
+  - Unsupervised ECODA stratification on pre-treatment TNBC cohort ($n \approx 100$) evaluated against known chemotherapy response.
+- [ ] **6.2 MrVI vs. ECODA Signal Attribution:**
+  - Identify gene programs driving MrVI patient separation on Adams and Stephenson; score via UCell and compare with ECODA HVCs.
+- [ ] **6.3 Marker-Cell-Type Stability & Figure 3B:**
+  - Jaccard overlap of top marker genes across author annotations, HiTME, and multi-resolution Leiden clusters.
+- [ ] **6.4 Downsampling Robustness (Priority 2):**
+  - Measure separation score stability across varying cell counts per sample.
+- [x] **6.5 Leiden Resolution Scan:**
+  - Extended clustering resolution range up to resolution 50.
+- [x] **6.6 Zero-Imputation Range Extension:**
+  - Extended parameter evaluation range for zero-handling strategies.
+- [ ] **6.7 Shuffled Baseline Runtime Comparison:**
+  - Benchmark execution time table comparing ECODA and GloProp against randomized matrices.
+- [ ] **6.8 LASSO-Penalized Classification Comparison:**
+  - Compare unsupervised variance-based HVC selection against supervised sparse feature selection.
+- [ ] **6.9 Foundation Models (PULSAR / UCE) Feasibility Check:**
+  - Assess PBMC pretrained foundation model feasibility and requirements.
+- [ ] **6.10 Demographics Supplementary Figure:**
+  - Evaluate stratification consistency across age and sex stratifications.
+- [x] **6.12 Author Response Text:**
+  - Circularity discussion, objective alignment notes, and manuscript revisions handled by the author.
 
-## Keep-draft notes
+---
 
-- `src/3_scrnaseq_preprocessing/preprocess_gongsharma.qmd` (GongSharma other-subsetting
-  conditions) + `src/3_scrnaseq_preprocessing/TODO_STUMP_preprocess_sikkema.qmd` (future
-  Sikkema Lung dataset) are intentional drafts — do NOT delete.
+## Ideas & Technical Notes for Later
+
+- **Python `.feather` Atomic Writes:** Python workers write `.feather` files directly; consider writing to `.tmp` followed by `os.replace` if interrupted tasks ever leave partial feathers.
+- **PILOT-GM-VAE Runtime Documentation:** On large cohorts, PILOT-GM-VAE execution time is an intrinsic algorithmic property (several hours per combo on GPU); default combo (`hvg2000_highres`) serves as the primary benchmark comparison.
