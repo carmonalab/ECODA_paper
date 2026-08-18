@@ -99,8 +99,20 @@ def _sample_values(matrix, n_sample_cells: int = 200_000, seed: int = 0):
         if n_data == 0:
             return np.array([], dtype=float)
         take = min(n_pick, n_data)
-        idx = np.sort(rng.choice(n_data, size=take, replace=False))
-        return np.asarray(sp_data[idx], dtype=float)
+        if isinstance(sp_data, np.ndarray):
+            idx = rng.choice(n_data, size=take, replace=False)
+            return np.asarray(sp_data[np.sort(idx)], dtype=float)
+        # H5PY / on-disk dataset: sample random contiguous blocks to avoid
+        # 200,000 non-contiguous random seeks on compressed chunks
+        n_blocks = 10
+        block_size = max(1000, take // n_blocks)
+        max_start = max(0, n_data - block_size)
+        if max_start == 0:
+            return np.asarray(sp_data[:take], dtype=float)
+        starts = np.sort(rng.integers(0, max_start, size=n_blocks))
+        samples = [sp_data[s : s + block_size] for s in starts]
+        res = np.concatenate(samples)[:take]
+        return np.asarray(res, dtype=float)
 
     # In-memory dense numpy array
     if isinstance(matrix, np.ndarray):
@@ -693,7 +705,6 @@ def subset_by_samples(
 
     # --- per-sample reads (bounded by MAX_CELLS_PER_SAMPLE) ------------------
     cap_sample = int(cfg["MAX_CELLS_PER_SAMPLE"])
-    parts = []
     parent_positions = []
     for s in selected:
         c = sample_code.get(s)
@@ -706,16 +717,14 @@ def subset_by_samples(
         else:
             idx = np.sort(idx)
         parent_positions.append(idx)
-        part = adata[idx].to_memory()
-        part.obsm = {}
-        part.obsp = {}
-        parts.append(part)
-    if not parts:
+    if not parent_positions:
         raise ValueError("subset_by_samples: no cells selected")
-    parent_pos = np.concatenate(parent_positions)
+    parent_pos = np.sort(np.concatenate(parent_positions))
 
-    sub = ad.concat(parts, join="outer", merge="same")
-    del parts
+    # Single-pass slice on backed AnnData (orders of magnitude faster than 15 separate slices + concat)
+    sub = adata[parent_pos].to_memory()
+    sub.obsm = {}
+    sub.obsp = {}
 
     # Re-slice the parent's unintegrated obsm arrays to the subset rows so the
     # downstream UMAP/metrics stay in the original (global) embedding space.
