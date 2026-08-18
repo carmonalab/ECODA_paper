@@ -550,6 +550,68 @@ def _cap_total_stratified(obs: pd.DataFrame, strat_col, cap, seed) -> np.ndarray
     return keep
 
 
+def _fast_backed_csr_slice(h5_group, parent_pos: np.ndarray, n_vars: int):
+    """Fast bulk slice of on-disk CSR matrix from an HDF5 group or dataset.
+
+    Merges nearby row ranges to replace thousands of single-row HDF5 seeks
+    with a small number of bulk contiguous reads.
+    """
+    import scipy.sparse as sp
+
+    indptr_ds = h5_group["indptr"]
+    data_ds = h5_group["data"]
+    indices_ds = h5_group["indices"]
+
+    indptr = np.asarray(indptr_ds)
+    row_starts = indptr[parent_pos]
+    row_ends = indptr[parent_pos + 1]
+    row_lengths = row_ends - row_starts
+
+    sub_indptr = np.zeros(len(parent_pos) + 1, dtype=np.int64)
+    sub_indptr[1:] = np.cumsum(row_lengths)
+    total_nnz = sub_indptr[-1]
+
+    sub_data = np.empty(total_nnz, dtype=data_ds.dtype)
+    sub_indices = np.empty(total_nnz, dtype=indices_ds.dtype)
+
+    if total_nnz == 0:
+        return sp.csr_matrix((sub_data, sub_indices, sub_indptr), shape=(len(parent_pos), n_vars))
+
+    merged_intervals = []
+    cur_start = row_starts[0]
+    cur_end = row_ends[0]
+    cur_rows = []
+
+    for i in range(len(parent_pos)):
+        rs = row_starts[i]
+        re = row_ends[i]
+        dst_s = sub_indptr[i]
+        dst_e = sub_indptr[i + 1]
+        if rs == re:
+            continue
+        if rs <= cur_end + 2_000_000:
+            cur_end = max(cur_end, re)
+            cur_rows.append((rs, re, dst_s, dst_e))
+        else:
+            merged_intervals.append((cur_start, cur_end, cur_rows))
+            cur_start = rs
+            cur_end = re
+            cur_rows = [(rs, re, dst_s, dst_e)]
+    if cur_rows:
+        merged_intervals.append((cur_start, cur_end, cur_rows))
+
+    for blk_start, blk_end, rows in merged_intervals:
+        blk_data = data_ds[blk_start:blk_end]
+        blk_indices = indices_ds[blk_start:blk_end]
+        for rs, re, dst_s, dst_e in rows:
+            offset_s = rs - blk_start
+            offset_e = re - blk_start
+            sub_data[dst_s:dst_e] = blk_data[offset_s:offset_e]
+            sub_indices[dst_s:dst_e] = blk_indices[offset_s:offset_e]
+
+    return sp.csr_matrix((sub_data, sub_indices, sub_indptr), shape=(len(parent_pos), n_vars))
+
+
 def subset_by_samples(
     adata,
     sample_col: str | None = None,
@@ -722,8 +784,26 @@ def subset_by_samples(
         raise ValueError("subset_by_samples: no cells selected")
     parent_pos = np.sort(np.concatenate(parent_positions))
 
-    # Single-pass slice on backed AnnData (orders of magnitude faster than 15 separate slices + concat)
-    sub = adata[parent_pos].to_memory()
+    # Fast slice on backed AnnData (orders of magnitude faster than scanpy default row seeks)
+    extracted_fast = False
+    if getattr(adata, "isbacked", False):
+        try:
+            import h5py
+            import anndata as ad
+            fpath = getattr(adata, "filename", None)
+            if fpath and os.path.exists(fpath):
+                with h5py.File(fpath, "r") as hf:
+                    if "X" in hf and isinstance(hf["X"], h5py.Group) and "indptr" in hf["X"]:
+                        sub_X = _fast_backed_csr_slice(hf["X"], parent_pos, adata.n_vars)
+                        sub_obs = adata.obs.iloc[parent_pos].copy()
+                        sub_var = adata.var.copy()
+                        sub = ad.AnnData(X=sub_X, obs=sub_obs, var=sub_var)
+                        extracted_fast = True
+        except Exception:
+            extracted_fast = False
+
+    if not extracted_fast:
+        sub = adata[parent_pos].to_memory()
     sub.obsm = {}
     sub.obsp = {}
 
