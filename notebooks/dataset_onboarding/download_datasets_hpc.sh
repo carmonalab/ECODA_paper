@@ -147,12 +147,12 @@ append_log() {
       fi
       if [[ -f "${sf}" ]]; then
         local st f sz ma me note
-        st="$(grep '^STATUS=' "${sf}" | cut -d= -f2- | head -1)"
-        f="$(grep '^FILE=' "${sf}" | cut -d= -f2- | head -1)"
-        sz="$(grep '^SIZE=' "${sf}" | cut -d= -f2- | head -1)"
-        ma="$(grep '^MD5_ACTUAL=' "${sf}" | cut -d= -f2- | head -1)"
-        me="$(grep '^MD5_EXPECTED=' "${sf}" | cut -d= -f2- | head -1)"
-        note="$(grep -E '^(SKIPPED|FILES|ERROR|VERIFY|MD5_RECORDED)=' "${sf}" | cut -d= -f2- | paste -sd ', ' -)"
+        st="$(grep '^STATUS=' "${sf}" | cut -d= -f2- | head -1 || true)"
+        f="$(grep '^FILE=' "${sf}" | cut -d= -f2- | head -1 || true)"
+        sz="$(grep '^SIZE=' "${sf}" | cut -d= -f2- | head -1 || true)"
+        ma="$(grep '^MD5_ACTUAL=' "${sf}" | cut -d= -f2- | head -1 || true)"
+        me="$(grep '^MD5_EXPECTED=' "${sf}" | cut -d= -f2- | head -1 || true)"
+        note="$(grep -E '^(SKIPPED|FILES|ERROR|VERIFY|MD5_RECORDED)=' "${sf}" | cut -d= -f2- | paste -sd ', ' - || true)"
         printf -- '- **Key:** %s **Status:** %s\n  - File: %s (%s)\n  - md5: %s (expected %s)\n' \
           "${k}" "${st:-?}" "${f:-?}" "${sz:-?}" "${ma:-n/a}" "${me:-n/a}"
         if [[ -n "${note}" ]]; then
@@ -322,8 +322,8 @@ STATUS_FAILED=()
 for k in "${REQ_KEYS[@]}"; do
   sf="${STATUS_DIR}/${k}.status"
   if [[ -f "${sf}" ]] && grep -q '^STATUS=OK$' "${sf}"; then
-    f="$(grep '^FILE=' "${sf}" | cut -d= -f2- | head -1)"
-    sz="$(grep '^SIZE=' "${sf}" | cut -d= -f2- | head -1)"
+    f="$(grep '^FILE=' "${sf}" | cut -d= -f2- | head -1 || true)"
+    sz="$(grep '^SIZE=' "${sf}" | cut -d= -f2- | head -1 || true)"
     echo "  OK   ${k}  (${f:-?}, ${sz:-?})"
   else
     echo "  FAIL ${k}"
@@ -362,7 +362,7 @@ SYNC_LIST="${STATUS_DIR}/.sync_list"
 for sf in "${STATUS_DIR}"/*.status; do
   [[ -f "${sf}" ]] || continue
   grep -q '^STATUS=OK$' "${sf}" || continue
-  f="$(grep '^FILE=' "${sf}" | cut -d= -f2- | head -1)"
+  f="$(grep '^FILE=' "${sf}" | cut -d= -f2- | head -1 || true)"
   [[ -n "${f}" ]] && printf '%s\n' "${f}" >> "${SYNC_LIST}"
   for nf in $(grep '^FILES=' "${sf}" 2>/dev/null | cut -d= -f2- | tr ',' ' '); do
     [[ -n "${nf}" ]] && printf '%s\n' "${nf}" >> "${SYNC_LIST}"
@@ -388,14 +388,14 @@ for k in "${REQ_KEYS[@]}"; do
   # Tar keys: the canonical outputs carry worker-recorded md5s (MD5_<file>=) --
   # verify the NAS copy against them; fall back to scratch==NAS identity for
   # statuses written by older workers without recorded extracted md5s.
-  files_list="$(grep '^FILES=' "${sf}" 2>/dev/null | cut -d= -f2- | tr ',' ' ')"
+  files_list="$(grep '^FILES=' "${sf}" 2>/dev/null | cut -d= -f2- | tr ',' ' ' || true)"
   if [[ -n "${files_list}" ]]; then
     for nf in ${files_list}; do
       if [[ "${DOWNLOAD_SKIP_NAS_MD5:-0}" == "1" ]]; then
         echo "  ${nf}: NAS size $(stat -c %s "${NAS_DEST}/${nf}" 2>/dev/null || echo '?') (md5 verify skipped)"
         continue
       fi
-      exp_md5="$(grep "^MD5_${nf}=" "${sf}" 2>/dev/null | cut -d= -f2- | head -1)"
+      exp_md5="$(grep "^MD5_${nf}=" "${sf}" 2>/dev/null | cut -d= -f2- | head -1 || true)"
       if [[ -n "${exp_md5}" ]]; then
         na="$(md5sum "${NAS_DEST}/${nf}" | awk '{print $1}')"
         if [[ "${na}" == "${exp_md5}" ]]; then
@@ -417,8 +417,8 @@ for k in "${REQ_KEYS[@]}"; do
     done
     continue
   fi
-  f="$(grep '^FILE=' "${sf}" 2>/dev/null | cut -d= -f2- | head -1)"
-  exp="$(grep '^MD5_ACTUAL=' "${sf}" 2>/dev/null | cut -d= -f2- | head -1)"
+  f="$(grep '^FILE=' "${sf}" 2>/dev/null | cut -d= -f2- | head -1 || true)"
+  exp="$(grep '^MD5_ACTUAL=' "${sf}" 2>/dev/null | cut -d= -f2- | head -1 || true)"
   [[ -z "${f}" || -z "${exp}" ]] && continue
   if [[ "${DOWNLOAD_SKIP_NAS_MD5:-0}" == "1" ]]; then
     echo "  ${f}: NAS size $(stat -c %s "${NAS_DEST}/${f}" 2>/dev/null || echo '?') (md5 verify skipped)"
