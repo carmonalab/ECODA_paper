@@ -63,6 +63,27 @@ def locate_counts(adata, verbose: bool = True) -> tuple:
     raise ValueError("No counts found: no 'counts' layer, no X, no raw.X.")
 
 
+def _extract_sparse_data_array(matrix):
+    """Extract the 1-D array / dataset of non-zero values from any sparse matrix."""
+    if hasattr(matrix, "format") and hasattr(matrix, "data"):
+        # In scipy.sparse (csr_matrix, csc_matrix, etc.): matrix.data is a 1D ndarray
+        return matrix.data
+    if hasattr(matrix, "_data"):
+        # In anndata backed sparse dataset (_CSRDataset, _CSCDataset): matrix._data is an h5py.Dataset
+        return matrix._data
+    if hasattr(matrix, "group") and hasattr(matrix.group, "__getitem__") and "data" in matrix.group:
+        return matrix.group["data"]
+    return None
+
+
+def _is_sparse(matrix) -> bool:
+    if hasattr(matrix, "format") or hasattr(matrix, "tocsr") or hasattr(matrix, "toarray") or hasattr(matrix, "_data"):
+        return True
+    if hasattr(matrix, "group") and hasattr(matrix.group, "__getitem__") and "data" in matrix.group:
+        return True
+    return False
+
+
 def _sample_values(matrix, n_sample_cells: int = 200_000, seed: int = 0):
     """Draw a flat sample of matrix values (numpy 1-D) for sanity checks."""
     rng = np.random.default_rng(seed)
@@ -71,18 +92,33 @@ def _sample_values(matrix, n_sample_cells: int = 200_000, seed: int = 0):
     n_pick = min(n_sample_cells, total)
     if total == 0:
         return np.array([], dtype=float)
-    if _is_sparse(matrix):
-        # Sparse: draw random (row, col) pairs without building a dense copy.
-        vals = matrix.data
-        if len(vals) >= n_pick:
-            return np.asarray(rng.choice(vals, size=n_pick, replace=False), dtype=float)
-        return np.asarray(vals, dtype=float)
-    flat = np.asarray(matrix).ravel()
-    return np.asarray(rng.choice(flat, size=n_pick, replace=False), dtype=float)
 
+    sp_data = _extract_sparse_data_array(matrix)
+    if sp_data is not None:
+        n_data = len(sp_data)
+        if n_data == 0:
+            return np.array([], dtype=float)
+        take = min(n_pick, n_data)
+        idx = np.sort(rng.choice(n_data, size=take, replace=False))
+        return np.asarray(sp_data[idx], dtype=float)
 
-def _is_sparse(matrix) -> bool:
-    return hasattr(matrix, "toarray") or hasattr(matrix, "tocsr")
+    # In-memory dense numpy array
+    if isinstance(matrix, np.ndarray):
+        flat = matrix.ravel()
+        take = min(n_pick, len(flat))
+        idx = np.sort(rng.choice(len(flat), size=take, replace=False))
+        return np.asarray(flat[idx], dtype=float)
+
+    # Dense backed h5py dataset (sample rows to avoid pulling full matrix)
+    if hasattr(matrix, "__getitem__"):
+        n_rows = min(1000, n_cells)
+        row_idx = np.sort(rng.choice(n_cells, size=n_rows, replace=False))
+        sub_chunk = np.asarray(matrix[row_idx, :]).ravel()
+        take = min(n_pick, len(sub_chunk))
+        idx = np.sort(rng.choice(len(sub_chunk), size=take, replace=False))
+        return np.asarray(sub_chunk[idx], dtype=float)
+
+    return np.array([], dtype=float)
 
 
 def count_sanity_check(
@@ -109,7 +145,19 @@ def count_sanity_check(
     n_cells, n_genes = counts.shape
     sparse = _is_sparse(counts)
     is_csr = hasattr(counts, "format") and counts.format == "csr"
-    n_nonzero = counts.nnz if sparse else int(np.count_nonzero(counts))
+
+    if hasattr(counts, "nnz"):
+        n_nonzero = counts.nnz
+    elif hasattr(counts, "_data"):
+        n_nonzero = len(counts._data)
+    elif hasattr(counts, "group") and hasattr(counts.group, "__getitem__") and "data" in counts.group:
+        n_nonzero = len(counts.group["data"])
+    elif sparse:
+        sp_data = _extract_sparse_data_array(counts)
+        n_nonzero = len(sp_data) if sp_data is not None else 0
+    else:
+        n_nonzero = int(np.count_nonzero(counts))
+
     sparsity = 1.0 - (n_nonzero / (n_cells * n_genes)) if n_cells * n_genes else float("nan")
 
     sample = _sample_values(counts, n_sample_cells=n_sample_cells)
