@@ -369,7 +369,7 @@ for sf in "${STATUS_DIR}"/*.status; do
   done
 done
 sort -u "${SYNC_LIST}" -o "${SYNC_LIST}"
-rsync -rlptDv \
+rsync -rltDv --no-perms --no-owner --no-group \
   --exclude '_status/' \
   --exclude '_tar_tmp.*' \
   --include '*/' \
