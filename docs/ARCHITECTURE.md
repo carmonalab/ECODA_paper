@@ -26,9 +26,12 @@ source for the CombinedPBMC dataset that is never preprocessed standalone).
 
 ## HPC Folder Layout
 
-Repo lives at `~/ECODA_paper` on the HPC (only affects docs; `PROJECT_ROOT`
-derives automatically via `slurm_config.sh`). Worker nodes only access local
-scratch; the NAS is reachable from the login node only.
+Repo lives at `~/ECODA_paper` on the HPC — **NOT `$HOME/scratch/ECODA_paper`,
+which is the `HPC_SCRATCH_DIR` data area and is not a git repo**. `PROJECT_ROOT`
+derives automatically via `slurm_config.sh` (so pipelines run from either path),
+but all git operations and submitter invocations belong in `~/ECODA_paper`.
+Worker nodes only access local scratch; the NAS is reachable from the login
+node only.
 
 ```
 # HPC home (Bamboo cluster)

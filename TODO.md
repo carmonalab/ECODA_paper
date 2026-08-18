@@ -302,8 +302,7 @@ Phase-5 follow-ups (from the plan, mostly out-of-scope for the onboarding plan):
   and wired (batch-only, never `"Sample"` as batch column; no-leakage — see
   AGENTS.md); the ECODA batch-associated CT-removal warning detail (test each
   cell type separately vs. checking global variance, p < 0.05) moved to 4.1.
-- on CUDA, torch's non-deterministic kernels
-
+- on CUDA, torch's non-deterministic kernels (atomic reductions, cudnn autotuning) can still produce tiny run-to-run differences even with the same seed. Full GPU determinism would require torch.use_deterministic_algorithms(True) + CUBLAS_WORKSPACE_CONFIG, which scvi-tools doesn't enable.
 - Python-method feather writes (`to_feather`) are NOT atomic and the worker's
   requeue-path feather deletion (1.1_run_worker.sh) runs only on ITS OWN
   self-requeue — a scheduler kill (TIMEOUT/scancel) mid-write can leave a
@@ -322,7 +321,6 @@ Phase-5 follow-ups (from the plan, mostly out-of-scope for the onboarding plan):
   missing combos/datasets are annotated later in benchmark_analysis.rmd.
   No method should need > 12 h on a GPU — this is a limitation of the method
   to report, not something to optimize away.
- (atomic reductions, cudnn autotuning) can still produce tiny run-to-run differences even with the same seed. Full GPU determinism would require torch.use_deterministic_algorithms(True) + CUBLAS_WORKSPACE_CONFIG, which scvi-tools doesn't enable.
 
 ## Keep-draft notes
 
