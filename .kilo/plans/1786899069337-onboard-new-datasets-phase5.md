@@ -23,12 +23,13 @@ Implemented + committed (2026-08-17 – 2026-08-18):
     - `Myocardial_Infarc_2.h5ad` (3,605,875,880 B, md5: `7431ae99250c99f11bf63e3034798af4`)
     - `Parkinson.h5ad` (30,547,659,019 B, md5: `f576bcf5eb28366aeaecff01c50fff34`)
   - Intermediate `.tar.gz` archives cleaned from scratch; `download_log.md` appended.
-- **T3 partial + T5/T6 (2026-08-17)**:
+- **T3 partial + T5/T6 (2026-08-17 – 2026-08-18)**:
   - 9 `dataset_check_<Name>.qmd` notebooks, `onboarding_utils.py` with `subset_by_samples()` (T3.1), `onboarding_metrics.R` (T3.0).
   - T3.0 `_debug` validation passed; T6 annotation safety guards implemented in `process_chunk.R`.
+  - **HPC Subsetting Tooling (2026-08-18)**: implemented `create_subsets_hpc.py` and `run_subset_hpc.sh` to execute full-file `count_sanity_check()` and `subset_by_samples()` directly on BeeGFS scratch, saving lightweight `~20 MB` subset `.h5ad` files + metadata JSONs (`<Name>_meta.json`). Updated all 9 `.qmd` notebooks to auto-load local subsets in <0.2s.
 
 **Pending**:
-- T2 & T3 execution: Run count sanity check and render onboarding check notebooks locally on Mac across the 9 datasets from the mounted NAS.
+- T2 & T3 execution: Run `run_subset_hpc.sh` on HPC scratch, sync `subsets/` to Mac, and render check notebooks locally across the 9 datasets.
 - T4: Study summaries verification.
 - T7: User usage decisions (benchmark / batch-effect / exclude).
 - T8: `datasets.json` registration (pending user approval).

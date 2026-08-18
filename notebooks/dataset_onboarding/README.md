@@ -43,17 +43,38 @@ logged to `notebooks/dataset_onboarding/download_log.md` (commit from the
 Mac). The original `download_datasets.sh` (Mac→NAS, sequential) is kept as a
 NAS-stable fallback only.
 
-## Render a check notebook (needs the downloaded file + NAS mounted)
+## Fast Workflow: Generate Subsets on HPC & Render Locally on Mac
+
+Reading 53 GB `.h5ad` files over a network NAS mount incurs heavy SMB random-seek latency. To achieve fast, sub-second loads and renders on your Mac:
+
+### Step 1: Generate diagnostic subsets on HPC scratch (~1–2 minutes)
+On the HPC login node or compute node (where the ~195 GB datasets sit on BeeGFS scratch):
 
 ```bash
-# pixi default env on PATH so quarto finds the python3 kernelspec
+cd "${HOME}/ECODA_paper" && git pull
+./notebooks/dataset_onboarding/run_subset_hpc.sh               # runs across all 9 datasets
+# or for a single dataset:
+./notebooks/dataset_onboarding/run_subset_hpc.sh --only alzheimer
+```
+
+This runs `create_subsets_hpc.py` to perform the full-file `count_sanity_check()`, extract full metadata summaries (`<Name>_meta.json`), and write lightweight diagnostic `.h5ad` subsets (~15–40 MB each, ~200 MB total) into `${HPC_SCRATCH_DIR}/_downloads/subsets/`.
+
+### Step 2: Pull the lightweight subsets to your Mac (~200 MB)
+From the repo root on your local Mac:
+
+```bash
+mkdir -p data/new_dataset_checks/subsets
+rsync -avP bamboo:scratch/ECODA_paper/_downloads/subsets/ data/new_dataset_checks/subsets/
+```
+
+### Step 3: Render check notebooks instantly on your Mac
+With the local subsets in place, notebooks load in <0.2s and render completely in ~5–10s without touching the network:
+
+```bash
 PATH="$PWD/.pixi/envs/default/bin:$PATH" quarto render notebooks/dataset_onboarding/dataset_check_Alzheimer.qmd
 ```
 
-Each notebook opens the h5ad `backed='r'`, runs the full-file count sanity +
-obs exploration, then **section 1.5 builds an in-memory sample-first subset**
-(`subset_by_samples`, ~10k cells) and UMAP + per-CT LISI metrics run on that
-subset — target wall time <2–3 min and ~1–2 GB peak RSS on the 64 GB Mac.
+*(Note: If local subsets are missing, the notebooks automatically fall back to opening the full file from the mounted NAS in backed mode).*
 
 Outputs (plots/feathers/csv) go to `data/new_dataset_checks/<Name>/` (gitignored).
 

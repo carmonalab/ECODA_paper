@@ -1019,3 +1019,64 @@ def plt_close(fig):
     import matplotlib.pyplot as plt
 
     plt.close(fig)
+
+
+def load_onboarding_dataset_or_subset(name: str, nas_file: str | Path, here: Path) -> dict:
+    """Find and load either a precomputed diagnostic subset or the full NAS file.
+
+    Search priority for precomputed subset:
+      1. data/new_dataset_checks/subsets/<name>_subset.h5ad
+      2. data/new_dataset_checks/<name>/<name>_subset.h5ad
+      3. <nas_dir>/subsets/<name>_subset.h5ad
+
+    Returns a dict:
+      mode: 'subset' or 'nas'
+      sub: in-memory subset AnnData (if mode=='subset')
+      adata: backed full AnnData (if mode=='nas')
+      meta: dict from <name>_meta.json (if mode=='subset')
+    """
+    root = here.parent.parent
+    nas_path = Path(nas_file)
+    cands = [
+        root / "data" / "new_dataset_checks" / "subsets" / f"{name}_subset.h5ad",
+        root / "data" / "new_dataset_checks" / name / f"{name}_subset.h5ad",
+        nas_path.parent.parent / "subsets" / f"{name}_subset.h5ad",
+    ]
+
+    for subset_p in cands:
+        meta_p = subset_p.with_name(f"{name}_meta.json")
+        if subset_p.exists() and meta_p.exists():
+            print(f"[{name}] Loading precomputed subset from: {subset_p}")
+            sub = sc.read_h5ad(subset_p)
+            with open(meta_p) as f:
+                meta = json.load(f)
+            print(f"[{name}] Precomputed metadata loaded (created {meta.get('created_at', 'unknown')})")
+            return {
+                "mode": "subset",
+                "sub": sub,
+                "adata": None,
+                "meta": meta,
+                "subset_path": str(subset_p),
+                "meta_path": str(meta_p),
+            }
+
+    if nas_path.exists():
+        print(f"[{name}] Opening full file from NAS in backed mode: {nas_path}")
+        adata = sc.read_h5ad(nas_path, backed="r")
+        return {
+            "mode": "nas",
+            "sub": None,
+            "adata": adata,
+            "meta": None,
+            "nas_path": str(nas_path),
+        }
+
+    err_msg = (
+        f"[{name}] ERROR: Neither precomputed subset nor NAS file found.\n"
+        f"  Looked for subset at: {[str(p) for p in cands]}\n"
+        f"  Looked for NAS file at: {nas_path}\n\n"
+        f"To generate subsets on the HPC and pull them locally:\n"
+        f"  1. Run on HPC: ./notebooks/dataset_onboarding/run_subset_hpc.sh --only {name.lower().split('_')[0]}\n"
+        f"  2. Pull to Mac: rsync -avP bamboo:scratch/ECODA_paper/_downloads/subsets/ data/new_dataset_checks/subsets/"
+    )
+    raise FileNotFoundError(err_msg)

@@ -27,9 +27,6 @@ NAS_FILE = '/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/Joo
 NAME = 'Alzheimer'
 EXPECTED = {"cells": 1395601, "samples": 83, "ct_types": 18}
 
-# Confirmed/best-guess columns. The agent confirms these against the actual
-# obs columns printed in section 3 (candidate detection below); anything not
-# found there falls back to the detected candidates automatically.
 SAMPLE_COL = None
 BIO_COL = 'disease'
 BATCH_COLS = []
@@ -50,102 +47,115 @@ OUT.mkdir(parents=True, exist_ok=True)
 
 
 ```{python}
-if not Path(NAS_FILE).exists():
-    print("ERROR: input file not found on NAS:")
-    print("  " + NAS_FILE)
-    print()
-    print("Run the download script first (from the repo root, NAS mounted):")
-    print("  ./notebooks/dataset_onboarding/download_datasets.sh --only %s" % NAME.lower().split("_")[0])
-    sys.exit(1)
+ds_data = ou.load_onboarding_dataset_or_subset(NAME, NAS_FILE, HERE)
+mode = ds_data["mode"]
+sub = ds_data["sub"]
+adata = ds_data["adata"]
+meta_info = ds_data["meta"]
 ```
 
 ## 1. File structure
 
 ```{python}
-adata = sc.read_h5ad(NAS_FILE, backed="r")
-print(adata)
-```
-
-```{python}
-print("n_obs x n_vars:", adata.shape)
-print("layers:", dict(adata.layers))
-print("obsm keys:", list(adata.obsm.keys()))
-print("obsp keys:", list(adata.obsp.keys()))
-has_raw = adata.raw is not None
-print("has raw:", has_raw)
+if mode == "subset":
+    struct = meta_info["full_file_structure"]
+    print("Full file n_obs x n_vars:", (struct["n_obs"], struct["n_vars"]))
+    print("layers:", struct["layers"])
+    print("obsm keys:", struct["obsm"])
+    print("obsp keys:", struct["obsp"])
+    print("has raw:", struct["has_raw"])
+    print(f"Diagnostic subset n_obs x n_vars: {sub.shape}")
+else:
+    print("n_obs x n_vars:", adata.shape)
+    print("layers:", dict(adata.layers))
+    print("obsm keys:", list(adata.obsm.keys()))
+    print("obsp keys:", list(adata.obsp.keys()))
+    print("has raw:", adata.raw is not None)
 ```
 
 ## 1.5 Sample-first subsetting (RAM-bounded, ~10k cells)
 
 ```{python}
-# Resolve effective columns: prefer the confirmed/best-guess names, fall back
-# to the first detected candidate (advisory heuristics). Moved here from
-# section 3 so the whole downstream analysis can run on the in-memory subset.
-def pick(guess, candidates):
-    if guess is not None and guess in adata.obs.columns:
-        return guess
-    return candidates[0] if candidates else None
+if mode == "subset":
+    eff = meta_info["effective_columns"]
+    SAMPLE_COL = SAMPLE_COL or eff["sample_col"]
+    BIO_COL = BIO_COL or eff["bio_col"]
+    CT_COL = CT_COL or eff["ct_col"]
+    if not BATCH_COLS:
+        BATCH_COLS = eff["batch_cols"]
+    subset_summary = meta_info["subset_summary"]
+    print("effective SAMPLE_COL:", SAMPLE_COL)
+    print("effective BIO_COL:", BIO_COL)
+    print("effective BATCH_COLS:", BATCH_COLS)
+    print("effective CT_COL:", CT_COL)
+    print(
+        "subset summary: %d cells / %d samples (of %d in the full file with %d cells)"
+        % (subset_summary["n_cells_total"], subset_summary["n_samples_selected"],
+           subset_summary["n_samples_total"], subset_summary["n_cells_full"])
+    )
+    print("samples per bio group:", subset_summary["samples_per_bio"])
+    print("cells per sample:", subset_summary["cells_per_sample"])
+else:
+    def pick(guess, candidates):
+        if guess is not None and guess in adata.obs.columns:
+            return guess
+        return candidates[0] if candidates else None
 
-cand = ou.candidate_col_detection(adata.obs)
-SAMPLE_COL = SAMPLE_COL or pick("Sample", cand["sample"])
-BIO_COL = BIO_COL or pick(None, cand["label"])
-CT_COL = CT_COL or pick(None, cand["cell_type"])
-if not BATCH_COLS:
-    BATCH_COLS = cand["batch"][:4]
-print("effective SAMPLE_COL:", SAMPLE_COL)
-print("effective BIO_COL:", BIO_COL)
-print("effective BATCH_COLS:", BATCH_COLS)
-print("effective CT_COL:", CT_COL)
-```
+    cand = ou.candidate_col_detection(adata.obs)
+    SAMPLE_COL = SAMPLE_COL or pick("Sample", cand["sample"])
+    BIO_COL = BIO_COL or pick(None, cand["label"])
+    CT_COL = CT_COL or pick(None, cand["cell_type"])
+    if not BATCH_COLS:
+        BATCH_COLS = cand["batch"][:4]
+    print("effective SAMPLE_COL:", SAMPLE_COL)
+    print("effective BIO_COL:", BIO_COL)
+    print("effective BATCH_COLS:", BATCH_COLS)
+    print("effective CT_COL:", CT_COL)
 
-```{python}
-# Diagnostic subset only -- the HPC pipeline always uses the full data.
-# Sample-first, RAM-bounded: reads obs, selects ~10-20 samples stratified by
-# bio condition + batch candidates (round-robin over the batch values), reads
-# only those samples' cells (per-sample .to_memory() slices, capped), then
-# optional per-CT cap + overall target cap. Override the defaults per dataset
-# via SUBSET_CFG (see onboarding_utils.SUBSET_CONFIG).
-SUBSET_CFG = {}  # e.g. {"MAX_SAMPLES": 15, "MAX_CELLS_PER_SAMPLE": 2000}
-sub, subset_summary = ou.subset_by_samples(
-    adata,
-    sample_col=SAMPLE_COL,
-    bio_col=BIO_COL,
-    batch_cols=BATCH_COLS,
-    ct_col=CT_COL,
-    config=SUBSET_CFG,
-)
-print(
-    "subset summary: %d cells / %d samples (of %d in the full file with %d cells)"
-    % (subset_summary["n_cells_total"], subset_summary["n_samples_selected"],
-       subset_summary["n_samples_total"], subset_summary["n_cells_full"])
-)
-print("samples per bio group:", subset_summary["samples_per_bio"])
-print("cells per sample:", subset_summary["cells_per_sample"])
+    SUBSET_CFG = {}
+    sub, subset_summary = ou.subset_by_samples(
+        adata,
+        sample_col=SAMPLE_COL,
+        bio_col=BIO_COL,
+        batch_cols=BATCH_COLS,
+        ct_col=CT_COL,
+        config=SUBSET_CFG,
+    )
+    print(
+        "subset summary: %d cells / %d samples (of %d in the full file with %d cells)"
+        % (subset_summary["n_cells_total"], subset_summary["n_samples_selected"],
+           subset_summary["n_samples_total"], subset_summary["n_cells_full"])
+    )
+    print("samples per bio group:", subset_summary["samples_per_bio"])
+    print("cells per sample:", subset_summary["cells_per_sample"])
 ```
 
 ## 2. Count sanity check (T2 verdict)
 
 ```{python}
-cs = ou.count_sanity_check(adata)
+if mode == "subset":
+    cs = meta_info["count_sanity"]
+else:
+    cs = ou.count_sanity_check(adata)
 pd.Series(cs).to_frame("value")
 ```
 
 ## 3. Metadata exploration
 
 ```{python}
-ou.obs_summary(adata).to_string(max_colwidth=60)
+if mode == "subset":
+    print("Full file obs summary:")
+    print(pd.DataFrame(meta_info["obs_summary"]).to_string(max_colwidth=60))
+    print("\nCandidate columns:")
+    print(json.dumps(meta_info["candidate_columns"], indent=2))
+else:
+    print(ou.obs_summary(adata).to_string(max_colwidth=60))
+    cand = ou.candidate_col_detection(adata.obs)
+    print("candidate columns:")
+    print(json.dumps(cand, indent=2))
 ```
 
 ```{python}
-# Heuristic column-role detection (advisory -- confirm against the study card)
-print("candidate columns:")
-print(json.dumps(ou.candidate_col_detection(adata.obs), indent=2))
-```
-
-```{python}
-# Effective columns were resolved in section 1.5 (the pick() helper lives
-# there); metadata exploration below still uses the full backed obs (cheap),
-# while UMAP (sec. 4) and metrics (sec. 5) run on the in-memory `sub` subset.
 print("effective SAMPLE_COL:", SAMPLE_COL)
 print("effective BIO_COL:", BIO_COL)
 print("effective BATCH_COLS:", BATCH_COLS)
@@ -153,15 +163,21 @@ print("effective CT_COL:", CT_COL)
 ```
 
 ```{python}
-cps = ou.cells_per_sample_stats(adata.obs, SAMPLE_COL) if SAMPLE_COL else {}
-{k: v for k, v in cps.items() if k != "cells_per_sample"}
+if mode == "subset":
+    cps = meta_info["cells_per_sample_stats"]
+    print("Cells per sample stats (full file):", cps)
+    cells_dict = meta_info.get("cells_per_sample", {})
+else:
+    cps = ou.cells_per_sample_stats(adata.obs, SAMPLE_COL) if SAMPLE_COL else {}
+    print("Cells per sample stats:", {k: v for k, v in cps.items() if k != "cells_per_sample"})
+    cells_dict = cps.get("cells_per_sample", {})
 ```
 
 ```{python}
-if SAMPLE_COL:
+if cells_dict and SAMPLE_COL:
     df = pd.DataFrame(
-        {"sample": list(cps["cells_per_sample"].keys()),
-         "cells": list(cps["cells_per_sample"].values())}
+        {"sample": list(cells_dict.keys()),
+         "cells": list(cells_dict.values())}
     ).sort_values("cells", ascending=False)
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.bar(df["sample"].astype(str), df["cells"], color="steelblue")
@@ -174,21 +190,22 @@ if SAMPLE_COL:
 
 ```{python}
 # n unique cell types per candidate CT/annotation column
-ct_cands = [c for c in adata.obs.columns if c in cand["cell_type"]]
+obs_for_ct = adata.obs if mode == "nas" else sub.obs
+cand_dict = cand if mode == "nas" else meta_info["candidate_columns"]
+ct_cands = [c for c in obs_for_ct.columns if c in cand_dict["cell_type"]]
 pd.DataFrame({
     "column": [c for c in ct_cands],
-    "n_unique": [int(adata.obs[c].nunique(dropna=True)) for c in ct_cands],
-    "na_count": [int(adata.obs[c].isna().sum()) for c in ct_cands],
+    "n_unique": [int(obs_for_ct[c].nunique(dropna=True)) for c in ct_cands],
+    "na_count": [int(obs_for_ct[c].isna().sum()) for c in ct_cands],
 })
 ```
 
 ```{python}
-# NaN check in CT columns (Lee/Zhang HiTME NaN precedent): a NaN-heavy CT
-# column breaks downstream PILOT-style methods unless guarded.
+# NaN check in CT columns (Lee/Zhang HiTME NaN precedent)
 ct_na = pd.DataFrame({
     "column": [c for c in ct_cands],
-    "na_count": [int(adata.obs[c].isna().sum()) for c in ct_cands],
-    "pct_na": [float(100 * adata.obs[c].isna().mean()) for c in ct_cands],
+    "na_count": [int(obs_for_ct[c].isna().sum()) for c in ct_cands],
+    "pct_na": [float(100 * obs_for_ct[c].isna().mean()) for c in ct_cands],
 }).sort_values("pct_na", ascending=False)
 print(ct_na.to_string(index=False))
 bad = ct_na[ct_na["pct_na"] > 5]
@@ -197,8 +214,9 @@ if len(bad):
 ```
 
 ```{python}
-# Gene-symbol sanity: mouse vs human (Diabetes is mouse!)
-h = adata.var_names.astype(str)
+# Gene-symbol sanity: mouse vs human
+var_names = adata.var_names if mode == "nas" else sub.var_names
+h = var_names.astype(str)
 mouse_frac = float(h.str.startswith(("Mgi", "Gm", "Rpl", "Rps")).mean()) if len(h) else 0.0
 um = h.str.upper()
 mt_frac = float(um.str.startswith("MT-").mean())
@@ -210,21 +228,28 @@ print("first 20 genes:", h[:20].tolist())
 ```
 
 ```{python}
-ou.paper_table_compare(adata.obs, SAMPLE_COL, CT_COL, EXPECTED) if SAMPLE_COL and CT_COL else "n/a (no sample/CT column resolved yet)"
+if mode == "subset" and meta_info.get("paper_table_compare"):
+    print(pd.DataFrame(meta_info["paper_table_compare"]).to_string(index=False))
+elif mode == "nas" and SAMPLE_COL and CT_COL:
+    print(ou.paper_table_compare(adata.obs, SAMPLE_COL, CT_COL, EXPECTED).to_string(index=False))
+else:
+    print("n/a (no sample/CT column resolved yet)")
 ```
 
 ```{python}
 # Confounding / design-matrix check: bio x batch cross-tabs
-if BIO_COL and BATCH_COLS:
-    ou.confounding_crosstab(adata.obs, BIO_COL, BATCH_COLS).to_string()
+if mode == "subset" and meta_info.get("confounding_crosstab"):
+    print(pd.DataFrame(meta_info["confounding_crosstab"]).to_string())
+elif mode == "nas" and BIO_COL and BATCH_COLS:
+    print(ou.confounding_crosstab(adata.obs, BIO_COL, BATCH_COLS).to_string())
 else:
-    "n/a (no bio/batch columns resolved yet)"
+    print("n/a (no bio/batch columns resolved yet)")
 ```
 
 ## 4. UMAP (unintegrated space only -- never Harmony/integrated)
 
 ```{python}
-label_cols = [c for c in [BIO_COL] + BATCH_COLS + [CT_COL] if c in adata.obs.columns]
+label_cols = [c for c in [BIO_COL] + BATCH_COLS + [CT_COL] if c and c in sub.obs.columns]
 label_cols
 ```
 
@@ -303,7 +328,11 @@ for line in jobj["verdict"]:
 ```
 
 ```{python}
-adata.file.close()
+if adata is not None and getattr(adata, "isbacked", False) and hasattr(adata, "file"):
+    try:
+        adata.file.close()
+    except Exception:
+        pass
 print("done.")
 ```
 
@@ -316,4 +345,3 @@ Feasibility table: benchmark. Verify cell counts vs the paper (collection update
 > note (e.g. brain dataset: no/minimal immune cells -> HiTME/scATOMIC likely
 > unsuitable -> propose `not_suitable_for_auto_annotation`), and the datasets.json
 > registration fields (`views.subset_vars`, `columns`, `meta_cols_keep`).
-
