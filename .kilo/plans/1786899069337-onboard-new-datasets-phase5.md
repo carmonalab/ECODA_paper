@@ -1,39 +1,40 @@
 # Onboard 9 new datasets from the PILOT-GM-VAE study (Phase 5)
 
-## Implementation status (2026-08-17)
+## Implementation status (2026-08-18)
 
-Implemented + committed (2026-08-17): `6f96aec` (T3 partial + T5/T6:
-`download_datasets.sh`, `download_log.md`, 9 `dataset_check_<Name>.qmd`,
-`onboarding_utils.py`, `onboarding_metrics.R`, `README.md`; T3.0 `_debug`
-helper validation PASSED; T6 annotation safety flag wired). Then commit
-**`579676c` (pushed to origin/master)** added: **T1 HPC download scripts**
-(`download_datasets_hpc.sh` submitter — egress smoke test → 8-task array (3
-concurrent) into `${HPC_SCRATCH_DIR}/_downloads/` → sacct gate → NAS sync
-(filtered to STATUS=OK files) + md5 verify + `download_log.md` append;
-`--sync-only <id>` / `--only <key>` / `--login-node` fallback;
-`run_download_worker.sh` sbatch worker with `/var/spool` SCRIPT_DIR recovery,
-resumable `curl -L -C -`, Zenodo md5s, selective tar extraction, per-key
-status files, concurrency guards) + **T3.1 sample-first subsetting**
-(`SUBSET_CONFIG` + `subset_by_samples()` in `onboarding_utils.py`; section 1.5
-added to all 9 notebooks, UMAP + metrics on the in-memory subset;
-`_debug_validation.py` subset-path check) + the shared catalog
-`download_sources.sh` + review fixes (filtered rsync, `_tar_tmp.*` cleanup,
-summary dtype fix, h5-bounded obsm re-slice, worker-recorded extracted md5s,
-gitignore). AGENTS.md/README.md/TODO.md/download_log.md updated.
+Implemented + committed (2026-08-17 – 2026-08-18):
+- **T1 + T1.1: HPC parallel download + verification + NAS sync COMPLETE (2026-08-18)**:
+  - All 8 download tasks (`alzheimer`, `breast`, `covid_lupus_tar`, `diabetes`, `kidney`, `lung_tar`, `myocardial`, `parkinson`) completed in BeeGFS scratch (`${HPC_SCRATCH_DIR}/_downloads/`).
+  - Bugfixes implemented and committed:
+    - Smoke test probed real object URLs (commit `52e785e`).
+    - CellxGene size-verification vs HEAD content-length (commit `52e785e`).
+    - Multi-pair tar canonical parsing fix (commit `eb28cb8`).
+    - Submitter grep no-match fix under `set -e` (commit `f2c54fb`).
+    - Rsync SMB permissions flag fix (commit `3ba440d`).
+  - All 9 canonical `.h5ad` files (~195 GB) rsynced cleanly to `${NAS_SC_DIR}/JooM_2025_41097818/output/`.
+  - NAS MD5 verification passed for all 9 files against expected/worker-recorded digests:
+    - `SEAAD_Alzheimer.h5ad` (53,187,995,660 B, md5: `c2ad4c584f31f40e8aae0b32608e8146`)
+    - `BreastCncr_processed.h5ad` (28,939,228,608 B, md5: `8b28a349c2c3638ddbfb3946a32d12ba`)
+    - `Covid19_Ren2021.h5ad` (30,408,338,999 B, md5: `ae2fab89414914b6001879c01f822381`)
+    - `Lupus_Perez2022.h5ad` (24,425,598,482 B, md5: `001658910686c61a5010da95b7b14a15`)
+    - `diabetes.h5ad` (4,134,240,780 B, md5: `38189a381bad630fa39ce2d7ad3a0855`)
+    - `Kidney_KPMP.h5ad` (2,755,120,874 B, md5: `36ceb02ba23c559f80625ec7bef6884f`)
+    - `lungatlas.h5ad` (17,356,989,429 B, md5: `010cd8b233ac569b711ea0cbd80980be`)
+    - `Myocardial_Infarc_2.h5ad` (3,605,875,880 B, md5: `7431ae99250c99f11bf63e3034798af4`)
+    - `Parkinson.h5ad` (30,547,659,019 B, md5: `f576bcf5eb28366aeaecff01c50fff34`)
+  - Intermediate `.tar.gz` archives cleaned from scratch; `download_log.md` appended.
+- **T3 partial + T5/T6 (2026-08-17)**:
+  - 9 `dataset_check_<Name>.qmd` notebooks, `onboarding_utils.py` with `subset_by_samples()` (T3.1), `onboarding_metrics.R` (T3.0).
+  - T3.0 `_debug` validation passed; T6 annotation safety guards implemented in `process_chunk.R`.
 
-**First HPC run (2026-08-17, user) exposed 2 download-script bugs — FIXED
-before re-running, see T1.1 below**: (1) the egress smoke test probed the
-CellxGene *bucket root* (HEAD → 403 always) → false login-node fallback
-(2 MB/s limit); (2) the `.h5ad.md5` sidecar does NOT exist (403 for everyone;
-S3 ETag is a multipart digest; curation API has no checksum) → alzheimer task
-failed. The run was aborted (would fail closed anyway); the partial
-`BreastCncr_processed.h5ad` in scratch resumes via `curl -C -`.
-
-**Pending**: T1.1 bugfixes (implement + commit), user re-runs the downloader
-(`git pull` on the HPC clone first), per-dataset count check + filled summary
-cards + rendered notebooks (T2/T4), T7 user decisions, T8 datasets.json
-registration, T10 rollout. This plan is NOT complete — it must stay at
-`.kilo/plans/` (do NOT archive).
+**Pending**:
+- T2 & T3 execution: Run count sanity check and render onboarding check notebooks locally on Mac across the 9 datasets from the mounted NAS.
+- T4: Study summaries verification.
+- T7: User usage decisions (benchmark / batch-effect / exclude).
+- T8: `datasets.json` registration (pending user approval).
+- T9: Diabetes (mouse) pipeline support (conditional).
+- T10: Pipeline rollout on HPC.
+This plan is NOT complete — it must stay at `.kilo/plans/` (do NOT archive).
 
 ## Context & goal
 

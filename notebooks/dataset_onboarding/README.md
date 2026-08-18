@@ -92,15 +92,15 @@ Outputs (plots/feathers/csv) go to `data/new_dataset_checks/<Name>/` (gitignored
 
 | # | Dataset | Study (PMID) | File (JooM_2025_41097818/output) | Size | md5 | Count check | n cells / samples / CTs (paper) | Batch candidates | UMAP verdict | Recommended use | Status |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | Alzheimer | Gabitto 2024 Nat Neurosci (42486312) | `SEAAD_Alzheimer.h5ad` | ~15–25 GB | verify on download | - | 1,395,601 / 83 / 18 | region / assay (10x 3' v3) | - | benchmark | pending download |
-| 2 | Breast cancer | Kumar 2023 Nature (37380767) | `BreastCncr_processed.h5ad` | 28.9 GB | `8b28a349c2c3638ddbfb3946a32d12ba` | - | 714,331 / 126 / 10 | 10x v2/v3, sample prep | - | batch-effect | pending download |
-| 3 | Covid-19 PBMC | Ren 2021 Cell (34767776) | `Covid19_Ren2021.h5ad` (from `Datasets.tar.gz`) | (in tar 36.35 GB) | tar `d105b52dbba38ac49c2ffe8b3cf34e24` | - | 993,171 / 151 / 10 | collection site | - | batch-effect | pending download |
-| 4 | Diabetes (mouse) | Hrovatin 2023 Nat Metab (37697055) | `diabetes.h5ad` | 4.1 GB | `38189a381bad630fa39ce2d7ad3a0855` | - | 264,235 / 52 / 13 | different studies, 10x v2/v3 | - | batch-effect (conditional) | pending download |
-| 5 | Kidney (KPMP) | Lake 2023 Nature (41648348) | `Kidney_KPMP.h5ad` | 2.75 GB | `36ceb02ba23c559f80625ec7bef6884f` | - | 104,314 / 45 / 14 | multi-site | - | benchmark + batch-effect | pending download |
-| 6 | Lupus PBMC | Perez 2022 Science (42115607) | `Lupus_Perez2022.h5ad` (from `Datasets.tar.gz`) | (in tar) | (in tar) | - | 1,263,676 / 261 / 11 | - | - | benchmark | pending download |
-| 7 | Lung | Sikkema 2023 Nat Med (42362693) | `lungatlas.h5ad` (from `lungatlas.h5ad.tar.gz`) | 17.2 GB (tar) | tar `0d0c97924f1b7a405b6ec3b55da02882` | - | 941,504 / 165 / 12 | study / platform (technical) | - | check-before-use | pending download |
-| 8 | Myocardial infarction (2) | Kuppe 2022 Nature (41937210) | `Myocardial_Infarc_2.h5ad` | 3.6 GB | `7431ae99250c99f11bf63e3034798af4` | - | 132,888 / 23 / 11 | - | - | benchmark (note: no HR CTs) | pending download |
-| 9 | Parkinson | Prashant 2024 Sci Data (39580497) | `Parkinson.h5ad` | ~25–40 GB | verify on download | - | 2,096,155 / 97 / 11 | brain region | - | negative control candidate | pending download |
+| 1 | Alzheimer | Gabitto 2024 Nat Neurosci (42486312) | `SEAAD_Alzheimer.h5ad` | 53.2 GB (53,187,995,660 B) | `c2ad4c584f31f40e8aae0b32608e8146` | - | 1,395,601 / 83 / 18 | region / assay (10x 3' v3) | - | benchmark | downloaded (on NAS) |
+| 2 | Breast cancer | Kumar 2023 Nature (37380767) | `BreastCncr_processed.h5ad` | 28.9 GB (28,939,228,608 B) | `8b28a349c2c3638ddbfb3946a32d12ba` | - | 714,331 / 126 / 10 | 10x v2/v3, sample prep | - | batch-effect | downloaded (on NAS) |
+| 3 | Covid-19 PBMC | Ren 2021 Cell (34767776) | `Covid19_Ren2021.h5ad` (from `Datasets.tar.gz`) | 30.4 GB (30,408,338,999 B) | `ae2fab89414914b6001879c01f822381` | - | 993,171 / 151 / 10 | collection site | - | batch-effect | downloaded (on NAS) |
+| 4 | Diabetes (mouse) | Hrovatin 2023 Nat Metab (37697055) | `diabetes.h5ad` | 4.1 GB (4,134,240,780 B) | `38189a381bad630fa39ce2d7ad3a0855` | - | 264,235 / 52 / 13 | different studies, 10x v2/v3 | - | batch-effect (conditional) | downloaded (on NAS) |
+| 5 | Kidney (KPMP) | Lake 2023 Nature (41648348) | `Kidney_KPMP.h5ad` | 2.75 GB (2,755,120,874 B) | `36ceb02ba23c559f80625ec7bef6884f` | - | 104,314 / 45 / 14 | multi-site | - | benchmark + batch-effect | downloaded (on NAS) |
+| 6 | Lupus PBMC | Perez 2022 Science (42115607) | `Lupus_Perez2022.h5ad` (from `Datasets.tar.gz`) | 24.4 GB (24,425,598,482 B) | `001658910686c61a5010da95b7b14a15` | - | 1,263,676 / 261 / 11 | - | - | benchmark | downloaded (on NAS) |
+| 7 | Lung | Sikkema 2023 Nat Med (42362693) | `lungatlas.h5ad` (from `lungatlas.h5ad.tar.gz`) | 17.4 GB (17,356,989,429 B) | `010cd8b233ac569b711ea0cbd80980be` | - | 941,504 / 165 / 12 | study / platform (technical) | - | check-before-use | downloaded (on NAS) |
+| 8 | Myocardial infarction (2) | Kuppe 2022 Nature (41937210) | `Myocardial_Infarc_2.h5ad` | 3.6 GB (3,605,875,880 B) | `7431ae99250c99f11bf63e3034798af4` | - | 132,888 / 23 / 11 | - | - | benchmark (note: no HR CTs) | downloaded (on NAS) |
+| 9 | Parkinson | Prashant 2024 Sci Data (39580497) | `Parkinson.h5ad` | 30.5 GB (30,547,659,019 B) | `f576bcf5eb28366aeaecff01c50fff34` | - | 2,096,155 / 97 / 11 | brain region | - | negative control candidate | downloaded (on NAS) |
 
 `-` = to be filled by the check notebook after download (T3/T7). Paper numbers
 from Zenodo record 15575593 (`datasets.pdf`, the study's own dataset
