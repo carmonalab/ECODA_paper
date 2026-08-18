@@ -154,12 +154,13 @@ echo ""
 
 # Report per-task exit status
 FAILED=0
-sacct -j "${JOB_ID}" --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS --noheader | grep -v 'batch\|extern' | while read -r line; do
+while read -r line; do
+  [[ -z "${line}" ]] && continue
   echo "  ${line}"
   if echo "${line}" | grep -Eq 'FAILED|CANCELLED|OUT_OF_MEMORY|TIMEOUT'; then
     FAILED=1
   fi
-done
+done < <(sacct -j "${JOB_ID}" --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS --noheader 2>/dev/null | grep -v 'batch\|extern' || true)
 
 # Check per-task logs for errors
 for log in "${SUBSET_LOGS_DIR}"/subset_"${JOB_ID}"_*.err; do

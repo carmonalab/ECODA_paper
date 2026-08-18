@@ -9,7 +9,7 @@ set -euo pipefail
 
 # Spool-safe SCRIPT_DIR recovery (AGENTS.md HPC invariant)
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
-    SCRIPT_DIR="$(scontrol show job "${SLURM_JOB_ID}" 2>/dev/null | awk -F= '/Command=/ {print $2}' | xargs dirname 2>/dev/null || cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SCRIPT_DIR="$(dirname "$(scontrol show job "${SLURM_JOB_ID}" -o | grep -o 'Command=[^ ]*' | head -1 | cut -d= -f2)")"
 else
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
