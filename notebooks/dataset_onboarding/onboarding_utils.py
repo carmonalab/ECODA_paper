@@ -371,7 +371,17 @@ def confounding_crosstab(obs: pd.DataFrame, bio_col: str, batch_cols, max_uniq: 
     rows = []
     for bcol in batch_cols:
         if bcol not in obs.columns:
-            rows.append({"batch_candidate": bcol, "note": "column not found"})
+            rows.append({
+                "batch_candidate": bcol,
+                "n_bio_uniq": 0,
+                "n_batch_uniq": 0,
+                "chi2_pvalue": None,
+                "perfectly_collinear": False,
+                "strongly_confounded": False,
+                "warning": "column not found",
+                "note": "column not found",
+                "crosstab": {},
+            })
             continue
         bio = obs[bio_col].astype(str).replace({"nan": "<NA>"})
         bat = obs[bcol].astype(str).replace({"nan": "<NA>"})
@@ -381,7 +391,12 @@ def confounding_crosstab(obs: pd.DataFrame, bio_col: str, batch_cols, max_uniq: 
                     "batch_candidate": bcol,
                     "n_bio_uniq": int(bio.nunique()),
                     "n_batch_uniq": int(bat.nunique()),
+                    "chi2_pvalue": None,
+                    "perfectly_collinear": False,
+                    "strongly_confounded": False,
+                    "warning": f"too many unique levels (>{max_uniq}); crosstab skipped",
                     "note": f"too many unique levels (>{max_uniq}); crosstab skipped",
+                    "crosstab": {},
                 }
             )
             continue
@@ -394,7 +409,9 @@ def confounding_crosstab(obs: pd.DataFrame, bio_col: str, batch_cols, max_uniq: 
                     "n_batch_uniq": int(bat.nunique()),
                     "chi2_pvalue": None,
                     "perfectly_collinear": True,
+                    "strongly_confounded": True,
                     "warning": "batch is (near-)perfectly collinear with the bio label -- bio and batch are statistically indistinguishable",
+                    "note": "",
                     "crosstab": ct.to_dict(),
                 }
             )
@@ -416,10 +433,515 @@ def confounding_crosstab(obs: pd.DataFrame, bio_col: str, batch_cols, max_uniq: 
                     if collinear
                     else ""
                 ),
+                "note": "",
                 "crosstab": ct.to_dict(),
             }
         )
     return pd.DataFrame(rows)
+
+
+def cell_type_harmonization_check(
+    obs: pd.DataFrame,
+    ct_cols: list[str],
+    batch_col: str | None = None,
+    sample_col: str | None = None,
+) -> pd.DataFrame:
+    """Evaluate cross-batch / cross-study cell type harmonization and label sharing.
+
+    For each candidate cell type annotation column, assesses whether annotations
+    are atlas-wide harmonized (present across batches) or study-specific.
+    """
+    rows = []
+    has_batch = batch_col is not None and batch_col in obs.columns
+    n_batches = int(obs[batch_col].nunique(dropna=True)) if has_batch else 1
+
+    for col in ct_cols:
+        if col not in obs.columns:
+            continue
+        nu = int(obs[col].nunique(dropna=True))
+        if nu == 0:
+            continue
+
+        if not has_batch or n_batches <= 1:
+            rows.append({
+                "Candidate Column": col,
+                "N Cell Types": nu,
+                "Shared (≥80% Batches)": f"{nu}/{nu} (100.0%)",
+                "Single-Batch Only": f"0/{nu} (0.0%)",
+                "Sharing Status": "Harmonized (Single Batch / Study)",
+                "Recommendation / Notes": "Single cohort context; all labels shared.",
+            })
+            continue
+
+        ct = pd.crosstab(obs[col], obs[batch_col])
+        b_per_ct = (ct > 0).sum(axis=1)
+        thr_80 = max(2, int(np.ceil(0.8 * n_batches)))
+        n_shared_80 = int((b_per_ct >= thr_80).sum())
+        n_single = int((b_per_ct == 1).sum())
+        pct_shared = (n_shared_80 / nu * 100) if nu else 0.0
+        pct_single = (n_single / nu * 100) if nu else 0.0
+
+        if pct_shared >= 75.0 and pct_single <= 20.0:
+            status = "Harmonized (Atlas-Wide)"
+            notes = "Atlas-wide harmonized labels; optimal for ECODA patient stratification."
+        elif pct_shared >= 35.0 or n_shared_80 >= 4:
+            status = "Partially Harmonized"
+            notes = "Core lineages shared across studies; fine subtypes partially batch-restricted."
+        else:
+            status = "Study-Specific / Unharmonized"
+            notes = "Disjoint label sets per study; unsuited for cross-study ECODA stratification."
+
+        rows.append({
+            "Candidate Column": col,
+            "N Cell Types": nu,
+            "Shared (≥80% Batches)": f"{n_shared_80}/{nu} ({pct_shared:.1f}%)",
+            "Single-Batch Only": f"{n_single}/{nu} ({pct_single:.1f}%)",
+            "Sharing Status": status,
+            "Recommendation / Notes": notes,
+        })
+    return pd.DataFrame(rows)
+
+
+def categorize_obs_columns(obs: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
+    """Classify all obs columns into 7 canonical roles with metadata summaries.
+
+    Roles:
+      1. Main Biological Condition (PILOT-GM-VAE / Primary Contrast)
+      2. Secondary / Demographic Biological Covariates
+      3. Batch Effect Candidates (Technical Covariates)
+      4. Cell Type Annotations
+      5. Sample & Donor Identifiers
+      6. Technical QC Metrics & Single-Cell Artifacts
+      7. Uninformative / Constant Columns
+    """
+    cfg = config or {}
+    role_map = {}
+
+    for col in cfg.get("bio_primary", []):
+        if col in obs.columns:
+            role_map[col] = "1. Main Biological Condition"
+    for col in cfg.get("bio_secondary", []):
+        if col in obs.columns:
+            role_map[col] = "2. Secondary / Demographic Biological Covariates"
+    for col in cfg.get("batch_candidates", []):
+        if col in obs.columns:
+            role_map[col] = "3. Batch Effect Candidates (Technical Covariates)"
+    for col in cfg.get("cell_types", []):
+        if col in obs.columns:
+            role_map[col] = "4. Cell Type Annotations"
+    for col in cfg.get("sample_ids", []):
+        if col in obs.columns:
+            role_map[col] = "5. Sample & Donor Identifiers"
+    for col in cfg.get("qc_metrics", []):
+        if col in obs.columns:
+            role_map[col] = "6. Technical QC Metrics & Single-Cell Artifacts"
+    for col in cfg.get("uninformative", []):
+        if col in obs.columns:
+            role_map[col] = "7. Uninformative / Constant Columns"
+
+    uninformative_exact = {
+        "is_primary_data", "organism", "observation_joinid", "mapped_reference_assembly",
+        "mapped_reference_annotation", "alignment_software", "organism_ontology_term_id",
+        "suspension_uuid", "library_uuid", "sample_uuid",
+    }
+    qc_terms = [
+        "ncount", "nfeature", "n_genes", "n_counts", "total_counts", "percent_mito", "percent_rb",
+        "percent.mt", "pct_counts_mito", "doublet_score", "doublet", "emptydrops", "matrisome",
+        "collagen", "s.score", "g2m.score", "rin", "low_q", "degen.score", "percent.er", "glycoprotein",
+        "proteoglycan", "cyc.score", "aepi.score", "astr.score", "genes detected", "number of umis",
+        "fraction mitochrondrial", "log10_n_counts", "mt_frac", "nfeaturess_rna", "dissociation_s1",
+    ]
+    sample_terms = [
+        "donor_id", "sample_id", "sampleid", "sample", "specimen", "patientid", "patient",
+        "file_id", "orig_ident", "ind_cov", "accsample", "patient_region_id",
+    ]
+    ct_terms = [
+        "cell_type", "celltype", "cell_types", "majortype", "broad_cell_type", "author_cell_type",
+        "subclass", "class", "ann_fine", "ann_coarse", "cell_subtype", "cg_cov", "opt_clust", "supertype",
+        "cell_state", "louvain", "leiden", "accannot", "acclabel", "structure", "state", "major_cell_types",
+    ]
+    batch_terms = [
+        "assay", "batch", "batch_cov", "sequencing_platform", "platform", "single cell sequencing platform",
+        "city", "brain_bank", "hospital", "study", "dataset", "tissue_type", "tissue_location",
+        "region", "dissociation", "preservation", "sample_source", "library", "sample_prep", "site",
+        "experiment", "processing_cohort", "sampletype", "tissue_sampling_method", "donor_status",
+    ]
+    bio_terms = [
+        "disease", "condition", "status", "severity", "patient_group", "origin", "cognitive status",
+        "age", "sex", "bmi", "braak", "adnc", "cerad", "outcome", "comorbidities", "diabetes",
+        "hypertension", "egfr", "smoker", "tumor_stage", "mutation", "pop_cov", "sle_status", "pathology",
+        "uicc_stage", "ever_smoker", "thal phase", "apoe4", "late-nc", "lewy body", "microinfarct",
+        "neurotypical", "breast_density", "sars-cov-2", "sampling day", "strain", "diabetes_model",
+    ]
+
+    rows = []
+    for col in obs.columns:
+        s = obs[col]
+        lc = col.lower()
+        nu = int(s.nunique(dropna=True))
+        na_pct = float(s.isna().mean() * 100)
+        dtype_str = str(s.dtype)
+
+        if nu == 0:
+            val_summary = "<Empty / All NA>"
+        elif pd.api.types.is_numeric_dtype(s) and nu > 10:
+            val_summary = f"[{s.min():.2g}, {s.max():.2g}] (mean: {s.mean():.2g})"
+        else:
+            top_vals = s.dropna().astype(str).unique()
+            if len(top_vals) <= 4:
+                val_summary = ", ".join(top_vals)
+            else:
+                val_summary = ", ".join(top_vals[:3]) + f", ... ({nu} total)"
+
+        if col in role_map:
+            role = role_map[col]
+        elif nu <= 1 or col in uninformative_exact or "_ontology_term_id" in lc:
+            role = "7. Uninformative / Constant Columns"
+        elif any(t in lc for t in qc_terms):
+            role = "6. Technical QC Metrics & Single-Cell Artifacts"
+        elif any(t in lc for t in sample_terms) or nu > len(obs) * 0.8:
+            role = "5. Sample & Donor Identifiers"
+        elif any(t in lc for t in ct_terms):
+            role = "4. Cell Type Annotations"
+        elif any(t in lc for t in batch_terms):
+            role = "3. Batch Effect Candidates (Technical Covariates)"
+        elif any(t in lc for t in bio_terms):
+            role = "2. Secondary / Demographic Biological Covariates"
+        else:
+            role = "2. Secondary / Demographic Biological Covariates"
+
+        rows.append({
+            "Column": col,
+            "Assigned Role": role,
+            "Data Type": dtype_str,
+            "Unique Levels": nu,
+            "Missing %": f"{na_pct:.1f}%",
+            "Sample Values / Categories": val_summary,
+        })
+
+    df = pd.DataFrame(rows)
+    return df.sort_values(by=["Assigned Role", "Column"]).reset_index(drop=True)
+
+
+def compute_clr_composition(
+    obs: pd.DataFrame,
+    sample_col: str,
+    ct_col: str,
+    pseudocount: float = 0.5,
+) -> pd.DataFrame:
+    """Compute centered log-ratio (CLR) abundance per sample and cell type.
+
+    Counts are imputed with ``+pseudocount`` (matching ECODA counts_all default),
+    normalized to proportions, and CLR-transformed.
+    """
+    counts = pd.crosstab(obs[sample_col].astype(str), obs[ct_col].astype(str)).astype(float)
+    counts_plus = counts + float(pseudocount)
+    props = counts_plus.div(counts_plus.sum(axis=1), axis=0)
+    log_props = np.log(props)
+    clr = log_props.sub(log_props.mean(axis=1), axis=0)
+    return clr
+
+
+def plot_clr_abundance_boxplots(
+    clr_df: pd.DataFrame,
+    meta_df: pd.DataFrame,
+    sample_col: str,
+    group_col: str,
+    max_cts: int = 20,
+    title: str | None = None,
+):
+    """Plot grouped boxplots of sample-level CLR abundances with Wilcoxon/Kruskal-Wallis tests.
+
+    Annotates Benjamini-Hochberg FDR-corrected significance stars above cell types.
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import scipy.stats as stats
+    import statsmodels.stats.multitest as smt
+
+    meta_dedup = meta_df[[sample_col, group_col]].drop_duplicates(subset=[sample_col]).set_index(sample_col)
+    common_samples = clr_df.index.intersection(meta_dedup.index)
+    clr_sub = clr_df.loc[common_samples]
+    meta_sub = meta_dedup.loc[common_samples]
+
+    valid_mask = (
+        meta_sub[group_col].notna()
+        & (meta_sub[group_col].astype(str) != "<NA>")
+        & (meta_sub[group_col].astype(str) != "nan")
+    )
+    clr_sub = clr_sub[valid_mask]
+    meta_sub = meta_sub[valid_mask]
+
+    if len(meta_sub) == 0 or clr_sub.shape[1] == 0:
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.text(0.5, 0.5, f"No valid samples for {group_col}", ha="center", va="center")
+        return fig
+
+    s_grp = meta_sub[group_col].astype(str)
+    uniq_levels = np.sort(s_grp.unique())
+
+    if clr_sub.shape[1] > max_cts:
+        variances = clr_sub.var(axis=0)
+        selected_cts = variances.nlargest(max_cts).index.tolist()
+    else:
+        selected_cts = clr_sub.columns.tolist()
+
+    raw_pvals = []
+    for ct in selected_cts:
+        vals = clr_sub[ct]
+        if len(uniq_levels) < 2:
+            raw_pvals.append(np.nan)
+        elif len(uniq_levels) == 2:
+            g1 = vals[s_grp == uniq_levels[0]]
+            g2 = vals[s_grp == uniq_levels[1]]
+            if len(g1) > 0 and len(g2) > 0:
+                try:
+                    _, p = stats.mannwhitneyu(g1, g2, alternative="two-sided")
+                    raw_pvals.append(p)
+                except Exception:
+                    raw_pvals.append(np.nan)
+            else:
+                raw_pvals.append(np.nan)
+        else:
+            grouped = [vals[s_grp == lvl] for lvl in uniq_levels if (s_grp == lvl).sum() > 0]
+            if len(grouped) >= 2:
+                try:
+                    _, p = stats.kruskal(*grouped)
+                    raw_pvals.append(p)
+                except Exception:
+                    raw_pvals.append(np.nan)
+            else:
+                raw_pvals.append(np.nan)
+
+    raw_pvals = np.array(raw_pvals, dtype=float)
+    valid_p = np.isfinite(raw_pvals)
+    adj_p = np.full_like(raw_pvals, np.nan)
+    if valid_p.sum() > 0:
+        _, corrected, _, _ = smt.multipletests(raw_pvals[valid_p], method="fdr_bh")
+        adj_p[valid_p] = corrected
+
+    def star_p(p):
+        if np.isnan(p):
+            return ""
+        if p < 0.0001:
+            return "****"
+        if p < 0.001:
+            return "***"
+        if p < 0.01:
+            return "**"
+        if p < 0.05:
+            return "*"
+        return "ns"
+
+    stars = [star_p(p) for p in adj_p]
+
+    plot_df = clr_sub[selected_cts].copy()
+    plot_df[group_col] = s_grp.values
+    plot_df[sample_col] = plot_df.index
+    melted = pd.melt(
+        plot_df, id_vars=[sample_col, group_col], value_vars=selected_cts,
+        var_name="cell_type", value_name="clr_abundance"
+    )
+
+    fig_w = max(8.0, len(selected_cts) * 0.75 + 2.5)
+    fig, ax = plt.subplots(figsize=(fig_w, 5.5))
+
+    palette = sns.color_palette("tab10", n_colors=max(1, len(uniq_levels)))
+    sns.boxplot(
+        data=melted, x="cell_type", y="clr_abundance", hue=group_col,
+        ax=ax, showmeans=False, fliersize=0, boxprops=dict(alpha=0.6), palette=palette
+    )
+    sns.stripplot(
+        data=melted, x="cell_type", y="clr_abundance", hue=group_col,
+        ax=ax, dodge=True, jitter=0.2, alpha=0.8, size=4.5, edgecolor="black", linewidth=0.5,
+        palette=palette, legend=False
+    )
+
+    y_max = float(melted["clr_abundance"].max()) if len(melted) else 1.0
+    y_min = float(melted["clr_abundance"].min()) if len(melted) else -1.0
+    y_range = y_max - y_min if y_max > y_min else 1.0
+    star_y = y_max + 0.08 * y_range
+    ax.set_ylim(y_min - 0.05 * y_range, y_max + 0.22 * y_range)
+
+    for i, (ct, st, p) in enumerate(zip(selected_cts, stars, adj_p)):
+        if st:
+            color = "#D62728" if st != "ns" else "#7F7F7F"
+            weight = "bold" if st != "ns" else "normal"
+            ax.text(i, star_y, st, ha="center", va="bottom", fontsize=10, color=color, fontweight=weight)
+
+    ax.set_title(title or f"Cell-Type Compositional CLR Abundance by {group_col}", fontsize=12, fontweight="bold")
+    ax.set_xlabel("Cell Type", fontweight="bold", fontsize=10)
+    ax.set_ylabel("CLR Abundance", fontweight="bold", fontsize=10)
+    plt.xticks(rotation=45, ha="right", fontsize=9)
+
+    handles, labels = ax.get_legend_handles_labels()
+    if len(uniq_levels) > 0:
+        ax.legend(
+            handles[: len(uniq_levels)], labels[: len(uniq_levels)],
+            title=group_col, bbox_to_anchor=(1.02, 1), loc="upper left", frameon=True
+        )
+    fig.tight_layout()
+    return fig
+
+
+def compute_compositional_significance_matrix(
+    clr_df: pd.DataFrame,
+    meta_df: pd.DataFrame,
+    sample_col: str,
+    group_cols: list[str],
+):
+    """Compute FDR-corrected p-values for all cell types across multiple clinical/technical covariates.
+
+    Returns (sig_matrix_df, heatmap_fig).
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import scipy.stats as stats
+    import statsmodels.stats.multitest as smt
+
+    meta_dedup = meta_df[[sample_col] + [c for c in group_cols if c in meta_df.columns]].drop_duplicates(subset=[sample_col]).set_index(sample_col)
+    common_samples = clr_df.index.intersection(meta_dedup.index)
+    clr_sub = clr_df.loc[common_samples]
+    meta_sub = meta_dedup.loc[common_samples]
+
+    cts = clr_sub.columns.tolist()
+    pvals_dict = {g: [] for g in group_cols if g in meta_sub.columns}
+
+    for g in pvals_dict:
+        s_grp = meta_sub[g].astype(str)
+        valid_mask = (s_grp != "<NA>") & (s_grp != "nan") & (s_grp != "None")
+        valid_grp = s_grp[valid_mask]
+        uniq_levels = valid_grp.unique()
+
+        for ct in cts:
+            vals = clr_sub[ct][valid_mask]
+            if len(uniq_levels) < 2:
+                pvals_dict[g].append(np.nan)
+            elif len(uniq_levels) == 2:
+                g1 = vals[valid_grp == uniq_levels[0]]
+                g2 = vals[valid_grp == uniq_levels[1]]
+                if len(g1) > 0 and len(g2) > 0:
+                    try:
+                        _, p = stats.mannwhitneyu(g1, g2, alternative="two-sided")
+                        pvals_dict[g].append(p)
+                    except Exception:
+                        pvals_dict[g].append(np.nan)
+                else:
+                    pvals_dict[g].append(np.nan)
+            else:
+                grouped_vals = [vals[valid_grp == lvl] for lvl in uniq_levels if (valid_grp == lvl).sum() > 0]
+                if len(grouped_vals) >= 2:
+                    try:
+                        _, p = stats.kruskal(*grouped_vals)
+                        pvals_dict[g].append(p)
+                    except Exception:
+                        pvals_dict[g].append(np.nan)
+                else:
+                    pvals_dict[g].append(np.nan)
+
+    sig_mat = pd.DataFrame(index=cts)
+    for g in pvals_dict:
+        raw_p = np.array(pvals_dict[g], dtype=float)
+        valid_p_mask = np.isfinite(raw_p)
+        adj_p = np.full_like(raw_p, np.nan)
+        if valid_p_mask.sum() > 0:
+            _, corrected, _, _ = smt.multipletests(raw_p[valid_p_mask], method="fdr_bh")
+            adj_p[valid_p_mask] = corrected
+        sig_mat[g] = -np.log10(np.clip(adj_p, 1e-10, 1.0))
+
+    n_rows = len(sig_mat)
+    n_cols = len(sig_mat.columns)
+    max_label_len = max([len(str(x)) for x in sig_mat.index] + [10])
+    label_margin = max(4.0, max_label_len * 0.14)
+    fig_w = max(6.0, label_margin + n_cols * 1.8 + 1.5)
+    fig_h = max(4.5, n_rows * 0.35 + 1.5)
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    max_val = max(3.0, float(np.nanmax(sig_mat.values))) if not np.all(np.isnan(sig_mat.values)) else 3.0
+    sns.heatmap(
+        sig_mat, annot=True, fmt=".2f", cmap="YlOrRd", vmin=0, vmax=max_val,
+        cbar_kws={"label": "-log10(FDR p-value)", "shrink": 0.6}, ax=ax
+    )
+    ax.set_title("Cell Type Compositional Shift Significance (-log10 FDR p)", fontsize=11, fontweight="bold")
+    ax.set_ylabel("Cell Type", fontsize=10, fontweight="bold")
+    ax.set_xlabel("Covariate", fontsize=10, fontweight="bold")
+    fig.tight_layout()
+
+    return sig_mat, fig
+
+
+def select_balanced_samples(
+    obs: pd.DataFrame,
+    sample_col: str,
+    bio_col: str | None = None,
+    batch_cols: list | None = None,
+    target_samples: int = 20,
+    min_cells: int = 200,
+    seed: int = 0,
+) -> list[str]:
+    """Joint balanced sample allocation: min(N_samples, target_samples).
+
+    Filters candidate samples with >= min_cells, then stratifies across bio_col
+    and round-robins across batch_cols combinations.
+    """
+    rng = np.random.default_rng(seed)
+    vc = obs[sample_col].value_counts(dropna=True)
+    eligible = vc[vc >= min_cells].index.astype(str).tolist()
+    if not eligible:
+        eligible = vc.index.astype(str).tolist()
+    if len(eligible) <= target_samples:
+        return eligible
+
+    sample_obs = obs[obs[sample_col].astype(str).isin(eligible)].copy()
+    sample_obs[sample_col] = sample_obs[sample_col].astype(str)
+    present_batch = [c for c in (batch_cols or []) if c in sample_obs.columns]
+
+    if bio_col and bio_col in sample_obs.columns:
+        bio_mode = sample_obs.groupby(sample_col)[bio_col].agg(
+            lambda s: s.mode().iloc[0] if len(s.mode()) else "<NA>"
+        ).to_dict()
+    else:
+        bio_mode = {s: "all" for s in eligible}
+
+    if present_batch:
+        modes = sample_obs.groupby(sample_col)[present_batch].agg(
+            lambda s: s.mode().iloc[0] if len(s.mode()) else "<NA>"
+        )
+        batch_dict = {s: tuple(row) for s, (_, row) in zip(modes.index, modes.iterrows())}
+    else:
+        batch_dict = {s: () for s in eligible}
+
+    groups = sorted(set(bio_mode.values()))
+    base_per_group = target_samples // len(groups)
+    rem = target_samples % len(groups)
+    alloc = {g: base_per_group + (1 if i < rem else 0) for i, g in enumerate(groups)}
+
+    selected = []
+    for g in groups:
+        grp_samples = [s for s in eligible if bio_mode.get(s) == g]
+        if not grp_samples:
+            continue
+        buckets = {}
+        for s in grp_samples:
+            buckets.setdefault(batch_dict.get(s), []).append(s)
+        for b in buckets.values():
+            rng.shuffle(b)
+        keys = list(buckets.keys())
+        grp_selected = []
+        i = 0
+        while len(grp_selected) < alloc[g] and any(buckets.values()):
+            k = keys[i % len(keys)]
+            if buckets[k]:
+                grp_selected.append(buckets[k].pop())
+            i += 1
+        selected.extend(grp_selected)
+
+    remaining = [s for s in eligible if s not in selected]
+    if len(selected) < target_samples and remaining:
+        rng.shuffle(remaining)
+        selected.extend(remaining[: target_samples - len(selected)])
+
+    return selected[:target_samples]
 
 
 # ---------------------------------------------------------------------------
@@ -906,9 +1428,10 @@ def plot_umap_panels(
         if col not in obs_subset.columns:
             warnings.warn(f"plot_umap_panels: label column {col!r} not found; skipped")
             continue
-        fig, ax = plt.subplots(figsize=(7, 5.5))
+        fig, ax = plt.subplots(figsize=(7.5, 5.5))
         cats = obs_subset[col].astype(str).fillna("NA")
         uniq_cats = pd.unique(cats)
+        n_uniq = len(uniq_cats)
         for cat in uniq_cats:
             m = cats.values == cat
             ax.scatter(
@@ -917,13 +1440,15 @@ def plot_umap_panels(
                 s=point_size,
                 alpha=0.7,
                 linewidths=0,
-                label=cat if len(uniq_cats) <= 30 else None,
+                label=cat if n_uniq <= 30 else None,
             )
-        if len(uniq_cats) <= 30:
+        if n_uniq <= 30:
+            ncol = 2 if n_uniq > 15 else 1
+            fsize = 7 if n_uniq > 15 else 8
             ax.legend(
                 bbox_to_anchor=(1.02, 1), loc="upper left",
-                frameon=False, fontsize=8, markerscale=2,
-                title=col,
+                frameon=False, fontsize=fsize, markerscale=2,
+                ncol=ncol, title=col,
             )
         ax.set_title(f"UMAP colored by {col}", fontsize=11, fontweight="bold")
         ax.set_xlabel("UMAP-1")
@@ -1050,7 +1575,12 @@ def embed_and_umap_workflow(
     )
     obs_subset = sub.obs.reset_index(drop=True)
     coords = np.asarray(sub.obsm[umap_key])
-    figs = plot_umap_panels(coords, obs_subset, label_cols, out_dir=out_dir, name=name, seed=seed)
+
+    effective_cols = list(label_cols)
+    if sample_col and sample_col in obs_subset.columns and sample_col not in effective_cols:
+        effective_cols.insert(0, sample_col)
+
+    figs = plot_umap_panels(coords, obs_subset, effective_cols, out_dir=out_dir, name=name, seed=seed)
     return {
         "pca_key": pca_key,
         "umap_key": umap_key,
@@ -1174,12 +1704,31 @@ def plot_separation_heatmap(sep_df: pd.DataFrame, name: str = "Dataset", out_pat
     lab = {c: re.sub("_separation$", "", c).replace("batch_", "") for c in score_cols}
     hm = mat[score_cols].rename(columns=lab)
 
-    fig, ax = plt.subplots(figsize=(max(4.5, 1.2 * len(score_cols)), max(3.5, 0.45 * len(hm))))
+    n_rows = len(hm)
+    n_cols = len(score_cols)
+    max_label_len = max([len(str(x)) for x in hm.index] + [10])
+    label_margin = max(4.0, max_label_len * 0.14)
+    col_width = 1.8
+    fig_w = label_margin + n_cols * col_width + 1.8
+    fig_h = max(5.0, n_rows * 0.38 + 1.5)
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
     sns.heatmap(
-        hm.astype(float), annot=True, fmt=".2f", cmap="RdYlGn_r", vmin=0, vmax=1,
-        mask=hm.isna(), linewidths=0.5, cbar_kws={"label": "LISI Separation (1=Separated, 0=Mixed)"}, ax=ax,
+        hm.astype(float),
+        annot=True,
+        fmt=".2f",
+        annot_kws={"size": 9, "weight": "bold"},
+        cmap="RdYlGn_r",
+        vmin=0,
+        vmax=1,
+        mask=hm.isna(),
+        linewidths=0.5,
+        cbar_kws={"shrink": 0.5, "aspect": 20, "label": "LISI Separation (1=Separated, 0=Mixed)"},
+        ax=ax,
     )
     ax.set_title(f"{name}: Per-Cell-Type LISI Separation (Unintegrated PCA)", fontsize=11, fontweight="bold")
+    ax.set_ylabel("Cell Type", fontsize=10, fontweight="bold")
+    ax.set_xlabel("Label / Covariate", fontsize=10, fontweight="bold")
     fig.tight_layout()
 
     if out_path is not None:

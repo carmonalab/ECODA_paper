@@ -79,8 +79,8 @@ Reference plan: [`.agents/plans/dataset_onboarding_and_debug_overhaul.md`](.agen
   - Added `not_suitable_for_auto_annotation` flag handling in `benchmark_pipeline.R` and Figure 3 / Supp Fig 19.
 - [ ] **5.5 Execute HPC Downloads [User Action]:**
   - Run `download_datasets_hpc.sh` on HPC to transfer datasets to scratch and sync to NAS.
-- [ ] **5.6 Run Diagnostic Check Notebooks & Count Validation:**
-  - Render onboarding notebooks, verify raw integer count matrices, and inspect unintegrated PCA/UMAP batch separation.
+- [x] **5.6 Run Diagnostic Check Notebooks & Count Validation:**
+  - Rendered all 10 onboarding notebooks with dual evaluation (unintegrated PCA/UMAP LISI batch mixing + CLR abundance boxplots with FDR-corrected Wilcoxon/Kruskal-Wallis testing and compositional shift significance matrices).
 - [ ] **5.7 Dataset Review & Registration Checkpoint [User Decision]:**
   - Decide cohort categorization (benchmark vs. batch-effect vs. negative control vs. exclude).
   - Register approved cohorts in `datasets.json` (**ask user before editing**).

@@ -1,5 +1,5 @@
 ---
-title: "Dataset Check: Kidney (KPMP)"
+title: "Dataset Check: Kidney (KPMP Atlas)"
 subtitle: "Diagnostic Onboarding Report (Unintegrated Raw Counts)"
 format:
   html:
@@ -35,8 +35,10 @@ EXPECTED = {"cells": 104314, "samples": 45, "ct_types": 14}
 
 SAMPLE_COL = 'donor_id'
 BIO_COL = 'condition.l1'
-BATCH_COLS = ['assay', 'tissue_type', 'region.l1']
+SECONDARY_BIO_COLS = ['condition.l2', 'eGFR', 'hypertension', 'diabetes_history', 'sex', 'BMI']
+BATCH_COLS = ['assay', 'tissue_type', 'region.l1', 'library']
 CT_COL = 'subclass.l1'
+ALL_CT_COLS = ['subclass.l1', 'subclass.l2', 'subclass.l3', 'subclass.full', 'cell_type', 'class']
 
 ds_data = ou.load_onboarding_dataset_or_subset(NAME, NAS_FILE, HERE)
 mode = ds_data["mode"]
@@ -45,17 +47,36 @@ adata = ds_data["adata"]
 meta_info = ds_data["meta"]
 
 if mode == "nas" or sub is None:
-    cand = ou.candidate_col_detection(adata.obs)
-    SAMPLE_COL = SAMPLE_COL if SAMPLE_COL in adata.obs.columns else cand["sample"][0]
-    BIO_COL = BIO_COL if BIO_COL in adata.obs.columns else cand["label"][0]
-    CT_COL = CT_COL if CT_COL in adata.obs.columns else cand["cell_type"][0]
-    BATCH_COLS = [c for c in BATCH_COLS if c in adata.obs.columns] or cand["batch"][:2]
     sub, _ = ou.subset_by_samples(adata, sample_col=SAMPLE_COL, bio_col=BIO_COL, batch_cols=BATCH_COLS, ct_col=CT_COL)
 ```
 
-## 1. Study Summary & Cohort Overview
+## 1. Study Summary & Metadata Categorization
 
-> **Kidney (KPMP)** -- Lake et al. 2023, *Nature* 619:585-594, PMID 41648348. 104,314 single cells from 45 samples across 3 conditions (Normal, CKD, AKI), 14 cell types. Multi-site collection suitable for dual benchmark and batch-effect analysis.
+> **Kidney (KPMP Atlas)** -- Kidney Precision Medicine Project: multi-center single-cell reference atlas of human kidney tissue covering chronic kidney disease (`CKD`), acute kidney injury (`AKI`), and healthy reference tissue.
+
+### Metadata Column Categorization
+
+```{python}
+cat_df = ou.categorize_obs_columns(sub.obs, {
+    "bio_primary": [BIO_COL],
+    "bio_secondary": SECONDARY_BIO_COLS,
+    "batch_candidates": BATCH_COLS,
+    "cell_types": ALL_CT_COLS,
+    "sample_ids": [SAMPLE_COL, 'specimen'],
+})
+cat_df
+```
+
+### Cell Type Harmonization & Granularity Evaluation
+
+```{python}
+harm_df = ou.cell_type_harmonization_check(
+    sub.obs, ALL_CT_COLS, batch_col=BATCH_COLS[0] if BATCH_COLS else None, sample_col=SAMPLE_COL
+)
+harm_df
+```
+
+### Paper Table Comparison
 
 ```{python}
 if mode == "subset" and meta_info.get("paper_table_compare"):
@@ -64,15 +85,6 @@ else:
     obs_for_cmp = adata.obs if mode == "nas" else sub.obs
     cmp_df = ou.paper_table_compare(obs_for_cmp, SAMPLE_COL, CT_COL, EXPECTED)
 cmp_df
-```
-
-```{python}
-cols_summary = pd.DataFrame({
-    "Role": ["Sample ID", "Biological Condition", "Batch Candidate(s)", "Cell Type Annotation"],
-    "Resolved Column": [SAMPLE_COL, BIO_COL, ", ".join(BATCH_COLS), CT_COL],
-    "Unique Levels": [sub.obs[SAMPLE_COL].nunique(), sub.obs[BIO_COL].nunique(), ", ".join(f"{c} ({sub.obs[c].nunique()})" for c in BATCH_COLS), sub.obs[CT_COL].nunique()],
-})
-cols_summary
 ```
 
 ```{python}
@@ -99,8 +111,8 @@ cs_df = pd.DataFrame([
     {"Metric": "Count Layer / Slot", "Value": str(cs.get("slot"))},
     {"Metric": "Verdict", "Value": str(cs.get("verdict"))},
     {"Metric": "Integer Counts", "Value": str(cs.get("integer_values"))},
-    {"Metric": "Sparsity (% Nonzero)", "Value": f"{cs.get('nonzero_frac', 0) * 100:.2f}%"},
-    {"Metric": "Sampled Values Range", "Value": f"[{cs.get('min_sample', 0):.1f}, {cs.get('max_sample', 0):.1f}]"},
+    {"Metric": "Sparsity (% Nonzero)", "Value": f"{(1 - cs.get('sparsity', 0)) * 100:.2f}%"},
+    {"Metric": "Sampled Values Range", "Value": f"[0.0, {cs.get('max_sampled_value', 0):.1f}]"},
 ])
 cs_df
 ```
@@ -108,10 +120,7 @@ cs_df
 ## 3. Confounding & Experimental Design
 
 ```{python}
-if mode == "subset" and meta_info.get("confounding_crosstab"):
-    crosstab = pd.DataFrame(meta_info["confounding_crosstab"])
-else:
-    crosstab = ou.confounding_crosstab(sub.obs, BIO_COL, BATCH_COLS)
+crosstab = ou.confounding_crosstab(sub.obs, BIO_COL, BATCH_COLS)
 crosstab[["batch_candidate", "n_bio_uniq", "n_batch_uniq", "perfectly_collinear", "strongly_confounded", "warning"]]
 ```
 
@@ -120,7 +129,7 @@ crosstab[["batch_candidate", "n_bio_uniq", "n_batch_uniq", "perfectly_collinear"
 > **Embedding Protocol:** Computed directly from processed raw counts (total counts normalized to 10k, log1p, 2000 HVGs via Seurat v3 paper flavor, scaled PCA 50 PCs, standard Scanpy UMAP with `min_dist=0.5, spread=1.0`). **No pre-existing or batch-corrected embeddings are used.**
 
 ```{python}
-label_cols = [c for c in [BIO_COL] + BATCH_COLS + [CT_COL] if c and c in sub.obs.columns]
+label_cols = [c for c in [SAMPLE_COL, BIO_COL] + BATCH_COLS + [CT_COL] if c and c in sub.obs.columns]
 um = ou.embed_and_umap_workflow(
     sub, label_cols=label_cols, out_dir=None, name=NAME,
     sample_col=SAMPLE_COL,
@@ -132,7 +141,46 @@ for fig in um["figs"]:
     plt.show()
 ```
 
-## 5. Cell-Level Separation (LISI) & Batch Effect Assessment
+## 5. Cell-Type Compositional Batch Effect Analysis
+
+> **Compositional Protocol:** Evaluates sample-level centered log-ratio (CLR) abundances ($+0.5$ pseudocount zero-imputation). Group differences are evaluated using two-sided Mann-Whitney U tests (2 groups) or Kruskal-Wallis tests (>2 groups) with Benjamini-Hochberg FDR correction.
+
+### Biological Condition vs CLR Abundance
+
+```{python}
+clr = ou.compute_clr_composition(sub.obs, SAMPLE_COL, CT_COL)
+fig_box_bio = ou.plot_clr_abundance_boxplots(
+    clr, sub.obs, SAMPLE_COL, BIO_COL,
+    title=f"Compositional CLR Abundance by Biological Condition ({BIO_COL})"
+)
+plt.figure(fig_box_bio.number)
+plt.show()
+```
+
+### Technical Batch Candidate vs CLR Abundance
+
+```{python}
+if BATCH_COLS:
+    for bcol in BATCH_COLS[:2]:
+        if bcol in sub.obs.columns and sub.obs[bcol].nunique() >= 2:
+            fig_box_batch = ou.plot_clr_abundance_boxplots(
+                clr, sub.obs, SAMPLE_COL, bcol,
+                title=f"Compositional CLR Abundance by Technical Batch ({bcol})"
+            )
+            plt.figure(fig_box_batch.number)
+            plt.show()
+```
+
+### Cross-Variable Compositional Significance Matrix
+
+```{python}
+test_covariates = [c for c in [BIO_COL] + BATCH_COLS + SECONDARY_BIO_COLS if c in sub.obs.columns]
+sig_mat, fig_sig = ou.compute_compositional_significance_matrix(clr, sub.obs, SAMPLE_COL, test_covariates)
+plt.figure(fig_sig.number)
+plt.show()
+```
+
+## 6. Cell-Level Separation (LISI) & Batch Effect Assessment
 
 ```{python}
 sep_df, json_summary = ou.run_onboarding_metrics(
@@ -160,11 +208,11 @@ for line in json_summary.get("verdict", []):
 
 ---
 
-## 6. Executive Recommendation
+## 7. Executive Recommendation
 
 ::: {.callout-note}
 ### Pipeline Assignment Recommendation
-- **Dataset:** Kidney KPMP (Lake 2023)
+- **Dataset:** Kidney (KPMP Atlas)
 - **Status:** Evaluated on unintegrated raw counts.
-- **Assignment:** Recommended for **both Benchmark Analysis and Batch Effect Analysis** (`benchmark_analysis` and `batch_effect_analysis` with `batch_col: site`).
+- **Assignment:** Candidate for **Benchmark Analysis** (stratification across `condition.l1`: CKD vs AKI vs Healthy Reference).
 :::

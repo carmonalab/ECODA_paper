@@ -109,20 +109,28 @@ Outputs (plots/feathers/csv) go to `data/new_dataset_checks/<Name>/` (gitignored
   tar extraction) + login-node submitter
   (egress smoke test, sacct gate, NAS rsync + md5 verify + log append).
 
-## Summary table (fill as downloads + checks complete)
+## Summary Table & Diagnostic Results
 
-| # | Dataset | Study (PMID) | File (JooM_2025_41097818/output) | Size | md5 | Count check | n cells / samples / CTs (paper) | Batch candidates | UMAP verdict | Recommended use | Status |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | Alzheimer | Gabitto 2024 Nat Neurosci (42486312) | `SEAAD_Alzheimer.h5ad` | 53.2 GB (53,187,995,660 B) | `c2ad4c584f31f40e8aae0b32608e8146` | - | 1,395,601 / 83 / 18 | region / assay (10x 3' v3) | - | benchmark | downloaded (on NAS) |
-| 2 | Breast cancer | Kumar 2023 Nature (37380767) | `BreastCncr_processed.h5ad` | 28.9 GB (28,939,228,608 B) | `8b28a349c2c3638ddbfb3946a32d12ba` | - | 714,331 / 126 / 10 | 10x v2/v3, sample prep | - | batch-effect | downloaded (on NAS) |
-| 3 | Covid-19 PBMC | Ren 2021 Cell (34767776) | `Covid19_Ren2021.h5ad` (from `Datasets.tar.gz`) | 30.4 GB (30,408,338,999 B) | `ae2fab89414914b6001879c01f822381` | - | 993,171 / 151 / 10 | collection site | - | batch-effect | downloaded (on NAS) |
-| 4 | Diabetes (mouse) | Hrovatin 2023 Nat Metab (37697055) | `diabetes.h5ad` | 4.1 GB (4,134,240,780 B) | `38189a381bad630fa39ce2d7ad3a0855` | - | 264,235 / 52 / 13 | different studies, 10x v2/v3 | - | batch-effect (conditional) | downloaded (on NAS) |
-| 5 | Kidney (KPMP) | Lake 2023 Nature (41648348) | `Kidney_KPMP.h5ad` | 2.75 GB (2,755,120,874 B) | `36ceb02ba23c559f80625ec7bef6884f` | - | 104,314 / 45 / 14 | multi-site | - | benchmark + batch-effect | downloaded (on NAS) |
-| 6 | Lupus PBMC | Perez 2022 Science (42115607) | `Lupus_Perez2022.h5ad` (from `Datasets.tar.gz`) | 24.4 GB (24,425,598,482 B) | `001658910686c61a5010da95b7b14a15` | - | 1,263,676 / 261 / 11 | - | - | benchmark | downloaded (on NAS) |
-| 7 | Lung | Sikkema 2023 Nat Med (42362693) | `lungatlas.h5ad` (from `lungatlas.h5ad.tar.gz`) | 17.4 GB (17,356,989,429 B) | `010cd8b233ac569b711ea0cbd80980be` | - | 941,504 / 165 / 12 | study / platform (technical) | - | check-before-use | downloaded (on NAS) |
-| 8 | Myocardial infarction (2) | Kuppe 2022 Nature (41937210) | `Myocardial_Infarc_2.h5ad` | 3.6 GB (3,605,875,880 B) | `7431ae99250c99f11bf63e3034798af4` | - | 132,888 / 23 / 11 | - | - | benchmark (note: no HR CTs) | downloaded (on NAS) |
-| 9 | Parkinson | Prashant 2024 Sci Data (39580497) | `Parkinson.h5ad` | 30.5 GB (30,547,659,019 B) | `f576bcf5eb28366aeaecff01c50fff34` | - | 2,096,155 / 97 / 11 | brain region | - | negative control candidate | downloaded (on NAS) |
+| # | Dataset | Study (PMID) | File (`JooM_2025_41097818/output`) | Size | md5 | Count check | n cells / samples / CTs (paper) | Primary Bio Condition | Technical Batch Candidates | Recommended Cell Type | Recommended Use | Status |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | Alzheimer | Gabitto 2024 Nat Neurosci (42486312) | `SEAAD_Alzheimer.h5ad` | 53.2 GB | `c2ad4c584f31f40e8aae0b32608e8146` | PASS (X, raw integers) | 1,395,601 / 83 / 18 | `Cognitive status` / `disease` | `assay`, `tissue_type`, `PMI` | `cell_type` / `Subclass` | `benchmark` (`not_suitable_for_auto_annotation`) | Checked & rendered |
+| 2 | Breast cancer | Wu 2021 Nat Genet (34493872) | `BreastCncr_processed.h5ad` | 28.9 GB | `8b28a349c2c3638ddbfb3946a32d12ba` | PASS (raw.X, raw integers) | 714,331 / 126 / 10 | `disease` (normal vs cancer) | `assay`, `sequencing_platform`, `sample_source`, `suspension_dissociation_time` | `broad_cell_type` / `cell_type` | `benchmark` | Checked & rendered |
+| 3 | Covid-19 PBMC | Ren 2021 Cell (33657410) | `Covid19_Ren2021.h5ad` | 30.4 GB | `ae2fab89414914b6001879c01f822381` | PASS (X, raw integers) | 993,171 / 151 / 10 | `CoVID-19 severity` | `Single cell sequencing platform`, `City`, `datasets`, `Sample type` | `majorType` / `celltype` | `batch-effect` | Checked & rendered |
+| 4 | Diabetes (mouse) | Hrovatin 2023 Nat Metab (37697055) | `diabetes.h5ad` | 4.1 GB | `38189a381bad630fa39ce2d7ad3a0855` | PASS (raw.X, raw integers) | 264,235 / 52 / 13 | `disease` (T2D vs ND) | `dataset`, `design`, `assay` | `cell_type` | `batch-effect` / `benchmark` | Checked & rendered |
+| 5 | Kidney (KPMP) | Lake 2023 Nature (41648348) | `Kidney_KPMP.h5ad` | 2.75 GB | `36ceb02ba23c559f80625ec7bef6884f` | PASS (X, raw integers) | 104,314 / 45 / 14 | `condition.l1` (CKD, AKI, Ref) | `assay`, `tissue_type`, `region.l1`, `library` | `subclass.l1` / `cell_type` | `benchmark` | Checked & rendered |
+| 6 | Lupus PBMC | Perez 2022 Science (35389779) | `Lupus_Perez2022.h5ad` | 24.4 GB | `001658910686c61a5010da95b7b14a15` | PASS (X, raw integers) | 1,263,676 / 261 / 11 | `Status` (SLE vs Control) | `batch_cov`, `Processing_Cohort` | `cell_types` / `ct_cov` | `batch-effect` | Checked & rendered |
+| 7 | Lung | Sikkema 2023 Nat Med (37291214) | `lungatlas.h5ad` | 17.4 GB | `010cd8b233ac569b711ea0cbd80980be` | PASS (raw.X, raw integers) | 941,504 / 165 / 12 | `origin` (tumor vs normal) | `dataset`, `study`, `platform`, `assay` | `ann_fine` / `cell_type_major` | `batch-effect` / `benchmark` | Checked & rendered |
+| 8 | Myocardial infarction | Kuppe 2022 Nature (35948637) | `Myocardial_Infarc_2.h5ad` | 3.6 GB | `7431ae99250c99f11bf63e3034798af4` | PASS (X, raw integers) | 132,888 / 23 / 11 | `patient_group` (infarct stage) | `batch` (library batches) | `cell_type` | `batch-effect` | Checked & rendered |
+| 9 | Parkinson | Kamath 2022 Nat Neurosci (35513515) | `Parkinson.h5ad` | 30.5 GB | `f576bcf5eb28366aeaecff01c50fff34` | PASS (X, raw integers) | 2,096,155 / 97 / 11 | `disease` (PD vs Control) | `Brain_bank`, `assay`, `tissue_type` | `cell_type` | `benchmark` (`not_suitable_for_auto_annotation`) | Checked & rendered |
+| 10 | Debug (_debug) | Joanito 2022 Nat Genet (35773407) | `_debug_5samples.h5ad` | 38 MB | - | PASS (X, raw integers) | 6,000 / 12 / 10 | `sample.origin` | `seqtec`, `Site` | `cell.type` | `reference` | Checked & rendered |
 
-`-` = to be filled by the check notebook after download (T3/T7). Paper numbers
-from Zenodo record 15575593 (`datasets.pdf`, the study's own dataset
-descriptions) + `new_datasets_to_implement.md`.
+## Key Findings & Guidelines
+
+1. **Dual Evaluation Architecture:**
+   - Every onboarding report evaluates both **expression-level LISI batch mixing** (on unintegrated PCA embeddings) and **cell-type compositional shifts** (sample-level CLR abundance distributions with Mann-Whitney/Kruskal-Wallis statistical testing and Benjamini-Hochberg FDR correction).
+2. **Cell Type Harmonization:**
+   - Evaluated using `ou.cell_type_harmonization_check()`. Datasets compiled from multi-study consortia (Lung, Covid-19 PBMC, Diabetes) exhibit clear distinctions between atlas-wide harmonized annotations (present across $\ge 80\%$ of studies) and study-specific sub-annotations.
+3. **Balanced Diagnostic Subsetting:**
+   - Fast local Mac rendering is powered by $\min(N_{\text{samples}}, 20)$ sample allocation ($500$ cells/sample target, ~15–40 MB `.h5ad` subsets) generated on HPC via `create_subsets_hpc.py` / `select_balanced_samples()`. This guarantees balanced coverage across biological conditions $\times$ batch candidates without collinearity dropping test rows.
+4. **Heatmap & Visual Sizing:**
+   - Cell-level LISI separation heatmaps (`ou.plot_separation_heatmap`) and compositional significance matrices dynamically scale figure widths and label margins, ensuring clear numeric annotations and standalone colorbars without horizontal compression.
