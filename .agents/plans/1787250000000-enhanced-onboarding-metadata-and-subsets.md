@@ -2,7 +2,10 @@
 
 ## Overview & Context
 
-This implementation plan details the full technical design and execution strategy for upgrading the single-cell dataset onboarding diagnostic suite (`notebooks/dataset_onboarding/`) across all candidate cohorts. It ensures that every new dataset onboarded into ECODA undergoes thorough, unbiased evaluation of data integrity, biological signal, technical batch effects, and cross-study cell type harmonization.
+This implementation plan details the full technical design and execution strategy for upgrading the single-cell dataset onboarding diagnostic suite (`notebooks/dataset_onboarding/`) across all candidate cohorts. It ensures that every new dataset onboarded into ECODA undergoes thorough, dual evaluation of:
+1. **Gene Expression Batch Effects** (Unintegrated PCA + UMAP embeddings, cell-level LISI separation).
+2. **Cell-Type Compositional Batch Effects** (Sample-level CLR abundance distributions, grouped boxplots with Wilcoxon/Kruskal-Wallis tests, and cross-variable significance matrices).
+3. **Cross-Study Cell Type Harmonization & Granularity** (Sharing across batches/studies).
 
 ---
 
@@ -43,18 +46,39 @@ In each notebook, all `obs` columns are parsed and classified into 7 distinct ro
 
 ---
 
-## 3. UMAP Panel Enhancement (Sample-Colored Embedding)
+## 3. Cell-Type Compositional Batch Effect Analysis (New Section 4.5)
 
-- Update `ou.embed_and_umap_workflow()` to always generate a dedicated **UMAP panel colored by Sample ID** (`SAMPLE_COL`).
-- Visual grid displays:
-  - **Panel A:** Biological condition (`BIO_COL`)
-  - **Panel B:** Primary batch candidate(s) (`BATCH_COLS`)
-  - **Panel C:** Cell type annotation (`CT_COL`)
-  - **Panel D:** Sample ID (`SAMPLE_COL`) — to visually detect donor-level clustering vs proper within-condition mixing.
+In addition to single-cell gene expression batch effects, ECODA specifically requires evaluating **cell-type compositional batch effects** across samples.
+
+### Mathematical Pipeline:
+1. **Sample $\times$ Cell Type Count Matrix:**
+   Compute cell count matrix $C_{s, ct}$ for sample $s$ and cell type $ct$.
+2. **Zero Imputation (+0.5 pseudocount):**
+   $C'_{s, ct} = C_{s, ct} + 0.5$ (matching ECODA benchmark default `counts_all` with `num=0.5`).
+3. **Centered Log-Ratio (CLR) Transformation:**
+   $P_{s, ct} = C'_{s, ct} / \sum_{k=1}^K C'_{s, k}$
+   $\text{CLR}(P_{s, ct}) = \log(P_{s, ct}) - \frac{1}{K} \sum_{k=1}^K \log(P_{s, k})$.
+4. **Statistical Significance Testing:**
+   - 2-group comparisons: Two-sided Mann-Whitney / Wilcoxon rank-sum test with Benjamini-Hochberg FDR correction and significance stars ($* p<0.05, ** p<0.01, *** p<0.001, **** p<0.0001$).
+   - $>2$ groups: Kruskal-Wallis non-parametric test.
+5. **Visualizations:**
+   - **Grouped Boxplots with Jittered Sample Points:**
+     - Plotted for broad / major cell type annotations ($\le 20$ cell types).
+     - X-axis: Cell types; Y-axis: CLR abundance; Hue: Condition / Batch candidate.
+     - Significance stars annotated above each cell type.
+   - **Compositional Shift Significance Table / Heatmap:**
+     - For all cell types (including fine annotations $>20$ types), a summary heatmap/table showing $-\log_{10}(\text{FDR } p\text{-value})$ and effect sizes across all biological and technical batch variables.
 
 ---
 
-## 4. Separation Heatmap Layout Overhaul (Section 5 Fix)
+## 4. Unintegrated Embeddings & UMAP Panel Enhancement (Section 4)
+
+- Compute fresh unintegrated PCA+UMAP directly from raw counts (10k normalization, log1p, 2000 HVGs, 50 PCs, Scanpy default UMAP).
+- Dedicated **UMAP panel colored by Sample ID** (`SAMPLE_COL`) alongside biological condition, batch candidate(s), and cell types.
+
+---
+
+## 5. Separation Heatmap Layout Overhaul (Section 5 Fix)
 
 ### Problem Identified:
 - In datasets with many cell types and long labels (e.g., Lung, Alzheimer), the heatmap columns get squished horizontally into thin vertical bars, cell values overlap (`0.99 0.99 0.99`), and the colorbar compresses the plot.
@@ -72,7 +96,7 @@ In each notebook, all `obs` columns are parsed and classified into 7 distinct ro
 
 ---
 
-## 5. Subsetting Strategy: Balanced $\min(N_{\text{samples}}, 20)$ Sample Allocation
+## 6. Subsetting Strategy: Balanced $\min(N_{\text{samples}}, 20)$ Sample Allocation
 
 ### Budget:
 - **Sample Count:** Target $\min(N_{\text{samples}}, 20)$ samples per dataset (e.g., 20 samples if cohort has $\ge 20$, or all available samples if $< 20$).
@@ -86,7 +110,7 @@ In each notebook, all `obs` columns are parsed and classified into 7 distinct ro
 
 ---
 
-## 6. Dataset-Specific Covariate Configurations
+## 7. Dataset-Specific Covariate Configurations
 
 ### 1. Alzheimer (SEA-AD)
 - **Primary Bio:** `Cognitive status` (Dementia, Mild Cognitive Impairment, No dementia)
@@ -144,13 +168,13 @@ In each notebook, all `obs` columns are parsed and classified into 7 distinct ro
 
 ---
 
-## 7. Documentation Updates (`notebooks/dataset_onboarding/README.md` & `TODO.md`)
+## 8. Documentation Updates (`notebooks/dataset_onboarding/README.md` & `TODO.md`)
 
 - Document concise summary findings per dataset in `README.md`:
   - Identified batch effect variables.
   - Degree of collinearity with biological condition.
   - Within-cell-type LISI mixing/separation.
-  - Recommended cell type annotation column based on cross-batch harmonization.
+  - Compositional batch effects and recommended cell type annotation column.
 - Track post-onboarding extension in `TODO.md`:
   - Cross-metadata collinearity matrices (Cramér's V) and atlas-wide LISI heatmaps on full HPC cohorts.
 
@@ -161,6 +185,9 @@ In each notebook, all `obs` columns are parsed and classified into 7 distinct ro
 ### Component A: Onboarding Utilities & Visualization
 - [MODIFY] `notebooks/dataset_onboarding/onboarding_utils.py`:
   - Add `cell_type_harmonization_check(obs, ct_cols, batch_col, sample_col)`.
+  - Add `compute_clr_composition(obs, sample_col, ct_col, pseudocount=0.5)`.
+  - Add `plot_clr_abundance_boxplots(clr_df, meta_df, ct_col, group_col, max_cts=20)`.
+  - Add `compute_compositional_significance_matrix(clr_df, meta_df, group_cols)`.
   - Add `categorize_obs_columns(obs, config)`.
   - Overhaul `plot_separation_heatmap(sep_df, name)` with dynamic width/height and non-compressing colorbars.
   - Update `embed_and_umap_workflow()` to add sample-colored UMAP panels.
@@ -170,6 +197,7 @@ In each notebook, all `obs` columns are parsed and classified into 7 distinct ro
 - [MODIFY] `notebooks/dataset_onboarding/dataset_check_*.qmd`:
   - Add Section 1 cell type harmonization comparison table.
   - Add metadata categorization table section (`ou.categorize_obs_columns`).
+  - Add Section 4.5 CLR abundance grouped boxplots and significance matrix.
   - Wire dataset-specific primary/secondary bio columns and technical batch candidates (including Sikkema Lung Fig 4 covariates).
   - Update UMAP panel rendering to display sample-colored plots.
 
@@ -185,6 +213,6 @@ In each notebook, all `obs` columns are parsed and classified into 7 distinct ro
 
 1. **Local Render Verification:**
    - Execute `pixi run -e default quarto render notebooks/dataset_onboarding/dataset_check_<name>.qmd` for each dataset.
-   - Verify that all 10 HTML reports generate with exit code 0, complete metadata categorization tables, cell type harmonization tables, sample-colored UMAPs, and readable, un-squeezed LISI separation heatmaps.
+   - Verify that all 10 HTML reports generate with exit code 0, complete metadata categorization tables, cell type harmonization tables, CLR abundance grouped boxplots, sample-colored UMAPs, and readable, un-squeezed LISI separation heatmaps.
 2. **Collinearity & Batch Evaluation Verification:**
    - Verify that balanced subsets allow LISI to evaluate batch candidates without dropping all cell types as "confounded".
