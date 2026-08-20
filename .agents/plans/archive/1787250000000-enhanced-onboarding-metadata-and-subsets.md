@@ -93,10 +93,10 @@ Evaluates sample-level centered log-ratio (CLR) abundances ($+0.5$ pseudocount z
 
 ---
 
-## 6. Subsetting Strategy: Balanced $\min(N_{\text{samples}}, 20)$ Sample Allocation
+## 6. Subsetting Strategy: Balanced $\min(N_{\text{samples}}, 25)$ Sample Allocation
 
 - Implemented `ou.select_balanced_samples()`:
-  - Targets $\min(N_{\text{samples}}, 20)$ samples with 500 cells per sample.
+  - Targets $\min(N_{\text{samples}}, 25)$ samples with 1,000 cells per sample for new dataset onboarding (500 cells per sample for `_debug`).
   - Stratifies across biological conditions and round-robins across batch candidates to guarantee multi-batch representation per condition.
 
 ---

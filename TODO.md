@@ -121,7 +121,7 @@ Reference plan: [`.agents/plans/dataset_onboarding_and_debug_overhaul.md`](.agen
 ## Ideas & Technical Notes for Later
 
 - **Dataset Onboarding Batch Effect & Collinearity Synthesis:**
-  - After re-running diagnostic reports with balanced subsets ($\min(N_{\text{samples}}, 20)$ samples, 500 cells/sample):
+  - After re-running diagnostic reports with balanced subsets ($\min(N_{\text{samples}}, 25)$ samples, 1,000 cells/sample for new datasets; 500 cells/sample for `_debug`):
     - Document concise summary findings per dataset in `notebooks/dataset_onboarding/README.md` (identified batch effect variables, degree of collinearity with biological conditions, LISI within-cell-type separation).
     - Post-onboarding extension (full cohort): generate cross-metadata collinearity matrices (Cramér's V / normalized mutual information) and atlas-wide LISI heatmaps to comprehensively capture all technical vs biological variance sources.
     - Finalize "Batch condition sequencing/sample prep (ECODA)" metadata assignments in `datasets.json` / `README.md` once all full-cohort samples are processed and evaluated.

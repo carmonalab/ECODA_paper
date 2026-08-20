@@ -1168,7 +1168,7 @@ def select_balanced_samples(
     sample_col: str,
     bio_col: str | None = None,
     batch_cols: list | None = None,
-    target_samples: int = 20,
+    target_samples: int = 25,
     min_cells: int = 200,
     seed: int = 0,
 ) -> list[str]:
@@ -1242,19 +1242,17 @@ def select_balanced_samples(
 # ---------------------------------------------------------------------------
 
 SUBSET_CONFIG = {
-    # Number of samples to select (range 10-20; files with fewer keep all).
-    "MAX_SAMPLES": 15,
-    # Samples per biological group (range 3-5), before the global cap applies.
-    "N_PER_BIO": 4,
-    # Random per-sample cap (range 500-5000); bounds every per-sample read so
-    # peak memory is independent of the file size.
-    "MAX_CELLS_PER_SAMPLE": 2000,
-    # Optional per-cell-type cap applied AFTER the concat, stratified by the
-    # batch candidates (e.g. 100) to avoid artificial within-CT imbalances.
+    # Number of samples to select (range 15-30; files with fewer keep all).
+    "MAX_SAMPLES": 25,
+    # Samples per biological group (range 3-6), before the global cap applies.
+    "N_PER_BIO": 5,
+    # Random per-sample cap (1000 cells/sample for new dataset onboarding; 500 for _debug).
+    "MAX_CELLS_PER_SAMPLE": 1000,
+    # Optional per-cell-type cap applied AFTER the concat.
     "MAX_CELLS_PER_CT": None,
     # Overall soft target: the subset is trimmed (stratified by sample) when it
     # exceeds this many cells.
-    "CELLS_TARGET": 10_000,
+    "CELLS_TARGET": 25_000,
     # Absolute ceiling the subset never exceeds (used when CELLS_TARGET is 0).
     "CELLS_MAX": 50_000,
     "SEED": 0,
