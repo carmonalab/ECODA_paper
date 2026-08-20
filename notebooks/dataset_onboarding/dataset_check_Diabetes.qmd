@@ -33,9 +33,9 @@ NAS_FILE = '/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/Joo
 NAME = 'Diabetes'
 EXPECTED = {"cells": 264235, "samples": 52, "ct_types": 13}
 
-SAMPLE_COL = 'file_id'
+SAMPLE_COL = 'donor_id'
 BIO_COL = 'disease'
-BATCH_COLS = ['study', 'batch']
+BATCH_COLS = ['dataset', 'design', 'assay']
 CT_COL = 'cell_type'
 
 ds_data = ou.load_onboarding_dataset_or_subset(NAME, NAS_FILE, HERE)

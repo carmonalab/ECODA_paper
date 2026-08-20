@@ -33,10 +33,10 @@ NAS_FILE = '/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/Joo
 NAME = 'Kidney_KPMP'
 EXPECTED = {"cells": 104314, "samples": 45, "ct_types": 14}
 
-SAMPLE_COL = 'sample_id'
-BIO_COL = 'disease'
-BATCH_COLS = ['site', 'batch']
-CT_COL = 'subclass.l2'
+SAMPLE_COL = 'donor_id'
+BIO_COL = 'condition.l1'
+BATCH_COLS = ['assay', 'tissue_type', 'region.l1']
+CT_COL = 'subclass.l1'
 
 ds_data = ou.load_onboarding_dataset_or_subset(NAME, NAS_FILE, HERE)
 mode = ds_data["mode"]

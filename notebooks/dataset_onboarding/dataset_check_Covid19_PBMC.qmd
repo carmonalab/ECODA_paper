@@ -33,10 +33,10 @@ NAS_FILE = '/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/Joo
 NAME = 'Covid19_PBMC'
 EXPECTED = {"cells": 993171, "samples": 151, "ct_types": 10}
 
-SAMPLE_COL = 'sample_new'
-BIO_COL = 'disease_stage'
-BATCH_COLS = ['batch', 'hospital']
-CT_COL = 'cell_type_major'
+SAMPLE_COL = 'sampleID'
+BIO_COL = 'CoVID-19 severity'
+BATCH_COLS = ['Single cell sequencing platform', 'datasets', 'City']
+CT_COL = 'celltype'
 
 ds_data = ou.load_onboarding_dataset_or_subset(NAME, NAS_FILE, HERE)
 mode = ds_data["mode"]

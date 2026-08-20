@@ -36,7 +36,7 @@
 
 ### Cluster Access & Host Configuration
 - **Cluster Endpoint:** `login1.bamboo.hpc.unige.ch` (SSH alias: `bamboo`, user: `halterc`).
-- Remote commands and status checks can be executed directly via `ssh bamboo "<command>"`.
+- Remote commands and status checks can be executed directly via `ssh bamboo "<command>"`. (Don't run pipelines or long running jobs here on the login node!)
 
 ### Login Node Policy
 - **Never execute heavy computation, preprocessing, or benchmarks on login nodes.**
