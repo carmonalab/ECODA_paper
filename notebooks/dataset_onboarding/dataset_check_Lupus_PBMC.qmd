@@ -33,10 +33,10 @@ NAS_FILE = '/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/Joo
 NAME = 'Lupus_PBMC'
 EXPECTED = {"cells": 1263676, "samples": 261, "ct_types": 11}
 
-SAMPLE_COL = 'ind_cov'
+SAMPLE_COL = 'sampleID'
 BIO_COL = 'Status'
-BATCH_COLS = ['batch_cov', 'processing_site']
-CT_COL = 'cg_cov'
+BATCH_COLS = ['batch_cov', 'Processing_Cohort', 'pop_cov']
+CT_COL = 'cell_types'
 
 ds_data = ou.load_onboarding_dataset_or_subset(NAME, NAS_FILE, HERE)
 mode = ds_data["mode"]

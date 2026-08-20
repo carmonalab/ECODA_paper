@@ -53,6 +53,13 @@ def locate_counts(adata, verbose: bool = True) -> tuple:
             if verbose:
                 print(f"counts slot: adata.layers[{layer_name!r}]")
             return adata.layers[layer_name], f"layers/{layer_name}"
+    # If raw.X exists, check if X is scaled (e.g. contains negative numbers)
+    if adata.raw is not None and adata.raw.X is not None and adata.X is not None:
+        sample_x = _sample_values(adata.X, n_sample_cells=1000)
+        if len(sample_x) > 0 and np.any(sample_x < 0):
+            if verbose:
+                print("counts slot: adata.raw.X (adata.X contains negative values / is scaled)")
+            return adata.raw.X, "raw.X"
     if adata.X is not None:
         if verbose:
             print("counts slot: adata.X")
@@ -968,7 +975,12 @@ def compute_embed_umap(
 
     counts, slot = locate_counts(sub, verbose=False)
     if slot.startswith("raw."):
-        counts = sub.raw[:, sub.var_names].X
+        common_vars = sub.var_names.intersection(sub.raw.var_names)
+        if len(common_vars) > 0:
+            counts = sub.raw[:, common_vars].X
+            sub = sub[:, common_vars].copy()
+        else:
+            counts = sub.raw.X
     sub.X = counts.copy() if hasattr(counts, "copy") else counts
     sub.layers["counts"] = sub.X.copy()
 
@@ -1002,8 +1014,15 @@ def compute_embed_umap(
 
     sub_hvg = sub[:, hvg_mask].copy()
     sc.pp.scale(sub_hvg, max_value=10)
+    if sp.issparse(sub_hvg.X):
+        sub_hvg.X.data = np.nan_to_num(sub_hvg.X.data, nan=0.0, posinf=10.0, neginf=-10.0)
+    elif isinstance(sub_hvg.X, np.ndarray):
+        sub_hvg.X = np.nan_to_num(sub_hvg.X, nan=0.0, posinf=10.0, neginf=-10.0)
     n_comps = min(pca_n_comps, sub_hvg.n_vars - 1, sub_hvg.n_obs - 1)
-    sc.pp.pca(sub_hvg, n_comps=n_comps, svd_solver="arpack")
+    try:
+        sc.pp.pca(sub_hvg, n_comps=n_comps, svd_solver="arpack", random_state=seed)
+    except Exception:
+        sc.pp.pca(sub_hvg, n_comps=n_comps, svd_solver="randomized", random_state=seed)
     sub.obsm["X_pca"] = sub_hvg.obsm["X_pca"]
 
     n_pcs_use = min(n_comps, sub.obsm["X_pca"].shape[1])
