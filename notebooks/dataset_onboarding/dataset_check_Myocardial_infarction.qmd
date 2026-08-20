@@ -42,7 +42,7 @@ PILOT_BIO_COL = 'patient_group'
 PILOT_BATCH_COL = 'None'
 
 ECODA_BIO_COL = 'patient_group'
-ECODA_SECONDARY_BIO = ['sampleType', 'cell_subtype', 'patient_region_id']
+ECODA_SECONDARY_BIO = ['sampleType', 'patient_region_id']
 ECODA_BATCH_SEQ = ['batch']
 ECODA_BATCH_PREP = ['sampleType']
 
