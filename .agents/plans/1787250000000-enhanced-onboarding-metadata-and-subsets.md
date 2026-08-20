@@ -1,21 +1,14 @@
 # Implementation Plan — Enhanced Dataset Onboarding & Diagnostic Analytics
 
-## Overview
+## Overview & Context
 
-This plan expands the dataset onboarding framework and Quarto diagnostic reports (`notebooks/dataset_onboarding/`) to provide deep, actionable evaluation of candidate cohorts for ECODA patient stratification. It introduces:
-1. **Cell type annotation granularity & cross-study harmonization evaluation** in Section 1.
-2. **Comprehensive metadata column categorization & exploration** across 7 structured roles.
-3. **Dedicated sample-colored UMAP panels** to evaluate inter-sample vs biological mixing.
-4. **Separation heatmap layout overhaul** in Section 5 to eliminate horizontal squeezing.
-5. **Balanced 10–20 sample diagnostic subsetting** (500 cells/sample, 5k–10k cells total) across joint bio × batch factors.
-6. **Sikkema et al. (2023) Lung Atlas (Fig 4) technical & biological covariates integration**.
-7. **`README.md` documentation updates** for Myocardial Infarction batch structure and onboarding standards.
+This implementation plan details the full technical design and execution strategy for upgrading the single-cell dataset onboarding diagnostic suite (`notebooks/dataset_onboarding/`) across all candidate cohorts. It ensures that every new dataset onboarded into ECODA undergoes thorough, unbiased evaluation of data integrity, biological signal, technical batch effects, and cross-study cell type harmonization.
 
 ---
 
 ## 1. Cell Type Harmonization & Granularity Evaluation (Section 1)
 
-ECODA requires fine-grained, biologically meaningful cell type annotations that are **consistently harmonized across all batches/studies** in multi-cohort datasets.
+ECODA requires fine-grained, biologically meaningful cell type annotations that are **consistently harmonized across all batches/studies** in multi-cohort datasets. If a dataset is a compilation of multiple studies with disjoint or study-specific cell labels, fine annotations cannot be used for cross-study patient stratification.
 
 ### Implementation:
 - Add `ou.cell_type_harmonization_check(obs, ct_cols, batch_col, sample_col)` to `onboarding_utils.py`.
@@ -61,10 +54,10 @@ In each notebook, all `obs` columns are parsed and classified into 7 distinct ro
 
 ---
 
-## 4. Separation Heatmap Layout Overhaul (Section 5)
+## 4. Separation Heatmap Layout Overhaul (Section 5 Fix)
 
 ### Problem Identified:
-- In datasets with many cell types and long labels (e.g., Lung, Alzheimer), the heatmap columns get squished into thin vertical bars, cell values overlap (`0.99 0.99 0.99`), and the colorbar compresses the plot.
+- In datasets with many cell types and long labels (e.g., Lung, Alzheimer), the heatmap columns get squished horizontally into thin vertical bars, cell values overlap (`0.99 0.99 0.99`), and the colorbar compresses the plot.
 
 ### Redesign in `plot_separation_heatmap`:
 - **Dynamic Proportional Sizing:**
@@ -79,21 +72,17 @@ In each notebook, all `obs` columns are parsed and classified into 7 distinct ro
 
 ---
 
-## 5. Subsetting Strategy Redesign (Balanced 10–20 Samples, 500 Cells/Sample)
+## 5. Subsetting Strategy: Balanced $\min(N_{\text{samples}}, 20)$ Sample Allocation
 
-### Problem Identified:
-- Previous subsetting selected only ~4 samples or drew samples from a single tissue/batch level (e.g., Alzheimer subset contained only one tissue level, resulting in `assay` batch candidates having a single level in the subset and all cell types being dropped as "confounded" with zero batch evaluation).
+### Budget:
+- **Sample Count:** Target $\min(N_{\text{samples}}, 20)$ samples per dataset (e.g., 20 samples if cohort has $\ge 20$, or all available samples if $< 20$).
+- **Cell Count:** 500 cells per sample (total $2,500 - 10,000$ cells), matching the validated `_debug` strategy.
 
-### Proposed Balanced Sampling Strategy:
-1. **Sample Budget:** Target **10–20 samples** with **500 cells per sample** (total 5,000–10,000 cells), identical to the successful `_debug` design.
-2. **Joint Balancing Algorithm (`select_balanced_samples`):**
-   - Identify candidate samples with $\ge 500$ cells.
-   - Cross-tabulate candidate samples across the primary biological condition $\times$ suspected batch candidates (e.g. `assay`, `tissue`/`region`, `batch`).
-   - Round-robin sample selection ensuring that for each biological condition, samples from multiple batch levels are selected (e.g., Normal in Assay A + Normal in Assay B; Disease in Assay A + Disease in Assay B).
-   - This ensures cell-level LISI can score batch separation within shared cell types without collinearity dropping all tests.
-3. **Execution Options:**
-   - **On-the-fly local subsetting:** Executed during `.qmd` render from the locally cached full subset / NAS files.
-   - **HPC subset extraction script (`create_subsets_hpc.py`):** Updated to use the balanced multi-sample selection logic for generating refreshed subsets.
+### Joint Balancing Algorithm (`select_balanced_samples`):
+- Filter candidate samples with $\ge 500$ cells (or $\ge 200$ cells if sample counts are small).
+- Cross-tabulate candidate samples across the primary biological condition $\times$ suspected batch candidates (e.g. `assay`, `tissue`/`region`, `batch`).
+- Round-robin sample selection ensuring that for each biological condition, samples from multiple batch levels are selected (e.g., Normal in Assay A + Normal in Assay B; Disease in Assay A + Disease in Assay B).
+- This ensures cell-level LISI can score batch separation within shared cell types without collinearity dropping all tests.
 
 ---
 
@@ -155,12 +144,15 @@ In each notebook, all `obs` columns are parsed and classified into 7 distinct ro
 
 ---
 
-## 7. Documentation Updates (`notebooks/dataset_onboarding/README.md`)
+## 7. Documentation Updates (`notebooks/dataset_onboarding/README.md` & `TODO.md`)
 
-- Update the status table in `README.md`:
-  - Explicitly document Myocardial Infarction `batch` column ('A' vs 'B') as a strong batch effect candidate.
-  - Document the updated balanced subsetting specifications (10–20 samples, 500 cells/sample, multi-batch multi-bio representation).
-  - Add references to Sikkema Lung Atlas Figure 4 technical vs biological covariates and cross-study cell type harmonization criteria.
+- Document concise summary findings per dataset in `README.md`:
+  - Identified batch effect variables.
+  - Degree of collinearity with biological condition.
+  - Within-cell-type LISI mixing/separation.
+  - Recommended cell type annotation column based on cross-batch harmonization.
+- Track post-onboarding extension in `TODO.md`:
+  - Cross-metadata collinearity matrices (Cramér's V) and atlas-wide LISI heatmaps on full HPC cohorts.
 
 ---
 
@@ -172,7 +164,7 @@ In each notebook, all `obs` columns are parsed and classified into 7 distinct ro
   - Add `categorize_obs_columns(obs, config)`.
   - Overhaul `plot_separation_heatmap(sep_df, name)` with dynamic width/height and non-compressing colorbars.
   - Update `embed_and_umap_workflow()` to add sample-colored UMAP panels.
-  - Implement `select_balanced_samples()` for joint multi-condition multi-batch sample allocation.
+  - Implement `select_balanced_samples()` for $\min(N_{\text{samples}}, 20)$ joint multi-condition multi-batch sample allocation.
 
 ### Component B: Candidate Dataset Notebooks
 - [MODIFY] `notebooks/dataset_onboarding/dataset_check_*.qmd`:
@@ -183,7 +175,9 @@ In each notebook, all `obs` columns are parsed and classified into 7 distinct ro
 
 ### Component C: Documentation
 - [MODIFY] `notebooks/dataset_onboarding/README.md`:
-  - Document Myocardial Infarction batch effect, Sikkema Lung covariates, harmonization criteria, and balanced subsetting design.
+  - Document Myocardial Infarction batch effect, Sikkema Lung covariates, harmonization criteria, and balanced subsetting findings.
+- [MODIFY] `TODO.md`:
+  - Track post-onboarding full-cohort collinearity synthesis.
 
 ---
 
