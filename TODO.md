@@ -66,7 +66,7 @@ Implementation plan and task tracking for manuscript revisions, benchmark extens
 
 ## Phase 5 — New Dataset Onboarding (BIB Study Cohorts)
 
-Reference plan: [`.kilo/plans/1786899069337-onboard-new-datasets-phase5.md`](.kilo/plans/1786899069337-onboard-new-datasets-phase5.md). Feasibility details: [`new_datasets_to_implement.md`](new_datasets_to_implement.md).
+Reference plan: [`.agents/plans/dataset_onboarding_and_debug_overhaul.md`](.agents/plans/dataset_onboarding_and_debug_overhaul.md). Feasibility details: [`new_datasets_to_implement.md`](new_datasets_to_implement.md).
 
 - [x] **5.1 Data Sources & Catalog:**
   - Identified Zenodo and CellxGene source locations for 9 target cohorts (Alzheimer, Breast Cancer, Covid-19 PBMC, Diabetes, Kidney KPMP, Lupus PBMC, Lung, Myocardial Infarction, Parkinson).

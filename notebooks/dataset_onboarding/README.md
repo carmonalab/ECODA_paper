@@ -12,7 +12,7 @@ for Alzheimer (SEA-AD) and Parkinson. Excluded: Kidney cancer, PDAC, MI(1)
 (duplicate of MI-2), follicular lymphoma. Full feasibility table (colors,
 comments): `new_datasets_to_implement.md` (Excel source
 `/Users/christianhalter/Desktop/ECODA_PAPER_DATASETS.xlsx`). Implementation
-plan: `.kilo/plans/1786899069337-onboard-new-datasets-phase5.md`.
+plan: `.agents/plans/dataset_onboarding_and_debug_overhaul.md`.
 
 ## Download (HPC route first — user runs; Mac→NAS script is the fallback)
 

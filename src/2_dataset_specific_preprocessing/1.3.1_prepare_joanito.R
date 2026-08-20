@@ -69,8 +69,8 @@ if (!"seqtec" %in% colnames(seurat@meta.data)) {
 # -----------------------------------------------------------------------------
 set.seed(321)
 
-# Sample selection: 5 samples covering both biological conditions (sample.origin)
-# and batches (seqtec), preferring samples with >= min_cells cells
+# Sample selection: 5 samples strictly covering biological conditions (sample.origin)
+# and batches (seqtec 5' vs 3' seq, and Site), preferring samples with >= min_cells cells
 select_debug_samples <- function(meta, n, min_cells) {
   counts <- sort(table(meta$sample.ID), decreasing = TRUE)
   candidates <- names(counts)[counts >= min_cells]
@@ -84,24 +84,54 @@ select_debug_samples <- function(meta, n, min_cells) {
   info <- unique(meta[meta$sample.ID %in% candidates,
                       c("sample.ID", "sample.origin", "seqtec", "Site")])
   info <- info[order(-counts[info$sample.ID]), ]
-  # Diversity key: one sample per (condition x batch x site) combo first
-  info$combo <- paste(info$sample.origin, info$seqtec, info$Site, sep = "|")
 
+  # Step 1: Ensure representation of every seqtec level (both 5' seq and 3' seq)
+  seqtec_levels <- unique(info$seqtec)
   chosen <- character(0)
+  for (st in seqtec_levels) {
+    cand <- info$sample.ID[info$seqtec == st & !info$sample.ID %in% chosen]
+    if (length(cand) > 0) chosen <- c(chosen, cand[1])
+  }
+
+  # Step 2: Ensure representation of main biological groups (sample.origin)
+  bio_levels <- unique(info$sample.origin)
+  for (bo in bio_levels) {
+    if (!any(info$sample.origin[info$sample.ID %in% chosen] == bo)) {
+      cand <- info$sample.ID[info$sample.origin == bo & !info$sample.ID %in% chosen]
+      if (length(cand) > 0) chosen <- c(chosen, cand[1])
+    }
+  }
+
+  # Step 3: Fill remaining slots by round-robin over distinct (condition x batch x site) combos
+  info$combo <- paste(info$sample.origin, info$seqtec, info$Site, sep = "|")
   for (k in unique(info$combo)) {
+    if (length(chosen) >= n) break
     cand <- info$sample.ID[info$combo == k & !info$sample.ID %in% chosen]
     if (length(cand) > 0) chosen <- c(chosen, cand[1])
-    if (length(chosen) >= n) break
   }
+
+  # Step 4: If still under n, fill by highest cell count
   if (length(chosen) < n) {
     rest <- info$sample.ID[!info$sample.ID %in% chosen]
     chosen <- c(chosen, rest[seq_len(n - length(chosen))])
   }
-  chosen[seq_len(n)]
+
+  chosen <- chosen[seq_len(n)]
+
+  # Verification check on chosen samples
+  chosen_meta <- info[info$sample.ID %in% chosen, ]
+  if (length(unique(chosen_meta$seqtec)) < 2) {
+    stop("select_debug_samples: chosen debug subset does not contain multi-level seqtec!")
+  }
+  if (length(unique(chosen_meta$sample.origin)) < 2) {
+    stop("select_debug_samples: chosen debug subset does not contain multi-level sample.origin!")
+  }
+
+  return(chosen)
 }
 
-chosen <- select_debug_samples(seurat@meta.data, 5, 500)
-message("Chosen samples: ", paste(chosen, collapse = ", "))
+chosen <- select_debug_samples(seurat@meta.data, 6, 500)
+message("Chosen samples (", length(chosen), "): ", paste(chosen, collapse = ", "))
 
 meta <- seurat@meta.data
 set.seed(321)

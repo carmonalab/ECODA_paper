@@ -806,39 +806,9 @@ def subset_by_samples(
         sub = adata[parent_pos].to_memory()
     sub.obsm = {}
     sub.obsp = {}
-
-    # Re-slice the parent's unintegrated obsm arrays to the subset rows so the
-    # downstream UMAP/metrics stay in the original (global) embedding space.
-    try:
-        import h5py
-    except ImportError:  # pragma: no cover
-        h5py = None
-
-    obsm_info = detect_unintegrated_obsm(adata)
-    needed_keys = obsm_info["pca_candidates"] + obsm_info["umap_candidates"]
-
-    if needed_keys:
-        if getattr(adata, "isbacked", False) and h5py is not None:
-            fpath = getattr(adata, "filename", None)
-            if fpath and os.path.exists(fpath):
-                try:
-                    with h5py.File(fpath, "r") as hf:
-                        if "obsm" in hf:
-                            for k in needed_keys:
-                                if k in hf["obsm"]:
-                                    ds = hf["obsm"][k]
-                                    if isinstance(ds, h5py.Dataset) and ds.ndim == 2 and ds.shape[0] == adata.n_obs:
-                                        sub.obsm[k] = ds[np.sort(parent_pos)]
-                except Exception:
-                    pass
-        for k in needed_keys:
-            if k not in sub.obsm and k in adata.obsm:
-                try:
-                    arr = np.asarray(adata.obsm[k])
-                    if arr.ndim == 2 and arr.shape[0] == adata.n_obs:
-                        sub.obsm[k] = arr[parent_pos]
-                except Exception:
-                    pass
+    sub.varm = {}
+    sub.varp = {}
+    sub.uns = {}
 
     # --- post-concat caps -----------------------------------------------------
     if cfg.get("MAX_CELLS_PER_CT") and ct_col and ct_col in sub.obs.columns:
@@ -891,40 +861,6 @@ def subset_by_samples(
     return sub, summary
 
 
-def detect_unintegrated_obsm(adata) -> dict:
-    """Find precomputed non-harmony PCA and UMAP keys in obsm.
-
-    Excludes any key containing 'harmony' (integrated space). For the paper's
-    own preprocessed views the keys are namespaced
-    (``X_pca_batch_effect_analysis_hvg2000``) -- still unintegrated and valid.
-    Preference for metrics: exact ``X_pca``, then a key containing ``hvg2000``,
-    then the lexicographically-smallest remaining candidate.
-    """
-    keys = list(adata.obsm.keys())
-    pca_keys = [k for k in keys if (k == "X_pca" or k.startswith("X_pca_")) and "harmony" not in k]
-    umap_keys = [k for k in keys if (k == "X_umap" or k.startswith("X_umap_")) and "harmony" not in k]
-
-    def pick(cands, preferred_substr=None):
-        if not cands:
-            return None
-        for c in cands:
-            if c == "X_pca" or c == "X_umap":
-                return c
-        if preferred_substr:
-            for c in cands:
-                if preferred_substr in c:
-                    return c
-        return sorted(cands)[0]
-
-    return {
-        "pca_key": pick(pca_keys, "hvg2000"),
-        "umap_key": pick(umap_keys),
-        "pca_candidates": pca_keys,
-        "umap_candidates": umap_keys,
-        "all_keys": keys,
-    }
-
-
 def get_counts_matrix_in_memory(adata, subset_idx, verbose: bool = False):
     """Return a dense/sparse counts matrix for a cell subset, from raw counts."""
     if subset_idx is not None:
@@ -941,61 +877,60 @@ def get_counts_matrix_in_memory(adata, subset_idx, verbose: bool = False):
 def plot_umap_panels(
     umap_coords: np.ndarray,
     obs_subset: pd.DataFrame,
-    label_cols,
-    out_dir: Path,
-    name: str,
+    label_cols: list,
+    out_dir: Path | None = None,
+    name: str = "dataset",
     dpi: int = 150,
-    max_cells: int = 200_000,
-    seed: int = 0,
     point_size: float | None = None,
+    seed: int = 0,
 ) -> list:
     """Scatter panels of the UMAP embedding colored by each label column.
 
-    ``umap_coords`` and ``obs_subset`` must be cell-aligned and already
-    subsampled by the caller. Saves one PNG per label column.
+    Returns a list of generated matplotlib Figure objects (and saves PNGs if out_dir is provided).
     """
-    import matplotlib
-    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
     n_cells = umap_coords.shape[0]
     if point_size is None:
-        point_size = 4.0 if n_cells <= 50_000 else 1.0
+        point_size = 6.0 if n_cells <= 10_000 else (3.0 if n_cells <= 50_000 else 1.0)
 
-    saved = []
+    saved_figs = []
     for col in label_cols:
         if col not in obs_subset.columns:
             warnings.warn(f"plot_umap_panels: label column {col!r} not found; skipped")
             continue
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(7, 5.5))
         cats = obs_subset[col].astype(str).fillna("NA")
-        for cat in pd.unique(cats):
+        uniq_cats = pd.unique(cats)
+        for cat in uniq_cats:
             m = cats.values == cat
             ax.scatter(
                 umap_coords[m, 0],
                 umap_coords[m, 1],
                 s=point_size,
-                alpha=0.6,
+                alpha=0.7,
                 linewidths=0,
-                label=cat if len(pd.unique(cats)) <= 40 else None,
+                label=cat if len(uniq_cats) <= 30 else None,
             )
-        if len(pd.unique(cats)) <= 40:
+        if len(uniq_cats) <= 30:
             ax.legend(
                 bbox_to_anchor=(1.02, 1), loc="upper left",
                 frameon=False, fontsize=8, markerscale=2,
+                title=col,
             )
+        ax.set_title(f"UMAP colored by {col}", fontsize=11, fontweight="bold")
         ax.set_xlabel("UMAP-1")
         ax.set_ylabel("UMAP-2")
-        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in col)
         fig.tight_layout()
-        path = out_dir / f"{name}_umap_{safe}.png"
-        fig.savefig(path, dpi=dpi, bbox_inches="tight")
-        plt.close(fig)
-        saved.append(str(path))
-        print(f"saved {path}")
-    return saved
+
+        if out_dir is not None:
+            out_path = Path(out_dir)
+            out_path.mkdir(parents=True, exist_ok=True)
+            safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in col)
+            p = out_path / f"{name}_umap_{safe}.png"
+            fig.savefig(p, dpi=dpi, bbox_inches="tight")
+        saved_figs.append(fig)
+    return saved_figs
 
 
 def compute_embed_umap(
@@ -1006,96 +941,103 @@ def compute_embed_umap(
     seed: int = 0,
     verbose: bool = True,
 ):
-    """Compute a fresh PCA+UMAP on a subsample of RAW counts.
+    """Compute a fresh unintegrated PCA+UMAP on a subsample of RAW counts.
 
-    Returns ``(pca_key, umap_key, n_cells_used, subset_idx)`` where the keys
-    point into the returned subset AnnData (``subset.obsm[pca_key]`` etc.).
-    The subset object is returned as third element.
+    Mirrors the standard preprocessing pipeline in src/3_scrnaseq_preprocessing/1.1.1_preprocess.py:
+    1. Extracts raw counts (adata.raw, layers['counts'], or X).
+    2. Filter cells (min_genes=100) & filter genes (min_cells=3).
+    3. Standard total-count normalization (sc.pp.normalize_total(target_sum=1e4)) + log1p.
+    4. HVG selection (n_top_genes=2000, flavor='seurat_v3_paper' with jitter fallback).
+    5. Scaling (max_value=10) and PCA (n_comps=50, svd_solver='arpack').
+    6. Neighborhood graph (n_pcs=50, n_neighbors=15).
+    7. UMAP embedding (Scanpy defaults: min_dist=0.5, spread=1.0).
     """
+    import scipy.sparse as sp
+
     rng = np.random.default_rng(seed)
     n_cells = adata.n_obs
     compute_max = min(n_cells, compute_subset_max)
     subset_idx = rng.choice(n_cells, size=compute_max, replace=False)
     subset_idx = np.sort(subset_idx)
     sub = adata[subset_idx].to_memory()
+    sub.obsm = {}
+    sub.obsp = {}
+    sub.varm = {}
+    sub.varp = {}
+    sub.uns = {}
 
     counts, slot = locate_counts(sub, verbose=False)
     if slot.startswith("raw."):
         counts = sub.raw[:, sub.var_names].X
-    sub.X = counts
-    sub.layers["counts"] = counts
+    sub.X = counts.copy() if hasattr(counts, "copy") else counts
+    sub.layers["counts"] = sub.X.copy()
+
+    if not sp.issparse(sub.X):
+        sub.X = sp.csr_matrix(sub.X)
+    if not sp.issparse(sub.layers["counts"]):
+        sub.layers["counts"] = sp.csr_matrix(sub.layers["counts"])
+
+    if sub.n_obs > 20 and sub.n_vars > 100:
+        sc.pp.filter_cells(sub, min_genes=100)
+        sc.pp.filter_genes(sub, min_cells=3)
 
     sc.pp.normalize_total(sub, target_sum=1e4)
     sc.pp.log1p(sub)
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        sc.pp.highly_variable_genes(sub, n_top_genes=hvg_n_top, flavor="seurat", subset=False)
+        try:
+            sc.pp.highly_variable_genes(
+                sub, layer="counts", n_top_genes=hvg_n_top, flavor="seurat_v3_paper", check_values=True
+            )
+        except Exception:
+            try:
+                sc.pp.highly_variable_genes(sub, n_top_genes=hvg_n_top, flavor="seurat", subset=False)
+            except Exception:
+                sub.var["highly_variable"] = True
+
     hvg_mask = sub.var["highly_variable"].values
     if not hvg_mask.any():
         hvg_mask = np.ones(len(sub.var), dtype=bool)
-    sub_hvg = sub[:, hvg_mask]
-    sc.pp.pca(sub_hvg, n_comps=pca_n_comps, svd_solver="arpack")
-    sub.obsm["X_pca_onboard"] = sub_hvg.obsm["X_pca"]
-    sub.obsm["X_pca_onboard_hvg"] = sub_hvg.obsm["X_pca"]
-    sc.pp.neighbors(sub, use_rep="X_pca_onboard", n_neighbors=15, n_pcs=pca_n_comps)
-    sc.tl.umap(sub, min_dist=0.3)
+
+    sub_hvg = sub[:, hvg_mask].copy()
+    sc.pp.scale(sub_hvg, max_value=10)
+    n_comps = min(pca_n_comps, sub_hvg.n_vars - 1, sub_hvg.n_obs - 1)
+    sc.pp.pca(sub_hvg, n_comps=n_comps, svd_solver="arpack")
+    sub.obsm["X_pca"] = sub_hvg.obsm["X_pca"]
+
+    n_pcs_use = min(n_comps, sub.obsm["X_pca"].shape[1])
+    sc.pp.neighbors(sub, use_rep="X_pca", n_neighbors=15, n_pcs=n_pcs_use)
+    sc.tl.umap(sub, min_dist=0.5, spread=1.0, random_state=seed)
+
     if verbose:
-        print(f"computed PCA+UMAP on {compute_max} cells (raw counts, {slot})")
-    return "X_pca_onboard", "X_umap", sub
+        print(f"computed unintegrated PCA+UMAP on {sub.n_obs} cells (raw counts, {slot})")
+    return "X_pca", "X_umap", sub
 
 
 def embed_and_umap_workflow(
     adata,
-    label_cols,
-    out_dir: Path,
-    name: str,
+    label_cols: list,
+    out_dir: Path | None = None,
+    name: str = "dataset",
     sample_col: str | None = None,
-    plot_max: int = 200_000,
     compute_subset_max: int = 100_000,
     seed: int = 0,
+    verbose: bool = True,
 ) -> dict:
-    """Driver: plot UMAP panels (precomputed if present, else computed fresh).
-
-    Returns a dict with the resolved pca/umap keys (potentially inside a
-    computed subset object), used by the metrics step.
-    """
-    obsm_info = detect_unintegrated_obsm(adata)
-    umap_key = obsm_info["umap_key"]
-    pca_key = obsm_info["pca_key"]
-
-    if umap_key is not None:
-        rng = np.random.default_rng(seed)
-        plot_max = min(adata.n_obs, plot_max)
-        idx = np.sort(rng.choice(adata.n_obs, size=plot_max, replace=False))
-        coords = np.asarray(adata.obsm[umap_key][idx])
-        obs_subset = adata.obs.iloc[idx]
-        saved = plot_umap_panels(
-            coords, obs_subset, label_cols, out_dir, name, seed=seed
-        )
-        print(f"used precomputed UMAP obsm key {umap_key!r} ({coords.shape[0]} cells)")
-        return {
-            "pca_key": pca_key,
-            "umap_key": umap_key,
-            "computed": False,
-            "subset": None,
-            "saved_pngs": saved,
-            "precomputed_pca_keys": obsm_info["pca_candidates"],
-        }
-
-    # compute fresh on raw-count subsample
+    """Driver: always compute fresh unintegrated PCA+UMAP on raw counts and generate panels."""
     pca_key, umap_key, sub = compute_embed_umap(
-        adata, compute_subset_max=compute_subset_max, seed=seed
+        adata, compute_subset_max=compute_subset_max, seed=seed, verbose=verbose
     )
     obs_subset = sub.obs.reset_index(drop=True)
     coords = np.asarray(sub.obsm[umap_key])
-    saved = plot_umap_panels(coords, obs_subset, label_cols, out_dir, name, seed=seed)
+    figs = plot_umap_panels(coords, obs_subset, label_cols, out_dir=out_dir, name=name, seed=seed)
     return {
         "pca_key": pca_key,
         "umap_key": umap_key,
-        "computed": True,
         "subset": sub,
-        "saved_pngs": saved,
-        "precomputed_pca_keys": obsm_info["pca_candidates"],
+        "figs": figs,
+        "computed": True,
     }
 
 
@@ -1105,35 +1047,27 @@ def write_metrics_input(
     ct_col,
     bio_col,
     batch_cols,
-    pca_key: str | None = None,
     sample_col: str | None = None,
     max_cells: int = 300_000,
     seed: int = 0,
     n_pcs: int = 50,
     verbose: bool = True,
 ) -> dict:
-    """Write the feather consumed by ``onboarding_metrics.R``.
-
-    Global random subsample (fixed seed), unintegrated PCA embedding (top
-    ``n_pcs`` PCs) + CT/bio/batch labels per cell. If no usable precomputed PCA
-    exists, computes PCA on a raw-count subsample. Never uses Harmony keys.
-    """
-    if pca_key is None:
-        pca_key = detect_unintegrated_obsm(adata)["pca_key"]
-
-    if pca_key is not None and pca_key in adata.obsm:
-        rng = np.random.default_rng(seed)
-        max_cells = min(adata.n_obs, max_cells)
-        idx = np.sort(rng.choice(adata.n_obs, size=max_cells, replace=False))
-        emb = np.asarray(adata.obsm[pca_key][idx])[:, :n_pcs]
-        obs_used = adata.obs.iloc[idx]
-        pc_source = f"obsm[{pca_key!r}]"
-        sub = None
+    """Write the feather consumed by onboarding_metrics.R on unintegrated PCA."""
+    if "X_pca" in adata.obsm:
+        sub = adata
+        pca_key = "X_pca"
+    elif "X_pca_onboard" in adata.obsm:
+        sub = adata
+        pca_key = "X_pca_onboard"
     else:
-        pca_key, _umap_key, sub = compute_embed_umap(adata, seed=seed)
-        emb = np.asarray(sub.obsm[pca_key])[:, :n_pcs]
-        obs_used = sub.obs.reset_index(drop=True)
-        pc_source = "computed X_pca (raw-count subsample)"
+        pca_key, _umap_key, sub = compute_embed_umap(adata, seed=seed, verbose=verbose)
+
+    rng = np.random.default_rng(seed)
+    max_cells = min(sub.n_obs, max_cells)
+    idx = np.sort(rng.choice(sub.n_obs, size=max_cells, replace=False))
+    emb = np.asarray(sub.obsm[pca_key][idx])[:, :n_pcs]
+    obs_used = sub.obs.iloc[idx]
 
     df = pd.DataFrame(emb, columns=[f"PC_{i + 1}" for i in range(emb.shape[1])])
     df["cell_index"] = np.arange(len(df))
@@ -1149,11 +1083,91 @@ def write_metrics_input(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_feather(out_path)
     if verbose:
-        print(
-            f"wrote metrics input to {out_path}: {df.shape[0]} cells x "
-            f"{df.shape[1]} cols (PCA from {pc_source})"
-        )
-    return {"path": str(out_path), "n_cells": int(len(df)), "pc_source": pc_source}
+        print(f"wrote metrics input to {out_path}: {df.shape[0]} cells x {df.shape[1]} cols")
+    return {"path": str(out_path), "n_cells": int(len(df)), "pc_source": "fresh unintegrated X_pca"}
+
+
+def run_onboarding_metrics(
+    sub,
+    ct_col: str,
+    bio_col: str,
+    batch_cols: list,
+    sample_col: str | None = None,
+    temp_dir: Path | None = None,
+    seed: int = 0,
+) -> tuple[pd.DataFrame, dict]:
+    """Runs cell-level LISI separation metrics and returns (sep_df, json_summary)."""
+    import json
+    import shutil
+    import subprocess
+    import tempfile
+
+    if temp_dir is None:
+        t_dir = Path(tempfile.mkdtemp(prefix="onboard_metrics_"))
+        cleanup = True
+    else:
+        t_dir = Path(temp_dir)
+        t_dir.mkdir(parents=True, exist_ok=True)
+        cleanup = False
+
+    feather_p = t_dir / "metrics_input.feather"
+    csv_p = t_dir / "metrics_separation.csv"
+    json_p = t_dir / "metrics_separation.json"
+
+    write_metrics_input(
+        sub, out_path=feather_p, ct_col=ct_col, bio_col=bio_col,
+        batch_cols=batch_cols, sample_col=sample_col, seed=seed, verbose=False
+    )
+
+    here = Path(__file__).resolve().parent
+    script_path = here / "onboarding_metrics.R"
+    pixi = shutil.which("pixi") or f"{Path.home()}/.pixi/bin/pixi"
+    cmd = [
+        pixi, "run", "-e", "default", "Rscript", "--vanilla",
+        str(script_path),
+        "--input", str(feather_p),
+        "--ct-col", str(ct_col),
+        "--bio-col", str(bio_col),
+        "--batch-cols", ",".join(batch_cols or []),
+        "--out-csv", str(csv_p),
+        "--out-json", str(json_p),
+        "--seed", str(seed),
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    sep_df = pd.read_csv(csv_p)
+    with open(json_p) as f:
+        meta_json = json.load(f)
+
+    if cleanup:
+        shutil.rmtree(t_dir, ignore_errors=True)
+
+    return sep_df, meta_json
+
+
+def plot_separation_heatmap(sep_df: pd.DataFrame, name: str = "Dataset", out_path: Path | None = None):
+    """Generate and return a seaborn heatmap Figure for cell-type x label separation."""
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import re
+
+    mat = sep_df.set_index("cell_type")
+    score_cols = [c for c in mat.columns if c.endswith("_separation")]
+    lab = {c: re.sub("_separation$", "", c).replace("batch_", "") for c in score_cols}
+    hm = mat[score_cols].rename(columns=lab)
+
+    fig, ax = plt.subplots(figsize=(max(4.5, 1.2 * len(score_cols)), max(3.5, 0.45 * len(hm))))
+    sns.heatmap(
+        hm.astype(float), annot=True, fmt=".2f", cmap="RdYlGn_r", vmin=0, vmax=1,
+        mask=hm.isna(), linewidths=0.5, cbar_kws={"label": "LISI Separation (1=Separated, 0=Mixed)"}, ax=ax,
+    )
+    ax.set_title(f"{name}: Per-Cell-Type LISI Separation (Unintegrated PCA)", fontsize=11, fontweight="bold")
+    fig.tight_layout()
+
+    if out_path is not None:
+        out_p = Path(out_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_p, dpi=150, bbox_inches="tight")
+    return fig
 
 
 def save_png(fig, path, dpi: int = 150):

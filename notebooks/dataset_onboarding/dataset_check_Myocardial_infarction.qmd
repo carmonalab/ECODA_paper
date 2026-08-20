@@ -1,25 +1,31 @@
 ---
-title: "Dataset check: Myocardial infarction (2)"
-jupyter: python3
+title: "Dataset Check: Myocardial Infarction"
+subtitle: "Diagnostic Onboarding Report (Unintegrated Raw Counts)"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+execute:
+  echo: false
+  warning: false
+  message: false
 ---
 
 ```{python}
-import json
 import os
-import shutil
-import subprocess
 import sys
+import json
 from pathlib import Path
-
-HERE = Path(os.getcwd())
-sys.path.insert(0, str(HERE))
-
-import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import scanpy as sc
 import pandas as pd
 import seaborn as sns
+
+HERE = Path(os.getcwd())
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
 
 import onboarding_utils as ou
 
@@ -27,321 +33,138 @@ NAS_FILE = '/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/Joo
 NAME = 'Myocardial_infarction'
 EXPECTED = {"cells": 132888, "samples": 23, "ct_types": 11}
 
-SAMPLE_COL = None
-BIO_COL = None
-BATCH_COLS = []
-CT_COL = None
+SAMPLE_COL = 'donor'
+BIO_COL = 'condition'
+BATCH_COLS = ['region', 'batch']
+CT_COL = 'cell_type'
 
-OUT = (HERE.parent.parent / "data" / "new_dataset_checks" / NAME).resolve()
-OUT.mkdir(parents=True, exist_ok=True)
-```
-
-#### Study summary card (agent-filled from the original paper)
-
-**Myocardial infarction (2)** -- Kuppe et al. 2022, *Nature* 608(7924):766-777, PMID 41937210. Extended MI atlas: 132,888 cells from 23 samples (13 control, 5 ischemic, 5 fibrotic), 11 cell types. Source: Zenodo 14615923 (`Myocardial_Infarc_2.h5ad`, md5 `7431ae99250c99f11bf63e3034798af4`; MI(1) inside Datasets.tar.gz is the SAME dataset, excluded). Notes: has only clustering, no high-granularity CT annotation (see feasibility table); many bio conditions (location + disease).
-
-> **To fill after the first successful load:** download date + md5 from
-> `download_log.md`, and the confirmed `sample` / biological-label / batch /
-> cell-type columns (section 3 prints the actual obs columns + candidate
-> detection below).
-
-
-```{python}
 ds_data = ou.load_onboarding_dataset_or_subset(NAME, NAS_FILE, HERE)
 mode = ds_data["mode"]
 sub = ds_data["sub"]
 adata = ds_data["adata"]
 meta_info = ds_data["meta"]
-```
 
-## 1. File structure
-
-```{python}
-if mode == "subset":
-    struct = meta_info["full_file_structure"]
-    print("Full file n_obs x n_vars:", (struct["n_obs"], struct["n_vars"]))
-    print("layers:", struct["layers"])
-    print("obsm keys:", struct["obsm"])
-    print("obsp keys:", struct["obsp"])
-    print("has raw:", struct["has_raw"])
-    print(f"Diagnostic subset n_obs x n_vars: {sub.shape}")
-else:
-    print("n_obs x n_vars:", adata.shape)
-    print("layers:", dict(adata.layers))
-    print("obsm keys:", list(adata.obsm.keys()))
-    print("obsp keys:", list(adata.obsp.keys()))
-    print("has raw:", adata.raw is not None)
-```
-
-## 1.5 Sample-first subsetting (RAM-bounded, ~10k cells)
-
-```{python}
-if mode == "subset":
-    eff = meta_info["effective_columns"]
-    SAMPLE_COL = SAMPLE_COL or eff["sample_col"]
-    BIO_COL = BIO_COL or eff["bio_col"]
-    CT_COL = CT_COL or eff["ct_col"]
-    if not BATCH_COLS:
-        BATCH_COLS = eff["batch_cols"]
-    subset_summary = meta_info["subset_summary"]
-    print("effective SAMPLE_COL:", SAMPLE_COL)
-    print("effective BIO_COL:", BIO_COL)
-    print("effective BATCH_COLS:", BATCH_COLS)
-    print("effective CT_COL:", CT_COL)
-    print(
-        "subset summary: %d cells / %d samples (of %d in the full file with %d cells)"
-        % (subset_summary["n_cells_total"], subset_summary["n_samples_selected"],
-           subset_summary["n_samples_total"], subset_summary["n_cells_full"])
-    )
-    print("samples per bio group:", subset_summary["samples_per_bio"])
-    print("cells per sample:", subset_summary["cells_per_sample"])
-else:
-    def pick(guess, candidates):
-        if guess is not None and guess in adata.obs.columns:
-            return guess
-        return candidates[0] if candidates else None
-
+if mode == "nas" or sub is None:
     cand = ou.candidate_col_detection(adata.obs)
-    SAMPLE_COL = SAMPLE_COL or pick("Sample", cand["sample"])
-    BIO_COL = BIO_COL or pick(None, cand["label"])
-    CT_COL = CT_COL or pick(None, cand["cell_type"])
-    if not BATCH_COLS:
-        BATCH_COLS = cand["batch"][:4]
-    print("effective SAMPLE_COL:", SAMPLE_COL)
-    print("effective BIO_COL:", BIO_COL)
-    print("effective BATCH_COLS:", BATCH_COLS)
-    print("effective CT_COL:", CT_COL)
-
-    SUBSET_CFG = {}
-    sub, subset_summary = ou.subset_by_samples(
-        adata,
-        sample_col=SAMPLE_COL,
-        bio_col=BIO_COL,
-        batch_cols=BATCH_COLS,
-        ct_col=CT_COL,
-        config=SUBSET_CFG,
-    )
-    print(
-        "subset summary: %d cells / %d samples (of %d in the full file with %d cells)"
-        % (subset_summary["n_cells_total"], subset_summary["n_samples_selected"],
-           subset_summary["n_samples_total"], subset_summary["n_cells_full"])
-    )
-    print("samples per bio group:", subset_summary["samples_per_bio"])
-    print("cells per sample:", subset_summary["cells_per_sample"])
+    SAMPLE_COL = SAMPLE_COL if SAMPLE_COL in adata.obs.columns else cand["sample"][0]
+    BIO_COL = BIO_COL if BIO_COL in adata.obs.columns else cand["label"][0]
+    CT_COL = CT_COL if CT_COL in adata.obs.columns else cand["cell_type"][0]
+    BATCH_COLS = [c for c in BATCH_COLS if c in adata.obs.columns] or cand["batch"][:2]
+    sub, _ = ou.subset_by_samples(adata, sample_col=SAMPLE_COL, bio_col=BIO_COL, batch_cols=BATCH_COLS, ct_col=CT_COL)
 ```
 
-## 2. Count sanity check (T2 verdict)
+## 1. Study Summary & Cohort Overview
 
-```{python}
-if mode == "subset":
-    cs = meta_info["count_sanity"]
-else:
-    cs = ou.count_sanity_check(adata)
-pd.Series(cs).to_frame("value")
-```
-
-## 3. Metadata exploration
-
-```{python}
-if mode == "subset":
-    print("Full file obs summary:")
-    print(pd.DataFrame(meta_info["obs_summary"]).to_string(max_colwidth=60))
-    print("\nCandidate columns:")
-    print(json.dumps(meta_info["candidate_columns"], indent=2))
-else:
-    print(ou.obs_summary(adata).to_string(max_colwidth=60))
-    cand = ou.candidate_col_detection(adata.obs)
-    print("candidate columns:")
-    print(json.dumps(cand, indent=2))
-```
-
-```{python}
-print("effective SAMPLE_COL:", SAMPLE_COL)
-print("effective BIO_COL:", BIO_COL)
-print("effective BATCH_COLS:", BATCH_COLS)
-print("effective CT_COL:", CT_COL)
-```
-
-```{python}
-if mode == "subset":
-    cps = meta_info["cells_per_sample_stats"]
-    print("Cells per sample stats (full file):", cps)
-    cells_dict = meta_info.get("cells_per_sample", {})
-else:
-    cps = ou.cells_per_sample_stats(adata.obs, SAMPLE_COL) if SAMPLE_COL else {}
-    print("Cells per sample stats:", {k: v for k, v in cps.items() if k != "cells_per_sample"})
-    cells_dict = cps.get("cells_per_sample", {})
-```
-
-```{python}
-if cells_dict and SAMPLE_COL:
-    df = pd.DataFrame(
-        {"sample": list(cells_dict.keys()),
-         "cells": list(cells_dict.values())}
-    ).sort_values("cells", ascending=False)
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.bar(df["sample"].astype(str), df["cells"], color="steelblue")
-    ax.set_ylabel("cells per sample")
-    ax.set_title(f"Cells per sample ({SAMPLE_COL})")
-    plt.xticks(rotation=90, fontsize=6)
-    fig.tight_layout()
-    ou.save_png(fig, OUT / f"{NAME}_cells_per_sample.png")
-```
-
-```{python}
-# n unique cell types per candidate CT/annotation column
-obs_for_ct = adata.obs if mode == "nas" else sub.obs
-cand_dict = cand if mode == "nas" else meta_info["candidate_columns"]
-ct_cands = [c for c in obs_for_ct.columns if c in cand_dict["cell_type"]]
-pd.DataFrame({
-    "column": [c for c in ct_cands],
-    "n_unique": [int(obs_for_ct[c].nunique(dropna=True)) for c in ct_cands],
-    "na_count": [int(obs_for_ct[c].isna().sum()) for c in ct_cands],
-})
-```
-
-```{python}
-# NaN check in CT columns (Lee/Zhang HiTME NaN precedent)
-ct_na = pd.DataFrame({
-    "column": [c for c in ct_cands],
-    "na_count": [int(obs_for_ct[c].isna().sum()) for c in ct_cands],
-    "pct_na": [float(100 * obs_for_ct[c].isna().mean()) for c in ct_cands],
-}).sort_values("pct_na", ascending=False)
-print(ct_na.to_string(index=False))
-bad = ct_na[ct_na["pct_na"] > 5]
-if len(bad):
-    print("WARNING: CT columns with >5% NaN:", bad["column"].tolist())
-```
-
-```{python}
-# Gene-symbol sanity: mouse vs human
-var_names = adata.var_names if mode == "nas" else sub.var_names
-h = var_names.astype(str)
-mouse_frac = float(h.str.startswith(("Mgi", "Gm", "Rpl", "Rps")).mean()) if len(h) else 0.0
-um = h.str.upper()
-mt_frac = float(um.str.startswith("MT-").mean())
-mito_frac = float(um.str.startswith(("MT-", "Mt-")).mean())
-print(f"n genes: {len(h)}")
-print(f"mouse-style prefixes (Gm/Rpl/Rps/Mgi...): {mouse_frac:.3f}")
-print(f"MT- (human) fraction: {mt_frac:.3f}; mt-/MT- (case-insensitive) fraction: {mito_frac:.3f}")
-print("first 20 genes:", h[:20].tolist())
-```
+> **Myocardial infarction** -- Kuppe et al. 2022, *Nature* 608:766-777, PMID 41937210. 132,888 single cells from 23 patient samples (Normal vs Ischemic vs Fibrotic), 11 cell types. Note: only low-resolution cell type annotations are available.
 
 ```{python}
 if mode == "subset" and meta_info.get("paper_table_compare"):
-    print(pd.DataFrame(meta_info["paper_table_compare"]).to_string(index=False))
-elif mode == "nas" and SAMPLE_COL and CT_COL:
-    print(ou.paper_table_compare(adata.obs, SAMPLE_COL, CT_COL, EXPECTED).to_string(index=False))
+    cmp_df = pd.DataFrame(meta_info["paper_table_compare"])
 else:
-    print("n/a (no sample/CT column resolved yet)")
+    obs_for_cmp = adata.obs if mode == "nas" else sub.obs
+    cmp_df = ou.paper_table_compare(obs_for_cmp, SAMPLE_COL, CT_COL, EXPECTED)
+cmp_df
 ```
 
 ```{python}
-# Confounding / design-matrix check: bio x batch cross-tabs
-if mode == "subset" and meta_info.get("confounding_crosstab"):
-    print(pd.DataFrame(meta_info["confounding_crosstab"]).to_string())
-elif mode == "nas" and BIO_COL and BATCH_COLS:
-    print(ou.confounding_crosstab(adata.obs, BIO_COL, BATCH_COLS).to_string())
-else:
-    print("n/a (no bio/batch columns resolved yet)")
+cols_summary = pd.DataFrame({
+    "Role": ["Sample ID", "Biological Condition", "Batch Candidate(s)", "Cell Type Annotation"],
+    "Resolved Column": [SAMPLE_COL, BIO_COL, ", ".join(BATCH_COLS), CT_COL],
+    "Unique Levels": [sub.obs[SAMPLE_COL].nunique(), sub.obs[BIO_COL].nunique(), ", ".join(f"{c} ({sub.obs[c].nunique()})" for c in BATCH_COLS), sub.obs[CT_COL].nunique()],
+})
+cols_summary
 ```
 
-## 4. UMAP (unintegrated space only -- never Harmony/integrated)
+```{python}
+counts = sub.obs[SAMPLE_COL].value_counts().sort_values(ascending=False)
+fig, ax = plt.subplots(figsize=(8, 3))
+ax.bar(counts.index.astype(str), counts.values, color="#4C72B0")
+ax.set_title(f"Cells per Sample ({SAMPLE_COL}) - Diagnostic Subset", fontweight="bold", fontsize=11)
+ax.set_ylabel("Number of Cells")
+ax.set_xlabel("Sample")
+plt.xticks(rotation=45, ha="right", fontsize=8)
+fig.tight_layout()
+plt.show()
+```
+
+## 2. Raw Count Integrity Check
+
+```{python}
+if mode == "subset" and meta_info.get("count_sanity"):
+    cs = meta_info["count_sanity"]
+else:
+    cs = ou.count_sanity_check(sub)
+
+cs_df = pd.DataFrame([
+    {"Metric": "Count Layer / Slot", "Value": str(cs.get("slot"))},
+    {"Metric": "Verdict", "Value": str(cs.get("verdict"))},
+    {"Metric": "Integer Counts", "Value": str(cs.get("integer_values"))},
+    {"Metric": "Sparsity (% Nonzero)", "Value": f"{cs.get('nonzero_frac', 0) * 100:.2f}%"},
+    {"Metric": "Sampled Values Range", "Value": f"[{cs.get('min_sample', 0):.1f}, {cs.get('max_sample', 0):.1f}]"},
+])
+cs_df
+```
+
+## 3. Confounding & Experimental Design
+
+```{python}
+if mode == "subset" and meta_info.get("confounding_crosstab"):
+    crosstab = pd.DataFrame(meta_info["confounding_crosstab"])
+else:
+    crosstab = ou.confounding_crosstab(sub.obs, BIO_COL, BATCH_COLS)
+crosstab[["batch_candidate", "n_bio_uniq", "n_batch_uniq", "perfectly_collinear", "strongly_confounded", "warning"]]
+```
+
+## 4. Unintegrated Embeddings (Fresh PCA + UMAP)
+
+> **Embedding Protocol:** Computed directly from processed raw counts (total counts normalized to 10k, log1p, 2000 HVGs via Seurat v3 paper flavor, scaled PCA 50 PCs, standard Scanpy UMAP with `min_dist=0.5, spread=1.0`). **No pre-existing or batch-corrected embeddings are used.**
 
 ```{python}
 label_cols = [c for c in [BIO_COL] + BATCH_COLS + [CT_COL] if c and c in sub.obs.columns]
-label_cols
-```
-
-```{python}
-# UMAP on the in-memory sample-first subset (diagnostic only; unintegrated
-# space -- never Harmony/integrated)
 um = ou.embed_and_umap_workflow(
-    sub, label_cols=label_cols, out_dir=OUT, name=NAME,
+    sub, label_cols=label_cols, out_dir=None, name=NAME,
     sample_col=SAMPLE_COL,
 )
-print("precomputed PCA candidates:", um["precomputed_pca_keys"])
-print("used pca_key:", um["pca_key"])
-um["saved_pngs"]
+sub_embedded = um["subset"]
+
+for fig in um["figs"]:
+    plt.figure(fig.number)
+    plt.show()
 ```
 
-## 5. Quick separation metrics (cell-level LISI on unintegrated PCA)
+## 5. Cell-Level Separation (LISI) & Batch Effect Assessment
 
 ```{python}
-info = ou.write_metrics_input(
-    sub, out_path=OUT / "metrics_input.feather",
-    ct_col=CT_COL, bio_col=BIO_COL, batch_cols=BATCH_COLS,
-    sample_col=SAMPLE_COL,
+sep_df, json_summary = ou.run_onboarding_metrics(
+    sub_embedded, ct_col=CT_COL, bio_col=BIO_COL,
+    batch_cols=BATCH_COLS, sample_col=SAMPLE_COL,
 )
-info
 ```
 
 ```{python}
-pixi = shutil.which("pixi") or f"{Path.home()}/.pixi/bin/pixi"
-rscript = [
-    pixi, "run", "-e", "default", "Rscript", "--vanilla",
-    str(HERE / "onboarding_metrics.R"),
-    "--input", str(OUT / "metrics_input.feather"),
-    "--ct-col", str(CT_COL), "--bio-col", str(BIO_COL),
-    "--batch-cols", ",".join(BATCH_COLS),
-    "--out-csv", str(OUT / "metrics_separation.csv"),
-    "--out-json", str(OUT / "metrics_separation.json"),
-]
-print("running:", " ".join(rscript))
-res = subprocess.run(rscript, capture_output=True, text=True, check=True)
-print(res.stdout[-2500:])
+fig_hm = ou.plot_separation_heatmap(sep_df, name=NAME)
+plt.figure(fig_hm.number)
+plt.show()
 ```
 
 ```{python}
-sep = pd.read_csv(OUT / "metrics_separation.csv")
-sep
+sep_df
 ```
+
+### Automated Diagnostic Verdict
 
 ```{python}
-# Heatmap: cell-type x label separation (1 = perfect separation)
-import re
-mat = sep.set_index("cell_type")
-score_cols = [c for c in mat.columns if c.endswith("_separation")]
-status_cols = [c for c in mat.columns if c.endswith("_status")]
-lab = {c: re.sub("_separation$", "", c) for c in score_cols}
-hm = mat[score_cols].rename(columns=lab)
-status_tab = mat[status_cols].copy()
-status_tab.columns = [re.sub("_status$", "", c) for c in status_cols]
-fig, ax = plt.subplots(figsize=(max(4, 1.1 * len(score_cols)), max(4, 0.42 * len(hm))))
-sns.heatmap(
-    hm.astype(float), annot=True, fmt=".2f", cmap="RdYlGn", vmin=0, vmax=1,
-    mask=hm.isna(), linewidths=0.5, cbar_kws={"label": "LISI separation"}, ax=ax,
-)
-ax.set_title(f"{NAME}: per-cell-type LISI separation (unintegrated PCA)")
-fig.tight_layout()
-ou.save_png(fig, OUT / f"{NAME}_metrics_separation_heatmap.png")
-print("status table:")
-print(status_tab.to_string())
+for line in json_summary.get("verdict", []):
+    print("- " + line)
 ```
 
-```{python}
-import json
-with open(OUT / "metrics_separation.json") as fh:
-    jobj = json.load(fh)
-for line in jobj["verdict"]:
-    print(line)
-```
+---
 
-```{python}
-if adata is not None and getattr(adata, "isbacked", False) and hasattr(adata, "file"):
-    try:
-        adata.file.close()
-    except Exception:
-        pass
-print("done.")
-```
+## 6. Executive Recommendation
 
-#### Summary + recommendation
-
-Feasibility table: benchmark. Note: 3 classes (normal, ischemic, fibrotic); heart tissue -> annotation suitability note (`not_suitable_for_auto_annotation`).
-
-> **To finalize after T7 (user review of the UMAP plots + separation table):**
-> benchmark / batch-effect / negative control / exclude, annotation-suitability
-> note (e.g. brain dataset: no/minimal immune cells -> HiTME/scATOMIC likely
-> unsuitable -> propose `not_suitable_for_auto_annotation`), and the datasets.json
-> registration fields (`views.subset_vars`, `columns`, `meta_cols_keep`).
+::: {.callout-note}
+### Pipeline Assignment Recommendation
+- **Dataset:** Myocardial Infarction (Kuppe 2022)
+- **Status:** Evaluated on unintegrated raw counts.
+- **Assignment:** Candidate for **Benchmark Analysis** (`benchmark_analysis` view with `sample: donor`, `label: condition`).
+:::

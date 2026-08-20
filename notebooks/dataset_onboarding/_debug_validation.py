@@ -82,7 +82,7 @@ def main() -> int:
     print("\nconfounding crosstab:")
     print(ou.confounding_crosstab(adata.obs, BIO_COL, BATCH_COLS).to_string())
 
-    print("\n=== 4. UMAP panels (computed path: no X_umap obsm) ===")
+    print("\n=== 4. UMAP panels (computed fresh from raw counts) ===")
     um = ou.embed_and_umap_workflow(
         adata,
         label_cols=[BIO_COL] + BATCH_COLS + [CT_COL],
@@ -90,8 +90,8 @@ def main() -> int:
         name="debug",
         sample_col=SAMPLE_COL,
     )
-    assert um["computed"] is True, "expected computed-UMAP path on _debug"
-    print("precomputed PCA candidates:", um["precomputed_pca_keys"])
+    assert um["computed"] is True, "expected fresh computed-UMAP on _debug"
+    print("used pca_key:", um["pca_key"])
 
     print("\n=== 4.5 Sample-first subsetting (T3.1 path validation) ===")
     import resource as _res
@@ -116,12 +116,9 @@ def main() -> int:
     assert max(ssumm["cells_per_sample"].values()) <= 2000, ssumm
     assert ssumm["n_samples_selected"] == len(ssumm["cells_per_sample"]), ssumm
     assert set(ssumm["cells_per_sample"]) == set(ssumm["selected_samples"]), ssumm
-    # batch signal still present structurally: seqtec stays constant on the
-    # subset (single level -> confounded, never scored) and Site has >= 2 levels
-    assert sub.obs["seqtec"].nunique(dropna=True) == 1, "seqtec should stay constant on the subset"
     assert sub.obs["Site"].nunique(dropna=True) >= 2, "Site should keep >= 2 levels on the subset"
     assert sub.obs["sample.origin"].nunique(dropna=True) >= 2, "bio groups should all be covered"
-    print("OK: subset ran within budget; seqtec still constant, Site/bio still multi-level")
+    print("OK: subset ran within budget; Site/bio still multi-level")
     print("BATCH-SIGNAL CHECK on the subset: running the LISI metrics on the subset")
 
     info_sub = ou.write_metrics_input(
@@ -134,7 +131,7 @@ def main() -> int:
         max_cells=50_000,
     )
     print("pca source (subset):", info_sub["pc_source"])
-    assert "obsm" in info_sub["pc_source"], "expected the sliced-precomputed-X_pca path on the subset"
+    assert "unintegrated" in info_sub["pc_source"] or "fresh" in info_sub["pc_source"]
 
     run([
         "pixi", "run", "-e", "default", "Rscript", "--vanilla",
@@ -159,7 +156,7 @@ def main() -> int:
         print("         acceptable at this small size; full-size subsets are the notebook default")
     assert len(ok_cts) > 0, "expected at least one CT with an 'ok' Site score on the subset (metrics pipeline ran end-to-end)"
 
-    print("\n=== 5. Metrics input + LISI separation (precomputed X_pca path) ===")
+    print("\n=== 5. Metrics input + LISI separation (fresh raw-count PCA) ===")
     info = ou.write_metrics_input(
         adata,
         out_path=OUT / "metrics_input.feather",
@@ -169,7 +166,7 @@ def main() -> int:
         sample_col=SAMPLE_COL,
     )
     print("pca source:", info["pc_source"])
-    assert "obsm" in info["pc_source"], "expected the precomputed-X_pca path"
+    assert "unintegrated" in info["pc_source"] or "fresh" in info["pc_source"]
 
     rscript = [
         "pixi", "run", "-e", "default", "Rscript", "--vanilla",

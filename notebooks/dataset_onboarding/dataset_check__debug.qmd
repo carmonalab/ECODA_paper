@@ -1,5 +1,5 @@
 ---
-title: "Dataset Check: Kidney (KPMP)"
+title: "Dataset Check: Debug (Joanito 5-Sample Cohort)"
 subtitle: "Diagnostic Onboarding Report (Unintegrated Raw Counts)"
 format:
   html:
@@ -29,14 +29,14 @@ if str(HERE) not in sys.path:
 
 import onboarding_utils as ou
 
-NAS_FILE = '/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/JooM_2025_41097818/output/Kidney_KPMP.h5ad'
-NAME = 'Kidney_KPMP'
-EXPECTED = {"cells": 104314, "samples": 45, "ct_types": 14}
+NAS_FILE = '/Volumes/Shared/Projects/ECODA_paper/_debug/output/JoaI_2022_35773407_debug_5samples_batch_effect_analysis_ECODAprocessed.h5ad'
+NAME = '_debug'
+EXPECTED = {"cells": 2500, "samples": 5, "ct_types": 10}
 
-SAMPLE_COL = 'sample_id'
-BIO_COL = 'disease'
-BATCH_COLS = ['site', 'batch']
-CT_COL = 'subclass.l2'
+SAMPLE_COL = 'sample.ID'
+BIO_COL = 'sample.origin'
+BATCH_COLS = ['seqtec', 'Site']
+CT_COL = 'cell.type'
 
 ds_data = ou.load_onboarding_dataset_or_subset(NAME, NAS_FILE, HERE)
 mode = ds_data["mode"]
@@ -45,24 +45,16 @@ adata = ds_data["adata"]
 meta_info = ds_data["meta"]
 
 if mode == "nas" or sub is None:
-    cand = ou.candidate_col_detection(adata.obs)
-    SAMPLE_COL = SAMPLE_COL if SAMPLE_COL in adata.obs.columns else cand["sample"][0]
-    BIO_COL = BIO_COL if BIO_COL in adata.obs.columns else cand["label"][0]
-    CT_COL = CT_COL if CT_COL in adata.obs.columns else cand["cell_type"][0]
-    BATCH_COLS = [c for c in BATCH_COLS if c in adata.obs.columns] or cand["batch"][:2]
-    sub, _ = ou.subset_by_samples(adata, sample_col=SAMPLE_COL, bio_col=BIO_COL, batch_cols=BATCH_COLS, ct_col=CT_COL)
+    sub = adata.to_memory()
 ```
 
 ## 1. Study Summary & Cohort Overview
 
-> **Kidney (KPMP)** -- Lake et al. 2023, *Nature* 619:585-594, PMID 41648348. 104,314 single cells from 45 samples across 3 conditions (Normal, CKD, AKI), 14 cell types. Multi-site collection suitable for dual benchmark and batch-effect analysis.
+> **Cohort: Joanito 5-Sample Debug Cohort**  
+> 5 colorectal cancer samples selected for pipeline validation, covering biological conditions (`LymphNode`, `Normal`, `Tumor`) and sequencing technologies (`seqtec`: `5' seq` vs `3' seq`, and multiple `Site` locations).
 
 ```{python}
-if mode == "subset" and meta_info.get("paper_table_compare"):
-    cmp_df = pd.DataFrame(meta_info["paper_table_compare"])
-else:
-    obs_for_cmp = adata.obs if mode == "nas" else sub.obs
-    cmp_df = ou.paper_table_compare(obs_for_cmp, SAMPLE_COL, CT_COL, EXPECTED)
+cmp_df = ou.paper_table_compare(sub.obs, SAMPLE_COL, CT_COL, EXPECTED)
 cmp_df
 ```
 
@@ -76,13 +68,14 @@ cols_summary
 ```
 
 ```{python}
+# Distribution of cells across samples
 counts = sub.obs[SAMPLE_COL].value_counts().sort_values(ascending=False)
-fig, ax = plt.subplots(figsize=(8, 3))
+fig, ax = plt.subplots(figsize=(7, 3))
 ax.bar(counts.index.astype(str), counts.values, color="#4C72B0")
-ax.set_title(f"Cells per Sample ({SAMPLE_COL}) - Diagnostic Subset", fontweight="bold", fontsize=11)
+ax.set_title(f"Cells per Sample ({SAMPLE_COL})", fontweight="bold", fontsize=11)
 ax.set_ylabel("Number of Cells")
 ax.set_xlabel("Sample")
-plt.xticks(rotation=45, ha="right", fontsize=8)
+plt.xticks(rotation=45, ha="right")
 fig.tight_layout()
 plt.show()
 ```
@@ -90,11 +83,7 @@ plt.show()
 ## 2. Raw Count Integrity Check
 
 ```{python}
-if mode == "subset" and meta_info.get("count_sanity"):
-    cs = meta_info["count_sanity"]
-else:
-    cs = ou.count_sanity_check(sub)
-
+cs = ou.count_sanity_check(sub)
 cs_df = pd.DataFrame([
     {"Metric": "Count Layer / Slot", "Value": str(cs.get("slot"))},
     {"Metric": "Verdict", "Value": str(cs.get("verdict"))},
@@ -108,10 +97,7 @@ cs_df
 ## 3. Confounding & Experimental Design
 
 ```{python}
-if mode == "subset" and meta_info.get("confounding_crosstab"):
-    crosstab = pd.DataFrame(meta_info["confounding_crosstab"])
-else:
-    crosstab = ou.confounding_crosstab(sub.obs, BIO_COL, BATCH_COLS)
+crosstab = ou.confounding_crosstab(sub.obs, BIO_COL, BATCH_COLS)
 crosstab[["batch_candidate", "n_bio_uniq", "n_batch_uniq", "perfectly_collinear", "strongly_confounded", "warning"]]
 ```
 
@@ -164,7 +150,7 @@ for line in json_summary.get("verdict", []):
 
 ::: {.callout-note}
 ### Pipeline Assignment Recommendation
-- **Dataset:** Kidney KPMP (Lake 2023)
-- **Status:** Evaluated on unintegrated raw counts.
-- **Assignment:** Recommended for **both Benchmark Analysis and Batch Effect Analysis** (`benchmark_analysis` and `batch_effect_analysis` with `batch_col: site`).
+- **Dataset:** Debug (`_debug`)
+- **Status:** Pipeline validation reference dataset.
+- **Assignment:** Dual-view reference (`benchmark_analysis` and `batch_effect_analysis`).
 :::

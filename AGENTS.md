@@ -72,8 +72,8 @@
 - **Copy-Paste Ready Commands:** When providing commands or instructions to the user, always provide the full, copy-paste-ready commands including required environment sourcing (`source src/slurm_config.sh`).
 - **Parallel Shells:** The user often operates multiple terminal sessions connected to different HPC login nodes. Highlight which commands can safely run in parallel.
 - **Efficient Code Search:** Use targeted tools (`grep_search`, `git grep`). Never run un-scoped `grep -rn` across the entire workspace, as it scans the gitignored ~97 GB `data/` and `.pixi/` directories.
-- **Plan Completion Workflow:** Whenever completing an implementation plan from `.kilo/plans/`:
-  1. Move the completed plan to `.kilo/plans/archive/`.
+- **Plan Completion Workflow:** Whenever completing an implementation plan from `.agents/plans/`:
+  1. Move the completed plan to `.agents/plans/archive/`.
   2. Stage the relevant modified files and the archived plan (`git add`).
   3. Commit and push the changes.
 
