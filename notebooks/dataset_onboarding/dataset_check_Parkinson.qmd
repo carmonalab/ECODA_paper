@@ -66,44 +66,6 @@ if mode == "nas" or sub is None:
 
 > **Parkinson's Disease** -- Kamath et al. 2022, *Nature Neuroscience* 25(5):588-601, PMID 35513515 / Prashant et al. 2024, *Sci Data* 11(1):1241, PMID 39580497. Single-nucleus transcriptomic atlas of human substantia nigra: 2,096,155 nuclei from 97 donors (Parkinson's disease `PD` vs `Control`), across multi-center brain banks (`Brain_bank`: Banner, Columbia, Rush, etc.). Note: brain tissue -> minimal immune cells; automated cell-type annotation is marked unsuitable.
 
-### PILOT-GM-VAE vs. ECODA Experimental Attribution
-
-```{python}
-attribution_df = pd.DataFrame([
-    {
-        "Framework / Role": "PILOT-GM-VAE (Benchmark Reference)",
-        "Biological Condition": PILOT_BIO_COL,
-        "Technical Batch Variable(s)": PILOT_BATCH_COL,
-        "Contrast / Objective": "Parkinson's disease stratification (PD vs Control)",
-    },
-    {
-        "Framework / Role": "ECODA (Primary Biological)",
-        "Biological Condition": ECODA_BIO_COL,
-        "Technical Batch Variable(s)": "-",
-        "Contrast / Objective": "Compositional dopaminergic neuron / glial shifts in PD pathology",
-    },
-    {
-        "Framework / Role": "ECODA (Secondary Biological)",
-        "Biological Condition": ", ".join(ECODA_SECONDARY_BIO),
-        "Technical Batch Variable(s)": "-",
-        "Contrast / Objective": "Lewy body Braak pathology (`path_braak_lb`), RNA integrity (RIN), PMI, and sex",
-    },
-    {
-        "Framework / Role": "ECODA (Sequencing Batch)",
-        "Biological Condition": "-",
-        "Technical Batch Variable(s)": ", ".join(ECODA_BATCH_SEQ) if ECODA_BATCH_SEQ else "None",
-        "Contrast / Objective": "10x 3' v3 sequencing protocol",
-    },
-    {
-        "Framework / Role": "ECODA (Sample Prep Batch)",
-        "Biological Condition": "-",
-        "Technical Batch Variable(s)": ", ".join(ECODA_BATCH_PREP) if ECODA_BATCH_PREP else "None",
-        "Contrast / Objective": "Multi-center brain banks (`Brain_bank`) and tissue preparation",
-    },
-])
-attribution_df
-```
-
 ### Metadata Categories Summary
 
 ```{python}
@@ -201,10 +163,10 @@ for fig in um["figs"]:
 
 ## 5. Cell-Type Compositional Batch Effect & Statistical Analysis
 
-> **Compositional Protocol:** Evaluates sample-level centered log-ratio (CLR) abundances ($+0.5$ pseudocount zero-imputation). Group differences are evaluated using two-sided Mann-Whitney U tests (2 groups) or Kruskal-Wallis tests (>2 groups) with Benjamini-Hochberg FDR correction. Additionally, OLS linear model regressions ($\text{CLR} \sim \text{Covariate}$) evaluate the proportion of compositional variance explained ($R^2$), $F$-statistics, and significance.
+> **Compositional Protocol:** Evaluates sample-level centered log-ratio (CLR) abundances (+0.5 pseudocount zero-imputation). Group differences are evaluated using two-sided Mann-Whitney U tests (2 groups) or Kruskal-Wallis tests (>2 groups) with Benjamini-Hochberg FDR correction. In addition, multi-variable joint OLS linear regression models ($\text{CLR} \sim \text{cov}_1 + \text{cov}_2 + \dots$) evaluate the joint proportion of variance explained ($R^2$), overall model $F$-statistics, and Type-II ANOVA covariate significance across all clinical and technical variables simultaneously.
 
 ```{python}
-test_covariates = [c for c in [BIO_COL] + BATCH_COLS + ECODA_SECONDARY_BIO if c in sub.obs.columns]
+test_covariates = list(dict.fromkeys([c for c in [BIO_COL] + BATCH_COLS + ECODA_SECONDARY_BIO if c in sub.obs.columns]))
 
 for annot_col in ALL_CT_COLS:
     if annot_col not in sub.obs.columns:
@@ -236,9 +198,12 @@ for annot_col in ALL_CT_COLS:
     plt.figure(fig_sig.number)
     plt.show()
     
-    # 3. Linear Model Statistical Summary Table
-    cov_summary, detail_df = ou.compute_compositional_lm_summary(clr_curr, sub.obs, SAMPLE_COL, test_covariates)
-    display(cov_summary)
+    # 3. Multi-Variable Joint OLS Linear Model (CLR ~ cov1 + cov2 + ...)
+    cov_anova, model_fits, top_summary_txt = ou.compute_compositional_joint_lm(clr_curr, sub.obs, SAMPLE_COL, test_covariates)
+    print("Joint Model Covariate Attribution (Type-II ANOVA across all tested variables):")
+    display(cov_anova)
+    print("Per-Cell-Type Multi-Variable OLS Model Fit Summary:")
+    display(model_fits)
 ```
 
 ## 6. Cell-Level Separation (LISI) & Batch Effect Assessment

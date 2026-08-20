@@ -66,44 +66,6 @@ if mode == "nas" or sub is None:
 
 > **Myocardial Infarction (MI-2)** -- Kuppe et al. 2022, *Nature* 608(7924):766-777, PMID 35948637. Spatial and single-cell atlas of human myocardial infarction: 132,888 single cells across 23 patients covering distinct disease stages (`patient_group`: `Control`, `Myogenic`, `Fibrotic`, `Ischemic`) and two distinct library batches (`batch`: `A` vs `B`).
 
-### PILOT-GM-VAE vs. ECODA Experimental Attribution
-
-```{python}
-attribution_df = pd.DataFrame([
-    {
-        "Framework / Role": "PILOT-GM-VAE (Benchmark Reference)",
-        "Biological Condition": PILOT_BIO_COL,
-        "Technical Batch Variable(s)": PILOT_BATCH_COL,
-        "Contrast / Objective": "Patient infarct stage stratification (Control, Myogenic, Fibrotic, Ischemic)",
-    },
-    {
-        "Framework / Role": "ECODA (Primary Biological)",
-        "Biological Condition": ECODA_BIO_COL,
-        "Technical Batch Variable(s)": "-",
-        "Contrast / Objective": "Compositional cardiac remodeling across infarction zones",
-    },
-    {
-        "Framework / Role": "ECODA (Secondary Biological)",
-        "Biological Condition": ", ".join(ECODA_SECONDARY_BIO),
-        "Technical Batch Variable(s)": "-",
-        "Contrast / Objective": "Sample type, fine cell subtypes, and patient region annotations",
-    },
-    {
-        "Framework / Role": "ECODA (Sequencing Batch)",
-        "Biological Condition": "-",
-        "Technical Batch Variable(s)": ", ".join(ECODA_BATCH_SEQ) if ECODA_BATCH_SEQ else "None",
-        "Contrast / Objective": "Library preparation batches (`batch`: 'A' vs 'B')",
-    },
-    {
-        "Framework / Role": "ECODA (Sample Prep Batch)",
-        "Biological Condition": "-",
-        "Technical Batch Variable(s)": ", ".join(ECODA_BATCH_PREP) if ECODA_BATCH_PREP else "None",
-        "Contrast / Objective": "Sample preparation types (`sampleType`)",
-    },
-])
-attribution_df
-```
-
 ### Metadata Categories Summary
 
 ```{python}
@@ -201,10 +163,10 @@ for fig in um["figs"]:
 
 ## 5. Cell-Type Compositional Batch Effect & Statistical Analysis
 
-> **Compositional Protocol:** Evaluates sample-level centered log-ratio (CLR) abundances ($+0.5$ pseudocount zero-imputation). Group differences are evaluated using two-sided Mann-Whitney U tests (2 groups) or Kruskal-Wallis tests (>2 groups) with Benjamini-Hochberg FDR correction. Additionally, OLS linear model regressions ($\text{CLR} \sim \text{Covariate}$) evaluate the proportion of compositional variance explained ($R^2$), $F$-statistics, and significance.
+> **Compositional Protocol:** Evaluates sample-level centered log-ratio (CLR) abundances (+0.5 pseudocount zero-imputation). Group differences are evaluated using two-sided Mann-Whitney U tests (2 groups) or Kruskal-Wallis tests (>2 groups) with Benjamini-Hochberg FDR correction. In addition, multi-variable joint OLS linear regression models ($\text{CLR} \sim \text{cov}_1 + \text{cov}_2 + \dots$) evaluate the joint proportion of variance explained ($R^2$), overall model $F$-statistics, and Type-II ANOVA covariate significance across all clinical and technical variables simultaneously.
 
 ```{python}
-test_covariates = [c for c in [BIO_COL] + BATCH_COLS + ECODA_SECONDARY_BIO if c in sub.obs.columns]
+test_covariates = list(dict.fromkeys([c for c in [BIO_COL] + BATCH_COLS + ECODA_SECONDARY_BIO if c in sub.obs.columns]))
 
 for annot_col in ALL_CT_COLS:
     if annot_col not in sub.obs.columns:
@@ -236,9 +198,12 @@ for annot_col in ALL_CT_COLS:
     plt.figure(fig_sig.number)
     plt.show()
     
-    # 3. Linear Model Statistical Summary Table
-    cov_summary, detail_df = ou.compute_compositional_lm_summary(clr_curr, sub.obs, SAMPLE_COL, test_covariates)
-    display(cov_summary)
+    # 3. Multi-Variable Joint OLS Linear Model (CLR ~ cov1 + cov2 + ...)
+    cov_anova, model_fits, top_summary_txt = ou.compute_compositional_joint_lm(clr_curr, sub.obs, SAMPLE_COL, test_covariates)
+    print("Joint Model Covariate Attribution (Type-II ANOVA across all tested variables):")
+    display(cov_anova)
+    print("Per-Cell-Type Multi-Variable OLS Model Fit Summary:")
+    display(model_fits)
 ```
 
 ## 6. Cell-Level Separation (LISI) & Batch Effect Assessment

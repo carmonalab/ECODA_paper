@@ -896,18 +896,20 @@ def compute_compositional_significance_matrix(
     return sig_mat, fig
 
 
-def compute_compositional_lm_summary(
+def compute_compositional_joint_lm(
     clr_df: pd.DataFrame,
     meta_df: pd.DataFrame,
     sample_col: str,
     group_cols: list[str],
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Fit per-covariate OLS linear models (CLR ~ covariate) across all cell types.
+) -> tuple[pd.DataFrame, pd.DataFrame, str]:
+    """Fit a multi-variable OLS linear model (CLR ~ cov1 + cov2 + ...) across all cell types simultaneously.
 
-    Returns (covariate_summary_df, per_celltype_detail_df), reporting model formula,
-    mean R-squared, F-statistic, raw and FDR-adjusted p-values, and significance codes.
+    Returns (covariate_anova_summary_df, per_celltype_fits_df, top_model_summary_text),
+    providing joint Type-II ANOVA covariate attribution, full model fit statistics,
+    and the comprehensive statsmodels OLS summary for the top affected cell type.
     """
     import statsmodels.formula.api as smf
+    from statsmodels.stats.anova import anova_lm
     import statsmodels.stats.multitest as smt
 
     dedup_group_cols = list(dict.fromkeys([c for c in group_cols if c in meta_df.columns]))
@@ -916,92 +918,136 @@ def compute_compositional_lm_summary(
     clr_sub = clr_df.loc[common_samples]
     meta_sub = meta_dedup.loc[common_samples].copy()
 
-    valid_cols = [c for c in dedup_group_cols if c in meta_sub.columns and meta_sub[c].nunique(dropna=True) >= 2]
+    # Filter to covariates with >= 2 distinct non-NA categories
+    valid_cols = []
+    rename_map = {}
+    for i, col in enumerate(dedup_group_cols):
+        if col in meta_sub.columns:
+            s_grp = meta_sub[col]
+            if isinstance(s_grp, pd.DataFrame):
+                s_grp = s_grp.iloc[:, 0]
+            s_clean = s_grp.dropna().astype(str)
+            s_clean = s_clean[(s_clean != "<NA>") & (s_clean != "nan") & (s_clean != "None")]
+            if s_clean.nunique() >= 2:
+                safe_name = f"cov_{i}"
+                rename_map[col] = safe_name
+                valid_cols.append(col)
+
     if not valid_cols or clr_sub.shape[1] == 0:
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), ""
 
-    per_ct_rows = []
-    cov_summary_rows = []
-
+    df_reg = pd.DataFrame(index=common_samples)
     for col in valid_cols:
         s_grp = meta_sub[col]
         if isinstance(s_grp, pd.DataFrame):
             s_grp = s_grp.iloc[:, 0]
-        s_grp = s_grp.astype("category")
-        valid_mask = s_grp.notna() & (s_grp.astype(str) != "<NA>") & (s_grp.astype(str) != "nan")
-        if valid_mask.sum() < 3 or s_grp[valid_mask].nunique() < 2:
-            continue
+        df_reg[rename_map[col]] = s_grp.astype("category")
 
-        df_fit = pd.DataFrame({"x": s_grp[valid_mask]})
-        col_pvals = []
-        col_fstats = []
-        col_r2s = []
+    formula = "clr_val ~ " + " + ".join([f"C({rename_map[c]})" for c in valid_cols])
 
-        for ct in clr_sub.columns:
-            df_fit["y"] = clr_sub[ct][valid_mask].values
-            try:
-                fit = smf.ols("y ~ C(x)", data=df_fit).fit()
-                f_stat = float(fit.fvalue) if np.isfinite(fit.fvalue) else 0.0
-                p_val = float(fit.f_pvalue) if np.isfinite(fit.f_pvalue) else 1.0
-                r2 = float(fit.rsquared) if np.isfinite(fit.rsquared) else 0.0
-                df_model = int(fit.df_model)
-                df_resid = int(fit.df_resid)
-            except Exception:
-                f_stat, p_val, r2, df_model, df_resid = 0.0, 1.0, 0.0, 1, max(1, len(df_fit) - 2)
+    fit_summaries = []
+    anova_rows = []
+    models_dict = {}
 
-            col_pvals.append(p_val)
-            col_fstats.append(f_stat)
-            col_r2s.append(r2)
+    for ct in clr_sub.columns:
+        df_reg["clr_val"] = clr_sub[ct].values
+        try:
+            model = smf.ols(formula, data=df_reg).fit()
+            r2 = float(model.rsquared) if np.isfinite(model.rsquared) else 0.0
+            adj_r2 = float(model.rsquared_adj) if np.isfinite(model.rsquared_adj) else 0.0
+            f_stat = float(model.fvalue) if np.isfinite(model.fvalue) else 0.0
+            p_val = float(model.f_pvalue) if np.isfinite(model.f_pvalue) else 1.0
 
-            per_ct_rows.append({
+            fit_summaries.append({
                 "Cell Type": ct,
-                "Covariate": col,
                 "R-squared": round(r2, 4),
+                "Adj R-squared": round(adj_r2, 4),
                 "F-statistic": round(f_stat, 2),
-                "df (model, resid)": f"({df_model}, {df_resid})",
-                "Raw p-value": p_val,
+                "Prob (F-stat)": p_val,
+                "AIC": round(float(model.aic), 1),
+                "BIC": round(float(model.bic), 1),
             })
+            models_dict[ct] = model
 
-        # FDR correction per covariate across cell types
-        raw_p = np.array(col_pvals, dtype=float)
+            try:
+                a_tbl = anova_lm(model, typ=2)
+                for col in valid_cols:
+                    safe = f"C({rename_map[col]})"
+                    if safe in a_tbl.index:
+                        f_cov = float(a_tbl.loc[safe, "F"]) if np.isfinite(a_tbl.loc[safe, "F"]) else 0.0
+                        p_cov = float(a_tbl.loc[safe, "PR(>F)"]) if np.isfinite(a_tbl.loc[safe, "PR(>F)"]) else 1.0
+                        ss_cov = float(a_tbl.loc[safe, "sum_sq"])
+                        df_cov = int(a_tbl.loc[safe, "df"])
+                        anova_rows.append({
+                            "Cell Type": ct,
+                            "Covariate": col,
+                            "Sum of Squares": round(ss_cov, 3),
+                            "df": df_cov,
+                            "F-statistic": round(f_cov, 2),
+                            "p-value": p_cov,
+                        })
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    df_fits = pd.DataFrame(fit_summaries)
+    df_anova = pd.DataFrame(anova_rows)
+
+    if df_anova.empty:
+        return pd.DataFrame(), df_fits, ""
+
+    # Multi-testing correction on ANOVA p-values
+    for col in valid_cols:
+        sub_c = df_anova[df_anova["Covariate"] == col]
+        raw_p = sub_c["p-value"].values
         valid_p_mask = np.isfinite(raw_p)
         adj_p = np.full_like(raw_p, 1.0)
         if valid_p_mask.sum() > 0:
             _, corr, _, _ = smt.multipletests(raw_p[valid_p_mask], method="fdr_bh")
             adj_p[valid_p_mask] = corr
+        df_anova.loc[df_anova["Covariate"] == col, "FDR p-value"] = adj_p
+        df_anova.loc[df_anova["Covariate"] == col, "Significance"] = [
+            "****" if p < 0.0001 else ("***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "ns")))
+            for p in adj_p
+        ]
 
-        start_idx = len(per_ct_rows) - len(clr_sub.columns)
-        for i, (p_adj, r2) in enumerate(zip(adj_p, col_r2s)):
-            per_ct_rows[start_idx + i]["FDR p-value"] = p_adj
-            per_ct_rows[start_idx + i]["Significance"] = (
-                "****" if p_adj < 0.0001 else ("***" if p_adj < 0.001 else ("**" if p_adj < 0.01 else ("*" if p_adj < 0.05 else "ns")))
-            )
-
+    cov_rows = []
+    for col in valid_cols:
+        sub_c = df_anova[df_anova["Covariate"] == col]
+        raw_p = sub_c["p-value"].values
+        adj_p = sub_c["FDR p-value"].values
         n_sig_raw = int((raw_p < 0.05).sum())
         n_sig_fdr = int((adj_p < 0.05).sum())
-        min_p = float(np.nanmin(raw_p)) if len(raw_p) else 1.0
         min_fdr = float(np.nanmin(adj_p)) if len(adj_p) else 1.0
-        mean_r2 = float(np.mean(col_r2s)) * 100 if len(col_r2s) else 0.0
-        mean_f = float(np.mean(col_fstats)) if len(col_fstats) else 0.0
-        best_ct = clr_sub.columns[int(np.argmin(raw_p))] if len(raw_p) else "-"
+        mean_f = float(sub_c["F-statistic"].mean()) if len(sub_c) else 0.0
+        best_ct = sub_c.loc[sub_c["p-value"].idxmin(), "Cell Type"] if len(sub_c) else "-"
 
         signif_code = (
             "****" if min_fdr < 0.0001 else ("***" if min_fdr < 0.001 else ("**" if min_fdr < 0.01 else ("*" if min_fdr < 0.05 else "ns")))
         )
-
-        cov_summary_rows.append({
+        cov_rows.append({
             "Covariate": col,
-            "Model": f"CLR ~ {col}",
-            "Mean R² (%)": f"{mean_r2:.1f}%",
+            "Joint Model Term": f"C({col})",
             "Mean F-stat": round(mean_f, 2),
             "Sig CTs (p < 0.05)": f"{n_sig_raw}/{len(clr_sub.columns)}",
             "Sig CTs (FDR < 0.05)": f"{n_sig_fdr}/{len(clr_sub.columns)}",
             "Min FDR p-value": f"{min_fdr:.3e}" if min_fdr < 0.01 else f"{min_fdr:.3f}",
             "Top Affected Cell Type": best_ct,
-            "Overall Significance": signif_code,
+            "Joint Model Significance": signif_code,
         })
 
-    return pd.DataFrame(cov_summary_rows), pd.DataFrame(per_ct_rows)
+    df_cov_summary = pd.DataFrame(cov_rows)
+
+    # Pick top affected cell type for detailed statsmodels OLS summary text
+    top_ct = df_fits.sort_values(by="F-statistic", ascending=False)["Cell Type"].iloc[0] if not df_fits.empty else None
+    top_summary_text = models_dict[top_ct].summary().as_text() if top_ct and top_ct in models_dict else ""
+
+    return df_cov_summary, df_fits, top_summary_text
+
+
+# Backward-compatible alias
+compute_compositional_lm_summary = compute_compositional_joint_lm
 
 
 def select_balanced_samples(

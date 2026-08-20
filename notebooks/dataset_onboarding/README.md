@@ -124,13 +124,67 @@ Outputs (plots/feathers/csv) go to `data/new_dataset_checks/<Name>/` (gitignored
 | 9 | Parkinson | Kamath 2022 Nat Neurosci (35513515) | `Parkinson.h5ad` | 30.5 GB | `f576bcf5eb28366aeaecff01c50fff34` | NOTE (X: log-normalized; no raw.X) | 2,096,155 / 97 / 11 | `disease` | `disease` | None | `assay` | `Brain_bank`, `tissue_type` | `Brain_bank`, `assay`, `tissue_type` | No | `benchmark` | Checked & rendered |
 | 10 | Debug (_debug) | Joanito 2022 Nat Genet (35773407) | `_debug_5samples.h5ad` | 38 MB | - | PASS (X: raw integer counts) | 6,000 / 12 / 10 | `sample.origin` | `sample.origin` | `seqtec` | `seqtec` | `Site` | `seqtec`, `Site` | Yes | `reference` | Checked & rendered |
 
+## Experimental Attribution & Study Design Comparison (PILOT-GM-VAE vs. ECODA)
+
+| # | Dataset | Framework / Role | Biological Condition | Technical Batch Variable(s) | Contrast / Study Objective |
+|---|---|---|---|---|---|
+| 1 | Alzheimer (SEA-AD) | PILOT-GM-VAE (Benchmark Reference) | `Cognitive status` | None | Patient cognitive status stratification (Dementia vs Mild Cognitive Impairment vs No dementia) |
+|   | | ECODA (Primary Biological) | `Cognitive status` | - | Compositional disease severity stratification across Alzheimer progression |
+|   | | ECODA (Secondary Biological) | `ADNC`, `Braak stage`, `CERAD score`, `Age at death`, `APOE4 status`, `sex` | - | Neuropathology stages (ADNC, Braak, CERAD) & donor demographics |
+|   | | ECODA (Sequencing Batch) | - | `assay` | 10x 3' v3 vs 10x multiome protocol variation |
+|   | | ECODA (Sample Prep Batch) | - | `tissue_type`, `PMI` | Tissue preparation & post-mortem interval (PMI) |
+| 2 | Breast cancer (HBCA) | PILOT-GM-VAE (Benchmark Reference) | `disease` | None | Patient disease status stratification (normal vs breast cancer) |
+|   | | ECODA (Primary Biological) | `disease` | - | Compositional stratification across breast cancer tumor microenvironment vs normal tissue |
+|   | | ECODA (Secondary Biological) | `tissue_location`, `bmi_group`, `procedure_group`, `breast_density`, `age_group`, `sex` | - | Demographic & clinical tissue characteristics (breast density, BMI, procedure, age) |
+|   | | ECODA (Sequencing Batch) | - | `assay`, `sequencing_platform` | 10x chemistry version (v2 vs v3) & sequencing platforms (NovaSeq 6000 vs HiSeq 4000/3000) |
+|   | | ECODA (Sample Prep Batch) | - | `sample_preservation_method`, `suspension_dissociation_time`, `suspension_dissociation_reagent` | Tissue handling protocols, dissociation reagents, and preservation methods |
+| 3 | COVID-19 PBMC | PILOT-GM-VAE (Benchmark Reference) | `CoVID-19 severity` | `Single cell sequencing platform`, `datasets` | Patient severity stratification (Control, Mild, Severe, Critical) |
+|   | | ECODA (Primary Biological) | `CoVID-19 severity` | - | Compositional immune remodeling across infection trajectories |
+|   | | ECODA (Secondary Biological) | `Age`, `Sex`, `Outcome`, `Comorbidities`, `Sampling day` | - | Patient demographics, disease outcome, comorbidities, and sampling day |
+|   | | ECODA (Sequencing Batch) | - | `Single cell sequencing platform` | Sequencing platforms (10X 5' vs 10X 3' vs BD Rhapsody) |
+|   | | ECODA (Sample Prep Batch) | - | `City`, `datasets`, `Sample type` | Multi-center clinical origin (Shenzhen, Wuhan, Beijing, etc.) & sample type (TBD) |
+| 4 | Diabetes (mouse islets) | PILOT-GM-VAE (Benchmark Reference) | `disease` | `dataset` | Diabetes disease state stratification (T2D vs non-diabetic ND) |
+|   | | ECODA (Primary Biological) | `disease` | - | Compositional endocrine/exocrine islet remodeling in diabetes progression |
+|   | | ECODA (Secondary Biological) | `diabetes_model`, `age`, `cell_cycle_phase`, `strain` | - | Mouse diabetes models (db/db, STZ, NOD), strain backgrounds, and age |
+|   | | ECODA (Sequencing Batch) | - | `assay` | 10x chemistry version (v2 vs v3) |
+|   | | ECODA (Sample Prep Batch) | - | `dataset`, `design` | Cross-study origin (`dataset`) & experimental design |
+| 5 | Kidney (KPMP) | PILOT-GM-VAE (Benchmark Reference) | `condition.l1` | None | Kidney condition level-1 stratification (AKI vs CKD vs Healthy Reference) |
+|   | | ECODA (Primary Biological) | `condition.l1` | - | Compositional renal lineage shifts across AKI, CKD, and Reference tissue |
+|   | | ECODA (Secondary Biological) | `condition.l2`, `eGFR`, `hypertension`, `diabetes_history`, `sex`, `BMI` | - | Clinical kidney markers (eGFR, hypertension, diabetes history, BMI) |
+|   | | ECODA (Sequencing Batch) | - | `assay`, `library` | Sequencing library batches & assay technology |
+|   | | ECODA (Sample Prep Batch) | - | `tissue_type`, `region.l1` | Anatomical kidney region (`region.l1`: Cortex vs Medulla) & sample tissue type |
+| 6 | Lupus PBMC | PILOT-GM-VAE (Benchmark Reference) | `Status` | `batch_cov` | SLE patient stratification (SLE vs Healthy Control) |
+|   | | ECODA (Primary Biological) | `Status` | - | Compositional immune cell remodeling in SLE pathology |
+|   | | ECODA (Secondary Biological) | `SLE_status`, `Age`, `Sex`, `pop_cov` | - | SLE clinical status, patient demographics, and ancestry population (`pop_cov`) |
+|   | | ECODA (Sequencing Batch) | - | `batch_cov` | Multiplexing sequencing pools (`batch_cov`, 23 pools) |
+|   | | ECODA (Sample Prep Batch) | - | `Processing_Cohort` | Experimental processing cohorts (`Processing_Cohort`) |
+| 7 | Lung Atlas (Fig 4) | PILOT-GM-VAE (Benchmark Reference) | `disease` | `dataset` | Stratification across lung disease annotations (COVID-19, IPF, Lung Cancer, Normal) |
+|   | | ECODA (Primary Biological) | `disease`, `origin` | - | Compositional tissue origin (tumor vs normal) and disease stratification |
+|   | | ECODA (Secondary Biological) | `uicc_stage`, `ever_smoker`, `age`, `tumor_stage`, `EGFR_mutation`, `TP53_mutation`, `sex` | - | Oncological staging (UICC, tumor stage), mutations (EGFR, TP53), and smoking status |
+|   | | ECODA (Sequencing Batch) | - | `dataset`, `platform`, `study`, `assay` | Multi-center sequencing platform & assay protocols (10x v2/v3, BD-Rhapsody, Smart-seq2) |
+|   | | ECODA (Sample Prep Batch) | - | `dataset`, `study`, `origin`, `origin_fine`, `tissue sampling method`, `tissue dissociation protocol`, `anatomical region`, `donor status` | Consortium source studies (`dataset`, `study`), dissociation protocols, and anatomical region |
+| 8 | Myocardial infarction (MI-2) | PILOT-GM-VAE (Benchmark Reference) | `patient_group` | None | Patient infarct stage stratification (Control, Myogenic, Fibrotic, Ischemic) |
+|   | | ECODA (Primary Biological) | `patient_group` | - | Compositional cardiac remodeling across infarction zones |
+|   | | ECODA (Secondary Biological) | `sampleType`, `cell_subtype`, `patient_region_id` | - | Sample type, fine cell subtypes, and patient region annotations |
+|   | | ECODA (Sequencing Batch) | - | `batch` | Library preparation batches (`batch`: 'A' vs 'B') |
+|   | | ECODA (Sample Prep Batch) | - | `sampleType` | Sample preparation types (`sampleType`) |
+| 9 | Parkinson | PILOT-GM-VAE (Benchmark Reference) | `disease` | None | Parkinson's disease stratification (PD vs Control) |
+|   | | ECODA (Primary Biological) | `disease` | - | Compositional dopaminergic neuron / glial shifts in PD pathology |
+|   | | ECODA (Secondary Biological) | `path_braak_lb`, `PMI`, `RIN`, `sex` | - | Lewy body Braak pathology (`path_braak_lb`), RNA integrity (RIN), PMI, and sex |
+|   | | ECODA (Sequencing Batch) | - | `assay` | 10x 3' v3 sequencing protocol |
+|   | | ECODA (Sample Prep Batch) | - | `Brain_bank`, `tissue_type` | Multi-center brain banks (`Brain_bank`) and tissue preparation |
+| 10 | Debug (_debug) | PILOT-GM-VAE (Benchmark Reference) | `sample.origin` | `seqtec` | Stratification across colorectal tissue origin (Normal, Tumor, LymphNode) |
+|   | | ECODA (Primary Biological) | `sample.origin` | - | Patient-level compositional disease stratification |
+|   | | ECODA (Sequencing Batch) | - | `seqtec` | Sequencing chemistry batch effect evaluation (3' vs 5' seq) |
+|   | | ECODA (Sample Prep Batch) | - | `Site` | Clinical collection site variation |
+
 ## Key Findings & Guidelines
 
 1. **Experimental Design & Attribution:**
-   - PILOT-GM-VAE author selections and ECODA primary/secondary conditions and sequencing vs sample preparation batch covariates are tracked at the beginning of each onboarding report.
+   - PILOT-GM-VAE author selections and ECODA primary/secondary conditions and sequencing vs sample preparation batch covariates are centralized in the attribution table above.
    - For datasets like **Lung Atlas**, PILOT-GM-VAE evaluated `disease`, whereas ECODA additionally evaluates `origin` (tumor vs normal) and extensive consortium-level technical batch structures (`dataset`, `study`, `platform`, `assay`).
 2. **Dual Evaluation Architecture:**
-   - Every onboarding report evaluates both **expression-level LISI batch mixing** (on unintegrated PCA embeddings) and **cell-type compositional shifts** (sample-level CLR abundance distributions with Mann-Whitney/Kruskal-Wallis statistical testing, Benjamini-Hochberg FDR correction, and per-covariate OLS linear regression models $\text{CLR} \sim \text{Covariate}$ across all candidate cell-type annotation levels).
+   - Every onboarding report evaluates both **expression-level LISI batch mixing** (on unintegrated PCA embeddings) and **cell-type compositional shifts** (sample-level CLR abundance distributions with Mann-Whitney/Kruskal-Wallis statistical testing, Benjamini-Hochberg FDR correction, and multi-variable joint OLS linear regression models $\text{CLR} \sim \text{cov}_1 + \text{cov}_2 + \dots$ across all candidate cell-type annotation levels).
 3. **Count Layer Integrity:**
    - Datasets from CellxGene / CZ CELLxGENE (Breast Cancer, Covid-19 PBMC, Diabetes, Kidney KPMP, Lung, Lupus PBMC) store raw integer count matrices in `adata.raw.X`, while `adata.X` holds log1p-normalized / scaled expression. `onboarding_utils.locate_counts()` automatically detects and routes raw integer counts from `raw.X`.
    - Datasets where the downloaded file only provides log-normalized expression (Alzheimer, Myocardial Infarction, Parkinson) are clearly noted with `NOTE (X: log-normalized)` status.
