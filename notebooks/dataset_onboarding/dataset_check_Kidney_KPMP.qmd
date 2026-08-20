@@ -1,11 +1,11 @@
 ---
-title: "Dataset Check: Kidney (KPMP Atlas)"
+title: "Dataset Check: Kidney KPMP (Lake et al. 2023)"
 subtitle: "Diagnostic Onboarding Report (Unintegrated Raw Counts)"
 format:
   html:
     theme: cosmo
     toc: true
-    toc-depth: 2
+    toc-depth: 3
     embed-resources: true
 execute:
   echo: false
@@ -23,6 +23,11 @@ import scanpy as sc
 import pandas as pd
 import seaborn as sns
 
+pd.set_option("display.max_columns", None)
+pd.set_option("display.max_rows", None)
+pd.set_option("display.max_colwidth", None)
+pd.set_option("display.width", 1000)
+
 HERE = Path(os.getcwd())
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
@@ -33,10 +38,17 @@ NAS_FILE = '/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/Joo
 NAME = 'Kidney_KPMP'
 EXPECTED = {"cells": 104314, "samples": 45, "ct_types": 14}
 
+PILOT_BIO_COL = 'condition.l1'
+PILOT_BATCH_COL = 'None'
+
+ECODA_BIO_COL = 'condition.l1'
+ECODA_SECONDARY_BIO = ['condition.l2', 'eGFR', 'hypertension', 'diabetes_history', 'sex', 'BMI']
+ECODA_BATCH_SEQ = ['assay', 'library']
+ECODA_BATCH_PREP = ['tissue_type', 'region.l1']
+
 SAMPLE_COL = 'donor_id'
-BIO_COL = 'condition.l1'
-SECONDARY_BIO_COLS = ['condition.l2', 'eGFR', 'hypertension', 'diabetes_history', 'sex', 'BMI']
-BATCH_COLS = ['assay', 'tissue_type', 'region.l1', 'library']
+BIO_COL = ECODA_BIO_COL
+BATCH_COLS = ECODA_BATCH_SEQ + ECODA_BATCH_PREP
 CT_COL = 'subclass.l1'
 ALL_CT_COLS = ['subclass.l1', 'subclass.l2', 'subclass.l3', 'subclass.full', 'cell_type', 'class']
 
@@ -52,18 +64,63 @@ if mode == "nas" or sub is None:
 
 ## 1. Study Summary & Metadata Categorization
 
-> **Kidney (KPMP Atlas)** -- Kidney Precision Medicine Project: multi-center single-cell reference atlas of human kidney tissue covering chronic kidney disease (`CKD`), acute kidney injury (`AKI`), and healthy reference tissue.
+> **Kidney (KPMP)** -- Lake et al. 2023, *Nature* 619(7970):585-594, PMID 41648348. Kidney Precision Medicine Project atlas: 104,314 single cells from 45 donors across acute kidney injury (`AKI`), chronic kidney disease (`CKD`), and healthy reference (`Ref`), sampled across anatomical regions (Cortex vs Medulla).
 
-### Metadata Column Categorization
+### PILOT-GM-VAE vs. ECODA Experimental Attribution
+
+```{python}
+attribution_df = pd.DataFrame([
+    {
+        "Framework / Role": "PILOT-GM-VAE (Benchmark Reference)",
+        "Biological Condition": PILOT_BIO_COL,
+        "Technical Batch Variable(s)": PILOT_BATCH_COL,
+        "Contrast / Objective": "Kidney condition level-1 stratification (AKI vs CKD vs Healthy Reference)",
+    },
+    {
+        "Framework / Role": "ECODA (Primary Biological)",
+        "Biological Condition": ECODA_BIO_COL,
+        "Technical Batch Variable(s)": "-",
+        "Contrast / Objective": "Compositional renal lineage shifts across AKI, CKD, and Reference tissue",
+    },
+    {
+        "Framework / Role": "ECODA (Secondary Biological)",
+        "Biological Condition": ", ".join(ECODA_SECONDARY_BIO),
+        "Technical Batch Variable(s)": "-",
+        "Contrast / Objective": "Clinical kidney markers (eGFR, hypertension, diabetes history, BMI)",
+    },
+    {
+        "Framework / Role": "ECODA (Sequencing Batch)",
+        "Biological Condition": "-",
+        "Technical Batch Variable(s)": ", ".join(ECODA_BATCH_SEQ) if ECODA_BATCH_SEQ else "None",
+        "Contrast / Objective": "Sequencing library batches & assay technology",
+    },
+    {
+        "Framework / Role": "ECODA (Sample Prep Batch)",
+        "Biological Condition": "-",
+        "Technical Batch Variable(s)": ", ".join(ECODA_BATCH_PREP) if ECODA_BATCH_PREP else "None",
+        "Contrast / Objective": "Anatomical kidney region (`region.l1`: Cortex vs Medulla) & sample tissue type",
+    },
+])
+attribution_df
+```
+
+### Metadata Categories Summary
 
 ```{python}
 cat_df = ou.categorize_obs_columns(sub.obs, {
     "bio_primary": [BIO_COL],
-    "bio_secondary": SECONDARY_BIO_COLS,
+    "bio_secondary": ECODA_SECONDARY_BIO,
     "batch_candidates": BATCH_COLS,
     "cell_types": ALL_CT_COLS,
     "sample_ids": [SAMPLE_COL, 'specimen'],
 })
+concise_df = ou.summarize_obs_categories(cat_df)
+concise_df
+```
+
+### Detailed Metadata Column Categorization
+
+```{python}
 cat_df
 ```
 
@@ -121,7 +178,8 @@ cs_df
 
 ```{python}
 crosstab = ou.confounding_crosstab(sub.obs, BIO_COL, BATCH_COLS)
-crosstab[["batch_candidate", "n_bio_uniq", "n_batch_uniq", "perfectly_collinear", "strongly_confounded", "warning"]]
+cols_show = [c for c in ["batch_candidate", "n_bio_uniq", "n_batch_uniq", "perfectly_collinear", "strongly_confounded", "warning"] if c in crosstab.columns]
+crosstab[cols_show]
 ```
 
 ## 4. Unintegrated Embeddings (Fresh PCA + UMAP)
@@ -141,43 +199,46 @@ for fig in um["figs"]:
     plt.show()
 ```
 
-## 5. Cell-Type Compositional Batch Effect Analysis
+## 5. Cell-Type Compositional Batch Effect & Statistical Analysis
 
-> **Compositional Protocol:** Evaluates sample-level centered log-ratio (CLR) abundances ($+0.5$ pseudocount zero-imputation). Group differences are evaluated using two-sided Mann-Whitney U tests (2 groups) or Kruskal-Wallis tests (>2 groups) with Benjamini-Hochberg FDR correction.
-
-### Biological Condition vs CLR Abundance
+> **Compositional Protocol:** Evaluates sample-level centered log-ratio (CLR) abundances ($+0.5$ pseudocount zero-imputation). Group differences are evaluated using two-sided Mann-Whitney U tests (2 groups) or Kruskal-Wallis tests (>2 groups) with Benjamini-Hochberg FDR correction. Additionally, OLS linear model regressions ($\text{CLR} \sim \text{Covariate}$) evaluate the proportion of compositional variance explained ($R^2$), $F$-statistics, and significance.
 
 ```{python}
-clr = ou.compute_clr_composition(sub.obs, SAMPLE_COL, CT_COL)
-fig_box_bio = ou.plot_clr_abundance_boxplots(
-    clr, sub.obs, SAMPLE_COL, BIO_COL,
-    title=f"Compositional CLR Abundance by Biological Condition ({BIO_COL})"
-)
-plt.figure(fig_box_bio.number)
-plt.show()
-```
+test_covariates = [c for c in [BIO_COL] + BATCH_COLS + ECODA_SECONDARY_BIO if c in sub.obs.columns]
 
-### Technical Batch Candidate vs CLR Abundance
-
-```{python}
-if BATCH_COLS:
-    for bcol in BATCH_COLS[:2]:
-        if bcol in sub.obs.columns and sub.obs[bcol].nunique() >= 2:
-            fig_box_batch = ou.plot_clr_abundance_boxplots(
-                clr, sub.obs, SAMPLE_COL, bcol,
-                title=f"Compositional CLR Abundance by Technical Batch ({bcol})"
-            )
-            plt.figure(fig_box_batch.number)
-            plt.show()
-```
-
-### Cross-Variable Compositional Significance Matrix
-
-```{python}
-test_covariates = [c for c in [BIO_COL] + BATCH_COLS + SECONDARY_BIO_COLS if c in sub.obs.columns]
-sig_mat, fig_sig = ou.compute_compositional_significance_matrix(clr, sub.obs, SAMPLE_COL, test_covariates)
-plt.figure(fig_sig.number)
-plt.show()
+for annot_col in ALL_CT_COLS:
+    if annot_col not in sub.obs.columns:
+        continue
+    clr_curr = ou.compute_clr_composition(sub.obs, SAMPLE_COL, annot_col)
+    
+    print(f"### Annotation Level: {annot_col} ({clr_curr.shape[1]} Cell Types)")
+    
+    # 1. Grouped boxplots
+    fig_bio = ou.plot_clr_abundance_boxplots(
+        clr_curr, sub.obs, SAMPLE_COL, BIO_COL,
+        title=f"Compositional CLR Abundance by Biological Condition ({BIO_COL}) — {annot_col}"
+    )
+    plt.figure(fig_bio.number)
+    plt.show()
+    
+    if BATCH_COLS:
+        for bcol in BATCH_COLS[:2]:
+            if bcol in sub.obs.columns and sub.obs[bcol].nunique() >= 2:
+                fig_batch = ou.plot_clr_abundance_boxplots(
+                    clr_curr, sub.obs, SAMPLE_COL, bcol,
+                    title=f"Compositional CLR Abundance by Technical Batch ({bcol}) — {annot_col}"
+                )
+                plt.figure(fig_batch.number)
+                plt.show()
+                
+    # 2. Compositional Significance Heatmap
+    sig_mat, fig_sig = ou.compute_compositional_significance_matrix(clr_curr, sub.obs, SAMPLE_COL, test_covariates)
+    plt.figure(fig_sig.number)
+    plt.show()
+    
+    # 3. Linear Model Statistical Summary Table
+    cov_summary, detail_df = ou.compute_compositional_lm_summary(clr_curr, sub.obs, SAMPLE_COL, test_covariates)
+    display(cov_summary)
 ```
 
 ## 6. Cell-Level Separation (LISI) & Batch Effect Assessment
@@ -212,7 +273,8 @@ for line in json_summary.get("verdict", []):
 
 ::: {.callout-note}
 ### Pipeline Assignment Recommendation
-- **Dataset:** Kidney (KPMP Atlas)
+- **Dataset:** Kidney KPMP (Lake et al. 2023)
 - **Status:** Evaluated on unintegrated raw counts.
-- **Assignment:** Candidate for **Benchmark Analysis** (stratification across `condition.l1`: CKD vs AKI vs Healthy Reference).
+- **Suitable for Auto-Annotation:** Yes
+- **Assignment:** Candidate for **Batch Effect Analysis** (evaluating `region.l1` cortex/medulla and `library` batches vs `condition.l1`).
 :::

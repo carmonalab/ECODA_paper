@@ -31,6 +31,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+# Ensure full visibility without clipping in notebook tables
+pd.set_option("display.max_columns", None)
+pd.set_option("display.max_rows", None)
+pd.set_option("display.max_colwidth", None)
+pd.set_option("display.width", 1000)
+
 try:
     import scanpy as sc
     import anndata as ad
@@ -44,22 +50,25 @@ except ImportError as e:  # pragma: no cover
 def locate_counts(adata, verbose: bool = True) -> tuple:
     """Return (counts_matrix, slot_name).
 
-    Slot chain: ``layers["counts"]`` -> ``X`` -> ``raw.X``. Never returns
-    ``None``: a missing counts slot raises a clear error so T2 can flag the
-    dataset as FAIL and suggest the fallback source.
+    Slot chain: ``layers["counts"]`` -> ``raw.X`` (if raw has integer counts while X is normalized) -> ``X`` -> ``raw.X``.
     """
     for layer_name in ("counts", "counts_cite", "counts_atac"):
         if layer_name in adata.layers:
             if verbose:
                 print(f"counts slot: adata.layers[{layer_name!r}]")
             return adata.layers[layer_name], f"layers/{layer_name}"
-    # If raw.X exists, check if X is scaled (e.g. contains negative numbers)
-    if adata.raw is not None and adata.raw.X is not None and adata.X is not None:
-        sample_x = _sample_values(adata.X, n_sample_cells=1000)
-        if len(sample_x) > 0 and np.any(sample_x < 0):
+
+    # If raw.X exists, check if X is scaled or log-normalized while raw.X holds integer counts
+    if adata.raw is not None and adata.raw.X is not None:
+        sample_x = _sample_values(adata.X, n_sample_cells=1000) if adata.X is not None else np.array([])
+        sample_raw = _sample_values(adata.raw.X, n_sample_cells=1000)
+        x_is_int = bool(sample_x.size > 0 and np.all(np.abs(sample_x - np.round(sample_x)) < 1e-4))
+        raw_is_int = bool(sample_raw.size > 0 and np.all(np.abs(sample_raw - np.round(sample_raw)) < 1e-4))
+        if len(sample_x) > 0 and (np.any(sample_x < 0) or (not x_is_int and raw_is_int)):
             if verbose:
-                print("counts slot: adata.raw.X (adata.X contains negative values / is scaled)")
+                print("counts slot: adata.raw.X (adata.raw.X contains raw integer counts while adata.X is normalized/scaled)")
             return adata.raw.X, "raw.X"
+
     if adata.X is not None:
         if verbose:
             print("counts slot: adata.X")
@@ -623,6 +632,19 @@ def categorize_obs_columns(obs: pd.DataFrame, config: dict | None = None) -> pd.
     return df.sort_values(by=["Assigned Role", "Column"]).reset_index(drop=True)
 
 
+def summarize_obs_categories(cat_df: pd.DataFrame) -> pd.DataFrame:
+    """Concise executive overview of metadata categories and their assigned columns."""
+    rows = []
+    for role, group in cat_df.groupby("Assigned Role", sort=True):
+        cols = group["Column"].tolist()
+        rows.append({
+            "Assigned Role": role,
+            "Column Count": len(cols),
+            "Assigned Columns": ", ".join(cols),
+        })
+    return pd.DataFrame(rows)
+
+
 def compute_clr_composition(
     obs: pd.DataFrame,
     sample_col: str,
@@ -799,16 +821,20 @@ def compute_compositional_significance_matrix(
     import scipy.stats as stats
     import statsmodels.stats.multitest as smt
 
-    meta_dedup = meta_df[[sample_col] + [c for c in group_cols if c in meta_df.columns]].drop_duplicates(subset=[sample_col]).set_index(sample_col)
+    dedup_group_cols = list(dict.fromkeys([c for c in group_cols if c in meta_df.columns]))
+    meta_dedup = meta_df[[sample_col] + dedup_group_cols].drop_duplicates(subset=[sample_col]).set_index(sample_col)
     common_samples = clr_df.index.intersection(meta_dedup.index)
     clr_sub = clr_df.loc[common_samples]
     meta_sub = meta_dedup.loc[common_samples]
 
     cts = clr_sub.columns.tolist()
-    pvals_dict = {g: [] for g in group_cols if g in meta_sub.columns}
+    pvals_dict = {g: [] for g in dedup_group_cols if g in meta_sub.columns}
 
     for g in pvals_dict:
-        s_grp = meta_sub[g].astype(str)
+        s_grp = meta_sub[g]
+        if isinstance(s_grp, pd.DataFrame):
+            s_grp = s_grp.iloc[:, 0]
+        s_grp = s_grp.astype(str)
         valid_mask = (s_grp != "<NA>") & (s_grp != "nan") & (s_grp != "None")
         valid_grp = s_grp[valid_mask]
         uniq_levels = valid_grp.unique()
@@ -868,6 +894,114 @@ def compute_compositional_significance_matrix(
     fig.tight_layout()
 
     return sig_mat, fig
+
+
+def compute_compositional_lm_summary(
+    clr_df: pd.DataFrame,
+    meta_df: pd.DataFrame,
+    sample_col: str,
+    group_cols: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fit per-covariate OLS linear models (CLR ~ covariate) across all cell types.
+
+    Returns (covariate_summary_df, per_celltype_detail_df), reporting model formula,
+    mean R-squared, F-statistic, raw and FDR-adjusted p-values, and significance codes.
+    """
+    import statsmodels.formula.api as smf
+    import statsmodels.stats.multitest as smt
+
+    dedup_group_cols = list(dict.fromkeys([c for c in group_cols if c in meta_df.columns]))
+    meta_dedup = meta_df[[sample_col] + dedup_group_cols].drop_duplicates(subset=[sample_col]).set_index(sample_col)
+    common_samples = clr_df.index.intersection(meta_dedup.index)
+    clr_sub = clr_df.loc[common_samples]
+    meta_sub = meta_dedup.loc[common_samples].copy()
+
+    valid_cols = [c for c in dedup_group_cols if c in meta_sub.columns and meta_sub[c].nunique(dropna=True) >= 2]
+    if not valid_cols or clr_sub.shape[1] == 0:
+        return pd.DataFrame(), pd.DataFrame()
+
+    per_ct_rows = []
+    cov_summary_rows = []
+
+    for col in valid_cols:
+        s_grp = meta_sub[col]
+        if isinstance(s_grp, pd.DataFrame):
+            s_grp = s_grp.iloc[:, 0]
+        s_grp = s_grp.astype("category")
+        valid_mask = s_grp.notna() & (s_grp.astype(str) != "<NA>") & (s_grp.astype(str) != "nan")
+        if valid_mask.sum() < 3 or s_grp[valid_mask].nunique() < 2:
+            continue
+
+        df_fit = pd.DataFrame({"x": s_grp[valid_mask]})
+        col_pvals = []
+        col_fstats = []
+        col_r2s = []
+
+        for ct in clr_sub.columns:
+            df_fit["y"] = clr_sub[ct][valid_mask].values
+            try:
+                fit = smf.ols("y ~ C(x)", data=df_fit).fit()
+                f_stat = float(fit.fvalue) if np.isfinite(fit.fvalue) else 0.0
+                p_val = float(fit.f_pvalue) if np.isfinite(fit.f_pvalue) else 1.0
+                r2 = float(fit.rsquared) if np.isfinite(fit.rsquared) else 0.0
+                df_model = int(fit.df_model)
+                df_resid = int(fit.df_resid)
+            except Exception:
+                f_stat, p_val, r2, df_model, df_resid = 0.0, 1.0, 0.0, 1, max(1, len(df_fit) - 2)
+
+            col_pvals.append(p_val)
+            col_fstats.append(f_stat)
+            col_r2s.append(r2)
+
+            per_ct_rows.append({
+                "Cell Type": ct,
+                "Covariate": col,
+                "R-squared": round(r2, 4),
+                "F-statistic": round(f_stat, 2),
+                "df (model, resid)": f"({df_model}, {df_resid})",
+                "Raw p-value": p_val,
+            })
+
+        # FDR correction per covariate across cell types
+        raw_p = np.array(col_pvals, dtype=float)
+        valid_p_mask = np.isfinite(raw_p)
+        adj_p = np.full_like(raw_p, 1.0)
+        if valid_p_mask.sum() > 0:
+            _, corr, _, _ = smt.multipletests(raw_p[valid_p_mask], method="fdr_bh")
+            adj_p[valid_p_mask] = corr
+
+        start_idx = len(per_ct_rows) - len(clr_sub.columns)
+        for i, (p_adj, r2) in enumerate(zip(adj_p, col_r2s)):
+            per_ct_rows[start_idx + i]["FDR p-value"] = p_adj
+            per_ct_rows[start_idx + i]["Significance"] = (
+                "****" if p_adj < 0.0001 else ("***" if p_adj < 0.001 else ("**" if p_adj < 0.01 else ("*" if p_adj < 0.05 else "ns")))
+            )
+
+        n_sig_raw = int((raw_p < 0.05).sum())
+        n_sig_fdr = int((adj_p < 0.05).sum())
+        min_p = float(np.nanmin(raw_p)) if len(raw_p) else 1.0
+        min_fdr = float(np.nanmin(adj_p)) if len(adj_p) else 1.0
+        mean_r2 = float(np.mean(col_r2s)) * 100 if len(col_r2s) else 0.0
+        mean_f = float(np.mean(col_fstats)) if len(col_fstats) else 0.0
+        best_ct = clr_sub.columns[int(np.argmin(raw_p))] if len(raw_p) else "-"
+
+        signif_code = (
+            "****" if min_fdr < 0.0001 else ("***" if min_fdr < 0.001 else ("**" if min_fdr < 0.01 else ("*" if min_fdr < 0.05 else "ns")))
+        )
+
+        cov_summary_rows.append({
+            "Covariate": col,
+            "Model": f"CLR ~ {col}",
+            "Mean R² (%)": f"{mean_r2:.1f}%",
+            "Mean F-stat": round(mean_f, 2),
+            "Sig CTs (p < 0.05)": f"{n_sig_raw}/{len(clr_sub.columns)}",
+            "Sig CTs (FDR < 0.05)": f"{n_sig_fdr}/{len(clr_sub.columns)}",
+            "Min FDR p-value": f"{min_fdr:.3e}" if min_fdr < 0.01 else f"{min_fdr:.3f}",
+            "Top Affected Cell Type": best_ct,
+            "Overall Significance": signif_code,
+        })
+
+    return pd.DataFrame(cov_summary_rows), pd.DataFrame(per_ct_rows)
 
 
 def select_balanced_samples(
