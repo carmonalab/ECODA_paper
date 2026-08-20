@@ -48,6 +48,10 @@
 - **Never run recursive deletions (`rm -rf`)** on `$HOME/scratch` or `data/` directories without explicit user confirmation.
 - **Job Monitoring:** Inspect runs with non-blocking Slurm queries (`squeue -u $USER`, `sacct -j <id> --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS`).
 
+### Execution Patience & Anti-Polling Invariant (Never Burn Tokens)
+- **Do not poll or loop on background tasks:** When launching long-running processes, sbatch jobs, or heavy scripts, NEVER run rapid polling loops or set tight 5-10s timers with repeated status queries.
+- **Launch and stop:** State what was launched in one concise sentence and immediately end the turn. Wait for the reactive system message on task completion. Do not burn tokens or flood the conversation.
+
 ### Repository vs. Scratch Directory Layout
 - **The git repository clone lives at `$HOME/ECODA_paper`** — all git operations (`git pull`, `git status`, commits) and job submissions must run from `~/ECODA_paper`.
 - **`$HOME/scratch/ECODA_paper` (`HPC_SCRATCH_DIR`) is data storage only** — it is not a git clone and does not carry tracked files.

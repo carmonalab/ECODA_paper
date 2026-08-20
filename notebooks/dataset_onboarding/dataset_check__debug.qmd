@@ -31,7 +31,7 @@ import onboarding_utils as ou
 
 NAS_FILE = '/Volumes/Shared/Projects/ECODA_paper/_debug/output/JoaI_2022_35773407_debug_5samples_batch_effect_analysis_ECODAprocessed.h5ad'
 NAME = '_debug'
-EXPECTED = {"cells": 2500, "samples": 5, "ct_types": 10}
+EXPECTED = {"cells": 6000, "samples": 12, "ct_types": 10}
 
 SAMPLE_COL = 'sample.ID'
 BIO_COL = 'sample.origin'

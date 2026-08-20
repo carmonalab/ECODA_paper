@@ -69,69 +69,66 @@ if (!"seqtec" %in% colnames(seurat@meta.data)) {
 # -----------------------------------------------------------------------------
 set.seed(321)
 
-# Sample selection: 5 samples strictly covering biological conditions (sample.origin)
-# and batches (seqtec 5' vs 3' seq, and Site), preferring samples with >= min_cells cells
-select_debug_samples <- function(meta, n, min_cells) {
+# Sample selection: Balanced cohort (12 samples, 500 cells each = 6,000 cells):
+# 1. seqtec: exactly 50% 3' seq (6 samples) and 50% 5' seq (6 samples).
+# 2. sample.origin: Normal and Tumor present in BOTH 3' seq and 5' seq
+#    (allowing direct assessment of batch vs bio separation within identical cell types/states).
+# 3. Site: matched anatomical locations (Ascending colon, Sigmoid colon, Rectum) across technologies.
+select_debug_samples <- function(meta, min_cells = 500) {
   counts <- sort(table(meta$sample.ID), decreasing = TRUE)
   candidates <- names(counts)[counts >= min_cells]
-  if (length(candidates) < n) {
-    stop(sprintf(
-      "Only %d samples have >= %d cells, but %d are requested.",
-      length(candidates), min_cells, n
-    ))
-  }
 
   info <- unique(meta[meta$sample.ID %in% candidates,
                       c("sample.ID", "sample.origin", "seqtec", "Site")])
-  info <- info[order(-counts[info$sample.ID]), ]
+  info$n_cells <- as.integer(counts[info$sample.ID])
+  info <- info[order(-info$n_cells), ]
 
-  # Step 1: Ensure representation of every seqtec level (both 5' seq and 3' seq)
-  seqtec_levels <- unique(info$seqtec)
-  chosen <- character(0)
-  for (st in seqtec_levels) {
-    cand <- info$sample.ID[info$seqtec == st & !info$sample.ID %in% chosen]
-    if (length(cand) > 0) chosen <- c(chosen, cand[1])
-  }
-
-  # Step 2: Ensure representation of main biological groups (sample.origin)
-  bio_levels <- unique(info$sample.origin)
-  for (bo in bio_levels) {
-    if (!any(info$sample.origin[info$sample.ID %in% chosen] == bo)) {
-      cand <- info$sample.ID[info$sample.origin == bo & !info$sample.ID %in% chosen]
-      if (length(cand) > 0) chosen <- c(chosen, cand[1])
+  pick_samples <- function(st, bo, sites, max_n) {
+    chosen_sub <- character(0)
+    for (st_loc in sites) {
+      if (length(chosen_sub) >= max_n) break
+      cand <- info$sample.ID[info$seqtec == st & info$sample.origin == bo & info$Site == st_loc & !info$sample.ID %in% chosen_sub]
+      if (length(cand) > 0) chosen_sub <- c(chosen_sub, cand[1])
     }
+    if (length(chosen_sub) < max_n) {
+      cand <- info$sample.ID[info$seqtec == st & info$sample.origin == bo & !info$sample.ID %in% chosen_sub]
+      needed <- max_n - length(chosen_sub)
+      chosen_sub <- c(chosen_sub, cand[seq_len(min(needed, length(cand)))])
+    }
+    return(chosen_sub)
   }
 
-  # Step 3: Fill remaining slots by round-robin over distinct (condition x batch x site) combos
-  info$combo <- paste(info$sample.origin, info$seqtec, info$Site, sep = "|")
-  for (k in unique(info$combo)) {
-    if (length(chosen) >= n) break
-    cand <- info$sample.ID[info$combo == k & !info$sample.ID %in% chosen]
-    if (length(cand) > 0) chosen <- c(chosen, cand[1])
-  }
+  sites_pref <- c("Ascending colon", "Sigmoid colon", "Rectum", "Upper rectum", "Caecum")
 
-  # Step 4: If still under n, fill by highest cell count
-  if (length(chosen) < n) {
-    rest <- info$sample.ID[!info$sample.ID %in% chosen]
-    chosen <- c(chosen, rest[seq_len(n - length(chosen))])
-  }
+  s_3p_norm  <- pick_samples("3' seq", "Normal", sites_pref, 3)
+  s_3p_tumor <- pick_samples("3' seq", "Tumor",  sites_pref, 3)
 
-  chosen <- chosen[seq_len(n)]
+  s_5p_norm  <- pick_samples("5' seq", "Normal", sites_pref, 3)
+  s_5p_tumor <- pick_samples("5' seq", "Tumor",  sites_pref, 2)
+  s_5p_ln    <- pick_samples("5' seq", "LymphNode", sites_pref, 1)
 
-  # Verification check on chosen samples
+  chosen <- c(s_3p_norm, s_3p_tumor, s_5p_norm, s_5p_tumor, s_5p_ln)
   chosen_meta <- info[info$sample.ID %in% chosen, ]
-  if (length(unique(chosen_meta$seqtec)) < 2) {
-    stop("select_debug_samples: chosen debug subset does not contain multi-level seqtec!")
+
+  message("\n=== Selected Debug Samples (", length(chosen), " samples) ===")
+  print(table(chosen_meta$seqtec, chosen_meta$sample.origin))
+  print(chosen_meta[order(chosen_meta$seqtec, chosen_meta$sample.origin, chosen_meta$Site),
+                    c("sample.ID", "seqtec", "sample.origin", "Site", "n_cells")], row.names = FALSE)
+
+  # Strict validation
+  if (sum(chosen_meta$seqtec == "3' seq") != sum(chosen_meta$seqtec == "5' seq")) {
+    stop("select_debug_samples: seqtec is not 50/50 balanced!")
   }
-  if (length(unique(chosen_meta$sample.origin)) < 2) {
-    stop("select_debug_samples: chosen debug subset does not contain multi-level sample.origin!")
+  if (!all(c("Normal", "Tumor") %in% chosen_meta$sample.origin[chosen_meta$seqtec == "3' seq"]) ||
+      !all(c("Normal", "Tumor") %in% chosen_meta$sample.origin[chosen_meta$seqtec == "5' seq"])) {
+    stop("select_debug_samples: Normal and Tumor must be present in BOTH 3' and 5' seq!")
   }
 
   return(chosen)
 }
 
-chosen <- select_debug_samples(seurat@meta.data, 6, 500)
-message("Chosen samples (", length(chosen), "): ", paste(chosen, collapse = ", "))
+chosen <- select_debug_samples(seurat@meta.data, 500)
+message("\nChosen sample IDs (", length(chosen), "): ", paste(chosen, collapse = ", "))
 
 meta <- seurat@meta.data
 set.seed(321)
