@@ -896,6 +896,119 @@ def compute_compositional_significance_matrix(
     return sig_mat, fig
 
 
+def compute_variance_partition(
+    clr_df: pd.DataFrame,
+    meta_df: pd.DataFrame,
+    sample_col: str,
+    bio_cols: list[str],
+    tech_cols: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Calculate the fraction of total variance in cell-type abundance explained by each covariate.
+
+    Follows Sikkema et al. 2023 (Nature Medicine, Fig 4a) variance partitioning.
+    Returns (var_tech_df, var_bio_df).
+    """
+    import statsmodels.formula.api as smf
+
+    dedup_bio = list(dict.fromkeys([c for c in bio_cols if c in meta_df.columns]))
+    dedup_tech = list(dict.fromkeys([c for c in tech_cols if c in meta_df.columns]))
+    all_cols = list(dict.fromkeys(dedup_bio + dedup_tech))
+
+    meta_dedup = meta_df[[sample_col] + all_cols].drop_duplicates(subset=[sample_col]).set_index(sample_col)
+    common_samples = clr_df.index.intersection(meta_dedup.index)
+    clr_sub = clr_df.loc[common_samples]
+    meta_sub = meta_dedup.loc[common_samples].copy()
+
+    cts = ["Whole atlas"] + clr_sub.columns.tolist()
+    var_bio = pd.DataFrame(index=cts, columns=dedup_bio, dtype=float)
+    var_tech = pd.DataFrame(index=cts, columns=dedup_tech, dtype=float)
+
+    for cdf, cols in [(var_tech, dedup_tech), (var_bio, dedup_bio)]:
+        for col in cols:
+            s_grp = meta_sub[col]
+            if isinstance(s_grp, pd.DataFrame):
+                s_grp = s_grp.iloc[:, 0]
+            s_clean = s_grp.dropna().astype(str)
+            s_clean = s_clean[(s_clean != "<NA>") & (s_clean != "nan") & (s_clean != "None")]
+            if s_clean.nunique() < 2 or len(s_clean) < 3:
+                continue
+
+            df_reg = pd.DataFrame({"x": s_grp.loc[s_clean.index].astype("category")})
+            r2_list = []
+            for ct in clr_sub.columns:
+                df_reg["y"] = clr_sub[ct].loc[s_clean.index].values
+                try:
+                    fit = smf.ols("y ~ C(x)", data=df_reg).fit()
+                    r2 = max(0.0, float(fit.rsquared))
+                except Exception:
+                    r2 = 0.0
+                cdf.loc[ct, col] = r2
+                r2_list.append(r2)
+            cdf.loc["Whole atlas", col] = np.mean(r2_list) if r2_list else np.nan
+
+    return var_tech, var_bio
+
+
+def plot_variance_partition_heatmap(
+    var_tech: pd.DataFrame,
+    var_bio: pd.DataFrame,
+    title: str | None = None,
+    vmax: float = 0.40,
+) -> plt.Figure:
+    """Plot dual-panel variance partition heatmap matching Sikkema et al. 2023 Fig 4a."""
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    n_rows = len(var_tech)
+    n_tech = max(1, var_tech.shape[1])
+    n_bio = max(1, var_bio.shape[1])
+
+    max_label_len = max([len(str(x)) for x in var_tech.index] + [10])
+    label_margin = max(2.5, max_label_len * 0.12)
+    fig_w = max(7.5, label_margin + (n_tech + n_bio) * 0.65 + 1.2)
+    fig_h = max(4.5, n_rows * 0.38 + 2.0)
+
+    fig, (ax_tech, ax_bio) = plt.subplots(
+        1, 2, figsize=(fig_w, fig_h),
+        gridspec_kw={"width_ratios": [n_tech, n_bio], "wspace": 0.08},
+        sharey=True,
+    )
+
+    cmap = plt.cm.Reds.copy()
+    cmap.set_bad(color="#7f7f7f")
+
+    # Left: Technical covariates
+    if var_tech.shape[1] > 0:
+        sns.heatmap(
+            var_tech, ax=ax_tech, cmap=cmap, vmin=0.0, vmax=vmax,
+            cbar=False, annot=False, linewidths=0.5, linecolor="white"
+        )
+        ax_tech.set_xticklabels(ax_tech.get_xticklabels(), rotation=90, ha="center", fontsize=9)
+    ax_tech.set_title("Covariate (technical)", fontsize=11, fontweight="bold", pad=10)
+    ax_tech.set_xlabel("")
+    ax_tech.set_ylabel("Cell type", fontsize=11, fontweight="bold")
+    ax_tech.tick_params(left=True, bottom=True)
+
+    # Right: Biological covariates
+    if var_bio.shape[1] > 0:
+        sns.heatmap(
+            var_bio, ax=ax_bio, cmap=cmap, vmin=0.0, vmax=vmax,
+            cbar=True, annot=False, linewidths=0.5, linecolor="white",
+            cbar_kws={"label": "Fraction of total variance", "shrink": 0.75, "extend": "max"}
+        )
+        ax_bio.set_xticklabels(ax_bio.get_xticklabels(), rotation=90, ha="center", fontsize=9)
+    ax_bio.set_title("Covariate (biological)", fontsize=11, fontweight="bold", pad=10)
+    ax_bio.set_xlabel("")
+    ax_bio.set_ylabel("")
+    ax_bio.tick_params(left=False, bottom=True)
+
+    if title:
+        fig.suptitle(title, fontsize=12, fontweight="bold", y=0.98)
+
+    fig.tight_layout()
+    return fig
+
+
 def compute_compositional_joint_lm(
     clr_df: pd.DataFrame,
     meta_df: pd.DataFrame,

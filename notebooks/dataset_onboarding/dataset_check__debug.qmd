@@ -156,49 +156,29 @@ for fig in um["figs"]:
     plt.show()
 ```
 
-## 5. Cell-Type Compositional Batch Effect & Statistical Analysis
+## 5. Variance Partition Across Covariates
 
-> **Compositional Protocol:** Evaluates sample-level centered log-ratio (CLR) abundances (+0.5 pseudocount zero-imputation). Group differences are evaluated using two-sided Mann-Whitney U tests (2 groups) or Kruskal-Wallis tests (>2 groups) with Benjamini-Hochberg FDR correction. In addition, multi-variable joint OLS linear regression models ($\text{CLR} \sim \text{cov}_1 + \text{cov}_2 + \dots$) evaluate the joint proportion of variance explained ($R^2$), overall model $F$-statistics, and Type-II ANOVA covariate significance across all clinical and technical variables simultaneously.
+> **Variance Partitioning Protocol:** Quantifies the fraction of total inter-sample variance in cell-type abundance explained by each biological vs. technical covariate across cell types and whole cohort average (`Whole atlas`), following Sikkema et al. 2023 (*Nature Medicine* 29:1563–1577, Fig. 4a). Inapplicable or single-level covariates are masked in grey.
 
 ```{python}
-test_covariates = list(dict.fromkeys([c for c in [BIO_COL] + BATCH_COLS + ECODA_SECONDARY_BIO if c in sub.obs.columns]))
+bio_candidates = list(dict.fromkeys([c for c in [BIO_COL] + ECODA_SECONDARY_BIO if c in sub.obs.columns]))
+tech_candidates = list(dict.fromkeys([c for c in BATCH_COLS if c in sub.obs.columns]))
 
 for annot_col in ALL_CT_COLS:
     if annot_col not in sub.obs.columns:
         continue
     clr_curr = ou.compute_clr_composition(sub.obs, SAMPLE_COL, annot_col)
     
-    print(f"### Annotation Level: {annot_col} ({clr_curr.shape[1]} Cell Types)")
-    
-    # 1. Grouped boxplots
-    fig_bio = ou.plot_clr_abundance_boxplots(
-        clr_curr, sub.obs, SAMPLE_COL, BIO_COL,
-        title=f"Compositional CLR Abundance by Biological Condition ({BIO_COL}) — {annot_col}"
+    var_tech, var_bio = ou.compute_variance_partition(
+        clr_curr, sub.obs, SAMPLE_COL, bio_candidates, tech_candidates
     )
-    plt.figure(fig_bio.number)
-    plt.show()
     
-    if BATCH_COLS:
-        for bcol in BATCH_COLS[:2]:
-            if bcol in sub.obs.columns and sub.obs[bcol].nunique() >= 2:
-                fig_batch = ou.plot_clr_abundance_boxplots(
-                    clr_curr, sub.obs, SAMPLE_COL, bcol,
-                    title=f"Compositional CLR Abundance by Technical Batch ({bcol}) — {annot_col}"
-                )
-                plt.figure(fig_batch.number)
-                plt.show()
-                
-    # 2. Compositional Significance Heatmap
-    sig_mat, fig_sig = ou.compute_compositional_significance_matrix(clr_curr, sub.obs, SAMPLE_COL, test_covariates)
-    plt.figure(fig_sig.number)
+    fig_var = ou.plot_variance_partition_heatmap(
+        var_tech, var_bio,
+        title=f"Fraction of Total Variance Explained Across Covariates — {annot_col}"
+    )
+    plt.figure(fig_var.number)
     plt.show()
-    
-    # 3. Multi-Variable Joint OLS Linear Model (CLR ~ cov1 + cov2 + ...)
-    cov_anova, model_fits, top_summary_txt = ou.compute_compositional_joint_lm(clr_curr, sub.obs, SAMPLE_COL, test_covariates)
-    print("Joint Model Covariate Attribution (Type-II ANOVA across all tested variables):")
-    display(cov_anova)
-    print("Per-Cell-Type Multi-Variable OLS Model Fit Summary:")
-    display(model_fits)
 ```
 
 ## 6. Cell-Level Separation (LISI) & Batch Effect Assessment
