@@ -45,7 +45,7 @@ CT_COL = "cell.type"
 BIO_COL = "sample.origin"
 BATCH_COLS = ["seqtec", "Site"]
 SAMPLE_COL = "sample.ID"
-EXPECTED = {"cells": 2500, "samples": 5, "ct_types": 10}
+EXPECTED = {"cells": 6000, "samples": 12, "ct_types": 10}
 
 
 def run(cmd: list, **kw):
@@ -195,13 +195,12 @@ def main() -> int:
     allrow = tbl[tbl["cell_type"] == "<ALL>"].iloc[0]
     assert allrow["bio_status"] == "ok", allrow
     print(f"overall bio separation: {allrow['bio_separation']:.3f}")
-    # seqtec is constant -> confounded (single level) or skipped, never scored
+    # seqtec is multi-level (both 5' and 3' seq) -> scored
     st_col = [c for c in tbl.columns if "seqtec_status" in c][0]
     sc_col = [c for c in tbl.columns if "seqtec_separation" in c][0]
     scored = tbl[st_col] == "ok"
-    assert not scored.any(), tbl[[st_col, sc_col]]
-    assert tbl.loc[scored, sc_col].isna().all()
-    print("seqtec correctly never scored (constant column -> confounded/skipped)")
+    assert scored.any(), tbl[[st_col, sc_col]]
+    print("seqtec correctly scored across cell types (multi-level batch signal detected)")
 
     adata.file.close()
     print("\nT3.0 validation PASSED")
