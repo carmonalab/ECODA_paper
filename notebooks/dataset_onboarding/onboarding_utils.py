@@ -1645,6 +1645,10 @@ def subset_by_samples(
         keep = _cap_total_stratified(sub.obs, sample_col, int(cap_target), seed)
         sub = sub[keep]
 
+    # Remove unused categorical levels left over from full parent atlas
+    for col in sub.obs.select_dtypes(include=["category"]).columns:
+        sub.obs[col] = sub.obs[col].cat.remove_unused_categories()
+
     # --- summary --------------------------------------------------------------
     # Keep the keys str-normalized like every earlier stage (sample_list,
     # bio_of, sample_code) so samples_per_bio/cells_per_sample stay consistent
@@ -2070,6 +2074,8 @@ def load_onboarding_dataset_or_subset(name: str, nas_file: str | Path, here: Pat
         if subset_p.exists() and meta_p.exists():
             print(f"[{name}] Loading precomputed subset from: {subset_p}")
             sub = sc.read_h5ad(subset_p)
+            for col in sub.obs.select_dtypes(include=["category"]).columns:
+                sub.obs[col] = sub.obs[col].cat.remove_unused_categories()
             with open(meta_p) as f:
                 meta = json.load(f)
             print(f"[{name}] Precomputed metadata loaded (created {meta.get('created_at', 'unknown')})")

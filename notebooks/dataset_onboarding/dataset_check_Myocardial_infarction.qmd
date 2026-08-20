@@ -107,7 +107,7 @@ cmp_df
 ```
 
 ```{python}
-counts = sub.obs[SAMPLE_COL].value_counts().sort_values(ascending=False)
+counts = sub.obs[SAMPLE_COL].astype(str).value_counts().sort_values(ascending=False)
 fig, ax = plt.subplots(figsize=(8, 3))
 ax.bar(counts.index.astype(str), counts.values, color="#4C72B0")
 ax.set_title(f"Cells per Sample ({SAMPLE_COL}) - Diagnostic Subset", fontweight="bold", fontsize=11)
