@@ -1,5 +1,5 @@
 ---
-title: "Dataset Check: Breast Cancer (Wu et al. 2021 / HBCA)"
+title: "Dataset Check: Breast Cancer (Kumar et al. 2023 / HBCA)"
 subtitle: "Diagnostic Onboarding Report (Unintegrated Raw Counts)"
 format:
   html:
@@ -46,7 +46,7 @@ ECODA_SECONDARY_BIO = ['tissue_location', 'bmi_group', 'procedure_group', 'breas
 ECODA_BATCH_SEQ = ['assay', 'sequencing_platform']
 ECODA_BATCH_PREP = ['sample_preservation_method', 'suspension_dissociation_time', 'suspension_dissociation_reagent']
 
-SAMPLE_COL = 'donor_id'
+SAMPLE_COL = 'sample_id'
 BIO_COL = ECODA_BIO_COL
 BATCH_COLS = ECODA_BATCH_SEQ + ECODA_BATCH_PREP
 CT_COL = 'broad_cell_type'
@@ -64,7 +64,7 @@ if mode == "nas" or sub is None:
 
 ## 1. Study Summary & Metadata Categorization
 
-> **Breast Cancer (HBCA)** -- Wu et al. 2021, *Nature Genetics* 53(9):1334-1347, PMID 34493872. Human Breast Cell Atlas: single-cell atlas of normal breast tissue and breast cancer tumors across multiple clinical dissociation times, preservation methods, and sequencing platforms.
+> **Breast Cancer (HBCA)** -- Kumar et al. 2023, *Nature* 620(7972):181-191, PMID 37380767. Human Breast Cell Atlas: single-cell and spatial atlas of normal breast tissue and breast cancer across multiple clinical dissociation times, preservation methods, and sequencing platforms.
 
 ### Metadata Categories Summary
 
@@ -74,7 +74,7 @@ cat_df = ou.categorize_obs_columns(sub.obs, {
     "bio_secondary": ECODA_SECONDARY_BIO,
     "batch_candidates": BATCH_COLS,
     "cell_types": ALL_CT_COLS,
-    "sample_ids": [SAMPLE_COL, 'sample_id'],
+    "sample_ids": [SAMPLE_COL, 'donor_id'],
 })
 concise_df = ou.summarize_obs_categories(cat_df)
 concise_df
@@ -247,7 +247,7 @@ for line in json_summary.get("verdict", []):
 
 ::: {.callout-note}
 ### Pipeline Assignment Recommendation
-- **Dataset:** Breast Cancer (Wu et al. 2021 / HBCA)
+- **Dataset:** Breast Cancer (Kumar et al. 2023 / HBCA)
 - **Status:** Evaluated on unintegrated raw counts.
 - **Suitable for Auto-Annotation:** Yes
 - **Assignment:** Candidate for **Batch Effect Analysis** (`disease` biological contrast evaluated against rich sequencing and sample prep technical batch covariates).

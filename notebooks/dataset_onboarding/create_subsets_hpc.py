@@ -60,7 +60,7 @@ DATASET_CATALOG = [
         "key": "breast",
         "file": "BreastCncr_processed.h5ad",
         "expected": {"cells": 714331, "samples": 126, "ct_types": 10},
-        "sample_col_hint": "donor_id",
+        "sample_col_hint": "sample_id",
         "bio_col_hint": "disease",
         "batch_cols_hint": ["assay", "sequencing_platform", "sample_preservation_method", "suspension_dissociation_time"],
         "ct_col_hint": "broad_cell_type",
