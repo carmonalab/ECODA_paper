@@ -50,7 +50,7 @@ DATASET_CATALOG = [
         "key": "alzheimer",
         "file": "SEAAD_Alzheimer.h5ad",
         "expected": {"cells": 1395601, "samples": 83, "ct_types": 18},
-        "sample_col_hint": "donor_id",
+        "sample_col_hint": "Specimen ID",
         "bio_col_hint": "Cognitive status",
         "batch_cols_hint": ["assay", "tissue_type", "PMI"],
         "ct_col_hint": "cell_type",

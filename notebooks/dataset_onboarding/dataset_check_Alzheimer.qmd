@@ -46,7 +46,7 @@ ECODA_SECONDARY_BIO = ['ADNC', 'Braak stage', 'CERAD score', 'Age at death', 'AP
 ECODA_BATCH_SEQ = ['assay']
 ECODA_BATCH_PREP = ['tissue_type', 'PMI']
 
-SAMPLE_COL = 'donor_id'
+SAMPLE_COL = 'Specimen ID'
 BIO_COL = ECODA_BIO_COL
 BATCH_COLS = ECODA_BATCH_SEQ + ECODA_BATCH_PREP
 CT_COL = 'cell_type'
@@ -74,7 +74,7 @@ cat_df = ou.categorize_obs_columns(sub.obs, {
     "bio_secondary": ECODA_SECONDARY_BIO,
     "batch_candidates": BATCH_COLS,
     "cell_types": ALL_CT_COLS,
-    "sample_ids": [SAMPLE_COL, 'Specimen ID'],
+    "sample_ids": [SAMPLE_COL, 'donor_id'],
 })
 concise_df = ou.summarize_obs_categories(cat_df)
 concise_df
