@@ -9,8 +9,8 @@
 
 ### Executive Summary
 - Standardized onboarding check notebooks (`dataset_check_<Name>.qmd`) were developed across all target cohorts (9 new cohorts + `_debug` subset).
-- Replaced manual inspection with an automated 6-step diagnostic suite operating strictly on unintegrated raw counts.
-- Implemented **Normalized Mutual Information (NMI)** to detect metadata collinearity/confounding upfront.
+- Diagnostic workflow operates strictly on unintegrated raw counts to establish ground-truth data characteristics before any pipeline processing.
+- Implemented **Normalized Mutual Information (NMI)** to detect metadata collinearity and confounding upfront.
 - Implemented **Global Compositional Distance PERMANOVA** to partition inter-sample distance variance into Unique Biological, Unique Technical, Shared/Confounded, and Residual components.
 
 ### 1.1 Diagnostic Architecture & Verification Pillars
@@ -32,7 +32,7 @@ Each onboarding notebook adheres to the following sequence:
 - **Thresholding:**
   - $\text{NMI} \approx 0.0$: Covariates are statistically independent.
   - $\text{NMI} \in [0.3, 0.7]$: Moderate overlap / partial confounding (requires multi-variable joint modeling).
-  - $\text{NMI} > 0.70$: Severe collinearity (e.g. `Cognitive status` vs. `APOE4 status` in Alzheimer, or `Status` vs. `tissue_source` in Myocardial Infarction); batch correction against such covariates risks removing biological signal.
+  - $\text{NMI} > 0.70$: Severe collinearity (e.g. `Cognitive status` vs. `APOE4 status` in Alzheimer); batch correction against such covariates risks removing biological signal.
 
 ### 1.3 Inter-Sample Distance PERMANOVA & Variance Decomposition
 - **Motivation:** While feature-level $R^2$ indicates which individual cell types fluctuate, patient stratification methods evaluate global pairwise sample distances.
@@ -50,9 +50,9 @@ Each onboarding notebook adheres to the following sequence:
 ## 2. Batch Effects in Single-Cell Cohorts: Expression vs. Composition
 
 ### Executive Summary
-- Single-cell technical noise operates through distinct physical mechanisms across modalities: **gene expression artifacts** (sequencing chemistry, depth, ambient RNA) vs. **compositional artifacts** (dissociation protocols, cryopreservation, cell fragile destruction).
-- Benchmark evaluation must distinguish between expression-level batch keys and composition-level batch keys.
-- Detailed cohort profiles and candidate variables are documented in [`notebooks/dataset_onboarding/README.md`](notebooks/dataset_onboarding/README.md).
+- Single-cell technical noise operates through distinct physical mechanisms across modalities: **gene expression artifacts** (sequencing chemistry, depth, ambient RNA) vs. **compositional artifacts** (dissociation protocols, cryopreservation, cell-type destruction).
+- Benchmark evaluations distinguish between expression-level batch keys and composition-level batch keys.
+- Detailed cohort profiles and candidate metadata columns are documented in [`notebooks/dataset_onboarding/README.md`](notebooks/dataset_onboarding/README.md).
 
 ### 2.1 Modality-Specific Noise Mechanisms
 
@@ -62,42 +62,32 @@ Each onboarding notebook adheres to the following sequence:
 | **Cell Composition** | Enzymatic dissociation protocol, tissue digestion time, cold ischemia time, fresh vs. frozen / cryopreservation, FACS gating / cell enrichment | `tissue_type`, `PMI` (post-mortem interval), `dissociation_protocol`, `sample_preservation`, `enrichment` |
 | **Cohort / Demographic** | Clinical collection site, hospital center, donor sex, age, ethnic background | `Site`, `Center`, `sex`, `Age`, `self_reported_ethnicity` |
 
-### 2.2 Target Cohort Batch Structures Summary
-
-- **Alzheimer (SEA-AD):** Primary Bio = `Cognitive status`; Secondary Bio = `ADNC`, `Braak stage`, `CERAD score`, `APOE4 status`; Tech = `assay` (Expression), `tissue_type`, `PMI` (Composition).
-- **Breast Cancer:** Primary Bio = `clinical_subtype` (ER+, HER2+, TNBC); Secondary Bio = `tumor_grade`, `stage`; Tech = `library_id` (Expression), `patient_treatment_status` (Composition/Clinical).
-- **Covid-19 PBMC:** Primary Bio = `Disease_Identity` (Control, Mild, Severe, Critical); Tech = `Processing_Site` / `Center` (Cohort), `Batch` (Expression).
-- **Diabetes (Mouse Islets):** Primary Bio = `disease` / `genotype`; Secondary Bio = `age`, `diet`; Tech = `assay`, `batch` (Expression/Sample Prep).
-- **Kidney KPMP:** Primary Bio = `Disease_Identity` (Reference, CKD, AKI); Tech = `Institution` / `Site` (Cohort), `Assay` (Expression).
-- **Human Lung Cell Atlas (HLCA / Sikkema):** Primary Bio = `disease` (COPD, IPF, COVID-19); Tech = `sequencing_platform`, `assay` (Expression), `tissue_dissociation_protocol`, `anatomical_region` (Composition).
-- **Lupus PBMC:** Primary Bio = `disease_status` (SLE vs. Healthy Control); Tech = `batch_cov` (Expression / Processing Pool).
-- **Myocardial Infarction:** Primary Bio = `cell_type_annotation_level` / `disease_zone` (Myocardial Infarct, Border Zone, Remote); Tech = `sample_source`, `assay` (Expression / Prep).
-- **Parkinson's Disease:** Primary Bio = `disease` (PD vs Control); Secondary Bio = `Braak_stage`; Tech = `assay` (Expression), `PMI` (Composition).
-
 ---
 
 ## 3. Batch Effect Correction & Benchmark Strategy (`batch_effect_analysis.rmd`)
 
 ### Executive Summary
 - The multi-batch benchmark evaluates patient stratification methods under two conditions: **Uncorrected (Raw)** and **Corrected**.
-- Batch correction is applied modality-appropriately while strictly enforcing the **No-Leakage Principle** (`design ~ 1`, no biological label guidance).
+- Batch correction is applied modality-appropriately using the technical batch covariates identified from uncorrected diagnostic checks, while strictly enforcing the **No-Leakage Principle** (biological condition is never protected or passed as a covariate).
 - Method outputs will be evaluated using PERMANOVA on resulting sample distance matrices.
 
 ### 3.1 Modality-Appropriate Correction Implementations
 
-1. **Cell-Type Composition Methods (ECODA, Pseudobulk):**
-   - Corrected via `limma::removeBatchEffect()` directly on the sample $\times$ cell-type CLR matrix (or DESeq2 normalized pseudobulk counts).
-   - **Guardrail:** Strictly unsupervised (`design = matrix(1, nrow=N, ncol=1)`), preventing biological group label leakage.
-   - **Simplex Recentering:** Post-correction row recentering ($\text{clr}^* - \text{mean}(\text{clr}^*)$) restores exact zero-sum simplex constraints.
-2. **Cell-Level Expression Embedding Methods (PILOT, PILOT-GM, GloScope):**
-   - Corrected using `Harmony` (`X_pca_harmony`) computed on cell-level PCA prior to Earth Mover's Distance (EMD) or GMM fitting.
-3. **Deep Generative / Integrated Models (MrVI):**
+1. **Selection of Batch Variables:**
+   - Determined per dataset based on uncorrected diagnostic results (metadata classifications, NMI collinearity matrix, and unintegrated PERMANOVA / LISI checks).
+2. **Cell-Type Composition Methods (ECODA, Pseudobulk):**
+   - Corrected via `limma::removeBatchEffect(x, batch = batch_col)` on the sample $\times$ cell-type CLR matrix or DESeq2-normalized pseudobulk expression matrix.
+   - **No-Leakage Invariant:** The correction model removes only the technical `batch_col`. The biological label (ground truth) is never passed as a protected design covariate (`design = NULL` or intercept-only `~ 1`).
+   - **Simplex Recentering (for CLR):** Post-correction row recentering ($\text{clr}^* - \text{mean}(\text{clr}^*)$) restores exact zero-sum simplex constraints.
+3. **Cell-Level Expression Embedding Methods (PILOT, PILOT-GM, GloScope):**
+   - Corrected using `Harmony` (`X_pca_harmony`) computed on cell-level PCA prior to sample-level distribution distance calculation (e.g. Earth Mover's Distance or GMM fitting).
+4. **Deep Generative / Integrated Models (MrVI):**
    - Corrected using native `batch_key` parameter support in the model architecture.
 
 ### 3.2 Evaluation via Distance Matrix PERMANOVA
 - **Why PERMANOVA is the Gold Standard for Distance Matrices:**
-  - Operates **directly on pairwise distance matrices $D$** without intermediate projection or coordinate distortion.
-  - Accommodates non-Euclidean metrics (e.g. PILOT Earth Mover's Distance, pseudobulk correlation distances).
+  - Operates **directly on pairwise distance matrices $D$** (e.g. Euclidean on CLR, Euclidean on normalized pseudobulk, PILOT Earth Mover's Distance) without intermediate projection or coordinate distortion.
+  - Accommodates non-Euclidean distance geometries without information loss.
   - Uses non-parametric permutation testing without multivariate normality assumptions.
   - Marginal $R^2$ (`by = "margin"`) accurately partitions unique variance between partially collinear covariates.
 - **Expected Benchmark Behavior:**
