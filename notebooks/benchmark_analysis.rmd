@@ -47,29 +47,31 @@ source("src/utils/load_all_functions.R")
 datasets <- read_datasets_json(view = "benchmark_analysis")
 # ============================================================
 # ANALYSIS SCOPE — select which methods + datasets the analysis includes.
-#   pipeline_version: "old" = published set (excludes the extended methods
-#                     below); "new" = everything currently in the pipeline.
+#   analysis_scope:    "preprint" = methods and datasets evaluated in the preprint
+#                      (calculated with the new pipeline, but excluding post-preprint
+#                      methods/datasets);
+#                      "all" / "extended" = everything currently in the pipeline.
 #   analysis_methods:  NULL = all methods found in the loaded results;
 #                      or exact result keys, e.g.
 #                      c("ECODA_authors_HR", "MrVI_hvg2000", "QOT_hvg2000")
 #   analysis_datasets: NULL = all non-debug datasets from datasets.json;
 #                      or dataset keys, e.g. c("Adams", "Pelka") (allows "_debug").
-# Defaults reproduce the published notebook exactly.
+# Defaults reproduce the preprint analysis.
 # ============================================================
-pipeline_version <- "new"   # "old" | "new"
+analysis_scope <- "preprint"   # "preprint" | "all" (or "extended")
 analysis_methods <- NULL
 analysis_datasets <- NULL
 
-# Result-key regex of methods added after the published analysis (excluded
-# when pipeline_version == "old"). Convention for future methods: (a) cover
+# Result-key regex of methods added after the preprint analysis (excluded
+# when analysis_scope == "preprint"). Convention for future methods: (a) cover
 # every recode map they appear in, (b) give main methods a default_methods
 # regex + screening branch, and (c) add them to extended_method_regex or the
-# old/new distinction silently stops covering them.
+# preprint/all distinction silently stops covering them.
 extended_method_regex <- "^QOT_|^PILOT-GM-VAE_"
-# Dataset keys added after the published analysis (excluded when "old").
+# Dataset keys added after the preprint analysis (excluded when "preprint").
 extended_datasets <- character(0)
 
-stopifnot(pipeline_version %in% c("old", "new"))
+stopifnot(analysis_scope %in% c("preprint", "extended", "all"))
 if (!is.null(analysis_datasets)) {
   datasets <- datasets[names(datasets) %in% analysis_datasets]
 } else {
@@ -77,7 +79,7 @@ if (!is.null(analysis_datasets)) {
   # convention marks debug-only entries in datasets.json.
   datasets <- datasets[!grepl("^_", names(datasets))]
 }
-if (pipeline_version == "old") {
+if (analysis_scope == "preprint") {
   datasets <- datasets[!names(datasets) %in% extended_datasets]
 }
 stopifnot(length(datasets) > 0)
@@ -476,13 +478,13 @@ df_results <- imap_dfr(bmark_result_list, ~ {
 df_results <- df_results[!df_results$score == "mod_score", ]
 
 # Resolve the analysis scope: analysis_methods NULL = all methods found in
-# the loaded results; "old" drops the extended (post-publication) methods.
+# the loaded results; "preprint" drops the extended (post-preprint) methods.
 # Runs BEFORE the factor() below so the method levels are exactly the scoped
 # set.
 if (is.null(analysis_methods)) {
   analysis_methods <- unique(as.character(df_results$method))
 }
-if (pipeline_version == "old") {
+if (analysis_scope == "preprint") {
   analysis_methods <- analysis_methods[
     !grepl(extended_method_regex, analysis_methods)
   ]
@@ -2070,10 +2072,12 @@ dss <- names(result_list[["bmark"]])
 
 for (ds in dss) {
   counts <- result_list[["bmark"]][[ds]]$ECODA_authors_HR$counts
-  meta <- data.frame(sample_id = names(result_list[["bmark"]][[ds]]$ECODA_authors_HR$labels),
-                     group = result_list[["bmark"]][[ds]]$ECODA_authors_HR$labels
+  meta <- data.frame(
+    sample_id = names(result_list[["bmark"]][[ds]]$ECODA_authors_HR$labels),
+    group = result_list[["bmark"]][[ds]]$ECODA_authors_HR$labels,
+    row.names = names(result_list[["bmark"]][[ds]]$ECODA_authors_HR$labels)
   )
-  ecoda_object <- ecoda(counts, metadata = meta, variance_explained = 0.4)
+  ecoda_object <- ecoda(t(counts), metadata = meta, variance_explained = 0.4)
   
   if (ds == "GongSharma_all_age") {
     ec_plot <- ecoda_object
@@ -2082,7 +2086,7 @@ for (ds in dss) {
   
   p <- plot_varmean(ecoda_object, plot_title = pt)
   # print(p)
-  plot_list <- c(plot_list, p)
+  plot_list[[ds]] <- p
   # p <- plot_corr(ecoda_object)
   # print(p)
 }
@@ -3165,16 +3169,13 @@ if (length(zeroimp_result_list) == 0) {
 df_results <- imap_dfr(zeroimp_result_list, ~ {
   dataset_name <- .y
   imap_dfr(.x, function(method_value, method_name) {
-    # multLN bundles nest the scores one level deeper (list(multLN = <named
-    # score vector>)) than the flat count/percentage bundles: unwrap a
-    # single-element nested list; drop anything still list-valued (only
-    # scalar score rows are kept).
     if (is.list(method_value) && !is.data.frame(method_value)) {
-      if (length(method_value) == 1 && is.numeric(method_value[[1]])) {
+      if (length(method_value) == 1 && is.list(method_value[[1]])) {
         method_value <- method_value[[1]]
-      } else {
+      }
+      if (!all(sapply(method_value, is.numeric))) {
         message(
-          "Dropping list-valued zeroimp rows for ", dataset_name, "/",
+          "Dropping non-numeric zeroimp rows for ", dataset_name, "/",
           method_name
         )
         return(tibble())
@@ -3184,7 +3185,7 @@ df_results <- imap_dfr(zeroimp_result_list, ~ {
       dataset = dataset_name,
       method = method_name,
       score = .y,
-      value = .x
+      value = as.numeric(.x)
     ))
   })
 })

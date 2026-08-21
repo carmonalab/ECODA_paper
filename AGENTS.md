@@ -29,10 +29,13 @@
 ### Reproducibility & Environments
 - **Never drop defined package versions in `pixi.toml`** — preserving exact dependency versions is essential for reproducibility.
 - Do not run full pipeline scripts (`.R`, `.py`, `.sh`) on large cohorts for minor validation checks unless explicitly requested by the user. Use the `_debug` dataset (Joanito 5-sample subset) for verification.
+- **Notebook Renders are Local:** All analysis notebooks (`notebooks/*.rmd`, `notebooks/*.ipynb`) are rendered locally on macOS using the local pixi environment (`pixi run Rscript ...`), NEVER on the HPC cluster (`bamboo`).
 
 ---
 
 ## 2. HPC Execution Invariants
+
+> **IMPORTANT:** `bamboo` IS the HPC cluster (`login1.bamboo.hpc.unige.ch`). Any command referencing `bamboo` (SSH, rsync, SLURM, scratch) is interacting with the HPC environment.
 
 ### Cluster Access & Host Configuration
 - **Cluster Endpoint:** `login1.bamboo.hpc.unige.ch` (SSH alias: `bamboo`, user: `halterc`).
@@ -48,9 +51,13 @@
 - **Never run recursive deletions (`rm -rf`)** on `$HOME/scratch` or `data/` directories without explicit user confirmation.
 - **Job Monitoring:** Inspect runs with non-blocking Slurm queries (`squeue -u $USER`, `sacct -j <id> --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS`).
 
-### Execution Patience & Anti-Polling Invariant (Never Burn Tokens)
-- **Do not poll or loop on background tasks:** When launching long-running processes, sbatch jobs, or heavy scripts, NEVER run rapid polling loops or set tight 5-10s timers with repeated status queries.
-- **Launch and stop:** State what was launched in one concise sentence and immediately end the turn. Wait for the reactive system message on task completion. Do not burn tokens or flood the conversation.
+### Execution Patience & Anti-Polling Invariant (Strict No-Spam Rule)
+- **Do not poll or loop on background tasks:** When launching long-running processes, notebook renders, or background scripts, NEVER run polling loops (`manage_task status`) and NEVER schedule timers to repeatedly inspect status.
+- **Strict Launch-and-Stop Protocol:**
+  - Launch the task.
+  - State exactly once: `"I have launched <task description> in the background; I will stay quiet and wait for the system to notify me when it finishes."`
+  - Immediately end the turn without calling any further tools.
+  - Wait silently for the reactive system message on task completion. Do not burn tokens or flood the conversation.
 
 ### Repository vs. Scratch Directory Layout
 - **The git repository clone lives at `$HOME/ECODA_paper`** — all git operations (`git pull`, `git status`, commits) and job submissions must run from `~/ECODA_paper`.

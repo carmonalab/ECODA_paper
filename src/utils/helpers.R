@@ -26,7 +26,7 @@ merge_exec_times <- function(df_results, exec_times) {
 highlight <- function(x, pat, color = "black", family = "") {
   ifelse(
     grepl(pat, x),
-    glue("<b style='font-family:{family}; color:{color}'>{x}</b>"),
+    glue::glue("<b style='font-family:{family}; color:{color}'>{x}</b>"),
     x
   )
 }

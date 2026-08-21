@@ -136,6 +136,17 @@ plot_varmean <- function(
 ) {
   labels <- match.arg(labels)
 
+  # If df_var is a SummarizedExperiment (e.g. from scECODA::ecoda), extract metadata
+  if (inherits(df_var, "SummarizedExperiment")) {
+    se <- df_var
+    if (is.null(highlight_celltypes)) {
+      highlight_celltypes <- S4Vectors::metadata(se)$hvcs
+    }
+    df_var <- as.data.frame(S4Vectors::metadata(se)$celltype_variances)
+  }
+
+  x_col <- if ("avg_clr_abundance" %in% colnames(df_var)) "avg_clr_abundance" else "Relative_abundance"
+
   # --- 1. Create a highlighting factor column ---
   if (highlight_hvcs) {
     df_var <- df_var %>%
@@ -151,14 +162,14 @@ plot_varmean <- function(
     p <- ggplot(
       df_var,
       aes(
-        x = Relative_abundance,
-        y = Variance,
+        x = .data[[x_col]],
+        y = .data$Variance,
         color = is_highlighted
       )
     ) +
       scale_color_manual(values = color_map, name = "Cell Type Group")
   } else {
-    p <- ggplot(df_var, aes(x = avg_clr_abundance, y = Variance))
+    p <- ggplot(df_var, aes(x = .data[[x_col]], y = .data$Variance))
   }
 
   p <- p +
