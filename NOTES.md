@@ -67,38 +67,68 @@ Each onboarding notebook adheres to the following sequence:
 ## 3. Batch Effect Correction & Benchmark Strategy (`batch_effect_analysis.rmd`)
 
 ### Executive Summary
-- The multi-batch benchmark evaluates patient stratification methods under two conditions: **Uncorrected (Raw)** and **Corrected**.
-- Batch correction is applied modality-appropriately using the technical batch covariates identified from uncorrected diagnostic checks, while strictly enforcing the **No-Leakage Principle** (biological condition is never protected or passed as a covariate).
-- Method outputs will be evaluated using PERMANOVA on resulting sample distance matrices.
+- The multi-batch benchmark evaluates patient stratification methods across a **Two-Pass Workflow**: (1) **Uncorrected (Raw)**, followed by (2) **Corrected**.
+- **Uncorrected Pass as the Decision Gate:** Running all methods without batch correction first and inspecting distance-level PERMANOVA and NMI collinearity across modalities provides the complete picture needed to decide which specific batch variables to target per method/modality.
+- **Cross-Modality Confounding Attribution:** When biological conditions and technical batches are partially confounded (e.g. `Site` with unbalanced disease/control allocations), single-modality evaluations cannot separate true biology from batch noise. Cross-modality comparison (expression vs. composition) clarifies whether separation is modality-specific or driven by shared technical confounders.
+- **Evaluation & Ratio-of-Ratios Metric:** Evaluates the shift in $R^2_{\text{Bio}}$ and $R^2_{\text{Batch}}$, the $\text{Bio} / \text{Batch}$ signal-to-noise ratio, and the **Ratio-of-Ratios** ($\text{Ratio}_{\text{Corr}} / \text{Ratio}_{\text{Raw}}$).
 
-### 3.1 Modality-Appropriate Correction Implementations
+### 3.1 Two-Pass Benchmark Workflow
 
-1. **Selection of Batch Variables:**
-   - Determined per dataset based on uncorrected diagnostic results (metadata classifications, NMI collinearity matrix, and unintegrated PERMANOVA / LISI checks).
-2. **Cell-Type Composition Methods (ECODA, Pseudobulk):**
-   - Corrected via `limma::removeBatchEffect(x, batch = batch_col)` on the sample $\times$ cell-type CLR matrix or DESeq2-normalized pseudobulk expression matrix.
-   - **No-Leakage Invariant:** The correction model removes only the technical `batch_col`. The biological label (ground truth) is never passed as a protected design covariate (`design = NULL` or intercept-only `~ 1`).
-   - **Simplex Recentering (for CLR):** Post-correction row recentering ($\text{clr}^* - \text{mean}(\text{clr}^*)$) restores exact zero-sum simplex constraints.
-3. **Cell-Level Expression Embedding Methods (PILOT, PILOT-GM, GloScope):**
-   - Corrected using `Harmony` (`X_pca_harmony`) computed on cell-level PCA prior to sample-level distribution distance calculation (e.g. Earth Mover's Distance or GMM fitting).
-4. **Deep Generative / Integrated Models (MrVI):**
-   - Corrected using native `batch_key` parameter support in the model architecture.
+```
+                        Processed Cohort Data
+                                  |
+              +-------------------+-------------------+
+              |                                       |
+    [Pass 1: Uncorrected (Raw)]             [Pass 2: Corrected]
+    - All methods run raw                   - Modality-appropriate correction
+    - Metadata Collinearity (NMI)           - limma for ECODA/Pseudobulk
+    - Distance Matrix PERMANOVA             - Harmony on PCA for PILOT/GloScope
+              |                             - Native batch_key for MrVI
+              v                                       |
+    [Attribution Decision Gate]                       v
+    - Identify active batch drivers         [Distance Matrix PERMANOVA]
+    - Cross-modality confounding check      - Measure batch suppression & bio retention
+              |                                       |
+              +-------------------+-------------------+
+                                  |
+                        [Comparative Synthesis]
+                        - Bio / Batch Ratios (Raw vs. Corr)
+                        - Delta R² (Bio vs. Batch)
+                        - Ratio-of-Ratios (Correction Benefit Index)
+```
 
-### 3.2 Evaluation via Distance Matrix PERMANOVA
-- **Why PERMANOVA is the Gold Standard for Distance Matrices:**
-  - Operates **directly on pairwise distance matrices $D$** (e.g. Euclidean on CLR, Euclidean on normalized pseudobulk, PILOT Earth Mover's Distance) without intermediate projection or coordinate distortion.
-  - Accommodates non-Euclidean distance geometries without information loss.
-  - Uses non-parametric permutation testing without multivariate normality assumptions.
-  - Marginal $R^2$ (`by = "margin"`) accurately partitions unique variance between partially collinear covariates.
-- **Expected Benchmark Behavior:**
-  - **Ideal Batch Correction:** $\Delta R^2_{\text{Batch}} = R^2_{\text{Batch}}(\text{Raw}) - R^2_{\text{Batch}}(\text{Corr}) \gg 0$ (batch variance suppressed to near zero), while $R^2_{\text{Bio}}(\text{Corr}) \ge R^2_{\text{Bio}}(\text{Raw})$ (biological separation preserved or enhanced).
+1. **Pass 1: Uncorrected (Raw) Benchmark Evaluation:**
+   - Execute all benchmark methods (ECODA family, Pseudobulk, Avg_PCA, GloScope, PILOT, PILOT-GM, MrVI, QOT) on raw, uncorrected embeddings/counts.
+   - For each method output distance matrix ($D_{\text{raw}}$), evaluate:
+     - **Metadata Collinearity (NMI):** Maps confounding structure across metadata columns.
+     - **Marginal PERMANOVA:** Quantifies baseline $R^2_{\text{Bio}}$, $R^2_{\text{Batch}}$, $R^2_{\text{Shared}}$, and $R^2_{\text{Residual}}$.
+   - **Cross-Modality Confounding Rationale:** In datasets where `Site` or `Institution` has unbalanced disease distributions, it is mathematically impossible within one modality to prove whether patient clustering reflects disease biology or site-specific sample prep. Comparing composition-based methods (ECODA) with expression-based methods (Pseudobulk, PILOT, MrVI) indicates whether one modality recovers the biological signal more cleanly than the other despite the technical confounder.
+   - **Decision Gate:** Finalize which batch variables to correct for each method and modality based on these empirical uncorrected PERMANOVA results.
 
-### 3.3 Open Decisions & Discussion Points (Tracked in `TODO.md`)
+2. **Pass 2: Modality-Appropriate Batch Correction:**
+   - **Cell-Type Composition Methods (ECODA, Pseudobulk):** `limma::removeBatchEffect(x, batch = batch_col)` applied to the sample $\times$ cell-type CLR matrix or DESeq2-normalized pseudobulk expression matrix.
+     - **No-Leakage Invariant:** The correction model removes only the technical `batch_col`. The biological label (ground truth) is strictly excluded (`design = NULL` or intercept-only `~ 1`).
+     - **Simplex Recentering (for CLR):** Post-correction row recentering ($\text{clr}^* - \text{mean}(\text{clr}^*)$) restores exact zero-sum simplex constraints.
+   - **Cell-Level Expression Embeddings (PILOT, PILOT-GM, GloScope):** `Harmony` (`X_pca_harmony`) computed on cell-level PCA prior to sample-level distribution distance calculation (e.g. Earth Mover's Distance or GMM fitting).
+   - **Deep Generative Models (MrVI):** Native multi-covariate `batch_key` integration within the autoencoder architecture.
 
-1. **Visualization Strategy for Multi-Batch Benchmark:**
-   - *Option A: Grouped / Stacked PERMANOVA Bar Plot:* A grouped bar chart displaying $R^2_{\text{Bio}}$, $R^2_{\text{Batch}}$, and $R^2_{\text{Residual}}$ for each method under Raw vs. Corrected conditions. Clean, statistically exact, and intuitive.
-   - *Option B: FunkyHeatmap:* Compact tabular heatmap summarizing multiple metrics (PERMANOVA $R^2$, Silhouette, LISI, ANOSIM, ARI) across methods. Matches the style of Figure 2A / Supp Fig 15, but may become dense with multiple batch covariates.
-2. **Biological Signal vs. Batch Effect Metric ($\text{Bio} / \text{Batch}$ Ratio):**
-   - *Formulation 1 (PERMANOVA Ratio):* $\text{Ratio}_{\text{PERMANOVA}} = \frac{R^2_{\text{Bio}}}{R^2_{\text{Batch}} + \epsilon}$
-   - *Formulation 2 (Aggregate Metric Ratio):* Ratio of biological cluster separation (e.g. $\text{Silhouette}_{\text{Bio}}$, $\text{ANOSIM}_{\text{Bio}}$) to batch mixing ($\text{LISI}_{\text{Batch}}$).
-   - Needs empirical comparison across benchmark cohorts to decide the most robust and interpretable index.
+### 3.2 Quantitative Evaluation & Comparative Metrics
+
+1. **Marginal Distance Variance Explained (PERMANOVA):**
+   $$\text{Total Distance Variance} = R^2_{\text{Bio}} + R^2_{\text{Batch}} + R^2_{\text{Shared}} + R^2_{\text{Residual}}$$
+2. **Biological Signal vs. Batch Effect Ratio ($\text{Bio} / \text{Batch}$ Ratio):**
+   $$\text{Ratio}_{\text{Raw}} = \frac{R^2_{\text{Bio}}(\text{Raw})}{R^2_{\text{Batch}}(\text{Raw}) + \epsilon}, \quad \text{Ratio}_{\text{Corr}} = \frac{R^2_{\text{Bio}}(\text{Corr})}{R^2_{\text{Batch}}(\text{Corr}) + \epsilon}$$
+   *(Also evaluated using summarized benchmark metrics: $\text{Silhouette}_{\text{Bio}} / \text{LISI}_{\text{Batch}}$).*
+3. **Signal Shifts ($\Delta R^2$):**
+   - Batch Suppression: $\Delta R^2_{\text{Batch}} = R^2_{\text{Batch}}(\text{Raw}) - R^2_{\text{Batch}}(\text{Corr}) \quad (\text{Target: } \gg 0)$
+   - Biological Retention: $\Delta R^2_{\text{Bio}} = R^2_{\text{Bio}}(\text{Corr}) - R^2_{\text{Bio}}(\text{Raw}) \quad (\text{Target: } \ge 0)$
+4. **Ratio-of-Ratios (Correction Benefit Index):**
+   $$\text{RoR} = \frac{\text{Ratio}_{\text{Corr}}}{\text{Ratio}_{\text{Raw}}}$$
+   An $\text{RoR} > 1.0$ quantitatively proves that batch correction improved the biological signal-to-noise ratio rather than removing biological variation.
+
+### 3.3 Open Decisions & Visualization Options (Tracked in `TODO.md`)
+
+1. **Visualization Format for Multi-Batch Benchmark:**
+   - *Option A: Grouped / Stacked PERMANOVA Bar Plot:* Method-by-method grouped bar chart showing $R^2_{\text{Bio}}$, $R^2_{\text{Batch}}$, and $R^2_{\text{Residual}}$ under Raw vs. Corrected conditions. Highly interpretable for variance shifts.
+   - *Option B: FunkyHeatmap Overview:* Compact tabular heatmap summarizing PERMANOVA $R^2$, Silhouette, LISI, ANOSIM, and ARI across all methods. Provides visual consistency with Main Figure 2A / Supp Fig 15.
+2. **Metric Ratio Selection:** Decide between PERMANOVA $R^2$ ratio vs. aggregate benchmark metric ratio ($\text{Silhouette} / \text{LISI}$) for summary reporting across cohorts.

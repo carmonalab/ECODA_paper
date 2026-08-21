@@ -52,12 +52,16 @@ Implementation plan and task tracking for manuscript revisions, benchmark extens
 - [x] **Batch Metadata Tracking:** Integrated `columns.batch` in `datasets.json` (Joanito `seqtec`, Kfoury `cells_lowres`).
 - [ ] **4.1 Generic ECODA Batch-Associated Cell Type Removal:**
   - Implement statistical test (t-test/Wilcoxon for 2 batches, ANOVA/Kruskal-Wallis for >2 batches, $p < 0.05$) to identify and optionally exclude batch-confounded cell types.
-- [ ] **4.2 Multi-Batch Benchmark Suite (Priority 1):**
-  - Evaluate datasets with defined technical batch structures (Stephenson, Joanito, CombinedPBMC, KPMP Kidney, Breast Cancer, Covid-19 PBMC).
-  - Run benchmark methods under two modes: **Uncorrected (Raw)** vs. **Corrected** (`limma` for ECODA/pseudobulk, `Harmony` on PCA for PILOT/GloScope, native multi-batch for MrVI).
-  - Quantify distance variance explained via **Marginal PERMANOVA** on resulting sample distance matrices ($R^2_{\text{Bio}}$, $R^2_{\text{Batch}}$, $R^2_{\text{Shared}}$, $R^2_{\text{Residual}}$).
+- [ ] **4.2 Multi-Batch Benchmark Suite (Priority 1 — `batch_effect_analysis.rmd`):**
+  - Implement two-pass benchmark evaluation:
+    1. **Pass 1 (Uncorrected):** Run all benchmark methods on raw counts/embeddings. Evaluate metadata collinearity (NMI) and distance matrix PERMANOVA. Conduct cross-modality confounding checks (expression vs. composition) on partially confounded cohorts (e.g. `Site`/`Institution`). Finalize modality-appropriate batch variables based on uncorrected results.
+    2. **Pass 2 (Corrected):** Run methods with modality-appropriate batch correction (`limma` for ECODA/pseudobulk, `Harmony` on PCA for PILOT/GloScope, native multi-batch for MrVI) adhering strictly to the No-Leakage Principle.
+  - **Comparative Quantitative Metrics:**
+    - PERMANOVA distance variance partitioning ($R^2_{\text{Bio}}$, $R^2_{\text{Batch}}$, $R^2_{\text{Shared}}$, $R^2_{\text{Residual}}$).
+    - $\text{Bio} / \text{Batch}$ signal-to-noise ratio in uncorrected vs. corrected runs ($\text{Ratio}_{\text{Raw}}$ vs. $\text{Ratio}_{\text{Corr}}$).
+    - Shift in biological retention ($\Delta R^2_{\text{Bio}}$) and batch suppression ($\Delta R^2_{\text{Batch}}$).
+    - **Ratio-of-Ratios (Correction Benefit Index):** $\text{RoR} = \text{Ratio}_{\text{Corr}} / \text{Ratio}_{\text{Raw}}$.
   - **Visualization Decision [Open]:** Grouped PERMANOVA variance bar plot per method/covariate vs. FunkyHeatmap summary.
-  - **Bio/Batch Ratio Metric [Open]:** Evaluate $\text{Bio} / \text{Batch}$ signal-to-noise ratio (PERMANOVA $R^2$ ratio vs. aggregate benchmark separation/mixing metrics).
 - [ ] **4.3 MrVI Native `batch_key` Integration:**
   - Wire native `batch_key` parameter in batch-effect benchmark evaluations.
 - [ ] **4.4 GloScope & PILOT-GM-VAE on Corrected Embeddings:**
