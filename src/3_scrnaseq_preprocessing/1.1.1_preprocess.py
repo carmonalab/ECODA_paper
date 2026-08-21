@@ -1,5 +1,6 @@
 import os
 import sys
+import anndata as ad
 import numpy as np
 import scanpy as sc
 import scipy.sparse as sp
@@ -142,42 +143,58 @@ def run_clustering(adata, rep_key, key_suffix, resolutions):
 # Shared setup: gene standardization + counts vaulting + normalize/log
 # ---------------------------------------------------------------------------
 def base_preprocessing(adata):
-    # anndataR-produced inputs (e.g. the _debug h5ad) can have X=None with the
-    # raw counts in layers["counts"]; promote the counts layer to X before any
-    # X-dependent step (filter_cells etc.).
-    if adata.X is None:
-        if "counts" in adata.layers:
-            adata.X = adata.layers["counts"].copy()
-        elif adata.raw is not None:
-            adata.X = adata.raw.X.copy()
-        else:
-            raise ValueError(
-                "Input has neither X, nor a counts layer, nor raw counts; cannot preprocess."
+    """
+    Extracts raw integer counts into adata.X upfront, standardizes gene symbols,
+    filters cells and genes on raw counts, vaults raw counts into layers['counts'],
+    and computes log-normalized expression in adata.X.
+    """
+    # 1. Resolve raw integer counts:
+    # Priority 1: layers['counts'] (already populated by anndataR or dataset preprocessing)
+    if "counts" in adata.layers:
+        adata.X = adata.layers["counts"].copy()
+    # Priority 2: raw.X holds integer counts while adata.X is log-normalized or scaled
+    elif adata.raw is not None and adata.raw.X is not None:
+        raw_mat = adata.raw.X
+        sample_raw = raw_mat.data[:1000] if sp.issparse(raw_mat) else raw_mat.ravel()[:1000]
+        sample_raw_pos = sample_raw[sample_raw > 1e-6]
+        is_raw_int = bool(sample_raw_pos.size > 0 and np.all(np.abs(sample_raw_pos - np.round(sample_raw_pos)) < 1e-3))
+        if is_raw_int:
+            raw_var = (
+                adata.raw.var.copy()
+                if hasattr(adata.raw, "var") and len(adata.raw.var) == raw_mat.shape[1]
+                else adata.var.copy()
             )
+            # Construct fresh AnnData using raw.X and raw.var to keep gene dimensions aligned
+            adata = ad.AnnData(
+                X=adata.raw.X.copy(),
+                obs=adata.obs.copy(),
+                var=raw_var,
+                obsm=adata.obsm.copy(),
+            )
+        elif adata.X is None:
+            raise ValueError(
+                "Input has raw matrix with non-integer values and X is None; cannot preprocess."
+            )
+    elif adata.X is None:
+        raise ValueError(
+            "Input has neither X, nor a counts layer, nor raw counts; cannot preprocess."
+        )
 
+    # 2. Ensure CSR format on counts
+    adata.X = adata.X.tocsr() if sp.issparse(adata.X) else sp.csr_matrix(adata.X)
+
+    # 3. Filter cells and genes on raw counts
     sc.pp.filter_cells(adata, min_genes=100)
     sc.pp.filter_genes(adata, min_cells=3)
 
+    # 4. Standardize gene symbols on filtered counts
     standardize_gene_symbols(adata)
     adata.var_names_make_unique()
- 
-    if "counts" not in adata.layers:
-        adata.layers["counts"] = (
-            adata.raw.X.copy() if adata.raw is not None else adata.X.copy()
-        )
 
-    # Force CSR unconditionally (not only for dense inputs): the on-disk sparse
-    # format is preserved at write time, and backed-mode per-sample subsets in
-    # cell type annotation are only selective for CSR (CSC falls back to a full
-    # in-memory read per subset -> OOM). tocsr() on an already-CSR matrix is a
-    # no-op (no copy). scanpy ops after this preserve CSR.
-    adata.X = adata.X.tocsr() if sp.issparse(adata.X) else sp.csr_matrix(adata.X)
-    adata.layers["counts"] = (
-        adata.layers["counts"].tocsr()
-        if sp.issparse(adata.layers["counts"])
-        else sp.csr_matrix(adata.layers["counts"])
-    )
+    # 5. Vault raw integer counts into layers['counts']
+    adata.layers["counts"] = adata.X.copy()
 
+    # 6. Normalize and log-transform X for PCA/Harmony
     sc.pp.normalize_total(adata)
     sc.pp.log1p(adata)
     return adata
