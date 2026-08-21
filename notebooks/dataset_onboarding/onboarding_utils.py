@@ -1009,6 +1009,432 @@ def plot_variance_partition_heatmap(
     return fig
 
 
+def compute_metadata_nmi_matrix(
+    meta_df: pd.DataFrame,
+    sample_col: str,
+    candidate_cols: list[str],
+) -> pd.DataFrame:
+    """Calculate pairwise Normalized Mutual Information (NMI) among metadata covariates at the sample level.
+
+    Evaluates potential collinearity and confounding among biological and technical covariates.
+    NMI ranges from 0.0 (statistical independence) to 1.0 (complete collinearity / deterministic mapping).
+    Pairs with NMI > 0.70 represent severe confounding.
+    """
+    from sklearn.metrics import normalized_mutual_info_score
+
+    valid_cols = list(dict.fromkeys([c for c in candidate_cols if c in meta_df.columns]))
+    meta_sample = (
+        meta_df[[sample_col] + valid_cols]
+        .drop_duplicates(subset=[sample_col])
+        .set_index(sample_col)
+    )
+
+    cols_to_use = []
+    for col in valid_cols:
+        s = meta_sample[col]
+        if isinstance(s, pd.DataFrame):
+            s = s.iloc[:, 0]
+        s_clean = s.dropna().astype(str)
+        s_clean = s_clean[~s_clean.isin(["<NA>", "nan", "None"])]
+        if s_clean.nunique() >= 2:
+            cols_to_use.append(col)
+
+    if not cols_to_use:
+        return pd.DataFrame()
+
+    n = len(cols_to_use)
+    nmi_mat = pd.DataFrame(index=cols_to_use, columns=cols_to_use, dtype=float)
+
+    for i in range(n):
+        col_i = cols_to_use[i]
+        s_i = meta_sample[col_i]
+        if isinstance(s_i, pd.DataFrame):
+            s_i = s_i.iloc[:, 0]
+        s_i = s_i.astype(str)
+
+        for j in range(i, n):
+            col_j = cols_to_use[j]
+            s_j = meta_sample[col_j]
+            if isinstance(s_j, pd.DataFrame):
+                s_j = s_j.iloc[:, 0]
+            s_j = s_j.astype(str)
+
+            if i == j:
+                val = 1.0
+            else:
+                mask = (~s_i.isin(["<NA>", "nan", "None"])) & (~s_j.isin(["<NA>", "nan", "None"]))
+                if mask.sum() >= 3 and s_i[mask].nunique() >= 2 and s_j[mask].nunique() >= 2:
+                    val = float(normalized_mutual_info_score(s_i[mask], s_j[mask], average_method="arithmetic"))
+                else:
+                    val = np.nan
+
+            nmi_mat.loc[col_i, col_j] = val
+            nmi_mat.loc[col_j, col_i] = val
+
+    return nmi_mat
+
+
+def plot_metadata_nmi_heatmap(
+    nmi_mat: pd.DataFrame,
+    title: str | None = None,
+    figsize: tuple[float, float] | None = None,
+) -> plt.Figure:
+    """Plot publication-quality correlation heatmap of Normalized Mutual Information (NMI) among covariates."""
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    if nmi_mat.empty:
+        fig, ax = plt.subplots(figsize=(5, 3))
+        ax.text(0.5, 0.5, "No valid metadata covariates for NMI", ha="center", va="center", fontsize=10)
+        ax.axis("off")
+        return fig
+
+    n = len(nmi_mat)
+    if figsize is None:
+        fig_dim = max(5.5, n * 0.65 + 2.0)
+        figsize = (fig_dim + 1.2, fig_dim)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    cmap = plt.cm.YlOrRd.copy()
+    cmap.set_bad(color="#e0e0e0")
+
+    sns.heatmap(
+        nmi_mat,
+        annot=True,
+        fmt=".2f",
+        cmap=cmap,
+        vmin=0.0,
+        vmax=1.0,
+        square=True,
+        linewidths=0.5,
+        linecolor="white",
+        cbar_kws={"label": "Normalized Mutual Information (NMI)", "shrink": 0.75},
+        ax=ax,
+        annot_kws={"fontsize": 9, "fontweight": "bold"},
+    )
+
+    ax.set_title(
+        title or "Metadata Covariate Collinearity Matrix (Normalized Mutual Information)",
+        fontsize=11,
+        fontweight="bold",
+        pad=12,
+    )
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right", fontsize=9.5)
+    ax.set_yticklabels(ax.get_yticklabels(), rotation=0, fontsize=9.5)
+    fig.tight_layout()
+    return fig
+
+
+def compute_compositional_permanova(
+    clr_df: pd.DataFrame,
+    meta_df: pd.DataFrame,
+    sample_col: str,
+    bio_cols: list[str],
+    tech_cols: list[str],
+    n_permutations: int = 999,
+    seed: int = 42,
+) -> tuple[pd.DataFrame, pd.DataFrame, str]:
+    """Calculate Permutational Multivariate Analysis of Variance (PERMANOVA) on compositional sample distances.
+
+    Calculates sample-by-sample Aitchison distance (Euclidean distance on CLR vectors) and performs:
+    1. Univariate PERMANOVA (Anderson 2001) per biological and technical covariate with permutation Pseudo-F tests.
+    2. Multi-variable marginal variance partitioning decomposing total inter-sample distance variance into:
+       - Unique Biological Variance
+       - Unique Technical / Batch Variance
+       - Shared / Confounded Variance
+       - Residual / Unexplained Variance
+
+    Returns (univariate_permanova_df, joint_variance_partition_df, formatted_summary_text).
+    """
+    from scipy.spatial.distance import pdist, squareform
+    import statsmodels.stats.multitest as smt
+
+    dedup_bio = list(dict.fromkeys([c for c in bio_cols if c in meta_df.columns]))
+    dedup_tech = list(dict.fromkeys([c for c in tech_cols if c in meta_df.columns]))
+    all_cols = list(dict.fromkeys(dedup_bio + dedup_tech))
+
+    meta_dedup = meta_df[[sample_col] + all_cols].drop_duplicates(subset=[sample_col]).set_index(sample_col)
+    common_samples = clr_df.index.intersection(meta_dedup.index)
+    clr_sub = clr_df.loc[common_samples]
+    meta_sub = meta_dedup.loc[common_samples].copy()
+
+    N = len(common_samples)
+    if N < 3 or clr_sub.shape[1] == 0:
+        return pd.DataFrame(), pd.DataFrame(), "Insufficient samples (N < 3) for PERMANOVA."
+
+    # Filter candidate covariates with >= 2 distinct non-NA categories
+    valid_cols = []
+    for col in all_cols:
+        s_grp = meta_sub[col]
+        if isinstance(s_grp, pd.DataFrame):
+            s_grp = s_grp.iloc[:, 0]
+        s_clean = s_grp.dropna().astype(str)
+        s_clean = s_clean[(s_clean != "<NA>") & (s_clean != "nan") & (s_clean != "None")]
+        if s_clean.nunique() >= 2 and len(s_clean) >= 3:
+            valid_cols.append(col)
+
+    if not valid_cols:
+        return pd.DataFrame(), pd.DataFrame(), "No valid covariates with >= 2 categories for PERMANOVA."
+
+    rng = np.random.default_rng(seed)
+
+    # 1. Univariate PERMANOVA per covariate
+    univar_rows = []
+    for col in valid_cols:
+        s_grp = meta_sub[col]
+        if isinstance(s_grp, pd.DataFrame):
+            s_grp = s_grp.iloc[:, 0]
+        s_clean = s_grp.dropna().astype(str)
+        s_clean = s_clean[(s_clean != "<NA>") & (s_clean != "nan") & (s_clean != "None")]
+        idx = s_clean.index
+        n_sub = len(idx)
+
+        # Distance matrix for subset with complete cases
+        sub_D = squareform(pdist(clr_sub.loc[idx].values, metric="euclidean"))
+        A_sub = -0.5 * sub_D**2
+        H_sub = np.eye(n_sub) - np.ones((n_sub, n_sub)) / n_sub
+        G_sub = H_sub @ A_sub @ H_sub
+        ss_tot_sub = float(np.trace(G_sub))
+
+        # Design matrix
+        dum = pd.get_dummies(s_clean, drop_first=True, dtype=float)
+        dum.insert(0, "intercept", 1.0)
+        X = dum.values
+        Q, R = np.linalg.qr(X)
+        tol = 1e-10 * np.abs(np.diag(R)).max() if len(np.diag(R)) else 1e-10
+        r = int((np.abs(np.diag(R)) > tol).sum())
+        Q_basis = Q[:, :r]
+        P = Q_basis @ Q_basis.T
+
+        ss_model = float(np.trace(P @ G_sub))
+        df_model = r - 1
+        df_res = n_sub - r
+        ss_res = max(0.0, ss_tot_sub - ss_model)
+        ms_model = ss_model / df_model if df_model > 0 else 0.0
+        ms_res = ss_res / df_res if df_res > 0 else np.nan
+        f_obs = ms_model / ms_res if (ms_res is not None and ms_res > 0) else np.nan
+        r2_obs = ss_model / ss_tot_sub if ss_tot_sub > 0 else 0.0
+
+        # Permutations
+        f_perms = []
+        for _ in range(n_permutations):
+            p_idx = rng.permutation(n_sub)
+            G_p = G_sub[p_idx, :][:, p_idx]
+            ss_p = float(np.trace(P @ G_p))
+            ss_res_p = max(0.0, ss_tot_sub - ss_p)
+            ms_p = ss_p / df_model if df_model > 0 else 0.0
+            ms_res_p = ss_res_p / df_res if df_res > 0 else np.nan
+            f_p = ms_p / ms_res_p if (ms_res_p is not None and ms_res_p > 0) else 0.0
+            f_perms.append(f_p)
+
+        p_val = float((1 + sum(fp >= f_obs for fp in f_perms)) / (n_permutations + 1))
+        cov_type = "Biological" if col in dedup_bio else "Technical"
+
+        univar_rows.append({
+            "Covariate": col,
+            "Type": cov_type,
+            "N_samples": n_sub,
+            "Df": df_model,
+            "SumOfSqs": round(ss_model, 4),
+            "R2": round(r2_obs, 4),
+            "F-statistic": round(f_obs, 3) if np.isfinite(f_obs) else 0.0,
+            "p-value": p_val,
+        })
+
+    df_univar = pd.DataFrame(univar_rows)
+    if not df_univar.empty:
+        raw_p = df_univar["p-value"].values
+        _, corr_p, _, _ = smt.multipletests(raw_p, method="fdr_bh")
+        df_univar["FDR p-value"] = corr_p
+        df_univar["Significance"] = [
+            "****" if p < 0.0001 else ("***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "ns")))
+            for p in corr_p
+        ]
+
+    # 2. Joint PERMANOVA & Variance Decomposition
+    meta_clean = meta_sub[valid_cols].dropna()
+    common_complete = clr_sub.index.intersection(meta_clean.index)
+
+    if len(common_complete) >= 4:
+        n_c = len(common_complete)
+        clr_c = clr_sub.loc[common_complete].values
+        D_c = squareform(pdist(clr_c, metric="euclidean"))
+        A_c = -0.5 * D_c**2
+        H_c = np.eye(n_c) - np.ones((n_c, n_c)) / n_c
+        G_c = H_c @ A_c @ H_c
+        ss_tot_c = float(np.trace(G_c))
+
+        X_list = []
+        covs_joint = []
+        for c in valid_cols:
+            s = meta_clean[c].loc[common_complete].astype(str)
+            if s.nunique() >= 2:
+                dum = pd.get_dummies(s, drop_first=True, prefix=c, dtype=float)
+                X_list.append(dum)
+                covs_joint.append(c)
+
+        if X_list:
+            X_full = pd.concat(X_list, axis=1)
+            X_full.insert(0, "intercept", 1.0)
+            Q_full, R_full = np.linalg.qr(X_full.values)
+            tol = 1e-10 * np.abs(np.diag(R_full)).max() if len(np.diag(R_full)) else 1e-10
+            rank_full = int((np.abs(np.diag(R_full)) > tol).sum())
+            Q_full_basis = Q_full[:, :rank_full]
+            P_full = Q_full_basis @ Q_full_basis.T
+            ss_full = float(np.trace(P_full @ G_c))
+            r2_full = float(ss_full / ss_tot_c) if ss_tot_c > 0 else 0.0
+
+            marginal_r2_dict = {}
+            for c in covs_joint:
+                other_list = [dum for col, dum in zip(covs_joint, X_list) if col != c]
+                if other_list:
+                    X_sub = pd.concat(other_list, axis=1)
+                    X_sub.insert(0, "intercept", 1.0)
+                    Q_sub, R_sub = np.linalg.qr(X_sub.values)
+                    r_sub = int((np.abs(np.diag(R_sub)) > tol).sum())
+                    Q_sub_basis = Q_sub[:, :r_sub]
+                    P_sub = Q_sub_basis @ Q_sub_basis.T
+                    ss_sub = float(np.trace(P_sub @ G_c))
+                else:
+                    ones = np.ones((n_c, 1)) / np.sqrt(n_c)
+                    P_sub = ones @ ones.T
+                    ss_sub = float(np.trace(P_sub @ G_c))
+
+                ss_marg = max(0.0, ss_full - ss_sub)
+                marginal_r2_dict[c] = float(ss_marg / ss_tot_c) if ss_tot_c > 0 else 0.0
+
+            bio_in_joint = [c for c in covs_joint if c in dedup_bio]
+            tech_in_joint = [c for c in covs_joint if c in dedup_tech]
+            r2_unique_bio = float(sum(marginal_r2_dict[c] for c in bio_in_joint))
+            r2_unique_tech = float(sum(marginal_r2_dict[c] for c in tech_in_joint))
+            r2_shared = float(max(0.0, r2_full - (r2_unique_bio + r2_unique_tech)))
+            r2_residual = float(max(0.0, 1.0 - r2_full))
+        else:
+            r2_unique_bio = 0.0
+            r2_unique_tech = 0.0
+            r2_shared = 0.0
+            r2_residual = 1.0
+    else:
+        r2_unique_bio = 0.0
+        r2_unique_tech = 0.0
+        r2_shared = 0.0
+        r2_residual = 1.0
+
+    df_joint_partition = pd.DataFrame([
+        {"Component": "Unique Biological", "R2": round(r2_unique_bio, 4), "Color": "#2b5c8f"},
+        {"Component": "Unique Technical", "R2": round(r2_unique_tech, 4), "Color": "#d95f02"},
+        {"Component": "Shared / Confounded", "R2": round(r2_shared, 4), "Color": "#7570b3"},
+        {"Component": "Residual (Unexplained)", "R2": round(r2_residual, 4), "Color": "#d9d9d9"},
+    ])
+
+    # Format text summary
+    summary_lines = [
+        "================================================================================",
+        " COMPOSITIONAL DISTANCE PERMANOVA (Aitchison Distance / CLR Euclidean)",
+        "================================================================================",
+        f" Samples: N = {N} | Cell types: {clr_sub.shape[1]} | Permutations: {n_permutations}",
+        "--------------------------------------------------------------------------------",
+        " Individual Covariate Associations (Univariate PERMANOVA):",
+    ]
+    for _, r in df_univar.iterrows():
+        p_str = f"{r['p-value']:.3e}" if r['p-value'] < 0.001 else f"{r['p-value']:.3f}"
+        fdr_str = f"{r['FDR p-value']:.3e}" if r['FDR p-value'] < 0.001 else f"{r['FDR p-value']:.3f}"
+        summary_lines.append(
+            f"  • {r['Covariate']:<22s} [{r['Type']:<10s}]: R² = {r['R2']*100:5.1f}% | "
+            f"F = {r['F-statistic']:5.2f} | p = {p_str} | FDR = {fdr_str} ({r['Significance']})"
+        )
+    summary_lines.append("--------------------------------------------------------------------------------")
+    summary_lines.append(" Global Distance Variance Decomposition (Joint Marginal Model):")
+    summary_lines.append(f"  • Unique Biological Variance  : {r2_unique_bio*100:5.1f}%")
+    summary_lines.append(f"  • Unique Technical Variance   : {r2_unique_tech*100:5.1f}%")
+    summary_lines.append(f"  • Shared / Confounded Variance : {r2_shared*100:5.1f}%")
+    summary_lines.append(f"  • Residual / Unexplained      : {r2_residual*100:5.1f}%")
+    summary_lines.append("================================================================================")
+    stats_text = "\n".join(summary_lines)
+
+    return df_univar, df_joint_partition, stats_text
+
+
+def plot_compositional_permanova(
+    univar_df: pd.DataFrame,
+    joint_partition_df: pd.DataFrame,
+    title: str | None = None,
+) -> plt.Figure:
+    """Plot dual-panel PERMANOVA compositional distance variance decomposition."""
+    import matplotlib.pyplot as plt
+
+    if univar_df.empty:
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.text(0.5, 0.5, "No valid PERMANOVA results to display", ha="center", va="center")
+        ax.axis("off")
+        return fig
+
+    n_covs = len(univar_df)
+    fig_h = max(5.0, 2.0 + n_covs * 0.45)
+
+    fig, (ax_stack, ax_bar) = plt.subplots(
+        2, 1, figsize=(8.5, fig_h),
+        gridspec_kw={"height_ratios": [1.1, max(2.2, n_covs * 0.45)], "hspace": 0.48}
+    )
+
+    # 1. Stacked bar (Global Partition)
+    left = 0.0
+    for _, row in joint_partition_df.iterrows():
+        width = float(row["R2"])
+        hatch = "//" if "Shared" in str(row["Component"]) else None
+        ax_stack.barh(
+            0, width, left=left, color=row["Color"], edgecolor="white", height=0.55,
+            hatch=hatch, label=f"{row['Component']} ({width*100:.1f}%)"
+        )
+        if width > 0.06:
+            text_color = "white" if str(row["Color"]).lower() not in ["#d9d9d9", "#e0e0e0", "#ffffff"] else "#333333"
+            ax_stack.text(
+                left + width / 2, 0, f"{width*100:.1f}%",
+                ha="center", va="center", color=text_color, fontweight="bold", fontsize=9
+            )
+        left += width
+
+    ax_stack.set_xlim(0, 1.0)
+    ax_stack.set_ylim(-0.5, 0.5)
+    ax_stack.set_yticks([])
+    ax_stack.set_xlabel("Fraction of Total Inter-Sample Distance Variance", fontsize=10, fontweight="bold")
+    ax_stack.set_title("Global Distance Variance Decomposition (Joint Marginal PERMANOVA)", fontsize=11, fontweight="bold", pad=8)
+    ax_stack.legend(bbox_to_anchor=(0.5, -0.32), loc="upper center", ncol=4, frameon=False, fontsize=8.5)
+
+    # 2. Individual Covariate Marginal R2
+    df_sorted = univar_df.sort_values(by="R2", ascending=True)
+    colors = ["#2b5c8f" if t == "Biological" else "#d95f02" for t in df_sorted["Type"]]
+    y_pos = np.arange(len(df_sorted))
+    bars = ax_bar.barh(y_pos, df_sorted["R2"], color=colors, edgecolor="white", height=0.6, alpha=0.9)
+
+    ax_bar.set_yticks(y_pos)
+    ax_bar.set_yticklabels(df_sorted["Covariate"], fontsize=9.5, fontweight="bold")
+    ax_bar.set_xlabel("Distance Variance Explained (R²)", fontsize=10, fontweight="bold")
+    max_r2 = float(df_sorted["R2"].max()) if not df_sorted.empty else 0.5
+    ax_bar.set_xlim(0, max(0.55, max_r2 * 1.25))
+
+    for bar, (_, row) in zip(bars, df_sorted.iterrows()):
+        r2_val = float(row["R2"])
+        sig = str(row.get("Significance", "ns"))
+        p_val = float(row.get("p-value", 1.0))
+        p_str = f"p={p_val:.3f}" if p_val >= 0.001 else "p<0.001"
+        label_txt = f"{r2_val*100:.1f}% ({p_str}, {sig})"
+        ax_bar.text(
+            r2_val + 0.01, bar.get_y() + bar.get_height() / 2, label_txt,
+            va="center", ha="left", fontsize=8.5, fontweight="bold" if sig != "ns" else "normal"
+        )
+
+    ax_bar.set_title("Individual Covariate Association (Permutation Pseudo-F Test)", fontsize=11, fontweight="bold", pad=8)
+    ax_bar.grid(axis="x", linestyle="--", alpha=0.35)
+
+    if title:
+        fig.suptitle(title, fontsize=12, fontweight="bold", y=0.99)
+
+    fig.tight_layout()
+    return fig
+
+
 def compute_compositional_joint_lm(
     clr_df: pd.DataFrame,
     meta_df: pd.DataFrame,

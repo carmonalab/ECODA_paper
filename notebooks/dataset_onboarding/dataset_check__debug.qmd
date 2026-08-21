@@ -139,6 +139,18 @@ cols_show = [c for c in ["batch_candidate", "n_bio_uniq", "n_batch_uniq", "perfe
 crosstab[cols_show]
 ```
 
+### Metadata Collinearity Matrix (Normalized Mutual Information)
+
+> **Collinearity Diagnostic:** Quantifies pairwise non-linear association among all biological and technical covariates at the sample level using Normalized Mutual Information (NMI $\in [0, 1]$). Values $> 0.70$ indicate severe collinearity and confounding.
+
+```{python}
+all_cand_cols = list(dict.fromkeys([BIO_COL] + ECODA_SECONDARY_BIO + BATCH_COLS))
+nmi_mat = ou.compute_metadata_nmi_matrix(sub.obs, SAMPLE_COL, all_cand_cols)
+fig_nmi = ou.plot_metadata_nmi_heatmap(nmi_mat, title=f"Metadata Collinearity Matrix (NMI) — {NAME}")
+plt.figure(fig_nmi.number)
+plt.show()
+```
+
 ## 4. Unintegrated Embeddings (Fresh PCA + UMAP)
 
 > **Embedding Protocol:** Computed directly from processed raw counts (total counts normalized to 10k, log1p, 2000 HVGs via Seurat v3 paper flavor, scaled PCA 50 PCs, standard Scanpy UMAP with `min_dist=0.5, spread=1.0`). **No pre-existing or batch-corrected embeddings are used.**
@@ -156,9 +168,11 @@ for fig in um["figs"]:
     plt.show()
 ```
 
-## 5. Variance Partition Across Covariates
+## 5. Variance Partition & Distance PERMANOVA Across Covariates
 
-> **Variance Partitioning Protocol:** Quantifies the fraction of total inter-sample variance in cell-type abundance explained by each biological vs. technical covariate across cell types and whole cohort average (`Whole atlas`), following Sikkema et al. 2023 (*Nature Medicine* 29:1563–1577, Fig. 4a). Inapplicable or single-level covariates are masked in grey.
+> **Variance Partitioning Protocol:**
+> 1. **Cell-Type Specific Variance Partitioning:** Quantifies the fraction of inter-sample variance in cell-type abundance explained by each biological vs. technical covariate across cell types and whole cohort average (`Whole atlas`), following Sikkema et al. 2023 (*Nature Medicine* 29:1563–1577, Fig. 4a).
+> 2. **Global Distance PERMANOVA & Variance Decomposition:** Partitions total inter-sample Aitchison distance variance (Euclidean distance on CLR composition) into **Unique Biological**, **Unique Technical**, **Shared/Confounded**, and **Residual** variance via multi-variable marginal PERMANOVA with permutation tests (Anderson 2001).
 
 ```{python}
 bio_candidates = list(dict.fromkeys([c for c in [BIO_COL] + ECODA_SECONDARY_BIO if c in sub.obs.columns]))
@@ -169,6 +183,7 @@ for annot_col in ALL_CT_COLS:
         continue
     clr_curr = ou.compute_clr_composition(sub.obs, SAMPLE_COL, annot_col)
     
+    # 1. Feature-level variance partition heatmap (Sikkema et al.)
     var_tech, var_bio = ou.compute_variance_partition(
         clr_curr, sub.obs, SAMPLE_COL, bio_candidates, tech_candidates
     )
@@ -179,6 +194,20 @@ for annot_col in ALL_CT_COLS:
     )
     plt.figure(fig_var.number)
     plt.show()
+
+    # 2. Global Distance PERMANOVA & Variance Decomposition
+    univar_perm, joint_perm, stats_text = ou.compute_compositional_permanova(
+        clr_curr, sub.obs, SAMPLE_COL, bio_candidates, tech_candidates, n_permutations=999
+    )
+    
+    fig_perm = ou.plot_compositional_permanova(
+        univar_perm, joint_perm,
+        title=f"Compositional Distance Variance Decomposition (PERMANOVA) — {annot_col}"
+    )
+    plt.figure(fig_perm.number)
+    plt.show()
+
+    print(stats_text)
 ```
 
 ## 6. Cell-Level Separation (LISI) & Batch Effect Assessment

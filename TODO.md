@@ -54,7 +54,10 @@ Implementation plan and task tracking for manuscript revisions, benchmark extens
   - Implement statistical test (t-test/Wilcoxon for 2 batches, ANOVA/Kruskal-Wallis for >2 batches, $p < 0.05$) to identify and optionally exclude batch-confounded cell types.
 - [ ] **4.2 Multi-Batch Benchmark Suite (Priority 1):**
   - Evaluate datasets with defined technical batch structures (Stephenson, Joanito, CombinedPBMC, KPMP Kidney, Breast Cancer, Covid-19 PBMC).
-  - Quantify biological separation vs. batch-mixing metrics (Silhouette, LISI) across all methods with and without batch correction.
+  - Run benchmark methods under two modes: **Uncorrected (Raw)** vs. **Corrected** (`limma` for ECODA/pseudobulk, `Harmony` on PCA for PILOT/GloScope, native multi-batch for MrVI).
+  - Quantify distance variance explained via **Marginal PERMANOVA** on resulting sample distance matrices ($R^2_{\text{Bio}}$, $R^2_{\text{Batch}}$, $R^2_{\text{Shared}}$, $R^2_{\text{Residual}}$).
+  - **Visualization Decision [Open]:** Grouped PERMANOVA variance bar plot per method/covariate vs. FunkyHeatmap summary.
+  - **Bio/Batch Ratio Metric [Open]:** Evaluate $\text{Bio} / \text{Batch}$ signal-to-noise ratio (PERMANOVA $R^2$ ratio vs. aggregate benchmark separation/mixing metrics).
 - [ ] **4.3 MrVI Native `batch_key` Integration:**
   - Wire native `batch_key` parameter in batch-effect benchmark evaluations.
 - [ ] **4.4 GloScope & PILOT-GM-VAE on Corrected Embeddings:**
@@ -73,14 +76,14 @@ Reference plan: [`.agents/plans/dataset_onboarding_and_debug_overhaul.md`](.agen
 - [x] **5.2 HPC Download Pipeline (T1 & T1.1):**
   - Implemented `notebooks/dataset_onboarding/download_datasets_hpc.sh` and `run_download_worker.sh` (resumable `curl -C -`, Zenodo MD5 verification, CellxGene size checks, and automated NAS synchronization).
 - [x] **5.3 Diagnostic Onboarding Tooling (T3.1):**
-  - Scaffolded 9 per-dataset Quarto check notebooks (`dataset_check_<Name>.qmd`).
-  - Implemented `onboarding_utils.py` (sample-first subsetting, count validation, crosstabs) and standalone `onboarding_metrics.R` (cell-level LISI on unintegrated PCA).
+  - Scaffolded 9 per-dataset Quarto check notebooks (`dataset_check_<Name>.qmd`) + `_debug`.
+  - Implemented `onboarding_utils.py` (sample-first subsetting, count validation, crosstabs, NMI collinearity matrix, compositional distance PERMANOVA) and standalone `onboarding_metrics.R` (cell-level LISI on unintegrated PCA).
 - [x] **5.4 Annotation Suitability Guardrails:**
   - Added `not_suitable_for_auto_annotation` flag handling in `benchmark_pipeline.R` and Figure 3 / Supp Fig 19.
 - [ ] **5.5 Execute HPC Downloads [User Action]:**
   - Run `download_datasets_hpc.sh` on HPC to transfer datasets to scratch and sync to NAS.
 - [x] **5.6 Run Diagnostic Check Notebooks & Count Validation:**
-  - Rendered all 10 onboarding notebooks with dual evaluation (unintegrated PCA/UMAP LISI batch mixing + CLR abundance boxplots with FDR-corrected Wilcoxon/Kruskal-Wallis testing and compositional shift significance matrices).
+  - Rendered all 10 onboarding notebooks with complete diagnostic suite: unintegrated PCA/UMAP LISI batch mixing + CLR abundance boxplots + NMI metadata collinearity matrix + compositional distance PERMANOVA variance decomposition.
 - [ ] **5.7 Dataset Review & Registration Checkpoint [User Decision]:**
   - Decide cohort categorization (benchmark vs. batch-effect vs. negative control vs. exclude).
   - Register approved cohorts in `datasets.json` (**ask user before editing**).
