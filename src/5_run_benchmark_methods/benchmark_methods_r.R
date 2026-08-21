@@ -376,11 +376,15 @@ process_gloprop_fig <- function(
 ) {
   if (!is.null(obs)) {
     sample_id <- obs[[sample_col]]
-    cluster_id <- obs[[ct_col]]
+    cluster_id <- as.character(obs[[ct_col]])
   } else {
     sample_id <- seurat@meta.data[[sample_col]]
-    cluster_id <- seurat@meta.data[[ct_col]]
+    cluster_id <- as.character(seurat@meta.data[[ct_col]])
   }
+  valid_mask <- !is.na(cluster_id) & !cluster_id %in% c("NA", "nan", "None", "Unknown") & cluster_id != ""
+  sample_id <- sample_id[valid_mask]
+  cluster_id <- cluster_id[valid_mask]
+
   dist_result <- gloscopeProp(
     sample_id,
     cluster_id,

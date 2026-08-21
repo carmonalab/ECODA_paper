@@ -147,15 +147,20 @@ FindClusters_multi <- function(
 
 # Get cell type composition dataframe from seurat
 get_ct_comp_df_seurat <- function(seurat, sample_col, ct_col) {
+  md <- seurat@meta.data
+  cts <- as.character(md[[ct_col]])
+  valid_mask <- !is.na(cts) & !cts %in% c("NA", "nan", "None", "Unknown") & cts != ""
+  md_sub <- md[valid_mask, , drop = FALSE]
+
   ct_comp_df <- table(
-    seurat@meta.data[[sample_col]],
-    seurat@meta.data[[ct_col]]
+    md_sub[[sample_col]],
+    md_sub[[ct_col]]
   ) %>%
     t() %>%
     as.data.frame.matrix() %>%
     t() %>%
     as.data.frame()
-  ct_comp_df <- ct_comp_df[rowSums(ct_comp_df) != 0, ]
+  ct_comp_df <- ct_comp_df[rowSums(ct_comp_df) != 0, , drop = FALSE]
   return(ct_comp_df)
 }
 
@@ -164,9 +169,13 @@ get_ct_comp_df_seurat <- function(seurat, sample_col, ct_col) {
 # `obs` is the cell-level metadata data.frame read from a preprocessed h5ad
 # (py_to_r(adata$obs)); sample/ct columns must be present.
 get_ct_comp_df <- function(obs, sample_col, ct_col) {
+  cts <- as.character(obs[[ct_col]])
+  valid_mask <- !is.na(cts) & !cts %in% c("NA", "nan", "None", "Unknown") & cts != ""
+  obs_sub <- obs[valid_mask, , drop = FALSE]
+
   ct_comp_df <- table(
-    obs[[sample_col]],
-    obs[[ct_col]]
+    obs_sub[[sample_col]],
+    obs_sub[[ct_col]]
   ) %>%
     t() %>%
     as.data.frame.matrix() %>%

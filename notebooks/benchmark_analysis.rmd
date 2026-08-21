@@ -673,7 +673,7 @@ filter_methods <- methods_in_scope(c(
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors5",
   "MrVI_hvg2000",
-  "scPoli_hvg2000_dims5_highres",
+  "scPoli_hvg2000_dims15_highres",
   "PILOT_hvg2000",
   "GloScope_hvg2000_pcadims30",
   "QOT_hvg2000",
@@ -694,7 +694,7 @@ df_plot_scaled <- df_results %>%
                          "MOFA_hvg2000_factors15" = "MOFA",
                          "scITD_hvg2000_factors5" = "scITD",
                          "MrVI_hvg2000" = "MrVI",
-                         "scPoli_hvg2000_dims5_highres" = "scPoli",
+                         "scPoli_hvg2000_dims15_highres" = "scPoli",
                          "PILOT_hvg2000" = "PILOT",
                          "GloScope_hvg2000_pcadims30" = "GloScope",
                          "QOT_hvg2000" = "QOT",
@@ -892,7 +892,7 @@ methods <- list(
   "MOFA_hvg2000_factors15" = "MOFA",
   "scITD_hvg2000_factors5" = "scITD",
   "MrVI_hvg2000" = "MrVI",
-  "scPoli_hvg2000_dims5_highres" = "scPoli",
+  "scPoli_hvg2000_dims15_highres" = "scPoli",
   "PILOT_hvg2000" = "PILOT",
   "GloScope_hvg2000_pcadims30" = "GloScope",
   "QOT_hvg2000" = "QOT",
@@ -1076,7 +1076,7 @@ methods <- list(
   "MOFA_hvg2000_factors15" = "MOFA",
   "scITD_hvg2000_factors5" = "scITD",
   "MrVI_hvg2000" = "MrVI",
-  "scPoli_hvg2000_dims5_highres" = "scPoli",
+  "scPoli_hvg2000_dims15_highres" = "scPoli",
   "PILOT_hvg2000" = "PILOT",
   "GloScope_hvg2000_pcadims30" = "GloScope",
   "QOT_hvg2000" = "QOT",
@@ -2422,7 +2422,7 @@ methods <- list(
   "Freq_highres" = "CellType_Frequency%",
   "MrVI_hvg2000" = "MrVI",
   "MOFA_hvg2000_factors15" = "MOFA",
-  "scPoli_hvg2000_dims5_highres" = "scPoli"
+  "scPoli_hvg2000_dims15_highres" = "scPoli"
 )
 methods <- methods_in_scope_named(methods)
 
@@ -2476,7 +2476,7 @@ filter_methods <- methods_in_scope(c(
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors5",
   "MrVI_hvg2000",
-  "scPoli_hvg2000_dims5_highres",
+  "scPoli_hvg2000_dims15_highres",
   "PILOT_hvg2000",
   "GloScope_hvg2000_pcadims30",
   "QOT_hvg2000",
@@ -2501,7 +2501,7 @@ clean_data <- df_results_bmark %>%
                          "MOFA_hvg2000_factors15" = "MOFA",
                          "scITD_hvg2000_factors5" = "scITD",
                          "MrVI_hvg2000" = "MrVI",
-                         "scPoli_hvg2000_dims5_highres" = "scPoli",
+                         "scPoli_hvg2000_dims15_highres" = "scPoli",
                          "scITD_2_factors" = "scITD",
                          "PILOT_hvg2000" = "PILOT",
                          "GloScope_hvg2000_pcadims30" = "GloScope",
