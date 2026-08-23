@@ -264,7 +264,7 @@ load_hpc_benchmark_results <- function(
     result_list[["bmark"]][[ds]] <- list()
   }
 
-  checksums <- read_md5_sidecar(file.path(path_results_nas, "checksums.md5"))
+  checksums <- read_md5_sidecar(file.path(dirname(path_results_nas), "checksums.md5"))
 
   for (method in methods) {
     method_file <- file.path(
