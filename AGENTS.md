@@ -1,71 +1,112 @@
-# Agent Guardrails & Repository Conventions
+# Repository Guidelines
 
-> This document defines the core domain rules, architectural guardrails, and HPC execution invariants that AI agents must strictly follow in this repository.
+## Project Overview
 
----
+ECODA (Exploratory Compositional Data Analysis) is a reproducible R/Python workflow for unsupervised patient stratification from single-cell cohorts. It compares CLR-based cell-type composition, pseudobulk, and sample-embedding methods, then scores recovery of known biological groups.
 
-## 1. Core Guardrails (Sacred Invariants)
+### Non-negotiable scientific and repository rules
 
-### Paper Figures are Sacred
-- Every plot saved with a filename starting with `Figure` or `Supp_fig` is a publication figure: **KEEP and FIX if broken — NEVER remove it**.
-- **Benchmark Figure Hierarchy:**
-  - **Main benchmark figure (`Figure 2A`):** Standard evaluation across all datasets using only the default/main parameter setting per method.
-  - **Extended figure (`Supp fig 15`):** Extended non-standard methods (HiTME/scATOMIC annotations, cell-type pseudobulk, frequency-based composition).
-  - **Parameter screening (`Supp fig 2`):** Main methods across parameter ranges (robustness check that default parameters are faithful).
-- `ECODA_PB_combo_*` (ECODA + Pseudobulk distance combinations) are legacy/experimental and are not included in publication figures.
+- **No label leakage.** Biological labels such as `Status`, `sample.origin`, `cond`, and `Disease_Identity` are ground truth only. Never pass them to preprocessing, HVG selection, normalization, batch correction, embeddings, or model covariates.
+- `DESeq2.normalize()` benchmark defaults are `blind=TRUE`, `batch_col=NULL`, `correct_batch=FALSE` (`~ 1`). Batch-effect mode is batch-only: `blind=FALSE`, `batch_col=<batch>`, `correct_batch=TRUE`; never protect biological labels in `removeBatchEffect`.
+- `datasets.json` is the dataset/view ground truth. **Do not modify it without explicit user confirmation.**
+- Files beginning with `Figure` or `Supp_fig` are publication figures: fix them, never remove them. Figure hierarchy: `Figure 2A` uses default/main settings; `Supp fig 15` contains extended methods; `Supp fig 2` is parameter screening. Exclude legacy `ECODA_PB_combo_*` from publication figures.
+- Preserve all version constraints in `pixi.toml` and the resolved `pixi.lock`.
+- Use the `_debug` Joanito five-sample subset for routine verification. Do not run full cohorts for minor checks.
 
-### No-Leakage Principle (Central Premise)
-- Biological group labels (`Status`, `sample.origin`, `cond`, `Disease_Identity`, etc.) are **ground truth only**:
-  - They must **NEVER** be passed as a design covariate, batch key, or input to preprocessing, DESeq2 normalization, batch correction, HVG selection, or embedding steps.
-  - Batch correction must be strictly batch-only (e.g., no design protection argument in `removeBatchEffect`).
-- **`DESeq2.normalize()` Semantics:**
-  - **Benchmark mode (default):** `blind=TRUE`, `batch_col=NULL`, `correct_batch=FALSE` (unsupervised, design `~ 1`).
-  - **Batch effect mode:** `batch_col=<col>`, `blind=FALSE`, `correct_batch=TRUE` (batch-only `limma::removeBatchEffect`).
+## Architecture & Data Flow
 
-### `datasets.json` Permissions
-- `datasets.json` is the central ground truth for evaluated datasets, metadata columns, and view definitions.
-- **Do not modify `datasets.json` without explicit user confirmation.**
+1. **Configuration:** `datasets.json` defines datasets, metadata columns, views, and filenames. `src/utils/datasets_io.R` and `src/utils/py/datasets_io.py` are the language-specific access layer.
+2. **Data staging:** `src/1_stage_data/1_stage_data.sh` copies raw data from NAS to `$HOME/scratch/ECODA_paper`; `src/2_dataset_specific_preprocessing/` converts cohort-specific inputs.
+3. **Canonical preprocessing:** `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py` filters data, preserves raw counts in `layers["counts"]`, normalizes/log-transforms `X`, ranks HVGs, computes PCA, and creates Harmony/neighbors/Leiden outputs. RDS conversion and subset validation live in `src/utils/py/preprocess_utils.py`.
+4. **Cell-type annotation:** `src/4_cell_type_annotation/` prepares sample chunks, runs annotation workers, checkpoints per-sample Feather output, and merges chunks.
+5. **Benchmarking:** `src/5_run_benchmark_methods/` runs R and Python methods through SLURM arrays. Methods converge on sample feature matrices, distance matrices, or `create_result_bundle(feat_mat, labels, dist_mat)` bundles.
+6. **Scoring and persistence:** `src/utils/scoring_metrics.R` computes silhouette, modularity, ANOSIM, ARI, and LISI. Results are saved atomically as `.rds` bundles with `checksums.md5`; Feather carries cross-language embeddings, distances, and execution logs.
+7. **Analysis:** local notebooks consume precomputed results and generate publication figures; they do not rerun cohort preprocessing.
 
-### Reproducibility & Environments
-- **Never drop defined package versions in `pixi.toml`** — preserving exact dependency versions is essential for reproducibility.
-- Do not run full pipeline scripts (`.R`, `.py`, `.sh`) on large cohorts for minor validation checks unless explicitly requested by the user. Use the `_debug` dataset (Joanito 5-sample subset) for verification.
-- **Notebook Renders are Local:** All analysis notebooks (`notebooks/*.rmd`, `notebooks/*.ipynb`) are rendered locally on macOS using the local pixi environment (`pixi run Rscript ...`), NEVER on the HPC cluster (`bamboo`).
+Operational concurrency is explicit rather than application-async: R uses `foreach`/`doParallel`, Python/R workers run in SLURM arrays, and shell watchdogs gate synchronization on `sacct`/`squeue`. Missing status, checksum mismatch, worker failure, or exhausted OOM retry must fail closed.
 
----
+## Key Directories
 
-## 2. HPC Execution Invariants
+- `src/1_stage_data/` — NAS-to-scratch staging.
+- `src/2_dataset_specific_preprocessing/` — cohort-specific conversion and harmonization.
+- `src/3_scrnaseq_preprocessing/` — shared Scanpy preprocessing and h5ad production.
+- `src/4_cell_type_annotation/` — chunk preparation, annotation workers, and merge.
+- `src/5_run_benchmark_methods/` — R/Python benchmark workers, submitters, watchdogs, and result synchronization.
+- `src/utils/` — dataset I/O, scoring, imports, environment checks, preprocessing utilities, and shell environment setup.
+- `notebooks/` — local analysis, publication figures, and dataset-onboarding reports.
+- `tests/` — focused standalone R regressions. Shell watchdog tests remain beside benchmark code.
+- `data/` — large/gitignored data; never scan recursively or delete recursively without explicit confirmation.
+- `$HOME/scratch/ECODA_paper` on `bamboo` — data storage only, not a git clone. The HPC repository is `$HOME/ECODA_paper`.
 
-> **IMPORTANT:** `bamboo` IS the HPC cluster (`login1.bamboo.hpc.unige.ch`). Any command referencing `bamboo` (SSH, rsync, SLURM, scratch) is interacting with the HPC environment.
+## Development Commands
 
-### Cluster Access & Host Configuration
-- **Cluster Endpoint:** `login1.bamboo.hpc.unige.ch` (SSH alias: `bamboo`, user: `halterc`).
-- Remote commands and status checks can be executed directly via `ssh bamboo "<command>"`. (Don't run pipelines or long running jobs here on the login node!)
+### Local macOS setup and analysis
 
-### Login Node Policy
-- **Never execute heavy computation, preprocessing, or benchmarks on login nodes.**
-- Login nodes are strictly for compiling, editing code, data staging (`1_stage_data.sh`), NAS synchronization, and submitting SLURM jobs/arrays.
-- Long-running I/O operations (staging, NAS sync) should run inside persistent background sessions (`tmux` / `screen`).
-- Use `debug-cpu` or `debug-gpu` partitions for short interactive checks.
+```bash
+pixi install
+pixi run setup
+pixi run Rscript tests/test_bassez_and_benchmark_regressions.R
+bash src/5_run_benchmark_methods/test_oom_retry.sh
+pixi run check-r-deps
+```
 
-### Data Protection & Safety
-- **Never run recursive deletions (`rm -rf`)** on `$HOME/scratch` or `data/` directories without explicit user confirmation.
-- **Job Monitoring:** Inspect runs with non-blocking Slurm queries (`squeue -u $USER`, `sacct -j <id> --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS`).
+Render analysis notebooks locally on macOS, never on HPC:
 
-### Execution Patience & Anti-Polling Invariant (Strict No-Spam Rule)
-- **Do not poll or loop on background tasks:** When launching long-running processes, notebook renders, or background scripts, NEVER run polling loops (`manage_task status`) and NEVER schedule timers to repeatedly inspect status.
-- **Strict Launch-and-Stop Protocol:**
-  - Launch the task.
-  - State exactly once: `"I have launched <task description> in the background; I will stay quiet and wait for the system to notify me when it finishes."`
-  - Immediately end the turn without calling any further tools.
-  - Wait silently for the reactive system message on task completion. Do not burn tokens or flood the conversation.
+```bash
+pixi run Rscript -e 'rmarkdown::render("notebooks/benchmark_analysis.rmd")'
+pixi run Rscript -e 'rmarkdown::render("notebooks/batch_effect_analysis.rmd")'
+```
 
-### Repository vs. Scratch Directory Layout
-- **The git repository clone lives at `$HOME/ECODA_paper`** — all git operations (`git pull`, `git status`, commits) and job submissions must run from `~/ECODA_paper`.
-- **`$HOME/scratch/ECODA_paper` (`HPC_SCRATCH_DIR`) is data storage only** — it is not a git clone and does not carry tracked files.
+### HPC setup
 
-### SLURM Submission Conventions
-- **Working Directory:** All HPC bash scripts must source `src/slurm_config.sh` and set `cd "${PROJECT_ROOT}"`.
-- **Spool Recovery (`BASH_SOURCE` safe):** Sbatch scripts copied to `/var/spool/slurmd/` must recover `SCRIPT_DIR` via:
+From the repository clone on `bamboo`:
+
+```bash
+cd "$HOME/ECODA_paper"
+sbatch src/utils/bash/setup_env_sbatch.sh
+```
+
+For a guarded login-node refresh, first ensure no array jobs are active and use a persistent session:
+
+```bash
+tmux new -s env-refresh
+cd "$HOME/ECODA_paper"
+source src/slurm_config.sh
+src/utils/bash/refresh_env.sh
+```
+
+### Representative pipeline commands
+
+```bash
+cd "$HOME/ECODA_paper"
+source src/slurm_config.sh
+src/1_stage_data/1_stage_data.sh --ds_name _debug
+src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh --ds_name _debug
+src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh --ds_name _debug --methods mrvi
+```
+
+Submit heavy work to SLURM; never preprocess or benchmark on a login node. Use `debug-cpu`/`debug-gpu` for short interactive checks (they have a max of 15 minutes). For non-blocking monitoring:
+
+```bash
+squeue -u "$USER"
+sacct -j <job-id> --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS
+```
+
+
+## Code Conventions & Common Patterns
+
+- **Configuration over duplication:** resolve datasets and columns through `datasets.json` helpers; source `src/slurm_config.sh` in every HPC shell entry point.
+- **Clean cross-language contracts:** h5ad stores raw counts in `layers["counts"]`; Feather stores tabular matrices with sample identity; RDS result bundles carry features, labels, and distances. Preserve row names/sample order and reject NA or mismatched identifiers.
+- **Fail closed:** R uses `stop()`/`stopifnot()` and benchmark parallelism uses `.errorhandling="stop"`; shell scripts use strict status gates; Python validates required observation columns. Warn-and-skip is reserved for explicitly optional/missing artifacts.
+- **Artifact safety:** use temporary files plus atomic rename, per-sample checkpoints, and MD5 verification before `readRDS`. Do not weaken checksum checks.
+- **Naming:** numbered scripts encode pipeline order (`1_submit...`, `2_process...`, `3_merge...`); dataset-specific code stays under stage 2; shared helpers belong in `src/utils/`; shell environment variables are uppercase.
+- **Dependencies/state:** there is no framework dependency-injection container or centralized in-memory state manager. Pass data/config explicitly through functions and CLI arguments; persistent state is files, manifests, status files, and checksums.
+- **Performance:** retain sparse matrices and subset before densifying. Do not add avoidable full-cohort copies. `scPoli` intentionally densifies only the selected HVG subset.
+- **R/Python imports:** use namespaced R package calls in HPC workers where established. Keep lazy imports for optional heavyweight Python methods.
+- **Shell compatibility:** shared benchmark shell helpers and tests support Bash 3.2; avoid unsupported newer Bash syntax unless the target script explicitly requires it.
+- **Comments/docs:** document scientific invariants and non-obvious scheduler behavior, not line-by-line mechanics. Update commands when entry points change.
+- **SLURM spool recovery:** submitted scripts may execute from `/var/spool/slurmd/`. Recover their source directory before sourcing configuration:
+
   ```bash
   if [[ -n "${SLURM_JOB_ID:-}" ]]; then
       SCRIPT_DIR="$(scontrol show job "${SLURM_JOB_ID}" | awk -F= '/Command=/ {print $2}' | xargs dirname)"
@@ -73,36 +114,49 @@
       SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   fi
   ```
-- **Direct Environment Invocations:** Workers invoke `${PYTHON_BIN}` and `${PIXI_RSCRIPT}` (`pixi run --as-is -e py-cuda13 Rscript --vanilla`) directly. The `--as-is` flag prevents runtime lockfile modifications.
-- **Environment Updates:** `setup_env_sbatch.sh` (worker node) and `refresh_env.sh` (login node) serialize via `logs/env_refresh.lock` and must never run while array jobs are active.
 
----
+- **Completed implementation plans:** move plans from `.agents/plans/` to `.agents/plans/archive/`, stage the implementation and archived plan, then commit and push.
 
-## 3. Task & Coding Conventions
+## Important Files
 
-- **Copy-Paste Ready Commands:** When providing commands or instructions to the user, always provide the full, copy-paste-ready commands including required environment sourcing (`source src/slurm_config.sh`).
-- **Parallel Shells:** The user often operates multiple terminal sessions connected to different HPC login nodes. Highlight which commands can safely run in parallel.
-- **Efficient Code Search:** Use targeted tools (`grep_search`, `git grep`). Never run un-scoped `grep -rn` across the entire workspace, as it scans the gitignored ~97 GB `data/` and `.pixi/` directories.
-- **Plan Completion Workflow:** Whenever completing an implementation plan from `.agents/plans/`:
-  1. Move the completed plan to `.agents/plans/archive/`.
-  2. Stage the relevant modified files and the archived plan (`git add`).
-  3. Commit and push the changes.
+- `datasets.json` — central dataset, metadata, and view contract; confirmation required before edits.
+- `pixi.toml`, `pixi.lock` — runtime environments, pinned dependencies, and Pixi tasks.
+- `src/slurm_config.sh` — canonical HPC paths, interpreters, modules, resources, and retry ceilings.
+- `src/utils/datasets_io.R`, `src/utils/py/datasets_io.py` — shared dataset configuration access.
+- `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py` — canonical single-cell preprocessing entry point.
+- `src/5_run_benchmark_methods/benchmark_pipeline.R` — transformations, zero imputation, distances, and parallel scoring.
+- `src/5_run_benchmark_methods/benchmark_methods_r.R` — R method wrappers and result-bundle contract.
+- `src/5_run_benchmark_methods/benchmark_submit_common.sh` — submission, retry, synchronization, and checksum logic.
+- `src/utils/scoring_metrics.R` — benchmark metrics.
+- `src/utils/bash/setup_env_sbatch.sh`, `src/utils/bash/refresh_env.sh` — serialized environment mutation and smoke checks.
+- `README.md`, `docs/ARCHITECTURE.md` — operator workflow and pipeline map.
 
----
+## Runtime/Tooling Preferences
 
-## 4. Domain Terminology
+- **Package/environment manager:** Pixi. Do not introduce Conda, renv, pip-only, npm, or a second lockfile for project dependencies.
+- **Required versions:** R `4.5.2`; Python `3.13.*`. Supported base platforms are `osx-arm64` and `linux-64`; HPC workers use the `py-cuda13` Pixi environment.
+- **Worker invocation:** never use bare `python`, `Rscript`, or ordinary `pixi run` inside jobs. Source the config and use its immutable commands:
 
-- **ECODA (Exploratory Compositional Data Analysis):** Uses CLR-transformed cell-type proportions for cohort-level patient stratification in an unsupervised setting.
-- **CLR (Centered Log-Ratio):** Compositional data transformation: $\text{CLR}(x_i) = \log(x_i / g(x))$, where $g(x)$ is the geometric mean. Requires prior zero-imputation.
-- **HVCs (Highly Variable Cell Types):** Cell types with the highest across-sample variance, selected for patient stratification.
-- **Zero Imputation Strategies:** Count-based (`counts_zeros`, `counts_all`), percentage-based (`percentage_zeros`, `percentage_all`), and log-normal models (`multiLN`, `multiRepl` via `zCompositions`).
-- **Pseudobulk:** Aggregating single-cell expression per sample followed by DESeq2 normalization.
-- **Separation Metrics:** Evaluated in `src/utils/scoring_metrics.R` to quantify cluster recovery:
-  - **ANOSIM:** Analysis of Similarities (`calc_sep_score()`).
-  - **ARI:** Adjusted Rand Index (`clust_eval()`).
-  - **Silhouette:** Silhouette width across biological classes (`calc_sil()`).
-  - **Modularity:** Graph modularity across KNN graphs (`calc_modularity()`).
-  - **LISI:** Local Inverse Simpson's Index (`calc_lisi()`).
-- **Data Exchange Contracts:**
-  - `.feather` files: Apache Arrow IPC format for cross-language distance matrices and sample embeddings.
-  - `.rds` result bundles: Method output bundles saved atomically with MD5 sidecars (`checksums.md5`).
+  ```bash
+  source src/slurm_config.sh
+  cd "${PROJECT_ROOT}"
+  "${PYTHON_BIN}" path/to/worker.py
+  ${PIXI_RSCRIPT} path/to/worker.R
+  ```
+
+  `PIXI_RSCRIPT` includes `pixi run --as-is -e py-cuda13 Rscript --vanilla`, preventing runtime lock/environment mutation.
+- Environment setup and refresh serialize on `logs/env_refresh.lock` and must not run while arrays are active.
+- `bamboo` is the HPC cluster. Login nodes are for editing, compilation, staging, NAS sync, and SLURM submission only.
+- Never run `rm -rf` against `$HOME/scratch` or `data/` without explicit user confirmation.
+- No project-wide formatter, linter, Makefile, or CI workflow is configured. Match surrounding R, Python, and shell style rather than inventing a second convention.
+
+## Testing & QA
+
+QA is focused and script-based; there is no aggregate test runner, CI gate, coverage threshold, `pytest`, or `testthat` suite.
+
+- `tests/test_bassez_and_benchmark_regressions.R` uses base-R assertions and temporary fixtures. It covers Bassez metadata fallback/validation and RDS checksum loading.
+- `src/5_run_benchmark_methods/test_oom_retry.sh` uses deterministic shell stubs. It covers memory escalation, scheduler states, status files, notifications, retry ceilings, and fail-closed watchdog behavior.
+- `src/utils/env_check.R` plus import smoke checks run during environment setup/refresh. Run manually with `pixi run check-r-deps` locally or `pixi run -e py-cuda13 check-r-deps` on Linux HPC.
+- `src/4_cell_type_annotation/1_prepare_chunks.sh test [<DS_NAME>]` is a small pipeline mode, not the unit-test suite.
+
+For changes, run the narrow contract test and exercise the `_debug` path. Add tests only for new observable behavior, boundary conditions, failure handling, or scientific invariants. Keep fixtures temporary and deterministic; stub Slurm/NAS effects rather than requiring live infrastructure.
