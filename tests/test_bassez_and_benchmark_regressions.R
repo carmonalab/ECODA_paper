@@ -88,6 +88,162 @@ sys.source(
   envir = pipeline_env
 )
 
+hpc_env <- new.env(parent = globalenv())
+sys.source(
+  file.path(
+    project_root,
+    "src",
+    "5_run_benchmark_methods",
+    "benchmark_hpc_utils.R"
+  ),
+  envir = hpc_env
+)
+
+pseudobulk_dir <- tempfile("ecoda_pseudobulk_cache-")
+dir.create(pseudobulk_dir, recursive = TRUE)
+for (variant in hpc_env$PB_VARIANT_NAMES) {
+  saveRDS(
+    list(pb = matrix(1, nrow = 1, ncol = 1), time_secs = 0),
+    file.path(pseudobulk_dir, paste0("Toy_pseudobulk_", variant, ".rds"))
+  )
+}
+stopifnot(identical(
+  hpc_env$pb_variants_missing(pseudobulk_dir, "Toy", force = FALSE),
+  character(0)
+))
+stopifnot(identical(
+  hpc_env$pb_variants_missing(pseudobulk_dir, "Toy", force = TRUE),
+  hpc_env$PB_VARIANT_NAMES
+))
+composition_pseudobulks <- hpc_env$load_composition_pb_variants(
+  sample_col = "Sample",
+  hvg_rank_genes = character(0),
+  pseudobulk_dir = pseudobulk_dir,
+  ds = "Toy"
+)
+stopifnot(identical(
+  names(composition_pseudobulks),
+  hpc_env$PB_VARIANT_NAMES
+))
+composition_loader_calls <- new.env(parent = emptyenv())
+composition_loader <- function(
+  seurat,
+  sample_col,
+  hvg_rank_genes,
+  pseudobulk_dir,
+  ds,
+  force = FALSE,
+  log_file = NULL
+) {
+  composition_loader_calls$seurat <- seurat
+  composition_loader_calls$force <- force
+  composition_loader_calls$args <- list(
+    sample_col = sample_col,
+    hvg_rank_genes = hvg_rank_genes,
+    pseudobulk_dir = pseudobulk_dir,
+    ds = ds,
+    log_file = log_file
+  )
+  setNames(
+    lapply(hpc_env$PB_VARIANT_NAMES, function(variant) list(variant = variant)),
+    hpc_env$PB_VARIANT_NAMES
+  )
+}
+injected_composition_pseudobulks <- hpc_env$load_composition_pb_variants(
+  sample_col = "Sample",
+  hvg_rank_genes = character(0),
+  pseudobulk_dir = pseudobulk_dir,
+  ds = "Toy",
+  log_file = "composition-test.log",
+  loader = composition_loader
+)
+stopifnot(is.null(composition_loader_calls$seurat))
+stopifnot(identical(composition_loader_calls$force, FALSE))
+stopifnot(identical(
+  composition_loader_calls$args,
+  list(
+    sample_col = "Sample",
+    hvg_rank_genes = character(0),
+    pseudobulk_dir = pseudobulk_dir,
+    ds = "Toy",
+    log_file = "composition-test.log"
+  )
+))
+stopifnot(identical(
+  names(injected_composition_pseudobulks),
+  hpc_env$PB_VARIANT_NAMES
+))
+stopifnot(identical(
+  unname(vapply(
+    injected_composition_pseudobulks,
+    function(variant) variant$variant,
+    character(1)
+  )),
+  hpc_env$PB_VARIANT_NAMES
+))
+unlink(pseudobulk_dir, recursive = TRUE, force = TRUE)
+
+# `--force` still invalidates composition result bundles, while the
+# obs-only pseudobulk loader reuses the prepared cache above.
+pipeline_env$peak_rss_gb <- function() NA_real_
+pipeline_env$save_rds_atomic <- function(object, file) saveRDS(object, file)
+pipeline_env$log_exec_row <- function(...) invisible(NULL)
+pipeline_env$process_avg_pca_embedding_fig <- function(...) {
+  list(marker = "fresh")
+}
+pipeline_env$process_deconv_fig <- function(...) {
+  list(marker = "fresh")
+}
+pipeline_env$process_coda_fig <- function(...) {
+  list(marker = "fresh")
+}
+
+
+composition_results_dir <- tempfile("ecoda_composition_results-")
+dir.create(composition_results_dir, recursive = TRUE)
+composition_obs <- data.frame(
+  Sample = c("sample_1", "sample_2"),
+  stringsAsFactors = FALSE
+)
+composition_labels <- factor(c("group_1", "group_2"))
+names(composition_labels) <- composition_obs$Sample
+composition_metadata <- composition_obs
+composition_pca <- matrix(1, nrow = 2, ncol = 1)
+composition_pb <- list(pb = matrix(1, nrow = 1, ncol = 2))
+run_composition <- function(force) {
+  pipeline_env$run_composition_methods_hpc(
+    labels = composition_labels,
+    metadata = composition_metadata,
+    pca_emb = composition_pca,
+    pb_hvg2000 = composition_pb,
+    obs = composition_obs,
+    label_col = "label",
+    sample_col = "Sample",
+    results_dir = composition_results_dir,
+    ds = "Toy",
+    force = force,
+    factors_test = integer(0),
+    seurat_res = 0.1,
+    ECODA_top_varexp_hvct = numeric(0)
+  )
+}
+run_composition(force = FALSE)
+composition_bundle <- file.path(
+  composition_results_dir,
+  "Toy_Avg_PCA_embedding.rds"
+)
+saveRDS(
+  list(marker = "cached", exec_time = 0, mem_GB = NA_real_),
+  composition_bundle
+)
+cached_composition <- run_composition(force = FALSE)
+stopifnot(identical(cached_composition$Avg_PCA_embedding$marker, "cached"))
+forced_composition <- run_composition(force = TRUE)
+stopifnot(identical(forced_composition$Avg_PCA_embedding$marker, "fresh"))
+unlink(composition_results_dir, recursive = TRUE, force = TRUE)
+
+
+
 fixture_root <- tempfile("ecoda_checksum_test-")
 results_dir <- file.path(fixture_root, "benchmark", "results")
 dir.create(results_dir, recursive = TRUE)

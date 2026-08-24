@@ -162,10 +162,12 @@ if (method == "mofa") {
   pca_emb <- py_to_r(adata$obsm[[emb_key]])
   if (is.null(rownames(pca_emb))) rownames(pca_emb) <- rownames(obs)
   colnames(pca_emb) <- paste0("PC_", seq_len(ncol(pca_emb)))
-  pb_variants <- load_pb_variants(
-    NULL, sample_col, hvg_rank_genes,
-    pseudobulk_dir = args$pseudobulk_dir, ds = ds,
-    force = force, log_file = args$log_file
+  pb_variants <- load_composition_pb_variants(
+    sample_col = sample_col,
+    hvg_rank_genes = hvg_rank_genes,
+    pseudobulk_dir = args$pseudobulk_dir,
+    ds = ds,
+    log_file = args$log_file
   )
 } else {
   seurat <- load_benchmark_seurat(

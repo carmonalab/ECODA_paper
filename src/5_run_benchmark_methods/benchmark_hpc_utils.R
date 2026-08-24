@@ -177,6 +177,28 @@ load_pb_variants <- function(
   }
   return(variants)
 }
+# Composition is obs-only and therefore cannot rebuild missing pseudobulks.
+# Its --force flag controls composition result bundles, not the shared
+# pseudobulk cache; always reuse the variants prepared by the prep array.
+load_composition_pb_variants <- function(
+  sample_col,
+  hvg_rank_genes,
+  pseudobulk_dir,
+  ds,
+  log_file = NULL,
+  loader = load_pb_variants
+) {
+  loader(
+    seurat = NULL,
+    sample_col = sample_col,
+    hvg_rank_genes = hvg_rank_genes,
+    pseudobulk_dir = pseudobulk_dir,
+    ds = ds,
+    force = FALSE,
+    log_file = log_file
+  )
+}
+
 
 # Atomic RDS write (tmp + rename) so a crashed worker never leaves a
 # half-written cache file behind.
