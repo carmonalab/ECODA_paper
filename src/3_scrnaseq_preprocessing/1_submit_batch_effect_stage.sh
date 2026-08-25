@@ -1,7 +1,9 @@
 #!/bin/bash
 # Submit the uncorrected onboarding preprocessing stage as one durable SLURM
-# array plus a compute-node watchdog. The submitter returns immediately;
-# durable-hpc-gate owns the terminal wait, accounting audit, and review.
+# array plus a compute-node watchdog. The submitter is intended to run inside
+# durable-hpc-gate; it blocks on the watchdog via scheduler-native --wait.
+#
+# The submitter never implements a login-node squeue/sacct polling loop.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,8 +23,8 @@ usage() {
 Usage: 1_submit_batch_effect_stage.sh [options]
 
 Submit all onboarding cohorts for one preprocessing view as one SLURM array.
-The command is gate-oriented and returns after submitting the array and its
-compute-node OOM watchdog; use durable-hpc-gate for waiting and inspection.
+The command submits the worker array and compute-node OOM watchdog, then
+blocks on the watchdog with scheduler-native --wait for durable-gate use.
 
 Options:
   --view NAME       preprocessing view (only batch_effect_uncorrected here)
@@ -182,7 +184,7 @@ if ! [[ "${ARRAY_ID}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-WATCHDOG_ID="$(sbatch --parsable \
+WATCHDOG_ID="$(sbatch --parsable --wait \
   --dependency="afterany:${ARRAY_ID}" \
   --partition="${PARTITION}" \
   --ntasks=1 \
