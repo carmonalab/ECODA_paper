@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import warnings
 from pathlib import Path
 
@@ -346,6 +347,273 @@ def cells_per_sample_stats(obs: pd.DataFrame, sample_col: str) -> dict:
         "cells_per_sample": vc.to_dict(),
     }
     return stats
+def _nonempty_mask(series: pd.Series) -> pd.Series:
+    """Return non-null, non-blank metadata values."""
+    return series.notna() & series.astype("string").str.strip().ne("")
+
+
+def _standardize_sample_id(value) -> str:
+    """Match the preprocessing sample transformation exactly."""
+    text = str(value)
+    return f"g{text}" if re.match(r"^\d", text) else text.replace("-", "_")
+
+
+def _sample_unit_rank(column: str) -> int:
+    """Rank biological units above specimens, samples, and libraries."""
+    low = str(column).lower()
+    if any(token in low for token in ("donor", "patient", "subject", "participant", "individual")):
+        return 3
+    if any(token in low for token in ("specimen", "sample", "aliquot", "region")):
+        return 2
+    if any(token in low for token in ("library", "assay")):
+        return 1
+    return 0
+
+
+def _sample_alias_score(column: str) -> int:
+    """Prefer readable source identifiers when candidates are aliases."""
+    low = str(column).lower()
+    if "specimen" in low or "sample_id" in low or low == "sampleid":
+        return 4
+    if "patient_region" in low or "orig_ident" in low:
+        return 3
+    if "donor_id" in low or low == "patientid":
+        return 2
+    if "acc" in low:
+        return 1
+    return 0
+
+
+def _pairwise_sample_relation(
+    obs: pd.DataFrame,
+    left: str,
+    right: str,
+) -> dict:
+    """Describe nesting/equivalence for two configured sample candidates."""
+    base = {"left": left, "right": right}
+    if left not in obs.columns or right not in obs.columns:
+        return {**base, "relation": "unavailable", "reason": "column not found"}
+
+    frame = pd.DataFrame(
+        {
+            "left": obs[left].astype("string"),
+            "right": obs[right].astype("string"),
+        }
+    )
+    frame = frame[_nonempty_mask(frame["left"]) & _nonempty_mask(frame["right"])]
+    if frame.empty:
+        return {**base, "relation": "unavailable", "reason": "no paired non-null IDs"}
+
+    left_to_right = frame.groupby("left", observed=True)["right"].nunique()
+    right_to_left = frame.groupby("right", observed=True)["left"].nunique()
+    n_left = int(left_to_right.size)
+    n_right = int(right_to_left.size)
+    left_one = bool((left_to_right <= 1).all())
+    right_one = bool((right_to_left <= 1).all())
+    if left_one and right_one and n_left == n_right:
+        relation = "equivalent"
+    elif left_one and n_left >= n_right:
+        relation = "left_nests_right"
+    elif right_one and n_right >= n_left:
+        relation = "right_nests_left"
+    else:
+        relation = "non_nested"
+    return {
+        **base,
+        "relation": relation,
+        "n_left_units": n_left,
+        "n_right_units": n_right,
+        "left_to_right_max": int(left_to_right.max()),
+        "right_to_left_max": int(right_to_left.max()),
+        "paired_cells": int(len(frame)),
+    }
+
+
+def audit_sample_candidates(
+    obs: pd.DataFrame,
+    candidates: list[str],
+    stable_cols: list[str],
+    expected_units: int | None,
+) -> tuple[pd.DataFrame, dict]:
+    """Audit full-file sample candidates and select a biological unit.
+
+    The audit is deliberately strict: missing IDs, standardized-name
+    collisions, and within-unit variation of any configured biological identity
+    field invalidate a candidate.  Expected counts are recorded as diagnostics
+    only and never override the observed invariance tests.
+    """
+    candidates = list(dict.fromkeys(candidates or []))
+    stable_cols = list(dict.fromkeys(stable_cols or []))
+    rows = []
+    candidate_values = {}
+    pairwise = []
+
+    for candidate in candidates:
+        row = {
+            "candidate": candidate,
+            "exists": candidate in obs.columns,
+            "expected_units": expected_units,
+            "independent_unit_rank": _sample_unit_rank(candidate),
+            "canonical_alias_score": _sample_alias_score(candidate),
+        }
+        if candidate not in obs.columns:
+            row.update(
+                {
+                    "n_units": 0,
+                    "non_null_cells": 0,
+                    "missing_cells": int(len(obs)),
+                    "cells_per_unit_min": None,
+                    "cells_per_unit_median": None,
+                    "cells_per_unit_mean": None,
+                    "cells_per_unit_max": None,
+                    "standardized_collision_count": 0,
+                    "standardized_collision_ids": {},
+                    "stable_conflicts": {},
+                    "missing_stable_cols": stable_cols,
+                    "passes": False,
+                    "reasons": ["configured sample column is missing"],
+                }
+            )
+            rows.append(row)
+            continue
+
+        raw = obs[candidate]
+        valid = _nonempty_mask(raw)
+        values = raw.loc[valid].astype("string")
+        candidate_values[candidate] = values
+        counts = values.value_counts(dropna=False)
+        standardized = values.map(_standardize_sample_id)
+        collision_groups = {}
+        for standardized_id, group in values.groupby(standardized, observed=True):
+            raw_ids = sorted({str(value) for value in group.tolist()})
+            if len(raw_ids) > 1:
+                collision_groups[str(standardized_id)] = raw_ids
+
+        stable_conflicts = {}
+        missing_stable_cols = []
+        for stable_col in stable_cols:
+            if stable_col not in obs.columns:
+                missing_stable_cols.append(stable_col)
+                continue
+            paired = pd.DataFrame(
+                {
+                    "unit": raw.astype("string"),
+                    "value": obs[stable_col].astype("string"),
+                }
+            )
+            paired = paired[_nonempty_mask(paired["unit"]) & _nonempty_mask(paired["value"])]
+            if paired.empty:
+                conflict_ids = []
+            else:
+                n_values = paired.groupby("unit", observed=True)["value"].nunique()
+                conflict_ids = sorted(str(value) for value in n_values[n_values > 1].index.tolist())
+            stable_conflicts[stable_col] = {
+                "n_conflicting_units": len(conflict_ids),
+                "conflicting_unit_ids": conflict_ids,
+            }
+
+        reasons = []
+        if int((~valid).sum()) > 0:
+            reasons.append("missing or blank sample IDs")
+        if collision_groups:
+            reasons.append("standardized sample-ID collision")
+        if missing_stable_cols:
+            reasons.append("configured stable metadata column is missing")
+        if any(item["n_conflicting_units"] for item in stable_conflicts.values()):
+            reasons.append("sample unit mixes a configured stable identity/biology field")
+
+        row.update(
+            {
+                "n_units": int(values.nunique(dropna=True)),
+                "non_null_cells": int(valid.sum()),
+                "missing_cells": int((~valid).sum()),
+                "cells_per_unit_min": int(counts.min()) if not counts.empty else None,
+                "cells_per_unit_median": float(counts.median()) if not counts.empty else None,
+                "cells_per_unit_mean": float(counts.mean()) if not counts.empty else None,
+                "cells_per_unit_max": int(counts.max()) if not counts.empty else None,
+                "standardized_collision_count": len(collision_groups),
+                "standardized_collision_ids": collision_groups,
+                "stable_conflicts": stable_conflicts,
+                "missing_stable_cols": missing_stable_cols,
+                "passes": not reasons,
+                "reasons": reasons,
+            }
+        )
+        rows.append(row)
+
+    for index, left in enumerate(candidates):
+        for right in candidates[index + 1 :]:
+            relation = _pairwise_sample_relation(obs, left, right)
+            pairwise.append(relation)
+
+    row_by_candidate = {row["candidate"]: row for row in rows}
+    passing = [row["candidate"] for row in rows if row.get("passes")]
+    reasons = []
+    required_source_check = sorted(
+        {
+            stable_col
+            for row in rows
+            for stable_col in row.get("missing_stable_cols", [])
+        }
+    )
+    selected = None
+    status = "FAIL"
+    if passing:
+        highest_rank = max(row_by_candidate[name]["independent_unit_rank"] for name in passing)
+        top = [name for name in passing if row_by_candidate[name]["independent_unit_rank"] == highest_rank]
+        top_relations = [
+            relation
+            for relation in pairwise
+            if relation["left"] in top and relation["right"] in top
+        ]
+        non_equivalent_top = [
+            relation for relation in top_relations if relation.get("relation") != "equivalent"
+        ]
+        if non_equivalent_top:
+            status = "AMBIGUOUS"
+            reasons.append("more than one non-equivalent passing unit at the highest biological rank")
+        else:
+            selected = sorted(
+                top,
+                key=lambda name: (
+                    -row_by_candidate[name]["canonical_alias_score"],
+                    sum(len(str(value)) for value in candidate_values.get(name, []))
+                    / max(1, len(candidate_values.get(name, []))),
+                    candidates.index(name),
+                ),
+            )[0]
+            lower_non_nested = [
+                relation
+                for relation in pairwise
+                if selected in (relation["left"], relation["right"])
+                and relation["left"] in passing
+                and relation["right"] in passing
+                and relation.get("relation") == "non_nested"
+            ]
+            if lower_non_nested:
+                status = "AMBIGUOUS"
+                selected = None
+                reasons.append("passing sample candidates are non-nested")
+            else:
+                status = "PASS"
+                reasons.append("selected highest independent biological unit")
+    else:
+        reasons.append("no configured sample candidate passes invariance and ID gates")
+
+    for row in rows:
+        if not row.get("passes", False):
+            reasons.extend(f"{row['candidate']}: {reason}" for reason in row.get("reasons", []))
+
+    selection = {
+        "status": status,
+        "selected": selected,
+        "reasons": list(dict.fromkeys(reasons)),
+        "required_source_check": required_source_check,
+        "passing_candidates": passing,
+        "pairwise": pairwise,
+        "expected_units": expected_units,
+    }
+    return pd.DataFrame(rows), selection
 
 
 def paper_table_compare(obs: pd.DataFrame, sample_col: str, ct_col: str | None, expected: dict) -> pd.DataFrame:
@@ -449,66 +717,800 @@ def confounding_crosstab(obs: pd.DataFrame, bio_col: str, batch_cols, max_uniq: 
     return pd.DataFrame(rows)
 
 
-def cell_type_harmonization_check(
+def _annotation_is_author(column: str) -> bool:
+    """Return whether a column can represent an author annotation tier."""
+    low = str(column).lower()
+    if low == "cell_type_tumor":
+        return False
+    disallowed = (
+        "ontology",
+        "louvain",
+        "leiden",
+        "cluster",
+        "kmeans",
+        "scvi",
+        "harmony",
+        "opt_clust",
+        "derived_class",
+    )
+    return not any(token in low for token in disallowed)
+
+
+def _annotation_hierarchy(obs: pd.DataFrame, high: str, low: str) -> dict:
+    """Evaluate whether a high tier maps injectively to a low tier."""
+    result = {"high": high, "low": low}
+    if high not in obs.columns or low not in obs.columns:
+        return {**result, "status": "UNAVAILABLE", "reason": "column not found"}
+
+    frame = pd.DataFrame(
+        {
+            "high": obs[high].astype("string"),
+            "low": obs[low].astype("string"),
+        }
+    )
+    frame = frame[_nonempty_mask(frame["high"]) & _nonempty_mask(frame["low"])]
+    if frame.empty:
+        return {**result, "status": "FAIL", "reason": "no paired non-null annotations"}
+
+    high_to_low = frame.groupby("high", observed=True)["low"].agg(
+        lambda values: sorted({str(value) for value in values})
+    )
+    low_values = set(str(value) for value in obs[low].loc[_nonempty_mask(obs[low])].tolist())
+    low_with_child = set(str(value) for value in frame["low"].tolist())
+    high_counts = frame["high"].value_counts()
+    single_parent_high = {
+        str(label) for label, values in high_to_low.items() if len(values) == 1
+    }
+    single_parent_cells = int(
+        high_counts[high_counts.index.astype(str).isin(single_parent_high)].sum()
+    )
+    nonmissing_cells = int(len(frame))
+    fraction_single_parent = single_parent_cells / nonmissing_cells if nonmissing_cells else 0.0
+    low_without_child = sorted(low_values - low_with_child)
+    hierarchy_pass = fraction_single_parent >= 0.999 and not low_without_child
+    return {
+        **result,
+        "status": "PASS" if hierarchy_pass else "FAIL",
+        "n_high_labels": int(high_to_low.size),
+        "n_low_labels": int(len(low_values)),
+        "nonmissing_cells": nonmissing_cells,
+        "high_labels_with_one_parent": int(len(single_parent_high)),
+        "fraction_high_cells_with_one_parent": float(fraction_single_parent),
+        "low_labels_without_child": low_without_child,
+        "mapping": [
+            {"high_label": str(label), "low_labels": values}
+            for label, values in high_to_low.items()
+        ],
+        "reason": (
+            ""
+            if hierarchy_pass
+            else "high labels do not map to one low parent for >=99.9% of cells "
+            "or a low label has no high-resolution child"
+        ),
+    }
+def _annotation_columns_equivalent(
+    obs: pd.DataFrame,
+    left: str,
+    right: str,
+) -> bool:
+    """Return whether two author tiers are one-to-one label aliases."""
+    if left not in obs.columns or right not in obs.columns:
+        return False
+    frame = pd.DataFrame(
+        {
+            "left": obs[left].astype("string"),
+            "right": obs[right].astype("string"),
+        }
+    )
+    frame = frame[_nonempty_mask(frame["left"]) & _nonempty_mask(frame["right"])]
+    if frame.empty:
+        return False
+    left_to_right = frame.groupby("left", observed=True)["right"].nunique()
+    right_to_left = frame.groupby("right", observed=True)["left"].nunique()
+    return bool(
+        left_to_right.size == right_to_left.size
+        and (left_to_right <= 1).all()
+        and (right_to_left <= 1).all()
+    )
+
+
+def audit_cell_type_candidates(
     obs: pd.DataFrame,
     ct_cols: list[str],
-    batch_col: str | None = None,
-    sample_col: str | None = None,
-) -> pd.DataFrame:
-    """Evaluate cross-batch / cross-study cell type harmonization and label sharing.
+    sample_col: str,
+    bio_col: str,
+    batch_cols: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    """Audit author annotation tiers on the full observation table.
 
-    For each candidate cell type annotation column, assesses whether annotations
-    are atlas-wide harmonized (present across batches) or study-specific.
+    Returns per-column gates, per-label coverage/restriction evidence, and a
+    deterministic low/high tier selection.  Restriction is reported as a
+    warning for individual labels but becomes a column failure only when it
+    breaches the configured mass or label-fraction gates.
     """
-    rows = []
-    has_batch = batch_col is not None and batch_col in obs.columns
-    n_batches = int(obs[batch_col].nunique(dropna=True)) if has_batch else 1
+    ct_cols = list(dict.fromkeys(ct_cols or []))
+    batch_cols = list(dict.fromkeys(batch_cols or []))
+    sample_series = obs[sample_col].astype("string") if sample_col in obs.columns else None
+    sample_valid = _nonempty_mask(sample_series) if sample_series is not None else pd.Series(False, index=obs.index)
+    bio_series = obs[bio_col].astype("string") if bio_col in obs.columns else None
+    bio_values = (
+        {str(value).lower() for value in bio_series.loc[_nonempty_mask(bio_series)].tolist()}
+        if bio_series is not None
+        else set()
+    )
+    sample_totals = (
+        sample_series.loc[sample_valid].value_counts(dropna=False)
+        if sample_series is not None
+        else pd.Series(dtype="int64")
+    )
 
-    for col in ct_cols:
-        if col not in obs.columns:
+    column_rows = []
+    label_rows = []
+    stats_by_column = {}
+
+    for candidate in ct_cols:
+        base = {
+            "candidate": candidate,
+            "exists": candidate in obs.columns,
+            "author_annotation": _annotation_is_author(candidate),
+            "human_readable": _annotation_is_author(candidate),
+        }
+        if candidate not in obs.columns:
+            row = {
+                **base,
+                "n_labels": 0,
+                "annotated_cells": 0,
+                "missing_cells": int(len(obs)),
+                "missing_fraction": 1.0,
+                "n_abundant_labels": 0,
+                "n_restricted_abundant_labels": 0,
+                "restricted_abundant_label_fraction": 0.0,
+                "restricted_abundant_cell_mass_fraction": 0.0,
+                "condition_derived_label_count": 0,
+                "condition_exclusive_label_count": 0,
+                "gate_status": "FAIL",
+                "gate_reasons": ["configured cell-type column is missing"],
+            }
+            column_rows.append(row)
+            stats_by_column[candidate] = row
             continue
-        nu = int(obs[col].nunique(dropna=True))
-        if nu == 0:
-            continue
 
-        if not has_batch or n_batches <= 1:
-            rows.append({
-                "Candidate Column": col,
-                "N Cell Types": nu,
-                "Shared (≥80% Batches)": f"{nu}/{nu} (100.0%)",
-                "Single-Batch Only": f"0/{nu} (0.0%)",
-                "Sharing Status": "Harmonized (Single Batch / Study)",
-                "Recommendation / Notes": "Single cohort context; all labels shared.",
-            })
-            continue
+        values = obs[candidate].astype("string")
+        valid = _nonempty_mask(values)
+        annotated = values.loc[valid]
+        label_counts = annotated.value_counts(dropna=False)
+        n_annotated = int(valid.sum())
+        n_samples = int(sample_series.loc[sample_valid].nunique()) if sample_series is not None else 0
+        sample_frame = pd.DataFrame(
+            {
+                "sample": sample_series,
+                "label": values,
+            }
+        )
+        sample_frame = sample_frame[
+            _nonempty_mask(sample_frame["sample"]) & _nonempty_mask(sample_frame["label"])
+        ]
+        sample_label_counts = (
+            sample_frame.groupby(["sample", "label"], observed=True).size()
+            if not sample_frame.empty
+            else pd.Series(dtype="int64")
+        )
+        sample_label_props = {}
+        for (sample, label), count in sample_label_counts.items():
+            denominator = int(sample_totals.get(sample, 0))
+            sample_label_props[(str(sample), str(label))] = int(count) / denominator if denominator else 0.0
 
-        ct = pd.crosstab(obs[col], obs[batch_col])
-        b_per_ct = (ct > 0).sum(axis=1)
-        thr_80 = max(2, int(np.ceil(0.8 * n_batches)))
-        n_shared_80 = int((b_per_ct >= thr_80).sum())
-        n_single = int((b_per_ct == 1).sum())
-        pct_shared = (n_shared_80 / nu * 100) if nu else 0.0
-        pct_single = (n_single / nu * 100) if nu else 0.0
+        batch_frames = {}
+        for batch_col in batch_cols:
+            if batch_col not in obs.columns:
+                continue
+            batch_frame = pd.DataFrame(
+                {
+                    "sample": sample_series,
+                    "batch": obs[batch_col].astype("string"),
+                    "label": values,
+                }
+            )
+            batch_frame = batch_frame[
+                _nonempty_mask(batch_frame["sample"])
+                & _nonempty_mask(batch_frame["batch"])
+                & _nonempty_mask(batch_frame["label"])
+            ]
+            batch_frames[batch_col] = batch_frame
 
-        if pct_shared >= 75.0 and pct_single <= 20.0:
-            status = "Harmonized (Atlas-Wide)"
-            notes = "Atlas-wide harmonized labels; optimal for ECODA patient stratification."
-        elif pct_shared >= 35.0 or n_shared_80 >= 4:
-            status = "Partially Harmonized"
-            notes = "Core lineages shared across studies; fine subtypes partially batch-restricted."
+        per_column_labels = []
+        for label, label_count in label_counts.items():
+            label = str(label)
+            label_sample_counts = {
+                str(sample): int(count)
+                for (sample, this_label), count in sample_label_counts.items()
+                if str(this_label) == label
+            }
+            present_samples = sorted(
+                sample
+                for sample, count in label_sample_counts.items()
+                if count >= 10 and sample_label_props.get((sample, label), 0.0) >= 0.001
+            )
+            sample_fraction = len(present_samples) / n_samples if n_samples else 0.0
+            max_sample_fraction = max(
+                (
+                    sample_label_props[(sample, label)]
+                    for sample in label_sample_counts
+                ),
+                default=0.0,
+            )
+            abundant = (
+                (int(label_count) / n_annotated >= 0.01 if n_annotated else False)
+                or max_sample_fraction >= 0.05
+            )
+            sample_restricted = bool(abundant and sample_fraction < 0.05)
+
+            batch_restrictions = {}
+            for batch_col, batch_frame in batch_frames.items():
+                if batch_frame.empty:
+                    continue
+                sample_counts_by_batch = batch_frame.groupby("batch", observed=True)["sample"].nunique()
+                eligible_levels = {
+                    str(level)
+                    for level, count in sample_counts_by_batch.items()
+                    if int(count) >= 5
+                }
+                label_levels = {
+                    str(level)
+                    for level in batch_frame.loc[batch_frame["label"] == label, "batch"].tolist()
+                }
+                eligible_label_levels = label_levels & eligible_levels
+                if len(eligible_levels) >= 2 and len(label_levels) == 1 and eligible_label_levels:
+                    level = sorted(eligible_label_levels)[0]
+                    batch_restrictions[batch_col] = {
+                        "level": level,
+                        "n_samples": int(sample_counts_by_batch.get(level, 0)),
+                    }
+            batch_restricted = bool(abundant and batch_restrictions)
+
+            label_bio_values = (
+                set(
+                    str(value).lower()
+                    for value in bio_series.loc[
+                        valid & _nonempty_mask(bio_series) & (values == label)
+                    ].tolist()
+                )
+                if bio_series is not None
+                else set()
+            )
+            condition_exclusive = bool(len(bio_values) > 1 and len(label_bio_values) == 1)
+            normalized_label = re.sub(r"[^a-z0-9]+", " ", label.lower()).strip()
+            vocabulary_derived = bool(
+                re.search(
+                    r"\b(?:tumou?r|cancer|malignant)\s+cells?\s+"
+                    r"(?:luad|lusc|nsclc|sclc|copd|adenocarcinoma|squamous)\b",
+                    normalized_label,
+                )
+            )
+            condition_derived = vocabulary_derived or bool(
+                any(
+                    len(value) >= 3
+                    and re.search(rf"\b{re.escape(value)}\b", normalized_label)
+                    for value in bio_values
+                )
+            )
+            restriction_scopes = []
+            if sample_restricted:
+                restriction_scopes.append("sample")
+            if batch_restricted:
+                restriction_scopes.extend(f"batch:{name}" for name in batch_restrictions)
+            label_record = {
+                "candidate": candidate,
+                "label": label,
+                "cell_count": int(label_count),
+                "cell_fraction": float(int(label_count) / n_annotated) if n_annotated else 0.0,
+                "n_samples_present": len(present_samples),
+                "sample_presence_fraction": float(sample_fraction),
+                "max_sample_fraction": float(max_sample_fraction),
+                "present_samples": present_samples,
+                "abundant": bool(abundant),
+                "sample_restricted": sample_restricted,
+                "batch_restricted": batch_restricted,
+                "batch_restrictions": batch_restrictions,
+                "restriction_scopes": restriction_scopes,
+                "bio_levels": sorted(label_bio_values),
+                "condition_exclusive": condition_exclusive,
+                "condition_derived_name": condition_derived,
+            }
+            label_rows.append(label_record)
+            per_column_labels.append(label_record)
+
+        abundant_labels = [record for record in per_column_labels if record["abundant"]]
+        restricted_abundant = [
+            record
+            for record in abundant_labels
+            if record["sample_restricted"] or record["batch_restricted"]
+        ]
+        restricted_mass = sum(
+            record["cell_count"] for record in restricted_abundant
+        ) / n_annotated if n_annotated else 0.0
+        restricted_label_fraction = (
+            len(restricted_abundant) / len(abundant_labels) if abundant_labels else 0.0
+        )
+        derived_labels = [record for record in per_column_labels if record["condition_derived_name"]]
+        exclusive_labels = [record for record in per_column_labels if record["condition_exclusive"]]
+        gate_reasons = []
+        missing_fraction = 1.0 - (n_annotated / len(obs) if len(obs) else 0.0)
+        if missing_fraction > 0.01:
+            gate_reasons.append("annotation missingness exceeds 1%")
+        if restricted_mass > 0.20:
+            gate_reasons.append("restricted abundant labels exceed 20% of annotated cell mass")
+        if restricted_label_fraction > 0.25:
+            gate_reasons.append("more than 25% of abundant labels are restricted")
+        if derived_labels:
+            gate_reasons.append("label names encode the biological outcome")
+        if not base["author_annotation"]:
+            gate_reasons.append("column is ontology/cluster/derived output, not an author tier")
+
+        row = {
+            **base,
+            "n_labels": int(label_counts.size),
+            "annotated_cells": n_annotated,
+            "missing_cells": int((~valid).sum()),
+            "missing_fraction": float(missing_fraction),
+            "n_samples": n_samples,
+            "n_abundant_labels": len(abundant_labels),
+            "n_restricted_abundant_labels": len(restricted_abundant),
+            "restricted_abundant_label_fraction": float(restricted_label_fraction),
+            "restricted_abundant_cell_mass_fraction": float(restricted_mass),
+            "condition_derived_label_count": len(derived_labels),
+            "condition_exclusive_label_count": len(exclusive_labels),
+            "gate_status": "PASS" if not gate_reasons else "FAIL",
+            "gate_reasons": gate_reasons,
+        }
+        column_rows.append(row)
+        stats_by_column[candidate] = row
+
+    hierarchy_rows = []
+    for index, left in enumerate(ct_cols):
+        for right in ct_cols[index + 1 :]:
+            left_count = stats_by_column.get(left, {}).get("n_labels", 0)
+            right_count = stats_by_column.get(right, {}).get("n_labels", 0)
+            if left_count == right_count:
+                high, low = right, left
+            elif left_count > right_count:
+                high, low = left, right
+            else:
+                high, low = right, left
+            hierarchy_rows.append(
+                {
+                    "left": left,
+                    "right": right,
+                    **_annotation_hierarchy(obs, high, low),
+                }
+            )
+
+    hierarchy_lookup = {
+        (row["high"], row["low"]): row
+        for row in hierarchy_rows
+        if row.get("status") != "UNAVAILABLE"
+    }
+    valid_author = [
+        row
+        for row in column_rows
+        if row.get("gate_status") == "PASS"
+        and row.get("author_annotation")
+        and row.get("n_labels", 0) > 0
+    ]
+    low_candidates = [
+        row for row in valid_author if 3 <= row["n_labels"] <= 20
+    ]
+    pair_candidates = []
+    for low_row in low_candidates:
+        for high_row in valid_author:
+            if high_row["candidate"] == low_row["candidate"]:
+                continue
+            if high_row["n_labels"] <= low_row["n_labels"]:
+                continue
+            hierarchy = hierarchy_lookup.get((high_row["candidate"], low_row["candidate"]))
+            if hierarchy and hierarchy.get("status") == "PASS":
+                pair_candidates.append(
+                    {
+                        "low": low_row["candidate"],
+                        "high": high_row["candidate"],
+                        "low_n_labels": low_row["n_labels"],
+                        "high_n_labels": high_row["n_labels"],
+                        "low_distance_from_ten": abs(low_row["n_labels"] - 10),
+                        "hierarchy": hierarchy,
+                    }
+                )
+
+    selection_reasons = []
+    selection_status = "FAIL"
+    selected = None
+    if pair_candidates:
+        pair_candidates.sort(
+            key=lambda row: (
+                -row["high_n_labels"],
+                row["low_distance_from_ten"],
+                ct_cols.index(row["high"]),
+                ct_cols.index(row["low"]),
+            )
+        )
+        best = pair_candidates[0]
+        tied = [
+            row
+            for row in pair_candidates
+            if row["high_n_labels"] == best["high_n_labels"]
+            and row["low_distance_from_ten"] == best["low_distance_from_ten"]
+        ]
+        tied_pairs = {(row["low"], row["high"]) for row in tied}
+        non_equivalent_ties = [
+            row
+            for row in tied
+            if not (
+                _annotation_columns_equivalent(obs, best["high"], row["high"])
+                and _annotation_columns_equivalent(obs, best["low"], row["low"])
+            )
+        ]
+        if len(tied_pairs) > 1 and non_equivalent_ties:
+            selection_status = "AMBIGUOUS"
+            selection_reasons.append("multiple non-equivalent annotation pairs tie for selection")
         else:
-            status = "Study-Specific / Unharmonized"
-            notes = "Disjoint label sets per study; unsuited for cross-study ECODA stratification."
+            selection_status = "PASS"
+            selected = {"low": best["low"], "high": best["high"]}
+            selection_reasons.append(
+                "selected valid author low tier nearest ten labels and highest valid high tier"
+                + (
+                    "; one-to-one aliases resolved by configured source order"
+                    if len(tied_pairs) > 1
+                    else ""
+                )
+            )
+    else:
+        selection_reasons.append(
+            "no distinct author low/high pair passes completeness, restriction, leakage, and hierarchy gates"
+        )
 
-        rows.append({
-            "Candidate Column": col,
-            "N Cell Types": nu,
-            "Shared (≥80% Batches)": f"{n_shared_80}/{nu} ({pct_shared:.1f}%)",
-            "Single-Batch Only": f"{n_single}/{nu} ({pct_single:.1f}%)",
-            "Sharing Status": status,
-            "Recommendation / Notes": notes,
-        })
-    return pd.DataFrame(rows)
+    restriction_warnings = [
+        row
+        for row in label_rows
+        if row["abundant"] and (row["sample_restricted"] or row["batch_restricted"])
+    ]
+    leakage_warnings = [
+        row
+        for row in label_rows
+        if row["condition_exclusive"] and not row["condition_derived_name"]
+    ]
+    selection = {
+        "status": selection_status,
+        "selected": selected,
+        "reasons": selection_reasons,
+        "required_source_check": [
+            column
+            for column in [sample_col, bio_col, *batch_cols]
+            if column not in obs.columns
+        ],
+        "hierarchy": hierarchy_rows,
+        "pair_candidates": pair_candidates,
+        "restriction_warnings": restriction_warnings,
+        "leakage_warnings": leakage_warnings,
+    }
+    return pd.DataFrame(column_rows), pd.DataFrame(label_rows), selection
+
+
+def build_registry_gate(
+    spec: dict,
+    obs: pd.DataFrame,
+    sample_audit: pd.DataFrame,
+    sample_selection: dict,
+    cell_type_column_audit: pd.DataFrame,
+    cell_type_label_audit: pd.DataFrame,
+    cell_type_selection: dict,
+) -> dict:
+    """Apply user-declared roles while retaining audit evidence.
+
+    Heuristic rankings are warnings only. Identity, missingness, collision,
+    retained-metadata, author-column, and hierarchy failures remain hard
+    failures. HiTME/Leiden roles are intentionally pending until the processed
+    h5ad supplies and validates the produced columns.
+    """
+    roles = spec.get("registry_roles")
+    if not isinstance(roles, dict):
+        raise ValueError(f"{spec.get('key', '<unknown>')}: registry_roles are required")
+    annotation_source = roles.get("annotation_source") or {}
+    sample_col = roles.get("sample")
+    bio_col = roles.get("label")
+    low_col = roles.get("cell_type_low_res")
+    high_col = roles.get("cell_type_high_res")
+    role_columns = {
+        "sample": sample_col,
+        "label": bio_col,
+        "cell_type_low_res": low_col,
+        "cell_type_high_res": high_col,
+    }
+    derived_roles = {
+        role: column
+        for role, column in (
+            ("cell_type_low_res", low_col),
+            ("cell_type_high_res", high_col),
+        )
+        if annotation_source.get("low" if role.endswith("low_res") else "high")
+        in {"hitme", "leiden"}
+    }
+    derived_columns = set(derived_roles.values())
+    batch_candidates = list(dict.fromkeys(spec.get("batch_cols") or []))
+    meta_cols_keep = []
+    for column in [sample_col, bio_col, low_col, high_col, *spec.get("sample_stable_cols", []), *batch_candidates]:
+        if column and column not in meta_cols_keep:
+            meta_cols_keep.append(column)
+    missing_meta_cols = [
+        column for column in meta_cols_keep
+        if column not in obs.columns and column not in derived_columns
+    ]
+
+    reasons = []
+    stable_field_conflict_warnings = []
+    heuristic_warnings = []
+    expected_source = spec.get("expected_source", {})
+    selected_unit_count = None
+    selected_sample_rows = (
+        sample_audit[sample_audit["candidate"] == sample_col]
+        if sample_col and not sample_audit.empty and "candidate" in sample_audit
+        else pd.DataFrame()
+    )
+    if not selected_sample_rows.empty:
+        selected_sample = selected_sample_rows.iloc[0]
+        selected_unit_count = selected_sample.get("n_units")
+        sample_reasons = list(selected_sample.get("reasons") or [])
+        stable_reason = "sample unit mixes a configured stable identity/biology field"
+        hard_sample_reasons = [reason for reason in sample_reasons if reason != stable_reason]
+        if hard_sample_reasons:
+            reasons.extend(
+                f"declared sample column {sample_col}: {reason}"
+                for reason in hard_sample_reasons
+            )
+        if stable_reason in sample_reasons:
+            stable_field_conflict_warnings.append(
+                {
+                    "column": sample_col,
+                    "conflicting_stable_fields": selected_sample.get("stable_conflicts", {}),
+                    "message": "user-approved stable-field conflict retained as warning",
+                }
+            )
+        if not hard_sample_reasons and not bool(selected_sample.get("passes", False)):
+            # The only permitted non-passing reason is the explicitly approved
+            # stable-field conflict handled above.
+            if stable_reason not in sample_reasons:
+                reasons.append(f"declared sample column {sample_col} failed its audit")
+    elif sample_col not in obs.columns:
+        reasons.append(f"declared sample column is missing: {sample_col}")
+    else:
+        reasons.append(f"declared sample column {sample_col} was not audited")
+
+    if sample_selection.get("selected") != sample_col:
+        heuristic_warnings.append(
+            {
+                "role": "sample",
+                "declared": sample_col,
+                "heuristic": sample_selection.get("selected"),
+                "message": "user-declared sample role overrides heuristic ranking",
+            }
+        )
+
+    for role, column in role_columns.items():
+        if not column:
+            reasons.append(f"declared {role} role is empty")
+            continue
+        if role in derived_roles:
+            continue
+        if column not in obs.columns:
+            reasons.append(f"declared {role} column is missing: {column}")
+
+    if bio_col in obs.columns:
+        missing_label = int((~_nonempty_mask(obs[bio_col])).sum())
+        if missing_label:
+            reasons.append(
+                f"biological label column {bio_col} has {missing_label} missing or blank values"
+            )
+
+    if missing_meta_cols:
+        reasons.append(f"configured metadata columns are missing: {missing_meta_cols}")
+
+    for role, column in (
+        ("cell_type_low_res", low_col),
+        ("cell_type_high_res", high_col),
+    ):
+        source_key = "low" if role.endswith("low_res") else "high"
+        if role in derived_roles or column not in obs.columns:
+            continue
+        rows = (
+            cell_type_column_audit[
+                cell_type_column_audit["candidate"] == column
+            ]
+            if not cell_type_column_audit.empty and "candidate" in cell_type_column_audit
+            else pd.DataFrame()
+        )
+        if rows.empty:
+            reasons.append(f"declared {role} column {column} was not audited")
+        elif rows.iloc[0].get("gate_status") != "PASS":
+            reasons.append(
+                f"declared {role} column {column} fails its author annotation gate"
+            )
+        if annotation_source.get(source_key) != "author":
+            heuristic_warnings.append(
+                {
+                    "role": role,
+                    "declared": column,
+                    "source": annotation_source.get(source_key),
+                    "message": "non-author annotation source is validated post-processing",
+                }
+            )
+
+    declared_pair = {"low": low_col, "high": high_col}
+    heuristic_pair = cell_type_selection.get("selected")
+    if heuristic_pair != declared_pair:
+        heuristic_warnings.append(
+            {
+                "role": "cell_type_pair",
+                "declared": declared_pair,
+                "heuristic": heuristic_pair,
+                "message": "user-declared annotation pair overrides heuristic ranking",
+            }
+        )
+
+    selected_hierarchy = None
+    if not derived_roles and low_col in obs.columns and high_col in obs.columns:
+        selected_hierarchy = _annotation_hierarchy(obs, high_col, low_col)
+        if selected_hierarchy.get("status") != "PASS":
+            reasons.append("declared author annotation hierarchy gate did not pass")
+
+    source_count_evidence = {
+        "observed_cells": int(len(obs)),
+        "expected_cells": expected_source.get("cells"),
+        "observed_selected_units": selected_unit_count,
+        "expected_independent_units": expected_source.get("independent_units"),
+        "required": bool(expected_source.get("source_match_required", False)),
+    }
+    if expected_source.get("source_match_required"):
+        if (
+            expected_source.get("cells") is not None
+            and int(len(obs)) != int(expected_source["cells"])
+        ):
+            reasons.append(
+                f"full-file cell count {len(obs)} differs from source count "
+                f"{expected_source['cells']}"
+            )
+        if (
+            selected_unit_count is not None
+            and expected_source.get("independent_units") is not None
+            and int(selected_unit_count) != int(expected_source["independent_units"])
+        ):
+            reasons.append(
+                f"selected sample count {selected_unit_count} differs from source count "
+                f"{expected_source['independent_units']}"
+            )
+
+    derived_pending = [
+        {
+            "role": role,
+            "column": column,
+            "source": annotation_source.get("low" if role.endswith("low_res") else "high"),
+        }
+        for role, column in derived_roles.items()
+    ]
+    pending_reasons = (
+        [
+            "declared produced annotation columns require post-processing evidence",
+            *[
+                f"{item['role']} requires produced column {item['column']!r} "
+                f"from {item['source']}"
+                for item in derived_pending
+            ],
+        ]
+        if derived_pending
+        else []
+    )
+
+    evidence = {
+        "declared_roles": role_columns,
+        "annotation_source": annotation_source,
+        "sample_selection": sample_selection,
+        "selected_sample_audit": (
+            selected_sample_rows.to_dict(orient="records")
+            if not selected_sample_rows.empty
+            else []
+        ),
+        "cell_type_selection": cell_type_selection,
+        "selected_cell_type_columns": (
+            cell_type_column_audit[
+                cell_type_column_audit["candidate"].isin([low_col, high_col])
+            ].to_dict(orient="records")
+            if not cell_type_column_audit.empty and "candidate" in cell_type_column_audit
+            else []
+        ),
+        "selected_hierarchy": selected_hierarchy,
+        "missing_meta_cols": missing_meta_cols,
+        "source_count_evidence": source_count_evidence,
+    }
+    status = "FAIL" if reasons else (
+        "PASS_PENDING_DERIVED_ANNOTATION" if derived_pending else "PASS"
+    )
+    return {
+        "status": status,
+        "selected": role_columns,
+        **role_columns,
+        "batch_candidates": batch_candidates,
+        "meta_cols_keep": meta_cols_keep,
+        "registry_roles": roles,
+        "decision_notes": list(spec.get("decision_notes") or []),
+        "derived_pending": derived_pending,
+        "pending_reasons": pending_reasons,
+        "stable_field_conflict_warnings": stable_field_conflict_warnings,
+        "heuristic_warnings": heuristic_warnings,
+        "reasons": list(dict.fromkeys(reasons)),
+        "required_source_check": list(
+            dict.fromkeys(
+                sample_selection.get("required_source_check", [])
+                + cell_type_selection.get("required_source_check", [])
+                + missing_meta_cols
+            )
+        ),
+        "evidence": evidence,
+        "expected_source": expected_source,
+        "initial_registry_mode": spec.get("initial_registry_mode"),
+    }
+def finalize_derived_registry_gate(gate: dict, processed_obs: pd.DataFrame) -> dict:
+    """Promote a pending registry gate only with processed-observation evidence."""
+    if gate.get("status") != "PASS_PENDING_DERIVED_ANNOTATION":
+        return gate
+
+    result = dict(gate)
+    reasons = list(gate.get("reasons") or [])
+    pending = list(gate.get("derived_pending") or [])
+    validation = []
+    if not isinstance(processed_obs, pd.DataFrame):
+        reasons.append("processed observation table is not a pandas DataFrame")
+    else:
+        for item in pending:
+            column = item["column"]
+            record = {
+                "role": item["role"],
+                "column": column,
+                "source": item.get("source"),
+                "present": column in processed_obs.columns,
+            }
+            if column not in processed_obs.columns:
+                reasons.append(f"processed observations are missing derived column: {column}")
+                validation.append(record)
+                continue
+            valid = _nonempty_mask(processed_obs[column])
+            values = processed_obs.loc[valid, column].astype("string")
+            record.update(
+                {
+                    "nonmissing": int(valid.sum()),
+                    "coverage_fraction": float(valid.mean()) if len(valid) else 0.0,
+                    "n_labels": int(values.nunique(dropna=True)),
+                }
+            )
+            if int(valid.sum()) == 0:
+                reasons.append(f"derived column {column} has zero nonmissing coverage")
+            if int(values.nunique(dropna=True)) < 2:
+                reasons.append(f"derived column {column} has fewer than two labels")
+            validation.append(record)
+
+        selected = gate.get("selected") or {}
+        low_col = selected.get("cell_type_low_res")
+        high_col = selected.get("cell_type_high_res")
+        if low_col not in processed_obs.columns or high_col not in processed_obs.columns:
+            reasons.append("processed observations do not contain both selected annotation tiers")
+        else:
+            hierarchy = _annotation_hierarchy(processed_obs, high_col, low_col)
+            result["derived_annotation_hierarchy"] = hierarchy
+            if hierarchy.get("status") != "PASS":
+                reasons.append("processed selected annotation hierarchy gate did not pass")
+
+    result["derived_annotation_validation"] = validation
+    result["derived_pending"] = [] if not reasons else pending
+    result["reasons"] = list(dict.fromkeys(reasons))
+    result["status"] = "PASS" if not reasons else "FAIL"
+    return result
+
 
 
 def categorize_obs_columns(obs: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
@@ -821,7 +1823,7 @@ def compute_compositional_significance_matrix(
     import scipy.stats as stats
     import statsmodels.stats.multitest as smt
 
-    dedup_group_cols = list(dict.fromkeys([c for c in group_cols if c in meta_df.columns]))
+    dedup_group_cols = list(dict.fromkeys([c for c in group_cols if c in meta_df.columns and c != sample_col]))
     meta_dedup = meta_df[[sample_col] + dedup_group_cols].drop_duplicates(subset=[sample_col]).set_index(sample_col)
     common_samples = clr_df.index.intersection(meta_dedup.index)
     clr_sub = clr_df.loc[common_samples]
@@ -910,8 +1912,8 @@ def compute_variance_partition(
     """
     import statsmodels.formula.api as smf
 
-    dedup_bio = list(dict.fromkeys([c for c in bio_cols if c in meta_df.columns]))
-    dedup_tech = list(dict.fromkeys([c for c in tech_cols if c in meta_df.columns]))
+    dedup_bio = list(dict.fromkeys([c for c in bio_cols if c in meta_df.columns and c != sample_col]))
+    dedup_tech = list(dict.fromkeys([c for c in tech_cols if c in meta_df.columns and c != sample_col]))
     all_cols = list(dict.fromkeys(dedup_bio + dedup_tech))
 
     meta_dedup = meta_df[[sample_col] + all_cols].drop_duplicates(subset=[sample_col]).set_index(sample_col)
@@ -1022,7 +2024,9 @@ def compute_metadata_nmi_matrix(
     """
     from sklearn.metrics import normalized_mutual_info_score
 
-    valid_cols = list(dict.fromkeys([c for c in candidate_cols if c in meta_df.columns]))
+    if sample_col not in meta_df.columns:
+        return pd.DataFrame()
+    valid_cols = list(dict.fromkeys([c for c in candidate_cols if c in meta_df.columns and c != sample_col]))
     meta_sample = (
         meta_df[[sample_col] + valid_cols]
         .drop_duplicates(subset=[sample_col])
@@ -1150,8 +2154,8 @@ def compute_compositional_permanova(
     from scipy.spatial.distance import pdist, squareform
     import statsmodels.stats.multitest as smt
 
-    dedup_bio = list(dict.fromkeys([c for c in bio_cols if c in meta_df.columns]))
-    dedup_tech = list(dict.fromkeys([c for c in tech_cols if c in meta_df.columns]))
+    dedup_bio = list(dict.fromkeys([c for c in bio_cols if c in meta_df.columns and c != sample_col]))
+    dedup_tech = list(dict.fromkeys([c for c in tech_cols if c in meta_df.columns and c != sample_col]))
     all_cols = list(dict.fromkeys(dedup_bio + dedup_tech))
 
     meta_dedup = meta_df[[sample_col] + all_cols].drop_duplicates(subset=[sample_col]).set_index(sample_col)
@@ -1451,7 +2455,7 @@ def compute_compositional_joint_lm(
     from statsmodels.stats.anova import anova_lm
     import statsmodels.stats.multitest as smt
 
-    dedup_group_cols = list(dict.fromkeys([c for c in group_cols if c in meta_df.columns]))
+    dedup_group_cols = list(dict.fromkeys([c for c in group_cols if c in meta_df.columns and c != sample_col]))
     meta_dedup = meta_df[[sample_col] + dedup_group_cols].drop_duplicates(subset=[sample_col]).set_index(sample_col)
     common_samples = clr_df.index.intersection(meta_dedup.index)
     clr_sub = clr_df.loc[common_samples]

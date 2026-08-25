@@ -20,40 +20,49 @@ fi
 source "${SCRIPT_DIR}/../../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-# METHOD and BENCHMARK_MANIFEST are exported by 1_submit_hpc_array.sh
-# (sbatch propagates the submit script's environment).
+# METHOD and the generic analysis manifest are exported by the submitter.
+# Ordinary benchmark runs still use BENCHMARK_MANIFEST as the fallback; batch
+# runs use ANALYSIS_MANIFEST and never populate the legacy variable.
 if [[ -z "${METHOD:-}" ]]; then
   echo "ERROR: METHOD is not set. Export it before submitting the array."
   exit 1
 fi
-if [[ -z "${BENCHMARK_MANIFEST:-}" ]]; then
-  echo "ERROR: BENCHMARK_MANIFEST is not set. Export it before submitting the array."
+MANIFEST_PATH="${ANALYSIS_MANIFEST:-${BENCHMARK_MANIFEST:-}}"
+if [[ -z "${MANIFEST_PATH}" ]]; then
+  echo "ERROR: ANALYSIS_MANIFEST (or legacy BENCHMARK_MANIFEST) is not set."
   exit 1
 fi
 
-# Read this task's dataset from the per-method manifest (one DS per line,
-# written by 1_submit_hpc_array.sh): sed -n matches SLURM_ARRAY_TASK_ID 1:1.
-DS_NAME="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${BENCHMARK_MANIFEST}")"
+DS_NAME="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${MANIFEST_PATH}")"
 if [[ -z "${DS_NAME}" ]]; then
-  echo "ERROR: No manifest entry for array task ${SLURM_ARRAY_TASK_ID} in ${BENCHMARK_MANIFEST}."
+  echo "ERROR: No manifest entry for array task ${SLURM_ARRAY_TASK_ID} in ${MANIFEST_PATH}."
   exit 1
 fi
 export DS_NAME
 echo "Task ${SLURM_ARRAY_TASK_ID}: METHOD=${METHOD}, DS_NAME=${DS_NAME}"
 
-OUT_DIR="${HPC_SCRATCH_DIR}/benchmark/embeddings"
-mkdir -p "${OUT_DIR}"
-# Log name is deterministic per (METHOD, DS_NAME): concurrent per-method
-# arrays each have a distinct METHOD, so there is no read-modify-write
-# collision, and re-runs overwrite the same file. The merge script globs
-# the (method x dataset) cross product.
-LOG_FILE="${OUT_DIR}/execution_times_${METHOD}_${DS_NAME}.feather"
+ANALYSIS_ROOT="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
+ANALYSIS_VIEW="${ANALYSIS_VIEW:-benchmark_analysis}"
+RESULTS_DIR="${ANALYSIS_ROOT}/results"
+PSEUDOBULK_DIR="${ANALYSIS_ROOT}/pseudobulks"
+GLOSCOPE_DIR="${ANALYSIS_ROOT}/gloscope_dists"
+EMBED_DIR="${ANALYSIS_ROOT}/embeddings"
+mkdir -p "${RESULTS_DIR}" "${PSEUDOBULK_DIR}" "${GLOSCOPE_DIR}" "${EMBED_DIR}"
+if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+  LOG_FILE="${EMBED_DIR}/execution_times_batch_effect_${ANALYSIS_PASS}_${METHOD}_${DS_NAME}.feather"
+else
+  LOG_FILE="${EMBED_DIR}/execution_times_${METHOD}_${DS_NAME}.feather"
+fi
 
 # FORCE_BENCHMARK is exported by 1_submit_hpc_array.sh (--force); forward it
 # to the R scripts so existing per-combo caches are recomputed.
 FORCE_FLAG=""
 if [[ "${FORCE_BENCHMARK:-0}" == "1" ]]; then
   FORCE_FLAG="--force"
+fi
+ANALYSIS_PASS_FLAG=()
+if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+  ANALYSIS_PASS_FLAG=(--analysis_pass "${ANALYSIS_PASS}")
 fi
 
 if [[ "${METHOD}" == "prepare_pseudobulk" ]]; then
@@ -77,14 +86,15 @@ set +e
 ${PIXI_RSCRIPT} "${R_SCRIPT}" \
     --config_path "${DATASETS_JSON_FILE}" \
     --ds_name "${DS_NAME}" \
-    --view benchmark_analysis \
+    --view "${ANALYSIS_VIEW}" \
     --method "${METHOD}" \
     --input_dir "${HPC_SCRATCH_DIR}/${DS_NAME}/output" \
-    --results_dir "${HPC_SCRATCH_DIR}/benchmark/results" \
-    --pseudobulk_dir "${HPC_SCRATCH_DIR}/benchmark/pseudobulks" \
-    --gloscope_cache_dir "${HPC_SCRATCH_DIR}/benchmark/gloscope_dists" \
+    --results_dir "${RESULTS_DIR}" \
+    --pseudobulk_dir "${PSEUDOBULK_DIR}" \
+    --gloscope_cache_dir "${GLOSCOPE_DIR}" \
     --log_file "${LOG_FILE}" \
-    ${FORCE_FLAG}
+    ${FORCE_FLAG} \
+    "${ANALYSIS_PASS_FLAG[@]}"
 RC=$?
 set -e
 if [[ ${RC} -eq 0 ]]; then
@@ -92,7 +102,8 @@ if [[ ${RC} -eq 0 ]]; then
   echo "Task ${SLURM_ARRAY_TASK_ID}: ${METHOD} on ${DS_NAME} complete."
   exit 0
 fi
-ERR_FILE="${LOGS_DIR}/5_benchmark_r_${METHOD}_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.err"
+ERR_PREFIX="${JOB_LOG_PREFIX:-5_benchmark_r_${METHOD}}"
+ERR_FILE="${LOGS_DIR}/${ERR_PREFIX}_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.err"
 if worker_requeue_if_transient "${ERR_FILE}" "${WORKER_MAX_RETRIES:-3}"; then
   exit 0   # requeued; the script restarts, likely on another node
 fi

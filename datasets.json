@@ -15,8 +15,15 @@
       "cell_type_high_res": "cell.type"
     },
     "meta_cols_keep": [
-      "sample.ID", "sample.origin", "patient.ID", "iCMS",
-      "dataset", "Gender", "Site", "cell.type", "seqtec"
+      "sample.ID",
+      "sample.origin",
+      "patient.ID",
+      "iCMS",
+      "dataset",
+      "Gender",
+      "Site",
+      "cell.type",
+      "seqtec"
     ],
     "views": {
       "benchmark_analysis": {
@@ -24,9 +31,14 @@
         "output_file_name": "JoaI_2022_35773407_debug_5samples_benchmark_analysis_ECODAprocessed.h5ad",
         "subset_vars": {}
       },
-      "batch_effect_analysis": {
+      "batch_effect_uncorrected": {
         "input_file_name": "JoaI_2022_35773407_debug_5samples.h5ad",
-        "output_file_name": "JoaI_2022_35773407_debug_5samples_batch_effect_analysis_ECODAprocessed.h5ad",
+        "output_file_name": "JoaI_2022_35773407_debug_5samples_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "JoaI_2022_35773407_debug_5samples.h5ad",
+        "output_file_name": "JoaI_2022_35773407_debug_5samples_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
         "subset_vars": {}
       }
     }
@@ -137,13 +149,25 @@
       "cell_type_high_res": "cell.type"
     },
     "meta_cols_keep": [
-      "sample.ID", "sample.origin", "patient.ID", "iCMS",
-      "dataset", "Gender", "Site", "cell.type", "seqtec"
+      "sample.ID",
+      "sample.origin",
+      "patient.ID",
+      "iCMS",
+      "dataset",
+      "Gender",
+      "Site",
+      "cell.type",
+      "seqtec"
     ],
     "views": {
-      "batch_effect_analysis": {
+      "batch_effect_uncorrected": {
         "input_file_name": "JoaI_2022_35773407_Nofilt_whole.rds",
-        "output_file_name": "JoaI_2022_35773407_Nofilt_whole_batch_effect_analysis_ECODAprocessed.h5ad",
+        "output_file_name": "JoaI_2022_35773407_Nofilt_whole_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "JoaI_2022_35773407_Nofilt_whole.rds",
+        "output_file_name": "JoaI_2022_35773407_Nofilt_whole_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
         "subset_vars": {}
       }
     }
@@ -296,25 +320,53 @@
       "cell_type_high_res": "full_clustering"
     },
     "meta_cols_keep": [
-      "Sample", "Status", "Site", "Status_on_day_collection_summary",
-      "Days_from_onset", "initial_clustering", "full_clustering"
+      "Sample",
+      "Status",
+      "Site",
+      "Status_on_day_collection_summary",
+      "Days_from_onset",
+      "initial_clustering",
+      "full_clustering"
     ],
     "views": {
-      "benchmark_analysis": {
+      "batch_effect_uncorrected": {
         "input_file_name": "StephensonE_2021_33879890_preprocessed.rds",
-        "output_file_name": "StephensonE_2021_33879890_preprocessed_benchmark_analysis_ECODAprocessed.h5ad",
+        "output_file_name": "StephensonE_2021_33879890_preprocessed_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
         "subset_vars": {
-          "Site": {"values": ["Ncl"], "op": "in"},
-          "Status": {"values": ["Healthy", "Covid"], "op": "in"},
-          "Sample": {"values": ["BGCV10_CV0198", "MH8919230"], "op": "notin"}
+          "Status": {
+            "values": [
+              "Healthy",
+              "Covid"
+            ],
+            "op": "in"
+          },
+          "Sample": {
+            "values": [
+              "BGCV10_CV0198",
+              "MH8919230"
+            ],
+            "op": "notin"
+          }
         }
       },
-      "batch_effect_analysis": {
+      "batch_effect_corrected": {
         "input_file_name": "StephensonE_2021_33879890_preprocessed.rds",
-        "output_file_name": "StephensonE_2021_33879890_preprocessed_batch_effect_analysis_ECODAprocessed.h5ad",
+        "output_file_name": "StephensonE_2021_33879890_preprocessed_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
         "subset_vars": {
-          "Status": {"values": ["Healthy", "Covid"], "op": "in"},
-          "Sample": {"values": ["BGCV10_CV0198", "MH8919230"], "op": "notin"}
+          "Status": {
+            "values": [
+              "Healthy",
+              "Covid"
+            ],
+            "op": "in"
+          },
+          "Sample": {
+            "values": [
+              "BGCV10_CV0198",
+              "MH8919230"
+            ],
+            "op": "notin"
+          }
         }
       }
     }
@@ -413,5 +465,412 @@
         "subset_vars": {}
       }
     }
+  },
+  "Alzheimer": {
+    "display_name": "Alzheimer (SEA-AD)",
+    "file_names": "SEAAD_Alzheimer.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Brain",
+    "normal_tissue": false,
+    "use_for_benchmark": false,
+    "use_for_batch_effect": true,
+    "not_suitable_for_auto_annotation": [
+      "hitme",
+      "scatomic"
+    ],
+    "columns": {
+      "sample": "donor_id",
+      "label": "Cognitive status",
+      "batch": null,
+      "cell_type_low_res": "Subclass",
+      "cell_type_high_res": "Supertype"
+    },
+    "meta_cols_keep": [
+      "donor_id",
+      "Cognitive status",
+      "Subclass",
+      "Supertype",
+      "sex",
+      "disease",
+      "tissue",
+      "assay",
+      "tissue_type",
+      "PMI"
+    ],
+    "views": {
+      "batch_effect_uncorrected": {
+        "input_file_name": "SEAAD_Alzheimer.h5ad",
+        "output_file_name": "SEAAD_Alzheimer_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "SEAAD_Alzheimer.h5ad",
+        "output_file_name": "SEAAD_Alzheimer_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      }
+    }
+  },
+  "Breast_cancer": {
+    "display_name": "Breast cancer",
+    "file_names": "BreastCncr_processed.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Breast tumor",
+    "normal_tissue": false,
+    "use_for_benchmark": false,
+    "use_for_batch_effect": true,
+    "columns": {
+      "sample": "sample_id",
+      "label": "disease",
+      "batch": null,
+      "cell_type_low_res": "broad_cell_type",
+      "cell_type_high_res": "author_cell_type"
+    },
+    "meta_cols_keep": [
+      "sample_id",
+      "disease",
+      "broad_cell_type",
+      "author_cell_type",
+      "sex",
+      "tissue",
+      "donor_id",
+      "assay",
+      "sequencing_platform",
+      "sample_preservation_method",
+      "suspension_dissociation_time",
+      "suspension_dissociation_reagent"
+    ],
+    "views": {
+      "batch_effect_uncorrected": {
+        "input_file_name": "BreastCncr_processed.h5ad",
+        "output_file_name": "BreastCncr_processed_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "BreastCncr_processed.h5ad",
+        "output_file_name": "BreastCncr_processed_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      }
+    }
+  },
+  "Covid19_PBMC": {
+    "display_name": "Covid-19 PBMC",
+    "file_names": "Covid19_Ren2021.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Blood",
+    "normal_tissue": true,
+    "use_for_benchmark": false,
+    "use_for_batch_effect": true,
+    "columns": {
+      "sample": "sampleID",
+      "label": "CoVID-19 severity",
+      "batch": null,
+      "cell_type_low_res": "majorType",
+      "cell_type_high_res": "celltype"
+    },
+    "meta_cols_keep": [
+      "sampleID",
+      "CoVID-19 severity",
+      "majorType",
+      "celltype",
+      "Sex",
+      "PatientID",
+      "Outcome",
+      "Sample time",
+      "Sampling day (Days after symptom onset)",
+      "Single cell sequencing platform",
+      "City",
+      "datasets",
+      "Sample type"
+    ],
+    "views": {
+      "batch_effect_uncorrected": {
+        "input_file_name": "Covid19_Ren2021.h5ad",
+        "output_file_name": "Covid19_Ren2021_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "Covid19_Ren2021.h5ad",
+        "output_file_name": "Covid19_Ren2021_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      }
+    }
+  },
+  "Kidney_KPMP": {
+    "display_name": "Kidney (KPMP)",
+    "file_names": "Kidney_KPMP.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Kidney",
+    "normal_tissue": true,
+    "use_for_benchmark": false,
+    "use_for_batch_effect": true,
+    "columns": {
+      "sample": "specimen",
+      "label": "condition.l1",
+      "batch": null,
+      "cell_type_low_res": "subclass.l1",
+      "cell_type_high_res": "subclass.l3"
+    },
+    "meta_cols_keep": [
+      "specimen",
+      "condition.l1",
+      "subclass.l1",
+      "subclass.l3",
+      "condition.l2",
+      "condition.long",
+      "sex",
+      "donor_id",
+      "region.l1",
+      "region.l2",
+      "tissue_type",
+      "experiment",
+      "library",
+      "assay"
+    ],
+    "views": {
+      "batch_effect_uncorrected": {
+        "input_file_name": "Kidney_KPMP.h5ad",
+        "output_file_name": "Kidney_KPMP_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "Kidney_KPMP.h5ad",
+        "output_file_name": "Kidney_KPMP_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      }
+    }
+  },
+  "Myocardial_infarction": {
+    "display_name": "Myocardial infarction",
+    "file_names": "Myocardial_Infarc_2.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Heart",
+    "normal_tissue": false,
+    "use_for_benchmark": false,
+    "use_for_batch_effect": true,
+    "columns": {
+      "sample": "orig_ident",
+      "label": "patient_group",
+      "batch": null,
+      "cell_type_low_res": "cell_type",
+      "cell_type_high_res": "cell_subtype"
+    },
+    "meta_cols_keep": [
+      "orig_ident",
+      "patient_group",
+      "cell_type",
+      "cell_subtype",
+      "patient",
+      "patient_region_id",
+      "sampleType",
+      "batch",
+      "dissociation_s1"
+    ],
+    "views": {
+      "batch_effect_uncorrected": {
+        "input_file_name": "Myocardial_Infarc_2.h5ad",
+        "output_file_name": "Myocardial_Infarc_2_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "Myocardial_Infarc_2.h5ad",
+        "output_file_name": "Myocardial_Infarc_2_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      }
+    }
+  },
+  "Diabetes": {
+    "display_name": "Diabetes (mouse)",
+    "file_names": "diabetes.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Pancreas",
+    "normal_tissue": false,
+    "use_for_benchmark": false,
+    "use_for_batch_effect": true,
+    "columns": {
+      "sample": "donor_id",
+      "label": "disease",
+      "batch": null,
+      "cell_type_low_res": "cell_type",
+      "cell_type_high_res": "cell_type_reannotatedIntegrated"
+    },
+    "meta_cols_keep": [
+      "donor_id",
+      "disease",
+      "cell_type",
+      "cell_type_reannotatedIntegrated",
+      "sex",
+      "strain",
+      "diabetes_model",
+      "age",
+      "batch_integration",
+      "dataset",
+      "design",
+      "assay"
+    ],
+    "views": {
+      "batch_effect_uncorrected": {
+        "input_file_name": "diabetes.h5ad",
+        "output_file_name": "diabetes_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "diabetes.h5ad",
+        "output_file_name": "diabetes_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      }
+    },
+    "not_suitable_for_auto_annotation": [
+      "hitme",
+      "scatomic"
+    ]
+  },
+  "Lupus_PBMC": {
+    "display_name": "Lupus PBMC",
+    "file_names": "Lupus_Perez2022.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Blood",
+    "normal_tissue": true,
+    "use_for_benchmark": false,
+    "use_for_batch_effect": true,
+    "columns": {
+      "sample": "sampleID",
+      "label": "Status",
+      "batch": null,
+      "cell_type_low_res": "layer1",
+      "cell_type_high_res": "layer2"
+    },
+    "meta_cols_keep": [
+      "sampleID",
+      "Status",
+      "layer1",
+      "layer2",
+      "Sex",
+      "Age",
+      "pop_cov",
+      "SLE_status",
+      "batch_cov",
+      "Processing_Cohort",
+      "ind_cov_batch_cov"
+    ],
+    "views": {
+      "batch_effect_uncorrected": {
+        "input_file_name": "Lupus_Perez2022.h5ad",
+        "output_file_name": "Lupus_Perez2022_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "Lupus_Perez2022.h5ad",
+        "output_file_name": "Lupus_Perez2022_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      }
+    }
+  },
+  "Lung": {
+    "display_name": "Lung atlas (10x subset)",
+    "file_names": "lungatlas.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Lung",
+    "normal_tissue": true,
+    "use_for_benchmark": false,
+    "use_for_batch_effect": true,
+    "columns": {
+      "sample": "sample",
+      "label": "origin",
+      "batch": null,
+      "cell_type_low_res": "ann_coarse",
+      "cell_type_high_res": "ann_fine"
+    },
+    "meta_cols_keep": [
+      "sample",
+      "origin",
+      "ann_coarse",
+      "ann_fine",
+      "origin_fine",
+      "disease",
+      "sex",
+      "donor_id",
+      "tissue",
+      "dataset",
+      "study",
+      "platform",
+      "assay"
+    ],
+    "views": {
+      "batch_effect_uncorrected": {
+        "input_file_name": "lungatlas.h5ad",
+        "output_file_name": "lungatlas_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {
+          "platform": {
+            "values": [
+              "10x"
+            ],
+            "op": "in"
+          }
+        }
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "lungatlas.h5ad",
+        "output_file_name": "lungatlas_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        "subset_vars": {
+          "platform": {
+            "values": [
+              "10x"
+            ],
+            "op": "in"
+          }
+        }
+      }
+    }
+  },
+  "Parkinson": {
+    "display_name": "Parkinson",
+    "file_names": "Parkinson.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Brain",
+    "normal_tissue": false,
+    "use_for_benchmark": false,
+    "use_for_batch_effect": true,
+    "columns": {
+      "sample": "donor_id",
+      "label": "disease",
+      "batch": null,
+      "cell_type_low_res": "cell_type",
+      "cell_type_high_res": "leiden_res_5_batch_effect_uncorrected_hvg2000"
+    },
+    "meta_cols_keep": [
+      "donor_id",
+      "disease",
+      "cell_type",
+      "leiden_res_5_batch_effect_uncorrected_hvg2000",
+      "sex",
+      "tissue",
+      "tissue_type",
+      "Brain_bank",
+      "assay",
+      "PMI",
+      "RIN"
+    ],
+    "views": {
+      "batch_effect_uncorrected": {
+        "input_file_name": "Parkinson.h5ad",
+        "output_file_name": "Parkinson_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {},
+        "columns": {
+          "cell_type_high_res": "leiden_res_5_batch_effect_uncorrected_hvg2000"
+        }
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "Parkinson.h5ad",
+        "output_file_name": "Parkinson_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        "subset_vars": {},
+        "columns": {
+          "cell_type_high_res": "leiden_res_5_batch_effect_corrected_hvg2000_harmony"
+        }
+      }
+    },
+    "not_suitable_for_auto_annotation": [
+      "hitme",
+      "scatomic"
+    ]
   }
 }

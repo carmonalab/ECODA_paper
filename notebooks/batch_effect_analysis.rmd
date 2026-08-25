@@ -19,7 +19,7 @@ This script prepares datasets for downstream analysis
 
 ```{r message=FALSE, warning=FALSE}
 source("src/utils/load_all_functions.R")
-datasets <- read_datasets_json(view = "batch_effect_analysis")
+datasets <- read_datasets_json(view = "batch_effect_corrected")
 
 # Set paths
 path_nas <- file.path(

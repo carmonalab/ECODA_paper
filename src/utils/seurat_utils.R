@@ -195,7 +195,11 @@ rename_leiden_cols <- function(
   view = "benchmark_analysis",
   resolutions = c(0.1, 0.4, 2, 5, 20, 50)
 ) {
-  src <- paste0("leiden_res_", resolutions, "_", view, "_hvg2000")
+  src <- if (view == "batch_effect_corrected") {
+    paste0("leiden_res_", resolutions, "_batch_effect_corrected_hvg2000_harmony")
+  } else {
+    paste0("leiden_res_", resolutions, "_", view, "_hvg2000")
+  }
   dst <- paste0("RNA_snn_res.", resolutions)
   present <- src[src %in% colnames(obs)]
   if (length(present) > 0) {

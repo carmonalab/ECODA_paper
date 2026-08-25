@@ -76,6 +76,12 @@ def main():
         dest="cleanup",
         help="Keep per-task logs after merging",
     )
+    parser.add_argument(
+        "--filename_prefix",
+        default="execution_times_",
+        help="Prefix before <label>_<dataset> in per-task log filenames "
+             "(default: execution_times_)",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -89,19 +95,28 @@ def main():
                     task_logs.extend(
                         sorted(
                             glob.glob(
-                                str(output_dir / f"execution_times_{label}_{ds}.feather")
+                                str(
+                                    output_dir
+                                    / f"{args.filename_prefix}{label}_{ds}.feather"
+                                )
                             )
                         )
                     )
             else:
                 task_logs.extend(
-                    sorted(glob.glob(str(output_dir / f"execution_times_{label}_*.feather")))
+                    sorted(
+                        glob.glob(
+                            str(output_dir / f"{args.filename_prefix}{label}_*.feather")
+                        )
+                    )
                 )
         task_logs = sorted(set(task_logs))
     else:
-        # Per-task logs are execution_times_<label>_<ds>.feather; the merged
-        # execution_times.feather has no "_" suffix and is never matched.
-        task_logs = sorted(glob.glob(str(output_dir / "execution_times_*.feather")))
+        # The merged execution_times.feather has no task suffix and is never
+        # matched by a prefix ending in an underscore.
+        task_logs = sorted(
+            glob.glob(str(output_dir / f"{args.filename_prefix}*.feather"))
+        )
 
     out_path = output_dir / "execution_times.feather"
 

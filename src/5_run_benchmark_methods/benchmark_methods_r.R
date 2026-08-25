@@ -99,6 +99,71 @@ process_coda_fig <- function(
   return(res)
 }
 
+# Correct CLR composition by subtracting only the fitted technical batch
+# random effect. Biological labels are deliberately absent from this model.
+correct_clr_batch_lmm <- function(feat_mat, sample_meta, batch_col) {
+  if (is.null(batch_col) || !nzchar(batch_col)) {
+    stop("correct_clr_batch_lmm: batch_col is required")
+  }
+  feat_mat <- as.matrix(feat_mat)
+  if (is.null(rownames(feat_mat)) || anyDuplicated(rownames(feat_mat))) {
+    stop("correct_clr_batch_lmm: feature matrix needs unique sample rownames")
+  }
+  if (is.null(sample_meta) || !batch_col %in% colnames(sample_meta)) {
+    stop("correct_clr_batch_lmm: batch column missing from sample metadata")
+  }
+  if (!"Sample" %in% colnames(sample_meta)) {
+    stop("correct_clr_batch_lmm: sample metadata needs a Sample column")
+  }
+  sample_ids <- as.character(sample_meta[["Sample"]])
+  if (anyNA(sample_ids) || any(!nzchar(sample_ids))) {
+    stop("correct_clr_batch_lmm: missing sample or batch IDs")
+  }
+  if (anyDuplicated(sample_ids)) {
+    stop("correct_clr_batch_lmm: duplicate sample IDs in metadata")
+  }
+  if (!identical(sample_ids, rownames(feat_mat))) {
+    stop("correct_clr_batch_lmm: sample-order mismatch")
+  }
+  batch <- sample_meta[[batch_col]]
+  valid <- !is.na(batch) & nzchar(as.character(batch))
+  if (!all(valid)) {
+    stop("correct_clr_batch_lmm: missing sample or batch IDs")
+  }
+  batch <- factor(batch)
+  if (nlevels(batch) < 2) {
+    stop("correct_clr_batch_lmm: fewer than two batch levels")
+  }
+
+  corrected <- feat_mat
+  model_data <- data.frame(batch = batch)
+  for (feature in seq_len(ncol(feat_mat))) {
+    model_data$y <- as.numeric(feat_mat[, feature])
+    fit <- tryCatch(
+      lme4::lmer(y ~ 1 + (1 | batch), data = model_data, REML = TRUE),
+      error = function(e) {
+        stop("correct_clr_batch_lmm: nonconvergence for feature ",
+             colnames(feat_mat)[feature], ": ", conditionMessage(e))
+      }
+    )
+    convergence <- fit@optinfo$conv$lme4$messages
+    if (!is.null(convergence)) {
+      stop("correct_clr_batch_lmm: nonconvergence for feature ",
+           colnames(feat_mat)[feature], ": ",
+           paste(convergence, collapse = "; "))
+    }
+    random_effects <- lme4::ranef(fit)$batch[["(Intercept)"]]
+    names(random_effects) <- rownames(lme4::ranef(fit)$batch)
+    corrected[, feature] <- model_data$y - random_effects[as.character(batch)]
+  }
+  corrected <- corrected - rowMeans(corrected)
+  dimnames(corrected) <- dimnames(feat_mat)
+  if (any(abs(rowSums(corrected)) > 1e-8)) {
+    stop("correct_clr_batch_lmm: row recentering failed to restore zero sums")
+  }
+  corrected
+}
+
 # Pseudobulk processing
 process_pseudobulk_fig <- function(
   feat_mat,

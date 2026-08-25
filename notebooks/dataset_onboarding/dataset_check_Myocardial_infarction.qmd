@@ -33,38 +33,147 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import onboarding_utils as ou
+from dataset_specs import get_dataset_spec
 
-NAS_FILE = '/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/JooM_2025_41097818/output/Myocardial_Infarc_2.h5ad'
+DATA_ROOT = Path('/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/JooM_2025_41097818/output')
 NAME = 'Myocardial_infarction'
-EXPECTED = {"cells": 132888, "samples": 23, "ct_types": 11}
-
-PILOT_BIO_COL = 'patient_group'
-PILOT_BATCH_COL = 'None'
-
-ECODA_BIO_COL = 'patient_group'
-ECODA_SECONDARY_BIO = ['sampleType', 'patient_region_id']
-ECODA_BATCH_SEQ = ['batch']
-ECODA_BATCH_PREP = ['sampleType']
-
-SAMPLE_COL = 'patient'
-BIO_COL = ECODA_BIO_COL
-BATCH_COLS = ECODA_BATCH_SEQ + ECODA_BATCH_PREP
-CT_COL = 'cell_type'
-ALL_CT_COLS = ['cell_type', 'cell_subtype', 'cell_subtype2']
+SPEC = get_dataset_spec(NAME)
+NAS_FILE = str(DATA_ROOT / SPEC["file_name"])
+EXPECTED = {
+    "cells": SPEC["expected_source"]["cells"],
+    "samples": SPEC["expected_source"]["independent_units"],
+    "ct_types": None,
+}
+SAMPLE_CANDIDATES = list(SPEC["sample_candidates"])
+SAMPLE_STABLE_COLS = list(SPEC["sample_stable_cols"])
+ECODA_SECONDARY_BIO = [c for c in SAMPLE_STABLE_COLS if c != SPEC["bio_col"]]
+BIO_COL = SPEC["bio_col"]
+BATCH_COLS = list(SPEC["batch_cols"])
+ALL_CT_COLS = list(SPEC["cell_type_candidates"])
 
 ds_data = ou.load_onboarding_dataset_or_subset(NAME, NAS_FILE, HERE)
 mode = ds_data["mode"]
 sub = ds_data["sub"]
 adata = ds_data["adata"]
-meta_info = ds_data["meta"]
+meta_info = ds_data["meta"] or {}
+
+if mode == "nas" and SPEC.get("subset_vars"):
+    subset_mask = pd.Series(True, index=adata.obs_names)
+    for subset_col, subset_rule in SPEC["subset_vars"].items():
+        if subset_col not in adata.obs.columns:
+            raise KeyError(f"{NAME}: subset_vars references missing obs column {subset_col!r}")
+        values = subset_rule.get("values", [])
+        col_mask = adata.obs[subset_col].isin(values)
+        subset_mask &= col_mask if subset_rule.get("op", "in") == "in" else ~col_mask
+    adata = adata[subset_mask]
+
+if mode == "nas":
+    sample_audit_df, sample_selection = ou.audit_sample_candidates(
+        adata.obs,
+        SAMPLE_CANDIDATES,
+        SAMPLE_STABLE_COLS,
+        SPEC["expected_source"]["independent_units"],
+    )
+    ct_sample = SPEC["registry_roles"]["sample"] if SPEC["registry_roles"]["sample"] in adata.obs.columns else (sample_selection.get("selected") or SAMPLE_CANDIDATES[0])
+    ct_column_audit_df, ct_label_audit_df, ct_selection = ou.audit_cell_type_candidates(
+        adata.obs, ALL_CT_COLS, ct_sample, BIO_COL, BATCH_COLS
+    )
+    registry_gate = ou.build_registry_gate(
+        SPEC,
+        adata.obs,
+        sample_audit_df,
+        sample_selection,
+        ct_column_audit_df,
+        ct_label_audit_df,
+        ct_selection,
+    )
+else:
+    sample_payload = meta_info.get("sample_audit", {})
+    sample_audit_df = pd.DataFrame(sample_payload.get("candidates", []))
+    sample_selection = sample_payload.get("selection", {})
+    ct_column_audit_df = pd.DataFrame(meta_info.get("cell_type_column_audit", []))
+    ct_label_audit_df = pd.DataFrame(meta_info.get("cell_type_label_audit", []))
+    ct_selection = meta_info.get("cell_type_selection", {})
+    registry_gate = meta_info.get("registry_gate", {"status": "MISSING", "reasons": ["registry_gate missing"]})
+
+selected = registry_gate.get("selected") or {}
+SAMPLE_COL = selected.get("sample") or SAMPLE_CANDIDATES[0]
+REGISTRY_CT_COL = selected.get("cell_type_high_res") or selected.get("cell_type_low_res") or ALL_CT_COLS[0]
+role_obs = adata.obs if mode == "nas" else sub.obs
+CT_COL = REGISTRY_CT_COL if REGISTRY_CT_COL in role_obs.columns else next((c for c in ALL_CT_COLS if c in role_obs.columns), REGISTRY_CT_COL)
+diagnostic_batch_cols = [c for c in BATCH_COLS if role_obs.get(c) is not None]
 
 if mode == "nas" or sub is None:
-    sub, _ = ou.subset_by_samples(adata, sample_col=SAMPLE_COL, bio_col=BIO_COL, batch_cols=BATCH_COLS, ct_col=CT_COL)
+    if registry_gate.get("status") not in {"PASS", "PASS_PENDING_DERIVED_ANNOTATION"}:
+        raise RuntimeError(f"{NAME}: cannot create a diagnostic subset without a passing declared-role gate")
+    sub, _ = ou.subset_by_samples(
+        adata,
+        sample_col=SAMPLE_COL,
+        bio_col=BIO_COL,
+        batch_cols=diagnostic_batch_cols,
+        ct_col=CT_COL,
+    )
+
 ```
 
+## 0. Full-file Registry Gate
+
+> The registry decision below is computed on the complete `.obs` table before
+> the diagnostic subset. Subset plots and embeddings cannot override it.
+
+```{python}
+pd.DataFrame([{
+    "scope": "full file .obs",
+    "registry_gate": registry_gate.get("status"),
+    "declared_roles": registry_gate.get("selected"),
+    "annotation_source": registry_gate.get("registry_roles", {}).get("annotation_source"),
+    "meta_cols_keep": registry_gate.get("meta_cols_keep"),
+    "reasons": registry_gate.get("reasons"),
+    "pending_reasons": registry_gate.get("pending_reasons"),
+    "stable_field_conflict_warnings": registry_gate.get("stable_field_conflict_warnings"),
+    "heuristic_warnings": registry_gate.get("heuristic_warnings"),
+    "decision_notes": SPEC.get("decision_notes"),
+    "subset_filter": SPEC.get("subset_vars", {}),
+    "filter_audit": meta_info.get("filter_summary", {}),
+}])
+```
+
+### Sample Candidate Invariance and Nesting
+
+```{python}
+sample_audit_df
+```
+
+```{python}
+pd.DataFrame(sample_selection.get("pairwise", []))
+```
+
+### Annotation Column and Hierarchy Gates
+
+```{python}
+ct_column_audit_df
+```
+
+```{python}
+pd.DataFrame(ct_selection.get("hierarchy", []))
+```
+
+### Per-label Coverage, Restriction, and Leakage Warnings
+
+```{python}
+ct_label_audit_df
+```
+
+```{python}
+pd.DataFrame(ct_selection.get("restriction_warnings", []))
+```
+
+```{python}
+pd.DataFrame(ct_selection.get("leakage_warnings", []))
+```
 ## 1. Study Summary & Metadata Categorization
 
-> **Myocardial Infarction (MI-2)** -- Kuppe et al. 2022, *Nature* 608(7924):766-777, PMID 35948637. Spatial and single-cell atlas of human myocardial infarction: 132,888 single cells across 23 patients covering distinct disease stages (`patient_group`: `Control`, `Myogenic`, `Fibrotic`, `Ischemic`) and two distinct library batches (`batch`: `A` vs `B`).
+> **Myocardial Infarction (MI-2)** -- Kuppe et al. 2022, *Nature* 608(7924):766-777, PMID 35948637. Spatial and single-cell atlas of human myocardial infarction: 132,888 single cells across 23 samples (from 19 patients) covering distinct disease stages (`patient_group`: `Control`, `Myogenic`, `Fibrotic`, `Ischemic`) and two distinct library batches (`batch`: `A` vs `B`).
 
 ### Metadata Categories Summary
 
@@ -74,7 +183,7 @@ cat_df = ou.categorize_obs_columns(sub.obs, {
     "bio_secondary": ECODA_SECONDARY_BIO,
     "batch_candidates": BATCH_COLS,
     "cell_types": ALL_CT_COLS,
-    "sample_ids": [SAMPLE_COL, 'sample'],
+    "sample_ids": SAMPLE_CANDIDATES,
 })
 concise_df = ou.summarize_obs_categories(cat_df)
 concise_df
@@ -86,13 +195,16 @@ concise_df
 cat_df
 ```
 
-### Cell Type Harmonization & Granularity Evaluation
+### Diagnostic Subset Annotation Display
+
+> Harmonization and restriction gates above use the full file. This table is
+> subset-scoped only and is retained for visual diagnostics.
 
 ```{python}
-harm_df = ou.cell_type_harmonization_check(
-    sub.obs, ALL_CT_COLS, batch_col=BATCH_COLS[0] if BATCH_COLS else None, sample_col=SAMPLE_COL
-)
-harm_df
+pd.DataFrame({
+    "column": [c for c in ALL_CT_COLS if c in sub.obs.columns],
+    "subset_unique_labels": [int(sub.obs[c].nunique(dropna=True)) for c in ALL_CT_COLS if c in sub.obs.columns],
+})
 ```
 
 ### Paper Table Comparison
@@ -243,12 +355,12 @@ for line in json_summary.get("verdict", []):
 
 ---
 
-## 7. Executive Recommendation
+## 7. Registry Decision
 
-::: {.callout-note}
-### Pipeline Assignment Recommendation
-- **Dataset:** Myocardial Infarction (Kuppe et al. 2022)
-- **Status:** Evaluated on unintegrated raw counts.
-- **Suitable for Auto-Annotation:** Yes
-- **Assignment:** Candidate for **Batch Effect Analysis** (evaluating library batch 'A' vs 'B' against `patient_group`).
-:::
+```{python}
+print(f"Full-file registry gate: {registry_gate.get('status')}")
+print(f"Initial registry mode: {SPEC['initial_registry_mode']}")
+print(f"Suitable for auto-annotation: {not SPEC['not_suitable_for_auto_annotation']}")
+for reason in registry_gate.get("reasons", []):
+    print(f"- {reason}")
+```

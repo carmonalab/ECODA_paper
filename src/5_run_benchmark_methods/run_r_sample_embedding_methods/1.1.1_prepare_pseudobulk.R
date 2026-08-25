@@ -34,10 +34,29 @@ force <- isTRUE(args[["force"]]) || identical(args[["force"]], "TRUE")
 
 config <- read_datasets_json(args$config_path, view = args$view)
 ds <- args$ds_name
+analysis_pass <- args[["analysis_pass"]]
+if (!is.null(analysis_pass) && !analysis_pass %in% c("uncorrected", "corrected")) {
+  stop("Unknown analysis pass: ", analysis_pass)
+}
+cache_stem <- if (is.null(analysis_pass)) {
+  ds
+} else {
+  paste0(ds, "_batch_effect_", analysis_pass)
+}
 entry <- config[[ds]]
 if (is.null(entry)) {
   stop("Dataset '", ds, "' not found in ", args$config_path)
 }
+batch_col <- if (!is.null(analysis_pass) && analysis_pass == "corrected") {
+  if (is.null(entry$batch_col)) {
+    stop("corrected batch-effect view requires a confirmed columns.batch")
+  }
+  entry$batch_col
+} else {
+  NULL
+}
+blind_mode <- is.null(analysis_pass) || analysis_pass == "uncorrected"
+correct_batch_mode <- identical(analysis_pass, "corrected")
 
 h5ad_path <- get_h5ad_path(config, ds, args$view, args$input_dir)
 if (!file.exists(h5ad_path)) {
@@ -62,7 +81,19 @@ seurat <- load_benchmark_seurat(adata, obs, sample_col = sample_col,
 # predate the python change (e.g. Adams), breaking the bundle label match.
 hvg_rank_genes <- get_hvg_rank_genes(adata)
 
-pending <- pb_variants_missing(args$pseudobulk_dir, ds, force)
+requested_variants <- if (is.null(analysis_pass)) {
+  PB_VARIANT_NAMES
+} else {
+  "hvg2000"
+}
+pending <- requested_variants[
+  !file.exists(
+    file.path(
+      args$pseudobulk_dir,
+      paste0(cache_stem, "_pseudobulk_", requested_variants, ".rds")
+    )
+  ) | force
+]
 
 if (length(pending) > 0) {
   message("Computing pseudobulk variants: ", paste(pending, collapse = ", "))
@@ -70,10 +101,13 @@ if (length(pending) > 0) {
     seurat,
     sample_col = sample_col,
     hvg_rank_genes = hvg_rank_genes,
-    variants = pending
+    variants = pending,
+    batch_col = batch_col,
+    blind = blind_mode,
+    correct_batch = correct_batch_mode
   )
   for (v in names(variants)) {
-    f <- file.path(args$pseudobulk_dir, paste0(ds, "_pseudobulk_", v, ".rds"))
+    f <- file.path(args$pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds"))
     save_rds_atomic(variants[[v]], f)
     log_exec_row(ds, paste0("prepare_pseudobulk_", v),
                  variants[[v]]$time_secs, args$log_file,
@@ -81,11 +115,9 @@ if (length(pending) > 0) {
     message("  Saved: ", f, " (", round(variants[[v]]$time_secs, 1), "s)")
   }
 } else {
-  # Everything cached: re-emit the stored timings so a resume after an
-  # aborted run does not lose the prep exec-log rows (the merge is scoped to
-  # the current run's labels x datasets).
-  for (v in PB_VARIANT_NAMES) {
-    f <- file.path(args$pseudobulk_dir, paste0(ds, "_pseudobulk_", v, ".rds"))
+  # Everything requested is cached: re-emit stored timings on resume.
+  for (v in requested_variants) {
+    f <- file.path(args$pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds"))
     cached <- readRDS(f)
     log_exec_row(ds, paste0("prepare_pseudobulk_", v),
                  cached$time_secs, args$log_file,

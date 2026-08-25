@@ -6,6 +6,8 @@ read_datasets_json <- function(path = "datasets.json", view = NULL) {
   for (ds_name in names(datasets)) {
     ds <- datasets[[ds_name]]
     views <- ds[["views"]]
+    base_columns <- ds[["columns"]]
+    if (is.null(base_columns)) base_columns <- list()
 
     if (is.null(views)) next
 
@@ -17,11 +19,14 @@ read_datasets_json <- function(path = "datasets.json", view = NULL) {
       output_file <- v[["output_file_name"]]
       if (is.null(output_file)) next
 
+      view_columns <- v[["columns"]]
+      if (is.null(view_columns)) view_columns <- list()
       matched_views[[v_name]] <- list(
         view_name = v_name,
         input_file = v[["input_file_name"]],
         output_file = output_file,
-        subset_vars = v[["subset_vars"]]
+        subset_vars = v[["subset_vars"]],
+        columns = modifyList(base_columns, view_columns)
       )
     }
 
@@ -29,7 +34,7 @@ read_datasets_json <- function(path = "datasets.json", view = NULL) {
 
     first_v_name <- names(matched_views)[1]
     first_v <- matched_views[[first_v_name]]
-    columns <- ds[["columns"]]
+    columns <- first_v[["columns"]]
 
     entry <- list(
       # dataset-level fields (order mirrors datasets.json)

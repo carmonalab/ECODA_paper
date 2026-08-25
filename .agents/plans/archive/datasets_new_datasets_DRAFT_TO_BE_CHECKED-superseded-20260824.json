@@ -1,0 +1,326 @@
+"Alzheimer": {
+    "display_name": "Alzheimer (SEA-AD)",
+    "file_names": "SEAAD_Alzheimer.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Brain",
+    "normal_tissue": false,
+    "use_for_benchmark": true,
+    "use_for_batch_effect": false,
+    "not_suitable_for_auto_annotation": [
+        "hitme",
+        "scatomic"
+    ],
+    "columns": {
+        "sample": "donor_id",
+        "label": "Cognitive status",
+        "batch": "assay",
+        "cell_type_low_res": "Class",
+        "cell_type_high_res": "Supertype"
+    },
+    "meta_cols_keep": [
+        "donor_id",
+        "Cognitive status",
+        "disease",
+        "Class",
+        "Subclass",
+        "Supertype",
+        "assay",
+        "PMI",
+        "Brain_region",
+        "APOE4 status"
+    ],
+    "views": {
+        "benchmark_analysis": {
+            "input_file_name": "SEAAD_Alzheimer.h5ad",
+            "output_file_name": "SEAAD_Alzheimer_benchmark_analysis_ECODAprocessed.h5ad",
+            "subset_vars": {}
+        }
+    }
+},
+"Breast_cancer": {
+    "display_name": "Breast cancer (Wu 2021)",
+    "file_names": "BreastCncr_processed.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Breast tumor",
+    "normal_tissue": false,
+    "use_for_benchmark": true,
+    "use_for_batch_effect": true,
+    "columns": {
+        "sample": "donor_id",
+        "label": "disease",
+        "batch": "sequencing_platform",
+        "cell_type_low_res": "broad_cell_type",
+        "cell_type_high_res": "cell_type"
+    },
+    "meta_cols_keep": [
+        "donor_id",
+        "sample_id",
+        "disease",
+        "broad_cell_type",
+        "cell_type",
+        "author_cell_type",
+        "sequencing_platform",
+        "sample_preservation_method",
+        "suspension_dissociation_time"
+    ],
+    "views": {
+        "benchmark_analysis": {
+            "input_file_name": "BreastCncr_processed.h5ad",
+            "output_file_name": "BreastCncr_processed_benchmark_analysis_ECODAprocessed.h5ad",
+            "subset_vars": {}
+        }
+    }
+},
+"Covid19_PBMC": {
+    "display_name": "Covid-19 PBMC (Ren 2021)",
+    "file_names": "Covid19_Ren2021.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Blood",
+    "normal_tissue": true,
+    "use_for_benchmark": true,
+    "use_for_batch_effect": true,
+    "columns": {
+        "sample": "sampleID",
+        "label": "CoVID-19 severity",
+        "batch": "Single cell sequencing platform",
+        "cell_type_low_res": "majorType",
+        "cell_type_high_res": "celltype"
+    },
+    "meta_cols_keep": [
+        "sampleID",
+        "PatientID",
+        "CoVID-19 severity",
+        "majorType",
+        "celltype",
+        "Single cell sequencing platform",
+        "datasets",
+        "City",
+        "Sample type"
+    ],
+    "views": {
+        "benchmark_analysis": {
+            "input_file_name": "Covid19_Ren2021.h5ad",
+            "output_file_name": "Covid19_Ren2021_benchmark_analysis_ECODAprocessed.h5ad",
+            "subset_vars": {}
+        }
+    }
+},
+"Diabetes": {
+    "display_name": "Diabetes mouse islet (Hrovatin 2023)",
+    "file_names": "diabetes.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Pancreas",
+    "normal_tissue": false,
+    "use_for_benchmark": true,
+    "use_for_batch_effect": true,
+    "not_suitable_for_auto_annotation": [
+        "hitme",
+        "scatomic"
+    ],
+    "columns": {
+        "sample": "dataset__design__sample",
+        "label": "disease",
+        "batch": "dataset",
+        "cell_type_low_res": "cell_type",
+        "cell_type_high_res": "cell_type_reannotatedIntegrated"
+    },
+    "meta_cols_keep": [
+        "dataset__design__sample",
+        "donor_id",
+        "disease",
+        "cell_type",
+        "cell_type_reannotatedIntegrated",
+        "dataset",
+        "design",
+        "assay",
+        "diet",
+        "stage"
+    ],
+    "views": {
+        "benchmark_analysis": {
+            "input_file_name": "diabetes.h5ad",
+            "output_file_name": "diabetes_benchmark_analysis_ECODAprocessed.h5ad",
+            "subset_vars": {}
+        }
+    }
+},
+"Kidney_KPMP": {
+    "display_name": "Kidney KPMP (Lake 2023)",
+    "file_names": "Kidney_KPMP.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Kidney",
+    "normal_tissue": true,
+    "use_for_benchmark": true,
+    "use_for_batch_effect": true,
+    "columns": {
+        "sample": "specimen",
+        "label": "condition.l1",
+        "batch": "library",
+        "cell_type_low_res": "subclass.l1",
+        "cell_type_high_res": "subclass.l3"
+    },
+    "meta_cols_keep": [
+        "specimen",
+        "donor_id",
+        "condition.l1",
+        "condition.l2",
+        "subclass.l1",
+        "subclass.l2",
+        "subclass.l3",
+        "subclass.full",
+        "major_cell_types",
+        "library",
+        "region.l1",
+        "sample_tissue_type"
+    ],
+    "views": {
+        "benchmark_analysis": {
+            "input_file_name": "Kidney_KPMP.h5ad",
+            "output_file_name": "Kidney_KPMP_benchmark_analysis_ECODAprocessed.h5ad",
+            "subset_vars": {}
+        }
+    }
+},
+"Lupus_PBMC": {
+    "display_name": "Lupus PBMC (Perez 2022)",
+    "file_names": "Lupus_Perez2022.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Blood",
+    "normal_tissue": true,
+    "use_for_benchmark": true,
+    "use_for_batch_effect": true,
+    "columns": {
+        "sample": "sampleID",
+        "label": "Status",
+        "batch": "batch_cov",
+        "cell_type_low_res": "cell_types",
+        "cell_type_high_res": "ct_cov"
+    },
+    "meta_cols_keep": [
+        "sampleID",
+        "ind_cov",
+        "Status",
+        "SLE_status",
+        "cell_types",
+        "ct_cov",
+        "batch_cov",
+        "Processing_Cohort"
+    ],
+    "views": {
+        "benchmark_analysis": {
+            "input_file_name": "Lupus_Perez2022.h5ad",
+            "output_file_name": "Lupus_Perez2022_benchmark_analysis_ECODAprocessed.h5ad",
+            "subset_vars": {}
+        }
+    }
+},
+"Lung": {
+    "display_name": "Lung Atlas (Sikkema 2023)",
+    "file_names": "lungatlas.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Lung",
+    "normal_tissue": false,
+    "use_for_benchmark": true,
+    "use_for_batch_effect": true,
+    "columns": {
+        "sample": "sample",
+        "label": "disease",
+        "batch": "dataset",
+        "cell_type_low_res": "ann_coarse",
+        "cell_type_high_res": "cell_type_major"
+    },
+    "meta_cols_keep": [
+        "sample",
+        "donor_id",
+        "disease",
+        "origin",
+        "origin_fine",
+        "ann_coarse",
+        "cell_type_major",
+        "cell_type",
+        "ann_fine",
+        "dataset",
+        "study",
+        "platform",
+        "assay"
+    ],
+    "views": {
+        "benchmark_analysis": {
+            "input_file_name": "lungatlas.h5ad",
+            "output_file_name": "lungatlas_benchmark_analysis_ECODAprocessed.h5ad",
+            "subset_vars": {}
+        }
+    }
+},
+"Myocardial_infarction": {
+    "display_name": "Myocardial infarction (Kuppe 2022)",
+    "file_names": "Myocardial_Infarc_2.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Heart",
+    "normal_tissue": false,
+    "use_for_benchmark": true,
+    "use_for_batch_effect": true,
+    "columns": {
+        "sample": "patient",
+        "label": "patient_group",
+        "batch": "batch",
+        "cell_type_low_res": "cell_type",
+        "cell_type_high_res": "cell_subtype"
+    },
+    "meta_cols_keep": [
+        "patient",
+        "patient_region_id",
+        "patient_group",
+        "sampleType",
+        "cell_type",
+        "cell_subtype",
+        "cell_subtype2",
+        "batch"
+    ],
+    "views": {
+        "benchmark_analysis": {
+            "input_file_name": "Myocardial_Infarc_2.h5ad",
+            "output_file_name": "Myocardial_Infarc_2_benchmark_analysis_ECODAprocessed.h5ad",
+            "subset_vars": {}
+        }
+    }
+},
+"Parkinson": {
+    "display_name": "Parkinson (Kamath 2022)",
+    "file_names": "Parkinson.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Brain",
+    "normal_tissue": false,
+    "use_for_benchmark": true,
+    "use_for_batch_effect": false,
+    "not_suitable_for_auto_annotation": [
+        "hitme",
+        "scatomic"
+    ],
+    "columns": {
+        "sample": "donor_id",
+        "label": "disease",
+        "batch": "Brain_bank",
+        "cell_type_low_res": "derived_class2",
+        "cell_type_high_res": "cell_type"
+    },
+    "meta_cols_keep": [
+        "donor_id",
+        "disease",
+        "tissue",
+        "cell_type",
+        "derived_class2",
+        "Brain_bank",
+        "assay",
+        "PMI",
+        "RIN",
+        "path_braak_lb"
+    ],
+    "views": {
+        "benchmark_analysis": {
+            "input_file_name": "Parkinson.h5ad",
+            "output_file_name": "Parkinson_benchmark_analysis_ECODAprocessed.h5ad",
+            "subset_vars": {}
+        }
+    }
+}

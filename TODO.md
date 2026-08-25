@@ -51,7 +51,7 @@ Implementation plan and task tracking for manuscript revisions, benchmark extens
 - [x] **CombinedPBMC Cohort:** Staging and combination of Stephenson + GongSharma + Zhu.
 - [x] **Batch Metadata Tracking:** Integrated `columns.batch` in `datasets.json` (Joanito `seqtec`, Kfoury `cells_lowres`).
 - [ ] **4.1 Generic ECODA Batch-Associated Cell Type Removal:**
-  - Implement statistical test (t-test/Wilcoxon for 2 batches, ANOVA/Kruskal-Wallis for >2 batches, $p < 0.05$) to identify and optionally exclude batch-confounded cell types.
+  - Implement statistical test (t-test/Wilcoxon for 2 batches, ANOVA/Kruskal-Wallis for >2 batches, $p < 0.05$) to identify and optionally exclude batch-confounded cell types. (will only be shown for information only but is not used for analysis as it is superseded by a more sophisticated method using lme4 as explained in NOTES.md).
 - [ ] **4.2 Multi-Batch Benchmark Suite (Priority 1 — `batch_effect_analysis.rmd`):**
   - Implement two-pass benchmark evaluation:
     1. **Pass 1 (Uncorrected):** Run all benchmark methods on raw counts/embeddings. Evaluate metadata collinearity (NMI) and distance matrix PERMANOVA. Conduct cross-modality confounding checks (expression vs. composition) on partially confounded cohorts (e.g. `Site`/`Institution`). Finalize modality-appropriate batch variables based on uncorrected results.
@@ -73,30 +73,18 @@ Implementation plan and task tracking for manuscript revisions, benchmark extens
 
 ## Phase 5 — New Dataset Onboarding (BIB Study Cohorts)
 
-Reference plan: [`.agents/plans/dataset_onboarding_and_debug_overhaul.md`](.agents/plans/dataset_onboarding_and_debug_overhaul.md). Feasibility details: [`new_datasets_to_implement.md`](new_datasets_to_implement.md).
+Reference plan: [`.agents/plans/archive/implementation_plan_new_datasets_json-superseded-20260824.md`](.agents/plans/archive/implementation_plan_new_datasets_json-superseded-20260824.md). The checked-in authorities are `datasets.json`, `notebooks/dataset_onboarding/dataset_specs.py`, and regenerated audit JSON.
 
-- [x] **5.1 Data Sources & Catalog:**
-  - Identified Zenodo and CellxGene source locations for 9 target cohorts (Alzheimer, Breast Cancer, Covid-19 PBMC, Diabetes, Kidney KPMP, Lupus PBMC, Lung, Myocardial Infarction, Parkinson).
-- [x] **5.2 HPC Download Pipeline (T1 & T1.1):**
-  - Implemented `notebooks/dataset_onboarding/download_datasets_hpc.sh` and `run_download_worker.sh` (resumable `curl -C -`, Zenodo MD5 verification, CellxGene size checks, and automated NAS synchronization).
-- [x] **5.3 Diagnostic Onboarding Tooling (T3.1):**
-  - Scaffolded 9 per-dataset Quarto check notebooks (`dataset_check_<Name>.qmd`) + `_debug`.
-  - Implemented `onboarding_utils.py` (sample-first subsetting, count validation, crosstabs, NMI collinearity matrix, compositional distance PERMANOVA) and standalone `onboarding_metrics.R` (cell-level LISI on unintegrated PCA).
-- [x] **5.4 Annotation Suitability Guardrails:**
-  - Added `not_suitable_for_auto_annotation` flag handling in `benchmark_pipeline.R` and Figure 3 / Supp Fig 19.
-- [ ] **5.5 Execute HPC Downloads [User Action]:**
-  - Run `download_datasets_hpc.sh` on HPC to transfer datasets to scratch and sync to NAS.
-- [x] **5.6 Run Diagnostic Check Notebooks & Count Validation:**
-  - Rendered all 10 onboarding notebooks with complete diagnostic suite: unintegrated PCA/UMAP LISI batch mixing + CLR abundance boxplots + NMI metadata collinearity matrix + compositional distance PERMANOVA variance decomposition.
-- [ ] **5.7 Dataset Review & Registration Checkpoint [User Decision]:**
-  - Decide cohort categorization (benchmark vs. batch-effect vs. negative control vs. exclude).
-  - Register approved cohorts in `datasets.json` (**ask user before editing**).
-- [ ] **5.8 Diabetes Mouse-Gene Handling (Conditional):**
-  - Add mouse gene ortholog mapping to `gene_utils.py` if Diabetes is approved for benchmark inclusion.
-- [ ] **5.9 Pipeline Rollout across Approved Cohorts:**
-  - Execute stage -> preprocess -> annotate -> benchmark array pipeline for new datasets.
-
----
+- [x] **5.1 Data sources and catalog:** Identify the nine Joodaki et al. cohorts and canonical source files.
+- [x] **5.2 HPC download pipeline:** Keep resumable download, checksum, and NAS synchronization gates.
+- [x] **5.3 Declared sample and annotation roles:** Record the user-confirmed sample, label, low/high tiers, annotation source, decision notes, and audit-warning policy in `dataset_specs.py`.
+- [x] **5.4 Derived annotation gate:** Keep HiTME/Leiden roles at `PASS_PENDING_DERIVED_ANNOTATION` until processed h5ad evidence proves presence, nonzero coverage, cardinality ≥2, and the selected hierarchy.
+- [x] **5.5 Lung registry subset:** Apply exact `platform == "10x"` filtering before audits; persist pre/post cell/sample counts, mask expression, assay-mask comparison, and the filtered `ann_coarse → ann_fine` hierarchy.
+- [ ] **5.6 Regenerate full-file audits:** Run all nine cohorts on Bamboo, pull metadata, and require exact agreement with `datasets.json`; no stale heuristic choice may activate a registry entry.
+- [x] **5.7 Two-pass registry contract:** Declare `batch_effect_uncorrected` and `batch_effect_corrected` with pass-qualified outputs. New cohorts remain `use_for_benchmark=false`, `use_for_batch_effect=true`, and `columns.batch=null`; corrected invocation fails closed.
+- [x] **5.8 Pass-aware preprocessing and runners:** Route exact views/passes, isolate scratch/NAS artifacts, enforce the fixed method allow-list, and never reuse benchmark-named batch artifacts.
+- [ ] **5.9 Uncorrected evidence checkpoint:** Run the ordered cohort suite, generate nine candidate CSVs plus `batch_candidate_review.csv`, and stop for one explicit technical-batch confirmation per new cohort.
+- [ ] **5.10 Corrected execution after confirmation:** Validate the confirmed columns, run the paired corrected suite, verify pass-separated checksums/keys, update the mapping, and remove only the five authorized obsolete files.
 
 ## Phase 6 — Additional Reviewer Analyses
 

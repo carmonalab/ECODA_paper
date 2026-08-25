@@ -1,140 +1,170 @@
 # Dataset onboarding — PILOT-GM-VAE study (Phase 5)
 
-Reviewer-requested additional datasets from Joodaki et al. 2025, *Brief
-Bioinform* 26(5):bbaf547 (PMID 41097818). Author-provided files are downloaded
-to the NAS folder `JooM_2025_41097818/output/` and checked with one
-`dataset_check_<Name>.qmd` notebook per dataset before `datasets.json`
-registration (user approval required) and pipeline rollout.
+The nine Joodaki et al. 2025 cohorts are registered from full-file metadata
+audits. The authoritative sources are:
 
-Sources: Zenodo records 8370081 (Part 1, latest version of 7435911 → 7956950 →
-8370081 — byte-identical files), 7957118 (Part 2), 14615923 (Part 3); CellxGene
-for Alzheimer (SEA-AD) and Parkinson. Excluded: Kidney cancer, PDAC, MI(1)
-(duplicate of MI-2), follicular lymphoma. Full feasibility table (colors,
-comments): `new_datasets_to_implement.md` (Excel source
-`/Users/christianhalter/Desktop/ECODA_PAPER_DATASETS.xlsx`). Implementation
-plan: `.agents/plans/dataset_onboarding_and_debug_overhaul.md`.
+- `datasets.json` for inputs, subsets, views, output names, and activation flags;
+- `notebooks/dataset_onboarding/dataset_specs.py` for user-confirmed roles,
+  candidate technical columns, decision notes, and annotation provenance;
+- regenerated `<key>_meta.json` audit files for observed counts, hierarchy,
+  conflict warnings, and gate evidence.
 
-## Download (HPC route first — user runs; Mac→NAS script is the fallback)
+Provisional root drafts are archived only for provenance. They are not registry
+inputs.
 
-The Mac NAS mount is unstable and the Mac disk is tight (~108 GB free vs
-~150–180 GB of files), so downloads go over the **HPC** into BeeGFS scratch
-(`${HPC_SCRATCH_DIR}/_downloads/`, 1.1 PB, no per-user size quota) and a
-login-node tail rsyncs them to the NAS folder
-`JooM_2025_41097818/output/`:
+## Canonical user-confirmed roles
 
-```bash
-cd "${HOME}/ECODA_paper" && git pull        # prerequisite: get the new scripts
-# from the HPC login node (repo root):
-./notebooks/dataset_onboarding/download_datasets_hpc.sh                  # all 8 keys (array job, 3 concurrent)
-./notebooks/dataset_onboarding/download_datasets_hpc.sh --only breast    # one key (resumable)
-./notebooks/dataset_onboarding/download_datasets_hpc.sh --sync-only <job-id>  # resume: gate + NAS sync tail only
-./notebooks/dataset_onboarding/download_datasets_hpc.sh --login-node     # fallback if compute nodes lack egress
-```
+| Key | Sample | Label | Low tier | High tier | Annotation source |
+|---|---|---|---|---|---|
+| Alzheimer | `donor_id` | `Cognitive status` | `Subclass` | `Supertype` | author / author |
+| Breast_cancer | `sample_id` | `disease` | `broad_cell_type` | `author_cell_type` | author / author |
+| Covid19_PBMC | `sampleID` | `CoVID-19 severity` | `majorType` | `celltype` | author / author |
+| Diabetes | `donor_id` | `disease` | `cell_type` | `cell_type_reannotatedIntegrated` | author / author |
+| Kidney_KPMP | `specimen` | `condition.l1` | `subclass.l1` | `subclass.l3` | author / author |
+| Lung | `sample` | `origin` | `ann_coarse` | `ann_fine` | author / author |
+| Lupus_PBMC | `sampleID` | `Status` | `layer1` | `layer2` | HiTME / HiTME |
+| Myocardial_infarction | `orig_ident` | `patient_group` | `cell_type` | `cell_subtype` | author / author |
+| Parkinson | `donor_id` | `disease` | `cell_type` | Leiden res-5 | author / Leiden |
 
-Compute-node egress is smoke-tested first (debug-cpu curl against real
-object URLs — a bucket-root HEAD would 403 and falsely fail); on failure the
-submitter automatically runs the login-node path (`nice -n 19` +
-`--limit-rate`). Tasks are `curl -L -C -` resumable and verified per key
-(Zenodo md5s; CellxGene files size-verified via HEAD content-length — no
-`.h5ad.md5` sidecar exists and the S3 ETag is a multipart digest; computed
-md5 recorded as informational); tar entries extract only the needed
-h5ads and the tars are deleted. Progress + per-key md5s + resume commands are
-logged to `notebooks/dataset_onboarding/download_log.md` (commit from the
-Mac). The original `download_datasets.sh` (Mac→NAS, sequential) is kept as a
-NAS-stable fallback only.
+The previous heuristic choice, stable-field conflicts, and aggregation warnings
+remain in each audit. They explain the decision; they do not silently replace
+the declared role. Missing IDs, standardized-ID collisions, missing labels,
+missing retained metadata, and failed declared author hierarchies remain hard
+failures. HiTME and Leiden columns are produced-output roles and remain pending
+until processed h5ad evidence validates them.
 
-## Fast Workflow: Generate Subsets on HPC & Render Locally on Mac
+## Full-file audit workflow
 
-Reading 53 GB `.h5ad` files over a network NAS mount incurs heavy SMB random-seek latency. To achieve fast, sub-second loads and renders on your Mac:
-
-### Step 1: Generate diagnostic subsets on HPC scratch (~1–2 minutes)
-On the HPC login node or compute node (where the ~195 GB datasets sit on BeeGFS scratch):
+Source files are staged to `${HPC_SCRATCH_DIR}/_downloads/` on Bamboo and audit
+metadata/subsets are written to its `subsets/` directory:
 
 ```bash
-cd "${HOME}/ECODA_paper" && git pull
-./notebooks/dataset_onboarding/run_subset_hpc.sh               # runs across all 9 datasets
-# or for a single dataset:
-./notebooks/dataset_onboarding/run_subset_hpc.sh --only alzheimer
+cd "${HOME}/ECODA_paper"
+./notebooks/dataset_onboarding/run_subset_hpc.sh
 ```
 
-This runs `create_subsets_hpc.py` to perform the full-file `count_sanity_check()`, extract full metadata summaries (`<Name>_meta.json`), and write lightweight diagnostic `.h5ad` subsets (~15–40 MB each, ~200 MB total) into `${HPC_SCRATCH_DIR}/_downloads/subsets/`.
+The worker applies a spec's `subset_vars` before sample and annotation audits.
+It records pre-filter and post-filter cell/sample counts plus the exact filter
+expression. Diagnostic subsets are for reports only; they cannot promote a
+failed gate.
 
-### Step 2: Pull the lightweight subsets to your Mac (~200 MB)
-From the repo root on your local Mac:
+Pull evidence and compare it with the registry:
 
 ```bash
 mkdir -p data/new_dataset_checks/subsets
-rsync -avP bamboo:scratch/ECODA_paper/_downloads/subsets/ data/new_dataset_checks/subsets/
+rsync -avP bamboo:scratch/ECODA_paper/_downloads/subsets/ \
+  data/new_dataset_checks/subsets/
+pixi run python notebooks/dataset_onboarding/_debug_validation.py \
+  --metadata-only \
+  --registry-audit-dir data/new_dataset_checks/subsets \
+  --config datasets.json
 ```
 
-### Step 3: Render check notebooks instantly on your Mac
-With the local subsets in place, notebooks load in <0.2s and render completely in ~5–10s without touching the network:
+For derived annotations, pass the processed output root. The validator writes
+and then consumes `<key>_postprocess_gate.json`; it never treats raw-audit
+absence as processed annotation evidence:
 
 ```bash
-PATH="$PWD/.pixi/envs/default/bin:$PATH" quarto render notebooks/dataset_onboarding/dataset_check_Alzheimer.qmd
+pixi run python notebooks/dataset_onboarding/_debug_validation.py \
+  --registry-audit-dir data/new_dataset_checks/subsets \
+  --processed-artifact-dir "$HPC_SCRATCH_DIR/batch_effect/uncorrected" \
+  --config datasets.json
 ```
 
-*(Note: If local subsets are missing, the notebooks automatically fall back to opening the full file from the mounted NAS in backed mode).*
+## Lung 10x registry subset
 
-Outputs (plots/feathers/csv) go to `data/new_dataset_checks/<Name>/` (gitignored).
+Lung is the exact categorical subset
+`{"platform": {"values": ["10x"], "op": "in"}}`, applied before all role and
+hierarchy audits. The platform mask is authoritative if it differs from the
+assay-name mask containing `10x`; the audit records both masks row-by-row.
+Observed filtered cell/sample totals replace paper expectations only after the
+full-file run verifies them. The `ann_coarse → ann_fine` hierarchy must pass.
+No copied stage-2 dataset is created.
 
-## Helpers
+## Two-pass registry views
 
-- `onboarding_utils.py` — shared Python helpers (Pixi **default** env, scanpy
-  1.12.2; NOT the R notebook loader): `locate_counts`, `count_sanity_check`
-  (integer-VALUE check with epsilon tolerance — float-encoded CSR is valid),
-  `obs_summary`, `candidate_col_detection`, `cells_per_sample_stats`,
-  `paper_table_compare`, `confounding_crosstab` (bio × batch collinearity),
-  `subset_by_samples` + `SUBSET_CONFIG` (sample-first, RAM-bounded subsetting
-  — select ~10–20 samples stratified by bio condition + round-robin over the
-  batch candidates, read only those samples' cells via per-sample
-  `.to_memory()` slices, cap per sample / per CT / overall ~10k (max 50k);
-  precomputed unintegrated `obsm` arrays are re-sliced to the subset rows so
-  UMAP/metrics stay in the original embedding space; diagnostic only — the
-  HPC pipeline uses full data), `embed_and_umap_workflow` (precomputed or
-  computed UMAP from RAW counts, unintegrated only), `write_metrics_input`.
-- `onboarding_metrics.R` — standalone Rscript (/ default env): cell-level,
-  per-cell-type `calc_lisi` separation (repo `src/utils/scoring_metrics.R`)
-  on the **unintegrated PCA embedding** (never `X_pca_harmony*`), per-CT
-  subsample caps + confounded-CT guards; validated on the NAS `_debug` view
-  (`_debug_validation.py`, 2026-08-17).
-- `_debug_validation.py` — T3.0 helper validation on the Joanito 5-sample
-  `_debug` batch-effect view (bio `sample.origin` vs batch `Site`/`seqtec`),
-  including the T3.1 `subset_by_samples` path (reduced config: 4 samples,
-  per-sample cap 2000, target 5000 — checks per-sample slice reads, budgeted
-  wall time/RSS, structural batch signal).
-- `run_download_worker.sh` + `download_datasets_hpc.sh` — Phase-5 HPC download
-  worker (sbatch array, one task per key: resumable `curl -L -C -`,
-  Zenodo md5 + CellxGene size verification via HEAD content-length, selective
-  tar extraction) + login-node submitter
-  (egress smoke test, sacct gate, NAS rsync + md5 verify + log append).
+Every new cohort, Joanito, and Stephenson exposes exactly:
 
-## Summary Table & Diagnostic Results
+- `views.batch_effect_uncorrected`;
+- `views.batch_effect_corrected`.
 
-| # | Dataset | Study (PMID) | File (`JooM_2025_41097818/output`) | Size | md5 | Count Check | n cells / samples / CTs (paper) | Bio Condition (PILOT-GM-VAE) | Bio Condition (ECODA) | Batch Condition (PILOT-GM-VAE) | Batch Sequencing (ECODA) | Batch Sample Prep (ECODA) | Technical Batch Candidates | Suitable for Auto-Annotation | Recommended Use | Status |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | Alzheimer | Gabitto 2024 Nat Neurosci (42486312) | `SEAAD_Alzheimer.h5ad` | 53.2 GB | `c2ad4c584f31f40e8aae0b32608e8146` | NOTE (X: log-normalized; no raw.X) | 1,395,601 / 83 / 18 | `Cognitive status` | `Cognitive status` | None | `assay` | `tissue_type`, `PMI` | `assay`, `tissue_type`, `PMI` | No | `batch-effect` | Checked & rendered |
-| 2 | Breast cancer | Kumar 2023 Nature (37380767) | `BreastCncr_processed.h5ad` | 28.9 GB | `8b28a349c2c3638ddbfb3946a32d12ba` | PASS (raw.X: raw integer counts; X: log1p) | 714,331 / 126 / 10 | `disease` | `disease` | None | `assay`, `sequencing_platform` | `sample_preservation_method`, `suspension_dissociation_time`, `suspension_dissociation_reagent` | `assay`, `sequencing_platform`, `sample_source`, `suspension_dissociation_time` | Yes | `batch-effect` | Checked & rendered |
-| 3 | Covid-19 PBMC | Ren 2021 Cell (33657410) | `Covid19_Ren2021.h5ad` | 30.4 GB | `ae2fab89414914b6001879c01f822381` | PASS (raw.X: raw integer counts; X: log1p) | 993,171 / 151 / 10 | `CoVID-19 severity` | `CoVID-19 severity` | `Single cell sequencing platform`, `datasets` | `Single cell sequencing platform`, `datasets` | `Sample type`, `datasets`, `City` | `Single cell sequencing platform`, `City`, `datasets`, `Sample type` | Yes | `batch-effect` | Checked & rendered |
-| 4 | Diabetes (mouse) | Hrovatin 2023 Nat Metab (37697055) | `diabetes.h5ad` | 4.1 GB | `38189a381bad630fa39ce2d7ad3a0855` | PASS (raw.X: raw integer counts; X: log1p) | 264,235 / 52 / 13 | `disease` | `disease` | `dataset` | `assay` | `dataset`, `design` | `dataset`, `design`, `assay` | No | `batch-effect` | Checked & rendered |
-| 5 | Kidney (KPMP) | Lake 2023 Nature (41648348) | `Kidney_KPMP.h5ad` | 2.75 GB | `36ceb02ba23c559f80625ec7bef6884f` | PASS (raw.X: raw integer counts; X: log1p) | 104,314 / 45 / 14 | `condition.l1` | `condition.l1` | None | `assay`, `library` | `tissue_type`, `region.l1` | `assay`, `tissue_type`, `region.l1`, `library` | Yes | `batch-effect` | Checked & rendered |
-| 6 | Lupus PBMC | Perez 2022 Science (35389779) | `Lupus_Perez2022.h5ad` | 24.4 GB | `001658910686c61a5010da95b7b14a15` | PASS (raw.X: raw integer counts; X: scaled) | 1,263,676 / 261 / 11 | `Status` | `Status` | `batch_cov` | `batch_cov` | `Processing_Cohort` | `batch_cov`, `Processing_Cohort` | Yes | `batch-effect` | Checked & rendered |
-| 7 | Lung | Sikkema 2023 Nat Med (37291214) | `lungatlas.h5ad` | 17.4 GB | `010cd8b233ac569b711ea0cbd80980be` | PASS (raw.X: raw integer counts; X: log1p) | 941,504 / 165 / 12 | `disease` | `disease`, `origin` | `dataset` | `dataset`, `platform`, `study`, `assay` | `dataset`, `study`, `origin`, `origin_fine`, `tissue sampling method`, `tissue dissociation protocol`, `anatomical region`, `donor status` | `dataset`, `study`, `platform`, `assay` | Yes | `batch-effect` | Checked & rendered |
-| 8 | Myocardial infarction | Kuppe 2022 Nature (35948637) | `Myocardial_Infarc_2.h5ad` | 3.6 GB | `7431ae99250c99f11bf63e3034798af4` | NOTE (X: log-normalized; no raw.X) | 132,888 / 23 / 11 | `patient_group` | `patient_group` | None | `batch` | `sampleType` | `batch`, `sampleType` | Yes | `batch-effect` | Checked & rendered |
-| 9 | Parkinson | Kamath 2022 Nat Neurosci (35513515) | `Parkinson.h5ad` | 30.5 GB | `f576bcf5eb28366aeaecff01c50fff34` | NOTE (X: log-normalized; no raw.X) | 2,096,155 / 97 / 11 | `disease` | `disease`, `tissue` | None | `assay` | `Brain_bank`, `tissue_type` | `Brain_bank`, `assay`, `tissue_type` | No | `batch-effect` | Checked & rendered |
-## Key Findings & Guidelines
+Both views use the same input and subset and distinct output names:
 
-1. **Experimental Design & Attribution:**
-   - PILOT-GM-VAE author selections, ECODA biological conditions, and sequencing vs sample preparation batch covariates are consolidated in the master Summary Table above.
-   - For datasets like **Lung Atlas**, PILOT-GM-VAE evaluated `disease`, whereas ECODA additionally evaluates `origin` (tumor vs normal) and extensive consortium-level technical batch structures (`dataset`, `study`, `platform`, `assay`).
-2. **Dual Evaluation Architecture:**
-   - Every onboarding report evaluates both **expression-level LISI batch mixing** (on unintegrated PCA embeddings) and **cell-type compositional variance partitioning** (quantifying the fraction of total inter-sample variance explained by each biological vs technical covariate across cell types, following Sikkema et al. 2023 Fig 4a).
-3. **Count Layer Integrity:**
-   - Datasets from CellxGene / CZ CELLxGENE (Breast Cancer, Covid-19 PBMC, Diabetes, Kidney KPMP, Lung, Lupus PBMC) store raw integer count matrices in `adata.raw.X`, while `adata.X` holds log1p-normalized / scaled expression. `onboarding_utils.locate_counts()` automatically detects and routes raw integer counts from `raw.X`.
-   - Datasets where the downloaded file only provides log-normalized expression (Alzheimer, Myocardial Infarction, Parkinson) are clearly noted with `NOTE (X: log-normalized)` status.
-4. **Assay Covariate & Level Distribution:**
-   - In single-platform atlases like **Kidney KPMP** and **Parkinson**, the `assay` metadata column is genuinely single-valued (`10x 3' v3`) across all 104k and 2M cells, as authored by the consortium. Technical batch variance in these cohorts is driven by `region.l1` (Cortex vs Medulla), `library`, and `Brain_bank`.
-   - In multi-platform atlases (**Lung**, **Covid-19 PBMC**, **Breast Cancer**, **Diabetes**), `assay` and `platform` contain multiple distinct chemistries (`10x v2/v3`, `BD-Rhapsody`, `Smart-seq2`, `NovaSeq 6000` vs `HiSeq 4000/3000`).
-5. **Auto-Annotation Suitability:**
-   - **Unsuitable (`No`):** Brain tissue cohorts (**Alzheimer**, **Parkinson**) lack hematopoietic/immune marker lineages for HiTME/scATOMIC, and mouse diabetes (**Diabetes**) requires ortholog symbol conversion.
-   - **Suitable (`Yes`):** Solid tumor & PBMC cohorts (**Breast Cancer**, **Covid-19 PBMC**, **Kidney KPMP**, **Lung**, **Lupus PBMC**, **Myocardial Infarction**, **Debug**) have well-defined immune and stromal lineages.
+```text
+<stem>_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad
+<stem>_batch_effect_analysis_corrected_ECODAprocessed.h5ad
+```
+
+All nine new cohorts use `use_for_benchmark: false`,
+`use_for_batch_effect: true`, and `columns.batch: null`. The uncorrected view
+is runnable and always uses `batch_key=Sample`. The corrected view fails closed
+until a confirmed technical column is written. Joanito (`seqtec`) and
+Stephenson (`Site`) are already confirmed. Parkinson's high tier is
+view-specific: raw res-5 in the uncorrected view and Harmony-qualified res-5
+in the corrected view. Python and R loaders merge optional view-level column
+overrides over the dataset-level columns.
+
+No active batch-effect artifact, key, manifest, cache, log, or result variable
+uses a benchmark-named identifier.
+
+## Pass-specific preprocessing
+
+`batch_effect_uncorrected` runs one hvg2000 pass with `Sample`, raw PCA,
+neighbors, and Leiden, with no Harmony. `batch_effect_corrected` requires a
+confirmed batch, selects HVGs by that technical column, and computes raw PCA
+plus Harmony neighbors/Leiden. Exact keys are:
+
+```text
+X_pca_batch_effect_uncorrected_hvg2000
+leiden_res_<r>_batch_effect_uncorrected_hvg2000
+X_pca_batch_effect_corrected_hvg2000
+X_pca_harmony_batch_effect_corrected_hvg2000
+leiden_res_<r>_batch_effect_corrected_hvg2000_harmony
+```
+
+The fixed suite uses resolutions `0.1, 0.4, 2, 5, 20, 50`; reported ECODA
+uses res-2, except Parkinson's configured res-5 tier.
+
+## Fixed batch method suite
+
+Configured high-resolution methods are:
+
+`ECODA_authors_HR`, applicable `ECODA_HiTME_HR_layer2`, applicable
+`ECODA_scATOMIC_HR`, `ECODA_seuratres_2`, `ECODA_authors_HR_NULL`,
+Pseudobulk, GloScope, PILOT, PILOT-GM-VAE, MrVI, and QOT.
+
+Avg_PCA, MOFA, scITD, scPoli, GloProp, cell-frequency-only baselines,
+LR ECODA, top-variable-cell-type variants, zero-imputation screens, and
+parameter screens are excluded. ECODA defaults are exactly
+`clr_zero_impute_method="counts_all"` and `clr_zero_impute_num=0.5`: add 0.5
+to every count before CLR. The shuffled baseline shares features and uses
+deterministic label shuffling; labels remain evaluation-only.
+
+Corrected ECODA uses batch-only LMM correction and exact row-zero-sum
+recentring. Corrected pseudobulk uses `blind=FALSE`, the confirmed batch,
+`correct_batch=TRUE`, and `~ 1`. GloScope/PILOT/PILOT-GM-VAE/QOT use Harmony
+PCA; MrVI receives only the confirmed technical `batch_key`.
+
+## Evidence checkpoint
+
+The uncorrected method bundles feed
+`notebooks/dataset_onboarding/build_batch_candidate_evidence.R`, which emits
+one CSV per cohort and `batch_candidate_review.csv` with completeness,
+levels/samples per level, NMI with biology, marginal/joint PERMANOVA
+$R^2$/Holm-adjusted p-values, and constant/sample-unique/perfect-confounding
+warnings. It uses 999 deterministic permutations and strict sample-order
+checks.
+
+At this checkpoint all nine new `columns.batch` values remain `null`. Stop for
+one explicit user-confirmed technical column per cohort. Only then run the
+corrected pass, verify paired identities, pass-specific checksums/NAS sync,
+exact keys, zero-sum CLR rows, batch-only pseudobulk settings, and native MrVI
+batch arguments.
+
+Render local reports with:
+
+```bash
+for report in notebooks/dataset_onboarding/dataset_check_*.qmd; do
+  quarto render "${report}"
+done
+```

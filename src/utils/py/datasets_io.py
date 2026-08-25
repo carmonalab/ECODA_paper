@@ -32,15 +32,17 @@ def read_datasets_json(path="datasets.json", view=None):
             output_file = v.get("output_file_name")
             if not output_file:
                 continue
+            view_columns = v.get("columns") or {}
             matched_views[v_name] = {
                 "input_file": v.get("input_file_name"),
                 "output_file": output_file,
                 "subset_vars": v.get("subset_vars", {}),
+                "columns": {**(ds.get("columns") or {}), **view_columns},
             }
 
         first_name = next(iter(matched_views), None)
         first = matched_views.get(first_name)
-        columns = ds.get("columns") or {}
+        columns = (first or {}).get("columns") or (ds.get("columns") or {})
 
         result[ds_name] = {
             # dataset-level fields (order mirrors datasets.json)

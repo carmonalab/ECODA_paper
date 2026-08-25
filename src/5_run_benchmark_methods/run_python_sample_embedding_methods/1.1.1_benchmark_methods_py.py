@@ -240,10 +240,13 @@ def use_counts_layer(sub, method, ds_name):
 # ---------------------------------------------------------------------------
 # Method bodies (qmd semantics preserved)
 # ---------------------------------------------------------------------------
-def run_mrvi(adata, device, output_path):
-    """MrVI local sample distances (lowres only; ct column unused)."""
+def run_mrvi(adata, device, output_path, batch_key=None):
+    """MrVI local sample distances with an optional technical batch key."""
     adata.obs["dummy_col"] = np.zeros(adata.n_obs)
-    MRVI.setup_anndata(adata, sample_key="Sample")
+    setup_kwargs = {"sample_key": "Sample"}
+    if batch_key is not None:
+        setup_kwargs["batch_key"] = batch_key
+    MRVI.setup_anndata(adata, **setup_kwargs)
     model = MRVI(adata)
     model.train(max_epochs=50, accelerator=device)
     dists = model.get_local_sample_distances(
@@ -304,9 +307,22 @@ def run_scpoli(adata, ct_col, dim, output_path):
     df_embs.to_feather(output_path)
 
 
+def resolve_pass_embedding_key(adata, view, n_hvg):
+    """Resolve the exact embedding required by an analysis view."""
+    if view == "batch_effect_uncorrected":
+        key = f"X_pca_batch_effect_uncorrected_hvg{n_hvg}"
+    elif view == "batch_effect_corrected":
+        key = f"X_pca_harmony_batch_effect_corrected_hvg{n_hvg}"
+    else:
+        key = f"X_pca_{view}_hvg{n_hvg}"
+    if key not in adata.obsm:
+        raise KeyError(f"Required embedding {key!r} is missing from adata.obsm")
+    return key
+
+
 def run_pilot(adata, ct_col, view, n_hvg, output_path):
-    """PILOT Wasserstein sample distances on the preprocessed obsm PCA."""
-    emb_key = f"X_pca_{view}_hvg{n_hvg}"
+    """PILOT Wasserstein sample distances on the exact view embedding."""
+    emb_key = resolve_pass_embedding_key(adata, view, n_hvg)
     emb = adata.obsm[emb_key]
     # PILOT (pilotpy>=2.0.x) requires a named-columns pandas DataFrame in
     # obsm (Trajectory.extract_data_anno_scRNA_from_h5ad accesses .columns);
@@ -359,7 +375,7 @@ def run_qot(adata, ct_col, view, n_hvg, output_path):
     docs/qot_hotfixes.md). Lazy import so the phate dependency is only
     touched for QOT runs.
     """
-    emb_key = f"X_pca_{view}_hvg{n_hvg}"
+    emb_key = resolve_pass_embedding_key(adata, view, n_hvg)
     import qot_utils_re
 
     fill_unknown_ct(adata, ct_col, "QOT")
@@ -408,7 +424,7 @@ def run_pilotgm(adata, ct_col, view, n_hvg, output_path, ds_name, device):
     Weights are ephemeral by design (load_weights=False; retries re-train
     from scratch).
     """
-    emb_key = f"X_pca_{view}_hvg{n_hvg}"
+    emb_key = resolve_pass_embedding_key(adata, view, n_hvg)
     emb = adata.obsm[emb_key]
     # train_gmvae needs torch.tensor(obsm[key]) (fails on a pandas
     # DataFrame: "could not determine the shape of object type 'DataFrame'"
@@ -484,6 +500,8 @@ def process_dataset(args, ds_name, entry):
     feather already exists unless --force.
     """
     view_name = args.view
+    analysis_pass = getattr(args, "analysis_pass", None)
+    high_resolution_only = bool(getattr(args, "high_resolution_only", False)) or analysis_pass is not None
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -491,28 +509,59 @@ def process_dataset(args, ds_name, entry):
         raise ValueError(
             f"Dataset '{ds_name}' has no '{view_name}' view in datasets.json."
         )
+    expected_view_for_pass = {
+        "uncorrected": "batch_effect_uncorrected",
+        "corrected": "batch_effect_corrected",
+    }
+    if analysis_pass is not None:
+        if analysis_pass not in expected_view_for_pass:
+            raise ValueError(f"Unknown analysis pass: {analysis_pass}")
+        if view_name != expected_view_for_pass[analysis_pass]:
+            raise ValueError(
+                f"analysis pass {analysis_pass!r} requires view "
+                f"{expected_view_for_pass[analysis_pass]!r}"
+            )
+        if analysis_pass == "corrected" and entry.get("batch_col") is None:
+            raise ValueError(
+                "corrected batch-effect view requires a confirmed columns.batch"
+            )
     view_output = entry["views"][view_name]["output_file"]
-
     input_path = Path(args.input_dir) / view_output
     if not input_path.exists():
         raise FileNotFoundError(f"Input h5ad not found: {input_path}")
 
     lowres_col = entry.get("cell_type_low_res")
     highres_col = entry.get("cell_type_high_res")
+    technical_batch = entry.get("batch_col") if analysis_pass == "corrected" else None
 
-    # combo: (n_hvg, res_label, ct_col, payload, run_fn, out_name)
+    def output_name(suffix, n, res_label=None, extension="dists"):
+        if analysis_pass is not None:
+            return (
+                f"{ds_name}_batch_effect_{analysis_pass}_hvg{n}_highres_"
+                f"{suffix}_{extension}.feather"
+            )
+        return f"{ds_name}_hvg{n}{res_label or ''}_{suffix}_{extension}.feather"
+
+    tiers = [("_highres", highres_col)] if high_resolution_only else [
+        ("_lowres", lowres_col),
+        ("_highres", highres_col),
+    ]
     combos = []
-
     if args.method == "mrvi":
         if lowres_col is None:
             print(f"WARNING: {ds_name}: cell_type_low_res is None; skipping MrVI.")
             return
         for n in args.hvg:
-            out_name = f"{ds_name}_hvg{n}_mrvi_dists.feather"
-            combos.append((n, "_lowres", None, None, run_mrvi, out_name))
+            out_name = (
+                output_name("mrvi", n, extension="dists")
+                if analysis_pass is not None
+                else f"{ds_name}_hvg{n}_mrvi_dists.feather"
+            )
+            combos.append((n, "_highres" if analysis_pass else "_lowres",
+                           None, None, run_mrvi, out_name))
 
     elif args.method == "scpoli":
-        for res_label, ct_col in (("_lowres", lowres_col), ("_highres", highres_col)):
+        for res_label, ct_col in tiers:
             if ct_col is None:
                 continue
             for n in args.hvg:
@@ -524,12 +573,16 @@ def process_dataset(args, ds_name, entry):
 
     elif args.method in ("pilot", "qot", "pilotgm"):
         suffix = {"pilot": "pilot", "qot": "qot", "pilotgm": "pilotgm"}[args.method]
-        for res_label, ct_col in (("_lowres", lowres_col), ("_highres", highres_col)):
+        for res_label, ct_col in tiers:
             if ct_col is None:
                 continue
             for n in args.hvg:
                 if run_wass_combo_for(n, res_label):
-                    out_name = f"{ds_name}_hvg{n}{res_label}_{suffix}_dists.feather"
+                    out_name = (
+                        output_name(suffix, n, res_label=res_label)
+                        if analysis_pass is not None
+                        else f"{ds_name}_hvg{n}{res_label}_{suffix}_dists.feather"
+                    )
                     combos.append((n, res_label, ct_col, None, None, out_name))
 
     # Defaults-first ordering: ru_maxrss peak RSS is monotonic within a
@@ -558,6 +611,10 @@ def process_dataset(args, ds_name, entry):
     if "Sample" not in adata.obs.columns:
         raise ValueError(
             f"Cannot find standardized sample column 'Sample' in obs of {input_path}."
+        )
+    if technical_batch is not None and technical_batch not in adata.obs.columns:
+        raise ValueError(
+            f"Confirmed batch column '{technical_batch}' not found in obs of {input_path}"
         )
 
     for n, res_label, ct_col, payload, run_fn, out_path in pending:
@@ -594,7 +651,7 @@ def process_dataset(args, ds_name, entry):
         print(f"Processing {method_str} ...")
         start_time = time.time()
         if args.method == "mrvi":
-            run_mrvi(sub, args.device, out_path)
+            run_mrvi(sub, args.device, out_path, batch_key=technical_batch)
         elif args.method == "scpoli":
             run_scpoli(sub, ct_col, payload, out_path)
         elif args.method == "qot":
@@ -622,6 +679,11 @@ def main():
                         help="Dataset key in datasets.json")
     parser.add_argument("--view", default="benchmark_analysis",
                         help="View name (default: benchmark_analysis)")
+    parser.add_argument("--analysis_pass", default=None,
+                        choices=["uncorrected", "corrected"],
+                        help="Batch-effect pass; requires the matching explicit view")
+    parser.add_argument("--high_resolution_only", action="store_true",
+                        help="Run only the configured high-resolution tier")
     parser.add_argument("--method", required=True,
                         choices=["mrvi", "scpoli", "pilot", "qot", "pilotgm"],
                         help="Benchmark method to run")
@@ -644,8 +706,8 @@ def main():
     args = parser.parse_args()
 
     args.hvg = sorted(set(args.hvg))
-    if args.log_file is None:
-        args.log_file = os.path.join(args.output_dir, "execution_times.feather")
+    if args.analysis_pass is not None:
+        args.hvg = [2000]
 
     scvi.settings.seed = 0
     print("scvi-tools version:", scvi.__version__)

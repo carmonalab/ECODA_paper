@@ -7,7 +7,7 @@
 #   1. Computes the `seqtec` batch column and saves the full object back in
 #      place (only when the column is absent — on re-runs the in-place save is
 #      skipped). Must run AFTER 1_stage_data.sh and BEFORE the preprocess array
-#      (the batch_effect_analysis view uses seqtec as batch_col).
+#      (the batch_effect_uncorrected/corrected views use seqtec as batch_col).
 #
 #   2. Derives the _debug 5-sample subset from the SAME in-memory object:
 #      5 samples covering (sample.origin x seqtec x Site) combos (candidates
@@ -36,9 +36,9 @@ if (config_path == "") {
 }
 config <- fromJSON(config_path, simplifyVector = FALSE)
 
-joanito_input <- config[["Joanito"]][["views"]][["batch_effect_analysis"]][["input_file_name"]]
+joanito_input <- config[["Joanito"]][["views"]][["batch_effect_uncorrected"]][["input_file_name"]]
 if (is.null(joanito_input)) {
-  stop("No input_file_name for the Joanito batch_effect_analysis view in datasets.json.")
+  stop("No input_file_name for the Joanito batch-effect view in datasets.json.")
 }
 input <- file.path(scratch_dir, "Joanito", "data", joanito_input)
 message("Reading Joanito raw input: ", input)

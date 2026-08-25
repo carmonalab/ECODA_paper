@@ -858,7 +858,10 @@ prepare_pseudobulks_hpc <- function(
   seurat,
   sample_col = "Sample",
   hvg_rank_genes = NULL,
-  variants = PB_VARIANT_NAMES
+  variants = PB_VARIANT_NAMES,
+  batch_col = NULL,
+  blind = TRUE,
+  correct_batch = FALSE
 ) {
   n_ranked <- length(hvg_rank_genes)
   pb_specs <- list(
@@ -893,7 +896,10 @@ prepare_pseudobulks_hpc <- function(
         sample_col = sample_col,
         hvg = spec$hvg,
         n_hvg = spec$n_hvg,
-        black_list = spec$black_list
+        black_list = spec$black_list,
+        batch_col = batch_col,
+        blind = blind,
+        correct_batch = correct_batch
       )
     )
     results[[variant]] <- list(
@@ -910,6 +916,9 @@ prepare_pseudobulks_hpc <- function(
 # _pcadims<d>_dists.rds (sqrt + NA->0 applied by process_gloscope_fig); on a
 # cache miss the combo time includes the distance computation, on a hit it is
 # sqrt + read only — matching the legacy path_data dist-cache semantics.
+# GloScope combos: hvg2000 x pcadims {10,30,50}; hvg1000, hvg3000 x pcadims 30.
+# Batch-effect mode deliberately runs only the high-resolution hvg2000/30-PC
+# result. Raw GloScope distances are cached under the pass-qualified stem.
 run_gloscope_hpc <- function(
   seurat,
   metadata,
@@ -919,49 +928,69 @@ run_gloscope_hpc <- function(
   results_dir,
   ds,
   force = FALSE,
-  log_file = NULL
+  log_file = NULL,
+  batch_mode = FALSE,
+  result_stem = ds,
+  embedding_name = NULL
 ) {
-  combos <- list(
-    list(hvg = 2000, pcadims = 10),
-    list(hvg = 2000, pcadims = 30),
-    list(hvg = 2000, pcadims = 50),
-    list(hvg = 1000, pcadims = 30),
-    list(hvg = 3000, pcadims = 30)
-  )
+  combos <- if (batch_mode) {
+    list(list(hvg = 2000, pcadims = 30))
+  } else {
+    list(
+      list(hvg = 2000, pcadims = 10),
+      list(hvg = 2000, pcadims = 30),
+      list(hvg = 2000, pcadims = 50),
+      list(hvg = 1000, pcadims = 30),
+      list(hvg = 3000, pcadims = 30)
+    )
+  }
+  artifact_stem <- if (batch_mode) result_stem else ds
 
   results <- list()
   for (combo in combos) {
     n_hvg <- combo$hvg
     n_pca_dims <- combo$pcadims
     nm <- paste0("GloScope_hvg", n_hvg, "_pcadims", n_pca_dims)
+    emb_key <- NULL
+    if (batch_mode) {
+      if (is.null(embedding_name) || !nzchar(embedding_name)) {
+        stop("Batch GloScope requires an exact embedding reduction name")
+      }
+      emb_key <- embedding_name
+      if (!emb_key %in% names(seurat@reductions)) {
+        stop("Embedding reduction '", emb_key, "' not found in seurat")
+      }
+    }
     bundle_file <- file.path(
       results_dir,
-      paste0(ds, "_", nm, ".rds")
+      paste0(artifact_stem, "_", nm, ".rds")
     )
     if (file.exists(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
-      # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's labels x datasets). The stored mem_GB
-      # is replayed too (the live cumulative peak would overstate the
-      # combo's RAM on a resume).
+      # not lose exec-log rows computed in an aborted run. The stored mem_GB
+      # is replayed too, rather than using the live cumulative peak.
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file,
                      mem_gb = cached$mem_GB)
       }
       next
     }
-
-    emb_key <- paste0("pca_benchmark_analysis_hvg", n_hvg)
-    if (!emb_key %in% names(seurat@reductions)) {
-      warning("Embedding '", emb_key, "' not found in seurat; skipping ", nm)
-      next
+    if (!batch_mode) {
+      emb_key <- paste0("pca_benchmark_analysis_hvg", n_hvg)
+      if (!emb_key %in% names(seurat@reductions)) {
+        warning("Embedding '", emb_key, "' not found in seurat; skipping ", nm)
+        next
+      }
     }
 
     dist_file <- file.path(
       gloscope_cache_dir,
-      paste0(ds, "_gloscope_hvg", n_hvg, "_pcadims", n_pca_dims, "_dists.rds")
+      paste0(
+        artifact_stem, "_gloscope_hvg", n_hvg,
+        "_pcadims", n_pca_dims, "_dists.rds"
+      )
     )
     time_secs <- exec_time(
       res <- process_gloscope_fig(
@@ -1070,8 +1099,31 @@ run_pseudobulk_hpc <- function(
   results_dir,
   ds,
   force = FALSE,
-  log_file = NULL
+  log_file = NULL,
+  batch_mode = FALSE,
+  result_stem = ds
 ) {
+  if (batch_mode) {
+    pb_variant <- pb_variants[["hvg2000"]]
+    if (is.null(pb_variant)) {
+      stop("Pseudobulk variant 'hvg2000' missing for batch-effect run")
+    }
+    nm <- "Pseudobulk_hvg2000"
+    bundle_file <- file.path(results_dir, paste0(result_stem, "_", nm, ".rds"))
+    if (file.exists(bundle_file) && !force) {
+      cached <- readRDS(bundle_file)
+      if (!is.null(cached$exec_time)) {
+        log_exec_row(ds, nm, cached$exec_time, log_file, mem_gb = cached$mem_GB)
+      }
+      return(setNames(list(cached), nm))
+    }
+    time_secs <- exec_time(res <- process_pseudobulk_fig(pb_variant$pb, labels))
+    res[["exec_time"]] <- as.numeric(time_secs, units = "secs") + pb_variant$time_secs
+    res[["mem_GB"]] <- peak_rss_gb()
+    save_rds_atomic(res, bundle_file)
+    log_exec_row(ds, nm, res[["exec_time"]], log_file, mem_gb = res[["mem_GB"]])
+    return(setNames(list(res), nm))
+  }
   plain_combos <- list(
     Pseudobulk_schvg2000 = "schvg2000",
     Pseudobulk_hvg2000 = "hvg2000",
@@ -1321,27 +1373,30 @@ run_composition_methods_hpc <- function(
   factors_test = c(2, 3, 5, 10, 15),
   seurat_res = c(0.1, 0.4, 2, 5, 20),
   ECODA_top_varexp_hvct = seq(0, 0.9, 0.1),
-  not_suitable_for_auto_annotation = character(0)
+  not_suitable_for_auto_annotation = character(0),
+  batch_mode = FALSE,
+  result_stem = ds,
+  batch_col = NULL,
+  corrected = FALSE
 ) {
   set.seed(123)
 
-  # datasets.json `not_suitable_for_auto_annotation` flag: per-dataset opt-out
-  # for the annotation-driven combos (HiTME layer2/3, scATOMIC). Absent/empty
-  # = suitable for all. Skipped combos are dropped with a warning instead of
-  # being computed from an annotation that has no biological meaning for this
-  # tissue (e.g. no immune cells for HiTME/scATOMIC).
+  if (corrected && !batch_mode) {
+    stop("Corrected CLR composition requires batch-effect mode")
+  }
+  if (batch_mode && corrected &&
+      (is.null(batch_col) || !nzchar(batch_col))) {
+    stop("Corrected CLR composition requires a confirmed technical batch")
+  }
+
   skip_hitme <- "hitme" %in% not_suitable_for_auto_annotation
   skip_scatomic <- "scatomic" %in% not_suitable_for_auto_annotation
   if (skip_hitme || skip_scatomic) {
     warning("Dataset '", ds, "' flagged not_suitable_for_auto_annotation = [",
             paste(not_suitable_for_auto_annotation, collapse = ", "),
-            "]; skipping HiTME", if (!skip_hitme) "" else "+scATOMIC",
-            " combos")
+            "]; skipping annotation-driven composition combos")
   }
 
-  # Metadata bundle: written on every driver invocation (also when all
-  # combos are cached), so the notebook always finds it after a
-  # composition run.
   cells_per_sample <- table(obs[[sample_col]])
   metadata_bundle <- list(
     labels = labels,
@@ -1355,9 +1410,109 @@ run_composition_methods_hpc <- function(
       NA_integer_
     }
   )
-  save_rds_atomic(metadata_bundle,
-                  file.path(results_dir, paste0(ds, "_metadata.rds")))
+  artifact_stem <- if (batch_mode) result_stem else ds
+  save_rds_atomic(
+    metadata_bundle,
+    file.path(results_dir, paste0(artifact_stem, "_metadata.rds"))
+  )
 
+  if (batch_mode) {
+    if (is.null(ct_col_high_res) ||
+        !ct_col_high_res %in% colnames(obs)) {
+      stop("Batch composition requires the configured high-resolution cell-type column")
+    }
+    if (!"RNA_snn_res.2" %in% colnames(obs)) {
+      stop("Batch composition requires RNA_snn_res.2 from the selected pass view")
+    }
+
+    correction_metadata <- metadata
+    if (!"Sample" %in% colnames(correction_metadata)) {
+      if (!sample_col %in% colnames(correction_metadata)) {
+        stop("Batch composition metadata is missing the sample identifier")
+      }
+      correction_metadata[["Sample"]] <- correction_metadata[[sample_col]]
+    }
+    if (corrected && !batch_col %in% colnames(correction_metadata)) {
+      stop("Confirmed technical batch column '", batch_col,
+           "' is missing from composition metadata")
+    }
+
+    correct_result <- function(res) {
+      if (!corrected) return(res)
+      corrected_feat <- correct_clr_batch_lmm(
+        res[["feat_mat"]], correction_metadata, batch_col
+      )
+      corrected_dist <- dist(corrected_feat)
+      corrected_labels <- res[["labels"]]
+      if (length(corrected_labels) != nrow(corrected_feat)) {
+        stop("Corrected CLR composition labels do not cover all samples")
+      }
+      names(corrected_labels) <- rownames(corrected_feat)
+      res[["feat_mat"]] <- corrected_feat
+      res[["dist_mat"]] <- corrected_dist
+      res[["labels"]] <- corrected_labels
+      res[["scores"]] <- calc_sep_score(corrected_dist, corrected_labels)
+      res
+    }
+
+    combos <- list()
+    add_coda <- function(name, ct_col, shuffle_labels = FALSE) {
+      combos[[name]] <<- function() {
+        process_coda_fig(
+          NULL, labels, ct_col = ct_col, obs = obs,
+          clr_zero_impute_method = "counts_all",
+          clr_zero_impute_num = 0.5,
+          shuffle_labels = shuffle_labels
+        )
+      }
+    }
+
+    add_coda("ECODA_authors_HR", ct_col_high_res)
+    add_coda("ECODA_authors_HR_NULL", ct_col_high_res, shuffle_labels = TRUE)
+
+    if (!skip_hitme && "layer2" %in% colnames(obs)) {
+      add_coda("ECODA_HiTME_HR_layer2", "layer2")
+    } else if (!skip_hitme) {
+      warning("ECODA_HiTME_HR_layer2 skipped for ", ds,
+              ": obs has no 'layer2' column")
+    }
+
+    if (!skip_scatomic && "scATOMIC_pred" %in% colnames(obs)) {
+      add_coda("ECODA_scATOMIC_HR", "scATOMIC_pred")
+    } else if (!skip_scatomic) {
+      warning("ECODA_scATOMIC_HR skipped for ", ds,
+              ": obs has no 'scATOMIC_pred' column")
+    }
+
+    add_coda("ECODA_seuratres_2", "RNA_snn_res.2")
+
+    results <- list()
+    for (nm in names(combos)) {
+      bundle_file <- file.path(
+        results_dir, paste0(artifact_stem, "_", nm, ".rds")
+      )
+      if (file.exists(bundle_file) && !force) {
+        cached <- readRDS(bundle_file)
+        results[[nm]] <- cached
+        if (!is.null(cached$exec_time)) {
+          log_exec_row(ds, nm, cached$exec_time, log_file,
+                       mem_gb = cached$mem_GB)
+        }
+        next
+      }
+      time_secs <- exec_time(res <- combos[[nm]]())
+      res <- correct_result(res)
+      res[["exec_time"]] <- as.numeric(time_secs, units = "secs")
+      res[["mem_GB"]] <- peak_rss_gb()
+      save_rds_atomic(res, bundle_file)
+      log_exec_row(ds, nm, res[["exec_time"]], log_file,
+                   mem_gb = res[["mem_GB"]])
+      results[[nm]] <- res
+    }
+    return(results)
+  }
+
+  # Ordinary benchmark composition behavior remains unchanged below.
   results <- list()
   combos <- list()
 
@@ -1398,7 +1553,6 @@ run_composition_methods_hpc <- function(
                        ct_col = ct_col_high_res, obs = obs)
     }
 
-    # ECODA_authors_HR_top_varexp<v> for v in seq(0, 0.9, 0.1)
     varexp_combos <- lapply(ECODA_top_varexp_hvct, function(v) {
       function() {
         process_coda_fig(NULL, labels, ECODA_top_varexp_hvct = v,
@@ -1410,8 +1564,6 @@ run_composition_methods_hpc <- function(
     )
     combos <- c(combos, varexp_combos)
 
-    # ECODA_HiTME_HR_layer2/3_top_varexp<v>: guarded on the annotation
-    # column being present (better than the old notebook, which crashed).
     for (hitme_ct in c("layer2", "layer3")) {
       if (skip_hitme) {
         warning("ECODA_HiTME_HR_", hitme_ct, "* combos skipped for ", ds,
@@ -1452,12 +1604,7 @@ run_composition_methods_hpc <- function(
     }
 
     for (hitme_ct in c("layer2", "layer3")) {
-      if (skip_hitme) {
-        next  # already warned above
-      }
-      if (!hitme_ct %in% colnames(obs)) {
-        next  # already warned above
-      }
+      if (skip_hitme || !hitme_ct %in% colnames(obs)) next
       hitme_plain <- lapply(hitme_ct, function(ct) {
         function() {
           process_coda_fig(NULL, labels, ct_col = ct, obs = obs)
@@ -1478,7 +1625,6 @@ run_composition_methods_hpc <- function(
               ": obs has no 'scATOMIC_pred' column")
     }
 
-    # ECODA_authors_HR_{2,3,5,10,15}_PCA_dims
     pca_combos <- lapply(factors_test, function(i) {
       function() {
         process_coda_fig(NULL, labels, pca_dims = i,
@@ -1492,8 +1638,6 @@ run_composition_methods_hpc <- function(
             ds, ": cell_type_high_res is null")
   }
 
-  # ECODA_seuratres_<r> (Leiden resolutions mapped to RNA_snn_res.<r> by
-  # rename_leiden_cols upstream).
   seuratres_combos <- lapply(seurat_res, function(r) {
     res_col_name <- paste0("RNA_snn_res.", r)
     function() {
@@ -1508,11 +1652,6 @@ run_composition_methods_hpc <- function(
     if (file.exists(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
-      # Re-emit the stored timing on cache reuse: failure-resume runs must
-      # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's labels x datasets). The stored mem_GB
-      # is replayed too (the live cumulative peak would overstate the
-      # combo's RAM on a resume).
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file,
                      mem_gb = cached$mem_GB)

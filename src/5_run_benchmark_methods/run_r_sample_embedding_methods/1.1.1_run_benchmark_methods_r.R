@@ -67,6 +67,15 @@ if (method == "composition") {
 
 config <- read_datasets_json(args$config_path, view = args$view)
 ds <- args$ds_name
+analysis_pass <- args[["analysis_pass"]]
+if (!is.null(analysis_pass) && !analysis_pass %in% c("uncorrected", "corrected")) {
+  stop("Unknown analysis pass: ", analysis_pass)
+}
+cache_stem <- if (is.null(analysis_pass)) {
+  ds
+} else {
+  paste0(ds, "_batch_effect_", analysis_pass)
+}
 entry <- config[[ds]]
 if (is.null(entry)) {
   stop("Dataset '", ds, "' not found in ", args$config_path)
@@ -78,7 +87,11 @@ if (!file.exists(h5ad_path)) {
 }
 dir.create(args$results_dir, showWarnings = FALSE, recursive = TRUE)
 
-method_rds <- file.path(args$results_dir, paste0(ds, "_", method, ".rds"))
+method_rds_stem <- if (is.null(analysis_pass)) ds else cache_stem
+method_rds <- file.path(
+  args$results_dir,
+  paste0(method_rds_stem, "_", method, ".rds")
+)
 if (file.exists(method_rds) && !force) {
   message("Method results already exist: ", method_rds,
           " (use --force to recompute)")
@@ -101,6 +114,28 @@ if (!sample_col %in% colnames(obs)) {
   stop(sample_col, " not found in obs columns of ", h5ad_path)
 }
 hvg_rank_genes <- get_hvg_rank_genes(adata)
+embedding_key <- if (args$view == "batch_effect_corrected") {
+  "X_pca_harmony_batch_effect_corrected_hvg2000"
+} else if (args$view == "batch_effect_uncorrected") {
+  "X_pca_batch_effect_uncorrected_hvg2000"
+} else {
+  "X_pca_benchmark_analysis_hvg2000"
+}
+batch_col <- if (!is.null(analysis_pass) && analysis_pass == "corrected") {
+  entry$batch_col
+} else {
+  NULL
+}
+blind_mode <- is.null(analysis_pass) || analysis_pass == "uncorrected"
+correct_batch_mode <- identical(analysis_pass, "corrected")
+if (correct_batch_mode) {
+  if (is.null(batch_col)) {
+    stop("corrected batch-effect view requires a confirmed columns.batch")
+  }
+  if (!batch_col %in% colnames(obs)) {
+    stop("Confirmed batch column '", batch_col, "' not found in obs of ", h5ad_path)
+  }
+}
 
 pb_variants <- NULL
 seurat <- NULL
@@ -115,7 +150,9 @@ if (method == "mofa") {
     stop("Missing required --pseudobulk_dir argument for method mofa")
   }
   dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
-  if (length(pb_variants_missing(args$pseudobulk_dir, ds, force)) > 0) {
+  if (length(pb_variants_missing(
+    args$pseudobulk_dir, ds, force, cache_stem = cache_stem
+  )) > 0) {
     message("Building Seurat for on-the-fly pseudobulk variants...")
     seurat <- load_benchmark_seurat(adata, obs, sample_col = sample_col,
                                     fetch_embedding = NULL)
@@ -123,7 +160,10 @@ if (method == "mofa") {
   pb_variants <- load_pb_variants(
     seurat, sample_col, hvg_rank_genes,
     pseudobulk_dir = args$pseudobulk_dir, ds = ds,
-    force = force, log_file = args$log_file
+    force = force, log_file = args$log_file, cache_stem = cache_stem,
+    batch_col = batch_col, blind = blind_mode,
+    correct_batch = correct_batch_mode,
+    variants = if (!is.null(analysis_pass)) "hvg2000" else PB_VARIANT_NAMES
   )
   # Sample names are already standardized in the preprocessed obs
   # (1.1.1_preprocess.py): no standardize_sample_names() re-application here
@@ -145,7 +185,7 @@ if (method == "mofa") {
   dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
   # Map the new-pipeline Leiden resolution columns to the legacy
   # RNA_snn_res.* names used by the ECODA_seuratres_* combos.
-  obs <- rename_leiden_cols(obs, view = "benchmark_analysis")
+  obs <- rename_leiden_cols(obs, view = args$view)
   metadata <- obs %>%
     dplyr::group_by(!!sym(sample_col)) %>%
     dplyr::slice(1)
@@ -154,7 +194,7 @@ if (method == "mofa") {
   obsm_keys <- py_to_r(import_builtins(convert = FALSE)$list(
     adata$obsm$keys()
   ))
-  emb_key <- "X_pca_benchmark_analysis_hvg2000"
+  emb_key <- embedding_key
   if (!emb_key %in% obsm_keys) {
     stop("Embedding '", emb_key, "' not found in adata.obsm of ", h5ad_path,
          ". Re-run preprocessing (1.1.1_preprocess.py) for this dataset.")
@@ -167,15 +207,24 @@ if (method == "mofa") {
     hvg_rank_genes = hvg_rank_genes,
     pseudobulk_dir = args$pseudobulk_dir,
     ds = ds,
-    log_file = args$log_file
+    log_file = args$log_file,
+    cache_stem = cache_stem,
+    batch_col = batch_col,
+    blind = blind_mode,
+    correct_batch = correct_batch_mode,
+    variants = if (!is.null(analysis_pass)) "hvg2000" else PB_VARIANT_NAMES
   )
 } else {
   seurat <- load_benchmark_seurat(
     adata, obs, sample_col = sample_col,
     fetch_embedding = if (method == "gloscope") {
-      c("X_pca_benchmark_analysis_hvg1000",
-        "X_pca_benchmark_analysis_hvg2000",
-        "X_pca_benchmark_analysis_hvg3000")
+      if (!is.null(analysis_pass)) {
+        embedding_key
+      } else {
+        c("X_pca_benchmark_analysis_hvg1000",
+          "X_pca_benchmark_analysis_hvg2000",
+          "X_pca_benchmark_analysis_hvg3000")
+      }
     } else {
       NULL
     }
@@ -203,7 +252,9 @@ if (method == "mofa") {
     pb_variants <- load_pb_variants(
       seurat, sample_col, hvg_rank_genes,
       pseudobulk_dir = args$pseudobulk_dir, ds = ds,
-      force = force, log_file = args$log_file
+      force = force, log_file = args$log_file, cache_stem = cache_stem,
+      batch_col = batch_col, blind = blind_mode,
+      correct_batch = correct_batch_mode
     )
   }
   if (method == "gloscope") {
@@ -222,7 +273,14 @@ results <- switch(
     sample_col = sample_col,
     gloscope_cache_dir = args$gloscope_cache_dir,
     results_dir = args$results_dir, ds = ds,
-    force = force, log_file = args$log_file
+    force = force, log_file = args$log_file,
+    batch_mode = !is.null(analysis_pass),
+    result_stem = cache_stem,
+    embedding_name = if (!is.null(analysis_pass)) {
+      sub("^X_", "", embedding_key)
+    } else {
+      NULL
+    }
   ),
   mofa = run_mofa_hpc(
     metadata, labels, pb_variants,
@@ -233,7 +291,9 @@ results <- switch(
     seurat, labels, pb_variants,
     sample_col = sample_col,
     results_dir = args$results_dir, ds = ds,
-    force = force, log_file = args$log_file
+    force = force, log_file = args$log_file,
+    batch_mode = !is.null(analysis_pass),
+    result_stem = cache_stem
   ),
   scitd = run_scitd_hpc(
     seurat, label_col = entry$label_col,
@@ -250,6 +310,11 @@ results <- switch(
     sample_col = sample_col,
     results_dir = args$results_dir, ds = ds,
     force = force, log_file = args$log_file,
+    seurat_res = if (!is.null(analysis_pass)) 2 else c(0.1, 0.4, 2, 5, 20),
+    batch_mode = !is.null(analysis_pass),
+    result_stem = cache_stem,
+    batch_col = batch_col,
+    corrected = correct_batch_mode,
     not_suitable_for_auto_annotation = if (is.null(entry$not_suitable_for_auto_annotation)) {
       character(0)
     } else {

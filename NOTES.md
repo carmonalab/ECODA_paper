@@ -67,153 +67,112 @@ Each onboarding notebook adheres to the following sequence:
 ## 3. Batch Effect Correction & Benchmark Strategy (`batch_effect_analysis.rmd`)
 
 ### Executive Summary
-- The multi-batch benchmark evaluates patient stratification methods across a **Two-Pass Workflow**: (1) **Uncorrected (Raw)**, followed by (2) **Corrected**.
-- **Uncorrected Pass as the Decision Gate:** Running all methods without batch correction first and inspecting distance-level PERMANOVA and NMI collinearity across modalities provides the complete picture needed to decide which specific batch variables to target per method/modality.
-- **Cross-Modality Confounding Attribution:** When biological conditions and technical batches are partially confounded (e.g. `Site` with unbalanced disease/control allocations), single-modality evaluations cannot separate true biology from batch noise. Cross-modality comparison (expression vs. composition) clarifies whether separation is modality-specific or driven by shared technical confounders.
-- **Modality-Specific Correction Frameworks:**
-  - **Composition (ECODA):** Linear Mixed Models via `lme4` / `variancePartition` for regularized batch adjustment on CLR-transformed matrices under severe group imbalance and multi-factor collinearity without design leakage.
-  - **Expression (PILOT, PILOT-GM, GloScope):** `Harmony` for multi-batch categorical covariate integration directly on cell-level PCA embeddings.
-  - **Deep Generative Embeddings (MrVI):** Native multi-covariate `batch_key` conditioning.
-- **Evaluation & Ratio-of-Ratios Metric:** Evaluates the shift in $R^2_{\text{Bio}}$ and $R^2_{\text{Batch}}$, the $\text{Bio} / \text{Batch}$ signal-to-noise ratio, and the **Ratio-of-Ratios** ($\text{Ratio}_{\text{Corr}} / \text{Ratio}_{\text{Raw}}$).
 
-### 3.1 Two-Pass Benchmark Workflow
+Batch-effect analysis is a validated two-pass workflow over the explicit
+registry views `batch_effect_uncorrected` and `batch_effect_corrected`. The
+uncorrected pass is the evidence gate: it always preprocesses with
+`batch_key=Sample`, runs the method suite without technical correction, and
+selects no batch column automatically. Only after reviewing its evidence may
+one confirmed technical column per cohort be written to `datasets.json`.
+Corrected execution is fail-closed while that column is `null`.
 
-```
-                        Processed Cohort Data
-                                  |
-              +-------------------+-------------------+
-              |                                       |
-    [Pass 1: Uncorrected (Raw)]             [Pass 2: Corrected]
-    - All methods run raw                   - Modality-appropriate correction
-    - Metadata Collinearity (NMI)           - lme4 / variancePartition for ECODA
-    - Distance Matrix PERMANOVA             - limma / DESeq2 for Pseudobulk
-              |                             - Harmony on PCA for PILOT/GloScope
-              v                             - Native batch_key for MrVI
-    [Attribution Decision Gate]                       |
-    - Identify active batch drivers                   v
-    - Cross-modality confounding check      [Distance Matrix PERMANOVA]
-              |                             - Measure batch suppression & bio retention
-              +-------------------+-------------------+
-                                  |
-                        [Comparative Synthesis]
-                        - Bio / Batch Ratios (Raw vs. Corr)
-                        - Delta R² (Bio vs. Batch)
-                        - Ratio-of-Ratios (Correction Benefit Index)
-```
+The biological label is evaluation-only. It never enters filtering, HVG
+selection, normalization, PCA, Harmony, CLR correction, pseudobulk design,
+MrVI covariates, or any other model input.
 
-1. **Pass 1: Uncorrected (Raw) Benchmark Evaluation:**
-   - Execute all benchmark methods (ECODA family, Pseudobulk, Avg_PCA, GloScope, PILOT, PILOT-GM, MrVI, QOT) on raw, uncorrected embeddings/counts.
-   - For each method output distance matrix ($D_{\text{raw}}$), evaluate:
-     - **Metadata Collinearity (NMI):** Maps confounding structure across metadata columns.
-     - **Marginal PERMANOVA:** Quantifies baseline $R^2_{\text{Bio}}$, $R^2_{\text{Batch}}$, $R^2_{\text{Shared}}$, and $R^2_{\text{Residual}}$.
-   - **Cross-Modality Confounding Rationale:** In datasets where `Site` or `Institution` has unbalanced disease distributions, it is mathematically impossible within one modality to prove whether patient clustering reflects disease biology or site-specific sample prep. Comparing composition-based methods (ECODA) with expression-based methods (Pseudobulk, PILOT, MrVI) indicates whether one modality recovers the biological signal more cleanly than the other despite the technical confounder.
-   - **Decision Gate:** Finalize which batch variables to correct for each method and modality based on these empirical uncorrected PERMANOVA results.
+### 3.1 Fixed method contract
 
-2. **Pass 2: Modality-Appropriate Batch Correction:**
-   - **Cell-Type Composition Methods (ECODA):** `lme4` / `variancePartition` (or `limma::removeBatchEffect`) applied to the sample $\times$ cell-type CLR matrix.
-     - **No-Leakage Invariant:** The correction model removes only technical batch factors. The biological label (ground truth) is strictly excluded (`design = NULL` or intercept-only `~ 1`).
-     - **Simplex Recentering (for CLR):** Post-correction row recentering ($\text{clr}^* - \text{mean}(\text{clr}^*)$) restores exact zero-sum simplex constraints.
-   - **Pseudobulk Expression:** DESeq2 blind normalization followed by batch-only residualization.
-   - **Cell-Level Expression Embeddings (PILOT, PILOT-GM, GloScope):** `Harmony` (`X_pca_harmony`) computed on cell-level PCA prior to sample-level distribution distance calculation (e.g. Earth Mover's Distance or GMM fitting).
-   - **Deep Generative Models (MrVI):** Native multi-covariate `batch_key` integration within the autoencoder architecture.
+The batch suite contains exactly these configured high-resolution methods:
 
----
+- ECODA configured author high tier (`ECODA_authors_HR`);
+- applicable HiTME ECODA (`ECODA_HiTME_HR_layer2`);
+- applicable scATOMIC ECODA (`ECODA_scATOMIC_HR`);
+- ECODA Leiden resolution 2 (`ECODA_seuratres_2`);
+- deterministic shuffled-label ECODA baseline (`ECODA_authors_HR_NULL`);
+- Pseudobulk;
+- GloScope;
+- PILOT;
+- PILOT-GM-VAE;
+- MrVI;
+- QOT.
 
-### 3.2 Compositional Batch Correction: Why `lme4` / `variancePartition` over `limma` and `ComBat`
+The suite excludes `Avg_PCA`, MOFA, scITD, scPoli, GloProp,
+cell-frequency-only baselines, LR ECODA, top-variable-cell-type variants,
+zero-imputation screens, and all parameter screens. QOT belongs to the
+Harmony-corrected expression group alongside GloScope, PILOT, and
+PILOT-GM-VAE.
 
-When correcting sample-level CLR composition matrices ($X \in \mathbb{R}^{N \times P}$, where $N$ is samples and $P$ is cell types), standard batch-correction algorithms behave very differently under the constraints of unsupervised benchmarking:
+ECODA uses the exact default `clr_zero_impute_method="counts_all"` and
+`clr_zero_impute_num=0.5`: add 0.5 to **every** count before the CLR
+transformation, not only entries equal to zero. The shuffled baseline uses the
+same features and deterministic label shuffling; labels remain evaluation-only.
 
-| Method | Statistical Framework | Handling of Imbalanced Groups | Multi-Factor / Collinearity Handling | Suitability for CLR Matrix Correction |
-| :--- | :--- | :--- | :--- | :--- |
-| **`limma`** (`removeBatchEffect`) | Ordinary Least Squares (OLS) / Fixed effects regression | **Moderate**; can suffer from parameter over-estimation in small/sparse batch levels | **Good** for full-rank designs, but will drop terms or fail if rank-deficient | **Best for standard fixed batches & simple designs**; prone to over-correcting small batch strata |
-| **`variancePartition` / `lme4`** | Linear Mixed Models (REML with shrinkage priors) | **Excellent**; random effects regularize small/imbalanced levels via empirical Bayes shrinkage | **Superior**; random effects gracefully absorb collinear variation across hierarchical/crossed batches | **Best when batches have many levels, hierarchical structure, or severe imbalance** |
-| **`ComBat`** | Empirical Bayes location-and-scale adjustments | **Poor** when unbalanced; requires design matrix to protect signal | **Struggles** when covariates share moderate collinearity without protected biological labels | **Not recommended** for this specific unsupervised design (risks severe biological signal loss) |
+### 3.2 Pass-specific preprocessing
 
-#### Deep-Dive Rationale for `lme4` on CLR Compositions:
+`batch_effect_uncorrected` performs one hvg2000 pass with `batch_key=Sample`,
+raw PCA, neighbors, and Leiden only. It emits no Harmony representation.
 
-1. **Handling Severe Imbalance & Small Batch Levels (Shrinkage Regularization):**
-   - In observational single-cell cohorts, batch variables (e.g., `donor`, `sequencing_run`, `tissue_source`) frequently have highly unequal sample counts (some batches having only 1–3 samples).
-   - Fixed-effects OLS (`limma`) estimates a separate unconstrained parameter $\hat{\beta}_k$ for each batch level. For sparse levels with few samples, this leads to large estimation variance and parameter over-estimation, effectively over-fitting and distorting the CLR geometry.
-   - `lme4` / `variancePartition` treats batch variables as random effects ($u \sim \mathcal{N}(0, \sigma_u^2)$) using Restricted Maximum Likelihood (REML). Random effects apply **empirical Bayes shrinkage (partial pooling)**: batch levels with many samples are adjusted fully, whereas levels with few samples are shrunk toward the cohort mean, preventing extreme residual distortion.
+`batch_effect_corrected` requires a confirmed non-null `columns.batch`. It
+performs one hvg2000 pass with HVGs selected by that technical column, computes
+raw PCA, then Harmony and neighbors/Leiden on Harmony. The biological label is
+never protected in correction.
 
-2. **Multi-Factor & Collinearity Robustness (Crossed & Hierarchical Batches):**
-   - Single-cell studies frequently contain multiple overlapping technical confounders (e.g., `10x_chemistry` + `site` + `flowcell`). These covariates often exhibit moderate collinearity ($\text{NMI} \in [0.3, 0.7]$).
-   - Fixed-effects models (`limma`) require full-rank design matrices; when covariates are partially collinear or nested, OLS causes rank deficiency, forcing terms to be arbitrarily dropped or inflating variance inflation factors (VIF).
-   - Mixed models (`lme4`) naturally handle crossed and nested random effects without rank-deficiency crashes. Shared variation between collinear technical factors is gracefully partitioned into respective variance components.
+Pass-qualified keys are literal and never fall back:
 
-3. **Strict Alignment with the No-Leakage Principle (Unsupervised Setting):**
-   - `ComBat` relies heavily on specifying a biological design matrix ($X_{\text{bio}}$) to separate biological variance from technical variance before pooling residual variances across features. When run in an **unsupervised setting without biological labels** (as required by the No-Leakage Principle), `ComBat` assumes all observed variance across batches is technical error, actively removing true biological differences that happen to correlate with batch distribution.
-   - `lme4` models batch as an additive random shift per cell type on the unbounded CLR scale without over-fitting to the unmodeled biological clusters, making it the mathematically sound choice for unsupervised compositional correction.
+- `X_pca_batch_effect_uncorrected_hvg2000`;
+- `leiden_res_<r>_batch_effect_uncorrected_hvg2000`;
+- `X_pca_batch_effect_corrected_hvg2000`;
+- `X_pca_harmony_batch_effect_corrected_hvg2000`;
+- `leiden_res_<r>_batch_effect_corrected_hvg2000_harmony`.
 
-4. **Continuous CLR Simplex Geometry:**
-   - CLR transformed proportions are continuous real-valued coordinates ($\mathbb{R}^P$) subject to the zero-sum constraint $\sum_{p=1}^P \text{clr}(x_{ip}) = 0$.
-   - Fitting linear mixed models feature-by-feature followed by simplex recentering ($\text{clr}^*_{ip} = \hat{\epsilon}_{ip} - \frac{1}{P}\sum_{j=1}^P \hat{\epsilon}_{ij}$) preserves Aitchison Euclidean geometry while stripping out random batch variance.
+All cohorts retain Leiden resolutions `(0.1, 0.4, 2, 5, 20, 50)`. The fixed
+suite consumes resolution 2, except Parkinson's configured high tier, which
+uses res-5 from the corresponding pass.
 
----
+### 3.3 Modality-specific corrected inputs
 
-### 3.3 Single-Cell Expression Integration: Why `Harmony` over `scVI`
+- **ECODA composition:** each CLR cell-type feature is fit with
+  `lme4::lmer(y ~ 1 + (1 | batch), REML=TRUE)`. Subtract only the fitted batch
+  random effect, then recenter every corrected row to an exact zero sum.
+  Missing IDs, fewer than two batch levels, nonconvergence, and sample-order
+  mismatches fail closed. The biological label is absent from the formula.
+- **Pseudobulk expression:** uncorrected uses
+  `blind=TRUE`, `batch_col=NULL`, `correct_batch=FALSE`, design `~ 1`.
+  Corrected uses `blind=FALSE`, the confirmed technical `batch_col`,
+  `correct_batch=TRUE`, design `~ 1`.
+- **GloScope, PILOT, PILOT-GM-VAE, and QOT:** uncorrected resolves
+  `X_pca_batch_effect_uncorrected_hvg2000`; corrected resolves
+  `X_pca_harmony_batch_effect_corrected_hvg2000`. Missing exact keys are
+  errors.
+- **MrVI:** uncorrected receives no technical covariate; corrected receives
+  only the confirmed technical column as native `batch_key`.
 
-For cell-level gene expression batch integration (used as the feature embedding input for distribution-based sample stratification methods such as PILOT, PILOT-GM, and GloScope), `Harmony` was chosen as the primary integration engine over `scVI`:
+### 3.4 Artifact and evidence contract
 
-1. **Multi-Batch Covariate Support in Both Frameworks:**
-   - Both `Harmony` and `scVI` natively support multiple categorical batch keys (e.g. `c("sequencing_run", "10x_chemistry", "donor")`).
+Every pass is isolated under
+`${HPC_SCRATCH_DIR}/batch_effect/<pass>/` and
+`${NAS_TARGET_DIR}/batch_effect/<pass>/`. Method bundles, distances,
+pseudobulks, execution logs, manifests, watchdog status, and checksums are
+pass-scoped. Active filenames and runtime identifiers use
+`batch_effect_uncorrected` or `batch_effect_corrected`; no pass artifact uses a
+benchmark-named identifier.
 
-2. **Simplicity, Speed, and Deterministic Scalability:**
-   - `Harmony` operates directly on cell-level PCA space using iterative maximum diversity clustering and linear batch correction. It runs in **seconds to minutes on standard CPU** architectures, is computationally lightweight, deterministic, and requires minimal hyperparameter tuning.
-   - `scVI` is a deep generative model (variational autoencoder) requiring heavy GPU infrastructure, extensive training epochs, neural network optimization, and extensive hyperparameter tuning (learning rates, latent dimension, dispersion models). On full-cohort single-cell atlases, this introduces substantial computational overhead and potential convergence variability.
+The uncorrected evidence report records completeness, levels and samples per
+candidate, NMI with biology, marginal and joint PERMANOVA $R^2$ and
+Holm-adjusted p-values, and constant/sample-unique/perfect-confounding
+warnings. It uses 999 deterministic permutations and strict sample-order
+checks. It emits one CSV per cohort plus `batch_candidate_review.csv`.
 
-3. **No Requirement for Continuous Covariate Modeling:**
-   - `scVI`'s primary theoretical advantage lies in modeling complex non-linear continuous covariates (e.g., continuous drug dosages, spatial coordinates) and count-level dispersion parameters.
-   - In our benchmark cohorts, batch effects are strictly **discrete categorical factors** (e.g., library preparation chemistry, clinical collection center, sequencing batch). `Harmony`'s linear mixture model is fully sufficient and avoids the risk of deep autoencoder latent space distortion.
+The evidence checkpoint keeps all nine new `columns.batch` values `null`.
+After explicit user confirmation, each corrected run verifies paired
+cell/sample identities, pass-specific checksums, NAS synchronization, CLR
+zero-sum recentering, batch-only pseudobulk mode, exact Harmony keys, and
+native MrVI batch arguments.
 
-4. **Preservation of Linear Geometry for Downstream Distribution Distances:**
-   - Downstream sample stratification methods (PILOT Earth Mover's Distance, GloScope GMM divergences) compute geometric distances between sample-level cell distributions.
-   - `Harmony` outputs linear PCA embeddings (`X_pca_harmony`) that preserve the underlying Euclidean distance structure across cells, whereas non-linear VAE latent embeddings can alter metric distances between cell clusters unpredictably.
+### 3.5 No-leakage invariant
 
----
-
-### 3.4 Inter-Sample Distance PERMANOVA Across Metadata Columns
-
-To systematically evaluate whether sample-to-sample distance matrices reflect biological phenotypes versus technical batch noise, we perform **Anderson (2001) Distance-Based PERMANOVA** directly on the method output distance matrices ($D \in \mathbb{R}^{N \times N}$):
-
-1. **Marginal Variance Partitioning Formula:**
-   - Given inter-sample distance matrix $D$, construct Gower's centered inner-product matrix:
-     $$G = H \left( -\frac{1}{2} D^2 \right) H, \quad H = I - \frac{1}{N}\mathbf{1}\mathbf{1}^T$$
-   - For a multi-variable design matrix containing biological condition ($\text{Bio}$) and technical batch keys ($\text{Batch}_1, \dots, \text{Batch}_k$), compute the projection matrices and marginal sums of squares $\text{SS}_{\text{marginal}}$ by dropping each covariate from the full model.
-   - Partition total distance variance:
-     $$\text{Total Distance Variance} = R^2_{\text{Unique Bio}} + \sum_{k} R^2_{\text{Unique Batch}_k} + R^2_{\text{Shared (Confounded)}} + R^2_{\text{Residual}}$$
-
-2. **Hypothesis Testing:**
-   - Permutation Pseudo-$F$ test statistics ($B = 999$ permutations) evaluate the statistical significance of each covariate:
-     $$F = \frac{\text{SS}_{\text{marginal}} / \text{df}_{\text{effect}}}{\text{SS}_{\text{Residual}} / \text{df}_{\text{Residual}}}$$
-   - $p$-values are adjusted using the Benjamini-Hochberg FDR procedure.
-
-3. **Benchmarking Usage:**
-   - **Pre-Correction (Pass 1):** Identifies which technical metadata columns significantly drive sample distances ($p_{\text{adj}} < 0.05, R^2 > 0.05$) and measures baseline $R^2_{\text{Bio}}$.
-   - **Post-Correction (Pass 2):** Quantifies batch effect suppression ($\Delta R^2_{\text{Batch}}$) and biological retention ($\Delta R^2_{\text{Bio}}$).
-
----
-
-### 3.5 Quantitative Evaluation & Comparative Metrics
-
-1. **Marginal Distance Variance Explained (PERMANOVA):**
-   $$\text{Total Distance Variance} = R^2_{\text{Bio}} + R^2_{\text{Batch}} + R^2_{\text{Shared}} + R^2_{\text{Residual}}$$
-2. **Biological Signal vs. Batch Effect Ratio ($\text{Bio} / \text{Batch}$ Ratio):**
-   $$\text{Ratio}_{\text{Raw}} = \frac{R^2_{\text{Bio}}(\text{Raw})}{R^2_{\text{Batch}}(\text{Raw}) + \epsilon}, \quad \text{Ratio}_{\text{Corr}} = \frac{R^2_{\text{Bio}}(\text{Corr})}{R^2_{\text{Batch}}(\text{Corr}) + \epsilon}$$
-   *(Also evaluated using summarized benchmark metrics: $\text{Silhouette}_{\text{Bio}} / \text{LISI}_{\text{Batch}}$).*
-3. **Signal Shifts ($\Delta R^2$):**
-   - Batch Suppression: $\Delta R^2_{\text{Batch}} = R^2_{\text{Batch}}(\text{Raw}) - R^2_{\text{Batch}}(\text{Corr}) \quad (\text{Target: } \gg 0)$
-   - Biological Retention: $\Delta R^2_{\text{Bio}} = R^2_{\text{Bio}}(\text{Corr}) - R^2_{\text{Bio}}(\text{Raw}) \quad (\text{Target: } \ge 0)$
-4. **Ratio-of-Ratios (Correction Benefit Index):**
-   $$\text{RoR} = \frac{\text{Ratio}_{\text{Corr}}}{\text{Ratio}_{\text{Raw}}}$$
-   An $\text{RoR} > 1.0$ quantitatively proves that batch correction improved the biological signal-to-noise ratio rather than removing biological variation.
-
----
-
-### 3.6 Open Decisions & Visualization Options (Tracked in `TODO.md`)
-
-1. **Visualization Format for Multi-Batch Benchmark:**
-   - *Option A: Grouped / Stacked PERMANOVA Bar Plot:* Method-by-method grouped bar chart showing $R^2_{\text{Bio}}$, $R^2_{\text{Batch}}$, and $R^2_{\text{Residual}}$ under Raw vs. Corrected conditions. Highly interpretable for variance shifts.
-   - *Option B: FunkyHeatmap Overview:* Compact tabular heatmap summarizing PERMANOVA $R^2$, Silhouette, LISI, ANOSIM, and ARI across all methods. Provides visual consistency with Main Figure 2A / Supp Fig 15.
-2. **Metric Ratio Selection:** Decide between PERMANOVA $R^2$ ratio vs. aggregate benchmark metric ratio ($\text{Silhouette} / \text{LISI}$) for summary reporting across cohorts.
-
+Technical correction is never allowed to protect or model a biological label.
+Confounded technical variables remain documented warnings, not reasons to
+silently change the confirmed sample or label roles. Missing IDs, collisions,
+missing labels, empty derived annotations, invalid hierarchies, and missing
+exact pass keys remain hard failures.

@@ -1,10 +1,9 @@
 #!/bin/bash
 # ==============================================================================
-# run_subset_worker.sh -- Worker task for HPC dataset subsetting
+# run_subset_worker.sh -- Worker task for full-file registry audit + subsetting
 # ==============================================================================
 # Invoked by run_subset_hpc.sh as a SLURM array task or direct srun.
-# Processes one dataset key from the catalog using ${PYTHON_BIN}.
-# ==============================================================================
+# Processes one dataset key from the authoritative spec using ${PYTHON_BIN}.
 set -euo pipefail
 
 # Spool-safe SCRIPT_DIR recovery (AGENTS.md HPC invariant)

@@ -39,6 +39,7 @@ echo "=== Submitting preprocessing array job ==="
 
 DS_NAME_ARG=""
 FORCE_ARG=0
+VIEW_ARG=""
 SYNC_ONLY_IDS=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -48,6 +49,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --ds_name=*)
       DS_NAME_ARG="${1#*=}"
+      shift
+      ;;
+    --view)
+      VIEW_ARG="${2:-}"
+      if [[ -z "${VIEW_ARG}" ]]; then
+        echo "ERROR: --view requires a view name."
+        exit 1
+      fi
+      shift 2
+      ;;
+    --view=*)
+      VIEW_ARG="${1#*=}"
+      if [[ -z "${VIEW_ARG}" ]]; then
+        echo "ERROR: --view requires a view name."
+        exit 1
+      fi
       shift
       ;;
     --force)
@@ -82,10 +99,15 @@ if [[ -n "${SYNC_ONLY_IDS}" && ${FORCE_ARG} -eq 1 ]]; then
   exit 1
 fi
 
-# Passed to workers via the environment (sbatch propagates the submit script's
-# environment); 1.1_run_worker.sh forwards it to 1.1.1_preprocess.py --force.
-export FORCE_PREPROCESS="${FORCE_ARG}"
+if [[ -n "${SYNC_ONLY_IDS}" && -z "${VIEW_ARG}" ]]; then
+  echo "ERROR: --sync-only requires the original --view when view-scoped."
+  exit 1
+fi
 
+# Passed to workers via the environment (sbatch propagates the submit script's
+# environment); 1.1_run_worker.sh forwards them to 1.1.1_preprocess.py.
+export FORCE_PREPROCESS="${FORCE_ARG}"
+export PREPROCESS_VIEW="${VIEW_ARG}"
 # ---------------------------------------------------------------------------
 # Task -> dataset mapping for the email reports. Task ids map 1:1 to the FULL
 # sorted jq key list (includes "_" keys, which sort last): single-dataset mode

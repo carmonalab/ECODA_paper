@@ -45,6 +45,10 @@ FORCE_FLAG=""
 if [[ "${FORCE_PREPROCESS:-0}" == "1" ]]; then
   FORCE_FLAG="--force"
 fi
+VIEW_FLAG=()
+if [[ -n "${PREPROCESS_VIEW:-}" ]]; then
+  VIEW_FLAG=(--view "${PREPROCESS_VIEW}")
+fi
 
 # Unified retry handling: transient-failure signatures (stale BeeGFS
 # client-cache views, missing imports) trigger a self-requeue, capped by
@@ -59,7 +63,8 @@ set +e
     --input_dir "${DATA_DIR}" \
     --output_dir "${OUTPUT_DIR}" \
     --ds_name "${DS_NAME}" \
-    ${FORCE_FLAG}
+    ${FORCE_FLAG} \
+    "${VIEW_FLAG[@]}"
 RC=$?
 set -e
 if [[ ${RC} -eq 0 ]]; then

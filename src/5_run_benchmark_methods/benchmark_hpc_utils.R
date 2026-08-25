@@ -88,10 +88,11 @@ make_hvg_sets <- function(hvg_rank_genes, sizes = c(1000, 2000, 3000)) {
 
 # Variants of the shared DESeq2 pseudobulks missing from pseudobulk_dir
 # (all of them under --force).
-pb_variants_missing <- function(pseudobulk_dir, ds, force = FALSE) {
+pb_variants_missing <- function(pseudobulk_dir, ds, force = FALSE,
+                                cache_stem = ds) {
   if (force) return(PB_VARIANT_NAMES)
   PB_VARIANT_NAMES[!file.exists(
-    file.path(pseudobulk_dir, paste0(ds, "_pseudobulk_", PB_VARIANT_NAMES, ".rds"))
+    file.path(pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", PB_VARIANT_NAMES, ".rds"))
   )]
 }
 
@@ -142,13 +143,31 @@ load_pb_variants <- function(
   pseudobulk_dir,
   ds,
   force = FALSE,
-  log_file = NULL
+  log_file = NULL,
+  cache_stem = ds,
+  batch_col = NULL,
+  blind = TRUE,
+  correct_batch = FALSE,
+  variants = PB_VARIANT_NAMES
 ) {
-  missing <- pb_variants_missing(pseudobulk_dir, ds, force)
-  variants <- list()
-  for (v in PB_VARIANT_NAMES[!PB_VARIANT_NAMES %in% missing]) {
-    variants[[v]] <- readRDS(
-      file.path(pseudobulk_dir, paste0(ds, "_pseudobulk_", v, ".rds"))
+  target_variants <- unique(as.character(variants))
+  if (!all(target_variants %in% PB_VARIANT_NAMES)) {
+    stop("Unknown pseudobulk variant requested: ",
+         paste(setdiff(target_variants, PB_VARIANT_NAMES), collapse = ", "))
+  }
+  missing <- target_variants[
+    force | !file.exists(
+      file.path(
+        pseudobulk_dir,
+        paste0(cache_stem, "_pseudobulk_", target_variants, ".rds")
+      )
+    )
+  ]
+  loaded <- target_variants[!target_variants %in% missing]
+  variants_out <- list()
+  for (v in loaded) {
+    variants_out[[v]] <- readRDS(
+      file.path(pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds"))
     )
   }
   if (length(missing) > 0) {
@@ -163,30 +182,37 @@ load_pb_variants <- function(
       seurat,
       sample_col = sample_col,
       hvg_rank_genes = hvg_rank_genes,
-      variants = missing
+      variants = missing,
+      batch_col = batch_col,
+      blind = blind,
+      correct_batch = correct_batch
     )
     for (v in names(computed)) {
       save_rds_atomic(
         computed[[v]],
-        file.path(pseudobulk_dir, paste0(ds, "_pseudobulk_", v, ".rds"))
+        file.path(pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds"))
       )
       log_exec_row(ds, paste0("prepare_pseudobulk_", v),
                    computed[[v]]$time_secs, log_file)
-      variants[[v]] <- computed[[v]]
+      variants_out[[v]] <- computed[[v]]
     }
   }
-  return(variants)
+  return(variants_out)
 }
+
 # Composition is obs-only and therefore cannot rebuild missing pseudobulks.
-# Its --force flag controls composition result bundles, not the shared
-# pseudobulk cache; always reuse the variants prepared by the prep array.
 load_composition_pb_variants <- function(
   sample_col,
   hvg_rank_genes,
   pseudobulk_dir,
   ds,
   log_file = NULL,
-  loader = load_pb_variants
+  loader = load_pb_variants,
+  cache_stem = ds,
+  batch_col = NULL,
+  blind = TRUE,
+  correct_batch = FALSE,
+  variants = PB_VARIANT_NAMES
 ) {
   loader(
     seurat = NULL,
@@ -195,7 +221,12 @@ load_composition_pb_variants <- function(
     pseudobulk_dir = pseudobulk_dir,
     ds = ds,
     force = FALSE,
-    log_file = log_file
+    log_file = log_file,
+    cache_stem = cache_stem,
+    batch_col = batch_col,
+    blind = blind,
+    correct_batch = correct_batch,
+    variants = variants
   )
 }
 

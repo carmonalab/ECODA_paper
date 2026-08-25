@@ -95,7 +95,7 @@
 
 # Path to the shared exec-log merge script, resolved from THIS file's location
 # (BASH_SOURCE[0] inside a sourced file is the sourced file's path).
-BENCHMARK_MERGE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_python_sample_embedding_methods/1.1.2_merge_execution_times.py"
+ANALYSIS_MERGE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_python_sample_embedding_methods/1.1.2_merge_execution_times.py"
 
 # Compute-node watchdog entry script (same directory as this file).
 WATCHDOG_MAIN_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/watchdog_main.sh"
@@ -723,78 +723,81 @@ Check ${LOGS_DIR}/5_benchmark_watchdog_${LABEL}_${WATCHDOG_ID}.log/.err; recover
 # ---------------------------------------------------------------------------
 # NAS check -> RDS integrity sidecar -> merge exec logs -> rsync -> cleanup
 # ---------------------------------------------------------------------------
-benchmark_merge_sync_cleanup() {
+analysis_merge_sync_cleanup() {
   local LABELS=("$@")
+  local LOCAL_ROOT="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
+  local REMOTE_ROOT="${ANALYSIS_NAS_ROOT:-${NAS_TARGET_DIR}/benchmark}"
+  local LOG_PREFIX="${ANALYSIS_LOG_PREFIX:-execution_times_}"
+  local KIND="benchmark"
+  local KIND_CAP="Benchmark"
+  if [[ "${LOCAL_ROOT}" != "${HPC_SCRATCH_DIR}/benchmark" ]]; then
+    KIND="analysis"
+    KIND_CAP="Analysis"
+  fi
 
   # NAS must be reachable BEFORE the merge: the merge with --no-cleanup keeps
-  # the per-task logs until after the rsync, but a merge-then-fail would
-  # otherwise leave the pipeline unable to sync anything without a --force
-  # recompute.
+  # the per-task logs until after the rsync below succeeds.
   echo "Checking NAS reachability..."
-  if ! ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
-      echo "ERROR: NAS path ${NAS_TARGET_DIR} is unreachable."
+  if ! ls "${REMOTE_ROOT}/.." > /dev/null 2>&1; then
+      echo "ERROR: NAS path ${REMOTE_ROOT} is unreachable."
       notify_sync_status \
-        "ECODA: benchmark NOT synced (no NAS access)" \
-        "Benchmark sync to NAS skipped (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]}): NAS path ${NAS_TARGET_DIR} is unreachable (check VPN/NAS mount).
+        "ECODA: ${KIND} NOT synced (no NAS access)" \
+        "${KIND_CAP} sync to NAS skipped (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]}): NAS path ${REMOTE_ROOT} is unreachable (check VPN/NAS mount).
 $(benchmark_job_durations_block)"
       exit 1
   fi
-  mkdir -p "${NAS_TARGET_DIR}/benchmark"
+  mkdir -p "${REMOTE_ROOT}"
 
-  # Write an md5 checksum sidecar over the RDS result bundles so the notebook
-  # (load_hpc_benchmark_results) can verify NAS-loaded bundles before
-  # deserializing them. Best-effort: only if at least one RDS exists.
-  if ls "${HPC_SCRATCH_DIR}/benchmark"/results/*.rds \
-         "${HPC_SCRATCH_DIR}/benchmark"/pseudobulks/*.rds \
-         "${HPC_SCRATCH_DIR}/benchmark"/gloscope_dists/*.rds > /dev/null 2>&1; then
+  # Write an md5 checksum sidecar over the RDS result bundles. The sidecar is
+  # kept inside the pass-scoped analysis root so raw/corrected artifacts never
+  # share an integrity manifest.
+  if ls "${LOCAL_ROOT}"/results/*.rds \
+         "${LOCAL_ROOT}"/pseudobulks/*.rds \
+         "${LOCAL_ROOT}"/gloscope_dists/*.rds > /dev/null 2>&1; then
     FIND_DIRS=()
     for d in results pseudobulks gloscope_dists; do
-      [[ -d "${HPC_SCRATCH_DIR}/benchmark/${d}" ]] && FIND_DIRS+=("${d}")
+      [[ -d "${LOCAL_ROOT}/${d}" ]] && FIND_DIRS+=("${d}")
     done
-    (cd "${HPC_SCRATCH_DIR}/benchmark" && \
+    (cd "${LOCAL_ROOT}" && \
        find "${FIND_DIRS[@]}" -type f -name '*.rds' -exec md5sum {} + > checksums.md5)
-    echo "Wrote benchmark/checksums.md5 (RDS bundle integrity sidecar)."
+    echo "Wrote ${KIND}/checksums.md5 (RDS bundle integrity sidecar)."
   fi
 
   echo "All tasks completed successfully. Merging execution-time logs..."
   # --no-cleanup: per-task logs are deleted only AFTER the rsync below
-  # succeeds. --labels x --datasets scopes the merge to THIS run's
-  # (method/analysis x dataset) cross product so stale logs from previous
-  # failed runs never leak in. --existing-log preserves the NAS log across
-  # partial (e.g. --ds_name _debug) runs instead of overwriting it with
-  # subset rows. DATASET_NAMES is filled by benchmark_resolve_datasets
-  # (called before this function by every submitter).
-  local MERGE_ARGS=(--output_dir "${HPC_SCRATCH_DIR}/benchmark/embeddings"
+  # succeeds. The prefix scopes pass-qualified batch logs separately from
+  # ordinary benchmark logs.
+  local MERGE_ARGS=(--output_dir "${LOCAL_ROOT}/embeddings"
                     --no-cleanup
+                    --filename_prefix "${LOG_PREFIX}"
                     --labels "${LABELS[@]}"
                     --datasets "${DATASET_NAMES[@]}")
-  # The rsync below copies ${HPC_SCRATCH_DIR}/benchmark/ wholesale, so the
-  # merged log lives at benchmark/embeddings/execution_times.feather.
-  local EXISTING_LOG="${NAS_TARGET_DIR}/benchmark/embeddings/execution_times.feather"
+  local EXISTING_LOG="${REMOTE_ROOT}/embeddings/execution_times.feather"
   if [[ -f "${EXISTING_LOG}" ]]; then
       MERGE_ARGS+=(--existing-log "${EXISTING_LOG}")
   fi
-  "${PYTHON_BIN}" "${BENCHMARK_MERGE_SCRIPT}" "${MERGE_ARGS[@]}"
+  "${PYTHON_BIN}" "${ANALYSIS_MERGE_SCRIPT}" "${MERGE_ARGS[@]}"
 
   echo "Merged logs. Syncing results to NAS..."
-  rsync -rlptDv "${HPC_SCRATCH_DIR}/benchmark/" "${NAS_TARGET_DIR}/benchmark/"
-  echo "Results synchronized to ${NAS_TARGET_DIR}/benchmark/"
+  rsync -rlptDv "${LOCAL_ROOT}/" "${REMOTE_ROOT}/"
+  echo "Results synchronized to ${REMOTE_ROOT}/"
   notify_sync_status \
-    "ECODA: benchmark synced to NAS" \
-    "Benchmark results synced to ${NAS_TARGET_DIR}/benchmark/ (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]}).
+    "ECODA: ${KIND} synced to NAS" \
+    "${KIND_CAP} results synced to ${REMOTE_ROOT}/ (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]}).
 $(benchmark_job_durations_block)"
 
   # Per-task logs may be deleted only now that the sync has succeeded.
-  # Scoped to THIS run's (label x dataset) cross product so an overlapping
-  # submission's not-yet-merged logs are never deleted; the legacy
-  # execution_times_task_* sweep is a separate glob (no current worker
-  # produces that naming, so it can only hit stale files). Neither glob
-  # matches the merged execution_times.feather (no "_" suffix).
   for LABEL in "${LABELS[@]}"; do
     for DS in "${DATASET_NAMES[@]}"; do
-      rm -f "${HPC_SCRATCH_DIR}/benchmark/embeddings"/"execution_times_${LABEL}_${DS}.feather"
+      rm -f "${LOCAL_ROOT}/embeddings/${LOG_PREFIX}${LABEL}_${DS}.feather"
     done
   done
-  rm -f "${HPC_SCRATCH_DIR}/benchmark/embeddings"/execution_times_task_*.feather
+  rm -f "${LOCAL_ROOT}/embeddings"/"${LOG_PREFIX}"task_*.feather
   echo "Deleted per-task execution-time logs."
+}
+
+# Existing submitters retain their public helper name; batch-effect submitters
+# call the generic implementation directly.
+benchmark_merge_sync_cleanup() {
+  analysis_merge_sync_cleanup "$@"
 }

@@ -215,16 +215,15 @@ RESOLUTIONS = (0.1, 0.4, 2, 5, 20, 50)
 
 
 def process_view(
-    adata, view_name, batch_key, n_hvg_sizes, resolutions, flavor="seurat_v3_paper"
+    adata,
+    view_name,
+    batch_key,
+    n_hvg_sizes,
+    resolutions,
+    flavor="seurat_v3_paper",
+    compute_harmony=True,
 ):
-    """
-    Unified per-view pipeline. Resulting keys (example, benchmark view):
-      - X_pca_{view_name}_hvg{n}                     for every HVG size n
-      - at the CLUSTER_N_HVG (2000) pass additionally:
-          X_pca_harmony_{view_name}_hvg2000
-          neighbors_{view_name}_hvg2000              (+ _harmony variant)
-          leiden_res_{r}_{view_name}_hvg2000         (+ _harmony variant)
-    """
+    """Run one explicit analysis view with pass-qualified output keys."""
     adata = base_preprocessing(adata)
 
     adata = select_hvgs_ranked(
@@ -234,15 +233,18 @@ def process_view(
     for n in n_hvg_sizes:
         genes = top_n_hvg_genes(adata, n=n)
         key_suffix = f"{view_name}_hvg{n}"
-
         sub = compute_pca_and_store(adata, genes, key_suffix)
 
         if n == CLUSTER_N_HVG:
             run_clustering(adata, f"X_pca_{key_suffix}", key_suffix, resolutions)
-            compute_harmony_and_store(adata, sub, batch_key, key_suffix)
-            run_clustering(
-                adata, f"X_pca_harmony_{key_suffix}", f"{key_suffix}_harmony", resolutions
-            )
+            if compute_harmony:
+                compute_harmony_and_store(adata, sub, batch_key, key_suffix)
+                run_clustering(
+                    adata,
+                    f"X_pca_harmony_{key_suffix}",
+                    f"{key_suffix}_harmony",
+                    resolutions,
+                )
 
     return adata
 
@@ -250,32 +252,56 @@ def process_view(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def main(config_path, input_dir, output_dir, ds_name=None, force=False):
+def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=None):
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
-    config = read_datasets_json(config_path)
+    allowed_views = {
+        "benchmark_analysis",
+        "batch_effect_uncorrected",
+        "batch_effect_corrected",
+    }
+    if view is not None and view not in allowed_views:
+        raise ValueError(f"Unknown preprocessing view: {view}")
+    config = read_datasets_json(config_path, view=view)
+    if view is not None and not any(entry.get("views") for entry in config.values()):
+        raise ValueError(f"No dataset declares preprocessing view: {view}")
 
     for current_ds, entry in config.items():
         if ds_name is not None and current_ds != ds_name:
             continue
 
         sample_col = entry["sample_col"]
-        batch_col = entry["batch_col"] or entry["sample_col"]
-        use_for_batch_effect = entry["use_for_batch_effect"]
-
-        views = entry["views"]
+        batch_col = entry.get("batch_col")
+        use_for_batch_effect = bool(entry.get("use_for_batch_effect"))
+        views = entry.get("views") or {}
         if not views:
             print(f"Skipping {current_ds}: No views defined.")
             continue
 
         for view_name, view_info in views.items():
+            if view_name not in allowed_views:
+                raise ValueError(
+                    f"Unknown preprocessing view {view_name!r} for dataset {current_ds}"
+                )
+            is_uncorrected = view_name == "batch_effect_uncorrected"
+            is_corrected = view_name == "batch_effect_corrected"
+            is_batch_view = is_uncorrected or is_corrected
+            if is_batch_view and not use_for_batch_effect:
+                raise ValueError(
+                    f"Dataset {current_ds} declares {view_name} but "
+                    "use_for_batch_effect is false"
+                )
+            if is_corrected and batch_col is None:
+                raise ValueError(
+                    "corrected batch-effect view requires a confirmed columns.batch"
+                )
+
             input_file_name = view_info.get("input_file")
             if not input_file_name:
                 print(f"Skipping {current_ds} / {view_name}: No input_file_name.")
                 continue
-
             output_file_name = view_info.get("output_file")
             if not output_file_name:
                 print(f"Skipping {current_ds} / {view_name}: No output_file_name.")
@@ -290,8 +316,7 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False):
             adata_full = load_input(input_file_name, input_dir, output_dir)
 
             # Subset on ORIGINAL sample/label values, before the sample column
-            # is standardized (standardization can alter '-' or leading digits
-            # that subset values may contain).
+            # is standardized (standardization can alter '-' or leading digits).
             adata_view = apply_subset_vars(adata_full, view_info.get("subset_vars", {}))
             if adata_view.n_obs == 0:
                 raise ValueError(
@@ -300,7 +325,7 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False):
                 )
 
             if sample_col in adata_view.obs.columns:
-                sample_col_out = os.environ.get("SAMPLE_COLNAME", "Sample")
+                sample_col_out = "Sample" if is_batch_view else os.environ.get("SAMPLE_COLNAME", "Sample")
                 adata_view.obs[sample_col_out] = [
                     f"g{s}" if re.match(r"^\d", str(s)) else str(s).replace("-", "_")
                     for s in adata_view.obs[sample_col]
@@ -308,30 +333,34 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False):
             else:
                 raise ValueError(f"Cannot find {sample_col} in obs for {current_ds} / {view_name}")
 
-            is_batch_view = view_name == "batch_effect_analysis" and use_for_batch_effect
-            if is_batch_view:
+            if is_uncorrected:
+                batch_key = "Sample"
+                n_hvg_sizes = (BATCH_VIEW_N_HVG,)
+                compute_harmony = False
+            elif is_corrected:
                 batch_key = batch_col
                 n_hvg_sizes = (BATCH_VIEW_N_HVG,)
+                compute_harmony = True
             else:
                 batch_key = os.environ.get("SAMPLE_COLNAME", "Sample")
                 n_hvg_sizes = BENCHMARK_VIEW_N_HVG_SIZES
+                compute_harmony = True
 
-            if is_batch_view and batch_col not in adata_view.obs.columns:
+            if is_corrected and batch_col not in adata_view.obs.columns:
                 raise ValueError(
                     f"batch_col '{batch_col}' not found in obs for {current_ds} / {view_name}. "
                     f"Available columns: {list(adata_view.obs.columns)}"
                 )
 
             print(f"Processing {current_ds} / {view_name} (batch_key={batch_key})...")
-
             adata_view = process_view(
                 adata_view,
                 view_name=view_name,
                 batch_key=batch_key,
                 n_hvg_sizes=n_hvg_sizes,
                 resolutions=RESOLUTIONS,
+                compute_harmony=compute_harmony,
             )
-
             adata_view.write_h5ad(str(processed_file_path))
             print(f"  -> Saved: {processed_file_path}\n")
 
@@ -347,10 +376,13 @@ if __name__ == "__main__":
                         help="Output directory for processed .h5ad files")
     parser.add_argument("--ds_name", default=None,
                         help="Only process this dataset (skip all others; default: all datasets)")
+    parser.add_argument("--view", default=None,
+                        help="Process exactly one declared view (default: all declared views)")
     parser.add_argument("--force", action="store_true", default=False,
                         help="Recompute views whose output .h5ad already exists "
                              "(bypasses the 'Already processed' skip; needed for "
                              "debug re-runs or after code changes)")
     args = parser.parse_args()
     main(config_path=args.config_path, input_dir=args.input_dir,
-         output_dir=args.output_dir, ds_name=args.ds_name, force=args.force)
+         output_dir=args.output_dir, ds_name=args.ds_name, force=args.force,
+         view=args.view)

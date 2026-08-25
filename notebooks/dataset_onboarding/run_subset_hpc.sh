@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# run_subset_hpc.sh -- Submit parallel dataset subsetting array on HPC
+# run_subset_hpc.sh -- Submit parallel full-file registry audits + diagnostic subsets
 # ==============================================================================
 # Submits a SLURM array job to worker nodes so all 9 datasets run in parallel
 # (~2-3 minutes total) on BeeGFS scratch instead of sequentially on login nodes.
@@ -201,7 +201,7 @@ fi
 echo ""
 echo "=============================================================================="
 if [[ "${FAILED}" -eq 0 ]]; then
-  echo "SUCCESS: All diagnostic subsets and metadata JSONs generated in:"
+  echo "SUCCESS: All full-file registry audits and diagnostic subsets generated in:"
   echo "  ${OUT_DIR}"
   echo ""
   echo "To sync to your Mac, run from your local Mac repo root:"
