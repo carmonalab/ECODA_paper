@@ -88,6 +88,19 @@ def _df_records(df: pd.DataFrame) -> list[dict]:
     if df is None or df.empty:
         return []
     return json.loads(df.to_json(orient="records"))
+def _json_safe(value):
+    """Convert pandas/numpy non-finite scalars before strict JSON output."""
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (float, np.floating)):
+        return None if not np.isfinite(value) else float(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.bool_):
+        return bool(value)
+    return value
 def _apply_subset_vars(adata, subset_vars: dict):
     """Apply exact categorical inclusion/exclusion before registry audits."""
     if not subset_vars:
@@ -346,7 +359,7 @@ def process_dataset(
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     with open(meta_json_path, "w") as handle:
-        json.dump(meta_data, handle, indent=2, default=str, allow_nan=False)
+        json.dump(_json_safe(meta_data), handle, indent=2, default=str, allow_nan=False)
     print(f"[{name}] Wrote metadata and registry gate: {meta_json_path}")
 
     try:
