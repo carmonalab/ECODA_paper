@@ -63,6 +63,10 @@ done
 MODE_ARG="${POS_ARGS[0]:-production}"
 DS_NAME_ARG="${POS_ARGS[1]:-}"
 PY_ARGS=""
+PY_VIEW_ARGS=()
+if [[ -n "${VIEW_ARG}" ]]; then
+  PY_VIEW_ARGS=(--view "${VIEW_ARG}")
+fi
 
 if [ "$MODE_ARG" = "test" ]; then
   echo ">>> CONFIGURING PIPELINE IN TEST MODE <<<"
@@ -329,7 +333,8 @@ for DS_NAME in "${DATASET_NAMES[@]}"; do
        --mem=4G \
        --output="${LOG_FILE}" \
        --error="${LOG_FILE}" \
-       "${PYTHON_BIN}" "${SCRIPT_DIR}/1.1_prepare_chunks.py" ${PY_ARGS}; then
+       "${PYTHON_BIN}" "${SCRIPT_DIR}/1.1_prepare_chunks.py" \
+       ${PY_ARGS} "${PY_VIEW_ARGS[@]}"; then
     echo "ERROR: Chunk generation failed for ${DS_NAME}. See ${LOG_FILE}."
     FAILED_DATASETS+=("${DS_NAME}")
     continue

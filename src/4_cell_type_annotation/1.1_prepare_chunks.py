@@ -426,7 +426,13 @@ def main():
              "view that are NOT produced by this pipeline's feathers; exit 0 "
              "= clean, 2 = legacy found, 1 = error. No chunk/union writes.",
     )
+    parser.add_argument(
+        "--view",
+        default=None,
+        help="Only use the declared output view with this name.",
+    )
     args = parser.parse_args()
+    view_name = args.view or os.environ.get("ANNOTATION_VIEW") or ""
 
     project_root = os.environ.get("PROJECT_ROOT")
     if not project_root:
@@ -465,16 +471,11 @@ def main():
     h5ad_files = sorted(
         f for f in path_data.glob("*.h5ad") if not f.name.endswith("_raw.h5ad")
     )
-    print(f"Files found: {', '.join(f.name for f in h5ad_files)}")
-    if not h5ad_files:
-        sys.exit(f"CRITICAL Error: No preprocessed .h5ad files found in {path_data} "
-                 "(run the preprocess array first).")
+    available_names = {f.name for f in h5ad_files}
 
     # Defensive fail-closed completeness check (mirrors the bash guard in
-    # 1_prepare_chunks.sh, mirroring 1.1.1_preprocess.py skip semantics):
-    # every view output the preprocess array is expected to produce must
-    # already exist. Catches bypasses/drift of the bash check — the dataset
-    # lands in FAILED_DATASETS instead of building a partial union.
+    # 1_prepare_chunks.sh). A selected view permits annotation to follow the
+    # uncorrected pass before the deliberately deferred corrected pass exists.
     datasets_json = os.environ.get("DATASETS_JSON_FILE")
     if not datasets_json:
         print("WARNING: DATASETS_JSON_FILE not set; skipping the expected-view "
@@ -484,16 +485,25 @@ def main():
             ds_entry = json.load(f).get(ds_name, {})
         expected = {
             v.get("output_file_name")
-            for v in ds_entry.get("views", {}).values()
-            if v.get("input_file_name") is not None and v.get("output_file_name")
+            for view_key, v in ds_entry.get("views", {}).items()
+            if (not view_name or view_key == view_name)
+            and v.get("input_file_name") is not None
+            and v.get("output_file_name")
         }
-        missing = expected - {f.name for f in h5ad_files}
+        missing = expected - available_names
         if missing:
             sys.exit(
                 f"CRITICAL Error: preprocessing incomplete for {ds_name}: missing "
                 f"expected view file(s) {sorted(missing)} in {path_data} "
                 "(run the preprocess array first)."
             )
+        if view_name:
+            h5ad_files = [f for f in h5ad_files if f.name in expected]
+
+    print(f"Files found: {', '.join(f.name for f in h5ad_files)}")
+    if not h5ad_files:
+        sys.exit(f"CRITICAL Error: No preprocessed .h5ad files found in {path_data} "
+                 "(run the preprocess array first).")
 
     # Delete chunk file folder recursively to ensure a perfectly clean start
     shutil.rmtree(path_output_chunks, ignore_errors=True)
