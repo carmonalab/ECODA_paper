@@ -17,7 +17,7 @@ fi
 # Usage:
 #   ./1_submit_hpc_array.sh                  # all datasets (skips keys starting with _)
 #   ./1_submit_hpc_array.sh --ds_name _debug # single dataset (explicitly allowed)
-#   ./1_submit_hpc_array.sh --ds_name _debug --force   # recompute existing outputs
+#   ./1_submit_hpc_array.sh --ds_name Alzheimer --view batch_effect_uncorrected --mem 256G
 #   ./1_submit_hpc_array.sh --sync-only <job-id>       # resume: skip submission, re-check + sync
 #                                                    # (repeat the original --ds_name flag)
 #
@@ -40,7 +40,7 @@ echo "=== Submitting preprocessing array job ==="
 DS_NAME_ARG=""
 FORCE_ARG=0
 VIEW_ARG=""
-SYNC_ONLY_IDS=""
+MEMORY="128G"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ds_name)
@@ -66,6 +66,10 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       shift
+      ;;
+    --mem)
+      MEMORY="${2:-}"
+      shift 2
       ;;
     --force)
       FORCE_ARG=1
@@ -180,7 +184,7 @@ if [[ -n "${DS_NAME_ARG}" ]]; then
 else
   ARRAY_SPEC="1-${NUM_DATASETS}"
 fi
-echo "Array specification: ${ARRAY_SPEC}"
+echo "Memory: ${MEMORY}"
 
 if [[ -n "${SYNC_ONLY_IDS}" ]]; then
   echo "=== Sync-only resume mode: job ${SYNC_ONLY_IDS} (no submission) ==="
@@ -188,7 +192,7 @@ if [[ -n "${SYNC_ONLY_IDS}" ]]; then
 else
   mkdir -p "${LOGS_DIR}"
   SUBMIT_MSG=$(sbatch \
-      --array="${ARRAY_SPEC}%${MAX_NUM_CHUNKS_PARALLEL}" \
+      --mem="${MEMORY}" \
       --partition="${SLURM_PARTITION}" \
       --output="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.log" \
       --error="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.err" \
