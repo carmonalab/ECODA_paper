@@ -79,9 +79,8 @@ done
 # intentionally before the array so every selected dataset contributes to one
 # immutable manifest and the watchdog can retry exact chunk rows.
 for DS_NAME in "${DATASET_NAMES[@]}"; do
-  "${SCRIPT_DIR}/1_prepare_chunks.sh" production "${DS_NAME}"
+  "${SCRIPT_DIR}/1_prepare_chunks.sh" production "${DS_NAME}" --view batch_effect_uncorrected
 done
-
 MANIFEST_DIR="${HPC_SCRATCH_DIR}/_annotation_stage_manifests"
 mkdir -p "${MANIFEST_DIR}" "${LOGS_DIR}"
 MANIFEST="${MANIFEST_DIR}/onboarding_$(date +%Y%m%d%H%M%S)_$$.txt"

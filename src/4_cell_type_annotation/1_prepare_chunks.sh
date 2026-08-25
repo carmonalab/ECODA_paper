@@ -1,15 +1,13 @@
 #!/bin/bash
 #
 # 1_prepare_chunks.sh — Build dataset chunks (Supports production or test modes)
-#
 # Usage:
 #   ./1_prepare_chunks.sh                        # production, all datasets (chunk_size = 2)
 #   ./1_prepare_chunks.sh test                   # test mode, all datasets (chunk_size = 1)
 #   ./1_prepare_chunks.sh production <DS_NAME>   # production, single dataset
-#   ./1_prepare_chunks.sh test <DS_NAME>         # test mode, single dataset
+#   [--view NAME]                                # only require this preprocessed view
 #   [--force]                                    # recompute chunks even if the dataset is
 #                                                # already annotated (accepted in any position)
-#
 # Datasets that are already annotated are skipped unless --force is given —
 # but only after a clean-entry check (1.1_prepare_chunks.py --check-clean)
 # confirms the views carry no legacy annotation columns; flagged datasets are
@@ -24,14 +22,31 @@ cd "${PROJECT_ROOT}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "${LOGS_DIR}"
 
-# 2. Parse arguments: MODE (production/test) + optional single dataset + optional
-#    --force flag (accepted in any position; errors on unknown flags)
+# 2. Parse arguments: MODE (production/test) + optional single dataset,
+#    optional view, and optional --force flag (accepted in any position).
 FORCE_ARG=0
+VIEW_ARG=""
 POS_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force)
       FORCE_ARG=1
+      shift
+      ;;
+    --view)
+      VIEW_ARG="${2:-}"
+      if [[ -z "${VIEW_ARG}" ]]; then
+        echo "ERROR: --view requires a view name."
+        exit 1
+      fi
+      shift 2
+      ;;
+    --view=*)
+      VIEW_ARG="${1#*=}"
+      if [[ -z "${VIEW_ARG}" ]]; then
+        echo "ERROR: --view requires a view name."
+        exit 1
+      fi
       shift
       ;;
     -*)
@@ -278,8 +293,8 @@ for DS_NAME in "${DATASET_NAMES[@]}"; do
   EXPECTED_VIEW_FILES=()
   while IFS= read -r view_file; do
     EXPECTED_VIEW_FILES+=("${view_file}")
-  done < <(jq -r --arg ds "${DS_NAME}" \
-    '.[$ds].views | to_entries[] | select(.value.input_file_name != null) | select(.value.output_file_name != null) | .value.output_file_name' \
+  done < <(jq -r --arg ds "${DS_NAME}" --arg view "${VIEW_ARG}" \
+    '.[$ds].views | to_entries[] | select($view == "" or .key == $view) | select(.value.input_file_name != null) | select(.value.output_file_name != null) | .value.output_file_name' \
     "${DATASETS_JSON_FILE}")
 
   MISSING_VIEW_FILES=()
