@@ -1425,7 +1425,18 @@ ggsave(file.path(path_plots, "Figure_3_B_annotationmethods_pca_adams.pdf"),
 #### Supp fig 19: Plot PCA for selected annot. methods (GongSharma)
 
 ```{r fig.height=10, fig.width=12}
-datas <- c("Bassez", "Lee", "Stephenson")
+requested_datas <- c("Bassez", "Lee", "Stephenson")
+datas <- intersect(requested_datas, names(result_list[["bmark"]]))
+missing_datas <- setdiff(requested_datas, datas)
+if (length(missing_datas) > 0) {
+  message(
+    "Supp fig 19: skipping datasets without benchmark-analysis bundles: ",
+    paste(missing_datas, collapse = ", ")
+  )
+}
+if (length(datas) == 0) {
+  stop("Supp fig 19 has no datasets with benchmark-analysis bundles.")
+}
 
 methods <- list(
   "ECODA_authors_HR" = "ECODA_authors_HR",

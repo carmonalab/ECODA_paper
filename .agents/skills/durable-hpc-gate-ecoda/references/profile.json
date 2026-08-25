@@ -93,7 +93,7 @@
       },
       {
         "name": "terminal-dataset-ground-truth",
-        "command": "cd \"$HOME/ECODA_paper\" && test -r datasets.json && grep -Eq '(^|[,{[:space:]])(dataset|identifier|sample)' datasets.json",
+        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && jq -e 'has(\"Bassez\") and (.Bassez.columns.sample != null) and (.Bassez.columns.label != null)' datasets.json >/dev/null",
         "expected_exit": 0
       },
       {
@@ -110,12 +110,12 @@
       },
       {
         "name": "nas-analysis-checksums",
-        "command": "cd \"$NAS_TARGET_DIR\" && if [[ -d batch_effect ]]; then for pass in uncorrected corrected; do if [[ -d \"batch_effect/$pass\" ]]; then test -s \"batch_effect/$pass/checksums.md5\" && (cd \"batch_effect/$pass\" && md5sum -c checksums.md5); fi; done; else cd benchmark && test -s checksums.md5 && md5sum -c checksums.md5; fi",
+        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && cd \"$NAS_TARGET_DIR\" && if [ -d benchmark ]; then test -s benchmark/checksums.md5 && (cd benchmark && md5sum -c checksums.md5); elif [ -d batch_effect ]; then found=0; for pass in uncorrected corrected; do if [ -d \"batch_effect/$pass\" ]; then found=1; test -s \"batch_effect/$pass/checksums.md5\" && (cd \"batch_effect/$pass\" && md5sum -c checksums.md5); fi; done; test \"$found\" -eq 1; else exit 1; fi",
         "expected_exit": 0
       },
       {
         "name": "dataset-identifiers-come-from-ground-truth",
-        "command": "cd \"$HOME/ECODA_paper\" && test -r datasets.json && grep -Eq '(^|[,{[:space:]])(dataset|identifier|sample)' datasets.json",
+        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && jq -e 'has(\"Bassez\") and (.Bassez.columns.sample != null) and (.Bassez.columns.label != null)' datasets.json >/dev/null",
         "expected_exit": 0
       }
     ],
