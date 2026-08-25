@@ -1,0 +1,136 @@
+{
+  "name": "durable-hpc-gate-ecoda",
+  "execution": {
+    "mode": "ssh",
+    "runner_shell": "/bin/bash",
+    "ssh_binary": "ssh",
+    "tmux_binary": "tmux"
+  },
+  "policy": {
+    "manifest_constraints": {
+      "remote_host": ["bamboo"],
+      "remote_workdir_suffix": ["/ECODA_paper"],
+      "remote_workdir_patterns": ["^/home/users/[^/]+/[^/]+/ECODA_paper$", "^/Users/[^/]+/ECODA_paper$"],
+      "remote_path_suffixes": {
+        "remote_manifest": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"],
+        "remote_runner": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"],
+        "remote_log": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"],
+        "remote_status": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"],
+        "remote_failure_status": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"],
+        "remote_exit_code": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"],
+        "completion_channel": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"]
+      },
+      "remote_path_patterns": {
+        "remote_manifest": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"],
+        "remote_runner": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"],
+        "remote_log": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"],
+        "remote_status": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"],
+        "remote_failure_status": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"],
+        "remote_exit_code": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"],
+        "completion_channel": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"]
+      }
+    },
+    "invariants": [
+      {
+        "name": "bamboo-repository-root",
+        "command": "cd \"$HOME/ECODA_paper\" && test \"$(pwd -P)\" = \"$HOME/ECODA_paper\"",
+        "expected_exit": 0
+      },
+      {
+        "name": "repository-guidelines-present",
+        "command": "cd \"$HOME/ECODA_paper\" && test -f AGENTS.md",
+        "expected_exit": 0
+      },
+      {
+        "name": "canonical-slurm-configuration",
+        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test \"$PROJECT_ROOT\" = \"$HOME/ECODA_paper\" && test \"$HPC_SCRATCH_DIR\" = \"$HOME/scratch/ECODA_paper\" && test \"$NAS_TARGET_DIR\" = \"/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper\"",
+        "expected_exit": 0
+      },
+      {
+        "name": "immutable-dataset-and-lock-contract",
+        "command": "cd \"$HOME/ECODA_paper\" && test -f datasets.json && test -f pixi.toml && test -f pixi.lock && sha256sum datasets.json pixi.toml pixi.lock >/dev/null",
+        "expected_exit": 0,
+        "discrepancy_kind": "known-artifact-provenance"
+      },
+      {
+        "name": "configured-worker-entrypoints",
+        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test -n \"$PYTHON_BIN\" && test -n \"$PIXI_RSCRIPT\"",
+        "expected_exit": 0
+      },
+      {
+        "name": "benchmark-wrapper-tree",
+        "command": "cd \"$HOME/ECODA_paper\" && test -d src/5_run_benchmark_methods && test -f src/5_run_benchmark_methods/benchmark_submit_common.sh",
+        "expected_exit": 0
+      },
+      {
+        "name": "scratch-is-not-the-repository",
+        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test \"$HPC_SCRATCH_DIR\" != \"$PROJECT_ROOT\"",
+        "expected_exit": 0
+      }
+    ],
+    "immutable_fingerprints": [
+      {
+        "name": "datasets-pixi-lock-sha256",
+        "command": "cd \"$HOME/ECODA_paper\" && sha256sum datasets.json pixi.toml pixi.lock",
+        "expected_exit": 0
+      },
+      {
+        "name": "repository-head",
+        "command": "cd \"$HOME/ECODA_paper\" && git rev-parse --verify HEAD",
+        "expected_exit": 0
+      }
+    ],
+    "audit_commands": [
+      {
+        "name": "terminal-repository-root",
+        "command": "cd \"$HOME/ECODA_paper\" && test \"$(pwd -P)\" = \"$HOME/ECODA_paper\"",
+        "expected_exit": 0
+      },
+      {
+        "name": "terminal-canonical-artifact-roots",
+        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR\" && test -d \"$NAS_TARGET_DIR\"",
+        "expected_exit": 0
+      },
+      {
+        "name": "terminal-dataset-ground-truth",
+        "command": "cd \"$HOME/ECODA_paper\" && test -r datasets.json && grep -Eq '(^|[,{[:space:]])(dataset|identifier|sample)' datasets.json",
+        "expected_exit": 0
+      },
+      {
+        "name": "terminal-benchmark-wrapper-contract",
+        "command": "cd \"$HOME/ECODA_paper\" && test -d src/5_run_benchmark_methods && test -f src/5_run_benchmark_methods/benchmark_submit_common.sh",
+        "expected_exit": 0
+      }
+    ],
+    "artifact_contracts": [
+      {
+        "name": "scratch-and-nas-outputs-use-configured-roots",
+        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR\" && test -d \"$NAS_TARGET_DIR\"",
+        "expected_exit": 0
+      },
+      {
+        "name": "nas-benchmark-checksums",
+        "command": "cd \"$NAS_TARGET_DIR/benchmark\" && test -s checksums.md5 && md5sum -c checksums.md5",
+        "expected_exit": 0
+      },
+      {
+        "name": "dataset-identifiers-come-from-ground-truth",
+        "command": "cd \"$HOME/ECODA_paper\" && test -r datasets.json && grep -Eq '(^|[,{[:space:]])(dataset|identifier|sample)' datasets.json",
+        "expected_exit": 0
+      }
+    ],
+    "accounting_command": "sacct -n -P -X -j {scheduler_ids} --format=JobIDRaw,State,ExitCode",
+    "require_scheduler_ids": true,
+    "reviewer_required": true,
+    "known_discrepancies": [
+      {
+        "kind": "known-artifact-provenance",
+        "severity": "known"
+      },
+      {
+        "kind": "approved-reused-cache",
+        "severity": "known"
+      }
+    ]
+  }
+}
