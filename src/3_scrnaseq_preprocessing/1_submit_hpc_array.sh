@@ -18,7 +18,7 @@ fi
 #   ./1_submit_hpc_array.sh                  # all datasets (skips keys starting with _)
 #   ./1_submit_hpc_array.sh --ds_name _debug # single dataset (explicitly allowed)
 #   ./1_submit_hpc_array.sh --ds_name Alzheimer --view batch_effect_uncorrected --mem 256G
-#   ./1_submit_hpc_array.sh --sync-only <job-id>       # resume: skip submission, re-check + sync
+#   ./1_submit_hpc_array.sh --partition shared-cpu # override scheduler partition
 #                                                    # (repeat the original --ds_name flag)
 #
 # Array task IDs map 1:1 to jq 'keys[]' line numbers (see 1.1_run_worker.sh).
@@ -41,6 +41,7 @@ DS_NAME_ARG=""
 FORCE_ARG=0
 VIEW_ARG=""
 MEMORY="128G"
+PARTITION_ARG=""
 SYNC_ONLY_IDS=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -70,6 +71,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --mem)
       MEMORY="${2:-}"
+      shift 2
+      ;;
+    --partition)
+      PARTITION_ARG="${2:-}"
       shift 2
       ;;
     --force)
@@ -186,6 +191,8 @@ else
   ARRAY_SPEC="1-${NUM_DATASETS}"
 fi
 echo "Memory: ${MEMORY}"
+PARTITION="${PARTITION_ARG:-${SLURM_PARTITION}}"
+echo "Partition: ${PARTITION}"
 
 if [[ -n "${SYNC_ONLY_IDS}" ]]; then
   echo "=== Sync-only resume mode: job ${SYNC_ONLY_IDS} (no submission) ==="
@@ -194,7 +201,7 @@ else
   mkdir -p "${LOGS_DIR}"
   SUBMIT_MSG=$(sbatch \
       --mem="${MEMORY}" \
-      --partition="${SLURM_PARTITION}" \
+      --partition="${PARTITION}" \
       --output="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.log" \
       --error="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.err" \
       --mail-user="${USER_EMAIL}" \
