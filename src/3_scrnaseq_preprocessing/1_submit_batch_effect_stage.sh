@@ -163,6 +163,27 @@ mkdir -p "${MANIFEST_DIR}" "${WATCHDOG_STATUS_DIR}" "${LOGS_DIR}"
 MANIFEST="${MANIFEST_DIR}/${VIEW}_$(date +%Y%m%d%H%M%S)_$$.txt"
 printf '%s\n' "${DATASET_NAMES[@]}" > "${MANIFEST}"
 
+sync_outputs_to_nas() {
+  local DS_NAME OUTPUT_NAME OUTPUT_FILE DEST_DIR
+  if [[ ! -d "${NAS_TARGET_DIR}" ]]; then
+    echo "ERROR: NAS path is unreachable: ${NAS_TARGET_DIR}" >&2
+    return 1
+  fi
+  for DS_NAME in "${DATASET_NAMES[@]}"; do
+    OUTPUT_NAME="$(jq -er --arg ds "${DS_NAME}" --arg view "${VIEW}" \
+      '.[$ds].views[$view].output_file_name' "${DATASETS_JSON_FILE}")"
+    OUTPUT_FILE="${HPC_SCRATCH_DIR}/${DS_NAME}/output/${OUTPUT_NAME}"
+    if [[ ! -s "${OUTPUT_FILE}" ]]; then
+      echo "ERROR: expected preprocessing artifact is missing or empty: ${OUTPUT_FILE}" >&2
+      return 1
+    fi
+    DEST_DIR="${NAS_TARGET_DIR}/${DS_NAME}/output"
+    mkdir -p "${DEST_DIR}"
+    rsync -rlptD "${HPC_SCRATCH_DIR}/${DS_NAME}/output/" "${DEST_DIR}/"
+  done
+}
+
+
 ARRAY_OUTPUT="${LOGS_DIR}/3_scrnaseq_batch_effect_%A_%a.log"
 ARRAY_ERROR="${LOGS_DIR}/3_scrnaseq_batch_effect_%A_%a.err"
 WATCHDOG_OUTPUT="${LOGS_DIR}/3_scrnaseq_batch_effect_watchdog_%j.log"
@@ -212,3 +233,10 @@ printf 'PREPROCESS_DATASETS=%s\n' "${DATASET_NAMES[*]}"
 printf 'PREPROCESS_MEMORY=%s\n' "${MEMORY}"
 printf 'PREPROCESS_MAX_MEMORY=%s\n' "${MAX_MEMORY}"
 printf 'PREPROCESS_PARTITION=%s\n' "${PARTITION}"
+if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" == "1" ]]; then
+  printf 'PREPROCESS_NAS_SYNC=TEST_SKIPPED\n'
+elif ! sync_outputs_to_nas; then
+  exit 1
+else
+  printf 'PREPROCESS_NAS_SYNC=OK\n'
+fi

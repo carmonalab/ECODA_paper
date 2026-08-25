@@ -26,6 +26,7 @@ OUTPUT="$(
   HOME="${TMP_DIR}/home" \
   PATH="${TMP_DIR}/bin:${PATH}" \
   USER_EMAIL="test@example.invalid" \
+  PREPROCESS_SUBMITTER_TEST=1 \
   bash "${ROOT}/src/3_scrnaseq_preprocessing/1_submit_batch_effect_stage.sh"
 )"
 

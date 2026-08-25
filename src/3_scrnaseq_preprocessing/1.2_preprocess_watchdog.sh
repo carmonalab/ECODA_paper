@@ -1,7 +1,8 @@
 #!/bin/bash
 # Compute-node watchdog for the stage-wise onboarding preprocessing array.
-# It owns terminal accounting, OOM-only retries, artifact validation, and NAS
-# synchronization so an SSH/login-session loss cannot interrupt escalation.
+# It owns terminal accounting, OOM-only retries, and scratch artifact
+# validation. NAS synchronization is deliberately performed by the durable
+# login-side wrapper because compute nodes cannot reach the NAS mount.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -151,8 +152,8 @@ submit_retry_array() {
   printf '%s' "${RETRY_ID}"
 }
 
-validate_and_sync() {
-  local DS_NAME OUTPUT_NAME OUTPUT_FILE DEST_DIR
+validate_outputs() {
+  local DS_NAME OUTPUT_NAME OUTPUT_FILE
   while IFS= read -r DS_NAME; do
     [[ -n "${DS_NAME}" ]] || continue
     OUTPUT_NAME="$(jq -er --arg ds "${DS_NAME}" --arg view "${VIEW}" \
@@ -162,17 +163,6 @@ validate_and_sync() {
       echo "ERROR: expected preprocessing artifact is missing or empty: ${OUTPUT_FILE}" >&2
       return 1
     fi
-  done < "${ROOT_MANIFEST}"
-
-  if [[ ! -d "${NAS_TARGET_DIR}" ]]; then
-    echo "ERROR: NAS path is unreachable: ${NAS_TARGET_DIR}" >&2
-    return 1
-  fi
-  while IFS= read -r DS_NAME; do
-    [[ -n "${DS_NAME}" ]] || continue
-    DEST_DIR="${NAS_TARGET_DIR}/${DS_NAME}/output"
-    mkdir -p "${DEST_DIR}"
-    rsync -rlptD "${HPC_SCRATCH_DIR}/${DS_NAME}/output/" "${DEST_DIR}/"
   done < "${ROOT_MANIFEST}"
 }
 
@@ -230,9 +220,8 @@ while :; do
   CURRENT_MANIFEST="${RETRY_MANIFEST}"
 done
 
-if ! validate_and_sync; then
-  write_status FAIL "preprocessing artifacts or NAS synchronization failed"
+if ! validate_outputs; then
+  write_status FAIL "preprocessing artifacts are missing or empty"
   exit 1
 fi
-write_status OK "all preprocessing tasks completed and artifacts synchronized"
-echo "Preprocessing stage completed successfully: ${ARRAY_JOB_IDS}"
+write_status OK "all preprocessing tasks completed and scratch artifacts validated"

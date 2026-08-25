@@ -113,10 +113,11 @@ The uncorrected onboarding preprocessing stage is one parallel array over the
 nine new cohorts plus Joanito and Stephenson. Launch
 `src/3_scrnaseq_preprocessing/1_submit_batch_effect_stage.sh` through the
 checked-in `durable-hpc-gate-ecoda` profile; it submits the worker array and a
-compute-node watchdog, then returns scheduler IDs without waiting. The
-watchdog retries only `OUT_OF_MEMORY` rows with doubled memory up to its
-configured ceiling, validates every pass-qualified h5ad, and synchronizes
-completed output to the canonical NAS root.
+compute-node watchdog. The login-side wrapper blocks with scheduler-native
+wait, while the watchdog retries only `OUT_OF_MEMORY` rows with doubled memory
+up to its configured ceiling and validates every pass-qualified h5ad. After
+that terminal validation, the wrapper synchronizes completed output to the
+canonical NAS root.
 
 Use one durable gate per pipeline stage. Arm one unbounded durable `wait`, run
 one terminal `inspect` with the array, every watchdog retry array, and watchdog
