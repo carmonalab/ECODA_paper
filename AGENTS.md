@@ -138,6 +138,7 @@ sacct -j <job-id> --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS
   fi
   ```
 
+- Plans should always be saved in `.agents/plans/` within this repo. The plan file name should be short and descriptive and prepended by the date and time, e.g. `1787688946000-onboarding-datasets-json-plan.md`.
 - **Completed implementation plans:** move plans from `.agents/plans/` to `.agents/plans/archive/`, stage the implementation and archived plan, then commit and push.
 
 ## Important Files
