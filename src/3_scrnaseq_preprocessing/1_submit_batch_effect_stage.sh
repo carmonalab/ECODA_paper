@@ -188,7 +188,7 @@ ARRAY_OUTPUT="${LOGS_DIR}/3_scrnaseq_batch_effect_%A_%a.log"
 ARRAY_ERROR="${LOGS_DIR}/3_scrnaseq_batch_effect_%A_%a.err"
 WATCHDOG_OUTPUT="${LOGS_DIR}/3_scrnaseq_batch_effect_watchdog_%j.log"
 WATCHDOG_ERROR="${LOGS_DIR}/3_scrnaseq_batch_effect_watchdog_%j.err"
-EXPORTS="ALL,PREPROCESS_DATASETS_FILE=${MANIFEST},PREPROCESS_VIEW=${VIEW},FORCE_PREPROCESS=${FORCE_PREPROCESS}"
+EXPORTS="ALL,PREPROCESS_DATASETS_FILE=${MANIFEST},PREPROCESS_VIEW=${VIEW},FORCE_PREPROCESS=${FORCE_PREPROCESS},PREPROCESS_ERROR_PREFIX=${LOGS_DIR}/3_scrnaseq_batch_effect"
 
 ARRAY_ID="$(sbatch --parsable \
   --array="1-${#DATASET_NAMES[@]}%${THROTTLE}" \
