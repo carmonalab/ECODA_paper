@@ -200,6 +200,7 @@ if [[ -n "${SYNC_ONLY_IDS}" ]]; then
 else
   mkdir -p "${LOGS_DIR}"
   SUBMIT_MSG=$(sbatch \
+      --array="${ARRAY_SPEC}%${MAX_NUM_CHUNKS_PARALLEL}" \
       --mem="${MEMORY}" \
       --partition="${PARTITION}" \
       --output="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.log" \
