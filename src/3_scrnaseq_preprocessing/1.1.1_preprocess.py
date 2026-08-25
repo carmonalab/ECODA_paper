@@ -148,11 +148,12 @@ def base_preprocessing(adata):
     filters cells and genes on raw counts, vaults raw counts into layers['counts'],
     and computes log-normalized expression in adata.X.
     """
-    # 1. Resolve raw integer counts:
-    # Priority 1: layers['counts'] (already populated by anndataR or dataset preprocessing)
-    if "counts" in adata.layers:
-        adata.X = adata.layers["counts"].copy()
-    # Priority 2: raw.X holds integer counts while adata.X is log-normalized or scaled
+    counts_layer_present = "counts" in adata.layers
+    if counts_layer_present:
+        # Use the existing raw layer as the temporary filter matrix. The copy
+        # needed for normalization is deferred until after cell/gene filters,
+        # avoiding two full-cohort sparse duplicates for large inputs.
+        adata.X = adata.layers["counts"]
     elif adata.raw is not None and adata.raw.X is not None:
         raw_mat = adata.raw.X
         sample_raw = raw_mat.data[:1000] if sp.issparse(raw_mat) else raw_mat.ravel()[:1000]
@@ -191,9 +192,13 @@ def base_preprocessing(adata):
     standardize_gene_symbols(adata)
     adata.var_names_make_unique()
 
-    # 5. Vault raw integer counts into layers['counts']
-    adata.layers["counts"] = adata.X.copy()
-
+    if counts_layer_present:
+        # Keep layers["counts"] raw and detach X only after filtering.
+        adata.X = adata.X.copy()
+    else:
+        # Raw counts came from X/raw.X; vault one filtered copy before
+        # normalizing X.
+        adata.layers["counts"] = adata.X.copy()
     # 6. Normalize and log-transform X for PCA/Harmony
     sc.pp.normalize_total(adata)
     sc.pp.log1p(adata)
