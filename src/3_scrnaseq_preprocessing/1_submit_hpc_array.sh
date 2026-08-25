@@ -41,6 +41,7 @@ DS_NAME_ARG=""
 FORCE_ARG=0
 VIEW_ARG=""
 MEMORY="128G"
+SYNC_ONLY_IDS=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ds_name)
