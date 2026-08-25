@@ -109,8 +109,8 @@
         "expected_exit": 0
       },
       {
-        "name": "nas-benchmark-checksums",
-        "command": "cd \"$NAS_TARGET_DIR/benchmark\" && test -s checksums.md5 && md5sum -c checksums.md5",
+        "name": "nas-analysis-checksums",
+        "command": "cd \"$NAS_TARGET_DIR\" && if [[ -d batch_effect ]]; then for pass in uncorrected corrected; do if [[ -d \"batch_effect/$pass\" ]]; then test -s \"batch_effect/$pass/checksums.md5\" && (cd \"batch_effect/$pass\" && md5sum -c checksums.md5); fi; done; else cd benchmark && test -s checksums.md5 && md5sum -c checksums.md5; fi",
         "expected_exit": 0
       },
       {
