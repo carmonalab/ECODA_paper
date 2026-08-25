@@ -41,7 +41,6 @@
   "use_for_benchmark": true,
   "use_for_batch_effect": false,
   "columns": { ... unchanged ... },
-  "meta_cols_keep": [ ... unchanged ... ],
   "views": {
     "benchmark_analysis": {
       "input_file_name": "AdamsT_2020_32832599.rds",
@@ -113,10 +112,6 @@
     "cell_type_low_res": "AIFI_L1",
     "cell_type_high_res": "AIFI_L3"
   },
-  "meta_cols_keep": [
-    "Sample", "sample.subjectAgeAtDraw", "subject.cmv",
-    "subject.biologicalSex", "AIFI_L1", "AIFI_L3"
-  ],
   "views": {
     "benchmark_analysis": {
       "input_file_name": "Gongsharma_cmv_young_males_ECODAprocessed.rds",

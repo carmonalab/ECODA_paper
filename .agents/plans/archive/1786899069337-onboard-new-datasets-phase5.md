@@ -515,7 +515,7 @@ Two bugs were exposed by the user's first run and verified from the Mac
 ### T8 — datasets.json registration (ASK THE USER FIRST — AGENTS.md rule)
 - Entries for the approved datasets: `folder_name: "JooM_2025_41097818"`,
   `file_names` (as stored on NAS), `columns` (sample / label / batch / CT
-  columns confirmed in T3), `meta_cols_keep`, `views` with `subset_vars`
+  columns confirmed in T3), views with `subset_vars`
   (e.g. Diabetes minus embryos E12–E15; Covid-19 PBMC-only if not already
   subset; Kidney already scRNA-only in the author file), `use_for_benchmark`
   / `use_for_batch_effect` per T7, `tissue` / `normal_tissue`, and the

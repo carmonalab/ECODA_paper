@@ -224,7 +224,6 @@ Changes:
        "cell_type_low_res": null,
        "cell_type_high_res": null
      },
-     "meta_cols_keep": ["Sample", "cond", "batch"],
      "views": {
        "batch_effect_analysis": {
          "input_file_name": "combined_pbmc_batch_effect_analysis.h5ad",

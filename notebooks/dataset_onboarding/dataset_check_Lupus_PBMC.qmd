@@ -127,7 +127,6 @@ pd.DataFrame([{
     "registry_gate": registry_gate.get("status"),
     "declared_roles": registry_gate.get("selected"),
     "annotation_source": registry_gate.get("registry_roles", {}).get("annotation_source"),
-    "meta_cols_keep": registry_gate.get("meta_cols_keep"),
     "reasons": registry_gate.get("reasons"),
     "pending_reasons": registry_gate.get("pending_reasons"),
     "stable_field_conflict_warnings": registry_gate.get("stable_field_conflict_warnings"),

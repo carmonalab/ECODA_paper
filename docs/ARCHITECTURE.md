@@ -74,7 +74,6 @@ All evaluated cohorts and views are configured in [`datasets.json`](../datasets.
       "cell_type_low_res": "Broad cell type annotation column",
       "cell_type_high_res": "High-granularity cell type annotation column"
     },
-    "meta_cols_keep": ["List", "of", "obs", "columns", "to", "retain"],
     "views": {
       "benchmark_analysis": {
         "input_file_name": "Input raw file",

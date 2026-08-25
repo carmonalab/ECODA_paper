@@ -51,7 +51,6 @@ read_datasets_json <- function(path = "datasets.json", view = NULL) {
       batch_col = columns[["batch"]],
       cell_type_low_res = columns[["cell_type_low_res"]],
       cell_type_high_res = columns[["cell_type_high_res"]],
-      meta_cols_keep = ds[["meta_cols_keep"]],
       # Optional flat flag: annotation methods this dataset is NOT suitable
       # for (values: "hitme", "scatomic"). Absent/empty = suitable for all
       # (see AGENTS.md "Onboarding new datasets" / benchmark_pipeline.R).

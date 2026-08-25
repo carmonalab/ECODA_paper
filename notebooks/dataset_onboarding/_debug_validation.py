@@ -448,8 +448,6 @@ def run_registry_audit(
             errors.append(f"{name}: use_for_benchmark must be false")
         if entry.get("use_for_batch_effect") is not True:
             errors.append(f"{name}: use_for_batch_effect must be true")
-        if entry.get("meta_cols_keep") != gate.get("meta_cols_keep"):
-            errors.append(f"{name}: meta_cols_keep differs from registry gate")
         print(f"PASS {name}: registry entry matches {meta_path.name}")
 
     if errors:

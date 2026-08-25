@@ -14,17 +14,6 @@
       "cell_type_low_res": "cell.type",
       "cell_type_high_res": "cell.type"
     },
-    "meta_cols_keep": [
-      "sample.ID",
-      "sample.origin",
-      "patient.ID",
-      "iCMS",
-      "dataset",
-      "Gender",
-      "Site",
-      "cell.type",
-      "seqtec"
-    ],
     "views": {
       "benchmark_analysis": {
         "input_file_name": "JoaI_2022_35773407_debug_5samples.h5ad",
@@ -57,10 +46,6 @@
       "cell_type_low_res": "OriginalAnnotationLevel1",
       "cell_type_high_res": "OriginalAnnotationLevel2"
     },
-    "meta_cols_keep": [
-      "Sample", "Tissue", "Disease_Identity",
-      "OriginalAnnotationLevel1", "OriginalAnnotationLevel2"
-    ],
     "views": {
       "benchmark_analysis": {
         "input_file_name": "AdamsT_2020_32832599.rds",
@@ -85,10 +70,6 @@
       "cell_type_low_res": "cellType",
       "cell_type_high_res": "cellSubType"
     },
-    "meta_cols_keep": [
-      "sample", "expansion", "timepoint", "BC_type", "cohort",
-      "cellType", "cellSubType"
-    ],
     "views": {
       "benchmark_analysis": {
         "input_file_name": "BassezA_2021_33958794whole.rds",
@@ -118,10 +99,6 @@
       "cell_type_low_res": "AIFI_L1",
       "cell_type_high_res": "AIFI_L3"
     },
-    "meta_cols_keep": [
-      "Sample", "sample.subjectAgeAtDraw", "subject.cmv",
-      "subject.biologicalSex", "AIFI_L1", "AIFI_L3"
-    ],
     "views": {
       "benchmark_analysis": {
         "input_file_name": [
@@ -148,17 +125,6 @@
       "cell_type_low_res": "cell.type",
       "cell_type_high_res": "cell.type"
     },
-    "meta_cols_keep": [
-      "sample.ID",
-      "sample.origin",
-      "patient.ID",
-      "iCMS",
-      "dataset",
-      "Gender",
-      "Site",
-      "cell.type",
-      "seqtec"
-    ],
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "JoaI_2022_35773407_Nofilt_whole.rds",
@@ -186,9 +152,6 @@
       "cell_type_low_res": "cells_lowres",
       "cell_type_high_res": "cells"
     },
-    "meta_cols_keep": [
-      "Sample", "Status", "subject.status", "cells", "cells_lowres"
-    ],
     "views": {
       "benchmark_analysis": {
         "input_file_name": "Kfoury_2021_34719426.rds",
@@ -211,10 +174,6 @@
       "cell_type_low_res": "Cell_type",
       "cell_type_high_res": "Cell_subtype"
     },
-    "meta_cols_keep": [
-      "Sample", "Tissue", "Individual", "Sex", "Age", "Histology",
-      "Smoking", "Pathology", "EGFR", "Stages", "Cell_subtype", "Cell_type"
-    ],
     "views": {
       "benchmark_analysis": {
         "input_file_name": "KimN_2020_32385277whole.rds",
@@ -237,9 +196,6 @@
       "cell_type_low_res": "layer1",
       "cell_type_high_res": "layer2"
     },
-    "meta_cols_keep": [
-      "Sample", "condition", "MGMT", "IDH_status"
-    ],
     "views": {
       "benchmark_analysis": {
         "input_file_name": "LeeA_2021_34836966p_tumor_seurat.rds",
@@ -262,11 +218,6 @@
       "cell_type_low_res": "OriginalAnnotationLevel1",
       "cell_type_high_res": "OriginalAnnotationLevel3"
     },
-    "meta_cols_keep": [
-      "Sample", "Tissue", "HistologicTypeSimple", "TissueSite_detailed",
-      "TissueSiteSimple", "Age", "TumorStage", "HistologicGrade_detailed",
-      "HistologicGradeSimple", "OriginalAnnotationLevel1", "OriginalAnnotationLevel3"
-    ],
     "views": {
       "benchmark_analysis": {
         "input_file_name": "PelkaK_2022_34450029whole.rds",
@@ -289,10 +240,6 @@
       "cell_type_low_res": "OriginalAnnotationLevel2",
       "cell_type_high_res": "OriginalAnnotationLevel3"
     },
-    "meta_cols_keep": [
-      "Sample", "Condition", "Tissue_compartment",
-      "OriginalAnnotationLevel1", "OriginalAnnotationLevel2", "OriginalAnnotationLevel3"
-    ],
     "views": {
       "benchmark_analysis": {
         "input_file_name": "SmillieC_2019_31348891.rds",
@@ -319,15 +266,6 @@
       "cell_type_low_res": "initial_clustering",
       "cell_type_high_res": "full_clustering"
     },
-    "meta_cols_keep": [
-      "Sample",
-      "Status",
-      "Site",
-      "Status_on_day_collection_summary",
-      "Days_from_onset",
-      "initial_clustering",
-      "full_clustering"
-    ],
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "StephensonE_2021_33879890_preprocessed.rds",
@@ -385,9 +323,6 @@
       "cell_type_low_res": "celltype_major",
       "cell_type_high_res": "celltype_subset"
     },
-    "meta_cols_keep": [
-      "Sample", "subtype", "celltype_major", "celltype_subset"
-    ],
     "views": {
       "benchmark_analysis": {
         "input_file_name": "WuS_2021_34493872.rds",
@@ -410,9 +345,6 @@
       "cell_type_low_res": "layer1",
       "cell_type_high_res": "layer2"
     },
-    "meta_cols_keep": [
-      "Sample", "Tissue", "Clinical.efficacy."
-    ],
     "views": {
       "benchmark_analysis": {
         "input_file_name": "ZhangY_2022_34653365.rds",
@@ -439,7 +371,6 @@
       "cell_type_low_res": null,
       "cell_type_high_res": null
     },
-    "meta_cols_keep": ["Sample"],
     "views": {}
   },
   "CombinedPBMC": {
@@ -457,7 +388,6 @@
       "cell_type_low_res": null,
       "cell_type_high_res": null
     },
-    "meta_cols_keep": ["Sample", "cond", "batch"],
     "views": {
       "batch_effect_analysis": {
         "input_file_name": "combined_pbmc_batch_effect_analysis.h5ad",
@@ -485,18 +415,6 @@
       "cell_type_low_res": "Subclass",
       "cell_type_high_res": "Supertype"
     },
-    "meta_cols_keep": [
-      "donor_id",
-      "Cognitive status",
-      "Subclass",
-      "Supertype",
-      "sex",
-      "disease",
-      "tissue",
-      "assay",
-      "tissue_type",
-      "PMI"
-    ],
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "SEAAD_Alzheimer.h5ad",
@@ -525,20 +443,6 @@
       "cell_type_low_res": "broad_cell_type",
       "cell_type_high_res": "author_cell_type"
     },
-    "meta_cols_keep": [
-      "sample_id",
-      "disease",
-      "broad_cell_type",
-      "author_cell_type",
-      "sex",
-      "tissue",
-      "donor_id",
-      "assay",
-      "sequencing_platform",
-      "sample_preservation_method",
-      "suspension_dissociation_time",
-      "suspension_dissociation_reagent"
-    ],
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "BreastCncr_processed.h5ad",
@@ -567,21 +471,6 @@
       "cell_type_low_res": "majorType",
       "cell_type_high_res": "celltype"
     },
-    "meta_cols_keep": [
-      "sampleID",
-      "CoVID-19 severity",
-      "majorType",
-      "celltype",
-      "Sex",
-      "PatientID",
-      "Outcome",
-      "Sample time",
-      "Sampling day (Days after symptom onset)",
-      "Single cell sequencing platform",
-      "City",
-      "datasets",
-      "Sample type"
-    ],
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "Covid19_Ren2021.h5ad",
@@ -610,22 +499,6 @@
       "cell_type_low_res": "subclass.l1",
       "cell_type_high_res": "subclass.l3"
     },
-    "meta_cols_keep": [
-      "specimen",
-      "condition.l1",
-      "subclass.l1",
-      "subclass.l3",
-      "condition.l2",
-      "condition.long",
-      "sex",
-      "donor_id",
-      "region.l1",
-      "region.l2",
-      "tissue_type",
-      "experiment",
-      "library",
-      "assay"
-    ],
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "Kidney_KPMP.h5ad",
@@ -654,17 +527,6 @@
       "cell_type_low_res": "cell_type",
       "cell_type_high_res": "cell_subtype"
     },
-    "meta_cols_keep": [
-      "orig_ident",
-      "patient_group",
-      "cell_type",
-      "cell_subtype",
-      "patient",
-      "patient_region_id",
-      "sampleType",
-      "batch",
-      "dissociation_s1"
-    ],
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "Myocardial_Infarc_2.h5ad",
@@ -693,20 +555,6 @@
       "cell_type_low_res": "cell_type",
       "cell_type_high_res": "cell_type_reannotatedIntegrated"
     },
-    "meta_cols_keep": [
-      "donor_id",
-      "disease",
-      "cell_type",
-      "cell_type_reannotatedIntegrated",
-      "sex",
-      "strain",
-      "diabetes_model",
-      "age",
-      "batch_integration",
-      "dataset",
-      "design",
-      "assay"
-    ],
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "diabetes.h5ad",
@@ -739,19 +587,6 @@
       "cell_type_low_res": "layer1",
       "cell_type_high_res": "layer2"
     },
-    "meta_cols_keep": [
-      "sampleID",
-      "Status",
-      "layer1",
-      "layer2",
-      "Sex",
-      "Age",
-      "pop_cov",
-      "SLE_status",
-      "batch_cov",
-      "Processing_Cohort",
-      "ind_cov_batch_cov"
-    ],
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "Lupus_Perez2022.h5ad",
@@ -780,21 +615,6 @@
       "cell_type_low_res": "ann_coarse",
       "cell_type_high_res": "ann_fine"
     },
-    "meta_cols_keep": [
-      "sample",
-      "origin",
-      "ann_coarse",
-      "ann_fine",
-      "origin_fine",
-      "disease",
-      "sex",
-      "donor_id",
-      "tissue",
-      "dataset",
-      "study",
-      "platform",
-      "assay"
-    ],
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "lungatlas.h5ad",
@@ -837,19 +657,6 @@
       "cell_type_low_res": "cell_type",
       "cell_type_high_res": "leiden_res_5_batch_effect_uncorrected_hvg2000"
     },
-    "meta_cols_keep": [
-      "donor_id",
-      "disease",
-      "cell_type",
-      "leiden_res_5_batch_effect_uncorrected_hvg2000",
-      "sex",
-      "tissue",
-      "tissue_type",
-      "Brain_bank",
-      "assay",
-      "PMI",
-      "RIN"
-    ],
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "Parkinson.h5ad",

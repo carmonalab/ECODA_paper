@@ -50,7 +50,6 @@ AGENTS.md:36-36
       "cell_type_low_res": null,
       "cell_type_high_res": null
     },
-    "meta_cols_keep": ["Sample"],
     "views": {}
   }
   ```
@@ -74,8 +73,8 @@ def read_datasets_json(path="datasets.json", view=None):
 ```
 
 Entry keys (both languages, identical names):
-- Dataset-level: `display_name`, `folder_name`, `file_names`, `tissue`, `normal_tissue`, `use_for_benchmark`, `use_for_batch_effect`, `sample_col`, `label_col`, `batch_col`, `low_res_ct_col`, `hi_res_ct_col`, `meta_cols_keep`
-- First-matching-view summary (R-compat): `view_name`, `output_file`, `input_file`, `subset_vars`
+- Dataset-level: `display_name`, `folder_name`, `file_names`, `tissue`, `normal_tissue`, `use_for_benchmark`, `use_for_batch_effect`, `sample_col`, `label_col`, `batch_col`, `low_res_ct_col`, `hi_res_ct_col`
+  First-matching-view summary (R-compat): `view_name`, `output_file`, `input_file`, `subset_vars`
 - `views`: `{view_name: {"input_file": …, "output_file": …, "subset_vars": …}}` (all views matching filter; skip views without `output_file_name`, like R)
 
 Semantics: no views → included with `views={}`, summary `None`/`{}`; `view` filter applies only to view matching (summary + `views`).
@@ -85,8 +84,7 @@ Semantics: no views → included with `views={}`, summary `None`/`{}`; `view` fi
 Rewrite `read_datasets_json()`:
 - Keep existing inclusion rule (skip datasets with no views) and the `break`-equivalent (first matching view with `output_file_name`) for summary fields — existing callers unchanged.
 - Keep existing entry keys (`output_file`, `label_col`, `batch_col`, `low_res_ct_col`, `hi_res_ct_col`, `display_name`, `tissue`) exactly as-is.
-- Add the new keys listed in Task 2 (use `ds[["file_names"]]`, `ds[["columns"]][["sample"]]`, `ds[["meta_cols_keep"]]`, etc.) and a `views` list of all matching views (each with `view_name`, `input_file_name`, `output_file_name`, `subset_vars`).
-
+- Add the new keys listed in Task 2 (use `ds[["file_names"]]`, `ds[["columns"]][["sample"]]`, etc.) and a `views` list of all matching views (each with `view_name`, `input_file_name`, `output_file_name`, `subset_vars`).
 ### 4. Refactor `src/preprocess/1.1.1_preprocess.py` main()
 
 - Remove `import json`; replace the `json.load` block with `config = read_datasets_json(config_path)` (import from `src.datasets_io`).
@@ -116,7 +114,6 @@ Rewrite `read_datasets_json()`:
 
 - `python3 -c "from src.datasets_io import read_datasets_json; import json; c=read_datasets_json(); assert 'Zhu' in c and c['Zhu']['file_names']=='ZhuH_2023_37379396whole.rds' and c['Zhu']['views']=={}; assert len(c['Stephenson']['views'])==2; assert read_datasets_json(view='benchmark_analysis')['Stephenson']['output_file'].endswith('benchmark_analysis_ECODAprocessed.h5ad')"`
 - `python3 -m py_compile src/datasets_io.py src/preprocess/1.1.1_preprocess.py src/preprocess/_create_combinedpbmc_dataset.py`
-- R: `pixi run Rscript -e 'source("src/utils/load_all_functions.R"); d <- read_datasets_json(view="benchmark_analysis"); stopifnot(all(c("output_file","label_col","batch_col","low_res_ct_col","hi_res_ct_col","display_name","tissue","file_names","sample_col","meta_cols_keep","views") %in% names(d[[1]])))'` — plus confirm the result is identical to the old version for previously available keys.
 - Dry-run `1.1.1_preprocess.py` on a dataset whose output already exists (prints "Already processed", no crash).
 - Full combine run (heavy: loads Stephenson rds + 2 GongSharma h5ads + ZhuH_2023_37379396whole.rds via rpy2): confirm `data/combined_pbmc_batch_effect_analysis.h5ad` produced, 3 batches, GongSharma contributes exactly 15 samples, obs limited to Sample/batch/cond. **Check `ZhuH_2023_37379396whole.rds` has a `Sample` obs column and raw counts**
 

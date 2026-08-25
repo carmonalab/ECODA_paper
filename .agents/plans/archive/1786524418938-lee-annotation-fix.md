@@ -3,7 +3,7 @@
 ## Context (established facts)
 
 - Lee's benchmark h5ad obs has scATOMIC columns (`layer_1..layer_6`, `scATOMIC_pred`, `S.Score`, `G2M.Score`, `Phase`, `classification_confidence`) and legacy columns (`scGate_multi`, `functional.cluster`) but **no** HiTME columns (`layer1/layer2/layer3`). `datasets.json` declares Lee `cell_type_high_res: "layer2"` → 4 failed tasks (trans 4311561_6, zeroimp 4311572_6, PILOT 4311499_6; pending scPoli 4311498_6 will fail too). MrVI passed (no ct col needed).
-- Root cause: the original Lee rds carries pre-existing annotation columns. Preprocessing keeps ALL obs columns (`meta_cols_keep` is defined in datasets_io but never applied anywhere). The union h5ad and `get_seurat_obj_from_h5ad` (`seurat_utils.R:337`, `meta.data = meta_data`) carry them into the annotation worker's Seurat object, where:
+- Root cause: the original Lee rds carries pre-existing annotation columns. Preprocessing preserves all observation columns, and the union h5ad plus `get_seurat_obj_from_h5ad` (`seurat_utils.R:337`, `meta.data = meta_data`) carry them into the annotation worker's Seurat object, where:
   - `2.1.1_process_chunk.R:275` skips scATOMIC if `layer_1` already exists → scATOMIC silently skipped (stale values passed through).
   - `Run.HiTME` sees old scGate/ProjecTILs columns → produced nothing for Lee (no layer1/2/3).
 - The current annotation run (4307176) shows NO scATOMIC/HiTME activity for Lee's tasks (323–336) → chunks were skipped as "already processed" (`2.1.1_process_chunk.R:211`) — Lee's feathers come from an older run.

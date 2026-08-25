@@ -26,9 +26,7 @@ remaining work as:
 - Views per dataset: only Stephenson has 2 views (benchmark ⊂ batch superset); Joanito +
   CombinedPBMC batch-only; Zhu view-less. Future multi-view datasets (PILOT-GM-VAE set)
   have unknown overlap relationships.
-- **Kfoury gap**: datasets.json declares `columns.cell_type_low_res: "cells_lowres"` and
-  `meta_cols_keep` includes `cells_lowres`, but NO code in src/ creates `cells_lowres`
-  (legacy-only: `Preprocess_datasets.Rmd:444`). → must be ported.
+- **Kfoury gap**: `datasets.json` declares `columns.cell_type_low_res: "cells_lowres"`, but NO code in `src/` creates `cells_lowres` (legacy-only: `Preprocess_datasets.Rmd:444`). → must be ported.
 - `Preprocess_datasets.Rmd` is at REPO ROOT (905 lines; legacy Seurat pipeline).
 - `.Rprofile` (621 B): sets `RETICULATE_PYTHON` to pixi python when `PIXI_PROJECT_ROOT`
   is set, IDE fallbacks otherwise. **Influences pipelines**: `2.1.1_process_chunk.R:28-30`

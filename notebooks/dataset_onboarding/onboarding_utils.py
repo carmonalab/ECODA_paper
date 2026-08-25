@@ -1206,9 +1206,9 @@ def build_registry_gate(
     """Apply user-declared roles while retaining audit evidence.
 
     Heuristic rankings are warnings only. Identity, missingness, collision,
-    retained-metadata, author-column, and hierarchy failures remain hard
-    failures. HiTME/Leiden roles are intentionally pending until the processed
-    h5ad supplies and validates the produced columns.
+    author-column, and hierarchy failures remain hard failures. HiTME/Leiden
+    roles are intentionally pending until the processed h5ad supplies and
+    validates the produced columns.
     """
     roles = spec.get("registry_roles")
     if not isinstance(roles, dict):
@@ -1235,14 +1235,6 @@ def build_registry_gate(
     }
     derived_columns = set(derived_roles.values())
     batch_candidates = list(dict.fromkeys(spec.get("batch_cols") or []))
-    meta_cols_keep = []
-    for column in [sample_col, bio_col, low_col, high_col, *spec.get("sample_stable_cols", []), *batch_candidates]:
-        if column and column not in meta_cols_keep:
-            meta_cols_keep.append(column)
-    missing_meta_cols = [
-        column for column in meta_cols_keep
-        if column not in obs.columns and column not in derived_columns
-    ]
 
     reasons = []
     stable_field_conflict_warnings = []
@@ -1309,8 +1301,6 @@ def build_registry_gate(
                 f"biological label column {bio_col} has {missing_label} missing or blank values"
             )
 
-    if missing_meta_cols:
-        reasons.append(f"configured metadata columns are missing: {missing_meta_cols}")
 
     for role, column in (
         ("cell_type_low_res", low_col),
@@ -1425,7 +1415,6 @@ def build_registry_gate(
             else []
         ),
         "selected_hierarchy": selected_hierarchy,
-        "missing_meta_cols": missing_meta_cols,
         "source_count_evidence": source_count_evidence,
     }
     status = "FAIL" if reasons else (
@@ -1436,7 +1425,6 @@ def build_registry_gate(
         "selected": role_columns,
         **role_columns,
         "batch_candidates": batch_candidates,
-        "meta_cols_keep": meta_cols_keep,
         "registry_roles": roles,
         "decision_notes": list(spec.get("decision_notes") or []),
         "derived_pending": derived_pending,
@@ -1448,7 +1436,6 @@ def build_registry_gate(
             dict.fromkeys(
                 sample_selection.get("required_source_check", [])
                 + cell_type_selection.get("required_source_check", [])
-                + missing_meta_cols
             )
         ),
         "evidence": evidence,

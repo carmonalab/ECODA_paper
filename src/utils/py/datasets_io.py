@@ -59,7 +59,6 @@ def read_datasets_json(path="datasets.json", view=None):
             "batch_col": columns.get("batch"),
             "cell_type_low_res": columns.get("cell_type_low_res"),
             "cell_type_high_res": columns.get("cell_type_high_res"),
-            "meta_cols_keep": ds.get("meta_cols_keep"),
             # first-matching-view summary (R-compat; mirrors view entry order)
             "view_name": first_name,
             "input_file": first["input_file"] if first else None,

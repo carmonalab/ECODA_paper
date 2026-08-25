@@ -74,10 +74,7 @@ create_clean_seuratv5_object <- function(seurat) {
 ```
 
 Rationale for **drop** (not flatten): dropped columns are not consumed anywhere — the
-CombinedPBMC script keeps only `Sample`/`batch`/`cond`; the preprocess array keeps
-`meta_cols_keep` only (Stephenson's list does not include `Barcode`). Flattening is
-ambiguous for multi-element list entries. (If a future dataset needs a list column,
-flatten/revisit then.)
+- CombinedPBMC script keeps only `Sample`/`batch`/`cond`; the preprocessing array preserves all observation columns. Flattening is ambiguous for multi-element list entries. (If a future dataset needs a list column, flatten/revisit then.)
 
 ## HPC rerun (user steps after pull)
 

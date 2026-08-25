@@ -28,10 +28,10 @@ inputs.
 
 The previous heuristic choice, stable-field conflicts, and aggregation warnings
 remain in each audit. They explain the decision; they do not silently replace
-the declared role. Missing IDs, standardized-ID collisions, missing labels,
-missing retained metadata, and failed declared author hierarchies remain hard
-failures. HiTME and Leiden columns are produced-output roles and remain pending
-until processed h5ad evidence validates them.
+the declared role. Missing IDs, standardized-ID collisions, missing labels, and
+failed declared author hierarchies remain hard failures. HiTME and Leiden
+columns are produced-output roles and remain pending until processed h5ad
+evidence validates them.
 
 ## Full-file audit workflow
 
