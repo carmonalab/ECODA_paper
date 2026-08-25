@@ -20,6 +20,8 @@ fi
 
 ARRAY_ID="$1"
 MANIFEST="$2"
+ROOT_MANIFEST="${MANIFEST}"
+CURRENT_MANIFEST="${MANIFEST}"
 CURRENT_MEMORY="$3"
 MAX_MEMORY="$4"
 PARTITION="$5"
@@ -45,8 +47,8 @@ write_status() {
     printf 'WATCHDOG_JOB_ID=%s\n' "${SLURM_JOB_ID}"
     printf 'ARRAY_JOB_IDS=%s\n' "${ARRAY_JOB_IDS}"
     printf 'VIEW=%s\n' "${VIEW}"
-    printf 'MANIFEST=%s\n' "${MANIFEST}"
-    printf 'DATASETS=%s\n' "$(tr '\n' ' ' < "${MANIFEST}" | sed 's/[[:space:]]*$//')"
+    printf 'MANIFEST=%s\n' "${ROOT_MANIFEST}"
+    printf 'DATASETS=%s\n' "$(tr '\n' ' ' < "${ROOT_MANIFEST}" | sed 's/[[:space:]]*$//')"
     printf 'FAIL_REASON=%s\n' "${FAIL_REASON}"
     if [[ ${#FAILED_ROWS[@]} -gt 0 ]]; then
       printf 'FAILED_ROWS=%s\n' "${FAILED_ROWS[*]}"
@@ -146,8 +148,6 @@ submit_retry_array() {
     echo "ERROR: invalid retry array id: ${RETRY_ID}" >&2
     return 1
   fi
-  ARRAY_JOB_IDS="${ARRAY_JOB_IDS},${RETRY_ID}"
-  printf 'PREPROCESS_ARRAY_JOB_ID=%s\n' "${RETRY_ID}" >&2
   printf '%s' "${RETRY_ID}"
 }
 
@@ -162,7 +162,7 @@ validate_and_sync() {
       echo "ERROR: expected preprocessing artifact is missing or empty: ${OUTPUT_FILE}" >&2
       return 1
     fi
-  done < "${MANIFEST}"
+  done < "${ROOT_MANIFEST}"
 
   if [[ ! -d "${NAS_TARGET_DIR}" ]]; then
     echo "ERROR: NAS path is unreachable: ${NAS_TARGET_DIR}" >&2
@@ -173,7 +173,7 @@ validate_and_sync() {
     DEST_DIR="${NAS_TARGET_DIR}/${DS_NAME}/output"
     mkdir -p "${DEST_DIR}"
     rsync -rlptD "${HPC_SCRATCH_DIR}/${DS_NAME}/output/" "${DEST_DIR}/"
-  done < "${MANIFEST}"
+  done < "${ROOT_MANIFEST}"
 }
 
 if ! command -v jq >/dev/null 2>&1; then
@@ -211,10 +211,10 @@ while :; do
     write_status FAIL "OOM retry ceiling reached at ${CURRENT_MEMORY}"
     exit 1
   fi
-  RETRY_MANIFEST="${MANIFEST}.retry_${CURRENT_MEMORY}_to_${NEXT_MEMORY}"
+  RETRY_MANIFEST="${CURRENT_MANIFEST}.retry_${CURRENT_MEMORY}_to_${NEXT_MEMORY}"
   : > "${RETRY_MANIFEST}"
   for TASK_ID in "${OOM_TASKS[@]}"; do
-    DS_NAME="$(sed -n "${TASK_ID}p" "${MANIFEST}")"
+    DS_NAME="$(sed -n "${TASK_ID}p" "${CURRENT_MANIFEST}")"
     if [[ -z "${DS_NAME}" ]]; then
       write_status FAIL "OOM task ${TASK_ID} has no dataset manifest row"
       exit 1
@@ -223,8 +223,11 @@ while :; do
   done
   CURRENT_MEMORY="${NEXT_MEMORY}"
   RETRY_ARRAY_ID="$(submit_retry_array "${RETRY_MANIFEST}")"
+  ARRAY_JOB_IDS="${ARRAY_JOB_IDS},${RETRY_ARRAY_ID}"
+  printf 'PREPROCESS_ARRAY_JOB_ID=%s\n' "${RETRY_ARRAY_ID}" >&2
   echo "Submitted OOM-only preprocessing retry ${RETRY_ARRAY_ID} at ${CURRENT_MEMORY}."
   ARRAY_ID="${RETRY_ARRAY_ID}"
+  CURRENT_MANIFEST="${RETRY_MANIFEST}"
 done
 
 if ! validate_and_sync; then
