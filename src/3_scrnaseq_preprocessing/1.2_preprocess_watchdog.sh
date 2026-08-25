@@ -57,7 +57,7 @@ write_status() {
 
 scheduler_rows() {
   sacct -n -P -X -j "$1" \
-    --format=JobIDRaw,State,ExitCode,MaxRSS 2>/dev/null || true
+    --format=JobID,State,ExitCode,MaxRSS 2>/dev/null || true
 }
 
 wait_for_terminal() {
