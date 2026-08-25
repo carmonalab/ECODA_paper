@@ -245,7 +245,7 @@ DATASET_SPECS: dict[str, dict] = {
         "sample_stable_cols": [
             "origin", "origin_fine", "disease", "sex", "donor_id", "tissue",
         ],
-        "bio_col": "origin",
+        "bio_col": "disease",
         "batch_cols": ["dataset", "study", "platform", "assay", "origin_fine"],
         "cell_type_candidates": [
             "ann_coarse", "ann_fine", "cell_type_major", "cell_type", "cell_type_tumor",
@@ -253,7 +253,7 @@ DATASET_SPECS: dict[str, dict] = {
         "initial_registry_mode": "two_pass_batch_effect",
         "registry_roles": {
             "sample": "sample",
-            "label": "origin",
+            "label": "disease",
             "cell_type_low_res": "ann_coarse",
             "cell_type_high_res": "ann_fine",
             "annotation_source": {"low": "author", "high": "author"},
@@ -262,6 +262,7 @@ DATASET_SPECS: dict[str, dict] = {
             "The registry cohort is platform == 10x; verify filtered cell and sample counts before activation.",
             "ann_coarse to ann_fine must pass on the filtered cohort.",
             "The platform mask is authoritative if it differs from assay names containing 10x.",
+            "The biological registry label is disease; origin remains a secondary field for tumor-versus-normal comparisons.",
         ],
         "not_suitable_for_auto_annotation": False,
         "subset_vars": {"platform": {"values": ["10x"], "op": "in"}},

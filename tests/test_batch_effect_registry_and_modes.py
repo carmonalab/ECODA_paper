@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Focused contracts for the two-pass batch-effect registry and workers."""
 
+import anndata as ad
 import importlib.util
 import json
+import numpy as np
+import pandas as pd
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -41,7 +44,7 @@ def main():
         "Covid19_PBMC": ("sampleID", "CoVID-19 severity", "majorType", "celltype"),
         "Diabetes": ("donor_id", "disease", "cell_type", "cell_type_reannotatedIntegrated"),
         "Kidney_KPMP": ("specimen", "condition.l1", "subclass.l1", "subclass.l3"),
-        "Lung": ("sample", "origin", "ann_coarse", "ann_fine"),
+        "Lung": ("sample", "disease", "ann_coarse", "ann_fine"),
         "Lupus_PBMC": ("sampleID", "Status", "layer1", "layer2"),
         "Myocardial_infarction": ("orig_ident", "patient_group", "cell_type", "cell_subtype"),
         "Parkinson": (
@@ -71,11 +74,84 @@ def main():
     ] == "leiden_res_5_batch_effect_corrected_hvg2000_harmony"
     assert datasets["Joanito"]["columns"]["batch"] == "seqtec"
     assert datasets["Stephenson"]["columns"]["batch"] == "Site"
+
+    stephenson = datasets["Stephenson"]
+    assert set(stephenson["views"]) == {
+        "benchmark_analysis",
+        "batch_effect_uncorrected",
+        "batch_effect_corrected",
+    }
+    assert stephenson["views"]["benchmark_analysis"] == {
+        "input_file_name": "StephensonE_2021_33879890_preprocessed.rds",
+        "output_file_name": (
+            "StephensonE_2021_33879890_preprocessed_"
+            "benchmark_analysis_ECODAprocessed.h5ad"
+        ),
+        "subset_vars": {
+            "Site": {"values": ["Ncl"], "op": "in"},
+            "Status": {"values": ["Healthy", "Covid"], "op": "in"},
+            "Sample": {
+                "values": ["BGCV10_CV0198", "MH8919230"],
+                "op": "notin",
+            },
+        },
+    }
+    expected_stephenson_batch_subset = {
+        "Status": {"values": ["Healthy", "Covid"], "op": "in"},
+        "Sample": {
+            "values": ["BGCV10_CV0198", "MH8919230"],
+            "op": "notin",
+        },
+    }
+    for view_name in ("batch_effect_uncorrected", "batch_effect_corrected"):
+        view = stephenson["views"][view_name]
+        assert view["input_file_name"] == (
+            "StephensonE_2021_33879890_preprocessed.rds"
+        )
+        assert view["output_file_name"] == (
+            "StephensonE_2021_33879890_preprocessed_"
+            f"batch_effect_analysis_{view_name.removeprefix('batch_effect_')}_"
+            "ECODAprocessed.h5ad"
+        )
+        assert view["subset_vars"] == expected_stephenson_batch_subset
     subset_worker = load_subset_worker()
     safe = subset_worker._json_safe({"nan": float("nan"), "finite": 2.5})
     assert safe == {"nan": None, "finite": 2.5}
 
     worker = load_worker()
+    benchmark_entries = worker.read_datasets_json(
+        str(DATASETS), view="benchmark_analysis"
+    )
+    benchmark_entry = benchmark_entries["Stephenson"]
+    assert benchmark_entry["view_name"] == "benchmark_analysis"
+    assert benchmark_entry["input_file"] == (
+        "StephensonE_2021_33879890_preprocessed.rds"
+    )
+    assert benchmark_entry["output_file"] == (
+        "StephensonE_2021_33879890_preprocessed_"
+        "benchmark_analysis_ECODAprocessed.h5ad"
+    )
+    assert benchmark_entry["subset_vars"] == stephenson["views"][
+        "benchmark_analysis"
+    ]["subset_vars"]
+
+    partial = ad.AnnData(
+        X=np.ones((3, 1), dtype=np.float32),
+        obs=pd.DataFrame(
+            {"ct": pd.Categorical(["T", None, "B"])},
+            index=["c1", "c2", "c3"],
+        ),
+    )
+    worker.fill_unknown_ct(partial, "ct", "test")
+    assert list(partial.obs["ct"].astype(str)) == ["T", "Unknown", "B"]
+
+    complete = ad.AnnData(
+        X=np.ones((2, 1), dtype=np.float32),
+        obs=pd.DataFrame({"ct": ["T", "B"]}, index=["c1", "c2"]),
+    )
+    before = complete.obs["ct"].copy()
+    worker.fill_unknown_ct(complete, "ct", "test")
+    pd.testing.assert_series_equal(complete.obs["ct"], before)
     fake = SimpleNamespace(
         obsm={
             "X_pca_batch_effect_uncorrected_hvg2000": object(),

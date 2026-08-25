@@ -21,7 +21,7 @@ inputs.
 | Covid19_PBMC | `sampleID` | `CoVID-19 severity` | `majorType` | `celltype` | author / author |
 | Diabetes | `donor_id` | `disease` | `cell_type` | `cell_type_reannotatedIntegrated` | author / author |
 | Kidney_KPMP | `specimen` | `condition.l1` | `subclass.l1` | `subclass.l3` | author / author |
-| Lung | `sample` | `origin` | `ann_coarse` | `ann_fine` | author / author |
+| Lung | `sample` | `disease` | `ann_coarse` | `ann_fine` | author / author |
 | Lupus_PBMC | `sampleID` | `Status` | `layer1` | `layer2` | HiTME / HiTME |
 | Myocardial_infarction | `orig_ident` | `patient_group` | `cell_type` | `cell_subtype` | author / author |
 | Parkinson | `donor_id` | `disease` | `cell_type` | Leiden res-5 | author / Leiden |
@@ -80,6 +80,10 @@ assay-name mask containing `10x`; the audit records both masks row-by-row.
 Observed filtered cell/sample totals replace paper expectations only after the
 full-file run verifies them. The `ann_coarse → ann_fine` hierarchy must pass.
 No copied stage-2 dataset is created.
+The primary biological label is `disease`, with observed values including
+`normal`, `chronic obstructive pulmonary disease`, `lung adenocarcinoma`,
+`squamous cell lung carcinoma`, and `non-small cell lung carcinoma`.
+`origin` remains available as a secondary tumor-versus-normal metadata field.
 
 ## Two-pass registry views
 

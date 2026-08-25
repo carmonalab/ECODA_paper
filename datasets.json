@@ -267,6 +267,32 @@
       "cell_type_high_res": "full_clustering"
     },
     "views": {
+      "benchmark_analysis": {
+        "input_file_name": "StephensonE_2021_33879890_preprocessed.rds",
+        "output_file_name": "StephensonE_2021_33879890_preprocessed_benchmark_analysis_ECODAprocessed.h5ad",
+        "subset_vars": {
+          "Site": {
+            "values": [
+              "Ncl"
+            ],
+            "op": "in"
+          },
+          "Status": {
+            "values": [
+              "Healthy",
+              "Covid"
+            ],
+            "op": "in"
+          },
+          "Sample": {
+            "values": [
+              "BGCV10_CV0198",
+              "MH8919230"
+            ],
+            "op": "notin"
+          }
+        }
+      },
       "batch_effect_uncorrected": {
         "input_file_name": "StephensonE_2021_33879890_preprocessed.rds",
         "output_file_name": "StephensonE_2021_33879890_preprocessed_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
@@ -610,7 +636,7 @@
     "use_for_batch_effect": true,
     "columns": {
       "sample": "sample",
-      "label": "origin",
+      "label": "disease",
       "batch": null,
       "cell_type_low_res": "ann_coarse",
       "cell_type_high_res": "ann_fine"
@@ -625,6 +651,12 @@
               "10x"
             ],
             "op": "in"
+          },
+          "tissue": {
+            "values": [
+              "lung"
+            ],
+            "op": "in"
           }
         }
       },
@@ -635,6 +667,12 @@
           "platform": {
             "values": [
               "10x"
+            ],
+            "op": "in"
+          },
+          "tissue": {
+            "values": [
+              "lung"
             ],
             "op": "in"
           }

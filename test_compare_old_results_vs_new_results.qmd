@@ -1,0 +1,644 @@
+---
+title: "Compare old and current benchmark results"
+subtitle: "Bassez diagnostics and targeted Zhang, Pelka, and Stephenson audit"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+  cache: false
+---
+
+# Purpose
+
+This report compares the Bassez entries in the March 26 snapshot
+`result_list_old.rds` with the regenerated result bundles used by
+`notebooks/benchmark_analysis.rmd`.
+
+The comparison covers the two high-resolution methods used in the benchmark:
+
+- **GloProp**: `feat_mat` is a sample-by-sample distance matrix, not a sample-by-feature matrix.
+- **ECODA_authors_HR**: `feat_mat` is the sample-by-cell-type CLR feature matrix.
+
+```{r setup}
+repo_root <- normalizePath(getwd(), mustWork = TRUE)
+if (!file.exists(file.path(repo_root, "result_list_old.rds"))) {
+  repo_root <- normalizePath(file.path(repo_root, ".."), mustWork = TRUE)
+}
+source(file.path(repo_root, "src/utils/load_all_functions.R"))
+
+old_file <- file.path(repo_root, "result_list_old.rds")
+new_composition_file <- file.path(
+  repo_root, "data", "benchmark", "results", "Bassez_composition.rds"
+)
+
+if (!file.exists(old_file)) stop("Missing old result file: ", old_file)
+if (!file.exists(new_composition_file)) {
+  stop("Missing regenerated composition bundle: ", new_composition_file)
+}
+
+old_result_list <- suppressWarnings(readRDS(old_file))
+new_composition <- readRDS(new_composition_file)
+
+old_bassez <- old_result_list[["bmark"]][["Bassez"]]
+old_gloprop <- old_bassez[["GloProp"]]
+old_ecoda <- old_bassez[["ECODA_authors_HR"]]
+new_gloprop <- new_composition[["GloProp"]]
+new_ecoda <- new_composition[["ECODA_authors_HR"]]
+
+if (is.null(old_gloprop) || is.null(old_ecoda)) {
+  stop("The old result list does not contain both requested Bassez methods.")
+}
+if (is.null(new_gloprop) || is.null(new_ecoda)) {
+  stop("The regenerated composition bundle does not contain both requested methods.")
+}
+
+library(ggplot2)
+library(patchwork)
+
+fmt <- function(x, digits = 3) {
+  formatC(x, format = "f", digits = digits)
+}
+
+matrix_dimensions <- function(x) {
+  paste(dim(x), collapse = " x ")
+}
+
+labels_by_sample <- function(result) {
+  labels <- as.character(result[["labels"]])
+  sample_ids <- names(result[["labels"]])
+  if (is.null(sample_ids)) sample_ids <- rownames(result[["feat_mat"]])
+  stats::setNames(labels, sample_ids)
+}
+
+show_matrix <- function(x, caption) {
+  display <- as.data.frame(as.matrix(x), check.names = FALSE)
+  display <- cbind(Sample = rownames(display), display)
+  rownames(display) <- NULL
+  knitr::kable(
+    display,
+    format = "html",
+    digits = 4,
+    caption = caption,
+    table.attr = 'class="table table-sm table-striped"'
+  )
+}
+
+compare_glo <- function(old_result, new_result) {
+  old_ids <- rownames(old_result[["feat_mat"]])
+  new_ids <- rownames(new_result[["feat_mat"]])
+  common <- intersect(old_ids, new_ids)
+  old_mat <- as.matrix(old_result[["feat_mat"]][common, common, drop = FALSE])
+  new_mat <- as.matrix(new_result[["feat_mat"]][common, common, drop = FALSE])
+  delta <- new_mat - old_mat
+  off_diagonal <- upper.tri(delta)
+  old_values <- old_mat[off_diagonal]
+  new_values <- new_mat[off_diagonal]
+  label_old <- labels_by_sample(old_result)
+  label_new <- labels_by_sample(new_result)
+
+  list(
+    old_dim = matrix_dimensions(old_result[["feat_mat"]]),
+    new_dim = matrix_dimensions(new_result[["feat_mat"]]),
+    common_samples = common,
+    only_old = setdiff(old_ids, new_ids),
+    only_new = setdiff(new_ids, old_ids),
+    labels_equal = all(label_old[common] == label_new[common]),
+    max_abs = max(abs(delta[off_diagonal])),
+    mae = mean(abs(delta[off_diagonal])),
+    rmse = sqrt(mean(delta[off_diagonal]^2)),
+    correlation = stats::cor(old_values, new_values)
+  )
+}
+
+compare_ecoda <- function(old_result, new_result) {
+  old_ids <- rownames(old_result[["feat_mat"]])
+  new_ids <- rownames(new_result[["feat_mat"]])
+  common_samples <- intersect(old_ids, new_ids)
+  old_features <- colnames(old_result[["feat_mat"]])
+  new_features <- colnames(new_result[["feat_mat"]])
+  common_features <- intersect(old_features, new_features)
+  old_mat <- as.matrix(old_result[["feat_mat"]][common_samples, common_features, drop = FALSE])
+  new_mat <- as.matrix(new_result[["feat_mat"]][common_samples, common_features, drop = FALSE])
+  delta <- new_mat - old_mat
+  label_old <- labels_by_sample(old_result)
+  label_new <- labels_by_sample(new_result)
+
+  list(
+    old_dim = matrix_dimensions(old_result[["feat_mat"]]),
+    new_dim = matrix_dimensions(new_result[["feat_mat"]]),
+    common_samples = common_samples,
+    only_old_samples = setdiff(old_ids, new_ids),
+    only_new_samples = setdiff(new_ids, old_ids),
+    common_features = common_features,
+    only_old_features = setdiff(old_features, new_features),
+    only_new_features = setdiff(new_features, old_features),
+    labels_equal = all(label_old[common_samples] == label_new[common_samples]),
+    max_abs = max(abs(delta)),
+    mae = mean(abs(delta)),
+    rmse = sqrt(mean(delta^2)),
+    correlation = stats::cor(as.vector(old_mat), as.vector(new_mat))
+  )
+}
+
+glo_comparison <- compare_glo(old_gloprop, new_gloprop)
+ecoda_comparison <- compare_ecoda(old_ecoda, new_ecoda)
+
+# These are the exact relationships used by the benchmark code. GloProp stores
+# sqrt(gloscopeProp(...)) as feat_mat and then wraps it with as.dist(); ECODA
+# computes dist(feat_mat).
+stopifnot(
+  max(abs(
+    as.numeric(old_gloprop[["dist_mat"]]) -
+      as.numeric(as.dist(old_gloprop[["feat_mat"]]))
+  )) < 1e-10,
+  max(abs(
+    as.numeric(new_gloprop[["dist_mat"]]) -
+      as.numeric(as.dist(new_gloprop[["feat_mat"]]))
+  )) < 1e-10,
+  max(abs(
+    as.numeric(old_ecoda[["dist_mat"]]) -
+      as.numeric(stats::dist(old_ecoda[["feat_mat"]]))
+  )) < 1e-10,
+  max(abs(
+    as.numeric(new_ecoda[["dist_mat"]]) -
+      as.numeric(stats::dist(new_ecoda[["feat_mat"]]))
+  )) < 1e-10
+)
+```
+
+# Result-bundle layout
+
+The regenerated bundle is `data/benchmark/results/Bassez_composition.rds`,
+which is the composition bundle loaded by the current benchmark pipeline. The
+old object is accessed as `result_list_old.rds$bmark$Bassez`.
+
+```{r bundle-summary}
+bundle_summary <- data.frame(
+  Method = c("GloProp (sample distances)", "ECODA_authors_HR (CLR features)"),
+  Old_feat_mat = c(
+    glo_comparison$old_dim,
+    ecoda_comparison$old_dim
+  ),
+  New_feat_mat = c(
+    glo_comparison$new_dim,
+    ecoda_comparison$new_dim
+  ),
+  Old_dist_mat = c(
+    matrix_dimensions(as.matrix(old_gloprop[["dist_mat"]])),
+    matrix_dimensions(as.matrix(old_ecoda[["dist_mat"]]))
+  ),
+  New_dist_mat = c(
+    matrix_dimensions(as.matrix(new_gloprop[["dist_mat"]])),
+    matrix_dimensions(as.matrix(new_ecoda[["dist_mat"]]))
+  ),
+  row.names = NULL,
+  check.names = FALSE
+)
+knitr::kable(bundle_summary, format = "html", caption = "Compared result-bundle dimensions.")
+```
+
+# GloProp
+
+## What `feat_mat` means for GloProp
+
+The current implementation calls `gloscopeProp(...)`, takes its square root,
+and stores that sample-by-sample matrix as `feat_mat`. It stores
+`as.dist(feat_mat)` as `dist_mat`. Therefore, the GloProp `feat_mat` below is
+already a distance matrix; it should not be passed to `dist()` a second time.
+The MDS panels use `as.dist(feat_mat)`, exactly as the benchmark does.
+
+## Old GloProp `feat_mat`
+
+```{r old-gloprop-matrix, results='asis'}
+show_matrix(
+  old_gloprop[["feat_mat"]],
+  "Old Bassez GloProp feat_mat (March 26 snapshot; sqrt pairwise distances)."
+)
+```
+
+## Regenerated GloProp `feat_mat`
+
+```{r new-gloprop-matrix, results='asis'}
+show_matrix(
+  new_gloprop[["feat_mat"]],
+  "Regenerated Bassez GloProp feat_mat (current composition bundle; sqrt pairwise distances)."
+)
+```
+
+## GloProp comparison diagnostics
+
+```{r gloprop-diagnostics}
+glo_diag <- data.frame(
+  Quantity = c(
+    "Old / new matrix dimensions",
+    "Common samples",
+    "Samples only in old matrix",
+    "Samples only in regenerated matrix",
+    "Labels equal on common samples",
+    "Shared off-diagonal max absolute change",
+    "Shared off-diagonal mean absolute change",
+    "Shared off-diagonal RMSE",
+    "Shared off-diagonal correlation"
+  ),
+  Value = c(
+    paste(glo_comparison$old_dim, "/", glo_comparison$new_dim),
+    length(glo_comparison$common_samples),
+    if (length(glo_comparison$only_old) == 0) "none" else paste(glo_comparison$only_old, collapse = ", "),
+    if (length(glo_comparison$only_new) == 0) "none" else paste(glo_comparison$only_new, collapse = ", "),
+    glo_comparison$labels_equal,
+    fmt(glo_comparison$max_abs),
+    fmt(glo_comparison$mae),
+    fmt(glo_comparison$rmse),
+    fmt(glo_comparison$correlation)
+  ),
+  row.names = NULL,
+  check.names = FALSE
+)
+knitr::kable(glo_diag, format = "html", caption = "GloProp old-versus-regenerated diagnostics.")
+```
+
+# ECODA high-resolution composition
+
+## Old ECODA `feat_mat`
+
+```{r old-ecoda-matrix, results='asis'}
+show_matrix(
+  old_ecoda[["feat_mat"]],
+  "Old Bassez ECODA_authors_HR feat_mat (sample x cell-type CLR matrix)."
+)
+```
+
+## Regenerated ECODA `feat_mat`
+
+```{r new-ecoda-matrix, results='asis'}
+show_matrix(
+  new_ecoda[["feat_mat"]],
+  "Regenerated Bassez ECODA_authors_HR feat_mat (sample x cell-type CLR matrix)."
+)
+```
+
+## ECODA comparison diagnostics
+
+```{r ecoda-diagnostics}
+ecoda_diag <- data.frame(
+  Quantity = c(
+    "Old / new matrix dimensions",
+    "Common samples",
+    "Samples only in old matrix",
+    "Samples only in regenerated matrix",
+    "Cell types only in old matrix",
+    "Cell types only in regenerated matrix",
+    "Labels equal on common samples",
+    "Shared-value max absolute change",
+    "Shared-value mean absolute change",
+    "Shared-value RMSE",
+    "Shared-value correlation"
+  ),
+  Value = c(
+    paste(ecoda_comparison$old_dim, "/", ecoda_comparison$new_dim),
+    length(ecoda_comparison$common_samples),
+    if (length(ecoda_comparison$only_old_samples) == 0) "none" else paste(ecoda_comparison$only_old_samples, collapse = ", "),
+    if (length(ecoda_comparison$only_new_samples) == 0) "none" else paste(ecoda_comparison$only_new_samples, collapse = ", "),
+    if (length(ecoda_comparison$only_old_features) == 0) "none" else paste(ecoda_comparison$only_old_features, collapse = ", "),
+    paste(ecoda_comparison$only_new_features, collapse = ", "),
+    ecoda_comparison$labels_equal,
+    fmt(ecoda_comparison$max_abs),
+    fmt(ecoda_comparison$mae),
+    fmt(ecoda_comparison$rmse),
+    fmt(ecoda_comparison$correlation)
+  ),
+  row.names = NULL,
+  check.names = FALSE
+)
+knitr::kable(ecoda_diag, format = "html", caption = "ECODA old-versus-regenerated diagnostics.")
+```
+
+The regenerated bundle's stored `counts` table makes the feature-set change
+explicit. The seven regenerated-only cell types are broad `cellType` labels
+that were not present as columns in the old high-resolution composition.
+
+```{r regenerated-only-cell-types}
+new_only_totals <- data.frame(
+  cell_type = ecoda_comparison$only_new_features,
+  regenerated_counts_total = as.numeric(
+    colSums(new_ecoda[["counts"]][, ecoda_comparison$only_new_features, drop = FALSE])
+  ),
+  row.names = NULL,
+  check.names = FALSE
+)
+knitr::kable(
+  new_only_totals,
+  format = "html",
+  digits = 1,
+  caption = "Nonzero regenerated-only cell-type composition entries (stored counts table)."
+)
+```
+
+# MDS comparison
+
+The four panels below use the same MDS calculation as `plot_mds()`:
+
+- GloProp: `cmdscale(as.dist(feat_mat))`;
+- ECODA: `cmdscale(dist(feat_mat))`, equivalently its stored `dist_mat`.
+
+MDS axes can rotate or flip sign between independent fits. The meaningful
+comparison is the pairwise geometry and the responder/non-responder pattern,
+not the sign or absolute orientation of an axis.
+
+```{r mds-comparison, fig.width=12, fig.height=9}
+plot_mds_comparison <- function(result, title, feature_is_distance = FALSE) {
+  dist_mat <- if (feature_is_distance) {
+    stats::as.dist(result[["feat_mat"]])
+  } else {
+    result[["dist_mat"]]
+  }
+  mds <- stats::cmdscale(dist_mat, k = 2, eig = TRUE)
+  positive_eigenvalues <- mds$eig[mds$eig > 0]
+  variance_percent <- 100 * mds$eig[1:2] / sum(positive_eigenvalues)
+
+  labels <- labels_by_sample(result)
+  labels <- labels[rownames(mds$points)]
+  labels[labels == "E"] <- "Responders"
+  labels[labels == "NE"] <- "Non-responders"
+  labels <- factor(labels, levels = c("Responders", "Non-responders"))
+
+  plot_data <- data.frame(
+    Sample = rownames(mds$points),
+    MDS1 = mds$points[, 1],
+    MDS2 = mds$points[, 2],
+    Group = labels,
+    row.names = NULL
+  )
+
+  ggplot2::ggplot(
+    plot_data,
+    ggplot2::aes(x = MDS1, y = MDS2, color = Group, shape = Group)
+  ) +
+    ggplot2::geom_point(size = 2.8) +
+    ggplot2::scale_color_manual(
+      values = c("Responders" = "#D55E00", "Non-responders" = "#0072B2"),
+      drop = FALSE
+    ) +
+    ggplot2::scale_shape_manual(
+      values = c("Responders" = 16, "Non-responders" = 17),
+      drop = FALSE
+    ) +
+    ggplot2::labs(
+      title = paste0(title, " (n = ", nrow(plot_data), ")"),
+      x = paste0("MDS dimension 1 (", fmt(variance_percent[1], 1), "%)"),
+      y = paste0("MDS dimension 2 (", fmt(variance_percent[2], 1), "%)"),
+      color = "Treatment response",
+      shape = "Treatment response"
+    ) +
+    ggplot2::theme_classic() +
+    ggplot2::coord_equal()
+}
+
+patchwork::wrap_plots(
+  plot_mds_comparison(old_gloprop, "Old GloProp", feature_is_distance = TRUE),
+  plot_mds_comparison(new_gloprop, "Regenerated GloProp", feature_is_distance = TRUE),
+  plot_mds_comparison(old_ecoda, "Old ECODA_authors_HR"),
+  plot_mds_comparison(new_ecoda, "Regenerated ECODA_authors_HR"),
+  ncol = 2
+)
+```
+
+
+# Targeted old/current method audit
+
+The targeted audit below keeps the comparison deliberately narrow: Zhang
+scPoli/PILOT, Pelka MrVI, and the restored Stephenson ordinary benchmark scope.
+It recomputes current Python scores from the released Feather inputs, compares
+sample IDs with the old result snapshot, reports current annotation coverage,
+and reads the current benchmark registry.
+
+```{r targeted-audit}
+current_metadata <- function(dataset) {
+  readRDS(file.path(
+    repo_root,
+    "data",
+    "benchmark",
+    "results",
+    paste0(dataset, "_metadata.rds")
+  ))
+}
+
+score_value <- function(result, name, fallback = NULL) {
+  value <- result[["scores"]][[name]]
+  if (is.null(value) && !is.null(fallback)) {
+    value <- result[["scores"]][[fallback]]
+  }
+  if (is.null(value)) NA_real_ else as.numeric(value)
+}
+
+sample_id_summary <- function(old_result, current_result) {
+  old_ids <- rownames(old_result[["feat_mat"]])
+  current_ids <- rownames(current_result[["feat_mat"]])
+  common <- intersect(old_ids, current_ids)
+  list(
+    old_n = length(old_ids),
+    current_n = length(current_ids),
+    shared_n = length(common),
+    only_old = setdiff(old_ids, current_ids),
+    only_current = setdiff(current_ids, old_ids)
+  )
+}
+
+targeted_cases <- list(
+  list(
+    dataset = "Zhang",
+    method = "scPoli_hvg2000_dims15_highres",
+    old_key = "scPoli_hvg2000_dims15_highres",
+    current_file = file.path(
+      repo_root,
+      "data",
+      "benchmark",
+      "embeddings",
+      "Zhang_hvg2000_highres_scpoli_dims15_embs.feather"
+    ),
+    current_reader = process_scpoli_fig
+  ),
+  list(
+    dataset = "Zhang",
+    method = "PILOT_hvg2000_highres",
+    old_key = "PILOT_hvg2000",
+    current_file = file.path(
+      repo_root,
+      "data",
+      "benchmark",
+      "embeddings",
+      "Zhang_hvg2000_highres_pilot_dists.feather"
+    ),
+    current_reader = process_pilot_fig
+  ),
+  list(
+    dataset = "Pelka",
+    method = "MrVI_hvg2000",
+    old_key = "MrVI_hvg2000",
+    current_file = file.path(
+      repo_root,
+      "data",
+      "benchmark",
+      "embeddings",
+      "Pelka_hvg2000_mrvi_dists.feather"
+    ),
+    current_reader = process_mrvi_fig
+  ),
+  list(
+    dataset = "Stephenson",
+    method = "ECODA_authors_HR",
+    old_key = "ECODA_authors_HR",
+    current_file = file.path(
+      repo_root,
+      "data",
+      "benchmark",
+      "results",
+      "Stephenson_ECODA_authors_HR.rds"
+    ),
+    current_reader = function(path, labels) readRDS(path)
+  )
+)
+
+targeted_results <- lapply(targeted_cases, function(case) {
+  old_result <- old_result_list[["bmark"]][[case$dataset]][[case$old_key]]
+  if (is.null(old_result)) {
+    stop("Missing old targeted result: ", case$dataset, " / ", case$old_key)
+  }
+  if (!file.exists(case$current_file)) {
+    stop("Missing current targeted artifact: ", case$current_file)
+  }
+  labels <- current_metadata(case$dataset)[["labels"]]
+  current_result <- case$current_reader(case$current_file, labels)
+  ids <- sample_id_summary(old_result, current_result)
+  data.frame(
+    Dataset = case$dataset,
+    Method = case$method,
+    Old_ANOSIM = score_value(old_result, "anosim_score"),
+    Current_ANOSIM = score_value(current_result, "anosim_score"),
+    Old_Cluster = score_value(old_result, "cluster_score"),
+    Current_Cluster = score_value(current_result, "cluster_score"),
+    Old_samples = ids$old_n,
+    Current_samples = ids$current_n,
+    Shared_samples = ids$shared_n,
+    Only_old = if (length(ids$only_old) == 0) "none" else paste(ids$only_old, collapse = ", "),
+    Only_current = if (length(ids$only_current) == 0) "none" else paste(ids$only_current, collapse = ", "),
+    row.names = NULL,
+    check.names = FALSE
+  )
+})
+targeted_score_table <- do.call(rbind, targeted_results)
+knitr::kable(
+  targeted_score_table,
+  format = "html",
+  digits = 4,
+  caption = "Targeted old/current score and sample-universe comparison."
+)
+
+metadata_coverage <- do.call(rbind, lapply(
+  c("Zhang", "Pelka", "Stephenson"),
+  function(dataset) {
+    metadata <- current_metadata(dataset)
+    data.frame(
+      Dataset = dataset,
+      Current_cells = as.integer(metadata[["n_cells"]]),
+      Current_samples = as.integer(metadata[["n_samples"]]),
+      High_resolution_levels = as.integer(metadata[["n_cell_types_high_res"]]),
+      row.names = NULL
+    )
+  }
+))
+
+read_h5ad_obs <- function(path) {
+  if (!file.exists(path)) stop("Missing current processed h5ad: ", path)
+  anndata <- reticulate::import("anndata", convert = FALSE)
+  handle <- anndata$read_h5ad(path, backed = "r")
+  on.exit(handle$file$close(), add = TRUE)
+  reticulate::py_to_r(handle$obs)
+}
+
+zhang_obs <- read_h5ad_obs(file.path(
+  repo_root,
+  "data",
+  "Zhang",
+  "output",
+  "ZhangY_2022_34653365_benchmark_analysis_ECODAprocessed.h5ad"
+))
+zhang_layer2 <- zhang_obs[["layer2"]]
+annotation_coverage <- data.frame(
+  Dataset = "Zhang",
+  Annotation_column = "layer2",
+  Total_cells = length(zhang_layer2),
+  Valid_nonmissing = sum(!is.na(zhang_layer2)),
+  Missing = sum(is.na(zhang_layer2)),
+  row.names = NULL
+)
+knitr::kable(
+  metadata_coverage,
+  format = "html",
+  caption = "Current sample and high-resolution level coverage."
+)
+knitr::kable(
+  annotation_coverage,
+  format = "html",
+  caption = "Current Zhang layer2 cell-level annotation coverage."
+)
+
+registry_dataset_scope <- data.frame(
+  Dataset = names(read_datasets_json(view = "benchmark_analysis")),
+  row.names = NULL
+)
+knitr::kable(
+  registry_dataset_scope,
+  format = "html",
+  caption = "Datasets currently declared for ordinary benchmark analysis."
+)
+```
+
+# Why are the results different?
+
+1. **The regenerated run contains two additional samples.** GloProp and
+   ECODA both have 26 rows in the old snapshot and 28 rows in the regenerated
+   bundle. The recovered samples are
+   `r paste(glo_comparison$only_new, collapse = ", ")`. The labels for the 26
+   shared samples are identical, so label recoding is not the explanation.
+
+2. **The Bassez high-resolution annotation contract changed.** The current
+   preprocessing repair fills missing/unknown `cellSubType` values with their
+   corresponding broad `cellType` values before benchmark analysis
+   (`src/2_dataset_specific_preprocessing/1.6.1_fill_bassez_cellsubtype.R`).
+   The regenerated ECODA matrix consequently has 40 cell-type columns instead
+   of the old 33. Its seven additional columns are
+   `r paste(ecoda_comparison$only_new_features, collapse = ", ")`.
+   Those columns have nonzero entries in the regenerated stored composition
+   counts, so they are not cosmetic column additions.
+
+3. **CLR values must change when the composition feature set changes.** ECODA
+   recomputes the CLR from the updated sample-by-cell-type composition. Adding
+   broad cell-type components changes the geometric mean used by every row.
+   That is why the shared 33 CLR columns remain highly correlated
+   (`r fmt(ecoda_comparison$correlation)`) but are not numerically identical.
+   The updated rows also include the two recovered samples.
+
+4. **GloProp is sensitive to the same cell-level annotation input.** Its
+   stored matrix is a transformed pairwise distance matrix, so filtering
+   invalid annotations, filling missing subtypes, and recovering samples alter
+   many pairwise entries. Among the 26 shared samples, the GloProp distances
+   have correlation `r fmt(glo_comparison$correlation)`, mean absolute change
+   `r fmt(glo_comparison$mae)`, and maximum absolute change
+   `r fmt(glo_comparison$max_abs)`. This demonstrates that the difference is
+   not only the two extra rows/columns.
+
+5. **MDS is not itself the source of the discrepancy.** Both old and new
+   panels are recomputed from their stored pairwise distances. MDS can rotate
+   or reflect an embedding, but it cannot explain changed sample distances;
+   the changed input matrices do.
+
+The short version: the March 26 object is a result from the older Bassez
+annotation/sample universe. The current pipeline uses the repaired high-resolution
+annotation, filters invalid annotation sentinels, and reruns the composition
+methods. The resulting GloProp distance matrix and ECODA CLR feature matrix are
+therefore expected to differ.

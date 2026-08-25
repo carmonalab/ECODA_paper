@@ -172,13 +172,13 @@ pd.DataFrame(ct_selection.get("leakage_warnings", []))
 ```
 ## 1. Study Summary & Metadata Categorization
 
-> **Lung Atlas (Fig 4)** -- Sikkema et al. 2023, *Nature Medicine* 29(6):1563-1577, PMID 37291214. Integrated human lung cell atlas across multiple studies, platforms (`10x`, `BD-Rhapsody`, `Smart-seq2`, `InDrop`), and conditions (`tumor` vs `normal` tissue). Note: The PILOT-GM-VAE paper evaluated `disease` as the biological condition, whereas ECODA also evaluates `origin` (tumor vs normal) and extensive multi-center batch structures.
+> **Lung Atlas (Fig 4)** -- Sikkema et al. 2023, *Nature Medicine* 29(6):1563-1577, PMID 37291214. Integrated human lung cell atlas across multiple studies, platforms (`10x`, `BD-Rhapsody`, `Smart-seq2`, `InDrop`), and disease states (`normal`, `chronic obstructive pulmonary disease`, and lung carcinomas). The primary biological label is `disease`; `origin` (tumor versus normal) remains a secondary metadata field for diagnostic comparisons.
 
 ### Metadata Categories Summary
 
 ```{python}
 cat_df = ou.categorize_obs_columns(sub.obs, {
-    "bio_primary": [BIO_COL, 'disease'],
+    "bio_primary": [BIO_COL],
     "bio_secondary": ECODA_SECONDARY_BIO,
     "batch_candidates": BATCH_COLS,
     "cell_types": ALL_CT_COLS,
@@ -260,7 +260,7 @@ crosstab[cols_show]
 > **Collinearity Diagnostic:** Quantifies pairwise non-linear association among all biological and technical covariates at the sample level using Normalized Mutual Information (NMI $\in [0, 1]$). Values $> 0.70$ indicate severe collinearity and confounding.
 
 ```{python}
-all_cand_cols = list(dict.fromkeys([BIO_COL, 'disease'] + ECODA_SECONDARY_BIO + BATCH_COLS))
+all_cand_cols = list(dict.fromkeys([BIO_COL] + ECODA_SECONDARY_BIO + BATCH_COLS))
 nmi_mat = ou.compute_metadata_nmi_matrix(sub.obs, SAMPLE_COL, all_cand_cols)
 fig_nmi = ou.plot_metadata_nmi_heatmap(nmi_mat, title=f"Metadata Collinearity Matrix (NMI) — {NAME}")
 plt.figure(fig_nmi.number)
@@ -291,7 +291,7 @@ for fig in um["figs"]:
 > 2. **Global Distance PERMANOVA & Variance Decomposition:** Partitions total inter-sample Aitchison distance variance (Euclidean distance on CLR composition) into **Unique Biological**, **Unique Technical**, **Shared/Confounded**, and **Residual** variance via multi-variable marginal PERMANOVA with permutation tests (Anderson 2001).
 
 ```{python}
-bio_candidates = list(dict.fromkeys([c for c in [BIO_COL, 'disease'] + ECODA_SECONDARY_BIO if c in sub.obs.columns]))
+bio_candidates = list(dict.fromkeys([c for c in [BIO_COL] + ECODA_SECONDARY_BIO if c in sub.obs.columns]))
 tech_candidates = list(dict.fromkeys([c for c in BATCH_COLS if c in sub.obs.columns]))
 
 for annot_col in ALL_CT_COLS:

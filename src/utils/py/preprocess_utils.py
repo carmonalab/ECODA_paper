@@ -2,6 +2,7 @@ import scipy.sparse as sp
 import pandas as pd
 import scanpy as sc
 import rpy2.robjects as ro
+from numbers import Integral
 from pathlib import Path
 
 
@@ -198,7 +199,7 @@ def load_input(input_names, input_dir, output_dir):
 # ---------------------------------------------------------------------------
 # Cell (row) subsetting for views
 # ---------------------------------------------------------------------------
-def apply_subset_vars(adata, subset_vars):
+def apply_subset_vars(adata, subset_vars, copy=True):
     if not subset_vars:
         return adata
     mask = pd.Series(True, index=adata.obs_names)
@@ -207,4 +208,52 @@ def apply_subset_vars(adata, subset_vars):
             raise KeyError(f"subset_vars references missing obs column: {col}")
         col_mask = adata.obs[col].isin(spec["values"])
         mask &= col_mask if spec.get("op", "in") == "in" else ~col_mask
-    return adata[mask].copy()
+    subset = adata[mask]
+    return subset.copy() if copy else subset
+
+
+def remove_low_cellcount_samples(
+    adata, sample_col="Sample", min_cells_per_sample=500
+):
+    """Remove samples with fewer than ``min_cells_per_sample`` observations.
+
+    The returned metadata maps each removed sample ID to its observation
+    count. Counts are computed before any per-cell or per-gene preprocessing;
+    missing and blank sample IDs are invalid input rather than a removable
+    sample.
+    """
+    if sample_col not in adata.obs.columns:
+        raise KeyError(
+            f"sample column {sample_col!r} is missing; "
+            f"available columns: {list(adata.obs.columns)}"
+        )
+    if isinstance(min_cells_per_sample, bool) or not isinstance(
+        min_cells_per_sample, Integral
+    ):
+        raise TypeError("min_cells_per_sample must be a positive integer")
+    if min_cells_per_sample <= 0:
+        raise ValueError("min_cells_per_sample must be a positive integer")
+
+    sample_values = adata.obs[sample_col]
+    sample_ids = sample_values.astype("string")
+    invalid = sample_values.isna() | sample_ids.str.strip().eq("")
+    if bool(invalid.any()):
+        invalid_rows = list(adata.obs_names[invalid][:5])
+        raise ValueError(
+            f"sample column {sample_col!r} contains missing or blank IDs; "
+            f"first invalid observations: {invalid_rows}"
+        )
+
+    counts = sample_ids.value_counts(sort=False)
+    removed = counts[counts < min_cells_per_sample].sort_index()
+    keep_ids = counts[counts >= min_cells_per_sample].index
+    keep_mask = sample_ids.isin(keep_ids).to_numpy()
+    if not bool(keep_mask.any()):
+        raise ValueError(
+            f"sample-count filtering removed all {adata.n_obs} observations; "
+            f"threshold={min_cells_per_sample}"
+        )
+
+    filtered = adata[keep_mask].copy()
+    removed_counts = {str(sample): int(count) for sample, count in removed.items()}
+    return filtered, removed_counts

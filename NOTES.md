@@ -45,6 +45,59 @@ Each onboarding notebook adheres to the following sequence:
   - Evaluated via permutation Pseudo-$F$ tests ($B=999$ permutations) with Benjamini-Hochberg FDR correction.
   - Visualized via a dual-panel plot: (1) Global 100% variance decomposition stacked bar, and (2) Marginal $R^2$ bar chart with permutation $p$-values and significance codes.
 
+### 1.4 New onboarding cohorts: sample-count comparison with PILOT-GM-VAE
+
+The current counts below come from the full-file onboarding audits in
+`data/new_dataset_checks/subsets/*_meta.json`, using the sample column registered
+in [`datasets.json`](datasets.json). The cell threshold is strict: samples with
+fewer than 500 cells are dropped, while samples with exactly 500 cells are
+retained.
+
+| Dataset | Current sample column | Current samples | Dropped (<500) | Retained | PILOT-GM-VAE reported samples |
+| :--- | :--- | ---: | ---: | ---: | ---: |
+| Alzheimer | `donor_id` | 83 | 0 | 83 | 83 |
+| Breast cancer | `sample_id` | 167 | 2 | 165 | 126 |
+| Covid-19 PBMC | `sampleID` | 172 | 8 | 164 | 151 |
+| Kidney (KPMP) | `specimen` | 47 | 2 | 45 | 45 |
+| Myocardial infarction (MI-2) | `orig_ident` | 24 | 0 | 24 | 23 |
+| Diabetes | `donor_id` | 56 | 0 | 56 | 52* |
+| Lupus PBMC | `sampleID` | 261 | 1 | 260 | 261 |
+| Lung atlas | `sample` | 304† | 19 | 285 | 165‡ |
+| Parkinson | `donor_id` | 97 | 1 | 96 | 97 |
+
+The PILOT-GM-VAE column is the reported count from [Table 1 of the
+study](https://academic.oup.com/bib/article/26/5/bbaf547/8287234#536377145);
+the same dataset descriptions are preserved in the
+[author-provided PDF](notebooks/dataset_onboarding/datasets.pdf). These
+reported units are not necessarily identical to the current registry units:
+PILOT uses donor/patient/sample terminology by cohort, whereas the current
+table follows the configured column in `datasets.json`.
+
+* `*` The PILOT-GM-VAE Table 1 lists 52 Diabetes samples. The author-provided
+  PDF additionally says that four embryo samples were excluded as outliers, but
+  the paper does not reconcile that statement with the 52-sample Table 1
+  entry. If the exclusion is applied to those 52 samples, the effective count
+  would be 48. The current onboarding file contains 56 `donor_id` values and
+  has no `subset_vars` exclusion for those samples.
+* For Breast cancer, the onboarding audit finds 126 `donor_id` values and 167
+  `sample_id` values. `sample_id` nests `donor_id` (up to four sample IDs per
+  donor), while `accSample` is equivalent to `donor_id`. The PILOT-GM-VAE
+  report says 126 donors, so the most likely explanation is that the authors
+  used `donor_id` (or the equivalent `accSample`) rather than `sample_id`.
+  This explains the 126-versus-167 discrepancy before the 500-cell filter.
+* `†` The lung dataset has 304 `sample` IDs,
+  and 165 `donor_id` values. It has 304 nonzero donor/sample pairs; every
+  sample maps to exactly one donor, 79 donors have multiple sample IDs, and
+  the maximum is 16 sample IDs for one donor. The per-donor distribution is:
+  86 donors with one sample, 56 with two, 4 with three, 17 with four, 1 with
+  ten, and 1 with sixteen. The 19 sample IDs below 500 cells leave 285
+  sample-level units.
+* `‡` The PILOT-GM-VAE report gives 941,504 cells and 165 donors for Lung.
+  Those values now match cell and `donor_id` totals
+  exactly. The remaining 304-versus-165 discrepancy is therefore a unit
+  choice: ECODA's configured column counts `sample` IDs, while PILOT reports
+  donors.
+
 ---
 
 ## 2. Batch Effects in Single-Cell Cohorts: Expression vs. Composition
@@ -176,3 +229,84 @@ Confounded technical variables remain documented warnings, not reasons to
 silently change the confirmed sample or label roles. Missing IDs, collisions,
 missing labels, empty derived annotations, invalid hierarchies, and missing
 exact pass keys remain hard failures.
+
+## 4. Benchmark regeneration and annotation invariants
+
+- Stage 3 counts observations per raw/staged view before Scanpy's per-cell and
+  per-gene filters. Samples with fewer than 500 observations are removed;
+  exactly 500 are retained. The authoritative raw/view audit identifies
+  `BIOKEY_8_Pre` (365) and `BIOKEY_25_Pre` (296) in Bassez, `LB4180T` (496) in
+  Lee, six Smillie samples (`N58.LPB2=498`, `N19.LPB=485`, `N8.LPB=482`,
+  `N12.LPB=441`, `N14.LPA=432`, `N12.LPA=243`), and Zhang
+  `Pre_P010_t=8`/`Pre_P018_b=437`. Current processed mirrors are evidence only.
+- Missing high-resolution Bassez annotations are filled from the configured
+  low-resolution/broad annotation. This is an accepted annotation-contract
+  change, not a biological-label substitute. Bassez and Smillie still run the
+  supported HiTME/scATOMIC Stage 4 path after Stage 3 changes so derived
+  annotation artifacts used by Figure 3 and Supp fig 19 are fresh.
+- scPoli's label encoder can receive mixed strings and `NaN` values and fail
+  under NumPy 2.x. PILOT's cost matrix can treat `NaN` as a pseudo-cell type
+  with a zero-cell centroid, yielding `NaN`/invalid EMD distances. The worker
+  therefore replaces missing cell-type annotations with an explicit `Unknown`
+  category, preserving every cell and sample; complete annotation columns are
+  unchanged. Missing cells are never dropped and the biological label is never
+  used in this handling.
+- MrVI is stochastic. CPU/GPU choice and preprocessing/input changes can alter
+  learned distances despite `scvi.settings.seed = 0`.
+- Gene-expression methods can differ slightly because the old Seurat
+  preprocessing and current Scanpy preprocessing are not bit-identical.
+- Zhang old/new differences additionally include the two low-cell samples,
+  explicit `Unknown` cell-type handling, stored-HVG/raw-count inputs, and
+  PILOT's switch from recomputed PCA to the stored preprocessing embedding.
+
+## 5. Modularity graph update in the new benchmark pipeline
+
+The modularity implementation changed during the repository migration from
+the March legacy pipeline to the current shared scoring code. The change is
+intentional and affects the modularity score, not the underlying biological
+labels or pseudobulk features.
+
+### 5.1 Legacy graph
+
+The March implementation in `functions.R` iterated only over each sample's
+directed k-nearest-neighbor list. It calculated the number of shared neighbors
+for those candidate pairs and symmetrized the result. This produced a
+kNN-restricted SNN graph: pairs that shared neighbors but were not direct kNN
+neighbors were omitted.
+
+### 5.2 Current graph
+
+`src/utils/scoring_metrics.R::compute_snn_graph()` builds a sparse binary
+sample-to-neighbor incidence matrix `A` and computes:
+
+$$
+S = A A^T
+$$
+
+After removing the diagonal, `S_{ij}` is the number of nearest neighbors shared
+by samples `i` and `j`, for all sample pairs. This is the standard full SNN
+edge set and matches the edge construction used by Seurat's `ComputeSNN`;
+the current ECODA implementation intentionally retains raw shared-neighbor
+weights and does not apply Seurat's Jaccard normalization or pruning threshold.
+
+`Matrix::tcrossprod()` is used rather than bare `t()` so sparse-matrix
+operations remain valid in the transformation workers. `knn_k` is clamped to
+`n_samples - 1`, which prevents invalid neighbor indices on small datasets such
+as `_debug`.
+
+### 5.3 Score naming and comparability
+
+The old `mod_score` was the default modularity using
+`k = max(3, round(sqrt(n_samples)))`. The current equivalent is
+`mod_knnsqrtn_score`; fixed-neighbor scores are explicitly reported as
+`mod_knn3_score`, `mod_knn6_score`, and `mod_knn9_score`. The old and current
+values are not numerically interchangeable because the graph edge set changed.
+The current notebook therefore drops the obsolete `mod_score` field rather than
+mixing it with the new score names.
+
+`igraph::modularity()` remains the underlying weighted modularity calculation.
+ECODA additionally divides it by `1 - 1 / n_groups` as a project-specific
+group-count adjustment. This adjustment is unchanged by the graph migration.
+For exact March reproducibility, the legacy kNN-restricted graph must be used;
+for the current method definition, report the full unpruned raw-overlap SNN
+score and do not describe it as Seurat's Jaccard-pruned score.

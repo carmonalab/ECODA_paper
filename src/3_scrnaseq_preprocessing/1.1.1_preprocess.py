@@ -11,7 +11,11 @@ import re
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.utils.py.gene_utils import standardize_gene_symbols
 from src.utils.py.datasets_io import read_datasets_json
-from src.utils.py.preprocess_utils import load_input, apply_subset_vars
+from src.utils.py.preprocess_utils import (
+    load_input,
+    apply_subset_vars,
+    remove_low_cellcount_samples,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +341,21 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                 ]
             else:
                 raise ValueError(f"Cannot find {sample_col} in obs for {current_ds} / {view_name}")
+
+            adata_view, removed_samples = remove_low_cellcount_samples(
+                adata_view, sample_col=sample_col_out, min_cells_per_sample=500
+            )
+            removed_summary = (
+                ", ".join(
+                    f"{sample}={count}" for sample, count in removed_samples.items()
+                )
+                if removed_samples
+                else "none"
+            )
+            print(
+                f"Sample-count filter ({current_ds} / {view_name}): "
+                f"threshold=500, removed={len(removed_samples)} [{removed_summary}]"
+            )
 
             if is_uncorrected:
                 batch_key = "Sample"
