@@ -25,6 +25,29 @@ ECODA (Exploratory Compositional Data Analysis) is a reproducible R/Python workf
 
 Operational concurrency is explicit rather than application-async: R uses `foreach`/`doParallel`, Python/R workers run in SLURM arrays, and shell watchdogs gate synchronization on `sacct`/`squeue`. Missing status, checksum mismatch, worker failure, or exhausted OOM retry must fail closed.
 
+### Durable HPC execution
+
+- Every full-cohort preprocessing, annotation, benchmark, evidence, or
+  correction run MUST be launched through the checked-in
+  `durable-hpc-gate-ecoda` profile. Direct SSH-launched long-running wrappers
+  are not an acceptable substitute.
+- Independent datasets MAY and SHOULD run in one SLURM array for a pipeline
+  stage. The durable gate owns the array's terminal wait, accounting
+  inspection, checksum/NAS audit, and Luna Max review; the next pipeline stage
+  starts only after that gate is reviewed `COMPLETED`.
+- Any array that can OOM MUST use a compute-node watchdog with automatic
+  OOM-only resubmission of the affected manifest rows, bounded memory
+  escalation, and fail-closed handling of non-OOM failures or an exhausted
+  ceiling.
+- After `launch`, arm exactly one unbounded durable `wait`; do not repeatedly
+  poll `squeue`/`sacct` from the agent session. Perform one terminal `inspect`
+  with every scheduler ID emitted by the wrapper, then the reviewer approval
+  inspect. Use `status` only for non-mutating recovery checks.
+- Short SSH commands for staging, code synchronization, and reading terminal
+  evidence remain allowed. If the durable gate or required watchdog cannot
+  represent a new wrapper, stop before launching full-cohort work and
+  generalize the shared wrapper rather than bypassing the gate.
+
 ## Key Directories
 
 - `src/1_stage_data/` — NAS-to-scratch staging.
