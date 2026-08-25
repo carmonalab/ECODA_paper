@@ -738,7 +738,7 @@ analysis_merge_sync_cleanup() {
   # NAS must be reachable BEFORE the merge: the merge with --no-cleanup keeps
   # the per-task logs until after the rsync below succeeds.
   echo "Checking NAS reachability..."
-  if ! ls "${REMOTE_ROOT}/.." > /dev/null 2>&1; then
+  if ! ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
       echo "ERROR: NAS path ${REMOTE_ROOT} is unreachable."
       notify_sync_status \
         "ECODA: ${KIND} NOT synced (no NAS access)" \
