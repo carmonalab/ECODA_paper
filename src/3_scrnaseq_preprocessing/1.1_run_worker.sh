@@ -21,16 +21,27 @@ fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-if ! command -v jq >/dev/null 2>&1; then
-  echo "ERROR: jq not available on worker node; cannot derive DS_NAME from ${DATASETS_JSON_FILE}."
+if [[ -z "${PREPROCESS_DATASETS_FILE:-}" ]] && ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: jq not available on worker node and PREPROCESS_DATASETS_FILE is unset; cannot derive DS_NAME."
   exit 1
 fi
 
-# Bash arrays do not propagate through sbatch; derive DS_NAME from datasets.json
-# directly (jq 'keys[]' is sorted, matching the array indices in 1_submit_hpc_array.sh).
-DS_NAME="$(jq -r 'keys[]' "${DATASETS_JSON_FILE}" | sed -n "${SLURM_ARRAY_TASK_ID}p")"
+# Durable stage wrappers provide a one-dataset-per-line manifest so selected
+# onboarding cohorts can share one array and OOM retries can resubmit only the
+# failed rows. Preserve the datasets.json mapping for legacy submitter calls.
+if [[ -n "${PREPROCESS_DATASETS_FILE:-}" ]]; then
+  if [[ ! -r "${PREPROCESS_DATASETS_FILE}" ]]; then
+    echo "ERROR: preprocessing dataset manifest is unreadable: ${PREPROCESS_DATASETS_FILE}"
+    exit 1
+  fi
+  DS_NAME="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${PREPROCESS_DATASETS_FILE}")"
+else
+  # Bash arrays do not propagate through sbatch; derive DS_NAME from datasets.json
+  # directly (jq 'keys[]' is sorted, matching the array indices in 1_submit_hpc_array.sh).
+  DS_NAME="$(jq -r 'keys[]' "${DATASETS_JSON_FILE}" | sed -n "${SLURM_ARRAY_TASK_ID}p")"
+fi
 if [[ -z "${DS_NAME}" ]]; then
-  echo "ERROR: No dataset for array task ${SLURM_ARRAY_TASK_ID} in ${DATASETS_JSON_FILE}."
+  echo "ERROR: No dataset for array task ${SLURM_ARRAY_TASK_ID}."
   exit 1
 fi
 echo "Processing dataset: ${DS_NAME} (array task ${SLURM_ARRAY_TASK_ID})"

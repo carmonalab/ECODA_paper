@@ -107,6 +107,23 @@ overrides over the dataset-level columns.
 No active batch-effect artifact, key, manifest, cache, log, or result variable
 uses a benchmark-named identifier.
 
+## Durable stage execution
+
+The uncorrected onboarding preprocessing stage is one parallel array over the
+nine new cohorts plus Joanito and Stephenson. Launch
+`src/3_scrnaseq_preprocessing/1_submit_batch_effect_stage.sh` through the
+checked-in `durable-hpc-gate-ecoda` profile; it submits the worker array and a
+compute-node watchdog, then returns scheduler IDs without waiting. The
+watchdog retries only `OUT_OF_MEMORY` rows with doubled memory up to its
+configured ceiling, validates every pass-qualified h5ad, and synchronizes
+completed output to the canonical NAS root.
+
+Use one durable gate per pipeline stage. Arm one unbounded durable `wait`, run
+one terminal `inspect` with the array, every watchdog retry array, and watchdog
+IDs emitted in the wrapper log, then obtain Luna Max reviewer approval before
+starting annotation. Do not poll `squeue` or `sacct` from the agent session or
+launch the next stage before the reviewed gate is terminal.
+
 ## Pass-specific preprocessing
 
 `batch_effect_uncorrected` runs one hvg2000 pass with `Sample`, raw PCA,
