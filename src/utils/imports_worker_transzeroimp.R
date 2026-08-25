@@ -21,7 +21,11 @@ my_packages <- c(
   "doParallel",
   "foreach",
   "reticulate",
-  "dplyr"
+  "dplyr",
+  # zCompositions::cenGeoMean() calls survival::survreg() without a
+  # namespace qualifier; attach survival so zero-imputation workers fail
+  # closed at startup rather than halfway through the analysis.
+  "survival"
 )
 
 # Function to attempt loading all packages quietly
