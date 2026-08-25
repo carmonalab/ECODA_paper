@@ -8,7 +8,8 @@
 # Usage (from HPC login node, repo root):
 #   ./notebooks/dataset_onboarding/run_subset_hpc.sh                  # all 9 datasets in parallel
 #   ./notebooks/dataset_onboarding/run_subset_hpc.sh --only breast    # one dataset
-#   ./notebooks/dataset_onboarding/run_subset_hpc.sh --debug-cpu     # submit to debug-cpu (max 15 min)
+#   ./notebooks/dataset_onboarding/run_subset_hpc.sh --only lung --mem 128G
+#
 #   ./notebooks/dataset_onboarding/run_subset_hpc.sh --direct        # direct execution (debug only)
 #   ./notebooks/dataset_onboarding/run_subset_hpc.sh --sync-nas      # copy subsets to NAS too
 # ==============================================================================
@@ -27,7 +28,7 @@ SUBSET_LOGS_DIR="${LOGS_DIR}/onboard_subsets"
 
 ONLY=""
 PARTITION="shared-cpu"
-TIME_LIMIT="00:45:00"
+MEMORY="32G"
 DIRECT=0
 SYNC_NAS=0
 SKIP_EXISTING=0
@@ -44,6 +45,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --time)
       TIME_LIMIT="${2:-}"
+      shift 2
+      ;;
+    --mem)
+      MEMORY="${2:-}"
       shift 2
       ;;
     --debug-cpu)
@@ -64,7 +69,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      echo "ERROR: Unknown option $1 (accepted: --only <key> | --partition <p> | --time <t> | --skip-existing | --debug-cpu | --direct | --sync-nas)" >&2
+      echo "ERROR: Unknown option $1 (accepted: --only <key> | --partition <p> | --time <t> | --mem <size> | --skip-existing | --debug-cpu | --direct | --sync-nas)" >&2
       exit 1
       ;;
   esac
@@ -118,7 +123,7 @@ echo "Array spec:    ${ARRAY_SPEC} (${N_TASKS} tasks)"
 echo "Partition:     ${PARTITION}"
 echo "Time limit:    ${TIME_LIMIT}"
 echo "CPUs per task: 4"
-echo "Memory:        32G per task"
+echo "Memory:        ${MEMORY} per task"
 echo "Scratch dir:   ${IN_DIR}"
 echo "Subsets dir:   ${OUT_DIR}"
 echo "Logs dir:      ${SUBSET_LOGS_DIR}"
@@ -133,7 +138,7 @@ SBATCH_CMD=(
   --partition="${PARTITION}"
   --time="${TIME_LIMIT}"
   --cpus-per-task=4
-  --mem=32G
+  --mem="${MEMORY}"
   --array="${ARRAY_SPEC}"
   --output="${SUBSET_LOGS_DIR}/subset_%A_%a.out"
   --error="${SUBSET_LOGS_DIR}/subset_%A_%a.err"
