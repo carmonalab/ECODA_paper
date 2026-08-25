@@ -85,7 +85,11 @@ if [[ ${RC} -eq 0 ]]; then
   echo "Task ${SLURM_ARRAY_TASK_ID}: chunk processing complete."
   exit 0
 fi
-ERR_FILE="${LOGS_DIR}/4_cell_type_annotation_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.err"
+if [[ -n "${ANNOTATION_ERROR_PREFIX:-}" ]]; then
+  ERR_FILE="${ANNOTATION_ERROR_PREFIX}_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.err"
+else
+  ERR_FILE="${LOGS_DIR}/4_cell_type_annotation_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.err"
+fi
 if worker_requeue_if_transient "${ERR_FILE}" "${WORKER_MAX_RETRIES:-3}"; then
   exit 0   # requeued; the script restarts, likely on another node
 fi
