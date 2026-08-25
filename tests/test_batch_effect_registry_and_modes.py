@@ -15,6 +15,7 @@ PY_WORKER = (
     / "src/5_run_benchmark_methods/run_python_sample_embedding_methods/"
     / "1.1.1_benchmark_methods_py.py"
 )
+SUBSET_SCRIPT = ROOT / "notebooks/dataset_onboarding/create_subsets_hpc.py"
 
 
 def load_worker():
@@ -23,6 +24,12 @@ def load_worker():
     spec.loader.exec_module(module)
     return module
 
+
+def load_subset_worker():
+    spec = importlib.util.spec_from_file_location("onboarding_subset_worker", SUBSET_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 def main():
     with DATASETS.open() as handle:
@@ -64,6 +71,9 @@ def main():
     ] == "leiden_res_5_batch_effect_corrected_hvg2000_harmony"
     assert datasets["Joanito"]["columns"]["batch"] == "seqtec"
     assert datasets["Stephenson"]["columns"]["batch"] == "Site"
+    subset_worker = load_subset_worker()
+    safe = subset_worker._json_safe({"nan": float("nan"), "finite": 2.5})
+    assert safe == {"nan": None, "finite": 2.5}
 
     worker = load_worker()
     fake = SimpleNamespace(
