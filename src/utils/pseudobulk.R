@@ -114,17 +114,57 @@ get_pb <- function(seurat, sample_col = "Sample", hvg = NULL) {
     group.by = sample_col,
     assays = "RNA"
   )[["RNA"]])
-  # Sample names are ALWAYS kept as-is (NO gsub("-", "_", ...)): the
-  # upstream 1.1.1_preprocess.py standardizes obs sample names for all
-  # preprocessed views, and legacy h5ads (e.g. Adams) still carry hyphens
-  # there. Pseudobulk column names must match those obs names so label
-  # alignment in create_result_bundle() never returns NA (ECODA_deconv on
-  # Adams hit this: "NA labels for 58 of 100 samples"; see AGENTS.md).
+  # Seurat may sanitize separators while aggregating (e.g.
+  # "BIOKEY-2-Pre" vs "BIOKEY_2_Pre"). get_pb_deseq2() reconciles the
+  # resulting sample IDs against the canonical preprocessed obs IDs before
+  # returning a samples-by-genes matrix.
   if (!is.null(hvg)) {
     pb <- pb[hvg, ]
   }
   return(pb)
 }
+# Reconcile Seurat/AggregateExpression sample IDs with the canonical IDs from
+# the preprocessed obs. Exact matches win; alias matching is accepted only when
+# it is one-to-one and covers every sample.
+align_pseudobulk_sample_names <- function(pb, sample_ids) {
+  pb_ids <- rownames(pb)
+  sample_ids <- as.character(sample_ids)
+  if (is.null(pb_ids) ||
+      length(pb_ids) != length(sample_ids) ||
+      anyNA(pb_ids) ||
+      anyNA(sample_ids) ||
+      any(!nzchar(pb_ids)) ||
+      any(!nzchar(sample_ids)) ||
+      anyDuplicated(pb_ids) ||
+      anyDuplicated(sample_ids)) {
+    stop("Pseudobulk sample IDs must be nonmissing and unique.")
+  }
+
+  exact_match <- match(pb_ids, sample_ids)
+  if (all(!is.na(exact_match))) {
+    rownames(pb) <- sample_ids[exact_match]
+    return(pb)
+  }
+
+  if (!exists("standardize_sample_names", mode = "function")) {
+    stop("Cannot reconcile pseudobulk sample IDs: standardize_sample_names is unavailable.")
+  }
+  pb_alias <- standardize_sample_names(pb_ids)
+  sample_alias <- standardize_sample_names(sample_ids)
+  if (anyDuplicated(pb_alias) || anyDuplicated(sample_alias)) {
+    stop("Pseudobulk sample-ID aliasing is ambiguous.")
+  }
+  alias_match <- match(pb_alias, sample_alias)
+  if (anyNA(alias_match)) {
+    stop(
+      "Pseudobulk sample IDs do not match canonical metadata IDs after ",
+      "standardization."
+    )
+  }
+  rownames(pb) <- sample_ids[alias_match]
+  pb
+}
+
 
 
 # Get DESeq2-normalized pseudobulk
@@ -173,9 +213,6 @@ get_pb_deseq2 <- function(
   }
 
   metadata <- get_metadata(seurat, sample_col = sample_col)
-  # Keep the metadata sample column as-is: it must match the pseudobulk
-  # colnames above and the obs-derived labels (no gsub hyphen->underscore;
-  # see get_pb()).
   pb_norm <- t(DESeq2.normalize(
     pb,
     metadata = metadata,
@@ -184,5 +221,9 @@ get_pb_deseq2 <- function(
     blind = blind,
     correct_batch = correct_batch
   ))
+  pb_norm <- align_pseudobulk_sample_names(
+    pb_norm,
+    metadata[[sample_col]]
+  )
   return(pb_norm)
 }

@@ -76,6 +76,34 @@ assert_error(
   utils_env$bassez_fill_cell_subtype(data.frame(cellSubType = factor(NA))),
   "missing required column"
 )
+pseudobulk_env <- new.env(parent = globalenv())
+pseudobulk_env$standardize_sample_names <- function(sample_names) {
+  gsub("-", "_", as.character(sample_names), fixed = TRUE)
+}
+sys.source(
+  file.path(project_root, "src", "utils", "pseudobulk.R"),
+  envir = pseudobulk_env
+)
+pseudobulk_fixture <- matrix(
+  c(1, 2, 3, 4),
+  nrow = 2,
+  dimnames = list(c("BIOKEY-2-Pre", "exact"), c("gene1", "gene2"))
+)
+aligned_pseudobulk <- pseudobulk_env$align_pseudobulk_sample_names(
+  pseudobulk_fixture,
+  c("BIOKEY_2_Pre", "exact")
+)
+stopifnot(identical(
+  rownames(aligned_pseudobulk),
+  c("BIOKEY_2_Pre", "exact")
+))
+assert_error(
+  pseudobulk_env$align_pseudobulk_sample_names(
+    pseudobulk_fixture,
+    c("BIOKEY_2_Pre", "different")
+  ),
+  "do not match canonical metadata IDs"
+)
 
 pipeline_env <- new.env(parent = globalenv())
 sys.source(
@@ -133,7 +161,12 @@ composition_loader <- function(
   pseudobulk_dir,
   ds,
   force = FALSE,
-  log_file = NULL
+  log_file = NULL,
+  cache_stem = ds,
+  batch_col = NULL,
+  blind = TRUE,
+  correct_batch = FALSE,
+  variants = hpc_env$PB_VARIANT_NAMES
 ) {
   composition_loader_calls$seurat <- seurat
   composition_loader_calls$force <- force
@@ -142,11 +175,16 @@ composition_loader <- function(
     hvg_rank_genes = hvg_rank_genes,
     pseudobulk_dir = pseudobulk_dir,
     ds = ds,
-    log_file = log_file
+    log_file = log_file,
+    cache_stem = cache_stem,
+    batch_col = batch_col,
+    blind = blind,
+    correct_batch = correct_batch,
+    variants = variants
   )
   setNames(
-    lapply(hpc_env$PB_VARIANT_NAMES, function(variant) list(variant = variant)),
-    hpc_env$PB_VARIANT_NAMES
+    lapply(variants, function(variant) list(variant = variant)),
+    variants
   )
 }
 injected_composition_pseudobulks <- hpc_env$load_composition_pb_variants(
@@ -166,7 +204,12 @@ stopifnot(identical(
     hvg_rank_genes = character(0),
     pseudobulk_dir = pseudobulk_dir,
     ds = "Toy",
-    log_file = "composition-test.log"
+    log_file = "composition-test.log",
+    cache_stem = "Toy",
+    batch_col = NULL,
+    blind = TRUE,
+    correct_batch = FALSE,
+    variants = hpc_env$PB_VARIANT_NAMES
   )
 ))
 stopifnot(identical(
