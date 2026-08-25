@@ -70,3 +70,6 @@ trained_models/
 notebooks/dataset_onboarding/download_log.md
 notebooks/dataset_onboarding/*.html
 notebooks/dataset_onboarding/*_files/
+
+/.quarto/
+**/*.quarto_ipynb
