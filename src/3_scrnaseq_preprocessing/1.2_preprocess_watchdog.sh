@@ -133,10 +133,11 @@ submit_retry_array() {
   local RETRY_MANIFEST="$1"
   local RETRY_COUNT
   RETRY_COUNT="$(wc -l < "${RETRY_MANIFEST}" | tr -d '[:space:]')"
-  local EXPORTS="ALL,PREPROCESS_DATASETS_FILE=${RETRY_MANIFEST},PREPROCESS_VIEW=${VIEW},FORCE_PREPROCESS=${FORCE_PREPROCESS},PREPROCESS_ERROR_PREFIX=${LOGS_DIR}/3_scrnaseq_batch_effect_retry"
+  local EXPORTS="ALL,PREPROCESS_DATASETS_FILE=${RETRY_MANIFEST},PREPROCESS_VIEW=${VIEW},FORCE_PREPROCESS=${FORCE_PREPROCESS},PREPROCESS_ERROR_PREFIX=${LOGS_DIR}/3_scrnaseq_batch_effect_retry,PREPROCESS_CPUS_PER_TASK=${PREPROCESS_CPUS_PER_TASK:-16}"
   local RETRY_ID
   RETRY_ID="$(sbatch --parsable \
     --array="1-${RETRY_COUNT}%${THROTTLE}" \
+    --cpus-per-task="${PREPROCESS_CPUS_PER_TASK:-16}" \
     --mem="${CURRENT_MEMORY}" \
     --partition="${PARTITION}" \
     --output="${LOGS_DIR}/3_scrnaseq_batch_effect_retry_%A_%a.log" \

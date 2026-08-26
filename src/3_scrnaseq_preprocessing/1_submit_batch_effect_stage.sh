@@ -17,6 +17,7 @@ PARTITION="${SLURM_PARTITION_BENCHMARK_CPU:-shared-cpu}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 FORCE_PREPROCESS=0
 DATASETS_ARG=""
+CPUS_PER_TASK="${PREPROCESS_CPUS_PER_TASK:-16}"
 
 usage() {
   cat <<'EOF'
@@ -32,6 +33,7 @@ Options:
   --mem VALUE       initial worker memory (default: 128G)
   --max-mem VALUE   OOM retry ceiling (default: PREPROCESS_MEM_MAX or 500G)
   --partition NAME  SLURM partition (default: shared-cpu)
+  --cpus-per-task N worker CPUs (default: 16; bigmem nodes may use 8)
   --throttle N      maximum concurrent array tasks
   --force           recompute existing outputs
 EOF
@@ -77,7 +79,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --partition=*)
       PARTITION="${1#*=}"
-      shift
       ;;
     --throttle)
       THROTTLE="${2:-}"
@@ -85,6 +86,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --throttle=*)
       THROTTLE="${1#*=}"
+      shift
+      ;;
+    --cpus-per-task)
+      CPUS_PER_TASK="${2:-}"
+      shift 2
+      ;;
+    --cpus-per-task=*)
+      CPUS_PER_TASK="${1#*=}"
       shift
       ;;
     --force)
@@ -113,6 +122,10 @@ if [[ -z "${MEMORY}" || -z "${MAX_MEMORY}" || -z "${PARTITION}" || -z "${THROTTL
 fi
 if ! [[ "${THROTTLE}" =~ ^[1-9][0-9]*$ ]]; then
   echo "ERROR: --throttle must be a positive integer." >&2
+  exit 1
+fi
+if ! [[ "${CPUS_PER_TASK}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: --cpus-per-task must be a positive integer." >&2
   exit 1
 fi
 if ! command -v jq >/dev/null 2>&1; then
@@ -188,10 +201,11 @@ ARRAY_OUTPUT="${LOGS_DIR}/3_scrnaseq_batch_effect_%A_%a.log"
 ARRAY_ERROR="${LOGS_DIR}/3_scrnaseq_batch_effect_%A_%a.err"
 WATCHDOG_OUTPUT="${LOGS_DIR}/3_scrnaseq_batch_effect_watchdog_%j.log"
 WATCHDOG_ERROR="${LOGS_DIR}/3_scrnaseq_batch_effect_watchdog_%j.err"
-EXPORTS="ALL,PREPROCESS_DATASETS_FILE=${MANIFEST},PREPROCESS_VIEW=${VIEW},FORCE_PREPROCESS=${FORCE_PREPROCESS},PREPROCESS_ERROR_PREFIX=${LOGS_DIR}/3_scrnaseq_batch_effect"
+EXPORTS="ALL,PREPROCESS_DATASETS_FILE=${MANIFEST},PREPROCESS_VIEW=${VIEW},FORCE_PREPROCESS=${FORCE_PREPROCESS},PREPROCESS_ERROR_PREFIX=${LOGS_DIR}/3_scrnaseq_batch_effect,PREPROCESS_CPUS_PER_TASK=${CPUS_PER_TASK}"
 
 ARRAY_ID="$(sbatch --parsable \
   --array="1-${#DATASET_NAMES[@]}%${THROTTLE}" \
+  --cpus-per-task="${CPUS_PER_TASK}" \
   --mem="${MEMORY}" \
   --partition="${PARTITION}" \
   --output="${ARRAY_OUTPUT}" \
@@ -214,8 +228,7 @@ WATCHDOG_ID="$(sbatch --parsable --wait \
   --time="${PREPROCESS_WATCHDOG_TIME_LIMIT:-12:00:00}" \
   --output="${WATCHDOG_OUTPUT}" \
   --error="${WATCHDOG_ERROR}" \
-  --mail-user="${USER_EMAIL}" \
-  --export="ALL,PREPROCESS_VIEW=${VIEW},FORCE_PREPROCESS=${FORCE_PREPROCESS}" \
+  --export="ALL,PREPROCESS_VIEW=${VIEW},FORCE_PREPROCESS=${FORCE_PREPROCESS},PREPROCESS_CPUS_PER_TASK=${CPUS_PER_TASK}" \
   "${SCRIPT_DIR}/1.2_preprocess_watchdog.sh" \
   "${ARRAY_ID}" "${MANIFEST}" "${MEMORY}" "${MAX_MEMORY}" \
   "${PARTITION}" "${THROTTLE}")"
