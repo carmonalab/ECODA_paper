@@ -117,6 +117,7 @@ LEGACY_ANNOT_TIER2 <- c("S.Score", "G2M.Score", "Phase", "classification_confide
 raw_args <- commandArgs(trailingOnly = TRUE)
 args <- defaults
 if (length(raw_args) > 0) args$chunk_file <- raw_args[1]
+breast_mode <- grepl("breast", args$tissue_type, ignore.case = TRUE)
 
 # ============================= ANNOTATION SAFETY ============================
 # Phase-5 T6: a method that annotated 0 cells, <2 unique cell types, or only
@@ -196,25 +197,15 @@ wall_left <- function() wall_limit_s - wall_elapsed()
 # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 ### Load scGate models ####
-# Load from a shared cache (created by 2.0_create_scgate_db.R via
-# 2_submit_hpc_array.sh) so array workers do not all download the model DB in
-# parallel. If the cache is missing, download once and persist it.
+# The Stage 4 preflight creates and validates this cache exactly once. Workers
+# must never download independently: parallel fallback downloads race the
+# release contract and can produce different model versions.
 scgate_db_path <- Sys.getenv("SCGATE_DB_PATH", unset = file.path(project_root, "aux", "scGateDB.rds"))
-scgate_db_branch <- Sys.getenv("SCGATE_DB_BRANCH", unset = "41a45cd3f8bb5f5a7daf21ec276f6a726f6ee0d4")
-if (scgate_db_path != "" && file.exists(scgate_db_path)) {
-  scGate_models_DB <- readRDS(scgate_db_path)
-  message("Loaded scGate DB from cache: ", scgate_db_path)
-} else {
-  message("scGate DB cache not found; downloading models (force_update=TRUE)...")
-  scGate_models_DB <- get_scGateDB(branch = scgate_db_branch, force_update = TRUE)
-  if (scgate_db_path != "") {
-    dir.create(dirname(scgate_db_path), showWarnings = FALSE, recursive = TRUE)
-    tmp_path <- paste0(scgate_db_path, ".tmp.", Sys.getpid())
-    saveRDS(scGate_models_DB, tmp_path)
-    file.rename(tmp_path, scgate_db_path)
-    message("Saved scGate DB cache to: ", scgate_db_path)
-  }
+if (scgate_db_path == "" || !file.exists(scgate_db_path) ||
+    file.info(scgate_db_path)$size <= 0) {
+  stop("Validated scGate DB cache is required before annotation workers: ", scgate_db_path)
 }
+scGate_models_DB <- readRDS(scgate_db_path)
 scGate_models_blood <- scGate_models_DB$human$PBMC
 scGate_models_blood$MoMac <- scGate_models_blood$Monocyte
 scGate_models_blood$Monocyte <- NULL
@@ -279,32 +270,24 @@ obs <- obs[, args$sample_colname, drop = FALSE]
 # ==============================================================================
 message(paste("--- Starting processing for chunk file:", args$chunk_file, "---"))
 
-# Feather name is derived from the chunk file (chunk_<N>.txt ->
-# annotations_chunk_<N>.feather), NOT from SLURM_ARRAY_TASK_ID: task IDs are
-# global across datasets and renumber on reruns, which would merge stale
-# feathers. Chunk numbers are per-dataset and stable as long as the input
-# files/samples do not change; 1.1_prepare_chunks.py deletes leftover feathers
-# on every rerun.
+# Feather name is derived from the chunk file (chunk_<N>.txt -> annotations_
+# chunk_<N>.feather), not from the global Slurm task id.
 annot_file <- file.path(
   paths$path_output,
   paste0("annotations_", sub("\\.txt$", ".feather", basename(args$chunk_file)))
 )
-if (file.exists(annot_file)) {
+if (file.exists(annot_file) && file.info(annot_file)$size > 0) {
   message(paste("Chunk already processed. Annotations exist at:", annot_file))
 } else {
-  # Per-sample checkpoints: each sample is written to
-  # output/annotation_tmp/chunk_<N>/sample_<NN>.feather as it completes, so a
-  # killed/failed chunk re-runs only the missing sample(s). The final
-  # annotations_chunk_<N>.feather is written atomically only when every sample
-  # succeeded; annotation_tmp/ is removed on success. The subdirectory name
-  # (annotation_tmp/) never matches the merge/coverage glob
-  # annotations_chunk_*.feather, and 1.1_prepare_chunks.py deletes stale
-  # annotation_tmp/ on every chunk rebuild (production mode).
+  # Per-sample checkpoints are run-owned because paths$path_output is supplied
+  # by the selected Stage 4 run.
   tmp_dir <- file.path(paths$path_output, "annotation_tmp",
                        sub("\\.txt$", "", basename(args$chunk_file)))
   failed_samples <- character(0)
 
   # Python 3 keys() returns a view object (dict_keys/KeysView) that py_to_r()
+  # does NOT convert; materialize it to a Python list first so py_to_r returns
+  # an R character vector usable with %in%. Computed once per chunk.
   # does NOT convert; materialize it to a Python list first so py_to_r returns
   # an R character vector usable with %in%. Computed once per chunk — the
   # layers group never changes between samples.
@@ -365,11 +348,15 @@ if (file.exists(annot_file)) {
         message(paste("  scATOMIC attempt", a, "with", round(eff), "s timeout"))
         result <- tryCatch({
           withTimeout({
-            sca_preds <- run_scATOMIC(seurat_obj@assays$RNA$counts)
+            sca_preds <- run_scATOMIC(
+              seurat_obj@assays$RNA$counts,
+              breast_mode = breast_mode
+            )
             sca_results <- create_summary_matrix(
               prediction_list = sca_preds,
               raw_counts = seurat_obj@assays$RNA$counts,
-              normal_tissue = args$normal_tissue
+              normal_tissue = args$normal_tissue,
+              breast_mode = breast_mode
             )
             "Complete"
           }, timeout = eff)
@@ -451,7 +438,10 @@ if (file.exists(annot_file)) {
       dir.create(tmp_dir, showWarnings = FALSE, recursive = TRUE)
       sample_tmp_write <- paste0(sample_tmp, ".tmp.", Sys.getpid())
       write_feather(annot, sample_tmp_write)
-      file.rename(sample_tmp_write, sample_tmp)
+      if (!file.rename(sample_tmp_write, sample_tmp)) {
+        unlink(sample_tmp_write)
+        stop("Could not atomically install annotation checkpoint: ", sample_tmp)
+      }
       message(paste("  Checkpoint written:", sample_tmp))
     } else {
       failed_samples <- c(failed_samples, target_sample)
@@ -485,7 +475,10 @@ if (file.exists(annot_file)) {
   rownames(annotations_df) <- NULL
   annot_file_tmp <- paste0(annot_file, ".tmp.", Sys.getpid())
   write_feather(annotations_df, annot_file_tmp)
-  file.rename(annot_file_tmp, annot_file)
+  if (!file.rename(annot_file_tmp, annot_file)) {
+    unlink(annot_file_tmp)
+    stop("Could not atomically install annotation feather: ", annot_file)
+  }
   unlink(tmp_dir, recursive = TRUE)
   message(paste("Wrote annotations to:", annot_file))
 
@@ -506,7 +499,10 @@ if (file.exists(annot_file)) {
     stats_file <- file.path(dirname(annot_file), stats_file)
     stats_tmp <- paste0(stats_file, ".tmp.", Sys.getpid())
     write_feather(stats_df, stats_tmp)
-    file.rename(stats_tmp, stats_file)
+    if (!file.rename(stats_tmp, stats_file)) {
+      unlink(stats_tmp)
+      stop("Could not atomically install annotation stats: ", stats_file)
+    }
     message(paste("Wrote per-method annotation stats to:", stats_file))
   }
 }
