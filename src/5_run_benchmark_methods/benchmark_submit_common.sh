@@ -296,19 +296,37 @@ benchmark_wait_array_terminal() {
   # The fail-closed gates downstream are the authoritative check (covers
   # cancellation, failure, purged controller records).
   # A transient squeue failure (non-zero exit / non-empty stderr) or a clean
-  # response still containing the id resets the miss counter; only 2
+  # response still containing the id resets the miss counter. Only 2
   # CONSECUTIVE clean responses without the id count as "left the scheduler".
   # This avoids a transient empty/error squeue response (stale BeeGFS view,
   # scheduler hiccup) being misread as an early exit; the bounded sacct poll
-  # below is the final safety net, not the primary signal.
-  local MISS=0 OUT=""
+  # below is the final safety net, not the primary signal. Repeated squeue
+  # After 3 failures, a terminal sacct response is an explicit fallback;
+  # failure from both commands still stops the wait closed.
+  local MISS=0 SQUEUE_FAILURES=0 OUT=""
   while :; do
     if ! OUT="$(squeue -j "${JOB_ID}" -h -o "%A" 2>/dev/null)"; then
-      echo "WARNING: squeue query failed while waiting for ${JOB_ID}; keeping polling." >&2
+      SQUEUE_FAILURES=$((SQUEUE_FAILURES + 1))
+      if (( SQUEUE_FAILURES >= 3 )); then
+        local FALLBACK_STATES
+        FALLBACK_STATES="$(sacct -j "${JOB_ID}" --format=State -n 2>/dev/null || true)"
+        if [[ -z "${FALLBACK_STATES//[[:space:]]/}" ]]; then
+          echo "ERROR: squeue and sacct could not report terminal state for ${JOB_ID}; stopping wait." >&2
+          return 1
+        elif ! grep -qE 'PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING' <<< "${FALLBACK_STATES}"; then
+          echo "WARNING: squeue unavailable for ${JOB_ID}; sacct reports terminal state, continuing." >&2
+          break
+        fi
+        echo "WARNING: squeue unavailable for ${JOB_ID}; sacct still reports a non-terminal state." >&2
+      else
+        echo "WARNING: squeue query failed while waiting for ${JOB_ID}; keeping polling." >&2
+      fi
       MISS=0
     elif grep -qx "${JOB_ID}" <<< "${OUT}"; then
+      SQUEUE_FAILURES=0
       MISS=0
     else
+      SQUEUE_FAILURES=0
       MISS=$((MISS + 1))
     fi
     (( MISS >= 2 )) && break
@@ -568,7 +586,11 @@ $(benchmark_oom_task_report "${JOB_ID}" "${MANIFEST}")"
     else
       echo "OOM escalation (${LABEL}): task(s) ${OOM_TASKS[*]} -> dataset(s) ${DS_CSV}; retrying with mem ${MEM} -> ${NEW_MEM} (attempt $((ATTEMPT + 1)) of ${MAX_ATTEMPTS})."
     fi
-    NEW_MANIFEST="${HPC_SCRATCH_DIR}/benchmark_manifest_${LABEL}_retry_$$.txt"
+    if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+      NEW_MANIFEST="${ANALYSIS_ROOT}/manifests/batch_effect_${ANALYSIS_PASS}_manifest_${LABEL}_retry_$$.txt"
+    else
+      NEW_MANIFEST="${HPC_SCRATCH_DIR}/benchmark_manifest_${LABEL}_retry_$$.txt"
+    fi
     NEW_ID="$("${RESUBMIT_FN}" "${LABEL}" "${DS_CSV}" "${NEW_MEM}" "${NEW_MANIFEST}")"
     if [[ -z "${NEW_ID}" ]]; then
       echo "ERROR: ${RESUBMIT_FN} returned no array job id for the ${LABEL} retry; NOT syncing to NAS." >&2
