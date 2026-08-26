@@ -209,11 +209,19 @@ FAILED_DATASETS=()
 SKIPPED_DATASETS=()
 SKIPPED_ANNOTATED=()
 SKIPPED_INCOMPLETE=()
+SKIPPED_UNSUITABLE=()
 FLAGGED_LEGACY=()
 
 for DS_NAME in "${DATASET_NAMES[@]}"; do
   echo ""
   echo ">>> Building chunks for dataset: ${DS_NAME} <<<"
+
+  # Skip datasets flagged as not suitable for auto annotation in datasets.json
+  if jq -e --arg ds "${DS_NAME}" '.[$ds].not_suitable_for_auto_annotation // [] | (index("hitme") and index("scatomic"))' "${DATASETS_JSON_FILE}" >/dev/null 2>&1; then
+    echo "NOTE: ${DS_NAME} is flagged not_suitable_for_auto_annotation in ${DATASETS_JSON_FILE}; skipping chunk preparation."
+    SKIPPED_UNSUITABLE+=("${DS_NAME}")
+    continue
+  fi
 
   # Skip datasets that are already annotated, unless --force. Two done states:
   #   Branch 1 — annotated, not yet merged: >=1 chunk_*.txt in output/chunks/
@@ -361,6 +369,10 @@ fi
 echo "Skipped (preprocessing incomplete): ${#SKIPPED_INCOMPLETE[@]}"
 if [[ ${#SKIPPED_INCOMPLETE[@]} -gt 0 ]]; then
   echo "  ${SKIPPED_INCOMPLETE[*]}"
+fi
+echo "Skipped (not suitable for auto-annotation): ${#SKIPPED_UNSUITABLE[@]}"
+if [[ ${#SKIPPED_UNSUITABLE[@]} -gt 0 ]]; then
+  echo "  ${SKIPPED_UNSUITABLE[*]}"
 fi
 echo "Failed: ${#FAILED_DATASETS[@]}"
 if [[ ${#FAILED_DATASETS[@]} -gt 0 ]]; then
