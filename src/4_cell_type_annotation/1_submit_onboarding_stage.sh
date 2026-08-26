@@ -12,6 +12,7 @@ cd "${PROJECT_ROOT}"
 DATASETS_ARG=""
 VIEW_ARG=""
 FORCE_ARG=0
+SKIP_PREPARE=0
 MEMORY="32G"
 MAX_MEMORY="128G"
 PARTITION="${SLURM_PARTITION_BENCHMARK_CPU:-shared-cpu}"
@@ -51,12 +52,16 @@ while [[ $# -gt 0 ]]; do
       THROTTLE="${2:-}"
       shift 2
       ;;
+    --skip-prepare)
+      SKIP_PREPARE=1
+      shift
+      ;;
     --force)
       FORCE_ARG=1
       shift
       ;;
     -h|--help)
-      echo "Usage: 1_submit_onboarding_stage.sh [--datasets LIST] [--view NAME] [--mem VALUE] [--max-mem VALUE] [--partition NAME] [--throttle N] [--force]"
+      echo "Usage: 1_submit_onboarding_stage.sh [--datasets LIST] [--view NAME] [--skip-prepare] [--mem VALUE] [--max-mem VALUE] [--partition NAME] [--throttle N] [--force]"
       exit 0
       ;;
     *)
@@ -119,9 +124,11 @@ if [[ ${FORCE_ARG} -eq 1 ]]; then
   PREPARE_EXTRA_ARGS+=(--force)
 fi
 
-for DS_NAME in "${ACTIVE_DATASET_NAMES[@]}"; do
-  "${SCRIPT_DIR}/1_prepare_chunks.sh" production "${DS_NAME}" "${PREPARE_EXTRA_ARGS[@]}"
-done
+if [[ ${SKIP_PREPARE} -eq 0 ]]; then
+  for DS_NAME in "${ACTIVE_DATASET_NAMES[@]}"; do
+    "${SCRIPT_DIR}/1_prepare_chunks.sh" production "${DS_NAME}" "${PREPARE_EXTRA_ARGS[@]}"
+  done
+fi
 
 MANIFEST_DIR="${HPC_SCRATCH_DIR}/_annotation_stage_manifests"
 mkdir -p "${MANIFEST_DIR}" "${LOGS_DIR}"
@@ -186,7 +193,8 @@ printf 'ANNOTATION_DATASETS=%s\n' "${ACTIVE_DATASET_NAMES[*]}"
 
 # Merge is login-side because compute nodes cannot reach NAS. It runs only
 # after the watchdog's terminal scratch validation and is part of this gate.
+MERGE_VIEW_ARG="${VIEW_ARG:-batch_effect_uncorrected}"
 for DS_NAME in "${ACTIVE_DATASET_NAMES[@]}"; do
-  "${SCRIPT_DIR}/3_submit_merge.sh" "${DS_NAME}"
+  "${SCRIPT_DIR}/3_submit_merge.sh" "${DS_NAME}" --view "${MERGE_VIEW_ARG}"
 done
 printf 'ANNOTATION_MERGE=OK\n'

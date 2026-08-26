@@ -53,11 +53,28 @@ fmt_seconds() {
 }
 
 FORCE_ARG=0
+VIEW_ARG=""
 POS_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force)
       FORCE_ARG=1
+      shift
+      ;;
+    --view)
+      VIEW_ARG="${2:-}"
+      if [[ -z "${VIEW_ARG}" ]]; then
+        echo "ERROR: --view requires a view name."
+        exit 1
+      fi
+      shift 2
+      ;;
+    --view=*)
+      VIEW_ARG="${1#*=}"
+      if [[ -z "${VIEW_ARG}" ]]; then
+        echo "ERROR: --view requires a view name."
+        exit 1
+      fi
       shift
       ;;
     -*)
@@ -124,6 +141,16 @@ merge_one_ds() {
     for f in "${VIEW_FILES[@]}"; do
       [[ "$(basename "${f}")" != *_raw.h5ad ]] && VIEW_FILES_CLEAN+=("${f}")
     done
+  if [[ -n "${VIEW_ARG}" ]]; then
+    EXPECTED_VIEW_FILE="$(jq -er --arg ds "${DS_NAME}" --arg view "${VIEW_ARG}" \
+      '.[$ds].views[$view].output_file_name' "${DATASETS_JSON_FILE}")"
+    VIEW_FILES_SELECTED=()
+    for f in "${VIEW_FILES_CLEAN[@]}"; do
+      [[ "$(basename "${f}")" == "${EXPECTED_VIEW_FILE}" ]] \
+        && VIEW_FILES_SELECTED+=("${f}")
+    done
+    VIEW_FILES_CLEAN=("${VIEW_FILES_SELECTED[@]}")
+  fi
   fi
   if [[ ${#VIEW_FILES_CLEAN[@]} -eq 0 ]]; then
     if [[ "${EMAIL_MODE}" == "per-event" ]]; then
