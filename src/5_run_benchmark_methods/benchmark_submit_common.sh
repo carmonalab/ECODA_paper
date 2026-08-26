@@ -15,13 +15,11 @@
 #       skipped unless explicitly requested). Errors out on unknown --ds_name
 #       or zero datasets.
 #   benchmark_wait_for_array <job_id> <label>
-#       Blocks on a `squeue` poll of `<job_id>` (exact id match via `-o %A`,
-#       60s interval; `scontrol` has no plain `wait` command — only
-#       `wait_job`, which is node-ready, not completion), then polls sacct
-#       (bounded, 5s interval) until every state row is terminal, then runs a
-#       fail-closed sacct gate (every state row must be
-#       COMPLETED; aborts without syncing on any non-COMPLETED state or empty
-#       sacct output).
+#       Blocks on an exact-id `squeue -j` poll (60s interval; `scontrol` has
+#       no plain wait command), then waits for sacct rows to become terminal.
+#       The watchdog time limit is the outer bound; two consecutive empty
+#       sacct responses fail closed. Every state row must be COMPLETED before
+#       syncing.
 #   benchmark_wait_oom_retry <job_id> <label> <resubmit_fn> <manifest> [status_file]
 #       OOM-auto-escalating variant of the wait+gate for the benchmark
 #       submitters' own arrays: waits for the array to leave the scheduler
@@ -103,7 +101,11 @@ WATCHDOG_MAIN_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/watchdog_mai
 # Watchdog status files: one `<watchdog_job_id>.status` per watchdog, written
 # by watchdog_main.sh (self-named from SLURM_JOB_ID) and read by the login
 # tail's benchmark_wait_watchdog. Outside benchmark/ so it is never rsync'd.
-WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_benchmark_watchdog"
+if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+  WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog"
+else
+  WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_benchmark_watchdog"
+fi
 
 # Per-array job duration records for the final email: one "<label>|<job id>|<array wall time>"
 # entry per gated array, appended by benchmark_wait_for_array /
@@ -149,6 +151,32 @@ benchmark_resolve_datasets() {
   fi
 
   echo "Found ${NUM_DATASETS} benchmark datasets."
+}
+
+# Validate authoritative processed h5ads before submitting any benchmark
+# workers. This is intentionally independent of result-file existence: a
+# metadata/PCA-only local mirror must never be accepted as a worker input.
+benchmark_validate_h5ad_inputs() {
+  local VIEW="$1"
+  local METHOD="$2"
+  shift 2
+  local DS_NAME OUTPUT_FILE H5AD_PATH
+  for DS_NAME in "$@"; do
+    OUTPUT_FILE="$(jq -r --arg ds "${DS_NAME}" --arg view "${VIEW}" \
+      '.[$ds].views[$view].output_file_name // empty' \
+      "${DATASETS_JSON_FILE}")"
+    if [[ -z "${OUTPUT_FILE}" ]]; then
+      echo "ERROR: no output_file_name for ${DS_NAME}/${VIEW} in ${DATASETS_JSON_FILE}."
+      return 1
+    fi
+    H5AD_PATH="${HPC_SCRATCH_DIR}/${DS_NAME}/output/${OUTPUT_FILE}"
+    echo "Validating h5ad contract: ${H5AD_PATH}" >&2
+    "${PYTHON_BIN}" \
+      "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+      --path "${H5AD_PATH}" \
+      --view "${VIEW}" \
+      --method "${METHOD}" || return 1
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -251,10 +279,10 @@ benchmark_pb_variant_names() {
 }
 
 # ---------------------------------------------------------------------------
-# Shared array terminal wait: squeue exact-id poll (60s) + bounded sacct
-# poll-until-terminal (max 20 min). Used by benchmark_wait_for_array (all
-# states) and benchmark_wait_oom_retry (per-task states) — behavior of the
-# wait itself is identical; the gate semantics differ per caller.
+ # Shared array terminal wait: exact-id squeue poll (60s) + sacct
+ # poll-until-terminal. Used by benchmark_wait_for_array (all states) and
+ # benchmark_wait_oom_retry (per-task states) — behavior of the wait itself is
+ # identical; the gate semantics differ per caller.
 # ---------------------------------------------------------------------------
 benchmark_wait_array_terminal() {
   local JOB_ID="$1"
@@ -262,19 +290,20 @@ benchmark_wait_array_terminal() {
   echo "=== Monitoring ${LABEL} array ${JOB_ID} ==="
   # Block until the job leaves the scheduler. scontrol has NO plain `wait`
   # command (only `wait_job`, which waits for node-ready — not completion —
-  # and is documented as unusable with SLURM_ARRAY_JOB_ID), so poll squeue
-  # for the exact job id (`-o %A` prints the array master id for every task).
+  # and is documented as unusable with SLURM_ARRAY_JOB_ID), so query squeue
+  # for this array ID directly. A user-wide query can omit a still-running
+  # array task under scheduler/permission lag and falsely release the gate.
   # The fail-closed gates downstream are the authoritative check (covers
   # cancellation, failure, purged controller records).
   # A transient squeue failure (non-zero exit / non-empty stderr) or a clean
   # response still containing the id resets the miss counter; only 2
   # CONSECUTIVE clean responses without the id count as "left the scheduler".
   # This avoids a transient empty/error squeue response (stale BeeGFS view,
-  # scheduler hiccup) being misread as an early exit — the bounded sacct poll
+  # scheduler hiccup) being misread as an early exit; the bounded sacct poll
   # below is the final safety net, not the primary signal.
   local MISS=0 OUT=""
   while :; do
-    if ! OUT="$(squeue -u "$USER" -h -o "%A" 2>/dev/null)"; then
+    if ! OUT="$(squeue -j "${JOB_ID}" -h -o "%A" 2>/dev/null)"; then
       echo "WARNING: squeue query failed while waiting for ${JOB_ID}; keeping polling." >&2
       MISS=0
     elif grep -qx "${JOB_ID}" <<< "${OUT}"; then
@@ -286,36 +315,30 @@ benchmark_wait_array_terminal() {
     sleep 60
   done
   echo "${LABEL} array ${JOB_ID} left the scheduler."
-  # sacct may lag a few seconds behind the job leaving the scheduler; poll
-  # (bounded) until every state row is terminal instead of a blind fixed sleep.
-  # The 180-iteration cap (15 min) plus a 60-iteration grace window (5 min)
-  # covers pathological SlurmDBD accounting lag (scheduler said done, sacct
-  # still reports RUNNING); the fail-closed gates below are unchanged.
-  echo "Waiting for sacct to record terminal states for job ${JOB_ID} (bounded, max 20 min)..."
-  local TAIL_ITER=0
-  local STATES=""
-  while (( TAIL_ITER < 180 )); do  # max 15 min at 5s
+  # sacct may lag a few seconds after the scheduler query stops returning the
+  # array. Wait until every accounting row is terminal; do not impose a short
+  # fixed cap because a legitimate large-dataset task can run longer than the
+  # old 20-minute grace window. The watchdog's Slurm time limit remains the
+  # outer fail-closed ceiling. Two consecutive empty accounting responses are
+  # still treated as an accounting failure and released to the caller's
+  # fail-closed check.
+  echo "Waiting for sacct to record terminal states for job ${JOB_ID}..."
+  local EMPTY=0 STATES=""
+  while :; do
     STATES="$(sacct -j "${JOB_ID}" --format=State -n 2>/dev/null || true)"
-    if [[ -n "${STATES//[[:space:]]/}" ]] \
-       && ! grep -qE 'PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING' <<< "${STATES}"; then
-      break
-    fi
-    sleep 5
-    TAIL_ITER=$((TAIL_ITER + 1))
-  done
-  if (( TAIL_ITER >= 180 )); then
-    echo "WARNING: sacct still reporting non-terminal states after 15 min; extending wait by a 5 min grace window..." >&2
-    TAIL_ITER=0
-    while (( TAIL_ITER < 60 )); do
-      STATES="$(sacct -j "${JOB_ID}" --format=State -n 2>/dev/null || true)"
-      if [[ -n "${STATES//[[:space:]]/}" ]] \
-         && ! grep -qE 'PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING' <<< "${STATES}"; then
+    if [[ -z "${STATES//[[:space:]]/}" ]]; then
+      EMPTY=$((EMPTY + 1))
+      if (( EMPTY >= 2 )); then
+        echo "WARNING: sacct returned no states twice for ${JOB_ID}; stopping wait." >&2
         break
       fi
-      sleep 5
-      TAIL_ITER=$((TAIL_ITER + 1))
-    done
-  fi
+    elif ! grep -qE 'PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING' <<< "${STATES}"; then
+      break
+    else
+      EMPTY=0
+    fi
+    sleep 5
+  done
   echo "${LABEL} array ${JOB_ID} finished. Checking task states..."
 }
 
@@ -626,14 +649,22 @@ benchmark_submit_watchdog() {
   echo "Submitting ${LABEL} watchdog for array ${ARRAY_ID} (mode=${MODE}, partition=${PARTITION}, " >&2
   echo "  time=${WATCHDOG_TIME_LIMIT}, flags for retries: ${WATCHDOG_FLAGS[*]})" >&2
 
+  local WD_JOB_NAME WD_OUTPUT_PREFIX
+  if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+    WD_JOB_NAME="batch_effect_watchdog_${ANALYSIS_PASS}_${LABEL}"
+    WD_OUTPUT_PREFIX="5_batch_effect_watchdog_${ANALYSIS_PASS}_${LABEL}"
+  else
+    WD_JOB_NAME="benchmark_watchdog_${LABEL}"
+    WD_OUTPUT_PREFIX="5_benchmark_watchdog_${LABEL}"
+  fi
   local SUBMIT_MSG
   SUBMIT_MSG=$(sbatch \
-      --job-name="benchmark_watchdog_${LABEL}" \
+      --job-name="${WD_JOB_NAME}" \
       --ntasks=1 --cpus-per-task=1 --mem=2G \
       --time="${WATCHDOG_TIME_LIMIT}" \
       --partition="${PARTITION}" \
-      --output="${LOGS_DIR}/5_benchmark_watchdog_${LABEL}_%A.log" \
-      --error="${LOGS_DIR}/5_benchmark_watchdog_${LABEL}_%A.err" \
+      --output="${LOGS_DIR}/${WD_OUTPUT_PREFIX}_%A.log" \
+      --error="${LOGS_DIR}/${WD_OUTPUT_PREFIX}_%A.err" \
       --mail-user="${USER_EMAIL}" \
       "${WATCHDOG_MAIN_SCRIPT}" \
       "${ARRAY_ID}" "${LABEL}" "${MANIFEST}" "${MODE}" -- \

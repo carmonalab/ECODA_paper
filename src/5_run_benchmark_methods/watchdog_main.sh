@@ -69,7 +69,12 @@ watchdog_resubmit() {
   for name in "${DS_LIST[@]}"; do
     echo "${name}" >> "${MANIFEST}"
   done
-  export BENCHMARK_MANIFEST="${MANIFEST}"
+  if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+    export ANALYSIS_MANIFEST="${MANIFEST}"
+    unset BENCHMARK_MANIFEST
+  else
+    export BENCHMARK_MANIFEST="${MANIFEST}"
+  fi
   # METHOD must be exported too: sbatch propagates only the exported
   # environment, and the workers (1.1_run_worker.sh) hard-require it.
   export METHOD="${LABEL}"

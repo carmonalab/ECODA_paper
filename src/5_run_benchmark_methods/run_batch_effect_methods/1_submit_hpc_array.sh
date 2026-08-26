@@ -108,6 +108,8 @@ ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/${PASS}"
 ANALYSIS_LOG_PREFIX="execution_times_batch_effect_${PASS}_"
 export ANALYSIS_VIEW ANALYSIS_PASS="${PASS}" ANALYSIS_ROOT ANALYSIS_NAS_ROOT
 export ANALYSIS_LOG_PREFIX ANALYSIS_HIGH_RES_ONLY=1
+WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog"
+export WATCHDOG_STATUS_DIR
 export FORCE_BENCHMARK="${FORCE_ARG}"
 # The batch workers use ANALYSIS_MANIFEST. Never populate the legacy manifest
 # variable, even when the caller's shell inherited one.
@@ -188,6 +190,17 @@ fi
 
 ALL_DATASET_NAMES=("${DATASET_NAMES[@]}")
 
+SUBMITTED_ARRAY_ID=""
+SUBMITTED_MANIFEST=""
+SUBMITTED_WORKER_SCRIPT=""
+SUBMITTED_JOB_PREFIX=""
+SUBMITTED_PARTITION=""
+SUBMITTED_THROTTLE=""
+SUBMITTED_FLAGS=()
+WATCHDOG_IDS=()
+ARRAY_IDS=()
+GATE_CHECK_IDS=()
+
 method_spec() {
   local METHOD="$1"
   METHOD_PARTITION="${SLURM_PARTITION_BENCHMARK_CPU}"
@@ -224,64 +237,115 @@ submit_array() {
   local MANIFEST="${ANALYSIS_ROOT}/manifests/${PASS}_batch_effect_manifest_${METHOD}_$$.txt"
   : > "${MANIFEST}"
   for DS in "${DATASET_NAMES[@]}"; do
-    echo "${DS}" >> "${MANIFEST}"
+    printf '%s\n' "${DS}" >> "${MANIFEST}"
   done
-  export ANALYSIS_MANIFEST="${MANIFEST}" METHOD="${METHOD}"
   method_spec "${METHOD}"
 
   if [[ "${METHOD}" == "mrvi" || "${METHOD}" == "pilot" ||
         "${METHOD}" == "pilotgm" || "${METHOD}" == "qot" ]]; then
-    WORKER_SCRIPT="${PROJECT_ROOT}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh"
-    JOB_PREFIX="5_batch_effect_${PASS}_${METHOD}"
+    SUBMITTED_WORKER_SCRIPT="${PROJECT_ROOT}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh"
   else
-    WORKER_SCRIPT="${PROJECT_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh"
-    JOB_PREFIX="5_batch_effect_${PASS}_${METHOD}"
+    SUBMITTED_WORKER_SCRIPT="${PROJECT_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh"
   fi
-  export JOB_LOG_PREFIX="${JOB_PREFIX}"
+  SUBMITTED_JOB_PREFIX="5_batch_effect_${PASS}_${METHOD}"
+  export ANALYSIS_MANIFEST="${MANIFEST}" METHOD="${METHOD}"
+  export JOB_LOG_PREFIX="${SUBMITTED_JOB_PREFIX}"
+  SUBMITTED_MANIFEST="${MANIFEST}"
+  SUBMITTED_PARTITION="${METHOD_PARTITION}"
+  SUBMITTED_THROTTLE="${METHOD_THROTTLE}"
+  SUBMITTED_FLAGS=("${METHOD_FLAGS[@]}")
 
   echo "Submitting ${METHOD} array (${#DATASET_NAMES[@]} datasets, pass=${PASS}, partition=${METHOD_PARTITION})" >&2
-  SUBMIT_MSG=$(sbatch \
+  SUBMIT_MSG="$(sbatch --parsable \
     --array="1-${#DATASET_NAMES[@]}%${METHOD_THROTTLE}" \
     --partition="${METHOD_PARTITION}" \
     "${METHOD_FLAGS[@]}" \
     --mem="${BENCHMARK_MEM}" \
-    --output="${LOGS_DIR}/${JOB_PREFIX}_%A_%a.log" \
-    --error="${LOGS_DIR}/${JOB_PREFIX}_%A_%a.err" \
+    --output="${LOGS_DIR}/${SUBMITTED_JOB_PREFIX}_%A_%a.log" \
+    --error="${LOGS_DIR}/${SUBMITTED_JOB_PREFIX}_%A_%a.err" \
     --mail-user="${USER_EMAIL}" \
-    "${WORKER_SCRIPT}")
-  ARRAY_JOB_ID="$(echo "${SUBMIT_MSG}" | grep -oE '[0-9]+')"
-  echo "  ${METHOD} array job ID: ${ARRAY_JOB_ID}" >&2
-  echo "${ARRAY_JOB_ID}"
+    "${SUBMITTED_WORKER_SCRIPT}")"
+  SUBMITTED_ARRAY_ID="${SUBMIT_MSG%%;*}"
+  [[ "${SUBMITTED_ARRAY_ID}" =~ ^[0-9]+$ ]] || {
+    echo "ERROR: invalid ${METHOD} array id: ${SUBMITTED_ARRAY_ID}" >&2
+    exit 1
+  }
+  printf 'BATCH_ARRAY_JOB_ID=%s\\n' "${SUBMITTED_ARRAY_ID}"
 }
 
-run_one_dataset() {
-  local DATASET="$1"
-  local PREP_JOB_ID NEW_ARRAY_ID
-  local -a ARRAY_JOB_IDS=()
-  local -a ARRAY_JOB_METHODS=()
-  DATASET_NAMES=("${DATASET}")
-  echo "=== Running ${ANALYSIS_VIEW} for ${DATASET} ==="
+submit_method_watchdog() {
+  local METHOD="$1"
+  benchmark_submit_watchdog \
+    "${SUBMITTED_ARRAY_ID}" "${METHOD}" "${SUBMITTED_MANIFEST}" strict \
+    "${SUBMITTED_PARTITION}" "${SUBMITTED_THROTTLE}" \
+    "${SUBMITTED_JOB_PREFIX}" "${SUBMITTED_WORKER_SCRIPT}" \
+    "${SUBMITTED_FLAGS[@]}"
+}
 
-  PREP_JOB_ID=""
-  for M in "${METHODS[@]}"; do
-    if [[ "${M}" == "prepare_pseudobulk" ]]; then
-      PREP_JOB_ID="$(submit_array "${M}")"
-      benchmark_wait_for_array "${PREP_JOB_ID}" "${ANALYSIS_VIEW}:${DATASET}:${M}"
-      break
+wait_watchdog_set() {
+  local LABEL="$1"
+  shift
+  local -a IDS=("$@")
+  local DEPENDENCY
+  local CHECK_ID CHECK_RC
+  DEPENDENCY="$(IFS=:; echo "${IDS[*]}")"
+  set +e
+  CHECK_ID="$(sbatch --parsable --wait \
+    --dependency="afterany:${DEPENDENCY}" \
+    --partition="${SLURM_PARTITION_BENCHMARK_CPU}" \
+    --ntasks=1 --cpus-per-task=1 --mem=1G \
+    --time="${WATCHDOG_TIME_LIMIT}" \
+    --wrap="exit 0")"
+  CHECK_RC=$?
+  set -e
+  CHECK_ID="${CHECK_ID%%;*}"
+  printf 'BATCH_GATE_CHECK_JOB_ID=%s\\n' "${CHECK_ID}"
+  if [[ ${CHECK_RC} -ne 0 || ! "${CHECK_ID}" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: ${LABEL} watchdog dependency check failed (${CHECK_ID})." >&2
+    exit 1
+  fi
+  for WATCHDOG_ID in "${IDS[@]}"; do
+    STATUS_FILE="${WATCHDOG_STATUS_DIR}/${WATCHDOG_ID}.status"
+    if [[ ! -s "${STATUS_FILE}" ]] || ! grep -q '^STATE=OK$' "${STATUS_FILE}"; then
+      echo "ERROR: ${LABEL} watchdog ${WATCHDOG_ID} did not report STATE=OK." >&2
+      exit 1
     fi
   done
-  for M in "${METHODS[@]}"; do
-    [[ "${M}" == "prepare_pseudobulk" ]] && continue
-    NEW_ARRAY_ID="$(submit_array "${M}")"
-    ARRAY_JOB_IDS+=("${NEW_ARRAY_ID}")
-    ARRAY_JOB_METHODS+=("${M}")
-  done
-  for i in "${!ARRAY_JOB_IDS[@]}"; do
-    benchmark_wait_for_array \
-      "${ARRAY_JOB_IDS[$i]}" "${ANALYSIS_VIEW}:${DATASET}:${ARRAY_JOB_METHODS[$i]}"
+}
+
+run_all_methods_concurrent() {
+  local PREP_WATCHDOG_ID=""
+  local METHOD
+  DATASET_NAMES=("${ALL_DATASET_NAMES[@]}")
+  ARRAY_IDS=()
+  WATCHDOG_IDS=()
+
+  for METHOD in "${METHODS[@]}"; do
+    [[ "${METHOD}" == "prepare_pseudobulk" ]] || continue
+    submit_array "${METHOD}"
+    ARRAY_IDS+=("${SUBMITTED_ARRAY_ID}")
+    PREP_WATCHDOG_ID="$(submit_method_watchdog "${METHOD}")"
+    WATCHDOG_IDS+=("${PREP_WATCHDOG_ID}")
+    printf 'BATCH_WATCHDOG_JOB_ID=%s\\n' "${PREP_WATCHDOG_ID}"
+    break
   done
 
-  # Sync/checksum/cleanup completes for this cohort before the next one starts.
+  if [[ -n "${PREP_WATCHDOG_ID}" ]]; then
+    wait_watchdog_set "prepare_pseudobulk" "${PREP_WATCHDOG_ID}"
+  fi
+
+  WATCHDOG_IDS=()
+  for METHOD in "${METHODS[@]}"; do
+    [[ "${METHOD}" == "prepare_pseudobulk" ]] && continue
+    submit_array "${METHOD}"
+    ARRAY_IDS+=("${SUBMITTED_ARRAY_ID}")
+    WD_ID="$(submit_method_watchdog "${METHOD}")"
+    WATCHDOG_IDS+=("${WD_ID}")
+    printf 'BATCH_WATCHDOG_JOB_ID=%s\\n' "${WD_ID}"
+  done
+  if [[ ${#WATCHDOG_IDS[@]} -gt 0 ]]; then
+    wait_watchdog_set "batch method" "${WATCHDOG_IDS[@]}"
+  fi
   analysis_merge_sync_cleanup "${METHODS[@]}"
 }
 
@@ -298,7 +362,5 @@ if [[ -n "${SYNC_ONLY_IDS}" ]]; then
   done
   analysis_merge_sync_cleanup "${METHODS[@]}"
 else
-  for DS in "${ALL_DATASET_NAMES[@]}"; do
-    run_one_dataset "${DS}"
-  done
+  run_all_methods_concurrent
 fi
