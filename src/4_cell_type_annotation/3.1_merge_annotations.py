@@ -8,6 +8,26 @@ import glob
 from pathlib import Path
 
 
+def _safe_annotation_scalar(value):
+    """Convert mixed annotation objects to h5ad-safe nullable strings."""
+    if value is None:
+        return pd.NA
+    try:
+        if bool(pd.isna(value)):
+            return pd.NA
+    except (TypeError, ValueError):
+        pass
+    return str(value)
+
+
+def _coerce_annotation_columns(obs, columns):
+    """Keep numeric scores numeric; normalize label columns for HDF5 writes."""
+    for column in columns:
+        series = obs[column]
+        if not pd.api.types.is_numeric_dtype(series):
+            obs[column] = series.map(_safe_annotation_scalar).astype("string")
+    return obs
+
 def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = None):
     """
     Merge all chunk annotation feather files into the input .h5ad's obs.
@@ -119,6 +139,7 @@ def merge_annotations(h5ad_path: str, annot_dir: str, output_path: str | None = 
     orig_cols = [c for c in adata.obs.columns if c not in drop_cols]
     existing_annot = [c for c in ANNOT_OUTPUT_COLS if c in adata.obs.columns]
     adata.obs = adata.obs[orig_cols + existing_annot]
+    adata.obs = _coerce_annotation_columns(adata.obs, existing_annot)
 
     if not existing_annot:
         print(
