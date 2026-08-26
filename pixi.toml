@@ -117,6 +117,7 @@ pytorch-cuda = { version = "*" }
 # in [tasks.setup]: worker nodes may not have system gcc/make, and conda
 # compilers make R CMD INSTALL node-independent (login node or worker).
 compilers = "*"
+r-robcompositions = "*"
 make = "*"
 
 [feature.cuda13.target.linux-64.pypi-dependencies]
