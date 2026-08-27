@@ -9,6 +9,8 @@ ECODA (Exploratory Compositional Data Analysis) is a reproducible R/Python workf
 - **No label leakage.** Biological labels such as `Status`, `sample.origin`, `cond`, and `Disease_Identity` are ground truth only. Never pass them to preprocessing, HVG selection, normalization, batch correction, embeddings, or model covariates.
 - `DESeq2.normalize()` benchmark defaults are `blind=TRUE`, `batch_col=NULL`, `correct_batch=FALSE` (`~ 1`). Batch-effect mode is batch-only: `blind=FALSE`, `batch_col=<batch>`, `correct_batch=TRUE`; never protect biological labels in `removeBatchEffect`.
 - `datasets.json` is the dataset/view ground truth. **Do not modify it without explicit user confirmation.**
+- **Universal cell-type annotation with HiTME & scATOMIC.** All benchmark datasets and all suitable cohorts must undergo dual automated cell-type annotation with HiTME (layers 1–3) and scATOMIC (layers 1–6, predicted labels, confidence, cell cycle scores). Author annotations are preserved as baseline ground truth metadata in `obs`, while HiTME and scATOMIC provide standardized, uniform cross-cohort cell-type annotations. Datasets explicitly flagged with `"not_suitable_for_auto_annotation"` in `datasets.json` (e.g., `Alzheimer`, `Diabetes`, `Parkinson`) are exempt and must be cleanly skipped by the automated annotation pipeline.
+- **Multi-dataset parallel execution & fail-closed idempotency.** Pipeline stages (preprocessing, cell-type annotation, benchmarks) must dispatch all eligible datasets concurrently in parallel SLURM arrays. All stages must implement strict, fail-closed safety checks that verify existing output file integrity, non-emptiness, valid schema, and checksums before skipping already-completed runs, with full `--force` recomputation support across all submitters and workers.
 - Files beginning with `Figure` or `Supp_fig` are publication figures: fix them, never remove them. Figure hierarchy: `Figure 2A` uses default/main settings; `Supp fig 15` contains extended methods; `Supp fig 2` is parameter screening. Exclude legacy `ECODA_PB_combo_*` from publication figures.
 - Preserve all version constraints in `pixi.toml` and the resolved `pixi.lock`.
 - Use the `_debug` Joanito five-sample subset for routine verification. Do not run full cohorts for minor checks.
@@ -18,7 +20,7 @@ ECODA (Exploratory Compositional Data Analysis) is a reproducible R/Python workf
 1. **Configuration:** `datasets.json` defines datasets, metadata columns, views, and filenames. `src/utils/datasets_io.R` and `src/utils/py/datasets_io.py` are the language-specific access layer.
 2. **Data staging:** `src/1_stage_data/1_stage_data.sh` copies raw data from NAS to `$HOME/scratch/ECODA_paper`; `src/2_dataset_specific_preprocessing/` converts cohort-specific inputs.
 3. **Canonical preprocessing:** `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py` filters data, preserves raw counts in `layers["counts"]`, normalizes/log-transforms `X`, ranks HVGs, computes PCA, and creates Harmony/neighbors/Leiden outputs. RDS conversion and subset validation live in `src/utils/py/preprocess_utils.py`.
-4. **Cell-type annotation:** `src/4_cell_type_annotation/` prepares sample chunks, runs annotation workers, checkpoints per-sample Feather output, and merges chunks.
+4. **Cell-type annotation:** `src/4_cell_type_annotation/` prepares sample chunks across all eligible datasets, runs dual annotation workers (HiTME and scATOMIC), checkpoints per-sample Feather output, validates chunk completeness, and merges annotations into all preprocessed view `.h5ad` files.
 5. **Benchmarking:** `src/5_run_benchmark_methods/` runs R and Python methods through SLURM arrays. Methods converge on sample feature matrices, distance matrices, or `create_result_bundle(feat_mat, labels, dist_mat)` bundles.
 6. **Scoring and persistence:** `src/utils/scoring_metrics.R` computes silhouette, modularity, ANOSIM, ARI, and LISI. Results are saved atomically as `.rds` bundles with `checksums.md5`; Feather carries cross-language embeddings, distances, and execution logs.
 7. **Analysis:** local notebooks consume precomputed results and generate publication figures; they do not rerun cohort preprocessing.
@@ -35,6 +37,12 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   stage. The durable gate owns the array's terminal wait, accounting
   inspection, checksum/NAS audit, and Luna Max review; the next pipeline stage
   starts only after that gate is reviewed `COMPLETED`.
+- **Bottleneck parallelism:** Pipelines 2–5 are the major time-consuming
+  bottlenecks. Submit all independent selected datasets, views, preparation
+  tasks, merges, and benchmark methods in the same pipeline concurrently
+  whenever resources permit; only documented data dependencies may serialize
+  work. Numbered pipelines remain ordered. Pipeline 1 is the NAS-bound serial
+  staging exception and is intentionally unchanged.
 - Any array that can OOM MUST use a compute-node watchdog with automatic
   OOM-only resubmission of the affected manifest rows, bounded memory
   escalation, and fail-closed handling of non-OOM failures or an exhausted
@@ -57,7 +65,7 @@ Operational concurrency is explicit rather than application-async: R uses `forea
 - `src/5_run_benchmark_methods/` — R/Python benchmark workers, submitters, watchdogs, and result synchronization.
 - `src/utils/` — dataset I/O, scoring, imports, environment checks, preprocessing utilities, and shell environment setup.
 - `notebooks/` — local analysis, publication figures, and dataset-onboarding reports.
-- `tests/` — focused standalone R regressions. Shell watchdog tests remain beside benchmark code.
+- `tests/` — focused standalone regressions. Shell watchdog tests remain beside benchmark code.
 - `data/` — large/gitignored data; never scan recursively or delete recursively without explicit confirmation.
 - `$HOME/scratch/ECODA_paper` on `bamboo` — data storage only, not a git clone. The HPC repository is `$HOME/ECODA_paper`.
 
@@ -68,7 +76,6 @@ Operational concurrency is explicit rather than application-async: R uses `forea
 ```bash
 pixi install
 pixi run setup
-pixi run Rscript tests/test_bassez_and_benchmark_regressions.R
 bash src/5_run_benchmark_methods/test_oom_retry.sh
 pixi run check-r-deps
 ```
@@ -104,8 +111,10 @@ src/utils/bash/refresh_env.sh
 cd "$HOME/ECODA_paper"
 source src/slurm_config.sh
 src/1_stage_data/1_stage_data.sh --ds_name _debug
-src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh --ds_name _debug
-src/5_run_benchmark_methods/run_python_sample_embedding_methods/1_submit_hpc_array.sh --ds_name _debug --methods mrvi
+src/2_dataset_specific_preprocessing/1_submit_hpc.sh --datasets Joanito
+src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh --datasets _debug --views benchmark_analysis,batch_effect_uncorrected
+src/4_cell_type_annotation/1_submit_onboarding_stage.sh --datasets _debug --views batch_effect_uncorrected
+src/5_run_benchmark_methods/1_submit_hpc_array.sh --datasets _debug --methods mrvi --analyses trans
 ```
 
 Submit heavy work to SLURM; never preprocess or benchmark on a login node. Use `debug-cpu`/`debug-gpu` for short interactive checks (they have a max of 15 minutes). For non-blocking monitoring:
@@ -178,9 +187,14 @@ sacct -j <job-id> --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS
 
 QA is focused and script-based; there is no aggregate test runner, CI gate, coverage threshold, `pytest`, or `testthat` suite.
 
-- `tests/test_bassez_and_benchmark_regressions.R` uses base-R assertions and temporary fixtures. It covers Bassez metadata fallback/validation and RDS checksum loading.
 - `src/5_run_benchmark_methods/test_oom_retry.sh` uses deterministic shell stubs. It covers memory escalation, scheduler states, status files, notifications, retry ceilings, and fail-closed watchdog behavior.
-- `src/utils/env_check.R` plus import smoke checks run during environment setup/refresh. Run manually with `pixi run check-r-deps` locally or `pixi run -e py-cuda13 check-r-deps` on Linux HPC.
-- `src/4_cell_type_annotation/1_prepare_chunks.sh test [<DS_NAME>]` is a small pipeline mode, not the unit-test suite.
+- `tests/test_ecoda_run_common.sh`, `tests/test_stage2_submitter.sh`,
+  `tests/test_stage2_watchdog.sh`, `tests/test_preprocessing_stage_submitter.sh`,
+  `tests/test_annotation_stage_submitter.sh`, and the benchmark matrix/sync
+  tests cover selection, ownership, dependency edges, OOM-only retries, and
+  one final synchronization owner.
+- `tests/test_artifact_contracts.py` and `tests/test_prepare_chunks.py` cover
+  incomplete artifact rejection, complete annotation key coverage, and
+  run-owned multi-view chunk preparation.
 
 For changes, run the narrow contract test and exercise the `_debug` path. Add tests only for new observable behavior, boundary conditions, failure handling, or scientific invariants. Keep fixtures temporary and deterministic; stub Slurm/NAS effects rather than requiring live infrastructure.
