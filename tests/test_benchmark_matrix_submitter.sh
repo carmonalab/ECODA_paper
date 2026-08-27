@@ -1,0 +1,146 @@
+#!/bin/bash
+# Deterministic Stage 5 matrix contract: grouped view/label arrays, one
+# aggregate gate, run-owned manifests/logs, and no hidden dependency waits.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1 || true
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ecoda-matrix-stage.XXXXXX")"
+TMP_DIR="$(cd "${TMP_DIR}" && pwd)"
+trap 'rm -rf "${TMP_DIR}"' EXIT
+mkdir -p "${TMP_DIR}/bin" "${TMP_DIR}/home"
+CAPTURE="${TMP_DIR}/sbatch.calls"
+export CAPTURE
+cat > "${TMP_DIR}/bin/sbatch" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${CAPTURE}"
+N="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
+printf '70000%s\n' "${N}"
+STUB
+chmod +x "${TMP_DIR}/bin/sbatch"
+OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --datasets Adams,Bassez,Kfoury,Kim --methods mrvi,gloscope
+)"
+RUN_ID="$(printf '%s\n' "${OUTPUT}" | sed -n 's/^BENCHMARK_RUN_ID=//p')"
+[[ -n "${RUN_ID}" ]]
+RUN_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs/${RUN_ID}"
+[[ -s "${RUN_ROOT}/manifests/selection.tsv" ]]
+for method in mrvi gloscope; do
+  manifest="${RUN_ROOT}/manifests/matrix_benchmark_analysis_${method}.tsv"
+  [[ "$(wc -l < "${manifest}" | tr -d '[:space:]')" == 4 ]]
+  while IFS=$'\t' read -r ds view label; do
+    [[ -n "${ds}" && "${view}" == benchmark_analysis && "${label}" == "${method}" ]]
+  done < "${manifest}"
+done
+[[ "$(wc -l < "${RUN_ROOT}/manifests/scheduler_ids.tsv" | tr -d '[:space:]')" == 5 ]]
+CALLS="$(cat "${CAPTURE}")"
+[[ "$(printf '%s\n' "${CALLS}" | wc -l | tr -d '[:space:]')" == 5 ]]
+CALL4="$(sed -n '4p' "${CAPTURE}")"
+CALL5="$(sed -n '5p' "${CAPTURE}")"
+case "${CALL4}" in *"matrix_watchdog"*) ;; *) echo "second method watchdog missing" >&2; exit 1 ;; esac
+case "${CALL5}" in *"matrix_gate.sh"*) ;; *) echo "aggregate gate was not submitted" >&2; exit 1 ;; esac
+case "${CALL5}" in *"--dependency=afterany:"*) ;; *) echo "aggregate gate dependency missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"--array=1-4"*) ;; *) echo "group arrays did not carry four dataset rows" >&2; exit 1 ;; esac
+case "${CALLS}" in *"--partition=${SLURM_PARTITION_BENCHMARK_GPU}"*) ;; *) echo "GPU method resource class missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"--partition=${SLURM_PARTITION_BENCHMARK_CPU}"*) ;; *) echo "CPU method resource class missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"_ecoda_runs/${RUN_ID}/logs/"*) ;; *) echo "scheduler logs escaped run root" >&2; exit 1 ;; esac
+
+: > "${CAPTURE}"
+SYNC_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --sync-only "${RUN_ID}"
+)"
+case "${SYNC_OUTPUT}" in *"BENCHMARK_RUN_ID=${RUN_ID}"*) ;; *) echo "sync-only recovery failed" >&2; exit 1 ;; esac
+[[ ! -s "${CAPTURE}" ]]
+
+BATCH_SELECTION="${TMP_DIR}/batch-matrix.tsv"
+printf 'Alzheimer\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nBreast_cancer\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nCovid19_PBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nKidney_KPMP\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nMyocardial_infarction\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nLupus_PBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nParkinson\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nStephenson\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nCombinedPBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' > "${BATCH_SELECTION}"
+: > "${CAPTURE}"
+PASS_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${BATCH_SELECTION}" --exact-batch-selection --pass uncorrected \
+    --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,pilotgm,qot
+)"
+case "${PASS_OUTPUT}" in *"BATCH_EFFECT_RUN_ID="*) ;; *) echo "batch run marker missing" >&2; exit 1 ;; esac
+if printf '%s\n' "${PASS_OUTPUT}" | grep -q '^BENCHMARK_'; then
+  echo "ordinary BENCHMARK marker leaked into batch mode" >&2
+  exit 1
+fi
+PASS_CALLS="$(cat "${CAPTURE}")"
+case "${PASS_CALLS}" in *"ANALYSIS_MANIFEST="*) ;; *) echo "batch ANALYSIS_MANIFEST export missing" >&2; exit 1 ;; esac
+case "${PASS_CALLS}" in *"BENCHMARK_MANIFEST="*) echo "batch BENCHMARK_MANIFEST export leaked" >&2; exit 1 ;; esac
+case "${PASS_CALLS}" in *"/batch_effect/uncorrected"*) ;; *) echo "batch analysis root was not pass-scoped" >&2; exit 1 ;; esac
+case "${PASS_CALLS}" in *"--array=1-12"*) ;; *) echo "batch matrix arrays did not use twelve rows" >&2; exit 1 ;; esac
+BAD_SCOPE_SELECTION="${TMP_DIR}/batch-wrong-scope.tsv"
+sed '1s/batch_effect_uncorrected$/wrong_scope/' "${BATCH_SELECTION}" > "${BAD_SCOPE_SELECTION}"
+: > "${CAPTURE}"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${BAD_SCOPE_SELECTION}" --pass uncorrected \
+    --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,pilotgm,qot; then
+  echo "wrong batch scope was accepted" >&2
+  exit 1
+fi
+[[ ! -s "${CAPTURE}" ]]
+BAD_EXACT_SELECTION="${TMP_DIR}/batch-malformed-exact.tsv"
+sed '1s/^Alzheimer/Breast_cancer/' "${BATCH_SELECTION}" > "${BAD_EXACT_SELECTION}"
+RUNS_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs"
+BEFORE_RUNS="$(printf '%s\n' "${RUNS_ROOT}"/*)"
+: > "${CAPTURE}"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${BAD_EXACT_SELECTION}" --exact-batch-selection \
+    --pass uncorrected \
+    --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,pilotgm,qot; then
+  echo "malformed exact batch selection was accepted" >&2
+  exit 1
+fi
+[[ ! -s "${CAPTURE}" ]]
+[[ "${BEFORE_RUNS}" == "$(printf '%s\n' "${RUNS_ROOT}"/*)" ]]
+
+
+rm -rf "${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_owners"
+HPC_ROOT="${TMP_DIR}/home/scratch/ECODA_paper"
+mkdir -p "${HPC_ROOT}/benchmark/embeddings"
+for n in 1000 2000 3000; do
+  selected="${HPC_ROOT}/benchmark/embeddings/Adams_hvg${n}_mrvi_dists.feather"
+  printf 'selected\n' > "${selected}"
+  digest="$(md5sum "${selected}" | cut -d' ' -f1)"
+  printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${digest}" "$(wc -c < "${selected}" | tr -d '[:space:]')" "${selected}" > "${selected}.md5"
+done
+unrelated="${HPC_ROOT}/benchmark/embeddings/Unrelated_hvg1000_mrvi_dists.feather"
+printf 'unrelated\n' > "${unrelated}"
+digest="$(md5sum "${unrelated}" | cut -d' ' -f1)"
+printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${digest}" "$(wc -c < "${unrelated}" | tr -d '[:space:]')" "${unrelated}" > "${unrelated}.md5"
+: > "${CAPTURE}"
+HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --datasets Adams --methods mrvi --force >/dev/null
+for n in 1000 2000 3000; do
+  [[ ! -e "${HPC_ROOT}/benchmark/embeddings/Adams_hvg${n}_mrvi_dists.feather.md5" ]]
+done
+[[ -s "${unrelated}.md5" ]]
+rm -rf "${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_owners"
+for n in 1000 2000 3000; do
+  selected="${HPC_ROOT}/benchmark/embeddings/Adams_hvg${n}_mrvi_dists.feather"
+  pixi run python -c 'import pandas as pd,sys; pd.DataFrame({"s1":[1.0],"s2":[0.0]},index=["s1"]).to_feather(sys.argv[1])' "${selected}"
+  digest="$(md5sum "${selected}" | cut -d' ' -f1)"
+  printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${digest}" "$(wc -c < "${selected}" | tr -d '[:space:]')" "${selected}" > "${selected}.md5"
+done
+: > "${CAPTURE}"
+HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --datasets Adams --methods mrvi >/dev/null
+[[ ! -s "${CAPTURE}" ]]
+printf 'MD5=00000000000000000000000000000000\n' > "${HPC_ROOT}/benchmark/embeddings/Adams_hvg2000_mrvi_dists.feather.md5"
+: > "${CAPTURE}"
+HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --datasets Adams --methods mrvi >/dev/null
+[[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == 3 ]]
+[[ ! -e "${HPC_ROOT}/benchmark/embeddings/Adams_hvg2000_mrvi_dists.feather.md5" ]]
+echo "benchmark matrix submitter: OK"

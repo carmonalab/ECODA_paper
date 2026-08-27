@@ -38,12 +38,17 @@
 #     dedup; this path needs a large srun allocation and prints a warning.
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import shutil
 import sys
 from pathlib import Path
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 
 import anndata as ad
 import h5py
@@ -52,6 +57,10 @@ import pyarrow as pa
 import pyarrow.feather as pafeather
 import scipy.sparse as sp
 import scanpy as sc
+from src.utils.py.h5ad_source_identity import (
+    read_obs_column as _read_obs_column,
+    read_str_dataset as _read_str_dataset,
+)
 
 
 # Legacy annotation column classification for the clean-entry check (--check-
@@ -72,54 +81,6 @@ def cell_keys(adata, sample_col):
     return np.char.add(np.char.add(samples, "_"), adata.obs_names.astype(str).values)
 
 
-def _read_str_dataset(ds):
-    """
-    Read a 1-D string h5py dataset into a numpy str array. Covers the
-    encodings anndata writes for obs string columns (fixed-length bytes
-    'S', variable-length h5py string dtype 'O', and numeric columns, which
-    mirror pandas `.astype(str)` semantics). Fails closed on anything else.
-    """
-    arr = ds[:]
-    if arr.dtype.kind == "S":
-        return np.char.decode(arr, "utf-8")
-    if arr.dtype.kind == "O":
-        out = np.empty(arr.shape, dtype=object)
-        for i, x in enumerate(arr):
-            if isinstance(x, bytes):
-                out[i] = x.decode("utf-8")
-            else:
-                out[i] = str(x)
-        return out.astype(str)
-    if arr.dtype.kind in "iuf":
-        return arr.astype(str)
-    raise RuntimeError(
-        f"Unsupported dtype '{arr.dtype}' for h5py dataset '{ds.name}'."
-    )
-
-
-def _read_obs_column(obs_grp, col):
-    """
-    Read one obs column as a numpy str array, mirroring the semantics of
-    `adata.obs[col].astype(str)` for the encodings anndata 0.12 writes
-    (plain string/numeric datasets and 'categorical' groups). A missing
-    column raises KeyError like pandas; unknown encodings raise
-    RuntimeError (fail closed, never silently mis-decode).
-    """
-    ds = obs_grp[col]
-    enc = ds.attrs.get("encoding-type")
-    if isinstance(enc, bytes):
-        enc = enc.decode("utf-8")
-    if enc is None or enc in ("", "array", "string-array"):
-        return _read_str_dataset(ds)
-    if enc == "categorical":
-        categories = _read_str_dataset(ds["categories"])
-        codes = ds["codes"][:].astype(np.int64)
-        # -1 = missing category; pandas .astype(str) renders NaN as "nan".
-        # np.clip keeps -1 from ever indexing categories.
-        return np.where(codes >= 0, categories[np.clip(codes, 0, None)], "nan")
-    raise RuntimeError(
-        f"Unsupported encoding-type '{enc}' for obs column '{col}'."
-    )
 
 
 def read_obs_keys_h5py(path, sample_col):
@@ -273,7 +234,7 @@ def verify_annotation_union(union_path, expected_nnz, sample_col):
             raise KeyError(f"Sample column '{sample_col}' not found in union obs.")
         with h5py.File(union_path, "r") as f:
             nnz = int(f["X/indptr"][-1])
-        if nnz != expected_nnz:
+        if expected_nnz is not None and nnz != expected_nnz:
             raise RuntimeError(
                 f"Union X nnz ({nnz}) != source counts nnz ({expected_nnz})."
             )
@@ -292,7 +253,7 @@ def write_annotation_union(source_path, union_path, sample_col):
     copied. Writes atomically (tmp + os.replace) and self-verifies the result.
     """
     union_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = union_path.with_name(union_path.name + ".tmp")
+    tmp_path = union_path.with_name(f".{union_path.name}.tmp.{os.getpid()}")
     try:
         with h5py.File(source_path, "r") as src, h5py.File(tmp_path, "w") as dst:
             dst.attrs["encoding-type"] = src.attrs.get("encoding-type", "anndata")
@@ -329,6 +290,7 @@ def write_annotation_union(source_path, union_path, sample_col):
         tmp_path.unlink(missing_ok=True)
         raise
     verify_annotation_union(union_path, expected_nnz, sample_col)
+    write_sidecar(union_path)
 
 
 def build_union(h5ad_files, union_path, sample_col):
@@ -369,8 +331,8 @@ def build_union(h5ad_files, union_path, sample_col):
     # 2. Partial-overlap views: concat in memory and dedup. Memory-heavy; the
     #    srun allocation for this dataset must be raised accordingly.
     print("WARNING: views partially overlap; concatenating in memory. "
-          "If this OOMs, raise the srun --mem for this dataset in "
-          "1_prepare_chunks.sh.")
+          "If this OOMs, raise the srun --mem for this dataset in the "
+          "canonical Stage 4 submitter.")
     adatas = [ad.read_h5ad(f) for f in h5ad_files]
     adata = sc.concat(adatas, join="outer", index_unique=None)
     del adatas
@@ -400,170 +362,317 @@ def build_union(h5ad_files, union_path, sample_col):
     expected_nnz = int(counts.nnz)
 
     union_path.parent.mkdir(parents=True, exist_ok=True)
-    adata.write_h5ad(str(union_path))
+    tmp_path = union_path.with_name(union_path.name + f".tmp.{os.getpid()}")
+    try:
+        adata.write_h5ad(str(tmp_path))
+        if not tmp_path.is_file() or tmp_path.stat().st_size == 0:
+            raise RuntimeError(f"empty annotation union: {tmp_path}")
+        with h5py.File(tmp_path, "r+") as f:
+            for grp in ("layers", "obsm", "obsp", "uns", "varm", "varp"):
+                if grp in f:
+                    del f[grp]
+        os.replace(tmp_path, union_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
     del adata
-    with h5py.File(union_path, "r+") as f:
-        for grp in ("layers", "obsm", "obsp", "uns", "varm", "varp"):
-            if grp in f:
-                del f[grp]
     verify_annotation_union(union_path, expected_nnz, sample_col)
+    write_sidecar(union_path)
     return union_path
+
+
+def parse_view_names(raw):
+    if not raw:
+        return []
+    names = [part.strip() for part in raw.split(",")]
+    if not names or any(not name for name in names):
+        raise ValueError("annotation view selection contains an empty item")
+    if len(set(names)) != len(names):
+        raise ValueError(f"duplicate annotation view: {raw}")
+    return names
+
+
+def selected_h5ad_files(ds_name, path_data, datasets_json, raw_views):
+    with open(datasets_json) as handle:
+        entry = json.load(handle).get(ds_name)
+    if entry is None:
+        raise KeyError(f"dataset {ds_name!r} is absent from datasets.json")
+    declared = entry.get("views") or {}
+    view_names = parse_view_names(raw_views)
+    if not view_names:
+        view_names = list(declared.keys())
+    if not view_names:
+        raise ValueError(f"dataset {ds_name} declares no annotation views")
+    files = []
+    for view_name in view_names:
+        view = declared.get(view_name)
+        if not view:
+            raise ValueError(f"{ds_name}/{view_name} is not declared in datasets.json")
+        output_name = view.get("output_file_name") or view.get("output_file")
+        input_name = view.get("input_file_name") or view.get("input_file")
+        if not input_name or not output_name:
+            raise ValueError(f"{ds_name}/{view_name} has no input/output contract")
+        path = path_data / output_name
+        if not path.is_file() or path.stat().st_size == 0:
+            raise FileNotFoundError(f"selected preprocessed view is missing: {path}")
+        files.append(path)
+    return files
+
+
+def validate_prepared(chunk_dir, union_path, sample_col, source_records=None):
+    if not union_path.is_file() or union_path.stat().st_size == 0:
+        raise ValueError(f"annotation union is missing/empty: {union_path}")
+    validate_sidecar_record(union_path)
+    verify_annotation_union(union_path, None, sample_col)
+    if source_records is not None:
+        metadata_path = union_path.parent.parent / "source_artifacts.json"
+        if not metadata_path.is_file() or metadata_path.stat().st_size == 0:
+            raise ValueError(f"source artifact metadata is missing: {metadata_path}")
+        try:
+            recorded = json.loads(metadata_path.read_text())
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"source artifact metadata is invalid: {metadata_path}") from exc
+        if recorded != source_records:
+            raise ValueError(f"selected preprocessed source contents changed: {metadata_path}")
+    union = ad.read_h5ad(union_path, backed="r")
+    try:
+        if sample_col not in union.obs.columns or union.n_obs <= 0:
+            raise ValueError(f"annotation union has no non-empty {sample_col}: {union_path}")
+        union_samples = set(union.obs[sample_col].astype(str).unique())
+    finally:
+        union.file.close()
+    chunks = sorted(chunk_dir.glob("chunk_*.txt"))
+    if not chunks:
+        raise ValueError(f"no annotation chunks in {chunk_dir}")
+    seen = []
+    for chunk in chunks:
+        lines = chunk.read_text().splitlines()
+        if len(lines) < 2 or Path(lines[0]).resolve() != union_path.resolve():
+            raise ValueError(f"chunk does not point at the current union: {chunk}")
+        if any(not sample.strip() for sample in lines[1:]):
+            raise ValueError(f"chunk contains a blank sample ID: {chunk}")
+        seen.extend(lines[1:])
+    if not seen or set(seen) != union_samples or len(seen) != len(set(seen)):
+        raise ValueError(
+            f"chunk sample coverage mismatch in {chunk_dir}: "
+            f"chunks={len(set(seen))}, union={len(union_samples)}"
+        )
+    return len(chunks), len(union_samples)
+
+
+
+def file_md5(path):
+    digest = hashlib.md5()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def artifact_record(path):
+    resolved = path.resolve()
+    return {
+        "path": str(resolved),
+        "md5": file_md5(resolved),
+        "size": resolved.stat().st_size,
+    }
+def validate_run_context(run_root, run_id, ds_name, scratch_dir):
+    """Require a genuine Stage 4 run and its dataset owner before any access."""
+    expected_root = (Path(scratch_dir) / "_ecoda_runs" / run_id).resolve()
+    if run_root.resolve() != expected_root:
+        raise ValueError(f"annotation run root is not canonical for {run_id}: {run_root}")
+    metadata_path = run_root / "metadata"
+    if not metadata_path.is_file() or metadata_path.stat().st_size == 0:
+        raise ValueError(f"Stage 4 run metadata is missing: {metadata_path}")
+    metadata = {}
+    for line in metadata_path.read_text().splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            metadata[key] = value
+    if metadata.get("STAGE") != "stage4" or metadata.get("RUN_ID") != run_id:
+        raise ValueError(f"Stage 4 run metadata does not match {run_id}: {metadata_path}")
+    safe_dataset = re.sub(r"[/,:	 |]", "_", ds_name)
+    owner_dir = Path(scratch_dir) / "_ecoda_owners" / "stage4" / safe_dataset
+    owner_path = owner_dir / "owner"
+    if not owner_path.is_file() or owner_path.stat().st_size == 0:
+        raise ValueError(f"Stage 4 dataset owner is missing: {owner_path}")
+    owner = {}
+    for line in owner_path.read_text().splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            owner[key] = value
+    if (
+        owner.get("RUN_ID") != run_id
+        or owner.get("STAGE") != "stage4"
+        or owner.get("KEY") != ds_name
+        or owner.get("STATE") not in {"ACTIVE", "OK"}
+    ):
+        raise ValueError(f"Stage 4 dataset owner does not match {ds_name}: {owner_path}")
+
+
+
+def validate_sidecar_record(path):
+    sidecar = Path(f"{path}.md5")
+    if not sidecar.is_file() or sidecar.stat().st_size == 0:
+        raise ValueError(f"artifact checksum sidecar is missing: {sidecar}")
+    fields = {}
+    for line in sidecar.read_text().splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            fields[key] = value
+    if fields.get("MD5", "").lower() != file_md5(path):
+        raise ValueError(f"artifact MD5 mismatch: {path}")
+    if fields.get("SIZE") != str(path.stat().st_size):
+        raise ValueError(f"artifact SIZE mismatch: {path}")
+    try:
+        recorded_path = Path(fields.get("PATH", "")).resolve()
+    except (OSError, RuntimeError):
+        recorded_path = None
+    if recorded_path != path.resolve():
+        raise ValueError(f"artifact PATH mismatch: {path}")
+
+
+def write_sidecar(path):
+    sidecar = Path(f"{path}.md5")
+    atomic_text(
+        sidecar,
+        f"MD5={file_md5(path)}\nSIZE={path.stat().st_size}\nPATH={path}\n",
+    )
+def atomic_text(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    try:
+        tmp.write_text(content)
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def main():
     parser = argparse.ArgumentParser(description="Build per-dataset sample chunk files.")
-    parser.add_argument(
-        "--test",
-        action="store_true",
-        default=False,
-        help="Test mode: 1 sample per chunk (production default: 2).",
-    )
-    parser.add_argument(
-        "--check-clean",
-        action="store_true",
-        default=False,
-        help="Clean-entry check only: report tier-matching obs columns per "
-             "view that are NOT produced by this pipeline's feathers; exit 0 "
-             "= clean, 2 = legacy found, 1 = error. No chunk/union writes.",
-    )
-    parser.add_argument(
-        "--view",
-        default=None,
-        help="Only use the declared output view with this name.",
-    )
+    parser.add_argument("--test", action="store_true",
+                        help="Test mode: 1 sample per chunk (production default: 2).")
+    parser.add_argument("--check-clean", action="store_true",
+                        help="Run the clean-entry check without writing chunks.")
+    parser.add_argument("--validate-only", action="store_true",
+                        help="Validate an existing run-owned union and chunk set.")
+    parser.add_argument("--view", default=None,
+                        help="Only use one declared output view.")
+    parser.add_argument("--views", default=None,
+                        help="Comma-separated declared output views.")
+    parser.add_argument("--run-root", default=None,
+                        help="Run-owned annotation root; avoids fixed-path races.")
+    parser.add_argument("--force", action="store_true",
+                        help="Rebuild only the selected run-owned dataset artifacts.")
     args = parser.parse_args()
-    view_name = args.view or os.environ.get("ANNOTATION_VIEW") or ""
 
     project_root = os.environ.get("PROJECT_ROOT")
     if not project_root:
         sys.exit("CRITICAL Error: PROJECT_ROOT not set. Source slurm_config.sh before calling this script.")
-
     ds_name = os.environ.get("DS_NAME")
     if not ds_name:
         sys.exit("CRITICAL Error: DS_NAME not set. Ensure it is exported before calling this script.")
-
-    sample_col = os.environ.get("SAMPLE_COLNAME")
-    if not sample_col:
-        sys.exit("CRITICAL Error: SAMPLE_COLNAME not set. Ensure it is exported before calling this script.")
-
+    sample_col = os.environ.get("SAMPLE_COLNAME") or "Sample"
     hpc_scratch_dir = os.environ.get("HPC_SCRATCH_DIR")
     if not hpc_scratch_dir:
         sys.exit("CRITICAL Error: HPC_SCRATCH_DIR not set. Source slurm_config.sh before calling this script.")
-
+    datasets_json = os.environ.get("DATASETS_JSON_FILE") or str(Path(project_root) / "datasets.json")
+    raw_views = args.views or args.view or os.environ.get("ANNOTATION_VIEWS") or ""
+    if args.view and args.views:
+        raise ValueError("use exactly one of --view and --views")
     path_data = Path(hpc_scratch_dir) / ds_name / "output"
-    path_union_dir = Path(hpc_scratch_dir) / ds_name / "annotation_union"
-    path_output_chunks = path_data / "chunks"
-
-    print(f"Path is: {path_data}")
-
-    if args.check_clean:
-        try:
-            code = check_clean(path_data)
-        except Exception as e:
-            print(f"ERROR: clean-entry check failed for {ds_name}: {e}")
-            sys.exit(1)
-        sys.exit(code)
-
-    # Skip rds->h5ad conversion caches written into the output dir by
-    # src.utils.py.preprocess_utils.load_single_input() (they lack the standardized sample
-    # column and are not preprocessed views). The union h5ad lives in
-    # annotation_union/, outside this glob.
-    h5ad_files = sorted(
-        f for f in path_data.glob("*.h5ad") if not f.name.endswith("_raw.h5ad")
-    )
-    available_names = {f.name for f in h5ad_files}
-
-    # Defensive fail-closed completeness check (mirrors the bash guard in
-    # 1_prepare_chunks.sh). A selected view permits annotation to follow the
-    # uncorrected pass before the deliberately deferred corrected pass exists.
-    datasets_json = os.environ.get("DATASETS_JSON_FILE")
-    if not datasets_json:
-        print("WARNING: DATASETS_JSON_FILE not set; skipping the expected-view "
-              "check (source slurm_config.sh on HPC).")
+    requested_run_root = args.run_root or os.environ.get("ANNOTATION_RUN_ROOT")
+    if requested_run_root:
+        run_id = os.environ.get("ANNOTATION_RUN_ID") or os.environ.get("RUN_ID")
+        if not run_id:
+            raise ValueError("run-owned annotation preparation requires ANNOTATION_RUN_ID")
+        expected_root = (Path(hpc_scratch_dir) / "_ecoda_runs" / run_id).resolve()
+        run_root = Path(requested_run_root).resolve()
+        if run_root != expected_root:
+            raise ValueError(f"annotation run root is not canonical for {run_id}: {run_root}")
+        if not run_root.is_dir():
+            raise ValueError(f"annotation run root is missing: {run_root}")
+        dataset_root = run_root / "datasets" / ds_name
+        path_union_dir = dataset_root / "union"
+        path_output_chunks = dataset_root / "chunks"
+        annotation_output_dir = dataset_root / "annotations"
     else:
-        with open(datasets_json) as f:
-            ds_entry = json.load(f).get(ds_name, {})
-        expected = {
-            v.get("output_file_name")
-            for view_key, v in ds_entry.get("views", {}).items()
-            if (not view_name or view_key == view_name)
-            and v.get("input_file_name") is not None
-            and v.get("output_file_name")
-        }
-        missing = expected - available_names
-        if missing:
-            sys.exit(
-                f"CRITICAL Error: preprocessing incomplete for {ds_name}: missing "
-                f"expected view file(s) {sorted(missing)} in {path_data} "
-                "(run the preprocess array first)."
+        run_root = None
+        path_union_dir = Path(hpc_scratch_dir) / ds_name / "annotation_union"
+        path_output_chunks = path_data / "chunks"
+        annotation_output_dir = path_data
+    union_file = path_union_dir / "union.h5ad"
+    if run_root is not None and not args.check_clean:
+        validate_run_context(run_root, run_id, ds_name, hpc_scratch_dir)
+
+    try:
+        h5ad_files = selected_h5ad_files(ds_name, path_data, datasets_json, raw_views)
+        source_records = [artifact_record(path) for path in h5ad_files]
+        if args.check_clean:
+            sys.exit(check_clean(path_data))
+        if args.validate_only:
+            n_chunks, n_samples = validate_prepared(
+                path_output_chunks, union_file, sample_col,
+                source_records if run_root is not None else None,
             )
-        if view_name:
-            h5ad_files = [f for f in h5ad_files if f.name in expected]
+            print(f"Prepared annotation artifacts valid: {n_chunks} chunks, {n_samples} samples")
+            return
 
-    print(f"Files found: {', '.join(f.name for f in h5ad_files)}")
-    if not h5ad_files:
-        sys.exit(f"CRITICAL Error: No preprocessed .h5ad files found in {path_data} "
-                 "(run the preprocess array first).")
+        path_output_chunks.parent.mkdir(parents=True, exist_ok=True)
+        if args.force or not path_output_chunks.exists():
+            shutil.rmtree(path_output_chunks, ignore_errors=True)
+        path_output_chunks.mkdir(parents=True, exist_ok=True)
+        if args.force or not path_union_dir.exists():
+            shutil.rmtree(path_union_dir, ignore_errors=True)
+        path_union_dir.mkdir(parents=True, exist_ok=True)
+        if args.force and annotation_output_dir != path_data:
+            shutil.rmtree(annotation_output_dir, ignore_errors=True)
+        annotation_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Delete chunk file folder recursively to ensure a perfectly clean start
-    shutil.rmtree(path_output_chunks, ignore_errors=True)
-    path_output_chunks.mkdir(parents=True, exist_ok=True)
-
-    # Delete any stale union from a previous run (e.g. after --force
-    # preprocess re-runs regenerated the views).
-    shutil.rmtree(path_union_dir, ignore_errors=True)
-    path_union_dir.mkdir(parents=True, exist_ok=True)
-
-    # Number of samples per chunk
-    chunk_size = 1 if args.test else 2
-
-    # Build the per-dataset minimal annotation union
-    union_file = build_union(h5ad_files, path_union_dir / "union.h5ad", sample_col)
-
-    # Read the union file in backed mode and extract its unique samples
-    adata = ad.read_h5ad(union_file, backed="r")
-    if sample_col not in adata.obs.columns:
-        raise KeyError(f"Sample column '{sample_col}' not found in obs of {union_file}")
-    file_samples = adata.obs[sample_col].astype(str).unique()
-    adata.file.close()
-    print(f"Union file {union_file.name} has {len(file_samples)} samples.")
-
-    # Split the union's samples into consecutive groups of chunk_size
-    sample_groups = [
-        file_samples[i : i + chunk_size] for i in range(0, len(file_samples), chunk_size)
-    ]
-
-    # Write each group to a unique chunk file (global counter within the dataset)
-    global_chunk_counter = 1
-    for group in sample_groups:
-        # We write the source file as the VERY FIRST line, followed by the sample IDs
-        chunk_path = path_output_chunks / f"chunk_{global_chunk_counter}.txt"
-        chunk_path.write_text(
-            "\n".join([str(union_file.resolve())] + [str(s) for s in group]) + "\n"
+        print(f"Path is: {path_data}")
+        print(f"Selected views: {', '.join(f.name for f in h5ad_files)}")
+        union_file = build_union(h5ad_files, union_file, sample_col)
+        if run_root is not None:
+            atomic_text(
+                dataset_root / "source_artifacts.json",
+                json.dumps(source_records, sort_keys=True, indent=2) + "\n",
+            )
+        adata = ad.read_h5ad(union_file, backed="r")
+        if sample_col not in adata.obs.columns:
+            adata.file.close()
+            raise KeyError(f"Sample column '{sample_col}' not found in h5ad union")
+        file_samples = adata.obs[sample_col].astype(str).unique()
+        adata.file.close()
+        chunk_size = 1 if args.test else 2
+        for chunk_number, start in enumerate(range(0, len(file_samples), chunk_size), start=1):
+            group = file_samples[start:start + chunk_size]
+            chunk_path = path_output_chunks / f"chunk_{chunk_number}.txt"
+            atomic_text(
+                chunk_path,
+                "\n".join([str(union_file.resolve())] + [str(sample) for sample in group]) + "\n",
+            )
+        if not args.test:
+            # Production rebuilds own the run directory, never another run's
+            # fixed scratch artifacts.
+            for stale in annotation_output_dir.glob("annotations_chunk_*.feather"):
+                stale.unlink()
+            stale_tmp = annotation_output_dir / "annotation_tmp"
+            if stale_tmp.exists():
+                shutil.rmtree(stale_tmp, ignore_errors=True)
+        n_chunks, n_samples = validate_prepared(
+            path_output_chunks, union_file, sample_col,
+            source_records if run_root is not None else None,
         )
-
-        global_chunk_counter += 1
-
-    print(f"Successfully generated {global_chunk_counter - 1} total chunk files.")
-
-    # Delete stale per-chunk annotation feathers from earlier runs (chunk
-    # numbering is per-dataset and changes with chunk size / sample set, so a
-    # rerun must not merge leftovers from a previous numbering). Only after
-    # all chunks were generated successfully, and never in --test mode
-    # (test runs must not destroy production annotation results).
-    if not args.test:
-        for stale in path_data.glob("annotations_chunk_*.feather"):
-            stale.unlink()
-            print(f"Removed stale annotations file: {stale.name}")
-
-        # Also delete stale per-sample checkpoint intermediates
-        # (output/annotation_tmp/): chunk numbering/sample sets change on
-        # rebuild, so old intermediates must not be resumed by 2.1.1
-        # (which maps sample_<NN>.feather to positions in the chunk file).
-        stale_tmp = path_data / "annotation_tmp"
-        if stale_tmp.exists():
-            shutil.rmtree(stale_tmp, ignore_errors=True)
-            print(f"Removed stale annotation checkpoints: {stale_tmp}")
+        print(f"Successfully generated {n_chunks} chunks for {n_samples} samples.")
+        print(f"ANNOTATION_CHUNK_DIR={path_output_chunks}")
+        print(f"ANNOTATION_UNION={union_file}")
+        print(f"ANNOTATION_FEATHER_DIR={annotation_output_dir}")
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"ERROR: chunk preparation failed for {ds_name}: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

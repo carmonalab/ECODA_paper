@@ -1,315 +1,772 @@
 #!/bin/bash
+# Canonical manifest-driven Stage 3 preprocessing gate.
 set -euo pipefail
 
-source "$(dirname "${BASH_SOURCE[0]}")/../slurm_config.sh"
-source "$(dirname "${BASH_SOURCE[0]}")/../utils/bash/sync_status_email.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../slurm_config.sh"
+export ECODA_GATE_STAGE=stage3
+source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_submit.sh"
 cd "${PROJECT_ROOT}"
 
-if ! command -v jq >/dev/null 2>&1; then
-  echo "ERROR: jq not available; cannot read ${DATASETS_JSON_FILE}."
-  exit 1
-fi
-
-# ---------------------------------------------------------------------------
-# Submit preprocessing array job
-# (Raw-data staging now lives in src/1_stage_data/1_stage_data.sh)
-#
-# Usage:
-#   ./1_submit_hpc_array.sh                  # all datasets (skips keys starting with _)
-#   ./1_submit_hpc_array.sh --ds_name _debug # single dataset (explicitly allowed)
-#   ./1_submit_hpc_array.sh --ds_name Alzheimer --view batch_effect_uncorrected --mem 256G
-#   ./1_submit_hpc_array.sh --partition shared-cpu # override scheduler partition
-#                                                    # (repeat the original --ds_name flag)
-#
-# Array task IDs map 1:1 to jq 'keys[]' line numbers (see 1.1_run_worker.sh).
-# Convention: default-all skips keys starting with "_" (e.g. _debug) unless
-# explicitly requested via --ds_name. Invariant relied on by the task->dataset
-# mapping: every non-"_" key sorts BEFORE any "_" key (jq sorts by codepoint;
-# "_" = 0x5F > A-Z = 0x41-0x5A, and all real dataset keys start with a capital
-# letter), so the non-underscore keys are exactly a PREFIX of the sorted keys:
-#   - default mode: array 1..N over the prefix (worker sed -n resolves the
-#     i-th non-underscore key automatically)
-#   - single mode: array INDEX..INDEX where INDEX is the dataset's position in
-#     the FULL sorted key list (worker sed -n resolves it without any change)
-# The completion/sync emails include a per-task report (task -> dataset,
-# state, elapsed, exit code) + array wall time, built from the FULL sorted key
-# list (DS_BY_TASK below) so single-dataset and _debug runs map correctly.
-# ---------------------------------------------------------------------------
-echo "=== Submitting preprocessing array job ==="
-
-DS_NAME_ARG=""
+DATASETS_ARG=""
+DATASETS_SET=0
+VIEWS_ARG=""
+VIEWS_SET=0
+SELECTION_FILE_ARG=""
+SELECTION_FILE_SET=0
+EXACT_BATCH_SELECTION=0
 FORCE_ARG=0
-VIEW_ARG=""
+SYNC_ONLY_RUN=""
+SYNC_ONLY_SET=0
 MEMORY="128G"
-PARTITION_ARG=""
-SYNC_ONLY_IDS=""
+MAX_MEMORY="500G"
+PARTITION="${SLURM_PARTITION}"
+THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
+
+usage() {
+  cat <<'EOF'
+Usage: 1_submit_hpc_array.sh [--datasets LIST] [--views LIST]
+       [--selection-file TSV] [--exact-batch-selection] [--force]
+       [--sync-only RUN_ID] [--mem VALUE] [--max-mem VALUE]
+       [--partition NAME] [--throttle N]
+
+Each manifest row is DATASET<TAB>VIEW. --ds_name and --view remain accepted
+as compatibility aliases for one dataset/view selection. Exact batch mode
+requires the immutable twelve-row uncorrected selection file.
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --ds_name)
-      DS_NAME_ARG="${2:-}"
-      shift 2
-      ;;
-    --ds_name=*)
-      DS_NAME_ARG="${1#*=}"
-      shift
-      ;;
-    --view)
-      VIEW_ARG="${2:-}"
-      if [[ -z "${VIEW_ARG}" ]]; then
-        echo "ERROR: --view requires a view name."
-        exit 1
-      fi
-      shift 2
-      ;;
-    --view=*)
-      VIEW_ARG="${1#*=}"
-      if [[ -z "${VIEW_ARG}" ]]; then
-        echo "ERROR: --view requires a view name."
-        exit 1
-      fi
-      shift
-      ;;
-    --mem)
-      MEMORY="${2:-}"
-      shift 2
-      ;;
-    --partition)
-      PARTITION_ARG="${2:-}"
-      shift 2
-      ;;
-    --force)
-      FORCE_ARG=1
-      shift
-      ;;
-    --sync-only)
-      SYNC_ONLY_IDS="${2:-}"
-      if [[ -z "${SYNC_ONLY_IDS}" ]]; then
-        echo "ERROR: --sync-only requires a job id."
-        exit 1
-      fi
-      shift 2
-      ;;
-    --sync-only=*)
-      SYNC_ONLY_IDS="${1#*=}"
-      if [[ -z "${SYNC_ONLY_IDS}" ]]; then
-        echo "ERROR: --sync-only requires a job id."
-        exit 1
-      fi
-      shift
-      ;;
-    *)
-      echo "ERROR: Unknown argument: $1"
-      exit 1
-      ;;
+    --datasets) DATASETS_ARG="${2:-}"; DATASETS_SET=1; shift 2 ;;
+    --datasets=*) DATASETS_ARG="${1#*=}"; DATASETS_SET=1; shift ;;
+    --ds_name) DATASETS_ARG="${2:-}"; DATASETS_SET=1; shift 2 ;;
+    --ds_name=*) DATASETS_ARG="${1#*=}"; DATASETS_SET=1; shift ;;
+    --views) VIEWS_ARG="${2:-}"; VIEWS_SET=1; shift 2 ;;
+    --views=*) VIEWS_ARG="${1#*=}"; VIEWS_SET=1; shift ;;
+    --view) VIEWS_ARG="${2:-}"; VIEWS_SET=1; shift 2 ;;
+    --view=*) VIEWS_ARG="${1#*=}"; VIEWS_SET=1; shift ;;
+    --selection-file) SELECTION_FILE_ARG="${2:-}"; SELECTION_FILE_SET=1; shift 2 ;;
+    --selection-file=*) SELECTION_FILE_ARG="${1#*=}"; SELECTION_FILE_SET=1; shift ;;
+    --exact-batch-selection) EXACT_BATCH_SELECTION=1; shift ;;
+    --force) FORCE_ARG=1; shift ;;
+    --sync-only) SYNC_ONLY_RUN="${2:-}"; SYNC_ONLY_SET=1; shift 2 ;;
+    --sync-only=*) SYNC_ONLY_RUN="${1#*=}"; SYNC_ONLY_SET=1; shift ;;
+    --mem) MEMORY="${2:-}"; shift 2 ;;
+    --mem=*) MEMORY="${1#*=}"; shift ;;
+    --max-mem) MAX_MEMORY="${2:-}"; shift 2 ;;
+    --max-mem=*) MAX_MEMORY="${1#*=}"; shift ;;
+    --partition) PARTITION="${2:-}"; shift 2 ;;
+    --partition=*) PARTITION="${1#*=}"; shift ;;
+    --throttle) THROTTLE="${2:-}"; shift 2 ;;
+    --throttle=*) THROTTLE="${1#*=}"; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
 
-if [[ -n "${SYNC_ONLY_IDS}" && ${FORCE_ARG} -eq 1 ]]; then
-  echo "ERROR: --sync-only cannot be combined with --force."
+if [[ -n "${SYNC_ONLY_RUN}" && ${FORCE_ARG} -eq 1 ]]; then
+  echo "ERROR: --sync-only cannot be combined with --force." >&2
+  exit 1
+fi
+if [[ ${DATASETS_SET} -eq 1 && -z "${DATASETS_ARG}" ]]; then
+  echo "ERROR: --datasets must not be empty." >&2
+  exit 1
+fi
+if [[ ${VIEWS_SET} -eq 1 && -z "${VIEWS_ARG}" ]]; then
+  echo "ERROR: --view/--views must not be empty." >&2
+  exit 1
+fi
+if [[ ${SELECTION_FILE_SET} -eq 1 && -z "${SELECTION_FILE_ARG}" ]]; then
+  echo "ERROR: --selection-file must not be empty." >&2
+  exit 1
+fi
+if [[ ${SYNC_ONLY_SET} -eq 1 && -z "${SYNC_ONLY_RUN}" ]]; then
+  echo "ERROR: --sync-only requires a scheduler ID or run ID." >&2
+  exit 1
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: jq is required for Stage 3 selection." >&2
   exit 1
 fi
 
-if [[ -n "${SYNC_ONLY_IDS}" && -z "${VIEW_ARG}" ]]; then
-  echo "ERROR: --sync-only requires the original --view when view-scoped."
-  exit 1
+if [[ ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
+  [[ -n "${SELECTION_FILE_ARG}" ]] || {
+    echo "ERROR: --exact-batch-selection requires --selection-file." >&2
+    exit 1
+  }
+  [[ -r "${SELECTION_FILE_ARG}" ]] || {
+    echo "ERROR: exact batch selection file is unreadable: ${SELECTION_FILE_ARG}" >&2
+    exit 1
+  }
+  ecoda_validate_exact_batch_selection "${SELECTION_FILE_ARG}" 2 || exit 1
 fi
 
-# Passed to workers via the environment (sbatch propagates the submit script's
-# environment); 1.1_run_worker.sh forwards them to 1.1.1_preprocess.py.
-export FORCE_PREPROCESS="${FORCE_ARG}"
-export PREPROCESS_VIEW="${VIEW_ARG}"
-# ---------------------------------------------------------------------------
-# Task -> dataset mapping for the email reports. Task ids map 1:1 to the FULL
-# sorted jq key list (includes "_" keys, which sort last): single-dataset mode
-# submits a 1-task array at the dataset's position in this full list, so
-# building DS_BY_TASK from the non-underscore prefix only would mis-map _debug
-# tasks. Built once; used by preprocess_report below.
-# ---------------------------------------------------------------------------
-DS_BY_TASK=()
-while IFS= read -r ds_name; do
-  DS_BY_TASK+=("${ds_name}")
-done < <(jq -r 'keys[]' "${DATASETS_JSON_FILE}")
-
-task_dataset() {
-  local TASK_ID="$1"
-  if [[ ${TASK_ID} -ge 1 && ${TASK_ID} -le ${#DS_BY_TASK[@]} ]]; then
-    printf '%s' "${DS_BY_TASK[$((TASK_ID - 1))]}"
-  else
-    printf '%s' "?"
-  fi
+output_path_for() {
+  local ds="$1" view="$2" output
+  output="$(ecoda_view_output_name "${ds}" "${view}")"
+  [[ -n "${output}" ]] || return 1
+  printf '%s/%s/output/%s' "${HPC_SCRATCH_DIR}" "${ds}" "${output}"
+}
+validate_external_selection() {
+  local ds view row seen=""
+  local selection="${1:-}"
+  [[ -r "${selection}" ]] || return 1
+  ecoda_validate_manifest "${selection}" 2 || return 1
+  while IFS=$'\t' read -r ds view; do
+    ecoda_dataset_exists "${ds}" || return 1
+    ecoda_view_exists "${ds}" "${view}" || return 1
+    [[ -n "$(ecoda_view_input_name "${ds}" "${view}")" &&
+      -n "$(ecoda_view_output_name "${ds}" "${view}")" ]] || return 1
+    row="${ds}/${view}"
+    case " ${seen} " in *" ${row} "*) return 1 ;; esac
+    seen="${seen} ${row}"
+  done < "${selection}"
 }
 
-# Renders the per-task report block for email bodies: task -> dataset, state,
-# elapsed, exit code (exit code only shown for non-COMPLETED tasks) + array
-# wall time. Prints an n/a line when sacct is unavailable or purged.
-preprocess_report() {
-  local JOB_ID="$1"
-  local TASKS
-  TASKS="$(array_task_report "${JOB_ID}")"
-  if [[ -z "${TASKS}" ]]; then
-    printf '%s' "Per-task report: n/a (sacct unavailable or job purged)."
+validate_h5ad() {
+  local ds="$1" view="$2" path="$3"
+  [[ -s "${path}" ]] || return 1
+  "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+    --path "${path}" --view "${view}" --method "Stage 3 preprocessing" >/dev/null 2>&1
+}
+STAGE3_PREFLIGHT_ACTIVE=0
+STAGE3_PREFLIGHT_MANIFEST=""
+STAGE3_PREFLIGHT_STATUS_DIR=""
+
+stage3_compute_validate_existing() {
+  local preflight_manifest="${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv"
+  local preflight_tmp="${preflight_manifest}.build.$$"
+  local status_dir="${ECODA_RUN_ROOT}/status/h5ad_preflight"
+  local ds view path safe status state preflight_id preflight_rc
+  local count=0
+  STAGE3_PREFLIGHT_MANIFEST="${preflight_manifest}"
+  STAGE3_PREFLIGHT_STATUS_DIR="${status_dir}"
+  [[ "${PREPROCESS_SUBMITTER_TEST:-0}" == 1 || ${FORCE_ARG} -eq 1 ]] && return 0
+  : > "${preflight_tmp}" || return 1
+  while IFS=$'\t' read -r ds view; do
+    path="$(output_path_for "${ds}" "${view}")" || return 1
+    if [[ -s "${path}" ]]; then
+      printf '%s\t%s\t%s\n' "${ds}" "${view}" "${path}" >> "${preflight_tmp}" || return 1
+      count=$((count + 1))
+    fi
+  done < "${MANIFEST}"
+  if [[ ${count} -eq 0 ]]; then
+    rm -f "${preflight_tmp}"
     return 0
   fi
-  printf '%s\n' "Per-task report (task -> dataset, state, elapsed, exit code):"
-  local task state elapsed exitcode extra
-  while IFS=$'\t' read -r task state elapsed exitcode; do
-    extra=""
-    [[ "${state}" == "COMPLETED" ]] || extra=" (${exitcode})"
-    printf '  %s -> %-30s %-14s%s  %s\n' "${task}" "$(task_dataset "${task}")" "${state}" "${extra}" "${elapsed}"
-  done <<< "${TASKS}"
-  printf 'Array wall time: %s\n' "$(array_wall_time "${JOB_ID}")"
+  ecoda_atomic_install_manifest "${preflight_tmp}" "${preflight_manifest}" 3 || {
+    rm -f "${preflight_tmp}"
+    return 1
+  }
+  rm -f "${preflight_tmp}"
+  ecoda_write_checksum "${preflight_manifest}" || return 1
+  mkdir -p "${status_dir}" "${LOGS_DIR}" || return 1
+  rm -f "${status_dir}"/*.status
+  set +e
+  preflight_id="$(
+    ecoda_submit_h5ad_preflight "${preflight_manifest}" "${status_dir}" \
+      "${ECODA_RUN_ROOT}" classify "${PARTITION}" "${MEMORY}" "${THROTTLE}" \
+      "${LOGS_DIR}" stage3 "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_worker.sh"
+  )"
+  preflight_rc=$?
+  set -e
+  if [[ "${preflight_id}" =~ ^[0-9]+$ ]]; then
+    stage3_install_scheduler_record PREFLIGHT "${preflight_id}" || return 1
+  fi
+  [[ ${preflight_rc} -eq 0 && "${preflight_id}" =~ ^[0-9]+$ ]] || return 1
+  while IFS=$'\t' read -r ds view path; do
+    safe="$(_ecoda_safe_component "${ds}__${view}")"
+    status="${status_dir}/${safe}.status"
+    [[ -s "${status}" ]] || return 1
+    state="$(sed -n 's/^STATE=//p' "${status}" | head -1)"
+    case "${state}" in
+      OK|REBUILD) ;;
+      *) return 1 ;;
+    esac
+  done < "${preflight_manifest}"
+  STAGE3_PREFLIGHT_ACTIVE=1
 }
 
-DATASET_NAMES=()
-if [[ -n "${DS_NAME_ARG}" ]]; then
-  if ! jq -e --arg ds "${DS_NAME_ARG}" 'has($ds)' "${DATASETS_JSON_FILE}" > /dev/null 2>&1; then
-    echo "ERROR: '${DS_NAME_ARG}' is not a dataset in ${DATASETS_JSON_FILE}."
-    exit 1
+stage3_existing_output_valid() {
+  local ds="$1" view="$2" path="$3" safe status state
+  if [[ ${FORCE_ARG} -ne 0 || ! -s "${path}" ]]; then
+    return 1
   fi
-  DATASET_NAMES+=("${DS_NAME_ARG}")
-else
-  while IFS= read -r name; do
-    DATASET_NAMES+=("$name")
-  done < <(jq -r 'keys[] | select(startswith("_") | not)' "${DATASETS_JSON_FILE}")
+  [[ ${STAGE3_PREFLIGHT_ACTIVE} -eq 1 ]] || return 2
+  safe="$(_ecoda_safe_component "${ds}__${view}")"
+  status="${STAGE3_PREFLIGHT_STATUS_DIR}/${safe}.status"
+  [[ -s "${status}" ]] || return 2
+  state="$(sed -n 's/^STATE=//p' "${status}" | head -1)"
+  case "${state}" in
+    OK) return 0 ;;
+    REBUILD) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+stage3_finalize_owner_manifest() {
+  local state="$1" reason="$2" owners_file="${ECODA_RUN_ROOT:-}/manifests/owners.tsv"
+  local row owner rc=0
+  [[ -r "${owners_file}" ]] || return 1
+  [[ -s "${owners_file}" ]] || return 0
+  while IFS=$'\t' read -r row owner; do
+    [[ -n "${row}" && -n "${owner}" ]] || { rc=1; continue; }
+    if ! ecoda_owner_set_state "${owner}" "${state}" "${reason}"; then
+      rc=1
+    fi
+  done < "${owners_file}"
+  return "${rc}"
+}
+
+stage3_abort() {
+  local reason="$1"
+  local rc=0
+  ecoda_owner_finalize_tracked FAIL "${reason}" || rc=1
+  if [[ -n "${ECODA_RUN_ROOT:-}" && -r "${ECODA_RUN_ROOT}/manifests/owners.tsv" ]]; then
+    stage3_finalize_owner_manifest FAIL "${reason}" || rc=1
+  fi
+  if [[ -n "${ECODA_RUN_ROOT:-}" ]]; then
+    ecoda_set_run_state FAIL "${reason}" || rc=1
+  fi
+  echo "ERROR: ${reason}" >&2
+  exit 1
+}
+stage3_validate_scheduler_manifest() {
+  local manifest="$1" require_jobs="${2:-1}"
+  local kind scheduler_id seen="" count=0 array_count=0 watchdog_count=0
+  [[ -r "${manifest}" ]] || return 1
+  ecoda_validate_run_owned_path "${manifest}" "${ECODA_RUN_ROOT}" || return 1
+  if [[ ! -s "${manifest}" ]]; then
+    [[ "${require_jobs}" == "0" ]] || return 1
+    return 0
+  fi
+  ecoda_validate_manifest "${manifest}" 2 || return 1
+  while IFS=$'\t' read -r kind scheduler_id; do
+    [[ -n "${kind}" && "${scheduler_id}" =~ ^[0-9]+$ ]] || return 1
+    case "${kind}" in
+      ARRAY) array_count=$((array_count + 1)) ;;
+      WATCHDOG) watchdog_count=$((watchdog_count + 1)) ;;
+      STATUS|PREFLIGHT) ;;
+      *) return 1 ;;
+    esac
+    case " ${seen} " in
+      *" ${scheduler_id} "*) return 1 ;;
+    esac
+    seen="${seen} ${scheduler_id}"
+    count=$((count + 1))
+  done < "${manifest}"
+  [[ "${require_jobs}" == "0" || ${array_count} -gt 0 ]] || return 1
+  [[ "${require_jobs}" == "0" || ${watchdog_count} -gt 0 ]]
+}
+
+stage3_install_scheduler_record() {
+  local kind="$1" scheduler_id="$2"
+  local manifest="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
+  local tmp="${manifest}.record.$$" existing_kind existing_id
+  [[ "${kind}" == "ARRAY" || "${kind}" == "WATCHDOG" ||
+     "${kind}" == "STATUS" || "${kind}" == "PREFLIGHT" ]] ||
+    return 1
+  [[ "${scheduler_id}" =~ ^[0-9]+$ ]] || return 1
+  if [[ -s "${manifest}" ]]; then
+    while IFS=$'\t' read -r existing_kind existing_id; do
+      [[ -n "${existing_kind}" && -n "${existing_id}" ]] || return 1
+      if [[ "${existing_id}" == "${scheduler_id}" ]]; then
+        [[ "${existing_kind}" == "${kind}" || "${kind}" == "STATUS" ]] || return 1
+        return 0
+      fi
+    done < "${manifest}"
+  fi
+  if [[ -s "${manifest}" ]]; then
+    cp "${manifest}" "${tmp}" || return 1
+  else
+    : > "${tmp}" || return 1
+  fi
+  printf '%s\t%s\n' "${kind}" "${scheduler_id}" >> "${tmp}" || {
+    rm -f "${tmp}"
+    return 1
+  }
+  if ! ecoda_atomic_install_manifest "${tmp}" "${manifest}" 2; then
+    rm -f "${tmp}"
+    return 1
+  fi
+  rm -f "${tmp}"
+  stage3_validate_scheduler_manifest "${manifest}" 0
+}
+
+stage3_record_watchdog_status_ids() {
+  local status_file="${ECODA_RUN_ROOT}/status/watchdog" status_line scheduler_id
+  [[ -r "${status_file}" ]] || return 0
+  while IFS= read -r status_line; do
+    case "${status_line}" in
+      SCHEDULER_ID=*)
+        scheduler_id="${status_line#*=}"
+        stage3_install_scheduler_record STATUS "${scheduler_id}" || return 1
+        ;;
+    esac
+  done < "${status_file}"
+}
+
+stage3_watchdog_terminal_ok() {
+  local scheduler_manifest="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
+  local status_file="${ECODA_RUN_ROOT}/status/watchdog"
+  local state status_run watchdog_id rows exitcode
+  if [[ -s "${status_file}" ]]; then
+    state="$(sed -n 's/^STATE=//p' "${status_file}" | head -1)"
+    status_run="$(sed -n 's/^RUN_ID=//p' "${status_file}" | head -1)"
+    [[ "${status_run}" == "${ECODA_RUN_ID}" ]] || return 1
+    case "${state}" in
+      OK) stage3_record_watchdog_status_ids || return 1; return 0 ;;
+      FAIL) return 1 ;;
+      ACTIVE|"") ;;
+      *) return 1 ;;
+    esac
+  fi
+  watchdog_id="$(awk -F '\t' '$1 == "WATCHDOG" {print $2; exit}' "${scheduler_manifest}")"
+  [[ "${watchdog_id}" =~ ^[0-9]+$ ]] || return 1
+  ecoda_wait_scalar_accounting "${watchdog_id}" \
+    "${STAGE3_WATCHDOG_POLL_SECONDS:-30}" || return 1
+  rows="${ECODA_ACCOUNTING_ROWS:-}"
+  exitcode="$(printf '%s\n' "${rows}" | awk -F '|' 'NR == 1 {print $3}')"
+  [[ "${ECODA_ACCOUNTING_STATE:-}" == "COMPLETED" &&
+     "${exitcode}" == 0:0* ]]
+}
+
+
+
+sync_selected() {
+  local manifest="$1" ds view path output remote_dir sync_lock lock_root
+  local transfer_manifest verify_manifest expected_output
+  local rc=0
+  [[ -d "${NAS_TARGET_DIR}" ]] || {
+    echo "ERROR: NAS path is unreachable: ${NAS_TARGET_DIR}" >&2
+    return 1
+  }
+  lock_root="${SYNC_LOCK_ROOT:-${ECODA_RUN_ROOT:-${TMPDIR:-/tmp}/ecoda-stage3-sync}}"
+  mkdir -p "${lock_root}" || return 1
+  sync_lock="${lock_root}/sync.lock"
+  mkdir "${sync_lock}" 2>/dev/null || {
+    echo "ERROR: another Stage 3 sync owns ${sync_lock}" >&2
+    return 1
+  }
+  transfer_manifest="${sync_lock}/files.$$"
+  verify_manifest="${sync_lock}/verify.$$"
+  : > "${transfer_manifest}" || rc=1
+  : > "${verify_manifest}" || rc=1
+  while IFS=$'\t' read -r ds view; do
+    [[ -n "${ds}" && -n "${view}" ]] || { rc=1; continue; }
+    if ! path="$(output_path_for "${ds}" "${view}")"; then
+      rc=1
+      continue
+    fi
+    output="$(basename "${path}")"
+    remote_dir="${NAS_TARGET_DIR}/${ds}/output"
+    expected_output="${ds}/output/${output}"
+    if ! mkdir -p "${remote_dir}" ||
+       ! ecoda_validate_checksum "${path}"; then
+      rc=1
+      continue
+    fi
+    printf '%s\n' "${expected_output}" >> "${transfer_manifest}" || rc=1
+    printf '%s\n' "${expected_output}.md5" >> "${transfer_manifest}" || rc=1
+    printf '%s\t%s\t%s\t%s\n' "${ds}" "${view}" "${path}" "${output}" \
+      >> "${verify_manifest}" || rc=1
+  done < "${manifest}"
+  if [[ ${rc} -eq 0 && -s "${transfer_manifest}" ]]; then
+    rsync -rlptDv --files-from="${transfer_manifest}" \
+      "${HPC_SCRATCH_DIR}/" "${NAS_TARGET_DIR}/" || rc=1
+  elif [[ ${rc} -eq 0 ]]; then
+    rc=1
+  fi
+  if [[ ${rc} -eq 0 ]]; then
+    while IFS=$'\t' read -r ds view path output; do
+      remote_dir="${NAS_TARGET_DIR}/${ds}/output"
+      ecoda_compare_checksum_remote "${path}" \
+        "${remote_dir}/${output}" "${remote_dir}/${output}.md5" || rc=1
+    done < "${verify_manifest}"
+  fi
+  rm -f "${transfer_manifest}" "${verify_manifest}"
+  rmdir "${sync_lock}" 2>/dev/null || rc=1
+  return "${rc}"
+}
+
+build_recovery_selection() {
+  local target="$1" ds view
+  : > "${target}" || return 1
+  if [[ -n "${SELECTION_FILE_ARG}" ]]; then
+    cp "${SELECTION_FILE_ARG}" "${target}" || return 1
+  else
+    [[ -n "${DATASETS_ARG}" && -n "${VIEWS_ARG}" ]] || {
+      echo "ERROR: numeric --sync-only requires --datasets and --view/--views." >&2
+      return 1
+    }
+    ecoda_split_csv "${DATASETS_ARG}" || return 1
+    DATASET_NAMES=("${ECODA_ARRAY[@]}")
+    ecoda_assert_unique_items "${DATASET_NAMES[@]}" || return 1
+    ecoda_split_csv "${VIEWS_ARG}" || return 1
+    RECOVERY_VIEWS=("${ECODA_ARRAY[@]}")
+    ecoda_assert_unique_items "${RECOVERY_VIEWS[@]}" || return 1
+    for ds in "${DATASET_NAMES[@]}"; do
+      ecoda_dataset_exists "${ds}" || return 1
+      for view in "${RECOVERY_VIEWS[@]}"; do
+        ecoda_view_exists "${ds}" "${view}" || return 1
+        printf '%s\t%s\n' "${ds}" "${view}" >> "${target}" || return 1
+      done
+    done
+  fi
+  ecoda_validate_manifest "${target}" 2 || return 1
+  if [[ ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
+    ecoda_validate_exact_batch_selection "${target}" 2 || return 1
+  fi
+}
+
+gate_recovery_scheduler_id() {
+  local scheduler_id="$1" expected="$2" rows
+  [[ "${scheduler_id}" =~ ^[0-9]+$ ]] || return 1
+  ECODA_ACCOUNTING_ROWS=""
+  if ecoda_wait_array_accounting "${scheduler_id}" "${expected}" \
+      "${STAGE3_WATCHDOG_POLL_SECONDS:-30}"; then
+    return 0
+  fi
+  rows="${ECODA_ACCOUNTING_ROWS:-}"
+  if [[ "${rows}" == *"${scheduler_id}_"* ]]; then
+    return 1
+  fi
+  ecoda_wait_scalar_accounting "${scheduler_id}" "${STAGE3_WATCHDOG_POLL_SECONDS:-30}"
+}
+
+numeric_sync_only() {
+  local ids="$1" recovery_manifest expected scheduler_id path ds view failed=0
+  recovery_manifest="${TMPDIR:-/tmp}/ecoda_stage3_sync_${$}.tsv"
+  build_recovery_selection "${recovery_manifest}" || {
+    rm -f "${recovery_manifest}"
+    return 1
+  }
+  expected="$(wc -l < "${recovery_manifest}" | tr -d '[:space:]')"
+  ecoda_split_csv "${ids}" || { rm -f "${recovery_manifest}"; return 1; }
+  for scheduler_id in "${ECODA_ARRAY[@]}"; do
+    gate_recovery_scheduler_id "${scheduler_id}" "${expected}" || {
+      echo "ERROR: scheduler recovery gate failed for ${scheduler_id}." >&2
+      rm -f "${recovery_manifest}"
+      return 1
+    }
+  done
+  while IFS=$'\t' read -r ds view; do
+    path="$(output_path_for "${ds}" "${view}")" || failed=1
+    validate_h5ad "${ds}" "${view}" "${path}" || failed=1
+    ecoda_validate_checksum "${path}" || failed=1
+  done < "${recovery_manifest}"
+  if [[ ${failed} -ne 0 ]]; then
+    rm -f "${recovery_manifest}"
+    return 1
+  fi
+  if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" != "1" ]]; then
+    SYNC_LOCK_ROOT="${TMPDIR:-/tmp}/ecoda_stage3_sync_${$}"
+    export SYNC_LOCK_ROOT
+    sync_selected "${recovery_manifest}" || {
+      rm -f "${recovery_manifest}"
+      return 1
+    }
+  fi
+  rm -f "${recovery_manifest}"
+  printf 'PREPROCESS_SYNC_ONLY_IDS=%s\n' "${ids}"
+}
+
+if [[ -n "${SYNC_ONLY_RUN}" &&
+      "${SYNC_ONLY_RUN}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+  numeric_sync_only "${SYNC_ONLY_RUN}" || exit 1
+  exit 0
 fi
 
-NUM_DATASETS=${#DATASET_NAMES[@]}
-if [[ ${NUM_DATASETS} -eq 0 ]]; then
-  echo "ERROR: No datasets found in ${DATASETS_JSON_FILE}."
+if [[ -n "${SYNC_ONLY_RUN}" ]]; then
+  ecoda_open_run "${SYNC_ONLY_RUN}" || exit 1
+  MANIFEST="${ECODA_RUN_ROOT}/manifests/selection.tsv"
+  PENDING_MANIFEST="${ECODA_RUN_ROOT}/manifests/pending.tsv"
+  SCHEDULER_IDS_FILE="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
+  STATUS_FILE="${ECODA_RUN_ROOT}/status/watchdog"
+  ecoda_validate_run_owned_path "${MANIFEST}" "${ECODA_RUN_ROOT}" ||
+    stage3_abort "Stage 3 selection manifest is not run-owned"
+  ecoda_validate_manifest "${MANIFEST}" 2 ||
+    stage3_abort "Stage 3 selection manifest is invalid"
+  ecoda_validate_checksum "${MANIFEST}" ||
+    stage3_abort "Stage 3 selection checksum is invalid"
+  [[ -r "${PENDING_MANIFEST}" ]] ||
+    stage3_abort "Stage 3 pending manifest is missing"
+  ecoda_validate_run_owned_path "${PENDING_MANIFEST}" "${ECODA_RUN_ROOT}" ||
+    stage3_abort "Stage 3 pending manifest is not run-owned"
+  if [[ -s "${PENDING_MANIFEST}" ]]; then
+    ecoda_validate_manifest "${PENDING_MANIFEST}" 2 ||
+      stage3_abort "Stage 3 pending manifest is invalid"
+    require_scheduler_jobs=1
+  else
+    require_scheduler_jobs=0
+  fi
+  stage3_validate_scheduler_manifest "${SCHEDULER_IDS_FILE}" \
+    "${require_scheduler_jobs}" ||
+    stage3_abort "Stage 3 scheduler ID manifest is missing or invalid"
+  if [[ "${require_scheduler_jobs}" -eq 1 ]]; then
+    stage3_watchdog_terminal_ok ||
+      stage3_abort "Stage 3 watchdog has not reached terminal success"
+    stage3_record_watchdog_status_ids ||
+      stage3_abort "Stage 3 watchdog scheduler records are invalid"
+    stage3_validate_scheduler_manifest "${SCHEDULER_IDS_FILE}" 1 ||
+      stage3_abort "Stage 3 scheduler ID manifest is incomplete"
+    if [[ -s "${STATUS_FILE}" ]]; then
+      grep -q '^STATE=OK$' "${STATUS_FILE}"
+    else
+      [[ -s "${ECODA_RUN_ROOT}/status/terminal" ]] &&
+        grep -q '^STATE=OK$' "${ECODA_RUN_ROOT}/status/terminal"
+    fi ||
+      stage3_abort "all-skipped Stage 3 run lacks terminal success"
+  fi
+  failed=0
+  while IFS=$'\t' read -r ds view; do
+    [[ -n "${ds}" && -n "${view}" ]] || { failed=1; continue; }
+    path="$(output_path_for "${ds}" "${view}")" || { failed=1; continue; }
+    validate_h5ad "${ds}" "${view}" "${path}" || failed=1
+    ecoda_validate_checksum "${path}" || failed=1
+  done < "${MANIFEST}"
+  [[ ${failed} -eq 0 ]] ||
+    stage3_abort "Stage 3 sync-only h5ad contract/checksum failed"
+  if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" != "1" ]]; then
+    sync_selected "${MANIFEST}" ||
+      stage3_abort "selected Stage 3 sync failed"
+  fi
+  stage3_finalize_owner_manifest OK "Stage 3 sync-only completed" ||
+    stage3_abort "failed to finalize Stage 3 owners after sync"
+  ecoda_set_run_state OK "sync-only Stage 3 validation and selected sync passed" ||
+    stage3_abort "failed to write Stage 3 terminal OK state"
+  echo "PREPROCESS_RUN_ID=${SYNC_ONLY_RUN}"
+  exit 0
+fi
+
+DATASET_NAMES=()
+if [[ -n "${SELECTION_FILE_ARG}" ]]; then
+  [[ -r "${SELECTION_FILE_ARG}" ]] || { echo "ERROR: selection file is unreadable: ${SELECTION_FILE_ARG}" >&2; exit 1; }
+elif [[ -n "${DATASETS_ARG}" ]]; then
+  ecoda_split_csv "${DATASETS_ARG}"
+  DATASET_NAMES=("${ECODA_ARRAY[@]}")
+  ecoda_assert_unique_items "${DATASET_NAMES[@]}"
+else
+  while IFS= read -r ds; do DATASET_NAMES+=("${ds}"); done < <(jq -r 'keys[] | select(startswith("_") | not)' "${DATASETS_JSON_FILE}")
+fi
+
+if [[ -z "${SELECTION_FILE_ARG}" && ${#DATASET_NAMES[@]} -eq 0 ]]; then
+  echo "ERROR: no Stage 3 datasets selected." >&2
   exit 1
 fi
-
-echo "Found ${NUM_DATASETS} datasets."
-echo "Datasets: ${DATASET_NAMES[*]}"
-
-# Map single-dataset mode to a 1-task array at the dataset's position in the
-# FULL sorted key list (includes "_" keys, which sort last).
-if [[ -n "${DS_NAME_ARG}" ]]; then
-  DS_INDEX="$(jq -r --arg ds "${DS_NAME_ARG}" '[keys[]] | index($ds) + 1' "${DATASETS_JSON_FILE}")"
-  ARRAY_SPEC="${DS_INDEX}-${DS_INDEX}"
-else
-  ARRAY_SPEC="1-${NUM_DATASETS}"
+if [[ -z "${SELECTION_FILE_ARG}" ]]; then
+  for ds in "${DATASET_NAMES[@]}"; do
+    ecoda_dataset_exists "${ds}" || { echo "ERROR: unknown dataset '${ds}'." >&2; exit 1; }
+  done
 fi
-echo "Memory: ${MEMORY}"
-PARTITION="${PARTITION_ARG:-${SLURM_PARTITION}}"
-echo "Partition: ${PARTITION}"
-
-if [[ -n "${SYNC_ONLY_IDS}" ]]; then
-  echo "=== Sync-only resume mode: job ${SYNC_ONLY_IDS} (no submission) ==="
-  ARRAY_JOB_ID="${SYNC_ONLY_IDS}"
-else
-  mkdir -p "${LOGS_DIR}"
-  SUBMIT_MSG=$(sbatch \
-      --array="${ARRAY_SPEC}%${MAX_NUM_CHUNKS_PARALLEL}" \
-      --mem="${MEMORY}" \
-      --partition="${PARTITION}" \
-      --output="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.log" \
-      --error="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.err" \
-      --mail-user="${USER_EMAIL}" \
-      "$(dirname "${BASH_SOURCE[0]}")/1.1_run_worker.sh")
-
-  ARRAY_JOB_ID=$(echo "${SUBMIT_MSG}" | grep -oE '[0-9]+')
-  echo "Array Job ID allocated: ${ARRAY_JOB_ID}"
+if [[ -n "${SELECTION_FILE_ARG}" ]]; then
+  validate_external_selection "${SELECTION_FILE_ARG}" || {
+    echo "ERROR: Stage 3 selection file is malformed or semantically invalid." >&2
+    exit 1
+  }
 fi
 
-# ---------------------------------------------------------------------------
-# Monitor & sync results back to NAS
-# ---------------------------------------------------------------------------
-echo "=== Monitoring job completion ==="
-# Block until the job leaves the scheduler. scontrol has NO plain `wait`
-# command (only `wait_job`, which waits for node-ready — not completion —
-# and is documented as unusable with SLURM_ARRAY_JOB_ID), so poll squeue
-# for the exact job id (`-o %A` prints the array master id for every task,
-# or the job id for plain jobs). The fail-closed sacct gate below is the
-# authoritative check (covers cancellation, failure, purged controller
-# records).
-while squeue -u "$USER" -h -o "%A" 2>/dev/null | grep -qx "${ARRAY_JOB_ID}"; do
-    sleep 60
-done
-echo "Array Job ${ARRAY_JOB_ID} left the scheduler."
+RUN_ID="${ECODA_RUN_ID:-$(ecoda_new_run_id stage3)}"
+ecoda_init_run stage3 "${RUN_ID}" >/dev/null
+MANIFEST="${ECODA_RUN_ROOT}/manifests/selection.tsv"
+MANIFEST_TMP="${MANIFEST}.build.$$"
+: > "${MANIFEST_TMP}"
+echo "PREPROCESS_RUN_ID=${RUN_ID}"
+echo "PREPROCESS_DATASET_MANIFEST=${MANIFEST}"
 
-# sacct may lag a few seconds behind the job leaving the scheduler; poll
-# (bounded) until every state row is terminal instead of a blind fixed sleep.
-# The 180-iteration cap (15 min) plus a 60-iteration grace window (5 min)
-# covers pathological SlurmDBD accounting lag (scheduler said done, sacct
-# still reports RUNNING); the fail-closed gate below is unchanged.
-echo "Waiting for sacct to record terminal states for job ${ARRAY_JOB_ID} (bounded, max 20 min)..."
-TAIL_ITER=0
-while (( TAIL_ITER < 180 )); do  # max 15 min at 5s
-    STATES="$(sacct -j "${ARRAY_JOB_ID}" --format=State -n 2>/dev/null || true)"
-    if [[ -n "${STATES//[[:space:]]/}" ]] \
-       && ! grep -qE 'PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING' <<< "${STATES}"; then
-        break
-    fi
-    sleep 5
-    TAIL_ITER=$((TAIL_ITER + 1))
-done
-if (( TAIL_ITER >= 180 )); then
-    echo "WARNING: sacct still reporting non-terminal states after 15 min; extending wait by a 5 min grace window..." >&2
-    TAIL_ITER=0
-    while (( TAIL_ITER < 60 )); do
-        STATES="$(sacct -j "${ARRAY_JOB_ID}" --format=State -n 2>/dev/null || true)"
-        if [[ -n "${STATES//[[:space:]]/}" ]] \
-           && ! grep -qE 'PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING' <<< "${STATES}"; then
-            break
-        fi
-        sleep 5
-        TAIL_ITER=$((TAIL_ITER + 1))
+append_selection() {
+  local ds="$1" view
+  ecoda_dataset_exists "${ds}" || { echo "ERROR: unknown dataset '${ds}'." >&2; return 1; }
+  if [[ -n "${VIEWS_ARG}" ]]; then
+    ecoda_split_csv "${VIEWS_ARG}"
+    for view in "${ECODA_ARRAY[@]}"; do
+      ecoda_view_exists "${ds}" "${view}" || { echo "ERROR: ${ds}/${view} is not declared in datasets.json." >&2; return 1; }
+      [[ -n "$(ecoda_view_input_name "${ds}" "${view}")" && -n "$(ecoda_view_output_name "${ds}" "${view}")" ]] || { echo "ERROR: ${ds}/${view} has no input/output contract." >&2; return 1; }
+      printf '%s\t%s\n' "${ds}" "${view}" >> "${MANIFEST_TMP}"
     done
-fi
+  else
+    while IFS= read -r view; do
+      [[ -n "${view}" ]] || continue
+      [[ -n "$(ecoda_view_input_name "${ds}" "${view}")" && -n "$(ecoda_view_output_name "${ds}" "${view}")" ]] || { echo "ERROR: ${ds}/${view} has no input/output contract." >&2; return 1; }
+      printf '%s\t%s\n' "${ds}" "${view}" >> "${MANIFEST_TMP}"
+    done < <(jq -r --arg ds "${ds}" '.[$ds].views // {} | keys[]' "${DATASETS_JSON_FILE}")
+  fi
+}
 
-echo "Array Job ${ARRAY_JOB_ID} finished. Checking task states..."
-STATES="$(sacct -j "${ARRAY_JOB_ID}" --format=State -n 2>/dev/null || true)"
-if [[ -z "${STATES//[[:space:]]/}" ]]; then
-    echo "ERROR: sacct returned no states for Array Job ${ARRAY_JOB_ID}; NOT syncing to NAS."
-    notify_sync_status \
-        "ECODA: preprocess NOT synced (job ${ARRAY_JOB_ID})" \
-        "Preprocess sync to NAS failed for job ${ARRAY_JOB_ID} (datasets: ${DATASET_NAMES[*]}): sacct returned no states (job purged or unknown id)."
-    exit 1
-fi
-# Fail-closed: every row (array master + tasks + batch steps) must be COMPLETED.
-if grep -qvE '^ *COMPLETED *$' <<< "${STATES}"; then
-    echo "ERROR: Array Job ${ARRAY_JOB_ID} had non-COMPLETED tasks; NOT syncing to NAS."
-    sacct -j "${ARRAY_JOB_ID}" --format=JobID,JobName,State,ExitCode
-    notify_sync_status \
-        "ECODA: preprocess NOT synced (job ${ARRAY_JOB_ID})" \
-        "Preprocess sync to NAS failed for job ${ARRAY_JOB_ID} (datasets: ${DATASET_NAMES[*]}): non-COMPLETED tasks.
-$(preprocess_report "${ARRAY_JOB_ID}")"
-    exit 1
-fi
-
-echo "All tasks completed successfully. Syncing results to NAS..."
-SYNCED_COUNT=0
-if ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
-    if [[ -n "${DS_NAME_ARG}" ]]; then
-      # Single-dataset mode: sync only the requested dataset's output dir.
-      SYNC_DIRS=("${HPC_SCRATCH_DIR}/${DS_NAME_ARG}/output")
-    else
-      SYNC_DIRS=("${HPC_SCRATCH_DIR}"/*/output)
-    fi
-    for DS_DIR in "${SYNC_DIRS[@]}"; do
-      [[ -d "${DS_DIR}" ]] || continue
-      DS_NAME="$(basename "$(dirname "${DS_DIR}")")"
-      mkdir -p "${NAS_TARGET_DIR}/${DS_NAME}/output"
-      rsync -rlptDv "${DS_DIR}/" "${NAS_TARGET_DIR}/${DS_NAME}/output/"
-      SYNCED_COUNT=$((SYNCED_COUNT + 1))
-    done
-    if [[ ${SYNCED_COUNT} -eq 0 ]]; then
-        echo "ERROR: No dataset output dirs found under ${HPC_SCRATCH_DIR}; nothing to sync."
-        notify_sync_status \
-            "ECODA: preprocess NOT synced (job ${ARRAY_JOB_ID})" \
-            "Preprocess sync to NAS failed for job ${ARRAY_JOB_ID}: no dataset output dirs found under ${HPC_SCRATCH_DIR}."
-        exit 1
-    fi
-    echo "Results synchronized to ${NAS_TARGET_DIR}/<DS_NAME>/output/ (${SYNCED_COUNT} datasets)"
-    notify_sync_status \
-        "ECODA: preprocess synced to NAS (job ${ARRAY_JOB_ID})" \
-        "Preprocess results for job ${ARRAY_JOB_ID} synced to NAS (${SYNCED_COUNT} datasets: ${DATASET_NAMES[*]}).
-$(preprocess_report "${ARRAY_JOB_ID}")"
+if [[ -n "${SELECTION_FILE_ARG}" ]]; then
+  cp "${SELECTION_FILE_ARG}" "${MANIFEST_TMP}" ||
+    stage3_abort "failed to copy Stage 3 selection file"
+  ecoda_validate_manifest "${MANIFEST_TMP}" 2 ||
+    stage3_abort "malformed Stage 3 selection file"
 else
-    echo "ERROR: NAS path ${NAS_TARGET_DIR} is unreachable."
-    notify_sync_status \
-        "ECODA: preprocess NOT synced (job ${ARRAY_JOB_ID})" \
-        "Preprocess sync to NAS failed for job ${ARRAY_JOB_ID}: NAS path ${NAS_TARGET_DIR} is unreachable (check VPN/NAS mount)."
-    exit 1
+  for ds in "${DATASET_NAMES[@]}"; do
+    append_selection "${ds}" || stage3_abort "invalid Stage 3 selection"
+  done
+  ecoda_validate_manifest "${MANIFEST_TMP}" 2 ||
+    stage3_abort "empty Stage 3 selection"
 fi
+if ! ecoda_atomic_install_manifest "${MANIFEST_TMP}" "${MANIFEST}" 2; then
+  stage3_abort "failed to install Stage 3 selection atomically"
+fi
+rm -f "${MANIFEST_TMP}"
+ecoda_write_checksum "${MANIFEST}" || stage3_abort "failed to checksum Stage 3 selection"
+
+# Reject duplicate dataset/view owners without relying on JSON key order.
+SEEN_ROWS=""
+while IFS=$'\t' read -r ds view; do
+  row="${ds}/${view}"
+  case " ${SEEN_ROWS} " in
+    *" ${row} "*) stage3_abort "duplicate selection row ${row}" ;;
+  esac
+  SEEN_ROWS="${SEEN_ROWS} ${row}"
+done < "${MANIFEST}"
+SCHEDULER_IDS_FILE="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
+ecoda_atomic_write "${SCHEDULER_IDS_FILE}" "" ||
+  stage3_abort "failed to initialize Stage 3 scheduler manifest"
+stage3_compute_validate_existing ||
+  stage3_abort "Stage 3 compute-node existing-output preflight failed"
+
+PENDING_MANIFEST="${ECODA_RUN_ROOT}/manifests/pending.tsv"
+PENDING_TMP="${PENDING_MANIFEST}.build.$$"
+OWNERS_MANIFEST="${ECODA_RUN_ROOT}/manifests/owners.tsv"
+OWNERS_TMP="${OWNERS_MANIFEST}.build.$$"
+PENDING_COUNT=0
+ecoda_owner_clear_tracked
+while IFS=$'\t' read -r ds view; do
+  path="$(output_path_for "${ds}" "${view}")" ||
+    stage3_abort "missing output contract for ${ds}/${view}"
+  valid=0
+  if [[ ${FORCE_ARG} -eq 0 && -s "${path}" ]]; then
+    set +e
+    stage3_existing_output_valid "${ds}" "${view}" "${path}"
+    preflight_rc=$?
+    set -e
+    if [[ ${preflight_rc} -eq 0 ]]; then
+      valid=1
+    elif [[ ${preflight_rc} -ne 1 ]]; then
+      stage3_abort "missing or malformed Stage 3 preflight status for ${ds}/${view}"
+    fi
+  fi
+  if [[ ${valid} -eq 1 ]]; then
+    echo "Skipping validated Stage 3 artifact ${ds}/${view}."
+    continue
+  fi
+  set +e
+  owner_dir="$(ecoda_owner_acquire stage3 "${ds}/${view}" "${RUN_ID}" "${FORCE_ARG}" 0)"
+  owner_rc=$?
+  set -e
+  if [[ ${owner_rc} -ne 0 ]]; then
+    stage3_abort "ownership conflict for ${ds}/${view}"
+  fi
+  ecoda_owner_track "${owner_dir}" ||
+    stage3_abort "failed to track Stage 3 owner for ${ds}/${view}"
+  if [[ ${FORCE_ARG} -eq 1 ]]; then
+    ecoda_invalidate_artifact "${path}" ||
+      stage3_abort "failed to invalidate Stage 3 artifact ${path}"
+  fi
+  printf '%s\t%s\n' "${ds}" "${view}" >> "${PENDING_TMP}"
+  printf '%s\t%s\n' "${ds}/${view}" "${owner_dir}" >> "${OWNERS_TMP}"
+  PENDING_COUNT=$((PENDING_COUNT + 1))
+done < "${MANIFEST}"
+
+if [[ ${PENDING_COUNT} -gt 0 ]]; then
+  ecoda_atomic_install_manifest "${PENDING_TMP}" "${PENDING_MANIFEST}" 2 ||
+    stage3_abort "failed to install Stage 3 pending manifest atomically"
+  ecoda_atomic_install_manifest "${OWNERS_TMP}" "${OWNERS_MANIFEST}" 2 ||
+    stage3_abort "failed to install Stage 3 owner manifest atomically"
+else
+  ecoda_atomic_write "${PENDING_MANIFEST}" "" ||
+    stage3_abort "failed to create empty Stage 3 pending manifest"
+  ecoda_atomic_write "${OWNERS_MANIFEST}" "" ||
+    stage3_abort "failed to create empty Stage 3 owner manifest"
+fi
+rm -f "${PENDING_TMP}" "${OWNERS_TMP}"
+
+if [[ ${PENDING_COUNT} -eq 0 ]]; then
+  if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" != "1" ]] &&
+     ! sync_selected "${MANIFEST}"; then
+    stage3_abort "selected Stage 3 sync failed"
+  fi
+  ecoda_set_run_state OK "all selected Stage 3 artifacts already validated and synced" ||
+    stage3_abort "failed to write Stage 3 terminal OK state"
+  echo "PREPROCESS_RUN_ID=${RUN_ID}"
+  exit 0
+fi
+
+mkdir -p "${LOGS_DIR}" || stage3_abort "failed to create Stage 3 log directory"
+export FORCE_PREPROCESS="${FORCE_ARG}"
+export PREPROCESS_SELECTION_FILE="${PENDING_MANIFEST}"
+export PREPROCESS_RUN_ROOT="${ECODA_RUN_ROOT}"
+export PREPROCESS_ERROR_PREFIX="${LOGS_DIR}/3_scrnaseq_preprocessing"
+set +e
+ARRAY_MSG="$(sbatch --parsable --array="1-${PENDING_COUNT}%${THROTTLE}" \
+  --mem="${MEMORY}" --partition="${PARTITION}" \
+  --output="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.log" \
+  --error="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.err" \
+  --mail-user="${USER_EMAIL}" \
+  --export="ALL,PREPROCESS_SELECTION_FILE=${PENDING_MANIFEST},PREPROCESS_RUN_ROOT=${ECODA_RUN_ROOT},FORCE_PREPROCESS=${FORCE_ARG},PREPROCESS_ERROR_PREFIX=${LOGS_DIR}/3_scrnaseq_preprocessing" \
+  "${SCRIPT_DIR}/1.1_run_worker.sh")"
+array_rc=$?
+set -e
+[[ ${array_rc} -eq 0 ]] || stage3_abort "sbatch rejected Stage 3 preprocessing array"
+ARRAY_ID="${ARRAY_MSG%%;*}"
+[[ "${ARRAY_ID}" =~ ^[0-9]+$ ]] || stage3_abort "invalid Stage 3 array id"
+echo "PREPROCESS_ARRAY_JOB_ID=${ARRAY_ID}"
+stage3_install_scheduler_record ARRAY "${ARRAY_ID}" ||
+  stage3_abort "failed to persist Stage 3 array scheduler ID"
+stage3_validate_scheduler_manifest "${SCHEDULER_IDS_FILE}" 0 ||
+  stage3_abort "Stage 3 scheduler ID manifest is invalid after array submission"
+set +e
+WATCHDOG_MSG="$(sbatch --parsable --wait --dependency="afterany:${ARRAY_ID}" \
+  --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem=2G \
+  --time="${STAGE3_WATCHDOG_TIME_LIMIT:-12:00:00}" \
+  --output="${LOGS_DIR}/3_scrnaseq_preprocessing_watchdog_%j.log" \
+  --error="${LOGS_DIR}/3_scrnaseq_preprocessing_watchdog_%j.err" \
+  --mail-user="${USER_EMAIL}" \
+  --export="ALL,PREPROCESS_RUN_ROOT=${ECODA_RUN_ROOT},PREPROCESS_PENDING_MANIFEST=${PENDING_MANIFEST}" \
+  "${SCRIPT_DIR}/1.2_preprocess_watchdog.sh" "${RUN_ID}" "${MANIFEST}" \
+  "${ARRAY_ID}" "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
+watchdog_rc=$?
+set -e
+WATCHDOG_ID="${WATCHDOG_MSG%%;*}"
+[[ "${WATCHDOG_ID}" =~ ^[0-9]+$ ]] ||
+  stage3_abort "invalid Stage 3 watchdog id"
+echo "PREPROCESS_WATCHDOG_JOB_ID=${WATCHDOG_ID}"
+stage3_install_scheduler_record WATCHDOG "${WATCHDOG_ID}" ||
+  stage3_abort "failed to persist Stage 3 watchdog scheduler ID"
+if [[ ${watchdog_rc} -ne 0 ]]; then
+  stage3_record_watchdog_status_ids ||
+    stage3_abort "failed to preserve Stage 3 watchdog scheduler IDs"
+  stage3_abort "Stage 3 watchdog job failed"
+fi
+
+if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" == "1" ]]; then
+  ecoda_set_run_state OK "submitter test mode; scheduler calls validated" ||
+    stage3_abort "failed to write Stage 3 terminal OK state"
+  exit 0
+fi
+if [[ ! -s "${ECODA_RUN_ROOT}/status/watchdog" ]] ||
+   ! grep -q '^STATE=OK$' "${ECODA_RUN_ROOT}/status/watchdog"; then
+  stage3_abort "Stage 3 watchdog did not report OK"
+fi
+while IFS= read -r status_line; do
+  case "${status_line}" in
+    SCHEDULER_ID=*|ARRAY_JOB_ID=*)
+      printf 'PREPROCESS_SCHEDULER_ID=%s:%s\n' "${RUN_ID}" "${status_line#*=}"
+      ;;
+  esac
+done < "${ECODA_RUN_ROOT}/status/watchdog"
+printf 'PREPROCESS_SCHEDULER_ID=%s:%s\n' "${RUN_ID}" "${WATCHDOG_ID}"
+stage3_record_watchdog_status_ids ||
+  stage3_abort "failed to install complete Stage 3 scheduler manifest"
+stage3_validate_scheduler_manifest "${SCHEDULER_IDS_FILE}" 1 ||
+  stage3_abort "Stage 3 scheduler manifest is incomplete"
+if ! sync_selected "${MANIFEST}"; then
+  stage3_abort "selected Stage 3 sync failed"
+fi
+stage3_finalize_owner_manifest OK "Stage 3 sync completed" ||
+  stage3_abort "failed to finalize Stage 3 owners"
+ecoda_set_run_state OK "Stage 3 preprocessing, validation, and selected sync completed" ||
+  stage3_abort "failed to write Stage 3 terminal OK state"

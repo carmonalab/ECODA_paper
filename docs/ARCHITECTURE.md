@@ -45,10 +45,10 @@ The ECODA benchmarking pipeline is designed for **cohort-level exploratory analy
 ```
 
 ### Key Technical Contracts
-1. **Backed HDF5 / CSR on Disk:** All preprocessed `.h5ad` files are stored in Compressed Sparse Row (CSR) format. This allows backed-mode chunk workers (`read_h5ad(..., backed="r")`) to slice sample subsets efficiently without loading entire dense count matrices into RAM.
-2. **Minimal Annotation Union:** To prevent eager HDF5 group loading overhead during cell-type annotation, multi-view datasets use a minimal union layout (`X` = raw counts CSR, `obs` + `var` only, no `layers`/`obsp`/`obsm`).
+1. **Backed HDF5 / CSR on Disk:** Preprocessed `.h5ad` files retain raw counts in `layers["counts"]` and use CSR storage. Annotation unions deliberately contain only raw counts in `X`, so their backed chunk workers can slice samples selectively. Login-side source-ID and annotation-contract validators use h5py-only metadata/`obs` reads; they must not use `anndata.read_h5ad(..., backed="r")`, because anndata 0.12.x may eagerly materialize `layers`.
+2. **Run-Owned Minimal Annotation Union:** Each Stage 4 run writes a minimal union at `${HPC_SCRATCH_DIR}/_ecoda_runs/<RUN_ID>/datasets/<DS_NAME>/union/union.h5ad` (`X` = raw counts CSR, `obs` + `var` only, no `layers`/`obsp`/`obsm`). Feathers are validated once against the complete union `(Sample, cell_barcode)` key set, then projected onto each selected view.
 3. **Cross-Language Data Exchange (`.feather`):** Python methods serialize embeddings and pairwise distance matrices to Apache Arrow `.feather` files, which R consumers read with zero format drift.
-4. **Atomic Writes & MD5 Checksums:** All R result bundles are written atomically (temp file + rename) and cataloged in `checksums.md5` before being synchronized to persistent NAS storage.
+4. **Atomic Writes & MD5 Checksums:** All R result bundles, annotation feathers, unions, and merged h5ads are written atomically (temp file + rename) with MD5/SIZE/PATH sidecars before synchronization to persistent NAS storage.
 
 ---
 
@@ -80,9 +80,14 @@ All evaluated cohorts and views are configured in [`datasets.json`](../datasets.
         "output_file_name": "<DS>_benchmark_analysis_ECODAprocessed.h5ad",
         "subset_vars": { "column": { "values": ["exclude_val"], "op": "notin" } }
       },
-      "batch_effect_analysis": {
+      "batch_effect_uncorrected": {
         "input_file_name": "Input raw file",
-        "output_file_name": "<DS>_batch_effect_analysis_ECODAprocessed.h5ad",
+        "output_file_name": "<DS>_batch_effect_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "Input raw file",
+        "output_file_name": "<DS>_batch_effect_corrected_ECODAprocessed.h5ad",
         "subset_vars": {}
       }
     }
@@ -106,7 +111,7 @@ Execution is split between compute scratch (fast local I/O on worker nodes) and 
 ${HPC_SCRATCH_DIR}/
 ├── <DS_NAME>/data/               # Staged raw inputs per dataset (1_stage_data.sh)
 ├── <DS_NAME>/output/             # Preprocessed .h5ad, annotation chunks, and merged outputs
-├── <DS_NAME>/annotation_union/   # Minimal counts union for chunked annotation (temporary)
+├── <DS_NAME>/annotation_union/   # legacy fixed-path location; new runs use _ecoda_runs/<RUN_ID>/datasets/<DS_NAME>/union/
 ├── benchmark/
 │   ├── embeddings/               # Python & R method distance matrices (.feather)
 │   ├── results/                  # Evaluated R result bundles (<ds>_<method>.rds)
@@ -116,6 +121,14 @@ ${HPC_SCRATCH_DIR}/
 ├── chunks_manifest_<pid>.txt     # Per-submission chunk manifests
 ├── _worker_retries/              # Worker transient retry counters
 └── _benchmark_watchdog/          # SLURM watchdog status logs
+
+# Run ownership / manifests (scratch only)
+${HPC_SCRATCH_DIR}/_ecoda_runs/<RUN_ID>/
+├── metadata
+├── manifests/                 # immutable selected dataset/view/method rows
+└── status/                    # atomic watchdog/aggregate/terminal records
+${HPC_SCRATCH_DIR}/_ecoda_owners/<stage>/<artifact>/
+└── owner                      # ACTIVE/OK/FAIL ownership state
 
 # NAS Storage (carmona_smb / Shared Collections; login node only)
 ${NAS_SC_DIR}/                    # Standardized raw source datasets
@@ -161,92 +174,121 @@ Per-dataset R Markdown notebooks performing study-specific initial quality contr
 - `1_stage_data.sh`: Login-node utility that queries `datasets.json` and rsyncs required raw input files from `${NAS_SC_DIR}` to `${HPC_SCRATCH_DIR}/<DS_NAME>/data/`. Supports `--ds_name <DS>`.
 
 #### 2. Dataset-Specific Preprocessing (`src/2_dataset_specific_preprocessing/`)
-- `1_submit_hpc.sh`: Orchestration dispatcher running cohort-specific adjustments in parallel:
-  - `1.1_submit_gongsharma.sh` (`1.1.1_subset_gongsharma.py`): Caps samples at ≤5,000 cells to prevent worker OOM while preserving deterministic sampling.
-  - `1.2_submit_combinedpbmc.sh` (`1.2.1_create_combinedpbmc_dataset.py`): Assembles the multi-study CombinedPBMC cohort (Stephenson + GongSharma + Zhu) with lazy backed chunk loading.
-  - `1.3_submit_joanito.sh` (`1.3.1_prepare_joanito.R`): Annotates `seqtec` batch column and generates the `_debug` 5-sample testing dataset.
-  - `1.4_submit_kfoury_lowres_ct.sh` (`1.4.1_create_kfoury_lowres_ct.R`): Derives the low-resolution cell type column (`cells_lowres`).
+- `1_submit_hpc.sh`: selected hook gate. Independent hooks are submitted in
+  one wave; only the GongSharma cap -> CombinedPBMC read/write edge uses
+  `afterok`. `stage2_watchdog.sh` owns terminal accounting, OOM-only retries,
+  semantic prerequisite validation, and atomic checksums. Stage 2 remains
+  scratch-only.
+- Hook outputs are installed atomically before the next numbered stage reads
+  them. The CombinedPBMC legacy raw basename is accepted only for guarded
+  content/checksum validation and one-time rename to `combined_pbmc.h5ad`.
 
 #### 3. Standardized Preprocessing (`src/3_scrnaseq_preprocessing/`)
-- `1_submit_hpc_array.sh` -> `1.1_run_worker.sh` -> `1.1.1_preprocess.py`:
-  - Standardizes gene names using Ensembl 105 (`aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz`).
-  - Standardizes sample columns and applies view-specific `subset_vars`.
-  - Performs library normalization, $\log(1+p)$ scaling, and batch-aware HVG selection (1000, 2000, 3000 HVGs).
-  - Computes PCA (`X_pca_{view}_hvg{n}`), Harmony batch correction (`X_pca_harmony_{view}_hvg2000`), and multi-resolution Leiden clusterings.
-  - Writes outputs in **CSR format on disk**.
+- `1_submit_hpc_array.sh` -> `1.1_run_worker.sh` -> `1.1.1_preprocess.py`
+  consumes one immutable `DATASET<TAB>VIEW` row per selected view. The exact
+  batch mode requires the canonical twelve-row uncorrected selection and
+  rejects legacy/corrected rows before scheduler submission.
+- Standardizes gene names using Ensembl 105, applies view-specific subsets,
+  preserves raw counts in `layers["counts"]`, normalizes/log-transforms,
+  ranks HVGs, and computes PCA/Harmony/Leiden outputs.
+- `1.2_preprocess_watchdog.sh` performs OOM-only reduced-row retries and full
+  H5AD schema/checksum validation. Existing output candidates are validated by
+  the compute-node H5AD preflight array before idempotent skip decisions, so
+  the login submitter does not open large H5AD content for the full contract.
+  Selected h5ads only are synchronized to NAS after the watchdog succeeds;
+  Stage 3 transfers use one per-stage files-from manifest plus per-artifact
+  remote checksum comparisons. `batch_effect_analysis` is not an accepted
+  logical view; historical filename components are migration/documentation
+  text only.
 
 #### 4. Parallel Cell Type Annotation (`src/4_cell_type_annotation/`)
-- `1_prepare_chunks.sh` (`1.1_prepare_chunks.py`): Builds a minimal union `.h5ad` (`X` = counts CSR) and splits samples into chunk manifests (2 samples/chunk).
-- `2_submit_hpc_array.sh` (`2.1_run_worker.sh` -> `2.1.1_process_chunk.R`): SLURM array executing dual annotation cell-by-cell on each sample:
-  - **scATOMIC:** Hierarchical classification (layer 1–6) with bounded EM optimization.
-  - **HiTME:** Reference mapping via scGate and ProjecTILs sketched reference atlases.
-  - Generates per-chunk `.feather` annotations with per-sample checkpointing.
-- `3_submit_merge.sh` (`3.1_merge_annotations.py`): Atomically joins feather annotations into every preprocessed view `.h5ad` on `(Sample, Barcode)` composite keys and synchronizes final annotated files to NAS.
+- `1_submit_onboarding_stage.sh` is the only production entrypoint. It stages
+  and validates reference maps/scGate once, submits dataset-parallel
+  preparation rows, one global annotation chunk array, and a dataset-parallel
+  merge array (`3.2_merge_worker.sh`). View updates remain serial inside each
+  dataset.
+- Run-owned union/chunk/checkpoint/feather paths prevent concurrent runs from
+  deleting one another. Watchdogs retry OOM rows only and validate union
+  membership, Feather key uniqueness, full `(Sample, cell_barcode)` coverage, and
+  atomic h5ad installation.
+- The union is the immutable annotation key authority for a run. A target view
+  may be a strict subset; merge validates the complete union once, then projects
+  only matching keys into each target view. Reuse requires matching source
+  h5ad path/MD5/SIZE records and canonical run-owned paths.
+- `--skip-prepare` is only a reuse operation and requires
+  `--reuse-run RUN_ID`; it never creates a new empty run root. The old
+  preparation/annotation/merge submitters fail closed.
+- Login-side synchronization runs once per selected dataset in bounded
+  parallel after merge validation. Stage 4 batches each dataset's H5AD and
+  sidecar transfer with an rsync files-from manifest, then compares every
+  remote artifact checksum; failed sync preserves run artifacts.
+All runnable datasets must produce the complete HiTME (`layer1`, `layer2`,
+`layer3`) and scATOMIC (`layer_1` through `layer_6`, `scATOMIC_pred`,
+confidence, and cell-cycle) schema. A sample with zero output is retained as
+an all-NA checkpoint and reported in per-sample stats; the dataset-level
+`layer1` and `scATOMIC_pred` anchors remain mandatory. The three
+`not_suitable_for_auto_annotation` cohorts are skipped a priori and are not
+failed annotation results. scATOMIC `breast_mode` is intentionally disabled:
+all callers use the upstream default `FALSE` for cross-cohort comparability.
 
 ---
 
 ### Stage 3 — Benchmark & Method Analyses (`src/5_run_benchmark_methods/`)
 
-```
-                                  +---------------------------------------+
-                                  | 1_submit_hpc_array.sh (Submitter)     |
-                                  +---------------------------------------+
-                                         /            |            \
-                                        /             |             \
-                                       v              v              v
-                        +------------------+  +------------------+  +------------------+
-                        | Python Methods   |  | R Methods        |  | Transformation & |
-                        | (GPU / CPU)      |  | (CPU Class)      |  | Zero-Imputation  |
-                        | MrVI, scPoli,    |  | GloScope, MOFA,  |  | 7 transforms,    |
-                        | PILOT, QOT,      |  | Pseudobulk,      |  | 6 zero-imp       |
-                        | PILOT-GM-VAE     |  | scITD,           |  | strategies       |
-                        |                  |  | Composition      |  |                  |
-                        +------------------+  +------------------+  +------------------+
-                                        \             |             /
-                                         \            |            /
-                                          v           v           v
-                                  +---------------------------------------+
-                                  | watchdog_main.sh (OOM Auto-Escalation)|
-                                  +---------------------------------------+
-                                                      |
-                                                      v
-                                  +---------------------------------------+
-                                  | NAS Sync & checksums.md5 Verification |
-                                  +---------------------------------------+
-```
+`1_submit_hpc_array.sh` is the canonical coordinated wrapper. In ordinary
+mode it accepts the benchmark matrix; in batch mode it requires
+`--pass uncorrected` and the exact three-column twelve-row matrix selection.
+The immutable batch matrix selection is
+`DATASET<TAB>VIEW<TAB>SCOPE`; in pass mode `VIEW` and `SCOPE` must both equal
+the selected `batch_effect_<pass>` view. `SCOPE` is not a method label; methods
+are supplied by the fixed `--methods` suite.
+Batch mode submits the fixed
+`prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,pilotgm,qot`
+suite, with only pseudobulk/composition gated on their view's
+`prepare_pseudobulk` watchdog. Every other method array is independent and the
+aggregate gate includes every watchdog.
 
-#### 1. Python Benchmark Array (`run_python_sample_embedding_methods/`)
-- `1.1.1_benchmark_methods_py.py`: Implements MrVI (sample latent space), scPoli (sample embeddings), PILOT (Wasserstein distance), PILOT-GM-VAE (Gaussian Mixture VAE), and QOT (Quantum Optimal Transport).
-- Outputs distance matrices and embeddings as `.feather` files to `${HPC_SCRATCH_DIR}/benchmark/embeddings/`.
+- `matrix_watchdog.sh`: compute-node OOM-only retry and terminal task gate for
+  one method matrix. Batch retries export `ANALYSIS_MANIFEST` only.
+- `matrix_gate.sh`: aggregate gate that requires every child watchdog to report
+  `STATE=OK`.
+- RDS validation requires the ordered source sample universe for every method
+  except scITD. scITD may report an ordered subset and its dropped sample IDs;
+  no other method receives this exception.
+- Each Stage 5 run records a run-owned `manifests/source_identity.json` with
+  source path, size, MD5, and ordered sample IDs. The identity sidecar is
+  verified against current source contents at stage entry and before final
+  validation; matrix/RDS validators consume the verified IDs.
+- Source Sample IDs and annotation H5AD contracts use h5py-only `obs` reads.
+  Full persisted-count H5AD validation is performed by the compute-node
+  preflight array, avoiding anndata 0.12.x backed opens on the login node.
+- Batch Feather skip checks use one-row dataset manifests, and fully populated
+  per-dataset RDS skip checks are grouped into one R validator invocation.
+- Pass roots, logs, watchdog status, manifests, and markers are scoped to
+  `batch_effect/uncorrected` or `batch_effect/corrected`. Batch markers use the
+  `BATCH_EFFECT_*` namespace; ordinary benchmark markers retain
+  `BENCHMARK_*`.
+- The family submitters are compatibility entrypoints that delegate to the
+  canonical wrapper; they do not own independent synchronization.
+- `batch_effect_analysis` is never a logical view or loader fallback.
 
-#### 2. R Benchmark Array (`run_r_sample_embedding_methods/`)
-- `1.1.1_benchmark_methods_r.R`: Evaluates GloScope, MOFA+, Pseudobulk (DESeq2 normalized counts + Euclidean distance), scITD (tensor decomposition), and the **`composition`** suite:
-  - **ECODA variants:** Standard CLR, Highly Variable Cell Types (`ECODA_HVCs_*`), and unsupervised Leiden resolution scans (`ECODA_seuratres_*`).
-  - **Baselines:** GloProp, EPIC deconvolution, Avg_PCA_embedding, and raw cell-type frequencies.
-- Evaluates separation metrics and saves `.rds` result bundles alongside `<ds>_metadata.rds` to `${HPC_SCRATCH_DIR}/benchmark/results/`.
-
-#### 3. Transformation & Zero-Imputation Arrays (`run_transformation_zeroimp_analysis/`)
-- `1.1.1_transformation_zeroimp.R`: Systematically benchmarks 7 compositional transformations (CLR, ILR, ALR, Log, Arcsin, Identity, Log-ratio) and 6 zero-handling strategies (`counts_zeros`, `counts_all`, `percentage_zeros`, `percentage_all`, `multiLN`, `multiRepl`).
-
-#### 4. Benchmark Watchdog & Memory Auto-Escalation (`watchdog_main.sh`)
-- Submitted alongside array jobs as a lightweight monitoring process on a compute node.
-- Survives SSH client disconnects.
-- Detects `OUT_OF_MEMORY` task failures via `sacct` and automatically resubmits failed tasks with doubled RAM allocations (`128G -> 256G -> 500G`, clamped to `BENCHMARK_MEM_MAX`).
-- On successful completion of all tasks, merges execution-time and peak RSS logs into `execution_times.feather` and triggers the NAS sync.
-
-#### 5. Benchmark Analysis Notebook (`notebooks/benchmark_analysis.rmd`)
-- Loads precomputed `.rds` result bundles and `.feather` matrices via `load_hpc_benchmark_results()`.
-- Does **not** load monolithic raw `.h5ad` files into memory, enabling rapid local knitting on macOS.
-- Generates publication figures (Figure 2A, Supp Fig 2, Supp Figs 14–21) and summary rank heatmaps.
-
+#### Benchmark Analysis Notebook (`notebooks/benchmark_analysis.rmd`)
+- Loads precomputed `.rds` result bundles and `.feather` matrices via
+  `load_hpc_benchmark_results()`.
+- Does **not** load monolithic raw `.h5ad` files into memory, enabling rapid
+  local knitting on macOS.
+- Generates publication figures (Figure 2A, Supp Fig 2, Supp Figs 14–21) and
+  summary rank heatmaps.
 ---
 
 ### Stage 4 — Batch Effect Analysis (`notebooks/batch_effect_analysis.rmd`)
 
-Evaluates method resilience against technical batch confounding across datasets with defined batch keys (e.g., Stephenson center differences, Joanito sequencing technology, CombinedPBMC multi-cohort merge):
-- Tests ECODA batch-associated cell-type removal (testing each cell type's association with batch covariates).
-- Evaluates Pseudobulk with batch-only correction (`blind=FALSE, correct_batch=TRUE`).
-- Benchmarks sample representations derived from uncorrected vs. Harmony-integrated spaces.
+The notebook retains its historical filename, but registry/submitter identifiers
+are the explicit `batch_effect_uncorrected` and `batch_effect_corrected` views.
+The uncorrected twelve-cohort pass is the evidence gate; no corrected processing
+is launched before its scientific review. Batch formulas consume only configured
+high-resolution cell types. Pseudobulk, Harmony, and native MrVI correction
+settings are batch-only and never protect biological labels.
 
 ---
 
@@ -258,6 +300,16 @@ Standardized protocol for onboarding new external cohorts:
 3. **Count Integrity Check:** Identifies raw integer count layers (`layers["counts"]` vs `raw.X` vs `X`).
 4. **Standalone LISI Scoring (`onboarding_metrics.R`):** Calculates cell-level biological and batch LISI on unintegrated PCA space.
 5. **Onboarding Check Notebooks (`dataset_check_<Name>.qmd`):** Diagnostic Quarto notebooks for review before registering cohorts into `datasets.json`.
+
+The batch-effect onboarding scope is the ordered twelve-dataset selection
+maintained in `dataset_specs.py`: nine audit cohorts, Joanito, Stephenson, and
+CombinedPBMC. Stage 4 records `not_suitable_for_auto_annotation` as an
+a-priori exclusion for non-immune/unsupported cohorts; it is not an annotation
+failure. The annotation contract requires all dual-method columns, exact
+`(Sample, cell_barcode)` union coverage, checksums, and dataset-level
+`layer1`/`scATOMIC_pred` anchors. The batch analysis consumes only configured
+high-resolution cell-type columns. scATOMIC `breast_mode` remains at default
+`FALSE` and must not be passed by callers.
 
 ---
 
@@ -281,8 +333,7 @@ Standardized protocol for onboarding new external cohorts:
 ---
 
 ## 6. Resilience & Fault-Tolerance Mechanisms
-
 1. **Transient Fault Recovery:** Array workers source `worker_retry.sh`. On non-zero exit codes caused by transient BeeGFS cache misses, workers grep the task `.err` log for known signatures and self-requeue via `scontrol requeue` (capped at `WORKER_MAX_RETRIES=3`).
 2. **Deterministic Locking:** Environment refreshes lock on `logs/env_refresh.lock` to prevent parallel array workers from racing on the shared R library directory.
-3. **Fail-Closed Verification:** All submitter sync tails verify that `sacct` reports `COMPLETED` for 100% of tasks before initiating NAS synchronization. If any task failed, synchronization is aborted and an alert email is dispatched.
-4. **Resume via `--sync-only <job-id>`:** If an interactive SSH session disconnects while array jobs are running, re-running the submitter with `--sync-only <job-id>` reconnects to the monitoring tail without resubmitting duplicate jobs.
+3. **Fail-Closed Verification:** All submitter sync tails verify terminal scheduler/accounting state, artifact schemas, and MD5/SIZE/PATH sidecars before initiating NAS synchronization. If any task or transfer fails, synchronization is aborted and an alert email is dispatched.
+4. **Run-ID Recovery:** `--sync-only RUN_ID` validates the immutable run manifests, scheduler records, watchdog/aggregate state, fresh artifacts, and owners before completing an interrupted login tail; it never resubmits. Numeric/CSV scheduler-ID recovery remains a separate compatibility path and requires the caller's original dataset/view selection.
