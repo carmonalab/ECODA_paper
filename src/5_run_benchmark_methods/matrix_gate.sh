@@ -48,6 +48,14 @@ for label in "${labels[@]}"; do
     esac
   done < "${status}"
 done
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+  [[ "${SLURM_JOB_ID}" =~ ^[0-9]+$ ]] ||
+    fail "malformed aggregate gate scheduler ID ${SLURM_JOB_ID}"
+  case " ${SCHEDULER_IDS[*]} " in
+    *" ${SLURM_JOB_ID} "*) ;;
+    *) SCHEDULER_IDS+=("${SLURM_JOB_ID}") ;;
+  esac
+fi
 if ! partials="$(find "${RUN_ROOT}" -type f \( -name '*.tmp.*' -o -name '*.partial' -o -name '*.build.*' \) -print)"; then
   fail "unable to inspect benchmark partial artifacts"
 fi
