@@ -1,7 +1,7 @@
 # ==============================================================================
 # 2.1.1_process_chunk.R — Process one chunk of samples for cell type annotation
 # ==============================================================================
-# Called by 2.1_run_worker.sh (pixi run --as-is Rscript --vanilla)
+# Called by 2.1_run_worker.sh (direct py-cuda13 Rscript --vanilla)
 # Expects a single argument: <path_to_chunk_txt>
 # ==============================================================================
 

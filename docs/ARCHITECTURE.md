@@ -149,7 +149,7 @@ ${NAS_TARGET_DIR}/                # Synced project results
 | `HOME_REF_DIR` | `$HOME/reference_atlases/sketched_200ct` | Local sketched reference maps for HiTME |
 | `SCGATE_DB_PATH` | `${PROJECT_ROOT}/aux/scGateDB.rds` | Pre-downloaded scGate model database cache |
 | `PYTHON_BIN` | `${PROJECT_ROOT}/.pixi/envs/py-cuda13/bin/python` | Target Python binary on HPC |
-| `PIXI_RSCRIPT` | `pixi run --as-is -e py-cuda13 Rscript --vanilla` | Target Rscript invocation command |
+| `PIXI_RSCRIPT` | `${PROJECT_ROOT}/.pixi/envs/py-cuda13/bin/Rscript --vanilla` | Direct target Rscript command on HPC; avoids the r-base activation hook's shared `R CMD javareconf` writes |
 | `SAMPLE_COLNAME` | `"Sample"` | Standardized sample metadata column name |
 
 ---

@@ -13,17 +13,17 @@
 # relying on the generalized alignment in preprocess_utils.py
 # (convert_rds_to_raw_h5ad).
 #
-# Usage (HPC, working dir = PROJECT_ROOT; use the pixi R, never bare Rscript).
-# NOTE: slurm_config.sh vars (HPC_SCRATCH_DIR) are NOT set in interactive login
-# shells — use the concrete scratch path below or `source src/slurm_config.sh`
-# first:
-#   pixi run -e py-cuda13 Rscript src/3_scrnaseq_preprocessing/diagnose_layer_alignment.R \
+# Usage (HPC, working dir = PROJECT_ROOT; use the configured direct py-cuda13
+# Rscript, never bare Rscript or `pixi run`, whose r-base activation hook
+# rewrites shared R/etc files):
+#   source src/slurm_config.sh
+#   ${PIXI_RSCRIPT} src/3_scrnaseq_preprocessing/diagnose_layer_alignment.R \
 #     ${HOME}/scratch/ECODA_paper/Wu/data/WuS_2021_34493872.rds
 #
 # For large RDS files run it via srun on the debug-cpu partition instead of the
 # login node:
 #   srun --partition=debug-cpu --mem=16G --cpus-per-task=2 --time=00:30:00 \
-#     pixi run -e py-cuda13 Rscript src/3_scrnaseq_preprocessing/diagnose_layer_alignment.R \
+#     ${PIXI_RSCRIPT} src/3_scrnaseq_preprocessing/diagnose_layer_alignment.R \
 #     ${HOME}/scratch/ECODA_paper/Wu/data/WuS_2021_34493872.rds
 #
 # Expected output interpretation:
