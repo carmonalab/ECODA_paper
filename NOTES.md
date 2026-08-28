@@ -133,6 +133,22 @@ The biological label is evaluation-only. It never enters filtering, HVG
 selection, normalization, PCA, Harmony, CLR correction, pseudobulk design,
 MrVI covariates, or any other model input.
 
+The exact batch roles for the onboarding pass are `Joanito` low/high
+`cell.type`/`cell.type_new` and `CombinedPBMC` low/high `layer1`/`layer2`.
+Batch composition consumes only the configured high-resolution role; low
+resolution remains a registry consistency field. `not_suitable_for_auto_annotation`
+is an a-priori skip for `Alzheimer`, `Diabetes`, and `Parkinson`, not a failed
+annotation result.
+
+The annotation worker intentionally leaves scATOMIC `breast_mode` at its
+default `FALSE` for cross-cohort comparability. No caller may pass that option.
+
+Stephenson's batch-effect view uses the full declared subset and candidate
+`Site`. CombinedPBMC's raw input is `combined_pbmc.h5ad`, with explicit
+uncorrected/corrected outputs `combined_pbmc_batch_effect_uncorrected_ECODAprocessed.h5ad`
+and `combined_pbmc_batch_effect_corrected_ECODAprocessed.h5ad`. The old raw
+basename is accepted only for guarded one-time migration.
+
 ### 3.1 Fixed method contract
 
 The batch suite contains exactly these configured high-resolution methods:
@@ -230,6 +246,21 @@ silently change the confirmed sample or label roles. Missing IDs, collisions,
 missing labels, empty derived annotations, invalid hierarchies, and missing
 exact pass keys remain hard failures.
 
+
+### 3.6 Historical notebook and publication boundary
+
+`notebooks/batch_effect_analysis.rmd` remains intentionally unchanged in this
+remediation. Its historical analysis surface is not part of the uncorrected
+pipeline cutover; a future extension must consume the explicit
+`batch_effect_uncorrected`/`batch_effect_corrected` contracts without changing
+the biological-label or `columns.batch` invariants. The future handoff is to
+add any new pass-specific analysis in a separate notebook or an explicitly
+reviewed revision, after the scientific decision checkpoint.
+
+The `Supp_fig_22` publication-figure name and placement remain deferred. No
+publication figure is renamed, removed, or rewritten while the naming and
+figure-hierarchy decision is pending.
+
 ## 4. Benchmark regeneration and annotation invariants
 
 - Stage 3 counts observations per raw/staged view before Scanpy's per-cell and
@@ -251,6 +282,12 @@ exact pass keys remain hard failures.
   category, preserving every cell and sample; complete annotation columns are
   unchanged. Missing cells are never dropped and the biological label is never
   used in this handling.
+- PILOT-GM uses the configured cell-type annotation only for the historical
+  number-of-components choice; its distance routine consumes the model-generated
+  component assignments rather than the biological annotations. The upstream
+  full-covariance path can emit undefined `np.cov` values for singleton
+  component assignments, so the worker applies a finite positive-semidefinite
+  covariance repair before EMD and rejects any remaining nonfinite output.
 - MrVI is stochastic. CPU/GPU choice and preprocessing/input changes can alter
   learned distances despite `scvi.settings.seed = 0`.
 - Gene-expression methods can differ slightly because the old Seurat
@@ -310,3 +347,32 @@ group-count adjustment. This adjustment is unchanged by the graph migration.
 For exact March reproducibility, the legacy kNN-restricted graph must be used;
 for the current method definition, report the full unpruned raw-overlap SNN
 score and do not describe it as Seurat's Jaccard-pruned score.
+
+## 6. CT pseudobulk and benchmark h5ad failure contracts
+
+The CT pseudobulk path must never serialize an all-zero distance matrix as a
+successful result. `process_pseudobulk_ct_fig()` now records
+`n_ct_success`, `successful_cell_types`, `n_sample_pairs_contributed`, and
+`n_ct_pair_contributions`, and stops if no cell-type pseudobulk contributes a
+sample-pair distance.
+
+The benchmark input contract is checked before worker submission and again at
+worker startup. A benchmark-analysis h5ad must contain:
+
+- `X` with normalized expression;
+- `layers["counts"]` with raw counts;
+- `var["hvg_rank"]` with the required ranked HVGs;
+- standardized `obs["Sample"]`; and
+- the expected pass-qualified PCA/Harmony embeddings.
+
+The local reduced h5ad mirrors under `data/<dataset>/output/` are not benchmark
+inputs. The authoritative worker inputs are the full h5ads under the configured
+HPC scratch/NAS roots. A metadata/PCA-only local mirror is rejected rather than
+used as a normalized-count fallback.
+
+The zero CT results in the August 2026 run were caused by commit `c477852`
+slimming the R worker imports while `get_pb_deseq2()` still used an unqualified
+STACAS `data("default_black_list")` lookup. The per-CT error was swallowed by
+the prior `tryCatch`, so the workers exited successfully with zero matrices.
+Commit `9788b6d` made the STACAS lookup explicit; the contribution guard now
+makes any recurrence fail closed.

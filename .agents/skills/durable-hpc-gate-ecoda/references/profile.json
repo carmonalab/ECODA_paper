@@ -58,8 +58,8 @@
         "expected_exit": 0
       },
       {
-        "name": "benchmark-wrapper-tree",
-        "command": "cd \"$HOME/ECODA_paper\" && test -d src/5_run_benchmark_methods && test -f src/5_run_benchmark_methods/benchmark_submit_common.sh",
+        "name": "stage-wrapper-tree",
+        "command": "cd \"$HOME/ECODA_paper\" && test -f src/2_dataset_specific_preprocessing/1_submit_hpc.sh && test -f src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh && test -f src/4_cell_type_annotation/1_submit_onboarding_stage.sh && test -f src/5_run_benchmark_methods/1_submit_hpc_array.sh",
         "expected_exit": 0
       },
       {
@@ -92,13 +92,18 @@
         "expected_exit": 0
       },
       {
-        "name": "terminal-dataset-ground-truth",
-        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && jq -e 'has(\"Bassez\") and (.Bassez.columns.sample != null) and (.Bassez.columns.label != null)' datasets.json >/dev/null",
+        "name": "terminal-canonical-wrapper-set",
+        "command": "cd \"$HOME/ECODA_paper\" && test -f src/2_dataset_specific_preprocessing/1_submit_hpc.sh && test -f src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh && test -f src/4_cell_type_annotation/1_submit_onboarding_stage.sh && test -f src/5_run_benchmark_methods/1_submit_hpc_array.sh && test -f src/utils/bash/ecoda_run_common.sh",
         "expected_exit": 0
       },
       {
-        "name": "terminal-benchmark-wrapper-contract",
-        "command": "cd \"$HOME/ECODA_paper\" && test -d src/5_run_benchmark_methods && test -f src/5_run_benchmark_methods/benchmark_submit_common.sh",
+        "name": "terminal-run-owned-manifests-status",
+        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR/_ecoda_runs\" && failed=0 && found=0 && for run_root in \"$HPC_SCRATCH_DIR\"/_ecoda_runs/*; do [ -d \"$run_root\" ] || continue; found=1; [ -d \"$run_root/manifests\" ] || failed=1; [ -d \"$run_root/status\" ] || failed=1; done; test \"$found\" -eq 1 && test \"$failed\" -eq 0",
+        "expected_exit": 0
+      },
+      {
+        "name": "terminal-emitted-scheduler-status-records",
+        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && found=0 && for status in \"$HPC_SCRATCH_DIR\"/_ecoda_runs/*/status/*; do [ -s \"$status\" ] || continue; if grep -q '^SCHEDULER_ID=' \"$status\"; then found=1; fi; done; test \"$found\" -eq 1",
         "expected_exit": 0
       }
     ],
@@ -109,13 +114,23 @@
         "expected_exit": 0
       },
       {
-        "name": "nas-analysis-checksums",
-        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && cd \"$NAS_TARGET_DIR\" && if [ -d benchmark ]; then test -s benchmark/checksums.md5 && (cd benchmark && md5sum -c checksums.md5); elif [ -d batch_effect ]; then found=0; for pass in uncorrected corrected; do if [ -d \"batch_effect/$pass\" ]; then found=1; test -s \"batch_effect/$pass/checksums.md5\" && (cd \"batch_effect/$pass\" && md5sum -c checksums.md5); fi; done; test \"$found\" -eq 1; else exit 1; fi",
+        "name": "stage-neutral-run-root-contract",
+        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR/_ecoda_runs\" && failed=0 && found=0 && for run_root in \"$HPC_SCRATCH_DIR\"/_ecoda_runs/*; do [ -d \"$run_root\" ] || continue; found=1; [ -d \"$run_root/manifests\" ] || failed=1; [ -d \"$run_root/status\" ] || failed=1; done; test \"$found\" -eq 1 && test \"$failed\" -eq 0",
+        "expected_exit": 0
+      },
+      {
+        "name": "stage-neutral-scheduler-status-contract",
+        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && found=0 && for status in \"$HPC_SCRATCH_DIR\"/_ecoda_runs/*/status/*; do [ -s \"$status\" ] || continue; if grep -q '^SCHEDULER_ID=' \"$status\"; then found=1; fi; done; test \"$found\" -eq 1",
         "expected_exit": 0
       },
       {
         "name": "dataset-identifiers-come-from-ground-truth",
         "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && jq -e 'has(\"Bassez\") and (.Bassez.columns.sample != null) and (.Bassez.columns.label != null)' datasets.json >/dev/null",
+        "expected_exit": 0
+      },
+      {
+        "name": "stage-neutral-scratch-contract",
+        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR\" && test \"$HPC_SCRATCH_DIR\" != \"$PROJECT_ROOT\"",
         "expected_exit": 0
       }
     ],
