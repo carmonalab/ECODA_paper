@@ -13,8 +13,9 @@
 # Runs 1.5.1_reconstruct_myocardial_counts.py, which inverts the log1p-normalized
 # expression in Myocardial_Infarc_2.h5ad into exact raw UMI integer counts via
 # cell-wise minimum step inversion and vaults them into adata.layers["counts"].
-# ---------------------------------------------------------------------------
-
+#
+# Runs 1.5.1_reconstruct_myocardial_counts.py; FORCE_PREPROCESS=1 is translated
+# to --force so intentional recomputation survives the scheduler hook.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,4 +28,6 @@ fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-"${PYTHON_BIN}" "${SCRIPT_DIR}/1.5.1_reconstruct_myocardial_counts.py"
+FORCE_FLAG=()
+[[ "${FORCE_PREPROCESS:-0}" == "1" ]] && FORCE_FLAG=(--force)
+"${PYTHON_BIN}" "${SCRIPT_DIR}/1.5.1_reconstruct_myocardial_counts.py" "${FORCE_FLAG[@]}"

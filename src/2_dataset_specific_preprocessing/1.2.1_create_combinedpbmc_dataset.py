@@ -7,8 +7,8 @@ Usage:
                           [--base-path ${HPC_SCRATCH_DIR} --output-dir ${HPC_SCRATCH_DIR}/CombinedPBMC/data]
 
 Output:
-    Local (flat):         PROJECT_ROOT/data/combined_pbmc_batch_effect_analysis.h5ad
-    HPC (per-dataset):    ${HPC_SCRATCH_DIR}/CombinedPBMC/data/combined_pbmc_batch_effect_analysis.h5ad
+    Local (flat):         PROJECT_ROOT/data/combined_pbmc.h5ad
+    HPC (per-dataset):    ${HPC_SCRATCH_DIR}/CombinedPBMC/data/combined_pbmc.h5ad
 
 Defaults are driven by the environment: if HPC_SCRATCH_DIR is set, base-path
 defaults to ${HPC_SCRATCH_DIR} with layout=per-dataset (per-source raw inputs at
@@ -67,6 +67,22 @@ GONGSHARMA_N_SAMPLES = 15
 SAMPLE_RNG_SEED = 123
 
 
+def write_h5ad_atomic(adata, path):
+    """Install an h5ad only after the complete same-filesystem write succeeds."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    try:
+        adata.write_h5ad(str(tmp_path))
+        if not tmp_path.is_file() or tmp_path.stat().st_size == 0:
+            raise RuntimeError(f"empty intermediate h5ad: {tmp_path}")
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
+
 def _resolve_source_paths(ds_name, entry, base_path, layout):
     if layout == "per-dataset":
         base_path = base_path / ds_name / "data"
@@ -120,7 +136,7 @@ def finalize_and_write_intermediate(adata, sample_col, batch_label, cond_value, 
         adata.obs["Sample"] = adata.obs[sample_col].values
     keep_only_cols(adata, KEEP_BASE)
     print(f"  -> {adata.n_obs} cells", flush=True)
-    adata.write_h5ad(str(intermediate_path))
+    write_h5ad_atomic(adata, intermediate_path)
     return adata.n_obs, str(intermediate_path)
 
 
@@ -313,9 +329,9 @@ def main():
     del adata_s, adata_g, adata_z
     gc.collect()
 
-    output_path = output_dir / "combined_pbmc_batch_effect_analysis.h5ad"
+    output_path = output_dir / "combined_pbmc.h5ad"
     os.makedirs(output_dir, exist_ok=True)
-    adata_combined.write_h5ad(str(output_path))
+    write_h5ad_atomic(adata_combined, output_path)
     print(f"Saved combined PBMC dataset to: {output_path}")
 
 

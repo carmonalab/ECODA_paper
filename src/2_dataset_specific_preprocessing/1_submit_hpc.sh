@@ -1,230 +1,521 @@
 #!/bin/bash
+# Dataset-specific preprocessing gate. Independent hooks are submitted in one
+# wave; only GongSharma cap -> CombinedPBMC is serialized.
 set -euo pipefail
-
-# ---------------------------------------------------------------------------
-# Dispatcher for dataset-specific preprocessing steps (src/2_dataset_specific_preprocessing/).
-#
-# Submits every per-step sbatch script in this folder (1.*_submit_*.sh) IN
-# PARALLEL, waits for all of them, then reports per-job state via sacct and
-# exits non-zero if any step failed.
-#
-# IMPORTANT: Steps are submitted in parallel and therefore MUST be mutually
-# independent. The one exception is wired explicitly via --dependency: the
-# GongSharma cap step (1.1_submit_gongsharma.sh, when present) is submitted
-# first and the CombinedPBMC step (1.2) is gated behind it with
-# --dependency=afterok (1.1 overwrites the staged SoundLife h5ads IN PLACE,
-# which 1.2 reads in backed mode — a race would nondeterminize the CombinedPBMC
-# dataset). For any future step dependency, use the same pattern (submit first
-# + --dependency) — do NOT rely on submission order alone.
-#
-# Run AFTER src/1_stage_data/1_stage_data.sh and BEFORE
-# src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh.
-#
-# Usage:
-#   ./1_submit_hpc.sh                    # submit + wait + report
-#   ./1_submit_hpc.sh --sync-only <id1,id2,...>   # resume: skip submission, re-check the given jobs
-#
-# NOTE: This dispatcher never syncs to NAS (dataset-specific preprocessing
-# writes to scratch only; the preprocess array syncs afterwards), so
-# --sync-only here only re-runs the wait + sacct gate + summary. A best-effort
-# completion email (per-step state + elapsed, via
-# src/utils/bash/sync_status_email.sh) is sent at the end — success or
-# failure — and --mail-user="${USER_EMAIL}" is passed on every sbatch call so
-# Slurm's own END/FAIL job emails reach the user instead of the cluster
-# default (the step scripts only carry #SBATCH --mail-type=END,FAIL).
-# ---------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
+export ECODA_GATE_STAGE=stage2
 source "${SCRIPT_DIR}/../utils/bash/sync_status_email.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
 cd "${PROJECT_ROOT}"
 
-STEP_SCRIPTS=( "${SCRIPT_DIR}"/1.*_submit_*.sh )
+DATASETS_ARG=""
+DATASETS_SET=0
+STEPS_ARG=""
+STEPS_SET=0
+FORCE_ARG=0
+SYNC_ONLY_RUN=""
+SYNC_ONLY_SET=0
+MEMORY="${STAGE2_MEM:-128G}"
+MAX_MEMORY="${STAGE2_MEM_MAX:-500G}"
+PARTITION="${SLURM_PARTITION}"
+THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 
-SYNC_ONLY_IDS=""
+usage() {
+  cat <<'EOF'
+Usage: 1_submit_hpc.sh [--datasets LIST] [--steps LIST] [--force]
+       [--sync-only RUN_ID] [--mem VALUE] [--max-mem VALUE]
+       [--partition NAME] [--throttle N]
+
+Steps: gongsharma_cap, combinedpbmc, joanito, kfoury_lowres_ct,
+       myocardial_counts, bassex_cellsubtype
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --sync-only)
-      SYNC_ONLY_IDS="${2:-}"
-      if [[ -z "${SYNC_ONLY_IDS}" ]]; then
-        echo "ERROR: --sync-only requires at least one job id (comma-separated)."
-        exit 1
-      fi
-      shift 2
-      ;;
-    --sync-only=*)
-      SYNC_ONLY_IDS="${1#*=}"
-      if [[ -z "${SYNC_ONLY_IDS}" ]]; then
-        echo "ERROR: --sync-only requires at least one job id (comma-separated)."
-        exit 1
-      fi
-      shift
-      ;;
-    *)
-      echo "ERROR: Unknown argument: $1"
-      exit 1
-      ;;
+    --datasets) DATASETS_ARG="${2:-}"; DATASETS_SET=1; shift 2 ;;
+    --datasets=*) DATASETS_ARG="${1#*=}"; DATASETS_SET=1; shift ;;
+    --ds_name) DATASETS_ARG="${2:-}"; DATASETS_SET=1; shift 2 ;;
+    --ds_name=*) DATASETS_ARG="${1#*=}"; DATASETS_SET=1; shift ;;
+    --steps) STEPS_ARG="${2:-}"; STEPS_SET=1; shift 2 ;;
+    --steps=*) STEPS_ARG="${1#*=}"; STEPS_SET=1; shift ;;
+    --force) FORCE_ARG=1; shift ;;
+    --sync-only) SYNC_ONLY_RUN="${2:-}"; SYNC_ONLY_SET=1; shift 2 ;;
+    --sync-only=*) SYNC_ONLY_RUN="${1#*=}"; SYNC_ONLY_SET=1; shift ;;
+    --mem) MEMORY="${2:-}"; shift 2 ;;
+    --mem=*) MEMORY="${1#*=}"; shift ;;
+    --max-mem) MAX_MEMORY="${2:-}"; shift 2 ;;
+    --max-mem=*) MAX_MEMORY="${1#*=}"; shift ;;
+    --partition) PARTITION="${2:-}"; shift 2 ;;
+    --partition=*) PARTITION="${1#*=}"; shift ;;
+    --throttle) THROTTLE="${2:-}"; shift 2 ;;
+    --throttle=*) THROTTLE="${1#*=}"; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
 
-if [[ ${#STEP_SCRIPTS[@]} -eq 0 && -z "${SYNC_ONLY_IDS}" ]]; then
-  echo "ERROR: No step scripts found in ${SCRIPT_DIR}."
+if [[ -n "${SYNC_ONLY_RUN}" && ${FORCE_ARG} -eq 1 ]]; then
+  echo "ERROR: --sync-only cannot be combined with --force." >&2
+  exit 1
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: jq is required for Stage 2 selection." >&2
   exit 1
 fi
 
-mkdir -p "${LOGS_DIR}"
-
-JOB_IDS=()
-if [[ -n "${SYNC_ONLY_IDS}" ]]; then
-  echo "=== Sync-only resume mode: jobs ${SYNC_ONLY_IDS} (no submission) ==="
-  IFS=',' read -r -a JOB_IDS <<< "${SYNC_ONLY_IDS}"
-else
-  # GongSharma cap step (1.1) must finish before the CombinedPBMC step (1.2):
-  # 1.1 overwrites the staged SoundLife h5ads IN PLACE and 1.2 reads the same
-  # staged files in backed mode — running them in parallel would nondeterminize
-  # the CombinedPBMC dataset. Submit 1.1 first, then gate 1.2 behind it with
-  # --dependency=afterok (fail-closed: a failed cap means 1.2 is never
-  # submitted and the sacct gate below reports non-COMPLETED).
-  CAP_STEP_SCRIPT="${SCRIPT_DIR}/1.1_submit_gongsharma.sh"
-  if [[ -f "${CAP_STEP_SCRIPT}" ]]; then
-    echo "=== Submitting $(basename "${CAP_STEP_SCRIPT}") (prerequisite for CombinedPBMC) ==="
-    STEP_LOG_STEM="${LOGS_DIR}/$(basename "${CAP_STEP_SCRIPT}" .sh)_%j"
-    CAP_JOB_ID="$(sbatch --parsable \
-        --partition="${SLURM_PARTITION}" \
-        --output="${STEP_LOG_STEM}.log" \
-        --error="${STEP_LOG_STEM}.err" \
-        --mail-user="${USER_EMAIL}" \
-        "${CAP_STEP_SCRIPT}")"
-    JOB_IDS+=("${CAP_JOB_ID}")
-  fi
-  for step_script in "${STEP_SCRIPTS[@]}"; do
-    step_name="$(basename "${step_script}")"
-    # Skip the cap step in the loop: the glob above (1.*_submit_*.sh) matches
-    # 1.1_submit_gongsharma.sh, which was ALREADY submitted as the cap
-    # prerequisite (two concurrent cap jobs would race on the deterministic
-    # *.capped_tmp.h5ad temp path + os.replace, and CombinedPBMC would be
-    # gated only on the first).
-    if [[ "${step_name}" == "1.1_submit_gongsharma.sh" ]]; then
-      echo "=== Skipping ${step_name} (already submitted as cap prerequisite above) ==="
-      continue
-    fi
-    echo "=== Submitting ${step_name} ==="
-    # --output/--error/--partition passed on the sbatch command line (not
-    # #SBATCH lines): SLURM directives do not expand environment variables.
-    STEP_LOG_STEM="${LOGS_DIR}/$(basename "${step_script}" .sh)_%j"
-    SBATCH_ARGS=(
-      --partition="${SLURM_PARTITION}"
-      --output="${STEP_LOG_STEM}.log"
-      --error="${STEP_LOG_STEM}.err"
-      --mail-user="${USER_EMAIL}"
-    )
-    if [[ "${step_name}" == "1.2_submit_combinedpbmc.sh" && -n "${CAP_JOB_ID}" ]]; then
-      SBATCH_ARGS+=(--dependency="afterok:${CAP_JOB_ID}")
-    fi
-    JOB_IDS+=("$(sbatch --parsable "${SBATCH_ARGS[@]}" "${step_script}")")
-  done
+if [[ ${DATASETS_SET} -eq 1 && -z "${DATASETS_ARG}" ]]; then
+  echo "ERROR: --datasets must not be empty." >&2
+  exit 1
+fi
+if [[ ${STEPS_SET} -eq 1 && -z "${STEPS_ARG}" ]]; then
+  echo "ERROR: --steps must not be empty." >&2
+  exit 1
+fi
+if [[ ${SYNC_ONLY_SET} -eq 1 && -z "${SYNC_ONLY_RUN}" ]]; then
+  echo "ERROR: --sync-only requires a run ID." >&2
+  exit 1
 fi
 
-echo "Submitted jobs: ${JOB_IDS[*]}"
-
-# Wait for all jobs to leave the queue (squeue poll, 60s interval; exit
-# codes ignored — the per-job sacct COMPLETED check below is the
-# authoritative gate). scontrol has no plain `wait` command (only
-# `wait_job`, which waits for node-ready — not completion), so poll squeue
-# for the exact job id (`-o %A` prints the array master id for every task,
-# or the job id for plain jobs).
-for job_id in "${JOB_IDS[@]}"; do
-  while squeue -u "$USER" -h -o "%A" 2>/dev/null | grep -qx "${job_id}"; do
-    sleep 60
-  done
-  echo "Job ${job_id} left the scheduler."
-done
-
-# sacct may lag a few seconds behind jobs leaving the scheduler; poll
-# (bounded) until every job's master state is terminal instead of a blind
-# fixed sleep (same -X master-only granularity as the COMPLETED check below).
-# The 180-iteration cap (15 min) plus a 60-iteration grace window (5 min)
-# covers pathological SlurmDBD accounting lag (scheduler said done, sacct
-# still reports RUNNING); the per-job COMPLETED gate below is unchanged.
-echo "Waiting for sacct to record terminal states (bounded, max 20 min)..."
-TAIL_ITER=0
-while (( TAIL_ITER < 180 )); do  # max 15 min at 5s
-  settled=1
-  for job_id in "${JOB_IDS[@]}"; do
-    state="$(sacct -j "${job_id}" -X -n -o "State" 2>/dev/null | tr -d ' \n' || true)"
-    if [[ -z "${state}" ]] || [[ "${state}" =~ PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING ]]; then
-      settled=0
-    fi
-  done
-  if [[ ${settled} -eq 1 ]]; then
-    break
+stage2_abort() {
+  local reason="$1"
+  local cleanup_rc=0
+  if [[ -n "${ECODA_RUN_ROOT:-}" ]]; then
+    ecoda_owner_finalize_tracked FAIL "${reason}" || cleanup_rc=1
+    ecoda_set_run_state FAIL "${reason}" || cleanup_rc=1
   fi
-  sleep 5
-  TAIL_ITER=$((TAIL_ITER + 1))
-done
-if (( TAIL_ITER >= 180 )); then
-  echo "WARNING: sacct still reporting non-terminal states after 15 min; extending wait by a 5 min grace window..." >&2
-  TAIL_ITER=0
-  while (( TAIL_ITER < 60 )); do
-    settled=1
-    for job_id in "${JOB_IDS[@]}"; do
-      state="$(sacct -j "${job_id}" -X -n -o "State" 2>/dev/null | tr -d ' \n' || true)"
-      if [[ -z "${state}" ]] || [[ "${state}" =~ PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING ]]; then
-        settled=0
-      fi
-    done
-    if [[ ${settled} -eq 1 ]]; then
-      break
-    fi
-    sleep 5
-    TAIL_ITER=$((TAIL_ITER + 1))
-  done
-fi
-
-echo "=== Job summary ==="
-sacct -j "$(IFS=,; echo "${JOB_IDS[*]}")" --format=JobID,JobName,State,ExitCode
-
-# Per-step report for the completion email: one line per job (bare job id row
-# only — excludes .batch/.extern step rows), JobName + State + Elapsed +
-# ExitCode. Plain jobs, no task->dataset mapping needed.
-stage2_report() {
-  local job_id jid jname state elapsed exitcode
-  printf '%s\n' "Per-step report (step, state, elapsed, exit code):"
-  for job_id in "${JOB_IDS[@]}"; do
-    while IFS='|' read -r jid jname state elapsed exitcode; do
-      jid="${jid//[[:space:]]/}"
-      exitcode="${exitcode%|}"
-      [[ "${jid}" == "${job_id}" ]] || continue
-      printf '  %-40s %-14s %s (%s)\n' "${jname}" "${state}" "${elapsed}" "${exitcode}"
-    done < <(sacct -j "${job_id}" -n -P --format=JobID,JobName,State,Elapsed,ExitCode 2>/dev/null || true)
-  done
+  echo "ERROR: ${reason}" >&2
+  exit 1
 }
 
-# Exit non-zero if any step failed
-failed=0
-FAILED_STEP_NAMES=()
-for job_id in "${JOB_IDS[@]}"; do
-  state=$(sacct -j "${job_id}" -X -n -o "State" 2>/dev/null | tr -d ' \n')
-  if [[ "${state}" != "COMPLETED" ]]; then
-    echo "ERROR: Job ${job_id} ended in state '${state}'."
-    failed=1
-    FAILED_STEP_NAME="$(sacct -j "${job_id}" -X -n -P --format=JobName 2>/dev/null | head -1 | tr -d '[:space:]|' || true)"
-    [[ -n "${FAILED_STEP_NAME}" ]] || FAILED_STEP_NAME="${job_id}"
-    FAILED_STEP_NAMES+=("${FAILED_STEP_NAME}")
-  fi
-done
+step_script() {
+  case "$1" in
+    gongsharma_cap) printf '%s/1.1_submit_gongsharma.sh' "${SCRIPT_DIR}" ;;
+    combinedpbmc) printf '%s/1.2_submit_combinedpbmc.sh' "${SCRIPT_DIR}" ;;
+    joanito) printf '%s/1.3_submit_joanito.sh' "${SCRIPT_DIR}" ;;
+    kfoury_lowres_ct) printf '%s/1.4_submit_kfoury_lowres_ct.sh' "${SCRIPT_DIR}" ;;
+    myocardial_counts) printf '%s/1.5_submit_myocardial.sh' "${SCRIPT_DIR}" ;;
+    bassex_cellsubtype) printf '%s/1.6_submit_bassez.sh' "${SCRIPT_DIR}" ;;
+    *) return 1 ;;
+  esac
+}
 
-if [[ ${failed} -ne 0 ]]; then
-  notify_sync_status \
-    "ECODA: stage-2 steps FAILED (${#FAILED_STEP_NAMES[@]}/${#JOB_IDS[@]})" \
-    "Stage-2 dataset-specific preprocessing steps FAILED (${#FAILED_STEP_NAMES[@]}/${#JOB_IDS[@]}). Failed steps: ${FAILED_STEP_NAMES[*]}.
-$(stage2_report)"
-  exit 1
+step_outputs() {
+  case "$1" in
+    gongsharma_cap) printf '%s;%s' \
+      "${HPC_SCRATCH_DIR}/Gongsharma_cmv_young_males/data/SoundLife_YoungAdult_Male_CMVneg.h5ad" \
+      "${HPC_SCRATCH_DIR}/Gongsharma_cmv_young_males/data/SoundLife_YoungAdult_Male_CMVpos.h5ad" ;;
+    combinedpbmc) printf '%s/CombinedPBMC/data/combined_pbmc.h5ad' "${HPC_SCRATCH_DIR}" ;;
+    joanito) printf '%s/Joanito/data/%s;%s/_debug/data/JoaI_2022_35773407_debug_5samples.h5ad' \
+      "${HPC_SCRATCH_DIR}" "$(ecoda_view_input_name Joanito batch_effect_uncorrected)" "${HPC_SCRATCH_DIR}" ;;
+    kfoury_lowres_ct) printf '%s/Kfoury/data/Kfoury_2021_34719426.rds' "${HPC_SCRATCH_DIR}" ;;
+    myocardial_counts) printf '%s/Myocardial_infarction/data/Myocardial_Infarc_2.h5ad' "${HPC_SCRATCH_DIR}" ;;
+    bassex_cellsubtype) printf '%s/Bassez/data/BassezA_2021_33958794whole.rds' "${HPC_SCRATCH_DIR}" ;;
+    *) return 1 ;;
+  esac
+}
+
+if [[ -n "${SYNC_ONLY_RUN}" ]]; then
+  ecoda_open_run "${SYNC_ONLY_RUN}" || exit 1
+  MANIFEST="${ECODA_RUN_ROOT}/manifests/steps.tsv"
+  JOB_FILE="${ECODA_RUN_ROOT}/manifests/jobs.tsv"
+  ecoda_validate_run_owned_path "${MANIFEST}" "${ECODA_RUN_ROOT}" ||
+    stage2_abort "Stage 2 steps manifest is not run-owned"
+  ecoda_validate_manifest "${MANIFEST}" 5 ||
+    stage2_abort "Stage 2 steps manifest is invalid"
+  seen_steps=""
+  pending_count=0
+  failed=0
+  while IFS=$'\t' read -r step script outputs dependency owner; do
+    expected_script="$(step_script "${step}" 2>/dev/null || true)"
+    expected_outputs="$(step_outputs "${step}" 2>/dev/null || true)"
+    case " ${seen_steps} " in
+      *" ${step} "*) echo "ERROR: duplicate Stage 2 step: ${step}" >&2; failed=1 ;;
+    esac
+    [[ -n "${expected_script}" && "${script}" == "${expected_script}" ]] || {
+      echo "ERROR: Stage 2 step script mismatch: ${step}" >&2
+      failed=1
+    }
+    [[ -n "${expected_outputs}" && "${outputs}" == "${expected_outputs}" ]] || {
+      echo "ERROR: Stage 2 step output mismatch: ${step}" >&2
+      failed=1
+    }
+    expected_dependency="-"
+    [[ "${step}" == "combinedpbmc" ]] && expected_dependency="gongsharma_cap"
+    [[ "${dependency}" == "${expected_dependency}" ]] || {
+      echo "ERROR: Stage 2 dependency mismatch: ${step}" >&2
+      failed=1
+    }
+    expected_owner="-"
+    [[ "${owner}" == "-" ]] || expected_owner="$(ecoda_owner_dir stage2 "${step}")"
+    [[ "${owner}" == "${expected_owner}" ]] || {
+      echo "ERROR: Stage 2 owner mismatch: ${step}" >&2
+      failed=1
+    }
+    if [[ "${owner}" != "-" ]]; then
+      owner_state="$(ecoda_owner_state "${owner}" 2>/dev/null || true)"
+      [[ "${owner_state}" == "OK" ]] || {
+        echo "ERROR: Stage 2 owner is not terminal OK: ${owner}" >&2
+        failed=1
+      }
+      pending_count=$((pending_count + 1))
+    fi
+    old_ifs="${IFS}"
+    IFS=';'
+    read -r -a output_paths <<< "${outputs}"
+    IFS="${old_ifs}"
+    for path in "${output_paths[@]}"; do
+      if ! ecoda_validate_checksum "${path}" ||
+         ! ecoda_validate_stage2_output "${step}" "${path}"; then
+        echo "ERROR: Stage 2 sync-only artifact failed semantic integrity: ${path}" >&2
+        failed=1
+      fi
+    done
+    seen_steps="${seen_steps} ${step}"
+  done < "${MANIFEST}"
+
+  if [[ -e "${JOB_FILE}" ]]; then
+    ecoda_validate_run_owned_path "${JOB_FILE}" "${ECODA_RUN_ROOT}" ||
+      stage2_abort "Stage 2 jobs manifest is not run-owned"
+    if [[ ${pending_count} -gt 0 ]]; then
+      ecoda_validate_manifest "${JOB_FILE}" 2 || {
+        echo "ERROR: Stage 2 jobs manifest is invalid." >&2
+        failed=1
+      }
+      job_count=0
+      job_seen=""
+      while IFS=$'\t' read -r job_step job_id; do
+        job_count=$((job_count + 1))
+        expected_owner="$(awk -F '\t' -v step="${job_step}" '$1 == step {print $5}' "${MANIFEST}")"
+        [[ -n "${job_step}" && "${job_id}" =~ ^[0-9]+$ &&
+           -n "${expected_owner}" && "${expected_owner}" != "-" ]] || failed=1
+        case " ${job_seen} " in
+          *" ${job_step} "*) failed=1 ;;
+        esac
+        job_seen="${job_seen} ${job_step}"
+      done < "${JOB_FILE}"
+      [[ ${job_count} -eq ${pending_count} ]] || failed=1
+    elif [[ -s "${JOB_FILE}" ]]; then
+      echo "ERROR: all-skipped Stage 2 run has nonempty jobs manifest." >&2
+      failed=1
+    fi
+  elif [[ ${pending_count} -gt 0 ]]; then
+    echo "ERROR: Stage 2 jobs manifest is missing for pending work." >&2
+    failed=1
+  fi
+  if [[ ${failed} -ne 0 ]]; then
+    stage2_abort "Stage 2 sync-only validation failed"
+  fi
+  ecoda_set_run_state OK "sync-only artifact and manifest validation passed" ||
+    stage2_abort "failed to write Stage 2 terminal OK state"
+  exit 0
 fi
 
-notify_sync_status \
-  "ECODA: stage-2 steps COMPLETED (${#JOB_IDS[@]} steps)" \
-  "Stage-2 dataset-specific preprocessing completed (${#JOB_IDS[@]} steps; no NAS sync by design).
-$(stage2_report)"
+DATASET_NAMES=()
+if [[ -n "${DATASETS_ARG}" ]]; then
+  ecoda_split_csv "${DATASETS_ARG}"
+  DATASET_NAMES=("${ECODA_ARRAY[@]}")
+  ecoda_assert_unique_items "${DATASET_NAMES[@]}"
+  for ds in "${DATASET_NAMES[@]}"; do
+    ecoda_dataset_exists "${ds}" || { echo "ERROR: unknown dataset '${ds}'." >&2; exit 1; }
+  done
+else
+  while IFS= read -r ds; do DATASET_NAMES+=("${ds}"); done < <(jq -r 'keys[] | select(startswith("_") | not)' "${DATASETS_JSON_FILE}")
+fi
 
-echo "All dataset-specific preprocessing steps completed."
+ALL_STEPS=(gongsharma_cap combinedpbmc joanito kfoury_lowres_ct myocardial_counts bassex_cellsubtype)
+SELECTED_STEPS=()
+if [[ -n "${STEPS_ARG}" ]]; then
+  ecoda_split_csv "${STEPS_ARG}"
+  SELECTED_STEPS=("${ECODA_ARRAY[@]}")
+  ecoda_assert_unique_items "${SELECTED_STEPS[@]}"
+else
+  SELECTED_STEPS=("${ALL_STEPS[@]}")
+fi
+for step in "${SELECTED_STEPS[@]}"; do
+  case " ${ALL_STEPS[*]} " in
+    *" ${step} "*) ;;
+    *) echo "ERROR: unknown Stage 2 step '${step}'." >&2; exit 1 ;;
+  esac
+done
+
+# Dataset selection narrows fixed hooks without changing their scientific code.
+# Generated datasets pull in their real prerequisites automatically.
+if [[ -n "${DATASETS_ARG}" ]]; then
+  FILTERED_STEPS=()
+  for step in "${SELECTED_STEPS[@]}"; do
+    keep=0
+    for ds in "${DATASET_NAMES[@]}"; do
+      case "${step}:${ds}" in
+        gongsharma_cap:Gongsharma_cmv_young_males|gongsharma_cap:CombinedPBMC|combinedpbmc:CombinedPBMC|joanito:Joanito|joanito:_debug|kfoury_lowres_ct:Kfoury|myocardial_counts:Myocardial_infarction|bassex_cellsubtype:Bassez) keep=1 ;;
+      esac
+    done
+    [[ ${keep} -eq 1 ]] && FILTERED_STEPS+=("${step}")
+  done
+  SELECTED_STEPS=("${FILTERED_STEPS[@]}")
+  if [[ " ${DATASET_NAMES[*]} " == *" CombinedPBMC "* ]]; then
+    case " ${SELECTED_STEPS[*]} " in *" gongsharma_cap "*) ;; *) SELECTED_STEPS=(gongsharma_cap "${SELECTED_STEPS[@]}") ;; esac
+  fi
+  if [[ ${#SELECTED_STEPS[@]} -eq 0 ]]; then
+    echo "ERROR: selected datasets have no Stage 2 preprocessing hook." >&2
+    exit 1
+  fi
+fi
+if [[ " ${SELECTED_STEPS[*]} " == *" combinedpbmc "* ]]; then
+  case " ${SELECTED_STEPS[*]} " in
+    *" gongsharma_cap "*) ;;
+    *) SELECTED_STEPS=(gongsharma_cap "${SELECTED_STEPS[@]}") ;;
+  esac
+fi
+ORDERED_STEPS=()
+for known_step in "${ALL_STEPS[@]}"; do
+  for selected_step in "${SELECTED_STEPS[@]}"; do
+    [[ "${selected_step}" == "${known_step}" ]] && ORDERED_STEPS+=("${known_step}")
+  done
+done
+SELECTED_STEPS=("${ORDERED_STEPS[@]}")
+
+RUN_ID="${ECODA_RUN_ID:-$(ecoda_new_run_id stage2)}"
+ecoda_init_run stage2 "${RUN_ID}" >/dev/null
+mkdir -p "${LOGS_DIR}" || stage2_abort "failed to create Stage 2 log directory"
+MANIFEST="${ECODA_RUN_ROOT}/manifests/steps.tsv"
+JOB_FILE="${ECODA_RUN_ROOT}/manifests/jobs.tsv"
+MANIFEST_TMP="${MANIFEST}.build.$$"
+JOB_FILE_TMP="${JOB_FILE}.build.$$"
+: > "${MANIFEST_TMP}"
+: > "${JOB_FILE_TMP}"
+
+
+combinedpbmc_raw_migrate() {
+  local data_dir="${HPC_SCRATCH_DIR}/CombinedPBMC/data"
+  local old_path="${data_dir}/combined_pbmc_batch_effect_analysis.h5ad"
+  local new_path="${data_dir}/combined_pbmc.h5ad"
+
+  if [[ -f "${old_path}" && ! -e "${new_path}" ]]; then
+    if ecoda_validate_checksum "${old_path}" &&
+       ecoda_validate_stage2_output combinedpbmc "${old_path}"; then
+      if ! cp "${old_path}" "${new_path}"; then
+        return 1
+      fi
+      if ! ecoda_write_checksum "${new_path}" ||
+         ! ecoda_validate_checksum "${new_path}" ||
+         ! ecoda_validate_stage2_output combinedpbmc "${new_path}"; then
+        rm -f "${new_path}" "${new_path}.md5"
+        return 1
+      fi
+      if ! rm -f "${old_path}" "${old_path}.md5"; then
+        rm -f "${new_path}" "${new_path}.md5"
+        return 1
+      fi
+      echo "Migrated validated CombinedPBMC raw input to ${new_path}."
+    else
+      echo "Existing legacy CombinedPBMC raw input failed migration validation; regeneration required." >&2
+    fi
+  fi
+  if [[ -f "${new_path}" && -f "${old_path}" ]] &&
+     ecoda_validate_checksum "${new_path}" &&
+     ecoda_validate_stage2_output combinedpbmc "${new_path}"; then
+    rm -f "${old_path}" "${old_path}.md5"
+    echo "Removed duplicate legacy CombinedPBMC raw input after canonical validation."
+  fi
+}
+if [[ " ${SELECTED_STEPS[*]} " == *" combinedpbmc "* ]]; then
+  combinedpbmc_raw_migrate || stage2_abort "CombinedPBMC raw input migration failed"
+fi
+MEMORY_CURRENT="${MEMORY}"
+CAP_JOB_ID=""
+PENDING_STEPS=()
+OWNER_DIRS=()
+ecoda_owner_clear_tracked
+for step in "${SELECTED_STEPS[@]}"; do
+  script="$(step_script "${step}")"
+  [[ -f "${script}" ]] || stage2_abort "missing hook script: ${script}"
+  outputs="$(step_outputs "${step}")"
+  old_ifs="${IFS}"
+  IFS=';'
+  read -r -a output_paths <<< "${outputs}"
+  IFS="${old_ifs}"
+  valid=1
+  for path in "${output_paths[@]}"; do
+    if [[ ${FORCE_ARG} -eq 1 ]] || ! ecoda_validate_checksum "${path}" ||
+       ! ecoda_validate_stage2_output "${step}" "${path}"; then
+      valid=0
+    fi
+  done
+  if [[ ${FORCE_ARG} -eq 0 && ${valid} -eq 1 ]]; then
+    printf '%s\t%s\t%s\t%s\t-\n' "${step}" "${script}" "${outputs}" "-" >> "${MANIFEST_TMP}"
+    echo "Skipping validated Stage 2 step ${step}."
+    continue
+  fi
+  set +e
+  owner_dir="$(ecoda_owner_acquire stage2 "${step}" "${RUN_ID}" "${FORCE_ARG}" 0)"
+  owner_rc=$?
+  set -e
+  if [[ ${owner_rc} -ne 0 ]]; then
+    [[ ${owner_rc} -eq 2 ]] && echo "ERROR: valid terminal owner exists for ${step}; selected artifact unexpectedly passed ownership gate." >&2
+    stage2_abort "ownership conflict for ${step}"
+  fi
+  ecoda_owner_track "${owner_dir}" || stage2_abort "failed to track Stage 2 owner for ${step}"
+  if [[ ${FORCE_ARG} -eq 1 ]]; then
+    for path in "${output_paths[@]}"; do
+      ecoda_invalidate_artifact "${path}" ||
+        stage2_abort "failed to invalidate Stage 2 artifact: ${path}"
+    done
+  fi
+  dependency="-"
+  [[ "${step}" == "combinedpbmc" ]] && dependency="gongsharma_cap"
+  printf '%s\t%s\t%s\t%s\t%s\n' "${step}" "${script}" "${outputs}" "${dependency}" "${owner_dir}" >> "${MANIFEST_TMP}"
+  PENDING_STEPS+=("${step}")
+  OWNER_DIRS+=("${owner_dir}")
+done
+if ! ecoda_atomic_install_manifest "${MANIFEST_TMP}" "${MANIFEST}" 5; then
+  stage2_abort "failed to install Stage 2 manifest atomically"
+fi
+rm -f "${MANIFEST_TMP}"
+
+if [[ ${#PENDING_STEPS[@]} -eq 0 ]]; then
+  ecoda_atomic_write "${JOB_FILE}" "" || stage2_abort "failed to create empty Stage 2 jobs manifest"
+  ecoda_atomic_write "${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv" "" ||
+    stage2_abort "failed to create empty Stage 2 scheduler manifest"
+  ecoda_set_run_state OK "all selected Stage 2 artifacts already validated" ||
+    stage2_abort "failed to write Stage 2 terminal OK state"
+  echo "STAGE2_RUN_ID=${RUN_ID}"
+  exit 0
+fi
+
+# Submit every independent hook immediately. CombinedPBMC is the only explicit
+# dependency edge; dependency submission does not serialize unrelated hooks.
+for step in "${PENDING_STEPS[@]}"; do
+  script="$(step_script "${step}")"
+  SBATCH_ARGS=(--parsable --partition="${PARTITION}" --mem="${MEMORY_CURRENT}" \
+    --output="${LOGS_DIR}/stage2_${step}_%j.log" \
+    --error="${LOGS_DIR}/stage2_${step}_%j.err" --mail-user="${USER_EMAIL}" \
+    --export="ALL,STAGE2_RUN_ROOT=${ECODA_RUN_ROOT},FORCE_PREPROCESS=${FORCE_ARG}")
+  if [[ "${step}" == "combinedpbmc" && -n "${CAP_JOB_ID}" ]]; then
+    SBATCH_ARGS+=(--dependency="afterok:${CAP_JOB_ID}")
+  fi
+  set +e
+  job_output="$(sbatch "${SBATCH_ARGS[@]}" "${script}")"
+  submit_rc=$?
+  set -e
+  if [[ ${submit_rc} -ne 0 ]]; then
+    stage2_abort "sbatch rejected Stage 2 step ${step}"
+  fi
+  job_id="${job_output%%;*}"
+  [[ "${job_id}" =~ ^[0-9]+$ ]] || stage2_abort "invalid sbatch id for ${step}: ${job_id}"
+  printf '%s\t%s\n' "${step}" "${job_id}" >> "${JOB_FILE_TMP}"
+  if ! ecoda_atomic_install_manifest "${JOB_FILE_TMP}" "${JOB_FILE}" 2; then
+    stage2_abort "failed to install Stage 2 scheduler manifest after ${step}"
+  fi
+  [[ "${step}" == "gongsharma_cap" ]] && CAP_JOB_ID="${job_id}"
+  echo "STAGE2_STEP_JOB_ID=${step}:${job_id}"
+done
+rm -f "${JOB_FILE_TMP}"
+SCHEDULER_IDS_FILE="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
+SCHEDULER_IDS_TMP="${SCHEDULER_IDS_FILE}.build.$$"
+: > "${SCHEDULER_IDS_TMP}"
+while IFS=$'\t' read -r step scheduler_id; do
+  [[ -n "${step}" && "${scheduler_id}" =~ ^[0-9]+$ ]] ||
+    stage2_abort "invalid Stage 2 scheduler manifest row"
+  printf 'ARRAY\t%s\n' "${scheduler_id}" >> "${SCHEDULER_IDS_TMP}"
+done < "${JOB_FILE}"
+if ! ecoda_atomic_install_manifest "${SCHEDULER_IDS_TMP}" "${SCHEDULER_IDS_FILE}" 2; then
+  stage2_abort "failed to persist Stage 2 array scheduler IDs"
+fi
+rm -f "${SCHEDULER_IDS_TMP}"
+JOB_IDS="$(cut -f2 "${JOB_FILE}" | paste -sd: -)"
+set +e
+watchdog_output="$(sbatch --parsable --wait --dependency="afterany:${JOB_IDS}" \
+  --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem=2G \
+  --time="${STAGE2_WATCHDOG_TIME_LIMIT:-12:00:00}" \
+  --output="${LOGS_DIR}/stage2_watchdog_%j.log" \
+  --error="${LOGS_DIR}/stage2_watchdog_%j.err" --mail-user="${USER_EMAIL}" \
+  --export="ALL,STAGE2_RUN_ROOT=${ECODA_RUN_ROOT},STAGE2_FORCE=${FORCE_ARG}" \
+  "${SCRIPT_DIR}/stage2_watchdog.sh" "${RUN_ID}" "${MANIFEST}" "${JOB_FILE}" \
+  "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
+watchdog_rc=$?
+set -e
+WATCHDOG_ID="${watchdog_output%%;*}"
+[[ "${WATCHDOG_ID}" =~ ^[0-9]+$ ]] || stage2_abort "invalid Stage 2 watchdog id: ${WATCHDOG_ID}"
+echo "STAGE2_RUN_ID=${RUN_ID}"
+echo "STAGE2_WATCHDOG_JOB_ID=${WATCHDOG_ID}"
+SCHEDULER_IDS_TMP="${SCHEDULER_IDS_FILE}.watchdog.build.$$"
+cp "${SCHEDULER_IDS_FILE}" "${SCHEDULER_IDS_TMP}" ||
+  stage2_abort "failed to copy Stage 2 scheduler manifest"
+SCHEDULER_ID_SEEN=""
+while IFS=$'\t' read -r scheduler_kind scheduler_id; do
+  SCHEDULER_ID_SEEN="${SCHEDULER_ID_SEEN} ${scheduler_id}"
+done < "${SCHEDULER_IDS_FILE}"
+printf 'WATCHDOG\t%s\n' "${WATCHDOG_ID}" >> "${SCHEDULER_IDS_TMP}"
+SCHEDULER_ID_SEEN="${SCHEDULER_ID_SEEN} ${WATCHDOG_ID}"
+if [[ -s "${ECODA_RUN_ROOT}/status/watchdog" ]]; then
+  while IFS= read -r status_line; do
+    case "${status_line}" in
+      SCHEDULER_ID=*)
+        scheduler_id="${status_line#*=}"
+        [[ "${scheduler_id}" =~ ^[0-9]+$ ]] ||
+          stage2_abort "invalid Stage 2 watchdog scheduler ID"
+        case " ${SCHEDULER_ID_SEEN} " in
+          *" ${scheduler_id} "*) ;;
+          *)
+            printf 'STATUS\t%s\n' "${scheduler_id}" >> "${SCHEDULER_IDS_TMP}"
+            SCHEDULER_ID_SEEN="${SCHEDULER_ID_SEEN} ${scheduler_id}"
+            ;;
+        esac
+        ;;
+    esac
+  done < "${ECODA_RUN_ROOT}/status/watchdog"
+fi
+if ! ecoda_atomic_install_manifest "${SCHEDULER_IDS_TMP}" "${SCHEDULER_IDS_FILE}" 2; then
+  stage2_abort "failed to install Stage 2 scheduler ID manifest atomically"
+fi
+rm -f "${SCHEDULER_IDS_TMP}"
+if [[ ${watchdog_rc} -ne 0 ]]; then
+  stage2_abort "Stage 2 watchdog submission or execution failed"
+fi
+if [[ "${STAGE2_SUBMITTER_TEST:-0}" == "1" ]]; then
+  ecoda_set_run_state OK "submitter test mode; scheduler calls validated" ||
+    stage2_abort "failed to write Stage 2 terminal OK state"
+  exit 0
+fi
+if [[ ! -s "${ECODA_RUN_ROOT}/status/watchdog" ]] ||
+   ! grep -q '^STATE=OK$' "${ECODA_RUN_ROOT}/status/watchdog"; then
+  stage2_abort "Stage 2 watchdog did not report OK"
+fi
+while IFS= read -r status_line; do
+  case "${status_line}" in
+    SCHEDULER_ID=*)
+      printf 'STAGE2_SCHEDULER_ID=%s:%s\n' "${RUN_ID}" "${status_line#*=}"
+      ;;
+  esac
+done < "${ECODA_RUN_ROOT}/status/watchdog"
+printf 'STAGE2_SCHEDULER_ID=%s:%s\n' "${RUN_ID}" "${WATCHDOG_ID}"
+COMPLETE_SCHEDULER_TMP="${SCHEDULER_IDS_FILE}.complete.build.$$"
+cp "${SCHEDULER_IDS_FILE}" "${COMPLETE_SCHEDULER_TMP}" ||
+  stage2_abort "failed to copy complete Stage 2 scheduler manifest"
+SCHEDULER_ID_SEEN=""
+while IFS=$'\t' read -r scheduler_kind scheduler_id; do
+  SCHEDULER_ID_SEEN="${SCHEDULER_ID_SEEN} ${scheduler_id}"
+done < "${SCHEDULER_IDS_FILE}"
+while IFS= read -r status_line; do
+  case "${status_line}" in
+    SCHEDULER_ID=*)
+      scheduler_id="${status_line#*=}"
+      case " ${SCHEDULER_ID_SEEN} " in
+        *" ${scheduler_id} "*) ;;
+        *)
+          printf 'STATUS\t%s\n' "${scheduler_id}" >> "${COMPLETE_SCHEDULER_TMP}"
+          SCHEDULER_ID_SEEN="${SCHEDULER_ID_SEEN} ${scheduler_id}"
+          ;;
+      esac
+      ;;
+  esac
+done < "${ECODA_RUN_ROOT}/status/watchdog"
+if ! ecoda_atomic_install_manifest "${COMPLETE_SCHEDULER_TMP}" "${SCHEDULER_IDS_FILE}" 2; then
+  stage2_abort "failed to install complete Stage 2 scheduler ID manifest"
+fi
+rm -f "${COMPLETE_SCHEDULER_TMP}"
+ecoda_set_run_state OK "Stage 2 watchdog completed and scheduler manifest is complete" ||
+  stage2_abort "failed to write Stage 2 terminal OK state"

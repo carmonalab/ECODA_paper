@@ -36,6 +36,15 @@ cells_lowres[
 ] <- "MoMac"
 cells_lowres[cells_lowres %in% c("mDC", "pDC")] <- "DCcells"
 seurat$cells_lowres <- as.factor(cells_lowres)
-
-saveRDS(seurat, input)
+tmp_input <- tempfile(pattern = paste0(".", basename(input), ".tmp-"),
+                      tmpdir = dirname(input), fileext = ".rds")
+saveRDS(seurat, tmp_input)
+if (!file.exists(tmp_input) || file.info(tmp_input)$size <= 0) {
+  unlink(tmp_input)
+  stop("Atomic Kfoury RDS write produced an empty file: ", tmp_input)
+}
+if (!file.rename(tmp_input, input)) {
+  unlink(tmp_input)
+  stop("Could not atomically install Kfoury RDS: ", input)
+}
 message("Recomputed 'cells_lowres' for Kfoury and saved in place: ", input)
