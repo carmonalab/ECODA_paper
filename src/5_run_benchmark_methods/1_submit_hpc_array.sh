@@ -640,6 +640,14 @@ done
 NEEDS_PREP=0
 for method in "${METHODS[@]}"; do case "${method}" in mofa|pseudobulk|composition) NEEDS_PREP=1;; esac; done
 if [[ ${NEEDS_PREP} -eq 1 ]]; then case " ${METHODS[*]} " in *" prepare_pseudobulk "*) ;; *) METHODS=(prepare_pseudobulk "${METHODS[@]}");; esac; fi
+R_ENV_PREFLIGHT_REQUIRED=0
+for method in "${METHODS[@]}" "${ANALYSES[@]}"; do
+  case "${method}" in
+    gloscope|mofa|pseudobulk|composition|scitd|prepare_pseudobulk|trans|zeroimp)
+      R_ENV_PREFLIGHT_REQUIRED=1
+      ;;
+  esac
+done
 export ECODA_SELECTION_MANIFEST="${MANIFEST}"
 export ECODA_EXACT_SELECTION="${EXACT_SELECTION}"
 
@@ -852,6 +860,34 @@ benchmark_selected_artifacts_valid() {
     fi
   fi
 }
+
+stage5_run_r_environment_preflight() {
+  local log_dir="${ECODA_RUN_ROOT}/logs/r_environment_preflight"
+  local preflight_msg preflight_id preflight_rc
+  [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
+  mkdir -p "${log_dir}" || return 1
+  set +e
+  preflight_msg="$(sbatch --parsable --wait \
+    --partition="${SLURM_PARTITION_BENCHMARK_CPU}" \
+    --ntasks=1 --cpus-per-task=1 --mem=2G \
+    --time="${WATCHDOG_TIME_LIMIT}" \
+    --output="${log_dir}/r_environment_preflight_%j.log" \
+    --error="${log_dir}/r_environment_preflight_%j.err" \
+    --mail-user="${USER_EMAIL}" --export="ALL" \
+    "${SCRIPT_DIR}/../utils/bash/r_environment_preflight_worker.sh")"
+  preflight_rc=$?
+  set -e
+  preflight_id="${preflight_msg%%;*}"
+  [[ "${preflight_id}" =~ ^[0-9]+$ ]] || return 1
+  stage5_record_scheduler PREFLIGHT "${preflight_id}" || return 1
+  [[ ${preflight_rc} -eq 0 ]] || return 1
+  echo "BENCHMARK_R_ENV_PREFLIGHT_JOB_ID=${preflight_id}"
+}
+
+if [[ -z "${SYNC_ONLY_RUN}" && ${R_ENV_PREFLIGHT_REQUIRED} -eq 1 ]]; then
+  stage5_run_r_environment_preflight ||
+    stage5_abort "Stage 5 compute-node R environment preflight failed"
+fi
 
 OWNERS_FILE="${ECODA_RUN_ROOT}/manifests/owners.tsv"
 if [[ -z "${SYNC_ONLY_RUN}" ]]; then
