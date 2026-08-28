@@ -64,11 +64,14 @@ watchdog_resubmit() {
   local MANIFEST="$4"
   local DS_LIST
   IFS=',' read -r -a DS_LIST <<< "${DS_CSV}"
-  : > "${MANIFEST}"
+  local MANIFEST_TMP="${MANIFEST}.build.$$"
+  : > "${MANIFEST_TMP}"
   local name
   for name in "${DS_LIST[@]}"; do
-    echo "${name}" >> "${MANIFEST}"
+    echo "${name}" >> "${MANIFEST_TMP}"
   done
+  [[ -s "${MANIFEST_TMP}" ]] || return 1
+  mv -f "${MANIFEST_TMP}" "${MANIFEST}"
   if [[ -n "${ANALYSIS_PASS:-}" ]]; then
     export ANALYSIS_MANIFEST="${MANIFEST}"
     unset BENCHMARK_MANIFEST
@@ -118,6 +121,8 @@ watchdog_main() {
   local STATUS_FILE="${WATCHDOG_STATUS_DIR}/${SLURM_JOB_ID}.status"
   mkdir -p "${WATCHDOG_STATUS_DIR}"
   echo "Watchdog ${SLURM_JOB_ID}: ${LABEL} array ${ARRAY_ID} (mode=${MODE}, manifest=${MANIFEST})"
+  WATCHDOG_SCHEDULER_IDS=("${ARRAY_ID}")
+  [[ -n "${SLURM_JOB_ID:-}" ]] && WATCHDOG_SCHEDULER_IDS+=("${SLURM_JOB_ID}")
 
   case "${MODE}" in
     strict)

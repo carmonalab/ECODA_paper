@@ -4,6 +4,10 @@ raw_args <- commandArgs(trailingOnly = FALSE)
 script_arg <- raw_args[grepl("^--file=", raw_args)][1]
 script_path <- sub("^--file=", "", script_arg)
 root <- normalizePath(file.path(dirname(script_path), ".."))
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr)
+})
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_hpc_utils.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_methods_r.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_pipeline.R"))
@@ -100,9 +104,77 @@ batch_pb <- run_pseudobulk_hpc(
   batch_mode = TRUE,
   result_stem = "DS_batch_effect_uncorrected"
 )
+
 stopifnot(identical(names(batch_pb), "Pseudobulk_hvg2000"))
 stopifnot(file.exists(file.path(
   tmp_results, "DS_batch_effect_uncorrected_Pseudobulk_hvg2000.rds"
 )))
 
 cat("batch-effect CLR and pseudobulk modes OK\n")
+# CT pseudobulk must fail closed when every per-CT normalization fails, and
+# successful runs must expose contribution counts in the result bundle.
+ct_counts <- matrix(
+  1,
+  nrow = 4,
+  ncol = 6,
+  dimnames = list(paste0("g", 1:4), paste0("cell", 1:6))
+)
+ct_meta <- data.frame(
+  Sample = rep(paste0("s", 1:3), each = 2),
+  ct = rep(c("A", "B"), 3),
+  row.names = colnames(ct_counts)
+)
+ct_seurat <- Seurat::CreateSeuratObject(
+  counts = ct_counts,
+  meta.data = ct_meta
+)
+ct_labels <- structure(
+  factor(c("A", "B", "A")),
+  names = paste0("s", 1:3)
+)
+get_pb_deseq2 <- function(...) {
+  stop("synthetic per-CT failure")
+}
+all_failed <- tryCatch(
+  process_pseudobulk_ct_fig(
+    ct_seurat,
+    ct_labels,
+    ct_col = "ct",
+    sample_col = "Sample",
+    hvg = 2,
+    min_cells = 1
+  ),
+  error = identity
+)
+stopifnot(
+  inherits(all_failed, "error"),
+  grepl("no successful cell-type pseudobulks", conditionMessage(all_failed))
+)
+
+create_result_bundle <- function(feat_mat, labels, dist_mat = NULL, extra = list()) {
+  c(list(feat_mat = feat_mat, labels = labels), extra)
+}
+get_pb_deseq2 <- function(...) {
+  matrix(
+    seq_len(6),
+    nrow = 3,
+    ncol = 2,
+    dimnames = list(paste0("s", 1:3), c("g1", "g2"))
+  )
+}
+ct_success <- process_pseudobulk_ct_fig(
+  ct_seurat,
+  ct_labels,
+  ct_col = "ct",
+  sample_col = "Sample",
+  hvg = 2,
+  min_cells = 1
+)
+stopifnot(
+  identical(ct_success$n_ct_success, 2L),
+  identical(ct_success$n_sample_pairs_contributed, 3L),
+  identical(ct_success$n_ct_pair_contributions, 6L),
+  identical(ct_success$successful_cell_types, c("A", "B"))
+)
+
+cat("batch-effect CLR, pseudobulk modes, and CT contribution guard OK\n")

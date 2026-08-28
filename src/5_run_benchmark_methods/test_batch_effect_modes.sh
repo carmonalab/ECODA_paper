@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SUBMITTER="${ROOT_DIR}/src/5_run_benchmark_methods/run_batch_effect_methods/1_submit_hpc_array.sh"
+[[ ! -e "${ROOT_DIR}/src/3_scrnaseq_preprocessing/1_submit_batch_effect_stage.sh" ]]
 
 bash -n "${SUBMITTER}"
 bash -n "${ROOT_DIR}/src/5_run_benchmark_methods/benchmark_submit_common.sh"

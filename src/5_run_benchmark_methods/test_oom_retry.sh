@@ -80,6 +80,7 @@ reset_captures() {
 
 squeue() { return 0; }   # clean empty response -> 2 clean misses -> terminal
 sleep() { :; }           # no real waits (poll loops otherwise take minutes)
+timeout() { local _duration="$1"; shift; "$@"; }
 
 SACCT_ROWS=""            # "<jid>:<STATE>" entries (master + task rows)
 SACCT_MEM_ROWS=""        # "<jid>:<MaxRSS>" entries (optional)
@@ -287,12 +288,13 @@ echo "=== benchmark_wait_array_terminal: consecutive-clean-miss poll ==="
 # stubbed sleep.
 setup_oom_scenario
 (
-  squeue() { echo "call" >> "${CAPTURE_DIR}/squeue_calls.txt"; return 0; }
+  squeue() { printf '%s\n' "$*" >> "${CAPTURE_DIR}/squeue_calls.txt"; return 0; }
   benchmark_wait_array_terminal 33333 poll-test
 ) > "${CAPTURE_DIR}/poll_out.txt" 2>&1
 assert_eq "clean-empty from the start exits 0" "0" "$?"
 assert_eq "clean-empty exits after exactly 2 squeue calls" "2" "$(wc -l < "${CAPTURE_DIR}/squeue_calls.txt" | tr -d ' ')"
 assert_contains "clean-empty reports left the scheduler" "left the scheduler." "$(cat "${CAPTURE_DIR}/poll_out.txt")"
+assert_contains "poll uses exact array id query" "-j 33333" "$(cat "${CAPTURE_DIR}/squeue_calls.txt")"
 
 setup_oom_scenario
 (
@@ -325,6 +327,31 @@ assert_eq "squeue failure resets the miss counter -> 3 calls" "3" "$(wc -l < "${
 assert_contains "failure warns and keeps polling" "WARNING: squeue query failed" "$(cat "${CAPTURE_DIR}/poll_out.txt")"
 assert_contains "failure-then-clean reports left the scheduler" "left the scheduler." "$(cat "${CAPTURE_DIR}/poll_out.txt")"
 
+setup_oom_scenario
+(
+  squeue() {
+    echo "call" >> "${CAPTURE_DIR}/squeue_calls.txt"
+    return 1
+  }
+  benchmark_wait_array_terminal 33333 poll-test
+) > "${CAPTURE_DIR}/poll_out.txt" 2>&1
+assert_eq "repeated squeue failures fail closed" "1" "$?"
+assert_eq "repeated squeue failures stop after three calls" "3" "$(wc -l < "${CAPTURE_DIR}/squeue_calls.txt" | tr -d ' ')"
+assert_contains "repeated squeue failures report an error" "squeue and sacct could not report terminal state" "$(cat "${CAPTURE_DIR}/poll_out.txt")"
+
+setup_oom_scenario
+SACCT_ROWS="33333:COMPLETED"
+(
+  squeue() {
+    echo "call" >> "${CAPTURE_DIR}/squeue_calls.txt"
+    return 1
+  }
+  benchmark_wait_array_terminal 33333 poll-test
+) > "${CAPTURE_DIR}/poll_out.txt" 2>&1
+assert_eq "terminal sacct fallback exits 0" "0" "$?"
+assert_eq "terminal sacct fallback starts after three failures" "3" "$(wc -l < "${CAPTURE_DIR}/squeue_calls.txt" | tr -d ' ')"
+assert_contains "terminal sacct fallback reports success" "sacct reports terminal state" "$(cat "${CAPTURE_DIR}/poll_out.txt")"
+
 echo "=== benchmark_wait_oom_retry: OK path with status file (OOM -> retry -> COMPLETED) ==="
 setup_oom_scenario
 make_manifest
@@ -340,6 +367,8 @@ STATUS_CONTENT="$(cat "${STATUS_FILE}")"
 assert_contains "status STATE=OK" "STATE=OK" "${STATUS_CONTENT}"
 assert_contains "status has JOB_REPORT for original id" "JOB_REPORT=scitd|11111|" "${STATUS_CONTENT}"
 assert_contains "status has JOB_REPORT incl. FINAL retry id" "JOB_REPORT=scitd|22222|" "${STATUS_CONTENT}"
+assert_contains "status has original scheduler id" "SCHEDULER_ID=11111" "${STATUS_CONTENT}"
+assert_contains "status has retry scheduler id" "SCHEDULER_ID=22222" "${STATUS_CONTENT}"
 assert_eq "no notify_sync_status in status-file mode" "0" "$(notify_count)"
 assert_eq "retry manifest reduced" "Wu" "$(cat "$(grep '^MANIFEST=' "${CAPTURE_DIR}/resubmit_capture.txt" | cut -d= -f2-)")"
 
