@@ -1,7 +1,8 @@
-# Dataset onboarding — PILOT-GM-VAE study (Phase 5)
+# Dataset onboarding — uncorrected batch-effect evidence gate
 
-The nine Joodaki et al. 2025 cohorts are registered from full-file metadata
-audits. The authoritative sources are:
+The nine Joodaki et al. 2025 cohorts plus Joanito, Stephenson, and the
+derived CombinedPBMC cohort are registered from full-file metadata audits.
+The authoritative sources are:
 
 - `datasets.json` for inputs, subsets, views, output names, and activation flags;
 - `notebooks/dataset_onboarding/dataset_specs.py` for user-confirmed roles,
@@ -25,6 +26,9 @@ inputs.
 | Lupus_PBMC | `sampleID` | `Status` | `layer1` | `layer2` | HiTME / HiTME |
 | Myocardial_infarction | `orig_ident` | `patient_group` | `cell_type` | `cell_subtype` | author / author |
 | Parkinson | `donor_id` | `disease` | `cell_type` | Leiden res-5 | author / Leiden |
+| Joanito | `sample.ID` | `sample.origin` | `cell.type` | `cell.type_new` | author / derived |
+| Stephenson | `Sample` | `Status` | `initial_clustering` | `full_clustering` | author / author |
+| CombinedPBMC | `Sample` | `cond` | `layer1` | `layer2` | HiTME / HiTME |
 
 The previous heuristic choice, stable-field conflicts, and aggregation warnings
 remain in each audit. They explain the decision; they do not silently replace
@@ -87,47 +91,68 @@ The primary biological label is `disease`, with observed values including
 
 ## Two-pass registry views
 
-Every new cohort, Joanito, and Stephenson exposes exactly:
+Every selected dataset declares `views.batch_effect_uncorrected` and
+`views.batch_effect_corrected`. The logical view key is never
+`batch_effect_analysis`. Existing non-Combined output basenames retain their
+historical `batch_effect_analysis_uncorrected` filename component; this is only
+a filename component, not an accepted view.
 
-- `views.batch_effect_uncorrected`;
-- `views.batch_effect_corrected`.
-
-Both views use the same input and subset and distinct output names:
+CombinedPBMC is the explicit basename migration:
 
 ```text
-<stem>_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad
-<stem>_batch_effect_analysis_corrected_ECODAprocessed.h5ad
+raw:       CombinedPBMC/data/combined_pbmc.h5ad
+uncorrected: combined_pbmc_batch_effect_uncorrected_ECODAprocessed.h5ad
+corrected:   combined_pbmc_batch_effect_corrected_ECODAprocessed.h5ad
 ```
 
-All nine new cohorts use `use_for_benchmark: false`,
-`use_for_batch_effect: true`, and `columns.batch: null`. The uncorrected view
-is runnable and always uses `batch_key=Sample`. The corrected view fails closed
-until a confirmed technical column is written. Joanito (`seqtec`) and
-Stephenson (`Site`) are already confirmed. Parkinson's high tier is
-view-specific: raw res-5 in the uncorrected view and Harmony-qualified res-5
-in the corrected view. Python and R loaders merge optional view-level column
-overrides over the dataset-level columns.
+Its low/high roles are `layer1`/`layer2`. Joanito's roles are
+`cell.type`/`cell.type_new`; the latter is derived from `cell.type` and `iCMS`.
+The batch-effect analysis consumes only each registry entry's high-resolution
+role. Stephenson's batch subset is its full declared batch-effect view; its
+only candidate is `Site`.
 
-No active batch-effect artifact, key, manifest, cache, log, or result variable
-uses a benchmark-named identifier.
+The Stage 3 and Stage 4 canonical dispatchers consume one immutable,
+headerless two-column selection file. Its adjacent `MD5/SIZE/PATH` sidecar is
+part of the contract. Exact mode validates these twelve rows in order and
+rejects legacy or corrected views before any array submission:
+
+```bash
+./src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh \
+  --selection-file "$BATCH_UNCORRECTED_SELECTION" \
+  --exact-batch-selection --force
+```
+
+The Stage 3 dispatcher supports two non-submitting recovery forms:
+`--sync-only RUN_ID` revalidates the run-owned manifests, scheduler records,
+watchdog state, h5ads, and checksums before completing an interrupted tail;
+numeric/CSV `--sync-only` IDs require the original `--datasets` and
+`--view/--views` selection and never infer a broader scope.
+
+The uncorrected view always uses `batch_key=Sample`; corrected execution
+remains gated on a confirmed technical column. All nine new cohorts retain
+`columns.batch: null`; Joanito (`seqtec`) and Stephenson (`Site`) remain the
+existing confirmed values. The Stage 4 exact run records three a-priori
+`SKIP_NOT_SUITABLE` rows (`Alzheimer`, `Diabetes`, `Parkinson`) and runs nine
+runnable datasets.
 
 ## Durable stage execution
 
-The uncorrected onboarding preprocessing stage is one parallel array over the
-nine new cohorts plus Joanito and Stephenson. Launch
-`src/3_scrnaseq_preprocessing/1_submit_batch_effect_stage.sh` through the
-checked-in `durable-hpc-gate-ecoda` profile; it submits the worker array and a
-compute-node watchdog. The login-side wrapper blocks with scheduler-native
-wait, while the watchdog retries only `OUT_OF_MEMORY` rows with doubled memory
-up to its configured ceiling and validates every pass-qualified h5ad. After
-that terminal validation, the wrapper synchronizes completed output to the
-canonical NAS root.
+Stage 2 derives the Myocardial counts, Joanito metadata/debug artifact, and
+CombinedPBMC raw input. The latter accepts the old raw basename only through a
+checksum/content-validated one-time rename to `combined_pbmc.h5ad`.
 
-Use one durable gate per pipeline stage. Arm one unbounded durable `wait`, run
-one terminal `inspect` with the array, every watchdog retry array, and watchdog
-IDs emitted in the wrapper log, then obtain Luna Max reviewer approval before
-starting annotation. Do not poll `squeue` or `sacct` from the agent session or
-launch the next stage before the reviewed gate is terminal.
+Stage 3 is the canonical
+`src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh` array. Stage 4 is
+`src/4_cell_type_annotation/1_submit_onboarding_stage.sh`; it records the
+three explicit unsuitable-cohort skips and runs all nine eligible datasets in
+parallel. Both stages use OOM-only watchdog retries and fail closed on stale
+checksums, malformed manifests, or invalid content.
+
+Launch each full-cohort stage only through the checked-in
+`durable-hpc-gate-ecoda` profile. Arm one unbounded durable `wait`, run one
+terminal `inspect` with every emitted array/retry/watchdog ID, and obtain Luna
+Max reviewer approval before starting the dependent stage. Do not poll
+`squeue` or `sacct` from the agent session.
 
 ## Pass-specific preprocessing
 
@@ -147,41 +172,50 @@ leiden_res_<r>_batch_effect_corrected_hvg2000_harmony
 The fixed suite uses resolutions `0.1, 0.4, 2, 5, 20, 50`; reported ECODA
 uses res-2, except Parkinson's configured res-5 tier.
 
+Stage 5 matrix selection rows are `DATASET<TAB>VIEW<TAB>SCOPE`; in batch
+mode both `VIEW` and `SCOPE` must equal the selected
+`batch_effect_<pass>` view. The third field is pass scope, not a method;
+methods come only from the fixed `--methods` list below.
+
 ## Fixed batch method suite
 
-Configured high-resolution methods are:
+The fixed Stage 5 pass list is:
 
-`ECODA_authors_HR`, applicable `ECODA_HiTME_HR_layer2`, applicable
-`ECODA_scATOMIC_HR`, `ECODA_seuratres_2`, `ECODA_authors_HR_NULL`,
-Pseudobulk, GloScope, PILOT, PILOT-GM-VAE, MrVI, and QOT.
+`prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,pilotgm,qot`.
 
-Avg_PCA, MOFA, scITD, scPoli, GloProp, cell-frequency-only baselines,
+It consumes only the configured high-resolution role for author ECODA
+composition. `layer2` and `scATOMIC_pred` remain separate standardized
+annotation-derived features. For the three a-priori exclusions,
+`ECODA_HiTME_HR_layer2` and `ECODA_scATOMIC_HR` are recorded as unavailable
+with reason `not_suitable_for_auto_annotation`; all other applicable outputs
+remain required.
+
+`Avg_PCA`, MOFA, scITD, scPoli, GloProp, cell-frequency-only baselines,
 LR ECODA, top-variable-cell-type variants, zero-imputation screens, and
 parameter screens are excluded. ECODA defaults are exactly
 `clr_zero_impute_method="counts_all"` and `clr_zero_impute_num=0.5`: add 0.5
 to every count before CLR. The shuffled baseline shares features and uses
 deterministic label shuffling; labels remain evaluation-only.
 
-Corrected ECODA uses batch-only LMM correction and exact row-zero-sum
-recentring. Corrected pseudobulk uses `blind=FALSE`, the confirmed batch,
-`correct_batch=TRUE`, and `~ 1`. GloScope/PILOT/PILOT-GM-VAE/QOT use Harmony
-PCA; MrVI receives only the confirmed technical `batch_key`.
+Corrected execution is deferred until the evidence decision. It uses batch-only
+LMM correction and corrected pseudobulk/Harmony/MrVI settings only after
+technical columns are explicitly confirmed.
 
 ## Evidence checkpoint
 
 The uncorrected method bundles feed
-`notebooks/dataset_onboarding/build_batch_candidate_evidence.R`, which emits
-one CSV per cohort and `batch_candidate_review.csv` with completeness,
-levels/samples per level, NMI with biology, marginal/joint PERMANOVA
-$R^2$/Holm-adjusted p-values, and constant/sample-unique/perfect-confounding
-warnings. It uses 999 deterministic permutations and strict sample-order
-checks.
+`notebooks/dataset_onboarding/submit_batch_candidate_evidence.sh`, which runs
+the strict twelve-row evidence builder and synchronizes only validated outputs:
+one CSV per cohort, `batch_candidate_review.csv`, their MD5 sidecars, and the
+checksum manifest. The builder records candidate completeness, levels/samples
+per level, NMI with biology, marginal/joint PERMANOVA $R^2$/Holm-adjusted
+p-values, explicit method availability/reasons, and
+constant/sample-unique/perfect-confounding warnings. It uses 999 permutations
+and strict sample-order checks.
 
 At this checkpoint all nine new `columns.batch` values remain `null`. Stop for
 one explicit user-confirmed technical column per cohort. Only then run the
-corrected pass, verify paired identities, pass-specific checksums/NAS sync,
-exact keys, zero-sum CLR rows, batch-only pseudobulk settings, and native MrVI
-batch arguments.
+corrected pass.
 
 Render local reports with:
 

@@ -1,8 +1,8 @@
-"""Authoritative metadata roles for the nine onboarding cohorts.
+"""Authoritative metadata roles for onboarding and batch-effect evidence.
 
-The registry is deliberately not inferred from column-name heuristics. Candidate
-roles come from the full-file metadata audits; declared roles are user-confirmed
-and the audits retain heuristic rankings as evidence only.
+The registry audit contract remains the nine full-file onboarding cohorts.
+The separate BATCH_EFFECT_* contract below fixes the ordered twelve-cohort
+uncorrected evidence scope and its candidate technical columns.
 """
 
 from __future__ import annotations
@@ -327,12 +327,61 @@ DATASET_SPECS: dict[str, dict] = {
 DATASET_SPECS["Lung"]["expected_source"]["source_match_required"] = True
 
 
+# Exact batch-effect onboarding scope. This remains separate from the
+# nine-cohort full-file DATASET_SPECS audit contract above.
+BATCH_EFFECT_DATASET_ORDER = (
+    "Alzheimer",
+    "Breast_cancer",
+    "Covid19_PBMC",
+    "Kidney_KPMP",
+    "Myocardial_infarction",
+    "Diabetes",
+    "Lupus_PBMC",
+    "Lung",
+    "Parkinson",
+    "Joanito",
+    "Stephenson",
+    "CombinedPBMC",
+)
+BATCH_EFFECT_SPECS = {
+    "Alzheimer": ["assay", "tissue_type", "PMI"],
+    "Breast_cancer": [
+        "assay",
+        "sequencing_platform",
+        "sample_preservation_method",
+        "suspension_dissociation_time",
+        "suspension_dissociation_reagent",
+    ],
+    "Covid19_PBMC": [
+        "Single cell sequencing platform",
+        "City",
+        "datasets",
+        "Sample type",
+    ],
+    "Kidney_KPMP": [
+        "experiment",
+        "library",
+        "tissue_type",
+        "region.l1",
+        "region.l2",
+        "assay",
+    ],
+    "Myocardial_infarction": ["batch", "sampleType", "dissociation_s1"],
+    "Diabetes": ["batch_integration", "dataset", "design", "assay"],
+    "Lupus_PBMC": ["batch_cov", "Processing_Cohort", "ind_cov_batch_cov"],
+    "Lung": ["dataset", "study", "platform", "assay", "origin_fine"],
+    "Parkinson": ["Brain_bank", "assay", "tissue_type", "PMI", "RIN"],
+    "Joanito": ["seqtec", "Site"],
+    "Stephenson": ["Site"],
+    "CombinedPBMC": ["batch"],
+}
+
 DEBUG_SPEC = {
     "key": "_debug",
-    "file_name": "JoaI_2022_35773407_debug_5samples_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+    "file_name": "JoaI_2022_35773407_debug_5samples_batch_effect_uncorrected_ECODAprocessed.h5ad",
     "expected_source": {
-        "cells": 6000,
-        "independent_units": 12,
+        "cells": 2500,
+        "independent_units": 5,
         "unit_kind": "sample",
         "display_name": "Debug (Joanito 5-sample subset)",
         "tissue": "Colon",
@@ -384,3 +433,21 @@ for _name, _spec in DATASET_SPECS.items():
     for role in ("sample", "label", "cell_type_low_res", "cell_type_high_res"):
         if not isinstance(_spec["registry_roles"][role], str) or not _spec["registry_roles"][role]:
             raise RuntimeError(f"{_name}: registry role {role} must be a non-empty column name")
+
+if set(BATCH_EFFECT_DATASET_ORDER) != set(BATCH_EFFECT_SPECS):
+    raise RuntimeError(
+        "BATCH_EFFECT_SPECS keys must exactly match the twelve-cohort order"
+    )
+if len(BATCH_EFFECT_DATASET_ORDER) != 12 or len(set(BATCH_EFFECT_DATASET_ORDER)) != 12:
+    raise RuntimeError("BATCH_EFFECT_DATASET_ORDER must contain twelve unique datasets")
+for _name in BATCH_EFFECT_DATASET_ORDER:
+    _candidates = BATCH_EFFECT_SPECS[_name]
+    if not isinstance(_candidates, list) or not _candidates:
+        raise RuntimeError(f"{_name}: batch-effect candidates must be non-empty")
+    if any(not isinstance(_candidate, str) or not _candidate for _candidate in _candidates):
+        raise RuntimeError(f"{_name}: batch-effect candidates must be non-empty strings")
+for _name in _DATASET_KEYS:
+    if BATCH_EFFECT_SPECS[_name] != DATASET_SPECS[_name]["batch_cols"]:
+        raise RuntimeError(
+            f"{_name}: batch-effect candidates diverge from DATASET_SPECS"
+        )

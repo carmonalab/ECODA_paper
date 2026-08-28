@@ -5,7 +5,7 @@ panels, cell-level LISI separation) against the Joanito 5-sample `_debug`
 batch-effect view on the NAS:
 
   /Volumes/Shared/Projects/ECODA_paper/_debug/output/
-    JoaI_2022_35773407_debug_5samples_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad
+    JoaI_2022_35773407_debug_5samples_batch_effect_uncorrected_ECODAprocessed.h5ad
 
 Known ground truth: bio label `sample.origin` (LymphNode/Normal/Tumor), batch
 candidates `seqtec` (constant -> single-label) and `Site` (partially
@@ -459,7 +459,7 @@ def run_registry_audit(
 
 H5AD = (
     "/Volumes/Shared/Projects/ECODA_paper/_debug/output/"
-    "JoaI_2022_35773407_debug_5samples_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad"
+    "JoaI_2022_35773407_debug_5samples_batch_effect_uncorrected_ECODAprocessed.h5ad"
 )
 OUT = ROOT / "data" / "new_dataset_checks" / "_debug"
 OUT.mkdir(parents=True, exist_ok=True)
@@ -468,7 +468,7 @@ CT_COL = "cell.type"
 BIO_COL = "sample.origin"
 BATCH_COLS = ["seqtec", "Site"]
 SAMPLE_COL = "Sample"
-EXPECTED = {"cells": 6000, "samples": 12, "ct_types": 10}
+EXPECTED = {"cells": 2500, "samples": 5, "ct_types": 10}
 
 
 def run(cmd: list, **kw):
@@ -529,6 +529,23 @@ def main() -> int:
     print("=== 1. File structure ===")
     print(adata)
     print("obsm:", list(adata.obsm.keys()))
+    assert int(adata.n_obs) == EXPECTED["cells"], (
+        f"expected {EXPECTED['cells']} cells, got {adata.n_obs}"
+    )
+    assert SAMPLE_COL in adata.obs.columns, f"missing {SAMPLE_COL} column"
+    sample_values = adata.obs[SAMPLE_COL].astype("string")
+    assert not sample_values.isna().any(), "Sample contains NA values"
+    assert not (sample_values.str.strip() == "").any(), "Sample contains blank values"
+    sample_counts = sample_values.value_counts(sort=False)
+    assert len(sample_counts) == EXPECTED["samples"], sample_counts.to_dict()
+    assert set(sample_counts.astype(int).tolist()) == {500}, sample_counts.to_dict()
+    assert "counts" in adata.layers, 'missing layers["counts"]'
+    required_obs = {"cell.type_new", "seqtec", "Site"}
+    missing_obs = sorted(required_obs - set(adata.obs.columns))
+    assert not missing_obs, f"missing required derived metadata: {missing_obs}"
+    pca_key = "X_pca_batch_effect_uncorrected_hvg2000"
+    assert pca_key in adata.obsm, f"missing {pca_key}"
+    print("OK: canonical _debug artifact shape, samples, counts, PCA, and metadata")
     print("layers:", dict(adata.layers))
 
     print("\n=== 2. Count sanity check ===")
