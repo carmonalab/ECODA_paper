@@ -79,4 +79,16 @@ ecoda_wait_array_accounting missing_job 1 0 >/dev/null 2>&1
 RC=$?
 set -e
 [[ ${RC} -ne 0 ]]
+sacct() {
+  ACCOUNTING_CALLS=$((ACCOUNTING_CALLS + 1))
+  if [[ ${ACCOUNTING_CALLS} -eq 1 ]]; then
+    printf 'active_job_1|PENDING|0:0\n'
+  else
+    printf 'active_job_1|COMPLETED|0:0\nactive_job_2|COMPLETED|0:0\n'
+  fi
+}
+squeue() { printf 'active_job_[1-2%%2]\n'; }
+ACCOUNTING_CALLS=0
+ecoda_wait_array_accounting active_job 2 0 >/dev/null
+[[ "${ECODA_ACCOUNTING_ROWS}" == *"active_job_2|COMPLETED|0:0"* ]]
 echo "common ownership/checksum: OK"

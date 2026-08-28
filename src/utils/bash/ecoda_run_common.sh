@@ -539,9 +539,11 @@ ecoda_wait_array_accounting() {
     scheduler_active=0
     if command -v squeue >/dev/null 2>&1; then
       active_jobs="$(squeue -j "${job}" -h -o "%A" 2>/dev/null || true)"
-      case " ${active_jobs} " in
-        *" ${job} "*) scheduler_active=1 ;;
-      esac
+      while IFS= read -r active_id; do
+        case "${active_id}" in
+          "${job}"|"${job}"_*) scheduler_active=1; break ;;
+        esac
+      done <<< "${active_jobs}"
     fi
     if [[ -z "${rows//[[:space:]]/}" ]]; then
       if [[ ${scheduler_active} -eq 1 ]]; then
