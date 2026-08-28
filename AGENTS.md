@@ -75,10 +75,12 @@ Operational concurrency is explicit rather than application-async: R uses `forea
 
 ```bash
 pixi install
-pixi run setup
 bash src/5_run_benchmark_methods/test_oom_retry.sh
 pixi run check-r-deps
 ```
+HPC-only pinned R source packages are installed through the guarded
+`src/utils/bash/setup_env_sbatch.sh` or `src/utils/bash/refresh_env.sh` entry
+points; do not run `pixi run setup` directly.
 
 Render analysis notebooks locally on macOS, never on HPC:
 

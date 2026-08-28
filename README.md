@@ -34,14 +34,15 @@ curl -fsSL https://pixi.sh/install.sh | bash
 
 - **Local macOS / Workstation (Lightweight analysis & figure generation):**
   ```bash
-  pixi install && pixi run setup
+  pixi install
   ```
-  *Note:* Only the interactive analysis notebooks (`notebooks/benchmark_analysis.rmd` and `notebooks/batch_effect_analysis.rmd`) are designed to run locally on precomputed results.
+  *Note:* Only the interactive analysis notebooks (`notebooks/benchmark_analysis.rmd` and `notebooks/batch_effect_analysis.rmd`) are designed to run locally on precomputed results. The HPC-only pinned R source packages are installed through the guarded HPC entry points below.
 
 - **HPC Cluster (SLURM worker build for full pipeline execution):**
   ```bash
   sbatch src/utils/bash/setup_env_sbatch.sh
   ```
+  For a guarded login-node refresh, source `src/slurm_config.sh` and run `src/utils/bash/refresh_env.sh` inside a persistent session. Do not run `pixi run setup` directly.
 
 ---
 

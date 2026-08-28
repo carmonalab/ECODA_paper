@@ -4,12 +4,12 @@
 # ============================================================
 # Run on the HPC LOGIN NODE only. Install on the login node is allowed, but
 # never while jobs are running:
-#   - conda (pixi install) and remotes (pixi run setup) both write into
+#   - conda (pixi install) and the guarded R setup script both write into
 #     .pixi/envs/py-cuda13/lib/R/library; a mutation racing with running array
 #     tasks corrupts the shared library (observed: digest/Meta/package.rds
 #     missing -> 'there is no package called digest'; mime lazyload DB missing).
 #   - `pixi install` does NOT verify installed package files, so a corrupt
-#     package dir survives re-installs; the setup task now runs an integrity
+#     package dir survives re-installs; setup_r_packages.R runs an integrity
 #     check and fails loudly with the wipe-and-reinstall repair.
 #   - an SSH drop can kill a running install mid-write -> run inside tmux.
 #
@@ -39,13 +39,12 @@ source "${SCRIPT_DIR}/env_mutation_lock.sh"
 acquire_env_lock
 ecoda_require_no_active_jobs
 
-# --- Failure diagnostics: printed only when pixi run setup fails ---------------
+# --- Failure diagnostics: printed only when guarded R setup fails -------------
 # Identical output contract as setup_env_sbatch.sh's run_env_diagnostics, so
-# login-node and worker-node failures are consistent. Single-quoted shell block
-# -> R uses DOUBLE quotes here (opposite constraint from the pixi.toml
-# [tasks.setup] TOML block).
+# login-node and worker-node failures are consistent. The direct configured
+# Rscript avoids the r-base activation hook's shared R/etc writes.
 run_env_diagnostics() {
-  "${PIXI_BIN}" run -e py-cuda13 Rscript --vanilla -e '
+  ${PIXI_RSCRIPT} -e '
     cat("R version:", R.version.string, "\n")
     cat("Library paths:\n")
     for (lib in .libPaths()) cat("  ", lib, "\n")
@@ -61,16 +60,17 @@ run_env_diagnostics() {
         }
       }
     }
-    cat("Hint: the only legitimate case is .../translations (R message catalogs, false positive -> update pixi.toml); anything else means the env is genuinely corrupt -> wipe-and-reinstall (rm -rf .pixi/envs/py-cuda13 && pixi install -e py-cuda13 && pixi run -e py-cuda13 setup).\n")
+    cat("Hint: the only legitimate case is .../translations (R message catalogs, false positive -> update pixi.toml); otherwise rerun the guarded environment setup after verifying no jobs are active.\n")
   ' || true
 }
 
 echo "=== [1/3] pixi install -e py-cuda13 (conda + pypi deps) ==="
 "${PIXI_BIN}" install --environment py-cuda13
 
-echo "=== [2/3] pixi run -e py-cuda13 setup (R source packages + integrity check) ==="
-if ! "${PIXI_BIN}" run -e py-cuda13 setup; then
-  echo "ERROR: pixi run setup failed — running env diagnostics..." >&2
+echo "=== [2/3] guarded R source package setup + integrity check ==="
+if ! ECODA_ENV_MUTATION_GUARD=1 ${PIXI_RSCRIPT} \
+    "${PROJECT_ROOT}/src/utils/setup_r_packages.R"; then
+  echo "ERROR: guarded R package setup failed — running env diagnostics..." >&2
   run_env_diagnostics
   exit 1
 fi
@@ -84,8 +84,7 @@ echo "=== [3/3] smoke check: notebook + worker import lists + env_check.R ==="
 # no longer attached by imports.R); a missing or broken package stops here
 # with the same error a worker would produce (set -euo pipefail turns it into
 # a FAILED refresh). Run from the project root (done above), so the relative
-# source paths resolve.
-"${PIXI_BIN}" run -e py-cuda13 Rscript --vanilla -e '
+${PIXI_RSCRIPT} -e '
   source("src/utils/imports.R")
   source("src/utils/imports_worker_core.R")
   source("src/utils/imports_worker_transzeroimp.R")

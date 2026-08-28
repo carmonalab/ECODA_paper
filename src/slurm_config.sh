@@ -56,7 +56,7 @@ module load GCCcore/12.2.0 >/dev/null 2>&1 || true
 module load jq/1.6 >/dev/null 2>&1 || true
 
 # --- R dynamic library resolution (rpy2 workers) ---
-# R package .so files built by `pixi run setup` resolve their dependencies
+# R package .so files built by `src/utils/setup_r_packages.R` resolve their dependencies
 # via LD_LIBRARY_PATH, which pixi's activation sets automatically but bare
 # ${PYTHON_BIN} execution (rpy2 workers, e.g. 1.1.1_preprocess.py) does not.
 # Without the env lib dir first, dyn.load() resolves against module (GCCcore)

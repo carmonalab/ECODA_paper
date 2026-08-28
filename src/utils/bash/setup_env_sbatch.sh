@@ -43,7 +43,7 @@ mkdir -p "${LOGS_DIR}"
 
 PIXI_BIN="${HOME}/.pixi/bin/pixi"
 
-# [tasks.setup] reads this for MAKEFLAGS=-jN (parallel R source compilation).
+# setup_r_packages.R reads this for MAKEFLAGS=-jN (parallel R source compilation).
 export R_SETUP_JOBS="${SLURM_CPUS_PER_TASK:-16}"
 
 # --- Lock guard: serialize env mutations (shared with refresh_env.sh) --------
@@ -77,13 +77,13 @@ check_toolchain() {
   return 1
 }
 
-# --- Failure diagnostics: printed only when pixi run setup fails ---------------
+# --- Failure diagnostics: printed only when guarded R setup fails -------------
 # Prints R version, .libPaths(), per-library DESCRIPTION-dir counts and every
 # dir missing Meta/package.rds (full path + Package: field), plus the
-# translations hint. NOTE: single-quoted shell block -> R uses DOUBLE quotes
-# here (opposite constraint from the pixi.toml [tasks.setup] TOML block).
+# translations hint. The direct configured Rscript avoids the r-base activation
+# hook's shared R/etc writes.
 run_env_diagnostics() {
-  "${PIXI_BIN}" run -e py-cuda13 Rscript --vanilla -e '
+  ${PIXI_RSCRIPT} -e '
     cat("R version:", R.version.string, "\n")
     cat("Library paths:\n")
     for (lib in .libPaths()) cat("  ", lib, "\n")
@@ -99,7 +99,7 @@ run_env_diagnostics() {
         }
       }
     }
-    cat("Hint: the only legitimate case is .../translations (R message catalogs, false positive -> update pixi.toml); anything else means the env is genuinely corrupt -> wipe-and-reinstall (rm -rf .pixi/envs/py-cuda13 && pixi install -e py-cuda13 && pixi run -e py-cuda13 setup).\n")
+    cat("Hint: the only legitimate case is .../translations (R message catalogs, false positive -> update pixi.toml); otherwise rerun the guarded environment setup after verifying no jobs are active.\n")
   ' || true
 }
 
@@ -117,9 +117,10 @@ echo "pixi install done: $(( $(date +%s) - start ))s elapsed."
 echo "=== [2/4] toolchain preflight (gcc/make for R source compilation) ==="
 check_toolchain
 
-echo "=== [3/4] pixi run -e py-cuda13 setup (R source packages, R_SETUP_JOBS=${R_SETUP_JOBS} parallel make) ==="
-if ! "${PIXI_BIN}" run -e py-cuda13 setup; then
-  echo "ERROR: pixi run setup failed — running env diagnostics..." >&2
+echo "=== [3/4] guarded R source package setup (R_SETUP_JOBS=${R_SETUP_JOBS} parallel make) ==="
+if ! ECODA_ENV_MUTATION_GUARD=1 ${PIXI_RSCRIPT} \
+    "${PROJECT_ROOT}/src/utils/setup_r_packages.R"; then
+  echo "ERROR: guarded R package setup failed — running env diagnostics..." >&2
   run_env_diagnostics
   exit 1
 fi
@@ -135,7 +136,7 @@ echo "=== [4/4] smoke check: notebook + worker import lists + env_check.R ==="
 # with the same error a worker would produce (set -euo pipefail turns it into
 # a FAILED build). Run from the project root (done above), so the relative
 # source paths resolve.
-"${PIXI_BIN}" run -e py-cuda13 Rscript --vanilla -e '
+${PIXI_RSCRIPT} -e '
   source("src/utils/imports.R")
   source("src/utils/imports_worker_core.R")
   source("src/utils/imports_worker_transzeroimp.R")

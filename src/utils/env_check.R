@@ -46,9 +46,9 @@ check_env_packages <- function(pkgs) {
     stop(
       "The following packages are missing from the pixi environment: \n",
       paste(missing_pkgs, collapse = ", "),
-      "\n\nTwo install paths (HPC py-cuda13 env):\n",
-      "  - conda-available packages: add 'r-<name>' to [dependencies] in pixi.toml, then run `pixi install`\n",
-      "  - GitHub/Bioc/CRAN-pinned packages (Seurat, anndataR, MOFA2, scITD, HiTME, ...): run `pixi run -e py-cuda13 setup`\n"
+      "\n\nFor the HPC py-cuda13 environment:\n",
+      "  - conda-available packages are changed by the guarded environment entry points, which run `pixi install` only after their lock and no-active-job checks\n",
+      "  - GitHub/Bioc/CRAN-pinned packages are installed by `src/utils/setup_r_packages.R` through `src/utils/bash/refresh_env.sh` or `setup_env_sbatch.sh`; do not run `pixi run setup` directly.\n"
     )
   }
 
