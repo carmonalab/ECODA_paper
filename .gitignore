@@ -74,6 +74,8 @@ notebooks/dataset_onboarding/*_files/
 /.quarto/
 **/*.quarto_ipynb
 
-# Durable gate state and local execution evidence (never source artifacts)
-/.gate/
-/.kilo/gates/
+# Durable gate state records; preserve audit/source scripts in these roots
+/.gate/**/*.json
+/.gate/**/*.json.lock
+/.kilo/gates/**/*.json
+/.kilo/gates/**/*.json.lock
