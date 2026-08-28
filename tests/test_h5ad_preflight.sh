@@ -26,6 +26,8 @@ run_worker() {
   H5AD_PREFLIGHT_MODE="${mode}" \
   H5AD_PREFLIGHT_PYTHON_BIN="${ROOT}/.pixi/envs/default/bin/python" \
   H5AD_PREFLIGHT_TASK_ID=1 \
+  SLURM_JOB_ID=999999 \
+  SLURM_SUBMIT_DIR="${ROOT}" \
   bash "${ROOT}/src/utils/bash/h5ad_preflight_worker.sh"
 }
 
