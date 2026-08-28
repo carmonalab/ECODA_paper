@@ -92,9 +92,8 @@ method_rds <- file.path(
   args$results_dir,
   paste0(method_rds_stem, "_", method, ".rds")
 )
-if (file.exists(method_rds) && !force) {
-  message("Method results already exist: ", method_rds,
-          " (use --force to recompute)")
+if (artifact_checksum_ok(method_rds) && !force) {
+  message("Method results already exist and passed checksum validation: ", method_rds)
   cached <- readRDS(method_rds)
   for (nm in names(cached)) {
     if (!is.null(cached[[nm]]$exec_time)) {
@@ -108,6 +107,12 @@ if (file.exists(method_rds) && !force) {
 ad <- import("anndata", convert = FALSE)
 adata <- ad$read_h5ad(h5ad_path, backed = "r")
 obs <- py_to_r(adata$obs)
+validate_benchmark_h5ad_contract(
+  adata,
+  obs = obs,
+  view = args$view,
+  method = method
+)
 
 sample_col <- "Sample"
 if (!sample_col %in% colnames(obs)) {
@@ -169,9 +174,7 @@ if (method == "mofa") {
   # (1.1.1_preprocess.py): no standardize_sample_names() re-application here
   # (it would diverge the labels from the obs names for h5ads that predate
   # the python change, e.g. Adams).
-  metadata <- obs %>%
-    dplyr::group_by(!!sym(sample_col)) %>%
-    dplyr::slice(1)
+  metadata <- collapse_sample_metadata(obs, sample_col = sample_col)
   labels <- as.factor(metadata[[entry$label_col]])
   names(labels) <- metadata[[sample_col]]
 } else if (method == "composition") {
@@ -186,9 +189,7 @@ if (method == "mofa") {
   # Map the new-pipeline Leiden resolution columns to the legacy
   # RNA_snn_res.* names used by the ECODA_seuratres_* combos.
   obs <- rename_leiden_cols(obs, view = args$view)
-  metadata <- obs %>%
-    dplyr::group_by(!!sym(sample_col)) %>%
-    dplyr::slice(1)
+  metadata <- collapse_sample_metadata(obs, sample_col = sample_col)
   labels <- as.factor(metadata[[entry$label_col]])
   names(labels) <- metadata[[sample_col]]
   obsm_keys <- py_to_r(import_builtins(convert = FALSE)$list(

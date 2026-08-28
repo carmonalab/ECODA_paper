@@ -91,15 +91,107 @@ make_hvg_sets <- function(hvg_rank_genes, sizes = c(1000, 2000, 3000)) {
 pb_variants_missing <- function(pseudobulk_dir, ds, force = FALSE,
                                 cache_stem = ds) {
   if (force) return(PB_VARIANT_NAMES)
-  PB_VARIANT_NAMES[!file.exists(
-    file.path(pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", PB_VARIANT_NAMES, ".rds"))
-  )]
+  paths <- file.path(
+    pseudobulk_dir,
+    paste0(cache_stem, "_pseudobulk_", PB_VARIANT_NAMES, ".rds")
+  )
+  PB_VARIANT_NAMES[!vapply(paths, artifact_checksum_ok, logical(1))]
 }
 
-# Build the full Seurat object (raw counts from layers["counts"], X fallback
-# with warning) with the benchmark obsm PCA embeddings attached as reductions
-# named pca_benchmark_analysis_hvg{n} (via get_seurat_obj_from_h5ad). All
-# samples of the dataset are included; obs is read once by the caller.
+# Validate the on-disk AnnData contract before any benchmark worker builds a
+# Seurat object or consumes a precomputed pseudobulk. This deliberately checks
+# content, not only file existence: a metadata/PCA-only h5ad can otherwise
+# pass the scheduler gate and fail later as a misleading zero result.
+validate_benchmark_h5ad_contract <- function(
+  adata,
+  obs = NULL,
+  view = "benchmark_analysis",
+  method = NULL
+) {
+  required_obsm <- switch(
+    view,
+    benchmark_analysis = c(
+      "X_pca_benchmark_analysis_hvg1000",
+      "X_pca_benchmark_analysis_hvg2000",
+      "X_pca_benchmark_analysis_hvg3000",
+      "X_pca_harmony_benchmark_analysis_hvg2000"
+    ),
+    batch_effect_uncorrected = "X_pca_batch_effect_uncorrected_hvg2000",
+    batch_effect_corrected = c(
+      "X_pca_batch_effect_corrected_hvg2000",
+      "X_pca_harmony_batch_effect_corrected_hvg2000"
+    ),
+    stop("Unknown preprocessing view for h5ad contract: ", view)
+  )
+  required_hvg <- if (identical(view, "benchmark_analysis")) 3000 else 2000
+
+  layer_keys <- py_to_r(import_builtins(convert = FALSE)$list(
+    adata$layers$keys()
+  ))
+  missing <- character()
+  if (!"counts" %in% layer_keys) {
+    missing <- c(missing, "layers['counts']")
+  }
+
+  x_present <- tryCatch(
+    !is.null(adata$X),
+    error = function(e) FALSE
+  )
+  if (!x_present) {
+    missing <- c(missing, "X")
+  }
+  dimensions <- tryCatch(
+    as.integer(py_to_r(adata$shape)),
+    error = function(e) integer()
+  )
+  if (length(dimensions) < 2L || any(dimensions[seq_len(2L)] <= 0L)) {
+    missing <- c(missing, "non-empty obs/var")
+  }
+
+  obsm_keys <- py_to_r(import_builtins(convert = FALSE)$list(
+    adata$obsm$keys()
+  ))
+  missing_obsm <- setdiff(required_obsm, obsm_keys)
+  if (length(missing_obsm) > 0) {
+    missing <- c(missing, paste0("obsm['", missing_obsm, "']"))
+  }
+
+  var_df <- py_to_r(adata$var)
+  if (!"hvg_rank" %in% colnames(var_df)) {
+    missing <- c(missing, "var['hvg_rank']")
+  } else if (sum(!is.na(var_df[["hvg_rank"]])) < required_hvg) {
+    missing <- c(
+      missing,
+      paste0(
+        "var['hvg_rank'] with at least ", required_hvg,
+        " non-NA ranks"
+      )
+    )
+  }
+
+  if (is.null(obs)) {
+    obs <- py_to_r(adata$obs)
+  }
+  if (!"Sample" %in% colnames(obs)) {
+    missing <- c(missing, "obs['Sample']")
+  }
+
+  if (length(missing) > 0) {
+    method_suffix <- if (is.null(method)) "" else paste0(" for method ", method)
+    stop(
+      "h5ad content contract failed", method_suffix, " (view ", view,
+      "): missing or invalid ", paste(missing, collapse = ", "),
+      ". Re-run src/3_scrnaseq_preprocessing/1.1.1_preprocess.py with ",
+      "--force and use the authoritative processed h5ad."
+    )
+  }
+  invisible(TRUE)
+}
+
+# Build the full Seurat object from the validated raw counts layer with the
+# benchmark obsm PCA embeddings attached as reductions named
+# pca_benchmark_analysis_hvg{n} (via get_seurat_obj_from_h5ad). All samples of
+# the dataset are included; obs is read once by the caller.
 load_benchmark_seurat <- function(
   adata,
   obs,
@@ -114,15 +206,16 @@ load_benchmark_seurat <- function(
   layer_keys <- py_to_r(import_builtins(convert = FALSE)$list(
     adata$layers$keys()
   ))
-  counts_layer_use <- if ("counts" %in% layer_keys) "counts" else "X"
-  if (counts_layer_use == "X") {
-    warning("Layer 'counts' not found in the h5ad; using log-normalized X ",
-            "as counts input.")
+  if (!"counts" %in% layer_keys) {
+    stop(
+      "load_benchmark_seurat: validated h5ad is missing layers['counts']; ",
+      "refusing to use log-normalized X as DESeq2 counts."
+    )
   }
   seurat <- get_seurat_obj_from_h5ad(
     adata, obs, all_samples,
     sample_colname = sample_col,
-    counts_layer = counts_layer_use,
+    counts_layer = "counts",
     fetch_embedding = fetch_embedding
   )
   return(seurat)
@@ -155,13 +248,12 @@ load_pb_variants <- function(
     stop("Unknown pseudobulk variant requested: ",
          paste(setdiff(target_variants, PB_VARIANT_NAMES), collapse = ", "))
   }
+  cache_paths <- file.path(
+    pseudobulk_dir,
+    paste0(cache_stem, "_pseudobulk_", target_variants, ".rds")
+  )
   missing <- target_variants[
-    force | !file.exists(
-      file.path(
-        pseudobulk_dir,
-        paste0(cache_stem, "_pseudobulk_", target_variants, ".rds")
-      )
-    )
+    force | !vapply(cache_paths, artifact_checksum_ok, logical(1))
   ]
   loaded <- target_variants[!target_variants %in% missing]
   variants_out <- list()
@@ -231,13 +323,80 @@ load_composition_pb_variants <- function(
 }
 
 
-# Atomic RDS write (tmp + rename) so a crashed worker never leaves a
-# half-written cache file behind.
+# Atomic RDS write plus a sidecar used by idempotency checks.
 save_rds_atomic <- function(object, file) {
+  validate_rds_object <- function(value) {
+    if (is.null(value) || (is.list(value) && length(value) == 0L)) {
+      stop("RDS artifact is empty: ", file)
+    }
+    dimensions <- dim(value)
+    if (length(dimensions) > 0L && any(dimensions <= 0L)) {
+      stop("RDS artifact has empty dimensions: ", file)
+    }
+  }
+  validate_rds_object(object)
   dir.create(dirname(file), showWarnings = FALSE, recursive = TRUE)
   tmp <- paste0(file, ".tmp.", Sys.getpid())
-  saveRDS(object, tmp)
-  file.rename(tmp, file)
+  checksum_tmp <- paste0(file, ".md5.tmp.", Sys.getpid())
+  sidecar <- paste0(file, ".md5")
+  backup <- paste0(file, ".previous.", Sys.getpid())
+  sidecar_backup <- paste0(sidecar, ".previous.", Sys.getpid())
+  had_file <- file.exists(file)
+  had_sidecar <- file.exists(sidecar)
+  installed <- FALSE
+  sidecar_installed <- FALSE
+  restore <- function() {
+    if (installed && file.exists(file)) unlink(file)
+    if (had_file && file.exists(backup)) file.rename(backup, file)
+    if (sidecar_installed && file.exists(sidecar)) unlink(sidecar)
+    if (had_sidecar && file.exists(sidecar_backup)) file.rename(sidecar_backup, sidecar)
+    if (!had_file && file.exists(file)) unlink(file)
+    if (!had_sidecar && file.exists(sidecar)) unlink(sidecar)
+  }
+  on.exit({
+    for (temporary in c(tmp, checksum_tmp, backup, sidecar_backup)) {
+      if (file.exists(temporary)) unlink(temporary)
+    }
+  }, add = TRUE)
+  tryCatch({
+    saveRDS(object, tmp)
+    if (!file.exists(tmp) || file.info(tmp)$size <= 0) {
+      stop("Empty RDS temporary file: ", tmp)
+    }
+    if (had_file && !isTRUE(file.link(file, backup))) {
+      stop("Could not preserve existing RDS artifact: ", file)
+    }
+    if (had_sidecar && !isTRUE(file.link(sidecar, sidecar_backup))) {
+      stop("Could not preserve existing RDS checksum: ", file)
+    }
+    if (!file.rename(tmp, file)) stop("Could not atomically install RDS: ", file)
+    installed <- TRUE
+    writeLines(c(
+      paste0("MD5=", unname(tools::md5sum(file))),
+      paste0("SIZE=", file.info(file)$size),
+      paste0("PATH=", file)
+    ), checksum_tmp)
+    if (!file.rename(checksum_tmp, sidecar)) {
+      stop("Could not atomically install RDS checksum: ", file)
+    }
+    sidecar_installed <- TRUE
+  }, error = function(error) {
+    restore()
+    stop(error)
+  })
+  invisible(NULL)
+}
+
+artifact_checksum_ok <- function(file) {
+  sidecar <- paste0(file, ".md5")
+  if (!file.exists(file) || file.info(file)$size <= 0 || !file.exists(sidecar)) return(FALSE)
+  lines <- readLines(sidecar, warn = FALSE)
+  md5 <- sub("^MD5=", "", lines[grepl("^MD5=", lines)][1])
+  size <- sub("^SIZE=", "", lines[grepl("^SIZE=", lines)][1])
+  recorded <- sub("^PATH=", "", lines[grepl("^PATH=", lines)][1])
+  identical(recorded, file) &&
+    identical(md5, unname(tools::md5sum(file))) &&
+    identical(size, as.character(file.info(file)$size))
 }
 
 # Peak resident set size of the current R process in GB, mirroring the
@@ -260,16 +419,75 @@ peak_rss_gb <- function() {
   return(kb / 1024^2)
 }
 
-# Append/overwrite one (dataset, method) row in the per-task exec log feather
-# (schema: dataset, method, time_secs, mem_GB with mem_GB = NA_real_ for
-# rows measured off-Linux or without a peak measurement — NA_real_ so arrow
-# writes a nullable double column matching the Python writer's float64,
-# keeping the merged feather's dtype stable). R workers log their peak RSS
-# (peak_rss_gb(), VmHWM) since 2026-08-16, so R rows no longer default to NA.
-# Read-modify-write on the feather (single process per task); overwrites the
-# row if the (dataset, method) combo already exists — mirrors
-# log_execution_time() in 1.1.1_benchmark_methods_py.py. The merge script
-# (1.1.2_merge_execution_times.py) concatenates the per-task logs.
+# Append/overwrite one (dataset, method) row in the per-task exec log feather.
+# The write and its checksum are installed atomically so concurrent reruns
+# cannot leave a partial file that a later worker treats as complete.
+write_feather_atomic <- function(df, path) {
+  if (nrow(df) <= 0L ||
+      !all(c("dataset", "method", "time_secs", "mem_GB") %in% names(df))) {
+    stop("Execution log has an empty or incomplete schema: ", path)
+  }
+  if (anyNA(df[["dataset"]]) || anyNA(df[["method"]])) {
+    stop("Execution log has NA identifiers: ", path)
+  }
+  identifiers <- paste(df[["dataset"]], df[["method"]], sep = "\r")
+  if (anyDuplicated(identifiers)) {
+    stop("Execution log has duplicate identifiers: ", path)
+  }
+  dir.create(dirname(path), showWarnings = FALSE, recursive = TRUE)
+  tmp <- file.path(dirname(path), paste0(".", basename(path), ".tmp.", Sys.getpid()))
+  checksum_tmp <- paste0(path, ".md5.tmp.", Sys.getpid())
+  sidecar <- paste0(path, ".md5")
+  backup <- paste0(path, ".previous.", Sys.getpid())
+  sidecar_backup <- paste0(sidecar, ".previous.", Sys.getpid())
+  had_file <- file.exists(path)
+  had_sidecar <- file.exists(sidecar)
+  installed <- FALSE
+  sidecar_installed <- FALSE
+  restore <- function() {
+    if (installed && file.exists(path)) unlink(path)
+    if (had_file && file.exists(backup)) file.rename(backup, path)
+    if (sidecar_installed && file.exists(sidecar)) unlink(sidecar)
+    if (had_sidecar && file.exists(sidecar_backup)) file.rename(sidecar_backup, sidecar)
+    if (!had_file && file.exists(path)) unlink(path)
+    if (!had_sidecar && file.exists(sidecar)) unlink(sidecar)
+  }
+  on.exit({
+    for (temporary in c(tmp, checksum_tmp, backup, sidecar_backup)) {
+      if (file.exists(temporary)) unlink(temporary)
+    }
+  }, add = TRUE)
+  tryCatch({
+    arrow::write_feather(df, tmp)
+    if (!file.exists(tmp) || file.info(tmp)$size <= 0) {
+      stop("Atomic Feather write produced an empty file: ", tmp)
+    }
+    if (had_file && !isTRUE(file.link(path, backup))) {
+      stop("Could not preserve existing Feather artifact: ", path)
+    }
+    if (had_sidecar && !isTRUE(file.link(sidecar, sidecar_backup))) {
+      stop("Could not preserve existing Feather checksum: ", path)
+    }
+    if (!file.rename(tmp, path)) stop("Could not atomically install Feather: ", path)
+    installed <- TRUE
+    digest <- unname(tools::md5sum(path))
+    writeLines(c(
+      paste0("MD5=", digest),
+      paste0("SIZE=", file.info(path)$size),
+      paste0("PATH=", path)
+    ), checksum_tmp)
+    if (!file.rename(checksum_tmp, sidecar)) {
+      stop("Could not atomically install Feather checksum: ", path)
+    }
+    sidecar_installed <- TRUE
+  }, error = function(error) {
+    restore()
+    stop(error)
+  })
+  invisible(NULL)
+}
+
+# Append/overwrite one (dataset, method) row in the per-task exec log feather.
 log_exec_row <- function(dataset, method, time_secs, log_file,
                          mem_gb = NA_real_) {
   if (is.null(log_file) || is.na(log_file) || log_file == "") {
@@ -283,7 +501,7 @@ log_exec_row <- function(dataset, method, time_secs, log_file,
     mem_GB = mem_gb,
     stringsAsFactors = FALSE
   )
-  if (file.exists(log_file)) {
+  if (file.exists(log_file) && file.info(log_file)$size > 0) {
     df_existing <- arrow::read_feather(log_file)
     df_existing <- df_existing[
       !(df_existing[["dataset"]] == dataset &
@@ -295,7 +513,7 @@ log_exec_row <- function(dataset, method, time_secs, log_file,
   } else {
     df_final <- new_row
   }
-  arrow::write_feather(df_final, log_file)
+  write_feather_atomic(df_final, log_file)
   return(invisible(NULL))
 }
 
@@ -337,9 +555,8 @@ run_ct_comps_analysis_worker <- function(
   dir.create(args$output_dir, showWarnings = FALSE, recursive = TRUE)
 
   out_file <- file.path(args$output_dir, paste0(ds, out_suffix, ".rds"))
-  if (file.exists(out_file) && !force) {
-    message(analysis_label, " results already exist: ", out_file,
-            " (use --force to recompute)")
+  if (artifact_checksum_ok(out_file) && !force) {
+    message(analysis_label, " results already exist and passed checksum validation: ", out_file)
     quit(save = "no", status = 0)
   }
 
@@ -373,9 +590,7 @@ run_ct_comps_analysis_worker <- function(
 
   # Labels: per-sample slice(1) of label_col, names = Sample
   # (get_labels-equivalent)
-  metadata <- obs %>%
-    dplyr::group_by(!!sym(sample_col)) %>%
-    dplyr::slice(1)
+  metadata <- collapse_sample_metadata(obs, sample_col = sample_col)
   labels <- as.factor(metadata[[label_col]])
   names(labels) <- metadata[[sample_col]]
 

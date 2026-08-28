@@ -85,17 +85,18 @@ process_coda_fig <- function(
     feat_mat <- prcomp(feat_mat, rank. = pca_dims)[["x"]]
   }
   dist_mat <- dist(feat_mat)
-  labels <- labels[rownames(feat_mat)]
   if (shuffle_labels) {
+    label_ids <- names(labels)
     set.seed(123)
-    labels <- sample(labels)
+    labels <- labels[sample(seq_along(labels))]
+    names(labels) <- label_ids
   }
-  res <- list()
-  res[["scores"]] <- calc_sep_score(dist_mat, labels)
-  res[["feat_mat"]] <- feat_mat
-  res[["dist_mat"]] <- dist_mat
-  res[["labels"]] <- labels
-  res[["counts"]] <- df_imp
+  res <- create_result_bundle(
+    feat_mat,
+    labels,
+    dist_mat = dist_mat,
+    extra = list(counts = df_imp)
+  )
   return(res)
 }
 
@@ -202,6 +203,8 @@ process_pseudobulk_ct_fig <- function(
   )
   cell_types <- unique(seurat[[ct_col, drop = TRUE]])
   cell_types <- cell_types[!is.na(cell_types)]
+  successful_cts <- character()
+  n_ct_pair_contributions <- 0L
 
   for (ct in cell_types) {
     sub <- subset(x = seurat, subset = !!sym(ct_col) == ct)
@@ -231,13 +234,34 @@ process_pseudobulk_ct_fig <- function(
       total_dist[rownames(dist_mat_ct), colnames(dist_mat_ct)] + dist_mat_ct
     count_mat[rownames(dist_mat_ct), colnames(dist_mat_ct)] <-
       count_mat[rownames(dist_mat_ct), colnames(dist_mat_ct)] + 1
+    successful_cts <- c(successful_cts, as.character(ct))
+    n_ct_pair_contributions <- n_ct_pair_contributions +
+      sum(upper.tri(dist_mat_ct))
   }
+
+  n_sample_pairs_contributed <- sum(
+    count_mat[upper.tri(count_mat)] > 0
+  )
+  if (length(successful_cts) == 0L || n_sample_pairs_contributed == 0L) {
+    stop(
+      "process_pseudobulk_ct_fig: no successful cell-type pseudobulks ",
+      "contributed sample-pair distances for ct_col='", ct_col,
+      "', hvg=", hvg, " (", length(cell_types), " cell types inspected)."
+    )
+  }
+
   final_dist_mat <- total_dist / count_mat
   final_dist_mat[is.nan(final_dist_mat)] <- 0
   return(create_result_bundle(
     feat_mat = final_dist_mat,
     labels,
-    dist_mat = as.dist(final_dist_mat)
+    dist_mat = as.dist(final_dist_mat),
+    extra = list(
+      n_ct_success = length(successful_cts),
+      successful_cell_types = successful_cts,
+      n_sample_pairs_contributed = n_sample_pairs_contributed,
+      n_ct_pair_contributions = n_ct_pair_contributions
+    )
   ))
 }
 
@@ -283,6 +307,25 @@ process_avg_pca_embedding_fig <- function(
   return(create_result_bundle(feat_mat, labels))
 }
 
+# MOFA requires row names, not merely a `sample` metadata column, to match
+# the sample names in each view. Benchmark metadata is cell-indexed upstream,
+# so set the explicit per-sample row-name contract immediately before the
+# samples_metadata<- assignment.
+prepare_mofa_metadata <- function(metadata) {
+  metadata <- as.data.frame(metadata)
+  if (!"Sample" %in% colnames(metadata)) {
+    stop("MOFA metadata requires a 'Sample' column.")
+  }
+  sample_ids <- as.character(metadata$Sample)
+  if (anyNA(sample_ids) || any(!nzchar(trimws(sample_ids))) ||
+      anyDuplicated(sample_ids)) {
+    stop("MOFA metadata sample IDs must be nonmissing, non-empty, and unique.")
+  }
+  rownames(metadata) <- sample_ids
+  metadata$sample <- sample_ids
+  metadata
+}
+
 # MOFA processing
 process_mofa_bulk_fig <- function(
   pb_norm,
@@ -293,7 +336,7 @@ process_mofa_bulk_fig <- function(
 ) {
   pb_list <- list(pb = t(pb_norm))
   MOFAobject <- create_mofa(pb_list)
-  metadata$sample <- metadata$Sample
+  metadata <- prepare_mofa_metadata(metadata)
   samples_metadata(MOFAobject) <- metadata
   data_opts <- get_default_data_options(MOFAobject)
   model_opts <- get_default_model_options(MOFAobject)
@@ -377,7 +420,8 @@ process_gloscope_fig <- function(
   n_pca_dims = 30,
   dens = "KNN",
   dist_metric = c("KL"),
-  k = 25
+  k = 25,
+  force = FALSE
 ) {
   n_samples <- length(unique(sample_ids))
   if (k >= n_samples) {
@@ -406,7 +450,7 @@ process_gloscope_fig <- function(
       progressbar = TRUE
     )
   }
-  if (!file.exists(gloscope_dist_file)) {
+  if (force || !artifact_checksum_ok(gloscope_dist_file)) {
     feat_mat <- GloScope::gloscope(
       embedding_matrix = embedding_matrix[, 1:n_pca_dims],
       cell_sample_ids = sample_ids,
@@ -415,17 +459,17 @@ process_gloscope_fig <- function(
       k = k,
       BPPARAM = BPPARAM
     )
-    saveRDS(feat_mat, file = gloscope_dist_file)
+    save_rds_atomic(feat_mat, gloscope_dist_file)
   } else {
     feat_mat <- readRDS(gloscope_dist_file)
   }
   feat_mat <- sqrt(feat_mat)
   feat_mat[is.na(feat_mat)] <- 0
   row.names(feat_mat) <- standardize_sample_names(row.names(feat_mat))
-  labels <- metadata[match(row.names(feat_mat), metadata$Sample), ][[label_col]]
-  names(labels) <- metadata[match(row.names(feat_mat), metadata$Sample), ][[
-    "Sample"
-  ]]
+  # Keep labels in canonical obs order; create_result_bundle reorders the
+  # distance matrix/feature rows rather than adopting GloScope's order.
+  labels <- as.factor(metadata[[label_col]])
+  names(labels) <- as.character(metadata[["Sample"]])
   return(create_result_bundle(feat_mat, labels, dist_mat = as.dist(feat_mat)))
 }
 
@@ -460,10 +504,10 @@ process_gloprop_fig <- function(
   # Sample names are standardized upstream (1.1.1_preprocess.py): do NOT
   # re-standardize here (hyphen->underscore) or names diverge from the obs
   # labels for h5ads that predate the python change (e.g. Adams).
-  labels <- metadata[match(row.names(feat_mat), metadata$Sample), ][[label_col]]
-  names(labels) <- metadata[match(row.names(feat_mat), metadata$Sample), ][[
-    "Sample"
-  ]]
+  # Keep labels in canonical obs order; create_result_bundle enforces the
+  # complete source universe and aligns the returned matrix.
+  labels <- as.factor(metadata[[label_col]])
+  names(labels) <- as.character(metadata[["Sample"]])
   return(create_result_bundle(feat_mat, labels, dist_mat = as.dist(feat_mat)))
 }
 
@@ -558,6 +602,51 @@ process_ecodapb_fig <- function(
   return(res)
 }
 
+# Align a result's feature rows and optional distance matrix to the named
+# sample order supplied by the canonical preprocessed obs metadata.
+align_result_samples <- function(feat_mat, labels, dist_mat = NULL) {
+  sample_ids <- rownames(feat_mat)
+  label_ids <- names(labels)
+  if (is.null(sample_ids) || length(sample_ids) == 0L ||
+      anyNA(sample_ids) || any(!nzchar(sample_ids)) ||
+      anyDuplicated(sample_ids) ||
+      is.null(label_ids) || length(label_ids) == 0L ||
+      anyNA(label_ids) || any(!nzchar(label_ids)) ||
+      anyDuplicated(label_ids) || anyNA(labels)) {
+    stop(
+      "Result sample identifiers must be nonmissing, non-empty, and unique."
+    )
+  }
+  if (length(sample_ids) != length(label_ids) ||
+      !setequal(as.character(sample_ids), as.character(label_ids))) {
+    stop(
+      "Result feature sample names do not match the labels vector. Check ",
+      "sample-name standardization consistency between the input artifact ",
+      "(h5ad/feather/pseudobulk) and the obs labels."
+    )
+  }
+
+  reorder <- match(label_ids, sample_ids)
+  if (anyNA(reorder)) {
+    stop("Result sample identifiers cannot be aligned to labels.")
+  }
+  if (!identical(reorder, seq_along(reorder))) {
+    feat_mat <- feat_mat[reorder, , drop = FALSE]
+    if (!is.null(dist_mat)) {
+      dist_matrix <- as.matrix(dist_mat)
+      if (nrow(dist_matrix) != length(sample_ids) ||
+          ncol(dist_matrix) != length(sample_ids)) {
+        stop("Result distance matrix dimensions do not match feature rows.")
+      }
+      dist_matrix <- dist_matrix[reorder, reorder, drop = FALSE]
+      dimnames(dist_matrix) <- list(label_ids, label_ids)
+      dist_mat <- dist_matrix
+    }
+  }
+  names(labels) <- label_ids
+  list(feat_mat = feat_mat, labels = labels, dist_mat = dist_mat)
+}
+
 # Create result bundle with scores, feature matrix, distance matrix, labels
 create_result_bundle <- function(
   feat_mat,
@@ -565,21 +654,14 @@ create_result_bundle <- function(
   dist_mat = NULL,
   extra = list()
 ) {
+  aligned <- align_result_samples(feat_mat, labels, dist_mat = dist_mat)
+  feat_mat <- aligned$feat_mat
+  labels <- aligned$labels
+  dist_mat <- aligned$dist_mat
   if (is.null(dist_mat)) {
     dist_mat <- dist(feat_mat)
   } else if (is.matrix(dist_mat)) {
     dist_mat <- as.dist(dist_mat)
-  }
-  labels <- labels[rownames(feat_mat)]
-  missing_samps <- names(labels)[is.na(labels)]
-  if (length(missing_samps) > 0) {
-    stop(
-      "NA labels for ", length(missing_samps), " of ", length(labels),
-      " samples (e.g. ", paste(head(missing_samps, 5), collapse = ", "),
-      "): feat_mat sample names do not match the labels vector. Check ",
-      "sample-name standardization consistency between the input artifact ",
-      "(h5ad/feather/pseudobulk) and the obs labels."
-    )
   }
   result <- list(
     scores = calc_sep_score(dist_mat, labels),

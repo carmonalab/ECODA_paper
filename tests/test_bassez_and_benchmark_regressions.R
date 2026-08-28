@@ -85,9 +85,9 @@ sys.source(
   envir = pseudobulk_env
 )
 pseudobulk_fixture <- matrix(
-  c(1, 2, 3, 4),
+  c(10, 20, 30, 40),
   nrow = 2,
-  dimnames = list(c("BIOKEY-2-Pre", "exact"), c("gene1", "gene2"))
+  dimnames = list(c("exact", "BIOKEY-2-Pre"), c("gene1", "gene2"))
 )
 aligned_pseudobulk <- pseudobulk_env$align_pseudobulk_sample_names(
   pseudobulk_fixture,
@@ -97,6 +97,14 @@ stopifnot(identical(
   rownames(aligned_pseudobulk),
   c("BIOKEY_2_Pre", "exact")
 ))
+stopifnot(identical(
+  as.numeric(aligned_pseudobulk[1, ]),
+  c(20, 40)
+))
+stopifnot(identical(
+  as.numeric(aligned_pseudobulk[2, ]),
+  c(10, 30)
+))
 assert_error(
   pseudobulk_env$align_pseudobulk_sample_names(
     pseudobulk_fixture,
@@ -104,6 +112,103 @@ assert_error(
   ),
   "do not match canonical metadata IDs"
 )
+
+suppressPackageStartupMessages(library(dplyr))
+metadata_env <- new.env(parent = globalenv())
+sys.source(
+  file.path(project_root, "src", "utils", "seurat_utils.R"),
+  envir = metadata_env
+)
+metadata_with_unused_level <- data.frame(
+  Sample = factor(
+    c("sample_keep", "sample_keep"),
+    levels = c("sample_keep", "sample_removed")
+  ),
+  label = c("case", "case"),
+  stringsAsFactors = FALSE
+)
+collapsed_metadata <- metadata_env$collapse_sample_metadata(
+  metadata_with_unused_level
+)
+stopifnot(nrow(collapsed_metadata) == 1L)
+stopifnot(identical(as.character(collapsed_metadata$Sample), "sample_keep"))
+assert_error(
+  metadata_env$collapse_sample_metadata(
+    data.frame(Sample = c("sample_keep", ""), stringsAsFactors = FALSE)
+  ),
+  "missing or blank sample IDs"
+)
+composition_obs <- data.frame(
+  Sample = factor(
+    c("sample_2", "sample_1", "sample_2", "sample_1"),
+    levels = c("sample_1", "sample_2")
+  ),
+  ct = factor(c("B", "A", "A", "B")),
+  stringsAsFactors = FALSE
+)
+composition_counts <- metadata_env$get_ct_comp_df(
+  composition_obs, sample_col = "Sample", ct_col = "ct"
+)
+stopifnot(identical(rownames(composition_counts), c("sample_2", "sample_1")))
+
+
+methods_env <- new.env(parent = globalenv())
+sys.source(
+  file.path(project_root, "src", "5_run_benchmark_methods", "benchmark_methods_r.R"),
+  envir = methods_env
+)
+mofa_metadata <- methods_env$prepare_mofa_metadata(
+  data.frame(
+    Sample = factor(c("sample_1", "sample_2")),
+    label = c("case", "control"),
+    stringsAsFactors = FALSE
+  )
+)
+stopifnot(identical(rownames(mofa_metadata), c("sample_1", "sample_2")))
+stopifnot(identical(as.character(mofa_metadata$sample), c("sample_1", "sample_2")))
+assert_error(
+  methods_env$prepare_mofa_metadata(
+    data.frame(Sample = c("sample_1", "sample_1"), stringsAsFactors = FALSE)
+  ),
+  "nonmissing, non-empty, and unique"
+)
+result_features <- matrix(
+  c(10, 20, 30, 40),
+  nrow = 2,
+  dimnames = list(c("sample_2", "sample_1"), c("PC_1", "PC_2"))
+)
+result_labels <- factor(c("case", "control"))
+names(result_labels) <- c("sample_1", "sample_2")
+result_dist <- as.dist(matrix(
+  c(0, 9, 9, 0),
+  nrow = 2,
+  dimnames = list(c("sample_2", "sample_1"), c("sample_2", "sample_1"))
+))
+aligned_result <- methods_env$align_result_samples(
+  result_features, result_labels, result_dist
+)
+stopifnot(identical(
+  rownames(aligned_result$feat_mat),
+  c("sample_1", "sample_2")
+))
+stopifnot(identical(
+  as.numeric(aligned_result$feat_mat[1, ]),
+  c(20, 40)
+))
+stopifnot(identical(
+  names(aligned_result$labels),
+  c("sample_1", "sample_2")
+))
+stopifnot(identical(
+  rownames(aligned_result$dist_mat),
+  c("sample_1", "sample_2")
+))
+stopifnot(identical(
+  colnames(aligned_result$dist_mat),
+  c("sample_1", "sample_2")
+))
+
+
 
 pipeline_env <- new.env(parent = globalenv())
 sys.source(
@@ -126,13 +231,23 @@ sys.source(
   ),
   envir = hpc_env
 )
+pipeline_env$artifact_checksum_ok <- function(file) file.exists(file) && file.info(file)$size > 0
 
 pseudobulk_dir <- tempfile("ecoda_pseudobulk_cache-")
 dir.create(pseudobulk_dir, recursive = TRUE)
 for (variant in hpc_env$PB_VARIANT_NAMES) {
+  path <- file.path(pseudobulk_dir, paste0("Toy_pseudobulk_", variant, ".rds"))
   saveRDS(
     list(pb = matrix(1, nrow = 1, ncol = 1), time_secs = 0),
-    file.path(pseudobulk_dir, paste0("Toy_pseudobulk_", variant, ".rds"))
+    path
+  )
+  writeLines(
+    c(
+      paste0("MD5=", unname(tools::md5sum(path))),
+      paste0("SIZE=", file.info(path)$size),
+      paste0("PATH=", path)
+    ),
+    paste0(path, ".md5")
   )
 }
 stopifnot(identical(

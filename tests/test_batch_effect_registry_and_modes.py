@@ -2,6 +2,7 @@
 """Focused contracts for the two-pass batch-effect registry and workers."""
 
 import anndata as ad
+import hashlib
 import importlib.util
 import json
 import numpy as np
@@ -75,6 +76,39 @@ def main():
     assert datasets["Joanito"]["columns"]["batch"] == "seqtec"
     assert datasets["Stephenson"]["columns"]["batch"] == "Site"
 
+    assert datasets["Joanito"]["columns"]["cell_type_low_res"] == "cell.type"
+    assert datasets["Joanito"]["columns"]["cell_type_high_res"] == "cell.type_new"
+    combined = datasets["CombinedPBMC"]
+    assert combined["file_names"] == "combined_pbmc.h5ad"
+    assert combined["columns"]["cell_type_low_res"] == "layer1"
+    assert combined["columns"]["cell_type_high_res"] == "layer2"
+    assert set(combined["views"]) == {"batch_effect_uncorrected", "batch_effect_corrected"}
+    assert combined["views"]["batch_effect_uncorrected"] == {
+        "input_file_name": "combined_pbmc.h5ad",
+        "output_file_name": "combined_pbmc_batch_effect_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {},
+    }
+    assert combined["views"]["batch_effect_corrected"] == {
+        "input_file_name": "combined_pbmc.h5ad",
+        "output_file_name": "combined_pbmc_batch_effect_corrected_ECODAprocessed.h5ad",
+        "subset_vars": {},
+    }
+    spec = importlib.util.spec_from_file_location(
+        "dataset_specs", ROOT / "notebooks/dataset_onboarding/dataset_specs.py"
+    )
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert len(module.BATCH_EFFECT_DATASET_ORDER) == 12
+    assert module.BATCH_EFFECT_DATASET_ORDER[-3:] == ("Joanito", "Stephenson", "CombinedPBMC")
+    assert module.BATCH_EFFECT_SPECS["Joanito"] == ["seqtec", "Site"]
+    assert module.BATCH_EFFECT_SPECS["Stephenson"] == ["Site"]
+    assert module.BATCH_EFFECT_SPECS["CombinedPBMC"] == ["batch"]
+    assert module.DEBUG_SPEC["file_name"].endswith(
+        "_debug_5samples_batch_effect_uncorrected_ECODAprocessed.h5ad"
+    )
+    assert module.DEBUG_SPEC["expected_source"]["cells"] == 2500
+    assert module.DEBUG_SPEC["expected_source"]["independent_units"] == 5
     stephenson = datasets["Stephenson"]
     assert set(stephenson["views"]) == {
         "benchmark_analysis",
@@ -119,6 +153,69 @@ def main():
     assert safe == {"nan": None, "finite": 2.5}
 
     worker = load_worker()
+    with tempfile.TemporaryDirectory() as writer_tmp:
+        writer_path = Path(writer_tmp) / "embedding.feather"
+        writer_frame = pd.DataFrame({"Dim_1": [0.0]}, index=["s1"])
+        worker.atomic_to_feather(writer_frame, writer_path)
+        assert worker.recorded_feather_valid(writer_path)
+        old_bytes = writer_path.read_bytes()
+        try:
+            worker.atomic_to_feather(pd.DataFrame({"Dim_1": [1.0]}), writer_path)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Feather writer accepted missing sample identifiers")
+        assert writer_path.read_bytes() == old_bytes
+        try:
+            worker.atomic_to_feather(
+                pd.DataFrame({"Dim_1": [float("nan")]}, index=["s1"]),
+                writer_path,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Feather writer accepted nonfinite features")
+        assert writer_path.read_bytes() == old_bytes
+    ordered_adata = SimpleNamespace(
+        obs=pd.DataFrame(
+            {"Sample": pd.Categorical(["sample_b", "sample_a", "sample_b"])},
+            index=["c1", "c2", "c3"],
+        )
+    )
+    assert worker._ordered_sample_ids(ordered_adata) == ["sample_b", "sample_a"]
+    square = pd.DataFrame(
+        [[0.0, 2.0], [2.0, 0.0]],
+        index=["sample_a", "sample_b"],
+        columns=["sample_a", "sample_b"],
+    )
+    aligned_square = worker._align_square_frame(
+        square, ["sample_b", "sample_a"], "square.feather"
+    )
+    assert list(aligned_square.index) == ["sample_b", "sample_a"]
+    assert list(aligned_square.columns) == ["sample_b", "sample_a"]
+    assert aligned_square.loc["sample_b", "sample_a"] == 2.0
+    covariance_adata = SimpleNamespace(
+        uns={
+            "GMVAE_Representation": {
+                "sample_a": {
+                    "means": np.zeros((2, 2)),
+                    "weights": np.array([0.5, 0.5]),
+                    "covariances": np.array(
+                        [
+                            [[np.nan, 0.0], [0.0, np.nan]],
+                            [[1.0, 0.0], [0.0, 1.0]],
+                        ]
+                    ),
+                }
+            }
+        }
+    )
+    worker._stabilize_pilotgm_covariances(covariance_adata)
+    repaired = covariance_adata.uns["GMVAE_Representation"]["sample_a"][
+        "covariances"
+    ]
+    assert np.isfinite(repaired).all()
+    assert (np.linalg.eigvalsh(repaired) >= -1e-10).all()
     benchmark_entries = worker.read_datasets_json(
         str(DATASETS), view="benchmark_analysis"
     )
@@ -170,6 +267,12 @@ def main():
         pass
     else:
         raise AssertionError("missing exact corrected embedding did not fail")
+    try:
+        worker.resolve_pass_embedding_key(fake, "batch_effect_analysis", 2000)
+    except (KeyError, ValueError):
+        pass
+    else:
+        raise AssertionError("legacy analysis embedding fallback was accepted")
 
     # Existing output skips execution, but the pass-qualified name must still
     # be the name the worker recognizes. This catches accidental fallback to
@@ -180,11 +283,32 @@ def main():
         output_dir = Path(tmp) / "output"
         input_dir.mkdir()
         output_dir.mkdir()
-        (input_dir / entry["output_file"]).touch()
+        input_h5ad = input_dir / entry["output_file"]
+        input_adata = ad.AnnData(
+            X=np.ones((1, 2000), dtype=np.float32),
+            obs=pd.DataFrame({"Sample": ["s1"]}, index=["c1"]),
+            var=pd.DataFrame(
+                {"hvg_rank": np.arange(2000, dtype=float)},
+                index=[f"g{i}" for i in range(2000)],
+            ),
+        )
+        input_adata.layers["counts"] = np.ones((1, 2000), dtype=np.float32)
+        input_adata.obsm["X_pca_batch_effect_uncorrected_hvg2000"] = np.ones(
+            (1, 2), dtype=np.float32
+        )
+        input_adata.write_h5ad(input_h5ad)
+        input_digest = hashlib.md5(input_h5ad.read_bytes()).hexdigest()
+        input_h5ad.with_name(f"{input_h5ad.name}.md5").write_text(
+            f"MD5={input_digest}\nSIZE={input_h5ad.stat().st_size}\nPATH={input_h5ad}\n"
+        )
         expected_output = output_dir / (
             "Alzheimer_batch_effect_uncorrected_hvg2000_highres_pilot_dists.feather"
         )
-        expected_output.touch()
+        pd.DataFrame({"Dim_1": [0.0]}, index=["s1"]).to_feather(expected_output)
+        output_digest = hashlib.md5(expected_output.read_bytes()).hexdigest()
+        expected_output.with_name(f"{expected_output.name}.md5").write_text(
+            f"MD5={output_digest}\nSIZE={expected_output.stat().st_size}\nPATH={expected_output}\n"
+        )
         args = SimpleNamespace(
             view="batch_effect_uncorrected",
             analysis_pass="uncorrected",

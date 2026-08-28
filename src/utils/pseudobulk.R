@@ -143,7 +143,10 @@ align_pseudobulk_sample_names <- function(pb, sample_ids) {
   exact_match <- match(pb_ids, sample_ids)
   if (all(!is.na(exact_match))) {
     rownames(pb) <- sample_ids[exact_match]
-    return(pb)
+    # AggregateExpression commonly sorts its sample columns. Reindex the
+    # normalized samples to the first-appearance order from the canonical
+    # preprocessed obs before any downstream result bundle is written.
+    return(pb[sample_ids, , drop = FALSE])
   }
 
   if (!exists("standardize_sample_names", mode = "function")) {
@@ -162,7 +165,9 @@ align_pseudobulk_sample_names <- function(pb, sample_ids) {
     )
   }
   rownames(pb) <- sample_ids[alias_match]
-  pb
+  # Alias reconciliation changes names but must not preserve AggregateExpression
+  # order; all consumers use the canonical obs order.
+  pb[sample_ids, , drop = FALSE]
 }
 
 

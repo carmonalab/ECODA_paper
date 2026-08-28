@@ -258,7 +258,88 @@ validate_input_row() {
   [[ -s "${path}" ]]
 }
 
+stage5_repair_missing_h5ad_sidecars() {
+  local repair_manifest="${ECODA_RUN_ROOT}/manifests/h5ad_checksum_repairs.tsv"
+  local repair_tmp="${repair_manifest}.build.$$"
+  local ds view path sidecar digest size root repairs=0
+  local scratch_path nas_path scratch_digest nas_digest source_key seen_sources=""
+  [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
+  : > "${repair_tmp}" || return 1
+  while IFS=$'\t' read -r ds view _scope; do
+    source_key="${ds}/${view}"
+    case " ${seen_sources} " in
+      *" ${source_key} "*) continue ;;
+    esac
+    seen_sources="${seen_sources} ${source_key}"
+    scratch_path="${HPC_SCRATCH_DIR}/${ds}/output/$(ecoda_view_output_name "${ds}" "${view}")"
+    nas_path="${NAS_TARGET_DIR}/${ds}/output/$(ecoda_view_output_name "${ds}" "${view}")"
+    [[ -s "${scratch_path}" && -s "${nas_path}" ]] || {
+      rm -f "${repair_tmp}"
+      return 1
+    }
+    scratch_digest="$(ecoda_md5_file "${scratch_path}")" || {
+      rm -f "${repair_tmp}"
+      return 1
+    }
+    nas_digest="$(ecoda_md5_file "${nas_path}")" || {
+      rm -f "${repair_tmp}"
+      return 1
+    }
+    [[ "${scratch_digest}" == "${nas_digest}" ]] || {
+      rm -f "${repair_tmp}"
+      return 1
+    }
+    for root in "${HPC_SCRATCH_DIR}" "${NAS_TARGET_DIR}"; do
+      path="${root}/${ds}/output/$(ecoda_view_output_name "${ds}" "${view}")"
+      sidecar="${path}.md5"
+      if [[ -e "${sidecar}" || -L "${sidecar}" ]]; then
+        ecoda_validate_checksum "${path}" || {
+          rm -f "${repair_tmp}"
+          return 1
+        }
+        continue
+      fi
+      # A missing sidecar is repaired only after the persisted H5AD content
+      # contract passes. Existing invalid sidecars are never overwritten.
+      "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+        --path "${path}" --view "${view}" \
+        --method "Stage 5 source checksum repair" >/dev/null 2>&1 || {
+        rm -f "${repair_tmp}"
+        return 1
+      }
+      ecoda_write_checksum "${path}" || {
+        rm -f "${repair_tmp}"
+        return 1
+      }
+      ecoda_validate_checksum "${path}" || {
+        rm -f "${repair_tmp}"
+        return 1
+      }
+      digest="$(sed -n 's/^MD5=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
+      size="$(sed -n 's/^SIZE=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
+      printf '%s\t%s\t%s\t%s\t%s\n' "${root}" "${ds}" "${view}" \
+        "${path}" "${digest}:${size}" >> "${repair_tmp}" || {
+        rm -f "${repair_tmp}"
+        return 1
+      }
+      repairs=$((repairs + 1))
+    done
+  done < "${MANIFEST}"
+  if [[ ${repairs} -gt 0 ]]; then
+    ecoda_atomic_install_manifest "${repair_tmp}" "${repair_manifest}" 5 || {
+      rm -f "${repair_tmp}"
+      return 1
+    }
+    rm -f "${repair_tmp}"
+    ecoda_write_checksum "${repair_manifest}" || return 1
+  else
+    rm -f "${repair_tmp}"
+  fi
+  return 0
+}
+
 stage5_prepare_source_identity() {
+  stage5_repair_missing_h5ad_sidecars || return 1
   local identity="${SOURCE_IDENTITY}" identity_sidecar="${SOURCE_IDENTITY}.md5"
   if [[ -e "${identity}" || -L "${identity}" ]]; then
     ecoda_validate_run_owned_path "${identity}" "${ECODA_RUN_ROOT}" || return 1

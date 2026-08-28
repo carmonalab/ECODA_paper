@@ -1,3 +1,4 @@
+import hashlib
 import os
 import sys
 import anndata as ad
@@ -11,11 +12,90 @@ import re
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.utils.py.gene_utils import standardize_gene_symbols
 from src.utils.py.datasets_io import read_datasets_json
+from src.utils.py.benchmark_h5ad_contract import (
+    validate_benchmark_h5ad_contract,
+    validate_benchmark_h5ad_path,
+)
 from src.utils.py.preprocess_utils import (
     load_input,
     apply_subset_vars,
     remove_low_cellcount_samples,
 )
+
+
+def _checksum(path):
+    digest = hashlib.md5()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _write_checksum(path):
+    path = Path(path)
+    sidecar = Path(f"{path}.md5")
+    tmp = sidecar.with_name(f".{sidecar.name}.tmp.{os.getpid()}")
+    tmp.write_text(
+        f"MD5={_checksum(path)}\nSIZE={path.stat().st_size}\nPATH={path}\n"
+    )
+    os.replace(tmp, sidecar)
+
+
+def _validate_recorded_checksum(path):
+    path = Path(path)
+    sidecar = Path(f"{path}.md5")
+    if not path.is_file() or path.stat().st_size == 0 or not sidecar.is_file():
+        return False
+    records = {}
+    for line in sidecar.read_text().splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            records[key] = value
+    return (
+        records.get("PATH") == str(path)
+        and records.get("MD5") == _checksum(path)
+        and records.get("SIZE") == str(path.stat().st_size)
+    )
+
+
+def _write_h5ad_atomic(adata, path, view_name):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    sidecar = Path(f"{path}.md5")
+    backup = path.with_name(f".{path.name}.previous.{os.getpid()}")
+    sidecar_backup = sidecar.with_name(f".{sidecar.name}.previous.{os.getpid()}")
+    had_path = path.is_file()
+    had_sidecar = sidecar.is_file()
+
+    validate_benchmark_h5ad_contract(adata, view_name, "preprocessing")
+    try:
+        adata.write_h5ad(str(tmp))
+        if not tmp.is_file() or tmp.stat().st_size == 0:
+            raise RuntimeError(f"preprocessing produced an empty h5ad: {tmp}")
+        validate_benchmark_h5ad_path(str(tmp), view_name, "preprocessing")
+
+        if had_path:
+            os.link(path, backup)
+        if had_sidecar:
+            os.link(sidecar, sidecar_backup)
+        os.replace(tmp, path)
+        validate_benchmark_h5ad_path(str(path), view_name, "preprocessing")
+        _write_checksum(path)
+    except Exception:
+        if backup.exists():
+            os.replace(backup, path)
+        elif not had_path and path.exists():
+            path.unlink()
+        if sidecar_backup.exists():
+            os.replace(sidecar_backup, sidecar)
+        elif not had_sidecar and sidecar.exists():
+            sidecar.unlink()
+        raise
+    finally:
+        for temporary in (tmp, backup, sidecar_backup):
+            if temporary.exists():
+                temporary.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -258,9 +338,6 @@ def process_view(
     return adata
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=None):
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
@@ -318,8 +395,18 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
 
             processed_file_path = output_dir / output_file_name
             if processed_file_path.exists() and not force:
-                print(f"Already processed: {current_ds} / {view_name}")
-                continue
+                try:
+                    validate_benchmark_h5ad_path(
+                        str(processed_file_path), view_name, "preprocessing"
+                    )
+                    if _validate_recorded_checksum(processed_file_path):
+                        print(f"Already processed and validated: {current_ds} / {view_name}")
+                        continue
+                except (OSError, ValueError, KeyError) as exc:
+                    print(
+                        f"Existing artifact invalid for {current_ds} / {view_name}; "
+                        f"recomputing ({exc})"
+                    )
 
             print(f"Loading {current_ds} / {view_name} ...")
             adata_full = load_input(input_file_name, input_dir, output_dir)
@@ -385,7 +472,7 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                 resolutions=RESOLUTIONS,
                 compute_harmony=compute_harmony,
             )
-            adata_view.write_h5ad(str(processed_file_path))
+            _write_h5ad_atomic(adata_view, processed_file_path, view_name)
             print(f"  -> Saved: {processed_file_path}\n")
 
 

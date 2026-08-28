@@ -67,6 +67,12 @@ dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
 ad <- import("anndata", convert = FALSE)
 adata <- ad$read_h5ad(h5ad_path, backed = "r")
 obs <- py_to_r(adata$obs)
+validate_benchmark_h5ad_contract(
+  adata,
+  obs = obs,
+  view = args$view,
+  method = "prepare_pseudobulk"
+)
 
 sample_col <- "Sample"
 if (!sample_col %in% colnames(obs)) {
@@ -87,11 +93,13 @@ requested_variants <- if (is.null(analysis_pass)) {
   "hvg2000"
 }
 pending <- requested_variants[
-  !file.exists(
+  vapply(
     file.path(
       args$pseudobulk_dir,
       paste0(cache_stem, "_pseudobulk_", requested_variants, ".rds")
-    )
+    ),
+    function(path) !artifact_checksum_ok(path),
+    logical(1)
   ) | force
 ]
 

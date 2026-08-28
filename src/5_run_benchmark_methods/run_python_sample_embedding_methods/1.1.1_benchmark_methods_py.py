@@ -46,6 +46,7 @@ RSS is monotonic within a process).
 
 import argparse
 import gc
+import hashlib
 import os
 import resource
 import sys
@@ -67,6 +68,185 @@ import pilotpy as pl
 import torch
 
 from src.utils.py.datasets_io import read_datasets_json
+from src.utils.py.benchmark_h5ad_contract import validate_benchmark_h5ad_contract
+
+
+def _file_md5(path):
+    digest = hashlib.md5()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _validate_feather_frame(frame, path):
+    if frame.empty:
+        raise ValueError(f"Feather artifact is empty: {path}")
+    if isinstance(frame.index, pd.RangeIndex):
+        raise ValueError(f"Feather artifact lacks sample identifiers: {path}")
+    if frame.index.hasnans or not frame.index.is_unique:
+        raise ValueError(f"Feather artifact has invalid sample identifiers: {path}")
+    if any(str(value).strip() == "" for value in frame.index):
+        raise ValueError(f"Feather artifact has blank sample identifiers: {path}")
+    numeric = frame.select_dtypes(include=[np.number])
+    if numeric.empty or not np.isfinite(numeric.to_numpy(dtype=float)).all():
+        raise ValueError(f"Feather artifact has no finite numeric features: {path}")
+
+
+def _ordered_sample_ids(adata):
+    """Return unique Sample IDs in their first-appearance obs order."""
+    if "Sample" not in adata.obs.columns:
+        raise ValueError("benchmark AnnData is missing the 'Sample' column")
+    values = adata.obs["Sample"]
+    if values.isna().any():
+        raise ValueError("benchmark AnnData Sample contains missing values")
+    sample_ids = [str(value) for value in values]
+    if any(not value.strip() for value in sample_ids):
+        raise ValueError("benchmark AnnData Sample contains blank values")
+    return list(dict.fromkeys(sample_ids))
+
+
+def _align_square_frame(frame, sample_ids, path):
+    """Align a sample-by-sample frame to the canonical obs sample order."""
+    expected = [str(value) for value in sample_ids]
+    row_ids = [str(value) for value in frame.index]
+    column_ids = [str(value) for value in frame.columns]
+    if (
+        len(row_ids) != len(expected)
+        or len(column_ids) != len(expected)
+        or len(set(row_ids)) != len(row_ids)
+        or len(set(column_ids)) != len(column_ids)
+        or set(row_ids) != set(expected)
+        or set(column_ids) != set(expected)
+    ):
+        raise ValueError(
+            f"sample-by-sample Feather output identifiers do not match "
+            f"canonical samples: {path}"
+        )
+    aligned = frame.copy()
+    aligned.index = row_ids
+    aligned.columns = column_ids
+    return aligned.loc[expected, expected]
+
+
+def recorded_feather_valid(path):
+    path = Path(path)
+    sidecar = Path(f"{path}.md5")
+    if not path.is_file() or path.stat().st_size == 0 or not sidecar.is_file():
+        return False
+    records = {}
+    for line in sidecar.read_text().splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            records[key] = value
+    if (
+        records.get("PATH") != str(path)
+        or records.get("MD5") != _file_md5(path)
+        or records.get("SIZE") != str(path.stat().st_size)
+    ):
+        return False
+    try:
+        frame = pd.read_feather(path)
+        _validate_feather_frame(frame, path)
+        return True
+    except Exception:
+        return False
+
+
+def atomic_to_feather(frame, path):
+    """Write a complete Feather file and checksum before publication."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    sidecar = Path(f"{path}.md5")
+    sidecar_tmp = sidecar.with_name(f".{sidecar.name}.tmp.{os.getpid()}")
+    backup = path.with_name(f".{path.name}.previous.{os.getpid()}")
+    sidecar_backup = sidecar.with_name(f".{sidecar.name}.previous.{os.getpid()}")
+    had_path = path.is_file()
+    had_sidecar = sidecar.is_file()
+    try:
+        _validate_feather_frame(frame, path)
+        frame.to_feather(tmp)
+        if not tmp.is_file() or tmp.stat().st_size == 0:
+            raise RuntimeError(f"empty Feather output: {tmp}")
+        if had_path:
+            os.link(path, backup)
+        if had_sidecar:
+            os.link(sidecar, sidecar_backup)
+        os.replace(tmp, path)
+        sidecar_tmp.write_text(
+            f"MD5={_file_md5(path)}\nSIZE={path.stat().st_size}\nPATH={path}\n"
+        )
+        os.replace(sidecar_tmp, sidecar)
+    except Exception:
+        if backup.exists():
+            os.replace(backup, path)
+        elif not had_path and path.exists():
+            path.unlink()
+        if sidecar_backup.exists():
+            os.replace(sidecar_backup, sidecar)
+        elif not had_sidecar and sidecar.exists():
+            sidecar.unlink()
+        raise
+    finally:
+        for temporary in (tmp, sidecar_tmp, backup, sidecar_backup):
+            if temporary.exists():
+                temporary.unlink()
+
+def _validate_execution_log_frame(frame, path):
+    required = {"dataset", "method", "time_secs", "mem_GB"}
+    if set(frame.columns) != required or frame.empty:
+        raise ValueError(f"execution log has an invalid schema: {path}")
+    if frame[["dataset", "method"]].isna().any().any() or \
+       frame[["dataset", "method"]].astype(str).apply(lambda column: column.str.strip() == "").any().any():
+        raise ValueError(f"execution log has blank identifiers: {path}")
+    if frame[["dataset", "method"]].duplicated().any():
+        raise ValueError(f"execution log has duplicate identifiers: {path}")
+    for column in ("time_secs", "mem_GB"):
+        values = pd.to_numeric(frame[column], errors="coerce")
+        if values.isna().any() or not np.isfinite(values.to_numpy(dtype=float)).all():
+            raise ValueError(f"execution log has invalid numeric values: {path}")
+
+
+def execution_log_atomic_to_feather(frame, path):
+    """Atomically write the documented indexless execution-log schema."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    sidecar = Path(f"{path}.md5")
+    sidecar_tmp = sidecar.with_name(f".{sidecar.name}.tmp.{os.getpid()}")
+    backup = path.with_name(f".{path.name}.previous.{os.getpid()}")
+    sidecar_backup = sidecar.with_name(f".{sidecar.name}.previous.{os.getpid()}")
+    had_path = path.is_file()
+    had_sidecar = sidecar.is_file()
+    try:
+        _validate_execution_log_frame(frame, path)
+        frame.reset_index(drop=True).to_feather(tmp)
+        if not tmp.is_file() or tmp.stat().st_size == 0:
+            raise RuntimeError(f"empty execution log: {tmp}")
+        if had_path:
+            os.link(path, backup)
+        if had_sidecar:
+            os.link(sidecar, sidecar_backup)
+        os.replace(tmp, path)
+        sidecar_tmp.write_text(
+            f"MD5={_file_md5(path)}\nSIZE={path.stat().st_size}\nPATH={path}\n"
+        )
+        os.replace(sidecar_tmp, sidecar)
+    except Exception:
+        if backup.exists():
+            os.replace(backup, path)
+        elif not had_path and path.exists():
+            path.unlink()
+        if sidecar_backup.exists():
+            os.replace(sidecar_backup, sidecar)
+        elif not had_sidecar and sidecar.exists():
+            sidecar.unlink()
+        raise
+    finally:
+        for temporary in (tmp, sidecar_tmp, backup, sidecar_backup):
+            if temporary.exists():
+                temporary.unlink()
 
 
 # scPoli is imported lazily (get_scpoli) so that MrVI/PILOT runs never touch
@@ -105,7 +285,6 @@ def get_pilotgm():
     """
     import importlib.metadata as md
 
-    pkg_dir = None
     for f in md.files("pilotgm"):
         if str(f).endswith("pilotgm/__init__.py"):
             pkg_dir = f.locate().parent
@@ -160,7 +339,7 @@ def log_execution_time(dataset_name, method_str, time_secs, log_file):
         df_final = pd.concat([df_final, new_row], ignore_index=True)
     else:
         df_final = new_row
-    df_final.reset_index(drop=True).to_feather(log_file)
+    execution_log_atomic_to_feather(df_final, log_file)
 
 
 # ---------------------------------------------------------------------------
@@ -213,20 +392,17 @@ def top_n_hvg_genes(adata, n):
     return list(ranks.index[:n])
 
 
+
+
 def use_counts_layer(sub, method, ds_name):
-    """Point X at the raw counts layer for MrVI/scPoli.
+    """Point X at the validated raw counts layer for MrVI/scPoli.
 
     The preprocessed h5ad has log-normalized X; both models need the raw
-    counts (vaulted by base_preprocessing as layers["counts"]). scPoli
-    additionally needs dense float32 — call this AFTER the HVG subset so
-    only the small n_obs x n_hvg matrix is densified. Falls back to X with
-    a warning if the counts layer is missing.
+    counts vaulted by base_preprocessing in layers["counts"]. The contract is
+    checked before this function runs, so missing counts are an error rather
+    than a normalized-expression fallback.
     """
-    counts = sub.layers.get("counts")
-    if counts is None:
-        print(f"WARNING: {ds_name}: no 'counts' layer; using log-normalized X "
-              f"for {method}.")
-        counts = sub.X
+    counts = sub.layers["counts"]
     if method == "scpoli":
         if sp.issparse(counts):
             sub.X = counts.toarray().astype("float32", copy=False)
@@ -253,7 +429,10 @@ def run_mrvi(adata, device, output_path, batch_key=None):
         keep_cell=False, groupby="dummy_col", batch_size=32
     )
     df_dists = dists["dummy_col"].isel(dummy_col_name=0).to_pandas()
-    df_dists.to_feather(output_path)
+    df_dists = _align_square_frame(
+        df_dists, _ordered_sample_ids(adata), output_path
+    )
+    atomic_to_feather(df_dists, output_path)
 
 
 def run_scpoli(adata, ct_col, dim, output_path):
@@ -304,17 +483,19 @@ def run_scpoli(adata, ct_col, dim, output_path):
     adata_emb = scpoli_model.get_conditional_embeddings()
     df_embs = pd.DataFrame(adata_emb.X, index=adata_emb.obs_names)
     df_embs.columns = [f"Dim_{i + 1}" for i in range(df_embs.shape[1])]
-    df_embs.to_feather(output_path)
+    atomic_to_feather(df_embs, output_path)
 
 
 def resolve_pass_embedding_key(adata, view, n_hvg):
-    """Resolve the exact embedding required by an analysis view."""
-    if view == "batch_effect_uncorrected":
+    """Resolve one explicitly declared embedding without compatibility fallback."""
+    if view == "benchmark_analysis":
+        key = f"X_pca_benchmark_analysis_hvg{n_hvg}"
+    elif view == "batch_effect_uncorrected":
         key = f"X_pca_batch_effect_uncorrected_hvg{n_hvg}"
     elif view == "batch_effect_corrected":
         key = f"X_pca_harmony_batch_effect_corrected_hvg{n_hvg}"
     else:
-        key = f"X_pca_{view}_hvg{n_hvg}"
+        raise ValueError(f"Unknown preprocessing view: {view}")
     if key not in adata.obsm:
         raise KeyError(f"Required embedding {key!r} is missing from adata.obsm")
     return key
@@ -347,7 +528,10 @@ def run_pilot(adata, ct_col, view, n_hvg, output_path):
         sample_col="Sample",
         status="Sample",
     )
-    adata.uns["EMD_df"].to_feather(output_path)
+    df_dists = _align_square_frame(
+        adata.uns["EMD_df"], _ordered_sample_ids(adata), output_path
+    )
+    atomic_to_feather(df_dists, output_path)
 
 
 def fill_unknown_ct(adata, ct_col, method):
@@ -398,7 +582,7 @@ def run_qot(adata, ct_col, view, n_hvg, output_path):
         qot_method="cosine",
         normalized_set=False,
     )
-    samples = adata.uns["Datafame_for_use"]["sampleID"].unique()
+    samples = _ordered_sample_ids(adata)
     # Plain object strings: anndata obs columns are categorical by default and
     # a categorical DataFrame index would be written to the feather as
     # categorical (pyarrow 24/25 pandas-compat cannot read that back:
@@ -408,7 +592,87 @@ def run_qot(adata, ct_col, view, n_hvg, output_path):
     df_dists = pd.DataFrame(
         adata.uns["QOT_Distance"], index=samples, columns=samples
     )
-    df_dists.to_feather(output_path)
+    df_dists = _align_square_frame(
+        df_dists, samples, output_path
+    )
+    atomic_to_feather(df_dists, output_path)
+
+
+def _stabilize_pilotgm_covariances(adata):
+    """Regularize undefined empirical covariances before PILOT-GM distances.
+
+    The upstream representation helper uses ``np.cov`` for each assigned
+    component. A component with one cell has an undefined covariance and
+    yields NaNs; interpreting that component as zero empirical covariance,
+    followed by the package's diagonal regularization, is the finite
+    single-observation limit. Means and weights remain untouched and must
+    already be finite.
+    """
+    representations = adata.uns.get("GMVAE_Representation")
+    if not isinstance(representations, dict) or not representations:
+        raise ValueError("PILOT-GM-VAE did not produce sample representations")
+    for sample_id, representation in representations.items():
+        means = np.asarray(representation["means"], dtype=float)
+        weights = np.asarray(representation["weights"], dtype=float)
+        if (
+            not np.isfinite(means).all()
+            or not np.isfinite(weights).all()
+            or weights.ndim != 1
+            or weights.size == 0
+            or float(weights.sum()) <= 0
+        ):
+            raise ValueError(
+                f"PILOT-GM-VAE produced invalid means/weights for sample {sample_id!r}"
+            )
+        covariances = np.asarray(representation["covariances"], dtype=float)
+        if (
+            covariances.ndim != 3
+            or covariances.shape[1] != covariances.shape[2]
+            or covariances.shape[0] != means.shape[0]
+        ):
+            raise ValueError(
+                f"PILOT-GM-VAE produced invalid covariances for sample {sample_id!r}"
+            )
+        stable = []
+        for covariance in covariances:
+            if np.isinf(covariance).any():
+                raise ValueError(
+                    f"PILOT-GM-VAE produced infinite covariance for sample {sample_id!r}"
+                )
+            covariance = np.nan_to_num(covariance, nan=0.0)
+            covariance = (covariance + covariance.T) / 2.0
+            eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+            eigenvalues = np.clip(eigenvalues, 0.0, None)
+            stable.append((eigenvectors * eigenvalues) @ eigenvectors.T)
+        representation["covariances"] = np.asarray(stable, dtype=float)
+
+
+def _run_pilotgm_distance_with_stable_covariances(pilotgm, adata, *, emb_key):
+    """Run PILOT-GM after finite PSD covariance stabilization."""
+    import importlib
+
+    pilotgm_core = importlib.import_module("pilotgm.core")
+    original_representation = pilotgm_core.gaussian_mixture_vae_representation
+
+    def stabilized_representation(*args, **kwargs):
+        result = original_representation(*args, **kwargs)
+        _stabilize_pilotgm_covariances(result)
+        return result
+
+    pilotgm_core.gaussian_mixture_vae_representation = stabilized_representation
+    try:
+        pilotgm.gmmvae_wasserstein_distance(
+            adata,
+            emb_matrix=emb_key,
+            clusters_col="component_assignment",
+            sample_col="Sample",
+            status="_bench_status",
+            wass_dis=True,
+            covariance_type="full",
+            epsilon=1e-3,
+        )
+    finally:
+        pilotgm_core.gaussian_mixture_vae_representation = original_representation
 
 
 def run_pilotgm(adata, ct_col, view, n_hvg, output_path, ds_name, device):
@@ -438,8 +702,13 @@ def run_pilotgm(adata, ct_col, view, n_hvg, output_path, ds_name, device):
         emb = np.asarray(emb)
     adata.obsm[emb_key] = emb
 
-    fill_unknown_ct(adata, ct_col, "PILOT-GM-VAE")
-    num_classes = max(2, int(adata.obs[ct_col].nunique()))
+    # Unlike PILOT/QOT, PILOT-GM's distance API uses the model-generated
+    # `component_assignment` column, not the biological cell-type labels. The
+    # configured annotation only preserves the historical component-count
+    # choice; do not turn missing labels into an extra rare component.
+    ct_values = adata.obs[ct_col].astype("string")
+    valid_ct = ct_values.notna() & (ct_values.str.strip() != "")
+    num_classes = max(2, int(ct_values[valid_ct].nunique()))
     # Distinct temp column for `status`: same duplicate-key rename bug as QOT
     # (gmmvae_wasserstein_distance renames the last three columns via a dict;
     # sample_col == status == "Sample" would collapse the keys).
@@ -474,20 +743,20 @@ def run_pilotgm(adata, ct_col, view, n_hvg, output_path, ds_name, device):
             index=adata.obs_names,
             columns=[f"PCA_{i + 1}" for i in range(emb.shape[1])],
         )
-        # num_components is recomputed inside from `component_assignment`
-        # when wass_dis=True; keep defaults for the rest.
-        pilotgm.gmmvae_wasserstein_distance(
+        # The configured cell-type column determines the requested number of
+        # mixture components, but the package's distance step uses the
+        # model-generated component_assignment column, not those annotations.
+        _run_pilotgm_distance_with_stable_covariances(
+            pilotgm,
             adata,
-            emb_matrix=emb_key,
-            clusters_col="component_assignment",
-            sample_col="Sample",
-            status="_bench_status",
-            wass_dis=True,
-            covariance_type="full",
+            emb_key=emb_key,
         )
     finally:
         os.chdir(cwd)
-    adata.uns["EMD_df"].to_feather(output_path)
+    df_dists = _align_square_frame(
+        adata.uns["EMD_df"], _ordered_sample_ids(adata), output_path
+    )
+    atomic_to_feather(df_dists, output_path)
 
 
 # ---------------------------------------------------------------------------
@@ -510,16 +779,16 @@ def process_dataset(args, ds_name, entry):
             f"Dataset '{ds_name}' has no '{view_name}' view in datasets.json."
         )
     expected_view_for_pass = {
-        "uncorrected": "batch_effect_uncorrected",
-        "corrected": "batch_effect_corrected",
+        "uncorrected": {"batch_effect_uncorrected"},
+        "corrected": {"batch_effect_corrected"},
     }
     if analysis_pass is not None:
         if analysis_pass not in expected_view_for_pass:
             raise ValueError(f"Unknown analysis pass: {analysis_pass}")
-        if view_name != expected_view_for_pass[analysis_pass]:
+        if view_name not in expected_view_for_pass[analysis_pass]:
             raise ValueError(
-                f"analysis pass {analysis_pass!r} requires view "
-                f"{expected_view_for_pass[analysis_pass]!r}"
+                f"analysis pass {analysis_pass!r} requires one of "
+                f"{sorted(expected_view_for_pass[analysis_pass])!r}"
             )
         if analysis_pass == "corrected" and entry.get("batch_col") is None:
             raise ValueError(
@@ -596,8 +865,8 @@ def process_dataset(args, ds_name, entry):
     pending = []
     for n, res_label, ct_col, payload, run_fn, out_name in combos:
         out_path = output_dir / out_name
-        if out_path.exists() and not args.force:
-            print(f"Already processed: {out_name}")
+        if recorded_feather_valid(out_path) and not args.force:
+            print(f"Already processed and validated: {out_name}")
             continue
         pending.append((n, res_label, ct_col, payload, run_fn, out_path))
 
@@ -605,7 +874,8 @@ def process_dataset(args, ds_name, entry):
         return
 
     print(f"Loading {input_path} ...")
-    adata = sc.read_h5ad(str(input_path))
+    adata = sc.read_h5ad(str(input_path), backed="r")
+    validate_benchmark_h5ad_contract(adata, args.view, args.method)
     adata = adata.to_memory()
 
     if "Sample" not in adata.obs.columns:

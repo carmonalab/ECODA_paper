@@ -400,9 +400,7 @@ run_benchmark_analysis <- function(
     }
     # Per-sample metadata + labels (get_metadata/get_labels equivalents on a
     # data.frame: slice(1) per sample, names = Sample).
-    metadata <- obs %>%
-      dplyr::group_by(!!sym(sample_col)) %>%
-      dplyr::slice(1)
+    metadata <- collapse_sample_metadata(obs, sample_col = sample_col)
     labels <- as.factor(metadata[[label_col]])
     names(labels) <- metadata[[sample_col]]
     # Map the new-pipeline Leiden columns
@@ -965,7 +963,7 @@ run_gloscope_hpc <- function(
       results_dir,
       paste0(artifact_stem, "_", nm, ".rds")
     )
-    if (file.exists(bundle_file) && !force) {
+    if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
@@ -999,7 +997,8 @@ run_gloscope_hpc <- function(
         metadata = metadata,
         label_col = label_col,
         gloscope_dist_file = dist_file,
-        n_pca_dims = n_pca_dims
+        n_pca_dims = n_pca_dims,
+        force = force
       )
     )
     res[["exec_time"]] <- as.numeric(time_secs, units = "secs")
@@ -1050,7 +1049,7 @@ run_mofa_hpc <- function(
       results_dir,
       paste0(ds, "_", nm, ".rds")
     )
-    if (file.exists(bundle_file) && !force) {
+    if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
@@ -1110,7 +1109,7 @@ run_pseudobulk_hpc <- function(
     }
     nm <- "Pseudobulk_hvg2000"
     bundle_file <- file.path(results_dir, paste0(result_stem, "_", nm, ".rds"))
-    if (file.exists(bundle_file) && !force) {
+    if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file, mem_gb = cached$mem_GB)
@@ -1160,7 +1159,7 @@ run_pseudobulk_hpc <- function(
       stop("Pseudobulk variant '", plain_combos[[nm]], "' missing for ", nm)
     }
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
-    if (file.exists(bundle_file) && !force) {
+    if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
@@ -1193,7 +1192,7 @@ run_pseudobulk_hpc <- function(
   for (nm in pca_combos) {
     n_pca_dims <- as.integer(sub("Pseudobulk_(\\d+)_PCA_dims", "\\1", nm))
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
-    if (file.exists(bundle_file) && !force) {
+    if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
@@ -1230,7 +1229,7 @@ run_pseudobulk_hpc <- function(
       next
     }
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
-    if (file.exists(bundle_file) && !force) {
+    if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
@@ -1301,7 +1300,7 @@ run_scitd_hpc <- function(
     }
 
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
-    if (file.exists(bundle_file) && !force) {
+    if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
@@ -1491,7 +1490,7 @@ run_composition_methods_hpc <- function(
       bundle_file <- file.path(
         results_dir, paste0(artifact_stem, "_", nm, ".rds")
       )
-      if (file.exists(bundle_file) && !force) {
+      if (artifact_checksum_ok(bundle_file) && !force) {
         cached <- readRDS(bundle_file)
         results[[nm]] <- cached
         if (!is.null(cached$exec_time)) {
@@ -1649,7 +1648,7 @@ run_composition_methods_hpc <- function(
 
   for (nm in names(combos)) {
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
-    if (file.exists(bundle_file) && !force) {
+    if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- readRDS(bundle_file)
       results[[nm]] <- cached
       if (!is.null(cached$exec_time)) {

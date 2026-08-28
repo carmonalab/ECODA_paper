@@ -67,20 +67,15 @@
 #       suffix; non-zero exit on unparseable input) / truthy when a >= b.
 #   benchmark_merge_sync_cleanup <labels...>
 #       NAS reachability check FIRST (fail before any destructive merge
-#       work), then writes the RDS integrity sidecar (benchmark/checksums.md5
-#       over results/, pseudobulks/, gloscope_dists/ — verified by the
-#       notebook's load_hpc_benchmark_results() before readRDS), merges the
-#       per-task exec logs via 1.1.2_merge_execution_times.py (--no-cleanup,
-#       --labels/--datasets-scoped over DATASET_NAMES, --existing-log NAS
-#       continuity), rsyncs ${HPC_SCRATCH_DIR}/benchmark/ ->
-#       ${NAS_TARGET_DIR}/benchmark/, and only then deletes this run's
-#       per-task logs (scoped to the run's label x dataset cross product,
-#       plus a separate legacy execution_times_task_* sweep).
+#       work), merges execution logs atomically, writes a scope-specific
+#       checksum sidecar over final RDS/Feather outputs, rsyncs the selected
+#       canonical root, verifies the remote checksum, and only then deletes
+#       this run's per-task logs.
 #
-# The three submitters also support `--sync-only <id1,id2,...>` resume mode
-# (skip the sbatch submission loops, re-check the provided job ids via
-# benchmark_wait_for_array, then run benchmark_merge_sync_cleanup): these
-# helpers are reused as-is; the submitters only branch on the flag.
+# The canonical 1_submit_hpc_array.sh owns the matrix submission, watchdog
+# aggregation, and sync-only RUN_ID resume path. The family entrypoints are
+# compatibility delegators; these helpers remain available to the watchdog
+# regression tests and any narrowly scoped legacy worker.
 # Sync-status emails are sent by the helpers via notify_sync_status
 # (src/utils/bash/sync_status_email.sh, sourced below) — one per gate
 # failure ("NOT synced — reason") and one after a successful rsync. Gate
@@ -102,7 +97,7 @@ WATCHDOG_MAIN_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/watchdog_mai
 # by watchdog_main.sh (self-named from SLURM_JOB_ID) and read by the login
 # tail's benchmark_wait_watchdog. Outside benchmark/ so it is never rsync'd.
 if [[ -n "${ANALYSIS_PASS:-}" ]]; then
-  WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog"
+  WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/${ANALYSIS_PASS}"
 else
   WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_benchmark_watchdog"
 fi
@@ -119,6 +114,7 @@ JOB_REPORTS=()
 # email shows the whole escalation chain. Only used when benchmark_wait_oom_retry
 # is called with a status_file arg; the tail merges these into JOB_REPORTS.
 WATCHDOG_GATED_REPORTS=()
+WATCHDOG_SCHEDULER_IDS=()
 
 # Sync-status email helper (best-effort; requires USER_EMAIL from slurm_config.sh).
 source "$(dirname "${BASH_SOURCE[0]}")/../utils/bash/sync_status_email.sh"
@@ -300,16 +296,16 @@ benchmark_wait_array_terminal() {
   # CONSECUTIVE clean responses without the id count as "left the scheduler".
   # This avoids a transient empty/error squeue response (stale BeeGFS view,
   # scheduler hiccup) being misread as an early exit; the bounded sacct poll
-  # below is the final safety net, not the primary signal. Repeated squeue
-  # After 3 failures, a terminal sacct response is an explicit fallback;
-  # failure from both commands still stops the wait closed.
+  # below is the final safety net, not the primary signal. After 3 failures,
+  # a terminal sacct response is an explicit fallback; failure from both
+  # commands still stops the wait closed.
   local MISS=0 SQUEUE_FAILURES=0 OUT=""
   while :; do
-    if ! OUT="$(squeue -j "${JOB_ID}" -h -o "%A" 2>/dev/null)"; then
+    if ! OUT="$(timeout 30 squeue -j "${JOB_ID}" -h -o "%A" 2>/dev/null)"; then
       SQUEUE_FAILURES=$((SQUEUE_FAILURES + 1))
       if (( SQUEUE_FAILURES >= 3 )); then
         local FALLBACK_STATES
-        FALLBACK_STATES="$(sacct -j "${JOB_ID}" --format=State -n 2>/dev/null || true)"
+        FALLBACK_STATES="$(timeout 30 sacct -j "${JOB_ID}" --format=State -n 2>/dev/null || true)"
         if [[ -z "${FALLBACK_STATES//[[:space:]]/}" ]]; then
           echo "ERROR: squeue and sacct could not report terminal state for ${JOB_ID}; stopping wait." >&2
           return 1
@@ -341,13 +337,13 @@ benchmark_wait_array_terminal() {
   # still treated as an accounting failure and released to the caller's
   # fail-closed check.
   echo "Waiting for sacct to record terminal states for job ${JOB_ID}..."
-  local EMPTY=0 STATES=""
+  local EMPTY=0 STATES="" EMPTY_GRACE="${ECODA_ACCOUNTING_EMPTY_GRACE:-3}"
   while :; do
-    STATES="$(sacct -j "${JOB_ID}" --format=State -n 2>/dev/null || true)"
+    STATES="$(timeout 30 sacct -j "${JOB_ID}" --format=State -n 2>/dev/null || true)"
     if [[ -z "${STATES//[[:space:]]/}" ]]; then
       EMPTY=$((EMPTY + 1))
-      if (( EMPTY >= 2 )); then
-        echo "WARNING: sacct returned no states twice for ${JOB_ID}; stopping wait." >&2
+      if (( EMPTY >= EMPTY_GRACE )); then
+        echo "WARNING: sacct returned no states ${EMPTY_GRACE} times for ${JOB_ID}; stopping wait." >&2
         break
       fi
     elif ! grep -qE 'PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING' <<< "${STATES}"; then
@@ -408,9 +404,14 @@ benchmark_write_status_file() {
   local FAIL_REASON="${4:-}"
   local REPORT="${5:-}"
   local TMP_FILE="${STATUS_FILE}.tmp"
+  mkdir -p "$(dirname "${STATUS_FILE}")"
   {
     printf 'STATE=%s\n' "${STATE}"
     printf 'LABEL=%s\n' "${LABEL}"
+    local scheduler_id
+    for scheduler_id in "${WATCHDOG_SCHEDULER_IDS[@]}"; do
+      printf 'SCHEDULER_ID=%s\n' "${scheduler_id}"
+    done
     local line
     for line in "${WATCHDOG_GATED_REPORTS[@]}"; do
       printf 'JOB_REPORT=%s\n' "${line}"
@@ -444,9 +445,10 @@ benchmark_wait_oom_retry() {
   local ATTEMPT=0
   local TASK_STATES OOM_TASKS=() BAD_TASK="" DS_CSV="" NEW_MEM="" NEW_MANIFEST="" NEW_ID=""
   local JID STATE MASTER_STATE="" TASK_ROWS_FOUND=0 t ds_name CLAMPED=0
-
   if [[ -n "${STATUS_FILE}" ]]; then
     WATCHDOG_GATED_REPORTS=()
+    WATCHDOG_SCHEDULER_IDS=("${JOB_ID}")
+    [[ -n "${SLURM_JOB_ID:-}" ]] && WATCHDOG_SCHEDULER_IDS+=("${SLURM_JOB_ID}")
   fi
 
   while (( ATTEMPT < MAX_ATTEMPTS )); do
@@ -599,6 +601,9 @@ $(benchmark_oom_task_report "${JOB_ID}" "${MANIFEST}")"
           "resubmit function returned no array job id for the ${LABEL} retry"
       fi
       exit 1
+    fi
+    if [[ -n "${STATUS_FILE}" ]]; then
+      WATCHDOG_SCHEDULER_IDS+=("${NEW_ID}")
     fi
     JOB_ID="${NEW_ID}"
     MANIFEST="${NEW_MANIFEST}"
@@ -776,78 +781,279 @@ Check ${LOGS_DIR}/5_benchmark_watchdog_${LABEL}_${WATCHDOG_ID}.log/.err; recover
 # ---------------------------------------------------------------------------
 # NAS check -> RDS integrity sidecar -> merge exec logs -> rsync -> cleanup
 # ---------------------------------------------------------------------------
-analysis_merge_sync_cleanup() {
+
+benchmark_sync_artifacts_for() {
+  local ds="$1" label="$2" n suffix stem
+  local root="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
+  SYNC_ARTIFACTS=()
+  if [[ "${label}" == prepare_pseudobulk ]]; then
+    if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+      SYNC_ARTIFACTS+=("${root}/pseudobulks/${ds}_batch_effect_${ANALYSIS_PASS}_pseudobulk_hvg2000.rds")
+    else
+      for suffix in schvg2000 hvg2000 hvg500 hvg2000_bl hvg1000 hvg3000; do
+        SYNC_ARTIFACTS+=("${root}/pseudobulks/${ds}_pseudobulk_${suffix}.rds")
+      done
+    fi
+    return 0
+  fi
+  case "${label}" in
+    mrvi)
+      if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+        SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_batch_effect_${ANALYSIS_PASS}_hvg2000_highres_mrvi_dists.feather")
+      else
+        for n in 1000 2000 3000; do
+          SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_hvg${n}_mrvi_dists.feather")
+        done
+      fi
+      ;;
+    scpoli)
+      SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_hvg2000_lowres_scpoli_dims15_embs.feather")
+      for n in 1000 3000; do
+        SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_hvg${n}_highres_scpoli_dims15_embs.feather")
+      done
+      for n in 2 3 5 10 15; do
+        SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_hvg2000_highres_scpoli_dims${n}_embs.feather")
+      done
+      ;;
+    pilot|qot|pilotgm)
+      suffix="${label}"
+      if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+        SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_batch_effect_${ANALYSIS_PASS}_hvg2000_highres_${suffix}_dists.feather")
+      else
+        SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_hvg2000_lowres_${suffix}_dists.feather")
+        for n in 1000 2000 3000; do
+          SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_hvg${n}_highres_${suffix}_dists.feather")
+        done
+      fi
+      ;;
+    trans|zeroimp)
+      SYNC_ARTIFACTS+=("${root}/results/${ds}_${label}.rds")
+      ;;
+    gloscope|mofa|pseudobulk|scitd)
+      stem="${ds}"
+      [[ -n "${ANALYSIS_PASS:-}" ]] && stem="${ds}_batch_effect_${ANALYSIS_PASS}"
+      SYNC_ARTIFACTS+=("${root}/results/${stem}_${label}.rds")
+      ;;
+    composition)
+      stem="${ds}"
+      [[ -n "${ANALYSIS_PASS:-}" ]] && stem="${ds}_batch_effect_${ANALYSIS_PASS}"
+      SYNC_ARTIFACTS+=("${root}/results/${stem}_composition.rds")
+      SYNC_ARTIFACTS+=("${root}/results/${stem}_metadata.rds")
+      ;;
+    *)
+      echo "ERROR: unsupported benchmark sync label '${label}'." >&2
+      return 1
+      ;;
+  esac
+}
+analysis_merge_sync_cleanup() (
   local LABELS=("$@")
   local LOCAL_ROOT="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
   local REMOTE_ROOT="${ANALYSIS_NAS_ROOT:-${NAS_TARGET_DIR}/benchmark}"
   local LOG_PREFIX="${ANALYSIS_LOG_PREFIX:-execution_times_}"
-  local KIND="benchmark"
-  local KIND_CAP="Benchmark"
+  local RUN_ROOT="${ECODA_RUN_ROOT:-}"
+  local RUN_ID="${ECODA_RUN_ID:-}"
+  local RUN_LOG_DIR="${EXECUTION_LOG_DIR:-${RUN_ROOT}/logs}"
+  local KIND="benchmark" KIND_CAP="Benchmark"
+  local SYNC_OWNER_DIR="" SYNC_LOCK_DIR="" SYNC_FINAL_STATE="FAIL"
+  local SYNC_FILES SYNC_FILES_TMP NO_CHECKSUM_FILES_TMP CLEANUP_MANIFEST
+  local CHECKSUM_TMP REMOTE_CHECKSUM_TMP EXISTING_LOG
+  local ds view row_label label path rel line selected_seen=""
+  local -a SELECTED_RELS=()
+  sync_fail() {
+    local reason="$1"
+    SYNC_FINAL_STATE="FAIL"
+    echo "ERROR: ${reason}" >&2
+    notify_sync_status \
+      "ECODA: ${KIND} NOT synced" \
+      "${KIND_CAP} sync to NAS skipped (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]}): ${reason}" || true
+    exit 1
+  }
+  sync_cleanup() {
+    local rc="$?"
+    if [[ -n "${SYNC_OWNER_DIR}" ]]; then
+      if ! ecoda_owner_set_state "${SYNC_OWNER_DIR}" "${SYNC_FINAL_STATE}" \
+          "Stage 5 synchronization terminal state"; then
+        rc=1
+      fi
+    fi
+    if [[ -n "${SYNC_LOCK_DIR}" ]]; then
+      rmdir "${SYNC_LOCK_DIR}" 2>/dev/null || rc=1
+    fi
+    exit "${rc}"
+  }
+  trap sync_cleanup EXIT
+
+  [[ -n "${RUN_ROOT}" && -n "${RUN_ID}" ]] || sync_fail "Stage 5 run root/id is not set"
   if [[ "${LOCAL_ROOT}" != "${HPC_SCRATCH_DIR}/benchmark" ]]; then
     KIND="analysis"
     KIND_CAP="Analysis"
   fi
-
-  # NAS must be reachable BEFORE the merge: the merge with --no-cleanup keeps
-  # the per-task logs until after the rsync below succeeds.
-  echo "Checking NAS reachability..."
-  if ! ls "${NAS_TARGET_DIR}/.." > /dev/null 2>&1; then
-      echo "ERROR: NAS path ${REMOTE_ROOT} is unreachable."
-      notify_sync_status \
-        "ECODA: ${KIND} NOT synced (no NAS access)" \
-        "${KIND_CAP} sync to NAS skipped (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]}): NAS path ${REMOTE_ROOT} is unreachable (check VPN/NAS mount).
-$(benchmark_job_durations_block)"
-      exit 1
+  echo "Checking NAS reachability before any destructive merge work..."
+  [[ -d "${NAS_TARGET_DIR}" ]] || sync_fail "NAS path ${REMOTE_ROOT} is unreachable"
+  if ! mkdir -p "${REMOTE_ROOT}" "${LOCAL_ROOT}/embeddings" "${RUN_ROOT}/manifests"; then
+    sync_fail "failed to create benchmark sync directories"
   fi
-  mkdir -p "${REMOTE_ROOT}"
+  LOCAL_ROOT="$(cd "${LOCAL_ROOT}" && pwd)" ||
+    sync_fail "failed to canonicalize local benchmark root"
+  REMOTE_ROOT="$(cd "${REMOTE_ROOT}" && pwd)" ||
+    sync_fail "failed to canonicalize remote benchmark root"
+  RUN_ROOT="$(cd "${RUN_ROOT}" && pwd)" ||
+    sync_fail "failed to canonicalize Stage 5 run root"
+  RUN_LOG_DIR="$(cd "${RUN_LOG_DIR}" && pwd)" ||
+    sync_fail "failed to canonicalize Stage 5 run log directory"
+  ECODA_RUN_ROOT="${RUN_ROOT}"
+  SYNC_OWNER_DIR="$(ecoda_owner_acquire stage5 "sync/${LOCAL_ROOT}" "${RUN_ID}" 0 0)" || {
+    sync_fail "shared Stage 5 sync owner is unavailable"
+  }
+  SYNC_LOCK_DIR="${RUN_ROOT}/sync.lock"
+  mkdir "${SYNC_LOCK_DIR}" 2>/dev/null || sync_fail "run sync lock already exists: ${SYNC_LOCK_DIR}"
 
-  # Write an md5 checksum sidecar over the RDS result bundles. The sidecar is
-  # kept inside the pass-scoped analysis root so raw/corrected artifacts never
-  # share an integrity manifest.
-  if ls "${LOCAL_ROOT}"/results/*.rds \
-         "${LOCAL_ROOT}"/pseudobulks/*.rds \
-         "${LOCAL_ROOT}"/gloscope_dists/*.rds > /dev/null 2>&1; then
-    FIND_DIRS=()
-    for d in results pseudobulks gloscope_dists; do
-      [[ -d "${LOCAL_ROOT}/${d}" ]] && FIND_DIRS+=("${d}")
+  SYNC_FILES="${RUN_ROOT}/manifests/sync_files.tsv"
+  SYNC_FILES_TMP="${SYNC_FILES}.build.$$"
+  NO_CHECKSUM_FILES_TMP="${RUN_ROOT}/manifests/sync_files.no_checksum.build.$$"
+  CLEANUP_MANIFEST="${RUN_ROOT}/manifests/cleanup.tsv"
+  if ! : > "${SYNC_FILES_TMP}"; then
+    sync_fail "failed to create selected sync manifest"
+  fi
+  SELECTED_RELS=()
+
+  add_sync_artifact() {
+    local artifact="$1" artifact_rel
+    [[ "${artifact}" == "${LOCAL_ROOT}/"* ]] || sync_fail "selected artifact is outside analysis root: ${artifact}"
+    artifact_rel="${artifact#${LOCAL_ROOT}/}"
+    case " ${selected_seen} " in
+      *" ${artifact_rel} "*) return 0 ;;
+    esac
+    [[ -s "${artifact}" ]] || sync_fail "selected artifact is missing or empty: ${artifact}"
+    ecoda_validate_checksum "${artifact}" || sync_fail "selected artifact checksum failed: ${artifact}"
+    selected_seen="${selected_seen} ${artifact_rel}"
+    SELECTED_RELS+=("${artifact_rel}")
+    printf '%s\n' "${artifact_rel}" >> "${SYNC_FILES_TMP}"
+    printf '%s\n' "${artifact_rel}.md5" >> "${SYNC_FILES_TMP}"
+  }
+
+  if [[ -r "${ECODA_SELECTION_MANIFEST:-}" ]]; then
+    while IFS=$'\t' read -r ds view row_label; do
+      [[ -n "${ds}" && -n "${view}" ]] || continue
+      SYNC_LABELS=("${LABELS[@]}")
+      if [[ "${ECODA_EXACT_SELECTION:-0}" == "1" && -z "${ANALYSIS_PASS:-}" ]]; then
+        SYNC_LABELS=("${row_label}")
+      fi
+      for label in "${SYNC_LABELS[@]}"; do
+        benchmark_sync_artifacts_for "${ds}" "${label}" || sync_fail "cannot resolve ${ds}/${view}/${label}"
+        for path in "${SYNC_ARTIFACTS[@]}"; do add_sync_artifact "${path}"; done
+      done
+    done < "${ECODA_SELECTION_MANIFEST}"
+  else
+    for ds in "${DATASET_NAMES[@]}"; do
+      for label in "${LABELS[@]}"; do
+        benchmark_sync_artifacts_for "${ds}" "${label}" || sync_fail "cannot resolve ${ds}/${label}"
+        for path in "${SYNC_ARTIFACTS[@]}"; do add_sync_artifact "${path}"; done
+      done
     done
-    (cd "${LOCAL_ROOT}" && \
-       find "${FIND_DIRS[@]}" -type f -name '*.rds' -exec md5sum {} + > checksums.md5)
-    echo "Wrote ${KIND}/checksums.md5 (RDS bundle integrity sidecar)."
+  fi
+  [[ ${#SELECTED_RELS[@]} -gt 0 ]] || sync_fail "no selected benchmark artifacts"
+  if [[ -s "${REMOTE_ROOT}/checksums.md5" ]]; then
+    (cd "${REMOTE_ROOT}" && md5sum -c checksums.md5 >/dev/null 2>&1) || {
+      sync_fail "existing remote checksum manifest failed validation"
+    }
   fi
 
-  echo "All tasks completed successfully. Merging execution-time logs..."
-  # --no-cleanup: per-task logs are deleted only AFTER the rsync below
-  # succeeds. The prefix scopes pass-qualified batch logs separately from
-  # ordinary benchmark logs.
-  local MERGE_ARGS=(--output_dir "${LOCAL_ROOT}/embeddings"
-                    --no-cleanup
-                    --filename_prefix "${LOG_PREFIX}"
-                    --labels "${LABELS[@]}"
-                    --datasets "${DATASET_NAMES[@]}")
-  local EXISTING_LOG="${REMOTE_ROOT}/embeddings/execution_times.feather"
-  if [[ -f "${EXISTING_LOG}" ]]; then
-      MERGE_ARGS+=(--existing-log "${EXISTING_LOG}")
+  EXISTING_LOG="${REMOTE_ROOT}/embeddings/execution_times.feather"
+  if [[ -f "${EXISTING_LOG}" && ! -f "${EXISTING_LOG}.md5" ]]; then
+    "${PYTHON_BIN}" "${ANALYSIS_MERGE_SCRIPT}" \
+      --migrate-existing-log "${EXISTING_LOG}" || {
+      sync_fail "existing remote execution log failed guarded sidecar migration"
+    }
   fi
-  "${PYTHON_BIN}" "${ANALYSIS_MERGE_SCRIPT}" "${MERGE_ARGS[@]}"
+  if [[ -e "${EXISTING_LOG}" || -e "${EXISTING_LOG}.md5" ]]; then
+    ecoda_validate_checksum_remote "${EXISTING_LOG}" "${EXISTING_LOG}.md5" || {
+      sync_fail "existing remote execution log checksum failed"
+    }
+  fi
+  MERGE_ARGS=(--output_dir "${LOCAL_ROOT}/embeddings"
+              --log-dir "${RUN_LOG_DIR}"
+              --no-cleanup
+              --filename_prefix "${LOG_PREFIX}"
+              --labels "${LABELS[@]}"
+              --datasets "${DATASET_NAMES[@]}"
+              --cleanup-manifest "${CLEANUP_MANIFEST}")
+  [[ -s "${EXISTING_LOG}" ]] && MERGE_ARGS+=(--existing-log "${EXISTING_LOG}")
+  "${PYTHON_BIN}" "${ANALYSIS_MERGE_SCRIPT}" "${MERGE_ARGS[@]}" || {
+    sync_fail "execution-log merge failed"
+  }
+  add_sync_artifact "${LOCAL_ROOT}/embeddings/execution_times.feather"
 
-  echo "Merged logs. Syncing results to NAS..."
-  rsync -rlptDv "${LOCAL_ROOT}/" "${REMOTE_ROOT}/"
-  echo "Results synchronized to ${REMOTE_ROOT}/"
+  CHECKSUM_TMP="${LOCAL_ROOT}/checksums.md5.build.$$"
+  if ! : > "${CHECKSUM_TMP}"; then
+    sync_fail "failed to create benchmark checksum manifest"
+  fi
+  if [[ -s "${REMOTE_ROOT}/checksums.md5" ]]; then
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+      rel="$(printf '%s\n' "${line}" | awk '{p=$2; sub(/^\*/, "", p); print p}')"
+      case " ${selected_seen} " in
+        *" ${rel} "*) ;;
+        *) printf '%s\n' "${line}" >> "${CHECKSUM_TMP}" ||
+             sync_fail "failed to preserve remote checksum entry" ;;
+      esac
+    done < "${REMOTE_ROOT}/checksums.md5"
+  fi
+  for rel in "${SELECTED_RELS[@]}"; do
+    (cd "${LOCAL_ROOT}" && md5sum "${rel}") >> "${CHECKSUM_TMP}" || {
+      rm -f "${CHECKSUM_TMP}"
+      sync_fail "cannot checksum selected relative path: ${rel}"
+    }
+  done
+  [[ -s "${CHECKSUM_TMP}" ]] || {
+    rm -f "${CHECKSUM_TMP}"
+    sync_fail "final benchmark checksum manifest is empty"
+  }
+  if ! mv -f "${CHECKSUM_TMP}" "${LOCAL_ROOT}/checksums.md5"; then
+    rm -f "${CHECKSUM_TMP}"
+    sync_fail "cannot install local benchmark checksum manifest"
+  fi
+  printf 'checksums.md5\n' >> "${SYNC_FILES_TMP}" ||
+    sync_fail "cannot add checksum manifest to selected sync"
+  [[ -s "${SYNC_FILES_TMP}" ]] || sync_fail "selected sync file manifest is empty"
+  if ! mv -f "${SYNC_FILES_TMP}" "${SYNC_FILES}"; then
+    rm -f "${SYNC_FILES_TMP}"
+    sync_fail "cannot install selected sync manifest"
+  fi
+
+  if ! : > "${NO_CHECKSUM_FILES_TMP}"; then
+    sync_fail "failed to create no-checksum sync manifest"
+  fi
+  while IFS= read -r rel || [[ -n "${rel}" ]]; do
+    if [[ "${rel}" != "checksums.md5" ]]; then
+      printf '%s\n' "${rel}" >> "${NO_CHECKSUM_FILES_TMP}" ||
+        sync_fail "failed to build no-checksum sync manifest"
+    fi
+  done < "${SYNC_FILES}"
+  rsync -rlptDv --files-from="${NO_CHECKSUM_FILES_TMP}" \
+    "${LOCAL_ROOT}/" "${REMOTE_ROOT}/" || sync_fail "selected benchmark rsync failed"
+  REMOTE_CHECKSUM_TMP="${REMOTE_ROOT}/.checksums.md5.tmp.${RUN_ID}"
+  cp "${LOCAL_ROOT}/checksums.md5" "${REMOTE_CHECKSUM_TMP}" || {
+    sync_fail "cannot stage remote checksum manifest"
+  }
+  mv -f "${REMOTE_CHECKSUM_TMP}" "${REMOTE_ROOT}/checksums.md5" || {
+    sync_fail "cannot atomically install remote checksum manifest"
+  }
+  (cd "${REMOTE_ROOT}" && md5sum -c checksums.md5) || sync_fail "remote checksum verification failed"
+  if [[ -s "${CLEANUP_MANIFEST}" ]]; then
+    while IFS= read -r path || [[ -n "${path}" ]]; do
+      [[ "${path}" == "${RUN_LOG_DIR}/"* ]] ||
+        sync_fail "cleanup manifest escapes run log directory: ${path}"
+      rm -f "${path}" "${path}.md5" ||
+        sync_fail "failed to clean up run log artifact: ${path}"
+    done < "${CLEANUP_MANIFEST}"
+  fi
   notify_sync_status \
     "ECODA: ${KIND} synced to NAS" \
-    "${KIND_CAP} results synced to ${REMOTE_ROOT}/ (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]}).
-$(benchmark_job_durations_block)"
-
-  # Per-task logs may be deleted only now that the sync has succeeded.
-  for LABEL in "${LABELS[@]}"; do
-    for DS in "${DATASET_NAMES[@]}"; do
-      rm -f "${LOCAL_ROOT}/embeddings/${LOG_PREFIX}${LABEL}_${DS}.feather"
-    done
-  done
-  rm -f "${LOCAL_ROOT}/embeddings"/"${LOG_PREFIX}"task_*.feather
-  echo "Deleted per-task execution-time logs."
-}
+    "${KIND_CAP} selected results synced to ${REMOTE_ROOT}/ (datasets: ${DATASET_NAMES[*]}, labels: ${LABELS[*]}).
+$(benchmark_job_durations_block)" || true
+  SYNC_FINAL_STATE="OK"
+)
 
 # Existing submitters retain their public helper name; batch-effect submitters
 # call the generic implementation directly.

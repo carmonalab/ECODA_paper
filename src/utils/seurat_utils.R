@@ -151,10 +151,17 @@ get_ct_comp_df_seurat <- function(seurat, sample_col, ct_col) {
   cts <- as.character(md[[ct_col]])
   valid_mask <- !is.na(cts) & !cts %in% c("NA", "nan", "None", "Unknown") & cts != ""
   md_sub <- md[valid_mask, , drop = FALSE]
+  sample_values <- as.character(md_sub[[sample_col]])
+  ct_values <- as.character(md_sub[[ct_col]])
+  sample_levels <- unique(sample_values)
+  ct_levels <- unique(ct_values)
 
+  # `table()` uses factor levels, which can be sorted independently of the
+  # first-appearance order in the canonical preprocessed obs. Explicit levels
+  # keep every composition result aligned with the source sample universe.
   ct_comp_df <- table(
-    md_sub[[sample_col]],
-    md_sub[[ct_col]]
+    factor(sample_values, levels = sample_levels),
+    factor(ct_values, levels = ct_levels)
   ) %>%
     t() %>%
     as.data.frame.matrix() %>%
@@ -172,10 +179,16 @@ get_ct_comp_df <- function(obs, sample_col, ct_col) {
   cts <- as.character(obs[[ct_col]])
   valid_mask <- !is.na(cts) & !cts %in% c("NA", "nan", "None", "Unknown") & cts != ""
   obs_sub <- obs[valid_mask, , drop = FALSE]
+  sample_values <- as.character(obs_sub[[sample_col]])
+  ct_values <- as.character(obs_sub[[ct_col]])
+  sample_levels <- unique(sample_values)
+  ct_levels <- unique(ct_values)
 
+  # Preserve the sample order from obs; default factor levels would sort IDs
+  # and produce a valid-looking but misordered composition matrix.
   ct_comp_df <- table(
-    obs_sub[[sample_col]],
-    obs_sub[[ct_col]]
+    factor(sample_values, levels = sample_levels),
+    factor(ct_values, levels = ct_levels)
   ) %>%
     t() %>%
     as.data.frame.matrix() %>%
@@ -304,13 +317,32 @@ standardize_sample_names <- function(sample_names) {
   sample_names <- gsub("-", "_", sample_names)
 }
 
+# Get one metadata row per non-empty sample. AnnData categorical columns can
+# retain levels for samples removed before conversion to R; `.drop = TRUE`
+# prevents empty factor levels from becoming NA-labelled benchmark samples.
+collapse_sample_metadata <- function(obs, sample_col = "Sample") {
+  if (!is.data.frame(obs)) obs <- as.data.frame(obs)
+  if (!sample_col %in% colnames(obs)) {
+    stop("Sample metadata column '", sample_col, "' not found.")
+  }
+  sample_values <- as.character(obs[[sample_col]])
+  if (anyNA(sample_values) || any(!nzchar(trimws(sample_values)))) {
+    stop("Sample metadata column '", sample_col,
+         "' contains missing or blank sample IDs.")
+  }
+  if (is.factor(obs[[sample_col]])) {
+    obs[[sample_col]] <- droplevels(obs[[sample_col]])
+  }
+  grouped <- dplyr::group_by(
+    obs,
+    !!dplyr::sym(sample_col),
+    .drop = TRUE
+  )
+  dplyr::ungroup(dplyr::slice(grouped, 1))
+}
 # Get unique metadata per sample
 get_metadata <- function(seurat, sample_col = "Sample") {
-  metadata <- seurat@meta.data %>%
-    dplyr::group_by(!!sym(sample_col)) %>%
-    dplyr::slice(1)
-
-  return(metadata)
+  collapse_sample_metadata(seurat@meta.data, sample_col = sample_col)
 }
 
 # Get labels from seurat metadata
