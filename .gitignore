@@ -73,3 +73,7 @@ notebooks/dataset_onboarding/*_files/
 
 /.quarto/
 **/*.quarto_ipynb
+
+# Durable gate state and local execution evidence (never source artifacts)
+/.gate/
+/.kilo/gates/
