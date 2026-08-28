@@ -123,7 +123,7 @@
       "label": "sample.origin",
       "batch": "seqtec",
       "cell_type_low_res": "cell.type",
-      "cell_type_high_res": "cell.type"
+      "cell_type_high_res": "cell.type_new"
     },
     "views": {
       "batch_effect_uncorrected": {
@@ -401,7 +401,7 @@
   },
   "CombinedPBMC": {
     "display_name": "Combined PBMC (Stephenson, GongSharma, Zhu)",
-    "file_names": "combined_pbmc_batch_effect_analysis.h5ad",
+    "file_names": "combined_pbmc.h5ad",
     "folder_name": null,
     "tissue": "Blood",
     "normal_tissue": true,
@@ -411,13 +411,18 @@
       "sample": "Sample",
       "label": "cond",
       "batch": "batch",
-      "cell_type_low_res": null,
-      "cell_type_high_res": null
+      "cell_type_low_res": "layer1",
+      "cell_type_high_res": "layer2"
     },
     "views": {
-      "batch_effect_analysis": {
-        "input_file_name": "combined_pbmc_batch_effect_analysis.h5ad",
-        "output_file_name": "combined_pbmc_batch_effect_analysis_batch_effect_analysis_ECODAprocessed.h5ad",
+      "batch_effect_uncorrected": {
+        "input_file_name": "combined_pbmc.h5ad",
+        "output_file_name": "combined_pbmc_batch_effect_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "combined_pbmc.h5ad",
+        "output_file_name": "combined_pbmc_batch_effect_corrected_ECODAprocessed.h5ad",
         "subset_vars": {}
       }
     }
