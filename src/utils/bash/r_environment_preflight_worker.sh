@@ -36,6 +36,18 @@ R_COMMAND="${R_ENV_PREFLIGHT_RSCRIPT:-${PIXI_RSCRIPT:-}}"
 }
 
 ${R_COMMAND} -e '
+  cat("node=", Sys.info()[["nodename"]], "\n", sep="")
+  cat("R=", R.version.string, "\n", sep="")
+  cat("HOME=", Sys.getenv("HOME"), "\n", sep="")
+  cat("libPaths=", paste(.libPaths(), collapse=";"), "\n", sep="")
+  packages <- c("arrow", "DelayedArray", "DESeq2", "EPIC", "GloScope", "MOFA2", "scITD")
+  for (pkg in packages) {
+    location <- find.package(pkg, quiet=TRUE)
+    rdb <- if (length(location)) file.path(location, "R", paste0(pkg, ".rdb")) else ""
+    cat("package=", pkg, " path=", if (length(location)) location else "<missing>",
+        " rdb=", if (nzchar(rdb)) rdb else "<missing>",
+        " exists=", if (nzchar(rdb)) file.exists(rdb) else FALSE, "\n", sep="")
+  }
   suppressPackageStartupMessages({
     library(arrow)
     library(DESeq2)
