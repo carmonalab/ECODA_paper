@@ -535,7 +535,7 @@ ecoda_wait_array_accounting() {
   local job="$1" expected="$2" poll_seconds="${3:-30}"
   local rows jid state found pending empty=0 missing=0 scheduler_active active_jobs
   while :; do
-    rows="$(sacct -j "${job}" -n -P --format=JobIDRaw,State,ExitCode 2>/dev/null || true)"
+    rows="$(sacct -j "${job}" -n -P --format=JobID,State,ExitCode 2>/dev/null || true)"
     scheduler_active=0
     if command -v squeue >/dev/null 2>&1; then
       active_jobs="$(squeue -j "${job}" -h -o "%A" 2>/dev/null || true)"
