@@ -24,6 +24,7 @@ RUN_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/run"
 MANIFEST="${RUN_ROOT}/manifests/mrvi.tsv"
 printf 'Adams\tbatch_effect_uncorrected\tmrvi\nBassez\tbatch_effect_uncorrected\tmrvi\n' > "${MANIFEST}"
 WATCHDOG_OUTPUT="$(HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" ANALYSIS_PASS=uncorrected MATRIX_WATCHDOG_MAX_POLLS=1 \
+  SLURM_JOB_ID=999999 SLURM_SUBMIT_DIR="${ROOT}" \
   bash "${ROOT}/src/5_run_benchmark_methods/matrix_watchdog.sh" "${RUN_ROOT}" mrvi "${MANIFEST}" 1001 128G 256G shared-gpu 4 "${ROOT}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh" --gpus=1)"
 STATUS="${RUN_ROOT}/status/watchdogs/mrvi.status"
 [[ "$(grep '^STATE=' "${STATUS}")" == "STATE=OK" ]]
