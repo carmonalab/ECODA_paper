@@ -45,6 +45,16 @@ case "${CALL5}" in *"--dependency=afterany:"*) ;; *) echo "aggregate gate depend
 case "${CALLS}" in *"--array=1-4"*) ;; *) echo "group arrays did not carry four dataset rows" >&2; exit 1 ;; esac
 case "${CALLS}" in *"--partition=${SLURM_PARTITION_BENCHMARK_GPU}"*) ;; *) echo "GPU method resource class missing" >&2; exit 1 ;; esac
 case "${CALLS}" in *"--partition=${SLURM_PARTITION_BENCHMARK_CPU}"*) ;; *) echo "CPU method resource class missing" >&2; exit 1 ;; esac
+while IFS= read -r call; do
+  case "${call}" in
+    *matrix_watchdog*)
+      case "${call}" in
+        *"--partition=${SLURM_PARTITION_BENCHMARK_CPU}"*) ;;
+        *) echo "matrix watchdog was scheduled outside CPU partition" >&2; exit 1 ;;
+      esac
+      ;;
+  esac
+done <<< "${CALLS}"
 case "${CALLS}" in *"_ecoda_runs/${RUN_ID}/logs/"*) ;; *) echo "scheduler logs escaped run root" >&2; exit 1 ;; esac
 
 : > "${CAPTURE}"

@@ -990,7 +990,8 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   submit_matrix() {
     local group_label="$1" manifest="$2" dependency="$3" method="$4" view="$5"
     method_spec "${method}" || return 1
-    local worker="${METHOD_WORKER}" partition="${METHOD_PARTITION}" throttle="${METHOD_THROTTLE}"
+    local worker="${METHOD_WORKER}" worker_partition="${METHOD_PARTITION}" \
+      watchdog_partition="${SLURM_PARTITION_BENCHMARK_CPU}" throttle="${METHOD_THROTTLE}"
     local safe="$(printf '%s' "${group_label}" | tr '/:,\t ' '_____')"
     local array_msg array_id array_rc wd_msg wd_id wd_rc
     local worker_env="METHOD=${method},ANALYSIS=${method},ANALYSIS_MANIFEST=${manifest},ANALYSIS_VIEW=${view},ANALYSIS_ROOT=${ANALYSIS_ROOT},EXECUTION_LOG_DIR=${RUN_LOG_DIR},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${RUN_ID},FORCE_BENCHMARK=${FORCE_ARG},JOB_LOG_PREFIX=${RUN_LOG_DIR}/5_matrix_${safe}"
@@ -999,7 +1000,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     else
       worker_env="${worker_env},BENCHMARK_MANIFEST=${manifest}"
     fi
-    array_args=(--parsable --array="1-$(wc -l < "${manifest}" | tr -d '[:space:]')%${throttle}" --partition="${partition}" "${METHOD_FLAGS[@]}" --mem="${MEMORY}" \
+    array_args=(--parsable --array="1-$(wc -l < "${manifest}" | tr -d '[:space:]')%${throttle}" --partition="${worker_partition}" "${METHOD_FLAGS[@]}" --mem="${MEMORY}" \
       --output="${RUN_LOG_DIR}/5_matrix_${safe}_%A_%a.log" --error="${RUN_LOG_DIR}/5_matrix_${safe}_%A_%a.err" --mail-user="${USER_EMAIL}")
     [[ -n "${dependency}" ]] && array_args+=(--dependency="afterok:${dependency}")
     array_args+=(--export="ALL,${worker_env}" "${worker}")
@@ -1015,10 +1016,10 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     fi
     [[ ${array_rc} -eq 0 ]] || return 1
     set +e
-    wd_msg="$(sbatch --parsable --partition="${partition}" --ntasks=1 --cpus-per-task=1 --mem=2G --time="${WATCHDOG_TIME_LIMIT}" \
+    wd_msg="$(sbatch --parsable --partition="${watchdog_partition}" --ntasks=1 --cpus-per-task=1 --mem=2G --time="${WATCHDOG_TIME_LIMIT}" \
       --output="${RUN_LOG_DIR}/5_matrix_watchdog_${safe}_%A.log" --error="${RUN_LOG_DIR}/5_matrix_watchdog_${safe}_%A.err" --mail-user="${USER_EMAIL}" \
       --export="ALL,${worker_env},MATRIX_WATCHDOG_ROOT=${ECODA_RUN_ROOT}" \
-      "${SCRIPT_DIR}/matrix_watchdog.sh" "${ECODA_RUN_ROOT}" "${group_label}" "${manifest}" "${array_id}" "${MEMORY}" "${MAX_MEMORY}" "${partition}" "${throttle}" "${worker}" "${METHOD_FLAGS[@]}")"
+      "${SCRIPT_DIR}/matrix_watchdog.sh" "${ECODA_RUN_ROOT}" "${group_label}" "${manifest}" "${array_id}" "${MEMORY}" "${MAX_MEMORY}" "${worker_partition}" "${throttle}" "${worker}" "${METHOD_FLAGS[@]}")"
     wd_rc=$?
     set -e
     wd_id="${wd_msg%%;*}"
