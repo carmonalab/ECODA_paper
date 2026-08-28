@@ -2,7 +2,7 @@ get_pipeline_config <- function(
   ds_name = Sys.getenv("DS_NAME")
 ) {
   if (ds_name == "") {
-    stop("CRITICAL: DS_NAME not set. Ensure it is exported before calling R.")
+    stop("CRITICAL: DS_NAME not set. Ensure DS_NAME is set before calling R.")
   }
 
   hpc_scratch_dir <- Sys.getenv("HPC_SCRATCH_DIR")
@@ -16,14 +16,13 @@ get_pipeline_config <- function(
   }
 
   scratch_output_dir <- file.path(hpc_scratch_dir, ds_name, "output")
+  annotation_output_dir <- Sys.getenv("ANNOTATION_OUTPUT_DIR")
+  if (annotation_output_dir == "") annotation_output_dir <- scratch_output_dir
 
   config_data <- list(
     ds_name             = ds_name,
-    # All per-dataset dirs live under HPC_SCRATCH_DIR/<DS_NAME>/output
-    # (preprocessed output = annotation input). Matches 2_submit_hpc_array.sh
-    # CHUNKS_DIR.
     path_data           = scratch_output_dir,
-    path_output         = scratch_output_dir,
+    path_output         = annotation_output_dir,
     path_ref            = home_ref_dir
   )
 

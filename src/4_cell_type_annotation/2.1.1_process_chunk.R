@@ -95,29 +95,33 @@ defaults <- list(
   normal_tissue         = if (env_normal_tissue != "") as.logical(env_normal_tissue) else TRUE
 )
 
-# Fresh annotation output columns: the ONLY annotation columns this pipeline
-# emits, extracted from the freshly annotated object at the end of the
-# per-sample loop. NOT a keep-whitelist — pre-existing versions never survive
-# (the obs wipe below keeps nothing but the sample column).
-HITME_OUTPUT_COLS <- c("IFN_UCell", "HeatShock_UCell", "cellCycle.G1S_UCell",
-                       "cellCycle.G2M_UCell", "layer1", "layer2", "layer3")
-SCATOMIC_OUTPUT_COLS <- c("layer_1", "layer_2", "layer_3", "layer_4", "layer_5", "layer_6",
-                          "scATOMIC_pred", "S.Score", "G2M.Score", "Phase", "classification_confidence")
+# Every checkpoint and final feather carries the complete dual-method schema.
+# Missing upstream labels are represented as typed NA values, not omitted
+# columns; the final dataset-level anchor check decides whether a method
+# produced anything anywhere in the selected union.
+HITME_REQUIRED_COLS <- c("layer1", "layer2", "layer3")
+SCATOMIC_REQUIRED_COLS <- c(
+  "layer_1", "layer_2", "layer_3", "layer_4", "layer_5", "layer_6",
+  "scATOMIC_pred", "classification_confidence", "S.Score", "G2M.Score", "Phase"
+)
+HITME_OPTIONAL_COLS <- c(
+  "IFN_UCell", "HeatShock_UCell", "cellCycle.G1S_UCell", "cellCycle.G2M_UCell"
+)
+HITME_OUTPUT_COLS <- c(HITME_OPTIONAL_COLS, HITME_REQUIRED_COLS)
+SCATOMIC_OUTPUT_COLS <- SCATOMIC_REQUIRED_COLS
+ANNOT_REQUIRED_COLS <- c(HITME_REQUIRED_COLS, SCATOMIC_REQUIRED_COLS)
 ANNOT_OUTPUT_COLS <- c(HITME_OUTPUT_COLS, SCATOMIC_OUTPUT_COLS)
-
-# Legacy annotation column classification, enforced at merge time in
-# 3.1_merge_annotations.py (Tier 1: unconditional pattern drop; Tier 2:
-# exact-name drop + loud warning). Informational here — the obs wipe below is
-# total (Sample only), so no pattern list is needed in the worker. Must
-# mirror 3.1_merge_annotations.py.
-LEGACY_ANNOT_TIER1 <- c("^scGate", "^functional\\.cluster", "_UCell$", "^scATOMIC", "^layer_?\\d")
-LEGACY_ANNOT_TIER2 <- c("S.Score", "G2M.Score", "Phase", "classification_confidence",
-                        "cellCycle.G1S_UCell", "cellCycle.G2M_UCell")
-
+NUMERIC_ANNOT_COLS <- c(
+  "IFN_UCell", "HeatShock_UCell", "cellCycle.G1S_UCell",
+  "cellCycle.G2M_UCell", "classification_confidence", "S.Score", "G2M.Score"
+)
+# scATOMIC breast_mode is intentionally left at the upstream default FALSE for
+# this uniform workflow. Do not pass breast_mode to run_scATOMIC() or
+# create_summary_matrix(); tissue-specific mode would make cohorts incomparable.
 raw_args <- commandArgs(trailingOnly = TRUE)
 args <- defaults
 if (length(raw_args) > 0) args$chunk_file <- raw_args[1]
-breast_mode <- grepl("breast", args$tissue_type, ignore.case = TRUE)
+# No breast_mode variable is derived here; upstream calls intentionally use FALSE.
 
 # ============================= ANNOTATION SAFETY ============================
 # Phase-5 T6: a method that annotated 0 cells, <2 unique cell types, or only
@@ -129,8 +133,8 @@ breast_mode <- grepl("breast", args$tissue_type, ignore.case = TRUE)
 # synced to NAS -- excluded from both rsyncs, mirroring annotation_tmp/). Keep
 # the cutoff.scATOMIC::em patch and wall-time guards intact.
 METHOD_COLS <- list(
-  HiTME = c("layer1", "layer2", "layer3"),
-  scATOMIC = c("scATOMIC_pred")
+  HiTME = HITME_REQUIRED_COLS,
+  scATOMIC = SCATOMIC_REQUIRED_COLS
 )
 
 chunk_annot_stats <- list()
@@ -140,8 +144,10 @@ record_method_stats <- function(annot, sample_label) {
     for (col in METHOD_COLS[[method]]) {
       if (!col %in% colnames(annot)) next
       vals <- annot[[col]]
-      n_annotated <- sum(!is.na(vals))
-      n_types <- if (n_annotated > 0) length(unique(vals[!is.na(vals)])) else 0
+      text_vals <- as.character(vals)
+      valid_vals <- !is.na(vals) & nzchar(trimws(text_vals))
+      n_annotated <- sum(valid_vals)
+      n_types <- if (n_annotated > 0) length(unique(text_vals[valid_vals])) else 0
       chunk_annot_stats[[length(chunk_annot_stats) + 1]] <<- data.frame(
         sample = sample_label,
         method = method,
@@ -168,6 +174,92 @@ record_method_stats <- function(annot, sample_label) {
         ))
       }
     }
+  }
+}
+
+typed_na <- function(column, n) {
+  if (column %in% NUMERIC_ANNOT_COLS) return(rep(NA_real_, n))
+  rep(NA_character_, n)
+}
+
+materialize_annotation <- function(meta, target_sample) {
+  n <- nrow(meta)
+  output_cols <- c(
+    ANNOT_REQUIRED_COLS,
+    intersect(HITME_OPTIONAL_COLS, colnames(meta))
+  )
+  annot <- list()
+  for (column in output_cols) {
+    annot[[column]] <- if (column %in% colnames(meta)) {
+      meta[[column]]
+    } else {
+      typed_na(column, n)
+    }
+  }
+  annot <- as.data.frame(annot, stringsAsFactors = FALSE, check.names = FALSE)
+  annot$cell_barcode <- rownames(meta)
+  annot$Sample <- rep(as.character(target_sample), n)
+  annot[, c("Sample", "cell_barcode", output_cols), drop = FALSE]
+}
+call_scatomic <- function(run_fn, summary_fn, counts, normal_tissue) {
+  predictions <- run_fn(counts)
+  summary_fn(
+    prediction_list = predictions,
+    raw_counts = counts,
+    normal_tissue = normal_tissue
+  )
+}
+
+call_hitme <- function(run_fn, seurat_obj, scgate_model, ref_maps) {
+  run_fn(
+    object = seurat_obj,
+    scGate.model = scgate_model,
+    ref.maps = ref_maps,
+    verbose = FALSE,
+    ncores = 1
+  )
+}
+
+
+checkpoint_valid <- function(path, target_sample) {
+  tryCatch({
+    if (!file.exists(path) || file.info(path)$size <= 0) return(FALSE)
+    checkpoint <- read_feather(path)
+    needed <- c("Sample", "cell_barcode", ANNOT_REQUIRED_COLS)
+    if (!all(needed %in% colnames(checkpoint)) || nrow(checkpoint) == 0) {
+      return(FALSE)
+    }
+    samples <- as.character(checkpoint$Sample)
+    barcodes <- as.character(checkpoint$cell_barcode)
+    if (any(is.na(samples)) || any(is.na(barcodes)) ||
+        any(!nzchar(trimws(samples))) || any(!nzchar(trimws(barcodes)))) return(FALSE)
+    if (anyDuplicated(paste(samples, barcodes, sep = "\t"))) return(FALSE)
+    for (column in intersect(NUMERIC_ANNOT_COLS, colnames(checkpoint))) {
+      values <- checkpoint[[column]]
+      numeric_values <- suppressWarnings(as.numeric(values))
+      invalid <- !is.na(values) & is.na(numeric_values)
+      if (any(invalid) || any(!is.finite(numeric_values[!is.na(numeric_values)]))) return(FALSE)
+    }
+    all(samples == as.character(target_sample))
+  }, error = function(e) FALSE)
+}
+
+write_checksum_sidecar <- function(path) {
+  digest <- unname(tools::md5sum(path))
+  size <- file.info(path)$size
+  if (is.na(digest) || is.na(size) || size <= 0) {
+    stop("Cannot checksum annotation feather: ", path)
+  }
+  sidecar <- paste0(path, ".md5")
+  sidecar_tmp <- paste0(sidecar, ".tmp.", Sys.getpid())
+  writeLines(c(
+    paste0("MD5=", digest),
+    paste0("SIZE=", size),
+    paste0("PATH=", path)
+  ), sidecar_tmp)
+  if (!file.rename(sidecar_tmp, sidecar)) {
+    unlink(sidecar_tmp)
+    stop("Could not atomically install annotation feather sidecar: ", sidecar)
   }
 }
 
@@ -276,18 +368,34 @@ annot_file <- file.path(
   paths$path_output,
   paste0("annotations_", sub("\\.txt$", ".feather", basename(args$chunk_file)))
 )
+final_feather_valid <- FALSE
 if (file.exists(annot_file) && file.info(annot_file)$size > 0) {
-  message(paste("Chunk already processed. Annotations exist at:", annot_file))
-} else {
+  validator <- file.path(project_root, "src", "utils", "py", "annotation_contract.py")
+  python_bin <- Sys.getenv("PYTHON_BIN")
+  if (python_bin != "" && file.exists(validator)) {
+    final_feather_valid <- identical(
+      system2(
+        python_bin,
+        c(validator, "--path", annot_file, "--require-sidecar"),
+        stdout = FALSE,
+        stderr = FALSE
+      ),
+      0L
+    )
+  }
+  if (final_feather_valid) {
+    message(paste("Chunk already processed and validated:", annot_file))
+  } else {
+    warning("Existing annotation feather failed schema/checksum validation; rebuilding: ",
+            annot_file)
+    unlink(c(annot_file, paste0(annot_file, ".md5")))
+  }
+}
+if (!final_feather_valid) {
   # Per-sample checkpoints are run-owned because paths$path_output is supplied
   # by the selected Stage 4 run.
   tmp_dir <- file.path(paths$path_output, "annotation_tmp",
                        sub("\\.txt$", "", basename(args$chunk_file)))
-  failed_samples <- character(0)
-
-  # Python 3 keys() returns a view object (dict_keys/KeysView) that py_to_r()
-  # does NOT convert; materialize it to a Python list first so py_to_r returns
-  # an R character vector usable with %in%. Computed once per chunk.
   # does NOT convert; materialize it to a Python list first so py_to_r returns
   # an R character vector usable with %in%. Computed once per chunk — the
   # layers group never changes between samples.
@@ -306,38 +414,34 @@ if (file.exists(annot_file) && file.info(annot_file)$size > 0) {
     target_sample <- samples_to_process[i]
     sample_tmp <- file.path(tmp_dir, sprintf("sample_%02d.feather", i))
     if (file.exists(sample_tmp)) {
-      message(paste("resume: sample", target_sample, "already annotated; skipping"))
-      next
+      if (checkpoint_valid(sample_tmp, target_sample)) {
+        annot <- read_feather(sample_tmp)
+        record_method_stats(annot, target_sample)
+        message(paste("resume: sample", target_sample, "checkpoint validated; skipping"))
+        next
+      }
+      warning("Existing sample checkpoint failed validation; rebuilding: ", sample_tmp)
+      unlink(sample_tmp)
     }
-    message(paste("--- Processing sample:", target_sample, "---"))
-
-    sample_ok <- tryCatch({
-
-    seurat_obj <- get_seurat_obj_from_h5ad(
-      adata, obs, target_sample,
-      sample_colname = args$sample_colname,
-      counts_layer = counts_layer
-    )
-
-    # HiTME (via scGate/UCell/ProjecTILs) requires the log-normalized "data"
-    # layer, but CreateSeuratObject only populates "counts" — without it,
-    # Run.HiTME fails with "Cannot find layer data in assay RNA" on every
-    # sample. The worker object always comes fresh from CreateSeuratObject, so
-    # normalize unconditionally (a v5-only Layers() guard would crash on the
-    # pinned Seurat 4.4.x build, which does not export it). NormalizeData
-    # leaves the counts layer untouched (scATOMIC input).
-    message("  Adding log-normalized 'data' layer (NormalizeData) for HiTME...")
-    seurat_obj <- NormalizeData(seurat_obj)
-
+    seurat_obj <- tryCatch({
+      obj <- get_seurat_obj_from_h5ad(
+        adata, obs, target_sample,
+        sample_colname = args$sample_colname,
+        counts_layer = counts_layer
+      )
+      message("  Adding log-normalized 'data' layer (NormalizeData) for HiTME...")
+      NormalizeData(obj)
+    }, error = function(e) {
+      stop("structural annotation setup failed for sample ", target_sample,
+           ": ", conditionMessage(e))
+    })
     timeout <- max(60, ncol(seurat_obj) / 10000 * 60 * 10)
-    # Per-attempt cap (wall-clock policy: 1800 s max, and only when the
-    # remaining wall time exceeds the attempt by a 300 s margin). withTimeout
-    # is best-effort — it fires at R evaluation points, not inside blocking
-    # python (reticulate) calls — so the real budget is enforced here at R
-    # level and Slurm's wall limit stays the backstop.
     attempt_timeout <- min(timeout, 1800)
 
-    ### scATOMIC annotation ####
+    # Method calls are fault-tolerant: timeout/error leaves the method's
+    # required columns absent so materialize_annotation fills typed NAs.
+    # Setup and output materialization remain outside this boundary and
+    # therefore fail the chunk on structural corruption.
     if (is.null(seurat_obj@meta.data[["layer_1"]])) {
       for (a in 1:5) {
         eff <- min(attempt_timeout, wall_left() - 300)
@@ -348,15 +452,11 @@ if (file.exists(annot_file) && file.info(annot_file)$size > 0) {
         message(paste("  scATOMIC attempt", a, "with", round(eff), "s timeout"))
         result <- tryCatch({
           withTimeout({
-            sca_preds <- run_scATOMIC(
+            sca_results <- call_scatomic(
+              run_scATOMIC,
+              create_summary_matrix,
               seurat_obj@assays$RNA$counts,
-              breast_mode = breast_mode
-            )
-            sca_results <- create_summary_matrix(
-              prediction_list = sca_preds,
-              raw_counts = seurat_obj@assays$RNA$counts,
-              normal_tissue = args$normal_tissue,
-              breast_mode = breast_mode
+              args$normal_tissue
             )
             "Complete"
           }, timeout = eff)
@@ -368,9 +468,17 @@ if (file.exists(annot_file) && file.info(annot_file)$size > 0) {
           NULL
         })
         if (!is.null(result)) {
-          sca_cols <- intersect(SCATOMIC_OUTPUT_COLS, colnames(sca_results))
-          seurat_obj <- AddMetaData(seurat_obj, sca_results[, sca_cols, drop = FALSE])
-          break
+          added <- tryCatch({
+            sca_cols <- intersect(SCATOMIC_OUTPUT_COLS, colnames(sca_results))
+            if (length(sca_cols) > 0) {
+              seurat_obj <- AddMetaData(seurat_obj, sca_results[, sca_cols, drop = FALSE])
+            }
+            TRUE
+          }, error = function(er) {
+            message(paste("  scATOMIC output materialization error:", er$message, "- retrying..."))
+            FALSE
+          })
+          if (isTRUE(added)) break
         }
       }
     }
@@ -385,24 +493,12 @@ if (file.exists(annot_file) && file.info(annot_file)$size > 0) {
       message(paste("  HiTME attempt", a, "with", round(eff), "s timeout"))
       result <- tryCatch({
         withTimeout({
-          if (args$tissue_type == "Blood") {
-            seurat_obj <- Run.HiTME(
-              object = seurat_obj,
-              scGate.model = scGate_models_blood,
-              ref.maps = ref.maps_sketched,
-              verbose = FALSE,
-              ncores = 1
-            )
-          } else {
-            seurat_obj <- Run.HiTME(
-              object = seurat_obj,
-              scGate.model = scGate_models_tumor,
-              ref.maps = ref.maps_sketched,
-              verbose = FALSE,
-              ncores = 1
-            )
-          }
-          "Complete"
+          seurat_obj <- call_hitme(
+            Run.HiTME,
+            seurat_obj,
+            if (args$tissue_type == "Blood") scGate_models_blood else scGate_models_tumor,
+            ref.maps_sketched
+          )
         }, timeout = eff)
       }, TimeoutException = function(te) {
         message("  HiTME timeout, retrying...")
@@ -414,45 +510,26 @@ if (file.exists(annot_file) && file.info(annot_file)$size > 0) {
       if (!is.null(result)) break
     }
 
-    ### Extract annotations ####
     meta <- seurat_obj@meta.data
-    keep_cols <- intersect(ANNOT_OUTPUT_COLS, colnames(meta))
-    annot <- meta[, keep_cols, drop = FALSE]
-    annot$cell_barcode <- rownames(annot)
-    annot[[args$sample_colname]] <- target_sample
+    annot <- materialize_annotation(meta, target_sample)
 
     # Phase-5 T6 safety: 0-annotated/<2-types/all-NA method results warn +
-    # record stats instead of propagating silently (handled by the helper;
-    # no crash).
+    # record stats instead of propagating silently.
     record_method_stats(annot, target_sample)
 
     rm(seurat_obj)
     gc()
-    TRUE
-    }, error = function(e) {
-      message(paste("SAMPLE FAILED (", target_sample, "): ", conditionMessage(e), " - continuing"))
-      FALSE
-    })
-
-    if (sample_ok) {
-      dir.create(tmp_dir, showWarnings = FALSE, recursive = TRUE)
-      sample_tmp_write <- paste0(sample_tmp, ".tmp.", Sys.getpid())
-      write_feather(annot, sample_tmp_write)
-      if (!file.rename(sample_tmp_write, sample_tmp)) {
-        unlink(sample_tmp_write)
-        stop("Could not atomically install annotation checkpoint: ", sample_tmp)
-      }
-      message(paste("  Checkpoint written:", sample_tmp))
-    } else {
-      failed_samples <- c(failed_samples, target_sample)
+    dir.create(tmp_dir, showWarnings = FALSE, recursive = TRUE)
+    sample_tmp_write <- paste0(sample_tmp, ".tmp.", Sys.getpid())
+    write_feather(annot, sample_tmp_write)
+    if (!file.rename(sample_tmp_write, sample_tmp)) {
+      unlink(sample_tmp_write)
+      stop("Could not atomically install annotation checkpoint: ", sample_tmp)
     }
+    message(paste("  Checkpoint written:", sample_tmp))
+
   }
 
-  if (length(failed_samples) > 0) {
-    message(paste("chunk INCOMPLETE - failed samples:", paste(failed_samples, collapse = ", ")))
-    message(paste("Sample intermediates kept in:", tmp_dir, "- a re-run resumes only the failed sample(s)."))
-    quit(status = 1)
-  }
 
   annotations_list <- list()
   for (i in seq_along(samples_to_process)) {
@@ -479,6 +556,7 @@ if (file.exists(annot_file) && file.info(annot_file)$size > 0) {
     unlink(annot_file_tmp)
     stop("Could not atomically install annotation feather: ", annot_file)
   }
+  write_checksum_sidecar(annot_file)
   unlink(tmp_dir, recursive = TRUE)
   message(paste("Wrote annotations to:", annot_file))
 
@@ -486,8 +564,7 @@ if (file.exists(annot_file) && file.info(annot_file)$size > 0) {
   # post-run annotation-rate documentation step
   # (notebooks/dataset_onboarding/annotation_summary.json). The file name
   # must NOT match the annotations_chunk_*.feather globs (merge/coverage) and
-  # is excluded from both NAS rsyncs (2_submit_hpc_array.sh /
-  # 3_submit_merge.sh --exclude='annotation_stats_chunk_*.feather').
+  # is excluded from the canonical Stage 4 synchronization path.
   if (length(chunk_annot_stats) > 0) {
     stats_df <- do.call(rbind, chunk_annot_stats)
     rownames(stats_df) <- NULL
