@@ -34,3 +34,20 @@ release_env_lock() {
   rm -f "${ENV_LOCK_FILE}/owner"
   rmdir "${ENV_LOCK_FILE}" 2>/dev/null || true
 }
+
+ecoda_require_no_active_jobs() {
+  local excluded_job_id="${1:-}" active_jobs
+  if ! active_jobs="$(squeue -u "${USER}" -h -o "%i" 2>/dev/null)"; then
+    echo "ERROR: could not query Slurm job state; refusing to mutate the environment." >&2
+    return 1
+  fi
+  if [[ -n "${excluded_job_id}" ]]; then
+    active_jobs="$(printf '%s\n' "${active_jobs}" |
+      awk -v me="${excluded_job_id}" '{ if ($1 != me) print }')"
+  fi
+  if [[ -n "${active_jobs}" ]]; then
+    echo "ERROR: active Slurm jobs detected — environment mutation is forbidden while jobs are running." >&2
+    squeue -u "${USER}" >&2 || true
+    return 1
+  fi
+}

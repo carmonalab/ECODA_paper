@@ -56,14 +56,7 @@ source "${SCRIPT_DIR}/env_mutation_lock.sh"
 
 # --- Guard: no other active jobs while mutating the env ----------------------
 check_no_active_jobs() {
-  ACTIVE_JOBS="$(squeue -u "${USER}" -h -o "%i" 2>/dev/null || true)"
-  ACTIVE_JOBS="$(printf '%s\n' "${ACTIVE_JOBS}" | awk -v me="${SLURM_JOB_ID:-}" '{ if ($1 != me) print }')"
-  if [[ -n "${ACTIVE_JOBS}" ]]; then
-    echo "ERROR: active Slurm jobs detected (other than this one) — env build must run" >&2
-    echo "       while no jobs are running (concurrent installs corrupt the shared R library)." >&2
-    squeue -u "${USER}" >&2
-    exit 1
-  fi
+  ecoda_require_no_active_jobs "${SLURM_JOB_ID:-}"
 }
 
 # --- Toolchain preflight (conda compilers, GCCcore module fallback) ----------

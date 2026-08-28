@@ -8,6 +8,28 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 ENV_LOCK_FILE="${TMP_DIR}/env_refresh.lock"
 source "${ROOT}/src/utils/bash/env_mutation_lock.sh"
 
+mkdir "${TMP_DIR}/bin"
+cat > "${TMP_DIR}/bin/squeue" <<'EOF'
+#!/bin/bash
+case "${FAKE_SQUEUE_MODE:-empty}" in
+  fail) exit 2 ;;
+  active) printf '123\n' ;;
+  self) printf '%s\n' "${SLURM_JOB_ID:-123}" ;;
+  empty) ;;
+esac
+EOF
+chmod +x "${TMP_DIR}/bin/squeue"
+PATH="${TMP_DIR}/bin:${PATH}"
+if FAKE_SQUEUE_MODE=fail ecoda_require_no_active_jobs; then
+  echo "ERROR: failed squeue query was accepted." >&2
+  exit 1
+fi
+if FAKE_SQUEUE_MODE=active ecoda_require_no_active_jobs; then
+  echo "ERROR: active job list was accepted." >&2
+  exit 1
+fi
+FAKE_SQUEUE_MODE=self SLURM_JOB_ID=123 ecoda_require_no_active_jobs 123
+
 acquire_env_lock
 [[ -d "${ENV_LOCK_FILE}" && -f "${ENV_LOCK_FILE}/owner" ]]
 if (

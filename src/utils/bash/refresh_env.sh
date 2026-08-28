@@ -37,13 +37,7 @@ source "${SCRIPT_DIR}/env_mutation_lock.sh"
 
 # --- Guard: no active jobs while mutating the env ---------------------------
 acquire_env_lock
-ACTIVE_JOBS="$(squeue -u "${USER}" -h -o "%j" 2>/dev/null || true)"
-if [[ -n "${ACTIVE_JOBS}" ]]; then
-  echo "ERROR: active Slurm jobs detected — env refresh must run while no jobs are running" >&2
-  echo "       (concurrent installs corrupt the shared R library). Active jobs:" >&2
-  squeue -u "${USER}" >&2
-  exit 1
-fi
+ecoda_require_no_active_jobs
 
 # --- Failure diagnostics: printed only when pixi run setup fails ---------------
 # Identical output contract as setup_env_sbatch.sh's run_env_diagnostics, so
