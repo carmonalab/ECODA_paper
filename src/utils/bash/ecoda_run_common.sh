@@ -533,10 +533,23 @@ ecoda_wait_scalar_accounting() {
 
 ecoda_wait_array_accounting() {
   local job="$1" expected="$2" poll_seconds="${3:-30}"
-  local rows jid state found pending empty=0 missing=0
+  local rows jid state found pending empty=0 missing=0 scheduler_active active_jobs
   while :; do
     rows="$(sacct -j "${job}" -n -P --format=JobIDRaw,State,ExitCode 2>/dev/null || true)"
+    scheduler_active=0
+    if command -v squeue >/dev/null 2>&1; then
+      active_jobs="$(squeue -j "${job}" -h -o "%A" 2>/dev/null || true)"
+      case " ${active_jobs} " in
+        *" ${job} "*) scheduler_active=1 ;;
+      esac
+    fi
     if [[ -z "${rows//[[:space:]]/}" ]]; then
+      if [[ ${scheduler_active} -eq 1 ]]; then
+        empty=0
+        missing=0
+        sleep "${poll_seconds}"
+        continue
+      fi
       empty=$((empty + 1))
       [[ ${empty} -lt ${ECODA_ACCOUNTING_EMPTY_GRACE:-3} ]] || return 1
     else
@@ -551,8 +564,12 @@ ecoda_wait_array_accounting() {
       _ecoda_accounting_active "${state}" && pending=1
     done <<< "${rows}"
     if [[ ${found} -lt ${expected} ]]; then
-      missing=$((missing + 1))
-      [[ ${missing} -lt ${ECODA_ACCOUNTING_EMPTY_GRACE:-3} ]] || return 1
+      if [[ ${scheduler_active} -eq 1 ]]; then
+        missing=0
+      else
+        missing=$((missing + 1))
+        [[ ${missing} -lt ${ECODA_ACCOUNTING_EMPTY_GRACE:-3} ]] || return 1
+      fi
     else
       missing=0
     fi
