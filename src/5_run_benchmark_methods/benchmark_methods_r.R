@@ -631,7 +631,16 @@ align_result_samples <- function(feat_mat, labels, dist_mat = NULL) {
     stop("Result sample identifiers cannot be aligned to labels.")
   }
   if (!identical(reorder, seq_along(reorder))) {
-    feat_mat <- feat_mat[reorder, , drop = FALSE]
+    square_feature_matrix <- !is.null(colnames(feat_mat)) &&
+      ncol(feat_mat) == length(sample_ids) &&
+      !anyNA(colnames(feat_mat)) &&
+      !anyDuplicated(colnames(feat_mat)) &&
+      setequal(as.character(colnames(feat_mat)), as.character(sample_ids))
+    if (square_feature_matrix) {
+      feat_mat <- feat_mat[reorder, reorder, drop = FALSE]
+    } else {
+      feat_mat <- feat_mat[reorder, , drop = FALSE]
+    }
     if (!is.null(dist_mat)) {
       dist_matrix <- as.matrix(dist_mat)
       if (nrow(dist_matrix) != length(sample_ids) ||

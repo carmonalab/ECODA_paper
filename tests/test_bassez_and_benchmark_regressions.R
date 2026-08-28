@@ -207,6 +207,26 @@ stopifnot(identical(
   colnames(aligned_result$dist_mat),
   c("sample_1", "sample_2")
 ))
+square_features <- matrix(
+  c(1, 2, 3, 4),
+  nrow = 2,
+  dimnames = list(c("sample_2", "sample_1"), c("sample_2", "sample_1"))
+)
+square_result <- methods_env$align_result_samples(
+  square_features, result_labels
+)
+stopifnot(identical(
+  rownames(square_result$feat_mat),
+  c("sample_1", "sample_2")
+))
+stopifnot(identical(
+  colnames(square_result$feat_mat),
+  c("sample_1", "sample_2")
+))
+stopifnot(identical(
+  as.numeric(square_result$feat_mat[1, ]),
+  c(4, 2)
+))
 
 
 
