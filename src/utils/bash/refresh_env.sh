@@ -28,30 +28,12 @@ cd "${PROJECT_ROOT}"
 PIXI_BIN="${HOME}/.pixi/bin/pixi"
 
 # --- Lock guard: serialize env mutations (shared with setup_env_sbatch.sh) ---
-# Both entry points write into .pixi/envs/py-cuda13 (conda + R library); the
-# lock (PID + timestamp) is stale if the holding process died or is > 24 h old.
+# Both entry points write into .pixi/envs/py-cuda13 (conda + R library). The
+# lock is an atomic directory containing PID + timestamp metadata.  It is
+# fail-closed after interruption; remove it only after verifying no writer is
+# active, rather than risking concurrent prefix mutation.
 ENV_LOCK_FILE="${LOGS_DIR}/env_refresh.lock"
-
-acquire_env_lock() {
-  if [[ -f "${ENV_LOCK_FILE}" ]]; then
-    local lock_pid lock_ts now
-    read -r lock_pid lock_ts < "${ENV_LOCK_FILE}" || true
-    now="$(date +%s)"
-    if [[ -n "${lock_pid}" ]] && kill -0 "${lock_pid}" 2>/dev/null && (( now - lock_ts < 86400 )); then
-      echo "ERROR: env lock held by PID ${lock_pid} (acquired at epoch ${lock_ts}) —" >&2
-      echo "       another refresh (refresh_env.sh) or sbatch build (setup_env_sbatch.sh) is running. Refusing to run concurrently." >&2
-      exit 1
-    fi
-    echo "WARNING: stale env lock (PID ${lock_pid:-?}, acquired at epoch ${lock_ts:-?}, dead or > 24 h old) — removing." >&2
-    rm -f "${ENV_LOCK_FILE}"
-  fi
-  echo "$$ $(date +%s)" > "${ENV_LOCK_FILE}"
-  trap 'release_env_lock' EXIT
-}
-
-release_env_lock() {
-  rm -f "${ENV_LOCK_FILE}"
-}
+source "${SCRIPT_DIR}/env_mutation_lock.sh"
 
 # --- Guard: no active jobs while mutating the env ---------------------------
 acquire_env_lock

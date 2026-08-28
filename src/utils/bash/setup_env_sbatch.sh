@@ -21,11 +21,12 @@
 # much faster than on the 2-core login node and survives SSH drops.
 #
 # Serialization contract with src/utils/bash/refresh_env.sh (login-node path):
-# both acquire the shared lockfile ${LOGS_DIR}/env_refresh.lock (PID +
-# timestamp; stale if the PID is dead or older than 24 h) and both refuse to
-# start while other jobs are active — a mutation racing with running array
-# tasks corrupts the shared R library (observed: digest/Meta/package.rds
-# missing, mime lazyload DB missing).
+# both acquire the shared atomic directory lock
+# ${LOGS_DIR}/env_refresh.lock (PID + timestamp).  The lock fails closed after
+# interruption; remove it only after verifying no writer is active.  Both
+# entry points also refuse to start while other jobs are active — a mutation
+# racing with running array tasks corrupts the shared R library (observed:
+# digest/Meta/package.rds missing, mime lazyload DB missing).
 # ============================================================
 set -euo pipefail
 
@@ -46,28 +47,12 @@ PIXI_BIN="${HOME}/.pixi/bin/pixi"
 export R_SETUP_JOBS="${SLURM_CPUS_PER_TASK:-16}"
 
 # --- Lock guard: serialize env mutations (shared with refresh_env.sh) --------
+# Both entry points write into .pixi/envs/py-cuda13 (conda + R library). The
+# lock is an atomic directory containing PID + timestamp metadata.  It is
+# fail-closed after interruption; remove it only after verifying no writer is
+# active, rather than risking concurrent prefix mutation.
 ENV_LOCK_FILE="${LOGS_DIR}/env_refresh.lock"
-
-acquire_env_lock() {
-  if [[ -f "${ENV_LOCK_FILE}" ]]; then
-    local lock_pid lock_ts now
-    read -r lock_pid lock_ts < "${ENV_LOCK_FILE}" || true
-    now="$(date +%s)"
-    if [[ -n "${lock_pid}" ]] && kill -0 "${lock_pid}" 2>/dev/null && (( now - lock_ts < 86400 )); then
-      echo "ERROR: env lock held by PID ${lock_pid} (acquired at epoch ${lock_ts}) —" >&2
-      echo "       another refresh (refresh_env.sh) or sbatch build is running. Refusing to run concurrently." >&2
-      exit 1
-    fi
-    echo "WARNING: stale env lock (PID ${lock_pid:-?}, acquired at epoch ${lock_ts:-?}, dead or > 24 h old) — removing." >&2
-    rm -f "${ENV_LOCK_FILE}"
-  fi
-  echo "$$ $(date +%s)" > "${ENV_LOCK_FILE}"
-  trap 'release_env_lock' EXIT
-}
-
-release_env_lock() {
-  rm -f "${ENV_LOCK_FILE}"
-}
+source "${SCRIPT_DIR}/env_mutation_lock.sh"
 
 # --- Guard: no other active jobs while mutating the env ----------------------
 check_no_active_jobs() {

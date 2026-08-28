@@ -334,6 +334,6 @@ high-resolution cell-type columns. scATOMIC `breast_mode` remains at default
 
 ## 6. Resilience & Fault-Tolerance Mechanisms
 1. **Transient Fault Recovery:** Array workers source `worker_retry.sh`. On non-zero exit codes caused by transient BeeGFS cache misses, workers grep the task `.err` log for known signatures and self-requeue via `scontrol requeue` (capped at `WORKER_MAX_RETRIES=3`).
-2. **Deterministic Locking:** Environment refreshes lock on `logs/env_refresh.lock` to prevent parallel array workers from racing on the shared R library directory.
+2. **Deterministic Locking:** Environment refreshes acquire the atomic directory lock `logs/env_refresh.lock`; interrupted locks fail closed and require independent verification before removal. This prevents concurrent Pixi/R writes to the shared library.
 3. **Fail-Closed Verification:** All submitter sync tails verify terminal scheduler/accounting state, artifact schemas, and MD5/SIZE/PATH sidecars before initiating NAS synchronization. If any task or transfer fails, synchronization is aborted and an alert email is dispatched.
 4. **Run-ID Recovery:** `--sync-only RUN_ID` validates the immutable run manifests, scheduler records, watchdog/aggregate state, fresh artifacts, and owners before completing an interrupted login tail; it never resubmits. Numeric/CSV scheduler-ID recovery remains a separate compatibility path and requires the caller's original dataset/view selection.
