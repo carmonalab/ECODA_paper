@@ -1,228 +1,201 @@
 #!/bin/bash
-# Compute-node watchdog for the stage-wise onboarding preprocessing array.
-# It owns terminal accounting, OOM-only retries, and scratch artifact
-# validation. NAS synchronization is deliberately performed by the durable
-# login-side wrapper because compute nodes cannot reach the NAS mount.
+# Compute-node watchdog for the manifest-driven Stage 3 array.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Slurm may execute this script from /var/spool/slurmd; recover the repository
-# path before sourcing the canonical configuration.
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
   SCRIPT_DIR="$(dirname "$(scontrol show job "${SLURM_JOB_ID}" -o | grep -o 'Command=[^ ]*' | head -1 | cut -d= -f2)")"
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
 cd "${PROJECT_ROOT}"
 
-if [[ $# -ne 6 ]]; then
-  echo "Usage: 1.2_preprocess_watchdog.sh ARRAY_ID MANIFEST INITIAL_MEM MAX_MEM PARTITION THROTTLE" >&2
+if [[ $# -eq 7 ]]; then
+  RUN_ID="$1"; ROOT_MANIFEST="$2"; ARRAY_ID="$3"; CURRENT_MEMORY="$4"; MAX_MEMORY="$5"; PARTITION="$6"; THROTTLE="$7"
+elif [[ $# -eq 6 ]]; then
+  # Compatibility for the former batch-effect submitter. New callers always
+  # pass the explicit run id and root selection manifest.
+  ARRAY_ID="$1"; ROOT_MANIFEST="$2"; CURRENT_MEMORY="$3"; MAX_MEMORY="$4"; PARTITION="$5"; THROTTLE="$6"
+  RUN_ID="${PREPROCESS_RUN_ID:-legacy_${ARRAY_ID}}"
+else
+  echo "Usage: 1.2_preprocess_watchdog.sh RUN_ID MANIFEST ARRAY_ID MEM MAX_MEM PARTITION THROTTLE" >&2
   exit 2
 fi
-
-ARRAY_ID="$1"
-MANIFEST="$2"
-ROOT_MANIFEST="${MANIFEST}"
-CURRENT_MANIFEST="${MANIFEST}"
-CURRENT_MEMORY="$3"
-MAX_MEMORY="$4"
-PARTITION="$5"
-THROTTLE="$6"
-VIEW="${PREPROCESS_VIEW:-batch_effect_uncorrected}"
-FORCE_PREPROCESS="${FORCE_PREPROCESS:-0}"
-WORKER_SCRIPT="${SCRIPT_DIR}/1.1_run_worker.sh"
-STATUS_DIR="${HPC_SCRATCH_DIR}/_preprocessing_watchdog"
-STATUS_FILE="${STATUS_DIR}/${SLURM_JOB_ID}.status"
-mkdir -p "${STATUS_DIR}"
-
-ARRAY_JOB_IDS="${ARRAY_ID}"
-OOM_TASKS=()
-FAILED_ROWS=()
-TASK_COUNT=0
-
-write_status() {
-  local STATE="$1"
-  local FAIL_REASON="$2"
-  local TMP_FILE="${STATUS_FILE}.tmp.$$"
+ecoda_validate_run_id "${RUN_ID}" || exit 1
+RUN_ROOT="${HPC_SCRATCH_DIR}/_ecoda_runs/${RUN_ID}"
+if [[ -n "${PREPROCESS_RUN_ROOT:-}" ]]; then
+  expected_root="$(ecoda_realpath_existing "${RUN_ROOT}" 2>/dev/null || true)"
+  supplied_root="$(ecoda_realpath_existing "${PREPROCESS_RUN_ROOT}" 2>/dev/null || true)"
+  [[ -n "${expected_root}" && "${expected_root}" == "${supplied_root}" ]] ||
+    { echo "ERROR: PREPROCESS_RUN_ROOT is not the canonical Stage 3 run root." >&2; exit 1; }
+fi
+[[ -d "${RUN_ROOT}" ]] || { echo "ERROR: Stage 3 run root is missing: ${RUN_ROOT}" >&2; exit 1; }
+STATUS_FILE="${RUN_ROOT}/status/watchdog"
+CURRENT_MANIFEST="${PREPROCESS_PENDING_MANIFEST:-${ROOT_MANIFEST}}"
+RETRY_INDEX=0
+SCHEDULER_IDS=("${ARRAY_ID}")
+atomic_status() {
+  local state="$1" reason="${2:-}" tmp="${STATUS_FILE}.tmp.$$"
+  mkdir -p "$(dirname "${STATUS_FILE}")"
   {
-    printf 'STATE=%s\n' "${STATE}"
-    printf 'WATCHDOG_JOB_ID=%s\n' "${SLURM_JOB_ID}"
-    printf 'ARRAY_JOB_IDS=%s\n' "${ARRAY_JOB_IDS}"
-    printf 'VIEW=%s\n' "${VIEW}"
-    printf 'MANIFEST=%s\n' "${ROOT_MANIFEST}"
-    printf 'DATASETS=%s\n' "$(tr '\n' ' ' < "${ROOT_MANIFEST}" | sed 's/[[:space:]]*$//')"
-    printf 'FAIL_REASON=%s\n' "${FAIL_REASON}"
-    if [[ ${#FAILED_ROWS[@]} -gt 0 ]]; then
-      printf 'FAILED_ROWS=%s\n' "${FAILED_ROWS[*]}"
+    printf 'STATE=%s\nRUN_ID=%s\nREASON=%s\nRETRY_INDEX=%s\n' "${state}" "${RUN_ID}" "${reason}" "${RETRY_INDEX}"
+    printf 'ARRAY_JOB_ID=%s\n' "${ARRAY_ID}"
+    if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+      printf 'SCHEDULER_ID=%s\n' "${SLURM_JOB_ID}"
     fi
-  } > "${TMP_FILE}"
-  mv -f "${TMP_FILE}" "${STATUS_FILE}"
-}
-
-scheduler_rows() {
-  sacct -n -P -X -j "$1" \
-    --format=JobID,State,ExitCode,MaxRSS 2>/dev/null || true
-}
-
-wait_for_terminal() {
-  local JOB_ID="$1"
-  local ATTEMPT=0
-  local ROWS=""
-  # The watchdog itself is the durable wait owner. Bound the wait by the
-  # watchdog's Slurm time limit rather than leaving a login-node poll alive.
-  while (( ATTEMPT < 2880 )); do
-    ROWS="$(scheduler_rows "${JOB_ID}")"
-    if [[ -n "${ROWS//[[:space:]]/}" ]] \
-        && ! [[ "${ROWS}" =~ (PENDING|RUNNING|REQUEUED|CONFIGURING|SUSPENDED|RESIZING) ]]; then
-      printf '%s\n' "${ROWS}"
-      return 0
+    if [[ ${#SCHEDULER_IDS[@]} -gt 0 ]]; then
+      local scheduler_id
+      for scheduler_id in "${SCHEDULER_IDS[@]}"; do
+        printf 'SCHEDULER_ID=%s\n' "${scheduler_id}"
+      done
     fi
-    sleep 15
-    ATTEMPT=$((ATTEMPT + 1))
-  done
-  echo "ERROR: scheduler accounting did not reach terminal state for ${JOB_ID}." >&2
-  return 1
+  } > "${tmp}" || return 1
+  mv -f "${tmp}" "${STATUS_FILE}"
 }
 
-analyze_rows() {
-  local ROWS="$1"
+set_owner_state() {
+  local state="$1" reason="$2" owners_file="${RUN_ROOT}/manifests/owners.tsv"
+  local row owner expected_owner owner_key rc=0 count=0
+  [[ -r "${owners_file}" ]] || return 1
+  while IFS=$'\t' read -r row owner; do
+    [[ -n "${row}" && -n "${owner}" ]] || { rc=1; continue; }
+    owner_key="${row}"
+    [[ "${owner_key}" == */* ]] || owner_key="${owner_key}/batch_effect_uncorrected"
+    expected_owner="$(ecoda_owner_dir stage3 "${owner_key}")"
+    [[ "${owner}" == "${expected_owner}" ]] || { rc=1; continue; }
+    count=$((count + 1))
+    if ! ecoda_owner_set_state "${owner}" "${state}" "${reason}"; then
+      rc=1
+    fi
+  done < "${owners_file}"
+  [[ ${count} -gt 0 ]] || rc=1
+  return "${rc}"
+}
+
+fail() {
+  local reason="$1"
+  local owner_rc=0
+  set_owner_state FAIL "${reason}" || owner_rc=1
+  atomic_status FAIL "${reason}" || owner_rc=1
+  exit 1
+}
+
+bump_memory() {
+  local value="$1"
+  [[ "${value}" =~ ^([0-9]+)([GT])$ ]] || return 1
+  printf '%s%s' "$((BASH_REMATCH[1] * 2))" "${BASH_REMATCH[2]}"
+}
+
+mem_ge() {
+  local a="$1" b="$2" an as bn bs
+  [[ "${a}" =~ ^([0-9]+)([GT])$ ]] || return 1
+  an="${BASH_REMATCH[1]}"; as="${BASH_REMATCH[2]}"
+  [[ "${b}" =~ ^([0-9]+)([GT])$ ]] || return 1
+  bn="${BASH_REMATCH[1]}"; bs="${BASH_REMATCH[2]}"
+  [[ "${as}" == "T" ]] && an=$((an * 1024))
+  [[ "${bs}" == "T" ]] && bn=$((bn * 1024))
+  (( an >= bn ))
+}
+
+wait_and_classify() {
+  local job="$1" expected="$2" rows jid state exitcode task
   OOM_TASKS=()
-  FAILED_ROWS=()
-  TASK_COUNT=0
-  local JOB_ID STATE EXIT_CODE MAX_RSS TASK_ID
-  while IFS='|' read -r JOB_ID STATE EXIT_CODE MAX_RSS; do
-    [[ -n "${JOB_ID}" ]] || continue
-    [[ "${JOB_ID}" == "${ARRAY_ID}_"* ]] || continue
-    TASK_ID="${JOB_ID#${ARRAY_ID}_}"
-    if ! [[ "${TASK_ID}" =~ ^[0-9]+$ ]]; then
-      FAILED_ROWS+=("${JOB_ID}|${STATE}|${EXIT_CODE}|${MAX_RSS}")
-      continue
-    fi
-    TASK_COUNT=$((TASK_COUNT + 1))
-    if [[ "${STATE}" == "COMPLETED" && "${EXIT_CODE}" == "0:0" ]]; then
-      continue
-    fi
-    if [[ "${STATE}" == OUT_OF_MEMORY* ]]; then
-      OOM_TASKS+=("${TASK_ID}")
-    else
-      FAILED_ROWS+=("${JOB_ID}|${STATE}|${EXIT_CODE}|${MAX_RSS}")
-    fi
-  done <<< "${ROWS}"
+  FAILED_TASKS=()
+  ecoda_wait_array_accounting "${job}" "${expected}" "${STAGE3_WATCHDOG_POLL_SECONDS:-30}" || return 1
+  rows="${ECODA_ACCOUNTING_ROWS}"
+  while IFS='|' read -r jid state exitcode; do
+    [[ "${jid}" =~ ^${job}_[0-9]+$ ]] || continue
+    task="${jid#${job}_}"
+    state="${state%%+*}"
+    case "${state}" in
+      COMPLETED) [[ -z "${exitcode}" || "${exitcode}" == "0:0"* ]] || FAILED_TASKS+=("${task}:${state}:${exitcode}") ;;
+      OUT_OF_MEMORY) OOM_TASKS+=("${task}") ;;
+      *) FAILED_TASKS+=("${task}:${state}:${exitcode}") ;;
+    esac
+  done <<< "${rows}"
 }
 
-memory_gb() {
-  case "$1" in
-    *G) printf '%s' "${1%G}" ;;
-    *T) printf '%s' "$(( ${1%T} * 1024 ))" ;;
-    *) return 1 ;;
-  esac
+validate_manifest_outputs() {
+  local manifest="$1" ds view output path
+  while IFS=$'\t' read -r ds view; do
+    [[ -n "${ds}" ]] || continue
+    output="$(ecoda_view_output_name "${ds}" "${view}")"
+    [[ -n "${output}" ]] || return 1
+    path="${HPC_SCRATCH_DIR}/${ds}/output/${output}"
+    [[ -s "${path}" ]] || return 1
+    "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+      --path "${path}" --view "${view}" --method "Stage 3 watchdog" >/dev/null 2>&1 || return 1
+    ecoda_validate_checksum "${path}" || return 1
+  done < "${manifest}"
 }
 
-next_memory() {
-  local CURRENT_GB MAX_GB NEXT_GB
-  CURRENT_GB="$(memory_gb "${CURRENT_MEMORY}")" || return 1
-  MAX_GB="$(memory_gb "${MAX_MEMORY}")" || return 1
-  if (( CURRENT_GB >= MAX_GB )); then
-    return 1
-  fi
-  NEXT_GB=$((CURRENT_GB * 2))
-  (( NEXT_GB > MAX_GB )) && NEXT_GB="${MAX_GB}"
-  printf '%sG' "${NEXT_GB}"
-}
-
-submit_retry_array() {
-  local RETRY_MANIFEST="$1"
-  local RETRY_COUNT
-  RETRY_COUNT="$(wc -l < "${RETRY_MANIFEST}" | tr -d '[:space:]')"
-  local EXPORTS="ALL,PREPROCESS_DATASETS_FILE=${RETRY_MANIFEST},PREPROCESS_VIEW=${VIEW},FORCE_PREPROCESS=${FORCE_PREPROCESS},PREPROCESS_ERROR_PREFIX=${LOGS_DIR}/3_scrnaseq_batch_effect_retry,PREPROCESS_CPUS_PER_TASK=${PREPROCESS_CPUS_PER_TASK:-16}"
-  local RETRY_ID
-  RETRY_ID="$(sbatch --parsable \
-    --array="1-${RETRY_COUNT}%${THROTTLE}" \
-    --cpus-per-task="${PREPROCESS_CPUS_PER_TASK:-16}" \
-    --mem="${CURRENT_MEMORY}" \
-    --partition="${PARTITION}" \
-    --output="${LOGS_DIR}/3_scrnaseq_batch_effect_retry_%A_%a.log" \
-    --error="${LOGS_DIR}/3_scrnaseq_batch_effect_retry_%A_%a.err" \
-    --mail-user="${USER_EMAIL}" \
-    --export="${EXPORTS}" \
-    "${WORKER_SCRIPT}")"
-  RETRY_ID="${RETRY_ID%%;*}"
-  if ! [[ "${RETRY_ID}" =~ ^[0-9]+$ ]]; then
-    echo "ERROR: invalid retry array id: ${RETRY_ID}" >&2
-    return 1
-  fi
-  printf '%s' "${RETRY_ID}"
-}
-
-validate_outputs() {
-  local DS_NAME OUTPUT_NAME OUTPUT_FILE
-  while IFS= read -r DS_NAME; do
-    [[ -n "${DS_NAME}" ]] || continue
-    OUTPUT_NAME="$(jq -er --arg ds "${DS_NAME}" --arg view "${VIEW}" \
-      '.[$ds].views[$view].output_file_name' "${DATASETS_JSON_FILE}")"
-    OUTPUT_FILE="${HPC_SCRATCH_DIR}/${DS_NAME}/output/${OUTPUT_NAME}"
-    if [[ ! -s "${OUTPUT_FILE}" ]]; then
-      echo "ERROR: expected preprocessing artifact is missing or empty: ${OUTPUT_FILE}" >&2
-      return 1
-    fi
-  done < "${ROOT_MANIFEST}"
-}
-
-if ! command -v jq >/dev/null 2>&1; then
-  write_status FAIL "jq is unavailable on the watchdog node"
-  exit 1
-fi
-if [[ ! -r "${MANIFEST}" ]]; then
-  write_status FAIL "dataset manifest is unreadable: ${MANIFEST}"
-  exit 1
-fi
+ecoda_validate_run_owned_path "${ROOT_MANIFEST}" "${RUN_ROOT}" ||
+  fail "Stage 3 selection manifest is outside run root"
+ecoda_validate_run_owned_path "${CURRENT_MANIFEST}" "${RUN_ROOT}" ||
+  fail "Stage 3 array manifest is outside run root"
+ecoda_validate_manifest "${ROOT_MANIFEST}" 2 ||
+  fail "Stage 3 selection manifest is invalid"
+ecoda_validate_manifest "${CURRENT_MANIFEST}" 2 ||
+  fail "Stage 3 array manifest is invalid"
+ecoda_validate_run_owned_path "${RUN_ROOT}/manifests/owners.tsv" "${RUN_ROOT}" ||
+  fail "Stage 3 owner manifest is missing or outside run root"
+expected="$(wc -l < "${CURRENT_MANIFEST}" | tr -d '[:space:]')"
+[[ "${expected}" =~ ^[1-9][0-9]*$ ]] || fail "Stage 3 array manifest is empty"
 
 while :; do
-  echo "Waiting for preprocessing array ${ARRAY_ID} to reach terminal accounting state."
-  if ! ROWS="$(wait_for_terminal "${ARRAY_ID}")"; then
-    write_status FAIL "scheduler accounting did not reach terminal state for ${ARRAY_ID}"
-    exit 1
+  wait_and_classify "${ARRAY_ID}" "${expected}" || fail "sacct did not provide terminal Stage 3 task rows"
+  if [[ ${#FAILED_TASKS[@]} -gt 0 ]]; then
+    fail "non-OOM Stage 3 task failure: ${FAILED_TASKS[*]}"
   fi
-  analyze_rows "${ROWS}"
-  if (( TASK_COUNT == 0 )); then
-    write_status FAIL "no array task rows found for ${ARRAY_ID}"
-    exit 1
+  if [[ ${#OOM_TASKS[@]} -eq 0 ]]; then break; fi
+  if mem_ge "${CURRENT_MEMORY}" "${MAX_MEMORY}"; then
+    fail "OUT_OF_MEMORY Stage 3 tasks at ${MAX_MEMORY} ceiling: ${OOM_TASKS[*]}"
   fi
-  if [[ ${#FAILED_ROWS[@]} -gt 0 ]]; then
-    echo "ERROR: preprocessing array ${ARRAY_ID} has non-OOM failures: ${FAILED_ROWS[*]}" >&2
-    write_status FAIL "non-OOM array task failure"
-    exit 1
-  fi
-  if [[ ${#OOM_TASKS[@]} -eq 0 ]]; then
-    break
-  fi
-
-  NEXT_MEMORY="$(next_memory || true)"
-  if [[ -z "${NEXT_MEMORY}" ]]; then
-    echo "ERROR: OOM retry ceiling reached for ${ARRAY_ID}." >&2
-    write_status FAIL "OOM retry ceiling reached at ${CURRENT_MEMORY}"
-    exit 1
-  fi
-  RETRY_MANIFEST="${CURRENT_MANIFEST}.retry_${CURRENT_MEMORY}_to_${NEXT_MEMORY}"
-  : > "${RETRY_MANIFEST}"
-  for TASK_ID in "${OOM_TASKS[@]}"; do
-    DS_NAME="$(sed -n "${TASK_ID}p" "${CURRENT_MANIFEST}")"
-    if [[ -z "${DS_NAME}" ]]; then
-      write_status FAIL "OOM task ${TASK_ID} has no dataset manifest row"
-      exit 1
-    fi
-    printf '%s\n' "${DS_NAME}" >> "${RETRY_MANIFEST}"
+  NEXT_MEMORY="$(bump_memory "${CURRENT_MEMORY}")" || fail "unparseable Stage 3 memory '${CURRENT_MEMORY}'"
+  if mem_ge "${NEXT_MEMORY}" "${MAX_MEMORY}"; then NEXT_MEMORY="${MAX_MEMORY}"; fi
+  RETRY_INDEX=$((RETRY_INDEX + 1))
+  [[ ${RETRY_INDEX} -le 4 ]] || fail "exceeded Stage 3 OOM retry attempts"
+  RETRY_MANIFEST="${RUN_ROOT}/manifests/selection.retry_${RETRY_INDEX}.tsv"
+  RETRY_TMP="${RETRY_MANIFEST}.build.$$"
+  : > "${RETRY_TMP}"
+  for task in "${OOM_TASKS[@]}"; do
+    line="$(sed -n "${task}p" "${CURRENT_MANIFEST}")"
+    [[ -n "${line}" ]] || fail "OOM task ${task} is absent from Stage 3 manifest"
+    printf '%s\n' "${line}" >> "${RETRY_TMP}"
   done
-  CURRENT_MEMORY="${NEXT_MEMORY}"
-  RETRY_ARRAY_ID="$(submit_retry_array "${RETRY_MANIFEST}")"
-  ARRAY_JOB_IDS="${ARRAY_JOB_IDS},${RETRY_ARRAY_ID}"
-  printf 'PREPROCESS_ARRAY_JOB_ID=%s\n' "${RETRY_ARRAY_ID}" >&2
-  echo "Submitted OOM-only preprocessing retry ${RETRY_ARRAY_ID} at ${CURRENT_MEMORY}."
-  ARRAY_ID="${RETRY_ARRAY_ID}"
+  if ! ecoda_atomic_install_manifest "${RETRY_TMP}" "${RETRY_MANIFEST}" 2; then
+    fail "failed to install Stage 3 retry manifest atomically"
+  fi
+  rm -f "${RETRY_TMP}"
+  ecoda_validate_run_owned_path "${RETRY_MANIFEST}" "${RUN_ROOT}" ||
+    fail "Stage 3 retry manifest escaped the run root"
+  ecoda_validate_manifest "${RETRY_MANIFEST}" 2 ||
+    fail "Stage 3 retry manifest is invalid"
+  RETRY_COUNT="$(wc -l < "${RETRY_MANIFEST}" | tr -d '[:space:]')"
+  set +e
+  RETRY_MSG="$(sbatch --parsable --array="1-${RETRY_COUNT}%${THROTTLE}" \
+    --mem="${NEXT_MEMORY}" --partition="${PARTITION}" \
+    --output="${LOGS_DIR}/3_scrnaseq_preprocessing_retry${RETRY_INDEX}_%A_%a.log" \
+    --error="${LOGS_DIR}/3_scrnaseq_preprocessing_retry${RETRY_INDEX}_%A_%a.err" \
+    --mail-user="${USER_EMAIL}" \
+    --export="ALL,PREPROCESS_SELECTION_FILE=${RETRY_MANIFEST},PREPROCESS_RUN_ROOT=${RUN_ROOT},FORCE_PREPROCESS=1,PREPROCESS_ERROR_PREFIX=${LOGS_DIR}/3_scrnaseq_preprocessing_retry${RETRY_INDEX}" \
+    "${SCRIPT_DIR}/1.1_run_worker.sh")"
+  retry_rc=$?
+  set -e
+  [[ ${retry_rc} -eq 0 ]] || fail "sbatch rejected Stage 3 OOM retry"
+  ARRAY_ID="${RETRY_MSG%%;*}"
+  [[ "${ARRAY_ID}" =~ ^[0-9]+$ ]] || fail "invalid Stage 3 retry array id"
+  SCHEDULER_IDS+=("${ARRAY_ID}")
+  echo "PREPROCESS_RETRY_ARRAY_JOB_ID=${ARRAY_ID}"
   CURRENT_MANIFEST="${RETRY_MANIFEST}"
+  expected="${RETRY_COUNT}"
+  CURRENT_MEMORY="${NEXT_MEMORY}"
 done
 
-if ! validate_outputs; then
-  write_status FAIL "preprocessing artifacts are missing or empty"
-  exit 1
+validate_manifest_outputs "${ROOT_MANIFEST}" || fail "Stage 3 h5ad schema/checksum validation failed"
+set_owner_state OK "Stage 3 preprocessing artifacts validated" ||
+  fail "failed to finalize Stage 3 owners"
+if ! atomic_status OK "all selected Stage 3 tasks completed and artifacts validated"; then
+  fail "failed to write Stage 3 watchdog success status"
 fi
-write_status OK "all preprocessing tasks completed and scratch artifacts validated"
+printf 'Stage 3 watchdog completed for run %s\n' "${RUN_ID}"
