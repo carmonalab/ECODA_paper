@@ -123,3 +123,12 @@ Reference plan: [`.agents/plans/archive/implementation_plan_new_datasets_json-su
 - **Python `.feather` Atomic Writes:** Python workers write `.feather` files directly; consider writing to `.tmp` followed by `os.replace` if interrupted tasks ever leave partial feathers.
 - **PILOT-GM-VAE Runtime Documentation:** On large cohorts, PILOT-GM-VAE execution time is an intrinsic algorithmic property (several hours per combo on GPU); default combo (`hvg2000_highres`) serves as the primary benchmark comparison.
 - **Watchdog Stale-RUNNING Recovery:** If SlurmDBD accounting lag exceeds the 20-minute poll cap and causes a false-fail status on a completed array, recovery is achieved via `1_submit_hpc_array.sh --sync-only <array_id>` (bypassing the watchdog's `STATE=FAIL` cache file).
+
+## Will not be addressed for now, just for documentation
+
+- An isolated sample in an otherwise runnable dataset may have zero HiTME or
+  scATOMIC labels. Stage 1 preserves nonfatal warning/stat reporting and does
+  not implement sample exclusion or downstream special handling.
+- The three known unsuitable datasets (`Alzheimer`, `Diabetes`, and `Parkinson`)
+  are skipped a priori via `not_suitable_for_auto_annotation`.
+- No email notifications are added for this rare edge case.

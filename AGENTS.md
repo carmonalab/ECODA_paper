@@ -129,6 +129,13 @@ sacct -j <job-id> --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS
 
 - **Configuration over duplication:** resolve datasets and columns through `datasets.json` helpers; source `src/slurm_config.sh` in every HPC shell entry point.
 - **Clean cross-language contracts:** h5ad stores raw counts in `layers["counts"]`; Feather stores tabular matrices with sample identity; RDS result bundles carry features, labels, and distances. Preserve row names/sample order and reject NA or mismatched identifiers.
+- **scITD sample-universe exception:** scITD may legitimately drop samples
+  during cell-type filtering/tensor factorization when it cannot produce a
+  feature row for a sample. Its result bundles can therefore contain fewer
+  sample IDs than the source H5AD. Validators must report the dropped IDs and
+  apply this exception only to scITD; all other benchmark methods must retain
+  the current sample universe. Dropped scITD samples are a known method
+  limitation, not a reason to rerun unrelated datasets or methods.
 - **Fail closed:** R uses `stop()`/`stopifnot()` and benchmark parallelism uses `.errorhandling="stop"`; shell scripts use strict status gates; Python validates required observation columns. Warn-and-skip is reserved for explicitly optional/missing artifacts.
 - **Artifact safety:** use temporary files plus atomic rename, per-sample checkpoints, and MD5 verification before `readRDS`. Do not weaken checksum checks.
 - **Naming:** numbered scripts encode pipeline order (`1_submit...`, `2_process...`, `3_merge...`); dataset-specific code stays under stage 2; shared helpers belong in `src/utils/`; shell environment variables are uppercase.

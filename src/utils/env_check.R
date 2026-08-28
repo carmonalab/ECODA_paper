@@ -11,11 +11,9 @@
 # DESeq2/vegan/robCompositions or an annotation-only package going missing
 # before a job runs).
 #
-# Intended to run on the HPC (login node, or sourced by the guarded
-# env-refresh smoke checks in setup_env_sbatch.sh / refresh_env.sh). On the
-# macOS `default` env HPC-only packages (py-cuda13 / linux-64-scoped or
-# annotation-only) may legitimately be absent and WILL be reported — this is
-# expected; do not "fix" it by installing them locally.
+# Intended to run in the environment being validated. On macOS, the default
+# environment is the local analysis surface; Linux-targeted packages provided
+# only by the py-cuda13 feature are checked on HPC instead.
 
 env_check_packages <- c(
   # --- notebook attach list (src/utils/imports.R, in attach order) ----------
@@ -31,6 +29,10 @@ env_check_packages <- c(
   "GloScope", "HiTME", "scATOMIC", "cutoff.scATOMIC", "scGate", "ProjecTILs",
   "SignatuR", "R.utils", "robCompositions"
 )
+
+if (identical(unname(Sys.info()[["sysname"]]), "Darwin")) {
+  env_check_packages <- setdiff(env_check_packages, "robCompositions")
+}
 
 check_env_packages <- function(pkgs) {
   missing_pkgs <- character(0)
