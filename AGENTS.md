@@ -13,7 +13,7 @@ ECODA (Exploratory Compositional Data Analysis) is a reproducible R/Python workf
 - **Multi-dataset parallel execution & fail-closed idempotency.** Pipeline stages (preprocessing, cell-type annotation, benchmarks) must dispatch all eligible datasets concurrently in parallel SLURM arrays. All stages must implement strict, fail-closed safety checks that verify existing output file integrity, non-emptiness, valid schema, and checksums before skipping already-completed runs, with full `--force` recomputation support across all submitters and workers.
 - Files beginning with `Figure` or `Supp_fig` are publication figures: fix them, never remove them. Figure hierarchy: `Figure 2A` uses default/main settings; `Supp fig 15` contains extended methods; `Supp fig 2` is parameter screening. Exclude legacy `ECODA_PB_combo_*` from publication figures.
 - Preserve all version constraints in `pixi.toml` and the resolved `pixi.lock`.
-- Use the `_debug` Joanito five-sample subset for routine verification. Do not run full cohorts for minor checks.
+- Use focused tests and the `_debug` Joanito five-sample subset for routine verification. Do not launch full cohorts for routine checks.
 
 ## Architecture & Data Flow
 
@@ -33,6 +33,7 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   correction run MUST be launched through the checked-in
   `durable-hpc-gate-ecoda` profile. Direct SSH-launched long-running wrappers
   are not an acceptable substitute.
+- Route full-cohort HPC work through the durable HPC gate; do not launch full cohorts for routine checks.
 - Independent datasets MAY and SHOULD run in one SLURM array for a pipeline
   stage. The durable gate owns the array's terminal wait, accounting
   inspection, checksum/NAS audit, and Luna Max review; the next pipeline stage
