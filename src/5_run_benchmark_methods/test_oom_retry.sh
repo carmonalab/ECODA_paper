@@ -44,6 +44,9 @@ export FORCE_BENCHMARK=0
 export WATCHDOG_STATUS_GRACE_ITERS=0
 
 # shellcheck source=/dev/null
+export ECODA_RUNTIME_MODE=host ECODA_RUNTIME_PROFILE=stage5
+source "${REPO_ROOT}/src/utils/bash/ecoda_runtime.sh"
+TEST_RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage5 0)"
 source "${REPO_ROOT}/src/5_run_benchmark_methods/benchmark_submit_common.sh"
 
 # watchdog_main.sh executes `watchdog_main "$@"` at the bottom, so its
@@ -453,7 +456,7 @@ mkdir -p "${WATCHDOG_STATUS_DIR}"
 WATCHDOG_ID="$(benchmark_submit_watchdog \
   11111 scitd "${MANIFEST_FILE}" strict shared-cpu 1000 \
   "5_benchmark_r_scitd" "${REPO_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh" \
-  --constraint=EPYC-7742 --cpus-per-task=16)"
+  "${TEST_RUNTIME_EXPORT}" --constraint=EPYC-7742 --cpus-per-task=16)"
 assert_eq "watchdog id is the sbatch-returned id" "22222" "${WATCHDOG_ID}"
 SBATCH_ARGS="$(head -1 "${CAPTURE_DIR}/sbatch_calls.txt")"
 assert_contains "job name" "--job-name=benchmark_watchdog_scitd" "${SBATCH_ARGS}"
@@ -467,6 +470,8 @@ assert_contains "mode forwarded" " strict -- " "${SBATCH_ARGS}"
 assert_contains "throttle forwarded" " shared-cpu 1000 5_benchmark_r_scitd" "${SBATCH_ARGS}"
 assert_contains "worker script forwarded" "1.1_run_worker.sh" "${SBATCH_ARGS}"
 assert_contains "flags preserved for retries" "--constraint=EPYC-7742 --cpus-per-task=16" "${SBATCH_ARGS}"
+assert_contains "watchdog runtime export" "ECODA_RUNTIME_MODE=host" "${SBATCH_ARGS}"
+assert_contains "watchdog runtime profile" "ECODA_RUNTIME_PROFILE=stage5" "${SBATCH_ARGS}"
 
 echo "=== benchmark_wait_watchdog: OK status -> pass + JOB_REPORTS merged ==="
 setup_oom_scenario
@@ -520,7 +525,7 @@ printf 'Gongsharma\nStephenson\nWu\n' > "${WD_MANIFEST}"
 SACCT_ROWS="11111:COMPLETED 11111_1:COMPLETED 11111_2:COMPLETED 11111_3:OUT_OF_MEMORY 22222:COMPLETED 22222_1:COMPLETED"
 run_watchdog 11111 scitd "${WD_MANIFEST}" strict -- shared-cpu 1000 5_benchmark_r_scitd \
   "${REPO_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh" \
-  --constraint=EPYC-7742 --cpus-per-task=16
+  "${TEST_RUNTIME_EXPORT}" --constraint=EPYC-7742 --cpus-per-task=16
 assert_eq "watchdog strict exit 0" "0" "$(wd_rc)"
 WD_STATUS="${WATCHDOG_STATUS_DIR}/77777.status"
 assert_contains "status STATE=OK" "STATE=OK" "$(cat "${WD_STATUS}")"
@@ -532,6 +537,7 @@ assert_contains "retry partition" "--partition=shared-cpu" "${RETRY_ARGS}"
 assert_contains "retry flags preserved" "--constraint=EPYC-7742 --cpus-per-task=16" "${RETRY_ARGS}"
 assert_contains "retry log naming" "5_benchmark_r_scitd_%A_%a.log" "${RETRY_ARGS}"
 assert_contains "retry worker script" "1.1_run_worker.sh" "${RETRY_ARGS}"
+assert_contains "retry runtime export" "ECODA_RUNTIME_MODE=host" "${RETRY_ARGS}"
 RETRY_MANIFEST="$(ls "${HPC_SCRATCH_DIR}"/benchmark_manifest_scitd_retry_*.txt 2>/dev/null | head -1)"
 assert_eq "retry manifest reduced to OOM'd dataset" "Wu" "$(cat "${RETRY_MANIFEST}")"
 assert_eq "METHOD exported for the retry workers" "scitd" "$(grep '^METHOD=' "${CAPTURE_DIR}/sbatch_env.txt" | head -1 | cut -d= -f2-)"
@@ -544,7 +550,8 @@ export BENCHMARK_MEM="256G"
 SACCT_ROWS="33333:COMPLETED 33333_1:OUT_OF_MEMORY 44444:COMPLETED 44444_1:COMPLETED"
 echo "44444" > "${CAPTURE_DIR}/sbatch_next.txt"
 run_watchdog 33333 gloscope "${WD_MANIFEST}" strict -- shared-cpu 1000 5_benchmark_r_gloscope \
-  "${REPO_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh"
+  "${REPO_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh" \
+  "${TEST_RUNTIME_EXPORT}"
 assert_eq "watchdog strict (clamp) exit 0" "0" "$(wd_rc)"
 assert_contains "retry --mem clamped to 500G" "--mem=500G" "$(head -1 "${CAPTURE_DIR}/sbatch_calls.txt")"
 assert_contains "status STATE=OK" "STATE=OK" "$(cat "${WATCHDOG_STATUS_DIR}/77778.status")"
@@ -560,7 +567,8 @@ for ds in Gongsharma Stephenson Wu; do
 done
 SACCT_ROWS="11111:COMPLETED 11111_1:COMPLETED 11111_2:COMPLETED 11111_3:FAILED"
 run_watchdog 11111 prepare_pseudobulk "${WD_MANIFEST}" soft-gate -- shared-cpu 1000 5_benchmark_r_prepare_pseudobulk \
-  "${REPO_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh"
+  "${REPO_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh" \
+  "${TEST_RUNTIME_EXPORT}"
 assert_eq "soft-gate exit 0" "0" "$(wd_rc)"
 assert_eq "no resubmit in soft-gate pass" "0" "$(wc -l < "${CAPTURE_DIR}/sbatch_calls.txt" | tr -d ' ')"
 WD_STATUS="${WATCHDOG_STATUS_DIR}/88888.status"
@@ -575,7 +583,8 @@ mkdir -p "${HPC_SCRATCH_DIR}/benchmark/pseudobulks"
 touch "${HPC_SCRATCH_DIR}/benchmark/pseudobulks/Gongsharma_pseudobulk_schvg2000.rds"
 SACCT_ROWS="11111:COMPLETED 11111_1:COMPLETED 11111_2:COMPLETED 11111_3:COMPLETED"
 run_watchdog 11111 prepare_pseudobulk "${WD_MANIFEST}" soft-gate -- shared-cpu 1000 5_benchmark_r_prepare_pseudobulk \
-  "${REPO_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh"
+  "${REPO_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh" \
+  "${TEST_RUNTIME_EXPORT}"
 assert_eq "soft-gate fallback exit 0 (all COMPLETED)" "0" "$(wd_rc)"
 assert_contains "status STATE=OK via strict gate" "STATE=OK" "$(cat "${WATCHDOG_STATUS_DIR}/88889.status")"
 
@@ -585,7 +594,8 @@ export SLURM_JOB_ID="88890"
 export FORCE_BENCHMARK=1
 SACCT_ROWS="11111:COMPLETED 11111_1:COMPLETED 11111_2:COMPLETED 11111_3:COMPLETED"
 run_watchdog 11111 prepare_pseudobulk "${WD_MANIFEST}" soft-gate -- shared-cpu 1000 5_benchmark_r_prepare_pseudobulk \
-  "${REPO_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh"
+  "${REPO_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh" \
+  "${TEST_RUNTIME_EXPORT}"
 assert_eq "soft-gate --force exit 0 (all COMPLETED)" "0" "$(wd_rc)"
 assert_contains "status STATE=OK" "STATE=OK" "$(cat "${WATCHDOG_STATUS_DIR}/88890.status")"
 
@@ -593,7 +603,8 @@ echo "=== watchdog_main (extracted): unknown mode -> exit 1, no status file ==="
 setup_oom_scenario
 export SLURM_JOB_ID="77779"
 assert_exit "unknown mode exit 1" 1 watchdog_main 11111 scitd "${WD_MANIFEST}" bogus -- shared-cpu 1000 5_benchmark_r_scitd \
-  "${REPO_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh"
+  "${REPO_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh" \
+  "${TEST_RUNTIME_EXPORT}"
 assert_eq "no status file on unknown mode" "" "$(cat "${WATCHDOG_STATUS_DIR}/77779.status" 2>/dev/null)"
 
 # ---------------------------------------------------------------------------

@@ -86,6 +86,12 @@ def main() -> None:
         stats = validate_feather(feather_path, expected_keys={("s1", "c1"), ("s1", "c2")})
         assert stats["n_rows"] == 2
         assert stats["column_coverage"]["layer1"]["n_nonblank"] == 2
+        categorical = frame.copy()
+        categorical["classification_confidence"] = ["confident", "low_confidence"]
+        categorical_path = root / "categorical_confidence.feather"
+        feather.write_feather(categorical, categorical_path)
+        categorical_stats = validate_feather(categorical_path)
+        assert categorical_stats["n_rows"] == 2
 
         duplicate = root / "duplicate.feather"
         feather.write_feather(annotation_frame(["s1", "s1"], ["c1", "c1"]), duplicate)

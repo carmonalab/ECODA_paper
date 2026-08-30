@@ -1,7 +1,30 @@
 #!/bin/bash
 # Aggregate benchmark gate: one terminal status after every child watchdog.
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR=""
+if [[ -n "${PROJECT_ROOT:-}" &&
+      -f "${PROJECT_ROOT}/src/slurm_config.sh" ]]; then
+  SCRIPT_DIR="${PROJECT_ROOT}/src/5_run_benchmark_methods"
+elif [[ -n "${SLURM_SUBMIT_DIR:-}" &&
+        -f "${SLURM_SUBMIT_DIR}/src/slurm_config.sh" ]]; then
+  SCRIPT_DIR="${SLURM_SUBMIT_DIR}/src/5_run_benchmark_methods"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -n "${SLURM_JOB_ID:-}" ]] &&
+     command -v scontrol >/dev/null 2>&1; then
+    submitted_command="$(scontrol show job "${SLURM_JOB_ID}" -o 2>/dev/null |
+      sed -n 's/.* Command=\([^ ]*\).*/\1/p' | head -1 || true)"
+    submitted_dir="$(dirname "${submitted_command}")"
+    if [[ -n "${submitted_command}" &&
+          -f "${submitted_dir}/../slurm_config.sh" ]]; then
+      SCRIPT_DIR="$(cd "${submitted_dir}" && pwd)"
+    fi
+  fi
+fi
+if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/../slurm_config.sh" ]]; then
+  echo "ERROR: could not recover the repository source directory." >&2
+  exit 1
+fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
 [[ $# -eq 3 ]] || { echo "Usage: matrix_gate.sh RUN_ROOT WATCHDOG_LABELS_CSV SCHEDULER_IDS_MANIFEST" >&2; exit 2; }

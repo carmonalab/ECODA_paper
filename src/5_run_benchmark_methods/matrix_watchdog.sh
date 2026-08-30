@@ -27,10 +27,14 @@ if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/../slurm_config.sh" ]]; then
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 cd "${PROJECT_ROOT}"
-[[ $# -ge 9 ]] || { echo "Usage: matrix_watchdog.sh RUN_ROOT LABEL MANIFEST ARRAY_ID MEM MAX_MEM PARTITION THROTTLE WORKER [flags...]" >&2; exit 2; }
-RUN_ROOT="$1"; LABEL="$2"; ROOT_MANIFEST="$3"; ARRAY_ID="$4"; CURRENT_MEMORY="$5"; MAX_MEMORY="$6"; PARTITION="$7"; THROTTLE="$8"; WORKER_SCRIPT="$9"; shift 9
+[[ $# -ge 10 ]] || { echo "Usage: matrix_watchdog.sh RUN_ROOT LABEL MANIFEST ARRAY_ID MEM MAX_MEM PARTITION THROTTLE WORKER RUNTIME_EXPORT [flags...]" >&2; exit 2; }
+RUN_ROOT="$1"; LABEL="$2"; ROOT_MANIFEST="$3"; ARRAY_ID="$4"; CURRENT_MEMORY="$5"; MAX_MEMORY="$6"; PARTITION="$7"; THROTTLE="$8"; WORKER_SCRIPT="$9"; RUNTIME_EXPORT="${10}"; shift 10
 WORKER_FLAGS=("$@")
+WORKER_TIME_LIMIT="${METHOD_TIME_LIMIT:-${BENCHMARK_CPU_TIME_LIMIT}}"
+[[ -n "${WORKER_TIME_LIMIT}" && "${WORKER_TIME_LIMIT}" != *$'\n'* && "${WORKER_TIME_LIMIT}" != *' '* ]] ||
+  { echo "ERROR: matrix worker time limit is invalid." >&2; exit 1; }
 [[ -d "${RUN_ROOT}" ]] || { echo "ERROR: matrix run root is missing: ${RUN_ROOT}" >&2; exit 1; }
 ecoda_validate_run_owned_path "${ROOT_MANIFEST}" "${RUN_ROOT}" ||
   { echo "ERROR: matrix manifest is outside the run root." >&2; exit 1; }
@@ -69,6 +73,15 @@ status_write() {
   mv -f "${tmp}" "${STATUS_FILE}"
 }
 fail() { status_write FAIL "$1"; exit 1; }
+[[ -n "${RUNTIME_EXPORT}" ]] || fail "matrix watchdog runtime export is missing"
+export ECODA_RUNTIME_PROFILE="${ECODA_RUNTIME_PROFILE:-stage5}"
+ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" ||
+  fail "matrix watchdog immutable runtime validation failed"
+validated_runtime_export="$(ecoda_runtime_export_csv \
+  "${ECODA_RUNTIME_PROFILE}" "${ECODA_APPTAINER_NV:-0}")" ||
+  fail "matrix watchdog runtime export construction failed"
+[[ "${validated_runtime_export}" == "${RUNTIME_EXPORT}" ]] ||
+  fail "matrix watchdog runtime export differs from worker export"
 bump_mem() { [[ "$1" =~ ^([0-9]+)([GT])$ ]] || return 1; printf '%s%s' "$((BASH_REMATCH[1] * 2))" "${BASH_REMATCH[2]}"; }
 mem_ge() { local a="$1" b="$2" an as bn bs; [[ "${a}" =~ ^([0-9]+)([GT])$ ]] || return 1; an="${BASH_REMATCH[1]}"; as="${BASH_REMATCH[2]}"; [[ "${b}" =~ ^([0-9]+)([GT])$ ]] || return 1; bn="${BASH_REMATCH[1]}"; bs="${BASH_REMATCH[2]}"; [[ "${as}" == T ]] && an=$((an * 1024)); [[ "${bs}" == T ]] && bn=$((bn * 1024)); (( an >= bn )); }
 classify() {
@@ -118,8 +131,9 @@ while :; do
   else
     retry_export="${retry_export},BENCHMARK_MANIFEST=${RETRY_MANIFEST}"
   fi
+  retry_export="${retry_export},${RUNTIME_EXPORT}"
   set +e
-  retry_msg="$(sbatch --parsable --array="1-${retry_count}%${THROTTLE}" --partition="${PARTITION}" "${WORKER_FLAGS[@]}" --mem="${NEXT_MEMORY}" \
+  retry_msg="$(sbatch --parsable --array="1-${retry_count}%${THROTTLE}" --partition="${PARTITION}" "${WORKER_FLAGS[@]}" --time="${WORKER_TIME_LIMIT}" --mem="${NEXT_MEMORY}" \
     --output="${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX}_%A_%a.log" --error="${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX}_%A_%a.err" \
     --mail-user="${USER_EMAIL}" --export="${retry_export}" "${WORKER_SCRIPT}")"
   retry_rc=$?

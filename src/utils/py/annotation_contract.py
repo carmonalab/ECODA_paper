@@ -43,6 +43,7 @@ OPTIONAL_HITME_COLUMNS = {
 }
 KNOWN_ANNOTATION_COLUMNS = REQUIRED_ANNOTATION_COLUMNS | OPTIONAL_HITME_COLUMNS
 REQUIRED_KEYS = {"cell_barcode", "Sample"}
+CONFIDENCE_LABELS = {"confident", "low_confidence"}
 
 
 def _artifact_path(path: str | Path) -> Path:
@@ -148,7 +149,6 @@ def _coverage_stats(frame: pd.DataFrame, samples: pd.Series) -> tuple[dict, dict
 
 def _validate_numeric_columns(frame: pd.DataFrame, path: Path) -> None:
     numeric_columns = {
-        "classification_confidence",
         "S.Score",
         "G2M.Score",
     } | (OPTIONAL_HITME_COLUMNS & {"IFN_UCell", "HeatShock_UCell",
@@ -164,6 +164,24 @@ def _validate_numeric_columns(frame: pd.DataFrame, path: Path) -> None:
             import numpy as np
             if not np.isfinite(finite.to_numpy(dtype=float)).all():
                 raise ValueError(f"annotation column {column!r} contains nonfinite values: {path}")
+    if "classification_confidence" in frame.columns:
+        values = frame["classification_confidence"]
+        converted = pd.to_numeric(values, errors="coerce")
+        labels = values.astype(object).map(
+            lambda value: str(value).strip() if _is_nonblank(value) else ""
+        )
+        invalid = values.notna() & converted.isna() & ~labels.isin(CONFIDENCE_LABELS)
+        if bool(invalid.any()):
+            raise ValueError(
+                f"annotation column 'classification_confidence' contains invalid values: {path}"
+            )
+        finite = converted.dropna()
+        if not finite.empty:
+            import numpy as np
+            if not np.isfinite(finite.to_numpy(dtype=float)).all():
+                raise ValueError(
+                    f"annotation column 'classification_confidence' contains nonfinite values: {path}"
+                )
 
 def _validate_frame(
     frame: pd.DataFrame,

@@ -28,9 +28,18 @@ if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/../../slurm_config.sh" ]]; then
 fi
 source "${SCRIPT_DIR}/../../slurm_config.sh"
 source "${SCRIPT_DIR}/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/ecoda_runtime.sh"
+ecoda_runtime_reexec_worker "${ECODA_RUNTIME_PROFILE:-stage3}" \
+  "${SCRIPT_DIR}/h5ad_preflight_worker.sh" || exit 1
 cd "${PROJECT_ROOT}"
 if [[ -n "${H5AD_PREFLIGHT_PYTHON_BIN:-}" ]]; then
-  PYTHON_BIN="${H5AD_PREFLIGHT_PYTHON_BIN}"
+  if [[ "${ECODA_RUNTIME_IN_CONTAINER:-0}" == "1" &&
+        "${H5AD_PREFLIGHT_PYTHON_BIN}" != "${PYTHON_BIN}" ]]; then
+    echo "ERROR: container H5AD preflight cannot override its in-image Python." >&2
+    exit 1
+  fi
+  [[ "${ECODA_RUNTIME_IN_CONTAINER:-0}" == "1" ]] ||
+    PYTHON_BIN="${H5AD_PREFLIGHT_PYTHON_BIN}"
 fi
 
 manifest="${H5AD_PREFLIGHT_MANIFEST:?H5AD_PREFLIGHT_MANIFEST is required}"

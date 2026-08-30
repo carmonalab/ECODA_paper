@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 export ECODA_GATE_STAGE=stage3
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
 source "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_submit.sh"
@@ -23,6 +24,7 @@ MEMORY="128G"
 MAX_MEMORY="500G"
 PARTITION="${SLURM_PARTITION}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
+RUNTIME_EXPORT=""
 
 usage() {
   cat <<'EOF'
@@ -90,6 +92,19 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "ERROR: jq is required for Stage 3 selection." >&2
   exit 1
 fi
+mkdir -p "${LOGS_DIR}" || {
+  echo "ERROR: could not create Stage 3 log directory." >&2
+  exit 1
+}
+export ECODA_RUNTIME_PROFILE=stage3
+ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" || {
+  echo "ERROR: Stage 3 immutable runtime validation failed." >&2
+  exit 1
+}
+RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage3 0)" || {
+  echo "ERROR: Stage 3 runtime export construction failed." >&2
+  exit 1
+}
 
 if [[ ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
   [[ -n "${SELECTION_FILE_ARG}" ]] || {
@@ -168,7 +183,8 @@ stage3_compute_validate_existing() {
   preflight_id="$(
     ecoda_submit_h5ad_preflight "${preflight_manifest}" "${status_dir}" \
       "${ECODA_RUN_ROOT}" classify "${PARTITION}" "${MEMORY}" "${THROTTLE}" \
-      "${LOGS_DIR}" stage3 "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_worker.sh"
+      "${LOGS_DIR}" stage3 "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_worker.sh" \
+      "${RUNTIME_EXPORT}"
   )"
   preflight_rc=$?
   set -e
@@ -706,7 +722,7 @@ ARRAY_MSG="$(sbatch --parsable --array="1-${PENDING_COUNT}%${THROTTLE}" \
   --output="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.log" \
   --error="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.err" \
   --mail-user="${USER_EMAIL}" \
-  --export="ALL,PREPROCESS_SELECTION_FILE=${PENDING_MANIFEST},PREPROCESS_RUN_ROOT=${ECODA_RUN_ROOT},FORCE_PREPROCESS=${FORCE_ARG},PREPROCESS_ERROR_PREFIX=${LOGS_DIR}/3_scrnaseq_preprocessing" \
+  --export="ALL,PREPROCESS_SELECTION_FILE=${PENDING_MANIFEST},PREPROCESS_RUN_ROOT=${ECODA_RUN_ROOT},FORCE_PREPROCESS=${FORCE_ARG},PREPROCESS_ERROR_PREFIX=${LOGS_DIR}/3_scrnaseq_preprocessing,${RUNTIME_EXPORT}" \
   "${SCRIPT_DIR}/1.1_run_worker.sh")"
 array_rc=$?
 set -e
@@ -725,7 +741,7 @@ WATCHDOG_MSG="$(sbatch --parsable --wait --dependency="afterany:${ARRAY_ID}" \
   --output="${LOGS_DIR}/3_scrnaseq_preprocessing_watchdog_%j.log" \
   --error="${LOGS_DIR}/3_scrnaseq_preprocessing_watchdog_%j.err" \
   --mail-user="${USER_EMAIL}" \
-  --export="ALL,PREPROCESS_RUN_ROOT=${ECODA_RUN_ROOT},PREPROCESS_PENDING_MANIFEST=${PENDING_MANIFEST}" \
+  --export="ALL,PREPROCESS_RUN_ROOT=${ECODA_RUN_ROOT},PREPROCESS_PENDING_MANIFEST=${PENDING_MANIFEST},${RUNTIME_EXPORT}" \
   "${SCRIPT_DIR}/1.2_preprocess_watchdog.sh" "${RUN_ID}" "${MANIFEST}" \
   "${ARRAY_ID}" "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
 watchdog_rc=$?

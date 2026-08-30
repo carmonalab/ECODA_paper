@@ -9,10 +9,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+if [[ -n "${SLURM_JOB_ID:-}" &&
+      "${ECODA_RUNTIME_IN_CONTAINER:-0}" != "1" ]]; then
   SCRIPT_DIR="$(dirname "$(scontrol show job "${SLURM_JOB_ID}" -o | grep -o 'Command=[^ ]*' | head -1 | cut -d= -f2)")"
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
+ecoda_runtime_reexec_worker stage4 \
+  "${SCRIPT_DIR}/3.2_merge_worker.sh" || exit 1
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
 cd "${PROJECT_ROOT}"
 

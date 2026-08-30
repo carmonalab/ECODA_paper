@@ -117,7 +117,7 @@ pixi containerize \
   --manual \
   --no-install \
   --env py-cuda13 \
-  --base-image=rockylinux:9 \
+  --base-image rockylinux:9 \
   --add-file "$PROJECT_ROOT/.pixi/envs/py-cuda13:/opt/ecoda/py-cuda13" \
   --keep-def \
   --output "$PROJECT_ROOT/.containers/ecoda-py-cuda13.sif"
@@ -208,20 +208,70 @@ The scheduled-worker boundary is preferable because it makes this behavior natur
 
 ## 8. GPU mode selection
 
-GPU selection is technically straightforward and does not require a second pipeline implementation.
+GPU selection remains one method-dependent dispatch decision; it does not
+require a second pipeline implementation. The resource class now distinguishes
+headline benchmark comparability from flexible exploratory throughput.
 
-Stage 5 already dispatches methods by method name and selects different worker/resource classes. The shared runtime launcher can consume an explicit per-job flag, for example:
+The standard `benchmark_analysis` MrVI/scPoli jobs use the default class:
 
 ```text
-ECODA_APPTAINER_NV=1   # MrVI and scPoli
-ECODA_APPTAINER_NV=0   # CPU methods
+partition = shared-gpu
+constraint = nvidia_h200_nvl
+time       = 12:00:00
 ```
 
-The Stage 5 submitter or worker-dispatch branch would set the flag only for `mrvi` and `scpoli`. The launcher then adds `--nv` only when the flag is enabled. CPU methods such as PILOT, QOT, PILOT-GM-VAE, and the R benchmark methods use the same launcher without GPU passthrough.
+Batch-effect passes and non-default/debug GPU jobs use the flexible class. The
+default flexible partition list is `shared-gpu,private-carmona-gpu`, with no
+GPU-model constraint and a three-hour worker time limit so jobs can backfill;
+`BENCHMARK_GPU_ANY_PARTITION`, `BENCHMARK_GPU_ANY_TIME_LIMIT`, and
+`BENCHMARK_GPU_ANY_VRAM_PER_GPU` are explicit overrides for larger workloads.
+`--gpu-policy any` selects this class for a debug or non-default run, while
+`--pass uncorrected|corrected` selects it automatically. The private Carmona
+GPU partition can be selected explicitly during its weekday 09:00–18:00
+reservation by setting `BENCHMARK_GPU_ANY_PARTITION=private-carmona-gpu`.
 
-This is a small conditional runtime change, not a second set of worker scripts. The mapping should fail closed for unknown methods rather than silently assuming GPU or CPU behavior.
+Both classes set `ECODA_APPTAINER_NV=1`; CPU methods use `0`. Flexible GPU
+workers print input H5AD bytes/cell/gene counts and peak allocated/reserved
+CUDA memory, which supplies the measured dataset-size/VRAM table needed before
+large batch-effect runs. If a measured job exceeds the flexible default
+three-hour or VRAM class, set the explicit time/VRAM override for that
+dataset/method rather than pinning every job to H200.
 
-The GPU feasibility test must use the repository's actual Bamboo GPU partition, constraints, and resource configuration. A generic `public-gpu` example is not sufficient. Apptainer's `--nv` exposes host NVIDIA devices and driver libraries; it does not replace the host driver. CUDA/PyTorch compatibility must be tested on the actual H200 nodes.
+Initial metadata-only sizing of the existing `batch_effect_uncorrected` H5AD
+outputs (2026-08-30) gives the following planning baseline. `h5ad GiB` is
+persisted file size; `dense fp32 GiB` is the full-cell-by-gene upper bound, not
+the expected model allocation. MrVI keeps sparse counts and scPoli densifies
+the selected 2,000-HVG subset, so the latter is the relevant conservative
+input-size proxy. The inventory used HDF5 metadata only and did not load a
+cohort into memory.
+
+| dataset | cells × genes | h5ad GiB | dense fp32 GiB | 2,000-HVG fp32 GiB |
+| --- | ---: | ---: | ---: | ---: |
+| Kidney_KPMP | 103,642 × 26,276 | 2.59 | 10.15 | 0.77 |
+| Myocardial_infarction | 132,888 × 27,416 | 4.53 | 13.57 | 0.99 |
+| Diabetes | 301,796 × 25,720 | 13.15 | 28.92 | 2.25 |
+| Joanito | 373,058 × 21,796 | 17.55 | 30.29 | 2.78 |
+| Stephenson | 621,279 × 19,214 | 18.91 | 44.47 | 4.63 |
+| Breast_cancer | 713,691 × 30,123 | 22.02 | 80.09 | 5.32 |
+| Lung | 936,636 × 17,811 | 18.96 | 62.15 | 6.98 |
+| Covid19_PBMC | 991,227 × 26,515 | 24.27 | 97.91 | 7.39 |
+| Lupus_PBMC | 1,263,220 × 25,716 | 16.27 | 121.02 | 9.41 |
+| Alzheimer | 1,395,601 × 34,800 | 178.21 | 180.93 | 10.40 |
+| Parkinson | 2,095,732 × 17,259 | 149.17 | 134.74 | 15.61 |
+
+The `_debug` telemetry gate measured a 6,000 × 17,903 input (0.24 GiB on
+disk) on an RTX 3090 with 23.80 GiB total VRAM; peak reserved memory was
+0.07 GiB for MrVI and 0.06 GiB for scPoli. These debug values must not be
+extrapolated to production. Before each large batch-effect tier, run the
+corresponding GPU method with this telemetry, reserve the next VRAM class
+above the observed peak, and set `BENCHMARK_GPU_ANY_VRAM_PER_GPU` plus an
+explicit time limit when the three-hour default is insufficient.
+
+The launcher adds Apptainer `--nv` only for the selected GPU methods and fails
+closed for unknown method/resource combinations. Default benchmark feasibility
+must still be tested on the actual H200 nodes; flexible jobs must be tested on
+the actual any-GPU/private allocations. Apptainer `--nv` exposes host NVIDIA
+devices and driver libraries; it does not replace the host driver.
 
 ## 9. Safe bind-mount design
 
@@ -335,6 +385,21 @@ Broad `/home` and `/srv` binds should be replaced with explicit path-aware binds
 R-to-Python interoperability should remain identical in host and container modes by ensuring that `PYTHON_BIN` is always a real executable path in the current process namespace. A worker-level container boundary is preferred because R can then call the internal Python directly through `system2()` without nested Apptainer execution. If wrappers are used instead, they need an in-container bypass or explicit environment overrides.
 
 The preferred Pixitainer role is a pinned build-time convenience helper using manual mode, no fresh environment installation, and an explicit `--add-file` copy of the validated realized `py-cuda13` environment. The generated definition remains part of the audit trail. Pixitainer itself should not be invoked by production workers.
+
+### Entry 3 — Pixitainer option syntax
+
+The feasibility command passes `--base-image` and `rockylinux:9` as separate arguments, retaining the explicit Rocky Linux 9 production base-image pin.
+
+### Entry 4 — Flexible GPU scheduling and VRAM profiling
+
+Only standard `benchmark_analysis` MrVI/scPoli results remain H200-pinned for
+comparability. Debug, non-default, and batch-effect GPU jobs may run on any
+configured GPU, use a shorter backfill-friendly time limit, and record input
+size plus peak CUDA memory. Large batch-effect datasets must be promoted to an
+explicit VRAM/time class from those measurements. The private Carmona H100
+partition is an explicit flexible-class option during its weekday office-hours
+reservation rather than a hidden second pipeline.
+
 
 ## References
 

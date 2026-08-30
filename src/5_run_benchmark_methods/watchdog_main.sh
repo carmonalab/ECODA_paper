@@ -17,12 +17,13 @@
 #
 # Invoked by benchmark_submit_watchdog (benchmark_submit_common.sh) as
 #   watchdog_main.sh <array_id> <label> <manifest> <mode> -- \
-#     <partition> <throttle> <log_prefix> <worker_script> [flags...]
+#     <partition> <throttle> <log_prefix> <worker_script> <runtime_export> \
+#     [flags...]
 # where mode is `strict` (method arrays) or `soft-gate` (prepare_pseudobulk:
 # artifact-completeness pass first, strict OOM-aware gate fallback — the
 # former benchmark_wait_prep_array logic). METHOD/BENCHMARK_MANIFEST/
-# FORCE_BENCHMARK propagate via sbatch env inheritance (submitter -> watchdog
-# -> retry workers).
+# FORCE_BENCHMARK and the explicit runtime export propagate via sbatch
+# inheritance (submitter -> watchdog -> retry workers).
 #
 # Protocol: writes ${WATCHDOG_STATUS_DIR}/<SLURM_JOB_ID>.status (self-named;
 # the id is unknowable at submit time) before exiting — STATE=OK|FAIL, LABEL=,
@@ -41,15 +42,17 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 source "${SCRIPT_DIR}/benchmark_submit_common.sh"
 
 # Retry-array spec forwarded by benchmark_submit_watchdog (after the --):
-# partition/throttle/log-prefix/worker-script + per-method sbatch flags
-# (--gpus/--constraint/--cpus-per-task pins preserved).
+# partition/throttle/log-prefix/worker-script/runtime-export + per-method
+# sbatch flags (--gpus/--constraint/--cpus-per-task pins preserved).
 WD_PARTITION=""
 WD_THROTTLE=""
 WD_LOG_PREFIX=""
 WD_WORKER_SCRIPT=""
+WD_RUNTIME_EXPORT=""
 WD_FLAGS=()
 
 # Retry-array submission closure (mirrors the submitters'
@@ -82,6 +85,24 @@ watchdog_resubmit() {
   # environment, and the workers (1.1_run_worker.sh) hard-require it.
   export METHOD="${LABEL}"
 
+  local runtime_export="${WD_RUNTIME_EXPORT:-}"
+  local validated_runtime_export
+  [[ -n "${runtime_export}" ]] || {
+    echo "ERROR: watchdog retry is missing the runtime export." >&2
+    return 1
+  }
+  export ECODA_RUNTIME_PROFILE="${ECODA_RUNTIME_PROFILE:-stage5}"
+  ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE:-host}" || {
+    echo "ERROR: watchdog retry runtime validation failed; refusing retry submission." >&2
+    return 1
+  }
+  validated_runtime_export="$(ecoda_runtime_export_csv \
+    "${ECODA_RUNTIME_PROFILE}" "${ECODA_APPTAINER_NV:-0}")" || return 1
+  [[ "${validated_runtime_export}" == "${runtime_export}" ]] || {
+    echo "ERROR: watchdog runtime export differs from inherited worker export." >&2
+    return 1
+  }
+
   echo "Watchdog resubmitting ${LABEL} array (${#DS_LIST[@]} datasets, partition=${WD_PARTITION}, " >&2
   echo "  flags: ${WD_FLAGS[*]}, mem=${MEM}, throttle=${WD_THROTTLE})" >&2
 
@@ -90,10 +111,12 @@ watchdog_resubmit() {
       --array="1-${#DS_LIST[@]}%${WD_THROTTLE}" \
       --partition="${WD_PARTITION}" \
       "${WD_FLAGS[@]}" \
+      --time="${BENCHMARK_WORKER_TIME_LIMIT:-12:00:00}" \
       --mem="${MEM}" \
       --output="${LOGS_DIR}/${WD_LOG_PREFIX}_%A_%a.log" \
       --error="${LOGS_DIR}/${WD_LOG_PREFIX}_%A_%a.err" \
       --mail-user="${USER_EMAIL}" \
+      --export="ALL,${runtime_export}" \
       "${WD_WORKER_SCRIPT}")
 
   local ARRAY_JOB_ID
@@ -115,7 +138,12 @@ watchdog_main() {
   WD_THROTTLE="$2"
   WD_LOG_PREFIX="$3"
   WD_WORKER_SCRIPT="$4"
-  shift 4
+  WD_RUNTIME_EXPORT="$5"
+  [[ -n "${WD_RUNTIME_EXPORT}" ]] || {
+    echo "ERROR: watchdog runtime export is required." >&2
+    return 1
+  }
+  shift 5
   WD_FLAGS=("$@")
 
   local STATUS_FILE="${WATCHDOG_STATUS_DIR}/${SLURM_JOB_ID}.status"

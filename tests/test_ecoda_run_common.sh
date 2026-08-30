@@ -72,6 +72,14 @@ ecoda_validate_checksum "${TMP_DIR}/artifact"
 RC=$?
 set -e
 [[ ${RC} -ne 0 ]]
+printf 'complete artifact\n' > "${TMP_DIR}/artifact"
+ecoda_write_checksum "${TMP_DIR}/artifact"
+remote_artifact="${TMP_DIR}/remote-artifact"
+cp "${TMP_DIR}/artifact" "${remote_artifact}"
+cp "${TMP_DIR}/artifact.md5" "${remote_artifact}.md5"
+ecoda_compare_checksum_remote "${TMP_DIR}/artifact" "${remote_artifact}" "${remote_artifact}.md5"
+[[ "$(sed -n 's/^PATH=//p' "${remote_artifact}.md5")" == "${remote_artifact}" ]]
+ecoda_validate_checksum "${remote_artifact}" "${remote_artifact}.md5"
 sacct() { return 0; }
 ECODA_ACCOUNTING_EMPTY_GRACE=2
 set +e

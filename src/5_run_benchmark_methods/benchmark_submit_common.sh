@@ -45,15 +45,16 @@
 #       JOB_REPORTS global (the tail merges the JOB_REPORT= lines from the
 #       file). Behavior without the arg is unchanged.
 #   benchmark_submit_watchdog <array_id> <label> <manifest> <mode> <partition>
-#       <throttle> <log_prefix> <worker_script> [flags...]
+#       <throttle> <log_prefix> <worker_script> <runtime_export> [flags...]
 #       Submits one compute-node watchdog job (watchdog_main.sh, 1 cpu/2G/
 #       WATCHDOG_TIME_LIMIT, default partition of the method — no constraint
 #       pin) that owns the terminal wait + OOM escalation for <array_id> and
 #       writes its status file `${WATCHDOG_STATUS_DIR}/<watchdog_job_id>.status`
 #       (self-named from SLURM_JOB_ID; unknowable at submit time). <mode> is
 #       strict (method arrays) or soft-gate (prepare_pseudobulk artifact gate).
-#       <throttle>/<log_prefix>/<worker_script>/<flags> are forwarded for the
-#       watchdog's retry-array submissions. Echoes ONLY the watchdog job id.
+#       <throttle>/<log_prefix>/<worker_script>/<runtime_export>/<flags> are
+#       forwarded for the watchdog's retry-array submissions. The explicit
+#       runtime export is also inherited by the host-side watchdog.
 #   benchmark_wait_watchdog <watchdog_id> <label>
 #       Login-tail counterpart: waits for the watchdog job to leave the
 #       scheduler, polls for its status file (<=2 min grace), then parses
@@ -659,7 +660,6 @@ $(benchmark_task_report "${JOB_ID}")"
 # carry the per-method --gpus/--constraint/--cpus-per-task pins). Echoes ONLY
 # the watchdog job id on stdout (progress to stderr) so the caller can capture
 # it with $(...) — a multi-line capture would break the gates downstream.
-# ---------------------------------------------------------------------------
 benchmark_submit_watchdog() {
   local ARRAY_ID="$1"
   local LABEL="$2"
@@ -669,8 +669,13 @@ benchmark_submit_watchdog() {
   local THROTTLE="$6"
   local LOG_PREFIX="$7"
   local WORKER_SCRIPT="$8"
-  shift 8
+  local RUNTIME_EXPORT="${9:-}"
+  shift 9
   local WATCHDOG_FLAGS=("$@")
+  [[ -n "${RUNTIME_EXPORT}" ]] || {
+    echo "ERROR: benchmark watchdog requires an explicit runtime export." >&2
+    return 1
+  }
 
   mkdir -p "${WATCHDOG_STATUS_DIR}"
   echo "Submitting ${LABEL} watchdog for array ${ARRAY_ID} (mode=${MODE}, partition=${PARTITION}, " >&2
@@ -693,9 +698,11 @@ benchmark_submit_watchdog() {
       --output="${LOGS_DIR}/${WD_OUTPUT_PREFIX}_%A.log" \
       --error="${LOGS_DIR}/${WD_OUTPUT_PREFIX}_%A.err" \
       --mail-user="${USER_EMAIL}" \
+      --export="ALL,${RUNTIME_EXPORT}" \
       "${WATCHDOG_MAIN_SCRIPT}" \
       "${ARRAY_ID}" "${LABEL}" "${MANIFEST}" "${MODE}" -- \
-      "${PARTITION}" "${THROTTLE}" "${LOG_PREFIX}" "${WORKER_SCRIPT}" "${WATCHDOG_FLAGS[@]}")
+      "${PARTITION}" "${THROTTLE}" "${LOG_PREFIX}" "${WORKER_SCRIPT}" \
+      "${RUNTIME_EXPORT}" "${WATCHDOG_FLAGS[@]}")
 
   local WATCHDOG_ID
   WATCHDOG_ID=$(echo "${SUBMIT_MSG}" | grep -oE '[0-9]+')

@@ -44,6 +44,8 @@ case "${CALL5}" in *"matrix_gate.sh"*) ;; *) echo "aggregate gate was not submit
 case "${CALL5}" in *"--dependency=afterany:"*) ;; *) echo "aggregate gate dependency missing" >&2; exit 1 ;; esac
 case "${CALLS}" in *"--array=1-4"*) ;; *) echo "group arrays did not carry four dataset rows" >&2; exit 1 ;; esac
 case "${CALLS}" in *"--partition=${SLURM_PARTITION_BENCHMARK_GPU}"*) ;; *) echo "GPU method resource class missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"--constraint=${BENCHMARK_GPU_CONSTRAINT}"*) ;; *) echo "default GPU method lost H200 constraint" >&2; exit 1 ;; esac
+case "${CALLS}" in *"--time=${BENCHMARK_GPU_DEFAULT_TIME_LIMIT}"*) ;; *) echo "default GPU method time limit missing" >&2; exit 1 ;; esac
 case "${CALLS}" in *"--partition=${SLURM_PARTITION_BENCHMARK_CPU}"*) ;; *) echo "CPU method resource class missing" >&2; exit 1 ;; esac
 while IFS= read -r call; do
   case "${call}" in
@@ -65,6 +67,41 @@ SYNC_OUTPUT="$(
 )"
 case "${SYNC_OUTPUT}" in *"BENCHMARK_RUN_ID=${RUN_ID}"*) ;; *) echo "sync-only recovery failed" >&2; exit 1 ;; esac
 [[ ! -s "${CAPTURE}" ]]
+: > "${CAPTURE}"
+ANY_OUTPUT="$(
+  BENCHMARK_GPU_ANY_VRAM_PER_GPU=80G \
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --datasets Adams --methods scpoli --gpu-policy any
+)"
+ANY_CALLS="$(cat "${CAPTURE}")"
+case "${ANY_CALLS}" in *"--partition=${BENCHMARK_GPU_ANY_PARTITION}"*) ;; *) echo "any-GPU policy partition missing" >&2; exit 1 ;; esac
+case "${ANY_CALLS}" in *"--constraint=${BENCHMARK_GPU_CONSTRAINT}"*) echo "any-GPU policy retained H200 constraint" >&2; exit 1 ;; esac
+case "${ANY_CALLS}" in *"--time=${BENCHMARK_GPU_ANY_TIME_LIMIT}"*) ;; *) echo "any-GPU policy time limit missing" >&2; exit 1 ;; esac
+case "${ANY_CALLS}" in *"ECODA_APPTAINER_NV=1"*) ;; *) echo "any-GPU policy runtime NV flag missing" >&2; exit 1 ;; esac
+case "${ANY_CALLS}" in *"--gres=gpu:${BENCHMARK_GPU_COUNT},VramPerGpu:80G"*) ;; *) echo "any-GPU VRAM request missing" >&2; exit 1 ;; esac
+case "${ANY_CALLS}" in *"--gpus="*) echo "any-GPU VRAM request retained --gpus" >&2; exit 1 ;; esac
+: > "${CAPTURE}"
+PILOTGM_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --datasets Adams --methods pilotgm
+)"
+PILOTGM_CALLS="$(cat "${CAPTURE}")"
+case "${PILOTGM_CALLS}" in *"--partition=${SLURM_PARTITION_BENCHMARK_CPU}"*) ;; *) echo "pilotgm was not moved to CPU resources" >&2; exit 1 ;; esac
+case "${PILOTGM_CALLS}" in *"--gpus="*) echo "pilotgm retained a GPU flag" >&2; exit 1 ;; esac
+case "${PILOTGM_CALLS}" in *"ECODA_APPTAINER_NV=0"*) ;; *) echo "pilotgm runtime NV flag missing" >&2; exit 1 ;; esac
+
+
+: > "${CAPTURE}"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  ECODA_RUNTIME_MODE=apptainer BENCHMARK_MATRIX_TEST=1 \
+  bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+  --datasets Adams --methods mrvi; then
+  echo "apptainer mode accepted a missing image" >&2
+  exit 1
+fi
+[[ ! -s "${CAPTURE}" ]]
 
 BATCH_SELECTION="${TMP_DIR}/batch-matrix.tsv"
 printf 'Alzheimer\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nBreast_cancer\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nCovid19_PBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nKidney_KPMP\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nMyocardial_infarction\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nLupus_PBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nParkinson\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nStephenson\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nCombinedPBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' > "${BATCH_SELECTION}"
@@ -85,6 +122,9 @@ case "${PASS_CALLS}" in *"ANALYSIS_MANIFEST="*) ;; *) echo "batch ANALYSIS_MANIF
 case "${PASS_CALLS}" in *"BENCHMARK_MANIFEST="*) echo "batch BENCHMARK_MANIFEST export leaked" >&2; exit 1 ;; esac
 case "${PASS_CALLS}" in *"/batch_effect/uncorrected"*) ;; *) echo "batch analysis root was not pass-scoped" >&2; exit 1 ;; esac
 case "${PASS_CALLS}" in *"--array=1-12"*) ;; *) echo "batch matrix arrays did not use twelve rows" >&2; exit 1 ;; esac
+case "${PASS_CALLS}" in *"--partition=${BENCHMARK_GPU_ANY_PARTITION}"*) ;; *) echo "batch GPU method did not use any-GPU partition" >&2; exit 1 ;; esac
+case "${PASS_CALLS}" in *"--constraint=${BENCHMARK_GPU_CONSTRAINT}"*) echo "batch GPU method retained H200 constraint" >&2; exit 1 ;; esac
+case "${PASS_CALLS}" in *"--time=${BENCHMARK_GPU_ANY_TIME_LIMIT}"*) ;; *) echo "batch GPU method time limit missing" >&2; exit 1 ;; esac
 BAD_SCOPE_SELECTION="${TMP_DIR}/batch-wrong-scope.tsv"
 sed '1s/batch_effect_uncorrected$/wrong_scope/' "${BATCH_SELECTION}" > "${BAD_SCOPE_SELECTION}"
 : > "${CAPTURE}"

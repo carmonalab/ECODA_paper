@@ -9,10 +9,14 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+if [[ -n "${SLURM_JOB_ID:-}" &&
+      "${ECODA_RUNTIME_IN_CONTAINER:-0}" != "1" ]]; then
   SCRIPT_DIR="$(dirname "$(scontrol show job "${SLURM_JOB_ID}" -o | grep -o 'Command=[^ ]*' | head -1 | cut -d= -f2)")"
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
+ecoda_runtime_reexec_worker stage4 \
+  "${SCRIPT_DIR}/2.1_run_worker.sh" || exit 1
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
 cd "${PROJECT_ROOT}"
 
@@ -27,12 +31,14 @@ MANIFEST_LINE="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${MANIFEST_PATH}")"
 [[ -n "${MANIFEST_LINE}" ]] || { echo "ERROR: no chunk manifest row for task ${SLURM_ARRAY_TASK_ID}" >&2; exit 1; }
 IFS=$'\t' read -r DS_NAME CHUNK_FILE FEATHER_DIR <<< "${MANIFEST_LINE}"
 [[ -n "${DS_NAME}" && -n "${CHUNK_FILE}" ]] || { echo "ERROR: malformed chunk manifest row" >&2; exit 1; }
+export DS_NAME
 EXPECTED_FEATHER_DIR="${RUN_ROOT}/datasets/${DS_NAME}/annotations"
 [[ "${FEATHER_DIR:-${EXPECTED_FEATHER_DIR}}" == "${EXPECTED_FEATHER_DIR}" ]] ||
   { echo "ERROR: annotation feather directory is not run-owned." >&2; exit 1; }
 ecoda_validate_run_owned_path "${CHUNK_FILE}" "${RUN_ROOT}" ||
   { echo "ERROR: annotation chunk is outside the Stage 4 run root." >&2; exit 1; }
 FEATHER_DIR="${EXPECTED_FEATHER_DIR}"
+export ANNOTATION_OUTPUT_DIR="${FEATHER_DIR}"
 NORMAL_TISSUE="$(jq -r --arg ds "${DS_NAME}" '
   if has($ds) and (.[$ds] | has("normal_tissue")) then
     if .[$ds].normal_tissue == true then "true"

@@ -5,6 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 export ECODA_GATE_STAGE=stage2
 source "${SCRIPT_DIR}/../utils/bash/sync_status_email.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
@@ -20,6 +21,7 @@ SYNC_ONLY_SET=0
 MEMORY="${STAGE2_MEM:-128G}"
 MAX_MEMORY="${STAGE2_MEM_MAX:-500G}"
 PARTITION="${SLURM_PARTITION}"
+RUNTIME_EXPORT=""
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 
 usage() {
@@ -384,6 +386,11 @@ if [[ ${#PENDING_STEPS[@]} -eq 0 ]]; then
   echo "STAGE2_RUN_ID=${RUN_ID}"
   exit 0
 fi
+export ECODA_RUNTIME_PROFILE=stage2
+ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" ||
+  stage2_abort "Stage 2 immutable runtime validation failed"
+RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage2 0)" ||
+  stage2_abort "Stage 2 runtime export construction failed"
 
 # Submit every independent hook immediately. CombinedPBMC is the only explicit
 # dependency edge; dependency submission does not serialize unrelated hooks.
@@ -392,7 +399,7 @@ for step in "${PENDING_STEPS[@]}"; do
   SBATCH_ARGS=(--parsable --partition="${PARTITION}" --mem="${MEMORY_CURRENT}" \
     --output="${LOGS_DIR}/stage2_${step}_%j.log" \
     --error="${LOGS_DIR}/stage2_${step}_%j.err" --mail-user="${USER_EMAIL}" \
-    --export="ALL,STAGE2_RUN_ROOT=${ECODA_RUN_ROOT},FORCE_PREPROCESS=${FORCE_ARG}")
+    --export="ALL,STAGE2_RUN_ROOT=${ECODA_RUN_ROOT},FORCE_PREPROCESS=${FORCE_ARG},${RUNTIME_EXPORT}")
   if [[ "${step}" == "combinedpbmc" && -n "${CAP_JOB_ID}" ]]; then
     SBATCH_ARGS+=(--dependency="afterok:${CAP_JOB_ID}")
   fi
@@ -432,7 +439,7 @@ watchdog_output="$(sbatch --parsable --wait --dependency="afterany:${JOB_IDS}" \
   --time="${STAGE2_WATCHDOG_TIME_LIMIT:-12:00:00}" \
   --output="${LOGS_DIR}/stage2_watchdog_%j.log" \
   --error="${LOGS_DIR}/stage2_watchdog_%j.err" --mail-user="${USER_EMAIL}" \
-  --export="ALL,STAGE2_RUN_ROOT=${ECODA_RUN_ROOT},STAGE2_FORCE=${FORCE_ARG}" \
+  --export="ALL,STAGE2_RUN_ROOT=${ECODA_RUN_ROOT},STAGE2_FORCE=${FORCE_ARG},${RUNTIME_EXPORT}" \
   "${SCRIPT_DIR}/stage2_watchdog.sh" "${RUN_ID}" "${MANIFEST}" "${JOB_FILE}" \
   "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
 watchdog_rc=$?

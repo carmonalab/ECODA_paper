@@ -8,6 +8,7 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 cd "${PROJECT_ROOT}"
 
 if [[ $# -eq 7 ]]; then
@@ -34,6 +35,7 @@ STATUS_FILE="${RUN_ROOT}/status/watchdog"
 CURRENT_MANIFEST="${PREPROCESS_PENDING_MANIFEST:-${ROOT_MANIFEST}}"
 RETRY_INDEX=0
 SCHEDULER_IDS=("${ARRAY_ID}")
+RUNTIME_EXPORT=""
 atomic_status() {
   local state="$1" reason="${2:-}" tmp="${STATUS_FILE}.tmp.$$"
   mkdir -p "$(dirname "${STATUS_FILE}")"
@@ -79,6 +81,11 @@ fail() {
   atomic_status FAIL "${reason}" || owner_rc=1
   exit 1
 }
+export ECODA_RUNTIME_PROFILE=stage3
+ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" || \
+  fail "Stage 3 immutable runtime validation failed before retry handling"
+RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage3 0)" || \
+  fail "Stage 3 runtime export construction failed"
 
 bump_memory() {
   local value="$1"
@@ -178,7 +185,7 @@ while :; do
     --output="${LOGS_DIR}/3_scrnaseq_preprocessing_retry${RETRY_INDEX}_%A_%a.log" \
     --error="${LOGS_DIR}/3_scrnaseq_preprocessing_retry${RETRY_INDEX}_%A_%a.err" \
     --mail-user="${USER_EMAIL}" \
-    --export="ALL,PREPROCESS_SELECTION_FILE=${RETRY_MANIFEST},PREPROCESS_RUN_ROOT=${RUN_ROOT},FORCE_PREPROCESS=1,PREPROCESS_ERROR_PREFIX=${LOGS_DIR}/3_scrnaseq_preprocessing_retry${RETRY_INDEX}" \
+    --export="ALL,PREPROCESS_SELECTION_FILE=${RETRY_MANIFEST},PREPROCESS_RUN_ROOT=${RUN_ROOT},FORCE_PREPROCESS=1,PREPROCESS_ERROR_PREFIX=${LOGS_DIR}/3_scrnaseq_preprocessing_retry${RETRY_INDEX},${RUNTIME_EXPORT}" \
     "${SCRIPT_DIR}/1.1_run_worker.sh")"
   retry_rc=$?
   set -e

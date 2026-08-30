@@ -330,6 +330,7 @@ collapse_sample_metadata <- function(obs, sample_col = "Sample") {
     stop("Sample metadata column '", sample_col,
          "' contains missing or blank sample IDs.")
   }
+  sample_order <- unique(sample_values)
   if (is.factor(obs[[sample_col]])) {
     obs[[sample_col]] <- droplevels(obs[[sample_col]])
   }
@@ -338,7 +339,16 @@ collapse_sample_metadata <- function(obs, sample_col = "Sample") {
     !!dplyr::sym(sample_col),
     .drop = TRUE
   )
-  dplyr::ungroup(dplyr::slice(grouped, 1))
+  collapsed <- dplyr::ungroup(dplyr::slice(grouped, 1))
+  # dplyr orders grouping keys; restore first-appearance order so every
+  # benchmark result follows the canonical H5AD Sample universe.
+  collapsed <- collapsed[
+    match(sample_order, as.character(collapsed[[sample_col]])),
+    ,
+    drop = FALSE
+  ]
+  rownames(collapsed) <- NULL
+  collapsed
 }
 # Get unique metadata per sample
 get_metadata <- function(seurat, sample_col = "Sample") {

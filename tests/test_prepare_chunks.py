@@ -26,7 +26,10 @@ SPEC.loader.exec_module(MODULE)
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="ecoda-chunks-") as raw:
         root = Path(raw)
+        scratch_target = root / "scratch_target"
+        scratch_target.mkdir()
         scratch = root / "scratch"
+        scratch.symlink_to(scratch_target, target_is_directory=True)
         output = scratch / "Synthetic" / "output"
         output.mkdir(parents=True)
         config = {
@@ -66,6 +69,20 @@ def main() -> None:
             }
         )
         sys.argv = ["1.1_prepare_chunks.py", "--views", "view_a,view_b", "--run-root", str(run_root)]
+        MODULE.main()
+        records = json.loads(
+            (run_root / "datasets" / "Synthetic" / "source_artifacts.json").read_text()
+        )
+        assert records[0]["path"] == os.path.abspath(os.fspath(output / "view_a.h5ad"))
+        assert str(scratch_target) not in records[0]["path"]
+        sys.argv = [
+            "1.1_prepare_chunks.py",
+            "--views",
+            "view_a,view_b",
+            "--run-root",
+            str(run_root),
+            "--validate-only",
+        ]
         MODULE.main()
         chunk_dir = run_root / "datasets" / "Synthetic" / "chunks"
         union = run_root / "datasets" / "Synthetic" / "union" / "union.h5ad"

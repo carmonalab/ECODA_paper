@@ -50,13 +50,17 @@ printf '812345\n'
 STUB
 chmod +x "${TMP_DIR}/sbatch"
 export CAPTURE USER_EMAIL="test@example.invalid"
+export ECODA_RUNTIME_MODE=host ECODA_RUNTIME_PROFILE=stage3
 source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1 || true
 source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+source "${ROOT}/src/utils/bash/ecoda_runtime.sh"
 source "${ROOT}/src/utils/bash/h5ad_preflight_submit.sh"
 export PATH="${TMP_DIR}:${PATH}"
+runtime_export="$(ecoda_runtime_export_csv stage3 0)"
 preflight_id="$(ecoda_submit_h5ad_preflight \
   "${MANIFEST}" "${STATUS_DIR}" "${RUN_ROOT}" classify shared-cpu 1G 1 \
-  "${RUN_ROOT}/logs" test "${ROOT}/src/utils/bash/h5ad_preflight_worker.sh")"
+  "${RUN_ROOT}/logs" test "${ROOT}/src/utils/bash/h5ad_preflight_worker.sh" \
+  "${runtime_export}")"
 [[ "${preflight_id}" == "812345" ]]
 case "$(cat "${CAPTURE}")" in
   *"--wait"*"--array=1-1%1"*) ;;

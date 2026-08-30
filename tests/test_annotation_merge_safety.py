@@ -27,6 +27,13 @@ assert pd.isna(coerced.loc["c2", "layer2"])
 assert coerced.loc["c3", "layer2"] == "2"
 assert pd.api.types.is_numeric_dtype(coerced["S.Score"])
 
+confidence = pd.DataFrame(
+    {"classification_confidence": ["confident", "low_confidence", None]}
+)
+coerced_confidence = module._coerce_annotation_columns(
+    confidence, ["classification_confidence"]
+)
+assert pd.api.types.is_string_dtype(coerced_confidence["classification_confidence"])
 
 def write_sidecar(path: Path) -> None:
     path.with_name(f"{path.name}.md5").write_text(

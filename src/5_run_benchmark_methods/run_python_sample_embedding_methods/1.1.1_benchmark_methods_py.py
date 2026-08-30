@@ -193,6 +193,17 @@ def atomic_to_feather(frame, path):
             if temporary.exists():
                 temporary.unlink()
 
+def _validate_execution_measurements(frame, path):
+    for column, allow_missing in (("time_secs", False), ("mem_GB", True)):
+        raw = frame[column]
+        values = pd.to_numeric(raw, errors="coerce")
+        missing = raw.isna()
+        if (not allow_missing and missing.any()) or values[~missing].isna().any():
+            raise ValueError(f"execution log has invalid numeric values: {path}")
+        if not np.isfinite(values[~missing].to_numpy(dtype=float)).all():
+            raise ValueError(f"execution log has invalid numeric values: {path}")
+
+
 def _validate_execution_log_frame(frame, path):
     required = {"dataset", "method", "time_secs", "mem_GB"}
     if set(frame.columns) != required or frame.empty:
@@ -202,11 +213,7 @@ def _validate_execution_log_frame(frame, path):
         raise ValueError(f"execution log has blank identifiers: {path}")
     if frame[["dataset", "method"]].duplicated().any():
         raise ValueError(f"execution log has duplicate identifiers: {path}")
-    for column in ("time_secs", "mem_GB"):
-        values = pd.to_numeric(frame[column], errors="coerce")
-        if values.isna().any() or not np.isfinite(values.to_numpy(dtype=float)).all():
-            raise ValueError(f"execution log has invalid numeric values: {path}")
-
+    _validate_execution_measurements(frame, path)
 
 def execution_log_atomic_to_feather(frame, path):
     """Atomically write the documented indexless execution-log schema."""
@@ -310,6 +317,24 @@ def peak_rss_gb():
     if sys.platform == "darwin":
         return rss / 1024.0 / 1024.0 / 1024.0
     return rss / 1024.0 / 1024.0
+
+def report_gpu_memory(method_str):
+    """Print peak CUDA memory and device capacity for resource profiling."""
+    if not torch.cuda.is_available():
+        return
+    try:
+        torch.cuda.synchronize()
+        props = torch.cuda.get_device_properties(torch.cuda.current_device())
+        gib = float(1024**3)
+        print(
+            f"GPU_MEMORY_PROFILE method={method_str} "
+            f"device={props.name} total_GiB={props.total_memory / gib:.2f} "
+            f"peak_allocated_GiB={torch.cuda.max_memory_allocated() / gib:.2f} "
+            f"peak_reserved_GiB={torch.cuda.max_memory_reserved() / gib:.2f}",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"GPU_MEMORY_PROFILE_ERROR method={method_str}: {exc}", flush=True)
 
 
 def log_execution_time(dataset_name, method_str, time_secs, log_file):
@@ -521,13 +546,22 @@ def run_pilot(adata, ct_col, view, n_hvg, output_path):
     # -> ot.emd2 collapses (all-zero EMD distances written on HPC; segfault
     # locally). Lee/Zhang (HiTME immune-only annotation, 12-33% NaN) hit this.
     fill_unknown_ct(adata, ct_col, "PILOT")
-    pl.tl.wasserstein_distance(
-        adata,
-        emb_matrix=emb_key,
-        clusters_col=ct_col,
-        sample_col="Sample",
-        status="Sample",
-    )
+    # pilotpy writes hard-coded Results_PILOT/plots relative to cwd.  A
+    # read-only project bind cannot host those scratch plots, and they are not
+    # benchmark artifacts; isolate only this third-party side effect.
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory(prefix="pilot_") as temp_dir:
+        try:
+            os.chdir(temp_dir)
+            pl.tl.wasserstein_distance(
+                adata,
+                emb_matrix=emb_key,
+                clusters_col=ct_col,
+                sample_col="Sample",
+                status="Sample",
+            )
+        finally:
+            os.chdir(cwd)
     df_dists = _align_square_frame(
         adata.uns["EMD_df"], _ordered_sample_ids(adata), output_path
     )
@@ -877,6 +911,11 @@ def process_dataset(args, ds_name, entry):
     adata = sc.read_h5ad(str(input_path), backed="r")
     validate_benchmark_h5ad_contract(adata, args.view, args.method)
     adata = adata.to_memory()
+    print(
+        f"INPUT_PROFILE bytes={input_path.stat().st_size} "
+        f"cells={adata.n_obs} genes={adata.n_vars}",
+        flush=True,
+    )
 
     if "Sample" not in adata.obs.columns:
         raise ValueError(
@@ -920,16 +959,23 @@ def process_dataset(args, ds_name, entry):
 
         print(f"Processing {method_str} ...")
         start_time = time.time()
-        if args.method == "mrvi":
-            run_mrvi(sub, args.device, out_path, batch_key=technical_batch)
-        elif args.method == "scpoli":
-            run_scpoli(sub, ct_col, payload, out_path)
-        elif args.method == "qot":
-            run_qot(sub, ct_col, args.view, n, out_path)
-        elif args.method == "pilotgm":
-            run_pilotgm(sub, ct_col, args.view, n, out_path, ds_name, args.device)
-        else:
-            run_pilot(sub, ct_col, args.view, n, out_path)
+        profile_gpu = args.method in ("mrvi", "scpoli") and torch.cuda.is_available()
+        if profile_gpu:
+            torch.cuda.reset_peak_memory_stats()
+        try:
+            if args.method == "mrvi":
+                run_mrvi(sub, args.device, out_path, batch_key=technical_batch)
+            elif args.method == "scpoli":
+                run_scpoli(sub, ct_col, payload, out_path)
+            elif args.method == "qot":
+                run_qot(sub, ct_col, args.view, n, out_path)
+            elif args.method == "pilotgm":
+                run_pilotgm(sub, ct_col, args.view, n, out_path, ds_name, args.device)
+            else:
+                run_pilot(sub, ct_col, args.view, n, out_path)
+        finally:
+            if profile_gpu:
+                report_gpu_memory(method_str)
         exec_time = time.time() - start_time
 
         log_execution_time(ds_name, method_str, exec_time, args.log_file)

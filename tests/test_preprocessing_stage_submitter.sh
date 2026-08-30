@@ -43,6 +43,16 @@ CALLS="$(cat "${CAPTURE}")"
 case "${CALLS}" in *"--array=1-12%1000"*) ;; *) echo "array was not submitted with all selected rows" >&2; exit 1 ;; esac
 case "${CALLS}" in *"--dependency=afterany:600001"*) ;; *) echo "watchdog dependency missing" >&2; exit 1 ;; esac
 case "${CALLS}" in *PREPROCESS_SELECTION_FILE=*pending.tsv*) ;; *) echo "pending manifest was not exported" >&2; exit 1 ;; esac
+case "${CALLS}" in *"ECODA_RUNTIME_MODE=host"*"ECODA_RUNTIME_PROFILE=stage3"*) ;; *) echo "Stage 3 runtime export missing" >&2; exit 1 ;; esac
+: > "${CAPTURE}"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  ECODA_RUNTIME_MODE=apptainer PREPROCESS_SUBMITTER_TEST=1 \
+  bash "${ROOT}/src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh" \
+  --selection-file "${SELECTION}" --exact-batch-selection >/dev/null 2>&1; then
+  echo "Stage 3 accepted missing immutable runtime image" >&2
+  exit 1
+fi
+[[ ! -s "${CAPTURE}" ]]
 : > "${CAPTURE}"
 BAD="${TMP_DIR}/bad.tsv"
 for bad_kind in legacy corrected missing; do

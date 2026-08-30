@@ -5,6 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 export ECODA_GATE_STAGE=stage4
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
 cd "${PROJECT_ROOT}"
@@ -25,6 +26,7 @@ MEMORY="32G"
 MAX_MEMORY="128G"
 PARTITION="${SLURM_PARTITION_BENCHMARK_CPU:-shared-cpu}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
+RUNTIME_EXPORT=""
 
 usage() {
   cat <<'EOF'
@@ -116,6 +118,26 @@ output_path_for() {
   name="$(ecoda_view_output_name "${ds}" "${view}")"
   [[ -n "${name}" ]] || return 1
   printf '%s/%s/output/%s' "${HPC_SCRATCH_DIR}" "${ds}" "${name}"
+}
+resolve_dataset_views() {
+  local ds="$1" view
+  ecoda_dataset_exists "${ds}" || return 1
+  if [[ -n "${VIEWS_ARG}" ]]; then
+    ecoda_split_csv "${VIEWS_ARG}" || return 1
+    for view in "${ECODA_ARRAY[@]}"; do
+      ecoda_view_exists "${ds}" "${view}" || return 1
+      [[ -n "$(ecoda_view_input_name "${ds}" "${view}")" &&
+         -n "$(ecoda_view_output_name "${ds}" "${view}")" ]] || return 1
+      printf '%s\t%s\n' "${ds}" "${view}"
+    done
+  else
+    while IFS= read -r view; do
+      [[ -n "${view}" ]] || continue
+      [[ -n "$(ecoda_view_input_name "${ds}" "${view}")" &&
+         -n "$(ecoda_view_output_name "${ds}" "${view}")" ]] || return 1
+      printf '%s\t%s\n' "${ds}" "${view}"
+    done < <(jq -r --arg ds "${ds}" '.[$ds].views // {} | keys[]' "${DATASETS_JSON_FILE}")
+  fi
 }
 
 stage4_finalize_owner_manifest() {
@@ -679,14 +701,20 @@ if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
   if ! "${SCRIPT_DIR}/1.0_stage_reference_maps.sh"; then
     stage4_abort "Stage 4 reference-map staging failed"
   fi
+  db_valid=0
+  if ${PIXI_RSCRIPT} "${SCRIPT_DIR}/2.0_create_scgate_db.R" --validate-db-only >/dev/null 2>&1; then
+    db_valid=1
+  fi
   cache_valid=0
   if ${PIXI_RSCRIPT} "${SCRIPT_DIR}/2.0_create_scgate_db.R" --validate-only >/dev/null 2>&1; then
     cache_valid=1
   fi
-  if [[ -e "${SCGATE_DB_PATH}" && ${cache_valid} -eq 0 && ${FORCE_ARG} -eq 0 ]]; then
-    stage4_abort "existing scGate cache failed validation; use --force to rebuild"
+  if [[ -e "${SCGATE_DB_PATH}" && ${db_valid} -eq 0 &&
+        ${cache_valid} -eq 0 && ${FORCE_ARG} -eq 0 ]]; then
+    stage4_abort "existing scGate DB cache failed validation; use --force to rebuild"
   fi
-  if [[ ! -e "${SCGATE_DB_PATH}" || ${FORCE_ARG} -eq 1 ]]; then
+  if [[ ! -e "${SCGATE_DB_PATH}" || ${FORCE_ARG} -eq 1 ||
+        ${cache_valid} -eq 0 ]]; then
     SCGATE_FORCE_ARG=()
     [[ ${FORCE_ARG} -eq 1 ]] && SCGATE_FORCE_ARG=(--force)
     set +e
@@ -708,6 +736,13 @@ if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
     echo "ANNOTATION_SCGATE_JOB_ID=${scgate_job}"
   fi
 fi
+export ECODA_RUNTIME_PROFILE=stage4
+ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" || {
+  stage4_abort "Stage 4 immutable runtime validation failed."
+}
+RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage4 0)" || {
+  stage4_abort "Stage 4 runtime export construction failed."
+}
 if [[ ${SKIP_PREPARE} -eq 0 ]]; then
   prep_count="$(wc -l < "${PREP_MANIFEST}" | tr -d '[:space:]')"
   [[ "${prep_count}" =~ ^[1-9][0-9]*$ ]] || stage4_abort "Stage 4 preparation manifest is empty"
@@ -715,7 +750,7 @@ if [[ ${SKIP_PREPARE} -eq 0 ]]; then
   set +e
   prep_msg="$(sbatch --parsable --array="1-${prep_count}%${THROTTLE}" --mem="${MEMORY}" --partition="${PARTITION}" \
     --output="${LOGS_DIR}/4_annotation_prepare_%A_%a.log" --error="${LOGS_DIR}/4_annotation_prepare_%A_%a.err" \
-    --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_PREP_MANIFEST=${PREP_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},FORCE_ANNOTATION=${FORCE_ARG}" \
+    --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_PREP_MANIFEST=${PREP_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},FORCE_ANNOTATION=${FORCE_ARG},${RUNTIME_EXPORT}" \
     "${SCRIPT_DIR}/1.2_prepare_chunks_worker.sh")"
   prep_rc=$?
   set -e
@@ -731,7 +766,7 @@ if [[ ${SKIP_PREPARE} -eq 0 ]]; then
   prep_watchdog_msg="$(sbatch --parsable --wait --dependency="afterany:${PREP_ARRAY}" --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem=2G \
     --time="${ANNOTATION_WATCHDOG_TIME_LIMIT:-12:00:00}" --output="${LOGS_DIR}/4_annotation_prepare_watchdog_%j.log" \
     --error="${LOGS_DIR}/4_annotation_prepare_watchdog_%j.err" --mail-user="${USER_EMAIL}" \
-    --export="ALL,ANNOTATION_RUN_ID=${RUN_ID}" "${SCRIPT_DIR}/1.3_prepare_chunks_watchdog.sh" "${RUN_ID}" "${PREP_MANIFEST}" \
+    --export="ALL,ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" "${SCRIPT_DIR}/1.3_prepare_chunks_watchdog.sh" "${RUN_ID}" "${PREP_MANIFEST}" \
     "${PREP_ARRAY}" "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
   prep_watchdog_rc=$?
   set -e
@@ -789,7 +824,7 @@ fi
 set +e
 annot_msg="$(sbatch --parsable --array="1-${TOTAL_CHUNKS}%${THROTTLE}" --mem="${MEMORY}" --partition="${PARTITION}" \
   --output="${LOGS_DIR}/4_cell_type_annotation_%A_%a.log" --error="${LOGS_DIR}/4_cell_type_annotation_%A_%a.err" \
-  --mail-user="${USER_EMAIL}" --export="ALL,CHUNKS_MANIFEST=${CHUNK_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},ANNOTATION_ERROR_PREFIX=${LOGS_DIR}/4_cell_type_annotation" \
+  --mail-user="${USER_EMAIL}" --export="ALL,CHUNKS_MANIFEST=${CHUNK_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},ANNOTATION_ERROR_PREFIX=${LOGS_DIR}/4_cell_type_annotation,${RUNTIME_EXPORT}" \
   "${SCRIPT_DIR}/2.1_run_worker.sh")"
 annot_rc=$?
 set -e
@@ -804,7 +839,7 @@ echo "ANNOTATION_ARRAY_JOB_ID=${ANNOT_ARRAY}"
 set +e
 annot_watchdog_msg="$(sbatch --parsable --wait --dependency="afterany:${ANNOT_ARRAY}" --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem=2G \
   --time="${ANNOTATION_WATCHDOG_TIME_LIMIT:-12:00:00}" --output="${LOGS_DIR}/4_cell_type_annotation_watchdog_%j.log" \
-  --error="${LOGS_DIR}/4_cell_type_annotation_watchdog_%j.err" --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_RUN_ID=${RUN_ID}" \
+  --error="${LOGS_DIR}/4_cell_type_annotation_watchdog_%j.err" --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" \
   "${SCRIPT_DIR}/1.2_annotation_watchdog.sh" "${RUN_ID}" "${CHUNK_MANIFEST}" "${ANNOT_ARRAY}" \
   "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
 annot_watchdog_rc=$?
@@ -841,7 +876,7 @@ rm -f "${MERGE_TMP}"
 set +e
 merge_msg="$(sbatch --parsable --array="1-${MERGE_COUNT}%${THROTTLE}" --mem="${MEMORY}" --partition="${PARTITION}" \
   --output="${LOGS_DIR}/4_annotation_merge_%A_%a.log" --error="${LOGS_DIR}/4_annotation_merge_%A_%a.err" \
-  --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_MERGE_MANIFEST=${MERGE_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},FORCE_ANNOTATION=${FORCE_ARG}" \
+  --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_MERGE_MANIFEST=${MERGE_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},FORCE_ANNOTATION=${FORCE_ARG},${RUNTIME_EXPORT}" \
   "${SCRIPT_DIR}/3.2_merge_worker.sh")"
 merge_rc=$?
 set -e
@@ -856,7 +891,7 @@ echo "ANNOTATION_MERGE_ARRAY_JOB_ID=${MERGE_ARRAY}"
 set +e
 merge_watchdog_msg="$(sbatch --parsable --wait --dependency="afterany:${MERGE_ARRAY}" --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem=2G \
   --time="${ANNOTATION_WATCHDOG_TIME_LIMIT:-12:00:00}" --output="${LOGS_DIR}/4_annotation_merge_watchdog_%j.log" \
-  --error="${LOGS_DIR}/4_annotation_merge_watchdog_%j.err" --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_RUN_ID=${RUN_ID}" \
+  --error="${LOGS_DIR}/4_annotation_merge_watchdog_%j.err" --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" \
   "${SCRIPT_DIR}/3.3_merge_watchdog.sh" "${RUN_ID}" "${MERGE_MANIFEST}" "${MERGE_ARRAY}" \
   "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
 merge_watchdog_rc=$?

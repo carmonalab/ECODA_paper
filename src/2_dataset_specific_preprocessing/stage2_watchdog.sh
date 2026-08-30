@@ -9,6 +9,7 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 cd "${PROJECT_ROOT}"
 
 if [[ $# -ne 7 ]]; then
@@ -28,6 +29,7 @@ RUN_ROOT="${ECODA_RUN_ROOT}"
 STATUS_FILE="${RUN_ROOT}/status/watchdog"
 RETRY_INDEX=0
 SCHEDULER_IDS=()
+RUNTIME_EXPORT=""
 
 stage2_step_script() {
   case "$1" in
@@ -97,6 +99,11 @@ fail() {
   fi
   exit 1
 }
+export ECODA_RUNTIME_PROFILE=stage2
+ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" || \
+  fail "Stage 2 immutable runtime validation failed before retry handling"
+RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage2 0)" || \
+  fail "Stage 2 runtime export construction failed"
 
 bump_memory() {
   local value="$1" number suffix
@@ -247,7 +254,7 @@ while :; do
       if [[ "${mstep}" == "${step}" ]]; then script="${mscript}"; dependency="${mdependency}"; break; fi
     done < "${MANIFEST}"
     [[ -n "${script}" ]] || fail "OOM step missing from manifest: ${step}"
-    retry_export="ALL,STAGE2_RUN_ROOT=${RUN_ROOT},FORCE_PREPROCESS=${STAGE2_FORCE:-0}"
+    retry_export="ALL,STAGE2_RUN_ROOT=${RUN_ROOT},FORCE_PREPROCESS=${STAGE2_FORCE:-0},${RUNTIME_EXPORT}"
     retry_args=(--parsable --partition="${PARTITION}" --mem="${NEXT_MEMORY}" \
       --output="${LOGS_DIR}/stage2_${step}_retry${RETRY_INDEX}_%j.log" \
       --error="${LOGS_DIR}/stage2_${step}_retry${RETRY_INDEX}_%j.err" \

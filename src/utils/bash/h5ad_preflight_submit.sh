@@ -13,9 +13,11 @@ ecoda_submit_h5ad_preflight() {
   local logs_dir="$8"
   local label="$9"
   local worker_script="${10}"
+  local runtime_export="${11:-}"
   local count msg rc scheduler_id
 
   [[ -r "${manifest}" && -s "${manifest}" ]] || return 1
+  [[ -n "${runtime_export}" ]] || return 1
   [[ "${mode}" == "require" || "${mode}" == "classify" ]] || return 1
   count="$(wc -l < "${manifest}" | tr -d '[:space:]')"
   [[ "${count}" =~ ^[0-9]+$ && ${count} -gt 0 ]] || return 1
@@ -27,7 +29,7 @@ ecoda_submit_h5ad_preflight() {
       --output="${logs_dir}/h5ad_preflight_${label}_%A_%a.log" \
       --error="${logs_dir}/h5ad_preflight_${label}_%A_%a.err" \
       --mail-user="${USER_EMAIL}" \
-      --export="ALL,H5AD_PREFLIGHT_MANIFEST=${manifest},H5AD_PREFLIGHT_STATUS_DIR=${status_dir},H5AD_PREFLIGHT_RUN_ROOT=${run_root},H5AD_PREFLIGHT_MODE=${mode}" \
+      --export="ALL,H5AD_PREFLIGHT_MANIFEST=${manifest},H5AD_PREFLIGHT_STATUS_DIR=${status_dir},H5AD_PREFLIGHT_RUN_ROOT=${run_root},H5AD_PREFLIGHT_MODE=${mode},${runtime_export}" \
       "${worker_script}")"; then
     rc=0
   else

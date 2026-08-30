@@ -27,6 +27,7 @@ SCHEDULER_MANIFEST="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs/${RUN_ID}/ma
 [[ "$(wc -l < "${SCHEDULER_MANIFEST}" | tr -d '[:space:]')" == 4 ]]
 CALLS="$(cat "${CAPTURE}")"
 case "${CALLS}" in *"FORCE_PREPROCESS=1"*) ;; *) echo "force export missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"ECODA_RUNTIME_MODE=host"*"ECODA_RUNTIME_PROFILE=stage2"*) ;; *) echo "Stage 2 runtime export missing" >&2; exit 1 ;; esac
 case "${CALLS}" in *"--dependency=afterok:710001"*) ;; *) echo "CombinedPBMC cap dependency missing" >&2; exit 1 ;; esac
 JOANITO_CALL="$(sed -n '3p' "${CAPTURE}")"
 case "${JOANITO_CALL}" in *"--dependency="*) echo "Joanito was artificially serialized" >&2; exit 1 ;; esac
@@ -53,11 +54,17 @@ grep -q "^PATH=${NEW}$" "${NEW}.md5"
 
 # Hook-level force propagation with a temporary slurm_config/python stub.
 HOOK_ROOT="${TMP_DIR}/hook-project"
-mkdir -p "${HOOK_ROOT}/src/2_dataset_specific_preprocessing" "${HOOK_ROOT}/bin"
+mkdir -p "${HOOK_ROOT}/src/2_dataset_specific_preprocessing" "${HOOK_ROOT}/src/utils/bash" "${HOOK_ROOT}/bin"
 cp "${ROOT}/src/2_dataset_specific_preprocessing/1.5_submit_myocardial.sh" "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/"
+cp "${ROOT}/src/utils/bash/ecoda_runtime.sh" "${HOOK_ROOT}/src/utils/bash/"
+cp "${ROOT}/src/2_dataset_specific_preprocessing/1.2_submit_combinedpbmc.sh" "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/"
 printf 'PROJECT_ROOT="%s"\nPYTHON_BIN="%s/bin/python"\n' "${HOOK_ROOT}" "${HOOK_ROOT}" > "${HOOK_ROOT}/src/slurm_config.sh"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" > "%s/force.args"\n' "${HOOK_ROOT}" > "${HOOK_ROOT}/bin/python"
-chmod +x "${HOOK_ROOT}/bin/python"
+printf '#!/bin/bash\n: > "%s/module.called"\n' "${HOOK_ROOT}" > "${HOOK_ROOT}/bin/module"
+chmod +x "${HOOK_ROOT}/bin/python" "${HOOK_ROOT}/bin/module"
 HOME="${TMP_DIR}/home" FORCE_PREPROCESS=1 bash "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/1.5_submit_myocardial.sh"
 case "$(cat "${HOOK_ROOT}/force.args")" in *"--force") ;; *) echo "myocardial hook dropped --force" >&2; exit 1 ;; esac
+ECODA_RUNTIME_IN_CONTAINER=1 SLURM_JOB_ID=999999 HOME="${TMP_DIR}/home" PATH="${HOOK_ROOT}/bin:${PATH}" \
+  bash "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/1.2_submit_combinedpbmc.sh"
+[[ ! -e "${HOOK_ROOT}/module.called" ]] || { echo "CombinedPBMC loaded host module inside container" >&2; exit 1; }
 echo "stage2 submitter: OK"

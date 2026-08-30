@@ -9,10 +9,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+if [[ -n "${SLURM_JOB_ID:-}" &&
+      "${ECODA_RUNTIME_IN_CONTAINER:-0}" != "1" ]]; then
   SCRIPT_DIR="$(dirname "$(scontrol show job "${SLURM_JOB_ID}" -o | grep -o 'Command=[^ ]*' | head -1 | cut -d= -f2)")"
 fi
 source "${SCRIPT_DIR}/../../slurm_config.sh"
+source "${SCRIPT_DIR}/../../utils/bash/ecoda_runtime.sh"
+ecoda_runtime_reexec_worker stage5 \
+  "${SCRIPT_DIR}/1.1_run_worker.sh" || exit 1
 cd "${PROJECT_ROOT}"
 [[ -n "${METHOD:-}" ]] || { echo "ERROR: METHOD is not set." >&2; exit 1; }
 MANIFEST_PATH="${ANALYSIS_MANIFEST:-${BENCHMARK_MANIFEST:-}}"

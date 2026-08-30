@@ -350,6 +350,12 @@ ecoda_compare_checksum_remote() {
   [[ "${remote_digest_actual}" == "${remote_digest}" ]] || return 1
   [[ "${local_size}" == "${remote_size}" && "${remote_size}" == "${expected_size}" ]] || return 1
   [[ -n "${recorded_path}" ]] || return 1
+  if [[ "${recorded_path}" != "${remote_path}" ]]; then
+    ecoda_atomic_write "${remote_sidecar}" \
+      "MD5=${remote_digest_actual}\nSIZE=${remote_size}\nPATH=${remote_path}\n" ||
+      return 1
+    ecoda_validate_checksum "${remote_path}" "${remote_sidecar}" || return 1
+  fi
 }
 
 ecoda_owner_dir() {

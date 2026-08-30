@@ -35,11 +35,10 @@ printf 'Adams\tbenchmark_analysis\n' > "${RUN_ROOT}/manifests/selection.tsv"
 selection="${RUN_ROOT}/manifests/selection.tsv"
 digest="$(md5sum "${selection}" | cut -d' ' -f1)"
 printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${digest}" "$(wc -c < "${selection}" | tr -d '[:space:]')" "${selection}" > "${selection}.md5"
-SOURCE_REAL="$(realpath "${SOURCE_H5AD}")"
 SOURCE_MD5="$(md5sum "${SOURCE_H5AD}" | cut -d' ' -f1)"
 SOURCE_SIZE="$(wc -c < "${SOURCE_H5AD}" | tr -d '[:space:]')"
 printf '[{"md5":"%s","path":"%s","size":%s}]\n' \
-  "${SOURCE_MD5}" "${SOURCE_REAL}" "${SOURCE_SIZE}" \
+  "${SOURCE_MD5}" "${SOURCE_H5AD}" "${SOURCE_SIZE}" \
   > "${RUN_ROOT}/datasets/Adams/source_artifacts.json"
 printf 'Adams\tbenchmark_analysis\t%s\n' "${RUN_ROOT}" > "${RUN_ROOT}/manifests/preparation.tsv"
 printf 'Adams\t%s\t%s\n' "${CHUNK}" "${RUN_ROOT}/datasets/Adams/annotations" > "${RUN_ROOT}/manifests/chunks.tsv"

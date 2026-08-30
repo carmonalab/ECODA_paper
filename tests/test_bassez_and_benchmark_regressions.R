@@ -132,6 +132,14 @@ collapsed_metadata <- metadata_env$collapse_sample_metadata(
 )
 stopifnot(nrow(collapsed_metadata) == 1L)
 stopifnot(identical(as.character(collapsed_metadata$Sample), "sample_keep"))
+ordered_metadata <- metadata_env$collapse_sample_metadata(
+  data.frame(
+    Sample = factor(c("sample_2", "sample_1", "sample_2", "sample_1")),
+    label = c("case", "control", "case", "control"),
+    stringsAsFactors = FALSE
+  )
+)
+stopifnot(identical(as.character(ordered_metadata$Sample), c("sample_2", "sample_1")))
 assert_error(
   metadata_env$collapse_sample_metadata(
     data.frame(Sample = c("sample_keep", ""), stringsAsFactors = FALSE)

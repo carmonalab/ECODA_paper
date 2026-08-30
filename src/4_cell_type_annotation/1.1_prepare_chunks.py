@@ -471,8 +471,9 @@ def file_md5(path):
 
 def artifact_record(path):
     resolved = path.resolve()
+    logical = Path(os.path.abspath(os.fspath(path)))
     return {
-        "path": str(resolved),
+        "path": str(logical),
         "md5": file_md5(resolved),
         "size": resolved.stat().st_size,
     }

@@ -7,6 +7,7 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 cd "${PROJECT_ROOT}"
 [[ $# -eq 7 ]] || { echo "Usage: 1.2_annotation_watchdog.sh RUN_ID MANIFEST ARRAY_ID MEM MAX_MEM PARTITION THROTTLE" >&2; exit 2; }
 RUN_ID="$1"; ROOT_MANIFEST="$2"; ARRAY_ID="$3"; CURRENT_MEMORY="$4"; MAX_MEMORY="$5"; PARTITION="$6"; THROTTLE="$7"
@@ -19,6 +20,7 @@ STATUS_FILE="${RUN_ROOT}/status/annotation_watchdog"
 CURRENT_MANIFEST="${ROOT_MANIFEST}"
 RETRY_INDEX=0
 SCHEDULER_IDS=("${ARRAY_ID}")
+RUNTIME_EXPORT=""
 status_write() {
   local state="$1" reason="${2:-}" tmp="${STATUS_FILE}.tmp.$$"
   mkdir -p "$(dirname "${STATUS_FILE}")"
@@ -31,6 +33,11 @@ status_write() {
   mv -f "${tmp}" "${STATUS_FILE}"
 }
 fail() { status_write FAIL "$1"; exit 1; }
+export ECODA_RUNTIME_PROFILE=stage4
+ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" || \
+  fail "Stage 4 immutable runtime validation failed before annotation retry handling"
+RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage4 0)" || \
+  fail "Stage 4 runtime export construction failed"
 bump_mem() { [[ "$1" =~ ^([0-9]+)([GT])$ ]] || return 1; printf '%s%s' "$((BASH_REMATCH[1] * 2))" "${BASH_REMATCH[2]}"; }
 mem_ge() { local a="$1" b="$2" an as bn bs; [[ "${a}" =~ ^([0-9]+)([GT])$ ]] || return 1; an="${BASH_REMATCH[1]}"; as="${BASH_REMATCH[2]}"; [[ "${b}" =~ ^([0-9]+)([GT])$ ]] || return 1; bn="${BASH_REMATCH[1]}"; bs="${BASH_REMATCH[2]}"; [[ "${as}" == T ]] && an=$((an * 1024)); [[ "${bs}" == T ]] && bn=$((bn * 1024)); (( an >= bn )); }
 classify() {
@@ -109,7 +116,7 @@ while :; do
   set +e
   retry_msg="$(sbatch --parsable --array="1-${retry_count}%${THROTTLE}" --mem="${NEXT_MEMORY}" --partition="${PARTITION}" \
     --output="${LOGS_DIR}/4_cell_type_annotation_retry${RETRY_INDEX}_%A_%a.log" --error="${LOGS_DIR}/4_cell_type_annotation_retry${RETRY_INDEX}_%A_%a.err" --mail-user="${USER_EMAIL}" \
-    --export="ALL,CHUNKS_MANIFEST=${RETRY_MANIFEST},ANNOTATION_ERROR_PREFIX=${LOGS_DIR}/4_cell_type_annotation_retry${RETRY_INDEX},ANNOTATION_RUN_ID=${RUN_ID}" "${SCRIPT_DIR}/2.1_run_worker.sh")"
+    --export="ALL,CHUNKS_MANIFEST=${RETRY_MANIFEST},ANNOTATION_ERROR_PREFIX=${LOGS_DIR}/4_cell_type_annotation_retry${RETRY_INDEX},ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" "${SCRIPT_DIR}/2.1_run_worker.sh")"
   retry_rc=$?
   set -e
   [[ ${retry_rc} -eq 0 ]] || fail "sbatch rejected annotation OOM retry"

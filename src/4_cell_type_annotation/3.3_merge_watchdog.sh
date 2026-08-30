@@ -8,6 +8,7 @@ fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 cd "${PROJECT_ROOT}"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 [[ $# -eq 7 ]] || { echo "Usage: 3.3_merge_watchdog.sh RUN_ID MANIFEST ARRAY_ID MEM MAX_MEM PARTITION THROTTLE" >&2; exit 2; }
 RUN_ID="$1"; ROOT_MANIFEST="$2"; ARRAY_ID="$3"; CURRENT_MEMORY="$4"; MAX_MEMORY="$5"; PARTITION="$6"; THROTTLE="$7"
 RUN_ROOT="${HPC_SCRATCH_DIR}/_ecoda_runs/${RUN_ID}"
@@ -15,6 +16,7 @@ STATUS_FILE="${RUN_ROOT}/status/merge_watchdog"
 CURRENT_MANIFEST="${ROOT_MANIFEST}"
 RETRY_INDEX=0
 SCHEDULER_IDS=("${ARRAY_ID}")
+RUNTIME_EXPORT=""
 
 status_write() {
   local state="$1" reason="${2:-}" tmp="${STATUS_FILE}.tmp.$$"
@@ -28,6 +30,11 @@ status_write() {
   mv -f "${tmp}" "${STATUS_FILE}"
 }
 fail() { echo "ERROR: $1" >&2; status_write FAIL "$1"; exit 1; }
+export ECODA_RUNTIME_PROFILE=stage4
+ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" || \
+  fail "Stage 4 immutable runtime validation failed before merge retry handling"
+RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage4 0)" || \
+  fail "Stage 4 runtime export construction failed"
 bump_mem() { [[ "$1" =~ ^([0-9]+)([GT])$ ]] || return 1; printf '%s%s' "$((BASH_REMATCH[1] * 2))" "${BASH_REMATCH[2]}"; }
 mem_ge() {
   local a="$1" b="$2" an as bn bs
@@ -122,7 +129,7 @@ while :; do
   set +e
   retry_msg="$(sbatch --parsable --array="1-${retry_count}%${THROTTLE}" --mem="${NEXT_MEMORY}" --partition="${PARTITION}" \
     --output="${LOGS_DIR}/4_annotation_merge_retry${RETRY_INDEX}_%A_%a.log" --error="${LOGS_DIR}/4_annotation_merge_retry${RETRY_INDEX}_%A_%a.err" \
-    --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_MERGE_MANIFEST=${RETRY_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},FORCE_ANNOTATION=1" \
+    --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_MERGE_MANIFEST=${RETRY_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},FORCE_ANNOTATION=1,${RUNTIME_EXPORT}" \
     "${SCRIPT_DIR}/3.2_merge_worker.sh")"
   retry_rc=$?
   set -e

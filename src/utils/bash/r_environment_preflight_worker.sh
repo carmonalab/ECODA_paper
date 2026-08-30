@@ -28,6 +28,9 @@ if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/../../slurm_config.sh" ]]; then
 fi
 source "${SCRIPT_DIR}/../../slurm_config.sh"
 source "${SCRIPT_DIR}/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/ecoda_runtime.sh"
+ecoda_runtime_reexec_worker "${ECODA_RUNTIME_PROFILE:-stage5}" \
+  "${SCRIPT_DIR}/r_environment_preflight_worker.sh" || exit 1
 cd "${PROJECT_ROOT}"
 R_COMMAND="${R_ENV_PREFLIGHT_RSCRIPT:-${PIXI_RSCRIPT:-}}"
 [[ -n "${R_COMMAND}" ]] || {

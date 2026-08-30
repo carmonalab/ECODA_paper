@@ -113,7 +113,7 @@ ANNOT_REQUIRED_COLS <- c(HITME_REQUIRED_COLS, SCATOMIC_REQUIRED_COLS)
 ANNOT_OUTPUT_COLS <- c(HITME_OUTPUT_COLS, SCATOMIC_OUTPUT_COLS)
 NUMERIC_ANNOT_COLS <- c(
   "IFN_UCell", "HeatShock_UCell", "cellCycle.G1S_UCell",
-  "cellCycle.G2M_UCell", "classification_confidence", "S.Score", "G2M.Score"
+  "cellCycle.G2M_UCell", "S.Score", "G2M.Score"
 )
 # scATOMIC breast_mode is intentionally left at the upstream default FALSE for
 # this uniform workflow. Do not pass breast_mode to run_scATOMIC() or
@@ -292,6 +292,46 @@ wall_left <- function() wall_limit_s - wall_elapsed()
 # The Stage 4 preflight creates and validates this cache exactly once. Workers
 # must never download independently: parallel fallback downloads race the
 # release contract and can produce different model versions.
+scgate_model_cache_dir <- Sys.getenv("SCGATE_MODEL_CACHE_DIR")
+scgate_ontology_branch <- Sys.getenv("SCGATE_ONTOLOGY_BRANCH", unset = "master")
+if (!nzchar(scgate_model_cache_dir) || !grepl("^/", scgate_model_cache_dir)) {
+  stop("SCGATE_MODEL_CACHE_DIR must be an absolute path: ", scgate_model_cache_dir)
+}
+if (!nzchar(scgate_ontology_branch) ||
+    grepl("[/\\r\\n]", scgate_ontology_branch, perl = TRUE)) {
+  stop("SCGATE_ONTOLOGY_BRANCH is invalid: ", scgate_ontology_branch)
+}
+scgate_ontology_repo <- file.path(
+  scgate_model_cache_dir,
+  paste0("scGate_models-", scgate_ontology_branch)
+)
+if (!dir.exists(scgate_ontology_repo)) {
+  stop("Validated scGate CellOntology dictionary cache is missing: ",
+       scgate_ontology_repo)
+}
+dictionary_paths <- list.files(
+  scgate_ontology_repo,
+  pattern = "dictionary\\.tsv$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+if (length(dictionary_paths) != 1L ||
+    is.na(file.info(dictionary_paths[[1]])$size) ||
+    file.info(dictionary_paths[[1]])$size <= 0) {
+  stop("Validated scGate CellOntology dictionary cache is incomplete: ",
+       scgate_ontology_repo)
+}
+local_ontology_repo <- file.path(tempdir(), basename(scgate_ontology_repo))
+if (file.exists(local_ontology_repo) || dir.exists(local_ontology_repo)) {
+  if (!dir.exists(local_ontology_repo)) {
+    stop("R tempdir contains a non-directory CellOntology cache path: ",
+         local_ontology_repo)
+  }
+} else if (!file.symlink(scgate_ontology_repo, local_ontology_repo)) {
+  stop("Could not expose staged CellOntology dictionary to scGate: ",
+       local_ontology_repo)
+}
+
 scgate_db_path <- Sys.getenv("SCGATE_DB_PATH", unset = file.path(project_root, "aux", "scGateDB.rds"))
 if (scgate_db_path == "" || !file.exists(scgate_db_path) ||
     file.info(scgate_db_path)$size <= 0) {

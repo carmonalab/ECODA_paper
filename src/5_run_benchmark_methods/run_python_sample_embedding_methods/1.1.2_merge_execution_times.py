@@ -69,9 +69,13 @@ def _validate_log_frame(frame, path):
         raise ValueError(f"execution log has blank identifiers: {path}")
     if frame[["dataset", "method"]].duplicated().any():
         raise ValueError(f"execution log has duplicate identifiers: {path}")
-    for column in ("time_secs", "mem_GB"):
-        values = pd.to_numeric(frame[column], errors="coerce")
-        if values.isna().any() or not np.isfinite(values.to_numpy(dtype=float)).all():
+    for column, allow_missing in (("time_secs", False), ("mem_GB", True)):
+        raw = frame[column]
+        values = pd.to_numeric(raw, errors="coerce")
+        missing = raw.isna()
+        if (not allow_missing and missing.any()) or values[~missing].isna().any():
+            raise ValueError(f"execution log has invalid numeric values: {path}")
+        if not np.isfinite(values[~missing].to_numpy(dtype=float)).all():
             raise ValueError(f"execution log has invalid numeric values: {path}")
 
 def atomic_feather(frame, path):

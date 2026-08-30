@@ -36,12 +36,13 @@ SCATOMIC_OUTPUT_COLS = ["layer_1", "layer_2", "layer_3", "layer_4", "layer_5", "
 ANNOT_OUTPUT_COLS = HITME_OUTPUT_COLS + SCATOMIC_OUTPUT_COLS
 NUMERIC_ANNOTATION_COLS = {
     "IFN_UCell", "HeatShock_UCell", "cellCycle.G1S_UCell", "cellCycle.G2M_UCell",
-    "S.Score", "G2M.Score", "classification_confidence",
+    "S.Score", "G2M.Score",
 }
 LEGACY_ANNOT_TIER1 = [r"^scGate", r"^functional\.cluster", r"_UCell$",
                       r"^scATOMIC", r"^layer_?\d"]
 LEGACY_ANNOT_TIER2 = ["S.Score", "G2M.Score", "Phase", "classification_confidence",
                       "cellCycle.G1S_UCell", "cellCycle.G2M_UCell"]
+CONFIDENCE_LABELS = {"confident", "low_confidence"}
 
 
 def _safe_annotation_scalar(value):
@@ -57,11 +58,27 @@ def _safe_annotation_scalar(value):
 
 
 def _coerce_annotation_columns(obs: pd.DataFrame, columns) -> pd.DataFrame:
-    """Keep score columns numeric and coerce label objects to nullable strings."""
+    """Keep scores numeric; preserve scATOMIC confidence labels or scores."""
     for column in columns:
         if column not in obs:
             continue
-        if column in NUMERIC_ANNOTATION_COLS:
+        if column == "classification_confidence":
+            values = obs[column]
+            converted = pd.to_numeric(values, errors="coerce")
+            labels = values.astype(object).map(
+                lambda value: str(value).strip() if _safe_annotation_scalar(value) is not None else ""
+            )
+            invalid = values.notna() & converted.isna() & ~labels.isin(CONFIDENCE_LABELS)
+            if bool(invalid.any()):
+                raise ValueError(
+                    "classification_confidence contains values outside the "
+                    "numeric/confidence-label contract"
+                )
+            if bool(labels.isin(CONFIDENCE_LABELS).any()):
+                obs[column] = values.map(_safe_annotation_scalar).astype("string")
+            else:
+                obs[column] = converted.astype("float64")
+        elif column in NUMERIC_ANNOTATION_COLS:
             obs[column] = pd.to_numeric(obs[column], errors="coerce").astype("float64")
         else:
             obs[column] = obs[column].map(_safe_annotation_scalar).astype("string")

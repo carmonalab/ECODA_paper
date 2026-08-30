@@ -6,6 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 export ECODA_GATE_STAGE=stage5
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
 source "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_submit.sh"
@@ -29,13 +30,15 @@ PARTITION_ARG=""
 MEMORY="${BENCHMARK_MEM}"
 MAX_MEMORY="${BENCHMARK_MEM_MAX}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
+RUNTIME_EXPORT=""
+GPU_POLICY="auto"
 
 usage() {
   cat <<'EOF'
 Usage: 1_submit_hpc_array.sh [--datasets LIST] [--methods LIST]
        [--analyses trans,zeroimp] [--selection-file TSV]
        [--exact-batch-selection] [--pass uncorrected|corrected]
-       [--force] [--sync-only RUN_ID]
+       [--gpu-policy auto|default|any] [--force] [--sync-only RUN_ID]
        [--partition NAME] [--mem VALUE] [--max-mem VALUE] [--throttle N]
 
 Selection-file rows are DATASET<TAB>VIEW<TAB>LABEL. Ordinary methods use the
@@ -59,6 +62,8 @@ while [[ $# -gt 0 ]]; do
     --pass|--analysis-pass) PASS_ARG="${2:-}"; PASS_SET=1; shift 2 ;;
     --pass=*|--analysis-pass=*) PASS_ARG="${1#*=}"; PASS_SET=1; shift ;;
     --force) FORCE_ARG=1; shift ;;
+    --gpu-policy) GPU_POLICY="${2:-}"; shift 2 ;;
+    --gpu-policy=*) GPU_POLICY="${1#*=}"; shift ;;
     --sync-only) SYNC_ONLY_RUN="${2:-}"; SYNC_ONLY_SET=1; shift 2 ;;
     --sync-only=*) SYNC_ONLY_RUN="${1#*=}"; SYNC_ONLY_SET=1; shift ;;
     --partition) PARTITION_ARG="${2:-}"; shift 2 ;;
@@ -73,9 +78,39 @@ while [[ $# -gt 0 ]]; do
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
+case "${GPU_POLICY}" in
+  auto|default|any) ;;
+  *) echo "ERROR: --gpu-policy must be auto, default, or any." >&2; exit 1 ;;
+esac
+if [[ -n "${BENCHMARK_GPU_ANY_VRAM_PER_GPU}" &&
+      ! "${BENCHMARK_GPU_ANY_VRAM_PER_GPU}" =~ ^[0-9]+(G|GB)$ ]]; then
+  echo "ERROR: BENCHMARK_GPU_ANY_VRAM_PER_GPU must be an integer G/GB value." >&2
+  exit 1
+fi
+for gpu_value in "${BENCHMARK_GPU_ANY_PARTITION}" \
+                 "${BENCHMARK_GPU_DEFAULT_TIME_LIMIT}" \
+                 "${BENCHMARK_GPU_ANY_TIME_LIMIT}"; do
+  [[ -n "${gpu_value}" && "${gpu_value}" != *$'\n'* && "${gpu_value}" != *' '* ]] || {
+    echo "ERROR: GPU resource configuration contains a blank/newline value." >&2
+    exit 1
+  }
+done
 if [[ -n "${SYNC_ONLY_RUN}" && ${FORCE_ARG} -eq 1 ]]; then echo "ERROR: --sync-only cannot use --force." >&2; exit 1; fi
 if [[ -n "${PASS_ARG}" && "${PASS_ARG}" != uncorrected && "${PASS_ARG}" != corrected ]]; then echo "ERROR: --pass must be uncorrected or corrected." >&2; exit 1; fi
 command -v jq >/dev/null 2>&1 || { echo "ERROR: jq is required for benchmark selection." >&2; exit 1; }
+mkdir -p "${LOGS_DIR}" || {
+  echo "ERROR: could not create Stage 5 log directory." >&2
+  exit 1
+}
+export ECODA_RUNTIME_PROFILE=stage5
+ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" || {
+  echo "ERROR: Stage 5 immutable runtime validation failed." >&2
+  exit 1
+}
+RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage5 0)" || {
+  echo "ERROR: Stage 5 runtime export construction failed." >&2
+  exit 1
+}
 if [[ ${DATASETS_SET} -eq 1 && -z "${DATASETS_ARG}" ]]; then
   echo "ERROR: --datasets must not be empty." >&2
   exit 1
@@ -214,20 +249,57 @@ stage5_record_scheduler() {
 }
 
 
+gpu_method_is_default() {
+  case ",${BENCHMARK_GPU_DEFAULT_METHODS}," in
+    *,"$1",*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 method_spec() {
-  local method="$1"
+  local method="$1" effective_gpu_policy="${GPU_POLICY}"
+  local gpu_request=()
+  METHOD_RUNTIME_NV=0
+  METHOD_TIME_LIMIT="${BENCHMARK_CPU_TIME_LIMIT}"
+  METHOD_GPU_POLICY=cpu
   METHOD_PARTITION="${SLURM_PARTITION_BENCHMARK_CPU}"
   METHOD_THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
   METHOD_FLAGS=(--constraint="${BENCHMARK_CPU_CONSTRAINT}" --cpus-per-task="${BENCHMARK_CPU_CPUS_PER_TASK}")
   METHOD_WORKER="${PROJECT_ROOT}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh"
   case "${method}" in
-    mrvi|pilotgm|scpoli)
-      METHOD_PARTITION="${SLURM_PARTITION_BENCHMARK_GPU}"
-      METHOD_THROTTLE="${BENCHMARK_GPU_ARRAY_THROTTLE}"
-      METHOD_FLAGS=(--gpus="${BENCHMARK_GPU_COUNT}" --constraint="${BENCHMARK_GPU_CONSTRAINT}" --cpus-per-task="${BENCHMARK_GPU_CPUS_PER_TASK}")
+    mrvi|scpoli)
+      METHOD_RUNTIME_NV=1
+      if [[ "${effective_gpu_policy}" == auto ]]; then
+        if [[ -n "${PASS_ARG}" ]] || ! gpu_method_is_default "${method}"; then
+          effective_gpu_policy=any
+        else
+          effective_gpu_policy=default
+        fi
+      fi
+      case "${effective_gpu_policy}" in
+        default)
+          METHOD_GPU_POLICY=default
+          METHOD_PARTITION="${BENCHMARK_GPU_DEFAULT_PARTITION}"
+          METHOD_THROTTLE="${BENCHMARK_GPU_DEFAULT_ARRAY_THROTTLE}"
+          METHOD_TIME_LIMIT="${BENCHMARK_GPU_DEFAULT_TIME_LIMIT}"
+          METHOD_FLAGS=(--gpus="${BENCHMARK_GPU_COUNT}" --constraint="${BENCHMARK_GPU_CONSTRAINT}" --cpus-per-task="${BENCHMARK_GPU_CPUS_PER_TASK}")
+          ;;
+        any)
+          METHOD_GPU_POLICY=any
+          METHOD_PARTITION="${BENCHMARK_GPU_ANY_PARTITION}"
+          METHOD_THROTTLE="${BENCHMARK_GPU_ANY_ARRAY_THROTTLE}"
+          METHOD_TIME_LIMIT="${BENCHMARK_GPU_ANY_TIME_LIMIT}"
+          gpu_request=(--gpus="${BENCHMARK_GPU_COUNT}")
+          if [[ -n "${BENCHMARK_GPU_ANY_VRAM_PER_GPU}" ]]; then
+            gpu_request=(--gres="gpu:${BENCHMARK_GPU_COUNT},VramPerGpu:${BENCHMARK_GPU_ANY_VRAM_PER_GPU}")
+          fi
+          METHOD_FLAGS=("${gpu_request[@]}" --cpus-per-task="${BENCHMARK_GPU_CPUS_PER_TASK}")
+          ;;
+        *) echo "ERROR: unsupported effective GPU policy '${effective_gpu_policy}'." >&2; return 1 ;;
+      esac
       METHOD_WORKER="${PROJECT_ROOT}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh"
       ;;
-    pilot|qot)
+    pilot|pilotgm|qot)
       METHOD_WORKER="${PROJECT_ROOT}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh"
       ;;
     gloscope|mofa|pseudobulk|composition|scitd|prepare_pseudobulk)
@@ -428,7 +500,8 @@ stage5_compute_h5ad_preflight() {
       ecoda_submit_h5ad_preflight "${preflight_manifest}" "${status_dir}" \
         "${ECODA_RUN_ROOT}" require "${PARTITION_ARG:-${SLURM_PARTITION_BENCHMARK_CPU}}" \
         "${MEMORY}" "${THROTTLE}" "${preflight_logs}" stage5 \
-        "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_worker.sh"
+        "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_worker.sh" \
+        "${RUNTIME_EXPORT}"
     )"
     preflight_rc=$?
     set -e
@@ -873,7 +946,7 @@ stage5_run_r_environment_preflight() {
     --time="${WATCHDOG_TIME_LIMIT}" \
     --output="${log_dir}/r_environment_preflight_%j.log" \
     --error="${log_dir}/r_environment_preflight_%j.err" \
-    --mail-user="${USER_EMAIL}" --export="ALL" \
+    --mail-user="${USER_EMAIL}" --export="ALL,${RUNTIME_EXPORT}" \
     "${SCRIPT_DIR}/../utils/bash/r_environment_preflight_worker.sh")"
   preflight_rc=$?
   set -e
@@ -1027,16 +1100,20 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     local group_label="$1" manifest="$2" dependency="$3" method="$4" view="$5"
     method_spec "${method}" || return 1
     local worker="${METHOD_WORKER}" worker_partition="${METHOD_PARTITION}" \
-      watchdog_partition="${SLURM_PARTITION_BENCHMARK_CPU}" throttle="${METHOD_THROTTLE}"
+      watchdog_partition="${SLURM_PARTITION_BENCHMARK_CPU}" throttle="${METHOD_THROTTLE}" \
+      method_time_limit="${METHOD_TIME_LIMIT}" method_gpu_policy="${METHOD_GPU_POLICY}"
+    local method_runtime_export
+    method_runtime_export="$(ecoda_runtime_export_csv stage5 "${METHOD_RUNTIME_NV}")" || return 1
     local safe="$(printf '%s' "${group_label}" | tr '/:,\t ' '_____')"
     local array_msg array_id array_rc wd_msg wd_id wd_rc
-    local worker_env="METHOD=${method},ANALYSIS=${method},ANALYSIS_MANIFEST=${manifest},ANALYSIS_VIEW=${view},ANALYSIS_ROOT=${ANALYSIS_ROOT},EXECUTION_LOG_DIR=${RUN_LOG_DIR},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${RUN_ID},FORCE_BENCHMARK=${FORCE_ARG},JOB_LOG_PREFIX=${RUN_LOG_DIR}/5_matrix_${safe}"
+    local worker_env="METHOD=${method},ANALYSIS=${method},ANALYSIS_MANIFEST=${manifest},ANALYSIS_VIEW=${view},ANALYSIS_ROOT=${ANALYSIS_ROOT},EXECUTION_LOG_DIR=${RUN_LOG_DIR},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${RUN_ID},FORCE_BENCHMARK=${FORCE_ARG},METHOD_TIME_LIMIT=${method_time_limit},METHOD_GPU_POLICY=${method_gpu_policy},JOB_LOG_PREFIX=${RUN_LOG_DIR}/5_matrix_${safe}"
     if [[ -n "${PASS_ARG}" ]]; then
       worker_env="${worker_env},ANALYSIS_PASS=${PASS_ARG}"
     else
       worker_env="${worker_env},BENCHMARK_MANIFEST=${manifest}"
     fi
-    array_args=(--parsable --array="1-$(wc -l < "${manifest}" | tr -d '[:space:]')%${throttle}" --partition="${worker_partition}" "${METHOD_FLAGS[@]}" --mem="${MEMORY}" \
+    worker_env="${worker_env},${method_runtime_export}"
+    array_args=(--parsable --array="1-$(wc -l < "${manifest}" | tr -d '[:space:]')%${throttle}" --partition="${worker_partition}" "${METHOD_FLAGS[@]}" --time="${method_time_limit}" --mem="${MEMORY}" \
       --output="${RUN_LOG_DIR}/5_matrix_${safe}_%A_%a.log" --error="${RUN_LOG_DIR}/5_matrix_${safe}_%A_%a.err" --mail-user="${USER_EMAIL}")
     [[ -n "${dependency}" ]] && array_args+=(--dependency="afterok:${dependency}")
     array_args+=(--export="ALL,${worker_env}" "${worker}")
@@ -1055,7 +1132,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     wd_msg="$(sbatch --parsable --partition="${watchdog_partition}" --ntasks=1 --cpus-per-task=1 --mem=2G --time="${WATCHDOG_TIME_LIMIT}" \
       --output="${RUN_LOG_DIR}/5_matrix_watchdog_${safe}_%A.log" --error="${RUN_LOG_DIR}/5_matrix_watchdog_${safe}_%A.err" --mail-user="${USER_EMAIL}" \
       --export="ALL,${worker_env},MATRIX_WATCHDOG_ROOT=${ECODA_RUN_ROOT}" \
-      "${SCRIPT_DIR}/matrix_watchdog.sh" "${ECODA_RUN_ROOT}" "${group_label}" "${manifest}" "${array_id}" "${MEMORY}" "${MAX_MEMORY}" "${worker_partition}" "${throttle}" "${worker}" "${METHOD_FLAGS[@]}")"
+      "${SCRIPT_DIR}/matrix_watchdog.sh" "${ECODA_RUN_ROOT}" "${group_label}" "${manifest}" "${array_id}" "${MEMORY}" "${MAX_MEMORY}" "${worker_partition}" "${throttle}" "${worker}" "${method_runtime_export}" "${METHOD_FLAGS[@]}")"
     wd_rc=$?
     set -e
     wd_id="${wd_msg%%;*}"
