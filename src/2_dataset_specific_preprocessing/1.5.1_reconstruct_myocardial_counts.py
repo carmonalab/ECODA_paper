@@ -1,9 +1,10 @@
 """
 1.5.1_reconstruct_myocardial_counts.py — Reconstruct raw integer count matrix for Myocardial Infarction.
 
-The staged Myocardial Infarction dataset (Kuppe et al. 2022 Nature, PMID 35948637;
-Myocardial_Infarc_2.h5ad) only provides log1p-normalized expression in .X and lacks
-an explicit raw count layer or raw.X.
+The staged Myocardial Infarction file may already contain a raw
+`layers["counts"]` layer. When present, the layer is fully validated and used
+as the authoritative raw-count source; otherwise the log1p-normalized `.X`
+matrix is inverted.
 
 This script reconstructs the exact raw UMI count matrix via cell-wise minimum positive
 step inversion:
