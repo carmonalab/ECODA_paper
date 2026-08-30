@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+unset HPC_SCRATCH_DIR HOME_REF_DIR ECODA_RUNTIME_IMAGE ECODA_RUNTIME_MANIFEST
 
 fail() {
   echo "ERROR: $*" >&2
@@ -196,6 +197,26 @@ export APPTAINER_BIN="${FAKE_BIN}/apptainer"
 export PATH="${FAKE_BIN}:${PROJECT}/.pixi/envs/py-cuda13/bin:/usr/bin:/bin"
 export LD_LIBRARY_PATH="${PROJECT}/.pixi/envs/py-cuda13/lib:/usr/lib"
 source "${ROOT}/src/utils/bash/ecoda_runtime.sh"
+
+# Sourcing the config after the Apptainer boundary must preserve inherited
+# absolute destinations rather than recomputing them from the container HOME.
+container_paths="$(
+  HOME="${TEST_HOME}/container-home" PATH="/usr/bin:/bin" \
+  ECODA_RUNTIME_MODE=apptainer ECODA_RUNTIME_IN_CONTAINER=1 \
+  ECODA_RUNTIME_PREFIX="${PROJECT}/.pixi/envs/py-cuda13" \
+  HPC_SCRATCH_DIR="/host/scratch/ECODA_paper" \
+  HOME_REF_DIR="/host/reference_atlases/sketched_200ct" \
+  ECODA_RUNTIME_IMAGE="/host/scratch/ECODA_paper/_ecoda_runtime/host-image.sif" \
+  bash -c 'source "$1/src/slurm_config.sh"; printf "%s\n%s\n%s" \
+    "$HPC_SCRATCH_DIR" "$HOME_REF_DIR" "$ECODA_RUNTIME_IMAGE"' \
+    _ "${PROJECT}"
+)"
+expected_container_paths="$(printf '%s\n' \
+  "/host/scratch/ECODA_paper" \
+  "/host/reference_atlases/sketched_200ct" \
+  "/host/scratch/ECODA_paper/_ecoda_runtime/host-image.sif")"
+assert_eq "${expected_container_paths}" "${container_paths}" \
+  "inherited container path contracts"
 [[ -d "${PROJECT}" ]] || fail "test project vanished before runtime validation: ${PROJECT}"
 realpath "${PROJECT}" >/dev/null || fail "external realpath failed: ${PROJECT}"
 

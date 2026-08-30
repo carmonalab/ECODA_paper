@@ -337,6 +337,25 @@ def report_gpu_memory(method_str):
         print(f"GPU_MEMORY_PROFILE_ERROR method={method_str}: {exc}", flush=True)
 
 
+
+GPU_BACKED_METHODS = frozenset(("mrvi", "scpoli"))
+
+
+def validate_gpu_execution(method, device):
+    """Refuse CPU fallback for methods submitted with a GPU allocation."""
+    if method not in GPU_BACKED_METHODS:
+        return
+    if device != "cuda":
+        raise RuntimeError(
+            f"{method} is GPU-backed and requires --device cuda; "
+            "refusing implicit CPU/auto execution"
+        )
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            f"{method} requested CUDA but torch.cuda.is_available() is False; "
+            "refusing CPU fallback"
+        )
+
 def log_execution_time(dataset_name, method_str, time_secs, log_file):
     """Append/overwrite one (dataset, method) row in the per-task exec log.
 
@@ -959,7 +978,7 @@ def process_dataset(args, ds_name, entry):
 
         print(f"Processing {method_str} ...")
         start_time = time.time()
-        profile_gpu = args.method in ("mrvi", "scpoli") and torch.cuda.is_available()
+        profile_gpu = args.method in GPU_BACKED_METHODS
         if profile_gpu:
             torch.cuda.reset_peak_memory_stats()
         try:
@@ -1017,13 +1036,14 @@ def main():
                         help="Recompute combos whose output feather already exists")
     parser.add_argument("--device", default="auto",
                         choices=["auto", "cpu", "cuda"],
-                        help="Train accelerator (default: auto; uses the "
-                             "allocated GPU on shared-gpu nodes)")
+                        help="Train accelerator; GPU-backed MrVI/scPoli "
+                             "require explicit --device cuda")
     args = parser.parse_args()
 
     args.hvg = sorted(set(args.hvg))
     if args.analysis_pass is not None:
         args.hvg = [2000]
+    validate_gpu_execution(args.method, args.device)
 
     scvi.settings.seed = 0
     print("scvi-tools version:", scvi.__version__)

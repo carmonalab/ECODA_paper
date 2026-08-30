@@ -21,8 +21,14 @@ export NAS_SC_DIR="${NAS_BASE_DIR}/Standardized_SingleCell_Datasets"
 export NAS_TARGET_DIR="${NAS_PREFIX}/Projects/ECODA_paper"
 
 # --- HPC Scratch Paths ---
-if [[ "${ECODA_RUNTIME_IN_CONTAINER:-0}" == "1" &&
-      -n "${HPC_SCRATCH_DIR:-}" ]]; then
+# Workers inside the immutable container use --containall --no-home and
+# therefore must retain the absolute host path exported before re-exec.  Do
+# not derive an inherited path from the container's HOME (/root).
+if [[ -n "${HPC_SCRATCH_DIR:-}" ]]; then
+  [[ "${HPC_SCRATCH_DIR}" = /* ]] || {
+    echo "ERROR: inherited HPC_SCRATCH_DIR must be absolute: ${HPC_SCRATCH_DIR}" >&2
+    return 1
+  }
   export HPC_SCRATCH_DIR
 else
   export HPC_SCRATCH_DIR="${HOME}/scratch/ECODA_paper"
@@ -149,8 +155,11 @@ fi
 
 # --- Reference atlas paths (cell type annotation) ---
 export NAS_REF_DIR="${NAS_PREFIX}/DataCollections/reference_atlases/sketched_200ct/"
-if [[ "${ECODA_RUNTIME_IN_CONTAINER:-0}" == "1" &&
-      -n "${HOME_REF_DIR:-}" ]]; then
+if [[ -n "${HOME_REF_DIR:-}" ]]; then
+  [[ "${HOME_REF_DIR}" = /* ]] || {
+    echo "ERROR: inherited HOME_REF_DIR must be absolute: ${HOME_REF_DIR}" >&2
+    return 1
+  }
   export HOME_REF_DIR
 else
   export HOME_REF_DIR="${HOME}/reference_atlases/sketched_200ct/"

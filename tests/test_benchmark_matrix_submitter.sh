@@ -4,6 +4,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1 || true
+unset HPC_SCRATCH_DIR
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ecoda-matrix-stage.XXXXXX")"
 TMP_DIR="$(cd "${TMP_DIR}" && pwd)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
@@ -91,6 +92,39 @@ PILOTGM_CALLS="$(cat "${CAPTURE}")"
 case "${PILOTGM_CALLS}" in *"--partition=${SLURM_PARTITION_BENCHMARK_CPU}"*) ;; *) echo "pilotgm was not moved to CPU resources" >&2; exit 1 ;; esac
 case "${PILOTGM_CALLS}" in *"--gpus="*) echo "pilotgm retained a GPU flag" >&2; exit 1 ;; esac
 case "${PILOTGM_CALLS}" in *"ECODA_APPTAINER_NV=0"*) ;; *) echo "pilotgm runtime NV flag missing" >&2; exit 1 ;; esac
+
+PY_CALL_LOG="${TMP_DIR}/python.call"
+FAKE_PREFIX="${TMP_DIR}/worker-prefix"
+mkdir -p "${FAKE_PREFIX}/bin" "${FAKE_PREFIX}/lib/R"
+cat > "${FAKE_PREFIX}/bin/python" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" > "${PY_CALL_LOG:?}"
+exit 0
+STUB
+cat > "${FAKE_PREFIX}/bin/Rscript" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+chmod +x "${FAKE_PREFIX}/bin/python" "${FAKE_PREFIX}/bin/Rscript"
+WORKER_MANIFEST="${TMP_DIR}/worker.tsv"
+printf 'Adams\tbenchmark_analysis\tmrvi\n' > "${WORKER_MANIFEST}"
+WORKER_SCRATCH="${TMP_DIR}/worker-scratch"
+WORKER_ROOT="${TMP_DIR}/worker-root"
+mkdir -p "${WORKER_SCRATCH}" "${WORKER_ROOT}"
+PY_CALL_LOG="${PY_CALL_LOG}" \
+HOME="${TMP_DIR}/home" PATH="/usr/bin:/bin" TMPDIR="${TMP_DIR}" \
+HPC_SCRATCH_DIR="${WORKER_SCRATCH}" LOGS_DIR="${TMP_DIR}/worker-logs" \
+ECODA_RUNTIME_MODE=host ECODA_RUNTIME_IN_CONTAINER=1 \
+ECODA_RUNTIME_PREFIX="${FAKE_PREFIX}" ECODA_APPTAINER_NV=1 \
+ECODA_RUNTIME_PROFILE=stage5 METHOD_GPU_POLICY=default METHOD=mrvi \
+ANALYSIS_MANIFEST="${WORKER_MANIFEST}" ANALYSIS_ROOT="${WORKER_ROOT}" \
+EXECUTION_LOG_DIR="${WORKER_ROOT}/embeddings" \
+SLURM_ARRAY_TASK_ID=1 SLURM_ARRAY_JOB_ID=91001 \
+  bash "${ROOT}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh"
+case "$(cat "${PY_CALL_LOG}")" in
+  *"--device cuda"*) ;;
+  *) echo "GPU worker did not force --device cuda" >&2; exit 1 ;;
+esac
 
 
 : > "${CAPTURE}"

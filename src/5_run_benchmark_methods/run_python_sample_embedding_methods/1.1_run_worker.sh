@@ -43,13 +43,35 @@ ANALYSIS_PASS_FLAG=()
 [[ -n "${ANALYSIS_PASS:-}" ]] && ANALYSIS_PASS_FLAG=(--analysis_pass "${ANALYSIS_PASS}")
 HIGH_RES_FLAG=()
 [[ "${ANALYSIS_HIGH_RES_ONLY:-0}" == 1 ]] && HIGH_RES_FLAG=(--high_resolution_only)
+# GPU-backed methods must receive an explicit CUDA device.  The Python entry
+# point rejects the default "auto" value so a missing runtime export cannot
+# silently move a scheduled GPU job onto CPU.
+GPU_DEVICE_ARGS=()
+case "${ECODA_APPTAINER_NV:-0}" in
+  0) ;;
+  1) GPU_DEVICE_ARGS=(--device cuda) ;;
+  *) echo "ERROR: ECODA_APPTAINER_NV must be 0 or 1." >&2; exit 1 ;;
+esac
+PYTHON_ARGS=(
+  --config_path "${DATASETS_JSON_FILE}" --ds_name "${DS_NAME}" --view "${ANALYSIS_VIEW}"
+  --method "${METHOD}" --input_dir "${HPC_SCRATCH_DIR}/${DS_NAME}/output"
+  --output_dir "${OUT_DIR}" --log_file "${LOG_FILE}"
+)
+if [[ ${#GPU_DEVICE_ARGS[@]} -gt 0 ]]; then
+  PYTHON_ARGS+=("${GPU_DEVICE_ARGS[@]}")
+fi
+if [[ ${#FORCE_FLAG[@]} -gt 0 ]]; then
+  PYTHON_ARGS+=("${FORCE_FLAG[@]}")
+fi
+if [[ ${#ANALYSIS_PASS_FLAG[@]} -gt 0 ]]; then
+  PYTHON_ARGS+=("${ANALYSIS_PASS_FLAG[@]}")
+fi
+if [[ ${#HIGH_RES_FLAG[@]} -gt 0 ]]; then
+  PYTHON_ARGS+=("${HIGH_RES_FLAG[@]}")
+fi
 source "${SCRIPT_DIR}/../../utils/bash/worker_retry.sh"
 set +e
-"${PYTHON_BIN}" "${SCRIPT_DIR}/1.1.1_benchmark_methods_py.py" \
-  --config_path "${DATASETS_JSON_FILE}" --ds_name "${DS_NAME}" --view "${ANALYSIS_VIEW}" \
-  --method "${METHOD}" --input_dir "${HPC_SCRATCH_DIR}/${DS_NAME}/output" \
-  --output_dir "${OUT_DIR}" --log_file "${LOG_FILE}" \
-  "${FORCE_FLAG[@]}" "${ANALYSIS_PASS_FLAG[@]}" "${HIGH_RES_FLAG[@]}"
+"${PYTHON_BIN}" "${SCRIPT_DIR}/1.1.1_benchmark_methods_py.py" "${PYTHON_ARGS[@]}"
 RC=$?
 set -e
 if [[ ${RC} -eq 0 ]]; then worker_clear_retry_count; exit 0; fi

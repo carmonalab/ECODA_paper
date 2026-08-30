@@ -153,6 +153,25 @@ def main():
     assert safe == {"nan": None, "finite": 2.5}
 
     worker = load_worker()
+    try:
+        worker.validate_gpu_execution("mrvi", "auto")
+    except RuntimeError as exc:
+        assert "requires --device cuda" in str(exc)
+    else:
+        raise AssertionError("GPU-backed method accepted implicit auto device")
+    original_cuda_available = worker.torch.cuda.is_available
+    worker.torch.cuda.is_available = lambda: False
+    try:
+        try:
+            worker.validate_gpu_execution("scpoli", "cuda")
+        except RuntimeError as exc:
+            assert "torch.cuda.is_available() is False" in str(exc)
+        else:
+            raise AssertionError("GPU-backed method accepted unavailable CUDA")
+    finally:
+        worker.torch.cuda.is_available = original_cuda_available
+    worker.validate_gpu_execution("pilotgm", "auto")
+
     with tempfile.TemporaryDirectory() as writer_tmp:
         writer_path = Path(writer_tmp) / "embedding.feather"
         writer_frame = pd.DataFrame({"Dim_1": [0.0]}, index=["s1"])

@@ -245,6 +245,11 @@ the selected 2,000-HVG subset, so the latter is the relevant conservative
 input-size proxy. The inventory used HDF5 metadata only and did not load a
 cohort into memory.
 
+The worker boundary passes `HPC_SCRATCH_DIR`, `HOME_REF_DIR`, and the runtime
+image path explicitly. When `slurm_config.sh` is sourced inside the
+`--containall --no-home` process, inherited absolute values are preserved
+instead of being recomputed from the container's `HOME`.
+
 | dataset | cells × genes | h5ad GiB | dense fp32 GiB | 2,000-HVG fp32 GiB |
 | --- | ---: | ---: | ---: | ---: |
 | Kidney_KPMP | 103,642 × 26,276 | 2.59 | 10.15 | 0.77 |
