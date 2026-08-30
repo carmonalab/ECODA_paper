@@ -14,6 +14,19 @@ N="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
 printf '71000%s\n' "${N}"
 STUB
 chmod +x "${TMP_DIR}/bin/sbatch"
+RUNS_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs"
+INVALID_STEP="basse""x_cellsubtype"
+: > "${CAPTURE}"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  bash "${ROOT}/src/2_dataset_specific_preprocessing/1_submit_hpc.sh" \
+    --datasets Bassez --steps "${INVALID_STEP}" > "${TMP_DIR}/invalid.submitter.log" 2>&1; then
+  echo "legacy Bassez spelling unexpectedly accepted" >&2
+  exit 1
+fi
+grep -q "ERROR: unknown Stage 2 step '${INVALID_STEP}'." "${TMP_DIR}/invalid.submitter.log"
+[[ ! -s "${CAPTURE}" ]]
+[[ ! -e "${RUNS_ROOT}" ]]
+
 OUTPUT="$(
   HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
   STAGE2_SUBMITTER_TEST=1 bash "${ROOT}/src/2_dataset_specific_preprocessing/1_submit_hpc.sh" \
@@ -33,6 +46,21 @@ JOANITO_CALL="$(sed -n '3p' "${CAPTURE}")"
 case "${JOANITO_CALL}" in *"--dependency="*) echo "Joanito was artificially serialized" >&2; exit 1 ;; esac
 WATCHDOG_CALL="$(sed -n '4p' "${CAPTURE}")"
 case "${WATCHDOG_CALL}" in *"--dependency=afterany:710001:710002:710003"*) ;; *) echo "aggregate watchdog dependency missing" >&2; exit 1 ;; esac
+BASSEZ_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  STAGE2_SUBMITTER_TEST=1 bash "${ROOT}/src/2_dataset_specific_preprocessing/1_submit_hpc.sh" \
+    --datasets Bassez --steps bassez_cellsubtype
+)"
+BASSEZ_RUN_ID="$(printf '%s\n' "${BASSEZ_OUTPUT}" | sed -n 's/^STAGE2_RUN_ID=//p')"
+[[ -n "${BASSEZ_RUN_ID}" ]]
+BASSEZ_MANIFEST="${RUNS_ROOT}/${BASSEZ_RUN_ID}/manifests/steps.tsv"
+[[ "$(wc -l < "${BASSEZ_MANIFEST}" | tr -d '[:space:]')" == 1 ]]
+IFS=$'\t' read -r BASSEZ_STEP BASSEZ_SCRIPT BASSEZ_OUTPUTS BASSEZ_DEPENDENCY BASSEZ_OWNER \
+  < "${BASSEZ_MANIFEST}"
+[[ "${BASSEZ_STEP}" == "bassez_cellsubtype" ]]
+[[ "${BASSEZ_SCRIPT}" == "${ROOT}/src/2_dataset_specific_preprocessing/1.6_submit_bassez.sh" ]]
+[[ "${BASSEZ_OUTPUTS}" == "${TMP_DIR}/home/scratch/ECODA_paper/Bassez/data/BassezA_2021_33958794whole.rds" ]]
+[[ "${BASSEZ_DEPENDENCY}" == "-" && "${BASSEZ_OWNER}" != "-" ]]
 
 # Guarded CombinedPBMC legacy-raw migration: valid content and sidecar move to
 # the canonical raw basename, with PATH rewritten and no duplicate left.

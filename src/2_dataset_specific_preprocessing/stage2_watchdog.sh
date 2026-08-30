@@ -38,7 +38,7 @@ stage2_step_script() {
     joanito) printf '%s/1.3_submit_joanito.sh' "${SCRIPT_DIR}" ;;
     kfoury_lowres_ct) printf '%s/1.4_submit_kfoury_lowres_ct.sh' "${SCRIPT_DIR}" ;;
     myocardial_counts) printf '%s/1.5_submit_myocardial.sh' "${SCRIPT_DIR}" ;;
-    bassex_cellsubtype) printf '%s/1.6_submit_bassez.sh' "${SCRIPT_DIR}" ;;
+    bassez_cellsubtype) printf '%s/1.6_submit_bassez.sh' "${SCRIPT_DIR}" ;;
     *) return 1 ;;
   esac
 }
@@ -53,7 +53,7 @@ stage2_step_outputs() {
       "${HPC_SCRATCH_DIR}" "$(ecoda_view_input_name Joanito batch_effect_uncorrected)" "${HPC_SCRATCH_DIR}" ;;
     kfoury_lowres_ct) printf '%s/Kfoury/data/Kfoury_2021_34719426.rds' "${HPC_SCRATCH_DIR}" ;;
     myocardial_counts) printf '%s/Myocardial_infarction/data/Myocardial_Infarc_2.h5ad' "${HPC_SCRATCH_DIR}" ;;
-    bassex_cellsubtype) printf '%s/Bassez/data/BassezA_2021_33958794whole.rds' "${HPC_SCRATCH_DIR}" ;;
+    bassez_cellsubtype) printf '%s/Bassez/data/BassezA_2021_33958794whole.rds' "${HPC_SCRATCH_DIR}" ;;
     *) return 1 ;;
   esac
 }

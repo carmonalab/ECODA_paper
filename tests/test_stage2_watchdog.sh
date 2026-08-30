@@ -38,4 +38,49 @@ HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.inv
 [[ "$(grep -c '^SCHEDULER_ID=1001$' "${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs/run/status/watchdog")" == 1 ]]
 [[ "$(grep -c '^SCHEDULER_ID=1002$' "${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs/run/status/watchdog")" == 1 ]]
 case "$(cat "${CAPTURE}")" in *"FORCE_PREPROCESS=1"*) ;; *) echo "OOM retry dropped FORCE_PREPROCESS=1" >&2; exit 1 ;; esac
+BASSEZ_RUN_ID="bassez_run"
+BASSEZ_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs/${BASSEZ_RUN_ID}"
+BASSEZ_OUTPUT="${TMP_DIR}/home/scratch/ECODA_paper/Bassez/data/BassezA_2021_33958794whole.rds"
+BASSEZ_OWNER="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_owners/stage2/bassez_cellsubtype"
+mkdir -p "${BASSEZ_ROOT}/status" "${BASSEZ_ROOT}/manifests" \
+  "$(dirname "${BASSEZ_OUTPUT}")" "${BASSEZ_OWNER}"
+printf 'STAGE=stage2\nRUN_ID=%s\nSTATE=ACTIVE\n' "${BASSEZ_RUN_ID}" > "${BASSEZ_ROOT}/metadata"
+printf 'rds payload\n' > "${BASSEZ_OUTPUT}"
+printf 'RUN_ID=%s\nSTATE=ACTIVE\nSTAGE=stage2\nKEY=bassez_cellsubtype\n' \
+  "${BASSEZ_RUN_ID}" > "${BASSEZ_OWNER}/owner"
+BASSEZ_MANIFEST="${BASSEZ_ROOT}/manifests/steps.tsv"
+BASSEZ_JOB_FILE="${BASSEZ_ROOT}/manifests/jobs.tsv"
+printf 'bassez_cellsubtype\t%s\t%s\t-\t%s\n' \
+  "${ROOT}/src/2_dataset_specific_preprocessing/1.6_submit_bassez.sh" \
+  "${BASSEZ_OUTPUT}" "${BASSEZ_OWNER}" > "${BASSEZ_MANIFEST}"
+printf 'bassez_cellsubtype\t2001\n' > "${BASSEZ_JOB_FILE}"
+BASSEZ_CALLS_BEFORE="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
+HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.invalid STAGE2_FORCE=0 \
+  STAGE2_WATCHDOG_MAX_POLLS=1 bash "${ROOT}/src/2_dataset_specific_preprocessing/stage2_watchdog.sh" \
+  "${BASSEZ_RUN_ID}" "${BASSEZ_MANIFEST}" "${BASSEZ_JOB_FILE}" 128G 256G shared-cpu 1000
+[[ "$(grep '^STATE=' "${BASSEZ_ROOT}/status/watchdog")" == "STATE=OK" ]]
+[[ "$(grep '^STATE=' "${BASSEZ_OWNER}/owner")" == "STATE=OK" ]]
+[[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == "${BASSEZ_CALLS_BEFORE}" ]]
+
+INVALID_RUN_ID="invalid_bassez_run"
+INVALID_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs/${INVALID_RUN_ID}"
+mkdir -p "${INVALID_ROOT}/status" "${INVALID_ROOT}/manifests"
+printf 'STAGE=stage2\nRUN_ID=%s\nSTATE=ACTIVE\n' "${INVALID_RUN_ID}" > "${INVALID_ROOT}/metadata"
+INVALID_STEP="basse""x_cellsubtype"
+INVALID_MANIFEST="${INVALID_ROOT}/manifests/steps.tsv"
+INVALID_JOB_FILE="${INVALID_ROOT}/manifests/jobs.tsv"
+sed "s/^bassez_cellsubtype/${INVALID_STEP}/" "${BASSEZ_MANIFEST}" > "${INVALID_MANIFEST}"
+sed "s/^bassez_cellsubtype/${INVALID_STEP}/" "${BASSEZ_JOB_FILE}" > "${INVALID_JOB_FILE}"
+INVALID_CALLS_BEFORE="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.invalid STAGE2_FORCE=0 \
+  STAGE2_WATCHDOG_MAX_POLLS=1 bash "${ROOT}/src/2_dataset_specific_preprocessing/stage2_watchdog.sh" \
+  "${INVALID_RUN_ID}" "${INVALID_MANIFEST}" "${INVALID_JOB_FILE}" 128G 256G shared-cpu 1000 \
+  > "${TMP_DIR}/invalid.watchdog.log" 2>&1; then
+  echo "legacy Bassez manifest spelling unexpectedly accepted" >&2
+  exit 1
+fi
+[[ "$(grep '^STATE=' "${INVALID_ROOT}/status/watchdog")" == "STATE=FAIL" ]]
+[[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == "${INVALID_CALLS_BEFORE}" ]]
+[[ ! -e "${INVALID_ROOT}/manifests/jobs.retry_1.tsv" ]]
+
 echo "stage2 watchdog: OK"
