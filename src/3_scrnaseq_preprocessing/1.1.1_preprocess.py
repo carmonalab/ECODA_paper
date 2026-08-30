@@ -1,8 +1,8 @@
 import hashlib
 import os
 import sys
-import anndata as ad
 import numpy as np
+import anndata as ad
 import scanpy as sc
 import scipy.sparse as sp
 from pathlib import Path
@@ -168,15 +168,70 @@ def top_n_hvg_genes(adata, n):
 # ---------------------------------------------------------------------------
 # PCA -> Harmony -> neighbors -> Leiden, for one gene set
 # ---------------------------------------------------------------------------
+def _scale_sparse_for_pca(matrix, max_value=10):
+    """Scale sparse data without materializing its centered dense form.
+
+    ``sc.pp.pca`` centers each feature before decomposition.  For sparse
+    input, retain only the difference from the scaled value of an implicit
+    zero; the feature-wise constant that was removed is therefore immaterial
+    to PCA while the matrix remains sparse.
+    """
+    matrix = sp.csr_matrix(matrix, dtype=np.float64, copy=True)
+    matrix.sum_duplicates()
+
+    n_obs, n_vars = matrix.shape
+    values = matrix.data
+    columns = matrix.indices
+    column_sum = np.bincount(columns, weights=values, minlength=n_vars)
+    column_sum_sq = np.bincount(
+        columns, weights=values * values, minlength=n_vars
+    )
+    mean = column_sum / n_obs
+    if n_obs > 1:
+        variance = (column_sum_sq - column_sum * mean) / (n_obs - 1)
+        variance = np.maximum(variance, 0)
+    else:
+        variance = np.zeros(n_vars, dtype=np.float64)
+    std = np.sqrt(variance)
+    std[std == 0] = 1
+
+    if max_value is None:
+        baseline = -mean / std
+        scaled_values = (values - mean[columns]) / std[columns]
+    else:
+        baseline = np.clip(-mean / std, -max_value, max_value)
+        scaled_values = np.clip(
+            (values - mean[columns]) / std[columns],
+            -max_value,
+            max_value,
+        )
+    matrix.data = scaled_values - baseline[columns]
+    matrix.eliminate_zeros()
+    return matrix
+
+
 def compute_pca_and_store(adata, genes, key_suffix, n_pcs=50):
     """
     Subset to the gene set, scale, run PCA and store the embedding as
     adata.obsm[f"X_pca_{key_suffix}"]. Runs for every HVG size.
     Returns the subsetted object (used by compute_harmony_and_store).
     """
-    sub = adata[:, adata.var_names.isin(genes)].copy()
+    gene_mask = adata.var_names.isin(genes)
+    selected_x = adata.X[:, gene_mask]
+    if sp.issparse(selected_x):
+        selected_x = sp.csr_matrix(selected_x, copy=True)
+    else:
+        selected_x = np.array(selected_x, copy=True)
+    sub = ad.AnnData(
+        X=selected_x,
+        obs=adata.obs.copy(),
+        var=adata.var.loc[gene_mask].copy(),
+    )
 
-    sc.pp.scale(sub, max_value=10)
+    if sp.issparse(sub.X):
+        sub.X = _scale_sparse_for_pca(sub.X, max_value=10)
+    else:
+        sc.pp.scale(sub, max_value=10)
     n_comps = min(n_pcs, sub.n_vars - 1, sub.n_obs - 1)
     sc.pp.pca(sub, n_comps=n_comps, svd_solver="arpack")
 
@@ -228,9 +283,12 @@ def run_clustering(adata, rep_key, key_suffix, resolutions):
 # ---------------------------------------------------------------------------
 def base_preprocessing(adata):
     """
-    Extracts raw integer counts into adata.X upfront, standardizes gene symbols,
-    filters cells and genes on raw counts, vaults raw counts into layers['counts'],
-    and computes log-normalized expression in adata.X.
+    Uses raw integer counts as the temporary filter matrix, standardizes gene
+    symbols, filters cells and genes on raw counts, vaults one filtered counts
+    copy in layers["counts"], and computes log-normalized expression in X.
+    Integer raw inputs transfer matrix ownership to X by reference; after
+    filtering, one counts copy is vaulted before X is normalized and raw is
+    cleared.
     """
     counts_layer_present = "counts" in adata.layers
     if counts_layer_present:
@@ -239,23 +297,59 @@ def base_preprocessing(adata):
         # avoiding two full-cohort sparse duplicates for large inputs.
         adata.X = adata.layers["counts"]
     elif adata.raw is not None and adata.raw.X is not None:
-        raw_mat = adata.raw.X
-        sample_raw = raw_mat.data[:1000] if sp.issparse(raw_mat) else raw_mat.ravel()[:1000]
+        raw_container = adata.raw
+        raw_mat = raw_container.X
+        sample_raw = (
+            raw_mat.data[:1000]
+            if sp.issparse(raw_mat)
+            else raw_mat.ravel()[:1000]
+        )
         sample_raw_pos = sample_raw[sample_raw > 1e-6]
-        is_raw_int = bool(sample_raw_pos.size > 0 and np.all(np.abs(sample_raw_pos - np.round(sample_raw_pos)) < 1e-3))
+        is_raw_int = bool(
+            sample_raw_pos.size > 0
+            and np.all(np.abs(sample_raw_pos - np.round(sample_raw_pos)) < 1e-3)
+        )
         if is_raw_int:
-            raw_var = (
-                adata.raw.var.copy()
-                if hasattr(adata.raw, "var") and len(adata.raw.var) == raw_mat.shape[1]
-                else adata.var.copy()
-            )
-            # Construct fresh AnnData using raw.X and raw.var to keep gene dimensions aligned
-            adata = ad.AnnData(
-                X=adata.raw.X.copy(),
-                obs=adata.obs.copy(),
-                var=raw_var,
-                obsm=adata.obsm.copy(),
-            )
+            raw_shape = getattr(raw_mat, "shape", None)
+            adata_shape = adata.shape
+            raw_var = getattr(raw_container, "var", None)
+            raw_obs_names = getattr(raw_container, "obs_names", None)
+            raw_var_names = getattr(raw_container, "var_names", None)
+            if (
+                raw_shape is None
+                or len(raw_shape) != 2
+                or tuple(raw_shape) != tuple(adata_shape)
+            ):
+                raise ValueError(
+                    f"Raw matrix shape {raw_shape} does not match adata shape "
+                    f"{adata_shape}; cannot adopt raw counts."
+                )
+            if (
+                raw_var is None
+                or len(raw_var) != raw_shape[1]
+                or raw_var_names is None
+                or not raw_var.index.equals(raw_var_names)
+            ):
+                raise ValueError(
+                    "Raw variable metadata does not align with the raw matrix; "
+                    "cannot adopt raw counts."
+                )
+            if (
+                raw_obs_names is None
+                or len(raw_obs_names) != raw_shape[0]
+                or not raw_obs_names.equals(adata.obs_names)
+            ):
+                raise ValueError(
+                    "Raw observations do not align with adata observations; "
+                    "cannot adopt raw counts."
+                )
+
+            adata.var = raw_var.copy()
+            # Transfer matrix ownership to X and clear Raw before making the
+            # single filtered counts vault copy below.
+            adata.X = raw_mat
+            adata.raw = None
+            del raw_container, raw_mat
         elif adata.X is None:
             raise ValueError(
                 "Input has raw matrix with non-integer values and X is None; cannot preprocess."
@@ -414,6 +508,9 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
             # Subset on ORIGINAL sample/label values, before the sample column
             # is standardized (standardization can alter '-' or leading digits).
             adata_view = apply_subset_vars(adata_full, view_info.get("subset_vars", {}))
+            # Drop the parent binding so copied subsets do not retain the
+            # full-cohort matrix during downstream preprocessing.
+            del adata_full
             if adata_view.n_obs == 0:
                 raise ValueError(
                     f"Subset for {current_ds} / {view_name} is empty after "
