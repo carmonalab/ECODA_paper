@@ -89,26 +89,33 @@ def process_myocardial_file(
     adata = ad.read_h5ad(str(input_path))
     print(f"Loaded {input_path.name}: shape {adata.shape}, layers: {list(adata.layers.keys())}", flush=True)
 
-    # A valid counts layer is already the authoritative raw-count artifact.
-    # --force invalidates the sidecar and forces revalidation, but must not
-    # replace valid counts with an overflow-prone inversion of X.
-    if "counts" in adata.layers and _valid_counts_layer(
-        adata.layers["counts"], adata.shape
+    existing_counts = adata.layers.get("counts")
+    counts_csr = None
+    if existing_counts is not None and _valid_counts_layer(
+        existing_counts, adata.shape
     ):
+        if not force:
+            print(
+                "Layer 'counts' already satisfies the finite nonnegative "
+                "integer contract; skipping.",
+                flush=True,
+            )
+            return True
         print(
-            "Layer 'counts' already satisfies the finite nonnegative integer "
-            "contract; retaining it after full validation.",
+            "Layer 'counts' already satisfies the contract; --force requests "
+            "an atomic rewrite of the validated raw counts.",
             flush=True,
         )
-        return True
+        counts_csr = sp.csr_matrix(existing_counts, copy=True)
 
-    if adata.X is None:
-        raise ValueError("Cannot reconstruct counts: adata.X is None.")
+    if counts_csr is None:
+        if adata.X is None:
+            raise ValueError("Cannot reconstruct counts: adata.X is None.")
 
-    print("Reconstructing raw count matrix via cell-wise minimum step inversion...", flush=True)
-    counts_csr = reconstruct_raw_counts_matrix(adata.X)
+        print("Reconstructing raw count matrix via cell-wise minimum step inversion...", flush=True)
+        counts_csr = reconstruct_raw_counts_matrix(adata.X)
 
-    # Verification of reconstructed counts
+    # Verify the selected raw counts before publishing them.
     rec_data = counts_csr.data
     is_non_neg = bool(np.all(rec_data >= 0))
     is_int = bool(np.all(np.abs(rec_data - np.round(rec_data)) < 1e-3))
