@@ -168,6 +168,8 @@ def top_n_hvg_genes(adata, n):
 # ---------------------------------------------------------------------------
 # PCA -> Harmony -> neighbors -> Leiden, for one gene set
 # ---------------------------------------------------------------------------
+_SPARSE_SCALE_CHUNK_SIZE = 1 << 20
+
 def _scale_sparse_for_pca(matrix, max_value=10):
     """Scale sparse data without materializing its centered dense form.
 
@@ -176,36 +178,94 @@ def _scale_sparse_for_pca(matrix, max_value=10):
     zero; the feature-wise constant that was removed is therefore immaterial
     to PCA while the matrix remains sparse.
     """
-    matrix = sp.csr_matrix(matrix, dtype=np.float64, copy=True)
+    matrix_dtype = (
+        matrix.dtype if sp.issparse(matrix) else np.asarray(matrix).dtype
+    )
+    if np.issubdtype(matrix_dtype, np.floating):
+        matrix = sp.csr_matrix(matrix, copy=True)
+    else:
+        matrix = sp.csr_matrix(matrix, dtype=np.float64, copy=True)
     matrix.sum_duplicates()
 
     n_obs, n_vars = matrix.shape
     values = matrix.data
     columns = matrix.indices
-    column_sum = np.bincount(columns, weights=values, minlength=n_vars)
-    column_sum_sq = np.bincount(
-        columns, weights=values * values, minlength=n_vars
+    stats_dtype = np.result_type(values.dtype, np.float64)
+    column_sum = np.bincount(
+        columns,
+        weights=values,
+        minlength=n_vars,
     )
+    if column_sum.dtype != stats_dtype:
+        column_sum = column_sum.astype(stats_dtype, copy=False)
+    column_sum_sq = np.zeros(n_vars, dtype=stats_dtype)
+    chunk_size = _SPARSE_SCALE_CHUNK_SIZE
+    square_buffer = np.empty(
+        min(chunk_size, values.size),
+        dtype=stats_dtype,
+    )
+    for start in range(0, values.size, chunk_size):
+        stop = min(start + chunk_size, values.size)
+        chunk_columns = columns[start:stop]
+        np.multiply(
+            values[start:stop],
+            values[start:stop],
+            out=square_buffer[: stop - start],
+            casting="unsafe",
+        )
+        np.add(
+            column_sum_sq,
+            np.bincount(
+                chunk_columns,
+                weights=square_buffer[: stop - start],
+                minlength=n_vars,
+            ),
+            out=column_sum_sq,
+            casting="unsafe",
+        )
+
     mean = column_sum / n_obs
     if n_obs > 1:
-        variance = (column_sum_sq - column_sum * mean) / (n_obs - 1)
-        variance = np.maximum(variance, 0)
+        variance = column_sum_sq
+        np.multiply(column_sum, mean, out=column_sum)
+        np.subtract(variance, column_sum, out=variance)
+        variance /= n_obs - 1
+        np.maximum(variance, 0, out=variance)
     else:
-        variance = np.zeros(n_vars, dtype=np.float64)
-    std = np.sqrt(variance)
+        variance = np.zeros(n_vars, dtype=stats_dtype)
+    std = np.sqrt(variance, out=variance)
     std[std == 0] = 1
 
-    if max_value is None:
-        baseline = -mean / std
-        scaled_values = (values - mean[columns]) / std[columns]
-    else:
-        baseline = np.clip(-mean / std, -max_value, max_value)
-        scaled_values = np.clip(
-            (values - mean[columns]) / std[columns],
-            -max_value,
-            max_value,
+    baseline = np.empty_like(mean)
+    np.negative(mean, out=baseline)
+    np.divide(baseline, std, out=baseline)
+    if max_value is not None:
+        np.clip(baseline, -max_value, max_value, out=baseline)
+
+    for start in range(0, values.size, chunk_size):
+        stop = min(start + chunk_size, values.size)
+        chunk = values[start:stop]
+        chunk_columns = columns[start:stop]
+        np.subtract(
+            chunk,
+            mean[chunk_columns],
+            out=chunk,
+            casting="unsafe",
         )
-    matrix.data = scaled_values - baseline[columns]
+        np.divide(
+            chunk,
+            std[chunk_columns],
+            out=chunk,
+            casting="unsafe",
+        )
+        if max_value is not None:
+            np.clip(chunk, -max_value, max_value, out=chunk)
+        np.subtract(
+            chunk,
+            baseline[chunk_columns],
+            out=chunk,
+            casting="unsafe",
+        )
     matrix.eliminate_zeros()
     return matrix
 

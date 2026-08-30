@@ -75,6 +75,36 @@ def test_sparse_scale_matches_dense_scanpy_after_centering():
     assert dense_values[0, 3] == -10
 
 
+def test_sparse_scale_preserves_float32_dtype_and_centered_values():
+    values = np.array(
+        [
+            [100, 1, 0, -100],
+            [2, 2, 0, -2],
+            [0, 3, 0, 0],
+        ],
+        dtype=np.float32,
+    )
+
+    sparse_scaled = module._scale_sparse_for_pca(
+        sp.csr_matrix(values),
+        max_value=2,
+    )
+    assert sp.isspmatrix_csr(sparse_scaled)
+    assert sparse_scaled.dtype == np.dtype(np.float32)
+
+    dense_adata = ad.AnnData(X=values.copy())
+    module.sc.pp.scale(dense_adata, max_value=2)
+    sparse_centered = dense(sparse_scaled)
+    sparse_centered -= sparse_centered.mean(axis=0)
+    dense_values = np.asarray(dense_adata.X)
+    dense_centered = dense_values - dense_values.mean(axis=0)
+    np.testing.assert_allclose(
+        sparse_centered,
+        dense_centered,
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
 def test_compute_pca_uses_lightweight_sparse_subset():
     n_obs, n_vars = 6, 4
     obs = pd.DataFrame(index=[f"cell_{i}" for i in range(n_obs)])
@@ -139,6 +169,7 @@ def test_integer_raw_shape_mismatch_fails_closed():
 
 def main():
     test_sparse_scale_matches_dense_scanpy_after_centering()
+    test_sparse_scale_preserves_float32_dtype_and_centered_values()
     test_compute_pca_uses_lightweight_sparse_subset()
     test_integer_raw_counts_are_adopted_and_vaulted()
     test_integer_raw_shape_mismatch_fails_closed()
