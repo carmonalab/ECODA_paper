@@ -62,6 +62,21 @@ def reconstruct_raw_counts_matrix(X: sp.spmatrix | np.ndarray) -> sp.csr_matrix:
 
     return sp.csr_matrix((recovered_data, X.indices, X.indptr), shape=X.shape)
 
+def _valid_counts_layer(counts, shape: tuple[int, int]) -> bool:
+    """Return whether an existing raw-count layer satisfies the full contract."""
+    if getattr(counts, "shape", None) != shape:
+        return False
+    values = counts.data if sp.issparse(counts) else np.asarray(counts).reshape(-1)
+    try:
+        return bool(
+            values.size > 0
+            and np.isfinite(values).all()
+            and (values >= 0).all()
+            and np.equal(values, np.round(values)).all()
+        )
+    except (TypeError, ValueError):
+        return False
+
 
 def process_myocardial_file(
     input_path: Path, output_path: Path, force: bool = False
@@ -74,13 +89,18 @@ def process_myocardial_file(
     adata = ad.read_h5ad(str(input_path))
     print(f"Loaded {input_path.name}: shape {adata.shape}, layers: {list(adata.layers.keys())}", flush=True)
 
-    # Check if raw counts already exist and are valid integer counts
-    if not force and "counts" in adata.layers:
-        cnt = adata.layers["counts"]
-        c_data = cnt.data[:2000] if sp.issparse(cnt) else cnt.ravel()[:2000]
-        if c_data.size > 0 and np.all(np.abs(c_data - np.round(c_data)) < 1e-3) and c_data.min() >= 0:
-            print(f"Layer 'counts' already present with valid integer counts (min={c_data.min()}, max={c_data.max()}). Skipping (use --force to recompute).", flush=True)
-            return True
+    # A valid counts layer is already the authoritative raw-count artifact.
+    # --force invalidates the sidecar and forces revalidation, but must not
+    # replace valid counts with an overflow-prone inversion of X.
+    if "counts" in adata.layers and _valid_counts_layer(
+        adata.layers["counts"], adata.shape
+    ):
+        print(
+            "Layer 'counts' already satisfies the finite nonnegative integer "
+            "contract; retaining it after full validation.",
+            flush=True,
+        )
+        return True
 
     if adata.X is None:
         raise ValueError("Cannot reconstruct counts: adata.X is None.")
@@ -147,7 +167,7 @@ def main():
         "--force",
         action="store_true",
         default=False,
-        help="Recompute even if layers['counts'] already exists",
+        help="Revalidate existing counts; recompute only when invalid or missing",
     )
     args = parser.parse_args()
 
