@@ -176,12 +176,19 @@ validate_outputs() {
         echo "Missing/empty Stage 2 output: ${path}" >&2
         return 1
       }
+      ecoda_validate_stage2_output "${step}" "${path}" || {
+        echo "Stage 2 semantic output validation failed: ${path}" >&2
+        return 1
+      }
       case "${path}" in
         *.h5ad)
           "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/artifact_contract.py" \
             --path "${path}" --kind h5ad >/dev/null 2>&1 || return 1
           ;;
       esac
+      ecoda_write_checksum "${path}" ||
+        return 1
+      ecoda_validate_checksum "${path}" || return 1
       if [[ "${step}" == "combinedpbmc" ]]; then
         rm -f "${HPC_SCRATCH_DIR}/CombinedPBMC/data/combined_pbmc_batch_effect_analysis.h5ad" \
           "${HPC_SCRATCH_DIR}/CombinedPBMC/data/combined_pbmc_batch_effect_analysis.h5ad.md5"
