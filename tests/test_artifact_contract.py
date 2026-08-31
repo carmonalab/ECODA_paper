@@ -47,6 +47,24 @@ def make_literal_index_h5ad(path: Path) -> None:
         handle.attrs["shape"] = (2, 2)
 
 
+def make_counts_only_h5ad(path: Path) -> None:
+    with h5py.File(path, "w") as handle:
+        layers = handle.create_group("layers")
+        counts = layers.create_group("counts")
+        counts.attrs["encoding-type"] = "csr_matrix"
+        counts.attrs["shape"] = (2, 2)
+        counts.create_dataset("data", data=np.asarray([1.0], dtype="float32"))
+        counts.create_dataset("indices", data=np.asarray([0], dtype="int32"))
+        counts.create_dataset("indptr", data=np.asarray([0, 1, 1], dtype="int32"))
+
+        obs = handle.create_group("obs")
+        obs.attrs["_index"] = b"barcodes"
+        obs.create_dataset("barcodes", data=np.asarray(["cell-1", "cell-2"], dtype="S6"))
+        var = handle.create_group("var")
+        var.create_dataset("_index", data=np.asarray(["gene-1", "gene-2"], dtype="S6"))
+        handle.attrs["shape"] = (2, 2)
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="ecoda-artifact-contract-") as raw:
         root = Path(raw)
@@ -73,6 +91,16 @@ def main() -> None:
         literal = root / "literal-index.h5ad"
         make_literal_index_h5ad(literal)
         module.validate_artifact(literal, "h5ad")
+
+        counts_only = root / "counts-only.h5ad"
+        make_counts_only_h5ad(counts_only)
+        module.validate_artifact(counts_only, "h5ad")
+
+        missing_matrix = root / "missing-matrix.h5ad"
+        make_literal_index_h5ad(missing_matrix)
+        with h5py.File(missing_matrix, "r+") as handle:
+            del handle["X"]
+        expect_failure(missing_matrix, "h5ad missing matrix storage")
     print("artifact contract index checks OK")
 
 
