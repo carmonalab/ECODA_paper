@@ -26,7 +26,21 @@ def validate_artifact(path: str | Path, kind: str) -> None:
         missing = [group for group in ("X", "obs", "var") if group not in handle]
         if missing:
             raise ValueError(f"h5ad missing required groups {missing}: {artifact}")
-        if "_index" not in handle["obs"] and "_index" not in handle["obs"].keys():
+        obs = handle["obs"]
+        if "_index" in obs.attrs:
+            index_name = obs.attrs["_index"]
+            if isinstance(index_name, bytes):
+                try:
+                    index_name = index_name.decode("utf-8")
+                except UnicodeDecodeError:
+                    index_name = None
+            if (
+                not isinstance(index_name, str)
+                or not index_name.strip()
+                or index_name not in obs
+            ):
+                raise ValueError(f"h5ad obs index is missing: {artifact}")
+        elif "_index" not in obs:
             raise ValueError(f"h5ad obs index is missing: {artifact}")
         shape = handle.attrs.get("shape")
         if shape is not None and any(int(value) <= 0 for value in shape):
