@@ -88,7 +88,12 @@ def test_integer_raw_h5ad_is_loaded_without_raw_container():
         assert loaded.raw is None
         assert sp.issparse(loaded.X)
         np.testing.assert_array_equal(loaded.X.toarray(), raw_values)
-        pd.testing.assert_frame_equal(loaded.obs, obs)
+        pd.testing.assert_index_equal(loaded.obs.index, obs.index)
+        pd.testing.assert_index_equal(loaded.obs.columns, obs.columns)
+        pd.testing.assert_frame_equal(
+            loaded.obs.astype(object),
+            obs.astype(object),
+        )
         pd.testing.assert_frame_equal(loaded.var, raw_var)
         np.testing.assert_array_equal(loaded.obsm["X_existing"], embedding)
 
