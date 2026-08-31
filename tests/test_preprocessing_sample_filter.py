@@ -33,6 +33,7 @@ def main():
     sample_ids = ["A"] * 500 + ["B"] * 499 + ["C"] * 501
     adata = make_adata(sample_ids)
     original_obs = adata.obs.copy(deep=True)
+    original_X = adata.X.copy()
     filtered, removed = remove_low_cellcount_samples(adata)
 
     assert filtered.n_obs == 1001
@@ -42,13 +43,20 @@ def main():
     assert filtered.obs_names[-1] == "cell_1499"
     assert adata.n_obs == 1500
     pd.testing.assert_frame_equal(adata.obs, original_obs)
+    np.testing.assert_array_equal(adata.X, original_X)
     assert filtered is not adata
+    filtered.X[0, 0] = 7
+    assert adata.X[0, 0] == original_X[0, 0]
+    filtered.obs.iloc[0, 0] = "detached"
+    assert adata.obs.iloc[0, 0] == original_obs.iloc[0, 0]
 
+    complete_input = make_adata(["A"] * 500)
     complete, removed_complete = remove_low_cellcount_samples(
-        make_adata(["A"] * 500), min_cells_per_sample=500
+        complete_input, min_cells_per_sample=500
     )
     assert complete.n_obs == 500
     assert removed_complete == {}
+    assert complete is complete_input
 
     expect_error(
         KeyError,

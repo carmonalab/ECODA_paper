@@ -170,21 +170,24 @@ def top_n_hvg_genes(adata, n):
 # ---------------------------------------------------------------------------
 _SPARSE_SCALE_CHUNK_SIZE = 1 << 20
 
-def _scale_sparse_for_pca(matrix, max_value=10):
+def _scale_sparse_for_pca(matrix, max_value=10, *, copy=True):
     """Scale sparse data without materializing its centered dense form.
 
     ``sc.pp.pca`` centers each feature before decomposition.  For sparse
     input, retain only the difference from the scaled value of an implicit
     zero; the feature-wise constant that was removed is therefore immaterial
     to PCA while the matrix remains sparse.
+
+    ``copy`` controls whether floating-point input is copied before scaling.
+    Nonfloating input is converted to ``float64`` as required.
     """
     matrix_dtype = (
         matrix.dtype if sp.issparse(matrix) else np.asarray(matrix).dtype
     )
     if np.issubdtype(matrix_dtype, np.floating):
-        matrix = sp.csr_matrix(matrix, copy=True)
+        matrix = sp.csr_matrix(matrix, copy=copy)
     else:
-        matrix = sp.csr_matrix(matrix, dtype=np.float64, copy=True)
+        matrix = sp.csr_matrix(matrix, dtype=np.float64, copy=copy)
     matrix.sum_duplicates()
 
     n_obs, n_vars = matrix.shape
@@ -278,9 +281,7 @@ def compute_pca_and_store(adata, genes, key_suffix, n_pcs=50):
     """
     gene_mask = adata.var_names.isin(genes)
     selected_x = adata.X[:, gene_mask]
-    if sp.issparse(selected_x):
-        selected_x = sp.csr_matrix(selected_x, copy=True)
-    else:
+    if not sp.issparse(selected_x):
         selected_x = np.array(selected_x, copy=True)
     sub = ad.AnnData(
         X=selected_x,
@@ -289,7 +290,7 @@ def compute_pca_and_store(adata, genes, key_suffix, n_pcs=50):
     )
 
     if sp.issparse(sub.X):
-        sub.X = _scale_sparse_for_pca(sub.X, max_value=10)
+        sub.X = _scale_sparse_for_pca(sub.X, max_value=10, copy=False)
     else:
         sc.pp.scale(sub, max_value=10)
     n_comps = min(n_pcs, sub.n_vars - 1, sub.n_obs - 1)
@@ -510,6 +511,7 @@ def process_view(
                     f"{key_suffix}_harmony",
                     resolutions,
                 )
+        del sub
 
     return adata
 

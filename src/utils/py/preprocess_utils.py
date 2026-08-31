@@ -254,6 +254,9 @@ def remove_low_cellcount_samples(
             f"threshold={min_cells_per_sample}"
         )
 
-    filtered = adata[keep_mask].copy()
+    if bool(keep_mask.all()):
+        filtered = adata
+    else:
+        filtered = adata[keep_mask].copy()
     removed_counts = {str(sample): int(count) for sample, count in removed.items()}
     return filtered, removed_counts

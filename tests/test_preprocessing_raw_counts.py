@@ -60,8 +60,13 @@ def test_sparse_scale_matches_dense_scanpy_after_centering():
     values[0, 3] = -100
     values[1, 3] = -2
 
-    sparse_scaled = module._scale_sparse_for_pca(sp.csr_matrix(values))
+    source = sp.csr_matrix(values)
+    source_before = source.copy()
+    sparse_scaled = module._scale_sparse_for_pca(source)
     assert sp.isspmatrix_csr(sparse_scaled)
+    np.testing.assert_array_equal(source.data, source_before.data)
+    np.testing.assert_array_equal(source.indices, source_before.indices)
+    np.testing.assert_array_equal(source.indptr, source_before.indptr)
 
     dense_adata = ad.AnnData(X=values.copy())
     module.sc.pp.scale(dense_adata, max_value=10)
@@ -111,6 +116,7 @@ def test_compute_pca_uses_lightweight_sparse_subset():
     var = pd.DataFrame(index=[f"gene_{i}" for i in range(n_vars)])
     values = np.arange(n_obs * n_vars, dtype=np.float64).reshape(n_obs, n_vars)
     adata = ad.AnnData(X=sp.csr_matrix(values), obs=obs, var=var)
+    parent_x_before = adata.X.copy()
     adata.layers["counts"] = sp.csr_matrix(values)
 
     original_pca = module.sc.pp.pca
@@ -133,6 +139,9 @@ def test_compute_pca_uses_lightweight_sparse_subset():
     assert len(sub.layers) == 0
     assert list(sub.var_names) == ["gene_0", "gene_2"]
     assert "X_pca_sparse_subset" in adata.obsm
+    np.testing.assert_array_equal(adata.X.data, parent_x_before.data)
+    np.testing.assert_array_equal(adata.X.indices, parent_x_before.indices)
+    np.testing.assert_array_equal(adata.X.indptr, parent_x_before.indptr)
 
 def test_integer_raw_counts_are_adopted_and_vaulted():
     module.standardize_gene_symbols = lambda _: None
