@@ -369,6 +369,9 @@ def base_preprocessing(adata):
             sample_raw_pos.size > 0
             and np.all(np.abs(sample_raw_pos - np.round(sample_raw_pos)) < 1e-3)
         )
+        # Drop sample views before releasing the source AnnData so they cannot
+        # keep a full dense raw matrix alive through the remaining pipeline.
+        del sample_raw, sample_raw_pos
         if is_raw_int:
             raw_shape = getattr(raw_mat, "shape", None)
             adata_shape = adata.shape
@@ -378,16 +381,17 @@ def base_preprocessing(adata):
             if (
                 raw_shape is None
                 or len(raw_shape) != 2
-                or tuple(raw_shape) != tuple(adata_shape)
+                or raw_shape[0] != adata_shape[0]
             ):
                 raise ValueError(
-                    f"Raw matrix shape {raw_shape} does not match adata shape "
-                    f"{adata_shape}; cannot adopt raw counts."
+                    f"Raw matrix shape {raw_shape} does not match adata "
+                    f"observation shape {adata_shape[0]}; cannot adopt raw counts."
                 )
             if (
                 raw_var is None
                 or len(raw_var) != raw_shape[1]
                 or raw_var_names is None
+                or len(raw_var_names) != raw_shape[1]
                 or not raw_var.index.equals(raw_var_names)
             ):
                 raise ValueError(
@@ -404,12 +408,30 @@ def base_preprocessing(adata):
                     "cannot adopt raw counts."
                 )
 
-            adata.var = raw_var.copy()
-            # Transfer matrix ownership to X and clear Raw before making the
-            # single filtered counts vault copy below.
-            adata.X = raw_mat
-            adata.raw = None
-            del raw_container, raw_mat
+            if raw_shape[1] != adata_shape[1]:
+                # Capture only the metadata needed by the replacement object,
+                # then release the old normalized-X/raw AnnData ownership
+                # before adopting raw.X by reference.
+                raw_obs = adata.obs.copy()
+                raw_var_copy = raw_var.copy()
+                existing_obsm = adata.obsm.copy()
+                adata.raw = None
+                adata.X = None
+                del raw_container, adata
+                adata = ad.AnnData(
+                    X=raw_mat,
+                    obs=raw_obs,
+                    var=raw_var_copy,
+                    obsm=existing_obsm,
+                )
+                del raw_obs, raw_var_copy, existing_obsm, raw_var, raw_mat
+            else:
+                adata.var = raw_var.copy()
+                # Transfer matrix ownership to X and clear Raw before making
+                # the single filtered counts vault copy below.
+                adata.X = raw_mat
+                adata.raw = None
+                del raw_container, raw_mat
         elif adata.X is None:
             raise ValueError(
                 "Input has raw matrix with non-integer values and X is None; cannot preprocess."

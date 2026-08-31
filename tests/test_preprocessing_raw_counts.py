@@ -151,13 +151,46 @@ def test_integer_raw_counts_are_adopted_and_vaulted():
     assert "normalized_marker" not in processed.var
 
 
+def test_integer_raw_variable_expansion_is_adopted():
+    module.standardize_gene_symbols = lambda _: None
+    adata, _, _ = make_adata()
+    n_raw_vars = 120
+    raw_values = np.arange(
+        1, adata.n_obs * n_raw_vars + 1, dtype=np.int32
+    ).reshape(adata.n_obs, n_raw_vars)
+    raw_var = pd.DataFrame(
+        {"raw_marker": np.arange(n_raw_vars, dtype=np.int32)},
+        index=[f"raw_gene_{i}" for i in range(n_raw_vars)],
+    )
+    obsm_values = np.arange(adata.n_obs * 2, dtype=np.float32).reshape(
+        adata.n_obs, 2
+    )
+    adata.obsm["existing"] = obsm_values
+    adata.raw = ad.AnnData(
+        X=sp.csr_matrix(raw_values),
+        obs=adata.obs.copy(),
+        var=raw_var,
+    )
+
+    processed = module.base_preprocessing(adata)
+
+    assert processed is not adata
+    assert processed.shape == raw_values.shape
+    np.testing.assert_array_equal(dense(processed.layers["counts"]), raw_values)
+    assert processed.raw is None
+    assert adata.raw is None
+    assert adata.X is None
+    np.testing.assert_array_equal(processed.obsm["existing"], obsm_values)
+    assert list(processed.var_names) == list(raw_var.index)
+
+
 def test_integer_raw_shape_mismatch_fails_closed():
     module.standardize_gene_symbols = lambda _: None
     adata, raw_values, raw_var = make_adata()
     adata.raw = ad.AnnData(
-        X=sp.csr_matrix(raw_values[:, :-1]),
-        obs=adata.obs.copy(),
-        var=raw_var.iloc[:-1].copy(),
+        X=sp.csr_matrix(raw_values[:-1, :]),
+        obs=adata.obs.iloc[:-1].copy(),
+        var=raw_var.copy(),
     )
 
     try:
@@ -172,6 +205,7 @@ def main():
     test_sparse_scale_preserves_float32_dtype_and_centered_values()
     test_compute_pca_uses_lightweight_sparse_subset()
     test_integer_raw_counts_are_adopted_and_vaulted()
+    test_integer_raw_variable_expansion_is_adopted()
     test_integer_raw_shape_mismatch_fails_closed()
     print("raw-count preprocessing contracts OK")
 
