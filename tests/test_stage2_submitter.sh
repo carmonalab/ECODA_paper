@@ -46,6 +46,7 @@ JOANITO_CALL="$(sed -n '3p' "${CAPTURE}")"
 case "${JOANITO_CALL}" in *"--dependency="*) echo "Joanito was artificially serialized" >&2; exit 1 ;; esac
 WATCHDOG_CALL="$(sed -n '4p' "${CAPTURE}")"
 case "${WATCHDOG_CALL}" in *"--dependency=afterany:710001:710002:710003"*) ;; *) echo "aggregate watchdog dependency missing" >&2; exit 1 ;; esac
+case "${WATCHDOG_CALL}" in *"--mem=64G"*) ;; *) echo "watchdog default memory missing" >&2; exit 1 ;; esac
 BASSEZ_OUTPUT="$(
   HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
   STAGE2_SUBMITTER_TEST=1 bash "${ROOT}/src/2_dataset_specific_preprocessing/1_submit_hpc.sh" \

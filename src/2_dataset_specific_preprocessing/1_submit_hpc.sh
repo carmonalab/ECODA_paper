@@ -434,8 +434,9 @@ fi
 rm -f "${SCHEDULER_IDS_TMP}"
 JOB_IDS="$(cut -f2 "${JOB_FILE}" | paste -sd: -)"
 set +e
+# The watchdog deserializes the full Joanito RDS for mandatory semantic validation.
 watchdog_output="$(sbatch --parsable --wait --dependency="afterany:${JOB_IDS}" \
-  --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem=2G \
+  --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem="${STAGE2_WATCHDOG_MEM:-64G}" \
   --time="${STAGE2_WATCHDOG_TIME_LIMIT:-12:00:00}" \
   --output="${LOGS_DIR}/stage2_watchdog_%j.log" \
   --error="${LOGS_DIR}/stage2_watchdog_%j.err" --mail-user="${USER_EMAIL}" \
