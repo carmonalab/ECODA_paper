@@ -1,3 +1,5 @@
+import anndata as ad
+import numpy as np
 import scipy.sparse as sp
 import pandas as pd
 import scanpy as sc
@@ -123,6 +125,158 @@ convert_rds_to_raw_h5ad_r = ro.globalenv["convert_rds_to_raw_h5ad"]
 # ---------------------------------------------------------------------------
 # Loading helpers
 # ---------------------------------------------------------------------------
+_H5AD_RAW_SAMPLE_COLUMNS = 1000
+
+
+def _close_backed_adata(adata):
+    """Close an AnnData file opened in backed mode."""
+    file_manager = getattr(adata, "file", None)
+    close = getattr(file_manager, "close", None)
+    if callable(close):
+        close()
+        return
+    close = getattr(adata, "close", None)
+    if callable(close):
+        close()
+
+
+def _raw_matrix_sample(matrix):
+    """Read at most one sparse row and 1,000 values from a backed matrix."""
+    is_sparse = sp.issparse(matrix) or getattr(matrix, "format", None) in {
+        "csr",
+        "csc",
+    }
+    if is_sparse:
+        # Read the full first sparse row so counts in columns beyond the
+        # leading sample window still provide integer evidence. Keep only a
+        # bounded number of stored values for the dtype check.
+        sample = matrix[:1, :]
+        values = sample.data
+    else:
+        sample = matrix[:1, :_H5AD_RAW_SAMPLE_COLUMNS]
+        values = np.asarray(sample).reshape(-1)
+    return values[:_H5AD_RAW_SAMPLE_COLUMNS]
+
+
+def _raw_matrix_is_integer(matrix):
+    """Conservatively detect integer-like count values without full loading."""
+    try:
+        sample = _raw_matrix_sample(matrix)
+        sample_positive = sample[sample > 1e-6]
+        return bool(
+            sample_positive.size > 0
+            and np.all(
+                np.abs(sample_positive - np.round(sample_positive)) < 1e-3
+            )
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _materialize_raw_matrix(matrix):
+    """Materialize only a raw matrix, retaining sparse storage where possible."""
+    to_memory = getattr(matrix, "to_memory", None)
+    if callable(to_memory):
+        return to_memory()
+    if sp.issparse(matrix):
+        return matrix.copy()
+    return np.asarray(matrix)
+
+
+def _load_h5ad_input(input_path):
+    """Load H5AD counts from raw.X without materializing normalized X."""
+    backed = sc.read_h5ad(input_path, backed="r")
+    use_fallback = False
+    loaded = None
+    try:
+        # A counts layer is already the authoritative raw representation. Keep
+        # the ordinary in-memory read path rather than selecting raw.X.
+        if "counts" in backed.layers:
+            use_fallback = True
+        else:
+            raw_container = getattr(backed, "raw", None)
+            raw_matrix = (
+                getattr(raw_container, "X", None)
+                if raw_container is not None
+                else None
+            )
+            if raw_matrix is None:
+                use_fallback = True
+            else:
+                raw_shape = getattr(raw_matrix, "shape", None)
+                backed_obs = backed.obs
+                backed_obs_names = getattr(backed, "obs_names", backed_obs.index)
+                backed_n_obs = len(backed_obs_names)
+                if (
+                    raw_shape is None
+                    or len(raw_shape) != 2
+                    or raw_shape[0] != backed_n_obs
+                ):
+                    raise ValueError(
+                        f"Raw matrix shape {raw_shape} does not match adata "
+                        f"observation shape {backed_n_obs}; cannot adopt raw counts."
+                    )
+                if not _raw_matrix_is_integer(raw_matrix):
+                    use_fallback = True
+                else:
+                    raw_var = getattr(raw_container, "var", None)
+                    raw_var_index = (
+                        getattr(raw_var, "index", None)
+                        if raw_var is not None
+                        else None
+                    )
+                    raw_var_names = getattr(raw_container, "var_names", None)
+                    if (
+                        raw_var is None
+                        or raw_var_index is None
+                        or len(raw_var) != raw_shape[1]
+                        or raw_var_names is None
+                        or len(raw_var_names) != raw_shape[1]
+                        or not pd.Index(raw_var_index).equals(
+                            pd.Index(raw_var_names)
+                        )
+                    ):
+                        raise ValueError(
+                            "Raw variable metadata does not align with the raw "
+                            "matrix; cannot adopt raw counts."
+                        )
+
+                    raw_obs = getattr(raw_container, "obs", None)
+                    raw_obs_names = (
+                        getattr(raw_obs, "index", None)
+                        if raw_obs is not None
+                        else getattr(raw_container, "obs_names", None)
+                    )
+                    if (
+                        raw_obs_names is None
+                        or len(raw_obs_names) != raw_shape[0]
+                        or not pd.Index(raw_obs_names).equals(
+                            pd.Index(backed_obs_names)
+                        )
+                    ):
+                        raise ValueError(
+                            "Raw observations do not align with adata observations; "
+                            "cannot adopt raw counts."
+                        )
+
+                    raw_obs_copy = backed_obs.copy()
+                    raw_var_copy = raw_var.copy()
+                    existing_obsm = backed.obsm.copy()
+                    raw_matrix = _materialize_raw_matrix(raw_matrix)
+                    loaded = ad.AnnData(
+                        X=raw_matrix,
+                        obs=raw_obs_copy,
+                        var=raw_var_copy,
+                        obsm=existing_obsm,
+                    )
+    finally:
+        _close_backed_adata(backed)
+
+    if use_fallback:
+        return sc.read_h5ad(input_path)
+    return loaded
+
+
 def load_single_input(input_name, input_dir, output_dir):
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
@@ -173,7 +327,7 @@ def load_single_input(input_name, input_dir, output_dir):
                 adata.X = adata.layers["counts"].copy()
         return adata
     elif str(input_name).endswith(".h5ad"):
-        return sc.read_h5ad(input_path)
+        return _load_h5ad_input(input_path)
     else:
         raise ValueError(f"Unsupported file format: {input_name}")
 
