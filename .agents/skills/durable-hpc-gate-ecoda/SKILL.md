@@ -14,7 +14,7 @@ This is the ECODA policy layer for the global `durable-hpc-gate` skill. It
 keeps long-running Slurm wrappers on Bamboo durable across SSH/session loss
 without copying the global orchestration implementation. The profile is
 repository-aware: it checks the ECODA checkout, canonical configuration and
-artifact roots, scientific invariants, serialized benchmark policy, and the
+artifact roots, scientific invariants, benchmark wave serialization, and the
 terminal accounting/audit contract.
 
 The profile contains no credentials, email addresses, scheduler secrets, or
@@ -59,11 +59,20 @@ uv run "$GLOBAL" prepare \
   --remote-runner "$REMOTE_RUNNER" \
   --remote-log "${REMOTE_ROOT}.log" --remote-status "${REMOTE_ROOT}.status.json"
 
+
 uv run "$GLOBAL" reconcile --manifest "$MANIFEST" --profile "$PROFILE" \
   --output "$PWD/.gate/${GATE_ID}.reconcile.json"
 uv run "$GLOBAL" launch --manifest "$MANIFEST" --profile "$PROFILE" \
   --output "$PWD/.gate/${GATE_ID}.launch.json"
 ```
+
+`serialization_group` is the required explicit cross-manifest mutex identity.
+Launch takes a deterministic lock keyed by project, profile, profile digest,
+and group; an active `RUNNING` sibling with that identity records a
+`resource_lock_conflict` discrepancy, moves this gate to `PRELAUNCH_STOP`, and
+is not launched. Distinct groups may be prepared and launched in parallel,
+including gates that share a reviewed predecessor. Reviewed dependency lineage
+is independent of `serialization_group`.
 
 After `launch` returns, the harness owns exactly one durable waiter. Start it
 as an asynchronous, unbounded call (`async=true`, `timeout=0` in the harness;
@@ -134,7 +143,8 @@ Python implementation.
 ### 1. Check the authoritative plan before preparing
 
 - Use the existing authoritative `.kilo` execution-plan checkpoint. Record the
-  gate ID, exact immutable wrapper, serialization group, manifest, and profile.
+  gate ID, exact immutable wrapper, opaque serialization group, manifest, and
+  profile.
 - On successful launch set that checkpoint to `RUNNING`; after terminal
   inspection set it to `COMPLETED` or `FAILED` with links to status and audit
   evidence. Preserve the discrepancy history.
@@ -159,21 +169,29 @@ Python implementation.
   `datasets.json` without explicit user confirmation. Publication figures are
   fixed rather than removed.
 
-### 3. Serialize benchmark wrappers
+### 3. Coordinate benchmark waves and reviewed lineage
 
-- A top-level benchmark wrapper is one member of its named serialization
-  group. Prepare repeatable absolute `--dependency-manifest` paths and launch
-  only after every predecessor in that group is terminal `COMPLETED`, has a
-  passing saved audit, and has reviewer approval when required.
-- The exact command string in the manifest is immutable. Do not launch two
-  top-level wrappers for the same serialization group, manually split a
-  wrapper, or rerun a wrapper after an ambiguous launch.
+- `serialization_group` is the required explicit cross-manifest mutex identity
+  for a matching project, profile, and profile digest. Before any remote
+  launch, `launch` takes its deterministic group lock and scans sibling
+  authoritative manifests for an active `RUNNING` gate with that identity.
+  Such a sibling records a `resource_lock_conflict` discrepancy, enters
+  `PRELAUNCH_STOP`, and is not launched. Distinct groups may be prepared and
+  launched concurrently, including gates that share a reviewed predecessor.
+- A top-level benchmark wrapper declares reviewed predecessor lineage through
+  repeatable absolute `--dependency-manifest` paths. Launch checks every
+  predecessor for the same project, profile, and profile digest, state
+  `COMPLETED`, a passing first audit, required reviewer approval, and a bound
+  `local_manifest`, without requiring matching `serialization_group`.
+  Dependency lineage is independent of the mutex identity.
+- The exact command string in the manifest is immutable. Do not manually split
+  a wrapper or rerun a wrapper after an ambiguous launch.
 - Existing remote evidence may be adopted only after the complete remote
-  manifest validates and binds every required identity/path field. A tmux
-  session must have exactly one pane across all windows whose
-  `pane_start_command` is the declared runner; process fallback parses exact
-  argv rather than accepting a runner-path substring. Any mismatch is a
-  fail-closed stop.
+  manifest validates and binds every required identity/path field, including
+  `serialization_group` and `dependency_manifests`. A tmux session must have
+  exactly one pane across all windows whose `pane_start_command` is the
+  declared runner; process fallback parses exact argv rather than accepting a
+  runner-path substring. Any mismatch is a fail-closed stop.
 
 ### 4. Launch, wait, and inspect durably
 
@@ -205,9 +223,14 @@ Python implementation.
   `IN_PROGRESS` without repeating accounting or audits. Never poll
   `squeue`/`sacct` or use an event as evidence.
 - A Luna Max **reviewer** invokes the second `inspect --approve-reviewer`
-  phase. That phase records approval without rerunning audit/accounting. Only
-  a reviewed `COMPLETED` gate releases the next serialized gate, and every
-  dependency must bind the same project, profile, and profile digest.
+  phase. That phase records approval without rerunning audit/accounting.
+  Only a reviewed `COMPLETED` predecessor releases a dependent gate;
+  dependency lineage is independent of `serialization_group`. Before remote
+  launch, the deterministic same-group lock rejects an active `RUNNING`
+  sibling with the same project/profile/profile-digest/group, records
+  `resource_lock_conflict`, and moves this gate to `PRELAUNCH_STOP`. Distinct
+  groups may proceed in parallel, including gates sharing a reviewed
+  predecessor.
 
 ### 5. Preserve scientific and artifact contracts
 
@@ -306,4 +329,7 @@ and must never be converted into a polling loop.
 - Relaunching after an SSH drop, treating event delivery as completion, or
   manually rsyncing partial outputs after a failure.
 - Polling while a subagent remains alive, running more than one terminal
-  `sacct`, or releasing the next benchmark before inspect and Luna Max review.
+  `sacct`, releasing a dependent gate before inspect and Luna Max review, or
+  treating `serialization_group` as dependency lineage rather than the
+  required mutex identity, or ignoring a `resource_lock_conflict`
+  `PRELAUNCH_STOP`.
