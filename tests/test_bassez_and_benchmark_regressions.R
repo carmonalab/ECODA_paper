@@ -388,11 +388,14 @@ pipeline_env$process_coda_fig <- function(...) {
 composition_results_dir <- tempfile("ecoda_composition_results-")
 dir.create(composition_results_dir, recursive = TRUE)
 composition_obs <- data.frame(
-  Sample = c("sample_1", "sample_2"),
+  Sample = factor(
+    c("sample_2", "sample_1", "sample_2"),
+    levels = c("sample_1", "sample_2")
+  ),
   stringsAsFactors = FALSE
 )
 composition_labels <- factor(c("group_1", "group_2"))
-names(composition_labels) <- composition_obs$Sample
+names(composition_labels) <- unique(as.character(composition_obs$Sample))
 composition_metadata <- composition_obs
 composition_pca <- matrix(1, nrow = 2, ncol = 1)
 composition_pb <- list(pb = matrix(1, nrow = 1, ncol = 2))
@@ -414,6 +417,22 @@ run_composition <- function(force) {
   )
 }
 run_composition(force = FALSE)
+metadata_bundle <- readRDS(file.path(
+  composition_results_dir,
+  "Toy_metadata.rds"
+))
+stopifnot(identical(
+  names(metadata_bundle$labels),
+  c("sample_2", "sample_1")
+))
+stopifnot(identical(
+  names(metadata_bundle$cells_per_sample),
+  c("sample_2", "sample_1")
+))
+stopifnot(identical(
+  as.integer(metadata_bundle$cells_per_sample),
+  c(2L, 1L)
+))
 composition_bundle <- file.path(
   composition_results_dir,
   "Toy_Avg_PCA_embedding.rds"

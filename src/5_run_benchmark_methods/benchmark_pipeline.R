@@ -1396,7 +1396,9 @@ run_composition_methods_hpc <- function(
             "]; skipping annotation-driven composition combos")
   }
 
-  cells_per_sample <- table(obs[[sample_col]])
+  cells_per_sample <- table(factor(
+    as.character(obs[[sample_col]]), levels = as.character(names(labels))
+  ))
   metadata_bundle <- list(
     labels = labels,
     n_cells = nrow(obs),
