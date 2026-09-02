@@ -60,6 +60,7 @@ ecoda_validate_checksum_record "${SOURCE}" "${ECODA_CHECKSUM_MD5}" \
   "${ECODA_CHECKSUM_SIZE}"
 source "${ROOT}/src/utils/bash/ecoda_runtime.sh"
 source "${ROOT}/src/utils/bash/h5ad_preflight_submit.sh"
+ecoda_wait_h5ad_preflight_status_files "${MANIFEST}" "${STATUS_DIR}"
 export PATH="${TMP_DIR}:${PATH}"
 runtime_export="$(ecoda_runtime_export_csv stage3 0)"
 preflight_id="$(ecoda_submit_h5ad_preflight \

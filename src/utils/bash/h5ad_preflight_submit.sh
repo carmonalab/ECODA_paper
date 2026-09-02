@@ -45,3 +45,26 @@ ecoda_submit_h5ad_preflight() {
   fi
   return "${rc}"
 }
+
+# A completed Slurm array can publish its run-owned status files a short time
+# after sbatch --wait returns on the shared filesystem.  Wait only on those
+# local files; this never polls scheduler state and never treats missing or
+# malformed status as success.
+ecoda_wait_h5ad_preflight_status_files() {
+  local manifest="$1" status_dir="$2"
+  local max_wait="${H5AD_PREFLIGHT_STATUS_GRACE_SECONDS:-60}"
+  local elapsed=0 missing ds view path safe status
+  [[ "${max_wait}" =~ ^[0-9]+$ ]] || return 1
+  while :; do
+    missing=0
+    while IFS=$'\t' read -r ds view path; do
+      safe="$(_ecoda_safe_component "${ds}__${view}")"
+      status="${status_dir}/${safe}.status"
+      [[ -s "${status}" ]] || missing=1
+    done < "${manifest}"
+    [[ ${missing} -eq 0 ]] && return 0
+    [[ ${elapsed} -lt ${max_wait} ]] || return 1
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+}

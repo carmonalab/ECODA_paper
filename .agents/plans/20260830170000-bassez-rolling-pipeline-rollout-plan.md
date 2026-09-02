@@ -355,9 +355,10 @@ operational evidence, not a replacement for the promotion rules above.
   semantic contract passes.
 - Focused local verification passed for checksum reuse, H5AD run/task binding,
   source identity, Stage 2/3/4/5 submitters/watchdogs, benchmark sync,
-  annotation merge safety, and Ensembl stable-ID mapping. The source/runtime
-  patch is committed as `46f6e3f` and the next commit must rebuild/review the
-  runtime before affected Stage 3/4 launches.
+  annotation merge safety, Ensembl stable-ID mapping, and the explicit
+  sidecar-validation path. Commit `46f6e3f` carries the preflight speedup;
+  commit `0145b24` adds the source-matched Ensembl correction and was built
+  into a separately reviewed runtime before affected Stage 3/4 work.
 - `ecoda_bassez_rolling_b4_batch_rest_80f71c8_20260902T081547Z` reached
   terminal `FAILED` at `2026-09-02T19:33:55Z` after preparation and annotation
   succeeded but merge array/watchdog `4373971`/`4373972` both returned
@@ -381,6 +382,36 @@ operational evidence, not a replacement for the promotion rules above.
   mappings; this is an upstream preprocessing correction, not an annotation
   anchor relaxation. A fresh Stage 3 rebuild for the affected rows is required
   before Stage 4 repair.
+- The optimized B5 retry
+  `ecoda_bassez_rolling_b5_benchmark_rest_0145b24_20260902T201538Z` reduced
+  source-check logging to one pass per selected scratch/NAS H5AD, but reached
+  terminal `FAILED` at `2026-09-02T20:26:29Z`: all ten H5AD preflight array
+  tasks (`4374121` parent, tasks `4374122`–`4374130`) audited
+  `COMPLETED|0:0`, while the submitter checked status files before the shared
+  filesystem exposed `Adams__benchmark_analysis.status`. The gate's one first
+  inspect passed accounting and generic audits, but the wrapper failure is
+  preserved; a bounded local status-settle grace is required and does not
+  mask nonzero `sbatch --wait` results.
+- The follow-up status-settle patch waits a bounded
+  `H5AD_PREFLIGHT_STATUS_GRACE_SECONDS` (default 60 seconds) for run-owned
+  status files after a successful `sbatch --wait`. It only waits on local
+  filesystem publication, still rejects a nonzero scheduler return, and
+  preserves run/task-bound status validation. This prevents shared-filesystem
+  publication races without converting status files into scheduler evidence.
+- Fresh Stage 3 gene-fix gate
+  `ecoda_bassez_rolling_b3_batch_gene_fix_0145b24_20260902T201359Z` rebuilt
+  `Breast_cancer`, `Kidney_KPMP`, and `Lung` with stable-ID-to-symbol mapping.
+- Array `4374117` and watchdog `4374118` completed, the fixed three-row H5AD
+  audit passed with strict checksums and reported residual Ensembl IDs that
+  have no `Gene name` in the reference table; downstream annotation anchors
+  remain the required success criterion. Luna Max approved the gate at
+  `2026-09-02T20:48:23Z`.
+- The third runtime
+  `ecoda_runtime_build_bassez_rolling_0145b24_20260902T195959Z` completed
+  with build job `4374113`, passed its first audit, and received Luna Max
+  approval at `2026-09-02T20:12:25Z`; its image is
+  `ecoda-py-cuda13-path-preserving-0145b24.sif` with SHA-256
+  `96e64d6e94f944c47ca9f9ec17b7fcb6b05ccca9bbd70ea9d35268404fe6da6c`.
 
 ### Historical failed batch Stage 3 gates
 
