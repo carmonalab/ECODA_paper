@@ -61,6 +61,19 @@ HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.inv
 [[ "$(grep '^STATE=' "${BASSEZ_ROOT}/status/watchdog")" == "STATE=OK" ]]
 [[ "$(grep '^STATE=' "${BASSEZ_OWNER}/owner")" == "STATE=OK" ]]
 [[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == "${BASSEZ_CALLS_BEFORE}" ]]
+BAD_BASSEZ_DIGEST="00000000000000000000000000000000"
+BASSEZ_SIZE="$(wc -c < "${BASSEZ_OUTPUT}" | tr -d '[:space:]')"
+printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${BAD_BASSEZ_DIGEST}" \
+  "${BASSEZ_SIZE}" "${BASSEZ_OUTPUT}" > "${BASSEZ_OUTPUT}.md5"
+BASSEZ_BAD_SIDECAR="$(cat "${BASSEZ_OUTPUT}.md5")"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.invalid STAGE2_FORCE=0 \
+  STAGE2_WATCHDOG_MAX_POLLS=1 bash "${ROOT}/src/2_dataset_specific_preprocessing/stage2_watchdog.sh" \
+  "${BASSEZ_RUN_ID}" "${BASSEZ_MANIFEST}" "${BASSEZ_JOB_FILE}" 128G 256G shared-cpu 1000 \
+  > "${TMP_DIR}/invalid-checksum.watchdog.log" 2>&1; then
+  echo "Stage 2 rewrote an invalid existing checksum" >&2
+  exit 1
+fi
+[[ "$(cat "${BASSEZ_OUTPUT}.md5")" == "${BASSEZ_BAD_SIDECAR}" ]]
 
 INVALID_RUN_ID="invalid_bassez_run"
 INVALID_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs/${INVALID_RUN_ID}"

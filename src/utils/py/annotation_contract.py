@@ -308,10 +308,11 @@ def validate_feather(
     expected_keys: Iterable[object] | None = None,
     require_dataset_anchor: bool = False,
     require_sidecar: bool = False,
+    sidecar_validated: bool = False,
 ) -> dict:
     """Validate one annotation feather, optionally against an expected key set."""
     artifact = _artifact_path(path)
-    if require_sidecar or Path(f"{artifact}.md5").exists():
+    if not sidecar_validated and (require_sidecar or Path(f"{artifact}.md5").exists()):
         validate_sidecar(artifact)
     import pyarrow.feather as feather
 
@@ -357,10 +358,11 @@ def validate_h5ad(
     expected_keys: Iterable[object] | None = None,
     require_dataset_anchor: bool = True,
     require_sidecar: bool = False,
+    sidecar_validated: bool = False,
 ) -> dict:
     """Validate merged h5ad annotations without anndata backed-open."""
     artifact = _artifact_path(path)
-    if require_sidecar or Path(f"{artifact}.md5").exists():
+    if not sidecar_validated and (require_sidecar or Path(f"{artifact}.md5").exists()):
         validate_sidecar(artifact)
     shape, frame = _read_h5ad_obs_frame(
         artifact, REQUIRED_KEYS | KNOWN_ANNOTATION_COLUMNS
@@ -392,6 +394,11 @@ def main() -> None:
         help="also require and validate the adjacent MD5/SIZE/PATH sidecar",
     )
     parser.add_argument(
+        "--sidecar-validated",
+        action="store_true",
+        help="skip the sidecar content hash after a strict caller validation",
+    )
+    parser.add_argument(
         "--expected-keys-file",
         help="headerless Sample<TAB>cell_barcode keys expected in the artifact",
     )
@@ -411,6 +418,8 @@ def main() -> None:
         help="require nonblank layer1 and scATOMIC_pred anchors",
     )
     args = parser.parse_args()
+    if args.require_sidecar and args.sidecar_validated:
+        parser.error("--require-sidecar and --sidecar-validated are mutually exclusive")
     artifact = args.h5ad or args.path
     if args.require_sidecar:
         validate_sidecar(artifact)
@@ -424,6 +433,7 @@ def main() -> None:
             args.h5ad,
             expected_keys=expected,
             require_dataset_anchor=True,
+            sidecar_validated=args.sidecar_validated,
         )
         print(f"annotated h5ad contract OK: {args.h5ad} ({stats['n_rows']} rows)")
     else:
@@ -431,6 +441,7 @@ def main() -> None:
             args.path,
             expected_keys=expected,
             require_dataset_anchor=args.require_dataset_anchor,
+            sidecar_validated=args.sidecar_validated,
         )
         print(f"annotation feather contract OK: {args.path} ({stats['n_rows']} rows)")
 

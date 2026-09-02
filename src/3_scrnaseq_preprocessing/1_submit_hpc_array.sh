@@ -154,8 +154,8 @@ stage3_compute_validate_existing() {
   local preflight_manifest="${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv"
   local preflight_tmp="${preflight_manifest}.build.$$"
   local status_dir="${ECODA_RUN_ROOT}/status/h5ad_preflight"
-  local ds view path safe status state preflight_id preflight_rc
-  local count=0
+  local ds view path safe status state status_run status_dataset status_view status_task
+  local preflight_id preflight_rc count=0 status_count=0
   STAGE3_PREFLIGHT_MANIFEST="${preflight_manifest}"
   STAGE3_PREFLIGHT_STATUS_DIR="${status_dir}"
   [[ "${PREPROCESS_SUBMITTER_TEST:-0}" == 1 || ${FORCE_ARG} -eq 1 ]] && return 0
@@ -191,17 +191,30 @@ stage3_compute_validate_existing() {
   if [[ "${preflight_id}" =~ ^[0-9]+$ ]]; then
     stage3_install_scheduler_record PREFLIGHT "${preflight_id}" || return 1
   fi
-  [[ ${preflight_rc} -eq 0 && "${preflight_id}" =~ ^[0-9]+$ ]] || return 1
+  if [[ ${preflight_rc} -ne 0 || ! "${preflight_id}" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: Stage 3 H5AD preflight scheduler wait failed: job=${preflight_id:-unknown} rc=${preflight_rc}" >&2
+    return 1
+  fi
   while IFS=$'\t' read -r ds view path; do
     safe="$(_ecoda_safe_component "${ds}__${view}")"
     status="${status_dir}/${safe}.status"
     [[ -s "${status}" ]] || return 1
+    status_run="$(sed -n 's/^RUN_ID=//p' "${status}" | head -1)"
+    status_dataset="$(sed -n 's/^DATASET=//p' "${status}" | head -1)"
+    status_view="$(sed -n 's/^VIEW=//p' "${status}" | head -1)"
+    status_task="$(sed -n 's/^TASK_ID=//p' "${status}" | head -1)"
+    [[ "${status_run}" == "${ECODA_RUN_ID}" &&
+       "${status_dataset}" == "${ds}" &&
+       "${status_view}" == "${view}" &&
+       "${status_task}" == "$((status_count + 1))" ]] || return 1
     state="$(sed -n 's/^STATE=//p' "${status}" | head -1)"
     case "${state}" in
       OK|REBUILD) ;;
       *) return 1 ;;
     esac
+    status_count=$((status_count + 1))
   done < "${preflight_manifest}"
+  [[ "${status_count}" == "${count}" ]] || return 1
   STAGE3_PREFLIGHT_ACTIVE=1
 }
 
@@ -353,7 +366,7 @@ stage3_watchdog_terminal_ok() {
 
 sync_selected() {
   local manifest="$1" ds view path output remote_dir sync_lock lock_root
-  local transfer_manifest verify_manifest expected_output
+  local transfer_manifest verify_manifest expected_output local_digest local_size
   local rc=0
   [[ -d "${NAS_TARGET_DIR}" ]] || {
     echo "ERROR: NAS path is unreachable: ${NAS_TARGET_DIR}" >&2
@@ -384,10 +397,12 @@ sync_selected() {
       rc=1
       continue
     fi
+    local_digest="${ECODA_CHECKSUM_MD5}"
+    local_size="${ECODA_CHECKSUM_SIZE}"
     printf '%s\n' "${expected_output}" >> "${transfer_manifest}" || rc=1
     printf '%s\n' "${expected_output}.md5" >> "${transfer_manifest}" || rc=1
-    printf '%s\t%s\t%s\t%s\n' "${ds}" "${view}" "${path}" "${output}" \
-      >> "${verify_manifest}" || rc=1
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${ds}" "${view}" "${path}" "${output}" \
+      "${local_digest}" "${local_size}" >> "${verify_manifest}" || rc=1
   done < "${manifest}"
   if [[ ${rc} -eq 0 && -s "${transfer_manifest}" ]]; then
     rsync -rlptDv --files-from="${transfer_manifest}" \
@@ -396,10 +411,11 @@ sync_selected() {
     rc=1
   fi
   if [[ ${rc} -eq 0 ]]; then
-    while IFS=$'\t' read -r ds view path output; do
+    while IFS=$'\t' read -r ds view path output local_digest local_size; do
       remote_dir="${NAS_TARGET_DIR}/${ds}/output"
       ecoda_compare_checksum_remote "${path}" \
-        "${remote_dir}/${output}" "${remote_dir}/${output}.md5" || rc=1
+        "${remote_dir}/${output}" "${remote_dir}/${output}.md5" \
+        "${local_digest}" "${local_size}" || rc=1
     done < "${verify_manifest}"
   fi
   rm -f "${transfer_manifest}" "${verify_manifest}"

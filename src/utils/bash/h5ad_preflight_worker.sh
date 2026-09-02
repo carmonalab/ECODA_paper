@@ -45,9 +45,20 @@ fi
 manifest="${H5AD_PREFLIGHT_MANIFEST:?H5AD_PREFLIGHT_MANIFEST is required}"
 status_dir="${H5AD_PREFLIGHT_STATUS_DIR:?H5AD_PREFLIGHT_STATUS_DIR is required}"
 run_root="${H5AD_PREFLIGHT_RUN_ROOT:-}"
+run_id="${H5AD_PREFLIGHT_RUN_ID:-${run_root##*/}}"
 mode="${H5AD_PREFLIGHT_MODE:-require}"
 task_id="${SLURM_ARRAY_TASK_ID:-${H5AD_PREFLIGHT_TASK_ID:-}}"
 
+[[ "${run_id}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || {
+  echo "ERROR: invalid H5AD preflight run ID" >&2
+  exit 1
+}
+if [[ -n "${run_root}" ]]; then
+  [[ "${run_root##*/}" == "${run_id}" ]] || {
+    echo "ERROR: H5AD preflight run ID does not match run root" >&2
+    exit 1
+  }
+fi
 [[ "${task_id}" =~ ^[0-9]+$ && ${task_id} -gt 0 ]] || {
   echo "ERROR: invalid H5AD preflight task ID" >&2
   exit 1
@@ -102,7 +113,7 @@ if [[ ${contract_rc} -ne 0 || ${checksum_rc} -ne 0 ]]; then
 fi
 
 if ! ecoda_atomic_write "${status_file}" \
-  "STATE=${state}\nDATASET=${dataset}\nVIEW=${view}\nTASK_ID=${task_id}\n"; then
+  "STATE=${state}\nRUN_ID=${run_id}\nDATASET=${dataset}\nVIEW=${view}\nTASK_ID=${task_id}\n"; then
   echo "ERROR: could not persist H5AD preflight status: ${status_file}" >&2
   exit 1
 fi

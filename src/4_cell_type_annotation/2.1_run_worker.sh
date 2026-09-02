@@ -58,8 +58,7 @@ FEATHER_FILE="${FEATHER_DIR}/annotations_chunk_${CHUNK_NUM}.feather"
 mkdir -p "${FEATHER_DIR}"
 if [[ -s "${FEATHER_FILE}" ]]; then
   if "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/annotation_contract.py" \
-      --path "${FEATHER_FILE}" --require-sidecar >/dev/null 2>&1 &&
-     ecoda_validate_checksum "${FEATHER_FILE}"; then
+      --path "${FEATHER_FILE}" --require-sidecar >/dev/null 2>&1; then
     echo "Annotation feather already exists and passed schema/checksum validation: ${FEATHER_FILE}"
     exit 0
   fi
@@ -76,13 +75,10 @@ set -e
 if [[ ${RC} -eq 0 ]]; then
   worker_clear_retry_count
   [[ -s "${FEATHER_FILE}" ]] || { echo "ERROR: annotation worker exited without a feather: ${FEATHER_FILE}" >&2; exit 1; }
+  # The canonical annotation contract performs the strict sidecar check once.
   "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/annotation_contract.py" \
     --path "${FEATHER_FILE}" --require-sidecar >/dev/null 2>&1 || {
     echo "ERROR: annotation worker produced an invalid feather: ${FEATHER_FILE}" >&2
-    exit 1
-  }
-  ecoda_validate_checksum "${FEATHER_FILE}" || {
-    echo "ERROR: annotation worker feather checksum failed: ${FEATHER_FILE}" >&2
     exit 1
   }
   exit 0

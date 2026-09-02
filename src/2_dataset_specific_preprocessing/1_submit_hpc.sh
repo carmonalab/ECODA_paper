@@ -302,7 +302,8 @@ combinedpbmc_raw_migrate() {
         return 1
       fi
       if ! ecoda_write_checksum "${new_path}" ||
-         ! ecoda_validate_checksum "${new_path}" ||
+         ! ecoda_validate_checksum_record "${new_path}" "${ECODA_CHECKSUM_MD5}" \
+           "${ECODA_CHECKSUM_SIZE}" ||
          ! ecoda_validate_stage2_output combinedpbmc "${new_path}"; then
         rm -f "${new_path}" "${new_path}.md5"
         return 1

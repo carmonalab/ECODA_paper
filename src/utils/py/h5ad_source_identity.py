@@ -208,7 +208,7 @@ def file_md5(path: str | Path) -> str:
     return digest.hexdigest()
 
 
-def _sidecar_fields(path: Path) -> dict[str, str]:
+def _sidecar_fields(path: Path, *, verify_content: bool = True) -> dict[str, str]:
     sidecar = Path(f"{path}.md5")
     if not sidecar.is_file() or sidecar.stat().st_size <= 0:
         raise ValueError(f"H5AD checksum sidecar is missing: {sidecar}")
@@ -228,7 +228,7 @@ def _sidecar_fields(path: Path) -> dict[str, str]:
         raise ValueError(f"H5AD checksum MD5 is malformed: {sidecar}")
     if not size.isdigit() or int(size) != path.stat().st_size:
         raise ValueError(f"H5AD checksum SIZE mismatch: {sidecar}")
-    if file_md5(path) != digest:
+    if verify_content and file_md5(path) != digest:
         raise ValueError(f"H5AD checksum MD5 mismatch: {path}")
     return {"MD5": digest, "SIZE": size, "PATH": str(path)}
 
@@ -278,14 +278,18 @@ def build_source_identity(
     selection: str | Path,
     input_root: str | Path,
     config_path: str | Path,
+    *,
+    validated_sidecars: bool = False,
 ) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
     for dataset, view in _selection_rows(selection):
         path = resolve_h5ad_path(input_root, config_path, dataset, view)
         if not path.is_file() or path.stat().st_size <= 0:
             raise ValueError(f"H5AD path is missing or empty: {path}")
-        # A source identity is never built from an unchecked artifact.
-        sidecar = _sidecar_fields(path)
+        # A source identity is never built from an unchecked artifact.  The
+        # optimized caller may opt out of a second content hash only after it
+        # has strictly validated every selected sidecar and source byte pair.
+        sidecar = _sidecar_fields(path, verify_content=not validated_sidecars)
         sample_ids = read_h5ad_sample_ids(path)
         entries.append(
             {
@@ -363,6 +367,8 @@ def verify_source_identity(
     selection: str | Path,
     input_root: str | Path,
     config_path: str | Path,
+    *,
+    validated_sidecars: bool = False,
 ) -> None:
     records = load_source_identity(identity_path, require_sidecar=True)
     selected = _selection_rows(selection)
@@ -373,10 +379,12 @@ def verify_source_identity(
         record = records[(dataset, view)]
         if record["path"] != str(path):
             raise ValueError(f"source identity PATH mismatch for {dataset}/{view}")
-        if path.stat().st_size != record["size"]:
-            raise ValueError(f"source identity SIZE mismatch for {dataset}/{view}")
-        if file_md5(path) != record["md5"]:
-            raise ValueError(f"source identity MD5 mismatch for {dataset}/{view}")
+        sidecar = _sidecar_fields(path, verify_content=not validated_sidecars)
+        if (
+            int(sidecar["SIZE"]) != record["size"]
+            or sidecar["MD5"] != record["md5"]
+        ):
+            raise ValueError(f"source identity checksum mismatch for {dataset}/{view}")
         if read_h5ad_sample_ids(path) != record["sample_ids"]:
             raise ValueError(f"source identity Sample order mismatch for {dataset}/{view}")
 
@@ -396,13 +404,29 @@ def main() -> None:
     parser.add_argument("--selection", type=Path, required=True)
     parser.add_argument("--input-root", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument(
+        "--validated-source-sidecars",
+        action="store_true",
+        help="trust caller-completed strict source sidecar/content validation",
+    )
     args = parser.parse_args()
     if args.output is not None:
-        payload = build_source_identity(args.selection, args.input_root, args.config)
+        payload = build_source_identity(
+            args.selection,
+            args.input_root,
+            args.config,
+            validated_sidecars=args.validated_source_sidecars,
+        )
         _write_json_atomic(args.output, payload)
         print(f"source identity written: {args.output}")
     else:
-        verify_source_identity(args.identity, args.selection, args.input_root, args.config)
+        verify_source_identity(
+            args.identity,
+            args.selection,
+            args.input_root,
+            args.config,
+            validated_sidecars=args.validated_source_sidecars,
+        )
         print(f"source identity verified: {args.identity}")
 
 

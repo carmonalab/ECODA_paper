@@ -62,7 +62,7 @@ classify() {
 }
 validate_markers() {
   local ds views run_root marker view name path expected_sources expected_records
-  local union_path union_md5 union_size marker_field
+  local union_path union_md5 union_size marker_field source_md5 source_size
   while IFS=$'\t' read -r ds views run_root; do
     [[ -n "${ds}" && "${run_root}" == "${RUN_ROOT}" ]] || return 1
     marker="${RUN_ROOT}/datasets/${ds}/merge.ok"
@@ -73,8 +73,8 @@ validate_markers() {
     union_path="${RUN_ROOT}/datasets/${ds}/union/union.h5ad"
     [[ "$(marker_field UNION_PATH)" == "${union_path}" ]] || return 1
     ecoda_validate_checksum "${union_path}" || return 1
-    union_md5="$(ecoda_md5_file "${union_path}")"
-    union_size="$(wc -c < "${union_path}" | tr -d '[:space:]')"
+    union_md5="${ECODA_CHECKSUM_MD5}"
+    union_size="${ECODA_CHECKSUM_SIZE}"
     [[ "$(marker_field UNION_MD5)" == "${union_md5}" &&
        "$(marker_field UNION_SIZE)" == "${union_size}" ]] || return 1
     expected_sources=""
@@ -86,9 +86,11 @@ validate_markers() {
       path="${HPC_SCRATCH_DIR}/${ds}/output/${name}"
       [[ -s "${path}" ]] || { echo "ERROR: merged h5ad missing: ${path}" >&2; return 1; }
       ecoda_validate_checksum "${path}" || return 1
+      source_md5="${ECODA_CHECKSUM_MD5}"
+      source_size="${ECODA_CHECKSUM_SIZE}"
       "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/annotation_contract.py" \
-        --h5ad "${path}" --require-sidecar >/dev/null 2>&1 || return 1
-      record="${path}|$(ecoda_md5_file "${path}")|$(wc -c < "${path}" | tr -d '[:space:]')"
+        --h5ad "${path}" --sidecar-validated >/dev/null 2>&1 || return 1
+      record="${path}|${source_md5}|${source_size}"
       [[ -z "${expected_sources}" ]] && expected_sources="${path}" ||
         expected_sources="${expected_sources};${path}"
       [[ -z "${expected_records}" ]] && expected_records="${record}" ||

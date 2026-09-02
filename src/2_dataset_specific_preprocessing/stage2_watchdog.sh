@@ -164,7 +164,7 @@ validate_manifests() {
 }
 
 validate_outputs() {
-  local path step script outputs dependency owner old_ifs
+  local path step script outputs dependency owner old_ifs sidecar sidecar_present
   while IFS=$'\t' read -r step script outputs dependency owner; do
     [[ -n "${step}" ]] || return 1
     old_ifs="${IFS}"
@@ -176,6 +176,14 @@ validate_outputs() {
         echo "Missing/empty Stage 2 output: ${path}" >&2
         return 1
       }
+      sidecar="${path}.md5"
+      sidecar_present=0
+      if [[ -e "${sidecar}" || -L "${sidecar}" ]]; then
+        # Existing checksums are immutable evidence; an invalid sidecar is
+        # never replaced by a semantically plausible output.
+        ecoda_validate_checksum "${path}" || return 1
+        sidecar_present=1
+      fi
       ecoda_validate_stage2_output "${step}" "${path}" || {
         echo "Stage 2 semantic output validation failed: ${path}" >&2
         return 1
@@ -186,9 +194,14 @@ validate_outputs() {
             --path "${path}" --kind h5ad >/dev/null 2>&1 || return 1
           ;;
       esac
-      ecoda_write_checksum "${path}" ||
-        return 1
-      ecoda_validate_checksum "${path}" || return 1
+      if [[ ${sidecar_present} -eq 0 ]]; then
+        # A genuinely new worker output has no prior checksum to validate.
+        # Its semantic contracts must pass before the first sidecar is written.
+        ecoda_write_checksum "${path}" ||
+          return 1
+        ecoda_validate_checksum_record "${path}" "${ECODA_CHECKSUM_MD5}" \
+          "${ECODA_CHECKSUM_SIZE}" || return 1
+      fi
       if [[ "${step}" == "combinedpbmc" ]]; then
         rm -f "${HPC_SCRATCH_DIR}/CombinedPBMC/data/combined_pbmc_batch_effect_analysis.h5ad" \
           "${HPC_SCRATCH_DIR}/CombinedPBMC/data/combined_pbmc_batch_effect_analysis.h5ad.md5"

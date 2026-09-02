@@ -90,6 +90,13 @@ def main() -> None:
             "s1", "s2"
         ]
         verify_source_identity(identity, selection, input_root, config)
+        verify_source_identity(
+            identity,
+            selection,
+            input_root,
+            config,
+            validated_sidecars=True,
+        )
         matrix_artifact_validator.validate(
             root,
             selection,

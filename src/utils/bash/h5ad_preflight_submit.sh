@@ -14,11 +14,13 @@ ecoda_submit_h5ad_preflight() {
   local label="$9"
   local worker_script="${10}"
   local runtime_export="${11:-}"
-  local count msg rc scheduler_id
+  local count msg rc scheduler_id run_id
 
   [[ -r "${manifest}" && -s "${manifest}" ]] || return 1
   [[ -n "${runtime_export}" ]] || return 1
   [[ "${mode}" == "require" || "${mode}" == "classify" ]] || return 1
+  run_id="${run_root##*/}"
+  [[ "${run_id}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || return 1
   count="$(wc -l < "${manifest}" | tr -d '[:space:]')"
   [[ "${count}" =~ ^[0-9]+$ && ${count} -gt 0 ]] || return 1
   mkdir -p "${status_dir}" "${logs_dir}" || return 1
@@ -29,7 +31,7 @@ ecoda_submit_h5ad_preflight() {
       --output="${logs_dir}/h5ad_preflight_${label}_%A_%a.log" \
       --error="${logs_dir}/h5ad_preflight_${label}_%A_%a.err" \
       --mail-user="${USER_EMAIL}" \
-      --export="ALL,H5AD_PREFLIGHT_MANIFEST=${manifest},H5AD_PREFLIGHT_STATUS_DIR=${status_dir},H5AD_PREFLIGHT_RUN_ROOT=${run_root},H5AD_PREFLIGHT_MODE=${mode},${runtime_export}" \
+      --export="ALL,H5AD_PREFLIGHT_RUN_ID=${run_id},H5AD_PREFLIGHT_MANIFEST=${manifest},H5AD_PREFLIGHT_STATUS_DIR=${status_dir},H5AD_PREFLIGHT_RUN_ROOT=${run_root},H5AD_PREFLIGHT_MODE=${mode},${runtime_export}" \
       "${worker_script}")"; then
     rc=0
   else

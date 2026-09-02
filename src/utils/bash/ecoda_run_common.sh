@@ -268,6 +268,10 @@ ecoda_view_output_name() {
   printf '%s' "${value}"
 }
 
+ECODA_CHECKSUM_PATH=""
+ECODA_CHECKSUM_MD5=""
+ECODA_CHECKSUM_SIZE=""
+
 ecoda_md5_file() {
   local path="$1"
   [[ -s "${path}" ]] || return 1
@@ -283,11 +287,18 @@ ecoda_md5_file() {
 
 ecoda_write_checksum() {
   local path="$1" sidecar="${2:-${1}.md5}" digest size
+  ECODA_CHECKSUM_PATH=""
+  ECODA_CHECKSUM_MD5=""
+  ECODA_CHECKSUM_SIZE=""
   [[ -s "${path}" ]] || { _ecoda_die "cannot checksum missing/empty artifact: ${path}"; return 1; }
   digest="$(ecoda_md5_file "${path}")" || return 1
-  size="$(wc -c < "${path}" | tr -d '[:space:]')"
-  ecoda_atomic_write "${sidecar}" "MD5=${digest}\nSIZE=${size}\nPATH=${path}\n"
+  size="$(wc -c < "${path}" | tr -d '[:space:]')" || return 1
+  ecoda_atomic_write "${sidecar}" "MD5=${digest}\nSIZE=${size}\nPATH=${path}\n" || return 1
+  ECODA_CHECKSUM_PATH="${path}"
+  ECODA_CHECKSUM_MD5="${digest}"
+  ECODA_CHECKSUM_SIZE="${size}"
 }
+
 
 ecoda_invalidate_artifact() {
   local path="$1"
@@ -301,19 +312,49 @@ ecoda_invalidate_artifact() {
 
 ecoda_validate_checksum() {
   local path="$1" sidecar="${2:-${1}.md5}" expected actual expected_size actual_size recorded_path
-  [[ -s "${path}" ]] || return 1
-  [[ -s "${sidecar}" ]] || return 1
+  ECODA_CHECKSUM_PATH=""
+  ECODA_CHECKSUM_MD5=""
+  ECODA_CHECKSUM_SIZE=""
+  [[ -s "${path}" && -s "${sidecar}" ]] || return 1
   expected="$(sed -n 's/^MD5=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
   expected_size="$(sed -n 's/^SIZE=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
   recorded_path="$(sed -n 's/^PATH=//p' "${sidecar}" | head -1)"
   [[ "${recorded_path}" == "${path}" ]] || return 1
   [[ "${expected}" =~ ^[[:xdigit:]]{32}$ ]] || return 1
   actual="$(ecoda_md5_file "${path}")" || return 1
+  actual_size="$(wc -c < "${path}" | tr -d '[:space:]')" || return 1
   [[ "${actual}" == "${expected}" ]] || return 1
-  if [[ -n "${expected_size}" ]]; then
-    actual_size="$(wc -c < "${path}" | tr -d '[:space:]')"
-    [[ "${actual_size}" == "${expected_size}" ]] || return 1
-  fi
+  [[ "${expected_size}" =~ ^[1-9][0-9]*$ &&
+     "${actual_size}" == "${expected_size}" ]] || return 1
+  ECODA_CHECKSUM_PATH="${path}"
+  ECODA_CHECKSUM_MD5="${actual}"
+  ECODA_CHECKSUM_SIZE="${actual_size}"
+}
+
+# Validate strict sidecar fields against a digest/size computed immediately
+# before this no-write confirmation; never use this as a standalone checksum.
+ecoda_validate_checksum_record() {
+  local path="$1" expected_digest="${2:-}" expected_size="${3:-}"
+  local sidecar="${4:-${1}.md5}" recorded_digest recorded_size recorded_path actual_size
+  ECODA_CHECKSUM_PATH=""
+  ECODA_CHECKSUM_MD5=""
+  ECODA_CHECKSUM_SIZE=""
+  [[ -s "${path}" && -s "${sidecar}" ]] || return 1
+  [[ "${expected_digest}" =~ ^[[:xdigit:]]{32}$ ]] || return 1
+  [[ "${expected_size}" =~ ^[1-9][0-9]*$ ]] || return 1
+  recorded_digest="$(sed -n 's/^MD5=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
+  recorded_size="$(sed -n 's/^SIZE=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
+  recorded_path="$(sed -n 's/^PATH=//p' "${sidecar}" | head -1)"
+  [[ "${recorded_path}" == "${path}" ]] || return 1
+  [[ "${recorded_digest}" =~ ^[[:xdigit:]]{32}$ &&
+     "${recorded_digest}" == "${expected_digest}" ]] || return 1
+  [[ "${recorded_size}" =~ ^[1-9][0-9]*$ &&
+     "${recorded_size}" == "${expected_size}" ]] || return 1
+  actual_size="$(wc -c < "${path}" | tr -d '[:space:]')" || return 1
+  [[ "${actual_size}" == "${expected_size}" ]] || return 1
+  ECODA_CHECKSUM_PATH="${path}"
+  ECODA_CHECKSUM_MD5="${expected_digest}"
+  ECODA_CHECKSUM_SIZE="${expected_size}"
 }
 
 ecoda_validate_checksum_remote() {
@@ -321,30 +362,37 @@ ecoda_validate_checksum_remote() {
   [[ -s "${path}" && -s "${sidecar}" ]] || return 1
   expected="$(sed -n 's/^MD5=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
   expected_size="$(sed -n 's/^SIZE=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
-  [[ "${expected}" =~ ^[[:xdigit:]]{32}$ ]] || return 1
+  [[ "${expected}" =~ ^[[:xdigit:]]{32}$ &&
+     "${expected_size}" =~ ^[1-9][0-9]*$ ]] || return 1
   actual="$(ecoda_md5_file "${path}")" || return 1
   [[ "${actual}" == "${expected}" ]] || return 1
-  if [[ -n "${expected_size}" ]]; then
-    actual_size="$(wc -c < "${path}" | tr -d '[:space:]')"
-    [[ "${actual_size}" == "${expected_size}" ]] || return 1
-  fi
+  actual_size="$(wc -c < "${path}" | tr -d '[:space:]')" || return 1
+  [[ "${actual_size}" == "${expected_size}" ]] || return 1
 }
 
 ecoda_compare_checksum_remote() {
   local local_path="$1"
   local remote_path="$2"
   local remote_sidecar="${3:-${remote_path}.md5}"
+  local known_digest="${4:-}" known_size="${5:-}"
   local local_digest remote_digest remote_digest_actual local_size remote_size expected_size recorded_path
-  ecoda_validate_checksum "${local_path}" || return 1
+  if [[ -n "${known_digest}" || -n "${known_size}" ]]; then
+    [[ -n "${known_digest}" && -n "${known_size}" ]] || return 1
+    ecoda_validate_checksum_record "${local_path}" "${known_digest}" "${known_size}" || return 1
+    local_digest="${known_digest}"
+    local_size="${known_size}"
+  else
+    ecoda_validate_checksum "${local_path}" || return 1
+    local_digest="${ECODA_CHECKSUM_MD5}"
+    local_size="${ECODA_CHECKSUM_SIZE}"
+  fi
   [[ -s "${remote_path}" && -s "${remote_sidecar}" ]] || return 1
   remote_digest="$(sed -n 's/^MD5=//p' "${remote_sidecar}" | head -1 | tr -d '[:space:]')"
   expected_size="$(sed -n 's/^SIZE=//p' "${remote_sidecar}" | head -1 | tr -d '[:space:]')"
   recorded_path="$(sed -n 's/^PATH=//p' "${remote_sidecar}" | head -1)"
   [[ "${remote_digest}" =~ ^[[:xdigit:]]{32}$ ]] || return 1
   [[ "${expected_size}" =~ ^[0-9]+$ ]] || return 1
-  local_digest="$(ecoda_md5_file "${local_path}")" || return 1
   remote_digest_actual="$(ecoda_md5_file "${remote_path}")" || return 1
-  local_size="$(wc -c < "${local_path}" | tr -d '[:space:]')"
   remote_size="$(wc -c < "${remote_path}" | tr -d '[:space:]')"
   [[ "${local_digest}" == "${remote_digest_actual}" ]] || return 1
   [[ "${remote_digest_actual}" == "${remote_digest}" ]] || return 1
@@ -354,7 +402,8 @@ ecoda_compare_checksum_remote() {
     ecoda_atomic_write "${remote_sidecar}" \
       "MD5=${remote_digest_actual}\nSIZE=${remote_size}\nPATH=${remote_path}\n" ||
       return 1
-    ecoda_validate_checksum "${remote_path}" "${remote_sidecar}" || return 1
+    ecoda_validate_checksum_record "${remote_path}" "${remote_digest_actual}" \
+      "${remote_size}" "${remote_sidecar}" || return 1
   fi
 }
 

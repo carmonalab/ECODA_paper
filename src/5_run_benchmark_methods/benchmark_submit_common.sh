@@ -866,7 +866,11 @@ analysis_merge_sync_cleanup() (
   local SYNC_FILES SYNC_FILES_TMP NO_CHECKSUM_FILES_TMP CLEANUP_MANIFEST
   local CHECKSUM_TMP REMOTE_CHECKSUM_TMP EXISTING_LOG
   local ds view row_label label path rel line selected_seen=""
-  local -a SELECTED_RELS=()
+  local artifact selected_index
+  # Worker artifacts are terminal and immutable during this sync; retain each
+  # strict validation digest for the local checksums manifest instead of
+  # hashing every selected payload a second time.
+  local -a SELECTED_RELS=() SELECTED_DIGESTS=()
   sync_fail() {
     local reason="$1"
     SYNC_FINAL_STATE="FAIL"
@@ -924,6 +928,7 @@ analysis_merge_sync_cleanup() (
     sync_fail "failed to create selected sync manifest"
   fi
   SELECTED_RELS=()
+  SELECTED_DIGESTS=()
 
   add_sync_artifact() {
     local artifact="$1" artifact_rel
@@ -936,6 +941,7 @@ analysis_merge_sync_cleanup() (
     ecoda_validate_checksum "${artifact}" || sync_fail "selected artifact checksum failed: ${artifact}"
     selected_seen="${selected_seen} ${artifact_rel}"
     SELECTED_RELS+=("${artifact_rel}")
+    SELECTED_DIGESTS+=("${ECODA_CHECKSUM_MD5}")
     printf '%s\n' "${artifact_rel}" >> "${SYNC_FILES_TMP}"
     printf '%s\n' "${artifact_rel}.md5" >> "${SYNC_FILES_TMP}"
   }
@@ -1006,11 +1012,15 @@ analysis_merge_sync_cleanup() (
       esac
     done < "${REMOTE_ROOT}/checksums.md5"
   fi
+  [[ ${#SELECTED_RELS[@]} -eq ${#SELECTED_DIGESTS[@]} ]] ||
+    sync_fail "selected checksum records are incomplete"
+  selected_index=0
   for rel in "${SELECTED_RELS[@]}"; do
-    (cd "${LOCAL_ROOT}" && md5sum "${rel}") >> "${CHECKSUM_TMP}" || {
+    printf '%s  %s\n' "${SELECTED_DIGESTS[${selected_index}]}" "${rel}" >> "${CHECKSUM_TMP}" || {
       rm -f "${CHECKSUM_TMP}"
-      sync_fail "cannot checksum selected relative path: ${rel}"
+      sync_fail "cannot write selected checksum record: ${rel}"
     }
+    selected_index=$((selected_index + 1))
   done
   [[ -s "${CHECKSUM_TMP}" ]] || {
     rm -f "${CHECKSUM_TMP}"

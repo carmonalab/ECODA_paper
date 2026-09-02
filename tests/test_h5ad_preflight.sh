@@ -34,12 +34,14 @@ run_worker() {
 run_worker classify
 STATUS_FILE="${STATUS_DIR}/Adams__benchmark_analysis.status"
 [[ "$(sed -n 's/^STATE=//p' "${STATUS_FILE}")" == "REBUILD" ]]
+[[ "$(sed -n 's/^RUN_ID=//p' "${STATUS_FILE}")" == "run" ]]
 
 if run_worker require; then
   echo "require-mode accepted malformed H5AD" >&2
   exit 1
 fi
 [[ "$(sed -n 's/^STATE=//p' "${STATUS_FILE}")" == "FAIL" ]]
+[[ "$(sed -n 's/^RUN_ID=//p' "${STATUS_FILE}")" == "run" ]]
 
 CAPTURE="${TMP_DIR}/sbatch.calls"
 cat > "${TMP_DIR}/sbatch" <<'STUB'
@@ -53,6 +55,9 @@ export CAPTURE USER_EMAIL="test@example.invalid"
 export ECODA_RUNTIME_MODE=host ECODA_RUNTIME_PROFILE=stage3
 source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1 || true
 source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+ecoda_validate_checksum "${SOURCE}"
+ecoda_validate_checksum_record "${SOURCE}" "${ECODA_CHECKSUM_MD5}" \
+  "${ECODA_CHECKSUM_SIZE}"
 source "${ROOT}/src/utils/bash/ecoda_runtime.sh"
 source "${ROOT}/src/utils/bash/h5ad_preflight_submit.sh"
 export PATH="${TMP_DIR}:${PATH}"
@@ -67,8 +72,27 @@ case "$(cat "${CAPTURE}")" in
   *) echo "preflight scheduler array contract missing" >&2; exit 1 ;;
 esac
 case "$(cat "${CAPTURE}")" in
+  *"H5AD_PREFLIGHT_RUN_ID=run"*) ;;
+  *) echo "preflight run ID was not exported" >&2; exit 1 ;;
+esac
+case "$(cat "${CAPTURE}")" in
   *"H5AD_PREFLIGHT_MODE=classify"*) ;;
   *) echo "preflight mode was not exported" >&2; exit 1 ;;
 esac
+
+cat > "${TMP_DIR}/sbatch" <<'STUB'
+#!/bin/bash
+printf '812346\n'
+exit 1
+STUB
+chmod +x "${TMP_DIR}/sbatch"
+set +e
+failed_id="$(ecoda_submit_h5ad_preflight \
+  "${MANIFEST}" "${STATUS_DIR}" "${RUN_ROOT}" classify shared-cpu 1G 1 \
+  "${RUN_ROOT}/logs" test "${ROOT}/src/utils/bash/h5ad_preflight_worker.sh" \
+  "${runtime_export}")"
+failed_rc=$?
+set -e
+[[ "${failed_id}" == "812346" && ${failed_rc} -ne 0 ]]
 
 echo "h5ad preflight worker: OK"

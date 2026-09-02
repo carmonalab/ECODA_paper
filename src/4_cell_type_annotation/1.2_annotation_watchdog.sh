@@ -60,7 +60,7 @@ classify() {
 }
 validate_feathers() {
   local manifest="$1" ds chunk feather_dir chunk_num feather union_path sample expected_union expected_chunk_dir
-  local expected_args
+  local expected_args validated_unions=""
   while IFS=$'\t' read -r ds chunk feather_dir; do
     [[ -n "${ds}" && -n "${chunk}" && -n "${feather_dir}" ]] || return 1
     ecoda_validate_run_owned_path "${chunk}" "${RUN_ROOT}" || return 1
@@ -74,7 +74,13 @@ validate_feathers() {
     [[ -s "${feather}" ]] || return 1
     union_path="$(sed -n '1p' "${chunk}")"
     [[ "${union_path}" == "${expected_union}" ]] || return 1
-    ecoda_validate_checksum "${union_path}" || return 1
+    case " ${validated_unions} " in
+      *" ${union_path} "*) ;;
+      *)
+        ecoda_validate_checksum "${union_path}" || return 1
+        validated_unions="${validated_unions} ${union_path}"
+        ;;
+    esac
     expected_args=(--expected-union "${union_path}")
     while IFS= read -r sample; do
       [[ -n "${sample}" ]] || return 1

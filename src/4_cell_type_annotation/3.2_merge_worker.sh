@@ -70,7 +70,7 @@ for view in "${VIEW_LIST[@]}"; do
   "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/annotation_contract.py" \
     --h5ad "${h5ad_path}" --require-sidecar >/dev/null
   ecoda_write_checksum "${h5ad_path}"
-  source_record="${h5ad_path}|$(ecoda_md5_file "${h5ad_path}")|$(wc -c < "${h5ad_path}" | tr -d '[:space:]')"
+  source_record="${h5ad_path}|${ECODA_CHECKSUM_MD5}|${ECODA_CHECKSUM_SIZE}"
   [[ -z "${SOURCE_PATHS}" ]] && SOURCE_PATHS="${h5ad_path}" ||
     SOURCE_PATHS="${SOURCE_PATHS};${h5ad_path}"
   [[ -z "${SOURCE_RECORDS}" ]] && SOURCE_RECORDS="${source_record}" ||

@@ -28,6 +28,7 @@ PARTITION="${SLURM_PARTITION_BENCHMARK_CPU:-shared-cpu}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 export ANNOTATION_WORKER_TIME_LIMIT="${ANNOTATION_WORKER_TIME_LIMIT:-02:00:00}"
 RUNTIME_EXPORT=""
+STAGE4_SOURCE_CHECKSUMS=""
 
 usage() {
   cat <<'EOF'
@@ -120,6 +121,23 @@ output_path_for() {
   [[ -n "${name}" ]] || return 1
   printf '%s/%s/output/%s' "${HPC_SCRATCH_DIR}" "${ds}" "${name}"
 }
+stage4_record_source_checksum() {
+  STAGE4_SOURCE_CHECKSUMS="${STAGE4_SOURCE_CHECKSUMS}${1}"$'\t'"${2}"$'\t'"${3}"$'\t'"${ECODA_CHECKSUM_MD5}"$'\t'"${ECODA_CHECKSUM_SIZE}"$'\n'
+}
+
+stage4_validate_source_checksum() {
+  local target="$1" record_ds record_view record_path record_digest record_size
+  while IFS=$'\t' read -r record_ds record_view record_path record_digest record_size; do
+    [[ -n "${record_path}" ]] || continue
+    if [[ "${record_path}" == "${target}" ]]; then
+      ecoda_validate_checksum_record "${target}" "${record_digest}" "${record_size}" || return 1
+      return 0
+    fi
+  done <<EOF
+${STAGE4_SOURCE_CHECKSUMS}
+EOF
+  return 1
+}
 resolve_dataset_views() {
   local ds="$1" view
   ecoda_dataset_exists "${ds}" || return 1
@@ -199,6 +217,7 @@ validate_reuse_preparation() {
   local prep_manifest="${ECODA_RUN_ROOT}/manifests/preparation.tsv"
   local chunk_manifest="${ECODA_RUN_ROOT}/manifests/chunks.tsv"
   local ds views run_root chunk feather_dir chunk_num feather union_path sample expected_args
+  local validated_unions=""
   [[ -s "${prep_manifest}" && -s "${chunk_manifest}" ]] || {
     echo "ERROR: --skip-prepare reuse run lacks immutable preparation/chunk manifests." >&2
     return 1
@@ -236,7 +255,13 @@ validate_reuse_preparation() {
     union_path="$(sed -n '1p' "${chunk}")"
     [[ "${union_path}" == "${expected_union}" ]] || return 1
     ecoda_validate_run_owned_path "${union_path}" "${ECODA_RUN_ROOT}" || return 1
-    ecoda_validate_checksum "${union_path}" || return 1
+    case " ${validated_unions} " in
+      *" ${union_path} "*) ;;
+      *)
+        ecoda_validate_checksum "${union_path}" || return 1
+        validated_unions="${validated_unions} ${union_path}"
+        ;;
+    esac
     expected_args=(--expected-union "${union_path}")
     while IFS= read -r sample; do
       [[ -n "${sample}" ]] || return 1
@@ -253,7 +278,8 @@ validate_reuse_preparation() {
 sync_one_dataset() {
   local ds="$1" manifest="$2" sync_dir="${ECODA_RUN_ROOT}/status/sync"
   local path view output remote_dir dataset_root lock
-  local transfer_manifest verify_manifest rc=0 selected=0
+  local transfer_manifest verify_manifest local_digest local_size
+  local rc=0 selected=0
   mkdir -p "${sync_dir}" || return 1
   lock="${sync_dir}/${ds}.lock"
   mkdir "${lock}" 2>/dev/null || return 1
@@ -271,14 +297,20 @@ sync_one_dataset() {
       selected=1
       path="$(output_path_for "${row_ds}" "${view}")" || { rc=1; continue; }
       output="$(basename "${path}")"
-      if ! ecoda_validate_checksum "${path}" ||
-         ! "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/annotation_contract.py" \
-           --h5ad "${path}" --require-sidecar >/dev/null 2>&1; then
+      if ! ecoda_validate_checksum "${path}"; then
+        rc=1
+        continue
+      fi
+      local_digest="${ECODA_CHECKSUM_MD5}"
+      local_size="${ECODA_CHECKSUM_SIZE}"
+      if ! "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/annotation_contract.py" \
+           --h5ad "${path}" --sidecar-validated >/dev/null 2>&1; then
         rc=1
         continue
       fi
       printf '%s\n' "${output}" >> "${transfer_manifest}" || rc=1
-      printf '%s\t%s\t%s\n' "${view}" "${path}" "${output}" >> "${verify_manifest}" || rc=1
+      printf '%s\t%s\t%s\t%s\t%s\n' "${view}" "${path}" "${output}" \
+        "${local_digest}" "${local_size}" >> "${verify_manifest}" || rc=1
       printf '%s\n' "${output}.md5" >> "${transfer_manifest}" || rc=1
     done < "${manifest}"
   fi
@@ -290,9 +322,10 @@ sync_one_dataset() {
     rc=1
   fi
   if [[ ${rc} -eq 0 ]]; then
-    while IFS=$'\t' read -r view path output; do
+    while IFS=$'\t' read -r view path output local_digest local_size; do
       ecoda_compare_checksum_remote "${path}" \
-        "${remote_dir}/${output}" "${remote_dir}/${output}.md5" || rc=1
+        "${remote_dir}/${output}" "${remote_dir}/${output}.md5" \
+        "${local_digest}" "${local_size}" || rc=1
     done < "${verify_manifest}"
   fi
   if [[ ${rc} -eq 0 ]]; then
@@ -544,6 +577,7 @@ while IFS=$'\t' read -r ds view; do
       stage4_abort "invalid Stage 4 h5ad ${row}"
     ecoda_validate_checksum "${input_path}" ||
       stage4_abort "invalid Stage 4 checksum ${row}"
+    stage4_record_source_checksum "${ds}" "${view}" "${input_path}"
   fi
   if [[ ${FORCE_ARG} -eq 1 ]]; then
     ecoda_invalidate_artifact "${ECODA_RUN_ROOT}/datasets/${ds}/merge.ok" ||
@@ -585,9 +619,12 @@ if [[ ${FORCE_ARG} -eq 0 && "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
     while IFS=$'\t' read -r row_ds view; do
       [[ "${row_ds}" == "${ds}" ]] || continue
       input_path="$(output_path_for "${ds}" "${view}")"
+      if ! stage4_validate_source_checksum "${input_path}"; then
+        dataset_valid=0
+        continue
+      fi
       "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/annotation_contract.py" \
-        --h5ad "${input_path}" --require-sidecar >/dev/null 2>&1 || dataset_valid=0
-      ecoda_validate_checksum "${input_path}" || dataset_valid=0
+        --h5ad "${input_path}" --sidecar-validated >/dev/null 2>&1 || dataset_valid=0
     done < "${WORK_MANIFEST}"
     if [[ ${dataset_valid} -eq 1 ]]; then
       printf '%s\tALREADY_ANNOTATED\n' "${ds}" >> "${ECODA_RUN_ROOT}/status/skipped"

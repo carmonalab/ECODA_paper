@@ -334,7 +334,7 @@ stage5_repair_missing_h5ad_sidecars() {
   local repair_manifest="${ECODA_RUN_ROOT}/manifests/h5ad_checksum_repairs.tsv"
   local repair_tmp="${repair_manifest}.build.$$"
   local ds view path sidecar digest size root repairs=0
-  local scratch_path nas_path scratch_digest nas_digest source_key seen_sources=""
+  local scratch_path nas_path scratch_digest scratch_size source_key seen_sources=""
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
   : > "${repair_tmp}" || return 1
   while IFS=$'\t' read -r ds view _scope; do
@@ -349,53 +349,57 @@ stage5_repair_missing_h5ad_sidecars() {
       rm -f "${repair_tmp}"
       return 1
     }
-    scratch_digest="$(ecoda_md5_file "${scratch_path}")" || {
-      rm -f "${repair_tmp}"
-      return 1
-    }
-    nas_digest="$(ecoda_md5_file "${nas_path}")" || {
-      rm -f "${repair_tmp}"
-      return 1
-    }
-    [[ "${scratch_digest}" == "${nas_digest}" ]] || {
-      rm -f "${repair_tmp}"
-      return 1
-    }
+    echo "Stage 5 source checksum validation: ${ds}/${view}" >&2
     for root in "${HPC_SCRATCH_DIR}" "${NAS_TARGET_DIR}"; do
       path="${root}/${ds}/output/$(ecoda_view_output_name "${ds}" "${view}")"
       sidecar="${path}.md5"
       if [[ -e "${sidecar}" || -L "${sidecar}" ]]; then
+        # Validate the existing sidecar once and reuse its strict digest/size
+        # record for the scratch/NAS identity comparison below.
         ecoda_validate_checksum "${path}" || {
           rm -f "${repair_tmp}"
           return 1
         }
-        continue
+        digest="${ECODA_CHECKSUM_MD5}"
+        size="${ECODA_CHECKSUM_SIZE}"
+      else
+        # A missing sidecar is repaired only after the persisted H5AD content
+        # contract passes. Existing invalid sidecars are never overwritten.
+        "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+          --path "${path}" --view "${view}" \
+          --method "Stage 5 source checksum repair" >/dev/null 2>&1 || {
+          rm -f "${repair_tmp}"
+          return 1
+        }
+        ecoda_write_checksum "${path}" || {
+          rm -f "${repair_tmp}"
+          return 1
+        }
+        digest="${ECODA_CHECKSUM_MD5}"
+        size="${ECODA_CHECKSUM_SIZE}"
+        ecoda_validate_checksum_record "${path}" "${digest}" "${size}" || {
+          rm -f "${repair_tmp}"
+          return 1
+        }
+        printf '%s\t%s\t%s\t%s\t%s\n' "${root}" "${ds}" "${view}" \
+          "${path}" "${digest}:${size}" >> "${repair_tmp}" || {
+          rm -f "${repair_tmp}"
+          return 1
+        }
+        repairs=$((repairs + 1))
       fi
-      # A missing sidecar is repaired only after the persisted H5AD content
-      # contract passes. Existing invalid sidecars are never overwritten.
-      "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
-        --path "${path}" --view "${view}" \
-        --method "Stage 5 source checksum repair" >/dev/null 2>&1 || {
-        rm -f "${repair_tmp}"
-        return 1
-      }
-      ecoda_write_checksum "${path}" || {
-        rm -f "${repair_tmp}"
-        return 1
-      }
-      ecoda_validate_checksum "${path}" || {
-        rm -f "${repair_tmp}"
-        return 1
-      }
-      digest="$(sed -n 's/^MD5=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
-      size="$(sed -n 's/^SIZE=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
-      printf '%s\t%s\t%s\t%s\t%s\n' "${root}" "${ds}" "${view}" \
-        "${path}" "${digest}:${size}" >> "${repair_tmp}" || {
-        rm -f "${repair_tmp}"
-        return 1
-      }
-      repairs=$((repairs + 1))
+      if [[ "${root}" == "${HPC_SCRATCH_DIR}" ]]; then
+        scratch_digest="${digest}"
+        scratch_size="${size}"
+      else
+        [[ "${scratch_digest}" == "${digest}" &&
+           "${scratch_size}" == "${size}" ]] || {
+          rm -f "${repair_tmp}"
+          return 1
+        }
+      fi
     done
+    echo "Stage 5 source checksum validation passed: ${ds}/${view}" >&2
   done < "${MANIFEST}"
   if [[ ${repairs} -gt 0 ]]; then
     ecoda_atomic_install_manifest "${repair_tmp}" "${repair_manifest}" 5 || {
@@ -423,12 +427,14 @@ stage5_prepare_source_identity() {
   if [[ -s "${identity}" && -s "${identity_sidecar}" ]]; then
     "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/h5ad_source_identity.py" \
       --identity "${identity}" --selection "${MANIFEST}" \
-      --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}" ||
+      --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}" \
+      --validated-source-sidecars ||
       return 1
   else
     "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/h5ad_source_identity.py" \
       --output "${identity}" --selection "${MANIFEST}" \
-      --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}" ||
+      --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}" \
+      --validated-source-sidecars ||
       return 1
     ecoda_write_checksum "${identity}" || return 1
   fi
@@ -441,7 +447,7 @@ stage5_compute_h5ad_preflight() {
   local expected_tmp="${preflight_manifest}.expected.$$"
   local status_dir="${ECODA_RUN_ROOT}/status/h5ad_preflight"
   local preflight_logs="${ECODA_RUN_ROOT}/logs"
-  local ds view source_path safe status state preflight_row seen_rows
+  local ds view source_path safe status state status_run status_dataset status_view status_task
   local preflight_id preflight_rc count=0
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
 
@@ -508,18 +514,34 @@ stage5_compute_h5ad_preflight() {
     if [[ "${preflight_id}" =~ ^[0-9]+$ ]]; then
       stage5_record_scheduler PREFLIGHT "${preflight_id}" || return 1
     fi
-    [[ ${preflight_rc} -eq 0 && "${preflight_id}" =~ ^[0-9]+$ ]] || return 1
-  fi
-
+    if [[ ${preflight_rc} -ne 0 || ! "${preflight_id}" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: Stage 5 H5AD preflight scheduler wait failed: job=${preflight_id:-unknown} rc=${preflight_rc}" >&2
+      return 1
+    fi
   while IFS=$'\t' read -r ds view _scope; do
     safe="$(_ecoda_safe_component "${ds}__${view}")"
     status="${status_dir}/${safe}.status"
-    [[ -s "${status}" ]] || return 1
+    [[ -s "${status}" ]] || {
+      echo "ERROR: Stage 5 H5AD preflight status is missing: ${status}" >&2
+      return 1
+    }
+    status_run="$(sed -n 's/^RUN_ID=//p' "${status}" | head -1)"
+    status_dataset="$(sed -n 's/^DATASET=//p' "${status}" | head -1)"
+    status_view="$(sed -n 's/^VIEW=//p' "${status}" | head -1)"
+    status_task="$(sed -n 's/^TASK_ID=//p' "${status}" | head -1)"
     state="$(sed -n 's/^STATE=//p' "${status}" | head -1)"
-    [[ "${state}" == OK ]] || return 1
+    [[ "${state}" == OK &&
+       "${status_run}" == "${ECODA_RUN_ID}" &&
+       "${status_dataset}" == "${ds}" &&
+       "${status_view}" == "${view}" &&
+       "${status_task}" == "$((count + 1))" ]] || {
+      echo "ERROR: Stage 5 H5AD preflight status mismatch: ${status}" >&2
+      return 1
+    }
     count=$((count + 1))
-  done < "${MANIFEST}"
+  done < "${preflight_manifest}"
   [[ ${count} -gt 0 ]] || return 1
+  fi
 }
 
 # Resolve the immutable dataset/view selection before any scheduler submission.
