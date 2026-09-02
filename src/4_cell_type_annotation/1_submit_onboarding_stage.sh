@@ -26,6 +26,7 @@ MEMORY="32G"
 MAX_MEMORY="128G"
 PARTITION="${SLURM_PARTITION_BENCHMARK_CPU:-shared-cpu}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
+export ANNOTATION_WORKER_TIME_LIMIT="${ANNOTATION_WORKER_TIME_LIMIT:-12:00:00}"
 RUNTIME_EXPORT=""
 
 usage() {
@@ -822,7 +823,7 @@ else
 fi
 [[ ${TOTAL_CHUNKS} -gt 0 ]] || stage4_abort "reuse chunk manifest is empty"
 set +e
-annot_msg="$(sbatch --parsable --array="1-${TOTAL_CHUNKS}%${THROTTLE}" --mem="${MEMORY}" --partition="${PARTITION}" \
+annot_msg="$(sbatch --parsable --array="1-${TOTAL_CHUNKS}%${THROTTLE}" --mem="${MEMORY}" --time="${ANNOTATION_WORKER_TIME_LIMIT}" --partition="${PARTITION}" \
   --output="${LOGS_DIR}/4_cell_type_annotation_%A_%a.log" --error="${LOGS_DIR}/4_cell_type_annotation_%A_%a.err" \
   --mail-user="${USER_EMAIL}" --export="ALL,CHUNKS_MANIFEST=${CHUNK_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},ANNOTATION_ERROR_PREFIX=${LOGS_DIR}/4_cell_type_annotation,${RUNTIME_EXPORT}" \
   "${SCRIPT_DIR}/2.1_run_worker.sh")"
@@ -874,7 +875,7 @@ ecoda_atomic_install_manifest "${MERGE_TMP}" "${MERGE_MANIFEST}" 3 ||
   stage4_abort "failed to install Stage 4 merge manifest atomically"
 rm -f "${MERGE_TMP}"
 set +e
-merge_msg="$(sbatch --parsable --array="1-${MERGE_COUNT}%${THROTTLE}" --mem="${MEMORY}" --partition="${PARTITION}" \
+merge_msg="$(sbatch --parsable --array="1-${MERGE_COUNT}%${THROTTLE}" --mem="${MEMORY}" --time="${ANNOTATION_WORKER_TIME_LIMIT}" --partition="${PARTITION}" \
   --output="${LOGS_DIR}/4_annotation_merge_%A_%a.log" --error="${LOGS_DIR}/4_annotation_merge_%A_%a.err" \
   --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_MERGE_MANIFEST=${MERGE_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},FORCE_ANNOTATION=${FORCE_ARG},${RUNTIME_EXPORT}" \
   "${SCRIPT_DIR}/3.2_merge_worker.sh")"

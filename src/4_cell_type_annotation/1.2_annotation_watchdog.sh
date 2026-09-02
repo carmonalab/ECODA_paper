@@ -11,6 +11,7 @@ source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 cd "${PROJECT_ROOT}"
 [[ $# -eq 7 ]] || { echo "Usage: 1.2_annotation_watchdog.sh RUN_ID MANIFEST ARRAY_ID MEM MAX_MEM PARTITION THROTTLE" >&2; exit 2; }
 RUN_ID="$1"; ROOT_MANIFEST="$2"; ARRAY_ID="$3"; CURRENT_MEMORY="$4"; MAX_MEMORY="$5"; PARTITION="$6"; THROTTLE="$7"
+ANNOTATION_WORKER_TIME_LIMIT="${ANNOTATION_WORKER_TIME_LIMIT:-12:00:00}"
 ecoda_validate_run_id "${RUN_ID}" || exit 1
 RUN_ROOT="${HPC_SCRATCH_DIR}/_ecoda_runs/${RUN_ID}"
 [[ -d "${RUN_ROOT}" ]] || { echo "ERROR: Stage 4 run root is missing: ${RUN_ROOT}" >&2; exit 1; }
@@ -53,6 +54,7 @@ classify() {
     case "${state}" in
       COMPLETED) [[ -z "${exitcode}" || "${exitcode}" == 0:0* ]] || FAILED_TASKS+=("${task}:${state}:${exitcode}") ;;
       OUT_OF_MEMORY) OOM_TASKS+=("${task}") ;;
+      *) FAILED_TASKS+=("${task}:${state}:${exitcode}") ;;
     esac
   done <<< "${rows}"
 }
@@ -114,9 +116,9 @@ while :; do
   ecoda_validate_manifest "${RETRY_MANIFEST}" 3 || fail "annotation retry manifest is invalid"
   retry_count="$(wc -l < "${RETRY_MANIFEST}" | tr -d '[:space:]')"
   set +e
-  retry_msg="$(sbatch --parsable --array="1-${retry_count}%${THROTTLE}" --mem="${NEXT_MEMORY}" --partition="${PARTITION}" \
+  retry_msg="$(sbatch --parsable --array="1-${retry_count}%${THROTTLE}" --mem="${NEXT_MEMORY}" --time="${ANNOTATION_WORKER_TIME_LIMIT}" --partition="${PARTITION}" \
     --output="${LOGS_DIR}/4_cell_type_annotation_retry${RETRY_INDEX}_%A_%a.log" --error="${LOGS_DIR}/4_cell_type_annotation_retry${RETRY_INDEX}_%A_%a.err" --mail-user="${USER_EMAIL}" \
-    --export="ALL,CHUNKS_MANIFEST=${RETRY_MANIFEST},ANNOTATION_ERROR_PREFIX=${LOGS_DIR}/4_cell_type_annotation_retry${RETRY_INDEX},ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" "${SCRIPT_DIR}/2.1_run_worker.sh")"
+    --export="ALL,CHUNKS_MANIFEST=${RETRY_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},ANNOTATION_ERROR_PREFIX=${LOGS_DIR}/4_cell_type_annotation_retry${RETRY_INDEX},${RUNTIME_EXPORT}" "${SCRIPT_DIR}/2.1_run_worker.sh")"
   retry_rc=$?
   set -e
   [[ ${retry_rc} -eq 0 ]] || fail "sbatch rejected annotation OOM retry"
