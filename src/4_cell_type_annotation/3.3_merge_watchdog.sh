@@ -11,7 +11,7 @@ source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 [[ $# -eq 7 ]] || { echo "Usage: 3.3_merge_watchdog.sh RUN_ID MANIFEST ARRAY_ID MEM MAX_MEM PARTITION THROTTLE" >&2; exit 2; }
 RUN_ID="$1"; ROOT_MANIFEST="$2"; ARRAY_ID="$3"; CURRENT_MEMORY="$4"; MAX_MEMORY="$5"; PARTITION="$6"; THROTTLE="$7"
-ANNOTATION_WORKER_TIME_LIMIT="${ANNOTATION_WORKER_TIME_LIMIT:-12:00:00}"
+ANNOTATION_WORKER_TIME_LIMIT="${ANNOTATION_WORKER_TIME_LIMIT:-02:00:00}"
 RUN_ROOT="${HPC_SCRATCH_DIR}/_ecoda_runs/${RUN_ID}"
 STATUS_FILE="${RUN_ROOT}/status/merge_watchdog"
 CURRENT_MANIFEST="${ROOT_MANIFEST}"

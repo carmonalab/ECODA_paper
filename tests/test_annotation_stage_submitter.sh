@@ -42,8 +42,8 @@ CALLS="$(cat "${CAPTURE}")"
 [[ "$(printf '%s\n' "${CALLS}" | wc -l | tr -d '[:space:]')" == "6" ]]
 case "${CALLS}" in *"--array=1-9%1000"*) ;; *) echo "runnable arrays did not use nine rows" >&2; exit 1 ;; esac
 case "${CALLS}" in *"1.2_prepare_chunks_worker.sh"*) ;; *) echo "preparation worker array missing" >&2; exit 1 ;; esac
-case "${CALLS}" in *"--time=12:00:00"*"2.1_run_worker.sh"*) ;; *) echo "annotation worker time limit missing" >&2; exit 1 ;; esac
-case "${CALLS}" in *"--time=12:00:00"*"3.2_merge_worker.sh"*) ;; *) echo "merge worker time limit missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"--time=02:00:00"*"2.1_run_worker.sh"*) ;; *) echo "annotation worker time limit missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"--time=02:00:00"*"3.2_merge_worker.sh"*) ;; *) echo "merge worker time limit missing" >&2; exit 1 ;; esac
 case "${CALLS}" in *"ECODA_RUNTIME_MODE=host"*"ECODA_RUNTIME_PROFILE=stage4"*) ;; *) echo "Stage 4 runtime export missing" >&2; exit 1 ;; esac
 : > "${CAPTURE}"
 DATASET_OUTPUT="$(

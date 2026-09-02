@@ -268,11 +268,9 @@ if (is.null(args$chunk_file) || !file.exists(args$chunk_file)) {
 }
 
 # Wall-clock budget: SLURM_TIME_LIMIT is in MINUTES (Slurm sets it as the
-# --time value, e.g. "120" for a 2h job) — multiply by 60 for the seconds
-# scale. The 7200 s fallback matches the worker's #SBATCH --time=02:00:00.
-# SLURM_JOB_START_TIME is not a standard Slurm env var, so proc.time()[3]
-# (R launch, i.e. after staging) is the actual elapsed source; it under-counts
-# wall time by the staging duration, which is a safe (conservative) direction.
+# --time value). The annotation method timeout scales at 3 minutes per 1000
+# cells, with a 3-minute floor, and the remaining worker wall time remains the
+# outer bound for both scATOMIC and HiTME attempts.
 wall_limit_s <- suppressWarnings(as.numeric(Sys.getenv("SLURM_TIME_LIMIT", "")))
 if (is.na(wall_limit_s) || wall_limit_s <= 0) {
   wall_limit_s <- 7200
@@ -475,9 +473,8 @@ if (!final_feather_valid) {
       stop("structural annotation setup failed for sample ", target_sample,
            ": ", conditionMessage(e))
     })
-    timeout <- max(60, ncol(seurat_obj) / 10000 * 60 * 10)
-    attempt_timeout <- min(timeout, 1800)
-
+    timeout <- max(180, ncol(seurat_obj) / 1000 * 180)
+    attempt_timeout <- timeout
     # Method calls are fault-tolerant: timeout/error leaves the method's
     # required columns absent so materialize_annotation fills typed NAs.
     # Setup and output materialization remain outside this boundary and
