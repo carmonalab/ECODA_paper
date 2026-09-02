@@ -398,6 +398,10 @@ operational evidence, not a replacement for the promotion rules above.
   filesystem publication, still rejects a nonzero scheduler return, and
   preserves run/task-bound status validation. This prevents shared-filesystem
   publication races without converting status files into scheduler evidence.
+- The same local status-settle barrier is now applied to Pipeline 3 before
+  consuming compute-node H5AD statuses; the pending source correction is
+  intentionally kept separate from the already reviewed `de621c6` runtime and
+  requires one final source-matched runtime rebuild before any dependent gate.
 - Fresh Stage 3 gene-fix gate
   `ecoda_bassez_rolling_b3_batch_gene_fix_0145b24_20260902T201359Z` rebuilt
   `Breast_cancer`, `Kidney_KPMP`, and `Lung` with stable-ID-to-symbol mapping.

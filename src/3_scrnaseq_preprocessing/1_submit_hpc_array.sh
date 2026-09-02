@@ -195,6 +195,10 @@ stage3_compute_validate_existing() {
     echo "ERROR: Stage 3 H5AD preflight scheduler wait failed: job=${preflight_id:-unknown} rc=${preflight_rc}" >&2
     return 1
   fi
+  ecoda_wait_h5ad_preflight_status_files "${preflight_manifest}" "${status_dir}" || {
+    echo "ERROR: Stage 3 H5AD preflight statuses did not settle within ${H5AD_PREFLIGHT_STATUS_GRACE_SECONDS:-60}s" >&2
+    return 1
+  }
   while IFS=$'\t' read -r ds view path; do
     safe="$(_ecoda_safe_component "${ds}__${view}")"
     status="${status_dir}/${safe}.status"
