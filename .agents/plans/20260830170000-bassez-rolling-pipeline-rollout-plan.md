@@ -274,6 +274,14 @@ operational evidence, not a replacement for the promotion rules above.
   Stage 3 raw-count ownership, bounded sparse-PCA allocation, named/counts-only
   H5AD contracts, 64G Stage 2 watchdog memory, raw-variable expansion, reduced
   preprocessing copy peaks, and a backed raw-only H5AD loader.
+- Commit `46f6e3f` adds the cross-pipeline preflight optimization: one strict
+  digest/size read is reused for sidecar and scratch/NAS checks, duplicate
+  local sync hashes are removed, repeated Stage 4 union hashes are cached per
+  run, and annotation contracts expose an explicit caller-validated-sidecar
+  mode that skips only a duplicate sidecar hash after `ecoda_validate_checksum`.
+  The Stage 5 source-repair loop now validates each scratch/NAS H5AD once and
+  records progress; no invalid-sidecar overwrite or status-only success path
+  is allowed.
 - The durable gate implementation now treats `dependency_manifests` as
   reviewed predecessor lineage independent of `serialization_group`.
   `serialization_group` remains the explicit deterministic mutex: an active
@@ -315,6 +323,12 @@ operational evidence, not a replacement for the promotion rules above.
   inspect covered `4371743` exactly once and recorded failed accounting; the
   gate is immutable failed evidence and must not be reused. A fresh runtime
   gate is required after the active jobs drain.
+- The optimized runtime gate
+  `ecoda_runtime_build_bassez_rolling_46f6e3f_20260902T194508Z` completed
+  with build job `4374019`; its first inspect and artifact audit passed, and
+  Luna Max approved it at `2026-09-02T19:57:55Z`. It is release-eligible for
+  commit `46f6e3f` only. The subsequent Ensembl stable-ID correction is
+  intentionally excluded from this image and requires a second runtime build.
 
 ### B5 preflight failure and cross-pipeline checksum optimization
 
@@ -340,10 +354,10 @@ operational evidence, not a replacement for the promotion rules above.
   remain fatal; only genuinely missing sidecars may be created after the H5AD
   semantic contract passes.
 - Focused local verification passed for checksum reuse, H5AD run/task binding,
-  source identity, Stage 2/3/4/5 submitters/watchdogs, benchmark sync, and
-  annotation merge safety. The source/runtime patch remains local until all
-  active Bamboo gates reach terminal state; then it requires a new immutable
-  runtime build/review before any fresh full-cohort gate.
+  source identity, Stage 2/3/4/5 submitters/watchdogs, benchmark sync,
+  annotation merge safety, and Ensembl stable-ID mapping. The source/runtime
+  patch is committed as `46f6e3f` and the next commit must rebuild/review the
+  runtime before affected Stage 3/4 launches.
 - `ecoda_bassez_rolling_b4_batch_rest_80f71c8_20260902T081547Z` reached
   terminal `FAILED` at `2026-09-02T19:33:55Z` after preparation and annotation
   succeeded but merge array/watchdog `4373971`/`4373972` both returned
@@ -359,6 +373,14 @@ operational evidence, not a replacement for the promotion rules above.
   issue; do not loosen anchor requirements or sidecar validation. A fresh
   reviewed B4 repair gate for the affected batch rows is required before
   releasing B5 batch-rest.
+- Inspection of the three failed batch inputs found Ensembl stable IDs in
+  `var_names` (for example `ENSG00000278232`) while the annotation signatures
+  require gene symbols. The canonical `gene_utils` map previously omitted its
+  `Gene stable ID` column, leaving those identifiers unmapped. The repair adds
+  stable-ID and version-suffix normalization before existing symbol/alias
+  mappings; this is an upstream preprocessing correction, not an annotation
+  anchor relaxation. A fresh Stage 3 rebuild for the affected rows is required
+  before Stage 4 repair.
 
 ### Historical failed batch Stage 3 gates
 

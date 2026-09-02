@@ -28,6 +28,7 @@ from src.utils.py.h5ad_source_identity import (
     load_source_identity,
     verify_source_identity,
 )
+from src.utils.py.gene_utils import standardize_gene_symbols
 
 
 def write_feather(path: Path, frame: pd.DataFrame) -> None:
@@ -55,7 +56,14 @@ def write_file_sidecar(path: Path) -> None:
     )
 
 
+
 def main() -> None:
+    class GeneFixture:
+        var_names = ["ENSG00000278232", "ENSG00000278232.1", "CRF-R"]
+
+    genes = GeneFixture()
+    standardize_gene_symbols(genes)
+    assert genes.var_names == ["CRHR1", "CRHR1", "CRHR1"]
     with tempfile.TemporaryDirectory(prefix="ecoda-matrix-validator-") as raw:
         root = Path(raw)
         (root / "embeddings").mkdir()

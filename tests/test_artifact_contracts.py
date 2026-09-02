@@ -83,8 +83,15 @@ def main() -> None:
         feather_path = root / "annotations_chunk_1.feather"
         frame = annotation_frame(["s1", "s1"], ["c1", "c2"])
         feather.write_feather(frame, feather_path)
+        write_sidecar(feather_path)
         stats = validate_feather(feather_path, expected_keys={("s1", "c1"), ("s1", "c2")})
+        validated_stats = validate_feather(
+            feather_path,
+            expected_keys={("s1", "c1"), ("s1", "c2")},
+            sidecar_validated=True,
+        )
         assert stats["n_rows"] == 2
+        assert validated_stats["n_rows"] == 2
         assert stats["column_coverage"]["layer1"]["n_nonblank"] == 2
         categorical = frame.copy()
         categorical["classification_confidence"] = ["confident", "low_confidence"]
