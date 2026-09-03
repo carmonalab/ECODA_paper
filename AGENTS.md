@@ -44,6 +44,14 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   whenever resources permit; only documented data dependencies may serialize
   work. Numbered pipelines remain ordered. Pipeline 1 is the NAS-bound serial
   staging exception and is intentionally unchanged.
+- **Targeted recovery is mandatory:** Before any Pipeline 2–5 rerun, inspect
+  the failed run's terminal status, manifests, watchdog records, and artifact
+  contracts. Re-run only the failed dataset/view/method/parameter rows; never
+  add `--force` to a broad selection that includes current-source artifacts
+  already validated successfully. Preserve successful run outputs and record
+  the exact failure scope and rationale for every repair gate. If a full
+  recomputation is genuinely required, document the dependency or integrity
+  reason before launching it.
 - Any array that can OOM MUST use a compute-node watchdog with automatic
   OOM-only resubmission of the affected manifest rows, bounded memory
   escalation, and fail-closed handling of non-OOM failures or an exhausted
