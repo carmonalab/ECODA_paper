@@ -38,7 +38,18 @@ WORKER_TIME_LIMIT="${METHOD_TIME_LIMIT:-${BENCHMARK_CPU_TIME_LIMIT}}"
 [[ -d "${RUN_ROOT}" ]] || { echo "ERROR: matrix run root is missing: ${RUN_ROOT}" >&2; exit 1; }
 ecoda_validate_run_owned_path "${ROOT_MANIFEST}" "${RUN_ROOT}" ||
   { echo "ERROR: matrix manifest is outside the run root." >&2; exit 1; }
-ecoda_validate_manifest "${ROOT_MANIFEST}" 3 ||
+MATRIX_MANIFEST_COLUMNS="$(
+  awk -F '\t' '
+    NF == 3 { saw_three = 1 }
+    NF == 4 { saw_four = 1 }
+    NF != 3 && NF != 4 { bad = 1 }
+    END {
+      if (bad || (saw_three && saw_four) || (!saw_three && !saw_four)) exit 1
+      print(saw_four ? 4 : 3)
+    }
+  ' "${ROOT_MANIFEST}"
+)" || { echo "ERROR: matrix manifest must have uniform three or four columns." >&2; exit 1; }
+ecoda_validate_manifest "${ROOT_MANIFEST}" "${MATRIX_MANIFEST_COLUMNS}" ||
   { echo "ERROR: matrix manifest is invalid." >&2; exit 1; }
 if [[ -n "${ANALYSIS_PASS:-}" ]]; then
   unset BENCHMARK_MANIFEST
@@ -116,13 +127,13 @@ while :; do
   for task in "${OOM_TASKS[@]}"; do
     sed -n "${task}p" "${CURRENT_MANIFEST}" >> "${RETRY_TMP}"
   done
-  if ! ecoda_atomic_install_manifest "${RETRY_TMP}" "${RETRY_MANIFEST}" 3; then
+  if ! ecoda_atomic_install_manifest "${RETRY_TMP}" "${RETRY_MANIFEST}" "${MATRIX_MANIFEST_COLUMNS}"; then
     fail "failed to install matrix retry manifest atomically"
   fi
   rm -f "${RETRY_TMP}"
   ecoda_validate_run_owned_path "${RETRY_MANIFEST}" "${RUN_ROOT}" ||
     fail "matrix retry manifest escaped the run root"
-  ecoda_validate_manifest "${RETRY_MANIFEST}" 3 || fail "matrix retry manifest is invalid"
+  ecoda_validate_manifest "${RETRY_MANIFEST}" "${MATRIX_MANIFEST_COLUMNS}" || fail "matrix retry manifest is invalid"
   retry_count="$(wc -l < "${RETRY_MANIFEST}" | tr -d '[:space:]')"
   retry_export="ALL,ANALYSIS_MANIFEST=${RETRY_MANIFEST},MATRIX_RETRY=1,JOB_LOG_PREFIX=${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX}"
   if [[ -n "${ANALYSIS_PASS:-}" ]]; then

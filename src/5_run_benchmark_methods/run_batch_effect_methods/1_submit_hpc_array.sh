@@ -19,6 +19,6 @@ for arg in "${ARGS[@]}"; do
   case "${arg}" in *scpoli*) echo "Unknown batch-effect method 'scpoli'" >&2; exit 1 ;; esac
 done
 if [[ ${METHODS_PRESENT} -eq 0 ]]; then
-  ARGS+=(--methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,pilotgm,qot)
+  ARGS+=(--methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot)
 fi
 exec "${SCRIPT_DIR}/../1_submit_hpc_array.sh" "${ARGS[@]}"

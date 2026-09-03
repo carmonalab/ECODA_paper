@@ -822,7 +822,7 @@ benchmark_sync_artifacts_for() {
         SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_hvg2000_highres_scpoli_dims${n}_embs.feather")
       done
       ;;
-    pilot|qot|pilotgm)
+    pilot|qot)
       suffix="${label}"
       if [[ -n "${ANALYSIS_PASS:-}" ]]; then
         SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_batch_effect_${ANALYSIS_PASS}_hvg2000_highres_${suffix}_dists.feather")
@@ -832,6 +832,10 @@ benchmark_sync_artifacts_for() {
           SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_hvg${n}_highres_${suffix}_dists.feather")
         done
       fi
+      ;;
+    pilotgm)
+      [[ -z "${ANALYSIS_PASS:-}" ]] || return 1
+      SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_hvg2000_highres_pilotgm_dists.feather")
       ;;
     trans|zeroimp)
       SYNC_ARTIFACTS+=("${root}/results/${ds}_${label}.rds")

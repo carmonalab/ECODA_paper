@@ -151,10 +151,16 @@ def expected_artifacts(root: Path, ds: str, label: str, batch: bool, batch_pass:
         return paths
     if label in {"pilot", "qot", "pilotgm"}:
         if batch:
+            if label == "pilotgm":
+                raise ValueError("PILOT-GM-VAE is not scheduled in batch-effect mode")
             return [
                 root
                 / "embeddings"
                 / f"{ds}_batch_effect_{batch_pass or 'uncorrected'}_hvg2000_highres_{label}_dists.feather"
+            ]
+        if label == "pilotgm":
+            return [
+                root / "embeddings" / f"{ds}_hvg2000_highres_pilotgm_dists.feather"
             ]
         paths = [root / "embeddings" / f"{ds}_hvg2000_lowres_{label}_dists.feather"]
         paths.extend(

@@ -195,18 +195,27 @@ uses the separate flexible any-GPU resource class:
 bash src/5_run_benchmark_methods/1_submit_hpc_array.sh \
   --datasets Joanito,Stephenson,CombinedPBMC,Alzheimer,Breast_cancer,Covid19_PBMC,Kidney_KPMP,Myocardial_infarction,Diabetes,Lupus_PBMC,Lung,Parkinson \
   --pass uncorrected \
-  --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,pilotgm,qot \
+  --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot \
   --force
 ```
 
 The ordinary benchmark gates use `benchmark_analysis` only. The batch gate uses `batch_effect_uncorrected` only and the fixed pass suite. Never pass Bassez, Lee, Smillie, or Zhang to the batch `--pass` command.
 
-Stage 5 resource behavior must remain explicit:
+Stage 5 resource behavior and parameter screening remain explicit:
 
-- Standard/default benchmark MrVI/scPoli use the H200-pinned default class.
-- Batch-effect MrVI/scPoli use the flexible any-GPU class automatically through `--pass uncorrected`.
-- Non-default/flexible GPU selections may use `shared-gpu,private-carmona-gpu` with the shorter default limit; target Carmona explicitly during weekday 09:00–18:00 when an H100 allocation is needed.
-- Preserve input-size and CUDA peak-memory telemetry. If a batch dataset exceeds the measured VRAM/time class, submit a new explicit tier gate with the required `BENCHMARK_GPU_ANY_VRAM_PER_GPU` and time override; do not silently move standard/default benchmark results off H200.
+- Ordinary GloScope, MrVI, scPoli, and PILOT-GM-VAE use fixed parameter
+  shards only for the heavy methods; small methods remain one dataset task to
+  avoid repeated H5AD loading.
+- The ordinary PILOT-GM-VAE suite is default-only:
+  `hvg2000_highres`; no pilotgm parameter screening is scheduled.
+- Ordinary default MrVI (`hvg2000`) and default scPoli
+  (`hvg2000_highres_dims15`) use the H200-pinned class.
+- Ordinary non-default MrVI shards (`hvg1000`, `hvg3000`) use CPU; ordinary
+  non-default scPoli shards use the relaxed any-GPU class.
+- Batch-effect PILOT-GM-VAE is not scheduled. Batch MrVI uses the flexible
+  any-GPU class automatically through `--pass uncorrected`.
+- Preserve input-size and CUDA peak-memory telemetry; do not silently move
+  standard/default benchmark results off H200.
 
 ### 9. Promotion, failure, and completion rules
 
@@ -416,6 +425,48 @@ operational evidence, not a replacement for the promotion rules above.
   approval at `2026-09-02T20:12:25Z`; its image is
   `ecoda-py-cuda13-path-preserving-0145b24.sif` with SHA-256
   `96e64d6e94f944c47ca9f9ec17b7fcb6b05ccca9bbd70ea9d35268404fe6da6c`.
+
+### B4/B5 final-gate failures and parameter sharding
+
+- The source-matched final runtime
+  `ecoda_runtime_build_bassez_rolling_01c8d93_20260902T211859Z` completed with
+  build job `4374197`, passed its first audit, and received Luna Max approval
+  at `2026-09-02T21:31:24Z`. Its immutable source is
+  `01c8d93928629dddb5ae388b0e8f02c77394d0aa`.
+- `ecoda_bassez_rolling_b4_batch_repair_01c8d93_20260902T213629Z` reached
+  terminal `FAILED` at `2026-09-03T00:00:41Z`. Preparation, annotation, and
+  merge arrays completed, but merge watchdog `4375215` was `OUT_OF_MEMORY`
+  (`0:125`) while running `annotation_contract.py --h5ad` with a hard-coded
+  2G allocation. Its first inspect covered every recorded array/watchdog ID
+  exactly once and found only that OOM; no reviewer approval was performed.
+  The checked-in repair raises the merge-watchdog allocation to 32G.
+- `ecoda_bassez_rolling_b5_benchmark_rest_01c8d93_20260902T213757Z` reached
+  terminal `FAILED` at `2026-09-03T09:52:23Z`. GloScope task 1 (Adams)
+  rejected one-sided sample-name normalization; scPoli watchdog `4374284`
+  and PILOT-GM-VAE watchdog `4374290` hit the shared 12-hour time limit, and
+  scPoli array `4374283` was still `RUNNING` at first inspection. The first
+  inspect covered two preflight arrays, thirteen method arrays, and thirteen
+  watchdogs exactly once; no reviewer approval was performed.
+- The prior matrix watchdogs were submitted without an `afterany` dependency,
+  so their 12-hour wall clock included queued-array time. The submitter now
+  binds each watchdog to its own array with `--dependency=afterany:<array>`,
+  preserving the full watchdog window for terminal task accounting.
+- Remote execution-time evidence shows the costly methods are GloScope,
+  MrVI, scPoli, and PILOT-GM-VAE; short PILOT, QOT, pseudobulk, and composition
+  methods remain one dataset task to avoid repeated H5AD loading.
+- The Stage 5 submitter now emits fixed four-column parameter-shard manifests
+  for those heavy ordinary methods. Default MrVI (`hvg2000`) and default
+  scPoli (`hvg2000_highres_dims15`) use H200; non-default MrVI uses CPU and
+  non-default scPoli uses any-GPU. GloScope shards consolidate into the
+  canonical method RDS only after their watchdog gate.
+- Ordinary PILOT-GM-VAE is default-only (`hvg2000_highres`); it is not
+  screened across HVG/resolution combinations. PILOT-GM-VAE is excluded from
+  the batch-effect method suite and batch candidate evidence.
+- Focused verification passed for parameter-shard submission/dependencies,
+  four-column OOM retry preservation, GloScope consolidation, execution-log
+  shard merging, default-only PILOT-GM-VAE artifacts, batch exclusion, and
+  MrVI CPU/default-H200 policy. A new runtime build and fresh durable B4/B5
+  gates are required for release.
 
 ### Historical failed batch Stage 3 gates
 

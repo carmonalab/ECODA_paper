@@ -207,20 +207,22 @@ def main():
 
     output_dir = Path(args.output_dir)
     log_dir = Path(args.log_dir or args.output_dir)
+    task_logs = []
     if args.datasets is not None and args.labels is None:
         parser.error("--datasets requires --labels")
     if args.labels is not None:
-        task_logs = []
         for label in args.labels:
             if args.datasets is not None:
                 for ds in args.datasets:
+                    base = log_dir / f"{args.filename_prefix}{label}_{ds}.feather"
+                    shard_pattern = (
+                        log_dir / f"{args.filename_prefix}{label}_{ds}_*.feather"
+                    )
                     task_logs.extend(
                         sorted(
-                            glob.glob(
-                                str(
-                                    log_dir
-                                    / f"{args.filename_prefix}{label}_{ds}.feather"
-                                )
+                            set(
+                                glob.glob(str(base))
+                                + glob.glob(str(shard_pattern))
                             )
                         )
                     )

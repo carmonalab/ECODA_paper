@@ -91,7 +91,7 @@ def make_feathers(analysis_root: Path) -> None:
     matrix = np.abs(np.subtract.outer(np.arange(6, dtype=float), np.arange(6, dtype=float)))
     for ds in ORDER:
         stem = f"{ds}_batch_effect_uncorrected"
-        for suffix in ("pilot", "pilotgm", "mrvi", "qot"):
+        for suffix in ("pilot", "mrvi", "qot"):
             path = embeddings / f"{stem}_hvg2000_highres_{suffix}_dists.feather"
             frame = pd.DataFrame(matrix, index=ids, columns=ids)
             frame.to_feather(path)

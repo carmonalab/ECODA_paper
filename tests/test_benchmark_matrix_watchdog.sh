@@ -22,7 +22,7 @@ STUB
 chmod +x "${TMP_DIR}/bin/sacct" "${TMP_DIR}/bin/sbatch"
 RUN_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/run"
 MANIFEST="${RUN_ROOT}/manifests/mrvi.tsv"
-printf 'Adams\tbatch_effect_uncorrected\tmrvi\nBassez\tbatch_effect_uncorrected\tmrvi\n' > "${MANIFEST}"
+printf 'Adams\tbatch_effect_uncorrected\tmrvi\thvg2000\nBassez\tbatch_effect_uncorrected\tmrvi\thvg1000\n' > "${MANIFEST}"
 RUNTIME_IMAGE="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13.sif"
 RUNTIME_EXPORT="ECODA_RUNTIME_MODE=host,ECODA_RUNTIME_IMAGE=${RUNTIME_IMAGE},ECODA_RUNTIME_MANIFEST=${RUNTIME_IMAGE}.manifest,ECODA_RUNTIME_PROFILE=stage5,ECODA_APPTAINER_NV=1"
 WATCHDOG_OUTPUT="$(HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" ANALYSIS_PASS=uncorrected \
@@ -33,7 +33,7 @@ WATCHDOG_OUTPUT="$(HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" ANALYSIS
 STATUS="${RUN_ROOT}/status/watchdogs/mrvi.status"
 [[ "$(grep '^STATE=' "${STATUS}")" == "STATE=OK" ]]
 RETRY="${RUN_ROOT}/manifests/mrvi.retry_1.tsv"
-[[ "$(cat "${RETRY}")" == $'Bassez\tbatch_effect_uncorrected\tmrvi' ]]
+[[ "$(cat "${RETRY}")" == $'Bassez\tbatch_effect_uncorrected\tmrvi\thvg1000' ]]
 [[ "$(grep -c '^SCHEDULER_ID=' "${STATUS}")" == 2 ]]
 [[ "$(grep -c '^SCHEDULER_ID=1001$' "${STATUS}")" == 1 ]]
 [[ "$(grep -c '^SCHEDULER_ID=1002$' "${STATUS}")" == 1 ]]

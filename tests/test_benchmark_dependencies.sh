@@ -20,29 +20,43 @@ HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.inv
   bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
   --selection-file "${TMP_DIR}/selection.tsv" --methods mofa,gloscope,mrvi >/dev/null
 CALLS="${CAPTURE}"
-[[ "$(wc -l < "${CALLS}" | tr -d '[:space:]')" == 17 ]]
+[[ "$(wc -l < "${CALLS}" | tr -d '[:space:]')" == 19 ]]
 RUN_ROOTS=("${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs/"*)
 [[ ${#RUN_ROOTS[@]} -eq 1 ]]
 RUN_ROOT="${RUN_ROOTS[0]}"
-for method in mofa gloscope mrvi; do
-  [[ -s "${RUN_ROOT}/manifests/matrix_benchmark_analysis_${method}.tsv" ]]
-  [[ -s "${RUN_ROOT}/manifests/matrix_batch_effect_uncorrected_${method}.tsv" ]]
+MANIFEST_NAMES=(
+  matrix_benchmark_analysis_prepare_pseudobulk.tsv
+  matrix_batch_effect_uncorrected_prepare_pseudobulk.tsv
+  matrix_benchmark_analysis_mofa.tsv
+  matrix_batch_effect_uncorrected_mofa.tsv
+  matrix_benchmark_analysis_gloscope_cpu.tsv
+  matrix_batch_effect_uncorrected_gloscope.tsv
+  matrix_benchmark_analysis_mrvi_default_gpu.tsv
+  matrix_benchmark_analysis_mrvi_cpu.tsv
+  matrix_batch_effect_uncorrected_mrvi.tsv
+)
+MANIFEST_COUNTS=(2 1 2 1 15 1 3 6 1)
+MANIFEST_COLUMNS=(3 3 3 3 4 3 4 4 3)
+for manifest_idx in "${!MANIFEST_NAMES[@]}"; do
+  manifest="${RUN_ROOT}/manifests/${MANIFEST_NAMES[${manifest_idx}]}"
+  [[ -s "${manifest}" ]]
+  [[ "$(wc -l < "${manifest}" | tr -d '[:space:]')" == "${MANIFEST_COUNTS[${manifest_idx}]}" ]]
+  awk -F '\t' -v expected="${MANIFEST_COLUMNS[${manifest_idx}]}" \
+    'NF != expected {exit 1}' "${manifest}"
 done
-[[ -s "${RUN_ROOT}/manifests/matrix_benchmark_analysis_prepare_pseudobulk.tsv" ]]
-[[ -s "${RUN_ROOT}/manifests/matrix_batch_effect_uncorrected_prepare_pseudobulk.tsv" ]]
 MOFA_BENCH="$(sed -n '5p' "${CALLS}")"
 MOFA_BATCH="$(sed -n '7p' "${CALLS}")"
 case "${MOFA_BENCH}" in *"--dependency=afterok:780002"*) ;; *) echo "benchmark MOFA dependency missing" >&2; exit 1 ;; esac
 case "${MOFA_BATCH}" in *"--dependency=afterok:780004"*) ;; *) echo "batch-view MOFA dependency missing" >&2; exit 1 ;; esac
-for line in 9 11 13 15; do
+for line in 9 11 13 15 17; do
   if sed -n "${line}p" "${CALLS}" | grep -q -- '--dependency=afterok:'; then
     echo "independent Stage 5 method carried pseudobulk dependency" >&2
     exit 1
   fi
 done
-if sed -n '1,16p' "${CALLS}" | grep -q -- '--wait'; then
+if sed -n '1,18p' "${CALLS}" | grep -q -- '--wait'; then
   echo "an independent array waited before aggregate submission" >&2
   exit 1
 fi
-case "$(sed -n '17p' "${CALLS}")" in *"matrix_gate.sh"*) ;; *) echo "aggregate gate was not last" >&2; exit 1 ;; esac
+case "$(sed -n '19p' "${CALLS}")" in *"matrix_gate.sh"*) ;; *) echo "aggregate gate was not last" >&2; exit 1 ;; esac
 echo "benchmark dependency edges: OK"

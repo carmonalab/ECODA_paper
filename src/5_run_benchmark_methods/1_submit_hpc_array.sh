@@ -135,7 +135,7 @@ if [[ ${SYNC_ONLY_SET} -eq 1 && -z "${SYNC_ONLY_RUN}" ]]; then
   echo "ERROR: --sync-only requires a run ID." >&2
   exit 1
 fi
-EXPECTED_BATCH_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,pilotgm,qot"
+EXPECTED_BATCH_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot"
 if [[ -n "${PASS_ARG}" && ${METHODS_SET} -eq 1 &&
       "${METHODS_ARG}" != "${EXPECTED_BATCH_METHODS}" ]]; then
   echo "ERROR: batch-effect pass requires the fixed ordered method suite: ${EXPECTED_BATCH_METHODS}" >&2
@@ -318,6 +318,90 @@ method_spec() {
     done
     METHOD_FLAGS=("${filtered[@]}")
   fi
+}
+
+# Heavy methods are split only where each parameter run is expensive enough to
+# amortize loading one dataset into a fresh worker.  Small R methods remain
+# one task per dataset; batch-effect runs are intentionally unsharded.
+benchmark_method_shard_rows() {
+  local method="$1" view="$2"
+  [[ -z "${PASS_ARG}" && "${view}" == "benchmark_analysis" ]] || return 0
+  case "${method}" in
+    gloscope)
+      printf '%s\n' \
+        $'hvg2000_pcadims10\tcpu' \
+        $'hvg2000_pcadims30\tcpu' \
+        $'hvg2000_pcadims50\tcpu' \
+        $'hvg1000_pcadims30\tcpu' \
+        $'hvg3000_pcadims30\tcpu'
+      ;;
+    mrvi)
+      printf '%s\n' \
+        $'hvg2000\tdefault_gpu' \
+        $'hvg1000\tcpu' \
+        $'hvg3000\tcpu'
+      ;;
+    scpoli)
+      printf '%s\n' \
+        $'hvg2000_highres_dims15\tdefault_gpu' \
+        $'hvg2000_lowres_dims15\tany_gpu' \
+        $'hvg1000_highres_dims15\tany_gpu' \
+        $'hvg2000_highres_dims2\tany_gpu' \
+        $'hvg2000_highres_dims3\tany_gpu' \
+        $'hvg2000_highres_dims5\tany_gpu' \
+        $'hvg2000_highres_dims10\tany_gpu' \
+        $'hvg3000_highres_dims15\tany_gpu'
+      ;;
+    pilotgm)
+      # PILOT-GM-VAE is benchmark-default-only: no parameter screening.
+      printf '%s\n' $'hvg2000_highres\tcpu'
+      ;;
+  esac
+}
+
+method_spec_for_group() {
+  local method="$1" resource_class="$2" saved_gpu_policy="${GPU_POLICY}" rc
+  case "${resource_class}" in
+    base)
+      method_spec "${method}"
+      rc=$?
+      ;;
+    default_gpu)
+      if [[ "${GPU_POLICY}" == "auto" ]]; then GPU_POLICY=default; fi
+      method_spec "${method}"
+      rc=$?
+      ;;
+    any_gpu)
+      if [[ "${GPU_POLICY}" == "auto" ]]; then GPU_POLICY=any; fi
+      method_spec "${method}"
+      rc=$?
+      ;;
+    cpu)
+      if [[ "${method}" == "mrvi" && "${GPU_POLICY}" == "auto" ]]; then
+        METHOD_RUNTIME_NV=0
+        METHOD_GPU_POLICY=cpu
+        METHOD_PARTITION="${SLURM_PARTITION_BENCHMARK_CPU}"
+        METHOD_THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
+        METHOD_TIME_LIMIT="${BENCHMARK_CPU_TIME_LIMIT}"
+        METHOD_FLAGS=(--constraint="${BENCHMARK_CPU_CONSTRAINT}" --cpus-per-task="${BENCHMARK_CPU_CPUS_PER_TASK}")
+        METHOD_WORKER="${PROJECT_ROOT}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh"
+        if [[ -n "${PARTITION_ARG}" ]]; then
+          METHOD_PARTITION="${PARTITION_ARG}"
+          METHOD_FLAGS=(--cpus-per-task="${BENCHMARK_CPU_CPUS_PER_TASK}")
+        fi
+        rc=0
+      else
+        method_spec "${method}"
+        rc=$?
+      fi
+      ;;
+    *)
+      echo "ERROR: unsupported benchmark resource class '${resource_class}'." >&2
+      rc=1
+      ;;
+  esac
+  GPU_POLICY="${saved_gpu_policy}"
+  return "${rc}"
 }
 
 validate_input_row() {
@@ -673,7 +757,7 @@ ANALYSES=(_ecoda_none_)
 ANALYSES_SELECTED=0
 EXACT_SELECTION=0
 [[ ${EXACT_BATCH_SELECTION} -eq 1 ]] && EXACT_SELECTION=1
-BATCH_EFFECT_METHODS=(prepare_pseudobulk pseudobulk gloscope composition mrvi pilot pilotgm qot)
+BATCH_EFFECT_METHODS=(prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot)
 if [[ -n "${PASS_ARG}" ]]; then METHODS=("${BATCH_EFFECT_METHODS[@]}"); fi
 if [[ -n "${METHODS_ARG}" ]]; then
   ecoda_split_csv "${METHODS_ARG}" || stage5_abort "invalid benchmark method selection"
@@ -785,14 +869,23 @@ benchmark_artifacts_for() {
       for n in 1000 3000; do ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg${n}_highres_scpoli_dims15_embs.feather"); done
       for n in 2 3 5 10 15; do ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg2000_highres_scpoli_dims${n}_embs.feather"); done
       ;;
-    pilot|qot|pilotgm)
+    pilot|qot)
       suffix="${label}"
       if [[ -n "${PASS_ARG}" ]]; then
         ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_batch_effect_${PASS_ARG}_hvg2000_highres_${suffix}_dists.feather")
       else
-        for n in 2000; do ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg${n}_lowres_${suffix}_dists.feather"); done
-        for n in 1000 2000 3000; do ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg${n}_highres_${suffix}_dists.feather"); done
+        ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg2000_lowres_${suffix}_dists.feather")
+        for n in 1000 2000 3000; do
+          ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg${n}_highres_${suffix}_dists.feather")
+        done
       fi
+      ;;
+    pilotgm)
+      [[ -z "${PASS_ARG}" ]] || {
+        echo "ERROR: PILOT-GM-VAE is not scheduled for batch-effect analyses." >&2
+        return 1
+      }
+      ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg2000_highres_pilotgm_dists.feather")
       ;;
     trans|zeroimp)
       ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/results/${ds}_${label}.rds")
@@ -1099,32 +1192,55 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   GROUP_KEYS=()
   GROUP_VIEWS=()
   GROUP_LABELS=()
+  GROUP_STATUS_LABELS=()
+  GROUP_RESOURCE_CLASSES=()
+  GROUP_MANIFEST_COLUMNS=()
   GROUP_MANIFESTS=()
   GROUP_TMP_FILES=()
   PREP_VIEWS=()
   PREP_WATCHDOGS=()
 
   group_add_row() {
-    local ds="$1" view="$2" label="$3" key="${2}|${3}"
-    local idx=0 safe
+    local ds="$1" view="$2" label="$3" combo="${4:-}" resource_class="${5:-base}"
+    local key idx=0 safe status_label
+    if [[ "${resource_class}" == base ]]; then
+      key="${view}|${label}"
+    else
+      key="${view}|${label}|${resource_class}"
+    fi
     while [[ ${idx} -lt ${#GROUP_KEYS[@]} && "${GROUP_KEYS[${idx}]}" != "${key}" ]]; do
       idx=$((idx + 1))
     done
     if [[ ${idx} -eq ${#GROUP_KEYS[@]} ]]; then
       safe="$(printf '%s' "${key}" | tr '/:,\t |' '______')"
+      status_label="${view}__${label}"
+      [[ "${resource_class}" == base ]] ||
+        status_label="${status_label}__${resource_class}"
       GROUP_KEYS+=("${key}")
       GROUP_VIEWS+=("${view}")
       GROUP_LABELS+=("${label}")
+      GROUP_STATUS_LABELS+=("${status_label}")
+      GROUP_RESOURCE_CLASSES+=("${resource_class}")
+      GROUP_MANIFEST_COLUMNS+=("$([[ -n "${combo}" ]] && printf 4 || printf 3)")
       GROUP_MANIFESTS+=("${ECODA_RUN_ROOT}/manifests/matrix_${safe}.tsv")
       GROUP_TMP_FILES+=("${ECODA_RUN_ROOT}/manifests/matrix_${safe}.build.$$")
       : > "${GROUP_TMP_FILES[${idx}]}"
     fi
-    printf '%s\t%s\t%s\n' "${ds}" "${view}" "${label}" >> "${GROUP_TMP_FILES[${idx}]}"
+    if [[ -n "${combo}" ]]; then
+      [[ "${GROUP_MANIFEST_COLUMNS[${idx}]}" == 4 ]] || return 1
+      printf '%s\t%s\t%s\t%s\n' "${ds}" "${view}" "${label}" "${combo}" \
+        >> "${GROUP_TMP_FILES[${idx}]}"
+    else
+      [[ "${GROUP_MANIFEST_COLUMNS[${idx}]}" == 3 ]] || return 1
+      printf '%s\t%s\t%s\n' "${ds}" "${view}" "${label}" \
+        >> "${GROUP_TMP_FILES[${idx}]}"
+    fi
   }
 
   submit_matrix() {
-    local group_label="$1" manifest="$2" dependency="$3" method="$4" view="$5"
-    method_spec "${method}" || return 1
+    local group_label="$1" manifest="$2" dependency="$3" method="$4"
+    local view="$5" resource_class="$6"
+    method_spec_for_group "${method}" "${resource_class}" || return 1
     local worker="${METHOD_WORKER}" worker_partition="${METHOD_PARTITION}" \
       watchdog_partition="${SLURM_PARTITION_BENCHMARK_CPU}" throttle="${METHOD_THROTTLE}" \
       method_time_limit="${METHOD_TIME_LIMIT}" method_gpu_policy="${METHOD_GPU_POLICY}"
@@ -1155,7 +1271,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     fi
     [[ ${array_rc} -eq 0 ]] || return 1
     set +e
-    wd_msg="$(sbatch --parsable --partition="${watchdog_partition}" --ntasks=1 --cpus-per-task=1 --mem=2G --time="${WATCHDOG_TIME_LIMIT}" \
+    wd_msg="$(sbatch --parsable --dependency="afterany:${array_id}" --partition="${watchdog_partition}" --ntasks=1 --cpus-per-task=1 --mem=2G --time="${WATCHDOG_TIME_LIMIT}" \
       --output="${RUN_LOG_DIR}/5_matrix_watchdog_${safe}_%A.log" --error="${RUN_LOG_DIR}/5_matrix_watchdog_${safe}_%A.err" --mail-user="${USER_EMAIL}" \
       --export="ALL,${worker_env},MATRIX_WATCHDOG_ROOT=${ECODA_RUN_ROOT}" \
       "${SCRIPT_DIR}/matrix_watchdog.sh" "${ECODA_RUN_ROOT}" "${group_label}" "${manifest}" "${array_id}" "${MEMORY}" "${MAX_MEMORY}" "${worker_partition}" "${throttle}" "${worker}" "${method_runtime_export}" "${METHOD_FLAGS[@]}")"
@@ -1185,20 +1301,36 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   if [[ -s "${PENDING_SELECTION}" ]]; then
     while IFS=$'\t' read -r ds view method; do
       [[ -n "${ds}" && -n "${view}" && -n "${method}" ]] || continue
-      group_add_row "${ds}" "${view}" "${method}"
+      shard_rows="$(benchmark_method_shard_rows "${method}" "${view}")"
+      if [[ -n "${shard_rows}" ]]; then
+        while IFS=$'\t' read -r shard_token resource_class; do
+          [[ -n "${shard_token}" && -n "${resource_class}" ]] ||
+            stage5_abort "invalid parameter-shard row for ${method}"
+          group_add_row "${ds}" "${view}" "${method}" \
+            "${shard_token}" "${resource_class}" ||
+            stage5_abort "inconsistent parameter-shard manifest for ${method}"
+        done <<< "${shard_rows}"
+      else
+        group_add_row "${ds}" "${view}" "${method}" "" base ||
+          stage5_abort "failed to build Stage 5 matrix manifest"
+      fi
     done < "${PENDING_SELECTION}"
   fi
   for idx in "${!GROUP_KEYS[@]}"; do
-    ecoda_atomic_install_manifest "${GROUP_TMP_FILES[${idx}]}" "${GROUP_MANIFESTS[${idx}]}" 3 ||
-      stage5_abort "failed to install Stage 5 matrix manifest atomically"
+    ecoda_atomic_install_manifest "${GROUP_TMP_FILES[${idx}]}" "${GROUP_MANIFESTS[${idx}]}" \
+      "${GROUP_MANIFEST_COLUMNS[${idx}]}" ||
+      stage5_abort "failed to install Stage 5 matrix manifest"
     rm -f "${GROUP_TMP_FILES[${idx}]}"
   done
 
   for idx in "${!GROUP_KEYS[@]}"; do
     view="${GROUP_VIEWS[${idx}]}"
     method="${GROUP_LABELS[${idx}]}"
+    group_label="${GROUP_STATUS_LABELS[${idx}]}"
+    resource_class="${GROUP_RESOURCE_CLASSES[${idx}]}"
     if [[ "${method}" == prepare_pseudobulk ]]; then
-      submit_matrix "${view}__${method}" "${GROUP_MANIFESTS[${idx}]}" "" "${method}" "${view}" ||
+      submit_matrix "${group_label}" "${GROUP_MANIFESTS[${idx}]}" "" \
+        "${method}" "${view}" "${resource_class}" ||
         stage5_abort "submission failed for ${method}/${view}"
       PREP_VIEWS+=("${view}")
       PREP_WATCHDOGS+=("${LAST_WATCHDOG_ID}")
@@ -1208,15 +1340,19 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     view="${GROUP_VIEWS[${idx}]}"
     method="${GROUP_LABELS[${idx}]}"
     [[ "${method}" == prepare_pseudobulk ]] && continue
+    group_label="${GROUP_STATUS_LABELS[${idx}]}"
+    resource_class="${GROUP_RESOURCE_CLASSES[${idx}]}"
     dependency=""
     case "${method}" in
       mofa|pseudobulk|composition)
         for prep_idx in "${!PREP_VIEWS[@]}"; do
-          [[ "${PREP_VIEWS[${prep_idx}]}" == "${view}" ]] && dependency="${PREP_WATCHDOGS[${prep_idx}]}"
+          [[ "${PREP_VIEWS[${prep_idx}]}" == "${view}" ]] &&
+            dependency="${PREP_WATCHDOGS[${prep_idx}]}"
         done
         ;;
     esac
-    submit_matrix "${view}__${method}" "${GROUP_MANIFESTS[${idx}]}" "${dependency}" "${method}" "${view}" ||
+    submit_matrix "${group_label}" "${GROUP_MANIFESTS[${idx}]}" "${dependency}" \
+      "${method}" "${view}" "${resource_class}" ||
       stage5_abort "submission failed for ${method}/${view}"
   done
   if [[ ${#WATCHDOG_IDS[@]} -gt 0 ]]; then
@@ -1342,6 +1478,17 @@ if [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]]; then
   fi
   exit 0
 fi
+
+if [[ -z "${PASS_ARG}" ]]; then
+  GLOSCOPE_SHARD_MANIFEST="${ECODA_RUN_ROOT}/manifests/matrix_benchmark_analysis_gloscope_cpu.tsv"
+  if [[ -s "${GLOSCOPE_SHARD_MANIFEST}" ]]; then
+    ${PIXI_RSCRIPT} "${SCRIPT_DIR}/consolidate_gloscope_results.R" \
+      --manifest "${GLOSCOPE_SHARD_MANIFEST}" \
+      --results_dir "${ANALYSIS_ROOT}/results" ||
+      stage5_abort "Stage 5 GloScope shard consolidation failed"
+  fi
+fi
+
 stage5_prepare_source_identity ||
   stage5_abort "Stage 5 source identity changed before final validation"
 LABELS=()

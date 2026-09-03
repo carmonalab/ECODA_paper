@@ -274,7 +274,6 @@ load_method_matrices <- function(ds, result_root, entry) {
 
   feather_specs <- c(
     PILOT_hvg2000_highres = "pilot",
-    `PILOT-GM-VAE_hvg2000_highres` = "pilotgm",
     MrVI_hvg2000 = "mrvi",
     QOT_hvg2000_highres = "qot"
   )

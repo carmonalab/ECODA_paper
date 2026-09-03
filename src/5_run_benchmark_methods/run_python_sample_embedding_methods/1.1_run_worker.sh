@@ -23,8 +23,11 @@ MANIFEST_PATH="${ANALYSIS_MANIFEST:-${BENCHMARK_MANIFEST:-}}"
 [[ -r "${MANIFEST_PATH}" ]] || { echo "ERROR: benchmark manifest is unreadable: ${MANIFEST_PATH}" >&2; exit 1; }
 line="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${MANIFEST_PATH}")"
 [[ -n "${line}" ]] || { echo "ERROR: no benchmark row for task ${SLURM_ARRAY_TASK_ID}" >&2; exit 1; }
-IFS=$'\t' read -r DS_NAME ROW_VIEW ROW_LABEL <<< "${line}"
-[[ -n "${DS_NAME}" ]] || { echo "ERROR: malformed benchmark row" >&2; exit 1; }
+IFS=$'\t' read -r DS_NAME ROW_VIEW ROW_LABEL ROW_COMBO ROW_EXTRA <<< "${line}"
+[[ -z "${ROW_EXTRA:-}" ]] || {
+  echo "ERROR: benchmark row has more than four tab-separated fields" >&2
+  exit 1
+}
 export DS_NAME
 ANALYSIS_VIEW="${ROW_VIEW:-${ANALYSIS_VIEW:-benchmark_analysis}}"
 export ANALYSIS_VIEW
@@ -32,10 +35,15 @@ ANALYSIS_ROOT="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
 OUT_DIR="${ANALYSIS_ROOT}/embeddings"
 EXECUTION_LOG_DIR="${EXECUTION_LOG_DIR:-${OUT_DIR}}"
 mkdir -p "${OUT_DIR}" "${EXECUTION_LOG_DIR}"
-if [[ -n "${ANALYSIS_PASS:-}" ]]; then
-  LOG_FILE="${EXECUTION_LOG_DIR}/execution_times_batch_effect_${ANALYSIS_PASS}_${METHOD}_${DS_NAME}.feather"
+if [[ -n "${ROW_COMBO:-}" ]]; then
+  LOG_SUFFIX="_${ROW_COMBO}"
 else
-  LOG_FILE="${EXECUTION_LOG_DIR}/execution_times_${METHOD}_${DS_NAME}.feather"
+  LOG_SUFFIX=""
+fi
+if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+  LOG_FILE="${EXECUTION_LOG_DIR}/execution_times_batch_effect_${ANALYSIS_PASS}_${METHOD}_${DS_NAME}${LOG_SUFFIX}.feather"
+else
+  LOG_FILE="${EXECUTION_LOG_DIR}/execution_times_${METHOD}_${DS_NAME}${LOG_SUFFIX}.feather"
 fi
 FORCE_FLAG=()
 [[ "${FORCE_BENCHMARK:-0}" == 1 ]] && FORCE_FLAG=(--force)
@@ -43,12 +51,18 @@ ANALYSIS_PASS_FLAG=()
 [[ -n "${ANALYSIS_PASS:-}" ]] && ANALYSIS_PASS_FLAG=(--analysis_pass "${ANALYSIS_PASS}")
 HIGH_RES_FLAG=()
 [[ "${ANALYSIS_HIGH_RES_ONLY:-0}" == 1 ]] && HIGH_RES_FLAG=(--high_resolution_only)
+COMBO_FLAG=()
+[[ -n "${ROW_COMBO:-}" ]] && COMBO_FLAG=(--combo "${ROW_COMBO}")
 # GPU-backed methods must receive an explicit CUDA device.  The Python entry
 # point rejects the default "auto" value so a missing runtime export cannot
 # silently move a scheduled GPU job onto CPU.
 GPU_DEVICE_ARGS=()
 case "${ECODA_APPTAINER_NV:-0}" in
-  0) ;;
+  0)
+    if [[ "${METHOD}" == "mrvi" && -n "${ROW_COMBO:-}" ]]; then
+      GPU_DEVICE_ARGS=(--device cpu)
+    fi
+    ;;
   1) GPU_DEVICE_ARGS=(--device cuda) ;;
   *) echo "ERROR: ECODA_APPTAINER_NV must be 0 or 1." >&2; exit 1 ;;
 esac
@@ -68,6 +82,9 @@ if [[ ${#ANALYSIS_PASS_FLAG[@]} -gt 0 ]]; then
 fi
 if [[ ${#HIGH_RES_FLAG[@]} -gt 0 ]]; then
   PYTHON_ARGS+=("${HIGH_RES_FLAG[@]}")
+fi
+if [[ ${#COMBO_FLAG[@]} -gt 0 ]]; then
+  PYTHON_ARGS+=("${COMBO_FLAG[@]}")
 fi
 source "${SCRIPT_DIR}/../../utils/bash/worker_retry.sh"
 set +e

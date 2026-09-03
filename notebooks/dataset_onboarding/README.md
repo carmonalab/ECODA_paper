@@ -181,7 +181,10 @@ methods come only from the fixed `--methods` list below.
 
 The fixed Stage 5 pass list is:
 
-`prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,pilotgm,qot`.
+`prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot`.
+
+PILOT-GM-VAE is intentionally excluded from batch-effect passes because its
+training cost is disproportionate for the large batch-effect cohorts.
 
 It consumes only the configured high-resolution role for author ECODA
 composition. `layer2` and `scATOMIC_pred` remain separate standardized

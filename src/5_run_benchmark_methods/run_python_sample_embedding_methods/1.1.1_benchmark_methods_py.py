@@ -341,8 +341,15 @@ def report_gpu_memory(method_str):
 GPU_BACKED_METHODS = frozenset(("mrvi", "scpoli"))
 
 
-def validate_gpu_execution(method, device):
-    """Refuse CPU fallback for methods submitted with a GPU allocation."""
+def validate_gpu_execution(method, device, combo=None):
+    """Validate the resource class selected by the Stage 5 submitter."""
+    if method == "mrvi" and device == "cpu":
+        if combo is None or combo == "hvg2000":
+            raise RuntimeError(
+                "MrVI CPU execution requires an explicit non-default "
+                "--combo; the default hvg2000 run is H200-only"
+            )
+        return
     if method not in GPU_BACKED_METHODS:
         return
     if device != "cuda":
@@ -423,6 +430,50 @@ def is_default_combo(method, combo):
     if method in ("pilot", "qot", "pilotgm"):
         return n == DEFAULT_HVG and res_label == DEFAULT_RES_LABEL
     return False
+
+
+def canonical_combo_token(method, combo):
+    """Return the strict matrix-manifest token for one generated combo."""
+    n_hvg, res_label, _, payload, _, _ = combo
+    try:
+        resolution = {"_lowres": "lowres", "_highres": "highres"}[res_label]
+    except KeyError as exc:
+        raise ValueError(
+            f"Cannot derive a canonical combo token from resolution {res_label!r}"
+        ) from exc
+
+    if method == "mrvi":
+        return f"hvg{n_hvg}"
+    if method == "scpoli":
+        if payload is None:
+            raise ValueError("scPoli combo is missing its embedding dimension")
+        return f"hvg{n_hvg}_{resolution}_dims{payload}"
+    if method in ("pilot", "qot", "pilotgm"):
+        return f"hvg{n_hvg}_{resolution}"
+    raise ValueError(f"Cannot derive a canonical combo token for method {method!r}")
+
+
+def select_requested_combo(method, combos, requested_combo):
+    """Select exactly one generated combo, failing closed on bad tokens."""
+    matches = [
+        combo
+        for combo in combos
+        if canonical_combo_token(method, combo) == requested_combo
+    ]
+    if not matches:
+        available = sorted(
+            {canonical_combo_token(method, combo) for combo in combos}
+        )
+        raise ValueError(
+            f"Unknown --combo {requested_combo!r} for method {method!r}; "
+            f"available canonical combos: {available}"
+        )
+    if len(matches) != 1:
+        raise ValueError(
+            f"Ambiguous --combo {requested_combo!r} for method {method!r}: "
+            f"{len(matches)} generated combos match"
+        )
+    return matches
 
 
 def top_n_hvg_genes(adata, n):
@@ -814,7 +865,6 @@ def run_pilotgm(adata, ct_col, view, n_hvg, output_path, ds_name, device):
 
 # ---------------------------------------------------------------------------
 # Orchestration
-# ---------------------------------------------------------------------------
 def process_dataset(args, ds_name, entry):
     """Run all combos of the requested method for one dataset.
 
@@ -823,6 +873,10 @@ def process_dataset(args, ds_name, entry):
     """
     view_name = args.view
     analysis_pass = getattr(args, "analysis_pass", None)
+    requested_combo = getattr(args, "combo", None)
+    if requested_combo is not None and analysis_pass is not None:
+        raise ValueError("--combo is only supported for ordinary benchmark runs")
+
     high_resolution_only = bool(getattr(args, "high_resolution_only", False)) or analysis_pass is not None
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -871,6 +925,12 @@ def process_dataset(args, ds_name, entry):
     combos = []
     if args.method == "mrvi":
         if lowres_col is None:
+            if requested_combo is not None:
+                raise ValueError(
+                    f"Unknown --combo {requested_combo!r} for method 'mrvi': "
+                    "MrVI has no runnable combo without cell_type_low_res"
+                )
+
             print(f"WARNING: {ds_name}: cell_type_low_res is None; skipping MrVI.")
             return
         for n in args.hvg:
@@ -906,6 +966,11 @@ def process_dataset(args, ds_name, entry):
                         else f"{ds_name}_hvg{n}{res_label}_{suffix}_dists.feather"
                     )
                     combos.append((n, res_label, ct_col, None, None, out_name))
+
+    if requested_combo is not None:
+        combos = select_requested_combo(
+            args.method, combos, requested_combo
+        )
 
     # Defaults-first ordering: ru_maxrss peak RSS is monotonic within a
     # process, so combos run earlier report the least bloated mem_GB (memory
@@ -978,7 +1043,7 @@ def process_dataset(args, ds_name, entry):
 
         print(f"Processing {method_str} ...")
         start_time = time.time()
-        profile_gpu = args.method in GPU_BACKED_METHODS
+        profile_gpu = args.method in GPU_BACKED_METHODS and args.device == "cuda"
         if profile_gpu:
             torch.cuda.reset_peak_memory_stats()
         try:
@@ -1032,18 +1097,26 @@ def main():
                              "for local runs)")
     parser.add_argument("--hvg", nargs="+", type=int, default=[1000, 2000, 3000],
                         help="HVG sizes to run (default: 1000 2000 3000)")
+    parser.add_argument(
+        "--combo",
+        default=None,
+        help=(
+            "Run exactly one generated canonical parameter combo "
+            "(for example, hvg2000_highres_dims15)"
+        ),
+    )
     parser.add_argument("--force", action="store_true", default=False,
                         help="Recompute combos whose output feather already exists")
     parser.add_argument("--device", default="auto",
                         choices=["auto", "cpu", "cuda"],
-                        help="Train accelerator; GPU-backed MrVI/scPoli "
-                             "require explicit --device cuda")
+                        help="Training device; default MrVI/scPoli combos "
+                             "require CUDA, non-default MrVI may use CPU")
     args = parser.parse_args()
 
     args.hvg = sorted(set(args.hvg))
     if args.analysis_pass is not None:
         args.hvg = [2000]
-    validate_gpu_execution(args.method, args.device)
+    validate_gpu_execution(args.method, args.device, args.combo)
 
     scvi.settings.seed = 0
     print("scvi-tools version:", scvi.__version__)

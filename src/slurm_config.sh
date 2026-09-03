@@ -184,6 +184,9 @@ export SAMPLE_COLNAME="Sample"
 # Standard benchmark MrVI/scPoli jobs remain pinned to H200 for comparable
 # headline results. Flexible GPU jobs (debug, non-default, and batch-effect
 # workloads) use the configured any-GPU partition list without a model pin.
+# Ordinary heavy-method shards are resource-classed by parameter: default
+# MrVI/scPoli combinations stay on H200; non-default MrVI runs on CPU and
+# non-default scPoli runs use the flexible any-GPU class.
 SLURM_PARTITION_PRIVATE="${SLURM_PARTITION_PRIVATE:-private-carmona-gpu}"
 SLURM_PARTITION_BENCHMARK_GPU="${SLURM_PARTITION_BENCHMARK_GPU:-shared-gpu}"
 SLURM_PARTITION_BENCHMARK_CPU="${SLURM_PARTITION_BENCHMARK_CPU:-shared-cpu}"

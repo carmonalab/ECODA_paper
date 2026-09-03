@@ -25,6 +25,9 @@ SYNC_ONLY_SET=0
 MEMORY="32G"
 MAX_MEMORY="128G"
 PARTITION="${SLURM_PARTITION_BENCHMARK_CPU:-shared-cpu}"
+# H5AD annotation validation materializes selected obs columns; 2G is not
+# sufficient for the largest merged cohorts even though workers are bounded.
+ANNOTATION_MERGE_WATCHDOG_MEMORY="${ANNOTATION_MERGE_WATCHDOG_MEMORY:-32G}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 export ANNOTATION_WORKER_TIME_LIMIT="${ANNOTATION_WORKER_TIME_LIMIT:-02:00:00}"
 RUNTIME_EXPORT=""
@@ -927,7 +930,7 @@ fi
   stage4_abort "Stage 4 merge array submission failed"
 echo "ANNOTATION_MERGE_ARRAY_JOB_ID=${MERGE_ARRAY}"
 set +e
-merge_watchdog_msg="$(sbatch --parsable --wait --dependency="afterany:${MERGE_ARRAY}" --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem=2G \
+merge_watchdog_msg="$(sbatch --parsable --wait --dependency="afterany:${MERGE_ARRAY}" --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem="${ANNOTATION_MERGE_WATCHDOG_MEMORY}" \
   --time="${ANNOTATION_WATCHDOG_TIME_LIMIT:-12:00:00}" --output="${LOGS_DIR}/4_annotation_merge_watchdog_%j.log" \
   --error="${LOGS_DIR}/4_annotation_merge_watchdog_%j.err" --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" \
   "${SCRIPT_DIR}/3.3_merge_watchdog.sh" "${RUN_ID}" "${MERGE_MANIFEST}" "${MERGE_ARRAY}" \

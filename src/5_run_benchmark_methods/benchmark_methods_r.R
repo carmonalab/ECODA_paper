@@ -465,7 +465,8 @@ process_gloscope_fig <- function(
   }
   feat_mat <- sqrt(feat_mat)
   feat_mat[is.na(feat_mat)] <- 0
-  row.names(feat_mat) <- standardize_sample_names(row.names(feat_mat))
+  # GloScope preserves the exact canonical sample IDs supplied in sample_ids.
+  # Keep them unchanged so labels retain the canonical metadata identifiers.
   # Keep labels in canonical obs order; create_result_bundle reorders the
   # distance matrix/feature rows rather than adopting GloScope's order.
   labels <- as.factor(metadata[[label_col]])

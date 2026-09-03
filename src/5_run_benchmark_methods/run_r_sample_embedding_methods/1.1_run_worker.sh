@@ -23,8 +23,30 @@ MANIFEST_PATH="${ANALYSIS_MANIFEST:-${BENCHMARK_MANIFEST:-}}"
 [[ -r "${MANIFEST_PATH}" ]] || { echo "ERROR: benchmark manifest is unreadable: ${MANIFEST_PATH}" >&2; exit 1; }
 line="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${MANIFEST_PATH}")"
 [[ -n "${line}" ]] || { echo "ERROR: no benchmark row for task ${SLURM_ARRAY_TASK_ID}" >&2; exit 1; }
-IFS=$'\t' read -r DS_NAME ROW_VIEW ROW_LABEL <<< "${line}"
+IFS=$'\t' read -r DS_NAME ROW_VIEW ROW_LABEL ROW_COMBO ROW_EXTRA <<< "${line}"
 [[ -n "${DS_NAME}" ]] || { echo "ERROR: malformed benchmark row" >&2; exit 1; }
+[[ -z "${ROW_EXTRA:-}" ]] || {
+  echo "ERROR: benchmark row has more than four tab-separated fields" >&2
+  exit 1
+}
+if [[ -n "${ROW_COMBO:-}" ]]; then
+  [[ "${METHOD}" == gloscope ]] || {
+    echo "ERROR: combo token is only supported for method gloscope" >&2
+    exit 1
+  }
+  [[ -z "${ANALYSIS_PASS:-}" ]] || {
+    echo "ERROR: GloScope combo shards are only supported for ordinary runs" >&2
+    exit 1
+  }
+  case "${ROW_COMBO}" in
+    hvg2000_pcadims10|hvg2000_pcadims30|hvg2000_pcadims50|\
+      hvg1000_pcadims30|hvg3000_pcadims30) ;;
+    *)
+      echo "ERROR: invalid GloScope combo token: ${ROW_COMBO}" >&2
+      exit 1
+      ;;
+  esac
+fi
 export DS_NAME
 ANALYSIS_VIEW="${ROW_VIEW:-${ANALYSIS_VIEW:-benchmark_analysis}}"
 export ANALYSIS_VIEW
@@ -35,7 +57,9 @@ GLOSCOPE_DIR="${ANALYSIS_ROOT}/gloscope_dists"
 EMBED_DIR="${ANALYSIS_ROOT}/embeddings"
 EXECUTION_LOG_DIR="${EXECUTION_LOG_DIR:-${EMBED_DIR}}"
 mkdir -p "${RESULTS_DIR}" "${PSEUDOBULK_DIR}" "${GLOSCOPE_DIR}" "${EMBED_DIR}" "${EXECUTION_LOG_DIR}"
-if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+if [[ -n "${ROW_COMBO:-}" ]]; then
+  LOG_FILE="${EXECUTION_LOG_DIR}/execution_times_${METHOD}_${DS_NAME}_${ROW_COMBO}.feather"
+elif [[ -n "${ANALYSIS_PASS:-}" ]]; then
   LOG_FILE="${EXECUTION_LOG_DIR}/execution_times_batch_effect_${ANALYSIS_PASS}_${METHOD}_${DS_NAME}.feather"
 else
   LOG_FILE="${EXECUTION_LOG_DIR}/execution_times_${METHOD}_${DS_NAME}.feather"
@@ -44,6 +68,8 @@ FORCE_FLAG=()
 [[ "${FORCE_BENCHMARK:-0}" == 1 ]] && FORCE_FLAG=(--force)
 ANALYSIS_PASS_FLAG=()
 [[ -n "${ANALYSIS_PASS:-}" ]] && ANALYSIS_PASS_FLAG=(--analysis_pass "${ANALYSIS_PASS}")
+COMBO_FLAG=()
+[[ -n "${ROW_COMBO:-}" ]] && COMBO_FLAG=(--combo "${ROW_COMBO}")
 if [[ "${METHOD}" == prepare_pseudobulk ]]; then
   R_SCRIPT="${SCRIPT_DIR}/1.1.1_prepare_pseudobulk.R"
 else
@@ -56,7 +82,7 @@ ${PIXI_RSCRIPT} "${R_SCRIPT}" \
   --method "${METHOD}" --input_dir "${HPC_SCRATCH_DIR}/${DS_NAME}/output" \
   --results_dir "${RESULTS_DIR}" --pseudobulk_dir "${PSEUDOBULK_DIR}" \
   --gloscope_cache_dir "${GLOSCOPE_DIR}" --log_file "${LOG_FILE}" \
-  "${FORCE_FLAG[@]}" "${ANALYSIS_PASS_FLAG[@]}"
+  "${FORCE_FLAG[@]}" "${ANALYSIS_PASS_FLAG[@]}" "${COMBO_FLAG[@]}"
 RC=$?
 set -e
 if [[ ${RC} -eq 0 ]]; then worker_clear_retry_count; exit 0; fi

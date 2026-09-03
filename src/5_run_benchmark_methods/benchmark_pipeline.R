@@ -929,7 +929,8 @@ run_gloscope_hpc <- function(
   log_file = NULL,
   batch_mode = FALSE,
   result_stem = ds,
-  embedding_name = NULL
+  embedding_name = NULL,
+  combo_token = NULL
 ) {
   combos <- if (batch_mode) {
     list(list(hvg = 2000, pcadims = 30))
@@ -941,6 +942,26 @@ run_gloscope_hpc <- function(
       list(hvg = 1000, pcadims = 30),
       list(hvg = 3000, pcadims = 30)
     )
+  }
+  if (!is.null(combo_token)) {
+    if (batch_mode ||
+        !is.character(combo_token) || length(combo_token) != 1L ||
+        !nzchar(combo_token)) {
+      stop("--combo is only supported for ordinary GloScope runs")
+    }
+    combo_names <- vapply(
+      combos,
+      function(combo) paste0("hvg", combo$hvg, "_pcadims", combo$pcadims),
+      character(1)
+    )
+    matches <- which(combo_names == combo_token)
+    if (length(matches) != 1L) {
+      stop(
+        "Unknown or ambiguous GloScope combo '", combo_token,
+        "'; expected one of ", paste(combo_names, collapse = ", ")
+      )
+    }
+    combos <- combos[matches]
   }
   artifact_stem <- if (batch_mode) result_stem else ds
 
@@ -982,7 +1003,6 @@ run_gloscope_hpc <- function(
         next
       }
     }
-
     dist_file <- file.path(
       gloscope_cache_dir,
       paste0(

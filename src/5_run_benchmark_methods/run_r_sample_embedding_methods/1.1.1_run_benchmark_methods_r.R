@@ -9,13 +9,13 @@
 # Loads the preprocessed benchmark view h5ad -> Seurat (raw counts +
 # X_pca_benchmark_analysis_hvg{n} obsm embeddings via reticulate), sets
 # seurat@misc$cell_type_low_res / label_col from datasets.json, dispatches on
-# --method to the T2 driver (benchmark_pipeline.R), writes the per-combo
+# method to the T2 driver (benchmark_pipeline.R), writes the per-combo
 # bundle files (<ds>_<combo>.rds; combo names are method-prefixed) + the
 # method-level RDS (<ds>_<method>.rds, a named list of result bundles) +
-# per-combo exec-log rows. Skip-if-exists: the method RDS exists -> re-emit
-# its exec-log rows
-# (failure-resume must not lose timing from an aborted run) and skip all
-# unless --force; otherwise per-combo cache files are reused.
+# per-combo exec-log rows. An optional --combo hvg{n}_pcadims{d} argument
+# selects one ordinary GloScope combo; that shard writes only its per-combo
+# bundle/cache and never reads or writes the shared method-level RDS. With no
+# --combo, skip-if-exists behavior remains unchanged.
 #
 # Memory: mofa consumes only the precomputed pseudobulks, so the full Seurat
 # object (multi-GB counts matrix) is built lazily only when a pb variant is
@@ -51,6 +51,14 @@ if (!method %in% c("gloscope", "mofa", "pseudobulk", "scitd",
   stop("Unknown method '", method,
        "' (expected gloscope, mofa, pseudobulk, scitd or composition)")
 }
+combo_supplied <- !is.null(args[["combo"]])
+combo_token <- args[["combo"]]
+if (combo_supplied && method != "gloscope") {
+  stop("--combo is only supported for method gloscope")
+}
+
+# A combo shard is intentionally ordinary-only. Batch-effect GloScope keeps
+# its existing single-combo behavior and pass-qualified artifact names.
 
 # Method-specific attaches: MOFA2/scITD are needed only by their methods
 # (bare create_mofa / initialize_params + make_new_container); gloscope needs
@@ -70,6 +78,9 @@ ds <- args$ds_name
 analysis_pass <- args[["analysis_pass"]]
 if (!is.null(analysis_pass) && !analysis_pass %in% c("uncorrected", "corrected")) {
   stop("Unknown analysis pass: ", analysis_pass)
+}
+if (combo_supplied && !is.null(analysis_pass)) {
+  stop("--combo is only supported for ordinary GloScope runs")
 }
 cache_stem <- if (is.null(analysis_pass)) {
   ds
@@ -92,7 +103,7 @@ method_rds <- file.path(
   args$results_dir,
   paste0(method_rds_stem, "_", method, ".rds")
 )
-if (artifact_checksum_ok(method_rds) && !force) {
+if (!combo_supplied && artifact_checksum_ok(method_rds) && !force) {
   message("Method results already exist and passed checksum validation: ", method_rds)
   cached <- readRDS(method_rds)
   for (nm in names(cached)) {
@@ -277,6 +288,7 @@ results <- switch(
     force = force, log_file = args$log_file,
     batch_mode = !is.null(analysis_pass),
     result_stem = cache_stem,
+    combo_token = combo_token,
     embedding_name = if (!is.null(analysis_pass)) {
       sub("^X_", "", embedding_key)
     } else {
@@ -324,6 +336,13 @@ results <- switch(
   )
 )
 
-save_rds_atomic(results, method_rds)
-message("Saved method results: ", method_rds, " (", length(results), " combos)")
+if (combo_supplied) {
+  message(
+    "Saved GloScope combo ", combo_token,
+    " per-combo bundle/cache; method-level RDS deferred to consolidation"
+  )
+} else {
+  save_rds_atomic(results, method_rds)
+  message("Saved method results: ", method_rds, " (", length(results), " combos)")
+}
 message("--- ", method, " for ", ds, " complete ---")

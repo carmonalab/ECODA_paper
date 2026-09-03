@@ -171,6 +171,13 @@ def main():
     finally:
         worker.torch.cuda.is_available = original_cuda_available
     worker.validate_gpu_execution("pilotgm", "auto")
+    worker.validate_gpu_execution("mrvi", "cpu", "hvg1000")
+    try:
+        worker.validate_gpu_execution("mrvi", "cpu", "hvg2000")
+    except RuntimeError as exc:
+        assert "default hvg2000 run is H200-only" in str(exc)
+    else:
+        raise AssertionError("default MrVI accepted CPU execution")
 
     with tempfile.TemporaryDirectory() as writer_tmp:
         writer_path = Path(writer_tmp) / "embedding.feather"

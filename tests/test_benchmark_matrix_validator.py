@@ -77,6 +77,15 @@ def main() -> None:
         matrix_artifact_validator.validate(
             root, selection, ["mrvi"], batch=False, exact=True
         )
+        pilotgm_selection = root / "pilotgm-selection.tsv"
+        pilotgm_selection.write_text("Adams\tbenchmark_analysis\tpilotgm\n")
+        write_feather(
+            root / "embeddings" / "Adams_hvg2000_highres_pilotgm_dists.feather",
+            frame,
+        )
+        matrix_artifact_validator.validate(
+            root, pilotgm_selection, ["pilotgm"], batch=False, exact=True
+        )
         input_root = root / "input"
         source_h5ad = input_root / "Adams" / "output" / "source.h5ad"
         write_h5ad_obs(source_h5ad)
@@ -140,6 +149,23 @@ def main() -> None:
             raise AssertionError("batch scope mismatch was accepted")
 
         broken = root / "embeddings" / "Adams_hvg2000_mrvi_dists.feather.md5"
+        batch_pilotgm = root / "batch-pilotgm.tsv"
+        batch_pilotgm.write_text(
+            "Adams\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n"
+        )
+        try:
+            matrix_artifact_validator.validate(
+                root,
+                batch_pilotgm,
+                ["pilotgm"],
+                batch=True,
+                batch_pass="uncorrected",
+            )
+        except ValueError as exc:
+            assert "not scheduled" in str(exc)
+        else:
+            raise AssertionError("batch PILOT-GM-VAE was accepted")
+
         broken.write_text("MD5=00000000000000000000000000000000\n")
         try:
             matrix_artifact_validator.validate(

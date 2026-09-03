@@ -60,8 +60,15 @@ done
 mkdir -p "${ECODA_RUN_ROOT}/logs"
 pixi run python -c 'import pandas as pd,sys; pd.DataFrame({"dataset":["Adams"],"method":["MrVI_hvg2000"],"time_secs":[1.0],"mem_GB":[1.0]}).to_feather(sys.argv[1])' "${ECODA_RUN_ROOT}/logs/execution_times_mrvi_Adams.feather"
 ecoda_write_checksum "${ECODA_RUN_ROOT}/logs/execution_times_mrvi_Adams.feather"
+for combo in hvg1000 hvg3000; do
+  shard_log="${ECODA_RUN_ROOT}/logs/execution_times_mrvi_Adams_${combo}.feather"
+  pixi run python -c 'import pandas as pd,sys; pd.DataFrame({"dataset":["Adams"],"method":[sys.argv[2]],"time_secs":[1.0],"mem_GB":[1.0]}).to_feather(sys.argv[1])' \
+    "${shard_log}" "MrVI_${combo}"
+  ecoda_write_checksum "${shard_log}"
+done
 printf 'unrelated remote\n' > "${ANALYSIS_NAS_ROOT}/unrelated.txt"
 analysis_merge_sync_cleanup "${LABELS[@]}"
+[[ "$(pixi run python -c 'import pandas as pd,sys; print(len(pd.read_feather(sys.argv[1])))' "${ANALYSIS_NAS_ROOT}/embeddings/execution_times.feather")" == 3 ]]
 [[ -s "${ANALYSIS_NAS_ROOT}/checksums.md5" ]]
 [[ -s "${ANALYSIS_NAS_ROOT}/embeddings/execution_times.feather" ]]
 [[ -s "${ANALYSIS_NAS_ROOT}/embeddings/Adams_hvg1000_mrvi_dists.feather" ]]

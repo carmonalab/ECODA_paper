@@ -28,24 +28,31 @@ RUN_ID="$(printf '%s\n' "${OUTPUT}" | sed -n 's/^BENCHMARK_RUN_ID=//p')"
 [[ -n "${RUN_ID}" ]]
 RUN_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs/${RUN_ID}"
 [[ -s "${RUN_ROOT}/manifests/selection.tsv" ]]
-for method in mrvi gloscope; do
-  manifest="${RUN_ROOT}/manifests/matrix_benchmark_analysis_${method}.tsv"
-  [[ "$(wc -l < "${manifest}" | tr -d '[:space:]')" == 4 ]]
-  while IFS=$'\t' read -r ds view label; do
-    [[ -n "${ds}" && "${view}" == benchmark_analysis && "${label}" == "${method}" ]]
+MANIFEST_NAMES=(
+  matrix_benchmark_analysis_mrvi_default_gpu.tsv
+  matrix_benchmark_analysis_mrvi_cpu.tsv
+  matrix_benchmark_analysis_gloscope_cpu.tsv
+)
+MANIFEST_COUNTS=(4 8 20)
+for manifest_idx in 0 1 2; do
+  manifest_name="${MANIFEST_NAMES[${manifest_idx}]}"
+  manifest="${RUN_ROOT}/manifests/${manifest_name}"
+  [[ "$(wc -l < "${manifest}" | tr -d '[:space:]')" == "${MANIFEST_COUNTS[${manifest_idx}]}" ]]
+  while IFS=$'\t' read -r ds view label combo; do
+    [[ -n "${ds}" && "${view}" == benchmark_analysis && -n "${combo}" ]]
+    case "${label}" in mrvi|gloscope) ;; *) exit 1 ;; esac
   done < "${manifest}"
 done
-[[ "$(wc -l < "${RUN_ROOT}/manifests/scheduler_ids.tsv" | tr -d '[:space:]')" == 5 ]]
+[[ "$(wc -l < "${RUN_ROOT}/manifests/scheduler_ids.tsv" | tr -d '[:space:]')" == 7 ]]
 CALLS="$(cat "${CAPTURE}")"
-[[ "$(printf '%s\n' "${CALLS}" | wc -l | tr -d '[:space:]')" == 5 ]]
-CALL4="$(sed -n '4p' "${CAPTURE}")"
-CALL5="$(sed -n '5p' "${CAPTURE}")"
-case "${CALL4}" in *"matrix_watchdog"*) ;; *) echo "second method watchdog missing" >&2; exit 1 ;; esac
-case "${CALL5}" in *"matrix_gate.sh"*) ;; *) echo "aggregate gate was not submitted" >&2; exit 1 ;; esac
-case "${CALL5}" in *"--dependency=afterany:"*) ;; *) echo "aggregate gate dependency missing" >&2; exit 1 ;; esac
-case "${CALLS}" in *"--array=1-4"*) ;; *) echo "group arrays did not carry four dataset rows" >&2; exit 1 ;; esac
-case "${CALLS}" in *"--partition=${SLURM_PARTITION_BENCHMARK_GPU}"*) ;; *) echo "GPU method resource class missing" >&2; exit 1 ;; esac
-case "${CALLS}" in *"--constraint=${BENCHMARK_GPU_CONSTRAINT}"*) ;; *) echo "default GPU method lost H200 constraint" >&2; exit 1 ;; esac
+[[ "$(printf '%s\n' "${CALLS}" | wc -l | tr -d '[:space:]')" == 7 ]]
+case "${CALLS}" in *"matrix_gate.sh"*) ;; *) echo "aggregate gate was not submitted" >&2; exit 1 ;; esac
+case "${CALLS}" in *"--dependency=afterany:"*) ;; *) echo "aggregate gate dependency missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"--array=1-4"*) ;; *) echo "default MrVI shard array missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"--array=1-8"*) ;; *) echo "CPU MrVI shard array missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"--array=1-20"*) ;; *) echo "GloScope shard array missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"--partition=${SLURM_PARTITION_BENCHMARK_GPU}"*"--constraint=${BENCHMARK_GPU_CONSTRAINT}"*) ;; *) echo "default GPU method resource class missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"--partition=${SLURM_PARTITION_BENCHMARK_CPU}"*"METHOD=mrvi"*) ;; *) echo "CPU MrVI shard resource class missing" >&2; exit 1 ;; esac
 case "${CALLS}" in *"--time=${BENCHMARK_GPU_DEFAULT_TIME_LIMIT}"*) ;; *) echo "default GPU method time limit missing" >&2; exit 1 ;; esac
 case "${CALLS}" in *"--partition=${SLURM_PARTITION_BENCHMARK_CPU}"*) ;; *) echo "CPU method resource class missing" >&2; exit 1 ;; esac
 while IFS= read -r call; do
@@ -54,6 +61,10 @@ while IFS= read -r call; do
       case "${call}" in
         *"--partition=${SLURM_PARTITION_BENCHMARK_CPU}"*) ;;
         *) echo "matrix watchdog was scheduled outside CPU partition" >&2; exit 1 ;;
+      esac
+      case "${call}" in
+        *"--dependency=afterany:"*) ;;
+        *) echo "matrix watchdog dependency on its array is missing" >&2; exit 1 ;;
       esac
       ;;
   esac
@@ -92,6 +103,7 @@ PILOTGM_CALLS="$(cat "${CAPTURE}")"
 case "${PILOTGM_CALLS}" in *"--partition=${SLURM_PARTITION_BENCHMARK_CPU}"*) ;; *) echo "pilotgm was not moved to CPU resources" >&2; exit 1 ;; esac
 case "${PILOTGM_CALLS}" in *"--gpus="*) echo "pilotgm retained a GPU flag" >&2; exit 1 ;; esac
 case "${PILOTGM_CALLS}" in *"ECODA_APPTAINER_NV=0"*) ;; *) echo "pilotgm runtime NV flag missing" >&2; exit 1 ;; esac
+case "${PILOTGM_CALLS}" in *"--array=1-1"*) ;; *) echo "pilotgm parameter screening was not reduced to default-only" >&2; exit 1 ;; esac
 
 PY_CALL_LOG="${TMP_DIR}/python.call"
 FAKE_PREFIX="${TMP_DIR}/worker-prefix"
@@ -144,7 +156,7 @@ PASS_OUTPUT="$(
   HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
   BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
     --selection-file "${BATCH_SELECTION}" --exact-batch-selection --pass uncorrected \
-    --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,pilotgm,qot
+    --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot
 )"
 case "${PASS_OUTPUT}" in *"BATCH_EFFECT_RUN_ID="*) ;; *) echo "batch run marker missing" >&2; exit 1 ;; esac
 if printf '%s\n' "${PASS_OUTPUT}" | grep -q '^BENCHMARK_'; then
@@ -152,6 +164,7 @@ if printf '%s\n' "${PASS_OUTPUT}" | grep -q '^BENCHMARK_'; then
   exit 1
 fi
 PASS_CALLS="$(cat "${CAPTURE}")"
+case "${PASS_CALLS}" in *pilotgm*) echo "batch PILOT-GM-VAE leaked into scheduler calls" >&2; exit 1 ;; esac
 case "${PASS_CALLS}" in *"ANALYSIS_MANIFEST="*) ;; *) echo "batch ANALYSIS_MANIFEST export missing" >&2; exit 1 ;; esac
 case "${PASS_CALLS}" in *"BENCHMARK_MANIFEST="*) echo "batch BENCHMARK_MANIFEST export leaked" >&2; exit 1 ;; esac
 case "${PASS_CALLS}" in *"/batch_effect/uncorrected"*) ;; *) echo "batch analysis root was not pass-scoped" >&2; exit 1 ;; esac
@@ -165,7 +178,7 @@ sed '1s/batch_effect_uncorrected$/wrong_scope/' "${BATCH_SELECTION}" > "${BAD_SC
 if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
   BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
     --selection-file "${BAD_SCOPE_SELECTION}" --pass uncorrected \
-    --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,pilotgm,qot; then
+    --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot; then
   echo "wrong batch scope was accepted" >&2
   exit 1
 fi
@@ -179,7 +192,7 @@ if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example
   BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
     --selection-file "${BAD_EXACT_SELECTION}" --exact-batch-selection \
     --pass uncorrected \
-    --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,pilotgm,qot; then
+    --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot; then
   echo "malformed exact batch selection was accepted" >&2
   exit 1
 fi
