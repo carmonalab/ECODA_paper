@@ -17,7 +17,12 @@ for (required in c("manifest", "results_dir")) {
 }
 
 manifest <- normalizePath(args$manifest, mustWork = TRUE)
-results_dir <- normalizePath(args$results_dir, mustWork = TRUE)
+# Preserve the configured path spelling: normalizePath() resolves symlinks,
+# while save_rds_atomic() records that spelling in each checksum sidecar.
+results_dir <- path.expand(args$results_dir)
+if (!dir.exists(results_dir)) {
+  stop("Results directory does not exist: ", results_dir)
+}
 rows <- readLines(manifest, warn = FALSE)
 if (!length(rows) || any(!nzchar(rows))) {
   stop("GloScope shard manifest is empty or contains blank rows: ", manifest)
