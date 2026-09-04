@@ -188,10 +188,50 @@ validate_benchmark_h5ad_contract <- function(
   invisible(TRUE)
 }
 
-# Build the full Seurat object from the validated raw counts layer with the
-# benchmark obsm PCA embeddings attached as reductions named
-# pca_benchmark_analysis_hvg{n} (via get_seurat_obj_from_h5ad). All samples of
-# the dataset are included; obs is read once by the caller.
+# Load only the metadata and requested PCA embeddings from an H5AD.  The
+# pinned anndata backed reader can materialize layers["counts"] at open, so
+# methods whose algorithms consume no counts use this h5py/minimal-AnnData
+# path instead.  Count-dependent methods keep load_benchmark_seurat()'s
+# explicit counts-layer path.
+load_h5ad_counts_free <- function(
+  h5ad_path,
+  obs_columns,
+  embedding_keys,
+  obs_prefixes = character(),
+  view = NULL,
+  method = NULL
+) {
+  project_root <- Sys.getenv("PROJECT_ROOT")
+  if (project_root == "") {
+    stop("PROJECT_ROOT not set; cannot load a counts-free H5AD.")
+  }
+  module_dir <- normalizePath(
+    file.path(project_root, "src", "utils", "py"),
+    mustWork = TRUE
+  )
+  loader <- reticulate::import_from_path(
+    "h5ad_counts_free",
+    path = module_dir,
+    convert = FALSE
+  )
+  if (!is.null(view) && !is.null(method)) {
+    loader$validate_h5ad_counts_free_input(
+      h5ad_path,
+      as.character(view),
+      as.character(method)
+    )
+  }
+  loader$load_h5ad_counts_free(
+    h5ad_path,
+    as.list(as.character(obs_columns)),
+    as.list(as.character(embedding_keys)),
+    as.list(as.character(obs_prefixes))
+  )
+}
+
+# Build a Seurat object from a validated H5AD. Count materialization is
+# opt-in: GloScope and composition consume only obs plus precomputed embeddings,
+# while pseudobulk, scITD, and count-backed model paths request the counts layer.
 load_benchmark_seurat <- function(
   adata,
   obs,
@@ -200,22 +240,25 @@ load_benchmark_seurat <- function(
     "X_pca_benchmark_analysis_hvg1000",
     "X_pca_benchmark_analysis_hvg2000",
     "X_pca_benchmark_analysis_hvg3000"
-  )
+  ),
+  counts_layer = "counts"
 ) {
   all_samples <- unique(obs[[sample_col]])
-  layer_keys <- py_to_r(import_builtins(convert = FALSE)$list(
-    adata$layers$keys()
-  ))
-  if (!"counts" %in% layer_keys) {
-    stop(
-      "load_benchmark_seurat: validated h5ad is missing layers['counts']; ",
-      "refusing to use log-normalized X as DESeq2 counts."
-    )
+  if (!is.null(counts_layer)) {
+    layer_keys <- py_to_r(import_builtins(convert = FALSE)$list(
+      adata$layers$keys()
+    ))
+    if (!counts_layer %in% layer_keys) {
+      stop(
+        "load_benchmark_seurat: validated h5ad is missing layers['",
+        counts_layer, "']; refusing to build a count-backed Seurat object."
+      )
+    }
   }
   seurat <- get_seurat_obj_from_h5ad(
     adata, obs, all_samples,
     sample_colname = sample_col,
-    counts_layer = "counts",
+    counts_layer = counts_layer,
     fetch_embedding = fetch_embedding
   )
   return(seurat)

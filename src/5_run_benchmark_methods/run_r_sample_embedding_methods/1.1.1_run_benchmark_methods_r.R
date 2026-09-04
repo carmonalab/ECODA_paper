@@ -6,23 +6,23 @@
 #   --config_path --ds_name --view benchmark_analysis --method {gloscope,mofa,
 #   pseudobulk,scitd,composition} --input_dir --results_dir --pseudobulk_dir
 #   --gloscope_cache_dir --log_file [--force]
-# Loads the preprocessed benchmark view h5ad -> Seurat (raw counts +
-# X_pca_benchmark_analysis_hvg{n} obsm embeddings via reticulate), sets
-# seurat@misc$cell_type_low_res / label_col from datasets.json, dispatches on
-# method to the T2 driver (benchmark_pipeline.R), writes the per-combo
-# bundle files (<ds>_<combo>.rds; combo names are method-prefixed) + the
-# method-level RDS (<ds>_<method>.rds, a named list of result bundles) +
-# per-combo exec-log rows. An optional --combo hvg{n}_pcadims{d} argument
-# selects one ordinary GloScope combo; that shard writes only its per-combo
-# bundle/cache and never reads or writes the shared method-level RDS. With no
-# --combo, skip-if-exists behavior remains unchanged.
+# Counts-dependent methods load the raw counts layer through reticulate.
+# GloScope and composition instead use the h5py/minimal-AnnData loader with
+# only required obs columns and precomputed embeddings, so anndata's backed
+# open never materializes layers["counts"] for those methods. The scripts set
+# seurat@misc$cell_type_low_res / label_col from datasets.json, dispatch on
+# method to the T2 driver (benchmark_pipeline.R), write the per-combo bundle
+# files (<ds>_<combo>.rds; combo names are method-prefixed) + the method-level
+# RDS (<ds>_<method>.rds, a named list of result bundles) + per-combo exec-log
+# rows. An optional --combo hvg{n}_pcadims{d} argument selects one ordinary
+# GloScope combo; that shard writes only its per-combo bundle/cache and never
+# reads or writes the shared method-level RDS. With no --combo, skip-if-exists
+# behavior remains unchanged.
 #
-# Memory: mofa consumes only the precomputed pseudobulks, so the full Seurat
+# Memory: MOFA consumes only the precomputed pseudobulks, so the full Seurat
 # object (multi-GB counts matrix) is built lazily only when a pb variant is
-# missing on disk; gloscope fetches the embeddings, pseudobulk/scitd the
-# counts (fetch_embedding = NULL). composition is obs-only (backed h5ad obs +
-# the hvg2000 obsm embedding + the precomputed hvg2000 pseudobulk variant):
-# no Seurat object at all.
+# missing on disk; GloScope, composition, PILOT, QOT, and PILOT-GM-VAE are
+# counts-free; pseudobulk/scITD retain their necessary count paths.
 # ==============================================================================
 
 project_root <- Sys.getenv("PROJECT_ROOT")
@@ -115,21 +115,7 @@ if (!combo_supplied && artifact_checksum_ok(method_rds) && !force) {
   quit(save = "no", status = 0)
 }
 
-ad <- import("anndata", convert = FALSE)
-adata <- ad$read_h5ad(h5ad_path, backed = "r")
-obs <- py_to_r(adata$obs)
-validate_benchmark_h5ad_contract(
-  adata,
-  obs = obs,
-  view = args$view,
-  method = method
-)
-
-sample_col <- "Sample"
-if (!sample_col %in% colnames(obs)) {
-  stop(sample_col, " not found in obs columns of ", h5ad_path)
-}
-hvg_rank_genes <- get_hvg_rank_genes(adata)
+counts_free_method <- method %in% c("gloscope", "composition")
 embedding_key <- if (args$view == "batch_effect_corrected") {
   "X_pca_harmony_batch_effect_corrected_hvg2000"
 } else if (args$view == "batch_effect_uncorrected") {
@@ -142,8 +128,56 @@ batch_col <- if (!is.null(analysis_pass) && analysis_pass == "corrected") {
 } else {
   NULL
 }
+
+if (counts_free_method) {
+  embedding_keys <- if (method == "gloscope" && is.null(analysis_pass)) {
+    c(
+      "X_pca_benchmark_analysis_hvg1000",
+      "X_pca_benchmark_analysis_hvg2000",
+      "X_pca_benchmark_analysis_hvg3000"
+    )
+  } else {
+    embedding_key
+  }
+  obs_columns <- if (method == "gloscope") {
+    c("Sample", entry$label_col, batch_col)
+  } else {
+    c(
+      "Sample",
+      entry$label_col,
+      entry$cell_type_low_res,
+      entry$cell_type_high_res,
+      batch_col
+    )
+  }
+  adata <- load_h5ad_counts_free(
+    h5ad_path,
+    unique(obs_columns[!is.na(obs_columns) & nzchar(obs_columns)]),
+    embedding_keys,
+    obs_prefixes = if (method == "composition") "leiden_res_" else character(),
+    view = args$view,
+    method = method
+  )
+  obs <- py_to_r(adata$obs)
+} else {
+  ad <- import("anndata", convert = FALSE)
+  adata <- ad$read_h5ad(h5ad_path, backed = "r")
+  obs <- py_to_r(adata$obs)
+  validate_benchmark_h5ad_contract(
+    adata,
+    obs = obs,
+    view = args$view,
+    method = method
+  )
+}
+
+sample_col <- "Sample"
+if (!sample_col %in% colnames(obs)) {
+  stop(sample_col, " not found in obs columns of ", h5ad_path)
+}
 blind_mode <- is.null(analysis_pass) || analysis_pass == "uncorrected"
 correct_batch_mode <- identical(analysis_pass, "corrected")
+hvg_rank_genes <- get_hvg_rank_genes(adata)
 if (correct_batch_mode) {
   if (is.null(batch_col)) {
     stop("corrected batch-effect view requires a confirmed columns.batch")
@@ -239,7 +273,8 @@ if (method == "mofa") {
       }
     } else {
       NULL
-    }
+    },
+    counts_layer = if (method == "gloscope") NULL else "counts"
   )
   # Sample names are already standardized in the preprocessed obs
   # (1.1.1_preprocess.py): no standardize_sample_names() re-application

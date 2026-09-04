@@ -236,17 +236,18 @@ all callers use the upstream default `FALSE` for cross-cohort comparability.
 ### Stage 3 — Benchmark & Method Analyses (`src/5_run_benchmark_methods/`)
 
 `1_submit_hpc_array.sh` is the canonical coordinated wrapper. In ordinary
-mode it accepts the benchmark matrix; in batch mode it requires
+mode it accepts the benchmark matrix. The default batch mode requires
 `--pass uncorrected` and the exact three-column twelve-row matrix selection.
 The immutable batch matrix selection is
 `DATASET<TAB>VIEW<TAB>SCOPE`; in pass mode `VIEW` and `SCOPE` must both equal
-the selected `batch_effect_<pass>` view. `SCOPE` is not a method label; methods
-are supplied by the fixed `--methods` suite.
-Batch mode submits the fixed
-`prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,pilotgm,qot`
-suite, with only pseudobulk/composition gated on their view's
-`prepare_pseudobulk` watchdog. Every other method array is independent and the
-aggregate gate includes every watchdog.
+the selected `batch_effect_<pass>` view. `SCOPE` is not a method label; the
+default batch methods are the fixed ordered suite
+`prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot`.
+For fail-closed recovery, an explicit `--target-methods LIST` may be combined
+with `--pass`, `--selection-file`, and an explicit `--partition` to select only
+the named batch methods for the supplied rows. It cannot be combined with the
+exact twelve-row selection or ordinary analyses; the fixed suite remains the
+default.
 
 - `matrix_watchdog.sh`: compute-node OOM-only retry and terminal task gate for
   one method matrix. Batch retries export `ANALYSIS_MANIFEST` only.
@@ -262,6 +263,11 @@ aggregate gate includes every watchdog.
 - Source Sample IDs and annotation H5AD contracts use h5py-only `obs` reads.
   Full persisted-count H5AD validation is performed by the compute-node
   preflight array, avoiding anndata 0.12.x backed opens on the login node.
+- GloScope, composition, PILOT, QOT, and PILOT-GM-VAE use the h5py-backed
+  counts-free loader and receive only required obs columns plus stored
+  embeddings. MrVI, scPoli, and pseudobulk retain counts access because their
+  algorithms require raw counts; MOFA uses precomputed pseudobulks and only
+  falls back to counts when a required cache is missing.
 - Batch Feather skip checks use one-row dataset manifests, and fully populated
   per-dataset RDS skip checks are grouped into one R validator invocation.
 - Pass roots, logs, watchdog status, manifests, and markers are scoped to

@@ -18,6 +18,8 @@ METHODS_ARG=""
 METHODS_SET=0
 ANALYSES_ARG=""
 ANALYSES_SET=0
+TARGET_METHODS_ARG=""
+TARGET_METHODS_SET=0
 SELECTION_FILE_ARG=""
 SELECTION_FILE_SET=0
 PASS_ARG=""
@@ -36,7 +38,7 @@ GPU_POLICY="auto"
 usage() {
   cat <<'EOF'
 Usage: 1_submit_hpc_array.sh [--datasets LIST] [--methods LIST]
-       [--analyses trans,zeroimp] [--selection-file TSV]
+       [--target-methods LIST] [--analyses trans,zeroimp] [--selection-file TSV]
        [--exact-batch-selection] [--pass uncorrected|corrected]
        [--gpu-policy auto|default|any] [--force] [--sync-only RUN_ID]
        [--partition NAME] [--mem VALUE] [--max-mem VALUE] [--throttle N]
@@ -44,6 +46,8 @@ Usage: 1_submit_hpc_array.sh [--datasets LIST] [--methods LIST]
 Selection-file rows are DATASET<TAB>VIEW<TAB>LABEL. Ordinary methods use the
 benchmark_analysis view; batch mode uses the selected explicit pass view.
 Exact batch mode requires the immutable twelve-row uncorrected matrix.
+--target-methods is an explicit selection-file-scoped partial batch recovery;
+it requires --pass and preserves the fixed suite as the default.
 EOF
 }
 while [[ $# -gt 0 ]]; do
@@ -58,6 +62,8 @@ while [[ $# -gt 0 ]]; do
     --analyses=*|--analysis=*) ANALYSES_ARG="${1#*=}"; ANALYSES_SET=1; shift ;;
     --selection-file) SELECTION_FILE_ARG="${2:-}"; SELECTION_FILE_SET=1; shift 2 ;;
     --selection-file=*) SELECTION_FILE_ARG="${1#*=}"; SELECTION_FILE_SET=1; shift ;;
+    --target-methods) TARGET_METHODS_ARG="${2:-}"; TARGET_METHODS_SET=1; shift 2 ;;
+    --target-methods=*) TARGET_METHODS_ARG="${1#*=}"; TARGET_METHODS_SET=1; shift ;;
     --exact-batch-selection) EXACT_BATCH_SELECTION=1; shift ;;
     --pass|--analysis-pass) PASS_ARG="${2:-}"; PASS_SET=1; shift 2 ;;
     --pass=*|--analysis-pass=*) PASS_ARG="${1#*=}"; PASS_SET=1; shift ;;
@@ -137,9 +143,36 @@ if [[ ${SYNC_ONLY_SET} -eq 1 && -z "${SYNC_ONLY_RUN}" ]]; then
 fi
 EXPECTED_BATCH_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot"
 if [[ -n "${PASS_ARG}" && ${METHODS_SET} -eq 1 &&
+      ${TARGET_METHODS_SET} -eq 0 &&
       "${METHODS_ARG}" != "${EXPECTED_BATCH_METHODS}" ]]; then
   echo "ERROR: batch-effect pass requires the fixed ordered method suite: ${EXPECTED_BATCH_METHODS}" >&2
   exit 1
+fi
+if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
+  [[ -n "${TARGET_METHODS_ARG}" ]] || {
+    echo "ERROR: --target-methods must not be empty." >&2
+    exit 1
+  }
+  [[ -n "${PASS_ARG}" && ${SELECTION_FILE_SET} -eq 1 ]] || {
+    echo "ERROR: --target-methods requires --pass and --selection-file." >&2
+    exit 1
+  }
+  [[ ${EXACT_BATCH_SELECTION} -eq 0 ]] || {
+    echo "ERROR: --target-methods cannot be combined with --exact-batch-selection." >&2
+    exit 1
+  }
+  [[ ${METHODS_SET} -eq 0 && ${ANALYSES_SET} -eq 0 ]] || {
+    echo "ERROR: --target-methods cannot be combined with --methods or --analyses." >&2
+    exit 1
+  }
+  ecoda_split_csv "${TARGET_METHODS_ARG}" || exit 1
+  ecoda_assert_unique_items "${ECODA_ARRAY[@]}" || exit 1
+  for target_method in "${ECODA_ARRAY[@]}"; do
+    case ",${EXPECTED_BATCH_METHODS}," in
+      *,"${target_method}",*) ;;
+      *) echo "ERROR: unsupported targeted batch-effect method: ${target_method}" >&2; exit 1 ;;
+    esac
+  done
 fi
 if [[ -n "${PASS_ARG}" && -n "${SELECTION_FILE_ARG}" ]]; then
   [[ -r "${SELECTION_FILE_ARG}" ]] || { echo "ERROR: selection file is unreadable." >&2; exit 1; }
@@ -715,7 +748,8 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   ecoda_atomic_write "${SCHEDULER_FILE}" "" ||
     stage5_abort "failed to initialize Stage 5 scheduler manifest"
 fi
-if [[ -n "${PASS_ARG}" && -n "${METHODS_ARG}" ]]; then
+if [[ -n "${PASS_ARG}" && -n "${METHODS_ARG}" &&
+      ${TARGET_METHODS_SET} -eq 0 ]]; then
   [[ "${METHODS_ARG}" == "${EXPECTED_BATCH_METHODS}" ]] ||
     stage5_abort "batch-effect pass requires the fixed ordered method suite"
 fi
@@ -758,12 +792,19 @@ ANALYSES_SELECTED=0
 EXACT_SELECTION=0
 [[ ${EXACT_BATCH_SELECTION} -eq 1 ]] && EXACT_SELECTION=1
 BATCH_EFFECT_METHODS=(prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot)
-if [[ -n "${PASS_ARG}" ]]; then METHODS=("${BATCH_EFFECT_METHODS[@]}"); fi
+if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
+  ecoda_split_csv "${TARGET_METHODS_ARG}" ||
+    stage5_abort "invalid targeted batch-effect method selection"
+  METHODS=("${ECODA_ARRAY[@]}")
+elif [[ -n "${PASS_ARG}" ]]; then
+  METHODS=("${BATCH_EFFECT_METHODS[@]}")
+fi
 if [[ -n "${METHODS_ARG}" ]]; then
-  ecoda_split_csv "${METHODS_ARG}" || stage5_abort "invalid benchmark method selection"
+  ecoda_split_csv "${METHODS_ARG}" ||
+    stage5_abort "invalid benchmark method selection"
   METHODS=("${ECODA_ARRAY[@]}")
 fi
-if [[ -n "${PASS_ARG}" ]]; then
+if [[ -n "${PASS_ARG}" && ${TARGET_METHODS_SET} -eq 0 ]]; then
   methods_csv="$(IFS=,; echo "${METHODS[*]}")"
   [[ "${methods_csv}" == "${EXPECTED_BATCH_METHODS}" ]] ||
     stage5_abort "batch-effect pass requires the fixed ordered method suite"

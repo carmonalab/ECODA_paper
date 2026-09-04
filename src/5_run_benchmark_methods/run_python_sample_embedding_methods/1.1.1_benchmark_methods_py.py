@@ -5,8 +5,9 @@ Replaces the logic of the archived notebook
 the preprocessed benchmark view h5ad produced by
 `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py`:
 
-- PILOT/QOT/PILOT-GM-VAE consume the stored obsm embedding `X_pca_{view}_hvg{n}`
-  (the qmd recomputed PCA from scratch);
+- PILOT/QOT/PILOT-GM-VAE consume only selected obs columns and the stored
+  obsm embedding `X_pca_{view}_hvg{n}`. They use the h5py/minimal-AnnData
+  loader and never materialize `X` or `layers["counts"]`;
 - MrVI/scPoli subset genes via the stored `var["hvg_rank"]` (computed by
   `select_hvgs_ranked`, batch-aware) instead of re-running HVG selection —
   subset to HVGs FIRST, then point X at the raw counts layer
@@ -68,7 +69,11 @@ import pilotpy as pl
 import torch
 
 from src.utils.py.datasets_io import read_datasets_json
-from src.utils.py.benchmark_h5ad_contract import validate_benchmark_h5ad_contract
+from src.utils.py.benchmark_h5ad_contract import (
+    validate_benchmark_h5ad_contract,
+    validate_benchmark_h5ad_path,
+)
+from src.utils.py.h5ad_counts_free import load_h5ad_counts_free
 
 
 def _file_md5(path):
@@ -992,9 +997,32 @@ def process_dataset(args, ds_name, entry):
         return
 
     print(f"Loading {input_path} ...")
-    adata = sc.read_h5ad(str(input_path), backed="r")
-    validate_benchmark_h5ad_contract(adata, args.view, args.method)
-    adata = adata.to_memory()
+    if args.method in ("pilot", "qot", "pilotgm"):
+        validate_benchmark_h5ad_path(input_path, args.view, args.method)
+        obs_columns = {"Sample"}
+        obs_columns.update(
+            str(ct_col) for _, _, ct_col, _, _, _ in pending if ct_col is not None
+        )
+        embedding_keys = []
+        for n, _, _, _, _, _ in pending:
+            if args.view == "batch_effect_corrected":
+                key = f"X_pca_harmony_batch_effect_corrected_hvg{n}"
+            elif args.view == "batch_effect_uncorrected":
+                key = f"X_pca_batch_effect_uncorrected_hvg{n}"
+            else:
+                key = f"X_pca_benchmark_analysis_hvg{n}"
+            if key not in embedding_keys:
+                embedding_keys.append(key)
+        adata = load_h5ad_counts_free(
+            input_path,
+            sorted(obs_columns),
+            embedding_keys,
+        )
+        print("COUNTS_ACCESS=none; loaded selected obs/obsm into minimal AnnData")
+    else:
+        adata = sc.read_h5ad(str(input_path), backed="r")
+        validate_benchmark_h5ad_contract(adata, args.view, args.method)
+        adata = adata.to_memory()
     print(
         f"INPUT_PROFILE bytes={input_path.stat().st_size} "
         f"cells={adata.n_obs} genes={adata.n_vars}",

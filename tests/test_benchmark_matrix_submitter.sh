@@ -172,6 +172,30 @@ case "${PASS_CALLS}" in *"--array=1-12"*) ;; *) echo "batch matrix arrays did no
 case "${PASS_CALLS}" in *"--partition=${BENCHMARK_GPU_ANY_PARTITION}"*) ;; *) echo "batch GPU method did not use any-GPU partition" >&2; exit 1 ;; esac
 case "${PASS_CALLS}" in *"--constraint=${BENCHMARK_GPU_CONSTRAINT}"*) echo "batch GPU method retained H200 constraint" >&2; exit 1 ;; esac
 case "${PASS_CALLS}" in *"--time=${BENCHMARK_GPU_ANY_TIME_LIMIT}"*) ;; *) echo "batch GPU method time limit missing" >&2; exit 1 ;; esac
+rm -rf "${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_owners"
+TARGET_SELECTION="${TMP_DIR}/batch-target.tsv"
+printf 'Alzheimer\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' > "${TARGET_SELECTION}"
+: > "${CAPTURE}"
+TARGET_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${TARGET_SELECTION}" --pass uncorrected \
+    --target-methods gloscope --partition shared-bigmem --mem 500G --max-mem 500G
+)"
+TARGET_RUN_ID="$(printf '%s\n' "${TARGET_OUTPUT}" | sed -n 's/^BATCH_EFFECT_RUN_ID=//p')"
+[[ -n "${TARGET_RUN_ID}" ]]
+TARGET_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs/${TARGET_RUN_ID}"
+[[ "$(cat "${TARGET_ROOT}/manifests/pending_selection.tsv")" == $'Alzheimer\tbatch_effect_uncorrected\tgloscope' ]]
+TARGET_MATRIX="${TARGET_ROOT}/manifests/matrix_batch_effect_uncorrected_gloscope.tsv"
+[[ -s "${TARGET_MATRIX}" ]]
+[[ "$(cat "${TARGET_MATRIX}")" == $'Alzheimer\tbatch_effect_uncorrected\tgloscope' ]]
+[[ ! -e "${TARGET_ROOT}/manifests/matrix_batch_effect_uncorrected_prepare_pseudobulk.tsv" ]]
+TARGET_CALLS="$(cat "${CAPTURE}")"
+case "${TARGET_CALLS}" in *"--partition=shared-bigmem"*"METHOD=gloscope"*) ;; *) echo "targeted GloScope did not use explicit bigmem partition" >&2; exit 1 ;; esac
+case "${TARGET_CALLS}" in *"prepare_pseudobulk"*) echo "targeted GloScope scheduled pseudobulk preparation" >&2; exit 1 ;; esac
+case "${TARGET_CALLS}" in *"--array=1-1"*) ;; *) echo "targeted GloScope array did not contain one selected row" >&2; exit 1 ;; esac
+rm -rf "${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_owners"
+
 BAD_SCOPE_SELECTION="${TMP_DIR}/batch-wrong-scope.tsv"
 sed '1s/batch_effect_uncorrected$/wrong_scope/' "${BATCH_SELECTION}" > "${BAD_SCOPE_SELECTION}"
 : > "${CAPTURE}"
