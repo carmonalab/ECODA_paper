@@ -231,6 +231,116 @@ load_h5ad_counts_free <- function(
   )
 }
 
+# Read only the first metadata row for each sample. This keeps MOFA and
+# batch-mode pseudobulk result workers counts-free when their pseudobulks are
+# already cached.
+load_h5ad_sample_metadata <- function(
+  h5ad_path,
+  sample_col = "Sample",
+  metadata_columns = character(),
+  chunk_size = 4096L
+) {
+  project_root <- Sys.getenv("PROJECT_ROOT")
+  if (project_root == "") {
+    stop("PROJECT_ROOT not set; cannot load sample metadata.")
+  }
+  module_dir <- normalizePath(
+    file.path(project_root, "src", "utils", "py"),
+    mustWork = TRUE
+  )
+  python_sys <- reticulate::import("sys", convert = FALSE)
+  python_sys$path$insert(0L, module_dir)
+  loader <- reticulate::import_from_path(
+    "h5ad_pseudobulk",
+    path = module_dir,
+    convert = FALSE
+  )
+  metadata <- reticulate::py_to_r(loader$read_h5ad_sample_metadata(
+    h5ad_path,
+    sample_col,
+    as.list(as.character(unique(c(sample_col, metadata_columns)))),
+    as.integer(chunk_size)
+  ))
+  if (!is.data.frame(metadata)) {
+    metadata <- as.data.frame(metadata, stringsAsFactors = FALSE)
+  }
+  if (!sample_col %in% colnames(metadata) ||
+      is.null(rownames(metadata)) ||
+      anyNA(rownames(metadata)) ||
+      any(!nzchar(rownames(metadata)))) {
+    stop("Streaming sample metadata has no valid sample index.")
+  }
+  metadata
+}
+
+# Stream the raw CSR counts layer into one count matrix per sample. This is
+# used only when a count-dependent method genuinely needs a pseudobulk
+# fallback; it avoids constructing the full cell-by-gene Seurat object.
+load_h5ad_pseudobulk_seurat <- function(
+  h5ad_path,
+  sample_col = "Sample",
+  batch_col = NULL,
+  chunk_size = 4096L
+) {
+  project_root <- Sys.getenv("PROJECT_ROOT")
+  if (project_root == "") {
+    stop("PROJECT_ROOT not set; cannot aggregate a pseudobulk.")
+  }
+  module_dir <- normalizePath(
+    file.path(project_root, "src", "utils", "py"),
+    mustWork = TRUE
+  )
+  python_sys <- reticulate::import("sys", convert = FALSE)
+  python_sys$path$insert(0L, module_dir)
+  loader <- reticulate::import_from_path(
+    "h5ad_pseudobulk",
+    path = module_dir,
+    convert = FALSE
+  )
+  metadata_columns <- unique(c(sample_col, batch_col))
+  aggregated <- loader$aggregate_h5ad_counts_by_sample(
+    h5ad_path,
+    sample_col,
+    as.list(as.character(metadata_columns)),
+    as.integer(chunk_size)
+  )
+  counts <- reticulate::py_to_r(aggregated$counts)
+  sample_ids <- as.character(reticulate::py_to_r(aggregated$sample_ids))
+  gene_names <- as.character(reticulate::py_to_r(aggregated$gene_names))
+  metadata <- reticulate::py_to_r(aggregated$metadata)
+  if (!is.matrix(counts)) counts <- as.matrix(counts)
+  if (length(dim(counts)) != 2L ||
+      nrow(counts) != length(gene_names) ||
+      ncol(counts) != length(sample_ids)) {
+    stop("Streaming pseudobulk counts have inconsistent dimensions.")
+  }
+  if (!is.data.frame(metadata)) {
+    metadata <- as.data.frame(metadata, stringsAsFactors = FALSE)
+  }
+  if (nrow(metadata) != length(sample_ids) ||
+      !sample_col %in% colnames(metadata)) {
+    stop("Streaming pseudobulk metadata has inconsistent sample rows.")
+  }
+  if (anyDuplicated(sample_ids) || anyNA(sample_ids) ||
+      any(!nzchar(sample_ids))) {
+    stop("Streaming pseudobulk sample IDs are invalid.")
+  }
+  if (any(!is.finite(counts)) || any(counts < 0) ||
+      any(counts != floor(counts))) {
+    stop("Streaming pseudobulk counts are not finite nonnegative integers.")
+  }
+  rownames(metadata) <- sample_ids
+  rownames(counts) <- gene_names
+  colnames(counts) <- sample_ids
+  Seurat::CreateSeuratObject(
+    counts = counts,
+    meta.data = metadata,
+    min.cells = 0,
+    min.features = 0
+  )
+}
+
+
 # Build a Seurat object from a validated H5AD. Count materialization is
 # opt-in: GloScope and composition consume only obs plus precomputed embeddings,
 # while pseudobulk, scITD, and count-backed model paths request the counts layer.

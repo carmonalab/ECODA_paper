@@ -66,21 +66,23 @@ dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
 
 ad <- import("anndata", convert = FALSE)
 adata <- ad$read_h5ad(h5ad_path, backed = "r")
-obs <- py_to_r(adata$obs)
+sample_col <- "Sample"
+seurat <- load_h5ad_pseudobulk_seurat(
+  h5ad_path,
+  sample_col = sample_col,
+  batch_col = batch_col
+)
+obs <- seurat@meta.data
 validate_benchmark_h5ad_contract(
   adata,
   obs = obs,
   view = args$view,
   method = "prepare_pseudobulk"
 )
-
-sample_col <- "Sample"
 if (!sample_col %in% colnames(obs)) {
   stop(sample_col, " not found in obs columns of ", h5ad_path)
 }
 
-seurat <- load_benchmark_seurat(adata, obs, sample_col = sample_col,
-                                fetch_embedding = NULL)
 # Sample names are already standardized in the preprocessed obs
 # (1.1.1_preprocess.py): do NOT re-apply standardize_sample_names() here —
 # it would diverge (hyphen -> underscore) from the obs names for h5ads that

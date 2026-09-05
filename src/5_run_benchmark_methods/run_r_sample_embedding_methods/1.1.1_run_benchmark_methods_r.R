@@ -19,10 +19,9 @@
 # reads or writes the shared method-level RDS. With no --combo, skip-if-exists
 # behavior remains unchanged.
 #
-# Memory: MOFA consumes only the precomputed pseudobulks, so the full Seurat
-# object (multi-GB counts matrix) is built lazily only when a pb variant is
-# missing on disk; GloScope, composition, PILOT, QOT, and PILOT-GM-VAE are
-# counts-free; pseudobulk/scITD retain their necessary count paths.
+# Memory: MOFA and batch-mode pseudobulk consume sample metadata and
+# precomputed pseudobulks. Missing variants use bounded H5AD CSR aggregation
+# into a sample-level object; ordinary pseudobulk CT/scITD retain cell counts.
 # ==============================================================================
 
 project_root <- Sys.getenv("PROJECT_ROOT")
@@ -115,7 +114,8 @@ if (!combo_supplied && artifact_checksum_ok(method_rds) && !force) {
   quit(save = "no", status = 0)
 }
 
-counts_free_method <- method %in% c("gloscope", "composition")
+counts_free_method <- method %in% c("gloscope", "composition", "mofa") ||
+  (method == "pseudobulk" && !is.null(analysis_pass))
 embedding_key <- if (args$view == "batch_effect_corrected") {
   "X_pca_harmony_batch_effect_corrected_hvg2000"
 } else if (args$view == "batch_effect_uncorrected") {
@@ -128,6 +128,7 @@ batch_col <- if (!is.null(analysis_pass) && analysis_pass == "corrected") {
 } else {
   NULL
 }
+sample_col <- "Sample"
 
 if (counts_free_method) {
   embedding_keys <- if (method == "gloscope" && is.null(analysis_pass)) {
@@ -139,7 +140,7 @@ if (counts_free_method) {
   } else {
     embedding_key
   }
-  obs_columns <- if (method == "gloscope") {
+  obs_columns <- if (method %in% c("gloscope", "mofa", "pseudobulk")) {
     c("Sample", entry$label_col, batch_col)
   } else {
     c(
@@ -158,7 +159,15 @@ if (counts_free_method) {
     view = args$view,
     method = method
   )
-  obs <- py_to_r(adata$obs)
+  if (method %in% c("mofa", "pseudobulk")) {
+    obs <- load_h5ad_sample_metadata(
+      h5ad_path,
+      sample_col = sample_col,
+      metadata_columns = c(entry$label_col, batch_col)
+    )
+  } else {
+    obs <- py_to_r(adata$obs)
+  }
 } else {
   ad <- import("anndata", convert = FALSE)
   adata <- ad$read_h5ad(h5ad_path, backed = "r")
@@ -171,7 +180,6 @@ if (counts_free_method) {
   )
 }
 
-sample_col <- "Sample"
 if (!sample_col %in% colnames(obs)) {
   stop(sample_col, " not found in obs columns of ", h5ad_path)
 }
@@ -193,9 +201,8 @@ metadata <- NULL
 labels <- NULL
 
 if (method == "mofa") {
-  # MOFA consumes only the precomputed pseudobulks: skip the multi-GB counts
-  # materialization unless a pb variant is missing (on-the-fly fallback
-  # needs the Seurat). Metadata/labels come straight from obs.
+  # MOFA consumes only the precomputed pseudobulks. Missing variants are
+  # rebuilt through bounded H5AD CSR aggregation, never a full cell Seurat.
   if (is.null(args$pseudobulk_dir) || identical(args$pseudobulk_dir, TRUE)) {
     stop("Missing required --pseudobulk_dir argument for method mofa")
   }
@@ -203,9 +210,12 @@ if (method == "mofa") {
   if (length(pb_variants_missing(
     args$pseudobulk_dir, ds, force, cache_stem = cache_stem
   )) > 0) {
-    message("Building Seurat for on-the-fly pseudobulk variants...")
-    seurat <- load_benchmark_seurat(adata, obs, sample_col = sample_col,
-                                    fetch_embedding = NULL)
+    message("Building sample-level Seurat for on-the-fly pseudobulk variants...")
+    seurat <- load_h5ad_pseudobulk_seurat(
+      h5ad_path,
+      sample_col = sample_col,
+      batch_col = batch_col
+    )
   }
   pb_variants <- load_pb_variants(
     seurat, sample_col, hvg_rank_genes,
@@ -219,6 +229,32 @@ if (method == "mofa") {
   # (1.1.1_preprocess.py): no standardize_sample_names() re-application here
   # (it would diverge the labels from the obs names for h5ads that predate
   # the python change, e.g. Adams).
+  metadata <- collapse_sample_metadata(obs, sample_col = sample_col)
+  labels <- as.factor(metadata[[entry$label_col]])
+  names(labels) <- metadata[[sample_col]]
+} else if (method == "pseudobulk" && !is.null(analysis_pass)) {
+  if (is.null(args$pseudobulk_dir) || identical(args$pseudobulk_dir, TRUE)) {
+    stop("Missing required --pseudobulk_dir argument for method pseudobulk")
+  }
+  dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
+  if (length(pb_variants_missing(
+    args$pseudobulk_dir, ds, force, cache_stem = cache_stem
+  )) > 0) {
+    message("Building sample-level Seurat for missing pseudobulk variants...")
+    seurat <- load_h5ad_pseudobulk_seurat(
+      h5ad_path,
+      sample_col = sample_col,
+      batch_col = batch_col
+    )
+  }
+  pb_variants <- load_pb_variants(
+    seurat, sample_col, hvg_rank_genes,
+    pseudobulk_dir = args$pseudobulk_dir, ds = ds,
+    force = force, log_file = args$log_file, cache_stem = cache_stem,
+    batch_col = batch_col, blind = blind_mode,
+    correct_batch = correct_batch_mode,
+    variants = "hvg2000"
+  )
   metadata <- collapse_sample_metadata(obs, sample_col = sample_col)
   labels <- as.factor(metadata[[entry$label_col]])
   names(labels) <- metadata[[sample_col]]
