@@ -45,11 +45,13 @@ adata <- load_h5ad_counts_free(
   input,
   c("Sample", "cell_type"),
   "X_pca_batch_effect_uncorrected_hvg2000",
-  "leiden_res_"
+  "leiden_res_",
+  view = "batch_effect_uncorrected",
+  method = "gloscope"
 )
 shape <- reticulate::py_to_r(adata$shape)
 stopifnot(as.integer(shape[[1]]) == 3L)
-stopifnot(as.integer(shape[[2]]) == 3L)
+stopifnot(as.integer(shape[[2]]) == 2000L)
 stopifnot(length(reticulate::py_to_r(adata$layers$keys())) == 0L)
 message("R counts-free H5AD loader: OK")
 """
@@ -149,15 +151,19 @@ def main() -> None:
             },
             index=["cell1", "cell2", "cell3"],
         )
-        counts = sparse.csr_matrix(
-            np.array([[1, 0, 2], [0, 3, 0], [4, 0, 5]], dtype=np.int32)
-        )
+        n_genes = 2000
+        counts = sparse.csr_matrix((3, n_genes), dtype=np.int32)
+        counts[0, 0] = 1
+        counts[0, 2] = 2
+        counts[1, 1] = 3
+        counts[2, 0] = 4
+        counts[2, 2] = 5
         data = ad.AnnData(
             X=counts.astype(np.float32),
             obs=obs,
             var=pd.DataFrame(
-                {"hvg_rank": [1.0, 2.0, 3.0]},
-                index=["g1", "g2", "g3"],
+                {"hvg_rank": np.arange(1, n_genes + 1, dtype=float)},
+                index=[f"g{i}" for i in range(1, n_genes + 1)],
             ),
         )
         data.layers["counts"] = counts
@@ -182,8 +188,10 @@ def main() -> None:
             minimal.obsm["X_pca_batch_effect_uncorrected_hvg2000"],
             data.obsm["X_pca_batch_effect_uncorrected_hvg2000"],
         )
-        assert list(minimal.var.index) == ["g1", "g2", "g3"]
-        np.testing.assert_allclose(minimal.var["hvg_rank"], [1.0, 2.0, 3.0])
+        assert list(minimal.var.index[:3]) == ["g1", "g2", "g3"]
+        np.testing.assert_allclose(
+            minimal.var["hvg_rank"].to_numpy()[:3], [1.0, 2.0, 3.0]
+        )
 
         try:
             load_h5ad_counts_free(

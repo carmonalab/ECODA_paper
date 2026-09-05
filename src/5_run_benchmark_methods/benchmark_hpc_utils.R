@@ -209,6 +209,8 @@ load_h5ad_counts_free <- function(
     file.path(project_root, "src", "utils", "py"),
     mustWork = TRUE
   )
+  python_sys <- reticulate::import("sys", convert = FALSE)
+  python_sys$path$insert(0L, module_dir)
   loader <- reticulate::import_from_path(
     "h5ad_counts_free",
     path = module_dir,
