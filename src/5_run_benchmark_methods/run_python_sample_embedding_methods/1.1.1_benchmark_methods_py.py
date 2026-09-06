@@ -8,12 +8,10 @@ the preprocessed benchmark view h5ad produced by
 - PILOT/QOT/PILOT-GM-VAE consume only selected obs columns and the stored
   obsm embedding `X_pca_{view}_hvg{n}`. They use the h5py/minimal-AnnData
   loader and never materialize `X` or `layers["counts"]`;
-- MrVI/scPoli subset genes via the stored `var["hvg_rank"]` (computed by
-  `select_hvgs_ranked`, batch-aware) instead of re-running HVG selection —
-  subset to HVGs FIRST, then point X at the raw counts layer
-  (`layers["counts"]`; X is log-normalized): MrVI keeps the sparse counts,
-  scPoli densifies the small HVG subset to float32
-  (`layers["counts"].toarray().astype("float32", copy=False)`);
+- MrVI/scPoli use the stored `var["hvg_rank"]` (computed by
+  `select_hvgs_ranked`) to stream only the requested HVG columns from the raw
+  CSR counts layer into a minimal AnnData; MrVI keeps those counts sparse and
+  scPoli densifies only its selected HVG subset to float32;
 - cell type annotation columns come from datasets.json
   (`cell_type_low_res` / `cell_type_high_res`).
 
@@ -74,6 +72,10 @@ from src.utils.py.benchmark_h5ad_contract import (
     validate_benchmark_h5ad_path,
 )
 from src.utils.py.h5ad_counts_free import load_h5ad_counts_free
+from src.utils.py.h5ad_counts_subset import (
+    load_h5ad_counts_subset,
+    read_h5ad_hvg_genes,
+)
 
 
 def _file_md5(path):
@@ -997,6 +999,7 @@ def process_dataset(args, ds_name, entry):
         return
 
     print(f"Loading {input_path} ...")
+    source_shape = None
     if args.method in ("pilot", "qot", "pilotgm"):
         validate_benchmark_h5ad_path(input_path, args.view, args.method)
         obs_columns = {"Sample"}
@@ -1019,13 +1022,41 @@ def process_dataset(args, ds_name, entry):
             embedding_keys,
         )
         print("COUNTS_ACCESS=none; loaded selected obs/obsm into minimal AnnData")
+    elif args.method in ("mrvi", "scpoli"):
+        validate_benchmark_h5ad_path(input_path, args.view, args.method)
+        obs_columns = {"Sample"}
+        if args.method == "scpoli":
+            obs_columns.update(
+                str(ct_col)
+                for _, _, ct_col, _, _, _ in pending
+                if ct_col is not None
+            )
+        if technical_batch is not None:
+            obs_columns.add(str(technical_batch))
+        max_hvg = max(n for n, _, _, _, _, _ in pending)
+        selected_genes = read_h5ad_hvg_genes(input_path, max_hvg)
+        adata = load_h5ad_counts_subset(
+            input_path,
+            selected_genes,
+            sorted(obs_columns),
+        )
+        source_shape = tuple(
+            int(value) for value in adata.uns.pop("_ecoda_source_shape")
+        )
+        print(
+            "COUNTS_ACCESS=selected; loaded stored HVG counts into minimal AnnData"
+        )
     else:
         adata = sc.read_h5ad(str(input_path), backed="r")
         validate_benchmark_h5ad_contract(adata, args.view, args.method)
         adata = adata.to_memory()
+    profile_shape = source_shape or (adata.n_obs, adata.n_vars)
+    selected_suffix = (
+        f" selected_genes={adata.n_vars}" if source_shape is not None else ""
+    )
     print(
         f"INPUT_PROFILE bytes={input_path.stat().st_size} "
-        f"cells={adata.n_obs} genes={adata.n_vars}",
+        f"cells={profile_shape[0]} genes={profile_shape[1]}{selected_suffix}",
         flush=True,
     )
 

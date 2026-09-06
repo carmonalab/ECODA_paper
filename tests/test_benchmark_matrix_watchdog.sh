@@ -42,6 +42,7 @@ if grep -q 'BENCHMARK_MANIFEST=' "${CAPTURE}"; then
   echo "batch retry exported BENCHMARK_MANIFEST" >&2
   exit 1
 fi
+case "$(cat "${CAPTURE}")" in *"MATRIX_RETRY_MANIFEST=${RETRY}"*) ;; *) echo "matrix retry manifest export missing" >&2; exit 1 ;; esac
 case "$(cat "${CAPTURE}")" in *"--time=03:00:00"*) ;; *) echo "matrix retry worker time limit missing" >&2; exit 1 ;; esac
 case "$(cat "${CAPTURE}")" in *"ECODA_RUNTIME_PROFILE=stage5"*"ECODA_APPTAINER_NV=1"*) ;; *) echo "matrix retry runtime export missing" >&2; exit 1 ;; esac
 SCHEDULER_MANIFEST="${RUN_ROOT}/manifests/scheduler_ids.tsv"

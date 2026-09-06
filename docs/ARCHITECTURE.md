@@ -250,7 +250,9 @@ exact twelve-row selection or ordinary analyses; the fixed suite remains the
 default.
 
 - `matrix_watchdog.sh`: compute-node OOM-only retry and terminal task gate for
-  one method matrix. Batch retries export `ANALYSIS_MANIFEST` only.
+  one method matrix. Retries bind both `MATRIX_RETRY_MANIFEST` and
+  `ANALYSIS_MANIFEST` to the reduced run-owned manifest; batch retries never
+  export `BENCHMARK_MANIFEST`.
 - `matrix_gate.sh`: aggregate gate that requires every child watchdog to report
   `STATE=OK`.
 - RDS validation requires the ordered source sample universe for every method
@@ -265,9 +267,12 @@ default.
   preflight array, avoiding anndata 0.12.x backed opens on the login node.
 - GloScope, composition, PILOT, QOT, and PILOT-GM-VAE use the h5py-backed
   counts-free loader and receive only required obs columns plus stored
-  embeddings. MrVI, scPoli, and pseudobulk retain counts access because their
-  algorithms require raw counts; MOFA uses precomputed pseudobulks and only
-  falls back to counts when a required cache is missing.
+  embeddings. MrVI and scPoli require raw counts, but their loaders stream
+  only the stored HVG columns into a minimal AnnData; scPoli densifies only
+  that selected subset. Pseudobulk preparation streams CSR counts into a
+  sample-level aggregate before invoking the existing DESeq2 normalization;
+  MOFA uses precomputed pseudobulks and only falls back to that bounded
+  aggregation when a required cache is missing.
 - Batch Feather skip checks use one-row dataset manifests, and fully populated
   per-dataset RDS skip checks are grouped into one R validator invocation.
 - Pass roots, logs, watchdog status, manifests, and markers are scoped to
@@ -331,6 +336,8 @@ high-resolution cell-type columns. scATOMIC `breast_mode` remains at default
 | `src/utils/scoring_metrics.R` | `calc_sep_score()` (ANOSIM), `clust_eval()` (ARI), `calc_sil()`, `calc_lisi()`, `calc_modularity()` |
 | `src/utils/datasets_io.R` | `read_datasets_json()`, `get_dataset_view_info()` (R parser) |
 | `src/utils/py/datasets_io.py` | `read_datasets_json()` (Python parser matching R semantics) |
+| `src/utils/py/h5ad_pseudobulk.py` | Bounded CSR sample aggregation and sample-level metadata reads for pseudobulk preparation |
+| `src/utils/py/h5ad_counts_subset.py` | Stored-HVG raw-count loading for MrVI/scPoli without full-gene materialization |
 | `src/utils/py/gene_utils.py` | `standardize_gene_symbols()` using Ensembl 105 reference dictionary |
 | `src/utils/bash/worker_retry.sh` | Sourced by SLURM workers for automated self-requeue on transient I/O faults |
 | `src/utils/bash/sync_status_email.sh` | Best-effort email notification utility with per-task duration reports |

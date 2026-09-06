@@ -19,7 +19,7 @@ ecoda_runtime_reexec_worker stage5 \
   "${SCRIPT_DIR}/1.1_run_worker.sh" || exit 1
 cd "${PROJECT_ROOT}"
 [[ -n "${METHOD:-}" ]] || { echo "ERROR: METHOD is not set." >&2; exit 1; }
-MANIFEST_PATH="${ANALYSIS_MANIFEST:-${BENCHMARK_MANIFEST:-}}"
+MANIFEST_PATH="${MATRIX_RETRY_MANIFEST:-${ANALYSIS_MANIFEST:-${BENCHMARK_MANIFEST:-}}}"
 [[ -r "${MANIFEST_PATH}" ]] || { echo "ERROR: benchmark manifest is unreadable: ${MANIFEST_PATH}" >&2; exit 1; }
 line="$(sed -n "${SLURM_ARRAY_TASK_ID}p" "${MANIFEST_PATH}")"
 [[ -n "${line}" ]] || { echo "ERROR: no benchmark row for task ${SLURM_ARRAY_TASK_ID}" >&2; exit 1; }

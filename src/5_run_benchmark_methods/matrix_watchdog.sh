@@ -135,7 +135,7 @@ while :; do
     fail "matrix retry manifest escaped the run root"
   ecoda_validate_manifest "${RETRY_MANIFEST}" "${MATRIX_MANIFEST_COLUMNS}" || fail "matrix retry manifest is invalid"
   retry_count="$(wc -l < "${RETRY_MANIFEST}" | tr -d '[:space:]')"
-  retry_export="ALL,ANALYSIS_MANIFEST=${RETRY_MANIFEST},MATRIX_RETRY=1,JOB_LOG_PREFIX=${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX}"
+  retry_export="ALL,MATRIX_RETRY_MANIFEST=${RETRY_MANIFEST},ANALYSIS_MANIFEST=${RETRY_MANIFEST},MATRIX_RETRY=1,JOB_LOG_PREFIX=${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX}"
   if [[ -n "${ANALYSIS_PASS:-}" ]]; then
     unset BENCHMARK_MANIFEST
     retry_export="${retry_export},ANALYSIS_PASS=${ANALYSIS_PASS}"
