@@ -8,9 +8,38 @@ suppressPackageStartupMessages({
   library(Seurat)
   library(dplyr)
 })
+source(file.path(root, "src/utils/seurat_utils.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_hpc_utils.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_methods_r.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_pipeline.R"))
+
+# A configured author annotation may itself be a generated Leiden column.
+# Preserve that source while adding the legacy alias consumed by composition.
+leiden_source <- "leiden_res_5_batch_effect_uncorrected_hvg2000"
+leiden_obs <- data.frame(
+  Sample = paste0("s", 1:3),
+  check = c("x", "y", "x"),
+  stringsAsFactors = FALSE
+)
+leiden_obs[[leiden_source]] <- c("0", "1", "0")
+leiden_mapped <- rename_leiden_cols(
+  leiden_obs,
+  view = "batch_effect_uncorrected",
+  preserve_source = TRUE
+)
+stopifnot(
+  leiden_source %in% colnames(leiden_mapped),
+  "RNA_snn_res.5" %in% colnames(leiden_mapped),
+  identical(leiden_mapped[[leiden_source]], leiden_mapped[["RNA_snn_res.5"]])
+)
+leiden_renamed <- rename_leiden_cols(
+  leiden_obs,
+  view = "batch_effect_uncorrected"
+)
+stopifnot(
+  !leiden_source %in% colnames(leiden_renamed),
+  "RNA_snn_res.5" %in% colnames(leiden_renamed)
+)
 
 # Corrected CLR removes the fitted technical effect and preserves the CLR
 # invariant exactly after row recentering.

@@ -201,12 +201,14 @@ get_ct_comp_df <- function(obs, sample_col, ct_col) {
 # Map the new-pipeline Leiden resolution columns
 # (leiden_res_<r>_<view>_hvg2000, written by 1.1.1_preprocess.py) to the
 # legacy RNA_snn_res.<r> names used by run_benchmark_analysis' ECODA_seuratres_*
-# methods. Only columns that exist in `obs` are renamed; returns the modified
-# obs data.frame (in place when it is a data.frame/tibble).
+# methods. Only columns that exist in `obs` are mapped; when
+# `preserve_source=TRUE`, the configured source column is retained so a
+# dataset whose author annotation is itself a Leiden column remains addressable.
 rename_leiden_cols <- function(
   obs,
   view = "benchmark_analysis",
-  resolutions = c(0.1, 0.4, 2, 5, 20, 50)
+  resolutions = c(0.1, 0.4, 2, 5, 20, 50),
+  preserve_source = FALSE
 ) {
   src <- if (view == "batch_effect_corrected") {
     paste0("leiden_res_", resolutions, "_batch_effect_corrected_hvg2000_harmony")
@@ -214,9 +216,17 @@ rename_leiden_cols <- function(
     paste0("leiden_res_", resolutions, "_", view, "_hvg2000")
   }
   dst <- paste0("RNA_snn_res.", resolutions)
-  present <- src[src %in% colnames(obs)]
+  present_mask <- src %in% colnames(obs)
+  present <- src[present_mask]
   if (length(present) > 0) {
-    colnames(obs)[match(present, colnames(obs))] <- dst[src %in% colnames(obs)]
+    for (source_name in present) {
+      destination_name <- dst[match(source_name, src)]
+      if (isTRUE(preserve_source)) {
+        obs[[destination_name]] <- obs[[source_name]]
+      } else {
+        colnames(obs)[match(source_name, colnames(obs))] <- destination_name
+      }
+    }
   }
   return(obs)
 }

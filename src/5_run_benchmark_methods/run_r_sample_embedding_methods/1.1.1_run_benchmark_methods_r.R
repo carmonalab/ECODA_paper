@@ -267,9 +267,14 @@ if (method == "mofa") {
     stop("Missing required --pseudobulk_dir argument for method composition")
   }
   dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
-  # Map the new-pipeline Leiden resolution columns to the legacy
-  # RNA_snn_res.* names used by the ECODA_seuratres_* combos.
-  obs <- rename_leiden_cols(obs, view = args$view)
+  # Keep a configured Leiden annotation source column alongside its legacy
+  # RNA_snn_res.* alias. Parkinson declares leiden_res_5_* as its author
+  # high-resolution column; renaming it in place would invalidate that config.
+  obs <- rename_leiden_cols(
+    obs,
+    view = args$view,
+    preserve_source = TRUE
+  )
   metadata <- collapse_sample_metadata(obs, sample_col = sample_col)
   labels <- as.factor(metadata[[entry$label_col]])
   names(labels) <- metadata[[sample_col]]
