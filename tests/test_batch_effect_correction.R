@@ -41,6 +41,71 @@ stopifnot(
   "RNA_snn_res.5" %in% colnames(leiden_renamed)
 )
 
+# Batch composition emits only its three required keys. Legacy optional
+# HiTME/scATOMIC bundles are not part of the batch execution contract.
+original_process_coda_fig <- process_coda_fig
+original_save_rds_atomic <- save_rds_atomic
+original_artifact_checksum_ok <- artifact_checksum_ok
+original_exec_time <- exec_time
+original_peak_rss_gb <- peak_rss_gb
+original_log_exec_row <- log_exec_row
+process_coda_fig <- function(seurat, labels, ...) {
+  feat <- matrix(
+    1,
+    nrow = length(labels),
+    ncol = 1,
+    dimnames = list(names(labels), "feature")
+  )
+  list(scores = 1, feat_mat = feat, dist_mat = dist(feat), labels = labels)
+}
+save_rds_atomic <- function(...) invisible(NULL)
+artifact_checksum_ok <- function(...) FALSE
+exec_time <- function(expr) {
+  force(expr)
+  0
+}
+peak_rss_gb <- function() 0
+log_exec_row <- function(...) invisible(NULL)
+batch_obs <- data.frame(
+  Sample = rep(paste0("s", 1:3), each = 2),
+  label = rep(c("A", "B", "A"), each = 2),
+  author = rep(c("T", "B", "T"), each = 2),
+  RNA_snn_res.2 = rep(c("0", "1", "0"), each = 2),
+  layer2 = rep(c("T", "B", "T"), each = 2),
+  scATOMIC_pred = rep(c("T", "B", "T"), each = 2)
+)
+batch_labels <- structure(
+  factor(c("A", "B", "A")),
+  names = paste0("s", 1:3)
+)
+batch_metadata <- data.frame(
+  Sample = paste0("s", 1:3),
+  label = c("A", "B", "A")
+)
+batch_composition <- run_composition_methods_hpc(
+  batch_labels,
+  batch_metadata,
+  pca_emb = NULL,
+  pb_hvg2000 = NULL,
+  obs = batch_obs,
+  label_col = "label",
+  ct_col_high_res = "author",
+  results_dir = tempfile("batch-composition-"),
+  ds = "Synthetic",
+  batch_mode = TRUE,
+  result_stem = "Synthetic_batch_effect_uncorrected"
+)
+stopifnot(identical(
+  names(batch_composition),
+  c("ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2")
+))
+process_coda_fig <- original_process_coda_fig
+save_rds_atomic <- original_save_rds_atomic
+artifact_checksum_ok <- original_artifact_checksum_ok
+exec_time <- original_exec_time
+peak_rss_gb <- original_peak_rss_gb
+log_exec_row <- original_log_exec_row
+
 # Corrected CLR removes the fitted technical effect and preserves the CLR
 # invariant exactly after row recentering.
 set.seed(11)

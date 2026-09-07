@@ -142,6 +142,7 @@ if (counts_free_method) {
   }
   composition_obs_columns <- if (
     method == "composition" &&
+    is.null(analysis_pass) &&
     length(entry$not_suitable_for_auto_annotation) == 0
   ) {
     c("layer2", "scATOMIC_pred")

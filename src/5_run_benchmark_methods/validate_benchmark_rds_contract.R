@@ -202,14 +202,17 @@ batch_required_keys <- function(ds, label) {
   if (label == "gloscope") return("GloScope_hvg2000_pcadims30")
   if (label == "pseudobulk") return("Pseudobulk_hvg2000")
   if (label == "composition") {
-    excluded <- unlist(config[[ds]]$not_suitable_for_auto_annotation %||% character())
-    keys <- c("ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2")
-    if (!all(c("hitme", "scatomic") %in% excluded)) {
-      keys <- c(keys, "ECODA_HiTME_HR_layer2", "ECODA_scATOMIC_HR")
-    }
-    return(keys)
+    # Batch composition has a deliberately smaller contract than ordinary
+    # benchmark composition. Optional annotation bundles are legacy extras.
+    return(c("ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2"))
   }
   NULL
+}
+batch_allowed_extra_keys <- function(ds, label) {
+  if (label == "composition") {
+    return(c("ECODA_HiTME_HR_layer2", "ECODA_scATOMIC_HR"))
+  }
+  character()
 }
 
 # scITD may legitimately emit an ordered subset of source samples; every
@@ -301,7 +304,13 @@ validate_combo <- function(combo, file, expected = NULL, method = "") {
   validate_dist(combo$dist_mat, nrow(combo$feat_mat), rownames(combo$feat_mat), file)
 }
 
-validate_result_file <- function(file, expected = NULL, required_keys = NULL, method = "") {
+validate_result_file <- function(
+  file,
+  expected = NULL,
+  required_keys = NULL,
+  allowed_extra_keys = character(),
+  method = ""
+) {
   if (!checksum_ok(file)) stop("Missing or invalid result checksum: ", file)
   bundle <- readRDS(file)
   required <- c("scores", "feat_mat", "dist_mat", "labels")
@@ -316,9 +325,15 @@ validate_result_file <- function(file, expected = NULL, required_keys = NULL, me
         any(!nzchar(names(bundle)))) {
       stop("Result bundle is empty or unnamed: ", file)
     }
-    if (!is.null(required_keys) &&
-        (!identical(sort(names(bundle)), sort(required_keys)))) {
-      stop("result combo keys do not match the method contract: ", file)
+    if (!is.null(required_keys)) {
+      actual_keys <- names(bundle)
+      allowed_keys <- unique(c(required_keys, allowed_extra_keys))
+      missing_keys <- setdiff(required_keys, actual_keys)
+      unexpected_keys <- setdiff(actual_keys, allowed_keys)
+      if (length(missing_keys) > 0L || length(unexpected_keys) > 0L ||
+          anyDuplicated(actual_keys)) {
+        stop("result combo keys do not match the method contract: ", file)
+      }
     }
     combos <- bundle
   }
@@ -443,7 +458,14 @@ validate_artifact_contract <- function(file, method, ds = "", view = "", metadat
     } else {
       NULL
     }
-    validate_result_file(file, expected, required_keys, method)
+    allowed_extra_keys <- if (batch) batch_allowed_extra_keys(ds, method) else character()
+    validate_result_file(
+      file,
+      expected,
+      required_keys,
+      allowed_extra_keys,
+      method
+    )
   }
 }
 
@@ -507,9 +529,15 @@ for (part in parts) {
     } else if (label == "zeroimp") {
       validate_zeroimp(file.path(root, "results", paste0(ds, "_zeroimp.rds")))
     } else {
-      stem <- if (batch) paste0(ds, "_batch_effect_", batch_pass) else ds
-      file <- file.path(root, "results", paste0(stem, "_", label, ".rds"))
-      validate_result_file(file, expected, if (batch) batch_required_keys(ds, label) else NULL, label)
+      required_keys <- if (batch) batch_required_keys(ds, label) else NULL
+      allowed_extra_keys <- if (batch) batch_allowed_extra_keys(ds, label) else character()
+      validate_result_file(
+        file,
+        expected,
+        required_keys,
+        allowed_extra_keys,
+        label
+      )
       if (label == "composition") {
         validate_metadata(file.path(root, "results", paste0(stem, "_metadata.rds")), expected)
       }

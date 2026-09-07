@@ -273,6 +273,11 @@ default.
   sample-level aggregate before invoking the existing DESeq2 normalization;
   MOFA uses precomputed pseudobulks and only falls back to that bounded
   aggregation when a required cache is missing.
+- Batch composition requires `ECODA_authors_HR`,
+  `ECODA_authors_HR_NULL`, and `ECODA_seuratres_2`. Existing
+  `ECODA_HiTME_HR_layer2` and `ECODA_scATOMIC_HR` bundles are recognized
+  legacy extras but are not required or regenerated in batch mode; ordinary
+  benchmark composition retains its annotation-specific outputs.
 - Batch Feather skip checks use one-row dataset manifests, and fully populated
   per-dataset RDS skip checks are grouped into one R validator invocation.
 - Pass roots, logs, watchdog status, manifests, and markers are scoped to

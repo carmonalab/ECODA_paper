@@ -1488,23 +1488,11 @@ run_composition_methods_hpc <- function(
       }
     }
 
+    # Batch composition requires only the configured author annotation and
+    # selected Leiden resolution. Existing HiTME/scATOMIC bundles are legacy
+    # extras and remain valid, but are not regenerated or required here.
     add_coda("ECODA_authors_HR", ct_col_high_res)
     add_coda("ECODA_authors_HR_NULL", ct_col_high_res, shuffle_labels = TRUE)
-
-    if (!skip_hitme && "layer2" %in% colnames(obs)) {
-      add_coda("ECODA_HiTME_HR_layer2", "layer2")
-    } else if (!skip_hitme) {
-      warning("ECODA_HiTME_HR_layer2 skipped for ", ds,
-              ": obs has no 'layer2' column")
-    }
-
-    if (!skip_scatomic && "scATOMIC_pred" %in% colnames(obs)) {
-      add_coda("ECODA_scATOMIC_HR", "scATOMIC_pred")
-    } else if (!skip_scatomic) {
-      warning("ECODA_scATOMIC_HR skipped for ", ds,
-              ": obs has no 'scATOMIC_pred' column")
-    }
-
     add_coda("ECODA_seuratres_2", "RNA_snn_res.2")
 
     results <- list()
