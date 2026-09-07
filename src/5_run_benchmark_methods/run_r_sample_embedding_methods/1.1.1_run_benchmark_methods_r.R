@@ -140,6 +140,14 @@ if (counts_free_method) {
   } else {
     embedding_key
   }
+  composition_obs_columns <- if (
+    method == "composition" &&
+    length(entry$not_suitable_for_auto_annotation) == 0
+  ) {
+    c("layer2", "scATOMIC_pred")
+  } else {
+    character()
+  }
   obs_columns <- if (method %in% c("gloscope", "mofa", "pseudobulk")) {
     c("Sample", entry$label_col, batch_col)
   } else {
@@ -148,7 +156,8 @@ if (counts_free_method) {
       entry$label_col,
       entry$cell_type_low_res,
       entry$cell_type_high_res,
-      batch_col
+      batch_col,
+      composition_obs_columns
     )
   }
   adata <- load_h5ad_counts_free(
