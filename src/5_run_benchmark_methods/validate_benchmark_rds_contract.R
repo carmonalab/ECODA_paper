@@ -529,6 +529,8 @@ for (part in parts) {
     } else if (label == "zeroimp") {
       validate_zeroimp(file.path(root, "results", paste0(ds, "_zeroimp.rds")))
     } else {
+      stem <- if (batch) paste0(ds, "_batch_effect_", batch_pass) else ds
+      file <- file.path(root, "results", paste0(stem, "_", label, ".rds"))
       required_keys <- if (batch) batch_required_keys(ds, label) else NULL
       allowed_extra_keys <- if (batch) batch_allowed_extra_keys(ds, label) else character()
       validate_result_file(
