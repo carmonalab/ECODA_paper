@@ -56,9 +56,9 @@ datasets <- read_datasets_json(view = "benchmark_analysis")
 #                      c("ECODA_authors_HR", "MrVI_hvg2000", "QOT_hvg2000")
 #   analysis_datasets: NULL = all non-debug datasets from datasets.json;
 #                      or dataset keys, e.g. c("Adams", "Pelka") (allows "_debug").
-# Defaults reproduce the preprint analysis.
+# Default analysis includes all currently loaded and future benchmark methods.
 # ============================================================
-analysis_scope <- "preprint"   # "preprint" | "all" (or "extended")
+analysis_scope <- "all"   # "preprint" | "all" (or "extended")
 analysis_methods <- NULL
 analysis_datasets <- NULL
 
@@ -84,7 +84,7 @@ if (analysis_scope == "preprint") {
 }
 stopifnot(length(datasets) > 0)
 
-# Scope helpers (closed over analysis_methods, resolved after df_results is
+# Scope helpers (closed over analysis_methods, resolved after df_benchmark is
 # built; only called from figure chunks, which run later).
 methods_in_scope <- function(x) intersect(x, analysis_methods)
 methods_in_scope_named <- function(m) m[names(m) %in% analysis_methods]
@@ -93,10 +93,10 @@ dataset_display_map <- sapply(datasets, `[[`, "display_name")
 # names use it); figures display it as GongSharma.
 dataset_display_map[["GongSharma"]] <- dataset_display_map[["Gongsharma_cmv_young_males"]]
 
-# Set paths. Default: LOCAL mirror of the NAS layout pulled into ./data
-# (data/benchmark/{results,embeddings,pseudobulks} + slim per-dataset h5ads
-# data/<ds>/output/...). To run against the NAS mount instead (slower),
-# comment the line below and uncomment the /Volumes/... line.
+# Set paths. Default: LOCAL mirror of the NAS benchmark result layout pulled
+# into ./data (`data/benchmark/{results,embeddings,pseudobulks}`). This
+# notebook never reads per-dataset h5ads; worker inputs remain on the
+# authoritative HPC/NAS paths.
 path_nas_project <- file.path(getwd(), "data")
 # path_nas_project <- file.path("", "Volumes", "Shared", "Projects", "ECODA_paper")
 # HPC-computed R benchmark results (Pipeline A methods incl. composition,
@@ -110,9 +110,21 @@ path_data <- file.path(getwd(), "data")
 path_plots <- file.path(getwd(), "plots")
 
 # Separation metrics used in the benchmark figures. Any combination of
-# score_label_map names works, e.g. add "sil_score", "mod_knn9_score".
+# score_label_map names works, e.g. add "sil_score" or "lisi_score"; the
+# alternate modularity neighborhoods are diagnostic-only in Supp fig X2.
 benchmark_metrics <- c("anosim_score", "mod_knn3_score", "cluster_score")
 stopifnot(all(benchmark_metrics %in% names(score_label_map)))
+
+# Canonical non-Supp fig 1/2 benchmark figures and aggregates use only
+# benchmark_metrics. Supp fig 1 and the Supp fig 2 exception use base_metrics.
+base_metrics <- c(
+  "anosim_score",
+  "mod_knn3_score",
+  "cluster_score",
+  "sil_score",
+  "lisi_score"
+)
+stopifnot(all(base_metrics %in% names(score_label_map)))
 
 # Methods treated as "default" (highlighted in the parameter-screening
 # figures): main methods at their default parameter setting. The regex is
@@ -450,7 +462,7 @@ bmark_result_list <- result_list[["bmark"]]
 bmark_result_list$GongSharma <- bmark_result_list$Gongsharma_cmv_young_males
 bmark_result_list$Gongsharma_cmv_young_males <- NULL
 
-df_results <- imap_dfr(bmark_result_list, ~ {
+df_benchmark <- imap_dfr(bmark_result_list, ~ {
   dataset_name <- .y
   imap_dfr(.x, ~ {
     method_name <- .y
@@ -475,21 +487,21 @@ df_results <- imap_dfr(bmark_result_list, ~ {
 })
 
 # Drop old modularity score method
-df_results <- df_results[!df_results$score == "mod_score", ]
+df_benchmark <- df_benchmark[!df_benchmark$score == "mod_score", ]
 
 # Resolve the analysis scope: analysis_methods NULL = all methods found in
 # the loaded results; "preprint" drops the extended (post-preprint) methods.
 # Runs BEFORE the factor() below so the method levels are exactly the scoped
 # set.
 if (is.null(analysis_methods)) {
-  analysis_methods <- unique(as.character(df_results$method))
+  analysis_methods <- unique(as.character(df_benchmark$method))
 }
 if (analysis_scope == "preprint") {
   analysis_methods <- analysis_methods[
     !grepl(extended_method_regex, analysis_methods)
   ]
 }
-df_results <- df_results[df_results$method %in% analysis_methods, ]
+df_benchmark <- df_benchmark[df_benchmark$method %in% analysis_methods, ]
 
 # datasets.json `not_suitable_for_auto_annotation` flag (see AGENTS.md):
 # datasets flagged for the annotation method families are dropped from the
@@ -523,12 +535,12 @@ flag_drop_annotation_methods <- function(df) {
 ## Show + sort all tested conditions
 
 ```{r}
-levs <- mixedsort(as.character(unique(df_results$method)))
+levs <- mixedsort(as.character(unique(df_benchmark$method)))
 levs
 
-df_results$method <- factor(df_results$method, levels = levs)
+df_benchmark$method <- factor(df_benchmark$method, levels = levs)
 
-df_results_list[["Benchmark"]] <- df_results
+df_results_list[["Benchmark"]] <- df_benchmark
 ```
 
 ## Plot results
@@ -536,7 +548,8 @@ df_results_list[["Benchmark"]] <- df_results
 ### All methods (overview)
 
 ```{r fig.height=8, fig.width=16}
-df_results %>%
+df_benchmark %>%
+  filter(score %in% benchmark_metrics) %>%
   group_by(score, method) %>%
   summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
   ungroup() %>%
@@ -586,8 +599,8 @@ filter_methods <- methods_in_scope(c(
 ))
 
 
-df_plot <- df_results %>%
-  filter(method %in% filter_methods) %>%
+df_plot <- df_benchmark %>%
+  filter(score %in% benchmark_metrics, method %in% filter_methods) %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA_authors",
                          "ECODA_authors_HR_NULL" = "Shuffled_baseline",
@@ -681,8 +694,8 @@ filter_methods <- methods_in_scope(c(
 ))
 
 
-df_plot_scaled <- df_results %>%
-  filter(method %in% filter_methods) %>%
+df_plot_scaled <- df_benchmark %>%
+  filter(score %in% benchmark_metrics, method %in% filter_methods) %>%
   # -- Recoding names --
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA_authors",
@@ -743,8 +756,8 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_ANOSIM_minmaxscaled_main
 #### Plot all separation metrics together
 
 ```{r fig.height=6, fig.width=5}
-df_results %>%
-  filter(method %in% filter_methods) %>%
+df_benchmark %>%
+  filter(score %in% benchmark_metrics, method %in% filter_methods) %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA_authors",
                          "ECODA_authors_HR_NULL" = "Shuffled_baseline",
@@ -1281,14 +1294,17 @@ filter_methods <- c(
 )
 
 
-df_plot <- df_results %>%
+df_plot <- df_benchmark %>%
   filter(score == "anosim_score") %>%
-  filter(!grepl("Zhang|Lee", dataset)) %>% # Exclude Zhang and Lee, as they do not have high-resolution author annotation
   filter(method %in% filter_methods) %>%
   flag_drop_annotation_methods() %>%
-  apply_method_labels(method_label_map_annotation)
-  
-p <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+  apply_method_labels(method_label_map_annotation) %>%
+  mutate(method = fct_reorder(method, value, .desc = TRUE, .fun = mean))
+
+# Reuse Figure 3 A's ANOSIM-derived method order for all annotation panels.
+annotation_method_order <- levels(df_plot$method)
+
+p <- ggplot(df_plot, aes(x = method, y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
   geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
@@ -1297,7 +1313,8 @@ p <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mea
   stat_compare_means(
     ref.group = "ECODA_authors_HR",
     method = "wilcox.test",
-    paired = TRUE, # Set to FALSE as the groups are not paired
+    paired = TRUE, # Dataset rows are paired across annotation methods.
+    method.args = list(exact = FALSE),
     aes(label = after_stat(p.signif)),
     size = 3,
     label.y = 1
@@ -1313,14 +1330,14 @@ ggsave(file.path(path_plots, "Figure_3_A_annotationmethods_barplot_anosim.pdf"),
 
 
 
-df_plot <- df_results %>%
+df_plot <- df_benchmark %>%
   filter(score == "mod_knn3_score") %>%
-  filter(!grepl("Zhang|Lee", dataset)) %>% # Exclude Zhang and Lee, as they do not have high-resolution author annotation
   filter(method %in% filter_methods) %>%
   flag_drop_annotation_methods() %>%
-  apply_method_labels(method_label_map_annotation)
+  apply_method_labels(method_label_map_annotation) %>%
+  mutate(method = factor(method, levels = annotation_method_order))
   
-p_mod <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+p_mod <- ggplot(df_plot, aes(x = method, y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
   geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
@@ -1329,7 +1346,8 @@ p_mod <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun =
   stat_compare_means(
     ref.group = "ECODA_authors_HR",
     method = "wilcox.test",
-    paired = TRUE, # Set to FALSE as the groups are not paired
+    method.args = list(exact = FALSE),
+    paired = TRUE, # Dataset rows are paired across annotation methods.
     aes(label = after_stat(p.signif)),
     size = 3,
     label.y = 1.1
@@ -1344,14 +1362,14 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_modularity_annotationmet
        height = 4)
 
 
-df_plot <- df_results %>%
+df_plot <- df_benchmark %>%
   filter(score == "cluster_score") %>%
-  filter(!grepl("Zhang|Lee", dataset)) %>% # Exclude Zhang and Lee, as they do not have high-resolution author annotation
   filter(method %in% filter_methods) %>%
   flag_drop_annotation_methods() %>%
-  apply_method_labels(method_label_map_annotation)
+  apply_method_labels(method_label_map_annotation) %>%
+  mutate(method = factor(method, levels = annotation_method_order))
   
-p_ari <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+p_ari <- ggplot(df_plot, aes(x = method, y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
   geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
@@ -1360,7 +1378,8 @@ p_ari <- ggplot(df_plot, aes(x = fct_reorder(method, value, .desc = TRUE, .fun =
   stat_compare_means(
     ref.group = "ECODA_authors_HR",
     method = "wilcox.test",
-    paired = TRUE, # Set to FALSE as the groups are not paired
+    method.args = list(exact = FALSE),
+    paired = TRUE, # Dataset rows are paired across annotation methods.
     aes(label = after_stat(p.signif)),
     size = 3,
     label.y = 1.1
@@ -1380,6 +1399,104 @@ wrap_plots(list(p_mod, p_ari)) +
 ggsave(file.path(path_plots, "Supp_fig_18_annotationmethods_barplot_mod_ari.pdf"),
        width = 9,
        height = 5)
+
+```
+### Figure X3 B: Number of cell types by annotation method
+
+```{r fig.height=6, fig.width=5}
+annotation_cell_type_count <- function(bundle, method, dataset) {
+  if (is.null(bundle) || !"feat_mat" %in% names(bundle)) {
+    stop(
+      "Missing feature matrix for annotation method '", method,
+      "' in dataset '", dataset, "'."
+    )
+  }
+
+  if (identical(method, "ECODA_deconv")) {
+    # ECODA_deconv has inferred EPIC components but no counts field.
+    cell_type_names <- colnames(bundle$feat_mat)
+    count_source <- "feat_mat component columns"
+  } else {
+    if (!"counts" %in% names(bundle) || is.null(bundle$counts)) {
+      stop(
+        "Missing top-level counts field for annotation method '", method,
+        "' in dataset '", dataset, "'."
+      )
+    }
+    cell_type_names <- colnames(bundle$counts)
+    count_source <- "counts columns"
+  }
+
+  if (is.null(cell_type_names) || length(cell_type_names) == 0L) {
+    stop(
+      "Empty ", count_source, " for annotation method '", method,
+      "' in dataset '", dataset, "'."
+    )
+  }
+
+  cell_type_names <- trimws(as.character(cell_type_names))
+  invalid <- is.na(cell_type_names) |
+    !nzchar(cell_type_names) |
+    cell_type_names %in% c("NA", "nan", "None", "Unknown")
+  valid_names <- cell_type_names[!invalid]
+  unique_names <- unique(valid_names)
+  if (length(valid_names) == 0L || length(unique_names) != length(valid_names)) {
+    stop(
+      "Invalid or duplicated cell-type identities in ", count_source,
+      " for annotation method '", method, "' in dataset '", dataset, "'."
+    )
+  }
+  length(unique_names)
+}
+
+df_celltype_counts <- imap_dfr(bmark_result_list, function(ds_results, dataset_name) {
+  map_dfr(filter_methods, function(method_name) {
+    bundle <- ds_results[[method_name]]
+    tibble(
+      dataset = dataset_name,
+      method = method_name,
+      n_cell_types = annotation_cell_type_count(
+        bundle,
+        method = method_name,
+        dataset = dataset_name
+      )
+    )
+  })
+})
+
+if (!setequal(unique(df_celltype_counts$method), filter_methods)) {
+  stop("Figure X3 B annotation method selection is incomplete.")
+}
+
+df_celltype_counts <- df_celltype_counts %>%
+  apply_method_labels(method_label_map_annotation) %>%
+  mutate(method = factor(method, levels = annotation_method_order))
+
+if (anyNA(df_celltype_counts$method)) {
+  stop("Figure X3 B method labels do not match Figure 3 A's method order.")
+}
+
+p_celltypes <- ggplot(
+  df_celltype_counts,
+  aes(x = method, y = n_cell_types)
+) +
+  stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+  stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
+  geom_point(aes(shape = dataset, color = dataset), size = pointsize) +
+  scale_shape_manual(values = 1:length(unique(df_celltype_counts$dataset))) +
+  geom_line(
+    aes(group = dataset, linetype = dataset, color = dataset),
+    alpha = 1
+  ) +
+  labs(x = "", y = "Number of cell types") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+print(p_celltypes)
+ggsave(
+  file.path(path_plots, "Figure_X3_B_number_of_celltypes.pdf"),
+  width = 5,
+  height = 5
+)
 ```
 
 #### Figure 3 B: Plot PCA for selected annot. methods (Adams)
@@ -1513,8 +1630,17 @@ filter_methods <- c(
 # default_methods / default_methods_regex are defined once in the setup chunk
 # (highlighting of default methods in this screening figure).
 
-df_results %>%
-  # filter(score == "anosim_score") %>%
+supp_fig_2_scores <- base_metrics
+supp_fig_2_score_labels <- c(
+  "anosim_score" = "ANOSIM",
+  "mod_knn3_score" = "Modularity",
+  "cluster_score" = "ARI",
+  "sil_score" = "Silhouette",
+  "lisi_score" = "LISI"
+)
+
+supp_fig_2_plot <- df_benchmark %>%
+  filter(score %in% supp_fig_2_scores) %>%
   filter(!grepl("HiTME|scATOMIC|seuratres|ECODA_authors_HR_NULL|ECODA_authors_LR|ECODA_deconv|Freq_highres|varexp|varcts|Avg_PCA|combo|CT_LR|schvg", method)
   ) %>%
   filter(
@@ -1528,6 +1654,7 @@ df_results %>%
   
   # CREATE THE FACETING GROUP COLUMN
   mutate(
+    score = factor(score, levels = supp_fig_2_scores),
     method_plot = case_when(
       grepl("^ECODA_", method) ~ "ECODA",
       grepl("^MOFA_", method) ~ "MOFA",
@@ -1561,7 +1688,7 @@ df_results %>%
            stringr::str_replace("PILOT-GM-VAE_hvg(\\d+)", "PILOT-GM-VAE_hvg\\1_HR")
   ) %>%
   
-  group_by(method, score) %>%
+  group_by(method) %>%
   mutate(mean_value = mean(value[score == "anosim_score"])) %>%
   ungroup() %>%
   
@@ -1585,14 +1712,18 @@ df_results %>%
     "black")
   ) +
   # ylim(c(-0.4, 1)) +
-  facet_grid(scales = "free_x",
+  facet_grid(scales = "free",
              space='free',
              rows = vars(score),
              cols = vars(method_plot), # Use the new grouping column for column faceting
-             labeller = labeller(score = as_labeller(score_facet_labels)))
+             labeller = labeller(
+               score = as_labeller(supp_fig_2_score_labels),
+               method_plot = function(labels) sub("^PILOT-GM-VAE$", "PILOT-G-V", labels)
+             ))
 
 
 ggsave(file.path(path_plots, "Supp_fig_2_methodparameter_screening.pdf"),
+       plot = supp_fig_2_plot,
        width = 14,
        height = 8)
 ```
@@ -1665,8 +1796,8 @@ filter_methods <- c(
 )
 
 
-df_results %>%
-  filter(method %in% filter_methods) %>%
+df_benchmark %>%
+  filter(score %in% benchmark_metrics, method %in% filter_methods) %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA_authors",
                          "ECODA_authors_HR_NULL" = "Shuffled_baseline",
@@ -1729,8 +1860,8 @@ filter_methods <- c(
 )
 
 
-df_plot <- df_results %>%
-  filter(method %in% filter_methods) %>%
+df_plot <- df_benchmark %>%
+  filter(score %in% benchmark_metrics, method %in% filter_methods) %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA_authors",
                          "ECODA_authors_HR_NULL" = "Shuffled_baseline",
@@ -1818,8 +1949,9 @@ df_plot %>%
 Surprisingly, even at the lowest number highly variable cell types (i.e. variance explained of 10% -\> \>=2 cell types) the average biological separation is quite very high. Different daatasets can do with a different number of highly variable cell types (separation plateaus out at different levels of variance explained % and number of cell types retained).
 
 ```{r}
-df_results_sub <- df_results %>%
+df_benchmark_sub <- df_benchmark %>%
   # filter(score == "anosim_score") %>%
+  filter(score %in% benchmark_metrics) %>%
   filter(grepl("ECODA_authors_HR", method) & !grepl("HiTME|scATOMIC|PCA|NULL|most|least", method)) %>%
   filter(!grepl("cmv|sex", dataset)) %>%
   filter(!method == "ECODA_authors_HR_top_varexp0") %>%
@@ -1838,12 +1970,12 @@ df_results_sub <- df_results %>%
   mutate(dataset = recode(dataset,
                           "GongSharma_all_age" = "GongSharma"))
 
-df_results_anosim <- df_results_sub %>% filter(score == "anosim_score")
+df_benchmark_anosim <- df_benchmark_sub %>% filter(score == "anosim_score")
 
-df_hvc40 <- df_results_anosim[df_results_anosim$method == 40 ,]
+df_hvc40 <- df_benchmark_anosim[df_benchmark_anosim$method == 40 ,]
 perc_tot <- c()
 for (ds in df_hvc40$dataset) {
-  tot <- df_results_anosim$n_features[df_results_anosim$dataset == ds & df_results_anosim$method == 100]
+  tot <- df_benchmark_anosim$n_features[df_benchmark_anosim$dataset == ds & df_benchmark_anosim$method == 100]
   perc_tot <- c(perc_tot, round(df_hvc40$n_features[df_hvc40$dataset == ds] / tot * 100))
 }
 
@@ -1852,17 +1984,17 @@ print(paste0("The top ", min(cts), "-", max(cts), " cell types ",
              "(~", min(perc_tot), "-", max(perc_tot), "% of the total) ",
              "explain 40% of the datasets' variances."))
 
-unique(df_results_sub$method)
+unique(df_benchmark_sub$method)
 
 pointsize <- 1.5
 
-p1 <- df_results_sub %>%
+p1 <- df_benchmark_sub %>%
   filter(score == "anosim_score") %>%
   ggplot(aes(x = method, y = n_features)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
   geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
-  scale_shape_manual(values=1:length(unique((df_results_sub$dataset)))) +
+  scale_shape_manual(values=1:length(unique((df_benchmark_sub$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
   labs(x = "Variance explained (%)", y = "Number of cell types") +
   theme_classic2() +
@@ -1870,22 +2002,14 @@ p1 <- df_results_sub %>%
         legend.position = "none")
 print(p1)
 
-p2 <- df_results_sub %>%
+p2 <- df_benchmark_sub %>%
   filter(score == "anosim_score") %>%
   ggplot(aes(x = method, y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
   geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
-  scale_shape_manual(values=1:length(unique((df_results_sub$dataset)))) +
+  scale_shape_manual(values=1:length(unique((df_benchmark_sub$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
-  stat_compare_means(
-    ref.group = "100",  # recoded ECODA_authors_HR level (was "All cell types")
-    method = "wilcox.test",
-    paired = TRUE,
-    angle = 25,
-    label.y = 0.93,
-    aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
-  ) +
   # ylim(c(-0.1, 1)) +
   labs(x = "Variance explained (%)", y = "Separation score (ANOSIM)") +
   theme_classic2() +
@@ -1914,22 +2038,14 @@ ggsave(file.path(path_plots, "Figure_4_AB_featureselectionHVC_barplot_anosim.pdf
 #### Supp fig 20: HVC Mod + ARI
 
 ```{r fig.height=3.5, fig.width=8}
-p3 <- df_results_sub %>%
+p3 <- df_benchmark_sub %>%
   filter(score == "mod_knn3_score") %>%
   ggplot(aes(x = method, y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
   geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
-  scale_shape_manual(values=1:length(unique((df_results_sub$dataset)))) +
+  scale_shape_manual(values=1:length(unique((df_benchmark_sub$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
-  stat_compare_means(
-    ref.group = "100",  # recoded ECODA_authors_HR level (was "All cell types")
-    method = "wilcox.test",
-    paired = TRUE,
-    angle = 25,
-    label.y = 0.93,
-    aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
-  ) +
   # ylim(c(-0.1, 1)) +
   labs(x = "Variance explained (%)", y = "Separation score (Modularity)") +
   theme_classic2() +
@@ -1937,22 +2053,14 @@ p3 <- df_results_sub %>%
         legend.position = "none")
 print(p3)
 
-p4 <- df_results_sub %>%
+p4 <- df_benchmark_sub %>%
   filter(score == "cluster_score") %>%
   ggplot(aes(x = method, y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
   stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
   geom_point(aes(shape = dataset, color = dataset), size = pointsize) + # Color added for legend consistency
-  scale_shape_manual(values=1:length(unique((df_results_sub$dataset)))) +
+  scale_shape_manual(values=1:length(unique((df_benchmark_sub$dataset)))) +
   geom_line(aes(group=dataset, linetype=dataset, color = dataset), alpha = 1) +
-  stat_compare_means(
-    ref.group = "100",  # recoded ECODA_authors_HR level (was "All cell types")
-    method = "wilcox.test",
-    paired = TRUE,
-    angle = 25,
-    label.y = 0.93,
-    aes(label = sprintf("%5.2f", as.numeric(..p.format..)))
-  ) +
   # ylim(c(-0.1, 1)) +
   labs(x = "Variance explained (%)", y = "Separation score (ARI)") +
   theme_classic2() +
@@ -2173,7 +2281,7 @@ bundle_exec_times <- imap_dfr(result_list[["bmark"]], ~ {
   })
 })
 
-# Normalize keys so the merge with df_results (paste0(dataset, method)
+# Normalize keys so the merge with df_benchmark (paste0(dataset, method)
 # join, helpers.R::merge_exec_times) hits:
 # - GongSharma: internal key Gongsharma_cmv_young_males is displayed as
 #   GongSharma (same rename as bmark_result_list above);
@@ -2234,6 +2342,70 @@ scientific_A_10n <- function(x) {
   s_converted <- gsub("e\\+", " %*% 10^", s) 
   return(parse(text = s_converted)) 
 }
+# Fit and draw the regression in log10(number of cells) / log10(response)
+# coordinates. The raw axes are log-scaled below, so the displayed line is
+# straight in the same log-log space used for the model.
+fit_log_log_lines <- function(data, y_col) {
+  groups <- split(data, data$method)
+  dplyr::bind_rows(lapply(groups, function(df) {
+    x <- as.numeric(df$n_cells)
+    y <- as.numeric(df[[y_col]])
+    keep <- is.finite(x) & x > 0 & is.finite(y) & y > 0
+    x <- x[keep]
+    y <- y[keep]
+    if (length(x) < 2L) return(NULL)
+    fit <- stats::lm(log10(y) ~ log10(x))
+    x_grid <- 10^seq(
+      log10(min(x)),
+      log10(max(x)),
+      length.out = 100L
+    )
+    data.frame(
+      method = as.character(df$method[[1L]]),
+      n_cells = x_grid,
+      fitted = 10^stats::predict(
+        fit,
+        newdata = data.frame(x = x_grid)
+      ),
+      stringsAsFactors = FALSE
+    )
+  }))
+}
+# Place labels in a deterministic right-hand lane. Repulsion in raw
+# coordinates is unstable after log transformation; spacing labels in the
+# already-log10 y coordinate guarantees no text overlap.
+spread_log_label_y <- function(data, min_gap = 0.2, x_offset = 0.18) {
+  data <- data[order(data$log_pred_y, decreasing = TRUE), , drop = FALSE]
+  data$log_label_y <- data$log_pred_y
+  if (nrow(data) > 1L) {
+    for (i in 2:nrow(data)) {
+      data$log_label_y[i] <- min(
+        data$log_label_y[i],
+        data$log_label_y[i - 1L] - min_gap
+      )
+    }
+  }
+  data$log_label_x <- max(data$log_max_x) + x_offset
+  data
+}
+spread_log_label_y_centered <- function(
+  data,
+  min_gap = 0.15,
+  x_offset = 0.18
+) {
+  data <- data[order(data$log_pred_y, decreasing = TRUE), , drop = FALSE]
+  n_labels <- nrow(data)
+  if (n_labels == 0L) return(data)
+  center_y <- mean(range(data$log_pred_y))
+  span_y <- min_gap * max(n_labels - 1L, 0L)
+  data$log_label_y <- seq(
+    center_y + span_y / 2,
+    center_y - span_y / 2,
+    length.out = n_labels
+  )
+  data$log_label_x <- max(data$log_max_x) + x_offset
+  data
+}
 
 # --- 1. Clean Data ---
 plot_data <- exec_times %>%
@@ -2251,17 +2423,31 @@ plot_data <- exec_times %>%
                          "QOT_hvg2000" = "QOT",
                          "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"))
 
-# --- 2. Calculate the End of the Regression Line ---
-line_ends <- plot_data %>%
+regression_lines <- fit_log_log_lines(plot_data, "time_secs")
+line_ends <- regression_lines %>%
   group_by(method) %>%
   dplyr::summarise(
     max_x = max(n_cells),
-    model = list(lm(log10(time_secs) ~ n_cells)),
-    pred_log_y = stats::predict(model[[1]], newdata = data.frame(n_cells = max_x))
-  ) %>%
-  mutate(
-    pred_y = 10^pred_log_y 
+    pred_y = fitted[which.max(n_cells)],
+    .groups = "drop"
   )
+line_ends_log <- spread_log_label_y(
+  line_ends %>%
+    mutate(
+      log_max_x = log10(max_x),
+      log_pred_y = log10(pred_y)
+    ),
+  min_gap = 0.22
+)
+line_ends_raw <- line_ends_log %>%
+  mutate(
+    endpoint_x = 10^log_max_x,
+    endpoint_y = 10^log_pred_y,
+    label_x = 10^log_label_x,
+    label_y = 10^log_label_y
+  )
+plot_x_breaks <- c(1e5, 3e5, 1e6)
+plot_y_breaks <- c(1, 10, 100, 1000, 10000)
 
 # --- NEW STEP: Create Ranked Color Palette ---
 
@@ -2281,61 +2467,72 @@ method_colors <- grad_func(length(ranked_methods))
 names(method_colors) <- ranked_methods
 
 
-# --- 3. Plot ---
-ggplot(plot_data, aes(x = n_cells, y = time_secs, color = method)) +
-  annotation_logticks(sides = "l", color = "grey80") +
-  # --- The Actual Data ---
+ggplot(
+  plot_data,
+  aes(x = n_cells, y = time_secs, color = method)
+) +
+  annotation_logticks(sides = "bl", color = "grey80") +
   geom_point(shape = 4, size = 1, stroke = 1.25, alpha = 0.5) +
-  geom_smooth(method = "lm", se = FALSE, size = 0.7) +
-  
-  # --- The Labels ---
-  geom_text_repel(
-    data = line_ends, 
-    aes(x = max_x, y = pred_y, label = method), 
-    size = 4,
-    direction = "y",
-    hjust = 0,
-    nudge_x = max(plot_data$n_cells) * 0.05,
-    segment.size = 0.2,
-    segment.color = "grey50",
-    show.legend = FALSE,
-    bg.color = "white", # Optional: adds a white halo around text for readability
-    bg.r = 0.15
+  geom_line(
+    data = regression_lines,
+    aes(x = n_cells, y = fitted, color = method),
+    inherit.aes = FALSE,
+    linewidth = 0.7
   ) +
-  
-  # --- NEW: Apply the Custom Colors ---
-  # scale_color_manual(values = method_colors) +
-  
-  # --- Theme & Scales ---
+  geom_segment(
+    data = line_ends_raw,
+    aes(
+      x = endpoint_x,
+      y = endpoint_y,
+      xend = label_x,
+      yend = label_y
+    ),
+    inherit.aes = FALSE,
+    color = "grey50",
+    linewidth = 0.2
+  ) +
+  geom_text(
+    data = line_ends_raw,
+    aes(
+      x = label_x,
+      y = label_y,
+      label = method,
+      color = method
+    ),
+    hjust = 0,
+    size = 4,
+    show.legend = FALSE
+  ) +
   labs(x = "Number of cells", y = "Time (s)") +
   theme_minimal() +
-  scale_x_continuous(
-    breaks = scales::pretty_breaks(n = 3),
+  scale_x_log10(
+    breaks = plot_x_breaks,
     labels = function(x) sapply(x, scientific_A_10n),
-    limits = c(min(plot_data$n_cells), max(plot_data$n_cells) * 1.4)
+    limits = c(
+      min(plot_data$n_cells),
+      max(plot_data$n_cells) * 10^0.65
+    )
   ) +
   scale_y_log10(
-    breaks = trans_breaks("log10", function(x) 10^x),
+    breaks = plot_y_breaks,
     labels = trans_format("log10", math_format(10^.x))
   ) +
   theme(legend.position = "none")
 
 ggsave(file.path(path_plots, "Supp_fig_14_benchmark_exec_times.pdf"),
-       width = 3.5,
+       width = 6.0,
        height = 3.5, limitsize = FALSE)
 ```
 
-## Supp fig 14B: Peak RAM usage (all HPC methods)
+## Supp fig 14B: Peak RAM usage (default HPC methods)
 
-```{r fig.width=3.5, fig.height=3.5}
-# Info-only figure: every HPC worker logs its process peak RSS in mem_GB
+```{r fig.width=6, fig.height=3.5}
+# Info-only figure: default HPC workers log their process peak RSS in mem_GB
 # (python: getrusage ru_maxrss; R: /proc/self/status VmHWM via
-# peak_rss_gb(), incl. prepare_pseudobulk + composition rows). Rows stay NA
-# only for bundles computed before 2026-08-16 or off-Linux. Same method
-# recoding as Supp fig 14; log-log axes, points only.
+# peak_rss_gb()). Same default method selection and recoding as Supp fig 14.
 ram_data <- exec_times %>%
   filter(!is.na(mem_GB)) %>%
-  filter(method %in% analysis_methods) %>%
+  filter(method %in% filter_methods) %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA",
                          "Pseudobulk_hvg2000" = "Pseudobulk",
@@ -2348,23 +2545,86 @@ ram_data <- exec_times %>%
                          "QOT_hvg2000" = "QOT",
                          "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"))
 
-ggplot(ram_data, aes(x = n_cells, y = mem_GB, color = method)) +
+ram_regression_lines <- fit_log_log_lines(ram_data, "mem_GB")
+ram_line_ends <- ram_regression_lines %>%
+  group_by(method) %>%
+  dplyr::summarise(
+    max_x = max(n_cells),
+    pred_y = fitted[which.max(n_cells)],
+    .groups = "drop"
+  )
+ram_line_ends_log <- spread_log_label_y_centered(
+  ram_line_ends %>%
+    mutate(
+      log_max_x = log10(max_x),
+      log_pred_y = log10(pred_y)
+    ),
+  min_gap = 0.15
+)
+ram_line_ends_raw <- ram_line_ends_log %>%
+  mutate(
+    endpoint_x = 10^log_max_x,
+    endpoint_y = 10^log_pred_y,
+    label_x = 10^log_label_x,
+    label_y = 10^log_label_y
+  )
+ram_x_breaks <- c(1e5, 3e5, 1e6)
+ram_y_breaks <- c(1, 10, 100)
+
+ggplot(
+  ram_data,
+  aes(x = n_cells, y = mem_GB, color = method)
+) +
   annotation_logticks(sides = "bl", color = "grey80") +
-  geom_point(shape = 4, size = 1.25, stroke = 1.25, alpha = 0.5) +
-  scale_x_log10(
-    breaks = scales::pretty_breaks(n = 3),
-    labels = function(x) sapply(x, scientific_A_10n)
+  geom_point(shape = 4, size = 1, stroke = 1.25, alpha = 0.5) +
+  geom_line(
+    data = ram_regression_lines,
+    aes(x = n_cells, y = fitted, color = method),
+    inherit.aes = FALSE,
+    linewidth = 0.7
   ) +
-  scale_y_log10(
-    breaks = trans_breaks("log10", function(x) 10^x),
-    labels = trans_format("log10", math_format(10^.x))
+  geom_segment(
+    data = ram_line_ends_raw,
+    aes(
+      x = endpoint_x,
+      y = endpoint_y,
+      xend = label_x,
+      yend = label_y
+    ),
+    inherit.aes = FALSE,
+    color = "grey50",
+    linewidth = 0.2
+  ) +
+  geom_text(
+    data = ram_line_ends_raw,
+    aes(
+      x = label_x,
+      y = label_y,
+      label = method,
+      color = method
+    ),
+    hjust = 0,
+    size = 4,
+    show.legend = FALSE
   ) +
   labs(x = "Number of cells", y = "Peak RAM usage (GB)") +
   theme_minimal() +
-  theme(legend.position = "right")
+  scale_x_log10(
+    breaks = ram_x_breaks,
+    labels = function(x) sapply(x, scientific_A_10n),
+    limits = c(
+      min(ram_data$n_cells),
+      max(ram_data$n_cells) * 10^0.65
+    )
+  ) +
+  scale_y_log10(
+    breaks = ram_y_breaks,
+    labels = scales::label_number(accuracy = 1)
+  ) +
+  theme(legend.position = "none")
 
 ggsave(file.path(path_plots, "Supp_fig_14B_benchmark_mem_GB.pdf"),
-       width = 3.5,
+       width = 6.0,
        height = 3.5, limitsize = FALSE)
 ```
 
@@ -2395,7 +2655,7 @@ filter_methods <- methods_in_scope(c(
 ))
 
 build_funky_heatmap(
-  df_results = df_results,
+  df_results = df_benchmark,
   exec_times = exec_times,
   filter_methods = filter_methods,
   method_recode = c(
@@ -2494,10 +2754,10 @@ filter_methods <- methods_in_scope(c(
   "PILOT-GM-VAE_hvg2000"
 ))
 
-df_results_bmark <- merge_exec_times(df_results, exec_times)
+df_results_bmark <- merge_exec_times(df_benchmark, exec_times)
 
 clean_data <- df_results_bmark %>%
-  filter(method %in% filter_methods) %>%
+  filter(score %in% benchmark_metrics, method %in% filter_methods) %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA",
                          "ECODA_authors_HR_NULL" = "Shuffled_baseline",
@@ -2661,7 +2921,7 @@ filter_methods <- methods_in_scope(c(
 ))
 
 build_funky_heatmap(
-  df_results = df_results,
+  df_results = df_benchmark,
   exec_times = exec_times,
   filter_methods = filter_methods,
   method_recode = c(
@@ -2713,13 +2973,13 @@ for (ds in names(result_list[["bmark"]])) {
 }
 
 
-# Define a function to get the global average excluding 'mod_score'
+# Define a function to get the global average over the canonical benchmark
+# metrics only. Alternate modularity neighborhoods are diagnostics-only.
 get_global_avg <- function(score_list) {
   # 1. Calculate the mean for each dataset
   ds_means <- sapply(score_list, function(ds) {
-    # Filter out 'mod_score' by name
-    relevant_vals <- unlist(ds[names(ds) != "mod_score"])
-    # Return the mean of remaining scores for this dataset
+    relevant_vals <- unlist(ds[names(ds) %in% benchmark_metrics])
+    # Return the average of ANOSIM, Modularity [kNN3], and ARI.
     mean(relevant_vals, na.rm = TRUE)
   })
   
@@ -2760,7 +3020,7 @@ filter_methods <- methods_in_scope(c(
 ))
 
 build_funky_heatmap(
-  df_results = df_results,
+  df_results = df_benchmark,
   exec_times = exec_times,
   filter_methods = filter_methods,
   method_recode = c(
@@ -2798,9 +3058,9 @@ build_funky_heatmap(
 
 # ---------------------------------------------------------------
 
-# Supp fig 1: Correlation between metrics
+# Supp fig 1: Correlation between default benchmark metrics
 
-```{r}
+```{r message=FALSE}
 # --- 0. CLEAN DATA (self-contained: same filter/recode as Figure 2A, built
 # locally so this chunk has no cross-chunk dependency on clean_data). All
 # score columns are kept (no score_set restriction) — the correlation matrix
@@ -2820,78 +3080,586 @@ filter_methods <- methods_in_scope(c(
   "PILOT-GM-VAE_hvg2000"
 ))
 
+benchmark_method_recode <- c(
+  "ECODA_authors_HR" = "ECODA",
+  "ECODA_authors_HR_NULL" = "Shuffled_baseline",
+  "Pseudobulk_hvg2000" = "Pseudobulk",
+  "MOFA_hvg2000_factors15" = "MOFA",
+  "scITD_hvg2000_factors5" = "scITD",
+  "MrVI_hvg2000" = "MrVI",
+  "scPoli_hvg2000_dims15_highres" = "scPoli",
+  "PILOT_hvg2000" = "PILOT",
+  "GloScope_hvg2000_pcadims30" = "GloScope",
+  "QOT_hvg2000" = "QOT",
+  "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"
+)
 clean_data <- prepare_benchmark_data(
-  df_results = df_results,
+  df_results = df_benchmark,
   exec_times = exec_times,
   filter_methods = filter_methods,
-  method_recode = c(
-    "ECODA_authors_HR" = "ECODA",
-    "ECODA_authors_HR_NULL" = "Shuffled_baseline",
-    "Pseudobulk_hvg2000" = "Pseudobulk",
-    "MOFA_hvg2000_factors15" = "MOFA",
-    "scITD_hvg2000_factors5" = "scITD",
-    "MrVI_hvg2000" = "MrVI",
-    "scPoli_hvg2000_dims15_highres" = "scPoli",
-    "PILOT_hvg2000" = "PILOT",
-    "GloScope_hvg2000_pcadims30" = "GloScope",
-    "QOT_hvg2000" = "QOT",
-    "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"
-  ),
-  dataset_recode = dataset_display_map
+  method_recode = benchmark_method_recode,
+  dataset_recode = dataset_display_map,
+  score_set = base_metrics
 )
 
 # --- 1. PREPARE WIDE DATA ---
-# Dynamically calculate the mean based on whatever metrics are present
-metrics <- c("ANOSIM", "Modularity", "ARI", "Silhouette", "LISI")
+metrics <- unname(score_label_map[base_metrics])
+mean_score_components <- metrics
 
 df_wide <- clean_data %>%
-  pivot_wider(id_cols = c(dataset, method), 
-              names_from = score, 
-              values_from = value) %>%
-  mutate(Mean_Score = rowMeans(dplyr::select(., all_of(metrics)), na.rm = TRUE))
+  pivot_wider(
+    id_cols = c(dataset, method),
+    names_from = score,
+    values_from = value
+  )
+mean_score_data <- dplyr::select(df_wide, all_of(mean_score_components))
+stopifnot(
+  nrow(mean_score_data) > 0,
+  all(complete.cases(mean_score_data))
+)
+df_wide$Mean_Score <- rowMeans(mean_score_data)
 
-# --- 2. REUSABLE PLOTTING FUNCTION ---
-# Updated to use tidy evaluation (.data[[]]) instead of the deprecated aes_string()
-plot_mean_corr <- function(data, metric_var) {
-  # Calculate limits dynamically
-  lims <- c(min(data %>% dplyr::select(all_of(metrics)), na.rm = TRUE) - 0.05, 1.2)
-  
-  ggplot(data, aes(x = Mean_Score, y = .data[[metric_var]])) +
-    geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey50", linewidth = 0.8) +
-    geom_point(alpha = 0.4, color = "#000000", size = 1.5) +
-    geom_smooth(method = "lm", color = "black", linewidth = 1, se = FALSE) +
-    stat_cor(aes(label = ..rr.label..), label.x.npc = "left", label.y.npc = "top") +
-    labs(x = "Mean Score", y = metric_var) +
-    coord_cartesian(xlim = lims, ylim = lims) + # Better than xlim()/ylim() to prevent dropping data in smooths
-    theme_classic()
+# --- 2. REUSABLE AXIS AND PLOTTING HELPERS ---
+# Use each variable's observed range rather than one broad range for every
+# metric. This keeps narrow metrics such as Silhouette from looking flat while
+# retaining a 5% margin around every observed point.
+metric_axis_range <- function(x, metric_name) {
+  x <- x[is.finite(x)]
+  if (length(x) == 0) {
+    stop("Supp fig 1: no finite values available for ", metric_name)
+  }
+
+  observed <- range(x)
+  span <- diff(observed)
+  padding <- if (span > 0) 0.05 * span else max(0.05, 0.05 * abs(observed[1]))
+  observed + c(-padding, padding)
 }
+
+metric_axis_breaks <- function(x, limits) {
+  observed <- x[is.finite(x)]
+  if (length(observed) == 0) {
+    stop("Supp fig 1: no finite values available for tick breaks")
+  }
+
+  breaks <- scales::breaks_extended(n = 4)(limits)
+
+  # Keep a negative boundary tick visible when the observed data cross zero
+  # but the extended-break algorithm starts at zero.
+  if (min(observed) < 0 && min(breaks) >= 0) {
+    negative_break <- floor(min(observed) / 0.1) * 0.1
+    breaks <- sort(unique(c(negative_break, breaks)))
+  }
+
+  if (length(breaks) < 3L || length(breaks) > 5L) {
+    stop("Supp fig 1: expected 3-5 meaningful ticks, got ", length(breaks))
+  }
+  breaks
+}
+
+build_metric_axis_spec <- function(data, variables) {
+  metric_values <- setNames(
+    lapply(variables, function(metric) data[[metric]]),
+    variables
+  )
+  axis_ranges <- setNames(
+    lapply(variables, function(metric) {
+      metric_axis_range(metric_values[[metric]], metric)
+    }),
+    variables
+  )
+  axis_breaks <- Map(metric_axis_breaks, metric_values, axis_ranges)
+  axis_ranges <- Map(
+    function(lims, breaks) range(c(lims, breaks)),
+    axis_ranges,
+    axis_breaks
+  )
+  stopifnot(
+    all(vapply(
+      axis_breaks,
+      function(breaks) length(breaks) >= 3L && length(breaks) <= 5L,
+      logical(1)
+    )),
+    all(vapply(names(axis_ranges), function(metric) {
+      values <- metric_values[[metric]]
+      values <- values[is.finite(values)]
+      all(
+        values >= axis_ranges[[metric]][1] &
+          values <= axis_ranges[[metric]][2]
+      )
+    }, logical(1)))
+  )
+  list(
+    values = metric_values,
+    ranges = axis_ranges,
+    breaks = axis_breaks
+  )
+}
+
+benchmark_axis_spec <- build_metric_axis_spec(
+  df_wide,
+  c("Mean_Score", metrics)
+)
+axis_ranges <- benchmark_axis_spec$ranges
+axis_breaks <- benchmark_axis_spec$breaks
+format_metric_ticks <- function(x) {
+  x[abs(x) < 0.005] <- 0
+  sprintf("%.2f", x)
+}
+
+# Add variable-specific meaningful 3-5 tick scales to each GGally panel. The
+# coordinate limits are applied with coord_cartesian() so smoothing/statistical
+# layers still see all rows; limits include every finite observation.
+add_pairwise_axes <- function(plot, mapping, axis_spec, include_y = TRUE) {
+  x_name <- rlang::as_name(mapping$x)
+  plot <- plot +
+    scale_x_continuous(
+      breaks = axis_spec$breaks[[x_name]],
+      labels = format_metric_ticks,
+      expand = c(0, 0)
+    )
+
+  if (include_y) {
+    y_name <- rlang::as_name(mapping$y)
+    plot <- plot +
+      scale_y_continuous(
+        breaks = axis_spec$breaks[[y_name]],
+        labels = format_metric_ticks,
+        expand = c(0, 0)
+      ) +
+      coord_cartesian(
+        xlim = axis_spec$ranges[[x_name]],
+        ylim = axis_spec$ranges[[y_name]],
+        expand = FALSE
+      )
+  } else {
+    plot <- plot +
+      coord_cartesian(
+        xlim = axis_spec$ranges[[x_name]],
+        expand = FALSE
+      )
+  }
+
+  plot
+}
+
+make_pairwise_upper <- function(digits = 2, text_size = 6.5) {
+  function(data, mapping, ...) {
+    ggally_cor(
+      data,
+      mapping,
+      ...,
+      stars = FALSE,
+      digits = digits,
+      title_args = list(size = text_size),
+      group_args = list(size = text_size)
+    )
+  }
+}
+
+make_pairwise_lower <- function(axis_spec) {
+  function(data, mapping, ...) {
+    plot <- ggplot(data, mapping) +
+      geom_point(alpha = 0.4, color = "#000000") +
+      geom_smooth(method = "lm", color = "black", se = TRUE)
+    add_pairwise_axes(plot, mapping, axis_spec)
+  }
+}
+
+make_pairwise_diag <- function(axis_spec) {
+  function(data, mapping, ...) {
+    add_pairwise_axes(
+      ggally_densityDiag(data, mapping, ...),
+      mapping,
+      axis_spec,
+      include_y = FALSE
+    )
+  }
+}
+
+pairwise_upper <- make_pairwise_upper()
+pairwise_lower <- make_pairwise_lower(benchmark_axis_spec)
+pairwise_diag <- make_pairwise_diag(benchmark_axis_spec)
 
 # --- 3. DYNAMICALLY GENERATE "METRIC VS MEAN" PLOTS ---
 # purrr::map iterates over your metrics and creates a list of plots
-mean_plots <- map(metrics, ~plot_mean_corr(df_wide, .x))
+plot_mean_corr <- function(data, metric_var, axis_spec) {
+  ggplot(data, aes(x = Mean_Score, y = .data[[metric_var]])) +
+    geom_abline(
+      intercept = 0,
+      slope = 1,
+      linetype = "dashed",
+      color = "grey50",
+      linewidth = 0.8
+    ) +
+    geom_point(alpha = 0.4, color = "#000000", size = 1.5) +
+    geom_smooth(method = "lm", color = "black", linewidth = 1, se = FALSE) +
+    stat_cor(
+      aes(label = after_stat(rr.label)),
+      label.x.npc = "right",
+      label.y.npc = "bottom",
+      hjust = 1,
+      vjust = 0,
+      size = 5
+    ) +
+    labs(x = NULL, y = metric_var) +
+    scale_x_continuous(
+      breaks = axis_spec$breaks[["Mean_Score"]],
+      labels = format_metric_ticks,
+      expand = c(0, 0)
+    ) +
+    scale_y_continuous(
+      breaks = axis_spec$breaks[[metric_var]],
+      labels = format_metric_ticks,
+      expand = c(0, 0)
+    ) +
+    coord_cartesian(
+      xlim = axis_spec$ranges[["Mean_Score"]],
+      ylim = axis_spec$ranges[[metric_var]],
+      expand = FALSE
+    ) +
+    theme_classic(base_size = 15) +
+    theme(
+      axis.text.x = element_text(size = 10),
+      axis.text.y = element_text(size = 10),
+      axis.title = element_text(size = 13),
+      aspect.ratio = 1
+    )
+}
 
-# Combine them using patchwork's wrap_plots
-mean_row <- wrap_plots(mean_plots, nrow = 1)
+mean_plots <- map(
+  metrics,
+  ~ plot_mean_corr(df_wide, .x, benchmark_axis_spec)
+)
+
+# Keep each mean-row panel square and separate adjacent axes so the repeated
+# numeric tick labels do not collide. A single shared x-axis title replaces the
+# five repeated "Mean Score" titles.
+mean_row <- wrap_plots(mean_plots, nrow = 1) +
+  theme(panel.spacing = grid::unit(1, "lines"))
+mean_x_label <- wrap_elements(
+  full = grid::textGrob(
+    "Mean Score",
+    x = grid::unit(0.5, "npc"),
+    y = grid::unit(1, "npc"),
+    just = c("center", "top"),
+    gp = grid::gpar(fontsize = 13)
+  ),
+  ignore_tag = TRUE
+)
+mean_row_with_label <- wrap_plots(
+  list(mean_row, mean_x_label),
+  ncol = 1,
+  heights = c(1, 0.08)
+)
+mean_panel <- wrap_elements(
+  full = patchwork::patchworkGrob(mean_row_with_label),
+  ignore_tag = TRUE
+)
+mean_panel_label <- wrap_elements(
+  full = grid::textGrob(
+    "B",
+    x = grid::unit(0, "npc"),
+    y = grid::unit(1, "npc"),
+    just = c("left", "top"),
+    gp = grid::gpar(fontface = "bold", fontsize = 18)
+  ),
+  ignore_tag = TRUE
+)
+mean_panel_with_tag <- wrap_plots(
+  list(mean_panel_label, mean_panel),
+  ncol = 1,
+  heights = c(0.08, 1)
+)
 
 # --- 4. PAIRWISE CORRELATION MATRIX ---
-# ggpairs handles the "all vs all" automatically
+# ggpairs returns a ggmatrix rather than a ggplot. Its public gtable converter
+# lets patchwork compose it with the mean-row plot without changing the matrix.
 pairwise_matrix <- ggpairs(
-  df_wide, 
+  df_wide,
   columns = metrics,
-  lower = list(continuous = wrap("smooth", alpha = 0.4, color = "black")),
-  diag = list(continuous = wrap("densityDiag", fill = "grey80"))
-) + theme_classic()
+  upper = list(continuous = pairwise_upper),
+  lower = list(continuous = pairwise_lower),
+  diag = list(continuous = pairwise_diag)
+) +
+  theme_classic(base_size = 15) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,
+      vjust = 1,
+      size = 9
+    ),
+    axis.text.y = element_text(size = 9),
+    strip.text = element_text(size = 16),
+    panel.spacing = grid::unit(1.5, "lines")
+  )
 
-# --- 5. COMBINE AND DISPLAY ---
-# Note: ggpairs returns a ggmatrix, which behaves slightly differently with patchwork, 
-# so saving them as two separate panels or using cowplot/gridExtra might be necessary 
-# depending on your exact layout needs. 
+pairwise_panel <- wrap_elements(
+  full = GGally::ggmatrix_gtable(pairwise_matrix),
+  ignore_tag = TRUE
+)
+pairwise_panel_label <- wrap_elements(
+  full = grid::textGrob(
+    "A",
+    x = grid::unit(0, "npc"),
+    y = grid::unit(1, "npc"),
+    just = c("left", "top"),
+    gp = grid::gpar(fontface = "bold", fontsize = 18)
+  ),
+  ignore_tag = TRUE
+)
+pairwise_panel_with_tag <- wrap_plots(
+  list(pairwise_panel_label, pairwise_panel),
+  ncol = 1,
+  heights = c(0.02, 1)
+)
 
-# Save the pairwise matrix
-ggsave(file.path(path_plots, "Supp_fig_1A_pairwise.pdf"), pairwise_matrix, width = 7, height = 7)
+# --- Supp fig X2A. MODULARITY-SCORE DIAGNOSTIC MATRIX ---
+modularity_score_keys <- c(
+  "mod_knn3_score",
+  "mod_knn6_score",
+  "mod_knn9_score",
+  "mod_knnsqrtn_score"
+)
+modularity_metrics <- c(
+  "Modularity kNN3",
+  "Modularity kNN6",
+  "Modularity kNN9",
+  "Modularity sqrt(n)"
+)
+modularity_score_labels <- setNames(
+  modularity_metrics,
+  modularity_score_keys
+)
 
-# Save the mean row
-ggsave(file.path(path_plots, "Supp_fig_1B_means.pdf"), mean_row, width = 10, height = 3.5)
+df_modularity_long <- df_benchmark %>%
+  filter(
+    method %in% filter_methods,
+    score %in% modularity_score_keys
+  ) %>%
+  mutate(
+    dataset = recode(dataset, !!!dataset_display_map),
+    method = recode(method, !!!benchmark_method_recode),
+    modularity_metric = recode(score, !!!modularity_score_labels)
+  ) %>%
+  select(dataset, method, modularity_metric, value)
+stopifnot(
+  !anyDuplicated(df_modularity_long[c("dataset", "method", "modularity_metric")])
+)
+
+df_modularity_wide <- df_modularity_long %>%
+  pivot_wider(
+    id_cols = c(dataset, method),
+    names_from = modularity_metric,
+    values_from = value
+  )
+stopifnot(
+  all(modularity_metrics %in% names(df_modularity_wide)),
+  all(vapply(
+    df_modularity_wide[modularity_metrics],
+    function(x) all(is.finite(x)),
+    logical(1)
+  )),
+  setequal(
+    paste(df_modularity_wide$dataset, df_modularity_wide$method, sep = "\r"),
+    paste(df_wide$dataset, df_wide$method, sep = "\r")
+  )
+)
+
+modularity_axis_spec <- build_metric_axis_spec(
+  df_modularity_wide,
+  modularity_metrics
+)
+modularity_pairwise_matrix <- ggpairs(
+  df_modularity_wide,
+  columns = modularity_metrics,
+  upper = list(continuous = make_pairwise_upper()),
+  lower = list(
+    continuous = make_pairwise_lower(modularity_axis_spec)
+  ),
+  diag = list(
+    continuous = make_pairwise_diag(modularity_axis_spec)
+  )
+) +
+  theme_classic(base_size = 15) +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,
+      vjust = 1,
+      size = 9
+    ),
+    axis.text.y = element_text(size = 9),
+    strip.text = element_text(size = 16),
+    panel.spacing = grid::unit(1.5, "lines")
+  )
+modularity_pairwise_panel <- wrap_elements(
+  full = GGally::ggmatrix_gtable(modularity_pairwise_matrix),
+  ignore_tag = TRUE
+)
+modularity_pairwise_panel_label <- wrap_elements(
+  full = grid::textGrob(
+    "A",
+    x = grid::unit(0, "npc"),
+    y = grid::unit(1, "npc"),
+    just = c("left", "top"),
+    gp = grid::gpar(fontface = "bold", fontsize = 18)
+  ),
+  ignore_tag = TRUE
+)
+modularity_pairwise_panel_with_tag <- wrap_plots(
+  list(modularity_pairwise_panel_label, modularity_pairwise_panel),
+  ncol = 1,
+  heights = c(0.02, 1)
+)
+
+# --- 4C. MODULARITY VARIANTS AGAINST THE SHARED MEAN SCORE ---
+# Mean_Score is inherited from df_wide and is always:
+# mean(ANOSIM, Modularity [kNN3], ARI, Silhouette, LISI).
+df_modularity_vs_mean <- df_modularity_wide %>%
+  inner_join(
+    dplyr::select(df_wide, dataset, method, Mean_Score),
+    by = c("dataset", "method")
+  )
+stopifnot(
+  nrow(df_modularity_vs_mean) == nrow(df_modularity_wide),
+  all(complete.cases(
+    df_modularity_vs_mean[c("Mean_Score", modularity_metrics)]
+  ))
+)
+
+modularity_mean_axis_spec <- build_metric_axis_spec(
+  df_modularity_vs_mean,
+  c("Mean_Score", modularity_metrics)
+)
+
+modularity_mean_plots <- map(
+  modularity_metrics,
+  ~ plot_mean_corr(
+    df_modularity_vs_mean,
+    .x,
+    modularity_mean_axis_spec
+  )
+)
+modularity_mean_row <- wrap_plots(
+  modularity_mean_plots,
+  nrow = 1
+) +
+  theme(panel.spacing = grid::unit(1, "lines"))
+modularity_mean_x_label <- wrap_elements(
+  full = grid::textGrob(
+    "Mean Score",
+    x = grid::unit(0.5, "npc"),
+    y = grid::unit(1, "npc"),
+    just = c("center", "top"),
+    gp = grid::gpar(fontsize = 13)
+  ),
+  ignore_tag = TRUE
+)
+modularity_mean_row_with_label <- wrap_plots(
+  list(modularity_mean_row, modularity_mean_x_label),
+  ncol = 1,
+  heights = c(1, 0.08)
+)
+modularity_mean_panel <- wrap_elements(
+  full = patchwork::patchworkGrob(modularity_mean_row_with_label),
+  ignore_tag = TRUE
+)
+modularity_mean_panel_label <- wrap_elements(
+  full = grid::textGrob(
+    "B",
+    x = grid::unit(0, "npc"),
+    y = grid::unit(1, "npc"),
+    just = c("left", "top"),
+    gp = grid::gpar(fontface = "bold", fontsize = 18)
+  ),
+  ignore_tag = TRUE
+)
+modularity_mean_panel_with_tag <- wrap_plots(
+  list(modularity_mean_panel_label, modularity_mean_panel),
+  ncol = 1,
+  heights = c(0.08, 1)
+)
+
+# --- Supp fig 1: COMBINE DEFAULT BENCHMARK PANELS ---
+supp_fig_1 <- wrap_plots(
+  list(pairwise_panel_with_tag, mean_panel_with_tag),
+  ncol = 1,
+  heights = c(4, 1)
+)
+
+# --- Supp fig X2: COMBINE MODULARITY COMPARISON PANELS ---
+supp_fig_X2 <- wrap_plots(
+  list(modularity_pairwise_panel_with_tag, modularity_mean_panel_with_tag),
+  ncol = 1,
+  heights = c(4, 1)
+)
+
+# Keep the default metric components in Supp fig 1 and the modularity
+# comparison components in Supp fig X2.
+# The combined panel uses large typography; keep the standalone 7-inch
+# control readable by relaxing its spacing and text scale before export.
+pairwise_matrix_component <- pairwise_matrix +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,
+      vjust = 1,
+      size = 8
+    ),
+    axis.text.y = element_text(size = 8),
+    strip.text = element_text(size = 13),
+    panel.spacing = grid::unit(0.4, "lines")
+  )
+
+modularity_pairwise_matrix_component <- modularity_pairwise_matrix +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,
+      vjust = 1,
+      size = 8
+    ),
+    axis.text.y = element_text(size = 8),
+    strip.text = element_text(size = 13),
+    panel.spacing = grid::unit(0.4, "lines")
+  )
+ggsave(
+  file.path(path_plots, "Supp_fig_X2A_modularity_pairwise.pdf"),
+  modularity_pairwise_matrix_component,
+  width = 7,
+  height = 7
+)
+ggsave(
+  file.path(path_plots, "Supp_fig_1A_pairwise.pdf"),
+  pairwise_matrix_component,
+  width = 7,
+  height = 7
+)
+ggsave(
+  file.path(path_plots, "Supp_fig_1B_means.pdf"),
+  mean_row_with_label,
+  width = 15,
+  height = 3.5
+)
+ggsave(
+  file.path(path_plots, "Supp_fig_X2B_modularity_means.pdf"),
+  modularity_mean_row_with_label,
+  width = 15,
+  height = 3.5
+)
+ggsave(
+  file.path(path_plots, "Supp_fig_1.pdf"),
+  supp_fig_1,
+  width = 14,
+  height = 17.5
+)
+ggsave(
+  file.path(path_plots, "Supp_fig_X2.pdf"),
+  supp_fig_X2,
+  width = 14,
+  height = 17.5
+)
 ```
 
 # ---------------------------------------------------------------
@@ -2908,7 +3676,7 @@ if (length(result_list[["trans"]]) == 0) {
 
 # Per-dataset trans bundles are summarized data.frames without a dataset
 # column; add it here so the paired lines/points below can group by dataset.
-df_results <- imap_dfr(result_list[["trans"]], ~ mutate(.x, dataset = .y)) %>%
+df_normalization <- imap_dfr(result_list[["trans"]], ~ mutate(.x, dataset = .y)) %>%
   mutate(
     trans_method = recode(
       trans_method,
@@ -2921,7 +3689,7 @@ df_results <- imap_dfr(result_list[["trans"]], ~ mutate(.x, dataset = .y)) %>%
     )
   )
 
-df_results <- df_results %>%
+df_normalization <- df_normalization %>%
   pivot_longer(
     cols = c(ANOSIM_score, Modularity_score, Adjusted_Rand_Index),
     names_to = "score",
@@ -2930,28 +3698,28 @@ df_results <- df_results %>%
   as.data.frame()
 
 
-df_results_anosim <- df_results %>%
+df_normalization_anosim <- df_normalization %>%
   filter(score == "ANOSIM_score") %>%
   group_by(trans_method) %>%
   summarize(mean = mean(value), sem = sd(value) / sqrt(length(value)))
 
-df_results_anosim <- df_results_anosim %>%
+df_normalization_anosim <- df_normalization_anosim %>%
   arrange(desc(mean))
 
-df_results_anosim$trans_method <- factor(
-  df_results_anosim$trans_method,
-  levels = df_results_anosim$trans_method
+df_normalization_anosim$trans_method <- factor(
+  df_normalization_anosim$trans_method,
+  levels = df_normalization_anosim$trans_method
 )
-df_results$trans_method <- factor(
-  df_results$trans_method,
-  levels = df_results_anosim$trans_method
+df_normalization$trans_method <- factor(
+  df_normalization$trans_method,
+  levels = df_normalization_anosim$trans_method
 )
 
 
-df_results_list[["Normalization"]] <- df_results
+df_results_list[["Normalization"]] <- df_normalization
 
 
-p1 <- df_results %>%
+p1 <- df_normalization %>%
   filter(score == "ANOSIM_score") %>%
 
   ggplot(aes(x = trans_method, y = value)) +
@@ -2982,7 +3750,7 @@ ggsave(
 )
 
 
-df_results %>%
+df_normalization %>%
   group_by(score, trans_method) %>%
   summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
   ungroup() %>%
@@ -3018,7 +3786,7 @@ my_comparisons <- list(
   c("CLR", "Counts")
 )
 
-df_results %>%
+df_normalization %>%
   filter(score == "ANOSIM_score") %>%
   filter(trans_method %in% c("Counts", "Frequency(%)", "CLR")) %>%
 
@@ -3067,7 +3835,7 @@ ggsave(
 )
 
 
-ggplot(df_results, aes(x = trans_method, y = value)) +
+ggplot(df_normalization, aes(x = trans_method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
   geom_point(aes(shape = dataset)) +
   geom_line(
@@ -3094,15 +3862,15 @@ ggsave(
   height = 5
 )
 
-df_results_anosim <- df_results %>%
+df_normalization_anosim <- df_normalization %>%
   filter(score == "ANOSIM_score")
 
-df_results_anosim <- df_results_anosim[
-  !grepl("pca", df_results_anosim$trans_method),
+df_normalization_anosim <- df_normalization_anosim[
+  !grepl("pca", df_normalization_anosim$trans_method),
 ]
 
 my_comparisons <- purrr::map(
-  unique(as.character(df_results_anosim$trans_method)),
+  unique(as.character(df_normalization_anosim$trans_method)),
   ~ c(.x, "Frequency(%)")
 )
 my_comparisons <- Filter(function(x) length(unique(x)) == 2, my_comparisons)
@@ -3110,7 +3878,7 @@ my_comparisons <- Filter(function(x) length(unique(x)) == 2, my_comparisons)
 my_comparisons <- my_comparisons[c(4, 3, 2, 1, 5)]
 
 
-ggplot(df_results_anosim, aes(x = trans_method, y = value)) +
+ggplot(df_normalization_anosim, aes(x = trans_method, y = value)) +
   stat_compare_means(
     comparisons = my_comparisons,
     # p.adjust.method = "bonferroni",
@@ -3122,7 +3890,7 @@ ggplot(df_results_anosim, aes(x = trans_method, y = value)) +
   ) + # Add pairwise comparisons p-value
   geom_boxplot(outlier.shape = NA) +
   geom_point(aes(shape = dataset)) +
-  scale_shape_manual(values = 1:length(unique((df_results_anosim$dataset)))) +
+  scale_shape_manual(values = 1:length(unique((df_normalization_anosim$dataset)))) +
   geom_line(
     aes(group = dataset, linetype = dataset),
     alpha = 1,
@@ -3139,7 +3907,7 @@ ggsave(
 )
 
 
-ggplot(df_results_anosim, aes(x = trans_method, y = value)) +
+ggplot(df_normalization_anosim, aes(x = trans_method, y = value)) +
   stat_compare_means(
     # comparisons = my_comparisons,
     # p.adjust.method = "bonferroni",
@@ -3151,7 +3919,7 @@ ggplot(df_results_anosim, aes(x = trans_method, y = value)) +
   ) + # Add pairwise comparisons p-value
   geom_boxplot(outlier.shape = NA) +
   geom_point(aes(shape = dataset)) +
-  scale_shape_manual(values = 1:length(unique((df_results_anosim$dataset)))) +
+  scale_shape_manual(values = 1:length(unique((df_normalization_anosim$dataset)))) +
   geom_line(
     aes(group = dataset, linetype = dataset),
     alpha = 1,
@@ -3159,7 +3927,7 @@ ggplot(df_results_anosim, aes(x = trans_method, y = value)) +
   ) +
   labs(x = "", y = "ANOSIM score") +
   # stat_pvalue_manual(stat.test, label = "p.adj",
-  #                    y.position = c(max(df_results_anosim$values)+0.1, max(df_results_anosim$values)+0.2), hide.ns = TRUE) +
+  #                    y.position = c(max(df_normalization_anosim$values)+0.1, max(df_normalization_anosim$values)+0.2), hide.ns = TRUE) +
   theme_classic() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
 ```
@@ -3177,7 +3945,7 @@ if (length(zeroimp_result_list) == 0) {
        "\nRun the HPC zeroimp pipeline first (run_transformation_zeroimp_analysis/).")
 }
 
-df_results <- imap_dfr(zeroimp_result_list, ~ {
+df_zeroimp <- imap_dfr(zeroimp_result_list, ~ {
   dataset_name <- .y
   imap_dfr(.x, function(method_value, method_name) {
     if (is.list(method_value) && !is.data.frame(method_value)) {
@@ -3201,25 +3969,25 @@ df_results <- imap_dfr(zeroimp_result_list, ~ {
   })
 })
 
-df_results <- df_results[!grepl("impRZilr", df_results$method), ]
-df_results <- df_results[!df_results$score == "mod_score", ]
+df_zeroimp <- df_zeroimp[!grepl("impRZilr", df_zeroimp$method), ]
+df_zeroimp <- df_zeroimp[!df_zeroimp$score == "mod_score", ]
 
-df_results_list[["Zero_imputation"]] <- df_results
+df_results_list[["Zero_imputation"]] <- df_zeroimp
 
-df_results_anosim <- df_results %>%
+df_zeroimp_anosim <- df_zeroimp %>%
   filter(score == "anosim_score") %>%
   group_by(method) %>%
   summarize(mean = mean(value), sem = sd(value) / sqrt(length(value)))
 
-df_results_anosim <- df_results_anosim %>%
+df_zeroimp_anosim <- df_zeroimp_anosim %>%
   arrange(desc(mean))
 
-df_results_anosim$method <- factor(df_results_anosim$method, levels = df_results_anosim$method)
-df_results$method <- factor(df_results$method, levels = df_results_anosim$method)
+df_zeroimp_anosim$method <- factor(df_zeroimp_anosim$method, levels = df_zeroimp_anosim$method)
+df_zeroimp$method <- factor(df_zeroimp$method, levels = df_zeroimp_anosim$method)
 
 
 
-p2 <- df_results %>%
+p2 <- df_zeroimp %>%
   filter(score == "anosim_score") %>%
   filter(method != "asinsqrt") %>%
   filter(!grepl("perc", method)) %>%
@@ -3245,12 +4013,12 @@ p2 <- df_results %>%
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 print(p2)
 ggsave(file.path(path_plots, "Supp_fig_16B_zero_replacement_anosim.pdf"),
-       width = 2.5,
+       width = 7.5,
        height = 4)
 
 
 
-df_results %>%
+df_zeroimp %>%
   filter(score == "mod_knn3_score") %>%
   filter(method != "asinsqrt") %>%
   filter(!grepl("perc", method)) %>%
@@ -3277,7 +4045,7 @@ df_results %>%
 
 
 
-df_results %>%
+df_zeroimp %>%
   filter(score == "cluster_score") %>%
   filter(method != "asinsqrt") %>%
   filter(!grepl("perc", method)) %>%
@@ -3303,7 +4071,7 @@ df_results %>%
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 
 
-df_results %>%
+df_zeroimp %>%
   filter(method != "asinsqrt") %>%
   filter(!grepl("perc", method)) %>%
   
@@ -3336,7 +4104,7 @@ ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_separatescor
 
 
 
-df_results %>%
+df_zeroimp %>%
   group_by(score, method) %>%
   summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
   ungroup() %>%
@@ -3357,7 +4125,7 @@ ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_barplot_sepa
        width = 3.5,
        height = 6)
 
-ggplot(df_results, aes(x = method, y = value)) +
+ggplot(df_zeroimp, aes(x = method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
   geom_point(aes(shape=dataset)) + 
   geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
@@ -3375,7 +4143,7 @@ ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_sepa
 
 
 
-df_results %>%
+df_zeroimp %>%
   filter(score == "cluster_score") %>%
   group_by(method) %>%
   summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
@@ -3391,7 +4159,7 @@ df_results %>%
   NoLegend()
 
 
-df_results %>%
+df_zeroimp %>%
   filter(score == "anosim_score") %>%
   group_by(method) %>%
   summarize(mean = mean(value), sem = sd(value) / sqrt(length(value))) %>%
@@ -3407,15 +4175,15 @@ df_results %>%
   NoLegend()
 
 
-df_results_clustering <- df_results %>%
+df_zeroimp_clustering <- df_zeroimp %>%
   filter(score == "cluster_score")
 
-my_comparisons <- purrr::map(unique(as.character(df_results_clustering$method)), ~ c(.x, "counts_all_1"))
+my_comparisons <- purrr::map(unique(as.character(df_zeroimp_clustering$method)), ~ c(.x, "counts_all_1"))
 my_comparisons <- Filter(function(x) length(unique(x)) == 2, my_comparisons)
 my_comparisons <- my_comparisons[c(6,1,7:10, 2:5)]
 # my_comparisons[[length(my_comparisons) + 1]] <- c("perc_all_0.1%", "perc_all_1%")
 
-p <- ggplot(df_results_clustering, aes(x = method, y = value)) +
+p <- ggplot(df_zeroimp_clustering, aes(x = method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
   geom_point(aes(shape=dataset)) + 
   geom_line(aes(group=dataset, linetype=dataset), alpha = 1, color = "steelblue") +
@@ -3428,7 +4196,7 @@ p <- ggplot(df_results_clustering, aes(x = method, y = value)) +
   ) + # Add pairwise comparisons p-value
   # geom_point(position = position_jitterdodge()) +
   labs(x = "", y = "Adjusted Rand Index") +
-  scale_shape_manual(values=1:length(unique((df_results_clustering$dataset)))) +
+  scale_shape_manual(values=1:length(unique((df_zeroimp_clustering$dataset)))) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 print(p)
@@ -3439,10 +4207,10 @@ ggsave(file.path(path_plots, "zero_imputation_real_datasets_summary_boxplot_clus
 # (removed: mod_score boxplot — mod_score rows are dropped above, so the
 # plot was always empty)
 
-df_results_anosim <- df_results %>%
+df_zeroimp_anosim <- df_zeroimp %>%
   filter(score == "anosim_score")
 
-p <- ggplot(df_results_anosim, aes(x = method, y = value)) +
+p <- ggplot(df_zeroimp_anosim, aes(x = method, y = value)) +
   geom_boxplot(outlier.shape = NA) +
   # geom_bar(stat = "identity", position = position_dodge()) +
   geom_point(aes(shape=dataset)) + 
@@ -3456,7 +4224,7 @@ p <- ggplot(df_results_anosim, aes(x = method, y = value)) +
   ) + # Add pairwise comparisons p-value
   # geom_point(position = position_jitterdodge()) +
   labs(x = "", y = "ANOSIM score") +
-  scale_shape_manual(values=1:length(unique((df_results_anosim$dataset)))) +
+  scale_shape_manual(values=1:length(unique((df_zeroimp_anosim$dataset)))) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 print(p)

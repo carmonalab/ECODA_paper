@@ -3,7 +3,7 @@
 # ============================================================
 
 # Calculate separation scores (ANOSIM, modularity, clustering, silhouette)
-calc_sep_score <- function(dist_mat, labels, knn_k = NULL) {
+calc_sep_score <- function(dist_mat, labels, knn_k = NULL, parallel = getOption("mc.cores")) {
   num_labels <- as.numeric(as.factor(labels))
 
   sil_score <- calc_sil(dist_mat, num_labels)
@@ -14,7 +14,8 @@ calc_sep_score <- function(dist_mat, labels, knn_k = NULL) {
   anosim_score <- vegan::anosim(
     x = dist_mat,
     grouping = num_labels,
-    distance = "euclidean"
+    distance = "euclidean",
+    parallel = parallel
   )[["statistic"]]
   cluster_score <- clust_eval(dist_mat, num_labels)
   lisi_score <- calc_lisi(num_labels, dist_mat = dist_mat)
