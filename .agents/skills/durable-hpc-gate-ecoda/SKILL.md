@@ -17,6 +17,14 @@ repository-aware: it checks the ECODA checkout, canonical configuration and
 artifact roots, scientific invariants, benchmark wave serialization, and the
 terminal accounting/audit contract.
 
+## Repository-defined exceptions
+
+For this checkout, `AGENTS.md` is authoritative for explicit user-requested
+exceptions to the durable-gate requirement. Keep exception criteria in
+`AGENTS.md` rather than duplicating them here; follow its exact scope and
+output restrictions, and ask if they are unclear.
+
+
 The profile contains no credentials, email addresses, scheduler secrets, or
 alternate runtime. Use the global CLI and the checked-in profile at
 `references/profile.json`; do not add a second runner or wrapper here.
