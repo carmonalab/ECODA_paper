@@ -75,7 +75,7 @@ def _validate_log_frame(frame, path):
         missing = raw.isna()
         if (not allow_missing and missing.any()) or values[~missing].isna().any():
             raise ValueError(f"execution log has invalid numeric values: {path}")
-        if not np.isfinite(values[~missing].to_numpy(dtype=float)).all():
+        if (not np.isfinite(values[~missing].to_numpy(dtype=float)).all() or (values[~missing] < 0).any()):
             raise ValueError(f"execution log has invalid numeric values: {path}")
 
 def atomic_feather(frame, path):

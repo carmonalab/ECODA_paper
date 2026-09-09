@@ -335,6 +335,13 @@ def main():
         expected_output.with_name(f"{expected_output.name}.md5").write_text(
             f"MD5={output_digest}\nSIZE={expected_output.stat().st_size}\nPATH={expected_output}\n"
         )
+        worker.publish_runtime_metadata(
+            expected_output,
+            "Alzheimer",
+            "PILOT_hvg2000_highres",
+            0.0,
+            None,
+        )
         args = SimpleNamespace(
             view="batch_effect_uncorrected",
             analysis_pass="uncorrected",

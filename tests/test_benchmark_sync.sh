@@ -56,6 +56,13 @@ for n in 1000 2000 3000; do
   path="${ANALYSIS_ROOT}/embeddings/Adams_hvg${n}_mrvi_dists.feather"
   pixi run python -c 'import pandas as pd,sys; pd.DataFrame({"s1":[1.0,0.0],"s2":[0.0,1.0]},index=["s1","s2"]).to_feather(sys.argv[1])' "${path}"
   ecoda_write_checksum "${path}"
+  pixi run python -c 'import hashlib,json,pathlib,sys; artifact=pathlib.Path(sys.argv[1]); metadata=pathlib.Path(str(artifact)+".runtime.json"); metadata.write_text(json.dumps({"schema_version":1,"artifact_path":str(artifact),"artifact_md5":hashlib.md5(artifact.read_bytes()).hexdigest(),"dataset":"Adams","method":f"MrVI_hvg{sys.argv[2]}","time_secs":1.0,"mem_GB":1.0},separators=(",",":"))+"\n")' "${path}" "${n}"
+  ecoda_write_checksum "${path}.runtime.json"
+done
+for n in 1000 2000 3000; do
+  path="${ANALYSIS_ROOT}/embeddings/Adams_hvg${n}_mrvi_dists.feather"
+  [[ -s "${path}.runtime.json" ]]
+  [[ -s "${path}.runtime.json.md5" ]]
 done
 mkdir -p "${ECODA_RUN_ROOT}/logs"
 pixi run python -c 'import pandas as pd,sys; pd.DataFrame({"dataset":["Adams"],"method":["MrVI_hvg2000"],"time_secs":[1.0],"mem_GB":[1.0]}).to_feather(sys.argv[1])' "${ECODA_RUN_ROOT}/logs/execution_times_mrvi_Adams.feather"
@@ -79,6 +86,11 @@ analysis_merge_sync_cleanup "${LABELS[@]}"
 [[ "$(grep -c '^checksums.md5$' "${ECODA_RUN_ROOT}/manifests/sync_files.tsv")" == 1 ]]
 [[ "$(grep -c 'unrelated' "${ECODA_RUN_ROOT}/manifests/sync_files.tsv" || true)" == 0 ]]
 [[ "$(grep -c '^embeddings/Adams_hvg1000_mrvi_dists.feather$' "${ECODA_RUN_ROOT}/manifests/sync_files.tsv")" == 1 ]]
+[[ "$(grep -c '^embeddings/Adams_hvg1000_mrvi_dists.feather.runtime.json$' "${ECODA_RUN_ROOT}/manifests/sync_files.tsv")" == 1 ]]
+[[ "$(grep -c '^embeddings/Adams_hvg1000_mrvi_dists.feather.runtime.json.md5$' "${ECODA_RUN_ROOT}/manifests/sync_files.tsv")" == 1 ]]
+[[ "$(grep -c 'embeddings/Adams_hvg1000_mrvi_dists.feather.runtime.json' "${ANALYSIS_NAS_ROOT}/checksums.md5")" == 1 ]]
+[[ -s "${ANALYSIS_NAS_ROOT}/embeddings/Adams_hvg1000_mrvi_dists.feather.runtime.json" ]]
+[[ -s "${ANALYSIS_NAS_ROOT}/embeddings/Adams_hvg1000_mrvi_dists.feather.runtime.json.md5" ]]
 (
   cd "${ANALYSIS_NAS_ROOT}"
   md5sum unrelated.txt >> checksums.md5

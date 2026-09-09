@@ -790,7 +790,7 @@ Check ${LOGS_DIR}/5_benchmark_watchdog_${LABEL}_${WATCHDOG_ID}.log/.err; recover
 # ---------------------------------------------------------------------------
 
 benchmark_sync_artifacts_for() {
-  local ds="$1" label="$2" n suffix stem
+  local ds="$1" label="$2" n suffix stem runtime_count runtime_index
   local root="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
   SYNC_ARTIFACTS=()
   if [[ "${label}" == prepare_pseudobulk ]]; then
@@ -856,7 +856,104 @@ benchmark_sync_artifacts_for() {
       return 1
       ;;
   esac
+  case "${label}" in
+    mrvi|scpoli|pilot|qot|pilotgm|trans|zeroimp)
+      # Keep the payload selection semantics above unchanged, then require its
+      # runtime record as an artifact in the same guarded selection. The
+      # generic add_sync_artifact caller validates each JSON and automatically
+      # carries the JSON's .md5 sidecar into the sync manifests.
+      runtime_count=${#SYNC_ARTIFACTS[@]}
+      runtime_index=0
+      while [[ ${runtime_index} -lt ${runtime_count} ]]; do
+        SYNC_ARTIFACTS+=("${SYNC_ARTIFACTS[${runtime_index}]}.runtime.json")
+        runtime_index=$((runtime_index + 1))
+      done
+      ;;
+  esac
 }
+# Validate the runtime metadata bound to a selected output. The JSON parser is
+# deliberately standard-library-only so this guard remains usable with the
+# immutable Python interpreter configured by the submitter.
+benchmark_validate_runtime_metadata() {
+  local metadata_path="$1" output_path="$2" output_md5="$3"
+  "${PYTHON_BIN}" - "${metadata_path}" "${output_path}" "${output_md5}" <<'PY'
+import json
+import math
+import re
+import sys
+
+
+def reject_duplicate_keys(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON field")
+        value[key] = item
+    return value
+
+
+def reject_nonfinite_json_constant(value):
+    raise ValueError("non-finite JSON constant: {}".format(value))
+
+
+def valid_nonnegative_number(value, allow_none=False):
+    if value is None and allow_none:
+        return True
+    if type(value) not in (int, float):
+        return False
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return math.isfinite(number) and number >= 0
+
+
+metadata_path, output_path, output_md5 = sys.argv[1:]
+required = {
+    "schema_version",
+    "artifact_path",
+    "artifact_md5",
+    "dataset",
+    "method",
+    "time_secs",
+    "mem_GB",
+}
+try:
+    with open(metadata_path, "r", encoding="utf-8") as handle:
+        payload = json.load(
+            handle,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite_json_constant,
+        )
+    if not isinstance(payload, dict) or set(payload) != required:
+        raise ValueError("runtime metadata must have exactly seven fields")
+    if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
+        raise ValueError("invalid schema_version")
+    if (
+        type(payload["artifact_path"]) is not str
+        or payload["artifact_path"] != output_path
+    ):
+        raise ValueError("runtime metadata artifact_path does not match output")
+    artifact_md5 = payload["artifact_md5"]
+    if (
+        type(artifact_md5) is not str
+        or re.fullmatch(r"[0-9a-f]{32}", artifact_md5) is None
+        or artifact_md5 != output_md5
+    ):
+        raise ValueError("runtime metadata artifact_md5 does not match output")
+    for field in ("dataset", "method"):
+        value = payload[field]
+        if type(value) is not str or not value.strip():
+            raise ValueError("runtime metadata {} is blank or not a string".format(field))
+    if not valid_nonnegative_number(payload["time_secs"]):
+        raise ValueError("runtime metadata time_secs is invalid")
+    if not valid_nonnegative_number(payload["mem_GB"], allow_none=True):
+        raise ValueError("runtime metadata mem_GB is invalid")
+except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+    sys.exit(1)
+PY
+}
+
 analysis_merge_sync_cleanup() (
   local LABELS=("$@")
   local LOCAL_ROOT="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
@@ -935,13 +1032,21 @@ analysis_merge_sync_cleanup() (
   SELECTED_DIGESTS=()
 
   add_sync_artifact() {
-    local artifact="$1" artifact_rel
+    local artifact="$1" artifact_rel runtime_output
     [[ "${artifact}" == "${LOCAL_ROOT}/"* ]] || sync_fail "selected artifact is outside analysis root: ${artifact}"
     artifact_rel="${artifact#${LOCAL_ROOT}/}"
     case " ${selected_seen} " in
       *" ${artifact_rel} "*) return 0 ;;
     esac
     [[ -s "${artifact}" ]] || sync_fail "selected artifact is missing or empty: ${artifact}"
+    if [[ "${artifact}" == *.runtime.json ]]; then
+      runtime_output="${artifact%.runtime.json}"
+      ecoda_validate_checksum "${runtime_output}" ||
+        sync_fail "selected runtime output checksum failed: ${runtime_output}"
+      benchmark_validate_runtime_metadata \
+        "${artifact}" "${runtime_output}" "${ECODA_CHECKSUM_MD5}" ||
+        sync_fail "selected runtime metadata validation failed: ${artifact}"
+    fi
     ecoda_validate_checksum "${artifact}" || sync_fail "selected artifact checksum failed: ${artifact}"
     selected_seen="${selected_seen} ${artifact_rel}"
     SELECTED_RELS+=("${artifact_rel}")

@@ -553,6 +553,285 @@ artifact_checksum_ok <- function(file) {
     identical(md5, unname(tools::md5sum(file))) &&
     identical(size, as.character(file.info(file)$size))
 }
+# ---------------------------------------------------------------------------
+# Runtime metadata for cached benchmark artifacts. The JSON and its checksum
+# are published only after the output artifact itself has been installed.
+# ---------------------------------------------------------------------------
+runtime_metadata_path <- function(artifact_path) {
+  paste0(artifact_path, ".runtime.json")
+}
+
+runtime_metadata_checksum_path <- function(artifact_path) {
+  paste0(runtime_metadata_path(artifact_path), ".md5")
+}
+
+runtime_require_string <- function(value, label) {
+  if (!is.character(value) || length(value) != 1L ||
+      is.na(value) || !nzchar(value)) {
+    stop(label, " must be one non-empty string")
+  }
+  value
+}
+
+runtime_require_nonnegative_number <- function(value, label) {
+  if (!is.numeric(value) || length(value) != 1L ||
+      is.na(value) || !is.finite(value) || value < 0) {
+    stop(label, " must be one finite nonnegative number")
+  }
+  as.numeric(value)
+}
+
+runtime_normalize_mem <- function(value, label = "mem_GB") {
+  if (is.null(value)) return(NULL)
+  if (!is.numeric(value) || length(value) != 1L) {
+    stop(label, " must be one finite nonnegative number or null")
+  }
+  # NA_real_ is the in-memory representation of the JSON null used when
+  # /proc is unavailable; NaN is nonfinite and must fail closed.
+  if (is.na(value)) {
+    if (is.nan(value)) stop(label, " must be finite or null")
+    return(NULL)
+  }
+  if (!is.finite(value) || value < 0) {
+    stop(label, " must be one finite nonnegative number or null")
+  }
+  as.numeric(value)
+}
+
+# Strictly validate an MD5/SIZE/PATH sidecar and return its canonical record.
+# Runtime metadata uses this for both the published RDS and the JSON sidecar;
+# unlike artifact_checksum_ok(), malformed or extra sidecar rows are errors.
+runtime_validate_checksum_sidecar <- function(file, description = "artifact") {
+  file <- runtime_require_string(file, paste0(description, " path"))
+  if (!file.exists(file)) stop(description, " is missing: ", file)
+  info <- file.info(file)
+  if (is.na(info$size) || info$size <= 0) {
+    stop(description, " is missing or empty: ", file)
+  }
+  sidecar <- paste0(file, ".md5")
+  if (!file.exists(sidecar)) {
+    stop(description, " checksum sidecar is missing: ", sidecar)
+  }
+  sidecar_info <- file.info(sidecar)
+  if (is.na(sidecar_info$size) || sidecar_info$size <= 0) {
+    stop(description, " checksum sidecar is missing or empty: ", sidecar)
+  }
+  lines <- tryCatch(
+    readLines(sidecar, warn = FALSE),
+    error = function(error) {
+      stop("Could not read ", description, " checksum sidecar: ", sidecar)
+    }
+  )
+  if (length(lines) != 3L || any(!nzchar(lines)) ||
+      !identical(sub("=.*$", "", lines),
+                  c("MD5", "SIZE", "PATH"))) {
+    stop(description, " checksum sidecar has the wrong schema: ", sidecar)
+  }
+  recorded_md5 <- sub("^MD5=", "", lines[[1L]])
+  recorded_size <- sub("^SIZE=", "", lines[[2L]])
+  recorded_path <- sub("^PATH=", "", lines[[3L]])
+  if (!grepl("^[0-9a-f]{32}$", recorded_md5, perl = TRUE)) {
+    stop(description, " checksum sidecar has a malformed MD5: ", sidecar)
+  }
+  if (!grepl("^[0-9]+$", recorded_size, perl = TRUE) ||
+      !nzchar(recorded_path)) {
+    stop(description, " checksum sidecar has malformed SIZE/PATH: ", sidecar)
+  }
+  if (!identical(recorded_path, file)) {
+    stop(description, " checksum sidecar PATH mismatch: ", sidecar)
+  }
+  if (!identical(recorded_size, as.character(info$size))) {
+    stop(description, " checksum sidecar SIZE mismatch: ", file)
+  }
+  actual_md5 <- unname(tools::md5sum(file))
+  if (length(actual_md5) != 1L || is.na(actual_md5) ||
+      !identical(recorded_md5, actual_md5)) {
+    stop(description, " checksum sidecar MD5 mismatch: ", file)
+  }
+  list(MD5 = recorded_md5, SIZE = recorded_size, PATH = recorded_path)
+}
+
+validate_runtime_metadata <- function(
+  artifact_path,
+  dataset,
+  method
+) {
+  artifact_path <- runtime_require_string(artifact_path, "artifact path")
+  dataset <- runtime_require_string(dataset, "dataset")
+  method <- runtime_require_string(method, "method")
+  artifact_record <- runtime_validate_checksum_sidecar(
+    artifact_path, "RDS artifact"
+  )
+  metadata_path <- runtime_metadata_path(artifact_path)
+  runtime_validate_checksum_sidecar(metadata_path, "runtime metadata")
+  parse_error <- NULL
+  payload <- tryCatch(
+    jsonlite::fromJSON(metadata_path, simplifyVector = FALSE),
+    error = function(error) {
+      parse_error <<- conditionMessage(error)
+      NULL
+    }
+  )
+  if (!is.null(parse_error) || !is.list(payload)) {
+    stop("Runtime metadata is not a JSON object: ", metadata_path)
+  }
+  required <- c(
+    "schema_version", "artifact_path", "artifact_md5", "dataset",
+    "method", "time_secs", "mem_GB"
+  )
+  if (!identical(sort(names(payload)), sort(required))) {
+    stop("Runtime metadata has the wrong fields: ", metadata_path)
+  }
+  schema_version <- payload[["schema_version"]]
+  if (!is.integer(schema_version) || !identical(schema_version, 1L)) {
+    stop("Runtime metadata schema_version is invalid: ", metadata_path)
+  }
+  if (!is.character(payload[["artifact_path"]]) ||
+      length(payload[["artifact_path"]]) != 1L ||
+      is.na(payload[["artifact_path"]]) ||
+      !identical(payload[["artifact_path"]], artifact_path)) {
+    stop("Runtime metadata artifact_path mismatch: ", metadata_path)
+  }
+  artifact_md5 <- payload[["artifact_md5"]]
+  if (!is.character(artifact_md5) || length(artifact_md5) != 1L ||
+      is.na(artifact_md5) ||
+      !grepl("^[0-9a-f]{32}$", artifact_md5, perl = TRUE) ||
+      !identical(artifact_md5, artifact_record[["MD5"]])) {
+    stop("Runtime metadata artifact_md5 mismatch: ", metadata_path)
+  }
+  if (!is.character(payload[["dataset"]]) ||
+      length(payload[["dataset"]]) != 1L || is.na(payload[["dataset"]]) ||
+      !identical(payload[["dataset"]], dataset)) {
+    stop("Runtime metadata dataset mismatch: ", metadata_path)
+  }
+  if (!is.character(payload[["method"]]) ||
+      length(payload[["method"]]) != 1L || is.na(payload[["method"]]) ||
+      !identical(payload[["method"]], method)) {
+    stop("Runtime metadata method mismatch: ", metadata_path)
+  }
+  time_secs <- runtime_require_nonnegative_number(
+    payload[["time_secs"]], "Runtime metadata time_secs"
+  )
+  mem_gb <- runtime_normalize_mem(payload[["mem_GB"]])
+  payload[["schema_version"]] <- 1L
+  payload[["time_secs"]] <- time_secs
+  payload["mem_GB"] <- list(mem_gb)
+  payload
+}
+
+write_runtime_metadata <- function(
+  artifact_path,
+  dataset,
+  method,
+  time_secs,
+  mem_gb = NA_real_
+) {
+  artifact_path <- runtime_require_string(artifact_path, "artifact path")
+  dataset <- runtime_require_string(dataset, "dataset")
+  method <- runtime_require_string(method, "method")
+  time_secs <- runtime_require_nonnegative_number(time_secs, "time_secs")
+  mem_gb <- runtime_normalize_mem(mem_gb)
+  artifact_record <- runtime_validate_checksum_sidecar(
+    artifact_path, "RDS artifact"
+  )
+  metadata_path <- runtime_metadata_path(artifact_path)
+  checksum_path <- runtime_metadata_checksum_path(artifact_path)
+  payload <- list(
+    schema_version = 1L,
+    artifact_path = artifact_path,
+    artifact_md5 = artifact_record[["MD5"]],
+    dataset = dataset,
+    method = method,
+    time_secs = time_secs,
+    mem_GB = mem_gb
+  )
+  metadata_json <- jsonlite::toJSON(
+    payload,
+    auto_unbox = TRUE,
+    null = "null",
+    na = "null",
+    digits = 17
+  )
+  dir.create(dirname(metadata_path), showWarnings = FALSE, recursive = TRUE)
+  metadata_tmp <- paste0(metadata_path, ".tmp.", Sys.getpid())
+  checksum_tmp <- paste0(checksum_path, ".tmp.", Sys.getpid())
+  metadata_backup <- paste0(metadata_path, ".previous.", Sys.getpid())
+  checksum_backup <- paste0(checksum_path, ".previous.", Sys.getpid())
+  had_metadata <- file.exists(metadata_path)
+  had_checksum <- file.exists(checksum_path)
+  metadata_installed <- FALSE
+  checksum_installed <- FALSE
+  restore <- function() {
+    if (metadata_installed && file.exists(metadata_path)) unlink(metadata_path)
+    if (had_metadata && file.exists(metadata_backup)) {
+      file.rename(metadata_backup, metadata_path)
+    }
+    if (checksum_installed && file.exists(checksum_path)) unlink(checksum_path)
+    if (had_checksum && file.exists(checksum_backup)) {
+      file.rename(checksum_backup, checksum_path)
+    }
+    if (!had_metadata && file.exists(metadata_path)) unlink(metadata_path)
+    if (!had_checksum && file.exists(checksum_path)) unlink(checksum_path)
+  }
+  on.exit({
+    for (temporary in c(
+      metadata_tmp, checksum_tmp, metadata_backup, checksum_backup
+    )) {
+      if (file.exists(temporary)) unlink(temporary)
+    }
+  }, add = TRUE)
+  tryCatch({
+    writeLines(as.character(metadata_json), metadata_tmp, useBytes = TRUE)
+    if (!file.exists(metadata_tmp) || file.info(metadata_tmp)$size <= 0) {
+      stop("Empty runtime metadata temporary file: ", metadata_tmp)
+    }
+    if (had_metadata && !isTRUE(file.link(metadata_path, metadata_backup))) {
+      stop("Could not preserve existing runtime metadata: ", metadata_path)
+    }
+    if (had_checksum && !isTRUE(file.link(checksum_path, checksum_backup))) {
+      stop("Could not preserve existing runtime metadata checksum: ",
+           checksum_path)
+    }
+    if (!file.rename(metadata_tmp, metadata_path)) {
+      stop("Could not atomically install runtime metadata: ", metadata_path)
+    }
+    metadata_installed <- TRUE
+    writeLines(c(
+      paste0("MD5=", unname(tools::md5sum(metadata_path))),
+      paste0("SIZE=", file.info(metadata_path)$size),
+      paste0("PATH=", metadata_path)
+    ), checksum_tmp)
+    if (!file.rename(checksum_tmp, checksum_path)) {
+      stop("Could not atomically install runtime metadata checksum: ",
+           checksum_path)
+    }
+    checksum_installed <- TRUE
+  }, error = function(error) {
+    restore()
+    stop(error)
+  })
+  invisible(NULL)
+}
+
+replay_runtime_metadata <- function(
+  artifact_path,
+  dataset,
+  method,
+  log_file
+) {
+  payload <- validate_runtime_metadata(artifact_path, dataset, method)
+  mem_gb <- payload[["mem_GB"]]
+  if (is.null(mem_gb)) mem_gb <- NA_real_
+  log_exec_row(
+    dataset,
+    method,
+    payload[["time_secs"]],
+    log_file,
+    mem_gb = mem_gb
+  )
+  invisible(payload)
+}
+
 
 # Peak resident set size of the current R process in GB, mirroring the
 # python worker's peak_rss_gb() (getrusage().ru_maxrss: KB on Linux, bytes
@@ -703,16 +982,18 @@ run_ct_comps_analysis_worker <- function(
     stop("Dataset '", ds, "' not found in ", args$config_path)
   }
 
-  h5ad_path <- get_h5ad_path(config, ds, args$view, args$input_dir)
-  if (!file.exists(h5ad_path)) {
-    stop("Input h5ad not found: ", h5ad_path)
-  }
   dir.create(args$output_dir, showWarnings = FALSE, recursive = TRUE)
 
   out_file <- file.path(args$output_dir, paste0(ds, out_suffix, ".rds"))
   if (artifact_checksum_ok(out_file) && !force) {
+    replay_runtime_metadata(out_file, ds, log_method, args$log_file)
     message(analysis_label, " results already exist and passed checksum validation: ", out_file)
-    quit(save = "no", status = 0)
+    return(invisible(NULL))
+  }
+
+  h5ad_path <- get_h5ad_path(config, ds, args$view, args$input_dir)
+  if (!file.exists(h5ad_path)) {
+    stop("Input h5ad not found: ", h5ad_path)
   }
 
   ad <- import("anndata", convert = FALSE)
@@ -750,10 +1031,16 @@ run_ct_comps_analysis_worker <- function(
   names(labels) <- metadata[[sample_col]]
 
   time_secs <- exec_time(res <- run_fun(ct_comps, labels))
+  time_secs_numeric <- as.numeric(time_secs, units = "secs")
+  mem_gb <- peak_rss_gb()
   save_rds_atomic(res, out_file)
-  log_exec_row(ds, log_method, as.numeric(time_secs, units = "secs"),
-               args$log_file, mem_gb = peak_rss_gb())
+  write_runtime_metadata(
+    out_file, ds, log_method, time_secs_numeric, mem_gb = mem_gb
+  )
+  log_exec_row(
+    ds, log_method, time_secs_numeric, args$log_file, mem_gb = mem_gb
+  )
   message("Saved: ", out_file, " (",
-          round(as.numeric(time_secs, units = "secs"), 1), "s)")
+          round(time_secs_numeric, 1), "s)")
   message("--- ", analysis_label, " analysis for ", ds, " complete ---")
 }

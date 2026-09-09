@@ -46,6 +46,7 @@ RSS is monotonic within a process).
 import argparse
 import gc
 import hashlib
+import json
 import os
 import resource
 import sys
@@ -200,6 +201,265 @@ def atomic_to_feather(frame, path):
             if temporary.exists():
                 temporary.unlink()
 
+
+_RUNTIME_METADATA_FIELDS = frozenset(
+    {
+        "schema_version",
+        "artifact_path",
+        "artifact_md5",
+        "dataset",
+        "method",
+        "time_secs",
+        "mem_GB",
+    }
+)
+_RUNTIME_CHECKSUM_KEYS = ("MD5", "SIZE", "PATH")
+
+
+def runtime_metadata_path(output_path):
+    """Return the runtime metadata path associated with a Feather output."""
+    return Path(f"{Path(output_path)}.runtime.json")
+
+
+def runtime_metadata_checksum_path(output_path):
+    """Return the checksum sidecar path for a runtime metadata JSON file."""
+    return Path(f"{runtime_metadata_path(output_path)}.md5")
+
+def _recorded_feather_md5(path):
+    """Return the verified MD5 for a recorded Feather artifact.
+
+    Runtime metadata is only meaningful when the output and its checksum
+    sidecar were published together.  Verify the exact sidecar schema and
+    digest here without parsing the Feather payload; cache validation performs
+    the more expensive frame-level checks separately.
+    """
+    path = Path(path)
+    sidecar = Path(f"{path}.md5")
+    try:
+        output_size = path.stat().st_size
+    except OSError as exc:
+        raise ValueError(f"cannot publish runtime metadata for missing output: {path}") from exc
+    if not path.is_file() or output_size == 0:
+        raise ValueError(f"cannot publish runtime metadata for missing output: {path}")
+    if not sidecar.is_file():
+        raise ValueError(f"cannot publish runtime metadata without checksum sidecar: {sidecar}")
+    try:
+        lines = sidecar.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"cannot read Feather checksum sidecar: {sidecar}") from exc
+    if len(lines) != len(_RUNTIME_CHECKSUM_KEYS):
+        raise ValueError(f"Feather checksum sidecar has an invalid schema: {sidecar}")
+    records = {}
+    for key, line in zip(_RUNTIME_CHECKSUM_KEYS, lines):
+        prefix = f"{key}="
+        if not line.startswith(prefix) or key in records:
+            raise ValueError(f"Feather checksum sidecar has an invalid schema: {sidecar}")
+        records[key] = line[len(prefix):]
+    artifact_md5 = _file_md5(path)
+    if records["PATH"] != str(path):
+        raise ValueError(f"Feather checksum sidecar has the wrong PATH: {sidecar}")
+    if records["SIZE"] != str(output_size):
+        raise ValueError(f"Feather checksum sidecar has the wrong SIZE: {sidecar}")
+    if records["MD5"] != artifact_md5:
+        raise ValueError(f"Feather checksum sidecar does not match: {sidecar}")
+    if path.stat().st_size != output_size:
+        raise ValueError(f"Feather artifact changed during checksum validation: {path}")
+    return artifact_md5
+
+def _runtime_number(value, field, allow_none=False):
+    if value is None and allow_none:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"runtime metadata has invalid {field}: {value!r}")
+    number = float(value)
+    if not np.isfinite(number) or number < 0:
+        raise ValueError(f"runtime metadata has invalid {field}: {value!r}")
+    return number
+
+def _runtime_metadata_payload(
+    output_path,
+    dataset_name,
+    method_str,
+    time_secs,
+    mem_gb,
+):
+    output_path = Path(output_path)
+    artifact_md5 = _recorded_feather_md5(output_path)
+    if not isinstance(dataset_name, str) or not dataset_name:
+        raise ValueError(f"runtime metadata has invalid dataset: {dataset_name!r}")
+    if not isinstance(method_str, str) or not method_str:
+        raise ValueError(f"runtime metadata has invalid method: {method_str!r}")
+    time_value = _runtime_number(time_secs, "time_secs")
+    memory_value = _runtime_number(mem_gb, "mem_GB", allow_none=True)
+    return {
+        "schema_version": 1,
+        "artifact_path": str(output_path),
+        "artifact_md5": artifact_md5,
+        "dataset": dataset_name,
+        "method": method_str,
+        "time_secs": time_value,
+        "mem_GB": memory_value,
+    }
+
+
+
+def _reject_nonfinite_json_constant(value):
+    raise ValueError(f"runtime metadata contains non-finite JSON value: {value}")
+
+
+def _read_runtime_checksum(metadata_path):
+    checksum_path = Path(f"{metadata_path}.md5")
+    if not checksum_path.is_file():
+        raise ValueError(f"runtime metadata checksum is missing: {checksum_path}")
+    try:
+        lines = checksum_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"cannot read runtime metadata checksum: {checksum_path}") from exc
+    if len(lines) != len(_RUNTIME_CHECKSUM_KEYS):
+        raise ValueError(f"runtime metadata checksum has an invalid schema: {checksum_path}")
+    records = {}
+    for key, line in zip(_RUNTIME_CHECKSUM_KEYS, lines):
+        prefix = f"{key}="
+        if not line.startswith(prefix) or key in records:
+            raise ValueError(f"runtime metadata checksum has an invalid schema: {checksum_path}")
+        records[key] = line[len(prefix):]
+    expected_md5 = records["MD5"]
+    if (
+        len(expected_md5) != 32
+        or expected_md5 != expected_md5.lower()
+        or any(char not in "0123456789abcdef" for char in expected_md5)
+    ):
+        raise ValueError(f"runtime metadata checksum has an invalid MD5: {checksum_path}")
+    try:
+        expected_size = int(records["SIZE"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"runtime metadata checksum has an invalid SIZE: {checksum_path}") from exc
+    if expected_size < 0 or str(expected_size) != records["SIZE"]:
+        raise ValueError(f"runtime metadata checksum has an invalid SIZE: {checksum_path}")
+    if records["PATH"] != str(metadata_path):
+        raise ValueError(f"runtime metadata checksum has the wrong PATH: {checksum_path}")
+    if expected_md5 != _file_md5(metadata_path):
+        raise ValueError(f"runtime metadata checksum does not match: {checksum_path}")
+    if expected_size != metadata_path.stat().st_size:
+        raise ValueError(f"runtime metadata checksum has the wrong SIZE: {checksum_path}")
+
+
+def publish_runtime_metadata(
+    output_path,
+    dataset_name,
+    method_str,
+    time_secs,
+    mem_gb,
+):
+    """Atomically publish runtime metadata after its output is complete."""
+    output_path = Path(output_path)
+    metadata_path = runtime_metadata_path(output_path)
+    checksum_path = runtime_metadata_checksum_path(output_path)
+    metadata_tmp = metadata_path.with_name(
+        f".{metadata_path.name}.tmp.{os.getpid()}"
+    )
+    checksum_tmp = checksum_path.with_name(
+        f".{checksum_path.name}.tmp.{os.getpid()}"
+    )
+    metadata_backup = metadata_path.with_name(
+        f".{metadata_path.name}.previous.{os.getpid()}"
+    )
+    checksum_backup = checksum_path.with_name(
+        f".{checksum_path.name}.previous.{os.getpid()}"
+    )
+    payload = _runtime_metadata_payload(
+        output_path,
+        dataset_name,
+        method_str,
+        time_secs,
+        mem_gb,
+    )
+    serialized = (
+        json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n"
+    )
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    had_metadata = metadata_path.is_file()
+    had_checksum = checksum_path.is_file()
+    try:
+        metadata_tmp.write_text(serialized, encoding="utf-8")
+        checksum_tmp.write_text(
+            f"MD5={_file_md5(metadata_tmp)}\n"
+            f"SIZE={metadata_tmp.stat().st_size}\n"
+            f"PATH={metadata_path}\n",
+            encoding="utf-8",
+        )
+        if had_metadata:
+            os.link(metadata_path, metadata_backup)
+        if had_checksum:
+            os.link(checksum_path, checksum_backup)
+        os.replace(metadata_tmp, metadata_path)
+        os.replace(checksum_tmp, checksum_path)
+    except Exception:
+        if metadata_backup.exists():
+            os.replace(metadata_backup, metadata_path)
+        elif not had_metadata and metadata_path.exists():
+            metadata_path.unlink()
+        if checksum_backup.exists():
+            os.replace(checksum_backup, checksum_path)
+        elif not had_checksum and checksum_path.exists():
+            checksum_path.unlink()
+        raise
+    finally:
+        for temporary in (
+            metadata_tmp,
+            checksum_tmp,
+            metadata_backup,
+            checksum_backup,
+        ):
+            if temporary.exists():
+                temporary.unlink()
+
+
+def read_runtime_metadata(output_path, dataset_name, method_str):
+    """Read and strictly validate metadata for a valid Feather cache hit."""
+    output_path = Path(output_path)
+    if not recorded_feather_valid(output_path):
+        raise ValueError(f"output Feather is not a valid recorded artifact: {output_path}")
+    metadata_path = runtime_metadata_path(output_path)
+    if not metadata_path.is_file() or metadata_path.stat().st_size == 0:
+        raise ValueError(f"runtime metadata is missing: {metadata_path}")
+    _read_runtime_checksum(metadata_path)
+    try:
+        payload = json.loads(
+            metadata_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_nonfinite_json_constant,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"runtime metadata is malformed: {metadata_path}") from exc
+    if not isinstance(payload, dict) or set(payload) != _RUNTIME_METADATA_FIELDS:
+        raise ValueError(f"runtime metadata has an invalid schema: {metadata_path}")
+    if payload["schema_version"] != 1 or type(payload["schema_version"]) is not int:
+        raise ValueError(f"runtime metadata has an invalid schema_version: {metadata_path}")
+    if payload["artifact_path"] != str(output_path):
+        raise ValueError(f"runtime metadata has the wrong artifact_path: {metadata_path}")
+    artifact_md5 = payload["artifact_md5"]
+    if (
+        not isinstance(artifact_md5, str)
+        or len(artifact_md5) != 32
+        or artifact_md5 != artifact_md5.lower()
+        or any(char not in "0123456789abcdef" for char in artifact_md5)
+        or artifact_md5 != _file_md5(output_path)
+    ):
+        raise ValueError(f"runtime metadata has the wrong artifact_md5: {metadata_path}")
+    if payload["dataset"] != dataset_name or not isinstance(payload["dataset"], str):
+        raise ValueError(f"runtime metadata has the wrong dataset: {metadata_path}")
+    if payload["method"] != method_str or not isinstance(payload["method"], str):
+        raise ValueError(f"runtime metadata has the wrong method: {metadata_path}")
+    _runtime_number(payload["time_secs"], "time_secs")
+    _runtime_number(payload["mem_GB"], "mem_GB", allow_none=True)
+    return payload
 def _validate_execution_measurements(frame, path):
     for column, allow_missing in (("time_secs", False), ("mem_GB", True)):
         raw = frame[column]
@@ -207,7 +467,8 @@ def _validate_execution_measurements(frame, path):
         missing = raw.isna()
         if (not allow_missing and missing.any()) or values[~missing].isna().any():
             raise ValueError(f"execution log has invalid numeric values: {path}")
-        if not np.isfinite(values[~missing].to_numpy(dtype=float)).all():
+        numeric = values[~missing].to_numpy(dtype=float)
+        if not np.isfinite(numeric).all() or (numeric < 0).any():
             raise ValueError(f"execution log has invalid numeric values: {path}")
 
 
@@ -370,19 +631,31 @@ def validate_gpu_execution(method, device, combo=None):
             "refusing CPU fallback"
         )
 
-def log_execution_time(dataset_name, method_str, time_secs, log_file):
+_USE_PEAK_RSS = object()
+
+
+def log_execution_time(
+    dataset_name,
+    method_str,
+    time_secs,
+    log_file,
+    mem_gb=_USE_PEAK_RSS,
+):
     """Append/overwrite one (dataset, method) row in the per-task exec log.
 
     Read-modify-write on the feather (single process per task). Overwrites
     the row if the (dataset, method) combo already exists (matches the qmd's
-    rerun semantics).
+    rerun semantics). When ``mem_gb`` is omitted, preserve the historical
+    peak-RSS measurement; an explicit ``None`` replays a missing measurement.
     """
+    if mem_gb is _USE_PEAK_RSS:
+        mem_gb = peak_rss_gb()
     new_row = pd.DataFrame(
         {
             "dataset": [dataset_name],
             "method": [method_str],
             "time_secs": [float(time_secs)],
-            "mem_GB": [peak_rss_gb()],
+            "mem_GB": [mem_gb],
         }
     )
     if os.path.exists(log_file):
@@ -398,6 +671,19 @@ def log_execution_time(dataset_name, method_str, time_secs, log_file):
     else:
         df_final = new_row
     execution_log_atomic_to_feather(df_final, log_file)
+
+
+def replay_runtime_metadata(output_path, dataset_name, method_str, log_file):
+    """Replay one validated runtime metadata row into the execution log."""
+    payload = read_runtime_metadata(output_path, dataset_name, method_str)
+    log_execution_time(
+        dataset_name,
+        method_str,
+        payload["time_secs"],
+        log_file,
+        mem_gb=payload["mem_GB"],
+    )
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +712,19 @@ def run_wass_combo_for(n_hvg, res_label):
 DEFAULT_HVG = 2000
 DEFAULT_SCPOLI_DIM = 15
 DEFAULT_RES_LABEL = "_highres"
+
+
+def legacy_method_label(method, n_hvg, res_label, payload):
+    """Return the exact execution-log label used by the legacy benchmark."""
+    if method == "mrvi":
+        return f"MrVI_hvg{n_hvg}"
+    if method == "scpoli":
+        return f"scPoli_hvg{n_hvg}_dims{payload}{res_label}"
+    if method == "qot":
+        return f"QOT_hvg{n_hvg}{res_label}"
+    if method == "pilotgm":
+        return f"PILOT-GM-VAE_hvg{n_hvg}{res_label}"
+    return f"PILOT_hvg{n_hvg}{res_label}"
 
 
 def is_default_combo(method, combo):
@@ -887,6 +1186,9 @@ def process_dataset(args, ds_name, entry):
     high_resolution_only = bool(getattr(args, "high_resolution_only", False)) or analysis_pass is not None
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    log_file = getattr(args, "log_file", None)
+    if log_file is None:
+        log_file = output_dir / "execution_times.feather"
 
     if view_name not in entry["views"]:
         raise ValueError(
@@ -988,9 +1290,18 @@ def process_dataset(args, ds_name, entry):
     combos.sort(key=lambda c: 0 if is_default_combo(args.method, c) else 1)
 
     pending = []
+    method_labels = {}
     for n, res_label, ct_col, payload, run_fn, out_name in combos:
         out_path = output_dir / out_name
+        method_str = legacy_method_label(args.method, n, res_label, payload)
+        method_labels[out_path] = method_str
         if recorded_feather_valid(out_path) and not args.force:
+            replay_runtime_metadata(
+                out_path,
+                ds_name,
+                method_str,
+                log_file,
+            )
             print(f"Already processed and validated: {out_name}")
             continue
         pending.append((n, res_label, ct_col, payload, run_fn, out_path))
@@ -1087,18 +1398,8 @@ def process_dataset(args, ds_name, entry):
             )
 
         # Exact legacy method strings (constants.R + notebook recodes depend
-        # on them): MrVI_hvg{n}, scPoli_hvg{n}_dims{d}{res},
-        # PILOT_hvg{n}{res}, QOT_hvg{n}{res}, PILOT-GM-VAE_hvg{n}{res}.
-        if args.method == "mrvi":
-            method_str = f"MrVI_hvg{n}"
-        elif args.method == "scpoli":
-            method_str = f"scPoli_hvg{n}_dims{payload}{res_label}"
-        elif args.method == "qot":
-            method_str = f"QOT_hvg{n}{res_label}"
-        elif args.method == "pilotgm":
-            method_str = f"PILOT-GM-VAE_hvg{n}{res_label}"
-        else:
-            method_str = f"PILOT_hvg{n}{res_label}"
+        # on them); these were derived before the cache scan as well.
+        method_str = method_labels[out_path]
 
         print(f"Processing {method_str} ...")
         start_time = time.time()
@@ -1120,13 +1421,24 @@ def process_dataset(args, ds_name, entry):
             if profile_gpu:
                 report_gpu_memory(method_str)
         exec_time = time.time() - start_time
-
-        log_execution_time(ds_name, method_str, exec_time, args.log_file)
+        mem_gb = peak_rss_gb()
+        publish_runtime_metadata(
+            out_path,
+            ds_name,
+            method_str,
+            exec_time,
+            mem_gb,
+        )
+        log_execution_time(
+            ds_name,
+            method_str,
+            exec_time,
+            log_file,
+            mem_gb=mem_gb,
+        )
         print(f"  -> Saved: {out_path} ({exec_time:.2f}s, "
-              f"{peak_rss_gb():.2f} GB peak RSS)")
+              f"{mem_gb:.2f} GB peak RSS)")
         gc.collect()
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Run Python benchmark methods (MrVI/scPoli/PILOT/QOT/"
