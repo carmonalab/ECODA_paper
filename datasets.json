@@ -516,13 +516,13 @@
     }
   },
   "Kidney_KPMP": {
-    "display_name": "Kidney (KPMP)",
+    "display_name": "Kidney (KPMP) (sc only)",
     "file_names": "Kidney_KPMP.h5ad",
     "folder_name": "JooM_2025_41097818",
     "tissue": "Kidney",
     "normal_tissue": true,
     "use_for_benchmark": false,
-    "use_for_batch_effect": true,
+    "use_for_batch_effect": false,
     "columns": {
       "sample": "specimen",
       "label": "condition.l1",
@@ -539,6 +539,34 @@
       "batch_effect_corrected": {
         "input_file_name": "Kidney_KPMP.h5ad",
         "output_file_name": "Kidney_KPMP_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      }
+    }
+  },
+  "Kidney_KPMP_full": {
+    "display_name": "Kidney (KPMP) (sc and sn)",
+    "file_names": "Kidney_KPMP_full.h5ad",
+    "folder_name": "JooM_2025_41097818",
+    "tissue": "Kidney",
+    "normal_tissue": true,
+    "use_for_benchmark": false,
+    "use_for_batch_effect": true,
+    "columns": {
+      "sample": "specimen",
+      "label": "condition.l1",
+      "batch": null,
+      "cell_type_low_res": "subclass.l1",
+      "cell_type_high_res": "subclass.l3"
+    },
+    "views": {
+      "batch_effect_uncorrected": {
+        "input_file_name": "Kidney_KPMP_full.h5ad",
+        "output_file_name": "Kidney_KPMP_full_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "subset_vars": {}
+      },
+      "batch_effect_corrected": {
+        "input_file_name": "Kidney_KPMP_full.h5ad",
+        "output_file_name": "Kidney_KPMP_full_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
         "subset_vars": {}
       }
     }
@@ -616,7 +644,7 @@
       "label": "Status",
       "batch": null,
       "cell_type_low_res": "layer1",
-      "cell_type_high_res": "layer2"
+      "cell_type_high_res": "louvain"
     },
     "views": {
       "batch_effect_uncorrected": {
@@ -698,7 +726,7 @@
       "label": "disease",
       "batch": null,
       "cell_type_low_res": "cell_type",
-      "cell_type_high_res": "leiden_res_5_batch_effect_uncorrected_hvg2000"
+      "cell_type_high_res": "cell_type"
     },
     "views": {
       "batch_effect_uncorrected": {
@@ -706,7 +734,7 @@
         "output_file_name": "Parkinson_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
         "subset_vars": {},
         "columns": {
-          "cell_type_high_res": "leiden_res_5_batch_effect_uncorrected_hvg2000"
+          "cell_type_high_res": "cell_type"
         }
       },
       "batch_effect_corrected": {
