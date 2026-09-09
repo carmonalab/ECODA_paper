@@ -1,0 +1,606 @@
+---
+title: "Uncorrected batch-effect analysis"
+author: "Christian Halter"
+date: "`r format(Sys.Date(), '%e de %B, %Y')`"
+output:
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+---
+
+# Scope
+
+This exploratory pass compares the twelve canonical batch-effect cohorts using
+only the persisted `batch_effect_uncorrected` distance artifacts. It does not
+rerun preprocessing, recompute embeddings, recalculate CLR distances, read the
+legacy batch notebook inputs, or inspect corrected artifacts. Biological labels
+are evaluation metadata only.
+
+```{r setup, message=FALSE, warning=FALSE}
+if (basename(getwd()) == "notebooks") {
+  setwd("..")
+  if (file.exists(".Rprofile")) source(".Rprofile")
+}
+
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(patchwork)
+  library(rmarkdown)
+})
+source("src/utils/load_all_functions.R")
+source("src/utils/batch_effect_analysis.R")
+
+set.seed(42)
+n_permutations <- 999L
+permanova_permutations <- 99L
+
+# vegan::anosim()/adonis2() use forked permutation workers on macOS. Keep the
+# default bounded to eight physical cores; lower this value for interactive
+# work or constrained machines.
+detected_cores <- parallel::detectCores(logical = FALSE)
+if (is.na(detected_cores)) detected_cores <- 1L
+parallel_cores <- min(8L, max(1L, detected_cores))
+options(mc.cores = parallel_cores)
+input_root <- file.path(getwd(), "data", "batch_effect", "uncorrected")
+metadata_root <- file.path(input_root, "metadata")
+plot_root <- file.path(getwd(), "plots", "batch_effect_uncorrected")
+analysis_output_root <- file.path(input_root, "analysis")
+dir.create(plot_root, recursive = TRUE, showWarnings = FALSE)
+dir.create(analysis_output_root, recursive = TRUE, showWarnings = FALSE)
+
+batch_datasets <- c(
+  "Alzheimer",
+  "Breast_cancer",
+  "Covid19_PBMC",
+  "Kidney_KPMP",
+  "Myocardial_infarction",
+  "Diabetes",
+  "Lupus_PBMC",
+  "Lung",
+  "Parkinson",
+  "Joanito",
+  "Stephenson",
+  "CombinedPBMC"
+)
+
+datasets <- read_datasets_json(view = "batch_effect_uncorrected")
+if (!identical(names(datasets)[match(batch_datasets, names(datasets))], batch_datasets)) {
+  stop("datasets.json does not contain the exact twelve canonical batch-effect datasets")
+}
+if (any(vapply(datasets[batch_datasets], function(x) is.null(x$label_col), logical(1)))) {
+  stop("one or more canonical batch-effect datasets lack a primary biological label")
+}
+registry <- batch_candidate_registry(datasets, batch_datasets)
+method_specs <- batch_uncorrected_method_specs()
+selected_methods <- names(method_specs)
+method_labels <- unname(method_label_map_main[selected_methods])
+if (anyNA(method_labels) || length(unique(method_labels)) != length(selected_methods)) {
+  stop("selected methods are not covered by method_label_map_main")
+}
+method_colors <- stats::setNames(
+  grDevices::hcl(seq(15, 375, length.out = length(selected_methods) + 1L)[-1L], l = 65, c = 100),
+  method_labels
+)
+
+
+# The preflight is intentionally before any figure work. Every sidecar, summary
+# bundle, distance matrix, sample ID, and label must validate or the pass stops.
+dataset_results <- lapply(batch_datasets, function(dataset) {
+  load_batch_uncorrected_dataset(input_root, metadata_root, dataset, registry)
+})
+names(dataset_results) <- batch_datasets
+stopifnot(identical(names(dataset_results), batch_datasets))
+```
+
+# Per-dataset sample and covariate contract
+
+```{r metadata-contract, message=FALSE, warning=FALSE}
+metadata_summary <- do.call(rbind, lapply(dataset_results, function(dataset_result) {
+  dataset <- dataset_result$dataset
+  ds_registry <- dataset_result$registry
+  data.frame(
+    dataset = dataset,
+    sample_count = length(dataset_result$sample_ids),
+    primary_label = dataset_result$label_col,
+    candidate_count = nrow(ds_registry),
+    biological_secondary_count = sum(ds_registry$is_secondary_biology),
+    technical_count = sum(ds_registry$is_technical),
+    stringsAsFactors = FALSE
+  )
+}))
+metadata_summary
+```
+
+# Plot and metric helpers
+
+```{r plotting-helpers, message=FALSE, warning=FALSE}
+`%||%` <- function(x, y) {
+  if (is.null(x) || length(x) == 0L || all(is.na(x))) y else x
+}
+
+.metric_warning <- function(...) {
+  pieces <- as.character(c(...))
+  pieces <- pieces[!is.na(pieces) & nzchar(pieces)]
+  paste(unique(pieces), collapse = "; ")
+}
+
+.metric_plot <- function(data, value_column, status_column, title, y_label, exclude_primary = FALSE) {
+  if (exclude_primary) data <- data[!data$is_primary, , drop = FALSE]
+  data <- data[data[[status_column]] == "ESTIMABLE" & is.finite(data[[value_column]]), , drop = FALSE]
+  if (nrow(data) == 0L) {
+    return(ggplot() + theme_void() + labs(title = paste0(title, "\nNo estimable candidate")))
+  }
+  data$method_label <- factor(data$method_label, levels = method_labels)
+  data$candidate <- factor(data$candidate, levels = unique(data$candidate))
+  data$candidate_class <- factor(
+    data$candidate_class,
+    levels = c(
+      "biological_primary",
+      "biological_secondary",
+      "technical",
+      "shared_biological_technical"
+    )
+  )
+  ggplot(data, aes(x = candidate, y = .data[[value_column]], fill = method_label)) +
+    geom_col(position = position_dodge(width = 0.82), width = 0.76) +
+    facet_wrap(~candidate_class, scales = "free_x", nrow = 1, drop = TRUE) +
+    scale_fill_manual(values = method_colors, drop = FALSE) +
+    labs(title = title, x = NULL, y = y_label, fill = "Method") +
+    theme_classic(base_size = 9) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+      legend.position = "bottom",
+      strip.background = element_blank(),
+      strip.text = element_text(face = "bold")
+    )
+}
+
+.blank_plot <- function(title, subtitle = NULL) {
+  ggplot() + theme_void() + labs(title = title, subtitle = subtitle)
+}
+
+.save_plot <- function(plot, path, width = 12, height = 7) {
+  ggplot2::ggsave(path, plot = plot, width = width, height = height, units = "in", device = "pdf")
+  if (!file.exists(path) || file.info(path)$size <= 0) stop("empty plot output: ", path)
+  invisible(path)
+}
+
+
+build_batch_funky_heatmap <- function(metric_data, output_path) {
+  metric_order <- c("ANOSIM", "Modularity", "ARI")
+  clean_data <- metric_data %>%
+    filter(score %in% metric_order, is.finite(value)) %>%
+    mutate(score = factor(score, levels = metric_order)) %>%
+    group_by(dataset, score) %>%
+    mutate(value = min_max(value)) %>%
+    ungroup()
+  if (nrow(clean_data) == 0L) stop("batch funky heatmap has no estimable metrics")
+
+  df_overall <- clean_data %>%
+    group_by(method) %>%
+    summarise(Overall_Score = mean(value, na.rm = TRUE), .groups = "drop")
+  df_datasets_wide <- clean_data %>%
+    group_by(method, dataset) %>%
+    summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(id_cols = method, names_from = dataset, values_from = value, names_prefix = "Dataset__")
+  df_metrics_wide <- clean_data %>%
+    group_by(method, score) %>%
+    summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(id_cols = method, names_from = score, values_from = value, names_prefix = "Metric__")
+  final_data <- df_overall %>%
+    left_join(df_datasets_wide, by = "method") %>%
+    left_join(df_metrics_wide, by = "method") %>%
+    mutate(id = method) %>%
+    arrange(desc(Overall_Score))
+
+  info_method <- tibble::tribble(
+    ~id, ~group, ~name, ~geom, ~palette, ~options,
+    "id", "", "", "text", NA, list(hjust = 0, width = 6)
+  )
+  info_overall <- tibble::tribble(
+    ~id, ~group, ~name, ~geom, ~palette, ~options,
+    "Overall_Score", "Overall", "Mean", "bar", "palette_overall", list(width = 4)
+  )
+  dataset_cols <- colnames(final_data)[startsWith(colnames(final_data), "Dataset__")]
+  info_datasets <- tibble(id = dataset_cols) %>%
+    mutate(
+      group = "Datasets",
+      name = stringr::str_remove(id, "Dataset__"),
+      geom = "circle",
+      palette = "Datasets",
+      options = list(list())
+    ) %>%
+    arrange(name)
+  metric_cols <- colnames(final_data)[startsWith(colnames(final_data), "Metric__")]
+  metric_order <- c("ANOSIM", "Modularity", "ARI")
+  info_metrics <- tibble(id = metric_cols) %>%
+    mutate(
+      group = "Metrics",
+      name = stringr::str_remove(id, "Metric__"),
+      name_f = factor(name, levels = metric_order),
+      geom = "bar",
+      palette = "Metrics",
+      options = list(list(width = 2))
+    ) %>%
+    arrange(name_f) %>%
+    select(-name_f)
+  column_info <- bind_rows(info_method, info_overall, info_datasets, info_metrics)
+  ncolors <- 11
+  p <- funky_heatmap(
+    data = final_data,
+    column_info = column_info,
+    scale_column = FALSE,
+    palettes = list(
+      palette_overall = RColorBrewer::brewer.pal(ncolors, "RdBu"),
+      Datasets = RColorBrewer::brewer.pal(ncolors, "RdBu"),
+      Metrics = RColorBrewer::brewer.pal(ncolors, "RdBu")
+    ),
+    column_groups = tibble(group = c("Overall", "Datasets", "Metrics")),
+    legends = list(
+      list(palette = "palette_overall", enabled = TRUE, title = "Mean normalized score", labels = c(". Min", rep("", ncolors - 2), "Max .")),
+      list(palette = "Datasets", enabled = TRUE, title = "Dataset score", labels = c(". Min", rep("", ncolors - 2), "Max .")),
+      list(palette = "Metrics", enabled = TRUE, title = "Metric score", labels = c(". Min", rep("", ncolors - 2), "Max ."))
+    ),
+    position_args = position_arguments(col_width = 1.5, col_space = 0.2, col_annot_offset = 5)
+  )
+  ggsave(output_path, p, width = 12, height = 7)
+  if (!file.exists(output_path) || file.info(output_path)$size <= 0) {
+    stop("empty batch funky heatmap output: ", output_path)
+  }
+  invisible(p)
+}
+```
+
+# MDS, metrics, joint decomposition, and NMI
+
+```{r batch-analysis, message=FALSE, warning=FALSE, results='hide'}
+metric_tables <- list()
+joint_tables <- list()
+decomposition_tables <- list()
+nmi_tables <- list()
+funky_metric_tables <- list()
+metric_index <- 0L
+joint_index <- 0L
+decomposition_index <- 0L
+nmi_index <- 0L
+funky_metric_index <- 0L
+
+for (dataset in batch_datasets) {
+  dataset_result <- dataset_results[[dataset]]
+  ds_registry <- dataset_result$registry
+  primary <- dataset_result$label_col
+  labels <- factor(as.character(dataset_result$metadata[[primary]]))
+  dataset_heatmap_metrics <- list()
+  for (method in selected_methods) {
+    method_result <- dataset_result$methods[[method]]
+    stored_scores <- method_result$scores
+    score_names <- c("anosim_score", "mod_knn3_score", "cluster_score")
+    if (!is.null(stored_scores)) {
+      if (!is.list(stored_scores) || !all(score_names %in% names(stored_scores))) {
+        stop(dataset, "/", method, ": persisted RDS scores lack the benchmark heatmap metrics")
+      }
+      heatmap_values <- c(
+        stored_scores[["anosim_score"]],
+        stored_scores[["mod_knn3_score"]],
+        stored_scores[["cluster_score"]]
+      )
+      heatmap_source <- "persisted_scores"
+    } else {
+      heatmap_anosim <- compute_batch_anosim(
+        method_result$dist_mat,
+        labels,
+        permutations = n_permutations,
+        parallel = parallel_cores
+      )
+      heatmap_values <- c(
+        heatmap_anosim$statistic,
+        calc_modularity(method_result$dist_mat, labels, 3),
+        clust_eval(method_result$dist_mat, labels)
+      )
+      heatmap_source <- "persisted_distance"
+    }
+    dataset_heatmap_metrics[[method]] <- data.frame(
+      dataset = dataset,
+      method = unname(method_label_map_main[[method]]),
+      score = c("ANOSIM", "Modularity", "ARI"),
+      value = as.numeric(heatmap_values),
+      source = heatmap_source,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  null_bundle_path <- file.path(
+    input_root,
+    "results",
+    paste0(dataset, "_batch_effect_uncorrected_ECODA_authors_HR_NULL.rds")
+  )
+  validate_batch_artifact(null_bundle_path, "ECODA shuffled baseline RDS")
+  null_bundle <- readRDS(null_bundle_path)
+  null_scores <- null_bundle$scores
+  if (is.null(null_scores) || !all(score_names %in% names(null_scores))) {
+    stop(dataset, "/ECODA_authors_HR_NULL: persisted RDS scores lack heatmap metrics")
+  }
+  dataset_heatmap_metrics[["ECODA_authors_HR_NULL"]] <- data.frame(
+    dataset = dataset,
+    method = unname(method_label_map_main[["ECODA_authors_HR_NULL"]]),
+    score = c("ANOSIM", "Modularity", "ARI"),
+    value = as.numeric(c(
+      null_scores[["anosim_score"]],
+      null_scores[["mod_knn3_score"]],
+      null_scores[["cluster_score"]]
+    )),
+    source = "persisted_scores",
+    stringsAsFactors = FALSE
+  )
+
+  mds_plots <- lapply(selected_methods, function(method) {
+    method_result <- dataset_result$methods[[method]]
+    anosim_value <- dataset_heatmap_metrics[[method]]$value[
+      dataset_heatmap_metrics[[method]]$score == "ANOSIM"
+    ]
+    plot_mds(
+      method_result$dist_mat,
+      labels,
+      title = paste0(dataset, " — ", unname(method_label_map_main[[method]])),
+      cluster_score = FALSE,
+      mod_score = FALSE,
+      sil_score = FALSE,
+      anosim_score = TRUE,
+      anosim_value = anosim_value,
+      digits = 3
+    )
+  })
+  names(mds_plots) <- selected_methods
+  mds_panel <- patchwork::wrap_plots(mds_plots, ncol = 2, guides = "collect") &
+    theme(legend.position = "bottom")
+  .save_plot(mds_panel, file.path(plot_root, paste0(dataset, "_mds.pdf")), width = 13, height = 10)
+
+
+  dataset_metrics <- list()
+  dataset_joint <- list()
+  dataset_decomposition <- list()
+  for (method in selected_methods) {
+    method_result <- dataset_result$methods[[method]]
+    funky_metric_index <- funky_metric_index + 1L
+    funky_metric_tables[[funky_metric_index]] <- dataset_heatmap_metrics[[method]]
+    metric <- make_batch_metric_table(
+      dataset = dataset,
+      method = method,
+      metadata = dataset_result$metadata,
+      candidate_registry = registry,
+      dist_mat = method_result$dist_mat,
+      artifact_path = method_result$path,
+      permutations = n_permutations,
+      parallel = parallel_cores,
+      permanova_permutations = permanova_permutations,
+      precomputed_anosim = dataset_heatmap_metrics[[method]]$value[
+        dataset_heatmap_metrics[[method]]$score == "ANOSIM"
+      ]
+    )
+    metric_index <- metric_index + 1L
+    metric_tables[[metric_index]] <- metric
+    dataset_metrics[[method]] <- metric
+
+    joint <- compute_batch_joint_permanova(
+      method_result$dist_mat,
+      dataset_result$metadata,
+      ds_registry,
+      permutations = permanova_permutations,
+      parallel = parallel_cores
+    )
+    joint_table <- make_batch_joint_table(dataset, method, joint, method_result$path)
+    joint_index <- joint_index + 1L
+    joint_tables[[joint_index]] <- joint_table
+    dataset_joint[[method]] <- joint_table
+
+    if (is.null(joint$decomposition)) {
+      decomposition <- data.frame(
+        component = c("Unique Biological", "Unique Technical", "Shared / Confounded", "Residual / Unexplained"),
+        r2 = NA_real_,
+        status = joint$status,
+        warning = joint$warning,
+        n_samples = as.integer(joint$n_samples),
+        full_model_r2 = NA_real_,
+        stringsAsFactors = FALSE
+      )
+    } else {
+      decomposition <- joint$decomposition
+    }
+    decomposition$dataset <- dataset
+    decomposition$method <- method
+    decomposition$method_label <- unname(method_label_map_main[[method]])
+    decomposition$artifact_path <- method_result$path
+    decomposition_index <- decomposition_index + 1L
+    decomposition_tables[[decomposition_index]] <- decomposition
+    dataset_decomposition[[method]] <- decomposition
+  }
+
+  funky_metric_index <- funky_metric_index + 1L
+  funky_metric_tables[[funky_metric_index]] <- dataset_heatmap_metrics[["ECODA_authors_HR_NULL"]]
+
+  metric_data <- do.call(rbind, dataset_metrics)
+  metric_data$method_label <- factor(metric_data$method_label, levels = method_labels)
+  .save_plot(
+    .metric_plot(
+      metric_data,
+      "anosim_statistic",
+      "anosim_status",
+      paste0(dataset, " — ANOSIM by metadata covariate"),
+      "ANOSIM statistic"
+    ),
+    file.path(plot_root, paste0(dataset, "_anosim.pdf")),
+    width = 14,
+    height = 7
+  )
+  .save_plot(
+    .metric_plot(
+      metric_data,
+      "univariate_r2",
+      "univariate_status",
+      paste0(dataset, " — univariate PERMANOVA"),
+      "Marginal R²"
+    ),
+    file.path(plot_root, paste0(dataset, "_permanova_univariate.pdf")),
+    width = 14,
+    height = 7
+  )
+  .save_plot(
+    .metric_plot(
+      metric_data,
+      "biology_informed_r2",
+      "biology_informed_status",
+      paste0(dataset, " — biology-informed PERMANOVA"),
+      "Candidate marginal R² after primary biology",
+      exclude_primary = TRUE
+    ),
+    file.path(plot_root, paste0(dataset, "_permanova_bio_informed.pdf")),
+    width = 14,
+    height = 7
+  )
+
+  joint_data <- do.call(rbind, dataset_joint)
+  joint_data$method_label <- factor(joint_data$method_label, levels = method_labels)
+  joint_data$plot_candidate <- ifelse(
+    joint_data$status == "ESTIMABLE" & !is.na(joint_data$joint_model_term),
+    joint_data$joint_model_term,
+    joint_data$candidate
+  )
+  joint_data$candidate <- joint_data$plot_candidate
+  joint_data$candidate_class <- ifelse(
+    joint_data$status == "ESTIMABLE" & !is.na(joint_data$joint_model_class),
+    joint_data$joint_model_class,
+    joint_data$candidate_class
+  )
+  design_status <- unique(joint_data$joint_design_status)
+  design_title <- if (length(design_status) == 1L && design_status == "ESTIMABLE_REDUCED") {
+    "joint PERMANOVA candidate terms (reduced estimable design)"
+  } else {
+    "joint PERMANOVA candidate terms"
+  }
+  upper <- .metric_plot(
+    joint_data,
+    "r2",
+    "status",
+    paste0(dataset, " — ", design_title),
+    "Reduced-model marginal R²"
+  )
+  decomposition_data <- do.call(rbind, dataset_decomposition)
+  decomposition_data$method_label <- factor(decomposition_data$method_label, levels = method_labels)
+  decomposition_data <- decomposition_data[decomposition_data$status %in% c("ESTIMABLE", "ESTIMABLE_REDUCED") & is.finite(decomposition_data$r2), , drop = FALSE]
+  if (nrow(decomposition_data) == 0L) {
+    lower <- .blank_plot(
+      paste0(dataset, " — global decomposition"),
+      "No estimable reduced joint design"
+    )
+  } else {
+    lower <- ggplot(decomposition_data, aes(x = method_label, y = r2, fill = component)) +
+      geom_col(width = 0.75) +
+      scale_fill_brewer(palette = "Set2", drop = FALSE) +
+      labs(title = paste0(dataset, " — global decomposition"), x = NULL, y = "R² component", fill = NULL) +
+      theme_classic(base_size = 9) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom")
+  }
+  joint_panel <- upper / lower + patchwork::plot_layout(heights = c(1.2, 1))
+  .save_plot(
+    joint_panel,
+    file.path(plot_root, paste0(dataset, "_permanova_joint.pdf")),
+    width = 14,
+    height = 11
+  )
+
+  nmi <- compute_batch_nmi(dataset_result$metadata, ds_registry)
+  nmi_table <- make_batch_nmi_table(dataset, nmi, ds_registry)
+  nmi_index <- nmi_index + 1L
+  nmi_tables[[nmi_index]] <- nmi_table
+  .save_plot(
+    plot_batch_nmi_heatmap(nmi, dataset),
+    file.path(plot_root, paste0(dataset, "_nmi.pdf")),
+    width = 11,
+    height = 9
+  )
+}
+
+scores <- do.call(rbind, metric_tables)
+scores$.row_order <- seq_len(nrow(scores))
+joint_scores <- do.call(rbind, joint_tables)
+join_columns <- c(
+  "dataset", "method", "candidate", "r2", "pseudo_f", "p_value",
+  "p_adjusted_holm", "status", "warning", "reduction_status",
+  "reduction_warning", "joint_model_term", "joint_model_class",
+  "joint_reduction_group", "joint_design_status", "joint_design_warning",
+  "n_samples", "full_model_r2"
+)
+joint_scores <- joint_scores[, join_columns, drop = FALSE]
+colnames(joint_scores)[match(
+  c("r2", "pseudo_f", "p_value", "p_adjusted_holm", "status", "warning", "n_samples"),
+  colnames(joint_scores)
+)] <- c(
+  "joint_r2", "joint_pseudo_f", "joint_p_value", "joint_p_adjusted_holm",
+  "joint_status", "joint_warning", "joint_n_samples"
+)
+scores <- merge(scores, joint_scores, by = c("dataset", "method", "candidate"), all.x = TRUE, sort = FALSE)
+scores <- scores[order(scores$.row_order), , drop = FALSE]
+scores$.row_order <- NULL
+row.names(scores) <- NULL
+
+funky_metric_data <- do.call(rbind, funky_metric_tables)
+build_batch_funky_heatmap(
+  funky_metric_data,
+  file.path(plot_root, "batch_effect_uncorrected_funkyheatmap.pdf")
+)
+
+decomposition <- do.call(rbind, decomposition_tables)
+nmi <- do.call(rbind, nmi_tables)
+
+write_batch_analysis_table(
+  scores,
+  file.path(analysis_output_root, "batch_effect_uncorrected_scores.csv")
+)
+write_batch_analysis_table(
+  decomposition,
+  file.path(analysis_output_root, "batch_effect_uncorrected_decomposition.csv")
+)
+write_batch_analysis_table(
+  nmi,
+  file.path(analysis_output_root, "batch_effect_uncorrected_nmi.csv")
+)
+
+stopifnot(
+  identical(sort(unique(scores$dataset)), sort(batch_datasets)),
+  identical(sort(unique(scores$method)), sort(selected_methods)),
+  all(vapply(list(
+    file.path(analysis_output_root, "batch_effect_uncorrected_scores.csv"),
+    file.path(analysis_output_root, "batch_effect_uncorrected_decomposition.csv"),
+    file.path(analysis_output_root, "batch_effect_uncorrected_nmi.csv")
+  ), function(path) validate_batch_artifact(path, "analysis table")[["path"]] == normalizePath(path), logical(1)))
+)
+```
+
+# Outputs
+
+The pass writes six base exploratory PDFs per canonical dataset:
+
+- `<dataset>_mds.pdf`
+- `<dataset>_anosim.pdf`
+- `<dataset>_permanova_univariate.pdf`
+- `<dataset>_permanova_bio_informed.pdf`
+- `<dataset>_permanova_joint.pdf`
+- `<dataset>_nmi.pdf`
+
+
+The batch-level funky heatmap is written as
+`plots/batch_effect_uncorrected/batch_effect_uncorrected_funkyheatmap.pdf`.
+It follows the Figure 2A layout with overall, per-dataset, and per-metric
+normalized score columns; runtime is intentionally excluded.
+
+Its metric columns are ANOSIM, Modularity, and ARI; the displayed methods also
+include the persisted `Shuffled_baseline` scores from
+`ECODA_authors_HR_NULL`.
+
+The normalized score, global decomposition, and metadata-only NMI tables are
+written under `data/batch_effect/uncorrected/analysis/`, each with an atomic
+`MD5/SIZE/PATH` sidecar. Invalid or non-estimable candidates remain in the
+score tables with their status and warning; they are never plotted as zero.

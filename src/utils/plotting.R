@@ -21,17 +21,20 @@ plot_pca <- function(
   plotly_3d = FALSE,
   invisible = c("var", "quali"),
   n_ct_show = Inf,
-  repel = FALSE
+  repel = FALSE,
+  parallel = getOption("mc.cores")
 ) {
   res.pca <- prcomp(feat_mat, scale. = scale., rank. = pca_dims)
   dist_mat <- dist(feat_mat)
   format_str <- paste0("%.", digits, "f")
-
   if (anosim_score) {
     anosim_score <- round(
-      vegan::anosim(x = dist_mat, grouping = labels, distance = "euclidean")[[
-        "statistic"
-      ]],
+      vegan::anosim(
+        x = dist_mat,
+        grouping = labels,
+        distance = "euclidean",
+        parallel = parallel
+      )[["statistic"]],
       3
     )
     title <- paste0(
@@ -174,7 +177,9 @@ plot_mds <- function(
   pointsize = 3,
   labelsize = 4,
   coord_equal = TRUE,
-  axes = c(1, 2)
+  axes = c(1, 2),
+  parallel = getOption("mc.cores"),
+  anosim_value = NULL
 ) {
   mds_res <- cmdscale(dist_mat, k = max(axes), eig = TRUE)
   format_str <- paste0("%.", digits, "f")
@@ -185,12 +190,17 @@ plot_mds <- function(
   )
 
   if (anosim_score) {
-    anosim_score_val <- round(
-      vegan::anosim(x = dist_mat, grouping = labels, distance = "euclidean")[[
-        "statistic"
-      ]],
-      3
-    )
+    anosim_score_val <- if (is.null(anosim_value)) {
+      vegan::anosim(
+        x = dist_mat,
+        grouping = labels,
+        distance = "euclidean",
+        parallel = parallel
+      )[["statistic"]]
+    } else {
+      anosim_value
+    }
+    anosim_score_val <- round(anosim_score_val, 3)
     title <- paste0(
       title,
       "\nANOSIM score: ",
