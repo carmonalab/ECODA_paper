@@ -44,6 +44,26 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   whenever resources permit; only documented data dependencies may serialize
   work. Numbered pipelines remain ordered. Pipeline 1 is the NAS-bound serial
   staging exception and is intentionally unchanged.
+- **Repair/validation is no-compute by default (hard stop):** A gate repair,
+  validator or schema fix, checksum audit, or reviewer/release audit MUST NOT
+  submit preprocessing, annotation, or benchmark workers. First inspect
+  existing terminal artifacts, run-owned manifests, and checksums; use a
+  validator-only or local contract check where possible. A durable gate is
+  not a reason to create compute or to obtain scheduler IDs. The benchmark
+  submitter `1_submit_hpc_array.sh` MUST NOT be invoked for repair work unless
+  the user explicitly names the dataset/view/method rows that must be
+  recomputed and records the dependency or integrity reason.
+- **Launch scope must be explicit:** Before any approved compute launch,
+  record the exact wrapper, dataset/view selection, method list, and expected
+  row count. A broad `--methods` list, an all-dataset selection, or `--force`
+  is prohibited for repair work. Validated artifacts MUST remain outside the
+  recomputation selection. Contract-only changes to already-written results
+  require revalidation, not worker execution.
+- **Scope mismatch is an immediate stop:** If the emitted wrapper or scheduler
+  rows exceed the approved scope, immediately cancel every emitted scheduler
+  ID and the durable runner, preserve all logs/manifests/partial artifacts,
+  and perform one terminal inspect as `FAILED`. Never let an unintended wave
+  finish and never manually mark it complete.
 - **Targeted recovery is mandatory:** Before any Pipeline 2–5 rerun, inspect
   the failed run's terminal status, manifests, watchdog records, and artifact
   contracts. Re-run only the failed dataset/view/method/parameter rows; never
@@ -64,6 +84,16 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   evidence remain allowed. If the durable gate or required watchdog cannot
   represent a new wrapper, stop before launching full-cohort work and
   generalize the shared wrapper rather than bypassing the gate.
+- Exception: When the user explicitly requests a temporary, noncanonical,
+  full-cohort scoring run and the scope/output location are clear, the run may
+  bypass durable-hpc-gate-ecoda and the normal src/ pipeline. If scope, input
+  artifacts, or output location is unclear, ask before launching. The run must
+  use only explicitly named datasets/annotation columns, write outside canonical
+  benchmark/NAS outputs, and leave existing validated artifacts outside the
+  recomputation selection. I.e. do not overwrite existing artifacts or gates
+  (or explicitly ask the user to do so or not).
+  In short: Upon specific user request, short-lived HPC sessions may be launched, e.g.
+  to run tests or create temporary artifacts for local analysis.
 
 ## Key Directories
 
@@ -90,13 +120,6 @@ pixi run check-r-deps
 HPC-only pinned R source packages are installed through the guarded
 `src/utils/bash/setup_env_sbatch.sh` or `src/utils/bash/refresh_env.sh` entry
 points; do not run `pixi run setup` directly.
-
-Render analysis notebooks locally on macOS, never on HPC:
-
-```bash
-pixi run Rscript -e 'rmarkdown::render("notebooks/benchmark_analysis.rmd")'
-pixi run Rscript -e 'rmarkdown::render("notebooks/batch_effect_analysis.rmd")'
-```
 
 ### HPC setup
 
@@ -181,10 +204,21 @@ sacct -j <job-id> --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS
 - `src/utils/scoring_metrics.R` — benchmark metrics.
 - `src/utils/bash/setup_env_sbatch.sh`, `src/utils/bash/refresh_env.sh` — serialized environment mutation and smoke checks.
 - `README.md`, `docs/ARCHITECTURE.md` — operator workflow and pipeline map.
+- `notebooks/benchmark_analysis.rmd` - analysis code to summarize the processed benchmark data (sample embedding methods), e.g. to show the separation scores, MDS plots, runtime, etc.
+- `notebooks/batch_effect_analysis.rmd` - (mostly implemented now, should preferably re-use existing functions and code snippets from the `notebooks/benchmark_analysis.rmd`) analysis code to summarize the processed batch effect analysis data (sample embedding methods), e.g. to show the separation scores, MDS plots
+  - do not knitr render the notebooks `notebooks/benchmark_analysis.rmd` and `notebooks/batch_effect_analysis.rmd`. just execute the code chunks (as needed) to create the pdf figure output (saved in the `plots/` directory).
 
 ## Runtime/Tooling Preferences
 
 - **Package/environment manager:** Pixi. Do not introduce Conda, renv, pip-only, npm, or a second lockfile for project dependencies.
+- **Local Python (macOS):** Do not assume a system `python` or `python3` exists.
+  - Prefer `pixi run -e default python ...` (or the equivalent Pixi interpreter) for Python-dependent repository work.
+  - Do not switch to JavaScript/Node.js merely because bare Python is unavailable; an intentional JS fallback is acceptable when the task does not require Python-specific code or packages.
+- **OMP Python eval:** OMP's Python eval backend does not automatically select this repository's Pixi interpreter.
+  - If using Python `eval`, set `python.interpreter` to the repository's absolute Pixi path, for example `/absolute/path/to/ECODA_paper/.pixi/envs/default/bin/python`, or run the script through `bash` with `pixi run -e default python ...`.
+- **Remote binary artifacts:** `read ssh://host/path` reads remote UTF-8 text files and directory listings only; it cannot return arbitrary binary bytes, and `:raw` does not change that.
+  - Never use it for `.feather`, `.parquet`, `.arrow`, `.h5`, `.h5ad`, `.rds`, `.sqlite`, or other binary artifacts.
+  - Inspect remotely with `bash` plus `ssh` using the configured Pixi interpreter, or copy with `scp`/`rsync` and inspect locally; use `sshfs` when a mount is appropriate.
 - **Required versions:** R `4.5.2`; Python `3.13.*`. Supported base platforms are `osx-arm64` and `linux-64`; HPC workers use the `py-cuda13` Pixi environment.
 - **Worker invocation:** never use bare `python`, `Rscript`, or ordinary `pixi run` inside jobs. Source the config and use its immutable commands:
 
@@ -195,7 +229,7 @@ sacct -j <job-id> --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS
   ${PIXI_RSCRIPT} path/to/worker.R
   ```
 
-  `PIXI_RSCRIPT` includes `pixi run --as-is -e py-cuda13 Rscript --vanilla`, preventing runtime lock/environment mutation.
+  `PYTHON_BIN` and `PIXI_RSCRIPT` resolve to the `py-cuda13` environment; do not invoke `pixi` inside workers because activation can mutate shared environment state.
 - Environment setup and refresh serialize on `logs/env_refresh.lock` and must not run while arrays are active.
 - `bamboo` is the HPC cluster. Login nodes are for editing, compilation, staging, NAS sync, and SLURM submission only.
 - Never run `rm -rf` against `$HOME/scratch` or `data/` without explicit user confirmation.
