@@ -260,7 +260,13 @@ Stage 5 resource behavior and parameter screening remain explicit:
 ## Assumptions & contingencies
 
 - The rollout intentionally excludes `_debug` from production selections; retain the reviewed `_debug` gate as runtime evidence only.
-- The rollout intentionally excludes corrected batch-effect views. If a corrected view is requested later, require a separate plan and confirm `columns.batch` before submission.
+- **Superseding assumption (2026-09-04):** Corrected batch-effect views are
+  deferred until the uncorrected branch is terminal, inspected, reviewed, and
+  complete; they are not omitted. The targeted Joanito Pipeline 3 refresh
+  already covers both `batch_effect_uncorrected` and
+  `batch_effect_corrected`. Corrected-mode Pipeline 5 remains pending after
+  the uncorrected recovery and requires the confirmed `columns.batch` contract
+  before submission.
 - Current evidence justifies forcing all hook-backed Pipeline 2 rows and all selected downstream rows. If a future current audited run proves a row complete before its wave launches, use that run's reviewed `sync-only` path instead of inventing a second run; otherwise retain the forced rebuild rule.
 - If Bamboo `HEAD` changes after plan approval or no longer matches the runtime manifest, stop before launching and rebuild/review the immutable image. Do not run the gate with a dirty or mismatched source identity.
 - If the H200 queue delays a standard/default benchmark row, keep it H200-pinned. Use flexible GPUs only for batch-effect or explicitly non-default GPU work; do not change the scientific comparability class to improve queue time.
@@ -664,3 +670,560 @@ operational evidence, not a replacement for the promotion rules above.
    immutable dataset/Pixi fingerprints, no competing same-resource gate, and
    no environment or Git lock. Preserve all old failed, PRELAUNCH_STOP, and
    stale PREPARED manifests as discrepancy evidence.
+- **Current source/runtime lineage:** commit `34a315f` introduced selective
+  Pipeline 5 parameter sharding, exact GloScope sample IDs, default-only
+  ordinary PILOT-GM-VAE, and batch exclusion of PILOT-GM-VAE. Commit `c5da3c2`
+  fixed GloScope consolidation when R resolves the configured scratch symlink
+  differently from checksum sidecars; its symlink regression test passed.
+  Commit `d558b26` added the mandatory targeted-recovery rule to `AGENTS.md`.
+  The source-matched `d558b26` path-preserving runtime was built by
+  `ecoda_runtime_build_bassez_rolling_d558b26_20260903174000Z`, first-audited,
+  and Luna Max approved. `datasets.json`, `pixi.toml`, and `pixi.lock` were
+  unchanged.
+
+- **Stage 4 recovery completed:** The old B4 batch repair run
+  `stage4_20260902233731_3919808` had successful preparation, annotation, and
+  merge arrays; only its 2G merge watchdog OOMed. The reviewed 32G
+  merge-only recovery passed for array `4375214` and watchdog `4375917`.
+  A guarded owner recovery and `--sync-only` gate then completed and was
+  reviewed. It transferred the nine eligible batch H5ADs to NAS at roughly
+  18--26 GB each and left the three automated-annotation exemptions untouched.
+
+- **Ordinary Pipeline 5 recovery completed:** The current-source ordinary
+  reconciliation skipped every already-valid row except
+  `Gongsharma_cmv_young_males/benchmark_analysis/scitd`; its targeted
+  no-force recovery also skipped the valid artifact and was reviewed. Adams
+  GloScope's five parameter shards were consolidated without recomputation
+  after the sidecar-path fix and its RDS contract passed. The initial ordinary
+  gate's first inspect correctly preserved the failed OOM attempt
+  `4376109`; retry `4376194` completed. No broad ordinary rerun was used.
+
+- **Joanito stale-cache finding:** Pipeline 2's
+  `1.3.1_prepare_joanito.R` derives `cell.type_new` and
+  `ecoda_validate_stage2_output` requires it. Stage 2 Joanito owner
+  `stage2_20260831032828_3836504` is `OK`. Pipeline 3's
+  `preprocess_utils.py` creates `JoaI_..._raw.h5ad` only when absent; the
+  cached raw H5AD was timestamped `2026-08-10`, before the derivation
+  hardening commit `087eee1` (`2026-08-28`). Pipeline 3 therefore propagated a
+  stale cache. The current uncorrected H5AD lacks `cell.type_new`, and the
+  corrected Joanito H5AD is absent. This is a Pipeline 3 cache-reuse defect,
+  not a missing Pipeline 2 derivation.
+
+- **Batch uncorrected attempts and exact failures:** The first forced batch
+  gate failed before method submission because the Alzheimer and Parkinson
+  preflight status files exceeded the 60-second publication grace; their
+  H5ADs are approximately 179 GB and 150 GB. The retry used a 1800-second
+  grace and submitted the fixed seven-method suite without PILOT-GM-VAE or
+  scPoli. Its run root was terminal `FAIL` at
+  `2026-09-04T05:58:33Z`. The final recovery accounting found:
+  - PILOT task 10 (`Joanito`) failed non-OOM because `cell.type_new` was
+    missing;
+  - QOT task 10 failed for the same reason;
+  - prepare-pseudobulk task 1 (`Alzheimer`) reached the 500G OOM ceiling;
+  - pseudobulk/composition did not obtain terminal matrix rows after that
+    dependency failure;
+  - MrVI completed successfully;
+  - GloScope's remaining Alzheimer retry was pending for node availability
+    and was canceled by the agent; completed GloScope artifacts and all
+    manifests remain preserved.
+
+- **Next steps before corrected mode:** Do not rerun Pipeline 2. After the
+  current failed gate is preserved, perform a targeted Pipeline 3 refresh for
+  Joanito's `batch_effect_uncorrected` and `batch_effect_corrected` views by
+  invalidating only the stale raw H5AD cache and regenerating from the
+  validated Pipeline 2 RDS. Revalidate/remerge existing Stage 4 annotation
+  checkpoints only for Joanito if regenerated H5ADs require it. Then run
+  targeted Pipeline 5 recovery for missing/invalid Joanito methods and
+  Alzheimer GloScope, with Alzheimer launched at the maximum configured
+  memory. Preserve all valid rows and use distinct durable serialization
+  groups for independent Joanito and Alzheimer repairs. Run corrected-mode
+  Pipeline 3--5 only after this uncorrected branch is reviewed and complete.
+
+- **Evidence and safety state:** All failed, PRELAUNCH_STOP, and unlaunched
+  PREPARED gate manifests remain preserved under `.gate/`; no historical gate
+  is being reused as a promotion barrier. Focused local verification passed
+  for matrix sharding/watchdog behavior, GloScope consolidation, benchmark
+  synchronization, batch-method exclusion, and the symlink-safe consolidation
+  regression. The next repair must be a new durable gate with an explicit
+  failure scope; no canonical Stage 3 artifact is to be rewritten without
+  preserving its prior evidence and recording the downstream revalidation
+  dependency.
+- **Joanito Pipeline 3 cache refresh completed:** The targeted gate
+  `ecoda_bassez_rolling_b3_joanito_batch_refresh_d558b26_20260904070000Z`
+  backed up the pre-refresh raw cache and existing uncorrected H5AD by
+  hardlink, invalidated only the stale raw cache, and reran both
+  `batch_effect_uncorrected` and `batch_effect_corrected` with the fixed
+  source-matched d558b26 runtime. The wrapper emitted preprocessing array
+  `4378942` and watchdog `4378943`; both completed. The single terminal
+  inspect passed at `2026-09-04T09:40:49Z` with one accounting query and no
+  discrepancies, and the Luna Max reviewer approved at `2026-09-04T09:42:11Z`.
+  The gate is release-eligible; evidence is in the corresponding `.gate`
+  wait, inspect, review, and manifest records.
+
+- **Immediate downstream action:** Revalidate/remerge only Joanito's existing
+  Stage 4 dual-annotation checkpoints into the two regenerated H5ADs, using a
+  new run-owned Stage 4 merge gate and the prior validated annotation union
+  and per-sample Feather checkpoints. Do not rerun annotation workers or
+  touch any other dataset. After that gate is inspected and reviewer-approved,
+  repair only the missing/invalid uncorrected Pipeline 5 rows: Joanito
+  PILOT, QOT, and composition, plus both missing GloScope rows for Alzheimer
+  and Parkinson. Preserve valid MrVI, GloScope, pseudobulk, and all other
+  dataset/method artifacts. The Alzheimer prepare-pseudobulk 500G OOM remains
+  a separate unresolved dependency and must not receive a blind retry.
+- **Joanito Stage 4 remerge completed:** Gate
+  `ecoda_bassez_rolling_b4_joanito_remerge_d558b26_20260904094500Z` launched
+  at `2026-09-04T10:03:26Z` with command digest
+  `29d5e0c70ca11bbc596d9dc3e902c083aed3021724aa6b9d537cd6aeabda27f1` and
+  completed at `2026-09-04T10:54:26Z`. It created run
+  `stage4_20260904094500_joanito_remerge`, built a fresh union with
+  `758,928,057` nonzeros and 84 chunks covering 168 samples, reused only the
+  84 prior validated annotation Feather checkpoints, merged both regenerated
+  views without annotation workers, and guardedly synced both H5ADs to NAS.
+  The single terminal inspect passed at `2026-09-04T10:55:24Z` with one
+  accounting query covering arrays `4379393`/`4379428` and watchdogs
+  `4379394`/`4379429`; all four were `COMPLETED|0:0`, all five artifact
+  contracts and immutable fingerprints passed, and no discrepancies were
+  recorded. Luna Max approved at `2026-09-04T10:57:05Z`; the gate is
+  release-eligible.
+- **Joanito uncorrected Pipeline 5 recovery completed, with a reconciled
+  strict-validation expansion:** Gate
+  `ecoda_bassez_rolling_b5_joanito_uncorrected_recovery_d558b26_20260904110000Z`
+  completed at `2026-09-04T11:36:36Z` with command digest
+  `eca798a68d8e26b1fb66408f6c7af834ee1c23cedf7f2ee8ac4e41e57b55592d`.
+  The exact one-row selection remained Joanito/
+  `batch_effect_uncorrected`/`batch_effect_uncorrected`, and no force was
+  used. The canonical no-force submitter skipped only
+  `prepare_pseudobulk` and `gloscope`; strict current-source validation
+  classified `pseudobulk`, `composition`, `mrvi`, `pilot`, and `qot` as
+  needing work, so those five rows were submitted and all completed. The
+  resulting matrix/RDS contracts passed and the selected outputs were
+  guardedly synced to NAS. The extra pseudobulk and MrVI recomputation is
+  preserved as evidence, not hidden: post-remerge Joanito H5AD identity
+  changed from the prior run's MD5/size
+  `5663f60e47ab096caf22a6a39ea016c5`/`18514536708` to
+  `65061f83948239642ea394db149eb1aa`/`18514914522`, and the prior MrVI row
+  was no longer accepted by the strict current-source selection. No other
+  dataset row was selected.
+
+- The gate's single terminal inspect passed at `2026-09-04T11:37:48Z` with
+  one accounting query covering preflight `4379518`, method arrays
+  `4379521`, `4379523`, `4379525`, `4379527`, `4379529`, watchdogs
+  `4379522`, `4379524`, `4379526`, `4379528`, `4379530`, and aggregate
+  `4379531`; all matched `COMPLETED|0:0`, all five artifact contracts and
+  immutable fingerprints passed, and no discrepancies were recorded. Luna
+  Max approved the reconciled gate in the approval-only review phase, so it
+  is release-eligible. Alzheimer/Parkinson GloScope remain the only
+  uncorrected GloScope rows missing from the canonical result root.
+- **Alzheimer/Parkinson GloScope attempt was canceled and audited
+  fail-closed:** Gate
+  `ecoda_bassez_rolling_b5_gloscope_alzheimer_parkinson_d558b26_20260904121500Z`
+  launched with command digest
+  `e82af5d86041dc5dbdeb1415bcb7788235fdcee84febb580e9c1f03147a4e61f`
+  and reached a durable transport failure at `2026-09-04T14:47:00Z`.
+  Preflight array `4379822` completed successfully for both H5AD rows;
+  GloScope array `4379874`, watchdog `4379875`, and aggregate `4379876`
+  were submitted, but no GloScope task started before cancellation.
+  Following the user's explicit authorization, preflight `4379822`, GloScope
+  array `4379874`, and watchdog `4379875` were sent to `scancel`; aggregate
+  `4379876` was not canceled and subsequently reached `FAILED|1:0`. The named
+  tmux session was killed and verified runner PID `2975098` received
+  `SIGTERM`. Reconciliation then found no runner process or tmux session, and
+  the remote terminal status was `FAILED` with exit
+  `143` at `2026-09-04T15:34:08Z`.
+
+- The required single first inspect completed at `2026-09-04T15:35:29Z`
+  with one accounting query over all four IDs. It matched preflight
+  `4379822` as `COMPLETED|0:0`, array `4379874` and watchdog `4379875` as
+  `CANCELLED|0:0`, and aggregate `4379876` as `FAILED|1:0`; therefore
+  `audit_passed=false` and `release_eligible=false`, while all individual
+  artifact/terminal/fingerprint checks passed. No reviewer approval was
+  issued and this failed `PRELAUNCH_STOP` gate is not a predecessor. The
+  replacement must be a new explicitly reconciled gate using the reviewed
+  Joanito predecessor.
+
+- **New reroute implementation:** The user authorized a reusable targeted
+  batch recovery path and a rerun on `shared-bigmem`, rather than waiting for
+  the shared-cpu queue. Commit `fdf137d` now preserves the fixed seven-method
+  batch default while adding selection-file-scoped
+  `--target-methods LIST` recovery with `--pass`, explicit partition, and
+  existing owner/preflight/watchdog/validation/sync machinery. It also makes
+  GloScope, composition, PILOT, QOT, and PILOT-GM-VAE use a genuinely
+  counts-free h5py/minimal-AnnData loader; MrVI, scPoli, and pseudobulk retain
+  counts only where their algorithms require them. Focused submitter,
+  Python-loader/worker, R-loader, syntax, and H5AD contract checks passed.
+  The source is pushed and a source-matched runtime gate is now running
+  before any replacement launch.
+
+- **Alzheimer prepare-pseudobulk remains blocked by a real memory floor:** The
+  failed batch attempts load the complete 1,395,601-cell by 34,800-gene counts
+  matrix into Seurat through `load_benchmark_seurat`, then
+  `get_pb_deseq2` calls `AggregateExpression` on the full object before
+  selecting the requested hvg2000 result. The affected task OOMed at the
+  configured 500G ceiling. A blind retry would repeat the same full-object
+  allocation; the next correction must preserve all-gene aggregation and
+  DESeq2 semantics through a bounded/streaming path, then use a new
+  source-matched runtime and targeted Alzheimer dependency repair.
+- **Runtime build retries are fail-closed and preserved:** The first fdf137d
+  runtime gate was invalid because it captured Bamboo HEAD `d558b263` before
+  a post-launch fast-forward; its runner was terminated and no image from it
+  is source-matched. The next gate
+  `ecoda_runtime_build_bassez_rolling_fdf137d_final_20260904185000Z` correctly
+  captured Bamboo HEAD
+  `fdf137d0c486e5edf884c4d1851d62aa6e72e655`, but its guarded build refused
+  environment mutation because stale runtime-build job `4380369` was still
+  active. Build job `4380402` failed with `1:0`; the verified jobs were
+  canceled, and the required single inspect ran at `2026-09-04T16:28:12Z`
+  with one accounting query. That gate is terminal `FAILED` and not
+  release-eligible. No failed image is adopted.
+
+- **Source-matched runtime build stopped fail-closed after transport recovery:** Gate
+  `ecoda_runtime_build_bassez_rolling_fdf137d_clean_20260904194000Z` launched
+  at `2026-09-04T16:34:06Z` with command digest
+  `214fec748034e5055452bb0623c6dcda62220b5a1d1c05dd6fa4753b90def278`.
+  Prepare/reconcile captured Bamboo HEAD
+  `fdf137d0c486e5edf884c4d1851d62aa6e72e655`, confirmed no stale runtime-build
+  process, and launched the one 128G shared-cpu build with an in-wrapper HEAD
+  assertion. The durable waiter hit one SSH completion transport error at
+  `2026-09-04T16:39:59Z`, so the local manifest entered terminal
+  `PRELAUNCH_STOP` rather than guessing. Recovery status later proved remote
+  `COMPLETED` at `2026-09-04T16:42:17Z`; scheduler ID `4380472` was extracted
+  from the durable wrapper log.
+
+- The required single terminal inspect ran at `2026-09-04T19:07:51Z` with one
+  accounting query for `4380472`, which matched `COMPLETED|0:0`; all five
+  artifact contracts, terminal commands, and immutable fingerprints passed.
+  Because the local lifecycle is irreversibly `PRELAUNCH_STOP`, reviewer
+  approval is prohibited and the gate remains release-ineligible. The produced
+  image is retained as evidence but is not adopted as a reviewed runtime.
+  A fresh source-matched runtime gate must rebuild/review before the
+  shared-bigmem replacement.
+- **Recovery runtime gate is now running:** New gate
+  `ecoda_runtime_build_bassez_rolling_fdf137d_recovery_20260904190825Z` was
+  prepared and launched after the stopped gate's terminal evidence was
+  recorded. It asserts Bamboo HEAD
+  `fdf137d0c486e5edf884c4d1851d62aa6e72e655`, rebuilds with
+  `build_ecoda_runtime.sh --layout path-preserving --force`, and writes
+  `ecoda-py-cuda13-path-preserving-fdf137d-reviewed.sif`. Its single durable
+  waiter is armed. No benchmark replacement may launch until this gate's
+  terminal inspect passes and Luna Max approves it.
+- **Recovery runtime reviewed:** Gate
+  `ecoda_runtime_build_bassez_rolling_fdf137d_recovery_20260904190825Z`
+  completed at `2026-09-04T19:17:26Z`. Its single terminal inspect at
+  `2026-09-04T19:18:44Z` covered scheduler job `4381441` with one accounting
+  query; accounting, all five artifact contracts, terminal commands, and
+  immutable fingerprints passed. Luna Max approved at `2026-09-04T19:19:44Z`;
+  the gate is release-eligible. The reviewed image is
+  `ecoda-py-cuda13-path-preserving-fdf137d-reviewed.sif`.
+
+- **GloScope replacement scope expanded to both missing rows:** The user
+  selected one shared-bigmem gate for only GloScope, counts-free, across
+  Alzheimer and Parkinson. The earlier prepared Alzheimer-only manifest
+  `ecoda_bassez_rolling_b5_alzheimer_gloscope_bigmem_fdf137d_20260904192119Z`
+  is superseded and remains unlaunched; it is not a predecessor.
+  The replacement selection file
+  `/home/users/h/halterc/scratch/ECODA_paper/gates/ecoda_bassez_rolling_b5_gloscope_alzheimer_parkinson_bigmem_fdf137d_20260905155916Z.selection.tsv`
+  contains exactly:
+  `Alzheimer<TAB>batch_effect_uncorrected<TAB>batch_effect_uncorrected` and
+  `Parkinson<TAB>batch_effect_uncorrected<TAB>batch_effect_uncorrected`.
+  Its SHA-256 is
+  `877a7437fddb1b9d72f97d68aac0fe1a28d06c846b6dfd4f7d18da2ae02554fe`.
+  The replacement gate will invoke the canonical submitter with
+  `--pass uncorrected --target-methods gloscope --partition shared-bigmem`,
+  `500G` memory, and throttle `1`, using the reviewed runtime and the
+  reviewed Joanito Stage 4 and uncorrected Pipeline 5 predecessors. No other
+  method or dataset is selected.
+- **Dual GloScope bigmem submission failed closed on an invalid CPU request:**
+  Gate
+  `ecoda_bassez_rolling_b5_gloscope_alzheimer_parkinson_bigmem_fdf137d_20260905155916Z`
+  reached durable `FAILED` at `2026-09-05T16:52:24Z`. Both selected H5ADs
+  passed source checksum validation; H5AD preflight `4382272` and R
+  environment preflight `4382274` were submitted, but the GloScope array
+  submission requested the configured 16 CPUs on `shared-bigmem`, whose
+  effective nodes expose 14 allocatable CPUs (`CPUSpecList=7,15`). Slurm
+  rejected that request with `Requested node configuration is not available`;
+  no GloScope array, watchdog, or aggregate gate was submitted.
+
+- The required single terminal inspect ran at `2026-09-05T16:54:08Z`; its one
+  accounting query covered the scheduler ID emitted in the durable log
+  (`4382274`), which was `COMPLETED|0:0`, and all five artifact contracts,
+  terminal commands, and immutable fingerprints passed. The gate remains
+  `FAILED` and release-ineligible because the wrapper failed before method
+  submission. A non-mutating `sbatch --test-only` confirmed that the same
+  shared-bigmem request is schedulable with `--cpus-per-task=14`.
+  The next replacement keeps the reviewed runtime and exact dual selection,
+  and exports `BENCHMARK_CPU_CPUS_PER_TASK=14` before sourcing the canonical
+  config; no source or lockfile change is needed.
+
+- **CPU-adjusted GloScope gate failed on the pre-existing R-loader import
+  bug:** Gate
+  `ecoda_bassez_rolling_b5_gloscope_alzheimer_parkinson_bigmem_cpu14_fdf137d_20260905165638Z`
+  reached durable `FAILED` at `2026-09-05T17:52:35Z`. Both H5ADs passed
+  source validation; preflights `4382279`/`4382282`, GloScope array
+  `4382283`, watchdog `4382284`, and aggregate `4382285` were recorded.
+  The method array failed twice because the fdf137d runtime's R
+  `load_h5ad_counts_free()` imported `benchmark_h5ad_contract` through a
+  relative-import fallback with no package parent. The aggregate and
+  watchdogs consequently failed; no GloScope artifact was accepted.
+
+- The required single terminal inspect ran at `2026-09-05T17:54:01Z` with one
+  accounting query covering all five recorded scheduler IDs. Preflights
+  `4382279`/`4382282` were `COMPLETED|0:0`; array `4382283`, watchdog
+  `4382284`, and aggregate `4382285` were `FAILED|1:0`. The audit therefore
+  failed and the gate is not a predecessor. Extra accounting rows
+  `4382280` and `4382286` were preserved as scheduler evidence.
+
+- **Loader fix committed and synchronized:** Commit `bc021d9` adds the
+  module directory to reticulate's Python `sys.path` before
+  `import_from_path`, and extends the R integration regression to call the
+  persisted H5AD contract path. `pixi run python tests/test_h5ad_counts_free.py`
+  passes locally, and Bamboo is synchronized to
+  `bc021d92b6bf5e157c5bb96315d5eba08ddde1f6`. The reviewed fdf137d runtime is
+  source-stale for this fix; a new source-matched runtime must be rebuilt and
+  reviewed before another GloScope launch.
+
+- **Loader-fix runtime reviewed:** Gate
+  `ecoda_runtime_build_bassez_rolling_bc021d9_loaderfix_20260905180014Z`
+  completed at `2026-09-05T18:10:49Z`; its single inspect at
+  `2026-09-05T18:11:56Z` covered scheduler job `4382288`, with accounting,
+  all five artifact contracts, terminal commands, and immutable fingerprints
+  passing. Luna Max approved at `2026-09-05T18:12:59Z`; the gate is
+  release-eligible and its image is
+  `ecoda-py-cuda13-path-preserving-bc021d9-reviewed.sif`.
+
+- **Loader-fixed GloScope recovery completed and reviewed:** Gate
+  `ecoda_bassez_rolling_b5_gloscope_alzheimer_parkinson_bigmem_cpu14_bc021d9_20260905181320Z`
+  completed at `2026-09-05T23:25:05Z`. Its single inspect at
+  `2026-09-05T23:26:19Z` covered preflights `4382320`/`4382322`, method array
+  `4382323`, watchdog `4382324`, and aggregate gate `4382325`; every required
+  accounting row was `COMPLETED|0:0`, and all five artifact contracts,
+  terminal audits, immutable fingerprints, and the overall audit passed.
+  Luna Max approved at `2026-09-05T23:27:29Z`; the gate is release-eligible.
+
+- The canonical wrapper merged two GloScope task logs into a 16-row execution
+  log, validated the Alzheimer and Parkinson RDS bundles, and synchronized
+  both outputs plus checksums to NAS:
+  `Alzheimer_batch_effect_uncorrected_gloscope.rds` and
+  `Parkinson_batch_effect_uncorrected_gloscope.rds`. The selected R worker
+  used the bc021d9 counts-free H5AD loader; no counts layer was materialized
+  for GloScope. No other method or dataset was selected. Uncorrected
+  GloScope is now closed; the remaining uncorrected blocker is Alzheimer
+  `prepare_pseudobulk` and its dependent pseudobulk/composition rows.
+- **Alzheimer pseudobulk memory-safe correction committed:** Commit
+  `d83ac1d` adds an h5py-only, bounded CSR aggregator that retains only the
+  sample-by-gene pseudobulk matrix and selected sample metadata. The prepare
+  worker now builds a sample-level Seurat object from that aggregate, so it
+  preserves the existing `AggregateExpression`/DESeq2 normalization semantics
+  without materializing the 1,395,601-cell count matrix. MOFA and batch-mode
+  pseudobulk result workers also use sample metadata/count-free paths when
+  cached pseudobulks suffice, while ordinary CT pseudobulk and scITD retain
+  their required cell counts. Focused Python, R-helper, and actual prepare
+  worker regressions passed; Bamboo is synchronized to
+  `d83ac1d`.
+
+- **Pseudobulk source-matched runtime reviewed:** Gate
+  `ecoda_runtime_build_bassez_rolling_d83ac1d_pseudobulk_20260905234243Z`
+  completed at `2026-09-05T23:53:44Z`; its single inspect at
+  `2026-09-05T23:54:33Z` covered scheduler job `4382417` with one passing
+  accounting query, all five artifact contracts, terminal commands, and
+  immutable fingerprints. Luna Max approved at `2026-09-05T23:55:36Z`; the
+  gate is release-eligible and its image is
+  `ecoda-py-cuda13-path-preserving-d83ac1d-reviewed.sif`.
+
+- **Alzheimer prepare-pseudobulk recovery completed and reviewed:** Gate
+  `ecoda_bassez_rolling_b5_alzheimer_prepare_pseudobulk_bigmem_d83ac1d_20260905235603Z`
+  completed at `2026-09-06T00:46:26Z`. Its single inspect at
+  `2026-09-06T00:47:31Z` covered preflights `4382422`/`4382423`, method array
+  `4382424`, watchdog `4382425`, and aggregate gate `4382426`; every required
+  accounting row was `COMPLETED|0:0`, and all five artifact contracts,
+  terminal audits, immutable fingerprints, and the overall audit passed.
+  Luna Max approved at `2026-09-06T00:48:23Z`; the gate is release-eligible.
+  The wrapper produced and synchronized
+  `Alzheimer_batch_effect_uncorrected_pseudobulk_hvg2000.rds` and its
+  checksum. The bounded CSR aggregation replaced the prior full-count OOM.
+
+- **Alzheimer dependent pseudobulk/composition recovery completed and
+  reviewed:** Gate
+  `ecoda_bassez_rolling_b5_alzheimer_pseudobulk_composition_bigmem_d83ac1d_20260906004850Z`
+  completed at `2026-09-06T01:36:09Z`; its single inspect at
+  `2026-09-06T01:37:13Z` covered preflights `4382433`/`4382441`, arrays
+  `4382442`/`4382444`, watchdogs `4382443`/`4382445`, and aggregate
+  `4382446`. All required accounting rows were `COMPLETED|0:0`; all five
+  artifact contracts, terminal audits, immutable fingerprints, and the
+  overall audit passed. Luna Max approved at `2026-09-06T01:38:23Z`; the gate
+  is release-eligible. It synchronized the Alzheimer pseudobulk,
+  composition, and metadata RDS bundles plus checksums.
+
+- **Full uncorrected batch audit exposed two preserved failures:** Gate
+  `ecoda_bassez_rolling_b5_batch_uncorrected_audit_d83ac1d_20260906014011Z`
+  reached durable `FAILED` at `2026-09-06T05:47:48Z`. Strict validation
+  skipped intact rows and submitted the remaining invalid artifacts. The
+  composition array `4382483`/watchdog `4382484` failed because Parkinson's
+  configured high-resolution column
+  `leiden_res_5_batch_effect_uncorrected_hvg2000` was renamed in place to
+  `RNA_snn_res.5` before the caller used the configured name. The MrVI array
+  `4382485` hit `OUT_OF_MEMORY|0:125`; its watchdog recorded a completed
+  `4382711` retry, but the original array remains non-`COMPLETED` and cannot
+  release this gate. Other retry rows are preserved.
+
+- The required single terminal inspect ran at `2026-09-06T05:49:22Z` with one
+  accounting query covering all 15 recorded IDs. It matched the composition
+  and original MrVI failures above plus aggregate gate `4382491 FAILED|1:0`;
+  the audit failed and no reviewer approval was issued. Commit `eafff66`
+  now preserves configured Leiden source columns while adding the legacy
+  aliases; focused mapping, pseudobulk, and mode regressions passed. Bamboo
+  is synchronized to `eafff66`. A source-matched runtime rebuild/review is
+  required before a new no-force full uncorrected audit; no unchanged rerun
+  is allowed.
+
+- **Composition-fix runtime reviewed:** Gate
+  `ecoda_runtime_build_bassez_rolling_eafff66_compositionfix_20260906055522Z`
+  completed at `2026-09-06T06:05:54Z`; its single inspect at
+  `2026-09-06T06:06:48Z` covered scheduler job `4382785`, with accounting,
+  all five artifact contracts, terminal commands, and immutable fingerprints
+  passing. Luna Max approved at `2026-09-06T06:07:53Z`; the gate is
+  release-eligible.
+
+- **Second full uncorrected audit failed only on missing Alzheimer MrVI:**
+  Gate
+  `ecoda_bassez_rolling_b5_batch_uncorrected_audit_eafff66_retry_20260906060835Z`
+  reached durable `FAILED` at `2026-09-06T11:53:31Z`. The corrected
+  composition mapping passed; strict validation and reruns produced the
+  remaining method artifacts, but the Alzheimer MrVI Feather remained
+  missing. The original MrVI array `4382873` had two `OUT_OF_MEMORY|0:125`
+  rows, and retry array `4383121` completed while its retry task log
+  processed Joanito even though
+  `batch_effect_uncorrected__mrvi.retry_1.tsv` contained Alzheimer/Parkinson.
+  This retry-manifest/worker mismatch is preserved as a failed recovery, not
+  treated as successful Alzheimer completion.
+
+- The required single terminal inspect ran at `2026-09-06T11:55:54Z` with one
+  accounting query covering all 18 emitted scheduler IDs. It matched 90
+  `COMPLETED|0:0` rows and two preserved `OUT_OF_MEMORY|0:125` rows
+  (`4382873` and extra task `4382883`); the gate audit failed and no reviewer
+  approval was issued. Commit `707468e` now binds OOM retries explicitly to
+  `MATRIX_RETRY_MANIFEST` and streams only selected HVG raw counts for
+  MrVI/scPoli instead of materializing all genes. Focused count-loader,
+  retry-manifest, pseudobulk, and batch-mode regressions passed; Bamboo is
+  synchronized to `707468e`.
+
+- **MrVI-subset runtime reviewed:** Gate
+  `ecoda_runtime_build_bassez_rolling_707468e_mrvi_subset_20260906120918Z`
+  completed at `2026-09-06T12:20:47Z`; its single inspect at
+  `2026-09-06T12:22:00Z` covered scheduler job `4383277`, with accounting,
+  all five artifact contracts, terminal commands, and immutable fingerprints
+  passing. Luna Max approved at `2026-09-06T12:23:25Z`; the gate is
+  release-eligible and its image is
+  `ecoda-py-cuda13-path-preserving-707468e-reviewed.sif`.
+
+- **Targeted Alzheimer MrVI recovery completed and reviewed:** Gate
+  `ecoda_bassez_rolling_b5_alzheimer_mrvi_gpu_707468e_20260906122358Z`
+  completed at `2026-09-06T15:43:07Z`. Its single inspect at
+  `2026-09-06T15:44:55Z` covered preflight `4383294`, method array `4383311`,
+  watchdog `4383312`, and aggregate `4383313`; all required accounting rows
+  were `COMPLETED|0:0`, and all artifact contracts, terminal audits,
+  immutable fingerprints, and the overall audit passed. Luna Max approved at
+  `2026-09-06T15:45:59Z`; the gate is release-eligible. It produced and
+  synchronized `Alzheimer_batch_effect_uncorrected_hvg2000_highres_mrvi_dists.feather`
+  with its checksum using the selected-HVG loader.
+
+- The corrected retry binding was exercised by the targeted run without an
+  OOM retry; the full current-source uncorrected audit can now be repeated
+  without force to close the branch. No broad recomputation is allowed.
+
+- **Final uncorrected audit wrapper failed on Stephenson composition:** Gate
+  `ecoda_bassez_rolling_b5_batch_uncorrected_final_707468e_20260906154643Z`
+  reached remote terminal `FAILED` at `2026-09-06T22:36:11Z` after all method
+  scheduler chains completed. RDS validation rejected
+  `Stephenson_batch_effect_uncorrected_composition.rds` because its three
+  combo keys omitted the expected `ECODA_HiTME_HR_layer2` and
+  `ECODA_scATOMIC_HR` entries. The source H5AD contains both annotation
+  columns; the counts-free R worker simply had not requested them.
+
+- The completion transport outage was recovered through the durable status
+  record. The required single inspect ran at `2026-09-07T10:08:17Z` with one
+  accounting query covering preflights `4383592`/`4383906`, arrays
+  `4383937`/`4383946`/`4383948`/`4383950`/`4383952`/`4383954`/`4383956`,
+  watchdogs `4383938`/`4383947`/`4383949`/`4383951`/`4383953`/`4383955`/
+  `4383957`, and aggregate `4383958`; all required rows were
+  `COMPLETED|0:0`, and the profile audit passed. The local lifecycle remains
+  `PRELAUNCH_STOP` because the wrapper exited nonzero, so no reviewer approval
+  was issued and this gate is not release-eligible.
+
+- **Batch contract correction committed:** The earlier `6c05613` runtime
+  build completed at `2026-09-07T10:23:21Z` but was not inspected, reviewed,
+  or adopted. After clarification, commit `0c25455` narrows batch composition
+  generation to `ECODA_authors_HR`, `ECODA_authors_HR_NULL`, and
+  `ECODA_seuratres_2`; the validator requires those three and permits only
+  the recognized legacy extras `ECODA_HiTME_HR_layer2` and
+  `ECODA_scATOMIC_HR`. Ordinary benchmark composition retains its annotation
+  outputs, and batch workers no longer request those optional columns.
+  Existing extra bundles are ignored for validity beyond that allowlist. The
+  focused batch-composition and RDS-contract regressions passed; Bamboo is
+  synchronized to `0c25455`.
+
+- **Batch-contract source fix is now complete:** Commit `12373b3` restores
+  the root-mode validator's batch `stem`/result-file path construction and
+  adds root-mode coverage proving base-only and allowlisted legacy-extra
+  composition bundles pass while missing/unknown keys fail. The focused
+  regression passes, and Bamboo is synchronized to
+  `12373b3d3409c06c2caef48a2db448a6570f6cbb`.
+
+- **Batch-contract runtime reviewed:** Gate
+  `ecoda_runtime_build_bassez_rolling_12373b3_batch_contract_20260907104734Z`
+  completed at `2026-09-07T10:59:03Z`; its single inspect at
+  `2026-09-07T11:00:21Z` covered scheduler job `4385036`, with accounting,
+  all five artifact contracts, terminal commands, and immutable fingerprints
+  passing. Luna Max approved at `2026-09-07T11:01:45Z`; the gate is
+  release-eligible and its image is
+  `ecoda-py-cuda13-path-preserving-12373b3-reviewed.sif`.
+
+- **Final no-force uncorrected audit was canceled as overbroad:** Gate
+  `ecoda_bassez_rolling_b5_batch_uncorrected_final_12373b3_20260907110212Z`
+  launched at `2026-09-07T11:03:01Z` with the reviewed 12373b3 runtime and
+  exact twelve-row selection, but its exact wrapper included all seven
+  methods. It skipped the 48 validated `prepare_pseudobulk`, `pseudobulk`,
+  `gloscope`, and `composition` artifacts, then submitted MRVI/PILOT/QOT
+  arrays and watchdogs (`4385850`/`4385852`, `4385853`/`4385865`, and
+  `4385866`/`4385867`). The H5AD and R preflights were `4385714` and
+  `4385842`. This was an unnecessary compute launch for a contract repair.
+
+- **Overbroad gate contained:** After explicit user approval, `scancel` was
+  issued for `4385714`, `4385842`, `4385850`, `4385852`, `4385853`, `4385865`,
+  `4385866`, and `4385867`, and the named durable tmux runner was terminated.
+  The existing durable waiter recorded terminal `FAILED` with exit code 143
+  at `2026-09-07T13:17:13Z`. The single first inspect ran at
+  `2026-09-07T13:18:43Z`, issued one accounting query over the six
+  array/watchdog IDs, and recorded `audit_state: COMPLETED`,
+  `audit.passed: false`, `state: FAILED`, and `release_eligible: false`.
+  PILOT array/watchdog accounting rows were completed; MRVI and QOT
+  array/watchdog rows were canceled. No reviewer approval or dependent gate
+  was started. Run-owned logs, manifests, and partial artifacts were
+  preserved; the preflight IDs were canceled but were not included in the
+  typed array/watchdog accounting list.
+
+- **No-unnecessary-compute guardrail strengthened:** `AGENTS.md` now makes
+  repair/validation no-compute by default, prohibits broad method or
+  all-dataset selections and `--force` for repair work, requires explicit
+  dataset/view/method row counts and rationale before compute, and mandates
+  immediate cancellation plus one failed inspect when emitted scope exceeds
+  approval.
+- **Batch-unccorrected local snapshot transfer completed:** Per the user's
+  explicit request, the complete current scratch tree
+  `$HOME/scratch/ECODA_paper/batch_effect/uncorrected/` was copied with
+  `rsync` to the local mirror
+  `/Users/christianhalter/Desktop/ECODA_paper/data/batch_effect/uncorrected/`.
+  The transfer included `results/`, `embeddings/`, `pseudobulks/`,
+  `gloscope_dists/`, and the existing `checksums.md5` plus sidecars:
+  348 files total, 343 transferred, 101801831 bytes. This records completion
+  of the requested local snapshot, not a new HPC computation or a passing
+  durable benchmark gate; existing partial/unpromoted artifacts remain
+  preserved as-is.
+- A NAS overlay was attempted after the initial scratch copy and transferred
+  10 changed files; it was not treated as authoritative. The final
+  authoritative local sync used `rsync -a --delete` from the HPC scratch
+  source to the local destination. It removed only local NAS-only entries
+  (`@eaDir/`, its Synology metadata, `.DS_Store`, and the NAS-only Alzheimer
+  MRVI sidecar); it did not contact or modify NAS. No file bytes needed
+  retransmission, and a final `rsync -ani --delete` reported no differences.
+  The local destination now follows the HPC scratch tree; existing partial or
+  unpromoted source artifacts remain preserved as-is.
