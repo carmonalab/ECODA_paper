@@ -74,8 +74,8 @@ notebooks/dataset_onboarding/*_files/
 /.quarto/
 **/*.quarto_ipynb
 
-# Durable gate state records; preserve audit/source scripts in these roots
-/.gate/**/*.json
-/.gate/**/*.json.lock
+# Durable gate state and run-owned audit captures are local-only. No
+# pipeline source or test invokes files under .gate/.
+/.gate/
 /.kilo/gates/**/*.json
 /.kilo/gates/**/*.json.lock
