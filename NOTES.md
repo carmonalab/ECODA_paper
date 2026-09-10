@@ -628,3 +628,154 @@ explicit `Unknown` level only in a separately documented sensitivity analysis;
 the main batch-effect pass does not impute metadata because that would create
 an artificial covariate level and could manufacture batch signal. Biological
 labels remain ground-truth evaluation fields and are never imputed.
+
+## 9. Standalone ECODA derived analyses
+
+The first approved derived-analysis phase is read-only with respect to the
+completed Stage 3--5 outputs.  It does not edit `datasets.json`, source H5ADs,
+canonical composition/pseudobulk/MOFA RDS files, or generic Stage 5 dispatch
+and validators.  No existing benchmark method is rerun or overwritten.
+
+### 9.1 Independent res50 and Harmony bundles
+
+The local derived runner has three explicit, mutually exclusive selectors:
+`--analysis res50`, `--analysis harmony`, and `--analysis cell_subsetting`.
+The first two selectors are independent standalone analyses; neither selector
+reruns or overwrites an ordinary Stage 5 method, and neither selector emits the
+other selector's output.
+
+The `res50` run emits exactly one RDS per selected dataset,
+`<DS>_ECODA_seuratres_50.rds` (+ `.rds.md5`).  Its source contract is the
+existing `leiden_res_50_benchmark_analysis_hvg2000` observation column and
+`X_pca_benchmark_analysis_hvg2000` embedding; its manifest method is
+`ECODA_seuratres_50`, displayed as `ECODA_Leiden_res_50`.
+
+The `harmony` run emits exactly one RDS per selected dataset,
+`<DS>_ECODA_seuratres_2_harmony.rds` (+ `.rds.md5`).  Its source contract is
+the existing `leiden_res_2_benchmark_analysis_hvg2000_harmony` observation
+column and `X_pca_harmony_benchmark_analysis_hvg2000` embedding; its manifest
+method is `ECODA_seuratres_2_harmony`, displayed as
+`ECODA_Leiden_res_2_harmony`.
+
+Each invocation is a separate run identity: use a distinct run-owned output
+directory and `run_id` for res50 versus Harmony.  The manifest `analysis`
+field, not the filename alone, is authoritative for selecting the notebook
+root.
+
+The runner's top-level output root is `ECODA_DERIVED_ROOT`, defaulting to
+`data/benchmark/results/derived`; every invocation must use a fresh strict
+descendant run directory.  Keep selector identities separate with
+analysis-specific paths such as `data/benchmark/results/derived/res50/<run_id>`
+and `data/benchmark/results/derived/harmony/<run_id>`.  The notebook roots
+point directly to those completed run directories through
+`ECODA_DERIVED_RES50_DIR` and `ECODA_DERIVED_HARMONY_DIR`.  When either
+variable is unset, that derived analysis is not loaded and baseline notebook
+behavior is unchanged.  When set, the root must name an existing run
+directory and the loader fails closed on non-completed status, wrong analysis,
+mismatched run/source provenance, escaped paths, checksums, source H5AD
+identities, or invalid bundle fields.  The runner and notebook both require
+complete, ordered benchmark sample bundles.
+Run and source manifests record the exact selector analysis.  A completed
+res50 or Harmony run manifest must record exactly one expected output method
+and filename per source dataset; the cell-subsetting manifest retains its exact
+RDS/CSV pair.  Raw-config union selection, source checksum/schema/root/owner
+checks, and all existing fail-closed validation remain in force.
+
+The standalone res50 method remains in the shared Figure 3A/X3B annotation
+method block when its root is opted in.  It is intentionally not added to
+Figure 2A or Supp fig 2, and the ordinary Stage 5 `ECODA_seuratres_2` method
+is unchanged.  Neither derived path recomputes PCA, Harmony, neighbors, or
+Leiden, and Harmony is never mapped to an `RNA_snn_res.*` alias.
+
+### 9.2 Author cell-depth subsetting
+
+The cell-subsetting run is a separate explicit run-owned directory selected by
+`ECODA_DERIVED_CELL_SUBSETTING_DIR`; it is opt-in and has no notebook default.
+Its artifacts are:
+`ECODA_authors_HR_cell_subsetting.rds` (+ `.rds.md5`) and
+`ECODA_authors_HR_cell_subsetting.csv`.  In ordinary H5AD mode the runner
+reads only the configured `Sample`, `cell_type_high_res`, and biological label
+columns from the authoritative `benchmark_analysis` H5ADs; in snapshot mode
+the same contract is served from the compact cache.  The biological label is
+used only for scoring.
+
+The exact target order is `all cells, 2000, 1000, 500, 400, 300, 200, 150,
+100, 50`.  The `all cells` baseline is one unmodified row
+(`replicate = 0`, `seed = NA`).  Every other target has exactly 20
+without-replacement subsamples with seeds `101:120`; each sample keeps
+`min(original_cell_count, target)` cells and all samples remain present.
+Replicate-level ANOSIM values, sample IDs, effective per-sample counts, total
+cell counts, target, replicate, and seed remain in the RDS/CSV diagnostics.
+The final notebook plot uses dataset means across the 20 subsamples, connects
+dataset-level points with lines, and draws aggregate dataset-mean bars with
+standard-error whiskers as
+`Supp_fig_X_ECODA_authors_HR_cell_subsetting.pdf`.
+
+### 9.3 One-time HPC composition snapshot and local reuse
+The full processed `benchmark_analysis` H5ADs remain on Bamboo scratch at
+`/home/users/h/halterc/scratch/ECODA_paper/<dataset>/output/<benchmark_analysis output_file_name>`
+with their adjacent `.md5` files.  The composition extractor is a one-time,
+explicitly scoped HPC job: it reads each full H5AD once, pulls only the
+cell-level metadata needed to form the compact composition tables, and
+publishes a fresh run-owned `derived_composition_snapshot.rds` with its
+checksum and `composition_snapshot_manifest.json`.  The cache records the
+verified remote H5AD path, MD5, size, mtime, and configured label/high-
+resolution column names as provenance; those source files are not copied to
+macOS.
+
+After the compact cache is synchronized locally, each standalone selector
+(`res50`, `harmony`, and `cell_subsetting`) may reuse that same snapshot with
+`--composition_snapshot`.  Snapshot-backed derived run/source manifests record
+`source_mode=composition_snapshot`, the local snapshot path, and its MD5.
+Notebook loading verifies the local snapshot manifest, RDS sidecar checksum,
+size, config identity, source provenance, and every derived-output checksum.
+Remote H5AD paths are retained for audit only and are never reopened in this
+mode; ordinary H5AD-mode runs continue to require local source files and
+matching sidecars.
+
+This cache workflow does not invoke any Pipeline 1--5 script and does not
+change the Figure 2A/default method set.  When opted in, res50 and Harmony
+remain in the shared Figure 3A/X3B scope, while cell-subsetting remains the
+independent `Supp_fig_X_ECODA_authors_HR_cell_subsetting.pdf` analysis.  No
+expression/count matrix, embedding, or full H5AD is transferred to or
+retained on macOS.
+
+### 9.4 Deferred MOFAcellulaR decision
+
+MOFAcellulaR remains conditional and is not loaded, installed, rerun, or added
+to any method list in this phase.  Its package source/verified Git SHA and
+runtime/packaging strategy are still a user-reviewed decision because the
+current Pixi lock cannot represent the verified SHA natively.  A separate
+`_debug` feasibility pass (and review of its result) is required before any
+production MOFAcellulaR artifact or durable HPC launch.  Until that decision
+and debug review are complete, Figure 2A defaults and all existing MOFA
+artifacts remain unchanged.
+### 9.5 Fast obs-only figure refresh — 2026-09-10
+
+For the immediate Figure 3A/Supp fig 18 refresh, Bamboo job `4398864` read
+only `obs` metadata from the 11 configured benchmark-analysis H5ADs:
+`Sample`, the configured biological-label column, and the persisted res50 and
+Harmony Leiden columns. It did not read `X`, `layers["counts"]`, `obsm`, or
+transfer any H5AD. The compact local artifacts are under
+`data/benchmark/results/derived/fast_obs_20260910/`, including the long
+composition table, labels, source metadata, and res50/Harmony sample-by-cell
+type count matrices.
+
+The refreshed outputs are
+`plots/Figure_3_A_annotationmethods_barplot_anosim.pdf`,
+`plots/Supp_fig_18_annotationmethods_barplot_mod_ari.pdf`, and
+`plots/Figure_X3_B_number_of_celltypes.pdf`. Figure 3A and Supp fig 18 include
+`ECODA_Leiden_res_50` and `ECODA_Leiden_res_2_harmony`; Figure X3B includes
+both methods, starts its log10 y-axis at 2 cell types, labels the axis
+`Number of cell types (log10 scale)`, and uses intermediate 2–3–5 ticks
+through 1000. It remains 5×5 inches so the legend is not clipped. Figure 2A
+defaults are unchanged. The compact-input refresh is a fast figure-generation
+artifact, not a replacement for the run-owned snapshot workflow used by the
+standalone runner.
+
+The fast MOFA sanity check found `MOFA2` and `reticulate`, but
+`MOFAcellulaR` is not installed in the existing Bamboo environment
+(`MOFAcellulaR=FALSE`), so no `_debug` model could run. The wrapper remains
+source-only and fail-closed. Its debug source check uses the current source's
+actual unique Sample IDs (at least two), rather than assuming a fixed
+five-sample universe.

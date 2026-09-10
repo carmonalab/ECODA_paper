@@ -27,8 +27,10 @@ method_label_map_annotation <- c(
   "ECODA_seuratres_0.1" = "ECODA_Leiden_res_0.1",
   "ECODA_seuratres_0.4" = "ECODA_Leiden_res_0.4",
   "ECODA_seuratres_2" = "ECODA_Leiden_res_2",
+  "ECODA_seuratres_2_harmony" = "ECODA_Leiden_res_2_harmony",
   "ECODA_seuratres_5" = "ECODA_Leiden_res_5",
   "ECODA_seuratres_20" = "ECODA_Leiden_res_20",
+  "ECODA_seuratres_50" = "ECODA_Leiden_res_50",
   "ECODA_HiTME_HR_layer2" = "ECODA_HiTME",
   "ECODA_scATOMIC_HR" = "ECODA_scATOMIC"
 )

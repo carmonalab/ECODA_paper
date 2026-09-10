@@ -110,6 +110,48 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   `Gongsharma_cmv_young_males`, `Kfoury`, `Kim`, `Lee`, `Pelka`, `Smillie`,
   `Stephenson`, `Wu`, and `Zhang`. This is the completed baseline, not a
   request to recompute those rows.
+### Explicit user override for the derived-analysis work
+
+- **Pipeline 1–5 benchmark completion is authoritative.** The user confirms
+  that all existing benchmark-analysis processing completed successfully.
+  Stale, failed, or outdated gate records MUST NOT be interpreted as evidence
+  that the completed baseline requires rerunning or invalidation.
+- Local Harmony, standalone unsupervised Leiden resolution 50, and
+  ECODA-authors cell-subsetting analyses are derived analyses only. They MUST
+  NOT launch any Pipeline 1–5 or other `src/` pipeline jobs on HPC. They read
+  the fully processed `benchmark_analysis` H5ADs from HPC scratch when local
+  subset mirrors are unavailable; local subset mirrors MUST NOT be treated as
+  the full-cohort source.
+- Existing benchmark H5ADs, RDS bundles, pseudobulks, checksums, manifests,
+  and gates remain valid and immutable. New derived outputs MUST use separate
+  run-owned output roots and MUST NOT overwrite or invalidate those artifacts.
+- MOFAcellulaR MAY use explicitly approved test scripts or allocations, but
+  MUST NOT launch unrelated HPC jobs or any existing Pipeline 1–5 script.
+  Changes to pinned Pixi, MOFA2, or mofapy2 versions still require explicit
+  user confirmation.
+
+### Local resource boundary for full-cohort derived analyses
+
+- The local workstation has 64 GB RAM and less than 100 GB free disk.
+  Full benchmark H5ADs MUST NOT be copied, staged, or retained on the local
+  workstation.
+- Local execution MUST NOT materialize whole-cohort expression/count matrices.
+  When full H5ADs are needed, operate against their authoritative HPC-scratch
+  or NAS location and read only the metadata required for the derived result:
+  `Sample`, configured biological-label/cell-type columns, and the persisted
+  Leiden columns/embeddings required by the standalone contract.
+- Derived computation MUST aggregate the required cell-type composition
+  dataset-by-dataset and release each dataset’s metadata before processing the
+  next. Local subset mirrors are not substitutes for full-cohort H5ADs.
+- A standalone `run_local_ecoda_derived.R` invocation against existing full
+  `benchmark_analysis` H5ADs on HPC scratch is allowed for these derived
+  analyses when it uses a fresh separate derived output root; only Pipeline
+  1--5, preprocessing, annotation, and Stage 5 submitters are forbidden.
+  Local subset mirrors are never valid substitutes for those full sources.
+- The only permitted local transfer is an explicitly scoped small debug or
+  metadata artifact. Never pull full benchmark H5ADs to satisfy a local
+  runner.
+
 - **Batch-effect baseline and pending rows:** the historical
   `batch_effect_uncorrected` selection was processed, but it is not
   terminally complete after the recent `datasets.json` update. `Lupus_PBMC`
@@ -121,9 +163,10 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   `Covid19_PBMC`, `Kidney_KPMP_full`, `Myocardial_infarction`, `Diabetes`,
   `Lupus_PBMC`, `Lung`, and `Parkinson`; the two changed datasets and the new
   Kidney key are pending targeted validation/rerun.
-- **Routine verification:** `_debug` is a five-sample verification fixture,
-  not a production cohort. Use it separately for routine checks in both
-  configured views.
+- **Routine verification:** `_debug` is a non-production verification fixture
+  whose sample universe may be expanded as the source is refreshed. Derived
+  probes must read and record its actual unique `Sample` IDs, use it
+  separately from production cohorts, and require at least two valid samples.
 - **Annotation exemption:** `Alzheimer`, `Diabetes`, and `Parkinson` remain
   covered by the existing `not_suitable_for_auto_annotation` exemption.
   Historical batch processing does not imply that automatic HiTME/scATOMIC
