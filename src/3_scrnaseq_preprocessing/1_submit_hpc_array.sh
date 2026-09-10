@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ECODA_RUNTIME_MODE_REQUESTED="${ECODA_RUNTIME_MODE:-}"
 source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 export ECODA_GATE_STAGE=stage3
@@ -92,19 +93,190 @@ if ! command -v jq >/dev/null 2>&1; then
   echo "ERROR: jq is required for Stage 3 selection." >&2
   exit 1
 fi
-mkdir -p "${LOGS_DIR}" || {
-  echo "ERROR: could not create Stage 3 log directory." >&2
-  exit 1
+
+stage3_manifest_value() {
+  local manifest="$1" key="$2" value
+  [[ -f "${manifest}" && ! -L "${manifest}" && -r "${manifest}" ]] || return 1
+  value="$(awk -v wanted="${key}" '
+    index($0, wanted "=") == 1 {
+      count++
+      result=substr($0, length(wanted) + 2)
+    }
+    END {
+      if (count != 1 || result == "") exit 1
+      print result
+    }
+  ' "${manifest}")" || return 1
+  printf '%s\n' "${value}"
 }
-export ECODA_RUNTIME_PROFILE=stage3
-ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" || {
-  echo "ERROR: Stage 3 immutable runtime validation failed." >&2
-  exit 1
+
+stage3_copy_atomic() {
+  local source="$1" destination="$2" temporary
+  [[ -f "${source}" && ! -L "${source}" && -r "${source}" ]] || return 1
+  mkdir -p "$(dirname "${destination}")" || return 1
+  temporary="${destination}.build.$$"
+  rm -f "${temporary}"
+  cp "${source}" "${temporary}" || {
+    rm -f "${temporary}"
+    return 1
+  }
+  chmod 600 "${temporary}" || {
+    rm -f "${temporary}"
+    return 1
+  }
+  mv -f "${temporary}" "${destination}" || {
+    rm -f "${temporary}"
+    return 1
+  }
 }
-RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage3 0)" || {
-  echo "ERROR: Stage 3 runtime export construction failed." >&2
-  exit 1
+
+stage3_load_bound_run() {
+  local source_copy="${ECODA_RUN_ROOT:-}/manifests/source.manifest"
+  local runtime_identity="${ECODA_RUN_ROOT:-}/manifests/runtime.identity"
+  local source_root source_manifest_original runtime_image runtime_manifest
+  local snapshot_root source_format runtime_format identity_count
+  [[ -n "${ECODA_RUN_ROOT:-}" && -d "${ECODA_RUN_ROOT}" ]] || return 2
+  [[ -s "${source_copy}" && ! -L "${source_copy}" && -r "${source_copy}" ]] || return 2
+  [[ -s "${runtime_identity}" && ! -L "${runtime_identity}" && -r "${runtime_identity}" ]] || return 2
+  ecoda_validate_run_owned_path "${source_copy}" "${ECODA_RUN_ROOT}" || return 1
+  ecoda_validate_run_owned_path "${runtime_identity}" "${ECODA_RUN_ROOT}" || return 1
+  source_format="$(stage3_manifest_value "${source_copy}" FORMAT)" || return 1
+  [[ "${source_format}" == "1" ]] || return 1
+  source_root="$(stage3_manifest_value "${source_copy}" SOURCE_ROOT)" || return 1
+  [[ "${source_root}" = /* && "${source_root}" == */tree ]] || return 1
+  snapshot_root="${source_root%/tree}"
+  source_manifest_original="${snapshot_root}/identity/source.manifest"
+  [[ -f "${source_manifest_original}" && ! -L "${source_manifest_original}" &&
+     -r "${source_manifest_original}" ]] || return 1
+  cmp -s "${source_copy}" "${source_manifest_original}" || {
+    echo "ERROR: run-owned Stage 3 source manifest differs from immutable snapshot." >&2
+    return 1
+  }
+  runtime_image="$(stage3_manifest_value "${runtime_identity}" RUNTIME_IMAGE)" || return 1
+  runtime_manifest="$(stage3_manifest_value "${runtime_identity}" RUNTIME_MANIFEST)" || return 1
+  [[ "${runtime_image}" = /* && "${runtime_manifest}" = /* ]] || return 1
+  identity_count="$(wc -l < "${runtime_identity}" | tr -d '[:space:]')" || return 1
+  runtime_format="$(_ecoda_runtime_manifest_value "${runtime_manifest}" FORMAT 2>/dev/null || true)"
+  case "${runtime_format}" in
+    1) [[ "${identity_count}" == "6" ]] || return 1 ;;
+    2) [[ "${identity_count}" == "8" ]] || return 1 ;;
+    *) return 1 ;;
+  esac
+  SOURCE_ROOT="${source_root}"
+  SOURCE_MANIFEST_ORIGINAL="${source_manifest_original}"
+  SOURCE_MANIFEST_RUN="${source_copy}"
+  RUNTIME_IDENTITY="${runtime_identity}"
+  export ECODA_SOURCE_ROOT="${SOURCE_ROOT}"
+  export ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST_ORIGINAL}"
+  export ECODA_SOURCE_SNAPSHOT_REQUIRED=1
+  export ECODA_AUX_ROOT="${SOURCE_ROOT%/}/aux"
+  export ECODA_RUNTIME_IMAGE="${runtime_image}"
+  export ECODA_RUNTIME_MANIFEST="${runtime_manifest}"
+  export ECODA_RUNTIME_IDENTITY="${RUNTIME_IDENTITY}"
+  export ECODA_RUN_ID="${RUN_ID}"
+  export ECODA_RUNTIME_MODE="${ECODA_RUNTIME_MODE:-apptainer}"
+  PROJECT_ROOT="${SOURCE_ROOT}"
+  DATASETS_JSON_FILE="${PROJECT_ROOT}/datasets.json"
+  SCRIPT_DIR="${PROJECT_ROOT}/src/3_scrnaseq_preprocessing"
+  export PROJECT_ROOT DATASETS_JSON_FILE
+  LOGS_DIR="${ECODA_LOGS_DIR:-${LOGS_DIR:-${ECODA_RUN_ROOT}/logs}}"
+  export LOGS_DIR ECODA_LOGS_DIR="${LOGS_DIR}"
+  return 0
 }
+
+stage3_record_identity_metadata() {
+  local source_commit source_archive source_archive_sha source_config source_datasets
+  local source_toml source_lock source_aux source_branch key value tmp
+  local runtime_image runtime_manifest image_sha manifest_sha image_size manifest_size
+  local image_toml image_lock
+  source_commit="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_COMMIT)" || return 1
+  source_archive="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ARCHIVE_PATH)" || return 1
+  source_archive_sha="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ARCHIVE_SHA256)" || return 1
+  source_config="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" CONFIG_HELPER_SHA256)" || return 1
+  source_datasets="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" DATASETS_SHA256)" || return 1
+  source_toml="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" PIXI_TOML_SHA256)" || return 1
+  source_lock="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" PIXI_LOCK_SHA256)" || return 1
+  source_aux="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" AUX_ROOT)" || return 1
+  source_branch="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SCGATE_DB_BRANCH)" || return 1
+  runtime_image="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE)" || return 1
+  runtime_manifest="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST)" || return 1
+  image_sha="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SHA256)" || return 1
+  manifest_sha="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SHA256)" || return 1
+  image_size="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SIZE)" || return 1
+  manifest_size="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SIZE)" || return 1
+  image_toml="$(stage3_manifest_value "${RUNTIME_IDENTITY}" IMAGE_PIXI_TOML_SHA256 2>/dev/null || true)"
+  image_lock="$(stage3_manifest_value "${RUNTIME_IDENTITY}" IMAGE_PIXI_LOCK_SHA256 2>/dev/null || true)"
+  tmp="${ECODA_RUN_ROOT}/metadata.build.$$"
+  {
+    cat "${ECODA_RUN_ROOT}/metadata"
+    printf 'SOURCE_MANIFEST=%s\nSOURCE_MANIFEST_COPY=%s\nSOURCE_ROOT=%s\nSOURCE_COMMIT=%s\nSOURCE_ARCHIVE_PATH=%s\nSOURCE_ARCHIVE_SHA256=%s\nSOURCE_CONFIG_HELPER_SHA256=%s\nSOURCE_DATASETS_SHA256=%s\nSOURCE_PIXI_TOML_SHA256=%s\nSOURCE_PIXI_LOCK_SHA256=%s\nSOURCE_AUX_ROOT=%s\nSOURCE_SCGATE_DB_BRANCH=%s\n' \
+      "${SOURCE_MANIFEST_ORIGINAL}" "${SOURCE_MANIFEST_RUN}" "${SOURCE_ROOT}" \
+      "${source_commit}" "${source_archive}" "${source_archive_sha}" \
+      "${source_config}" "${source_datasets}" "${source_toml}" "${source_lock}" \
+      "${source_aux}" "${source_branch}"
+    printf 'RUNTIME_IDENTITY=%s\nRUNTIME_IMAGE=%s\nRUNTIME_MANIFEST=%s\nRUNTIME_IMAGE_SHA256=%s\nRUNTIME_MANIFEST_SHA256=%s\nRUNTIME_IMAGE_SIZE=%s\nRUNTIME_MANIFEST_SIZE=%s\n' \
+      "${RUNTIME_IDENTITY}" "${runtime_image}" "${runtime_manifest}" \
+      "${image_sha}" "${manifest_sha}" "${image_size}" "${manifest_size}"
+    [[ -n "${image_toml}" ]] && printf 'IMAGE_PIXI_TOML_SHA256=%s\n' "${image_toml}"
+    [[ -n "${image_lock}" ]] && printf 'IMAGE_PIXI_LOCK_SHA256=%s\n' "${image_lock}"
+  } > "${tmp}" || {
+    rm -f "${tmp}"
+    return 1
+  }
+  mv -f "${tmp}" "${ECODA_RUN_ROOT}/metadata" || {
+    rm -f "${tmp}"
+    return 1
+  }
+}
+
+stage3_artifact_record_valid() {
+  local path="$1" producer="$2" record
+  record="$(ecoda_artifact_record_path "${path}" "${RUN_ID}" 2>/dev/null || true)"
+  [[ -n "${record}" && -f "${record}" && ! -L "${record}" ]] || return 1
+  ecoda_validate_artifact_record "${path}" "${producer}" "${RUN_ID}"
+}
+
+stage3_artifact_record_any() {
+  local path="$1"
+  stage3_artifact_record_valid "${path}" stage3 ||
+    stage3_artifact_record_valid "${path}" stage3_preflight
+}
+
+stage3_require_new_snapshot() {
+  [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" &&
+     "${ECODA_SOURCE_ROOT:-}" = /* &&
+     "${ECODA_SOURCE_MANIFEST:-}" = /* ]] || {
+    echo "legacy_source_unpinned" >&2
+    return 1
+  }
+  [[ -f "${ECODA_SOURCE_MANIFEST}" && ! -L "${ECODA_SOURCE_MANIFEST}" &&
+     -r "${ECODA_SOURCE_MANIFEST}" ]] || return 1
+}
+
+stage3_install_source_manifest() {
+  local incoming="${ECODA_SOURCE_MANIFEST:-}"
+  local destination="${ECODA_RUN_ROOT}/manifests/source.manifest"
+  stage3_require_new_snapshot || return 1
+  stage3_copy_atomic "${incoming}" "${destination}" || return 1
+  ecoda_validate_run_owned_path "${destination}" "${ECODA_RUN_ROOT}" || return 1
+  [[ "$(stage3_manifest_value "${destination}" FORMAT)" == "1" ]] || return 1
+  [[ "$(stage3_manifest_value "${destination}" SOURCE_ROOT)" == "${ECODA_SOURCE_ROOT}" ]] ||
+    return 1
+  cmp -s "${destination}" "${incoming}" || return 1
+}
+
+stage3_source_script() {
+  local relative="$1"
+  printf '%s/%s' "${SOURCE_ROOT:-${ECODA_SOURCE_ROOT:-${SCRIPT_DIR}}}" "${relative}"
+}
+
+stage3_require_source_script() {
+  local candidate="$1"
+  [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]] || return 1
+  [[ -n "${SOURCE_ROOT:-${ECODA_SOURCE_ROOT:-}}" ]] || return 1
+  ecoda_require_source_script_path "${candidate}" "${SOURCE_ROOT:-${ECODA_SOURCE_ROOT}}"
+}
+
 
 if [[ ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
   [[ -n "${SELECTION_FILE_ARG}" ]] || {
@@ -155,7 +327,7 @@ stage3_compute_validate_existing() {
   local preflight_tmp="${preflight_manifest}.build.$$"
   local status_dir="${ECODA_RUN_ROOT}/status/h5ad_preflight"
   local ds view path safe status state status_run status_dataset status_view status_task
-  local preflight_id preflight_rc count=0 status_count=0
+  local preflight_id preflight_rc preflight_script count=0 status_count=0
   STAGE3_PREFLIGHT_MANIFEST="${preflight_manifest}"
   STAGE3_PREFLIGHT_STATUS_DIR="${status_dir}"
   [[ "${PREPROCESS_SUBMITTER_TEST:-0}" == 1 || ${FORCE_ARG} -eq 1 ]] && return 0
@@ -179,11 +351,13 @@ stage3_compute_validate_existing() {
   ecoda_write_checksum "${preflight_manifest}" || return 1
   mkdir -p "${status_dir}" "${LOGS_DIR}" || return 1
   rm -f "${status_dir}"/*.status
+  preflight_script="$(stage3_require_source_script \
+    "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_worker.sh")" || return 1
   set +e
   preflight_id="$(
     ecoda_submit_h5ad_preflight "${preflight_manifest}" "${status_dir}" \
       "${ECODA_RUN_ROOT}" classify "${PARTITION}" "${MEMORY}" "${THROTTLE}" \
-      "${LOGS_DIR}" stage3 "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_worker.sh" \
+      "${LOGS_DIR}" stage3 "${preflight_script}" \
       "${RUNTIME_EXPORT}"
   )"
   preflight_rc=$?
@@ -213,7 +387,11 @@ stage3_compute_validate_existing() {
        "${status_task}" == "$((status_count + 1))" ]] || return 1
     state="$(sed -n 's/^STATE=//p' "${status}" | head -1)"
     case "${state}" in
-      OK|REBUILD) ;;
+      OK)
+        validate_h5ad "${ds}" "${view}" "${path}" || return 1
+        stage3_artifact_record_valid "${path}" stage3_preflight || return 1
+        ;;
+      REBUILD) ;;
       *) return 1 ;;
     esac
     status_count=$((status_count + 1))
@@ -233,11 +411,16 @@ stage3_existing_output_valid() {
   [[ -s "${status}" ]] || return 2
   state="$(sed -n 's/^STATE=//p' "${status}" | head -1)"
   case "${state}" in
-    OK) return 0 ;;
+    OK)
+      validate_h5ad "${ds}" "${view}" "${path}" || return 1
+      stage3_artifact_record_valid "${path}" stage3_preflight || return 2
+      return 0
+      ;;
     REBUILD) return 1 ;;
     *) return 2 ;;
   esac
 }
+
 
 stage3_finalize_owner_manifest() {
   local state="$1" reason="$2" owners_file="${ECODA_RUN_ROOT:-}/manifests/owners.tsv"
@@ -396,10 +579,21 @@ sync_selected() {
     output="$(basename "${path}")"
     remote_dir="${NAS_TARGET_DIR}/${ds}/output"
     expected_output="${ds}/output/${output}"
-    if ! mkdir -p "${remote_dir}" ||
-       ! ecoda_validate_checksum "${path}"; then
+    if ! mkdir -p "${remote_dir}" || ! validate_h5ad "${ds}" "${view}" "${path}"; then
       rc=1
       continue
+    fi
+    if [[ -n "${ECODA_RUN_ROOT:-}" &&
+          -s "${ECODA_RUN_ROOT}/manifests/source.manifest" ]]; then
+      stage3_artifact_record_any "${path}" || {
+        rc=1
+        continue
+      }
+    else
+      ecoda_validate_checksum "${path}" || {
+        rc=1
+        continue
+      }
     fi
     local_digest="${ECODA_CHECKSUM_MD5}"
     local_size="${ECODA_CHECKSUM_SIZE}"
@@ -517,6 +711,23 @@ fi
 
 if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   ecoda_open_run "${SYNC_ONLY_RUN}" || exit 1
+  RUN_ID="${SYNC_ONLY_RUN}"
+  export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT
+  set +e
+  stage3_load_bound_run
+  bound_rc=$?
+  set -e
+  if [[ ${bound_rc} -eq 2 ]]; then
+    stage3_abort "legacy_source_unpinned"
+  fi
+  [[ ${bound_rc} -eq 0 ]] ||
+    stage3_abort "Stage 3 run-bound source/runtime identity is invalid"
+  ecoda_runtime_validate_bound_run ||
+    stage3_abort "Stage 3 run-bound runtime validation failed"
+  export ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST_ORIGINAL}"
+  RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage3 0)" ||
+    stage3_abort "Stage 3 run-bound runtime export construction failed"
+  RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_RUNTIME_IDENTITY=${RUNTIME_IDENTITY},ECODA_SOURCE_MANIFEST_RUN=${SOURCE_MANIFEST_RUN},ECODA_RUNTIME_RUN_ID=${RUN_ID}"
   MANIFEST="${ECODA_RUN_ROOT}/manifests/selection.tsv"
   PENDING_MANIFEST="${ECODA_RUN_ROOT}/manifests/pending.tsv"
   SCHEDULER_IDS_FILE="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
@@ -561,7 +772,7 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     [[ -n "${ds}" && -n "${view}" ]] || { failed=1; continue; }
     path="$(output_path_for "${ds}" "${view}")" || { failed=1; continue; }
     validate_h5ad "${ds}" "${view}" "${path}" || failed=1
-    ecoda_validate_checksum "${path}" || failed=1
+    stage3_artifact_record_any "${path}" || failed=1
   done < "${MANIFEST}"
   [[ ${failed} -eq 0 ]] ||
     stage3_abort "Stage 3 sync-only h5ad contract/checksum failed"
@@ -604,8 +815,31 @@ if [[ -n "${SELECTION_FILE_ARG}" ]]; then
   }
 fi
 
+stage3_require_new_snapshot || {
+  echo "ERROR: legacy_source_unpinned" >&2
+  exit 1
+}
+if [[ "${ECODA_RUNTIME_MODE_REQUESTED}" == "host" ]]; then
+  echo "ERROR: host_snapshot_requires_apptainer" >&2
+  exit 1
+fi
 RUN_ID="${ECODA_RUN_ID:-$(ecoda_new_run_id stage3)}"
-ecoda_init_run stage3 "${RUN_ID}" >/dev/null
+ecoda_init_run stage3 "${RUN_ID}" >/dev/null || {
+  echo "ERROR: Stage 3 run root already exists or could not be initialized." >&2
+  exit 1
+}
+export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT
+SOURCE_ROOT="${ECODA_SOURCE_ROOT}"
+SOURCE_MANIFEST_ORIGINAL="${ECODA_SOURCE_MANIFEST}"
+SOURCE_MANIFEST_RUN="${ECODA_RUN_ROOT}/manifests/source.manifest"
+RUNTIME_IDENTITY="${ECODA_RUN_ROOT}/manifests/runtime.identity"
+stage3_install_source_manifest ||
+  stage3_abort "failed to copy immutable Stage 3 source manifest"
+if [[ -z "${ECODA_RUNTIME_MODE_REQUESTED}" ]]; then
+  export ECODA_RUNTIME_MODE=apptainer
+else
+  export ECODA_RUNTIME_MODE="${ECODA_RUNTIME_MODE_REQUESTED}"
+fi
 MANIFEST="${ECODA_RUN_ROOT}/manifests/selection.tsv"
 MANIFEST_TMP="${MANIFEST}.build.$$"
 : > "${MANIFEST_TMP}"
@@ -658,6 +892,18 @@ while IFS=$'\t' read -r ds view; do
   esac
   SEEN_ROWS="${SEEN_ROWS} ${row}"
 done < "${MANIFEST}"
+export ECODA_RUNTIME_PROFILE=stage3
+ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE:-apptainer}" ||
+  stage3_abort "Stage 3 immutable runtime validation failed"
+[[ -s "${RUNTIME_IDENTITY}" && ! -L "${RUNTIME_IDENTITY}" ]] ||
+  stage3_abort "Stage 3 runtime submission did not write runtime.identity"
+stage3_load_bound_run ||
+  stage3_abort "Stage 3 run-bound source/runtime identity is invalid"
+stage3_record_identity_metadata ||
+  stage3_abort "failed to record Stage 3 source/runtime identity"
+RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage3 0)" ||
+  stage3_abort "Stage 3 runtime export construction failed"
+RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_RUNTIME_IDENTITY=${RUNTIME_IDENTITY},ECODA_SOURCE_MANIFEST_RUN=${SOURCE_MANIFEST_RUN}"
 SCHEDULER_IDS_FILE="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
 ecoda_atomic_write "${SCHEDULER_IDS_FILE}" "" ||
   stage3_abort "failed to initialize Stage 3 scheduler manifest"
@@ -721,21 +967,39 @@ fi
 rm -f "${PENDING_TMP}" "${OWNERS_TMP}"
 
 if [[ ${PENDING_COUNT} -eq 0 ]]; then
+  ecoda_validate_output_ownership stage3 "${MANIFEST}" "${RUN_ID}" 1 ||
+    stage3_abort "Stage 3 no-op output ownership validation failed"
   if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" != "1" ]] &&
      ! sync_selected "${MANIFEST}"; then
     stage3_abort "selected Stage 3 sync failed"
   fi
-  ecoda_set_run_state OK "all selected Stage 3 artifacts already validated and synced" ||
-    stage3_abort "failed to write Stage 3 terminal OK state"
+  ecoda_owner_finalize_tracked OK "Stage 3 no-op artifacts validated" ||
+    stage3_abort "failed to finalize Stage 3 no-op output owners"
+
+  NOOP_REPORT="${ECODA_RUN_REPORT:-${ECODA_RUN_ROOT}/status/noop}"
+  case "${NOOP_REPORT}" in
+    "${ECODA_RUN_ROOT}"/*) ;;
+    *) NOOP_REPORT="${ECODA_RUN_ROOT}/status/noop" ;;
+  esac
+  ecoda_atomic_write "${NOOP_REPORT}" \
+    "STATE=NOOP_VALIDATED\nRUN_ID=${RUN_ID}\nREASON=all selected Stage 3 artifacts already validated\n" ||
+    stage3_abort "failed to write Stage 3 validator-only report"
+  ecoda_set_run_state NOOP_VALIDATED "all selected Stage 3 artifacts already validated" ||
+    stage3_abort "failed to write Stage 3 NOOP_VALIDATED state"
+  echo "NOOP_VALIDATED=${RUN_ID}"
   echo "PREPROCESS_RUN_ID=${RUN_ID}"
   exit 0
 fi
 
+ecoda_validate_output_ownership stage3 "${PENDING_MANIFEST}" "${RUN_ID}" 1 ||
+  stage3_abort "Stage 3 output ownership validation failed before array submission"
 mkdir -p "${LOGS_DIR}" || stage3_abort "failed to create Stage 3 log directory"
 export FORCE_PREPROCESS="${FORCE_ARG}"
 export PREPROCESS_SELECTION_FILE="${PENDING_MANIFEST}"
 export PREPROCESS_RUN_ROOT="${ECODA_RUN_ROOT}"
 export PREPROCESS_ERROR_PREFIX="${LOGS_DIR}/3_scrnaseq_preprocessing"
+worker_script="$(stage3_require_source_script "${SCRIPT_DIR}/1.1_run_worker.sh")" ||
+  stage3_abort "Stage 3 worker script escaped immutable source root"
 set +e
 ARRAY_MSG="$(sbatch --parsable --array="1-${PENDING_COUNT}%${THROTTLE}" \
   --mem="${MEMORY}" --partition="${PARTITION}" \
@@ -743,7 +1007,7 @@ ARRAY_MSG="$(sbatch --parsable --array="1-${PENDING_COUNT}%${THROTTLE}" \
   --error="${LOGS_DIR}/3_scrnaseq_preprocessing_%A_%a.err" \
   --mail-user="${USER_EMAIL}" \
   --export="ALL,PREPROCESS_SELECTION_FILE=${PENDING_MANIFEST},PREPROCESS_RUN_ROOT=${ECODA_RUN_ROOT},FORCE_PREPROCESS=${FORCE_ARG},PREPROCESS_ERROR_PREFIX=${LOGS_DIR}/3_scrnaseq_preprocessing,${RUNTIME_EXPORT}" \
-  "${SCRIPT_DIR}/1.1_run_worker.sh")"
+  "${worker_script}")"
 array_rc=$?
 set -e
 [[ ${array_rc} -eq 0 ]] || stage3_abort "sbatch rejected Stage 3 preprocessing array"
@@ -754,6 +1018,8 @@ stage3_install_scheduler_record ARRAY "${ARRAY_ID}" ||
   stage3_abort "failed to persist Stage 3 array scheduler ID"
 stage3_validate_scheduler_manifest "${SCHEDULER_IDS_FILE}" 0 ||
   stage3_abort "Stage 3 scheduler ID manifest is invalid after array submission"
+watchdog_script="$(stage3_require_source_script "${SCRIPT_DIR}/1.2_preprocess_watchdog.sh")" ||
+  stage3_abort "Stage 3 watchdog script escaped immutable source root"
 set +e
 WATCHDOG_MSG="$(sbatch --parsable --wait --dependency="afterany:${ARRAY_ID}" \
   --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem=2G \
@@ -762,7 +1028,7 @@ WATCHDOG_MSG="$(sbatch --parsable --wait --dependency="afterany:${ARRAY_ID}" \
   --error="${LOGS_DIR}/3_scrnaseq_preprocessing_watchdog_%j.err" \
   --mail-user="${USER_EMAIL}" \
   --export="ALL,PREPROCESS_RUN_ROOT=${ECODA_RUN_ROOT},PREPROCESS_PENDING_MANIFEST=${PENDING_MANIFEST},${RUNTIME_EXPORT}" \
-  "${SCRIPT_DIR}/1.2_preprocess_watchdog.sh" "${RUN_ID}" "${MANIFEST}" \
+  "${watchdog_script}" "${RUN_ID}" "${MANIFEST}" \
   "${ARRAY_ID}" "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
 watchdog_rc=$?
 set -e

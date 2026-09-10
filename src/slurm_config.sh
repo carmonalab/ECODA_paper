@@ -12,13 +12,23 @@
 # Sys.getenv()/os.environ consumers (R config_helper.R, Python scripts) see them.
 export PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export DATASETS_JSON_FILE="${PROJECT_ROOT}/datasets.json"
-export LOGS_DIR="${PROJECT_ROOT}/logs"
+export PYTHONDONTWRITEBYTECODE=1
+if [[ -n "${ECODA_LOGS_DIR:-}" ]]; then
+  [[ "${ECODA_LOGS_DIR}" = /* ]] || {
+    echo "ERROR: ECODA_LOGS_DIR must be absolute: ${ECODA_LOGS_DIR}" >&2
+    return 1
+  }
+  export ECODA_LOGS_DIR
+  export LOGS_DIR="${ECODA_LOGS_DIR}"
+else
+  export LOGS_DIR="${PROJECT_ROOT}/logs"
+fi
 
 # --- NAS Paths ---
-export NAS_PREFIX="/srv/smednas515.unige.ch/carmona_smb"
-NAS_BASE_DIR="${NAS_PREFIX}/DataCollections"
-export NAS_SC_DIR="${NAS_BASE_DIR}/Standardized_SingleCell_Datasets"
-export NAS_TARGET_DIR="${NAS_PREFIX}/Projects/ECODA_paper"
+export NAS_PREFIX="${NAS_PREFIX:-/srv/smednas515.unige.ch/carmona_smb}"
+NAS_BASE_DIR="${NAS_BASE_DIR:-${NAS_PREFIX}/DataCollections}"
+export NAS_SC_DIR="${NAS_SC_DIR:-${NAS_BASE_DIR}/Standardized_SingleCell_Datasets}"
+export NAS_TARGET_DIR="${NAS_TARGET_DIR:-${NAS_PREFIX}/Projects/ECODA_paper}"
 
 # --- HPC Scratch Paths ---
 # Workers inside the immutable container use --containall --no-home and
@@ -41,7 +51,21 @@ export ECODA_RUNTIME_IN_CONTAINER="${ECODA_RUNTIME_IN_CONTAINER:-0}"
 export ECODA_RUNTIME_PROFILE="${ECODA_RUNTIME_PROFILE:-default}"
 export ECODA_APPTAINER_NV="${ECODA_APPTAINER_NV:-0}"
 export ECODA_RUNTIME_PREFIX="${ECODA_RUNTIME_PREFIX:-}"
-export ECODA_HOST_ENV_PREFIX="${PROJECT_ROOT}/.pixi/envs/py-cuda13"
+if [[ -n "${ECODA_HOST_ENV_PREFIX:-}" ]]; then
+  [[ "${ECODA_HOST_ENV_PREFIX}" = /* ]] || {
+    echo "ERROR: ECODA_HOST_ENV_PREFIX must be absolute: ${ECODA_HOST_ENV_PREFIX}" >&2
+    return 1
+  }
+else
+  export ECODA_HOST_ENV_PREFIX="${PROJECT_ROOT}/.pixi/envs/py-cuda13"
+fi
+export ECODA_HOST_ENV_PREFIX
+if [[ "${ECODA_RUNTIME_IN_CONTAINER}" != "1" &&
+      ( ! -x "${ECODA_HOST_ENV_PREFIX}/bin/python" ||
+        ! -x "${ECODA_HOST_ENV_PREFIX}/bin/Rscript" ) ]]; then
+  echo "ERROR: host environment prefix is missing Python/Rscript: ${ECODA_HOST_ENV_PREFIX}" >&2
+  return 1
+fi
 export ECODA_HOST_PYTHON_BIN="${ECODA_HOST_ENV_PREFIX}/bin/python"
 export ECODA_HOST_PIXI_RSCRIPT="${ECODA_HOST_ENV_PREFIX}/bin/Rscript --vanilla"
 
@@ -58,23 +82,23 @@ export ECODA_HOST_PIXI_RSCRIPT="${ECODA_HOST_ENV_PREFIX}/bin/Rscript --vanilla"
 # LD_LIBRARY_PATH, and RETICULATE_PYTHON are set below; only the guarded
 # setup_env_sbatch.sh / refresh_env.sh entry points may invoke pixi for
 # environment mutation.
-export PYTHON_BIN="${PROJECT_ROOT}/.pixi/envs/py-cuda13/bin/python"
-export PIXI_RSCRIPT="${PROJECT_ROOT}/.pixi/envs/py-cuda13/bin/Rscript --vanilla"
+export PYTHON_BIN="${ECODA_HOST_PYTHON_BIN}"
+export PIXI_RSCRIPT="${ECODA_HOST_PIXI_RSCRIPT}"
 
 # rpy2 (imported by src/utils/py/preprocess_utils.py) needs R/Rscript on PATH;
 # workers run PYTHON_BIN directly, so prepend the env bin (keeps python/R
 # consistent across login node and workers).
-export PATH="${PROJECT_ROOT}/.pixi/envs/py-cuda13/bin:${PATH}"
+export PATH="${ECODA_HOST_ENV_PREFIX}/bin:${PATH}"
 
 # --- jq (JSON parsing) ---
 # Lmod's hierarchical tree on UNIGE clusters hides jq/1.6 behind its toolchain
 # prerequisite GCCcore/12.2.0 (verified via `module spider jq` on bamboo, 2026-08-07).
-# Both loads are guarded: a failing module load must never abort a `set -e` script
-# nor print noise — the `command -v jq` guards in each consumer script are the
-# fail-closed backstop. If the module tree updates (jq 1.6 no longer builds on newer
-# GCCcore; EasyBuild pairs jq/1.7.1-1.8.1 with GCCcore/13.x and jq/1.8.1 with
-# GCCcore/14.x), re-run `module spider jq` and bump both lines — or add jq to the
-# py-cuda13 pixi env to drop the module dependency entirely.
+# Both loads are guarded: a failing module load must never abort a `set -e`
+# script nor print noise — the `command -v jq` guards in each consumer script
+# are the fail-closed backstop. If the module tree updates (jq 1.6 no longer
+# builds on newer GCCcore; EasyBuild pairs jq/1.7.1-1.8.1 with GCCcore/13.x and
+# jq/1.8.1 with GCCcore/14.x), re-run `module spider jq` and bump both lines —
+# or add jq to the py-cuda13 pixi env to drop the module dependency entirely.
 module load GCCcore/12.2.0 >/dev/null 2>&1 || true
 module load jq/1.6 >/dev/null 2>&1 || true
 
@@ -86,7 +110,7 @@ module load jq/1.6 >/dev/null 2>&1 || true
 # or node-system libs, and packages built with newer conda toolchains fail to
 # attach on node images with older libstdc++/GLIBCXX (preprocessing array
 # 4294806). Must come AFTER the module loads so the env lib dir wins.
-export LD_LIBRARY_PATH="${PROJECT_ROOT}/.pixi/envs/py-cuda13/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${ECODA_HOST_ENV_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 
 # --- reticulate python (R workers) ---
 # Pinned explicitly so R always uses the py-cuda13 python: the annotation
@@ -97,7 +121,8 @@ export LD_LIBRARY_PATH="${PROJECT_ROOT}/.pixi/envs/py-cuda13/lib:${LD_LIBRARY_PA
 # applies to non-vanilla R sessions (.Rprofile is not read with --vanilla).
 # Note: .Rprofile points at .pixi/envs/default on macOS only (py-cuda13 is
 # linux-64-target-scoped and does not exist on osx-arm64).
-export RETICULATE_PYTHON="${PROJECT_ROOT}/.pixi/envs/py-cuda13/bin/python"
+export RETICULATE_PYTHON="${ECODA_HOST_PYTHON_BIN}"
+
 
 # Container workers enter this branch only after ecoda_runtime_reexec_worker
 # crosses the Apptainer boundary.  ECODA_RUNTIME_MODE alone never selects
@@ -154,7 +179,7 @@ if [[ "${ECODA_RUNTIME_IN_CONTAINER}" == "1" ]]; then
 fi
 
 # --- Reference atlas paths (cell type annotation) ---
-export NAS_REF_DIR="${NAS_PREFIX}/DataCollections/reference_atlases/sketched_200ct/"
+export NAS_REF_DIR="${NAS_REF_DIR:-${NAS_PREFIX}/DataCollections/reference_atlases/sketched_200ct/}"
 if [[ -n "${HOME_REF_DIR:-}" ]]; then
   [[ "${HOME_REF_DIR}" = /* ]] || {
     echo "ERROR: inherited HOME_REF_DIR must be absolute: ${HOME_REF_DIR}" >&2
@@ -169,14 +194,19 @@ fi
 # Created once by the canonical Stage 4 submitter via 2.0_create_scgate_db.R;
 # loaded by annotation workers so they do not download in parallel.
 # SCGATE_DB_BRANCH is the single source of truth for the model DB version.
-export SCGATE_DB_PATH="${PROJECT_ROOT}/aux/scGateDB.rds"
+if [[ -n "${ECODA_AUX_ROOT:-}" ]]; then
+  [[ "${ECODA_AUX_ROOT}" = /* ]] || {
+    echo "ERROR: ECODA_AUX_ROOT must be absolute: ${ECODA_AUX_ROOT}" >&2
+    return 1
+  }
+  export ECODA_AUX_ROOT
+  export SCGATE_DB_PATH="${ECODA_AUX_ROOT}/scGateDB.rds"
+else
+  export SCGATE_DB_PATH="${PROJECT_ROOT}/aux/scGateDB.rds"
+fi
 export SCGATE_DB_BRANCH="41a45cd3f8bb5f5a7daf21ec276f6a726f6ee0d4"
-# The HiTME CellOntology dictionary is staged once beside the reference maps
-# and symlinked into each R worker's tempdir; workers must never download it.
 export SCGATE_MODEL_CACHE_DIR="${HOME_REF_DIR}/scGate_models"
 export SCGATE_ONTOLOGY_BRANCH="master"
-
-# --- Sample column name (cell type annotation) ---
 # 1.1.1_preprocess.py standardizes every dataset's sample column to "Sample".
 export SAMPLE_COLNAME="Sample"
 

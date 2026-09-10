@@ -44,6 +44,10 @@ wrapper, and artifact paths for the gate being run. Resolve Bamboo's home
 directory remotely; local `$HOME` is not a valid prefix for remote artifact
 paths. The remote checkout is `${BAMBOO_HOME}/ECODA_paper`; its scratch data
 root is `${BAMBOO_HOME}/scratch/ECODA_paper` (not a git clone).
+The exact wrapper must invoke the immutable snapshot's own executor with its
+source manifest, frozen `tree/aux` root, versioned runtime image/manifest,
+run ID, separate logs root, and explicit selected-row arguments.
+
 
 ```bash
 GLOBAL="$HOME/.agents/skills/durable-hpc-gate/scripts/durable_hpc_gate.py"
@@ -52,7 +56,7 @@ GATE_ID="ecoda_<unique-id>"
 MANIFEST="$PWD/.gate/${GATE_ID}.json"
 BAMBOO_HOME="$(ssh bamboo 'printf %s "$HOME"')"
 REMOTE_WORKDIR="${BAMBOO_HOME}/ECODA_paper"
-WRAPPER='cd "$HOME/ECODA_paper" && source src/slurm_config.sh && <serialized-wrapper>'
+WRAPPER='/bin/bash "<resolved-snapshot>/tree/src/utils/bash/ecoda_source_snapshot.sh" exec --source-root "<resolved-snapshot>/tree" --source-manifest "<resolved-snapshot>/identity/source.manifest" --host-env-prefix "<pinned-env-prefix>" --runtime-image "<versioned-runtime>.sif" --runtime-manifest "<versioned-runtime>.sif.manifest" --run-id "<run-id>" --scratch-root "<scratch-root>" --logs-root "<logs-root>" --script "src/<stage>/<submitter>.sh" -- <explicit-selection-arguments>'
 REMOTE_ROOT="${BAMBOO_HOME}/scratch/ECODA_paper/gates/${GATE_ID}"
 REMOTE_RUNNER="${REMOTE_ROOT}.runner.sh"
 
@@ -161,31 +165,68 @@ Python implementation.
 
 ### 2. Enforce Bamboo and repository invariants
 
-- Remote host is `bamboo`; the remote working directory is the repository
-  clone `$HOME/ECODA_paper`. The clone is not `$HOME/scratch/ECODA_paper`.
-- Source `src/slurm_config.sh` in every HPC wrapper. It is the authority for
-  `PROJECT_ROOT`, `HPC_SCRATCH_DIR`, `NAS_TARGET_DIR`, `PYTHON_BIN`,
-  `PIXI_RSCRIPT`, scheduler resources, and retry ceilings.
+- Remote host is `bamboo`; the durable gate's `remote_workdir` remains the
+  repository clone `$HOME/ECODA_paper`. The clone is not
+  `$HOME/scratch/ECODA_paper`; the exact wrapper executes the
+  `/bin/bash` executor from the commit-keyed immutable source snapshot.
+- Create one verified source snapshot per full source commit before gate
+  `prepare`. It contains the complete committed tree, `COMPLETE`,
+  `identity/source.manifest`, `identity/source.tar`, and the tracked
+  `tree/aux` directory as the sole frozen auxiliary root. New wrappers export
+  `ECODA_SOURCE_ROOT`, `ECODA_SOURCE_MANIFEST`,
+  `ECODA_SOURCE_SNAPSHOT_REQUIRED=1`, and `ECODA_AUX_ROOT`; they never source
+  the mutable canonical checkout.
+- Each new run records exact run-bound copies of the source manifest and
+  `runtime.identity` under its own `manifests/` directory, together with the
+  selected-row/dependency metadata. Runtime image and runtime-manifest paths,
+  digests, sizes, dependency fields, and permissions are bound to that run;
+  writable logs live in the separately named run log root, not in read-only
+  source or `tree/aux`.
+- Source `src/slurm_config.sh` from the immutable snapshot for every HPC
+  wrapper. It remains the authority for `PROJECT_ROOT`, `HPC_SCRATCH_DIR`,
+  `NAS_TARGET_DIR`, `PYTHON_BIN`, `PIXI_RSCRIPT`, scheduler resources, and
+  retry ceilings. Snapshot-backed format-2 runs use the relocated immutable
+  source/runtime layout; format-1 images and runs retain their legacy
+  validation path.
 - Scratch data belongs under `$HOME/scratch/ECODA_paper`; NAS artifacts belong
   under the configured `NAS_TARGET_DIR`. Do not hard-code a second path or
-  treat scratch as a git checkout.
+  treat scratch as a git checkout. The frozen `tree/aux` is the only source
+  of auxiliary inputs, and Stage 4 validates (rather than rewrites) its
+  pre-existing scGate database.
 - Workers use the immutable config-provided interpreter commands; never invoke
   bare `python`, `Rscript`, or an ordinary lock-mutating `pixi run` in a job.
   Login nodes are for editing, staging, synchronization, and submission;
   heavy preprocessing/benchmarking runs in Slurm.
-- Preserve `pixi.toml` and the resolved `pixi.lock`. Do not mutate
-  `datasets.json` without explicit user confirmation. Publication figures are
-  fixed rather than removed.
+- New runs do not couple identity to mutable canonical-checkout `git HEAD` or
+  live `pixi.toml`/`pixi.lock` fingerprints. Source/config/dependency identity
+  comes from the verified source manifest and the run-bound runtime identity;
+  preserve the checked-in `pixi.toml`, resolved `pixi.lock`, and
+  `datasets.json` unless explicitly authorized.
+- Before terminal inspect, the completion task invokes only the exact
+  run-scoped validator
+  `ecoda_run_audit.sh --run-root ABSOLUTE_RUN_ROOT --stage STAGE --selection ABSOLUTE_SELECTION --source-manifest ABSOLUTE_SOURCE_MANIFEST --runtime-identity ABSOLUTE_RUNTIME_IDENTITY`.
+  It validates that run's manifests, source/runtime/aux identities,
+  selection, scheduler IDs, terminal status, artifact records/owners, and
+  selected artifact contracts; it never globs all run roots or submits or
+  repairs workers.
 
 ### 3. Coordinate benchmark waves and reviewed lineage
 
+- The exact wrapper must invoke the executor from the commit-keyed source
+  snapshot and carry the absolute source manifest, versioned runtime image
+  and runtime manifest, frozen `tree/aux` root, run ID, log root, and
+  explicit selected-row scope. The durable manifest binds all of those
+  source/runtime/aux identities; a later pull of the canonical checkout
+  cannot change the wrapper between `prepare` and execution.
 - `serialization_group` is the required explicit cross-manifest mutex identity
   for a matching project, profile, and profile digest. Before any remote
   launch, `launch` takes its deterministic group lock and scans sibling
-  authoritative manifests for an active `RUNNING` gate with that identity.
-  Such a sibling records a `resource_lock_conflict` discrepancy, enters
+  authoritative **gate manifests** for an active `RUNNING` gate with that
+  identity. This bounded lock check is not a global run-root or artifact
+  audit. Such a sibling records a `resource_lock_conflict` discrepancy, enters
   `PRELAUNCH_STOP`, and is not launched. Distinct groups may be prepared and
-  launched concurrently, including gates that share a reviewed predecessor.
+  launched concurrently only when their concrete artifact paths are
+  disjoint, including gates that share a reviewed predecessor.
 - A top-level benchmark wrapper declares reviewed predecessor lineage through
   repeatable absolute `--dependency-manifest` paths. Launch checks every
   predecessor for the same project, profile, and profile digest, state
@@ -193,13 +234,22 @@ Python implementation.
   `local_manifest`, without requiring matching `serialization_group`.
   Dependency lineage is independent of the mutex identity.
 - The exact command string in the manifest is immutable. Do not manually split
-  a wrapper or rerun a wrapper after an ambiguous launch.
+  a wrapper or rerun a wrapper after an ambiguous launch. New compute gates
+  are not selected from old gate state; selection comes from the explicit
+  run manifest and artifact contract.
 - Existing remote evidence may be adopted only after the complete remote
   manifest validates and binds every required identity/path field, including
-  `serialization_group` and `dependency_manifests`. A tmux session must have
-  exactly one pane across all windows whose `pane_start_command` is the
-  declared runner; process fallback parses exact argv rather than accepting a
-  runner-path substring. Any mismatch is a fail-closed stop.
+  `serialization_group`, `dependency_manifests`, source/runtime/auxiliary
+  manifests, and the exact run identity. A tmux session must have exactly one
+  pane across all windows whose `pane_start_command` is the declared runner;
+  process fallback parses exact argv rather than accepting a runner-path
+  substring. Any mismatch is a fail-closed stop.
+- Before the one terminal `inspect`, the completion task invokes the exact
+  run-scoped `ecoda_run_audit.sh` command from Section 2 against the recorded
+  run root. It must validate only the selected run's manifests, scheduler
+  records, status, artifact records/owners, and selected contracts; it must
+  not glob `${HPC_SCRATCH_DIR}/_ecoda_runs/*`, inspect mutable current
+  `HEAD`/Pixi fingerprints, submit workers, or repair compute.
 
 ### 4. Launch, wait, and inspect durably
 
@@ -267,12 +317,34 @@ Python implementation.
 
 - An ambiguous launch becomes `PRELAUNCH_STOP`: preserve all evidence and
   reconcile before any retry. Never guess that the wrapper did not start.
+- Repair and reuse begin with a validator-only preflight of the explicitly
+  requested artifact rows. Reuse is allowed only when each selected artifact
+  satisfies its nonempty/schema/identity/checksum contract. If every row is
+  valid, write `NOOP_VALIDATED` to the specified run report and do not call
+  durable-gate `prepare` or `launch`; no scheduler IDs are created. If any
+  row is missing or invalid, submit only those explicitly scoped rows through
+  the durable gate. Never broad-force a pipeline or infer scope from gate
+  history.
+- An old `FAILED`, `PRELAUNCH_STOP`, or stale gate is evidence only and cannot
+  create a new scheduler selection. `--force` remains row-scoped and requires
+  an explicit dependency or integrity reason. A legacy run without its
+  run-bound source/runtime manifests exits with `legacy_source_unpinned`
+  before any worker, retry, or scheduler submission; validator-only inspection
+  is the sole allowed path for such a run.
+- Every compute or retry path must carry the exact immutable source snapshot,
+  source manifest, frozen `tree/aux` identity, runtime identity, run ID, and
+  selected-row scope. Run-scoped `ecoda_run_audit.sh` validates those
+  manifests, status, scheduler IDs, artifact records/owners, and selected
+  contracts before terminal inspect. Recovery never performs a global
+  `_ecoda_runs/*` scan or couples a new run to mutable `HEAD`/Pixi state.
 - A nonzero wrapper, unexpected terminal accounting state, unknown process,
-  path/config discrepancy, or audit failure records `FAILED`/`STOP`, starts no
+  path/config discrepancy, missing or mismatched source/runtime/aux manifest,
+  ownership conflict, or audit failure records `FAILED`/`STOP`, starts no
   dependent gate, and leaves the checkpoint unresolved for review.
 - Never manually synchronize partial outputs after wrapper failure. Do not
   delete logs, manifests, status, checksums, or discrepancy records. A later
-  retry is a new explicitly reconciled gate, not an ad-hoc `rsync`.
+  retry is a new explicitly reconciled gate, not an ad-hoc `rsync`, and repair
+  remains no-compute by default.
 
 ## Profile severity and audit contracts
 
@@ -284,35 +356,51 @@ severity rules govern any discrepancy it reports:
   non-terminal/non-`COMPLETED` accounting; missing artifact; checksum, path,
   source-level label-leakage, or scientific-invariant failure; a failed
   gate-specific shape/identifier/provenance check defined by the authoritative
-  plan and run by the completion agent; manual/partial synchronization. Do
-  not launch a dependent gate.
+  plan and run by the completion agent; missing or mismatched run-bound
+  source/runtime/auxiliary manifests; manual/partial synchronization. Do not
+  launch a dependent gate.
 - **APPROVAL_REQUIRED:** a discrepancy whose `kind` is explicitly listed in
   `policy.known_discrepancies`. Preserve the raw evidence and obtain explicit
   user approval before proceeding; approval does not erase or downgrade the
   recorded discrepancy.
-- **PASS:** all exact identity, status, accounting, configured-root, checksum,
-  immutable-fingerprint, and plan-defined scientific/artifact audits succeed.
-  Only a reviewed `COMPLETED` result is releasable.
+- **PASS:** all exact gate identity, status, accounting, configured-root,
+  checksum, run-bound source/runtime/auxiliary manifest, and plan-defined
+  scientific/artifact audits succeed. Only a reviewed `COMPLETED` result is
+  releasable.
 
 Audit contracts are evaluated only at the terminal `inspect` step:
 
-1. gate/manifest identity and exact command;
+1. gate/manifest identity and exact immutable wrapper command;
 2. atomic terminal status and completion signal;
-3. one `sacct` query covering every recorded scheduler ID;
-4. repository/configured scratch/NAS roots and wrapper-produced artifact
+3. one strict `sacct -n -P -X -j ... --format=JobIDRaw,State,ExitCode`
+   query covering every recorded scheduler ID;
+4. canonical repository/configured scratch/NAS roots and required wrapper
    presence;
-5. nonempty canonical NAS checksums and immutable datasets/pixi/`HEAD`
-   fingerprints; and
-6. gate-specific artifact shape, identifier, and provenance checks defined by
-   the authoritative execution plan and recorded by the completion agent,
-   followed by the authoritative plan checkpoint and reviewer evidence.
+5. the exact run-scoped validator invocation
+   `ecoda_run_audit.sh --run-root ABSOLUTE_RUN_ROOT --stage STAGE --selection ABSOLUTE_SELECTION --source-manifest ABSOLUTE_SOURCE_MANIFEST --runtime-identity ABSOLUTE_RUNTIME_IDENTITY`,
+   validating that run's source/archive, runtime, frozen `tree/aux`, selection,
+   scheduler-ID manifest, terminal status, artifact records/owners, and
+   selected artifact contracts;
+6. nonempty canonical NAS checksums and any plan-defined artifact shape,
+   identifier, and provenance checks against artifacts the wrapper actually
+   produced; and
+7. the authoritative plan checkpoint and Luna Max reviewer evidence.
+
+The run-bound source snapshot and stage `runtime.identity` are the provenance
+authorities. `profile.json` intentionally has `"immutable_fingerprints": []`
+for snapshot-backed runs: do not fingerprint mutable canonical-checkout
+`git HEAD`, live `pixi.toml`, or live `pixi.lock` as a terminal gate
+contract. Do not glob `${HPC_SCRATCH_DIR}/_ecoda_runs/*` or require broad
+stage-neutral run-root/status scans; `ecoda_run_audit.sh` validates only the
+recorded run.
 
 Gate-specific artifact shape, identifier, and provenance checks are
-intentionally not generic profile contracts. The authoritative execution plan
-must name the existing wrapper-produced artifacts and expected checks, and the
-completion agent must run and record those checks against those artifacts.
-Do not require generic `provenance.json` or `source_manifest.json` files; their
-absence is not a failure.
+intentionally not broad profile contracts. The authoritative execution plan
+must name the existing wrapper-produced artifacts and expected checks, and
+the completion agent must run and record those checks against those artifacts.
+Require the exact run-bound `source.manifest` and `runtime.identity` copies
+where specified by the run contract; do not invent generic `provenance.json`
+or unrelated global source-manifest files.
 
 The source-level no-label-leakage rule remains mandatory (see Section 5).
 This profile does not scan benchmark output strings for biological labels:

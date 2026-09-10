@@ -206,40 +206,71 @@ datrans <- function(
   return(rets)
 }
 
-# Read the checksums.md5 sidecar written by the benchmark submitters (paths
-# relative to the benchmark results root, "<md5>  <path>" lines, GNU md5sum
-# format). Returns a named character vector (path -> hash), or NULL when no
-# sidecar exists (e.g. results that predate the sidecar).
+# Read checksums.md5 written by benchmark submitters. The paths are relative
+# to the benchmark results root and use GNU md5sum's "<md5>  <path>" format.
 read_md5_sidecar <- function(checksum_file) {
   if (!file.exists(checksum_file)) return(NULL)
   lines <- readLines(checksum_file, warn = FALSE)
   lines <- lines[nzchar(lines)]
   if (length(lines) == 0) return(character(0))
   parts <- strsplit(lines, "  ", fixed = TRUE)
+  if (any(lengths(parts) != 2L)) {
+    stop("Malformed checksums.md5 sidecar: ", checksum_file)
+  }
   hashes <- vapply(parts, `[`, character(1), 1)
   paths <- vapply(parts, `[`, character(1), 2)
+  if (any(!grepl("^[0-9a-fA-F]{32}$", hashes)) ||
+      any(!nzchar(paths)) || anyDuplicated(paths)) {
+    stop("Malformed checksums.md5 sidecar: ", checksum_file)
+  }
   names(hashes) <- paths
   return(hashes)
 }
 
-# Best-effort integrity check before readRDS of NAS-produced bundles (RDS
-# deserialization can execute code): files listed in the sidecar must match
-# their md5; files not listed (legacy results) are read unverified.
+md5_sidecar_key <- function(file_path) {
+  file.path(basename(dirname(file_path)), basename(file_path))
+}
+
+md5_sidecar_listed <- function(file_path, checksums) {
+  if (is.null(checksums) || length(checksums) == 0L) return(FALSE)
+  expected <- unname(checksums[md5_sidecar_key(file_path)])
+  length(expected) == 1L && !is.na(expected) && nzchar(expected)
+}
+
+# Validate a listed file immediately before readRDS. FALSE means the file is
+# legacy-unverified (missing/unlisted manifest entry), not trusted content.
 verify_md5_sidecar <- function(file_path, checksums) {
-  if (is.null(checksums) || length(checksums) == 0) {
-    return(invisible(NULL))
-  }
-  key <- file.path(basename(dirname(file_path)), basename(file_path))
-  expected <- unname(checksums[key])
-  if (is.na(expected)) return(invisible(NULL))
-  actual <- unname(tools::md5sum(file_path))
-  if (is.na(actual) || actual != expected) {
+  if (!md5_sidecar_listed(file_path, checksums)) return(invisible(FALSE))
+  expected <- unname(checksums[md5_sidecar_key(file_path)])
+  actual <- tolower(unname(tools::md5sum(file_path)))
+  if (length(actual) != 1L || is.na(actual) ||
+      tolower(expected) != actual) {
     stop("Checksum mismatch for ", file_path, " (expected ", expected,
          ", got ", actual, "). The HPC result bundle was modified or ",
          "corrupted; re-run the benchmark pipeline (or remove the file) ",
          "before loading it.")
   }
-  return(invisible(NULL))
+  invisible(TRUE)
+}
+
+report_legacy_unverified <- function(file_path, reason) {
+  warning(
+    "Skipping ", file_path, " (legacy_unverified: ", reason,
+    "); readRDS was not attempted."
+  )
+  invisible(NULL)
+}
+
+read_rds_sidecar_checked <- function(file_path, checksums) {
+  if (!md5_sidecar_listed(file_path, checksums)) {
+    report_legacy_unverified(file_path, "file is not listed in checksums.md5")
+    return(NULL)
+  }
+  if (!isTRUE(verify_md5_sidecar(file_path, checksums))) {
+    report_legacy_unverified(file_path, "checksums.md5 entry is unusable")
+    return(NULL)
+  }
+  readRDS(file_path)
 }
 
 # Load HPC-computed benchmark results (Pipeline A methods + Pipeline B
@@ -247,9 +278,9 @@ verify_md5_sidecar <- function(file_path, checksums) {
 # fresh list() and loads ALL bundles anew (no result_list.rds persistence,
 # no "entries already present are kept" rerun semantics): the feather
 # methods recompute in seconds and the stats come from <ds>_metadata.rds,
-# so a stale session list can never silently clobber a good file. Bundles
-# are verified against the checksums.md5 sidecar (written by the submit
-# scripts) before deserialization. Missing files warn and are skipped.
+# so a stale session list can never silently clobber a good file. A listed
+# bundle is checksum-verified immediately before deserialization. A missing
+# or unlisted checksums.md5 entry is reported as legacy_unverified and skipped.
 # Returns the (unmodified, in-memory) result_list.
 load_hpc_benchmark_results <- function(
   result_list,
@@ -264,7 +295,16 @@ load_hpc_benchmark_results <- function(
     result_list[["bmark"]][[ds]] <- list()
   }
 
-  checksums <- read_md5_sidecar(file.path(dirname(path_results_nas), "checksums.md5"))
+  checksums <- read_md5_sidecar(
+    file.path(dirname(path_results_nas), "checksums.md5")
+  )
+  legacy_reason <- if (is.null(checksums)) {
+    "checksums.md5 is missing"
+  } else if (length(checksums) == 0L) {
+    "checksums.md5 is empty"
+  } else {
+    NULL
+  }
 
   for (method in methods) {
     method_file <- file.path(
@@ -275,8 +315,19 @@ load_hpc_benchmark_results <- function(
       warning("HPC benchmark result file not found: ", method_file)
       next
     }
-    verify_md5_sidecar(method_file, checksums)
-    bundles <- readRDS(method_file)
+    if (!is.null(legacy_reason)) {
+      report_legacy_unverified(method_file, legacy_reason)
+      next
+    }
+    if (!md5_sidecar_listed(method_file, checksums)) {
+      report_legacy_unverified(method_file, "file is not listed in checksums.md5")
+      next
+    }
+    if (!isTRUE(verify_md5_sidecar(method_file, checksums))) {
+      report_legacy_unverified(method_file, "checksums.md5 entry is unusable")
+      next
+    }
+    bundles <- read_rds_sidecar_checked(method_file, checksums)
     for (nm in names(bundles)) {
       if (!nm %in% names(result_list[["bmark"]][[ds]])) {
         result_list[["bmark"]][[ds]][[nm]] <- bundles[[nm]]
@@ -287,8 +338,17 @@ load_hpc_benchmark_results <- function(
   trans_file <- file.path(path_results_nas, paste0(ds, "_trans.rds"))
   if (is.null(result_list[["trans"]][[ds]])) {
     if (file.exists(trans_file)) {
-      verify_md5_sidecar(trans_file, checksums)
-      result_list[["trans"]][[ds]] <- readRDS(trans_file)
+      if (!is.null(legacy_reason)) {
+        report_legacy_unverified(trans_file, legacy_reason)
+      } else if (!md5_sidecar_listed(trans_file, checksums)) {
+        report_legacy_unverified(trans_file, "file is not listed in checksums.md5")
+      } else if (!isTRUE(verify_md5_sidecar(trans_file, checksums))) {
+        report_legacy_unverified(trans_file, "checksums.md5 entry is unusable")
+      } else {
+        result_list[["trans"]][[ds]] <- read_rds_sidecar_checked(
+          trans_file, checksums
+        )
+      }
     } else {
       warning("HPC transformation result file not found: ", trans_file)
     }
@@ -297,8 +357,17 @@ load_hpc_benchmark_results <- function(
   zeroimp_file <- file.path(path_results_nas, paste0(ds, "_zeroimp.rds"))
   if (is.null(result_list[["zeroimp"]][[ds]])) {
     if (file.exists(zeroimp_file)) {
-      verify_md5_sidecar(zeroimp_file, checksums)
-      result_list[["zeroimp"]][[ds]] <- readRDS(zeroimp_file)
+      if (!is.null(legacy_reason)) {
+        report_legacy_unverified(zeroimp_file, legacy_reason)
+      } else if (!md5_sidecar_listed(zeroimp_file, checksums)) {
+        report_legacy_unverified(zeroimp_file, "file is not listed in checksums.md5")
+      } else if (!isTRUE(verify_md5_sidecar(zeroimp_file, checksums))) {
+        report_legacy_unverified(zeroimp_file, "checksums.md5 entry is unusable")
+      } else {
+        result_list[["zeroimp"]][[ds]] <- read_rds_sidecar_checked(
+          zeroimp_file, checksums
+        )
+      }
     } else {
       warning("HPC zero-imputation result file not found: ", zeroimp_file)
     }
@@ -985,7 +1054,7 @@ run_gloscope_hpc <- function(
       paste0(artifact_stem, "_", nm, ".rds")
     )
     if (artifact_checksum_ok(bundle_file) && !force) {
-      cached <- readRDS(bundle_file)
+      cached <- read_rds_checked(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run. The stored mem_GB
@@ -1070,7 +1139,7 @@ run_mofa_hpc <- function(
       paste0(ds, "_", nm, ".rds")
     )
     if (artifact_checksum_ok(bundle_file) && !force) {
-      cached <- readRDS(bundle_file)
+      cached <- read_rds_checked(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
@@ -1130,7 +1199,7 @@ run_pseudobulk_hpc <- function(
     nm <- "Pseudobulk_hvg2000"
     bundle_file <- file.path(results_dir, paste0(result_stem, "_", nm, ".rds"))
     if (artifact_checksum_ok(bundle_file) && !force) {
-      cached <- readRDS(bundle_file)
+      cached <- read_rds_checked(bundle_file)
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file, mem_gb = cached$mem_GB)
       }
@@ -1180,7 +1249,7 @@ run_pseudobulk_hpc <- function(
     }
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (artifact_checksum_ok(bundle_file) && !force) {
-      cached <- readRDS(bundle_file)
+      cached <- read_rds_checked(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
@@ -1213,7 +1282,7 @@ run_pseudobulk_hpc <- function(
     n_pca_dims <- as.integer(sub("Pseudobulk_(\\d+)_PCA_dims", "\\1", nm))
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (artifact_checksum_ok(bundle_file) && !force) {
-      cached <- readRDS(bundle_file)
+      cached <- read_rds_checked(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
@@ -1250,7 +1319,7 @@ run_pseudobulk_hpc <- function(
     }
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (artifact_checksum_ok(bundle_file) && !force) {
-      cached <- readRDS(bundle_file)
+      cached <- read_rds_checked(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
@@ -1321,7 +1390,7 @@ run_scitd_hpc <- function(
 
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (artifact_checksum_ok(bundle_file) && !force) {
-      cached <- readRDS(bundle_file)
+      cached <- read_rds_checked(bundle_file)
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
@@ -1501,7 +1570,7 @@ run_composition_methods_hpc <- function(
         results_dir, paste0(artifact_stem, "_", nm, ".rds")
       )
       if (artifact_checksum_ok(bundle_file) && !force) {
-        cached <- readRDS(bundle_file)
+        cached <- read_rds_checked(bundle_file)
         results[[nm]] <- cached
         if (!is.null(cached$exec_time)) {
           log_exec_row(ds, nm, cached$exec_time, log_file,
@@ -1659,7 +1728,7 @@ run_composition_methods_hpc <- function(
   for (nm in names(combos)) {
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (artifact_checksum_ok(bundle_file) && !force) {
-      cached <- readRDS(bundle_file)
+      cached <- read_rds_checked(bundle_file)
       results[[nm]] <- cached
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file,

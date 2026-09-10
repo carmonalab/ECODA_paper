@@ -92,8 +92,146 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   benchmark/NAS outputs, and leave existing validated artifacts outside the
   recomputation selection. I.e. do not overwrite existing artifacts or gates
   (or explicitly ask the user to do so or not).
+  This exception does not authorize unpinned direct stage submitter commands;
+  they remain legacy/validator-only unless the required immutable
+  source/runtime/auxiliary manifests and explicit row scope are supplied.
   In short: Upon specific user request, short-lived HPC sessions may be launched, e.g.
   to run tests or create temporary artifacts for local analysis.
+
+
+## Current processing baseline
+
+- **Baseline anchor:** `5302671ad94556edcf9acccf372d2dc34121d714` is the
+  repository HEAD captured while preparing the processing plan. Preserve this
+  anchor even when the implementation or documentation lands in a later
+  commit; record a later implementation/documentation commit separately.
+- **Completed production benchmark (`benchmark_analysis`):** the
+  user-confirmed completed dataset view is `Adams`, `Bassez`,
+  `Gongsharma_cmv_young_males`, `Kfoury`, `Kim`, `Lee`, `Pelka`, `Smillie`,
+  `Stephenson`, `Wu`, and `Zhang`. This is the completed baseline, not a
+  request to recompute those rows.
+- **Batch-effect baseline and pending rows:** the historical
+  `batch_effect_uncorrected` selection was processed, but it is not
+  terminally complete after the recent `datasets.json` update. `Lupus_PBMC`
+  and `Parkinson` changed `cell_type_high_res`; only downstream methods whose
+  input/feature path consumes that high-resolution field are pending targeted
+  validation/rerun. The current batch dataset key is
+  `Kidney_KPMP_full`, not `Kidney_KPMP`. The configured batch-effect dataset
+  list is `Joanito`, `Stephenson`, `CombinedPBMC`, `Alzheimer`, `Breast_cancer`,
+  `Covid19_PBMC`, `Kidney_KPMP_full`, `Myocardial_infarction`, `Diabetes`,
+  `Lupus_PBMC`, `Lung`, and `Parkinson`; the two changed datasets and the new
+  Kidney key are pending targeted validation/rerun.
+- **Routine verification:** `_debug` is a five-sample verification fixture,
+  not a production cohort. Use it separately for routine checks in both
+  configured views.
+- **Annotation exemption:** `Alzheimer`, `Diabetes`, and `Parkinson` remain
+  covered by the existing `not_suitable_for_auto_annotation` exemption.
+  Historical batch processing does not imply that automatic HiTME/scATOMIC
+  annotation was required for those datasets.
+- **Baseline selection:** benchmark methods are `gloscope`, `mofa`,
+  `pseudobulk`, `composition`, `scitd`, `mrvi`, `scpoli`, `pilot`, `qot`, and
+  `pilotgm`; analyses are `trans` and `zeroimp`; the batch-effect suite is
+  `prepare_pseudobulk`, `pseudobulk`, `gloscope`, `composition`, `mrvi`,
+  `pilot`, and `qot`.
+- The Stage 5 default method list remains the baseline list above. Methods or
+  scripts registered after this baseline are not defaults and run only when
+  named explicitly with `--methods` or an explicit selection manifest.
+  Existing valid benchmark rows and unaffected batch rows are skipped
+  individually without `--force`. Changed `Lupus_PBMC`/`Parkinson`
+  high-resolution consumers, `Kidney_KPMP_full`, and absent post-baseline
+  method rows are submitted only through explicit targeted selection.
+- A `datasets.json` change invalidates only dependent downstream rows; it
+  never triggers a blanket rerun. Gate history is evidence only: an old
+  `FAILED`, `PRELAUNCH_STOP`, or stale gate manifest cannot select rows for
+  reuse or recomputation. Existing valid artifacts remain outside every
+  recomputation selection, and `--force` is allowed only for explicitly
+  scoped rows with a recorded dependency or integrity reason.
+- Selection starts with a validator-only preflight. If every requested row
+  satisfies its artifact contract, write `NOOP_VALIDATED` to the specified run
+  report and do not call durable-gate `prepare` or `launch`. If a row is
+  missing or invalid, submit only those rows through a new snapshot-backed
+  durable gate; actual compute still requires emitted scheduler IDs, terminal
+  accounting, and reviewer approval.
+
+### Snapshot-backed full-cohort workflow
+
+Full-cohort preprocessing, annotation, benchmark, evidence, and correction
+runs use a commit-keyed source snapshot and a versioned runtime identity
+before durable-gate `prepare`. Resolve Bamboo's remote home before composing
+paths; the repository clone is `${BAMBOO_HOME}/ECODA_paper`, while scratch is
+`${BAMBOO_HOME}/scratch/ECODA_paper`. Create the source snapshot from a clean
+full-commit checkout, then use the snapshot's own executor:
+
+Publish and validate the versioned runtime image and manifest under
+`${RUNTIME_ROOT}` before `prepare`; do not fall back to the mutable canonical
+checkout or an unversioned runtime path.
+
+
+```bash
+BAMBOO_HOME="$(ssh bamboo 'printf %s "$HOME"')"
+SOURCE_COMMIT="<full-40-hex-commit>"
+SNAPSHOT_PARENT="${BAMBOO_HOME}/scratch/ECODA_paper/_ecoda_source_snapshots"
+RUNTIME_ID="<versioned-runtime-id>"
+RUN_ID="<run-id>"
+SNAPSHOT_ROOT="${SNAPSHOT_PARENT}/${SOURCE_COMMIT}"
+RUNTIME_ROOT="${BAMBOO_HOME}/scratch/ECODA_paper/_ecoda_runtime/${RUNTIME_ID}"
+
+/bin/bash "${BAMBOO_HOME}/ECODA_paper/src/utils/bash/ecoda_source_snapshot.sh" \
+  create --source-root "${BAMBOO_HOME}/ECODA_paper" \
+  --snapshot-parent "${SNAPSHOT_PARENT}" --commit "${SOURCE_COMMIT}"
+
+WRAPPER="/bin/bash \
+  \"${SNAPSHOT_ROOT}/tree/src/utils/bash/ecoda_source_snapshot.sh\" exec \
+  --source-root \"${SNAPSHOT_ROOT}/tree\" \
+  --source-manifest \"${SNAPSHOT_ROOT}/identity/source.manifest\" \
+  --host-env-prefix \"${BAMBOO_HOME}/ECODA_paper/.pixi/envs/py-cuda13\" \
+  --runtime-image \"${RUNTIME_ROOT}/ecoda-py-cuda13.sif\" \
+  --runtime-manifest \"${RUNTIME_ROOT}/ecoda-py-cuda13.sif.manifest\" \
+  --run-id \"${RUN_ID}\" \
+  --scratch-root \"${BAMBOO_HOME}/scratch/ECODA_paper\" \
+  --logs-root \"${BAMBOO_HOME}/scratch/ECODA_paper/_ecoda_logs/${RUN_ID}\" \
+  --script \"src/<stage>/<submitter>.sh\" -- <explicit-selection-arguments>"
+
+uv run "$HOME/.agents/skills/durable-hpc-gate/scripts/durable_hpc_gate.py" prepare \
+  --profile "$PWD/.agents/skills/durable-hpc-gate-ecoda/references/profile.json" \
+  --manifest "$PWD/.gate/${RUN_ID}.json" \
+  --output "$PWD/.gate/${RUN_ID}.prepare.json" \
+  --project ECODA --gate-id "${RUN_ID}" --remote-host bamboo \
+  --remote-workdir "${BAMBOO_HOME}/ECODA_paper" --exact-command "${WRAPPER}" \
+  --serialization-group ecoda-benchmark \
+  --tmux-session "${RUN_ID}" \
+  --completion-channel "file:${BAMBOO_HOME}/scratch/ECODA_paper/gates/${RUN_ID}.done" \
+  --remote-manifest "${BAMBOO_HOME}/scratch/ECODA_paper/gates/${RUN_ID}.manifest.json" \
+  --remote-runner "${BAMBOO_HOME}/scratch/ECODA_paper/gates/${RUN_ID}.runner.sh" \
+  --remote-log "${BAMBOO_HOME}/scratch/ECODA_paper/gates/${RUN_ID}.log" \
+  --remote-status "${BAMBOO_HOME}/scratch/ECODA_paper/gates/${RUN_ID}.status.json"
+uv run "$HOME/.agents/skills/durable-hpc-gate/scripts/durable_hpc_gate.py" reconcile \
+  --manifest "$PWD/.gate/${RUN_ID}.json" --profile "$PWD/.agents/skills/durable-hpc-gate-ecoda/references/profile.json" \
+  --output "$PWD/.gate/${RUN_ID}.reconcile.json"
+uv run "$HOME/.agents/skills/durable-hpc-gate/scripts/durable_hpc_gate.py" launch \
+  --manifest "$PWD/.gate/${RUN_ID}.json" --profile "$PWD/.agents/skills/durable-hpc-gate-ecoda/references/profile.json" \
+  --output "$PWD/.gate/${RUN_ID}.launch.json"
+```
+
+After `launch`, arm exactly one unbounded durable `wait`, then perform one
+terminal `inspect` with every scheduler array/watchdog ID emitted by the
+wrapper and obtain the required Luna Max reviewer approval. The durable
+workflow owns the terminal accounting and artifact audit; do not rerun the
+wrapper after an ambiguous launch.
+
+Before that inspect, the completion task runs the exact run-scoped
+`ecoda_run_audit.sh` invocation with the run root, stage, selection, source
+manifest, and runtime identity; it never scans all run roots or submits repair
+compute.
+
+Unpinned direct invocations of stage submitters (for example, the scripts
+under `src/2_dataset_specific_preprocessing/`,
+`src/3_scrnaseq_preprocessing/`, `src/4_cell_type_annotation/`, and
+`src/5_run_benchmark_methods/`) are **legacy/validator-only**. They may not
+submit compute for a new run unless they carry the required immutable source
+manifest, runtime identity, auxiliary-root identity, exact run ID, and
+selected-row scope. Validator-only checks may inspect existing artifacts but
+must not create scheduler work.
 
 ## Key Directories
 
@@ -141,22 +279,20 @@ src/utils/bash/refresh_env.sh
 
 ### Representative pipeline commands
 
-```bash
-cd "$HOME/ECODA_paper"
-source src/slurm_config.sh
-src/1_stage_data/1_stage_data.sh --ds_name _debug
-src/2_dataset_specific_preprocessing/1_submit_hpc.sh --datasets Joanito
-src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh --datasets _debug --views benchmark_analysis,batch_effect_uncorrected
-src/4_cell_type_annotation/1_submit_onboarding_stage.sh --datasets _debug --views batch_effect_uncorrected
-src/5_run_benchmark_methods/1_submit_hpc_array.sh --datasets _debug --methods mrvi --analyses trans
-```
+For any full-cohort preprocessing, annotation, benchmark, evidence, or
+correction run, use the **Snapshot-backed full-cohort workflow** above. The
+durable gate must receive the exact wrapper that executes from the immutable
+source snapshot, with the run-bound source/runtime/auxiliary manifests and
+explicit selected-row scope recorded before `prepare`.
 
-Submit heavy work to SLURM; never preprocess or benchmark on a login node. Use `debug-cpu`/`debug-gpu` for short interactive checks (they have a max of 15 minutes). For non-blocking monitoring:
+After `launch`, arm the single unbounded durable `wait`, use the terminal
+`inspect` and Luna Max reviewer flow, and use `status` only for a
+non-mutating recovery view. Never monitor a full-cohort run with ad hoc
+`squeue`/`sacct` polling or invoke an unpinned stage submitter directly.
 
-```bash
-squeue -u "$USER"
-sacct -j <job-id> --format=JobID,JobName,State,ExitCode,Elapsed,MaxRSS
-```
+Direct submitter commands without the required immutable source/runtime
+identity are legacy/validator-only; validator checks may inspect existing
+artifacts but may not submit workers, retries, or new scheduler jobs.
 
 
 ## Code Conventions & Common Patterns

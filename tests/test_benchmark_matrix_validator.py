@@ -69,16 +69,38 @@ def main() -> None:
         (root / "embeddings").mkdir()
         selection = root / "selection.tsv"
         selection.write_text("Adams\tbenchmark_analysis\tmrvi\n")
+        write_file_sidecar(selection)
         frame = pd.DataFrame(
             {"s1": [1.0, 0.0], "s2": [0.0, 1.0]}, index=["s1", "s2"]
         )
         for n in (1000, 2000, 3000):
             write_feather(root / "embeddings" / f"Adams_hvg{n}_mrvi_dists.feather", frame)
+        unrelated_partial = root / "unrelated" / "nested" / "stale.tmp.123"
+        unrelated_partial.parent.mkdir(parents=True)
+        unrelated_partial.write_text("stale")
+        matrix_artifact_validator.validate(
+            root, selection, ["mrvi"], batch=False, exact=True
+        )
+        selected_partial = (
+            root / "embeddings" / "Adams_hvg1000_mrvi_dists.feather.tmp.123"
+        )
+        selected_partial.write_text("stale")
+        try:
+            matrix_artifact_validator.validate(
+                root, selection, ["mrvi"], batch=False, exact=True
+            )
+        except ValueError as exc:
+            assert "partial benchmark artifacts remain" in str(exc)
+        else:
+            raise AssertionError("selected adjacent partial was accepted")
+        finally:
+            selected_partial.unlink()
         matrix_artifact_validator.validate(
             root, selection, ["mrvi"], batch=False, exact=True
         )
         pilotgm_selection = root / "pilotgm-selection.tsv"
         pilotgm_selection.write_text("Adams\tbenchmark_analysis\tpilotgm\n")
+        write_file_sidecar(pilotgm_selection)
         write_feather(
             root / "embeddings" / "Adams_hvg2000_highres_pilotgm_dists.feather",
             frame,
@@ -135,6 +157,7 @@ def main() -> None:
 
         wrong_scope = root / "batch-wrong-scope.tsv"
         wrong_scope.write_text("Adams\tbatch_effect_uncorrected\twrong_scope\n")
+        write_file_sidecar(wrong_scope)
         try:
             matrix_artifact_validator.validate(
                 root,
@@ -153,6 +176,7 @@ def main() -> None:
         batch_pilotgm.write_text(
             "Adams\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n"
         )
+        write_file_sidecar(batch_pilotgm)
         try:
             matrix_artifact_validator.validate(
                 root,

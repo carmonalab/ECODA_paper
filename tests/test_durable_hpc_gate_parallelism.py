@@ -51,13 +51,7 @@ def _write_profile(path: Path) -> None:
             "artifact_contracts": [
                 {"name": "synthetic-artifact", "command": "true", "expected_exit": 0}
             ],
-            "immutable_fingerprints": [
-                {
-                    "name": "synthetic-fingerprint",
-                    "command": "printf synthetic-profile",
-                    "expected_exit": 0,
-                }
-            ],
+            "immutable_fingerprints": [],
             "accounting_command": None,
             "require_scheduler_ids": False,
             "reviewer_required": True,
@@ -209,6 +203,8 @@ def _complete_and_review(module: Any, root: Path, profile: Path, manifest: Path)
     assert completed["audit_state"] == "COMPLETED"
     assert completed["audit_completed"] is True
     assert completed["audit"]["passed"] is True
+    assert completed["immutable_fingerprints"] == []
+    assert completed["audit"]["immutable_fingerprints"] == []
     assert completed["reviewer"]["approved"] is True
 
 
@@ -275,6 +271,82 @@ def _assert_dependency_rejected(
     )
 
 
+def _write_overlap_fixture(root: Path) -> dict[str, Path]:
+    """Create two distinct Stage 3 selections that share one output path."""
+    scratch = root / "ownership-scratch"
+    nas = root / "ownership-nas"
+    datasets = root / "ownership-datasets.json"
+    selection_one = root / "selection-one.tsv"
+    selection_two = root / "selection-two.tsv"
+    sbatch_log = root / "fake-sbatch.calls"
+    fake_sbatch = root / "bin" / "sbatch"
+    fake_sbatch.parent.mkdir(parents=True, exist_ok=True)
+    for base in (scratch, nas):
+        for dataset in ("dataset-one", "dataset-two"):
+            (base / dataset / "output").mkdir(parents=True, exist_ok=True)
+    datasets.write_text(
+        json.dumps(
+            {
+                "dataset-one": {
+                    "views": {
+                        "benchmark_analysis": {"output_file_name": "shared.h5ad"}
+                    }
+                },
+                "dataset-two": {
+                    "views": {
+                        "benchmark_analysis": {"output_file_name": "other.h5ad"}
+                    }
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    selection_one.write_text("dataset-one\tbenchmark_analysis\n", encoding="utf-8")
+    selection_two.write_text(
+        "dataset-one\tbenchmark_analysis\n"
+        "dataset-two\tbenchmark_analysis\n",
+        encoding="utf-8",
+    )
+    fake_sbatch.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$1" >> "${ECODA_FAKE_SBATCH_LOG:?}"\n',
+        encoding="utf-8",
+    )
+    fake_sbatch.chmod(0o755)
+    return {
+        "scratch": scratch,
+        "nas": nas,
+        "datasets": datasets,
+        "selection_one": selection_one,
+        "selection_two": selection_two,
+        "sbatch_log": sbatch_log,
+        "fake_sbatch": fake_sbatch,
+    }
+
+
+def _ownership_command(
+    fixture: dict[str, Path], selection: Path, run_id: str
+) -> str:
+    common = Path(__file__).resolve().parents[1] / "src/utils/bash/ecoda_run_common.sh"
+    exports = " ".join(
+        (
+            f"HPC_SCRATCH_DIR={shlex.quote(str(fixture['scratch']))}",
+            f"NAS_TARGET_DIR={shlex.quote(str(fixture['nas']))}",
+            f"DATASETS_JSON_FILE={shlex.quote(str(fixture['datasets']))}",
+            f"ECODA_FAKE_SBATCH_LOG={shlex.quote(str(fixture['sbatch_log']))}",
+        )
+    )
+    return (
+        f"export {exports}; "
+        f"source {shlex.quote(str(common))} && "
+        f"ecoda_validate_output_ownership stage3 {shlex.quote(str(selection))} "
+        f"{shlex.quote(run_id)} && "
+        f"{shlex.quote(str(fixture['fake_sbatch']))} {shlex.quote(run_id)} && "
+        "sleep 60"
+    )
+
+
 def test_durable_gate_parallelism_contract() -> None:
     module = _load_gate_module()
     manifests: list[Path] = []
@@ -329,6 +401,62 @@ def test_durable_gate_parallelism_contract() -> None:
             assert rc == 0, payload
             assert payload["ok"] is True
             assert payload["state"] == "RUNNING"
+
+            overlap = _write_overlap_fixture(root)
+            assert overlap["selection_one"].read_text(encoding="utf-8") != overlap[
+                "selection_two"
+            ].read_text(encoding="utf-8")
+            overlap_first = _prepare(
+                module,
+                root,
+                profile,
+                "overlap-first",
+                serialization_group="overlap-wave-one",
+                exact_command=_ownership_command(
+                    overlap, overlap["selection_one"], "overlap-first"
+                ),
+            )
+            overlap_second = _prepare(
+                module,
+                root,
+                profile,
+                "overlap-second",
+                serialization_group="overlap-wave-two",
+                exact_command=_ownership_command(
+                    overlap, overlap["selection_two"], "overlap-second"
+                ),
+            )
+            manifests.extend((overlap_first, overlap_second))
+            assert _read_manifest(overlap_first)["serialization_group"] != _read_manifest(
+                overlap_second
+            )["serialization_group"]
+
+            rc, payload = _launch(module, root, profile, overlap_first)
+            assert rc == 0, payload
+            assert payload["state"] == "RUNNING"
+            _wait_for_lines(overlap["sbatch_log"], ["overlap-first"])
+
+            # Distinct durable serialization groups do not bypass concrete
+            # artifact ownership.  The second selection overlaps the first
+            # expanded scratch/NAS paths and must fail before fake sbatch.
+            rc, payload = _launch(module, root, profile, overlap_second)
+            assert rc == 0, payload
+            assert payload["state"] == "RUNNING"
+            rc, payload = _wait(module, root, overlap_second)
+            assert rc == 0, payload
+            assert payload["state"] == "FAILED"
+            overlap_second_value = _read_manifest(overlap_second)
+            assert overlap_second_value["state"] == "FAILED"
+            assert overlap["sbatch_log"].read_text(encoding="utf-8").splitlines() == [
+                "overlap-first"
+            ]
+            overlap_second_log = Path(overlap_second_value["remote_log"]).read_text(
+                encoding="utf-8"
+            )
+            assert "active global artifact owner" in overlap_second_log
+            assert str(
+                (overlap["scratch"] / "dataset-one" / "output" / "shared.h5ad").resolve()
+            ) in overlap_second_log
 
             malformed_predecessor = root / "malformed-predecessor.json"
             malformed_predecessor.write_text("{not-json\n", encoding="utf-8")

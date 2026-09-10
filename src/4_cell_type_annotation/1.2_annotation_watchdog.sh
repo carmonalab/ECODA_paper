@@ -22,23 +22,236 @@ CURRENT_MANIFEST="${ROOT_MANIFEST}"
 RETRY_INDEX=0
 SCHEDULER_IDS=("${ARRAY_ID}")
 RUNTIME_EXPORT=""
+STAGE4_OUTPUT_OWNER_DIRS=()
+STAGE4_OUTPUT_OWNER_PATHS=()
+
+stage4_build_owner_selection() {
+  local manifest="$1" output="$2"
+  local ds chunk feather_dir sel_ds sel_view extra existing
+  local selected_datasets=() matched_datasets=() matched
+  : > "${output}" || return 1
+  while IFS=$'\t' read -r ds chunk feather_dir; do
+    [[ -n "${ds}" && -n "${chunk}" && -n "${feather_dir}" ]] || return 1
+    ecoda_validate_run_owned_path "${chunk}" "${RUN_ROOT}" || return 1
+    [[ "${chunk}" == "${RUN_ROOT}/datasets/${ds}/chunks/chunk_"*.txt &&
+       "${feather_dir}" == "${RUN_ROOT}/datasets/${ds}/annotations" ]] || return 1
+    matched=0
+    if [[ ${#selected_datasets[@]} -gt 0 ]]; then
+      for existing in "${selected_datasets[@]}"; do
+        [[ "${existing}" == "${ds}" ]] && { matched=1; break; }
+      done
+    fi
+    [[ ${matched} -eq 1 ]] || selected_datasets+=("${ds}")
+  done < "${manifest}"
+  while IFS=$'\t' read -r sel_ds sel_view extra; do
+    [[ -n "${sel_ds}" && -n "${sel_view}" && -z "${extra}" ]] || return 1
+    matched=0
+    if [[ ${#selected_datasets[@]} -gt 0 ]]; then
+      for ds in "${selected_datasets[@]}"; do
+        if [[ "${ds}" == "${sel_ds}" ]]; then
+          printf '%s\t%s\n' "${sel_ds}" "${sel_view}" >> "${output}" || return 1
+          matched=1
+          break
+        fi
+      done
+    fi
+    [[ ${matched} -eq 0 ]] && continue
+    matched=0
+    if [[ ${#matched_datasets[@]} -gt 0 ]]; then
+      for existing in "${matched_datasets[@]}"; do
+        [[ "${existing}" == "${sel_ds}" ]] && { matched=1; break; }
+      done
+    fi
+    [[ ${matched} -eq 1 ]] || matched_datasets+=("${sel_ds}")
+  done < "${STAGE4_SELECTION_MANIFEST}"
+  for ds in "${selected_datasets[@]}"; do
+    matched=0
+    if [[ ${#matched_datasets[@]} -gt 0 ]]; then
+      for existing in "${matched_datasets[@]}"; do
+        [[ "${existing}" == "${ds}" ]] && { matched=1; break; }
+      done
+    fi
+    [[ ${matched} -eq 1 ]] || return 1
+  done
+  [[ -s "${output}" ]]
+}
+
+stage4_collect_output_owners() {
+  local manifest="$1" selection path owner_dir existing owner_path write_flag
+  local output_index=0 seen
+  selection="${RUN_ROOT}/manifests/.stage4_annotation_selection_$$-${RANDOM}.tsv"
+  stage4_build_owner_selection "${manifest}" "${selection}" || {
+    rm -f "${selection}"
+    return 1
+  }
+  ecoda_validate_run_owned_path "${selection}" "${RUN_ROOT}" || {
+    rm -f "${selection}"
+    return 1
+  }
+  ecoda_validate_manifest "${selection}" 2 || {
+    rm -f "${selection}"
+    return 1
+  }
+  if ! ecoda_validate_output_ownership stage4 "${selection}" "${RUN_ID}"; then
+    rm -f "${selection}"
+    return 1
+  fi
+  rm -f "${selection}" || return 1
+  for path in "${ECODA_OUTPUT_PATHS[@]}"; do
+    write_flag="${ECODA_OUTPUT_WRITE_FLAGS[${output_index}]:-1}"
+    output_index=$((output_index + 1))
+    [[ "${write_flag}" == "1" ]] || continue
+    owner_dir="$(ecoda_artifact_owner_dir "${path}")" || return 1
+    [[ -d "${owner_dir}" ]] || return 1
+    _ecoda_artifact_owner_validate_dir "${owner_dir}" "${path}" || return 1
+    [[ "${ECODA_ARTIFACT_OWNER_RUN}" == "${RUN_ID}" &&
+       "${ECODA_ARTIFACT_OWNER_STAGE}" == "stage4" &&
+       "${ECODA_ARTIFACT_OWNER_STATE}" == "ACTIVE" ]] || return 1
+    seen=0
+    if [[ ${#STAGE4_OUTPUT_OWNER_DIRS[@]} -gt 0 ]]; then
+      for existing in "${STAGE4_OUTPUT_OWNER_DIRS[@]}"; do
+        if [[ "${existing}" == "${owner_dir}" ]]; then
+          seen=1
+          break
+        fi
+      done
+    fi
+    if [[ ${seen} -eq 0 ]]; then
+      STAGE4_OUTPUT_OWNER_DIRS+=("${owner_dir}")
+      STAGE4_OUTPUT_OWNER_PATHS+=("${path}")
+    fi
+  done
+}
+
+stage4_finalize_output_owners() {
+  local state="$1" reason="${2:-}" owner owner_path owner_state owner_run owner_stage
+  local rc=0 output_index=0
+  [[ "${state}" == "OK" || "${state}" == "FAIL" ]] || return 1
+  [[ ${#STAGE4_OUTPUT_OWNER_DIRS[@]} -gt 0 ]] || return 0
+  [[ ${#STAGE4_OUTPUT_OWNER_DIRS[@]} -eq ${#STAGE4_OUTPUT_OWNER_PATHS[@]} ]] || return 1
+  for owner in "${STAGE4_OUTPUT_OWNER_DIRS[@]}"; do
+    owner_path="${STAGE4_OUTPUT_OWNER_PATHS[${output_index}]:-}"
+    output_index=$((output_index + 1))
+    [[ -n "${owner_path}" ]] || { rc=1; continue; }
+    _ecoda_artifact_owner_validate_dir "${owner}" "${owner_path}" || { rc=1; continue; }
+    owner_run="${ECODA_ARTIFACT_OWNER_RUN}"
+    owner_stage="${ECODA_ARTIFACT_OWNER_STAGE}"
+    owner_state="${ECODA_ARTIFACT_OWNER_STATE}"
+    [[ "${owner_run}" == "${RUN_ID}" && "${owner_stage}" == "stage4" ]] ||
+      { rc=1; continue; }
+    if [[ "${state}" == "OK" ]]; then
+      [[ "${owner_state}" == "ACTIVE" ]] || { rc=1; continue; }
+    else
+      [[ "${owner_state}" == "ACTIVE" || "${owner_state}" == "FAIL" ]] ||
+        { rc=1; continue; }
+    fi
+  done
+  [[ ${rc} -eq 0 ]] || return 1
+  output_index=0
+  for owner in "${STAGE4_OUTPUT_OWNER_DIRS[@]}"; do
+    owner_path="${STAGE4_OUTPUT_OWNER_PATHS[${output_index}]:-}"
+    output_index=$((output_index + 1))
+    _ecoda_artifact_owner_validate_dir "${owner}" "${owner_path}" || { rc=1; continue; }
+    owner_run="${ECODA_ARTIFACT_OWNER_RUN}"
+    owner_stage="${ECODA_ARTIFACT_OWNER_STAGE}"
+    owner_state="${ECODA_ARTIFACT_OWNER_STATE}"
+    [[ "${owner_run}" == "${RUN_ID}" && "${owner_stage}" == "stage4" &&
+       "${owner_state}" == "ACTIVE" ]] || { rc=1; continue; }
+    ecoda_owner_set_state "${owner}" "${state}" "${reason}" || rc=1
+  done
+  return "${rc}"
+}
+
+stage4_assert_output_owners_active() {
+  local owner owner_path owner_run owner_stage owner_state
+  local output_index=0
+  [[ ${#STAGE4_OUTPUT_OWNER_DIRS[@]} -gt 0 ]] || return 1
+  [[ ${#STAGE4_OUTPUT_OWNER_DIRS[@]} -eq ${#STAGE4_OUTPUT_OWNER_PATHS[@]} ]] || return 1
+  for owner in "${STAGE4_OUTPUT_OWNER_DIRS[@]}"; do
+    owner_path="${STAGE4_OUTPUT_OWNER_PATHS[${output_index}]:-}"
+    output_index=$((output_index + 1))
+    [[ -n "${owner_path}" ]] || return 1
+    _ecoda_artifact_owner_validate_dir "${owner}" "${owner_path}" || return 1
+    owner_run="${ECODA_ARTIFACT_OWNER_RUN}"
+    owner_stage="${ECODA_ARTIFACT_OWNER_STAGE}"
+    owner_state="${ECODA_ARTIFACT_OWNER_STATE}"
+    [[ "${owner_run}" == "${RUN_ID}" &&
+       "${owner_stage}" == "stage4" &&
+       "${owner_state}" == "ACTIVE" ]] || return 1
+  done
+}
+
+
+
+STAGE4_ARTIFACT_RECORD_USED=0
 status_write() {
   local state="$1" reason="${2:-}" tmp="${STATUS_FILE}.tmp.$$"
   mkdir -p "$(dirname "${STATUS_FILE}")"
   {
-    printf 'STATE=%s\nRUN_ID=%s\nREASON=%s\nARRAY_JOB_ID=%s\nRETRY_INDEX=%s\n' "${state}" "${RUN_ID}" "${reason}" "${ARRAY_ID}" "${RETRY_INDEX}"
+    printf 'STATE=%s\nRUN_ID=%s\nSOURCE_ROOT=%s\nSOURCE_MANIFEST=%s\nRUNTIME_IMAGE=%s\nRUNTIME_MANIFEST=%s\nREASON=%s\nARRAY_JOB_ID=%s\nRETRY_INDEX=%s\n' \
+      "${state}" "${RUN_ID}" "${ECODA_SOURCE_ROOT:-}" "${ECODA_SOURCE_MANIFEST:-}" \
+      "${ECODA_RUNTIME_IMAGE:-}" "${ECODA_RUNTIME_MANIFEST:-}" "${reason}" "${ARRAY_ID}" "${RETRY_INDEX}"
     if [[ -n "${SLURM_JOB_ID:-}" ]]; then printf 'SCHEDULER_ID=%s\n' "${SLURM_JOB_ID}"; fi
     local scheduler_id
     for scheduler_id in "${SCHEDULER_IDS[@]}"; do printf 'SCHEDULER_ID=%s\n' "${scheduler_id}"; done
   } > "${tmp}"
   mv -f "${tmp}" "${STATUS_FILE}"
 }
-fail() { status_write FAIL "$1"; exit 1; }
+fail() {
+  local reason="$1"
+  ecoda_owner_finalize_tracked FAIL "${reason}" >/dev/null 2>&1 || true
+  stage4_finalize_output_owners FAIL "${reason}" >/dev/null 2>&1 || true
+  status_write FAIL "${reason}"
+  exit 1
+}
+load_bound_identity() {
+  local source_copy="${RUN_ROOT}/manifests/source.manifest"
+  local runtime_identity="${RUN_ROOT}/manifests/runtime.identity"
+  local source_root expected_source_manifest runtime_image runtime_manifest
+  local metadata_stage metadata_run
+  [[ -s "${source_copy}" && ! -L "${source_copy}" &&
+     -s "${runtime_identity}" && ! -L "${runtime_identity}" ]] || {
+    echo "ERROR: legacy_source_unpinned: Stage 4 run lacks source/runtime identity manifests." >&2
+    return 1
+  }
+  metadata_stage="$(sed -n 's/^STAGE=//p' "${RUN_ROOT}/metadata" | head -1 || true)"
+  metadata_run="$(sed -n 's/^RUN_ID=//p' "${RUN_ROOT}/metadata" | head -1 || true)"
+  [[ "${metadata_stage}" == "stage4" && "${metadata_run}" == "${RUN_ID}" ]] || return 1
+  source_root="$(sed -n 's/^SOURCE_ROOT=//p' "${source_copy}" | head -1)"
+  [[ "${source_root}" = /* && "${source_root##*/}" == tree ]] || return 1
+  expected_source_manifest="${source_root%/tree}/identity/source.manifest"
+  [[ -f "${expected_source_manifest}" && -r "${expected_source_manifest}" ]] || return 1
+  cmp -s "${source_copy}" "${expected_source_manifest}" || return 1
+  runtime_image="$(sed -n 's/^RUNTIME_IMAGE=//p' "${runtime_identity}" | head -1)"
+  runtime_manifest="$(sed -n 's/^RUNTIME_MANIFEST=//p' "${runtime_identity}" | head -1)"
+  [[ "${runtime_image}" = /* && "${runtime_manifest}" = /* ]] || return 1
+  export ECODA_SOURCE_ROOT="${source_root}"
+  export ECODA_SOURCE_MANIFEST="${expected_source_manifest}"
+  export ECODA_SOURCE_SNAPSHOT_REQUIRED=1
+  export ECODA_AUX_ROOT="${source_root}/aux"
+  export ECODA_RUNTIME_IMAGE="${runtime_image}"
+  export ECODA_RUNTIME_MANIFEST="${runtime_manifest}"
+  export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT="${RUN_ROOT}"
+  export PROJECT_ROOT="${source_root}"
+  export DATASETS_JSON_FILE="${source_root}/datasets.json"
+  export SCGATE_DB_PATH="${ECODA_AUX_ROOT}/scGateDB.rds"
+}
+
+export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT="${RUN_ROOT}"
+load_bound_identity || fail "legacy_source_unpinned: Stage 4 annotation run is not source/runtime pinned"
 export ECODA_RUNTIME_PROFILE=stage4
-ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" || \
-  fail "Stage 4 immutable runtime validation failed before annotation retry handling"
+ecoda_runtime_validate_bound_run || \
+  fail "Stage 4 bound runtime validation failed before annotation retry handling"
 RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage4 0)" || \
   fail "Stage 4 runtime export construction failed"
+STAGE4_SELECTION_MANIFEST="${RUN_ROOT}/manifests/runnable_selection.tsv"
+if [[ ! -r "${STAGE4_SELECTION_MANIFEST}" ]]; then
+  STAGE4_SELECTION_MANIFEST="${RUN_ROOT}/manifests/selection.tsv"
+fi
+ecoda_validate_run_owned_path "${STAGE4_SELECTION_MANIFEST}" "${RUN_ROOT}" ||
+  fail "Stage 4 ownership selection manifest is outside the run root"
+ecoda_validate_manifest "${STAGE4_SELECTION_MANIFEST}" 2 ||
+  fail "Stage 4 ownership selection manifest is invalid"
 bump_mem() { [[ "$1" =~ ^([0-9]+)([GT])$ ]] || return 1; printf '%s%s' "$((BASH_REMATCH[1] * 2))" "${BASH_REMATCH[2]}"; }
 mem_ge() { local a="$1" b="$2" an as bn bs; [[ "${a}" =~ ^([0-9]+)([GT])$ ]] || return 1; an="${BASH_REMATCH[1]}"; as="${BASH_REMATCH[2]}"; [[ "${b}" =~ ^([0-9]+)([GT])$ ]] || return 1; bn="${BASH_REMATCH[1]}"; bs="${BASH_REMATCH[2]}"; [[ "${as}" == T ]] && an=$((an * 1024)); [[ "${bs}" == T ]] && bn=$((bn * 1024)); (( an >= bn )); }
 classify() {
@@ -58,8 +271,20 @@ classify() {
     esac
   done <<< "${rows}"
 }
+validate_artifact() {
+  local path="$1" producer="${2:-${RUN_ID}}" record=""
+  STAGE4_ARTIFACT_RECORD_USED=0
+  record="$(ecoda_artifact_record_path "${path}" "${RUN_ID}" 2>/dev/null || true)"
+  if [[ -n "${record}" && -e "${record}" ]]; then
+    ecoda_validate_artifact_record "${path}" "${producer}" "${RUN_ID}" || return 1
+    STAGE4_ARTIFACT_RECORD_USED=1
+  else
+    ecoda_validate_checksum "${path}"
+  fi
+}
 validate_feathers() {
   local manifest="$1" ds chunk feather_dir chunk_num feather union_path sample expected_union expected_chunk_dir
+  local feather_sidecar_flag
   local expected_args validated_unions=""
   while IFS=$'\t' read -r ds chunk feather_dir; do
     [[ -n "${ds}" && -n "${chunk}" && -n "${feather_dir}" ]] || return 1
@@ -77,7 +302,7 @@ validate_feathers() {
     case " ${validated_unions} " in
       *" ${union_path} "*) ;;
       *)
-        ecoda_validate_checksum "${union_path}" || return 1
+        validate_artifact "${union_path}" || return 1
         validated_unions="${validated_unions} ${union_path}"
         ;;
     esac
@@ -86,8 +311,11 @@ validate_feathers() {
       [[ -n "${sample}" ]] || return 1
       expected_args+=(--expected-sample "${sample}")
     done < <(sed -n '2,$p' "${chunk}")
+    validate_artifact "${feather}" stage4_annotation || return 1
+    feather_sidecar_flag="--require-sidecar"
+    [[ ${STAGE4_ARTIFACT_RECORD_USED} -eq 1 ]] && feather_sidecar_flag="--sidecar-validated"
     "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/annotation_contract.py" \
-      --path "${feather}" --require-sidecar "${expected_args[@]}" >/dev/null 2>&1 || return 1
+      --path "${feather}" "${feather_sidecar_flag}" "${expected_args[@]}" >/dev/null 2>&1 || return 1
   done < "${manifest}"
 }
 ecoda_validate_run_owned_path "${ROOT_MANIFEST}" "${RUN_ROOT}" ||
@@ -99,6 +327,9 @@ ecoda_validate_run_owned_path "${manifest}" "${RUN_ROOT}" ||
 ecoda_validate_manifest "${manifest}" 3 || fail "annotation validation manifest is invalid"
 expected="$(wc -l < "${CURRENT_MANIFEST}" | tr -d '[:space:]')"
 [[ "${expected}" =~ ^[1-9][0-9]*$ ]] || fail "annotation array manifest empty"
+stage4_collect_output_owners "${ROOT_MANIFEST}" ||
+  fail "Stage 4 annotation output ownership validation failed before watchdog accounting"
+
 while :; do
   classify "${ARRAY_ID}" "${expected}" || fail "sacct did not provide terminal annotation rows"
   [[ ${#FAILED_TASKS[@]} -eq 0 ]] || fail "non-OOM annotation failure: ${FAILED_TASKS[*]}"
@@ -121,10 +352,15 @@ while :; do
     fail "annotation retry manifest escaped the run root"
   ecoda_validate_manifest "${RETRY_MANIFEST}" 3 || fail "annotation retry manifest is invalid"
   retry_count="$(wc -l < "${RETRY_MANIFEST}" | tr -d '[:space:]')"
+  stage4_collect_output_owners "${ROOT_MANIFEST}" ||
+    fail "Stage 4 annotation retry output ownership validation failed"
+  retry_script="$(ecoda_require_source_script_path \
+    "${SCRIPT_DIR}/2.1_run_worker.sh" "${ECODA_SOURCE_ROOT}")" ||
+    fail "Stage 4 annotation retry worker is outside the immutable source root"
   set +e
   retry_msg="$(sbatch --parsable --array="1-${retry_count}%${THROTTLE}" --mem="${NEXT_MEMORY}" --time="${ANNOTATION_WORKER_TIME_LIMIT}" --partition="${PARTITION}" \
     --output="${LOGS_DIR}/4_cell_type_annotation_retry${RETRY_INDEX}_%A_%a.log" --error="${LOGS_DIR}/4_cell_type_annotation_retry${RETRY_INDEX}_%A_%a.err" --mail-user="${USER_EMAIL}" \
-    --export="ALL,CHUNKS_MANIFEST=${RETRY_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},ANNOTATION_ERROR_PREFIX=${LOGS_DIR}/4_cell_type_annotation_retry${RETRY_INDEX},${RUNTIME_EXPORT}" "${SCRIPT_DIR}/2.1_run_worker.sh")"
+    --export="ALL,CHUNKS_MANIFEST=${RETRY_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},ANNOTATION_ERROR_PREFIX=${LOGS_DIR}/4_cell_type_annotation_retry${RETRY_INDEX},${RUNTIME_EXPORT}" "${retry_script}")"
   retry_rc=$?
   set -e
   [[ ${retry_rc} -eq 0 ]] || fail "sbatch rejected annotation OOM retry"
@@ -135,4 +371,8 @@ while :; do
   CURRENT_MANIFEST="${RETRY_MANIFEST}"; expected="${retry_count}"; CURRENT_MEMORY="${NEXT_MEMORY}"
 done
 validate_feathers "${manifest}" || fail "annotation feather schema/key validation failed"
+# Annotation is non-terminal: the submitter's final H5AD owners stay ACTIVE
+# until the merge watchdog validates the merged outputs.
+stage4_assert_output_owners_active ||
+  fail "Stage 4 annotation output owners are not active after validation"
 status_write OK "all annotation chunks completed and validated"

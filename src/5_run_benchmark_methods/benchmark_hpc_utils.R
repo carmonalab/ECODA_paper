@@ -13,6 +13,42 @@
 PB_VARIANT_NAMES <- c(
   "schvg2000", "hvg2000", "hvg500", "hvg2000_bl", "hvg1000", "hvg3000"
 )
+# Every prepared cache record is published by the Stage 5 producer for its
+# variant, regardless of which downstream benchmark method consumes it.
+PB_VARIANT_PRODUCERS <- setNames(
+  paste0("stage5_prepare_pseudobulk_", PB_VARIANT_NAMES),
+  PB_VARIANT_NAMES
+)
+
+# Validate a prepared pseudobulk cache against its canonical producer. A
+# run-owned record is authoritative: malformed or mismatched records fail
+# closed instead of being treated as a cache miss. Artifacts from before
+# run-owned records were introduced retain the strict sidecar fallback.
+.pb_variant_cache_valid <- function(path, variant) {
+  producer <- PB_VARIANT_PRODUCERS[[variant]]
+  context <- .artifact_context(producer = producer)
+  if (!is.null(context)) {
+    record_path <- artifact_record_path(
+      path, context$run_id, runs_root = context$runs_root
+    )
+    if (file.exists(record_path)) {
+      record <- artifact_record_for_load(
+        path, producer = producer, run_id = context$run_id
+      )
+      if (is.null(record)) {
+        stop("Artifact record validation failed: ", record_path)
+      }
+      sidecar <- .artifact_sidecar(path, verify = TRUE)
+      if (is.null(sidecar) ||
+          !identical(sidecar$MD5, record$MD5) ||
+          !identical(sidecar$SIZE, record$SIZE)) {
+        stop("Artifact checksum validation failed: ", path)
+      }
+      return(TRUE)
+    }
+  }
+  artifact_checksum_ok(path, producer = producer)
+}
 
 # Tiny "--flag value" / "--flag=value" / "--flag" (TRUE) arg parser
 parse_flags <- function(raw_args) {
@@ -91,11 +127,14 @@ make_hvg_sets <- function(hvg_rank_genes, sizes = c(1000, 2000, 3000)) {
 pb_variants_missing <- function(pseudobulk_dir, ds, force = FALSE,
                                 cache_stem = ds) {
   if (force) return(PB_VARIANT_NAMES)
-  paths <- file.path(
-    pseudobulk_dir,
-    paste0(cache_stem, "_pseudobulk_", PB_VARIANT_NAMES, ".rds")
-  )
-  PB_VARIANT_NAMES[!vapply(paths, artifact_checksum_ok, logical(1))]
+  valid <- vapply(PB_VARIANT_NAMES, function(variant) {
+    path <- file.path(
+      pseudobulk_dir,
+      paste0(cache_stem, "_pseudobulk_", variant, ".rds")
+    )
+    .pb_variant_cache_valid(path, variant)
+  }, logical(1))
+  PB_VARIANT_NAMES[!valid]
 }
 
 # Validate the on-disk AnnData contract before any benchmark worker builds a
@@ -403,18 +442,19 @@ load_pb_variants <- function(
     stop("Unknown pseudobulk variant requested: ",
          paste(setdiff(target_variants, PB_VARIANT_NAMES), collapse = ", "))
   }
-  cache_paths <- file.path(
-    pseudobulk_dir,
-    paste0(cache_stem, "_pseudobulk_", target_variants, ".rds")
-  )
-  missing <- target_variants[
-    force | !vapply(cache_paths, artifact_checksum_ok, logical(1))
-  ]
-  loaded <- target_variants[!target_variants %in% missing]
+  missing <- character()
   variants_out <- list()
-  for (v in loaded) {
-    variants_out[[v]] <- readRDS(
-      file.path(pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds"))
+  for (v in target_variants) {
+    cache_path <- file.path(
+      pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds")
+    )
+    if (force || !.pb_variant_cache_valid(cache_path, v)) {
+      missing <- c(missing, v)
+      next
+    }
+    variants_out[[v]] <- read_rds_checked(
+      cache_path,
+      producer = PB_VARIANT_PRODUCERS[[v]]
     )
   }
   if (length(missing) > 0) {
@@ -437,7 +477,8 @@ load_pb_variants <- function(
     for (v in names(computed)) {
       save_rds_atomic(
         computed[[v]],
-        file.path(pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds"))
+        file.path(pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds")),
+        producer = PB_VARIANT_PRODUCERS[[v]]
       )
       log_exec_row(ds, paste0("prepare_pseudobulk_", v),
                    computed[[v]]$time_secs, log_file)
@@ -478,8 +519,123 @@ load_composition_pb_variants <- function(
 }
 
 
+# Artifact records are run-owned, immutable publication metadata. A valid
+# record lets cache checks reuse the already computed MD5; an absent record
+# falls back to the strict sidecar/content check for legacy artifacts.
+.artifact_canonical_path <- function(path) {
+  if (!is.character(path) || length(path) != 1L || is.na(path) ||
+      !nzchar(path)) stop("artifact path must be one non-empty string")
+  normalizePath(path, winslash = "/", mustWork = FALSE)
+}
+
+.artifact_sha256_text <- function(value) {
+  if (requireNamespace("digest", quietly = TRUE)) {
+    return(tolower(digest::digest(value, algo = "sha256", serialize = FALSE)))
+  }
+  commands <- c("shasum", "sha256sum")
+  executable <- commands[nzchar(Sys.which(commands))][1L]
+  if (is.na(executable)) stop("digest package or SHA-256 utility is required")
+  temporary <- tempfile("ecoda_sha256_")
+  on.exit(unlink(temporary), add = TRUE)
+  writeBin(charToRaw(value), temporary)
+  arguments <- if (identical(executable, "shasum")) {
+    c("-a", "256", temporary)
+  } else {
+    temporary
+  }
+  output <- system2(executable, arguments, stdout = TRUE, stderr = TRUE)
+  digest <- sub("[[:space:]].*$", "", output[grepl("^[[:xdigit:]]{64}", output)][1L])
+  if (length(digest) != 1L || is.na(digest) ||
+      !grepl("^[0-9a-fA-F]{64}$", digest)) {
+    stop("could not compute SHA-256 for artifact record path")
+  }
+  tolower(digest)
+}
+
+.artifact_context <- function(producer = NULL, run_id = NULL,
+                              execution_log = FALSE) {
+  if (is.null(run_id)) run_id <- Sys.getenv("ECODA_RUN_ID", unset = "")
+  if (is.null(producer)) {
+    env_name <- if (execution_log) {
+      "ECODA_EXECUTION_LOG_PRODUCER"
+    } else {
+      "ECODA_ARTIFACT_PRODUCER"
+    }
+    producer <- Sys.getenv(env_name, unset = "")
+    if (!nzchar(producer) && !execution_log) {
+      producer <- Sys.getenv("METHOD", unset = "")
+      if (!nzchar(producer)) producer <- Sys.getenv("ANALYSIS", unset = "")
+    }
+    if (execution_log && !nzchar(producer)) producer <- "stage5_execution_log"
+  }
+  if (!is.character(run_id) || length(run_id) != 1L || is.na(run_id) ||
+      !grepl("^[A-Za-z0-9][A-Za-z0-9_-]*$", run_id)) return(NULL)
+  if (!is.character(producer) || length(producer) != 1L || is.na(producer) ||
+      !nzchar(producer) || grepl("[\r\n]", producer, perl = TRUE)) return(NULL)
+  runs_root <- Sys.getenv("ECODA_RUNS_ROOT", unset = "")
+  if (!nzchar(runs_root)) {
+    scratch <- Sys.getenv("HPC_SCRATCH_DIR", unset = "")
+    if (nzchar(scratch)) runs_root <- file.path(scratch, "_ecoda_runs")
+  }
+  if (!nzchar(runs_root) || !grepl("^/", runs_root)) return(NULL)
+  list(
+    run_id = run_id,
+    producer = producer,
+    runs_root = runs_root
+  )
+}
+
+artifact_record_path <- function(path, run_id, runs_root = NULL) {
+  canonical <- .artifact_canonical_path(path)
+  if (!is.character(run_id) || length(run_id) != 1L ||
+      !grepl("^[A-Za-z0-9][A-Za-z0-9_-]*$", run_id)) {
+    stop("artifact record run ID is invalid")
+  }
+  if (is.null(runs_root)) {
+    context <- .artifact_context(run_id = run_id, producer = "record")
+    if (is.null(context)) stop("artifact record root is unavailable")
+    runs_root <- context$runs_root
+  } else {
+    if (!is.character(runs_root) || length(runs_root) != 1L ||
+        is.na(runs_root) || !grepl("^/", runs_root)) {
+      stop("artifact record root must be absolute")
+    }
+    runs_root <- as.character(runs_root)
+  }
+  key <- substr(.artifact_sha256_text(canonical), 1L, 32L)
+  file.path(runs_root, run_id, "manifests", "artifacts",
+            paste0(key, ".record"))
+}
+
+.artifact_sidecar <- function(path, verify = FALSE, allow_canonical = FALSE) {
+  if (!file.exists(path) || !isTRUE(file.info(path)$size > 0)) return(NULL)
+  sidecar <- paste0(path, ".md5")
+  if (!file.exists(sidecar) || !isTRUE(file.info(sidecar)$size > 0)) return(NULL)
+  lines <- tryCatch(readLines(sidecar, warn = FALSE),
+                    error = function(e) character())
+  if (length(lines) != 3L ||
+      !identical(sub("=.*$", "", lines), c("MD5", "SIZE", "PATH"))) {
+    return(NULL)
+  }
+  md5 <- sub("^MD5=", "", lines[[1L]])
+  size <- sub("^SIZE=", "", lines[[2L]])
+  recorded <- sub("^PATH=", "", lines[[3L]])
+  canonical <- .artifact_canonical_path(path)
+  valid_path <- identical(recorded, as.character(path)) ||
+    (allow_canonical && identical(recorded, canonical))
+  if (!valid_path || !grepl("^[0-9a-fA-F]{32}$", md5) ||
+      !grepl("^[1-9][0-9]*$", size) ||
+      !identical(size, as.character(file.info(path)$size))) return(NULL)
+  if (verify) {
+    actual <- unname(tools::md5sum(path))
+    if (length(actual) != 1L || is.na(actual) ||
+        !identical(tolower(md5), tolower(actual))) return(NULL)
+  }
+  list(MD5 = tolower(md5), SIZE = size, PATH = recorded)
+}
+
 # Atomic RDS write plus a sidecar used by idempotency checks.
-save_rds_atomic <- function(object, file) {
+save_rds_atomic <- function(object, file, producer = NULL, run_id = NULL) {
   validate_rds_object <- function(value) {
     if (is.null(value) || (is.list(value) && length(value) == 0L)) {
       stop("RDS artifact is empty: ", file)
@@ -500,6 +656,8 @@ save_rds_atomic <- function(object, file) {
   had_sidecar <- file.exists(sidecar)
   installed <- FALSE
   sidecar_installed <- FALSE
+  digest <- NULL
+  size <- NULL
   restore <- function() {
     if (installed && file.exists(file)) unlink(file)
     if (had_file && file.exists(backup)) file.rename(backup, file)
@@ -526,9 +684,11 @@ save_rds_atomic <- function(object, file) {
     }
     if (!file.rename(tmp, file)) stop("Could not atomically install RDS: ", file)
     installed <- TRUE
+    digest <- tolower(unname(tools::md5sum(file)))
+    size <- as.character(file.info(file)$size)
     writeLines(c(
-      paste0("MD5=", unname(tools::md5sum(file))),
-      paste0("SIZE=", file.info(file)$size),
+      paste0("MD5=", digest),
+      paste0("SIZE=", size),
       paste0("PATH=", file)
     ), checksum_tmp)
     if (!file.rename(checksum_tmp, sidecar)) {
@@ -539,19 +699,151 @@ save_rds_atomic <- function(object, file) {
     restore()
     stop(error)
   })
+  artifact_write_record(file, producer = producer, run_id = run_id,
+                        md5 = digest, size = size)
   invisible(NULL)
 }
 
-artifact_checksum_ok <- function(file) {
-  sidecar <- paste0(file, ".md5")
-  if (!file.exists(file) || file.info(file)$size <= 0 || !file.exists(sidecar)) return(FALSE)
-  lines <- readLines(sidecar, warn = FALSE)
-  md5 <- sub("^MD5=", "", lines[grepl("^MD5=", lines)][1])
-  size <- sub("^SIZE=", "", lines[grepl("^SIZE=", lines)][1])
-  recorded <- sub("^PATH=", "", lines[grepl("^PATH=", lines)][1])
-  identical(recorded, file) &&
-    identical(md5, unname(tools::md5sum(file))) &&
-    identical(size, as.character(file.info(file)$size))
+.artifact_record_from_file <- function(path, producer = NULL, run_id = NULL) {
+  context <- .artifact_context(producer = producer, run_id = run_id)
+  if (is.null(context)) return(NULL)
+  record_path <- artifact_record_path(
+    path, context$run_id, runs_root = context$runs_root
+  )
+  if (!file.exists(record_path) || !isTRUE(file.info(record_path)$size > 0)) {
+    return(NULL)
+  }
+  lines <- tryCatch(readLines(record_path, warn = FALSE),
+                    error = function(e) character())
+  keys <- c("PATH", "SIZE", "MD5", "RUN_ID", "PRODUCER", "STATE")
+  if (length(lines) != length(keys) ||
+      !identical(sub("=.*$", "", lines), keys)) {
+    stop("Artifact record has the wrong schema: ", record_path)
+  }
+  values <- sub("^[^=]*=", "", lines)
+  record <- as.list(values)
+  names(record) <- keys
+  canonical <- .artifact_canonical_path(path)
+  if (!identical(record$PATH, canonical) ||
+      !identical(record$RUN_ID, context$run_id) ||
+      !identical(record$PRODUCER, context$producer) ||
+      !identical(record$STATE, "PUBLISHED") ||
+      !grepl("^[0-9a-f]{32}$", record$MD5) ||
+      !grepl("^[1-9][0-9]*$", record$SIZE)) {
+    stop("Artifact record binding is invalid: ", record_path)
+  }
+  info <- file.info(path)
+  if (is.na(info$size) || info$size <= 0 ||
+      !identical(record$SIZE, as.character(info$size))) {
+    stop("Artifact record SIZE mismatch: ", path)
+  }
+  sidecar <- .artifact_sidecar(path, allow_canonical = TRUE)
+  if (is.null(sidecar) || !identical(sidecar$MD5, record$MD5) ||
+      !identical(sidecar$SIZE, record$SIZE)) {
+    stop("Artifact record checksum sidecar mismatch: ", path)
+  }
+  record
+}
+
+artifact_validate_record <- function(path, producer = NULL, run_id = NULL) {
+  .artifact_record_from_file(path, producer = producer, run_id = run_id)
+}
+
+artifact_record_for_load <- function(path, producer = NULL, run_id = NULL) {
+  context <- .artifact_context(producer = producer, run_id = run_id)
+  if (!is.null(context)) {
+    record_path <- artifact_record_path(
+      path, context$run_id, runs_root = context$runs_root
+    )
+    if (file.exists(record_path)) {
+      record <- .artifact_record_from_file(
+        path, producer = context$producer, run_id = context$run_id
+      )
+      if (is.null(record)) {
+        stop("Artifact checksum validation failed: ", path)
+      }
+      sidecar <- .artifact_sidecar(path, verify = TRUE)
+      if (is.null(sidecar) ||
+          !identical(sidecar$MD5, record$MD5) ||
+          !identical(sidecar$SIZE, record$SIZE)) {
+        stop("Artifact checksum validation failed: ", path)
+      }
+      return(record)
+    }
+  }
+  sidecar <- .artifact_sidecar(path, verify = TRUE)
+  if (is.null(sidecar)) {
+    stop("Artifact checksum validation failed: ", path)
+  }
+  sidecar
+}
+
+artifact_write_record <- function(
+  path, producer = NULL, run_id = NULL, md5 = NULL, size = NULL
+) {
+  context <- .artifact_context(producer = producer, run_id = run_id)
+  if (is.null(context)) return(invisible(NULL))
+  canonical <- .artifact_canonical_path(path)
+  sidecar <- .artifact_sidecar(path, allow_canonical = TRUE)
+  if (is.null(sidecar)) {
+    stop("Cannot publish artifact record without a valid sidecar: ", path)
+  }
+  if (is.null(md5)) md5 <- sidecar$MD5
+  if (is.null(size)) size <- sidecar$SIZE
+  if (!identical(tolower(as.character(md5)), sidecar$MD5) ||
+      !identical(as.character(size), sidecar$SIZE)) {
+    stop("Artifact record checksum does not match sidecar: ", path)
+  }
+  record_path <- artifact_record_path(
+    canonical, context$run_id, runs_root = context$runs_root
+  )
+  dir.create(dirname(record_path), showWarnings = FALSE, recursive = TRUE)
+  temporary <- paste0(record_path, ".tmp.", Sys.getpid())
+  writeLines(c(
+    paste0("PATH=", canonical),
+    paste0("SIZE=", sidecar$SIZE),
+    paste0("MD5=", sidecar$MD5),
+    paste0("RUN_ID=", context$run_id),
+    paste0("PRODUCER=", context$producer),
+    "STATE=PUBLISHED"
+  ), temporary)
+  if (!file.rename(temporary, record_path)) {
+    if (file.exists(temporary)) unlink(temporary)
+    stop("Could not atomically install artifact record: ", record_path)
+  }
+  invisible(list(
+    PATH = canonical, SIZE = sidecar$SIZE, MD5 = sidecar$MD5,
+    RUN_ID = context$run_id, PRODUCER = context$producer,
+    STATE = "PUBLISHED"
+  ))
+}
+
+artifact_checksum_ok <- function(file, producer = NULL, run_id = NULL) {
+  context <- .artifact_context(producer = producer, run_id = run_id)
+  if (!is.null(context)) {
+    record_path <- artifact_record_path(
+      file, context$run_id, runs_root = context$runs_root
+    )
+    if (file.exists(record_path)) {
+      return(isTRUE(tryCatch(
+        !is.null(.artifact_record_from_file(
+          file, producer = context$producer, run_id = context$run_id
+        )),
+        error = function(e) FALSE
+      )))
+    }
+  }
+  isTRUE(!is.null(.artifact_sidecar(file, verify = TRUE)))
+}
+
+read_rds_checked <- function(path, producer = NULL, run_id = NULL) {
+  artifact_record_for_load(path, producer = producer, run_id = run_id)
+  readRDS(path)
+}
+
+read_feather_checked <- function(path, producer = NULL, run_id = NULL) {
+  artifact_record_for_load(path, producer = producer, run_id = run_id)
+  arrow::read_feather(path)
 }
 # ---------------------------------------------------------------------------
 # Runtime metadata for cached benchmark artifacts. The JSON and its checksum
@@ -601,7 +893,9 @@ runtime_normalize_mem <- function(value, label = "mem_GB") {
 # Strictly validate an MD5/SIZE/PATH sidecar and return its canonical record.
 # Runtime metadata uses this for both the published RDS and the JSON sidecar;
 # unlike artifact_checksum_ok(), malformed or extra sidecar rows are errors.
-runtime_validate_checksum_sidecar <- function(file, description = "artifact") {
+runtime_validate_checksum_sidecar <- function(
+  file, description = "artifact", expected_md5 = NULL, expected_size = NULL
+) {
   file <- runtime_require_string(file, paste0(description, " path"))
   if (!file.exists(file)) stop(description, " is missing: ", file)
   info <- file.info(file)
@@ -623,8 +917,7 @@ runtime_validate_checksum_sidecar <- function(file, description = "artifact") {
     }
   )
   if (length(lines) != 3L || any(!nzchar(lines)) ||
-      !identical(sub("=.*$", "", lines),
-                  c("MD5", "SIZE", "PATH"))) {
+      !identical(sub("=.*$", "", lines), c("MD5", "SIZE", "PATH"))) {
     stop(description, " checksum sidecar has the wrong schema: ", sidecar)
   }
   recorded_md5 <- sub("^MD5=", "", lines[[1L]])
@@ -643,10 +936,20 @@ runtime_validate_checksum_sidecar <- function(file, description = "artifact") {
   if (!identical(recorded_size, as.character(info$size))) {
     stop(description, " checksum sidecar SIZE mismatch: ", file)
   }
-  actual_md5 <- unname(tools::md5sum(file))
-  if (length(actual_md5) != 1L || is.na(actual_md5) ||
-      !identical(recorded_md5, actual_md5)) {
-    stop(description, " checksum sidecar MD5 mismatch: ", file)
+  if (!is.null(expected_md5)) {
+    if (!identical(tolower(as.character(expected_md5)), recorded_md5)) {
+      stop(description, " checksum sidecar MD5 mismatch: ", file)
+    }
+  } else {
+    actual_md5 <- tolower(unname(tools::md5sum(file)))
+    if (length(actual_md5) != 1L || is.na(actual_md5) ||
+        !identical(recorded_md5, actual_md5)) {
+      stop(description, " checksum sidecar MD5 mismatch: ", file)
+    }
+  }
+  if (!is.null(expected_size) &&
+      !identical(as.character(expected_size), recorded_size)) {
+    stop(description, " checksum sidecar SIZE mismatch: ", file)
   }
   list(MD5 = recorded_md5, SIZE = recorded_size, PATH = recorded_path)
 }
@@ -654,16 +957,33 @@ runtime_validate_checksum_sidecar <- function(file, description = "artifact") {
 validate_runtime_metadata <- function(
   artifact_path,
   dataset,
-  method
+  method,
+  producer = NULL,
+  run_id = NULL,
+  artifact_record = NULL
 ) {
   artifact_path <- runtime_require_string(artifact_path, "artifact path")
   dataset <- runtime_require_string(dataset, "dataset")
   method <- runtime_require_string(method, "method")
-  artifact_record <- runtime_validate_checksum_sidecar(
-    artifact_path, "RDS artifact"
+  if (is.null(artifact_record)) {
+    artifact_record <- artifact_record_for_load(
+      artifact_path, producer = producer, run_id = run_id
+    )
+  }
+  runtime_validate_checksum_sidecar(
+    artifact_path, "RDS artifact",
+    expected_md5 = artifact_record[["MD5"]],
+    expected_size = artifact_record[["SIZE"]]
   )
   metadata_path <- runtime_metadata_path(artifact_path)
-  runtime_validate_checksum_sidecar(metadata_path, "runtime metadata")
+  metadata_record <- artifact_record_for_load(
+    metadata_path, producer = producer, run_id = run_id
+  )
+  runtime_validate_checksum_sidecar(
+    metadata_path, "runtime metadata",
+    expected_md5 = metadata_record[["MD5"]],
+    expected_size = metadata_record[["SIZE"]]
+  )
   parse_error <- NULL
   payload <- tryCatch(
     jsonlite::fromJSON(metadata_path, simplifyVector = FALSE),
@@ -718,21 +1038,27 @@ validate_runtime_metadata <- function(
   payload["mem_GB"] <- list(mem_gb)
   payload
 }
-
 write_runtime_metadata <- function(
   artifact_path,
   dataset,
   method,
   time_secs,
-  mem_gb = NA_real_
+  mem_gb = NA_real_,
+  producer = NULL,
+  run_id = NULL
 ) {
   artifact_path <- runtime_require_string(artifact_path, "artifact path")
   dataset <- runtime_require_string(dataset, "dataset")
   method <- runtime_require_string(method, "method")
   time_secs <- runtime_require_nonnegative_number(time_secs, "time_secs")
   mem_gb <- runtime_normalize_mem(mem_gb)
-  artifact_record <- runtime_validate_checksum_sidecar(
-    artifact_path, "RDS artifact"
+  artifact_record <- artifact_record_for_load(
+    artifact_path, producer = producer, run_id = run_id
+  )
+  runtime_validate_checksum_sidecar(
+    artifact_path, "RDS artifact",
+    expected_md5 = artifact_record[["MD5"]],
+    expected_size = artifact_record[["SIZE"]]
   )
   metadata_path <- runtime_metadata_path(artifact_path)
   checksum_path <- runtime_metadata_checksum_path(artifact_path)
@@ -761,6 +1087,8 @@ write_runtime_metadata <- function(
   had_checksum <- file.exists(checksum_path)
   metadata_installed <- FALSE
   checksum_installed <- FALSE
+  metadata_digest <- NULL
+  metadata_size <- NULL
   restore <- function() {
     if (metadata_installed && file.exists(metadata_path)) unlink(metadata_path)
     if (had_metadata && file.exists(metadata_backup)) {
@@ -796,9 +1124,11 @@ write_runtime_metadata <- function(
       stop("Could not atomically install runtime metadata: ", metadata_path)
     }
     metadata_installed <- TRUE
+    metadata_digest <- tolower(unname(tools::md5sum(metadata_path)))
+    metadata_size <- as.character(file.info(metadata_path)$size)
     writeLines(c(
-      paste0("MD5=", unname(tools::md5sum(metadata_path))),
-      paste0("SIZE=", file.info(metadata_path)$size),
+      paste0("MD5=", metadata_digest),
+      paste0("SIZE=", metadata_size),
       paste0("PATH=", metadata_path)
     ), checksum_tmp)
     if (!file.rename(checksum_tmp, checksum_path)) {
@@ -810,6 +1140,10 @@ write_runtime_metadata <- function(
     restore()
     stop(error)
   })
+  artifact_write_record(
+    metadata_path, producer = producer, run_id = run_id,
+    md5 = metadata_digest, size = metadata_size
+  )
   invisible(NULL)
 }
 
@@ -817,9 +1151,16 @@ replay_runtime_metadata <- function(
   artifact_path,
   dataset,
   method,
-  log_file
+  log_file,
+  producer = NULL,
+  run_id = NULL,
+  artifact_record = NULL
 ) {
-  payload <- validate_runtime_metadata(artifact_path, dataset, method)
+  payload <- validate_runtime_metadata(
+    artifact_path, dataset, method,
+    producer = producer, run_id = run_id,
+    artifact_record = artifact_record
+  )
   mem_gb <- payload[["mem_GB"]]
   if (is.null(mem_gb)) mem_gb <- NA_real_
   log_exec_row(
@@ -856,7 +1197,9 @@ peak_rss_gb <- function() {
 # Append/overwrite one (dataset, method) row in the per-task exec log feather.
 # The write and its checksum are installed atomically so concurrent reruns
 # cannot leave a partial file that a later worker treats as complete.
-write_feather_atomic <- function(df, path) {
+write_feather_atomic <- function(
+  df, path, producer = NULL, run_id = NULL
+) {
   if (nrow(df) <= 0L ||
       !all(c("dataset", "method", "time_secs", "mem_GB") %in% names(df))) {
     stop("Execution log has an empty or incomplete schema: ", path)
@@ -878,6 +1221,8 @@ write_feather_atomic <- function(df, path) {
   had_sidecar <- file.exists(sidecar)
   installed <- FALSE
   sidecar_installed <- FALSE
+  digest <- NULL
+  size <- NULL
   restore <- function() {
     if (installed && file.exists(path)) unlink(path)
     if (had_file && file.exists(backup)) file.rename(backup, path)
@@ -904,10 +1249,11 @@ write_feather_atomic <- function(df, path) {
     }
     if (!file.rename(tmp, path)) stop("Could not atomically install Feather: ", path)
     installed <- TRUE
-    digest <- unname(tools::md5sum(path))
+    digest <- tolower(unname(tools::md5sum(path)))
+    size <- as.character(file.info(path)$size)
     writeLines(c(
       paste0("MD5=", digest),
-      paste0("SIZE=", file.info(path)$size),
+      paste0("SIZE=", size),
       paste0("PATH=", path)
     ), checksum_tmp)
     if (!file.rename(checksum_tmp, sidecar)) {
@@ -918,14 +1264,23 @@ write_feather_atomic <- function(df, path) {
     restore()
     stop(error)
   })
+  artifact_write_record(path, producer = producer, run_id = run_id,
+                        md5 = digest, size = size)
   invisible(NULL)
 }
 
 # Append/overwrite one (dataset, method) row in the per-task exec log feather.
-log_exec_row <- function(dataset, method, time_secs, log_file,
-                         mem_gb = NA_real_) {
+log_exec_row <- function(
+  dataset, method, time_secs, log_file, mem_gb = NA_real_,
+  producer = NULL, run_id = NULL
+) {
   if (is.null(log_file) || is.na(log_file) || log_file == "") {
     return(invisible(NULL))
+  }
+  if (is.null(producer)) {
+    producer <- Sys.getenv(
+      "ECODA_EXECUTION_LOG_PRODUCER", unset = "stage5_execution_log"
+    )
   }
   if (is.null(mem_gb)) mem_gb <- NA_real_
   new_row <- data.frame(
@@ -936,7 +1291,15 @@ log_exec_row <- function(dataset, method, time_secs, log_file,
     stringsAsFactors = FALSE
   )
   if (file.exists(log_file) && file.info(log_file)$size > 0) {
-    df_existing <- arrow::read_feather(log_file)
+    if (!artifact_checksum_ok(
+      log_file, producer = producer, run_id = run_id
+    )) {
+      stop("Execution log checksum or artifact record validation failed: ",
+           log_file)
+    }
+    df_existing <- read_feather_checked(
+      log_file, producer = producer, run_id = run_id
+    )
     df_existing <- df_existing[
       !(df_existing[["dataset"]] == dataset &
         df_existing[["method"]] == method),
@@ -947,7 +1310,9 @@ log_exec_row <- function(dataset, method, time_secs, log_file,
   } else {
     df_final <- new_row
   }
-  write_feather_atomic(df_final, log_file)
+  write_feather_atomic(
+    df_final, log_file, producer = producer, run_id = run_id
+  )
   return(invisible(NULL))
 }
 
@@ -975,6 +1340,16 @@ run_ct_comps_analysis_worker <- function(
   }
   force <- isTRUE(args[["force"]]) || identical(args[["force"]], "TRUE")
 
+  artifact_producer <- paste0("stage5_", analysis_label)
+  artifact_run_id <- Sys.getenv(
+    "ECODA_ARTIFACT_PRODUCER_RUN_ID",
+    unset = ""
+  )
+  if (!nzchar(artifact_run_id)) {
+    artifact_run_id <- Sys.getenv("ECODA_RUN_ID", unset = "")
+  }
+  if (!nzchar(artifact_run_id)) artifact_run_id <- NULL
+
   config <- read_datasets_json(args$config_path, view = args$view)
   ds <- args$ds_name
   entry <- config[[ds]]
@@ -985,8 +1360,19 @@ run_ct_comps_analysis_worker <- function(
   dir.create(args$output_dir, showWarnings = FALSE, recursive = TRUE)
 
   out_file <- file.path(args$output_dir, paste0(ds, out_suffix, ".rds"))
-  if (artifact_checksum_ok(out_file) && !force) {
-    replay_runtime_metadata(out_file, ds, log_method, args$log_file)
+  if (artifact_checksum_ok(
+    out_file,
+    producer = artifact_producer,
+    run_id = artifact_run_id
+  ) && !force) {
+    replay_runtime_metadata(
+      out_file,
+      ds,
+      log_method,
+      args$log_file,
+      producer = artifact_producer,
+      run_id = artifact_run_id
+    )
     message(analysis_label, " results already exist and passed checksum validation: ", out_file)
     return(invisible(NULL))
   }
@@ -1033,12 +1419,28 @@ run_ct_comps_analysis_worker <- function(
   time_secs <- exec_time(res <- run_fun(ct_comps, labels))
   time_secs_numeric <- as.numeric(time_secs, units = "secs")
   mem_gb <- peak_rss_gb()
-  save_rds_atomic(res, out_file)
+  save_rds_atomic(
+    res,
+    out_file,
+    producer = artifact_producer,
+    run_id = artifact_run_id
+  )
   write_runtime_metadata(
-    out_file, ds, log_method, time_secs_numeric, mem_gb = mem_gb
+    out_file,
+    ds,
+    log_method,
+    time_secs_numeric,
+    mem_gb = mem_gb,
+    producer = artifact_producer,
+    run_id = artifact_run_id
   )
   log_exec_row(
-    ds, log_method, time_secs_numeric, args$log_file, mem_gb = mem_gb
+    ds,
+    log_method,
+    time_secs_numeric,
+    args$log_file,
+    mem_gb = mem_gb,
+    run_id = artifact_run_id
   )
   message("Saved: ", out_file, " (",
           round(time_secs_numeric, 1), "s)")

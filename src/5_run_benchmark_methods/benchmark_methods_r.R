@@ -397,10 +397,42 @@ process_scitd_fig <- function(
   return(create_result_bundle(feat_mat, labels))
 }
 
+# Feather deserialization must be preceded by a strict sidecar/content check.
+# benchmark_hpc_utils.R replaces this with the record-aware implementation
+# when an HPC worker sources it; the fallback keeps notebook loading safe.
+read_feather_checked <- function(path) {
+  if (exists("artifact_record_for_load", mode = "function")) {
+    artifact_record_for_load(path)
+  } else {
+    sidecar <- paste0(path, ".md5")
+    if (!file.exists(path) || !isTRUE(file.info(path)$size > 0) ||
+        !file.exists(sidecar)) {
+      stop("Feather checksum validation failed: ", path)
+    }
+    lines <- readLines(sidecar, warn = FALSE)
+    if (length(lines) != 3L ||
+        !identical(sub("=.*$", "", lines), c("MD5", "SIZE", "PATH"))) {
+      stop("Feather checksum sidecar has the wrong schema: ", sidecar)
+    }
+    md5 <- sub("^MD5=", "", lines[[1L]])
+    size <- sub("^SIZE=", "", lines[[2L]])
+    recorded <- sub("^PATH=", "", lines[[3L]])
+    actual <- tolower(unname(tools::md5sum(path)))
+    if (!identical(recorded, path) ||
+        !grepl("^[0-9a-f]{32}$", md5) ||
+        !identical(size, as.character(file.info(path)$size)) ||
+        length(actual) != 1L || is.na(actual) ||
+        !identical(tolower(md5), actual)) {
+      stop("Feather checksum validation failed: ", path)
+    }
+  }
+  arrow::read_feather(path)
+}
+
 # MrVI processing
 process_mrvi_fig <- function(mrvi_dist_file, labels) {
   arrow::set_cpu_count(1)
-  feat_mat <- arrow::read_feather(mrvi_dist_file) %>%
+  feat_mat <- read_feather_checked(mrvi_dist_file) %>%
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
   arrow::set_cpu_count(parallelly::availableCores() - 2)
@@ -461,7 +493,7 @@ process_gloscope_fig <- function(
     )
     save_rds_atomic(feat_mat, gloscope_dist_file)
   } else {
-    feat_mat <- readRDS(gloscope_dist_file)
+    feat_mat <- read_rds_checked(gloscope_dist_file)
   }
   feat_mat <- sqrt(feat_mat)
   feat_mat[is.na(feat_mat)] <- 0
@@ -515,7 +547,7 @@ process_gloprop_fig <- function(
 # scPoli processing
 process_scpoli_fig <- function(scpoli_emb_file, labels) {
   arrow::set_cpu_count(1)
-  feat_mat <- arrow::read_feather(scpoli_emb_file) %>%
+  feat_mat <- read_feather_checked(scpoli_emb_file) %>%
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
   arrow::set_cpu_count(parallelly::availableCores() - 2)
@@ -527,7 +559,7 @@ process_scpoli_fig <- function(scpoli_emb_file, labels) {
 # PILOT processing
 process_pilot_fig <- function(pilot_dist_file, labels) {
   arrow::set_cpu_count(1)
-  feat_mat <- arrow::read_feather(pilot_dist_file) %>%
+  feat_mat <- read_feather_checked(pilot_dist_file) %>%
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
   arrow::set_cpu_count(parallelly::availableCores() - 2)
@@ -540,7 +572,7 @@ process_pilot_fig <- function(pilot_dist_file, labels) {
 # plain DataFrame.to_feather() with the pandas index = sample names)
 process_qot_fig <- function(qot_dist_file, labels) {
   arrow::set_cpu_count(1)
-  feat_mat <- arrow::read_feather(qot_dist_file) %>%
+  feat_mat <- read_feather_checked(qot_dist_file) %>%
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
   arrow::set_cpu_count(parallelly::availableCores() - 2)
@@ -553,7 +585,7 @@ process_qot_fig <- function(qot_dist_file, labels) {
 # matrix, plain DataFrame.to_feather() with the pandas index = sample names)
 process_pilotgm_fig <- function(pilotgm_dist_file, labels) {
   arrow::set_cpu_count(1)
-  feat_mat <- arrow::read_feather(pilotgm_dist_file) %>%
+  feat_mat <- read_feather_checked(pilotgm_dist_file) %>%
     tibble::column_to_rownames(var = names(.)[ncol(.)]) %>%
     as.data.frame()
   arrow::set_cpu_count(parallelly::availableCores() - 2)

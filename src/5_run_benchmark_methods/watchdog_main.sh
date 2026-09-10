@@ -55,6 +55,15 @@ WD_WORKER_SCRIPT=""
 WD_RUNTIME_EXPORT=""
 WD_FLAGS=()
 
+watchdog_require_source_script() {
+  local candidate="$1"
+  if [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]]; then
+    ecoda_require_source_script_path "${candidate}" "${ECODA_SOURCE_ROOT}"
+  else
+    [[ -f "${candidate}" && -r "${candidate}" && ! -L "${candidate}" ]]
+  fi
+}
+
 # Retry-array submission closure (mirrors the submitters'
 # submit_*_method_array_retry): writes the reduced manifest (one dataset per
 # line), exports METHOD/BENCHMARK_MANIFEST, sbatch's the reduced array with
@@ -75,6 +84,10 @@ watchdog_resubmit() {
   done
   [[ -s "${MANIFEST_TMP}" ]] || return 1
   mv -f "${MANIFEST_TMP}" "${MANIFEST}"
+  if [[ -n "${ECODA_RUN_ROOT:-}" ]]; then
+    ecoda_validate_run_owned_path "${MANIFEST}" "${ECODA_RUN_ROOT}" || return 1
+    export ECODA_SELECTION_MANIFEST="${ECODA_SELECTION_MANIFEST:-${ECODA_RUN_ROOT}/manifests/selection.tsv}"
+  fi
   if [[ -n "${ANALYSIS_PASS:-}" ]]; then
     export ANALYSIS_MANIFEST="${MANIFEST}"
     unset BENCHMARK_MANIFEST
@@ -87,15 +100,18 @@ watchdog_resubmit() {
 
   local runtime_export="${WD_RUNTIME_EXPORT:-}"
   local validated_runtime_export
-  [[ -n "${runtime_export}" ]] || {
-    echo "ERROR: watchdog retry is missing the runtime export." >&2
-    return 1
-  }
-  export ECODA_RUNTIME_PROFILE="${ECODA_RUNTIME_PROFILE:-stage5}"
-  ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE:-host}" || {
-    echo "ERROR: watchdog retry runtime validation failed; refusing retry submission." >&2
-    return 1
-  }
+  if [[ -n "${ECODA_RUN_ROOT:-}" ||
+        "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]]; then
+    ecoda_runtime_validate_bound_run || {
+      echo "ERROR: watchdog retry bound runtime validation failed; refusing retry submission." >&2
+      return 1
+    }
+  else
+    ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE:-host}" || {
+      echo "ERROR: watchdog retry runtime validation failed; refusing retry submission." >&2
+      return 1
+    }
+  fi
   validated_runtime_export="$(ecoda_runtime_export_csv \
     "${ECODA_RUNTIME_PROFILE}" "${ECODA_APPTAINER_NV:-0}")" || return 1
   [[ "${validated_runtime_export}" == "${runtime_export}" ]] || {
@@ -106,7 +122,19 @@ watchdog_resubmit() {
   echo "Watchdog resubmitting ${LABEL} array (${#DS_LIST[@]} datasets, partition=${WD_PARTITION}, " >&2
   echo "  flags: ${WD_FLAGS[*]}, mem=${MEM}, throttle=${WD_THROTTLE})" >&2
 
+  benchmark_validate_output_scope || {
+    echo "ERROR: watchdog retry output ownership validation failed; refusing retry submission." >&2
+    return 1
+  }
+  benchmark_require_source_script_path "${WD_WORKER_SCRIPT}" || {
+    echo "ERROR: watchdog retry worker script is outside the immutable source root." >&2
+    return 1
+  }
+  local submit_export="${runtime_export}"
+  [[ -n "${ECODA_RUN_ROOT:-}" ]] &&
+    submit_export="${submit_export},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${ECODA_RUN_ID:-},ECODA_SELECTION_MANIFEST=${ECODA_SELECTION_MANIFEST:-${ECODA_RUN_ROOT}/manifests/selection.tsv}"
   local SUBMIT_MSG
+  benchmark_require_source_script_path "${WD_WORKER_SCRIPT}" || return 1
   SUBMIT_MSG=$(sbatch \
       --array="1-${#DS_LIST[@]}%${WD_THROTTLE}" \
       --partition="${WD_PARTITION}" \
@@ -114,9 +142,8 @@ watchdog_resubmit() {
       --time="${BENCHMARK_WORKER_TIME_LIMIT:-12:00:00}" \
       --mem="${MEM}" \
       --output="${LOGS_DIR}/${WD_LOG_PREFIX}_%A_%a.log" \
-      --error="${LOGS_DIR}/${WD_LOG_PREFIX}_%A_%a.err" \
+      --export="ALL,${submit_export}" \
       --mail-user="${USER_EMAIL}" \
-      --export="ALL,${runtime_export}" \
       "${WD_WORKER_SCRIPT}")
 
   local ARRAY_JOB_ID
@@ -145,6 +172,14 @@ watchdog_main() {
   }
   shift 5
   WD_FLAGS=("$@")
+  if [[ -n "${ECODA_RUN_ROOT:-}" ]]; then
+    export ECODA_RUN_ID="${ECODA_RUN_ID:-${ECODA_RUN_ROOT##*/}}"
+    ECODA_SELECTION_MANIFEST="${ECODA_SELECTION_MANIFEST:-${ECODA_RUN_ROOT}/manifests/selection.tsv}"
+    export ECODA_SELECTION_MANIFEST
+    ecoda_validate_run_owned_path "${MANIFEST}" "${ECODA_RUN_ROOT}" || return 1
+  fi
+  benchmark_validate_bound_runtime || return 1
+  benchmark_require_source_script_path "${SCRIPT_DIR}/watchdog_main.sh" || return 1
 
   local STATUS_FILE="${WATCHDOG_STATUS_DIR}/${SLURM_JOB_ID}.status"
   mkdir -p "${WATCHDOG_STATUS_DIR}"

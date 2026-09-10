@@ -1,37 +1,75 @@
 #!/bin/bash
 # Aggregate benchmark gate: one terminal status after every child watchdog.
 set -euo pipefail
-SCRIPT_DIR=""
-if [[ -n "${PROJECT_ROOT:-}" &&
-      -f "${PROJECT_ROOT}/src/slurm_config.sh" ]]; then
-  SCRIPT_DIR="${PROJECT_ROOT}/src/5_run_benchmark_methods"
-elif [[ -n "${SLURM_SUBMIT_DIR:-}" &&
-        -f "${SLURM_SUBMIT_DIR}/src/slurm_config.sh" ]]; then
-  SCRIPT_DIR="${SLURM_SUBMIT_DIR}/src/5_run_benchmark_methods"
-else
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [[ -n "${SLURM_JOB_ID:-}" ]] &&
-     command -v scontrol >/dev/null 2>&1; then
-    submitted_command="$(scontrol show job "${SLURM_JOB_ID}" -o 2>/dev/null |
-      sed -n 's/.* Command=\([^ ]*\).*/\1/p' | head -1 || true)"
-    submitted_dir="$(dirname "${submitted_command}")"
-    if [[ -n "${submitted_command}" &&
-          -f "${submitted_dir}/../slurm_config.sh" ]]; then
-      SCRIPT_DIR="$(cd "${submitted_dir}" && pwd)"
-    fi
-  fi
-fi
-if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/../slurm_config.sh" ]]; then
-  echo "ERROR: could not recover the repository source directory." >&2
-  exit 1
-fi
-source "${SCRIPT_DIR}/../slurm_config.sh"
-source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
-[[ $# -eq 3 ]] || { echo "Usage: matrix_gate.sh RUN_ROOT WATCHDOG_LABELS_CSV SCHEDULER_IDS_MANIFEST" >&2; exit 2; }
+
+[[ $# -eq 3 ]] || {
+  echo "Usage: matrix_gate.sh RUN_ROOT WATCHDOG_LABELS_CSV SCHEDULER_IDS_MANIFEST" >&2
+  exit 2
+}
 RUN_ROOT="$1"
 WATCHDOG_LABELS_CSV="$2"
 SCHEDULER_IDS_MANIFEST="$3"
+SNAPSHOT_REQUIRED="${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}"
+
+case "${SNAPSHOT_REQUIRED}" in
+  1)
+    SOURCE_ROOT="${ECODA_SOURCE_ROOT:-}"
+    SOURCE_MANIFEST="${ECODA_SOURCE_MANIFEST:-}"
+    BOUND_RUN_ROOT="${ECODA_RUN_ROOT:-}"
+    BOUND_RUN_ID="${ECODA_RUN_ID:-}"
+    [[ "${SOURCE_ROOT}" = /* && -d "${SOURCE_ROOT}" && ! -L "${SOURCE_ROOT}" ]] || {
+      echo "ERROR: Stage 5 snapshot aggregate gate requires an absolute immutable source root." >&2
+      exit 1
+    }
+    [[ "${SOURCE_MANIFEST}" = /* && -f "${SOURCE_MANIFEST}" &&
+       ! -L "${SOURCE_MANIFEST}" && -r "${SOURCE_MANIFEST}" && -s "${SOURCE_MANIFEST}" ]] || {
+      echo "ERROR: Stage 5 snapshot aggregate gate requires an absolute immutable source manifest." >&2
+      exit 1
+    }
+    GATE_SCRIPT="${SOURCE_ROOT%/}/src/5_run_benchmark_methods/matrix_gate.sh"
+    [[ -f "${GATE_SCRIPT}" && ! -L "${GATE_SCRIPT}" && -r "${GATE_SCRIPT}" ]] || {
+      echo "ERROR: immutable Stage 5 aggregate gate script is missing or unsafe." >&2
+      exit 1
+    }
+    for helper in \
+      "${SOURCE_ROOT%/}/src/slurm_config.sh" \
+      "${SOURCE_ROOT%/}/src/utils/bash/ecoda_runtime.sh" \
+      "${SOURCE_ROOT%/}/src/utils/bash/ecoda_run_common.sh"; do
+      [[ -f "${helper}" && ! -L "${helper}" && -r "${helper}" ]] || {
+        echo "ERROR: immutable Stage 5 shared helper is missing or unsafe: ${helper}" >&2
+        exit 1
+      }
+    done
+    export ECODA_SOURCE_ROOT="${SOURCE_ROOT}"
+    export ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST}"
+    export ECODA_SOURCE_SNAPSHOT_REQUIRED=1
+    source "${SOURCE_ROOT%/}/src/slurm_config.sh"
+    source "${SOURCE_ROOT%/}/src/utils/bash/ecoda_runtime.sh"
+    source "${SOURCE_ROOT%/}/src/utils/bash/ecoda_run_common.sh"
+    export ECODA_RUN_ROOT="${BOUND_RUN_ROOT}"
+    export ECODA_RUN_ID="${BOUND_RUN_ID}"
+    ;;
+  0|"")
+    echo "ERROR: legacy_source_unpinned: Stage 5 aggregate gate requires an immutable source snapshot." >&2
+    exit 1
+    ;;
+  *)
+    echo "ERROR: ECODA_SOURCE_SNAPSHOT_REQUIRED must be 1 for snapshot-backed execution." >&2
+    exit 1
+    ;;
+esac
+
 STATUS_FILE="${RUN_ROOT}/status/aggregate"
+if [[ "${SNAPSHOT_REQUIRED}" == "1" ]]; then
+  [[ "${RUN_ROOT}" = /* && -d "${RUN_ROOT}" && ! -L "${RUN_ROOT}" ]] || {
+    echo "ERROR: Stage 5 snapshot aggregate gate run root is missing or unsafe." >&2
+    exit 1
+  }
+  [[ "${ECODA_RUN_ROOT:-}" = "${RUN_ROOT}" && "${ECODA_RUN_ROOT}" = /* ]] || {
+    echo "ERROR: Stage 5 aggregate gate run root does not match ECODA_RUN_ROOT." >&2
+    exit 1
+  }
+fi
 mkdir -p "$(dirname "${STATUS_FILE}")"
 
 fail() {
@@ -40,6 +78,44 @@ fail() {
   mv -f "${tmp}" "${STATUS_FILE}"
   exit 1
 }
+
+if [[ "${SNAPSHOT_REQUIRED}" == "1" ]]; then
+  [[ "${ECODA_RUN_ID:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] ||
+    fail "Stage 5 aggregate gate requires an exact ECODA_RUN_ID"
+  [[ "${ECODA_RUN_ROOT##*/}" == "${ECODA_RUN_ID}" ]] ||
+    fail "Stage 5 aggregate gate run root does not match ECODA_RUN_ID"
+  ecoda_validate_run_id "${ECODA_RUN_ID}" ||
+    fail "Stage 5 aggregate gate run ID is invalid"
+  EXPECTED_RUN_ROOT="${HPC_SCRATCH_DIR}/_ecoda_runs/${ECODA_RUN_ID}"
+  [[ "${ECODA_RUN_ROOT}" == "${EXPECTED_RUN_ROOT}" ]] ||
+    fail "Stage 5 aggregate gate run root is not the exact bound run root"
+
+  RUN_SOURCE_MANIFEST="${ECODA_RUN_ROOT}/manifests/source.manifest"
+  RUN_RUNTIME_IDENTITY="${ECODA_RUN_ROOT}/manifests/runtime.identity"
+  [[ -f "${RUN_SOURCE_MANIFEST}" && ! -L "${RUN_SOURCE_MANIFEST}" &&
+     -r "${RUN_SOURCE_MANIFEST}" && -s "${RUN_SOURCE_MANIFEST}" ]] ||
+    fail "legacy_source_unpinned: Stage 5 run-bound source.manifest is missing or unsafe"
+  [[ -f "${RUN_RUNTIME_IDENTITY}" && ! -L "${RUN_RUNTIME_IDENTITY}" &&
+     -r "${RUN_RUNTIME_IDENTITY}" && -s "${RUN_RUNTIME_IDENTITY}" ]] ||
+    fail "legacy_source_unpinned: Stage 5 run-bound runtime.identity is missing or unsafe"
+  ecoda_validate_run_owned_path "${RUN_SOURCE_MANIFEST}" "${ECODA_RUN_ROOT}" ||
+    fail "Stage 5 run-bound source.manifest escaped the run root"
+  ecoda_validate_run_owned_path "${RUN_RUNTIME_IDENTITY}" "${ECODA_RUN_ROOT}" ||
+    fail "Stage 5 run-bound runtime.identity escaped the run root"
+  cmp -s "${RUN_SOURCE_MANIFEST}" "${ECODA_SOURCE_MANIFEST}" ||
+    fail "Stage 5 run source manifest differs from the immutable source manifest"
+  if [[ -n "${ECODA_RUNTIME_IDENTITY:-}" &&
+        "${ECODA_RUNTIME_IDENTITY}" != "${RUN_RUNTIME_IDENTITY}" ]]; then
+    fail "Stage 5 runtime identity does not match the run-owned runtime.identity"
+  fi
+  export ECODA_RUN_ROOT ECODA_RUN_ID
+  export ECODA_RUNTIME_IDENTITY="${RUN_RUNTIME_IDENTITY}"
+  export ECODA_RUNTIME_PROFILE=stage5
+  LOGS_DIR="${ECODA_RUN_ROOT}/logs"
+  export LOGS_DIR ECODA_LOGS_DIR="${LOGS_DIR}"
+  ecoda_runtime_validate_bound_run ||
+    fail "Stage 5 run-bound runtime validation failed before aggregate status"
+fi
 
 [[ -r "${SCHEDULER_IDS_MANIFEST}" ]] || fail "missing scheduler ID manifest"
 ecoda_validate_run_owned_path "${SCHEDULER_IDS_MANIFEST}" "${RUN_ROOT}" ||

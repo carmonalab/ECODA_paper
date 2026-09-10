@@ -48,17 +48,61 @@ if (!nzchar(artifact_path) && !nzchar(artifact_list) &&
 
 checksum_ok <- function(file) {
   sidecar <- paste0(file, ".md5")
-  if (!file.exists(file) || file.info(file)$size <= 0L || !file.exists(sidecar)) return(FALSE)
-  lines <- readLines(sidecar, warn = FALSE)
-  get <- function(prefix) {
-    value <- lines[startsWith(lines, prefix)]
-    if (!length(value)) return("")
-    sub(paste0("^", prefix), "", value[[1L]])
+  info <- if (file.exists(file)) file.info(file) else NULL
+  if (is.null(info) || !isTRUE(info$isdir == FALSE) ||
+      is.na(info$size) || info$size <= 0 || !file.exists(sidecar)) {
+    return(FALSE)
   }
-  identical(get("PATH="), file) &&
-    identical(get("SIZE="), as.character(file.info(file)$size)) &&
-    identical(get("MD5="), unname(tools::md5sum(file)))
+  lines <- tryCatch(readLines(sidecar, warn = FALSE), error = function(e) NULL)
+  keys <- c("MD5", "SIZE", "PATH")
+  if (is.null(lines) || length(lines) != length(keys) ||
+      any(!startsWith(lines, paste0(keys, "=")))) {
+    return(FALSE)
+  }
+  values <- substring(lines, nchar(keys) + 2L)
+  digest <- values[[1L]]
+  size <- values[[2L]]
+  recorded_path <- values[[3L]]
+  if (!grepl("^[0-9a-f]{32}$", digest, perl = TRUE) ||
+      !grepl("^[1-9][0-9]*$", size, perl = TRUE) ||
+      !identical(recorded_path, file) ||
+      !identical(size, as.character(info$size))) {
+    return(FALSE)
+  }
+  actual <- tryCatch(unname(tools::md5sum(file)), error = function(e) NA_character_)
+  isTRUE(!is.na(actual) && identical(actual, digest))
 }
+
+partial_name_patterns <- function(path) {
+  bases <- c(path, paste0(path, ".md5"))
+  hidden <- file.path(dirname(bases), paste0(".", basename(bases)))
+  bases <- unique(c(bases, hidden))
+  suffixes <- c(
+    ".tmp", ".tmp.*",
+    ".build", ".build.*",
+    ".partial", ".partial.*"
+  )
+  unlist(lapply(bases, paste0, suffixes), use.names = FALSE)
+}
+
+selected_partial_paths <- function(paths) {
+  patterns <- unlist(
+    lapply(unique(as.character(paths)), partial_name_patterns),
+    use.names = FALSE
+  )
+  matches <- unique(unlist(lapply(patterns, Sys.glob), use.names = FALSE))
+  matches[file.exists(matches)]
+}
+
+reject_selected_partials <- function(paths) {
+  partials <- selected_partial_paths(paths)
+  if (length(partials)) {
+    stop("partial benchmark artifacts remain: ",
+         paste(partials, collapse = ", "))
+  }
+}
+
+
 
 artifact_list_parts <- list()
 if (nzchar(artifact_path)) {
@@ -473,16 +517,20 @@ if (nzchar(artifact_path)) {
   validate_artifact_contract(
     artifact_path, method_arg, dataset_arg, view_arg, metadata_kind
   )
+  reject_selected_partials(artifact_path)
   cat("benchmark RDS artifact contract OK\n")
   quit(save = "no", status = 0)
 }
 
 if (nzchar(artifact_list)) {
+  selected_artifacts <- artifact_list
   for (part in artifact_list_parts) {
+    selected_artifacts <- c(selected_artifacts, part[[1L]])
     validate_artifact_contract(
       part[[1L]], part[[2L]], part[[3L]], part[[4L]], part[[5L]] == "1"
     )
   }
+  reject_selected_partials(selected_artifacts)
   cat("benchmark RDS artifact-list contract OK\n")
   quit(save = "no", status = 0)
 }
@@ -493,7 +541,7 @@ if (batch && !batch_pass %in% c("uncorrected", "corrected")) {
 }
 if (batch && exact) {
   expected_rows <- paste(
-    c("Alzheimer", "Breast_cancer", "Covid19_PBMC", "Kidney_KPMP",
+    c("Alzheimer", "Breast_cancer", "Covid19_PBMC", "Kidney_KPMP_full",
       "Myocardial_infarction", "Diabetes", "Lupus_PBMC", "Lung",
       "Parkinson", "Joanito", "Stephenson", "CombinedPBMC"),
     "batch_effect_uncorrected", "batch_effect_uncorrected", sep = "\t"
@@ -503,6 +551,7 @@ if (batch && exact) {
   }
 }
 
+selected_artifacts <- selection
 for (part in parts) {
   ds <- part[[1L]]
   view <- part[[2L]]
@@ -522,15 +571,22 @@ for (part in parts) {
       variants <- if (batch) "hvg2000" else c("schvg2000", "hvg2000", "hvg500", "hvg2000_bl", "hvg1000", "hvg3000")
       stem <- if (batch) paste0(ds, "_batch_effect_", batch_pass) else ds
       for (variant in variants) {
-        validate_pseudobulk(file.path(root, "pseudobulks", paste0(stem, "_pseudobulk_", variant, ".rds")), expected)
+        file <- file.path(root, "pseudobulks", paste0(stem, "_pseudobulk_", variant, ".rds"))
+        selected_artifacts <- c(selected_artifacts, file)
+        validate_pseudobulk(file, expected)
       }
     } else if (label == "trans") {
-      validate_trans(file.path(root, "results", paste0(ds, "_trans.rds")))
+      file <- file.path(root, "results", paste0(ds, "_trans.rds"))
+      selected_artifacts <- c(selected_artifacts, file)
+      validate_trans(file)
     } else if (label == "zeroimp") {
-      validate_zeroimp(file.path(root, "results", paste0(ds, "_zeroimp.rds")))
+      file <- file.path(root, "results", paste0(ds, "_zeroimp.rds"))
+      selected_artifacts <- c(selected_artifacts, file)
+      validate_zeroimp(file)
     } else {
       stem <- if (batch) paste0(ds, "_batch_effect_", batch_pass) else ds
       file <- file.path(root, "results", paste0(stem, "_", label, ".rds"))
+      selected_artifacts <- c(selected_artifacts, file)
       required_keys <- if (batch) batch_required_keys(ds, label) else NULL
       allowed_extra_keys <- if (batch) batch_allowed_extra_keys(ds, label) else character()
       validate_result_file(
@@ -541,13 +597,12 @@ for (part in parts) {
         label
       )
       if (label == "composition") {
-        validate_metadata(file.path(root, "results", paste0(stem, "_metadata.rds")), expected)
+        metadata_file <- file.path(root, "results", paste0(stem, "_metadata.rds"))
+        selected_artifacts <- c(selected_artifacts, metadata_file)
+        validate_metadata(metadata_file, expected)
       }
     }
   }
 }
-
-partials <- list.files(root, recursive = TRUE, full.names = TRUE)
-partials <- partials[grepl("\\.(tmp|partial|build)(\\.|$)", basename(partials))]
-if (length(partials)) stop("partial benchmark artifacts remain: ", paste(partials, collapse = ", "))
+reject_selected_partials(selected_artifacts)
 cat("benchmark RDS bundle contract OK\n")

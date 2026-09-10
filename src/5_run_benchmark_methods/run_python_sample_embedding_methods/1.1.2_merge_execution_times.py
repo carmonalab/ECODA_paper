@@ -25,6 +25,7 @@ import argparse
 import glob
 import hashlib
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -41,21 +42,231 @@ def _file_md5(path):
             digest.update(block)
     return digest.hexdigest()
 
-def _recorded_checksum_ok(path):
+_CHECKSUM_FIELDS = ("MD5", "SIZE", "PATH")
+_ARTIFACT_RECORD_FIELDS = ("PATH", "SIZE", "MD5", "RUN_ID", "PRODUCER", "STATE")
+_MD5_RE = re.compile(r"^[0-9a-f]{32}$")
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+
+def _read_checksum_sidecar(path):
+    """Read an exact MD5/SIZE/PATH sidecar without hashing artifact bytes."""
     path = Path(path)
     sidecar = Path(f"{path}.md5")
-    if not path.is_file() or not sidecar.is_file():
-        return False
+    if not path.is_file() or path.stat().st_size <= 0 or not sidecar.is_file():
+        raise ValueError(f"checksum sidecar is missing: {sidecar}")
+    try:
+        lines = sidecar.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"checksum sidecar is unreadable: {sidecar}") from exc
+    if len(lines) != len(_CHECKSUM_FIELDS):
+        raise ValueError(f"checksum sidecar has an invalid schema: {sidecar}")
     records = {}
-    for line in sidecar.read_text().splitlines():
-        if "=" in line:
-            key, value = line.split("=", 1)
-            records[key] = value
-    return (
-        records.get("PATH") == str(path)
-        and records.get("MD5") == _file_md5(path)
-        and records.get("SIZE") == str(path.stat().st_size)
+    for key, line in zip(_CHECKSUM_FIELDS, lines):
+        prefix = f"{key}="
+        if not line.startswith(prefix) or key in records:
+            raise ValueError(f"checksum sidecar has an invalid schema: {sidecar}")
+        records[key] = line[len(prefix):]
+    if not _MD5_RE.fullmatch(records["MD5"]):
+        raise ValueError(f"checksum sidecar has an invalid MD5: {sidecar}")
+    try:
+        size = int(records["SIZE"])
+    except ValueError as exc:
+        raise ValueError(f"checksum sidecar has an invalid SIZE: {sidecar}") from exc
+    if size <= 0 or str(size) != records["SIZE"]:
+        raise ValueError(f"checksum sidecar has an invalid SIZE: {sidecar}")
+    if records["PATH"] != str(path):
+        raise ValueError(f"checksum sidecar has the wrong PATH: {sidecar}")
+    if size != path.stat().st_size:
+        raise ValueError(f"checksum sidecar has the wrong SIZE: {sidecar}")
+    return records
+
+
+def _full_checksum(path):
+    records = _read_checksum_sidecar(path)
+    digest = _file_md5(path)
+    if digest != records["MD5"]:
+        raise ValueError(f"checksum sidecar does not match artifact: {path}")
+    if path.stat().st_size != int(records["SIZE"]):
+        raise ValueError(f"artifact changed during checksum validation: {path}")
+    return records
+
+
+def _record_context(run_id=None):
+    selected_run_id = (
+        run_id
+        or os.environ.get("ECODA_PRODUCER_RUN_ID")
+        or os.environ.get("ECODA_RUN_ID")
     )
+    runs_root = os.environ.get("ECODA_RUNS_ROOT", "")
+    if not runs_root:
+        scratch_root = os.environ.get("HPC_SCRATCH_DIR") or os.environ.get(
+            "ECODA_SCRATCH_ROOT", ""
+        )
+        if scratch_root:
+            runs_root = str(Path(scratch_root) / "_ecoda_runs")
+    if not selected_run_id or not runs_root:
+        return None
+    if not _RUN_ID_RE.fullmatch(selected_run_id):
+        raise ValueError(f"invalid producer run ID: {selected_run_id!r}")
+    return Path(runs_root), selected_run_id
+
+
+def artifact_record_path(path, run_id):
+    context = _record_context(run_id)
+    if context is None:
+        raise ValueError("artifact records require a run ID and run root")
+    runs_root, selected_run_id = context
+    canonical = Path(path).resolve()
+    path_digest = hashlib.sha256(str(canonical).encode("utf-8")).hexdigest()[:32]
+    return (
+        runs_root
+        / selected_run_id
+        / "manifests"
+        / "artifacts"
+        / f"{path_digest}.record"
+    )
+
+
+def _record_candidate(path, run_id=None):
+    context = _record_context(run_id)
+    if context is None:
+        return None
+    return artifact_record_path(path, context[1])
+
+
+def _read_artifact_record(path, producer=None, run_id=None, *, require=False):
+    path = Path(path)
+    candidate = _record_candidate(path, run_id)
+    if candidate is None:
+        if require:
+            raise ValueError(f"artifact record context is missing: {path}")
+        return None
+    if not candidate.exists() and not candidate.is_symlink():
+        if require:
+            raise ValueError(f"artifact record is missing: {candidate}")
+        return None
+    if not candidate.is_file():
+        raise ValueError(f"artifact record is not a regular file: {candidate}")
+    try:
+        lines = candidate.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"artifact record is unreadable: {candidate}") from exc
+    if len(lines) != len(_ARTIFACT_RECORD_FIELDS):
+        raise ValueError(f"artifact record has an invalid schema: {candidate}")
+    records = {}
+    for key, line in zip(_ARTIFACT_RECORD_FIELDS, lines):
+        prefix = f"{key}="
+        if not line.startswith(prefix) or key in records:
+            raise ValueError(f"artifact record has an invalid schema: {candidate}")
+        records[key] = line[len(prefix):]
+    context = _record_context(run_id)
+    expected_run_id = "" if context is None else context[1]
+    if records["PATH"] != str(path.resolve()):
+        raise ValueError(f"artifact record has the wrong PATH: {candidate}")
+    if not _MD5_RE.fullmatch(records["MD5"]):
+        raise ValueError(f"artifact record has an invalid MD5: {candidate}")
+    try:
+        size = int(records["SIZE"])
+    except ValueError as exc:
+        raise ValueError(f"artifact record has an invalid SIZE: {candidate}") from exc
+    if size <= 0 or str(size) != records["SIZE"]:
+        raise ValueError(f"artifact record has an invalid SIZE: {candidate}")
+    if records["RUN_ID"] != expected_run_id:
+        raise ValueError(f"artifact record has the wrong RUN_ID: {candidate}")
+    if not records["PRODUCER"] or any(
+        character in records["PRODUCER"] for character in "\t\r\n"
+    ):
+        raise ValueError(f"artifact record has an invalid PRODUCER: {candidate}")
+    if producer is not None and records["PRODUCER"] != producer:
+        raise ValueError(f"artifact record has the wrong PRODUCER: {candidate}")
+    if records["STATE"] != "PUBLISHED":
+        raise ValueError(f"artifact record is not published: {candidate}")
+    if not path.is_file() or path.stat().st_size != size:
+        raise ValueError(f"artifact record SIZE does not match artifact: {path}")
+    sidecar = _read_checksum_sidecar(path)
+    if (
+        sidecar["PATH"] != str(path)
+        or sidecar["SIZE"] != records["SIZE"]
+        or sidecar["MD5"] != records["MD5"]
+    ):
+        raise ValueError(f"artifact record does not match checksum sidecar: {path}")
+    return records
+
+
+def validate_artifact_record(path, producer, run_id):
+    record = _read_artifact_record(path, producer, run_id, require=True)
+    if record is None:
+        raise ValueError(f"artifact record is missing: {path}")
+    return record
+
+
+def _write_artifact_record(path, producer, run_id=None, checksum=None):
+    context = _record_context(run_id)
+    if context is None:
+        return None
+    if not isinstance(producer, str) or not producer or any(
+        character in producer for character in "\t\r\n"
+    ):
+        raise ValueError(f"invalid artifact producer: {producer!r}")
+    path = Path(path)
+    sidecar = _full_checksum(path) if checksum is None else checksum
+    destination = artifact_record_path(path, context[1])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.tmp.{os.getpid()}")
+    serialized = (
+        f"PATH={path.resolve()}\n"
+        f"SIZE={sidecar['SIZE']}\n"
+        f"MD5={sidecar['MD5']}\n"
+        f"RUN_ID={context[1]}\n"
+        f"PRODUCER={producer}\n"
+        "STATE=PUBLISHED\n"
+    )
+    try:
+        temporary.write_text(serialized, encoding="utf-8")
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return destination
+
+def _current_run_root(run_id=None):
+    """Return the canonical producer root for the current run, if bound."""
+    configured_root = os.environ.get("ECODA_RUN_ROOT", "")
+    if configured_root:
+        try:
+            return Path(configured_root).resolve()
+        except (OSError, RuntimeError):
+            return None
+    context = _record_context(run_id)
+    if context is None:
+        return None
+    return (context[0] / context[1]).resolve()
+
+
+def _path_is_current_run_owned(path, run_id=None):
+    root = _current_run_root(run_id)
+    if root is None:
+        return False
+    try:
+        Path(path).resolve().relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
+
+
+def _recorded_checksum_ok(
+    path, producer=None, run_id=None, *, require_record=False
+):
+    """Require a strict checksum and any record required by path ownership."""
+    path = Path(path)
+    record_required = require_record or _path_is_current_run_owned(path, run_id)
+    try:
+        _full_checksum(path)
+        if record_required:
+            _read_artifact_record(path, producer, run_id, require=True)
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def _validate_log_frame(frame, path):
@@ -78,7 +289,40 @@ def _validate_log_frame(frame, path):
         if (not np.isfinite(values[~missing].to_numpy(dtype=float)).all() or (values[~missing] < 0).any()):
             raise ValueError(f"execution log has invalid numeric values: {path}")
 
-def atomic_feather(frame, path):
+def _read_recorded_execution_log(
+    path, producer=None, run_id=None, *, require_record=False
+):
+    """Validate a log's checksum, record (when required), and schema."""
+    path = Path(path)
+    sidecar = Path(f"{path}.md5")
+    present = path.exists() or sidecar.exists()
+    if not present:
+        return None
+    if not path.is_file() or not sidecar.is_file():
+        raise ValueError(f"execution log is incomplete: {path}")
+    record_required = require_record or _path_is_current_run_owned(path, run_id)
+    if not _recorded_checksum_ok(
+        path,
+        producer=producer,
+        run_id=run_id,
+        require_record=record_required,
+    ):
+        if record_required:
+            candidate = _record_candidate(path, run_id)
+            if candidate is None or (
+                not candidate.exists() and not candidate.is_symlink()
+            ):
+                raise ValueError(f"execution log artifact record is missing: {path}")
+        raise ValueError(f"execution log checksum or record failed: {path}")
+    try:
+        frame = pd.read_feather(path)
+    except Exception as exc:
+        raise ValueError(f"execution log is malformed: {path}") from exc
+    _validate_log_frame(frame, path)
+    return frame
+
+
+def atomic_feather(frame, path, producer=None, *, write_record=True):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
@@ -98,10 +342,23 @@ def atomic_feather(frame, path):
         if had_sidecar:
             os.link(sidecar, sidecar_backup)
         os.replace(tmp, path)
+        checksum = {
+            "MD5": _file_md5(path),
+            "SIZE": str(path.stat().st_size),
+            "PATH": str(path),
+        }
         sidecar_tmp.write_text(
-            f"MD5={_file_md5(path)}\nSIZE={path.stat().st_size}\nPATH={path}\n"
+            f"MD5={checksum['MD5']}\n"
+            f"SIZE={checksum['SIZE']}\n"
+            f"PATH={checksum['PATH']}\n",
+            encoding="utf-8",
         )
         os.replace(sidecar_tmp, sidecar)
+        effective_producer = producer or os.environ.get(
+            "ECODA_EXECUTION_LOG_PRODUCER", "stage5_execution_log"
+        )
+        if write_record and _record_context() is not None:
+            _write_artifact_record(path, effective_producer, checksum=checksum)
     except Exception:
         if backup.exists():
             os.replace(backup, path)
@@ -195,13 +452,22 @@ def main():
         help="Write the exact task-log paths eligible for cleanup",
     )
     args = parser.parse_args()
+    log_producer = os.environ.get(
+        "ECODA_EXECUTION_LOG_PRODUCER", "stage5_execution_log"
+    )
     if args.migrate_existing_log:
         migrated = Path(args.migrate_existing_log)
-        if not migrated.is_file():
+        frame = _read_recorded_execution_log(
+            migrated, producer=log_producer
+        )
+        if frame is None:
             parser.error(f"existing execution log is missing: {migrated}")
-        frame = pd.read_feather(migrated)
-        _validate_log_frame(frame, migrated)
-        atomic_feather(frame, migrated)
+        atomic_feather(
+            frame,
+            migrated,
+            producer=log_producer,
+            write_record=_path_is_current_run_owned(migrated),
+        )
         print(f"Execution log sidecar migrated: {migrated}")
         return
 
@@ -251,36 +517,46 @@ def main():
         )
         if args.cleanup_manifest:
             _atomic_text([], args.cleanup_manifest)
-        if args.existing_log and os.path.exists(args.existing_log):
-            existing = pd.read_feather(args.existing_log)
-            _validate_log_frame(existing, args.existing_log)
-            atomic_feather(existing, out_path)
-            print(
-                f"No new rows; wrote existing log unchanged -> {out_path} "
-                f"({len(existing)} rows)"
+        if not args.existing_log:
+            raise ValueError(
+                "no per-task execution logs or validated existing log were found"
             )
+        existing = _read_recorded_execution_log(
+            args.existing_log, producer=log_producer
+        )
+        if existing is None:
+            raise ValueError(f"existing execution log is missing: {args.existing_log}")
+        atomic_feather(existing, out_path, producer=log_producer)
+        print(
+            f"No new rows; wrote existing log unchanged -> {out_path} "
+            f"({len(existing)} rows)"
+        )
         return
 
     frames = []
     for task_log in task_logs:
-        if not _recorded_checksum_ok(task_log):
-            raise ValueError(f"execution log checksum failed: {task_log}")
-        frame = pd.read_feather(task_log)
-        _validate_log_frame(frame, task_log)
+        frame = _read_recorded_execution_log(
+            task_log,
+            producer=log_producer,
+        )
+        if frame is None:
+            raise ValueError(f"execution log is missing: {task_log}")
         frames.append(frame)
     merged = pd.concat(frames, ignore_index=True)
     merged = merged.drop_duplicates(subset=["dataset", "method"], keep="last")
 
     # Merge with the existing log (NAS continuity): this run's rows win.
-    if args.existing_log and os.path.exists(args.existing_log):
-        existing = pd.read_feather(args.existing_log)
-        _validate_log_frame(existing, args.existing_log)
-        merged = pd.concat([existing, merged], ignore_index=True)
-        merged = merged.drop_duplicates(subset=["dataset", "method"], keep="last")
+    if args.existing_log:
+        existing = _read_recorded_execution_log(
+            args.existing_log, producer=log_producer
+        )
+        if existing is not None:
+            merged = pd.concat([existing, merged], ignore_index=True)
+            merged = merged.drop_duplicates(subset=["dataset", "method"], keep="last")
 
     merged = merged.reset_index(drop=True)
     _validate_log_frame(merged, out_path)
-    atomic_feather(merged, out_path)
+    atomic_feather(merged, out_path, producer=log_producer)
     if args.cleanup_manifest:
         _atomic_text(
             [f"{task_log}\n" for task_log in task_logs],

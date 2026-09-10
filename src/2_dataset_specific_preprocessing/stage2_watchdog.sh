@@ -26,19 +26,24 @@ THROTTLE="$7"
 ecoda_validate_run_id "${RUN_ID}" || exit 1
 ecoda_open_run "${RUN_ID}" || exit 1
 RUN_ROOT="${ECODA_RUN_ROOT}"
+export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT="${ECODA_RUN_ROOT}"
 STATUS_FILE="${RUN_ROOT}/status/watchdog"
 RETRY_INDEX=0
 SCHEDULER_IDS=()
 RUNTIME_EXPORT=""
 
 stage2_step_script() {
+  local root="${SCRIPT_DIR}"
+  if [[ -n "${SOURCE_ROOT:-}" ]]; then
+    root="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing"
+  fi
   case "$1" in
-    gongsharma_cap) printf '%s/1.1_submit_gongsharma.sh' "${SCRIPT_DIR}" ;;
-    combinedpbmc) printf '%s/1.2_submit_combinedpbmc.sh' "${SCRIPT_DIR}" ;;
-    joanito) printf '%s/1.3_submit_joanito.sh' "${SCRIPT_DIR}" ;;
-    kfoury_lowres_ct) printf '%s/1.4_submit_kfoury_lowres_ct.sh' "${SCRIPT_DIR}" ;;
-    myocardial_counts) printf '%s/1.5_submit_myocardial.sh' "${SCRIPT_DIR}" ;;
-    bassez_cellsubtype) printf '%s/1.6_submit_bassez.sh' "${SCRIPT_DIR}" ;;
+    gongsharma_cap) printf '%s/1.1_submit_gongsharma.sh' "${root}" ;;
+    combinedpbmc) printf '%s/1.2_submit_combinedpbmc.sh' "${root}" ;;
+    joanito) printf '%s/1.3_submit_joanito.sh' "${root}" ;;
+    kfoury_lowres_ct) printf '%s/1.4_submit_kfoury_lowres_ct.sh' "${root}" ;;
+    myocardial_counts) printf '%s/1.5_submit_myocardial.sh' "${root}" ;;
+    bassez_cellsubtype) printf '%s/1.6_submit_bassez.sh' "${root}" ;;
     *) return 1 ;;
   esac
 }
@@ -56,6 +61,76 @@ stage2_step_outputs() {
     bassez_cellsubtype) printf '%s/Bassez/data/BassezA_2021_33958794whole.rds' "${HPC_SCRATCH_DIR}" ;;
     *) return 1 ;;
   esac
+}
+
+stage2_manifest_value() {
+  local manifest="$1"
+  local key="$2"
+  local value
+  [[ -f "${manifest}" && ! -L "${manifest}" ]] || return 1
+  value="$(awk -v wanted="${key}" '
+    index($0, wanted "=") == 1 {
+      count++
+      result = substr($0, length(wanted) + 2)
+    }
+    END {
+      if (count != 1) exit 1
+      print result
+    }
+  ' "${manifest}")" || return 1
+  [[ -n "${value}" ]] || return 1
+  printf '%s\n' "${value}"
+}
+
+stage2_load_bound_run() {
+  local source_manifest="${RUN_ROOT}/manifests/source.manifest"
+  local identity="${RUN_ROOT}/manifests/runtime.identity"
+  local source_root source_manifest_original runtime_image runtime_manifest
+  local snapshot_root
+  [[ -f "${source_manifest}" && ! -L "${source_manifest}" &&
+     -r "${source_manifest}" ]] || return 2
+  [[ -f "${identity}" && ! -L "${identity}" && -r "${identity}" ]] || return 2
+  source_root="$(stage2_manifest_value "${source_manifest}" SOURCE_ROOT)" || return 1
+  [[ "${source_root}" = /* && "${source_root}" == */tree ]] || return 1
+  snapshot_root="${source_root%/tree}"
+  source_manifest_original="${snapshot_root}/identity/source.manifest"
+  [[ -f "${source_manifest_original}" && ! -L "${source_manifest_original}" &&
+     -r "${source_manifest_original}" ]] || return 1
+  cmp -s "${source_manifest}" "${source_manifest_original}" || return 1
+  runtime_image="$(stage2_manifest_value "${identity}" RUNTIME_IMAGE)" || return 1
+  runtime_manifest="$(stage2_manifest_value "${identity}" RUNTIME_MANIFEST)" || return 1
+  [[ "${runtime_image}" = /* && "${runtime_manifest}" = /* ]] || return 1
+  SOURCE_ROOT="${source_root}"
+  SOURCE_MANIFEST_ORIGINAL="${source_manifest_original}"
+  SOURCE_MANIFEST_RUN="${source_manifest}"
+  RUNTIME_IDENTITY="${identity}"
+  export ECODA_SOURCE_ROOT="${SOURCE_ROOT}"
+  export ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST_ORIGINAL}"
+  export ECODA_SOURCE_SNAPSHOT_REQUIRED=1
+  export ECODA_AUX_ROOT="${SOURCE_ROOT%/}/aux"
+  export ECODA_RUNTIME_IMAGE="${runtime_image}"
+  export ECODA_RUNTIME_MANIFEST="${runtime_manifest}"
+  export ECODA_RUNTIME_IDENTITY="${RUNTIME_IDENTITY}"
+  export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT="${RUN_ROOT}"
+  export ECODA_RUNTIME_MODE=apptainer
+  LOGS_DIR="${ECODA_LOGS_DIR:-${LOGS_DIR:-${RUN_ROOT}/logs}}"
+  export LOGS_DIR ECODA_LOGS_DIR="${LOGS_DIR}"
+  return 0
+}
+
+stage2_artifact_record_valid() {
+  local path="$1"
+  local producer="$2"
+  local record
+  record="$(ecoda_artifact_record_path "${path}" "${RUN_ID}" 2>/dev/null || true)"
+  [[ -n "${record}" && -f "${record}" && ! -L "${record}" ]] || return 1
+  ecoda_validate_artifact_record "${path}" "${producer}" "${RUN_ID}"
+}
+
+stage2_artifact_record_write() {
+  local path="$1"
+  local producer="$2"
+  ecoda_write_artifact_record "${path}" "${producer}" "${RUN_ID}" >/dev/null
 }
 
 atomic_status() {
@@ -82,11 +157,13 @@ atomic_status() {
   } > "${tmp}" || return 1
   mv -f "${tmp}" "${STATUS_FILE}"
 }
-
 fail() {
   local reason="$1"
+  if [[ -n "${OWNERSHIP_MANIFEST:-}" ]]; then
+    rm -f "${OWNERSHIP_MANIFEST}.check.$$"
+  fi
   local owner_rc=0
-  if [[ -r "${MANIFEST}" ]]; then
+  if [[ "${MANIFEST}" == "${RUN_ROOT}/manifests/steps.tsv" && -r "${MANIFEST}" ]]; then
     while IFS=$'\t' read -r step script outputs dependency owner; do
       [[ -n "${owner}" && "${owner}" != "-" ]] || continue
       if ! ecoda_owner_set_state "${owner}" FAIL "${reason}"; then
@@ -94,16 +171,46 @@ fail() {
       fi
     done < "${MANIFEST}"
   fi
+  if ! ecoda_owner_finalize_tracked FAIL "${reason}"; then
+    owner_rc=1
+  fi
   if ! atomic_status FAIL "${reason}"; then
     owner_rc=1
   fi
   exit 1
 }
+set +e
+stage2_load_bound_run
+bound_rc=$?
+set -e
+if [[ ${bound_rc} -eq 2 ]]; then
+  fail "legacy_source_unpinned"
+fi
+[[ ${bound_rc} -eq 0 ]] || fail "Stage 2 run-bound source/runtime identity is invalid"
+[[ "${MANIFEST}" == "${RUN_ROOT}/manifests/steps.tsv" &&
+   "${JOB_FILE}" == "${RUN_ROOT}/manifests/jobs.tsv" ]] ||
+  fail "Stage 2 scheduler manifests are not the exact run-owned paths"
+OWNERSHIP_MANIFEST="${RUN_ROOT}/manifests/ownership.tsv"
+[[ -f "${OWNERSHIP_MANIFEST}" && ! -L "${OWNERSHIP_MANIFEST}" ]] ||
+  fail "Stage 2 ownership manifest is missing"
+ecoda_validate_run_owned_path "${OWNERSHIP_MANIFEST}" "${RUN_ROOT}" ||
+  fail "Stage 2 ownership manifest escaped the run root"
+ecoda_validate_manifest "${OWNERSHIP_MANIFEST}" 5 ||
+  fail "Stage 2 ownership manifest is invalid"
+ecoda_validate_run_owned_path "${MANIFEST}" "${RUN_ROOT}" ||
+  fail "Stage 2 steps manifest escaped the run root"
+ecoda_validate_run_owned_path "${JOB_FILE}" "${RUN_ROOT}" ||
+  fail "Stage 2 jobs manifest escaped the run root"
+ecoda_require_source_script_path "${SCRIPT_DIR}/stage2_watchdog.sh" "${SOURCE_ROOT}" >/dev/null ||
+  fail "Stage 2 watchdog script escaped immutable source root"
 export ECODA_RUNTIME_PROFILE=stage2
-ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" || \
-  fail "Stage 2 immutable runtime validation failed before retry handling"
-RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage2 0)" || \
-  fail "Stage 2 runtime export construction failed"
+ecoda_runtime_validate_bound_run ||
+  fail "Stage 2 run-bound runtime validation failed before retry handling"
+RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage2 0)" ||
+  fail "Stage 2 run-bound runtime export construction failed"
+RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_RUNTIME_IDENTITY=${RUNTIME_IDENTITY},ECODA_RUN_ROOT=${RUN_ROOT},ECODA_SOURCE_MANIFEST_RUN=${SOURCE_MANIFEST_RUN},ECODA_HOST_ENV_PREFIX=${ECODA_HOST_ENV_PREFIX:-},ECODA_AUX_ROOT=${ECODA_AUX_ROOT:-${SOURCE_ROOT%/}/aux},ECODA_LOGS_DIR=${LOGS_DIR},ECODA_SCRATCH_ROOT=${ECODA_SCRATCH_ROOT:-${HPC_SCRATCH_DIR}}"
+ecoda_validate_output_ownership stage2 "${OWNERSHIP_MANIFEST}" "${RUN_ID}" ||
+  fail "Stage 2 output ownership validation failed before watchdog accounting"
 
 bump_memory() {
   local value="$1" number suffix
@@ -126,32 +233,75 @@ mem_ge() {
   if [[ "${bs}" == "T" ]]; then bn=$((bn * 1024)); fi
   (( an >= bn ))
 }
-
+# Wait through normal Slurm accounting lag, then fail closed unless the shared
+# scalar query produced exactly one Stage 2 terminal state for this job.
+# Keeping this wrapper local prevents BASH_ENV from supplying the watchdog's
+# accounting policy.
 wait_job_terminal() {
-  local job="$1"
-  ecoda_wait_scalar_accounting "${job}" "${STAGE2_WATCHDOG_POLL_SECONDS:-30}" || return 1
-  printf '%s' "${ECODA_ACCOUNTING_STATE}"
+  local job="${1:-}" state rows row_job row_state
+  [[ "${job}" =~ ^[0-9]+$ ]] || return 1
+  ECODA_ACCOUNTING_STATE=""
+  ECODA_ACCOUNTING_ROWS=""
+  ecoda_wait_scalar_accounting "${job}" \
+    "${STAGE2_WATCHDOG_POLL_SECONDS:-30}" || return 1
+  state="${ECODA_ACCOUNTING_STATE:-}"
+  rows="${ECODA_ACCOUNTING_ROWS:-}"
+  [[ -n "${state}" && -n "${state//[[:space:]]/}" ]] || return 1
+  [[ -n "${rows}" && "${rows}" != *$'\n'* ]] || return 1
+  case "${rows}" in
+    *'|'*)
+      IFS='|' read -r row_job row_state _ <<< "${rows}"
+      [[ "${row_job}" == "${job}" &&
+         "${row_state%%+*}" == "${state}" ]] || return 1
+      ;;
+  esac
+  case "${state}" in
+    COMPLETED|OUT_OF_MEMORY|FAILED|CANCELLED|TIMEOUT|DEPENDENCY*)
+      printf '%s\n' "${state}"
+      ;;
+    *) return 1 ;;
+  esac
 }
+
 
 validate_manifests() {
   ecoda_validate_run_owned_path "${MANIFEST}" "${RUN_ROOT}" || return 1
   ecoda_validate_manifest "${MANIFEST}" 5 || return 1
+  ecoda_validate_checksum "${MANIFEST}" || return 1
   ecoda_validate_run_owned_path "${JOB_FILE}" "${RUN_ROOT}" || return 1
   ecoda_validate_manifest "${JOB_FILE}" 2 || return 1
-  local seen_steps="" step script outputs dependency owner expected_script expected_outputs
+  local seen_steps="" step script outputs dependency owner expected_script expected_outputs ownership_tmp
   while IFS=$'\t' read -r step script outputs dependency owner; do
     expected_script="$(stage2_step_script "${step}" 2>/dev/null || true)"
+    expected_script="$(ecoda_require_source_script_path "${expected_script}" "${SOURCE_ROOT}" 2>/dev/null || true)"
     expected_outputs="$(stage2_step_outputs "${step}" 2>/dev/null || true)"
     [[ -n "${expected_script}" && "${script}" == "${expected_script}" ]] || return 1
     [[ -n "${expected_outputs}" && "${outputs}" == "${expected_outputs}" ]] || return 1
     expected_dependency="-"
     [[ "${step}" == "combinedpbmc" ]] && expected_dependency="gongsharma_cap"
     [[ "${dependency}" == "${expected_dependency}" ]] || return 1
-    expected_owner="$(ecoda_owner_dir stage2 "${step}")"
+    expected_owner="-"
+    [[ "${owner}" == "-" ]] || expected_owner="$(ecoda_owner_dir stage2 "${step}")"
     [[ "${owner}" == "${expected_owner}" ]] || return 1
     case " ${seen_steps} " in *" ${step} "*) return 1 ;; esac
     seen_steps="${seen_steps} ${step}"
   done < "${MANIFEST}"
+  ownership_tmp="${OWNERSHIP_MANIFEST}.check.$$"
+  : > "${ownership_tmp}" || return 1
+  while IFS=$'\t' read -r ownership_step ownership_script ownership_outputs ownership_dependency ownership_owner; do
+    [[ "${ownership_owner}" != "-" ]] || continue
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+      "${ownership_step}" "${ownership_script}" "${ownership_outputs}" \
+      "${ownership_dependency}" "${ownership_owner}" >> "${ownership_tmp}" || {
+      rm -f "${ownership_tmp}"
+      return 1
+    }
+  done < "${MANIFEST}"
+  if ! cmp -s "${ownership_tmp}" "${OWNERSHIP_MANIFEST}"; then
+    rm -f "${ownership_tmp}"
+    return 1
+  fi
+  rm -f "${ownership_tmp}"
   local seen_jobs="" job_step job_id known_owner
   while IFS=$'\t' read -r job_step job_id; do
     [[ "${job_id}" =~ ^[0-9]+$ ]] || return 1
@@ -162,9 +312,9 @@ validate_manifests() {
   done < "${JOB_FILE}"
   [[ -n "${seen_jobs}" ]] || return 1
 }
-
 validate_outputs() {
   local path step script outputs dependency owner old_ifs sidecar sidecar_present
+  local record_valid
   while IFS=$'\t' read -r step script outputs dependency owner; do
     [[ -n "${step}" ]] || return 1
     old_ifs="${IFS}"
@@ -176,31 +326,47 @@ validate_outputs() {
         echo "Missing/empty Stage 2 output: ${path}" >&2
         return 1
       }
-      sidecar="${path}.md5"
-      sidecar_present=0
-      if [[ -e "${sidecar}" || -L "${sidecar}" ]]; then
-        # Existing checksums are immutable evidence; an invalid sidecar is
-        # never replaced by a semantically plausible output.
-        ecoda_validate_checksum "${path}" || return 1
-        sidecar_present=1
-      fi
-      ecoda_validate_stage2_output "${step}" "${path}" || {
-        echo "Stage 2 semantic output validation failed: ${path}" >&2
-        return 1
-      }
-      case "${path}" in
-        *.h5ad)
-          "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/artifact_contract.py" \
-            --path "${path}" --kind h5ad >/dev/null 2>&1 || return 1
-          ;;
-      esac
-      if [[ ${sidecar_present} -eq 0 ]]; then
-        # A genuinely new worker output has no prior checksum to validate.
-        # Its semantic contracts must pass before the first sidecar is written.
-        ecoda_write_checksum "${path}" ||
+      record_valid=0
+      if stage2_artifact_record_valid "${path}" "${step}" &&
+         ecoda_validate_stage2_output "${step}" "${path}"; then
+        record_valid=1
+      else
+        sidecar="${path}.md5"
+        sidecar_present=0
+        if [[ -e "${sidecar}" || -L "${sidecar}" ]]; then
+          # Existing checksums are immutable evidence; an invalid sidecar is
+          # never replaced by a semantically plausible output.
+          ecoda_validate_checksum "${path}" || return 1
+          sidecar_present=1
+        fi
+        ecoda_validate_stage2_output "${step}" "${path}" || {
+          echo "Stage 2 semantic output validation failed: ${path}" >&2
           return 1
-        ecoda_validate_checksum_record "${path}" "${ECODA_CHECKSUM_MD5}" \
-          "${ECODA_CHECKSUM_SIZE}" || return 1
+        }
+        case "${path}" in
+          *.h5ad)
+            "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/artifact_contract.py" \
+              --path "${path}" --kind h5ad >/dev/null 2>&1 || return 1
+            ;;
+        esac
+        if [[ ${sidecar_present} -eq 0 ]]; then
+          # A genuinely new worker output has no prior checksum to validate.
+          # Its semantic contracts must pass before the first sidecar is written.
+          ecoda_write_checksum "${path}" ||
+            return 1
+          ecoda_validate_checksum_record "${path}" "${ECODA_CHECKSUM_MD5}" \
+            "${ECODA_CHECKSUM_SIZE}" || return 1
+        fi
+      fi
+      if [[ ${record_valid} -eq 1 ]]; then
+        case "${path}" in
+          *.h5ad)
+            "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/artifact_contract.py" \
+              --path "${path}" --kind h5ad >/dev/null 2>&1 || return 1
+            ;;
+        esac
+      elif [[ "${owner}" != "-" ]]; then
+        stage2_artifact_record_write "${path}" "${step}" || return 1
       fi
       if [[ "${step}" == "combinedpbmc" ]]; then
         rm -f "${HPC_SCRATCH_DIR}/CombinedPBMC/data/combined_pbmc_batch_effect_analysis.h5ad" \
@@ -208,6 +374,13 @@ validate_outputs() {
       fi
     done
   done < "${MANIFEST}"
+  local published_path owner_dir
+  for published_path in "${ECODA_OUTPUT_PATHS[@]}"; do
+    owner_dir="$(ecoda_artifact_owner_dir "${published_path}")" || return 1
+    [[ -d "${owner_dir}" ]] || return 1
+    ecoda_artifact_owner_set_state "${published_path}" OK \
+      "validated and published by Stage 2 watchdog" || return 1
+  done
 }
 
 validate_manifests || fail "Stage 2 manifest or job contract failed"
@@ -259,6 +432,8 @@ while :; do
   if mem_ge "${CURRENT_MEMORY}" "${MAX_MEMORY}"; then
     fail "OUT_OF_MEMORY Stage 2 hooks at ${MAX_MEMORY} ceiling: ${OOM_STEPS[*]}"
   fi
+  ecoda_validate_output_ownership stage2 "${OWNERSHIP_MANIFEST}" "${RUN_ID}" ||
+    fail "Stage 2 output ownership validation failed before OOM retry"
   NEXT_MEMORY="$(bump_memory "${CURRENT_MEMORY}")" || fail "unparseable Stage 2 memory '${CURRENT_MEMORY}'"
   if mem_ge "${NEXT_MEMORY}" "${MAX_MEMORY}"; then NEXT_MEMORY="${MAX_MEMORY}"; fi
   RETRY_INDEX=$((RETRY_INDEX + 1))
@@ -288,6 +463,8 @@ while :; do
       fi
       [[ -n "${dep_job}" ]] && retry_args+=(--dependency="afterok:${dep_job}")
     fi
+    script="$(ecoda_require_source_script_path "${script}" "${SOURCE_ROOT}")" ||
+      fail "Stage 2 retry script escaped immutable source root: ${step}"
     set +e
     retry_output="$(sbatch "${retry_args[@]}" "${script}")"
     retry_rc=$?
@@ -318,7 +495,8 @@ done
 validate_outputs || fail "Stage 2 output contract/checksum validation failed"
 owner_failure=0
 while IFS=$'\t' read -r step script outputs dependency owner; do
-  [[ -n "${owner}" && "${owner}" != "-" ]] || fail "Stage 2 owner is missing for ${step}"
+  [[ -n "${step}" ]] || fail "Stage 2 step is missing from manifest"
+  [[ "${owner}" == "-" ]] && continue
   if ! ecoda_owner_set_state "${owner}" OK "validated by Stage 2 watchdog"; then
     owner_failure=1
   fi

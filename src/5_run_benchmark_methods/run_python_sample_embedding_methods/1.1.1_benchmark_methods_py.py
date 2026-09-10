@@ -48,6 +48,7 @@ import gc
 import hashlib
 import json
 import os
+import re
 import resource
 import sys
 import tempfile
@@ -85,6 +86,217 @@ def _file_md5(path):
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+_CHECKSUM_FIELDS = ("MD5", "SIZE", "PATH")
+_ARTIFACT_RECORD_FIELDS = ("PATH", "SIZE", "MD5", "RUN_ID", "PRODUCER", "STATE")
+_MD5_RE = re.compile(r"^[0-9a-f]{32}$")
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+STAGE5_ARTIFACT_PRODUCERS = {
+    "mrvi": "stage5_mrvi",
+    "scpoli": "stage5_scpoli",
+    "pilot": "stage5_pilot",
+    "qot": "stage5_qot",
+    "pilotgm": "stage5_pilotgm",
+}
+
+
+def stage5_artifact_producer(method):
+    """Return the canonical run-bound producer for one Stage 5 method."""
+    try:
+        return STAGE5_ARTIFACT_PRODUCERS[method]
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            f"unsupported Stage 5 benchmark method: {method!r}"
+        ) from exc
+
+def _read_checksum_sidecar(path):
+    """Read an exact MD5/SIZE/PATH sidecar without hashing artifact bytes."""
+    path = Path(path)
+    sidecar = Path(f"{path}.md5")
+    if not path.is_file() or path.stat().st_size <= 0 or not sidecar.is_file():
+        raise ValueError(f"checksum sidecar is missing: {sidecar}")
+    try:
+        lines = sidecar.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"checksum sidecar is unreadable: {sidecar}") from exc
+    if len(lines) != len(_CHECKSUM_FIELDS):
+        raise ValueError(f"checksum sidecar has an invalid schema: {sidecar}")
+    records = {}
+    for key, line in zip(_CHECKSUM_FIELDS, lines):
+        prefix = f"{key}="
+        if not line.startswith(prefix) or key in records:
+            raise ValueError(f"checksum sidecar has an invalid schema: {sidecar}")
+        records[key] = line[len(prefix):]
+    if not _MD5_RE.fullmatch(records["MD5"]):
+        raise ValueError(f"checksum sidecar has an invalid MD5: {sidecar}")
+    try:
+        size = int(records["SIZE"])
+    except ValueError as exc:
+        raise ValueError(f"checksum sidecar has an invalid SIZE: {sidecar}") from exc
+    if size <= 0 or str(size) != records["SIZE"]:
+        raise ValueError(f"checksum sidecar has an invalid SIZE: {sidecar}")
+    if records["PATH"] != str(path):
+        raise ValueError(f"checksum sidecar has the wrong PATH: {sidecar}")
+    if size != path.stat().st_size:
+        raise ValueError(f"checksum sidecar has the wrong SIZE: {sidecar}")
+    return records
+
+
+def _full_checksum(path):
+    """Strictly verify an artifact sidecar and the bytes it describes."""
+    path = Path(path)
+    records = _read_checksum_sidecar(path)
+    digest = _file_md5(path)
+    if digest != records["MD5"]:
+        raise ValueError(f"checksum sidecar does not match artifact: {path}")
+    if path.stat().st_size != int(records["SIZE"]):
+        raise ValueError(f"artifact changed during checksum validation: {path}")
+    return records
+
+
+def _record_context(run_id=None):
+    """Resolve one explicit/current run without scanning other run roots."""
+    selected_run_id = (
+        run_id
+        or os.environ.get("ECODA_PRODUCER_RUN_ID")
+        or os.environ.get("ECODA_RUN_ID")
+    )
+    runs_root = os.environ.get("ECODA_RUNS_ROOT", "")
+    if not runs_root:
+        scratch_root = os.environ.get("HPC_SCRATCH_DIR") or os.environ.get(
+            "ECODA_SCRATCH_ROOT", ""
+        )
+        if scratch_root:
+            runs_root = str(Path(scratch_root) / "_ecoda_runs")
+    if not selected_run_id or not runs_root:
+        return None
+    if not _RUN_ID_RE.fullmatch(selected_run_id):
+        raise ValueError(f"invalid producer run ID: {selected_run_id!r}")
+    return Path(runs_root), selected_run_id
+
+
+def artifact_record_path(path, run_id):
+    """Return the bounded record path for a canonical artifact path."""
+    context = _record_context(run_id)
+    if context is None:
+        raise ValueError("artifact records require a run ID and run root")
+    runs_root, selected_run_id = context
+    canonical = Path(path).resolve()
+    path_digest = hashlib.sha256(str(canonical).encode("utf-8")).hexdigest()[:32]
+    return (
+        runs_root
+        / selected_run_id
+        / "manifests"
+        / "artifacts"
+        / f"{path_digest}.record"
+    )
+
+
+def _record_candidate(path, run_id=None):
+    context = _record_context(run_id)
+    if context is None:
+        return None
+    return artifact_record_path(path, context[1])
+
+
+def _read_artifact_record(path, producer=None, run_id=None, *, require=False):
+    """Validate run-owned record metadata and sidecar fields without rehashing."""
+    path = Path(path)
+    candidate = _record_candidate(path, run_id)
+    if candidate is None:
+        if require:
+            raise ValueError(f"artifact record context is missing: {path}")
+        return None
+    if not candidate.exists() and not candidate.is_symlink():
+        if require:
+            raise ValueError(f"artifact record is missing: {candidate}")
+        return None
+    if not candidate.is_file():
+        raise ValueError(f"artifact record is not a regular file: {candidate}")
+    try:
+        lines = candidate.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"artifact record is unreadable: {candidate}") from exc
+    if len(lines) != len(_ARTIFACT_RECORD_FIELDS):
+        raise ValueError(f"artifact record has an invalid schema: {candidate}")
+    records = {}
+    for key, line in zip(_ARTIFACT_RECORD_FIELDS, lines):
+        prefix = f"{key}="
+        if not line.startswith(prefix) or key in records:
+            raise ValueError(f"artifact record has an invalid schema: {candidate}")
+        records[key] = line[len(prefix):]
+    context = _record_context(run_id)
+    expected_run_id = "" if context is None else context[1]
+    if records["PATH"] != str(path.resolve()):
+        raise ValueError(f"artifact record has the wrong PATH: {candidate}")
+    if not _MD5_RE.fullmatch(records["MD5"]):
+        raise ValueError(f"artifact record has an invalid MD5: {candidate}")
+    try:
+        size = int(records["SIZE"])
+    except ValueError as exc:
+        raise ValueError(f"artifact record has an invalid SIZE: {candidate}") from exc
+    if size <= 0 or str(size) != records["SIZE"]:
+        raise ValueError(f"artifact record has an invalid SIZE: {candidate}")
+    if records["RUN_ID"] != expected_run_id:
+        raise ValueError(f"artifact record has the wrong RUN_ID: {candidate}")
+    if not records["PRODUCER"] or any(
+        character in records["PRODUCER"] for character in "\t\r\n"
+    ):
+        raise ValueError(f"artifact record has an invalid PRODUCER: {candidate}")
+    if producer is not None and records["PRODUCER"] != producer:
+        raise ValueError(f"artifact record has the wrong PRODUCER: {candidate}")
+    if records["STATE"] != "PUBLISHED":
+        raise ValueError(f"artifact record is not published: {candidate}")
+    if not path.is_file() or path.stat().st_size != size:
+        raise ValueError(f"artifact record SIZE does not match artifact: {path}")
+    sidecar = _read_checksum_sidecar(path)
+    if (
+        sidecar["PATH"] != str(path)
+        or sidecar["SIZE"] != records["SIZE"]
+        or sidecar["MD5"] != records["MD5"]
+    ):
+        raise ValueError(f"artifact record does not match checksum sidecar: {path}")
+    return records
+
+
+def validate_artifact_record(path, producer, run_id):
+    """Require and validate one exact run-owned artifact record."""
+    record = _read_artifact_record(path, producer, run_id, require=True)
+    if record is None:
+        raise ValueError(f"artifact record is missing: {path}")
+    return record
+
+
+def _write_artifact_record(path, producer, run_id=None, checksum=None):
+    """Publish a run-owned record after a strict artifact publication."""
+    context = _record_context(run_id)
+    if context is None:
+        return None
+    if not isinstance(producer, str) or not producer or any(
+        character in producer for character in "\t\r\n"
+    ):
+        raise ValueError(f"invalid artifact producer: {producer!r}")
+    path = Path(path)
+    sidecar = _full_checksum(path) if checksum is None else checksum
+    destination = artifact_record_path(path, context[1])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.tmp.{os.getpid()}")
+    serialized = (
+        f"PATH={path.resolve()}\n"
+        f"SIZE={sidecar['SIZE']}\n"
+        f"MD5={sidecar['MD5']}\n"
+        f"RUN_ID={context[1]}\n"
+        f"PRODUCER={producer}\n"
+        "STATE=PUBLISHED\n"
+    )
+    try:
+        temporary.write_text(serialized, encoding="utf-8")
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return destination
 
 
 def _validate_feather_frame(frame, path):
@@ -137,32 +349,32 @@ def _align_square_frame(frame, sample_ids, path):
     return aligned.loc[expected, expected]
 
 
-def recorded_feather_valid(path):
+def recorded_feather_valid(path, producer=None, producer_run_id=None):
+    """Validate a cache Feather and its semantic frame before reading callers use it."""
     path = Path(path)
     sidecar = Path(f"{path}.md5")
-    if not path.is_file() or path.stat().st_size == 0 or not sidecar.is_file():
+    present = path.exists() or sidecar.exists()
+    if not present:
         return False
-    records = {}
-    for line in sidecar.read_text().splitlines():
-        if "=" in line:
-            key, value = line.split("=", 1)
-            records[key] = value
-    if (
-        records.get("PATH") != str(path)
-        or records.get("MD5") != _file_md5(path)
-        or records.get("SIZE") != str(path.stat().st_size)
-    ):
-        return False
+    if not path.is_file() or not sidecar.is_file():
+        raise ValueError(f"Feather cache is incomplete: {path}")
+    # This full check is mandatory immediately before Feather deserialization.
+    _full_checksum(path)
+    candidate = _record_candidate(path, producer_run_id)
+    if candidate is not None and (candidate.exists() or candidate.is_symlink()):
+        _read_artifact_record(path, producer, producer_run_id, require=True)
     try:
         frame = pd.read_feather(path)
         _validate_feather_frame(frame, path)
-        return True
-    except Exception:
-        return False
+    except Exception as exc:
+        if isinstance(exc, ValueError):
+            raise
+        raise ValueError(f"Feather cache is malformed: {path}") from exc
+    return True
 
 
-def atomic_to_feather(frame, path):
-    """Write a complete Feather file and checksum before publication."""
+def atomic_to_feather(frame, path, producer=None):
+    """Write a complete Feather file, checksum, and optional run record."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
@@ -182,10 +394,27 @@ def atomic_to_feather(frame, path):
         if had_sidecar:
             os.link(sidecar, sidecar_backup)
         os.replace(tmp, path)
+        checksum = {
+            "MD5": _file_md5(path),
+            "SIZE": str(path.stat().st_size),
+            "PATH": str(path),
+        }
         sidecar_tmp.write_text(
-            f"MD5={_file_md5(path)}\nSIZE={path.stat().st_size}\nPATH={path}\n"
+            f"MD5={checksum['MD5']}\n"
+            f"SIZE={checksum['SIZE']}\n"
+            f"PATH={checksum['PATH']}\n",
+            encoding="utf-8",
         )
         os.replace(sidecar_tmp, sidecar)
+        effective_producer = producer or os.environ.get(
+            "ECODA_ARTIFACT_PRODUCER"
+        )
+        if _record_context() is not None:
+            if not effective_producer:
+                raise ValueError(
+                    "run-bound artifact producer is required for Feather output"
+                )
+            _write_artifact_record(path, effective_producer, checksum=checksum)
     except Exception:
         if backup.exists():
             os.replace(backup, path)
@@ -305,6 +534,14 @@ def _runtime_metadata_payload(
 
 def _reject_nonfinite_json_constant(value):
     raise ValueError(f"runtime metadata contains non-finite JSON value: {value}")
+def _reject_duplicate_json_keys(pairs):
+    """Reject duplicate object keys instead of silently keeping the last."""
+    payload = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"runtime metadata has duplicate key: {key}")
+        payload[key] = value
+    return payload
 
 
 def _read_runtime_checksum(metadata_path):
@@ -350,9 +587,24 @@ def publish_runtime_metadata(
     method_str,
     time_secs,
     mem_gb,
+    producer=None,
+    producer_run_id=None,
 ):
     """Atomically publish runtime metadata after its output is complete."""
     output_path = Path(output_path)
+    effective_producer = producer or os.environ.get("ECODA_ARTIFACT_PRODUCER")
+    record_context = _record_context(producer_run_id)
+    if record_context is not None:
+        if not effective_producer:
+            raise ValueError(
+                "run-bound artifact producer is required for runtime metadata"
+            )
+        _read_artifact_record(
+            output_path,
+            effective_producer,
+            producer_run_id,
+            require=True,
+        )
     metadata_path = runtime_metadata_path(output_path)
     checksum_path = runtime_metadata_checksum_path(output_path)
     metadata_tmp = metadata_path.with_name(
@@ -401,6 +653,18 @@ def publish_runtime_metadata(
             os.link(checksum_path, checksum_backup)
         os.replace(metadata_tmp, metadata_path)
         os.replace(checksum_tmp, checksum_path)
+        if record_context is not None:
+            metadata_checksum = {
+                "MD5": _file_md5(metadata_path),
+                "SIZE": str(metadata_path.stat().st_size),
+                "PATH": str(metadata_path),
+            }
+            _write_artifact_record(
+                metadata_path,
+                effective_producer,
+                run_id=producer_run_id,
+                checksum=metadata_checksum,
+            )
     except Exception:
         if metadata_backup.exists():
             os.replace(metadata_backup, metadata_path)
@@ -422,19 +686,49 @@ def publish_runtime_metadata(
                 temporary.unlink()
 
 
-def read_runtime_metadata(output_path, dataset_name, method_str):
+def read_runtime_metadata(
+    output_path,
+    dataset_name,
+    method_str,
+    producer=None,
+    producer_run_id=None,
+):
     """Read and strictly validate metadata for a valid Feather cache hit."""
     output_path = Path(output_path)
-    if not recorded_feather_valid(output_path):
+    effective_producer = producer or os.environ.get("ECODA_ARTIFACT_PRODUCER")
+    record_context = _record_context(producer_run_id)
+    if record_context is not None and not effective_producer:
+        raise ValueError(
+            "run-bound artifact producer is required for runtime metadata"
+        )
+    if not recorded_feather_valid(
+        output_path,
+        producer=effective_producer,
+        producer_run_id=producer_run_id,
+    ):
         raise ValueError(f"output Feather is not a valid recorded artifact: {output_path}")
     metadata_path = runtime_metadata_path(output_path)
     if not metadata_path.is_file() or metadata_path.stat().st_size == 0:
         raise ValueError(f"runtime metadata is missing: {metadata_path}")
     _read_runtime_checksum(metadata_path)
+    metadata_record = _record_candidate(metadata_path, producer_run_id)
+    metadata_record_present = metadata_record is not None and (
+        metadata_record.exists() or metadata_record.is_symlink()
+    )
+    if metadata_record_present:
+        _read_artifact_record(
+            metadata_path,
+            effective_producer,
+            producer_run_id,
+            require=True,
+        )
+    elif producer_run_id is not None:
+        raise ValueError(f"runtime metadata artifact record is missing: {metadata_path}")
     try:
         payload = json.loads(
             metadata_path.read_text(encoding="utf-8"),
             parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_keys,
         )
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"runtime metadata is malformed: {metadata_path}") from exc
@@ -483,7 +777,31 @@ def _validate_execution_log_frame(frame, path):
         raise ValueError(f"execution log has duplicate identifiers: {path}")
     _validate_execution_measurements(frame, path)
 
-def execution_log_atomic_to_feather(frame, path):
+def _read_recorded_execution_log(
+    path, producer=None, producer_run_id=None, *, require_record=False
+):
+    """Validate an execution log fully before deserializing it."""
+    path = Path(path)
+    sidecar = Path(f"{path}.md5")
+    present = path.exists() or sidecar.exists()
+    if not present:
+        return None
+    if not path.is_file() or not sidecar.is_file():
+        raise ValueError(f"execution log is incomplete: {path}")
+    _full_checksum(path)
+    candidate = _record_candidate(path, producer_run_id)
+    if candidate is not None and (candidate.exists() or candidate.is_symlink()):
+        _read_artifact_record(path, producer, producer_run_id, require=True)
+    elif require_record:
+        raise ValueError(f"execution log artifact record is missing: {path}")
+    try:
+        frame = pd.read_feather(path)
+    except Exception as exc:
+        raise ValueError(f"execution log is malformed: {path}") from exc
+    _validate_execution_log_frame(frame, path)
+    return frame
+
+def execution_log_atomic_to_feather(frame, path, producer=None):
     """Atomically write the documented indexless execution-log schema."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -504,10 +822,23 @@ def execution_log_atomic_to_feather(frame, path):
         if had_sidecar:
             os.link(sidecar, sidecar_backup)
         os.replace(tmp, path)
+        checksum = {
+            "MD5": _file_md5(path),
+            "SIZE": str(path.stat().st_size),
+            "PATH": str(path),
+        }
         sidecar_tmp.write_text(
-            f"MD5={_file_md5(path)}\nSIZE={path.stat().st_size}\nPATH={path}\n"
+            f"MD5={checksum['MD5']}\n"
+            f"SIZE={checksum['SIZE']}\n"
+            f"PATH={checksum['PATH']}\n",
+            encoding="utf-8",
         )
         os.replace(sidecar_tmp, sidecar)
+        effective_producer = producer or os.environ.get(
+            "ECODA_EXECUTION_LOG_PRODUCER", "stage5_execution_log"
+        )
+        if _record_context() is not None:
+            _write_artifact_record(path, effective_producer, checksum=checksum)
     except Exception:
         if backup.exists():
             os.replace(backup, path)
@@ -640,14 +971,10 @@ def log_execution_time(
     time_secs,
     log_file,
     mem_gb=_USE_PEAK_RSS,
+    producer=None,
+    producer_run_id=None,
 ):
-    """Append/overwrite one (dataset, method) row in the per-task exec log.
-
-    Read-modify-write on the feather (single process per task). Overwrites
-    the row if the (dataset, method) combo already exists (matches the qmd's
-    rerun semantics). When ``mem_gb`` is omitted, preserve the historical
-    peak-RSS measurement; an explicit ``None`` replays a missing measurement.
-    """
+    """Append/overwrite one (dataset, method) row in the per-task exec log."""
     if mem_gb is _USE_PEAK_RSS:
         mem_gb = peak_rss_gb()
     new_row = pd.DataFrame(
@@ -658,30 +985,55 @@ def log_execution_time(
             "mem_GB": [mem_gb],
         }
     )
-    if os.path.exists(log_file):
-        df_existing = pd.read_feather(log_file)
+    effective_producer = producer or os.environ.get(
+        "ECODA_EXECUTION_LOG_PRODUCER", "stage5_execution_log"
+    )
+    df_existing = _read_recorded_execution_log(
+        log_file,
+        producer=effective_producer,
+        producer_run_id=producer_run_id,
+    )
+    if df_existing is None:
+        df_final = new_row
+    else:
         mask = (df_existing["dataset"] == dataset_name) & (
             df_existing["method"] == method_str
         )
         if mask.any():
-            df_final = df_existing[~mask]
-        else:
-            df_final = df_existing
-        df_final = pd.concat([df_final, new_row], ignore_index=True)
-    else:
-        df_final = new_row
-    execution_log_atomic_to_feather(df_final, log_file)
+            df_existing = df_existing[~mask]
+        df_final = pd.concat([df_existing, new_row], ignore_index=True)
+    execution_log_atomic_to_feather(
+        df_final, log_file, producer=effective_producer
+    )
 
 
-def replay_runtime_metadata(output_path, dataset_name, method_str, log_file):
+def replay_runtime_metadata(
+    output_path,
+    dataset_name,
+    method_str,
+    log_file,
+    producer=None,
+    producer_run_id=None,
+):
     """Replay one validated runtime metadata row into the execution log."""
-    payload = read_runtime_metadata(output_path, dataset_name, method_str)
+    payload = read_runtime_metadata(
+        output_path,
+        dataset_name,
+        method_str,
+        producer=producer,
+        producer_run_id=producer_run_id,
+    )
     log_execution_time(
         dataset_name,
         method_str,
         payload["time_secs"],
         log_file,
         mem_gb=payload["mem_GB"],
+        producer=(
+            os.environ.get("ECODA_EXECUTION_LOG_PRODUCER")
+            or "stage5_execution_log"
+        ),
+        producer_run_id=producer_run_id,
     )
     return payload
 
@@ -817,7 +1169,7 @@ def use_counts_layer(sub, method, ds_name):
 # ---------------------------------------------------------------------------
 # Method bodies (qmd semantics preserved)
 # ---------------------------------------------------------------------------
-def run_mrvi(adata, device, output_path, batch_key=None):
+def run_mrvi(adata, device, output_path, batch_key=None, producer=None):
     """MrVI local sample distances with an optional technical batch key."""
     adata.obs["dummy_col"] = np.zeros(adata.n_obs)
     setup_kwargs = {"sample_key": "Sample"}
@@ -833,10 +1185,10 @@ def run_mrvi(adata, device, output_path, batch_key=None):
     df_dists = _align_square_frame(
         df_dists, _ordered_sample_ids(adata), output_path
     )
-    atomic_to_feather(df_dists, output_path)
+    atomic_to_feather(df_dists, output_path, producer=producer)
 
 
-def run_scpoli(adata, ct_col, dim, output_path):
+def run_scpoli(adata, ct_col, dim, output_path, producer=None):
     """scPoli conditional sample embeddings for one embedding dim."""
     # scPoli requires a cell-type label for EVERY cell, but datasets whose
     # declared ct columns are the pipeline annotation columns (Lee/Zhang:
@@ -884,7 +1236,7 @@ def run_scpoli(adata, ct_col, dim, output_path):
     adata_emb = scpoli_model.get_conditional_embeddings()
     df_embs = pd.DataFrame(adata_emb.X, index=adata_emb.obs_names)
     df_embs.columns = [f"Dim_{i + 1}" for i in range(df_embs.shape[1])]
-    atomic_to_feather(df_embs, output_path)
+    atomic_to_feather(df_embs, output_path, producer=producer)
 
 
 def resolve_pass_embedding_key(adata, view, n_hvg):
@@ -902,7 +1254,7 @@ def resolve_pass_embedding_key(adata, view, n_hvg):
     return key
 
 
-def run_pilot(adata, ct_col, view, n_hvg, output_path):
+def run_pilot(adata, ct_col, view, n_hvg, output_path, producer=None):
     """PILOT Wasserstein sample distances on the exact view embedding."""
     emb_key = resolve_pass_embedding_key(adata, view, n_hvg)
     emb = adata.obsm[emb_key]
@@ -941,7 +1293,7 @@ def run_pilot(adata, ct_col, view, n_hvg, output_path):
     df_dists = _align_square_frame(
         adata.uns["EMD_df"], _ordered_sample_ids(adata), output_path
     )
-    atomic_to_feather(df_dists, output_path)
+    atomic_to_feather(df_dists, output_path, producer=producer)
 
 
 def fill_unknown_ct(adata, ct_col, method):
@@ -961,7 +1313,7 @@ def fill_unknown_ct(adata, ct_col, method):
         adata.obs[ct_col] = col.fillna("Unknown")
 
 
-def run_qot(adata, ct_col, view, n_hvg, output_path):
+def run_qot(adata, ct_col, view, n_hvg, output_path, producer=None):
     """QOT Wasserstein sample distances on the preprocessed obsm PCA.
 
     Runs the vendored qot_utils_re.py (PennShenLab/QOT @ 28cd529880c1, two
@@ -1005,7 +1357,7 @@ def run_qot(adata, ct_col, view, n_hvg, output_path):
     df_dists = _align_square_frame(
         df_dists, samples, output_path
     )
-    atomic_to_feather(df_dists, output_path)
+    atomic_to_feather(df_dists, output_path, producer=producer)
 
 
 def _stabilize_pilotgm_covariances(adata):
@@ -1085,7 +1437,7 @@ def _run_pilotgm_distance_with_stable_covariances(pilotgm, adata, *, emb_key):
         pilotgm_core.gaussian_mixture_vae_representation = original_representation
 
 
-def run_pilotgm(adata, ct_col, view, n_hvg, output_path, ds_name, device):
+def run_pilotgm(adata, ct_col, view, n_hvg, output_path, ds_name, device, producer=None):
     """PILOT-GM-VAE Wasserstein sample distances on the preprocessed obsm PCA.
 
     Runs the `pilotgm` PyPI package (CostaLab/PILOT-GM-VAE, BIB 2025):
@@ -1166,7 +1518,7 @@ def run_pilotgm(adata, ct_col, view, n_hvg, output_path, ds_name, device):
     df_dists = _align_square_frame(
         adata.uns["EMD_df"], _ordered_sample_ids(adata), output_path
     )
-    atomic_to_feather(df_dists, output_path)
+    atomic_to_feather(df_dists, output_path, producer=producer)
 
 
 # ---------------------------------------------------------------------------
@@ -1174,9 +1526,14 @@ def run_pilotgm(adata, ct_col, view, n_hvg, output_path, ds_name, device):
 def process_dataset(args, ds_name, entry):
     """Run all combos of the requested method for one dataset.
 
-    Loads the h5ad once per task (not per combo); skips combos whose output
-    feather already exists unless --force.
+    Loads the h5ad once per task (not per combo); skips only a valid,
+    recorded Feather cache unless --force. Existing incomplete or invalid
+    artifacts fail closed instead of being silently recomputed.
     """
+    artifact_producer = stage5_artifact_producer(args.method)
+    # The method supplied by the Stage 5 submitter is authoritative for all
+    # benchmark artifacts, including calls into helpers that omit producer.
+    os.environ["ECODA_ARTIFACT_PRODUCER"] = artifact_producer
     view_name = args.view
     analysis_pass = getattr(args, "analysis_pass", None)
     requested_combo = getattr(args, "combo", None)
@@ -1295,12 +1652,13 @@ def process_dataset(args, ds_name, entry):
         out_path = output_dir / out_name
         method_str = legacy_method_label(args.method, n, res_label, payload)
         method_labels[out_path] = method_str
-        if recorded_feather_valid(out_path) and not args.force:
+        if recorded_feather_valid(out_path, producer=artifact_producer) and not args.force:
             replay_runtime_metadata(
                 out_path,
                 ds_name,
                 method_str,
                 log_file,
+                producer=artifact_producer,
             )
             print(f"Already processed and validated: {out_name}")
             continue
@@ -1408,13 +1766,26 @@ def process_dataset(args, ds_name, entry):
             torch.cuda.reset_peak_memory_stats()
         try:
             if args.method == "mrvi":
-                run_mrvi(sub, args.device, out_path, batch_key=technical_batch)
+                run_mrvi(
+                    sub,
+                    args.device,
+                    out_path,
+                    batch_key=technical_batch,
+                )
             elif args.method == "scpoli":
                 run_scpoli(sub, ct_col, payload, out_path)
             elif args.method == "qot":
                 run_qot(sub, ct_col, args.view, n, out_path)
             elif args.method == "pilotgm":
-                run_pilotgm(sub, ct_col, args.view, n, out_path, ds_name, args.device)
+                run_pilotgm(
+                    sub,
+                    ct_col,
+                    args.view,
+                    n,
+                    out_path,
+                    ds_name,
+                    args.device,
+                )
             else:
                 run_pilot(sub, ct_col, args.view, n, out_path)
         finally:
@@ -1428,6 +1799,7 @@ def process_dataset(args, ds_name, entry):
             method_str,
             exec_time,
             mem_gb,
+            producer=artifact_producer,
         )
         log_execution_time(
             ds_name,
@@ -1435,6 +1807,10 @@ def process_dataset(args, ds_name, entry):
             exec_time,
             log_file,
             mem_gb=mem_gb,
+            producer=(
+                os.environ.get("ECODA_EXECUTION_LOG_PRODUCER")
+                or "stage5_execution_log"
+            ),
         )
         print(f"  -> Saved: {out_path} ({exec_time:.2f}s, "
               f"{mem_gb:.2f} GB peak RSS)")

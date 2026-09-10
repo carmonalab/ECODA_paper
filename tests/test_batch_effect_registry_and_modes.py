@@ -44,15 +44,15 @@ def main():
         "Breast_cancer": ("sample_id", "disease", "broad_cell_type", "author_cell_type"),
         "Covid19_PBMC": ("sampleID", "CoVID-19 severity", "majorType", "celltype"),
         "Diabetes": ("donor_id", "disease", "cell_type", "cell_type_reannotatedIntegrated"),
-        "Kidney_KPMP": ("specimen", "condition.l1", "subclass.l1", "subclass.l3"),
+        "Kidney_KPMP_full": ("specimen", "condition.l1", "subclass.l1", "subclass.l3"),
         "Lung": ("sample", "disease", "ann_coarse", "ann_fine"),
-        "Lupus_PBMC": ("sampleID", "Status", "layer1", "layer2"),
+        "Lupus_PBMC": ("sampleID", "Status", "layer1", "louvain"),
         "Myocardial_infarction": ("orig_ident", "patient_group", "cell_type", "cell_subtype"),
         "Parkinson": (
             "donor_id",
             "disease",
             "cell_type",
-            "leiden_res_5_batch_effect_uncorrected_hvg2000",
+            "cell_type",
         ),
     }
     for name, roles in expected.items():

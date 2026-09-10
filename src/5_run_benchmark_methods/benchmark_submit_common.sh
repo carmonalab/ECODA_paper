@@ -120,6 +120,51 @@ WATCHDOG_SCHEDULER_IDS=()
 # Sync-status email helper (best-effort; requires USER_EMAIL from slurm_config.sh).
 source "$(dirname "${BASH_SOURCE[0]}")/../utils/bash/sync_status_email.sh"
 
+benchmark_source_script_path() {
+  local relative="$1"
+  local root="${ECODA_SOURCE_ROOT:-${PROJECT_ROOT}}"
+  printf '%s/%s' "${root%/}" "${relative}"
+}
+
+benchmark_require_source_script_path() {
+  local candidate="$1"
+  if [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]]; then
+    [[ -n "${ECODA_SOURCE_ROOT:-}" ]] || return 1
+    ecoda_require_source_script_path "${candidate}" "${ECODA_SOURCE_ROOT}"
+  else
+    [[ -f "${candidate}" && -r "${candidate}" && ! -L "${candidate}" ]]
+  fi
+}
+
+benchmark_validate_bound_runtime() {
+  if [[ -n "${ECODA_RUN_ROOT:-}" ||
+        "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]]; then
+    ecoda_runtime_validate_bound_run
+  else
+    ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE:-host}"
+  fi
+}
+
+benchmark_validate_output_scope() {
+  local selection="${ECODA_SELECTION_MANIFEST:-${ECODA_RUN_ROOT:-}/manifests/selection.tsv}"
+  local ownership_selection="${selection}" ownership_tmp="" rc
+  [[ -n "${ECODA_RUN_ID:-}" ]] || return 0
+  [[ -r "${selection}" ]] || return 1
+  command -v ecoda_validate_output_ownership >/dev/null 2>&1 || return 1
+  if awk -F '\t' '
+      NF != 3 { saw_extended=1 }
+      END { exit(saw_extended ? 0 : 1) }
+    ' "${selection}"; then
+    ownership_tmp="${selection}.ownership.$$"
+    ownership_selection="${ownership_tmp}"
+  fi
+  ecoda_validate_output_ownership stage5 "${ownership_selection}" "${ECODA_RUN_ID}"
+  rc=$?
+  [[ -n "${ownership_tmp}" ]] && rm -f "${ownership_tmp}"
+  return "${rc}"
+}
+
+
 # ---------------------------------------------------------------------------
 # Dataset resolution (see header)
 # ---------------------------------------------------------------------------
@@ -589,11 +634,30 @@ $(benchmark_oom_task_report "${JOB_ID}" "${MANIFEST}")"
     else
       echo "OOM escalation (${LABEL}): task(s) ${OOM_TASKS[*]} -> dataset(s) ${DS_CSV}; retrying with mem ${MEM} -> ${NEW_MEM} (attempt $((ATTEMPT + 1)) of ${MAX_ATTEMPTS})."
     fi
-    if [[ -n "${ANALYSIS_PASS:-}" ]]; then
-      NEW_MANIFEST="${ANALYSIS_ROOT}/manifests/batch_effect_${ANALYSIS_PASS}_manifest_${LABEL}_retry_$$.txt"
+    retry_safe_label="$(printf '%s' "${LABEL}" | tr '/:,\t ' '_____')"
+    if [[ -n "${ECODA_RUN_ROOT:-}" ]]; then
+      NEW_MANIFEST="${ECODA_RUN_ROOT}/manifests/${retry_safe_label}.retry_$((ATTEMPT + 1)).tsv"
+    elif [[ -n "${ANALYSIS_PASS:-}" ]]; then
+      NEW_MANIFEST="${ANALYSIS_ROOT}/manifests/batch_effect_${ANALYSIS_PASS}_manifest_${retry_safe_label}_retry_$$.txt"
     else
-      NEW_MANIFEST="${HPC_SCRATCH_DIR}/benchmark_manifest_${LABEL}_retry_$$.txt"
+      NEW_MANIFEST="${HPC_SCRATCH_DIR}/benchmark_manifest_${retry_safe_label}_retry_$$.txt"
     fi
+    benchmark_validate_bound_runtime || {
+      echo "ERROR: ${LABEL} retry runtime validation failed; NOT syncing to NAS." >&2
+      if [[ -n "${STATUS_FILE}" ]]; then
+        benchmark_write_status_file "${STATUS_FILE}" FAIL "${LABEL}" \
+          "bound runtime validation failed before retry ${LABEL}"
+      fi
+      exit 1
+    }
+    benchmark_validate_output_scope || {
+      echo "ERROR: ${LABEL} retry output ownership validation failed; NOT syncing to NAS." >&2
+      if [[ -n "${STATUS_FILE}" ]]; then
+        benchmark_write_status_file "${STATUS_FILE}" FAIL "${LABEL}" \
+          "output ownership validation failed before retry ${LABEL}"
+      fi
+      exit 1
+    }
     NEW_ID="$("${RESUBMIT_FN}" "${LABEL}" "${DS_CSV}" "${NEW_MEM}" "${NEW_MANIFEST}")"
     if [[ -z "${NEW_ID}" ]]; then
       echo "ERROR: ${RESUBMIT_FN} returned no array job id for the ${LABEL} retry; NOT syncing to NAS." >&2
@@ -602,6 +666,12 @@ $(benchmark_oom_task_report "${JOB_ID}" "${MANIFEST}")"
           "resubmit function returned no array job id for the ${LABEL} retry"
       fi
       exit 1
+    fi
+    if [[ -n "${ECODA_RUN_ROOT:-}" ]]; then
+      ecoda_validate_run_owned_path "${NEW_MANIFEST}" "${ECODA_RUN_ROOT}" || {
+        echo "ERROR: ${LABEL} retry manifest escaped the run root; NOT syncing to NAS." >&2
+        exit 1
+      }
     fi
     if [[ -n "${STATUS_FILE}" ]]; then
       WATCHDOG_SCHEDULER_IDS+=("${NEW_ID}")
@@ -672,10 +742,18 @@ benchmark_submit_watchdog() {
   local RUNTIME_EXPORT="${9:-}"
   shift 9
   local WATCHDOG_FLAGS=("$@")
+  local WATCHDOG_SCRIPT="${WATCHDOG_MAIN_SCRIPT}"
+  [[ -n "${ECODA_SOURCE_ROOT:-}" ]] &&
+    WATCHDOG_SCRIPT="$(benchmark_source_script_path src/5_run_benchmark_methods/watchdog_main.sh)"
+  local WATCHDOG_EXPORT="${RUNTIME_EXPORT}"
   [[ -n "${RUNTIME_EXPORT}" ]] || {
     echo "ERROR: benchmark watchdog requires an explicit runtime export." >&2
     return 1
   }
+  [[ -n "${ECODA_RUN_ROOT:-}" ]] &&
+    WATCHDOG_EXPORT="${WATCHDOG_EXPORT},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${ECODA_RUN_ID:-}"
+  [[ -n "${ECODA_SOURCE_ROOT:-}" ]] &&
+    WATCHDOG_EXPORT="${WATCHDOG_EXPORT},ECODA_SOURCE_ROOT=${ECODA_SOURCE_ROOT},ECODA_SOURCE_MANIFEST=${ECODA_SOURCE_MANIFEST:-},ECODA_SOURCE_SNAPSHOT_REQUIRED=1"
 
   mkdir -p "${WATCHDOG_STATUS_DIR}"
   echo "Submitting ${LABEL} watchdog for array ${ARRAY_ID} (mode=${MODE}, partition=${PARTITION}, " >&2
@@ -689,7 +767,10 @@ benchmark_submit_watchdog() {
     WD_JOB_NAME="benchmark_watchdog_${LABEL}"
     WD_OUTPUT_PREFIX="5_benchmark_watchdog_${LABEL}"
   fi
-  local SUBMIT_MSG
+  benchmark_validate_bound_runtime || return 1
+  benchmark_validate_output_scope || return 1
+  benchmark_require_source_script_path "${WORKER_SCRIPT}" || return 1
+  benchmark_require_source_script_path "${WATCHDOG_SCRIPT}" || return 1
   SUBMIT_MSG=$(sbatch \
       --job-name="${WD_JOB_NAME}" \
       --ntasks=1 --cpus-per-task=1 --mem=2G \
@@ -698,8 +779,8 @@ benchmark_submit_watchdog() {
       --output="${LOGS_DIR}/${WD_OUTPUT_PREFIX}_%A.log" \
       --error="${LOGS_DIR}/${WD_OUTPUT_PREFIX}_%A.err" \
       --mail-user="${USER_EMAIL}" \
-      --export="ALL,${RUNTIME_EXPORT}" \
-      "${WATCHDOG_MAIN_SCRIPT}" \
+      --export="ALL,${WATCHDOG_EXPORT}" \
+      "${WATCHDOG_SCRIPT}" \
       "${ARRAY_ID}" "${LABEL}" "${MANIFEST}" "${MODE}" -- \
       "${PARTITION}" "${THROTTLE}" "${LOG_PREFIX}" "${WORKER_SCRIPT}" \
       "${RUNTIME_EXPORT}" "${WATCHDOG_FLAGS[@]}")
@@ -966,6 +1047,7 @@ analysis_merge_sync_cleanup() (
   local SYNC_OWNER_DIR="" SYNC_LOCK_DIR="" SYNC_FINAL_STATE="FAIL"
   local SYNC_FILES SYNC_FILES_TMP NO_CHECKSUM_FILES_TMP CLEANUP_MANIFEST
   local CHECKSUM_TMP REMOTE_CHECKSUM_TMP EXISTING_LOG
+  local merge_script="${ANALYSIS_MERGE_SCRIPT}"
   local ds view row_label label path rel line selected_seen=""
   local artifact selected_index
   # Worker artifacts are terminal and immutable during this sync; retain each
@@ -1014,6 +1096,8 @@ analysis_merge_sync_cleanup() (
     sync_fail "failed to canonicalize Stage 5 run root"
   RUN_LOG_DIR="$(cd "${RUN_LOG_DIR}" && pwd)" ||
     sync_fail "failed to canonicalize Stage 5 run log directory"
+  [[ -n "${ECODA_SOURCE_ROOT:-}" ]] &&
+    merge_script="$(benchmark_source_script_path src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1.2_merge_execution_times.py)"
   ECODA_RUN_ROOT="${RUN_ROOT}"
   SYNC_OWNER_DIR="$(ecoda_owner_acquire stage5 "sync/${LOCAL_ROOT}" "${RUN_ID}" 0 0)" || {
     sync_fail "shared Stage 5 sync owner is unavailable"
@@ -1082,9 +1166,33 @@ analysis_merge_sync_cleanup() (
     }
   fi
 
+  normalize_external_checksum_path() {
+    local path="$1" sidecar="${2:-${1}.md5}"
+    local md5_line size_line path_line line_count tmp
+    [[ -s "${path}" && -s "${sidecar}" ]] || return 1
+    line_count="$(awk 'END { print NR }' "${sidecar}")" || return 1
+    [[ "${line_count}" == "3" ]] || return 1
+    md5_line="$(sed -n '1p' "${sidecar}")"
+    size_line="$(sed -n '2p' "${sidecar}")"
+    path_line="$(sed -n '3p' "${sidecar}")"
+    [[ "${md5_line}" == MD5=* && "${size_line}" == SIZE=* &&
+       "${path_line}" == PATH=* && -n "${path_line#PATH=}" ]] || return 1
+    [[ "${path_line}" == "PATH=${path}" ]] && return 0
+    tmp="${sidecar}.tmp.$$"
+    if ! printf '%s\n%s\nPATH=%s\n' \
+        "${md5_line}" "${size_line}" "${path}" > "${tmp}"; then
+      rm -f "${tmp}"
+      return 1
+    fi
+    if ! mv -f "${tmp}" "${sidecar}"; then
+      rm -f "${tmp}"
+      return 1
+    fi
+  }
+
   EXISTING_LOG="${REMOTE_ROOT}/embeddings/execution_times.feather"
   if [[ -f "${EXISTING_LOG}" && ! -f "${EXISTING_LOG}.md5" ]]; then
-    "${PYTHON_BIN}" "${ANALYSIS_MERGE_SCRIPT}" \
+    "${PYTHON_BIN}" "${merge_script}" \
       --migrate-existing-log "${EXISTING_LOG}" || {
       sync_fail "existing remote execution log failed guarded sidecar migration"
     }
@@ -1093,6 +1201,13 @@ analysis_merge_sync_cleanup() (
     ecoda_validate_checksum_remote "${EXISTING_LOG}" "${EXISTING_LOG}.md5" || {
       sync_fail "existing remote execution log checksum failed"
     }
+    case "${EXISTING_LOG}" in
+      "${RUN_ROOT}"/*) ;;
+      *)
+        normalize_external_checksum_path "${EXISTING_LOG}" ||
+          sync_fail "existing remote execution log sidecar schema failed"
+        ;;
+    esac
   fi
   MERGE_ARGS=(--output_dir "${LOCAL_ROOT}/embeddings"
               --log-dir "${RUN_LOG_DIR}"
@@ -1102,7 +1217,7 @@ analysis_merge_sync_cleanup() (
               --datasets "${DATASET_NAMES[@]}"
               --cleanup-manifest "${CLEANUP_MANIFEST}")
   [[ -s "${EXISTING_LOG}" ]] && MERGE_ARGS+=(--existing-log "${EXISTING_LOG}")
-  "${PYTHON_BIN}" "${ANALYSIS_MERGE_SCRIPT}" "${MERGE_ARGS[@]}" || {
+  "${PYTHON_BIN}" "${merge_script}" "${MERGE_ARGS[@]}" || {
     sync_fail "execution-log merge failed"
   }
   add_sync_artifact "${LOCAL_ROOT}/embeddings/execution_times.feather"

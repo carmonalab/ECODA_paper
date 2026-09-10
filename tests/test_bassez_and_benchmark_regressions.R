@@ -259,6 +259,7 @@ sys.source(
   ),
   envir = hpc_env
 )
+pipeline_env$read_rds_checked <- hpc_env$read_rds_checked
 pipeline_env$artifact_checksum_ok <- function(file) file.exists(file) && file.info(file)$size > 0
 
 pseudobulk_dir <- tempfile("ecoda_pseudobulk_cache-")
@@ -367,12 +368,145 @@ stopifnot(identical(
   )),
   hpc_env$PB_VARIANT_NAMES
 ))
+stopifnot(identical(
+  hpc_env$PB_VARIANT_PRODUCERS,
+  setNames(
+    paste0("stage5_prepare_pseudobulk_", hpc_env$PB_VARIANT_NAMES),
+    hpc_env$PB_VARIANT_NAMES
+  )
+))
+
+record_env <- Sys.getenv(
+  c("ECODA_RUN_ID", "ECODA_RUNS_ROOT", "ECODA_ARTIFACT_PRODUCER"),
+  unset = NA_character_
+)
+recorded_pseudobulk_dir <- tempfile("ecoda_pseudobulk_records-")
+recorded_runs_root <- tempfile("ecoda_pseudobulk_runs-")
+dir.create(recorded_pseudobulk_dir, recursive = TRUE)
+dir.create(recorded_runs_root, recursive = TRUE)
+record_run_id <- "benchmark-cache-records"
+Sys.setenv(
+  ECODA_RUN_ID = record_run_id,
+  ECODA_RUNS_ROOT = normalizePath(recorded_runs_root, mustWork = FALSE),
+  ECODA_ARTIFACT_PRODUCER = "mofa"
+)
+recorded_object <- function(variant) {
+  list(
+    pb = matrix(match(variant, hpc_env$PB_VARIANT_NAMES), nrow = 1L),
+    time_secs = 0
+  )
+}
+for (variant in hpc_env$PB_VARIANT_NAMES) {
+  hpc_env$save_rds_atomic(
+    recorded_object(variant),
+    file.path(
+      recorded_pseudobulk_dir,
+      paste0("Toy_pseudobulk_", variant, ".rds")
+    ),
+    producer = hpc_env$PB_VARIANT_PRODUCERS[[variant]],
+    run_id = record_run_id
+  )
+}
+stopifnot(identical(
+  hpc_env$pb_variants_missing(recorded_pseudobulk_dir, "Toy"),
+  character(0)
+))
+recorded_loaded <- hpc_env$load_pb_variants(
+  seurat = NULL,
+  sample_col = "Sample",
+  hvg_rank_genes = character(0),
+  pseudobulk_dir = recorded_pseudobulk_dir,
+  ds = "Toy"
+)
+stopifnot(identical(
+  names(recorded_loaded),
+  hpc_env$PB_VARIANT_NAMES
+))
+
+tamper_path <- file.path(
+  recorded_pseudobulk_dir,
+  paste0("Toy_pseudobulk_", hpc_env$PB_VARIANT_NAMES[[1L]], ".rds")
+)
+tampered_bytes <- readBin(
+  tamper_path, what = "raw", n = file.info(tamper_path)$size
+)
+tampered_bytes[[1L]] <- as.raw(bitwXor(as.integer(tampered_bytes[[1L]]), 1L))
+writeBin(tampered_bytes, tamper_path)
+assert_error(
+  hpc_env$pb_variants_missing(recorded_pseudobulk_dir, "Toy"),
+  "Artifact checksum validation failed"
+)
+assert_error(
+  hpc_env$load_pb_variants(
+    seurat = NULL,
+    sample_col = "Sample",
+    hvg_rank_genes = character(0),
+    pseudobulk_dir = recorded_pseudobulk_dir,
+    ds = "Toy",
+    variants = hpc_env$PB_VARIANT_NAMES[[1L]]
+  ),
+  "Artifact checksum validation failed"
+)
+
+mismatched_pseudobulk_dir <- tempfile("ecoda_pseudobulk_mismatch-")
+dir.create(mismatched_pseudobulk_dir, recursive = TRUE)
+for (variant in hpc_env$PB_VARIANT_NAMES) {
+  hpc_env$save_rds_atomic(
+    recorded_object(variant),
+    file.path(
+      mismatched_pseudobulk_dir,
+      paste0("Toy_pseudobulk_", variant, ".rds")
+    ),
+    producer = hpc_env$PB_VARIANT_PRODUCERS[[variant]],
+    run_id = record_run_id
+  )
+}
+mismatched_variant <- hpc_env$PB_VARIANT_NAMES[[1L]]
+hpc_env$save_rds_atomic(
+  recorded_object(mismatched_variant),
+  file.path(
+    mismatched_pseudobulk_dir,
+    paste0("Toy_pseudobulk_", mismatched_variant, ".rds")
+  ),
+  producer = "mofa",
+  run_id = record_run_id
+)
+assert_error(
+  hpc_env$pb_variants_missing(mismatched_pseudobulk_dir, "Toy"),
+  "Artifact record binding is invalid"
+)
+assert_error(
+  hpc_env$load_pb_variants(
+    seurat = NULL,
+    sample_col = "Sample",
+    hvg_rank_genes = character(0),
+    pseudobulk_dir = mismatched_pseudobulk_dir,
+    ds = "Toy",
+    variants = mismatched_variant
+  ),
+  "Artifact record binding is invalid"
+)
+unlink(
+  c(recorded_pseudobulk_dir, recorded_runs_root, mismatched_pseudobulk_dir),
+  recursive = TRUE,
+  force = TRUE
+)
+for (name in names(record_env)) {
+  if (is.na(record_env[[name]])) {
+    Sys.unsetenv(name)
+  } else {
+    do.call(Sys.setenv, setNames(list(record_env[[name]]), name))
+  }
+}
+
 unlink(pseudobulk_dir, recursive = TRUE, force = TRUE)
 
 # `--force` still invalidates composition result bundles, while the
 # obs-only pseudobulk loader reuses the prepared cache above.
 pipeline_env$peak_rss_gb <- function() NA_real_
-pipeline_env$save_rds_atomic <- function(object, file) saveRDS(object, file)
+pipeline_env$save_rds_atomic <- function(object, file) {
+  hpc_env$save_rds_atomic(object, file)
+}
 pipeline_env$log_exec_row <- function(...) invisible(NULL)
 pipeline_env$process_avg_pca_embedding_fig <- function(...) {
   list(marker = "fresh")
@@ -437,7 +571,7 @@ composition_bundle <- file.path(
   composition_results_dir,
   "Toy_Avg_PCA_embedding.rds"
 )
-saveRDS(
+hpc_env$save_rds_atomic(
   list(marker = "cached", exec_time = 0, mem_GB = NA_real_),
   composition_bundle
 )

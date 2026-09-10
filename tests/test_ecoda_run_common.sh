@@ -23,7 +23,7 @@ set -e
 [[ ${RC} -ne 0 ]]
 [[ "$(cat "${MANIFEST_DEST}")" == $'Adams\tbenchmark_analysis' ]]
 BATCH_MANIFEST="${TMP_DIR}/batch-selection.tsv"
-printf 'Alzheimer\tbatch_effect_uncorrected\nBreast_cancer\tbatch_effect_uncorrected\nCovid19_PBMC\tbatch_effect_uncorrected\nKidney_KPMP\tbatch_effect_uncorrected\nMyocardial_infarction\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\nLupus_PBMC\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\nParkinson\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\nStephenson\tbatch_effect_uncorrected\nCombinedPBMC\tbatch_effect_uncorrected\n' > "${BATCH_MANIFEST}"
+printf 'Alzheimer\tbatch_effect_uncorrected\nBreast_cancer\tbatch_effect_uncorrected\nCovid19_PBMC\tbatch_effect_uncorrected\nKidney_KPMP_full\tbatch_effect_uncorrected\nMyocardial_infarction\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\nLupus_PBMC\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\nParkinson\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\nStephenson\tbatch_effect_uncorrected\nCombinedPBMC\tbatch_effect_uncorrected\n' > "${BATCH_MANIFEST}"
 ecoda_validate_exact_batch_selection "${BATCH_MANIFEST}" 2
 BATCH_MATRIX="${TMP_DIR}/batch-matrix.tsv"
 sed 's/$/\tbatch_effect_uncorrected/' "${BATCH_MANIFEST}" > "${BATCH_MATRIX}"
@@ -63,6 +63,32 @@ ecoda_owner_set_state "${OWNER2}" FAIL retry
 OWNER3="$(ecoda_owner_acquire test dataset/view final_run 1)"
 [[ "${OWNER3}" == "${OWNER}" ]]
 [[ "$(ecoda_owner_state "${OWNER3}")" == "ACTIVE" ]]
+GLOBAL_ARTIFACT="${TMP_DIR}/global-artifact"
+printf 'global artifact\n' > "${GLOBAL_ARTIFACT}"
+GLOBAL_OWNER="$(ecoda_artifact_owner_dir "${GLOBAL_ARTIFACT}")"
+mkdir -p "$(dirname "${GLOBAL_OWNER}")"
+SYMLINK_OWNER_TARGET="${TMP_DIR}/global-owner-target"
+mkdir -p "${SYMLINK_OWNER_TARGET}"
+GLOBAL_CANONICAL="$(ecoda_canonical_path "${GLOBAL_ARTIFACT}")"
+printf 'RUN_ID=symlink-owner\nSTAGE=stage5\nPATH=%s\nSTATE=ACTIVE\nPID=%s\n' \
+  "${GLOBAL_CANONICAL}" "$$" > "${SYMLINK_OWNER_TARGET}/owner"
+ln -s "${SYMLINK_OWNER_TARGET}" "${GLOBAL_OWNER}"
+SYMLINK_OWNER_BEFORE="$(cat "${SYMLINK_OWNER_TARGET}/owner")"
+set +e
+ecoda_artifact_owner_acquire "${GLOBAL_ARTIFACT}" stage5 symlink-owner 1 1 0 \
+  >/dev/null 2>&1
+SYMLINK_ACQUIRE_RC=$?
+ecoda_artifact_owner_validate "${GLOBAL_ARTIFACT}" symlink-owner \
+  >/dev/null 2>&1
+SYMLINK_VALIDATE_RC=$?
+ecoda_artifact_owner_set_state "${GLOBAL_ARTIFACT}" OK should-reject \
+  >/dev/null 2>&1
+SYMLINK_SET_STATE_RC=$?
+set -e
+[[ ${SYMLINK_ACQUIRE_RC} -ne 0 ]]
+[[ ${SYMLINK_VALIDATE_RC} -ne 0 ]]
+[[ ${SYMLINK_SET_STATE_RC} -ne 0 ]]
+[[ "$(cat "${SYMLINK_OWNER_TARGET}/owner")" == "${SYMLINK_OWNER_BEFORE}" ]]
 printf 'complete artifact\n' > "${TMP_DIR}/artifact"
 ecoda_write_checksum "${TMP_DIR}/artifact"
 ecoda_validate_checksum "${TMP_DIR}/artifact"

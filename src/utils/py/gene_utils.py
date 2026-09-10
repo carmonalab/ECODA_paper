@@ -1,6 +1,7 @@
-import pandas as pd
+import os
 from pathlib import Path
 
+import pandas as pd
 
 _ENSEMBL105_MAP = None
 
@@ -9,7 +10,16 @@ def _load_ensembl105_map():
     if _ENSEMBL105_MAP is not None:
         return _ENSEMBL105_MAP
     project_root = Path(__file__).resolve().parents[3]
-    path = project_root / "aux" / "EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+    filename = "EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
+    if "ECODA_AUX_ROOT" in os.environ:
+        aux_root = os.environ["ECODA_AUX_ROOT"]
+        path = Path(aux_root) / filename
+        if not aux_root or not path.is_file() or not os.access(path, os.R_OK):
+            raise FileNotFoundError(
+                f"ECODA_AUX_ROOT Ensembl map is missing or unreadable: {path}"
+            )
+    else:
+        path = project_root / "aux" / filename
     df = pd.read_csv(path, sep="\t")
 
     stable_ids = df[["Gene stable ID", "Gene name"]].copy()

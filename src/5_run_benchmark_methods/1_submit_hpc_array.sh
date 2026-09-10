@@ -34,6 +34,8 @@ MAX_MEMORY="${BENCHMARK_MEM_MAX}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 RUNTIME_EXPORT=""
 GPU_POLICY="auto"
+BASELINE_METHODS=(gloscope mofa pseudobulk composition scitd mrvi scpoli pilot qot pilotgm)
+STAGE5_INPUT_PRODUCER_RUN_ID="${STAGE5_INPUT_PRODUCER_RUN_ID:-${STAGE4_RUN_ID:-${ANNOTATION_RUN_ID:-${PREPROCESS_RUN_ID:-${STAGE3_RUN_ID:-${INPUT_PRODUCER_RUN_ID:-${ECODA_ARTIFACT_PRODUCER_RUN_ID:-${ECODA_PRODUCER_RUN_ID:-}}}}}}}}"
 
 usage() {
   cat <<'EOF'
@@ -109,14 +111,7 @@ mkdir -p "${LOGS_DIR}" || {
   exit 1
 }
 export ECODA_RUNTIME_PROFILE=stage5
-ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" || {
-  echo "ERROR: Stage 5 immutable runtime validation failed." >&2
-  exit 1
-}
-RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage5 0)" || {
-  echo "ERROR: Stage 5 runtime export construction failed." >&2
-  exit 1
-}
+RUNTIME_EXPORT=""
 if [[ ${DATASETS_SET} -eq 1 && -z "${DATASETS_ARG}" ]]; then
   echo "ERROR: --datasets must not be empty." >&2
   exit 1
@@ -176,6 +171,10 @@ if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
 fi
 if [[ -n "${PASS_ARG}" && -n "${SELECTION_FILE_ARG}" ]]; then
   [[ -r "${SELECTION_FILE_ARG}" ]] || { echo "ERROR: selection file is unreadable." >&2; exit 1; }
+  ecoda_validate_manifest "${SELECTION_FILE_ARG}" 3 || {
+    echo "ERROR: selection file must contain exactly three columns per row." >&2
+    exit 1
+  }
   selection_invalid=0
   while IFS=$'\t' read -r selection_ds selection_view selection_label; do
     [[ -n "${selection_ds}" && -n "${selection_view}" && -n "${selection_label}" ]] || selection_invalid=1
@@ -227,6 +226,155 @@ if [[ -n "${PASS_ARG}" ]]; then
   unset BENCHMARK_MANIFEST
 fi
 source "${SCRIPT_DIR}/benchmark_submit_common.sh"
+
+stage5_manifest_value() {
+  local manifest="$1" key="$2"
+  awk -v wanted="${key}" '
+    index($0, wanted "=") == 1 {
+      count++
+      value=substr($0, length(wanted) + 2)
+    }
+    END {
+      if (count != 1 || value == "") exit 1
+      print value
+    }
+  ' "${manifest}"
+}
+
+stage5_atomic_copy() {
+  local source="$1" destination="$2" temporary
+  [[ -f "${source}" && -r "${source}" && ! -L "${source}" ]] || return 1
+  mkdir -p "$(dirname "${destination}")" || return 1
+  temporary="${destination}.build.$$"
+  cp "${source}" "${temporary}" || {
+    rm -f "${temporary}"
+    return 1
+  }
+  chmod 600 "${temporary}" || {
+    rm -f "${temporary}"
+    return 1
+  }
+  mv -f "${temporary}" "${destination}" || {
+    rm -f "${temporary}"
+    return 1
+  }
+}
+
+stage5_source_script() {
+  local relative="$1"
+  local source_root="${ECODA_SOURCE_ROOT:-${PROJECT_ROOT}}"
+  printf '%s/%s' "${source_root%/}" "${relative}"
+}
+
+stage5_require_source_script() {
+  local candidate="$1" source_root="${ECODA_SOURCE_ROOT:-}"
+  if [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]]; then
+    [[ -n "${source_root}" ]] || return 1
+    ecoda_require_source_script_path "${candidate}" "${source_root}"
+  else
+    [[ -f "${candidate}" && -r "${candidate}" && ! -L "${candidate}" ]]
+  fi
+}
+
+stage5_install_source_manifest() {
+  local incoming="${ECODA_SOURCE_MANIFEST:-}"
+  local destination="${ECODA_RUN_ROOT}/manifests/source.manifest"
+  if [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" != "1" ]]; then
+    [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
+
+
+    echo "ERROR: new Stage 5 runs require an immutable source snapshot." >&2
+    return 1
+  fi
+  stage5_atomic_copy "${incoming}" "${destination}" || return 1
+  ecoda_validate_run_owned_path "${destination}" "${ECODA_RUN_ROOT}" || return 1
+  [[ "$(stage5_manifest_value "${destination}" FORMAT)" == "1" ]] || return 1
+  [[ "$(stage5_manifest_value "${destination}" SOURCE_ROOT)" == "${ECODA_SOURCE_ROOT}" ]] ||
+    return 1
+}
+stage5_validate_output_ownership() {
+  local manifest="$1" reclaim_terminal="${2:-0}"
+  local ownership_manifest="${1}" ownership_tmp="" rc
+  [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
+  [[ "${reclaim_terminal}" == "0" || "${reclaim_terminal}" == "1" ]] || return 1
+  if awk -F '\t' '
+      NF != 3 { saw_extended=1 }
+      END { exit(saw_extended ? 0 : 1) }
+    ' "${manifest}"; then
+    ownership_tmp="${manifest}.ownership.$$"
+    awk -F '\t' 'NF >= 3 { print $1 "\t" $2 "\t" $3 }' \
+      "${manifest}" > "${ownership_tmp}" || return 1
+    ownership_manifest="${ownership_tmp}"
+  fi
+  ecoda_validate_output_ownership stage5 "${ownership_manifest}" "${RUN_ID}" \
+    "${reclaim_terminal}"
+  rc=$?
+  [[ -n "${ownership_tmp}" ]] && rm -f "${ownership_tmp}"
+  return "${rc}"
+}
+
+stage5_bind_run_identity() {
+  local source_copy="${ECODA_RUN_ROOT}/manifests/source.manifest"
+  local runtime_identity="${ECODA_RUN_ROOT}/manifests/runtime.identity"
+  local source_root source_manifest image manifest
+  [[ -s "${source_copy}" && -s "${runtime_identity}" ]] || {
+    echo "legacy_source_unpinned" >&2
+    return 1
+  }
+  ecoda_validate_run_owned_path "${source_copy}" "${ECODA_RUN_ROOT}" || return 1
+  ecoda_validate_run_owned_path "${runtime_identity}" "${ECODA_RUN_ROOT}" || return 1
+  source_root="$(stage5_manifest_value "${source_copy}" SOURCE_ROOT)" || return 1
+  [[ "${source_root}" = /* ]] || return 1
+  source_manifest="${source_root%/tree}/identity/source.manifest"
+  [[ -f "${source_manifest}" && -r "${source_manifest}" ]] || return 1
+  cmp -s "${source_copy}" "${source_manifest}" || {
+    echo "ERROR: run-owned source manifest differs from the immutable snapshot manifest." >&2
+    return 1
+  }
+  image="$(stage5_manifest_value "${runtime_identity}" RUNTIME_IMAGE)" || return 1
+  manifest="$(stage5_manifest_value "${runtime_identity}" RUNTIME_MANIFEST)" || return 1
+  [[ "${image}" = /* && "${manifest}" = /* ]] || return 1
+  export ECODA_SOURCE_ROOT="${source_root}"
+  export ECODA_SOURCE_MANIFEST="${source_manifest}"
+  export ECODA_SOURCE_SNAPSHOT_REQUIRED=1
+  export ECODA_AUX_ROOT="${source_root%/}/aux"
+  export ECODA_RUNTIME_IMAGE="${image}"
+  export ECODA_RUNTIME_MANIFEST="${manifest}"
+  export ECODA_RUN_ID="${RUN_ID}"
+  PROJECT_ROOT="${source_root}"
+  DATASETS_JSON_FILE="${PROJECT_ROOT}/datasets.json"
+  export PROJECT_ROOT DATASETS_JSON_FILE
+  SCRIPT_DIR="${PROJECT_ROOT}/src/5_run_benchmark_methods"
+  WATCHDOG_MAIN_SCRIPT="${SCRIPT_DIR}/watchdog_main.sh"
+  ANALYSIS_MERGE_SCRIPT="${SCRIPT_DIR}/run_python_sample_embedding_methods/1.1.2_merge_execution_times.py"
+}
+
+stage5_validate_bound_runtime() {
+  if [[ -n "${ECODA_RUN_ROOT:-}" ||
+        "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]]; then
+    ecoda_runtime_validate_bound_run
+  else
+    ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE:-host}"
+  fi
+}
+
+stage5_record_run_identity_metadata() {
+  local source_copy="${ECODA_RUN_ROOT}/manifests/source.manifest"
+  local runtime_identity="${ECODA_RUN_ROOT}/manifests/runtime.identity"
+  local key value
+  [[ -s "${source_copy}" && -s "${runtime_identity}" ]] || return 0
+  printf 'SOURCE_MANIFEST=%s\nRUNTIME_IDENTITY=%s\n' "${source_copy}" "${runtime_identity}"
+  for key in FORMAT SOURCE_ROOT SOURCE_COMMIT SOURCE_ARCHIVE_PATH SOURCE_ARCHIVE_SHA256 \
+    CONFIG_HELPER_SHA256 DATASETS_SHA256 PIXI_TOML_SHA256 PIXI_LOCK_SHA256 AUX_ROOT \
+    SCGATE_DB_BRANCH; do
+    value="$(stage5_manifest_value "${source_copy}" "${key}")" || return 1
+    printf '%s=%s\n' "SOURCE_${key}" "${value}"
+  done
+  while IFS='=' read -r key value; do
+    [[ -n "${key}" && -n "${value}" ]] || continue
+    printf '%s=%s\n' "${key}" "${value}"
+  done < "${runtime_identity}"
+}
 
 stage5_finalize_owner_manifest() {
   local state="$1" reason="$2" owner_file="${ECODA_RUN_ROOT:-}/manifests/owners.tsv"
@@ -437,15 +585,167 @@ method_spec_for_group() {
   return "${rc}"
 }
 
+stage5_validate_path_component() {
+  local component="${1:-}" kind="${2:-path}"
+  case "${component}" in
+    ""|"."|".."|/*|*/*|*$'\n'*|*$'\r'*|*$'\t'*)
+      echo "ERROR: invalid ${kind} path component." >&2
+      return 1
+      ;;
+  esac
+  [[ "${component}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || {
+    echo "ERROR: invalid ${kind} path component." >&2
+    return 1
+  }
+}
+
+stage5_configured_output_name() {
+  local ds="$1" view="$2"
+  [[ -r "${DATASETS_JSON_FILE:-}" ]] || return 1
+  jq -er --arg ds "${ds}" --arg view "${view}" '
+    def nonempty_string:
+      (type == "string" and length > 0);
+    .[$ds].views[$view] as $spec
+    | if ($spec | type) != "object" then empty
+      elif ($spec.output_file_name | nonempty_string) then $spec.output_file_name
+      elif (($spec.output_file_name == null
+             or (($spec.output_file_name | type) == "string"
+                 and ($spec.output_file_name | length) == 0))
+            and ($spec.output_file | nonempty_string)) then $spec.output_file
+      else empty
+      end
+    | select(. != "." and . != "..")
+    | select(test("^[A-Za-z0-9_][A-Za-z0-9_.-]*$"))
+  ' "${DATASETS_JSON_FILE}" || return 1
+}
+
+stage5_canonical_output_path() {
+  local root="${1:-}" ds="${2:-}" view="${3:-}" name
+  local output_root candidate root_real output_root_real candidate_real
+  local expected_output_root
+  STAGE5_OUTPUT_PATH=""
+  STAGE5_OUTPUT_CANONICAL_PATH=""
+  [[ "${root}" = /* &&
+      "${root}" != *$'\n'* && "${root}" != *$'\r'* && "${root}" != *$'\t'* ]] ||
+    return 1
+  stage5_validate_path_component "${ds}" dataset || return 1
+  stage5_validate_path_component "${view}" view || return 1
+  name="$(stage5_configured_output_name "${ds}" "${view}")" || return 1
+  stage5_validate_path_component "${name}" output || return 1
+  output_root="${root%/}/${ds}/output"
+  candidate="${output_root}/${name}"
+  [[ ! -e "${root}" && ! -L "${root}" || -d "${root}" ]] || return 1
+  [[ ! -e "${output_root}" && ! -L "${output_root}" || -d "${output_root}" ]] || return 1
+  root_real="$(ecoda_canonical_path "${root}")" || return 1
+  output_root_real="$(ecoda_canonical_path "${output_root}")" || return 1
+  candidate_real="$(ecoda_canonical_path "${candidate}")" || return 1
+  expected_output_root="${root_real%/}/${ds}/output"
+  [[ "${output_root_real}" == "${expected_output_root}" ]] || return 1
+  case "${candidate_real}" in
+    "${output_root_real}"/*) ;;
+    *) return 1 ;;
+  esac
+  STAGE5_OUTPUT_PATH="${candidate}"
+  STAGE5_OUTPUT_CANONICAL_PATH="${candidate_real}"
+  printf '%s' "${candidate}"
+}
+
+stage5_input_path() {
+  stage5_canonical_output_path "${HPC_SCRATCH_DIR}" "$1" "$2"
+}
+
 validate_input_row() {
-  local ds="$1" view="$2" name path
-  name="$(ecoda_view_output_name "${ds}" "${view}")"; [[ -n "${name}" ]] || return 1
-  path="${HPC_SCRATCH_DIR}/${ds}/output/${name}"
+  local ds="$1" view="$2" path
+  path="$(stage5_input_path "${ds}" "${view}")" || return 1
   # Full persisted-content validation runs in the compute-node preflight
   # array.  The login submitter only checks presence here; source identity
   # creation below validates the sidecar, size, MD5, and Sample column.
   [[ -s "${path}" ]]
 }
+
+stage5_output_path_for_root() {
+  stage5_canonical_output_path "$1" "$2" "$3"
+}
+
+stage5_require_input_ownerships() {
+  local ds view source_path row seen_sources=""
+  [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
+  while IFS=$'\t' read -r ds view _scope; do
+    row="${ds}/${view}"
+    case " ${seen_sources} " in *" ${row} "*) continue ;; esac
+    seen_sources="${seen_sources} ${row}"
+    source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
+    [[ -s "${source_path}" ]] || return 1
+    ecoda_require_input_ownership "${source_path}" "${RUN_ID}" || return 1
+  done < "${MANIFEST}"
+}
+
+stage5_validate_input_provenance() {
+  local ds view source_path row seen_sources="" owner_stage producer_run
+  local producer owner_dir producer_ok
+  [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
+  [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]] || return 0
+  command -v ecoda_artifact_owner_validate >/dev/null 2>&1 || return 1
+  command -v ecoda_validate_input_artifact >/dev/null 2>&1 || return 1
+  while IFS=$'\t' read -r ds view _scope; do
+    row="${ds}/${view}"
+    case " ${seen_sources} " in
+      *" ${row} "*) continue ;;
+    esac
+    seen_sources="${seen_sources} ${row}"
+    source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
+    ECODA_ARTIFACT_OWNER_CANONICAL_PATH=""
+    ecoda_artifact_owner_validate "${source_path}" >/dev/null 2>&1 || return 1
+    owner_dir="$(ecoda_artifact_owner_dir \
+      "${ECODA_ARTIFACT_OWNER_CANONICAL_PATH}")" || return 1
+    owner_stage="${ECODA_ARTIFACT_OWNER_STAGE:-}"
+    [[ -n "${owner_dir}" && "${ECODA_ARTIFACT_OWNER_STATE:-}" == "OK" ]] ||
+      return 1
+    case "${owner_stage}" in
+      stage3)
+        producer_run="${STAGE5_INPUT_PRODUCER_RUN_ID:-${ECODA_ARTIFACT_OWNER_RUN:-}}"
+        producer_ok=0
+        for producer in stage3 stage3_preflight; do
+          if ecoda_validate_input_artifact \
+              "${source_path}" "${producer}" "${producer_run}" >/dev/null 2>&1; then
+            producer_ok=1
+            break
+          fi
+        done
+        ;;
+      stage4)
+        producer_run="${STAGE5_INPUT_PRODUCER_RUN_ID:-${ECODA_ARTIFACT_OWNER_RUN:-}}"
+        producer_ok=0
+        if ecoda_validate_input_artifact \
+            "${source_path}" stage4_merge "${producer_run}" >/dev/null 2>&1; then
+          producer_ok=1
+        fi
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+    ecoda_validate_run_id "${producer_run}" || return 1
+    [[ ${producer_ok} -eq 1 ]] || return 1
+  done < "${MANIFEST}"
+}
+
+stage5_validate_source_artifact_records() {
+  local ds view source_path row seen_sources="" producer="stage5_preflight"
+  [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
+  while IFS=$'\t' read -r ds view _scope; do
+    row="${ds}/${view}"
+    case " ${seen_sources} " in *" ${row} "*) continue ;; esac
+    seen_sources="${seen_sources} ${row}"
+    source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
+    ecoda_validate_artifact_record "${source_path}" "${producer}" "${RUN_ID}" ||
+      return 1
+    "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+      --path "${source_path}" --view "${view}" \
+      --method "Stage 5 source preflight" || return 1
+  done < "${MANIFEST}"
+}
+
 
 stage5_repair_missing_h5ad_sidecars() {
   local repair_manifest="${ECODA_RUN_ROOT}/manifests/h5ad_checksum_repairs.tsv"
@@ -460,15 +760,27 @@ stage5_repair_missing_h5ad_sidecars() {
       *" ${source_key} "*) continue ;;
     esac
     seen_sources="${seen_sources} ${source_key}"
-    scratch_path="${HPC_SCRATCH_DIR}/${ds}/output/$(ecoda_view_output_name "${ds}" "${view}")"
-    nas_path="${NAS_TARGET_DIR}/${ds}/output/$(ecoda_view_output_name "${ds}" "${view}")"
+    scratch_path="$(stage5_input_path "${ds}" "${view}")" || {
+      rm -f "${repair_tmp}"
+      return 1
+    }
+    nas_path="$(stage5_output_path_for_root "${NAS_TARGET_DIR}" "${ds}" "${view}")" || {
+      rm -f "${repair_tmp}"
+      return 1
+    }
     [[ -s "${scratch_path}" && -s "${nas_path}" ]] || {
       rm -f "${repair_tmp}"
       return 1
     }
+    ecoda_require_input_ownership "${scratch_path}" "${RUN_ID}" || return 1
+    ecoda_require_input_ownership "${nas_path}" "${RUN_ID}" || return 1
     echo "Stage 5 source checksum validation: ${ds}/${view}" >&2
     for root in "${HPC_SCRATCH_DIR}" "${NAS_TARGET_DIR}"; do
-      path="${root}/${ds}/output/$(ecoda_view_output_name "${ds}" "${view}")"
+      if [[ "${root}" == "${HPC_SCRATCH_DIR}" ]]; then
+        path="${scratch_path}"
+      else
+        path="${nas_path}"
+      fi
       sidecar="${path}.md5"
       if [[ -e "${sidecar}" || -L "${sidecar}" ]]; then
         # Validate the existing sidecar once and reuse its strict digest/size
@@ -532,8 +844,8 @@ stage5_repair_missing_h5ad_sidecars() {
 }
 
 stage5_prepare_source_identity() {
-  stage5_repair_missing_h5ad_sidecars || return 1
   local identity="${SOURCE_IDENTITY}" identity_sidecar="${SOURCE_IDENTITY}.md5"
+  local identity_script
   if [[ -e "${identity}" || -L "${identity}" ]]; then
     ecoda_validate_run_owned_path "${identity}" "${ECODA_RUN_ROOT}" || return 1
   fi
@@ -541,14 +853,15 @@ stage5_prepare_source_identity() {
     ecoda_validate_run_owned_path "${identity_sidecar}" "${ECODA_RUN_ROOT}" || return 1
   fi
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
+  identity_script="$(stage5_source_script src/utils/py/h5ad_source_identity.py)"
   if [[ -s "${identity}" && -s "${identity_sidecar}" ]]; then
-    "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/h5ad_source_identity.py" \
+    "${PYTHON_BIN}" "${identity_script}" \
       --identity "${identity}" --selection "${MANIFEST}" \
       --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}" \
       --validated-source-sidecars ||
       return 1
   else
-    "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/h5ad_source_identity.py" \
+    "${PYTHON_BIN}" "${identity_script}" \
       --output "${identity}" --selection "${MANIFEST}" \
       --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}" \
       --validated-source-sidecars ||
@@ -573,8 +886,8 @@ stage5_compute_h5ad_preflight() {
     # not resubmit during recovery; validate the immutable selected sources
     # locally and fail closed if any source is invalid.
     while IFS=$'\t' read -r ds view _scope; do
-      source_path="${HPC_SCRATCH_DIR}/${ds}/output/$(ecoda_view_output_name "${ds}" "${view}")"
-      "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+      source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
+      "${PYTHON_BIN}" "$(stage5_source_script src/utils/py/benchmark_h5ad_contract.py)" \
         --path "${source_path}" --view "${view}" --method "Stage 5 sync recovery" >/dev/null 2>&1 ||
         return 1
       ecoda_validate_checksum "${source_path}" || return 1
@@ -592,7 +905,7 @@ stage5_compute_h5ad_preflight() {
       preflight_row="${ds}/${view}"
       case " ${seen_rows} " in *" ${preflight_row} "*) continue ;; esac
       seen_rows="${seen_rows} ${preflight_row}"
-      source_path="${HPC_SCRATCH_DIR}/${ds}/output/$(ecoda_view_output_name "${ds}" "${view}")"
+      source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
       printf '%s\t%s\t%s\n' "${ds}" "${view}" "${source_path}" >> "${expected_tmp}" || return 1
     done < "${MANIFEST}"
     if ! cmp -s "${expected_tmp}" "${preflight_manifest}"; then
@@ -607,7 +920,7 @@ stage5_compute_h5ad_preflight() {
       preflight_row="${ds}/${view}"
       case " ${seen_rows} " in *" ${preflight_row} "*) continue ;; esac
       seen_rows="${seen_rows} ${preflight_row}"
-      source_path="${HPC_SCRATCH_DIR}/${ds}/output/$(ecoda_view_output_name "${ds}" "${view}")"
+      source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
       printf '%s\t%s\t%s\n' "${ds}" "${view}" "${source_path}" >> "${preflight_tmp}" || return 1
     done < "${MANIFEST}"
     ecoda_atomic_install_manifest "${preflight_tmp}" "${preflight_manifest}" 3 || {
@@ -618,12 +931,15 @@ stage5_compute_h5ad_preflight() {
     ecoda_write_checksum "${preflight_manifest}" || return 1
     mkdir -p "${status_dir}" "${preflight_logs}" || return 1
     rm -f "${status_dir}"/*.status
+    preflight_worker="$(stage5_source_script src/utils/bash/h5ad_preflight_worker.sh)"
+    stage5_validate_bound_runtime || return 1
+    stage5_require_source_script "${preflight_worker}" || return 1
     set +e
     preflight_id="$(
       ecoda_submit_h5ad_preflight "${preflight_manifest}" "${status_dir}" \
         "${ECODA_RUN_ROOT}" require "${PARTITION_ARG:-${SLURM_PARTITION_BENCHMARK_CPU}}" \
         "${MEMORY}" "${THROTTLE}" "${preflight_logs}" stage5 \
-        "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_worker.sh" \
+        "${preflight_worker}" \
         "${RUNTIME_EXPORT}"
     )"
     preflight_rc=$?
@@ -670,6 +986,14 @@ RUN_ID="${ECODA_RUN_ID:-$(ecoda_new_run_id stage5)}"
 if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   ecoda_open_run "${SYNC_ONLY_RUN}" || exit 1
   RUN_ID="${SYNC_ONLY_RUN}"
+  export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT
+  stage5_bind_run_identity ||
+    { echo "legacy_source_unpinned" >&2; exit 1; }
+  stage5_validate_bound_runtime || exit 1
+  RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage5 0)" || {
+    echo "ERROR: Stage 5 bound runtime export construction failed." >&2
+    exit 1
+  }
   MANIFEST="${ECODA_RUN_ROOT}/manifests/selection.tsv"
   ecoda_validate_run_owned_path "${MANIFEST}" "${ECODA_RUN_ROOT}" ||
     stage5_abort "Stage 5 selection manifest is not run-owned"
@@ -684,14 +1008,44 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   [[ -n "${PASS_ARG}" ]] && unset BENCHMARK_MANIFEST
 else
   ecoda_init_run stage5 "${RUN_ID}" >/dev/null
+  export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT
+  stage5_install_source_manifest ||
+    stage5_abort "new Stage 5 run has no immutable source manifest"
+  runtime_submission_mode="${ECODA_RUNTIME_MODE:-host}"
+  if [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]]; then
+    runtime_submission_mode=apptainer
+    export ECODA_RUNTIME_MODE=apptainer
+  fi
+  ecoda_runtime_validate_submission "${runtime_submission_mode}" || {
+    stage5_abort "Stage 5 immutable runtime validation failed"
+  }
+  if [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]]; then
+    [[ -s "${ECODA_RUN_ROOT}/manifests/runtime.identity" ]] ||
+      stage5_abort "Stage 5 runtime submission did not write runtime.identity"
+    stage5_bind_run_identity ||
+      stage5_abort "Stage 5 run-bound source/runtime identity is invalid"
+  fi
+  RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage5 0)" || {
+    stage5_abort "Stage 5 runtime export construction failed"
+  }
   MANIFEST="${ECODA_RUN_ROOT}/manifests/selection.tsv"
   MANIFEST_TMP="${MANIFEST}.build.$$"
   : > "${MANIFEST_TMP}"
   if [[ -n "${SELECTION_FILE_ARG}" ]]; then
     [[ -r "${SELECTION_FILE_ARG}" ]] || stage5_abort "selection file is unreadable"
+    ecoda_validate_manifest "${SELECTION_FILE_ARG}" 3 ||
+      stage5_abort "selection file must contain exactly three columns per row"
     while IFS=$'\t' read -r ds input_view row_label; do
       [[ -n "${ds}" && -n "${input_view}" && -n "${row_label}" ]] ||
         stage5_abort "selection rows require DATASET<TAB>VIEW<TAB>LABEL"
+      stage5_validate_path_component "${ds}" dataset ||
+        stage5_abort "invalid Stage 5 dataset selection"
+      stage5_validate_path_component "${input_view}" view ||
+        stage5_abort "invalid Stage 5 view selection"
+      stage5_validate_path_component "${row_label}" selection ||
+        stage5_abort "invalid Stage 5 selection label"
+      ecoda_dataset_exists "${ds}" ||
+        stage5_abort "unknown dataset ${ds}"
       if [[ -n "${PASS_ARG}" ]]; then
         [[ "${input_view}" == "batch_effect_${PASS_ARG}" ]] ||
           stage5_abort "pass-mode selection has the wrong view: ${input_view}"
@@ -700,6 +1054,13 @@ else
         view="${input_view}"
         case "${view}" in trans|zeroimp) view="benchmark_analysis" ;; esac
       fi
+      ecoda_view_exists "${ds}" "${view}" ||
+        stage5_abort "${ds}/${view} is not declared"
+      stage5_input_path "${ds}" "${view}" >/dev/null ||
+        stage5_abort "invalid Stage 5 H5AD path contract for ${ds}/${view}"
+      [[ -n "$(ecoda_view_input_name "${ds}" "${view}")" &&
+        -n "$(ecoda_view_output_name "${ds}" "${view}")" ]] ||
+        stage5_abort "${ds}/${view} has no input/output"
       printf '%s\t%s\t%s\n' "${ds}" "${view}" "${row_label}" >> "${MANIFEST_TMP}"
     done < "${SELECTION_FILE_ARG}"
   else
@@ -723,6 +1084,8 @@ else
     fi
     [[ ${#DATASET_NAMES_TMP[@]} -gt 0 ]] || stage5_abort "no benchmark datasets selected"
     for ds in "${DATASET_NAMES_TMP[@]}"; do
+      stage5_validate_path_component "${ds}" dataset ||
+        stage5_abort "invalid Stage 5 dataset selection"
       ecoda_dataset_exists "${ds}" || stage5_abort "unknown dataset ${ds}"
       if [[ -n "${PASS_ARG}" ]]; then
         view="batch_effect_${PASS_ARG}"
@@ -731,6 +1094,10 @@ else
       else
         view="benchmark_analysis"
       fi
+      stage5_validate_path_component "${view}" view ||
+        stage5_abort "invalid Stage 5 view selection"
+      stage5_input_path "${ds}" "${view}" >/dev/null ||
+        stage5_abort "invalid Stage 5 H5AD path contract for ${ds}/${view}"
       [[ -n "$(ecoda_view_input_name "${ds}" "${view}")" &&
         -n "$(ecoda_view_output_name "${ds}" "${view}")" ]] ||
         stage5_abort "${ds}/${view} has no input/output"
@@ -758,15 +1125,21 @@ fi
 # a processing covariate; LABEL is only a scheduler/output grouping token.
 ecoda_validate_manifest "${MANIFEST}" 3 ||
   stage5_abort "invalid Stage 5 selection"
-if [[ ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
-  ecoda_validate_exact_batch_selection "${MANIFEST}" 3 ||
-    stage5_abort "invalid exact Stage 5 selection"
-fi
+stage5_validate_input_provenance ||
+  stage5_abort "Stage 5 source H5AD lacks a terminal upstream owner/record"
 DATASET_NAMES=(); SEEN_DS=""; SEEN_ROW=""
 while IFS=$'\t' read -r ds view row_label; do
+  stage5_validate_path_component "${ds}" dataset ||
+    stage5_abort "invalid Stage 5 dataset selection"
+  stage5_validate_path_component "${view}" view ||
+    stage5_abort "invalid Stage 5 view selection"
+  stage5_validate_path_component "${row_label}" selection ||
+    stage5_abort "invalid Stage 5 selection label"
   ecoda_dataset_exists "${ds}" || stage5_abort "unknown dataset ${ds}"
   ecoda_view_exists "${ds}" "${view}" ||
     stage5_abort "${ds}/${view} is not declared"
+  stage5_input_path "${ds}" "${view}" >/dev/null ||
+    stage5_abort "invalid Stage 5 H5AD path contract for ${ds}/${view}"
   if [[ -n "${PASS_ARG}" ]]; then
     [[ "${view}" == "batch_effect_${PASS_ARG}" ]] ||
       stage5_abort "pass-mode selection has the wrong view for ${ds}"
@@ -782,11 +1155,9 @@ while IFS=$'\t' read -r ds view row_label; do
     validate_input_row "${ds}" "${view}" || stage5_abort "invalid Stage 5 h5ad ${row}"
   fi
 done < "${MANIFEST}"
-stage5_prepare_source_identity ||
-  stage5_abort "failed to build or verify Stage 5 source identity"
-stage5_compute_h5ad_preflight ||
-  stage5_abort "Stage 5 compute-node H5AD preflight failed"
-METHODS=(gloscope mofa pseudobulk composition scitd mrvi scpoli pilot qot pilotgm)
+stage5_require_input_ownerships ||
+  stage5_abort "Stage 5 source input has an ACTIVE writer"
+METHODS=("${BASELINE_METHODS[@]}")
 ANALYSES=(_ecoda_none_)
 ANALYSES_SELECTED=0
 EXACT_SELECTION=0
@@ -1003,8 +1374,9 @@ benchmark_rds_group_valid() {
   rm -f "${list_tmp}"
   ecoda_write_checksum "${list}" || return 1
   rds_args=(--artifact-list "${list}" --config "${DATASETS_JSON_FILE}" \
-    --input-root "${HPC_SCRATCH_DIR}" --source-identity "${SOURCE_IDENTITY}" \
-    --source-identity-verified)
+    --input-root "${HPC_SCRATCH_DIR}")
+  [[ -s "${SOURCE_IDENTITY}" ]] &&
+    rds_args+=(--source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
   [[ -n "${PASS_ARG}" ]] && rds_args+=(--batch-pass "${PASS_ARG}")
   set +e
   ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
@@ -1020,9 +1392,36 @@ benchmark_rds_group_valid() {
   return 0
 }
 
+stage5_validate_reusable_artifact() {
+  local path="$1" producer="$2" record="" recorded_producer
+  # A checksum/record is not enough to declare a reusable artifact: a live
+  # writer from another run may be mutating the same path.  Missing owners
+  # remain valid for legacy baseline artifacts.
+  ecoda_require_input_ownership "${path}" "${RUN_ID}" || return 1
+  if command -v ecoda_artifact_record_path >/dev/null 2>&1; then
+    record="$(ecoda_artifact_record_path "${path}" "${RUN_ID}" 2>/dev/null || true)"
+    if [[ -n "${record}" && -e "${record}" ]]; then
+      recorded_producer="$(stage5_recorded_producer "${record}")" || return 1
+      stage5_producer_allowed "${path}" "${producer}" "${recorded_producer}" ||
+        return 1
+      ecoda_validate_artifact_record \
+        "${path}" "${recorded_producer}" "${RUN_ID}" || return 1
+      return 0
+    fi
+  fi
+  # Run-bound artifacts may be reused only with a run-owned record.  The
+  # sidecar-only fallback is reserved for validator-only legacy mode.
+  if [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" &&
+        "${BENCHMARK_MATRIX_TEST:-0}" != "1" ]]; then
+    return 1
+  fi
+  ecoda_validate_checksum "${path}"
+
+}
 benchmark_selected_artifacts_valid() {
   local ds="$1" view="$2" label="$3" path artifact_check
   local has_feather=0 rds_grouped=0 group_rc
+  local artifact_validator_args=()
   case "${label}" in
     gloscope|mofa|pseudobulk|composition|scitd|prepare_pseudobulk|trans|zeroimp)
       if benchmark_rds_group_valid "${ds}" "${view}"; then
@@ -1031,12 +1430,11 @@ benchmark_selected_artifacts_valid() {
         group_rc=$?
         [[ ${group_rc} -eq 2 ]] || return 1
       fi
-      ;;
   esac
   benchmark_artifacts_for "${ds}" "${view}" "${label}" || return 1
   [[ ${#ARTIFACT_PATHS[@]} -gt 0 ]] || return 1
   for path in "${ARTIFACT_PATHS[@]}"; do
-    ecoda_validate_checksum "${path}" || return 1
+    stage5_validate_reusable_artifact "${path}" "${label}" || return 1
     case "${path}" in
       *.feather)
         has_feather=1
@@ -1064,11 +1462,13 @@ benchmark_selected_artifacts_valid() {
         rm -f "${artifact_check}"
         return 1
       }
-      "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
-        --root "${ANALYSIS_ROOT}" --selection "${artifact_check}" \
+      artifact_validator_args=(--root "${ANALYSIS_ROOT}" --selection "${artifact_check}" \
         --labels "${label}" --batch --batch-pass "${PASS_ARG}" \
-        --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}" \
-        --source-identity "${SOURCE_IDENTITY}" --source-identity-verified >/dev/null 2>&1 || {
+        --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}")
+      [[ -s "${SOURCE_IDENTITY}" ]] &&
+        artifact_validator_args+=(--source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
+      "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
+        "${artifact_validator_args[@]}" >/dev/null 2>&1 || {
         rm -f "${artifact_check}" "${artifact_check}.md5"
         return 1
       }
@@ -1081,11 +1481,13 @@ benchmark_selected_artifacts_valid() {
         rm -f "${artifact_check}"
         return 1
       }
-      "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
-        --root "${ANALYSIS_ROOT}" --selection "${artifact_check}" \
+      artifact_validator_args=(--root "${ANALYSIS_ROOT}" --selection "${artifact_check}" \
         --labels "${label}" --input-root "${HPC_SCRATCH_DIR}" \
-        --config "${DATASETS_JSON_FILE}" --source-identity "${SOURCE_IDENTITY}" \
-        --source-identity-verified >/dev/null 2>&1 || {
+        --config "${DATASETS_JSON_FILE}")
+      [[ -s "${SOURCE_IDENTITY}" ]] &&
+        artifact_validator_args+=(--source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
+      "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
+        "${artifact_validator_args[@]}" >/dev/null 2>&1 || {
         rm -f "${artifact_check}" "${artifact_check}.md5"
         return 1
       }
@@ -1094,11 +1496,233 @@ benchmark_selected_artifacts_valid() {
   fi
 }
 
+stage5_publish_output_records() {
+  local ds view label path runtime_path
+  [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
+  command -v ecoda_write_artifact_record >/dev/null 2>&1 || return 1
+  while IFS=$'\t' read -r ds view label; do
+    [[ -n "${ds}" && -n "${view}" && -n "${label}" ]] || return 1
+    benchmark_artifacts_for "${ds}" "${view}" "${label}" || return 1
+    for path in "${ARTIFACT_PATHS[@]}"; do
+      stage5_publish_or_validate_artifact_record "${path}" "${label}" ||
+        return 1
+      case "${label}" in
+        mrvi|scpoli|pilot|qot|pilotgm|trans|zeroimp)
+          runtime_path="${path}.runtime.json"
+          [[ -s "${runtime_path}" ]] || return 1
+          stage5_publish_or_validate_artifact_record "${runtime_path}" "${label}" ||
+            return 1
+          ;;
+      esac
+    done
+  done < "${PENDING_SELECTION}"
+}
+
+stage5_recorded_producer() {
+  local record="$1" producer="" producer_count=0 key value
+  [[ -f "${record}" && ! -L "${record}" && -r "${record}" ]] || return 1
+  while IFS='=' read -r key value; do
+    if [[ "${key}" == PRODUCER ]]; then
+      producer_count=$((producer_count + 1))
+      producer="${value}"
+    fi
+  done < "${record}"
+  [[ ${producer_count} -eq 1 && -n "${producer}" &&
+     "${producer}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  printf '%s' "${producer}"
+}
+
+stage5_allowed_producers_for() {
+  local path="$1" label="$2" basename variant
+  STAGE5_ALLOWED_PRODUCERS=()
+  case "${label}" in
+    prepare_pseudobulk)
+      basename="${path##*/}"
+      variant="${basename##*_pseudobulk_}"
+      variant="${variant%.rds}"
+      stage5_validate_path_component "${variant}" pseudobulk ||
+        return 1
+      STAGE5_ALLOWED_PRODUCERS=("stage5_prepare_pseudobulk_${variant}")
+      ;;
+    gloscope)
+      if [[ -n "${PASS_ARG}" ]]; then
+        STAGE5_ALLOWED_PRODUCERS=(stage5_gloscope)
+      else
+        STAGE5_ALLOWED_PRODUCERS=(stage5_gloscope_consolidate)
+      fi
+      ;;
+    *)
+      stage5_validate_path_component "${label}" producer ||
+        return 1
+      STAGE5_ALLOWED_PRODUCERS=("stage5_${label}")
+      ;;
+  esac
+}
+
+stage5_producer_allowed() {
+  local path="$1" label="$2" producer="$3" allowed
+  stage5_allowed_producers_for "${path}" "${label}" || return 1
+  for allowed in "${STAGE5_ALLOWED_PRODUCERS[@]}"; do
+    [[ "${producer}" == "${allowed}" ]] && return 0
+  done
+  return 1
+}
+
+stage5_publish_or_validate_artifact_record() {
+  local path="$1" fallback_producer="$2" record producer canonical_producer
+  stage5_allowed_producers_for "${path}" "${fallback_producer}" || return 1
+  canonical_producer="${STAGE5_ALLOWED_PRODUCERS[0]}"
+  record="$(ecoda_artifact_record_path "${path}" "${RUN_ID}" 2>/dev/null || true)"
+  [[ -n "${record}" ]] || return 1
+  if [[ -e "${record}" || -L "${record}" ]]; then
+    producer="$(stage5_recorded_producer "${record}")" || return 1
+    stage5_producer_allowed "${path}" "${fallback_producer}" "${producer}" ||
+      return 1
+    ecoda_validate_artifact_record "${path}" "${producer}" "${RUN_ID}" >/dev/null ||
+      return 1
+    return 0
+  fi
+  ecoda_write_artifact_record "${path}" "${canonical_producer}" "${RUN_ID}" >/dev/null
+}
+
+stage5_validate_pending_rds_records() {
+  local ds view label path record producer
+  while IFS=$'\t' read -r ds view label; do
+    [[ -n "${ds}" && -n "${view}" && -n "${label}" ]] || return 1
+    benchmark_artifacts_for "${ds}" "${view}" "${label}" || return 1
+    for path in "${ARTIFACT_PATHS[@]}"; do
+      case "${path}" in
+        *.rds)
+          record="$(ecoda_artifact_record_path \
+            "${path}" "${RUN_ID}" 2>/dev/null || true)"
+          [[ -n "${record}" && -e "${record}" ]] || return 1
+          producer="$(stage5_recorded_producer "${record}")" || return 1
+          stage5_producer_allowed "${path}" "${label}" "${producer}" || return 1
+          ecoda_validate_artifact_record \
+            "${path}" "${producer}" "${RUN_ID}" >/dev/null || return 1
+          ;;
+      esac
+    done
+  done < "${PENDING_SELECTION}"
+}
+
+stage5_matrix_validation_selection() {
+  local label="$1" selection tmp
+  STAGE5_MATRIX_VALIDATION_SELECTION="${MANIFEST}"
+  STAGE5_MATRIX_VALIDATION_SELECTION_TEMP=""
+  if [[ ${EXACT_SELECTION} -eq 1 && -z "${PASS_ARG}" ]]; then
+    selection="${ECODA_RUN_ROOT}/manifests/matrix_validation_${label}.tsv"
+    tmp="${selection}.build.$$"
+    awk -F '\t' -v wanted="${label}" '$3 == wanted { print }' \
+      "${MANIFEST}" > "${tmp}" || return 1
+    [[ -s "${tmp}" ]] || {
+      rm -f "${tmp}"
+      return 2
+    }
+    ecoda_atomic_install_manifest "${tmp}" "${selection}" 3 || {
+      rm -f "${tmp}"
+      return 1
+    }
+    rm -f "${tmp}"
+    ecoda_write_checksum "${selection}" || return 1
+    STAGE5_MATRIX_VALIDATION_SELECTION="${selection}"
+    STAGE5_MATRIX_VALIDATION_SELECTION_TEMP="${selection}"
+  fi
+}
+
+stage5_track_pending_artifact_owners() {
+  local owner_dir
+  [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
+  [[ -s "${PENDING_SELECTION}" ]] || return 0
+  ecoda_validate_output_ownership stage5 "${PENDING_SELECTION}" "${RUN_ID}" ||
+    return 1
+  for owner_dir in "${ECODA_OUTPUT_OWNER_DIRS[@]:-}"; do
+    [[ -n "${owner_dir}" ]] || return 1
+    _ecoda_artifact_owner_validate_dir "${owner_dir}" || return 1
+    [[ "${ECODA_ARTIFACT_OWNER_STATE:-}" == "ACTIVE" &&
+       "${ECODA_ARTIFACT_OWNER_RUN:-}" == "${RUN_ID}" ]] || return 1
+    ecoda_owner_track "${owner_dir}" || return 1
+  done
+}
+
+stage5_selection_has_pending_rows() {
+  local method ds view row_label
+  for method in "${METHODS[@]}" "${ANALYSES[@]}"; do
+    [[ "${method}" == _ecoda_none_ ]] && continue
+    while IFS=$'\t' read -r ds view row_label; do
+      if [[ ${EXACT_SELECTION} -eq 1 && -z "${PASS_ARG}" ]]; then
+        case "${method}:${row_label}" in
+          prepare_pseudobulk:mofa|prepare_pseudobulk:pseudobulk|prepare_pseudobulk:composition|prepare_pseudobulk:prepare_pseudobulk) ;;
+          prepare_pseudobulk:*) continue ;;
+          *:"${method}") ;;
+          *) continue ;;
+        esac
+      fi
+      if [[ ${FORCE_ARG} -eq 1 ]] ||
+         ! benchmark_selected_artifacts_valid "${ds}" "${view}" "${method}"; then
+        return 0
+      fi
+    done < "${MANIFEST}"
+  done
+  return 1
+}
+
+PENDING_SELECTION="${ECODA_RUN_ROOT}/manifests/pending_selection.tsv"
+if [[ -z "${SYNC_ONLY_RUN}" ]] &&
+   ! stage5_selection_has_pending_rows; then
+  ecoda_atomic_write "${PENDING_SELECTION}" "" ||
+    stage5_abort "failed to create empty Stage 5 pending manifest"
+  ecoda_atomic_write "${ECODA_RUN_ROOT}/manifests/owners.tsv" "" ||
+    stage5_abort "failed to create empty Stage 5 owner manifest"
+  identity_metadata="$(stage5_record_run_identity_metadata)" ||
+    stage5_abort "failed to read Stage 5 source/runtime identity"
+  methods_csv="$(IFS=,; echo "${METHODS[*]}")"
+  analyses_csv=""
+  [[ ${ANALYSES_SELECTED} -eq 1 ]] &&
+    analyses_csv="$(IFS=,; echo "${ANALYSES[*]}")"
+  ecoda_atomic_write "${ECODA_RUN_ROOT}/metadata" \
+    "STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\n${identity_metadata}\n" ||
+    stage5_abort "failed to write Stage 5 NOOP metadata"
+  ecoda_atomic_write "${ECODA_RUN_ROOT}/status/report" \
+    "STATE=NOOP_VALIDATED\nRUN_ID=${RUN_ID}\nREASON=all selected benchmark artifacts are valid; no rerun selected\n" ||
+    stage5_abort "failed to write Stage 5 NOOP_VALIDATED report"
+  ecoda_set_run_state OK "NOOP_VALIDATED: all selected benchmark artifacts are valid" ||
+    stage5_abort "failed to write Stage 5 NOOP_VALIDATED terminal state"
+  echo "NOOP_VALIDATED=1"
+  if [[ -n "${PASS_ARG}" ]]; then
+    echo "BATCH_EFFECT_RUN_ID=${RUN_ID}"
+  else
+    echo "BENCHMARK_RUN_ID=${RUN_ID}"
+  fi
+  exit 0
+fi
+
+
+if [[ -z "${SYNC_ONLY_RUN}" ]]; then
+  stage5_repair_missing_h5ad_sidecars ||
+    stage5_abort "Stage 5 source H5AD sidecar validation failed"
+fi
+stage5_compute_h5ad_preflight ||
+  stage5_abort "Stage 5 compute-node H5AD preflight failed"
+if [[ -z "${SYNC_ONLY_RUN}" ||
+      -s "${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv" ]]; then
+  stage5_validate_source_artifact_records ||
+    stage5_abort "Stage 5 H5AD preflight artifact record validation failed"
+fi
+stage5_prepare_source_identity ||
+  stage5_abort "failed to build or verify Stage 5 source identity"
+
 stage5_run_r_environment_preflight() {
   local log_dir="${ECODA_RUN_ROOT}/logs/r_environment_preflight"
-  local preflight_msg preflight_id preflight_rc
+  local preflight_msg preflight_id preflight_rc preflight_worker preflight_export
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
   mkdir -p "${log_dir}" || return 1
+  preflight_worker="$(stage5_source_script src/utils/bash/r_environment_preflight_worker.sh)"
+  preflight_export="${RUNTIME_EXPORT},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${RUN_ID},R_ENV_PREFLIGHT_RUN_ROOT=${ECODA_RUN_ROOT}"
+  [[ -n "${ECODA_SOURCE_ROOT:-}" ]] &&
+    preflight_export="${preflight_export},ECODA_SOURCE_ROOT=${ECODA_SOURCE_ROOT},ECODA_SOURCE_MANIFEST=${ECODA_SOURCE_MANIFEST},ECODA_SOURCE_SNAPSHOT_REQUIRED=1"
+  stage5_validate_bound_runtime || return 1
+  stage5_require_source_script "${preflight_worker}" || return 1
   set +e
   preflight_msg="$(sbatch --parsable --wait \
     --partition="${SLURM_PARTITION_BENCHMARK_CPU}" \
@@ -1106,8 +1730,8 @@ stage5_run_r_environment_preflight() {
     --time="${WATCHDOG_TIME_LIMIT}" \
     --output="${log_dir}/r_environment_preflight_%j.log" \
     --error="${log_dir}/r_environment_preflight_%j.err" \
-    --mail-user="${USER_EMAIL}" --export="ALL,${RUNTIME_EXPORT}" \
-    "${SCRIPT_DIR}/../utils/bash/r_environment_preflight_worker.sh")"
+    --mail-user="${USER_EMAIL}" --export="ALL,${preflight_export}" \
+    "${preflight_worker}")"
   preflight_rc=$?
   set -e
   preflight_id="${preflight_msg%%;*}"
@@ -1123,6 +1747,8 @@ if [[ -z "${SYNC_ONLY_RUN}" && ${R_ENV_PREFLIGHT_REQUIRED} -eq 1 ]]; then
 fi
 
 OWNERS_FILE="${ECODA_RUN_ROOT}/manifests/owners.tsv"
+PENDING_SELECTION_MD5=""
+PENDING_SELECTION_SIZE=""
 if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   OWNERS_TMP="${OWNERS_FILE}.build.$$"
   PENDING_SELECTION="${ECODA_RUN_ROOT}/manifests/pending_selection.tsv"
@@ -1136,7 +1762,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     while IFS=$'\t' read -r ds view row_label; do
       if [[ ${EXACT_SELECTION} -eq 1 && -z "${PASS_ARG}" ]]; then
         case "${method}:${row_label}" in
-          prepare_pseudobulk:mofa|prepare_pseudobulk:pseudobulk|prepare_pseudobulk:composition) ;;
+          prepare_pseudobulk:mofa|prepare_pseudobulk:pseudobulk|prepare_pseudobulk:composition|prepare_pseudobulk:prepare_pseudobulk) ;;
           prepare_pseudobulk:*) continue ;;
           *:"${method}") ;;
           *) continue ;;
@@ -1172,6 +1798,10 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   if [[ -s "${PENDING_SELECTION_TMP}" ]]; then
     ecoda_atomic_install_manifest "${PENDING_SELECTION_TMP}" "${PENDING_SELECTION}" 3 ||
       stage5_abort "failed to install Stage 5 pending manifest atomically"
+    ecoda_write_checksum "${PENDING_SELECTION}" ||
+      stage5_abort "failed to checksum Stage 5 pending manifest"
+    PENDING_SELECTION_MD5="${ECODA_CHECKSUM_MD5}"
+    PENDING_SELECTION_SIZE="${ECODA_CHECKSUM_SIZE}"
     ecoda_atomic_install_manifest "${OWNERS_TMP}" "${OWNERS_FILE}" 2 ||
       stage5_abort "failed to install Stage 5 owner manifest atomically"
   else
@@ -1202,10 +1832,13 @@ else
   done
   analyses_csv=""
   if [[ ${ANALYSES_SELECTED} -eq 1 ]]; then analyses_csv="$(IFS=,; echo "${ANALYSES[*]}")"; fi
-  RUN_METADATA="STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\nH5AD_PREFLIGHT=${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv\nROOT=${HPC_SCRATCH_DIR}/$([[ -n "${PASS_ARG}" ]] && printf 'batch_effect/%s' "${PASS_ARG}" || printf 'benchmark')\n"
+  identity_metadata="$(stage5_record_run_identity_metadata)" ||
+    stage5_abort "failed to read Stage 5 source/runtime identity"
+  RUN_METADATA="STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\nH5AD_PREFLIGHT=${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv\nPENDING_SELECTION=${PENDING_SELECTION}\nPENDING_SELECTION_MD5=${PENDING_SELECTION_MD5}\nPENDING_SELECTION_SIZE=${PENDING_SELECTION_SIZE}\n${identity_metadata}\nROOT=${HPC_SCRATCH_DIR}/$([[ -n "${PASS_ARG}" ]] && printf 'batch_effect/%s' "${PASS_ARG}" || printf 'benchmark')\n"
   ecoda_atomic_write "${ECODA_RUN_ROOT}/metadata" "${RUN_METADATA}" ||
     stage5_abort "failed to write Stage 5 run metadata"
 fi
+
 
 if [[ -n "${PASS_ARG}" ]]; then
   ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${PASS_ARG}"
@@ -1285,11 +1918,12 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     local worker="${METHOD_WORKER}" worker_partition="${METHOD_PARTITION}" \
       watchdog_partition="${SLURM_PARTITION_BENCHMARK_CPU}" throttle="${METHOD_THROTTLE}" \
       method_time_limit="${METHOD_TIME_LIMIT}" method_gpu_policy="${METHOD_GPU_POLICY}"
-    local method_runtime_export
+    local method_runtime_export watchdog_script ownership_manifest ownership_tmp
     method_runtime_export="$(ecoda_runtime_export_csv stage5 "${METHOD_RUNTIME_NV}")" || return 1
+    watchdog_script="$(stage5_source_script src/5_run_benchmark_methods/matrix_watchdog.sh)"
     local safe="$(printf '%s' "${group_label}" | tr '/:,\t ' '_____')"
     local array_msg array_id array_rc wd_msg wd_id wd_rc
-    local worker_env="METHOD=${method},ANALYSIS=${method},ANALYSIS_MANIFEST=${manifest},ANALYSIS_VIEW=${view},ANALYSIS_ROOT=${ANALYSIS_ROOT},EXECUTION_LOG_DIR=${RUN_LOG_DIR},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${RUN_ID},FORCE_BENCHMARK=${FORCE_ARG},METHOD_TIME_LIMIT=${method_time_limit},METHOD_GPU_POLICY=${method_gpu_policy},JOB_LOG_PREFIX=${RUN_LOG_DIR}/5_matrix_${safe}"
+    local worker_env="METHOD=${method},ANALYSIS=${method},ANALYSIS_MANIFEST=${manifest},ANALYSIS_VIEW=${view},ANALYSIS_ROOT=${ANALYSIS_ROOT},EXECUTION_LOG_DIR=${RUN_LOG_DIR},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${RUN_ID},ECODA_SELECTION_MANIFEST=${manifest},FORCE_BENCHMARK=${FORCE_ARG},METHOD_TIME_LIMIT=${method_time_limit},METHOD_GPU_POLICY=${method_gpu_policy},ECODA_ARTIFACT_PRODUCER=stage5_${method},JOB_LOG_PREFIX=${RUN_LOG_DIR}/5_matrix_${safe}"
     if [[ -n "${PASS_ARG}" ]]; then
       worker_env="${worker_env},ANALYSIS_PASS=${PASS_ARG}"
     else
@@ -1297,9 +1931,12 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     fi
     worker_env="${worker_env},${method_runtime_export}"
     array_args=(--parsable --array="1-$(wc -l < "${manifest}" | tr -d '[:space:]')%${throttle}" --partition="${worker_partition}" "${METHOD_FLAGS[@]}" --time="${method_time_limit}" --mem="${MEMORY}" \
-      --output="${RUN_LOG_DIR}/5_matrix_${safe}_%A_%a.log" --error="${RUN_LOG_DIR}/5_matrix_${safe}_%A_%a.err" --mail-user="${USER_EMAIL}")
+      --output="${RUN_LOG_DIR}/5_matrix_${safe}_%A_%a.log" --error="${RUN_LOG_DIR}/5_matrix_${safe}_%A_%a.err" --mail-user="${USER_EMAIL}" \
+      --export="ALL,${worker_env}" "${worker}")
     [[ -n "${dependency}" ]] && array_args+=(--dependency="afterok:${dependency}")
-    array_args+=(--export="ALL,${worker_env}" "${worker}")
+    stage5_validate_bound_runtime || return 1
+    stage5_validate_output_ownership "${manifest}" 1 || return 1
+    stage5_require_source_script "${worker}" || return 1
     set +e
     array_msg="$(sbatch "${array_args[@]}")"
     array_rc=$?
@@ -1311,11 +1948,14 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
       return 1
     fi
     [[ ${array_rc} -eq 0 ]] || return 1
+    stage5_validate_bound_runtime || return 1
+    stage5_validate_output_ownership "${manifest}" || return 1
+    stage5_require_source_script "${watchdog_script}" || return 1
     set +e
     wd_msg="$(sbatch --parsable --dependency="afterany:${array_id}" --partition="${watchdog_partition}" --ntasks=1 --cpus-per-task=1 --mem=2G --time="${WATCHDOG_TIME_LIMIT}" \
       --output="${RUN_LOG_DIR}/5_matrix_watchdog_${safe}_%A.log" --error="${RUN_LOG_DIR}/5_matrix_watchdog_${safe}_%A.err" --mail-user="${USER_EMAIL}" \
       --export="ALL,${worker_env},MATRIX_WATCHDOG_ROOT=${ECODA_RUN_ROOT}" \
-      "${SCRIPT_DIR}/matrix_watchdog.sh" "${ECODA_RUN_ROOT}" "${group_label}" "${manifest}" "${array_id}" "${MEMORY}" "${MAX_MEMORY}" "${worker_partition}" "${throttle}" "${worker}" "${method_runtime_export}" "${METHOD_FLAGS[@]}")"
+      "${watchdog_script}" "${ECODA_RUN_ROOT}" "${group_label}" "${manifest}" "${array_id}" "${MEMORY}" "${MAX_MEMORY}" "${worker_partition}" "${throttle}" "${worker}" "${method_runtime_export}" "${METHOD_FLAGS[@]}")"
     wd_rc=$?
     set -e
     wd_id="${wd_msg%%;*}"
@@ -1399,11 +2039,18 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   if [[ ${#WATCHDOG_IDS[@]} -gt 0 ]]; then
     watchdog_ids_colon="$(IFS=:; echo "${WATCHDOG_IDS[*]}")"
     watchdog_labels_csv="$(IFS=,; echo "${WATCHDOG_LABELS[*]}")"
+    gate_script="$(stage5_source_script src/5_run_benchmark_methods/matrix_gate.sh)"
+    stage5_validate_bound_runtime ||
+      stage5_abort "Stage 5 bound runtime validation failed before aggregate gate"
+    stage5_validate_output_ownership "${PENDING_SELECTION}" ||
+      stage5_abort "Stage 5 output ownership changed before aggregate gate"
+    stage5_require_source_script "${gate_script}" ||
+      stage5_abort "Stage 5 aggregate gate script is outside the immutable source root"
     set +e
     gate_msg="$(sbatch --parsable --wait --dependency="afterany:${watchdog_ids_colon}" --partition="${SLURM_PARTITION_BENCHMARK_CPU}" \
       --ntasks=1 --cpus-per-task=1 --mem=2G --time="${WATCHDOG_TIME_LIMIT}" --output="${RUN_LOG_DIR}/5_matrix_gate_%j.log" \
       --error="${RUN_LOG_DIR}/5_matrix_gate_%j.err" --mail-user="${USER_EMAIL}" \
-      "${SCRIPT_DIR}/matrix_gate.sh" "${ECODA_RUN_ROOT}" "${watchdog_labels_csv}" "${SCHEDULER_FILE}")"
+      "${gate_script}" "${ECODA_RUN_ROOT}" "${watchdog_labels_csv}" "${SCHEDULER_FILE}")"
     gate_rc=$?
     set -e
     GATE_ID="${gate_msg%%;*}"
@@ -1507,6 +2154,9 @@ else
     stage5_abort "Stage 5 aggregate status is not OK"
 fi
 
+stage5_track_pending_artifact_owners ||
+  stage5_abort "Stage 5 artifact ownership state is missing or foreign"
+
 # Exactly one shared merge/checksum/sync owner for this run. Tests stop before
 # NAS access; real durable-gate invocations run this tail only after the
 # aggregate watchdog status is complete.
@@ -1537,14 +2187,40 @@ for method in "${METHODS[@]}"; do
   [[ "${method}" == _ecoda_none_ ]] || LABELS+=("${method}")
 done
 if [[ ${ANALYSES_SELECTED} -eq 1 ]]; then LABELS+=("${ANALYSES[@]}"); fi
-validation_args=(--root "${ANALYSIS_ROOT}" --selection "${MANIFEST}" --labels "${LABELS[@]}" \
-  --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}" \
-  --source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
-[[ -n "${PASS_ARG}" ]] && validation_args+=(--batch --batch-pass "${PASS_ARG}")
-[[ ${EXACT_SELECTION} -eq 1 ]] && validation_args+=(--exact)
-if ! "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" "${validation_args[@]}"; then
-  stage5_abort "Stage 5 matrix artifact validation failed"
-fi
+FEATHER_LABELS=()
+for label in "${LABELS[@]}"; do
+  case "${label}" in
+    mrvi|scpoli|pilot|qot|pilotgm)
+      FEATHER_LABELS+=("${label}")
+      ;;
+  esac
+done
+for label in "${FEATHER_LABELS[@]}"; do
+  if stage5_matrix_validation_selection "${label}"; then
+    :
+  else
+    selection_rc=$?
+    [[ ${selection_rc} -eq 2 ]] && continue
+    stage5_abort "failed to build Stage 5 ${label} validation selection"
+  fi
+  validation_args=(--root "${ANALYSIS_ROOT}" \
+    --selection "${STAGE5_MATRIX_VALIDATION_SELECTION}" --labels "${label}" \
+    --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}" \
+    --source-identity "${SOURCE_IDENTITY}" --source-identity-verified \
+    --producer "stage5_${label}" --producer-run-id "${RUN_ID}")
+  [[ -n "${PASS_ARG}" ]] && validation_args+=(--batch --batch-pass "${PASS_ARG}")
+  [[ ${EXACT_SELECTION} -eq 1 ]] && validation_args+=(--exact)
+  if ! "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
+      "${validation_args[@]}"; then
+    [[ -n "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}" ]] &&
+      rm -f "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}" \
+        "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}.md5"
+    stage5_abort "Stage 5 ${label} matrix artifact validation failed"
+  fi
+  [[ -n "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}" ]] &&
+    rm -f "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}" \
+      "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}.md5"
+done
 RDS_LABELS=()
 for label in "${LABELS[@]}"; do
   case "${label}" in
@@ -1554,6 +2230,8 @@ for label in "${LABELS[@]}"; do
   esac
 done
 if [[ ${#RDS_LABELS[@]} -gt 0 ]]; then
+  stage5_validate_pending_rds_records ||
+    stage5_abort "Stage 5 RDS artifact record validation failed"
   rds_args=(--root "${ANALYSIS_ROOT}" --selection "${MANIFEST}" \
     --labels "$(IFS=,; echo "${RDS_LABELS[*]}")" \
     --config "${DATASETS_JSON_FILE}" --input-root "${HPC_SCRATCH_DIR}" \
@@ -1564,13 +2242,17 @@ if [[ ${#RDS_LABELS[@]} -gt 0 ]]; then
     stage5_abort "Stage 5 RDS artifact validation failed"
   fi
 fi
+stage5_publish_output_records ||
+  stage5_abort "Stage 5 artifact record publication failed"
 if ! benchmark_merge_sync_cleanup "${LABELS[@]}"; then
   stage5_abort "Stage 5 benchmark synchronization failed"
 fi
+stage5_track_pending_artifact_owners ||
+  stage5_abort "Stage 5 artifact ownership changed before finalization"
+ecoda_owner_finalize_tracked OK "benchmark matrix sync completed" ||
+  stage5_abort "failed to finalize global Stage 5 artifact owners"
 stage5_finalize_owner_manifest OK "benchmark matrix sync completed" ||
   stage5_abort "failed to finalize Stage 5 owners"
-ecoda_set_run_state OK "benchmark matrix aggregate, artifact validation, and selected sync completed" ||
-  stage5_abort "failed to write Stage 5 terminal OK state"
 if [[ -n "${PASS_ARG}" ]]; then
   echo "BATCH_EFFECT_RUN_ID=${RUN_ID}"
 else

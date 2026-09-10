@@ -31,6 +31,8 @@ ANNOTATION_MERGE_WATCHDOG_MEMORY="${ANNOTATION_MERGE_WATCHDOG_MEMORY:-32G}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 export ANNOTATION_WORKER_TIME_LIMIT="${ANNOTATION_WORKER_TIME_LIMIT:-02:00:00}"
 RUNTIME_EXPORT=""
+STAGE4_BOUND_RUN=0
+STAGE4_INPUT_PRODUCER_RUN_ID="${PREPROCESS_RUN_ID:-${STAGE3_RUN_ID:-${INPUT_PRODUCER_RUN_ID:-}}}"
 STAGE4_SOURCE_CHECKSUMS=""
 
 usage() {
@@ -214,12 +216,176 @@ stage4_record_scheduler() {
     return 1
   }
 }
+stage4_is_snapshot_mode() {
+  [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ||
+     -n "${ECODA_SOURCE_MANIFEST:-}" ]]
+}
+
+stage4_source_script() {
+  local candidate="$1"
+  local root="${ECODA_SOURCE_ROOT:-${PROJECT_ROOT}}"
+  ecoda_require_source_script_path "${candidate}" "${root}"
+}
+
+stage4_atomic_copy() {
+  local source="$1" destination="$2" parent tmp
+  [[ -f "${source}" && -r "${source}" ]] || return 1
+  parent="$(dirname "${destination}")"
+  mkdir -p "${parent}" || return 1
+  tmp="${destination}.tmp.$$"
+  cp "${source}" "${tmp}" || {
+    rm -f "${tmp}"
+    return 1
+  }
+  mv -f "${tmp}" "${destination}" || {
+    rm -f "${tmp}"
+    return 1
+  }
+}
+
+stage4_identity_value() {
+  local file="$1" key="$2"
+  sed -n "s/^${key}=//p" "${file}" | head -1
+}
+
+stage4_validate_snapshot_inputs() {
+  local source_root="${ECODA_SOURCE_ROOT:-}"
+  local source_manifest="${ECODA_SOURCE_MANIFEST:-}"
+  local expected_manifest source_root_real manifest_real
+  if ! stage4_is_snapshot_mode; then
+    return 0
+  fi
+  # Snapshot executors may omit the mode; immutable source runs must use Apptainer.
+  export ECODA_RUNTIME_MODE=apptainer
+  [[ "${source_root}" = /* && "${source_manifest}" = /* ]] || return 1
+  [[ -d "${source_root}" && -r "${source_root}" &&
+     -f "${source_manifest}" && -r "${source_manifest}" ]] || return 1
+  expected_manifest="${source_root%/tree}/identity/source.manifest"
+  source_root_real="$(ecoda_realpath_existing "${source_root}" 2>/dev/null || true)"
+  manifest_real="$(ecoda_realpath_existing "${source_manifest}" 2>/dev/null || true)"
+  [[ -n "${source_root_real}" && -n "${manifest_real}" &&
+     "${source_root_real}" == "${source_root}" &&
+     "${manifest_real}" == "${expected_manifest}" ]] || return 1
+  [[ "${ECODA_AUX_ROOT:-${source_root}/aux}" == "${source_root}/aux" ]] || return 1
+  [[ -f "${source_root}/aux/scGateDB.rds" &&
+     -r "${source_root}/aux/scGateDB.rds" ]] || return 1
+}
+
+stage4_copy_new_source_manifest() {
+  stage4_validate_snapshot_inputs || return 1
+  if stage4_is_snapshot_mode; then
+    stage4_atomic_copy "${ECODA_SOURCE_MANIFEST}" \
+      "${ECODA_RUN_ROOT}/manifests/source.manifest" || return 1
+  fi
+}
+
+stage4_record_run_identity_metadata() {
+  local metadata="${ECODA_RUN_ROOT}/metadata"
+  local metadata_tmp="${metadata}.identity.$$"
+  local source_manifest="${ECODA_RUN_ROOT}/manifests/source.manifest"
+  local runtime_identity="${ECODA_RUN_ROOT}/manifests/runtime.identity"
+  local key value
+  [[ -r "${metadata}" && -r "${source_manifest}" && -r "${runtime_identity}" ]] || return 1
+  cp "${metadata}" "${metadata_tmp}" || return 1
+  printf 'SOURCE_MANIFEST=%s\n' "${source_manifest}" >> "${metadata_tmp}" || {
+    rm -f "${metadata_tmp}"
+    return 1
+  }
+  for key in FORMAT SOURCE_ROOT SOURCE_COMMIT SOURCE_ARCHIVE_PATH \
+    SOURCE_ARCHIVE_SHA256 CONFIG_HELPER_SHA256 DATASETS_SHA256 \
+    PIXI_TOML_SHA256 PIXI_LOCK_SHA256 AUX_ROOT SCGATE_DB_BRANCH; do
+    value="$(stage4_identity_value "${source_manifest}" "${key}")"
+    [[ -n "${value}" ]] || {
+      rm -f "${metadata_tmp}"
+      return 1
+    }
+    if [[ "${key}" == "FORMAT" ]]; then
+      printf 'SOURCE_MANIFEST_FORMAT=%s\n' "${value}" >> "${metadata_tmp}" || {
+        rm -f "${metadata_tmp}"
+        return 1
+      }
+    else
+      printf '%s=%s\n' "${key}" "${value}" >> "${metadata_tmp}" || {
+        rm -f "${metadata_tmp}"
+        return 1
+      }
+    fi
+  done
+  for key in RUNTIME_IMAGE RUNTIME_MANIFEST RUNTIME_IMAGE_SHA256 \
+    RUNTIME_MANIFEST_SHA256 RUNTIME_IMAGE_SIZE RUNTIME_MANIFEST_SIZE \
+    IMAGE_PIXI_TOML_SHA256 IMAGE_PIXI_LOCK_SHA256; do
+    value="$(stage4_identity_value "${runtime_identity}" "${key}")"
+    [[ -n "${value}" ]] || {
+      rm -f "${metadata_tmp}"
+      return 1
+    }
+    printf '%s=%s\n' "${key}" "${value}" >> "${metadata_tmp}" || {
+      rm -f "${metadata_tmp}"
+      return 1
+    }
+  done
+  mv -f "${metadata_tmp}" "${metadata}" || {
+    rm -f "${metadata_tmp}"
+    return 1
+  }
+}
+
+stage4_load_bound_identity() {
+  local source_copy="${ECODA_RUN_ROOT}/manifests/source.manifest"
+  local runtime_identity="${ECODA_RUN_ROOT}/manifests/runtime.identity"
+  local expected_source_manifest source_root runtime_image runtime_manifest
+  [[ -s "${source_copy}" && ! -L "${source_copy}" &&
+     -s "${runtime_identity}" && ! -L "${runtime_identity}" ]] || {
+    echo "ERROR: legacy_source_unpinned: Stage 4 run lacks source/runtime identity manifests." >&2
+    return 1
+  }
+  source_root="$(stage4_identity_value "${source_copy}" SOURCE_ROOT)"
+  [[ "${source_root}" = /* && "${source_root##*/}" == tree ]] || return 1
+  expected_source_manifest="${source_root%/tree}/identity/source.manifest"
+  [[ -f "${expected_source_manifest}" && -r "${expected_source_manifest}" ]] || return 1
+  cmp -s "${source_copy}" "${expected_source_manifest}" || return 1
+  runtime_image="$(stage4_identity_value "${runtime_identity}" RUNTIME_IMAGE)"
+  runtime_manifest="$(stage4_identity_value "${runtime_identity}" RUNTIME_MANIFEST)"
+  [[ "${runtime_image}" = /* && "${runtime_manifest}" = /* ]] || return 1
+  export ECODA_SOURCE_ROOT="${source_root}"
+  export ECODA_SOURCE_MANIFEST="${expected_source_manifest}"
+  export ECODA_SOURCE_SNAPSHOT_REQUIRED=1
+  export ECODA_AUX_ROOT="${source_root}/aux"
+  export ECODA_RUNTIME_IMAGE="${runtime_image}"
+  export ECODA_RUNTIME_MANIFEST="${runtime_manifest}"
+  export PROJECT_ROOT="${source_root}"
+  export DATASETS_JSON_FILE="${source_root}/datasets.json"
+  export SCGATE_DB_PATH="${ECODA_AUX_ROOT}/scGateDB.rds"
+  stage4_validate_snapshot_inputs || return 1
+}
+
+stage4_write_noop_validated() {
+  local reason="${1:-all selected artifacts already validated}"
+  local report="${ECODA_RUN_REPORT:-${ECODA_RUN_ROOT}/status/run_report}"
+  if [[ "${report}" != "${ECODA_RUN_ROOT}"/* ]]; then
+    report="${ECODA_RUN_ROOT}/status/run_report"
+  fi
+  ecoda_atomic_write "${report}" \
+    "STATE=NOOP_VALIDATED\nRUN_ID=${RUN_ID}\nREASON=${reason}\n" || return 1
+  ecoda_set_run_state OK "NOOP_VALIDATED: ${reason}"
+}
+stage4_validate_recorded_artifact() {
+  local path="$1" producer="$2" record=""
+  record="$(ecoda_artifact_record_path "${path}" "${RUN_ID}" 2>/dev/null || true)"
+  if [[ -n "${record}" && -e "${record}" ]]; then
+    ecoda_validate_artifact_record "${path}" "${producer}" "${RUN_ID}"
+  else
+    ecoda_validate_checksum "${path}"
+  fi
+}
+
 
 
 validate_reuse_preparation() {
   local prep_manifest="${ECODA_RUN_ROOT}/manifests/preparation.tsv"
   local chunk_manifest="${ECODA_RUN_ROOT}/manifests/chunks.tsv"
   local ds views run_root chunk feather_dir chunk_num feather union_path sample expected_args
+  local prepare_script="${ECODA_SOURCE_ROOT:-${PROJECT_ROOT}}/src/4_cell_type_annotation/1.1_prepare_chunks.py"
   local validated_unions=""
   [[ -s "${prep_manifest}" && -s "${chunk_manifest}" ]] || {
     echo "ERROR: --skip-prepare reuse run lacks immutable preparation/chunk manifests." >&2
@@ -240,7 +406,7 @@ validate_reuse_preparation() {
       return 1
     }
     export DS_NAME="${ds}" ANNOTATION_VIEWS="${views}" ANNOTATION_RUN_ROOT="${run_root}" ANNOTATION_RUN_ID="${RUN_ID}"
-    "${PYTHON_BIN}" "${SCRIPT_DIR}/1.1_prepare_chunks.py" \
+    "${PYTHON_BIN}" "${prepare_script}" \
       --views "${views}" --run-root "${run_root}" --validate-only || return 1
   done < "${prep_manifest}"
   while IFS=$'\t' read -r ds chunk feather_dir; do
@@ -261,7 +427,7 @@ validate_reuse_preparation() {
     case " ${validated_unions} " in
       *" ${union_path} "*) ;;
       *)
-        ecoda_validate_checksum "${union_path}" || return 1
+        stage4_validate_recorded_artifact "${union_path}" stage4_preparation || return 1
         validated_unions="${validated_unions} ${union_path}"
         ;;
     esac
@@ -273,6 +439,10 @@ validate_reuse_preparation() {
     "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/annotation_contract.py" \
       --path "${feather}" --require-sidecar "${expected_args[@]}" || {
       echo "ERROR: reuse annotation feather failed validation: ${feather}" >&2
+      return 1
+    }
+    stage4_validate_recorded_artifact "${feather}" stage4_annotation || {
+      echo "ERROR: reuse annotation feather artifact record failed: ${feather}" >&2
       return 1
     }
   done < "${chunk_manifest}"
@@ -347,6 +517,13 @@ sync_one_dataset() {
 if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   ecoda_open_run "${SYNC_ONLY_RUN}" || exit 1
   RUN_ID="${SYNC_ONLY_RUN}"
+  stage4_load_bound_identity ||
+    { echo "ERROR: legacy_source_unpinned: cannot sync an unpinned Stage 4 run." >&2; exit 1; }
+  STAGE4_BOUND_RUN=1
+  ecoda_runtime_validate_bound_run ||
+    { echo "ERROR: Stage 4 bound runtime identity validation failed." >&2; exit 1; }
+  RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage4 0)" || exit 1
+  RUN_ID="${SYNC_ONLY_RUN}"
   MANIFEST="${ECODA_RUN_ROOT}/manifests/selection.tsv"
   ecoda_validate_run_owned_path "${MANIFEST}" "${ECODA_RUN_ROOT}" ||
     stage4_abort "Stage 4 selection manifest is not run-owned"
@@ -416,6 +593,13 @@ DATASET_NAMES=()
 if [[ -n "${REUSE_RUN_ARG}" ]]; then
   ecoda_open_run "${REUSE_RUN_ARG}" || exit 1
   RUN_ID="${REUSE_RUN_ARG}"
+  stage4_load_bound_identity ||
+    stage4_abort "legacy_source_unpinned: cannot reuse an unpinned Stage 4 run"
+  STAGE4_BOUND_RUN=1
+  ecoda_runtime_validate_bound_run ||
+    stage4_abort "Stage 4 bound runtime identity validation failed"
+  RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage4 0)" ||
+    stage4_abort "Stage 4 runtime export construction failed"
   stage="$(sed -n 's/^STAGE=//p' "${ECODA_RUN_ROOT}/metadata" | head -1 || true)"
   [[ "${stage}" == "stage4" ]] || stage4_abort "reuse run is not a Stage 4 run: ${RUN_ID}"
   MANIFEST="${ECODA_RUN_ROOT}/manifests/selection.tsv"
@@ -466,6 +650,8 @@ else
 
   RUN_ID="${ECODA_RUN_ID:-$(ecoda_new_run_id stage4)}"
   ecoda_init_run stage4 "${RUN_ID}" >/dev/null
+  stage4_copy_new_source_manifest ||
+    stage4_abort "Stage 4 source snapshot manifest is missing or invalid"
   MANIFEST="${ECODA_RUN_ROOT}/manifests/selection.tsv"
   MANIFEST_TMP="${MANIFEST}.build.$$"
   : > "${MANIFEST_TMP}"
@@ -575,11 +761,25 @@ while IFS=$'\t' read -r ds view; do
   input_path="$(output_path_for "${ds}" "${view}")" ||
     stage4_abort "missing Stage 4 output contract ${row}"
   if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
+    ecoda_require_input_ownership "${input_path}" "${RUN_ID}" ||
+      stage4_abort "active Stage 4 input writer for ${row}"
     "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
       --path "${input_path}" --view "${view}" --method "Stage 4 annotation" >/dev/null 2>&1 ||
       stage4_abort "invalid Stage 4 h5ad ${row}"
     ecoda_validate_checksum "${input_path}" ||
       stage4_abort "invalid Stage 4 checksum ${row}"
+    if stage4_is_snapshot_mode; then
+      [[ -n "${STAGE4_INPUT_PRODUCER_RUN_ID}" ]] ||
+        stage4_abort "snapshot-backed Stage 4 compute requires an upstream producer run ID"
+    fi
+    if [[ -n "${STAGE4_INPUT_PRODUCER_RUN_ID}" ]]; then
+      if ! ecoda_validate_input_artifact "${input_path}" \
+        stage3 "${STAGE4_INPUT_PRODUCER_RUN_ID}"; then
+        ecoda_validate_input_artifact "${input_path}" \
+          stage3_preflight "${STAGE4_INPUT_PRODUCER_RUN_ID}" ||
+          stage4_abort "Stage 4 input artifact record validation failed for ${row}"
+      fi
+    fi
     stage4_record_source_checksum "${ds}" "${view}" "${input_path}"
   fi
   if [[ ${FORCE_ARG} -eq 1 ]]; then
@@ -596,8 +796,8 @@ if [[ ! -s "${RUNNABLE_TMP}" ]]; then
   ecoda_atomic_write "${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv" "" ||
     stage4_abort "failed to create empty Stage 4 scheduler manifest"
   rm -f "${RUNNABLE_TMP}"
-  ecoda_set_run_state OK "all selected datasets explicitly exempt from auto-annotation" ||
-    stage4_abort "failed to write Stage 4 terminal OK state"
+  stage4_write_noop_validated "all selected datasets explicitly exempt from auto-annotation" ||
+    stage4_abort "failed to write Stage 4 NOOP_VALIDATED report"
   exit 0
 fi
 if [[ ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
@@ -649,8 +849,8 @@ if [[ ${FORCE_ARG} -eq 0 && "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
   rm -f "${VALIDATION_TMP}"
 fi
 if [[ ! -s "${WORK_MANIFEST}" ]]; then
-  ecoda_set_run_state OK "all selected annotation artifacts already validated" ||
-    stage4_abort "failed to write Stage 4 terminal OK state"
+  stage4_write_noop_validated "all selected annotation artifacts already validated" ||
+    stage4_abort "failed to write Stage 4 NOOP_VALIDATED report"
   exit 0
 fi
 
@@ -738,61 +938,104 @@ emit_watchdog_status_ids() {
     esac
   done < "${status_file}"
 }
+if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" &&
+      ${STAGE4_BOUND_RUN} -eq 0 && ! stage4_is_snapshot_mode ]]; then
+  stage4_abort "legacy_source_unpinned: Stage 4 compute requires an immutable source snapshot"
+fi
 if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
   if ! "${SCRIPT_DIR}/1.0_stage_reference_maps.sh"; then
     stage4_abort "Stage 4 reference-map staging failed"
   fi
-  db_valid=0
-  if ${PIXI_RSCRIPT} "${SCRIPT_DIR}/2.0_create_scgate_db.R" --validate-db-only >/dev/null 2>&1; then
-    db_valid=1
-  fi
-  cache_valid=0
-  if ${PIXI_RSCRIPT} "${SCRIPT_DIR}/2.0_create_scgate_db.R" --validate-only >/dev/null 2>&1; then
-    cache_valid=1
-  fi
-  if [[ -e "${SCGATE_DB_PATH}" && ${db_valid} -eq 0 &&
-        ${cache_valid} -eq 0 && ${FORCE_ARG} -eq 0 ]]; then
-    stage4_abort "existing scGate DB cache failed validation; use --force to rebuild"
-  fi
-  if [[ ! -e "${SCGATE_DB_PATH}" || ${FORCE_ARG} -eq 1 ||
-        ${cache_valid} -eq 0 ]]; then
-    SCGATE_FORCE_ARG=()
-    [[ ${FORCE_ARG} -eq 1 ]] && SCGATE_FORCE_ARG=(--force)
-    set +e
-    scgate_msg="$(sbatch --parsable --wait --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem=4G \
-      --time="${ANNOTATION_WATCHDOG_TIME_LIMIT:-12:00:00}" --output="${LOGS_DIR}/4_scgate_%j.log" \
-      --error="${LOGS_DIR}/4_scgate_%j.err" --mail-user="${USER_EMAIL}" \
-      --export="ALL" --wrap="${PIXI_RSCRIPT} ${SCRIPT_DIR}/2.0_create_scgate_db.R ${SCGATE_FORCE_ARG[*]}")"
-    scgate_rc=$?
-    set -e
-    scgate_job="${scgate_msg%%;*}"
-    if [[ "${scgate_job}" =~ ^[0-9]+$ ]]; then
-      stage4_record_scheduler SCGATE "${scgate_job}" ||
-        stage4_abort "failed to persist scGate scheduler ID"
-    fi
-    [[ ${scgate_rc} -eq 0 && "${scgate_job}" =~ ^[0-9]+$ && -s "${SCGATE_DB_PATH}" ]] ||
-      stage4_abort "scGate cache preflight failed"
-    ${PIXI_RSCRIPT} "${SCRIPT_DIR}/2.0_create_scgate_db.R" --validate-only >/dev/null 2>&1 ||
-      stage4_abort "scGate cache failed post-build validation"
-    echo "ANNOTATION_SCGATE_JOB_ID=${scgate_job}"
-  fi
+fi
+if stage4_is_snapshot_mode; then
+  export ECODA_RUNTIME_MODE=apptainer
 fi
 export ECODA_RUNTIME_PROFILE=stage4
-ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" || {
-  stage4_abort "Stage 4 immutable runtime validation failed."
-}
+if [[ ${STAGE4_BOUND_RUN} -eq 1 ]]; then
+  ecoda_runtime_validate_bound_run || {
+    stage4_abort "Stage 4 bound runtime identity validation failed."
+  }
+else
+  ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" || {
+    stage4_abort "Stage 4 immutable runtime validation failed."
+  }
+fi
+if stage4_is_snapshot_mode && [[ "${ECODA_RUNTIME_FORMAT:-}" != "2" ]]; then
+  stage4_abort "snapshot-backed Stage 4 runs require a FORMAT=2 runtime image"
+fi
 RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage4 0)" || {
   stage4_abort "Stage 4 runtime export construction failed."
 }
+if [[ ${STAGE4_BOUND_RUN} -eq 0 && stage4_is_snapshot_mode ]]; then
+  [[ -s "${ECODA_RUN_ROOT}/manifests/runtime.identity" ]] ||
+    stage4_abort "Stage 4 runtime identity was not recorded"
+  stage4_record_run_identity_metadata ||
+    stage4_abort "Stage 4 source/runtime metadata recording failed"
+fi
+if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
+  if stage4_is_snapshot_mode; then
+    scgate_wrapper="$(stage4_source_script \
+      "${ECODA_SOURCE_ROOT}/src/4_cell_type_annotation/2.0_create_scgate_db.sh")" ||
+      stage4_abort "Stage 4 scGate validator wrapper is outside the immutable source root"
+    "${scgate_wrapper}" --validate-only >/dev/null 2>&1 ||
+      stage4_abort "frozen snapshot scGate cache failed --validate-only"
+  else
+    scgate_wrapper="$(stage4_source_script \
+      "${SCRIPT_DIR}/2.0_create_scgate_db.sh")" ||
+      stage4_abort "Stage 4 scGate writer wrapper is outside the source root"
+    db_valid=0
+    if "${scgate_wrapper}" --validate-db-only >/dev/null 2>&1; then
+      db_valid=1
+    fi
+    cache_valid=0
+    if "${scgate_wrapper}" --validate-only >/dev/null 2>&1; then
+      cache_valid=1
+    fi
+    if [[ -e "${SCGATE_DB_PATH}" && ${db_valid} -eq 0 &&
+          ${cache_valid} -eq 0 && ${FORCE_ARG} -eq 0 ]]; then
+      stage4_abort "existing scGate DB cache failed validation; use --force to rebuild"
+    fi
+    if [[ ! -e "${SCGATE_DB_PATH}" || ${FORCE_ARG} -eq 1 ||
+          ${cache_valid} -eq 0 ]]; then
+      scgate_sbatch_args=(--parsable --wait --partition="${PARTITION}" --ntasks=1
+        --cpus-per-task=1 --mem=4G
+        --time="${ANNOTATION_WATCHDOG_TIME_LIMIT:-12:00:00}"
+        --output="${LOGS_DIR}/4_scgate_%j.log"
+        --error="${LOGS_DIR}/4_scgate_%j.err" --mail-user="${USER_EMAIL}"
+        --export="ALL" "${scgate_wrapper}")
+      [[ ${FORCE_ARG} -eq 1 ]] && scgate_sbatch_args+=(--force)
+      set +e
+      scgate_msg="$(sbatch "${scgate_sbatch_args[@]}")"
+      scgate_rc=$?
+      set -e
+      scgate_job="${scgate_msg%%;*}"
+      if [[ "${scgate_job}" =~ ^[0-9]+$ ]]; then
+        stage4_record_scheduler SCGATE "${scgate_job}" ||
+          stage4_abort "failed to persist scGate scheduler ID"
+      fi
+      [[ ${scgate_rc} -eq 0 && "${scgate_job}" =~ ^[0-9]+$ && -s "${SCGATE_DB_PATH}" ]] ||
+        stage4_abort "scGate cache preflight failed"
+      "${scgate_wrapper}" --validate-only >/dev/null 2>&1 ||
+        stage4_abort "scGate cache failed post-build validation"
+      echo "ANNOTATION_SCGATE_JOB_ID=${scgate_job}"
+    fi
+  fi
+fi
+export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT="${ECODA_RUN_ROOT}"
 if [[ ${SKIP_PREPARE} -eq 0 ]]; then
   prep_count="$(wc -l < "${PREP_MANIFEST}" | tr -d '[:space:]')"
   [[ "${prep_count}" =~ ^[1-9][0-9]*$ ]] || stage4_abort "Stage 4 preparation manifest is empty"
   export FORCE_ANNOTATION="${FORCE_ARG}" ANNOTATION_RUN_ID="${RUN_ID}"
+  ecoda_validate_output_ownership stage4 "${WORK_MANIFEST}" "${RUN_ID}" 1 ||
+    stage4_abort "Stage 4 preparation output ownership validation failed"
+  prep_script="$(stage4_source_script \
+    "${SCRIPT_DIR}/1.2_prepare_chunks_worker.sh")" ||
+    stage4_abort "Stage 4 preparation worker is outside the immutable source root"
   set +e
   prep_msg="$(sbatch --parsable --array="1-${prep_count}%${THROTTLE}" --mem="${MEMORY}" --partition="${PARTITION}" \
     --output="${LOGS_DIR}/4_annotation_prepare_%A_%a.log" --error="${LOGS_DIR}/4_annotation_prepare_%A_%a.err" \
     --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_PREP_MANIFEST=${PREP_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},FORCE_ANNOTATION=${FORCE_ARG},${RUNTIME_EXPORT}" \
-    "${SCRIPT_DIR}/1.2_prepare_chunks_worker.sh")"
+    "${prep_script}")"
   prep_rc=$?
   set -e
   PREP_ARRAY="${prep_msg%%;*}"
@@ -803,11 +1046,16 @@ if [[ ${SKIP_PREPARE} -eq 0 ]]; then
   [[ ${prep_rc} -eq 0 && "${PREP_ARRAY}" =~ ^[0-9]+$ ]] ||
     stage4_abort "Stage 4 preparation array submission failed"
   echo "ANNOTATION_PREP_ARRAY_JOB_ID=${PREP_ARRAY}"
+  ecoda_validate_output_ownership stage4 "${WORK_MANIFEST}" "${RUN_ID}" ||
+    stage4_abort "Stage 4 preparation watchdog ownership validation failed"
+  prep_watchdog_script="$(stage4_source_script \
+    "${SCRIPT_DIR}/1.3_prepare_chunks_watchdog.sh")" ||
+    stage4_abort "Stage 4 preparation watchdog is outside the immutable source root"
   set +e
   prep_watchdog_msg="$(sbatch --parsable --wait --dependency="afterany:${PREP_ARRAY}" --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem=2G \
     --time="${ANNOTATION_WATCHDOG_TIME_LIMIT:-12:00:00}" --output="${LOGS_DIR}/4_annotation_prepare_watchdog_%j.log" \
     --error="${LOGS_DIR}/4_annotation_prepare_watchdog_%j.err" --mail-user="${USER_EMAIL}" \
-    --export="ALL,ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" "${SCRIPT_DIR}/1.3_prepare_chunks_watchdog.sh" "${RUN_ID}" "${PREP_MANIFEST}" \
+    --export="ALL,ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" "${prep_watchdog_script}" "${RUN_ID}" "${PREP_MANIFEST}" \
     "${PREP_ARRAY}" "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
   prep_watchdog_rc=$?
   set -e
@@ -862,11 +1110,16 @@ else
   rm -f "${CHUNK_TMP}"
 fi
 [[ ${TOTAL_CHUNKS} -gt 0 ]] || stage4_abort "reuse chunk manifest is empty"
+ecoda_validate_output_ownership stage4 "${WORK_MANIFEST}" "${RUN_ID}" 1 ||
+  stage4_abort "Stage 4 annotation output ownership validation failed"
+annotation_script="$(stage4_source_script \
+  "${SCRIPT_DIR}/2.1_run_worker.sh")" ||
+  stage4_abort "Stage 4 annotation worker is outside the immutable source root"
 set +e
 annot_msg="$(sbatch --parsable --array="1-${TOTAL_CHUNKS}%${THROTTLE}" --mem="${MEMORY}" --time="${ANNOTATION_WORKER_TIME_LIMIT}" --partition="${PARTITION}" \
   --output="${LOGS_DIR}/4_cell_type_annotation_%A_%a.log" --error="${LOGS_DIR}/4_cell_type_annotation_%A_%a.err" \
   --mail-user="${USER_EMAIL}" --export="ALL,CHUNKS_MANIFEST=${CHUNK_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},ANNOTATION_ERROR_PREFIX=${LOGS_DIR}/4_cell_type_annotation,${RUNTIME_EXPORT}" \
-  "${SCRIPT_DIR}/2.1_run_worker.sh")"
+  "${annotation_script}")"
 annot_rc=$?
 set -e
 ANNOT_ARRAY="${annot_msg%%;*}"
@@ -877,11 +1130,16 @@ fi
 [[ ${annot_rc} -eq 0 && "${ANNOT_ARRAY}" =~ ^[0-9]+$ ]] ||
   stage4_abort "Stage 4 annotation array submission failed"
 echo "ANNOTATION_ARRAY_JOB_ID=${ANNOT_ARRAY}"
+ecoda_validate_output_ownership stage4 "${WORK_MANIFEST}" "${RUN_ID}" ||
+  stage4_abort "Stage 4 annotation watchdog ownership validation failed"
+annotation_watchdog_script="$(stage4_source_script \
+  "${SCRIPT_DIR}/1.2_annotation_watchdog.sh")" ||
+  stage4_abort "Stage 4 annotation watchdog is outside the immutable source root"
 set +e
 annot_watchdog_msg="$(sbatch --parsable --wait --dependency="afterany:${ANNOT_ARRAY}" --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem=2G \
   --time="${ANNOTATION_WATCHDOG_TIME_LIMIT:-12:00:00}" --output="${LOGS_DIR}/4_cell_type_annotation_watchdog_%j.log" \
   --error="${LOGS_DIR}/4_cell_type_annotation_watchdog_%j.err" --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" \
-  "${SCRIPT_DIR}/1.2_annotation_watchdog.sh" "${RUN_ID}" "${CHUNK_MANIFEST}" "${ANNOT_ARRAY}" \
+  "${annotation_watchdog_script}" "${RUN_ID}" "${CHUNK_MANIFEST}" "${ANNOT_ARRAY}" \
   "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
 annot_watchdog_rc=$?
 set -e
@@ -914,11 +1172,16 @@ MERGE_COUNT="$(wc -l < "${MERGE_TMP}" | tr -d '[:space:]')"
 ecoda_atomic_install_manifest "${MERGE_TMP}" "${MERGE_MANIFEST}" 3 ||
   stage4_abort "failed to install Stage 4 merge manifest atomically"
 rm -f "${MERGE_TMP}"
+ecoda_validate_output_ownership stage4 "${WORK_MANIFEST}" "${RUN_ID}" 1 ||
+  stage4_abort "Stage 4 merge output ownership validation failed"
+merge_script="$(stage4_source_script \
+  "${SCRIPT_DIR}/3.2_merge_worker.sh")" ||
+  stage4_abort "Stage 4 merge worker is outside the immutable source root"
 set +e
 merge_msg="$(sbatch --parsable --array="1-${MERGE_COUNT}%${THROTTLE}" --mem="${MEMORY}" --time="${ANNOTATION_WORKER_TIME_LIMIT}" --partition="${PARTITION}" \
   --output="${LOGS_DIR}/4_annotation_merge_%A_%a.log" --error="${LOGS_DIR}/4_annotation_merge_%A_%a.err" \
   --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_MERGE_MANIFEST=${MERGE_MANIFEST},ANNOTATION_RUN_ID=${RUN_ID},FORCE_ANNOTATION=${FORCE_ARG},${RUNTIME_EXPORT}" \
-  "${SCRIPT_DIR}/3.2_merge_worker.sh")"
+  "${merge_script}")"
 merge_rc=$?
 set -e
 MERGE_ARRAY="${merge_msg%%;*}"
@@ -929,11 +1192,16 @@ fi
 [[ ${merge_rc} -eq 0 && "${MERGE_ARRAY}" =~ ^[0-9]+$ ]] ||
   stage4_abort "Stage 4 merge array submission failed"
 echo "ANNOTATION_MERGE_ARRAY_JOB_ID=${MERGE_ARRAY}"
+ecoda_validate_output_ownership stage4 "${WORK_MANIFEST}" "${RUN_ID}" ||
+  stage4_abort "Stage 4 merge watchdog ownership validation failed"
+merge_watchdog_script="$(stage4_source_script \
+  "${SCRIPT_DIR}/3.3_merge_watchdog.sh")" ||
+  stage4_abort "Stage 4 merge watchdog is outside the immutable source root"
 set +e
 merge_watchdog_msg="$(sbatch --parsable --wait --dependency="afterany:${MERGE_ARRAY}" --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem="${ANNOTATION_MERGE_WATCHDOG_MEMORY}" \
   --time="${ANNOTATION_WATCHDOG_TIME_LIMIT:-12:00:00}" --output="${LOGS_DIR}/4_annotation_merge_watchdog_%j.log" \
   --error="${LOGS_DIR}/4_annotation_merge_watchdog_%j.err" --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" \
-  "${SCRIPT_DIR}/3.3_merge_watchdog.sh" "${RUN_ID}" "${MERGE_MANIFEST}" "${MERGE_ARRAY}" \
+  "${merge_watchdog_script}" "${RUN_ID}" "${MERGE_MANIFEST}" "${MERGE_ARRAY}" \
   "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
 merge_watchdog_rc=$?
 set -e
@@ -1002,6 +1270,8 @@ else
   done < "${SCHEDULER_IDS_FILE}"
 fi
 if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" == "1" ]]; then
+  ecoda_owner_finalize_tracked OK "submitter test mode; dataset arrays submitted" ||
+    stage4_abort "failed to finalize global Stage 4 artifact owners"
   ecoda_set_run_state OK "submitter test mode; dataset arrays submitted" ||
     stage4_abort "failed to write Stage 4 terminal OK state"
   exit 0
@@ -1019,6 +1289,8 @@ for pid in "${SYNC_PIDS[@]}"; do
   wait "${pid}" || sync_failed=1
 done
 [[ ${sync_failed} -eq 0 ]] || stage4_abort "Stage 4 selected NAS sync failed"
+ecoda_owner_finalize_tracked OK "Stage 4 merge and selected sync completed" ||
+  stage4_abort "failed to finalize global Stage 4 artifact owners"
 stage4_finalize_owner_manifest OK "Stage 4 merge and selected sync completed" ||
   stage4_abort "failed to finalize Stage 4 owners"
 ecoda_set_run_state OK "Stage 4 preparation, annotation, merge, and selected sync completed" ||

@@ -59,6 +59,15 @@ expect_fail <- function(arguments, label) {
   if (identical(status, 0L)) stop("expected validator failure: ", label)
 }
 
+expect_fail_capture <- function(arguments, label, pattern) {
+  result <- run_validator_capture(arguments)
+  if (identical(result$status, 0L)) stop("expected validator failure: ", label)
+  if (!grepl(pattern, result$output, fixed = TRUE)) {
+    stop("validator failure did not report ", label, ": ", result$output)
+  }
+  invisible(result)
+}
+
 combo <- function(ids = c("s1", "s2")) {
   feature <- matrix(
     c(1, 0, 0, 1), nrow = 2L,
@@ -95,6 +104,23 @@ withTemporary({
   gloscope <- file.path(directory, "gloscope.rds")
   write_checked(gloscope, list(GloScope_hvg2000_pcadims30 = combo()))
   expect_ok(batch_args(gloscope, "gloscope"), "batch GloScope")
+
+  missing_sidecar <- file.path(directory, "gloscope-missing-sidecar.rds")
+  writeBin(charToRaw("not an RDS stream"), missing_sidecar)
+  expect_fail_capture(
+    batch_args(missing_sidecar, "gloscope"),
+    "missing result sidecar",
+    "Missing or invalid result checksum"
+  )
+
+  malformed_sidecar <- file.path(directory, "gloscope-malformed-sidecar.rds")
+  writeBin(charToRaw("not an RDS stream"), malformed_sidecar)
+  writeLines("not a checksums.md5 record", paste0(malformed_sidecar, ".md5"))
+  expect_fail_capture(
+    batch_args(malformed_sidecar, "gloscope"),
+    "malformed result sidecar",
+    "Missing or invalid result checksum"
+  )
 
   pseudobulk <- file.path(directory, "pseudobulk_hvg2000.rds")
   pb <- matrix(c(1, 2, 3, 4), nrow = 2L, dimnames = list(c("s1", "s2"), c("g1", "g2")))
@@ -232,6 +258,9 @@ withTemporary({
     paste0("SIZE=", file.info(scitd_selection)$size),
     paste0("PATH=", scitd_selection)
   ), paste0(scitd_selection, ".md5"))
+  unrelated_partial <- file.path(scitd_root, "unrelated", "nested", "stale.tmp.123")
+  dir.create(dirname(unrelated_partial), recursive = TRUE)
+  writeLines("stale", unrelated_partial)
   scitd_root_result <- run_validator_capture(c(
     "--root", scitd_root,
     "--selection", scitd_selection,
@@ -243,6 +272,24 @@ withTemporary({
   if (!grepl("dropped sample IDs: s2", scitd_root_result$output, fixed = TRUE)) {
     stop("root scITD dropped sample IDs were not reported: ", scitd_root_result$output)
   }
+  selected_partial <- file.path(
+    scitd_root, "results", "Synthetic_scitd.rds.tmp.123"
+  )
+  writeLines("stale", selected_partial)
+  selected_partial_result <- run_validator_capture(c(
+    "--root", scitd_root,
+    "--selection", scitd_selection,
+    "--labels", "scitd",
+    "--input-root", scratch,
+    "--config", config
+  ))
+  if (identical(selected_partial_result$status, 0L) ||
+      !grepl("partial benchmark artifacts remain",
+             selected_partial_result$output, fixed = TRUE)) {
+    stop("selected adjacent partial was accepted: ",
+         selected_partial_result$output)
+  }
+  unlink(selected_partial)
 
   ordinary_root <- file.path(directory, "ordinary")
   ordinary_selection <- file.path(directory, "ordinary-selection.tsv")

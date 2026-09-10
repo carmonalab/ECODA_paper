@@ -15,23 +15,84 @@ ecoda_submit_h5ad_preflight() {
   local worker_script="${10}"
   local runtime_export="${11:-}"
   local count msg rc scheduler_id run_id
+  local source_root source_manifest source_required host_env_prefix
+  local runtime_image runtime_manifest runtime_run_id scratch_root aux_root logs_root
+  local worker_source_path export_values value
 
   [[ -r "${manifest}" && -s "${manifest}" ]] || return 1
   [[ -n "${runtime_export}" ]] || return 1
   [[ "${mode}" == "require" || "${mode}" == "classify" ]] || return 1
+  [[ "${run_root}" = /* && "${manifest}" = /* &&
+     "${status_dir}" = /* && "${logs_dir}" = /* ]] || return 1
   run_id="${run_root##*/}"
   [[ "${run_id}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || return 1
+  [[ -z "${ECODA_RUN_ROOT:-}" || "${ECODA_RUN_ROOT}" == "${run_root}" ]] || return 1
+  [[ -z "${ECODA_RUN_ID:-}" || "${ECODA_RUN_ID}" == "${run_id}" ]] || return 1
+  [[ "${ECODA_RUNS_ROOT:-}" = /* &&
+     "${run_root}" == "${ECODA_RUNS_ROOT%/}/${run_id}" ]] || return 1
+  case "${manifest}" in
+    "${run_root}"/*) ;;
+    *) return 1 ;;
+  esac
+  case "${status_dir}" in
+    "${run_root}"/*) ;;
+    *) return 1 ;;
+  esac
+  source_root="${ECODA_SOURCE_ROOT:-}"
+  source_manifest="${ECODA_SOURCE_MANIFEST:-}"
+  source_required="${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}"
+  host_env_prefix="${ECODA_HOST_ENV_PREFIX:-}"
+  runtime_image="${ECODA_RUNTIME_IMAGE:-}"
+  runtime_manifest="${ECODA_RUNTIME_MANIFEST:-}"
+  runtime_run_id="${ECODA_RUN_ID:-${run_id}}"
+  scratch_root="${ECODA_SCRATCH_ROOT:-${HPC_SCRATCH_DIR:-}}"
+  logs_root="${ECODA_LOGS_DIR:-${logs_dir}}"
+  aux_root="${ECODA_AUX_ROOT:-${source_root%/}/aux}"
+  [[ "${source_required}" == "1" ]] || return 1
+  [[ "${source_root}" = /* && "${source_manifest}" = /* &&
+     "${host_env_prefix}" = /* && "${runtime_image}" = /* &&
+     "${runtime_manifest}" = /* && "${scratch_root}" = /* &&
+     "${logs_root}" = /* && "${aux_root}" = /* ]] || return 1
+  for value in "${source_root}" "${source_manifest}" "${host_env_prefix}" \
+      "${runtime_image}" "${runtime_manifest}" "${run_root}" "${scratch_root}" \
+      "${logs_root}" "${aux_root}"; do
+    case "${value}" in
+      *[,]*|*$'\n'*|*$'\r'*|*$'\t'*) return 1 ;;
+    esac
+  done
+  case "${runtime_export}" in
+    *$'\n'*|*$'\r'*|*$'\t'*) return 1 ;;
+  esac
   count="$(wc -l < "${manifest}" | tr -d '[:space:]')"
   [[ "${count}" =~ ^[0-9]+$ && ${count} -gt 0 ]] || return 1
   mkdir -p "${status_dir}" "${logs_dir}" || return 1
+  declare -F ecoda_validate_run_owned_path >/dev/null 2>&1 || return 1
+  ecoda_validate_run_owned_path "${manifest}" "${run_root}" || return 1
+  ecoda_validate_run_owned_path "${status_dir}" "${run_root}" || return 1
 
+  export ECODA_RUN_ROOT="${run_root}" ECODA_RUN_ID="${run_id}"
+  export ECODA_SOURCE_ROOT="${source_root}"
+  export ECODA_SOURCE_MANIFEST="${source_manifest}"
+  export ECODA_SOURCE_SNAPSHOT_REQUIRED="${source_required}"
+  export ECODA_HOST_ENV_PREFIX="${host_env_prefix}"
+  export ECODA_RUNTIME_IMAGE="${runtime_image}"
+  export HPC_SCRATCH_DIR="${scratch_root}"
+  export ECODA_SCRATCH_ROOT="${scratch_root}"
+  export ECODA_LOGS_DIR="${logs_root}"
+  export ECODA_AUX_ROOT="${aux_root}"
+  declare -F ecoda_runtime_validate_bound_run >/dev/null 2>&1 || return 1
+  ecoda_runtime_validate_bound_run >/dev/null 2>&1 || return 1
+  export_values="ALL,H5AD_PREFLIGHT_RUN_ID=${run_id},H5AD_PREFLIGHT_MANIFEST=${manifest},H5AD_PREFLIGHT_STATUS_DIR=${status_dir},H5AD_PREFLIGHT_RUN_ROOT=${run_root},H5AD_PREFLIGHT_MODE=${mode},ECODA_RUN_ROOT=${run_root},ECODA_RUN_ID=${run_id},ECODA_SOURCE_ROOT=${source_root},ECODA_SOURCE_MANIFEST=${source_manifest},ECODA_SOURCE_SNAPSHOT_REQUIRED=${source_required},ECODA_HOST_ENV_PREFIX=${host_env_prefix},ECODA_RUNTIME_IMAGE=${runtime_image},ECODA_RUNTIME_MANIFEST=${runtime_manifest},HPC_SCRATCH_DIR=${scratch_root},ECODA_SCRATCH_ROOT=${scratch_root},ECODA_LOGS_DIR=${logs_root},ECODA_AUX_ROOT=${aux_root}"
+  worker_source_path="${worker_script}"
+  worker_script="$(ecoda_require_source_script_path "${worker_source_path}" "${source_root}")" ||
+    return 1
   if msg="$(sbatch --parsable --wait --array="1-${count}%${throttle}" \
       --partition="${partition}" --ntasks=1 --cpus-per-task=1 --mem="${memory}" \
       --time="${WATCHDOG_TIME_LIMIT:-12:00:00}" \
       --output="${logs_dir}/h5ad_preflight_${label}_%A_%a.log" \
       --error="${logs_dir}/h5ad_preflight_${label}_%A_%a.err" \
       --mail-user="${USER_EMAIL}" \
-      --export="ALL,H5AD_PREFLIGHT_RUN_ID=${run_id},H5AD_PREFLIGHT_MANIFEST=${manifest},H5AD_PREFLIGHT_STATUS_DIR=${status_dir},H5AD_PREFLIGHT_RUN_ROOT=${run_root},H5AD_PREFLIGHT_MODE=${mode},${runtime_export}" \
+      --export="ALL,${runtime_export},${export_values#ALL,}" \
       "${worker_script}")"; then
     rc=0
   else

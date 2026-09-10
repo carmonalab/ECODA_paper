@@ -36,8 +36,8 @@ WORKER_TIME_LIMIT="${METHOD_TIME_LIMIT:-${BENCHMARK_CPU_TIME_LIMIT}}"
 [[ -n "${WORKER_TIME_LIMIT}" && "${WORKER_TIME_LIMIT}" != *$'\n'* && "${WORKER_TIME_LIMIT}" != *' '* ]] ||
   { echo "ERROR: matrix worker time limit is invalid." >&2; exit 1; }
 [[ -d "${RUN_ROOT}" ]] || { echo "ERROR: matrix run root is missing: ${RUN_ROOT}" >&2; exit 1; }
-ecoda_validate_run_owned_path "${ROOT_MANIFEST}" "${RUN_ROOT}" ||
-  { echo "ERROR: matrix manifest is outside the run root." >&2; exit 1; }
+export ECODA_RUN_ROOT="${RUN_ROOT}"
+export ECODA_RUN_ID="${ECODA_RUN_ID:-${RUN_ROOT##*/}}"
 MATRIX_MANIFEST_COLUMNS="$(
   awk -F '\t' '
     NF == 3 { saw_three = 1 }
@@ -86,8 +86,40 @@ status_write() {
 fail() { status_write FAIL "$1"; exit 1; }
 [[ -n "${RUNTIME_EXPORT}" ]] || fail "matrix watchdog runtime export is missing"
 export ECODA_RUNTIME_PROFILE="${ECODA_RUNTIME_PROFILE:-stage5}"
-ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE}" ||
-  fail "matrix watchdog immutable runtime validation failed"
+if [[ -n "${RUN_ROOT:-}" ]]; then
+  ecoda_runtime_validate_bound_run ||
+    fail "matrix watchdog bound runtime validation failed"
+else
+  ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE:-host}" ||
+    fail "matrix watchdog immutable runtime validation failed"
+fi
+
+matrix_validate_output_ownership() {
+  local manifest="$1" ownership_manifest="${1}" ownership_tmp="" rc
+  [[ -n "${RUN_ROOT:-}" ]] || return 0
+  if awk -F '\t' '
+      NF != 3 { saw_extended=1 }
+      END { exit(saw_extended ? 0 : 1) }
+    ' "${manifest}"; then
+    ownership_tmp="${manifest}.ownership.$$"
+    awk -F '\t' 'NF >= 3 { print $1 "\t" $2 "\t" $3 }' \
+      "${manifest}" > "${ownership_tmp}" || return 1
+    ownership_manifest="${ownership_tmp}"
+  fi
+  ecoda_validate_output_ownership stage5 "${ownership_manifest}" "${ECODA_RUN_ID}"
+  rc=$?
+  [[ -n "${ownership_tmp}" ]] && rm -f "${ownership_tmp}"
+  return "${rc}"
+}
+
+matrix_require_source_script() {
+  local candidate="$1"
+  if [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]]; then
+    ecoda_require_source_script_path "${candidate}" "${ECODA_SOURCE_ROOT}"
+  else
+    [[ -f "${candidate}" && -r "${candidate}" && ! -L "${candidate}" ]]
+  fi
+}
 validated_runtime_export="$(ecoda_runtime_export_csv \
   "${ECODA_RUNTIME_PROFILE}" "${ECODA_APPTAINER_NV:-0}")" ||
   fail "matrix watchdog runtime export construction failed"
@@ -135,7 +167,7 @@ while :; do
     fail "matrix retry manifest escaped the run root"
   ecoda_validate_manifest "${RETRY_MANIFEST}" "${MATRIX_MANIFEST_COLUMNS}" || fail "matrix retry manifest is invalid"
   retry_count="$(wc -l < "${RETRY_MANIFEST}" | tr -d '[:space:]')"
-  retry_export="ALL,MATRIX_RETRY_MANIFEST=${RETRY_MANIFEST},ANALYSIS_MANIFEST=${RETRY_MANIFEST},MATRIX_RETRY=1,JOB_LOG_PREFIX=${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX}"
+  retry_export="ALL,MATRIX_RETRY_MANIFEST=${RETRY_MANIFEST},ANALYSIS_MANIFEST=${RETRY_MANIFEST},MATRIX_RETRY=1,JOB_LOG_PREFIX=${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX},ECODA_RUN_ROOT=${RUN_ROOT},ECODA_RUN_ID=${ECODA_RUN_ID},ECODA_SELECTION_MANIFEST=${ROOT_MANIFEST}"
   if [[ -n "${ANALYSIS_PASS:-}" ]]; then
     unset BENCHMARK_MANIFEST
     retry_export="${retry_export},ANALYSIS_PASS=${ANALYSIS_PASS}"
@@ -143,6 +175,14 @@ while :; do
     retry_export="${retry_export},BENCHMARK_MANIFEST=${RETRY_MANIFEST}"
   fi
   retry_export="${retry_export},${RUNTIME_EXPORT}"
+  if [[ -n "${RUN_ROOT:-}" ]]; then
+    ecoda_runtime_validate_bound_run ||
+      fail "matrix retry bound runtime validation failed"
+  fi
+  matrix_validate_output_ownership "${RETRY_MANIFEST}" ||
+    fail "matrix retry output ownership validation failed"
+  matrix_require_source_script "${WORKER_SCRIPT}" ||
+    fail "matrix retry worker script is outside the immutable source root"
   set +e
   retry_msg="$(sbatch --parsable --array="1-${retry_count}%${THROTTLE}" --partition="${PARTITION}" "${WORKER_FLAGS[@]}" --time="${WORKER_TIME_LIMIT}" --mem="${NEXT_MEMORY}" \
     --output="${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX}_%A_%a.log" --error="${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX}_%A_%a.err" \

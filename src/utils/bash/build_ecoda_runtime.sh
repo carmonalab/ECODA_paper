@@ -13,6 +13,8 @@ PIXITAINER_VERSION="0.8.3"
 BASE_IMAGE="rockylinux:9"
 LAYOUT=""
 OUTPUT=""
+RUNTIME_ID=""
+RUNTIME_ID_SET=0
 FORCE=0
 
 _builder_die() {
@@ -20,9 +22,46 @@ _builder_die() {
   exit 1
 }
 
+# The configured scratch root may intentionally be a site-provided symlink
+# (for example, $HOME/scratch).  Only runtime-owned components below it may
+# influence publication, so reject symlinks in that appended ancestry.
+_builder_no_symlink_components_below() {
+  local root="${1:-}"
+  local path="${2:-}"
+  local suffix component prefix
+  local old_ifs="${IFS}"
+  local parts=()
+  [[ "${root}" = /* && "${path}" = /* ]] || return 1
+  case "${root}" in
+    /)
+      suffix="${path#/}"
+      prefix="/"
+      ;;
+    *)
+      root="${root%/}"
+      case "${path}" in
+        "${root}"/*)
+          suffix="${path#${root}/}"
+          prefix="${root}"
+          ;;
+        *) return 1 ;;
+      esac
+      ;;
+  esac
+  IFS='/' read -r -a parts <<< "${suffix}"
+  IFS="${old_ifs}"
+  for component in "${parts[@]}"; do
+    [[ -n "${component}" && "${component}" != "." ]] || continue
+    [[ "${component}" != ".." ]] || return 1
+    prefix="${prefix%/}/${component}"
+    [[ ! -L "${prefix}" ]] || return 1
+  done
+  return 0
+}
+
 _builder_usage() {
   cat >&2 <<'USAGE'
-Usage: build_ecoda_runtime.sh --layout relocated|path-preserving --output ABSOLUTE_SIF [--force]
+Usage: build_ecoda_runtime.sh --layout relocated|path-preserving --output ABSOLUTE_SIF [--runtime-id RUNTIME_ID] [--force]
 USAGE
   exit 2
 }
@@ -37,6 +76,12 @@ while [[ $# -gt 0 ]]; do
     --output)
       [[ $# -ge 2 ]] || _builder_usage
       OUTPUT="$2"
+      shift 2
+      ;;
+    --runtime-id)
+      [[ $# -ge 2 ]] || _builder_usage
+      RUNTIME_ID="$2"
+      RUNTIME_ID_SET=1
       shift 2
       ;;
     --force)
@@ -56,10 +101,38 @@ case "${LAYOUT}" in
   relocated|path-preserving) ;;
   *) _builder_die "--layout must be relocated or path-preserving" ;;
 esac
+
+RUNTIME_FORMAT=1
+RUNTIME_ROOT=""
+RUNTIME_DIR=""
+if [[ "${RUNTIME_ID_SET}" == 1 ]]; then
+  RUNTIME_FORMAT=2
+  [[ -n "${RUNTIME_ID}" ]] || _builder_die "--runtime-id requires a nonempty value"
+  [[ "${RUNTIME_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
+    _builder_die "--runtime-id must be a single safe path component"
+  [[ -n "${HPC_SCRATCH_DIR:-}" && "${HPC_SCRATCH_DIR}" = /* ]] || \
+    _builder_die "format-2 runtime builds require an absolute HPC_SCRATCH_DIR"
+  RUNTIME_ROOT="${HPC_SCRATCH_DIR%/}/_ecoda_runtime"
+  RUNTIME_DIR="${RUNTIME_ROOT}/${RUNTIME_ID}"
+  if [[ -z "${OUTPUT}" ]]; then
+    OUTPUT="${RUNTIME_DIR}/ecoda-py-cuda13.sif"
+  fi
+  _builder_no_symlink_components_below "${HPC_SCRATCH_DIR}" "${RUNTIME_DIR}" || \
+    _builder_die "format-2 runtime path contains a symlinked component: ${RUNTIME_DIR}"
+  [[ "$(dirname "${OUTPUT}")" == "${RUNTIME_DIR}" ]] || \
+    _builder_die "format-2 output must be directly under ${RUNTIME_DIR}"
+  [[ ! -e "${RUNTIME_DIR}" && ! -L "${RUNTIME_DIR}" ]] || \
+    _builder_die "format-2 runtime output already exists; choose a new --runtime-id: ${RUNTIME_DIR}"
+else
+  [[ -n "${OUTPUT}" ]] || _builder_die "--output is required for a legacy FORMAT=1 runtime build"
+fi
+
 [[ "${OUTPUT}" = /* ]] || _builder_die "--output must be an absolute SIF path"
 [[ "${OUTPUT}" != */ ]] || _builder_die "--output must name a SIF file"
 [[ "${OUTPUT}" == *.sif ]] || _builder_die "--output must use the .sif suffix"
-[[ "${FORCE}" == 1 || ! -e "${OUTPUT}" ]] || _builder_die "output already exists; use --force to replace it: ${OUTPUT}"
+if [[ "${RUNTIME_FORMAT}" == 1 ]]; then
+  [[ "${FORCE}" == 1 || ! -e "${OUTPUT}" ]] || _builder_die "output already exists; use --force to replace it: ${OUTPUT}"
+fi
 
 if [[ "$(uname -s)" != "Linux" ]]; then
   _builder_die "runtime image construction is supported only on a Linux Bamboo compute allocation"
@@ -81,6 +154,8 @@ case "${host_short}" in
   *login*|*Login*|*LOGIN*) _builder_die "runtime image construction must run on a compute node, not ${host_short}" ;;
 esac
 
+[[ -f "${PROJECT_ROOT}/pixi.toml" && -r "${PROJECT_ROOT}/pixi.toml" ]] || \
+  _builder_die "pixi.toml is missing or unreadable: ${PROJECT_ROOT}/pixi.toml"
 [[ -f "${PROJECT_ROOT}/pixi.lock" && -r "${PROJECT_ROOT}/pixi.lock" ]] || \
   _builder_die "pixi.lock is missing or unreadable: ${PROJECT_ROOT}/pixi.lock"
 [[ -d "${PROJECT_ROOT}/.pixi/envs/py-cuda13" ]] || \
@@ -108,6 +183,7 @@ APPTAINER_VERSION="$(${APPTAINER_BIN} --version 2>/dev/null | awk 'NF {print $NF
 [[ -n "${APPTAINER_VERSION}" ]] || _builder_die "could not determine the Apptainer version"
 
 realized_env="$(_ecoda_runtime_realpath_existing "${PROJECT_ROOT}/.pixi/envs/py-cuda13")" || exit 1
+toml_sha="$(_ecoda_runtime_sha256 "${PROJECT_ROOT}/pixi.toml")" || exit 1
 lock_sha="$(_ecoda_runtime_sha256 "${PROJECT_ROOT}/pixi.lock")" || exit 1
 git_revision="$(git -C "${PROJECT_ROOT}" rev-parse HEAD 2>/dev/null)" || \
   _builder_die "could not determine the source Git revision"
@@ -126,9 +202,30 @@ esac
 
 output_parent="$(dirname "${OUTPUT}")"
 mkdir -p "${output_parent}"
+if [[ "${RUNTIME_FORMAT}" == 2 ]]; then
+  _builder_no_symlink_components_below "${HPC_SCRATCH_DIR}" "${output_parent}" || \
+    _builder_die "format-2 output parent contains a symlinked component: ${output_parent}"
+fi
 _ecoda_runtime_realpath_existing "${output_parent}" >/dev/null || exit 1
-# Preserve the caller's absolute spelling (notably $HOME/scratch symlinks) so
-# the manifest path is identical to slurm_config.sh's runtime default.
+if [[ "${RUNTIME_FORMAT}" == 2 ]]; then
+  canonical_runtime_root="$(_ecoda_runtime_realpath_existing "${RUNTIME_ROOT}")" || exit 1
+  canonical_runtime_dir="$(_ecoda_runtime_realpath_existing "${RUNTIME_DIR}")" || exit 1
+  canonical_output_parent="$(_ecoda_runtime_realpath_existing "${output_parent}")" || exit 1
+  output_name="$(basename "${OUTPUT}")"
+  canonical_output="${canonical_output_parent}/${output_name}"
+  [[ "${canonical_runtime_dir}" == "${canonical_runtime_root}/${RUNTIME_ID}" ]] || \
+    _builder_die "format-2 runtime directory escaped the configured runtime root: ${RUNTIME_DIR}"
+  [[ "${canonical_output_parent}" == "${canonical_runtime_dir}" ]] || \
+    _builder_die "format-2 output escaped the configured runtime root: ${OUTPUT}"
+  case "${canonical_output}" in
+    "${canonical_runtime_root}/${RUNTIME_ID}/"*) ;;
+    *) _builder_die "format-2 canonical output escaped the configured runtime root: ${canonical_output}" ;;
+  esac
+  output_parent="${canonical_output_parent}"
+  OUTPUT="${canonical_output}"
+fi
+# Preserve the caller's absolute spelling for legacy FORMAT=1 so the manifest
+# path remains identical to slurm_config.sh's runtime default.
 temporary_output="${OUTPUT}.partial.$$"
 dryrun_def="${OUTPUT}.dryrun.def"
 dryrun_stderr="${OUTPUT}.dryrun.stderr"
@@ -195,32 +292,53 @@ if ! "${PIXI_BIN}" "${build_args[@]}" > "${build_log}" 2>&1; then
   _builder_die "Pixitainer/Apptainer image build failed; inspect ${build_log}"
 fi
 [[ -s "${temporary_output}" ]] || _builder_die "image build produced an empty SIF: ${temporary_output}"
-"${APPTAINER_BIN}" inspect "${temporary_output}" >/dev/null 2>&1 || \
-  _builder_die "apptainer inspect failed for the built SIF"
-
+new_toml_sha="$(_ecoda_runtime_sha256 "${PROJECT_ROOT}/pixi.toml")" || exit 1
 new_lock_sha="$(_ecoda_runtime_sha256 "${PROJECT_ROOT}/pixi.lock")" || exit 1
+[[ "${new_toml_sha}" == "${toml_sha}" ]] || _builder_die "pixi.toml changed during image construction"
 [[ "${new_lock_sha}" == "${lock_sha}" ]] || _builder_die "pixi.lock changed during image construction"
 
 image_sha="$(_ecoda_runtime_sha256 "${temporary_output}")" || exit 1
 umask 077
-{
-  printf '%s\n' \
-    'FORMAT=1' \
-    "IMAGE_PATH=${OUTPUT}" \
-    "IMAGE_SHA256=${image_sha}" \
-    'RUNTIME_ENV=py-cuda13' \
-    "RUNTIME_LAYOUT=${LAYOUT}" \
-    "CONTAINER_ENV_PREFIX=${container_prefix}" \
-    "BASE_IMAGE=${BASE_IMAGE}" \
-    "PIXITAINER_VERSION=${PIXITAINER_VERSION}" \
-    "PIXI_VERSION=${PIXI_VERSION}" \
-    "APPTAINER_VERSION=${APPTAINER_VERSION}" \
-    "GIT_REVISION=${git_revision}" \
-    "PIXI_LOCK_SHA256=${lock_sha}"
-  if [[ "${LAYOUT}" == "path-preserving" ]]; then
-    printf 'CONTAINER_PROJECT_ROOT=%s\n' "${PROJECT_ROOT}"
-  fi
-} > "${temporary_manifest}"
+if [[ "${RUNTIME_FORMAT}" == 2 ]]; then
+  {
+    printf '%s\n' \
+      'FORMAT=2' \
+      "IMAGE_PATH=${OUTPUT}" \
+      "IMAGE_SHA256=${image_sha}" \
+      'RUNTIME_ENV=py-cuda13' \
+      "RUNTIME_LAYOUT=${LAYOUT}" \
+      "CONTAINER_ENV_PREFIX=${container_prefix}" \
+      "BASE_IMAGE=${BASE_IMAGE}" \
+      "PIXITAINER_VERSION=${PIXITAINER_VERSION}" \
+      "PIXI_VERSION=${PIXI_VERSION}" \
+      "APPTAINER_VERSION=${APPTAINER_VERSION}" \
+      "IMAGE_BUILD_GIT_REVISION=${git_revision}" \
+      "IMAGE_PIXI_TOML_SHA256=${toml_sha}" \
+      "IMAGE_PIXI_LOCK_SHA256=${lock_sha}"
+    if [[ "${LAYOUT}" == "path-preserving" ]]; then
+      printf 'CONTAINER_PROJECT_ROOT=%s\n' "${PROJECT_ROOT}"
+    fi
+  } > "${temporary_manifest}"
+else
+  {
+    printf '%s\n' \
+      'FORMAT=1' \
+      "IMAGE_PATH=${OUTPUT}" \
+      "IMAGE_SHA256=${image_sha}" \
+      'RUNTIME_ENV=py-cuda13' \
+      "RUNTIME_LAYOUT=${LAYOUT}" \
+      "CONTAINER_ENV_PREFIX=${container_prefix}" \
+      "BASE_IMAGE=${BASE_IMAGE}" \
+      "PIXITAINER_VERSION=${PIXITAINER_VERSION}" \
+      "PIXI_VERSION=${PIXI_VERSION}" \
+      "APPTAINER_VERSION=${APPTAINER_VERSION}" \
+      "GIT_REVISION=${git_revision}" \
+      "PIXI_LOCK_SHA256=${lock_sha}"
+    if [[ "${LAYOUT}" == "path-preserving" ]]; then
+      printf 'CONTAINER_PROJECT_ROOT=%s\n' "${PROJECT_ROOT}"
+    fi
+  } > "${temporary_manifest}"
+fi
 
 mv -f "${temporary_output}" "${OUTPUT}"
 mv -f "${temporary_manifest}" "${manifest}"
@@ -231,9 +349,21 @@ export ECODA_RUNTIME_IMAGE="${OUTPUT}"
 export ECODA_RUNTIME_MANIFEST="${manifest}"
 export ECODA_RUNTIME_PROFILE=default
 export ECODA_APPTAINER_NV=0
+if [[ "${RUNTIME_FORMAT}" == 2 ]]; then
+  export ECODA_RUNTIME_BUILD_VALIDATION=1
+fi
 if ! ecoda_runtime_validate_submission apptainer; then
   rm -f "${manifest}"
   _builder_die "published image failed its immutable runtime contract validation"
+fi
+unset ECODA_RUNTIME_BUILD_VALIDATION
+
+if [[ "${RUNTIME_FORMAT}" == 2 ]]; then
+  chmod a-w "${OUTPUT}" "${manifest}" "${output_parent}" || \
+    _builder_die "failed to publish format-2 runtime read-only"
+  _ecoda_runtime_require_nonwritable "${OUTPUT}" || exit 1
+  _ecoda_runtime_require_nonwritable "${manifest}" || exit 1
+  _ecoda_runtime_require_nonwritable "${output_parent}" || exit 1
 fi
 
 [[ -f "${kept_def}" ]] || _builder_die "Pixitainer --keep-def did not retain the generated definition: ${kept_def}"
