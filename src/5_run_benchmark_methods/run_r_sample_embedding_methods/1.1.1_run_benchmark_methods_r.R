@@ -6,22 +6,11 @@
 #   --config_path --ds_name --view benchmark_analysis --method {gloscope,mofa,
 #   pseudobulk,scitd,composition} --input_dir --results_dir --pseudobulk_dir
 #   --gloscope_cache_dir --log_file [--force]
-# Counts-dependent methods load the raw counts layer through reticulate.
-# GloScope and composition instead use the h5py/minimal-AnnData loader with
-# only required obs columns and precomputed embeddings, so anndata's backed
-# open never materializes layers["counts"] for those methods. The scripts set
-# seurat@misc$cell_type_low_res / label_col from datasets.json, dispatch on
-# method to the T2 driver (benchmark_pipeline.R), write the per-combo bundle
-# files (<ds>_<combo>.rds; combo names are method-prefixed) + the method-level
-# RDS (<ds>_<method>.rds, a named list of result bundles) + per-combo exec-log
-# rows. An optional --combo hvg{n}_pcadims{d} argument selects one ordinary
-# GloScope combo; that shard writes only its per-combo bundle/cache and never
-# reads or writes the shared method-level RDS. With no --combo, skip-if-exists
-# behavior remains unchanged.
-#
-# Memory: MOFA and batch-mode pseudobulk consume sample metadata and
-# precomputed pseudobulks. Missing variants use bounded H5AD CSR aggregation
-# into a sample-level object; ordinary pseudobulk CT/scITD retain cell counts.
+# Canonical ordinary and batch pseudobulk paths use the raw H5AD CSR Sample
+# aggregate plus the direct matrix DESeq2 API.  They never materialize a
+# sample-level Seurat object.  Count-backed Seurat remains reserved for
+# genuine cell-level methods such as scITD; CT pseudobulk calls
+# process_pseudobulk_ct_h5ad_fig() directly.
 # ==============================================================================
 
 project_root <- Sys.getenv("PROJECT_ROOT")
@@ -348,6 +337,19 @@ h5ad_path <- get_h5ad_path(config, ds, args$view, args$input_dir)
 if (!file.exists(h5ad_path)) {
   stop("Input h5ad not found: ", h5ad_path)
 }
+# Source identity is run-owned when available; the CT store manifest records
+# this identity alongside its H5AD path and scheduler owner.
+source_identity <- Sys.getenv("ECODA_SOURCE_IDENTITY", unset = "")
+if (!nzchar(source_identity)) {
+  run_root_for_identity <- Sys.getenv("ECODA_RUN_ROOT", unset = "")
+  if (nzchar(run_root_for_identity)) {
+    candidate_identity <- file.path(
+      run_root_for_identity, "manifests", "source_identity.json"
+    )
+    if (file.exists(candidate_identity)) source_identity <- candidate_identity
+  }
+}
+if (!nzchar(source_identity)) source_identity <- NULL
 dir.create(args$results_dir, showWarnings = FALSE, recursive = TRUE)
 
 method_rds_stem <- if (is.null(analysis_pass)) ds else cache_stem
@@ -358,17 +360,64 @@ method_rds <- file.path(
 if (!combo_supplied && ecoda_local_cache_valid(method_rds) && !force) {
   message("Method results already exist and passed checksum/record validation: ", method_rds)
   cached <- ecoda_local_read_rds(method_rds, "Method results")
+  if (!is.list(cached)) {
+    stop("Method results artifact is not a list: ", method_rds)
+  }
+  shared_replayed <- character()
+  shared_rows <- list()
   for (nm in names(cached)) {
-    if (!is.null(cached[[nm]]$exec_time)) {
-      log_exec_row(ds, nm, cached[[nm]]$exec_time, args$log_file,
-                   mem_gb = cached[[nm]]$mem_GB)
+    value <- cached[[nm]]
+    validate_hpc_timing_bundle(
+      value, label = paste0("Method result ", ds, "/", method, "/", nm)
+    )
+    if ("timing_schema" %in% names(value)) {
+      timing_id <- as.character(value[["timing_id"]])
+      shared_method <- if ("shared_timing_method" %in% names(value)) {
+        as.character(value[["shared_timing_method"]])
+      } else if (grepl("^Pseudobulk_CT_", nm)) {
+        timing_parts <- strsplit(timing_id, ":", fixed = TRUE)[[1L]]
+        safe_ct <- if (
+          length(timing_parts) == 4L &&
+          grepl("_ct_", timing_parts[[2L]], fixed = TRUE)
+        ) {
+          sub("^.*_ct_", "", timing_parts[[2L]])
+        } else {
+          sub("^Pseudobulk_CT_([^_]+)_.*$", "\\1", nm)
+        }
+        paste0("prepare_pseudobulk_ct_shared_", safe_ct)
+      } else {
+        "prepare_pseudobulk_shared"
+      }
+      shared_key <- paste(shared_method, timing_id, sep = "\r")
+      if (!shared_key %in% shared_replayed) {
+        shared_rows[[shared_key]] <- list(
+          method = shared_method,
+          time = as.numeric(value[["shared_time_secs"]]),
+          mem = value[["shared_mem_GB"]]
+        )
+        shared_replayed <- c(shared_replayed, shared_key)
+      }
     }
+    if (!is.null(value$exec_time)) {
+      log_exec_row(ds, nm, value$exec_time, args$log_file,
+                   mem_gb = value$mem_GB)
+    }
+  }
+  for (shared in shared_rows) {
+    log_exec_row(
+      ds, shared[["method"]], shared[["time"]], args$log_file,
+      mem_gb = shared[["mem"]]
+    )
   }
   quit(save = "no", status = 0)
 }
 
-counts_free_method <- method %in% c("gloscope", "composition", "mofa") ||
-  (method == "pseudobulk" && !is.null(analysis_pass))
+# GloScope and composition use the embedding/obs-only loader.  MOFA and
+# pseudobulk use a stricter metadata/HVG-only reader so complete cache paths
+# never open or read count values.  scITD remains the sole canonical path
+# below that materializes a count-backed Seurat object.
+counts_free_method <- method %in% c("gloscope", "composition")
+pseudobulk_metadata_method <- method %in% c("mofa", "pseudobulk")
 embedding_key <- if (args$view == "batch_effect_corrected") {
   "X_pca_harmony_batch_effect_corrected_hvg2000"
 } else if (args$view == "batch_effect_uncorrected") {
@@ -382,8 +431,34 @@ batch_col <- if (!is.null(analysis_pass) && analysis_pass == "corrected") {
   NULL
 }
 sample_col <- "Sample"
+required_hvg <- if (identical(args$view, "benchmark_analysis")) 3000L else 2000L
 
-if (counts_free_method) {
+adata <- NULL
+hvg_rank_genes <- NULL
+embedding_matrices <- NULL
+embedding_sample_ids <- NULL
+if (pseudobulk_metadata_method) {
+  ct_columns <- if (method == "pseudobulk" && is.null(analysis_pass)) {
+    c(entry$cell_type_low_res, entry$cell_type_high_res)
+  } else {
+    character()
+  }
+  metadata_info <- load_h5ad_pseudobulk_metadata(
+    h5ad_path,
+    sample_col = sample_col,
+    metadata_columns = unique(c(entry$label_col, batch_col, ct_columns)),
+    n_hvg = required_hvg,
+    required_nonmissing_columns = unique(
+      c(sample_col, entry$label_col, batch_col)
+    )
+  )
+  obs <- metadata_info$obs
+  hvg_rank_genes <- metadata_info$hvg_rank_genes
+} else if (method == "gloscope" || method == "composition") {
+  # Both methods are counts-free, but GloScope has a deliberately minimal
+  # metadata contract: it needs only Sample/label and its stored embeddings.
+  # In particular, do not request the CT annotations used by composition and
+  # never let GloScope fall through to the count-backed Seurat branch below.
   embedding_keys <- if (method == "gloscope" && is.null(analysis_pass)) {
     c(
       "X_pca_benchmark_analysis_hvg1000",
@@ -402,11 +477,11 @@ if (counts_free_method) {
   } else {
     character()
   }
-  obs_columns <- if (method %in% c("gloscope", "mofa", "pseudobulk")) {
-    c("Sample", entry$label_col, batch_col)
+  obs_columns <- if (method == "gloscope") {
+    c(sample_col, entry$label_col)
   } else {
     c(
-      "Sample",
+      sample_col,
       entry$label_col,
       entry$cell_type_low_res,
       entry$cell_type_high_res,
@@ -422,14 +497,24 @@ if (counts_free_method) {
     view = args$view,
     method = method
   )
-  if (method %in% c("mofa", "pseudobulk")) {
-    obs <- load_h5ad_sample_metadata(
-      h5ad_path,
-      sample_col = sample_col,
-      metadata_columns = c(entry$label_col, batch_col)
-    )
-  } else {
-    obs <- py_to_r(adata$obs)
+  obs <- py_to_r(adata$obs)
+  hvg_rank_genes <- get_hvg_rank_genes(adata)
+  if (method == "gloscope") {
+    metadata <- collapse_sample_metadata(obs, sample_col = sample_col)
+    embedding_names <- if (is.null(analysis_pass)) {
+      c(
+        hvg1000 = "X_pca_benchmark_analysis_hvg1000",
+        hvg2000 = "X_pca_benchmark_analysis_hvg2000",
+        hvg3000 = "X_pca_benchmark_analysis_hvg3000"
+      )
+    } else {
+      c(hvg2000 = embedding_key)
+    }
+    embedding_matrices <- lapply(unname(embedding_names), function(key) {
+      py_to_r(adata$obsm[[key]])
+    })
+    names(embedding_matrices) <- names(embedding_names)
+    embedding_sample_ids <- as.character(obs[[sample_col]])
   }
 } else {
   ad <- import("anndata", convert = FALSE)
@@ -441,6 +526,7 @@ if (counts_free_method) {
     view = args$view,
     method = method
   )
+  hvg_rank_genes <- get_hvg_rank_genes(adata)
 }
 
 if (!sample_col %in% colnames(obs)) {
@@ -448,7 +534,6 @@ if (!sample_col %in% colnames(obs)) {
 }
 blind_mode <- is.null(analysis_pass) || analysis_pass == "uncorrected"
 correct_batch_mode <- identical(analysis_pass, "corrected")
-hvg_rank_genes <- get_hvg_rank_genes(adata)
 if (correct_batch_mode) {
   if (is.null(batch_col)) {
     stop("corrected batch-effect view requires a confirmed columns.batch")
@@ -463,60 +548,36 @@ seurat <- NULL
 metadata <- NULL
 labels <- NULL
 
-if (method == "mofa") {
-  # MOFA consumes only the precomputed pseudobulks. Missing variants are
-  # rebuilt through bounded H5AD CSR aggregation, never a full cell Seurat.
+if (method %in% c("mofa", "pseudobulk")) {
+  # Both methods consume direct matrix pseudobulks.  Cache validation occurs
+  # inside load_pb_variants before the H5AD raw counts pass; a complete cache
+  # set therefore performs no aggregation and creates no Seurat object.
   if (is.null(args$pseudobulk_dir) || identical(args$pseudobulk_dir, TRUE)) {
-    stop("Missing required --pseudobulk_dir argument for method mofa")
+    stop("Missing required --pseudobulk_dir argument for method ", method)
   }
   dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
-  if (length(pb_variants_missing(
-    args$pseudobulk_dir, ds, force, cache_stem = cache_stem
-  )) > 0) {
-    message("Building sample-level Seurat for on-the-fly pseudobulk variants...")
-    seurat <- load_h5ad_pseudobulk_seurat(
-      h5ad_path,
-      sample_col = sample_col,
-      batch_col = batch_col
-    )
+  requested_pb_variants <- if (method == "mofa" || is.null(analysis_pass)) {
+    PB_VARIANT_NAMES
+  } else {
+    "hvg2000"
   }
   pb_variants <- load_pb_variants(
-    seurat, sample_col, hvg_rank_genes,
-    pseudobulk_dir = args$pseudobulk_dir, ds = ds,
-    force = force, log_file = args$log_file, cache_stem = cache_stem,
-    batch_col = batch_col, blind = blind_mode,
+    seurat = NULL,
+    sample_col = sample_col,
+    hvg_rank_genes = hvg_rank_genes,
+    pseudobulk_dir = args$pseudobulk_dir,
+    ds = ds,
+    force = force,
+    log_file = args$log_file,
+    cache_stem = cache_stem,
+    batch_col = batch_col,
+    blind = blind_mode,
     correct_batch = correct_batch_mode,
-    variants = if (!is.null(analysis_pass)) "hvg2000" else PB_VARIANT_NAMES
-  )
-  # Sample names are already standardized in the preprocessed obs
-  # (1.1.1_preprocess.py): no standardize_sample_names() re-application here
-  # (it would diverge the labels from the obs names for h5ads that predate
-  # the python change, e.g. Adams).
-  metadata <- collapse_sample_metadata(obs, sample_col = sample_col)
-  labels <- as.factor(metadata[[entry$label_col]])
-  names(labels) <- metadata[[sample_col]]
-} else if (method == "pseudobulk" && !is.null(analysis_pass)) {
-  if (is.null(args$pseudobulk_dir) || identical(args$pseudobulk_dir, TRUE)) {
-    stop("Missing required --pseudobulk_dir argument for method pseudobulk")
-  }
-  dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
-  if (length(pb_variants_missing(
-    args$pseudobulk_dir, ds, force, cache_stem = cache_stem
-  )) > 0) {
-    message("Building sample-level Seurat for missing pseudobulk variants...")
-    seurat <- load_h5ad_pseudobulk_seurat(
-      h5ad_path,
-      sample_col = sample_col,
-      batch_col = batch_col
-    )
-  }
-  pb_variants <- load_pb_variants(
-    seurat, sample_col, hvg_rank_genes,
-    pseudobulk_dir = args$pseudobulk_dir, ds = ds,
-    force = force, log_file = args$log_file, cache_stem = cache_stem,
-    batch_col = batch_col, blind = blind_mode,
-    correct_batch = correct_batch_mode,
-    variants = "hvg2000"
+    variants = requested_pb_variants,
+    h5ad_path = h5ad_path,
+    view = args$view,
+    analysis_pass = analysis_pass,
+    run_id = ecoda_local_current_run_id()
   )
   metadata <- collapse_sample_metadata(obs, sample_col = sample_col)
   labels <- as.factor(metadata[[entry$label_col]])
@@ -565,20 +626,13 @@ if (method == "mofa") {
     variants = if (!is.null(analysis_pass)) "hvg2000" else PB_VARIANT_NAMES
   )
 } else {
+  # scITD is the genuine cell-level count consumer.  Keep its existing
+  # count-backed Seurat boundary; ordinary pseudobulk and CT never enter this
+  # branch.
   seurat <- load_benchmark_seurat(
     adata, obs, sample_col = sample_col,
-    fetch_embedding = if (method == "gloscope") {
-      if (!is.null(analysis_pass)) {
-        embedding_key
-      } else {
-        c("X_pca_benchmark_analysis_hvg1000",
-          "X_pca_benchmark_analysis_hvg2000",
-          "X_pca_benchmark_analysis_hvg3000")
-      }
-    } else {
-      NULL
-    },
-    counts_layer = if (method == "gloscope") NULL else "counts"
+    fetch_embedding = NULL,
+    counts_layer = "counts"
   )
   # Sample names are already standardized in the preprocessed obs
   # (1.1.1_preprocess.py): no standardize_sample_names() re-application
@@ -591,30 +645,8 @@ if (method == "mofa") {
   seurat@misc$label_col <- entry$label_col
   seurat@misc$cell_type_low_res <- entry$cell_type_low_res
   seurat@misc$cell_type_high_res <- entry$cell_type_high_res
-
   metadata <- get_metadata(seurat)
   labels <- get_labels(seurat, entry$label_col)
-
-  if (method == "pseudobulk") {
-    if (is.null(args$pseudobulk_dir) || identical(args$pseudobulk_dir, TRUE)) {
-      stop("Missing required --pseudobulk_dir argument for method pseudobulk")
-    }
-    dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
-    pb_variants <- load_pb_variants(
-      seurat, sample_col, hvg_rank_genes,
-      pseudobulk_dir = args$pseudobulk_dir, ds = ds,
-      force = force, log_file = args$log_file, cache_stem = cache_stem,
-      batch_col = batch_col, blind = blind_mode,
-      correct_batch = correct_batch_mode
-    )
-  }
-  if (method == "gloscope") {
-    if (is.null(args$gloscope_cache_dir) ||
-        identical(args$gloscope_cache_dir, TRUE)) {
-      stop("Missing required --gloscope_cache_dir argument for method gloscope")
-    }
-    dir.create(args$gloscope_cache_dir, showWarnings = FALSE, recursive = TRUE)
-  }
 }
 
 results <- switch(
@@ -632,20 +664,35 @@ results <- switch(
       sub("^X_", "", embedding_key)
     } else {
       NULL
-    }
+    },
+    embedding_matrices = embedding_matrices,
+    embedding_sample_ids = embedding_sample_ids
   ),
   mofa = run_mofa_hpc(
     metadata, labels, pb_variants,
-    results_dir = args$results_dir, ds = ds,
-    force = force, log_file = args$log_file
+    results_dir = args$results_dir,
+    ds = ds,
+    force = force,
+    log_file = args$log_file
   ),
   pseudobulk = run_pseudobulk_hpc(
-    seurat, labels, pb_variants,
+    seurat = NULL,
+    labels = labels,
+    pb_variants = pb_variants,
     sample_col = sample_col,
-    results_dir = args$results_dir, ds = ds,
-    force = force, log_file = args$log_file,
+    results_dir = args$results_dir,
+    ds = ds,
+    force = force,
+    log_file = args$log_file,
     batch_mode = !is.null(analysis_pass),
-    result_stem = cache_stem
+    result_stem = cache_stem,
+    h5ad_path = h5ad_path,
+    ct_col_low_res = entry$cell_type_low_res,
+    ct_col_high_res = entry$cell_type_high_res,
+    view = args$view,
+    analysis_pass = analysis_pass,
+    run_id = ecoda_local_current_run_id(),
+    source_identity = source_identity
   ),
   scitd = run_scitd_hpc(
     seurat, label_col = entry$label_col,
@@ -667,7 +714,9 @@ results <- switch(
     result_stem = cache_stem,
     batch_col = batch_col,
     corrected = correct_batch_mode,
-    not_suitable_for_auto_annotation = if (is.null(entry$not_suitable_for_auto_annotation)) {
+    not_suitable_for_auto_annotation = if (
+      is.null(entry$not_suitable_for_auto_annotation)
+    ) {
       character(0)
     } else {
       entry$not_suitable_for_auto_annotation

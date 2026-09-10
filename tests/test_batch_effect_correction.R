@@ -9,6 +9,7 @@ suppressPackageStartupMessages({
   library(dplyr)
 })
 source(file.path(root, "src/utils/seurat_utils.R"))
+source(file.path(root, "src/utils/pseudobulk.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_hpc_utils.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_methods_r.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_pipeline.R"))
@@ -138,31 +139,177 @@ missing_error <- tryCatch(
 )
 stopifnot(inherits(missing_error, "error"))
 
-# The pseudobulk driver forwards the two modes without exposing labels to the
-# DESeq2 normalizer.
-captured <- list()
-get_pb_deseq2 <- function(...) {
-  captured <<- list(...)
-  matrix(1, nrow = 2, ncol = 3, dimnames = list(c("g1", "g2"), paste0("s", 1:3)))
-}
+# The canonical pseudobulk driver uses one raw H5AD aggregate and forwards the
+# two batch modes to the direct DESeq2 fit without exposing biological labels.
+captured <- new.env(parent = emptyenv())
+fake_counts <- matrix(
+  c(1, 2, 3, 4, 5, 6),
+  nrow = 2L,
+  byrow = TRUE,
+  dimnames = list(c("g1", "g2"), paste0("s", 1:3))
+)
+fake_metadata <- data.frame(
+  Sample = paste0("s", 1:3),
+  tech = factor(c("A", "B", "A")),
+  row.names = paste0("s", 1:3),
+  stringsAsFactors = FALSE
+)
+prepare_pseudobulk_env <- environment(prepare_pseudobulks_hpc)
+old_h5ad_aggregate <- get(
+  "load_h5ad_sample_aggregate",
+  envir = prepare_pseudobulk_env,
+  inherits = TRUE
+)
+old_fit_pseudobulk <- get(
+  "fit_pseudobulk_deseq2",
+  envir = prepare_pseudobulk_env,
+  inherits = TRUE
+)
+old_select_pseudobulk <- get(
+  "select_pseudobulk_deseq2",
+  envir = prepare_pseudobulk_env,
+  inherits = TRUE
+)
+old_exec_time <- get("exec_time", envir = prepare_pseudobulk_env, inherits = TRUE)
+old_peak_rss <- get("peak_rss_gb", envir = prepare_pseudobulk_env, inherits = TRUE)
+assign(
+  "load_h5ad_sample_aggregate",
+  function(
+    h5ad_path,
+    sample_col = "Sample",
+    metadata_columns = character(),
+    chunk_size = 4096L,
+    max_value = .Machine$integer.max
+  ) {
+    captured$aggregate <- list(
+      path = h5ad_path,
+      sample_col = sample_col,
+      metadata_columns = metadata_columns,
+      chunk_size = chunk_size,
+      max_value = max_value
+    )
+    requested_columns <- unique(c(sample_col, metadata_columns))
+    if (any(!requested_columns %in% colnames(fake_metadata))) {
+      stop("fixture requested metadata column is unavailable")
+    }
+    returned_metadata <- fake_metadata[
+      , requested_columns,
+      drop = FALSE
+    ]
+    list(
+      counts = fake_counts,
+      sample_ids = colnames(fake_counts),
+      gene_names = rownames(fake_counts),
+      metadata = returned_metadata
+    )
+  },
+  envir = prepare_pseudobulk_env
+)
+assign(
+  "fit_pseudobulk_deseq2",
+  function(
+    counts,
+    metadata,
+    batch_col = NULL,
+    blind = TRUE,
+    correct_batch = FALSE
+  ) {
+    captured$fit <- list(
+      counts = counts,
+      metadata = metadata,
+      batch_col = batch_col,
+      blind = blind,
+      correct_batch = correct_batch
+    )
+    variance_order <- rownames(counts)
+    list(
+      norm_matrix = counts,
+      normalized_matrix = counts,
+      variance_order = variance_order,
+      variance_ordering = variance_order,
+      row_variances = setNames(numeric(nrow(counts)), variance_order),
+      counts = counts,
+      metadata = metadata,
+      batch_col = batch_col,
+      blind = blind,
+      correct_batch = correct_batch
+    )
+  },
+  envir = prepare_pseudobulk_env
+)
+assign(
+  "select_pseudobulk_deseq2",
+  function(fit, n_hvg, black_list = "none") {
+    captured$select <- list(n_hvg = n_hvg, black_list = black_list)
+    fit$norm_matrix[seq_len(min(n_hvg, nrow(fit$norm_matrix))), , drop = FALSE]
+  },
+  envir = prepare_pseudobulk_env
+)
+assign("exec_time", function(expr) {
+  force(expr)
+  0
+}, envir = prepare_pseudobulk_env)
+assign("peak_rss_gb", function() 0, envir = prepare_pseudobulk_env)
+fixture_h5ad <- tempfile("ecoda-pseudobulk-driver-")
+writeBin(charToRaw("fixture-only"), fixture_h5ad)
 invisible(prepare_pseudobulks_hpc(
-  list(),
+  h5ad_path = fixture_h5ad,
   hvg_rank_genes = c("g1", "g2"),
   variants = "hvg2000",
   batch_col = "tech",
   blind = FALSE,
-  correct_batch = TRUE
+  correct_batch = TRUE,
+  cache_stem = "fixture",
+  view = "batch_effect_corrected",
+  analysis_pass = "corrected",
+  run_id = "fixture-run"
 ))
-stopifnot(identical(captured$batch_col, "tech"))
-stopifnot(identical(captured$blind, FALSE))
-stopifnot(identical(captured$correct_batch, TRUE))
+stopifnot(
+  identical(captured$fit$counts, fake_counts),
+  identical(captured$fit$metadata, fake_metadata),
+  !"label" %in% colnames(captured$fit$metadata),
+  identical(captured$fit$batch_col, "tech"),
+  identical(captured$fit$blind, FALSE),
+  identical(captured$fit$correct_batch, TRUE),
+  identical(captured$aggregate$metadata_columns, c("Sample", "tech")),
+  !"label" %in% captured$aggregate$metadata_columns
+)
 invisible(prepare_pseudobulks_hpc(
-  list(),
+  h5ad_path = fixture_h5ad,
   hvg_rank_genes = c("g1", "g2"),
   variants = "hvg2000"
 ))
-stopifnot(identical(captured$blind, TRUE))
-stopifnot(identical(captured$correct_batch, FALSE))
+stopifnot(
+  identical(captured$fit$counts, fake_counts),
+  identical(
+    captured$fit$metadata,
+    fake_metadata[, "Sample", drop = FALSE]
+  ),
+  !"label" %in% colnames(captured$fit$metadata),
+  identical(captured$fit$batch_col, NULL),
+  identical(captured$fit$blind, TRUE),
+  identical(captured$fit$correct_batch, FALSE),
+  identical(captured$aggregate$metadata_columns, "Sample"),
+  !"label" %in% captured$aggregate$metadata_columns
+)
+assign(
+  "load_h5ad_sample_aggregate",
+  old_h5ad_aggregate,
+  envir = prepare_pseudobulk_env
+)
+assign(
+  "fit_pseudobulk_deseq2",
+  old_fit_pseudobulk,
+  envir = prepare_pseudobulk_env
+)
+assign(
+  "select_pseudobulk_deseq2",
+  old_select_pseudobulk,
+  envir = prepare_pseudobulk_env
+)
+assign("exec_time", old_exec_time, envir = prepare_pseudobulk_env)
+assign("peak_rss_gb", old_peak_rss, envir = prepare_pseudobulk_env)
+unlink(fixture_h5ad)
 
 single_batch_error <- tryCatch(
   correct_clr_batch_lmm(feat, transform(meta, tech = factor("A")), "tech"),
@@ -270,5 +417,335 @@ stopifnot(
   identical(ct_success$n_ct_pair_contributions, 6L),
   identical(ct_success$successful_cell_types, c("A", "B"))
 )
+
+# Canonical CT pseudobulk uses a fixture-only H5AD and the one-pass composite
+# store.  The fixture deliberately has unsorted samples, an absent combination,
+# a below-threshold group, and one normalization failure.
+ct_h5ad_root <- tempfile("ecoda-ct-h5ad-")
+dir.create(ct_h5ad_root, recursive = TRUE)
+ct_h5ad <- file.path(ct_h5ad_root, "fixture.h5ad")
+ct_python <- paste(
+  "import anndata as ad, numpy as np, pandas as pd, sys;",
+  "from scipy import sparse;",
+  "samples = (['s2'] * 5 + ['s3'] * 5 + ['s1'] * 5 +",
+  " ['s2'] * 5 + ['s1'] * 5 + ['s3'] * 4 +",
+  " ['s2'] * 5 + ['s1'] * 5);",
+  "cell_types = (['B'] * 15 + ['A'] * 14 + ['C'] * 10);",
+  "b_values = {'s1': 1, 's2': 3, 's3': 7};",
+  "a_values = {'s1': 30, 's2': 4, 's3': 8};",
+  "values = [99 if ct == 'C' else (",
+  " a_values if ct == 'A' else b_values)[sample]",
+  " for sample, ct in zip(samples, cell_types)];",
+  "counts = np.asarray([[value, 1]",
+  " for i, value in enumerate(values)], dtype=np.int64);",
+  "obs = pd.DataFrame({'Sample': samples, 'ct': cell_types},",
+  " index=[f'cell{i}' for i in range(len(samples))]);",
+  "adata = ad.AnnData(X=counts.astype(np.float32), obs=obs,",
+  " var=pd.DataFrame(index=['g1', 'g2']));",
+  "adata.layers['counts'] = sparse.csr_matrix(counts);",
+  "adata.write_h5ad(sys.argv[1])"
+)
+ct_status <- system2(
+  "pixi",
+  c("run", "python", "-c", shQuote(ct_python), shQuote(ct_h5ad)),
+  stdout = FALSE,
+  stderr = FALSE
+)
+if (!identical(ct_status, 0L) || !file.exists(ct_h5ad)) {
+  stop("could not create the synthetic CT H5AD fixture")
+}
+old_project_root <- Sys.getenv("PROJECT_ROOT", unset = NA_character_)
+Sys.setenv(PROJECT_ROOT = root)
+old_direct_ct_normalizer <- get_pb_deseq2_from_counts
+get_pb_deseq2_from_counts <- function(counts, metadata, ...) {
+  # The direct CT boundary receives per-group aggregates: A/s1 is 5 * 30 =
+  # 150, while C aggregates are 5 * 99 = 495.  Fail only the C-sized
+  # aggregates without confusing a valid high-count A group for C.
+  if (max(counts) >= 400) stop("synthetic C normalization failure")
+  sample_ids <- colnames(counts)
+  matrix(
+    as.numeric(colSums(counts)),
+    nrow = length(sample_ids),
+    ncol = 1L,
+    dimnames = list(sample_ids, "score")
+  )
+}
+old_ct_bundle <- create_result_bundle
+create_result_bundle <- function(feat_mat, labels, dist_mat = NULL, extra = list()) {
+  c(list(feat_mat = feat_mat, dist_mat = dist_mat, labels = labels), extra)
+}
+ct_temp_root <- tempfile("ecoda-ct-store-root-")
+ct_labels_h5ad <- structure(
+  factor(c("A", "B", "A")),
+  names = c("s1", "s2", "s3")
+)
+ct_result_h5ad <- tryCatch(
+  process_pseudobulk_ct_h5ad_fig(
+    ct_h5ad,
+    ct_labels_h5ad,
+    sample_col = "Sample",
+    ct_col = "ct",
+    hvg = 1L,
+    min_cells = 5L,
+    chunk_size = 4L,
+    run_id = "ct-fixture-run",
+    temp_root = ct_temp_root,
+    source_identity = "fixture-source"
+  ),
+  error = function(error) {
+    create_result_bundle <<- old_ct_bundle
+    get_pb_deseq2_from_counts <<- old_direct_ct_normalizer
+    stop(error)
+  }
+)
+create_result_bundle <- old_ct_bundle
+get_pb_deseq2_from_counts <- old_direct_ct_normalizer
+stopifnot(
+  identical(ct_result_h5ad$successful_cell_types, c("B", "A")),
+  identical(ct_result_h5ad$n_ct_success, 2L),
+  identical(ct_result_h5ad$n_sample_pairs_contributed, 3L),
+  identical(ct_result_h5ad$n_ct_pair_contributions, 4L),
+  identical(
+    rownames(ct_result_h5ad$feat_mat),
+    c("s1", "s2", "s3")
+  ),
+  identical(
+    colnames(ct_result_h5ad$feat_mat),
+    c("s1", "s2", "s3")
+  )
+)
+ct_expected_distance <- matrix(
+  c(
+    0, 70, 30,
+    70, 0, 20,
+    30, 20, 0
+  ),
+  nrow = 3L,
+  byrow = TRUE,
+  dimnames = list(c("s1", "s2", "s3"), c("s1", "s2", "s3"))
+)
+stopifnot(isTRUE(all.equal(
+  ct_result_h5ad$feat_mat,
+  ct_expected_distance,
+  tolerance = 1e-12
+)))
+ct_distance_matrix <- as.matrix(ct_result_h5ad$dist_mat)
+stopifnot(isTRUE(all.equal(
+  ct_distance_matrix,
+  ct_expected_distance,
+  tolerance = 1e-12
+)))
+ct_store_paths <- if (dir.exists(ct_temp_root)) {
+  list.files(ct_temp_root, recursive = TRUE, all.files = TRUE, full.names = TRUE)
+} else {
+  character()
+}
+stopifnot(!any(grepl(
+  "(groups\\.h5|\\.manifest\\.json|\\.lock)$",
+  ct_store_paths,
+  perl = TRUE
+)))
+
+all_failed_temp_root <- tempfile("ecoda-ct-store-failure-root-")
+old_direct_ct_normalizer <- get_pb_deseq2_from_counts
+get_pb_deseq2_from_counts <- function(...) {
+  stop("synthetic normalization failure")
+}
+all_failed_h5ad <- tryCatch(
+  process_pseudobulk_ct_h5ad_fig(
+    ct_h5ad,
+    ct_labels_h5ad,
+    sample_col = "Sample",
+    ct_col = "ct",
+    hvg = 1L,
+    min_cells = 5L,
+    chunk_size = 4L,
+    run_id = "ct-failure-run",
+    temp_root = all_failed_temp_root,
+    source_identity = "fixture-source"
+  ),
+  error = identity
+)
+get_pb_deseq2_from_counts <- old_direct_ct_normalizer
+stopifnot(
+  inherits(all_failed_h5ad, "error"),
+  grepl("no successful cell-type pseudobulks", conditionMessage(all_failed_h5ad))
+)
+failed_store_paths <- if (dir.exists(all_failed_temp_root)) {
+  list.files(
+    all_failed_temp_root,
+    recursive = TRUE,
+    all.files = TRUE,
+    full.names = TRUE
+  )
+} else {
+  character()
+}
+stopifnot(!any(grepl(
+  "(groups\\.h5|\\.manifest\\.json|\\.lock)$",
+  failed_store_paths,
+  perl = TRUE
+)))
+
+# Exercise the store API directly so the ownership manifest and conservative
+# stale-store cleanup remain covered independently of the canonical wrapper.
+ct_module <- reticulate::import_from_path(
+  "h5ad_pseudobulk",
+  path = file.path(root, "src", "utils", "py"),
+  convert = TRUE
+)
+ct_store_root <- tempfile("ecoda-ct-store-api-")
+dir.create(ct_store_root, recursive = TRUE)
+ct_store_path <- file.path(ct_store_root, "groups.h5")
+ct_store_payload <- ct_module$prepare_h5ad_ct_group_store(
+  path = ct_h5ad,
+  sample_col = "Sample",
+  cell_type_col = "ct",
+  metadata_columns = as.list(c("Sample", "ct")),
+  chunk_size = 4L,
+  max_value = as.integer(.Machine$integer.max),
+  store_path = ct_store_path,
+  run_id = "store-fixture-run",
+  source_identity = "fixture-source"
+)
+ct_manifest_path <- paste0(ct_store_path, ".manifest.json")
+ct_manifest <- jsonlite::fromJSON(ct_manifest_path, simplifyVector = FALSE)
+write_ct_manifest <- function(value) {
+  jsonlite::write_json(
+    value,
+    ct_manifest_path,
+    auto_unbox = TRUE,
+    null = "null",
+    pretty = FALSE
+  )
+  manifest_json <- paste(readLines(ct_manifest_path, warn = FALSE), collapse = "")
+  manifest_json <- sub(
+    '"scheduler_identity":\\[\\]',
+    '"scheduler_identity":{}',
+    manifest_json,
+    fixed = FALSE
+  )
+  writeLines(manifest_json, ct_manifest_path, useBytes = TRUE)
+}
+stopifnot(
+  is.list(ct_store_payload),
+  identical(
+    sort(names(ct_store_payload)),
+    sort(c(
+      "store_path", "group_ids", "sample_ids", "all_sample_ids",
+      "cell_type_ids", "group_cell_counts", "group_metadata",
+      "gene_names", "n_vars"
+    ))
+  ),
+  identical(
+    as.character(ct_store_payload$store_path),
+    normalizePath(ct_store_path)
+  ),
+  identical(
+    as.character(ct_store_payload$group_ids),
+    c(
+      "Sample=s2;cell_type=B",
+      "Sample=s3;cell_type=B",
+      "Sample=s1;cell_type=B",
+      "Sample=s2;cell_type=A",
+      "Sample=s1;cell_type=A",
+      "Sample=s3;cell_type=A",
+      "Sample=s2;cell_type=C",
+      "Sample=s1;cell_type=C"
+    )
+  ),
+  identical(
+    as.character(ct_store_payload$sample_ids),
+    c("s2", "s3", "s1", "s2", "s1", "s3", "s2", "s1")
+  ),
+  identical(
+    as.character(ct_store_payload$all_sample_ids),
+    c("s2", "s3", "s1")
+  ),
+  identical(
+    as.character(ct_store_payload$cell_type_ids),
+    c("B", "B", "B", "A", "A", "A", "C", "C")
+  ),
+  identical(
+    as.integer(ct_store_payload$group_cell_counts),
+    c(5L, 5L, 5L, 5L, 5L, 4L, 5L, 5L)
+  ),
+  identical(
+    colnames(ct_store_payload$group_metadata),
+    c("Sample", "ct")
+  ),
+  identical(
+    as.character(ct_store_payload$group_metadata$Sample),
+    c("s2", "s3", "s1", "s2", "s1", "s3", "s2", "s1")
+  ),
+  identical(
+    as.character(ct_store_payload$group_metadata$ct),
+    c("B", "B", "B", "A", "A", "A", "C", "C")
+  ),
+  identical(
+    as.character(ct_store_payload$gene_names),
+    c("g1", "g2")
+  ),
+  identical(as.integer(ct_store_payload$n_vars), 2L),
+  all(c(
+    "run_id", "pid", "scheduler_identity", "source_identity",
+    "source_checksum", "stage", "schema", "created_at"
+  ) %in% names(ct_manifest)),
+  identical(as.character(ct_manifest$run_id), "store-fixture-run"),
+  identical(as.character(ct_manifest$stage), "pseudobulk_ct"),
+  identical(as.integer(ct_manifest$schema), 1L)
+)
+ct_active_audit <- ct_module$audit_h5ad_ct_group_store(
+  ct_store_path,
+  expected_run_id = "store-fixture-run",
+  max_age_seconds = 0,
+  cleanup = TRUE
+)
+stopifnot(
+  isTRUE(ct_active_audit$valid),
+  !isTRUE(ct_active_audit$cleanup_performed),
+  file.exists(ct_store_path)
+)
+unlink(ct_manifest_path)
+ct_malformed_audit <- ct_module$audit_h5ad_ct_group_store(
+  ct_store_path,
+  expected_run_id = "store-fixture-run",
+  max_age_seconds = 0,
+  cleanup = TRUE
+)
+stopifnot(
+  !isTRUE(ct_malformed_audit$valid),
+  !isTRUE(ct_malformed_audit$cleanup_performed),
+  file.exists(ct_store_path)
+)
+write_ct_manifest(ct_manifest)
+ct_manifest$pid <- 2147483647
+ct_manifest$scheduler_identity <- list()
+ct_manifest$created_at <- 0
+write_ct_manifest(ct_manifest)
+ct_stale_audit <- ct_module$audit_h5ad_ct_group_store(
+  ct_store_path,
+  expected_run_id = "store-fixture-run",
+  max_age_seconds = 1,
+  cleanup = TRUE
+)
+stopifnot(
+  isTRUE(ct_stale_audit$valid),
+  identical(as.character(ct_stale_audit$owner_status), "dead"),
+  isTRUE(ct_stale_audit$expired),
+  isTRUE(ct_stale_audit$cleanup_performed),
+  !file.exists(ct_store_path),
+  !file.exists(ct_manifest_path)
+)
+unlink(
+  c(ct_h5ad_root, ct_temp_root, all_failed_temp_root, ct_store_root),
+  recursive = TRUE,
+  force = TRUE
+)
+if (is.na(old_project_root)) {
+  Sys.unsetenv("PROJECT_ROOT")
+} else {
+  Sys.setenv(PROJECT_ROOT = old_project_root)
+}
 
 cat("batch-effect CLR, pseudobulk modes, and CT contribution guard OK\n")

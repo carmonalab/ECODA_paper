@@ -25,7 +25,7 @@ The ECODA benchmarking pipeline is designed for **cohort-level exploratory analy
                                                   |
                                                   v
 +---------------------------------------------------------------------------------------------------+
-|                         STAGE 3: BENCHMARK & TRANSFORMATION ARRAYS                                |
+|                             STAGE 5: BENCHMARK & TRANSFORMATION ARRAYS                                |
 |                                                                                                   |
 |  [Python Benchmark Array]           [R Benchmark Array]            [Transformation & Zero-Imp]    |
 |   - MrVI, scPoli, PILOT-GM-VAE       - GloScope, MOFA, Pseudobulk   - 7 CLR transformations       |
@@ -233,7 +233,7 @@ all callers use the upstream default `FALSE` for cross-cohort comparability.
 
 ---
 
-### Stage 3 — Benchmark & Method Analyses (`src/5_run_benchmark_methods/`)
+### Stage 5 — Benchmark & Method Analyses (`src/5_run_benchmark_methods/`)
 
 `1_submit_hpc_array.sh` is the canonical coordinated wrapper. In ordinary
 mode it accepts the benchmark matrix. The default batch mode requires
@@ -269,10 +269,16 @@ default.
   counts-free loader and receive only required obs columns plus stored
   embeddings. MrVI and scPoli require raw counts, but their loaders stream
   only the stored HVG columns into a minimal AnnData; scPoli densifies only
-  that selected subset. Pseudobulk preparation streams CSR counts into a
-  sample-level aggregate before invoking the existing DESeq2 normalization;
-  MOFA uses precomputed pseudobulks and only falls back to that bounded
-  aggregation when a required cache is missing.
+  that selected subset.
+- Canonical Stage 5 pseudobulk uses only the persisted raw CSR counts in
+  `layers["counts"]`; normalized/log-transformed `X`, labels, and Seurat
+  aggregates are never a source of canonical counts. The Sample-only and
+  Sample × cell-type paths below are separate contracts. MOFA consumes
+  precomputed pseudobulks and only uses the bounded raw-count path when a
+  required cache is missing.
+- The canonical path passes raw aggregate matrices directly to the R
+  matrix-to-DESeq2 boundary. It does not create a one-sample-per-column
+  Seurat object or call `AggregateExpression()` a second time.
 - Batch composition requires `ECODA_authors_HR`,
   `ECODA_authors_HR_NULL`, and `ECODA_seuratres_2`. Existing
   `ECODA_HiTME_HR_layer2` and `ECODA_scATOMIC_HR` bundles are recognized
@@ -287,6 +293,114 @@ default.
 - The family submitters are compatibility entrypoints that delegate to the
   canonical wrapper; they do not own independent synchronization.
 - `batch_effect_analysis` is never a logical view or loader fallback.
+
+#### Canonical pseudobulk dataflow
+
+Stage 5 has one canonical count source and two deliberately separate
+aggregation contracts:
+
+- **Source and leakage boundary.** The only canonical pseudobulk source is
+  the H5AD `layers["counts"]` CSR matrix. Values must be finite,
+  nonnegative, integer-valued raw counts. Normalized/log-transformed `X`,
+  `raw.X`, embeddings, and biological labels are not interchangeable count
+  sources; labels are evaluation metadata and never DESeq2 covariates.
+- **Sample-only contract.** Group by `Sample` only, retaining the first-seen
+  sample order and first-observation metadata. The Python reducer returns
+  checked-int64 genes-by-samples counts. The R boundary
+  `get_pb_deseq2_from_counts()` consumes that matrix directly and publishes
+  canonical samples-by-genes output with the same sample universe and
+  metadata alignment. Ordinary pseudobulk uses `~1`, `blind=TRUE`, and no
+  batch correction. Corrected batch-effect pseudobulk uses only the configured
+  technical batch, `blind=FALSE`, and batch-only correction; biological
+  labels remain outside the model.
+- **Shared full-gene fit.** `fit_pseudobulk_deseq2()` performs the full-gene
+  DESeq2 size-factor/normalization/VST fit once and returns the normalized/VST
+  matrix plus its variance ordering. `select_pseudobulk_deseq2()` derives
+  `hvg500`, `hvg1000`, `hvg2000`, and `hvg3000` from that fit, so shared work
+  is not repeated per variant. `schvg2000` remains a separate restricted
+  gene-universe fit. The documented `hvg2000_bl` no-op behavior is preserved.
+  `validate_pseudobulk_counts_matrix()` enforces the R-side boundary before
+  `DESeqDataSetFromMatrix`; `get_pb()` and `get_pb_deseq2()` are not part of
+  this canonical path.
+- **Sample × cell-type contract.** Group only present `(Sample, cell_type)`
+  combinations; never materialize the Cartesian product. Cell types retain
+  first-observation order (missing values excluded), and a group is eligible
+  only when it has at least five raw cells. Each cell type is normalized
+  independently; failed cell types are isolated, while the final distance
+  universe is `sort(unique(Sample))` and successful per-cell-type pairwise
+  distances are averaged with the existing denominator and counters. The
+  canonical entry point is `process_pseudobulk_ct_h5ad_fig()`, which consumes
+  the composite raw-count store rather than a full Seurat object.
+- **Checked count transport.** Every persistent accumulator addition is
+  checked in int64 before the addition; signed negative CSR values are
+  rejected. Any sparse multiplication has a division-safe pre-bound for
+  the selected limit. The canonical Stage 5 reducer requests the DESeq2
+  ceiling `INT_MAX = 2,147,483,647`, and the R validator repeats finite,
+  nonnegative, integer-valued, and `INT_MAX` checks before reticulate data
+  reaches DESeq2. Overflow or an unsafe value fails closed; it is never
+  wrapped, saturated, or silently coerced.
+
+#### Run-owned cell-type stores and timing
+
+`prepare_h5ad_ct_group_store()` performs a metadata pass followed by one raw
+CSR count pass. It writes an exclusive, append-only/chunked HDF5/CSR store
+under a unique run-owned path such as
+`<run-owned scratch>/pseudobulk_ct/<run_id>/<unique-token>`. The store keeps
+contribution `group_ids`, CSR `indptr`, `indices`, `data`, group cell counts,
+and first-observation group metadata; it must remain sparse and bounded rather
+than retaining a dense all-group array or a persistent
+`Sample × cell_type × gene` dictionary. `read_h5ad_ct_group_store()` selects
+only requested contribution rows without densifying all groups.
+
+Each store has an ownership manifest containing run ID, PID/scheduler
+identity, source H5AD identity/checksum, stage, schema, and creation time.
+The canonical CT routine closes handles and cleans its unique store on normal
+and ordinary error paths. Before reuse it invokes
+`audit_h5ad_ct_group_store()` in no-compute mode: cleanup is allowed only for
+a valid matching manifest, a demonstrably dead owner, and an expired
+age/lock policy. Active, ambiguous, malformed, or mismatched stores fail
+closed and are never removed.
+
+New pseudobulk cache records use timing schema 2:
+`$pb`, `$time_secs`, `$mem_GB`, `aggregate_time_secs`,
+`shared_fit_time_secs`, `shared_time_secs`, `variant_time_secs`,
+`shared_mem_GB`, `timing_id`, and `timing_schema`. Here `$time_secs` and
+`$mem_GB` are variant-local; `shared_time_secs` is exactly
+`aggregate_time_secs + shared_fit_time_secs`; and
+`timing_id` is
+`${ECODA_RUN_ID}:${cache_stem}:${view}:${analysis_pass_or_none}`.
+The shared aggregate/fit row is logged once per timing ID, never once per
+variant. Records without schema 2 remain readable with their old inclusive
+timing interpretation. `shared_mem_GB` is a shared-stage peak or upper
+bound: RSS/VmHWM is process-cumulative and must not be described as an
+isolated component allocation.
+
+#### Backend selection policy
+
+The custom checked HDF5/CSR reducer and run-owned store are the production
+baseline. Scanpy and decoupler remain optional candidates only. Neither is
+adopted, nor added as an implicit dependency, unless a controlled local
+contract/performance benchmark demonstrates exact contract preservation and a
+clear wall-time or peak-RSS improvement. Existing production artifacts and
+their cache/checksum/producer/force/missing-only semantics are not
+invalidated by candidate evaluation.
+
+#### Legacy Seurat boundary and maintained-caller audit
+
+The maintained-caller audit found no maintained canonical Stage 5 caller for
+the legacy Seurat pseudobulk APIs. The disposition is:
+
+| API | Observed callers and disposition |
+|---|---|
+| `get_pb()` | Called internally by legacy `get_pb_deseq2()` and by historical `notebooks/batch_effect_analysis_legacy.rmd` sections. No canonical Stage 5 caller remains; retain as an isolated legacy boundary. |
+| `get_pb_deseq2()` | Former canonical calls in `prepare_pseudobulks_hpc()` and `process_pseudobulk_ct_fig()` migrate to the direct matrix APIs. The Seurat branch of deprecated `run_benchmark_analysis()` and the historical batch-effect notebook remain legacy-only callers; retain the wrapper and do not use it for canonical production pseudobulk. |
+| `load_h5ad_pseudobulk_seurat()` | Former preparation and missing-cache fallback callsites in the Stage 5 workers migrate to the raw CSR reducer/direct matrix path. The focused adapter fixture may exercise this helper, but it is not a maintained production caller; no canonical path may construct a sample-level Seurat object solely for pseudobulk. |
+| `run_benchmark_analysis()` | Explicitly deprecated and notebook-only. `notebooks/benchmark_analysis.rmd` loads HPC result bundles rather than invoking it; its retained Seurat branch is a compatibility boundary and is not a canonical Stage 5 dependency. |
+
+This audit does not edit historical notebooks or delete the legacy
+implementations. Cell-level Seurat loaders needed by methods with a genuine
+cell-count contract remain distinct from the legacy sample-pseudobulk
+adapter.
 
 #### Benchmark Analysis Notebook (`notebooks/benchmark_analysis.rmd`)
 - Loads precomputed `.rds` result bundles and `.feather` matrices via
@@ -337,11 +451,14 @@ high-resolution cell-type columns. scATOMIC `breast_mode` remains at default
 |---|---|
 | `src/utils/math_utils.R` | `clr_transform()`, `zero_imputation()`, ALR/ILR transformations |
 | `src/utils/hvcs.R` | `select_hvcs()` — variance-based selection of Highly Variable Cell Types |
-| `src/utils/pseudobulk.R` | `get_pb_deseq2()`, `DESeq2.normalize()` — pseudobulk aggregation & normalization |
+| `src/utils/pseudobulk.R` | `validate_pseudobulk_counts_matrix()`, `fit_pseudobulk_deseq2()`, `select_pseudobulk_deseq2()`, `get_pb_deseq2_from_counts()` and `DESeq2.normalize()` — direct raw-matrix normalization; `get_pb()`/`get_pb_deseq2()` remain isolated legacy Seurat boundaries |
 | `src/utils/scoring_metrics.R` | `calc_sep_score()` (ANOSIM), `clust_eval()` (ARI), `calc_sil()`, `calc_lisi()`, `calc_modularity()` |
 | `src/utils/datasets_io.R` | `read_datasets_json()`, `get_dataset_view_info()` (R parser) |
 | `src/utils/py/datasets_io.py` | `read_datasets_json()` (Python parser matching R semantics) |
-| `src/utils/py/h5ad_pseudobulk.py` | Bounded CSR sample aggregation and sample-level metadata reads for pseudobulk preparation |
+| `src/utils/py/h5ad_pseudobulk.py` | Checked-int64 Sample-only aggregation plus `prepare_h5ad_ct_group_store()`, `read_h5ad_ct_group_store()`, and `audit_h5ad_ct_group_store()` for bounded run-owned Sample × cell-type CSR stores |
+| `src/5_run_benchmark_methods/benchmark_hpc_utils.R` | H5AD source/metadata validation, direct raw aggregate bridge, cache identity, and schema-2 timing integration |
+| `src/5_run_benchmark_methods/benchmark_methods_r.R` | `process_pseudobulk_ct_h5ad_fig()` canonical raw-matrix CT processing; `process_pseudobulk_ct_fig()` retained only as a legacy Seurat boundary |
+| `src/5_run_benchmark_methods/benchmark_pipeline.R` | Stage 5 orchestration; `run_benchmark_analysis()` is deprecated notebook-only compatibility code, not a canonical pseudobulk entry point |
 | `src/utils/py/h5ad_counts_subset.py` | Stored-HVG raw-count loading for MrVI/scPoli without full-gene materialization |
 | `src/utils/py/gene_utils.py` | `standardize_gene_symbols()` using Ensembl 105 reference dictionary |
 | `src/utils/bash/worker_retry.sh` | Sourced by SLURM workers for automated self-requeue on transient I/O faults |

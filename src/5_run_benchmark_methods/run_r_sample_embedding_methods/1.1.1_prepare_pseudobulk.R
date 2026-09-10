@@ -5,11 +5,11 @@
 # Called by 1.1_run_worker.sh via ${PIXI_RSCRIPT} with:
 #   --config_path --ds_name --view benchmark_analysis --input_dir
 #   --pseudobulk_dir --log_file [--force]
-# Loads the preprocessed benchmark view h5ad (raw counts + var["hvg_rank"]
-# only; no embeddings), runs prepare_pseudobulks_hpc() and writes
-# pseudobulks/<ds>_pseudobulk_<variant>.rds atomically (list(pb, time_secs)),
-# with one exec-log row per variant (method "prepare_pseudobulk_<variant>").
-# Skip-if-exists per variant unless --force.
+# Loads H5AD metadata/HVG ranks without count values, validates the pending
+# cache set, then performs one raw Sample aggregation and one shared full-gene
+# DESeq2 fit where possible.  Each
+# pseudobulks/<ds>_pseudobulk_<variant>.rds record is published atomically
+# with schema-2 shared/variant timing fields and one shared timing log row.
 # ==============================================================================
 
 project_root <- Sys.getenv("PROJECT_ROOT")
@@ -316,21 +316,20 @@ if (!file.exists(h5ad_path)) {
 }
 dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
 
-ad <- import("anndata", convert = FALSE)
-adata <- ad$read_h5ad(h5ad_path, backed = "r")
+# Read metadata and ranked HVGs through h5py-only helpers.  These readers
+# validate persisted H5AD structure while never materializing count values;
+# cache completeness is checked below before the raw CSR pass is requested.
 sample_col <- "Sample"
-seurat <- load_h5ad_pseudobulk_seurat(
+required_hvg <- if (identical(args$view, "benchmark_analysis")) 3000L else 2000L
+h5ad_metadata <- load_h5ad_pseudobulk_metadata(
   h5ad_path,
   sample_col = sample_col,
-  batch_col = batch_col
+  metadata_columns = batch_col,
+  n_hvg = required_hvg,
+  required_nonmissing_columns = unique(c(sample_col, batch_col))
 )
-obs <- seurat@meta.data
-validate_benchmark_h5ad_contract(
-  adata,
-  obs = obs,
-  view = args$view,
-  method = "prepare_pseudobulk"
-)
+obs <- h5ad_metadata$obs
+hvg_rank_genes <- h5ad_metadata$hvg_rank_genes
 if (!sample_col %in% colnames(obs)) {
   stop(sample_col, " not found in obs columns of ", h5ad_path)
 }
@@ -339,55 +338,78 @@ if (!sample_col %in% colnames(obs)) {
 # (1.1.1_preprocess.py): do NOT re-apply standardize_sample_names() here —
 # it would diverge (hyphen -> underscore) from the obs names for h5ads that
 # predate the python change (e.g. Adams), breaking the bundle label match.
-hvg_rank_genes <- get_hvg_rank_genes(adata)
 
 requested_variants <- if (is.null(analysis_pass)) {
   PB_VARIANT_NAMES
 } else {
   "hvg2000"
 }
-pending <- requested_variants[
-  vapply(
-    file.path(
-      args$pseudobulk_dir,
-      paste0(cache_stem, "_pseudobulk_", requested_variants, ".rds")
-    ),
-    function(path) !ecoda_local_cache_valid(path),
-    logical(1)
-  ) | force
-]
+cache_paths <- file.path(
+  args$pseudobulk_dir,
+  paste0(cache_stem, "_pseudobulk_", requested_variants, ".rds")
+)
+cache_valid <- vapply(seq_along(requested_variants), function(index) {
+  .pb_variant_cache_valid(
+    cache_paths[[index]], requested_variants[[index]]
+  )
+}, logical(1))
+cached_variants <- list()
+reused <- requested_variants[cache_valid & !force]
+for (v in reused) {
+  cache_index <- match(v, requested_variants)
+  value <- read_rds_checked(
+    cache_paths[[cache_index]],
+    producer = PB_VARIANT_PRODUCERS[[v]]
+  )
+  validate_pseudobulk_timing_record(value, variant = v)
+  cached_variants[[v]] <- value
+}
+pending <- requested_variants[!cache_valid | force]
 
 if (length(pending) > 0) {
   message("Computing pseudobulk variants: ", paste(pending, collapse = ", "))
   variants <- prepare_pseudobulks_hpc(
-    seurat,
+    h5ad_path = h5ad_path,
     sample_col = sample_col,
     hvg_rank_genes = hvg_rank_genes,
     variants = pending,
     batch_col = batch_col,
     blind = blind_mode,
-    correct_batch = correct_batch_mode
+    correct_batch = correct_batch_mode,
+    cache_stem = cache_stem,
+    view = args$view,
+    analysis_pass = analysis_pass,
+    run_id = ecoda_local_current_run_id()
   )
   for (v in names(variants)) {
-    f <- file.path(args$pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds"))
+    f <- file.path(
+      args$pseudobulk_dir,
+      paste0(cache_stem, "_pseudobulk_", v, ".rds")
+    )
     ecoda_local_publish_rds(
       variants[[v]], f, producer = paste0("stage5_prepare_pseudobulk_", v)
     )
-    log_exec_row(ds, paste0("prepare_pseudobulk_", v),
-                 variants[[v]]$time_secs, args$log_file,
-                 mem_gb = variants[[v]]$mem_GB)
-    message("  Saved: ", f, " (", round(variants[[v]]$time_secs, 1), "s)")
+    message("  Saved: ", f, " (",
+            round(variants[[v]]$time_secs, 1), "s)")
   }
+  all_variants <- cached_variants
+  for (v in names(variants)) {
+    all_variants[[v]] <- variants[[v]]
+  }
+  all_variants <- all_variants[requested_variants]
+  emit_pseudobulk_timing_rows(
+    all_variants, ds, log_file = args$log_file
+  )
 } else {
-  # Everything requested is cached: re-emit stored timings on resume.
+  # Everything requested is cached: re-emit stored timings on resume without
+  # opening the counts layer, aggregating, or constructing a Seurat object.
   for (v in requested_variants) {
-    f <- file.path(args$pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds"))
-    cached <- ecoda_local_read_rds(f, "Pseudobulk variant")
-    log_exec_row(ds, paste0("prepare_pseudobulk_", v),
-                 cached$time_secs, args$log_file,
-                 mem_gb = cached$mem_GB)
-    message("Pseudobulk variant already exists: ", f)
+    message(
+      "Pseudobulk variant already exists: ",
+      cache_paths[[match(v, requested_variants)]]
+    )
   }
+  emit_pseudobulk_timing_rows(
+    cached_variants, ds, log_file = args$log_file
+  )
 }
-
-message("--- prepare_pseudobulk for ", ds, " complete ---")

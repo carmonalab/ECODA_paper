@@ -314,8 +314,23 @@ def _check_merge_rejects_duplicate_and_invalid_runtime_rows(merge_worker) -> Non
             "mem_GB": [2.0],
         }
     )
+    shared = pd.DataFrame(
+        {
+            "dataset": ["Adams"],
+            "method": ["prepare_pseudobulk_shared"],
+            "time_secs": [4.0],
+            "mem_GB": [np.nan],
+        }
+    )
+    # Legacy rows and the one shared preparation row coexist in the canonical
+    # four-column log; a second shared row is still a duplicate identifier.
+    merge_worker._validate_log_frame(pd.concat([valid, shared]), "mixed")
     duplicate = pd.concat([valid, valid], ignore_index=True)
     expect_value_error(lambda: merge_worker._validate_log_frame(duplicate, "duplicate"))
+    duplicate_shared = pd.concat([shared, shared], ignore_index=True)
+    expect_value_error(
+        lambda: merge_worker._validate_log_frame(duplicate_shared, "duplicate-shared")
+    )
 
     for column, value in (
         ("time_secs", np.nan),
@@ -337,6 +352,11 @@ def run_r_replay_fixture(root: Path) -> pd.DataFrame:
 helper <- normalizePath(args[[1]], mustWork = TRUE)
 root <- normalizePath(args[[2]], mustWork = FALSE)
 source(helper)
+helpers <- normalizePath(
+  file.path(dirname(helper), "..", "utils", "helpers.R"),
+  mustWork = TRUE
+)
+source(helpers)
 results <- file.path(root, "results")
 dir.create(results, recursive = TRUE, showWarnings = FALSE)
 log_file <- file.path(root, "execution_times.feather")
@@ -368,6 +388,278 @@ for (spec in specs) {
   stopifnot(isTRUE(all.equal(as.numeric(row$time_secs[[1L]]), spec$time)))
   stopifnot(isTRUE(all.equal(as.numeric(row$mem_GB[[1L]]), spec$mem)))
 }
+
+# Schema-2 pseudobulk cache timing is replayed as one shared row plus one
+# variant-local row per cache.  Keep this in a separate log so the legacy
+# runtime fixture above remains a four-column two-row log.
+schema2_variants <- list(
+  hvg500 = list(
+    pb = matrix(1, nrow = 1L, ncol = 1L,
+                dimnames = list("s1", "g1")),
+    time_secs = 0.25,
+    mem_GB = NA_real_,
+    aggregate_time_secs = 1.25,
+    shared_fit_time_secs = 2.75,
+    shared_time_secs = 4,
+    variant_time_secs = 0.25,
+    shared_mem_GB = NA_real_,
+    timing_id = "run-1:Adams:benchmark_analysis:none",
+    timing_schema = 2L
+  ),
+  hvg2000 = list(
+    pb = matrix(2, nrow = 1L, ncol = 1L,
+                dimnames = list("s1", "g1")),
+    time_secs = 0.75,
+    mem_GB = NA_real_,
+    aggregate_time_secs = 1.25,
+    shared_fit_time_secs = 2.75,
+    shared_time_secs = 4,
+    variant_time_secs = 0.75,
+    shared_mem_GB = NA_real_,
+    timing_id = "run-1:Adams:benchmark_analysis:none",
+    timing_schema = 2L
+  )
+)
+schema2_fields <- c(
+  "pb", "time_secs", "mem_GB", "aggregate_time_secs",
+  "shared_fit_time_secs", "shared_time_secs", "variant_time_secs",
+  "shared_mem_GB", "timing_id", "timing_schema"
+)
+stopifnot(identical(sort(names(schema2_variants[[1L]])), sort(schema2_fields)))
+shared_log_file <- file.path(root, "pseudobulk-execution-times.feather")
+emit_pseudobulk_timing_rows(
+  schema2_variants,
+  ds = "Adams",
+  log_file = shared_log_file
+)
+shared_rows <- arrow::read_feather(shared_log_file)
+stopifnot(
+  nrow(shared_rows) == 3L,
+  sum(shared_rows$method == "prepare_pseudobulk_shared") == 1L,
+  sum(shared_rows$time_secs) == 4 + 0.25 + 0.75,
+  all(c("dataset", "method", "time_secs", "mem_GB") %in%
+      colnames(shared_rows))
+)
+emit_pseudobulk_timing_rows(
+  schema2_variants,
+  ds = "Adams",
+  log_file = shared_log_file
+)
+shared_rows_replayed <- arrow::read_feather(shared_log_file)
+stopifnot(
+  nrow(shared_rows_replayed) == 3L,
+  sum(shared_rows_replayed$method == "prepare_pseudobulk_shared") == 1L,
+  sum(shared_rows_replayed$time_secs) == 4 + 0.25 + 0.75
+)
+bad_timing_ids <- schema2_variants
+bad_timing_ids$hvg2000$timing_id <- "run-2:Adams:benchmark_analysis:none"
+bad <- try(
+  emit_pseudobulk_timing_rows(
+    bad_timing_ids,
+    ds = "Adams",
+    log_file = file.path(root, "invalid-timing-ids.feather")
+  ),
+  silent = TRUE
+)
+stopifnot(inherits(bad, "try-error"))
+bad_timing_ids$hvg2000$timing_id <- ""
+bad <- try(
+  emit_pseudobulk_timing_rows(
+    bad_timing_ids,
+    ds = "Adams",
+    log_file = file.path(root, "blank-timing-id.feather")
+  ),
+  silent = TRUE
+)
+stopifnot(inherits(bad, "try-error"))
+
+# A legacy cache payload remains inclusive and does not fabricate shared time.
+legacy_timing_log <- file.path(root, "legacy-execution-times.feather")
+log_exec_row("Adams", "prepare_pseudobulk_hvg500", 5.5, legacy_timing_log)
+legacy_rows <- arrow::read_feather(legacy_timing_log)
+stopifnot(nrow(legacy_rows) == 1L, legacy_rows$time_secs[[1L]] == 5.5)
+
+# Helper timing validation is fail-closed for vectors and malformed schema
+# markers rather than silently coercing them to legacy rows.
+expect_helper_error <- function(fn) {
+  value <- try(fn(), silent = TRUE)
+  stopifnot(inherits(value, "try-error"))
+}
+expect_helper_error(function() .execution_scalar(c(1, 2), "vector"))
+malformed_schema <- data.frame(
+  dataset = c("Adams", "Adams"),
+  method = c("legacy_a", "legacy_b"),
+  time_secs = c(1, 2),
+  mem_GB = c(NA_real_, NA_real_),
+  timing_schema = c("2", "not-a-schema"),
+  stringsAsFactors = FALSE
+)
+expect_helper_error(function() normalize_exec_times(malformed_schema))
+
+# A timing_id without timing_schema remains one legacy-inclusive row.
+legacy_bundle <- execution_time_rows_from_bundle(
+  "Adams",
+  "legacy_method",
+  list(exec_time = 6, variant_time_secs = 2, timing_id = "id-without-schema")
+)
+stopifnot(
+  nrow(legacy_bundle) == 1L,
+  legacy_bundle$time_secs[[1L]] == 6,
+  !"timing_schema" %in% names(legacy_bundle)
+)
+
+ct_bundle_rows <- execution_time_rows_from_bundle(
+  "Adams",
+  "Pseudobulk_CT_HR_hvg2000",
+  schema2_variants$hvg500
+)
+stopifnot(
+  sum(ct_bundle_rows$method == "prepare_pseudobulk_ct_shared") == 1L,
+  sum(ct_bundle_rows$method == "Pseudobulk_CT_HR_hvg2000") == 1L
+)
+
+ct_shared_log <- data.frame(
+  dataset = rep("Adams", 3L),
+  method = c(
+    "prepare_pseudobulk_ct_shared_LR",
+    "prepare_pseudobulk_ct_shared_HR",
+    "prepare_pseudobulk_ct_shared_LR"
+  ),
+  time_secs = c(4, 5, 4),
+  mem_GB = c(NA_real_, NA_real_, NA_real_),
+  shared_time_secs = c(4, 5, 4),
+  shared_mem_GB = c(NA_real_, NA_real_, NA_real_),
+  timing_id = c("ct-lr", "ct-hr", "ct-lr"),
+  timing_schema = c(2L, 2L, 2L),
+  stringsAsFactors = FALSE
+)
+ct_shared_dedup <- deduplicate_exec_times(ct_shared_log)
+stopifnot(
+  nrow(ct_shared_dedup) == 2L,
+  setequal(
+    ct_shared_dedup$method,
+    c(
+      "prepare_pseudobulk_ct_shared_LR",
+      "prepare_pseudobulk_ct_shared_HR"
+    )
+  ),
+  setequal(ct_shared_dedup$time_secs, c(4, 5))
+)
+dynamic_ct_bundle <- schema2_variants$hvg500
+dynamic_ct_bundle$shared_timing_method <-
+  "prepare_pseudobulk_ct_shared_LR"
+dynamic_ct_rows <- execution_time_rows_from_bundle(
+  "Adams",
+  "Pseudobulk_CT_LR_hvg2000",
+  dynamic_ct_bundle
+)
+stopifnot(
+  sum(
+    dynamic_ct_rows$method ==
+      "prepare_pseudobulk_ct_shared_LR"
+  ) == 1L
+)
+
+# The persisted execution log remains the canonical four-column format while
+# retaining separate LR/HR CT-column shared rows.
+ct_four_column_log <- file.path(root, "ct-shared-execution-times.feather")
+log_exec_row(
+  "Adams", "prepare_pseudobulk_ct_shared_LR", 4, ct_four_column_log
+)
+log_exec_row(
+  "Adams", "prepare_pseudobulk_ct_shared_HR", 5, ct_four_column_log
+)
+ct_four_column_rows <- arrow::read_feather(ct_four_column_log)
+stopifnot(
+  identical(
+    colnames(ct_four_column_rows),
+    c("dataset", "method", "time_secs", "mem_GB")
+  ),
+  nrow(ct_four_column_rows) == 2L,
+  setequal(
+    ct_four_column_rows$method,
+    c(
+      "prepare_pseudobulk_ct_shared_LR",
+      "prepare_pseudobulk_ct_shared_HR"
+    )
+  )
+)
+
+# Legacy preparation rows retain their inclusive time, and a dataset mixing
+# schema-2 and legacy rows classifies each row by its own marker.
+legacy_summary <- summarize_exec_times(data.frame(
+  dataset = c("Adams", "Adams"),
+  method = c("prepare_pseudobulk_hvg500", "trans_analysis"),
+  time_secs = c(5.5, 2),
+  mem_GB = c(NA_real_, 1),
+  stringsAsFactors = FALSE
+))
+legacy_row <- legacy_summary[legacy_summary$dataset == "Adams", , drop = FALSE]
+stopifnot(
+  nrow(legacy_row) == 1L,
+  legacy_row$variant_time_secs[[1L]] == 0,
+  legacy_row$shared_time_secs[[1L]] == 0,
+  legacy_row$legacy_inclusive_time_secs[[1L]] == 7.5,
+  legacy_row$total_time_secs[[1L]] == 7.5
+)
+
+mixed_rows <- data.frame(
+  dataset = rep("Adams", 4L),
+  method = c(
+    "legacy_method", "Pseudobulk_hvg500",
+    "prepare_pseudobulk_hvg500", "prepare_pseudobulk_shared"
+  ),
+  time_secs = c(3, 0.75, 2, 4),
+  mem_GB = c(NA_real_, NA_real_, NA_real_, NA_real_),
+  aggregate_time_secs = c(NA_real_, 1.25, NA_real_, 1.25),
+  shared_fit_time_secs = c(NA_real_, 2.75, NA_real_, 2.75),
+  shared_time_secs = c(NA_real_, 4, NA_real_, 4),
+  variant_time_secs = c(NA_real_, 0.75, NA_real_, NA_real_),
+  shared_mem_GB = c(NA_real_, NA_real_, NA_real_, NA_real_),
+  timing_id = c(NA_character_, "id-a", NA_character_, "id-a"),
+  timing_schema = c(NA_integer_, 2L, NA_integer_, 2L),
+  stringsAsFactors = FALSE
+)
+mixed_summary <- summarize_exec_times(mixed_rows)
+mixed_row <- mixed_summary[mixed_summary$dataset == "Adams", , drop = FALSE]
+stopifnot(
+  mixed_row$variant_time_secs[[1L]] == 0.75,
+  mixed_row$shared_time_secs[[1L]] == 4,
+  mixed_row$legacy_inclusive_time_secs[[1L]] == 5,
+  mixed_row$total_time_secs[[1L]] == 9.75
+)
+
+# Missing shared rows are derived independently for distinct timing IDs.
+derived_rows <- data.frame(
+  dataset = c("Adams", "Adams"),
+  method = c("Pseudobulk_hvg500", "Pseudobulk_hvg2000"),
+  time_secs = c(0.5, 0.75),
+  mem_GB = c(NA_real_, NA_real_),
+  aggregate_time_secs = c(1.25, 2.25),
+  shared_fit_time_secs = c(2.75, 3.75),
+  shared_time_secs = c(4, 6),
+  variant_time_secs = c(0.5, 0.75),
+  shared_mem_GB = c(NA_real_, NA_real_),
+  timing_id = c("id-a", "id-b"),
+  timing_schema = c(2L, 2L),
+  stringsAsFactors = FALSE
+)
+derived_summary <- summarize_exec_times(derived_rows)
+derived_row <- derived_summary[derived_summary$dataset == "Adams", , drop = FALSE]
+stopifnot(
+  derived_row$variant_time_secs[[1L]] == 1.25,
+  derived_row$shared_time_secs[[1L]] == 10,
+  derived_row$total_time_secs[[1L]] == 11.25
+)
+bad_decomposition <- derived_rows
+bad_decomposition$shared_time_secs[[1L]] <- 5
+expect_helper_error(function() summarize_exec_times(bad_decomposition))
+bad_shared_row <- mixed_rows
+bad_shared_row$variant_time_secs[[4L]] <- 0
+expect_helper_error(function() summarize_exec_times(bad_shared_row))
+
+# Keep the canonical runtime log assertions independent from the schema-2
+# pseudobulk timing log above.
 
 # A metadata artifact-MD5 mismatch is rejected while the RDS checksum remains
 # valid.  Re-write the metadata sidecar so this is not merely a stale JSON

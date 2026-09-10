@@ -259,6 +259,10 @@ plot_mds <- function(
   return(p)
 }
 
+# Shared benchmark preparation is represented by global
+# `prepare_pseudobulk_shared` and `prepare_pseudobulk_ct_shared_<token>` rows,
+# not method variants.  merge_exec_times() keeps all shared rows out of
+# method-level result joins while preserving schema-2 local and legacy timing.
 # Shared cleaning step for the funky-heatmap figures (Figure 2A, Supp fig 15,
 # "For presentation"): merge exec times, filter methods, recode method/score/
 # dataset display names. `score_set` optionally restricts to the configured
@@ -358,7 +362,11 @@ build_funky_heatmap <- function(
       names_prefix = "Metric__"
     )
 
+  # Runtime bars use method-local rows.  Both global shared preparation rows
+  # are deliberately excluded from clean_data; adding shared work to every
+  # variant would charge one timing identity once per method.
   df_runtime <- clean_data %>%
+    filter(is.finite(time_secs), time_secs >= 0) %>%
     distinct(method, dataset, time_secs) %>%
     group_by(method) %>%
     dplyr::summarise(raw_time = mean(time_secs, na.rm = TRUE), .groups = "drop") %>%

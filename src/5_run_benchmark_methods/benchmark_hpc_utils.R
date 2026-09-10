@@ -311,10 +311,157 @@ load_h5ad_sample_metadata <- function(
   }
   metadata
 }
+# Read the raw Sample aggregate directly from the H5AD CSR layer.  This is
+# the canonical Stage 5 path: the returned genes-by-samples matrix crosses
+# the reticulate boundary once and is passed directly to the matrix DESeq2
+# helpers; no one-sample-per-column Seurat object is created.
+load_h5ad_sample_aggregate <- function(
+  h5ad_path,
+  sample_col = "Sample",
+  metadata_columns = character(),
+  chunk_size = 4096L,
+  max_value = .Machine$integer.max
+) {
+  project_root <- Sys.getenv("PROJECT_ROOT")
+  if (project_root == "") {
+    stop("PROJECT_ROOT not set; cannot aggregate an H5AD.")
+  }
+  module_dir <- normalizePath(
+    file.path(project_root, "src", "utils", "py"),
+    mustWork = TRUE
+  )
+  python_sys <- reticulate::import("sys", convert = FALSE)
+  python_sys$path$insert(0L, module_dir)
+  loader <- reticulate::import_from_path(
+    "h5ad_pseudobulk",
+    path = module_dir,
+    convert = FALSE
+  )
+  columns <- unique(c(sample_col, metadata_columns))
+  if (is.null(max_value)) {
+    aggregated <- loader$aggregate_h5ad_counts_by_sample(
+      h5ad_path,
+      sample_col,
+      as.list(as.character(columns)),
+      as.integer(chunk_size)
+    )
+  } else {
+    aggregated <- loader$aggregate_h5ad_counts_by_sample(
+      h5ad_path,
+      sample_col,
+      as.list(as.character(columns)),
+      as.integer(chunk_size),
+      as.numeric(max_value)
+    )
+  }
+  counts <- reticulate::py_to_r(aggregated$counts)
+  sample_ids <- as.character(reticulate::py_to_r(aggregated$sample_ids))
+  gene_names <- as.character(reticulate::py_to_r(aggregated$gene_names))
+  metadata <- reticulate::py_to_r(aggregated$metadata)
+  if (!is.matrix(counts)) counts <- as.matrix(counts)
+  if (length(dim(counts)) != 2L ||
+      nrow(counts) != length(gene_names) ||
+      ncol(counts) != length(sample_ids)) {
+    stop("H5AD Sample aggregate has inconsistent matrix dimensions.")
+  }
+  if (!is.data.frame(metadata)) {
+    metadata <- as.data.frame(metadata, stringsAsFactors = FALSE)
+  }
+  if (nrow(metadata) != length(sample_ids) ||
+      !sample_col %in% colnames(metadata)) {
+    stop("H5AD Sample aggregate metadata has inconsistent sample rows.")
+  }
+  metadata_samples <- as.character(metadata[[sample_col]])
+  if (length(metadata_samples) != length(sample_ids) ||
+      anyNA(metadata_samples) ||
+      !identical(metadata_samples, sample_ids)) {
+    stop("H5AD Sample aggregate metadata is not aligned to first-seen samples.")
+  }
+  if (anyDuplicated(sample_ids) || anyNA(sample_ids) ||
+      any(!nzchar(trimws(sample_ids)))) {
+    stop("H5AD Sample aggregate IDs are invalid.")
+  }
+  if (any(!is.finite(counts)) || any(counts < 0) ||
+      any(counts != floor(counts))) {
+    stop("H5AD Sample aggregate counts are not finite nonnegative integers.")
+  }
+  if (!is.null(max_value) && any(counts > max_value)) {
+    stop("H5AD Sample aggregate exceeds the requested count ceiling.")
+  }
+  rownames(metadata) <- sample_ids
+  rownames(counts) <- gene_names
+  colnames(counts) <- sample_ids
+  list(
+    counts = counts,
+    sample_ids = sample_ids,
+    gene_names = gene_names,
+    metadata = metadata
+  )
+}
 
-# Stream the raw CSR counts layer into one count matrix per sample. This is
-# used only when a count-dependent method genuinely needs a pseudobulk
-# fallback; it avoids constructing the full cell-by-gene Seurat object.
+# Metadata/HVG-only loading used before a canonical pseudobulk cache decides
+# whether the raw counts layer is needed.  h5ad_obs_free validates persisted
+# shapes and reads only obs; h5ad_counts_subset reads var["hvg_rank"] without
+# reading any X/layers values.
+load_h5ad_pseudobulk_metadata <- function(
+  h5ad_path,
+  sample_col = "Sample",
+  metadata_columns = character(),
+  n_hvg = 3000L,
+  required_nonmissing_columns = sample_col
+) {
+  project_root <- Sys.getenv("PROJECT_ROOT")
+  if (project_root == "") {
+    stop("PROJECT_ROOT not set; cannot load H5AD metadata.")
+  }
+  module_dir <- normalizePath(
+    file.path(project_root, "src", "utils", "py"),
+    mustWork = TRUE
+  )
+  python_sys <- reticulate::import("sys", convert = FALSE)
+  python_sys$path$insert(0L, module_dir)
+  obs_loader <- reticulate::import_from_path(
+    "h5ad_obs_free", path = module_dir, convert = FALSE
+  )
+  hvg_loader <- reticulate::import_from_path(
+    "h5ad_counts_subset", path = module_dir, convert = FALSE
+  )
+  columns <- unique(c(sample_col, metadata_columns))
+  obs <- reticulate::py_to_r(obs_loader$load_h5ad_obs_free(
+    h5ad_path, as.list(as.character(columns))
+  ))
+  hvg_rank_genes <- as.character(reticulate::py_to_r(
+    hvg_loader$read_h5ad_hvg_genes(h5ad_path, as.integer(n_hvg))
+  ))
+  if (!is.data.frame(obs) || !sample_col %in% colnames(obs)) {
+    stop("H5AD metadata has no valid ", sample_col, " column.")
+  }
+  required_nonmissing_columns <- unique(as.character(
+    required_nonmissing_columns
+  ))
+  missing_required <- setdiff(required_nonmissing_columns, colnames(obs))
+  if (length(missing_required) > 0L) {
+    stop("H5AD metadata lacks required columns: ",
+         paste(missing_required, collapse = ", "))
+  }
+  for (column in required_nonmissing_columns) {
+    values <- as.character(obs[[column]])
+    if (anyNA(values) || any(!nzchar(trimws(values))) ||
+        any(tolower(values) == "nan")) {
+      stop("H5AD metadata column '", column,
+           "' contains missing or blank values.")
+    }
+  }
+  if (length(hvg_rank_genes) == 0L || anyNA(hvg_rank_genes) ||
+      any(!nzchar(hvg_rank_genes)) || anyDuplicated(hvg_rank_genes)) {
+    stop("H5AD hvg_rank metadata is invalid.")
+  }
+  list(obs = obs, hvg_rank_genes = hvg_rank_genes)
+}
+
+# Legacy-only adapter: this retains the historical Seurat boundary for
+# maintained callers, but canonical Stage 5 preparation/fallback never calls
+# it.  A sample-level Seurat round trip must not be used for AggregateExpression.
 load_h5ad_pseudobulk_seurat <- function(
   h5ad_path,
   sample_col = "Sample",
@@ -415,16 +562,246 @@ load_benchmark_seurat <- function(
   return(seurat)
 }
 
-# Load the precomputed pseudobulk variants from pseudobulks/ (produced by the
-# prepare_pseudobulk worker); variants missing on disk (e.g. --methods mofa
-# without the prep array on a stale scratch) are computed on the fly via
-# prepare_pseudobulks_hpc (only the missing subset), saved atomically and
-# logged as prepare_pseudobulk_<variant> rows. `seurat` (counts) is required
-# only when the on-the-fly fallback triggers; callers that cannot afford the
-# full object may pre-check pb_variants_missing() and build it lazily.
-# Returns per-variant list(pb, time_secs).
+# The canonical fallback consumes the H5AD directly.  The first argument is
+# retained as an inert compatibility slot for old callers; no canonical path
+# may pass a Seurat object here.
+pb_timing_id <- function(
+  cache_stem,
+  view = "benchmark_analysis",
+  analysis_pass = NULL,
+  run_id = NULL
+) {
+  if (is.null(run_id) || !nzchar(as.character(run_id))) {
+    run_id <- Sys.getenv("ECODA_RUN_ID", unset = "")
+  }
+  if (!nzchar(as.character(run_id))) run_id <- "unbound"
+  pass <- if (is.null(analysis_pass)) "none" else as.character(analysis_pass)
+  paste(
+    as.character(run_id), as.character(cache_stem), as.character(view), pass,
+    sep = ":"
+  )
+}
+
+.pb_timing_schema2 <- function(value, label = "Pseudobulk cache") {
+  if (!is.list(value)) stop(label, " is not a list.")
+  if (!"timing_schema" %in% names(value)) return(FALSE)
+  schema <- value[["timing_schema"]]
+  if (!is.numeric(schema) || length(schema) != 1L ||
+      is.na(schema) || !is.finite(schema) ||
+      schema != 2 || schema != floor(schema)) {
+    stop(label, " has an unsupported timing_schema.")
+  }
+  TRUE
+}
+
+.pb_validate_nonnegative <- function(
+  value, label, allow_na = FALSE
+) {
+  if (!is.numeric(value) || length(value) != 1L) {
+    stop(label, " is invalid.")
+  }
+  if (is.na(value)) {
+    if (allow_na && !is.nan(value)) return(invisible(TRUE))
+    stop(label, " is invalid.")
+  }
+  if (!is.finite(value) || value < 0) stop(label, " is invalid.")
+  invisible(TRUE)
+}
+
+pb_variant_time_secs <- function(variant) {
+  if (!is.list(variant)) stop("Pseudobulk variant record must be a list.")
+  schema2 <- .pb_timing_schema2(variant)
+  field <- if (isTRUE(schema2)) "variant_time_secs" else "time_secs"
+  if (!field %in% names(variant)) {
+    stop("Pseudobulk variant timing is missing ", field, ".")
+  }
+  .pb_validate_nonnegative(
+    variant[[field]], paste0("Pseudobulk ", field)
+  )
+  as.numeric(variant[[field]])
+}
+
+pb_shared_time_secs <- function(variant) {
+  if (!is.list(variant)) {
+    stop("Pseudobulk variant record must be a list.")
+  }
+  if (!isTRUE(.pb_timing_schema2(variant))) return(0)
+  .pb_validate_nonnegative(
+    variant[["shared_time_secs"]],
+    "Pseudobulk shared_time_secs"
+  )
+  as.numeric(variant[["shared_time_secs"]])
+}
+
+# Validate cache timing fields independently of whether an execution log is
+# being emitted.  This keeps malformed schema-2 payloads from being treated as
+# cache hits or from reaching a raw-count fallback.
+validate_pseudobulk_timing_record <- function(value, variant = NULL) {
+  label <- if (is.null(variant)) "Pseudobulk cache" else {
+    paste0("Pseudobulk cache ", variant)
+  }
+  if (!is.list(value)) stop(label, " is not a list.")
+  schema2 <- .pb_timing_schema2(value, label)
+  if (!isTRUE(schema2)) {
+    if (!"time_secs" %in% names(value)) {
+      # A legacy matrix wrapper may have no timing metadata at all.  It remains
+      # a legacy cache; callers that need a timing row will reject it at the
+      # point where a numeric time is required.
+      return(invisible(TRUE))
+    }
+    .pb_validate_nonnegative(value[["time_secs"]],
+                             paste0(label, " legacy time_secs"))
+    return(invisible(TRUE))
+  }
+
+  required <- c(
+    "pb", "time_secs", "mem_GB", "aggregate_time_secs",
+    "shared_fit_time_secs", "shared_time_secs", "variant_time_secs",
+    "shared_mem_GB", "timing_id", "timing_schema"
+  )
+  missing <- setdiff(required, names(value))
+  if (length(missing) > 0L) {
+    stop(label, " is missing timing fields: ", paste(missing, collapse = ", "))
+  }
+
+  pb <- value[["pb"]]
+  if (!is.matrix(pb) || length(dim(pb)) != 2L ||
+      any(dim(pb) <= 0L) || !is.numeric(pb) ||
+      any(!is.finite(pb))) {
+    stop(label, " has a non-matrix or invalid pb payload.")
+  }
+
+  numeric_fields <- c(
+    "time_secs", "aggregate_time_secs", "shared_fit_time_secs",
+    "shared_time_secs", "variant_time_secs"
+  )
+  for (field in numeric_fields) {
+    .pb_validate_nonnegative(value[[field]], paste0(label, " ", field))
+  }
+  for (field in c("mem_GB", "shared_mem_GB")) {
+    .pb_validate_nonnegative(
+      value[[field]], paste0(label, " ", field), allow_na = TRUE
+    )
+  }
+
+  timing_id <- value[["timing_id"]]
+  timing_id_parts <- if (is.character(timing_id) && length(timing_id) == 1L &&
+                         !is.na(timing_id)) {
+    strsplit(timing_id, ":", fixed = TRUE)[[1L]]
+  } else {
+    character()
+  }
+  if (!is.character(timing_id) || length(timing_id) != 1L ||
+      is.na(timing_id) || !nzchar(trimws(timing_id)) ||
+      length(timing_id_parts) != 4L ||
+      any(!nzchar(trimws(timing_id_parts))) ||
+      grepl("[[:cntrl:]]", timing_id, perl = TRUE)) {
+    stop(label, " has an invalid timing_id.")
+  }
+  if (!isTRUE(all.equal(
+    as.numeric(value[["time_secs"]]),
+    as.numeric(value[["variant_time_secs"]]),
+    tolerance = 0
+  ))) {
+    stop(label, " time_secs does not equal variant_time_secs.")
+  }
+  if (!isTRUE(all.equal(
+    as.numeric(value[["shared_time_secs"]]),
+    as.numeric(value[["aggregate_time_secs"]]) +
+      as.numeric(value[["shared_fit_time_secs"]]),
+    tolerance = 0
+  ))) {
+    stop(label, " shared_time_secs is not aggregate + shared_fit.")
+  }
+  invisible(TRUE)
+}
+
+
+# Emit one shared timing row and one variant-local row per cache record.  The
+# execution Feather schema intentionally remains the historical four columns;
+# the cache timing_id is the run-scoped identity used to deduplicate the
+# shared stage during report/merge.
+emit_pseudobulk_timing_rows <- function(
+  variants, ds, log_file = NULL
+) {
+  if (length(variants) == 0L) return(invisible(NULL))
+  if (is.null(names(variants)) || any(!nzchar(names(variants)))) {
+    stop("Pseudobulk timing records must be named by variant.")
+  }
+  has_timing <- vapply(
+    variants,
+    function(value) is.list(value) && (
+      "time_secs" %in% names(value) ||
+      "timing_schema" %in% names(value)
+    ),
+    logical(1)
+  )
+  for (variant_name in names(variants)[has_timing]) {
+    validate_pseudobulk_timing_record(
+      variants[[variant_name]], variant = variant_name
+    )
+  }
+  if (is.null(log_file) || is.na(log_file) || !nzchar(log_file)) {
+    return(invisible(NULL))
+  }
+  schema2 <- has_timing & vapply(
+    variants,
+    function(value) is.list(value) && isTRUE(
+      .pb_timing_schema2(value)
+    ),
+    logical(1)
+  )
+  if (any(schema2)) {
+    shared_ids <- unique(vapply(
+      variants[schema2],
+      function(value) as.character(value[["timing_id"]]),
+      character(1)
+    ))
+    if (length(shared_ids) != 1L || !nzchar(shared_ids[[1L]])) {
+      stop("Pseudobulk schema-2 variants do not share one timing_id.")
+    }
+    shared_times <- unique(vapply(
+      variants[schema2],
+      function(value) as.numeric(value[["shared_time_secs"]]),
+      numeric(1)
+    ))
+    if (length(shared_times) != 1L || !is.finite(shared_times[[1L]]) ||
+        shared_times[[1L]] < 0) {
+      stop("Pseudobulk schema-2 shared timing is invalid.")
+    }
+    shared_mem <- variants[[which(schema2)[[1L]]]][["shared_mem_GB"]]
+    if (!all(vapply(
+      variants[schema2],
+      function(value) identical(value[["shared_mem_GB"]], shared_mem),
+      logical(1)
+    ))) {
+      stop("Pseudobulk schema-2 shared memory differs.")
+    }
+    log_exec_row(
+      ds, "prepare_pseudobulk_shared", shared_times[[1L]], log_file,
+      mem_gb = shared_mem
+    )
+  }
+  for (variant_name in names(variants)[has_timing]) {
+    value <- variants[[variant_name]]
+    local_time <- pb_variant_time_secs(value)
+    if (!is.finite(local_time) || local_time < 0) {
+      stop("Pseudobulk variant timing is invalid for ", variant_name)
+    }
+    log_exec_row(
+      ds, paste0("prepare_pseudobulk_", variant_name), local_time, log_file,
+      mem_gb = if (is.list(value)) value$mem_GB else NA_real_
+    )
+  }
+  invisible(NULL)
+}
+
+# Load the precomputed pseudobulk variants from pseudobulks/.  Cache
+# validation and deserialization happen before the H5AD path is touched.
+# Missing variants are rebuilt with one bounded raw Sample aggregation and
+# one shared full-gene fit; a Seurat object is never used by this fallback.
 load_pb_variants <- function(
-  seurat,
+  seurat = NULL,
   sample_col,
   hvg_rank_genes,
   pseudobulk_dir,
@@ -435,7 +812,13 @@ load_pb_variants <- function(
   batch_col = NULL,
   blind = TRUE,
   correct_batch = FALSE,
-  variants = PB_VARIANT_NAMES
+  variants = PB_VARIANT_NAMES,
+  h5ad_path = NULL,
+  view = "benchmark_analysis",
+  analysis_pass = NULL,
+  run_id = NULL,
+  source_identity = NULL,
+  chunk_size = 4096L
 ) {
   target_variants <- unique(as.character(variants))
   if (!all(target_variants %in% PB_VARIANT_NAMES)) {
@@ -444,6 +827,7 @@ load_pb_variants <- function(
   }
   missing <- character()
   variants_out <- list()
+  computed_out <- list()
   for (v in target_variants) {
     cache_path <- file.path(
       pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds")
@@ -452,40 +836,58 @@ load_pb_variants <- function(
       missing <- c(missing, v)
       next
     }
-    variants_out[[v]] <- read_rds_checked(
+    value <- read_rds_checked(
       cache_path,
       producer = PB_VARIANT_PRODUCERS[[v]]
     )
+    validate_pseudobulk_timing_record(value, variant = v)
+    variants_out[[v]] <- value
   }
-  if (length(missing) > 0) {
-    if (is.null(seurat)) {
+  if (length(missing) > 0L) {
+    if (is.null(h5ad_path) || !nzchar(as.character(h5ad_path))) {
       stop("Pseudobulk variant(s) missing in ", pseudobulk_dir,
            " (", paste(missing, collapse = ", "),
-           ") and no Seurat object was provided for the on-the-fly fallback.")
+           ") and no H5AD path was provided for the raw fallback.")
     }
     message("Pseudobulk variant(s) missing in ", pseudobulk_dir,
             ", computing on the fly: ", paste(missing, collapse = ", "))
     computed <- prepare_pseudobulks_hpc(
-      seurat,
+      h5ad_path = h5ad_path,
       sample_col = sample_col,
       hvg_rank_genes = hvg_rank_genes,
       variants = missing,
       batch_col = batch_col,
       blind = blind,
-      correct_batch = correct_batch
+      correct_batch = correct_batch,
+      cache_stem = cache_stem,
+      view = view,
+      analysis_pass = analysis_pass,
+      run_id = run_id,
+      source_identity = source_identity,
+      chunk_size = chunk_size
     )
     for (v in names(computed)) {
+      value <- computed[[v]]
+      validate_pseudobulk_timing_record(value, variant = v)
+      cache_path <- file.path(
+        pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds")
+      )
       save_rds_atomic(
-        computed[[v]],
-        file.path(pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds")),
+        value, cache_path,
         producer = PB_VARIANT_PRODUCERS[[v]]
       )
-      log_exec_row(ds, paste0("prepare_pseudobulk_", v),
-                   computed[[v]]$time_secs, log_file)
-      variants_out[[v]] <- computed[[v]]
+      variants_out[[v]] <- value
+      computed_out[[v]] <- value
     }
   }
-  return(variants_out)
+  # A partial repair must not mix an older cached timing identity with the
+  # newly computed shared stage in the canonical four-column log.  Cache-only
+  # loads retain the historical all-cached replay.
+  timing_records <- if (length(missing) > 0L) computed_out else variants_out
+  emit_pseudobulk_timing_rows(
+    timing_records, ds, log_file = log_file
+  )
+  variants_out[target_variants]
 }
 
 # Composition is obs-only and therefore cannot rebuild missing pseudobulks.

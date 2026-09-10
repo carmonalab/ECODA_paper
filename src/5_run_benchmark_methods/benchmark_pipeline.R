@@ -273,6 +273,122 @@ read_rds_sidecar_checked <- function(file_path, checksums) {
   readRDS(file_path)
 }
 
+# Validate timing metadata carried by a cached benchmark result bundle before
+# the bundle is reused or replayed.  Pseudobulk cache records have a stricter
+# validator in benchmark_hpc_utils.R; this companion accepts both those
+# records and downstream method bundles, whose payload omits `pb` and the
+# aggregate decomposition.  A missing timing_schema is the legacy contract:
+# timing_id alone must not promote an old bundle to schema 2.
+validate_hpc_timing_bundle <- function(value, label = "Benchmark result") {
+  if (!is.list(value)) stop(label, " is not a list.")
+  if (!"timing_schema" %in% names(value)) {
+    return(invisible(FALSE))
+  }
+
+  schema <- value[["timing_schema"]]
+  if (!is.numeric(schema) || length(schema) != 1L ||
+      is.na(schema) || !is.finite(schema) ||
+      schema != 2 || schema != floor(schema)) {
+    stop(label, " has an invalid timing_schema.")
+  }
+
+  require_fields <- c(
+    "shared_time_secs", "variant_time_secs", "shared_mem_GB", "timing_id"
+  )
+  missing <- setdiff(require_fields, names(value))
+  if (length(missing) > 0L) {
+    stop(label, " is missing timing fields: ",
+         paste(missing, collapse = ", "))
+  }
+
+  validate_nonnegative <- function(raw, field, allow_na = FALSE) {
+    if (!is.numeric(raw) || length(raw) != 1L) {
+      stop(label, " has invalid ", field, ".")
+    }
+    if (is.na(raw)) {
+      if (allow_na && !is.nan(raw)) return(invisible(TRUE))
+      stop(label, " has invalid ", field, ".")
+    }
+    if (!is.finite(raw) || raw < 0) {
+      stop(label, " has invalid ", field, ".")
+    }
+    invisible(TRUE)
+  }
+  for (field in c("shared_time_secs", "variant_time_secs")) {
+    validate_nonnegative(value[[field]], field)
+  }
+  for (field in intersect(
+    c("time_secs", "exec_time", "aggregate_time_secs",
+      "shared_fit_time_secs"),
+    names(value)
+  )) {
+    validate_nonnegative(value[[field]], field)
+  }
+  for (field in intersect(c("mem_GB", "shared_mem_GB"), names(value))) {
+    validate_nonnegative(value[[field]], field, allow_na = TRUE)
+  }
+
+  timing_id <- value[["timing_id"]]
+  timing_id_parts <- if (is.character(timing_id) && length(timing_id) == 1L &&
+                         !is.na(timing_id)) {
+    strsplit(timing_id, ":", fixed = TRUE)[[1L]]
+  } else {
+    character()
+  }
+  if (!is.character(timing_id) || length(timing_id) != 1L ||
+      is.na(timing_id) || !nzchar(trimws(timing_id)) ||
+      length(timing_id_parts) != 4L ||
+      any(!nzchar(trimws(timing_id_parts))) ||
+      grepl("[[:cntrl:]]", timing_id, perl = TRUE)) {
+    stop(label, " has an invalid timing_id.")
+  }
+
+  if ("pb" %in% names(value)) {
+    pb <- value[["pb"]]
+    if (!is.matrix(pb) || length(dim(pb)) != 2L ||
+        any(dim(pb) <= 0L) || !is.numeric(pb) ||
+        any(!is.finite(pb))) {
+      stop(label, " has a non-matrix or invalid pb payload.")
+    }
+    if (!all(c("time_secs", "mem_GB") %in% names(value))) {
+      stop(label, " pseudobulk timing record is incomplete.")
+    }
+  }
+  if ("time_secs" %in% names(value) &&
+      !isTRUE(all.equal(
+        as.numeric(value[["time_secs"]]),
+        as.numeric(value[["variant_time_secs"]]),
+        tolerance = 0
+      ))) {
+    stop(label, " time_secs does not equal variant_time_secs.")
+  }
+  has_aggregate <- "aggregate_time_secs" %in% names(value)
+  has_fit <- "shared_fit_time_secs" %in% names(value)
+  if (has_aggregate != has_fit) {
+    stop(label, " has an incomplete shared timing decomposition.")
+  }
+  if (has_aggregate) {
+    if (!isTRUE(all.equal(
+      as.numeric(value[["shared_time_secs"]]),
+      as.numeric(value[["aggregate_time_secs"]]) +
+        as.numeric(value[["shared_fit_time_secs"]]),
+      tolerance = 0
+    ))) {
+      stop(label, " shared_time_secs is not aggregate + shared_fit.")
+    }
+  }
+  if ("shared_timing_method" %in% names(value)) {
+    shared_method <- value[["shared_timing_method"]]
+    if (!is.character(shared_method) || length(shared_method) != 1L ||
+        is.na(shared_method) ||
+        !grepl("^prepare_pseudobulk_ct_shared_[A-Za-z0-9_-]+$",
+               shared_method)) {
+      stop(label, " has an invalid shared_timing_method.")
+    }
+  }
+  invisible(TRUE)
+}
+
 # Load HPC-computed benchmark results (Pipeline A methods + Pipeline B
 # trans/zeroimp) into the notebook's result_list. Every knit starts from a
 # fresh list() and loads ALL bundles anew (no result_list.rds persistence,
@@ -328,7 +444,16 @@ load_hpc_benchmark_results <- function(
       next
     }
     bundles <- read_rds_sidecar_checked(method_file, checksums)
+    if (!is.list(bundles)) {
+      stop("HPC benchmark result bundle is not a list: ", method_file)
+    }
     for (nm in names(bundles)) {
+      if (is.list(bundles[[nm]])) {
+        validate_hpc_timing_bundle(
+          bundles[[nm]],
+          label = paste0("HPC benchmark ", ds, "/", method, "/", nm)
+        )
+      }
       if (!nm %in% names(result_list[["bmark"]][[ds]])) {
         result_list[["bmark"]][[ds]][[nm]] <- bundles[[nm]]
       }
@@ -905,77 +1030,187 @@ run_benchmark_analysis <- function(
 # _sqrtmat suffix).
 # ============================================================
 
-# Precompute the shared DESeq2 pseudobulks used by MOFA and Pseudobulk.
-# Returns per-variant list(pb, time_secs, mem_GB) (mem_GB = peak_rss_gb() at
-# variant completion; old bundles without it re-emit NA). Variants (legacy
-# combo list):
-#   schvg2000  get_pb_deseq2(hvg = top-2000 hvg_rank genes)
-#   hvg2000    get_pb_deseq2(n_hvg = 2000)
-#   hvg500     get_pb_deseq2(n_hvg = 500)
-#   hvg2000_bl get_pb_deseq2(n_hvg = 2000, black_list = "default_without_sex_genes")
-#   hvg1000    get_pb_deseq2(n_hvg = 1000)
-#   hvg3000    get_pb_deseq2(n_hvg = 3000)
-# `variants` restricts the computed subset (default: all PB_VARIANT_NAMES);
-# failure-resume callers pass only the missing set so existing caches are
-# neither recomputed nor overwritten.
-# NOTE: the legacy get_pb_deseq2 black-list behavior (incl. the pre-existing
-# `%in% black_list` no-op typo at pseudobulk.R:84) is preserved on purpose,
-# to keep Pseudobulk_hvg2000_bl legacy-equivalent.
+# Focused tests may source this pipeline file without the HPC utility file.
+# Keep the canonical timing-ID construction available in that isolated
+# context; the production load order resolves the shared helper instead.
+if (!exists("pb_timing_id", mode = "function", inherits = TRUE)) {
+  pb_timing_id <- function(
+    cache_stem, view = "benchmark_analysis", analysis_pass = NULL,
+    run_id = NULL
+  ) {
+    if (is.null(run_id) || !nzchar(as.character(run_id))) {
+      run_id <- Sys.getenv("ECODA_RUN_ID", unset = "")
+    }
+    if (!nzchar(as.character(run_id))) run_id <- "unbound"
+    pass <- if (is.null(analysis_pass)) "none" else as.character(analysis_pass)
+    paste(as.character(run_id), as.character(cache_stem), as.character(view),
+          pass, sep = ":")
+  }
+}
+
+# Precompute shared DESeq2 pseudobulks from one raw H5AD Sample aggregate.
+# Full-gene HVG variants share one fit; schvg2000 intentionally uses a
+# separate pre-filtered fit.  The returned cache payload retains the legacy
+# $pb/$time_secs/$mem_GB fields and adds schema-2 shared timing fields.
 prepare_pseudobulks_hpc <- function(
-  seurat,
+  h5ad_path,
   sample_col = "Sample",
   hvg_rank_genes = NULL,
   variants = PB_VARIANT_NAMES,
   batch_col = NULL,
   blind = TRUE,
-  correct_batch = FALSE
+  correct_batch = FALSE,
+  cache_stem = basename(h5ad_path),
+  view = "benchmark_analysis",
+  analysis_pass = NULL,
+  run_id = NULL,
+  source_identity = NULL,
+  chunk_size = 4096L
 ) {
-  n_ranked <- length(hvg_rank_genes)
-  pb_specs <- list(
-    schvg2000 = list(
-      hvg = hvg_rank_genes[seq_len(min(2000, n_ranked))],
-      n_hvg = NULL,
-      black_list = "none"
-    ),
-    hvg2000 = list(hvg = NULL, n_hvg = 2000, black_list = "none"),
-    hvg500 = list(hvg = NULL, n_hvg = 500, black_list = "none"),
-    hvg2000_bl = list(
-      hvg = NULL,
-      n_hvg = 2000,
-      black_list = "default_without_sex_genes"
-    ),
-    hvg1000 = list(hvg = NULL, n_hvg = 1000, black_list = "none"),
-    hvg3000 = list(hvg = NULL, n_hvg = 3000, black_list = "none")
-  )
-
-  variants <- intersect(variants, names(pb_specs))
-  if (length(variants) == 0) {
-    stop("No valid pseudobulk variant names requested (valid: ",
-         paste(names(pb_specs), collapse = ", "), ")")
+  if (!is.character(h5ad_path) || length(h5ad_path) != 1L ||
+      is.na(h5ad_path) || !nzchar(h5ad_path) || !file.exists(h5ad_path)) {
+    stop("prepare_pseudobulks_hpc: H5AD path is missing: ", h5ad_path)
+  }
+  variants <- unique(as.character(variants))
+  unknown <- setdiff(variants, PB_VARIANT_NAMES)
+  if (length(unknown) > 0L) {
+    stop("Unknown pseudobulk variant requested: ",
+         paste(unknown, collapse = ", "))
+  }
+  if (length(variants) == 0L) {
+    stop("No pseudobulk variants requested.")
+  }
+  if (is.null(hvg_rank_genes) || length(hvg_rank_genes) == 0L) {
+    stop("prepare_pseudobulks_hpc requires ranked HVG genes.")
+  }
+  hvg_rank_genes <- as.character(hvg_rank_genes)
+  if (anyNA(hvg_rank_genes) || any(!nzchar(hvg_rank_genes)) ||
+      anyDuplicated(hvg_rank_genes)) {
+    stop("prepare_pseudobulks_hpc received invalid ranked HVG genes.")
   }
 
-  results <- list()
-  for (variant in variants) {
-    spec <- pb_specs[[variant]]
-    time_secs <- exec_time(
-      pb <- get_pb_deseq2(
-        seurat,
-        sample_col = sample_col,
-        hvg = spec$hvg,
-        n_hvg = spec$n_hvg,
-        black_list = spec$black_list,
+  specs <- list(
+    schvg2000 = list(n_hvg = 2000L, black_list = "none"),
+    hvg2000 = list(n_hvg = 2000L, black_list = "none"),
+    hvg500 = list(n_hvg = 500L, black_list = "none"),
+    hvg2000_bl = list(
+      n_hvg = 2000L, black_list = "default_without_sex_genes"
+    ),
+    hvg1000 = list(n_hvg = 1000L, black_list = "none"),
+    hvg3000 = list(n_hvg = 3000L, black_list = "none")
+  )
+  timing_id <- pb_timing_id(
+    cache_stem = cache_stem,
+    view = view,
+    analysis_pass = analysis_pass,
+    run_id = run_id
+  )
+
+  # This call is the only raw Sample aggregation for the entire requested
+  # variant set.  Biological labels are intentionally not requested.
+  aggregate_time <- exec_time(
+    aggregated <- load_h5ad_sample_aggregate(
+      h5ad_path,
+      sample_col = sample_col,
+      metadata_columns = unique(c(sample_col, batch_col)),
+      chunk_size = chunk_size,
+      max_value = .Machine$integer.max
+    )
+  )
+  aggregate_time <- as.numeric(aggregate_time, units = "secs")
+
+  full_names <- c("hvg500", "hvg1000", "hvg2000", "hvg2000_bl", "hvg3000")
+  shared_names <- intersect(variants, full_names)
+  shared_fit <- NULL
+  shared_fit_time <- 0
+  shared_mem <- NA_real_
+  if (length(shared_names) > 0L) {
+    shared_fit_time <- exec_time(
+      shared_fit <- fit_pseudobulk_deseq2(
+        aggregated$counts,
+        metadata = aggregated$metadata,
         batch_col = batch_col,
         blind = blind,
         correct_batch = correct_batch
       )
     )
+    shared_fit_time <- as.numeric(shared_fit_time, units = "secs")
+    shared_mem <- peak_rss_gb()
+  }
+  shared_time <- aggregate_time + shared_fit_time
+
+  results <- list()
+  for (variant in variants) {
+    spec <- specs[[variant]]
+    variant_start <- Sys.time()
+    if (identical(variant, "schvg2000")) {
+      ranked <- hvg_rank_genes[seq_len(min(2000L, length(hvg_rank_genes)))]
+      positions <- match(ranked, rownames(aggregated$counts))
+      positions <- positions[!is.na(positions)]
+      if (length(positions) == 0L) {
+        stop("schvg2000 has no ranked genes in the H5AD gene universe.")
+      }
+      schvg_fit_time <- exec_time(
+        selected_fit <- fit_pseudobulk_deseq2(
+          aggregated$counts[positions, , drop = FALSE],
+          metadata = aggregated$metadata,
+          batch_col = batch_col,
+          blind = blind,
+          correct_batch = correct_batch
+        )
+      )
+      selected_fit_time <- as.numeric(schvg_fit_time, units = "secs")
+      selected_time <- exec_time(
+        selected <- select_pseudobulk_deseq2(
+          selected_fit,
+          n_hvg = spec$n_hvg,
+          black_list = spec$black_list
+        )
+      )
+      selected_time <- as.numeric(selected_time, units = "secs")
+      variant_time <- selected_fit_time + selected_time
+    } else {
+      if (is.null(shared_fit)) {
+        stop("Shared full-gene fit is missing for ", variant)
+      }
+      selected_time <- exec_time(
+        selected <- select_pseudobulk_deseq2(
+          shared_fit,
+          n_hvg = spec$n_hvg,
+          black_list = spec$black_list
+        )
+      )
+      selected_time <- as.numeric(selected_time, units = "secs")
+      variant_time <- selected_time
+    }
+    if (!is.matrix(selected)) selected <- as.matrix(selected)
+    pb <- t(selected)
+    canonical_samples <- as.character(aggregated$sample_ids)
+    if (is.null(rownames(pb)) || is.null(colnames(pb))) {
+      stop("Direct pseudobulk selection returned unnamed dimensions for ", variant)
+    }
+    pb <- pb[canonical_samples, , drop = FALSE]
+    variant_elapsed <- as.numeric(
+      difftime(Sys.time(), variant_start, units = "secs")
+    )
+    # Include any unmeasured R-side selection bookkeeping, while keeping the
+    # shared aggregate/fit out of every variant-local charge.
+    variant_time <- max(variant_time, variant_elapsed)
+    variant_mem <- peak_rss_gb()
     results[[variant]] <- list(
       pb = pb,
-      time_secs = as.numeric(time_secs, units = "secs"),
-      mem_GB = peak_rss_gb()
+      time_secs = variant_time,
+      mem_GB = variant_mem,
+      aggregate_time_secs = aggregate_time,
+      shared_fit_time_secs = shared_fit_time,
+      shared_time_secs = shared_time,
+      variant_time_secs = variant_time,
+      shared_mem_GB = shared_mem,
+      timing_id = timing_id,
+      timing_schema = 2L
     )
   }
-  return(results)
+  results
 }
 
 # GloScope combos: hvg2000 x pcadims {10,30,50}; hvg1000, hvg3000 x pcadims 30.
@@ -983,7 +1218,6 @@ prepare_pseudobulks_hpc <- function(
 # _pcadims<d>_dists.rds (sqrt + NA->0 applied by process_gloscope_fig); on a
 # cache miss the combo time includes the distance computation, on a hit it is
 # sqrt + read only — matching the legacy path_data dist-cache semantics.
-# GloScope combos: hvg2000 x pcadims {10,30,50}; hvg1000, hvg3000 x pcadims 30.
 # Batch-effect mode deliberately runs only the high-resolution hvg2000/30-PC
 # result. Raw GloScope distances are cached under the pass-qualified stem.
 run_gloscope_hpc <- function(
@@ -999,7 +1233,9 @@ run_gloscope_hpc <- function(
   batch_mode = FALSE,
   result_stem = ds,
   embedding_name = NULL,
-  combo_token = NULL
+  combo_token = NULL,
+  embedding_matrices = NULL,
+  embedding_sample_ids = NULL
 ) {
   combos <- if (batch_mode) {
     list(list(hvg = 2000, pcadims = 30))
@@ -1039,38 +1275,51 @@ run_gloscope_hpc <- function(
     n_hvg <- combo$hvg
     n_pca_dims <- combo$pcadims
     nm <- paste0("GloScope_hvg", n_hvg, "_pcadims", n_pca_dims)
-    emb_key <- NULL
-    if (batch_mode) {
-      if (is.null(embedding_name) || !nzchar(embedding_name)) {
-        stop("Batch GloScope requires an exact embedding reduction name")
-      }
-      emb_key <- embedding_name
-      if (!emb_key %in% names(seurat@reductions)) {
-        stop("Embedding reduction '", emb_key, "' not found in seurat")
-      }
-    }
     bundle_file <- file.path(
       results_dir,
       paste0(artifact_stem, "_", nm, ".rds")
     )
     if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- read_rds_checked(bundle_file)
+      validate_hpc_timing_bundle(
+        cached, label = paste0("GloScope result ", ds, "/", nm)
+      )
       results[[nm]] <- cached
-      # Re-emit the stored timing on cache reuse: failure-resume runs must
-      # not lose exec-log rows computed in an aborted run. The stored mem_GB
-      # is replayed too, rather than using the live cumulative peak.
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file,
                      mem_gb = cached$mem_GB)
       }
       next
     }
-    if (!batch_mode) {
-      emb_key <- paste0("pca_benchmark_analysis_hvg", n_hvg)
+
+    emb_key <- NULL
+    embedding_matrix <- NULL
+    sample_ids <- NULL
+    if (!is.null(seurat)) {
+      if (batch_mode) {
+        if (is.null(embedding_name) || !nzchar(embedding_name)) {
+          stop("Batch GloScope requires an exact embedding reduction name")
+        }
+        emb_key <- embedding_name
+      } else {
+        emb_key <- paste0("pca_benchmark_analysis_hvg", n_hvg)
+      }
       if (!emb_key %in% names(seurat@reductions)) {
         warning("Embedding '", emb_key, "' not found in seurat; skipping ", nm)
         next
       }
+      embedding_matrix <- seurat@reductions[[emb_key]]@cell.embeddings
+      sample_ids <- seurat@meta.data[[sample_col]]
+    } else {
+      if (!is.list(embedding_matrices) ||
+          is.null(embedding_matrices[[paste0("hvg", n_hvg)]]) ||
+          is.null(embedding_sample_ids)) {
+        stop(
+          "GloScope requires embedding matrices and sample IDs when Seurat is absent"
+        )
+      }
+      embedding_matrix <- embedding_matrices[[paste0("hvg", n_hvg)]]
+      sample_ids <- embedding_sample_ids
     }
     dist_file <- file.path(
       gloscope_cache_dir,
@@ -1081,8 +1330,8 @@ run_gloscope_hpc <- function(
     )
     time_secs <- exec_time(
       res <- process_gloscope_fig(
-        embedding_matrix = seurat@reductions[[emb_key]]@cell.embeddings,
-        sample_ids = seurat@meta.data[[sample_col]],
+        embedding_matrix = embedding_matrix,
+        sample_ids = sample_ids,
         metadata = metadata,
         label_col = label_col,
         gloscope_dist_file = dist_file,
@@ -1097,13 +1346,13 @@ run_gloscope_hpc <- function(
                  mem_gb = res[["mem_GB"]])
     results[[nm]] <- res
   }
-  return(results)
+  results
 }
 
 # MOFA combos: MOFA_hvg2000_factors{2,3,5,10,15}, MOFA_hvg{1000,3000}_factors15.
-# Each combo time = pb creation time (pb_variants$time_secs) + MOFA runtime.
-# Combos with num_factors >= n_samples are skipped with a warning (the model
-# cannot fit that many factors; makes the 5-sample _debug dataset usable).
+# Shared pseudobulk preparation is not charged to each combo.  A schema-2
+# result's exec_time is MOFA runtime plus the selected variant-local time;
+# preparation's shared row is emitted by load_pb_variants().
 run_mofa_hpc <- function(
   metadata,
   labels,
@@ -1113,6 +1362,27 @@ run_mofa_hpc <- function(
   force = FALSE,
   log_file = NULL
 ) {
+  local_variant_time <- function(value) {
+    if (!is.list(value)) {
+      stop("Pseudobulk variant timing is invalid.")
+    }
+    if ("timing_schema" %in% names(value)) {
+      validate_hpc_timing_bundle(value, "Pseudobulk variant")
+      raw <- value[["variant_time_secs"]]
+    } else {
+      raw <- value[["time_secs"]]
+    }
+    if (!is.numeric(raw) || length(raw) != 1L ||
+        is.na(raw) || !is.finite(raw) || raw < 0) {
+      stop("Pseudobulk variant timing is invalid.")
+    }
+    as.numeric(raw)
+  }
+  local_shared_time <- function(value) {
+    if (!is.list(value) || !"timing_schema" %in% names(value)) return(0)
+    validate_hpc_timing_bundle(value, "Pseudobulk variant")
+    as.numeric(value[["shared_time_secs"]])
+  }
   combos <- c(
     paste0("MOFA_hvg2000_factors", c(2, 3, 5, 10, 15)),
     "MOFA_hvg1000_factors15",
@@ -1140,12 +1410,10 @@ run_mofa_hpc <- function(
     )
     if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- read_rds_checked(bundle_file)
+      validate_hpc_timing_bundle(
+        cached, label = paste0("MOFA result ", ds, "/", nm)
+      )
       results[[nm]] <- cached
-      # Re-emit the stored timing on cache reuse: failure-resume runs must
-      # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's labels x datasets). The stored mem_GB
-      # is replayed too (the live cumulative peak would overstate the
-      # combo's RAM on a resume).
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file,
                      mem_gb = cached$mem_GB)
@@ -1153,7 +1421,7 @@ run_mofa_hpc <- function(
       next
     }
 
-    time_secs <- exec_time(
+    process_time <- exec_time(
       res <- process_mofa_bulk_fig(
         pb_variant$pb,
         metadata = metadata,
@@ -1161,26 +1429,38 @@ run_mofa_hpc <- function(
         num_factors = num_factors
       )
     )
-    res[["exec_time"]] <- as.numeric(time_secs, units = "secs") +
-      pb_variant$time_secs
+    process_time <- as.numeric(process_time, units = "secs")
+    variant_time <- local_variant_time(pb_variant)
+    res[["exec_time"]] <- process_time + variant_time
+    if ("timing_schema" %in% names(pb_variant)) {
+      res[["variant_time_secs"]] <- process_time + variant_time
+      res[["shared_time_secs"]] <- local_shared_time(pb_variant)
+      res[["timing_schema"]] <- 2L
+      res[["timing_id"]] <- as.character(pb_variant[["timing_id"]])
+      res[["shared_mem_GB"]] <- pb_variant[["shared_mem_GB"]]
+    }
     res[["mem_GB"]] <- peak_rss_gb()
+    validate_hpc_timing_bundle(
+      res, label = paste0("MOFA result ", ds, "/", nm)
+    )
     save_rds_atomic(res, bundle_file)
     log_exec_row(ds, nm, res[["exec_time"]], log_file,
                  mem_gb = res[["mem_GB"]])
     results[[nm]] <- res
   }
-  return(results)
+  results
 }
 
 # Pseudobulk combos: Pseudobulk_schvg2000, Pseudobulk_hvg2000,
 # Pseudobulk_hvg500, Pseudobulk_hvg2000_bl, Pseudobulk_CT_LR_hvg2000,
 # Pseudobulk_CT_HR_hvg2000, Pseudobulk_CT_LR_hvg500, Pseudobulk_CT_HR_hvg500,
 # Pseudobulk_{2,3,5,10,15}_PCA_dims, Pseudobulk_hvg1000, Pseudobulk_hvg3000.
-# Plain variants reuse the precomputed pb_variants (time = pb creation +
-# processing); CT variants compute their per-cell-type pseudobulk internally
-# (each gated on its own ct col being non-null).
+# Plain variants reuse precomputed direct-matrix pseudobulks.  CT variants
+# invoke the store-backed H5AD processor (the multi-variant helper when one
+# CT column has multiple pending HVGs); the Seurat CT routine remains only as
+# an explicit legacy fallback.
 run_pseudobulk_hpc <- function(
-  seurat,
+  seurat = NULL,
   labels,
   pb_variants,
   sample_col = "Sample",
@@ -1189,8 +1469,56 @@ run_pseudobulk_hpc <- function(
   force = FALSE,
   log_file = NULL,
   batch_mode = FALSE,
-  result_stem = ds
+  result_stem = ds,
+  h5ad_path = NULL,
+  ct_col_low_res = NULL,
+  ct_col_high_res = NULL,
+  view = "benchmark_analysis",
+  analysis_pass = NULL,
+  run_id = NULL,
+  temp_root = NULL,
+  source_identity = NULL,
+  chunk_size = 4096L
 ) {
+  local_variant_time <- function(value) {
+    if (!is.list(value)) {
+      stop("Pseudobulk variant timing is invalid.")
+    }
+    if ("timing_schema" %in% names(value)) {
+      validate_hpc_timing_bundle(value, "Pseudobulk variant")
+      raw <- value[["variant_time_secs"]]
+    } else {
+      raw <- value[["time_secs"]]
+    }
+    if (!is.numeric(raw) || length(raw) != 1L ||
+        is.na(raw) || !is.finite(raw) || raw < 0) {
+      stop("Pseudobulk variant timing is invalid.")
+    }
+    as.numeric(raw)
+  }
+  local_shared_time <- function(value) {
+    if (!is.list(value) || !"timing_schema" %in% names(value)) return(0)
+    validate_hpc_timing_bundle(value, "Pseudobulk variant")
+    as.numeric(value[["shared_time_secs"]])
+  }
+  add_pb_timing <- function(res, process_time, pb_variant) {
+    process_time <- as.numeric(process_time)
+    if (!is.finite(process_time) || process_time < 0) {
+      stop("Pseudobulk process timing is invalid.")
+    }
+    res[["exec_time"]] <- process_time + local_variant_time(pb_variant)
+    if ("timing_schema" %in% names(pb_variant)) {
+      res[["variant_time_secs"]] <- res[["exec_time"]]
+      res[["shared_time_secs"]] <- local_shared_time(pb_variant)
+      res[["timing_schema"]] <- 2L
+      res[["timing_id"]] <- as.character(pb_variant[["timing_id"]])
+      res[["shared_mem_GB"]] <- pb_variant[["shared_mem_GB"]]
+    }
+    res[["mem_GB"]] <- peak_rss_gb()
+    validate_hpc_timing_bundle(res, "Pseudobulk result")
+    res
+  }
+
   if (batch_mode) {
     pb_variant <- pb_variants[["hvg2000"]]
     if (is.null(pb_variant)) {
@@ -1200,18 +1528,25 @@ run_pseudobulk_hpc <- function(
     bundle_file <- file.path(results_dir, paste0(result_stem, "_", nm, ".rds"))
     if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- read_rds_checked(bundle_file)
+      validate_hpc_timing_bundle(
+        cached, label = paste0("Pseudobulk result ", ds, "/", nm)
+      )
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file, mem_gb = cached$mem_GB)
       }
       return(setNames(list(cached), nm))
     }
-    time_secs <- exec_time(res <- process_pseudobulk_fig(pb_variant$pb, labels))
-    res[["exec_time"]] <- as.numeric(time_secs, units = "secs") + pb_variant$time_secs
-    res[["mem_GB"]] <- peak_rss_gb()
+    process_time <- exec_time(
+      res <- process_pseudobulk_fig(pb_variant$pb, labels)
+    )
+    res <- add_pb_timing(
+      res, as.numeric(process_time, units = "secs"), pb_variant
+    )
     save_rds_atomic(res, bundle_file)
     log_exec_row(ds, nm, res[["exec_time"]], log_file, mem_gb = res[["mem_GB"]])
     return(setNames(list(res), nm))
   }
+
   plain_combos <- list(
     Pseudobulk_schvg2000 = "schvg2000",
     Pseudobulk_hvg2000 = "hvg2000",
@@ -1221,27 +1556,20 @@ run_pseudobulk_hpc <- function(
     Pseudobulk_hvg3000 = "hvg3000"
   )
   pca_combos <- paste0("Pseudobulk_", c(2, 3, 5, 10, 15), "_PCA_dims")
+  if (is.null(ct_col_low_res) && !is.null(seurat)) {
+    ct_col_low_res <- seurat@misc$cell_type_low_res
+  }
+  if (is.null(ct_col_high_res) && !is.null(seurat)) {
+    ct_col_high_res <- seurat@misc$cell_type_high_res
+  }
   ct_combos <- list(
-    Pseudobulk_CT_LR_hvg2000 = list(
-      ct_col = seurat@misc$cell_type_low_res,
-      hvg = 2000
-    ),
-    Pseudobulk_CT_HR_hvg2000 = list(
-      ct_col = seurat@misc$cell_type_high_res,
-      hvg = 2000
-    ),
-    Pseudobulk_CT_LR_hvg500 = list(
-      ct_col = seurat@misc$cell_type_low_res,
-      hvg = 500
-    ),
-    Pseudobulk_CT_HR_hvg500 = list(
-      ct_col = seurat@misc$cell_type_high_res,
-      hvg = 500
-    )
+    Pseudobulk_CT_LR_hvg2000 = list(ct_col = ct_col_low_res, hvg = 2000),
+    Pseudobulk_CT_HR_hvg2000 = list(ct_col = ct_col_high_res, hvg = 2000),
+    Pseudobulk_CT_LR_hvg500 = list(ct_col = ct_col_low_res, hvg = 500),
+    Pseudobulk_CT_HR_hvg500 = list(ct_col = ct_col_high_res, hvg = 500)
   )
 
   results <- list()
-
   for (nm in names(plain_combos)) {
     pb_variant <- pb_variants[[plain_combos[[nm]]]]
     if (is.null(pb_variant)) {
@@ -1250,24 +1578,22 @@ run_pseudobulk_hpc <- function(
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- read_rds_checked(bundle_file)
+      validate_hpc_timing_bundle(
+        cached, label = paste0("Pseudobulk result ", ds, "/", nm)
+      )
       results[[nm]] <- cached
-      # Re-emit the stored timing on cache reuse: failure-resume runs must
-      # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's labels x datasets). The stored mem_GB
-      # is replayed too (the live cumulative peak would overstate the
-      # combo's RAM on a resume).
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file,
                      mem_gb = cached$mem_GB)
       }
       next
     }
-    time_secs <- exec_time(
+    process_time <- exec_time(
       res <- process_pseudobulk_fig(pb_variant$pb, labels)
     )
-    res[["exec_time"]] <- as.numeric(time_secs, units = "secs") +
-      pb_variant$time_secs
-    res[["mem_GB"]] <- peak_rss_gb()
+    res <- add_pb_timing(
+      res, as.numeric(process_time, units = "secs"), pb_variant
+    )
     save_rds_atomic(res, bundle_file)
     log_exec_row(ds, nm, res[["exec_time"]], log_file,
                  mem_gb = res[["mem_GB"]])
@@ -1283,73 +1609,446 @@ run_pseudobulk_hpc <- function(
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- read_rds_checked(bundle_file)
+      validate_hpc_timing_bundle(
+        cached, label = paste0("Pseudobulk result ", ds, "/", nm)
+      )
       results[[nm]] <- cached
-      # Re-emit the stored timing on cache reuse: failure-resume runs must
-      # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's labels x datasets). The stored mem_GB
-      # is replayed too (the live cumulative peak would overstate the
-      # combo's RAM on a resume).
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file,
                      mem_gb = cached$mem_GB)
       }
       next
     }
-    time_secs <- exec_time(
+    process_time <- exec_time(
       res <- process_pseudobulk_fig(
         pb_hvg2000$pb,
         labels,
         pca_dims = n_pca_dims
       )
     )
-    res[["exec_time"]] <- as.numeric(time_secs, units = "secs") +
-      pb_hvg2000$time_secs
-    res[["mem_GB"]] <- peak_rss_gb()
+    res <- add_pb_timing(
+      res, as.numeric(process_time, units = "secs"), pb_hvg2000
+    )
     save_rds_atomic(res, bundle_file)
     log_exec_row(ds, nm, res[["exec_time"]], log_file,
                  mem_gb = res[["mem_GB"]])
     results[[nm]] <- res
   }
 
-  for (nm in names(ct_combos)) {
-    spec <- ct_combos[[nm]]
-    if (is.null(spec$ct_col)) {
-      warning(nm, " skipped: ct column is null for this dataset")
-      next
+  # CT combinations sharing a column also share one composite H5AD store.
+  # Resolve/cache-hit bundles first so a complete CT result set never opens
+  # the counts layer.  A partial set passes only missing HVG variants to the
+  # reusable store-backed processor, preserving missing-only publication.
+  ct_names <- names(ct_combos)
+  # Validate configured CT-column eligibility before touching any CT bundle.
+  # A stale result for a dataset whose CT column is now null is not a valid
+  # cache hit and must not even be deserialized.
+  eligible_ct_names <- ct_names[vapply(ct_names, function(nm) {
+    value <- ct_combos[[nm]]$ct_col
+    !is.null(value) && length(value) == 1L &&
+      !is.na(value) && nzchar(as.character(value))
+  }, logical(1))]
+  ct_cache_hit <- setNames(rep(FALSE, length(ct_names)), ct_names)
+  if (length(eligible_ct_names) > 0L) {
+    ct_cache_hit[eligible_ct_names] <- vapply(
+      eligible_ct_names,
+      function(nm) {
+        bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
+        artifact_checksum_ok(bundle_file) && !force
+      },
+      logical(1)
+    )
+  }
+  ct_shared_method_name <- function(ct_col) {
+    safe <- gsub("[^A-Za-z0-9_-]", "_", as.character(ct_col), perl = TRUE)
+    if (length(safe) != 1L || is.na(safe) || !nzchar(safe)) {
+      stop("CT column cannot form a shared timing method: ", ct_col)
     }
-    bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
-    if (artifact_checksum_ok(bundle_file) && !force) {
-      cached <- read_rds_checked(bundle_file)
-      results[[nm]] <- cached
-      # Re-emit the stored timing on cache reuse: failure-resume runs must
-      # not lose exec-log rows computed in an aborted run (the merge is
-      # scoped to the current run's labels x datasets). The stored mem_GB
-      # is replayed too (the live cumulative peak would overstate the
-      # combo's RAM on a resume).
-      if (!is.null(cached$exec_time)) {
-        log_exec_row(ds, nm, cached$exec_time, log_file,
-                     mem_gb = cached$mem_GB)
+    paste0("prepare_pseudobulk_ct_shared_", safe)
+  }
+  ct_shared_replay <- list()
+  record_ct_shared <- function(timing, context) {
+    if (is.null(timing)) return(invisible(NULL))
+    required <- c(
+      "shared_time_secs", "shared_mem_GB", "timing_id",
+      "timing_schema", "shared_timing_method"
+    )
+    if (!all(required %in% names(timing))) {
+      stop("CT timing metadata is incomplete for ", context)
+    }
+    shared_time <- timing[["shared_time_secs"]]
+    shared_mem <- timing[["shared_mem_GB"]]
+    timing_id <- timing[["timing_id"]]
+    shared_method <- timing[["shared_timing_method"]]
+    if (!is.numeric(shared_time) || length(shared_time) != 1L ||
+        is.na(shared_time) || !is.finite(shared_time) || shared_time < 0 ||
+        !is.numeric(shared_mem) || length(shared_mem) != 1L ||
+        (is.na(shared_mem) && is.nan(shared_mem)) ||
+        (!is.na(shared_mem) &&
+         (!is.finite(shared_mem) || shared_mem < 0)) ||
+        !is.character(timing_id) || length(timing_id) != 1L ||
+        is.na(timing_id) || !nzchar(trimws(timing_id)) ||
+        !is.character(shared_method) || length(shared_method) != 1L ||
+        is.na(shared_method) ||
+        !grepl("^prepare_pseudobulk_ct_shared_[A-Za-z0-9_-]+$",
+               shared_method)) {
+      stop("CT timing metadata is invalid for ", context)
+    }
+    prior <- ct_shared_replay[[timing_id]]
+    if (!is.null(prior)) {
+      if (!isTRUE(all.equal(prior$time, as.numeric(shared_time),
+                            tolerance = 0)) ||
+          !identical(prior$mem, shared_mem) ||
+          !identical(prior$method, shared_method)) {
+        stop("CT shared timing differs for timing_id ", timing_id)
       }
-      next
+      return(invisible(NULL))
     }
-    time_secs <- exec_time(
-      res <- process_pseudobulk_ct_fig(
-        seurat,
-        labels,
-        ct_col = spec$ct_col,
-        sample_col = sample_col,
-        hvg = spec$hvg
+    ct_shared_replay[[timing_id]] <<- list(
+      time = as.numeric(shared_time), mem = shared_mem, method = shared_method
+    )
+    invisible(NULL)
+  }
+
+  # Deserialize only eligible CT hits, validate schema-2 timing before use,
+  # and collect one shared-store row per timing identity.  The shared rows are
+  # emitted below, after all hit bundles have been read, so one grouped store
+  # can never be charged once per HVG.
+  for (nm in eligible_ct_names[ct_cache_hit[eligible_ct_names]]) {
+    bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
+    cached <- read_rds_checked(bundle_file)
+    validate_hpc_timing_bundle(
+      cached, label = paste0("Pseudobulk result ", ds, "/", nm)
+    )
+    results[[nm]] <- cached
+    if ("timing_schema" %in% names(cached)) {
+      record_ct_shared(
+        list(
+          shared_time_secs = cached[["shared_time_secs"]],
+          shared_mem_GB = cached[["shared_mem_GB"]],
+          timing_id = cached[["timing_id"]],
+          timing_schema = cached[["timing_schema"]],
+          shared_timing_method = if (
+            "shared_timing_method" %in% names(cached)
+          ) {
+            cached[["shared_timing_method"]]
+          } else {
+            ct_shared_method_name(ct_combos[[nm]][["ct_col"]])
+          }
+        ),
+        paste0(ds, "/", nm)
+      )
+    }
+    if (!is.null(cached$exec_time)) {
+      log_exec_row(ds, nm, cached$exec_time, log_file,
+                   mem_gb = cached$mem_GB)
+    }
+  }
+  for (nm in ct_names[!ct_cache_hit]) {
+    if (!nm %in% eligible_ct_names) {
+      warning(nm, " skipped: ct column is null for this dataset")
+    }
+  }
+  if (length(eligible_ct_names) > 0L) {
+    ct_groups <- split(
+      eligible_ct_names,
+      vapply(
+        eligible_ct_names,
+        function(nm) as.character(ct_combos[[nm]]$ct_col),
+        character(1)
       )
     )
-    res[["exec_time"]] <- as.numeric(time_secs, units = "secs")
-    res[["mem_GB"]] <- peak_rss_gb()
-    save_rds_atomic(res, bundle_file)
-    log_exec_row(ds, nm, res[["exec_time"]], log_file,
-                 mem_gb = res[["mem_GB"]])
-    results[[nm]] <- res
-  }
+    for (ct_col_name in names(ct_groups)) {
+      group_names <- ct_groups[[ct_col_name]]
+      pending_names <- group_names[!ct_cache_hit[group_names]]
+      if (length(pending_names) == 0L) next
+      if (!is.null(h5ad_path)) {
+        hvgs <- unique(vapply(
+          pending_names,
+          function(nm) as.integer(ct_combos[[nm]]$hvg),
+          integer(1)
+        ))
+        safe_ct <- gsub("[^A-Za-z0-9_-]", "_", ct_col_name, perl = TRUE)
+        if (!nzchar(safe_ct)) {
+          stop("CT column cannot form a timing identity: ", ct_col_name)
+        }
+        ct_timing_id <- pb_timing_id(
+          cache_stem = paste0(result_stem, "_ct_", safe_ct),
+          view = view,
+          analysis_pass = analysis_pass,
+          run_id = run_id
+        )
+        variant_formals <- tryCatch(
+          names(formals(process_pseudobulk_ct_h5ad_variants_fig)),
+          error = function(error) character()
+        )
+        wrapper_formals <- tryCatch(
+          names(formals(process_pseudobulk_ct_h5ad_fig)),
+          error = function(error) character()
+        )
+        supports_timing <- "timing_id" %in% variant_formals &&
+          (length(hvgs) > 1L || "timing_id" %in% wrapper_formals)
+        call_timed <- function(fun, call_args, formals_names) {
+          if ("timing_id" %in% formals_names) {
+            call_args[["timing_id"]] <- ct_timing_id
+          }
+          do.call(fun, call_args)
+        }
 
-  return(results)
+        # The current reducer exposes one shared store timing and one local
+        # timing per HVG.  Keep a compatibility path for an older sourced
+        # reducer by measuring each single-HVG call independently; it avoids
+        # assigning a grouped elapsed time to every legacy result.
+        if (supports_timing) {
+          if (length(hvgs) > 1L) {
+            ct_processed <- call_timed(
+              process_pseudobulk_ct_h5ad_variants_fig,
+              list(
+                h5ad_path = h5ad_path,
+                labels = labels,
+                sample_col = sample_col,
+                ct_col = ct_col_name,
+                hvgs = hvgs,
+                min_cells = 5,
+                chunk_size = chunk_size,
+                run_id = run_id,
+                temp_root = temp_root,
+                source_identity = source_identity
+              ),
+              variant_formals
+            )
+          } else {
+            ct_processed <- setNames(
+              list(call_timed(
+                process_pseudobulk_ct_h5ad_fig,
+                list(
+                  h5ad_path = h5ad_path,
+                  labels = labels,
+                  sample_col = sample_col,
+                  ct_col = ct_col_name,
+                  hvg = hvgs[[1L]],
+                  min_cells = 5,
+                  chunk_size = chunk_size,
+                  run_id = run_id,
+                  temp_root = temp_root,
+                  source_identity = source_identity
+                ),
+                wrapper_formals
+              )),
+              paste0("hvg", hvgs[[1L]])
+            )
+          }
+        } else {
+          ct_processed <- setNames(lapply(hvgs, function(n_hvg) {
+            result <- NULL
+            elapsed <- exec_time(
+              result <- process_pseudobulk_ct_h5ad_fig(
+                h5ad_path,
+                labels,
+                sample_col = sample_col,
+                ct_col = ct_col_name,
+                hvg = n_hvg,
+                min_cells = 5,
+                chunk_size = chunk_size,
+                run_id = run_id,
+                temp_root = temp_root,
+                source_identity = source_identity
+              )
+            )
+            attr(result, "legacy_ct_elapsed") <- as.numeric(
+              elapsed, units = "secs"
+            )
+            result
+          }), paste0("hvg", hvgs))
+        }
+
+        extract_ct_timing <- function(result, context) {
+          if (!is.list(result)) {
+            stop("CT processor returned a non-list result for ", context)
+          }
+          if ("timing_schema" %in% names(result)) {
+            validate_hpc_timing_bundle(result, context)
+            return(list(
+              local = as.numeric(result[["variant_time_secs"]]),
+              shared = as.numeric(result[["shared_time_secs"]]),
+              mem = result[["shared_mem_GB"]],
+              id = as.character(result[["timing_id"]]),
+              schema2 = TRUE
+            ))
+          }
+          timing <- attr(result, "ct_timing", exact = TRUE)
+          if (is.list(timing) && !is.null(timing[["timing_id"]])) {
+            required <- c(
+              "shared_time_secs", "variant_time_secs", "shared_mem_GB",
+              "timing_id", "timing_schema"
+            )
+            if (!all(required %in% names(timing))) {
+              stop("CT timing metadata is incomplete for ", context)
+            }
+            timing_bundle <- list(
+              shared_time_secs = timing[["shared_time_secs"]],
+              variant_time_secs = timing[["variant_time_secs"]],
+              shared_mem_GB = timing[["shared_mem_GB"]],
+              timing_id = timing[["timing_id"]],
+              timing_schema = timing[["timing_schema"]]
+            )
+            timing_bundle[["exec_time"]] <- timing_bundle[[
+              "variant_time_secs"
+            ]]
+            validate_hpc_timing_bundle(timing_bundle, context)
+            return(list(
+              local = as.numeric(timing[["variant_time_secs"]]),
+              shared = as.numeric(timing[["shared_time_secs"]]),
+              mem = timing[["shared_mem_GB"]],
+              id = as.character(timing[["timing_id"]]),
+              schema2 = TRUE
+            ))
+          }
+          elapsed <- attr(result, "legacy_ct_elapsed", exact = TRUE)
+          if (!is.numeric(elapsed) || length(elapsed) != 1L ||
+              is.na(elapsed) || !is.finite(elapsed) || elapsed < 0) {
+            stop("CT processor did not return timing metadata for ", context)
+          }
+          list(
+            local = as.numeric(elapsed),
+            shared = NA_real_,
+            mem = NA_real_,
+            id = NULL,
+            schema2 = FALSE
+          )
+        }
+
+        ct_timings <- lapply(names(ct_processed), function(key) {
+          extract_ct_timing(
+            ct_processed[[key]],
+            paste0(ds, "/", key, " (ct_col=", ct_col_name, ")")
+          )
+        })
+        names(ct_timings) <- names(ct_processed)
+        if (any(vapply(ct_timings, function(value) is.null(value), logical(1)))) {
+          stop(
+            "CT processor did not return per-variant timing metadata for ",
+            ct_col_name
+          )
+        }
+        schema2_flags <- vapply(
+          ct_timings, function(value) isTRUE(value[["schema2"]]), logical(1)
+        )
+        if (any(schema2_flags) && !all(schema2_flags)) {
+          stop("CT timing metadata mixes legacy and schema-2 results for ",
+               ct_col_name)
+        }
+        if (all(schema2_flags)) {
+          shared_times <- unique(vapply(
+            ct_timings,
+            function(value) as.numeric(value[["shared"]]),
+            numeric(1)
+          ))
+          if (length(shared_times) != 1L ||
+              !is.finite(shared_times[[1L]]) || shared_times[[1L]] < 0) {
+            stop("CT shared timing differs across variants for ", ct_col_name)
+          }
+          shared_mem <- ct_timings[[1L]][["mem"]]
+          if (!all(vapply(
+            ct_timings,
+            function(value) identical(value[["mem"]], shared_mem),
+            logical(1)
+          ))) {
+            stop("CT shared memory differs across variants for ", ct_col_name)
+          }
+          timing_ids <- unique(vapply(
+            ct_timings, function(value) as.character(value[["id"]]),
+            character(1)
+          ))
+          if (length(timing_ids) != 1L) {
+            stop("CT variants do not share one timing_id for ", ct_col_name)
+          }
+          record_ct_shared(
+            list(
+              shared_time_secs = shared_times[[1L]],
+              shared_mem_GB = shared_mem,
+              timing_id = timing_ids[[1L]],
+              timing_schema = 2L,
+              shared_timing_method = ct_shared_method_name(ct_col_name)
+            ),
+            paste0(ds, " (ct_col=", ct_col_name, ")")
+          )
+        }
+        for (nm in pending_names) {
+          key <- paste0("hvg", as.integer(ct_combos[[nm]]$hvg))
+          res <- ct_processed[[key]]
+          if (is.null(res)) {
+            stop("CT processor returned no result for ", key,
+                 " (ct_col=", ct_col_name, ")")
+          }
+          timing <- ct_timings[[key]]
+          if (isTRUE(timing[["schema2"]]) &&
+              !"timing_schema" %in% names(res)) {
+            res[["shared_time_secs"]] <- timing[["shared"]]
+            res[["variant_time_secs"]] <- timing[["local"]]
+            res[["shared_mem_GB"]] <- timing[["mem"]]
+            res[["timing_id"]] <- timing[["id"]]
+            res[["timing_schema"]] <- 2L
+          }
+          if (isTRUE(timing[["schema2"]])) {
+            res[["shared_timing_method"]] <-
+              ct_shared_method_name(ct_col_name)
+          }
+          res[["exec_time"]] <- as.numeric(timing[["local"]])
+          res[["mem_GB"]] <- peak_rss_gb()
+          if (isTRUE(timing[["schema2"]])) {
+            validate_hpc_timing_bundle(
+              res, label = paste0("Pseudobulk result ", ds, "/", nm)
+            )
+          }
+          bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
+          save_rds_atomic(res, bundle_file)
+          log_exec_row(ds, nm, res[["exec_time"]], log_file,
+                       mem_gb = res[["mem_GB"]])
+          results[[nm]] <- res
+        }
+      } else {
+        if (is.null(seurat)) {
+          stop("Canonical CT pseudobulk requires an H5AD path.")
+        }
+        for (nm in pending_names) {
+          spec <- ct_combos[[nm]]
+          bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
+          ct_time <- exec_time(
+            res <- process_pseudobulk_ct_fig(
+              seurat,
+              labels,
+              ct_col = as.character(spec$ct_col),
+              sample_col = sample_col,
+              hvg = spec$hvg
+            )
+          )
+          res[["exec_time"]] <- as.numeric(ct_time, units = "secs")
+          res[["mem_GB"]] <- peak_rss_gb()
+          validate_hpc_timing_bundle(
+            res, label = paste0("Pseudobulk result ", ds, "/", nm)
+          )
+          save_rds_atomic(res, bundle_file)
+          log_exec_row(ds, nm, res[["exec_time"]], log_file,
+                       mem_gb = res[["mem_GB"]])
+          results[[nm]] <- res
+        }
+      }
+    }
+  }
+  for (timing in ct_shared_replay) {
+    log_exec_row(
+      ds, timing$method, timing$time, log_file,
+      mem_gb = timing$mem
+    )
+  }
+  # Restore the historical CT combination order after grouping by cell-type
+  # column; this keeps the published result-list order stable.
+  results <- c(
+    results[setdiff(names(results), ct_names)],
+    results[ct_names[ct_names %in% names(results)]]
+  )
+  results
 }
 
 # scITD combos: scITD_hvg2000_factors{2,3,5,10,15}, scITD_hvg{1000,3000}_factors5.
@@ -1391,6 +2090,9 @@ run_scitd_hpc <- function(
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- read_rds_checked(bundle_file)
+      validate_hpc_timing_bundle(
+        cached, label = paste0("scITD result ", ds, "/", nm)
+      )
       results[[nm]] <- cached
       # Re-emit the stored timing on cache reuse: failure-resume runs must
       # not lose exec-log rows computed in an aborted run (the merge is
@@ -1571,6 +2273,9 @@ run_composition_methods_hpc <- function(
       )
       if (artifact_checksum_ok(bundle_file) && !force) {
         cached <- read_rds_checked(bundle_file)
+        validate_hpc_timing_bundle(
+          cached, label = paste0("Composition result ", ds, "/", nm)
+        )
         results[[nm]] <- cached
         if (!is.null(cached$exec_time)) {
           log_exec_row(ds, nm, cached$exec_time, log_file,
@@ -1601,6 +2306,18 @@ run_composition_methods_hpc <- function(
   if (is.null(pb_hvg2000)) {
     stop("run_composition_methods_hpc: pb_hvg2000 (hvg2000 pseudobulk ",
          "variant) is required for ECODA_deconv")
+  }
+  deconv_pb_timing <- NULL
+  if ("timing_schema" %in% names(pb_hvg2000)) {
+    validate_hpc_timing_bundle(
+      pb_hvg2000, label = paste0("Pseudobulk cache ", ds, "/hvg2000")
+    )
+    deconv_pb_timing <- list(
+      variant = as.numeric(pb_hvg2000[["variant_time_secs"]]),
+      shared = as.numeric(pb_hvg2000[["shared_time_secs"]]),
+      shared_mem = pb_hvg2000[["shared_mem_GB"]],
+      timing_id = as.character(pb_hvg2000[["timing_id"]])
+    )
   }
   combos[["ECODA_deconv"]] <- function() {
     process_deconv_fig(t(pb_hvg2000$pb), labels)
@@ -1729,6 +2446,9 @@ run_composition_methods_hpc <- function(
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- read_rds_checked(bundle_file)
+      validate_hpc_timing_bundle(
+        cached, label = paste0("Composition result ", ds, "/", nm)
+      )
       results[[nm]] <- cached
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file,
@@ -1737,8 +2457,21 @@ run_composition_methods_hpc <- function(
       next
     }
     time_secs <- exec_time(res <- combos[[nm]]())
-    res[["exec_time"]] <- as.numeric(time_secs, units = "secs")
+    process_time <- as.numeric(time_secs, units = "secs")
+    if (identical(nm, "ECODA_deconv") && !is.null(deconv_pb_timing)) {
+      res[["exec_time"]] <- process_time + deconv_pb_timing[["variant"]]
+      res[["variant_time_secs"]] <- res[["exec_time"]]
+      res[["shared_time_secs"]] <- deconv_pb_timing[["shared"]]
+      res[["shared_mem_GB"]] <- deconv_pb_timing[["shared_mem"]]
+      res[["timing_id"]] <- deconv_pb_timing[["timing_id"]]
+      res[["timing_schema"]] <- 2L
+    } else {
+      res[["exec_time"]] <- process_time
+    }
     res[["mem_GB"]] <- peak_rss_gb()
+    validate_hpc_timing_bundle(
+      res, label = paste0("Composition result ", ds, "/", nm)
+    )
     save_rds_atomic(res, bundle_file)
     log_exec_row(ds, nm, res[["exec_time"]], log_file,
                  mem_gb = res[["mem_GB"]])

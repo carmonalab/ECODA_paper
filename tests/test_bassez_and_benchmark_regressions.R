@@ -113,6 +113,132 @@ assert_error(
   "do not match canonical metadata IDs"
 )
 
+# The direct matrix boundary rejects values that cannot be represented by
+# DESeq2 before constructing a DESeqDataSet.
+overflow_counts <- matrix(
+  as.numeric(.Machine$integer.max) + 1,
+  nrow = 1L,
+  ncol = 2L,
+  dimnames = list("overflow_gene", c("s1", "s2"))
+)
+overflow_metadata <- data.frame(
+  Sample = c("s1", "s2"),
+  row.names = c("s1", "s2"),
+  stringsAsFactors = FALSE
+)
+assert_error(
+  pseudobulk_env$get_pb_deseq2_from_counts(
+    overflow_counts,
+    overflow_metadata
+  ),
+  "exceed"
+)
+
+# Full-gene HVG variants are selections from one fit and therefore agree with
+# independent legacy normalization for every shared full-gene prefix.
+direct_counts <- matrix(
+  c(
+    30, 10, 40,
+    20, 40, 50,
+    7, 14, 21,
+    1, 2, 3,
+    1000, 1, 1
+  ),
+  nrow = 5L,
+  byrow = TRUE,
+  dimnames = list(paste0("g", 1:5), c("s2", "s1", "s3"))
+)
+direct_metadata <- data.frame(
+  Sample = c("s1", "s2", "s3"),
+  batch = factor(c("A", "B", "A")),
+  row.names = c("s1", "s2", "s3"),
+  stringsAsFactors = FALSE
+)
+shared_fit <- pseudobulk_env$fit_pseudobulk_deseq2(
+  direct_counts,
+  direct_metadata
+)
+stopifnot(
+  identical(rownames(shared_fit$norm_matrix), rownames(direct_counts)),
+  identical(colnames(shared_fit$norm_matrix), colnames(direct_counts)),
+  length(shared_fit$variance_order) == nrow(direct_counts),
+  setequal(shared_fit$variance_order, rownames(direct_counts))
+)
+assert_matrix_close <- function(actual, expected, tolerance = 1e-7) {
+  if (!identical(dim(actual), dim(expected)) ||
+      !identical(dimnames(actual), dimnames(expected))) {
+    stop("normalized matrix dimensions or identifiers differ")
+  }
+  delta <- max(abs(as.numeric(actual) - as.numeric(expected)))
+  if (!is.finite(delta) || delta > tolerance) {
+    stop("normalized matrices differ by ", delta)
+  }
+  invisible(TRUE)
+}
+for (n_hvg in c(2L, 3L, 5L)) {
+  shared_selected <- pseudobulk_env$select_pseudobulk_deseq2(
+    shared_fit,
+    n_hvg = n_hvg
+  )
+  independent_selected <- pseudobulk_env[["DESeq2.normalize"]](
+    direct_counts,
+    direct_metadata,
+    n_hvg = n_hvg
+  )
+  assert_matrix_close(shared_selected, independent_selected)
+}
+direct_published <- pseudobulk_env$get_pb_deseq2_from_counts(
+  direct_counts,
+  direct_metadata,
+  n_hvg = 3L
+)
+expected_published <- t(
+  pseudobulk_env$select_pseudobulk_deseq2(shared_fit, n_hvg = 3L)
+)
+expected_published <- expected_published[
+  c("s1", "s2", "s3"),
+  ,
+  drop = FALSE
+]
+assert_matrix_close(direct_published, expected_published)
+stopifnot(isTRUE(all.equal(
+  pseudobulk_env$select_pseudobulk_deseq2(
+    shared_fit,
+    n_hvg = 5L,
+    black_list = "default_without_sex_genes"
+  ),
+  pseudobulk_env$select_pseudobulk_deseq2(
+    shared_fit,
+    n_hvg = 5L,
+    black_list = "none"
+  ),
+  tolerance = 1e-7
+)))
+
+# schvg2000 is a separate fit on the prefiltered raw gene universe, rather
+# than a prefix selected from the full-gene fit.
+schvg_genes <- c("g1", "g2", "g3")
+schvg_fit <- pseudobulk_env$fit_pseudobulk_deseq2(
+  direct_counts[schvg_genes, , drop = FALSE],
+  direct_metadata
+)
+schvg_selected <- pseudobulk_env$select_pseudobulk_deseq2(
+  schvg_fit,
+  n_hvg = 2000L
+)
+stopifnot(
+  identical(rownames(schvg_fit$norm_matrix), schvg_genes),
+  identical(rownames(schvg_selected), schvg_genes)
+)
+full_shared_for_schvg <- shared_fit$norm_matrix[
+  schvg_genes,
+  colnames(direct_counts),
+  drop = FALSE
+]
+if (max(abs(schvg_fit$norm_matrix - full_shared_for_schvg)) <= 1e-7) {
+  stop("schvg fit unexpectedly reused full-gene normalization")
+}
+
 suppressPackageStartupMessages(library(dplyr))
 metadata_env <- new.env(parent = globalenv())
 sys.source(
@@ -259,6 +385,232 @@ sys.source(
   ),
   envir = hpc_env
 )
+
+write_checked_fixture <- function(path, value) {
+  saveRDS(value, path)
+  writeLines(
+    c(
+      paste0("MD5=", unname(tools::md5sum(path))),
+      paste0("SIZE=", file.info(path)$size),
+      paste0("PATH=", path)
+    ),
+    paste0(path, ".md5")
+  )
+}
+validator_path <- file.path(
+  project_root,
+  "src",
+  "5_run_benchmark_methods",
+  "validate_benchmark_rds_contract.R"
+)
+validator_status <- function(path) {
+  system2(
+    "pixi",
+    c(
+      "run", "Rscript", "--vanilla", validator_path,
+      "--artifact", path,
+      "--method", "prepare_pseudobulk"
+    ),
+    stdout = FALSE,
+    stderr = FALSE
+  )
+}
+expect_validator_ok <- function(path, label) {
+  status <- validator_status(path)
+  if (!identical(status, 0L)) {
+    stop("expected pseudobulk validator success: ", label)
+  }
+  invisible(TRUE)
+}
+expect_validator_failure <- function(path, label) {
+  status <- validator_status(path)
+  if (identical(status, 0L)) {
+    stop("expected pseudobulk validator failure: ", label)
+  }
+  invisible(TRUE)
+}
+schema2_record <- function(
+  variant,
+  timing_id = "run-cache:Toy:benchmark_analysis:none"
+) {
+  list(
+    pb = matrix(
+      match(variant, hpc_env$PB_VARIANT_NAMES),
+      nrow = 1L,
+      dimnames = list(c("sample_1"), c("gene_1"))
+    ),
+    time_secs = 0.25,
+    mem_GB = NA_real_,
+    aggregate_time_secs = 1.25,
+    shared_fit_time_secs = 2.75,
+    shared_time_secs = 4,
+    variant_time_secs = 0.25,
+    shared_mem_GB = NA_real_,
+    timing_id = timing_id,
+    timing_schema = 2L
+  )
+}
+schema2_dir <- tempfile("ecoda_pseudobulk_schema2-")
+dir.create(schema2_dir, recursive = TRUE)
+schema2_paths <- setNames(
+  file.path(
+    schema2_dir,
+    paste0("Toy_pseudobulk_", hpc_env$PB_VARIANT_NAMES, ".rds")
+  ),
+  hpc_env$PB_VARIANT_NAMES
+)
+for (variant in names(schema2_paths)) {
+  write_checked_fixture(schema2_paths[[variant]], schema2_record(variant))
+}
+expect_validator_ok(schema2_paths[[1L]], "schema-2 cache")
+legacy_matrix_path <- file.path(schema2_dir, "legacy-matrix.rds")
+write_checked_fixture(
+  legacy_matrix_path,
+  matrix(1, nrow = 1L, ncol = 1L,
+         dimnames = list("sample_1", "gene_1"))
+)
+expect_validator_ok(legacy_matrix_path, "legacy matrix cache")
+legacy_wrapper_path <- file.path(schema2_dir, "legacy-wrapper.rds")
+write_checked_fixture(
+  legacy_wrapper_path,
+  list(
+    pb = matrix(1, nrow = 1L, ncol = 1L,
+                dimnames = list("sample_1", "gene_1")),
+    time_secs = 3.5,
+    mem_GB = NA_real_
+  )
+)
+expect_validator_ok(legacy_wrapper_path, "legacy wrapped cache")
+stopifnot(identical(
+  hpc_env$pb_variants_missing(schema2_dir, "Toy"),
+  character(0)
+))
+cached_schema2 <- hpc_env$load_pb_variants(
+  seurat = NULL,
+  sample_col = "Sample",
+  hvg_rank_genes = paste0("g", 1:5),
+  pseudobulk_dir = schema2_dir,
+  ds = "Toy",
+  h5ad_path = file.path(schema2_dir, "must-not-be-read.h5ad")
+)
+stopifnot(identical(names(cached_schema2), hpc_env$PB_VARIANT_NAMES))
+missing_schema2 <- schema2_paths[["hvg500"]]
+unlink(c(missing_schema2, paste0(missing_schema2, ".md5")))
+stopifnot(identical(
+  hpc_env$pb_variants_missing(schema2_dir, "Toy"),
+  "hvg500"
+))
+stopifnot(identical(
+  hpc_env$pb_variants_missing(schema2_dir, "Toy", force = TRUE),
+  hpc_env$PB_VARIANT_NAMES
+))
+original_prepare_pseudobulks <- hpc_env$prepare_pseudobulks_hpc
+prepared_missing <- character()
+hpc_env$prepare_pseudobulks_hpc <- function(h5ad_path, variants, ...) {
+  prepared_missing <<- as.character(variants)
+  setNames(lapply(variants, schema2_record), as.character(variants))
+}
+repaired_schema2 <- hpc_env$load_pb_variants(
+  seurat = NULL,
+  sample_col = "Sample",
+  hvg_rank_genes = paste0("g", 1:5),
+  pseudobulk_dir = schema2_dir,
+  ds = "Toy",
+  h5ad_path = file.path(schema2_dir, "synthetic.h5ad")
+)
+hpc_env$prepare_pseudobulks_hpc <- original_prepare_pseudobulks
+stopifnot(
+  identical(prepared_missing, "hvg500"),
+  identical(names(repaired_schema2), hpc_env$PB_VARIANT_NAMES)
+)
+bad_shared_total_path <- file.path(schema2_dir, "bad-shared-total.rds")
+bad_shared_total <- schema2_record("hvg2000")
+bad_shared_total$shared_time_secs <- 4.5
+write_checked_fixture(bad_shared_total_path, bad_shared_total)
+expect_validator_failure(bad_shared_total_path, "inconsistent shared total")
+bad_timing_id_path <- file.path(schema2_dir, "bad-timing-id.rds")
+bad_timing_id <- schema2_record("hvg2000")
+bad_timing_id$timing_id <- ""
+write_checked_fixture(bad_timing_id_path, bad_timing_id)
+expect_validator_failure(bad_timing_id_path, "blank timing ID")
+bad_timing_id$timing_id <- "malformed"
+write_checked_fixture(bad_timing_id_path, bad_timing_id)
+expect_validator_failure(bad_timing_id_path, "malformed timing ID")
+bad_schema_fields_path <- file.path(schema2_dir, "bad-schema-fields.rds")
+bad_schema_fields <- schema2_record("hvg2000")
+bad_schema_fields$shared_mem_GB <- NULL
+write_checked_fixture(bad_schema_fields_path, bad_schema_fields)
+expect_validator_failure(bad_schema_fields_path, "missing schema-2 field")
+bad_schema_version_path <- file.path(schema2_dir, "bad-schema-version.rds")
+bad_schema_version <- schema2_record("hvg2000")
+bad_schema_version$timing_schema <- 3L
+write_checked_fixture(bad_schema_version_path, bad_schema_version)
+expect_validator_failure(bad_schema_version_path, "unsupported schema version")
+bad_variant_time_path <- file.path(schema2_dir, "bad-variant-time.rds")
+bad_variant_time <- schema2_record("hvg2000")
+bad_variant_time$time_secs <- 0.5
+write_checked_fixture(bad_variant_time_path, bad_variant_time)
+expect_validator_failure(bad_variant_time_path, "inconsistent variant timing")
+bad_memory_path <- file.path(schema2_dir, "bad-memory.rds")
+bad_memory <- schema2_record("hvg2000")
+bad_memory$shared_mem_GB <- Inf
+write_checked_fixture(bad_memory_path, bad_memory)
+expect_validator_failure(bad_memory_path, "nonfinite shared memory")
+timing_rows <- list()
+original_hpc_log_exec_row <- hpc_env$log_exec_row
+hpc_env$log_exec_row <- function(
+  dataset, method, time_secs, log_file, mem_gb = NA_real_, ...
+) {
+  timing_rows[[length(timing_rows) + 1L]] <<- list(
+    dataset = dataset,
+    method = method,
+    time_secs = as.numeric(time_secs),
+    mem_GB = mem_gb
+  )
+  invisible(NULL)
+}
+schema2_variants <- setNames(
+  lapply(hpc_env$PB_VARIANT_NAMES, schema2_record),
+  hpc_env$PB_VARIANT_NAMES
+)
+hpc_env$emit_pseudobulk_timing_rows(
+  schema2_variants,
+  ds = "Toy",
+  log_file = "fixture-execution-times.feather"
+)
+shared_rows <- vapply(
+  timing_rows,
+  function(row) identical(row$method, "prepare_pseudobulk_shared"),
+  logical(1L)
+)
+stopifnot(
+  sum(shared_rows) == 1L,
+  length(timing_rows) == length(hpc_env$PB_VARIANT_NAMES) + 1L,
+  identical(timing_rows[[which(shared_rows)[[1L]]]]$time_secs, 4),
+  sum(vapply(timing_rows, function(row) row$time_secs, numeric(1L))) ==
+    4 + 0.25 * length(hpc_env$PB_VARIANT_NAMES)
+)
+different_timing_id <- schema2_variants
+different_timing_id[["hvg500"]]$timing_id <- "other-run:Toy:benchmark_analysis:none"
+assert_error(
+  hpc_env$emit_pseudobulk_timing_rows(
+    different_timing_id,
+    ds = "Toy",
+    log_file = "fixture-execution-times.feather"
+  ),
+  "timing"
+)
+blank_timing_id <- schema2_variants
+blank_timing_id[["hvg500"]]$timing_id <- ""
+assert_error(
+  hpc_env$emit_pseudobulk_timing_rows(
+    blank_timing_id,
+    ds = "Toy",
+    log_file = "fixture-execution-times.feather"
+  ),
+  "timing"
+)
+hpc_env$log_exec_row <- original_hpc_log_exec_row
 pipeline_env$read_rds_checked <- hpc_env$read_rds_checked
 pipeline_env$artifact_checksum_ok <- function(file) file.exists(file) && file.info(file)$size > 0
 
@@ -500,6 +852,7 @@ for (name in names(record_env)) {
 }
 
 unlink(pseudobulk_dir, recursive = TRUE, force = TRUE)
+unlink(schema2_dir, recursive = TRUE, force = TRUE)
 
 # `--force` still invalidates composition result bundles, while the
 # obs-only pseudobulk loader reuses the prepared cache above.

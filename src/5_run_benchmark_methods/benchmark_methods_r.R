@@ -264,6 +264,1116 @@ process_pseudobulk_ct_fig <- function(
     )
   ))
 }
+if (!exists("DEFAULT_CHUNK_SIZE", inherits = TRUE)) {
+  DEFAULT_CHUNK_SIZE <- 4096L
+}
+# Canonical cell-type pseudobulk processing from a raw H5AD CSR store.
+#
+# Unlike process_pseudobulk_ct_fig(), this boundary never accepts a Seurat
+# object.  The Python helper performs the metadata-only eligibility pass and
+# the single raw counts pass, retaining only sparse Sample x cell-type
+# contribution rows in a run-owned store.  One cell type is materialized at a
+# time at the direct DESeq2 boundary.
+process_pseudobulk_ct_h5ad_fig <- function(
+  h5ad_path,
+  labels,
+  sample_col = "Sample",
+  ct_col,
+  hvg = 500,
+  min_cells = 5,
+  chunk_size = DEFAULT_CHUNK_SIZE,
+  run_id = NULL,
+  temp_root = NULL,
+  source_identity = NULL,
+  timing_id = NULL
+) {
+  variants <- process_pseudobulk_ct_h5ad_variants_fig(
+    h5ad_path = h5ad_path,
+    labels = labels,
+    sample_col = sample_col,
+    ct_col = ct_col,
+    hvgs = hvg,
+    min_cells = min_cells,
+    chunk_size = chunk_size,
+    run_id = run_id,
+    temp_root = temp_root,
+    source_identity = source_identity,
+    timing_id = timing_id
+  )
+  if (length(hvg) == 1L) variants[[1L]] else variants
+}
+
+
+# Internal helpers for the canonical H5AD cell-type store boundary.  These
+# deliberately live outside the public wrapper so one prepared store can serve
+# all requested HVG variants without a second raw H5AD pass.
+.ecoda_ct_scalar_character <- function(value, name) {
+  if (!is.character(value) || length(value) != 1L ||
+      is.na(value) || !nzchar(value)) {
+    stop(name, " must be one non-empty string")
+  }
+  value
+}
+
+.ecoda_ct_scalar_positive_integer <- function(value, name) {
+  if (length(value) != 1L || is.na(value) ||
+      !is.numeric(value) || !is.finite(value) ||
+      value != floor(value) || value <= 0 ||
+      value > .Machine$integer.max) {
+    stop(name, " must be a positive integer")
+  }
+  as.integer(value)
+}
+
+.ecoda_ct_canonical_path <- function(value, name) {
+  value <- .ecoda_ct_scalar_character(as.character(value), name)
+  path <- path.expand(value)
+  initial <- normalizePath(path, winslash = "/", mustWork = FALSE)
+  if (length(initial) != 1L || is.na(initial) ||
+      !grepl("^(/|[A-Za-z]:[/\\\\])", initial, perl = TRUE)) {
+    stop(name, " must resolve to an absolute path")
+  }
+
+  # normalizePath(mustWork = FALSE) cannot resolve symlinks above a
+  # nonexistent descendant.  Canonicalize the deepest existing ancestor
+  # first, then attach unresolved components to that canonical parent.
+  candidate <- path
+  suffix <- character()
+  repeat {
+    if (file.exists(candidate) || dir.exists(candidate)) {
+      current <- normalizePath(candidate, winslash = "/", mustWork = TRUE)
+      if (!length(suffix)) {
+        path <- current
+        break
+      }
+
+      # Walk the suffix from the canonical parent so existing symlinks are
+      # resolved before any following .. component is applied.  Once a
+      # component is missing, descendants remain unresolved until a .. pops
+      # back to the existing prefix.
+      unresolved <- character()
+      for (component in suffix) {
+        if (!nzchar(component) || identical(component, ".")) next
+        if (identical(component, "..")) {
+          if (length(unresolved)) {
+            unresolved <- unresolved[-length(unresolved)]
+          } else {
+            current <- dirname(current)
+          }
+          next
+        }
+        if (length(unresolved)) {
+          unresolved <- c(unresolved, component)
+          next
+        }
+        next_path <- file.path(current, component)
+        if (file.exists(next_path) || dir.exists(next_path)) {
+          current <- normalizePath(next_path, winslash = "/", mustWork = TRUE)
+        } else {
+          unresolved <- component
+        }
+      }
+      if (!length(unresolved)) {
+        path <- current
+      } else {
+        rebuilt <- do.call(file.path, c(list(current), as.list(unresolved)))
+        path <- normalizePath(rebuilt, winslash = "/", mustWork = FALSE)
+      }
+      break
+    }
+
+    parent <- dirname(candidate)
+    if (identical(parent, candidate)) break
+    suffix <- c(basename(candidate), suffix)
+    candidate <- parent
+  }
+  if (!grepl("^(/|[A-Za-z]:[/\\\\])", path, perl = TRUE)) {
+    stop(name, " must resolve to an absolute path")
+  }
+  path
+}
+
+.ecoda_ct_scalar_path <- function(value, name) {
+  .ecoda_ct_canonical_path(value, name)
+}
+
+.ecoda_ct_paths_equal <- function(left, right,
+                                  left_name = "left path",
+                                  right_name = "right path") {
+  identical(
+    .ecoda_ct_canonical_path(left, left_name),
+    .ecoda_ct_canonical_path(right, right_name)
+  )
+}
+
+.ecoda_ct_py_raw_member <- function(object, name) {
+  value <- tryCatch(object[[name]], error = function(e) NULL)
+  if (is.null(value)) {
+    value <- switch(
+      name,
+      shape = tryCatch(object$shape, error = function(e) NULL),
+      data = tryCatch(object$data, error = function(e) NULL),
+      indices = tryCatch(object$indices, error = function(e) NULL),
+      indptr = tryCatch(object$indptr, error = function(e) NULL),
+      NULL
+    )
+  }
+  if (is.null(value) && exists(
+    "py_get_attr",
+    envir = asNamespace("reticulate"),
+    inherits = FALSE
+  )) {
+    value <- tryCatch(
+      reticulate::py_get_attr(object, name),
+      error = function(e) NULL
+    )
+  }
+  value
+}
+
+.ecoda_ct_py_member <- function(object, name) {
+  value <- .ecoda_ct_py_raw_member(object, name)
+  if (is.null(value)) return(NULL)
+  if (!requireNamespace("reticulate", quietly = TRUE)) return(value)
+  reticulate::py_to_r(value)
+}
+
+.ecoda_ct_csr_to_matrix <- function(csr, expected_nrow, expected_ncol) {
+  if (inherits(csr, "Matrix") || is.matrix(csr)) {
+    return(csr)
+  }
+  shape <- .ecoda_ct_py_member(csr, "shape")
+  data <- .ecoda_ct_py_member(csr, "data")
+  indices <- .ecoda_ct_py_member(csr, "indices")
+  indptr <- .ecoda_ct_py_member(csr, "indptr")
+  if (is.null(shape) || is.null(data) || is.null(indices) ||
+      is.null(indptr)) {
+    stop("Python CT store reader returned no usable CSR arrays")
+  }
+  shape <- as.numeric(shape)
+  if (length(shape) != 2L || any(!is.finite(shape)) ||
+      any(shape != floor(shape)) ||
+      shape[1L] != expected_nrow || shape[2L] != expected_ncol) {
+    stop("selected CT CSR shape is inconsistent")
+  }
+  data <- as.numeric(data)
+  indices <- as.numeric(indices)
+  indptr <- as.numeric(indptr)
+  if (any(!is.finite(data)) || any(data < 0) ||
+      any(data != floor(data)) ||
+      any(data > .Machine$integer.max) ||
+      any(!is.finite(indices)) || any(indices != floor(indices)) ||
+      any(indices < 0) || any(indices >= expected_ncol) ||
+      any(!is.finite(indptr)) || any(indptr != floor(indptr)) ||
+      any(indptr < 0) || any(indptr > .Machine$integer.max) ||
+      length(indptr) != expected_nrow + 1L ||
+      indptr[1L] != 0 || any(diff(indptr) < 0) ||
+      indptr[length(indptr)] != length(data) ||
+      length(indices) != length(data)) {
+    stop("selected CT CSR arrays are invalid")
+  }
+  if (length(data) == 0L) {
+    return(Matrix::sparseMatrix(
+      i = integer(), j = integer(), x = numeric(),
+      dims = c(expected_nrow, expected_ncol)
+    ))
+  }
+  row_ids <- rep.int(seq_len(expected_nrow), diff(indptr))
+  if (anyDuplicated(paste(row_ids, indices, sep = ":"))) {
+    stop("selected CT CSR rows contain duplicate coordinates")
+  }
+  Matrix::sparseMatrix(
+    i = as.integer(row_ids),
+    j = as.integer(indices + 1),
+    x = data,
+    dims = c(expected_nrow, expected_ncol),
+    repr = "C"
+  )
+}
+
+.ecoda_ct_audit_field <- function(audit, name) {
+  if (is.null(audit) || !is.list(audit) ||
+      is.null(names(audit)) || !name %in% names(audit)) {
+    return(NULL)
+  }
+  audit[[name]]
+}
+
+prepare_pseudobulk_ct_h5ad_store_context <- function(
+  h5ad_path,
+  sample_col = "Sample",
+  ct_col,
+  chunk_size = DEFAULT_CHUNK_SIZE,
+  run_id = NULL,
+  temp_root = NULL,
+  source_identity = NULL
+) {
+  h5ad_path <- .ecoda_ct_scalar_path(h5ad_path, "h5ad_path")
+  if (!file.exists(h5ad_path) ||
+      !isTRUE(file.info(h5ad_path)$size > 0)) {
+    stop("H5AD path is missing or empty: ", h5ad_path)
+  }
+  sample_col <- .ecoda_ct_scalar_character(sample_col, "sample_col")
+  ct_col <- .ecoda_ct_scalar_character(ct_col, "ct_col")
+  chunk_size <- .ecoda_ct_scalar_positive_integer(chunk_size, "chunk_size")
+  if (is.character(source_identity) &&
+      (length(source_identity) != 1L ||
+       is.na(source_identity) || !nzchar(source_identity))) {
+    stop("source_identity character value must be one non-empty string")
+  }
+
+  resolved_run_id <- run_id
+  if (is.null(resolved_run_id) || length(resolved_run_id) == 0L ||
+      !nzchar(as.character(resolved_run_id))) {
+    resolved_run_id <- Sys.getenv("ECODA_RUN_ID", unset = "")
+  }
+  if (!nzchar(resolved_run_id)) {
+    resolved_run_id <- paste0(
+      "local-", Sys.getpid(), "-", as.integer(as.numeric(Sys.time()))
+    )
+  }
+  resolved_run_id <- .ecoda_ct_scalar_character(
+    as.character(resolved_run_id),
+    "run_id"
+  )
+  if (!grepl(
+    "^[A-Za-z0-9][A-Za-z0-9_-]*$",
+    resolved_run_id,
+    perl = TRUE
+  )) {
+    stop("run_id contains unsafe path characters")
+  }
+
+  max_age_seconds <- suppressWarnings(as.numeric(Sys.getenv(
+    "ECODA_PSEUDOBULK_CT_MAX_AGE_SECONDS", unset = "86400"
+  )))
+  if (length(max_age_seconds) != 1L || is.na(max_age_seconds) ||
+      !is.finite(max_age_seconds) || max_age_seconds < 0) {
+    stop("ECODA_PSEUDOBULK_CT_MAX_AGE_SECONDS must be nonnegative and finite")
+  }
+  if (!requireNamespace("reticulate", quietly = TRUE)) {
+    stop("reticulate is required for canonical H5AD cell-type pseudobulk")
+  }
+  if (!exists("get_pb_deseq2_from_counts", mode = "function")) {
+    stop("get_pb_deseq2_from_counts is required for canonical H5AD cell-type pseudobulk")
+  }
+  project_root <- Sys.getenv("PROJECT_ROOT", unset = "")
+  if (!nzchar(project_root)) {
+    stop("PROJECT_ROOT is required for canonical H5AD cell-type pseudobulk")
+  }
+  module_dir <- normalizePath(
+    file.path(project_root, "src", "utils", "py"),
+    mustWork = TRUE
+  )
+  python_sys <- reticulate::import("sys", convert = FALSE)
+  python_sys$path$insert(0L, module_dir)
+  loader <- reticulate::import_from_path(
+    "h5ad_pseudobulk",
+    path = module_dir,
+    convert = FALSE
+  )
+  if (is.null(loader$prepare_h5ad_ct_group_store) ||
+      is.null(loader$read_h5ad_ct_group_store) ||
+      is.null(loader$audit_h5ad_ct_group_store)) {
+    stop("h5ad_pseudobulk is missing the canonical cell-type store API")
+  }
+
+  if (is.null(temp_root) || length(temp_root) == 0L ||
+      !nzchar(as.character(temp_root))) {
+    configured_run_root <- Sys.getenv("ECODA_RUN_ROOT", unset = "")
+    if (nzchar(configured_run_root)) {
+      temp_root <- file.path(configured_run_root, "scratch")
+    } else {
+      temp_root <- Sys.getenv("HPC_SCRATCH_DIR", unset = "")
+      if (!nzchar(temp_root)) temp_root <- tempdir()
+    }
+  }
+  temp_root <- .ecoda_ct_scalar_path(temp_root, "temp_root")
+  if (!dir.exists(temp_root) &&
+      !dir.create(temp_root, recursive = TRUE, showWarnings = FALSE)) {
+    stop("cannot create temporary root: ", temp_root)
+  }
+  ct_parent <- file.path(temp_root, "pseudobulk_ct", resolved_run_id)
+  if (!dir.exists(ct_parent) &&
+      !dir.create(ct_parent, recursive = TRUE, showWarnings = FALSE)) {
+    stop("cannot create run-owned CT root: ", ct_parent)
+  }
+  if (nzchar(Sys.readlink(ct_parent))) {
+    stop("run-owned CT root must not be a symlink")
+  }
+  unique_root <- tempfile(
+    pattern = ".store-",
+    tmpdir = ct_parent,
+    fileext = ""
+  )
+  if (file.exists(unique_root) || dir.exists(unique_root) ||
+      !dir.create(unique_root, recursive = FALSE, showWarnings = FALSE)) {
+    stop("cannot acquire a unique run-owned CT store root")
+  }
+  store_path <- file.path(unique_root, "groups.h5")
+  manifest_path <- paste0(store_path, ".manifest.json")
+  lock_path <- paste0(store_path, ".lock")
+
+  # Keep the Python ownership context available for the failure cleanup below.
+  # A writing-state store is removable only while this exact process is still
+  # inside the Python preparation call.  Once preparation returns, normal
+  # ready-state cleanup remains the only permitted path.
+  preparation_state <- "not_started"
+  expected_source_identity <- source_identity
+  if (is.null(expected_source_identity)) {
+    expected_source_identity <- tryCatch({
+      source_identity_fn <- reticulate::py_get_attr(loader, "_source_identity")
+      reticulate::py_to_r(source_identity_fn(h5ad_path, NULL))
+    }, error = function(error) {
+      NULL
+    })
+  }
+  scheduler_keys <- c(
+    "SLURM_JOB_ID",
+    "SLURM_STEP_ID",
+    "SLURM_ARRAY_JOB_ID",
+    "SLURM_ARRAY_TASK_ID",
+    "PBS_JOBID",
+    "JOB_ID",
+    "ECODA_JOB_ID"
+  )
+  scheduler_values <- Sys.getenv(scheduler_keys, unset = "")
+  scheduler_values <- scheduler_values[nzchar(scheduler_values)]
+  expected_scheduler_identity <- structure(
+    as.list(scheduler_values),
+    names = names(scheduler_values)
+  )
+  expected_owner_host <- tryCatch({
+    socket <- reticulate::import("socket", convert = TRUE)
+    as.character(socket$gethostname())
+  }, error = function(error) {
+    as.character(Sys.info()[["nodename"]])
+  })
+
+  .ecoda_ct_json_equal <- function(left, right) {
+    if (is.null(left) || is.null(right)) {
+      return(is.null(left) && is.null(right))
+    }
+    if (is.factor(left)) left <- as.character(left)
+    if (is.factor(right)) right <- as.character(right)
+    if (is.atomic(left) && is.atomic(right)) {
+      if (length(left) != length(right)) return(FALSE)
+      if (is.numeric(left) && is.numeric(right)) {
+        if (anyNA(left) || anyNA(right) ||
+            any(!is.finite(left)) || any(!is.finite(right))) {
+          return(FALSE)
+        }
+        return(all(left == right))
+      }
+      return(identical(left, right))
+    }
+    if (!is.list(left) || !is.list(right) ||
+        length(left) != length(right)) {
+      return(FALSE)
+    }
+    left_names <- names(left)
+    right_names <- names(right)
+    if (is.null(left_names) != is.null(right_names)) return(FALSE)
+    if (!is.null(left_names)) {
+      if (anyDuplicated(left_names) || anyDuplicated(right_names) ||
+          !setequal(left_names, right_names)) {
+        return(FALSE)
+      }
+      return(all(vapply(
+        left_names,
+        function(name) .ecoda_ct_json_equal(left[[name]], right[[name]]),
+        logical(1)
+      )))
+    }
+    all(vapply(
+      seq_along(left),
+      function(index) .ecoda_ct_json_equal(left[[index]], right[[index]]),
+      logical(1)
+    ))
+  }
+
+  .ecoda_ct_path_is_symlink <- function(path) {
+    link <- tryCatch(Sys.readlink(path), error = function(error) NA_character_)
+    length(link) == 1L && !is.na(link) && nzchar(link)
+  }
+
+  .ecoda_ct_existing_path <- function(path) {
+    file.exists(path) || dir.exists(path)
+  }
+
+  .ecoda_ct_read_manifest <- function() {
+    if (!isTRUE(file_test("-f", manifest_path)) ||
+        .ecoda_ct_path_is_symlink(manifest_path) ||
+        !requireNamespace("jsonlite", quietly = TRUE)) {
+      return(NULL)
+    }
+    info <- tryCatch(file.info(manifest_path), error = function(error) NULL)
+    if (is.null(info) || nrow(info) != 1L || isTRUE(info$isdir) ||
+        is.na(info$size) || info$size <= 0) {
+      return(NULL)
+    }
+    manifest <- tryCatch(
+      jsonlite::fromJSON(manifest_path, simplifyVector = FALSE),
+      error = function(error) NULL
+    )
+    if (!is.list(manifest) || is.null(names(manifest))) return(NULL)
+    manifest
+  }
+
+  .ecoda_ct_manifest_matches <- function(manifest, expected_state,
+                                          require_fresh = FALSE) {
+    required <- c(
+      "schema", "stage", "state", "run_id", "pid", "owner_host",
+      "scheduler_identity", "source_identity", "source_checksum",
+      "store_path", "lock_path", "created_at"
+    )
+    if (!is.list(manifest) || is.null(names(manifest)) ||
+        !all(required %in% names(manifest))) {
+      return(FALSE)
+    }
+    schema <- suppressWarnings(as.numeric(manifest[["schema"]]))
+    pid <- suppressWarnings(as.numeric(manifest[["pid"]]))
+    created_at <- suppressWarnings(as.numeric(manifest[["created_at"]]))
+    state <- as.character(manifest[["state"]])
+    run_value <- as.character(manifest[["run_id"]])
+    host_value <- as.character(manifest[["owner_host"]])
+    manifest_store <- as.character(manifest[["store_path"]])
+    manifest_lock <- as.character(manifest[["lock_path"]])
+    if (length(schema) != 1L || is.na(schema) || !is.finite(schema) ||
+        schema != 1 || length(pid) != 1L || is.na(pid) ||
+        !is.finite(pid) || pid != floor(pid) ||
+        length(created_at) != 1L || is.na(created_at) ||
+        !is.finite(created_at) || created_at < 0 ||
+        length(state) != 1L || is.na(state) ||
+        length(run_value) != 1L || is.na(run_value) ||
+        length(host_value) != 1L || is.na(host_value) ||
+        !nzchar(run_value) || !nzchar(host_value) ||
+        length(manifest_store) != 1L || is.na(manifest_store) ||
+        length(manifest_lock) != 1L || is.na(manifest_lock) ||
+        !nzchar(manifest_store) || !nzchar(manifest_lock) ||
+        !identical(as.character(manifest[["stage"]]), "pseudobulk_ct") ||
+        !identical(state, expected_state) ||
+        !identical(run_value, resolved_run_id) ||
+        !identical(host_value, expected_owner_host) ||
+        !identical(pid, as.numeric(Sys.getpid())) ||
+        !identical(manifest_store, store_path) ||
+        !.ecoda_ct_paths_equal(
+          manifest_store,
+          store_path,
+          "manifest store path",
+          "run-owned store path"
+        ) ||
+        !identical(manifest_lock, lock_path) ||
+        !.ecoda_ct_paths_equal(
+          manifest_lock,
+          lock_path,
+          "manifest lock path",
+          "run-owned lock path"
+        ) ||
+        !is.list(manifest[["scheduler_identity"]]) ||
+        !.ecoda_ct_json_equal(
+          manifest[["scheduler_identity"]],
+          expected_scheduler_identity
+        ) ||
+        is.null(expected_source_identity) ||
+        !.ecoda_ct_json_equal(
+          manifest[["source_identity"]],
+          expected_source_identity
+        ) ||
+        .ecoda_ct_existing_path(lock_path)) {
+      return(FALSE)
+    }
+    if (isTRUE(require_fresh)) {
+      age <- as.numeric(Sys.time()) - created_at
+      if (!is.finite(age) || age < 0 || age >= max_age_seconds) {
+        return(FALSE)
+      }
+    }
+    TRUE
+  }
+
+  cleanup_done <- FALSE
+  cleanup_store <- function(strict = FALSE, allow_writing = FALSE) {
+    reject <- function(message) {
+      if (strict) stop("CT store cleanup failed closed: ", message)
+      warning("CT store cleanup skipped: ", message)
+      invisible(FALSE)
+    }
+    if (isTRUE(cleanup_done)) return(invisible(TRUE))
+    if (isTRUE(allow_writing) &&
+        !identical(preparation_state, "running")) {
+      return(reject("writing-state cleanup is not tied to active preparation"))
+    }
+    if (!dir.exists(unique_root) ||
+        .ecoda_ct_path_is_symlink(unique_root)) {
+      return(reject("CT store cleanup refused a missing or symlinked store root"))
+    }
+    protected_parents <- c(temp_root, dirname(ct_parent), ct_parent)
+    if (any(vapply(
+      protected_parents,
+      function(path) !dir.exists(path) || .ecoda_ct_path_is_symlink(path),
+      logical(1)
+    ))) {
+      return(reject("CT store cleanup refused an unsafe parent path"))
+    }
+
+    entries <- tryCatch(
+      list.files(unique_root, all.files = TRUE, no.. = TRUE),
+      error = function(error) NULL
+    )
+    if (is.null(entries)) {
+      return(reject("CT store cleanup could not inspect the run-owned root"))
+    }
+    allowed_entries <- c(basename(store_path), basename(manifest_path))
+    if (length(entries) > 0L &&
+        any(!entries %in% allowed_entries)) {
+      return(reject("CT store cleanup found unexpected root entries"))
+    }
+    entry_paths <- file.path(unique_root, entries)
+    if (length(entry_paths) > 0L &&
+        any(vapply(entry_paths, .ecoda_ct_path_is_symlink, logical(1)))) {
+      return(reject("CT store cleanup refused symlinked store entries"))
+    }
+    if (.ecoda_ct_existing_path(store_path) &&
+        !isTRUE(file_test("-f", store_path))) {
+      return(reject("CT store cleanup refused a non-regular store file"))
+    }
+    if (.ecoda_ct_existing_path(manifest_path) &&
+        !isTRUE(file_test("-f", manifest_path))) {
+      return(reject("CT store cleanup refused a non-regular manifest file"))
+    }
+
+    has_store <- .ecoda_ct_existing_path(store_path) ||
+      .ecoda_ct_existing_path(manifest_path) ||
+      .ecoda_ct_existing_path(lock_path)
+    if (!has_store) {
+      if (length(entries) == 0L) {
+        unlink(unique_root, recursive = TRUE, force = FALSE)
+        if (.ecoda_ct_existing_path(unique_root)) {
+          return(reject("CT store cleanup did not remove the empty root"))
+        }
+        cleanup_done <<- TRUE
+        return(invisible(TRUE))
+      }
+      return(reject("CT store cleanup found an unmanifested store"))
+    }
+
+    manifest <- .ecoda_ct_read_manifest()
+    if (isTRUE(allow_writing)) {
+      # Do not require a valid CSR layout here: an exception can leave a
+      # torn HDF5 file after Python closes its handles.  The manifest is the
+      # ownership proof, and every path/owner/source field is checked above.
+      if (is.null(manifest) ||
+          !.ecoda_ct_manifest_matches(
+            manifest, expected_state = "writing", require_fresh = TRUE
+          )) {
+        return(reject(
+          "writing-state manifest is unknown, stale, or not current-run-owned"
+        ))
+      }
+      if (.ecoda_ct_existing_path(store_path) &&
+          (dir.exists(store_path) || .ecoda_ct_path_is_symlink(store_path))) {
+        return(reject("CT store cleanup refused an unsafe store file"))
+      }
+    } else {
+      audit <- tryCatch(
+        reticulate::py_to_r(loader$audit_h5ad_ct_group_store(
+          store_path,
+          expected_run_id = resolved_run_id,
+          max_age_seconds = max_age_seconds,
+          cleanup = FALSE
+        )),
+        error = function(error) error
+      )
+      if (inherits(audit, "error") || is.null(audit)) {
+        message <- if (inherits(audit, "error")) {
+          conditionMessage(audit)
+        } else {
+          "audit returned no result"
+        }
+        return(reject(paste("CT store cleanup audit failed:", message)))
+      }
+      valid <- .ecoda_ct_audit_field(audit, "valid")
+      audited_path <- .ecoda_ct_audit_field(audit, "store_path")
+      owner_status <- tolower(as.character(
+        .ecoda_ct_audit_field(audit, "owner_status")
+      ))
+      expired <- .ecoda_ct_audit_field(audit, "expired")
+      state <- tolower(as.character(.ecoda_ct_audit_field(audit, "state")))
+      if (!isTRUE(as.logical(valid)) ||
+          length(audited_path) != 1L ||
+          !.ecoda_ct_paths_equal(
+            as.character(audited_path),
+            store_path,
+            "audited store path",
+            "run-owned store path"
+          ) ||
+          length(owner_status) != 1L || owner_status != "active" ||
+          length(expired) != 1L || is.na(as.logical(expired)) ||
+          length(state) != 1L || !identical(state, "ready") ||
+          is.null(manifest) ||
+          !.ecoda_ct_manifest_matches(
+            manifest, expected_state = "ready", require_fresh = FALSE
+          )) {
+        message <- .ecoda_ct_audit_field(audit, "reason")
+        if (is.null(message) || !nzchar(as.character(message))) {
+          message <- "ownership manifest or store audit is not safe"
+        }
+        return(reject(as.character(message)))
+      }
+    }
+
+    # Remove only the two expected files, then the exact empty run root.
+    # Never recursively delete an unexpected or symlinked entry.
+    unlink(c(store_path, manifest_path), recursive = FALSE, force = FALSE)
+    if (.ecoda_ct_existing_path(store_path) ||
+        .ecoda_ct_existing_path(manifest_path) ||
+        .ecoda_ct_existing_path(lock_path)) {
+      return(reject("CT store cleanup did not remove the owned files"))
+    }
+    unlink(unique_root, recursive = TRUE, force = FALSE)
+    if (.ecoda_ct_existing_path(unique_root)) {
+      return(reject("CT store cleanup did not remove the owned root"))
+    }
+    cleanup_done <<- TRUE
+    invisible(TRUE)
+  }
+  ownership_transferred <- FALSE
+  on.exit({
+    if (!isTRUE(ownership_transferred) && !isTRUE(cleanup_done)) {
+      tryCatch(
+        cleanup_store(
+          strict = FALSE,
+          allow_writing = identical(preparation_state, "running")
+        ),
+        error = function(error) {
+          warning("CT store cleanup failed closed: ", conditionMessage(error))
+        }
+      )
+    }
+  }, add = TRUE)
+
+  pre_audit <- tryCatch(
+    reticulate::py_to_r(loader$audit_h5ad_ct_group_store(
+      store_path,
+      expected_run_id = resolved_run_id,
+      max_age_seconds = max_age_seconds,
+      cleanup = TRUE
+    )),
+    error = function(error) error
+  )
+  if (inherits(pre_audit, "error") || is.null(pre_audit)) {
+    message <- if (inherits(pre_audit, "error")) {
+      conditionMessage(pre_audit)
+    } else {
+      "audit returned no result"
+    }
+    stop("CT store reuse audit failed closed: ", message)
+  }
+  pre_valid <- .ecoda_ct_audit_field(pre_audit, "valid")
+  if (length(pre_valid) != 1L || is.na(pre_valid)) {
+    stop("CT store reuse audit returned an invalid validity flag")
+  }
+  if (isTRUE(as.logical(pre_valid)) &&
+      (.ecoda_ct_existing_path(store_path) ||
+       .ecoda_ct_existing_path(manifest_path) ||
+       .ecoda_ct_existing_path(lock_path))) {
+    stop("CT store path remains active after stale-store audit")
+  }
+  if (!isTRUE(as.logical(pre_valid)) &&
+      (.ecoda_ct_existing_path(store_path) ||
+       .ecoda_ct_existing_path(manifest_path) ||
+       .ecoda_ct_existing_path(lock_path))) {
+    stop("CT store path remains ambiguous after stale-store audit")
+  }
+  pre_entries <- tryCatch(
+    list.files(unique_root, all.files = TRUE, no.. = TRUE),
+    error = function(error) NULL
+  )
+  if (is.null(pre_entries) || length(pre_entries) > 0L) {
+    stop("CT store temporary root is not empty before preparation")
+  }
+
+  preparation_state <- "running"
+  prepared <- loader$prepare_h5ad_ct_group_store(
+    path = h5ad_path,
+    sample_col = sample_col,
+    cell_type_col = ct_col,
+    metadata_columns = as.list(as.character(unique(c(sample_col, ct_col)))),
+    chunk_size = as.integer(chunk_size),
+    max_value = as.integer(.Machine$integer.max),
+    store_path = store_path,
+    run_id = resolved_run_id,
+    source_identity = source_identity
+  )
+  preparation_state <- "succeeded"
+  reported_store <- .ecoda_ct_py_member(prepared, "store_path")
+  if (!is.null(reported_store) &&
+      !.ecoda_ct_paths_equal(
+        as.character(reported_store),
+        store_path,
+        "store_path",
+        "run-owned store path"
+      )) {
+    stop("Python CT store returned a path different from the run-owned target")
+  }
+  group_ids <- as.character(.ecoda_ct_py_member(prepared, "group_ids"))
+  sample_ids <- as.character(.ecoda_ct_py_member(prepared, "sample_ids"))
+  cell_type_ids <- as.character(.ecoda_ct_py_member(prepared, "cell_type_ids"))
+  group_cell_counts <- as.numeric(
+    .ecoda_ct_py_member(prepared, "group_cell_counts")
+  )
+  gene_names <- as.character(.ecoda_ct_py_member(prepared, "gene_names"))
+  n_vars <- as.integer(.ecoda_ct_py_member(prepared, "n_vars"))
+  all_sample_ids <- as.character(
+    .ecoda_ct_py_member(prepared, "all_sample_ids")
+  )
+  n_groups <- length(group_ids)
+  if (n_groups == 0L || length(sample_ids) != n_groups ||
+      length(cell_type_ids) != n_groups ||
+      length(group_cell_counts) != n_groups ||
+      length(all_sample_ids) == 0L ||
+      length(n_vars) != 1L || is.na(n_vars) || n_vars <= 0L ||
+      length(gene_names) != n_vars ||
+      anyNA(group_ids) || any(!nzchar(group_ids)) ||
+      anyDuplicated(group_ids) ||
+      anyNA(sample_ids) || any(!nzchar(sample_ids)) ||
+      anyNA(cell_type_ids) || any(!nzchar(cell_type_ids)) ||
+      any(!is.finite(group_cell_counts)) ||
+      any(group_cell_counts < 0) ||
+      any(group_cell_counts != floor(group_cell_counts)) ||
+      anyNA(all_sample_ids) || any(!nzchar(all_sample_ids)) ||
+      anyDuplicated(all_sample_ids)) {
+    stop("Python CT store metadata has invalid dimensions or identifiers")
+  }
+  if (anyNA(gene_names) || any(!nzchar(gene_names)) ||
+      anyDuplicated(gene_names)) {
+    stop("Python CT store gene names are invalid")
+  }
+  context <- list(
+    loader = loader,
+    store_path = store_path,
+    manifest_path = manifest_path,
+    unique_root = unique_root,
+    run_id = resolved_run_id,
+    max_age_seconds = max_age_seconds,
+    group_ids = group_ids,
+    sample_ids = sample_ids,
+    all_sample_ids = all_sample_ids,
+    cell_type_ids = cell_type_ids,
+    group_cell_counts = group_cell_counts,
+    gene_names = gene_names,
+    n_vars = n_vars,
+    cleanup = cleanup_store
+  )
+  ownership_transferred <- TRUE
+  context
+}
+
+process_pseudobulk_ct_store_fig <- function(
+  store_context,
+  labels,
+  sample_col = "Sample",
+  ct_col,
+  hvg = 500,
+  min_cells = 5
+) {
+  if (!is.list(store_context) ||
+      !is.function(store_context[["cleanup"]]) ||
+      is.null(store_context[["loader"]]) ||
+      is.null(store_context[["store_path"]])) {
+    stop("process_pseudobulk_ct_store_fig received an invalid store context")
+  }
+  sample_col <- .ecoda_ct_scalar_character(sample_col, "sample_col")
+  ct_col <- .ecoda_ct_scalar_character(ct_col, "ct_col")
+  hvg <- .ecoda_ct_scalar_positive_integer(hvg, "hvg")
+  min_cells <- .ecoda_ct_scalar_positive_integer(min_cells, "min_cells")
+  group_ids <- as.character(store_context[["group_ids"]])
+  sample_ids <- as.character(store_context[["sample_ids"]])
+  all_sample_ids <- as.character(store_context[["all_sample_ids"]])
+  cell_type_ids <- as.character(store_context[["cell_type_ids"]])
+  group_cell_counts <- as.numeric(store_context[["group_cell_counts"]])
+  gene_names <- as.character(store_context[["gene_names"]])
+  n_vars <- as.integer(store_context[["n_vars"]])
+  n_groups <- length(group_ids)
+  if (n_groups == 0L || length(sample_ids) != n_groups ||
+      length(cell_type_ids) != n_groups ||
+      length(group_cell_counts) != n_groups ||
+      length(all_sample_ids) == 0L ||
+      length(n_vars) != 1L || is.na(n_vars) || n_vars <= 0L ||
+      length(gene_names) != n_vars) {
+    stop("process_pseudobulk_ct_store_fig received invalid store metadata")
+  }
+  all_samples <- sort(unique(all_sample_ids))
+  canonical_samples <- all_sample_ids
+  total_dist <- matrix(
+    0,
+    nrow = length(all_samples),
+    ncol = length(all_samples),
+    dimnames = list(all_samples, all_samples)
+  )
+  count_mat <- matrix(
+    0L,
+    nrow = length(all_samples),
+    ncol = length(all_samples),
+    dimnames = list(all_samples, all_samples)
+  )
+  cell_types <- unique(cell_type_ids)
+  cell_types <- cell_types[!is.na(cell_types) & nzchar(cell_types)]
+  successful_cts <- character()
+  n_ct_pair_contributions <- 0L
+
+  for (ct in cell_types) {
+    eligible <- which(cell_type_ids == ct & group_cell_counts >= min_cells)
+    if (length(eligible) < 2L) next
+    ct_result <- tryCatch(
+      (function() {
+        eligible_group_ids <- group_ids[eligible]
+        eligible_sample_ids <- sample_ids[eligible]
+        sample_rank <- match(eligible_sample_ids, canonical_samples)
+        if (anyNA(sample_rank) || anyDuplicated(eligible_sample_ids)) {
+          stop("Python CT store has duplicate or unalignable eligible sample groups")
+        }
+        eligible_order <- order(sample_rank)
+        eligible_group_ids <- eligible_group_ids[eligible_order]
+        eligible_sample_ids <- eligible_sample_ids[eligible_order]
+        selected <- store_context$loader$read_h5ad_ct_group_store(
+          store_context$store_path,
+          as.list(as.character(eligible_group_ids))
+        )
+        selected_group_ids <- as.character(
+          .ecoda_ct_py_member(selected, "group_ids")
+        )
+        selected_sample_ids <- as.character(
+          .ecoda_ct_py_member(selected, "sample_ids")
+        )
+        if (length(selected_group_ids) != length(eligible_group_ids) ||
+            anyNA(selected_group_ids) || anyDuplicated(selected_group_ids)) {
+          stop("selected CT contribution IDs are invalid")
+        }
+        selected_rows <- match(eligible_group_ids, selected_group_ids)
+        if (anyNA(selected_rows)) {
+          stop("selected CT contribution IDs do not match the requested groups")
+        }
+        selected_counts <- .ecoda_ct_py_raw_member(selected, "counts")
+        if (is.null(selected_counts)) {
+          selected_counts <- .ecoda_ct_py_raw_member(selected, "rows")
+        }
+        if (is.null(selected_counts)) {
+          stop("Python CT store reader returned no sparse contribution rows")
+        }
+        selected_counts <- .ecoda_ct_csr_to_matrix(
+          selected_counts,
+          expected_nrow = length(selected_group_ids),
+          expected_ncol = n_vars
+        )
+        if (length(dim(selected_counts)) != 2L ||
+            nrow(selected_counts) != length(selected_group_ids) ||
+            ncol(selected_counts) != n_vars) {
+          stop("selected CT contribution rows have inconsistent dimensions")
+        }
+        selected_counts <- selected_counts[selected_rows, , drop = FALSE]
+        if (!is.null(selected_sample_ids) &&
+            (length(selected_sample_ids) != length(selected_group_ids) ||
+             anyNA(selected_sample_ids) ||
+             !identical(
+               selected_sample_ids[selected_rows],
+               eligible_sample_ids
+             ))) {
+          stop("selected CT sample IDs do not match canonical contribution order")
+        }
+        dimnames(selected_counts) <- list(eligible_group_ids, gene_names)
+        counts_ct <- Matrix::t(selected_counts)
+        dimnames(counts_ct) <- list(gene_names, eligible_sample_ids)
+        metadata_ct <- data.frame(
+          stringsAsFactors = FALSE,
+          check.names = FALSE,
+          sample_id = eligible_sample_ids
+        )
+        colnames(metadata_ct)[1L] <- sample_col
+        if (!identical(sample_col, "Sample")) {
+          metadata_ct[["Sample"]] <- eligible_sample_ids
+        }
+        rownames(metadata_ct) <- eligible_sample_ids
+        norm <- get_pb_deseq2_from_counts(
+          counts = counts_ct,
+          metadata = metadata_ct,
+          hvg = NULL,
+          n_hvg = as.integer(hvg),
+          black_list = "none",
+          batch_col = NULL,
+          blind = TRUE,
+          correct_batch = FALSE
+        )
+        if (is.data.frame(norm)) norm <- as.matrix(norm)
+        if (length(dim(norm)) != 2L ||
+            nrow(norm) != length(eligible_sample_ids) ||
+            is.null(rownames(norm)) ||
+            anyNA(rownames(norm)) ||
+            anyDuplicated(rownames(norm)) ||
+            !setequal(rownames(norm), eligible_sample_ids)) {
+          stop("normalized matrix has invalid sample identifiers")
+        }
+        norm <- norm[eligible_sample_ids, , drop = FALSE]
+        dist_mat_ct <- as.matrix(stats::dist(norm))
+        dimnames(dist_mat_ct) <- list(
+          eligible_sample_ids,
+          eligible_sample_ids
+        )
+        list(dist_mat = dist_mat_ct)
+      })(),
+      error = function(error) {
+        warning(
+          "process_pseudobulk_ct_h5ad_fig: pseudobulk failed for cell type '",
+          ct, "': ", conditionMessage(error)
+        )
+        NULL
+      }
+    )
+    if (is.null(ct_result)) {
+      invisible(gc(verbose = FALSE))
+      next
+    }
+    dist_mat_ct <- ct_result[["dist_mat"]]
+    total_dist[rownames(dist_mat_ct), colnames(dist_mat_ct)] <-
+      total_dist[rownames(dist_mat_ct), colnames(dist_mat_ct)] + dist_mat_ct
+    count_mat[rownames(dist_mat_ct), colnames(dist_mat_ct)] <-
+      count_mat[rownames(dist_mat_ct), colnames(dist_mat_ct)] + 1L
+    successful_cts <- c(successful_cts, as.character(ct))
+    n_ct_pair_contributions <- n_ct_pair_contributions +
+      as.integer(sum(upper.tri(dist_mat_ct)))
+    rm(ct_result, dist_mat_ct)
+    invisible(gc(verbose = FALSE))
+  }
+
+  n_sample_pairs_contributed <- as.integer(sum(
+    count_mat[upper.tri(count_mat)] > 0
+  ))
+  if (length(successful_cts) == 0L || n_sample_pairs_contributed == 0L) {
+    stop(
+      "process_pseudobulk_ct_h5ad_fig: no successful cell-type pseudobulks ",
+      "contributed sample-pair distances for ct_col='", ct_col,
+      "', hvg=", hvg, " (", length(cell_types), " cell types inspected)."
+    )
+  }
+  final_dist_mat <- total_dist / count_mat
+  final_dist_mat[is.nan(final_dist_mat)] <- 0
+  create_result_bundle(
+    feat_mat = final_dist_mat,
+    labels,
+    dist_mat = stats::as.dist(final_dist_mat),
+    extra = list(
+      n_ct_success = length(successful_cts),
+      successful_cell_types = successful_cts,
+      n_sample_pairs_contributed = n_sample_pairs_contributed,
+      n_ct_pair_contributions = n_ct_pair_contributions
+    )
+  )
+}
+
+process_pseudobulk_ct_h5ad_variants_fig <- function(
+  h5ad_path,
+  labels,
+  sample_col = "Sample",
+  ct_col,
+  hvgs = c(500L, 2000L),
+  min_cells = 5,
+  chunk_size = DEFAULT_CHUNK_SIZE,
+  run_id = NULL,
+  temp_root = NULL,
+  source_identity = NULL,
+  timing_id = NULL
+) {
+  if (!is.numeric(hvgs) || length(hvgs) == 0L ||
+      anyNA(hvgs) || any(!is.finite(hvgs)) ||
+      any(hvgs != floor(hvgs)) || any(hvgs <= 0) ||
+      any(hvgs > .Machine$integer.max) ||
+      anyDuplicated(as.integer(hvgs))) {
+    stop("hvgs must be unique positive integers")
+  }
+  hvgs <- as.integer(hvgs)
+  if (!is.null(timing_id)) {
+    timing_id <- .ecoda_ct_scalar_character(timing_id, "timing_id")
+  }
+  shared_start <- proc.time()[["elapsed"]]
+  context <- prepare_pseudobulk_ct_h5ad_store_context(
+    h5ad_path = h5ad_path,
+    sample_col = sample_col,
+    ct_col = ct_col,
+    chunk_size = chunk_size,
+    run_id = run_id,
+    temp_root = temp_root,
+    source_identity = source_identity
+  )
+  shared_time_secs <- as.numeric(
+    proc.time()[["elapsed"]] - shared_start
+  )
+  if (length(shared_time_secs) != 1L || is.na(shared_time_secs) ||
+      !is.finite(shared_time_secs) || shared_time_secs < 0) {
+    stop("CT shared preparation timing is invalid")
+  }
+  shared_mem_GB <- NA_real_
+  if (exists("peak_rss_gb", mode = "function", inherits = TRUE)) {
+    measured_mem <- tryCatch(
+      as.numeric(peak_rss_gb()),
+      error = function(error) NA_real_
+    )
+    if (length(measured_mem) == 1L && !is.nan(measured_mem) &&
+        (is.na(measured_mem) ||
+         (is.finite(measured_mem) && measured_mem >= 0))) {
+      shared_mem_GB <- measured_mem
+    }
+  }
+  cleanup_done <- FALSE
+  on.exit({
+    if (!isTRUE(cleanup_done)) {
+      tryCatch(
+        context$cleanup(strict = FALSE),
+        error = function(error) {
+          warning("CT store cleanup failed closed: ", conditionMessage(error))
+        }
+      )
+    }
+  }, add = TRUE)
+  results <- lapply(hvgs, function(n_hvg) {
+    variant_start <- proc.time()[["elapsed"]]
+    result <- process_pseudobulk_ct_store_fig(
+      store_context = context,
+      labels = labels,
+      sample_col = sample_col,
+      ct_col = ct_col,
+      hvg = n_hvg,
+      min_cells = min_cells
+    )
+    variant_time_secs <- as.numeric(
+      proc.time()[["elapsed"]] - variant_start
+    )
+    if (length(variant_time_secs) != 1L || is.na(variant_time_secs) ||
+        !is.finite(variant_time_secs) || variant_time_secs < 0) {
+      stop("CT variant processing timing is invalid")
+    }
+    timing_metadata <- list(
+      shared_time_secs = shared_time_secs,
+      variant_time_secs = variant_time_secs,
+      shared_mem_GB = shared_mem_GB,
+      timing_id = timing_id,
+      timing_schema = if (is.null(timing_id)) NULL else 2L
+    )
+    if (!is.null(timing_id)) {
+      result[["shared_time_secs"]] <- shared_time_secs
+      result[["variant_time_secs"]] <- variant_time_secs
+      result[["shared_mem_GB"]] <- shared_mem_GB
+      result[["timing_id"]] <- timing_id
+      result[["timing_schema"]] <- 2L
+    }
+    attr(result, "ct_timing") <- timing_metadata
+    result
+  })
+  context$cleanup(strict = TRUE)
+  cleanup_done <- TRUE
+  names(results) <- paste0("hvg", hvgs)
+  results
+}
 
 # Average PCA embedding
 process_avg_pca_embedding_fig <- function(

@@ -699,7 +699,8 @@ NOTE: Pre-processed (e.g. including cell type annotation, clustering, etc.) data
       "derived_run_manifest.json source_mode"
     )
   }
-  if (!source_mode %in% c("h5ad", "composition_snapshot")) {
+  if (!source_mode %in%
+      c("h5ad", "composition_snapshot", "local_composition")) {
     stop("Unsupported derived source_mode: ", source_mode)
   }
   snapshot_context <- NULL
@@ -895,7 +896,8 @@ NOTE: Pre-processed (e.g. including cell type annotation, clustering, etc.) data
       "derived_source_manifest.json source_mode"
     )
   }
-  if (!source_mode_source %in% c("h5ad", "composition_snapshot") ||
+  if (!source_mode_source %in%
+      c("h5ad", "composition_snapshot", "local_composition") ||
       !identical(source_mode_source, source_mode)) {
     stop("Derived source manifest source_mode does not match the run.")
   }
@@ -1021,13 +1023,88 @@ NOTE: Pre-processed (e.g. including cell type annotation, clustering, etc.) data
   }
   source_rows <- lapply(seq_along(source$sources), function(i) {
     row <- source$sources[[i]]
-    .derived_require_fields(
-      row, c("dataset", "view", "h5ad_path", "h5ad_md5", "analysis"),
-      paste0("derived source entry ", i)
-    )
     dataset <- .derived_require_scalar(
       as.character(row$dataset),
       paste0("source entry ", i, " dataset")
+    )
+    if (identical(source_mode, "local_composition")) {
+      local_fields <- c(
+        "dataset", "view", "composition_path", "composition_md5",
+        "composition_size", "composition_mtime", "metadata_path",
+        "metadata_md5", "metadata_size", "metadata_mtime", "analysis"
+      )
+      .derived_require_fields(
+        row, local_fields, paste0("local composition source entry ", i)
+      )
+      if (!identical(as.character(row$view), "local_composition") ||
+          !identical(as.character(row$analysis), as.character(run$analysis)) ||
+          !grepl("^[[:xdigit:]]{32}$", as.character(row$composition_md5)) ||
+          !grepl("^[[:xdigit:]]{32}$", as.character(row$metadata_md5))) {
+        stop("Invalid local composition source entry ", i)
+      }
+      validate_local_input <- function(
+        path_ref,
+        expected_md5,
+        expected_size,
+        expected_mtime,
+        label
+      ) {
+        path <- .derived_resolve_path(path_ref)
+        info <- file.info(path)
+        if (!file.exists(path) || isTRUE(info$isdir) ||
+            is.na(info$size) || info$size <= 0 || is.na(info$mtime)) {
+          stop("Invalid ", label, ": ", path)
+        }
+        actual_md5 <- .derived_md5(path, label)
+        if (!identical(actual_md5, tolower(as.character(expected_md5))) ||
+            !identical(
+              as.character(info$size),
+              as.character(expected_size)
+            ) ||
+            !identical(
+              as.character(as.numeric(info$mtime)),
+              as.character(as.numeric(expected_mtime))
+            )) {
+          stop(label, " identity mismatch: ", path)
+        }
+        list(
+          path = path,
+          md5 = actual_md5,
+          size = as.numeric(info$size),
+          mtime = as.numeric(info$mtime)
+        )
+      }
+      composition_identity <- validate_local_input(
+        row$composition_path,
+        row$composition_md5,
+        row$composition_size,
+        row$composition_mtime,
+        "local HR composition bundle"
+      )
+      metadata_identity <- validate_local_input(
+        row$metadata_path,
+        row$metadata_md5,
+        row$metadata_size,
+        row$metadata_mtime,
+        "local metadata bundle"
+      )
+      return(list(
+        dataset = dataset,
+        view = as.character(row$view),
+        composition_path = composition_identity$path,
+        composition_md5 = composition_identity$md5,
+        composition_size = composition_identity$size,
+        composition_mtime = composition_identity$mtime,
+        metadata_path = metadata_identity$path,
+        metadata_md5 = metadata_identity$md5,
+        metadata_size = metadata_identity$size,
+        metadata_mtime = metadata_identity$mtime,
+        analysis = as.character(row$analysis)
+      ))
+    }
+    .derived_require_fields(
+      row, c("dataset", "view", "h5ad_path", "h5ad_md5", "analysis"),
+      paste0("derived source entry ", i)
     )
     if (!identical(as.character(row$view), "benchmark_analysis") ||
         !identical(as.character(row$analysis), as.character(run$analysis)) ||
@@ -1103,39 +1180,59 @@ NOTE: Pre-processed (e.g. including cell type annotation, clustering, etc.) data
   }
   for (i in seq_along(source_rows)) {
     run_source <- run$sources[[i]]
-    .derived_require_fields(
-      run_source,
-      c("dataset", "view", "h5ad_path", "h5ad_md5", "analysis"),
-      paste0("derived run source entry ", i)
-    )
-    for (field in c(
-      "dataset", "view", "h5ad_path", "h5ad_md5", "analysis"
-    )) {
-      if (!identical(
-        as.character(run_source[[field]]),
-        as.character(source_rows[[i]][[field]])
-      )) {
-        stop("derived run/source manifest source mismatch at entry ", i)
-      }
-    }
-    if (identical(source_mode, "composition_snapshot")) {
-      provenance_fields <- list(
-        size = c("size", "h5ad_size"),
-        mtime = c("mtime", "h5ad_mtime"),
-        label_column = c("label_column", "label_col"),
-        high_res_column = c("high_res_column", "high_res_col")
+    if (identical(source_mode, "local_composition")) {
+      local_fields <- c(
+        "dataset", "view", "composition_path", "composition_md5",
+        "composition_size", "composition_mtime", "metadata_path",
+        "metadata_md5", "metadata_size", "metadata_mtime", "analysis"
       )
-      for (field in names(provenance_fields)) {
-        run_value <- .derived_snapshot_source_field(
-          run_source,
-          provenance_fields[[field]],
-          field
-        )
+      .derived_require_fields(
+        run_source, local_fields,
+        paste0("derived run local source entry ", i)
+      )
+      for (field in local_fields) {
         if (!identical(
-          as.character(run_value),
+          as.character(run_source[[field]]),
           as.character(source_rows[[i]][[field]])
         )) {
-          stop("derived run/source snapshot provenance mismatch at entry ", i)
+          stop("Derived run/source local provenance mismatch at entry ", i)
+        }
+      }
+    } else {
+      .derived_require_fields(
+        run_source,
+        c("dataset", "view", "h5ad_path", "h5ad_md5", "analysis"),
+        paste0("derived run source entry ", i)
+      )
+      for (field in c(
+        "dataset", "view", "h5ad_path", "h5ad_md5", "analysis"
+      )) {
+        if (!identical(
+          as.character(run_source[[field]]),
+          as.character(source_rows[[i]][[field]])
+        )) {
+          stop("derived run/source manifest source mismatch at entry ", i)
+        }
+      }
+      if (identical(source_mode, "composition_snapshot")) {
+        provenance_fields <- list(
+          size = c("size", "h5ad_size"),
+          mtime = c("mtime", "h5ad_mtime"),
+          label_column = c("label_column", "label_col"),
+          high_res_column = c("high_res_column", "high_res_col")
+        )
+        for (field in names(provenance_fields)) {
+          run_value <- .derived_snapshot_source_field(
+            run_source,
+            provenance_fields[[field]],
+            field
+          )
+          if (!identical(
+            as.character(run_value),
+            as.character(source_rows[[i]][[field]])
+          )) {
+            stop("Derived run/source snapshot provenance mismatch at entry ", i)
+          }
         }
       }
     }
@@ -1416,6 +1513,20 @@ load_derived_cell_subsetting <- function(
     stop("Cell-subsetting results missing fields: ",
          paste(setdiff(required, names(results)), collapse = ", "))
   }
+  if (identical(context$source_mode, "local_composition")) {
+    methodology_fields <- c(
+      "source_mode", "sampling_method", "source_limitation"
+    )
+    if (!all(methodology_fields %in% names(results)) ||
+        any(!nzchar(as.character(results$source_mode))) ||
+        any(as.character(results$source_mode) != "local_composition") ||
+        any(!nzchar(as.character(results$sampling_method))) ||
+        any(!nzchar(as.character(results$source_limitation)))) {
+      stop(
+        "Local composition subsetting methodology is missing or invalid."
+      )
+    }
+  }
   if (!setequal(unique(as.character(results$dataset)), expected_datasets)) {
     stop("Cell-subsetting results do not cover the expected datasets.")
   }
@@ -1438,8 +1549,8 @@ load_derived_cell_subsetting <- function(
       any(is.nan(results$target_cells)) ||
       any(is.na(results$target_cells) != is.na(target_cells_expected)) ||
       any(!is.na(results$target_cells) &
-          (!is.finite(results$target_cells) ||
-           results$target_cells < 1 ||
+          (!is.finite(results$target_cells) |
+           results$target_cells < 1 |
            results$target_cells != floor(results$target_cells))) ||
       any(!is.na(results$target_cells) &
           results$target_cells != target_cells_expected)) {
@@ -3816,12 +3927,19 @@ for (ds in names(result_list[["bmark"]])) {
 ```{r}
 # Single source of execution times, regenerated fresh on EVERY knit (no
 # data/exec_times.rds cache: a stale cache would pin old rows, e.g. NA
-# mem_GB for R methods computed before the workers logged peak RAM):
+# mem_GB for R methods computed before the workers logged peak RAM).
+#
+# Established execution logs remain four columns:
+# dataset/method/time_secs/mem_GB.  Schema-2 preparation workers emit global
+# `prepare_pseudobulk_shared` and `prepare_pseudobulk_ct_shared_<token>` rows
+# per timing context plus variant-local rows.  Shared rows are retained as
+# accounting rows; they are never joined onto each pseudobulk variant.  If a
+# timing-extended artifact is encountered, helpers.R validates it and uses
+# variant_time_secs locally.
+#
 # 1. The NAS merged feather (${NAS_TARGET_DIR}/benchmark/embeddings/
 #    execution_times.feather): HPC rows (R heavy methods, composition
-#    methods, python methods, trans/zeroimp, prepare_pseudobulk_*), schema
-#    dataset/method/time_secs/mem_GB (mem_GB = worker peak RSS: python
-#    ru_maxrss, R /proc/self/status VmHWM).
+#    methods, python methods, trans/zeroimp, prepare_pseudobulk_*).
 # 2. Bundle-derived rows for methods the feather does not cover — union by
 #    (dataset, method); mem_GB taken from the bundle when present.
 exec_times_feather <- file.path(path_nas_embeddings, "execution_times.feather")
@@ -3833,28 +3951,24 @@ if (!file.exists(exec_times_feather)) {
   )
 }
 feather_exec_times <- arrow::read_feather(exec_times_feather) %>%
-  as.data.frame()
+  as.data.frame() %>%
+  normalize_exec_times()
 
 bundle_exec_times <- imap_dfr(result_list[["bmark"]], ~ {
   dataset_name <- .y
   imap_dfr(.x, function(bundle, method_name) {
-    if ("exec_time" %in% names(bundle)) {
-      data.frame(
-        dataset = dataset_name,
-        method = method_name,
-        time_secs = as.numeric(bundle[["exec_time"]], units = "secs"),
-        mem_GB = if ("mem_GB" %in% names(bundle)) {
-          as.numeric(bundle[["mem_GB"]])
-        } else {
-          NA_real_
-        },
-        stringsAsFactors = FALSE
-      )
-    } else {
-      NULL # no timing (e.g. methods that failed to compute)
-    }
+    execution_time_rows_from_bundle(dataset_name, method_name, bundle)
   })
 })
+if (ncol(bundle_exec_times) == 0L) {
+  bundle_exec_times <- data.frame(
+    dataset = character(),
+    method = character(),
+    time_secs = numeric(),
+    mem_GB = numeric(),
+    stringsAsFactors = FALSE
+  )
+}
 
 # Normalize keys so the merge with df_benchmark (paste0(dataset, method)
 # join, helpers.R::merge_exec_times) hits:
@@ -3874,13 +3988,47 @@ normalize_exec_keys <- function(df) {
 feather_exec_times <- normalize_exec_keys(feather_exec_times)
 bundle_exec_times <- normalize_exec_keys(bundle_exec_times)
 
-# Feather rows win for the HPC methods; bundle rows fill the methods
-# missing from the feather.
+# Feather rows win for ordinary dataset/method records.  Shared preparation
+# rows are different when their explicit timing identities differ; an
+# anti_join on only (dataset, method) would silently discard those contexts.
+execution_union_key <- function(df) {
+  key <- paste(
+    as.character(df[["dataset"]]),
+    as.character(df[["method"]]),
+    sep = "\r"
+  )
+  shared <- .execution_is_shared_timing_method(
+    as.character(df[["method"]])
+  )
+  if ("timing_id" %in% names(df)) {
+    identified <- shared & .execution_nonblank(df[["timing_id"]])
+    if (any(identified)) {
+      key[identified] <- paste(
+        key[identified],
+        as.character(df[["timing_id"]][identified]),
+        sep = "\r"
+      )
+    }
+  }
+  key
+}
+feather_exec_times[[".execution_union_key"]] <-
+  execution_union_key(feather_exec_times)
+bundle_exec_times[[".execution_union_key"]] <-
+  execution_union_key(bundle_exec_times)
+
+# Feather rows win for ordinary dataset/method records; bundle rows fill
+# methods absent from the feather while retaining distinct shared identities.
+bundle_only <- bundle_exec_times %>%
+  anti_join(
+    feather_exec_times %>% dplyr::select(.execution_union_key),
+    by = ".execution_union_key"
+  )
 exec_times <- bind_rows(
-  feather_exec_times,
-  bundle_exec_times %>%
-    anti_join(feather_exec_times, by = c("dataset", "method"))
-)
+  feather_exec_times %>% dplyr::select(-.execution_union_key),
+  bundle_only %>% dplyr::select(-.execution_union_key)
+) %>%
+  deduplicate_exec_times()
 
 # n_cells per dataset (from the metadata bundles via the dataset loop;
 # display keys).
@@ -3890,6 +4038,33 @@ exec_times$n_cells <- n_cells_lookup[exec_times$dataset]
 # NAS feather covers all benchmark datasets; keep only this run's datasets
 # (n_cells_by_ds keys are display keys, matching exec_times$dataset).
 exec_times <- exec_times[exec_times$dataset %in% names(n_cells_by_ds), ]
+
+# A report-level total has one shared preparation charge per timing identity.
+# Keep this explicit object available to downstream summaries; method-level
+# plots below continue to use variant-local time_secs.
+exec_time_summary <- summarize_exec_times(exec_times)
+
+```
+
+## Execution-time totals (shared preparation counted once)
+
+```{r}
+# Keep the global shared preparation charge separate from method-level rows.
+# This table is the report's authoritative total and never joins shared work
+# to every method.
+exec_time_summary_display <- exec_time_summary %>%
+  transmute(
+    Dataset = dataset,
+    `Variant/local (s)` = variant_time_secs,
+    `Shared preparation (s)` = shared_time_secs,
+    `Legacy inclusive (s)` = legacy_inclusive_time_secs,
+    `Total (s)` = total_time_secs
+  )
+knitr::kable(
+  exec_time_summary_display,
+  digits = 2,
+  caption = "Execution-time totals by dataset; shared preparation is counted once per timing identity."
+)
 ```
 
 ## Supp fig 14: Plot
@@ -3984,7 +4159,12 @@ spread_log_label_y_centered <- function(
 
 # --- 1. Clean Data ---
 plot_data <- exec_times %>%
-  filter(method %in% filter_methods) %>%
+  # prepare_pseudobulk_shared is retained in exec_times for global accounting,
+  # never as a plotted method variant.
+  filter(
+    method %in% filter_methods,
+    !.execution_is_shared_timing_method(method)
+  ) %>%
   # filter(!dataset %in% c("GongSharma_all_cmv", "GongSharma_all_sex")) %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA",
@@ -4102,12 +4282,14 @@ ggsave(file.path(path_plots, "Supp_fig_14_benchmark_exec_times.pdf"),
 ## Supp fig 14B: Peak RAM usage (default HPC methods)
 
 ```{r fig.width=6, fig.height=3.5}
-# Info-only figure: default HPC workers log their process peak RSS in mem_GB
 # (python: getrusage ru_maxrss; R: /proc/self/status VmHWM via
 # peak_rss_gb()). Same default method selection and recoding as Supp fig 14.
 ram_data <- exec_times %>%
   filter(!is.na(mem_GB)) %>%
-  filter(method %in% filter_methods) %>%
+  filter(
+    method %in% filter_methods,
+    !.execution_is_shared_timing_method(method)
+  ) %>%
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA",
                          "Pseudobulk_hvg2000" = "Pseudobulk",
@@ -5878,7 +6060,7 @@ for (i in seq_len(nrow(ds_stats_df))) {
 
 # Supp fig X: ECODA author annotation sensitivity to cell depth
 
-```{r fig.width=8, fig.height=5}
+```{r fig.width=4.5, fig.height=3.6}
 if (isTRUE(cell_subsetting_requested) && !is.null(cell_subsetting_results)) {
 cell_subsetting_targets <- c(
   "all cells", "2000", "1000", "500", "400",
@@ -5909,13 +6091,7 @@ cell_subsetting_aggregate <- cell_subsetting_dataset_means %>%
   )
 
 p_cell_subsetting <- ggplot() +
-  geom_col(
-    data = cell_subsetting_aggregate,
-    aes(x = target, y = mean_anosim),
-    fill = "white",
-    color = "black",
-    width = 0.72
-  ) +
+  # Draw error bars first so the bars cover their redundant central segment.
   geom_errorbar(
     data = cell_subsetting_aggregate,
     aes(
@@ -5924,6 +6100,26 @@ p_cell_subsetting <- ggplot() +
       ymax = mean_anosim + se_anosim
     ),
     width = 0.2
+  ) +
+  geom_col(
+    data = cell_subsetting_aggregate,
+    aes(x = target, y = mean_anosim),
+    fill = "white",
+    color = "black",
+    width = 0.9
+  ) +
+  geom_point(
+    data = cell_subsetting_dataset_means,
+    aes(
+      x = target,
+      y = anosim,
+      shape = dataset_display,
+      color = dataset_display
+    ),
+    size = pointsize
+  ) +
+  scale_shape_manual(
+    values = seq_along(unique(cell_subsetting_dataset_means$dataset_display))
   ) +
   geom_line(
     data = cell_subsetting_dataset_means,
@@ -5934,17 +6130,7 @@ p_cell_subsetting <- ggplot() +
       color = dataset_display,
       linetype = dataset_display
     ),
-    alpha = 0.85
-  ) +
-  geom_point(
-    data = cell_subsetting_dataset_means,
-    aes(
-      x = target,
-      y = anosim,
-      shape = dataset_display,
-      color = dataset_display
-    ),
-    size = 2
+    alpha = 1
   ) +
   scale_x_discrete(
     limits = cell_subsetting_targets,
@@ -5958,13 +6144,13 @@ p_cell_subsetting <- ggplot() +
     linetype = "Dataset"
   ) +
   theme_classic() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 
 print(p_cell_subsetting)
 ggsave(
   file.path(path_plots, "Supp_fig_X_ECODA_authors_HR_cell_subsetting.pdf"),
-  width = 8,
-  height = 5
+  width = 4.5,
+  height = 3.6
 )
 }
 ```

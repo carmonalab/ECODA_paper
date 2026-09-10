@@ -386,6 +386,29 @@ validate_result_file <- function(
     validate_combo(combo, file, expected, method)
   }
 }
+validate_timing_scalar <- function(value, field, file) {
+  if (!is.numeric(value) || length(value) != 1L || is.na(value) ||
+      !is.finite(value) || value < 0) {
+    stop("Pseudobulk ", field, " is invalid: ", file)
+  }
+  invisible(TRUE)
+}
+
+validate_memory_scalar <- function(value, field, file) {
+  if (is.null(value)) return(invisible(TRUE))
+  if (!is.numeric(value) || length(value) != 1L) {
+    stop("Pseudobulk ", field, " is invalid: ", file)
+  }
+  if (is.na(value)) {
+    if (is.nan(value)) stop("Pseudobulk ", field, " is invalid: ", file)
+    return(invisible(TRUE))
+  }
+  if (!is.finite(value) || value < 0) {
+    stop("Pseudobulk ", field, " is invalid: ", file)
+  }
+  invisible(TRUE)
+}
+
 validate_pseudobulk <- function(file, expected = NULL) {
   if (!checksum_ok(file)) stop("Missing or invalid pseudobulk checksum: ", file)
   value <- readRDS(file)
@@ -394,6 +417,77 @@ validate_pseudobulk <- function(file, expected = NULL) {
   if (is.list(value) && !is.data.frame(value) && !is.null(value$pb)) {
     timing <- value$time_secs
     memory <- value$mem_GB
+    schema_fields <- c(
+      "timing_schema", "aggregate_time_secs", "shared_fit_time_secs",
+      "shared_time_secs", "variant_time_secs", "shared_mem_GB", "timing_id"
+    )
+    present_schema_fields <- intersect(names(value), schema_fields)
+    if (length(present_schema_fields)) {
+      required_schema2 <- c(
+        "pb", "time_secs", "mem_GB", "aggregate_time_secs",
+        "shared_fit_time_secs", "shared_time_secs", "variant_time_secs",
+        "shared_mem_GB", "timing_id", "timing_schema"
+      )
+      actual_fields <- names(value)
+      if (is.null(actual_fields) ||
+          length(actual_fields) != length(required_schema2) ||
+          anyDuplicated(actual_fields) ||
+          !setequal(actual_fields, required_schema2) ||
+          !is.numeric(value$timing_schema) ||
+          length(value$timing_schema) != 1L ||
+          is.na(value$timing_schema) ||
+          !is.finite(value$timing_schema) ||
+          value$timing_schema != 2 ||
+          value$timing_schema != floor(value$timing_schema)) {
+        stop("Pseudobulk schema-2 timing fields are invalid: ", file)
+      }
+      for (field in c(
+        "time_secs", "aggregate_time_secs", "shared_fit_time_secs",
+        "shared_time_secs", "variant_time_secs"
+      )) {
+        validate_timing_scalar(value[[field]], field, file)
+      }
+      for (field in c("mem_GB", "shared_mem_GB")) {
+        validate_memory_scalar(value[[field]], field, file)
+      }
+      timing_id <- value$timing_id
+      timing_id_parts <- if (is.character(timing_id) && length(timing_id) == 1L &&
+                             !is.na(timing_id)) {
+        strsplit(timing_id, ":", fixed = TRUE)[[1L]]
+      } else {
+        character()
+      }
+      if (!is.character(timing_id) || length(timing_id) != 1L ||
+          is.na(timing_id) || !nzchar(trimws(timing_id)) ||
+          length(timing_id_parts) != 4L ||
+          any(!nzchar(trimws(timing_id_parts))) ||
+          grepl("[[:cntrl:]]", timing_id, perl = TRUE)) {
+        stop("Pseudobulk timing_id is invalid: ", file)
+      }
+      shared_time <- value$aggregate_time_secs +
+        value$shared_fit_time_secs
+      if (!is.finite(shared_time) ||
+          !isTRUE(all.equal(
+            as.numeric(value$shared_time_secs),
+            as.numeric(shared_time),
+            tolerance = 0
+          )) ||
+          !isTRUE(all.equal(
+            as.numeric(value$time_secs),
+            as.numeric(value$variant_time_secs),
+            tolerance = 0
+          ))) {
+        stop("Pseudobulk schema-2 timing totals are inconsistent: ", file)
+      }
+    } else if (length(intersect(
+      names(value),
+      c(
+        "aggregate_time_secs", "shared_fit_time_secs", "shared_time_secs",
+        "variant_time_secs", "shared_mem_GB", "timing_id"
+      )
+    ))) {
+      stop("Pseudobulk schema-2 timing fields are incomplete: ", file)
+    }
     value <- value$pb
   }
   dimensions <- dim(value)
@@ -416,12 +510,8 @@ validate_pseudobulk <- function(file, expected = NULL) {
     stop("Pseudobulk sample identifiers do not match ordered selected h5ad: ", file)
   }
   if (!finite_numeric(value)) stop("Pseudobulk values are nonfinite: ", file)
-  if (!is.null(timing) && (!is.numeric(timing) || length(timing) != 1L || !finite_numeric(timing))) {
-    stop("Pseudobulk timing is invalid: ", file)
-  }
-  if (!is.null(memory) && (!is.numeric(memory) || length(memory) != 1L || !finite_numeric(memory))) {
-    stop("Pseudobulk memory is invalid: ", file)
-  }
+  if (!is.null(timing)) validate_timing_scalar(timing, "timing", file)
+  if (!is.null(memory)) validate_memory_scalar(memory, "memory", file)
 }
 
 validate_trans <- function(file) {
