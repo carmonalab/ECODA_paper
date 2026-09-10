@@ -14,6 +14,55 @@ source(file.path(root, "src/5_run_benchmark_methods/benchmark_hpc_utils.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_methods_r.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_pipeline.R"))
 
+# CT timing method names use injective UTF-8 byte tokens.  In particular,
+# punctuation and underscores must not collapse into one four-column log key.
+ct_dot_token <- ct_timing_token("cell.type")
+ct_underscore_token <- ct_timing_token("cell_type")
+stopifnot(
+  nzchar(ct_dot_token),
+  nzchar(ct_underscore_token),
+  !identical(ct_dot_token, ct_underscore_token),
+  !identical(
+    ct_shared_timing_method("cell.type"),
+    ct_shared_timing_method("cell_type")
+  ),
+  grepl(
+    "^prepare_pseudobulk_ct_shared_[A-Za-z0-9_-]+$",
+    ct_shared_timing_method("cell.type")
+  ),
+  identical(
+    ct_shared_timing_method_from_timing_id(
+      paste(
+        "run-1",
+        paste0("Synthetic_ct_", ct_dot_token),
+        "benchmark_analysis",
+        "none",
+        sep = ":"
+      )
+    ),
+    ct_shared_timing_method("cell.type")
+  )
+)
+
+# A schema-2 local/downstream bundle cannot replay a divergent exec_time.
+divergent_exec_bundle <- list(
+  shared_time_secs = 4,
+  variant_time_secs = 2,
+  shared_mem_GB = NA_real_,
+  timing_id = "run-1:Synthetic:benchmark_analysis:none",
+  timing_schema = 2L,
+  exec_time = 3
+)
+divergent_exec_error <- tryCatch(
+  validate_hpc_timing_bundle(divergent_exec_bundle),
+  error = identity
+)
+stopifnot(inherits(divergent_exec_error, "error"))
+divergent_exec_bundle$exec_time <- divergent_exec_bundle$variant_time_secs
+stopifnot(isTRUE(
+  validate_hpc_timing_bundle(divergent_exec_bundle)
+))
+
 # A configured author annotation may itself be a generated Leiden column.
 # Preserve that source while adding the legacy alias consumed by composition.
 leiden_source <- "leiden_res_5_batch_effect_uncorrected_hvg2000"

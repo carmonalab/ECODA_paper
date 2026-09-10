@@ -362,6 +362,22 @@ validate_hpc_timing_bundle <- function(value, label = "Benchmark result") {
       ))) {
     stop(label, " time_secs does not equal variant_time_secs.")
   }
+  if ("exec_time" %in% names(value)) {
+    expected_exec_field <- if ("variant_time_secs" %in% names(value)) {
+      "variant_time_secs"
+    } else {
+      "shared_time_secs"
+    }
+    if (!isTRUE(all.equal(
+      as.numeric(value[["exec_time"]]),
+      as.numeric(value[[expected_exec_field]]),
+      tolerance = 0
+    ))) {
+      stop(
+        label, " exec_time does not equal ", expected_exec_field, "."
+      )
+    }
+  }
   has_aggregate <- "aggregate_time_secs" %in% names(value)
   has_fit <- "shared_fit_time_secs" %in% names(value)
   if (has_aggregate != has_fit) {
@@ -1048,6 +1064,89 @@ if (!exists("pb_timing_id", mode = "function", inherits = TRUE)) {
   }
 }
 
+# Focused tests may source this pipeline file without the HPC utility file.
+# Keep CT method/token construction available in that isolated context; the
+# production load order resolves the shared helpers from benchmark_hpc_utils.R.
+if (!exists("ct_timing_token", mode = "function", inherits = TRUE)) {
+  .ct_timing_validate_token <- function(
+    token, label = "CT timing token"
+  ) {
+    if (is.factor(token)) token <- as.character(token)
+    if (!is.character(token) || length(token) != 1L ||
+        is.na(token) || !nzchar(token) ||
+        !grepl("^[A-Za-z0-9_-]+$", token, perl = TRUE)) {
+      stop(label, " must be a non-empty safe token.")
+    }
+    token
+  }
+  ct_timing_token <- function(ct_col) {
+    if (is.factor(ct_col)) ct_col <- as.character(ct_col)
+    if (!is.character(ct_col) || length(ct_col) != 1L ||
+        is.na(ct_col) || !nzchar(ct_col)) {
+      stop("CT column must be one non-empty string.")
+    }
+    ct_col <- tryCatch(
+      enc2utf8(ct_col),
+      error = function(error) {
+        stop("CT column is not valid UTF-8: ", conditionMessage(error))
+      }
+    )
+    if (grepl("[[:cntrl:]]", ct_col, perl = TRUE)) {
+      stop("CT column contains control characters.")
+    }
+    raw <- charToRaw(ct_col)
+    token <- paste(sprintf("%02x", as.integer(raw)), collapse = "")
+    .ct_timing_validate_token(token)
+  }
+  ct_shared_timing_method_from_token <- function(token) {
+    token <- .ct_timing_validate_token(token)
+    paste0("prepare_pseudobulk_ct_shared_", token)
+  }
+  ct_shared_timing_method <- function(ct_col) {
+    ct_shared_timing_method_from_token(ct_timing_token(ct_col))
+  }
+  ct_shared_timing_method_from_timing_id <- function(
+    timing_id, fallback_method = NULL
+  ) {
+    if (is.factor(timing_id)) timing_id <- as.character(timing_id)
+    if (!is.character(timing_id) || length(timing_id) != 1L ||
+        is.na(timing_id) || !nzchar(trimws(timing_id))) {
+      stop("CT timing_id must be one non-empty string.")
+    }
+    parts <- strsplit(timing_id, ":", fixed = TRUE)[[1L]]
+    token <- NULL
+    if (length(parts) == 4L && grepl("_ct_", parts[[2L]], fixed = TRUE)) {
+      candidate <- sub("^.*_ct_", "", parts[[2L]])
+      if (length(candidate) == 1L &&
+          !is.na(candidate) && nzchar(candidate) &&
+          grepl("^[A-Za-z0-9_-]+$", candidate, perl = TRUE)) {
+        token <- candidate
+      }
+    }
+    if (is.null(token) && !is.null(fallback_method)) {
+      if (is.factor(fallback_method)) {
+        fallback_method <- as.character(fallback_method)
+      }
+      if (is.character(fallback_method) && length(fallback_method) == 1L &&
+          !is.na(fallback_method) &&
+          grepl("^Pseudobulk_CT_[^_]+_.*$", fallback_method)) {
+        candidate <- sub(
+          "^Pseudobulk_CT_([^_]+)_.*$", "\\1", fallback_method
+        )
+        if (nzchar(candidate) &&
+            grepl("^[A-Za-z0-9_-]+$", candidate, perl = TRUE)) {
+          token <- candidate
+        }
+      }
+    }
+    if (is.null(token)) {
+      stop("CT timing identity does not contain a recoverable token.")
+    }
+    ct_shared_timing_method_from_token(token)
+  }
+}
+
+
 # Precompute shared DESeq2 pseudobulks from one raw H5AD Sample aggregate.
 # Full-gene HVG variants share one fit; schvg2000 intentionally uses a
 # separate pre-filtered fit.  The returned cache payload retains the legacy
@@ -1659,13 +1758,6 @@ run_pseudobulk_hpc <- function(
       logical(1)
     )
   }
-  ct_shared_method_name <- function(ct_col) {
-    safe <- gsub("[^A-Za-z0-9_-]", "_", as.character(ct_col), perl = TRUE)
-    if (length(safe) != 1L || is.na(safe) || !nzchar(safe)) {
-      stop("CT column cannot form a shared timing method: ", ct_col)
-    }
-    paste0("prepare_pseudobulk_ct_shared_", safe)
-  }
   ct_shared_replay <- list()
   record_ct_shared <- function(timing, context) {
     if (is.null(timing)) return(invisible(NULL))
@@ -1733,7 +1825,7 @@ run_pseudobulk_hpc <- function(
           ) {
             cached[["shared_timing_method"]]
           } else {
-            ct_shared_method_name(ct_combos[[nm]][["ct_col"]])
+            ct_shared_timing_method(ct_combos[[nm]][["ct_col"]])
           }
         ),
         paste0(ds, "/", nm)
@@ -1768,12 +1860,9 @@ run_pseudobulk_hpc <- function(
           function(nm) as.integer(ct_combos[[nm]]$hvg),
           integer(1)
         ))
-        safe_ct <- gsub("[^A-Za-z0-9_-]", "_", ct_col_name, perl = TRUE)
-        if (!nzchar(safe_ct)) {
-          stop("CT column cannot form a timing identity: ", ct_col_name)
-        }
+        ct_token <- ct_timing_token(ct_col_name)
         ct_timing_id <- pb_timing_id(
-          cache_stem = paste0(result_stem, "_ct_", safe_ct),
+          cache_stem = paste0(result_stem, "_ct_", ct_token),
           view = view,
           analysis_pass = analysis_pass,
           run_id = run_id
@@ -1969,7 +2058,7 @@ run_pseudobulk_hpc <- function(
               shared_mem_GB = shared_mem,
               timing_id = timing_ids[[1L]],
               timing_schema = 2L,
-              shared_timing_method = ct_shared_method_name(ct_col_name)
+              shared_timing_method = ct_shared_timing_method(ct_col_name)
             ),
             paste0(ds, " (ct_col=", ct_col_name, ")")
           )
@@ -1992,7 +2081,7 @@ run_pseudobulk_hpc <- function(
           }
           if (isTRUE(timing[["schema2"]])) {
             res[["shared_timing_method"]] <-
-              ct_shared_method_name(ct_col_name)
+              ct_shared_timing_method(ct_col_name)
           }
           res[["exec_time"]] <- as.numeric(timing[["local"]])
           res[["mem_GB"]] <- peak_rss_gb()

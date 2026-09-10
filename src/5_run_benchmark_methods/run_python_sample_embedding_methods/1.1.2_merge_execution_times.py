@@ -5,12 +5,13 @@ product (labels are the benchmark method names or 'trans'/'zeroimp'
 analyses; each log file is `execution_times_<label>_<ds>.feather`) from the
 benchmark embeddings output dir into `execution_times.feather`, deduplicating
 ordinary rows on (dataset, method) with the last occurrence kept (matches the
-qmd's overwrite-on-rerun semantics).  The schema-2
-`prepare_pseudobulk_shared` row is global preparation accounting: with the
-established four-column log it is retained once per dataset/timing context
-and is never copied onto each variant.  Timing-extended logs are accepted and
-shared rows are deduplicated by timing_id when present.  Runs on the login
-node after the benchmark arrays complete.
+qmd's overwrite-on-rerun semantics).  Schema-2 shared preparation rows (the
+exact `prepare_pseudobulk_shared` row and safe-token
+`prepare_pseudobulk_ct_shared_<token>` rows) are global preparation accounting:
+with the established four-column log they are retained once per dataset/timing
+context and are never copied onto each variant.  Timing-extended logs are
+accepted and shared rows are deduplicated by timing_id when present.  Runs on
+the login node after the benchmark arrays complete.
 
 Scoping to the run's label x dataset cross product keeps stale logs from
 previous failed runs out of the merge; `--existing-log` preserves the NAS log
@@ -69,6 +70,21 @@ _EXECUTION_LOG_ALLOWED_COLUMNS = frozenset(
     _EXECUTION_LOG_BASE_COLUMNS + _EXECUTION_LOG_TIMING_COLUMNS
 )
 _SHARED_TIMING_METHOD = "prepare_pseudobulk_shared"
+# Keep this grammar in lockstep with the R timing helpers.  Anchoring the
+# token prevents a lookalike method from being treated as shared accounting.
+_CT_SHARED_TIMING_METHOD_RE = re.compile(
+    r"^prepare_pseudobulk_ct_shared_[A-Za-z0-9_-]+$"
+)
+
+
+def _is_shared_timing_method(method):
+    return method == _SHARED_TIMING_METHOD or bool(
+        _CT_SHARED_TIMING_METHOD_RE.fullmatch(method)
+    )
+
+
+def _shared_timing_method_mask(methods):
+    return methods.map(_is_shared_timing_method).to_numpy(dtype=bool)
 
 
 def _read_checksum_sidecar(path):
@@ -357,9 +373,7 @@ def _validate_log_frame(frame, path):
         raise ValueError(f"execution log has blank identifiers: {path}")
 
     schema2 = _schema2_rows(frame, path)
-    shared_rows = frame["method"].astype(str).eq(
-        _SHARED_TIMING_METHOD
-    ).to_numpy(dtype=bool)
+    shared_rows = _shared_timing_method_mask(frame["method"].astype(str))
     timing_ids = None
     if "timing_id" in frame.columns:
         timing_ids = _nonblank_series(frame["timing_id"])
@@ -533,7 +547,7 @@ def _execution_log_key(frame):
     if "timing_id" in frame.columns:
         timing_values = frame["timing_id"].astype(str).to_numpy()
         identified_shared = (
-            (methods == _SHARED_TIMING_METHOD)
+            _shared_timing_method_mask(frame["method"].astype(str))
             & _nonblank_series(frame["timing_id"]).to_numpy(dtype=bool)
         )
     else:

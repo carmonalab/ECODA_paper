@@ -375,16 +375,9 @@ if (!combo_supplied && ecoda_local_cache_valid(method_rds) && !force) {
       shared_method <- if ("shared_timing_method" %in% names(value)) {
         as.character(value[["shared_timing_method"]])
       } else if (grepl("^Pseudobulk_CT_", nm)) {
-        timing_parts <- strsplit(timing_id, ":", fixed = TRUE)[[1L]]
-        safe_ct <- if (
-          length(timing_parts) == 4L &&
-          grepl("_ct_", timing_parts[[2L]], fixed = TRUE)
-        ) {
-          sub("^.*_ct_", "", timing_parts[[2L]])
-        } else {
-          sub("^Pseudobulk_CT_([^_]+)_.*$", "\\1", nm)
-        }
-        paste0("prepare_pseudobulk_ct_shared_", safe_ct)
+        ct_shared_timing_method_from_timing_id(
+          timing_id, fallback_method = nm
+        )
       } else {
         "prepare_pseudobulk_shared"
       }

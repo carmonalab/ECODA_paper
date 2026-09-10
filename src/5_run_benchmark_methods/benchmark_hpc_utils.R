@@ -562,6 +562,92 @@ load_benchmark_seurat <- function(
   return(seurat)
 }
 
+# CT shared timing methods are persisted in the canonical four-column
+# execution log.  Encode the configured column name as its UTF-8 bytes so
+# punctuation (for example, "." versus "_") cannot collapse two identities.
+# The resulting token is restricted to the method-name alphabet accepted by
+# the execution-log/report validators.
+.ct_timing_validate_token <- function(token, label = "CT timing token") {
+  if (is.factor(token)) token <- as.character(token)
+  if (!is.character(token) || length(token) != 1L ||
+      is.na(token) || !nzchar(token) ||
+      !grepl("^[A-Za-z0-9_-]+$", token, perl = TRUE)) {
+    stop(label, " must be a non-empty safe token.")
+  }
+  token
+}
+
+ct_timing_token <- function(ct_col) {
+  if (is.factor(ct_col)) ct_col <- as.character(ct_col)
+  if (!is.character(ct_col) || length(ct_col) != 1L ||
+      is.na(ct_col) || !nzchar(ct_col)) {
+    stop("CT column must be one non-empty string.")
+  }
+  ct_col <- tryCatch(
+    enc2utf8(ct_col),
+    error = function(error) {
+      stop("CT column is not valid UTF-8: ", conditionMessage(error))
+    }
+  )
+  if (grepl("[[:cntrl:]]", ct_col, perl = TRUE)) {
+    stop("CT column contains control characters.")
+  }
+  raw <- charToRaw(ct_col)
+  token <- paste(sprintf("%02x", as.integer(raw)), collapse = "")
+  .ct_timing_validate_token(token)
+}
+
+ct_shared_timing_method_from_token <- function(token) {
+  token <- .ct_timing_validate_token(token)
+  paste0("prepare_pseudobulk_ct_shared_", token)
+}
+
+ct_shared_timing_method <- function(ct_col) {
+  ct_shared_timing_method_from_token(ct_timing_token(ct_col))
+}
+
+# Recover the dynamic shared method from a schema-2 timing identity during
+# method-level cache replay.  New identities carry the injective token in the
+# cache-stem component; the result-name fallback keeps older CT bundles
+# replayable when that component cannot be recovered.
+ct_shared_timing_method_from_timing_id <- function(
+  timing_id, fallback_method = NULL
+) {
+  if (is.factor(timing_id)) timing_id <- as.character(timing_id)
+  if (!is.character(timing_id) || length(timing_id) != 1L ||
+      is.na(timing_id) || !nzchar(trimws(timing_id))) {
+    stop("CT timing_id must be one non-empty string.")
+  }
+  parts <- strsplit(timing_id, ":", fixed = TRUE)[[1L]]
+  token <- NULL
+  if (length(parts) == 4L && grepl("_ct_", parts[[2L]], fixed = TRUE)) {
+    candidate <- sub("^.*_ct_", "", parts[[2L]])
+    if (length(candidate) == 1L &&
+        !is.na(candidate) && nzchar(candidate) &&
+        grepl("^[A-Za-z0-9_-]+$", candidate, perl = TRUE)) {
+      token <- candidate
+    }
+  }
+  if (is.null(token) && !is.null(fallback_method)) {
+    if (is.factor(fallback_method)) fallback_method <- as.character(fallback_method)
+    if (is.character(fallback_method) && length(fallback_method) == 1L &&
+        !is.na(fallback_method) &&
+        grepl("^Pseudobulk_CT_[^_]+_.*$", fallback_method)) {
+      candidate <- sub(
+        "^Pseudobulk_CT_([^_]+)_.*$", "\\1", fallback_method
+      )
+      if (nzchar(candidate) &&
+          grepl("^[A-Za-z0-9_-]+$", candidate, perl = TRUE)) {
+        token <- candidate
+      }
+    }
+  }
+  if (is.null(token)) {
+    stop("CT timing identity does not contain a recoverable token.")
+  }
+  ct_shared_timing_method_from_token(token)
+}
+
 # The canonical fallback consumes the H5AD directly.  The first argument is
 # retained as an inert compatibility slot for old callers; no canonical path
 # may pass a Seurat object here.

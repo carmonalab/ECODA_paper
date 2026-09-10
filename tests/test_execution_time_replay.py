@@ -343,6 +343,87 @@ def _check_merge_rejects_duplicate_and_invalid_runtime_rows(merge_worker) -> Non
         invalid = valid.copy()
         invalid.loc[0, column] = value
         expect_value_error(lambda invalid=invalid: merge_worker._validate_log_frame(invalid, "invalid"))
+    dynamic_shared = pd.DataFrame(
+        {
+            "dataset": ["Adams", "Adams", "Adams"],
+            "method": [
+                "prepare_pseudobulk_ct_shared_LR",
+                "prepare_pseudobulk_ct_shared_HR",
+                "prepare_pseudobulk_ct_shared_LR",
+            ],
+            "time_secs": [4.0, 5.0, 4.0],
+            "mem_GB": [np.nan, np.nan, np.nan],
+            "shared_time_secs": [4.0, 5.0, 4.0],
+            "timing_id": ["ct-lr", "ct-hr", "ct-lr"],
+            "timing_schema": [2, 2, 2],
+        }
+    )
+    # Per-task shards validate independently, then deduplication keeps both
+    # dynamic CT shared methods and removes only the repeated LR identity.
+    merge_worker._validate_log_frame(dynamic_shared.iloc[:2], "dynamic-shared")
+    merge_worker._validate_log_frame(
+        dynamic_shared.iloc[[2]], "dynamic-shared-repeat"
+    )
+    dynamic_dedup = merge_worker._deduplicate_log_frame(
+        pd.concat(
+            [dynamic_shared.iloc[:2], dynamic_shared.iloc[[2]]],
+            ignore_index=True,
+        )
+    )
+    assert len(dynamic_dedup) == 2
+    assert set(dynamic_dedup["method"]) == {
+        "prepare_pseudobulk_ct_shared_LR",
+        "prepare_pseudobulk_ct_shared_HR",
+    }
+    assert set(dynamic_dedup["time_secs"]) == {4.0, 5.0}
+
+    malformed_schema = valid.copy()
+    malformed_schema["timing_schema"] = ["not-a-schema"]
+    expect_value_error(
+        lambda: merge_worker._validate_log_frame(
+            malformed_schema, "malformed-schema"
+        )
+    )
+
+    local_missing_variant = dynamic_shared.iloc[[0]].copy()
+    local_missing_variant.loc[:, "method"] = "Pseudobulk_hvg500"
+    expect_value_error(
+        lambda: merge_worker._validate_log_frame(
+            local_missing_variant, "missing-variant"
+        )
+    )
+
+    shared_base_mismatch = dynamic_shared.iloc[[0]].copy()
+    shared_base_mismatch.loc[:, "time_secs"] = 3.0
+    expect_value_error(
+        lambda: merge_worker._validate_log_frame(
+            shared_base_mismatch, "shared-base-mismatch"
+        )
+    )
+
+    inconsistent_timing = pd.DataFrame(
+        {
+            "dataset": ["Adams", "Adams"],
+            "method": [
+                "prepare_pseudobulk_ct_shared_LR",
+                "Pseudobulk_hvg500",
+            ],
+            "time_secs": [4.0, 0.5],
+            "mem_GB": [np.nan, np.nan],
+            "aggregate_time_secs": [1.25, 1.5],
+            "shared_fit_time_secs": [2.75, 2.5],
+            "shared_time_secs": [4.0, 4.0],
+            "variant_time_secs": [np.nan, 0.5],
+            "shared_mem_GB": [np.nan, np.nan],
+            "timing_id": ["ct-id", "ct-id"],
+            "timing_schema": [2, 2],
+        }
+    )
+    expect_value_error(
+        lambda: merge_worker._validate_log_frame(
+            inconsistent_timing, "inconsistent-timing"
+        )
+    )
 
 
 def run_r_replay_fixture(root: Path) -> pd.DataFrame:
