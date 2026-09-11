@@ -1652,7 +1652,9 @@ def process_dataset(args, ds_name, entry):
         out_path = output_dir / out_name
         method_str = legacy_method_label(args.method, n, res_label, payload)
         method_labels[out_path] = method_str
-        if recorded_feather_valid(out_path, producer=artifact_producer) and not args.force:
+        if not args.force and recorded_feather_valid(
+            out_path, producer=artifact_producer
+        ):
             replay_runtime_metadata(
                 out_path,
                 ds_name,
