@@ -170,6 +170,19 @@ stage3_remember_output_owners() {
     stage3_remember_output_owner "${owner}" || return 1
   done
 }
+stage3_validate_scratch_output_ownership() {
+  local selection="$1" saved_nas="${NAS_TARGET_DIR-}" had_nas=0 rc
+  [[ -n "${NAS_TARGET_DIR+x}" ]] && had_nas=1
+  unset NAS_TARGET_DIR
+  ecoda_validate_output_ownership stage3 "${selection}" "${RUN_ID}"
+  rc=$?
+  if [[ ${had_nas} -eq 1 ]]; then
+    export NAS_TARGET_DIR="${saved_nas}"
+  else
+    unset NAS_TARGET_DIR
+  fi
+  return "${rc}"
+}
 
 stage3_validate_output_owner() {
   local owner="$1" expected_owner
@@ -328,7 +341,7 @@ ecoda_validate_run_owned_path "${RUN_ROOT}/manifests/owners.tsv" "${RUN_ROOT}" |
   fail "Stage 3 owner manifest is missing or outside run root"
 expected="$(wc -l < "${CURRENT_MANIFEST}" | tr -d '[:space:]')"
 [[ "${expected}" =~ ^[1-9][0-9]*$ ]] || fail "Stage 3 array manifest is empty"
-ecoda_validate_output_ownership stage3 "${CURRENT_MANIFEST}" "${RUN_ID}" ||
+stage3_validate_scratch_output_ownership "${CURRENT_MANIFEST}" ||
   fail "Stage 3 output ownership validation failed before watchdog handling"
 stage3_remember_output_owners ||
   fail "failed to track Stage 3 global output owners"
@@ -363,7 +376,7 @@ while :; do
   ecoda_validate_manifest "${RETRY_MANIFEST}" 2 ||
     fail "Stage 3 retry manifest is invalid"
   RETRY_COUNT="$(wc -l < "${RETRY_MANIFEST}" | tr -d '[:space:]')"
-  ecoda_validate_output_ownership stage3 "${RETRY_MANIFEST}" "${RUN_ID}" ||
+stage3_validate_scratch_output_ownership "${RETRY_MANIFEST}" ||
     fail "Stage 3 output ownership validation failed before OOM retry"
   stage3_remember_output_owners ||
     fail "failed to track Stage 3 global output owners"

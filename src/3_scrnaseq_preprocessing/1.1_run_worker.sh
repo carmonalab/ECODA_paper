@@ -27,6 +27,7 @@ RUN_ID="${ECODA_RUN_ID:-}"
 RUNTIME_IMAGE_ENV="${ECODA_RUNTIME_IMAGE:-}"
 RUNTIME_MANIFEST_ENV="${ECODA_RUNTIME_MANIFEST:-}"
 RUNTIME_IDENTITY_ENV="${ECODA_RUNTIME_IDENTITY:-}"
+SCRIPT_RELATIVE="src/3_scrnaseq_preprocessing/1.1_run_worker.sh"
 
 [[ "${SOURCE_SNAPSHOT_REQUIRED}" == "1" ]] || {
   echo "ERROR: Stage 3 worker requires an immutable source snapshot." >&2
