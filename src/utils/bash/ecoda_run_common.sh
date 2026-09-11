@@ -1808,7 +1808,7 @@ ecoda_validate_input_artifact() {
     _ecoda_die "input artifact owner run does not match producer run: ${canonical}"
     return 1
   }
-  ecoda_validate_artifact_record "${canonical}" "${producer}" "${run_id}" || return 1
+  ecoda_validate_artifact_record "${path}" "${producer}" "${run_id}" || return 1
   _ecoda_validate_input_schema_contract "${canonical}" || return 1
 }
 
