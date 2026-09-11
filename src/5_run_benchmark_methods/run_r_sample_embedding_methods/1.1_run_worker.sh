@@ -184,6 +184,9 @@ if [[ "${METHOD}" == prepare_pseudobulk ]]; then
 else
   R_SCRIPT="${SCRIPT_DIR}/1.1.1_run_benchmark_methods_r.R"
 fi
+printf 'ECODA_WORKER_DISPATCH METHOD=%s R_SCRIPT=%s ANALYSIS_PASS=%s FORCE_BENCHMARK=%s\n' \
+  "${METHOD}" "${R_SCRIPT}" "${ANALYSIS_PASS:-}" "${FORCE_BENCHMARK:-0}"
+
 set +e
 R_ARGS=(
   "${R_SCRIPT}"
