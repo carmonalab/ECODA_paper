@@ -242,7 +242,7 @@ export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-${TMPDIR:-/tmp}/ecoda-apptainer
 mkdir -p "${APPTAINER_TMPDIR}" "${APPTAINER_CACHEDIR}"
 
 cd "${PROJECT_ROOT}"
-RUNTIME_SYSTEM_POST_COMMAND="dnf install -y which jq"
+RUNTIME_SYSTEM_POST_COMMAND="dnf install -y which jq diffutils"
 dryrun_args=(
   containerize
   --manual
