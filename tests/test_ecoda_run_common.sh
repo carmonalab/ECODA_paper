@@ -106,6 +106,22 @@ cp "${TMP_DIR}/artifact.md5" "${remote_artifact}.md5"
 ecoda_compare_checksum_remote "${TMP_DIR}/artifact" "${remote_artifact}" "${remote_artifact}.md5"
 [[ "$(sed -n 's/^PATH=//p' "${remote_artifact}.md5")" == "${remote_artifact}" ]]
 ecoda_validate_checksum "${remote_artifact}" "${remote_artifact}.md5"
+SYMLINK_INPUT_REAL="${TMP_DIR}/input-real"
+SYMLINK_INPUT_LINK="${TMP_DIR}/input-link"
+mkdir -p "${SYMLINK_INPUT_REAL}"
+ln -s "${SYMLINK_INPUT_REAL}" "${SYMLINK_INPUT_LINK}"
+SYMLINK_INPUT="${SYMLINK_INPUT_LINK}/artifact.bin"
+printf 'symlinked input artifact\n' > "${SYMLINK_INPUT}"
+ecoda_write_checksum "${SYMLINK_INPUT}"
+SYMLINK_PRODUCER_RUN="symlink_input_$$"
+ecoda_init_run stage3 "${SYMLINK_PRODUCER_RUN}" >/dev/null
+ecoda_write_artifact_record "${SYMLINK_INPUT}" stage3 "${SYMLINK_PRODUCER_RUN}" >/dev/null
+SYMLINK_INPUT_OWNER="$(ecoda_artifact_owner_acquire \
+  "${SYMLINK_INPUT}" stage3 "${SYMLINK_PRODUCER_RUN}" 0)"
+ecoda_artifact_owner_set_state "${SYMLINK_INPUT}" OK \
+  "symlinked input regression" >/dev/null
+ecoda_validate_input_artifact \
+  "${SYMLINK_INPUT}" stage3 "${SYMLINK_PRODUCER_RUN}" >/dev/null
 sacct() { return 0; }
 ECODA_ACCOUNTING_EMPTY_GRACE=2
 set +e
