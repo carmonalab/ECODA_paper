@@ -287,6 +287,17 @@ for (req in c("config_path", "ds_name", "view", "method", "input_dir",
 force <- isTRUE(args[["force"]]) || identical(args[["force"]], "TRUE")
 
 method <- args$method
+script_identity_arg <- commandArgs(trailingOnly = FALSE)
+script_identity <- sub(
+  "^--file=",
+  "",
+  script_identity_arg[grepl("^--file=", script_identity_arg)][1L]
+)
+message(
+  "ECODA_R_DISPATCH_PARSED method=", method,
+  " source_root=", Sys.getenv("ECODA_SOURCE_ROOT", unset = ""),
+  " script=", script_identity
+)
 if (!method %in% c("gloscope", "mofa", "pseudobulk", "scitd",
                    "composition")) {
   stop("Unknown method '", method,
