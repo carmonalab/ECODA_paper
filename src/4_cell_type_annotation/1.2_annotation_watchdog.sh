@@ -76,6 +76,20 @@ stage4_build_owner_selection() {
   [[ -s "${output}" ]]
 }
 
+stage4_validate_scratch_output_ownership() {
+  local selection="$1" saved_nas="${NAS_TARGET_DIR-}" had_nas=0 rc
+  [[ -n "${NAS_TARGET_DIR+x}" ]] && had_nas=1
+  unset NAS_TARGET_DIR
+  ecoda_validate_output_ownership stage4 "${selection}" "${RUN_ID}"
+  rc=$?
+  if [[ ${had_nas} -eq 1 ]]; then
+    export NAS_TARGET_DIR="${saved_nas}"
+  else
+    unset NAS_TARGET_DIR
+  fi
+  return "${rc}"
+}
+
 stage4_collect_output_owners() {
   local manifest="$1" selection path owner_dir existing owner_path write_flag
   local output_index=0 seen
@@ -92,7 +106,7 @@ stage4_collect_output_owners() {
     rm -f "${selection}"
     return 1
   }
-  if ! ecoda_validate_output_ownership stage4 "${selection}" "${RUN_ID}"; then
+  if ! stage4_validate_scratch_output_ownership "${selection}"; then
     rm -f "${selection}"
     return 1
   fi
