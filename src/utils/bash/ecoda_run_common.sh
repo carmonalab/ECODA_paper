@@ -572,6 +572,20 @@ ecoda_invalidate_artifact() {
   done
 }
 
+_ecoda_checksum_path_matches() {
+  local recorded_path="$1" requested_path="$2" recorded_real requested_real
+  [[ "${recorded_path}" = /* && "${requested_path}" = /* &&
+     "${recorded_path}" != *$'\n'* && "${requested_path}" != *$'\n'* &&
+     "${recorded_path}" != *$'\t'* && "${requested_path}" != *$'\t'* ]] ||
+    return 1
+  [[ "${recorded_path}" == "${requested_path}" ]] && return 0
+  recorded_real="$(ecoda_realpath_existing "${recorded_path}" 2>/dev/null)" ||
+    return 1
+  requested_real="$(ecoda_realpath_existing "${requested_path}" 2>/dev/null)" ||
+    return 1
+  [[ "${recorded_real}" == "${requested_real}" ]]
+}
+
 ecoda_validate_checksum() {
   local path="$1" sidecar="${2:-${1}.md5}" expected actual expected_size actual_size recorded_path
   ECODA_CHECKSUM_PATH=""
@@ -582,7 +596,7 @@ ecoda_validate_checksum() {
   expected="$(sed -n 's/^MD5=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
   expected_size="$(sed -n 's/^SIZE=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
   recorded_path="$(sed -n 's/^PATH=//p' "${sidecar}" | head -1)"
-  [[ "${recorded_path}" == "${path}" ]] || return 1
+  _ecoda_checksum_path_matches "${recorded_path}" "${path}" || return 1
   [[ "${expected}" =~ ^[[:xdigit:]]{32}$ ]] || return 1
   actual="$(ecoda_md5_file "${path}")" || return 1
   actual_size="$(wc -c < "${path}" | tr -d '[:space:]')" || return 1
@@ -610,7 +624,7 @@ ecoda_validate_checksum_record() {
   recorded_digest="$(sed -n 's/^MD5=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
   recorded_size="$(sed -n 's/^SIZE=//p' "${sidecar}" | head -1 | tr -d '[:space:]')"
   recorded_path="$(sed -n 's/^PATH=//p' "${sidecar}" | head -1)"
-  [[ "${recorded_path}" == "${path}" ]] || return 1
+  _ecoda_checksum_path_matches "${recorded_path}" "${path}" || return 1
   [[ "${recorded_digest}" =~ ^[[:xdigit:]]{32}$ &&
      "${recorded_digest}" == "${expected_digest}" ]] || return 1
   [[ "${recorded_size}" =~ ^[1-9][0-9]*$ &&

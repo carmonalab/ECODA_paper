@@ -122,6 +122,14 @@ ecoda_artifact_owner_set_state "${SYMLINK_INPUT}" OK \
   "symlinked input regression" >/dev/null
 ecoda_validate_input_artifact \
   "${SYMLINK_INPUT}" stage3 "${SYMLINK_PRODUCER_RUN}" >/dev/null
+SYMLINK_INPUT_CANONICAL="$(ecoda_canonical_path "${SYMLINK_INPUT}")"
+ecoda_validate_checksum "${SYMLINK_INPUT_CANONICAL}" \
+  "${SYMLINK_INPUT}.md5"
+ecoda_validate_checksum_record "${SYMLINK_INPUT_CANONICAL}" \
+  "${ECODA_CHECKSUM_MD5}" "${ECODA_CHECKSUM_SIZE}" \
+  "${SYMLINK_INPUT}.md5"
+ecoda_validate_input_artifact \
+  "${SYMLINK_INPUT_CANONICAL}" stage3 "${SYMLINK_PRODUCER_RUN}" >/dev/null
 sacct() { return 0; }
 ECODA_ACCOUNTING_EMPTY_GRACE=2
 set +e
