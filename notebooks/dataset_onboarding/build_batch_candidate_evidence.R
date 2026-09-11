@@ -39,6 +39,9 @@ if (!is.null(parse_arg(args, "--ds_name", NULL))) {
 }
 
 config <- fromJSON(config_path, simplifyVector = FALSE)
+if (!is.list(config) || is.null(names(config)) || any(!nzchar(names(config)))) {
+  stop("datasets.json must be a named object")
+}
 spec_path <- file.path(repo_root, "notebooks", "dataset_onboarding", "dataset_specs.py")
 spec_module <- import_from_path("dataset_specs", path = dirname(spec_path), convert = TRUE)
 BATCH_EFFECT_DATASET_ORDER <- as.character(spec_module$BATCH_EFFECT_DATASET_ORDER)
@@ -54,6 +57,40 @@ for (ds in BATCH_EFFECT_DATASET_ORDER) {
     stop(ds, ": BATCH_EFFECT_SPECS candidate list is empty")
   }
 }
+
+# The registry may retain the debug reference cohort, but every production
+# batch-effect entry must be represented in the fixed twelve-row evidence
+# scope. Refuse both omitted active entries and newly enabled extras rather
+# than silently producing a partial or stale review.
+configured_batch_effect <- names(config)[vapply(
+  config,
+  function(entry) isTRUE(entry$use_for_batch_effect),
+  logical(1)
+)]
+unexpected_batch_effect <- setdiff(
+  configured_batch_effect,
+  c("_debug", BATCH_EFFECT_DATASET_ORDER)
+)
+missing_batch_effect <- setdiff(BATCH_EFFECT_DATASET_ORDER, configured_batch_effect)
+if (length(unexpected_batch_effect) > 0L ||
+    length(missing_batch_effect) > 0L) {
+  stop(paste0(
+    "datasets.json batch-effect membership does not match the twelve-row ",
+    "contract; unexpected: ",
+    paste(unexpected_batch_effect, collapse = ","),
+    "; missing: ",
+    paste(missing_batch_effect, collapse = ",")
+  ))
+}
+
+registry_entry <- function(ds) {
+  entry <- config[[ds]]
+  if (is.null(entry) || !isTRUE(entry$use_for_batch_effect)) {
+    stop(ds, ": datasets.json entry is missing or disabled for batch-effect evidence")
+  }
+  entry
+}
+
 
 read_exact_selection <- function(path) {
   validate_source_artifact(path, "selection")
@@ -362,11 +399,10 @@ write_csv_atomic <- function(data, path) {
   write_artifact_sidecar(path)
   validate_source_artifact(path, "evidence CSV")
 }
-
 for (ds in BATCH_EFFECT_DATASET_ORDER) {
-  if (is.null(config[[ds]])) stop(ds, ": missing datasets.json entry")
+  entry <- registry_entry(ds)
   message("Building uncorrected candidate evidence for ", ds)
-  result <- build_dataset_evidence(ds, config[[ds]], BATCH_EFFECT_SPECS[[ds]])
+  result <- build_dataset_evidence(ds, entry, BATCH_EFFECT_SPECS[[ds]])
   output_path <- file.path(output_dir, paste0(ds, "_batch_candidate_evidence.csv"))
   write_csv_atomic(result, output_path)
 }

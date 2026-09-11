@@ -20,7 +20,7 @@ emit_outputs() {
   local output_dir="${EVIDENCE_OUTPUT_DIR:?}"
   local ds path digest size
   mkdir -p "${output_dir}"
-  for ds in Alzheimer Breast_cancer Covid19_PBMC Kidney_KPMP Myocardial_infarction Diabetes Lupus_PBMC Lung Parkinson Joanito Stephenson CombinedPBMC; do
+  for ds in Alzheimer Breast_cancer Covid19_PBMC Kidney_KPMP_full Myocardial_infarction Diabetes Lupus_PBMC Lung Parkinson Joanito Stephenson CombinedPBMC; do
     path="${output_dir}/${ds}_batch_candidate_evidence.csv"
     emit_csv "${path}" "${ds}"
     digest="$(md5sum "${path}" | cut -d' ' -f1)"
@@ -58,7 +58,7 @@ cp "${source_file}" "${source_sidecar}" "${destination}"
 STUB
 chmod +x "${TMP_DIR}/bin/rsync"
 SELECTION="${TMP_DIR}/selection.tsv"
-printf 'Alzheimer\tbatch_effect_uncorrected\nBreast_cancer\tbatch_effect_uncorrected\nCovid19_PBMC\tbatch_effect_uncorrected\nKidney_KPMP\tbatch_effect_uncorrected\nMyocardial_infarction\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\nLupus_PBMC\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\nParkinson\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\nStephenson\tbatch_effect_uncorrected\nCombinedPBMC\tbatch_effect_uncorrected\n' > "${SELECTION}"
+printf 'Alzheimer\tbatch_effect_uncorrected\nBreast_cancer\tbatch_effect_uncorrected\nCovid19_PBMC\tbatch_effect_uncorrected\nKidney_KPMP_full\tbatch_effect_uncorrected\nMyocardial_infarction\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\nLupus_PBMC\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\nParkinson\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\nStephenson\tbatch_effect_uncorrected\nCombinedPBMC\tbatch_effect_uncorrected\n' > "${SELECTION}"
 digest="$(md5sum "${SELECTION}" | cut -d' ' -f1)"
 printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${digest}" "$(wc -c < "${SELECTION}" | tr -d '[:space:]')" "${SELECTION}" > "${SELECTION}.md5"
 OUTPUT="$(
@@ -110,7 +110,7 @@ case "${SUCCESS_OUTPUT}" in *"EVIDENCE_RUN_ID=evidence-success"*) ;; *) echo "ev
 SUCCESS_RUN="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs/evidence-success"
 [[ "$(grep '^STATE=' "${SUCCESS_RUN}/status/terminal")" == "STATE=OK" ]]
 SUCCESS_REMOTE="${NAS_ROOT}/batch_effect/uncorrected/evidence/evidence-success"
-for ds in Alzheimer Breast_cancer Covid19_PBMC Kidney_KPMP Myocardial_infarction Diabetes Lupus_PBMC Lung Parkinson Joanito Stephenson CombinedPBMC; do
+for ds in Alzheimer Breast_cancer Covid19_PBMC Kidney_KPMP_full Myocardial_infarction Diabetes Lupus_PBMC Lung Parkinson Joanito Stephenson CombinedPBMC; do
   [[ -s "${SUCCESS_REMOTE}/${ds}_batch_candidate_evidence.csv" ]]
   [[ -s "${SUCCESS_REMOTE}/${ds}_batch_candidate_evidence.csv.md5" ]]
 done

@@ -69,6 +69,20 @@ def main():
                 "_batch_effect_analysis_"
                 f"{view_name.removeprefix('batch_effect_')}_ECODAprocessed.h5ad"
             )
+    legacy = datasets["Kidney_KPMP"]
+    assert legacy["use_for_benchmark"] is False
+    assert legacy["use_for_batch_effect"] is False
+    full = datasets["Kidney_KPMP_full"]
+    assert full["use_for_benchmark"] is False
+    assert full["use_for_batch_effect"] is True
+    assert full["file_names"] == "Kidney_KPMP_full.h5ad"
+    assert tuple(
+        full["columns"][key]
+        for key in ("sample", "label", "cell_type_low_res", "cell_type_high_res")
+    ) == expected["Kidney_KPMP_full"]
+    for view in full["views"].values():
+        assert view["input_file_name"] == "Kidney_KPMP_full.h5ad"
+
 
     assert datasets["Parkinson"]["views"]["batch_effect_corrected"]["columns"][
         "cell_type_high_res"
@@ -100,6 +114,20 @@ def main():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert len(module.BATCH_EFFECT_DATASET_ORDER) == 12
+    assert module.BATCH_EFFECT_DATASET_ORDER == (
+        "Alzheimer",
+        "Breast_cancer",
+        "Covid19_PBMC",
+        "Kidney_KPMP_full",
+        "Myocardial_infarction",
+        "Diabetes",
+        "Lupus_PBMC",
+        "Lung",
+        "Parkinson",
+        "Joanito",
+        "Stephenson",
+        "CombinedPBMC",
+    )
     assert module.BATCH_EFFECT_DATASET_ORDER[-3:] == ("Joanito", "Stephenson", "CombinedPBMC")
     assert module.BATCH_EFFECT_SPECS["Joanito"] == ["seqtec", "Site"]
     assert module.BATCH_EFFECT_SPECS["Stephenson"] == ["Site"]

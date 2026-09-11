@@ -24,7 +24,7 @@ LABELS = {
     "Alzheimer": "Cognitive status",
     "Breast_cancer": "disease",
     "Covid19_PBMC": "CoVID-19 severity",
-    "Kidney_KPMP": "condition.l1",
+    "Kidney_KPMP_full": "condition.l1",
     "Myocardial_infarction": "patient_group",
     "Diabetes": "disease",
     "Lupus_PBMC": "Status",
@@ -66,7 +66,7 @@ def make_h5ads(input_root: Path) -> None:
                 values = ["A", "A", "B", "B", "C", None]  # incomplete
             elif ds == "Covid19_PBMC" and candidate == "City":
                 values = ["A"] * 6  # constant
-            elif ds == "Kidney_KPMP" and candidate == "experiment":
+            elif ds == "Kidney_KPMP_full" and candidate == "experiment":
                 values = [f"u{i}" for i in range(6)]  # sample-unique
             elif ds == "Myocardial_infarction" and candidate == "batch":
                 values = labels[:]  # perfectly confounded
@@ -179,7 +179,7 @@ def main() -> None:
         assert bool(review.loc[(review.dataset == "Alzheimer") & (review.candidate == "assay"), "present"].eq(False).any())
         assert bool(review.loc[(review.dataset == "Breast_cancer") & (review.candidate == "assay"), "warnings"].str.contains("incomplete").any())
         assert bool(review.loc[(review.dataset == "Covid19_PBMC") & (review.candidate == "City"), "constant_candidate"].eq(True).any())
-        assert bool(review.loc[(review.dataset == "Kidney_KPMP") & (review.candidate == "experiment"), "sample_unique_candidate"].eq(True).any())
+        assert bool(review.loc[(review.dataset == "Kidney_KPMP_full") & (review.candidate == "experiment"), "sample_unique_candidate"].eq(True).any())
         assert bool(review.loc[(review.dataset == "Myocardial_infarction") & (review.candidate == "batch"), "perfect_confounded"].eq(True).any())
         unavailable = review[(review.dataset == "Alzheimer") & (review.method == "ECODA_HiTME_HR_layer2")]
         assert not unavailable.empty and unavailable.method_available.eq(False).all()

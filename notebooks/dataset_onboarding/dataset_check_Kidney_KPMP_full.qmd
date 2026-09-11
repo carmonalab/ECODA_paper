@@ -1,0 +1,490 @@
+---
+title: "Dataset Check: Kidney KPMP Full Cohort"
+subtitle: "Diagnostic Onboarding Report (Combined Single-Cell / Single-Nucleus Raw Counts)"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+> **Diagnostic-only report.** This report reads the full source file, or a
+> precomputed diagnostic subset when one is available, and records metadata,
+> hierarchy, confounding, and count checks. It never edits `datasets.json` or
+> selection files, submits jobs, or authorizes a registry or compute decision.
+> An unexpected source, metadata, hierarchy, or modality finding must stop for
+> user direction.
+
+```{python}
+import os
+import sys
+import json
+from pathlib import Path
+import matplotlib.pyplot as plt
+import scanpy as sc
+import pandas as pd
+import seaborn as sns
+
+pd.set_option("display.max_columns", None)
+pd.set_option("display.max_rows", None)
+pd.set_option("display.max_colwidth", None)
+pd.set_option("display.width", 1000)
+
+HERE = Path(os.getcwd())
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+import onboarding_utils as ou
+from dataset_specs import get_dataset_spec
+
+DATA_ROOT = Path('/Volumes/Shared/DataCollections/Standardized_SingleCell_Datasets/JooM_2025_41097818/output')
+NAME = 'Kidney_KPMP_full'
+SPEC = get_dataset_spec('Kidney_KPMP_full')
+NAS_FILE = str(DATA_ROOT / SPEC["file_name"])
+EXPECTED_SOURCE = SPEC.get("expected_source", {})
+EXPECTED = {
+    "cells": EXPECTED_SOURCE.get("cells"),
+    "samples": EXPECTED_SOURCE.get("independent_units"),
+    "ct_types": None,
+}
+SAMPLE_CANDIDATES = list(SPEC["sample_candidates"])
+SAMPLE_STABLE_COLS = list(SPEC["sample_stable_cols"])
+ECODA_SECONDARY_BIO = [c for c in SAMPLE_STABLE_COLS if c != SPEC["bio_col"]]
+BIO_COL = SPEC["bio_col"]
+BATCH_COLS = list(SPEC["batch_cols"])
+SUSPENSION_COL = "suspension_type"
+if SUSPENSION_COL not in BATCH_COLS:
+    raise RuntimeError(
+        f"{NAME}: the declared batch candidate contract must include {SUSPENSION_COL!r}"
+    )
+ALL_CT_COLS = list(SPEC["cell_type_candidates"])
+
+
+ds_data = ou.load_onboarding_dataset_or_subset(NAME, NAS_FILE, HERE)
+mode = ds_data["mode"]
+sub = ds_data["sub"]
+adata = ds_data["adata"]
+meta_info = ds_data["meta"] or {}
+audit_obs = adata.obs if mode == "nas" else sub.obs
+if SUSPENSION_COL not in audit_obs.columns:
+    raise KeyError(
+        f"{NAME}: required full-file metadata column {SUSPENSION_COL!r} is absent; "
+        "stop for source/registry review"
+    )
+
+if mode == "nas" and SPEC.get("subset_vars"):
+    subset_mask = pd.Series(True, index=adata.obs_names)
+    for subset_col, subset_rule in SPEC["subset_vars"].items():
+        if subset_col not in adata.obs.columns:
+            raise KeyError(f"{NAME}: subset_vars references missing obs column {subset_col!r}")
+        values = subset_rule.get("values", [])
+        col_mask = adata.obs[subset_col].isin(values)
+        subset_mask &= col_mask if subset_rule.get("op", "in") == "in" else ~col_mask
+    adata = adata[subset_mask]
+    audit_obs = adata.obs
+
+if mode == "nas":
+    sample_audit_df, sample_selection = ou.audit_sample_candidates(
+        adata.obs,
+        SAMPLE_CANDIDATES,
+        SAMPLE_STABLE_COLS,
+        SPEC["expected_source"]["independent_units"],
+    )
+    ct_sample = SPEC["registry_roles"]["sample"] if SPEC["registry_roles"]["sample"] in adata.obs.columns else (sample_selection.get("selected") or SAMPLE_CANDIDATES[0])
+    ct_column_audit_df, ct_label_audit_df, ct_selection = ou.audit_cell_type_candidates(
+        adata.obs, ALL_CT_COLS, ct_sample, BIO_COL, BATCH_COLS
+    )
+    registry_gate = ou.build_registry_gate(
+        SPEC,
+        adata.obs,
+        sample_audit_df,
+        sample_selection,
+        ct_column_audit_df,
+        ct_label_audit_df,
+        ct_selection,
+    )
+else:
+    sample_payload = meta_info.get("sample_audit", {})
+    sample_audit_df = pd.DataFrame(sample_payload.get("candidates", []))
+    sample_selection = sample_payload.get("selection", {})
+    ct_column_audit_df = pd.DataFrame(meta_info.get("cell_type_column_audit", []))
+    ct_label_audit_df = pd.DataFrame(meta_info.get("cell_type_label_audit", []))
+    ct_selection = meta_info.get("cell_type_selection", {})
+    registry_gate = meta_info.get("registry_gate", {"status": "MISSING", "reasons": ["registry_gate missing"]})
+
+selected = registry_gate.get("selected") or {}
+SAMPLE_COL = selected.get("sample") or SAMPLE_CANDIDATES[0]
+REGISTRY_CT_COL = selected.get("cell_type_high_res") or selected.get("cell_type_low_res") or ALL_CT_COLS[0]
+role_obs = adata.obs if mode == "nas" else sub.obs
+CT_COL = REGISTRY_CT_COL if REGISTRY_CT_COL in role_obs.columns else next((c for c in ALL_CT_COLS if c in role_obs.columns), REGISTRY_CT_COL)
+diagnostic_batch_cols = [c for c in BATCH_COLS if role_obs.get(c) is not None]
+
+if mode == "nas" or sub is None:
+    if registry_gate.get("status") not in {"PASS", "PASS_PENDING_DERIVED_ANNOTATION"}:
+        raise RuntimeError(f"{NAME}: cannot create a diagnostic subset without a passing declared-role gate")
+    sub, _ = ou.subset_by_samples(
+        adata,
+        sample_col=SAMPLE_COL,
+        bio_col=BIO_COL,
+        batch_cols=diagnostic_batch_cols,
+        ct_col=CT_COL,
+    )
+
+```
+
+## 0. Full-file Registry Gate
+
+> The registry decision below is computed on the complete `.obs` table before
+> the diagnostic subset. Subset plots and embeddings cannot override it.
+
+```{python}
+pd.DataFrame([{
+    "scope": "full file .obs",
+    "registry_gate": registry_gate.get("status"),
+    "declared_roles": registry_gate.get("selected"),
+    "annotation_source": registry_gate.get("registry_roles", {}).get("annotation_source"),
+    "reasons": registry_gate.get("reasons"),
+    "pending_reasons": registry_gate.get("pending_reasons"),
+    "stable_field_conflict_warnings": registry_gate.get("stable_field_conflict_warnings"),
+    "heuristic_warnings": registry_gate.get("heuristic_warnings"),
+    "decision_notes": SPEC.get("decision_notes"),
+    "subset_filter": SPEC.get("subset_vars", {}),
+    "filter_audit": meta_info.get("filter_summary", {}),
+}])
+```
+
+### Sample Candidate Invariance and Nesting
+
+```{python}
+sample_audit_df
+```
+
+```{python}
+pd.DataFrame(sample_selection.get("pairwise", []))
+```
+
+### Annotation Column and Hierarchy Gates
+
+```{python}
+ct_column_audit_df
+```
+
+```{python}
+pd.DataFrame(ct_selection.get("hierarchy", []))
+```
+
+### Per-label Coverage, Restriction, and Leakage Warnings
+
+```{python}
+pd.DataFrame(ct_selection.get("restriction_warnings", []))
+```
+
+```{python}
+pd.DataFrame(ct_selection.get("leakage_warnings", []))
+```
+
+## 1. Study Summary & Metadata Categorization
+
+> **Kidney KPMP full cohort** -- This combined single-cell/single-nucleus
+> cohort is identified by the source contract in `SPEC`. Expected source cell
+> and independent-unit counts are read from `SPEC["expected_source"]`; values
+> that remain `None` are intentionally unconfigured and are not replaced with
+> paper, legacy-cohort, or guessed counts.
+
+```{python}
+source_contract_df = pd.DataFrame([
+    {"Metric": "Source file (SPEC)", "Value": SPEC.get("file_name")},
+    {"Metric": "Expected cells (SPEC)", "Value": EXPECTED["cells"]},
+    {"Metric": "Expected independent units (SPEC)", "Value": EXPECTED["samples"]},
+    {"Metric": "Expected cell types (SPEC)", "Value": EXPECTED["ct_types"]},
+    {"Metric": "Source note (SPEC)", "Value": EXPECTED_SOURCE.get("source_note")},
+])
+source_contract_df
+```
+
+### Metadata Categories Summary
+
+```{python}
+cat_df = ou.categorize_obs_columns(audit_obs, {
+    "bio_primary": [BIO_COL],
+    "bio_secondary": ECODA_SECONDARY_BIO,
+    "batch_candidates": list(dict.fromkeys(BATCH_COLS + [SUSPENSION_COL])),
+    "cell_types": ALL_CT_COLS,
+    "sample_ids": SAMPLE_CANDIDATES,
+})
+concise_df = ou.summarize_obs_categories(cat_df)
+concise_df
+```
+
+### Detailed Metadata Column Categorization
+
+```{python}
+cat_df
+```
+
+### Combined Single-Cell / Single-Nucleus Modality Summary
+
+> `suspension_type` is shown verbatim and is an explicit batch-candidate
+> metadata field. The modality grouping below is a transparent display aid:
+> values containing `nuc` or explicit `sn`/`snrna` labels are grouped as
+> single-nucleus, values containing `cell` (or explicit `sc`/`scrna` labels) as
+> single-cell, and all other values remain unclassified. No source labels or
+> counts are inferred.
+
+```{python}
+def suspension_modality(value):
+    label = str(value).strip().lower()
+    nucleus_labels = {"sn", "snrna", "sn_rna", "single-nucleus", "single nucleus", "nucleus", "nuclei"}
+    cell_labels = {"sc", "scrna", "sc_rna", "single-cell", "single cell"}
+    if label in nucleus_labels or "nuc" in label:
+        return "single-nucleus"
+    if label in cell_labels or "cell" in label:
+        return "single-cell"
+    return "unclassified"
+
+suspension_values = audit_obs[SUSPENSION_COL].astype("string").fillna("<NA>")
+suspension_counts_df = (
+    suspension_values.value_counts(dropna=False)
+    .rename_axis(SUSPENSION_COL)
+    .reset_index(name="cells")
+)
+suspension_counts_df["modality"] = suspension_counts_df[SUSPENSION_COL].map(suspension_modality)
+suspension_counts_df["percent_cells"] = (
+    suspension_counts_df["cells"] / len(audit_obs) * 100 if len(audit_obs) else 0.0
+)
+suspension_counts_df
+```
+
+```{python}
+modality_summary_df = (
+    suspension_counts_df.groupby("modality", as_index=False, sort=True)
+    .agg(
+        cells=("cells", "sum"),
+        suspension_levels=(SUSPENSION_COL, "nunique"),
+    )
+)
+modality_summary_df["percent_cells"] = (
+    modality_summary_df["cells"] / len(audit_obs) * 100 if len(audit_obs) else 0.0
+)
+modality_summary_df
+```
+
+```{python}
+suspension_coverage_df = pd.DataFrame([{
+    "scope": "full file .obs" if mode == "nas" else "diagnostic subset",
+    "cells": int(len(audit_obs)),
+    "non_missing_cells": int(suspension_values.ne("<NA>").sum()),
+    "non_missing_percent": float(suspension_values.ne("<NA>").mean() * 100) if len(audit_obs) else 0.0,
+    "observed_suspension_levels": int(suspension_values.nunique(dropna=False)),
+}])
+suspension_coverage_df
+```
+
+```{python}
+coverage_frame = pd.DataFrame({
+    SAMPLE_COL: audit_obs[SAMPLE_COL].astype("string").fillna("<NA>"),
+    SUSPENSION_COL: suspension_values,
+})
+suspension_by_sample_df = (
+    coverage_frame.groupby([SAMPLE_COL, SUSPENSION_COL], dropna=False)
+    .size()
+    .rename("cells")
+    .reset_index()
+    .sort_values([SAMPLE_COL, SUSPENSION_COL])
+)
+suspension_by_sample_df
+```
+
+### Diagnostic Subset Annotation Display
+
+> Harmonization and restriction gates above use the full file. This table is
+> subset-scoped only and is retained for visual diagnostics.
+
+```{python}
+pd.DataFrame({
+    "column": [c for c in ALL_CT_COLS if c in sub.obs.columns],
+    "subset_unique_labels": [int(sub.obs[c].nunique(dropna=True)) for c in ALL_CT_COLS if c in sub.obs.columns],
+})
+```
+
+### Paper Table Comparison
+
+```{python}
+if mode == "subset" and meta_info.get("paper_table_compare"):
+    cmp_df = pd.DataFrame(meta_info["paper_table_compare"])
+else:
+    obs_for_cmp = adata.obs if mode == "nas" else sub.obs
+    cmp_df = ou.paper_table_compare(obs_for_cmp, SAMPLE_COL, CT_COL, EXPECTED)
+cmp_df
+```
+
+```{python}
+counts = sub.obs[SAMPLE_COL].astype(str).value_counts().sort_values(ascending=False)
+fig, ax = plt.subplots(figsize=(8, 3))
+ax.bar(counts.index.astype(str), counts.values, color="#4C72B0")
+ax.set_title(f"Cells per Sample ({SAMPLE_COL}) - Diagnostic Subset", fontweight="bold", fontsize=11)
+ax.set_ylabel("Number of Cells")
+ax.set_xlabel("Sample")
+plt.xticks(rotation=45, ha="right", fontsize=8)
+fig.tight_layout()
+plt.show()
+```
+
+## 2. Raw Count Integrity Check
+
+```{python}
+if mode == "subset" and meta_info.get("count_sanity"):
+    cs = meta_info["count_sanity"]
+else:
+    cs = ou.count_sanity_check(sub)
+
+cs_df = pd.DataFrame([
+    {"Metric": "Count Layer / Slot", "Value": str(cs.get("slot"))},
+    {"Metric": "Verdict", "Value": str(cs.get("verdict"))},
+    {"Metric": "Integer Counts", "Value": str(cs.get("integer_values"))},
+    {"Metric": "Sparsity (% Nonzero)", "Value": f"{(1 - cs.get('sparsity', 0)) * 100:.2f}%"},
+    {"Metric": "Sampled Values Range", "Value": f"[0.0, {cs.get('max_sampled_value', 0):.1f}]"},
+])
+cs_df
+```
+
+## 3. Confounding & Experimental Design
+
+> The confounding table is full-file evidence: it is computed from the full
+> `.obs` table when the source is available and otherwise loaded from the
+> precomputed full-file audit metadata. The subset is used only for the
+> downstream visual diagnostics.
+
+```{python}
+if mode == "subset":
+    crosstab = pd.DataFrame(meta_info.get("confounding_crosstab", []))
+else:
+    crosstab = ou.confounding_crosstab(adata.obs, BIO_COL, BATCH_COLS)
+cols_show = [c for c in ["batch_candidate", "n_bio_uniq", "n_batch_uniq", "perfectly_collinear", "strongly_confounded", "warning"] if c in crosstab.columns]
+crosstab[cols_show]
+```
+
+### Metadata Collinearity Matrix (Normalized Mutual Information)
+
+> **Collinearity Diagnostic:** Quantifies pairwise non-linear association among all biological and technical covariates at the sample level using Normalized Mutual Information (NMI $\in [0, 1]$). Values $> 0.70$ indicate severe collinearity and confounding.
+
+```{python}
+all_cand_cols = list(dict.fromkeys([BIO_COL] + ECODA_SECONDARY_BIO + BATCH_COLS))
+if mode == "nas":
+    nmi_mat = ou.compute_metadata_nmi_matrix(adata.obs, SAMPLE_COL, all_cand_cols)
+    fig_nmi = ou.plot_metadata_nmi_heatmap(nmi_mat, title=f"Metadata Collinearity Matrix (NMI) — {NAME}")
+    plt.figure(fig_nmi.number)
+    plt.show()
+else:
+    nmi_mat = pd.DataFrame([{
+        "scope": "full file .obs",
+        "status": "unavailable from the precomputed full-file audit metadata",
+    }])
+nmi_mat
+```
+
+## 4. Unintegrated Embeddings (Fresh PCA + UMAP)
+
+> **Embedding Protocol:** Computed directly from processed raw counts (total counts normalized to 10k, log1p, 2000 HVGs via Seurat v3 paper flavor, scaled PCA 50 PCs, standard Scanpy UMAP with `min_dist=0.5, spread=1.0`). **No pre-existing or batch-corrected embeddings are used.**
+
+```{python}
+label_cols = [c for c in [SAMPLE_COL, BIO_COL] + BATCH_COLS + [CT_COL] if c and c in sub.obs.columns]
+um = ou.embed_and_umap_workflow(
+    sub, label_cols=label_cols, out_dir=None, name=NAME,
+    sample_col=SAMPLE_COL,
+)
+sub_embedded = um["subset"]
+
+for fig in um["figs"]:
+    plt.figure(fig.number)
+    plt.show()
+```
+
+## 5. Variance Partition & Distance PERMANOVA Across Covariates
+
+> **Variance Partitioning Protocol:**
+> 1. **Cell-Type Specific Variance Partitioning:** Quantifies the fraction of inter-sample variance in cell-type abundance explained by each biological vs. technical covariate across cell types and whole cohort average (`Whole atlas`), following Sikkema et al. 2023 (*Nature Medicine* 29:1563–1577, Fig. 4a).
+> 2. **Global Distance PERMANOVA & Variance Decomposition:** Partitions total inter-sample Aitchison distance variance (Euclidean distance on CLR composition) into **Unique Biological**, **Unique Technical**, **Shared/Confounded**, and **Residual** variance via multi-variable marginal PERMANOVA with permutation tests (Anderson 2001).
+
+```{python}
+bio_candidates = list(dict.fromkeys([c for c in [BIO_COL] + ECODA_SECONDARY_BIO if c in sub.obs.columns]))
+tech_candidates = list(dict.fromkeys([c for c in BATCH_COLS if c in sub.obs.columns]))
+
+for annot_col in ALL_CT_COLS:
+    if annot_col not in sub.obs.columns:
+        continue
+    clr_curr = ou.compute_clr_composition(sub.obs, SAMPLE_COL, annot_col)
+    
+    # 1. Feature-level variance partition heatmap (Sikkema et al.)
+    var_tech, var_bio = ou.compute_variance_partition(
+        clr_curr, sub.obs, SAMPLE_COL, bio_candidates, tech_candidates
+    )
+    
+    fig_var = ou.plot_variance_partition_heatmap(
+        var_tech, var_bio,
+        title=f"Fraction of Total Variance Explained Across Covariates — {annot_col}"
+    )
+    plt.figure(fig_var.number)
+    plt.show()
+    
+    # 2. Global Distance PERMANOVA & Variance Decomposition
+    univar_perm, joint_perm, stats_text = ou.compute_compositional_permanova(
+        clr_curr, sub.obs, SAMPLE_COL, bio_candidates, tech_candidates, n_permutations=999
+    )
+    
+    fig_perm = ou.plot_compositional_permanova(
+        univar_perm, joint_perm,
+        title=f"Compositional Distance Variance Decomposition (PERMANOVA) — {annot_col}"
+    )
+    plt.figure(fig_perm.number)
+    plt.show()
+
+    print(stats_text)
+```
+
+## 6. Cell-Level Separation (LISI) & Batch Effect Assessment
+
+```{python}
+sep_df, json_summary = ou.run_onboarding_metrics(
+    sub_embedded, ct_col=CT_COL, bio_col=BIO_COL,
+    batch_cols=BATCH_COLS, sample_col=SAMPLE_COL,
+)
+```
+
+```{python}
+fig_hm = ou.plot_separation_heatmap(sep_df, name=NAME)
+plt.figure(fig_hm.number)
+plt.show()
+```
+
+```{python}
+sep_df
+```
+
+### Automated Diagnostic Verdict
+
+```{python}
+for line in json_summary.get("verdict", []):
+    print("- " + line)
+```
+
+---
+
+## 7. Registry Decision
+
+> This is an informational rendering of the declared spec and observed audit
+> state. It does not mutate the registry, enable or disable methods, alter
+> selection files, or submit Stage 3/4/5 jobs.
+
+```{python}
+print(f"Full-file registry gate: {registry_gate.get('status')}")
+print(f"Initial registry mode: {SPEC['initial_registry_mode']}")
+print(f"Suitable for auto-annotation: {not SPEC['not_suitable_for_auto_annotation']}")
+for reason in registry_gate.get("reasons", []):
+    print(f"- {reason}")
+```

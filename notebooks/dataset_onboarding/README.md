@@ -21,7 +21,7 @@ inputs.
 | Breast_cancer | `sample_id` | `disease` | `broad_cell_type` | `author_cell_type` | author / author |
 | Covid19_PBMC | `sampleID` | `CoVID-19 severity` | `majorType` | `celltype` | author / author |
 | Diabetes | `donor_id` | `disease` | `cell_type` | `cell_type_reannotatedIntegrated` | author / author |
-| Kidney_KPMP | `specimen` | `condition.l1` | `subclass.l1` | `subclass.l3` | author / author |
+| Kidney_KPMP_full | `specimen` | `condition.l1` | `subclass.l1` | `subclass.l3` | author / author |
 | Lung | `sample` | `disease` | `ann_coarse` | `ann_fine` | author / author |
 | Lupus_PBMC | `sampleID` | `Status` | `layer1` | `layer2` | HiTME / HiTME |
 | Myocardial_infarction | `orig_ident` | `patient_group` | `cell_type` | `cell_subtype` | author / author |
@@ -30,12 +30,58 @@ inputs.
 | Stephenson | `Sample` | `Status` | `initial_clustering` | `full_clustering` | author / author |
 | CombinedPBMC | `Sample` | `cond` | `layer1` | `layer2` | HiTME / HiTME |
 
+> **Legacy compatibility note — not active:** `Kidney_KPMP` is retained only
+> for the preserved historical onboarding QMD and reproducibility of its
+> existing artifacts. Its registry flags remain disabled; it is excluded from
+> active onboarding, batch-effect order, selection files, and worker dispatch.
+
 The previous heuristic choice, stable-field conflicts, and aggregation warnings
 remain in each audit. They explain the decision; they do not silently replace
 the declared role. Missing IDs, standardized-ID collisions, missing labels, and
 failed declared author hierarchies remain hard failures. HiTME and Leiden
 columns are produced-output roles and remain pending until processed h5ad
 evidence validates them.
+
+## Kidney_KPMP_full combined cohort
+
+`Kidney_KPMP_full` is the active Kidney cohort and represents a combined
+single-cell/single-nucleus (sc/sn) source. Its canonical staged input is
+`Kidney_KPMP_full.h5ad`; source identity and verification details come from
+the authoritative source catalog and registry rather than from this
+documentation. No source URL or paper/legacy count is assumed here. Expected
+cell and independent-unit counts remain unset until the full-file audit
+establishes and the user accepts the source contract.
+
+The declared roles are `specimen` (sample), `condition.l1` (biological
+condition), `subclass.l1` (low-resolution annotation), and `subclass.l3`
+(high-resolution annotation), with author/author provenance. The observed
+`suspension_type` field is an explicit batch-effect candidate and must be
+reported separately for its single-cell and single-nucleus coverage. Missing
+declared roles or required metadata are hard audit findings; the report does
+not silently substitute another column.
+
+The active batch-effect registry and its authoritative twelve-row order use
+`Kidney_KPMP_full` in place of the disabled legacy key. The active uncorrected
+view is `batch_effect_uncorrected`: preprocessing uses `Sample` and no
+technical correction covariate. Its Stage 5 batch run uses the fixed suite
+`prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot`.
+
+The active order is:
+
+```text
+Alzheimer, Breast_cancer, Covid19_PBMC, Kidney_KPMP_full,
+Myocardial_infarction, Diabetes, Lupus_PBMC, Lung, Parkinson,
+Joanito, Stephenson, CombinedPBMC
+```
+
+The Kidney onboarding report
+`dataset_check_Kidney_KPMP_full.qmd` is diagnostic information only. It reads
+the source or a diagnostic subset, displays audit findings, and cannot edit
+`datasets.json`, selection files, or submit jobs. A source, modality,
+metadata, hierarchy, or count discrepancy stops the onboarding decision for
+explicit user direction; a report rendering never authorizes automated
+registry or compute changes.
+
 
 ## Full-file audit workflow
 

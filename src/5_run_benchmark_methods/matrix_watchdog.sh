@@ -32,6 +32,13 @@ cd "${PROJECT_ROOT}"
 [[ $# -ge 10 ]] || { echo "Usage: matrix_watchdog.sh RUN_ROOT LABEL MANIFEST ARRAY_ID MEM MAX_MEM PARTITION THROTTLE WORKER RUNTIME_EXPORT [flags...]" >&2; exit 2; }
 RUN_ROOT="$1"; LABEL="$2"; ROOT_MANIFEST="$3"; ARRAY_ID="$4"; CURRENT_MEMORY="$5"; MAX_MEMORY="$6"; PARTITION="$7"; THROTTLE="$8"; WORKER_SCRIPT="$9"; RUNTIME_EXPORT="${10}"; shift 10
 WORKER_FLAGS=("$@")
+WATCHDOG_FORCE_BENCHMARK="${FORCE_BENCHMARK:-0}"
+[[ "${WATCHDOG_FORCE_BENCHMARK}" == "0" ||
+   "${WATCHDOG_FORCE_BENCHMARK}" == "1" ]] || {
+  echo "ERROR: FORCE_BENCHMARK must be 0 or 1 for matrix watchdog retries." >&2
+  exit 1
+}
+export FORCE_BENCHMARK="${WATCHDOG_FORCE_BENCHMARK}"
 WORKER_TIME_LIMIT="${METHOD_TIME_LIMIT:-${BENCHMARK_CPU_TIME_LIMIT}}"
 [[ -n "${WORKER_TIME_LIMIT}" && "${WORKER_TIME_LIMIT}" != *$'\n'* && "${WORKER_TIME_LIMIT}" != *' '* ]] ||
   { echo "ERROR: matrix worker time limit is invalid." >&2; exit 1; }
@@ -167,7 +174,7 @@ while :; do
     fail "matrix retry manifest escaped the run root"
   ecoda_validate_manifest "${RETRY_MANIFEST}" "${MATRIX_MANIFEST_COLUMNS}" || fail "matrix retry manifest is invalid"
   retry_count="$(wc -l < "${RETRY_MANIFEST}" | tr -d '[:space:]')"
-  retry_export="ALL,MATRIX_RETRY_MANIFEST=${RETRY_MANIFEST},ANALYSIS_MANIFEST=${RETRY_MANIFEST},MATRIX_RETRY=1,JOB_LOG_PREFIX=${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX},ECODA_RUN_ROOT=${RUN_ROOT},ECODA_RUN_ID=${ECODA_RUN_ID},ECODA_SELECTION_MANIFEST=${ROOT_MANIFEST}"
+  retry_export="ALL,MATRIX_RETRY_MANIFEST=${RETRY_MANIFEST},ANALYSIS_MANIFEST=${RETRY_MANIFEST},MATRIX_RETRY=1,JOB_LOG_PREFIX=${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX},ECODA_RUN_ROOT=${RUN_ROOT},ECODA_RUN_ID=${ECODA_RUN_ID},ECODA_SELECTION_MANIFEST=${ROOT_MANIFEST},FORCE_BENCHMARK=${WATCHDOG_FORCE_BENCHMARK}"
   if [[ -n "${ANALYSIS_PASS:-}" ]]; then
     unset BENCHMARK_MANIFEST
     retry_export="${retry_export},ANALYSIS_PASS=${ANALYSIS_PASS}"

@@ -104,7 +104,7 @@ if ! ecoda_write_checksum "${RUN_SELECTION}"; then
 fi
 
 EVIDENCE_DATASETS=(
-  Alzheimer Breast_cancer Covid19_PBMC Kidney_KPMP Myocardial_infarction
+  Alzheimer Breast_cancer Covid19_PBMC Kidney_KPMP_full Myocardial_infarction
   Diabetes Lupus_PBMC Lung Parkinson Joanito Stephenson CombinedPBMC
 )
 EVIDENCE_CSVS=()
@@ -187,7 +187,7 @@ for row in rows:
     if row["dataset"] != expected_dataset and expected_dataset != "__review__":
         fail("evidence CSV dataset does not match filename: " + path)
     if expected_dataset == "__review__" and row["dataset"] not in {
-        "Alzheimer", "Breast_cancer", "Covid19_PBMC", "Kidney_KPMP",
+        "Alzheimer", "Breast_cancer", "Covid19_PBMC", "Kidney_KPMP_full",
         "Myocardial_infarction", "Diabetes", "Lupus_PBMC", "Lung",
         "Parkinson", "Joanito", "Stephenson", "CombinedPBMC",
     }:

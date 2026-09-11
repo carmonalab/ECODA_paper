@@ -17,7 +17,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${PROJECT_ROOT}/src/slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-KEYS=(alzheimer breast covid19 diabetes kidney lung lupus myocardial parkinson)
+KEYS=(alzheimer breast covid19 diabetes Kidney_KPMP_full lung lupus myocardial parkinson)
 
 IN_DIR="${1:-${HPC_SCRATCH_DIR}/_downloads}"
 OUT_DIR="${2:-${IN_DIR}/subsets}"

@@ -20,12 +20,16 @@ ANALYSES_ARG=""
 ANALYSES_SET=0
 TARGET_METHODS_ARG=""
 TARGET_METHODS_SET=0
+TARGET_METHODS=()
 SELECTION_FILE_ARG=""
 SELECTION_FILE_SET=0
 PASS_ARG=""
 PASS_SET=0
 EXACT_BATCH_SELECTION=0
 FORCE_ARG=0
+FORCE_TARGETED_ARG=0
+FORCE_REASON_ARG=""
+FORCE_REASON_SET=0
 SYNC_ONLY_RUN=""
 SYNC_ONLY_SET=0
 PARTITION_ARG=""
@@ -42,7 +46,8 @@ usage() {
 Usage: 1_submit_hpc_array.sh [--datasets LIST] [--methods LIST]
        [--target-methods LIST] [--analyses trans,zeroimp] [--selection-file TSV]
        [--exact-batch-selection] [--pass uncorrected|corrected]
-       [--gpu-policy auto|default|any] [--force] [--sync-only RUN_ID]
+       [--gpu-policy auto|default|any] [--force]
+       [--force-targeted --force-reason REASON] [--sync-only RUN_ID]
        [--partition NAME] [--mem VALUE] [--max-mem VALUE] [--throttle N]
 
 Selection-file rows are DATASET<TAB>VIEW<TAB>LABEL. Ordinary methods use the
@@ -50,6 +55,8 @@ benchmark_analysis view; batch mode uses the selected explicit pass view.
 Exact batch mode requires the immutable twelve-row uncorrected matrix.
 --target-methods is an explicit selection-file-scoped partial batch recovery;
 it requires --pass and preserves the fixed suite as the default.
+--force-targeted force-reclaims only the explicit target methods; it requires
+--target-methods, --pass, --selection-file, and --force-reason.
 EOF
 }
 while [[ $# -gt 0 ]]; do
@@ -70,6 +77,9 @@ while [[ $# -gt 0 ]]; do
     --pass|--analysis-pass) PASS_ARG="${2:-}"; PASS_SET=1; shift 2 ;;
     --pass=*|--analysis-pass=*) PASS_ARG="${1#*=}"; PASS_SET=1; shift ;;
     --force) FORCE_ARG=1; shift ;;
+    --force-targeted) FORCE_TARGETED_ARG=1; shift ;;
+    --force-reason) FORCE_REASON_ARG="${2:-}"; FORCE_REASON_SET=1; shift 2 ;;
+    --force-reason=*) FORCE_REASON_ARG="${1#*=}"; FORCE_REASON_SET=1; shift ;;
     --gpu-policy) GPU_POLICY="${2:-}"; shift 2 ;;
     --gpu-policy=*) GPU_POLICY="${1#*=}"; shift ;;
     --sync-only) SYNC_ONLY_RUN="${2:-}"; SYNC_ONLY_SET=1; shift 2 ;;
@@ -86,6 +96,49 @@ while [[ $# -gt 0 ]]; do
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
+if [[ ${FORCE_TARGETED_ARG} -eq 1 ]]; then
+  [[ ${FORCE_ARG} -eq 0 ]] || {
+    echo "ERROR: --force-targeted cannot be combined with --force." >&2
+    exit 1
+  }
+  [[ ${TARGET_METHODS_SET} -eq 1 && -n "${TARGET_METHODS_ARG}" ]] || {
+    echo "ERROR: --force-targeted requires --target-methods." >&2
+    exit 1
+  }
+  [[ ${PASS_SET} -eq 1 && "${PASS_ARG}" == "uncorrected" ]] || {
+    echo "ERROR: --force-targeted requires --pass uncorrected." >&2
+    exit 1
+  }
+  [[ ${SELECTION_FILE_SET} -eq 1 && -n "${SELECTION_FILE_ARG}" ]] || {
+    echo "ERROR: --force-targeted requires --selection-file." >&2
+    exit 1
+  }
+  [[ ${METHODS_SET} -eq 0 && ${ANALYSES_SET} -eq 0 ]] || {
+    echo "ERROR: --force-targeted cannot be combined with --methods or --analyses." >&2
+    exit 1
+  }
+  [[ ${EXACT_BATCH_SELECTION} -eq 0 ]] || {
+    echo "ERROR: --force-targeted cannot be combined with --exact-batch-selection." >&2
+    exit 1
+  }
+  [[ ${SYNC_ONLY_SET} -eq 0 ]] || {
+    echo "ERROR: --force-targeted cannot be combined with --sync-only." >&2
+    exit 1
+  }
+  [[ ${FORCE_REASON_SET} -eq 1 && -n "${FORCE_REASON_ARG}" ]] || {
+    echo "ERROR: --force-targeted requires --force-reason." >&2
+    exit 1
+  }
+  case "${FORCE_REASON_ARG}" in
+    *$'\n'*|*$'\r'*|*$'\t'*|*=*|*\\*)
+      echo "ERROR: --force-reason contains a record delimiter." >&2
+      exit 1
+      ;;
+  esac
+elif [[ ${FORCE_REASON_SET} -eq 1 ]]; then
+  echo "ERROR: --force-reason requires --force-targeted." >&2
+  exit 1
+fi
 case "${GPU_POLICY}" in
   auto|default|any) ;;
   *) echo "ERROR: --gpu-policy must be auto, default, or any." >&2; exit 1 ;;
@@ -162,6 +215,7 @@ if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
   }
   ecoda_split_csv "${TARGET_METHODS_ARG}" || exit 1
   ecoda_assert_unique_items "${ECODA_ARRAY[@]}" || exit 1
+  TARGET_METHODS=("${ECODA_ARRAY[@]}")
   for target_method in "${ECODA_ARRAY[@]}"; do
     case ",${EXPECTED_BATCH_METHODS}," in
       *,"${target_method}",*) ;;
@@ -598,6 +652,16 @@ stage5_validate_path_component() {
     return 1
   }
 }
+stage5_method_is_forced() {
+  local method="$1" target_method
+  [[ ${FORCE_ARG} -eq 1 ]] && return 0
+  [[ ${FORCE_TARGETED_ARG} -eq 1 ]] || return 1
+  for target_method in "${TARGET_METHODS[@]}"; do
+    [[ "${target_method}" == "${method}" ]] && return 0
+  done
+  return 1
+}
+
 
 stage5_configured_output_name() {
   local ds="$1" view="$2"
@@ -1164,9 +1228,7 @@ EXACT_SELECTION=0
 [[ ${EXACT_BATCH_SELECTION} -eq 1 ]] && EXACT_SELECTION=1
 BATCH_EFFECT_METHODS=(prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot)
 if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
-  ecoda_split_csv "${TARGET_METHODS_ARG}" ||
-    stage5_abort "invalid targeted batch-effect method selection"
-  METHODS=("${ECODA_ARRAY[@]}")
+  METHODS=("${TARGET_METHODS[@]}")
 elif [[ -n "${PASS_ARG}" ]]; then
   METHODS=("${BATCH_EFFECT_METHODS[@]}")
 fi
@@ -1418,6 +1480,47 @@ stage5_validate_reusable_artifact() {
   ecoda_validate_checksum "${path}"
 
 }
+stage5_prepare_pseudobulk_valid() {
+  local ds="$1" view="$2" path owner_dir producer_run record recorded_producer
+  local prepare_rds_args=()
+  [[ -n "${PASS_ARG}" ]] || return 1
+  benchmark_artifacts_for "${ds}" "${view}" prepare_pseudobulk || return 1
+  [[ ${#ARTIFACT_PATHS[@]} -eq 1 ]] || return 1
+  path="${ARTIFACT_PATHS[0]}"
+  [[ "${path}" == *_batch_effect_${PASS_ARG}_pseudobulk_hvg2000.rds ]] || return 1
+
+  # Targeted recovery runs have a new RUN_ID.  Validate the immutable cache
+  # against its terminal global owner first, then resolve the record under
+  # that producer run rather than the recovery run.
+  ecoda_validate_checksum "${path}" || return 1
+  ecoda_artifact_owner_validate "${path}" >/dev/null 2>&1 || return 1
+  owner_dir="${ECODA_ARTIFACT_OWNER_DIR:-}"
+  [[ -n "${owner_dir}" &&
+     "${ECODA_ARTIFACT_OWNER_STATE:-}" == "OK" &&
+     "${ECODA_ARTIFACT_OWNER_STAGE:-}" == "stage5" ]] || return 1
+  producer_run="${ECODA_ARTIFACT_OWNER_RUN:-}"
+  ecoda_validate_run_id "${producer_run}" || return 1
+  record="$(ecoda_artifact_record_path "${path}" "${producer_run}" 2>/dev/null || true)"
+  [[ -n "${record}" && -f "${record}" && ! -L "${record}" ]] || return 1
+  recorded_producer="$(stage5_recorded_producer "${record}")" || return 1
+  stage5_producer_allowed "${path}" prepare_pseudobulk "${recorded_producer}" ||
+    return 1
+  ecoda_validate_artifact_record \
+    "${path}" "${recorded_producer}" "${producer_run}" >/dev/null || return 1
+
+  # The matrix fixture does not have a real R runtime, but it must still pass
+  # every checksum, owner, and producer-record check above.
+  [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
+  prepare_rds_args=(--artifact "${path}" --method prepare_pseudobulk
+    --dataset "${ds}" --view "${view}" --input-root "${HPC_SCRATCH_DIR}"
+    --config "${DATASETS_JSON_FILE}")
+  prepare_rds_args+=(--batch-pass "${PASS_ARG}")
+  [[ -s "${SOURCE_IDENTITY}" ]] &&
+    prepare_rds_args+=(--source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
+  ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
+    "${prepare_rds_args[@]}" >/dev/null 2>&1
+}
+
 benchmark_selected_artifacts_valid() {
   local ds="$1" view="$2" label="$3" path artifact_check
   local has_feather=0 rds_grouped=0 group_rc
@@ -1658,8 +1761,13 @@ stage5_selection_has_pending_rows() {
           *) continue ;;
         esac
       fi
-      if [[ ${FORCE_ARG} -eq 1 ]] ||
-         ! benchmark_selected_artifacts_valid "${ds}" "${view}" "${method}"; then
+      if stage5_method_is_forced "${method}"; then
+        return 0
+      fi
+      if [[ ${FORCE_TARGETED_ARG} -eq 1 &&
+            "${method}" == "prepare_pseudobulk" ]]; then
+        stage5_prepare_pseudobulk_valid "${ds}" "${view}" || return 0
+      elif ! benchmark_selected_artifacts_valid "${ds}" "${view}" "${method}"; then
         return 0
       fi
     done < "${MANIFEST}"
@@ -1681,10 +1789,10 @@ if [[ -z "${SYNC_ONLY_RUN}" ]] &&
   [[ ${ANALYSES_SELECTED} -eq 1 ]] &&
     analyses_csv="$(IFS=,; echo "${ANALYSES[*]}")"
   ecoda_atomic_write "${ECODA_RUN_ROOT}/metadata" \
-    "STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\n${identity_metadata}\n" ||
+    "STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\n${identity_metadata}\n" ||
     stage5_abort "failed to write Stage 5 NOOP metadata"
   ecoda_atomic_write "${ECODA_RUN_ROOT}/status/report" \
-    "STATE=NOOP_VALIDATED\nRUN_ID=${RUN_ID}\nREASON=all selected benchmark artifacts are valid; no rerun selected\n" ||
+    "STATE=NOOP_VALIDATED\nRUN_ID=${RUN_ID}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nREASON=all selected benchmark artifacts are valid; no rerun selected\n" ||
     stage5_abort "failed to write Stage 5 NOOP_VALIDATED report"
   ecoda_set_run_state OK "NOOP_VALIDATED: all selected benchmark artifacts are valid" ||
     stage5_abort "failed to write Stage 5 NOOP_VALIDATED terminal state"
@@ -1759,6 +1867,8 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   ecoda_owner_clear_tracked
   for method in "${METHODS[@]}" "${ANALYSES[@]}"; do
     [[ "${method}" == _ecoda_none_ ]] && continue
+    method_force=0
+    stage5_method_is_forced "${method}" && method_force=1
     while IFS=$'\t' read -r ds view row_label; do
       if [[ ${EXACT_SELECTION} -eq 1 && -z "${PASS_ARG}" ]]; then
         case "${method}:${row_label}" in
@@ -1773,15 +1883,22 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
         *" ${owner_key} "*) continue ;;
       esac
       OWNER_SEEN="${OWNER_SEEN} ${owner_key}"
-      if benchmark_selected_artifacts_valid "${ds}" "${view}" "${method}" &&
-         [[ ${FORCE_ARG} -eq 0 ]]; then
+      if [[ ${FORCE_TARGETED_ARG} -eq 1 &&
+            "${method}" == "prepare_pseudobulk" &&
+            ${method_force} -eq 0 ]]; then
+        if stage5_prepare_pseudobulk_valid "${ds}" "${view}"; then
+          echo "Skipping validated Stage 5 pseudobulk cache ${ds}/${view}/${method}."
+          continue
+        fi
+      elif [[ ${method_force} -eq 0 ]] &&
+           benchmark_selected_artifacts_valid "${ds}" "${view}" "${method}"; then
         echo "Skipping validated Stage 5 artifact ${ds}/${view}/${method}."
         continue
       fi
       benchmark_artifacts_for "${ds}" "${view}" "${method}" ||
         stage5_abort "cannot resolve output contract for ${ds}/${view}/${method}"
       set +e
-      owner_dir="$(ecoda_owner_acquire stage5 "${owner_key}" "${RUN_ID}" "${FORCE_ARG}" 0)"
+      owner_dir="$(ecoda_owner_acquire stage5 "${owner_key}" "${RUN_ID}" "${method_force}" 0)"
       owner_rc=$?
       set -e
       [[ ${owner_rc} -eq 0 ]] || stage5_abort "ownership conflict for ${owner_key}"
@@ -1834,7 +1951,7 @@ else
   if [[ ${ANALYSES_SELECTED} -eq 1 ]]; then analyses_csv="$(IFS=,; echo "${ANALYSES[*]}")"; fi
   identity_metadata="$(stage5_record_run_identity_metadata)" ||
     stage5_abort "failed to read Stage 5 source/runtime identity"
-  RUN_METADATA="STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\nH5AD_PREFLIGHT=${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv\nPENDING_SELECTION=${PENDING_SELECTION}\nPENDING_SELECTION_MD5=${PENDING_SELECTION_MD5}\nPENDING_SELECTION_SIZE=${PENDING_SELECTION_SIZE}\n${identity_metadata}\nROOT=${HPC_SCRATCH_DIR}/$([[ -n "${PASS_ARG}" ]] && printf 'batch_effect/%s' "${PASS_ARG}" || printf 'benchmark')\n"
+  RUN_METADATA="STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\nH5AD_PREFLIGHT=${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv\nPENDING_SELECTION=${PENDING_SELECTION}\nPENDING_SELECTION_MD5=${PENDING_SELECTION_MD5}\nPENDING_SELECTION_SIZE=${PENDING_SELECTION_SIZE}\n${identity_metadata}\nROOT=${HPC_SCRATCH_DIR}/$([[ -n "${PASS_ARG}" ]] && printf 'batch_effect/%s' "${PASS_ARG}" || printf 'benchmark')\n"
   ecoda_atomic_write "${ECODA_RUN_ROOT}/metadata" "${RUN_METADATA}" ||
     stage5_abort "failed to write Stage 5 run metadata"
 fi
@@ -1915,6 +2032,8 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     local group_label="$1" manifest="$2" dependency="$3" method="$4"
     local view="$5" resource_class="$6"
     method_spec_for_group "${method}" "${resource_class}" || return 1
+    local method_force=0
+    stage5_method_is_forced "${method}" && method_force=1
     local worker="${METHOD_WORKER}" worker_partition="${METHOD_PARTITION}" \
       watchdog_partition="${SLURM_PARTITION_BENCHMARK_CPU}" throttle="${METHOD_THROTTLE}" \
       method_time_limit="${METHOD_TIME_LIMIT}" method_gpu_policy="${METHOD_GPU_POLICY}"
@@ -1923,7 +2042,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     watchdog_script="$(stage5_source_script src/5_run_benchmark_methods/matrix_watchdog.sh)"
     local safe="$(printf '%s' "${group_label}" | tr '/:,\t ' '_____')"
     local array_msg array_id array_rc wd_msg wd_id wd_rc
-    local worker_env="METHOD=${method},ANALYSIS=${method},ANALYSIS_MANIFEST=${manifest},ANALYSIS_VIEW=${view},ANALYSIS_ROOT=${ANALYSIS_ROOT},EXECUTION_LOG_DIR=${RUN_LOG_DIR},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${RUN_ID},ECODA_SELECTION_MANIFEST=${manifest},FORCE_BENCHMARK=${FORCE_ARG},METHOD_TIME_LIMIT=${method_time_limit},METHOD_GPU_POLICY=${method_gpu_policy},ECODA_ARTIFACT_PRODUCER=stage5_${method},JOB_LOG_PREFIX=${RUN_LOG_DIR}/5_matrix_${safe}"
+    local worker_env="METHOD=${method},ANALYSIS=${method},ANALYSIS_MANIFEST=${manifest},ANALYSIS_VIEW=${view},ANALYSIS_ROOT=${ANALYSIS_ROOT},EXECUTION_LOG_DIR=${RUN_LOG_DIR},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${RUN_ID},ECODA_SELECTION_MANIFEST=${manifest},FORCE_BENCHMARK=${method_force},METHOD_TIME_LIMIT=${method_time_limit},METHOD_GPU_POLICY=${method_gpu_policy},ECODA_ARTIFACT_PRODUCER=stage5_${method},JOB_LOG_PREFIX=${RUN_LOG_DIR}/5_matrix_${safe}"
     if [[ -n "${PASS_ARG}" ]]; then
       worker_env="${worker_env},ANALYSIS_PASS=${PASS_ARG}"
     else

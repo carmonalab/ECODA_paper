@@ -409,6 +409,233 @@ case "${TARGETED_CALLS}" in *"METHOD=mrvi"*) ;; *) echo "targeted changed-input 
 case "${TARGETED_CALLS}" in *"METHOD=prepare_pseudobulk"*) echo "unselected batch method leaked into targeted rerun" >&2; exit 1 ;; esac
 rm -rf "${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_owners"
 
+# Targeted force must reclaim only the explicitly changed high-resolution
+# consumers.  The auto-added prepare_pseudobulk dependency has a valid
+# uncorrected hvg2000 cache, checksum, producer record, and terminal artifact
+# owner, so it must be reused without submitting a preparation array.
+TARGET_FORCE_SELECTION="${TMP_DIR}/lupus-parkinson-targeted-force.tsv"
+printf 'Lupus_PBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nParkinson\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' \
+  > "${TARGET_FORCE_SELECTION}"
+TARGET_FORCE_ANALYSIS_ROOT="${HPC_ROOT}/batch_effect/uncorrected"
+mkdir -p "${TARGET_FORCE_ANALYSIS_ROOT}/pseudobulks" \
+  "${TARGET_FORCE_ANALYSIS_ROOT}/results" \
+  "${TARGET_FORCE_ANALYSIS_ROOT}/embeddings"
+TARGET_FORCE_PREP_RUN_ID="targeted-prep-cache"
+TARGET_FORCE_PREP_ROOT="${HPC_ROOT}/_ecoda_runs/${TARGET_FORCE_PREP_RUN_ID}"
+mkdir -p "${TARGET_FORCE_PREP_ROOT}/manifests"
+for ds in Lupus_PBMC Parkinson; do
+  prep_path="${TARGET_FORCE_ANALYSIS_ROOT}/pseudobulks/${ds}_batch_effect_uncorrected_pseudobulk_hvg2000.rds"
+  printf 'valid hvg2000 pseudobulk cache for %s\n' "${ds}" > "${prep_path}"
+  (
+    set -e
+    export HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}"
+    export HPC_SCRATCH_DIR="${HPC_ROOT}" ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}"
+    export ECODA_RUN_ROOT="${TARGET_FORCE_PREP_ROOT}" \
+      ECODA_RUN_ID="${TARGET_FORCE_PREP_RUN_ID}"
+    source "${ROOT}/src/slurm_config.sh"
+    source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+    ecoda_write_checksum "${prep_path}" >/dev/null
+    ecoda_write_artifact_record "${prep_path}" \
+      stage5_prepare_pseudobulk_hvg2000 "${TARGET_FORCE_PREP_RUN_ID}" >/dev/null
+    ecoda_artifact_owner_acquire "${prep_path}" stage5 \
+      "${TARGET_FORCE_PREP_RUN_ID}" 0 0 0 >/dev/null
+    ecoda_artifact_owner_set_state "${prep_path}" OK \
+      "targeted force fixture prep cache published"
+  )
+  stale_composition="${TARGET_FORCE_ANALYSIS_ROOT}/results/${ds}_batch_effect_uncorrected_composition.rds"
+  stale_metadata="${TARGET_FORCE_ANALYSIS_ROOT}/results/${ds}_batch_effect_uncorrected_metadata.rds"
+  printf 'stale composition output\n' > "${stale_composition}"
+  printf 'stale composition metadata\n' > "${stale_metadata}"
+  for stale_method in pilot qot; do
+    stale_feather="${TARGET_FORCE_ANALYSIS_ROOT}/embeddings/${ds}_batch_effect_uncorrected_hvg2000_highres_${stale_method}_dists.feather"
+    printf 'stale %s output\n' "${stale_method}" > "${stale_feather}"
+    printf 'MD5=00000000000000000000000000000000\nSIZE=1\nPATH=%s\n' \
+      "${stale_feather}" > "${stale_feather}.md5"
+  done
+  for stale_path in "${stale_composition}" "${stale_metadata}"; do
+    printf 'MD5=00000000000000000000000000000000\nSIZE=1\nPATH=%s\n' \
+      "${stale_path}" > "${stale_path}.md5"
+  done
+done
+TARGET_FORCE_RECOVERY_RUN_ID="targeted-force-recovery"
+: > "${CAPTURE}"
+TARGET_FORCE_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  ECODA_RUN_ID="${TARGET_FORCE_RECOVERY_RUN_ID}" BENCHMARK_MATRIX_TEST=1 \
+  bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${TARGET_FORCE_SELECTION}" --pass uncorrected \
+    --target-methods composition,pilot,qot --force-targeted \
+    --force-reason high_resolution_mapping_changed
+)"
+TARGET_FORCE_RUN_ID="$(printf '%s\n' "${TARGET_FORCE_OUTPUT}" | sed -n 's/^BATCH_EFFECT_RUN_ID=//p')"
+[[ "${TARGET_FORCE_RUN_ID}" == "${TARGET_FORCE_RECOVERY_RUN_ID}" ]]
+[[ "${TARGET_FORCE_RUN_ID}" != "${TARGET_FORCE_PREP_RUN_ID}" ]]
+[[ -n "${TARGET_FORCE_RUN_ID}" ]]
+TARGET_FORCE_ROOT="${HPC_ROOT}/_ecoda_runs/${TARGET_FORCE_RUN_ID}"
+EXPECTED_TARGET_FORCE_PENDING=$'Lupus_PBMC\tbatch_effect_uncorrected\tcomposition\nParkinson\tbatch_effect_uncorrected\tcomposition\nLupus_PBMC\tbatch_effect_uncorrected\tpilot\nParkinson\tbatch_effect_uncorrected\tpilot\nLupus_PBMC\tbatch_effect_uncorrected\tqot\nParkinson\tbatch_effect_uncorrected\tqot'
+[[ "$(cat "${TARGET_FORCE_ROOT}/manifests/pending_selection.tsv")" == "${EXPECTED_TARGET_FORCE_PENDING}" ]]
+! grep -q $'\tprepare_pseudobulk$' "${TARGET_FORCE_ROOT}/manifests/pending_selection.tsv"
+grep -q '^FORCE_TARGETED=1$' "${TARGET_FORCE_ROOT}/metadata"
+grep -q '^FORCE_REASON=high_resolution_mapping_changed$' "${TARGET_FORCE_ROOT}/metadata"
+TARGET_FORCE_CALLS="$(cat "${CAPTURE}")"
+[[ "$(printf '%s\n' "${TARGET_FORCE_CALLS}" | wc -l | tr -d '[:space:]')" == 7 ]]
+if printf '%s\n' "${TARGET_FORCE_CALLS}" | grep -q 'METHOD=prepare_pseudobulk'; then
+  echo "targeted force submitted the reusable prepare_pseudobulk dependency" >&2
+  exit 1
+fi
+[[ "$(printf '%s\n' "${TARGET_FORCE_CALLS}" | grep -c 'FORCE_BENCHMARK=1' || true)" == 6 ]]
+for forced_method in composition pilot qot; do
+  [[ "$(printf '%s\n' "${TARGET_FORCE_CALLS}" | grep -c "METHOD=${forced_method}" || true)" == 2 ]]
+  [[ "$(printf '%s\n' "${TARGET_FORCE_CALLS}" | grep "METHOD=${forced_method}" | grep -c 'FORCE_BENCHMARK=1' || true)" == 2 ]]
+done
+
+[[ ! -e "${TARGET_FORCE_ROOT}/manifests/matrix_batch_effect_uncorrected_prepare_pseudobulk.tsv" ]]
+for ds in Lupus_PBMC Parkinson; do
+  prep_path="${TARGET_FORCE_ANALYSIS_ROOT}/pseudobulks/${ds}_batch_effect_uncorrected_pseudobulk_hvg2000.rds"
+  [[ -s "${prep_path}" && -s "${prep_path}.md5" ]]
+  (
+    set -e
+    export HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}"
+    export HPC_SCRATCH_DIR="${HPC_ROOT}" ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}"
+    export ECODA_RUN_ROOT="${TARGET_FORCE_PREP_ROOT}" \
+      ECODA_RUN_ID="${TARGET_FORCE_PREP_RUN_ID}"
+    source "${ROOT}/src/slurm_config.sh"
+    source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+    ecoda_validate_checksum "${prep_path}" >/dev/null
+    prior_record="$(ecoda_artifact_record_path "${prep_path}" \
+      "${TARGET_FORCE_PREP_RUN_ID}")"
+    [[ -s "${prior_record}" ]]
+    current_record="$(ecoda_artifact_record_path "${prep_path}" \
+      "${TARGET_FORCE_RECOVERY_RUN_ID}")"
+    [[ ! -e "${current_record}" && ! -L "${current_record}" ]]
+    ecoda_validate_artifact_record "${prep_path}" \
+      stage5_prepare_pseudobulk_hvg2000 "${TARGET_FORCE_PREP_RUN_ID}" >/dev/null
+    ecoda_artifact_owner_validate "${prep_path}" \
+      "${TARGET_FORCE_PREP_RUN_ID}" >/dev/null
+  )
+done
+
+# Exercise the same worker environment through the watchdog's OOM retry path.
+# The retry array must preserve the method-scoped force export.
+cat > "${TMP_DIR}/bin/sacct" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+job=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -j) job="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ "${job}" == "88001" ]]; then
+  printf '88001|COMPLETED|0:0\n88001_1|OUT_OF_MEMORY|0:0\n88001_2|COMPLETED|0:0\n'
+else
+  printf '%s|COMPLETED|0:0\n%s_1|COMPLETED|0:0\n' "${job}" "${job}"
+fi
+STUB
+chmod +x "${TMP_DIR}/bin/sacct"
+TARGET_FORCE_OOM_MANIFEST="${TARGET_FORCE_ROOT}/manifests/composition_oom.tsv"
+printf 'Lupus_PBMC\tbatch_effect_uncorrected\tcomposition\nParkinson\tbatch_effect_uncorrected\tcomposition\n' \
+  > "${TARGET_FORCE_OOM_MANIFEST}"
+mkdir -p "${TMP_DIR}/nas/batch_effect/uncorrected"
+TARGET_FORCE_RUNTIME_EXPORT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+  HPC_SCRATCH_DIR="${HPC_ROOT}" NAS_TARGET_DIR="${TMP_DIR}/nas" \
+  ECODA_LOGS_DIR="${TARGET_FORCE_ROOT}/logs" TMPDIR="${TEST_TMP}" \
+  ECODA_SOURCE_ROOT="${SOURCE_TREE}" ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST}" \
+  ECODA_SOURCE_SNAPSHOT_REQUIRED=1 ECODA_AUX_ROOT="${SOURCE_TREE}/aux" \
+  ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}" \
+  ECODA_RUNTIME_MODE=apptainer ECODA_RUNTIME_IMAGE="${RUNTIME_IMAGE}" \
+  ECODA_RUNTIME_MANIFEST="${RUNTIME_MANIFEST}" ECODA_RUNTIME_PROFILE=stage5 \
+  ECODA_APPTAINER_NV=0 APPTAINER_BIN="${TMP_DIR}/bin/apptainer" \
+  ECODA_RUN_ROOT="${TARGET_FORCE_ROOT}" ECODA_RUN_ID="${TARGET_FORCE_RUN_ID}" \
+  bash -c '
+    set -e
+    source "$1/src/slurm_config.sh"
+    source "$1/src/utils/bash/ecoda_runtime.sh"
+    ecoda_runtime_validate_bound_run >/dev/null
+    ecoda_runtime_export_csv stage5 0
+  ' _ "${SOURCE_TREE}"
+)"
+: > "${CAPTURE}"
+TARGET_FORCE_OOM_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  HPC_SCRATCH_DIR="${HPC_ROOT}" NAS_TARGET_DIR="${TMP_DIR}/nas" \
+  ECODA_LOGS_DIR="${TARGET_FORCE_ROOT}/logs" TMPDIR="${TEST_TMP}" \
+  PROJECT_ROOT="${SOURCE_TREE}" SLURM_SUBMIT_DIR="${SOURCE_TREE}" \
+  ECODA_SOURCE_ROOT="${SOURCE_TREE}" ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST}" \
+  ECODA_SOURCE_SNAPSHOT_REQUIRED=1 ECODA_AUX_ROOT="${SOURCE_TREE}/aux" \
+  ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}" \
+  ECODA_RUNTIME_MODE=apptainer ECODA_RUNTIME_IMAGE="${RUNTIME_IMAGE}" \
+  ECODA_RUNTIME_MANIFEST="${RUNTIME_MANIFEST}" ECODA_RUNTIME_PROFILE=stage5 \
+  ECODA_APPTAINER_NV=0 APPTAINER_BIN="${TMP_DIR}/bin/apptainer" \
+  ECODA_RUN_ROOT="${TARGET_FORCE_ROOT}" ECODA_RUN_ID="${TARGET_FORCE_RUN_ID}" \
+  ECODA_RUNTIME_IN_CONTAINER=0 ANALYSIS_PASS=uncorrected \
+  ANALYSIS_ROOT="${TARGET_FORCE_ANALYSIS_ROOT}" \
+  ANALYSIS_NAS_ROOT="${TMP_DIR}/nas/batch_effect/uncorrected" \
+  MATRIX_WATCHDOG_POLL_SECONDS=0 ECODA_ACCOUNTING_EMPTY_GRACE=1 \
+  FORCE_BENCHMARK=1 METHOD_TIME_LIMIT=03:00:00 \
+  bash "${SOURCE_TREE}/src/5_run_benchmark_methods/matrix_watchdog.sh" \
+    "${TARGET_FORCE_ROOT}" composition "${TARGET_FORCE_OOM_MANIFEST}" \
+    88001 128G 256G shared-cpu 1 \
+    "${SOURCE_TREE}/src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1_run_worker.sh" \
+    "${TARGET_FORCE_RUNTIME_EXPORT}" --cpus-per-task=1
+)"
+case "${TARGET_FORCE_OOM_OUTPUT}" in
+  *"BATCH_EFFECT_RETRY_ARRAY_JOB_ID="*) ;;
+  *) echo "targeted force OOM retry marker missing" >&2; exit 1 ;;
+esac
+TARGET_FORCE_RETRY_CALLS="$(cat "${CAPTURE}")"
+[[ "$(printf '%s\n' "${TARGET_FORCE_RETRY_CALLS}" | grep -c 'FORCE_BENCHMARK=1' || true)" == 1 ]]
+case "${TARGET_FORCE_RETRY_CALLS}" in
+  *"MATRIX_RETRY_MANIFEST="*"FORCE_BENCHMARK=1"*) ;;
+  *) echo "targeted force OOM retry omitted FORCE_BENCHMARK=1" >&2; exit 1 ;;
+esac
+rm -rf "${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_owners"
+
+RUNS_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs"
+assert_targeted_force_guard() {
+  local guard_name="$1"
+  shift
+  local before_runs after_runs
+  before_runs="$(printf '%s\n' "${RUNS_ROOT}"/*)"
+  : > "${CAPTURE}"
+  if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+    BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    "$@" >/dev/null 2>&1; then
+    echo "targeted force guard accepted ${guard_name}" >&2
+    exit 1
+  fi
+  [[ ! -s "${CAPTURE}" ]]
+  after_runs="$(printf '%s\n' "${RUNS_ROOT}"/*)"
+  [[ "${before_runs}" == "${after_runs}" ]] || {
+    echo "targeted force guard created run state for ${guard_name}" >&2
+    exit 1
+  }
+}
+assert_targeted_force_guard "missing force reason" \
+  --selection-file "${TARGET_FORCE_SELECTION}" --pass uncorrected \
+  --target-methods composition,pilot,qot --force-targeted
+assert_targeted_force_guard "missing target scope" \
+  --selection-file "${TARGET_FORCE_SELECTION}" --pass uncorrected \
+  --force-targeted --force-reason high_resolution_mapping_changed
+assert_targeted_force_guard "global force combination" \
+  --selection-file "${TARGET_FORCE_SELECTION}" --pass uncorrected \
+  --target-methods composition,pilot,qot --force-targeted \
+  --force-reason high_resolution_mapping_changed --force
+assert_targeted_force_guard "methods combination" \
+  --selection-file "${TARGET_FORCE_SELECTION}" --pass uncorrected \
+  --target-methods composition,pilot,qot --force-targeted \
+  --force-reason high_resolution_mapping_changed --methods composition,pilot,qot
+assert_targeted_force_guard "analyses combination" \
+  --selection-file "${TARGET_FORCE_SELECTION}" --pass uncorrected \
+  --target-methods composition,pilot,qot --force-targeted \
+  --force-reason high_resolution_mapping_changed --analyses trans
+assert_targeted_force_guard "exact batch selection combination" \
+  --selection-file "${TARGET_FORCE_SELECTION}" --pass uncorrected \
+  --target-methods composition,pilot,qot --force-targeted \
+  --force-reason high_resolution_mapping_changed --exact-batch-selection
+
 BAD_SCOPE_SELECTION="${TMP_DIR}/batch-wrong-scope.tsv"
 sed '1s/batch_effect_uncorrected$/wrong_scope/' "${BATCH_SELECTION}" > "${BAD_SCOPE_SELECTION}"
 : > "${CAPTURE}"

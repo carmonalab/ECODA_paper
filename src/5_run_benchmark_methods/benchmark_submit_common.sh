@@ -743,9 +743,14 @@ benchmark_submit_watchdog() {
   shift 9
   local WATCHDOG_FLAGS=("$@")
   local WATCHDOG_SCRIPT="${WATCHDOG_MAIN_SCRIPT}"
+  local FORCE_VALUE="${FORCE_BENCHMARK:-0}"
+  [[ "${FORCE_VALUE}" == "0" || "${FORCE_VALUE}" == "1" ]] || {
+    echo "ERROR: FORCE_BENCHMARK must be 0 or 1 for watchdog submission." >&2
+    return 1
+  }
   [[ -n "${ECODA_SOURCE_ROOT:-}" ]] &&
     WATCHDOG_SCRIPT="$(benchmark_source_script_path src/5_run_benchmark_methods/watchdog_main.sh)"
-  local WATCHDOG_EXPORT="${RUNTIME_EXPORT}"
+  local WATCHDOG_EXPORT="${RUNTIME_EXPORT},FORCE_BENCHMARK=${FORCE_VALUE}"
   [[ -n "${RUNTIME_EXPORT}" ]] || {
     echo "ERROR: benchmark watchdog requires an explicit runtime export." >&2
     return 1

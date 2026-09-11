@@ -13,7 +13,7 @@ _DATASET_KEYS = (
     "Breast_cancer",
     "Covid19_PBMC",
     "Diabetes",
-    "Kidney_KPMP",
+    "Kidney_KPMP_full",
     "Lupus_PBMC",
     "Lung",
     "Myocardial_infarction",
@@ -171,21 +171,22 @@ DATASET_SPECS: dict[str, dict] = {
         "not_suitable_for_auto_annotation": True,
         "subset_vars": {},
     },
-    "Kidney_KPMP": {
-        "key": "Kidney_KPMP",
-        "file_name": "Kidney_KPMP.h5ad",
+    "Kidney_KPMP_full": {
+        "key": "Kidney_KPMP_full",
+        "file_name": "Kidney_KPMP_full.h5ad",
         "expected_source": _source(
-            104_314, 47, "specimen", "Kidney (KPMP)", "Kidney", True,
-            "KPMP source report; user-confirmed specimen unit has 47 specimens",
+            None, None, "specimen", "Kidney (KPMP) (sc and sn)", "Kidney", True,
+            "KPMP combined single-cell/single-nucleus source audit pending",
         ),
         "sample_candidates": ["donor_id", "specimen", "library"],
         "sample_stable_cols": [
             "condition.l1", "condition.l2", "condition.long", "sex", "donor_id",
-            "region.l1", "region.l2", "tissue_type",
+            "region.l1", "region.l2", "tissue_type", "suspension_type",
         ],
         "bio_col": "condition.l1",
         "batch_cols": [
             "experiment", "library", "tissue_type", "region.l1", "region.l2", "assay",
+            "suspension_type", "sex",
         ],
         "cell_type_candidates": [
             "major_cell_types", "subclass.l1", "subclass.l2", "subclass.l3",
@@ -200,7 +201,7 @@ DATASET_SPECS: dict[str, dict] = {
             "annotation_source": {"low": "author", "high": "author"},
         },
         "decision_notes": [
-            "Use the user-confirmed specimen unit (47 specimens) and the audited 16-to-67 hierarchy.",
+            "Use the user-confirmed specimen unit; full-cohort cell and specimen counts await the source audit.",
             "Donor/library alternatives remain available for audit comparison only.",
         ],
         "not_suitable_for_auto_annotation": False,
@@ -324,6 +325,43 @@ DATASET_SPECS: dict[str, dict] = {
         "subset_vars": {},
     },
 }
+LEGACY_DATASET_SPECS: dict[str, dict] = {
+    "Kidney_KPMP": {
+        "key": "Kidney_KPMP",
+        "file_name": "Kidney_KPMP.h5ad",
+        "expected_source": _source(
+            104_314, 47, "specimen", "Kidney (KPMP)", "Kidney", True,
+            "KPMP source report; user-confirmed specimen unit has 47 specimens",
+        ),
+        "sample_candidates": ["donor_id", "specimen", "library"],
+        "sample_stable_cols": [
+            "condition.l1", "condition.l2", "condition.long", "sex", "donor_id",
+            "region.l1", "region.l2", "tissue_type",
+        ],
+        "bio_col": "condition.l1",
+        "batch_cols": [
+            "experiment", "library", "tissue_type", "region.l1", "region.l2", "assay",
+        ],
+        "cell_type_candidates": [
+            "major_cell_types", "subclass.l1", "subclass.l2", "subclass.l3",
+            "subclass.full", "cell_type",
+        ],
+        "initial_registry_mode": "two_pass_batch_effect",
+        "registry_roles": {
+            "sample": "specimen",
+            "label": "condition.l1",
+            "cell_type_low_res": "subclass.l1",
+            "cell_type_high_res": "subclass.l3",
+            "annotation_source": {"low": "author", "high": "author"},
+        },
+        "decision_notes": [
+            "Use the user-confirmed specimen unit (47 specimens) and the audited 16-to-67 hierarchy.",
+            "Donor/library alternatives remain available for audit comparison only.",
+        ],
+        "not_suitable_for_auto_annotation": False,
+        "subset_vars": {},
+    },
+}
 DATASET_SPECS["Lung"]["expected_source"]["source_match_required"] = True
 
 
@@ -333,7 +371,7 @@ BATCH_EFFECT_DATASET_ORDER = (
     "Alzheimer",
     "Breast_cancer",
     "Covid19_PBMC",
-    "Kidney_KPMP",
+    "Kidney_KPMP_full",
     "Myocardial_infarction",
     "Diabetes",
     "Lupus_PBMC",
@@ -358,13 +396,15 @@ BATCH_EFFECT_SPECS = {
         "datasets",
         "Sample type",
     ],
-    "Kidney_KPMP": [
+    "Kidney_KPMP_full": [
         "experiment",
         "library",
         "tissue_type",
         "region.l1",
         "region.l2",
         "assay",
+        "suspension_type",
+        "sex",
     ],
     "Myocardial_infarction": ["batch", "sampleType", "dissociation_s1"],
     "Diabetes": ["batch_integration", "dataset", "design", "assay"],
@@ -400,20 +440,28 @@ DEBUG_SPEC = {
 
 
 def get_dataset_spec(name: str) -> dict:
-    """Return a configured onboarding spec or fail closed."""
+    """Return an active or legacy compatibility spec, or fail closed."""
     if name == "_debug":
         return DEBUG_SPEC
-    try:
+    if name in DATASET_SPECS:
         return DATASET_SPECS[name]
-    except KeyError as exc:
-        raise KeyError(
-            f"Unknown onboarding dataset {name!r}; expected one of "
-            f"{list(DATASET_SPECS)} or '_debug'"
-        ) from exc
+    if name in LEGACY_DATASET_SPECS:
+        return LEGACY_DATASET_SPECS[name]
+    raise KeyError(
+        f"Unknown onboarding dataset {name!r}; expected an active dataset in "
+        f"{list(DATASET_SPECS)}, a legacy compatibility dataset in "
+        f"{list(LEGACY_DATASET_SPECS)}, or '_debug'"
+    )
 
 
 if set(DATASET_SPECS) != set(_DATASET_KEYS):
-    raise RuntimeError("DATASET_SPECS keys do not match the nine onboarding cohorts")
+    raise RuntimeError("DATASET_SPECS keys do not match the active nine onboarding cohorts")
+if set(DATASET_SPECS) & set(LEGACY_DATASET_SPECS):
+    raise RuntimeError("DATASET_SPECS and LEGACY_DATASET_SPECS keys must be disjoint")
+if set(LEGACY_DATASET_SPECS) != {"Kidney_KPMP"}:
+    raise RuntimeError(
+        "LEGACY_DATASET_SPECS must contain only the preserved Kidney_KPMP spec"
+    )
 
 for _name, _spec in DATASET_SPECS.items():
     _expected = {

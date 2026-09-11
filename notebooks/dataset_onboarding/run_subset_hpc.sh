@@ -8,6 +8,7 @@
 # Usage (from HPC login node, repo root):
 #   ./notebooks/dataset_onboarding/run_subset_hpc.sh                  # all 9 datasets in parallel
 #   ./notebooks/dataset_onboarding/run_subset_hpc.sh --only breast    # one dataset
+#   ./notebooks/dataset_onboarding/run_subset_hpc.sh --only Kidney_KPMP_full  # one dataset
 #   ./notebooks/dataset_onboarding/run_subset_hpc.sh --only lung --mem 128G
 #
 #   ./notebooks/dataset_onboarding/run_subset_hpc.sh --direct        # direct execution (debug only)
@@ -20,7 +21,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${PROJECT_ROOT}/src/slurm_config.sh"
 cd "${PROJECT_ROOT}"
 
-KEYS=(alzheimer breast covid19 diabetes kidney lung lupus myocardial parkinson)
+KEYS=(alzheimer breast covid19 diabetes Kidney_KPMP_full lung lupus myocardial parkinson)
 IN_DIR="${HPC_SCRATCH_DIR}/_downloads"
 OUT_DIR="${IN_DIR}/subsets"
 NAS_SUBSETS="${NAS_SC_DIR}/JooM_2025_41097818/subsets"
