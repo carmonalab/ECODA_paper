@@ -175,8 +175,8 @@ DATASET_SPECS: dict[str, dict] = {
         "key": "Kidney_KPMP_full",
         "file_name": "Kidney_KPMP_full.h5ad",
         "expected_source": _source(
-            None, None, "specimen", "Kidney (KPMP) (sc and sn)", "Kidney", True,
-            "KPMP combined single-cell/single-nucleus source audit pending",
+            304_652, 88, "specimen", "Kidney (KPMP) (sc and sn)", "Kidney", True,
+            "CellxGene-downloaded combined sc/sn source; full-file audit: 304,652 cells and 88 specimens",
         ),
         "sample_candidates": ["donor_id", "specimen", "library"],
         "sample_stable_cols": [
@@ -201,7 +201,8 @@ DATASET_SPECS: dict[str, dict] = {
             "annotation_source": {"low": "author", "high": "author"},
         },
         "decision_notes": [
-            "Use the user-confirmed specimen unit; full-cohort cell and specimen counts await the source audit.",
+            "Use the user-confirmed specimen unit (88 specimens) for the combined sc/sn source.",
+            "The full audit observed 304,652 cells, 67 donors, 93 libraries, and suspension_type values cell/nucleus.",
             "Donor/library alternatives remain available for audit comparison only.",
         ],
         "not_suitable_for_auto_annotation": False,
