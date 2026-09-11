@@ -581,9 +581,11 @@ _audit_stage5_scope_selection() {
 
 _audit_scheduler_ids() {
   local scheduler_file="${RUN_ROOT_REAL}/manifests/scheduler_ids.tsv"
-  local kind scheduler_id extra id_list="" rows row row_tail jid state exit_code
-  local seen="" returned_seen="" match_id requested_id found_id found
-  local requested_ids=() found_ids=()
+  local kind scheduler_id extra id_list="" rows row
+  local field1 field2 field3 field4 field5 display_id raw_id state exit_code
+  local normalized_state match_id requested_id found_id found root_row
+  local manifest_seen="" accounting_seen=""
+  local requested_ids=() found_ids=() root_success_ids="" root_failed_ids=""
   [[ -f "${scheduler_file}" && ! -L "${scheduler_file}" &&
      -r "${scheduler_file}" ]] || {
     _audit_die "scheduler ID manifest is missing: ${scheduler_file}"
@@ -594,35 +596,29 @@ _audit_scheduler_ids() {
        "${AUDIT_TERMINAL_STATE}" == OK ]] || return 1
     return 0
   fi
-  command -v sacct >/dev/null 2>&1 || {
-    _audit_die "sacct is required to audit scheduler IDs"
-    return 1
-  }
   while IFS=$'\t' read -r kind scheduler_id extra; do
     [[ -n "${kind}" && "${kind}" =~ ^[A-Za-z0-9_.-]+$ &&
        "${scheduler_id}" =~ ^[0-9]+$ && -z "${extra}" ]] || {
       _audit_die "scheduler ID manifest row is malformed: ${scheduler_file}"
       return 1
     }
-    case " ${seen} " in
+    case " ${manifest_seen} " in
       *" ${scheduler_id} "*)
         _audit_die "scheduler ID manifest contains a duplicate: ${scheduler_id}"
         return 1
         ;;
     esac
-    seen="${seen} ${scheduler_id}"
+    manifest_seen="${manifest_seen} ${scheduler_id}"
     requested_ids+=("${scheduler_id}")
-  done < "${scheduler_file}"
-  [[ ${#requested_ids[@]} -gt 0 ]] || return 1
-  for scheduler_id in "${requested_ids[@]}"; do
     if [[ -z "${id_list}" ]]; then
       id_list="${scheduler_id}"
     else
       id_list+=",${scheduler_id}"
     fi
-  done
+  done < "${scheduler_file}"
+  [[ ${#requested_ids[@]} -gt 0 ]] || return 1
   if ! rows="$(sacct -n -P -X -j "${id_list}" \
-    --format=JobIDRaw,State,ExitCode 2>/dev/null)"; then
+    --format=JobID,JobIDRaw,State,ExitCode 2>/dev/null)"; then
     _audit_die "scheduler accounting query failed for requested IDs: ${id_list}"
     return 1
   fi
@@ -635,48 +631,94 @@ _audit_scheduler_ids() {
       _audit_die "scheduler accounting returned a blank row"
       return 1
     }
-    case "${row}" in
-      *'|'*'|'*) ;;
-      *)
-        _audit_die "scheduler accounting row is malformed: ${row}"
-        return 1
-        ;;
-    esac
-    row_tail="${row#*|}"
-    row_tail="${row_tail#*|}"
-    [[ "${row_tail}" != *'|'* ]] || {
+    IFS='|' read -r field1 field2 field3 field4 field5 <<< "${row}"
+    [[ -z "${field5}" ]] || {
       _audit_die "scheduler accounting row has extra fields: ${row}"
       return 1
     }
-    IFS='|' read -r jid state exit_code <<< "${row}"
-    [[ -n "${jid}" && -n "${state}" && -n "${exit_code}" ]] || {
+    if [[ -n "${field4}" ]]; then
+      display_id="${field1}"
+      raw_id="${field2}"
+      state="${field3}"
+      exit_code="${field4}"
+    else
+      # Keep compatibility with three-column local accounting stubs. Production
+      # Slurm output uses JobID plus JobIDRaw so array children can be tied to
+      # their requested array root without mistaking their numeric raw IDs for
+      # independent jobs.
+      display_id="${field1}"
+      raw_id="${field1%%_*}"
+      state="${field2}"
+      exit_code="${field3}"
+    fi
+    [[ "${display_id}" =~ ^[0-9]+(_[0-9]+)?$ &&
+       "${raw_id}" =~ ^[0-9]+$ &&
+       -n "${state}" && -n "${exit_code}" ]] || {
       _audit_die "scheduler accounting row is malformed: ${row}"
       return 1
     }
-    case " ${returned_seen} " in
-      *" ${jid} "*)
-        _audit_die "scheduler accounting returned a duplicate job row: ${jid}"
+    case " ${accounting_seen} " in
+      *" ${display_id} "*)
+        _audit_die "scheduler accounting returned a duplicate job row: ${display_id}"
         return 1
         ;;
     esac
-    returned_seen="${returned_seen} ${jid}"
+    accounting_seen="${accounting_seen} ${display_id}"
     match_id=""
+    root_row=0
     for requested_id in "${requested_ids[@]}"; do
-      if [[ "${jid}" == "${requested_id}" ||
-            "${jid}" =~ ^${requested_id}_[0-9]+$ ]]; then
+      if [[ "${raw_id}" == "${requested_id}" ]]; then
         match_id="${requested_id}"
+        root_row=1
         break
       fi
     done
+    if [[ -z "${match_id}" ]]; then
+      for requested_id in "${requested_ids[@]}"; do
+        if [[ "${display_id}" == "${requested_id}" ||
+              "${display_id}" =~ ^${requested_id}_[0-9]+$ ]]; then
+          match_id="${requested_id}"
+          break
+        fi
+      done
+    fi
     [[ -n "${match_id}" ]] || {
-      _audit_die "scheduler accounting returned an unexpected job row: ${jid}"
+      _audit_die "scheduler accounting returned an unexpected job row: ${display_id}"
       return 1
     }
-    [[ "${state}" == COMPLETED && "${exit_code}" == "0:0" ]] || {
-      _audit_die "scheduler ID is not a successful terminal job: ${match_id} (${state}/${exit_code})"
-      return 1
-    }
+    if [[ ${root_row} -eq 0 && "${display_id}" == "${match_id}" ]]; then
+      root_row=1
+    fi
+    if [[ ${root_row} -eq 0 ]]; then
+      # Array task rows are descendants of a requested root. Their state is
+      # retained by Slurm accounting and intentionally is not promoted to a
+      # separate scheduler requirement: an OOM task may have been superseded
+      # by the watchdog's recorded retry array.
+      continue
+    fi
     found_ids+=("${match_id}")
+    normalized_state="${state%%+*}"
+    case "${normalized_state}" in
+      COMPLETED)
+        if [[ "${exit_code}" == 0:0* ]]; then
+          case " ${root_success_ids} " in
+            *" ${match_id} "*) ;;
+            *) root_success_ids="${root_success_ids} ${match_id}" ;;
+          esac
+        else
+          case " ${root_failed_ids} " in
+            *" ${match_id} "*) ;;
+            *) root_failed_ids="${root_failed_ids} ${match_id}" ;;
+          esac
+        fi
+        ;;
+      *)
+        case " ${root_failed_ids} " in
+          *" ${match_id} "*) ;;
+          *) root_failed_ids="${root_failed_ids} ${match_id}" ;;
+        esac
+        ;;
+    esac
   done <<< "${rows}"
   for requested_id in "${requested_ids[@]}"; do
     found=0
@@ -687,9 +729,22 @@ _audit_scheduler_ids() {
       fi
     done
     [[ ${found} -eq 1 ]] || {
-      _audit_die "scheduler accounting is missing rows for ${requested_id}"
+      _audit_die "scheduler accounting is missing a successful root row for ${requested_id}"
       return 1
     }
+    case " ${root_failed_ids} " in
+      *" ${requested_id} "*)
+        _audit_die "scheduler ID is not a successful terminal job: ${requested_id}"
+        return 1
+        ;;
+    esac
+    case " ${root_success_ids} " in
+      *" ${requested_id} "*) ;;
+      *)
+        _audit_die "scheduler ID has no successful terminal root row: ${requested_id}"
+        return 1
+        ;;
+    esac
   done
 }
 
