@@ -242,7 +242,8 @@ export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-${TMPDIR:-/tmp}/ecoda-apptainer
 mkdir -p "${APPTAINER_TMPDIR}" "${APPTAINER_CACHEDIR}"
 
 cd "${PROJECT_ROOT}"
-RUNTIME_SYSTEM_POST_COMMAND="dnf install -y which jq diffutils"
+RUNTIME_COMPAT_ENV_ROOT="${PROJECT_ROOT}/.pixi/envs"
+RUNTIME_SYSTEM_POST_COMMAND="dnf install -y which jq diffutils && mkdir -p \"${RUNTIME_COMPAT_ENV_ROOT}\" && ln -s /opt/ecoda/py-cuda13 \"${RUNTIME_COMPAT_ENV_ROOT}/py-cuda13\""
 dryrun_args=(
   containerize
   --manual
