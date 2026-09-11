@@ -461,6 +461,7 @@ def main():
     )
     if failures:
         print(f"Failed datasets: {failures}")
+        raise SystemExit(1)
     print(f"Output directory: {args.out_dir}")
     print("Registry gates are authoritative; PASS is required before datasets.json registration.")
     print("==============================================================================")
