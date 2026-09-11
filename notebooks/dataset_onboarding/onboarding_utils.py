@@ -3521,7 +3521,7 @@ def load_onboarding_dataset_or_subset(name: str, nas_file: str | Path, here: Pat
         f"  Looked for subset at: {[str(p) for p in cands]}\n"
         f"  Looked for NAS file at: {nas_path}\n\n"
         f"To generate subsets on the HPC and pull them locally:\n"
-        f"  1. Run on HPC: ./notebooks/dataset_onboarding/run_subset_hpc.sh --only {name.lower().split('_')[0]}\n"
+        f"  1. Run on HPC: ./notebooks/dataset_onboarding/run_subset_hpc.sh --only {name}\n"
         f"  2. Pull to Mac: rsync -avP bamboo:scratch/ECODA_paper/_downloads/subsets/ data/new_dataset_checks/subsets/"
     )
     raise FileNotFoundError(err_msg)
