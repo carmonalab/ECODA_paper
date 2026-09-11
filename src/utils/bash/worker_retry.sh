@@ -103,10 +103,14 @@ worker_requeue_if_transient() {
     return 1
   fi
   echo "Transient failure detected; requeueing (attempt ${N})"
+  command -v scontrol >/dev/null 2>&1 || {
+    echo "Task ${SLURM_ARRAY_TASK_ID:-?}: scontrol is unavailable; refusing false-success retry." >&2
+    return 1
+  }
   if [[ -n "${SLURM_ARRAY_JOB_ID:-}" && -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
-    scontrol requeue "${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+    scontrol requeue "${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}" || return 1
   else
-    scontrol requeue "${SLURM_JOB_ID}"
+    scontrol requeue "${SLURM_JOB_ID}" || return 1
   fi
   sleep 2
   return 0
