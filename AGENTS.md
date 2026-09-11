@@ -44,6 +44,28 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   whenever resources permit; only documented data dependencies may serialize
   work. Numbered pipelines remain ordered. Pipeline 1 is the NAS-bound serial
   staging exception and is intentionally unchanged.
+
+#### Stage 5 cross-gate synchronization boundary
+
+- Independent Stage 5 datasets and methods **MUST** be submitted together in
+  one explicit selection manifest/SLURM wave whenever they share an
+  `ANALYSIS_ROOT`; the worker arrays and method watchdogs are designed for
+  that concurrency.
+- Separate durable Stage 5 gates targeting the same analysis root (for
+  example, two `batch_effect/uncorrected` gates) are **not currently
+  safe to launch concurrently**. `benchmark_submit_common.sh` acquires one
+  global `stage5` owner at `sync/${ANALYSIS_ROOT}` before NAS synchronization.
+  A second gate can compute independently but will fail closed at
+  synchronization when that owner is active.
+- The durable profile therefore serializes these gates with the
+  `ecoda-benchmark` serialization group. Do not bypass this boundary by
+  inventing a distinct serialization group; that only moves the conflict to
+  artifact ownership/NAS synchronization.
+- A future parallel-gate implementation must replace the shared sync owner
+  with a per-dataset/method merge contract or an explicit serialized merge
+  queue, while retaining atomic checksums and fail-closed ownership. Until
+  then, queue later same-root gates after terminal wait, inspect, and Luna Max
+  review of the current gate.
 - **Repair/validation is no-compute by default (hard stop):** A gate repair,
   validator or schema fix, checksum audit, or reviewer/release audit MUST NOT
   submit preprocessing, annotation, or benchmark workers. First inspect
