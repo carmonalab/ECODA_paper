@@ -718,9 +718,11 @@ ecoda_runtime_build_bind_args() {
     _ecoda_runtime_add_bind "${run_runtime_identity}" "${run_runtime_identity}" ro || return 1
     _ecoda_runtime_add_bind "${source_root}" "${source_root}" ro || return 1
     _ecoda_runtime_add_bind "${source_aux}" "${source_root}/aux" ro || return 1
-    if [[ -x /usr/bin/scontrol && -r /usr/lib64/slurm/libslurmfull.so ]]; then
+    if [[ -x /usr/bin/scontrol && -r /usr/lib64/slurm/libslurmfull.so &&
+          -r /etc/slurm/slurm.conf ]]; then
       _ecoda_runtime_add_bind /usr/bin/scontrol /usr/bin/scontrol ro || return 1
       _ecoda_runtime_add_bind /usr/lib64/slurm/libslurmfull.so /usr/lib64/slurm/libslurmfull.so ro || return 1
+      _ecoda_runtime_add_bind /etc/slurm/slurm.conf /etc/slurm/slurm.conf ro || return 1
     fi
     return 0
   fi
