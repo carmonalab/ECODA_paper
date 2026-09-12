@@ -25,7 +25,7 @@ import h5py
 import numpy as np
 import pandas as pd
 
-# The evaluator import is deliberately from the immutable snapshot package.
+# The evaluator import is deliberately from the lightweight shared module.
 # Keeping this boundary shared prevents a second implementation of subset
 # operators while this script remains usable as a direct source-tree script.
 try:
@@ -39,7 +39,7 @@ try:
         read_obs_column_values,
         read_str_dataset,
     )
-    from src.utils.py.preprocess_utils import (
+    from src.utils.py.subset_vars import (
         assert_subset_sample_consistency,
         evaluate_subset_mask,
     )
@@ -54,7 +54,7 @@ except ModuleNotFoundError:  # direct execution with src/utils/py on sys.path
         read_obs_column_values,
         read_str_dataset,
     )
-    from preprocess_utils import (  # type: ignore[no-redef]
+    from subset_vars import (  # type: ignore[no-redef]
         assert_subset_sample_consistency,
         evaluate_subset_mask,
     )
@@ -292,7 +292,7 @@ def _validate_identity_manifests(
     if source_archive_path != expected_source_archive:
         raise ValueError("source archive is not bound to the immutable snapshot identity")
     aux_root = _safe_absolute(source["AUX_ROOT"], "source aux root")
-    if aux_root != expected_snapshot_root / "aux":
+    if aux_root != source_root / "aux":
         raise ValueError("source aux root is not bound to the immutable snapshot")
     complete_marker = expected_snapshot_root / "COMPLETE"
     if not complete_marker.is_file() or complete_marker.is_symlink():

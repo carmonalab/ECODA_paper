@@ -53,7 +53,7 @@ def _make_snapshot(base: Path, config: dict[str, object]) -> dict[str, Path]:
     source_root = snapshot / "tree"
     identity_dir = snapshot / "identity"
     runtime_dir = snapshot / "runtime"
-    aux_root = snapshot / "aux"
+    aux_root = source_root / "aux"
     for directory in (source_root, identity_dir, runtime_dir, aux_root):
         directory.mkdir(parents=True, exist_ok=True)
 
