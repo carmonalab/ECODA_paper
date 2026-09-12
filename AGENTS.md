@@ -182,15 +182,19 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   launch from the immutable current `datasets.json`: every non-underscore
   entry with `use_for_batch_effect == true`, using
   `batch_effect_corrected`. It may include cohorts frozen for the
-  uncorrected/final analysis lane and runs in the same supported parallel
-  Stage 3 wave or a separately validated corrected gate. Corrected Stage 3
-  outputs do not authorize corrected Stage 5 work.
+  uncorrected/final analysis lane, including `Kidney_KPMP_full`, and runs in
+  the same supported parallel Stage 3 wave or a separately validated
+  corrected gate. Corrected Stage 3 outputs do not authorize corrected Stage
+  5 work.
 - **Approved final Stage 5 scope:** The changed-dataset wave selects exactly
   the four uncorrected rows above with the suite `prepare_pseudobulk`,
   `pseudobulk`, `gloscope`, `composition`, `mrvi`, `pilot`, and `qot`.
   `Kidney_KPMP_full` receives only targeted missing-method recovery in the
-  uncorrected Stage 5 final lane; it receives no new Stage 2/3/4 work. The
-  final Stage 5 lane has no corrected pass or `corrected_final` Stage 5 root.
+  uncorrected Stage 5 final lane; for uncorrected/final-lane work it receives
+  no new Stage 2/3/4 work. Its corrected Stage 3 row remains eligible through
+  the dynamic config rule above, but it does not authorize Pipeline 4 or a
+  corrected Stage 5 lane. The final Stage 5 lane has no corrected pass or
+  `corrected_final` Stage 5 root.
 - **Uncorrected/final frozen and disabled cohorts:** `Alzheimer`,
   `Breast_cancer`, `Lupus_PBMC`, and `Stephenson` are frozen and MUST be
   absent from every new uncorrected Stage 3 selection, Stage 2/4/5 job,

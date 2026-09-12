@@ -1218,3 +1218,87 @@ full rationale when a short evidence-linked update is sufficient.
   `datasets.json`; disabled cohorts and `_debug` remain excluded everywhere.
   The corrected RDS prerequisite/source audit remains pending before runtime
   publication.
+
+- 2026-09-12, stabilization contracts and the combined Stage 3 regression
+  fixture pass the focused Python/R/shell checks, including the new 13-row
+  combined selection test; commit `986c6c7` is pushed to `origin/master`.
+  The next blocker is authoritative read-only corrected-source auditing on
+  Bamboo before publishing/reusing the final runtime identity.
+
+- 2026-09-12, incorporated the external read-only architecture review as
+  evidence, not as authorization for a broad Ponytail refactor. The proposed
+  deletion/DRY rewrite of Pipelines 2--5 is outside this execution scope and
+  would risk the repository’s scientific and ownership invariants; preserve
+  trust-boundary validation, atomic writes, checksums, and targeted recovery.
+  The review did identify a real missing `read_datasets_json` import, now
+  dispatched for correction, plus the required snapshot-bound RDS/source
+  validation gaps.
+
+### Pause status after structural review
+
+- 2026-09-12, the user requested a pause before further plan execution:
+  broader Pipeline 2--5 structural simplification/DRY/deletion work is
+  explicitly out of scope for this session and belongs in a separate session.
+  No runtime, gate, scheduler, HPC, SIF-publication, structural-refactor,
+  deletion, or downstream Stage 5/analysis action is authorized here.
+- 2026-09-12, the in-flight stabilization agents were cancelled after the
+  read-only review. `986c6c7` remains the last pushed implementation commit.
+  The attempted snapshot of that commit failed because the command used a
+  short hash; no final `986c6c7` source snapshot or final runtime publication
+  exists.
+- 2026-09-12, the uncommitted worktree contains the plan update, the
+  clarified `AGENTS.md` scope text, the missing `read_datasets_json` import,
+  and prior obs-worker changes; unrelated pre-existing modifications remain
+  untouched. The import correction and any partial cancelled-agent edits are
+  not yet revalidated or committed.
+- 2026-09-12, gate state is unchanged: Stage 2
+  `stage2_joanito_final_20260912b` remains reviewed/completed with IDs
+  `4403663/4403664`; Stage 3
+  `stage3_batch_final_20260912c` remains failed in Covid preflight with ID
+  `4403668`; no downstream Stage 5 gate is authorized. The focused suite was
+  green before the latest unverified/cancelled edits; rerun it only after a
+  future resume.
+- 2026-09-12, next-session blockers are the pre-mkdir obs-worker path
+  validation, snapshot-owned RDS `@meta.data` corrected-source validation,
+  immutable-source binding for corrected preflight imports, strict
+  corrected-only/partial-selection guards, and a fresh full-hash source
+  snapshot/runtime freeze. Reassess the whole architecture before applying
+  further patches.
+
+### Structural review disposition
+
+- 2026-09-12, the reviewer feedback is accepted as architecture triage, not
+  as a pre-run refactor specification. Concrete trust-boundary blockers
+  remain in this plan: verify/commit the `read_datasets_json` import,
+  complete authoritative RDS `@meta.data` validation, finish obs-worker
+  pre-mkdir ordering and strict Stage 3 selection guards, bind corrected
+  preflight imports to the immutable snapshot, and reconcile the clarified
+  `AGENTS.md` scope.
+- 2026-09-12, deletion of stubs/shims, Stage 2 wrapper consolidation,
+  submitter DRY rewrites, MD5 unification, and retirement of the R batch
+  contract are explicitly deferred. They require a separate call-graph,
+  schema-compatibility, migration, and focused-regression review. The
+  separate follow-up plan is
+  `.agents/plans/1789248891506-ecoda-pipeline-structure-plan.md`.
+- 2026-09-12, reviewer line counts, commit identifiers, and checksum claims
+  are not treated as authoritative while the worktree is moving; verify them
+  independently before any structural change. The current execution remains
+  paused and no runtime, gate, scheduler, HPC, SIF, or downstream analysis
+  action is authorized in this session.
+
+### Resume update after structural triage
+
+- 2026-09-12, the user resumed implementation of this plan while keeping
+  broad structural cleanup in the separate follow-up plan. Concrete fixes now
+  include the authoritative `read_datasets_json` import, obs-worker
+  pre-creation path validation, strict four-row/combined/corrected-only
+  selection classification, immutable-source-bound corrected preflight, and
+  snapshot-owned RDS `@meta.data` auditing.
+- 2026-09-12, focused verification passed after these fixes:
+  `test_subset_vars.py`, `test_batch_effect_registry_and_modes.py`,
+  `test_multibatch_contracts.py`, `test_preprocessing_stage_submitter.sh`,
+  `test_benchmark_selection_file.sh`, `test_benchmark_sync.sh`,
+  `test_benchmark_rds_contract.R`, `test_batch_effect_analysis.R`, and
+  `test_corrected_source_metadata.R`; shell syntax, Python compilation,
+  `datasets.json` parsing, and R auditor parsing also passed. No HPC/SIF
+  action has been taken since the pause.

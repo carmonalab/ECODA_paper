@@ -87,6 +87,62 @@ RUN_ROOT_REAL="$(realpath -e "${RUN_ROOT}" 2>/dev/null || realpath "${RUN_ROOT}"
   fail "could not canonicalize audit run root"
 [[ "${RUN_ROOT_REAL}" == "${RUN_ROOT}" ]] ||
   fail "audit run root is not canonical"
+_ecoda_validate_run_owned_directory_for_create() {
+  local candidate="${1:-}"
+  local boundary="${2:-${RUN_ROOT}}"
+  local boundary_real current parent candidate_real current_real
+  [[ "${candidate}" = /* && "${candidate}" != *$'\n'* &&
+     "${candidate}" != *$'\t'* ]] || return 1
+  [[ "${boundary}" = /* && "${boundary}" != *$'\n'* &&
+     "${boundary}" != *$'\t'* ]] || return 1
+  case "${candidate}" in
+    *"/.."|*"/../"*) return 1 ;;
+  esac
+  case "${boundary}" in
+    *"/.."|*"/../"*) return 1 ;;
+  esac
+  case "${candidate}" in
+    "${boundary}"|"${boundary}"/*) ;;
+    *) return 1 ;;
+  esac
+  if [[ "${boundary}" == "${RUN_ROOT}" ]]; then
+    boundary_real="${RUN_ROOT_REAL}"
+  else
+    boundary_real="$(realpath -e "${boundary}" 2>/dev/null ||
+      realpath "${boundary}" 2>/dev/null)" || return 1
+  fi
+  [[ -n "${boundary_real}" ]] || return 1
+  [[ ! -L "${candidate}" ]] || return 1
+  _ecoda_validate_path_ancestors "${candidate}" "${boundary}" ||
+    return 1
+
+  current="${candidate}"
+  while [[ ! -e "${current}" && ! -L "${current}" ]]; do
+    parent="$(dirname "${current}")"
+    [[ "${parent}" != "${current}" ]] || return 1
+    current="${parent}"
+  done
+  [[ -d "${current}" && ! -L "${current}" ]] || return 1
+  current_real="$(realpath -e "${current}" 2>/dev/null ||
+    realpath "${current}" 2>/dev/null)" || return 1
+  case "${current_real}" in
+    "${boundary_real}"|"${boundary_real}"/*) ;;
+    *) return 1 ;;
+  esac
+
+  if [[ -e "${candidate}" ]]; then
+    [[ -d "${candidate}" ]] || return 1
+    candidate_real="$(realpath -e "${candidate}" 2>/dev/null ||
+      realpath "${candidate}" 2>/dev/null)" || return 1
+    case "${candidate_real}" in
+      "${boundary_real}"|"${boundary_real}"/*) ;;
+      *) return 1 ;;
+    esac
+  fi
+}
+
+
+RUN_SOURCE_MANIFEST="${RUN_ROOT}/manifests/source.manifest"
 
 RUN_SOURCE_MANIFEST="${RUN_ROOT}/manifests/source.manifest"
 RUN_RUNTIME_IDENTITY="${RUN_ROOT}/manifests/runtime.identity"
@@ -184,18 +240,22 @@ if [[ "${AUDIT_MODE}" == metadata ]]; then
   done < "${METADATA_MANIFEST}"
   [[ ${manifest_rows} -gt 0 && ${TASK_ID} -le ${manifest_rows} ]] ||
     fail "metadata export task ID is outside manifest rows"
-  [[ -n "${row}" ]] ||
-    fail "metadata export selected row is missing"
   IFS=$'\t' read -r row_dataset row_view row_input row_output row_extra <<< "${row}"
+  metadata_output_parent="$(dirname "${row_output}")"
+  _ecoda_validate_run_owned_directory_for_create \
+    "${metadata_output_parent}" "${HPC_SCRATCH_DIR}" ||
+    fail "metadata export output parent is not a safe final path"
+  _ecoda_validate_run_owned_directory_for_create "${STATUS_DIR}" "${RUN_ROOT}" ||
+    fail "metadata export status directory is not a safe run-owned path"
+  [[ ! -L "${row_output}" && ! -L "${row_output}.md5" ]] ||
+    fail "metadata export output is a symlink"
   mkdir -p "${STATUS_DIR}"
   ecoda_validate_run_owned_path "${STATUS_DIR}" "${RUN_ROOT}" ||
     fail "metadata export status directory is not run-owned"
   EXPORTER="${SOURCE_ROOT}/src/utils/py/export_h5ad_sample_metadata.py"
   EXPORTER="$(ecoda_require_source_script_path "${EXPORTER}" "${SOURCE_ROOT}")" ||
     fail "metadata exporter escaped immutable source root"
-  mkdir -p "$(dirname "${row_output}")"
-  [[ ! -L "${row_output}" && ! -L "${row_output}.md5" ]] ||
-    fail "metadata export output is a symlink"
+  mkdir -p "${metadata_output_parent}"
   status_kind="EXPORTED"
   if "${PYTHON_BIN}" "${EXPORTER}" \
       --config "${DATASETS_JSON_FILE}" --dataset "${row_dataset}" \
@@ -226,17 +286,23 @@ INPUT_FILE="${H5AD_OBS_AUDIT_INPUT_FILE:-${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Co
 EXPECTED_INPUT="${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
 [[ "${INPUT_FILE}" == "${EXPECTED_INPUT}" ]] ||
   fail "Covid obs audit input path is not the configured direct source"
-[[ -f "${INPUT_FILE}" && ! -L "${INPUT_FILE}" && -r "${INPUT_FILE}" ]] ||
-  fail "Covid direct H5AD input is missing or unsafe: ${INPUT_FILE}"
-
 OUTPUT_ROOT="${H5AD_OBS_AUDIT_OUTPUT_ROOT:-${RUN_ROOT}/preflight}"
 [[ "${OUTPUT_ROOT}" = /* ]] || fail "obs audit output root must be absolute"
 [[ "${OUTPUT_ROOT}" == "${RUN_ROOT}/preflight" ]] ||
   fail "obs audit output root must be the run-owned preflight directory"
-mkdir -p "${OUTPUT_ROOT}"
-[[ ! -L "${OUTPUT_ROOT}" ]] || fail "obs audit output root must not be a symlink"
-ecoda_validate_run_owned_path "${OUTPUT_ROOT}" "${RUN_ROOT}" ||
-  fail "obs audit output root is not run-owned"
+_ecoda_validate_run_owned_directory_for_create "${OUTPUT_ROOT}" "${RUN_ROOT}" ||
+  fail "obs audit output root is not a safe run-owned path"
+for audit_view in batch_effect_uncorrected batch_effect_corrected; do
+  audit_report="${OUTPUT_ROOT}/Covid19_PBMC_${audit_view}.json"
+  [[ ! -L "${audit_report}" && ! -L "${audit_report}.md5" ]] ||
+    fail "obs audit report or checksum is a symlink: ${audit_report}"
+  _ecoda_validate_run_owned_directory_for_create \
+    "$(dirname "${audit_report}")" "${RUN_ROOT}" ||
+    fail "obs audit report parent is not run-owned: ${audit_report}"
+  _ecoda_validate_run_owned_directory_for_create \
+    "$(dirname "${audit_report}.md5")" "${RUN_ROOT}" ||
+    fail "obs audit checksum parent is not run-owned: ${audit_report}.md5"
+done
 
 AUDIT_MANIFEST="${H5AD_OBS_AUDIT_MANIFEST:-${H5AD_PREFLIGHT_MANIFEST:-}}"
 STATUS_DIR="${H5AD_OBS_AUDIT_STATUS_DIR:-${H5AD_PREFLIGHT_STATUS_DIR:-}}"
@@ -254,6 +320,8 @@ if [[ -n "${AUDIT_MANIFEST}" ]]; then
     fail "obs audit manifest is malformed"
   [[ "${STATUS_DIR}" = /* && ! -L "${STATUS_DIR}" ]] ||
     fail "obs audit status directory is missing or unsafe"
+  _ecoda_validate_run_owned_directory_for_create "${STATUS_DIR}" "${RUN_ROOT}" ||
+    fail "obs audit status directory is not a safe run-owned path"
   row=""
   manifest_rows=0
   seen_audit_views=""
@@ -280,9 +348,6 @@ if [[ -n "${AUDIT_MANIFEST}" ]]; then
   [[ -n "${row}" ]] ||
     fail "obs audit selected row is missing"
   IFS=$'\t' read -r row_dataset row_view row_input row_extra <<< "${row}"
-  mkdir -p "${STATUS_DIR}"
-  ecoda_validate_run_owned_path "${STATUS_DIR}" "${RUN_ROOT}" ||
-    fail "obs audit status directory is not run-owned"
   VIEWS=("${row_view}")
   safe="$(_ecoda_safe_component "${row_dataset}__${row_view}")"
   STATUS_FILE="${STATUS_DIR}/${safe}.status"
@@ -290,6 +355,15 @@ else
   VIEWS=(batch_effect_uncorrected batch_effect_corrected)
 fi
 
+mkdir -p "${OUTPUT_ROOT}"
+[[ ! -L "${OUTPUT_ROOT}" ]] || fail "obs audit output root must not be a symlink"
+ecoda_validate_run_owned_path "${OUTPUT_ROOT}" "${RUN_ROOT}" ||
+  fail "obs audit output root is not run-owned"
+if [[ -n "${STATUS_FILE}" ]]; then
+  mkdir -p "${STATUS_DIR}"
+  ecoda_validate_run_owned_path "${STATUS_DIR}" "${RUN_ROOT}" ||
+    fail "obs audit status directory is not run-owned"
+fi
 [[ -x "${PYTHON_BIN}" ]] || fail "immutable runtime Python is unavailable: ${PYTHON_BIN}"
 for view in "${VIEWS[@]}"; do
   report="${OUTPUT_ROOT}/Covid19_PBMC_${view}.json"

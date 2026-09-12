@@ -29,6 +29,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from src.utils.py.datasets_io import read_datasets_json
 from src.utils.py.preprocess_utils import (
     assert_subset_sample_consistency,
     evaluate_subset_mask,
