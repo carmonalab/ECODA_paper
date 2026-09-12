@@ -548,65 +548,162 @@ load_batch_uncorrected_dataset <- function(input_root, metadata_root, dataset, r
     invisible(lapply(values, .batch_manifest_resolve_path, repository_root = repository_root))
   }
 }
+.batch_manifest_lane_roots <- function(repository_root) {
+  # Production manifests are rooted below data/batch_effect.  The direct
+  # fallback keeps the helper usable by isolated fixtures that provide
+  # uncorrected/uncorrected_final directly below their temporary root.
+  canonical_base <- normalizePath(
+    file.path(repository_root, "data", "batch_effect"),
+    mustWork = FALSE
+  )
+  canonical <- dir.exists(canonical_base) || file.exists(canonical_base)
+  base <- if (canonical) canonical_base else repository_root
+  roots <- c(
+    legacy = normalizePath(file.path(base, "uncorrected"), mustWork = FALSE),
+    final = normalizePath(file.path(base, "uncorrected_final"), mustWork = FALSE)
+  )
+  attr(roots, "canonical") <- canonical
+  roots
+}
+
+.batch_manifest_path_under <- function(path, root) {
+  identical(path, root) || startsWith(path, paste0(root, .Platform$file.sep))
+}
+
+.batch_validate_manifest_lane_paths <- function(
+  frame,
+  path_column,
+  lane_column,
+  repository_root
+) {
+  roots <- .batch_manifest_lane_roots(repository_root)
+  canonical <- isTRUE(attr(roots, "canonical"))
+  for (index in seq_len(nrow(frame))) {
+    lane <- frame[[lane_column]][[index]]
+    if (!lane %in% names(roots)) {
+      .batch_stop("final analysis manifest has unsupported lane ", lane)
+    }
+    resolved <- .batch_manifest_resolve_path(
+      frame[[path_column]][[index]],
+      repository_root
+    )
+    expected_root <- roots[[lane]]
+    if (.batch_manifest_path_under(resolved, expected_root)) next
+    opposite <- roots[[if (identical(lane, "final")) "legacy" else "final"]]
+    if (canonical || .batch_manifest_path_under(resolved, opposite)) {
+      .batch_stop(
+        "final analysis manifest ", path_column, " for lane ", lane,
+        " must be under ", expected_root, ": ", resolved
+      )
+    }
+    # Isolated unit fixtures may use placeholder paths outside their direct
+    # lane roots; cross-lane paths are still rejected above.
+  }
+  invisible(NULL)
+}
+
+.batch_frozen_datasets <- function() {
+  c("Alzheimer", "Breast_cancer", "Lupus_PBMC", "Stephenson")
+}
+
+.batch_changed_final_datasets <- function() {
+  c("Covid19_PBMC", "Diabetes", "Joanito", "Lung")
+}
+
+.batch_validate_manifest_dataset_lanes <- function(frame, manifest_kind) {
+  frozen <- .batch_frozen_datasets()
+  changed <- .batch_changed_final_datasets()
+  for (dataset in unique(frame$dataset)) {
+    rows <- frame[frame$dataset == dataset, , drop = FALSE]
+    if (manifest_kind == "metadata") {
+      if (dataset %in% frozen &&
+          (any(rows$summary_lane != "legacy") ||
+           any(rows$feather_lane != "legacy"))) {
+        .batch_stop(dataset, ": frozen cohorts may use only legacy metadata lanes")
+      }
+      if (dataset %in% changed &&
+          (any(rows$summary_lane != "final") ||
+           any(rows$feather_lane != "final"))) {
+        .batch_stop(dataset, ": changed final targets may use only final metadata lanes")
+      }
+    } else if (manifest_kind == "artifacts") {
+      if (dataset %in% frozen && any(rows$lane != "legacy")) {
+        .batch_stop(dataset, ": frozen cohorts may use only legacy artifact lanes")
+      }
+      if (dataset %in% changed && any(rows$lane != "final")) {
+        .batch_stop(dataset, ": changed final targets may use only final artifact lanes")
+      }
+    } else {
+      .batch_stop("unsupported final analysis manifest kind: ", manifest_kind)
+    }
+  }
+  invisible(NULL)
+}
 
 .batch_validate_final_composition_rows <- function(frame, repository_root) {
   if (!all(c("ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL") %in% frame$method)) {
     return(invisible(NULL))
   }
   datasets <- unique(frame$dataset)
+  composition_methods <- c(
+    "ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL"
+  )
+  expected_keys <- c(
+    ECODA_authors_HR = "ECODA_authors_HR",
+    ECODA_seuratres_2 = "ECODA_seuratres_2",
+    ECODA_authors_HR_NULL = "ECODA_authors_HR_NULL"
+  )
   for (dataset in datasets) {
     rows <- frame[frame$dataset == dataset, , drop = FALSE]
-    selected <- rows[rows$method %in% c(
-      "ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL"
-    ), , drop = FALSE]
+    selected <- rows[rows$method %in% composition_methods, , drop = FALSE]
     final_rows <- selected[selected$lane == "final", , drop = FALSE]
     if (nrow(final_rows) == 0L) next
-    if (nrow(final_rows) != 3L ||
-        any(final_rows$artifact_kind != "rds_bundle") ||
-        !all(final_rows$method %in% c(
-          "ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL"
-        ))) {
-      .batch_stop(dataset, ": final composition/null rows must be three shared rds_bundle rows")
+    if (any(final_rows$artifact_kind != "rds_bundle") ||
+        (dataset != "Kidney_KPMP_full" && nrow(final_rows) != length(composition_methods))) {
+      .batch_stop(dataset, ": final composition/null rows must be shared rds_bundle rows")
     }
-    expected_keys <- c(
-      ECODA_authors_HR = "ECODA_authors_HR",
-      ECODA_seuratres_2 = "ECODA_seuratres_2",
-      ECODA_authors_HR_NULL = "ECODA_authors_HR_NULL"
-    )
-    observed_keys <- stats::setNames(final_rows$bundle_key, final_rows$method)
-    if (!identical(unname(observed_keys[names(expected_keys)]), unname(expected_keys))) {
-      .batch_stop(dataset, ": final composition/null bundle keys are not explicit")
+    for (index in seq_len(nrow(final_rows))) {
+      method <- final_rows$method[[index]]
+      if (!identical(final_rows$bundle_key[[index]], expected_keys[[method]])) {
+        .batch_stop(dataset, ": final composition/null bundle keys are not explicit")
+      }
     }
   }
   invisible(NULL)
 }
 
 .batch_validate_loaded_final_composition <- function(artifact_rows, repository_root, dataset) {
-  selected <- artifact_rows[artifact_rows$method %in% c(
+  composition_methods <- c(
     "ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL"
-  ), , drop = FALSE]
+  )
+  selected <- artifact_rows[artifact_rows$method %in% composition_methods, , drop = FALSE]
   final_rows <- selected[selected$lane == "final", , drop = FALSE]
   if (nrow(final_rows) == 0L) return(invisible(NULL))
-  if (nrow(final_rows) != 3L || any(final_rows$artifact_kind != "rds_bundle")) {
-    .batch_stop(dataset, ": final composition/null rows must be three rds_bundle rows")
+  if (any(final_rows$artifact_kind != "rds_bundle") ||
+      (dataset != "Kidney_KPMP_full" && nrow(final_rows) != length(composition_methods))) {
+    .batch_stop(dataset, ": final composition/null rows must be shared rds_bundle rows")
   }
   expected_keys <- c(
     ECODA_authors_HR = "ECODA_authors_HR",
     ECODA_seuratres_2 = "ECODA_seuratres_2",
     ECODA_authors_HR_NULL = "ECODA_authors_HR_NULL"
   )
-  observed_keys <- stats::setNames(final_rows$bundle_key, final_rows$method)
-  if (!identical(unname(observed_keys[names(expected_keys)]), unname(expected_keys))) {
-    .batch_stop(dataset, ": final composition/null bundle keys are not explicit")
+  for (index in seq_len(nrow(final_rows))) {
+    method <- final_rows$method[[index]]
+    if (!identical(final_rows$bundle_key[[index]], expected_keys[[method]])) {
+      .batch_stop(dataset, ": final composition/null bundle keys are not explicit")
+    }
   }
-  resolved <- vapply(
-    final_rows$artifact_path,
-    .batch_manifest_resolve_path,
-    character(1L),
-    repository_root = repository_root
-  )
-  if (length(unique(resolved)) != 1L) {
-    .batch_stop(dataset, ": final composition/null rows must share one physical RDS path")
+  if (dataset != "Kidney_KPMP_full") {
+    resolved <- vapply(
+      final_rows$artifact_path,
+      .batch_manifest_resolve_path,
+      character(1L),
+      repository_root = repository_root
+    )
+    if (length(unique(resolved)) != 1L) {
+      .batch_stop(dataset, ": final composition/null rows must share one physical RDS path")
+    }
   }
   invisible(NULL)
 }
@@ -640,6 +737,19 @@ read_batch_final_manifest <- function(
       c("metadata_summary_path", "metadata_feather_path"),
       repository_root
     )
+    .batch_validate_manifest_lane_paths(
+      frame,
+      "metadata_summary_path",
+      "summary_lane",
+      repository_root
+    )
+    .batch_validate_manifest_lane_paths(
+      frame,
+      "metadata_feather_path",
+      "feather_lane",
+      repository_root
+    )
+    .batch_validate_manifest_dataset_lanes(frame, "metadata")
   } else {
     if (!identical(colnames(frame), c(
       "dataset", "method", "lane", "artifact_kind",
@@ -659,6 +769,13 @@ read_batch_final_manifest <- function(
       .batch_stop("final analysis artifact manifest has an unsupported lane or artifact kind")
     }
     .batch_validate_manifest_paths(frame, "artifact_path", repository_root)
+    .batch_validate_manifest_lane_paths(
+      frame,
+      "artifact_path",
+      "lane",
+      repository_root
+    )
+    .batch_validate_manifest_dataset_lanes(frame, "artifacts")
     if (anyNA(frame$bundle_key)) .batch_stop("final analysis artifact bundle_key must be physical, not NA")
     distance_rows <- frame$artifact_kind == "distance_feather"
     if (any(frame$bundle_key[distance_rows] != "")) {
@@ -932,6 +1049,26 @@ load_batch_uncorrected_dataset_from_manifest <- function(
   }
   metadata_manifest <- metadata_info$frame
   artifact_manifest <- artifact_info$frame
+  .batch_validate_manifest_lane_paths(
+    metadata_manifest,
+    "metadata_summary_path",
+    "summary_lane",
+    repository_root
+  )
+  .batch_validate_manifest_lane_paths(
+    metadata_manifest,
+    "metadata_feather_path",
+    "feather_lane",
+    repository_root
+  )
+  .batch_validate_manifest_dataset_lanes(metadata_manifest, "metadata")
+  .batch_validate_manifest_lane_paths(
+    artifact_manifest,
+    "artifact_path",
+    "lane",
+    repository_root
+  )
+  .batch_validate_manifest_dataset_lanes(artifact_manifest, "artifacts")
   metadata_rows <- metadata_manifest[metadata_manifest$dataset == dataset, , drop = FALSE]
   artifact_rows <- artifact_manifest[artifact_manifest$dataset == dataset, , drop = FALSE]
   if (nrow(metadata_rows) != 1L) .batch_stop(dataset, ": final metadata manifest must contain exactly one row")

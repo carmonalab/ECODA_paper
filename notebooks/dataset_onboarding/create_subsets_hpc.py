@@ -32,18 +32,19 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
 print = functools.partial(print, flush=True)
 
-# Ensure onboarding_utils can be imported
+# Ensure repository modules can be imported
 HERE = Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+REPO_ROOT = HERE.parents[1]
+for import_root in (HERE, REPO_ROOT):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
 
 import anndata as ad
 import numpy as np
 import pandas as pd
-import scanpy as sc
-
 import onboarding_utils as ou
 from dataset_specs import DATASET_SPECS, get_dataset_spec
+from src.utils.py.preprocess_utils import evaluate_subset_mask
 
 
 DATASET_NAMES = tuple(DATASET_SPECS)
@@ -102,16 +103,8 @@ def _json_safe(value):
         return bool(value)
     return value
 def _apply_subset_vars(adata, subset_vars: dict):
-    """Apply exact categorical inclusion/exclusion before registry audits."""
-    if not subset_vars:
-        return adata
-    mask = pd.Series(True, index=adata.obs_names)
-    for column, rule in subset_vars.items():
-        if column not in adata.obs.columns:
-            raise KeyError(f"subset_vars references missing obs column: {column}")
-        values = rule.get("values", [])
-        column_mask = adata.obs[column].isin(values)
-        mask &= column_mask if rule.get("op", "in") == "in" else ~column_mask
+    """Apply registry filters through the shared production evaluator."""
+    mask = evaluate_subset_mask(adata, subset_vars)
     return adata[mask]
 
 

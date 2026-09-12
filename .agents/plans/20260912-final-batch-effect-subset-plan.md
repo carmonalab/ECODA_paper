@@ -1049,8 +1049,172 @@ Updated during execution on 2026-09-12.
 
 ### Current gate status
 
-- Immutable source snapshot exists at `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/e9ee50add76c2e7826980d7333e6f9440d5c647b`.
-- Reviewed relocated runtime identity is `ecoda-py-cuda13-6bbf70b-relocated`; its Pixi TOML/lock hashes match the committed source.
-- Corrected durable Stage 2 gate `stage2_joanito_final_20260912b` was launched through the ECODA profile and has exactly one unbounded durable waiter armed. Its terminal evidence/reviewer step remains pending.
-- Stage 3 exact eight-row selection is staged at the run-independent gate input path; Stage 3, final changed-dataset Stage 5, targeted Kidney Stage 5, explicit local mixed manifests, sync, and final notebook execution remain pending until their dependencies reach reviewed completion.
+- Immutable source snapshots exist for implementation commit e9ee50add76c2e7826980d7333e6f9440d5c647b, gate commit fe380b880bedad958d0e1929a2565a0bc7e3e2fe, and the spool-recovery commit 70c81fdfb33c651be5dcd51789211c21650810e5 under `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/`.
+- Reviewed relocated runtime identity is `ecoda-py-cuda13-6bbf70b-relocated`; its Pixi TOML/lock hashes match the implementation source.
+- Corrected durable Stage 2 gate `stage2_joanito_final_20260912b` completed with scheduler IDs 4403663/4403664; its exact run-scoped audit, terminal inspect, and Luna Max reviewer approval passed.
+- No Stage 3 gate is currently active or release-eligible. Gate `stage3_batch_final_20260912c` failed in its Covid obs-only preflight with ID `4403668`; terminal inspection completed with failed accounting/release, reviewer approval was not performed, and retry remains paused.
 - Frozen cohorts are not selected for new jobs; disabled cohorts and `_debug` remain outside production selections. No H5AD was copied to the workstation and no legacy artifact/output was intentionally overwritten.
+
+
+### Live gate update
+
+- The first Stage 2 gate (`stage2_joanito_final_20260912`) failed before scheduler submission because the snapshot executor rejected the textual symlink scratch root; its evidence remains preserved and no scheduler IDs were emitted.
+- The corrected Stage 2 gate (`stage2_joanito_final_20260912b`) completed with scheduler IDs 4403663/4403664; the exact run-scoped audit, one terminal inspect, and Luna Max reviewer approval passed.
+- The first Stage 3 prepared manifest was abandoned before launch after detecting a duplicated `scratch` path. The corrected gate `stage3_batch_final_20260912b` then failed before preprocessing because its Slurm spool copy could not resolve `../../slurm_config.sh`; the targeted `stage3_batch_final_20260912c` retry also failed before preprocessing in the container/spool bootstrap path. No Stage 3 worker rows were released.
+- Stage 3 c terminal accounting/inspection completed as failed for preflight ID `4403668`; reviewer approval was not performed. The required container guard repair, four-row uncorrected retry, independent corrected wave, Stage 5 recoveries, final artifact sync, and final notebook execution remain pending.
+
+### Live gate update 2
+
+- Stage 3 gate `stage3_batch_final_20260912b` failed before preprocessing because the Slurm spool copy could not resolve `../../slurm_config.sh`; its one preflight array ID 4403666 was terminally inspected as failed and no Stage 3 worker rows were released.
+- The bootstrap fix is committed as `70c81fdfb33c651be5dcd51789211c21650810e5` and has a verified immutable snapshot at `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/70c81fdfb33c651be5dcd51789211c21650810e5`.
+- The Stage 3 recovery gate `stage3_batch_final_20260912c` is terminally failed in the Covid obs-only preflight with ID `4403668`; its terminal inspection completed with failed accounting/release, reviewer approval was not performed, and no downstream Stage 5 gate is authorized.
+### User clarification superseding execution scope
+
+The initial approved plan above is retained as implementation history. The
+following clarification from the user on 2026-09-12 is now authoritative for
+the remaining execution work wherever it conflicts with the earlier
+frozen-cohort/four-plus-four Stage 3 wording.
+
+1. Do not launch more gates, run more commands, or rebuild the HPC SIF while
+   source contracts are still being repaired. Finish local code, configuration,
+   manifest, worker, validator, and notebook stabilization first.
+2. After those local/source/runtime contracts are proven, publish and validate
+   one versioned final `py-cuda13` SIF/runtime identity for all subsequent
+   waves. Do not repeatedly rebuild it after each failed worker bootstrap.
+   Reuse the immutable SIF unless its identity is invalid or does not bind the
+   finalized source/runtime contract.
+3. The missing **uncorrected** Pipeline 3 subset is only
+   `Covid19_PBMC`, `Diabetes`, `Joanito`, and `Lung`. Its next selection is
+   four `batch_effect_uncorrected` rows, not the historical twelve-row matrix.
+   No Alzheimer, Breast_cancer, Lupus_PBMC, Stephenson, or other completed
+   cohort is selected for that uncorrected subset.
+4. `Kidney_KPMP_full` is added separately in Pipeline 5 only. Its recovery
+   selects only missing rows from
+   `prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot`;
+   valid existing rows remain outside the selection. Kidney is not added to
+   the uncorrected Pipeline 3 subset or Pipeline 4 annotation.
+5. Corrected mode is independent of the uncorrected subset and may run in
+   parallel after the local/runtime freeze. Its explicit Pipeline 3 selection
+   must be generated from the current `datasets.json` at launch time:
+   every non-underscore entry with `use_for_batch_effect == true`, using
+   `batch_effect_corrected`. Do not carry forward the earlier frozen-cohort
+   exclusion into this corrected wave, and do not infer membership from stale
+   gate history. `_debug` remains diagnostic-only.
+6. Corrected mode is a first full-cohort exercise of the recently added
+   multi-batch integration. Treat failures as expected engineering risk:
+   fail closed, preserve all evidence, and repair only failed dataset/view
+   rows with a recorded dependency reason. A corrected failure must not trigger
+   a broad rerun of successful corrected rows, the uncorrected subset, or
+   frozen artifacts. Corrected Pipeline 3 output is separate from the final
+   uncorrected Pipeline 5 analysis; no corrected Pipeline 5 lane is authorized
+   by this clarification.
+
+### Feasibility assessment
+
+This clarified workflow is feasible. Pipeline 3 already accepts explicit
+selection manifests, corrected and uncorrected views have distinct output
+contracts, and the corrected wave can be isolated in its own durable run.
+Pipeline 5 can remain serialized on the shared final uncorrected root while
+the independent corrected Pipeline 3 run uses its own view/output namespace.
+The parallelism constraint is explicit: the current durable profile uses one
+`ecoda-benchmark` serialization group, and the custom Stage 3 Covid obs-only
+preflight is intentionally triggered only by the exact four-dataset
+uncorrected target selection. Therefore “parallel corrected mode” cannot be
+implemented by inventing a second serialization group or by silently
+bypassing the Covid release evidence. The safest supported design is one
+validated Stage 3 scheduler manifest/wave containing the four uncorrected
+target rows plus the dynamically generated corrected rows, while retaining
+the exact target-row Covid preflight, or a separately implemented independent
+gate with an explicit corrected-mode preflight/release contract. This choice
+must be fixed in source and manifests before resuming; no ad hoc concurrent
+gate is safe under the current shared lock.
+The main feasibility risk is not the decomposition; it is first-run behavior
+of the corrected multi-batch path on full cohorts: missing/constant batch
+levels, unexpected metadata encodings, Harmony/resource failures, and
+dataset-specific source columns may require targeted code or configuration
+repairs.
+
+Before the one final SIF publication and any resumed gate, complete this
+stabilization checklist:
+
+- Fix `h5ad_obs_audit_worker.sh` bootstrap recovery to use the established
+  `SLURM_JOB_ID && ECODA_RUNTIME_IN_CONTAINER != 1` spool condition. Inside
+  Apptainer, retain the inherited immutable source path and do not require
+  `scontrol`. Gate `stage3_batch_final_20260912c` failed in its Covid
+  preflight with ID `4403668`; terminal inspection completed as failed,
+  reviewer approval was not performed, and retry remains paused.
+- Make direct obs-only output-scope validation check absolute ancestry,
+  run-root containment, and symlink safety before creating an external
+  directory. Keep reports/checksums strictly under the bound run root.
+- Route diagnostic onboarding subset evaluation through the shared evaluator
+  (or remove the duplicate comparison implementation) so the scalar Covid
+  threshold and comparison/include-values semantics cannot diverge.
+- Bind obs-worker run roots to the global `${ECODA_RUNS_ROOT}/${RUN_ID}`
+  layout before trusting manifests/reports. Revalidate final selection
+  membership with parsed rows rather than newline counts.
+- Enforce the final root identity in shared Stage 5 artifact/sync helpers,
+  not only in the CLI, and verify final no-op reuse against the prior
+  terminal global owner/producer record so valid final artifacts are skipped
+  individually across runs.
+- Make the final analysis loader bind `lane=final` to
+  `data/batch_effect/uncorrected_final` and `lane=legacy` to the approved
+  legacy lane, with frozen/Kidney lane policy explicit. Ensure the metadata
+  exporter includes `BATCH_EFFECT_SPECS` candidates such as Joanito/Stephenson
+  `Site` in addition to active `DATASET_SPECS` fields.
+- Exercise the corrected path with validator-only metadata/source checks and
+  deterministic small fixtures before full cohorts. Confirm biological labels
+  remain evaluation-only covariates and that all configured corrected batch
+  keys are present before allocating full jobs.
+
+### Pause status for compaction
+
+No further shell, SSH, test, durable-gate, scheduler, or SIF-build command is
+authorized until the user completes clarification and compacts the main-agent
+context. The initial implementation commits, failed-gate evidence, and local
+plan history remain preserved. After compaction, resume with the checklist
+above, then publish one final runtime identity, then launch the four-row
+uncorrected Pipeline 3 subset, the independent all-configured corrected
+Pipeline 3 wave, and the serialized targeted Pipeline 5 recoveries only after
+their exact manifests and predecessor reviews are complete.
+### Plan maintenance
+
+All subsequent implementation, verification, gate, SIF, failure, repair, and
+scope updates MUST be recorded in this plan. Keep each status entry concise:
+date, status, evidence/path, and next blocker or action. Do not duplicate the
+full rationale when a short evidence-linked update is sufficient.
+
+### Resume update
+
+- 2026-09-12, resumed after the user-authorized context compaction; local
+  stabilization work is dispatched in disjoint units for the obs worker,
+  obs-only/onboarding paths, Stage 5 root ownership, final analysis/export,
+  and the combined Stage 3 wave. No new gate or SIF command is authorized
+  until those units are integrated and the focused contracts pass.
+
+- 2026-09-12, corrected-contract scout confirmed exactly nine dynamic corrected
+  datasets and their configured sample/label/batch keys; evidence is the
+  current `datasets.json` plus `src/utils/py/batch_contract.py`. The
+  pre-allocation contract must inspect authoritative source `obs` for required
+  batch columns, at least two levels, within-sample constancy, missing/sentinel
+  values, near-unique levels, and full-rank composite design. Biological
+  labels remain evaluation-only. No source-level counts can be inferred from
+  static configuration.
+
+- 2026-09-12, local verification caught a red combined Stage 3 fixture:
+  `tests/test_preprocessing_stage_submitter.sh` reaches the validator-only
+  combined run but its stubbed Covid preflight evidence is rejected. A
+  focused test repair is dispatched; no HPC/SIF action is allowed until it
+  passes.
+- 2026-09-12, advisory-driven Stage 3 repairs now classify exact four-row
+  uncorrected manifests independently (with the required Covid preflight),
+  reserve combined mode for four-plus-dynamic-corrected rows, and fail closed
+  when corrected RDS inputs lack a bound raw H5AD metadata cache. The
+  corrected dynamic set remains the nine current config rows; missing RDS
+  source metadata is now an explicit blocker rather than `CONFIG_ONLY_RDS`.
+
+- 2026-09-12, reconciled `AGENTS.md` with the clarification: frozen cohorts
+  remain excluded from uncorrected/final-lane work but are explicitly allowed
+  in the independent corrected Stage 3 wave when selected by current
+  `datasets.json`; disabled cohorts and `_debug` remain excluded everywhere.
+  The corrected RDS prerequisite/source audit remains pending before runtime
+  publication.

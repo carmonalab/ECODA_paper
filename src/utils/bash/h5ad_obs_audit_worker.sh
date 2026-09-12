@@ -3,13 +3,16 @@
 # source or creates an artifact ownership record for it.
 set -euo pipefail
 
-if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+if [[ -n "${SLURM_JOB_ID:-}" &&
+      "${ECODA_RUNTIME_IN_CONTAINER:-0}" != "1" ]]; then
   command -v scontrol >/dev/null 2>&1 || {
     echo "ERROR: scontrol is required to recover the immutable worker path." >&2
     exit 1
   }
   SCRIPT_DIR="$(scontrol show job "${SLURM_JOB_ID}" | awk -F= '/Command=/ {print $2}' | xargs dirname)"
 else
+  # Apptainer inherits the immutable source identity and executes this
+  # snapshot path directly; never try to recover a host command in-image.
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 [[ -n "${SCRIPT_DIR}" ]] || {
@@ -53,11 +56,33 @@ EXPECTED_SOURCE_MANIFEST="${SNAPSHOT_ROOT}/identity/source.manifest"
    -r "${SOURCE_MANIFEST}" ]] ||
   fail "immutable source identity is missing or unsafe"
 
+[[ -z "${ECODA_RUN_ROOT:-}" || "${ECODA_RUN_ROOT}" == "${RUN_ROOT}" ]] ||
+  fail "inherited run root does not match audit run root"
+[[ -z "${ECODA_RUN_ID:-}" || "${ECODA_RUN_ID}" == "${RUN_ID}" ]] ||
+  fail "inherited run ID does not match audit run ID"
+[[ -z "${H5AD_OBS_AUDIT_RUN_ID:-}" ||
+   "${H5AD_OBS_AUDIT_RUN_ID}" == "${RUN_ID}" ]] ||
+  fail "obs audit scheduler run ID does not match audit run ID"
 [[ "${RUN_ROOT}" = /* && -d "${RUN_ROOT}" && ! -L "${RUN_ROOT}" ]] ||
   fail "read-only H5AD obs audit requires an existing run root"
 [[ "${RUN_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ &&
    "${RUN_ROOT##*/}" == "${RUN_ID}" ]] ||
   fail "read-only H5AD obs audit run identity is invalid"
+[[ "${ECODA_RUNS_ROOT:-}" = /* &&
+   "${ECODA_RUNS_ROOT}" != *$'\n'* &&
+   "${ECODA_RUNS_ROOT}" != *$'\t'* &&
+   -d "${ECODA_RUNS_ROOT}" && ! -L "${ECODA_RUNS_ROOT}" ]] ||
+  fail "global ECODA run root is missing or unsafe"
+EXPECTED_RUN_ROOT="${ECODA_RUNS_ROOT%/}/${RUN_ID}"
+[[ "${RUN_ROOT}" == "${EXPECTED_RUN_ROOT}" ]] ||
+  fail "audit run root is not the global run root for its ID"
+_ecoda_validate_path_ancestors "${RUN_ROOT}" "${ECODA_RUNS_ROOT}" ||
+  fail "audit run root has a symlinked ancestor"
+RUNS_ROOT_REAL="$(realpath -e "${ECODA_RUNS_ROOT}" 2>/dev/null ||
+  realpath "${ECODA_RUNS_ROOT}" 2>/dev/null)" ||
+  fail "could not canonicalize global ECODA run root"
+[[ "${RUNS_ROOT_REAL}" == "${ECODA_RUNS_ROOT}" ]] ||
+  fail "global ECODA run root is not canonical"
 RUN_ROOT_REAL="$(realpath -e "${RUN_ROOT}" 2>/dev/null || realpath "${RUN_ROOT}" 2>/dev/null)" ||
   fail "could not canonicalize audit run root"
 [[ "${RUN_ROOT_REAL}" == "${RUN_ROOT}" ]] ||
@@ -130,20 +155,41 @@ if [[ "${AUDIT_MODE}" == metadata ]]; then
     fail "metadata export manifest is not run-owned"
   ecoda_validate_manifest "${METADATA_MANIFEST}" 4 ||
     fail "metadata export manifest is malformed"
+  row=""
+  manifest_rows=0
+  seen_metadata_datasets=""
+  manifest_line=""
+  while IFS= read -r manifest_line || [[ -n "${manifest_line}" ]]; do
+    IFS=$'\t' read -r row_dataset row_view row_input row_output row_extra <<< "${manifest_line}"
+    manifest_rows=$((manifest_rows + 1))
+    [[ -n "${row_dataset}" &&
+       "${row_view}" == "batch_effect_uncorrected" &&
+       "${row_input}" = /* && -n "${row_output}" &&
+       -z "${row_extra}" ]] ||
+      fail "metadata export manifest row ${manifest_rows} is malformed"
+    [[ "${row_dataset}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] ||
+      fail "metadata export dataset is not a safe path component"
+    case " ${seen_metadata_datasets} " in
+      *" ${row_dataset} "*)
+        fail "metadata export manifest contains duplicate dataset: ${row_dataset}" ;;
+      *) seen_metadata_datasets="${seen_metadata_datasets} ${row_dataset}" ;;
+    esac
+    [[ "${row_output}" == "${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final/metadata/${row_dataset}_sample_metadata.feather" ]] ||
+      fail "metadata export row ${manifest_rows} is not a final output binding"
+    [[ -f "${row_input}" && ! -L "${row_input}" && -r "${row_input}" ]] ||
+      fail "metadata export H5AD input is missing or unsafe: ${row_input}"
+    if [[ ${manifest_rows} -eq ${TASK_ID} ]]; then
+      row="${row_dataset}"$'\t'"${row_view}"$'\t'"${row_input}"$'\t'"${row_output}"
+    fi
+  done < "${METADATA_MANIFEST}"
+  [[ ${manifest_rows} -gt 0 && ${TASK_ID} -le ${manifest_rows} ]] ||
+    fail "metadata export task ID is outside manifest rows"
+  [[ -n "${row}" ]] ||
+    fail "metadata export selected row is missing"
+  IFS=$'\t' read -r row_dataset row_view row_input row_output row_extra <<< "${row}"
   mkdir -p "${STATUS_DIR}"
   ecoda_validate_run_owned_path "${STATUS_DIR}" "${RUN_ROOT}" ||
     fail "metadata export status directory is not run-owned"
-  row="$(sed -n "${TASK_ID}p" "${METADATA_MANIFEST}")"
-  IFS=$'\t' read -r row_dataset row_view row_input row_output row_extra <<< "${row}"
-  [[ -n "${row_dataset}" && "${row_view}" == "batch_effect_uncorrected" &&
-     -n "${row_input}" &&
-     "${row_output}" = "${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final/metadata/${row_dataset}_sample_metadata.feather" &&
-     -z "${row_extra}" ]] ||
-    fail "metadata export row is not a final uncorrected binding"
-  [[ "${row_dataset}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] ||
-    fail "metadata export dataset is not a safe path component"
-  [[ -f "${row_input}" && ! -L "${row_input}" && -r "${row_input}" ]] ||
-    fail "metadata export H5AD input is missing or unsafe: ${row_input}"
   EXPORTER="${SOURCE_ROOT}/src/utils/py/export_h5ad_sample_metadata.py"
   EXPORTER="$(ecoda_require_source_script_path "${EXPORTER}" "${SOURCE_ROOT}")" ||
     fail "metadata exporter escaped immutable source root"
@@ -208,16 +254,35 @@ if [[ -n "${AUDIT_MANIFEST}" ]]; then
     fail "obs audit manifest is malformed"
   [[ "${STATUS_DIR}" = /* && ! -L "${STATUS_DIR}" ]] ||
     fail "obs audit status directory is missing or unsafe"
+  row=""
+  manifest_rows=0
+  seen_audit_views=""
+  manifest_line=""
+  while IFS= read -r manifest_line || [[ -n "${manifest_line}" ]]; do
+    IFS=$'\t' read -r row_dataset row_view row_input row_extra <<< "${manifest_line}"
+    manifest_rows=$((manifest_rows + 1))
+    [[ "${row_dataset}" == "Covid19_PBMC" &&
+       ( "${row_view}" == "batch_effect_uncorrected" ||
+         "${row_view}" == "batch_effect_corrected" ) &&
+       "${row_input}" == "${INPUT_FILE}" && -z "${row_extra}" ]] ||
+      fail "obs audit manifest row ${manifest_rows} is not the approved direct Covid binding"
+    case " ${seen_audit_views} " in
+      *" ${row_view} "*)
+        fail "obs audit manifest contains duplicate view: ${row_view}" ;;
+      *) seen_audit_views="${seen_audit_views} ${row_view}" ;;
+    esac
+    if [[ ${manifest_rows} -eq ${TASK_ID} ]]; then
+      row="${row_dataset}"$'\t'"${row_view}"$'\t'"${row_input}"
+    fi
+  done < "${AUDIT_MANIFEST}"
+  [[ ${manifest_rows} -gt 0 && ${TASK_ID} -le ${manifest_rows} ]] ||
+    fail "obs audit task ID is outside manifest rows"
+  [[ -n "${row}" ]] ||
+    fail "obs audit selected row is missing"
+  IFS=$'\t' read -r row_dataset row_view row_input row_extra <<< "${row}"
   mkdir -p "${STATUS_DIR}"
   ecoda_validate_run_owned_path "${STATUS_DIR}" "${RUN_ROOT}" ||
     fail "obs audit status directory is not run-owned"
-  row="$(sed -n "${TASK_ID}p" "${AUDIT_MANIFEST}")"
-  IFS=$'\t' read -r row_dataset row_view row_input row_extra <<< "${row}"
-  [[ "${row_dataset}" == "Covid19_PBMC" &&
-     ( "${row_view}" == "batch_effect_uncorrected" ||
-       "${row_view}" == "batch_effect_corrected" ) &&
-     "${row_input}" == "${INPUT_FILE}" && -z "${row_extra}" ]] ||
-    fail "obs audit manifest row is not the approved direct Covid binding"
   VIEWS=("${row_view}")
   safe="$(_ecoda_safe_component "${row_dataset}__${row_view}")"
   STATUS_FILE="${STATUS_DIR}/${safe}.status"

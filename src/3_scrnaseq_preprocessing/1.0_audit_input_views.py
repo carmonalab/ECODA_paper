@@ -360,25 +360,131 @@ def write_checksum_atomic(path: Path) -> None:
         raise
 
 
-def _validate_direct_output_scope(output_root: Path, output: Path) -> tuple[Path, Path]:
+def _validate_path_ancestry(
+    path: Path,
+    label: str,
+    *,
+    boundary: Path | None = None,
+) -> None:
+    """Reject traversal and unsafe ancestry before any mkdir.
+
+    When a trusted run-root boundary is available, symlink aliases above that
+    canonical boundary are allowed (for example macOS ``/var``), while every
+    existing component below the boundary is checked strictly.
+    """
+    if not path.is_absolute():
+        raise ValueError(f"{label} must be an absolute path")
+    if ".." in path.parts:
+        raise ValueError(f"{label} must not contain '..' path traversal")
+
+    boundary_real = None
+    if boundary is not None:
+        if not boundary.is_absolute() or ".." in boundary.parts:
+            raise ValueError("ECODA_RUN_ROOT must be an absolute, canonical path")
+        try:
+            boundary_real = boundary.resolve(strict=False)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError("ECODA_RUN_ROOT cannot be resolved safely") from exc
+
+    current = Path(path.anchor)
+    parts = path.parts[1:] if path.anchor else path.parts
+    boundary_reached = boundary_real is None
+    for index, part in enumerate(parts):
+        current /= part
+        try:
+            current.lstat()
+        except FileNotFoundError:
+            # A missing ancestor means all remaining descendants are also
+            # absent; they will be created only after the full validation.
+            break
+        except OSError as exc:
+            raise ValueError(f"{label} ancestry cannot be inspected") from exc
+
+        if boundary_real is not None and not boundary_reached:
+            try:
+                current_real = current.resolve(strict=False)
+            except (OSError, RuntimeError) as exc:
+                raise ValueError(f"{label} ancestry cannot be resolved") from exc
+            if current_real in boundary_real.parents:
+                # Existing ancestors above the bound are outside this
+                # output's security domain and may use platform aliases.
+                continue
+            if current_real == boundary_real or boundary_real in current_real.parents:
+                # The lexical path is now at or below the trusted boundary;
+                # every component from here onward must be non-symlinked.
+                boundary_reached = True
+
+        if current.is_symlink():
+            raise ValueError(f"{label} ancestry contains a symlink: {current}")
+        if index < len(parts) - 1 and not current.is_dir():
+            raise ValueError(f"{label} ancestry is not directory-backed: {current}")
+
+
+def _validate_direct_output_scope(
+    output_root: Path,
+    output: Path,
+    run_root: Path,
+) -> tuple[Path, Path]:
+    """Validate an obs-only report path without creating any directories."""
+    output_root = output_root.expanduser()
+    output = output.expanduser()
+    run_root = run_root.expanduser()
     if not output_root.is_absolute() or not output.is_absolute():
         raise ValueError("obs-only output-root and output must be absolute paths")
-    output_root.mkdir(parents=True, exist_ok=True)
-    if output_root.is_symlink():
-        raise ValueError("obs-only output-root must not be a symlink")
-    root_real = output_root.resolve()
-    parent = output.parent
-    parent_real = parent.resolve(strict=False)
-    if parent_real != root_real and root_real not in parent_real.parents:
-        raise ValueError("obs-only report path escapes output-root")
-    current = parent
-    while current != output_root and current != current.parent:
-        if current.is_symlink():
-            raise ValueError("obs-only report parent contains a symlink")
-        current = current.parent
-    output.parent.mkdir(parents=True, exist_ok=True)
+    if not run_root.is_absolute():
+        raise ValueError("ECODA_RUN_ROOT must be an absolute path")
+    if ".." in run_root.parts:
+        raise ValueError("ECODA_RUN_ROOT must not contain '..' path traversal")
+    if not run_root.is_dir() or run_root.is_symlink():
+        raise ValueError("ECODA_RUN_ROOT must be a real directory")
+
+    try:
+        run_real = run_root.resolve(strict=False)
+        checksum = Path(f"{output}.md5")
+        _validate_path_ancestry(
+            output_root,
+            "obs-only output-root",
+            boundary=run_real,
+        )
+        _validate_path_ancestry(
+            output,
+            "obs-only report",
+            boundary=run_real,
+        )
+        _validate_path_ancestry(
+            checksum,
+            "obs-only report checksum",
+            boundary=run_real,
+        )
+        root_real = output_root.resolve(strict=False)
+        output_real = output.resolve(strict=False)
+        checksum_real = checksum.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("obs-only output path cannot be resolved safely") from exc
+
+    if output_root.exists() and not output_root.is_dir():
+        raise ValueError("obs-only output-root must be a directory")
+    if output.exists() and not output.is_file():
+        raise ValueError("obs-only report path must be a regular file")
     if output.exists() and output.is_symlink():
         raise ValueError("obs-only report must not replace a symlink")
+    if checksum.exists() and checksum.is_symlink():
+        raise ValueError("obs-only report checksum must not replace a symlink")
+
+    if output_real == root_real or root_real not in output_real.parents:
+        raise ValueError("obs-only report path escapes output-root")
+    if checksum_real == root_real or root_real not in checksum_real.parents:
+        raise ValueError("obs-only report checksum escapes output-root")
+    if root_real != run_real and run_real not in root_real.parents:
+        raise ValueError("obs-only report root escapes ECODA_RUN_ROOT")
+    for candidate in (output_real, checksum_real):
+        if candidate == run_real or run_real not in candidate.parents:
+            raise ValueError(
+                "obs-only report and checksum must remain below ECODA_RUN_ROOT"
+            )
+
+    # All checks above intentionally precede directory creation.  The caller
+    # may now let the atomic writers create missing run-owned parents.
     return root_real, output
 
 
@@ -423,10 +529,11 @@ def _validate_direct_identity(args: argparse.Namespace, output_root: Path) -> di
     runtime_run_identity = (run_root / "manifests" / "runtime.identity").resolve()
     if runtime_identity != runtime_run_identity:
         raise ValueError("obs-only audit runtime identity is not run-bound")
-    root_real, _ = _validate_direct_output_scope(output_root, args.output)
-    run_real = run_root.resolve()
-    if root_real != run_real and run_real not in root_real.parents:
-        raise ValueError("obs-only report root escapes ECODA_RUN_ROOT")
+    _validate_direct_output_scope(
+        output_root,
+        args.output.expanduser(),
+        run_root,
+    )
     config_real = args.config.expanduser().resolve()
     if config_real != (source_root / "datasets.json").resolve():
         raise ValueError("obs-only audit config is not the immutable snapshot datasets.json")

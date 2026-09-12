@@ -1427,6 +1427,9 @@ ecoda_artifact_owner_acquire() {
     _ecoda_die "global artifact path is missing or cannot be canonicalized: ${path}"
     return 1
   }
+  if [[ "${stage}" == "stage5" && "${ANALYSIS_VARIANT:-}" == "final" ]]; then
+    ecoda_stage5_validate_artifact_path "${canonical}" || return 1
+  fi
   owner_dir="$(ecoda_artifact_owner_dir "${canonical}")" || return 1
   _ecoda_artifact_owner_validate_path "${owner_dir}" 1 || return 1
   mkdir -p "$(dirname "${owner_dir}")" || return 1
@@ -1541,6 +1544,10 @@ ecoda_artifact_owner_validate() {
   canonical="$(_ecoda_canonical_path "${path}")" || return 1
   owner_dir="$(ecoda_artifact_owner_dir "${canonical}")" || return 1
   _ecoda_artifact_owner_validate_dir "${owner_dir}" "${canonical}" || return 1
+  if [[ "${ANALYSIS_VARIANT:-}" == "final" &&
+        "${ECODA_ARTIFACT_OWNER_STAGE:-}" == "stage5" ]]; then
+    ecoda_stage5_validate_artifact_path "${canonical}" || return 1
+  fi
   if [[ -n "${expected_run}" && "${ECODA_ARTIFACT_OWNER_RUN}" != "${expected_run}" ]]; then
     _ecoda_die "global artifact owner run mismatch for ${canonical}"
     return 1
@@ -1712,6 +1719,113 @@ _ecoda_output_add_scratch_nas_pair() {
   fi
 }
 
+ecoda_stage5_validate_identity() {
+  local requested_pass="${1:-}" pass variant="${2:-${ANALYSIS_VARIANT:-}}"
+  local scratch_root nas_root expected_root expected_nas
+  [[ -n "${requested_pass}" ]] || requested_pass="${PASS_ARG:-${ANALYSIS_PASS:-}}"
+  pass="${requested_pass}"
+  if [[ -n "${PASS_ARG:-}" && "${PASS_ARG}" != "${pass}" ]]; then
+    _ecoda_die "Stage 5 pass identity disagrees with PASS_ARG"
+    return 1
+  fi
+  if [[ -n "${ANALYSIS_PASS:-}" && "${ANALYSIS_PASS}" != "${pass}" ]]; then
+    _ecoda_die "Stage 5 pass identity disagrees with ANALYSIS_PASS"
+    return 1
+  fi
+  case "${variant}" in
+    "")
+      return 0
+      ;;
+    final)
+      [[ "${pass}" == "uncorrected" ]] || {
+        _ecoda_die "final Stage 5 analysis requires the uncorrected pass"
+        return 1
+      }
+      scratch_root="${HPC_SCRATCH_DIR:-}"
+      nas_root="${NAS_TARGET_DIR:-}"
+      [[ "${scratch_root}" = /* && "${scratch_root}" != *$'\n'* &&
+         "${scratch_root}" != *$'\t'* &&
+         "${nas_root}" = /* && "${nas_root}" != *$'\n'* &&
+         "${nas_root}" != *$'\t'* ]] || {
+        _ecoda_die "final Stage 5 analysis requires absolute scratch and NAS roots"
+        return 1
+      }
+      scratch_root="${scratch_root%/}"
+      nas_root="${nas_root%/}"
+      [[ -n "${scratch_root}" ]] || scratch_root="/"
+      [[ -n "${nas_root}" ]] || nas_root="/"
+      if [[ "${scratch_root}" == "/" ]]; then
+        expected_root="/batch_effect/uncorrected_final"
+      else
+        expected_root="${scratch_root}/batch_effect/uncorrected_final"
+      fi
+      if [[ "${nas_root}" == "/" ]]; then
+        expected_nas="/batch_effect/uncorrected_final"
+      else
+        expected_nas="${nas_root}/batch_effect/uncorrected_final"
+      fi
+      [[ "${ANALYSIS_ROOT:-}" == "${expected_root}" ]] || {
+        _ecoda_die "final Stage 5 analysis root must be ${expected_root}"
+        return 1
+      }
+      [[ "${ANALYSIS_NAS_ROOT:-}" == "${expected_nas}" ]] || {
+        _ecoda_die "final Stage 5 NAS root must be ${expected_nas}"
+        return 1
+      }
+      ;;
+    *)
+      _ecoda_die "unsupported Stage 5 analysis variant: ${variant}"
+      return 1
+      ;;
+  esac
+}
+ecoda_stage5_validate_final_method() {
+  local method="${1:-}"
+  [[ "${ANALYSIS_VARIANT:-}" == "final" ]] || return 0
+  case "${method}" in
+    prepare_pseudobulk|pseudobulk|gloscope|composition|mrvi|pilot|qot) ;;
+    *)
+      _ecoda_die "method is not permitted in the final Stage 5 suite: ${method}"
+      return 1
+      ;;
+  esac
+}
+
+ecoda_stage5_validate_artifact_path() {
+  local path="${1:-}" canonical scratch_root nas_root expected_root expected_nas
+  [[ "${ANALYSIS_VARIANT:-}" == "final" ]] || return 0
+  ecoda_stage5_validate_identity || return 1
+  [[ -n "${path}" ]] || {
+    _ecoda_die "final Stage 5 artifact path is empty"
+    return 1
+  }
+  canonical="$(_ecoda_canonical_path "${path}")" || {
+    _ecoda_die "final Stage 5 artifact path cannot be canonicalized: ${path}"
+    return 1
+  }
+  scratch_root="${HPC_SCRATCH_DIR%/}"
+  nas_root="${NAS_TARGET_DIR%/}"
+  [[ -n "${scratch_root}" ]] || scratch_root="/"
+  [[ -n "${nas_root}" ]] || nas_root="/"
+  if [[ "${scratch_root}" == "/" ]]; then
+    expected_root="/batch_effect/uncorrected_final"
+  else
+    expected_root="${scratch_root}/batch_effect/uncorrected_final"
+  fi
+  if [[ "${nas_root}" == "/" ]]; then
+    expected_nas="/batch_effect/uncorrected_final"
+  else
+    expected_nas="${nas_root}/batch_effect/uncorrected_final"
+  fi
+  case "${canonical}" in
+    "${expected_root}"/*|"${expected_nas}"/*) ;;
+    *)
+      _ecoda_die "final Stage 5 artifact escapes uncorrected_final roots: ${path}"
+      return 1
+      ;;
+  esac
+}
+
 ecoda_stage5_batch_stem() {
   local ds="${1:-}" pass="${2:-${PASS_ARG:-${ANALYSIS_PASS:-}}}"
   local variant="${3:-${ANALYSIS_VARIANT:-}}" stem
@@ -1722,6 +1836,8 @@ ecoda_stage5_batch_stem() {
       "") ;;
       final)
         [[ "${pass}" == "uncorrected" ]] || return 1
+        [[ -z "${PASS_ARG:-}" || "${PASS_ARG}" == "${pass}" ]] || return 1
+        [[ -z "${ANALYSIS_PASS:-}" || "${ANALYSIS_PASS}" == "${pass}" ]] || return 1
         stem="${stem}_final"
         ;;
       *) return 1 ;;
@@ -1742,6 +1858,13 @@ _ecoda_stage5_artifacts_for() {
       batch_effect_corrected) pass="corrected" ;;
     esac
   fi
+  ecoda_stage5_validate_identity "${pass}" || return 1
+  if [[ "${ANALYSIS_VARIANT:-}" == final &&
+        "${view}" != "batch_effect_uncorrected" ]]; then
+    _ecoda_die "final Stage 5 artifacts require the uncorrected batch-effect view"
+    return 1
+  fi
+  ecoda_stage5_validate_final_method "${label}" || return 1
   if [[ -n "${pass}" ]]; then
     batch_stem="$(ecoda_stage5_batch_stem "${ds}" "${pass}" "${ANALYSIS_VARIANT:-}")" ||
       return 1
@@ -1844,6 +1967,7 @@ _ecoda_stage5_artifacts_for() {
   fi
 }
 
+
 _ecoda_expand_output_selection() {
   local stage="${1:-}" selection="${2:-}" step script ds view label outputs extra
   local path name pass nas_path artifact_index write_flag
@@ -1944,8 +2068,8 @@ _ecoda_expand_output_selection() {
 
 _ecoda_validate_output_owner_availability() {
   local run_id="$1" path owner_dir state owner_run
+  ecoda_stage5_validate_identity || return 1
   _ecoda_init_output_arrays
-
   if [[ ${#ECODA_OUTPUT_PATHS[@]} -gt 0 ]]; then
     for path in "${ECODA_OUTPUT_PATHS[@]}"; do
       owner_dir="$(ecoda_artifact_owner_dir "${path}")" || return 1

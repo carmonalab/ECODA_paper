@@ -1919,16 +1919,24 @@ stage5_validate_corrected_source_contracts ||
 
 benchmark_artifacts_for() {
   local ds="$1" view="$2" label="$3"
+  local pass="${PASS_ARG:-${ANALYSIS_PASS:-}}"
   local stem batch_stem suffix n
   ARTIFACT_PATHS=()
-  if [[ -n "${PASS_ARG}" ]]; then
-    batch_stem="$(ecoda_stage5_batch_stem "${ds}" "${PASS_ARG}" "${ANALYSIS_VARIANT:-}")" ||
+  ecoda_stage5_validate_identity "${pass}" || return 1
+  if [[ "${ANALYSIS_VARIANT:-}" == final &&
+        "${view}" != "batch_effect_uncorrected" ]]; then
+    echo "ERROR: final Stage 5 artifacts require the uncorrected batch-effect view." >&2
+    return 1
+  fi
+  ecoda_stage5_validate_final_method "${label}" || return 1
+  if [[ -n "${pass}" ]]; then
+    batch_stem="$(ecoda_stage5_batch_stem "${ds}" "${pass}" "${ANALYSIS_VARIANT:-}")" ||
       return 1
   else
     batch_stem="${ds}"
   fi
   if [[ "${label}" == prepare_pseudobulk ]]; then
-    if [[ -n "${PASS_ARG}" ]]; then
+    if [[ -n "${pass}" ]]; then
       ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/pseudobulks/${batch_stem}_pseudobulk_hvg2000.rds")
     else
       for stem in schvg2000 hvg2000 hvg500 hvg2000_bl hvg1000 hvg3000; do
@@ -1939,7 +1947,7 @@ benchmark_artifacts_for() {
   fi
   case "${label}" in
     mrvi)
-      if [[ -n "${PASS_ARG}" ]]; then
+      if [[ -n "${pass}" ]]; then
         ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${batch_stem}_hvg2000_highres_mrvi_dists.feather")
       else
         for n in 1000 2000 3000; do
@@ -1954,7 +1962,7 @@ benchmark_artifacts_for() {
       ;;
     pilot|qot)
       suffix="${label}"
-      if [[ -n "${PASS_ARG}" ]]; then
+      if [[ -n "${pass}" ]]; then
         ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${batch_stem}_hvg2000_highres_${suffix}_dists.feather")
       else
         ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg2000_lowres_${suffix}_dists.feather")
@@ -1964,7 +1972,7 @@ benchmark_artifacts_for() {
       fi
       ;;
     pilotgm)
-      [[ -z "${PASS_ARG}" ]] || {
+      [[ -z "${pass}" ]] || {
         echo "ERROR: PILOT-GM-VAE is not scheduled for batch-effect analyses." >&2
         return 1
       }
@@ -1993,12 +2001,14 @@ RDS_PREFLIGHT_DONE=""
 RDS_PREFLIGHT_FAILED=""
 
 benchmark_rds_group_valid() {
-  local ds="$1" view="$2" key="${PASS_ARG:-ordinary}/${ds}/${view}"
+  local ds="$1" view="$2" pass="${PASS_ARG:-${ANALYSIS_PASS:-}}"
+  local key="${pass:-ordinary}/${ds}/${view}"
   local safe list list_tmp label path metadata group_rc
   local selected_labels="" seen_label=""
   local has_rds=0
+  ecoda_stage5_validate_identity "${pass}" || return 1
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 2
-  [[ "${PASS_ARG:-}" == corrected ]] && return 2
+  [[ "${pass:-}" == corrected ]] && return 2
   case " ${RDS_PREFLIGHT_DONE} " in *" ${key} "*) return 0 ;; esac
   case " ${RDS_PREFLIGHT_FAILED} " in *" ${key} "*) return 1 ;; esac
   safe="$(_ecoda_safe_component "${key}")"
@@ -2047,7 +2057,9 @@ benchmark_rds_group_valid() {
     --input-root "${HPC_SCRATCH_DIR}")
   [[ -s "${SOURCE_IDENTITY}" ]] &&
     rds_args+=(--source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
-  [[ -n "${PASS_ARG}" ]] && rds_args+=(--batch-pass "${PASS_ARG}")
+  [[ -n "${pass}" ]] && rds_args+=(--batch-pass "${pass}")
+  [[ "${ANALYSIS_VARIANT:-}" == final ]] &&
+    rds_args+=(--analysis-variant final)
   set +e
   ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
     "${rds_args[@]}" >/dev/null 2>&1
@@ -2064,6 +2076,30 @@ benchmark_rds_group_valid() {
 
 stage5_validate_reusable_artifact() {
   local path="$1" producer="$2" record="" recorded_producer
+  local owner_run owner_stage owner_state
+  if [[ "${ANALYSIS_VARIANT:-}" == "final" ]]; then
+    # Final artifacts are reusable across runs only after the immutable path,
+    # terminal global owner, and producer-run record all agree.  A record in
+    # the current recovery run is not required; the owner identifies the
+    # prior terminal producer run.
+    ecoda_stage5_validate_identity "${PASS_ARG:-${ANALYSIS_PASS:-}}" || return 1
+    ecoda_stage5_validate_artifact_path "${path}" || return 1
+    ecoda_require_input_ownership "${path}" "${RUN_ID}" || return 1
+    ecoda_artifact_owner_validate "${path}" >/dev/null 2>&1 || return 1
+    owner_state="${ECODA_ARTIFACT_OWNER_STATE:-}"
+    owner_stage="${ECODA_ARTIFACT_OWNER_STAGE:-}"
+    [[ "${owner_state}" == "OK" && "${owner_stage}" == "stage5" ]] || return 1
+    owner_run="${ECODA_ARTIFACT_OWNER_RUN:-}"
+    ecoda_validate_run_id "${owner_run}" || return 1
+    record="$(ecoda_artifact_record_path "${path}" "${owner_run}" 2>/dev/null || true)"
+    [[ -n "${record}" && -f "${record}" && ! -L "${record}" ]] || return 1
+    recorded_producer="$(stage5_recorded_producer "${record}")" || return 1
+    stage5_producer_allowed "${path}" "${producer}" "${recorded_producer}" ||
+      return 1
+    ecoda_validate_artifact_record \
+      "${path}" "${recorded_producer}" "${owner_run}" || return 1
+    return 0
+  fi
   # A checksum/record is not enough to declare a reusable artifact: a live
   # writer from another run may be mutating the same path.  Missing owners
   # remain valid for legacy baseline artifacts.
@@ -2086,7 +2122,6 @@ stage5_validate_reusable_artifact() {
     return 1
   fi
   ecoda_validate_checksum "${path}"
-
 }
 stage5_prepare_pseudobulk_valid() {
   local ds="$1" view="$2" path owner_dir producer_run record recorded_producer expected_cache
@@ -2440,6 +2475,7 @@ stage5_selection_has_pending_rows() {
 
 stage5_variant_metadata() {
   if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
+    ecoda_stage5_validate_identity "${PASS_ARG:-${ANALYSIS_PASS:-}}" || return 1
     printf 'ANALYSIS_VARIANT=final\nANALYSIS_ROOT=%s\nANALYSIS_NAS_ROOT=%s\nANALYSIS_PASS=uncorrected\nANALYSIS_LOG_PREFIX=execution_times_batch_effect_uncorrected_final_\nMETADATA_EXPORT_MANIFEST=%s\nMETADATA_EXPORT_STATUS=%s\n' \
       "${ANALYSIS_ROOT}" "${ANALYSIS_NAS_ROOT}" \
       "${ECODA_RUN_ROOT}/manifests/metadata_export.tsv" \
@@ -2458,6 +2494,7 @@ stage5_export_final_sample_metadata() {
   local ds view input output safe state status_task pending_count=0 pending_index=0
   local row extra seen=""
   [[ "${ANALYSIS_VARIANT:-}" == final ]] || return 0
+  ecoda_stage5_validate_identity "${PASS_ARG:-${ANALYSIS_PASS:-}}" || return 1
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
   exporter="$(stage5_source_script src/utils/py/export_h5ad_sample_metadata.py)"
   stage5_require_source_script "${exporter}" || return 1
@@ -2812,10 +2849,8 @@ fi
 
 
 if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
-  [[ "${PASS_ARG:-}" == uncorrected &&
-     "${ANALYSIS_ROOT}" == "${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final" &&
-     "${ANALYSIS_NAS_ROOT}" == "${NAS_TARGET_DIR}/batch_effect/uncorrected_final" ]] ||
-    stage5_abort "final Stage 5 analysis roots are not bound to uncorrected_final"
+  ecoda_stage5_validate_identity "${PASS_ARG:-${ANALYSIS_PASS:-}}" ||
+    stage5_abort "final Stage 5 analysis identity is not bound to uncorrected_final"
   export ANALYSIS_PASS=uncorrected ANALYSIS_HIGH_RES_ONLY=1
 elif [[ -n "${PASS_ARG}" ]]; then
   ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${PASS_ARG}"
@@ -2907,6 +2942,9 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
       worker_env="${worker_env},ANALYSIS_PASS=${PASS_ARG}"
       [[ -n "${ANALYSIS_VARIANT:-}" ]] &&
         worker_env="${worker_env},ANALYSIS_VARIANT=${ANALYSIS_VARIANT}"
+      if [[ "${ANALYSIS_VARIANT:-}" == "final" ]]; then
+        worker_env="${worker_env},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT},ANALYSIS_LOG_PREFIX=execution_times_batch_effect_uncorrected_final_"
+      fi
       [[ "${PASS_ARG}" == corrected ]] &&
         worker_env="${worker_env},ECODA_BATCH_CONTRACT_MANIFEST=${ECODA_BATCH_CONTRACT_MANIFEST}"
     else

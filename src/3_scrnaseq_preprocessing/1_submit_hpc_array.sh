@@ -18,6 +18,7 @@ VIEWS_SET=0
 SELECTION_FILE_ARG=""
 SELECTION_FILE_SET=0
 EXACT_BATCH_SELECTION=0
+COMBINED_BATCH_SELECTION=0
 FORCE_ARG=0
 SYNC_ONLY_RUN=""
 SYNC_ONLY_SET=0
@@ -26,7 +27,10 @@ MAX_MEMORY="500G"
 PARTITION="${SLURM_PARTITION}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 RUNTIME_EXPORT=""
-STAGE3_FINAL_TARGET_SELECTION=0
+STAGE3_SELECTION_CLASSIFICATION=""
+STAGE3_UNCORRECTED_BATCH_SELECTION=0
+STAGE3_COMBINED_BATCH_SELECTION=0
+STAGE3_CORRECTED_SELECTION=0
 STAGE3_COVID_PREFLIGHT_REQUIRED=0
 STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED="${STAGE3_COVID_PREFLIGHT_ROOT:-${ECODA_COVID_PREFLIGHT_ROOT:-}}"
 STAGE3_COVID_PREFLIGHT_ROOT=""
@@ -34,16 +38,20 @@ STAGE3_COVID_PREFLIGHT_ROOT=""
 usage() {
   cat <<'EOF'
 Usage: 1_submit_hpc_array.sh [--datasets LIST] [--views LIST]
-       [--selection-file TSV] [--exact-batch-selection] [--force]
+       [--selection-file TSV] [--combined-batch-selection]
+       [--exact-batch-selection] [--force]
        [--sync-only RUN_ID] [--mem VALUE] [--max-mem VALUE]
        [--partition NAME] [--throttle N]
 
 Each manifest row is DATASET<TAB>VIEW. --ds_name and --view remain accepted
 as compatibility aliases for one dataset/view selection. Exact batch mode
-requires the immutable twelve-row uncorrected selection file. A headerless
-eight-row manifest is reserved for the approved final Stage 3 target matrix.
+requires the immutable twelve-row uncorrected selection file. Combined batch
+mode requires the four target uncorrected rows followed by every configured
+non-underscore use_for_batch_effect dataset in corrected mode, in config order.
+An all-corrected manifest remains a separate corrected-only release path.
 EOF
 }
+
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -57,6 +65,7 @@ while [[ $# -gt 0 ]]; do
     --view=*) VIEWS_ARG="${1#*=}"; VIEWS_SET=1; shift ;;
     --selection-file) SELECTION_FILE_ARG="${2:-}"; SELECTION_FILE_SET=1; shift 2 ;;
     --selection-file=*) SELECTION_FILE_ARG="${1#*=}"; SELECTION_FILE_SET=1; shift ;;
+    --combined-batch-selection) COMBINED_BATCH_SELECTION=1; shift ;;
     --exact-batch-selection) EXACT_BATCH_SELECTION=1; shift ;;
     --force) FORCE_ARG=1; shift ;;
     --sync-only) SYNC_ONLY_RUN="${2:-}"; SYNC_ONLY_SET=1; shift 2 ;;
@@ -96,6 +105,31 @@ if [[ ${SYNC_ONLY_SET} -eq 1 && -z "${SYNC_ONLY_RUN}" ]]; then
 fi
 if ! command -v jq >/dev/null 2>&1; then
   echo "ERROR: jq is required for Stage 3 selection." >&2
+  exit 1
+fi
+if [[ "${ECODA_SOURCE_ROOT:-}" = */tree &&
+      -f "${ECODA_SOURCE_ROOT}/datasets.json" &&
+      ! -L "${ECODA_SOURCE_ROOT}/datasets.json" &&
+      -r "${ECODA_SOURCE_ROOT}/datasets.json" ]]; then
+  # Selection validation must use the immutable snapshot config whenever the
+  # durable wrapper has already bound one; the run-bound loader repeats this
+  # check after the manifest is copied into the run root.
+  DATASETS_JSON_FILE="${ECODA_SOURCE_ROOT}/datasets.json"
+  export DATASETS_JSON_FILE
+fi
+if [[ ${COMBINED_BATCH_SELECTION} -eq 1 && ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
+  echo "ERROR: --combined-batch-selection cannot be combined with --exact-batch-selection." >&2
+  exit 1
+fi
+if [[ ${COMBINED_BATCH_SELECTION} -eq 1 &&
+      ${SYNC_ONLY_SET} -eq 0 &&
+      ${SELECTION_FILE_SET} -eq 0 ]]; then
+  echo "ERROR: --combined-batch-selection requires --selection-file." >&2
+  exit 1
+fi
+if [[ ${COMBINED_BATCH_SELECTION} -eq 1 &&
+      (${DATASETS_SET} -eq 1 || ${VIEWS_SET} -eq 1) ]]; then
+  echo "ERROR: --combined-batch-selection cannot combine --datasets/--views." >&2
   exit 1
 fi
 
@@ -317,62 +351,275 @@ validate_external_selection() {
   done < "${selection}"
 }
 
-stage3_validate_final_target_selection() {
-  local selection="${1:-}" count=0 ds view expected_ds expected_view line
+stage3_corrected_dataset_list() {
+  local config="${1:-${DATASETS_JSON_FILE:-}}"
+  [[ -r "${config}" && ! -L "${config}" ]] || return 1
+  jq -r -e '
+    if type != "object" then
+      error("datasets configuration must be a JSON object")
+    elif any(to_entries[]; (.value | type) != "object") then
+      error("dataset entries must be JSON objects")
+    else
+      to_entries[]
+      | select((.key | startswith("_") | not) and
+               (.value.use_for_batch_effect == true))
+      | .key
+    end
+  ' "${config}"
+}
+
+stage3_validate_selection_row() {
+  local ds="$1" view="$2"
+  [[ -n "${ds}" && -n "${view}" &&
+     "${ds}" != *$'\t'* && "${ds}" != *$'\n'* &&
+     "${view}" != *$'\t'* && "${view}" != *$'\n'* ]] || return 1
+  ecoda_dataset_exists "${ds}" || return 1
+  ecoda_view_exists "${ds}" "${view}" || return 1
+  [[ -n "$(ecoda_view_input_name "${ds}" "${view}")" &&
+     -n "$(ecoda_view_output_name "${ds}" "${view}")" ]] || return 1
+}
+
+stage3_validate_configured_corrected_row() {
+  local config="${1:-${DATASETS_JSON_FILE:-}}" ds="${2:-}" view="${3:-}"
+  local sample_col label_col input_name output_name
+  [[ "${view}" == "batch_effect_corrected" && "${ds}" != _* ]] || {
+    echo "ERROR: corrected Stage 3 row is not a production corrected view: ${ds}/${view}" >&2
+    return 1
+  }
+  stage3_validate_selection_row "${ds}" "${view}" || return 1
+  jq -e --arg ds "${ds}" --arg view "${view}" '
+    .[$ds] as $entry
+    | (($entry.columns // {}) * ($entry.views[$view].columns // {})) as $columns
+    | ($columns.sample | type) == "string"
+    and (($columns.sample | test("[^[:space:]]")))
+    and (($columns.label | type) == "string")
+    and (($columns.label | test("[^[:space:]]")))
+    and ($columns.sample != $columns.label)
+    and (($entry.use_for_batch_effect // false) == true)
+    and (($entry.views[$view].input_file_name // $entry.views[$view].input_file)
+         | type) == "string"
+    and (($entry.views[$view].output_file_name // $entry.views[$view].output_file)
+         | type) == "string"
+  ' "${config}" >/dev/null || {
+    echo "ERROR: corrected Stage 3 row lacks a complete configured sample/label/input/output contract: ${ds}/${view}" >&2
+    return 1
+  }
+  ecoda_validate_corrected_batch_columns "${config}" "${ds}" "${view}" || return 1
+  sample_col="$(jq -r --arg ds "${ds}" --arg view "${view}" \
+    '((.[$ds].columns // {}) * (.[$ds].views[$view].columns // {})).sample' \
+    "${config}")" || return 1
+  label_col="$(jq -r --arg ds "${ds}" --arg view "${view}" \
+    '((.[$ds].columns // {}) * (.[$ds].views[$view].columns // {})).label' \
+    "${config}")" || return 1
+  input_name="$(jq -r --arg ds "${ds}" --arg view "${view}" \
+    '.[$ds].views[$view].input_file_name // .[$ds].views[$view].input_file // empty' \
+    "${config}")" || return 1
+  output_name="$(jq -r --arg ds "${ds}" --arg view "${view}" \
+    '.[$ds].views[$view].output_file_name // .[$ds].views[$view].output_file // empty' \
+    "${config}")" || return 1
+  [[ -n "${sample_col}" && -n "${label_col}" &&
+     -n "${input_name}" && -n "${output_name}" ]]
+}
+
+stage3_selection_is_uncorrected_four_candidate() {
+  local selection="${1:-}" ds view extra
+  local count=0
   local expected_datasets=(
     Covid19_PBMC
-    Covid19_PBMC
     Diabetes
-    Diabetes
-    Joanito
     Joanito
     Lung
+  )
+  [[ -r "${selection}" ]] || return 1
+  ecoda_validate_manifest "${selection}" 2 || return 1
+  while IFS=$'\t' read -r ds view extra; do
+    count=$((count + 1))
+    [[ ${count} -le 4 &&
+       "${ds}" == "${expected_datasets[$((count - 1))]}" &&
+       "${view}" == "batch_effect_uncorrected" &&
+       -z "${extra}" ]] || return 1
+  done < "${selection}"
+  [[ ${count} -eq 4 ]]
+}
+
+stage3_validate_uncorrected_four_selection() {
+  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
+  local ds view count=0
+  [[ -r "${selection}" && -r "${config}" && ! -L "${config}" ]] || return 1
+  stage3_selection_is_uncorrected_four_candidate "${selection}" || return 1
+  while IFS=$'\t' read -r ds view; do
+    stage3_validate_selection_row "${ds}" "${view}" || return 1
+    jq -e --arg ds "${ds}" \
+      '.[$ds].use_for_batch_effect == true' "${config}" >/dev/null || {
+      echo "ERROR: uncorrected Stage 3 target row is not batch-enabled: ${ds}" >&2
+      return 1
+    }
+    count=$((count + 1))
+  done < "${selection}"
+  [[ ${count} -eq 4 ]] || return 1
+  STAGE3_SELECTION_CLASSIFICATION="uncorrected_four"
+  STAGE3_UNCORRECTED_BATCH_SELECTION=1
+  STAGE3_COMBINED_BATCH_SELECTION=0
+  STAGE3_CORRECTED_SELECTION=0
+}
+
+stage3_validate_combined_batch_selection() {
+  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
+  local corrected_rows corrected_count expected_count count=0
+  local ds view expected_ds expected_view line corrected_index
+  local expected_datasets=(
+    Covid19_PBMC
+    Diabetes
+    Joanito
     Lung
   )
   local expected_views=(
     batch_effect_uncorrected
-    batch_effect_corrected
     batch_effect_uncorrected
-    batch_effect_corrected
     batch_effect_uncorrected
-    batch_effect_corrected
     batch_effect_uncorrected
-    batch_effect_corrected
   )
   [[ -r "${selection}" ]] || return 1
   ecoda_validate_manifest "${selection}" 2 || return 1
+  corrected_rows="$(stage3_corrected_dataset_list "${config}")" || return 1
+  corrected_count="$(printf '%s\n' "${corrected_rows}" | awk 'NF {count++} END {print count + 0}')"
+  [[ "${corrected_count}" =~ ^[1-9][0-9]*$ ]] || {
+    echo "ERROR: configured corrected Stage 3 selection is empty." >&2
+    return 1
+  }
+  expected_count=$((4 + corrected_count))
   while IFS= read -r line || [[ -n "${line}" ]]; do
     IFS=$'\t' read -r ds view <<< "${line}"
     count=$((count + 1))
-    expected_ds="${expected_datasets[$((count - 1))]:-}"
-    expected_view="${expected_views[$((count - 1))]:-}"
-    [[ "${ds}" == "${expected_ds}" && "${view}" == "${expected_view}" ]] || {
-      echo "ERROR: eight-row Stage 3 selection row ${count} is not an approved final target." >&2
-      return 1
-    }
+    if [[ ${count} -le 4 ]]; then
+      expected_ds="${expected_datasets[$((count - 1))]}"
+      expected_view="${expected_views[$((count - 1))]}"
+      [[ "${ds}" == "${expected_ds}" && "${view}" == "${expected_view}" ]] || {
+        echo "ERROR: combined Stage 3 row ${count} must be ${expected_ds}/${expected_view}." >&2
+        return 1
+      }
+      stage3_validate_selection_row "${ds}" "${view}" || {
+        echo "ERROR: combined Stage 3 uncorrected row is not configured: ${ds}/${view}" >&2
+        return 1
+      }
+      jq -e --arg ds "${ds}" '.[$ds].use_for_batch_effect == true' \
+        "${config}" >/dev/null || {
+        echo "ERROR: combined Stage 3 uncorrected row is not batch-enabled: ${ds}" >&2
+        return 1
+      }
+    else
+      corrected_index=$((count - 4))
+      expected_ds="$(printf '%s\n' "${corrected_rows}" |
+        sed -n "${corrected_index}p")"
+      [[ -n "${expected_ds}" &&
+         "${ds}" == "${expected_ds}" &&
+         "${view}" == "batch_effect_corrected" ]] || {
+        echo "ERROR: combined Stage 3 corrected row ${corrected_index} is stale or out of order." >&2
+        return 1
+      }
+      stage3_validate_configured_corrected_row \
+        "${config}" "${ds}" "${view}" || return 1
+    fi
   done < "${selection}"
-  [[ ${count} -eq 8 ]] || {
-    echo "ERROR: final Stage 3 target selection requires exactly eight rows." >&2
+  [[ ${count} -eq ${expected_count} ]] || {
+    echo "ERROR: combined Stage 3 selection requires exactly four uncorrected rows followed by ${corrected_count} current-config corrected rows." >&2
     return 1
   }
-  STAGE3_FINAL_TARGET_SELECTION=1
+  STAGE3_SELECTION_CLASSIFICATION="combined"
+  STAGE3_UNCORRECTED_BATCH_SELECTION=0
+  STAGE3_COMBINED_BATCH_SELECTION=1
+  STAGE3_CORRECTED_SELECTION=1
 }
 
-stage3_selection_is_final_candidate() {
-  local selection="${1:-}" ds view extra line target=0 non_target=0
+stage3_selection_is_combined_candidate() {
+  local selection="${1:-}" ds view extra line expected_ds expected_view
+  local total=0 uncorrected=0 corrected=0 other=0 prefix_ok=1
+  local expected_datasets=(
+    Covid19_PBMC
+    Diabetes
+    Joanito
+    Lung
+  )
   [[ -r "${selection}" ]] || return 1
   while IFS= read -r line || [[ -n "${line}" ]]; do
     IFS=$'\t' read -r ds view extra <<< "${line}"
     [[ -n "${ds}" && -n "${view}" && -z "${extra}" ]] || return 1
-    case "${ds}" in
-      Covid19_PBMC|Diabetes|Joanito|Lung) target=1 ;;
-      *) non_target=1 ;;
+    total=$((total + 1))
+    if [[ ${total} -le 4 ]]; then
+      expected_ds="${expected_datasets[$((total - 1))]}"
+      expected_view="batch_effect_uncorrected"
+      [[ "${ds}" == "${expected_ds}" &&
+         "${view}" == "${expected_view}" ]] || prefix_ok=0
+    fi
+    case "${view}" in
+      batch_effect_uncorrected) uncorrected=$((uncorrected + 1)) ;;
+      batch_effect_corrected) corrected=$((corrected + 1)) ;;
+      *) other=1 ;;
     esac
   done < "${selection}"
-  [[ ${target} -eq 1 && ${non_target} -eq 0 ]]
+  if [[ ${total} -gt 4 && ${prefix_ok} -eq 1 && ${corrected} -gt 0 ]]; then
+    return 0
+  fi
+  [[ ${total} -gt 0 && ${uncorrected} -gt 0 &&
+     ${corrected} -gt 0 && ${other} -eq 0 ]]
 }
+
+stage3_selection_contains_corrected() {
+  local selection="${1:-}" ds view extra
+  [[ -r "${selection}" ]] || return 1
+  while IFS=$'\t' read -r ds view extra; do
+    [[ -n "${ds}" && -n "${view}" && -z "${extra}" ]] || return 1
+    [[ "${view}" == "batch_effect_corrected" ]] && return 0
+  done < "${selection}"
+  return 1
+}
+
+stage3_validate_corrected_selection() {
+  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
+  local ds view count=0
+  [[ -r "${selection}" ]] || return 1
+  ecoda_validate_manifest "${selection}" 2 || return 1
+  while IFS=$'\t' read -r ds view; do
+    [[ "${view}" == "batch_effect_corrected" ]] || {
+      echo "ERROR: corrected-only Stage 3 selection contains a non-corrected row: ${ds}/${view}" >&2
+      return 1
+    }
+    stage3_validate_configured_corrected_row \
+      "${config}" "${ds}" "${view}" || return 1
+    count=$((count + 1))
+  done < "${selection}"
+  [[ ${count} -gt 0 ]] || return 1
+  STAGE3_SELECTION_CLASSIFICATION="corrected_only"
+  STAGE3_UNCORRECTED_BATCH_SELECTION=0
+  STAGE3_COMBINED_BATCH_SELECTION=0
+  STAGE3_CORRECTED_SELECTION=1
+}
+stage3_classify_selection() {
+  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
+  stage3_reset_selection_classification
+  if [[ ${COMBINED_BATCH_SELECTION} -eq 1 ]]; then
+    stage3_validate_combined_batch_selection "${selection}" "${config}" || return 1
+  elif stage3_selection_is_uncorrected_four_candidate "${selection}"; then
+    stage3_validate_uncorrected_four_selection "${selection}" "${config}" || return 1
+  elif stage3_selection_is_combined_candidate "${selection}"; then
+    stage3_validate_combined_batch_selection "${selection}" "${config}" || {
+      echo "ERROR: Stage 3 mixed selection is not the approved four-row uncorrected prefix plus every current-config corrected row." >&2
+      return 1
+    }
+  elif stage3_selection_contains_corrected "${selection}"; then
+    stage3_validate_corrected_selection "${selection}" "${config}" || return 1
+  fi
+}
+
+stage3_reset_selection_classification() {
+  STAGE3_SELECTION_CLASSIFICATION=""
+  STAGE3_UNCORRECTED_BATCH_SELECTION=0
+  STAGE3_COMBINED_BATCH_SELECTION=0
+  STAGE3_CORRECTED_SELECTION=0
+}
+
 stage3_validate_covid_obs_report() {
-  local view="$1" report expected_rule actual_rule input_path actual_md5 actual_size
+  local view="$1" report expected_rule actual_rule input_path configured_input_path actual_md5 actual_size
   local preflight_root="${STAGE3_COVID_PREFLIGHT_ROOT:-}"
   local config="${ECODA_SOURCE_ROOT:-}/datasets.json"
   [[ "${ECODA_RUN_ROOT:-}" = /* && -d "${ECODA_RUN_ROOT}" &&
@@ -415,8 +662,16 @@ stage3_validate_covid_obs_report() {
     return 1
   }
   input_path="${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
-  input_path="$(realpath -e "${input_path}" 2>/dev/null || true)"
-  [[ -n "${input_path}" ]] || return 1
+  configured_input_path="${input_path}"
+  [[ -f "${configured_input_path}" && ! -L "${configured_input_path}" &&
+     -r "${configured_input_path}" ]] || {
+    echo "ERROR: Covid direct H5AD input is missing or unsafe: ${configured_input_path}" >&2
+    return 1
+  }
+  input_path="$(ecoda_realpath_existing "${configured_input_path}")" || {
+    echo "ERROR: Covid direct H5AD input could not be canonicalized: ${configured_input_path}" >&2
+    return 1
+  }
   [[ -f "${input_path}" && ! -L "${input_path}" && -r "${input_path}" ]] || {
     echo "ERROR: Covid direct H5AD input is missing or unsafe: ${input_path}" >&2
     return 1
@@ -514,7 +769,10 @@ stage3_run_covid_obs_preflight() {
   local view path status safe state status_run status_dataset status_view
   local status_task status_path preflight_script preflight_id preflight_rc
   local status_count=0
-  [[ ${STAGE3_FINAL_TARGET_SELECTION} -eq 1 ]] || return 0
+  case "${STAGE3_SELECTION_CLASSIFICATION}" in
+    uncorrected_four|combined) ;;
+    *) return 0 ;;
+  esac
   stage3_selection_contains_covid "${selection}" || return 0
   STAGE3_COVID_PREFLIGHT_REQUIRED=1
   if [[ -n "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" &&
@@ -584,6 +842,169 @@ stage3_run_covid_obs_preflight() {
   stage3_validate_covid_obs_reports || return 1
   stage3_install_covid_obs_evidence || return 1
 }
+
+stage3_validate_corrected_source_release() {
+  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
+  local manifest="${ECODA_RUN_ROOT}/manifests/corrected_batch_preflight.tsv"
+  local manifest_tmp="${manifest}.build.$$"
+  local status_dir="${ECODA_RUN_ROOT}/status/corrected_batch_preflight"
+  local ds view input_name source_path cache_path report report_tmp safe
+  local sample_col label_col batch_json status
+  [[ ${STAGE3_CORRECTED_SELECTION} -eq 1 ]] || return 0
+  [[ -r "${selection}" && "${ECODA_RUN_ROOT:-}" = /* &&
+     -d "${ECODA_RUN_ROOT}" && ! -L "${ECODA_RUN_ROOT}" ]] || return 1
+  mkdir -p "${status_dir}" || return 1
+  [[ ! -L "${status_dir}" ]] || return 1
+  ecoda_validate_run_owned_path "${status_dir}" "${ECODA_RUN_ROOT}" || return 1
+  : > "${manifest_tmp}" || return 1
+  while IFS=$'\t' read -r ds view; do
+    [[ "${view}" == "batch_effect_corrected" ]] || continue
+    stage3_validate_configured_corrected_row \
+      "${config}" "${ds}" "${view}" || return 1
+    sample_col="$(jq -r --arg ds "${ds}" --arg view "${view}" \
+      '((.[$ds].columns // {}) * (.[$ds].views[$view].columns // {})).sample' \
+      "${config}")" || return 1
+    label_col="$(jq -r --arg ds "${ds}" --arg view "${view}" \
+      '((.[$ds].columns // {}) * (.[$ds].views[$view].columns // {})).label' \
+      "${config}")" || return 1
+    batch_json="$(jq -c --arg ds "${ds}" --arg view "${view}" \
+      '((.[$ds].columns // {}) * (.[$ds].views[$view].columns // {})).batch' \
+      "${config}")" || return 1
+    input_name="$(jq -r --arg ds "${ds}" --arg view "${view}" \
+      '.[$ds].views[$view].input_file_name // .[$ds].views[$view].input_file // empty' \
+      "${config}")" || return 1
+    case "${input_name}" in
+      /*) source_path="${input_name}" ;;
+      *) source_path="${HPC_SCRATCH_DIR}/${ds}/data/${input_name}" ;;
+    esac
+    report="${ECODA_RUN_ROOT}/manifests/corrected_batch_preflight/$(
+      _ecoda_safe_component "${ds}__${view}"
+    ).json"
+    mkdir -p "$(dirname "${report}")" || return 1
+    report_tmp="${report}.build.$$"
+    rm -f "${report_tmp}"
+    status=""
+    if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" == "1" ]]; then
+      status="CONFIG_ONLY_TEST"
+      jq -n --arg dataset "${ds}" --arg view "${view}" \
+        --arg source "${source_path}" --arg sample "${sample_col}" \
+        --arg label "${label_col}" --arg status "${status}" \
+        --argjson batch "${batch_json}" \
+        '{dataset:$dataset,view:$view,status:$status,source_path:$source,
+          sample_column:$sample,label_column:$label,batch_keys:$batch}' \
+        > "${report_tmp}" || return 1
+    else
+      [[ -f "${source_path}" && ! -L "${source_path}" &&
+         -r "${source_path}" ]] || {
+        echo "ERROR: corrected Stage 3 source input is missing or unsafe: ${source_path}" >&2
+        return 1
+      }
+      if [[ "${source_path}" == *.rds ]]; then
+        cache_path="${HPC_SCRATCH_DIR}/${ds}/output/$(basename "${input_name}" .rds)_raw.h5ad"
+        [[ -f "${cache_path}" && ! -L "${cache_path}" &&
+           -r "${cache_path}" ]] || {
+          echo "ERROR: corrected Stage 3 source metadata cache is missing; expected bound raw H5AD cache: ${cache_path}" >&2
+          return 1
+        }
+        source_path="${cache_path}"
+        status="SOURCE_OBS_VALIDATED_CACHE"
+      fi
+      if [[ "${source_path}" == *.h5ad ]]; then
+        if [[ -z "${status}" ]]; then
+          status="SOURCE_OBS_VALIDATED"
+        fi
+        "${PYTHON_BIN}" -c '
+import json
+import sys
+from src.utils.py.h5ad_pseudobulk import validate_h5ad_corrected_batch_metadata
+result = validate_h5ad_corrected_batch_metadata(
+    sys.argv[1],
+    json.loads(sys.argv[2]),
+    sample_col=sys.argv[3],
+    biological_column=sys.argv[4],
+    method_id="preprocess",
+    model_id="hvg_composite_v1",
+)
+print(json.dumps(result, sort_keys=True))
+' "${source_path}" "${batch_json}" "${sample_col}" "${label_col}" \
+          > "${report_tmp}" || {
+          rm -f "${report_tmp}"
+          echo "ERROR: corrected Stage 3 source metadata preflight failed: ${ds}/${view}" >&2
+          return 1
+        }
+        [[ -s "${report_tmp}" ]] || return 1
+      else
+        echo "ERROR: corrected Stage 3 source metadata validation requires an H5AD or bound raw H5AD cache: ${ds}/${view} (${source_path})" >&2
+        return 1
+      fi
+    fi
+    mkdir -p "$(dirname "${report}")" || return 1
+    mv -f "${report_tmp}" "${report}" || return 1
+    ecoda_validate_run_owned_path "${report}" "${ECODA_RUN_ROOT}" || return 1
+    ecoda_write_checksum "${report}" || return 1
+    printf '%s\t%s\t%s\t%s\t%s\n' "${ds}" "${view}" "${status}" \
+      "${source_path}" "${report}" >> "${manifest_tmp}" || return 1
+    safe="$(_ecoda_safe_component "${ds}__${view}")"
+    ecoda_atomic_write "${status_dir}/${safe}.status" \
+      "STATE=OK\nRUN_ID=${ECODA_RUN_ID}\nDATASET=${ds}\nVIEW=${view}\nSTATUS=${status}\nREPORT=${report}\n" ||
+      return 1
+  done < "${selection}"
+  ecoda_atomic_install_manifest "${manifest_tmp}" "${manifest}" 5 || {
+    rm -f "${manifest_tmp}"
+    return 1
+  }
+  rm -f "${manifest_tmp}"
+  ecoda_write_checksum "${manifest}" || return 1
+  ecoda_validate_manifest "${manifest}" 5
+}
+stage3_validate_corrected_source_evidence() {
+  local selection="${1:-}"
+  local manifest="${ECODA_RUN_ROOT}/manifests/corrected_batch_preflight.tsv"
+  local status_dir="${ECODA_RUN_ROOT}/status/corrected_batch_preflight"
+  local ds view extra row_ds row_view row_status row_source row_report
+  local safe status expected_count=0 evidence_count=0
+  [[ ${STAGE3_CORRECTED_SELECTION} -eq 1 ]] || return 0
+  [[ -r "${selection}" && -f "${manifest}" && ! -L "${manifest}" &&
+     -r "${manifest}" && -s "${manifest}" ]] || return 1
+  ecoda_validate_run_owned_path "${manifest}" "${ECODA_RUN_ROOT}" || return 1
+  ecoda_validate_checksum "${manifest}" || return 1
+  ecoda_validate_manifest "${manifest}" 5 || return 1
+  [[ -d "${status_dir}" && ! -L "${status_dir}" ]] || return 1
+  ecoda_validate_run_owned_path "${status_dir}" "${ECODA_RUN_ROOT}" || return 1
+  while IFS=$'\t' read -r ds view extra; do
+    [[ -n "${ds}" && -n "${view}" && -z "${extra}" ]] || return 1
+    [[ "${view}" == "batch_effect_corrected" ]] || continue
+    expected_count=$((expected_count + 1))
+    row="$(sed -n "$((expected_count))p" "${manifest}")"
+    IFS=$'\t' read -r row_ds row_view row_status row_source row_report extra <<< "${row}"
+    [[ "${row_ds}" == "${ds}" && "${row_view}" == "${view}" &&
+       -n "${row_status}" && "${row_source}" = /* &&
+       -n "${row_report}" && -z "${extra}" ]] || return 1
+    case "${row_status}" in
+      CONFIG_ONLY_TEST|SOURCE_OBS_VALIDATED|SOURCE_OBS_VALIDATED_CACHE) ;;
+      *) return 1 ;;
+    esac
+    [[ -f "${row_report}" && ! -L "${row_report}" &&
+       -r "${row_report}" && -s "${row_report}" ]] || return 1
+    ecoda_validate_run_owned_path "${row_report}" "${ECODA_RUN_ROOT}" || return 1
+    ecoda_validate_checksum "${row_report}" || return 1
+    safe="$(_ecoda_safe_component "${ds}__${view}")"
+    status="${status_dir}/${safe}.status"
+    [[ -f "${status}" && ! -L "${status}" && -r "${status}" ]] || return 1
+    ecoda_validate_run_owned_path "${status}" "${ECODA_RUN_ROOT}" || return 1
+    [[ "$(sed -n 's/^STATE=//p' "${status}" | head -1)" == "OK" &&
+       "$(sed -n 's/^RUN_ID=//p' "${status}" | head -1)" == "${ECODA_RUN_ID}" &&
+       "$(sed -n 's/^DATASET=//p' "${status}" | head -1)" == "${ds}" &&
+       "$(sed -n 's/^VIEW=//p' "${status}" | head -1)" == "${view}" &&
+       "$(sed -n 's/^REPORT=//p' "${status}" | head -1)" == "${row_report}" ]] ||
+      return 1
+    evidence_count=$((evidence_count + 1))
+  done < "${selection}"
+  [[ ${evidence_count} -gt 0 && "${evidence_count}" == "$(
+    wc -l < "${manifest}" | tr -d '[:space:]'
+  )" ]]
+}
+
 
 validate_h5ad() {
   local ds="$1" view="$2" path="$3"
@@ -1011,17 +1432,21 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     stage3_abort "Stage 3 selection manifest is invalid"
   ecoda_validate_checksum "${MANIFEST}" ||
     stage3_abort "Stage 3 selection checksum is invalid"
-  if stage3_selection_is_final_candidate "${MANIFEST}"; then
-    stage3_validate_final_target_selection "${MANIFEST}" ||
-      stage3_abort "Stage 3 final target selection is not exactly eight rows"
-    if [[ -n "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" &&
-          "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" != "${ECODA_RUN_ROOT}/preflight" ]]; then
-      stage3_abort "Stage 3 sync-only Covid preflight root override is not run-bound"
-    fi
-    STAGE3_COVID_PREFLIGHT_ROOT="${ECODA_RUN_ROOT}/preflight"
-    stage3_validate_covid_obs_reports ||
-      stage3_abort "Stage 3 sync-only Covid obs preflight validation failed"
-  fi
+  stage3_classify_selection "${MANIFEST}" "${DATASETS_JSON_FILE}" ||
+    stage3_abort "Stage 3 selection classification is invalid"
+  case "${STAGE3_SELECTION_CLASSIFICATION}" in
+    uncorrected_four|combined)
+      if [[ -n "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" &&
+            "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" != "${ECODA_RUN_ROOT}/preflight" ]]; then
+        stage3_abort "Stage 3 sync-only Covid preflight root override is not run-bound"
+      fi
+      STAGE3_COVID_PREFLIGHT_ROOT="${ECODA_RUN_ROOT}/preflight"
+      stage3_validate_covid_obs_reports ||
+        stage3_abort "Stage 3 sync-only Covid obs preflight validation failed"
+      ;;
+  esac
+  stage3_validate_corrected_source_evidence "${MANIFEST}" ||
+    stage3_abort "Stage 3 corrected source preflight evidence is missing or invalid"
   [[ -r "${PENDING_MANIFEST}" ]] ||
     stage3_abort "Stage 3 pending manifest is missing"
   ecoda_validate_run_owned_path "${PENDING_MANIFEST}" "${ECODA_RUN_ROOT}" ||
@@ -1097,9 +1522,10 @@ if [[ -n "${SELECTION_FILE_ARG}" ]]; then
     echo "ERROR: Stage 3 selection file is malformed or semantically invalid." >&2
     exit 1
   }
-  if stage3_selection_is_final_candidate "${SELECTION_FILE_ARG}"; then
-    stage3_validate_final_target_selection "${SELECTION_FILE_ARG}" || exit 1
-  fi
+  stage3_classify_selection "${SELECTION_FILE_ARG}" "${DATASETS_JSON_FILE}" || {
+    echo "ERROR: Stage 3 selection classification is invalid." >&2
+    exit 1
+  }
 fi
 
 stage3_require_new_snapshot || {
@@ -1188,6 +1614,12 @@ stage3_load_bound_run ||
   stage3_abort "Stage 3 run-bound source/runtime identity is invalid"
 stage3_record_identity_metadata ||
   stage3_abort "failed to record Stage 3 source/runtime identity"
+stage3_classify_selection "${MANIFEST}" "${DATASETS_JSON_FILE}" ||
+  stage3_abort "Stage 3 selection classification is invalid"
+stage3_validate_corrected_source_release "${MANIFEST}" "${DATASETS_JSON_FILE}" ||
+  stage3_abort "Stage 3 corrected source metadata/configuration release failed"
+stage3_validate_corrected_source_evidence "${MANIFEST}" ||
+  stage3_abort "Stage 3 corrected source preflight evidence is missing or invalid"
 RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage3 0)" ||
   stage3_abort "Stage 3 runtime export construction failed"
 RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_RUNTIME_IDENTITY=${RUNTIME_IDENTITY},ECODA_SOURCE_MANIFEST_RUN=${SOURCE_MANIFEST_RUN}"

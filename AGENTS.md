@@ -175,21 +175,30 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   metadata artifact. Never pull full benchmark H5ADs to satisfy a local
   runner.
 
-- **Approved final batch-effect scope:** Regenerate both
-  `batch_effect_uncorrected` and `batch_effect_corrected` Stage 3 views only
-  for `Covid19_PBMC`, `Diabetes`, `Joanito`, and `Lung`, using their
-  final-qualified output names. The final Stage 5 changed-dataset wave selects
-  exactly those four datasets in the uncorrected pass with the suite
-  `prepare_pseudobulk`, `pseudobulk`, `gloscope`, `composition`, `mrvi`,
-  `pilot`, and `qot`. `Kidney_KPMP_full` receives only targeted missing-method
-  recovery in the uncorrected Stage 5 final lane; it receives no new
-  Stage 2/3/4 work. The final Stage 5 lane has no corrected pass or
-  `corrected_final` Stage 5 root.
-- **Frozen and disabled cohorts:** `Alzheimer`, `Breast_cancer`, `Lupus_PBMC`,
-  and `Stephenson` are frozen and MUST be absent from every new job,
-  validator selection, and compute manifest. Disabled cohorts
+- **Approved final batch-effect scope:** The uncorrected Stage 3 recovery
+  contains exactly four rows: `Covid19_PBMC`, `Diabetes`, `Joanito`, and
+  `Lung`, each using `batch_effect_uncorrected` and the final-qualified
+  output names. The independent corrected Stage 3 wave is generated at
+  launch from the immutable current `datasets.json`: every non-underscore
+  entry with `use_for_batch_effect == true`, using
+  `batch_effect_corrected`. It may include cohorts frozen for the
+  uncorrected/final analysis lane and runs in the same supported parallel
+  Stage 3 wave or a separately validated corrected gate. Corrected Stage 3
+  outputs do not authorize corrected Stage 5 work.
+- **Approved final Stage 5 scope:** The changed-dataset wave selects exactly
+  the four uncorrected rows above with the suite `prepare_pseudobulk`,
+  `pseudobulk`, `gloscope`, `composition`, `mrvi`, `pilot`, and `qot`.
+  `Kidney_KPMP_full` receives only targeted missing-method recovery in the
+  uncorrected Stage 5 final lane; it receives no new Stage 2/3/4 work. The
+  final Stage 5 lane has no corrected pass or `corrected_final` Stage 5 root.
+- **Uncorrected/final frozen and disabled cohorts:** `Alzheimer`,
+  `Breast_cancer`, `Lupus_PBMC`, and `Stephenson` are frozen and MUST be
+  absent from every new uncorrected Stage 3 selection, Stage 2/4/5 job,
+  final-lane validator selection, and compute manifest. This exclusion does
+  not apply to the independent corrected Stage 3 wave, whose membership is
+  determined only by the current config rule above. Disabled cohorts
   `CombinedPBMC`, `Kidney_KPMP`, `Myocardial_infarction`, and `Parkinson`,
-  plus `_debug`, are non-production and MUST be absent from production
+  plus `_debug`, remain non-production and MUST be absent from all production
   selections.
 - **Diagnostic fixture boundary:** `_debug` remains available only for
   explicitly separate diagnostic probes and is never a production target,

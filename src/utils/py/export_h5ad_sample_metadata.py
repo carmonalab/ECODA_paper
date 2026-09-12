@@ -95,17 +95,43 @@ def _dataset_spec_columns(config_path: Path, dataset: str) -> list[str]:
     module = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(module)
-        value = module.DATASET_SPECS.get(dataset, {})
+        dataset_specs = getattr(module, "DATASET_SPECS", {})
+        batch_effect_specs = getattr(module, "BATCH_EFFECT_SPECS", {})
+        dataset_spec = dataset_specs.get(dataset, {})
+        batch_candidates = batch_effect_specs.get(dataset, [])
     except (AttributeError, ImportError, OSError, TypeError, ValueError):
         return []
+
     columns: list[str] = []
-    for key in ("sample_candidates", "sample_stable_cols", "batch_cols", "cell_type_candidates"):
-        candidate = value.get(key, [])
-        if isinstance(candidate, str):
-            candidate = [candidate]
-        if isinstance(candidate, (list, tuple)):
-            columns.extend(str(item) for item in candidate if isinstance(item, str) and item)
-    return columns
+
+    def add(value: Any) -> None:
+        if isinstance(value, str):
+            values = [value]
+        elif isinstance(value, (list, tuple)):
+            values = value
+        else:
+            return
+        columns.extend(
+            item for item in values
+            if isinstance(item, str) and item.strip()
+        )
+
+    # These fields are the complete candidate registry in DATASET_SPECS.  The
+    # biological column is included for technical-only/legacy entries whose
+    # configured columns may not repeat it.
+    if isinstance(dataset_spec, dict):
+        add(dataset_spec.get("bio_col"))
+        for key in (
+            "sample_candidates",
+            "sample_stable_cols",
+            "batch_cols",
+            "cell_type_candidates",
+        ):
+            add(dataset_spec.get(key, []))
+    # Joanito and Stephenson are represented in the technical batch registry
+    # even when they have no active DATASET_SPECS entry (notably Site).
+    add(batch_candidates)
+    return list(dict.fromkeys(columns))
 def requested_columns(config_path: Path, dataset: str, entry: dict) -> tuple[str, list[str], list[str]]:
     columns = entry.get("columns")
     if not isinstance(columns, dict):

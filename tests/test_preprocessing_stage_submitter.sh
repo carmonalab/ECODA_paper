@@ -53,7 +53,7 @@ mkdir -p \
 cp "${ROOT}/src/slurm_config.sh" "${SOURCE_ROOT}/src/slurm_config.sh"
 for source_file in \
   ecoda_run_common.sh ecoda_runtime.sh h5ad_preflight_submit.sh \
-  h5ad_preflight_worker.sh worker_retry.sh; do
+  h5ad_preflight_worker.sh h5ad_obs_audit_worker.sh worker_retry.sh; do
   cp "${ROOT}/src/utils/bash/${source_file}" \
     "${SOURCE_ROOT}/src/utils/bash/${source_file}"
 done
@@ -166,6 +166,7 @@ chmod 555 "${RUNTIME_DIR}"
 export PATH="${TMP_DIR}/bin:${PATH}"
 export HOME="${TMP_DIR}/home"
 export HPC_SCRATCH_DIR="${TMP_DIR}/home/scratch/ECODA_paper"
+export ECODA_SCRATCH_ROOT="${HPC_SCRATCH_DIR}"
 export NAS_TARGET_DIR="${TMP_DIR}/nas"
 export ECODA_LOGS_DIR="${TMP_DIR}/logs"
 export ECODA_SOURCE_ROOT="${SOURCE_ROOT}"
@@ -187,28 +188,140 @@ export USER_EMAIL="test@example.invalid"
 cat > "${TMP_DIR}/bin/sbatch" <<'STUB'
 #!/bin/bash
 set -euo pipefail
+
+worker_script=""
+export_arg=""
+for arg in "$@"; do
+  case "${arg}" in
+    --export=*) export_arg="${arg#--export=}" ;;
+    *.sh) worker_script="${arg}" ;;
+  esac
+done
+export_field() {
+  local key="$1" item
+  local fields=()
+  IFS=',' read -r -a fields <<< "${export_arg#ALL,}"
+  for item in "${fields[@]}"; do
+    case "${item}" in
+      "${key}"=*) printf '%s' "${item#*=}"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# The combined selection also submits the read-only Covid obs audit.  Keep
+# that boundary scheduler-free while emitting the same run-owned evidence
+# that the submitter validates, so this remains a manifest/selection test.
+if [[ "${worker_script}" == *h5ad_obs_audit_worker.sh ]]; then
+  preflight_manifest="$(export_field H5AD_PREFLIGHT_MANIFEST)"
+  preflight_status_dir="$(export_field H5AD_PREFLIGHT_STATUS_DIR)"
+  preflight_run_root="$(export_field H5AD_PREFLIGHT_RUN_ROOT)"
+  preflight_run_id="$(export_field H5AD_PREFLIGHT_RUN_ID)"
+  source_root="$(export_field ECODA_SOURCE_ROOT)"
+  source_manifest="$(export_field ECODA_SOURCE_MANIFEST)"
+  runtime_identity="$(export_field ECODA_RUNTIME_IDENTITY || true)"
+  runtime_manifest="$(export_field ECODA_RUNTIME_MANIFEST)"
+  runtime_image="$(export_field ECODA_RUNTIME_IMAGE)"
+  scratch_root="$(export_field HPC_SCRATCH_DIR)"
+  input_path="${scratch_root}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
+  input_dir="$(cd "$(dirname "${input_path}")" && pwd -P)" || exit 1
+  input_path="${input_dir}/$(basename "${input_path}")"
+  [[ -n "${input_path}" ]] || exit 1
+  runtime_identity="${runtime_identity:-${preflight_run_root}/manifests/runtime.identity}"
+  mkdir -p "${preflight_status_dir}" "${preflight_run_root}/preflight"
+  actual_md5="$(
+    if command -v md5sum >/dev/null 2>&1; then
+      md5sum "${input_path}" | cut -d' ' -f1
+    else
+      md5 -q "${input_path}"
+    fi
+  )"
+  actual_size="$(wc -c < "${input_path}" | tr -d '[:space:]')"
+  task_id=0
+  while IFS=$'\t' read -r dataset view manifest_input; do
+    task_id=$((task_id + 1))
+    report="${preflight_run_root}/preflight/Covid19_PBMC_${view}.json"
+    subset_rule="$(jq -cS --arg view "${view}" \
+      '.Covid19_PBMC.views[$view].subset_vars' \
+      "${source_root}/datasets.json")"
+    jq -n \
+      --arg dataset "${dataset}" --arg view "${view}" \
+      --arg input "${input_path}" --arg md5 "${actual_md5}" \
+      --argjson size "${actual_size}" --argjson subset_rule "${subset_rule}" \
+      --arg source_root "${source_root}" \
+      --arg source_manifest "${source_manifest}" \
+      --arg runtime_identity "${runtime_identity}" \
+      --arg runtime_manifest "${runtime_manifest}" \
+      --arg runtime_image "${runtime_image}" '
+      {
+        obs_only: true,
+        view: $view,
+        datasets: [{
+          dataset: $dataset,
+          view: $view,
+          sample_column: "sampleID",
+          input_identity: {
+            path: $input,
+            md5: $md5,
+            size: $size
+          },
+          split_sample_count: 0,
+          configured_cardinalities: {sampleID: 1, PatientID: 1},
+          sampling_day_audit: {
+            column: "Sampling day (Days after symptom onset)",
+            raw_unique_values: ["29", "30", "30.5", "control", "unknown", "malformed"]
+          },
+          subset_vars: $subset_rule
+        }],
+        provenance: {
+          source_root: $source_root,
+          source_manifest: {path: $source_manifest},
+          runtime_identity: {path: $runtime_identity},
+          runtime_manifest: {path: $runtime_manifest},
+          runtime_image: {path: $runtime_image}
+        }
+      }' > "${report}"
+    report_md5="$(
+      if command -v md5sum >/dev/null 2>&1; then
+        md5sum "${report}" | cut -d' ' -f1
+      else
+        md5 -q "${report}"
+      fi
+    )"
+    printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' \
+      "${report_md5}" "$(wc -c < "${report}" | tr -d '[:space:]')" "${report}" \
+      > "${report}.md5"
+    printf 'STATE=OK\nRUN_ID=%s\nDATASET=%s\nVIEW=%s\nTASK_ID=%s\nINPUT_FILE=%s\nREPORT=%s\n' \
+      "${preflight_run_id}" "${dataset}" "${view}" "${task_id}" \
+      "${manifest_input}" "${report}" \
+      > "${preflight_status_dir}/${dataset}__${view}.status"
+  done < "${preflight_manifest}"
+  printf '600003\n'
+  exit 0
+fi
+
 printf '%s\n' "$*" >> "${CAPTURE}"
 CALL_COUNT="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
-if [[ "${PREPROCESS_NOOP_PREFLIGHT:-0}" == "1" ]]; then
-  export_arg=""
-  worker_script=""
+if [[ "${PREPROCESS_NOOP_PREFLIGHT:-0}" == "1" &&
+      "${worker_script}" == *h5ad_preflight_worker.sh ]]; then
+  preflight_manifest=""
+  preflight_status_dir=""
+  preflight_run_root=""
+  preflight_run_id=""
+  source_root=""
+  source_manifest=""
+  host_prefix=""
+  host_python_sha=""
+  host_rscript_sha=""
+  runtime_image=""
+  runtime_manifest=""
+  scratch_root=""
+  logs_root=""
   for arg in "$@"; do
     case "${arg}" in
       --export=*) export_arg="${arg#--export=}" ;;
-      *.sh) worker_script="${arg}" ;;
     esac
   done
-  export_field() {
-    local key="$1" item
-    local fields=()
-    IFS=',' read -r -a fields <<< "${export_arg#ALL,}"
-    for item in "${fields[@]}"; do
-      case "${item}" in
-        "${key}"=*) printf '%s' "${item#*=}"; return 0 ;;
-      esac
-    done
-    return 1
-  }
   preflight_manifest="$(export_field H5AD_PREFLIGHT_MANIFEST)"
   preflight_status_dir="$(export_field H5AD_PREFLIGHT_STATUS_DIR)"
   preflight_run_root="$(export_field H5AD_PREFLIGHT_RUN_ROOT)"
@@ -286,6 +399,235 @@ case "${CALLS}" in *"ECODA_RUNTIME_IDENTITY=${RUN_ROOT}/manifests/runtime.identi
 case "${CALLS}" in *"${SOURCE_ROOT}/src/3_scrnaseq_preprocessing/1.1_run_worker.sh"*) ;; *) echo "array did not use immutable worker script" >&2; exit 1 ;; esac
 case "${CALLS}" in *"${SOURCE_ROOT}/src/3_scrnaseq_preprocessing/1.2_preprocess_watchdog.sh"*) ;; *) echo "watchdog did not use immutable watchdog script" >&2; exit 1 ;; esac
 case "${CALLS}" in *"ECODA_RUNTIME_MODE=apptainer"*"ECODA_RUNTIME_PROFILE=stage3"*) ;; *) echo "Stage 3 runtime export missing" >&2; exit 1 ;; esac
+
+# The exact historical run leaves its fixture owners active; discard only
+# those temporary owners before the independent combined run.
+ECODA_OWNERS_ROOT="${HPC_SCRATCH_DIR}/_ecoda_owners"
+rm -rf "${ECODA_OWNERS_ROOT}"
+
+# Combined batch mode is four target uncorrected rows followed by the current
+# non-underscore, batch-enabled corrected rows in copied-snapshot order.
+RUNS_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs"
+COVID_INPUT="${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
+mkdir -p "$(dirname "${COVID_INPUT}")"
+printf 'stub-direct-h5ad\n' > "${COVID_INPUT}"
+COVID_INPUT_DIR="$(cd "$(dirname "${COVID_INPUT}")" && pwd -P)"
+COVID_INPUT_CANONICAL="${COVID_INPUT_DIR}/$(basename "${COVID_INPUT}")"
+CORRECTED_DATASETS=()
+while IFS= read -r corrected_dataset; do
+  CORRECTED_DATASETS+=("${corrected_dataset}")
+done < <(
+  jq -r '
+    to_entries[]
+    | select((.key | startswith("_") | not) and
+             (.value.use_for_batch_effect == true))
+    | .key
+  ' "${SOURCE_ROOT}/datasets.json"
+)
+COMBINED_EXPECTED_ROWS=$((4 + ${#CORRECTED_DATASETS[@]}))
+[[ ${COMBINED_EXPECTED_ROWS} -eq 13 ]]
+COMBINED_SELECTION="${TMP_DIR}/combined-selection.tsv"
+{
+  printf 'Covid19_PBMC\tbatch_effect_uncorrected\n'
+  printf 'Diabetes\tbatch_effect_uncorrected\n'
+  printf 'Joanito\tbatch_effect_uncorrected\n'
+  printf 'Lung\tbatch_effect_uncorrected\n'
+  for corrected_dataset in "${CORRECTED_DATASETS[@]}"; do
+    printf '%s\tbatch_effect_corrected\n' "${corrected_dataset}"
+  done
+} > "${COMBINED_SELECTION}"
+[[ "$(wc -l < "${COMBINED_SELECTION}" | tr -d '[:space:]')" == 13 ]]
+[[ "$(sed -n '1p' "${COMBINED_SELECTION}")" == $'Covid19_PBMC\tbatch_effect_uncorrected' ]]
+[[ "$(sed -n '2p' "${COMBINED_SELECTION}")" == $'Diabetes\tbatch_effect_uncorrected' ]]
+[[ "$(sed -n '3p' "${COMBINED_SELECTION}")" == $'Joanito\tbatch_effect_uncorrected' ]]
+[[ "$(sed -n '4p' "${COMBINED_SELECTION}")" == $'Lung\tbatch_effect_uncorrected' ]]
+corrected_index=0
+while IFS= read -r corrected_dataset; do
+  corrected_index=$((corrected_index + 1))
+  expected_row="${corrected_dataset}"$'\tbatch_effect_corrected'
+  [[ "$(sed -n "$((4 + corrected_index))p" "${COMBINED_SELECTION}")" == "${expected_row}" ]]
+done < <(
+  jq -r '
+    to_entries[]
+    | select((.key | startswith("_") | not) and
+             (.value.use_for_batch_effect == true))
+    | .key
+  ' "${SOURCE_ROOT}/datasets.json"
+)
+: > "${CAPTURE}"
+COMBINED_OUTPUT="$(
+  PREPROCESS_NOOP_PREFLIGHT=1 \
+    run_stage3 --selection-file "${COMBINED_SELECTION}" \
+      --combined-batch-selection
+)"
+case "${COMBINED_OUTPUT}" in
+  *"PREPROCESS_ARRAY_JOB_ID="*) ;;
+  *) echo "combined selection did not submit an array" >&2; exit 1 ;;
+esac
+case "${COMBINED_OUTPUT}" in
+  *"PREPROCESS_WATCHDOG_JOB_ID="*) ;;
+  *) echo "combined selection did not submit a watchdog" >&2; exit 1 ;;
+esac
+COMBINED_MANIFEST="$(printf '%s\n' "${COMBINED_OUTPUT}" |
+  sed -n 's/^PREPROCESS_DATASET_MANIFEST=//p')"
+[[ -s "${COMBINED_MANIFEST}" ]]
+[[ "$(wc -l < "${COMBINED_MANIFEST}" | tr -d '[:space:]')" == 13 ]]
+uncorrected_index=0
+for expected_row in \
+  $'Covid19_PBMC\tbatch_effect_uncorrected' \
+  $'Diabetes\tbatch_effect_uncorrected' \
+  $'Joanito\tbatch_effect_uncorrected' \
+  $'Lung\tbatch_effect_uncorrected'; do
+  uncorrected_index=$((uncorrected_index + 1))
+  [[ "$(sed -n "${uncorrected_index}p" "${COMBINED_MANIFEST}")" == "${expected_row}" ]]
+done
+corrected_index=0
+while IFS= read -r corrected_dataset; do
+  corrected_index=$((corrected_index + 1))
+  expected_row="${corrected_dataset}"$'\tbatch_effect_corrected'
+  [[ "$(sed -n "$((4 + corrected_index))p" "${COMBINED_MANIFEST}")" == "${expected_row}" ]]
+done < <(
+  jq -r '
+    to_entries[]
+    | select((.key | startswith("_") | not) and
+             (.value.use_for_batch_effect == true))
+    | .key
+  ' "${SOURCE_ROOT}/datasets.json"
+)
+COMBINED_RUN_ROOT="$(dirname "${COMBINED_MANIFEST}")/.."
+COMBINED_RUN_ROOT="$(cd "${COMBINED_RUN_ROOT}" && pwd)"
+[[ "$(wc -l < "${COMBINED_RUN_ROOT}/manifests/pending.tsv" |
+  tr -d '[:space:]')" == 13 ]]
+cmp -s "${COMBINED_MANIFEST}" \
+  "${COMBINED_RUN_ROOT}/manifests/pending.tsv" || {
+  echo "combined pending manifest differs from selected manifest" >&2
+  exit 1
+}
+PREFLIGHT_RECORDS="$(awk -F '\t' '$1 == "PREFLIGHT" && $2 == "600003" { count++ } END { print count + 0 }' \
+  "${COMBINED_RUN_ROOT}/manifests/scheduler_ids.tsv")"
+[[ "${PREFLIGHT_RECORDS}" == 1 ]]
+for preflight_view in batch_effect_uncorrected batch_effect_corrected; do
+  PREFLIGHT_REPORT="${COMBINED_RUN_ROOT}/preflight/Covid19_PBMC_${preflight_view}.json"
+  PREFLIGHT_STATUS="${COMBINED_RUN_ROOT}/status/h5ad_obs_audit/Covid19_PBMC__${preflight_view}.status"
+  [[ -s "${PREFLIGHT_REPORT}" && -s "${PREFLIGHT_REPORT}.md5" ]]
+  [[ "$(sed -n 's/^MD5=//p' "${PREFLIGHT_REPORT}.md5" | sed -n '1p')" == "$(md5_file "${PREFLIGHT_REPORT}")" ]]
+  [[ "$(sed -n 's/^SIZE=//p' "${PREFLIGHT_REPORT}.md5" | sed -n '1p')" == "$(wc -c < "${PREFLIGHT_REPORT}" | tr -d '[:space:]')" ]]
+  [[ "$(sed -n 's/^PATH=//p' "${PREFLIGHT_REPORT}.md5" | sed -n '1p')" == "${PREFLIGHT_REPORT}" ]]
+  [[ -s "${PREFLIGHT_STATUS}" ]]
+  [[ "$(sed -n 's/^STATE=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == "OK" ]]
+  [[ "$(sed -n 's/^RUN_ID=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == "${COMBINED_RUN_ROOT##*/}" ]]
+  [[ "$(sed -n 's/^DATASET=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == "Covid19_PBMC" ]]
+  [[ "$(sed -n 's/^VIEW=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == "${preflight_view}" ]]
+  if [[ "${preflight_view}" == "batch_effect_uncorrected" ]]; then
+    expected_task_id=1
+  else
+    expected_task_id=2
+  fi
+  [[ "$(sed -n 's/^TASK_ID=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == "${expected_task_id}" ]]
+  [[ "$(sed -n 's/^INPUT_FILE=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == "${COVID_INPUT}" ]]
+  jq -e --arg view "${preflight_view}" \
+    --arg source_root "${SOURCE_ROOT}" \
+    --arg source_manifest "${SOURCE_MANIFEST}" \
+    --arg input "${COVID_INPUT_CANONICAL}" \
+    '.obs_only == true and
+     .view == $view and
+     (.datasets | length) == 1 and
+     .datasets[0].dataset == "Covid19_PBMC" and
+     .datasets[0].view == $view and
+     .datasets[0].sample_column == "sampleID" and
+     .datasets[0].input_identity.path == $input and
+     .datasets[0].split_sample_count == 0 and
+     .datasets[0].sampling_day_audit.column == "Sampling day (Days after symptom onset)" and
+     (.datasets[0].sampling_day_audit.raw_unique_values | type) == "array" and
+     (.provenance.source_root == $source_root) and
+     (.provenance.source_manifest.path == $source_manifest) and
+     (.provenance.runtime_identity.path | type) == "string" and
+     (.provenance.runtime_manifest.path | type) == "string" and
+     (.provenance.runtime_image.path | type) == "string"' \
+    "${PREFLIGHT_REPORT}" >/dev/null
+  expected_subset_rule="$(jq -cS --arg view "${preflight_view}" \
+    '.Covid19_PBMC.views[$view].subset_vars' "${SOURCE_ROOT}/datasets.json")"
+  jq -e --argjson expected_rule "${expected_subset_rule}" \
+    '.datasets[0].subset_vars == $expected_rule' "${PREFLIGHT_REPORT}" >/dev/null
+done
+COMBINED_CALLS="$(cat "${CAPTURE}")"
+case "${COMBINED_CALLS}" in
+  *"--array=1-${COMBINED_EXPECTED_ROWS}%1000"*) ;;
+  *) echo "combined array was not submitted with all pending rows" >&2; exit 1 ;;
+esac
+case "${COMBINED_CALLS}" in
+  *"PREPROCESS_SELECTION_FILE=${COMBINED_RUN_ROOT}/manifests/pending.tsv"*) ;;
+  *) echo "combined pending manifest was not exported" >&2; exit 1 ;;
+esac
+
+assert_combined_rejected() {
+  local selection="$1" label="$2" before after rc
+  : > "${CAPTURE}"
+  before="$(printf '%s\n' "${RUNS_ROOT}"/*)"
+  if run_stage3 --selection-file "${selection}" \
+      --combined-batch-selection >/dev/null 2>&1; then
+    rc=0
+  else
+    rc=$?
+  fi
+  [[ ${rc} -ne 0 ]] || {
+    echo "${label} was accepted" >&2
+    return 1
+  }
+  [[ ! -s "${CAPTURE}" ]] || {
+    echo "${label} reached sbatch" >&2
+    return 1
+  }
+  after="$(printf '%s\n' "${RUNS_ROOT}"/*)"
+  [[ "${before}" == "${after}" ]] || {
+    echo "${label} created a run root" >&2
+    return 1
+  }
+}
+
+OLD_EIGHT_SELECTION="${TMP_DIR}/combined-old-eight.tsv"
+{
+  printf 'Covid19_PBMC\tbatch_effect_uncorrected\n'
+  printf 'Covid19_PBMC\tbatch_effect_corrected\n'
+  printf 'Diabetes\tbatch_effect_uncorrected\n'
+  printf 'Diabetes\tbatch_effect_corrected\n'
+  printf 'Joanito\tbatch_effect_uncorrected\n'
+  printf 'Joanito\tbatch_effect_corrected\n'
+  printf 'Lung\tbatch_effect_uncorrected\n'
+  printf 'Lung\tbatch_effect_corrected\n'
+} > "${OLD_EIGHT_SELECTION}"
+assert_combined_rejected "${OLD_EIGHT_SELECTION}" \
+  "historical eight-row combined target matrix"
+
+MISSING_CORRECTED_SELECTION="${TMP_DIR}/combined-missing-corrected.tsv"
+sed '13d' "${COMBINED_SELECTION}" > "${MISSING_CORRECTED_SELECTION}"
+assert_combined_rejected "${MISSING_CORRECTED_SELECTION}" \
+  "combined selection with a missing corrected row"
+
+EXTRA_CORRECTED_SELECTION="${TMP_DIR}/combined-extra-corrected.tsv"
+cp "${COMBINED_SELECTION}" "${EXTRA_CORRECTED_SELECTION}"
+printf '%s\tbatch_effect_corrected\n' "${CORRECTED_DATASETS[0]}" \
+  >> "${EXTRA_CORRECTED_SELECTION}"
+assert_combined_rejected "${EXTRA_CORRECTED_SELECTION}" \
+  "combined selection with an extra corrected row"
+
+STALE_CORRECTED_DATASET="$(
+  jq -r '
+    to_entries[]
+    | select((.key | startswith("_") | not) and
+             ((.value.use_for_batch_effect // false) != true) and
+             ((.value.views // {}) | has("batch_effect_corrected")))
+    | .key
+  ' "${SOURCE_ROOT}/datasets.json" | sed -n '1p'
+)"
+[[ -n "${STALE_CORRECTED_DATASET}" ]]
+STALE_CORRECTED_SELECTION="${TMP_DIR}/combined-stale-corrected.tsv"
+{
+  sed -n '1,12p' "${COMBINED_SELECTION}"
+  printf '%s\tbatch_effect_corrected\n' "${STALE_CORRECTED_DATASET}"
+} > "${STALE_CORRECTED_SELECTION}"
+assert_combined_rejected "${STALE_CORRECTED_SELECTION}" \
+  "combined selection with a stale corrected row"
 
 # Missing image identity fails before the first scheduler boundary.
 : > "${CAPTURE}"
@@ -559,7 +901,8 @@ mkdir -p "${MISSING_HPC}" "${MISSING_HOME}/logs"
 : > "${CAPTURE}"
 set +e
 HOME="${MISSING_HOME}" PATH="${TMP_DIR}/bin:${PATH}" \
-  HPC_SCRATCH_DIR="${MISSING_HPC}" ECODA_LOGS_DIR="${MISSING_HOME}/logs" \
+  HPC_SCRATCH_DIR="${MISSING_HPC}" ECODA_SCRATCH_ROOT="${MISSING_HPC}" \
+  ECODA_LOGS_DIR="${MISSING_HOME}/logs" \
   NAS_TARGET_DIR="${NAS_TARGET_DIR}" USER_EMAIL="test@example.invalid" \
   PREPROCESS_SUBMITTER_TEST=0 \
   bash "${ROOT}/src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh" \

@@ -93,14 +93,75 @@ ANALYSIS_MERGE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_python_
 
 # Compute-node watchdog entry script (same directory as this file).
 WATCHDOG_MAIN_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/watchdog_main.sh"
+benchmark_stage5_identity_guard() {
+  local requested_pass="${1:-${PASS_ARG:-${ANALYSIS_PASS:-}}}"
+  local scratch_root="${HPC_SCRATCH_DIR:-}" nas_root="${NAS_TARGET_DIR:-}"
+  local expected_root expected_nas
+  if command -v ecoda_stage5_validate_identity >/dev/null 2>&1; then
+    ecoda_stage5_validate_identity "${requested_pass}"
+    return $?
+  fi
+  [[ "${ANALYSIS_VARIANT:-}" == "final" ]] || return 0
+  [[ -z "${PASS_ARG:-}" || "${PASS_ARG}" == "${requested_pass}" ]] || {
+    echo "ERROR: final Stage 5 PASS_ARG disagrees with pass identity." >&2
+    return 1
+  }
+  [[ -z "${ANALYSIS_PASS:-}" || "${ANALYSIS_PASS}" == "${requested_pass}" ]] || {
+    echo "ERROR: final Stage 5 ANALYSIS_PASS disagrees with pass identity." >&2
+    return 1
+  }
+  [[ "${requested_pass}" == "uncorrected" &&
+     "${scratch_root}" = /* && "${nas_root}" = /* &&
+     "${ANALYSIS_ROOT:-}" != "" && "${ANALYSIS_NAS_ROOT:-}" != "" ]] || {
+    echo "ERROR: final Stage 5 identity is incomplete or not uncorrected." >&2
+    return 1
+  }
+  scratch_root="${scratch_root%/}"
+  nas_root="${nas_root%/}"
+  [[ -n "${scratch_root}" ]] || scratch_root="/"
+  [[ -n "${nas_root}" ]] || nas_root="/"
+  if [[ "${scratch_root}" == "/" ]]; then
+    expected_root="/batch_effect/uncorrected_final"
+  else
+    expected_root="${scratch_root}/batch_effect/uncorrected_final"
+  fi
+  if [[ "${nas_root}" == "/" ]]; then
+    expected_nas="/batch_effect/uncorrected_final"
+  else
+    expected_nas="${nas_root}/batch_effect/uncorrected_final"
+  fi
+  [[ "${ANALYSIS_ROOT}" == "${expected_root}" &&
+     "${ANALYSIS_NAS_ROOT}" == "${expected_nas}" ]] || {
+    echo "ERROR: final Stage 5 roots are not bound to uncorrected_final." >&2
+    return 1
+  }
+}
+
+benchmark_stage5_method_guard() {
+  local method="${1:-}"
+  if command -v ecoda_stage5_validate_final_method >/dev/null 2>&1; then
+    ecoda_stage5_validate_final_method "${method}"
+    return $?
+  fi
+  [[ "${ANALYSIS_VARIANT:-}" == "final" ]] || return 0
+  case "${method}" in
+    prepare_pseudobulk|pseudobulk|gloscope|composition|mrvi|pilot|qot) ;;
+    *) echo "ERROR: method is not permitted in the final Stage 5 suite: ${method}" >&2; return 1 ;;
+  esac
+}
 
 # Watchdog status files: one `<watchdog_job_id>.status` per watchdog, written
 # by watchdog_main.sh (self-named from SLURM_JOB_ID) and read by the login
 # tail's benchmark_wait_watchdog. Outside benchmark/ so it is never rsync'd.
-if [[ -n "${ANALYSIS_PASS:-}" ]]; then
-  WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/${ANALYSIS_PASS}"
+STAGE5_STATUS_PASS="${ANALYSIS_PASS:-${PASS_ARG:-}}"
+benchmark_stage5_identity_guard "${STAGE5_STATUS_PASS}" || {
+  echo "ERROR: final Stage 5 identity is invalid." >&2
+  return 1
+}
+if [[ -n "${STAGE5_STATUS_PASS}" ]]; then
+  WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/${STAGE5_STATUS_PASS}"
   [[ "${ANALYSIS_VARIANT:-}" == final ]] &&
-    WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/${ANALYSIS_PASS}_final"
+    WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/uncorrected_final"
 else
   WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_benchmark_watchdog"
 fi
@@ -139,6 +200,7 @@ benchmark_require_source_script_path() {
 }
 
 benchmark_validate_bound_runtime() {
+  benchmark_stage5_identity_guard || return 1
   if [[ -n "${ECODA_RUN_ROOT:-}" ||
         "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]]; then
     ecoda_runtime_validate_bound_run
@@ -150,6 +212,7 @@ benchmark_validate_bound_runtime() {
 benchmark_validate_output_scope() {
   local selection="${ECODA_SELECTION_MANIFEST:-${ECODA_RUN_ROOT:-}/manifests/selection.tsv}"
   local ownership_selection="${selection}" ownership_tmp="" rc
+  benchmark_stage5_identity_guard || return 1
   [[ -n "${ECODA_RUN_ID:-}" ]] || return 0
   [[ -r "${selection}" ]] || return 1
   command -v ecoda_validate_output_ownership >/dev/null 2>&1 || return 1
@@ -452,8 +515,16 @@ benchmark_write_status_file() {
   local FAIL_REASON="${4:-}"
   local REPORT="${5:-}"
   local TMP_FILE="${STATUS_FILE}.tmp"
+  benchmark_stage5_identity_guard || return 1
+  benchmark_stage5_method_guard "${LABEL}" || return 1
   mkdir -p "$(dirname "${STATUS_FILE}")"
   {
+    if [[ "${ANALYSIS_VARIANT:-}" == "final" ]]; then
+      printf 'ANALYSIS_VARIANT=final\n'
+      printf 'ANALYSIS_ROOT=%s\n' "${ANALYSIS_ROOT}"
+      printf 'ANALYSIS_NAS_ROOT=%s\n' "${ANALYSIS_NAS_ROOT}"
+      printf 'ANALYSIS_PASS=uncorrected\n'
+    fi
     printf 'STATE=%s\n' "${STATE}"
     printf 'LABEL=%s\n' "${LABEL}"
     local scheduler_id
@@ -489,10 +560,13 @@ benchmark_wait_oom_retry() {
   local MANIFEST="$4"
   local STATUS_FILE="${5:-}"
   local MEM="${BENCHMARK_MEM}"
+  local RETRY_PASS="${ANALYSIS_PASS:-${PASS_ARG:-}}"
   local MAX_ATTEMPTS=4
   local ATTEMPT=0
   local TASK_STATES OOM_TASKS=() BAD_TASK="" DS_CSV="" NEW_MEM="" NEW_MANIFEST="" NEW_ID=""
   local JID STATE MASTER_STATE="" TASK_ROWS_FOUND=0 t ds_name CLAMPED=0
+  benchmark_stage5_identity_guard "${RETRY_PASS}" || return 1
+  benchmark_stage5_method_guard "${LABEL}" || return 1
   if [[ -n "${STATUS_FILE}" ]]; then
     WATCHDOG_GATED_REPORTS=()
     WATCHDOG_SCHEDULER_IDS=("${JOB_ID}")
@@ -639,8 +713,10 @@ $(benchmark_oom_task_report "${JOB_ID}" "${MANIFEST}")"
     retry_safe_label="$(printf '%s' "${LABEL}" | tr '/:,\t ' '_____')"
     if [[ -n "${ECODA_RUN_ROOT:-}" ]]; then
       NEW_MANIFEST="${ECODA_RUN_ROOT}/manifests/${retry_safe_label}.retry_$((ATTEMPT + 1)).tsv"
-    elif [[ -n "${ANALYSIS_PASS:-}" ]]; then
-      NEW_MANIFEST="${ANALYSIS_ROOT}/manifests/batch_effect_${ANALYSIS_PASS}_manifest_${retry_safe_label}_retry_$$.txt"
+    elif [[ "${ANALYSIS_VARIANT:-}" == "final" ]]; then
+      NEW_MANIFEST="${ANALYSIS_ROOT}/manifests/batch_effect_uncorrected_final_manifest_${retry_safe_label}_retry_$$.txt"
+    elif [[ -n "${RETRY_PASS}" ]]; then
+      NEW_MANIFEST="${ANALYSIS_ROOT}/manifests/batch_effect_${RETRY_PASS}_manifest_${retry_safe_label}_retry_$$.txt"
     else
       NEW_MANIFEST="${HPC_SCRATCH_DIR}/benchmark_manifest_${retry_safe_label}_retry_$$.txt"
     fi
@@ -746,6 +822,14 @@ benchmark_submit_watchdog() {
   local WATCHDOG_FLAGS=("$@")
   local WATCHDOG_SCRIPT="${WATCHDOG_MAIN_SCRIPT}"
   local FORCE_VALUE="${FORCE_BENCHMARK:-0}"
+  local STAGE5_PASS="${ANALYSIS_PASS:-${PASS_ARG:-}}"
+  benchmark_stage5_identity_guard "${STAGE5_PASS}" || return 1
+  benchmark_stage5_method_guard "${LABEL}" || return 1
+  if [[ "${ANALYSIS_VARIANT:-}" == "final" &&
+        "${LOG_PREFIX}" != "execution_times_batch_effect_uncorrected_final_" ]]; then
+    echo "ERROR: final Stage 5 watchdog log prefix is not final-qualified." >&2
+    return 1
+  fi
   [[ "${FORCE_VALUE}" == "0" || "${FORCE_VALUE}" == "1" ]] || {
     echo "ERROR: FORCE_BENCHMARK must be 0 or 1 for watchdog submission." >&2
     return 1
@@ -761,15 +845,21 @@ benchmark_submit_watchdog() {
     WATCHDOG_EXPORT="${WATCHDOG_EXPORT},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${ECODA_RUN_ID:-}"
   [[ -n "${ECODA_SOURCE_ROOT:-}" ]] &&
     WATCHDOG_EXPORT="${WATCHDOG_EXPORT},ECODA_SOURCE_ROOT=${ECODA_SOURCE_ROOT},ECODA_SOURCE_MANIFEST=${ECODA_SOURCE_MANIFEST:-},ECODA_SOURCE_SNAPSHOT_REQUIRED=1"
+  if [[ "${ANALYSIS_VARIANT:-}" == "final" ]]; then
+    WATCHDOG_EXPORT="${WATCHDOG_EXPORT},ANALYSIS_VARIANT=final,ANALYSIS_PASS=uncorrected,ANALYSIS_ROOT=${ANALYSIS_ROOT},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT},ANALYSIS_LOG_PREFIX=execution_times_batch_effect_uncorrected_final_"
+  fi
 
   mkdir -p "${WATCHDOG_STATUS_DIR}"
   echo "Submitting ${LABEL} watchdog for array ${ARRAY_ID} (mode=${MODE}, partition=${PARTITION}, " >&2
   echo "  time=${WATCHDOG_TIME_LIMIT}, flags for retries: ${WATCHDOG_FLAGS[*]})" >&2
 
   local WD_JOB_NAME WD_OUTPUT_PREFIX
-  if [[ -n "${ANALYSIS_PASS:-}" ]]; then
-    WD_JOB_NAME="batch_effect_watchdog_${ANALYSIS_PASS}_${LABEL}"
-    WD_OUTPUT_PREFIX="5_batch_effect_watchdog_${ANALYSIS_PASS}_${LABEL}"
+  if [[ "${ANALYSIS_VARIANT:-}" == "final" ]]; then
+    WD_JOB_NAME="batch_effect_watchdog_uncorrected_final_${LABEL}"
+    WD_OUTPUT_PREFIX="5_batch_effect_watchdog_uncorrected_final_${LABEL}"
+  elif [[ -n "${STAGE5_PASS}" ]]; then
+    WD_JOB_NAME="batch_effect_watchdog_${STAGE5_PASS}_${LABEL}"
+    WD_OUTPUT_PREFIX="5_batch_effect_watchdog_${STAGE5_PASS}_${LABEL}"
   else
     WD_JOB_NAME="benchmark_watchdog_${LABEL}"
     WD_OUTPUT_PREFIX="5_benchmark_watchdog_${LABEL}"
@@ -815,7 +905,12 @@ benchmark_wait_watchdog() {
   local WATCHDOG_ID="$1"
   local LABEL="$2"
   local STATUS_FILE="${WATCHDOG_STATUS_DIR}/${WATCHDOG_ID}.status"
-  local WSTATE REASON REPORT WD_STATE WD_EXIT line GRACE
+  local WSTATE REASON REPORT WD_STATE WD_EXIT line GRACE watchdog_log_prefix
+  benchmark_stage5_identity_guard || return 1
+  benchmark_stage5_method_guard "${LABEL}" || return 1
+  watchdog_log_prefix="5_benchmark_watchdog"
+  [[ "${ANALYSIS_VARIANT:-}" == "final" ]] &&
+    watchdog_log_prefix="5_batch_effect_watchdog_uncorrected_final"
 
   benchmark_wait_array_terminal "${WATCHDOG_ID}" "${LABEL} watchdog"
 
@@ -865,11 +960,11 @@ ${REPORT}"
   WD_STATE="$(sacct -j "${WATCHDOG_ID}" -X -n --format=State 2>/dev/null | head -1 | tr -d '[:space:]' || true)"
   WD_EXIT="$(sacct -j "${WATCHDOG_ID}" -X -n --format=ExitCode 2>/dev/null | head -1 | tr -d '[:space:]' || true)"
   echo "ERROR: ${LABEL} watchdog ${WATCHDOG_ID} exited without a status file (sacct State=${WD_STATE:-n/a}, ExitCode=${WD_EXIT:-n/a}); NOT syncing to NAS." >&2
-  echo "  Check ${LOGS_DIR}/5_benchmark_watchdog_${LABEL}_${WATCHDOG_ID}.log/.err" >&2
+  echo "  Check ${LOGS_DIR}/${watchdog_log_prefix}_${LABEL}_${WATCHDOG_ID}.log/.err" >&2
   notify_sync_status \
     "ECODA: benchmark NOT synced (watchdog lost)" \
     "Benchmark sync to NAS skipped for ${LABEL}: watchdog job ${WATCHDOG_ID} exited without a status file (sacct State=${WD_STATE:-n/a}, ExitCode=${WD_EXIT:-n/a}).
-Check ${LOGS_DIR}/5_benchmark_watchdog_${LABEL}_${WATCHDOG_ID}.log/.err; recover with --sync-only ${WATCHDOG_ID} or a re-run (idempotent)."
+Check ${LOGS_DIR}/${watchdog_log_prefix}_${LABEL}_${WATCHDOG_ID}.log/.err; recover with --sync-only ${WATCHDOG_ID} or a re-run (idempotent)."
   exit 1
 }
 
@@ -879,23 +974,26 @@ Check ${LOGS_DIR}/5_benchmark_watchdog_${LABEL}_${WATCHDOG_ID}.log/.err; recover
 
 benchmark_sync_artifacts_for() {
   local ds="$1" label="$2" n suffix stem batch_stem runtime_count runtime_index
+  local pass="${ANALYSIS_PASS:-${PASS_ARG:-}}"
   SYNC_ARTIFACTS=()
+  benchmark_stage5_identity_guard "${pass}" || return 1
+  benchmark_stage5_method_guard "${label}" || return 1
   local root="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
-  if [[ -n "${ANALYSIS_PASS:-}" && -z "${ANALYSIS_ROOT:-}" ]]; then
+  if [[ -n "${pass}" && -z "${ANALYSIS_ROOT:-}" ]]; then
     if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
-      root="${HPC_SCRATCH_DIR}/batch_effect/${ANALYSIS_PASS}_final"
+      root="${HPC_SCRATCH_DIR}/batch_effect/${pass}_final"
     else
-      root="${HPC_SCRATCH_DIR}/batch_effect/${ANALYSIS_PASS}"
+      root="${HPC_SCRATCH_DIR}/batch_effect/${pass}"
     fi
   fi
-  if [[ -n "${ANALYSIS_PASS:-}" ]]; then
-    batch_stem="$(ecoda_stage5_batch_stem "${ds}" "${ANALYSIS_PASS}" "${ANALYSIS_VARIANT:-}")" ||
+  if [[ -n "${pass}" ]]; then
+    batch_stem="$(ecoda_stage5_batch_stem "${ds}" "${pass}" "${ANALYSIS_VARIANT:-}")" ||
       return 1
   else
     batch_stem="${ds}"
   fi
   if [[ "${label}" == prepare_pseudobulk ]]; then
-    if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+    if [[ -n "${pass}" ]]; then
       SYNC_ARTIFACTS+=("${root}/pseudobulks/${batch_stem}_pseudobulk_hvg2000.rds")
     else
       for suffix in schvg2000 hvg2000 hvg500 hvg2000_bl hvg1000 hvg3000; do
@@ -906,7 +1004,7 @@ benchmark_sync_artifacts_for() {
   fi
   case "${label}" in
     mrvi)
-      if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+      if [[ -n "${pass}" ]]; then
         SYNC_ARTIFACTS+=("${root}/embeddings/${batch_stem}_hvg2000_highres_mrvi_dists.feather")
       else
         for n in 1000 2000 3000; do
@@ -925,7 +1023,7 @@ benchmark_sync_artifacts_for() {
       ;;
     pilot|qot)
       suffix="${label}"
-      if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+      if [[ -n "${pass}" ]]; then
         SYNC_ARTIFACTS+=("${root}/embeddings/${batch_stem}_hvg2000_highres_${suffix}_dists.feather")
       else
         SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_hvg2000_lowres_${suffix}_dists.feather")
@@ -935,7 +1033,7 @@ benchmark_sync_artifacts_for() {
       fi
       ;;
     pilotgm)
-      [[ -z "${ANALYSIS_PASS:-}" ]] || return 1
+      [[ -z "${pass}" ]] || return 1
       SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_hvg2000_highres_pilotgm_dists.feather")
       ;;
     trans|zeroimp)
@@ -975,6 +1073,13 @@ benchmark_sync_artifacts_for() {
 # immutable Python interpreter configured by the submitter.
 benchmark_validate_runtime_metadata() {
   local metadata_path="$1" output_path="$2" output_md5="$3"
+  benchmark_stage5_identity_guard || return 1
+  if [[ "${ANALYSIS_VARIANT:-}" == "final" ]]; then
+    case "${output_path}" in
+      "${ANALYSIS_ROOT}"/*|"${ANALYSIS_NAS_ROOT}"/*) ;;
+      *) echo "ERROR: final runtime output is outside uncorrected_final roots." >&2; return 1 ;;
+    esac
+  fi
   "${PYTHON_BIN}" - "${metadata_path}" "${output_path}" "${output_md5}" <<'PY'
 import json
 import math
@@ -1055,22 +1160,24 @@ PY
 
 analysis_merge_sync_cleanup() (
   local LABELS=("$@")
+  local STAGE5_PASS="${ANALYSIS_PASS:-${PASS_ARG:-}}"
   local LOCAL_ROOT="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
   local REMOTE_ROOT="${ANALYSIS_NAS_ROOT:-${NAS_TARGET_DIR}/benchmark}"
   local ds view row_label label path rel line selected_seen=""
   local metadata_manifest metadata_ds metadata_view metadata_input metadata_output metadata_extra
-  if [[ -z "${ANALYSIS_ROOT:-}" && -n "${ANALYSIS_PASS:-}" ]]; then
+  benchmark_stage5_identity_guard "${STAGE5_PASS}" || exit 1
+  if [[ -z "${ANALYSIS_ROOT:-}" && -n "${STAGE5_PASS}" ]]; then
     if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
-      LOCAL_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${ANALYSIS_PASS}_final"
+      LOCAL_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${STAGE5_PASS}_final"
     else
-      LOCAL_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${ANALYSIS_PASS}"
+      LOCAL_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${STAGE5_PASS}"
     fi
   fi
-  if [[ -z "${ANALYSIS_NAS_ROOT:-}" && -n "${ANALYSIS_PASS:-}" ]]; then
+  if [[ -z "${ANALYSIS_NAS_ROOT:-}" && -n "${STAGE5_PASS}" ]]; then
     if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
-      REMOTE_ROOT="${NAS_TARGET_DIR}/batch_effect/${ANALYSIS_PASS}_final"
+      REMOTE_ROOT="${NAS_TARGET_DIR}/batch_effect/${STAGE5_PASS}_final"
     else
-      REMOTE_ROOT="${NAS_TARGET_DIR}/batch_effect/${ANALYSIS_PASS}"
+      REMOTE_ROOT="${NAS_TARGET_DIR}/batch_effect/${STAGE5_PASS}"
     fi
   fi
   local LOG_PREFIX="${ANALYSIS_LOG_PREFIX:-execution_times_}"
@@ -1176,7 +1283,7 @@ analysis_merge_sync_cleanup() (
     while IFS=$'\t' read -r ds view row_label; do
       [[ -n "${ds}" && -n "${view}" ]] || continue
       SYNC_LABELS=("${LABELS[@]}")
-      if [[ "${ECODA_EXACT_SELECTION:-0}" == "1" && -z "${ANALYSIS_PASS:-}" ]]; then
+      if [[ "${ECODA_EXACT_SELECTION:-0}" == "1" && -z "${STAGE5_PASS}" ]]; then
         SYNC_LABELS=("${row_label}")
       fi
       for label in "${SYNC_LABELS[@]}"; do
