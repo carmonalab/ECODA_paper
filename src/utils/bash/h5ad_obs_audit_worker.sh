@@ -3,7 +3,19 @@
 # source or creates an artifact ownership record for it.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+  command -v scontrol >/dev/null 2>&1 || {
+    echo "ERROR: scontrol is required to recover the immutable worker path." >&2
+    exit 1
+  }
+  SCRIPT_DIR="$(scontrol show job "${SLURM_JOB_ID}" | awk -F= '/Command=/ {print $2}' | xargs dirname)"
+else
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+[[ -n "${SCRIPT_DIR}" ]] || {
+  echo "ERROR: could not recover the immutable worker directory." >&2
+  exit 1
+}
 source "${SCRIPT_DIR}/../../slurm_config.sh"
 source "${SCRIPT_DIR}/ecoda_run_common.sh"
 source "${SCRIPT_DIR}/ecoda_runtime.sh"
