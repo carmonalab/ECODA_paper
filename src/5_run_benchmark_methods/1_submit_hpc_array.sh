@@ -314,14 +314,78 @@ stage5_validate_final_selection() {
     }
   fi
 }
-if [[ "${ANALYSIS_VARIANT_ARG:-}" == final &&
-      ${TARGET_METHODS_SET} -eq 0 && ${METHODS_SET} -eq 0 ]]; then
-  METHODS_ARG="${EXPECTED_BATCH_METHODS}"
-  METHODS_SET=1
+if [[ -n "${SYNC_ONLY_RUN}" ]]; then
+  ecoda_validate_run_id "${SYNC_ONLY_RUN}" || exit 1
+  sync_metadata="${HPC_SCRATCH_DIR}/_ecoda_runs/${SYNC_ONLY_RUN}/metadata"
+  [[ -r "${sync_metadata}" ]] || {
+    echo "ERROR: sync-only run metadata is missing or unreadable." >&2
+    exit 1
+  }
+  sync_pass="$(sed -n 's/^PASS=//p' "${sync_metadata}" | head -1 || true)"
+  if [[ -n "${sync_pass}" ]]; then
+    [[ -z "${PASS_ARG}" || "${PASS_ARG}" == "${sync_pass}" ]] || {
+      echo "ERROR: sync-only pass does not match run metadata." >&2
+      exit 1
+    }
+    PASS_ARG="${sync_pass}"
+    PASS_SET=1
+  fi
+  sync_variant="$(sed -n 's/^ANALYSIS_VARIANT=//p' "${sync_metadata}" | head -1 || true)"
+  [[ -z "${sync_variant}" || "${sync_variant}" == final ]] || {
+    echo "ERROR: sync-only run has an unknown analysis variant." >&2
+    exit 1
+  }
+  if [[ -n "${sync_variant}" ]]; then
+    [[ -z "${ANALYSIS_VARIANT_ARG}" ||
+       "${ANALYSIS_VARIANT_ARG}" == "${sync_variant}" ]] || {
+      echo "ERROR: sync-only analysis variant does not match run metadata." >&2
+      exit 1
+    }
+    ANALYSIS_VARIANT_ARG="${sync_variant}"
+  fi
+  if [[ "${ANALYSIS_VARIANT_ARG:-}" == final ]]; then
+    expected_selection="${HPC_SCRATCH_DIR}/_ecoda_runs/${SYNC_ONLY_RUN}/manifests/selection.tsv"
+    if [[ -z "${SELECTION_FILE_ARG}" ]]; then
+      SELECTION_FILE_ARG="${expected_selection}"
+      SELECTION_FILE_SET=1
+    else
+      [[ "${SELECTION_FILE_ARG}" == "${expected_selection}" ]] || {
+        echo "ERROR: final sync-only selection is not the run-bound selection." >&2
+        exit 1
+      }
+    fi
+    stored_methods="$(sed -n 's/^METHODS=//p' "${sync_metadata}" | head -1 || true)"
+    stored_target_methods="$(sed -n 's/^TARGET_METHODS=//p' "${sync_metadata}" | head -1 || true)"
+    if [[ -n "${stored_target_methods}" ]]; then
+      [[ ${METHODS_SET} -eq 0 &&
+         ( ${TARGET_METHODS_SET} -eq 0 ||
+           "${TARGET_METHODS_ARG}" == "${stored_target_methods}" ) ]] || {
+        echo "ERROR: final sync-only target methods do not match run metadata." >&2
+        exit 1
+      }
+      TARGET_METHODS_ARG="${stored_target_methods}"
+      TARGET_METHODS_SET=1
+      METHODS_ARG=""
+      METHODS_SET=0
+      ecoda_split_csv "${TARGET_METHODS_ARG}" || exit 1
+      TARGET_METHODS=("${ECODA_ARRAY[@]}")
+      ecoda_assert_unique_items "${TARGET_METHODS[@]}" || exit 1
+    else
+      [[ -n "${stored_methods}" && ${TARGET_METHODS_SET} -eq 0 ]] || {
+        echo "ERROR: final sync-only run metadata lacks the fixed method suite." >&2
+        exit 1
+      }
+      [[ ${METHODS_SET} -eq 0 ||
+         "${METHODS_ARG}" == "${stored_methods}" ]] || {
+        echo "ERROR: final sync-only methods do not match run metadata." >&2
+        exit 1
+      }
+      METHODS_ARG="${stored_methods}"
+      METHODS_SET=1
+    fi
+  fi
 fi
-if [[ -z "${SYNC_ONLY_RUN}" ]]; then
-  stage5_validate_final_selection || exit 1
-fi
+stage5_validate_final_selection || exit 1
 
 # Exact validation is a preflight: reject malformed input before any run-root,
 # pending-manifest, owner, or scheduler state can be created.
@@ -341,25 +405,6 @@ if [[ ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
   ecoda_validate_exact_batch_selection "${SELECTION_FILE_ARG}" 3 || exit 1
 fi
 
-if [[ -z "${PASS_ARG}" && -n "${SYNC_ONLY_RUN}" ]]; then
-  sync_metadata="${HPC_SCRATCH_DIR}/_ecoda_runs/${SYNC_ONLY_RUN}/metadata"
-  if [[ -r "${sync_metadata}" ]]; then
-    sync_pass="$(sed -n 's/^PASS=//p' "${sync_metadata}" | head -1 || true)"
-    case "${sync_pass}" in
-      uncorrected|corrected) PASS_ARG="${sync_pass}" ;;
-    esac
-  fi
-fi
-if [[ -z "${ANALYSIS_VARIANT_ARG}" && -n "${SYNC_ONLY_RUN}" ]]; then
-  sync_variant="$(sed -n 's/^ANALYSIS_VARIANT=//p' \
-    "${HPC_SCRATCH_DIR}/_ecoda_runs/${SYNC_ONLY_RUN}/metadata" 2>/dev/null |
-    head -1 || true)"
-  [[ -z "${sync_variant}" || "${sync_variant}" == final ]] || {
-    echo "ERROR: sync-only run has an unknown analysis variant." >&2
-    exit 1
-  }
-  ANALYSIS_VARIANT_ARG="${sync_variant}"
-fi
 
 # Corrected configuration is a validator-only boundary.  Resolve the same
 # dataset scope that the later selection builder will use, but do not create
