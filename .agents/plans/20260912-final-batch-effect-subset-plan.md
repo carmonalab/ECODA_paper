@@ -1300,5 +1300,41 @@ full rationale when a short evidence-linked update is sufficient.
   `test_benchmark_selection_file.sh`, `test_benchmark_sync.sh`,
   `test_benchmark_rds_contract.R`, `test_batch_effect_analysis.R`, and
   `test_corrected_source_metadata.R`; shell syntax, Python compilation,
-  `datasets.json` parsing, and R auditor parsing also passed. No HPC/SIF
-  action has been taken since the pause.
+  `datasets.json` parsing, and R auditor parsing also passed. No scheduler,
+  full-cohort worker, SIF, or durable-gate action has been taken since the
+  pause; the subsequent read-only SSH/source inventory and failed RDS audit
+  are recorded below.
+
+- 2026-09-12, the H5AD corrected-subset audit patch was paused/cancelled
+  while the user considered a Snakemake-based structural replacement; no
+  canceled-agent output is accepted as verified. The production corrected
+  wave remains blocked on the authoritative RDS audit resource failure.
+
+- 2026-09-12, the resumed trust-boundary implementation and focused
+  regression are committed and pushed as `332f7c4` (following `986c6c7`).
+  The new snapshot-owned RDS auditor is covered by
+  `tests/test_corrected_source_metadata.R`. The next action is read-only
+  authoritative source auditing and then one full-hash snapshot/runtime
+  freeze; no broad structural refactor is part of this execution.
+
+- 2026-09-12, authoritative corrected-source audit was started against the
+  run-owned audit root. The direct Joanito RDS metadata audit was killed with
+  exit 137 after about 173 seconds while deserializing the 3.88-GB RDS on
+  Bamboo; no report was produced and the sequential Stephenson audit did not
+  start. This is a no-compute preflight resource failure, not validation
+  evidence. The corrected wave remains unauthorized until metadata auditing
+  moves to a memory-sufficient/bounded path without bypassing the RDS
+  contract.
+
+### H5AD corrected-source audit update
+
+- 2026-09-12, the user explicitly selected continuation of this plan and
+  dropped Snakemake from the current decision. A source-bound H5AD obs-only
+  corrected-source auditor now mirrors the RDS subset/sample/batch contract;
+  its deterministic regression passes. The earlier remote H5AD audit attempts
+  correctly stopped because the existing `332f7c4` snapshot predated this
+  helper; no source data was treated as validated.
+- 2026-09-12, the existing Joanito/Stephenson raw H5AD caches were inspected
+  read-only and their global producer records were absent. They remain
+  diagnostic only, not authoritative replacements for the killed direct RDS
+  audit. The direct Joanito RDS audit remains blocked by exit 137/OOM.

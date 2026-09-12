@@ -1044,96 +1044,30 @@ stage3_validate_corrected_source_release() {
             }' > "${report_tmp}" || return 1
           mv -f "${report_tmp}" "${report}" || return 1
         else
+          source_script="$(stage3_require_source_script \
+            "${SCRIPT_DIR}/../utils/py/audit_corrected_h5ad_source.py")" || return 1
           (
             cd "${SOURCE_ROOT}" || exit 1
             export PYTHONPATH="${SOURCE_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
-            "${PYTHON_BIN}" -c '
-import json
-import sys
-from src.utils.py.h5ad_pseudobulk import validate_h5ad_corrected_batch_metadata
-result = validate_h5ad_corrected_batch_metadata(
-    sys.argv[1],
-    json.loads(sys.argv[2]),
-    sample_col=sys.argv[3],
-    biological_column=sys.argv[4],
-    method_id="preprocess",
-    model_id="hvg_composite_v1",
-)
-print(json.dumps(result, sort_keys=True))
-' "${source_real}" "${batch_json}" "${sample_col}" "${label_col}" \
-              > "${raw_tmp}"
+            "${PYTHON_BIN}" "${source_script}" \
+              --config "${config}" \
+              --input-file "${source_real}" \
+              --output "${report}" \
+              --dataset "${ds}" \
+              --view "${view}" \
+              --source-root "${SOURCE_ROOT}" \
+              --source-manifest "${SOURCE_MANIFEST_ORIGINAL}" \
+              --runtime-identity "${RUNTIME_IDENTITY}" \
+              --run-root "${ECODA_RUN_ROOT}" \
+              --sample-column "${sample_col}" \
+              --label-column "${label_col}" \
+              --batch-keys-json "${batch_json}" \
+              --subset-vars-json "${subset_json}"
           ) || {
-            rm -f "${raw_tmp}" "${report_tmp}"
+            rm -f "${report}" "${report}.md5"
             echo "ERROR: corrected Stage 3 H5AD source metadata preflight failed: ${ds}/${view}" >&2
             return 1
           }
-          jq -n --slurpfile validation "${raw_tmp}" \
-            --arg dataset "${ds}" --arg view "${view}" --arg status "${status}" \
-            --arg source "${source_real}" --arg source_type "${source_type}" \
-            --arg sample "${sample_col}" --arg label "${label_col}" \
-            --arg source_root "${SOURCE_ROOT}" \
-            --arg source_manifest "${SOURCE_MANIFEST_ORIGINAL}" \
-            --arg runtime_identity "${RUNTIME_IDENTITY}" \
-            --arg runtime_manifest "${runtime_manifest}" \
-            --arg runtime_image "${runtime_image}" \
-            --arg source_md5 "${source_md5}" --arg source_sha256 "${source_sha256}" \
-            --argjson source_size "${source_size}" \
-            --argjson batch "${batch_json}" --argjson subset "${subset_json}" \
-            --arg source_format "${source_format}" --arg source_commit "${source_commit}" \
-            --arg source_archive "${source_archive}" \
-            --arg source_archive_sha "${source_archive_sha}" \
-            --arg source_config "${source_config}" --arg source_datasets "${source_datasets}" \
-            --arg source_toml "${source_toml}" --arg source_lock "${source_lock}" \
-            --arg source_aux "${source_aux}" --arg source_branch "${source_branch}" \
-            --arg runtime_image_sha "${runtime_image_sha}" \
-            --arg runtime_manifest_sha "${runtime_manifest_sha}" \
-            --arg runtime_image_size "${runtime_image_size}" \
-            --arg runtime_manifest_size "${runtime_manifest_size}" '
-            ($validation[0]) as $v |
-            {
-              schema_version: 1, dataset: $dataset, view: $view, status: $status,
-              source_type: $source_type, source_path: $source,
-              source_identity: {path: $source, size: $source_size, md5: $source_md5,
-                sha256: $source_sha256},
-              config: {dataset: $dataset, view: $view, sample_column: $sample,
-                label_column: $label, batch_keys: $batch, subset_vars: $subset},
-              subset_audit: {configured: $subset, sample_column: $sample,
-                validation_scope: "full_source_metadata", split_sample_count: 0},
-              validation_summary: {
-                valid: ($v.valid // true), n_cells: ($v.n_cells // $v.n_obs),
-                n_samples: $v.n_samples,
-                batch_keys: ($v.ordered_keys // $v.keys // $batch),
-                key_level_counts: $v.key_level_counts,
-                design_rank: $v.design_rank, design_columns: $v.design_columns,
-                composite_design_rank: $v.composite_design_rank,
-                composite_design_columns: $v.composite_design_columns,
-                estimable: ($v.estimable // true), fingerprint: $v.fingerprint
-              },
-              provenance: {
-                source_root: $source_root,
-                source_manifest: {path: $source_manifest, format: $source_format,
-                  source_commit: $source_commit, source_archive_path: $source_archive,
-                  source_archive_sha256: $source_archive_sha,
-                  config_helper_sha256: $source_config, datasets_sha256: $source_datasets,
-                  pixi_toml_sha256: $source_toml, pixi_lock_sha256: $source_lock,
-                  aux_root: $source_aux, scgate_db_branch: $source_branch},
-                runtime_identity: {path: $runtime_identity, runtime_image: $runtime_image,
-                  runtime_manifest: $runtime_manifest,
-                  runtime_image_sha256: $runtime_image_sha,
-                  runtime_manifest_sha256: $runtime_manifest_sha,
-                  runtime_image_size: $runtime_image_size,
-                  runtime_manifest_size: $runtime_manifest_size},
-                runtime_manifest: {path: $runtime_manifest,
-                  sha256: $runtime_manifest_sha, size: ($runtime_manifest_size | tonumber)},
-                runtime_image: {path: $runtime_image,
-                  sha256: $runtime_image_sha, size: ($runtime_image_size | tonumber)}
-              }
-            }' "${raw_tmp}" > "${report_tmp}" || {
-              rm -f "${raw_tmp}" "${report_tmp}"
-              return 1
-            }
-          rm -f "${raw_tmp}"
-          mv -f "${report_tmp}" "${report}" || return 1
         fi
         ;;
       *)
@@ -1167,7 +1101,7 @@ stage3_validate_corrected_source_evidence() {
   local ds view extra row_ds row_view row_status row_source row_report
   local safe status expected_count=0 evidence_count=0 expected_report
   local source_real source_md5 source_sha256 source_size source_type
-  local sample_col label_col batch_json subset_json
+  local sample_col label_col batch_json batch_expected_json subset_json
   local runtime_manifest runtime_image runtime_image_sha runtime_manifest_sha
   local runtime_image_size runtime_manifest_size
   [[ ${STAGE3_CORRECTED_SELECTION} -eq 1 ]] || return 0
@@ -1236,6 +1170,12 @@ stage3_validate_corrected_source_evidence() {
       "${DATASETS_JSON_FILE}")" || return 1
     subset_json="$(jq -c --arg ds "${ds}" --arg view "${view}" \
       '.[$ds].views[$view].subset_vars // {}' "${DATASETS_JSON_FILE}")" || return 1
+    batch_expected_json="$(printf '%s\n' "${batch_json}" | jq -c '
+      if type == "array" then .
+      elif type == "string" then [.]
+      else error("configured batch keys must be a string or array")
+      end
+    ')" || return 1
     if [[ "${row_status}" == "CONFIG_ONLY_TEST" ]]; then
       jq -e --arg dataset "${ds}" --arg view "${view}" --arg status "${row_status}" \
         --arg source "${row_source}" --arg sample "${sample_col}" \
@@ -1256,6 +1196,7 @@ stage3_validate_corrected_source_evidence() {
         --arg source_md5 "${source_md5}" --arg source_sha256 "${source_sha256}" \
         --argjson source_size "${source_size}" --arg sample "${sample_col}" \
         --arg label "${label_col}" --argjson batch "${batch_json}" \
+        --argjson batch_expected "${batch_expected_json}" \
         --argjson subset "${subset_json}" --arg source_root "${SOURCE_ROOT}" \
         --arg source_manifest "${SOURCE_MANIFEST_ORIGINAL}" \
         --arg runtime_identity "${RUNTIME_IDENTITY}" \
@@ -1273,10 +1214,78 @@ stage3_validate_corrected_source_evidence() {
         .source_identity.size == $source_size and
         .config.dataset == $dataset and .config.view == $view and
         .config.sample_column == $sample and .config.label_column == $label and
-        .config.batch_keys == $batch and .config.subset_vars == $subset and
-        .subset_audit.split_sample_count == 0 and
-        .validation_summary.valid == true and
-        .validation_summary.estimable == true and
+        (if $source_type == "h5ad" then
+           .config.batch_keys == $batch_expected
+         else
+           (.config.batch_keys == $batch or
+            .config.batch_keys == $batch_expected)
+         end) and
+        (.subset_audit as $subset_audit |
+          ($subset_audit | type == "object") and
+          $subset_audit.sample_column == $sample and
+          ($subset_audit.total_cells | type == "number") and
+          ($subset_audit.retained_cells | type == "number") and
+          ($subset_audit.dropped_cells | type == "number") and
+          ($subset_audit.total_samples | type == "number") and
+          ($subset_audit.retained_samples | type == "number") and
+          ($subset_audit.dropped_samples | type == "number") and
+          ($subset_audit.total_cells >= 1) and
+          ($subset_audit.retained_cells >= 1) and
+          ($subset_audit.dropped_cells >= 0) and
+          ($subset_audit.total_samples >= 1) and
+          ($subset_audit.retained_samples >= 1) and
+          ($subset_audit.dropped_samples >= 0) and
+          ($subset_audit.retained_cells + $subset_audit.dropped_cells ==
+            $subset_audit.total_cells) and
+          ($subset_audit.retained_samples + $subset_audit.dropped_samples ==
+            $subset_audit.total_samples) and
+          ($subset_audit.retained_sample_ids | type == "array") and
+          ($subset_audit.dropped_sample_ids | type == "array") and
+          ($subset_audit.split_sample_ids | type == "array") and
+          ($subset_audit.retained_sample_ids | length) == $subset_audit.retained_samples and
+          ($subset_audit.dropped_sample_ids | length) == $subset_audit.dropped_samples and
+          ($subset_audit.split_sample_ids | length) == 0 and
+          $subset_audit.split_sample_count == 0 and
+          (.source_type != "h5ad" or
+            ($subset_audit.configured == $subset and
+             $subset_audit.validation_scope == "full_source_metadata"))
+        ) and
+        (.validation_summary as $validation |
+          ($validation | type == "object") and
+          (($validation | keys | sort) ==
+            ["batch_keys", "biological_column", "composite_design_columns",
+             "composite_design_rank", "design_columns", "design_rank",
+             "estimable", "fingerprint", "key_level_counts",
+             "key_near_unique_fraction", "method_id", "model_id", "n_cells",
+             "n_samples", "near_unique_fraction", "sample_column", "valid"]) and
+          $validation.valid == true and
+          $validation.estimable == true and
+          $validation.sample_column == $sample and
+          $validation.biological_column == $label and
+          ($validation.batch_keys == $batch_expected or
+           ($source_type != "h5ad" and $validation.batch_keys == $batch)) and
+          ($validation.n_cells | type == "number") and
+          ($validation.n_samples | type == "number") and
+          ($validation.n_cells == .subset_audit.retained_cells) and
+          ($validation.n_samples == .subset_audit.retained_samples) and
+          ($validation.key_level_counts | type == "object") and
+          ($validation.key_near_unique_fraction | type == "object") and
+          (($validation.key_level_counts | keys | sort) ==
+            ($batch_expected | sort)) and
+          (($validation.key_near_unique_fraction | keys | sort) ==
+            ($batch_expected | sort)) and
+          ($validation.near_unique_fraction | type == "number") and
+          ($validation.near_unique_fraction > 0 and
+            $validation.near_unique_fraction < 1) and
+          ($validation.design_rank | type == "number") and
+          ($validation.design_columns | type == "number") and
+          ($validation.composite_design_rank | type == "number") and
+          ($validation.composite_design_columns | type == "number") and
+          ($validation.fingerprint |
+            if type == "string" then test("^[0-9a-f]{64}$") else false end) and
+          $validation.method_id == "preprocess" and
+          $validation.model_id == "hvg_composite_v1"
+        ) and
         .provenance.source_root == $source_root and
         .provenance.source_manifest.path == $source_manifest and
         .provenance.runtime_identity.path == $runtime_identity and
