@@ -299,39 +299,103 @@ entry <- config[[ds]]
 if (is.null(entry)) {
   stop("Dataset '", ds, "' not found in ", args$config_path)
 }
+sample_col <- "Sample"
+batch_keys <- NULL
+batch_context <- NULL
+pseudobulk_batch_contract <- NULL
+h5ad_expected_batch_contract <- NULL
+python_batch_metadata <- NULL
 batch_col <- if (!is.null(analysis_pass) && analysis_pass == "corrected") {
   if (is.null(entry$batch_col)) {
     stop("corrected batch-effect view requires a confirmed columns.batch")
   }
-  entry$batch_col
+  batch_keys <- ecoda_batch_normalize_keys(
+    entry$batch_col,
+    sample_col = sample_col,
+    biological_label = entry$label_col
+  )
+  if (length(batch_keys) >= 2L) {
+    "__ecoda_batch_combined_v1"
+  } else {
+    batch_keys[[1L]]
+  }
 } else {
   NULL
 }
 blind_mode <- is.null(analysis_pass) || analysis_pass == "uncorrected"
 correct_batch_mode <- identical(analysis_pass, "corrected")
-
+if (correct_batch_mode) {
+  h5ad_expected_batch_contract <- ecoda_hpc_batch_contract_identity(
+    batch_keys = batch_keys,
+    sample_col = sample_col,
+    method_id = "preprocess",
+    model_id = "hvg_composite_v1"
+  )
+}
 h5ad_path <- get_h5ad_path(config, ds, args$view, args$input_dir)
 if (!file.exists(h5ad_path)) {
   stop("Input h5ad not found: ", h5ad_path)
+}
+if (correct_batch_mode) {
+  # This full-cell pass is intentionally before
+  # load_h5ad_pseudobulk_metadata(), whose downstream consumers may collapse
+  # metadata to the first observation for each Sample.
+  python_batch_metadata <- validate_h5ad_corrected_batch_metadata(
+    h5ad_path = h5ad_path,
+    batch_keys = as.list(unname(batch_keys)),
+    sample_col = sample_col,
+    biological_label = entry$label_col
+  )
 }
 dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Read metadata and ranked HVGs through h5py-only helpers.  These readers
 # validate persisted H5AD structure while never materializing count values;
 # cache completeness is checked below before the raw CSR pass is requested.
-sample_col <- "Sample"
 required_hvg <- if (identical(args$view, "benchmark_analysis")) 3000L else 2000L
 h5ad_metadata <- load_h5ad_pseudobulk_metadata(
   h5ad_path,
   sample_col = sample_col,
-  metadata_columns = batch_col,
+  metadata_columns = if (correct_batch_mode) {
+    unique(c(as.list(unname(batch_keys)), entry$label_col))
+  } else {
+    batch_col
+  },
   n_hvg = required_hvg,
-  required_nonmissing_columns = unique(c(sample_col, batch_col))
+  required_nonmissing_columns = unique(c(
+    sample_col,
+    if (correct_batch_mode) c(batch_keys, entry$label_col) else batch_col
+  )),
+  expected_batch_contract = h5ad_expected_batch_contract,
+  view = args$view,
+  method = "preprocessing"
 )
 obs <- h5ad_metadata$obs
 hvg_rank_genes <- h5ad_metadata$hvg_rank_genes
 if (!sample_col %in% colnames(obs)) {
   stop(sample_col, " not found in obs columns of ", h5ad_path)
+}
+if (correct_batch_mode) {
+  batch_context <- ecoda_hpc_batch_context(
+    metadata = obs,
+    batch_keys = as.list(unname(batch_keys)),
+    sample_col = sample_col,
+    biological_label = entry$label_col,
+    python_metadata = python_batch_metadata
+  )
+  batch_col <- batch_context$scalar_batch_col
+  pseudobulk_batch_contract <- ecoda_hpc_augment_batch_contract(
+    identity = ecoda_hpc_batch_contract_identity(
+      batch_keys = batch_keys,
+      sample_col = sample_col,
+      method_id = "Pseudobulk",
+      model_id = "pseudobulk_composite_v1"
+    ),
+    validation = batch_context$validation,
+    method_id = "Pseudobulk",
+    batch_keys = batch_keys,
+    scalar_batch_col = batch_context$scalar_batch_col
+  )
 }
 
 # Sample names are already standardized in the preprocessed obs
@@ -350,7 +414,13 @@ cache_paths <- file.path(
 )
 cache_valid <- vapply(seq_along(requested_variants), function(index) {
   .pb_variant_cache_valid(
-    cache_paths[[index]], requested_variants[[index]]
+    cache_paths[[index]],
+    requested_variants[[index]],
+    expected_batch_contract = if (correct_batch_mode) {
+      pseudobulk_batch_contract
+    } else {
+      NULL
+    }
   )
 }, logical(1))
 cached_variants <- list()
@@ -362,6 +432,13 @@ for (v in reused) {
     producer = PB_VARIANT_PRODUCERS[[v]]
   )
   validate_pseudobulk_timing_record(value, variant = v)
+  if (correct_batch_mode) {
+    ecoda_hpc_validate_batch_contract(
+      value[["batch_contract"]],
+      pseudobulk_batch_contract,
+      label = paste0("Pseudobulk cache ", v, " (", cache_paths[[cache_index]], ")")
+    )
+  }
   cached_variants[[v]] <- value
 }
 pending <- requested_variants[!cache_valid | force]
@@ -379,7 +456,10 @@ if (length(pending) > 0) {
     cache_stem = cache_stem,
     view = args$view,
     analysis_pass = analysis_pass,
-    run_id = ecoda_local_current_run_id()
+    run_id = ecoda_local_current_run_id(),
+    batch_context = if (correct_batch_mode) batch_context else NULL,
+    batch_contract = if (correct_batch_mode) pseudobulk_batch_contract else NULL,
+    expected_h5ad_batch_contract = h5ad_expected_batch_contract
   )
   for (v in names(variants)) {
     f <- file.path(

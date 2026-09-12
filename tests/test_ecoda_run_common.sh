@@ -44,6 +44,45 @@ ecoda_validate_exact_batch_selection "${invalid}" 2 >/dev/null 2>&1
 RC=$?
 set -e
 [[ ${RC} -ne 0 ]]
+CORRECTED_BATCH_BASE="${TMP_DIR}/corrected-batch-base.json"
+cat > "${CORRECTED_BATCH_BASE}" <<'JSON'
+{"Fixture":{"columns":{"sample":"sample_id","label":"label","batch":"batch_a"},"views":{"batch_effect_corrected":{"columns":{}}}}}
+JSON
+CORRECTED_BATCH_STATE="${TMP_DIR}/corrected-batch-state"
+CORRECTED_BATCH_SBATCH="${TMP_DIR}/corrected-batch.sbatch.calls"
+: > "${CORRECTED_BATCH_SBATCH}"
+for corrected_case in null object empty duplicate blank label_overlap sample_overlap reserved_sample; do
+  case "${corrected_case}" in
+    null) raw_batch='null' ;;
+    object) raw_batch='{"name":"batch_a"}' ;;
+    empty) raw_batch='[]' ;;
+    duplicate) raw_batch='["batch_a","batch_a"]' ;;
+    blank) raw_batch='["   "]' ;;
+    label_overlap) raw_batch='["label"]' ;;
+    sample_overlap) raw_batch='["sample_id"]' ;;
+    reserved_sample) raw_batch='["Sample"]' ;;
+  esac
+  corrected_fixture="${TMP_DIR}/corrected-${corrected_case}.json"
+  jq --argjson batch "${raw_batch}" \
+    '.Fixture.columns.batch = $batch' "${CORRECTED_BATCH_BASE}" \
+    > "${corrected_fixture}"
+  corrected_run_root="${CORRECTED_BATCH_STATE}/_ecoda_runs/${corrected_case}"
+  corrected_runs_before="$(printf '%s\n' "${ECODA_RUNS_ROOT}"/*)"
+  set +e
+  ecoda_validate_corrected_batch_columns \
+    "${corrected_fixture}" Fixture batch_effect_corrected >/dev/null 2>&1
+  RC=$?
+  set -e
+  [[ ${RC} -ne 0 ]]
+  [[ ! -s "${CORRECTED_BATCH_SBATCH}" ]]
+  [[ "${corrected_runs_before}" == "$(printf '%s\n' "${ECODA_RUNS_ROOT}"/*)" ]]
+  [[ ! -e "${CORRECTED_BATCH_STATE}" ]]
+  [[ ! -e "${corrected_run_root}" ]]
+  [[ ! -e "${corrected_run_root}/manifests/scheduler_ids.tsv" ]]
+  [[ ! -e "${corrected_run_root}/manifests/selection.tsv" ]]
+  [[ ! -e "${corrected_run_root}/manifests/pending.tsv" ]]
+  [[ ! -e "${corrected_run_root}/status/compute" ]]
+done
 OWNER="$(ecoda_owner_acquire test dataset/view "${RUN_ID}" 0)"
 [[ -d "${OWNER}" ]]
 set +e

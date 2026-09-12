@@ -473,6 +473,218 @@ ecoda_view_input_name() {
   fi
   printf '%s' "${value}"
 }
+# Validate one corrected-mode dataset's columns.batch schema without creating
+# files, run state, manifests, ownership, or scheduler state.  The caller
+# supplies the dataset/view so view-level column overrides are resolved before
+# the batch key is checked.
+ecoda_validate_corrected_batch_columns() {
+  local config_path="${1:-${DATASETS_JSON_FILE:-}}"
+  local dataset="${2:-}"
+  local view="${3:-batch_effect_corrected}"
+  [[ -r "${config_path}" ]] || {
+    _ecoda_die "corrected batch configuration is unreadable: ${config_path}"
+    return 1
+  }
+  [[ -n "${dataset}" && -n "${view}" ]] || {
+    _ecoda_die "corrected batch validation requires a dataset and view"
+    return 1
+  }
+  if ! jq -e --arg ds "${dataset}" --arg view "${view}" '
+    def nonblank_string:
+      if type != "string" then false
+      elif length == 0 then false
+      else test("[^[:space:]]")
+      end;
+    def object_or_empty:
+      if . == null then {}
+      elif type == "object" then .
+      else error("expected a JSON object")
+      end;
+
+    if type != "object" then
+      error("datasets configuration must be a JSON object")
+    elif (has($ds) | not) then
+      error("dataset is not configured")
+    else
+      .[$ds] as $entry |
+      if ($entry | type) != "object" then
+        error("dataset entry must be a JSON object")
+      elif (($entry.views // null) | type) != "object" then
+        error("dataset views must be a JSON object")
+      elif (($entry.views | has($view)) | not) then
+        error("corrected view is not configured")
+      else
+        $entry.views[$view] as $view_spec |
+        if ($view_spec | type) != "object" then
+          error("corrected view must be a JSON object")
+        else
+          ($entry.columns | object_or_empty) as $base_columns |
+          ($view_spec.columns | object_or_empty) as $view_columns |
+          ($base_columns * $view_columns) as $columns |
+          ($columns.batch) as $raw_batch |
+          (if ($raw_batch | type) == "string" then
+             [$raw_batch]
+           elif ($raw_batch | type) == "array" then
+             $raw_batch
+           else
+             error("columns.batch must be a string or nonempty array of strings")
+           end) as $keys |
+          if ($keys | length) == 0 then
+            error("columns.batch must not be empty")
+          elif any($keys[]; (nonblank_string | not)) then
+            error("columns.batch contains an empty, blank, or non-string key")
+          elif (($keys | unique | length) != ($keys | length)) then
+            error("columns.batch contains duplicate keys")
+          elif any($keys[];
+                   . == "Sample" or . == "__ecoda_batch_combined_v1") then
+            error("columns.batch contains a reserved key")
+          elif (($columns.label? != null) and
+                (($columns.label | type) == "string") and
+                any($keys[]; . == $columns.label)) then
+            error("columns.batch overlaps the configured label column")
+          elif (($columns.sample? != null) and
+                (($columns.sample | type) == "string") and
+                any($keys[]; . == $columns.sample)) then
+            error("columns.batch overlaps the configured sample column")
+          else
+            true
+          end
+        end
+      end
+    end
+  ' "${config_path}" >/dev/null; then
+    _ecoda_die "invalid corrected columns.batch for dataset ${dataset}"
+    return 1
+  fi
+}
+
+ecoda_corrected_batch_method_policy() {
+  local method="${1:-}"
+  ECODA_CORRECTED_BATCH_METHOD_ID=""
+  ECODA_CORRECTED_BATCH_MODEL_ID=""
+  case "${method}" in
+    preprocess)
+      ECODA_CORRECTED_BATCH_METHOD_ID="preprocess"
+      ECODA_CORRECTED_BATCH_MODEL_ID="hvg_composite_v1"
+      ;;
+    prepare_pseudobulk|pseudobulk)
+      ECODA_CORRECTED_BATCH_METHOD_ID="Pseudobulk"
+      ECODA_CORRECTED_BATCH_MODEL_ID="pseudobulk_composite_v1"
+      ;;
+    gloscope)
+      ECODA_CORRECTED_BATCH_METHOD_ID="GloScope"
+      ECODA_CORRECTED_BATCH_MODEL_ID="embedding_consumer_harmony_v1"
+      ;;
+    pilot)
+      ECODA_CORRECTED_BATCH_METHOD_ID="PILOT"
+      ECODA_CORRECTED_BATCH_MODEL_ID="embedding_consumer_harmony_v1"
+      ;;
+    qot)
+      ECODA_CORRECTED_BATCH_METHOD_ID="QOT"
+      ECODA_CORRECTED_BATCH_MODEL_ID="embedding_consumer_harmony_v1"
+      ;;
+    mrvi)
+      ECODA_CORRECTED_BATCH_METHOD_ID="MrVI"
+      ECODA_CORRECTED_BATCH_MODEL_ID="mrvi_composite_v1"
+      ;;
+    composition)
+      ECODA_CORRECTED_BATCH_METHOD_ID="ECODA_authors_HR"
+      ECODA_CORRECTED_BATCH_MODEL_ID="ecoda_additive_random_intercepts_v1"
+      ;;
+    *)
+      _ecoda_die "unsupported corrected batch method policy: ${method}"
+      return 1
+      ;;
+  esac
+}
+
+# Emit one canonical JSON identity.  Configuration-only calls remain useful
+# before an authoritative H5AD exists; corrected manifest callers may provide
+# that path to attach the validated, vector-free summary.
+ecoda_batch_contract_identity() {
+  local config_path="${1:-${DATASETS_JSON_FILE:-}}"
+  local dataset="${2:-}" view="${3:-}"
+  local method_id="${4:-}" model_id="${5:-}"
+  local h5ad_path="${6:-}"
+  local source_root="${ECODA_SOURCE_ROOT:-${PROJECT_ROOT:-}}"
+  local contract_script python_bin
+  [[ -r "${config_path}" && -n "${dataset}" && -n "${view}" &&
+     -n "${method_id}" && -n "${model_id}" ]] || {
+    _ecoda_die "batch contract identity requires config, dataset, view, method, and model"
+    return 1
+  }
+  contract_script="${source_root%/}/src/utils/py/batch_contract.py"
+  [[ -r "${contract_script}" ]] || contract_script="src/utils/py/batch_contract.py"
+  [[ -r "${contract_script}" ]] || {
+    _ecoda_die "corrected batch contract builder is missing: ${contract_script}"
+    return 1
+  }
+  python_bin="${PYTHON_BIN:-python3}"
+  if [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] &&
+     command -v python3 >/dev/null 2>&1; then
+    python_bin="python3"
+  fi
+  command -v "${python_bin}" >/dev/null 2>&1 || {
+    _ecoda_die "corrected batch contract builder Python is unavailable: ${python_bin}"
+    return 1
+  }
+  "${python_bin}" - "${contract_script}" "${config_path}" "${dataset}" \
+    "${view}" "${method_id}" "${model_id}" "${h5ad_path}" <<'PY'
+import importlib.util
+import json
+import sys
+
+script_path, config_path, dataset, view, method_id, model_id, h5ad_path = sys.argv[1:]
+spec = importlib.util.spec_from_file_location("ecoda_batch_contract", script_path)
+if spec is None or spec.loader is None:
+    raise RuntimeError("could not load corrected batch contract builder")
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+with open(config_path, "r", encoding="utf-8") as handle:
+    config = json.load(handle)
+if not isinstance(config, dict):
+    raise ValueError("datasets configuration must be a JSON object")
+entry = config.get(dataset)
+if not isinstance(entry, dict):
+    raise ValueError(f"dataset is not configured: {dataset}")
+views = entry.get("views")
+if not isinstance(views, dict) or not isinstance(views.get(view), dict):
+    raise ValueError(f"corrected view is not configured: {dataset}/{view}")
+base_columns = entry.get("columns")
+view_columns = views[view].get("columns")
+if base_columns is None:
+    base_columns = {}
+if view_columns is None:
+    view_columns = {}
+if not isinstance(base_columns, dict) or not isinstance(view_columns, dict):
+    raise ValueError(f"dataset/view columns must be JSON objects: {dataset}/{view}")
+columns = dict(base_columns)
+columns.update(view_columns)
+sample_column = "Sample"
+identity = module.build_batch_contract_identity(
+    columns.get("batch"),
+    sample_column=sample_column,
+    method_id=method_id,
+    model_id=model_id,
+)
+if h5ad_path:
+    batch_keys = identity["ordered_source_keys"]
+    summary = module.read_h5ad_validation_summary(h5ad_path, batch_keys)
+    correction_mode, correction_formula = module.batch_correction_spec_for_keys(
+        method_id,
+        batch_keys,
+    )
+    identity = module.augment_batch_contract(
+        identity,
+        summary,
+        correction_mode,
+        correction_formula,
+    )
+json.dump(identity, sys.stdout, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+sys.stdout.write("\n")
+PY
+}
 
 ecoda_view_output_name() {
   local value
@@ -705,6 +917,24 @@ _ecoda_sha256_text() {
   }
   printf '%s' "${digest}" | tr '[:upper:]' '[:lower:]'
 }
+ecoda_sha256_file() {
+  local path="${1:-}" digest
+  [[ -s "${path}" && -f "${path}" && ! -L "${path}" ]] || {
+    _ecoda_die "cannot derive a SHA-256 digest for missing or unsafe file: ${path}"
+    return 1
+  }
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest="$(sha256sum "${path}" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    digest="$(shasum -a 256 "${path}" | awk '{print $1}')"
+  else
+    _ecoda_die "sha256sum or shasum is required for file identity"
+    return 1
+  fi
+  [[ "${digest}" =~ ^[[:xdigit:]]{64}$ ]] || return 1
+  printf '%s' "${digest}" | tr '[:upper:]' '[:lower:]'
+}
+
 
 # Canonicalize an absolute path while permitting the final artifact itself to
 # be not-yet-created.  The containing directory must already exist; this is

@@ -19,14 +19,497 @@ PB_VARIANT_PRODUCERS <- setNames(
   paste0("stage5_prepare_pseudobulk_", PB_VARIANT_NAMES),
   PB_VARIANT_NAMES
 )
+# Corrected-mode consumers share the independent R batch contract.  The worker
+# loader predates that module, so source it here once for both Pipeline A
+# scripts and for direct utility callers.
+if (!exists("ecoda_batch_normalize_keys", mode = "function", inherits = TRUE)) {
+  .ecoda_hpc_project_root <- Sys.getenv("PROJECT_ROOT", unset = "")
+  .ecoda_hpc_contract_path <- if (nzchar(.ecoda_hpc_project_root)) {
+    file.path(.ecoda_hpc_project_root, "src", "utils", "batch_contract.R")
+  } else {
+    file.path("src", "utils", "batch_contract.R")
+  }
+  if (!file.exists(.ecoda_hpc_contract_path)) {
+    .ecoda_hpc_source_file <- tryCatch(
+      sys.frame(1L)$ofile,
+      error = function(error) ""
+    )
+    if (is.character(.ecoda_hpc_source_file) &&
+        length(.ecoda_hpc_source_file) == 1L &&
+        nzchar(.ecoda_hpc_source_file)) {
+      .ecoda_hpc_contract_path <- normalizePath(
+        file.path(
+          dirname(.ecoda_hpc_source_file),
+          "..", "utils", "batch_contract.R"
+        ),
+        mustWork = FALSE
+      )
+    }
+    rm(.ecoda_hpc_source_file)
+  }
+  if (!file.exists(.ecoda_hpc_contract_path)) {
+    stop(
+      "R corrected batch contract not found: ",
+      .ecoda_hpc_contract_path
+    )
+  }
+  source(.ecoda_hpc_contract_path)
+  rm(.ecoda_hpc_project_root, .ecoda_hpc_contract_path)
+}
+# Normalize the scalar/list representation at the R execution boundary while
+# preserving the configured key order.  The shared contract deliberately
+# rejects an atomic character vector with multiple keys, so convert only that
+# representation to the ordered list form accepted by the contract.
+ecoda_hpc_normalize_batch_keys <- function(
+  batch_keys,
+  sample_col = "Sample",
+  biological_label = NULL
+) {
+  batch_keys_input <- if (
+    is.character(batch_keys) && length(batch_keys) > 1L
+  ) {
+    as.list(batch_keys)
+  } else {
+    batch_keys
+  }
+  ecoda_batch_normalize_keys(
+    batch_keys_input,
+    sample_col = sample_col,
+    biological_label = biological_label
+  )
+}
+
+# Corrected artifact identity is configuration-only.  Keep this helper small
+# and exact: the strict artifact validators normalize the same canonical fields
+# and a missing or changed mapping must never become a cache miss.
+ecoda_hpc_batch_contract_identity <- function(
+  batch_keys,
+  sample_col = "Sample",
+  method_id,
+  model_id
+) {
+  keys <- ecoda_hpc_normalize_batch_keys(
+    batch_keys,
+    sample_col = sample_col
+  )
+  ecoda_batch_contract_identity(
+    batch_keys = as.list(unname(keys)),
+    sample_col = sample_col,
+    method_id = method_id,
+    model_id = model_id
+  )
+}
+
+# Attach a compact validated summary to one corrected identity.  The full
+# validation remains in-memory in batch_context; only the fixed semantic
+# summary and configuration/fingerprint fields cross an artifact boundary.
+ecoda_hpc_augment_batch_contract <- function(
+  identity,
+  validation,
+  method_id,
+  batch_keys,
+  scalar_batch_col = NULL
+) {
+  if (is.null(identity)) {
+    stop("cannot augment a missing corrected batch contract identity")
+  }
+  keys <- ecoda_hpc_normalize_batch_keys(batch_keys)
+  spec <- ecoda_batch_correction_spec(
+    method_id = method_id,
+    batch_keys = keys,
+    scalar_batch_col = scalar_batch_col
+  )
+  ecoda_batch_augment_contract(
+    identity = identity,
+    validation = validation,
+    correction_mode = spec$correction_mode,
+    correction_formula = spec$correction_formula
+  )
+}
+
+ecoda_hpc_validate_batch_contract <- function(
+  recorded,
+  expected,
+  label = "corrected batch artifact"
+) {
+  if (is.null(expected)) return(invisible(NULL))
+  if (is.null(recorded) || !is.list(recorded) ||
+      !identical(recorded, expected)) {
+    stop(label, " is missing or has a mismatched corrected batch contract")
+  }
+  invisible(TRUE)
+}
+
+# Compare only configuration/fingerprint identity while a full-cell summary is
+# not yet available.  Callers must perform exact validation after attaching
+# the summary from batch_context$validation.
+ecoda_hpc_validate_batch_contract_source <- function(
+  recorded,
+  expected,
+  label = "corrected batch artifact"
+) {
+  recorded_source <- recorded
+  expected_source <- expected
+  if (is.list(recorded_source)) recorded_source[["validation_summary"]] <- NULL
+  if (is.list(expected_source)) expected_source[["validation_summary"]] <- NULL
+  ecoda_hpc_validate_batch_contract(
+    recorded_source,
+    expected_source,
+    label = label
+  )
+}
+
+# Reticulate simplifies one-element R character vectors to Python strings,
+# while the structural validator intentionally requires ordered lists.  Keep
+# identity key fields list-shaped even for scalar corrected configurations.
+ecoda_hpc_identity_for_python <- function(identity) {
+  if (!is.list(identity) || is.null(names(identity))) {
+    stop("corrected H5AD identity must be a named list")
+  }
+  payload <- identity
+  for (field in c(
+    "ordered_source_keys",
+    "required_source_obs_columns"
+  )) {
+    if (field %in% names(payload)) {
+      payload[[field]] <- as.list(unname(payload[[field]]))
+    }
+  }
+  reticulate::r_to_py(payload)
+}
+
+# The counts-free Python loader predates explicit identity arguments.  Invoke
+# the path validator directly first so corrected H5AD reads check both
+# structure and the embedded preprocessing identity without materializing X.
+ecoda_hpc_validate_h5ad_path_identity <- function(
+  h5ad_path,
+  view,
+  method = "preprocessing",
+  expected_batch_contract = NULL
+) {
+  if (is.null(expected_batch_contract)) return(invisible(NULL))
+  project_root <- Sys.getenv("PROJECT_ROOT")
+  if (!nzchar(project_root)) {
+    stop("PROJECT_ROOT not set; cannot validate corrected H5AD identity.")
+  }
+  module_dir <- normalizePath(
+    file.path(project_root, "src", "utils", "py"),
+    mustWork = TRUE
+  )
+  python_sys <- reticulate::import("sys", convert = FALSE)
+  python_sys$path$insert(0L, module_dir)
+  validator <- reticulate::import_from_path(
+    "benchmark_h5ad_contract",
+    path = module_dir,
+    convert = FALSE
+  )
+  validator$validate_benchmark_h5ad_path(
+    h5ad_path,
+    as.character(view),
+    as.character(method),
+    expected_batch_contract = ecoda_hpc_identity_for_python(
+      expected_batch_contract
+    )
+  )
+  invisible(TRUE)
+}
+
+# Equivalent identity check for the one maintained R branch that already
+# opens an AnnData object through reticulate (scITD/count-backed methods).
+ecoda_hpc_validate_h5ad_object_identity <- function(
+  adata,
+  view,
+  method = "benchmark",
+  expected_batch_contract = NULL
+) {
+  if (is.null(expected_batch_contract)) return(invisible(NULL))
+  project_root <- Sys.getenv("PROJECT_ROOT")
+  if (!nzchar(project_root)) {
+    stop("PROJECT_ROOT not set; cannot validate corrected H5AD identity.")
+  }
+  module_dir <- normalizePath(
+    file.path(project_root, "src", "utils", "py"),
+    mustWork = TRUE
+  )
+  python_sys <- reticulate::import("sys", convert = FALSE)
+  python_sys$path$insert(0L, module_dir)
+  validator <- reticulate::import_from_path(
+    "benchmark_h5ad_contract",
+    path = module_dir,
+    convert = FALSE
+  )
+  validator$validate_benchmark_h5ad_contract(
+    adata,
+    as.character(view),
+    as.character(method),
+    expected_batch_contract = ecoda_hpc_identity_for_python(
+      expected_batch_contract
+    )
+  )
+  invisible(TRUE)
+}
+
+
+# Call the full-cell Python validator before any R/Python first-observation
+# reducer.  The validator reads only obs metadata and returns the serialized
+# cross-language contract, including sample-order composite values.
+validate_h5ad_corrected_batch_metadata <- function(
+  h5ad_path,
+  batch_keys,
+  sample_col = "Sample",
+  biological_label = NULL,
+  near_unique_fraction = 0.50,
+  method_id = "Pseudobulk",
+  model_id = "pseudobulk_composite_v1",
+  chunk_size = 4096L
+) {
+  batch_keys_input <- if (
+    is.character(batch_keys) && length(batch_keys) > 1L
+  ) {
+    as.list(batch_keys)
+  } else {
+    batch_keys
+  }
+  keys <- ecoda_batch_normalize_keys(
+    batch_keys_input,
+    sample_col = sample_col,
+    biological_label = biological_label
+  )
+  if (!is.character(h5ad_path) || length(h5ad_path) != 1L ||
+      is.na(h5ad_path) || !nzchar(h5ad_path) || !file.exists(h5ad_path)) {
+    stop("Corrected batch validator H5AD path is missing: ", h5ad_path)
+  }
+  if (!is.numeric(chunk_size) || length(chunk_size) != 1L ||
+      is.na(chunk_size) || !is.finite(chunk_size) ||
+      chunk_size < 1 || chunk_size != floor(chunk_size)) {
+    stop("Corrected batch validator chunk_size must be a positive integer")
+  }
+  project_root <- Sys.getenv("PROJECT_ROOT")
+  if (!nzchar(project_root)) {
+    stop("PROJECT_ROOT not set; cannot validate corrected batch metadata.")
+  }
+  module_dir <- normalizePath(
+    file.path(project_root, "src", "utils", "py"),
+    mustWork = TRUE
+  )
+  python_sys <- reticulate::import("sys", convert = FALSE)
+  python_sys$path$insert(0L, module_dir)
+  loader <- reticulate::import_from_path(
+    "h5ad_pseudobulk",
+    path = module_dir,
+    convert = FALSE
+  )
+  result <- reticulate::py_to_r(
+    loader$validate_h5ad_corrected_batch_metadata(
+      h5ad_path,
+      as.list(unname(keys)),
+      sample_col,
+      biological_label,
+      method_id,
+      model_id,
+      as.integer(chunk_size),
+      as.numeric(near_unique_fraction)
+    )
+  )
+  if (!is.list(result) || is.null(result[["composite_values"]]) ||
+      is.null(result[["sample_ids"]])) {
+    stop("Python corrected batch validator returned malformed metadata")
+  }
+  result
+}
+
+# Validate the full cell table through the R contract and reconcile its
+# deterministic sample-order tokens with the Python validator result.  The
+# returned context is deliberately in-memory; callers may add its scalar
+# column to an aggregate copy but must never persist that temporary column.
+ecoda_hpc_batch_context <- function(
+  metadata,
+  batch_keys,
+  sample_col = "Sample",
+  biological_label = NULL,
+  python_metadata = NULL,
+  near_unique_fraction = 0.50
+) {
+  batch_keys_input <- if (
+    is.character(batch_keys) && length(batch_keys) > 1L
+  ) {
+    as.list(batch_keys)
+  } else {
+    batch_keys
+  }
+  keys <- ecoda_batch_normalize_keys(
+    batch_keys_input,
+    sample_col = sample_col,
+    biological_label = biological_label
+  )
+  validation <- ecoda_batch_validate_metadata(
+    metadata = metadata,
+    batch_keys = as.list(unname(keys)),
+    sample_col = sample_col,
+    biological_label = biological_label,
+    near_unique_fraction = near_unique_fraction
+  )
+  if (!is.null(python_metadata)) {
+    python_key_field <- python_metadata[["ordered_keys"]]
+    if (is.null(python_key_field)) python_key_field <- python_metadata[["keys"]]
+    python_keys <- as.character(python_key_field)
+    if (!identical(python_keys, unname(keys))) {
+      stop("Python/R corrected batch key order differs")
+    }
+    python_samples <- as.character(python_metadata[["sample_ids"]])
+    python_sample_groups <- python_metadata[["sample_group_ids"]]
+    if (is.null(python_sample_groups)) {
+      same_raw_order <- identical(
+        python_samples,
+        as.character(validation$sample_ids)
+      )
+      same_canonical_order <- identical(
+        python_samples,
+        as.character(validation$sample_group_ids)
+      )
+      if (!same_raw_order && !same_canonical_order) {
+        stop("Python/R corrected batch sample order differs")
+      }
+    } else {
+      if (!identical(python_samples, as.character(validation$sample_ids))) {
+        stop("Python/R corrected batch raw sample order differs")
+      }
+      if (!identical(
+        as.character(python_sample_groups),
+        as.character(validation$sample_group_ids)
+      )) {
+        stop("Python/R corrected batch canonical sample order differs")
+      }
+    }
+    python_values <- as.character(python_metadata[["composite_values"]])
+    python_sample_values <- python_metadata[["sample_composite_values"]]
+    cell_samples <- as.character(metadata[[sample_col]])
+    first_indices <- match(as.character(validation$sample_ids), cell_samples)
+    if (anyNA(first_indices)) {
+      stop("R corrected batch validation lost a validated Sample")
+    }
+    if (is.null(python_sample_values)) {
+      if (length(python_values) != length(validation$sample_ids)) {
+        stop(
+          "Python corrected batch sample composite values do not cover ",
+          "every validated Sample"
+        )
+      }
+      python_sample_values <- python_values
+    } else {
+      python_sample_values <- as.character(python_sample_values)
+      if (length(python_sample_values) != length(validation$sample_ids)) {
+        stop(
+          "Python corrected batch sample composite values do not cover ",
+          "every validated Sample"
+        )
+      }
+    }
+    if (!identical(
+      python_sample_values,
+      as.character(validation$composite_values)
+    )) {
+      stop("Python/R corrected batch composite values differ")
+    }
+    python_scalarization <- as.character(python_metadata[["scalarization"]])
+    if (!identical(python_scalarization, as.character(validation$scalarization))) {
+      stop("Python/R corrected batch scalarization differs")
+    }
+    python_method_id <- python_metadata[["method_id"]]
+    if (is.null(python_method_id)) python_method_id <- python_metadata[["method"]]
+    python_model_id <- python_metadata[["model_id"]]
+    if (is.null(python_model_id)) python_model_id <- python_metadata[["model"]]
+    python_fingerprint <- as.character(python_metadata[["fingerprint"]])
+    if (length(python_method_id) != 1L || length(python_model_id) != 1L ||
+        length(python_fingerprint) != 1L || is.na(python_fingerprint) ||
+        !nzchar(python_fingerprint)) {
+      stop("Python corrected batch validator returned incomplete fingerprint metadata")
+    }
+    r_fingerprint <- ecoda_batch_fingerprint(
+      batch_keys = as.list(unname(keys)),
+      method_id = as.character(python_method_id),
+      model_id = as.character(python_model_id),
+      scalarization = validation$scalarization
+    )
+    if (!identical(as.character(r_fingerprint), python_fingerprint)) {
+      stop("Python/R corrected batch fingerprint differs")
+    }
+  }
+  scalar_batch_col <- if (length(keys) >= 2L) {
+    "__ecoda_batch_combined_v1"
+  } else {
+    keys[[1L]]
+  }
+  list(
+    ordered_keys = unname(keys),
+    scalar_batch_col = scalar_batch_col,
+    scalarization = validation$scalarization,
+    sample_ids = as.character(validation$sample_ids),
+    sample_metadata = validation$sample_metadata,
+    canonical_sample_metadata = validation$canonical_sample_metadata,
+    composite_values = as.character(validation$composite_values),
+    validation = validation,
+    python_metadata = python_metadata,
+    fingerprint = if (!is.null(python_metadata)) {
+      as.character(python_metadata[["fingerprint"]])
+    } else {
+      NULL
+    }
+  )
+}
+
+# Add the validated sample-level technical values to an aggregate or a
+# collapsed metadata copy.  This never changes the caller's data frame and
+# keeps all original batch columns alongside the ephemeral scalar composite.
+ecoda_hpc_apply_batch_context <- function(
+  metadata,
+  context,
+  sample_col = "Sample"
+) {
+  if (is.null(context)) return(metadata)
+  if (!is.data.frame(metadata)) {
+    metadata <- as.data.frame(metadata, stringsAsFactors = FALSE)
+  } else {
+    metadata <- metadata
+  }
+  if (!sample_col %in% colnames(metadata)) {
+    stop("Corrected batch metadata is missing ", sample_col)
+  }
+  if ("__ecoda_batch_combined_v1" %in% colnames(metadata) &&
+      !identical(context$scalar_batch_col, "__ecoda_batch_combined_v1")) {
+    stop("Metadata already contains the reserved corrected batch column")
+  }
+  sample_ids <- as.character(metadata[[sample_col]])
+  context_ids <- as.character(context$sample_ids)
+  if (anyNA(sample_ids) || any(!nzchar(sample_ids)) ||
+      anyDuplicated(sample_ids) || !identical(sample_ids, context_ids)) {
+    stop("Corrected batch sample metadata is not aligned to validated Samples")
+  }
+  sample_metadata <- context$sample_metadata
+  for (key in context$ordered_keys) {
+    if (!key %in% colnames(sample_metadata)) {
+      stop("Validated corrected batch metadata is missing key ", key)
+    }
+    metadata[[key]] <- sample_metadata[[key]]
+  }
+  if (identical(context$scalar_batch_col, "__ecoda_batch_combined_v1")) {
+    metadata[[context$scalar_batch_col]] <- context$composite_values
+  }
+  metadata
+}
 
 # Validate a prepared pseudobulk cache against its canonical producer. A
 # run-owned record is authoritative: malformed or mismatched records fail
 # closed instead of being treated as a cache miss. Artifacts from before
 # run-owned records were introduced retain the strict sidecar fallback.
-.pb_variant_cache_valid <- function(path, variant) {
+.pb_variant_cache_valid <- function(
+  path,
+  variant,
+  expected_batch_contract = NULL
+) {
   producer <- PB_VARIANT_PRODUCERS[[variant]]
   context <- .artifact_context(producer = producer)
+  cache_valid <- FALSE
   if (!is.null(context)) {
     record_path <- artifact_record_path(
       path, context$run_id, runs_root = context$runs_root
@@ -44,10 +527,24 @@ PB_VARIANT_PRODUCERS <- setNames(
           !identical(sidecar$SIZE, record$SIZE)) {
         stop("Artifact checksum validation failed: ", path)
       }
-      return(TRUE)
+      cache_valid <- TRUE
     }
+  } else {
+    cache_valid <- artifact_checksum_ok(path, producer = producer)
   }
-  artifact_checksum_ok(path, producer = producer)
+  if (!isTRUE(cache_valid) || is.null(expected_batch_contract)) {
+    return(isTRUE(cache_valid))
+  }
+  value <- readRDS(path)
+  if (!is.list(value)) {
+    stop("Pseudobulk cache is not a list: ", path)
+  }
+  ecoda_hpc_validate_batch_contract(
+    value[["batch_contract"]],
+    expected_batch_contract,
+    label = paste0("Pseudobulk cache ", variant, " (", path, ")")
+  )
+  TRUE
 }
 
 # Tiny "--flag value" / "--flag=value" / "--flag" (TRUE) arg parser
@@ -145,8 +642,15 @@ validate_benchmark_h5ad_contract <- function(
   adata,
   obs = NULL,
   view = "benchmark_analysis",
-  method = NULL
+  method = NULL,
+  expected_batch_contract = NULL
 ) {
+  ecoda_hpc_validate_h5ad_object_identity(
+    adata = adata,
+    view = view,
+    method = if (is.null(method)) "benchmark" else method,
+    expected_batch_contract = expected_batch_contract
+  )
   required_obsm <- switch(
     view,
     benchmark_analysis = c(
@@ -226,20 +730,21 @@ validate_benchmark_h5ad_contract <- function(
   }
   invisible(TRUE)
 }
-
-# Load only the metadata and requested PCA embeddings from an H5AD.  The
-# pinned anndata backed reader can materialize layers["counts"] at open, so
-# methods whose algorithms consume no counts use this h5py/minimal-AnnData
-# path instead.  Count-dependent methods keep load_benchmark_seurat()'s
-# explicit counts-layer path.
 load_h5ad_counts_free <- function(
   h5ad_path,
   obs_columns,
   embedding_keys,
   obs_prefixes = character(),
   view = NULL,
-  method = NULL
+  method = NULL,
+  expected_batch_contract = NULL
 ) {
+  ecoda_hpc_validate_h5ad_path_identity(
+    h5ad_path = h5ad_path,
+    view = view,
+    method = if (is.null(method)) "benchmark" else method,
+    expected_batch_contract = expected_batch_contract
+  )
   project_root <- Sys.getenv("PROJECT_ROOT")
   if (project_root == "") {
     stop("PROJECT_ROOT not set; cannot load a counts-free H5AD.")
@@ -255,7 +760,8 @@ load_h5ad_counts_free <- function(
     path = module_dir,
     convert = FALSE
   )
-  if (!is.null(view) && !is.null(method)) {
+  if (!is.null(view) && !is.null(method) &&
+      is.null(expected_batch_contract)) {
     loader$validate_h5ad_counts_free_input(
       h5ad_path,
       as.character(view),
@@ -408,8 +914,17 @@ load_h5ad_pseudobulk_metadata <- function(
   sample_col = "Sample",
   metadata_columns = character(),
   n_hvg = 3000L,
-  required_nonmissing_columns = sample_col
+  required_nonmissing_columns = sample_col,
+  expected_batch_contract = NULL,
+  view = "batch_effect_corrected",
+  method = "preprocessing"
 ) {
+  ecoda_hpc_validate_h5ad_path_identity(
+    h5ad_path = h5ad_path,
+    view = view,
+    method = method,
+    expected_batch_contract = expected_batch_contract
+  )
   project_root <- Sys.getenv("PROJECT_ROOT")
   if (project_root == "") {
     stop("PROJECT_ROOT not set; cannot load H5AD metadata.")
@@ -882,10 +1397,6 @@ emit_pseudobulk_timing_rows <- function(
   invisible(NULL)
 }
 
-# Load the precomputed pseudobulk variants from pseudobulks/.  Cache
-# validation and deserialization happen before the H5AD path is touched.
-# Missing variants are rebuilt with one bounded raw Sample aggregation and
-# one shared full-gene fit; a Seurat object is never used by this fallback.
 load_pb_variants <- function(
   seurat = NULL,
   sample_col,
@@ -904,8 +1415,51 @@ load_pb_variants <- function(
   analysis_pass = NULL,
   run_id = NULL,
   source_identity = NULL,
-  chunk_size = 4096L
+  chunk_size = 4096L,
+  batch_keys = NULL,
+  batch_context = NULL,
+  batch_contract = NULL,
+  expected_h5ad_batch_contract = NULL
 ) {
+  expected_contract <- batch_contract
+  if (isTRUE(correct_batch)) {
+    key_source <- batch_keys
+    if (is.null(key_source)) {
+      key_source <- if (!is.null(batch_context)) {
+        batch_context$ordered_keys
+      } else {
+        batch_col
+      }
+    }
+    normalized_keys <- ecoda_hpc_normalize_batch_keys(
+      key_source,
+      sample_col = sample_col
+    )
+    derived_contract <- ecoda_hpc_batch_contract_identity(
+      normalized_keys,
+      sample_col = sample_col,
+      method_id = "Pseudobulk",
+      model_id = "pseudobulk_composite_v1"
+    )
+    if (is.null(expected_contract)) {
+      expected_contract <- derived_contract
+    } else {
+      ecoda_hpc_validate_batch_contract_source(
+        expected_contract,
+        derived_contract,
+        label = "Corrected pseudobulk cache"
+      )
+    }
+    if (!is.null(batch_context)) {
+      expected_contract <- ecoda_hpc_augment_batch_contract(
+        identity = expected_contract,
+        validation = batch_context$validation,
+        method_id = "Pseudobulk",
+        batch_keys = normalized_keys,
+        scalar_batch_col = batch_context$scalar_batch_col
+      )
+    }
+  }
   target_variants <- unique(as.character(variants))
   if (!all(target_variants %in% PB_VARIANT_NAMES)) {
     stop("Unknown pseudobulk variant requested: ",
@@ -918,7 +1472,11 @@ load_pb_variants <- function(
     cache_path <- file.path(
       pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds")
     )
-    if (force || !.pb_variant_cache_valid(cache_path, v)) {
+    if (force || !.pb_variant_cache_valid(
+      cache_path,
+      v,
+      expected_batch_contract = expected_contract
+    )) {
       missing <- c(missing, v)
       next
     }
@@ -927,6 +1485,13 @@ load_pb_variants <- function(
       producer = PB_VARIANT_PRODUCERS[[v]]
     )
     validate_pseudobulk_timing_record(value, variant = v)
+    if (!is.null(expected_contract)) {
+      ecoda_hpc_validate_batch_contract(
+        value[["batch_contract"]],
+        expected_contract,
+        label = paste0("Pseudobulk cache ", v, " (", cache_path, ")")
+      )
+    }
     variants_out[[v]] <- value
   }
   if (length(missing) > 0L) {
@@ -935,9 +1500,7 @@ load_pb_variants <- function(
            " (", paste(missing, collapse = ", "),
            ") and no H5AD path was provided for the raw fallback.")
     }
-    message("Pseudobulk variant(s) missing in ", pseudobulk_dir,
-            ", computing on the fly: ", paste(missing, collapse = ", "))
-    computed <- prepare_pseudobulks_hpc(
+    prepare_args <- list(
       h5ad_path = h5ad_path,
       sample_col = sample_col,
       hvg_rank_genes = hvg_rank_genes,
@@ -952,8 +1515,24 @@ load_pb_variants <- function(
       source_identity = source_identity,
       chunk_size = chunk_size
     )
+    if (!is.null(batch_keys)) prepare_args$batch_keys <- batch_keys
+    if (!is.null(batch_context)) prepare_args$batch_context <- batch_context
+    if (!is.null(expected_contract)) {
+      prepare_args$batch_contract <- expected_contract
+    }
+    if (!is.null(expected_h5ad_batch_contract)) {
+      prepare_args$expected_h5ad_batch_contract <- expected_h5ad_batch_contract
+    }
+    computed <- do.call(prepare_pseudobulks_hpc, prepare_args)
     for (v in names(computed)) {
       value <- computed[[v]]
+      if (!is.null(expected_contract)) {
+        ecoda_hpc_validate_batch_contract(
+          value[["batch_contract"]],
+          expected_contract,
+          label = paste0("Computed pseudobulk cache ", v)
+        )
+      }
       validate_pseudobulk_timing_record(value, variant = v)
       cache_path <- file.path(
         pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds")
@@ -975,8 +1554,6 @@ load_pb_variants <- function(
   )
   variants_out[target_variants]
 }
-
-# Composition is obs-only and therefore cannot rebuild missing pseudobulks.
 load_composition_pb_variants <- function(
   sample_col,
   hvg_rank_genes,
@@ -988,9 +1565,13 @@ load_composition_pb_variants <- function(
   batch_col = NULL,
   blind = TRUE,
   correct_batch = FALSE,
-  variants = PB_VARIANT_NAMES
+  variants = PB_VARIANT_NAMES,
+  batch_keys = NULL,
+  batch_context = NULL,
+  batch_contract = NULL,
+  expected_h5ad_batch_contract = NULL
 ) {
-  loader(
+  loader_args <- list(
     seurat = NULL,
     sample_col = sample_col,
     hvg_rank_genes = hvg_rank_genes,
@@ -1004,6 +1585,13 @@ load_composition_pb_variants <- function(
     correct_batch = correct_batch,
     variants = variants
   )
+  if (!is.null(batch_keys)) loader_args$batch_keys <- batch_keys
+  if (!is.null(batch_context)) loader_args$batch_context <- batch_context
+  if (!is.null(batch_contract)) loader_args$batch_contract <- batch_contract
+  if (!is.null(expected_h5ad_batch_contract)) {
+    loader_args$expected_h5ad_batch_contract <- expected_h5ad_batch_contract
+  }
+  do.call(loader, loader_args)
 }
 
 

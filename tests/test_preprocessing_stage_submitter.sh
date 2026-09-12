@@ -358,6 +358,51 @@ if ecoda_require_source_script_path "${OUTSIDE_SCRIPT}" "${SOURCE_ROOT}" >/dev/n
   exit 1
 fi
 [[ ! -s "${CAPTURE}" ]]
+CORRECTED_BATCH_BASE="${TMP_DIR}/corrected-batch-base.json"
+cat > "${CORRECTED_BATCH_BASE}" <<'JSON'
+{"Fixture":{"columns":{"sample":"sample_id","label":"label","batch":"batch_a"},"views":{"batch_effect_corrected":{"columns":{}}}}}
+JSON
+CORRECTED_BATCH_STATE="${TMP_DIR}/corrected-batch-state"
+CORRECTED_BATCH_RUNS="${CORRECTED_BATCH_STATE}/_ecoda_runs"
+mkdir -p "${CORRECTED_BATCH_RUNS}"
+: > "${CAPTURE}"
+for corrected_case in null object empty duplicate blank label_overlap sample_overlap reserved_sample; do
+  case "${corrected_case}" in
+    null) raw_batch='null' ;;
+    object) raw_batch='{"name":"batch_a"}' ;;
+    empty) raw_batch='[]' ;;
+    duplicate) raw_batch='["batch_a","batch_a"]' ;;
+    blank) raw_batch='["   "]' ;;
+    label_overlap) raw_batch='["label"]' ;;
+    sample_overlap) raw_batch='["sample_id"]' ;;
+    reserved_sample) raw_batch='["Sample"]' ;;
+  esac
+  corrected_fixture="${TMP_DIR}/corrected-${corrected_case}.json"
+  jq --argjson batch "${raw_batch}" \
+    '.Fixture.columns.batch = $batch' "${CORRECTED_BATCH_BASE}" \
+    > "${corrected_fixture}"
+  corrected_run_root="${CORRECTED_BATCH_RUNS}/${corrected_case}"
+  corrected_runs_before="$(printf '%s\n' "${CORRECTED_BATCH_RUNS}"/*)"
+  stage3_runs_before="$(printf '%s\n' "${RUNS_ROOT}"/*)"
+  owners_before="$(printf '%s\n' "${ECODA_OWNERS_ROOT}"/*)"
+  if ecoda_validate_corrected_batch_columns \
+      "${corrected_fixture}" Fixture batch_effect_corrected >/dev/null 2>&1; then
+    RC=0
+  else
+    RC=$?
+  fi
+  [[ ${RC} -ne 0 ]]
+  [[ ! -s "${CAPTURE}" ]]
+  [[ "${corrected_runs_before}" == "$(printf '%s\n' "${CORRECTED_BATCH_RUNS}"/*)" ]]
+  [[ "${stage3_runs_before}" == "$(printf '%s\n' "${RUNS_ROOT}"/*)" ]]
+  [[ "${owners_before}" == "$(printf '%s\n' "${ECODA_OWNERS_ROOT}"/*)" ]]
+  [[ ! -e "${corrected_run_root}" ]]
+  [[ ! -e "${corrected_run_root}/manifests/scheduler_ids.tsv" ]]
+  [[ ! -e "${corrected_run_root}/manifests/selection.tsv" ]]
+  [[ ! -e "${corrected_run_root}/manifests/pending.tsv" ]]
+  [[ ! -e "${corrected_run_root}/status" ]]
+done
+
 
 # Output ownership is path based: a same-run OOM retry revalidates an ACTIVE
 # owner, while another run is rejected without reclaiming it.

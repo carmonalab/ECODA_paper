@@ -13,22 +13,31 @@ The authoritative sources are:
 Provisional root drafts are archived only for provenance. They are not registry
 inputs.
 
-## Canonical user-confirmed roles
+## Active registry roles (`datasets.json`)
 
-| Key | Sample | Label | Low tier | High tier | Annotation source |
-|---|---|---|---|---|---|
-| Alzheimer | `donor_id` | `Cognitive status` | `Subclass` | `Supertype` | author / author |
-| Breast_cancer | `sample_id` | `disease` | `broad_cell_type` | `author_cell_type` | author / author |
-| Covid19_PBMC | `sampleID` | `CoVID-19 severity` | `majorType` | `celltype` | author / author |
-| Diabetes | `donor_id` | `disease` | `cell_type` | `cell_type_reannotatedIntegrated` | author / author |
-| Kidney_KPMP_full | `specimen` | `condition.l1` | `subclass.l1` | `subclass.l3` | author / author |
-| Lung | `sample` | `disease` | `ann_coarse` | `ann_fine` | author / author |
-| Lupus_PBMC | `sampleID` | `Status` | `layer1` | `layer2` | HiTME / HiTME |
-| Myocardial_infarction | `orig_ident` | `patient_group` | `cell_type` | `cell_subtype` | author / author |
-| Parkinson | `donor_id` | `disease` | `cell_type` | Leiden res-5 | author / Leiden |
-| Joanito | `sample.ID` | `sample.origin` | `cell.type` | `cell.type_new` | author / derived |
-| Stephenson | `Sample` | `Status` | `initial_clustering` | `full_clustering` | author / author |
-| CombinedPBMC | `Sample` | `cond` | `layer1` | `layer2` | HiTME / HiTME |
+| Key | Sample | Label | Low tier | High tier | Usable high-tier categories | Annotation source |
+|---|---|---|---|---|---:|---|
+| Alzheimer | `donor_id` | `Cognitive status` | `Subclass` | `Supertype` | 131 | author / author |
+| Breast_cancer | `sample_id` | `disease` | `broad_cell_type` | `author_cell_type` | 58 | author / author |
+| Covid19_PBMC | `sampleID` | `CoVID-19 severity` | `majorType` | `celltype` | 58 | author / author |
+| Diabetes | `donor_id` | `disease` | `cell_type` | `cell_type_reannotatedIntegrated` | 20 | author / author |
+| Kidney_KPMP_full | `specimen` | `condition.l1` | `subclass.l1` | `subclass.l3` | pending | author / author |
+| Lung | `sample` | `disease` | `ann_coarse` | `ann_fine` | 44 | author / author |
+| Lupus_PBMC | `sampleID` | `Status` | `layer1` | `louvain` | 24 | HiTME / derived |
+| Myocardial_infarction | `orig_ident` | `patient_group` | `cell_type` | `cell_subtype` | 33 | author / author |
+| Parkinson | `donor_id` | `disease` | `cell_type` | `cell_type` | 11 | author / author |
+| Joanito | `sample.ID` | `sample.origin` | `cell.type` | `cell.type_new` | 12 | author / derived |
+| Stephenson | `Sample` | `Status` | `initial_clustering` | `full_clustering` | 50 | author / author |
+| CombinedPBMC | `Sample` | `cond` | `layer1` | `layer2` | 40 | HiTME / HiTME |
+
+> Counts are distinct non-missing values in the configured High tier source
+> column, not method-output feature-column counts. `CombinedPBMC` has 40
+> valid `layer2` labels; its composition metadata contains 41 unique values
+> because one missing/sentinel level accounts for 77,813 cells and is excluded. `Kidney_KPMP_full`
+> remains pending because no active full-cohort artifact is available; the
+> legacy `Kidney_KPMP` count of 67 is not carried over. Historical Lupus
+> `layer2`/Parkinson Leiden counts are not used; current roles are `louvain`
+> (24) and `cell_type` (11).
 
 > **Legacy compatibility note — not active:** `Kidney_KPMP` is retained only
 > for the preserved historical onboarding QMD and reproducibility of its
@@ -38,9 +47,12 @@ inputs.
 The previous heuristic choice, stable-field conflicts, and aggregation warnings
 remain in each audit. They explain the decision; they do not silently replace
 the declared role. Missing IDs, standardized-ID collisions, missing labels, and
-failed declared author hierarchies remain hard failures. HiTME and Leiden
-columns are produced-output roles and remain pending until processed h5ad
-evidence validates them.
+failed declared author hierarchies remain hard failures.
+
+The table follows the active `datasets.json` High tier roles. Historical
+Lupus `layer2` and Parkinson Leiden selections do not replace the declared
+roles; produced-output roles are published only when corresponding processed
+evidence is available.
 
 ## Kidney_KPMP_full combined cohort
 
@@ -175,7 +187,10 @@ numeric/CSV `--sync-only` IDs require the original `--datasets` and
 `--view/--views` selection and never infer a broader scope.
 
 The uncorrected view always uses `batch_key=Sample`; corrected execution
-remains gated on a confirmed technical column. All nine new cohorts retain
+remains gated on a confirmed technical batch definition: either one scalar
+key or an ordered, nonempty list of independent keys. A corrected
+`columns.batch: null` or malformed key list is rejected before a run root,
+manifest, scheduler ID, or worker state exists. All nine new cohorts retain
 `columns.batch: null`; Joanito (`seqtec`) and Stephenson (`Site`) remain the
 existing confirmed values. The Stage 4 exact run records three a-priori
 `SKIP_NOT_SUITABLE` rows (`Alzheimer`, `Diabetes`, `Parkinson`) and runs nine
@@ -203,9 +218,22 @@ Max reviewer approval before starting the dependent stage. Do not poll
 ## Pass-specific preprocessing
 
 `batch_effect_uncorrected` runs one hvg2000 pass with `Sample`, raw PCA,
-neighbors, and Leiden, with no Harmony. `batch_effect_corrected` requires a
-confirmed batch, selects HVGs by that technical column, and computes raw PCA
-plus Harmony neighbors/Leiden. Exact keys are:
+neighbors, and Leiden, with no Harmony. `batch_effect_corrected` accepts either
+one scalar batch key or an ordered, nonempty list of independent additive
+batch factors (a one-element list has the same execution semantics as its
+scalar key), then computes raw PCA plus Harmony neighbors/Leiden. Corrected
+`columns.batch: null` is rejected; the raw reader shape remains unchanged
+(`string`, list, or `null`) and corrected execution-boundary normalization
+rejects non-string, empty, duplicated, or whitespace-only keys, including a
+key equal to the biological label or standardized `Sample`. After view
+subsetting, `Sample` standardization, and the 500-cell filter, every
+configured key is validated over the full selected cell metadata before HVG,
+PCA, or Harmony: it must exist, contain no missing/blank value or
+case-insensitive `NA`, `nan`, `None`, `<NA>`, `n/a`, `null`, or `Unknown`
+sentinel, be constant within `Sample`, and have at least two levels.
+Disconnected, rank-deficient, near-unique, or otherwise non-estimable
+correction designs fail closed; no `Unknown` imputation is allowed. Biological
+labels are evaluation-only. Exact keys are:
 
 ```text
 X_pca_batch_effect_uncorrected_hvg2000
@@ -216,7 +244,8 @@ leiden_res_<r>_batch_effect_corrected_hvg2000_harmony
 ```
 
 The fixed suite uses resolutions `0.1, 0.4, 2, 5, 20, 50`; reported ECODA
-uses res-2, except Parkinson's configured res-5 tier.
+uses res-2. Parkinson's uncorrected High tier is the configured `cell_type`;
+its corrected view uses the explicit res-5 Harmony column.
 
 Stage 5 matrix selection rows are `DATASET<TAB>VIEW<TAB>SCOPE`; in batch
 mode both `VIEW` and `SCOPE` must equal the selected
@@ -246,9 +275,127 @@ parameter screens are excluded. ECODA defaults are exactly
 to every count before CLR. The shuffled baseline shares features and uses
 deterministic label shuffling; labels remain evaluation-only.
 
-Corrected execution is deferred until the evidence decision. It uses batch-only
-LMM correction and corrected pseudobulk/Harmony/MrVI settings only after
-technical columns are explicitly confirmed.
+Corrected execution is deferred until the evidence decision and starts only
+after the confirmed scalar or ordered key list passes the full-cell and
+estimability checks above. Corrected ECODA uses additive per-key random
+intercepts; corrected Pseudobulk uses a scalar composite for batch-only
+removal with DESeq2 `~ 1`, `blind=FALSE`, and `correct_batch=TRUE`. No
+biological label enters correction or design.
+
+## Corrected-mode batch contract
+
+The corrected method matrix is exactly:
+
+```text
+ECODA_authors_HR
+ECODA_seuratres_2
+ECODA_authors_HR_NULL
+Pseudobulk
+GloScope
+PILOT
+MrVI
+QOT
+```
+
+No other method is in the corrected matrix. In particular,
+`pilot-gm-vae` (`PILOT-GM-VAE`) is explicitly excluded from corrected work
+and must not be selected, validated, or used as a fallback. The historical
+fixed Stage 5 list above and ordinary benchmark method references remain
+unchanged.
+
+### Ordered factors, validation, and identity
+
+Readers preserve the raw `columns.batch` JSON shape (`string`, ordered list,
+or `null`). At the corrected execution boundary, a scalar is one ordered key;
+a nonempty list is an ordered set of independent additive batch factors, and a
+one-element list has the same direct-column semantics as its scalar key.
+Corrected `null` is rejected, as are non-string, empty, duplicated, or
+whitespace-only key names and keys that equal the biological label or
+standardized `Sample`. These failures occur before any run root, manifest,
+scheduler ID, or worker state is created.
+
+After view subsetting, `Sample` standardization, and the 500-cell filter, every
+configured key is validated across the full selected cell metadata before
+first-observation metadata collapse or any HVG, PCA, Harmony, CLR, DESeq2,
+pseudobulk, or MRVI setup. Each key must exist, contain no actual missing or
+blank values and no case-insensitive `NA`, `nan`, `None`, `<NA>`, `n/a`,
+`null`, or `Unknown` sentinel, remain constant within standardized `Sample`,
+and have at least two observed levels. Disconnected, rank-deficient,
+near-unique, or otherwise non-estimable correction designs fail closed; no
+`Unknown` imputation is allowed. (`Unknown` in a cell-type annotation column
+is outside this batch-column rule.) Biological labels remain evaluation-only
+and never enter preprocessing, correction, design, or MRVI setup.
+
+For two or more keys, the exact cross-language composite encoding is
+`ecoda_batch_composite_v1`. Composite construction is used only for two or
+more keys; a scalar or one-key list remains a direct column. Each nonmissing
+scalar category value is canonicalized to typed Unicode text: character or
+factor values use `s:` followed by the exact label; booleans use `b:true` or
+`b:false`; signed integers use `i:` followed by base-10 decimal; and finite
+IEEE-754 binary64 values use `f64:` followed by their 16-lowercase-hex-digit
+big-endian bit pattern. Other, list, date, and object values are rejected.
+
+The UTF-8 bytes of each key name and canonical value are encoded as lowercase
+hexadecimal. Each token is exactly
+`ecoda_batch_composite_v1|<key-count>|<pair-1>;<pair-2>;...`, with each pair
+exactly `<key-byte-length>:<key-hex>,<value-byte-length>:<value-hex>`.
+Lengths count raw UTF-8 bytes rather than characters, every hex field has two
+characters per byte, and delimiters never occur inside hex. Configured key
+order is preserved in every token; categorical levels may be sorted by raw
+UTF-8 token bytes only when category metadata is constructed. Missing values
+are never coerced into a category.
+
+The reserved in-memory observation name is
+`__ecoda_batch_combined_v1`; assert that it is absent before construction and
+absent again before writing any corrected H5AD. Record the encoding version,
+ordered source keys, per-key levels, composite-level count, sample-constancy
+result, correction formula/mode, and key-set/configuration fingerprint in
+run-owned metadata.
+
+The fingerprint input is exact bytes, with no JSON/object serialization,
+locale dependence, or map iteration:
+`ecoda_batch_contract_v1\0` followed in this fixed order by
+`field("encoding","ecoda_batch_composite_v1")`,
+`field("keys",ordered_key_vector_v1)`,
+`field("scalarization",scalarization_id)`,
+`field("method",method_id)`, and `field("model",model_id)`.
+`field(name,value)` is
+`<name-byte-length>:<lowercase-hex-UTF-8(name)>,<value-byte-length>:<lowercase-hex-UTF-8(value)>;`,
+with lengths counting raw UTF-8 bytes. `ordered_key_vector_v1` is
+`key-count|<key-byte-length>:<lowercase-hex-UTF-8(key)>;...` in configured
+order. `scalarization_id` is exactly `direct_v1` for a scalar or one-key
+direct column, or `composite_v1` for two or more keys. `method_id` is the
+exact canonical corrected method or `preprocess`; `model_id` is one of
+`hvg_composite_v1`, `harmony_native_list_v1`,
+`ecoda_additive_random_intercepts_v1`, `pseudobulk_composite_v1`,
+`mrvi_composite_v1`, or `embedding_consumer_harmony_v1`. Hash the resulting
+bytes with SHA-256 and record lowercase hexadecimal output; source H5AD and
+configuration checksums remain separate.
+
+For example, keys `site`, `tech` with values `A`, `x` encode as
+`ecoda_batch_composite_v1|2|4:73697465,3:733a41;4:74656368,3:733a78`.
+
+### Corrected method representations
+
+| Method/path | Corrected multi-key representation |
+|---|---|
+| `ECODA_authors_HR`, `ECODA_seuratres_2`, `ECODA_authors_HR_NULL` | Use additive per-key random intercepts in the CLR correction model. The null variant shuffles only evaluation labels after the same corrected features are produced. |
+| Scanpy HVG | Build `__ecoda_batch_combined_v1` temporarily and pass that one scalar name as `batch_key`; delete it immediately after HVG ranking, including retry or error paths. |
+| Harmony | Pass the original ordered batch-key list natively (`vars_use=list` or the equivalent supported API); do not scalarize it. Preserve the exact pass-qualified embedding and orientation handling. |
+| `Pseudobulk` | Build the composite at sample-metadata level and pass one scalar composite through the DESeq2/limma batch-removal path. Corrected DESeq2 uses exactly `~ 1`, `blind=FALSE`, and `correct_batch=TRUE`, with batch-only removal and no biological design protection. |
+| `GloScope`, `PILOT`, `QOT` | No method-local batch argument. Resolve only `X_pca_harmony_batch_effect_corrected_hvg2000`; a missing exact key is a hard error. |
+| `MrVI` | Load all original batch columns, recreate the equivalent composite in memory, and pass only its one scalar name to `MRVI.setup_anndata(batch_key=...)`. Never pass a list and never persist the temporary column. |
+
+The HVG, MRVI, and R pseudobulk builders may be separate implementations,
+but they must produce identical composite golden-vector tokens and the same
+key-set fingerprint for equivalent scalar, two-key, and three-key fixtures.
+New corrected artifacts are reusable only when this ordered key identity,
+encoding, scalarization policy, model policy, and fingerprint all match; a
+checksum alone is not semantic proof of the configured batch factors.
+
+These rules apply only to `batch_effect_corrected`. Historical
+`batch_effect_uncorrected` rows and order, its `Sample`/no-Harmony behavior,
+and ordinary benchmark paths and method references remain unchanged.
 
 ## Evidence checkpoint
 
@@ -263,8 +410,8 @@ constant/sample-unique/perfect-confounding warnings. It uses 999 permutations
 and strict sample-order checks.
 
 At this checkpoint all nine new `columns.batch` values remain `null`. Stop for
-one explicit user-confirmed technical column per cohort. Only then run the
-corrected pass.
+one explicit user-confirmed technical batch definition per cohort: either one
+scalar key or an ordered, nonempty list. Only then run the corrected pass.
 
 Render local reports with:
 

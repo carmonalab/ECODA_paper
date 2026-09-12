@@ -176,7 +176,11 @@ validate_pseudobulk_counts_matrix <- function(
     stop("pseudobulk blind and correct_batch must be scalar logical values")
   }
 
-  design_formula <- if (is.null(batch_col)) {
+  # Corrected mode removes the technical factor after a blind=FALSE
+  # transformation, so DESeq2 itself must always fit the intercept-only
+  # design.  Ordinary and uncorrected callers retain their historical
+  # batch-aware design behavior.
+  design_formula <- if (isTRUE(correct_batch) || is.null(batch_col)) {
     stats::formula("~ 1")
   } else {
     stats::reformulate(batch_col)

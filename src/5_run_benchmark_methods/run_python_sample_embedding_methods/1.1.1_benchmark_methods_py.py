@@ -69,15 +69,34 @@ import pilotpy as pl
 import torch
 
 from src.utils.py.datasets_io import read_datasets_json
-from src.utils.py.benchmark_h5ad_contract import (
-    validate_benchmark_h5ad_contract,
-    validate_benchmark_h5ad_path,
+from src.utils.py.batch_contract import (
+    augment_batch_contract,
+    batch_correction_spec_for_keys,
+    build_batch_composite,
+    build_batch_contract_identity,
+    build_batch_validation_summary,
+    normalize_batch_keys,
+    read_h5ad_validation_summary,
+    validate_batch_metadata,
+    validate_batch_validation_summary,
 )
 from src.utils.py.h5ad_counts_free import load_h5ad_counts_free
 from src.utils.py.h5ad_counts_subset import (
     load_h5ad_counts_subset,
     read_h5ad_hvg_genes,
 )
+from src.utils.py.benchmark_h5ad_contract import (
+    validate_batch_contract_identity,
+    validate_benchmark_h5ad_contract,
+    validate_benchmark_h5ad_path,
+)
+_CORRECTED_H5AD_METHOD_ID = "preprocess"
+_CORRECTED_H5AD_MODEL_ID = "hvg_composite_v1"
+_CORRECTED_STAGE5_METHOD_MODELS = {
+    "mrvi": ("MrVI", "mrvi_composite_v1"),
+    "pilot": ("PILOT", "embedding_consumer_harmony_v1"),
+    "qot": ("QOT", "embedding_consumer_harmony_v1"),
+}
 
 
 def _file_md5(path):
@@ -91,6 +110,28 @@ _CHECKSUM_FIELDS = ("MD5", "SIZE", "PATH")
 _ARTIFACT_RECORD_FIELDS = ("PATH", "SIZE", "MD5", "RUN_ID", "PRODUCER", "STATE")
 _MD5_RE = re.compile(r"^[0-9a-f]{32}$")
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+def _read_corrected_validation_summary(path, batch_keys):
+    """Read and validate the compact summary embedded in a corrected H5AD."""
+
+    try:
+        normalized = read_h5ad_validation_summary(str(path), batch_keys)
+    except ValueError as exc:
+        raise ValueError(
+            f"corrected H5AD validation_summary is invalid: {path}"
+        ) from exc
+    expected_mode, expected_formula = batch_correction_spec_for_keys(
+        "preprocess",
+        batch_keys,
+    )
+    if (
+        normalized["correction_mode"] != expected_mode
+        or normalized["correction_formula"] != expected_formula
+    ):
+        raise ValueError(
+            f"corrected H5AD validation_summary has the wrong correction policy: {path}"
+        )
+    return normalized
+
 
 STAGE5_ARTIFACT_PRODUCERS = {
     "mrvi": "stage5_mrvi",
@@ -109,6 +150,113 @@ def stage5_artifact_producer(method):
         raise ValueError(
             f"unsupported Stage 5 benchmark method: {method!r}"
         ) from exc
+
+
+def _corrected_h5ad_identity(batch_keys):
+    """Build the source identity required for corrected H5AD validation."""
+    return build_batch_contract_identity(
+        batch_keys,
+        sample_column="Sample",
+        method_id=_CORRECTED_H5AD_METHOD_ID,
+        model_id=_CORRECTED_H5AD_MODEL_ID,
+    )
+
+
+def _corrected_stage5_identity(method, batch_keys, validation_summary=None):
+    """Build Stage 5 identity and attach the source validation summary."""
+
+    method_model = _CORRECTED_STAGE5_METHOD_MODELS.get(method)
+    if method_model is None:
+        return None
+    method_id, model_id = method_model
+    identity = build_batch_contract_identity(
+        batch_keys,
+        sample_column="Sample",
+        method_id=method_id,
+        model_id=model_id,
+    )
+    if validation_summary is None:
+        return identity
+    correction_mode, correction_formula = batch_correction_spec_for_keys(
+        method_id,
+        batch_keys,
+    )
+    return augment_batch_contract(
+        identity,
+        validation_summary,
+        correction_mode,
+        correction_formula,
+    )
+
+
+def _validate_h5ad_path(path, view, method, expected_batch_contract):
+    """Validate an H5AD path, preserving legacy call shape when unbound."""
+    if expected_batch_contract is None:
+        return validate_benchmark_h5ad_path(path, view, method)
+    return validate_benchmark_h5ad_path(
+        path,
+        view,
+        method,
+        expected_batch_contract=expected_batch_contract,
+    )
+
+
+def _validate_corrected_batch_contract(expected, recorded, label):
+    """Validate identity and exact compact summary for corrected caches."""
+
+    validate_batch_contract_identity(
+        expected,
+        recorded,
+        require_recorded=True,
+        label=label,
+    )
+    if not isinstance(expected, dict) or not isinstance(recorded, dict):
+        raise ValueError(f"{label} must be a mapping")
+    expected_summary = expected.get("validation_summary")
+    recorded_summary = recorded.get("validation_summary")
+    if expected_summary is None or recorded_summary is None:
+        raise ValueError(f"{label} is missing validation_summary")
+    forbidden = {
+        "composite_values",
+        "sample_composite_values",
+        "sample_ids",
+        "sample_group_ids",
+        "tokens",
+    }
+    for mapping_name, mapping in (("expected", expected), ("recorded", recorded)):
+        vectors = sorted(forbidden.intersection(mapping))
+        if vectors:
+            raise ValueError(
+                f"{label} {mapping_name} contains per-cell/sample vectors: "
+                f"{', '.join(vectors)}"
+            )
+    try:
+        expected_normalized = validate_batch_validation_summary(
+            expected_summary,
+            expected["ordered_source_keys"],
+        )
+        recorded_normalized = validate_batch_validation_summary(
+            recorded_summary,
+            expected["ordered_source_keys"],
+        )
+    except ValueError as exc:
+        raise ValueError(f"{label} has an invalid validation_summary") from exc
+    if recorded_normalized != expected_normalized:
+        raise ValueError(
+            f"{label} validation_summary does not match expected corrected metadata"
+        )
+
+
+def _validate_h5ad_content(adata, view, method, expected_batch_contract):
+    """Validate loaded H5AD content with corrected identity when required."""
+    if expected_batch_contract is None:
+        return validate_benchmark_h5ad_contract(adata, view, method)
+    return validate_benchmark_h5ad_contract(
+        adata,
+        view,
+        method,
+        expected_batch_contract=expected_batch_contract,
+    )
 
 def _read_checksum_sidecar(path):
     """Read an exact MD5/SIZE/PATH sidecar without hashing artifact bytes."""
@@ -349,7 +497,9 @@ def _align_square_frame(frame, sample_ids, path):
     return aligned.loc[expected, expected]
 
 
-def recorded_feather_valid(path, producer=None, producer_run_id=None):
+def recorded_feather_valid(
+    path, producer=None, producer_run_id=None, expected_batch_contract=None
+):
     """Validate a cache Feather and its semantic frame before reading callers use it."""
     path = Path(path)
     sidecar = Path(f"{path}.md5")
@@ -358,11 +508,21 @@ def recorded_feather_valid(path, producer=None, producer_run_id=None):
         return False
     if not path.is_file() or not sidecar.is_file():
         raise ValueError(f"Feather cache is incomplete: {path}")
-    # This full check is mandatory immediately before Feather deserialization.
-    _full_checksum(path)
+    if expected_batch_contract is None:
+        # This full check is mandatory immediately before Feather deserialization.
+        _full_checksum(path)
     candidate = _record_candidate(path, producer_run_id)
     if candidate is not None and (candidate.exists() or candidate.is_symlink()):
         _read_artifact_record(path, producer, producer_run_id, require=True)
+    if expected_batch_contract is not None:
+        recorded_batch_contract = _read_runtime_batch_contract(path)
+        _validate_corrected_batch_contract(
+            expected_batch_contract,
+            recorded_batch_contract,
+            "runtime metadata",
+        )
+        # This full check is mandatory immediately before Feather deserialization.
+        _full_checksum(path)
     try:
         frame = pd.read_feather(path)
         _validate_feather_frame(frame, path)
@@ -442,6 +602,7 @@ _RUNTIME_METADATA_FIELDS = frozenset(
         "mem_GB",
     }
 )
+_RUNTIME_METADATA_IDENTITY_FIELDS = frozenset({"batch_contract"})
 _RUNTIME_CHECKSUM_KEYS = ("MD5", "SIZE", "PATH")
 
 
@@ -511,6 +672,7 @@ def _runtime_metadata_payload(
     method_str,
     time_secs,
     mem_gb,
+    batch_contract=None,
 ):
     output_path = Path(output_path)
     artifact_md5 = _recorded_feather_md5(output_path)
@@ -520,7 +682,7 @@ def _runtime_metadata_payload(
         raise ValueError(f"runtime metadata has invalid method: {method_str!r}")
     time_value = _runtime_number(time_secs, "time_secs")
     memory_value = _runtime_number(mem_gb, "mem_GB", allow_none=True)
-    return {
+    payload = {
         "schema_version": 1,
         "artifact_path": str(output_path),
         "artifact_md5": artifact_md5,
@@ -529,6 +691,31 @@ def _runtime_metadata_payload(
         "time_secs": time_value,
         "mem_GB": memory_value,
     }
+    if batch_contract is not None:
+        # Corrected runtime metadata must carry the compact summary; ordinary
+        # and uncorrected calls leave the legacy payload untouched.
+        if not isinstance(batch_contract, dict):
+            raise ValueError("runtime metadata batch_contract must be a mapping")
+        _validate_corrected_batch_contract(
+            batch_contract,
+            batch_contract,
+            "runtime metadata",
+        )
+        forbidden = {
+            "composite_values",
+            "sample_composite_values",
+            "sample_ids",
+            "sample_group_ids",
+            "tokens",
+        }
+        vectors = sorted(forbidden.intersection(batch_contract))
+        if vectors:
+            raise ValueError(
+                "runtime metadata batch_contract contains per-cell/sample "
+                f"vectors: {', '.join(vectors)}"
+            )
+        payload["batch_contract"] = dict(batch_contract)
+    return payload
 
 
 
@@ -581,6 +768,50 @@ def _read_runtime_checksum(metadata_path):
         raise ValueError(f"runtime metadata checksum has the wrong SIZE: {checksum_path}")
 
 
+def _read_runtime_batch_contract(output_path):
+    """Read and verify the corrected identity beside one Feather artifact."""
+    output_path = Path(output_path)
+    metadata_path = runtime_metadata_path(output_path)
+    if not metadata_path.is_file() or metadata_path.stat().st_size == 0:
+        raise ValueError(f"runtime metadata is missing: {metadata_path}")
+    _read_runtime_checksum(metadata_path)
+    try:
+        payload = json.loads(
+            metadata_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"runtime metadata is malformed: {metadata_path}") from exc
+    required_fields = _RUNTIME_METADATA_FIELDS | _RUNTIME_METADATA_IDENTITY_FIELDS
+    if not isinstance(payload, dict) or set(payload) != required_fields:
+        raise ValueError(f"runtime metadata has an invalid schema: {metadata_path}")
+    if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
+        raise ValueError(f"runtime metadata has an invalid schema_version: {metadata_path}")
+    if payload["artifact_path"] != str(output_path):
+        raise ValueError(f"runtime metadata has the wrong artifact_path: {metadata_path}")
+    artifact_checksum = _read_checksum_sidecar(output_path)
+    if (
+        not isinstance(payload["artifact_md5"], str)
+        or payload["artifact_md5"] != artifact_checksum["MD5"]
+    ):
+        raise ValueError(f"runtime metadata has the wrong artifact_md5: {metadata_path}")
+    if (
+        not isinstance(payload["dataset"], str)
+        or not payload["dataset"]
+        or not isinstance(payload["method"], str)
+        or not payload["method"]
+    ):
+        raise ValueError(f"runtime metadata has invalid dataset/method: {metadata_path}")
+    _runtime_number(payload["time_secs"], "time_secs")
+    _runtime_number(payload["mem_GB"], "mem_GB", allow_none=True)
+    identity = payload["batch_contract"]
+    if not isinstance(identity, dict):
+        raise ValueError(
+            f"runtime metadata batch_contract is not an object: {metadata_path}"
+        )
+    return identity
+
 def publish_runtime_metadata(
     output_path,
     dataset_name,
@@ -589,6 +820,7 @@ def publish_runtime_metadata(
     mem_gb,
     producer=None,
     producer_run_id=None,
+    batch_contract=None,
 ):
     """Atomically publish runtime metadata after its output is complete."""
     output_path = Path(output_path)
@@ -625,6 +857,7 @@ def publish_runtime_metadata(
         method_str,
         time_secs,
         mem_gb,
+        batch_contract=batch_contract,
     )
     serialized = (
         json.dumps(
@@ -692,6 +925,7 @@ def read_runtime_metadata(
     method_str,
     producer=None,
     producer_run_id=None,
+    expected_batch_contract=None,
 ):
     """Read and strictly validate metadata for a valid Feather cache hit."""
     output_path = Path(output_path)
@@ -701,11 +935,20 @@ def read_runtime_metadata(
         raise ValueError(
             "run-bound artifact producer is required for runtime metadata"
         )
-    if not recorded_feather_valid(
-        output_path,
-        producer=effective_producer,
-        producer_run_id=producer_run_id,
-    ):
+    if expected_batch_contract is None:
+        feather_valid = recorded_feather_valid(
+            output_path,
+            producer=effective_producer,
+            producer_run_id=producer_run_id,
+        )
+    else:
+        feather_valid = recorded_feather_valid(
+            output_path,
+            producer=effective_producer,
+            producer_run_id=producer_run_id,
+            expected_batch_contract=expected_batch_contract,
+        )
+    if not feather_valid:
         raise ValueError(f"output Feather is not a valid recorded artifact: {output_path}")
     metadata_path = runtime_metadata_path(output_path)
     if not metadata_path.is_file() or metadata_path.stat().st_size == 0:
@@ -732,7 +975,10 @@ def read_runtime_metadata(
         )
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError(f"runtime metadata is malformed: {metadata_path}") from exc
-    if not isinstance(payload, dict) or set(payload) != _RUNTIME_METADATA_FIELDS:
+    expected_runtime_fields = _RUNTIME_METADATA_FIELDS
+    if expected_batch_contract is not None:
+        expected_runtime_fields |= _RUNTIME_METADATA_IDENTITY_FIELDS
+    if not isinstance(payload, dict) or set(payload) != expected_runtime_fields:
         raise ValueError(f"runtime metadata has an invalid schema: {metadata_path}")
     if payload["schema_version"] != 1 or type(payload["schema_version"]) is not int:
         raise ValueError(f"runtime metadata has an invalid schema_version: {metadata_path}")
@@ -751,6 +997,12 @@ def read_runtime_metadata(
         raise ValueError(f"runtime metadata has the wrong dataset: {metadata_path}")
     if payload["method"] != method_str or not isinstance(payload["method"], str):
         raise ValueError(f"runtime metadata has the wrong method: {metadata_path}")
+    if expected_batch_contract is not None:
+        _validate_corrected_batch_contract(
+            expected_batch_contract,
+            payload["batch_contract"],
+            f"runtime metadata {method_str}",
+        )
     _runtime_number(payload["time_secs"], "time_secs")
     _runtime_number(payload["mem_GB"], "mem_GB", allow_none=True)
     return payload
@@ -1014,14 +1266,15 @@ def replay_runtime_metadata(
     log_file,
     producer=None,
     producer_run_id=None,
+    expected_batch_contract=None,
 ):
-    """Replay one validated runtime metadata row into the execution log."""
     payload = read_runtime_metadata(
         output_path,
         dataset_name,
         method_str,
         producer=producer,
         producer_run_id=producer_run_id,
+        expected_batch_contract=expected_batch_contract,
     )
     log_execution_time(
         dataset_name,
@@ -1572,9 +1825,34 @@ def process_dataset(args, ds_name, entry):
     if not input_path.exists():
         raise FileNotFoundError(f"Input h5ad not found: {input_path}")
 
+    corrected_batch_keys = ()
+    corrected_validation_summary = None
+    expected_h5ad_batch_contract = None
+    expected_stage5_batch_contract = None
+    if analysis_pass == "corrected":
+        corrected_batch_keys = normalize_batch_keys(entry.get("batch_col"))
+        corrected_validation_summary = _read_corrected_validation_summary(
+            input_path,
+            corrected_batch_keys,
+        )
+        expected_h5ad_batch_contract = _corrected_h5ad_identity(
+            corrected_batch_keys
+        )
+        expected_stage5_batch_contract = _corrected_stage5_identity(
+            args.method,
+            corrected_batch_keys,
+            corrected_validation_summary,
+        )
+        if args.method == "pilotgm":
+            raise ValueError(
+                "PILOT-GM-VAE is not scheduled for corrected batch-effect runs"
+            )
+
     lowres_col = entry.get("cell_type_low_res")
     highres_col = entry.get("cell_type_high_res")
-    technical_batch = entry.get("batch_col") if analysis_pass == "corrected" else None
+    technical_batch = (
+        corrected_batch_keys[0] if len(corrected_batch_keys) == 1 else None
+    )
 
     def output_name(suffix, n, res_label=None, extension="dists"):
         if analysis_pass is not None:
@@ -1652,15 +1930,28 @@ def process_dataset(args, ds_name, entry):
         out_path = output_dir / out_name
         method_str = legacy_method_label(args.method, n, res_label, payload)
         method_labels[out_path] = method_str
-        if not args.force and recorded_feather_valid(
-            out_path, producer=artifact_producer
-        ):
+        if expected_stage5_batch_contract is None:
+            cache_valid = (
+                not args.force
+                and recorded_feather_valid(out_path, producer=artifact_producer)
+            )
+        else:
+            cache_valid = (
+                not args.force
+                and recorded_feather_valid(
+                    out_path,
+                    producer=artifact_producer,
+                    expected_batch_contract=expected_stage5_batch_contract,
+                )
+            )
+        if cache_valid:
             replay_runtime_metadata(
                 out_path,
                 ds_name,
                 method_str,
                 log_file,
                 producer=artifact_producer,
+                expected_batch_contract=expected_stage5_batch_contract,
             )
             print(f"Already processed and validated: {out_name}")
             continue
@@ -1672,7 +1963,12 @@ def process_dataset(args, ds_name, entry):
     print(f"Loading {input_path} ...")
     source_shape = None
     if args.method in ("pilot", "qot", "pilotgm"):
-        validate_benchmark_h5ad_path(input_path, args.view, args.method)
+        _validate_h5ad_path(
+            input_path,
+            args.view,
+            args.method,
+            expected_h5ad_batch_contract,
+        )
         obs_columns = {"Sample"}
         obs_columns.update(
             str(ct_col) for _, _, ct_col, _, _, _ in pending if ct_col is not None
@@ -1694,7 +1990,12 @@ def process_dataset(args, ds_name, entry):
         )
         print("COUNTS_ACCESS=none; loaded selected obs/obsm into minimal AnnData")
     elif args.method in ("mrvi", "scpoli"):
-        validate_benchmark_h5ad_path(input_path, args.view, args.method)
+        _validate_h5ad_path(
+            input_path,
+            args.view,
+            args.method,
+            expected_h5ad_batch_contract,
+        )
         obs_columns = {"Sample"}
         if args.method == "scpoli":
             obs_columns.update(
@@ -1702,7 +2003,9 @@ def process_dataset(args, ds_name, entry):
                 for _, _, ct_col, _, _, _ in pending
                 if ct_col is not None
             )
-        if technical_batch is not None:
+        if args.method == "mrvi" and corrected_batch_keys:
+            obs_columns.update(corrected_batch_keys)
+        elif technical_batch is not None:
             obs_columns.add(str(technical_batch))
         max_hvg = max(n for n, _, _, _, _, _ in pending)
         selected_genes = read_h5ad_hvg_genes(input_path, max_hvg)
@@ -1719,7 +2022,12 @@ def process_dataset(args, ds_name, entry):
         )
     else:
         adata = sc.read_h5ad(str(input_path), backed="r")
-        validate_benchmark_h5ad_contract(adata, args.view, args.method)
+        _validate_h5ad_content(
+            adata,
+            args.view,
+            args.method,
+            expected_h5ad_batch_contract,
+        )
         adata = adata.to_memory()
     profile_shape = source_shape or (adata.n_obs, adata.n_vars)
     selected_suffix = (
@@ -1739,6 +2047,17 @@ def process_dataset(args, ds_name, entry):
         raise ValueError(
             f"Confirmed batch column '{technical_batch}' not found in obs of {input_path}"
         )
+    if args.method == "mrvi" and analysis_pass == "corrected":
+        validation = validate_batch_metadata(adata.obs, corrected_batch_keys)
+        loaded_summary = build_batch_validation_summary(
+            validation,
+            corrected_validation_summary["correction_mode"],
+            corrected_validation_summary["correction_formula"],
+        )
+        if loaded_summary != corrected_validation_summary:
+            raise ValueError(
+                "loaded corrected batch metadata differs from H5AD validation_summary"
+            )
 
     for n, res_label, ct_col, payload, run_fn, out_path in pending:
         # HVG gene subset per combo, done FIRST (before any dense conversion)
@@ -1756,6 +2075,8 @@ def process_dataset(args, ds_name, entry):
                 f"Cell type column '{ct_col}' not found in obs of {ds_name} "
                 f"(available: {list(sub.obs.columns)})."
             )
+        run_batch_key = technical_batch
+        temporary_batch_key = None
 
         # Exact legacy method strings (constants.R + notebook recodes depend
         # on them); these were derived before the cache scan as well.
@@ -1767,12 +2088,24 @@ def process_dataset(args, ds_name, entry):
         if profile_gpu:
             torch.cuda.reset_peak_memory_stats()
         try:
+            if (
+                args.method == "mrvi"
+                and analysis_pass == "corrected"
+                and len(corrected_batch_keys) >= 2
+            ):
+                batch_composite = build_batch_composite(
+                    sub.obs,
+                    corrected_batch_keys,
+                )
+                sub.obs = batch_composite.frame
+                temporary_batch_key = batch_composite.column_name
+                run_batch_key = temporary_batch_key
             if args.method == "mrvi":
                 run_mrvi(
                     sub,
                     args.device,
                     out_path,
-                    batch_key=technical_batch,
+                    batch_key=run_batch_key,
                 )
             elif args.method == "scpoli":
                 run_scpoli(sub, ct_col, payload, out_path)
@@ -1791,6 +2124,11 @@ def process_dataset(args, ds_name, entry):
             else:
                 run_pilot(sub, ct_col, args.view, n, out_path)
         finally:
+            if (
+                temporary_batch_key is not None
+                and temporary_batch_key in sub.obs.columns
+            ):
+                del sub.obs[temporary_batch_key]
             if profile_gpu:
                 report_gpu_memory(method_str)
         exec_time = time.time() - start_time
@@ -1802,6 +2140,7 @@ def process_dataset(args, ds_name, entry):
             exec_time,
             mem_gb,
             producer=artifact_producer,
+            batch_contract=expected_stage5_batch_contract,
         )
         log_execution_time(
             ds_name,

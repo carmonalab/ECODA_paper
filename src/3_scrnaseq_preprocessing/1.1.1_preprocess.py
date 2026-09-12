@@ -16,6 +16,17 @@ from src.utils.py.benchmark_h5ad_contract import (
     validate_benchmark_h5ad_contract,
     validate_benchmark_h5ad_path,
 )
+from src.utils.py.batch_contract import (
+    RESERVED_OBS_NAME,
+    augment_batch_contract,
+    batch_correction_spec,
+    batch_correction_spec_for_keys,
+    build_batch_composite,
+    build_batch_contract_identity,
+    normalize_batch_keys,
+    read_h5ad_validation_summary,
+    validate_batch_metadata,
+)
 from src.utils.py.preprocess_utils import (
     load_input,
     apply_subset_vars,
@@ -56,9 +67,31 @@ def _validate_recorded_checksum(path):
         and records.get("MD5") == _checksum(path)
         and records.get("SIZE") == str(path.stat().st_size)
     )
+def _validate_corrected_summary_path(path, batch_keys):
+    """Require the compact validated summary on a corrected H5AD cache hit."""
+
+    try:
+        normalized = read_h5ad_validation_summary(str(path), batch_keys)
+    except ValueError as exc:
+        raise ValueError(
+            f"corrected H5AD validation_summary is invalid: {path}"
+        ) from exc
+    expected_mode, expected_formula = batch_correction_spec_for_keys(
+        "preprocess",
+        batch_keys,
+    )
+    if (
+        normalized["correction_mode"] != expected_mode
+        or normalized["correction_formula"] != expected_formula
+    ):
+        raise ValueError(
+            f"corrected H5AD validation_summary has the wrong correction policy: {path}"
+        )
 
 
-def _write_h5ad_atomic(adata, path, view_name):
+
+
+def _write_h5ad_atomic(adata, path, view_name, corrected_identity=None):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
@@ -68,19 +101,37 @@ def _write_h5ad_atomic(adata, path, view_name):
     had_path = path.is_file()
     had_sidecar = sidecar.is_file()
 
-    validate_benchmark_h5ad_contract(adata, view_name, "preprocessing")
+    validator_kwargs = {}
+    if view_name == "batch_effect_corrected":
+        if RESERVED_OBS_NAME in adata.obs.columns:
+            raise ValueError(
+                f"temporary corrected batch column {RESERVED_OBS_NAME!r} "
+                "must be absent before validation or writing"
+            )
+        validator_kwargs = {
+            "expected_batch_contract": corrected_identity,
+            "batch_contract": adata.uns.get("batch_contract"),
+        }
+
+    validate_benchmark_h5ad_contract(
+        adata, view_name, "preprocessing", **validator_kwargs
+    )
     try:
         adata.write_h5ad(str(tmp))
         if not tmp.is_file() or tmp.stat().st_size == 0:
             raise RuntimeError(f"preprocessing produced an empty h5ad: {tmp}")
-        validate_benchmark_h5ad_path(str(tmp), view_name, "preprocessing")
+        validate_benchmark_h5ad_path(
+            str(tmp), view_name, "preprocessing", **validator_kwargs
+        )
 
         if had_path:
             os.link(path, backup)
         if had_sidecar:
             os.link(sidecar, sidecar_backup)
         os.replace(tmp, path)
-        validate_benchmark_h5ad_path(str(path), view_name, "preprocessing")
+        validate_benchmark_h5ad_path(
+            str(path), view_name, "preprocessing", **validator_kwargs
+        )
         _write_checksum(path)
     except Exception:
         if backup.exists():
@@ -147,9 +198,10 @@ def select_hvgs_ranked(adata, n_top_genes, batch_key=None, flavor="seurat_v3_pap
                 check_values=False,
             )
         except ValueError:
-            del adata.layers["counts_jittered"]
             raise e
-        del adata.layers["counts_jittered"]
+        finally:
+            if "counts_jittered" in adata.layers:
+                del adata.layers["counts_jittered"]
     adata.var["hvg_rank"] = hvg_df["highly_variable_rank"].values
     return adata
 
@@ -488,13 +540,58 @@ def process_view(
     resolutions,
     flavor="seurat_v3_paper",
     compute_harmony=True,
+    *,
+    hvg_batch_key=None,
+    harmony_batch_keys=None,
+    corrected_batch_keys=None,
+    corrected_biological_column=None,
 ):
     """Run one explicit analysis view with pass-qualified output keys."""
-    adata = base_preprocessing(adata)
+    if hvg_batch_key is None:
+        hvg_batch_key = batch_key
+    if harmony_batch_keys is None:
+        harmony_batch_keys = batch_key
 
-    adata = select_hvgs_ranked(
-        adata, n_top_genes=max(n_hvg_sizes), batch_key=batch_key, flavor=flavor
-    )
+    adata = base_preprocessing(adata)
+    if corrected_batch_keys is not None:
+        validate_batch_metadata(
+            adata.obs,
+            corrected_batch_keys,
+            sample_column="Sample",
+            biological_column=corrected_biological_column,
+        )
+    temporary_adata = None
+    try:
+        if hvg_batch_key == RESERVED_OBS_NAME:
+            if RESERVED_OBS_NAME in adata.obs.columns:
+                raise ValueError(
+                    f"metadata already contains reserved temporary column "
+                    f"{RESERVED_OBS_NAME!r}"
+                )
+            temporary_adata = adata
+            composite = build_batch_composite(
+                adata.obs,
+                harmony_batch_keys,
+                sample_column="Sample",
+            )
+            try:
+                adata.obs[RESERVED_OBS_NAME] = composite.values
+            finally:
+                del composite
+
+        adata = select_hvgs_ranked(
+            adata,
+            n_top_genes=max(n_hvg_sizes),
+            batch_key=hvg_batch_key,
+            flavor=flavor,
+        )
+    finally:
+        for temporary in (temporary_adata, adata):
+            if (
+                temporary is not None
+                and RESERVED_OBS_NAME in temporary.obs.columns
+            ):
+                del temporary.obs[RESERVED_OBS_NAME]
 
     for n in n_hvg_sizes:
         genes = top_n_hvg_genes(adata, n=n)
@@ -504,7 +601,9 @@ def process_view(
         if n == CLUSTER_N_HVG:
             run_clustering(adata, f"X_pca_{key_suffix}", key_suffix, resolutions)
             if compute_harmony:
-                compute_harmony_and_store(adata, sub, batch_key, key_suffix)
+                compute_harmony_and_store(
+                    adata, sub, harmony_batch_keys, key_suffix
+                )
                 run_clustering(
                     adata,
                     f"X_pca_harmony_{key_suffix}",
@@ -536,8 +635,6 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
         if ds_name is not None and current_ds != ds_name:
             continue
 
-        sample_col = entry["sample_col"]
-        batch_col = entry.get("batch_col")
         use_for_batch_effect = bool(entry.get("use_for_batch_effect"))
         views = entry.get("views") or {}
         if not views:
@@ -549,6 +646,13 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                 raise ValueError(
                     f"Unknown preprocessing view {view_name!r} for dataset {current_ds}"
                 )
+            # datasets_io merges dataset-level and view-level columns into each
+            # view entry.  Resolve them here so a view override never falls
+            # through to the first matching view's top-level summary.
+            view_columns = view_info.get("columns") or {}
+            sample_col = view_columns.get("sample")
+            label_col = view_columns.get("label")
+            batch_col = view_columns.get("batch")
             is_uncorrected = view_name == "batch_effect_uncorrected"
             is_corrected = view_name == "batch_effect_corrected"
             is_batch_view = is_uncorrected or is_corrected
@@ -556,10 +660,6 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                 raise ValueError(
                     f"Dataset {current_ds} declares {view_name} but "
                     "use_for_batch_effect is false"
-                )
-            if is_corrected and batch_col is None:
-                raise ValueError(
-                    "corrected batch-effect view requires a confirmed columns.batch"
                 )
 
             input_file_name = view_info.get("input_file")
@@ -570,13 +670,41 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
             if not output_file_name:
                 print(f"Skipping {current_ds} / {view_name}: No output_file_name.")
                 continue
-
             processed_file_path = output_dir / output_file_name
+            expected_batch_contract = None
+            if is_corrected:
+                corrected_sample_column = "Sample"
+                batch_keys = normalize_batch_keys(
+                    batch_col,
+                    sample_column=corrected_sample_column,
+                    biological_column=label_col,
+                )
+                expected_batch_contract = build_batch_contract_identity(
+                    batch_keys,
+                    sample_column=corrected_sample_column,
+                    method_id="preprocess",
+                    model_id="hvg_composite_v1",
+                )
+
+            path_validator_kwargs = (
+                {"expected_batch_contract": expected_batch_contract}
+                if is_corrected
+                else {}
+            )
+
             if processed_file_path.exists() and not force:
                 try:
                     validate_benchmark_h5ad_path(
-                        str(processed_file_path), view_name, "preprocessing"
+                        str(processed_file_path),
+                        view_name,
+                        "preprocessing",
+                        **path_validator_kwargs,
                     )
+                    if is_corrected:
+                        _validate_corrected_summary_path(
+                            processed_file_path,
+                            batch_keys,
+                        )
                     if _validate_recorded_checksum(processed_file_path):
                         print(f"Already processed and validated: {current_ds} / {view_name}")
                         continue
@@ -624,7 +752,6 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                 f"Sample-count filter ({current_ds} / {view_name}): "
                 f"threshold=500, removed={len(removed_samples)} [{removed_summary}]"
             )
-
             if is_uncorrected:
                 batch_key = "Sample"
                 n_hvg_sizes = (BATCH_VIEW_N_HVG,)
@@ -633,27 +760,79 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                 batch_key = batch_col
                 n_hvg_sizes = (BATCH_VIEW_N_HVG,)
                 compute_harmony = True
+                hvg_batch_key = (
+                    batch_keys[0]
+                    if len(batch_keys) == 1
+                    else RESERVED_OBS_NAME
+                )
+                harmony_batch_keys = (
+                    batch_keys[0]
+                    if len(batch_keys) == 1
+                    else list(batch_keys)
+                )
             else:
                 batch_key = os.environ.get("SAMPLE_COLNAME", "Sample")
                 n_hvg_sizes = BENCHMARK_VIEW_N_HVG_SIZES
                 compute_harmony = True
 
-            if is_corrected and batch_col not in adata_view.obs.columns:
-                raise ValueError(
-                    f"batch_col '{batch_col}' not found in obs for {current_ds} / {view_name}. "
-                    f"Available columns: {list(adata_view.obs.columns)}"
-                )
-
             print(f"Processing {current_ds} / {view_name} (batch_key={batch_key})...")
-            adata_view = process_view(
-                adata_view,
-                view_name=view_name,
-                batch_key=batch_key,
-                n_hvg_sizes=n_hvg_sizes,
-                resolutions=RESOLUTIONS,
-                compute_harmony=compute_harmony,
-            )
-            _write_h5ad_atomic(adata_view, processed_file_path, view_name)
+            if is_corrected:
+                adata_view = process_view(
+                    adata_view,
+                    view_name=view_name,
+                    batch_key=batch_key,
+                    n_hvg_sizes=n_hvg_sizes,
+                    resolutions=RESOLUTIONS,
+                    compute_harmony=compute_harmony,
+                    hvg_batch_key=hvg_batch_key,
+                    harmony_batch_keys=harmony_batch_keys,
+                    corrected_batch_keys=batch_keys,
+                    corrected_biological_column=label_col,
+                )
+            else:
+                adata_view = process_view(
+                    adata_view,
+                    view_name=view_name,
+                    batch_key=batch_key,
+                    n_hvg_sizes=n_hvg_sizes,
+                    resolutions=RESOLUTIONS,
+                    compute_harmony=compute_harmony,
+                )
+            if is_corrected:
+                if RESERVED_OBS_NAME in adata_view.obs.columns:
+                    raise ValueError(
+                        f"temporary corrected batch column {RESERVED_OBS_NAME!r} "
+                        "must be absent before writing the H5AD"
+                    )
+                # Revalidate the post-base, post-filter metadata at the
+                # persistence boundary and project only its compact summary.
+                # Full cell/sample vectors remain in memory for consumers but
+                # never enter the corrected H5AD identity.
+                validation = validate_batch_metadata(
+                    adata_view.obs,
+                    batch_keys,
+                    sample_column="Sample",
+                    biological_column=label_col,
+                )
+                correction_mode, correction_formula = batch_correction_spec(
+                    "preprocess", validation
+                )
+                expected_batch_contract = augment_batch_contract(
+                    expected_batch_contract,
+                    validation,
+                    correction_mode,
+                    correction_formula,
+                )
+                adata_view.uns["batch_contract"] = dict(expected_batch_contract)
+            if is_corrected:
+                _write_h5ad_atomic(
+                    adata_view,
+                    processed_file_path,
+                    view_name,
+                    corrected_identity=expected_batch_contract,
+                )
+            else:
+                _write_h5ad_atomic(adata_view, processed_file_path, view_name)
             print(f"  -> Saved: {processed_file_path}\n")
 
 

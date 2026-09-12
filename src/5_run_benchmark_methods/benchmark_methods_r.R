@@ -86,10 +86,7 @@ process_coda_fig <- function(
   }
   dist_mat <- dist(feat_mat)
   if (shuffle_labels) {
-    label_ids <- names(labels)
-    set.seed(123)
-    labels <- labels[sample(seq_along(labels))]
-    names(labels) <- label_ids
+    labels <- shuffle_labels_deterministic(labels)
   }
   res <- create_result_bundle(
     feat_mat,
@@ -100,66 +97,247 @@ process_coda_fig <- function(
   return(res)
 }
 
+# Keep null controls deterministic without changing the feature matrix.  The
+# caller supplies the original sample order; only the label values are
+# permuted and their sample names remain attached to the same samples.
+shuffle_labels_deterministic <- function(labels, seed = 123) {
+  label_ids <- names(labels)
+  set.seed(seed)
+  labels <- labels[sample(seq_along(labels))]
+  names(labels) <- label_ids
+  labels
+}
+
+# Reuse a computed result bundle for a deterministic null control.  In
+# particular, this must not re-run composition or batch correction.
+shuffle_result_labels_deterministic <- function(res, seed = 123) {
+  if (!is.list(res) || is.null(res[["labels"]])) {
+    stop("shuffle_result_labels_deterministic: result labels are required")
+  }
+  res[["labels"]] <- shuffle_labels_deterministic(res[["labels"]], seed = seed)
+  if (!is.null(res[["dist_mat"]])) {
+    res[["scores"]] <- calc_sep_score(res[["dist_mat"]], res[["labels"]])
+  }
+  res
+}
+
+# Load the corrected-mode contract lazily.  Ordinary benchmark and
+# uncorrected batch paths do not need this module and retain their existing
+# package/source behavior.
+.ecoda_require_batch_contract <- function() {
+  required <- c(
+    "ecoda_batch_normalize_keys",
+    "ecoda_batch_validate_metadata"
+  )
+  if (all(vapply(
+    required,
+    function(name) exists(name, mode = "function", inherits = TRUE),
+    logical(1)
+  ))) {
+    return(invisible(TRUE))
+  }
+
+  project_root <- Sys.getenv("PROJECT_ROOT", unset = "")
+  candidates <- character()
+  if (nzchar(project_root)) {
+    candidates <- c(
+      candidates,
+      file.path(project_root, "src", "utils", "batch_contract.R")
+    )
+  }
+  candidates <- c(
+    candidates,
+    file.path(getwd(), "src", "utils", "batch_contract.R")
+  )
+  candidates <- unique(candidates[file.exists(candidates)])
+  if (length(candidates) == 0L) {
+    stop(
+      "Corrected CLR composition requires src/utils/batch_contract.R"
+    )
+  }
+  source(candidates[[1L]], local = .GlobalEnv)
+  if (!all(vapply(
+    required,
+    function(name) exists(name, mode = "function", inherits = TRUE),
+    logical(1)
+  ))) {
+    stop("src/utils/batch_contract.R did not define the corrected-mode contract")
+  }
+  invisible(TRUE)
+}
+
+
 # Correct CLR composition by subtracting only the fitted technical batch
 # random effect. Biological labels are deliberately absent from this model.
-correct_clr_batch_lmm <- function(feat_mat, sample_meta, batch_col) {
-  if (is.null(batch_col) || !nzchar(batch_col)) {
+correct_clr_batch_lmm <- function(
+  feat_mat,
+  sample_meta,
+  batch_col = NULL,
+  sample_col = "Sample",
+  metadata_validation = NULL
+) {
+  if (is.null(batch_col)) {
     stop("correct_clr_batch_lmm: batch_col is required")
   }
+  .ecoda_require_batch_contract()
+  if (!is.data.frame(sample_meta)) {
+    stop("correct_clr_batch_lmm: sample metadata must be a data.frame")
+  }
+
+  batch_keys <- ecoda_batch_normalize_keys(
+    batch_col,
+    sample_col = sample_col
+  )
   feat_mat <- as.matrix(feat_mat)
+  if (length(dim(feat_mat)) != 2L ||
+      nrow(feat_mat) == 0L || ncol(feat_mat) == 0L) {
+    stop("correct_clr_batch_lmm: feature matrix must be non-empty")
+  }
   if (is.null(rownames(feat_mat)) || anyDuplicated(rownames(feat_mat))) {
     stop("correct_clr_batch_lmm: feature matrix needs unique sample rownames")
   }
-  if (is.null(sample_meta) || !batch_col %in% colnames(sample_meta)) {
-    stop("correct_clr_batch_lmm: batch column missing from sample metadata")
+  if (!is.numeric(feat_mat) || any(!is.finite(feat_mat))) {
+    stop("correct_clr_batch_lmm: feature matrix must contain finite numeric values")
   }
-  if (!"Sample" %in% colnames(sample_meta)) {
-    stop("correct_clr_batch_lmm: sample metadata needs a Sample column")
+
+  validation <- metadata_validation
+  if (is.null(validation)) {
+    # This call deliberately receives the cell-level table.  The contract
+    # checks every row before creating its sample-level representation.
+    validation <- ecoda_batch_validate_metadata(
+      metadata = sample_meta,
+      batch_keys = if (length(batch_keys) >= 2L) {
+        as.list(unname(batch_keys))
+      } else {
+        batch_keys
+      },
+      sample_col = sample_col
+    )
   }
-  sample_ids <- as.character(sample_meta[["Sample"]])
-  if (anyNA(sample_ids) || any(!nzchar(sample_ids))) {
-    stop("correct_clr_batch_lmm: missing sample or batch IDs")
+  if (!is.list(validation) || !isTRUE(validation[["valid"]]) ||
+      !identical(as.character(validation[["ordered_keys"]]), batch_keys)) {
+    stop("correct_clr_batch_lmm: invalid batch metadata validation")
   }
-  if (anyDuplicated(sample_ids)) {
-    stop("correct_clr_batch_lmm: duplicate sample IDs in metadata")
+  sample_metadata <- validation[["sample_metadata"]]
+  canonical_metadata <- validation[["canonical_sample_metadata"]]
+  if (!is.data.frame(sample_metadata) ||
+      !is.data.frame(canonical_metadata) ||
+      !all(batch_keys %in% colnames(sample_metadata)) ||
+      !all(batch_keys %in% colnames(canonical_metadata))) {
+    stop("correct_clr_batch_lmm: validated batch metadata is incomplete")
   }
-  if (!identical(sample_ids, rownames(feat_mat))) {
+
+  sample_ids <- as.character(validation[["sample_ids"]])
+  if (length(sample_ids) != nrow(feat_mat) ||
+      anyNA(sample_ids) || any(!nzchar(sample_ids)) ||
+      !identical(sample_ids, rownames(feat_mat))) {
     stop("correct_clr_batch_lmm: sample-order mismatch")
   }
-  batch <- sample_meta[[batch_col]]
-  valid <- !is.na(batch) & nzchar(as.character(batch))
-  if (!all(valid)) {
-    stop("correct_clr_batch_lmm: missing sample or batch IDs")
+  if (nrow(sample_metadata) != nrow(feat_mat) ||
+      nrow(canonical_metadata) != nrow(feat_mat)) {
+    stop("correct_clr_batch_lmm: sample metadata does not cover all features")
   }
-  batch <- factor(batch)
-  if (nlevels(batch) < 2) {
-    stop("correct_clr_batch_lmm: fewer than two batch levels")
+
+  # Never interpolate user-configured names into a formula.  The aliases are
+  # fixed syntactic names and the original key order is retained separately.
+  aliases <- if (length(batch_keys) == 1L) {
+    "batch"
+  } else {
+    paste0("batch_key_", seq_along(batch_keys))
+  }
+  model_data <- data.frame(
+    row.names = seq_len(nrow(feat_mat)),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  for (key_index in seq_along(batch_keys)) {
+    key <- batch_keys[[key_index]]
+    values <- canonical_metadata[[key]]
+    levels <- validation[["per_key_levels"]][[key]]
+    if (length(values) != nrow(feat_mat) ||
+        length(levels) < 2L ||
+        anyNA(values) || any(!values %in% levels)) {
+      stop("correct_clr_batch_lmm: invalid levels for batch key ", key)
+    }
+    model_data[[aliases[[key_index]]]] <- factor(
+      as.character(values),
+      levels = as.character(levels)
+    )
+  }
+
+  # Keep the scalar formula literal for the established one-key path.  The
+  # multi-key branch is generated only from the fixed aliases above.
+  model_formula <- if (length(aliases) == 1L) {
+    y ~ 1 + (1 | batch)
+  } else {
+    stats::as.formula(paste0(
+      "y ~ 1 + ",
+      paste0("(1 | ", aliases, ")", collapse = " + ")
+    ))
   }
 
   corrected <- feat_mat
-  model_data <- data.frame(batch = batch)
   for (feature in seq_len(ncol(feat_mat))) {
     model_data$y <- as.numeric(feat_mat[, feature])
+    feature_name <- if (is.null(colnames(feat_mat))) {
+      as.character(feature)
+    } else {
+      colnames(feat_mat)[[feature]]
+    }
     fit <- tryCatch(
-      lme4::lmer(y ~ 1 + (1 | batch), data = model_data, REML = TRUE),
+      lme4::lmer(model_formula, data = model_data, REML = TRUE),
       error = function(e) {
         stop("correct_clr_batch_lmm: nonconvergence for feature ",
-             colnames(feat_mat)[feature], ": ", conditionMessage(e))
+             feature_name, ": ", conditionMessage(e))
       }
     )
     convergence <- fit@optinfo$conv$lme4$messages
     if (!is.null(convergence)) {
       stop("correct_clr_batch_lmm: nonconvergence for feature ",
-           colnames(feat_mat)[feature], ": ",
+           feature_name, ": ",
            paste(convergence, collapse = "; "))
     }
-    random_effects <- lme4::ranef(fit)$batch[["(Intercept)"]]
-    names(random_effects) <- rownames(lme4::ranef(fit)$batch)
-    corrected[, feature] <- model_data$y - random_effects[as.character(batch)]
+
+    random_effects <- numeric(nrow(feat_mat))
+    random_tables <- lme4::ranef(fit)
+    for (alias in aliases) {
+      random_table <- random_tables[[alias]]
+      if (is.null(random_table) ||
+          !"(Intercept)" %in% colnames(random_table)) {
+        stop("correct_clr_batch_lmm: nonconvergence for feature ",
+             feature_name, ": missing random effect for ", alias)
+      }
+      effect_levels <- rownames(random_table)
+      effect <- random_table[["(Intercept)"]][match(
+        as.character(model_data[[alias]]), effect_levels
+      )]
+      if (length(effect) != nrow(feat_mat) ||
+          anyNA(effect) || any(!is.finite(effect))) {
+        stop("correct_clr_batch_lmm: nonconvergence for feature ",
+             feature_name, ": invalid random effect for ", alias)
+      }
+      random_effects <- random_effects + as.numeric(effect)
+    }
+    corrected[, feature] <- as.numeric(model_data$y) - random_effects
   }
-  corrected <- corrected - rowMeans(corrected)
+
+  # Recenter rows (not columns) and make the final coordinate the exact
+  # negative sum of its prefix, restoring the CLR zero-sum invariant.
+  corrected <- sweep(corrected, 1L, rowMeans(corrected), FUN = "-")
+  final_column <- ncol(corrected)
+  if (final_column == 1L) {
+    corrected[, final_column] <- 0
+  } else {
+    prefix <- seq_len(final_column - 1L)
+    for (row_index in seq_len(nrow(corrected))) {
+      corrected[row_index, final_column] <- -sum(
+        corrected[row_index, prefix, drop = FALSE]
+      )
+    }
+  }
   dimnames(corrected) <- dimnames(feat_mat)
-  if (any(abs(rowSums(corrected)) > 1e-8)) {
+  row_sums <- rowSums(corrected)
+  if (any(!is.finite(row_sums)) || any(row_sums != 0)) {
     stop("correct_clr_batch_lmm: row recentering failed to restore zero sums")
   }
   corrected

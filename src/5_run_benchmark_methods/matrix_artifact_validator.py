@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import sys
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
@@ -16,13 +16,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.utils.py.batch_contract import (  # noqa: E402
+    build_batch_contract_identity,
+)
+from src.utils.py.datasets_io import read_datasets_json  # noqa: E402
 from src.utils.py.h5ad_source_identity import (  # noqa: E402
     load_source_identity,
     read_h5ad_sample_ids,
     resolve_h5ad_path,
     verify_source_identity,
 )
-PB_VARIANTS = ("schvg2000", "hvg2000", "hvg500", "hvg2000_bl", "hvg1000", "hvg3000")
+from src.utils.py.benchmark_h5ad_contract import (  # noqa: E402
+    validate_batch_contract_identity,
+)
 BATCH_DATASET_ORDER = (
     "Alzheimer",
     "Breast_cancer",
@@ -40,6 +46,162 @@ BATCH_DATASET_ORDER = (
 PYTHON_METHODS = {"mrvi", "scpoli", "pilot", "qot", "pilotgm"}
 R_METHODS = {"gloscope", "mofa", "pseudobulk", "composition", "scitd"}
 CONSUMES_PSEUDOBULK = {"mofa", "pseudobulk", "composition"}
+
+_CORRECTED_METHOD_IDENTITIES = {
+    "prepare_pseudobulk": ("Pseudobulk", "pseudobulk_composite_v1"),
+    "pseudobulk": ("Pseudobulk", "pseudobulk_composite_v1"),
+    "composition": (
+        "ECODA_authors_HR",
+        "ecoda_additive_random_intercepts_v1",
+    ),
+    "gloscope": ("GloScope", "embedding_consumer_harmony_v1"),
+    "mrvi": ("MrVI", "mrvi_composite_v1"),
+    "pilot": ("PILOT", "embedding_consumer_harmony_v1"),
+    "qot": ("QOT", "embedding_consumer_harmony_v1"),
+}
+
+
+def _corrected_method_identity(label: str) -> tuple[str, str]:
+    try:
+        return _CORRECTED_METHOD_IDENTITIES[label]
+    except KeyError as exc:
+        raise ValueError(
+            f"unsupported corrected batch method for identity: {label}"
+        ) from exc
+
+
+def _build_corrected_batch_contract(
+    config_entries: dict,
+    ds: str,
+    view: str,
+    label: str,
+) -> dict:
+    entry = config_entries.get(ds)
+    if not isinstance(entry, dict):
+        raise ValueError(f"dataset {ds!r} is missing from the selected config")
+    raw_keys = entry.get("batch_col")
+    if raw_keys is None:
+        raise ValueError(
+            f"corrected batch config is missing columns.batch for {ds}/{view}"
+        )
+    method_id, model_id = _corrected_method_identity(label)
+    try:
+        return build_batch_contract_identity(
+            raw_keys,
+            sample_column="Sample",
+            method_id=method_id,
+            model_id=model_id,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"invalid corrected batch config for {ds}/{view}/{label}: {exc}"
+        ) from exc
+
+
+_RUNTIME_METADATA_FIELDS = frozenset(
+    {
+        "schema_version",
+        "artifact_path",
+        "artifact_md5",
+        "dataset",
+        "method",
+        "time_secs",
+        "mem_GB",
+    }
+)
+_RUNTIME_METADATA_IDENTITY_FIELDS = frozenset({"batch_contract"})
+_RUNTIME_CHECKSUM_FIELDS = ("MD5", "SIZE", "PATH")
+
+
+def _reject_nonfinite_json_constant(value):
+    raise ValueError(f"runtime metadata contains non-finite JSON value: {value}")
+
+
+def _reject_duplicate_json_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"runtime metadata has duplicate key: {key}")
+        result[key] = value
+    return result
+
+
+def _runtime_number(value, field, *, allow_none=False):
+    if value is None and allow_none:
+        return
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"runtime metadata has invalid {field}")
+    if not np.isfinite(float(value)) or value < 0:
+        raise ValueError(f"runtime metadata has invalid {field}")
+
+
+def _read_feather_batch_contract(path: Path) -> dict | None:
+    """Read and verify the corrected identity beside one Feather artifact."""
+    metadata_path = Path(f"{path}.runtime.json")
+    if not metadata_path.is_file():
+        return None
+    try:
+        _full_checksum(metadata_path)
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            f"Feather runtime metadata checksum is invalid: {metadata_path}"
+        ) from exc
+    try:
+        payload = json.loads(
+            metadata_path.read_text(encoding="utf-8"),
+            parse_constant=_reject_nonfinite_json_constant,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(
+            f"Feather runtime metadata is malformed: {metadata_path}"
+        ) from exc
+    required_fields = _RUNTIME_METADATA_FIELDS | _RUNTIME_METADATA_IDENTITY_FIELDS
+    if not isinstance(payload, dict) or set(payload) != required_fields:
+        raise ValueError(
+            f"Feather runtime metadata has an invalid schema: {metadata_path}"
+        )
+    if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
+        raise ValueError(
+            f"Feather runtime metadata has an invalid schema_version: {metadata_path}"
+        )
+    if payload["artifact_path"] != str(path):
+        raise ValueError(
+            f"Feather runtime metadata has the wrong artifact_path: {metadata_path}"
+        )
+    artifact_checksum = _read_checksum_sidecar(path)
+    if (
+        not isinstance(payload["artifact_md5"], str)
+        or payload["artifact_md5"] != artifact_checksum["MD5"]
+    ):
+        raise ValueError(
+            f"Feather runtime metadata has the wrong artifact_md5: {metadata_path}"
+        )
+    if (
+        not isinstance(payload["dataset"], str)
+        or not payload["dataset"]
+        or not isinstance(payload["method"], str)
+        or not payload["method"]
+    ):
+        raise ValueError(
+            f"Feather runtime metadata has invalid dataset/method: {metadata_path}"
+        )
+    _runtime_number(payload["time_secs"], "time_secs")
+    _runtime_number(payload["mem_GB"], "mem_GB", allow_none=True)
+    identity = payload["batch_contract"]
+    if not isinstance(identity, dict):
+        raise ValueError(
+            f"Feather runtime metadata batch_contract is not an object: "
+            f"{metadata_path}"
+        )
+    validate_batch_contract_identity(
+        identity,
+        identity,
+        require_recorded=True,
+        require_summary=True,
+        label=f"Feather runtime metadata {metadata_path}",
+    )
+    return identity
 
 _CHECKSUM_FIELDS = ("MD5", "SIZE", "PATH")
 _ARTIFACT_RECORD_FIELDS = ("PATH", "SIZE", "MD5", "RUN_ID", "PRODUCER", "STATE")
@@ -279,9 +441,23 @@ def require_nonempty(
     expected_samples: list[str] | None = None,
     producer: str | None = None,
     producer_run_id: str | None = None,
+    *,
+    expected_batch_contract=None,
+    batch_contract=None,
+    require_runtime_batch_contract: bool = False,
 ) -> None:
     if not paths:
         raise ValueError(f"missing/invalid {description}: []")
+    if expected_batch_contract is not None or batch_contract is not None:
+        validate_batch_contract_identity(
+            expected_batch_contract,
+            batch_contract,
+            require_recorded=(
+                expected_batch_contract is not None and batch_contract is not None
+            ),
+            require_summary=False,
+            label=description,
+        )
     expected = None if expected_samples is None else list(expected_samples)
     for raw_path in paths:
         path = Path(raw_path)
@@ -300,6 +476,27 @@ def require_nonempty(
                 if record_present:
                     _read_artifact_record(
                         path, producer, producer_run_id, require=True
+                    )
+                if require_runtime_batch_contract:
+                    runtime_batch_contract = _read_feather_batch_contract(path)
+                    if runtime_batch_contract is None:
+                        raise ValueError(
+                            "missing recorded corrected batch contract identity"
+                        )
+                    if batch_contract is not None:
+                        validate_batch_contract_identity(
+                            batch_contract,
+                            runtime_batch_contract,
+                            require_recorded=True,
+                            require_summary=True,
+                            label=f"{description} embedded identity",
+                        )
+                    validate_batch_contract_identity(
+                        expected_batch_contract,
+                        runtime_batch_contract,
+                        require_recorded=expected_batch_contract is not None,
+                        require_summary=True,
+                        label=description,
                     )
             elif record_present:
                 _read_artifact_record(
@@ -471,6 +668,9 @@ def validate(
     source_identity_verified: bool = False,
     producer_run_id: str | None = None,
     producer: str | None = None,
+    *,
+    expected_batch_contract=None,
+    batch_contract=None,
 ) -> None:
     rows = read_selection(selection)
     selected_paths = [Path(selection)]
@@ -495,6 +695,13 @@ def validate(
         raise ValueError("no selected benchmark labels")
     if batch and batch_pass not in {"uncorrected", "corrected"}:
         raise ValueError("batch validation requires --batch-pass")
+    corrected = batch and batch_pass == "corrected"
+    config_by_view: dict[str, dict] = {}
+    if corrected:
+        if config_path is None or not config_path.is_file():
+            raise ValueError(
+                "corrected batch artifact validation requires an existing --config"
+            )
     if batch and exact:
         expected_rows = [
             (ds, "batch_effect_uncorrected", "batch_effect_uncorrected")
@@ -517,7 +724,24 @@ def validate(
         expected = expected_sample_ids(
             input_root, config_path, ds, view, source_identity_records
         )
+        if corrected and view not in config_by_view:
+            config_by_view[view] = read_datasets_json(config_path, view=view)
         for label in selected_labels:
+            row_expected_batch_contract = expected_batch_contract
+            if corrected:
+                derived_batch_contract = _build_corrected_batch_contract(
+                    config_by_view[view], ds, view, label
+                )
+                row_expected_batch_contract = derived_batch_contract
+                if expected_batch_contract is not None:
+                    validate_batch_contract_identity(
+                        derived_batch_contract,
+                        expected_batch_contract,
+                        require_recorded=True,
+                        require_summary=False,
+                        label=f"{ds}/{view}/{label} supplied identity",
+                    )
+                    row_expected_batch_contract = expected_batch_contract
             paths = expected_artifacts(root, ds, label, batch, batch_pass)
             selected_paths.extend(paths)
             require_nonempty(
@@ -526,6 +750,9 @@ def validate(
                 expected,
                 producer=producer or label,
                 producer_run_id=producer_run_id,
+                expected_batch_contract=row_expected_batch_contract,
+                batch_contract=batch_contract,
+                require_runtime_batch_contract=corrected,
             )
     _reject_selected_partials(selected_paths, producer_run_id)
 
@@ -535,14 +762,47 @@ def validate_single(
     path: Path,
     producer: str | None = None,
     producer_run_id: str | None = None,
+    *,
+    corrected: bool = False,
+    expected_batch_contract=None,
+    batch_contract=None,
 ) -> None:
+    if (
+        corrected
+        and expected_batch_contract is None
+        and batch_contract is None
+    ):
+        raise ValueError(
+            "corrected batch artifact validation requires explicit contract identity"
+        )
     require_nonempty(
         [path],
         "benchmark artifact",
         producer=producer,
         producer_run_id=producer_run_id,
+        expected_batch_contract=expected_batch_contract,
+        batch_contract=batch_contract,
+        require_runtime_batch_contract=corrected,
     )
     _reject_selected_partials([Path(path)], producer_run_id)
+def _load_batch_contract_argument(value):
+    if value is None:
+        return None
+    candidate = Path(value)
+    try:
+        text = (
+            candidate.read_text(encoding="utf-8")
+            if candidate.is_file()
+            else value
+        )
+        identity = json.loads(text)
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as exc:
+        raise ValueError(
+            "batch contract identity must be a JSON object or a readable JSON path"
+        ) from exc
+    if not isinstance(identity, dict):
+        raise ValueError("batch contract identity JSON must be an object")
+    return identity
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
@@ -557,14 +817,23 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--source-identity", type=Path, default=None)
     parser.add_argument("--source-identity-verified", action="store_true")
+    parser.add_argument("--expected-batch-contract", default=None)
+    parser.add_argument("--batch-contract", default=None)
     parser.add_argument("--producer", default=None)
     parser.add_argument("--producer-run-id", default=None)
     args = parser.parse_args()
+    expected_batch_contract = _load_batch_contract_argument(
+        args.expected_batch_contract
+    )
+    batch_contract = _load_batch_contract_argument(args.batch_contract)
     if args.artifact is not None:
         validate_single(
             args.artifact,
             producer=args.producer,
             producer_run_id=args.producer_run_id,
+            corrected=args.batch_pass == "corrected",
+            expected_batch_contract=expected_batch_contract,
+            batch_contract=batch_contract,
         )
     else:
         if args.selection is None or not args.labels:
@@ -582,6 +851,8 @@ def main() -> None:
             args.source_identity_verified,
             producer_run_id=args.producer_run_id,
             producer=args.producer,
+            expected_batch_contract=expected_batch_contract,
+            batch_contract=batch_contract,
         )
     print("matrix artifact contract OK")
 

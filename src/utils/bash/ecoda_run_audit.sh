@@ -11,6 +11,16 @@ SELECTION_ARG=""
 SOURCE_MANIFEST_ARG=""
 RUNTIME_IDENTITY_ARG=""
 
+AUDIT_METADATA_METHODS=""
+AUDIT_METADATA_BATCH_CONTRACT_MANIFEST=""
+AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_MD5=""
+AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SIZE=""
+AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SHA256=""
+AUDIT_BATCH_CONTRACT_DATASETS=()
+AUDIT_BATCH_CONTRACT_VIEWS=()
+AUDIT_BATCH_CONTRACT_METHODS=()
+AUDIT_BATCH_CONTRACT_PATHS=()
+
 _audit_die() {
   echo "ERROR: $*" >&2
   return 1
@@ -415,6 +425,7 @@ _audit_runtime_identity() {
 
 _audit_run_metadata() {
   local metadata="${RUN_ROOT_REAL}/metadata" metadata_stage metadata_run
+  local field field_count
   _audit_regular_file "${metadata}" || return 1
   metadata_stage="$(sed -n 's/^STAGE=//p' "${metadata}" | sed -n '1p')"
   metadata_run="$(sed -n 's/^RUN_ID=//p' "${metadata}" | sed -n '1p')"
@@ -430,9 +441,24 @@ _audit_run_metadata() {
   }
   AUDIT_METADATA_ROOT="$(sed -n 's/^ROOT=//p' "${metadata}" | sed -n '1p')"
   AUDIT_METADATA_PASS="$(sed -n 's/^PASS=//p' "${metadata}" | sed -n '1p')"
+  AUDIT_METADATA_METHODS="$(sed -n 's/^METHODS=//p' "${metadata}" | sed -n '1p')"
   AUDIT_METADATA_PENDING_SELECTION="$(sed -n 's/^PENDING_SELECTION=//p' "${metadata}" | sed -n '1p')"
   AUDIT_METADATA_PENDING_MD5="$(sed -n 's/^PENDING_SELECTION_MD5=//p' "${metadata}" | sed -n '1p')"
   AUDIT_METADATA_PENDING_SIZE="$(sed -n 's/^PENDING_SELECTION_SIZE=//p' "${metadata}" | sed -n '1p')"
+  if [[ "${AUDIT_METADATA_PASS}" == corrected ]]; then
+    for field in BATCH_CONTRACT_MANIFEST BATCH_CONTRACT_MANIFEST_MD5 \
+      BATCH_CONTRACT_MANIFEST_SIZE BATCH_CONTRACT_MANIFEST_SHA256; do
+      field_count="$(sed -n "s/^${field}=//p" "${metadata}" | wc -l | tr -d '[:space:]')"
+      [[ "${field_count}" == 1 ]] || {
+        _audit_die "corrected run metadata is missing or duplicates ${field}: ${metadata}"
+        return 1
+      }
+    done
+    AUDIT_METADATA_BATCH_CONTRACT_MANIFEST="$(sed -n 's/^BATCH_CONTRACT_MANIFEST=//p' "${metadata}" | sed -n '1p')"
+    AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_MD5="$(sed -n 's/^BATCH_CONTRACT_MANIFEST_MD5=//p' "${metadata}" | sed -n '1p')"
+    AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SIZE="$(sed -n 's/^BATCH_CONTRACT_MANIFEST_SIZE=//p' "${metadata}" | sed -n '1p')"
+    AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SHA256="$(sed -n 's/^BATCH_CONTRACT_MANIFEST_SHA256=//p' "${metadata}" | sed -n '1p')"
+  fi
 }
 
 _audit_terminal_status() {
@@ -467,6 +493,193 @@ _audit_selection() {
   rows="$(wc -l < "${SELECTION_ARG}" | tr -d '[:space:]')"
   [[ "${rows}" =~ ^[1-9][0-9]*$ ]] || return 1
   AUDIT_SELECTION_ROWS="${rows}"
+}
+
+_audit_batch_contract_identity_path() {
+  local dataset="${1:-}" view="${2:-}" method="${3:-}"
+  local index row_dataset row_view row_method row_path row_md5 row_size extra
+  local found=0
+  index="${#AUDIT_BATCH_CONTRACT_PATHS[@]}"
+  while [[ ${index} -gt 0 ]]; do
+    index=$((index - 1))
+    if [[ "${AUDIT_BATCH_CONTRACT_DATASETS[${index}]}" == "${dataset}" &&
+          "${AUDIT_BATCH_CONTRACT_VIEWS[${index}]}" == "${view}" &&
+          "${AUDIT_BATCH_CONTRACT_METHODS[${index}]}" == "${method}" ]]; then
+      [[ ${found} -eq 0 ]] || return 1
+      found=1
+      printf '%s' "${AUDIT_BATCH_CONTRACT_PATHS[${index}]}"
+    fi
+  done
+  [[ ${found} -eq 1 ]]
+}
+
+_audit_batch_contract_manifest() {
+  local manifest="${AUDIT_METADATA_BATCH_CONTRACT_MANIFEST:-}"
+  local row_dataset row_view row_method row_path row_md5 row_size extra
+  local expected_path expected_identity safe key actual_count=0 expected_count=0
+  local manifest_real row_path_real
+  local source_path output_name
+  local duplicate_keys="" dataset view label method contract_method found index
+  local -a expected_methods=(preprocess)
+  local -a scope_datasets=() scope_views=()
+  local -a actual_datasets=() actual_views=() actual_methods=() actual_paths=()
+  [[ "${STAGE_ARG}" == stage5 && "${AUDIT_METADATA_PASS:-}" == corrected ]] ||
+    return 0
+  export ECODA_SOURCE_ROOT="${AUDIT_SOURCE_ROOT}"
+  PYTHON_BIN="$(_audit_python_binary)" || return 1
+  export PYTHON_BIN
+  export PROJECT_ROOT="${AUDIT_SOURCE_ROOT}"
+  export DATASETS_JSON_FILE="${AUDIT_SOURCE_ROOT}/datasets.json"
+  [[ -n "${manifest}" &&
+     -f "${manifest}" && ! -L "${manifest}" && -r "${manifest}" ]] || {
+    _audit_die "corrected run batch-contract manifest is missing or unsafe"
+    return 1
+  }
+  manifest_real="$(ecoda_realpath_existing "${manifest}")" || return 1
+  [[ "${manifest_real}" == "${RUN_ROOT_REAL}/manifests/batch_contract.tsv" ]] || {
+    _audit_die "corrected run batch-contract manifest is not run-owned"
+    return 1
+  }
+  ecoda_validate_run_owned_path "${manifest}" "${RUN_ROOT_REAL}" || return 1
+  ecoda_validate_manifest "${manifest}" 6 || return 1
+  ecoda_validate_checksum "${manifest}" || {
+    _audit_die "corrected run batch-contract manifest checksum is invalid"
+    return 1
+  }
+  [[ "${AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_MD5}" == "${ECODA_CHECKSUM_MD5}" &&
+     "${AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SIZE}" == "${ECODA_CHECKSUM_SIZE}" ]] || {
+    _audit_die "corrected run batch-contract manifest checksum metadata mismatches"
+    return 1
+  }
+  [[ "${AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SHA256}" == "$(ecoda_sha256_file "${manifest}")" ]] || {
+    _audit_die "corrected run batch-contract manifest SHA-256 mismatches"
+    return 1
+  }
+  [[ -n "${AUDIT_METADATA_METHODS}" ]] || {
+    _audit_die "corrected run metadata has no selected methods"
+    return 1
+  }
+  ecoda_split_csv "${AUDIT_METADATA_METHODS}" || return 1
+  for method in "${ECODA_ARRAY[@]}"; do
+    [[ "${method}" != _ecoda_none_ ]] || return 1
+    ecoda_corrected_batch_method_policy "${method}" || return 1
+    expected_methods+=("${method}")
+  done
+  while IFS=$'\t' read -r dataset view label extra; do
+    [[ -n "${dataset}" && -n "${view}" && -n "${label}" && -z "${extra}" &&
+       "${dataset}" =~ ^[A-Za-z0-9_.-]+$ &&
+       "${view}" =~ ^[A-Za-z0-9_.-]+$ &&
+       "${label}" == batch_effect_corrected ]] || {
+      _audit_die "corrected selection has an invalid dataset/view row"
+      return 1
+    }
+    key="${dataset}|${view}"
+    case " ${duplicate_keys} " in
+      *" ${key} "*)
+        _audit_die "corrected selection contains a duplicate dataset/view"
+        return 1
+        ;;
+    esac
+    duplicate_keys="${duplicate_keys} ${key}"
+    scope_datasets+=("${dataset}")
+    scope_views+=("${view}")
+  done < "${SELECTION_ARG}"
+  [[ ${#scope_datasets[@]} -gt 0 ]] || return 1
+  for index in "${!scope_datasets[@]}"; do
+    ecoda_validate_corrected_batch_columns \
+      "${DATASETS_JSON_FILE}" "${scope_datasets[${index}]}" \
+      "${scope_views[${index}]}" || return 1
+  done
+  AUDIT_BATCH_CONTRACT_DATASETS=()
+  AUDIT_BATCH_CONTRACT_VIEWS=()
+  AUDIT_BATCH_CONTRACT_METHODS=()
+  AUDIT_BATCH_CONTRACT_PATHS=()
+  while IFS=$'\t' read -r row_dataset row_view row_method row_path row_md5 row_size extra; do
+    [[ -n "${row_dataset}" && -n "${row_view}" && -n "${row_method}" &&
+       -n "${row_path}" && -n "${row_md5}" && -n "${row_size}" && -z "${extra}" &&
+       "${row_dataset}" =~ ^[A-Za-z0-9_.-]+$ &&
+       "${row_view}" =~ ^[A-Za-z0-9_.-]+$ &&
+       "${row_method}" =~ ^[A-Za-z0-9_.-]+$ &&
+       "${row_path}" = /* && "${row_path}" != *$'\n'* &&
+       "${row_path}" != *$'\t'* &&
+       "${row_md5}" =~ ^[[:xdigit:]]{32}$ &&
+       "${row_size}" =~ ^[1-9][0-9]*$ ]] || {
+      _audit_die "corrected batch-contract manifest row is malformed"
+      return 1
+    }
+    key="${row_dataset}|${row_view}|${row_method}"
+    case " ${duplicate_keys} " in
+      *" ${key} "*)
+        _audit_die "corrected batch-contract manifest contains duplicate ${key}"
+        return 1
+        ;;
+    esac
+    duplicate_keys="${duplicate_keys} ${key}"
+    safe="$(_ecoda_safe_component "${row_dataset}__${row_view}__${row_method}")" ||
+      return 1
+    expected_path="${RUN_ROOT_REAL}/manifests/batch_contracts/${safe}.json"
+    row_path_real="$(ecoda_realpath_existing "${row_path}")" || return 1
+    [[ "${row_path_real}" == "${expected_path}" ]] || {
+      _audit_die "corrected batch-contract identity path is not run-owned: ${key}"
+      return 1
+    }
+    ecoda_validate_checksum "${row_path}" || {
+      _audit_die "corrected batch-contract identity checksum is invalid: ${key}"
+      return 1
+    }
+    [[ "${row_md5}" == "${ECODA_CHECKSUM_MD5}" &&
+       "${row_size}" == "${ECODA_CHECKSUM_SIZE}" ]] || return 1
+    ecoda_corrected_batch_method_policy "${row_method}" || return 1
+    output_name="$(ecoda_view_output_name "${row_dataset}" "${row_view}")" ||
+      return 1
+    source_path="${HPC_SCRATCH_DIR}/${row_dataset}/output/${output_name}"
+    [[ -s "${source_path}" ]] || {
+      _audit_die "corrected source H5AD is missing or empty: ${source_path}"
+      return 1
+    }
+    expected_identity="$(
+      ecoda_batch_contract_identity "${DATASETS_JSON_FILE}" "${row_dataset}" \
+        "${row_view}" "${ECODA_CORRECTED_BATCH_METHOD_ID}" \
+        "${ECODA_CORRECTED_BATCH_MODEL_ID}" "${source_path}"
+    )" || return 1
+    cmp -s "${row_path}" <(printf '%s\n' "${expected_identity}") || {
+      _audit_die "corrected batch-contract identity or validated summary mismatches ${key}"
+      return 1
+    }
+    actual_datasets+=("${row_dataset}")
+    actual_views+=("${row_view}")
+    actual_methods+=("${row_method}")
+    actual_paths+=("${row_path}")
+    actual_count=$((actual_count + 1))
+  done < "${manifest}"
+  for index in "${!scope_datasets[@]}"; do
+    dataset="${scope_datasets[${index}]}"
+    view="${scope_views[${index}]}"
+    for contract_method in "${expected_methods[@]}"; do
+      found=0
+      for method_index in "${!actual_datasets[@]}"; do
+        if [[ "${actual_datasets[${method_index}]}" == "${dataset}" &&
+              "${actual_views[${method_index}]}" == "${view}" &&
+              "${actual_methods[${method_index}]}" == "${contract_method}" ]]; then
+          found=1
+          break
+        fi
+      done
+      [[ ${found} -eq 1 ]] || {
+        _audit_die "corrected batch-contract identity is missing ${dataset}/${view}/${contract_method}"
+        return 1
+      }
+      expected_count=$((expected_count + 1))
+    done
+  done
+  [[ ${actual_count} -eq ${expected_count} ]] || {
+    _audit_die "corrected batch-contract manifest has unexpected rows"
+    return 1
+  }
+  AUDIT_BATCH_CONTRACT_DATASETS=("${actual_datasets[@]}")
+  AUDIT_BATCH_CONTRACT_VIEWS=("${actual_views[@]}")
+  AUDIT_BATCH_CONTRACT_METHODS=("${actual_methods[@]}")
+  AUDIT_BATCH_CONTRACT_PATHS=("${actual_paths[@]}")
 }
 
 _audit_stage5_scope_selection() {
@@ -780,18 +993,47 @@ _audit_python_binary() {
 }
 
 _audit_benchmark_h5ad() {
-  local path="$1" view="$2" method="$3" python_bin validator
+  local path="$1" view="$2" method="$3" identity_path="${4:-}"
+  local python_bin validator
+  local -a validator_args
   python_bin="$(_audit_python_binary)" || return 1
   validator="${AUDIT_SOURCE_ROOT}/src/utils/py/benchmark_h5ad_contract.py"
   [[ -r "${validator}" ]] || {
     _audit_die "benchmark H5AD validator is missing: ${validator}"
     return 1
   }
-  "${python_bin}" "${validator}" --path "${path}" --view "${view}" \
-    --method "${method}" >/dev/null 2>&1 || {
+  validator_args=(--path "${path}" --view "${view}" --method "${method}")
+  [[ -n "${identity_path}" ]] &&
+    validator_args+=(--expected-batch-contract "${identity_path}")
+  "${python_bin}" "${validator}" "${validator_args[@]}" >/dev/null 2>&1 || {
     _audit_die "selected H5AD contract is invalid: ${path}"
     return 1
   }
+}
+
+_audit_corrected_source_contracts() {
+  local dataset view source_path identity_path output_name key seen=""
+  local index
+  [[ "${STAGE_ARG}" == stage5 &&
+     "${AUDIT_METADATA_PASS:-}" == corrected ]] || return 0
+  for index in "${!AUDIT_BATCH_CONTRACT_DATASETS[@]}"; do
+    dataset="${AUDIT_BATCH_CONTRACT_DATASETS[${index}]}"
+    view="${AUDIT_BATCH_CONTRACT_VIEWS[${index}]}"
+    key="${dataset}|${view}"
+    case " ${seen} " in *" ${key} "*) continue ;; esac
+    seen="${seen} ${key}"
+    output_name="$(ecoda_view_output_name "${dataset}" "${view}")" || return 1
+    source_path="${HPC_SCRATCH_DIR}/${dataset}/output/${output_name}"
+    identity_path="$(
+      _audit_batch_contract_identity_path "${dataset}" "${view}" preprocess
+    )" || return 1
+    ecoda_validate_checksum "${source_path}" || {
+      _audit_die "corrected source H5AD checksum is invalid: ${source_path}"
+      return 1
+    }
+    _audit_benchmark_h5ad "${source_path}" "${view}" \
+      "Stage 5 corrected source" "${identity_path}" || return 1
+  done
 }
 
 _audit_annotation_artifact() {
@@ -810,22 +1052,29 @@ _audit_annotation_artifact() {
 }
 
 _audit_matrix_feather() {
-  local path="$1" owner_run="$2" python_bin validator
+  local path="$1" owner_run="$2" identity_path="${3:-}"
+  local python_bin validator
+  local -a validator_args
   python_bin="$(_audit_python_binary)" || return 1
   validator="${AUDIT_SOURCE_ROOT}/src/5_run_benchmark_methods/matrix_artifact_validator.py"
   [[ -r "${validator}" ]] || {
     _audit_die "matrix artifact validator is missing: ${validator}"
     return 1
   }
-  "${python_bin}" "${validator}" --artifact "${path}" \
-    --producer-run-id "${owner_run}" >/dev/null 2>&1 || {
+  validator_args=(--artifact "${path}" --producer-run-id "${owner_run}")
+  if [[ "${AUDIT_METADATA_PASS:-}" == corrected ]]; then
+    validator_args+=(--batch --batch-pass corrected)
+  fi
+  [[ -n "${identity_path}" ]] &&
+    validator_args+=(--expected-batch-contract "${identity_path}")
+  "${python_bin}" "${validator}" "${validator_args[@]}" >/dev/null 2>&1 || {
     _audit_die "selected Feather contract is invalid: ${path}"
     return 1
   }
 }
 
 _audit_benchmark_rds() {
-  local path="$1" dataset="$2" view="$3" label="$4"
+  local path="$1" dataset="$2" view="$3" label="$4" identity_path="${5:-}"
   local rscript="${PIXI_RSCRIPT:-Rscript}"
   local validator="${AUDIT_SOURCE_ROOT}/src/5_run_benchmark_methods/validate_benchmark_rds_contract.R"
   local -a rscript_cmd rds_args
@@ -853,6 +1102,8 @@ _audit_benchmark_rds() {
     --config "${DATASETS_JSON_FILE}")
   [[ -n "${AUDIT_METADATA_PASS:-}" ]] &&
     rds_args+=(--batch-pass "${AUDIT_METADATA_PASS}")
+  [[ -n "${identity_path}" ]] &&
+    rds_args+=(--expected-batch-contract "${identity_path}")
   [[ "${path}" == *_metadata.rds ]] && rds_args+=(--metadata)
   "${rscript_cmd[@]}" "${validator}" "${rds_args[@]}" >/dev/null 2>&1 || {
     _audit_die "selected RDS contract is invalid: ${path}"
@@ -862,6 +1113,15 @@ _audit_benchmark_rds() {
 
 _audit_semantic_artifact() {
   local path="$1" dataset="$2" view="$3" label="$4" owner_run="$5"
+  local identity_path=""
+  if [[ "${STAGE_ARG}" == stage5 &&
+        "${AUDIT_METADATA_PASS:-}" == corrected &&
+        "${label}" != batch_effect_corrected &&
+        "${label}" != batch_effect_uncorrected ]]; then
+    identity_path="$(
+      _audit_batch_contract_identity_path "${dataset}" "${view}" "${label}"
+    )" || return 1
+  fi
   case "${STAGE_ARG}" in
     stage3)
       case "${path}" in
@@ -886,14 +1146,16 @@ _audit_semantic_artifact() {
     stage5)
       case "${path}" in
         *.rds)
-          _audit_benchmark_rds "${path}" "${dataset}" "${view}" "${label}" || return 1
+          _audit_benchmark_rds "${path}" "${dataset}" "${view}" "${label}" \
+            "${identity_path}" || return 1
           ;;
         *.feather)
-          _audit_matrix_feather "${path}" "${owner_run}" || return 1
+          _audit_matrix_feather "${path}" "${owner_run}" "${identity_path}" || return 1
           ;;
         *.h5ad)
           ecoda_validate_checksum "${path}" || return 1
-          _audit_benchmark_h5ad "${path}" "${view}" "${label}" || return 1
+          _audit_benchmark_h5ad "${path}" "${view}" "${label}" \
+            "${identity_path}" || return 1
           ;;
       esac
       ;;
@@ -1049,6 +1311,8 @@ ecoda_validate_run_owned_path "${RUNTIME_COPY}" "${RUN_ROOT_REAL}" || exit 1
 _audit_same_bytes "${SOURCE_MANIFEST_ARG}" "${SOURCE_COPY}" || exit 1
 _audit_same_bytes "${RUNTIME_IDENTITY_ARG}" "${RUNTIME_COPY}" || exit 1
 _audit_source_manifest "${SOURCE_MANIFEST_ARG}" || exit 1
+_audit_batch_contract_manifest || exit 1
+_audit_corrected_source_contracts || exit 1
 _audit_runtime_identity "${RUNTIME_IDENTITY_ARG}" || exit 1
 _audit_selection || exit 1
 _audit_terminal_status || exit 1

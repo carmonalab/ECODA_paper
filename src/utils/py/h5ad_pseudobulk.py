@@ -29,6 +29,23 @@ try:  # import_from_path exposes this directory as a top-level module path
 except ImportError:  # package imports used by focused tests
     from .h5ad_source_identity import read_obs_column_values, read_str_dataset
 
+try:  # import_from_path exposes this directory as a top-level module path
+    from batch_contract import (
+        BatchContractError,
+        RESERVED_OBS_NAME,
+        normalize_batch_keys,
+        serialize_batch_metadata,
+        validate_batch_metadata,
+    )
+except ImportError:  # package imports used by focused tests
+    from .batch_contract import (
+        BatchContractError,
+        RESERVED_OBS_NAME,
+        normalize_batch_keys,
+        serialize_batch_metadata,
+        validate_batch_metadata,
+    )
+
 
 DEFAULT_CHUNK_SIZE = 4096
 _INT64_MAX = np.iinfo(np.int64).max
@@ -38,8 +55,6 @@ _STORE_SCHEMA = 1
 _STORE_STAGE = "pseudobulk_ct"
 _STORE_STATE_WRITING = "writing"
 _STORE_STATE_READY = "ready"
-
-
 __all__ = [
     "DEFAULT_CHUNK_SIZE",
     "aggregate_h5ad_counts_by_sample",
@@ -47,7 +62,9 @@ __all__ = [
     "prepare_h5ad_ct_group_store",
     "read_h5ad_ct_group_store",
     "read_h5ad_sample_metadata",
+    "validate_h5ad_corrected_batch_metadata",
 ]
+
 
 
 def _decode(value: Any) -> Any:
@@ -284,6 +301,73 @@ def _collect_sample_metadata(
         index=pd.Index(sample_ids, name=sample_col),
     )
     return sample_ids, sample_to_index, metadata
+
+
+def validate_h5ad_corrected_batch_metadata(
+    path: str | Path,
+    batch_keys: str | Iterable[str],
+    sample_col: str = "Sample",
+    biological_column: str | None = None,
+    method_id: str = "Pseudobulk",
+    model_id: str = "pseudobulk_composite_v1",
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    near_unique_fraction: float = 0.50,
+) -> dict[str, Any]:
+    """Validate corrected batch metadata across every selected cell.
+
+    This is the metadata-only boundary for corrected callers.  It reads the
+    complete ``obs`` vectors needed by the batch contract in bounded chunks,
+    before any sample or cell-type reducer can retain first-observation
+    values.  The H5AD expression/count nodes are never opened or materialized.
+    """
+    keys = normalize_batch_keys(
+        batch_keys,
+        sample_column=sample_col,
+        biological_column=biological_column,
+    )
+    chunk_size = _validate_chunk_size(chunk_size)
+    artifact = Path(path)
+    if not artifact.is_file() or artifact.stat().st_size <= 0:
+        raise ValueError(f"H5AD is missing or empty: {artifact}")
+
+    columns = list(dict.fromkeys([sample_col, *keys]))
+    if biological_column is not None:
+        columns.append(biological_column)
+        columns = list(dict.fromkeys(columns))
+    metadata_values: dict[str, list[Any]] = {column: [] for column in columns}
+
+    with h5py.File(artifact, "r") as handle:
+        obs = handle.get("obs")
+        if obs is None or _decode(obs.attrs.get("encoding-type")) != "dataframe":
+            raise ValueError(f"H5AD obs is not a dataframe: {artifact}")
+        if RESERVED_OBS_NAME in obs:
+            raise BatchContractError(
+                f"metadata already contains reserved temporary column {RESERVED_OBS_NAME!r}"
+            )
+        index_name = str(_decode(obs.attrs.get("_index", "_index")))
+        if index_name not in obs:
+            raise ValueError(f"H5AD obs index is missing: {artifact}")
+        n_obs = _obs_column_length(obs[index_name])
+        if n_obs <= 0:
+            raise ValueError(f"H5AD obs index is empty: {artifact}")
+
+        for _start, _stop, chunk in _read_obs_chunks(obs, columns, n_obs, chunk_size):
+            for column in columns:
+                metadata_values[column].extend(list(chunk[column]))
+
+    validation = validate_batch_metadata(
+        metadata_values,
+        batch_keys,
+        sample_column=sample_col,
+        biological_column=biological_column,
+        near_unique_fraction=near_unique_fraction,
+    )
+    serialized = serialize_batch_metadata(
+        validation,
+        method_id=method_id,
+        model_id=model_id,
+    )
+    return _json_safe(serialized)
 
 
 def read_h5ad_sample_metadata(

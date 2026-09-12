@@ -129,6 +129,93 @@ IFS=$'\t' read -r dataset view path extra <<< "${line}"
   echo "ERROR: malformed H5AD preflight row ${task_id}" >&2
   exit 1
 }
+resolve_corrected_batch_identity() {
+  local selected_dataset="${1:-}" selected_view="${2:-}"
+  local contract_manifest="${ECODA_BATCH_CONTRACT_MANIFEST:-}"
+  local row_dataset row_view row_method row_path row_md5 row_size extra
+  local found=0 safe expected_path
+  [[ -n "${contract_manifest}" &&
+     "${contract_manifest}" = /* &&
+     -f "${contract_manifest}" && ! -L "${contract_manifest}" &&
+     -r "${contract_manifest}" && -s "${contract_manifest}" ]] || {
+    echo "ERROR: corrected H5AD preflight batch-contract manifest is missing or unsafe." >&2
+    return 1
+  }
+  ecoda_validate_run_owned_path "${contract_manifest}" "${run_root}" || {
+    echo "ERROR: corrected H5AD preflight batch-contract manifest is not run-owned." >&2
+    return 1
+  }
+  ecoda_validate_manifest "${contract_manifest}" 6 || {
+    echo "ERROR: corrected H5AD preflight batch-contract manifest is malformed." >&2
+    return 1
+  }
+  while IFS=$'\t' read -r row_dataset row_view row_method row_path \
+      row_md5 row_size extra; do
+    [[ -n "${row_dataset}" && -n "${row_view}" && -n "${row_method}" &&
+       -n "${row_path}" && -n "${row_md5}" && -n "${row_size}" &&
+       -z "${extra}" &&
+       "${row_dataset}" != *$'\n'* && "${row_dataset}" != *$'\t'* &&
+       "${row_view}" != *$'\n'* && "${row_view}" != *$'\t'* &&
+       "${row_method}" != *$'\n'* && "${row_method}" != *$'\t'* &&
+       "${row_path}" = /* && "${row_path}" != *$'\n'* &&
+       "${row_path}" != *$'\t'* &&
+       "${row_md5}" =~ ^[[:xdigit:]]{32}$ &&
+       "${row_size}" =~ ^[1-9][0-9]*$ ]] || {
+      echo "ERROR: corrected H5AD preflight batch-contract manifest row is malformed." >&2
+      return 1
+    }
+    if [[ "${row_dataset}" == "${selected_dataset}" &&
+          "${row_view}" == "${selected_view}" &&
+          "${row_method}" == "preprocess" ]]; then
+      [[ ${found} -eq 0 ]] || {
+        echo "ERROR: corrected H5AD preflight batch-contract identity is duplicated." >&2
+        return 1
+      }
+      found=1
+      corrected_identity_path="${row_path}"
+      corrected_identity_md5="${row_md5}"
+      corrected_identity_size="${row_size}"
+    fi
+  done < "${contract_manifest}"
+  [[ ${found} -eq 1 ]] || {
+    echo "ERROR: corrected H5AD preflight batch-contract identity is missing for ${selected_dataset}/${selected_view}." >&2
+    return 1
+  }
+  safe="$(_ecoda_safe_component \
+    "${selected_dataset}__${selected_view}__preprocess")" || return 1
+  expected_path="${run_root}/manifests/batch_contracts/${safe}.json"
+  [[ "${corrected_identity_path}" == "${expected_path}" ]] || {
+    echo "ERROR: corrected H5AD preflight batch-contract identity path mismatch." >&2
+    return 1
+  }
+  [[ -f "${corrected_identity_path}" &&
+     ! -L "${corrected_identity_path}" &&
+     -r "${corrected_identity_path}" &&
+     -s "${corrected_identity_path}" ]] || {
+    echo "ERROR: corrected H5AD preflight batch-contract identity JSON is missing or unsafe." >&2
+    return 1
+  }
+  ecoda_validate_run_owned_path "${corrected_identity_path}" "${run_root}" || {
+    echo "ERROR: corrected H5AD preflight batch-contract identity is not run-owned." >&2
+    return 1
+  }
+  ecoda_validate_checksum "${corrected_identity_path}" || {
+    echo "ERROR: corrected H5AD preflight batch-contract identity checksum is invalid." >&2
+    return 1
+  }
+  [[ "${corrected_identity_md5}" == "${ECODA_CHECKSUM_MD5}" &&
+     "${corrected_identity_size}" == "${ECODA_CHECKSUM_SIZE}" ]] || {
+    echo "ERROR: corrected H5AD preflight batch-contract identity checksum metadata mismatches." >&2
+    return 1
+  }
+}
+
+corrected_identity_path=""
+corrected_identity_md5=""
+corrected_identity_size=""
+if [[ "${view}" == "batch_effect_corrected" ]]; then
+  resolve_corrected_batch_identity "${dataset}" "${view}" || exit 1
+fi
 
 safe="$(printf '%s__%s' "${dataset}" "${view}" | tr '/:,\t |' '______')"
 status_file="${status_dir}/${safe}.status"
@@ -141,13 +228,20 @@ if [[ ! -s "${path}" ]]; then
   checksum_rc=1
 else
   set +e
-  "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
-    --path "${path}" --view "${view}" --method "H5AD compute preflight" >/dev/null 2>&1
+  if [[ -n "${corrected_identity_path}" ]]; then
+    "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+      --path "${path}" --view "${view}" --method "H5AD compute preflight" \
+      --expected-batch-contract "${corrected_identity_path}" >/dev/null 2>&1
+  else
+    "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+      --path "${path}" --view "${view}" --method "H5AD compute preflight" >/dev/null 2>&1
+  fi
   contract_rc=$?
   ecoda_validate_checksum "${path}"
   checksum_rc=$?
   set -e
 fi
+
 if [[ ${contract_rc} -ne 0 || ${checksum_rc} -ne 0 ]]; then
   if [[ "${mode}" == "classify" ]]; then
     state="REBUILD"

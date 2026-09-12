@@ -1164,7 +1164,11 @@ prepare_pseudobulks_hpc <- function(
   analysis_pass = NULL,
   run_id = NULL,
   source_identity = NULL,
-  chunk_size = 4096L
+  chunk_size = 4096L,
+  batch_keys = NULL,
+  batch_context = NULL,
+  batch_contract = NULL,
+  expected_h5ad_batch_contract = NULL
 ) {
   if (!is.character(h5ad_path) || length(h5ad_path) != 1L ||
       is.na(h5ad_path) || !nzchar(h5ad_path) || !file.exists(h5ad_path)) {
@@ -1188,6 +1192,93 @@ prepare_pseudobulks_hpc <- function(
     stop("prepare_pseudobulks_hpc received invalid ranked HVG genes.")
   }
 
+  # Corrected pseudobulk always validates every cell before the raw
+  # first-observation Sample aggregate.  The scalar/one-key path keeps its
+  # original column; two or more ordered keys receive one in-memory composite
+  # column for the DESeq2/limma boundary.
+  corrected_context_required <- isTRUE(correct_batch)
+  corrected_batch_keys <- NULL
+  if (isTRUE(correct_batch)) {
+    key_source <- batch_keys
+    if (is.null(key_source)) {
+      key_source <- if (!is.null(batch_context)) {
+        batch_context$ordered_keys
+      } else {
+        batch_col
+      }
+    }
+    corrected_batch_keys <- ecoda_hpc_normalize_batch_keys(
+      key_source,
+      sample_col = sample_col
+    )
+    if (is.null(batch_keys)) batch_keys <- corrected_batch_keys
+    if (!is.null(expected_h5ad_batch_contract)) {
+      ecoda_hpc_validate_h5ad_path_identity(
+        h5ad_path = h5ad_path,
+        view = view,
+        method = "preprocessing",
+        expected_batch_contract = expected_h5ad_batch_contract
+      )
+    }
+    expected_pb_contract <- ecoda_hpc_batch_contract_identity(
+      corrected_batch_keys,
+      sample_col = sample_col,
+      method_id = "Pseudobulk",
+      model_id = "pseudobulk_composite_v1"
+    )
+    if (is.null(batch_contract)) {
+      batch_contract <- expected_pb_contract
+    } else {
+      ecoda_hpc_validate_batch_contract_source(
+        batch_contract,
+        expected_pb_contract,
+        label = "Corrected pseudobulk"
+      )
+    }
+  }
+  if (isTRUE(correct_batch) && corrected_context_required) {
+    if (is.null(batch_context)) {
+      python_metadata <- validate_h5ad_corrected_batch_metadata(
+        h5ad_path = h5ad_path,
+        batch_keys = as.list(unname(corrected_batch_keys)),
+        sample_col = sample_col,
+        method_id = "Pseudobulk",
+        model_id = "pseudobulk_composite_v1"
+      )
+      metadata_pass <- load_h5ad_pseudobulk_metadata(
+        h5ad_path = h5ad_path,
+        sample_col = sample_col,
+        metadata_columns = as.list(unname(corrected_batch_keys)),
+        n_hvg = 1L,
+        required_nonmissing_columns = c(sample_col, corrected_batch_keys),
+        expected_batch_contract = expected_h5ad_batch_contract,
+        view = view,
+        method = "preprocessing"
+      )
+      batch_context <- ecoda_hpc_batch_context(
+        metadata = metadata_pass$obs,
+        batch_keys = as.list(unname(corrected_batch_keys)),
+        sample_col = sample_col,
+        python_metadata = python_metadata
+      )
+    } else {
+      if (!identical(
+        unname(corrected_batch_keys),
+        as.character(batch_context$ordered_keys)
+      )) {
+        stop("Corrected pseudobulk batch context key order differs")
+      }
+    }
+    batch_col <- batch_context$scalar_batch_col
+    batch_contract <- ecoda_hpc_augment_batch_contract(
+      identity = batch_contract,
+      validation = batch_context$validation,
+      method_id = "Pseudobulk",
+      batch_keys = corrected_batch_keys,
+      scalar_batch_col = batch_context$scalar_batch_col
+    )
+  }
+
   specs <- list(
     schvg2000 = list(n_hvg = 2000L, black_list = "none"),
     hvg2000 = list(n_hvg = 2000L, black_list = "none"),
@@ -1207,16 +1298,30 @@ prepare_pseudobulks_hpc <- function(
 
   # This call is the only raw Sample aggregation for the entire requested
   # variant set.  Biological labels are intentionally not requested.
+  aggregate_columns <- if (
+    isTRUE(correct_batch) && corrected_context_required
+  ) {
+    unique(c(sample_col, batch_keys))
+  } else {
+    unique(c(sample_col, batch_col))
+  }
   aggregate_time <- exec_time(
     aggregated <- load_h5ad_sample_aggregate(
       h5ad_path,
       sample_col = sample_col,
-      metadata_columns = unique(c(sample_col, batch_col)),
+      metadata_columns = aggregate_columns,
       chunk_size = chunk_size,
       max_value = .Machine$integer.max
     )
   )
   aggregate_time <- as.numeric(aggregate_time, units = "secs")
+  if (!is.null(batch_context)) {
+    aggregated$metadata <- ecoda_hpc_apply_batch_context(
+      aggregated$metadata,
+      batch_context,
+      sample_col = sample_col
+    )
+  }
 
   full_names <- c("hvg500", "hvg1000", "hvg2000", "hvg2000_bl", "hvg3000")
   shared_names <- intersect(variants, full_names)
@@ -1296,7 +1401,7 @@ prepare_pseudobulks_hpc <- function(
     # shared aggregate/fit out of every variant-local charge.
     variant_time <- max(variant_time, variant_elapsed)
     variant_mem <- peak_rss_gb()
-    results[[variant]] <- list(
+    result <- list(
       pb = pb,
       time_secs = variant_time,
       mem_GB = variant_mem,
@@ -1308,6 +1413,8 @@ prepare_pseudobulks_hpc <- function(
       timing_id = timing_id,
       timing_schema = 2L
     )
+    if (isTRUE(correct_batch)) result[["batch_contract"]] <- batch_contract
+    results[[variant]] <- result
   }
   results
 }
@@ -1334,8 +1441,30 @@ run_gloscope_hpc <- function(
   embedding_name = NULL,
   combo_token = NULL,
   embedding_matrices = NULL,
-  embedding_sample_ids = NULL
+  embedding_sample_ids = NULL,
+  batch_contract = NULL,
+  batch_context = NULL,
+  batch_keys = NULL
 ) {
+  if (isTRUE(batch_mode) && !is.null(batch_context)) {
+    key_source <- batch_keys
+    if (is.null(key_source)) key_source <- batch_context$ordered_keys
+    if (is.null(batch_contract)) {
+      batch_contract <- ecoda_hpc_batch_contract_identity(
+        key_source,
+        sample_col = sample_col,
+        method_id = "GloScope",
+        model_id = "embedding_consumer_harmony_v1"
+      )
+    }
+    batch_contract <- ecoda_hpc_augment_batch_contract(
+      identity = batch_contract,
+      validation = batch_context$validation,
+      method_id = "GloScope",
+      batch_keys = key_source,
+      scalar_batch_col = batch_context$scalar_batch_col
+    )
+  }
   combos <- if (batch_mode) {
     list(list(hvg = 2000, pcadims = 30))
   } else {
@@ -1380,6 +1509,11 @@ run_gloscope_hpc <- function(
     )
     if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- read_rds_checked(bundle_file)
+      ecoda_hpc_validate_batch_contract(
+        cached[["batch_contract"]],
+        batch_contract,
+        label = paste0("GloScope result ", ds, "/", nm)
+      )
       validate_hpc_timing_bundle(
         cached, label = paste0("GloScope result ", ds, "/", nm)
       )
@@ -1440,11 +1574,13 @@ run_gloscope_hpc <- function(
     )
     res[["exec_time"]] <- as.numeric(time_secs, units = "secs")
     res[["mem_GB"]] <- peak_rss_gb()
+    if (!is.null(batch_contract)) res[["batch_contract"]] <- batch_contract
     save_rds_atomic(res, bundle_file)
     log_exec_row(ds, nm, res[["exec_time"]], log_file,
                  mem_gb = res[["mem_GB"]])
     results[[nm]] <- res
   }
+  if (!is.null(batch_contract)) results[["batch_contract"]] <- batch_contract
   results
 }
 
@@ -1577,8 +1713,40 @@ run_pseudobulk_hpc <- function(
   run_id = NULL,
   temp_root = NULL,
   source_identity = NULL,
-  chunk_size = 4096L
+  chunk_size = 4096L,
+  batch_contract = NULL,
+  batch_context = NULL,
+  batch_keys = NULL
 ) {
+  corrected_identity_active <- identical(analysis_pass, "corrected") ||
+    !is.null(batch_contract)
+  if (corrected_identity_active &&
+      is.null(batch_contract) &&
+      is.list(pb_variants[["hvg2000"]])) {
+    batch_contract <- pb_variants[["hvg2000"]][["batch_contract"]]
+  }
+  if (corrected_identity_active && !is.null(batch_context)) {
+    key_source <- batch_keys
+    if (is.null(key_source)) key_source <- batch_context$ordered_keys
+    if (is.null(batch_contract)) {
+      batch_contract <- ecoda_hpc_batch_contract_identity(
+        key_source,
+        sample_col = sample_col,
+        method_id = "Pseudobulk",
+        model_id = "pseudobulk_composite_v1"
+      )
+    }
+    batch_contract <- ecoda_hpc_augment_batch_contract(
+      identity = batch_contract,
+      validation = batch_context$validation,
+      method_id = "Pseudobulk",
+      batch_keys = key_source,
+      scalar_batch_col = batch_context$scalar_batch_col
+    )
+  }
+  if (corrected_identity_active && is.null(batch_contract)) {
+    stop("Corrected pseudobulk result is missing its batch contract")
+  }
   local_variant_time <- function(value) {
     if (!is.list(value)) {
       stop("Pseudobulk variant timing is invalid.")
@@ -1614,6 +1782,9 @@ run_pseudobulk_hpc <- function(
       res[["shared_mem_GB"]] <- pb_variant[["shared_mem_GB"]]
     }
     res[["mem_GB"]] <- peak_rss_gb()
+    if (corrected_identity_active) {
+      res[["batch_contract"]] <- batch_contract
+    }
     validate_hpc_timing_bundle(res, "Pseudobulk result")
     res
   }
@@ -1624,16 +1795,30 @@ run_pseudobulk_hpc <- function(
       stop("Pseudobulk variant 'hvg2000' missing for batch-effect run")
     }
     nm <- "Pseudobulk_hvg2000"
+    if (corrected_identity_active) {
+      ecoda_hpc_validate_batch_contract(
+        pb_variant[["batch_contract"]],
+        batch_contract,
+        label = paste0("Corrected pseudobulk input ", ds, "/", nm)
+      )
+    }
     bundle_file <- file.path(results_dir, paste0(result_stem, "_", nm, ".rds"))
     if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- read_rds_checked(bundle_file)
+      ecoda_hpc_validate_batch_contract(
+        cached[["batch_contract"]],
+        batch_contract,
+        label = paste0("Pseudobulk result ", ds, "/", nm)
+      )
       validate_hpc_timing_bundle(
         cached, label = paste0("Pseudobulk result ", ds, "/", nm)
       )
       if (!is.null(cached$exec_time)) {
         log_exec_row(ds, nm, cached$exec_time, log_file, mem_gb = cached$mem_GB)
       }
-      return(setNames(list(cached), nm))
+      output <- setNames(list(cached), nm)
+      if (corrected_identity_active) output[["batch_contract"]] <- batch_contract
+      return(output)
     }
     process_time <- exec_time(
       res <- process_pseudobulk_fig(pb_variant$pb, labels)
@@ -1643,7 +1828,9 @@ run_pseudobulk_hpc <- function(
     )
     save_rds_atomic(res, bundle_file)
     log_exec_row(ds, nm, res[["exec_time"]], log_file, mem_gb = res[["mem_GB"]])
-    return(setNames(list(res), nm))
+    output <- setNames(list(res), nm)
+    if (corrected_identity_active) output[["batch_contract"]] <- batch_contract
+    return(output)
   }
 
   plain_combos <- list(
@@ -2256,16 +2443,96 @@ run_composition_methods_hpc <- function(
   batch_mode = FALSE,
   result_stem = ds,
   batch_col = NULL,
-  corrected = FALSE
+  corrected = FALSE,
+  batch_keys = NULL,
+  metadata_validation = NULL,
+  batch_contract = NULL
 ) {
   set.seed(123)
 
   if (corrected && !batch_mode) {
     stop("Corrected CLR composition requires batch-effect mode")
   }
-  if (batch_mode && corrected &&
-      (is.null(batch_col) || !nzchar(batch_col))) {
-    stop("Corrected CLR composition requires a confirmed technical batch")
+  correction_batch_keys <- NULL
+  if (corrected) {
+    if (is.null(batch_keys)) batch_keys <- batch_col
+    if (is.null(batch_keys)) {
+      stop("Corrected CLR composition requires a confirmed technical batch")
+    }
+    batch_keys_input <- if (
+      is.character(batch_keys) && length(batch_keys) > 1L
+    ) {
+      as.list(batch_keys)
+    } else {
+      batch_keys
+    }
+    if (exists("ecoda_batch_normalize_keys", mode = "function", inherits = TRUE)) {
+      correction_batch_keys <- ecoda_batch_normalize_keys(
+        batch_keys_input,
+        sample_col = sample_col
+      )
+    } else {
+      correction_batch_keys <- if (is.list(batch_keys)) {
+        as.character(unlist(batch_keys, use.names = FALSE))
+      } else {
+        as.character(batch_keys)
+      }
+    }
+    if (length(correction_batch_keys) < 1L ||
+        anyNA(correction_batch_keys) ||
+        any(!nzchar(correction_batch_keys))) {
+      stop("Corrected CLR composition requires valid technical batch keys")
+    }
+    expected_composition_contract <- ecoda_hpc_batch_contract_identity(
+      correction_batch_keys,
+      sample_col = sample_col,
+      method_id = "ECODA_authors_HR",
+      model_id = "ecoda_additive_random_intercepts_v1"
+    )
+    if (is.null(batch_contract)) {
+      batch_contract <- expected_composition_contract
+    } else {
+      ecoda_hpc_validate_batch_contract_source(
+        batch_contract,
+        expected_composition_contract,
+        label = "Corrected composition"
+      )
+    }
+    if (is.null(metadata_validation)) {
+      stop(
+        "Corrected CLR composition requires full-cell batch validation"
+      )
+    }
+    batch_contract <- ecoda_hpc_augment_batch_contract(
+      identity = batch_contract,
+      validation = metadata_validation,
+      method_id = "ECODA_authors_HR",
+      batch_keys = correction_batch_keys
+    )
+    if (is.list(pb_hvg2000)) {
+      pseudobulk_contract <- ecoda_hpc_batch_contract_identity(
+        correction_batch_keys,
+        sample_col = sample_col,
+        method_id = "Pseudobulk",
+        model_id = "pseudobulk_composite_v1"
+      )
+      pseudobulk_contract <- ecoda_hpc_augment_batch_contract(
+        identity = pseudobulk_contract,
+        validation = metadata_validation,
+        method_id = "Pseudobulk",
+        batch_keys = correction_batch_keys,
+        scalar_batch_col = if (length(correction_batch_keys) >= 2L) {
+          .ecoda_batch_reserved_name
+        } else {
+          correction_batch_keys[[1L]]
+        }
+      )
+      ecoda_hpc_validate_batch_contract(
+        pb_hvg2000[["batch_contract"]],
+        pseudobulk_contract,
+        label = paste0("Corrected composition pseudobulk input ", ds)
+      )
+    }
   }
 
   skip_hitme <- "hitme" %in% not_suitable_for_auto_annotation
@@ -2291,6 +2558,7 @@ run_composition_methods_hpc <- function(
       NA_integer_
     }
   )
+  if (corrected) metadata_bundle[["batch_contract"]] <- batch_contract
   artifact_stem <- if (batch_mode) result_stem else ds
   save_rds_atomic(
     metadata_bundle,
@@ -2313,16 +2581,32 @@ run_composition_methods_hpc <- function(
       }
       correction_metadata[["Sample"]] <- correction_metadata[[sample_col]]
     }
-    if (corrected && !batch_col %in% colnames(correction_metadata)) {
-      stop("Confirmed technical batch column '", batch_col,
-           "' is missing from composition metadata")
+    missing_correction_keys <- setdiff(
+      correction_batch_keys,
+      colnames(correction_metadata)
+    )
+    if (corrected && length(missing_correction_keys) > 0L) {
+      stop(
+        "Confirmed technical batch column(s) missing from composition metadata: ",
+        paste(missing_correction_keys, collapse = ", ")
+      )
     }
-
     correct_result <- function(res) {
       if (!corrected) return(res)
-      corrected_feat <- correct_clr_batch_lmm(
-        res[["feat_mat"]], correction_metadata, batch_col
+      correction_args <- list(
+        feat_mat = res[["feat_mat"]],
+        sample_meta = correction_metadata,
+        batch_col = if (length(correction_batch_keys) >= 2L) {
+          as.list(unname(correction_batch_keys))
+        } else {
+          correction_batch_keys[[1L]]
+        },
+        sample_col = sample_col
       )
+      if (!is.null(metadata_validation)) {
+        correction_args$metadata_validation <- metadata_validation
+      }
+      corrected_feat <- do.call(correct_clr_batch_lmm, correction_args)
       corrected_dist <- dist(corrected_feat)
       corrected_labels <- res[["labels"]]
       if (length(corrected_labels) != nrow(corrected_feat)) {
@@ -2335,8 +2619,33 @@ run_composition_methods_hpc <- function(
       res[["scores"]] <- calc_sep_score(corrected_dist, corrected_labels)
       res
     }
+    corrected_contract_for <- function(name) {
+      if (!corrected) return(NULL)
+      allowed <- c(
+        "ECODA_authors_HR",
+        "ECODA_authors_HR_NULL",
+        "ECODA_seuratres_2"
+      )
+      if (!name %in% allowed) {
+        stop("Unknown corrected composition method identity: ", name)
+      }
+      contract <- ecoda_hpc_batch_contract_identity(
+        correction_batch_keys,
+        sample_col = sample_col,
+        method_id = name,
+        model_id = "ecoda_additive_random_intercepts_v1"
+      )
+      ecoda_hpc_augment_batch_contract(
+        identity = contract,
+        validation = metadata_validation,
+        method_id = name,
+        batch_keys = correction_batch_keys
+      )
+    }
+
 
     combos <- list()
+    hr_result <- NULL
     add_coda <- function(name, ct_col, shuffle_labels = FALSE) {
       combos[[name]] <<- function() {
         process_coda_fig(
@@ -2352,7 +2661,20 @@ run_composition_methods_hpc <- function(
     # selected Leiden resolution. Existing HiTME/scATOMIC bundles are legacy
     # extras and remain valid, but are not regenerated or required here.
     add_coda("ECODA_authors_HR", ct_col_high_res)
-    add_coda("ECODA_authors_HR_NULL", ct_col_high_res, shuffle_labels = TRUE)
+    if (corrected) {
+      combos[["ECODA_authors_HR_NULL"]] <- function() {
+        if (is.null(hr_result)) {
+          stop("Corrected ECODA NULL result requires the HR result")
+        }
+        shuffle_result_labels_deterministic(hr_result)
+      }
+    } else {
+      add_coda(
+        "ECODA_authors_HR_NULL",
+        ct_col_high_res,
+        shuffle_labels = TRUE
+      )
+    }
     add_coda("ECODA_seuratres_2", "RNA_snn_res.2")
 
     results <- list()
@@ -2362,18 +2684,50 @@ run_composition_methods_hpc <- function(
       )
       if (artifact_checksum_ok(bundle_file) && !force) {
         cached <- read_rds_checked(bundle_file)
+        ecoda_hpc_validate_batch_contract(
+          cached[["batch_contract"]],
+          corrected_contract_for(nm),
+          label = paste0("Composition result ", ds, "/", nm)
+        )
         validate_hpc_timing_bundle(
           cached, label = paste0("Composition result ", ds, "/", nm)
         )
         results[[nm]] <- cached
+        if (corrected &&
+            identical(nm, "ECODA_authors_HR_NULL") &&
+            !is.null(hr_result)) {
+          if (!identical(cached[["feat_mat"]], hr_result[["feat_mat"]])) {
+            stop("Corrected ECODA NULL features differ from HR features")
+          }
+          expected_null_labels <- shuffle_labels_deterministic(
+            hr_result[["labels"]]
+          )
+          if (!identical(cached[["labels"]], expected_null_labels)) {
+            stop("Corrected ECODA NULL labels are not the deterministic shuffle")
+          }
+        }
+        if (corrected && identical(nm, "ECODA_authors_HR")) {
+          hr_result <- cached
+        }
         if (!is.null(cached$exec_time)) {
           log_exec_row(ds, nm, cached$exec_time, log_file,
                        mem_gb = cached$mem_GB)
         }
         next
       }
-      time_secs <- exec_time(res <- combos[[nm]]())
-      res <- correct_result(res)
+      time_secs <- NULL
+      if (corrected &&
+          identical(nm, "ECODA_authors_HR_NULL") &&
+          !is.null(hr_result)) {
+        time_secs <- exec_time(res <- combos[[nm]]())
+      } else {
+        time_secs <- exec_time(res <- combos[[nm]]())
+        res <- correct_result(res)
+        if (corrected && identical(nm, "ECODA_authors_HR")) {
+          hr_result <- res
+        }
+      }
+      if (corrected) res[["batch_contract"]] <- corrected_contract_for(nm)
       res[["exec_time"]] <- as.numeric(time_secs, units = "secs")
       res[["mem_GB"]] <- peak_rss_gb()
       save_rds_atomic(res, bundle_file)
@@ -2381,6 +2735,7 @@ run_composition_methods_hpc <- function(
                    mem_gb = res[["mem_GB"]])
       results[[nm]] <- res
     }
+    if (corrected) results[["batch_contract"]] <- batch_contract
     return(results)
   }
 

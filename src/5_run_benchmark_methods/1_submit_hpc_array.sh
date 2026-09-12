@@ -269,6 +269,95 @@ if [[ -z "${PASS_ARG}" && -n "${SYNC_ONLY_RUN}" ]]; then
   fi
 fi
 
+# Corrected configuration is a validator-only boundary.  Resolve the same
+# dataset scope that the later selection builder will use, but do not create
+# run, selection, scheduler, worker, or preflight state while checking it.
+stage5_validate_corrected_batch_selection() {
+  local dataset selection_manifest=""
+  local old_ifs contract_method
+  local -a corrected_datasets=()
+  local -a corrected_contract_methods=(
+    preprocess prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
+  )
+
+  [[ -r "${DATASETS_JSON_FILE}" ]] || {
+    _ecoda_die "corrected batch configuration is unreadable: ${DATASETS_JSON_FILE}"
+    return 1
+  }
+  jq -e 'type == "object"' "${DATASETS_JSON_FILE}" >/dev/null 2>&1 || {
+    _ecoda_die "corrected batch configuration is not a JSON object"
+    return 1
+  }
+
+  if [[ -n "${SELECTION_FILE_ARG}" ]]; then
+    while IFS=$'\t' read -r dataset _selection_view _selection_label; do
+      [[ -n "${dataset}" ]] || {
+        _ecoda_die "corrected selection contains an empty dataset"
+        return 1
+      }
+      corrected_datasets+=("${dataset}")
+    done < "${SELECTION_FILE_ARG}"
+  elif [[ -n "${DATASETS_ARG}" ]]; then
+    [[ "${DATASETS_ARG}" != ,* && "${DATASETS_ARG}" != *, &&
+       "${DATASETS_ARG}" != *,,* ]] || {
+      _ecoda_die "corrected dataset selection contains an empty item"
+      return 1
+    }
+    old_ifs="${IFS}"
+    IFS=','
+    read -r -a corrected_datasets <<< "${DATASETS_ARG}"
+    IFS="${old_ifs}"
+  elif [[ -n "${SYNC_ONLY_RUN}" ]]; then
+    selection_manifest="${ECODA_RUNS_ROOT}/${SYNC_ONLY_RUN}/manifests/selection.tsv"
+    if [[ -r "${selection_manifest}" ]]; then
+      while IFS=$'\t' read -r dataset _selection_view _selection_label; do
+        [[ -n "${dataset}" ]] || {
+          _ecoda_die "corrected run selection contains an empty dataset"
+          return 1
+        }
+        corrected_datasets+=("${dataset}")
+      done < "${selection_manifest}"
+    fi
+  fi
+
+  if [[ ${#corrected_datasets[@]} -eq 0 ]]; then
+    while IFS= read -r dataset; do
+      [[ -n "${dataset}" ]] && corrected_datasets+=("${dataset}")
+    done < <(
+      jq -r '
+        to_entries[]
+        | select((.key | startswith("_") | not)
+                 and (.value | type == "object")
+                 and (.value.use_for_batch_effect == true))
+        | .key
+      ' "${DATASETS_JSON_FILE}"
+    )
+  fi
+  [[ ${#corrected_datasets[@]} -gt 0 ]] || {
+    _ecoda_die "corrected batch selection contains no datasets"
+    return 1
+  }
+
+  for dataset in "${corrected_datasets[@]}"; do
+    ecoda_validate_corrected_batch_columns \
+      "${DATASETS_JSON_FILE}" "${dataset}" batch_effect_corrected || return 1
+    for contract_method in "${corrected_contract_methods[@]}"; do
+      ecoda_corrected_batch_method_policy "${contract_method}" || return 1
+      ecoda_batch_contract_identity \
+        "${DATASETS_JSON_FILE}" "${dataset}" batch_effect_corrected \
+        "${ECODA_CORRECTED_BATCH_METHOD_ID}" \
+        "${ECODA_CORRECTED_BATCH_MODEL_ID}" >/dev/null || {
+        _ecoda_die "invalid corrected batch contract identity for ${dataset}/${contract_method}"
+        return 1
+      }
+    done
+  done
+}
+
+if [[ "${PASS_ARG}" == corrected ]]; then
+  stage5_validate_corrected_batch_selection || exit 1
+fi
+
 # Pass-sensitive helper paths (notably watchdog status roots) are resolved
 # only after --pass has been parsed and validated.
 if [[ -n "${PASS_ARG}" ]]; then
@@ -428,6 +517,239 @@ stage5_record_run_identity_metadata() {
     [[ -n "${key}" && -n "${value}" ]] || continue
     printf '%s=%s\n' "${key}" "${value}"
   done < "${runtime_identity}"
+}
+
+ECODA_BATCH_CONTRACT_MANIFEST=""
+ECODA_BATCH_CONTRACT_MANIFEST_MD5=""
+ECODA_BATCH_CONTRACT_MANIFEST_SIZE=""
+ECODA_BATCH_CONTRACT_MANIFEST_SHA256=""
+
+stage5_batch_contract_identity_path() {
+  local ds="${1:-}" view="${2:-}" method="${3:-}"
+  local manifest="${ECODA_BATCH_CONTRACT_MANIFEST:-}"
+  local row_ds row_view row_method row_path row_md5 row_size extra found=0
+  [[ -n "${manifest}" && -r "${manifest}" &&
+     -n "${ds}" && -n "${view}" && -n "${method}" ]] || return 1
+  while IFS=$'\t' read -r row_ds row_view row_method row_path row_md5 row_size extra; do
+    [[ -z "${extra}" ]] || return 1
+    if [[ "${row_ds}" == "${ds}" && "${row_view}" == "${view}" &&
+          "${row_method}" == "${method}" ]]; then
+      [[ ${found} -eq 0 ]] || return 1
+      found=1
+      printf '%s' "${row_path}"
+    fi
+  done < "${manifest}"
+  [[ ${found} -eq 1 ]]
+}
+
+stage5_record_batch_contract_metadata() {
+  [[ "${PASS_ARG:-}" == corrected ]] || return 0
+  [[ -n "${ECODA_BATCH_CONTRACT_MANIFEST}" &&
+     "${ECODA_BATCH_CONTRACT_MANIFEST_MD5}" =~ ^[[:xdigit:]]{32}$ &&
+     "${ECODA_BATCH_CONTRACT_MANIFEST_SIZE}" =~ ^[1-9][0-9]*$ &&
+     "${ECODA_BATCH_CONTRACT_MANIFEST_SHA256}" =~ ^[[:xdigit:]]{64}$ ]] || {
+    echo "ERROR: corrected Stage 5 batch-contract manifest metadata is incomplete." >&2
+    return 1
+  }
+  printf 'BATCH_CONTRACT_MANIFEST=%s\nBATCH_CONTRACT_MANIFEST_MD5=%s\nBATCH_CONTRACT_MANIFEST_SIZE=%s\nBATCH_CONTRACT_MANIFEST_SHA256=%s\n' \
+    "${ECODA_BATCH_CONTRACT_MANIFEST}" \
+    "${ECODA_BATCH_CONTRACT_MANIFEST_MD5}" \
+    "${ECODA_BATCH_CONTRACT_MANIFEST_SIZE}" \
+    "${ECODA_BATCH_CONTRACT_MANIFEST_SHA256}"
+}
+
+
+stage5_validate_batch_contract_manifest() {
+  local manifest="${ECODA_BATCH_CONTRACT_MANIFEST:-}"
+  local row_ds row_view row_method row_path row_md5 row_size extra
+  local source_path
+  local expected_path expected_identity actual_count=0 duplicate_key
+  local safe key found expected_count=0
+  local -a actual_ds=() actual_views=() actual_methods=() actual_paths=()
+  local -a contract_methods=(preprocess)
+  local contract_method ds view method
+  [[ "${PASS_ARG:-}" == corrected ]] || return 0
+  [[ -n "${manifest}" && "${manifest}" == "${ECODA_RUN_ROOT}/manifests/batch_contract.tsv" &&
+     -f "${manifest}" && ! -L "${manifest}" && -r "${manifest}" ]] || {
+    echo "ERROR: corrected Stage 5 batch-contract manifest is missing or unsafe." >&2
+    return 1
+  }
+  ecoda_validate_run_owned_path "${manifest}" "${ECODA_RUN_ROOT}" || return 1
+  ecoda_validate_manifest "${manifest}" 6 || return 1
+  ecoda_validate_checksum "${manifest}" || return 1
+  [[ "${ECODA_BATCH_CONTRACT_MANIFEST_MD5}" == "${ECODA_CHECKSUM_MD5}" &&
+     "${ECODA_BATCH_CONTRACT_MANIFEST_SIZE}" == "${ECODA_CHECKSUM_SIZE}" ]] || {
+    echo "ERROR: corrected Stage 5 batch-contract manifest checksum metadata mismatches." >&2
+    return 1
+  }
+  [[ "${ECODA_BATCH_CONTRACT_MANIFEST_SHA256}" == "$(ecoda_sha256_file "${manifest}")" ]] || {
+    echo "ERROR: corrected Stage 5 batch-contract manifest SHA-256 mismatches." >&2
+    return 1
+  }
+  for method in "${METHODS[@]:-}"; do
+    [[ "${method}" == _ecoda_none_ ]] || contract_methods+=("${method}")
+  done
+  while IFS=$'\t' read -r row_ds row_view row_method row_path row_md5 row_size extra; do
+    [[ -n "${row_ds}" && -n "${row_view}" && -n "${row_method}" &&
+       -n "${row_path}" && -n "${row_md5}" && -n "${row_size}" &&
+       -z "${extra}" &&
+       "${row_ds}" != *$'\n'* && "${row_ds}" != *$'\t'* &&
+       "${row_view}" != *$'\n'* && "${row_view}" != *$'\t'* &&
+       "${row_method}" != *$'\n'* && "${row_method}" != *$'\t'* &&
+       "${row_path}" = /* && "${row_path}" != *$'\n'* &&
+       "${row_path}" != *$'\t'* &&
+       "${row_md5}" =~ ^[[:xdigit:]]{32}$ &&
+       "${row_size}" =~ ^[1-9][0-9]*$ ]] || return 1
+    key="${row_ds}|${row_view}|${row_method}"
+    case " ${duplicate_key} " in
+      *" ${key} "*)
+        echo "ERROR: corrected Stage 5 batch-contract manifest has duplicate key ${key}." >&2
+        return 1
+        ;;
+    esac
+    duplicate_key="${duplicate_key} ${key}"
+    safe="$(_ecoda_safe_component "${row_ds}__${row_view}__${row_method}")" || return 1
+    expected_path="${ECODA_RUN_ROOT}/manifests/batch_contracts/${safe}.json"
+    [[ "${row_path}" == "${expected_path}" ]] || return 1
+    ecoda_validate_run_owned_path "${row_path}" "${ECODA_RUN_ROOT}" || return 1
+    ecoda_validate_checksum "${row_path}" || return 1
+    [[ "${row_md5}" == "${ECODA_CHECKSUM_MD5}" &&
+       "${row_size}" == "${ECODA_CHECKSUM_SIZE}" ]] || return 1
+    ecoda_corrected_batch_method_policy "${row_method}" || return 1
+    source_path="$(stage5_input_path "${row_ds}" "${row_view}")" || return 1
+    [[ -s "${source_path}" ]] || return 1
+    expected_identity="$(
+      ecoda_batch_contract_identity "${DATASETS_JSON_FILE}" "${row_ds}" \
+        "${row_view}" "${ECODA_CORRECTED_BATCH_METHOD_ID}" \
+        "${ECODA_CORRECTED_BATCH_MODEL_ID}" "${source_path}"
+    )" || return 1
+    cmp -s "${row_path}" <(printf '%s\n' "${expected_identity}") || {
+      echo "ERROR: corrected Stage 5 batch-contract identity mismatches ${key}." >&2
+      return 1
+    }
+    actual_ds+=("${row_ds}")
+    actual_views+=("${row_view}")
+    actual_methods+=("${row_method}")
+    actual_paths+=("${row_path}")
+    actual_count=$((actual_count + 1))
+  done < "${manifest}"
+  while IFS=$'\t' read -r ds view _row_label; do
+    [[ -n "${ds}" && -n "${view}" ]] || return 1
+    for contract_method in "${contract_methods[@]}"; do
+      found=0
+      for index in "${!actual_ds[@]}"; do
+        if [[ "${actual_ds[${index}]}" == "${ds}" &&
+              "${actual_views[${index}]}" == "${view}" &&
+              "${actual_methods[${index}]}" == "${contract_method}" ]]; then
+          found=1
+          break
+        fi
+      done
+      [[ ${found} -eq 1 ]] || {
+        echo "ERROR: corrected Stage 5 batch-contract identity is missing ${ds}/${view}/${contract_method}." >&2
+        return 1
+      }
+      expected_count=$((expected_count + 1))
+    done
+  done < "${MANIFEST}"
+  [[ ${actual_count} -eq ${expected_count} ]] || {
+    echo "ERROR: corrected Stage 5 batch-contract manifest has unexpected rows." >&2
+    return 1
+  }
+}
+
+stage5_create_batch_contract_manifest() {
+  local manifest="${ECODA_RUN_ROOT}/manifests/batch_contract.tsv"
+  local contracts_dir="${ECODA_RUN_ROOT}/manifests/batch_contracts"
+  local manifest_tmp="${manifest}.build.$$"
+  local identity_path identity_tmp identity_json identity_md5 identity_size
+  local source_path
+  local ds view row_label contract_method safe fingerprint key
+  local seen_views="" seen_contracts=""
+  local -a contract_methods=(preprocess)
+  [[ "${PASS_ARG:-}" == corrected ]] || return 0
+  for method in "${METHODS[@]:-}"; do
+    [[ "${method}" == _ecoda_none_ ]] || contract_methods+=("${method}")
+  done
+  if [[ -n "${SYNC_ONLY_RUN:-}" ]]; then
+    ECODA_BATCH_CONTRACT_MANIFEST="$(
+      sed -n 's/^BATCH_CONTRACT_MANIFEST=//p' \
+        "${ECODA_RUN_ROOT}/metadata" | head -1 || true
+    )"
+    ECODA_BATCH_CONTRACT_MANIFEST_MD5="$(
+      sed -n 's/^BATCH_CONTRACT_MANIFEST_MD5=//p' \
+        "${ECODA_RUN_ROOT}/metadata" | head -1 || true
+    )"
+    ECODA_BATCH_CONTRACT_MANIFEST_SIZE="$(
+      sed -n 's/^BATCH_CONTRACT_MANIFEST_SIZE=//p' \
+        "${ECODA_RUN_ROOT}/metadata" | head -1 || true
+    )"
+    ECODA_BATCH_CONTRACT_MANIFEST_SHA256="$(
+      sed -n 's/^BATCH_CONTRACT_MANIFEST_SHA256=//p' \
+        "${ECODA_RUN_ROOT}/metadata" | head -1 || true
+    )"
+    stage5_validate_batch_contract_manifest
+    return $?
+  fi
+  mkdir -p "${contracts_dir}" || return 1
+  : > "${manifest_tmp}" || return 1
+  while IFS=$'\t' read -r ds view row_label; do
+    key="${ds}|${view}"
+    case " ${seen_views} " in
+      *" ${key} "*) continue ;;
+    esac
+    seen_views="${seen_views} ${key}"
+    source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
+    [[ -s "${source_path}" ]] || return 1
+    for contract_method in "${contract_methods[@]}"; do
+      key="${ds}|${view}|${contract_method}"
+      case " ${seen_contracts} " in
+        *" ${key} "*) return 1 ;;
+      esac
+      seen_contracts="${seen_contracts} ${key}"
+      ecoda_corrected_batch_method_policy "${contract_method}" || return 1
+      identity_json="$(
+        ecoda_batch_contract_identity "${DATASETS_JSON_FILE}" "${ds}" \
+          "${view}" "${ECODA_CORRECTED_BATCH_METHOD_ID}" \
+          "${ECODA_CORRECTED_BATCH_MODEL_ID}" "${source_path}"
+      )" || return 1
+      [[ -n "${identity_json}" ]] || return 1
+      safe="$(_ecoda_safe_component "${ds}__${view}__${contract_method}")" || return 1
+      identity_path="${contracts_dir}/${safe}.json"
+      identity_tmp="${identity_path}.build.$$"
+      printf '%s\n' "${identity_json}" > "${identity_tmp}" || {
+        rm -f "${identity_tmp}"
+        return 1
+      }
+      chmod 600 "${identity_tmp}" || {
+        rm -f "${identity_tmp}"
+        return 1
+      }
+      mv -f "${identity_tmp}" "${identity_path}" || {
+        rm -f "${identity_tmp}"
+        return 1
+      }
+      ecoda_write_checksum "${identity_path}" || return 1
+      identity_md5="${ECODA_CHECKSUM_MD5}"
+      identity_size="${ECODA_CHECKSUM_SIZE}"
+      fingerprint="$(jq -er '.fingerprint' "${identity_path}")" || return 1
+      [[ "${fingerprint}" =~ ^[[:xdigit:]]{64}$ ]] || return 1
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "${ds}" "${view}" "${contract_method}" "${identity_path}" \
+        "${identity_md5}" "${identity_size}" >> "${manifest_tmp}" || return 1
+    done
+  done < "${MANIFEST}"
+  ecoda_atomic_install_manifest "${manifest_tmp}" "${manifest}" 6 || {
+    rm -f "${manifest_tmp}"
+    return 1
+  }
+  rm -f "${manifest_tmp}"
+  ecoda_write_checksum "${manifest}" || return 1
+  ECODA_BATCH_CONTRACT_MANIFEST="${manifest}"
+  ECODA_BATCH_CONTRACT_MANIFEST_MD5="${ECODA_CHECKSUM_MD5}"
+  ECODA_BATCH_CONTRACT_MANIFEST_SIZE="${ECODA_CHECKSUM_SIZE}"
+  ECODA_BATCH_CONTRACT_MANIFEST_SHA256="$(ecoda_sha256_file "${manifest}")" || return 1
+  stage5_validate_batch_contract_manifest
 }
 
 stage5_finalize_owner_manifest() {
@@ -727,6 +1049,29 @@ validate_input_row() {
   [[ -s "${path}" ]]
 }
 
+stage5_validate_corrected_source_contracts() {
+  local ds view source_path identity_path row seen_sources=""
+  local validator="${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py"
+  [[ "${PASS_ARG:-}" == corrected ]] || return 0
+  [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
+  [[ -r "${validator}" ]] || return 1
+  while IFS=$'\t' read -r ds view _scope; do
+    row="${ds}/${view}"
+    case " ${seen_sources} " in
+      *" ${row} "*) continue ;;
+    esac
+    seen_sources="${seen_sources} ${row}"
+    source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
+    identity_path="$(
+      stage5_batch_contract_identity_path "${ds}" "${view}" preprocess
+    )" || return 1
+    "${PYTHON_BIN}" "${validator}" --path "${source_path}" \
+      --view "${view}" --method "Stage 5 corrected source" \
+      --expected-batch-contract "${identity_path}" >/dev/null 2>&1 || return 1
+  done < "${MANIFEST}"
+}
+
+
 stage5_output_path_for_root() {
   stage5_canonical_output_path "$1" "$2" "$3"
 }
@@ -795,7 +1140,7 @@ stage5_validate_input_provenance() {
 }
 
 stage5_validate_source_artifact_records() {
-  local ds view source_path row seen_sources="" producer="stage5_preflight"
+  local ds view source_path identity_path row seen_sources="" producer="stage5_preflight"
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
   while IFS=$'\t' read -r ds view _scope; do
     row="${ds}/${view}"
@@ -804,9 +1149,19 @@ stage5_validate_source_artifact_records() {
     source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
     ecoda_validate_artifact_record "${source_path}" "${producer}" "${RUN_ID}" ||
       return 1
-    "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
-      --path "${source_path}" --view "${view}" \
-      --method "Stage 5 source preflight" || return 1
+    if [[ "${PASS_ARG:-}" == corrected ]]; then
+      identity_path="$(
+        stage5_batch_contract_identity_path "${ds}" "${view}" preprocess
+      )" || return 1
+      "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+        --path "${source_path}" --view "${view}" \
+        --method "Stage 5 source preflight" \
+        --expected-batch-contract "${identity_path}" || return 1
+    else
+      "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+        --path "${source_path}" --view "${view}" \
+        --method "Stage 5 source preflight" || return 1
+    fi
   done < "${MANIFEST}"
 }
 
@@ -816,6 +1171,7 @@ stage5_repair_missing_h5ad_sidecars() {
   local repair_tmp="${repair_manifest}.build.$$"
   local ds view path sidecar digest size root repairs=0
   local scratch_path nas_path scratch_digest scratch_size source_key seen_sources=""
+  local identity_path
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
   : > "${repair_tmp}" || return 1
   while IFS=$'\t' read -r ds view _scope; do
@@ -858,12 +1214,28 @@ stage5_repair_missing_h5ad_sidecars() {
       else
         # A missing sidecar is repaired only after the persisted H5AD content
         # contract passes. Existing invalid sidecars are never overwritten.
-        "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
-          --path "${path}" --view "${view}" \
-          --method "Stage 5 source checksum repair" >/dev/null 2>&1 || {
-          rm -f "${repair_tmp}"
-          return 1
-        }
+        if [[ "${PASS_ARG:-}" == corrected ]]; then
+          identity_path="$(
+            stage5_batch_contract_identity_path "${ds}" "${view}" preprocess
+          )" || {
+            rm -f "${repair_tmp}"
+            return 1
+          }
+          "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+            --path "${path}" --view "${view}" \
+            --method "Stage 5 source checksum repair" \
+            --expected-batch-contract "${identity_path}" >/dev/null 2>&1 || {
+            rm -f "${repair_tmp}"
+            return 1
+          }
+        else
+          "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+            --path "${path}" --view "${view}" \
+            --method "Stage 5 source checksum repair" >/dev/null 2>&1 || {
+            rm -f "${repair_tmp}"
+            return 1
+          }
+        fi
         ecoda_write_checksum "${path}" || {
           rm -f "${repair_tmp}"
           return 1
@@ -943,6 +1315,8 @@ stage5_compute_h5ad_preflight() {
   local preflight_logs="${ECODA_RUN_ROOT}/logs"
   local ds view source_path safe status state status_run status_dataset status_view status_task
   local preflight_id preflight_rc count=0
+  local identity_path
+  local preflight_runtime_export
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
 
   if [[ -n "${SYNC_ONLY_RUN}" && ! -s "${preflight_manifest}" ]]; then
@@ -951,9 +1325,18 @@ stage5_compute_h5ad_preflight() {
     # locally and fail closed if any source is invalid.
     while IFS=$'\t' read -r ds view _scope; do
       source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
-      "${PYTHON_BIN}" "$(stage5_source_script src/utils/py/benchmark_h5ad_contract.py)" \
-        --path "${source_path}" --view "${view}" --method "Stage 5 sync recovery" >/dev/null 2>&1 ||
-        return 1
+      if [[ "${PASS_ARG:-}" == corrected ]]; then
+        identity_path="$(
+          stage5_batch_contract_identity_path "${ds}" "${view}" preprocess
+        )" || return 1
+        "${PYTHON_BIN}" "$(stage5_source_script src/utils/py/benchmark_h5ad_contract.py)" \
+          --path "${source_path}" --view "${view}" --method "Stage 5 sync recovery" \
+          --expected-batch-contract "${identity_path}" >/dev/null 2>&1 || return 1
+      else
+        "${PYTHON_BIN}" "$(stage5_source_script src/utils/py/benchmark_h5ad_contract.py)" \
+          --path "${source_path}" --view "${view}" --method "Stage 5 sync recovery" \
+          >/dev/null 2>&1 || return 1
+      fi
       ecoda_validate_checksum "${source_path}" || return 1
     done < "${MANIFEST}"
     return 0
@@ -998,13 +1381,16 @@ stage5_compute_h5ad_preflight() {
     preflight_worker="$(stage5_source_script src/utils/bash/h5ad_preflight_worker.sh)"
     stage5_validate_bound_runtime || return 1
     stage5_require_source_script "${preflight_worker}" || return 1
+    preflight_runtime_export="${RUNTIME_EXPORT}"
+    [[ "${PASS_ARG:-}" == corrected ]] &&
+      preflight_runtime_export="${preflight_runtime_export},ECODA_BATCH_CONTRACT_MANIFEST=${ECODA_BATCH_CONTRACT_MANIFEST}"
     set +e
     preflight_id="$(
       ecoda_submit_h5ad_preflight "${preflight_manifest}" "${status_dir}" \
         "${ECODA_RUN_ROOT}" require "${PARTITION_ARG:-${SLURM_PARTITION_BENCHMARK_CPU}}" \
         "${MEMORY}" "${THROTTLE}" "${preflight_logs}" stage5 \
         "${preflight_worker}" \
-        "${RUNTIME_EXPORT}"
+        "${preflight_runtime_export}"
     )"
     preflight_rc=$?
     set -e
@@ -1308,6 +1694,15 @@ done
 export ECODA_SELECTION_MANIFEST="${MANIFEST}"
 export ECODA_EXACT_SELECTION="${EXACT_SELECTION}"
 
+if [[ "${PASS_ARG}" == corrected ]]; then
+  stage5_create_batch_contract_manifest ||
+    stage5_abort "failed to create or validate corrected Stage 5 batch-contract manifest"
+fi
+stage5_validate_corrected_source_contracts ||
+  stage5_abort "Stage 5 corrected source batch-contract validation failed"
+
+
+
 if [[ -n "${PASS_ARG}" ]]; then
   ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${PASS_ARG}"
 else
@@ -1391,6 +1786,7 @@ benchmark_rds_group_valid() {
   local selected_labels="" seen_label=""
   local has_rds=0
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 2
+  [[ "${PASS_ARG:-}" == corrected ]] && return 2
   case " ${RDS_PREFLIGHT_DONE} " in *" ${key} "*) return 0 ;; esac
   case " ${RDS_PREFLIGHT_FAILED} " in *" ${key} "*) return 1 ;; esac
   safe="$(_ecoda_safe_component "${key}")"
@@ -1522,9 +1918,15 @@ stage5_prepare_pseudobulk_valid() {
 }
 
 benchmark_selected_artifacts_valid() {
-  local ds="$1" view="$2" label="$3" path artifact_check
+  local ds="$1" view="$2" label="$3" path artifact_check batch_identity
   local has_feather=0 rds_grouped=0 group_rc
   local artifact_validator_args=()
+  batch_identity=""
+  if [[ "${PASS_ARG:-}" == corrected ]]; then
+    batch_identity="$(
+      stage5_batch_contract_identity_path "${ds}" "${view}" "${label}"
+    )" || return 1
+  fi
   case "${label}" in
     gloscope|mofa|pseudobulk|composition|scitd|prepare_pseudobulk|trans|zeroimp)
       if benchmark_rds_group_valid "${ds}" "${view}"; then
@@ -1549,6 +1951,8 @@ benchmark_selected_artifacts_valid() {
         [[ -n "${PASS_ARG}" ]] && rds_args+=(--batch-pass "${PASS_ARG}")
         [[ "${path}" == *_metadata.rds ]] && rds_args+=(--metadata)
         [[ -s "${SOURCE_IDENTITY}" ]] && rds_args+=(--source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
+        [[ -n "${batch_identity}" ]] &&
+          rds_args+=(--expected-batch-contract "${batch_identity}")
         ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
           "${rds_args[@]}" >/dev/null 2>&1 || return 1
         ;;
@@ -1570,6 +1974,8 @@ benchmark_selected_artifacts_valid() {
         --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}")
       [[ -s "${SOURCE_IDENTITY}" ]] &&
         artifact_validator_args+=(--source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
+      [[ -n "${batch_identity}" ]] &&
+        artifact_validator_args+=(--expected-batch-contract "${batch_identity}")
       "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
         "${artifact_validator_args[@]}" >/dev/null 2>&1 || {
         rm -f "${artifact_check}" "${artifact_check}.md5"
@@ -1733,6 +2139,42 @@ stage5_matrix_validation_selection() {
   fi
 }
 
+stage5_validate_corrected_matrix_rows() {
+  local label="$1" ds view row_label identity_path safe selection tmp
+  local -a validation_args
+  [[ "${PASS_ARG:-}" == corrected ]] || return 1
+  while IFS=$'\t' read -r ds view row_label; do
+    identity_path="$(
+      stage5_batch_contract_identity_path "${ds}" "${view}" "${label}"
+    )" || return 1
+    safe="$(_ecoda_safe_component "${ds}__${view}__${label}")" || return 1
+    selection="${ECODA_RUN_ROOT}/manifests/matrix_validation_${safe}.tsv"
+    tmp="${selection}.build.$$"
+    printf '%s\t%s\t%s\n' "${ds}" "${view}" "${row_label}" > "${tmp}" || return 1
+    ecoda_atomic_install_manifest "${tmp}" "${selection}" 3 || {
+      rm -f "${tmp}"
+      return 1
+    }
+    rm -f "${tmp}"
+    ecoda_write_checksum "${selection}" || {
+      rm -f "${selection}"
+      return 1
+    }
+    validation_args=(--root "${ANALYSIS_ROOT}" --selection "${selection}" \
+      --labels "${label}" --batch --batch-pass corrected \
+      --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}" \
+      --source-identity "${SOURCE_IDENTITY}" --source-identity-verified \
+      --expected-batch-contract "${identity_path}" \
+      --producer "stage5_${label}" --producer-run-id "${RUN_ID}")
+    if ! "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
+        "${validation_args[@]}" >/dev/null 2>&1; then
+      rm -f "${selection}" "${selection}.md5"
+      return 1
+    fi
+    rm -f "${selection}" "${selection}.md5"
+  done < "${MANIFEST}"
+}
+
 stage5_track_pending_artifact_owners() {
   local owner_dir
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
@@ -1784,12 +2226,17 @@ if [[ -z "${SYNC_ONLY_RUN}" ]] &&
     stage5_abort "failed to create empty Stage 5 owner manifest"
   identity_metadata="$(stage5_record_run_identity_metadata)" ||
     stage5_abort "failed to read Stage 5 source/runtime identity"
+  batch_contract_metadata="$(stage5_record_batch_contract_metadata)" ||
+    stage5_abort "failed to read corrected Stage 5 batch-contract metadata"
+  batch_contract_metadata_suffix=""
+  [[ "${PASS_ARG:-}" == corrected ]] &&
+    batch_contract_metadata_suffix="${batch_contract_metadata}\n"
   methods_csv="$(IFS=,; echo "${METHODS[*]}")"
   analyses_csv=""
   [[ ${ANALYSES_SELECTED} -eq 1 ]] &&
     analyses_csv="$(IFS=,; echo "${ANALYSES[*]}")"
   ecoda_atomic_write "${ECODA_RUN_ROOT}/metadata" \
-    "STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\n${identity_metadata}\n" ||
+    "STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\n${identity_metadata}\n${batch_contract_metadata_suffix}" ||
     stage5_abort "failed to write Stage 5 NOOP metadata"
   ecoda_atomic_write "${ECODA_RUN_ROOT}/status/report" \
     "STATE=NOOP_VALIDATED\nRUN_ID=${RUN_ID}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nREASON=all selected benchmark artifacts are valid; no rerun selected\n" ||
@@ -1951,7 +2398,12 @@ else
   if [[ ${ANALYSES_SELECTED} -eq 1 ]]; then analyses_csv="$(IFS=,; echo "${ANALYSES[*]}")"; fi
   identity_metadata="$(stage5_record_run_identity_metadata)" ||
     stage5_abort "failed to read Stage 5 source/runtime identity"
-  RUN_METADATA="STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\nH5AD_PREFLIGHT=${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv\nPENDING_SELECTION=${PENDING_SELECTION}\nPENDING_SELECTION_MD5=${PENDING_SELECTION_MD5}\nPENDING_SELECTION_SIZE=${PENDING_SELECTION_SIZE}\n${identity_metadata}\nROOT=${HPC_SCRATCH_DIR}/$([[ -n "${PASS_ARG}" ]] && printf 'batch_effect/%s' "${PASS_ARG}" || printf 'benchmark')\n"
+  batch_contract_metadata="$(stage5_record_batch_contract_metadata)" ||
+    stage5_abort "failed to read corrected Stage 5 batch-contract metadata"
+  batch_contract_metadata_suffix=""
+  [[ "${PASS_ARG:-}" == corrected ]] &&
+    batch_contract_metadata_suffix="${batch_contract_metadata}\n"
+  RUN_METADATA="STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\nH5AD_PREFLIGHT=${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv\nPENDING_SELECTION=${PENDING_SELECTION}\nPENDING_SELECTION_MD5=${PENDING_SELECTION_MD5}\nPENDING_SELECTION_SIZE=${PENDING_SELECTION_SIZE}\n${identity_metadata}\n${batch_contract_metadata_suffix}ROOT=${HPC_SCRATCH_DIR}/$([[ -n "${PASS_ARG}" ]] && printf 'batch_effect/%s' "${PASS_ARG}" || printf 'benchmark')\n"
   ecoda_atomic_write "${ECODA_RUN_ROOT}/metadata" "${RUN_METADATA}" ||
     stage5_abort "failed to write Stage 5 run metadata"
 fi
@@ -2045,6 +2497,8 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     local worker_env="METHOD=${method},ANALYSIS=${method},ANALYSIS_MANIFEST=${manifest},ANALYSIS_VIEW=${view},ANALYSIS_ROOT=${ANALYSIS_ROOT},EXECUTION_LOG_DIR=${RUN_LOG_DIR},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${RUN_ID},ECODA_SELECTION_MANIFEST=${manifest},FORCE_BENCHMARK=${method_force},METHOD_TIME_LIMIT=${method_time_limit},METHOD_GPU_POLICY=${method_gpu_policy},ECODA_ARTIFACT_PRODUCER=stage5_${method},JOB_LOG_PREFIX=${RUN_LOG_DIR}/5_matrix_${safe}"
     if [[ -n "${PASS_ARG}" ]]; then
       worker_env="${worker_env},ANALYSIS_PASS=${PASS_ARG}"
+      [[ "${PASS_ARG}" == corrected ]] &&
+        worker_env="${worker_env},ECODA_BATCH_CONTRACT_MANIFEST=${ECODA_BATCH_CONTRACT_MANIFEST}"
     else
       worker_env="${worker_env},BENCHMARK_MANIFEST=${manifest}"
     fi
@@ -2315,6 +2769,11 @@ for label in "${LABELS[@]}"; do
   esac
 done
 for label in "${FEATHER_LABELS[@]}"; do
+  if [[ "${PASS_ARG:-}" == corrected ]]; then
+    stage5_validate_corrected_matrix_rows "${label}" ||
+      stage5_abort "Stage 5 corrected ${label} matrix artifact validation failed"
+    continue
+  fi
   if stage5_matrix_validation_selection "${label}"; then
     :
   else
@@ -2348,7 +2807,36 @@ for label in "${LABELS[@]}"; do
       ;;
   esac
 done
-if [[ ${#RDS_LABELS[@]} -gt 0 ]]; then
+
+stage5_validate_corrected_rds_rows() {
+  local ds view row_label label path identity_path
+  local -a corrected_rds_args
+  [[ "${PASS_ARG:-}" == corrected ]] || return 1
+  while IFS=$'\t' read -r ds view row_label; do
+    for label in "${RDS_LABELS[@]}"; do
+      identity_path="$(
+        stage5_batch_contract_identity_path "${ds}" "${view}" "${label}"
+      )" || return 1
+      benchmark_artifacts_for "${ds}" "${view}" "${label}" || return 1
+      for path in "${ARTIFACT_PATHS[@]}"; do
+        corrected_rds_args=(--artifact "${path}" --method "${label}" \
+          --dataset "${ds}" --view "${view}" --config "${DATASETS_JSON_FILE}" \
+          --input-root "${HPC_SCRATCH_DIR}" --batch-pass corrected \
+          --source-identity "${SOURCE_IDENTITY}" --source-identity-verified \
+          --expected-batch-contract "${identity_path}")
+        [[ "${path}" == *_metadata.rds ]] &&
+          corrected_rds_args+=(--metadata)
+        ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
+          "${corrected_rds_args[@]}" >/dev/null 2>&1 || return 1
+      done
+    done
+  done < "${MANIFEST}"
+}
+
+if [[ "${PASS_ARG:-}" == corrected ]]; then
+  stage5_validate_corrected_rds_rows ||
+    stage5_abort "Stage 5 corrected RDS artifact validation failed"
+elif [[ ${#RDS_LABELS[@]} -gt 0 ]]; then
   stage5_validate_pending_rds_records ||
     stage5_abort "Stage 5 RDS artifact record validation failed"
   rds_args=(--root "${ANALYSIS_ROOT}" --selection "${MANIFEST}" \
