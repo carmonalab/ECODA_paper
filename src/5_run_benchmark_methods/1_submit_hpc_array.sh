@@ -370,6 +370,12 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
       ecoda_split_csv "${TARGET_METHODS_ARG}" || exit 1
       TARGET_METHODS=("${ECODA_ARRAY[@]}")
       ecoda_assert_unique_items "${TARGET_METHODS[@]}" || exit 1
+      for stored_target_method in "${TARGET_METHODS[@]}"; do
+        case ",${EXPECTED_BATCH_METHODS}," in
+          *,"${stored_target_method}",*) ;;
+          *) echo "ERROR: final sync-only metadata contains an unsupported target method." >&2; exit 1 ;;
+        esac
+      done
     else
       [[ -n "${stored_methods}" && ${TARGET_METHODS_SET} -eq 0 ]] || {
         echo "ERROR: final sync-only run metadata lacks the fixed method suite." >&2
