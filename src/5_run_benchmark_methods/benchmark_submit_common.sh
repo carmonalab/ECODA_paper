@@ -99,6 +99,8 @@ WATCHDOG_MAIN_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/watchdog_mai
 # tail's benchmark_wait_watchdog. Outside benchmark/ so it is never rsync'd.
 if [[ -n "${ANALYSIS_PASS:-}" ]]; then
   WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/${ANALYSIS_PASS}"
+  [[ "${ANALYSIS_VARIANT:-}" == final ]] &&
+    WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/${ANALYSIS_PASS}_final"
 else
   WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_benchmark_watchdog"
 fi
@@ -876,12 +878,25 @@ Check ${LOGS_DIR}/5_benchmark_watchdog_${LABEL}_${WATCHDOG_ID}.log/.err; recover
 # ---------------------------------------------------------------------------
 
 benchmark_sync_artifacts_for() {
-  local ds="$1" label="$2" n suffix stem runtime_count runtime_index
-  local root="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
+  local ds="$1" label="$2" n suffix stem batch_stem runtime_count runtime_index
   SYNC_ARTIFACTS=()
+  local root="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
+  if [[ -n "${ANALYSIS_PASS:-}" && -z "${ANALYSIS_ROOT:-}" ]]; then
+    if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
+      root="${HPC_SCRATCH_DIR}/batch_effect/${ANALYSIS_PASS}_final"
+    else
+      root="${HPC_SCRATCH_DIR}/batch_effect/${ANALYSIS_PASS}"
+    fi
+  fi
+  if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+    batch_stem="$(ecoda_stage5_batch_stem "${ds}" "${ANALYSIS_PASS}" "${ANALYSIS_VARIANT:-}")" ||
+      return 1
+  else
+    batch_stem="${ds}"
+  fi
   if [[ "${label}" == prepare_pseudobulk ]]; then
     if [[ -n "${ANALYSIS_PASS:-}" ]]; then
-      SYNC_ARTIFACTS+=("${root}/pseudobulks/${ds}_batch_effect_${ANALYSIS_PASS}_pseudobulk_hvg2000.rds")
+      SYNC_ARTIFACTS+=("${root}/pseudobulks/${batch_stem}_pseudobulk_hvg2000.rds")
     else
       for suffix in schvg2000 hvg2000 hvg500 hvg2000_bl hvg1000 hvg3000; do
         SYNC_ARTIFACTS+=("${root}/pseudobulks/${ds}_pseudobulk_${suffix}.rds")
@@ -892,7 +907,7 @@ benchmark_sync_artifacts_for() {
   case "${label}" in
     mrvi)
       if [[ -n "${ANALYSIS_PASS:-}" ]]; then
-        SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_batch_effect_${ANALYSIS_PASS}_hvg2000_highres_mrvi_dists.feather")
+        SYNC_ARTIFACTS+=("${root}/embeddings/${batch_stem}_hvg2000_highres_mrvi_dists.feather")
       else
         for n in 1000 2000 3000; do
           SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_hvg${n}_mrvi_dists.feather")
@@ -911,7 +926,7 @@ benchmark_sync_artifacts_for() {
     pilot|qot)
       suffix="${label}"
       if [[ -n "${ANALYSIS_PASS:-}" ]]; then
-        SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_batch_effect_${ANALYSIS_PASS}_hvg2000_highres_${suffix}_dists.feather")
+        SYNC_ARTIFACTS+=("${root}/embeddings/${batch_stem}_hvg2000_highres_${suffix}_dists.feather")
       else
         SYNC_ARTIFACTS+=("${root}/embeddings/${ds}_hvg2000_lowres_${suffix}_dists.feather")
         for n in 1000 2000 3000; do
@@ -927,13 +942,11 @@ benchmark_sync_artifacts_for() {
       SYNC_ARTIFACTS+=("${root}/results/${ds}_${label}.rds")
       ;;
     gloscope|mofa|pseudobulk|scitd)
-      stem="${ds}"
-      [[ -n "${ANALYSIS_PASS:-}" ]] && stem="${ds}_batch_effect_${ANALYSIS_PASS}"
+      stem="${batch_stem}"
       SYNC_ARTIFACTS+=("${root}/results/${stem}_${label}.rds")
       ;;
     composition)
-      stem="${ds}"
-      [[ -n "${ANALYSIS_PASS:-}" ]] && stem="${ds}_batch_effect_${ANALYSIS_PASS}"
+      stem="${batch_stem}"
       SYNC_ARTIFACTS+=("${root}/results/${stem}_composition.rds")
       SYNC_ARTIFACTS+=("${root}/results/${stem}_metadata.rds")
       ;;
@@ -1044,6 +1057,22 @@ analysis_merge_sync_cleanup() (
   local LABELS=("$@")
   local LOCAL_ROOT="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
   local REMOTE_ROOT="${ANALYSIS_NAS_ROOT:-${NAS_TARGET_DIR}/benchmark}"
+  local ds view row_label label path rel line selected_seen=""
+  local metadata_manifest metadata_ds metadata_view metadata_input metadata_output metadata_extra
+  if [[ -z "${ANALYSIS_ROOT:-}" && -n "${ANALYSIS_PASS:-}" ]]; then
+    if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
+      LOCAL_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${ANALYSIS_PASS}_final"
+    else
+      LOCAL_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${ANALYSIS_PASS}"
+    fi
+  fi
+  if [[ -z "${ANALYSIS_NAS_ROOT:-}" && -n "${ANALYSIS_PASS:-}" ]]; then
+    if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
+      REMOTE_ROOT="${NAS_TARGET_DIR}/batch_effect/${ANALYSIS_PASS}_final"
+    else
+      REMOTE_ROOT="${NAS_TARGET_DIR}/batch_effect/${ANALYSIS_PASS}"
+    fi
+  fi
   local LOG_PREFIX="${ANALYSIS_LOG_PREFIX:-execution_times_}"
   local RUN_ROOT="${ECODA_RUN_ROOT:-}"
   local RUN_ID="${ECODA_RUN_ID:-}"
@@ -1053,7 +1082,6 @@ analysis_merge_sync_cleanup() (
   local SYNC_FILES SYNC_FILES_TMP NO_CHECKSUM_FILES_TMP CLEANUP_MANIFEST
   local CHECKSUM_TMP REMOTE_CHECKSUM_TMP EXISTING_LOG
   local merge_script="${ANALYSIS_MERGE_SCRIPT}"
-  local ds view row_label label path rel line selected_seen=""
   local artifact selected_index
   # Worker artifacts are terminal and immutable during this sync; retain each
   # strict validation digest for the local checksums manifest instead of
@@ -1163,6 +1191,18 @@ analysis_merge_sync_cleanup() (
         for path in "${SYNC_ARTIFACTS[@]}"; do add_sync_artifact "${path}"; done
       done
     done
+  fi
+  if [[ -n "${ANALYSIS_VARIANT:-}" && "${ANALYSIS_VARIANT}" == "final" ]]; then
+    metadata_manifest="${ECODA_RUN_ROOT}/manifests/metadata_export.tsv"
+    if [[ -s "${metadata_manifest}" ]]; then
+      while IFS=$'\t' read -r metadata_ds metadata_view metadata_input metadata_output metadata_extra; do
+        [[ -n "${metadata_ds}" && -n "${metadata_view}" &&
+           -n "${metadata_input}" && -n "${metadata_output}" &&
+           -z "${metadata_extra}" ]] ||
+          sync_fail "malformed final metadata export manifest row"
+        add_sync_artifact "${metadata_output}"
+      done < "${metadata_manifest}"
+    fi
   fi
   [[ ${#SELECTED_RELS[@]} -gt 0 ]] || sync_fail "no selected benchmark artifacts"
   if [[ -s "${REMOTE_ROOT}/checksums.md5" ]]; then

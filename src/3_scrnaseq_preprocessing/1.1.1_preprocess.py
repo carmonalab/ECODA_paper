@@ -29,7 +29,8 @@ from src.utils.py.batch_contract import (
 )
 from src.utils.py.preprocess_utils import (
     load_input,
-    apply_subset_vars,
+    evaluate_subset_mask,
+    assert_subset_sample_consistency,
     remove_low_cellcount_samples,
 )
 
@@ -717,16 +718,25 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
             print(f"Loading {current_ds} / {view_name} ...")
             adata_full = load_input(input_file_name, input_dir, output_dir)
 
-            # Subset on ORIGINAL sample/label values, before the sample column
-            # is standardized (standardization can alter '-' or leading digits).
-            adata_view = apply_subset_vars(adata_full, view_info.get("subset_vars", {}))
+            # Evaluate and audit against ORIGINAL sample/label values before
+            # slicing.  Standardizing the sample column first could hide a
+            # split sample (and can alter '-' or leading digits).
+            subset_vars = view_info.get("subset_vars", {})
+            subset_mask = evaluate_subset_mask(adata_full, subset_vars)
+            assert_subset_sample_consistency(
+                adata_full,
+                subset_mask,
+                sample_col,
+                context=f"{current_ds} / {view_name}",
+            )
+            adata_view = adata_full[subset_mask].copy()
             # Drop the parent binding so copied subsets do not retain the
             # full-cohort matrix during downstream preprocessing.
             del adata_full
             if adata_view.n_obs == 0:
                 raise ValueError(
                     f"Subset for {current_ds} / {view_name} is empty after "
-                    f"apply_subset_vars. Check subset_vars: {view_info.get('subset_vars', {})}"
+                    f"evaluate_subset_mask. Check subset_vars: {subset_vars}"
                 )
 
             if sample_col in adata_view.obs.columns:

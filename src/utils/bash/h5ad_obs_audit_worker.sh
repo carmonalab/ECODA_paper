@@ -1,0 +1,240 @@
+#!/bin/bash
+# Read-only Covid H5AD obs preflight.  This worker never writes to the H5AD
+# source or creates an artifact ownership record for it.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/../../slurm_config.sh"
+source "${SCRIPT_DIR}/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/ecoda_runtime.sh"
+
+AUDIT_MODE="${H5AD_OBS_AUDIT_MODE:-audit}"
+case "${AUDIT_MODE}" in
+  audit) AUDIT_RUNTIME_STAGE=stage3 ;;
+  metadata) AUDIT_RUNTIME_STAGE=stage5 ;;
+  *) echo "ERROR: unsupported obs worker mode: ${AUDIT_MODE}" >&2; exit 1 ;;
+esac
+SOURCE_ROOT="${ECODA_SOURCE_ROOT:-}"
+SOURCE_MANIFEST="${ECODA_SOURCE_MANIFEST:-}"
+SOURCE_REQUIRED="${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}"
+RUN_ROOT="${H5AD_OBS_AUDIT_RUN_ROOT:-${ECODA_RUN_ROOT:-}}"
+RUN_ID="${H5AD_OBS_AUDIT_RUN_ID:-${ECODA_RUN_ID:-${RUN_ROOT##*/}}}"
+fail() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+[[ "${SOURCE_REQUIRED}" == "1" ]] ||
+  fail "read-only H5AD obs audit requires an immutable source snapshot"
+[[ "${SOURCE_ROOT}" = /* && "${SOURCE_MANIFEST}" = /* ]] ||
+  fail "immutable source root and manifest are required"
+[[ "${SOURCE_ROOT##*/}" == "tree" ]] ||
+  fail "immutable source root is not a snapshot tree"
+SNAPSHOT_ROOT="${SOURCE_ROOT%/tree}"
+[[ "${SNAPSHOT_ROOT##*/}" =~ ^[[:xdigit:]]{40}$ ]] ||
+  fail "immutable source root is not commit keyed"
+EXPECTED_SOURCE_MANIFEST="${SNAPSHOT_ROOT}/identity/source.manifest"
+[[ "${SOURCE_MANIFEST}" == "${EXPECTED_SOURCE_MANIFEST}" ]] ||
+  fail "source manifest is not bound to immutable source tree"
+[[ -d "${SOURCE_ROOT}" && ! -L "${SOURCE_ROOT}" &&
+   -f "${SOURCE_MANIFEST}" && ! -L "${SOURCE_MANIFEST}" &&
+   -r "${SOURCE_MANIFEST}" ]] ||
+  fail "immutable source identity is missing or unsafe"
+
+[[ "${RUN_ROOT}" = /* && -d "${RUN_ROOT}" && ! -L "${RUN_ROOT}" ]] ||
+  fail "read-only H5AD obs audit requires an existing run root"
+[[ "${RUN_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ &&
+   "${RUN_ROOT##*/}" == "${RUN_ID}" ]] ||
+  fail "read-only H5AD obs audit run identity is invalid"
+RUN_ROOT_REAL="$(realpath -e "${RUN_ROOT}" 2>/dev/null || realpath "${RUN_ROOT}" 2>/dev/null)" ||
+  fail "could not canonicalize audit run root"
+[[ "${RUN_ROOT_REAL}" == "${RUN_ROOT}" ]] ||
+  fail "audit run root is not canonical"
+
+RUN_SOURCE_MANIFEST="${RUN_ROOT}/manifests/source.manifest"
+RUN_RUNTIME_IDENTITY="${RUN_ROOT}/manifests/runtime.identity"
+[[ -f "${RUN_SOURCE_MANIFEST}" && ! -L "${RUN_SOURCE_MANIFEST}" &&
+   -r "${RUN_SOURCE_MANIFEST}" &&
+   -f "${RUN_RUNTIME_IDENTITY}" && ! -L "${RUN_RUNTIME_IDENTITY}" &&
+   -r "${RUN_RUNTIME_IDENTITY}" ]] ||
+  fail "run-bound source/runtime identity manifests are missing or unsafe"
+ecoda_validate_run_owned_path "${RUN_SOURCE_MANIFEST}" "${RUN_ROOT}" ||
+  fail "run-bound source manifest is not run-owned"
+ecoda_validate_run_owned_path "${RUN_RUNTIME_IDENTITY}" "${RUN_ROOT}" ||
+  fail "run-bound runtime identity is not run-owned"
+cmp -s "${RUN_SOURCE_MANIFEST}" "${SOURCE_MANIFEST}" ||
+  fail "run-bound source manifest differs from immutable source manifest"
+
+IDENTITY_IMAGE="$(_ecoda_runtime_require_identity_value \
+  "${RUN_RUNTIME_IDENTITY}" RUNTIME_IMAGE)" ||
+  fail "run runtime identity lacks RUNTIME_IMAGE"
+IDENTITY_MANIFEST="$(_ecoda_runtime_require_identity_value \
+  "${RUN_RUNTIME_IDENTITY}" RUNTIME_MANIFEST)" ||
+  fail "run runtime identity lacks RUNTIME_MANIFEST"
+[[ "${IDENTITY_IMAGE}" = /* && "${IDENTITY_MANIFEST}" = /* &&
+   "${ECODA_RUNTIME_IMAGE:-}" == "${IDENTITY_IMAGE}" &&
+   "${ECODA_RUNTIME_MANIFEST:-}" == "${IDENTITY_MANIFEST}" ]] ||
+  fail "runtime paths do not match run-bound runtime identity"
+[[ -f "${IDENTITY_IMAGE}" && ! -L "${IDENTITY_IMAGE}" &&
+   -f "${IDENTITY_MANIFEST}" && ! -L "${IDENTITY_MANIFEST}" ]] ||
+  fail "run-bound runtime image or manifest is missing or unsafe"
+
+export ECODA_RUN_ROOT="${RUN_ROOT}" ECODA_RUN_ID="${RUN_ID}"
+export ECODA_SOURCE_ROOT="${SOURCE_ROOT}"
+export ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST}"
+export ECODA_SOURCE_SNAPSHOT_REQUIRED=1
+export ECODA_RUNTIME_IMAGE="${IDENTITY_IMAGE}"
+export ECODA_RUNTIME_MANIFEST="${IDENTITY_MANIFEST}"
+export ECODA_RUNTIME_IDENTITY="${RUN_RUNTIME_IDENTITY}"
+export ECODA_AUX_ROOT="${SOURCE_ROOT%/}/aux"
+export ECODA_RUNTIME_PROFILE="${AUDIT_RUNTIME_STAGE}"
+PROJECT_ROOT="${SOURCE_ROOT}"
+DATASETS_JSON_FILE="${SOURCE_ROOT}/datasets.json"
+export PROJECT_ROOT DATASETS_JSON_FILE
+
+if [[ "${ECODA_RUNTIME_IN_CONTAINER:-0}" != "1" &&
+      "${ECODA_RUNTIME_MODE:-host}" == "host" ]]; then
+  ecoda_runtime_validate_bound_run ||
+    fail "run-bound runtime validation failed"
+fi
+
+WORKER_SCRIPT="${SOURCE_ROOT}/src/utils/bash/h5ad_obs_audit_worker.sh"
+WORKER_SCRIPT="$(ecoda_require_source_script_path "${WORKER_SCRIPT}" "${SOURCE_ROOT}")" ||
+  fail "obs audit worker escaped immutable source root"
+ecoda_runtime_reexec_worker "${AUDIT_RUNTIME_STAGE}" "${WORKER_SCRIPT}" ||
+  fail "could not enter immutable audit runtime"
+if [[ "${AUDIT_MODE}" == metadata ]]; then
+  METADATA_MANIFEST="${H5AD_METADATA_EXPORT_MANIFEST:-}"
+  STATUS_DIR="${H5AD_METADATA_EXPORT_STATUS_DIR:-}"
+  TASK_ID="${SLURM_ARRAY_TASK_ID:-${H5AD_METADATA_EXPORT_TASK_ID:-}}"
+  [[ -n "${METADATA_MANIFEST}" && -r "${METADATA_MANIFEST}" &&
+     ! -L "${METADATA_MANIFEST}" ]] ||
+    fail "metadata export manifest is missing or unsafe"
+  [[ -n "${STATUS_DIR}" && "${STATUS_DIR}" = /* &&
+     ! -L "${STATUS_DIR}" &&
+     "${TASK_ID}" =~ ^[0-9]+$ && ${TASK_ID} -gt 0 ]] ||
+    fail "metadata export requires a run-owned status directory and task ID"
+  ecoda_validate_run_owned_path "${METADATA_MANIFEST}" "${RUN_ROOT}" ||
+    fail "metadata export manifest is not run-owned"
+  ecoda_validate_manifest "${METADATA_MANIFEST}" 4 ||
+    fail "metadata export manifest is malformed"
+  mkdir -p "${STATUS_DIR}"
+  ecoda_validate_run_owned_path "${STATUS_DIR}" "${RUN_ROOT}" ||
+    fail "metadata export status directory is not run-owned"
+  row="$(sed -n "${TASK_ID}p" "${METADATA_MANIFEST}")"
+  IFS=$'\t' read -r row_dataset row_view row_input row_output row_extra <<< "${row}"
+  [[ -n "${row_dataset}" && "${row_view}" == "batch_effect_uncorrected" &&
+     -n "${row_input}" &&
+     "${row_output}" = "${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final/metadata/${row_dataset}_sample_metadata.feather" &&
+     -z "${row_extra}" ]] ||
+    fail "metadata export row is not a final uncorrected binding"
+  [[ "${row_dataset}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] ||
+    fail "metadata export dataset is not a safe path component"
+  [[ -f "${row_input}" && ! -L "${row_input}" && -r "${row_input}" ]] ||
+    fail "metadata export H5AD input is missing or unsafe: ${row_input}"
+  EXPORTER="${SOURCE_ROOT}/src/utils/py/export_h5ad_sample_metadata.py"
+  EXPORTER="$(ecoda_require_source_script_path "${EXPORTER}" "${SOURCE_ROOT}")" ||
+    fail "metadata exporter escaped immutable source root"
+  mkdir -p "$(dirname "${row_output}")"
+  [[ ! -L "${row_output}" && ! -L "${row_output}.md5" ]] ||
+    fail "metadata export output is a symlink"
+  status_kind="EXPORTED"
+  if "${PYTHON_BIN}" "${EXPORTER}" \
+      --config "${DATASETS_JSON_FILE}" --dataset "${row_dataset}" \
+      --view "${row_view}" --input-file "${row_input}" \
+      --output "${row_output}" --check >/dev/null 2>&1; then
+    status_kind="NOOP_VALIDATED"
+  else
+    "${PYTHON_BIN}" "${EXPORTER}" \
+      --config "${DATASETS_JSON_FILE}" --dataset "${row_dataset}" \
+      --view "${row_view}" --input-file "${row_input}" \
+      --output "${row_output}" ||
+      fail "metadata export failed for ${row_dataset}"
+  fi
+  ecoda_validate_checksum "${row_output}" ||
+    fail "metadata export checksum is invalid: ${row_output}"
+  safe="$(_ecoda_safe_component "${row_dataset}__${row_view}")"
+  ecoda_atomic_write "${STATUS_DIR}/${safe}.status" \
+    "STATE=OK\nSTATUS=${status_kind}\nRUN_ID=${RUN_ID}\nDATASET=${row_dataset}\nVIEW=${row_view}\nTASK_ID=${TASK_ID}\nINPUT_FILE=${row_input}\nOUTPUT_FILE=${row_output}\n"
+  printf 'H5AD_METADATA_EXPORT=%s\n' "${row_output}"
+  exit 0
+fi
+
+
+# A scheduler array supplies one manifest row per view.  A direct invocation
+# without a manifest remains useful for diagnostics and runs both views, but
+# never does so when a row-isolated task binding is present.
+INPUT_FILE="${H5AD_OBS_AUDIT_INPUT_FILE:-${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad}"
+EXPECTED_INPUT="${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
+[[ "${INPUT_FILE}" == "${EXPECTED_INPUT}" ]] ||
+  fail "Covid obs audit input path is not the configured direct source"
+[[ -f "${INPUT_FILE}" && ! -L "${INPUT_FILE}" && -r "${INPUT_FILE}" ]] ||
+  fail "Covid direct H5AD input is missing or unsafe: ${INPUT_FILE}"
+
+OUTPUT_ROOT="${H5AD_OBS_AUDIT_OUTPUT_ROOT:-${RUN_ROOT}/preflight}"
+[[ "${OUTPUT_ROOT}" = /* ]] || fail "obs audit output root must be absolute"
+[[ "${OUTPUT_ROOT}" == "${RUN_ROOT}/preflight" ]] ||
+  fail "obs audit output root must be the run-owned preflight directory"
+mkdir -p "${OUTPUT_ROOT}"
+[[ ! -L "${OUTPUT_ROOT}" ]] || fail "obs audit output root must not be a symlink"
+ecoda_validate_run_owned_path "${OUTPUT_ROOT}" "${RUN_ROOT}" ||
+  fail "obs audit output root is not run-owned"
+
+AUDIT_MANIFEST="${H5AD_OBS_AUDIT_MANIFEST:-${H5AD_PREFLIGHT_MANIFEST:-}}"
+STATUS_DIR="${H5AD_OBS_AUDIT_STATUS_DIR:-${H5AD_PREFLIGHT_STATUS_DIR:-}}"
+TASK_ID="${SLURM_ARRAY_TASK_ID:-${H5AD_OBS_AUDIT_TASK_ID:-${H5AD_PREFLIGHT_TASK_ID:-}}}"
+VIEWS=()
+STATUS_FILE=""
+if [[ -n "${AUDIT_MANIFEST}" ]]; then
+  [[ -n "${STATUS_DIR}" && "${TASK_ID}" =~ ^[0-9]+$ && ${TASK_ID} -gt 0 ]] ||
+    fail "row-isolated obs audit requires manifest, status directory, and task ID"
+  [[ -r "${AUDIT_MANIFEST}" && ! -L "${AUDIT_MANIFEST}" ]] ||
+    fail "obs audit manifest is missing or unsafe"
+  ecoda_validate_run_owned_path "${AUDIT_MANIFEST}" "${RUN_ROOT}" ||
+    fail "obs audit manifest is not run-owned"
+  ecoda_validate_manifest "${AUDIT_MANIFEST}" 3 ||
+    fail "obs audit manifest is malformed"
+  [[ "${STATUS_DIR}" = /* && ! -L "${STATUS_DIR}" ]] ||
+    fail "obs audit status directory is missing or unsafe"
+  mkdir -p "${STATUS_DIR}"
+  ecoda_validate_run_owned_path "${STATUS_DIR}" "${RUN_ROOT}" ||
+    fail "obs audit status directory is not run-owned"
+  row="$(sed -n "${TASK_ID}p" "${AUDIT_MANIFEST}")"
+  IFS=$'\t' read -r row_dataset row_view row_input row_extra <<< "${row}"
+  [[ "${row_dataset}" == "Covid19_PBMC" &&
+     ( "${row_view}" == "batch_effect_uncorrected" ||
+       "${row_view}" == "batch_effect_corrected" ) &&
+     "${row_input}" == "${INPUT_FILE}" && -z "${row_extra}" ]] ||
+    fail "obs audit manifest row is not the approved direct Covid binding"
+  VIEWS=("${row_view}")
+  safe="$(_ecoda_safe_component "${row_dataset}__${row_view}")"
+  STATUS_FILE="${STATUS_DIR}/${safe}.status"
+else
+  VIEWS=(batch_effect_uncorrected batch_effect_corrected)
+fi
+
+[[ -x "${PYTHON_BIN}" ]] || fail "immutable runtime Python is unavailable: ${PYTHON_BIN}"
+for view in "${VIEWS[@]}"; do
+  report="${OUTPUT_ROOT}/Covid19_PBMC_${view}.json"
+  "${PYTHON_BIN}" "${SOURCE_ROOT}/src/3_scrnaseq_preprocessing/1.0_audit_input_views.py" \
+    --config "${SOURCE_ROOT}/datasets.json" \
+    --input-file "${INPUT_FILE}" \
+    --output-root "${OUTPUT_ROOT}" \
+    --output "${report}" \
+    --view "${view}" --ds-name Covid19_PBMC --obs-only
+  [[ -s "${report}" && ! -L "${report}" && -s "${report}.md5" &&
+     ! -L "${report}.md5" ]] || fail "obs audit report or checksum is missing: ${report}"
+  ecoda_validate_run_owned_path "${report}" "${RUN_ROOT}" ||
+    fail "obs audit report is not run-owned: ${report}"
+  ecoda_validate_run_owned_path "${report}.md5" "${RUN_ROOT}" ||
+    fail "obs audit checksum is not run-owned: ${report}.md5"
+  ecoda_validate_checksum "${report}" ||
+    fail "obs audit report checksum is invalid: ${report}"
+  if [[ -n "${STATUS_FILE}" ]]; then
+    ecoda_atomic_write "${STATUS_FILE}" \
+      "STATE=OK\nRUN_ID=${RUN_ID}\nDATASET=Covid19_PBMC\nVIEW=${view}\nTASK_ID=${TASK_ID}\nINPUT_FILE=${INPUT_FILE}\nREPORT=${report}\n"
+  fi
+done
+for view in "${VIEWS[@]}"; do
+  printf 'H5AD_OBS_AUDIT_REPORT=%s\n' "${OUTPUT_ROOT}/Covid19_PBMC_${view}.json"
+done

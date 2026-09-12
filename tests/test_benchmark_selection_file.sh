@@ -3,7 +3,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 unset HPC_SCRATCH_DIR ECODA_SOURCE_ROOT ECODA_SOURCE_MANIFEST \
   ECODA_SOURCE_SNAPSHOT_REQUIRED ECODA_RUNTIME_IMAGE ECODA_RUNTIME_MANIFEST \
-  ECODA_RUNTIME_IDENTITY ECODA_RUN_ROOT ECODA_RUN_ID
+  ECODA_RUNTIME_IDENTITY ECODA_RUN_ROOT ECODA_RUN_ID \
+  ANALYSIS_VARIANT ANALYSIS_PASS ANALYSIS_ROOT ANALYSIS_NAS_ROOT \
+  ANALYSIS_LOG_PREFIX
 source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1 || true
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ecoda-selection.XXXXXX")"
 TMP_DIR="$(cd "${TMP_DIR}" && pwd -P)"
@@ -143,3 +145,87 @@ test "$(grep -c -- '--array=1-2' "${CAPTURE}")" = 1
 test "$(grep -c -- '--array=1-5' "${CAPTURE}")" = 1
 test "$(grep -c 'matrix_gate.sh' "${CAPTURE}")" = 1
 echo "exact benchmark selection and aliases: OK"
+expect_submit_failure() {
+  local label="$1"
+  shift
+  local before output
+  before="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
+  if output="$(
+    HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+      BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
+      bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+      "$@" 2>&1
+  )"; then
+    echo "expected Stage 5 selection failure: ${label}" >&2
+    exit 1
+  fi
+  if [[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" != "${before}" ]]; then
+    echo "invalid Stage 5 selection reached scheduler: ${label}" >&2
+    printf '%s\n' "${output}" >&2
+    exit 1
+  fi
+}
+
+NAS_ROOT="${TMP_DIR}/nas/project"
+mkdir -p "${NAS_ROOT}"
+export NAS_TARGET_DIR="${NAS_ROOT}"
+FINAL_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot"
+FINAL_SELECTION="${TMP_DIR}/final-selection.tsv"
+printf 'Covid19_PBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' \
+  > "${FINAL_SELECTION}"
+
+FINAL_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+    BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
+    bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${FINAL_SELECTION}" \
+    --pass uncorrected \
+    --analysis-variant final \
+    --methods "${FINAL_METHODS}"
+)"
+FINAL_RUN_ID="$(printf '%s\n' "${FINAL_OUTPUT}" | sed -n 's/^BATCH_EFFECT_RUN_ID=//p')"
+test -n "${FINAL_RUN_ID}"
+FINAL_RUN_ROOT="${HPC_ROOT}/_ecoda_runs/${FINAL_RUN_ID}"
+FINAL_RUN_SELECTION="${FINAL_RUN_ROOT}/manifests/selection.tsv"
+test "$(cat "${FINAL_RUN_SELECTION}")" = "$(cat "${FINAL_SELECTION}")"
+test "$(wc -l < "${FINAL_RUN_SELECTION}" | tr -d '[:space:]')" = 4
+FINAL_METADATA="${FINAL_RUN_ROOT}/metadata"
+grep -q '^ANALYSIS_VARIANT=final$' "${FINAL_METADATA}"
+grep -q '^ANALYSIS_ROOT=.*/batch_effect/uncorrected_final$' "${FINAL_METADATA}"
+grep -q "^ANALYSIS_NAS_ROOT=${NAS_ROOT}/batch_effect/uncorrected_final$" "${FINAL_METADATA}"
+grep -q '^ANALYSIS_PASS=uncorrected$' "${FINAL_METADATA}"
+grep -q '^PASS=uncorrected$' "${FINAL_METADATA}"
+grep -q '^ROOT=.*/batch_effect/uncorrected_final$' "${FINAL_METADATA}"
+grep -q '^ANALYSIS_LOG_PREFIX=execution_times_batch_effect_uncorrected_final_$' \
+  "${FINAL_METADATA}"
+FINAL_PENDING="$(sed -n 's/^PENDING_SELECTION=//p' "${FINAL_METADATA}")"
+test -s "${FINAL_PENDING}"
+test "$(wc -l < "${FINAL_PENDING}" | tr -d '[:space:]')" = 28
+grep -q 'ANALYSIS_ROOT=.*/batch_effect/uncorrected_final' "${CAPTURE}"
+if grep -Eq 'ANALYSIS_ROOT=.*/batch_effect/uncorrected(,|$)' "${CAPTURE}"; then
+  echo "final worker selection leaked the legacy analysis root" >&2
+  exit 1
+fi
+expect_submit_failure "final variant without explicit selection" \
+  --pass uncorrected --analysis-variant final --methods "${FINAL_METHODS}"
+expect_submit_failure "final variant with broad dataset selection" \
+  --datasets Covid19_PBMC --pass uncorrected --analysis-variant final \
+  --methods "${FINAL_METHODS}"
+expect_submit_failure "final variant with corrected pass" \
+  --selection-file "${FINAL_SELECTION}" --pass corrected \
+  --analysis-variant final --methods "${FINAL_METHODS}"
+expect_submit_failure "final variant with ordinary selection" \
+  --selection-file "${TMP_DIR}/selection.tsv" --analysis-variant final \
+  --methods "${FINAL_METHODS}"
+expect_submit_failure "final variant with forbidden method" \
+  --selection-file "${FINAL_SELECTION}" --pass uncorrected \
+  --analysis-variant final \
+  --methods "prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,mofa"
+expect_submit_failure "final variant with ordinary analyses" \
+  --selection-file "${FINAL_SELECTION}" --pass uncorrected \
+  --analysis-variant final --analyses trans
+expect_submit_failure "final variant with exact historical mode" \
+  --selection-file "${FINAL_SELECTION}" --pass uncorrected \
+  --analysis-variant final --exact-batch-selection
+
+echo "final benchmark variant selection contract: OK"

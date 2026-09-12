@@ -287,13 +287,23 @@ force <- isTRUE(args[["force"]]) || identical(args[["force"]], "TRUE")
 config <- read_datasets_json(args$config_path, view = args$view)
 ds <- args$ds_name
 analysis_pass <- args[["analysis_pass"]]
+analysis_variant <- Sys.getenv("ANALYSIS_VARIANT", unset = "")
+if (!analysis_variant %in% c("", "final")) {
+  stop("Unknown analysis variant: ", analysis_variant)
+}
+if (identical(analysis_variant, "final") &&
+    !identical(analysis_pass, "uncorrected")) {
+  stop("final analysis variant requires the uncorrected batch-effect pass")
+}
 if (!is.null(analysis_pass) && !analysis_pass %in% c("uncorrected", "corrected")) {
   stop("Unknown analysis pass: ", analysis_pass)
 }
 cache_stem <- if (is.null(analysis_pass)) {
   ds
 } else {
-  paste0(ds, "_batch_effect_", analysis_pass)
+  stem <- paste0(ds, "_batch_effect_", analysis_pass)
+  if (identical(analysis_variant, "final")) stem <- paste0(stem, "_final")
+  stem
 }
 entry <- config[[ds]]
 if (is.null(entry)) {

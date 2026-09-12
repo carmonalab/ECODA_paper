@@ -21,6 +21,7 @@ selection <- value_for("--selection")
 labels_arg <- value_for("--labels", "")
 labels <- if (nzchar(labels_arg)) strsplit(labels_arg, ",", fixed = TRUE)[[1L]] else character()
 batch_pass <- value_for("--batch-pass", "")
+analysis_variant <- value_for("--analysis-variant", "")
 config_path <- value_for("--config", Sys.getenv("DATASETS_JSON_FILE", unset = ""))
 input_root <- value_for("--input-root", "")
 dataset_arg <- value_for("--dataset", "")
@@ -33,6 +34,13 @@ batch_contract_arg <- value_for("--batch-contract", "")
 source_identity_verified <- has_flag("--source-identity-verified")
 exact <- has_flag("--exact")
 batch <- nzchar(batch_pass)
+if (!analysis_variant %in% c("", "final")) {
+  stop("unknown analysis variant: ", analysis_variant)
+}
+if (identical(analysis_variant, "final") &&
+    (!batch || !identical(batch_pass, "uncorrected"))) {
+  stop("final analysis variant requires uncorrected batch-effect validation")
+}
 supported_labels <- c("gloscope", "mofa", "pseudobulk", "composition", "scitd",
                       "prepare_pseudobulk", "trans", "zeroimp")
 if (nzchar(artifact_path) && nzchar(artifact_list)) {
@@ -910,6 +918,17 @@ finite_numeric <- function(value) {
   if (is.list(value)) return(all(vapply(value, finite_numeric, logical(1L))))
   FALSE
 }
+.batch_result_stem <- function(ds) {
+  if (!batch) return(ds)
+  stem <- paste0(ds, "_batch_effect_", batch_pass)
+  if (identical(analysis_variant, "final")) {
+    if (!identical(batch_pass, "uncorrected")) {
+      stop("final analysis variant requires uncorrected batch-effect validation")
+    }
+    stem <- paste0(stem, "_final")
+  }
+  stem
+}
 
 config <- if (nzchar(config_path) && file.exists(config_path)) {
   jsonlite::fromJSON(config_path, simplifyVector = FALSE)
@@ -1768,6 +1787,19 @@ if (
 ) {
   stop("corrected batch artifact validation requires an existing --config")
 }
+if (identical(analysis_variant, "final")) {
+  if (exact) stop("final analysis variant does not support historical exact selection")
+  final_methods <- c(
+    "prepare_pseudobulk", "pseudobulk", "gloscope", "composition",
+    "mrvi", "pilot", "qot"
+  )
+  if (length(setdiff(labels, final_methods))) {
+    stop(
+      "final analysis variant has unsupported labels: ",
+      paste(setdiff(labels, final_methods), collapse = ", ")
+    )
+  }
+}
 if (batch && exact) {
   expected_rows <- paste(
     c("Alzheimer", "Breast_cancer", "Covid19_PBMC", "Kidney_KPMP_full",
@@ -1806,7 +1838,7 @@ for (part in parts) {
     }
     if (label == "prepare_pseudobulk") {
       variants <- if (batch) "hvg2000" else c("schvg2000", "hvg2000", "hvg500", "hvg2000_bl", "hvg1000", "hvg3000")
-      stem <- if (batch) paste0(ds, "_batch_effect_", batch_pass) else ds
+      stem <- .batch_result_stem(ds)
       for (variant in variants) {
         file <- file.path(root, "pseudobulks", paste0(stem, "_pseudobulk_", variant, ".rds"))
         selected_artifacts <- c(selected_artifacts, file)
@@ -1826,7 +1858,7 @@ for (part in parts) {
       selected_artifacts <- c(selected_artifacts, file)
       validate_zeroimp(file)
     } else {
-      stem <- if (batch) paste0(ds, "_batch_effect_", batch_pass) else ds
+      stem <- .batch_result_stem(ds)
       file <- file.path(root, "results", paste0(stem, "_", label, ".rds"))
       selected_artifacts <- c(selected_artifacts, file)
       required_keys <- if (batch) batch_required_keys(ds, label) else NULL

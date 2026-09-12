@@ -1789,10 +1789,14 @@ def process_dataset(args, ds_name, entry):
     os.environ["ECODA_ARTIFACT_PRODUCER"] = artifact_producer
     view_name = args.view
     analysis_pass = getattr(args, "analysis_pass", None)
+    analysis_variant = os.environ.get("ANALYSIS_VARIANT", "")
+    if analysis_variant not in ("", "final"):
+        raise ValueError(f"Unknown analysis variant: {analysis_variant!r}")
+    if analysis_variant == "final" and analysis_pass != "uncorrected":
+        raise ValueError("final analysis variant requires the uncorrected batch-effect pass")
     requested_combo = getattr(args, "combo", None)
     if requested_combo is not None and analysis_pass is not None:
         raise ValueError("--combo is only supported for ordinary benchmark runs")
-
     high_resolution_only = bool(getattr(args, "high_resolution_only", False)) or analysis_pass is not None
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1856,8 +1860,11 @@ def process_dataset(args, ds_name, entry):
 
     def output_name(suffix, n, res_label=None, extension="dists"):
         if analysis_pass is not None:
+            stem = f"{ds_name}_batch_effect_{analysis_pass}"
+            if analysis_variant == "final":
+                stem += "_final"
             return (
-                f"{ds_name}_batch_effect_{analysis_pass}_hvg{n}_highres_"
+                f"{stem}_hvg{n}_highres_"
                 f"{suffix}_{extension}.feather"
             )
         return f"{ds_name}_hvg{n}{res_label or ''}_{suffix}_{extension}.feather"

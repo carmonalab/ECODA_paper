@@ -20,6 +20,27 @@ PY_WORKER = (
     / "1.1.1_benchmark_methods_py.py"
 )
 SUBSET_SCRIPT = ROOT / "notebooks/dataset_onboarding/create_subsets_hpc.py"
+FINAL_BATCH_DATASET_ORDER = (
+    "Alzheimer",
+    "Breast_cancer",
+    "Covid19_PBMC",
+    "Kidney_KPMP_full",
+    "Diabetes",
+    "Lupus_PBMC",
+    "Lung",
+    "Joanito",
+    "Stephenson",
+)
+FINAL_BATCH_METHOD_KEYS = (
+    "ECODA_authors_HR",
+    "ECODA_seuratres_2",
+    "Pseudobulk_hvg2000",
+    "GloScope_hvg2000_pcadims30",
+    "MrVI_hvg2000",
+    "PILOT_hvg2000",
+    "QOT_hvg2000",
+    "ECODA_authors_HR_NULL",
+)
 
 
 def load_worker():
@@ -39,36 +60,147 @@ def main():
     with DATASETS.open() as handle:
         datasets = json.load(handle)
 
-    expected = {
+    expected_final_roles = {
         "Alzheimer": ("donor_id", "Cognitive status", "Subclass", "Supertype"),
         "Breast_cancer": ("sample_id", "disease", "broad_cell_type", "author_cell_type"),
         "Covid19_PBMC": ("sampleID", "CoVID-19 severity", "majorType", "celltype"),
-        "Diabetes": ("donor_id", "disease", "cell_type", "cell_type_reannotatedIntegrated"),
         "Kidney_KPMP_full": ("specimen", "condition.l1", "subclass.l1", "subclass.l3"),
-        "Lung": ("sample", "disease", "ann_coarse", "ann_fine"),
+        "Diabetes": ("donor_id", "disease", "cell_type", "cell_type_reannotatedIntegrated"),
         "Lupus_PBMC": ("sampleID", "Status", "layer1", "louvain"),
-        "Myocardial_infarction": ("orig_ident", "patient_group", "cell_type", "cell_subtype"),
-        "Parkinson": (
-            "donor_id",
-            "disease",
-            "cell_type",
-            "cell_type",
+        "Lung": ("sample", "disease", "ann_coarse", "ann_fine"),
+        "Joanito": ("sample.ID", "sample.origin", "cell.type", "cell.type_new"),
+        "Stephenson": ("Sample", "Status", "initial_clustering", "full_clustering"),
+    }
+    assert tuple(expected_final_roles) == FINAL_BATCH_DATASET_ORDER
+    assert len(FINAL_BATCH_DATASET_ORDER) == 9
+    assert len(set(FINAL_BATCH_DATASET_ORDER)) == 9
+    assert all(name in datasets for name in FINAL_BATCH_DATASET_ORDER)
+    assert tuple(
+        name for name in FINAL_BATCH_DATASET_ORDER if datasets[name]["use_for_batch_effect"]
+    ) == FINAL_BATCH_DATASET_ORDER
+    assert FINAL_BATCH_METHOD_KEYS == (
+        "ECODA_authors_HR",
+        "ECODA_seuratres_2",
+        "Pseudobulk_hvg2000",
+        "GloScope_hvg2000_pcadims30",
+        "MrVI_hvg2000",
+        "PILOT_hvg2000",
+        "QOT_hvg2000",
+        "ECODA_authors_HR_NULL",
+    )
+    final_target_outputs = {
+        "Covid19_PBMC": (
+            "Covid19_Ren2021_batch_effect_analysis_uncorrected_final_ECODAprocessed.h5ad",
+            "Covid19_Ren2021_batch_effect_analysis_corrected_final_ECODAprocessed.h5ad",
+        ),
+        "Diabetes": (
+            "diabetes_batch_effect_analysis_uncorrected_final_ECODAprocessed.h5ad",
+            "diabetes_batch_effect_analysis_corrected_final_ECODAprocessed.h5ad",
+        ),
+        "Joanito": (
+            "JoaI_2022_35773407_Nofilt_whole_batch_effect_analysis_uncorrected_final_ECODAprocessed.h5ad",
+            "JoaI_2022_35773407_Nofilt_whole_batch_effect_analysis_corrected_final_ECODAprocessed.h5ad",
+        ),
+        "Lung": (
+            "lungatlas_batch_effect_analysis_uncorrected_final_ECODAprocessed.h5ad",
+            "lungatlas_batch_effect_analysis_corrected_final_ECODAprocessed.h5ad",
         ),
     }
-    for name, roles in expected.items():
+    covid_subset = {
+        "Sampling day (Days after symptom onset)": {
+            "values": 30,
+            "op": "<=",
+            "include_values": ["control"],
+        }
+    }
+    assert datasets["Covid19_PBMC"]["views"]["batch_effect_uncorrected"]["subset_vars"] == covid_subset
+    assert datasets["Covid19_PBMC"]["views"]["batch_effect_corrected"]["subset_vars"] == covid_subset
+
+    legacy_batch_output_names = {
+        "Alzheimer": (
+            "SEAAD_Alzheimer_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+            "SEAAD_Alzheimer_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        ),
+        "Breast_cancer": (
+            "BreastCncr_processed_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+            "BreastCncr_processed_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        ),
+        "Kidney_KPMP": (
+            "Kidney_KPMP_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+            "Kidney_KPMP_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        ),
+        "Kidney_KPMP_full": (
+            "Kidney_KPMP_full_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+            "Kidney_KPMP_full_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        ),
+        "Lupus_PBMC": (
+            "Lupus_Perez2022_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+            "Lupus_Perez2022_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        ),
+        "Myocardial_infarction": (
+            "Myocardial_Infarc_2_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+            "Myocardial_Infarc_2_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        ),
+        "Parkinson": (
+            "Parkinson_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+            "Parkinson_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        ),
+        "Stephenson": (
+            "StephensonE_2021_33879890_preprocessed_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+            "StephensonE_2021_33879890_preprocessed_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        ),
+        "CombinedPBMC": (
+            "combined_pbmc_batch_effect_uncorrected_ECODAprocessed.h5ad",
+            "combined_pbmc_batch_effect_corrected_ECODAprocessed.h5ad",
+        ),
+    }
+    for name, roles in expected_final_roles.items():
         entry = datasets[name]
-        assert entry["use_for_benchmark"] is False
         assert entry["use_for_batch_effect"] is True
-        assert set(entry["views"]) == {"batch_effect_uncorrected", "batch_effect_corrected"}
-        assert entry["columns"]["batch"] is None
+        assert {"batch_effect_uncorrected", "batch_effect_corrected"} <= set(entry["views"])
         cols = entry["columns"]
         assert tuple(cols[key] for key in ("sample", "label", "cell_type_low_res", "cell_type_high_res")) == roles
-        for view_name, view in entry["views"].items():
-            assert "benchmark" not in view["output_file_name"]
-            assert view["output_file_name"].endswith(
-                "_batch_effect_analysis_"
-                f"{view_name.removeprefix('batch_effect_')}_ECODAprocessed.h5ad"
-            )
+        output_names = tuple(
+            entry["views"][view_name]["output_file_name"]
+            for view_name in ("batch_effect_uncorrected", "batch_effect_corrected")
+        )
+        if name in final_target_outputs:
+            assert output_names == final_target_outputs[name]
+        else:
+            assert output_names == legacy_batch_output_names[name]
+
+    for name in ("CombinedPBMC", "Kidney_KPMP", "Myocardial_infarction", "Parkinson"):
+        assert datasets[name]["use_for_benchmark"] is False
+        assert datasets[name]["use_for_batch_effect"] is False
+    legacy_target_output_names = {
+        "Covid19_PBMC": (
+            "Covid19_Ren2021_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+            "Covid19_Ren2021_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        ),
+        "Diabetes": (
+            "diabetes_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+            "diabetes_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        ),
+        "Joanito": (
+            "JoaI_2022_35773407_Nofilt_whole_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+            "JoaI_2022_35773407_Nofilt_whole_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        ),
+        "Lung": (
+            "lungatlas_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+            "lungatlas_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        ),
+    }
+    final_suffix = "_final_ECODAprocessed.h5ad"
+    for name, entry in datasets.items():
+        if not {"batch_effect_uncorrected", "batch_effect_corrected"} <= set(entry.get("views", {})):
+            continue
+        output_names = tuple(
+            entry["views"][view_name]["output_file_name"]
+            for view_name in ("batch_effect_uncorrected", "batch_effect_corrected")
+        )
+        assert all((final_suffix in output) == (name in final_target_outputs) for output in output_names)
+        if name in legacy_target_output_names:
+            assert output_names != legacy_target_output_names[name]
     legacy = datasets["Kidney_KPMP"]
     assert legacy["use_for_benchmark"] is False
     assert legacy["use_for_batch_effect"] is False
@@ -79,7 +211,7 @@ def main():
     assert tuple(
         full["columns"][key]
         for key in ("sample", "label", "cell_type_low_res", "cell_type_high_res")
-    ) == expected["Kidney_KPMP_full"]
+    ) == expected_final_roles["Kidney_KPMP_full"]
     for view in full["views"].values():
         assert view["input_file_name"] == "Kidney_KPMP_full.h5ad"
 
@@ -395,6 +527,7 @@ def main():
         device="cpu",
     )
     corrected_entry = worker.read_datasets_json(str(DATASETS), view="batch_effect_corrected")["Alzheimer"]
+    corrected_entry["batch_col"] = None
     try:
         worker.process_dataset(corrected_args, "Alzheimer", corrected_entry)
     except ValueError as exc:

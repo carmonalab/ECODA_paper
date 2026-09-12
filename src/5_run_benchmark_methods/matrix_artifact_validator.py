@@ -60,6 +60,38 @@ _CORRECTED_METHOD_IDENTITIES = {
     "qot": ("QOT", "embedding_consumer_harmony_v1"),
 }
 
+FINAL_BATCH_METHODS = (
+    "prepare_pseudobulk",
+    "pseudobulk",
+    "gloscope",
+    "composition",
+    "mrvi",
+    "pilot",
+    "qot",
+)
+
+
+def batch_artifact_stem(
+    ds: str,
+    batch_pass: str | None,
+    analysis_variant: str | None = None,
+) -> str:
+    """Return the single variant-qualified stem used by every batch artifact."""
+    if not batch_pass:
+        if analysis_variant:
+            raise ValueError("analysis variant requires a batch-effect pass")
+        return ds
+    if batch_pass not in {"uncorrected", "corrected"}:
+        raise ValueError(f"invalid batch pass: {batch_pass}")
+    variant = analysis_variant or ""
+    if variant not in {"", "final"}:
+        raise ValueError(f"unknown analysis variant: {variant}")
+    if variant == "final":
+        if batch_pass != "uncorrected":
+            raise ValueError("final analysis variant requires uncorrected batch pass")
+        return f"{ds}_batch_effect_uncorrected_final"
+    return f"{ds}_batch_effect_{batch_pass}"
+
 
 def _corrected_method_identity(label: str) -> tuple[str, str]:
     try:
@@ -548,15 +580,20 @@ def require_nonempty(
             if len(feature_columns) != len(ids) or feature_columns != ids:
                 raise ValueError(f"distance Feather is not square with ordered IDs: {path}")
 
-
-def expected_artifacts(root: Path, ds: str, label: str, batch: bool, batch_pass: str | None) -> list[Path]:
+def expected_artifacts(
+    root: Path,
+    ds: str,
+    label: str,
+    batch: bool,
+    batch_pass: str | None,
+    analysis_variant: str | None = None,
+) -> list[Path]:
+    stem = batch_artifact_stem(
+        ds, batch_pass if batch else None, analysis_variant if batch else None
+    )
     if label == "prepare_pseudobulk":
         if batch:
-            return [
-                root
-                / "pseudobulks"
-                / f"{ds}_batch_effect_{batch_pass or 'uncorrected'}_pseudobulk_hvg2000.rds"
-            ]
+            return [root / "pseudobulks" / f"{stem}_pseudobulk_hvg2000.rds"]
         return [
             root / "pseudobulks" / f"{ds}_pseudobulk_{variant}.rds"
             for variant in PB_VARIANTS
@@ -564,16 +601,16 @@ def expected_artifacts(root: Path, ds: str, label: str, batch: bool, batch_pass:
     if label in {"trans", "zeroimp"}:
         return [root / "results" / f"{ds}_{label}.rds"]
     if label in R_METHODS:
-        stem = f"{ds}_batch_effect_{batch_pass or 'uncorrected'}" if batch else ds
         return [root / "results" / f"{stem}_{label}.rds"]
     if label == "mrvi":
         if batch:
             return [
-                root
-                / "embeddings"
-                / f"{ds}_batch_effect_{batch_pass or 'uncorrected'}_hvg2000_highres_mrvi_dists.feather"
+                root / "embeddings" / f"{stem}_hvg2000_highres_mrvi_dists.feather"
             ]
-        return [root / "embeddings" / f"{ds}_hvg{n}_mrvi_dists.feather" for n in (1000, 2000, 3000)]
+        return [
+            root / "embeddings" / f"{ds}_hvg{n}_mrvi_dists.feather"
+            for n in (1000, 2000, 3000)
+        ]
     if label == "scpoli":
         if batch:
             raise ValueError("scPoli is not supported in batch-effect mode")
@@ -594,7 +631,7 @@ def expected_artifacts(root: Path, ds: str, label: str, batch: bool, batch_pass:
             return [
                 root
                 / "embeddings"
-                / f"{ds}_batch_effect_{batch_pass or 'uncorrected'}_hvg2000_highres_{label}_dists.feather"
+                / f"{stem}_hvg2000_highres_{label}_dists.feather"
             ]
         if label == "pilotgm":
             return [
@@ -669,6 +706,7 @@ def validate(
     producer_run_id: str | None = None,
     producer: str | None = None,
     *,
+    analysis_variant: str | None = None,
     expected_batch_contract=None,
     batch_contract=None,
 ) -> None:
@@ -693,6 +731,19 @@ def validate(
         verify_source_identity(source_identity, selection, input_root, config_path)
     if not allowed:
         raise ValueError("no selected benchmark labels")
+    if analysis_variant not in (None, "", "final"):
+        raise ValueError(f"unknown analysis variant: {analysis_variant}")
+    if analysis_variant == "final":
+        if not batch or batch_pass != "uncorrected":
+            raise ValueError(
+                "final analysis variant requires the uncorrected batch-effect pass"
+            )
+        forbidden = sorted(set(allowed) - set(FINAL_BATCH_METHODS))
+        if forbidden:
+            raise ValueError(
+                "final analysis variant has unsupported methods: "
+                + ", ".join(forbidden)
+            )
     if batch and batch_pass not in {"uncorrected", "corrected"}:
         raise ValueError("batch validation requires --batch-pass")
     corrected = batch and batch_pass == "corrected"
@@ -742,7 +793,9 @@ def validate(
                         label=f"{ds}/{view}/{label} supplied identity",
                     )
                     row_expected_batch_contract = expected_batch_contract
-            paths = expected_artifacts(root, ds, label, batch, batch_pass)
+            paths = expected_artifacts(
+                root, ds, label, batch, batch_pass, analysis_variant
+            )
             selected_paths.extend(paths)
             require_nonempty(
                 paths,
@@ -764,9 +817,14 @@ def validate_single(
     producer_run_id: str | None = None,
     *,
     corrected: bool = False,
+    analysis_variant: str | None = None,
     expected_batch_contract=None,
     batch_contract=None,
 ) -> None:
+    if analysis_variant not in (None, "", "final"):
+        raise ValueError(f"unknown analysis variant: {analysis_variant}")
+    if analysis_variant == "final" and corrected:
+        raise ValueError("final analysis variant cannot validate corrected Stage 5 artifacts")
     if (
         corrected
         and expected_batch_contract is None
@@ -808,6 +866,9 @@ def main() -> None:
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--artifact", type=Path)
     group.add_argument("--root", type=Path)
+    parser.add_argument("--analysis-variant", default=None,
+                        choices=["final"],
+                        help="variant-qualified batch artifact paths")
     parser.add_argument("--selection", type=Path)
     parser.add_argument("--labels", nargs="+")
     parser.add_argument("--batch", action="store_true")
@@ -832,6 +893,7 @@ def main() -> None:
             producer=args.producer,
             producer_run_id=args.producer_run_id,
             corrected=args.batch_pass == "corrected",
+            analysis_variant=args.analysis_variant,
             expected_batch_contract=expected_batch_contract,
             batch_contract=batch_contract,
         )
@@ -851,6 +913,7 @@ def main() -> None:
             args.source_identity_verified,
             producer_run_id=args.producer_run_id,
             producer=args.producer,
+            analysis_variant=args.analysis_variant,
             expected_batch_contract=expected_batch_contract,
             batch_contract=batch_contract,
         )

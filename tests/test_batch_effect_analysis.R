@@ -328,4 +328,508 @@ stopifnot(
   any(nmi_table$severe_collinearity)
 )
 
+final_datasets <- c(
+  "Alzheimer", "Breast_cancer", "Covid19_PBMC", "Kidney_KPMP_full",
+  "Diabetes", "Lupus_PBMC", "Lung", "Joanito", "Stephenson"
+)
+final_methods <- c(names(specs), "ECODA_authors_HR_NULL")
+final_analysis_root <- file.path(root, "uncorrected_final")
+final_results_root <- file.path(final_analysis_root, "results")
+final_embeddings_root <- file.path(final_analysis_root, "embeddings")
+final_metadata_root <- file.path(final_analysis_root, "metadata")
+dir.create(final_results_root, recursive = TRUE)
+dir.create(final_embeddings_root, recursive = TRUE)
+dir.create(final_metadata_root, recursive = TRUE)
+
+final_summary_path <- file.path(
+  final_results_root,
+  "Synthetic_batch_effect_uncorrected_final_metadata.rds"
+)
+saveRDS(summary, final_summary_path)
+.batch_write_checksum(final_summary_path)
+final_metadata_path <- file.path(final_metadata_root, "Synthetic_sample_metadata.feather")
+write_batch_metadata_sidecar(
+  metadata,
+  final_metadata_path,
+  expected_sample_ids = sample_ids
+)
+
+final_combo <- function(scale) {
+  list(
+    scores = list(sil_score = 0.5),
+    dist_mat = stats::as.dist(base_matrix * scale)
+  )
+}
+final_composition_path <- file.path(
+  final_results_root,
+  "Synthetic_batch_effect_uncorrected_final_composition.rds"
+)
+saveRDS(
+  list(
+    ECODA_authors_HR = final_combo(1.0),
+    ECODA_seuratres_2 = final_combo(1.1),
+    ECODA_authors_HR_NULL = final_combo(1.2)
+  ),
+  final_composition_path
+)
+.batch_write_checksum(final_composition_path)
+final_pseudobulk_path <- file.path(
+  final_results_root,
+  "Synthetic_batch_effect_uncorrected_final_pseudobulk.rds"
+)
+saveRDS(list(Pseudobulk_hvg2000 = final_combo(1.3)), final_pseudobulk_path)
+.batch_write_checksum(final_pseudobulk_path)
+final_gloscope_path <- file.path(
+  final_results_root,
+  "Synthetic_batch_effect_uncorrected_final_gloscope.rds"
+)
+saveRDS(list(GloScope_hvg2000_pcadims30 = final_combo(1.4)), final_gloscope_path)
+.batch_write_checksum(final_gloscope_path)
+for (suffix in c("mrvi", "pilot", "qot")) {
+  make_feather(
+    file.path(
+      final_embeddings_root,
+      paste0(
+        "Synthetic_batch_effect_uncorrected_final_hvg2000_highres_",
+        suffix, "_dists.feather"
+      )
+    ),
+    base_matrix * (1 + match(suffix, c("mrvi", "pilot", "qot")) / 20)
+  )
+}
+
+manifest_write <- function(path, lines) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  writeLines(lines, path, useBytes = TRUE)
+  normalizePath(path, mustWork = TRUE)
+}
+manifest_row <- function(values) paste(values, collapse = "\t")
+final_metadata_manifest <- manifest_write(
+  file.path(root, "final-analysis-metadata.tsv"),
+  c(
+    "dataset\tsummary_lane\tfeather_lane\tmetadata_summary_path\tmetadata_feather_path",
+    manifest_row(c(
+      "Synthetic", "final", "final",
+      "uncorrected_final/results/Synthetic_batch_effect_uncorrected_final_metadata.rds",
+      "uncorrected_final/metadata/Synthetic_sample_metadata.feather"
+    ))
+  )
+)
+final_artifact_manifest <- manifest_write(
+  file.path(root, "final-analysis-artifacts.tsv"),
+  c(
+    "dataset\tmethod\tlane\tartifact_kind\tartifact_path\tbundle_key",
+    manifest_row(c(
+      "Synthetic", "ECODA_authors_HR", "final", "rds_bundle",
+      "uncorrected_final/results/Synthetic_batch_effect_uncorrected_final_composition.rds",
+      "ECODA_authors_HR"
+    )),
+    manifest_row(c(
+      "Synthetic", "ECODA_seuratres_2", "final", "rds_bundle",
+      "uncorrected_final/results/Synthetic_batch_effect_uncorrected_final_composition.rds",
+      "ECODA_seuratres_2"
+    )),
+    manifest_row(c(
+      "Synthetic", "Pseudobulk_hvg2000", "final", "rds_bundle",
+      "uncorrected_final/results/Synthetic_batch_effect_uncorrected_final_pseudobulk.rds",
+      "Pseudobulk_hvg2000"
+    )),
+    manifest_row(c(
+      "Synthetic", "GloScope_hvg2000_pcadims30", "final", "rds_bundle",
+      "uncorrected_final/results/Synthetic_batch_effect_uncorrected_final_gloscope.rds",
+      "GloScope_hvg2000_pcadims30"
+    )),
+    manifest_row(c(
+      "Synthetic", "MrVI_hvg2000", "final", "distance_feather",
+      "uncorrected_final/embeddings/Synthetic_batch_effect_uncorrected_final_hvg2000_highres_mrvi_dists.feather",
+      ""
+    )),
+    manifest_row(c(
+      "Synthetic", "PILOT_hvg2000", "final", "distance_feather",
+      "uncorrected_final/embeddings/Synthetic_batch_effect_uncorrected_final_hvg2000_highres_pilot_dists.feather",
+      ""
+    )),
+    manifest_row(c(
+      "Synthetic", "QOT_hvg2000", "final", "distance_feather",
+      "uncorrected_final/embeddings/Synthetic_batch_effect_uncorrected_final_hvg2000_highres_qot_dists.feather",
+      ""
+    )),
+    manifest_row(c(
+      "Synthetic", "ECODA_authors_HR_NULL", "final", "rds_bundle",
+      "uncorrected_final/results/Synthetic_batch_effect_uncorrected_final_composition.rds",
+      "ECODA_authors_HR_NULL"
+    ))
+  )
+)
+
+final_metadata_frame <- read_batch_final_manifest(
+  final_metadata_manifest,
+  expected_datasets = "Synthetic",
+  expected_methods = final_methods,
+  repository_root = root
+)
+final_artifact_frame <- read_batch_final_manifest(
+  final_artifact_manifest,
+  expected_datasets = "Synthetic",
+  expected_methods = final_methods,
+  repository_root = root
+)
+stopifnot(
+  identical(attr(final_metadata_frame, "manifest_kind"), "metadata"),
+  identical(attr(final_artifact_frame, "manifest_kind"), "artifacts"),
+  all(vapply(final_metadata_frame, is.character, logical(1L))),
+  all(vapply(final_artifact_frame, is.character, logical(1L))),
+  identical(
+    final_artifact_frame$bundle_key[
+      final_artifact_frame$artifact_kind == "distance_feather"
+    ],
+    rep("", 3L)
+  )
+)
+composition_rows <- final_artifact_frame[
+  final_artifact_frame$method %in% c(
+    "ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL"
+  ),
+  ,
+  drop = FALSE
+]
+stopifnot(
+  length(unique(composition_rows$artifact_path)) == 1L,
+  identical(
+    composition_rows$bundle_key,
+    c("ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL")
+  )
+)
+loaded_final <- load_batch_uncorrected_dataset_from_manifest(
+  final_metadata_frame,
+  final_artifact_frame,
+  "Synthetic",
+  registry,
+  root
+)
+stopifnot(
+  identical(names(loaded_final$methods), final_methods),
+  identical(loaded_final$sample_ids, sample_ids),
+  identical(
+    loaded_final$methods[["Pseudobulk_hvg2000"]]$path,
+    normalizePath(final_pseudobulk_path, mustWork = TRUE)
+  ),
+  identical(
+    loaded_final$methods[["ECODA_authors_HR_NULL"]]$bundle_key,
+    "ECODA_authors_HR_NULL"
+  ),
+  identical(
+    loaded_final$methods[["ECODA_authors_HR_NULL"]]$sample_ids,
+    sample_ids
+  )
+)
+
+# A legacy null score artifact is aggregate-only and intentionally has no
+# sample-ID axis.  The explicit standalone_scores mapping permits it while
+# retaining strict final RDS/Feather checks above.
+legacy_null_path <- file.path(
+  input_root,
+  "results",
+  "Synthetic_batch_effect_uncorrected_ECODA_authors_HR_NULL.rds"
+)
+saveRDS(
+  list(scores = list(
+    anosim_score = 0.1,
+    mod_knn3_score = 0.2,
+    cluster_score = 0.3
+  )),
+  legacy_null_path
+)
+legacy_metadata_manifest <- manifest_write(
+  file.path(root, "legacy-analysis-metadata.tsv"),
+  c(
+    "dataset\tsummary_lane\tfeather_lane\tmetadata_summary_path\tmetadata_feather_path",
+    manifest_row(c(
+      "LegacySynthetic", "legacy", "legacy",
+      "uncorrected/results/Synthetic_batch_effect_uncorrected_metadata.rds",
+      "uncorrected/metadata/Synthetic_sample_metadata.feather"
+    ))
+  )
+)
+legacy_artifact_manifest <- manifest_write(
+  file.path(root, "legacy-analysis-artifacts.tsv"),
+  c(
+    "dataset\tmethod\tlane\tartifact_kind\tartifact_path\tbundle_key",
+    manifest_row(c(
+      "LegacySynthetic", "ECODA_authors_HR", "legacy", "rds_bundle",
+      "uncorrected/results/Synthetic_batch_effect_uncorrected_composition.rds",
+      "ECODA_authors_HR"
+    )),
+    manifest_row(c(
+      "LegacySynthetic", "ECODA_seuratres_2", "legacy", "rds_bundle",
+      "uncorrected/results/Synthetic_batch_effect_uncorrected_composition.rds",
+      "ECODA_seuratres_2"
+    )),
+    manifest_row(c(
+      "LegacySynthetic", "Pseudobulk_hvg2000", "legacy", "rds_bundle",
+      "uncorrected/results/Synthetic_batch_effect_uncorrected_pseudobulk.rds",
+      "Pseudobulk_hvg2000"
+    )),
+    manifest_row(c(
+      "LegacySynthetic", "GloScope_hvg2000_pcadims30", "legacy", "rds_bundle",
+      "uncorrected/results/Synthetic_batch_effect_uncorrected_gloscope.rds",
+      "GloScope_hvg2000_pcadims30"
+    )),
+    manifest_row(c(
+      "LegacySynthetic", "MrVI_hvg2000", "legacy", "distance_feather",
+      "uncorrected/embeddings/Synthetic_batch_effect_uncorrected_hvg2000_highres_mrvi_dists.feather",
+      ""
+    )),
+    manifest_row(c(
+      "LegacySynthetic", "PILOT_hvg2000", "legacy", "distance_feather",
+      "uncorrected/embeddings/Synthetic_batch_effect_uncorrected_hvg2000_highres_pilot_dists.feather",
+      ""
+    )),
+    manifest_row(c(
+      "LegacySynthetic", "QOT_hvg2000", "legacy", "distance_feather",
+      "uncorrected/embeddings/Synthetic_batch_effect_uncorrected_hvg2000_highres_qot_dists.feather",
+      ""
+    )),
+    manifest_row(c(
+      "LegacySynthetic", "ECODA_authors_HR_NULL", "legacy", "standalone_scores",
+      "uncorrected/results/Synthetic_batch_effect_uncorrected_ECODA_authors_HR_NULL.rds",
+      "scores"
+    ))
+  )
+)
+legacy_metadata_frame <- read_batch_final_manifest(
+  legacy_metadata_manifest,
+  expected_datasets = "LegacySynthetic",
+  expected_methods = final_methods,
+  repository_root = root
+)
+legacy_artifact_frame <- read_batch_final_manifest(
+  legacy_artifact_manifest,
+  expected_datasets = "LegacySynthetic",
+  expected_methods = final_methods,
+  repository_root = root
+)
+legacy_registry <- registry
+legacy_registry$dataset <- "LegacySynthetic"
+loaded_legacy <- load_batch_uncorrected_dataset_from_manifest(
+  legacy_metadata_frame,
+  legacy_artifact_frame,
+  "LegacySynthetic",
+  legacy_registry,
+  root
+)
+stopifnot(
+  identical(
+    loaded_legacy$methods[["ECODA_authors_HR_NULL"]]$artifact_kind,
+    "standalone_scores"
+  ),
+  is.null(loaded_legacy$methods[["ECODA_authors_HR_NULL"]]$sample_ids),
+  identical(
+    names(loaded_legacy$methods[["ECODA_authors_HR_NULL"]]$scores),
+    c("anosim_score", "mod_knn3_score", "cluster_score")
+  )
+)
+
+# Final RDS and distance-Feather bundles must carry the ordered sample IDs.
+bad_rds_path <- file.path(final_results_root, "bad-composition.rds")
+bad_rds_combo <- final_combo(1.0)
+bad_rds_combo$dist_mat <- stats::as.dist(unname(as.matrix(bad_rds_combo$dist_mat)))
+saveRDS(
+  setNames(
+    list(bad_rds_combo, bad_rds_combo, bad_rds_combo),
+    c("ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL")
+  ),
+  bad_rds_path
+)
+.batch_write_checksum(bad_rds_path)
+bad_rds_lines <- readLines(final_artifact_manifest, warn = FALSE)
+for (index in c(2L, 3L, 9L)) {
+  bad_rds_parts <- strsplit(bad_rds_lines[[index]], "\t", fixed = TRUE)[[1L]]
+  bad_rds_parts[[5L]] <- "uncorrected_final/results/bad-composition.rds"
+  bad_rds_lines[[index]] <- manifest_row(bad_rds_parts)
+}
+bad_rds_manifest <- manifest_write(
+  file.path(root, "bad-rds-artifacts.tsv"),
+  bad_rds_lines
+)
+bad_rds_frame <- read_batch_final_manifest(
+  bad_rds_manifest,
+  expected_datasets = "Synthetic",
+  expected_methods = final_methods,
+  repository_root = root
+)
+expect_error(
+  load_batch_uncorrected_dataset_from_manifest(
+    final_metadata_frame,
+    bad_rds_frame,
+    "Synthetic",
+    registry,
+    root
+  ),
+  "sample IDs/order mismatch"
+)
+
+bad_feather_path <- file.path(final_embeddings_root, "bad-mrvi.feather")
+arrow::write_feather(as.data.frame(base_matrix), bad_feather_path)
+.batch_write_checksum(bad_feather_path)
+bad_feather_lines <- readLines(final_artifact_manifest, warn = FALSE)
+bad_feather_parts <- strsplit(bad_feather_lines[[6L]], "\t", fixed = TRUE)[[1L]]
+bad_feather_parts[[5L]] <- "uncorrected_final/embeddings/bad-mrvi.feather"
+bad_feather_lines[[6L]] <- paste0(manifest_row(bad_feather_parts), "\t")
+bad_feather_manifest <- manifest_write(
+  file.path(root, "bad-feather-artifacts.tsv"),
+  bad_feather_lines
+)
+bad_feather_frame <- read_batch_final_manifest(
+  bad_feather_manifest,
+  expected_datasets = "Synthetic",
+  expected_methods = final_methods,
+  repository_root = root
+)
+expect_error(
+  load_batch_uncorrected_dataset_from_manifest(
+    final_metadata_frame,
+    bad_feather_frame,
+    "Synthetic",
+    registry,
+    root
+  ),
+  "distance Feather schema is not square"
+)
+
+# The physical sixth TSV field is mandatory even when its value is empty.
+bad_key_lines <- readLines(final_artifact_manifest, warn = FALSE)
+bad_key_parts <- strsplit(bad_key_lines[[8L]], "\t", fixed = TRUE)[[1L]]
+bad_key_parts[[6L]] <- "not-empty"
+bad_key_lines[[8L]] <- manifest_row(bad_key_parts)
+expect_error(
+  read_batch_final_manifest(
+    manifest_write(file.path(root, "bad-key-artifacts.tsv"), bad_key_lines),
+    expected_datasets = "Synthetic",
+    expected_methods = final_methods,
+    repository_root = root
+  ),
+  "empty bundle_key"
+)
+bad_physical_lines <- readLines(final_artifact_manifest, warn = FALSE)
+bad_physical_fields <- strsplit(bad_physical_lines[[7L]], "\t", fixed = TRUE)[[1L]]
+bad_physical_lines[[7L]] <- paste(bad_physical_fields[-length(bad_physical_fields)], collapse = "\t")
+expect_error(
+  read_batch_final_manifest(
+    manifest_write(file.path(root, "bad-physical-artifacts.tsv"), bad_physical_lines),
+    expected_datasets = "Synthetic",
+    expected_methods = final_methods,
+    repository_root = root
+  ),
+  "wrong physical field count"
+)
+bad_path_lines <- readLines(final_metadata_manifest, warn = FALSE)
+bad_path_parts <- strsplit(bad_path_lines[[2L]], "\t", fixed = TRUE)[[1L]]
+bad_path_parts[[5L]] <- "../outside.feather"
+bad_path_lines[[2L]] <- manifest_row(bad_path_parts)
+expect_error(
+  read_batch_final_manifest(
+    manifest_write(file.path(root, "bad-path-metadata.tsv"), bad_path_lines),
+    expected_datasets = "Synthetic",
+    expected_methods = final_methods,
+    repository_root = root
+  ),
+  "escapes repository root"
+)
+
+# The production final manifest has an exact mixed-source nine-dataset order.
+scope_metadata_lines <- c(
+  "dataset\tsummary_lane\tfeather_lane\tmetadata_summary_path\tmetadata_feather_path",
+  vapply(
+    final_datasets,
+    function(dataset) {
+      frozen <- dataset %in% c(
+        "Alzheimer", "Breast_cancer", "Lupus_PBMC", "Stephenson"
+      )
+      summary_lane <- if (frozen || dataset == "Kidney_KPMP_full") {
+        "legacy"
+      } else {
+        "final"
+      }
+      feather_lane <- if (frozen) "legacy" else "final"
+      manifest_row(c(
+        dataset,
+        summary_lane,
+        feather_lane,
+        paste0("scope/", dataset, "/metadata_summary.rds"),
+        paste0("scope/", dataset, "/metadata.feather")
+      ))
+    },
+    character(1L)
+  )
+)
+scope_artifact_lines <- c(
+  "dataset\tmethod\tlane\tartifact_kind\tartifact_path\tbundle_key",
+  unlist(lapply(final_datasets, function(dataset) {
+    lane <- if (dataset %in% c("Alzheimer", "Breast_cancer", "Lupus_PBMC", "Stephenson")) "legacy" else "final"
+    vapply(final_methods, function(method) {
+      kind <- if (method %in% c("MrVI_hvg2000", "PILOT_hvg2000", "QOT_hvg2000")) {
+        "distance_feather"
+      } else if (method == "ECODA_authors_HR_NULL" && lane == "legacy") {
+        "standalone_scores"
+      } else {
+        "rds_bundle"
+      }
+      key <- if (kind == "distance_feather") "" else if (kind == "standalone_scores") "scores" else method
+      path <- if (
+        lane == "final" &&
+        method %in% c("ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL")
+      ) {
+        paste0("scope/", dataset, "/composition.rds")
+      } else {
+        paste0(
+          "scope/", dataset, "/", method,
+          if (kind == "distance_feather") ".feather" else ".rds"
+        )
+      }
+      manifest_row(c(dataset, method, lane, kind, path, key))
+    }, character(1L))
+  }), use.names = FALSE)
+)
+scope_metadata_manifest <- manifest_write(
+  file.path(root, "scope-metadata.tsv"),
+  scope_metadata_lines
+)
+scope_artifact_manifest <- manifest_write(
+  file.path(root, "scope-artifacts.tsv"),
+  scope_artifact_lines
+)
+scope_metadata_frame <- read_batch_final_manifest(
+  scope_metadata_manifest,
+  expected_datasets = final_datasets,
+  expected_methods = final_methods,
+  repository_root = root
+)
+scope_artifact_frame <- read_batch_final_manifest(
+  scope_artifact_manifest,
+  expected_datasets = final_datasets,
+  expected_methods = final_methods,
+  repository_root = root
+)
+stopifnot(
+  identical(scope_metadata_frame$dataset, final_datasets),
+  identical(
+    scope_metadata_frame$summary_lane,
+    c("legacy", "legacy", "final", "legacy", "final", "legacy", "final", "final", "legacy")
+  ),
+  identical(
+    scope_metadata_frame$feather_lane,
+    c("legacy", "legacy", "final", "final", "final", "legacy", "final", "final", "legacy")
+  ),
+  identical(
+    scope_artifact_frame$dataset,
+    rep(final_datasets, each = length(final_methods))
+  ),
+  identical(
+    scope_artifact_frame$method,
+    rep(final_methods, times = length(final_datasets))
+  )
+)
+
 cat("test_batch_effect_analysis.R: all checks passed\n")
+

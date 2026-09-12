@@ -13,11 +13,13 @@ output:
 
 # Scope
 
-This exploratory pass compares the twelve canonical batch-effect cohorts using
-only the persisted `batch_effect_uncorrected` distance artifacts. It does not
-rerun preprocessing, recompute embeddings, recalculate CLR distances, read the
-legacy batch notebook inputs, or inspect corrected artifacts. Biological labels
-are evaluation metadata only.
+This final uncorrected pass compares the nine approved batch-effect cohorts in
+the exact order recorded by the mixed-source analysis manifests. Changed and
+recovered cohorts use the final Stage 5 artifacts; frozen cohorts use only
+their explicitly approved legacy result and metadata artifacts. It does not
+rerun preprocessing, read any dataset H5AD, recompute embeddings or distances,
+or write to the legacy contingency lane. Biological labels are evaluation
+metadata only.
 
 ```{r setup, message=FALSE, warning=FALSE}
 if (basename(getwd()) == "notebooks") {
@@ -44,55 +46,71 @@ detected_cores <- parallel::detectCores(logical = FALSE)
 if (is.na(detected_cores)) detected_cores <- 1L
 parallel_cores <- min(8L, max(1L, detected_cores))
 options(mc.cores = parallel_cores)
-input_root <- file.path(getwd(), "data", "batch_effect", "uncorrected")
-metadata_root <- file.path(input_root, "metadata")
-plot_root <- file.path(getwd(), "plots", "batch_effect_uncorrected")
-analysis_output_root <- file.path(input_root, "analysis")
-dir.create(plot_root, recursive = TRUE, showWarnings = FALSE)
-dir.create(analysis_output_root, recursive = TRUE, showWarnings = FALSE)
+
+analysis_root <- file.path(getwd(), "data", "batch_effect", "uncorrected_final")
+metadata_manifest_path <- file.path(analysis_root, "final_analysis_metadata.tsv")
+artifact_manifest_path <- file.path(analysis_root, "final_analysis_artifacts.tsv")
+plot_root <- file.path(getwd(), "plots", "batch_effect_uncorrected_final")
+analysis_output_root <- file.path(analysis_root, "analysis")
 
 batch_datasets <- c(
   "Alzheimer",
   "Breast_cancer",
   "Covid19_PBMC",
-  "Kidney_KPMP",
-  "Myocardial_infarction",
+  "Kidney_KPMP_full",
   "Diabetes",
   "Lupus_PBMC",
   "Lung",
-  "Parkinson",
   "Joanito",
-  "Stephenson",
-  "CombinedPBMC"
+  "Stephenson"
 )
 
 datasets <- read_datasets_json(view = "batch_effect_uncorrected")
 if (!identical(names(datasets)[match(batch_datasets, names(datasets))], batch_datasets)) {
-  stop("datasets.json does not contain the exact twelve canonical batch-effect datasets")
+  stop("datasets.json does not contain the exact nine final batch-effect datasets")
 }
 if (any(vapply(datasets[batch_datasets], function(x) is.null(x$label_col), logical(1)))) {
-  stop("one or more canonical batch-effect datasets lack a primary biological label")
+  stop("one or more final batch-effect datasets lack a primary biological label")
 }
 registry <- batch_candidate_registry(datasets, batch_datasets)
 method_specs <- batch_uncorrected_method_specs()
 selected_methods <- names(method_specs)
+null_method <- "ECODA_authors_HR_NULL"
+final_method_keys <- c(selected_methods, null_method)
 method_labels <- unname(method_label_map_main[selected_methods])
 if (anyNA(method_labels) || length(unique(method_labels)) != length(selected_methods)) {
   stop("selected methods are not covered by method_label_map_main")
 }
+metadata_manifest <- read_batch_final_manifest(
+  metadata_manifest_path,
+  expected_datasets = batch_datasets,
+  expected_methods = final_method_keys
+)
+artifact_manifest <- read_batch_final_manifest(
+  artifact_manifest_path,
+  expected_datasets = batch_datasets,
+  expected_methods = final_method_keys
+)
 method_colors <- stats::setNames(
   grDevices::hcl(seq(15, 375, length.out = length(selected_methods) + 1L)[-1L], l = 65, c = 100),
   method_labels
 )
 
-
-# The preflight is intentionally before any figure work. Every sidecar, summary
-# bundle, distance matrix, sample ID, and label must validate or the pass stops.
+# The preflight is intentionally before any figure work. Both manifests are
+# required and every explicit final/legacy artifact path is loaded exactly as
+# recorded; no path is reconstructed from a common root.
 dataset_results <- lapply(batch_datasets, function(dataset) {
-  load_batch_uncorrected_dataset(input_root, metadata_root, dataset, registry)
+  load_batch_uncorrected_dataset_from_manifest(
+    metadata_manifest,
+    artifact_manifest,
+    dataset,
+    registry
+  )
 })
 names(dataset_results) <- batch_datasets
 stopifnot(identical(names(dataset_results), batch_datasets))
+dir.create(plot_root, recursive = TRUE, showWarnings = FALSE)
+dir.create(analysis_output_root, recursive = TRUE, showWarnings = FALSE)
 ```
 
 # Per-dataset sample and covariate contract
@@ -312,27 +330,38 @@ for (dataset in batch_datasets) {
     )
   }
 
-  null_bundle_path <- file.path(
-    input_root,
-    "results",
-    paste0(dataset, "_batch_effect_uncorrected_ECODA_authors_HR_NULL.rds")
-  )
-  validate_batch_artifact(null_bundle_path, "ECODA shuffled baseline RDS")
-  null_bundle <- readRDS(null_bundle_path)
-  null_scores <- null_bundle$scores
-  if (is.null(null_scores) || !all(score_names %in% names(null_scores))) {
-    stop(dataset, "/ECODA_authors_HR_NULL: persisted RDS scores lack heatmap metrics")
-  }
-  dataset_heatmap_metrics[["ECODA_authors_HR_NULL"]] <- data.frame(
-    dataset = dataset,
-    method = unname(method_label_map_main[["ECODA_authors_HR_NULL"]]),
-    score = c("ANOSIM", "Modularity", "ARI"),
-    value = as.numeric(c(
+  null_result <- dataset_result$methods[[null_method]]
+  null_scores <- null_result$scores
+  if (!is.null(null_scores) && all(score_names %in% names(null_scores))) {
+    null_heatmap_values <- as.numeric(c(
       null_scores[["anosim_score"]],
       null_scores[["mod_knn3_score"]],
       null_scores[["cluster_score"]]
-    )),
-    source = "persisted_scores",
+    ))
+    null_heatmap_source <- "persisted_scores"
+  } else {
+    if (is.null(null_result$dist_mat)) {
+      stop(dataset, "/", null_method, ": manifest null artifact has neither scores nor a distance matrix")
+    }
+    null_anosim <- compute_batch_anosim(
+      null_result$dist_mat,
+      labels,
+      permutations = n_permutations,
+      parallel = parallel_cores
+    )
+    null_heatmap_values <- as.numeric(c(
+      null_anosim$statistic,
+      calc_modularity(null_result$dist_mat, labels, 3),
+      clust_eval(null_result$dist_mat, labels)
+    ))
+    null_heatmap_source <- "persisted_distance"
+  }
+  dataset_heatmap_metrics[[null_method]] <- data.frame(
+    dataset = dataset,
+    method = unname(method_label_map_main[[null_method]]),
+    score = c("ANOSIM", "Modularity", "ARI"),
+    value = null_heatmap_values,
+    source = null_heatmap_source,
     stringsAsFactors = FALSE
   )
 
@@ -549,7 +578,7 @@ row.names(scores) <- NULL
 funky_metric_data <- do.call(rbind, funky_metric_tables)
 build_batch_funky_heatmap(
   funky_metric_data,
-  file.path(plot_root, "batch_effect_uncorrected_funkyheatmap.pdf")
+  file.path(plot_root, "batch_effect_uncorrected_final_funkyheatmap.pdf")
 )
 
 decomposition <- do.call(rbind, decomposition_tables)
@@ -557,31 +586,31 @@ nmi <- do.call(rbind, nmi_tables)
 
 write_batch_analysis_table(
   scores,
-  file.path(analysis_output_root, "batch_effect_uncorrected_scores.csv")
+  file.path(analysis_output_root, "batch_effect_uncorrected_final_scores.csv")
 )
 write_batch_analysis_table(
   decomposition,
-  file.path(analysis_output_root, "batch_effect_uncorrected_decomposition.csv")
+  file.path(analysis_output_root, "batch_effect_uncorrected_final_decomposition.csv")
 )
 write_batch_analysis_table(
   nmi,
-  file.path(analysis_output_root, "batch_effect_uncorrected_nmi.csv")
+  file.path(analysis_output_root, "batch_effect_uncorrected_final_nmi.csv")
 )
 
 stopifnot(
   identical(sort(unique(scores$dataset)), sort(batch_datasets)),
   identical(sort(unique(scores$method)), sort(selected_methods)),
   all(vapply(list(
-    file.path(analysis_output_root, "batch_effect_uncorrected_scores.csv"),
-    file.path(analysis_output_root, "batch_effect_uncorrected_decomposition.csv"),
-    file.path(analysis_output_root, "batch_effect_uncorrected_nmi.csv")
+    file.path(analysis_output_root, "batch_effect_uncorrected_final_scores.csv"),
+    file.path(analysis_output_root, "batch_effect_uncorrected_final_decomposition.csv"),
+    file.path(analysis_output_root, "batch_effect_uncorrected_final_nmi.csv")
   ), function(path) validate_batch_artifact(path, "analysis table")[["path"]] == normalizePath(path), logical(1)))
 )
 ```
 
 # Outputs
 
-The pass writes six base exploratory PDFs per canonical dataset:
+The pass writes six PDFs per final dataset:
 
 - `<dataset>_mds.pdf`
 - `<dataset>_anosim.pdf`
@@ -590,17 +619,16 @@ The pass writes six base exploratory PDFs per canonical dataset:
 - `<dataset>_permanova_joint.pdf`
 - `<dataset>_nmi.pdf`
 
-
 The batch-level funky heatmap is written as
-`plots/batch_effect_uncorrected/batch_effect_uncorrected_funkyheatmap.pdf`.
+`plots/batch_effect_uncorrected_final/batch_effect_uncorrected_final_funkyheatmap.pdf`.
 It follows the Figure 2A layout with overall, per-dataset, and per-metric
 normalized score columns; runtime is intentionally excluded.
 
-Its metric columns are ANOSIM, Modularity, and ARI; the displayed methods also
-include the persisted `Shuffled_baseline` scores from
-`ECODA_authors_HR_NULL`.
+Its metric columns are ANOSIM, Modularity, and ARI; the seven displayed methods
+also include the persisted `Shuffled_baseline` scores from the explicit
+`ECODA_authors_HR_NULL` manifest rows.
 
 The normalized score, global decomposition, and metadata-only NMI tables are
-written under `data/batch_effect/uncorrected/analysis/`, each with an atomic
-`MD5/SIZE/PATH` sidecar. Invalid or non-estimable candidates remain in the
-score tables with their status and warning; they are never plotted as zero.
+written under `data/batch_effect/uncorrected_final/analysis/`, each with an
+atomic `MD5/SIZE/PATH` sidecar. Invalid or non-estimable candidates remain in
+the score tables with their status and warning; they are never plotted as zero.

@@ -26,6 +26,10 @@ MAX_MEMORY="500G"
 PARTITION="${SLURM_PARTITION}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 RUNTIME_EXPORT=""
+STAGE3_FINAL_TARGET_SELECTION=0
+STAGE3_COVID_PREFLIGHT_REQUIRED=0
+STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED="${STAGE3_COVID_PREFLIGHT_ROOT:-${ECODA_COVID_PREFLIGHT_ROOT:-}}"
+STAGE3_COVID_PREFLIGHT_ROOT=""
 
 usage() {
   cat <<'EOF'
@@ -36,7 +40,8 @@ Usage: 1_submit_hpc_array.sh [--datasets LIST] [--views LIST]
 
 Each manifest row is DATASET<TAB>VIEW. --ds_name and --view remain accepted
 as compatibility aliases for one dataset/view selection. Exact batch mode
-requires the immutable twelve-row uncorrected selection file.
+requires the immutable twelve-row uncorrected selection file. A headerless
+eight-row manifest is reserved for the approved final Stage 3 target matrix.
 EOF
 }
 
@@ -310,6 +315,274 @@ validate_external_selection() {
     case " ${seen} " in *" ${row} "*) return 1 ;; esac
     seen="${seen} ${row}"
   done < "${selection}"
+}
+
+stage3_validate_final_target_selection() {
+  local selection="${1:-}" count=0 ds view expected_ds expected_view line
+  local expected_datasets=(
+    Covid19_PBMC
+    Covid19_PBMC
+    Diabetes
+    Diabetes
+    Joanito
+    Joanito
+    Lung
+    Lung
+  )
+  local expected_views=(
+    batch_effect_uncorrected
+    batch_effect_corrected
+    batch_effect_uncorrected
+    batch_effect_corrected
+    batch_effect_uncorrected
+    batch_effect_corrected
+    batch_effect_uncorrected
+    batch_effect_corrected
+  )
+  [[ -r "${selection}" ]] || return 1
+  ecoda_validate_manifest "${selection}" 2 || return 1
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    IFS=$'\t' read -r ds view <<< "${line}"
+    count=$((count + 1))
+    expected_ds="${expected_datasets[$((count - 1))]:-}"
+    expected_view="${expected_views[$((count - 1))]:-}"
+    [[ "${ds}" == "${expected_ds}" && "${view}" == "${expected_view}" ]] || {
+      echo "ERROR: eight-row Stage 3 selection row ${count} is not an approved final target." >&2
+      return 1
+    }
+  done < "${selection}"
+  [[ ${count} -eq 8 ]] || {
+    echo "ERROR: final Stage 3 target selection requires exactly eight rows." >&2
+    return 1
+  }
+  STAGE3_FINAL_TARGET_SELECTION=1
+}
+
+stage3_selection_is_final_candidate() {
+  local selection="${1:-}" ds view extra line target=0 non_target=0
+  [[ -r "${selection}" ]] || return 1
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    IFS=$'\t' read -r ds view extra <<< "${line}"
+    [[ -n "${ds}" && -n "${view}" && -z "${extra}" ]] || return 1
+    case "${ds}" in
+      Covid19_PBMC|Diabetes|Joanito|Lung) target=1 ;;
+      *) non_target=1 ;;
+    esac
+  done < "${selection}"
+  [[ ${target} -eq 1 && ${non_target} -eq 0 ]]
+}
+stage3_validate_covid_obs_report() {
+  local view="$1" report expected_rule actual_rule input_path actual_md5 actual_size
+  local preflight_root="${STAGE3_COVID_PREFLIGHT_ROOT:-}"
+  local config="${ECODA_SOURCE_ROOT:-}/datasets.json"
+  [[ "${ECODA_RUN_ROOT:-}" = /* && -d "${ECODA_RUN_ROOT}" &&
+     ! -L "${ECODA_RUN_ROOT}" ]] || return 1
+  [[ "${preflight_root}" = "${ECODA_RUN_ROOT}/preflight" &&
+     -d "${preflight_root}" && ! -L "${preflight_root}" ]] || {
+    echo "ERROR: final Stage 3 Covid obs preflight root is not run-bound." >&2
+    return 1
+  }
+  ecoda_validate_run_owned_path "${preflight_root}" "${ECODA_RUN_ROOT}" || {
+    echo "ERROR: Covid obs preflight root is not run-owned." >&2
+    return 1
+  }
+  report="${preflight_root}/Covid19_PBMC_${view}.json"
+  [[ -f "${report}" && ! -L "${report}" && -r "${report}" && -s "${report}" &&
+     -f "${report}.md5" && ! -L "${report}.md5" && -r "${report}.md5" &&
+     -s "${report}.md5" ]] || {
+    echo "ERROR: missing Covid ${view} obs-only preflight report/checksum: ${report}" >&2
+    return 1
+  }
+  ecoda_validate_run_owned_path "${report}" "${ECODA_RUN_ROOT}" || {
+    echo "ERROR: Covid ${view} obs-only report is not run-owned." >&2
+    return 1
+  }
+  ecoda_validate_run_owned_path "${report}.md5" "${ECODA_RUN_ROOT}" || {
+    echo "ERROR: Covid ${view} obs-only checksum is not run-owned." >&2
+    return 1
+  }
+  ecoda_validate_checksum "${report}" || {
+    echo "ERROR: invalid Covid ${view} obs-only preflight checksum: ${report}" >&2
+    return 1
+  }
+  [[ -r "${config}" && ! -L "${config}" ]] || return 1
+  expected_rule="$(jq -cS --arg view "${view}" \
+    '.Covid19_PBMC.views[$view].subset_vars' "${config}")" || return 1
+  actual_rule="$(jq -cS --arg view "${view}" \
+    '.datasets[0].subset_vars // null' "${report}")" || return 1
+  [[ "${expected_rule}" != "null" && "${actual_rule}" == "${expected_rule}" ]] || {
+    echo "ERROR: Covid ${view} obs-only report does not record the configured subset rule." >&2
+    return 1
+  }
+  input_path="${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
+  input_path="$(realpath -e "${input_path}" 2>/dev/null || true)"
+  [[ -n "${input_path}" ]] || return 1
+  [[ -f "${input_path}" && ! -L "${input_path}" && -r "${input_path}" ]] || {
+    echo "ERROR: Covid direct H5AD input is missing or unsafe: ${input_path}" >&2
+    return 1
+  }
+  actual_md5="$(ecoda_md5_file "${input_path}")" || return 1
+  actual_size="$(wc -c < "${input_path}" | tr -d '[:space:]')" || return 1
+  jq -e --arg view "${view}" \
+    --arg source "${ECODA_SOURCE_ROOT}" \
+    --arg manifest "${ECODA_SOURCE_MANIFEST}" \
+    --arg input "${input_path}" \
+    --arg md5 "${actual_md5}" --argjson size "${actual_size}" '
+      .obs_only == true and
+      .view == $view and
+      (.datasets | length) == 1 and
+      .datasets[0].dataset == "Covid19_PBMC" and
+      .datasets[0].view == $view and
+      .datasets[0].sample_column == "sampleID" and
+      .datasets[0].input_identity.path == $input and
+      .datasets[0].input_identity.md5 == $md5 and
+      .datasets[0].input_identity.size == $size and
+      .datasets[0].split_sample_count == 0 and
+      .datasets[0].configured_cardinalities.sampleID != null and
+      .datasets[0].configured_cardinalities.PatientID != null and
+      .datasets[0].sampling_day_audit.column == "Sampling day (Days after symptom onset)" and
+      (.datasets[0].sampling_day_audit.raw_unique_values | type) == "array" and
+      (.provenance.source_root == $source) and
+      (.provenance.source_manifest.path == $manifest) and
+      (.provenance.runtime_identity.path | type) == "string" and
+      (.provenance.runtime_manifest.path | type) == "string" and
+      (.provenance.runtime_image.path | type) == "string"
+    ' "${report}" >/dev/null || {
+      echo "ERROR: Covid ${view} obs-only preflight identity/predicate audit failed." >&2
+      return 1
+    }
+}
+
+stage3_validate_covid_obs_reports() {
+  stage3_validate_covid_obs_report batch_effect_uncorrected || return 1
+  stage3_validate_covid_obs_report batch_effect_corrected || return 1
+}
+
+stage3_install_covid_obs_evidence() {
+  local source_root="${STAGE3_COVID_PREFLIGHT_ROOT:-}"
+  local destination="${ECODA_RUN_ROOT}/manifests/covid_obs_preflight"
+  local manifest="${ECODA_RUN_ROOT}/manifests/covid_obs_preflight.tsv"
+  local tmp="${manifest}.build.$$"
+  local view report target digest size
+  [[ ${STAGE3_COVID_PREFLIGHT_REQUIRED} -eq 1 ]] || return 0
+  [[ "${source_root}" = /* && -d "${source_root}" && ! -L "${source_root}" ]] || return 1
+  mkdir -p "${destination}" || return 1
+  : > "${tmp}" || return 1
+  for view in batch_effect_uncorrected batch_effect_corrected; do
+    report="${source_root}/Covid19_PBMC_${view}.json"
+    target="${destination}/$(basename "${report}")"
+    stage3_copy_atomic "${report}" "${target}" || {
+      rm -f "${tmp}"
+      return 1
+    }
+    ecoda_write_checksum "${target}" || {
+      rm -f "${tmp}"
+      return 1
+    }
+    ecoda_validate_run_owned_path "${target}" "${ECODA_RUN_ROOT}" || {
+      rm -f "${tmp}"
+      return 1
+    }
+    digest="${ECODA_CHECKSUM_MD5}"
+    size="${ECODA_CHECKSUM_SIZE}"
+    printf '%s\t%s\t%s\t%s\n' "${view}" "${target}" "${digest}" "${size}" >> "${tmp}"
+  done
+  ecoda_atomic_install_manifest "${tmp}" "${manifest}" 4 || {
+    rm -f "${tmp}"
+    return 1
+  }
+  rm -f "${tmp}"
+  ecoda_write_checksum "${manifest}"
+}
+
+stage3_selection_contains_covid() {
+  local selection="${1:-}" ds view extra
+  [[ -r "${selection}" ]] || return 1
+  while IFS=$'\t' read -r ds view extra; do
+    [[ -n "${ds}" && -n "${view}" && -z "${extra}" ]] || return 1
+    [[ "${ds}" == "Covid19_PBMC" ]] && return 0
+  done < "${selection}"
+  return 1
+}
+
+stage3_run_covid_obs_preflight() {
+  local selection="${1:-}" audit_manifest="${ECODA_RUN_ROOT}/manifests/h5ad_obs_audit.tsv"
+  local audit_tmp="${audit_manifest}.build.$$"
+  local status_dir="${ECODA_RUN_ROOT}/status/h5ad_obs_audit"
+  local input_path="${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
+  local expected_root="${ECODA_RUN_ROOT}/preflight"
+  local view path status safe state status_run status_dataset status_view
+  local status_task status_path preflight_script preflight_id preflight_rc
+  local status_count=0
+  [[ ${STAGE3_FINAL_TARGET_SELECTION} -eq 1 ]] || return 0
+  stage3_selection_contains_covid "${selection}" || return 0
+  STAGE3_COVID_PREFLIGHT_REQUIRED=1
+  if [[ -n "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" &&
+        "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" != "${expected_root}" ]]; then
+    echo "ERROR: Stage 3 Covid preflight root override is not run-bound." >&2
+    return 1
+  fi
+  STAGE3_COVID_PREFLIGHT_ROOT="${expected_root}"
+  mkdir -p "${STAGE3_COVID_PREFLIGHT_ROOT}" "${status_dir}" || return 1
+  [[ ! -L "${STAGE3_COVID_PREFLIGHT_ROOT}" && ! -L "${status_dir}" ]] || return 1
+  ecoda_validate_run_owned_path "${STAGE3_COVID_PREFLIGHT_ROOT}" "${ECODA_RUN_ROOT}" || return 1
+  ecoda_validate_run_owned_path "${status_dir}" "${ECODA_RUN_ROOT}" || return 1
+  [[ -f "${input_path}" && ! -L "${input_path}" && -r "${input_path}" ]] || {
+    echo "ERROR: Covid direct H5AD input is missing or unsafe: ${input_path}" >&2
+    return 1
+  }
+  : > "${audit_tmp}" || return 1
+  printf 'Covid19_PBMC\tbatch_effect_uncorrected\t%s\n' "${input_path}" >> "${audit_tmp}"
+  printf 'Covid19_PBMC\tbatch_effect_corrected\t%s\n' "${input_path}" >> "${audit_tmp}"
+  ecoda_atomic_install_manifest "${audit_tmp}" "${audit_manifest}" 3 || {
+    rm -f "${audit_tmp}"
+    return 1
+  }
+  rm -f "${audit_tmp}"
+  ecoda_write_checksum "${audit_manifest}" || return 1
+  rm -f "${status_dir}"/*.status
+  preflight_script="$(stage3_require_source_script \
+    "${SCRIPT_DIR}/../utils/bash/h5ad_obs_audit_worker.sh")" || return 1
+  set +e
+  preflight_id="$(
+    ecoda_submit_h5ad_preflight "${audit_manifest}" "${status_dir}" \
+      "${ECODA_RUN_ROOT}" require "${PARTITION}" "${MEMORY}" "${THROTTLE}" \
+      "${LOGS_DIR}" stage3 "${preflight_script}" "${RUNTIME_EXPORT}"
+  )"
+  preflight_rc=$?
+  set -e
+  if [[ "${preflight_id}" =~ ^[0-9]+$ ]]; then
+    stage3_install_scheduler_record PREFLIGHT "${preflight_id}" || return 1
+  fi
+  [[ "${preflight_id}" =~ ^[0-9]+$ && ${preflight_rc} -eq 0 ]] || {
+    echo "ERROR: Covid obs-only preflight worker failed: job=${preflight_id:-unknown} rc=${preflight_rc}" >&2
+    return 1
+  }
+  ecoda_wait_h5ad_preflight_status_files "${audit_manifest}" "${status_dir}" || {
+    echo "ERROR: Covid obs-only preflight statuses did not settle." >&2
+    return 1
+  }
+  while IFS=$'\t' read -r ds view path; do
+    status_count=$((status_count + 1))
+    safe="$(_ecoda_safe_component "${ds}__${view}")"
+    status="${status_dir}/${safe}.status"
+    [[ -s "${status}" && ! -L "${status}" ]] || return 1
+    state="$(sed -n 's/^STATE=//p' "${status}" | head -1)"
+    status_run="$(sed -n 's/^RUN_ID=//p' "${status}" | head -1)"
+    status_dataset="$(sed -n 's/^DATASET=//p' "${status}" | head -1)"
+    status_view="$(sed -n 's/^VIEW=//p' "${status}" | head -1)"
+    status_task="$(sed -n 's/^TASK_ID=//p' "${status}" | head -1)"
+    status_path="$(sed -n 's/^INPUT_FILE=//p' "${status}" | head -1)"
+    [[ "${state}" == "OK" && "${status_run}" == "${ECODA_RUN_ID}" &&
+       "${status_dataset}" == "${ds}" && "${status_view}" == "${view}" &&
+       "${status_task}" == "${status_count}" && "${status_path}" == "${path}" ]] || {
+      echo "ERROR: malformed Covid obs-only preflight status: ${status}" >&2
+      return 1
+    }
+  done < "${audit_manifest}"
+  [[ ${status_count} -eq 2 ]] || return 1
+  stage3_validate_covid_obs_reports || return 1
+  stage3_install_covid_obs_evidence || return 1
 }
 
 validate_h5ad() {
@@ -738,6 +1011,17 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     stage3_abort "Stage 3 selection manifest is invalid"
   ecoda_validate_checksum "${MANIFEST}" ||
     stage3_abort "Stage 3 selection checksum is invalid"
+  if stage3_selection_is_final_candidate "${MANIFEST}"; then
+    stage3_validate_final_target_selection "${MANIFEST}" ||
+      stage3_abort "Stage 3 final target selection is not exactly eight rows"
+    if [[ -n "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" &&
+          "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" != "${ECODA_RUN_ROOT}/preflight" ]]; then
+      stage3_abort "Stage 3 sync-only Covid preflight root override is not run-bound"
+    fi
+    STAGE3_COVID_PREFLIGHT_ROOT="${ECODA_RUN_ROOT}/preflight"
+    stage3_validate_covid_obs_reports ||
+      stage3_abort "Stage 3 sync-only Covid obs preflight validation failed"
+  fi
   [[ -r "${PENDING_MANIFEST}" ]] ||
     stage3_abort "Stage 3 pending manifest is missing"
   ecoda_validate_run_owned_path "${PENDING_MANIFEST}" "${ECODA_RUN_ROOT}" ||
@@ -813,6 +1097,9 @@ if [[ -n "${SELECTION_FILE_ARG}" ]]; then
     echo "ERROR: Stage 3 selection file is malformed or semantically invalid." >&2
     exit 1
   }
+  if stage3_selection_is_final_candidate "${SELECTION_FILE_ARG}"; then
+    stage3_validate_final_target_selection "${SELECTION_FILE_ARG}" || exit 1
+  fi
 fi
 
 stage3_require_new_snapshot || {
@@ -907,6 +1194,8 @@ RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_RUNTIME_IDENTITY=${RUNTIME_IDENTITY},ECO
 SCHEDULER_IDS_FILE="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
 ecoda_atomic_write "${SCHEDULER_IDS_FILE}" "" ||
   stage3_abort "failed to initialize Stage 3 scheduler manifest"
+stage3_run_covid_obs_preflight "${MANIFEST}" ||
+  stage3_abort "Covid obs-only preflight failed; Stage 3 release is blocked"
 stage3_compute_validate_existing ||
   stage3_abort "Stage 3 compute-node existing-output preflight failed"
 

@@ -141,6 +141,111 @@ withTemporary({
   write_checked(composition, setNames(lapply(composition_keys, function(x) combo()), composition_keys))
   expect_ok(batch_args(composition, "composition"), "batch composition")
 
+  final_batch_args <- function(path, method) c(
+    "--artifact", path,
+    "--method", method,
+    "--dataset", "Synthetic",
+    "--view", "batch_effect_uncorrected",
+    "--batch-pass", "uncorrected",
+    "--analysis-variant", "final"
+  )
+  final_root <- file.path(directory, "uncorrected_final")
+  final_results <- file.path(final_root, "results")
+  final_cache <- file.path(final_root, "pseudobulks")
+  dir.create(final_results, recursive = TRUE)
+  dir.create(final_cache, recursive = TRUE)
+
+  final_composition <- file.path(
+    final_results,
+    "Synthetic_batch_effect_uncorrected_final_composition.rds"
+  )
+  final_composition_keys <- c(
+    "ECODA_authors_HR",
+    "ECODA_seuratres_2",
+    "ECODA_authors_HR_NULL"
+  )
+  write_checked(
+    final_composition,
+    setNames(lapply(final_composition_keys, function(x) combo()), final_composition_keys)
+  )
+  expect_ok(
+    final_batch_args(final_composition, "composition"),
+    "final composition shared bundle with explicit null key"
+  )
+
+  final_metadata <- file.path(
+    final_results,
+    "Synthetic_batch_effect_uncorrected_final_metadata.rds"
+  )
+  write_checked(
+    final_metadata,
+    list(
+      labels = structure(factor(c("A", "B")), names = c("s1", "s2")),
+      n_cells = 200,
+      n_samples = 2,
+      cells_per_sample = structure(c(100, 100), names = c("s1", "s2"))
+    )
+  )
+
+  final_pseudobulk <- file.path(
+    final_results,
+    "Synthetic_batch_effect_uncorrected_final_pseudobulk.rds"
+  )
+  write_checked(
+    final_pseudobulk,
+    list(Pseudobulk_hvg2000 = combo())
+  )
+  final_pseudobulk_cache <- file.path(
+    final_cache,
+    "Synthetic_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds"
+  )
+  write_checked(final_pseudobulk_cache, pb)
+  expect_ok(
+    final_batch_args(final_pseudobulk, "pseudobulk"),
+    "final pseudobulk result bundle"
+  )
+
+  final_selection <- file.path(directory, "final-selection.tsv")
+  write_checked_text(
+    final_selection,
+    c(
+      "Synthetic\tbatch_effect_uncorrected\tbatch_effect_uncorrected"
+    )
+  )
+  expect_ok(
+    c(
+      "--root", final_root,
+      "--selection", final_selection,
+      "--labels", "pseudobulk",
+      "--batch-pass", "uncorrected",
+      "--analysis-variant", "final"
+    ),
+    "final pseudobulk result path under results"
+  )
+  unlink(final_pseudobulk)
+  expect_fail(
+    c(
+      "--root", final_root,
+      "--selection", final_selection,
+      "--labels", "pseudobulk",
+      "--batch-pass", "uncorrected",
+      "--analysis-variant", "final"
+    ),
+    "final pseudobulk cache is not a result bundle"
+  )
+  write_checked(final_pseudobulk, list(Pseudobulk_hvg2000 = combo()))
+  expect_ok(
+    c(
+      "--root", final_root,
+      "--selection", final_selection,
+      "--labels", "composition",
+      "--batch-pass", "uncorrected",
+      "--analysis-variant", "final"
+    ),
+    "final composition result and metadata paths"
+  )
+
+
   missing_key <- file.path(directory, "gloscope-missing.rds")
   write_checked(missing_key, list(GloScope_hvg2000_pcadims30 = combo(), extra = combo()))
   expect_fail(batch_args(missing_key, "gloscope"), "extra GloScope key")

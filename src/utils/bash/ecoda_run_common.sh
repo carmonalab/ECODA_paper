@@ -1712,20 +1712,49 @@ _ecoda_output_add_scratch_nas_pair() {
   fi
 }
 
+ecoda_stage5_batch_stem() {
+  local ds="${1:-}" pass="${2:-${PASS_ARG:-${ANALYSIS_PASS:-}}}"
+  local variant="${3:-${ANALYSIS_VARIANT:-}}" stem
+  [[ -n "${ds}" && "${ds}" != *$'\n'* && "${ds}" != *$'\t'* ]] || return 1
+  if [[ -n "${pass}" ]]; then
+    stem="${ds}_batch_effect_${pass}"
+    case "${variant}" in
+      "") ;;
+      final)
+        [[ "${pass}" == "uncorrected" ]] || return 1
+        stem="${stem}_final"
+        ;;
+      *) return 1 ;;
+    esac
+  else
+    [[ -z "${variant}" ]] || return 1
+    stem="${ds}"
+  fi
+  printf '%s' "${stem}"
+}
+
 _ecoda_stage5_artifacts_for() {
   local ds="$1" view="$2" label="$3" pass="${PASS_ARG:-${ANALYSIS_PASS:-}}"
-  local root nas_root stem suffix n
+  local root nas_root stem batch_stem suffix n
   if [[ -z "${pass}" ]]; then
     case "${view}" in
       batch_effect_uncorrected) pass="uncorrected" ;;
       batch_effect_corrected) pass="corrected" ;;
     esac
   fi
+  if [[ -n "${pass}" ]]; then
+    batch_stem="$(ecoda_stage5_batch_stem "${ds}" "${pass}" "${ANALYSIS_VARIANT:-}")" ||
+      return 1
+  else
+    batch_stem="${ds}"
+  fi
   ECODA_BENCHMARK_ARTIFACTS=()
   if [[ -n "${ANALYSIS_ROOT:-}" ]]; then
     root="${ANALYSIS_ROOT}"
   elif [[ -n "${pass}" ]]; then
     root="${HPC_SCRATCH_DIR}/batch_effect/${pass}"
+    [[ "${ANALYSIS_VARIANT:-}" == final ]] &&
+      root="${HPC_SCRATCH_DIR}/batch_effect/${pass}_final"
   else
     root="${HPC_SCRATCH_DIR}/benchmark"
   fi
@@ -1733,6 +1762,7 @@ _ecoda_stage5_artifacts_for() {
     nas_root="${ANALYSIS_NAS_ROOT}"
   elif [[ -n "${pass}" && -n "${NAS_TARGET_DIR:-}" ]]; then
     nas_root="${NAS_TARGET_DIR}/batch_effect/${pass}"
+    [[ "${ANALYSIS_VARIANT:-}" == final ]] && nas_root="${NAS_TARGET_DIR}/batch_effect/${pass}_final"
   elif [[ -n "${NAS_TARGET_DIR:-}" ]]; then
     nas_root="${NAS_TARGET_DIR}/benchmark"
   else
@@ -1740,7 +1770,7 @@ _ecoda_stage5_artifacts_for() {
   fi
   if [[ "${label}" == "prepare_pseudobulk" ]]; then
     if [[ -n "${pass}" ]]; then
-      ECODA_BENCHMARK_ARTIFACTS+=("${root}/pseudobulks/${ds}_batch_effect_${pass}_pseudobulk_hvg2000.rds")
+      ECODA_BENCHMARK_ARTIFACTS+=("${root}/pseudobulks/${batch_stem}_pseudobulk_hvg2000.rds")
     else
       for stem in schvg2000 hvg2000 hvg500 hvg2000_bl hvg1000 hvg3000; do
         ECODA_BENCHMARK_ARTIFACTS+=("${root}/pseudobulks/${ds}_pseudobulk_${stem}.rds")
@@ -1750,7 +1780,7 @@ _ecoda_stage5_artifacts_for() {
     case "${label}" in
       mrvi)
         if [[ -n "${pass}" ]]; then
-          ECODA_BENCHMARK_ARTIFACTS+=("${root}/embeddings/${ds}_batch_effect_${pass}_hvg2000_highres_mrvi_dists.feather")
+          ECODA_BENCHMARK_ARTIFACTS+=("${root}/embeddings/${batch_stem}_hvg2000_highres_mrvi_dists.feather")
         else
           for n in 1000 2000 3000; do
             ECODA_BENCHMARK_ARTIFACTS+=("${root}/embeddings/${ds}_hvg${n}_mrvi_dists.feather")
@@ -1769,7 +1799,7 @@ _ecoda_stage5_artifacts_for() {
       pilot|qot)
         suffix="${label}"
         if [[ -n "${pass}" ]]; then
-          ECODA_BENCHMARK_ARTIFACTS+=("${root}/embeddings/${ds}_batch_effect_${pass}_hvg2000_highres_${suffix}_dists.feather")
+          ECODA_BENCHMARK_ARTIFACTS+=("${root}/embeddings/${batch_stem}_hvg2000_highres_${suffix}_dists.feather")
         else
           ECODA_BENCHMARK_ARTIFACTS+=("${root}/embeddings/${ds}_hvg2000_lowres_${suffix}_dists.feather")
           for n in 1000 2000 3000; do
@@ -1785,13 +1815,11 @@ _ecoda_stage5_artifacts_for() {
         ECODA_BENCHMARK_ARTIFACTS+=("${root}/results/${ds}_${label}.rds")
         ;;
       gloscope|mofa|pseudobulk|scitd)
-        stem="${ds}"
-        [[ -z "${pass}" ]] || stem="${ds}_batch_effect_${pass}"
+        stem="${batch_stem}"
         ECODA_BENCHMARK_ARTIFACTS+=("${root}/results/${stem}_${label}.rds")
         ;;
       composition)
-        stem="${ds}"
-        [[ -z "${pass}" ]] || stem="${ds}_batch_effect_${pass}"
+        stem="${batch_stem}"
         ECODA_BENCHMARK_ARTIFACTS+=("${root}/results/${stem}_composition.rds")
         ECODA_BENCHMARK_ARTIFACTS+=("${root}/results/${stem}_metadata.rds")
         ;;
@@ -1800,8 +1828,7 @@ _ecoda_stage5_artifacts_for() {
         # The submitter's method registry remains authoritative for whether
         # the row is runnable; this fallback gives the ownership layer a
         # deterministic path without broad filesystem discovery.
-        stem="${ds}"
-        [[ -z "${pass}" ]] || stem="${ds}_batch_effect_${pass}"
+        stem="${batch_stem}"
         ECODA_BENCHMARK_ARTIFACTS+=("${root}/results/${stem}_${label}.rds")
         ;;
     esac

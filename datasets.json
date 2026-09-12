@@ -128,13 +128,17 @@
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "JoaI_2022_35773407_Nofilt_whole.rds",
-        "output_file_name": "JoaI_2022_35773407_Nofilt_whole_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "output_file_name": "JoaI_2022_35773407_Nofilt_whole_batch_effect_analysis_uncorrected_final_ECODAprocessed.h5ad",
+        "subset_vars": {
+          "sample.origin": {"values": "LymphNode", "op": "notin"}
+        }
       },
       "batch_effect_corrected": {
         "input_file_name": "JoaI_2022_35773407_Nofilt_whole.rds",
-        "output_file_name": "JoaI_2022_35773407_Nofilt_whole_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "output_file_name": "JoaI_2022_35773407_Nofilt_whole_batch_effect_analysis_corrected_final_ECODAprocessed.h5ad",
+        "subset_vars": {
+          "sample.origin": {"values": "LymphNode", "op": "notin"}
+        }
       }
     }
   },
@@ -406,7 +410,7 @@
     "tissue": "Blood",
     "normal_tissue": true,
     "use_for_benchmark": false,
-    "use_for_batch_effect": true,
+    "use_for_batch_effect": false,
     "columns": {
       "sample": "Sample",
       "label": "cond",
@@ -442,7 +446,7 @@
     "columns": {
       "sample": "donor_id",
       "label": "Cognitive status",
-      "batch": null,
+      "batch": ["assay", "sex"],
       "cell_type_low_res": "Subclass",
       "cell_type_high_res": "Supertype"
     },
@@ -470,7 +474,7 @@
     "columns": {
       "sample": "sample_id",
       "label": "disease",
-      "batch": null,
+      "batch": ["assay", "sequencing_platform", "suspension_dissociation_time"],
       "cell_type_low_res": "broad_cell_type",
       "cell_type_high_res": "author_cell_type"
     },
@@ -498,20 +502,24 @@
     "columns": {
       "sample": "sampleID",
       "label": "CoVID-19 severity",
-      "batch": null,
+      "batch": "datasets",
       "cell_type_low_res": "majorType",
       "cell_type_high_res": "celltype"
     },
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "Covid19_Ren2021.h5ad",
-        "output_file_name": "Covid19_Ren2021_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "output_file_name": "Covid19_Ren2021_batch_effect_analysis_uncorrected_final_ECODAprocessed.h5ad",
+        "subset_vars": {
+          "Sampling day (Days after symptom onset)": {"values": 30, "op": "<=", "include_values": ["control"]}
+        }
       },
       "batch_effect_corrected": {
         "input_file_name": "Covid19_Ren2021.h5ad",
-        "output_file_name": "Covid19_Ren2021_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "output_file_name": "Covid19_Ren2021_batch_effect_analysis_corrected_final_ECODAprocessed.h5ad",
+        "subset_vars": {
+          "Sampling day (Days after symptom onset)": {"values": 30, "op": "<=", "include_values": ["control"]}
+        }
       }
     }
   },
@@ -554,7 +562,7 @@
     "columns": {
       "sample": "specimen",
       "label": "condition.l1",
-      "batch": null,
+      "batch": ["suspension_type", "sex"],
       "cell_type_low_res": "subclass.l1",
       "cell_type_high_res": "subclass.l3"
     },
@@ -578,11 +586,11 @@
     "tissue": "Heart",
     "normal_tissue": false,
     "use_for_benchmark": false,
-    "use_for_batch_effect": true,
+    "use_for_batch_effect": false,
     "columns": {
       "sample": "orig_ident",
       "label": "patient_group",
-      "batch": null,
+      "batch": ["batch", "patient"],
       "cell_type_low_res": "cell_type",
       "cell_type_high_res": "cell_subtype"
     },
@@ -610,20 +618,24 @@
     "columns": {
       "sample": "donor_id",
       "label": "disease",
-      "batch": null,
+      "batch": "dataset",
       "cell_type_low_res": "cell_type",
       "cell_type_high_res": "cell_type_reannotatedIntegrated"
     },
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "diabetes.h5ad",
-        "output_file_name": "diabetes_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "output_file_name": "diabetes_batch_effect_analysis_uncorrected_final_ECODAprocessed.h5ad",
+        "subset_vars": {
+          "disease": {"values": ["endocrine pancreas disorder", "type 1 diabetes mellitus"], "op": "notin"}
+        }
       },
       "batch_effect_corrected": {
         "input_file_name": "diabetes.h5ad",
-        "output_file_name": "diabetes_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "output_file_name": "diabetes_batch_effect_analysis_corrected_final_ECODAprocessed.h5ad",
+        "subset_vars": {
+          "disease": {"values": ["endocrine pancreas disorder", "type 1 diabetes mellitus"], "op": "notin"}
+        }
       }
     },
     "not_suitable_for_auto_annotation": [
@@ -642,7 +654,7 @@
     "columns": {
       "sample": "sampleID",
       "label": "Status",
-      "batch": null,
+      "batch": "batch_cov",
       "cell_type_low_res": "layer1",
       "cell_type_high_res": "louvain"
     },
@@ -670,14 +682,14 @@
     "columns": {
       "sample": "sample",
       "label": "disease",
-      "batch": null,
+      "batch": "dataset",
       "cell_type_low_res": "ann_coarse",
       "cell_type_high_res": "ann_fine"
     },
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "lungatlas.h5ad",
-        "output_file_name": "lungatlas_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "output_file_name": "lungatlas_batch_effect_analysis_uncorrected_final_ECODAprocessed.h5ad",
         "subset_vars": {
           "platform": {
             "values": [
@@ -690,12 +702,13 @@
               "lung"
             ],
             "op": "in"
-          }
+          },
+          "disease": {"values": "chronic obstructive pulmonary disease", "op": "notin"}
         }
       },
       "batch_effect_corrected": {
         "input_file_name": "lungatlas.h5ad",
-        "output_file_name": "lungatlas_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        "output_file_name": "lungatlas_batch_effect_analysis_corrected_final_ECODAprocessed.h5ad",
         "subset_vars": {
           "platform": {
             "values": [
@@ -708,7 +721,8 @@
               "lung"
             ],
             "op": "in"
-          }
+          },
+          "disease": {"values": "chronic obstructive pulmonary disease", "op": "notin"}
         }
       }
     }
@@ -720,11 +734,11 @@
     "tissue": "Brain",
     "normal_tissue": false,
     "use_for_benchmark": false,
-    "use_for_batch_effect": true,
+    "use_for_batch_effect": false,
     "columns": {
       "sample": "donor_id",
       "label": "disease",
-      "batch": null,
+      "batch": "Brain_bank",
       "cell_type_low_res": "cell_type",
       "cell_type_high_res": "cell_type"
     },

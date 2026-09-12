@@ -1,6 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+unset ANALYSIS_VARIANT ANALYSIS_PASS ANALYSIS_LOG_PREFIX
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ecoda-sync.XXXXXX")"
 TMP_DIR="$(cd "${TMP_DIR}" && pwd -P)"
 cleanup() {
@@ -427,3 +428,105 @@ rm -f "${RUNTIME_OUTPUT}" "${RUNTIME_OUTPUT}.md5"
 expect_sync_failure missing-runtime-record
 
 echo "benchmark sync owner: OK"
+
+FINAL_ANALYSIS_ROOT="${TMP_DIR}/scratch/batch_effect/uncorrected_final"
+FINAL_ANALYSIS_NAS_ROOT="${TMP_DIR}/nas/project/batch_effect/uncorrected_final"
+mkdir -p "${FINAL_ANALYSIS_ROOT}" "${FINAL_ANALYSIS_NAS_ROOT}"
+export ANALYSIS_VARIANT=final ANALYSIS_PASS=uncorrected \
+  ANALYSIS_ROOT="${FINAL_ANALYSIS_ROOT}" \
+  ANALYSIS_NAS_ROOT="${FINAL_ANALYSIS_NAS_ROOT}" \
+  ANALYSIS_LOG_PREFIX="execution_times_batch_effect_uncorrected_final_"
+
+benchmark_sync_artifacts_for Adams prepare_pseudobulk
+[[ "${SYNC_ARTIFACTS[0]}" == \
+  "${FINAL_ANALYSIS_ROOT}/pseudobulks/Adams_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds" ]]
+benchmark_sync_artifacts_for Adams pseudobulk
+[[ "${SYNC_ARTIFACTS[0]}" == \
+  "${FINAL_ANALYSIS_ROOT}/results/Adams_batch_effect_uncorrected_final_pseudobulk.rds" ]]
+benchmark_sync_artifacts_for Adams gloscope
+[[ "${SYNC_ARTIFACTS[0]}" == \
+  "${FINAL_ANALYSIS_ROOT}/results/Adams_batch_effect_uncorrected_final_gloscope.rds" ]]
+benchmark_sync_artifacts_for Adams composition
+[[ "${SYNC_ARTIFACTS[0]}" == \
+  "${FINAL_ANALYSIS_ROOT}/results/Adams_batch_effect_uncorrected_final_composition.rds" ]]
+[[ "${SYNC_ARTIFACTS[1]}" == \
+  "${FINAL_ANALYSIS_ROOT}/results/Adams_batch_effect_uncorrected_final_metadata.rds" ]]
+benchmark_sync_artifacts_for Adams mrvi
+[[ "${SYNC_ARTIFACTS[0]}" == \
+  "${FINAL_ANALYSIS_ROOT}/embeddings/Adams_batch_effect_uncorrected_final_hvg2000_highres_mrvi_dists.feather" ]]
+benchmark_sync_artifacts_for Adams pilot
+[[ "${SYNC_ARTIFACTS[0]}" == \
+  "${FINAL_ANALYSIS_ROOT}/embeddings/Adams_batch_effect_uncorrected_final_hvg2000_highres_pilot_dists.feather" ]]
+benchmark_sync_artifacts_for Adams qot
+[[ "${SYNC_ARTIFACTS[0]}" == \
+  "${FINAL_ANALYSIS_ROOT}/embeddings/Adams_batch_effect_uncorrected_final_hvg2000_highres_qot_dists.feather" ]]
+for final_path in "${SYNC_ARTIFACTS[@]}"; do
+  [[ "${final_path}" == *"_batch_effect_uncorrected_final_"* ]]
+done
+
+_ecoda_stage5_artifacts_for Adams batch_effect_uncorrected pseudobulk
+[[ "${ECODA_BENCHMARK_ARTIFACTS[0]}" == \
+  "${FINAL_ANALYSIS_ROOT}/results/Adams_batch_effect_uncorrected_final_pseudobulk.rds" ]]
+_ecoda_stage5_artifacts_for Adams batch_effect_uncorrected composition
+[[ "${ECODA_BENCHMARK_ARTIFACTS[0]}" == \
+  "${FINAL_ANALYSIS_ROOT}/results/Adams_batch_effect_uncorrected_final_composition.rds" ]]
+[[ "${ECODA_BENCHMARK_ARTIFACTS[1]}" == \
+  "${FINAL_ANALYSIS_ROOT}/results/Adams_batch_effect_uncorrected_final_metadata.rds" ]]
+
+FINAL_PAYLOAD="${FINAL_ANALYSIS_ROOT}/embeddings/Adams_batch_effect_uncorrected_final_hvg2000_highres_mrvi_dists.feather"
+mkdir -p "$(dirname "${FINAL_PAYLOAD}")"
+pixi run python -c 'import pandas as pd,sys; pd.DataFrame({"s1":[1.0,0.0],"s2":[0.0,1.0]},index=["s1","s2"]).to_feather(sys.argv[1])' \
+  "${FINAL_PAYLOAD}"
+ecoda_write_checksum "${FINAL_PAYLOAD}"
+FINAL_PAYLOAD_MD5="${ECODA_CHECKSUM_MD5}"
+FINAL_RUNTIME="${FINAL_PAYLOAD}.runtime.json"
+printf '{"schema_version":1,"artifact_path":"%s","artifact_md5":"%s","dataset":"Adams","method":"MrVI_hvg2000","time_secs":1.0,"mem_GB":1.0}\n' \
+  "${FINAL_PAYLOAD}" "${FINAL_PAYLOAD_MD5}" > "${FINAL_RUNTIME}"
+ecoda_write_checksum "${FINAL_RUNTIME}"
+
+FINAL_METADATA_OUTPUT="${FINAL_ANALYSIS_ROOT}/metadata/Adams_sample_metadata.feather"
+mkdir -p "$(dirname "${FINAL_METADATA_OUTPUT}")"
+printf 'Sample\ns1\ns2\n' > "${FINAL_METADATA_OUTPUT}"
+ecoda_write_checksum "${FINAL_METADATA_OUTPUT}"
+
+FINAL_RUN_ID="final_sync_run"
+ecoda_init_run stage5 "${FINAL_RUN_ID}" >/dev/null
+export ECODA_RUN_ID ECODA_RUN_ROOT
+FINAL_SELECTION_MANIFEST="${ECODA_RUN_ROOT}/manifests/selection.tsv"
+printf 'Adams\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' \
+  > "${FINAL_SELECTION_MANIFEST}"
+export ECODA_SELECTION_MANIFEST="${FINAL_SELECTION_MANIFEST}" ECODA_EXACT_SELECTION=0
+DATASET_NAMES=(Adams)
+LABELS=(mrvi)
+export DATASET_NAMES LABELS
+export EXECUTION_LOG_DIR="${ECODA_RUN_ROOT}/logs"
+mkdir -p "${EXECUTION_LOG_DIR}"
+pixi run python -c 'import pandas as pd,sys; pd.DataFrame({"dataset":["Adams"],"method":["MrVI_hvg2000"],"time_secs":[1.0],"mem_GB":[1.0]}).to_feather(sys.argv[1])' \
+  "${EXECUTION_LOG_DIR}/execution_times_batch_effect_uncorrected_final_mrvi_Adams.feather"
+ecoda_write_checksum \
+  "${EXECUTION_LOG_DIR}/execution_times_batch_effect_uncorrected_final_mrvi_Adams.feather"
+ecoda_write_artifact_record \
+  "${EXECUTION_LOG_DIR}/execution_times_batch_effect_uncorrected_final_mrvi_Adams.feather" \
+  stage5_execution_log "${ECODA_RUN_ID}" >/dev/null
+METADATA_EXPORT_MANIFEST="${ECODA_RUN_ROOT}/manifests/metadata_export.tsv"
+printf 'Adams\tbatch_effect_uncorrected\t/immutable/Adams.h5ad\t%s\n' \
+  "${FINAL_METADATA_OUTPUT}" > "${METADATA_EXPORT_MANIFEST}"
+
+analysis_merge_sync_cleanup mrvi
+FINAL_SYNC_FILES="${ECODA_RUN_ROOT}/manifests/sync_files.tsv"
+grep -q '^embeddings/Adams_batch_effect_uncorrected_final_hvg2000_highres_mrvi_dists.feather$' \
+  "${FINAL_SYNC_FILES}"
+grep -q '^embeddings/Adams_batch_effect_uncorrected_final_hvg2000_highres_mrvi_dists.feather.md5$' \
+  "${FINAL_SYNC_FILES}"
+grep -q '^metadata/Adams_sample_metadata.feather$' "${FINAL_SYNC_FILES}"
+grep -q '^metadata/Adams_sample_metadata.feather.md5$' "${FINAL_SYNC_FILES}"
+if grep -Eq 'uncorrected_(hvg|pseudobulk|gloscope|composition)' \
+    "${FINAL_SYNC_FILES}"; then
+  echo "final sync expanded a legacy analysis path" >&2
+  exit 1
+fi
+[[ -s "${FINAL_ANALYSIS_NAS_ROOT}/metadata/Adams_sample_metadata.feather" ]]
+[[ -s "${FINAL_ANALYSIS_NAS_ROOT}/metadata/Adams_sample_metadata.feather.md5" ]]
+[[ -s "${FINAL_ANALYSIS_NAS_ROOT}/embeddings/Adams_batch_effect_uncorrected_final_hvg2000_highres_mrvi_dists.feather" ]]
+[[ ! -e "${FINAL_ANALYSIS_NAS_ROOT}/pseudobulks/Adams_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds" ]]
+echo "final benchmark sync variant: OK"

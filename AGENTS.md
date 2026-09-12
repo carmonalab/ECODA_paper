@@ -9,8 +9,9 @@ ECODA (Exploratory Compositional Data Analysis) is a reproducible R/Python workf
 - **No label leakage.** Biological labels such as `Status`, `sample.origin`, `cond`, and `Disease_Identity` are ground truth only. Never pass them to preprocessing, HVG selection, normalization, batch correction, embeddings, or model covariates.
 - `DESeq2.normalize()` benchmark defaults are `blind=TRUE`, `batch_col=NULL`, `correct_batch=FALSE` (`~ 1`). Batch-effect mode is batch-only: `blind=FALSE`, `batch_col=<batch>`, `correct_batch=TRUE`; never protect biological labels in `removeBatchEffect`.
 - `datasets.json` is the dataset/view ground truth. **Do not modify it without explicit user confirmation.**
-- **Universal cell-type annotation with HiTME & scATOMIC.** All benchmark datasets and all suitable cohorts must undergo dual automated cell-type annotation with HiTME (layers 1–3) and scATOMIC (layers 1–6, predicted labels, confidence, cell cycle scores). Author annotations are preserved as baseline ground truth metadata in `obs`, while HiTME and scATOMIC provide standardized, uniform cross-cohort cell-type annotations. Datasets explicitly flagged with `"not_suitable_for_auto_annotation"` in `datasets.json` (e.g., `Alzheimer`, `Diabetes`, `Parkinson`) are exempt and must be cleanly skipped by the automated annotation pipeline.
-- **Multi-dataset parallel execution & fail-closed idempotency.** Pipeline stages (preprocessing, cell-type annotation, benchmarks) must dispatch all eligible datasets concurrently in parallel SLURM arrays. All stages must implement strict, fail-closed safety checks that verify existing output file integrity, non-emptiness, valid schema, and checksums before skipping already-completed runs, with full `--force` recomputation support across all submitters and workers.
+- **Universal cell-type annotation with HiTME & scATOMIC.** All benchmark-analysis datasets and all suitable cohorts used by benchmark workflows must undergo dual automated cell-type annotation with HiTME (layers 1–3) and scATOMIC (layers 1–6, predicted labels, confidence, cell cycle scores). Author annotations are preserved as baseline ground truth metadata in `obs`, while HiTME and scATOMIC provide standardized, uniform cross-cohort cell-type annotations. Datasets explicitly flagged with `"not_suitable_for_auto_annotation"` in `datasets.json` (e.g., `Alzheimer`, `Diabetes`, `Parkinson`) are exempt and must be cleanly skipped by the automated annotation pipeline.
+- **Batch-effect-only annotation exception.** The `batch_effect_uncorrected` and `batch_effect_corrected` views do not require HiTME/scATOMIC Pipeline 4. Do not schedule Pipeline 4 solely for batch-effect analysis; preserve and use the configured author/source cell-type columns. This exception is view-scoped and does not remove the universal annotation requirement for `benchmark_analysis` datasets or the existing `"not_suitable_for_auto_annotation"` exemptions.
+- **Multi-dataset parallel execution & fail-closed idempotency.** Pipeline stages (preprocessing, cell-type annotation, benchmarks) must dispatch all eligible datasets concurrently in parallel SLURM arrays. All stages must implement strict, fail-closed safety checks that verify existing output file integrity, non-emptiness, valid schema, and checksums before skipping already-completed runs, with full `--force` recomputation support across all submitters and workers. But keep every job launch explicit to targeted datasets and stages. Do not blindly re-run broad, global cohorts for routine checks that were already processed!
 - Files beginning with `Figure` or `Supp_fig` are publication figures: fix them, never remove them. Figure hierarchy: `Figure 2A` uses default/main settings; `Supp fig 15` contains extended methods; `Supp fig 2` is parameter screening. Exclude legacy `ECODA_PB_combo_*` from publication figures.
 - Preserve all version constraints in `pixi.toml` and the resolved `pixi.lock`.
 - Use focused tests and the `_debug` Joanito five-sample subset for routine verification. Do not launch full cohorts for routine checks.
@@ -20,7 +21,7 @@ ECODA (Exploratory Compositional Data Analysis) is a reproducible R/Python workf
 1. **Configuration:** `datasets.json` defines datasets, metadata columns, views, and filenames. `src/utils/datasets_io.R` and `src/utils/py/datasets_io.py` are the language-specific access layer.
 2. **Data staging:** `src/1_stage_data/1_stage_data.sh` copies raw data from NAS to `$HOME/scratch/ECODA_paper`; `src/2_dataset_specific_preprocessing/` converts cohort-specific inputs.
 3. **Canonical preprocessing:** `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py` filters data, preserves raw counts in `layers["counts"]`, normalizes/log-transforms `X`, ranks HVGs, computes PCA, and creates Harmony/neighbors/Leiden outputs. RDS conversion and subset validation live in `src/utils/py/preprocess_utils.py`.
-4. **Cell-type annotation:** `src/4_cell_type_annotation/` prepares sample chunks across all eligible datasets, runs dual annotation workers (HiTME and scATOMIC), checkpoints per-sample Feather output, validates chunk completeness, and merges annotations into all preprocessed view `.h5ad` files.
+4. **Cell-type annotation:** `src/4_cell_type_annotation/` prepares sample chunks for eligible benchmark-analysis datasets, runs dual annotation workers (HiTME and scATOMIC), checkpoints per-sample Feather output, validates chunk completeness, and merges annotations into benchmark-analysis view `.h5ad` files. Batch-effect views are an explicit no-Pipeline-4 path and retain their configured source/author cell-type columns.
 5. **Benchmarking:** `src/5_run_benchmark_methods/` runs R and Python methods through SLURM arrays. Methods converge on sample feature matrices, distance matrices, or `create_result_bundle(feat_mat, labels, dist_mat)` bundles.
 6. **Scoring and persistence:** `src/utils/scoring_metrics.R` computes silhouette, modularity, ANOSIM, ARI, and LISI. Results are saved atomically as `.rds` bundles with `checksums.md5`; Feather carries cross-language embeddings, distances, and execution logs.
 7. **Analysis:** local notebooks consume precomputed results and generate publication figures; they do not rerun cohort preprocessing.
@@ -174,37 +175,45 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   metadata artifact. Never pull full benchmark H5ADs to satisfy a local
   runner.
 
-- **Batch-effect baseline and pending rows:** the historical
-  `batch_effect_uncorrected` selection was processed, but it is not
-  terminally complete after the recent `datasets.json` update. `Lupus_PBMC`
-  and `Parkinson` changed `cell_type_high_res`; only downstream methods whose
-  input/feature path consumes that high-resolution field are pending targeted
-  validation/rerun. The current batch dataset key is
-  `Kidney_KPMP_full`, not `Kidney_KPMP`. The configured batch-effect dataset
-  list is `Joanito`, `Stephenson`, `CombinedPBMC`, `Alzheimer`, `Breast_cancer`,
-  `Covid19_PBMC`, `Kidney_KPMP_full`, `Myocardial_infarction`, `Diabetes`,
-  `Lupus_PBMC`, `Lung`, and `Parkinson`; the two changed datasets and the new
-  Kidney key are pending targeted validation/rerun.
-- **Routine verification:** `_debug` is a non-production verification fixture
-  whose sample universe may be expanded as the source is refreshed. Derived
-  probes must read and record its actual unique `Sample` IDs, use it
-  separately from production cohorts, and require at least two valid samples.
+- **Approved final batch-effect scope:** Regenerate both
+  `batch_effect_uncorrected` and `batch_effect_corrected` Stage 3 views only
+  for `Covid19_PBMC`, `Diabetes`, `Joanito`, and `Lung`, using their
+  final-qualified output names. The final Stage 5 changed-dataset wave selects
+  exactly those four datasets in the uncorrected pass with the suite
+  `prepare_pseudobulk`, `pseudobulk`, `gloscope`, `composition`, `mrvi`,
+  `pilot`, and `qot`. `Kidney_KPMP_full` receives only targeted missing-method
+  recovery in the uncorrected Stage 5 final lane; it receives no new
+  Stage 2/3/4 work. The final Stage 5 lane has no corrected pass or
+  `corrected_final` Stage 5 root.
+- **Frozen and disabled cohorts:** `Alzheimer`, `Breast_cancer`, `Lupus_PBMC`,
+  and `Stephenson` are frozen and MUST be absent from every new job,
+  validator selection, and compute manifest. Disabled cohorts
+  `CombinedPBMC`, `Kidney_KPMP`, `Myocardial_infarction`, and `Parkinson`,
+  plus `_debug`, are non-production and MUST be absent from production
+  selections.
+- **Diagnostic fixture boundary:** `_debug` remains available only for
+  explicitly separate diagnostic probes and is never a production target,
+  validator input, or scheduler selection.
 - **Annotation exemption:** `Alzheimer`, `Diabetes`, and `Parkinson` remain
   covered by the existing `not_suitable_for_auto_annotation` exemption.
   Historical batch processing does not imply that automatic HiTME/scATOMIC
   annotation was required for those datasets.
-- **Baseline selection:** benchmark methods are `gloscope`, `mofa`,
+- Batch-effect-only `batch_effect_uncorrected` and `batch_effect_corrected` views do not run Pipeline 4; their final H5ADs use the configured source/author cell-type columns without HiTME/scATOMIC annotation work.
+- **Legacy baseline selection:** benchmark methods are `gloscope`, `mofa`,
   `pseudobulk`, `composition`, `scitd`, `mrvi`, `scpoli`, `pilot`, `qot`, and
-  `pilotgm`; analyses are `trans` and `zeroimp`; the batch-effect suite is
-  `prepare_pseudobulk`, `pseudobulk`, `gloscope`, `composition`, `mrvi`,
+  `pilotgm`; analyses are `trans` and `zeroimp`; the legacy batch-effect suite
+  is `prepare_pseudobulk`, `pseudobulk`, `gloscope`, `composition`, `mrvi`,
   `pilot`, and `qot`.
+- The approved final Stage 5 suite is exactly the seven methods above and is
+  valid only for the explicit four-row uncorrected selection; no ordinary,
+  post-baseline, corrected, or broad selection is part of this final lane.
 - The Stage 5 default method list remains the baseline list above. Methods or
   scripts registered after this baseline are not defaults and run only when
   named explicitly with `--methods` or an explicit selection manifest.
-  Existing valid benchmark rows and unaffected batch rows are skipped
-  individually without `--force`. Changed `Lupus_PBMC`/`Parkinson`
-  high-resolution consumers, `Kidney_KPMP_full`, and absent post-baseline
-  method rows are submitted only through explicit targeted selection.
+  Existing valid benchmark rows and unaffected legacy batch rows are skipped
+  individually without `--force`. Final changed-dataset and Kidney rows are
+  submitted only through the explicit targeted selections described above;
+  valid rows remain outside every recomputation selection.
 - A `datasets.json` change invalidates only dependent downstream rows; it
   never triggers a blanket rerun. Gate history is evidence only: an old
   `FAILED`, `PRELAUNCH_STOP`, or stale gate manifest cannot select rows for

@@ -220,9 +220,11 @@ read_batch_metadata_sidecar <- function(path, expected_sample_ids, required_labe
 
 batch_candidate_registry <- function(config, dataset_order) {
   if (!requireNamespace("reticulate", quietly = TRUE)) .batch_stop("reticulate is required for the onboarding registry")
+  if (is.null(dataset_order)) .batch_stop("batch candidate registry requires a nonempty unique dataset order")
   dataset_order <- as.character(dataset_order)
-  if (length(dataset_order) != 12L || anyDuplicated(dataset_order)) {
-    .batch_stop("batch candidate registry requires exactly twelve unique datasets")
+  if (length(dataset_order) == 0L || anyNA(dataset_order) ||
+      any(!nzchar(trimws(dataset_order))) || anyDuplicated(dataset_order)) {
+    .batch_stop("batch candidate registry requires a nonempty unique dataset order")
   }
   spec_path <- normalizePath(file.path("notebooks", "dataset_onboarding", "dataset_specs.py"), mustWork = TRUE)
   spec_module <- reticulate::import_from_path(
@@ -231,12 +233,23 @@ batch_candidate_registry <- function(config, dataset_order) {
     convert = TRUE
   )
   authoritative_order <- as.character(spec_module$BATCH_EFFECT_DATASET_ORDER)
-  if (!identical(authoritative_order, dataset_order)) {
+  historical_order <- identical(authoritative_order, dataset_order)
+  # A twelve-row request is the historical contract and must retain its
+  # authoritative order. Explicit subsets (including the final nine-row
+  # order) preserve their caller order but still require registered columns.
+  if (length(dataset_order) == length(authoritative_order) && !historical_order) {
     .batch_stop("dataset order does not match BATCH_EFFECT_DATASET_ORDER")
   }
   technical_specs <- spec_module$BATCH_EFFECT_SPECS
-  if (!setequal(names(technical_specs), dataset_order)) {
-    .batch_stop("BATCH_EFFECT_SPECS does not cover exactly the twelve datasets")
+  technical_names <- names(technical_specs)
+  active_names <- names(spec_module$DATASET_SPECS)
+  if (historical_order) {
+    if (!setequal(technical_names, dataset_order)) {
+      .batch_stop("BATCH_EFFECT_SPECS does not cover exactly the twelve datasets")
+    }
+  } else if (any(!dataset_order %in% union(active_names, technical_names))) {
+    missing <- dataset_order[!dataset_order %in% union(active_names, technical_names)]
+    .batch_stop("selected dataset(s) are not covered by DATASET_SPECS or BATCH_EFFECT_SPECS: ", paste(missing, collapse = ", "))
   }
   rows <- list()
   row_index <- 0L
@@ -409,6 +422,582 @@ load_batch_uncorrected_dataset <- function(input_root, metadata_root, dataset, r
     metadata_summary_path = metadata_summary_path,
     metadata_path = metadata_path,
     artifact_paths = vapply(methods, function(x) x$path, character(1))
+  )
+}
+
+.batch_final_dataset_order <- function() {
+  c(
+    "Alzheimer",
+    "Breast_cancer",
+    "Covid19_PBMC",
+    "Kidney_KPMP_full",
+    "Diabetes",
+    "Lupus_PBMC",
+    "Lung",
+    "Joanito",
+    "Stephenson"
+  )
+}
+
+.batch_final_method_names <- function() {
+  c(.batch_method_names(), "ECODA_authors_HR_NULL")
+}
+
+.batch_manifest_root <- function(repository_root = getwd()) {
+  if (length(repository_root) != 1L || is.na(repository_root) || !nzchar(repository_root)) {
+    .batch_stop("repository_root must be one non-empty path")
+  }
+  normalizePath(repository_root, mustWork = TRUE)
+}
+
+.batch_manifest_resolve_path <- function(path, repository_root) {
+  if (length(path) != 1L || is.na(path) || !nzchar(trimws(path))) {
+    .batch_stop("manifest path must be one non-empty string")
+  }
+  path <- path.expand(path)
+  path_components <- strsplit(path, "[/\\\\]", perl = TRUE)[[1L]]
+  if (any(path_components == "..")) {
+    .batch_stop("manifest path escapes repository root: ", path)
+  }
+  absolute <- grepl("^(/|[A-Za-z]:[\\\\/])", path)
+  candidate <- normalizePath(
+    if (absolute) path else file.path(repository_root, path),
+    mustWork = FALSE
+  )
+  prefix <- paste0(repository_root, .Platform$file.sep)
+  if (!identical(candidate, repository_root) && !startsWith(candidate, prefix)) {
+    .batch_stop("manifest path escapes repository root: ", path)
+  }
+  candidate
+}
+
+.batch_split_physical_tsv <- function(line) {
+  fields <- strsplit(line, "\t", fixed = TRUE)[[1L]]
+  positions <- gregexpr("\t", line, fixed = TRUE)[[1L]]
+  tab_count <- if (length(positions) == 1L && positions[[1L]] == -1L) 0L else length(positions)
+  missing_trailing <- tab_count + 1L - length(fields)
+  if (missing_trailing > 0L) fields <- c(fields, rep("", missing_trailing))
+  fields
+}
+
+.batch_read_manifest_lines <- function(path, repository_root) {
+  manifest_path <- normalizePath(path, mustWork = TRUE)
+  lines <- readLines(manifest_path, warn = FALSE, encoding = "UTF-8")
+  if (length(lines) < 2L) .batch_stop("final analysis manifest has no data rows: ", manifest_path)
+  lines <- sub("\r$", "", lines)
+  if (any(!nzchar(trimws(lines)))) {
+    .batch_stop("final analysis manifest contains blank rows: ", manifest_path)
+  }
+  header <- strsplit(lines[[1L]], "\t", fixed = TRUE)[[1L]]
+  metadata_header <- c(
+    "dataset", "summary_lane", "feather_lane",
+    "metadata_summary_path", "metadata_feather_path"
+  )
+  artifact_header <- c(
+    "dataset", "method", "lane", "artifact_kind",
+    "artifact_path", "bundle_key"
+  )
+  manifest_kind <- if (identical(header, metadata_header)) {
+    "metadata"
+  } else if (identical(header, artifact_header)) {
+    "artifacts"
+  } else {
+    .batch_stop(
+      "final analysis manifest header must be either ",
+      paste(metadata_header, collapse = "\t"), " or ",
+      paste(artifact_header, collapse = "\t")
+    )
+  }
+  rows <- lapply(lines[-1L], .batch_split_physical_tsv)
+  widths <- vapply(rows, length, integer(1L))
+  if (any(widths != length(header))) {
+    .batch_stop(
+      "final analysis manifest has a row with the wrong physical field count (expected ",
+      length(header), " columns, including the empty bundle-key field)"
+    )
+  }
+  values <- do.call(rbind, rows)
+  result <- as.data.frame(values, stringsAsFactors = FALSE, check.names = FALSE)
+  colnames(result) <- header
+  result[] <- lapply(result, as.character)
+  attr(result, "manifest_kind") <- manifest_kind
+  attr(result, "repository_root") <- repository_root
+  result
+}
+
+.batch_validate_expected_manifest_vectors <- function(expected_datasets, expected_methods) {
+  expected_datasets <- as.character(expected_datasets)
+  expected_methods <- as.character(expected_methods)
+  if (length(expected_datasets) == 0L || anyNA(expected_datasets) ||
+      any(!nzchar(trimws(expected_datasets))) || anyDuplicated(expected_datasets)) {
+    .batch_stop("final analysis expected dataset order must be nonempty and unique")
+  }
+  if (length(expected_methods) == 0L || anyNA(expected_methods) ||
+      any(!nzchar(trimws(expected_methods))) || anyDuplicated(expected_methods)) {
+    .batch_stop("final analysis expected method keys must be nonempty and unique")
+  }
+  list(datasets = expected_datasets, methods = expected_methods)
+}
+
+.batch_validate_manifest_paths <- function(frame, columns, repository_root) {
+  for (column in columns) {
+    values <- frame[[column]]
+    if (anyNA(values) || any(!nzchar(trimws(values)))) {
+      .batch_stop("final analysis manifest contains an empty ", column)
+    }
+    invisible(lapply(values, .batch_manifest_resolve_path, repository_root = repository_root))
+  }
+}
+
+.batch_validate_final_composition_rows <- function(frame, repository_root) {
+  if (!all(c("ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL") %in% frame$method)) {
+    return(invisible(NULL))
+  }
+  datasets <- unique(frame$dataset)
+  for (dataset in datasets) {
+    rows <- frame[frame$dataset == dataset, , drop = FALSE]
+    selected <- rows[rows$method %in% c(
+      "ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL"
+    ), , drop = FALSE]
+    final_rows <- selected[selected$lane == "final", , drop = FALSE]
+    if (nrow(final_rows) == 0L) next
+    if (nrow(final_rows) != 3L ||
+        any(final_rows$artifact_kind != "rds_bundle") ||
+        !all(final_rows$method %in% c(
+          "ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL"
+        ))) {
+      .batch_stop(dataset, ": final composition/null rows must be three shared rds_bundle rows")
+    }
+    expected_keys <- c(
+      ECODA_authors_HR = "ECODA_authors_HR",
+      ECODA_seuratres_2 = "ECODA_seuratres_2",
+      ECODA_authors_HR_NULL = "ECODA_authors_HR_NULL"
+    )
+    observed_keys <- stats::setNames(final_rows$bundle_key, final_rows$method)
+    if (!identical(unname(observed_keys[names(expected_keys)]), unname(expected_keys))) {
+      .batch_stop(dataset, ": final composition/null bundle keys are not explicit")
+    }
+  }
+  invisible(NULL)
+}
+
+.batch_validate_loaded_final_composition <- function(artifact_rows, repository_root, dataset) {
+  selected <- artifact_rows[artifact_rows$method %in% c(
+    "ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL"
+  ), , drop = FALSE]
+  final_rows <- selected[selected$lane == "final", , drop = FALSE]
+  if (nrow(final_rows) == 0L) return(invisible(NULL))
+  if (nrow(final_rows) != 3L || any(final_rows$artifact_kind != "rds_bundle")) {
+    .batch_stop(dataset, ": final composition/null rows must be three rds_bundle rows")
+  }
+  expected_keys <- c(
+    ECODA_authors_HR = "ECODA_authors_HR",
+    ECODA_seuratres_2 = "ECODA_seuratres_2",
+    ECODA_authors_HR_NULL = "ECODA_authors_HR_NULL"
+  )
+  observed_keys <- stats::setNames(final_rows$bundle_key, final_rows$method)
+  if (!identical(unname(observed_keys[names(expected_keys)]), unname(expected_keys))) {
+    .batch_stop(dataset, ": final composition/null bundle keys are not explicit")
+  }
+  resolved <- vapply(
+    final_rows$artifact_path,
+    .batch_manifest_resolve_path,
+    character(1L),
+    repository_root = repository_root
+  )
+  if (length(unique(resolved)) != 1L) {
+    .batch_stop(dataset, ": final composition/null rows must share one physical RDS path")
+  }
+  invisible(NULL)
+}
+
+read_batch_final_manifest <- function(
+  path,
+  expected_datasets = .batch_final_dataset_order(),
+  expected_methods = .batch_final_method_names(),
+  repository_root = getwd()
+) {
+  repository_root <- .batch_manifest_root(repository_root)
+  expected <- .batch_validate_expected_manifest_vectors(expected_datasets, expected_methods)
+  frame <- .batch_read_manifest_lines(path, repository_root)
+  if (identical(attr(frame, "manifest_kind"), "metadata")) {
+    if (!identical(colnames(frame), c(
+      "dataset", "summary_lane", "feather_lane",
+      "metadata_summary_path", "metadata_feather_path"
+    ))) {
+      .batch_stop("malformed final analysis metadata manifest columns")
+    }
+    if (!identical(frame$dataset, expected$datasets)) {
+      .batch_stop("final analysis metadata manifest dataset order does not match the exact expected order")
+    }
+    allowed_lanes <- c("legacy", "final")
+    if (any(!frame$summary_lane %in% allowed_lanes) ||
+        any(!frame$feather_lane %in% allowed_lanes)) {
+      .batch_stop("final analysis metadata manifest lanes must be legacy or final")
+    }
+    .batch_validate_manifest_paths(
+      frame,
+      c("metadata_summary_path", "metadata_feather_path"),
+      repository_root
+    )
+  } else {
+    if (!identical(colnames(frame), c(
+      "dataset", "method", "lane", "artifact_kind",
+      "artifact_path", "bundle_key"
+    ))) {
+      .batch_stop("malformed final analysis artifact manifest columns")
+    }
+    expected_dataset_rows <- rep(expected$datasets, each = length(expected$methods))
+    expected_method_rows <- rep(expected$methods, times = length(expected$datasets))
+    if (!identical(frame$dataset, expected_dataset_rows) ||
+        !identical(frame$method, expected_method_rows)) {
+      .batch_stop("final analysis artifact manifest dataset/method order is not exact")
+    }
+    allowed_lanes <- c("legacy", "final")
+    allowed_kinds <- c("rds_bundle", "standalone_scores", "distance_feather")
+    if (any(!frame$lane %in% allowed_lanes) || any(!frame$artifact_kind %in% allowed_kinds)) {
+      .batch_stop("final analysis artifact manifest has an unsupported lane or artifact kind")
+    }
+    .batch_validate_manifest_paths(frame, "artifact_path", repository_root)
+    if (anyNA(frame$bundle_key)) .batch_stop("final analysis artifact bundle_key must be physical, not NA")
+    distance_rows <- frame$artifact_kind == "distance_feather"
+    if (any(frame$bundle_key[distance_rows] != "")) {
+      .batch_stop("distance_feather rows must carry an explicit empty bundle_key field")
+    }
+    standalone_rows <- frame$artifact_kind == "standalone_scores"
+    if (any(frame$bundle_key[standalone_rows] != "scores")) {
+      .batch_stop("standalone_scores rows must use the explicit scores bundle key")
+    }
+    rds_rows <- frame$artifact_kind == "rds_bundle"
+    if (any(!nzchar(trimws(frame$bundle_key[rds_rows])))) {
+      .batch_stop("rds_bundle rows require a non-empty bundle_key")
+    }
+    known_keys <- c(
+      ECODA_authors_HR = "ECODA_authors_HR",
+      ECODA_seuratres_2 = "ECODA_seuratres_2",
+      Pseudobulk_hvg2000 = "Pseudobulk_hvg2000",
+      GloScope_hvg2000_pcadims30 = "GloScope_hvg2000_pcadims30"
+    )
+    for (method in names(known_keys)) {
+      selected <- frame$method == method
+      if (any(frame$artifact_kind[selected] != "rds_bundle") ||
+          any(frame$bundle_key[selected] != known_keys[[method]])) {
+        .batch_stop(method, ": artifact manifest has an invalid rds_bundle key/kind")
+      }
+    }
+    distance_methods <- c("MrVI_hvg2000", "PILOT_hvg2000", "QOT_hvg2000")
+    selected_distance <- frame$method %in% distance_methods
+    if (any(frame$artifact_kind[selected_distance] != "distance_feather") ||
+        any(frame$bundle_key[selected_distance] != "")) {
+      .batch_stop("distance methods must use distance_feather rows with an empty bundle_key")
+    }
+    if (any(standalone_rows & frame$method != "ECODA_authors_HR_NULL")) {
+      .batch_stop("only ECODA_authors_HR_NULL may use standalone_scores")
+    }
+    null_rows <- frame$method == "ECODA_authors_HR_NULL"
+    if (any(frame$lane[null_rows] == "final" &
+            (frame$artifact_kind[null_rows] != "rds_bundle" |
+             frame$bundle_key[null_rows] != "ECODA_authors_HR_NULL"))) {
+      .batch_stop("final ECODA_authors_HR_NULL must select its composition rds_bundle key")
+    }
+    if (any(frame$lane[null_rows] == "legacy" &
+            !((frame$artifact_kind[null_rows] == "standalone_scores" &
+               frame$bundle_key[null_rows] == "scores") |
+              (frame$artifact_kind[null_rows] == "rds_bundle" &
+               frame$bundle_key[null_rows] == "ECODA_authors_HR_NULL")))) {
+      .batch_stop("legacy ECODA_authors_HR_NULL must select scores or its explicit RDS bundle key")
+    }
+    .batch_validate_final_composition_rows(frame, repository_root)
+  }
+  frame
+}
+
+.batch_manifest_frame <- function(manifest, expected_kind, repository_root = NULL) {
+  if (is.character(manifest) && length(manifest) == 1L) {
+    root_argument <- if (is.null(repository_root)) getwd() else repository_root
+    manifest <- read_batch_final_manifest(
+      manifest,
+      repository_root = root_argument
+    )
+  }
+  if (!is.data.frame(manifest)) .batch_stop("final analysis manifest must be a data.frame or manifest path")
+  actual_kind <- attr(manifest, "manifest_kind")
+  if (!identical(actual_kind, expected_kind)) {
+    .batch_stop("expected a ", expected_kind, " final analysis manifest")
+  }
+  root <- attr(manifest, "repository_root")
+  if (is.null(repository_root)) repository_root <- root
+  if (is.null(repository_root)) repository_root <- getwd()
+  repository_root <- .batch_manifest_root(repository_root)
+  list(frame = manifest, root = repository_root)
+}
+
+.batch_read_manifest_summary <- function(path, dataset, strict_checksum) {
+  path <- normalizePath(path, mustWork = FALSE)
+  if (strict_checksum) validate_batch_artifact(path, paste0(dataset, " metadata summary"))
+  summary <- tryCatch(
+    readRDS(path),
+    error = function(error) {
+      .batch_stop("malformed ", dataset, " metadata summary ", path, ": ", conditionMessage(error))
+    }
+  )
+  labels <- summary$labels
+  if (is.null(labels) || is.null(names(labels)) || anyNA(names(labels)) ||
+      any(!nzchar(names(labels))) || anyDuplicated(names(labels)) || anyNA(labels)) {
+    .batch_stop(dataset, ": metadata summary labels are malformed")
+  }
+  sample_ids <- as.character(names(labels))
+  n_samples <- suppressWarnings(as.integer(summary$n_samples))
+  if (length(n_samples) != 1L || is.na(n_samples) || !identical(n_samples, length(sample_ids))) {
+    .batch_stop(dataset, ": metadata summary sample count mismatch")
+  }
+  list(summary = summary, labels = labels, sample_ids = sample_ids, path = path)
+}
+
+.batch_read_manifest_metadata <- function(path, expected_sample_ids, required_label, strict_checksum) {
+  path <- normalizePath(path, mustWork = FALSE)
+  if (strict_checksum) validate_batch_artifact(path, "final metadata Feather")
+  metadata <- tryCatch(
+    arrow::read_feather(path),
+    error = function(error) {
+      .batch_stop("malformed metadata Feather ", path, ": ", conditionMessage(error))
+    }
+  )
+  metadata <- as.data.frame(metadata, stringsAsFactors = FALSE)
+  if (!"Sample" %in% colnames(metadata)) .batch_stop("metadata Feather lacks Sample: ", path)
+  if (length(required_label) != 1L || is.na(required_label) || !nzchar(required_label)) {
+    .batch_stop("required primary label is missing")
+  }
+  if (!required_label %in% colnames(metadata)) {
+    .batch_stop("metadata Feather lacks primary biological label '", required_label, "': ", path)
+  }
+  sample_ids <- as.character(metadata[["Sample"]])
+  expected_sample_ids <- as.character(expected_sample_ids)
+  if (length(sample_ids) == 0L || anyNA(sample_ids) ||
+      any(!nzchar(trimws(sample_ids))) || anyDuplicated(sample_ids) ||
+      !identical(sample_ids, expected_sample_ids)) {
+    .batch_stop("metadata Feather Sample membership/order mismatch: ", path)
+  }
+  labels <- .batch_values(metadata[[required_label]])
+  if (anyNA(labels)) .batch_stop("metadata Feather primary biological label is incomplete: ", path)
+  rownames(metadata) <- sample_ids
+  metadata
+}
+
+.batch_read_manifest_rds_bundle <- function(
+  row,
+  expected_sample_ids,
+  strict_checksum,
+  require_distance = TRUE
+) {
+  path <- normalizePath(row$artifact_path, mustWork = FALSE)
+  if (strict_checksum) validate_batch_artifact(path, paste0(row$method, " final RDS"))
+  bundle <- tryCatch(
+    readRDS(path),
+    error = function(error) {
+      .batch_stop("malformed RDS artifact ", path, ": ", conditionMessage(error))
+    }
+  )
+  key <- row$bundle_key
+  if (!is.list(bundle) || is.null(names(bundle)) || !key %in% names(bundle)) {
+    .batch_stop(row$method, ": RDS bundle lacks explicit key ", key, ": ", path)
+  }
+  result <- bundle[[key]]
+  matrix <- NULL
+  dist_mat <- NULL
+  scores <- NULL
+  if (require_distance) {
+    if (!is.list(result) || is.null(result$dist_mat)) {
+      .batch_stop(row$method, ": RDS bundle key ", key, " lacks dist_mat: ", path)
+    }
+    matrix <- .batch_validate_matrix(
+      as.matrix(result$dist_mat),
+      expected_sample_ids,
+      paste0(row$method, " RDS")
+    )
+    dist_mat <- stats::as.dist(matrix)
+    scores <- result$scores
+  }
+  list(
+    method = row$method,
+    path = path,
+    kind = "rds_bundle",
+    artifact_kind = row$artifact_kind,
+    bundle_key = key,
+    lane = row$lane,
+    matrix = matrix,
+    dist_mat = dist_mat,
+    sample_ids = if (is.null(matrix)) NULL else rownames(matrix),
+    scores = scores
+  )
+}
+
+.batch_read_manifest_distance_feather <- function(row, expected_sample_ids, strict_checksum) {
+  path <- normalizePath(row$artifact_path, mustWork = FALSE)
+  if (strict_checksum) validate_batch_artifact(path, paste0(row$method, " final Feather"))
+  frame <- tryCatch(
+    arrow::read_feather(path),
+    error = function(error) {
+      .batch_stop("malformed Feather distance artifact ", path, ": ", conditionMessage(error))
+    }
+  )
+  frame <- as.data.frame(frame, stringsAsFactors = FALSE)
+  if (ncol(frame) < 2L || nrow(frame) != ncol(frame) - 1L) {
+    .batch_stop(row$method, ": distance Feather schema is not square: ", path)
+  }
+  index <- as.character(frame[[ncol(frame)]])
+  column_ids <- as.character(colnames(frame)[seq_len(ncol(frame) - 1L)])
+  if (anyNA(index) || any(!nzchar(trimws(index))) || anyDuplicated(index) ||
+      anyDuplicated(column_ids) || !identical(column_ids, index)) {
+    .batch_stop(row$method, ": distance Feather columns/index are not in identical order: ", path)
+  }
+  value_frame <- frame[, seq_len(ncol(frame) - 1L), drop = FALSE]
+  if (!all(vapply(value_frame, is.numeric, logical(1L)))) {
+    .batch_stop(row$method, ": distance Feather values are not numeric: ", path)
+  }
+  matrix <- suppressWarnings(as.matrix(value_frame))
+  storage.mode(matrix) <- "double"
+  if (anyNA(matrix) || any(!is.finite(matrix))) {
+    .batch_stop(row$method, ": distance Feather contains non-finite values: ", path)
+  }
+  rownames(matrix) <- index
+  colnames(matrix) <- index
+  matrix <- .batch_validate_matrix(matrix, expected_sample_ids, "final Feather")
+  list(
+    method = row$method,
+    path = path,
+    kind = "distance_feather",
+    artifact_kind = row$artifact_kind,
+    bundle_key = "",
+    lane = row$lane,
+    matrix = matrix,
+    dist_mat = stats::as.dist(matrix),
+    sample_ids = rownames(matrix),
+    scores = NULL
+  )
+}
+
+.batch_validate_heatmap_scores <- function(scores, method, path) {
+  required <- c("anosim_score", "mod_knn3_score", "cluster_score")
+  if (!is.list(scores) || is.null(names(scores)) || !all(required %in% names(scores))) {
+    .batch_stop(method, ": persisted scores lack required heatmap fields: ", path)
+  }
+  finite <- vapply(required, function(name) {
+    value <- scores[[name]]
+    length(value) == 1L && is.numeric(value) && is.finite(value)
+  }, logical(1L))
+  if (any(!finite)) .batch_stop(method, ": persisted scores contain missing/non-finite fields: ", path)
+  scores
+}
+
+.batch_read_manifest_scores <- function(row, strict_checksum) {
+  path <- normalizePath(row$artifact_path, mustWork = FALSE)
+  if (strict_checksum) validate_batch_artifact(path, paste0(row$method, " final scores"))
+  bundle <- tryCatch(
+    readRDS(path),
+    error = function(error) {
+      .batch_stop("malformed standalone score artifact ", path, ": ", conditionMessage(error))
+    }
+  )
+  if (!is.list(bundle) || is.null(names(bundle)) || !"scores" %in% names(bundle)) {
+    .batch_stop(row$method, ": standalone score artifact lacks explicit scores key: ", path)
+  }
+  scores <- .batch_validate_heatmap_scores(bundle[["scores"]], row$method, path)
+  list(
+    method = row$method,
+    path = path,
+    kind = "standalone_scores",
+    artifact_kind = row$artifact_kind,
+    bundle_key = "scores",
+    lane = row$lane,
+    matrix = NULL,
+    dist_mat = NULL,
+    sample_ids = NULL,
+    scores = scores
+  )
+}
+
+load_batch_uncorrected_dataset_from_manifest <- function(
+  metadata_manifest,
+  artifact_manifest,
+  dataset,
+  registry,
+  repository_root = NULL
+) {
+  metadata_info <- .batch_manifest_frame(metadata_manifest, "metadata", repository_root)
+  artifact_info <- .batch_manifest_frame(artifact_manifest, "artifacts", repository_root)
+  repository_root <- metadata_info$root
+  if (!identical(repository_root, artifact_info$root)) {
+    .batch_stop("metadata and artifact manifests use different repository roots")
+  }
+  metadata_manifest <- metadata_info$frame
+  artifact_manifest <- artifact_info$frame
+  metadata_rows <- metadata_manifest[metadata_manifest$dataset == dataset, , drop = FALSE]
+  artifact_rows <- artifact_manifest[artifact_manifest$dataset == dataset, , drop = FALSE]
+  if (nrow(metadata_rows) != 1L) .batch_stop(dataset, ": final metadata manifest must contain exactly one row")
+  expected_methods <- .batch_final_method_names()
+  if (nrow(artifact_rows) != length(expected_methods) ||
+      !identical(artifact_rows$method, expected_methods)) {
+    .batch_stop(dataset, ": final artifact manifest must contain exactly eight ordered method rows")
+  }
+  .batch_validate_loaded_final_composition(artifact_rows, repository_root, dataset)
+  registry <- .batch_registry_for_dataset(registry, dataset)
+  primary_rows <- which(as.logical(registry$is_primary))
+  if (length(primary_rows) != 1L) .batch_stop(dataset, ": registry must contain exactly one primary label")
+  label_col <- registry$candidate[[primary_rows[[1L]]]]
+  summary_row <- metadata_rows[1L, , drop = FALSE]
+  summary_path <- .batch_manifest_resolve_path(summary_row$metadata_summary_path, repository_root)
+  feather_path <- .batch_manifest_resolve_path(summary_row$metadata_feather_path, repository_root)
+  summary_info <- .batch_read_manifest_summary(
+    summary_path,
+    dataset,
+    identical(summary_row$summary_lane, "final")
+  )
+  metadata <- .batch_read_manifest_metadata(
+    feather_path,
+    summary_info$sample_ids,
+    label_col,
+    identical(summary_row$feather_lane, "final")
+  )
+  if (!identical(.batch_values(metadata[[label_col]]), .batch_values(summary_info$labels))) {
+    .batch_stop(dataset, ": metadata Feather labels do not match metadata summary")
+  }
+  methods <- vector("list", length(expected_methods))
+  names(methods) <- expected_methods
+  for (index in seq_along(expected_methods)) {
+    row <- artifact_rows[index, , drop = FALSE]
+    row$artifact_path <- .batch_manifest_resolve_path(row$artifact_path, repository_root)
+    strict_checksum <- identical(row$lane, "final")
+    methods[[index]] <- if (identical(row$artifact_kind, "distance_feather")) {
+      .batch_read_manifest_distance_feather(row, summary_info$sample_ids, strict_checksum)
+    } else if (identical(row$artifact_kind, "standalone_scores")) {
+      .batch_read_manifest_scores(row, strict_checksum)
+    } else {
+      .batch_read_manifest_rds_bundle(
+        row,
+        summary_info$sample_ids,
+        strict_checksum,
+        require_distance = TRUE
+      )
+    }
+  }
+  null_method <- methods[["ECODA_authors_HR_NULL"]]
+  if (is.null(null_method$scores)) {
+    .batch_stop(dataset, ": ECODA_authors_HR_NULL lacks persisted scores")
+  }
+  list(
+    dataset = dataset,
+    metadata = metadata,
+    sample_ids = summary_info$sample_ids,
+    label_col = label_col,
+    registry = registry,
+    methods = methods,
+    metadata_summary_path = summary_path,
+    metadata_path = feather_path,
+    metadata_summary_lane = summary_row$summary_lane,
+    metadata_feather_lane = summary_row$feather_lane,
+    artifact_paths = vapply(methods, function(x) x$path, character(1L)),
+    artifact_lanes = vapply(methods, function(x) x$lane, character(1L))
   )
 }
 

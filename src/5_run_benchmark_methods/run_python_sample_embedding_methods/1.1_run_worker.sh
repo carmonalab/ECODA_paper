@@ -145,15 +145,24 @@ export DS_NAME
 ANALYSIS_VIEW="${ROW_VIEW:-${ANALYSIS_VIEW:-benchmark_analysis}}"
 export ANALYSIS_VIEW
 ANALYSIS_ROOT="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
+if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
+  [[ "${ANALYSIS_PASS:-}" == uncorrected &&
+     "${ANALYSIS_ROOT}" == "${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final" ]] || {
+    echo "ERROR: final Stage 5 Python worker is not bound to uncorrected_final." >&2
+    exit 1
+  }
+  export ANALYSIS_VARIANT
+fi
 OUT_DIR="${ANALYSIS_ROOT}/embeddings"
 EXECUTION_LOG_DIR="${EXECUTION_LOG_DIR:-${OUT_DIR}}"
-mkdir -p "${OUT_DIR}" "${EXECUTION_LOG_DIR}"
 if [[ -n "${ROW_COMBO:-}" ]]; then
   LOG_SUFFIX="_${ROW_COMBO}"
 else
   LOG_SUFFIX=""
 fi
-if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
+  LOG_FILE="${EXECUTION_LOG_DIR}/${ANALYSIS_LOG_PREFIX:-execution_times_batch_effect_uncorrected_final_}${METHOD}_${DS_NAME}${LOG_SUFFIX}.feather"
+elif [[ -n "${ANALYSIS_PASS:-}" ]]; then
   LOG_FILE="${EXECUTION_LOG_DIR}/execution_times_batch_effect_${ANALYSIS_PASS}_${METHOD}_${DS_NAME}${LOG_SUFFIX}.feather"
 else
   LOG_FILE="${EXECUTION_LOG_DIR}/execution_times_${METHOD}_${DS_NAME}${LOG_SUFFIX}.feather"
