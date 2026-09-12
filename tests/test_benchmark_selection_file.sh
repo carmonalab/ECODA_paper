@@ -208,6 +208,9 @@ if grep -Eq 'ANALYSIS_ROOT=.*/batch_effect/uncorrected(,|$)' "${CAPTURE}"; then
 fi
 expect_submit_failure "final variant without explicit selection" \
   --pass uncorrected --analysis-variant final --methods "${FINAL_METHODS}"
+expect_submit_failure "final variant without explicit method suite" \
+  --selection-file "${FINAL_SELECTION}" --pass uncorrected \
+  --analysis-variant final
 expect_submit_failure "final variant with broad dataset selection" \
   --datasets Covid19_PBMC --pass uncorrected --analysis-variant final \
   --methods "${FINAL_METHODS}"

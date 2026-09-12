@@ -272,10 +272,17 @@ stage5_validate_final_selection() {
     echo "ERROR: final analysis variant rejects broad/default, ordinary, or exact selection modes." >&2
     return 1
   }
-  if [[ ${METHODS_SET} -eq 1 &&
-        "${METHODS_ARG}" != "${EXPECTED_BATCH_METHODS}" ]]; then
-    echo "ERROR: final analysis variant requires the fixed seven-method suite." >&2
-    return 1
+  if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
+    [[ ${METHODS_SET} -eq 0 ]] || {
+      echo "ERROR: final targeted recovery cannot combine --target-methods with --methods." >&2
+      return 1
+    }
+  else
+    [[ ${METHODS_SET} -eq 1 &&
+       "${METHODS_ARG}" == "${EXPECTED_BATCH_METHODS}" ]] || {
+      echo "ERROR: final analysis variant requires explicit --methods ${EXPECTED_BATCH_METHODS}." >&2
+      return 1
+    }
   fi
   [[ -r "${SELECTION_FILE_ARG}" ]] || {
     echo "ERROR: final selection file is unreadable." >&2
