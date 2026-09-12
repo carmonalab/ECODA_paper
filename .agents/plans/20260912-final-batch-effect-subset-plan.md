@@ -1338,3 +1338,50 @@ full rationale when a short evidence-linked update is sufficient.
   read-only and their global producer records were absent. They remain
   diagnostic only, not authoritative replacements for the killed direct RDS
   audit. The direct Joanito RDS audit remains blocked by exit 137/OOM.
+
+- 2026-09-12, the lightweight subset boundary and source-bound H5AD auditor
+  were committed/pushed as `b8f7aec15dfc91bc493caeb04f3d2cc066db8c5d`; a
+  verified snapshot and fresh run-owned audit root were created at
+  `_ecoda_source_snapshots/b8f7aec15dfc91bc493caeb04f3d2cc066db8c5d` and
+  `_ecoda_runs/corrected_h5ad_audit_b8f7aec_20260912b`.
+- 2026-09-12, authoritative H5AD corrected-source auditing passed for
+  `Covid19_PBMC`, `Kidney_KPMP_full`, `Diabetes`, and `Lung`, with zero
+  split samples and estimable batch contracts; their checksummed reports are
+  retained below the fresh audit root. It failed closed for `Alzheimer`
+  because `assay` disagrees within 21 configured `donor_id` samples, for
+  `Breast_cancer` because `suspension_dissociation_time` contains 65,359
+  `unknown` sentinel cells, and for `Lupus_PBMC` because `batch_cov`
+  disagrees within configured `sampleID` values. These are source/config
+  contract failures requiring targeted scientific review, not reasons for a
+  broad rerun. No Stage 3 worker or downstream gate was launched.
+
+### Uncorrected Stage 3 launch
+
+- 2026-09-12, the exact four-row uncorrected selection was staged under the
+  canonical Bamboo gate input root and prepared/reconciled through
+  `durable-hpc-gate-ecoda` as
+  `stage3_uncorrected_final_20260912`, with reviewed Stage 2
+  `stage2_joanito_final_20260912b` as the only predecessor. The wrapper uses
+  the full-hash `b8f7aec15dfc91bc493caeb04f3d2cc066db8c5d` source snapshot, the
+  reviewed relocated runtime, canonical scratch/log roots, and no
+  `--force`.
+- 2026-09-12, the gate launched once and exactly one unbounded durable waiter
+  was armed. Scheduler IDs and terminal status are intentionally not claimed
+  until waiter completion, run-scoped audit, terminal inspect, and Luna Max
+  review. The corrected wave remains blocked by the recorded source metadata
+  failures/OOM and has not been launched.
+
+### Uncorrected Stage 3 failed preflight
+
+- 2026-09-12, `stage3_uncorrected_final_20260912` failed before any Stage 3
+  worker array or watchdog was released. Its Covid obs-only preflight array
+  ID was `4403790`; the remote error was the Slurm-spool bootstrap resolving
+  the worker’s relative `slurm_config.sh` path instead of the inherited
+  immutable snapshot source root.
+- 2026-09-12, the required exact run-scoped audit was attempted and failed on
+  the terminal `FAIL` status, then one terminal durable inspect ran with
+  `4403790`. Accounting was queried once, reported `4403790|FAILED|1:0`,
+  and the gate is `FAILED`/not release-eligible with no reviewer approval.
+  The failed run and logs remain preserved; no retry or downstream Stage 5
+  action is authorized until the container source-root bootstrap fix is in a
+  fresh full-hash snapshot.

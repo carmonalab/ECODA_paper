@@ -3,23 +3,53 @@
 # source or creates an artifact ownership record for it.
 set -euo pipefail
 
-if [[ -n "${SLURM_JOB_ID:-}" &&
-      "${ECODA_RUNTIME_IN_CONTAINER:-0}" != "1" ]]; then
+BOOTSTRAP_SOURCE_ROOT="${ECODA_SOURCE_ROOT:-}"
+BOOTSTRAP_SOURCE_VALID=0
+if [[ -n "${BOOTSTRAP_SOURCE_ROOT}" &&
+      "${BOOTSTRAP_SOURCE_ROOT}" = /* &&
+      "${BOOTSTRAP_SOURCE_ROOT}" != *$'\n'* &&
+      "${BOOTSTRAP_SOURCE_ROOT}" != *$'\t'* &&
+      "${BOOTSTRAP_SOURCE_ROOT##*/}" == "tree" ]]; then
+  BOOTSTRAP_SNAPSHOT_ROOT="${BOOTSTRAP_SOURCE_ROOT%/tree}"
+  if [[ "${BOOTSTRAP_SNAPSHOT_ROOT##*/}" =~ ^[[:xdigit:]]{40}$ &&
+        -d "${BOOTSTRAP_SOURCE_ROOT}" &&
+        ! -L "${BOOTSTRAP_SOURCE_ROOT}" &&
+        -f "${BOOTSTRAP_SOURCE_ROOT}/src/slurm_config.sh" &&
+        ! -L "${BOOTSTRAP_SOURCE_ROOT}/src/slurm_config.sh" &&
+        -r "${BOOTSTRAP_SOURCE_ROOT}/src/slurm_config.sh" ]]; then
+    BOOTSTRAP_SOURCE_VALID=1
+  fi
+fi
+
+if [[ "${ECODA_RUNTIME_IN_CONTAINER:-0}" == "1" ]]; then
+  [[ "${BOOTSTRAP_SOURCE_VALID}" == "1" ]] || {
+    echo "ERROR: container audit worker requires a valid immutable ECODA_SOURCE_ROOT." >&2
+    exit 1
+  }
+  SCRIPT_DIR="${BOOTSTRAP_SOURCE_ROOT%/}/src/utils/bash"
+elif [[ "${BOOTSTRAP_SOURCE_VALID}" == "1" ]]; then
+  SCRIPT_DIR="${BOOTSTRAP_SOURCE_ROOT%/}/src/utils/bash"
+elif [[ -n "${SLURM_JOB_ID:-}" ]]; then
   command -v scontrol >/dev/null 2>&1 || {
     echo "ERROR: scontrol is required to recover the immutable worker path." >&2
     exit 1
   }
   SCRIPT_DIR="$(scontrol show job "${SLURM_JOB_ID}" | awk -F= '/Command=/ {print $2}' | xargs dirname)"
 else
-  # Apptainer inherits the immutable source identity and executes this
-  # snapshot path directly; never try to recover a host command in-image.
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 [[ -n "${SCRIPT_DIR}" ]] || {
   echo "ERROR: could not recover the immutable worker directory." >&2
   exit 1
 }
-source "${SCRIPT_DIR}/../../slurm_config.sh"
+SLURM_CONFIG_FILE="${SCRIPT_DIR}/../../slurm_config.sh"
+[[ -f "${SLURM_CONFIG_FILE}" &&
+   ! -L "${SLURM_CONFIG_FILE}" &&
+   -r "${SLURM_CONFIG_FILE}" ]] || {
+  echo "ERROR: immutable Slurm config is missing or unsafe: ${SLURM_CONFIG_FILE}" >&2
+  exit 1
+}
+source "${SLURM_CONFIG_FILE}"
 source "${SCRIPT_DIR}/ecoda_run_common.sh"
 source "${SCRIPT_DIR}/ecoda_runtime.sh"
 
