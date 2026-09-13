@@ -18,14 +18,8 @@ from src.utils.py.benchmark_h5ad_contract import (
 )
 from src.utils.py.batch_contract import (
     RESERVED_OBS_NAME,
-    augment_batch_contract,
-    batch_correction_spec,
-    batch_correction_spec_for_keys,
-    build_batch_composite,
     build_batch_contract_identity,
     normalize_batch_keys,
-    read_h5ad_validation_summary,
-    validate_batch_metadata,
 )
 from src.utils.py.preprocess_utils import (
     load_input,
@@ -68,27 +62,46 @@ def _validate_recorded_checksum(path):
         and records.get("MD5") == _checksum(path)
         and records.get("SIZE") == str(path.stat().st_size)
     )
-def _validate_corrected_summary_path(path, batch_keys):
-    """Require the compact validated summary on a corrected H5AD cache hit."""
 
-    try:
-        normalized = read_h5ad_validation_summary(str(path), batch_keys)
-    except ValueError as exc:
-        raise ValueError(
-            f"corrected H5AD validation_summary is invalid: {path}"
-        ) from exc
-    expected_mode, expected_formula = batch_correction_spec_for_keys(
-        "preprocess",
-        batch_keys,
+
+def _build_ephemeral_batch_composite(obs, batch_keys):
+    """Encode one deterministic per-cell token for multi-key HVG selection."""
+    columns = list(batch_keys) if not isinstance(batch_keys, str) else [batch_keys]
+    if len(columns) < 2:
+        raise ValueError("ephemeral batch composite requires at least two columns")
+    missing = [column for column in columns if column not in obs.columns]
+    if missing:
+        raise KeyError(f"corrected batch columns are missing from obs: {missing}")
+
+    values_by_column = [obs[column] for column in columns]
+    tokens = []
+    for row in zip(*values_by_column):
+        fields = []
+        for value in row:
+            missing_value = value is None or value is pd.NA or value is pd.NaT
+            if not missing_value:
+                try:
+                    missing_marker = pd.isna(value)
+                except (TypeError, ValueError):
+                    missing_marker = False
+                missing_value = (
+                    isinstance(missing_marker, (bool, np.bool_))
+                    and bool(missing_marker)
+                )
+            text = "<NA>" if missing_value else repr(value)
+            type_name = f"{type(value).__module__}.{type(value).__qualname__}"
+            text_bytes = text.encode("utf-8")
+            fields.append(
+                f"{len(type_name)}:{type_name}:"
+                f"{len(text_bytes)}:{text_bytes.hex()}"
+            )
+        tokens.append("ecoda_hvg_batch_v1|" + "|".join(fields))
+    return pd.Series(
+        tokens,
+        index=obs.index,
+        name=RESERVED_OBS_NAME,
+        dtype=object,
     )
-    if (
-        normalized["correction_mode"] != expected_mode
-        or normalized["correction_formula"] != expected_formula
-    ):
-        raise ValueError(
-            f"corrected H5AD validation_summary has the wrong correction policy: {path}"
-        )
-
 
 
 
@@ -112,6 +125,7 @@ def _write_h5ad_atomic(adata, path, view_name, corrected_identity=None):
         validator_kwargs = {
             "expected_batch_contract": corrected_identity,
             "batch_contract": adata.uns.get("batch_contract"),
+            "allow_missing_corrected_summary": True,
         }
 
     validate_benchmark_h5ad_contract(
@@ -544,6 +558,8 @@ def process_view(
     *,
     hvg_batch_key=None,
     harmony_batch_keys=None,
+    # Retained as compatibility slots; corrected preprocessing no longer
+    # validates or reduces metadata at the Sample level.
     corrected_batch_keys=None,
     corrected_biological_column=None,
 ):
@@ -554,13 +570,6 @@ def process_view(
         harmony_batch_keys = batch_key
 
     adata = base_preprocessing(adata)
-    if corrected_batch_keys is not None:
-        validate_batch_metadata(
-            adata.obs,
-            corrected_batch_keys,
-            sample_column="Sample",
-            biological_column=corrected_biological_column,
-        )
     temporary_adata = None
     try:
         if hvg_batch_key == RESERVED_OBS_NAME:
@@ -570,15 +579,12 @@ def process_view(
                     f"{RESERVED_OBS_NAME!r}"
                 )
             temporary_adata = adata
-            composite = build_batch_composite(
+            composite = _build_ephemeral_batch_composite(
                 adata.obs,
                 harmony_batch_keys,
-                sample_column="Sample",
             )
-            try:
-                adata.obs[RESERVED_OBS_NAME] = composite.values
-            finally:
-                del composite
+            adata.obs[RESERVED_OBS_NAME] = composite.to_numpy()
+            del composite
 
         adata = select_hvgs_ranked(
             adata,
@@ -688,7 +694,10 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                 )
 
             path_validator_kwargs = (
-                {"expected_batch_contract": expected_batch_contract}
+                {
+                    "expected_batch_contract": expected_batch_contract,
+                    "allow_missing_corrected_summary": True,
+                }
                 if is_corrected
                 else {}
             )
@@ -701,11 +710,6 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                         "preprocessing",
                         **path_validator_kwargs,
                     )
-                    if is_corrected:
-                        _validate_corrected_summary_path(
-                            processed_file_path,
-                            batch_keys,
-                        )
                     if _validate_recorded_checksum(processed_file_path):
                         print(f"Already processed and validated: {current_ds} / {view_name}")
                         continue
@@ -796,8 +800,6 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                     compute_harmony=compute_harmony,
                     hvg_batch_key=hvg_batch_key,
                     harmony_batch_keys=harmony_batch_keys,
-                    corrected_batch_keys=batch_keys,
-                    corrected_biological_column=label_col,
                 )
             else:
                 adata_view = process_view(
@@ -814,25 +816,9 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                         f"temporary corrected batch column {RESERVED_OBS_NAME!r} "
                         "must be absent before writing the H5AD"
                     )
-                # Revalidate the post-base, post-filter metadata at the
-                # persistence boundary and project only its compact summary.
-                # Full cell/sample vectors remain in memory for consumers but
-                # never enter the corrected H5AD identity.
-                validation = validate_batch_metadata(
-                    adata_view.obs,
-                    batch_keys,
-                    sample_column="Sample",
-                    biological_column=label_col,
-                )
-                correction_mode, correction_formula = batch_correction_spec(
-                    "preprocess", validation
-                )
-                expected_batch_contract = augment_batch_contract(
-                    expected_batch_contract,
-                    validation,
-                    correction_mode,
-                    correction_formula,
-                )
+                # Persist only the configuration identity.  Cell-level batch
+                # values and any sample-level reduction remain out of the
+                # corrected H5AD provenance contract.
                 adata_view.uns["batch_contract"] = dict(expected_batch_contract)
             if is_corrected:
                 _write_h5ad_atomic(

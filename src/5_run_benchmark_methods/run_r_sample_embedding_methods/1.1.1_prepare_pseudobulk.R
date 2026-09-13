@@ -288,12 +288,16 @@ config <- read_datasets_json(args$config_path, view = args$view)
 ds <- args$ds_name
 analysis_pass <- args[["analysis_pass"]]
 analysis_variant <- Sys.getenv("ANALYSIS_VARIANT", unset = "")
-if (!analysis_variant %in% c("", "final")) {
+if (!analysis_variant %in% c("", "final", "corrected_final")) {
   stop("Unknown analysis variant: ", analysis_variant)
 }
 if (identical(analysis_variant, "final") &&
     !identical(analysis_pass, "uncorrected")) {
   stop("final analysis variant requires the uncorrected batch-effect pass")
+}
+if (identical(analysis_variant, "corrected_final") &&
+    !identical(analysis_pass, "corrected")) {
+  stop("corrected_final analysis variant requires the corrected batch-effect pass")
 }
 if (!is.null(analysis_pass) && !analysis_pass %in% c("uncorrected", "corrected")) {
   stop("Unknown analysis pass: ", analysis_pass)
@@ -302,7 +306,9 @@ cache_stem <- if (is.null(analysis_pass)) {
   ds
 } else {
   stem <- paste0(ds, "_batch_effect_", analysis_pass)
-  if (identical(analysis_variant, "final")) stem <- paste0(stem, "_final")
+  if (analysis_variant %in% c("final", "corrected_final")) {
+    stem <- paste0(stem, "_final")
+  }
   stem
 }
 entry <- config[[ds]]
@@ -334,6 +340,21 @@ batch_col <- if (!is.null(analysis_pass) && analysis_pass == "corrected") {
 }
 blind_mode <- is.null(analysis_pass) || analysis_pass == "uncorrected"
 correct_batch_mode <- identical(analysis_pass, "corrected")
+corrected_final_mode <- identical(analysis_variant, "corrected_final") &&
+  correct_batch_mode
+if (is.null(analysis_pass)) {
+  Sys.unsetenv("ANALYSIS_PASS")
+} else {
+  Sys.setenv(ANALYSIS_PASS = as.character(analysis_pass))
+}
+if (corrected_final_mode) {
+  # The final corrected lane is explicitly summary-free; the pipeline's
+  # compatibility call reads this flag from the worker environment.
+  Sys.setenv(ECODA_ALLOW_MISSING_CORRECTED_SUMMARY = "1")
+} else {
+  # Never let a stale worker environment relax ordinary or uncorrected lanes.
+  Sys.unsetenv("ECODA_ALLOW_MISSING_CORRECTED_SUMMARY")
+}
 if (correct_batch_mode) {
   h5ad_expected_batch_contract <- ecoda_hpc_batch_contract_identity(
     batch_keys = batch_keys,
@@ -346,10 +367,9 @@ h5ad_path <- get_h5ad_path(config, ds, args$view, args$input_dir)
 if (!file.exists(h5ad_path)) {
   stop("Input h5ad not found: ", h5ad_path)
 }
-if (correct_batch_mode) {
-  # This full-cell pass is intentionally before
-  # load_h5ad_pseudobulk_metadata(), whose downstream consumers may collapse
-  # metadata to the first observation for each Sample.
+if (correct_batch_mode && !corrected_final_mode) {
+  # Validate every cell before any metadata reducer selects a first row per
+  # Sample. This is the historical ordinary corrected contract.
   python_batch_metadata <- validate_h5ad_corrected_batch_metadata(
     h5ad_path = h5ad_path,
     batch_keys = as.list(unname(batch_keys)),
@@ -378,7 +398,8 @@ h5ad_metadata <- load_h5ad_pseudobulk_metadata(
   )),
   expected_batch_contract = h5ad_expected_batch_contract,
   view = args$view,
-  method = "preprocessing"
+  method = "preprocessing",
+  allow_missing_summary = corrected_final_mode
 )
 obs <- h5ad_metadata$obs
 hvg_rank_genes <- h5ad_metadata$hvg_rank_genes
@@ -386,13 +407,38 @@ if (!sample_col %in% colnames(obs)) {
   stop(sample_col, " not found in obs columns of ", h5ad_path)
 }
 if (correct_batch_mode) {
-  batch_context <- ecoda_hpc_batch_context(
-    metadata = obs,
-    batch_keys = as.list(unname(batch_keys)),
-    sample_col = sample_col,
-    biological_label = entry$label_col,
-    python_metadata = python_batch_metadata
-  )
+  if (corrected_final_mode) {
+    missing_batch_keys <- setdiff(batch_keys, colnames(obs))
+    if (length(missing_batch_keys) > 0L) {
+      stop(
+        "Confirmed batch column(s) missing from obs of ", h5ad_path, ": ",
+        paste(missing_batch_keys, collapse = ", ")
+      )
+    }
+    expected_sample_ids <- unique(as.character(obs[[sample_col]]))
+    allow_unknown_keys <- if (identical(ds, "Breast_cancer")) {
+      intersect(batch_keys, "suspension_dissociation_time")
+    } else {
+      character()
+    }
+    batch_context <- ecoda_hpc_load_sample_metadata_contract(
+      path = ecoda_hpc_sample_metadata_path(ds),
+      expected_sample_ids = expected_sample_ids,
+      batch_keys = batch_keys,
+      sample_col = sample_col,
+      biological_label = entry$label_col,
+      required_columns = entry$label_col,
+      allow_unknown_keys = allow_unknown_keys
+    )
+  } else {
+    batch_context <- ecoda_hpc_batch_context(
+      metadata = obs,
+      batch_keys = as.list(unname(batch_keys)),
+      sample_col = sample_col,
+      biological_label = entry$label_col,
+      python_metadata = python_batch_metadata
+    )
+  }
   batch_col <- batch_context$scalar_batch_col
   pseudobulk_batch_contract <- ecoda_hpc_augment_batch_contract(
     identity = ecoda_hpc_batch_contract_identity(

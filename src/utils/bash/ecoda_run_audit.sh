@@ -11,15 +11,25 @@ SELECTION_ARG=""
 SOURCE_MANIFEST_ARG=""
 RUNTIME_IDENTITY_ARG=""
 
+AUDIT_METADATA_VARIANT=""
+AUDIT_METADATA_ANALYSIS_ROOT=""
+AUDIT_METADATA_ANALYSIS_NAS_ROOT=""
+AUDIT_METADATA_ANALYSIS_PASS=""
+AUDIT_METADATA_ANALYSIS_LOG_PREFIX=""
+AUDIT_METADATA_EXPORT_MANIFEST=""
+AUDIT_METADATA_EXPORT_STATUS=""
+AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY=""
+AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_MD5=""
+AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_SIZE=""
+AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_STATUS=""
+AUDIT_METADATA_KIDNEY_LEGACY_VALID_METHODS=""
+AUDIT_METADATA_KIDNEY_LEGACY_MISSING_METHODS=""
+AUDIT_METADATA_KIDNEY_LEGACY_INVALID_METHODS=""
 AUDIT_METADATA_METHODS=""
 AUDIT_METADATA_BATCH_CONTRACT_MANIFEST=""
 AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_MD5=""
 AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SIZE=""
 AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SHA256=""
-AUDIT_BATCH_CONTRACT_DATASETS=()
-AUDIT_BATCH_CONTRACT_VIEWS=()
-AUDIT_BATCH_CONTRACT_METHODS=()
-AUDIT_BATCH_CONTRACT_PATHS=()
 
 _audit_die() {
   echo "ERROR: $*" >&2
@@ -423,42 +433,362 @@ _audit_runtime_identity() {
   AUDIT_RUNTIME_MANIFEST="${manifest}"
 }
 
+_audit_metadata_count() {
+  local metadata="$1" field="$2"
+  sed -n "s/^${field}=//p" "${metadata}" | wc -l | tr -d '[:space:]'
+}
+
+_audit_metadata_value() {
+  local metadata="$1" field="$2"
+  sed -n "s/^${field}=//p" "${metadata}" | sed -n '1p'
+}
+
+_audit_stage5_identity() {
+  local variant="${AUDIT_METADATA_VARIANT:-}"
+  local pass="${AUDIT_METADATA_PASS:-}"
+  local analysis_root="${AUDIT_METADATA_ANALYSIS_ROOT:-}"
+  local analysis_nas_root="${AUDIT_METADATA_ANALYSIS_NAS_ROOT:-}"
+  local analysis_pass="${AUDIT_METADATA_ANALYSIS_PASS:-}"
+  local expected_suffix expected_pass expected_root expected_nas
+  local expected_log_prefix
+  local analysis_log_prefix="${AUDIT_METADATA_ANALYSIS_LOG_PREFIX:-}"
+  local scratch_root nas_target nas_base
+
+  if [[ "${STAGE_ARG}" != stage5 && -n "${variant}" ]]; then
+    _audit_die "ANALYSIS_VARIANT is only valid for Stage 5 run metadata"
+    return 1
+  fi
+  [[ "${STAGE_ARG}" == stage5 ]] || return 0
+  case "${pass}" in
+    ""|uncorrected|corrected) ;;
+    *)
+      _audit_die "invalid Stage 5 PASS metadata: ${pass}"
+      return 1
+      ;;
+  esac
+
+  # Do not let a caller-provided variant or PASS_ARG influence an audit.  The
+  # run metadata is the only identity source for selected Stage 5 paths.
+  unset ANALYSIS_VARIANT ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_PASS \
+    ANALYSIS_LOG_PREFIX PASS_ARG
+  unset ECODA_STAGE5_LEGACY_SYNC_SKIP ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS
+
+  if [[ -n "${variant}" ]]; then
+    case "${variant}" in
+      final)
+        expected_suffix="uncorrected_final"
+        expected_pass="uncorrected"
+        expected_log_prefix="execution_times_batch_effect_uncorrected_final_"
+        ;;
+      corrected_final)
+        expected_suffix="corrected_final"
+        expected_pass="corrected"
+        expected_log_prefix="execution_times_batch_effect_corrected_final_"
+        ;;
+      *)
+        _audit_die "unsupported Stage 5 analysis variant: ${variant}"
+        return 1
+        ;;
+    esac
+    scratch_root="${HPC_SCRATCH_DIR%/}"
+    [[ -n "${scratch_root}" ]] || scratch_root="/"
+    if [[ "${scratch_root}" == "/" ]]; then
+      expected_root="/batch_effect/${expected_suffix}"
+    else
+      expected_root="${scratch_root}/batch_effect/${expected_suffix}"
+    fi
+    [[ "${pass}" == "${expected_pass}" &&
+       "${analysis_pass}" == "${expected_pass}" &&
+       "${AUDIT_METADATA_ROOT}" == "${analysis_root}" &&
+       "${analysis_root}" == "${expected_root}" &&
+       "${analysis_root}" = /* &&
+       "${analysis_nas_root}" = /* &&
+       "${analysis_log_prefix}" == "${expected_log_prefix}" ]] || {
+      _audit_die "Stage 5 variant metadata has mismatched pass/root/log identity"
+      return 1
+    }
+
+    case "${analysis_nas_root}" in
+      */batch_effect/${expected_suffix})
+        nas_base="${analysis_nas_root%/batch_effect/${expected_suffix}}"
+        [[ -n "${nas_base}" ]] || nas_base="/"
+        ;;
+      *)
+        _audit_die "Stage 5 variant NAS root is not variant-qualified"
+        return 1
+        ;;
+    esac
+    nas_target="${NAS_TARGET_DIR:-}"
+    if [[ -n "${nas_target}" ]]; then
+      nas_target="${nas_target%/}"
+      [[ -n "${nas_target}" ]] || nas_target="/"
+      [[ "${nas_target}" == "${nas_base}" ]] || {
+        _audit_die "Stage 5 variant NAS root disagrees with configured NAS root"
+        return 1
+      }
+    else
+      nas_target="${nas_base}"
+    fi
+    [[ "${nas_target}" = /* && -d "${nas_target}" ]] || {
+      _audit_die "Stage 5 variant NAS root parent is missing: ${nas_target}"
+      return 1
+    }
+    expected_nas="${nas_target%/}"
+    [[ -n "${expected_nas}" ]] || expected_nas="/"
+    if [[ "${expected_nas}" == "/" ]]; then
+      expected_nas="/batch_effect/${expected_suffix}"
+    else
+      expected_nas="${expected_nas}/batch_effect/${expected_suffix}"
+    fi
+    [[ "${analysis_nas_root}" == "${expected_nas}" ]] || {
+      _audit_die "Stage 5 variant NAS root has the wrong suffix"
+      return 1
+    }
+    export NAS_TARGET_DIR="${nas_target}"
+    export ANALYSIS_VARIANT="${variant}"
+    export ANALYSIS_ROOT="${analysis_root}"
+    export ANALYSIS_NAS_ROOT="${analysis_nas_root}"
+    export ANALYSIS_PASS="${analysis_pass}"
+    export ANALYSIS_LOG_PREFIX="${analysis_log_prefix}"
+    export PASS_ARG="${pass}"
+    return 0
+  fi
+
+  # Legacy runs do not record ANALYSIS_* fields.  Recreate the historical
+  # defaults from ROOT/PASS without allowing stale variant state to leak in.
+  if [[ -n "${AUDIT_METADATA_ROOT}" ]]; then
+    [[ "${AUDIT_METADATA_ROOT}" = /* ]] || {
+      _audit_die "legacy Stage 5 ROOT metadata is not absolute"
+      return 1
+    }
+    export ANALYSIS_ROOT="${AUDIT_METADATA_ROOT}"
+  elif [[ -n "${pass}" ]]; then
+    export ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${pass}"
+  else
+    export ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/benchmark"
+  fi
+  if [[ -n "${pass}" ]]; then
+    export ANALYSIS_PASS="${pass}"
+    export PASS_ARG="${pass}"
+    export ANALYSIS_LOG_PREFIX="execution_times_batch_effect_${pass}_"
+    if [[ -n "${NAS_TARGET_DIR:-}" ]]; then
+      if [[ -n "${AUDIT_METADATA_ROOT}" &&
+            "${AUDIT_METADATA_ROOT}" == "${HPC_SCRATCH_DIR}"/* ]]; then
+        export ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR%/}/${AUDIT_METADATA_ROOT#${HPC_SCRATCH_DIR}/}"
+      else
+        export ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR%/}/batch_effect/${pass}"
+      fi
+    fi
+  else
+    unset ANALYSIS_PASS PASS_ARG
+    export ANALYSIS_LOG_PREFIX="execution_times_"
+    if [[ -n "${NAS_TARGET_DIR:-}" ]]; then
+      if [[ -n "${AUDIT_METADATA_ROOT}" &&
+            "${AUDIT_METADATA_ROOT}" == "${HPC_SCRATCH_DIR}"/* ]]; then
+        export ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR%/}/${AUDIT_METADATA_ROOT#${HPC_SCRATCH_DIR}/}"
+      else
+        export ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR%/}/benchmark"
+      fi
+    fi
+  fi
+}
+
 _audit_run_metadata() {
   local metadata="${RUN_ROOT_REAL}/metadata" metadata_stage metadata_run
-  local field field_count
+  local field field_count variant_count identity_count
+  local inventory_count export_count
+  local -a identity_fields=(
+    ANALYSIS_VARIANT ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_PASS
+    ANALYSIS_LOG_PREFIX
+  )
+  local -a inventory_fields=(
+    KIDNEY_LEGACY_INVENTORY KIDNEY_LEGACY_INVENTORY_MD5
+    KIDNEY_LEGACY_INVENTORY_SIZE KIDNEY_LEGACY_INVENTORY_STATUS
+    KIDNEY_LEGACY_VALID_METHODS KIDNEY_LEGACY_MISSING_METHODS
+    KIDNEY_LEGACY_INVALID_METHODS
+  )
   _audit_regular_file "${metadata}" || return 1
-  metadata_stage="$(sed -n 's/^STAGE=//p' "${metadata}" | sed -n '1p')"
-  metadata_run="$(sed -n 's/^RUN_ID=//p' "${metadata}" | sed -n '1p')"
+  metadata_stage="$(_audit_metadata_value "${metadata}" STAGE)"
+  metadata_run="$(_audit_metadata_value "${metadata}" RUN_ID)"
   [[ "${metadata_stage}" == "${STAGE_ARG}" &&
      "${metadata_run}" == "${RUN_ID}" ]] || {
     _audit_die "run metadata does not match requested stage/run: ${metadata}"
     return 1
   }
-  [[ "$(sed -n 's/^STAGE=//p' "${metadata}" | wc -l | tr -d '[:space:]')" == 1 &&
-     "$(sed -n 's/^RUN_ID=//p' "${metadata}" | wc -l | tr -d '[:space:]')" == 1 ]] || {
+  [[ "$(_audit_metadata_count "${metadata}" STAGE)" == 1 &&
+     "$(_audit_metadata_count "${metadata}" RUN_ID)" == 1 ]] || {
     _audit_die "run metadata has duplicate stage/run identity fields: ${metadata}"
     return 1
   }
-  AUDIT_METADATA_ROOT="$(sed -n 's/^ROOT=//p' "${metadata}" | sed -n '1p')"
-  AUDIT_METADATA_PASS="$(sed -n 's/^PASS=//p' "${metadata}" | sed -n '1p')"
-  AUDIT_METADATA_METHODS="$(sed -n 's/^METHODS=//p' "${metadata}" | sed -n '1p')"
-  AUDIT_METADATA_PENDING_SELECTION="$(sed -n 's/^PENDING_SELECTION=//p' "${metadata}" | sed -n '1p')"
-  AUDIT_METADATA_PENDING_MD5="$(sed -n 's/^PENDING_SELECTION_MD5=//p' "${metadata}" | sed -n '1p')"
-  AUDIT_METADATA_PENDING_SIZE="$(sed -n 's/^PENDING_SELECTION_SIZE=//p' "${metadata}" | sed -n '1p')"
+  for field in ROOT PASS; do
+    field_count="$(_audit_metadata_count "${metadata}" "${field}")"
+    [[ "${field_count}" =~ ^[01]$ ]] || {
+      _audit_die "run metadata has duplicate ${field} fields: ${metadata}"
+      return 1
+    }
+  done
+  AUDIT_METADATA_ROOT="$(_audit_metadata_value "${metadata}" ROOT)"
+  AUDIT_METADATA_PASS="$(_audit_metadata_value "${metadata}" PASS)"
+  AUDIT_METADATA_METHODS="$(_audit_metadata_value "${metadata}" METHODS)"
+  AUDIT_METADATA_PENDING_SELECTION="$(
+    _audit_metadata_value "${metadata}" PENDING_SELECTION
+  )"
+  AUDIT_METADATA_PENDING_MD5="$(
+    _audit_metadata_value "${metadata}" PENDING_SELECTION_MD5
+  )"
+  AUDIT_METADATA_PENDING_SIZE="$(
+    _audit_metadata_value "${metadata}" PENDING_SELECTION_SIZE
+  )"
+  AUDIT_METADATA_VARIANT="$(_audit_metadata_value "${metadata}" ANALYSIS_VARIANT)"
+  AUDIT_METADATA_ANALYSIS_ROOT="$(
+    _audit_metadata_value "${metadata}" ANALYSIS_ROOT
+  )"
+  AUDIT_METADATA_ANALYSIS_NAS_ROOT="$(
+    _audit_metadata_value "${metadata}" ANALYSIS_NAS_ROOT
+  )"
+  AUDIT_METADATA_ANALYSIS_PASS="$(
+    _audit_metadata_value "${metadata}" ANALYSIS_PASS
+  )"
+  AUDIT_METADATA_ANALYSIS_LOG_PREFIX="$(
+    _audit_metadata_value "${metadata}" ANALYSIS_LOG_PREFIX
+  )"
+
+  variant_count="$(_audit_metadata_count "${metadata}" ANALYSIS_VARIANT)"
+  for field in "${identity_fields[@]}"; do
+    field_count="$(_audit_metadata_count "${metadata}" "${field}")"
+    [[ "${field_count}" =~ ^[01]$ ]] || {
+      _audit_die "run metadata has duplicate ${field} fields: ${metadata}"
+      return 1
+    }
+  done
+  if [[ ${variant_count} -eq 1 ]]; then
+    [[ -n "${AUDIT_METADATA_VARIANT}" ]] || {
+      _audit_die "run metadata has an empty ANALYSIS_VARIANT: ${metadata}"
+      return 1
+    }
+    for field in ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_PASS \
+      ANALYSIS_LOG_PREFIX; do
+      identity_count="$(_audit_metadata_count "${metadata}" "${field}")"
+      [[ "${identity_count}" == 1 &&
+         -n "$(_audit_metadata_value "${metadata}" "${field}")" ]] || {
+        _audit_die "variant run metadata is missing ${field}: ${metadata}"
+        return 1
+      }
+    done
+  else
+    for field in ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_PASS \
+      ANALYSIS_LOG_PREFIX; do
+      identity_count="$(_audit_metadata_count "${metadata}" "${field}")"
+      [[ "${identity_count}" == 0 ]] || {
+        _audit_die "legacy run metadata contains partial variant identity: ${metadata}"
+        return 1
+      }
+    done
+  fi
+
+  AUDIT_METADATA_EXPORT_MANIFEST="$(
+    _audit_metadata_value "${metadata}" METADATA_EXPORT_MANIFEST
+  )"
+  AUDIT_METADATA_EXPORT_STATUS="$(
+    _audit_metadata_value "${metadata}" METADATA_EXPORT_STATUS
+  )"
+  export_count="$(_audit_metadata_count "${metadata}" METADATA_EXPORT_MANIFEST)"
+  [[ "${export_count}" == "$(_audit_metadata_count \
+    "${metadata}" METADATA_EXPORT_STATUS)" ]] || {
+    _audit_die "run metadata has an incomplete metadata-export identity: ${metadata}"
+    return 1
+  }
+  if [[ -n "${AUDIT_METADATA_VARIANT}" ]]; then
+    [[ "${export_count}" == 1 &&
+       -n "${AUDIT_METADATA_EXPORT_MANIFEST}" &&
+       -n "${AUDIT_METADATA_EXPORT_STATUS}" ]] || {
+      _audit_die "variant run metadata is missing metadata-export identity: ${metadata}"
+      return 1
+    }
+  else
+    [[ "${export_count}" == 0 ]] || {
+      _audit_die "legacy run metadata contains metadata-export identity: ${metadata}"
+      return 1
+    }
+  fi
+
+  AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY="$(
+    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_INVENTORY
+  )"
+  AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_MD5="$(
+    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_INVENTORY_MD5
+  )"
+  AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_SIZE="$(
+    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_INVENTORY_SIZE
+  )"
+  AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_STATUS="$(
+    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_INVENTORY_STATUS
+  )"
+  AUDIT_METADATA_KIDNEY_LEGACY_VALID_METHODS="$(
+    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_VALID_METHODS
+  )"
+  AUDIT_METADATA_KIDNEY_LEGACY_MISSING_METHODS="$(
+    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_MISSING_METHODS
+  )"
+  AUDIT_METADATA_KIDNEY_LEGACY_INVALID_METHODS="$(
+    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_INVALID_METHODS
+  )"
+  inventory_count="$(_audit_metadata_count \
+    "${metadata}" KIDNEY_LEGACY_INVENTORY)"
+  for field in "${inventory_fields[@]}"; do
+    field_count="$(_audit_metadata_count "${metadata}" "${field}")"
+    [[ "${field_count}" =~ ^[01]$ ]] || {
+      _audit_die "run metadata has duplicate ${field} fields: ${metadata}"
+      return 1
+    }
+  done
+  if [[ ${inventory_count} -eq 1 ]]; then
+    for field in KIDNEY_LEGACY_INVENTORY_MD5 KIDNEY_LEGACY_INVENTORY_SIZE \
+      KIDNEY_LEGACY_INVENTORY_STATUS KIDNEY_LEGACY_VALID_METHODS \
+      KIDNEY_LEGACY_MISSING_METHODS KIDNEY_LEGACY_INVALID_METHODS; do
+      field_count="$(_audit_metadata_count "${metadata}" "${field}")"
+      [[ "${field_count}" == 1 ]] || {
+        _audit_die "Kidney legacy inventory metadata is incomplete: ${metadata}"
+        return 1
+      }
+    done
+  else
+    for field in "${inventory_fields[@]:1}"; do
+      field_count="$(_audit_metadata_count "${metadata}" "${field}")"
+      [[ "${field_count}" == 0 ]] || {
+        _audit_die "Kidney legacy inventory metadata is incomplete: ${metadata}"
+        return 1
+      }
+    done
+  fi
+
+  AUDIT_METADATA_BATCH_CONTRACT_MANIFEST=""
+  AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_MD5=""
+  AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SIZE=""
+  AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SHA256=""
   if [[ "${AUDIT_METADATA_PASS}" == corrected ]]; then
     for field in BATCH_CONTRACT_MANIFEST BATCH_CONTRACT_MANIFEST_MD5 \
       BATCH_CONTRACT_MANIFEST_SIZE BATCH_CONTRACT_MANIFEST_SHA256; do
-      field_count="$(sed -n "s/^${field}=//p" "${metadata}" | wc -l | tr -d '[:space:]')"
+      field_count="$(_audit_metadata_count "${metadata}" "${field}")"
       [[ "${field_count}" == 1 ]] || {
         _audit_die "corrected run metadata is missing or duplicates ${field}: ${metadata}"
         return 1
       }
     done
-    AUDIT_METADATA_BATCH_CONTRACT_MANIFEST="$(sed -n 's/^BATCH_CONTRACT_MANIFEST=//p' "${metadata}" | sed -n '1p')"
-    AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_MD5="$(sed -n 's/^BATCH_CONTRACT_MANIFEST_MD5=//p' "${metadata}" | sed -n '1p')"
-    AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SIZE="$(sed -n 's/^BATCH_CONTRACT_MANIFEST_SIZE=//p' "${metadata}" | sed -n '1p')"
-    AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SHA256="$(sed -n 's/^BATCH_CONTRACT_MANIFEST_SHA256=//p' "${metadata}" | sed -n '1p')"
+    AUDIT_METADATA_BATCH_CONTRACT_MANIFEST="$(
+      _audit_metadata_value "${metadata}" BATCH_CONTRACT_MANIFEST
+    )"
+    AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_MD5="$(
+      _audit_metadata_value "${metadata}" BATCH_CONTRACT_MANIFEST_MD5
+    )"
+    AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SIZE="$(
+      _audit_metadata_value "${metadata}" BATCH_CONTRACT_MANIFEST_SIZE
+    )"
+    AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SHA256="$(
+      _audit_metadata_value "${metadata}" BATCH_CONTRACT_MANIFEST_SHA256
+    )"
   fi
+  _audit_stage5_identity || return 1
 }
 
 _audit_terminal_status() {
@@ -637,11 +967,19 @@ _audit_batch_contract_manifest() {
       _audit_die "corrected source H5AD is missing or empty: ${source_path}"
       return 1
     }
-    expected_identity="$(
-      ecoda_batch_contract_identity "${DATASETS_JSON_FILE}" "${row_dataset}" \
-        "${row_view}" "${ECODA_CORRECTED_BATCH_METHOD_ID}" \
-        "${ECODA_CORRECTED_BATCH_MODEL_ID}" "${source_path}"
-    )" || return 1
+    if [[ "${AUDIT_METADATA_VARIANT:-}" == corrected_final ]]; then
+      expected_identity="$(
+        ecoda_batch_contract_identity "${DATASETS_JSON_FILE}" "${row_dataset}" \
+          "${row_view}" "${ECODA_CORRECTED_BATCH_METHOD_ID}" \
+          "${ECODA_CORRECTED_BATCH_MODEL_ID}"
+      )" || return 1
+    else
+      expected_identity="$(
+        ecoda_batch_contract_identity "${DATASETS_JSON_FILE}" "${row_dataset}" \
+          "${row_view}" "${ECODA_CORRECTED_BATCH_METHOD_ID}" \
+          "${ECODA_CORRECTED_BATCH_MODEL_ID}" "${source_path}"
+      )" || return 1
+    fi
     cmp -s "${row_path}" <(printf '%s\n' "${expected_identity}") || {
       _audit_die "corrected batch-contract identity or validated summary mismatches ${key}"
       return 1
@@ -682,6 +1020,29 @@ _audit_batch_contract_manifest() {
   AUDIT_BATCH_CONTRACT_PATHS=("${actual_paths[@]}")
 }
 
+_audit_stage5_variant_view() {
+  local view="$1"
+  case "${AUDIT_METADATA_VARIANT:-}" in
+    "") ;;
+    final)
+      [[ "${view}" == batch_effect_uncorrected ]] || {
+        _audit_die "final Stage 5 selection must use batch_effect_uncorrected"
+        return 1
+      }
+      ;;
+    corrected_final)
+      [[ "${view}" == batch_effect_corrected ]] || {
+        _audit_die "corrected_final Stage 5 selection must use batch_effect_corrected"
+        return 1
+      }
+      ;;
+    *)
+      _audit_die "unsupported Stage 5 analysis variant"
+      return 1
+      ;;
+  esac
+}
+
 _audit_stage5_scope_selection() {
   local dataset view label extra scope
   local pending_dataset pending_view pending_label pending_extra pending_key
@@ -698,6 +1059,7 @@ _audit_stage5_scope_selection() {
       _audit_die "Stage 5 selection dataset/view is not declared: ${dataset}/${view}"
       return 1
     }
+    _audit_stage5_variant_view "${view}" || return 1
     case "${label}" in
       benchmark_analysis|batch_effect_uncorrected|batch_effect_corrected)
         [[ "${label}" == "${view}" ]] || {
@@ -765,6 +1127,7 @@ _audit_stage5_scope_selection() {
           _audit_die "Stage 5 pending dataset/view is not declared: ${pending_dataset}/${pending_view}"
           return 1
         }
+        _audit_stage5_variant_view "${pending_view}" || return 1
         case "${pending_label}" in
           benchmark_analysis|batch_effect_uncorrected|batch_effect_corrected)
             _audit_die "Stage 5 pending selection uses a view as method scope: ${scope}"
@@ -994,7 +1357,7 @@ _audit_python_binary() {
 
 _audit_benchmark_h5ad() {
   local path="$1" view="$2" method="$3" identity_path="${4:-}"
-  local python_bin validator
+  local python_bin validator variant="${AUDIT_METADATA_VARIANT:-}"
   local -a validator_args
   python_bin="$(_audit_python_binary)" || return 1
   validator="${AUDIT_SOURCE_ROOT}/src/utils/py/benchmark_h5ad_contract.py"
@@ -1005,6 +1368,11 @@ _audit_benchmark_h5ad() {
   validator_args=(--path "${path}" --view "${view}" --method "${method}")
   [[ -n "${identity_path}" ]] &&
     validator_args+=(--expected-batch-contract "${identity_path}")
+  if [[ "${variant}" == corrected_final &&
+        "${view}" == batch_effect_corrected &&
+        "${method}" == "Stage 3 preprocessing" ]]; then
+    validator_args+=(--allow-missing-corrected-summary)
+  fi
   "${python_bin}" "${validator}" "${validator_args[@]}" >/dev/null 2>&1 || {
     _audit_die "selected H5AD contract is invalid: ${path}"
     return 1
@@ -1031,9 +1399,286 @@ _audit_corrected_source_contracts() {
       _audit_die "corrected source H5AD checksum is invalid: ${source_path}"
       return 1
     }
-    _audit_benchmark_h5ad "${source_path}" "${view}" \
-      "Stage 5 corrected source" "${identity_path}" || return 1
+    if [[ "${AUDIT_METADATA_VARIANT:-}" == corrected_final ]]; then
+      _audit_benchmark_h5ad "${source_path}" "${view}" \
+        "Stage 3 preprocessing" "${identity_path}" || return 1
+    else
+      _audit_benchmark_h5ad "${source_path}" "${view}" \
+        "Stage 5 corrected source" "${identity_path}" || return 1
+    fi
   done
+}
+
+_audit_metadata_export_manifest() {
+  local manifest="${AUDIT_METADATA_EXPORT_MANIFEST:-}"
+  local status_report="${AUDIT_METADATA_EXPORT_STATUS:-}"
+  local expected_view="batch_effect_${AUDIT_METADATA_ANALYSIS_PASS:-}"
+  local manifest_real status_real
+  local dataset view input output extra key name expected_input expected_output
+  local row_count=0 actual_count=0 found
+  local status_field
+  local expected_keys="" actual_keys=""
+  [[ "${STAGE_ARG}" == stage5 &&
+     -n "${AUDIT_METADATA_VARIANT:-}" ]] || return 0
+  export ECODA_SOURCE_ROOT="${AUDIT_SOURCE_ROOT}"
+  export PROJECT_ROOT="${AUDIT_SOURCE_ROOT}"
+  export DATASETS_JSON_FILE="${AUDIT_SOURCE_ROOT}/datasets.json"
+  [[ "${manifest}" == "${RUN_ROOT_REAL}/manifests/metadata_export.tsv" &&
+     "${status_report}" == "${RUN_ROOT_REAL}/status/metadata_export.report" ]] || {
+    _audit_die "metadata-export paths are not run-owned"
+    return 1
+  }
+  [[ -f "${manifest}" && ! -L "${manifest}" && -r "${manifest}" ]] || {
+    _audit_die "metadata-export manifest is missing or unsafe: ${manifest}"
+    return 1
+  }
+  [[ -f "${status_report}" && ! -L "${status_report}" &&
+     -r "${status_report}" ]] || {
+    _audit_die "metadata-export status is missing or unsafe: ${status_report}"
+    return 1
+  }
+  _audit_regular_file "${manifest}.md5" || return 1
+  _audit_regular_file "${status_report}.md5" || return 1
+  manifest_real="$(ecoda_realpath_existing "${manifest}")" || return 1
+  status_real="$(ecoda_realpath_existing "${status_report}")" || return 1
+  [[ "${manifest_real}" == "${manifest}" &&
+     "${status_real}" == "${status_report}" ]] || {
+    _audit_die "metadata-export identity paths are not canonical"
+    return 1
+  }
+  ecoda_validate_run_owned_path "${manifest}" "${RUN_ROOT_REAL}" || return 1
+  ecoda_validate_run_owned_path "${manifest}.md5" "${RUN_ROOT_REAL}" || return 1
+  ecoda_validate_run_owned_path "${status_report}" "${RUN_ROOT_REAL}" || return 1
+  ecoda_validate_run_owned_path "${status_report}.md5" "${RUN_ROOT_REAL}" || return 1
+  ecoda_validate_manifest "${manifest}" 4 || return 1
+  ecoda_validate_checksum "${manifest}" || {
+    _audit_die "metadata-export manifest checksum is invalid: ${manifest}"
+    return 1
+  }
+
+  # The exporter is declared for each selected dataset/view, independently of
+  # pending method rows.  Build that exact set from the caller's selection;
+  # never discover additional rows from the run root.
+  while IFS=$'\t' read -r dataset view _label extra; do
+    [[ -n "${dataset}" && -n "${view}" && -z "${extra}" ]] || return 1
+    _audit_stage5_variant_view "${view}" || return 1
+    key="${dataset}|${view}"
+    case " ${expected_keys} " in
+      *" ${key} "*)
+        continue
+        ;;
+    esac
+    expected_keys="${expected_keys} ${key}"
+    row_count=$((row_count + 1))
+  done < "${SELECTION_ARG}"
+  [[ ${row_count} -gt 0 ]] || return 1
+
+  while IFS=$'\t' read -r dataset view input output extra; do
+    [[ -n "${dataset}" && -n "${view}" && -n "${input}" &&
+       -n "${output}" && -z "${extra}" &&
+       "${dataset}" =~ ^[A-Za-z0-9_.-]+$ &&
+       "${view}" =~ ^[A-Za-z0-9_.-]+$ &&
+       "${input}" = /* && "${output}" = /* ]] || {
+      _audit_die "metadata-export manifest row is malformed: ${manifest}"
+      return 1
+    }
+    _audit_stage5_variant_view "${view}" || return 1
+    key="${dataset}|${view}"
+    case " ${expected_keys} " in
+      *" ${key} "*) ;;
+      *)
+        _audit_die "metadata-export row escapes selected scope: ${key}"
+        return 1
+        ;;
+    esac
+    case " ${actual_keys} " in
+      *" ${key} "*)
+        _audit_die "metadata-export manifest contains a duplicate: ${key}"
+        return 1
+        ;;
+    esac
+    actual_keys="${actual_keys} ${key}"
+    name="$(ecoda_view_output_name "${dataset}" "${view}")" || return 1
+    expected_input="${HPC_SCRATCH_DIR}/${dataset}/output/${name}"
+    expected_output="${ANALYSIS_ROOT}/metadata/${dataset}_sample_metadata.feather"
+    [[ "${input}" == "${expected_input}" &&
+       "${output}" == "${expected_output}" ]] || {
+      _audit_die "metadata-export row is not bound to the selected variant path: ${key}"
+      return 1
+    }
+    _audit_regular_file "${input}" || return 1
+    _audit_regular_file "${output}" || return 1
+    ecoda_validate_checksum "${input}" || {
+      _audit_die "metadata-export input H5AD checksum is invalid: ${input}"
+      return 1
+    }
+    ecoda_validate_checksum "${output}" || {
+      _audit_die "metadata-export Feather checksum is invalid: ${output}"
+      return 1
+    }
+    actual_count=$((actual_count + 1))
+  done < "${manifest}"
+  [[ ${actual_count} -eq ${row_count} ]] || {
+    _audit_die "metadata-export manifest does not match selected datasets"
+    return 1
+  }
+
+  for status_field in STATE RUN_ID ANALYSIS_VARIANT ANALYSIS_ROOT \
+    ANALYSIS_NAS_ROOT ANALYSIS_PASS ANALYSIS_LOG_PREFIX MANIFEST COUNT PENDING; do
+    [[ "$(_audit_metadata_count "${status_report}" "${status_field}")" == 1 ]] || {
+      _audit_die "metadata-export status is missing or duplicates ${status_field}"
+      return 1
+    }
+  done
+  [[ "$(_audit_metadata_value "${status_report}" STATE)" == OK &&
+     "$(_audit_metadata_value "${status_report}" RUN_ID)" == "${RUN_ID}" &&
+     "$(_audit_metadata_value "${status_report}" ANALYSIS_VARIANT)" == \
+       "${AUDIT_METADATA_VARIANT}" &&
+     "$(_audit_metadata_value "${status_report}" ANALYSIS_ROOT)" == \
+       "${AUDIT_METADATA_ANALYSIS_ROOT}" &&
+     "$(_audit_metadata_value "${status_report}" ANALYSIS_NAS_ROOT)" == \
+       "${AUDIT_METADATA_ANALYSIS_NAS_ROOT}" &&
+     "$(_audit_metadata_value "${status_report}" ANALYSIS_PASS)" == \
+       "${AUDIT_METADATA_ANALYSIS_PASS}" &&
+     "$(_audit_metadata_value "${status_report}" ANALYSIS_LOG_PREFIX)" == \
+       "${AUDIT_METADATA_ANALYSIS_LOG_PREFIX}" &&
+     "$(_audit_metadata_value "${status_report}" MANIFEST)" == "${manifest}" &&
+     "$(_audit_metadata_value "${status_report}" COUNT)" == "${row_count}" &&
+     "$(_audit_metadata_value "${status_report}" PENDING)" =~ ^[0-9]+$ ]] || {
+    _audit_die "metadata-export status identity mismatches run metadata"
+    return 1
+  }
+  ecoda_validate_checksum "${status_report}" || {
+    _audit_die "metadata-export status checksum is invalid: ${status_report}"
+    return 1
+  }
+}
+
+_audit_kidney_legacy_inventory() {
+  local inventory="${AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY:-}"
+  local declared_md5="${AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_MD5:-}"
+  local declared_size="${AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_SIZE:-}"
+  local declared_status="${AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_STATUS:-}"
+  local declared_valid="${AUDIT_METADATA_KIDNEY_LEGACY_VALID_METHODS:-}"
+  local declared_missing="${AUDIT_METADATA_KIDNEY_LEGACY_MISSING_METHODS:-}"
+  local declared_invalid="${AUDIT_METADATA_KIDNEY_LEGACY_INVALID_METHODS:-}"
+  local row_dataset row_method row_status row_paths extra expected_paths
+  local expected_method expected_status computed_status=""
+  local row_count=0 index=0 path
+  local valid_methods="" missing_methods="" invalid_methods=""
+  local key
+  local -a methods=(
+    prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
+  )
+  local -a paths=()
+  [[ "${STAGE_ARG}" == stage5 ]] || return 0
+  if [[ -z "${inventory}" ]]; then
+    return 0
+  fi
+  [[ "${AUDIT_METADATA_VARIANT:-}" == final &&
+     "${AUDIT_METADATA_PASS:-}" == uncorrected ]] || {
+    _audit_die "Kidney legacy inventory is only valid for final uncorrected Stage 5"
+    return 1
+  }
+  [[ "${inventory}" == "${RUN_ROOT_REAL}/manifests/kidney_legacy_inventory.tsv" &&
+     -f "${inventory}" && ! -L "${inventory}" && -r "${inventory}" ]] || {
+    _audit_die "Kidney legacy inventory is missing or not run-owned"
+    return 1
+  }
+  _audit_regular_file "${inventory}.md5" || return 1
+  ecoda_validate_run_owned_path "${inventory}" "${RUN_ROOT_REAL}" || return 1
+  ecoda_validate_run_owned_path "${inventory}.md5" "${RUN_ROOT_REAL}" || return 1
+  ecoda_validate_manifest "${inventory}" 4 || return 1
+  ecoda_validate_checksum "${inventory}" || {
+    _audit_die "Kidney legacy inventory checksum is invalid: ${inventory}"
+    return 1
+  }
+  [[ "${declared_md5}" == "${ECODA_CHECKSUM_MD5}" &&
+     "${declared_size}" == "${ECODA_CHECKSUM_SIZE}" &&
+     "${declared_md5}" =~ ^[[:xdigit:]]{32}$ &&
+     "${declared_size}" =~ ^[1-9][0-9]*$ &&
+     -n "${declared_status}" ]] || {
+    _audit_die "Kidney legacy inventory metadata checksum is invalid"
+    return 1
+  }
+  while IFS=$'\t' read -r row_dataset row_method row_status row_paths extra; do
+    expected_method="${methods[${index}]:-}"
+    [[ -n "${expected_method}" &&
+       "${row_dataset}" == Kidney_KPMP_full &&
+       "${row_method}" == "${expected_method}" &&
+       -z "${extra}" ]] || {
+      _audit_die "Kidney legacy inventory row order or dataset is invalid"
+      return 1
+    }
+    [[ "${row_status}" == valid || "${row_status}" == missing ||
+       "${row_status}" == invalid ]] || {
+      _audit_die "Kidney legacy inventory status is invalid"
+      return 1
+    }
+    case "${row_method}" in
+      prepare_pseudobulk)
+        paths=(
+          "${HPC_SCRATCH_DIR}/batch_effect/uncorrected/pseudobulks/Kidney_KPMP_full_batch_effect_uncorrected_pseudobulk_hvg2000.rds"
+        )
+        ;;
+      pseudobulk|gloscope)
+        paths=(
+          "${HPC_SCRATCH_DIR}/batch_effect/uncorrected/results/Kidney_KPMP_full_batch_effect_uncorrected_${row_method}.rds"
+        )
+        ;;
+      composition)
+        paths=(
+          "${HPC_SCRATCH_DIR}/batch_effect/uncorrected/results/Kidney_KPMP_full_batch_effect_uncorrected_composition.rds"
+          "${HPC_SCRATCH_DIR}/batch_effect/uncorrected/results/Kidney_KPMP_full_batch_effect_uncorrected_metadata.rds"
+        )
+        ;;
+      mrvi|pilot|qot)
+        paths=(
+          "${HPC_SCRATCH_DIR}/batch_effect/uncorrected/embeddings/Kidney_KPMP_full_batch_effect_uncorrected_hvg2000_highres_${row_method}_dists.feather"
+        )
+        ;;
+      *) return 1 ;;
+    esac
+    expected_paths="${paths[0]}"
+    for path in "${paths[@]:1}"; do expected_paths="${expected_paths};${path}"; done
+    [[ "${row_paths}" == "${expected_paths}" ]] || {
+      _audit_die "Kidney legacy inventory path is not the declared legacy path"
+      return 1
+    }
+    expected_status="${row_method}=invalid"
+    case "${row_status}" in
+      valid)
+        valid_methods="${valid_methods}${row_method} "
+        for path in "${paths[@]}"; do
+          _audit_regular_file "${path}" || return 1
+          ecoda_validate_checksum "${path}" || {
+            _audit_die "validated Kidney legacy artifact checksum is invalid: ${path}"
+            return 1
+          }
+        done
+        ;;
+      missing) missing_methods="${missing_methods}${row_method} " ;;
+      invalid) invalid_methods="${invalid_methods}${row_method} " ;;
+    esac
+    if [[ -n "${computed_status}" ]]; then computed_status="${computed_status};"; fi
+    computed_status="${computed_status}${row_method}=${row_status}"
+    row_count=$((row_count + 1))
+    index=$((index + 1))
+  done < "${inventory}"
+  [[ ${row_count} -eq ${#methods[@]} && ${index} -eq ${#methods[@]} &&
+     "${declared_status}" == "${computed_status}" &&
+     "${declared_valid}" == "${valid_methods% }" &&
+     "${declared_missing}" == "${missing_methods% }" &&
+     "${declared_invalid}" == "${invalid_methods% }" ]] || {
+    _audit_die "Kidney legacy inventory status metadata mismatches rows"
+    return 1
+  }
+  # This is deliberately the only context passed to the common expansion
+  # helper.  It contains valid methods from this run-owned inventory only.
+  if [[ -n "${valid_methods}" ]]; then
+    export ECODA_STAGE5_LEGACY_SYNC_SKIP=1
+    export ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS="${valid_methods% }"
+  fi
 }
 
 _audit_annotation_artifact() {
@@ -1053,7 +1698,7 @@ _audit_annotation_artifact() {
 
 _audit_matrix_feather() {
   local path="$1" owner_run="$2" identity_path="${3:-}"
-  local python_bin validator
+  local python_bin validator variant="${AUDIT_METADATA_VARIANT:-}"
   local -a validator_args
   python_bin="$(_audit_python_binary)" || return 1
   validator="${AUDIT_SOURCE_ROOT}/src/5_run_benchmark_methods/matrix_artifact_validator.py"
@@ -1062,6 +1707,8 @@ _audit_matrix_feather() {
     return 1
   }
   validator_args=(--artifact "${path}" --producer-run-id "${owner_run}")
+  [[ -n "${variant}" ]] &&
+    validator_args+=(--analysis-variant "${variant}")
   if [[ "${AUDIT_METADATA_PASS:-}" == corrected ]]; then
     validator_args+=(--batch --batch-pass corrected)
   fi
@@ -1072,11 +1719,11 @@ _audit_matrix_feather() {
     return 1
   }
 }
-
 _audit_benchmark_rds() {
   local path="$1" dataset="$2" view="$3" label="$4" identity_path="${5:-}"
   local rscript="${PIXI_RSCRIPT:-Rscript}"
   local validator="${AUDIT_SOURCE_ROOT}/src/5_run_benchmark_methods/validate_benchmark_rds_contract.R"
+  local variant="${AUDIT_METADATA_VARIANT:-}"
   local -a rscript_cmd rds_args
   rscript_cmd=()
   rds_args=()
@@ -1102,6 +1749,8 @@ _audit_benchmark_rds() {
     --config "${DATASETS_JSON_FILE}")
   [[ -n "${AUDIT_METADATA_PASS:-}" ]] &&
     rds_args+=(--batch-pass "${AUDIT_METADATA_PASS}")
+  [[ -n "${variant}" ]] &&
+    rds_args+=(--analysis-variant "${variant}")
   [[ -n "${identity_path}" ]] &&
     rds_args+=(--expected-batch-contract "${identity_path}")
   [[ "${path}" == *_metadata.rds ]] && rds_args+=(--metadata)
@@ -1216,12 +1865,16 @@ _audit_prepare_output_semantics() {
 
 _audit_selected_artifacts() {
   local path owner_dir owner_run metadata_root metadata_pass scope_selection
-  local semantic_index=0 semantic_dataset semantic_view semantic_label
+  local artifact_marker semantic_index=0
   scope_selection="${SELECTION_ARG}"
   export DATASETS_JSON_FILE="${AUDIT_SOURCE_ROOT}/datasets.json"
   export PROJECT_ROOT="${AUDIT_SOURCE_ROOT}"
   metadata_root="${AUDIT_METADATA_ROOT:-}"
   metadata_pass="${AUDIT_METADATA_PASS:-}"
+  if [[ -n "${AUDIT_METADATA_VARIANT:-}" ]]; then
+    ecoda_stage5_validate_identity "${metadata_pass}" \
+      "${AUDIT_METADATA_VARIANT}" || return 1
+  fi
   if [[ "${STAGE_ARG}" == stage5 ]]; then
     case "${metadata_pass}" in
       ""|uncorrected|corrected) ;;
@@ -1240,6 +1893,11 @@ _audit_selected_artifacts() {
         export ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/${metadata_pass}"
       fi
     fi
+  fi
+  if [[ "${STAGE_ARG}" == stage5 &&
+        -n "${AUDIT_METADATA_VARIANT:-}" ]]; then
+    ecoda_stage5_validate_identity "${metadata_pass}" \
+      "${AUDIT_METADATA_VARIANT}" || return 1
   fi
   if [[ "${STAGE_ARG}" == stage5 ]]; then
     _audit_stage5_scope_selection || return 1
@@ -1270,6 +1928,18 @@ _audit_selected_artifacts() {
       semantic_view="${AUDIT_OUTPUT_VIEWS[${semantic_index}]}"
       semantic_label="${AUDIT_OUTPUT_LABELS[${semantic_index}]}"
       semantic_index=$((semantic_index + 1))
+      if [[ "${STAGE_ARG}" == stage5 &&
+            -n "${AUDIT_METADATA_VARIANT:-}" ]]; then
+        case "${AUDIT_METADATA_VARIANT}" in
+          final) artifact_marker="_batch_effect_uncorrected_final_" ;;
+          corrected_final) artifact_marker="_batch_effect_corrected_final_" ;;
+          *) return 1 ;;
+        esac
+        [[ "${path##*/}" == *"${artifact_marker}"* ]] || {
+          _audit_die "selected Stage 5 artifact stem is not variant-qualified: ${path}"
+          return 1
+        }
+      fi
     else
       semantic_dataset=""
       semantic_view=""
@@ -1316,6 +1986,8 @@ _audit_corrected_source_contracts || exit 1
 _audit_runtime_identity "${RUNTIME_IDENTITY_ARG}" || exit 1
 _audit_selection || exit 1
 _audit_terminal_status || exit 1
+_audit_metadata_export_manifest || exit 1
+_audit_kidney_legacy_inventory || exit 1
 _audit_scheduler_ids || exit 1
 _audit_selected_artifacts || exit 1
 printf 'ECODA_RUN_AUDIT_OK=%s\n' "${RUN_ID}"

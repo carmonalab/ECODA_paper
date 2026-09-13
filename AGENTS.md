@@ -175,35 +175,57 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   metadata artifact. Never pull full benchmark H5ADs to satisfy a local
   runner.
 
-- **Approved final batch-effect scope:** The uncorrected Stage 3 recovery
-  contains exactly four rows: `Covid19_PBMC`, `Diabetes`, `Joanito`, and
-  `Lung`, each using `batch_effect_uncorrected` and the final-qualified
-  output names. The independent corrected Stage 3 wave is generated at
-  launch from the immutable current `datasets.json`: every non-underscore
-  entry with `use_for_batch_effect == true`, using
-  `batch_effect_corrected`. It may include cohorts frozen for the
-  uncorrected/final analysis lane, including `Kidney_KPMP_full`, and runs in
-  the same supported parallel Stage 3 wave or a separately validated
-  corrected gate. Corrected Stage 3 outputs do not authorize corrected Stage
-  5 work.
-- **Approved final Stage 5 scope:** The changed-dataset wave selects exactly
-  the four uncorrected rows above with the suite `prepare_pseudobulk`,
-  `pseudobulk`, `gloscope`, `composition`, `mrvi`, `pilot`, and `qot`.
-  `Kidney_KPMP_full` receives only targeted missing-method recovery in the
-  uncorrected Stage 5 final lane; for uncorrected/final-lane work it receives
-  no new Stage 2/3/4 work. Its corrected Stage 3 row remains eligible through
-  the dynamic config rule above, but it does not authorize Pipeline 4 or a
-  corrected Stage 5 lane. The final Stage 5 lane has no corrected pass or
-  `corrected_final` Stage 5 root.
+- **Approved final batch-effect Pipeline 3 scope and topology:** Pipeline 3 uses
+  two separate parallel selections/gates/arrays, not one combined or
+  serialized four-plus-nine matrix. The uncorrected selection is exactly four
+  rows: `Covid19_PBMC`, `Diabetes`, `Joanito`, and `Lung`, each using
+  `batch_effect_uncorrected`. The corrected selection is exactly every current
+  non-underscore `datasets.json` entry with `use_for_batch_effect == true`, in
+  configuration order: `Joanito`, `Stephenson`, `Alzheimer`, `Breast_cancer`,
+  `Covid19_PBMC`, `Kidney_KPMP_full`, `Diabetes`, `Lupus_PBMC`, and `Lung`,
+  each using `batch_effect_corrected`. Dataset rows dispatch concurrently;
+  manifest order is deterministic ordering only. The four uncorrected rows use
+  final-qualified output names. Each selected output is validated for
+  non-emptiness, schema, checksum, and ownership; any prior owner-state
+  discrepancy is reconciled validator-only before reuse. A valid output from
+  the prior reviewed gate is skipped as `NOOP_VALIDATED`, never implicitly
+  rerun.
+- **Pipeline 3 corrected contract:** Pass each cell's original technical batch
+  metadata directly to Harmony/HVG. Do not perform a sample-level batch
+  constancy check, within-`Sample` constancy check, cell-level majority
+  rewrite, or retired corrected-source metadata/RDS release preflight.
+  Configuration, content, and provenance checks remain required. The separate
+  Covid obs-only subset preflight remains required for both declared views.
+- **Approved final Pipeline 5 scopes:** The uncorrected lane uses
+  `--pass uncorrected --analysis-variant final`, root
+  `batch_effect/uncorrected_final`, one five-dataset selection containing the
+  four uncorrected targets above plus `Kidney_KPMP_full`, and exactly
+  `prepare_pseudobulk`, `pseudobulk`, `gloscope`, `composition`, `mrvi`,
+  `pilot`, and `qot`. The corrected lane uses
+  `--pass corrected --analysis-variant corrected_final`, root
+  `batch_effect/corrected_final`, one nine-dataset selection in the corrected
+  order above, and the same seven methods. It has at most 63 method rows.
+  Both lanes use explicit eight-key artifact manifests; dataset rows dispatch
+  concurrently within each lane, and distinct corrected/uncorrected roots may
+  run in parallel after their respective Pipeline 3 predecessors are
+  reviewed. Valid rows are skipped individually; only missing or invalid rows
+  are selected.
+- **Pipeline 5 metadata boundary:** Corrected sample-level consumers read the
+  obs-only metadata Feather under the corrected analysis root and apply
+  majority only to `Alzheimer/assay`,
+  `Breast_cancer/suspension_dissociation_time` (literal `unknown` is an
+  ordinary configured class), and `Lupus_PBMC/batch_cov`. Corrected
+  cell-level methods retain source cell values. The uncorrected lane has no
+  majority assignment.
 - **Uncorrected/final frozen and disabled cohorts:** `Alzheimer`,
   `Breast_cancer`, `Lupus_PBMC`, and `Stephenson` are frozen and MUST be
   absent from every new uncorrected Stage 3 selection, Stage 2/4/5 job,
-  final-lane validator selection, and compute manifest. This exclusion does
-  not apply to the independent corrected Stage 3 wave, whose membership is
-  determined only by the current config rule above. Disabled cohorts
-  `CombinedPBMC`, `Kidney_KPMP`, `Myocardial_infarction`, and `Parkinson`,
-  plus `_debug`, remain non-production and MUST be absent from all production
-  selections.
+  final-lane validator selection, and compute manifest. They remain eligible
+  in the independent corrected Pipeline 3 and corrected Pipeline 5 selections
+  above because those selections are defined by the current config contract.
+  Disabled cohorts `CombinedPBMC`, `Kidney_KPMP`, `Myocardial_infarction`, and
+  `Parkinson`, plus `_debug`, remain non-production and MUST be absent from all
+  production selections.
 - **Diagnostic fixture boundary:** `_debug` remains available only for
   explicitly separate diagnostic probes and is never a production target,
   validator input, or scheduler selection.
@@ -211,22 +233,24 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   covered by the existing `not_suitable_for_auto_annotation` exemption.
   Historical batch processing does not imply that automatic HiTME/scATOMIC
   annotation was required for those datasets.
-- Batch-effect-only `batch_effect_uncorrected` and `batch_effect_corrected` views do not run Pipeline 4; their final H5ADs use the configured source/author cell-type columns without HiTME/scATOMIC annotation work.
+- Batch-effect-only `batch_effect_uncorrected` and `batch_effect_corrected`
+  views do not run Pipeline 4; their final H5ADs use the configured
+  source/author cell-type columns without HiTME/scATOMIC annotation work.
 - **Legacy baseline selection:** benchmark methods are `gloscope`, `mofa`,
   `pseudobulk`, `composition`, `scitd`, `mrvi`, `scpoli`, `pilot`, `qot`, and
   `pilotgm`; analyses are `trans` and `zeroimp`; the legacy batch-effect suite
   is `prepare_pseudobulk`, `pseudobulk`, `gloscope`, `composition`, `mrvi`,
   `pilot`, and `qot`.
-- The approved final Stage 5 suite is exactly the seven methods above and is
-  valid only for the explicit four-row uncorrected selection; no ordinary,
-  post-baseline, corrected, or broad selection is part of this final lane.
+- The approved final Pipeline 5 suite is exactly the seven methods above and
+  is valid only for the explicit uncorrected five-dataset or corrected
+  nine-dataset selections. Ordinary benchmark, post-baseline, and broad
+  selections remain outside these final lanes.
 - The Stage 5 default method list remains the baseline list above. Methods or
   scripts registered after this baseline are not defaults and run only when
   named explicitly with `--methods` or an explicit selection manifest.
   Existing valid benchmark rows and unaffected legacy batch rows are skipped
-  individually without `--force`. Final changed-dataset and Kidney rows are
-  submitted only through the explicit targeted selections described above;
-  valid rows remain outside every recomputation selection.
+  individually without `--force`; valid rows remain outside every
+  recomputation selection.
 - A `datasets.json` change invalidates only dependent downstream rows; it
   never triggers a blanket rerun. Gate history is evidence only: an old
   `FAILED`, `PRELAUNCH_STOP`, or stale gate manifest cannot select rows for

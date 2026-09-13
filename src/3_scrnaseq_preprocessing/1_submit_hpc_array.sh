@@ -18,7 +18,6 @@ VIEWS_SET=0
 SELECTION_FILE_ARG=""
 SELECTION_FILE_SET=0
 EXACT_BATCH_SELECTION=0
-COMBINED_BATCH_SELECTION=0
 FORCE_ARG=0
 SYNC_ONLY_RUN=""
 SYNC_ONLY_SET=0
@@ -29,7 +28,6 @@ THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 RUNTIME_EXPORT=""
 STAGE3_SELECTION_CLASSIFICATION=""
 STAGE3_UNCORRECTED_BATCH_SELECTION=0
-STAGE3_COMBINED_BATCH_SELECTION=0
 STAGE3_CORRECTED_SELECTION=0
 STAGE3_COVID_PREFLIGHT_REQUIRED=0
 STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED="${STAGE3_COVID_PREFLIGHT_ROOT:-${ECODA_COVID_PREFLIGHT_ROOT:-}}"
@@ -38,19 +36,17 @@ STAGE3_COVID_PREFLIGHT_ROOT=""
 usage() {
   cat <<'EOF'
 Usage: 1_submit_hpc_array.sh [--datasets LIST] [--views LIST]
-       [--selection-file TSV] [--combined-batch-selection]
-       [--exact-batch-selection] [--force]
+       [--selection-file TSV] [--exact-batch-selection] [--force]
        [--sync-only RUN_ID] [--mem VALUE] [--max-mem VALUE]
        [--partition NAME] [--throttle N]
 
 Each manifest row is DATASET<TAB>VIEW. --ds_name and --view remain accepted
 as compatibility aliases for one dataset/view selection. Exact batch mode
-requires the immutable twelve-row uncorrected selection file. A corrected-only
-selection must contain every current non-underscore use_for_batch_effect
-dataset's corrected row in config order. Combined batch mode requires the four
-target uncorrected rows followed by every configured non-underscore
-use_for_batch_effect dataset in corrected mode, in config order. An
-all-corrected manifest remains a separate corrected-only release path.
+requires the immutable twelve-row uncorrected selection file. The approved
+batch-effect selectors are separate: the uncorrected selector is exactly the
+four target rows in fixed order, while the corrected selector is every current
+non-underscore use_for_batch_effect dataset in config order. A combined
+uncorrected-plus-corrected launch is not supported.
 EOF
 }
 
@@ -67,7 +63,10 @@ while [[ $# -gt 0 ]]; do
     --view=*) VIEWS_ARG="${1#*=}"; VIEWS_SET=1; shift ;;
     --selection-file) SELECTION_FILE_ARG="${2:-}"; SELECTION_FILE_SET=1; shift 2 ;;
     --selection-file=*) SELECTION_FILE_ARG="${1#*=}"; SELECTION_FILE_SET=1; shift ;;
-    --combined-batch-selection) COMBINED_BATCH_SELECTION=1; shift ;;
+    --combined-batch-selection)
+      echo "ERROR: combined Stage 3 selection is retired; submit uncorrected and corrected arrays separately." >&2
+      exit 1
+      ;;
     --exact-batch-selection) EXACT_BATCH_SELECTION=1; shift ;;
     --force) FORCE_ARG=1; shift ;;
     --sync-only) SYNC_ONLY_RUN="${2:-}"; SYNC_ONLY_SET=1; shift 2 ;;
@@ -118,21 +117,6 @@ if [[ "${ECODA_SOURCE_ROOT:-}" = */tree &&
   # check after the manifest is copied into the run root.
   DATASETS_JSON_FILE="${ECODA_SOURCE_ROOT}/datasets.json"
   export DATASETS_JSON_FILE
-fi
-if [[ ${COMBINED_BATCH_SELECTION} -eq 1 && ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
-  echo "ERROR: --combined-batch-selection cannot be combined with --exact-batch-selection." >&2
-  exit 1
-fi
-if [[ ${COMBINED_BATCH_SELECTION} -eq 1 &&
-      ${SYNC_ONLY_SET} -eq 0 &&
-      ${SELECTION_FILE_SET} -eq 0 ]]; then
-  echo "ERROR: --combined-batch-selection requires --selection-file." >&2
-  exit 1
-fi
-if [[ ${COMBINED_BATCH_SELECTION} -eq 1 &&
-      (${DATASETS_SET} -eq 1 || ${VIEWS_SET} -eq 1) ]]; then
-  echo "ERROR: --combined-batch-selection cannot combine --datasets/--views." >&2
-  exit 1
 fi
 
 stage3_manifest_value() {
@@ -461,110 +445,10 @@ stage3_validate_uncorrected_four_selection() {
   [[ ${count} -eq 4 ]] || return 1
   STAGE3_SELECTION_CLASSIFICATION="uncorrected_four"
   STAGE3_UNCORRECTED_BATCH_SELECTION=1
-  STAGE3_COMBINED_BATCH_SELECTION=0
   STAGE3_CORRECTED_SELECTION=0
 }
 
-stage3_validate_combined_batch_selection() {
-  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
-  local corrected_rows corrected_count expected_count count=0
-  local ds view expected_ds expected_view line corrected_index
-  local expected_datasets=(
-    Covid19_PBMC
-    Diabetes
-    Joanito
-    Lung
-  )
-  local expected_views=(
-    batch_effect_uncorrected
-    batch_effect_uncorrected
-    batch_effect_uncorrected
-    batch_effect_uncorrected
-  )
-  [[ -r "${selection}" ]] || return 1
-  ecoda_validate_manifest "${selection}" 2 || return 1
-  corrected_rows="$(stage3_corrected_dataset_list "${config}")" || return 1
-  corrected_count="$(printf '%s\n' "${corrected_rows}" | awk 'NF {count++} END {print count + 0}')"
-  [[ "${corrected_count}" =~ ^[1-9][0-9]*$ ]] || {
-    echo "ERROR: configured corrected Stage 3 selection is empty." >&2
-    return 1
-  }
-  expected_count=$((4 + corrected_count))
-  while IFS= read -r line || [[ -n "${line}" ]]; do
-    IFS=$'\t' read -r ds view <<< "${line}"
-    count=$((count + 1))
-    if [[ ${count} -le 4 ]]; then
-      expected_ds="${expected_datasets[$((count - 1))]}"
-      expected_view="${expected_views[$((count - 1))]}"
-      [[ "${ds}" == "${expected_ds}" && "${view}" == "${expected_view}" ]] || {
-        echo "ERROR: combined Stage 3 row ${count} must be ${expected_ds}/${expected_view}." >&2
-        return 1
-      }
-      stage3_validate_selection_row "${ds}" "${view}" || {
-        echo "ERROR: combined Stage 3 uncorrected row is not configured: ${ds}/${view}" >&2
-        return 1
-      }
-      jq -e --arg ds "${ds}" '.[$ds].use_for_batch_effect == true' \
-        "${config}" >/dev/null || {
-        echo "ERROR: combined Stage 3 uncorrected row is not batch-enabled: ${ds}" >&2
-        return 1
-      }
-    else
-      corrected_index=$((count - 4))
-      expected_ds="$(printf '%s\n' "${corrected_rows}" |
-        sed -n "${corrected_index}p")"
-      [[ -n "${expected_ds}" &&
-         "${ds}" == "${expected_ds}" &&
-         "${view}" == "batch_effect_corrected" ]] || {
-        echo "ERROR: combined Stage 3 corrected row ${corrected_index} is stale or out of order." >&2
-        return 1
-      }
-      stage3_validate_configured_corrected_row \
-        "${config}" "${ds}" "${view}" || return 1
-    fi
-  done < "${selection}"
-  [[ ${count} -eq ${expected_count} ]] || {
-    echo "ERROR: combined Stage 3 selection requires exactly four uncorrected rows followed by ${corrected_count} current-config corrected rows." >&2
-    return 1
-  }
-  STAGE3_SELECTION_CLASSIFICATION="combined"
-  STAGE3_UNCORRECTED_BATCH_SELECTION=0
-  STAGE3_COMBINED_BATCH_SELECTION=1
-  STAGE3_CORRECTED_SELECTION=1
-}
 
-stage3_selection_is_combined_candidate() {
-  local selection="${1:-}" ds view extra line expected_ds expected_view
-  local total=0 uncorrected=0 corrected=0 other=0 prefix_ok=1
-  local expected_datasets=(
-    Covid19_PBMC
-    Diabetes
-    Joanito
-    Lung
-  )
-  [[ -r "${selection}" ]] || return 1
-  while IFS= read -r line || [[ -n "${line}" ]]; do
-    IFS=$'\t' read -r ds view extra <<< "${line}"
-    [[ -n "${ds}" && -n "${view}" && -z "${extra}" ]] || return 1
-    total=$((total + 1))
-    if [[ ${total} -le 4 ]]; then
-      expected_ds="${expected_datasets[$((total - 1))]}"
-      expected_view="batch_effect_uncorrected"
-      [[ "${ds}" == "${expected_ds}" &&
-         "${view}" == "${expected_view}" ]] || prefix_ok=0
-    fi
-    case "${view}" in
-      batch_effect_uncorrected) uncorrected=$((uncorrected + 1)) ;;
-      batch_effect_corrected) corrected=$((corrected + 1)) ;;
-      *) other=1 ;;
-    esac
-  done < "${selection}"
-  if [[ ${total} -gt 4 && ${prefix_ok} -eq 1 && ${corrected} -gt 0 ]]; then
-    return 0
-  fi
-  [[ ${total} -gt 0 && ${uncorrected} -gt 0 &&
-     ${corrected} -gt 0 && ${other} -eq 0 ]]
-}
 
 stage3_selection_contains_corrected() {
   local selection="${1:-}" ds view extra
@@ -605,7 +489,6 @@ stage3_validate_corrected_selection() {
   }
   STAGE3_SELECTION_CLASSIFICATION="corrected_only"
   STAGE3_UNCORRECTED_BATCH_SELECTION=0
-  STAGE3_COMBINED_BATCH_SELECTION=0
   STAGE3_CORRECTED_SELECTION=1
 }
 
@@ -627,24 +510,16 @@ stage3_classify_selection() {
   local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
   stage3_reset_selection_classification
   # --exact-batch-selection has already validated the immutable historical
-  # twelve-row matrix before this function is reached.  Keep it outside the
-  # corrected release modes and therefore outside all source preflights.
+  # twelve-row matrix before this function is reached.
   if [[ ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
     STAGE3_SELECTION_CLASSIFICATION="historical_exact"
     return 0
   fi
-  if [[ ${COMBINED_BATCH_SELECTION} -eq 1 ]]; then
-    stage3_validate_combined_batch_selection "${selection}" "${config}" || return 1
-  elif stage3_selection_is_uncorrected_four_candidate "${selection}"; then
+  if stage3_selection_is_uncorrected_four_candidate "${selection}"; then
     stage3_validate_uncorrected_four_selection "${selection}" "${config}" || return 1
   elif stage3_selection_contains_target_uncorrected "${selection}"; then
-    # Target uncorrected rows are released only as the exact four-row mode or
-    # the exact four-row prefix plus the complete dynamic corrected tail.
-    stage3_selection_is_combined_candidate "${selection}" &&
-      stage3_validate_combined_batch_selection "${selection}" "${config}" || {
-        echo "ERROR: partial target uncorrected Stage 3 selection is not an approved four-row mode." >&2
-        return 1
-      }
+    echo "ERROR: target uncorrected Stage 3 selection must be exactly the approved four rows." >&2
+    return 1
   elif stage3_selection_contains_corrected "${selection}"; then
     stage3_validate_corrected_selection "${selection}" "${config}" || return 1
   fi
@@ -653,7 +528,6 @@ stage3_classify_selection() {
 stage3_reset_selection_classification() {
   STAGE3_SELECTION_CLASSIFICATION=""
   STAGE3_UNCORRECTED_BATCH_SELECTION=0
-  STAGE3_COMBINED_BATCH_SELECTION=0
   STAGE3_CORRECTED_SELECTION=0
 }
 
@@ -805,11 +679,11 @@ stage3_run_covid_obs_preflight() {
   local status_dir="${ECODA_RUN_ROOT}/status/h5ad_obs_audit"
   local input_path="${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
   local expected_root="${ECODA_RUN_ROOT}/preflight"
-  local view path status safe state status_run status_dataset status_view
-  local status_task status_path preflight_script preflight_id preflight_rc
-  local status_count=0
+  local view="" path="" status="" safe="" state="" status_run="" status_dataset="" status_view=""
+  local status_task="" status_path="" status_count=0
+  local preflight_script="" preflight_id="" preflight_rc=0
   case "${STAGE3_SELECTION_CLASSIFICATION}" in
-    uncorrected_four|combined) ;;
+    uncorrected_four|corrected_only) ;;
     *) return 0 ;;
   esac
   stage3_selection_contains_covid "${selection}" || return 0
@@ -882,539 +756,111 @@ stage3_run_covid_obs_preflight() {
   stage3_install_covid_obs_evidence || return 1
 }
 
-stage3_validate_corrected_source_release() {
-  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
-  local manifest="${ECODA_RUN_ROOT}/manifests/corrected_batch_preflight.tsv"
-  local manifest_tmp="${manifest}.build.$$"
-  local status_dir="${ECODA_RUN_ROOT}/status/corrected_batch_preflight"
-  local ds view input_name source_path source_real report report_tmp raw_tmp safe
-  local sample_col label_col batch_json subset_json status source_type
-  local source_md5 source_sha256 source_size
-  local source_commit source_archive source_archive_sha source_config source_datasets
-  local source_toml source_lock source_aux source_branch source_format
-  local runtime_image runtime_manifest runtime_image_sha runtime_manifest_sha
-  local runtime_image_size runtime_manifest_size rscript_bin source_script
-  [[ ${STAGE3_CORRECTED_SELECTION} -eq 1 ]] || return 0
-  [[ -r "${selection}" && "${ECODA_RUN_ROOT:-}" = /* &&
-     -d "${ECODA_RUN_ROOT}" && ! -L "${ECODA_RUN_ROOT}" ]] || return 1
-  mkdir -p "${status_dir}" || return 1
-  [[ ! -L "${status_dir}" ]] || return 1
-  ecoda_validate_run_owned_path "${status_dir}" "${ECODA_RUN_ROOT}" || return 1
-  : > "${manifest_tmp}" || return 1
-  source_format="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" FORMAT)" || return 1
-  source_commit="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_COMMIT)" || return 1
-  source_archive="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ARCHIVE_PATH)" || return 1
-  source_archive_sha="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ARCHIVE_SHA256)" || return 1
-  source_config="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" CONFIG_HELPER_SHA256)" || return 1
-  source_datasets="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" DATASETS_SHA256)" || return 1
-  source_toml="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" PIXI_TOML_SHA256)" || return 1
-  source_lock="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" PIXI_LOCK_SHA256)" || return 1
-  source_aux="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" AUX_ROOT)" || return 1
-  source_branch="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SCGATE_DB_BRANCH)" || return 1
-  runtime_image="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE)" || return 1
-  runtime_manifest="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST)" || return 1
-  runtime_image_sha="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SHA256)" || return 1
-  runtime_manifest_sha="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SHA256)" || return 1
-  runtime_image_size="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SIZE)" || return 1
-  runtime_manifest_size="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SIZE)" || return 1
-  while IFS=$'\t' read -r ds view; do
-    [[ "${view}" == "batch_effect_corrected" ]] || continue
-    stage3_validate_configured_corrected_row \
-      "${config}" "${ds}" "${view}" || return 1
-    sample_col="$(jq -r --arg ds "${ds}" --arg view "${view}" \
-      '((.[$ds].columns // {}) * (.[$ds].views[$view].columns // {})).sample' \
-      "${config}")" || return 1
-    label_col="$(jq -r --arg ds "${ds}" --arg view "${view}" \
-      '((.[$ds].columns // {}) * (.[$ds].views[$view].columns // {})).label' \
-      "${config}")" || return 1
-    batch_json="$(jq -c --arg ds "${ds}" --arg view "${view}" \
-      '((.[$ds].columns // {}) * (.[$ds].views[$view].columns // {})).batch' \
-      "${config}")" || return 1
-    subset_json="$(jq -c --arg ds "${ds}" --arg view "${view}" \
-      '.[$ds].views[$view].subset_vars // {}' "${config}")" || return 1
-    input_name="$(jq -r --arg ds "${ds}" --arg view "${view}" \
-      '.[$ds].views[$view].input_file_name // .[$ds].views[$view].input_file // empty' \
-      "${config}")" || return 1
-    case "${input_name}" in
-      /*) source_path="${input_name}" ;;
-      *"/"*|*$'\n'*|*$'\t'*)
-        echo "ERROR: corrected source input name is unsafe: ${ds}/${view}" >&2
-        return 1
-        ;;
-      *) source_path="${HPC_SCRATCH_DIR}/${ds}/data/${input_name}" ;;
-    esac
-    source_real="${source_path}"
-    if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" != "1" ]]; then
-      [[ -f "${source_path}" && ! -L "${source_path}" &&
-         -r "${source_path}" ]] || {
-        echo "ERROR: corrected Stage 3 source input is missing or unsafe: ${source_path}" >&2
-        return 1
-      }
-      source_real="$(ecoda_realpath_existing "${source_path}")" || return 1
-      [[ -f "${source_real}" && ! -L "${source_real}" && -r "${source_real}" ]] || return 1
-      source_md5="$(ecoda_md5_file "${source_real}")" || return 1
-      source_sha256="$(ecoda_sha256_file "${source_real}")" || return 1
-      source_size="$(wc -c < "${source_real}" | tr -d '[:space:]')" || return 1
-    fi
-    report="${ECODA_RUN_ROOT}/manifests/corrected_batch_preflight/$(
-      _ecoda_safe_component "${ds}__${view}"
-    ).json"
-    mkdir -p "$(dirname "${report}")" || return 1
-    ecoda_validate_run_owned_path "$(dirname "${report}")" "${ECODA_RUN_ROOT}" || return 1
-    report_tmp="${report}.build.$$"
-    raw_tmp="${report}.raw.$$"
-    rm -f "${report_tmp}" "${raw_tmp}"
-    status=""
-    case "${source_real}" in
-      *.rds|*.RDS)
-        source_type="rds"
-        status="SOURCE_METADATA_VALIDATED_RDS"
-        if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" == "1" ]]; then
-          status="CONFIG_ONLY_TEST"
-          jq -n --arg dataset "${ds}" --arg view "${view}" \
-            --arg source "${source_real}" --arg sample "${sample_col}" \
-            --arg label "${label_col}" --arg status "${status}" \
-            --arg source_root "${SOURCE_ROOT}" \
-            --arg source_manifest "${SOURCE_MANIFEST_ORIGINAL}" \
-            --arg runtime_identity "${RUNTIME_IDENTITY}" \
-            --arg runtime_manifest "${runtime_manifest}" \
-            --arg runtime_image "${runtime_image}" \
-            --argjson batch "${batch_json}" --argjson subset "${subset_json}" \
-            '{
-              schema_version: 1, dataset: $dataset, view: $view, status: $status,
-              source_type: "rds", source_path: $source,
-              config: {dataset: $dataset, view: $view, sample_column: $sample,
-                label_column: $label, batch_keys: $batch, subset_vars: $subset},
-              provenance: {source_root: $source_root,
-                source_manifest: {path: $source_manifest},
-                runtime_identity: {path: $runtime_identity},
-                runtime_manifest: {path: $runtime_manifest},
-                runtime_image: {path: $runtime_image}}
-            }' > "${report_tmp}" || return 1
-          mv -f "${report_tmp}" "${report}" || return 1
-        else
-          source_script="$(stage3_require_source_script \
-            "${SCRIPT_DIR}/../utils/r/audit_corrected_source_metadata.R")" || return 1
-          rscript_bin="${PIXI_RSCRIPT%% *}"
-          [[ -n "${rscript_bin}" ]] || rscript_bin="${ECODA_HOST_ENV_PREFIX:-}/bin/Rscript"
-          [[ -x "${rscript_bin}" ]] || {
-            echo "ERROR: immutable runtime Rscript is unavailable for corrected RDS preflight." >&2
-            return 1
-          }
-          (
-            cd "${SOURCE_ROOT}" || exit 1
-            "${rscript_bin}" --vanilla "${source_script}" \
-              --config "${config}" --input-file "${source_real}" \
-              --output "${report}" --dataset "${ds}" \
-              --view "${view}" --source-root "${SOURCE_ROOT}" \
-              --source-manifest "${SOURCE_MANIFEST_ORIGINAL}" \
-              --runtime-identity "${RUNTIME_IDENTITY}" \
-              --run-root "${ECODA_RUN_ROOT}"
-          ) || {
-            rm -f "${report}" "${report}.md5"
-            echo "ERROR: corrected Stage 3 RDS source metadata preflight failed: ${ds}/${view}" >&2
-            return 1
-          }
-        fi
-        ;;
-      *.h5ad|*.H5AD)
-        source_type="h5ad"
-        status="SOURCE_METADATA_VALIDATED_H5AD"
-        if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" == "1" ]]; then
-          status="CONFIG_ONLY_TEST"
-          jq -n --arg dataset "${ds}" --arg view "${view}" \
-            --arg source "${source_real}" --arg sample "${sample_col}" \
-            --arg label "${label_col}" --arg status "${status}" \
-            --arg source_root "${SOURCE_ROOT}" \
-            --arg source_manifest "${SOURCE_MANIFEST_ORIGINAL}" \
-            --arg runtime_identity "${RUNTIME_IDENTITY}" \
-            --arg runtime_manifest "${runtime_manifest}" \
-            --arg runtime_image "${runtime_image}" \
-            --argjson batch "${batch_json}" --argjson subset "${subset_json}" \
-            '{
-              schema_version: 1, dataset: $dataset, view: $view, status: $status,
-              source_type: "h5ad", source_path: $source,
-              config: {dataset: $dataset, view: $view, sample_column: $sample,
-                label_column: $label, batch_keys: $batch, subset_vars: $subset},
-              provenance: {source_root: $source_root,
-                source_manifest: {path: $source_manifest},
-                runtime_identity: {path: $runtime_identity},
-                runtime_manifest: {path: $runtime_manifest},
-                runtime_image: {path: $runtime_image}}
-            }' > "${report_tmp}" || return 1
-          mv -f "${report_tmp}" "${report}" || return 1
-        else
-          source_script="$(stage3_require_source_script \
-            "${SCRIPT_DIR}/../utils/py/audit_corrected_h5ad_source.py")" || return 1
-          (
-            cd "${SOURCE_ROOT}" || exit 1
-            export PYTHONPATH="${SOURCE_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
-            "${PYTHON_BIN}" "${source_script}" \
-              --config "${config}" \
-              --input-file "${source_real}" \
-              --output "${report}" \
-              --dataset "${ds}" \
-              --view "${view}" \
-              --source-root "${SOURCE_ROOT}" \
-              --source-manifest "${SOURCE_MANIFEST_ORIGINAL}" \
-              --runtime-identity "${RUNTIME_IDENTITY}" \
-              --run-root "${ECODA_RUN_ROOT}" \
-              --sample-column "${sample_col}" \
-              --label-column "${label_col}" \
-              --batch-keys-json "${batch_json}" \
-              --subset-vars-json "${subset_json}"
-          ) || {
-            rm -f "${report}" "${report}.md5"
-            echo "ERROR: corrected Stage 3 H5AD source metadata preflight failed: ${ds}/${view}" >&2
-            return 1
-          }
-        fi
-        ;;
-      *)
-        echo "ERROR: corrected source metadata validation requires an RDS or H5AD input: ${ds}/${view}" >&2
-        return 1
-        ;;
-    esac
-    [[ -s "${report}" && ! -L "${report}" && -r "${report}" ]] || return 1
-    ecoda_validate_run_owned_path "${report}" "${ECODA_RUN_ROOT}" || return 1
-    ecoda_write_checksum "${report}" || return 1
-    printf '%s\t%s\t%s\t%s\t%s\n' "${ds}" "${view}" "${status}" \
-      "${source_real}" "${report}" >> "${manifest_tmp}" || return 1
-    safe="$(_ecoda_safe_component "${ds}__${view}")"
-    ecoda_atomic_write "${status_dir}/${safe}.status" \
-      "STATE=OK\nRUN_ID=${ECODA_RUN_ID}\nDATASET=${ds}\nVIEW=${view}\nSTATUS=${status}\nSOURCE_TYPE=${source_type}\nSOURCE_PATH=${source_real}\nREPORT=${report}\n" ||
-      return 1
-  done < "${selection}"
-  ecoda_atomic_install_manifest "${manifest_tmp}" "${manifest}" 5 || {
-    rm -f "${manifest_tmp}"
-    return 1
-  }
-  rm -f "${manifest_tmp}"
-  ecoda_write_checksum "${manifest}" || return 1
-  ecoda_validate_manifest "${manifest}" 5
+stage3_nas_output_path() {
+  local ds="$1" view="$2" output
+  output="$(ecoda_view_output_name "${ds}" "${view}")"
+  [[ -n "${output}" ]] || return 1
+  printf '%s/%s/output/%s' "${NAS_TARGET_DIR}" "${ds}" "${output}"
 }
-
-stage3_validate_corrected_source_evidence() {
-  local selection="${1:-}"
-  local manifest="${ECODA_RUN_ROOT}/manifests/corrected_batch_preflight.tsv"
-  local status_dir="${ECODA_RUN_ROOT}/status/corrected_batch_preflight"
-  local ds view extra row_ds row_view row_status row_source row_report
-  local safe status expected_count=0 evidence_count=0 expected_report
-  local source_real source_md5 source_sha256 source_size source_type
-  local sample_col label_col batch_json batch_expected_json subset_json
-  local runtime_manifest runtime_image runtime_image_sha runtime_manifest_sha
-  local runtime_image_size runtime_manifest_size
-  [[ ${STAGE3_CORRECTED_SELECTION} -eq 1 ]] || return 0
-  [[ -r "${selection}" && -f "${manifest}" && ! -L "${manifest}" &&
-     -r "${manifest}" && -s "${manifest}" ]] || return 1
-  ecoda_validate_run_owned_path "${manifest}" "${ECODA_RUN_ROOT}" || return 1
-  ecoda_validate_checksum "${manifest}" || return 1
-  ecoda_validate_manifest "${manifest}" 5 || return 1
-  [[ -d "${status_dir}" && ! -L "${status_dir}" ]] || return 1
-  ecoda_validate_run_owned_path "${status_dir}" "${ECODA_RUN_ROOT}" || return 1
-  runtime_manifest="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST)" || return 1
-  runtime_image="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE)" || return 1
-  runtime_image_sha="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SHA256)" || return 1
-  runtime_manifest_sha="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SHA256)" || return 1
-  runtime_image_size="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SIZE)" || return 1
-  runtime_manifest_size="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SIZE)" || return 1
-  while IFS=$'\t' read -r ds view extra; do
-    [[ -n "${ds}" && -n "${view}" && -z "${extra}" ]] || return 1
-    [[ "${view}" == "batch_effect_corrected" ]] || continue
-    expected_count=$((expected_count + 1))
-    row="$(sed -n "$((expected_count))p" "${manifest}")"
-    IFS=$'\t' read -r row_ds row_view row_status row_source row_report extra <<< "${row}"
-    [[ "${row_ds}" == "${ds}" && "${row_view}" == "${view}" &&
-       -n "${row_status}" && "${row_source}" = /* &&
-       -n "${row_report}" && -z "${extra}" ]] || return 1
-    expected_report="${ECODA_RUN_ROOT}/manifests/corrected_batch_preflight/$(
-      _ecoda_safe_component "${ds}__${view}"
-    ).json"
-    [[ "${row_report}" == "${expected_report}" ]] || return 1
-    case "${row_status}" in
-      CONFIG_ONLY_TEST) [[ "${PREPROCESS_SUBMITTER_TEST:-0}" == "1" ]] || return 1 ;;
-      SOURCE_METADATA_VALIDATED_H5AD)
-        source_type="h5ad"
-        ;;
-      SOURCE_METADATA_VALIDATED_RDS)
-        source_type="rds"
-        ;;
-      SOURCE_METADATA_VALIDATED_H5AD_CACHE)
-        source_type="h5ad"
-        ;;
-      *) return 1 ;;
-    esac
-    [[ -f "${row_report}" && ! -L "${row_report}" &&
-       -r "${row_report}" && -s "${row_report}" ]] || return 1
-    ecoda_validate_run_owned_path "${row_report}" "${ECODA_RUN_ROOT}" || return 1
-    ecoda_validate_checksum "${row_report}" || return 1
-    safe="$(_ecoda_safe_component "${ds}__${view}")"
-    status="${status_dir}/${safe}.status"
-    [[ -f "${status}" && ! -L "${status}" && -r "${status}" ]] || return 1
-    ecoda_validate_run_owned_path "${status}" "${ECODA_RUN_ROOT}" || return 1
-    [[ "$(sed -n 's/^STATE=//p' "${status}" | head -1)" == "OK" &&
-       "$(sed -n 's/^RUN_ID=//p' "${status}" | head -1)" == "${ECODA_RUN_ID}" &&
-       "$(sed -n 's/^DATASET=//p' "${status}" | head -1)" == "${ds}" &&
-       "$(sed -n 's/^VIEW=//p' "${status}" | head -1)" == "${view}" &&
-       "$(sed -n 's/^STATUS=//p' "${status}" | head -1)" == "${row_status}" &&
-       "$(sed -n 's/^REPORT=//p' "${status}" | head -1)" == "${row_report}" ]] ||
-      return 1
-    sample_col="$(jq -r --arg ds "${ds}" --arg view "${view}" \
-      '((.[$ds].columns // {}) * (.[$ds].views[$view].columns // {})).sample' \
-      "${DATASETS_JSON_FILE}")" || return 1
-    label_col="$(jq -r --arg ds "${ds}" --arg view "${view}" \
-      '((.[$ds].columns // {}) * (.[$ds].views[$view].columns // {})).label' \
-      "${DATASETS_JSON_FILE}")" || return 1
-    batch_json="$(jq -c --arg ds "${ds}" --arg view "${view}" \
-      '((.[$ds].columns // {}) * (.[$ds].views[$view].columns // {})).batch' \
-      "${DATASETS_JSON_FILE}")" || return 1
-    subset_json="$(jq -c --arg ds "${ds}" --arg view "${view}" \
-      '.[$ds].views[$view].subset_vars // {}' "${DATASETS_JSON_FILE}")" || return 1
-    batch_expected_json="$(printf '%s\n' "${batch_json}" | jq -c '
-      if type == "array" then .
-      elif type == "string" then [.]
-      else error("configured batch keys must be a string or array")
-      end
-    ')" || return 1
-    if [[ "${row_status}" == "CONFIG_ONLY_TEST" ]]; then
-      jq -e --arg dataset "${ds}" --arg view "${view}" --arg status "${row_status}" \
-        --arg source "${row_source}" --arg sample "${sample_col}" \
-        --arg label "${label_col}" --argjson batch "${batch_json}" \
-        '.schema_version == 1 and .dataset == $dataset and .view == $view and
-         .status == $status and .source_path == $source and
-         .config.dataset == $dataset and .config.view == $view and
-         .config.sample_column == $sample and .config.label_column == $label and
-         .config.batch_keys == $batch' "${row_report}" >/dev/null || return 1
-    else
-      source_real="$(ecoda_realpath_existing "${row_source}")" || return 1
-      [[ "${source_real}" == "${row_source}" ]] || return 1
-      source_md5="$(ecoda_md5_file "${source_real}")" || return 1
-      source_sha256="$(ecoda_sha256_file "${source_real}")" || return 1
-      source_size="$(wc -c < "${source_real}" | tr -d '[:space:]')" || return 1
-      jq -e --arg dataset "${ds}" --arg view "${view}" --arg status "${row_status}" \
-        --arg source "${row_source}" --arg source_type "${source_type}" \
-        --arg source_md5 "${source_md5}" --arg source_sha256 "${source_sha256}" \
-        --argjson source_size "${source_size}" --arg sample "${sample_col}" \
-        --arg label "${label_col}" --argjson batch "${batch_json}" \
-        --argjson batch_expected "${batch_expected_json}" \
-        --argjson subset "${subset_json}" --arg source_root "${SOURCE_ROOT}" \
-        --arg source_manifest "${SOURCE_MANIFEST_ORIGINAL}" \
-        --arg runtime_identity "${RUNTIME_IDENTITY}" \
-        --arg runtime_manifest "${runtime_manifest}" --arg runtime_image "${runtime_image}" \
-        --arg runtime_image_sha "${runtime_image_sha}" \
-        --arg runtime_manifest_sha "${runtime_manifest_sha}" \
-        --arg runtime_image_size "${runtime_image_size}" \
-        --arg runtime_manifest_size "${runtime_manifest_size}" '
-        .schema_version == 1 and .dataset == $dataset and .view == $view and
-        .status == $status and .source_type == $source_type and
-        .source_path == $source and
-        .source_identity.path == $source and
-        .source_identity.md5 == $source_md5 and
-        .source_identity.sha256 == $source_sha256 and
-        .source_identity.size == $source_size and
-        .config.dataset == $dataset and .config.view == $view and
-        .config.sample_column == $sample and .config.label_column == $label and
-        (if $source_type == "h5ad" then
-           .config.batch_keys == $batch_expected
-         else
-           (.config.batch_keys == $batch or
-            .config.batch_keys == $batch_expected)
-         end) and
-        (.subset_audit as $subset_audit |
-          ($subset_audit | type == "object") and
-          $subset_audit.sample_column == $sample and
-          ($subset_audit.total_cells | type == "number") and
-          ($subset_audit.retained_cells | type == "number") and
-          ($subset_audit.dropped_cells | type == "number") and
-          ($subset_audit.total_samples | type == "number") and
-          ($subset_audit.retained_samples | type == "number") and
-          ($subset_audit.dropped_samples | type == "number") and
-          ($subset_audit.total_cells >= 1) and
-          ($subset_audit.retained_cells >= 1) and
-          ($subset_audit.dropped_cells >= 0) and
-          ($subset_audit.total_samples >= 1) and
-          ($subset_audit.retained_samples >= 1) and
-          ($subset_audit.dropped_samples >= 0) and
-          ($subset_audit.retained_cells + $subset_audit.dropped_cells ==
-            $subset_audit.total_cells) and
-          ($subset_audit.retained_samples + $subset_audit.dropped_samples ==
-            $subset_audit.total_samples) and
-          ($subset_audit.retained_sample_ids | type == "array") and
-          ($subset_audit.dropped_sample_ids | type == "array") and
-          ($subset_audit.split_sample_ids | type == "array") and
-          ($subset_audit.retained_sample_ids | length) == $subset_audit.retained_samples and
-          ($subset_audit.dropped_sample_ids | length) == $subset_audit.dropped_samples and
-          ($subset_audit.split_sample_ids | length) == 0 and
-          $subset_audit.split_sample_count == 0 and
-          (.source_type != "h5ad" or
-            ($subset_audit.configured == $subset and
-             $subset_audit.validation_scope == "full_source_metadata"))
-        ) and
-        (.validation_summary as $validation |
-          ($validation | type == "object") and
-          (($validation | keys | sort) ==
-            ["batch_keys", "biological_column", "composite_design_columns",
-             "composite_design_rank", "design_columns", "design_rank",
-             "estimable", "fingerprint", "key_level_counts",
-             "key_near_unique_fraction", "method_id", "model_id", "n_cells",
-             "n_samples", "near_unique_fraction", "sample_column", "valid"]) and
-          $validation.valid == true and
-          $validation.estimable == true and
-          $validation.sample_column == $sample and
-          $validation.biological_column == $label and
-          ($validation.batch_keys == $batch_expected or
-           ($source_type != "h5ad" and $validation.batch_keys == $batch)) and
-          ($validation.n_cells | type == "number") and
-          ($validation.n_samples | type == "number") and
-          ($validation.n_cells == .subset_audit.retained_cells) and
-          ($validation.n_samples == .subset_audit.retained_samples) and
-          ($validation.key_level_counts | type == "object") and
-          ($validation.key_near_unique_fraction | type == "object") and
-          (($validation.key_level_counts | keys | sort) ==
-            ($batch_expected | sort)) and
-          (($validation.key_near_unique_fraction | keys | sort) ==
-            ($batch_expected | sort)) and
-          ($validation.near_unique_fraction | type == "number") and
-          ($validation.near_unique_fraction > 0 and
-            $validation.near_unique_fraction < 1) and
-          ($validation.design_rank | type == "number") and
-          ($validation.design_columns | type == "number") and
-          ($validation.composite_design_rank | type == "number") and
-          ($validation.composite_design_columns | type == "number") and
-          ($validation.fingerprint |
-            if type == "string" then test("^[0-9a-f]{64}$") else false end) and
-          $validation.method_id == "preprocess" and
-          $validation.model_id == "hvg_composite_v1"
-        ) and
-        .provenance.source_root == $source_root and
-        .provenance.source_manifest.path == $source_manifest and
-        .provenance.runtime_identity.path == $runtime_identity and
-        .provenance.runtime_manifest.path == $runtime_manifest and
-        .provenance.runtime_manifest.sha256 == $runtime_manifest_sha and
-        (.provenance.runtime_manifest.size | tostring) == $runtime_manifest_size and
-        .provenance.runtime_image.path == $runtime_image and
-        .provenance.runtime_image.sha256 == $runtime_image_sha and
-        (.provenance.runtime_image.size | tostring) == $runtime_image_size' \
-        "${row_report}" >/dev/null || {
-          echo "ERROR: corrected Stage 3 source preflight report identity/content failed: ${ds}/${view}" >&2
-          return 1
-        }
-    fi
-    evidence_count=$((evidence_count + 1))
-  done < "${selection}"
-  [[ ${evidence_count} -gt 0 && "${evidence_count}" == "$(
-    wc -l < "${manifest}" | tr -d '[:space:]'
-  )" ]]
-}
-
 
 validate_h5ad() {
-  local ds="$1" view="$2" path="$3"
-  [[ -s "${path}" ]] || return 1
-  "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
-    --path "${path}" --view "${view}" --method "Stage 3 preprocessing" >/dev/null 2>&1
-}
-STAGE3_PREFLIGHT_ACTIVE=0
-STAGE3_PREFLIGHT_MANIFEST=""
-STAGE3_PREFLIGHT_STATUS_DIR=""
-
-stage3_compute_validate_existing() {
-  local preflight_manifest="${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv"
-  local preflight_tmp="${preflight_manifest}.build.$$"
-  local status_dir="${ECODA_RUN_ROOT}/status/h5ad_preflight"
-  local ds view path safe status state status_run status_dataset status_view status_task
-  local preflight_id preflight_rc preflight_script count=0 status_count=0
-  STAGE3_PREFLIGHT_MANIFEST="${preflight_manifest}"
-  STAGE3_PREFLIGHT_STATUS_DIR="${status_dir}"
-  [[ "${PREPROCESS_SUBMITTER_TEST:-0}" == 1 || ${FORCE_ARG} -eq 1 ]] && return 0
-  : > "${preflight_tmp}" || return 1
-  while IFS=$'\t' read -r ds view; do
-    path="$(output_path_for "${ds}" "${view}")" || return 1
-    if [[ -s "${path}" ]]; then
-      printf '%s\t%s\t%s\n' "${ds}" "${view}" "${path}" >> "${preflight_tmp}" || return 1
-      count=$((count + 1))
+  local ds="$1" view="$2" path="$3" expected_contract
+  [[ -s "${path}" && -f "${path}" && ! -L "${path}" ]] || return 1
+  if [[ "${view}" == "batch_effect_corrected" ]]; then
+    if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" == "1" ]]; then
+      expected_contract="$(
+        BENCHMARK_MATRIX_TEST=1 ecoda_batch_contract_identity \
+          "${DATASETS_JSON_FILE}" "${ds}" "${view}" preprocess hvg_composite_v1
+      )" || return 1
+    else
+      expected_contract="$(
+        ecoda_batch_contract_identity \
+          "${DATASETS_JSON_FILE}" "${ds}" "${view}" preprocess hvg_composite_v1
+      )" || return 1
     fi
-  done < "${MANIFEST}"
-  if [[ ${count} -eq 0 ]]; then
-    rm -f "${preflight_tmp}"
-    return 0
+    [[ -n "${expected_contract}" ]] || return 1
+    "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+      --path "${path}" --view "${view}" --method "Stage 3 preprocessing" \
+      --expected-batch-contract "${expected_contract}" \
+      --allow-missing-corrected-summary >/dev/null 2>&1
+  else
+    "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+      --path "${path}" --view "${view}" --method "Stage 3 preprocessing" \
+      >/dev/null 2>&1
   fi
-  ecoda_atomic_install_manifest "${preflight_tmp}" "${preflight_manifest}" 3 || {
-    rm -f "${preflight_tmp}"
-    return 1
-  }
-  rm -f "${preflight_tmp}"
-  ecoda_write_checksum "${preflight_manifest}" || return 1
-  mkdir -p "${status_dir}" "${LOGS_DIR}" || return 1
-  rm -f "${status_dir}"/*.status
-  preflight_script="$(stage3_require_source_script \
-    "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_worker.sh")" || return 1
-  set +e
-  preflight_id="$(
-    ecoda_submit_h5ad_preflight "${preflight_manifest}" "${status_dir}" \
-      "${ECODA_RUN_ROOT}" classify "${PARTITION}" "${MEMORY}" "${THROTTLE}" \
-      "${LOGS_DIR}" stage3 "${preflight_script}" \
-      "${RUNTIME_EXPORT}"
-  )"
-  preflight_rc=$?
-  set -e
-  if [[ "${preflight_id}" =~ ^[0-9]+$ ]]; then
-    stage3_install_scheduler_record PREFLIGHT "${preflight_id}" || return 1
-  fi
-  if [[ ${preflight_rc} -ne 0 || ! "${preflight_id}" =~ ^[0-9]+$ ]]; then
-    echo "ERROR: Stage 3 H5AD preflight scheduler wait failed: job=${preflight_id:-unknown} rc=${preflight_rc}" >&2
-    return 1
-  fi
-  ecoda_wait_h5ad_preflight_status_files "${preflight_manifest}" "${status_dir}" || {
-    echo "ERROR: Stage 3 H5AD preflight statuses did not settle within ${H5AD_PREFLIGHT_STATUS_GRACE_SECONDS:-60}s" >&2
-    return 1
-  }
-  while IFS=$'\t' read -r ds view path; do
-    safe="$(_ecoda_safe_component "${ds}__${view}")"
-    status="${status_dir}/${safe}.status"
-    [[ -s "${status}" ]] || return 1
-    status_run="$(sed -n 's/^RUN_ID=//p' "${status}" | head -1)"
-    status_dataset="$(sed -n 's/^DATASET=//p' "${status}" | head -1)"
-    status_view="$(sed -n 's/^VIEW=//p' "${status}" | head -1)"
-    status_task="$(sed -n 's/^TASK_ID=//p' "${status}" | head -1)"
-    [[ "${status_run}" == "${ECODA_RUN_ID}" &&
-       "${status_dataset}" == "${ds}" &&
-       "${status_view}" == "${view}" &&
-       "${status_task}" == "$((status_count + 1))" ]] || return 1
-    state="$(sed -n 's/^STATE=//p' "${status}" | head -1)"
-    case "${state}" in
-      OK)
-        validate_h5ad "${ds}" "${view}" "${path}" || return 1
-        stage3_artifact_record_valid "${path}" stage3_preflight || return 1
-        ;;
-      REBUILD) ;;
-      *) return 1 ;;
-    esac
-    status_count=$((status_count + 1))
-  done < "${preflight_manifest}"
-  [[ "${status_count}" == "${count}" ]] || return 1
-  STAGE3_PREFLIGHT_ACTIVE=1
+}
+
+stage3_existing_artifact_owner_valid() {
+  local path="$1" require_record="${2:-1}" canonical owner_dir owner_run
+  canonical="$(ecoda_canonical_path "${path}")" || return 2
+  owner_dir="$(ecoda_artifact_owner_dir "${canonical}")" || return 2
+  [[ -d "${owner_dir}" && ! -L "${owner_dir}" ]] || return 1
+  _ecoda_artifact_owner_validate_dir "${owner_dir}" "${canonical}" || return 2
+  [[ "${ECODA_ARTIFACT_OWNER_STAGE}" == "stage3" ]] || return 2
+  case "${ECODA_ARTIFACT_OWNER_STATE}" in
+    OK) ;;
+    ACTIVE) return 2 ;;
+    FAIL) return 1 ;;
+    *) return 2 ;;
+  esac
+  [[ "${require_record}" == "1" ]] || return 0
+  owner_run="${ECODA_ARTIFACT_OWNER_RUN}"
+  for producer in stage3 stage3_preflight; do
+    if ecoda_validate_artifact_record "${canonical}" "${producer}" "${owner_run}" \
+      >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 stage3_existing_output_valid() {
-  local ds="$1" view="$2" path="$3" safe status state
-  if [[ ${FORCE_ARG} -ne 0 || ! -s "${path}" ]]; then
+  local ds="$1" view="$2" path="$3" nas_path owner_rc
+  if [[ ${FORCE_ARG} -ne 0 || ! -s "${path}" ||
+        ! -f "${path}" || -L "${path}" ]]; then
     return 1
   fi
-  [[ ${STAGE3_PREFLIGHT_ACTIVE} -eq 1 ]] || return 2
-  safe="$(_ecoda_safe_component "${ds}__${view}")"
-  status="${STAGE3_PREFLIGHT_STATUS_DIR}/${safe}.status"
-  [[ -s "${status}" ]] || return 2
-  state="$(sed -n 's/^STATE=//p' "${status}" | head -1)"
-  case "${state}" in
-    OK)
-      validate_h5ad "${ds}" "${view}" "${path}" || return 1
-      stage3_artifact_record_valid "${path}" stage3_preflight || return 2
-      return 0
-      ;;
-    REBUILD) return 1 ;;
-    *) return 2 ;;
-  esac
+
+  # The scratch H5AD is the compute artifact.  Its content, checksum, and
+  # prior terminal owner/record must all agree before it can be skipped.
+  stage3_existing_artifact_owner_valid "${path}"
+  owner_rc=$?
+  [[ ${owner_rc} -eq 0 ]] || return "${owner_rc}"
+  validate_h5ad "${ds}" "${view}" "${path}" || return 1
+  ecoda_validate_checksum "${path}" || return 1
+
+  # NAS is a synchronization destination, not the compute artifact record.
+  # Validate a terminal owner when one exists, but allow a missing/stale
+  # destination because sync_selected repairs it from the validated scratch
+  # artifact without scheduling a recomputation.
+  nas_path="$(stage3_nas_output_path "${ds}" "${view}")" || return 2
+  if [[ -e "${nas_path}" || -L "${nas_path}" ]]; then
+    [[ -s "${nas_path}" && -f "${nas_path}" && ! -L "${nas_path}" ]] ||
+      return 1
+    stage3_existing_artifact_owner_valid "${nas_path}" 0
+    owner_rc=$?
+    [[ ${owner_rc} -eq 0 || ${owner_rc} -eq 1 ]] || return "${owner_rc}"
+  fi
+  return 0
+}
+
+stage3_publish_existing_output() {
+  local ds="$1" view="$2" path="$3" nas_path
+  nas_path="$(stage3_nas_output_path "${ds}" "${view}")" || return 1
+  ecoda_write_artifact_record "${path}" stage3 "${RUN_ID}" >/dev/null || return 1
+  if [[ -s "${nas_path}" && -f "${nas_path}" && ! -L "${nas_path}" ]] &&
+     ecoda_validate_checksum "${nas_path}" >/dev/null 2>&1; then
+    ecoda_write_artifact_record "${nas_path}" stage3 "${RUN_ID}" >/dev/null || return 1
+  fi
+}
+
+stage3_invalidate_existing_output() {
+  local ds="$1" view="$2" path="$3" nas_path candidate
+  nas_path="$(stage3_nas_output_path "${ds}" "${view}")" || return 1
+  for candidate in "${path}" "${nas_path}"; do
+    [[ ! -L "${candidate}" ]] || return 1
+    ecoda_invalidate_artifact "${candidate}" || return 1
+  done
 }
 
 
@@ -1737,7 +1183,7 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   stage3_classify_selection "${MANIFEST}" "${DATASETS_JSON_FILE}" ||
     stage3_abort "Stage 3 selection classification is invalid"
   case "${STAGE3_SELECTION_CLASSIFICATION}" in
-    uncorrected_four|combined)
+    uncorrected_four)
       if [[ -n "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" &&
             "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" != "${ECODA_RUN_ROOT}/preflight" ]]; then
         stage3_abort "Stage 3 sync-only Covid preflight root override is not run-bound"
@@ -1747,8 +1193,6 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
         stage3_abort "Stage 3 sync-only Covid obs preflight validation failed"
       ;;
   esac
-  stage3_validate_corrected_source_evidence "${MANIFEST}" ||
-    stage3_abort "Stage 3 corrected source preflight evidence is missing or invalid"
   [[ -r "${PENDING_MANIFEST}" ]] ||
     stage3_abort "Stage 3 pending manifest is missing"
   ecoda_validate_run_owned_path "${PENDING_MANIFEST}" "${ECODA_RUN_ROOT}" ||
@@ -1958,21 +1402,12 @@ stage3_record_identity_metadata ||
   stage3_abort "failed to record Stage 3 source/runtime identity"
 stage3_classify_selection "${MANIFEST}" "${DATASETS_JSON_FILE}" ||
   stage3_abort "Stage 3 selection classification is invalid"
-stage3_validate_corrected_source_release "${MANIFEST}" "${DATASETS_JSON_FILE}" ||
-  stage3_abort "Stage 3 corrected source metadata/configuration release failed"
-stage3_validate_corrected_source_evidence "${MANIFEST}" ||
-  stage3_abort "Stage 3 corrected source preflight evidence is missing or invalid"
 RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage3 0)" ||
   stage3_abort "Stage 3 runtime export construction failed"
 RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_RUNTIME_IDENTITY=${RUNTIME_IDENTITY},ECODA_SOURCE_MANIFEST_RUN=${SOURCE_MANIFEST_RUN}"
 SCHEDULER_IDS_FILE="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
 ecoda_atomic_write "${SCHEDULER_IDS_FILE}" "" ||
   stage3_abort "failed to initialize Stage 3 scheduler manifest"
-stage3_run_covid_obs_preflight "${MANIFEST}" ||
-  stage3_abort "Covid obs-only preflight failed; Stage 3 release is blocked"
-stage3_compute_validate_existing ||
-  stage3_abort "Stage 3 compute-node existing-output preflight failed"
-
 PENDING_MANIFEST="${ECODA_RUN_ROOT}/manifests/pending.tsv"
 PENDING_TMP="${PENDING_MANIFEST}.build.$$"
 OWNERS_MANIFEST="${ECODA_RUN_ROOT}/manifests/owners.tsv"
@@ -1983,21 +1418,27 @@ while IFS=$'\t' read -r ds view; do
   path="$(output_path_for "${ds}" "${view}")" ||
     stage3_abort "missing output contract for ${ds}/${view}"
   valid=0
+  existing_rc=1
   if [[ ${FORCE_ARG} -eq 0 && -s "${path}" ]]; then
     set +e
     stage3_existing_output_valid "${ds}" "${view}" "${path}"
-    preflight_rc=$?
+    existing_rc=$?
     set -e
-    if [[ ${preflight_rc} -eq 0 ]]; then
+    if [[ ${existing_rc} -eq 0 ]]; then
       valid=1
-    elif [[ ${preflight_rc} -ne 1 ]]; then
-      stage3_abort "missing or malformed Stage 3 preflight status for ${ds}/${view}"
+    elif [[ ${existing_rc} -eq 2 ]]; then
+      stage3_abort "missing or malformed Stage 3 output owner contract for ${ds}/${view}"
     fi
   fi
   if [[ ${valid} -eq 1 ]]; then
+    stage3_publish_existing_output "${ds}" "${view}" "${path}" ||
+      stage3_abort "failed to publish current-run Stage 3 record for ${ds}/${view}"
     echo "Skipping validated Stage 3 artifact ${ds}/${view}."
     continue
   fi
+
+  stage3_invalidate_existing_output "${ds}" "${view}" "${path}" ||
+    stage3_abort "unsafe or unremovable invalid Stage 3 artifact ${ds}/${view}"
   set +e
   owner_dir="$(ecoda_owner_acquire stage3 "${ds}/${view}" "${RUN_ID}" "${FORCE_ARG}" 0)"
   owner_rc=$?
@@ -2007,10 +1448,6 @@ while IFS=$'\t' read -r ds view; do
   fi
   ecoda_owner_track "${owner_dir}" ||
     stage3_abort "failed to track Stage 3 owner for ${ds}/${view}"
-  if [[ ${FORCE_ARG} -eq 1 ]]; then
-    ecoda_invalidate_artifact "${path}" ||
-      stage3_abort "failed to invalidate Stage 3 artifact ${path}"
-  fi
   printf '%s\t%s\n' "${ds}" "${view}" >> "${PENDING_TMP}"
   printf '%s\t%s\n' "${ds}/${view}" "${owner_dir}" >> "${OWNERS_TMP}"
   PENDING_COUNT=$((PENDING_COUNT + 1))
@@ -2029,9 +1466,15 @@ else
 fi
 rm -f "${PENDING_TMP}" "${OWNERS_TMP}"
 
+# The immutable watchdog validates every row in the root selection, including
+# rows skipped here.  Reserve global artifact owners and publish current-run
+# records for those rows before submitting only the pending scheduler array.
+stage3_run_covid_obs_preflight "${PENDING_MANIFEST}" ||
+  stage3_abort "Covid obs-only preflight failed; Stage 3 release is blocked"
+ecoda_validate_output_ownership stage3 "${MANIFEST}" "${RUN_ID}" 1 ||
+  stage3_abort "Stage 3 output ownership validation failed before submission"
+
 if [[ ${PENDING_COUNT} -eq 0 ]]; then
-  ecoda_validate_output_ownership stage3 "${MANIFEST}" "${RUN_ID}" 1 ||
-    stage3_abort "Stage 3 no-op output ownership validation failed"
   if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" != "1" ]] &&
      ! sync_selected "${MANIFEST}"; then
     stage3_abort "selected Stage 3 sync failed"
@@ -2054,8 +1497,6 @@ if [[ ${PENDING_COUNT} -eq 0 ]]; then
   exit 0
 fi
 
-ecoda_validate_output_ownership stage3 "${PENDING_MANIFEST}" "${RUN_ID}" 1 ||
-  stage3_abort "Stage 3 output ownership validation failed before array submission"
 mkdir -p "${LOGS_DIR}" || stage3_abort "failed to create Stage 3 log directory"
 export FORCE_PREPROCESS="${FORCE_ARG}"
 export PREPROCESS_SELECTION_FILE="${PENDING_MANIFEST}"

@@ -139,6 +139,22 @@ stopifnot(
   identical(loaded$sample_ids, sample_ids),
   identical(rownames(loaded$methods[["MrVI_hvg2000"]]$matrix), sample_ids)
 )
+stopifnot(
+  identical(
+    loaded$methods[["Pseudobulk_hvg2000"]]$path,
+    normalizePath(
+      file.path(input_root, "results", "Synthetic_batch_effect_uncorrected_pseudobulk.rds"),
+      mustWork = TRUE
+    )
+  ),
+  identical(
+    loaded$methods[["ECODA_authors_HR"]]$path,
+    normalizePath(
+      file.path(input_root, "results", "Synthetic_batch_effect_uncorrected_composition.rds"),
+      mustWork = TRUE
+    )
+  )
+)
 
 expect_error(
   read_batch_method_dist(input_root, "Synthetic", specs[["MrVI_hvg2000"]], rev(sample_ids)),
@@ -523,6 +539,13 @@ stopifnot(
     sample_ids
   )
 )
+stopifnot(
+  identical(
+    loaded_final$metadata_path,
+    normalizePath(final_metadata_path, mustWork = TRUE)
+  ),
+  file.exists(paste0(final_metadata_path, ".md5"))
+)
 
 # A legacy null score artifact is aggregate-only and intentionally has no
 # sample-ID axis.  The explicit standalone_scores mapping permits it while
@@ -710,6 +733,19 @@ expect_error(
     repository_root = root
   ),
   "empty bundle_key"
+)
+bad_rds_key_lines <- readLines(final_artifact_manifest, warn = FALSE)
+bad_rds_key_parts <- strsplit(bad_rds_key_lines[[2L]], "\t", fixed = TRUE)[[1L]]
+bad_rds_key_parts[[6L]] <- "ECODA_seuratres_2"
+bad_rds_key_lines[[2L]] <- manifest_row(bad_rds_key_parts)
+expect_error(
+  read_batch_final_manifest(
+    manifest_write(file.path(root, "bad-rds-key-artifacts.tsv"), bad_rds_key_lines),
+    expected_datasets = "Synthetic",
+    expected_methods = final_methods,
+    repository_root = root
+  ),
+  "invalid rds_bundle key/kind"
 )
 bad_physical_lines <- readLines(final_artifact_manifest, warn = FALSE)
 bad_physical_fields <- strsplit(bad_physical_lines[[7L]], "\t", fixed = TRUE)[[1L]]

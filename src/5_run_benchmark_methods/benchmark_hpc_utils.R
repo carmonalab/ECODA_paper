@@ -100,9 +100,9 @@ ecoda_hpc_batch_contract_identity <- function(
   )
 }
 
-# Attach a compact validated summary to one corrected identity.  The full
-# validation remains in-memory in batch_context; only the fixed semantic
-# summary and configuration/fingerprint fields cross an artifact boundary.
+# Augment a corrected identity at the artifact boundary. Ordinary corrected
+# workers attach the strict full-cell validation summary; corrected_final
+# workers supply the summary-free sample-metadata Feather contract.
 ecoda_hpc_augment_batch_contract <- function(
   identity,
   validation,
@@ -114,6 +114,32 @@ ecoda_hpc_augment_batch_contract <- function(
     stop("cannot augment a missing corrected batch contract identity")
   }
   keys <- ecoda_hpc_normalize_batch_keys(batch_keys)
+  if (is.list(validation) &&
+      identical(validation[["validation_scope"]], "sample_metadata_feather")) {
+    model_id <- if (identical(method_id, "Pseudobulk")) {
+      "pseudobulk_composite_v1"
+    } else if (identical(method_id, "GloScope") ||
+               identical(method_id, "PILOT") ||
+               identical(method_id, "QOT")) {
+      "embedding_consumer_harmony_v1"
+    } else if (identical(method_id, "preprocess")) {
+      "hvg_composite_v1"
+    } else {
+      "ecoda_additive_random_intercepts_v1"
+    }
+    derived <- ecoda_hpc_batch_contract_identity(
+      keys,
+      sample_col = "Sample",
+      method_id = method_id,
+      model_id = model_id
+    )
+    ecoda_hpc_validate_batch_contract_source(
+      identity,
+      derived,
+      label = "Corrected sample metadata batch contract"
+    )
+    return(derived)
+  }
   spec <- ecoda_batch_correction_spec(
     method_id = method_id,
     batch_keys = keys,
@@ -159,6 +185,7 @@ ecoda_hpc_validate_batch_contract_source <- function(
   )
 }
 
+
 # Reticulate simplifies one-element R character vectors to Python strings,
 # while the structural validator intentionally requires ordered lists.  Keep
 # identity key fields list-shaped even for scalar corrected configurations.
@@ -178,6 +205,40 @@ ecoda_hpc_identity_for_python <- function(identity) {
   reticulate::r_to_py(payload)
 }
 
+# Corrected Stage 5 may validate the persisted H5AD against configuration
+# identity/content without requiring the retired full-cell validation summary.
+# The opt-in flag is explicit at every boundary; the environment fallback is
+# used by benchmark_pipeline.R, whose call signature predates this contract.
+ecoda_hpc_corrected_final_mode <- function(
+  analysis_variant = Sys.getenv("ANALYSIS_VARIANT", unset = ""),
+  analysis_pass = Sys.getenv("ANALYSIS_PASS", unset = "")
+) {
+  identical(as.character(analysis_variant), "corrected_final") &&
+    identical(as.character(analysis_pass), "corrected")
+}
+
+ecoda_hpc_allow_missing_corrected_summary <- function(
+  value = FALSE,
+  analysis_variant = Sys.getenv("ANALYSIS_VARIANT", unset = ""),
+  analysis_pass = Sys.getenv("ANALYSIS_PASS", unset = "")
+) {
+  if (!is.logical(value) || length(value) != 1L || is.na(value)) {
+    stop("allow_missing_summary must be one logical scalar")
+  }
+  requested <- isTRUE(value) || identical(
+    Sys.getenv("ECODA_ALLOW_MISSING_CORRECTED_SUMMARY", unset = ""),
+    "1"
+  )
+  if (!requested) return(FALSE)
+  if (!ecoda_hpc_corrected_final_mode(analysis_variant, analysis_pass)) {
+    stop(
+      "allow_missing_summary is only valid for ",
+      "ANALYSIS_VARIANT=corrected_final with pass=corrected"
+    )
+  }
+  TRUE
+}
+
 # The counts-free Python loader predates explicit identity arguments.  Invoke
 # the path validator directly first so corrected H5AD reads check both
 # structure and the embedded preprocessing identity without materializing X.
@@ -185,9 +246,13 @@ ecoda_hpc_validate_h5ad_path_identity <- function(
   h5ad_path,
   view,
   method = "preprocessing",
-  expected_batch_contract = NULL
+  expected_batch_contract = NULL,
+  allow_missing_summary = FALSE
 ) {
   if (is.null(expected_batch_contract)) return(invisible(NULL))
+  allow_missing_summary <- ecoda_hpc_allow_missing_corrected_summary(
+    allow_missing_summary
+  )
   project_root <- Sys.getenv("PROJECT_ROOT")
   if (!nzchar(project_root)) {
     stop("PROJECT_ROOT not set; cannot validate corrected H5AD identity.")
@@ -209,7 +274,8 @@ ecoda_hpc_validate_h5ad_path_identity <- function(
     as.character(method),
     expected_batch_contract = ecoda_hpc_identity_for_python(
       expected_batch_contract
-    )
+    ),
+    require_corrected_summary = !allow_missing_summary
   )
   invisible(TRUE)
 }
@@ -220,9 +286,13 @@ ecoda_hpc_validate_h5ad_object_identity <- function(
   adata,
   view,
   method = "benchmark",
-  expected_batch_contract = NULL
+  expected_batch_contract = NULL,
+  allow_missing_summary = FALSE
 ) {
   if (is.null(expected_batch_contract)) return(invisible(NULL))
+  allow_missing_summary <- ecoda_hpc_allow_missing_corrected_summary(
+    allow_missing_summary
+  )
   project_root <- Sys.getenv("PROJECT_ROOT")
   if (!nzchar(project_root)) {
     stop("PROJECT_ROOT not set; cannot validate corrected H5AD identity.")
@@ -244,9 +314,301 @@ ecoda_hpc_validate_h5ad_object_identity <- function(
     as.character(method),
     expected_batch_contract = ecoda_hpc_identity_for_python(
       expected_batch_contract
-    )
+    ),
+    require_corrected_summary = !allow_missing_summary
   )
   invisible(TRUE)
+}
+
+# Resolve the run's serialized sample-level metadata handoff.  Stage 5
+# corrected workers must receive this path from ANALYSIS_ROOT rather than
+# reconstructing a legacy result-root path.
+ecoda_hpc_sample_metadata_path <- function(
+  ds,
+  analysis_root = Sys.getenv("ANALYSIS_ROOT", unset = "")
+) {
+  if (!is.character(ds) || length(ds) != 1L || is.na(ds) ||
+      !nzchar(ds) || grepl("[/\\\\]", ds, perl = TRUE)) {
+    stop("dataset name is invalid for sample metadata")
+  }
+  if (!is.character(analysis_root) || length(analysis_root) != 1L ||
+      is.na(analysis_root) || !nzchar(analysis_root)) {
+    stop("ANALYSIS_ROOT is required for corrected sample metadata")
+  }
+  analysis_root <- normalizePath(
+    path.expand(analysis_root), winslash = "/", mustWork = FALSE
+  )
+  if (!grepl("^/", analysis_root, perl = TRUE)) {
+    stop("ANALYSIS_ROOT must resolve to an absolute path")
+  }
+  normalizePath(
+    file.path(
+      analysis_root, "metadata", paste0(ds, "_sample_metadata.feather")
+    ),
+    winslash = "/", mustWork = FALSE
+  )
+}
+
+.ecoda_hpc_sample_canonical_value <- function(
+  value,
+  key,
+  allow_unknown_keys = character()
+) {
+  if (is.factor(value)) value <- as.character(value)
+  # Arrow may expose integer columns as bit64::integer64.  Keep the original
+  # Feather value in sample_metadata but canonicalize its numeric value here.
+  if (inherits(value, "integer64")) value <- as.numeric(value)
+  if (is.character(value) && length(value) == 1L &&
+      key %in% allow_unknown_keys && identical(value, "unknown")) {
+    return("s:unknown")
+  }
+  tryCatch(
+    ecoda_batch_canonical_value(value, paste0(key, " sample value")),
+    error = function(error) {
+      stop(
+        "Corrected sample metadata column '", key, "' is invalid: ",
+        conditionMessage(error)
+      )
+    }
+  )
+}
+
+# Build the in-memory validation object consumed by the existing DESeq2/CLR
+# routines.  This validates the already serialized one-row-per-Sample table;
+# it never inspects cells or performs a majority vote.  Breast's literal
+# ``unknown`` class is explicitly allowed by the exporter policy.
+ecoda_hpc_sample_metadata_validation <- function(
+  metadata,
+  batch_keys,
+  sample_col = "Sample",
+  biological_label = NULL,
+  allow_unknown_keys = character()
+) {
+  if (!is.data.frame(metadata)) {
+    metadata <- as.data.frame(metadata, stringsAsFactors = FALSE)
+  }
+  if (!is.character(sample_col) || length(sample_col) != 1L ||
+      is.na(sample_col) || !nzchar(sample_col) ||
+      !sample_col %in% colnames(metadata)) {
+    stop("Corrected sample metadata is missing ", sample_col)
+  }
+  keys <- ecoda_hpc_normalize_batch_keys(
+    batch_keys,
+    sample_col = sample_col,
+    biological_label = biological_label
+  )
+  allow_unknown_keys <- as.character(allow_unknown_keys)
+  if (any(!allow_unknown_keys %in% keys)) {
+    stop("allow_unknown_keys contains an unconfigured technical key")
+  }
+  sample_ids <- unname(as.character(metadata[[sample_col]]))
+  if (!length(sample_ids) || anyNA(sample_ids) ||
+      any(!nzchar(trimws(sample_ids))) || anyDuplicated(sample_ids)) {
+    stop("Corrected sample metadata has missing or duplicate Sample IDs")
+  }
+  if (nrow(metadata) < 2L) {
+    stop("Corrected sample metadata requires at least two Samples")
+  }
+  canonical_columns <- setNames(vector("list", length(keys)), keys)
+  per_key_levels <- setNames(vector("list", length(keys)), keys)
+  for (key in keys) {
+    if (!key %in% colnames(metadata)) {
+      stop("Corrected sample metadata is missing technical key ", key)
+    }
+    column <- metadata[[key]]
+    if (is.list(column) && !is.factor(column)) {
+      stop("Corrected sample metadata technical key is list-valued: ", key)
+    }
+    canonical <- vapply(
+      seq_len(nrow(metadata)),
+      function(index) .ecoda_hpc_sample_canonical_value(
+        column[[index]], key, allow_unknown_keys
+      ),
+      character(1)
+    )
+    levels <- .ecoda_batch_raw_sort(
+      unique(canonical), paste0(key, " sample levels")
+    )
+    if (length(levels) < 2L) {
+      stop("Corrected sample metadata technical key has one level: ", key)
+    }
+    canonical_columns[[key]] <- canonical
+    per_key_levels[[key]] <- levels
+  }
+  canonical_sample_metadata <- data.frame(
+    Sample = sample_ids,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  for (key in keys) {
+    canonical_sample_metadata[[key]] <- canonical_columns[[key]]
+  }
+  rownames(metadata) <- sample_ids
+  rownames(canonical_sample_metadata) <- sample_ids
+  composite_values <- if (length(keys) >= 2L) {
+    vapply(seq_len(nrow(metadata)), function(index) {
+      .ecoda_batch_composite_token_canonical(
+        keys,
+        lapply(keys, function(key) canonical_columns[[key]][[index]])
+      )
+    }, character(1))
+  } else {
+    canonical_columns[[keys[[1L]]]]
+  }
+  composite_levels <- if (length(keys) >= 2L) {
+    .ecoda_batch_raw_sort(
+      unique(composite_values), "sample composite levels"
+    )
+  } else {
+    character()
+  }
+  if (length(keys) >= 2L && length(composite_levels) < 2L) {
+    stop("Corrected sample metadata composite batch has one level")
+  }
+  list(
+    valid = TRUE,
+    validation_scope = "sample_metadata_feather",
+    sample_col = sample_col,
+    sample_column = sample_col,
+    biological_label = biological_label,
+    biological_column = biological_label,
+    ordered_keys = unname(keys),
+    keys = unname(keys),
+    key_count = as.integer(length(keys)),
+    scalarization = if (length(keys) >= 2L) "composite_v1" else "direct_v1",
+    sample_ids = sample_ids,
+    sample_group_ids = sample_ids,
+    n_cells = as.integer(nrow(metadata)),
+    n_obs = as.integer(nrow(metadata)),
+    n_samples = as.integer(nrow(metadata)),
+    sample_constancy = setNames(
+      lapply(keys, function(key) TRUE), keys
+    ),
+    sample_metadata = metadata,
+    canonical_sample_metadata = canonical_sample_metadata,
+    canonical_values = canonical_columns,
+    canonical_cell_values = canonical_columns,
+    per_key_levels = per_key_levels,
+    levels = per_key_levels,
+    key_level_counts = setNames(
+      lapply(per_key_levels, length), keys
+    ),
+    composite_values = composite_values,
+    composite_levels = composite_levels,
+    composite_level_count = as.integer(length(composite_levels)),
+    composite_near_unique_fraction = if (length(keys) >= 2L) {
+      as.numeric(length(composite_levels) / nrow(metadata))
+    } else {
+      NA_real_
+    }
+  )
+}
+
+# Read and verify one exporter-produced Feather table.  The H5AD Sample order
+# is supplied by the selected worker input, so a stale/mismatched exporter
+# output cannot silently alter the model design.
+ecoda_hpc_load_sample_metadata_contract <- function(
+  path,
+  expected_sample_ids,
+  batch_keys,
+  sample_col = "Sample",
+  biological_label = NULL,
+  required_columns = character(),
+  allow_unknown_keys = character()
+) {
+  path <- normalizePath(path.expand(as.character(path)), winslash = "/",
+                        mustWork = FALSE)
+  expected_sample_ids <- unname(as.character(expected_sample_ids))
+  if (!length(expected_sample_ids) ||
+      anyNA(expected_sample_ids) ||
+      any(!nzchar(trimws(expected_sample_ids))) ||
+      anyDuplicated(expected_sample_ids)) {
+    stop("selected H5AD has an invalid Sample order")
+  }
+  normalized_keys <- ecoda_hpc_normalize_batch_keys(
+    batch_keys,
+    sample_col = sample_col,
+    biological_label = biological_label
+  )
+  metadata_checksum <- runtime_validate_checksum_sidecar(
+    path, "corrected sample metadata"
+  )
+  if (!requireNamespace("arrow", quietly = TRUE)) {
+    stop("arrow is required to read corrected sample metadata")
+  }
+  metadata <- tryCatch(
+    arrow::read_feather(path),
+    error = function(error) {
+      stop(
+        "corrected sample metadata Feather is unreadable: ",
+        conditionMessage(error)
+      )
+    }
+  )
+  if (!is.data.frame(metadata)) {
+    metadata <- as.data.frame(metadata, stringsAsFactors = FALSE)
+  }
+  for (column in intersect(
+    colnames(metadata),
+    unique(c(sample_col, biological_label, normalized_keys))
+  )) {
+    if (inherits(metadata[[column]], "integer64")) {
+      metadata[[column]] <- as.numeric(metadata[[column]])
+    }
+  }
+  required <- unique(c(sample_col, biological_label, normalized_keys,
+                       as.character(required_columns)))
+  required <- required[!is.na(required) & nzchar(required)]
+  missing <- setdiff(required, colnames(metadata))
+  if (length(missing)) {
+    stop(
+      "corrected sample metadata lacks required columns: ",
+      paste(missing, collapse = ", ")
+    )
+  }
+  if (!"Sample" %in% colnames(metadata)) {
+    stop("corrected sample metadata must contain the standardized Sample column")
+  }
+  sample_ids <- unname(as.character(metadata[[sample_col]]))
+  if (anyNA(sample_ids) || any(!nzchar(trimws(sample_ids))) ||
+      anyDuplicated(sample_ids)) {
+    stop("corrected sample metadata has missing or duplicate Sample IDs")
+  }
+  if (!identical(sample_ids, expected_sample_ids)) {
+    stop("corrected sample metadata Sample order differs from selected H5AD")
+  }
+  for (column in unique(c(sample_col, biological_label, normalized_keys,
+                          as.character(required_columns)))) {
+    if (is.null(column) || is.na(column) || !nzchar(column)) next
+    values <- as.character(metadata[[column]])
+    if (anyNA(values) || any(!nzchar(trimws(values)))) {
+      stop("corrected sample metadata column is missing/blank: ", column)
+    }
+  }
+  validation <- ecoda_hpc_sample_metadata_validation(
+    metadata = metadata,
+    batch_keys = normalized_keys,
+    sample_col = sample_col,
+    biological_label = biological_label,
+    allow_unknown_keys = allow_unknown_keys
+  )
+  list(
+    ordered_keys = validation$ordered_keys,
+    scalar_batch_col = if (length(normalized_keys) >= 2L) {
+      "__ecoda_batch_combined_v1"
+    } else {
+      normalized_keys[[1L]]
+    },
+    scalarization = validation$scalarization,
+    sample_ids = validation$sample_ids,
+    sample_metadata = validation$sample_metadata,
+    canonical_sample_metadata = validation$canonical_sample_metadata,
+    composite_values = validation$composite_values,
+    validation = validation,
+    validation_scope = "sample_metadata_feather",
+    metadata_path = path,
+    metadata_checksum = metadata_checksum
+  )
 }
 
 
@@ -318,10 +680,9 @@ validate_h5ad_corrected_batch_metadata <- function(
   result
 }
 
-# Validate the full cell table through the R contract and reconcile its
-# deterministic sample-order tokens with the Python validator result.  The
-# returned context is deliberately in-memory; callers may add its scalar
-# column to an aggregate copy but must never persist that temporary column.
+# Ordinary corrected Stage 5 retains this full-cell validator/context path.
+# Only corrected_final workers use ecoda_hpc_load_sample_metadata_contract()
+# instead, with its sample-level Feather validation object.
 ecoda_hpc_batch_context <- function(
   metadata,
   batch_keys,
@@ -479,8 +840,8 @@ ecoda_hpc_apply_batch_context <- function(
       !identical(context$scalar_batch_col, "__ecoda_batch_combined_v1")) {
     stop("Metadata already contains the reserved corrected batch column")
   }
-  sample_ids <- as.character(metadata[[sample_col]])
-  context_ids <- as.character(context$sample_ids)
+  sample_ids <- unname(as.character(metadata[[sample_col]]))
+  context_ids <- unname(as.character(context$sample_ids))
   if (anyNA(sample_ids) || any(!nzchar(sample_ids)) ||
       anyDuplicated(sample_ids) || !identical(sample_ids, context_ids)) {
     stop("Corrected batch sample metadata is not aligned to validated Samples")
@@ -643,13 +1004,15 @@ validate_benchmark_h5ad_contract <- function(
   obs = NULL,
   view = "benchmark_analysis",
   method = NULL,
-  expected_batch_contract = NULL
+  expected_batch_contract = NULL,
+  allow_missing_summary = FALSE
 ) {
   ecoda_hpc_validate_h5ad_object_identity(
     adata = adata,
     view = view,
     method = if (is.null(method)) "benchmark" else method,
-    expected_batch_contract = expected_batch_contract
+    expected_batch_contract = expected_batch_contract,
+    allow_missing_summary = allow_missing_summary
   )
   required_obsm <- switch(
     view,
@@ -737,13 +1100,15 @@ load_h5ad_counts_free <- function(
   obs_prefixes = character(),
   view = NULL,
   method = NULL,
-  expected_batch_contract = NULL
+  expected_batch_contract = NULL,
+  allow_missing_summary = FALSE
 ) {
   ecoda_hpc_validate_h5ad_path_identity(
     h5ad_path = h5ad_path,
     view = view,
     method = if (is.null(method)) "benchmark" else method,
-    expected_batch_contract = expected_batch_contract
+    expected_batch_contract = expected_batch_contract,
+    allow_missing_summary = allow_missing_summary
   )
   project_root <- Sys.getenv("PROJECT_ROOT")
   if (project_root == "") {
@@ -905,10 +1270,6 @@ load_h5ad_sample_aggregate <- function(
   )
 }
 
-# Metadata/HVG-only loading used before a canonical pseudobulk cache decides
-# whether the raw counts layer is needed.  h5ad_obs_free validates persisted
-# shapes and reads only obs; h5ad_counts_subset reads var["hvg_rank"] without
-# reading any X/layers values.
 load_h5ad_pseudobulk_metadata <- function(
   h5ad_path,
   sample_col = "Sample",
@@ -917,13 +1278,15 @@ load_h5ad_pseudobulk_metadata <- function(
   required_nonmissing_columns = sample_col,
   expected_batch_contract = NULL,
   view = "batch_effect_corrected",
-  method = "preprocessing"
+  method = "preprocessing",
+  allow_missing_summary = FALSE
 ) {
   ecoda_hpc_validate_h5ad_path_identity(
     h5ad_path = h5ad_path,
     view = view,
     method = method,
-    expected_batch_contract = expected_batch_contract
+    expected_batch_contract = expected_batch_contract,
+    allow_missing_summary = allow_missing_summary
   )
   project_root <- Sys.getenv("PROJECT_ROOT")
   if (project_root == "") {

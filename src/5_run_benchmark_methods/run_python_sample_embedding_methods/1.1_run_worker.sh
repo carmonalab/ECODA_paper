@@ -144,15 +144,57 @@ IFS=$'\t' read -r DS_NAME ROW_VIEW ROW_LABEL ROW_COMBO ROW_EXTRA <<< "${line}"
 export DS_NAME
 ANALYSIS_VIEW="${ROW_VIEW:-${ANALYSIS_VIEW:-benchmark_analysis}}"
 export ANALYSIS_VIEW
+ANALYSIS_VARIANT="${ANALYSIS_VARIANT:-}"
+ANALYSIS_PASS="${ANALYSIS_PASS:-}"
 ANALYSIS_ROOT="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
-if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
-  [[ "${ANALYSIS_PASS:-}" == uncorrected &&
-     "${ANALYSIS_ROOT}" == "${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final" ]] || {
-    echo "ERROR: final Stage 5 Python worker is not bound to uncorrected_final." >&2
+ANALYSIS_NAS_ROOT="${ANALYSIS_NAS_ROOT:-}"
+ANALYSIS_LOG_PREFIX="${ANALYSIS_LOG_PREFIX:-}"
+EXPECTED_VARIANT_PASS=""
+EXPECTED_ANALYSIS_ROOT=""
+EXPECTED_ANALYSIS_NAS_ROOT=""
+EXPECTED_LOG_PREFIX=""
+case "${ANALYSIS_VARIANT}" in
+  "")
+    ;;
+  final)
+    EXPECTED_VARIANT_PASS="uncorrected"
+    EXPECTED_ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final"
+    EXPECTED_ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/uncorrected_final"
+    EXPECTED_LOG_PREFIX="execution_times_batch_effect_uncorrected_final_"
+    ;;
+  corrected_final)
+    EXPECTED_VARIANT_PASS="corrected"
+    EXPECTED_ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final"
+    EXPECTED_ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
+    EXPECTED_LOG_PREFIX="execution_times_batch_effect_corrected_final_"
+    ;;
+  *)
+    echo "ERROR: unsupported Stage 5 Python analysis variant: ${ANALYSIS_VARIANT}" >&2
+    exit 1
+    ;;
+esac
+if [[ -n "${ANALYSIS_VARIANT}" ]]; then
+  [[ "${ANALYSIS_PASS}" == "${EXPECTED_VARIANT_PASS}" &&
+     "${ANALYSIS_ROOT}" == "${EXPECTED_ANALYSIS_ROOT}" ]] || {
+    echo "ERROR: Stage 5 Python worker variant/pass/root identity mismatch." >&2
     exit 1
   }
-  export ANALYSIS_VARIANT
+  if [[ -n "${ANALYSIS_NAS_ROOT}" &&
+        "${ANALYSIS_NAS_ROOT}" != "${EXPECTED_ANALYSIS_NAS_ROOT}" ]]; then
+    echo "ERROR: Stage 5 Python worker NAS root identity mismatch." >&2
+    exit 1
+  fi
+  if [[ -n "${ANALYSIS_LOG_PREFIX}" &&
+        "${ANALYSIS_LOG_PREFIX}" != "${EXPECTED_LOG_PREFIX}" ]]; then
+    echo "ERROR: Stage 5 Python worker log identity mismatch." >&2
+    exit 1
+  fi
+  ANALYSIS_LOG_PREFIX="${EXPECTED_LOG_PREFIX}"
 fi
+export ANALYSIS_VARIANT ANALYSIS_PASS ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_LOG_PREFIX
+PASS="${ANALYSIS_PASS}"
+ROOT="${ANALYSIS_ROOT}"
+export PASS ROOT
 OUT_DIR="${ANALYSIS_ROOT}/embeddings"
 EXECUTION_LOG_DIR="${EXECUTION_LOG_DIR:-${OUT_DIR}}"
 if [[ -n "${ROW_COMBO:-}" ]]; then
@@ -160,15 +202,18 @@ if [[ -n "${ROW_COMBO:-}" ]]; then
 else
   LOG_SUFFIX=""
 fi
-if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
-  LOG_FILE="${EXECUTION_LOG_DIR}/${ANALYSIS_LOG_PREFIX:-execution_times_batch_effect_uncorrected_final_}${METHOD}_${DS_NAME}${LOG_SUFFIX}.feather"
-elif [[ -n "${ANALYSIS_PASS:-}" ]]; then
+if [[ -n "${ANALYSIS_VARIANT}" ]]; then
+  LOG_FILE="${EXECUTION_LOG_DIR}/${ANALYSIS_LOG_PREFIX}${METHOD}_${DS_NAME}${LOG_SUFFIX}.feather"
+elif [[ -n "${ANALYSIS_PASS}" ]]; then
   LOG_FILE="${EXECUTION_LOG_DIR}/execution_times_batch_effect_${ANALYSIS_PASS}_${METHOD}_${DS_NAME}${LOG_SUFFIX}.feather"
 else
   LOG_FILE="${EXECUTION_LOG_DIR}/execution_times_${METHOD}_${DS_NAME}${LOG_SUFFIX}.feather"
 fi
 FORCE_FLAG=()
 [[ "${FORCE_BENCHMARK:-0}" == 1 ]] && FORCE_FLAG=(--force)
+ANALYSIS_VARIANT_FLAG=()
+[[ -n "${ANALYSIS_VARIANT}" ]] &&
+  ANALYSIS_VARIANT_FLAG=(--analysis_variant "${ANALYSIS_VARIANT}")
 ANALYSIS_PASS_FLAG=()
 [[ -n "${ANALYSIS_PASS:-}" ]] && ANALYSIS_PASS_FLAG=(--analysis_pass "${ANALYSIS_PASS}")
 HIGH_RES_FLAG=()
@@ -193,8 +238,8 @@ PYTHON_ARGS=(
   --method "${METHOD}" --input_dir "${HPC_SCRATCH_DIR}/${DS_NAME}/output"
   --output_dir "${OUT_DIR}" --log_file "${LOG_FILE}"
 )
-if [[ ${#GPU_DEVICE_ARGS[@]} -gt 0 ]]; then
-  PYTHON_ARGS+=("${GPU_DEVICE_ARGS[@]}")
+if [[ ${#ANALYSIS_VARIANT_FLAG[@]} -gt 0 ]]; then
+  PYTHON_ARGS+=("${ANALYSIS_VARIANT_FLAG[@]}")
 fi
 if [[ ${#FORCE_FLAG[@]} -gt 0 ]]; then
   PYTHON_ARGS+=("${FORCE_FLAG[@]}")

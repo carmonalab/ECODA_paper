@@ -202,8 +202,6 @@ correct_clr_batch_lmm <- function(
 
   validation <- metadata_validation
   if (is.null(validation)) {
-    # This call deliberately receives the cell-level table.  The contract
-    # checks every row before creating its sample-level representation.
     validation <- ecoda_batch_validate_metadata(
       metadata = sample_meta,
       batch_keys = if (length(batch_keys) >= 2L) {

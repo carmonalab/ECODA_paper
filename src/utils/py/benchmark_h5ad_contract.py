@@ -36,9 +36,13 @@ except ModuleNotFoundError:  # pragma: no cover - direct script execution
     )
 
 
+# The identity is an explicit corrected-mode caller contract.  Pipeline 3
+# preprocessing persists configuration identity without a sample-level
+# validation summary; consumers other than preprocessing remain strict.
+#
 # These values are duplicated here deliberately rather than inferred from an
-# audit/checksum sidecar.  The identity is an explicit corrected-mode caller
-# contract; ordinary and uncorrected validation never enters this code.
+# audit/checksum sidecar.
+#
 _BATCH_TOKEN_VERSION = "ecoda_batch_composite_v1"
 _BATCH_CONTRACT_VERSION = "ecoda_batch_contract_v1"
 _BATCH_RESERVED_OBS_NAME = "__ecoda_batch_combined_v1"
@@ -104,13 +108,51 @@ _BATCH_IDENTITY_VECTOR_FIELDS = frozenset(
         "tokens",
         "scalarized_values",
         "sample_scalarized_values",
+        "batch_values",
+        "batch_levels",
+        "sample_batch_values",
+        "sample_batch_levels",
     }
 )
 _BATCH_RESERVED_ABSENCE_FIELDS = (
     "reserved_obs_absent",
     "reserved_column_absent",
     "reserved_absent",
+    "temporary_column_absent",
 )
+_PIPELINE3_METHODS = frozenset(
+    {
+        "preprocessing",
+        "Stage 3 preprocessing",
+        "Stage 3 worker publication",
+        "Stage 3 watchdog",
+        "Stage 3 audit",
+    }
+)
+
+
+def _corrected_summary_required(
+    view,
+    method,
+    require_corrected_summary,
+    allow_missing_corrected_summary,
+    expected_batch_contract,
+):
+    """Resolve the explicit summary policy for corrected H5AD validation."""
+    if allow_missing_corrected_summary:
+        if (
+            view != "batch_effect_corrected"
+            or method not in _PIPELINE3_METHODS
+            or expected_batch_contract is None
+        ):
+            raise ValueError(
+                "allow_missing_corrected_summary is restricted to Pipeline 3 "
+                "corrected validation with an expected configuration identity"
+            )
+        return False
+    return view == "batch_effect_corrected" and (
+        method != "preprocessing" or require_corrected_summary
+    )
 
 
 def _identity_alias(identity, fields, label):
@@ -715,19 +757,44 @@ def validate_benchmark_h5ad_contract(
     *,
     expected_batch_contract=None,
     batch_contract=None,
+    require_corrected_summary=True,
+    allow_missing_corrected_summary=False,
 ):
-    """Reject incomplete AnnData artifacts before benchmark computation."""
+
+    """Reject incomplete AnnData artifacts before benchmark computation.
+
+    Pipeline 3 may explicitly pass ``allow_missing_corrected_summary=True``
+    (with an expected configuration identity) because its corrected H5AD
+    persists configuration identity only.  The option is rejected for
+    ordinary corrected consumers; their default summary requirement remains
+    strict.  ``require_corrected_summary=False`` is retained as the
+    equivalent explicit Python API.
+    """
     if view not in REQUIRED_OBSM:
         raise ValueError(f"Unknown preprocessing view for h5ad contract: {view}")
+    corrected_summary_required = _corrected_summary_required(
+        view,
+        method,
+        require_corrected_summary,
+        allow_missing_corrected_summary,
+        expected_batch_contract,
+    )
     if (
         view == "batch_effect_corrected"
         and expected_batch_contract is None
+        and (
+            method != "preprocessing"
+            or not require_corrected_summary
+        )
     ):
         raise ValueError(
             "corrected batch h5ad validation requires explicit contract identity "
             "(expected config identity)"
         )
-    if view == "batch_effect_corrected":
+    if (
+        view == "batch_effect_corrected"
+        and expected_batch_contract is not None
+    ):
         expected_batch_contract = _normalize_h5ad_expected_identity(
             expected_batch_contract,
             f"h5ad {method} ({view}) expected identity",
@@ -742,7 +809,7 @@ def validate_benchmark_h5ad_contract(
                 batch_contract,
                 embedded_batch_contract,
                 require_recorded=True,
-                require_summary=view == "batch_effect_corrected",
+                require_summary=corrected_summary_required,
                 label=f"h5ad {method} ({view}) embedded identity",
             )
         recorded_batch_contract = (
@@ -758,7 +825,7 @@ def validate_benchmark_h5ad_contract(
                 _BATCH_RESERVED_OBS_NAME not in obs_columns
             ),
             require_recorded=expected_batch_contract is not None,
-            require_summary=view == "batch_effect_corrected",
+            require_summary=corrected_summary_required,
             label=f"h5ad {method} ({view})",
         )
     missing = []
@@ -811,23 +878,46 @@ def validate_benchmark_h5ad_path(
     *,
     expected_batch_contract=None,
     batch_contract=None,
+    require_corrected_summary=True,
+    allow_missing_corrected_summary=False,
 ):
-    """Validate persisted h5ad structure without materializing AnnData."""
+    """Validate persisted h5ad structure without materializing AnnData.
+
+    Pipeline 3 may explicitly pass ``allow_missing_corrected_summary=True``
+    (with an expected configuration identity) because its corrected H5AD
+    persists configuration identity only.  Ordinary corrected consumers keep
+    the strict summary requirement.  ``require_corrected_summary=False`` is
+    retained as the equivalent explicit Python API.
+    """
     import h5py
 
     if not os.path.isfile(path) or os.path.getsize(path) == 0:
         raise ValueError(f"h5ad path is missing or empty: {path}")
     if view not in REQUIRED_OBSM:
         raise ValueError(f"Unknown preprocessing view for h5ad contract: {view}")
+    corrected_summary_required = _corrected_summary_required(
+        view,
+        method,
+        require_corrected_summary,
+        allow_missing_corrected_summary,
+        expected_batch_contract,
+    )
     if (
         view == "batch_effect_corrected"
         and expected_batch_contract is None
+        and (
+            method != "preprocessing"
+            or not require_corrected_summary
+        )
     ):
         raise ValueError(
             "corrected batch h5ad validation requires explicit contract identity "
             "(expected config identity)"
         )
-    if view == "batch_effect_corrected":
+    if (
+        view == "batch_effect_corrected"
+        and expected_batch_contract is not None
+    ):
         expected_batch_contract = _normalize_h5ad_expected_identity(
             expected_batch_contract,
             f"h5ad {method} ({view}) expected identity",
@@ -851,7 +941,7 @@ def validate_benchmark_h5ad_path(
                     batch_contract,
                     embedded_batch_contract,
                     require_recorded=True,
-                    require_summary=view == "batch_effect_corrected",
+                    require_summary=corrected_summary_required,
                     label=f"h5ad {method} ({view}) embedded identity",
                 )
             recorded_batch_contract = (
@@ -868,7 +958,7 @@ def validate_benchmark_h5ad_path(
                     and _BATCH_RESERVED_OBS_NAME not in obs_columns
                 ),
                 require_recorded=expected_batch_contract is not None,
-                require_summary=view == "batch_effect_corrected",
+                require_summary=corrected_summary_required,
                 label=f"h5ad {method} ({view})",
             )
 
@@ -958,15 +1048,30 @@ def main():
     parser.add_argument("--method", required=True)
     parser.add_argument("--expected-batch-contract", default=None)
     parser.add_argument("--batch-contract", default=None)
+    parser.add_argument(
+        "--allow-missing-corrected-summary",
+        action="store_true",
+        help=(
+            "Allow a summary-free corrected H5AD only for Pipeline 3 with "
+            "an explicit expected configuration identity."
+        ),
+    )
     args = parser.parse_args()
+
+    expected_batch_contract = _load_batch_contract_argument(
+        args.expected_batch_contract
+    )
+    batch_contract = _load_batch_contract_argument(args.batch_contract)
+    is_pipeline3 = args.method in _PIPELINE3_METHODS
+    validation_method = "preprocessing" if is_pipeline3 else args.method
     validate_benchmark_h5ad_path(
         args.path,
         args.view,
-        args.method,
-        expected_batch_contract=_load_batch_contract_argument(
-            args.expected_batch_contract
-        ),
-        batch_contract=_load_batch_contract_argument(args.batch_contract),
+        validation_method,
+        expected_batch_contract=expected_batch_contract,
+        batch_contract=batch_contract,
+        require_corrected_summary=not args.allow_missing_corrected_summary,
+        allow_missing_corrected_summary=args.allow_missing_corrected_summary,
     )
     print(f"h5ad contract OK: {args.path}")
 

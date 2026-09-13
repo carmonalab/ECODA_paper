@@ -1,6 +1,6 @@
 #!/bin/bash
-# Read-only Covid H5AD obs preflight.  This worker never writes to the H5AD
-# source or creates an artifact ownership record for it.
+# Read-only H5AD obs audit/metadata export.  This worker never writes to the
+# H5AD source or creates an artifact ownership record for it.
 set -euo pipefail
 
 BOOTSTRAP_SOURCE_ROOT="${ECODA_SOURCE_ROOT:-}"
@@ -230,6 +230,48 @@ if [[ "${AUDIT_MODE}" == metadata ]]; then
   METADATA_MANIFEST="${H5AD_METADATA_EXPORT_MANIFEST:-}"
   STATUS_DIR="${H5AD_METADATA_EXPORT_STATUS_DIR:-}"
   TASK_ID="${SLURM_ARRAY_TASK_ID:-${H5AD_METADATA_EXPORT_TASK_ID:-}}"
+  if [[ -n "${H5AD_METADATA_EXPORT_VARIANT:-}" &&
+        -n "${ANALYSIS_VARIANT:-}" &&
+        "${H5AD_METADATA_EXPORT_VARIANT}" != "${ANALYSIS_VARIANT}" ]]; then
+    fail "metadata export variant disagrees with Stage 5 analysis variant"
+  fi
+  if [[ -n "${H5AD_METADATA_EXPORT_PASS:-}" &&
+        -n "${ANALYSIS_PASS:-}" &&
+        "${H5AD_METADATA_EXPORT_PASS}" != "${ANALYSIS_PASS}" ]]; then
+    fail "metadata export pass disagrees with Stage 5 analysis pass"
+  fi
+  METADATA_VARIANT="${H5AD_METADATA_EXPORT_VARIANT:-${ANALYSIS_VARIANT:-}}"
+  METADATA_PASS="${H5AD_METADATA_EXPORT_PASS:-${ANALYSIS_PASS:-}}"
+  METADATA_ROOT="${H5AD_METADATA_EXPORT_ROOT:-${ANALYSIS_ROOT:-}}"
+  METADATA_NAS_ROOT="${H5AD_METADATA_EXPORT_NAS_ROOT:-${ANALYSIS_NAS_ROOT:-}}"
+  case "${METADATA_VARIANT}" in
+    final)
+      EXPECTED_METADATA_PASS="uncorrected"
+      EXPECTED_METADATA_ROOT="${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final"
+      EXPECTED_METADATA_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/uncorrected_final"
+      ;;
+    corrected_final)
+      EXPECTED_METADATA_PASS="corrected"
+      EXPECTED_METADATA_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final"
+      EXPECTED_METADATA_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
+      ;;
+    *)
+      fail "metadata export requires analysis variant final or corrected_final"
+      ;;
+  esac
+  [[ -z "${METADATA_PASS}" ||
+     "${METADATA_PASS}" == "${EXPECTED_METADATA_PASS}" ]] ||
+    fail "metadata export variant/pass identity mismatch"
+  METADATA_PASS="${EXPECTED_METADATA_PASS}"
+  [[ "${METADATA_ROOT}" == "${EXPECTED_METADATA_ROOT}" ]] ||
+    fail "metadata export variant/root identity mismatch"
+  if [[ -n "${METADATA_NAS_ROOT}" &&
+        "${METADATA_NAS_ROOT}" != "${EXPECTED_METADATA_NAS_ROOT}" ]]; then
+    fail "metadata export NAS root does not match analysis variant"
+  fi
+  export ANALYSIS_VARIANT="${METADATA_VARIANT}"
+  export ANALYSIS_PASS="${METADATA_PASS}"
+  export ANALYSIS_ROOT="${METADATA_ROOT}"
   [[ -n "${METADATA_MANIFEST}" && -r "${METADATA_MANIFEST}" &&
      ! -L "${METADATA_MANIFEST}" ]] ||
     fail "metadata export manifest is missing or unsafe"
@@ -239,29 +281,46 @@ if [[ "${AUDIT_MODE}" == metadata ]]; then
     fail "metadata export requires a run-owned status directory and task ID"
   ecoda_validate_run_owned_path "${METADATA_MANIFEST}" "${RUN_ROOT}" ||
     fail "metadata export manifest is not run-owned"
+  ecoda_validate_checksum "${METADATA_MANIFEST}" ||
+    fail "metadata export manifest checksum is invalid"
   ecoda_validate_manifest "${METADATA_MANIFEST}" 4 ||
     fail "metadata export manifest is malformed"
   row=""
   manifest_rows=0
-  seen_metadata_datasets=""
+  seen_metadata_rows=""
   manifest_line=""
   while IFS= read -r manifest_line || [[ -n "${manifest_line}" ]]; do
     IFS=$'\t' read -r row_dataset row_view row_input row_output row_extra <<< "${manifest_line}"
     manifest_rows=$((manifest_rows + 1))
     [[ -n "${row_dataset}" &&
-       "${row_view}" == "batch_effect_uncorrected" &&
+       "${row_view}" == "batch_effect_${METADATA_PASS}" &&
        "${row_input}" = /* && -n "${row_output}" &&
        -z "${row_extra}" ]] ||
       fail "metadata export manifest row ${manifest_rows} is malformed"
     [[ "${row_dataset}" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] ||
       fail "metadata export dataset is not a safe path component"
-    case " ${seen_metadata_datasets} " in
-      *" ${row_dataset} "*)
-        fail "metadata export manifest contains duplicate dataset: ${row_dataset}" ;;
-      *) seen_metadata_datasets="${seen_metadata_datasets} ${row_dataset}" ;;
+    ecoda_dataset_exists "${row_dataset}" ||
+      fail "metadata export dataset is not configured: ${row_dataset}"
+    ecoda_view_exists "${row_dataset}" "${row_view}" ||
+      fail "metadata export view is not configured: ${row_dataset}/${row_view}"
+    expected_input_name="$(ecoda_view_output_name "${row_dataset}" "${row_view}")" ||
+      fail "metadata export output name is unavailable: ${row_dataset}/${row_view}"
+    [[ -n "${expected_input_name}" &&
+       "${expected_input_name}" != */* &&
+       "${expected_input_name}" != *$'\n'* &&
+       "${expected_input_name}" != *$'\t'* ]] ||
+      fail "metadata export configured H5AD output name is unsafe"
+    expected_input="${HPC_SCRATCH_DIR%/}/${row_dataset}/output/${expected_input_name}"
+    [[ "${row_input}" == "${expected_input}" ]] ||
+      fail "metadata export input is not the configured ${METADATA_PASS} H5AD path"
+    case " ${seen_metadata_rows} " in
+      *" ${row_dataset}|${row_view} "*)
+        fail "metadata export manifest contains duplicate dataset/view" ;;
+      *) seen_metadata_rows="${seen_metadata_rows} ${row_dataset}|${row_view}" ;;
     esac
-    [[ "${row_output}" == "${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final/metadata/${row_dataset}_sample_metadata.feather" ]] ||
-      fail "metadata export row ${manifest_rows} is not a final output binding"
+    expected_output="${METADATA_ROOT%/}/metadata/${row_dataset}_sample_metadata.feather"
+    [[ "${row_output}" == "${expected_output}" ]] ||
+      fail "metadata export row ${manifest_rows} is not bound to the exact variant output"
     [[ -f "${row_input}" && ! -L "${row_input}" && -r "${row_input}" ]] ||
       fail "metadata export H5AD input is missing or unsafe: ${row_input}"
     if [[ ${manifest_rows} -eq ${TASK_ID} ]]; then
@@ -270,6 +329,7 @@ if [[ "${AUDIT_MODE}" == metadata ]]; then
   done < "${METADATA_MANIFEST}"
   [[ ${manifest_rows} -gt 0 && ${TASK_ID} -le ${manifest_rows} ]] ||
     fail "metadata export task ID is outside manifest rows"
+  [[ -n "${row}" ]] || fail "metadata export selected row is missing"
   IFS=$'\t' read -r row_dataset row_view row_input row_output row_extra <<< "${row}"
   metadata_output_parent="$(dirname "${row_output}")"
   _ecoda_validate_run_owned_directory_for_create \
@@ -289,21 +349,21 @@ if [[ "${AUDIT_MODE}" == metadata ]]; then
   status_kind="EXPORTED"
   if "${PYTHON_BIN}" "${EXPORTER}" \
       --config "${DATASETS_JSON_FILE}" --dataset "${row_dataset}" \
-      --view "${row_view}" --input-file "${row_input}" \
-      --output "${row_output}" --check >/dev/null 2>&1; then
+      --view "${row_view}" --analysis-variant "${METADATA_VARIANT}" \
+      --input-file "${row_input}" --output "${row_output}" --check >/dev/null 2>&1; then
     status_kind="NOOP_VALIDATED"
   else
     "${PYTHON_BIN}" "${EXPORTER}" \
       --config "${DATASETS_JSON_FILE}" --dataset "${row_dataset}" \
-      --view "${row_view}" --input-file "${row_input}" \
-      --output "${row_output}" ||
+      --view "${row_view}" --analysis-variant "${METADATA_VARIANT}" \
+      --input-file "${row_input}" --output "${row_output}" ||
       fail "metadata export failed for ${row_dataset}"
   fi
   ecoda_validate_checksum "${row_output}" ||
     fail "metadata export checksum is invalid: ${row_output}"
   safe="$(_ecoda_safe_component "${row_dataset}__${row_view}")"
   ecoda_atomic_write "${STATUS_DIR}/${safe}.status" \
-    "STATE=OK\nSTATUS=${status_kind}\nRUN_ID=${RUN_ID}\nDATASET=${row_dataset}\nVIEW=${row_view}\nTASK_ID=${TASK_ID}\nINPUT_FILE=${row_input}\nOUTPUT_FILE=${row_output}\n"
+    "STATE=OK\nSTATUS=${status_kind}\nRUN_ID=${RUN_ID}\nANALYSIS_VARIANT=${METADATA_VARIANT}\nANALYSIS_PASS=${METADATA_PASS}\nANALYSIS_ROOT=${METADATA_ROOT}\nDATASET=${row_dataset}\nVIEW=${row_view}\nTASK_ID=${TASK_ID}\nINPUT_FILE=${row_input}\nOUTPUT_FILE=${row_output}\n"
   printf 'H5AD_METADATA_EXPORT=%s\n' "${row_output}"
   exit 0
 fi

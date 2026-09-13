@@ -70,6 +70,47 @@ FINAL_BATCH_METHODS = (
     "qot",
 )
 
+FINAL_UNCORRECTED_DATASETS = (
+    "Covid19_PBMC",
+    "Diabetes",
+    "Joanito",
+    "Lung",
+    "Kidney_KPMP_full",
+)
+
+
+def _configured_batch_effect_datasets(config_path: Path, view: str) -> tuple[str, ...]:
+    """Return the non-private batch-effect datasets in config order."""
+    try:
+        entries = read_datasets_json(config_path, view=view)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read batch-effect config: {config_path}") from exc
+    return tuple(
+        ds
+        for ds, entry in entries.items()
+        if not ds.startswith("_")
+        and entry.get("use_for_batch_effect") is True
+        and isinstance(entry.get("views"), dict)
+        and view in entry["views"]
+    )
+
+
+def _validate_variant_root(root: Path, analysis_variant: str) -> None:
+    expected_root = (
+        "uncorrected_final"
+        if analysis_variant == "final"
+        else "corrected_final"
+    )
+    if (
+        not root.is_absolute()
+        or root.name != expected_root
+        or root.parent.name != "batch_effect"
+    ):
+        raise ValueError(
+            f"{analysis_variant} artifact validation requires a "
+            f"batch_effect/{expected_root} root"
+        )
+
 
 def batch_artifact_stem(
     ds: str,
@@ -84,12 +125,18 @@ def batch_artifact_stem(
     if batch_pass not in {"uncorrected", "corrected"}:
         raise ValueError(f"invalid batch pass: {batch_pass}")
     variant = analysis_variant or ""
-    if variant not in {"", "final"}:
+    if variant not in {"", "final", "corrected_final"}:
         raise ValueError(f"unknown analysis variant: {variant}")
     if variant == "final":
         if batch_pass != "uncorrected":
             raise ValueError("final analysis variant requires uncorrected batch pass")
         return f"{ds}_batch_effect_uncorrected_final"
+    if variant == "corrected_final":
+        if batch_pass != "corrected":
+            raise ValueError(
+                "corrected_final analysis variant requires corrected batch pass"
+            )
+        return f"{ds}_batch_effect_corrected_final"
     return f"{ds}_batch_effect_{batch_pass}"
 
 
@@ -731,19 +778,39 @@ def validate(
         verify_source_identity(source_identity, selection, input_root, config_path)
     if not allowed:
         raise ValueError("no selected benchmark labels")
-    if analysis_variant not in (None, "", "final"):
+    if analysis_variant not in (None, "", "final", "corrected_final"):
         raise ValueError(f"unknown analysis variant: {analysis_variant}")
-    if analysis_variant == "final":
-        if not batch or batch_pass != "uncorrected":
+    variant_datasets: tuple[str, ...] | None = None
+    if analysis_variant in {"final", "corrected_final"}:
+        expected_pass = (
+            "uncorrected" if analysis_variant == "final" else "corrected"
+        )
+        if not batch or batch_pass != expected_pass:
             raise ValueError(
-                "final analysis variant requires the uncorrected batch-effect pass"
+                f"{analysis_variant} analysis variant requires the "
+                f"{expected_pass} batch-effect pass"
             )
         forbidden = sorted(set(allowed) - set(FINAL_BATCH_METHODS))
         if forbidden:
             raise ValueError(
-                "final analysis variant has unsupported methods: "
+                f"{analysis_variant} analysis variant has unsupported methods: "
                 + ", ".join(forbidden)
             )
+        _validate_variant_root(root, analysis_variant)
+        if analysis_variant == "final":
+            variant_datasets = FINAL_UNCORRECTED_DATASETS
+        else:
+            if config_path is None or not config_path.is_file():
+                raise ValueError(
+                    "corrected_final artifact validation requires an existing --config"
+                )
+            variant_datasets = _configured_batch_effect_datasets(
+                config_path, "batch_effect_corrected"
+            )
+            if not variant_datasets:
+                raise ValueError(
+                    "corrected_final config has no selected corrected datasets"
+                )
     if batch and batch_pass not in {"uncorrected", "corrected"}:
         raise ValueError("batch validation requires --batch-pass")
     corrected = batch and batch_pass == "corrected"
@@ -753,6 +820,14 @@ def validate(
             raise ValueError(
                 "corrected batch artifact validation requires an existing --config"
             )
+    if (
+        variant_datasets is not None
+        and len(rows) > 1
+        and tuple(row[0] for row in rows) != variant_datasets
+    ):
+        raise ValueError(
+            f"{analysis_variant} selection must use its exact configured dataset order"
+        )
     if batch and exact:
         expected_rows = [
             (ds, "batch_effect_uncorrected", "batch_effect_uncorrected")
@@ -761,6 +836,10 @@ def validate(
         if rows != expected_rows or batch_pass != "uncorrected":
             raise ValueError("batch exact selection is not the literal twelve-row uncorrected matrix")
     for ds, view, scope in rows:
+        if variant_datasets is not None and ds not in variant_datasets:
+            raise ValueError(
+                f"{analysis_variant} selection contains an unapproved dataset: {ds}"
+            )
         if batch:
             expected_view = f"batch_effect_{batch_pass}"
             if view != expected_view:
@@ -821,10 +900,24 @@ def validate_single(
     expected_batch_contract=None,
     batch_contract=None,
 ) -> None:
-    if analysis_variant not in (None, "", "final"):
+    if analysis_variant not in (None, "", "final", "corrected_final"):
         raise ValueError(f"unknown analysis variant: {analysis_variant}")
     if analysis_variant == "final" and corrected:
         raise ValueError("final analysis variant cannot validate corrected Stage 5 artifacts")
+    if analysis_variant == "corrected_final" and not corrected:
+        raise ValueError(
+            "corrected_final analysis variant requires corrected Stage 5 artifacts"
+        )
+    if analysis_variant:
+        marker = (
+            "_batch_effect_uncorrected_final_"
+            if analysis_variant == "final"
+            else "_batch_effect_corrected_final_"
+        )
+        if marker not in path.name:
+            raise ValueError(
+                f"{analysis_variant} artifact path is not variant-qualified: {path}"
+            )
     if (
         corrected
         and expected_batch_contract is None
@@ -867,7 +960,7 @@ def main() -> None:
     group.add_argument("--artifact", type=Path)
     group.add_argument("--root", type=Path)
     parser.add_argument("--analysis-variant", default=None,
-                        choices=["final"],
+                        choices=["final", "corrected_final"],
                         help="variant-qualified batch artifact paths")
     parser.add_argument("--selection", type=Path)
     parser.add_argument("--labels", nargs="+")

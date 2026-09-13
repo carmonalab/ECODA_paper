@@ -70,11 +70,13 @@ import torch
 
 from src.utils.py.datasets_io import read_datasets_json
 from src.utils.py.batch_contract import (
+    RESERVED_OBS_NAME,
     augment_batch_contract,
     batch_correction_spec_for_keys,
     build_batch_composite,
     build_batch_contract_identity,
     build_batch_validation_summary,
+    composite_token,
     normalize_batch_keys,
     read_h5ad_validation_summary,
     validate_batch_metadata,
@@ -163,7 +165,7 @@ def _corrected_h5ad_identity(batch_keys):
 
 
 def _corrected_stage5_identity(method, batch_keys, validation_summary=None):
-    """Build Stage 5 identity and attach the source validation summary."""
+    """Build Stage 5 identity and attach the optional validation summary."""
 
     method_model = _CORRECTED_STAGE5_METHOD_MODELS.get(method)
     if method_model is None:
@@ -187,41 +189,130 @@ def _corrected_stage5_identity(method, batch_keys, validation_summary=None):
         correction_mode,
         correction_formula,
     )
+def _read_corrected_final_accepted_sentinel_values(config_path, ds_name):
+    """Read the authoritative sentinel policy for one corrected-final task."""
+
+    if config_path is None:
+        raise ValueError(
+            "corrected_final requires the authoritative datasets.json path"
+        )
+    try:
+        with open(config_path, encoding="utf-8") as handle:
+            datasets = json.load(handle)
+    except (OSError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"cannot read authoritative datasets.json for {ds_name!r}"
+        ) from exc
+    if not isinstance(datasets, dict):
+        raise ValueError("authoritative datasets.json must contain a mapping")
+    entry = datasets.get(ds_name)
+    if not isinstance(entry, dict):
+        raise ValueError(
+            f"authoritative datasets.json has no mapping for {ds_name!r}"
+        )
+    policy = entry.get("batch_metadata_policy")
+    if policy is None:
+        return {}
+    if not isinstance(policy, dict):
+        raise ValueError(
+            f"batch_metadata_policy for {ds_name!r} must be a mapping"
+        )
+    return policy.get("accepted_sentinel_values", {})
 
 
-def _validate_h5ad_path(path, view, method, expected_batch_contract):
+def _build_cell_batch_composite(
+    adata,
+    batch_keys,
+    *,
+    accepted_sentinel_values=None,
+):
+    """Add a composite technical key without reducing cell-level metadata.
+
+    The corrected-final lane intentionally consumes the source value on every
+    cell.  In particular, it must not run the sample-level validation helper,
+    whose within-Sample constancy check is a contract for older artifacts.
+    """
+
+    keys = tuple(batch_keys)
+    missing = [key for key in keys if key not in adata.obs.columns]
+    if missing:
+        raise ValueError(
+            "corrected batch columns are missing from loaded H5AD: "
+            + ", ".join(missing)
+        )
+    if RESERVED_OBS_NAME in adata.obs.columns:
+        raise ValueError(
+            f"loaded H5AD already contains reserved batch column {RESERVED_OBS_NAME!r}"
+        )
+    values = [
+        composite_token(
+            keys,
+            row,
+            accepted_sentinel_values=accepted_sentinel_values,
+        )
+        for row in adata.obs.loc[:, list(keys)].itertuples(
+            index=False, name=None
+        )
+    ]
+    adata.obs[RESERVED_OBS_NAME] = values
+    return RESERVED_OBS_NAME
+
+
+def _validate_h5ad_path(
+    path,
+    view,
+    method,
+    expected_batch_contract,
+    *,
+    require_corrected_summary=True,
+):
     """Validate an H5AD path, preserving legacy call shape when unbound."""
+    validation_method = (
+        "preprocessing"
+        if view == "batch_effect_corrected" and not require_corrected_summary
+        else method
+    )
     if expected_batch_contract is None:
-        return validate_benchmark_h5ad_path(path, view, method)
+        return validate_benchmark_h5ad_path(path, view, validation_method)
     return validate_benchmark_h5ad_path(
         path,
         view,
-        method,
+        validation_method,
         expected_batch_contract=expected_batch_contract,
+        require_corrected_summary=require_corrected_summary,
     )
 
 
 def _validate_corrected_batch_contract(expected, recorded, label):
-    """Validate identity and exact compact summary for corrected caches."""
+    """Validate corrected identity and its optional compact summary."""
 
-    validate_batch_contract_identity(
-        expected,
-        recorded,
-        require_recorded=True,
-        label=label,
-    )
     if not isinstance(expected, dict) or not isinstance(recorded, dict):
         raise ValueError(f"{label} must be a mapping")
     expected_summary = expected.get("validation_summary")
     recorded_summary = recorded.get("validation_summary")
-    if expected_summary is None or recorded_summary is None:
-        raise ValueError(f"{label} is missing validation_summary")
+    # Corrected-final artifacts are configuration-identity-only.  Legacy
+    # corrected artifacts carry the compact summary and still require it.
+    require_summary = expected_summary is not None
+    validate_batch_contract_identity(
+        expected,
+        recorded,
+        require_recorded=True,
+        require_summary=require_summary,
+        label=label,
+    )
     forbidden = {
         "composite_values",
         "sample_composite_values",
         "sample_ids",
         "sample_group_ids",
+        "canonical_values",
+        "canonical_cell_values",
+        "canonical_sample_metadata",
+        "sample_metadata",
+        "row_tokens",
         "tokens",
+        "scalarized_values",
+        "sample_scalarized_values",
     }
     for mapping_name, mapping in (("expected", expected), ("recorded", recorded)):
         vectors = sorted(forbidden.intersection(mapping))
@@ -230,6 +321,10 @@ def _validate_corrected_batch_contract(expected, recorded, label):
                 f"{label} {mapping_name} contains per-cell/sample vectors: "
                 f"{', '.join(vectors)}"
             )
+    if expected_summary is None:
+        return
+    if recorded_summary is None:
+        raise ValueError(f"{label} is missing validation_summary")
     try:
         expected_normalized = validate_batch_validation_summary(
             expected_summary,
@@ -247,15 +342,28 @@ def _validate_corrected_batch_contract(expected, recorded, label):
         )
 
 
-def _validate_h5ad_content(adata, view, method, expected_batch_contract):
+def _validate_h5ad_content(
+    adata,
+    view,
+    method,
+    expected_batch_contract,
+    *,
+    require_corrected_summary=True,
+):
     """Validate loaded H5AD content with corrected identity when required."""
+    validation_method = (
+        "preprocessing"
+        if view == "batch_effect_corrected" and not require_corrected_summary
+        else method
+    )
     if expected_batch_contract is None:
-        return validate_benchmark_h5ad_contract(adata, view, method)
+        return validate_benchmark_h5ad_contract(adata, view, validation_method)
     return validate_benchmark_h5ad_contract(
         adata,
         view,
-        method,
+        validation_method,
         expected_batch_contract=expected_batch_contract,
+        require_corrected_summary=require_corrected_summary,
     )
 
 def _read_checksum_sidecar(path):
@@ -692,8 +800,8 @@ def _runtime_metadata_payload(
         "mem_GB": memory_value,
     }
     if batch_contract is not None:
-        # Corrected runtime metadata must carry the compact summary; ordinary
-        # and uncorrected calls leave the legacy payload untouched.
+        # Corrected runtime metadata carries the compact summary for legacy
+        # corrected artifacts; corrected-final identities are configuration-only.
         if not isinstance(batch_contract, dict):
             raise ValueError("runtime metadata batch_contract must be a mapping")
         _validate_corrected_batch_contract(
@@ -1789,11 +1897,40 @@ def process_dataset(args, ds_name, entry):
     os.environ["ECODA_ARTIFACT_PRODUCER"] = artifact_producer
     view_name = args.view
     analysis_pass = getattr(args, "analysis_pass", None)
-    analysis_variant = os.environ.get("ANALYSIS_VARIANT", "")
-    if analysis_variant not in ("", "final"):
+    requested_variant = getattr(args, "analysis_variant", None)
+    environment_variant = os.environ.get("ANALYSIS_VARIANT", "")
+    if (
+        requested_variant is not None
+        and environment_variant
+        and requested_variant != environment_variant
+    ):
+        raise ValueError(
+            "CLI analysis variant disagrees with ANALYSIS_VARIANT"
+        )
+    analysis_variant = (
+        requested_variant
+        if requested_variant is not None
+        else environment_variant
+    )
+    if analysis_variant not in ("", "final", "corrected_final"):
         raise ValueError(f"Unknown analysis variant: {analysis_variant!r}")
     if analysis_variant == "final" and analysis_pass != "uncorrected":
-        raise ValueError("final analysis variant requires the uncorrected batch-effect pass")
+        raise ValueError(
+            "final analysis variant requires the uncorrected batch-effect pass"
+        )
+    if analysis_variant == "corrected_final" and analysis_pass != "corrected":
+        raise ValueError(
+            "corrected_final analysis variant requires the corrected batch-effect pass"
+        )
+    accepted_sentinel_values = (
+        _read_corrected_final_accepted_sentinel_values(
+            getattr(args, "config_path", None),
+            ds_name,
+        )
+        if analysis_variant == "corrected_final"
+        else None
+    )
+
     requested_combo = getattr(args, "combo", None)
     if requested_combo is not None and analysis_pass is not None:
         raise ValueError("--combo is only supported for ordinary benchmark runs")
@@ -1826,19 +1963,22 @@ def process_dataset(args, ds_name, entry):
             )
     view_output = entry["views"][view_name]["output_file"]
     input_path = Path(args.input_dir) / view_output
-    if not input_path.exists():
-        raise FileNotFoundError(f"Input h5ad not found: {input_path}")
-
     corrected_batch_keys = ()
     corrected_validation_summary = None
     expected_h5ad_batch_contract = None
     expected_stage5_batch_contract = None
+    require_corrected_summary = analysis_variant != "corrected_final"
     if analysis_pass == "corrected":
-        corrected_batch_keys = normalize_batch_keys(entry.get("batch_col"))
-        corrected_validation_summary = _read_corrected_validation_summary(
-            input_path,
-            corrected_batch_keys,
+        corrected_batch_keys = normalize_batch_keys(
+            entry.get("batch_col"),
+            sample_column="Sample",
+            biological_column=entry.get("label_col"),
         )
+        if require_corrected_summary:
+            corrected_validation_summary = _read_corrected_validation_summary(
+                input_path,
+                corrected_batch_keys,
+            )
         expected_h5ad_batch_contract = _corrected_h5ad_identity(
             corrected_batch_keys
         )
@@ -1861,7 +2001,7 @@ def process_dataset(args, ds_name, entry):
     def output_name(suffix, n, res_label=None, extension="dists"):
         if analysis_pass is not None:
             stem = f"{ds_name}_batch_effect_{analysis_pass}"
-            if analysis_variant == "final":
+            if analysis_variant in ("final", "corrected_final"):
                 stem += "_final"
             return (
                 f"{stem}_hvg{n}_highres_"
@@ -1899,9 +2039,17 @@ def process_dataset(args, ds_name, entry):
                 continue
             for n in args.hvg:
                 for dim in scpoli_dims_for(n, res_label):
-                    out_name = (
-                        f"{ds_name}_hvg{n}{res_label}_scpoli_dims{dim}_embs.feather"
-                    )
+                    if analysis_variant:
+                        stem = f"{ds_name}_batch_effect_{analysis_pass}_final"
+                        out_name = (
+                            f"{stem}_hvg{n}_highres_"
+                            f"scpoli_dims{dim}_embs.feather"
+                        )
+                    else:
+                        out_name = (
+                            f"{ds_name}_hvg{n}{res_label}_"
+                            f"scpoli_dims{dim}_embs.feather"
+                        )
                     combos.append((n, res_label, ct_col, dim, run_scpoli, out_name))
 
     elif args.method in ("pilot", "qot", "pilotgm"):
@@ -1963,9 +2111,10 @@ def process_dataset(args, ds_name, entry):
             print(f"Already processed and validated: {out_name}")
             continue
         pending.append((n, res_label, ct_col, payload, run_fn, out_path))
-
     if not pending:
+        print("No pending method combinations; cached outputs are complete.")
         return
+
 
     print(f"Loading {input_path} ...")
     source_shape = None
@@ -1975,11 +2124,14 @@ def process_dataset(args, ds_name, entry):
             args.view,
             args.method,
             expected_h5ad_batch_contract,
+            require_corrected_summary=require_corrected_summary,
         )
         obs_columns = {"Sample"}
         obs_columns.update(
             str(ct_col) for _, _, ct_col, _, _, _ in pending if ct_col is not None
         )
+        if corrected_batch_keys:
+            obs_columns.update(corrected_batch_keys)
         embedding_keys = []
         for n, _, _, _, _, _ in pending:
             if args.view == "batch_effect_corrected":
@@ -2002,6 +2154,7 @@ def process_dataset(args, ds_name, entry):
             args.view,
             args.method,
             expected_h5ad_batch_contract,
+            require_corrected_summary=require_corrected_summary,
         )
         obs_columns = {"Sample"}
         if args.method == "scpoli":
@@ -2010,7 +2163,7 @@ def process_dataset(args, ds_name, entry):
                 for _, _, ct_col, _, _, _ in pending
                 if ct_col is not None
             )
-        if args.method == "mrvi" and corrected_batch_keys:
+        if corrected_batch_keys:
             obs_columns.update(corrected_batch_keys)
         elif technical_batch is not None:
             obs_columns.add(str(technical_batch))
@@ -2034,6 +2187,7 @@ def process_dataset(args, ds_name, entry):
             args.view,
             args.method,
             expected_h5ad_batch_contract,
+            require_corrected_summary=require_corrected_summary,
         )
         adata = adata.to_memory()
     profile_shape = source_shape or (adata.n_obs, adata.n_vars)
@@ -2054,7 +2208,11 @@ def process_dataset(args, ds_name, entry):
         raise ValueError(
             f"Confirmed batch column '{technical_batch}' not found in obs of {input_path}"
         )
-    if args.method == "mrvi" and analysis_pass == "corrected":
+    if (
+        args.method == "mrvi"
+        and analysis_pass == "corrected"
+        and require_corrected_summary
+    ):
         validation = validate_batch_metadata(adata.obs, corrected_batch_keys)
         loaded_summary = build_batch_validation_summary(
             validation,
@@ -2100,12 +2258,19 @@ def process_dataset(args, ds_name, entry):
                 and analysis_pass == "corrected"
                 and len(corrected_batch_keys) >= 2
             ):
-                batch_composite = build_batch_composite(
-                    sub.obs,
-                    corrected_batch_keys,
-                )
-                sub.obs = batch_composite.frame
-                temporary_batch_key = batch_composite.column_name
+                if analysis_variant == "corrected_final":
+                    temporary_batch_key = _build_cell_batch_composite(
+                        sub,
+                        corrected_batch_keys,
+                        accepted_sentinel_values=accepted_sentinel_values,
+                    )
+                else:
+                    batch_composite = build_batch_composite(
+                        sub.obs,
+                        corrected_batch_keys,
+                    )
+                    sub.obs = batch_composite.frame
+                    temporary_batch_key = batch_composite.column_name
                 run_batch_key = temporary_batch_key
             if args.method == "mrvi":
                 run_mrvi(
@@ -2177,6 +2342,15 @@ def main():
     parser.add_argument("--analysis_pass", default=None,
                         choices=["uncorrected", "corrected"],
                         help="Batch-effect pass; requires the matching explicit view")
+    parser.add_argument(
+        "--analysis_variant",
+        default=None,
+        choices=["final", "corrected_final"],
+        help=(
+            "Explicit Stage 5 batch-effect lane; final selects uncorrected_final "
+            "and corrected_final selects corrected_final"
+        ),
+    )
     parser.add_argument("--high_resolution_only", action="store_true",
                         help="Run only the configured high-resolution tier")
     parser.add_argument("--method", required=True,

@@ -450,6 +450,11 @@
       "cell_type_low_res": "Subclass",
       "cell_type_high_res": "Supertype"
     },
+    "batch_metadata_policy": {
+      "sample_aggregation": "majority_v1",
+      "majority_keys": ["assay"],
+      "accepted_sentinel_values": {}
+    },
     "views": {
       "batch_effect_uncorrected": {
         "input_file_name": "SEAAD_Alzheimer.h5ad",
@@ -477,6 +482,13 @@
       "batch": ["assay", "sequencing_platform", "suspension_dissociation_time"],
       "cell_type_low_res": "broad_cell_type",
       "cell_type_high_res": "author_cell_type"
+    },
+    "batch_metadata_policy": {
+      "sample_aggregation": "majority_v1",
+      "majority_keys": ["suspension_dissociation_time"],
+      "accepted_sentinel_values": {
+        "suspension_dissociation_time": ["unknown"]
+      }
     },
     "views": {
       "batch_effect_uncorrected": {
@@ -657,6 +669,11 @@
       "batch": "batch_cov",
       "cell_type_low_res": "layer1",
       "cell_type_high_res": "louvain"
+    },
+    "batch_metadata_policy": {
+      "sample_aggregation": "majority_v1",
+      "majority_keys": ["batch_cov"],
+      "accepted_sentinel_values": {}
     },
     "views": {
       "batch_effect_uncorrected": {

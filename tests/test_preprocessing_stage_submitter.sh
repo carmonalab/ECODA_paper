@@ -63,6 +63,8 @@ for source_file in 1.1_run_worker.sh 1.2_preprocess_watchdog.sh; do
 done
 cp "${ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
   "${SOURCE_ROOT}/src/utils/py/benchmark_h5ad_contract.py"
+cp "${ROOT}/src/utils/py/batch_contract.py" \
+  "${SOURCE_ROOT}/src/utils/py/batch_contract.py"
 for source_file in config_helper.R datasets.json pixi.toml pixi.lock; do
   cp "${ROOT}/${source_file}" "${SOURCE_ROOT}/${source_file}"
 done
@@ -182,9 +184,8 @@ export ECODA_RUNTIME_MANIFEST="${RUNTIME_MANIFEST}"
 export APPTAINER_BIN="${APPTAINER_STUB}"
 export USER_EMAIL="test@example.invalid"
 
-# The scheduler stub records every boundary.  NOOP_PREFLIGHT mode executes the
-# immutable preflight worker locally so a valid existing output can complete
-# the validator-only path without a real scheduler.
+# The scheduler stub records every boundary.  The generic preflight branch is
+# retained only to catch an accidental validator submission in valid-only runs.
 cat > "${TMP_DIR}/bin/sbatch" <<'STUB'
 #!/bin/bash
 set -euo pipefail
@@ -209,9 +210,9 @@ export_field() {
   return 1
 }
 
-# The combined selection also submits the read-only Covid obs audit.  Keep
-# that boundary scheduler-free while emitting the same run-owned evidence
-# that the submitter validates, so this remains a manifest/selection test.
+# A batch-effect selection with pending Covid work submits the read-only obs
+# audit. Keep that boundary scheduler-free while emitting the same run-owned
+# evidence that the submitter validates.
 if [[ "${worker_script}" == *h5ad_obs_audit_worker.sh ]]; then
   preflight_manifest="$(export_field H5AD_PREFLIGHT_MANIFEST)"
   preflight_status_dir="$(export_field H5AD_PREFLIGHT_STATUS_DIR)"
@@ -401,130 +402,61 @@ case "${CALLS}" in *"${SOURCE_ROOT}/src/3_scrnaseq_preprocessing/1.2_preprocess_
 case "${CALLS}" in *"ECODA_RUNTIME_MODE=apptainer"*"ECODA_RUNTIME_PROFILE=stage3"*) ;; *) echo "Stage 3 runtime export missing" >&2; exit 1 ;; esac
 
 # The exact historical run leaves its fixture owners active; discard only
-# those temporary owners before the independent combined run.
+# those temporary owners before the independent batch-effect arrays.
 ECODA_OWNERS_ROOT="${HPC_SCRATCH_DIR}/_ecoda_owners"
 rm -rf "${ECODA_OWNERS_ROOT}"
 
-# Combined batch mode is four target uncorrected rows followed by the current
-# non-underscore, batch-enabled corrected rows in copied-snapshot order.
+# The approved batch-effect release uses two independent arrays.  Each array
+# runs the direct Covid obs-only preflight when its Covid row needs compute.
 RUNS_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs"
 COVID_INPUT="${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
 mkdir -p "$(dirname "${COVID_INPUT}")"
 printf 'stub-direct-h5ad\n' > "${COVID_INPUT}"
 COVID_INPUT_DIR="$(cd "$(dirname "${COVID_INPUT}")" && pwd -P)"
 COVID_INPUT_CANONICAL="${COVID_INPUT_DIR}/$(basename "${COVID_INPUT}")"
-CORRECTED_DATASETS=()
-while IFS= read -r corrected_dataset; do
-  CORRECTED_DATASETS+=("${corrected_dataset}")
-done < <(
-  jq -r '
-    to_entries[]
-    | select((.key | startswith("_") | not) and
-             (.value.use_for_batch_effect == true))
-    | .key
-  ' "${SOURCE_ROOT}/datasets.json"
-)
-COMBINED_EXPECTED_ROWS=$((4 + ${#CORRECTED_DATASETS[@]}))
-[[ ${COMBINED_EXPECTED_ROWS} -eq 13 ]]
-COMBINED_SELECTION="${TMP_DIR}/combined-selection.tsv"
-{
-  printf 'Covid19_PBMC\tbatch_effect_uncorrected\n'
-  printf 'Diabetes\tbatch_effect_uncorrected\n'
-  printf 'Joanito\tbatch_effect_uncorrected\n'
-  printf 'Lung\tbatch_effect_uncorrected\n'
-  for corrected_dataset in "${CORRECTED_DATASETS[@]}"; do
-    printf '%s\tbatch_effect_corrected\n' "${corrected_dataset}"
-  done
-} > "${COMBINED_SELECTION}"
-[[ "$(wc -l < "${COMBINED_SELECTION}" | tr -d '[:space:]')" == 13 ]]
-[[ "$(sed -n '1p' "${COMBINED_SELECTION}")" == $'Covid19_PBMC\tbatch_effect_uncorrected' ]]
-[[ "$(sed -n '2p' "${COMBINED_SELECTION}")" == $'Diabetes\tbatch_effect_uncorrected' ]]
-[[ "$(sed -n '3p' "${COMBINED_SELECTION}")" == $'Joanito\tbatch_effect_uncorrected' ]]
-[[ "$(sed -n '4p' "${COMBINED_SELECTION}")" == $'Lung\tbatch_effect_uncorrected' ]]
-corrected_index=0
-while IFS= read -r corrected_dataset; do
-  corrected_index=$((corrected_index + 1))
-  expected_row="${corrected_dataset}"$'\tbatch_effect_corrected'
-  [[ "$(sed -n "$((4 + corrected_index))p" "${COMBINED_SELECTION}")" == "${expected_row}" ]]
-done < <(
-  jq -r '
-    to_entries[]
-    | select((.key | startswith("_") | not) and
-             (.value.use_for_batch_effect == true))
-    | .key
-  ' "${SOURCE_ROOT}/datasets.json"
-)
+
+UNCORRECTED_SELECTION="${TMP_DIR}/uncorrected-selection.tsv"
+printf '%s\n' \
+  'Covid19_PBMC	batch_effect_uncorrected' \
+  'Diabetes	batch_effect_uncorrected' \
+  'Joanito	batch_effect_uncorrected' \
+  'Lung	batch_effect_uncorrected' > "${UNCORRECTED_SELECTION}"
 : > "${CAPTURE}"
-COMBINED_OUTPUT="$(
-  PREPROCESS_NOOP_PREFLIGHT=1 \
-    run_stage3 --selection-file "${COMBINED_SELECTION}" \
-      --combined-batch-selection
+UNCORRECTED_OUTPUT="$(
+  run_stage3 --selection-file "${UNCORRECTED_SELECTION}"
 )"
-case "${COMBINED_OUTPUT}" in
-  *"PREPROCESS_ARRAY_JOB_ID="*) ;;
-  *) echo "combined selection did not submit an array" >&2; exit 1 ;;
+case "${UNCORRECTED_OUTPUT}" in
+  *"PREPROCESS_ARRAY_JOB_ID=600001"*) ;;
+  *) echo "uncorrected selection did not submit its own array" >&2; exit 1 ;;
 esac
-case "${COMBINED_OUTPUT}" in
-  *"PREPROCESS_WATCHDOG_JOB_ID="*) ;;
-  *) echo "combined selection did not submit a watchdog" >&2; exit 1 ;;
+case "${UNCORRECTED_OUTPUT}" in
+  *"PREPROCESS_WATCHDOG_JOB_ID=600002"*) ;;
+  *) echo "uncorrected selection did not submit its own watchdog" >&2; exit 1 ;;
 esac
-COMBINED_MANIFEST="$(printf '%s\n' "${COMBINED_OUTPUT}" |
+UNCORRECTED_MANIFEST="$(printf '%s\n' "${UNCORRECTED_OUTPUT}" |
   sed -n 's/^PREPROCESS_DATASET_MANIFEST=//p')"
-[[ -s "${COMBINED_MANIFEST}" ]]
-[[ "$(wc -l < "${COMBINED_MANIFEST}" | tr -d '[:space:]')" == 13 ]]
-uncorrected_index=0
-for expected_row in \
-  $'Covid19_PBMC\tbatch_effect_uncorrected' \
-  $'Diabetes\tbatch_effect_uncorrected' \
-  $'Joanito\tbatch_effect_uncorrected' \
-  $'Lung\tbatch_effect_uncorrected'; do
-  uncorrected_index=$((uncorrected_index + 1))
-  [[ "$(sed -n "${uncorrected_index}p" "${COMBINED_MANIFEST}")" == "${expected_row}" ]]
-done
-corrected_index=0
-while IFS= read -r corrected_dataset; do
-  corrected_index=$((corrected_index + 1))
-  expected_row="${corrected_dataset}"$'\tbatch_effect_corrected'
-  [[ "$(sed -n "$((4 + corrected_index))p" "${COMBINED_MANIFEST}")" == "${expected_row}" ]]
-done < <(
-  jq -r '
-    to_entries[]
-    | select((.key | startswith("_") | not) and
-             (.value.use_for_batch_effect == true))
-    | .key
-  ' "${SOURCE_ROOT}/datasets.json"
-)
-COMBINED_RUN_ROOT="$(dirname "${COMBINED_MANIFEST}")/.."
-COMBINED_RUN_ROOT="$(cd "${COMBINED_RUN_ROOT}" && pwd)"
-[[ "$(wc -l < "${COMBINED_RUN_ROOT}/manifests/pending.tsv" |
-  tr -d '[:space:]')" == 13 ]]
-cmp -s "${COMBINED_MANIFEST}" \
-  "${COMBINED_RUN_ROOT}/manifests/pending.tsv" || {
-  echo "combined pending manifest differs from selected manifest" >&2
-  exit 1
-}
-PREFLIGHT_RECORDS="$(awk -F '\t' '$1 == "PREFLIGHT" && $2 == "600003" { count++ } END { print count + 0 }' \
-  "${COMBINED_RUN_ROOT}/manifests/scheduler_ids.tsv")"
+[[ -s "${UNCORRECTED_MANIFEST}" ]]
+UNCORRECTED_RUN_ROOT="$(dirname "${UNCORRECTED_MANIFEST}")/.."
+UNCORRECTED_RUN_ROOT="$(cd "${UNCORRECTED_RUN_ROOT}" && pwd)"
+cmp -s "${UNCORRECTED_SELECTION}" "${UNCORRECTED_MANIFEST}"
+cmp -s "${UNCORRECTED_SELECTION}" \
+  "${UNCORRECTED_RUN_ROOT}/manifests/pending.tsv"
+case "$(cat "${CAPTURE}")" in
+  *"--array=1-4%1000"*) ;;
+  *) echo "uncorrected array escaped its four-row scope" >&2; exit 1 ;;
+esac
+PREFLIGHT_RECORDS="$(awk -F '	' '$1 == "PREFLIGHT" && $2 == "600003" { count++ } END { print count + 0 }' \
+  "${UNCORRECTED_RUN_ROOT}/manifests/scheduler_ids.tsv")"
 [[ "${PREFLIGHT_RECORDS}" == 1 ]]
 for preflight_view in batch_effect_uncorrected batch_effect_corrected; do
-  PREFLIGHT_REPORT="${COMBINED_RUN_ROOT}/preflight/Covid19_PBMC_${preflight_view}.json"
-  PREFLIGHT_STATUS="${COMBINED_RUN_ROOT}/status/h5ad_obs_audit/Covid19_PBMC__${preflight_view}.status"
+  PREFLIGHT_REPORT="${UNCORRECTED_RUN_ROOT}/preflight/Covid19_PBMC_${preflight_view}.json"
+  PREFLIGHT_STATUS="${UNCORRECTED_RUN_ROOT}/status/h5ad_obs_audit/Covid19_PBMC__${preflight_view}.status"
   [[ -s "${PREFLIGHT_REPORT}" && -s "${PREFLIGHT_REPORT}.md5" ]]
   [[ "$(sed -n 's/^MD5=//p' "${PREFLIGHT_REPORT}.md5" | sed -n '1p')" == "$(md5_file "${PREFLIGHT_REPORT}")" ]]
   [[ "$(sed -n 's/^SIZE=//p' "${PREFLIGHT_REPORT}.md5" | sed -n '1p')" == "$(wc -c < "${PREFLIGHT_REPORT}" | tr -d '[:space:]')" ]]
   [[ "$(sed -n 's/^PATH=//p' "${PREFLIGHT_REPORT}.md5" | sed -n '1p')" == "${PREFLIGHT_REPORT}" ]]
   [[ -s "${PREFLIGHT_STATUS}" ]]
-  [[ "$(sed -n 's/^STATE=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == "OK" ]]
-  [[ "$(sed -n 's/^RUN_ID=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == "${COMBINED_RUN_ROOT##*/}" ]]
-  [[ "$(sed -n 's/^DATASET=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == "Covid19_PBMC" ]]
-  [[ "$(sed -n 's/^VIEW=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == "${preflight_view}" ]]
-  if [[ "${preflight_view}" == "batch_effect_uncorrected" ]]; then
-    expected_task_id=1
-  else
-    expected_task_id=2
-  fi
-  [[ "$(sed -n 's/^TASK_ID=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == "${expected_task_id}" ]]
-  [[ "$(sed -n 's/^INPUT_FILE=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == "${COVID_INPUT}" ]]
+  [[ "$(sed -n 's/^STATE=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == OK ]]
   jq -e --arg view "${preflight_view}" \
     --arg source_root "${SOURCE_ROOT}" \
     --arg source_manifest "${SOURCE_MANIFEST}" \
@@ -550,84 +482,166 @@ for preflight_view in batch_effect_uncorrected batch_effect_corrected; do
   jq -e --argjson expected_rule "${expected_subset_rule}" \
     '.datasets[0].subset_vars == $expected_rule' "${PREFLIGHT_REPORT}" >/dev/null
 done
-COMBINED_CALLS="$(cat "${CAPTURE}")"
-case "${COMBINED_CALLS}" in
-  *"--array=1-${COMBINED_EXPECTED_ROWS}%1000"*) ;;
-  *) echo "combined array was not submitted with all pending rows" >&2; exit 1 ;;
-esac
-case "${COMBINED_CALLS}" in
-  *"PREPROCESS_SELECTION_FILE=${COMBINED_RUN_ROOT}/manifests/pending.tsv"*) ;;
-  *) echo "combined pending manifest was not exported" >&2; exit 1 ;;
-esac
+[[ ! -e "${UNCORRECTED_RUN_ROOT}/manifests/corrected_batch_preflight.tsv" ]]
+[[ ! -e "${UNCORRECTED_RUN_ROOT}/manifests/corrected_batch_preflight" ]]
+[[ ! -e "${UNCORRECTED_RUN_ROOT}/status/corrected_batch_preflight" ]]
 
-assert_combined_rejected() {
-  local selection="$1" label="$2" before after rc
-  : > "${CAPTURE}"
-  before="$(printf '%s\n' "${RUNS_ROOT}"/*)"
-  if run_stage3 --selection-file "${selection}" \
-      --combined-batch-selection >/dev/null 2>&1; then
-    rc=0
-  else
-    rc=$?
-  fi
-  [[ ${rc} -ne 0 ]] || {
-    echo "${label} was accepted" >&2
-    return 1
-  }
-  [[ ! -s "${CAPTURE}" ]] || {
-    echo "${label} reached sbatch" >&2
-    return 1
-  }
-  after="$(printf '%s\n' "${RUNS_ROOT}"/*)"
-  [[ "${before}" == "${after}" ]] || {
-    echo "${label} created a run root" >&2
-    return 1
-  }
-}
-
-OLD_EIGHT_SELECTION="${TMP_DIR}/combined-old-eight.tsv"
-{
-  printf 'Covid19_PBMC\tbatch_effect_uncorrected\n'
-  printf 'Covid19_PBMC\tbatch_effect_corrected\n'
-  printf 'Diabetes\tbatch_effect_uncorrected\n'
-  printf 'Diabetes\tbatch_effect_corrected\n'
-  printf 'Joanito\tbatch_effect_uncorrected\n'
-  printf 'Joanito\tbatch_effect_corrected\n'
-  printf 'Lung\tbatch_effect_uncorrected\n'
-  printf 'Lung\tbatch_effect_corrected\n'
-} > "${OLD_EIGHT_SELECTION}"
-assert_combined_rejected "${OLD_EIGHT_SELECTION}" \
-  "historical eight-row combined target matrix"
-
-MISSING_CORRECTED_SELECTION="${TMP_DIR}/combined-missing-corrected.tsv"
-sed '13d' "${COMBINED_SELECTION}" > "${MISSING_CORRECTED_SELECTION}"
-assert_combined_rejected "${MISSING_CORRECTED_SELECTION}" \
-  "combined selection with a missing corrected row"
-
-EXTRA_CORRECTED_SELECTION="${TMP_DIR}/combined-extra-corrected.tsv"
-cp "${COMBINED_SELECTION}" "${EXTRA_CORRECTED_SELECTION}"
-printf '%s\tbatch_effect_corrected\n' "${CORRECTED_DATASETS[0]}" \
-  >> "${EXTRA_CORRECTED_SELECTION}"
-assert_combined_rejected "${EXTRA_CORRECTED_SELECTION}" \
-  "combined selection with an extra corrected row"
-
-STALE_CORRECTED_DATASET="$(
+# The corrected release is a separate, config-ordered array.  Its pending
+# Covid row also requires the direct obs-only reports, but never the retired
+# corrected-source metadata/RDS preflight.
+rm -rf "${ECODA_OWNERS_ROOT}"
+CORRECTED_DATASETS=()
+while IFS= read -r corrected_dataset; do
+  CORRECTED_DATASETS+=("${corrected_dataset}")
+done < <(
   jq -r '
     to_entries[]
     | select((.key | startswith("_") | not) and
-             ((.value.use_for_batch_effect // false) != true) and
-             ((.value.views // {}) | has("batch_effect_corrected")))
+             (.value.use_for_batch_effect == true))
     | .key
-  ' "${SOURCE_ROOT}/datasets.json" | sed -n '1p'
+  ' "${SOURCE_ROOT}/datasets.json"
+)
+[[ "${#CORRECTED_DATASETS[@]}" -eq 9 ]]
+CORRECTED_SELECTION="${TMP_DIR}/corrected-selection.tsv"
+for corrected_dataset in "${CORRECTED_DATASETS[@]}"; do
+  printf '%s	batch_effect_corrected\n' "${corrected_dataset}"
+done > "${CORRECTED_SELECTION}"
+: > "${CAPTURE}"
+CORRECTED_OUTPUT="$(
+  run_stage3 --selection-file "${CORRECTED_SELECTION}"
 )"
-[[ -n "${STALE_CORRECTED_DATASET}" ]]
-STALE_CORRECTED_SELECTION="${TMP_DIR}/combined-stale-corrected.tsv"
-{
-  sed -n '1,12p' "${COMBINED_SELECTION}"
-  printf '%s\tbatch_effect_corrected\n' "${STALE_CORRECTED_DATASET}"
-} > "${STALE_CORRECTED_SELECTION}"
-assert_combined_rejected "${STALE_CORRECTED_SELECTION}" \
-  "combined selection with a stale corrected row"
+case "${CORRECTED_OUTPUT}" in
+  *"PREPROCESS_ARRAY_JOB_ID=600001"*) ;;
+  *) echo "corrected selection did not submit its own array" >&2; exit 1 ;;
+esac
+case "${CORRECTED_OUTPUT}" in
+  *"PREPROCESS_WATCHDOG_JOB_ID=600002"*) ;;
+  *) echo "corrected selection did not submit its own watchdog" >&2; exit 1 ;;
+esac
+CORRECTED_MANIFEST="$(printf '%s\n' "${CORRECTED_OUTPUT}" |
+  sed -n 's/^PREPROCESS_DATASET_MANIFEST=//p')"
+[[ -s "${CORRECTED_MANIFEST}" ]]
+[[ "$(wc -l < "${CORRECTED_MANIFEST}" | tr -d '[:space:]')" == 9 ]]
+CORRECTED_RUN_ROOT="$(dirname "${CORRECTED_MANIFEST}")/.."
+CORRECTED_RUN_ROOT="$(cd "${CORRECTED_RUN_ROOT}" && pwd)"
+cmp -s "${CORRECTED_SELECTION}" "${CORRECTED_MANIFEST}"
+cmp -s "${CORRECTED_SELECTION}" \
+  "${CORRECTED_RUN_ROOT}/manifests/pending.tsv"
+[[ "$(wc -l < "${CORRECTED_RUN_ROOT}/manifests/scheduler_ids.tsv" |
+  tr -d '[:space:]')" == 3 ]]
+CORRECTED_PREFLIGHT_RECORDS="$(awk -F '	' '$1 == "PREFLIGHT" && $2 == "600003" { count++ } END { print count + 0 }' \
+  "${CORRECTED_RUN_ROOT}/manifests/scheduler_ids.tsv")"
+[[ "${CORRECTED_PREFLIGHT_RECORDS}" == 1 ]]
+for preflight_view in batch_effect_uncorrected batch_effect_corrected; do
+  PREFLIGHT_REPORT="${CORRECTED_RUN_ROOT}/preflight/Covid19_PBMC_${preflight_view}.json"
+  PREFLIGHT_STATUS="${CORRECTED_RUN_ROOT}/status/h5ad_obs_audit/Covid19_PBMC__${preflight_view}.status"
+  [[ -s "${PREFLIGHT_REPORT}" && -s "${PREFLIGHT_REPORT}.md5" ]]
+  [[ "$(sed -n 's/^MD5=//p' "${PREFLIGHT_REPORT}.md5" | sed -n '1p')" == "$(md5_file "${PREFLIGHT_REPORT}")" ]]
+  [[ -s "${PREFLIGHT_STATUS}" ]]
+  [[ "$(sed -n 's/^STATE=//p' "${PREFLIGHT_STATUS}" | sed -n '1p')" == OK ]]
+done
+[[ ! -e "${CORRECTED_RUN_ROOT}/manifests/corrected_batch_preflight.tsv" ]]
+[[ ! -e "${CORRECTED_RUN_ROOT}/manifests/corrected_batch_preflight" ]]
+[[ ! -e "${CORRECTED_RUN_ROOT}/status/corrected_batch_preflight" ]]
+CORRECTED_CALLS="$(cat "${CAPTURE}")"
+case "${CORRECTED_CALLS}" in
+  *"--array=1-9%1000"*) ;;
+  *) echo "corrected array escaped its nine-row scope" >&2; exit 1 ;;
+esac
+case "${CORRECTED_CALLS}" in
+  *"audit_corrected_source_metadata"*|*"audit_corrected_h5ad_source"*|*"corrected_batch_preflight"*)
+    echo "corrected selection invoked retired source metadata preflight" >&2
+    exit 1
+    ;;
+esac
+
+# A combined launch is retired rather than silently broadening either array.
+: > "${CAPTURE}"
+BEFORE_RUNS="$(printf '%s\n' "${RUNS_ROOT}"/*)"
+if run_stage3 --selection-file "${UNCORRECTED_SELECTION}" \
+    --combined-batch-selection >/dev/null 2>&1; then
+  echo "retired combined Stage 3 selection was accepted" >&2
+  exit 1
+fi
+[[ ! -s "${CAPTURE}" ]]
+[[ "${BEFORE_RUNS}" == "$(printf '%s\n' "${RUNS_ROOT}"/*)" ]]
+
+# Validator-only idempotency checks use the same run/ownership primitives as
+# the submitter.  Source the immutable fixture copy before initializing runs.
+source "${SOURCE_ROOT}/src/slurm_config.sh"
+source "${SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
+
+# Valid rows are published into the new run's artifact manifest and skipped;
+# a mixed selection submits only its missing/invalid row.
+rm -rf "${ECODA_OWNERS_ROOT}"
+VALID_RUN_ID="prior-stage3-valid"
+ecoda_init_run stage3 "${VALID_RUN_ID}" >/dev/null
+VALID_NAME="$(jq -r '.Adams.views.benchmark_analysis.output_file_name' \
+  "${SOURCE_ROOT}/datasets.json")"
+VALID_SCRATCH="${HPC_SCRATCH_DIR}/Adams/output/${VALID_NAME}"
+VALID_NAS="${NAS_TARGET_DIR}/Adams/output/${VALID_NAME}"
+mkdir -p "$(dirname "${VALID_SCRATCH}")" "$(dirname "${VALID_NAS}")"
+printf 'validated-output\n' > "${VALID_SCRATCH}"
+printf 'validated-output\n' > "${VALID_NAS}"
+write_sidecar "${VALID_SCRATCH}"
+write_sidecar "${VALID_NAS}"
+ecoda_write_artifact_record "${VALID_SCRATCH}" stage3 "${VALID_RUN_ID}" >/dev/null
+ecoda_write_artifact_record "${VALID_NAS}" stage3 "${VALID_RUN_ID}" >/dev/null
+ecoda_artifact_owner_acquire "${VALID_SCRATCH}" stage3 "${VALID_RUN_ID}" 0 1 1 >/dev/null
+ecoda_artifact_owner_set_state "${VALID_SCRATCH}" OK "fixture validated" >/dev/null
+ecoda_artifact_owner_acquire "${VALID_NAS}" stage3 "${VALID_RUN_ID}" 0 1 1 >/dev/null
+ecoda_artifact_owner_set_state "${VALID_NAS}" OK "fixture validated" >/dev/null
+
+NOOP_SELECTION="${TMP_DIR}/noop-selection.tsv"
+printf 'Adams	benchmark_analysis\n' > "${NOOP_SELECTION}"
+: > "${CAPTURE}"
+NOOP_OUTPUT="$(run_stage3 --selection-file "${NOOP_SELECTION}")"
+NOOP_RUN_ID="$(printf '%s\n' "${NOOP_OUTPUT}" |
+  sed -n 's/^PREPROCESS_RUN_ID=//p' | tail -1)"
+[[ -n "${NOOP_RUN_ID}" ]]
+case "${NOOP_OUTPUT}" in
+  *"NOOP_VALIDATED=${NOOP_RUN_ID}"*) ;;
+  *) echo "valid Stage 3 row was not validator-only skipped" >&2; exit 1 ;;
+esac
+[[ ! -s "${CAPTURE}" ]]
+NOOP_ROOT="${RUNS_ROOT}/${NOOP_RUN_ID}"
+[[ "$(sed -n 's/^STATE=//p' "${NOOP_ROOT}/status/terminal" | sed -n '1p')" == NOOP_VALIDATED ]]
+[[ -s "${NOOP_ROOT}/manifests/artifacts/"*.record ]]
+NOOP_SCRATCH_OWNER="$(ecoda_artifact_owner_dir "${VALID_SCRATCH}")"
+NOOP_NAS_OWNER="$(ecoda_artifact_owner_dir "${VALID_NAS}")"
+[[ "$(sed -n 's/^STATE=//p' "${NOOP_SCRATCH_OWNER}/owner" | sed -n '1p')" == OK ]]
+[[ "$(sed -n 's/^RUN_ID=//p' "${NOOP_SCRATCH_OWNER}/owner" | sed -n '1p')" == "${NOOP_RUN_ID}" ]]
+[[ "$(sed -n 's/^STATE=//p' "${NOOP_NAS_OWNER}/owner" | sed -n '1p')" == OK ]]
+[[ "$(sed -n 's/^RUN_ID=//p' "${NOOP_NAS_OWNER}/owner" | sed -n '1p')" == "${NOOP_RUN_ID}" ]]
+
+rm -rf "${ECODA_OWNERS_ROOT}"
+ecoda_artifact_owner_acquire "${VALID_SCRATCH}" stage3 "${VALID_RUN_ID}" 0 1 1 >/dev/null
+ecoda_artifact_owner_set_state "${VALID_SCRATCH}" OK "fixture validated" >/dev/null
+ecoda_artifact_owner_acquire "${VALID_NAS}" stage3 "${VALID_RUN_ID}" 0 1 1 >/dev/null
+ecoda_artifact_owner_set_state "${VALID_NAS}" OK "fixture validated" >/dev/null
+MIXED_SELECTION="${TMP_DIR}/mixed-selection.tsv"
+printf '%s\n' \
+  'Adams	benchmark_analysis' \
+  'Bassez	benchmark_analysis' > "${MIXED_SELECTION}"
+: > "${CAPTURE}"
+MIXED_OUTPUT="$(run_stage3 --selection-file "${MIXED_SELECTION}")"
+MIXED_MANIFEST="$(printf '%s\n' "${MIXED_OUTPUT}" |
+  sed -n 's/^PREPROCESS_DATASET_MANIFEST=//p')"
+MIXED_ROOT="$(dirname "${MIXED_MANIFEST}")/.."
+MIXED_ROOT="$(cd "${MIXED_ROOT}" && pwd)"
+[[ "$(wc -l < "${MIXED_ROOT}/manifests/pending.tsv" |
+  tr -d '[:space:]')" == 1 ]]
+[[ "$(sed -n '1p' "${MIXED_ROOT}/manifests/pending.tsv")" == $'Bassez\tbenchmark_analysis' ]]
+case "${MIXED_OUTPUT}" in
+  *"PREPROCESS_ARRAY_JOB_ID=600001"*) ;;
+  *) echo "mixed Stage 3 selection did not submit missing work" >&2; exit 1 ;;
+esac
+case "$(cat "${CAPTURE}")" in
+  *"--array=1-1%1000"*) ;;
+  *) echo "mixed Stage 3 array was not narrowed to invalid rows" >&2; exit 1 ;;
+esac
+[[ "$(printf '%s\n' "$(cat "${CAPTURE}")" | wc -l |
+  tr -d '[:space:]')" == 2 ]]
 
 # Missing image identity fails before the first scheduler boundary.
 : > "${CAPTURE}"
@@ -763,6 +777,7 @@ if ecoda_validate_output_ownership stage3 "${OWNER_SELECTION}" other-owner; then
 fi
 [[ "$(sed -n 's/^RUN_ID=//p' "${OWNER_PATH}/owner")" == retry-owner ]]
 rm -rf "${ECODA_OWNERS_ROOT}"
+chmod u+w "${VALID_SCRATCH}" "${VALID_NAS}"
 
 # Exercise the watchdog's OOM retry boundary with the immutable source/runtime
 # identity and a real same-run ACTIVE global output owner.
@@ -778,8 +793,17 @@ ecoda_write_artifact_record "${WD_OUTPUT}" stage3 "${WD_RUN_ID}" >/dev/null
 printf 'Adams\tbenchmark_analysis\n' > "${WD_ROOT}/manifests/selection.tsv"
 cp "${WD_ROOT}/manifests/selection.tsv" "${WD_ROOT}/manifests/pending.tsv"
 ecoda_validate_output_ownership stage3 "${WD_ROOT}/manifests/pending.tsv" "${WD_RUN_ID}"
+WD_SCRATCH_OWNER="$(ecoda_artifact_owner_dir "${WD_OUTPUT}")"
+WD_NAS_OUTPUT="${NAS_TARGET_DIR}/Adams/output/${WD_OUTPUT_NAME}"
+WD_NAS_OWNER="$(ecoda_artifact_owner_dir "${WD_NAS_OUTPUT}")"
+[[ -d "${WD_SCRATCH_OWNER}" && -d "${WD_NAS_OWNER}" ]]
+[[ "$(sed -n 's/^STATE=//p' "${WD_SCRATCH_OWNER}/owner" | sed -n '1p')" == ACTIVE ]]
+[[ "$(sed -n 's/^STATE=//p' "${WD_NAS_OWNER}/owner" | sed -n '1p')" == ACTIVE ]]
 WD_STAGE_OWNER="$(ecoda_owner_acquire stage3 Adams/benchmark_analysis "${WD_RUN_ID}" 0 0)"
 printf 'Adams/benchmark_analysis\t%s\n' "${WD_STAGE_OWNER}" > "${WD_ROOT}/manifests/owners.tsv"
+ecoda_write_checksum "${WD_ROOT}/manifests/selection.tsv" >/dev/null
+ecoda_write_checksum "${WD_ROOT}/manifests/pending.tsv" >/dev/null
+printf 'ARRAY\t930001\nWATCHDOG\t930002\n' > "${WD_ROOT}/manifests/scheduler_ids.tsv"
 printf 'RUNTIME_IMAGE=%s\nRUNTIME_MANIFEST=%s\nRUNTIME_IMAGE_SHA256=%s\nRUNTIME_MANIFEST_SHA256=%s\nRUNTIME_IMAGE_SIZE=%s\nRUNTIME_MANIFEST_SIZE=%s\nIMAGE_PIXI_TOML_SHA256=%s\nIMAGE_PIXI_LOCK_SHA256=%s\n' \
   "${RUNTIME_IMAGE}" "${RUNTIME_MANIFEST}" "${RUNTIME_IMAGE_SHA256}" \
   "$(sha256_file "${RUNTIME_MANIFEST}")" "$(wc -c < "${RUNTIME_IMAGE}" | tr -d '[:space:]')" \
@@ -835,13 +859,33 @@ case "${WATCHDOG_CALL}" in *"ECODA_RUNTIME_MANIFEST=${RUNTIME_MANIFEST}"*) ;; *)
 case "${WATCHDOG_CALL}" in *"ECODA_RUNTIME_IDENTITY=${WD_ROOT}/manifests/runtime.identity"*) ;; *) echo "OOM retry omitted runtime identity" >&2; exit 1 ;; esac
 case "${WATCHDOG_CALL}" in *"ECODA_RUN_ID=${WD_RUN_ID}"*) ;; *) echo "OOM retry omitted run ID" >&2; exit 1 ;; esac
 [[ "$(sed -n 's/^STATE=//p' "${WD_ROOT}/status/watchdog")" == OK ]]
-[[ "$(sed -n 's/^STATE=//p' "${WD_STAGE_OWNER}/owner")" == OK ]]
-
-WD_SCRATCH_OWNER="$(ecoda_artifact_owner_dir "${WD_OUTPUT}")"
-WD_NAS_OUTPUT="${NAS_TARGET_DIR}/Adams/output/${WD_OUTPUT_NAME}"
-WD_NAS_OWNER="$(ecoda_artifact_owner_dir "${WD_NAS_OUTPUT}")"
-[[ "$(sed -n 's/^STATE=//p' "${WD_SCRATCH_OWNER}/owner")" == OK ]]
-[[ "$(sed -n 's/^STATE=//p' "${WD_NAS_OWNER}/owner")" == OK ]]
+# The watchdog only validates scratch outputs.  Owners remain ACTIVE until
+# the submitter's existing verified sync/finalization path runs.
+[[ -d "${WD_SCRATCH_OWNER}" && -d "${WD_NAS_OWNER}" ]]
+[[ "$(sed -n 's/^STATE=//p' "${WD_SCRATCH_OWNER}/owner" | sed -n '1p')" == ACTIVE ]]
+[[ "$(sed -n 's/^STATE=//p' "${WD_NAS_OWNER}/owner" | sed -n '1p')" == ACTIVE ]]
+WD_SYNC_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${WATCHDOG_BIN}:${TMP_DIR}/bin:${PATH}" \
+  USER_EMAIL="test@example.invalid" HPC_SCRATCH_DIR="${HPC_SCRATCH_DIR}" \
+  NAS_TARGET_DIR="${NAS_TARGET_DIR}" ECODA_LOGS_DIR="${ECODA_LOGS_DIR}" \
+  ECODA_RUNTIME_MODE=host ECODA_RUNTIME_PROFILE=stage3 \
+  ECODA_RUNTIME_IMAGE="${RUNTIME_IMAGE}" ECODA_RUNTIME_MANIFEST="${RUNTIME_MANIFEST}" \
+  ECODA_RUNTIME_IMAGE_SHA256="${RUNTIME_IMAGE_SHA256}" \
+  ECODA_RUNTIME_MANIFEST_SHA256="$(sha256_file "${RUNTIME_MANIFEST}")" \
+  ECODA_RUNTIME_IMAGE_SIZE="$(wc -c < "${RUNTIME_IMAGE}" | tr -d '[:space:]')" \
+  ECODA_RUNTIME_MANIFEST_SIZE="$(wc -c < "${RUNTIME_MANIFEST}" | tr -d '[:space:]')" \
+  PREPROCESS_SUBMITTER_TEST=0 \
+  bash "${ROOT}/src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh" \
+    --sync-only "${WD_RUN_ID}"
+)"
+case "${WD_SYNC_OUTPUT}" in
+  *"PREPROCESS_RUN_ID=${WD_RUN_ID}"*) ;;
+  *) echo "verified Stage 3 sync-only path did not complete" >&2; exit 1 ;;
+esac
+[[ -d "${WD_SCRATCH_OWNER}" && -d "${WD_NAS_OWNER}" ]]
+[[ "$(sed -n 's/^STATE=//p' "${WD_SCRATCH_OWNER}/owner" | sed -n '1p')" == OK ]]
+[[ "$(sed -n 's/^STATE=//p' "${WD_NAS_OWNER}/owner" | sed -n '1p')" == OK ]]
+[[ "$(sed -n 's/^STATE=//p' "${WD_STAGE_OWNER}/owner" | sed -n '1p')" == OK ]]
 
 # A submitter-preacquired same-run owner is also finalized FAIL when the
 # watchdog reaches a terminal non-OOM scheduler failure.
@@ -866,6 +910,9 @@ chmod 600 "${FAIL_ROOT}/manifests/source.manifest" \
 FAIL_SCRATCH_OWNER="$(ecoda_artifact_owner_dir "${FAIL_OUTPUT}")"
 FAIL_NAS_OUTPUT="${NAS_TARGET_DIR}/Breast_cancer/output/${FAIL_OUTPUT_NAME}"
 FAIL_NAS_OWNER="$(ecoda_artifact_owner_dir "${FAIL_NAS_OUTPUT}")"
+[[ -d "${FAIL_SCRATCH_OWNER}" && -d "${FAIL_NAS_OWNER}" ]]
+[[ "$(sed -n 's/^STATE=//p' "${FAIL_SCRATCH_OWNER}/owner" | sed -n '1p')" == ACTIVE ]]
+[[ "$(sed -n 's/^STATE=//p' "${FAIL_NAS_OWNER}/owner" | sed -n '1p')" == ACTIVE ]]
 set +e
 FAIL_WATCHDOG_OUTPUT="$(
   HOME="${TMP_DIR}/home" PATH="${WATCHDOG_BIN}:${TMP_DIR}/bin:${PATH}" \
@@ -887,6 +934,7 @@ FAIL_RC=$?
 set -e
 [[ ${FAIL_RC} -ne 0 ]]
 [[ "$(sed -n 's/^STATE=//p' "${FAIL_ROOT}/status/watchdog")" == FAIL ]]
+[[ -d "${FAIL_SCRATCH_OWNER}" && -d "${FAIL_NAS_OWNER}" ]]
 [[ "$(sed -n 's/^STATE=//p' "${FAIL_SCRATCH_OWNER}/owner")" == FAIL ]]
 [[ "$(sed -n 's/^STATE=//p' "${FAIL_NAS_OWNER}/owner")" == FAIL ]]
 [[ "$(sed -n 's/^STATE=//p' "${FAIL_STAGE_OWNER}/owner")" == FAIL ]]
@@ -914,42 +962,5 @@ MISSING_CALLS="$(cat "${CAPTURE}")"
 case "${MISSING_CALLS}" in *"--array=1-1%1000"*) ;; *) echo "missing-output path did not submit preprocessing work" >&2; exit 1 ;; esac
 case "${MISSING_CALLS}" in *"h5ad_preflight"*) echo "missing-output path submitted an unnecessary preflight" >&2; exit 1 ;; esac
 
-# Validator-only no-op still performs its strict preflight, then emits only the
-# run-owned NOOP report and never submits a compute array/watchdog.
-rm -rf "${ECODA_OWNERS_ROOT}"
-NOOP_NAME="$(jq -r '.Adams.views.benchmark_analysis.output_file_name' "${SOURCE_ROOT}/datasets.json")"
-NOOP_OUTPUT_PATH="${HPC_SCRATCH_DIR}/Adams/output/${NOOP_NAME}"
-mkdir -p "$(dirname "${NOOP_OUTPUT_PATH}")"
-chmod u+w "${NOOP_OUTPUT_PATH}"
-printf 'already-validated\n' > "${NOOP_OUTPUT_PATH}"
-write_sidecar "${NOOP_OUTPUT_PATH}"
-NOOP_SELECTION="${TMP_DIR}/noop-selection.tsv"
-printf 'Adams\tbenchmark_analysis\n' > "${NOOP_SELECTION}"
-: > "${CAPTURE}"
-NOOP_OUTPUT="$(
-  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
-  USER_EMAIL="test@example.invalid" PREPROCESS_NOOP_PREFLIGHT=1 \
-  PREPROCESS_SUBMITTER_TEST=0 ECODA_RUN_ID=noop-validated \
-  ECODA_RUN_REPORT="${HPC_SCRATCH_DIR}/_ecoda_runs/noop-validated/status/noop-report" \
-  bash "${ROOT}/src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh" \
-    --selection-file "${NOOP_SELECTION}"
-)"
-chmod a-w "${NOOP_OUTPUT_PATH}"
-NOOP_RUN_ID="$(printf '%s\n' "${NOOP_OUTPUT}" | sed -n 's/^PREPROCESS_RUN_ID=//p' | tail -1)"
-[[ -n "${NOOP_RUN_ID}" ]]
-NOOP_OWNER="$(ecoda_artifact_owner_dir "${NOOP_OUTPUT_PATH}")"
-NOOP_NAS_OUTPUT="${NAS_TARGET_DIR}/Adams/output/${NOOP_NAME}"
-NOOP_NAS_OWNER="$(ecoda_artifact_owner_dir "${NOOP_NAS_OUTPUT}")"
-[[ "$(sed -n 's/^STATE=//p' "${NOOP_OWNER}/owner")" == OK ]]
-[[ "$(sed -n 's/^RUN_ID=//p' "${NOOP_OWNER}/owner")" == "${NOOP_RUN_ID}" ]]
-[[ "$(sed -n 's/^STATE=//p' "${NOOP_NAS_OWNER}/owner")" == OK ]]
-[[ "$(sed -n 's/^RUN_ID=//p' "${NOOP_NAS_OWNER}/owner")" == "${NOOP_RUN_ID}" ]]
-NOOP_ROOT="${HPC_SCRATCH_DIR}/_ecoda_runs/${NOOP_RUN_ID}"
-case "${NOOP_OUTPUT}" in *"NOOP_VALIDATED=${NOOP_RUN_ID}"*) ;; *) echo "validator-only no-op marker missing" >&2; exit 1 ;; esac
-[[ "$(sed -n 's/^STATE=//p' "${NOOP_ROOT}/status/noop-report")" == NOOP_VALIDATED ]]
-NOOP_CALLS="$(cat "${CAPTURE}")"
-[[ "$(printf '%s\n' "${NOOP_CALLS}" | wc -l | tr -d '[:space:]')" == 1 ]]
-case "${NOOP_CALLS}" in *"h5ad_preflight_worker.sh"*) ;; *) echo "no-op did not run validator preflight" >&2; exit 1 ;; esac
-case "${NOOP_CALLS}" in *"1.1_run_worker.sh"*|*"1.2_preprocess_watchdog.sh"*) echo "no-op submitted compute work" >&2; exit 1 ;; esac
 
 echo "preprocessing stage submitter: OK"

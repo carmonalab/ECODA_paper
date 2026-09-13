@@ -170,6 +170,84 @@ stage3_remember_output_owners() {
     stage3_remember_output_owner "${owner}" || return 1
   done
 }
+
+stage3_manifest_row_count() {
+  local manifest="$1" ds="$2" view="$3"
+  awk -F '\t' -v wanted_ds="${ds}" -v wanted_view="${view}" \
+    '$1 == wanted_ds && $2 == wanted_view { count++ }
+     END { print count + 0 }' "${manifest}"
+}
+
+stage3_validate_current_manifest_rows() {
+  local ds view extra count
+  while IFS=$'\t' read -r ds view extra; do
+    [[ -n "${ds}" && -n "${view}" && -z "${extra}" ]] || return 1
+    count="$(stage3_manifest_row_count "${ROOT_MANIFEST}" "${ds}" "${view}")" ||
+      return 1
+    [[ "${count}" == "1" ]] || return 1
+  done < "${CURRENT_MANIFEST}"
+}
+
+stage3_remember_manifest_output_owner() {
+  local path="$1" owner
+  owner="$(ecoda_artifact_owner_dir "${path}")" || return 1
+  stage3_validate_output_owner "${owner}" || return 1
+  [[ "${ECODA_ARTIFACT_OWNER_STATE}" == "ACTIVE" ]] || return 1
+  stage3_remember_output_owner "${owner}"
+}
+
+stage3_remember_manifest_output_owners() {
+  local manifest="$1" ds view extra output scratch_path nas_path
+  [[ -n "${HPC_SCRATCH_DIR:-}" && "${HPC_SCRATCH_DIR}" = /* ]] || return 1
+  if [[ -n "${NAS_TARGET_DIR:-}" ]]; then
+    [[ "${NAS_TARGET_DIR}" = /* ]] || return 1
+  fi
+  while IFS=$'\t' read -r ds view extra; do
+    [[ -n "${ds}" && -n "${view}" && -z "${extra}" ]] || return 1
+    output="$(ecoda_view_output_name "${ds}" "${view}")" || return 1
+    [[ -n "${output}" && "${output}" != */* &&
+       "${output}" != *$'\n'* && "${output}" != *$'\t'* ]] || return 1
+    scratch_path="${HPC_SCRATCH_DIR%/}/${ds}/output/${output}"
+    [[ "${scratch_path}" == "${HPC_SCRATCH_DIR%/}/"* ]] || return 1
+    stage3_remember_manifest_output_owner "${scratch_path}" || return 1
+    if [[ -n "${NAS_TARGET_DIR:-}" ]]; then
+      nas_path="${NAS_TARGET_DIR%/}/${ds}/output/${output}"
+      [[ "${nas_path}" == "${NAS_TARGET_DIR%/}/"* ]] || return 1
+      stage3_remember_manifest_output_owner "${nas_path}" || return 1
+    fi
+  done < "${manifest}"
+}
+
+stage3_install_output_owner_manifest() {
+  local owners_file="${RUN_ROOT}/manifests/owners.tsv"
+  local tmp owner row existing_owner extra owner_listed
+  [[ -f "${owners_file}" && ! -L "${owners_file}" && -r "${owners_file}" ]] ||
+    return 1
+  ecoda_validate_run_owned_path "${owners_file}" "${RUN_ROOT}" || return 1
+  tmp="${owners_file}.artifact.$$"
+  cp "${owners_file}" "${tmp}" || return 1
+  for owner in "${STAGE3_OUTPUT_OWNER_DIRS_ALL[@]:-}"; do
+    [[ -n "${owner}" ]] || continue
+    owner_listed=0
+    while IFS=$'\t' read -r row existing_owner extra; do
+      [[ -n "${row}" && -n "${existing_owner}" && -z "${extra}" ]] ||
+        { rm -f "${tmp}"; return 1; }
+      [[ "${existing_owner}" == "${owner}" ]] && owner_listed=1
+    done < "${owners_file}"
+    if [[ ${owner_listed} -eq 0 ]]; then
+      printf 'ARTIFACT\t%s\n' "${owner}" >> "${tmp}" || {
+        rm -f "${tmp}"
+        return 1
+      }
+    fi
+  done
+  if ! ecoda_atomic_install_manifest "${tmp}" "${owners_file}" 2; then
+    rm -f "${tmp}"
+    return 1
+  fi
+  rm -f "${tmp}"
+}
+
 stage3_validate_scratch_output_ownership() {
   local selection="$1" saved_nas="${NAS_TARGET_DIR-}" had_nas=0 rc
   [[ -n "${NAS_TARGET_DIR+x}" ]] && had_nas=1
@@ -243,6 +321,18 @@ set_owner_state() {
   [[ -r "${owners_file}" ]] || return 1
   while IFS=$'\t' read -r row owner; do
     [[ -n "${row}" && -n "${owner}" ]] || { rc=1; continue; }
+    case "${owner}" in
+      "${ECODA_OWNERS_ROOT}/artifact/"*)
+        if stage3_validate_output_owner "${owner}"; then
+          count=$((count + 1))
+          ecoda_owner_set_state "${owner}" "${state}" "${reason}" || rc=1
+        else
+          # Never rewrite an owner belonging to another run or stage.
+          rc=1
+        fi
+        continue
+        ;;
+    esac
     owner_key="${row}"
     [[ "${owner_key}" == */* ]] || owner_key="${owner_key}/batch_effect_uncorrected"
     expected_owner="$(ecoda_owner_dir stage3 "${owner_key}")"
@@ -256,9 +346,26 @@ set_owner_state() {
   return "${rc}"
 }
 
+
+
+STAGE3_BOUND=0
+stage3_try_prepare_reserved_output_owners() {
+  [[ "${STAGE3_BOUND:-0}" == "1" ]] || return 0
+  [[ -n "${ROOT_MANIFEST:-}" && -f "${ROOT_MANIFEST}" &&
+     ! -L "${ROOT_MANIFEST}" && -r "${ROOT_MANIFEST}" ]] || return 0
+  ecoda_validate_run_owned_path "${ROOT_MANIFEST}" "${RUN_ROOT}" || return 0
+  ecoda_validate_manifest "${ROOT_MANIFEST}" 2 || return 0
+  stage3_remember_manifest_output_owners "${ROOT_MANIFEST}" || return 0
+  stage3_install_output_owner_manifest || true
+}
+
 fail() {
   local reason="$1"
   local owner_rc=0
+  # A failure can occur before the normal scratch-only validation boundary.
+  # Recover owners only from the validated root manifest and bound snapshot;
+  # never infer paths from an untrusted owner-manifest row.
+  stage3_try_prepare_reserved_output_owners || true
   stage3_finalize_output_owners FAIL "${reason}" || owner_rc=1
   set_owner_state FAIL "${reason}" || owner_rc=1
   atomic_status FAIL "${reason}" || owner_rc=1
@@ -273,6 +380,7 @@ if [[ ${bound_rc} -eq 2 ]]; then
   fail "legacy_source_unpinned"
 fi
 [[ ${bound_rc} -eq 0 ]] || fail "Stage 3 run-bound source/runtime identity is invalid"
+STAGE3_BOUND=1
 ecoda_runtime_validate_bound_run ||
   fail "Stage 3 run-bound runtime validation failed before retry handling"
 export ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST_ORIGINAL}"
@@ -341,10 +449,19 @@ ecoda_validate_run_owned_path "${RUN_ROOT}/manifests/owners.tsv" "${RUN_ROOT}" |
   fail "Stage 3 owner manifest is missing or outside run root"
 expected="$(wc -l < "${CURRENT_MANIFEST}" | tr -d '[:space:]')"
 [[ "${expected}" =~ ^[1-9][0-9]*$ ]] || fail "Stage 3 array manifest is empty"
+# Reserve tracking is reconstructed from the validated root selection before
+# scratch-only validation, so a failure at that boundary can still fail every
+# submitter-preacquired scratch/NAS artifact owner.
+stage3_validate_current_manifest_rows ||
+  fail "Stage 3 array manifest is not a subset of the root selection"
+stage3_remember_manifest_output_owners "${ROOT_MANIFEST}" ||
+  fail "failed to track all Stage 3 root output owners"
+stage3_install_output_owner_manifest ||
+  fail "failed to publish Stage 3 artifact owners in the run manifest"
 stage3_validate_scratch_output_ownership "${CURRENT_MANIFEST}" ||
   fail "Stage 3 output ownership validation failed before watchdog handling"
 stage3_remember_output_owners ||
-  fail "failed to track Stage 3 global output owners"
+  fail "failed to track Stage 3 current output owners"
 
 while :; do
   wait_and_classify "${ARRAY_ID}" "${expected}" || fail "sacct did not provide terminal Stage 3 task rows"
@@ -376,10 +493,12 @@ while :; do
   ecoda_validate_manifest "${RETRY_MANIFEST}" 2 ||
     fail "Stage 3 retry manifest is invalid"
   RETRY_COUNT="$(wc -l < "${RETRY_MANIFEST}" | tr -d '[:space:]')"
-stage3_validate_scratch_output_ownership "${RETRY_MANIFEST}" ||
+  stage3_validate_scratch_output_ownership "${RETRY_MANIFEST}" ||
     fail "Stage 3 output ownership validation failed before OOM retry"
   stage3_remember_output_owners ||
-    fail "failed to track Stage 3 global output owners"
+    fail "failed to track Stage 3 current output owners"
+  stage3_remember_manifest_output_owners "${RETRY_MANIFEST}" ||
+    fail "failed to track Stage 3 retry output owners"
   retry_worker_script="$(stage3_require_source_script \
     "${SCRIPT_DIR}/1.1_run_worker.sh")" ||
     fail "Stage 3 retry worker script escaped immutable source root"
@@ -404,10 +523,9 @@ stage3_validate_scratch_output_ownership "${RETRY_MANIFEST}" ||
 done
 
 validate_manifest_outputs "${ROOT_MANIFEST}" || fail "Stage 3 h5ad schema/checksum validation failed"
-stage3_finalize_output_owners OK "Stage 3 preprocessing artifacts validated" ||
-  fail "failed to finalize Stage 3 global artifact owners"
-set_owner_state OK "Stage 3 preprocessing artifacts validated" ||
-  fail "failed to finalize Stage 3 owners"
+# The submitter performs the verified scratch-to-NAS sync after this watchdog
+# exits.  Keep every owner ACTIVE until that post-sync finalizer runs; failure
+# paths above still transition all tracked owners to FAIL immediately.
 if ! atomic_status OK "all selected Stage 3 tasks completed and artifacts validated"; then
   fail "failed to write Stage 3 watchdog success status"
 fi

@@ -34,13 +34,21 @@ batch_contract_arg <- value_for("--batch-contract", "")
 source_identity_verified <- has_flag("--source-identity-verified")
 exact <- has_flag("--exact")
 batch <- nzchar(batch_pass)
-if (!analysis_variant %in% c("", "final")) {
+if (!analysis_variant %in% c("", "final", "corrected_final")) {
   stop("unknown analysis variant: ", analysis_variant)
 }
 if (identical(analysis_variant, "final") &&
     (!batch || !identical(batch_pass, "uncorrected"))) {
   stop("final analysis variant requires uncorrected batch-effect validation")
 }
+if (identical(analysis_variant, "corrected_final") &&
+    (!batch || !identical(batch_pass, "corrected"))) {
+  stop("corrected_final analysis variant requires corrected batch-effect validation")
+}
+corrected_final_mode <- identical(analysis_variant, "corrected_final") &&
+  identical(batch_pass, "corrected")
+corrected_summary_required <- identical(batch_pass, "corrected") &&
+  !corrected_final_mode
 supported_labels <- c("gloscope", "mofa", "pseudobulk", "composition", "scitd",
                       "prepare_pseudobulk", "trans", "zeroimp")
 if (nzchar(artifact_path) && nzchar(artifact_list)) {
@@ -54,6 +62,23 @@ if (!nzchar(artifact_path) && !nzchar(artifact_list) &&
 if (!nzchar(artifact_path) && !nzchar(artifact_list) &&
     (is.null(root) || is.null(selection) || !length(labels) || any(!nzchar(labels)))) {
   stop("--root, --selection, and --labels are required")
+}
+if (!nzchar(artifact_path) && !nzchar(artifact_list) &&
+    nzchar(analysis_variant)) {
+  expected_root_name <- if (identical(analysis_variant, "final")) {
+    "uncorrected_final"
+  } else {
+    "corrected_final"
+  }
+  resolved_root_name <- basename(
+    normalizePath(path.expand(root), winslash = "/", mustWork = FALSE)
+  )
+  if (!identical(resolved_root_name, expected_root_name)) {
+    stop(
+      analysis_variant, " validation root must end in ",
+      expected_root_name, ": ", root
+    )
+  }
 }
 
 checksum_ok <- function(file) {
@@ -921,9 +946,17 @@ finite_numeric <- function(value) {
 .batch_result_stem <- function(ds) {
   if (!batch) return(ds)
   stem <- paste0(ds, "_batch_effect_", batch_pass)
-  if (identical(analysis_variant, "final")) {
-    if (!identical(batch_pass, "uncorrected")) {
-      stop("final analysis variant requires uncorrected batch-effect validation")
+  if (analysis_variant %in% c("final", "corrected_final")) {
+    expected_pass <- if (identical(analysis_variant, "final")) {
+      "uncorrected"
+    } else {
+      "corrected"
+    }
+    if (!identical(batch_pass, expected_pass)) {
+      stop(
+        analysis_variant, " requires ", expected_pass,
+        " batch-effect validation"
+      )
     }
     stem <- paste0(stem, "_final")
   }
@@ -1046,8 +1079,6 @@ batch_allowed_extra_keys <- function(ds, label) {
     stop("corrected composition bundle is missing its source identity: ", file)
   }
 
-  # Configuration-only expected identities are used by the corrected CLI, so
-  # retain the recorded top-level summary when the expected identity has none.
   source_summary_identity <- expected_batch_contract
   source_summary <- if (is.list(source_summary_identity)) {
     source_summary_identity[["validation_summary"]]
@@ -1062,24 +1093,25 @@ batch_allowed_extra_keys <- function(ds, label) {
       NULL
     }
   }
-  if (is.null(source_summary)) {
+  if (!corrected_final_mode && is.null(source_summary)) {
     stop(
       "corrected composition bundle is missing its source validation_summary: ",
       file
     )
   }
-
   normalized_source <- .batch_identity_normalize(
     identity_source,
     paste0("RDS composition (", file, ")")
   )
-  source_summary <- .batch_identity_summary(
-    source_summary_identity,
-    normalized_source$ordered_source_keys,
-    paste0("RDS composition (", file, ") source identity"),
-    method_id = normalized_source$method_id,
-    required = TRUE
-  )
+  if (!corrected_final_mode) {
+    source_summary <- .batch_identity_summary(
+      source_summary_identity,
+      normalized_source$ordered_source_keys,
+      paste0("RDS composition (", file, ") source identity"),
+      method_id = normalized_source$method_id,
+      required = TRUE
+    )
+  }
   methods <- c(
     "ECODA_authors_HR",
     "ECODA_authors_HR_NULL",
@@ -1109,22 +1141,24 @@ batch_allowed_extra_keys <- function(ds, label) {
         )
       }
     )
-    correction_spec <- tryCatch(
-      ecoda_batch_correction_spec(
-        method_id = method_id,
-        batch_keys = batch_keys
-      ),
-      error = function(error) {
-        stop(
-          "invalid corrected composition correction policy for ", method_id,
-          " in ", file, ": ", conditionMessage(error)
-        )
-      }
-    )
-    nested_summary <- source_summary
-    nested_summary[["correction_mode"]] <- correction_spec[["correction_mode"]]
-    nested_summary[["correction_formula"]] <- correction_spec[["correction_formula"]]
-    expected_nested[["validation_summary"]] <- nested_summary
+    if (!corrected_final_mode) {
+      correction_spec <- tryCatch(
+        ecoda_batch_correction_spec(
+          method_id = method_id,
+          batch_keys = batch_keys
+        ),
+        error = function(error) {
+          stop(
+            "invalid corrected composition correction policy for ", method_id,
+            " in ", file, ": ", conditionMessage(error)
+          )
+        }
+      )
+      nested_summary <- source_summary
+      nested_summary[["correction_mode"]] <- correction_spec[["correction_mode"]]
+      nested_summary[["correction_formula"]] <- correction_spec[["correction_formula"]]
+      expected_nested[["validation_summary"]] <- nested_summary
+    }
     .rds_batch_contract_values(
       combo,
       expected_nested,
@@ -1242,7 +1276,7 @@ validate_combo <- function(combo, file, expected = NULL, method = "") {
         embedded,
         value[[field]],
         require_recorded = TRUE,
-        require_summary = identical(batch_pass, "corrected"),
+        require_summary = corrected_summary_required,
         label = paste0(label, " embedded identity aliases")
       )
     }
@@ -1258,8 +1292,14 @@ validate_combo <- function(combo, file, expected = NULL, method = "") {
   require_summary = NULL
 ) {
   embedded <- .rds_embedded_batch_contract(value, label)
+  if (batch_pass == "corrected" &&
+      is.null(expected_batch_contract) &&
+      is.null(batch_contract) &&
+      is.null(embedded)) {
+    stop(label, " is missing explicit corrected batch contract identity")
+  }
   summary_required <- if (is.null(require_summary)) {
-    identical(batch_pass, "corrected")
+    corrected_summary_required
   } else {
     isTRUE(require_summary)
   }
@@ -1382,7 +1422,7 @@ validate_result_file <- function(
         NULL
       }
     }
-    if (is.null(source_summary)) {
+    if (!corrected_final_mode && is.null(source_summary)) {
       stop(
         "corrected pseudobulk bundle is missing its source validation_summary: ",
         file
@@ -1391,13 +1431,6 @@ validate_result_file <- function(
     normalized_source <- .batch_identity_normalize(
       identity_source,
       paste0("RDS pseudobulk (", file, ")")
-    )
-    source_summary <- .batch_identity_summary(
-      summary_source_identity,
-      normalized_source$ordered_source_keys,
-      paste0("RDS pseudobulk (", file, ") source identity"),
-      method_id = "Pseudobulk",
-      required = TRUE
     )
     .batch_identity_load_contract()
     expected_nested <- tryCatch(
@@ -1414,13 +1447,22 @@ validate_result_file <- function(
         )
       }
     )
-    expected_nested[["validation_summary"]] <- source_summary
+    if (!corrected_final_mode) {
+      source_summary <- .batch_identity_summary(
+        summary_source_identity,
+        normalized_source$ordered_source_keys,
+        paste0("RDS pseudobulk (", file, ") source identity"),
+        method_id = "Pseudobulk",
+        required = TRUE
+      )
+      expected_nested[["validation_summary"]] <- source_summary
+    }
     .rds_batch_contract_values(
       nested,
       expected_nested,
       NULL,
       paste0("RDS pseudobulk Pseudobulk_hvg2000 (", file, ")"),
-      require_summary = TRUE
+      require_summary = corrected_summary_required
     )
   }
   if (identical(batch_pass, "corrected") && identical(method, "composition")) {
@@ -1673,6 +1715,88 @@ validate_metadata <- function(
   }
 }
 
+.validate_variant_artifact_path <- function(
+  file,
+  method,
+  ds = "",
+  view = "",
+  metadata = FALSE
+) {
+  if (!batch || !nzchar(analysis_variant) || !nzchar(method)) {
+    return(invisible(NULL))
+  }
+  expected_root_name <- if (identical(analysis_variant, "final")) {
+    "uncorrected_final"
+  } else {
+    "corrected_final"
+  }
+  root_name <- basename(
+    normalizePath(
+      dirname(dirname(path.expand(file))),
+      winslash = "/",
+      mustWork = FALSE
+    )
+  )
+  if (!identical(root_name, expected_root_name)) {
+    stop(
+      analysis_variant, " artifact is under the wrong analysis root: ", file
+    )
+  }
+  expected_directory <- if (
+    identical(method, "prepare_pseudobulk") && !isTRUE(metadata)
+  ) {
+    "pseudobulks"
+  } else {
+    "results"
+  }
+  if (!identical(basename(dirname(path.expand(file))), expected_directory)) {
+    stop(
+      analysis_variant, " artifact is under the wrong result directory: ", file
+    )
+  }
+  pass_marker <- if (identical(analysis_variant, "final")) {
+    "uncorrected_final"
+  } else {
+    "corrected_final"
+  }
+  basename_value <- basename(path.expand(file))
+  if (nzchar(ds)) {
+    stem <- .batch_result_stem(ds)
+    expected_name <- if (isTRUE(metadata)) {
+      paste0(stem, "_metadata.rds")
+    } else if (identical(method, "prepare_pseudobulk")) {
+      paste0(stem, "_pseudobulk_hvg2000.rds")
+    } else {
+      paste0(stem, "_", method, ".rds")
+    }
+    if (!identical(basename_value, expected_name)) {
+      stop(
+        analysis_variant, " artifact path does not match its direct contract: ",
+        file
+      )
+    }
+  } else {
+    expected_suffix <- if (isTRUE(metadata)) {
+      "_metadata.rds"
+    } else if (identical(method, "prepare_pseudobulk")) {
+      "_pseudobulk_hvg2000.rds"
+    } else {
+      paste0("_", method, ".rds")
+    }
+    if (!grepl(
+      paste0("_batch_effect_", pass_marker, "_"),
+      basename_value,
+      fixed = TRUE
+    ) || !endsWith(basename_value, expected_suffix)) {
+      stop(
+        analysis_variant, " artifact path does not match its direct contract: ",
+        file
+      )
+    }
+  }
+  invisible(NULL)
+}
+
 validate_artifact_contract <- function(
   file,
   method,
@@ -1682,6 +1806,13 @@ validate_artifact_contract <- function(
   expected_batch_contract = NULL,
   batch_contract = NULL
 ) {
+  .validate_variant_artifact_path(
+    file = file,
+    method = method,
+    ds = ds,
+    view = view,
+    metadata = metadata
+  )
   row_expected_batch_contract <- expected_batch_contract
   if (
     identical(view, "batch_effect_corrected") &&
@@ -1787,15 +1918,20 @@ if (
 ) {
   stop("corrected batch artifact validation requires an existing --config")
 }
-if (identical(analysis_variant, "final")) {
-  if (exact) stop("final analysis variant does not support historical exact selection")
+if (analysis_variant %in% c("final", "corrected_final")) {
+  if (exact) {
+    stop(
+      analysis_variant,
+      " analysis variant does not support historical exact selection"
+    )
+  }
   final_methods <- c(
     "prepare_pseudobulk", "pseudobulk", "gloscope", "composition",
     "mrvi", "pilot", "qot"
   )
   if (length(setdiff(labels, final_methods))) {
     stop(
-      "final analysis variant has unsupported labels: ",
+      analysis_variant, " analysis variant has unsupported labels: ",
       paste(setdiff(labels, final_methods), collapse = ", ")
     )
   }

@@ -92,6 +92,11 @@ manifest="${H5AD_PREFLIGHT_MANIFEST:?H5AD_PREFLIGHT_MANIFEST is required}"
 status_dir="${H5AD_PREFLIGHT_STATUS_DIR:?H5AD_PREFLIGHT_STATUS_DIR is required}"
 mode="${H5AD_PREFLIGHT_MODE:-require}"
 task_id="${SLURM_ARRAY_TASK_ID:-${H5AD_PREFLIGHT_TASK_ID:-}}"
+allow_missing_summary="${H5AD_ALLOW_MISSING_SUMMARY:-0}"
+case "${allow_missing_summary}" in
+  0|1) ;;
+  *) echo "ERROR: invalid H5AD_ALLOW_MISSING_SUMMARY; expected 0 or 1." >&2; exit 1 ;;
+esac
 
 [[ "${task_id}" =~ ^[0-9]+$ && ${task_id} -gt 0 ]] || {
   echo "ERROR: invalid H5AD preflight task ID" >&2
@@ -129,6 +134,18 @@ IFS=$'\t' read -r dataset view path extra <<< "${line}"
   echo "ERROR: malformed H5AD preflight row ${task_id}" >&2
   exit 1
 }
+validator_method="H5AD compute preflight"
+contract_allow_missing_summary=()
+if [[ "${view}" == "batch_effect_corrected" ]]; then
+  validator_method="Stage 3 preprocessing"
+  if [[ "${allow_missing_summary}" == "1" ]]; then
+    contract_allow_missing_summary+=(--allow-missing-corrected-summary)
+  fi
+elif [[ "${allow_missing_summary}" == "1" ]]; then
+  echo "ERROR: H5AD_ALLOW_MISSING_SUMMARY=1 is restricted to batch_effect_corrected." >&2
+  exit 1
+fi
+
 resolve_corrected_batch_identity() {
   local selected_dataset="${1:-}" selected_view="${2:-}"
   local contract_manifest="${ECODA_BATCH_CONTRACT_MANIFEST:-}"
@@ -227,14 +244,14 @@ if [[ ! -s "${path}" ]]; then
   contract_rc=1
   checksum_rc=1
 else
-  set +e
   if [[ -n "${corrected_identity_path}" ]]; then
     "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
-      --path "${path}" --view "${view}" --method "H5AD compute preflight" \
-      --expected-batch-contract "${corrected_identity_path}" >/dev/null 2>&1
+      --path "${path}" --view "${view}" --method "${validator_method}" \
+      --expected-batch-contract "${corrected_identity_path}" \
+      "${contract_allow_missing_summary[@]}" >/dev/null 2>&1
   else
     "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
-      --path "${path}" --view "${view}" --method "H5AD compute preflight" >/dev/null 2>&1
+      --path "${path}" --view "${view}" --method "${validator_method}" >/dev/null 2>&1
   fi
   contract_rc=$?
   ecoda_validate_checksum "${path}"

@@ -365,6 +365,91 @@ def _is_missing(value: object) -> bool:
     return False
 
 
+def _normalize_accepted_sentinel_values(
+    keys: tuple[str, ...],
+    accepted_sentinel_values: Mapping[str, Sequence[object]] | None,
+) -> dict[str, frozenset[str]]:
+    """Validate key-scoped literal sentinels allowed by one caller.
+
+    The normal canonicalizer compares sentinel text after trimming and
+    case-folding.  This exception is deliberately narrower: the configured
+    values are validated as recognized sentinels, then matched by their exact
+    literal text at encoding time.  A mapping may only name keys participating
+    in the composite, so it cannot accidentally authorize another metadata
+    column.
+    """
+
+    if accepted_sentinel_values is None:
+        return {}
+    if not isinstance(accepted_sentinel_values, Mapping):
+        raise BatchContractError(
+            "accepted_sentinel_values must be a mapping of batch key to values"
+        )
+
+    normalized: dict[str, frozenset[str]] = {}
+    for key, raw_values in accepted_sentinel_values.items():
+        if not isinstance(key, str) or not key.strip():
+            raise BatchContractError(
+                "accepted sentinel keys must be nonblank strings"
+            )
+        if key not in keys:
+            raise BatchContractError(
+                f"accepted sentinel key {key!r} is not a configured batch key"
+            )
+        if (
+            isinstance(raw_values, (str, bytes, bytearray))
+            or not isinstance(raw_values, Sequence)
+        ):
+            raise BatchContractError(
+                f"accepted sentinel values for {key!r} must be an ordered sequence"
+            )
+        literals: list[str] = []
+        for value in raw_values:
+            if not isinstance(value, (str, np.str_)):
+                raise BatchContractError(
+                    f"accepted sentinel value for {key!r} must be a string"
+                )
+            literal = str(value)
+            if not literal or not literal.strip():
+                raise BatchContractError(
+                    f"accepted sentinel value for {key!r} must be nonblank"
+                )
+            if literal.strip().casefold() not in MISSING_SENTINELS:
+                raise BatchContractError(
+                    f"accepted sentinel value for {key!r} is not a recognized "
+                    f"missing sentinel: {value!r}"
+                )
+            if literal in literals:
+                raise BatchContractError(
+                    f"accepted sentinel values for {key!r} contain duplicate "
+                    f"{value!r}"
+                )
+            literals.append(literal)
+        if not literals:
+            raise BatchContractError(
+                f"accepted sentinel values for {key!r} must not be empty"
+            )
+        normalized[key] = frozenset(literals)
+    return normalized
+
+
+def _canonicalize_composite_value(
+    key: str,
+    value: object,
+    *,
+    factor: bool,
+    accepted_sentinel_values: Mapping[str, frozenset[str]],
+) -> str:
+    """Canonicalize one composite value with a key-scoped exception."""
+
+    if isinstance(value, (str, np.str_)):
+        literal = str(value)
+        accepted = accepted_sentinel_values.get(key)
+        if accepted is not None and literal in accepted:
+            return f"s:{literal}"
+    return canonicalize_batch_value(value, factor=factor)
+
+
 def _reject_text_placeholder(text: str, *, value: object) -> None:
     if not text.strip():
         raise BatchContractError(f"batch value is blank: {value!r}")
@@ -529,11 +614,14 @@ def composite_token(
     values: Sequence[object] | Mapping[str, object] | object,
     *,
     factors: Sequence[bool] | Mapping[str, bool] | None = None,
+    accepted_sentinel_values: Mapping[str, Sequence[object]] | None = None,
 ) -> str:
     """Encode one ordered composite token using the exact UTF-8 contract.
-
     Composite construction is defined only for two or more ordered keys.
     Scalar and one-key corrected configurations use direct canonical values.
+    ``accepted_sentinel_values`` is an optional key-to-sequence mapping of
+    exact literal missing-sentinel values approved for this composite only.
+    Without it, all missing/sentinel text remains rejected.
     """
 
     normalized = normalize_batch_keys(keys)
@@ -566,9 +654,19 @@ def composite_token(
                 if not isinstance(marker, (bool, np.bool_)):
                     raise BatchContractError("factor markers must be boolean")
                 factor_by_key[key] = bool(marker)
+    accepted_by_key = _normalize_accepted_sentinel_values(
+        normalized,
+        accepted_sentinel_values,
+    )
+
 
     canonical = tuple(
-        canonicalize_batch_value(value, factor=factor_by_key[key])
+        _canonicalize_composite_value(
+            key,
+            value,
+            factor=factor_by_key[key],
+            accepted_sentinel_values=accepted_by_key,
+        )
         for key, value in zip(normalized, ordered)
     )
     return _encode_canonical_token(normalized, canonical)

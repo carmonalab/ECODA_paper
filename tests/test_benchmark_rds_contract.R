@@ -91,6 +91,7 @@ withTemporary <- function(code) {
   on.exit(unlink(directory, recursive = TRUE, force = TRUE), add = TRUE)
   eval(substitute(code), envir = environment())
 }
+sys.source(file.path(root, "src", "utils", "batch_contract.R"), envir = .GlobalEnv)
 
 withTemporary({
   batch_args <- function(path, method) c(
@@ -244,6 +245,202 @@ withTemporary({
     ),
     "final composition result and metadata paths"
   )
+  corrected_identity <- function(method_id, model_id) {
+    ecoda_batch_contract_identity(
+      batch_keys = "batch",
+      sample_col = "Sample",
+      method_id = method_id,
+      model_id = model_id
+    )
+  }
+  corrected_combo <- function(method_id, model_id = "ecoda_additive_random_intercepts_v1") {
+    result <- combo()
+    result$batch_contract <- corrected_identity(method_id, model_id)
+    result
+  }
+  corrected_root <- file.path(directory, "batch_effect", "corrected_final")
+  corrected_results <- file.path(corrected_root, "results")
+  corrected_cache <- file.path(corrected_root, "pseudobulks")
+  dir.create(corrected_results, recursive = TRUE)
+  dir.create(corrected_cache, recursive = TRUE)
+  corrected_config <- file.path(directory, "corrected-final-datasets.json")
+  writeLines(
+    paste0(
+      '{"Synthetic":{"columns":{"batch":["batch"]},"views":',
+      '{"benchmark_analysis":{"output_file_name":"synthetic.h5ad"},',
+      '"batch_effect_corrected":{"output_file_name":"synthetic-corrected.h5ad"}}}}'
+    ),
+    corrected_config
+  )
+  corrected_composition <- file.path(
+    corrected_results,
+    "Synthetic_batch_effect_corrected_final_composition.rds"
+  )
+  corrected_composition_bundle <- list(
+    batch_contract = corrected_identity(
+      "ECODA_authors_HR",
+      "ecoda_additive_random_intercepts_v1"
+    ),
+    ECODA_authors_HR = corrected_combo("ECODA_authors_HR"),
+    ECODA_seuratres_2 = corrected_combo("ECODA_seuratres_2"),
+    ECODA_authors_HR_NULL = corrected_combo("ECODA_authors_HR_NULL")
+  )
+  write_checked(corrected_composition, corrected_composition_bundle)
+  corrected_batch_args <- function(path, method) c(
+    "--artifact", path,
+    "--method", method,
+    "--dataset", "Synthetic",
+    "--view", "batch_effect_corrected",
+    "--batch-pass", "corrected",
+    "--analysis-variant", "corrected_final",
+    "--config", corrected_config
+  )
+  expect_ok(
+    corrected_batch_args(corrected_composition, "composition"),
+    "corrected-final composition shared bundle with explicit null key"
+  )
+  rejected_final_variant_args <- corrected_batch_args(
+    corrected_composition,
+    "composition"
+  )
+  rejected_final_variant_args[
+    match("--analysis-variant", rejected_final_variant_args) + 1L
+  ] <- "final"
+  expect_fail(
+    rejected_final_variant_args,
+    "final variant rejects corrected pass"
+  )
+  corrected_metadata <- file.path(
+    corrected_results,
+    "Synthetic_batch_effect_corrected_final_metadata.rds"
+  )
+  write_checked(
+    corrected_metadata,
+    c(
+      list(batch_contract = corrected_identity(
+        "ECODA_authors_HR",
+        "ecoda_additive_random_intercepts_v1"
+      )),
+      list(
+        labels = structure(factor(c("A", "B")), names = c("s1", "s2")),
+        n_cells = 200,
+        n_samples = 2,
+        cells_per_sample = structure(c(100, 100), names = c("s1", "s2"))
+      )
+    )
+  )
+  corrected_pseudobulk <- file.path(
+    corrected_results,
+    "Synthetic_batch_effect_corrected_final_pseudobulk.rds"
+  )
+  corrected_pseudobulk_bundle <- list(
+    batch_contract = corrected_identity("Pseudobulk", "pseudobulk_composite_v1"),
+    Pseudobulk_hvg2000 = corrected_combo(
+      "Pseudobulk",
+      "pseudobulk_composite_v1"
+    )
+  )
+  write_checked(corrected_pseudobulk, corrected_pseudobulk_bundle)
+  corrected_pseudobulk_cache <- file.path(
+    corrected_cache,
+    "Synthetic_batch_effect_corrected_final_pseudobulk_hvg2000.rds"
+  )
+  write_checked(corrected_pseudobulk_cache, pb)
+  corrected_selection <- file.path(directory, "corrected-final-selection.tsv")
+  write_checked_text(
+    corrected_selection,
+    "Synthetic\tbatch_effect_corrected\tbatch_effect_corrected"
+  )
+  expect_ok(
+    c(
+      "--root", corrected_root,
+      "--selection", corrected_selection,
+      "--labels", "pseudobulk",
+      "--batch-pass", "corrected",
+      "--analysis-variant", "corrected_final",
+      "--config", corrected_config
+    ),
+    "corrected-final pseudobulk result bundle"
+  )
+  unlink(corrected_pseudobulk)
+  expect_fail(
+    c(
+      "--root", corrected_root,
+      "--selection", corrected_selection,
+      "--labels", "pseudobulk",
+      "--batch-pass", "corrected",
+      "--analysis-variant", "corrected_final",
+      "--config", corrected_config
+    ),
+    "corrected-final pseudobulk cache is not a result bundle"
+  )
+  write_checked(corrected_pseudobulk, corrected_pseudobulk_bundle)
+  wrong_corrected_stem <- file.path(
+    corrected_results,
+    "Synthetic_batch_effect_corrected_composition.rds"
+  )
+  write_checked(wrong_corrected_stem, corrected_composition_bundle)
+  expect_fail(
+    corrected_batch_args(wrong_corrected_stem, "composition"),
+    "corrected-final result stem"
+  )
+  wrong_corrected_root <- file.path(directory, "batch_effect", "uncorrected_final")
+  wrong_root_results <- file.path(wrong_corrected_root, "results")
+  dir.create(wrong_root_results, recursive = TRUE)
+  wrong_root_composition <- file.path(
+    wrong_root_results,
+    "Synthetic_batch_effect_corrected_final_composition.rds"
+  )
+  wrong_root_metadata <- file.path(
+    wrong_root_results,
+    "Synthetic_batch_effect_corrected_final_metadata.rds"
+  )
+  write_checked(wrong_root_composition, corrected_composition_bundle)
+  write_checked(
+    wrong_root_metadata,
+    c(
+      list(batch_contract = corrected_identity(
+        "ECODA_authors_HR",
+        "ecoda_additive_random_intercepts_v1"
+      )),
+      list(
+        labels = structure(factor(c("A", "B")), names = c("s1", "s2")),
+        n_cells = 200,
+        n_samples = 2,
+        cells_per_sample = structure(c(100, 100), names = c("s1", "s2"))
+      )
+    )
+  )
+  expect_fail(
+    c(
+      "--root", wrong_corrected_root,
+      "--selection", corrected_selection,
+      "--labels", "composition",
+      "--batch-pass", "corrected",
+      "--analysis-variant", "corrected_final",
+      "--config", corrected_config
+    ),
+    "corrected-final root"
+  )
+  bad_corrected_bundle <- corrected_composition_bundle
+  bad_corrected_bundle$ECODA_authors_HR_NULL <- NULL
+  write_checked(corrected_composition, bad_corrected_bundle)
+  expect_fail(
+    corrected_batch_args(corrected_composition, "composition"),
+    "corrected-final composition requires explicit null bundle key"
+  )
+  write_checked(corrected_composition, corrected_composition_bundle)
+  wrong_key_bundle <- corrected_composition_bundle
+  wrong_key_bundle$ECODA_authors_HR_NULL$batch_contract <- corrected_identity(
+    "ECODA_authors_HR",
+    "ecoda_additive_random_intercepts_v1"
+  )
+  write_checked(corrected_composition, wrong_key_bundle)
+  expect_fail(
+    corrected_batch_args(corrected_composition, "composition"),
+    "corrected-final composition null key identity"
+  )
+  write_checked(corrected_composition, corrected_composition_bundle)
 
 
   missing_key <- file.path(directory, "gloscope-missing.rds")

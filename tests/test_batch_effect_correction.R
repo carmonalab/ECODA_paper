@@ -192,15 +192,15 @@ stopifnot(inherits(missing_error, "error"))
 # two batch modes to the direct DESeq2 fit without exposing biological labels.
 captured <- new.env(parent = emptyenv())
 fake_counts <- matrix(
-  c(1, 2, 3, 4, 5, 6),
+  c(1, 2, 3, 4, 5, 6, 7, 8),
   nrow = 2L,
   byrow = TRUE,
-  dimnames = list(c("g1", "g2"), paste0("s", 1:3))
+  dimnames = list(c("g1", "g2"), paste0("s", 1:4))
 )
 fake_metadata <- data.frame(
-  Sample = paste0("s", 1:3),
-  tech = factor(c("A", "B", "A")),
-  row.names = paste0("s", 1:3),
+  Sample = paste0("s", 1:4),
+  tech = factor(c("A", "B", "A", "B")),
+  row.names = paste0("s", 1:4),
   stringsAsFactors = FALSE
 )
 prepare_pseudobulk_env <- environment(prepare_pseudobulks_hpc)
@@ -299,8 +299,44 @@ assign("exec_time", function(expr) {
   0
 }, envir = prepare_pseudobulk_env)
 assign("peak_rss_gb", function() 0, envir = prepare_pseudobulk_env)
-fixture_h5ad <- tempfile("ecoda-pseudobulk-driver-")
-writeBin(charToRaw("fixture-only"), fixture_h5ad)
+fixture_cell_metadata <- fake_metadata[
+  rep(seq_len(nrow(fake_metadata)), each = 2L),
+  ,
+  drop = FALSE
+]
+rownames(fixture_cell_metadata) <- paste0(
+  "fixture-cell",
+  seq_len(nrow(fixture_cell_metadata))
+)
+fixture_batch_context <- ecoda_hpc_batch_context(
+  metadata = fixture_cell_metadata,
+  batch_keys = "tech",
+  sample_col = "Sample"
+)
+fixture_h5ad <- tempfile("ecoda-pseudobulk-driver-", fileext = ".h5ad")
+fixture_h5ad_python <- paste(
+  "import anndata as ad, numpy as np, pandas as pd, scipy.sparse as sp, sys;",
+  "adata = ad.AnnData(",
+  "X=np.ones((4, 1), dtype=np.float32),",
+  "obs=pd.DataFrame({'Sample': ['s1', 's2', 's3', 's4'],",
+  "                  'tech': ['A', 'B', 'A', 'B']},",
+  "                 index=['c1', 'c2', 'c3', 'c4']),",
+  "var=pd.DataFrame(index=['g1']));",
+  "adata.layers['counts'] = sp.csr_matrix(np.ones((4, 1), dtype=np.int64));",
+  "adata.write_h5ad(sys.argv[1])"
+)
+fixture_h5ad_status <- system2(
+  "pixi",
+  c(
+    "run", "python", "-c", shQuote(fixture_h5ad_python),
+    shQuote(fixture_h5ad)
+  ),
+  stdout = FALSE,
+  stderr = FALSE
+)
+if (!identical(fixture_h5ad_status, 0L) || !file.exists(fixture_h5ad)) {
+  stop("could not create the synthetic pseudobulk H5AD fixture")
+}
 invisible(prepare_pseudobulks_hpc(
   h5ad_path = fixture_h5ad,
   hvg_rank_genes = c("g1", "g2"),
@@ -311,7 +347,8 @@ invisible(prepare_pseudobulks_hpc(
   cache_stem = "fixture",
   view = "batch_effect_corrected",
   analysis_pass = "corrected",
-  run_id = "fixture-run"
+  run_id = "fixture-run",
+  batch_context = fixture_batch_context
 ))
 stopifnot(
   identical(captured$fit$counts, fake_counts),

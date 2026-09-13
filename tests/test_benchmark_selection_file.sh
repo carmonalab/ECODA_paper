@@ -171,7 +171,7 @@ mkdir -p "${NAS_ROOT}"
 export NAS_TARGET_DIR="${NAS_ROOT}"
 FINAL_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot"
 FINAL_SELECTION="${TMP_DIR}/final-selection.tsv"
-printf 'Covid19_PBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' \
+printf 'Covid19_PBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nKidney_KPMP_full\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' \
   > "${FINAL_SELECTION}"
 
 FINAL_OUTPUT="$(
@@ -188,7 +188,7 @@ test -n "${FINAL_RUN_ID}"
 FINAL_RUN_ROOT="${HPC_ROOT}/_ecoda_runs/${FINAL_RUN_ID}"
 FINAL_RUN_SELECTION="${FINAL_RUN_ROOT}/manifests/selection.tsv"
 test "$(cat "${FINAL_RUN_SELECTION}")" = "$(cat "${FINAL_SELECTION}")"
-test "$(wc -l < "${FINAL_RUN_SELECTION}" | tr -d '[:space:]')" = 4
+test "$(wc -l < "${FINAL_RUN_SELECTION}" | tr -d '[:space:]')" = 5
 FINAL_METADATA="${FINAL_RUN_ROOT}/metadata"
 grep -q '^ANALYSIS_VARIANT=final$' "${FINAL_METADATA}"
 grep -q '^ANALYSIS_ROOT=.*/batch_effect/uncorrected_final$' "${FINAL_METADATA}"
@@ -200,12 +200,21 @@ grep -q '^ANALYSIS_LOG_PREFIX=execution_times_batch_effect_uncorrected_final_$' 
   "${FINAL_METADATA}"
 FINAL_PENDING="$(sed -n 's/^PENDING_SELECTION=//p' "${FINAL_METADATA}")"
 test -s "${FINAL_PENDING}"
-test "$(wc -l < "${FINAL_PENDING}" | tr -d '[:space:]')" = 28
+test "$(wc -l < "${FINAL_PENDING}" | tr -d '[:space:]')" = 35
 grep -q 'ANALYSIS_ROOT=.*/batch_effect/uncorrected_final' "${CAPTURE}"
 if grep -Eq 'ANALYSIS_ROOT=.*/batch_effect/uncorrected(,|$)' "${CAPTURE}"; then
   echo "final worker selection leaked the legacy analysis root" >&2
   exit 1
 fi
+FOUR_ROW_FINAL_SELECTION="${TMP_DIR}/four-row-final-selection.tsv"
+printf 'Covid19_PBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' \
+  > "${FOUR_ROW_FINAL_SELECTION}"
+expect_submit_failure "final variant with retired four-row selection" \
+  --selection-file "${FOUR_ROW_FINAL_SELECTION}" --pass uncorrected \
+  --analysis-variant final --methods "${FINAL_METHODS}"
+expect_submit_failure "final variant with broad force" \
+  --selection-file "${FINAL_SELECTION}" --pass uncorrected \
+  --analysis-variant final --methods "${FINAL_METHODS}" --force
 expect_submit_failure "final variant without explicit selection" \
   --pass uncorrected --analysis-variant final --methods "${FINAL_METHODS}"
 expect_submit_failure "final variant without explicit method suite" \
@@ -227,8 +236,241 @@ expect_submit_failure "final variant with forbidden method" \
 expect_submit_failure "final variant with ordinary analyses" \
   --selection-file "${FINAL_SELECTION}" --pass uncorrected \
   --analysis-variant final --analyses trans
+CAPTURE_BEFORE_CORRECTED="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
 expect_submit_failure "final variant with exact historical mode" \
   --selection-file "${FINAL_SELECTION}" --pass uncorrected \
   --analysis-variant final --exact-batch-selection
+CORRECTED_FINAL_SELECTION="${TMP_DIR}/corrected-final-selection.tsv"
+printf 'Joanito\tbatch_effect_corrected\tbatch_effect_corrected\nStephenson\tbatch_effect_corrected\tbatch_effect_corrected\nAlzheimer\tbatch_effect_corrected\tbatch_effect_corrected\nBreast_cancer\tbatch_effect_corrected\tbatch_effect_corrected\nCovid19_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nKidney_KPMP_full\tbatch_effect_corrected\tbatch_effect_corrected\nDiabetes\tbatch_effect_corrected\tbatch_effect_corrected\nLupus_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nLung\tbatch_effect_corrected\tbatch_effect_corrected\n' \
+  > "${CORRECTED_FINAL_SELECTION}"
+CORRECTED_FINAL_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+    BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
+    bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${CORRECTED_FINAL_SELECTION}" \
+    --pass corrected \
+    --analysis-variant corrected_final \
+    --methods "${FINAL_METHODS}"
+)"
+CORRECTED_FINAL_RUN_ID="$(printf '%s\n' "${CORRECTED_FINAL_OUTPUT}" | sed -n 's/^BATCH_EFFECT_RUN_ID=//p')"
+test -n "${CORRECTED_FINAL_RUN_ID}"
+CORRECTED_FINAL_RUN_ROOT="${HPC_ROOT}/_ecoda_runs/${CORRECTED_FINAL_RUN_ID}"
+CORRECTED_FINAL_RUN_SELECTION="${CORRECTED_FINAL_RUN_ROOT}/manifests/selection.tsv"
+test "$(cat "${CORRECTED_FINAL_RUN_SELECTION}")" = "$(cat "${CORRECTED_FINAL_SELECTION}")"
+test "$(wc -l < "${CORRECTED_FINAL_RUN_SELECTION}" | tr -d '[:space:]')" = 9
+CORRECTED_FINAL_METADATA="${CORRECTED_FINAL_RUN_ROOT}/metadata"
+grep -q '^ANALYSIS_VARIANT=corrected_final$' "${CORRECTED_FINAL_METADATA}"
+grep -q '^ANALYSIS_ROOT=.*/batch_effect/corrected_final$' "${CORRECTED_FINAL_METADATA}"
+grep -q "^ANALYSIS_NAS_ROOT=${NAS_ROOT}/batch_effect/corrected_final$" \
+  "${CORRECTED_FINAL_METADATA}"
+grep -q '^ANALYSIS_PASS=corrected$' "${CORRECTED_FINAL_METADATA}"
+grep -q '^PASS=corrected$' "${CORRECTED_FINAL_METADATA}"
+CORRECTED_CAPTURE="${TMP_DIR}/corrected-calls"
+sed -n "$((CAPTURE_BEFORE_CORRECTED + 1)),\$p" "${CAPTURE}" > "${CORRECTED_CAPTURE}"
+grep -q 'ANALYSIS_ROOT=.*/batch_effect/corrected_final' "${CORRECTED_CAPTURE}"
+grep -q 'ANALYSIS_VARIANT=corrected_final' "${CORRECTED_CAPTURE}"
+grep -q 'ANALYSIS_PASS=corrected' "${CORRECTED_CAPTURE}"
+grep -q 'ANALYSIS_NAS_ROOT=.*/batch_effect/corrected_final' "${CORRECTED_CAPTURE}"
+grep -q 'ANALYSIS_LOG_PREFIX=execution_times_batch_effect_corrected_final_' \
+  "${CORRECTED_CAPTURE}"
+if grep -Eq 'ANALYSIS_ROOT=.*/batch_effect/(uncorrected|uncorrected_final)(,|$)' \
+    "${CORRECTED_CAPTURE}"; then
+  echo "corrected-final worker selection leaked an uncorrected analysis root" >&2
+  exit 1
+fi
+CORRECTED_FINAL_SHORT_SELECTION="${TMP_DIR}/corrected-final-short-selection.tsv"
+printf 'Joanito\tbatch_effect_corrected\tbatch_effect_corrected\nStephenson\tbatch_effect_corrected\tbatch_effect_corrected\nAlzheimer\tbatch_effect_corrected\tbatch_effect_corrected\nBreast_cancer\tbatch_effect_corrected\tbatch_effect_corrected\nCovid19_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nKidney_KPMP_full\tbatch_effect_corrected\tbatch_effect_corrected\nDiabetes\tbatch_effect_corrected\tbatch_effect_corrected\nLupus_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\n' \
+  > "${CORRECTED_FINAL_SHORT_SELECTION}"
+expect_submit_failure "corrected-final variant with incomplete nine-row selection" \
+  --selection-file "${CORRECTED_FINAL_SHORT_SELECTION}" --pass corrected \
+  --analysis-variant corrected_final --methods "${FINAL_METHODS}"
+CORRECTED_FINAL_REORDERED_SELECTION="${TMP_DIR}/corrected-final-reordered-selection.tsv"
+printf 'Stephenson\tbatch_effect_corrected\tbatch_effect_corrected\nJoanito\tbatch_effect_corrected\tbatch_effect_corrected\nAlzheimer\tbatch_effect_corrected\tbatch_effect_corrected\nBreast_cancer\tbatch_effect_corrected\tbatch_effect_corrected\nCovid19_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nKidney_KPMP_full\tbatch_effect_corrected\tbatch_effect_corrected\nDiabetes\tbatch_effect_corrected\tbatch_effect_corrected\nLupus_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nLung\tbatch_effect_corrected\tbatch_effect_corrected\n' \
+  > "${CORRECTED_FINAL_REORDERED_SELECTION}"
+expect_submit_failure "corrected-final variant with wrong config order" \
+  --selection-file "${CORRECTED_FINAL_REORDERED_SELECTION}" --pass corrected \
+  --analysis-variant corrected_final --methods "${FINAL_METHODS}"
+expect_submit_failure "corrected-final variant with force" \
+  --selection-file "${CORRECTED_FINAL_SELECTION}" --pass corrected \
+  --analysis-variant corrected_final --methods "${FINAL_METHODS}" --force
+expect_submit_failure "corrected-final variant without explicit selection" \
+  --pass corrected --analysis-variant corrected_final --methods "${FINAL_METHODS}"
+expect_submit_failure "corrected-final variant with uncorrected pass" \
+  --selection-file "${FINAL_SELECTION}" --pass uncorrected \
+  --analysis-variant corrected_final --methods "${FINAL_METHODS}"
+expect_submit_failure "corrected-final variant with broad dataset selection" \
+  --datasets Joanito --pass corrected --analysis-variant corrected_final \
+  --methods "${FINAL_METHODS}"
+expect_submit_failure "corrected-final variant with ordinary selection" \
+  --selection-file "${TMP_DIR}/selection.tsv" --pass corrected \
+  --analysis-variant corrected_final --methods "${FINAL_METHODS}"
+expect_submit_failure "corrected-final variant with forbidden method" \
+  --selection-file "${CORRECTED_FINAL_SELECTION}" --pass corrected \
+  --analysis-variant corrected_final \
+  --methods "prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,mofa"
+expect_submit_failure "corrected-final variant with exact historical mode" \
+  --selection-file "${CORRECTED_FINAL_SELECTION}" --pass corrected \
+  --analysis-variant corrected_final --exact-batch-selection
+
+echo "corrected-final benchmark variant selection contract: OK"
 
 echo "final benchmark variant selection contract: OK"
+md5_file_for_fixture() {
+  if command -v md5sum >/dev/null 2>&1; then
+    md5sum "$1" | awk '{print $1}'
+  else
+    md5 -q "$1"
+  fi
+}
+
+# Exercise the validator-only Kidney legacy inventory independently of the
+# all-missing five-row final fixture above.  The arbitrary payload is enough
+# for the existing Rscript validator stub; no H5AD/RDS computation is run.
+rm -rf "${HPC_ROOT}/_ecoda_owners"
+LEGACY_KIDNEY_ROOT="${HPC_ROOT}/batch_effect/uncorrected"
+LEGACY_KIDNEY_PREP="${LEGACY_KIDNEY_ROOT}/pseudobulks/Kidney_KPMP_full_batch_effect_uncorrected_pseudobulk_hvg2000.rds"
+mkdir -p "$(dirname "${LEGACY_KIDNEY_PREP}")"
+printf 'legacy Kidney prepare pseudobulk fixture\n' > "${LEGACY_KIDNEY_PREP}"
+(
+  set -euo pipefail
+  source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1
+  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  ecoda_write_checksum "${LEGACY_KIDNEY_PREP}" >/dev/null
+)
+cp "${LEGACY_KIDNEY_PREP}" "${TMP_DIR}/kidney-legacy-prep.before"
+cp "${LEGACY_KIDNEY_PREP}.md5" "${TMP_DIR}/kidney-legacy-prep.before.md5"
+FIXTURE_CAPTURE_BEFORE="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
+KIDNEY_FIXTURE_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+    BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
+    bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${FINAL_SELECTION}" \
+    --pass uncorrected \
+    --analysis-variant final \
+    --methods "${FINAL_METHODS}"
+)"
+KIDNEY_FIXTURE_RUN_ID="$(printf '%s\n' "${KIDNEY_FIXTURE_OUTPUT}" |
+  sed -n 's/^BATCH_EFFECT_RUN_ID=//p')"
+test -n "${KIDNEY_FIXTURE_RUN_ID}"
+KIDNEY_FIXTURE_RUN_ROOT="${HPC_ROOT}/_ecoda_runs/${KIDNEY_FIXTURE_RUN_ID}"
+KIDNEY_FIXTURE_METADATA="${KIDNEY_FIXTURE_RUN_ROOT}/metadata"
+KIDNEY_FIXTURE_PENDING="$(sed -n 's/^PENDING_SELECTION=//p' \
+  "${KIDNEY_FIXTURE_METADATA}")"
+test -s "${KIDNEY_FIXTURE_PENDING}"
+test "$(wc -l < "${KIDNEY_FIXTURE_PENDING}" | tr -d '[:space:]')" = 34
+if grep -F -q $'Kidney_KPMP_full\tbatch_effect_uncorrected\tprepare_pseudobulk' \
+    "${KIDNEY_FIXTURE_PENDING}"; then
+  echo "validated legacy Kidney preparation appeared in pending selection" >&2
+  exit 1
+fi
+grep -F -q $'Kidney_KPMP_full\tbatch_effect_uncorrected\tqot' \
+  "${KIDNEY_FIXTURE_PENDING}"
+
+KIDNEY_FIXTURE_OWNERS="${KIDNEY_FIXTURE_RUN_ROOT}/manifests/owners.tsv"
+test -s "${KIDNEY_FIXTURE_OWNERS}"
+if grep -F -q \
+    $'uncorrected/Kidney_KPMP_full/batch_effect_uncorrected/prepare_pseudobulk' \
+    "${KIDNEY_FIXTURE_OWNERS}"; then
+  echo "validated legacy Kidney preparation appeared in owner expansion" >&2
+  exit 1
+fi
+grep -F -q \
+  $'uncorrected/Kidney_KPMP_full/batch_effect_uncorrected/qot' \
+  "${KIDNEY_FIXTURE_OWNERS}"
+KIDNEY_FIXTURE_PREP_MATRIX="${KIDNEY_FIXTURE_RUN_ROOT}/manifests/matrix_batch_effect_uncorrected_prepare_pseudobulk.tsv"
+KIDNEY_FIXTURE_QOT_MATRIX="${KIDNEY_FIXTURE_RUN_ROOT}/manifests/matrix_batch_effect_uncorrected_qot.tsv"
+test "$(wc -l < "${KIDNEY_FIXTURE_PREP_MATRIX}" | tr -d '[:space:]')" = 4
+if grep -F -q $'Kidney_KPMP_full\tbatch_effect_uncorrected\tprepare_pseudobulk' \
+    "${KIDNEY_FIXTURE_PREP_MATRIX}"; then
+  echo "validated legacy Kidney preparation appeared in matrix owner expansion" >&2
+  exit 1
+fi
+test "$(wc -l < "${KIDNEY_FIXTURE_QOT_MATRIX}" | tr -d '[:space:]')" = 5
+grep -F -q $'Kidney_KPMP_full\tbatch_effect_uncorrected\tqot' \
+  "${KIDNEY_FIXTURE_QOT_MATRIX}"
+
+KIDNEY_FIXTURE_INVENTORY="${KIDNEY_FIXTURE_RUN_ROOT}/manifests/kidney_legacy_inventory.tsv"
+test -s "${KIDNEY_FIXTURE_INVENTORY}"
+test -s "${KIDNEY_FIXTURE_INVENTORY}.md5"
+[[ ! -L "${KIDNEY_FIXTURE_INVENTORY}" &&
+   ! -L "${KIDNEY_FIXTURE_INVENTORY}.md5" ]]
+test "$(awk -F $'\t' '$1 != "Kidney_KPMP_full" { bad=1 } END { print bad + 0 }' \
+  "${KIDNEY_FIXTURE_INVENTORY}")" = 0
+test "$(awk -F $'\t' \
+  '{ printf "%s%s", $2, (NR == 7 ? "\n" : ",") }' \
+  "${KIDNEY_FIXTURE_INVENTORY}")" = "${FINAL_METHODS}"
+test "$(wc -l < "${KIDNEY_FIXTURE_INVENTORY}" | tr -d '[:space:]')" = 7
+test "$(awk -F $'\t' 'NF != 4 { bad=1 } END { print bad + 0 }' \
+  "${KIDNEY_FIXTURE_INVENTORY}")" = 0
+test "$(awk -F $'\t' '$2 == "prepare_pseudobulk" { print $3 }' \
+  "${KIDNEY_FIXTURE_INVENTORY}")" = valid
+test "$(awk -F $'\t' '$3 == "valid" { count++ } END { print count + 0 }' \
+  "${KIDNEY_FIXTURE_INVENTORY}")" = 1
+test "$(awk -F $'\t' '$3 == "missing" { count++ } END { print count + 0 }' \
+  "${KIDNEY_FIXTURE_INVENTORY}")" = 6
+test "$(awk -F $'\t' '$2 == "qot" { print $3 }' \
+  "${KIDNEY_FIXTURE_INVENTORY}")" = missing
+test "$(awk -F $'\t' '$2 == "prepare_pseudobulk" { print $4 }' \
+  "${KIDNEY_FIXTURE_INVENTORY}")" = "${LEGACY_KIDNEY_PREP}"
+test "$(awk -F $'\t' '$2 == "qot" { print $4 }' \
+  "${KIDNEY_FIXTURE_INVENTORY}")" = \
+  "${LEGACY_KIDNEY_ROOT}/embeddings/Kidney_KPMP_full_batch_effect_uncorrected_hvg2000_highres_qot_dists.feather"
+KIDNEY_FIXTURE_INVENTORY_MD5="$(md5_file_for_fixture "${KIDNEY_FIXTURE_INVENTORY}")"
+KIDNEY_FIXTURE_INVENTORY_SIZE="$(wc -c < "${KIDNEY_FIXTURE_INVENTORY}" |
+  tr -d '[:space:]')"
+test "$(sed -n 's/^MD5=//p' "${KIDNEY_FIXTURE_INVENTORY}.md5")" = \
+  "${KIDNEY_FIXTURE_INVENTORY_MD5}"
+test "$(sed -n 's/^SIZE=//p' "${KIDNEY_FIXTURE_INVENTORY}.md5")" = \
+  "${KIDNEY_FIXTURE_INVENTORY_SIZE}"
+test "$(sed -n 's/^PATH=//p' "${KIDNEY_FIXTURE_INVENTORY}.md5")" = \
+  "${KIDNEY_FIXTURE_INVENTORY}"
+test "$(sed -n 's/^KIDNEY_LEGACY_INVENTORY=//p' \
+  "${KIDNEY_FIXTURE_METADATA}")" = "${KIDNEY_FIXTURE_INVENTORY}"
+test "$(sed -n 's/^KIDNEY_LEGACY_INVENTORY_MD5=//p' \
+  "${KIDNEY_FIXTURE_METADATA}")" = "${KIDNEY_FIXTURE_INVENTORY_MD5}"
+test "$(sed -n 's/^KIDNEY_LEGACY_INVENTORY_SIZE=//p' \
+  "${KIDNEY_FIXTURE_METADATA}")" = "${KIDNEY_FIXTURE_INVENTORY_SIZE}"
+test "$(sed -n 's/^KIDNEY_LEGACY_INVENTORY_STATUS=//p' \
+  "${KIDNEY_FIXTURE_METADATA}")" = \
+  "prepare_pseudobulk=valid;pseudobulk=missing;gloscope=missing;composition=missing;mrvi=missing;pilot=missing;qot=missing"
+test "$(sed -n 's/^KIDNEY_LEGACY_VALID_METHODS=//p' \
+  "${KIDNEY_FIXTURE_METADATA}")" = prepare_pseudobulk
+test "$(sed -n 's/^KIDNEY_LEGACY_MISSING_METHODS=//p' \
+  "${KIDNEY_FIXTURE_METADATA}")" = "pseudobulk gloscope composition mrvi pilot qot"
+test "$(sed -n 's/^KIDNEY_LEGACY_INVALID_METHODS=//p' \
+  "${KIDNEY_FIXTURE_METADATA}")" = ""
+
+# The missing qot row must resolve to the final stem, while the valid legacy
+# preparation must remain outside both final roots and retain its source bytes.
+QOT_FINAL_PATH="$(
+  set -euo pipefail
+  source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1
+  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  PASS_ARG=uncorrected
+  ANALYSIS_PASS=uncorrected
+  ANALYSIS_VARIANT=final
+  ANALYSIS_ROOT="${HPC_ROOT}/batch_effect/uncorrected_final"
+  ANALYSIS_NAS_ROOT="${NAS_ROOT}/batch_effect/uncorrected_final"
+  _ecoda_stage5_artifacts_for \
+    Kidney_KPMP_full batch_effect_uncorrected qot
+  test "${#ECODA_BENCHMARK_ARTIFACTS[@]}" = 1
+  printf '%s\n' "${ECODA_BENCHMARK_ARTIFACTS[0]}"
+)"
+test "${QOT_FINAL_PATH}" = \
+  "${HPC_ROOT}/batch_effect/uncorrected_final/embeddings/Kidney_KPMP_full_batch_effect_uncorrected_final_hvg2000_highres_qot_dists.feather"
+test "${QOT_FINAL_PATH}" != \
+  "${LEGACY_KIDNEY_ROOT}/embeddings/Kidney_KPMP_full_batch_effect_uncorrected_hvg2000_highres_qot_dists.feather"
+[[ ! -e "${HPC_ROOT}/batch_effect/uncorrected_final/pseudobulks/Kidney_KPMP_full_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds" &&
+   ! -L "${HPC_ROOT}/batch_effect/uncorrected_final/pseudobulks/Kidney_KPMP_full_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds" ]]
+[[ ! -e "${NAS_ROOT}/batch_effect/uncorrected_final/pseudobulks/Kidney_KPMP_full_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds" &&
+   ! -L "${NAS_ROOT}/batch_effect/uncorrected_final/pseudobulks/Kidney_KPMP_full_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds" ]]
+cmp -s "${TMP_DIR}/kidney-legacy-prep.before" "${LEGACY_KIDNEY_PREP}"
+cmp -s "${TMP_DIR}/kidney-legacy-prep.before.md5" "${LEGACY_KIDNEY_PREP}.md5"
+KIDNEY_FIXTURE_CAPTURE="${TMP_DIR}/kidney-fixture-calls"
+sed -n "$((FIXTURE_CAPTURE_BEFORE + 1)),\$p" "${CAPTURE}" \
+  > "${KIDNEY_FIXTURE_CAPTURE}"
+if grep -F -q "${LEGACY_KIDNEY_PREP}" "${KIDNEY_FIXTURE_CAPTURE}"; then
+  echo "legacy Kidney artifact leaked into final scheduler payload" >&2
+  exit 1
+fi
+echo "validator-only Kidney legacy inventory reuse: OK"

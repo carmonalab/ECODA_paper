@@ -329,12 +329,16 @@ config <- read_datasets_json(args$config_path, view = args$view)
 ds <- args$ds_name
 analysis_pass <- args[["analysis_pass"]]
 analysis_variant <- Sys.getenv("ANALYSIS_VARIANT", unset = "")
-if (!analysis_variant %in% c("", "final")) {
+if (!analysis_variant %in% c("", "final", "corrected_final")) {
   stop("Unknown analysis variant: ", analysis_variant)
 }
 if (identical(analysis_variant, "final") &&
     !identical(analysis_pass, "uncorrected")) {
   stop("final analysis variant requires the uncorrected batch-effect pass")
+}
+if (identical(analysis_variant, "corrected_final") &&
+    !identical(analysis_pass, "corrected")) {
+  stop("corrected_final analysis variant requires the corrected batch-effect pass")
 }
 if (!is.null(analysis_pass) && !analysis_pass %in% c("uncorrected", "corrected")) {
   stop("Unknown analysis pass: ", analysis_pass)
@@ -346,7 +350,9 @@ cache_stem <- if (is.null(analysis_pass)) {
   ds
 } else {
   stem <- paste0(ds, "_batch_effect_", analysis_pass)
-  if (identical(analysis_variant, "final")) stem <- paste0(stem, "_final")
+  if (analysis_variant %in% c("final", "corrected_final")) {
+    stem <- paste0(stem, "_final")
+  }
   stem
 }
 entry <- config[[ds]]
@@ -373,9 +379,24 @@ if (!nzchar(source_identity)) {
 if (!nzchar(source_identity)) source_identity <- NULL
 sample_col <- "Sample"
 correct_batch_mode <- identical(analysis_pass, "corrected")
+python_batch_metadata <- NULL
+corrected_final_mode <- identical(analysis_variant, "corrected_final") &&
+  correct_batch_mode
+if (is.null(analysis_pass)) {
+  Sys.unsetenv("ANALYSIS_PASS")
+} else {
+  Sys.setenv(ANALYSIS_PASS = as.character(analysis_pass))
+}
+if (corrected_final_mode) {
+  # The final corrected lane is explicitly summary-free; the pipeline's
+  # compatibility call reads this flag from the worker environment.
+  Sys.setenv(ECODA_ALLOW_MISSING_CORRECTED_SUMMARY = "1")
+} else {
+  # Never let a stale worker environment relax ordinary or uncorrected lanes.
+  Sys.unsetenv("ECODA_ALLOW_MISSING_CORRECTED_SUMMARY")
+}
 batch_keys <- NULL
 batch_context <- NULL
-python_batch_metadata <- NULL
 batch_col <- NULL
 h5ad_expected_batch_contract <- NULL
 pseudobulk_batch_contract <- NULL
@@ -460,8 +481,10 @@ embedding_key <- if (args$view == "batch_effect_corrected") {
 } else {
   "X_pca_benchmark_analysis_hvg2000"
 }
-  # Validate all cells before any loader is allowed to select a first row per
-  # Sample.  The ordinary and uncorrected paths do not incur this pass.
+# Validate every cell before any metadata reducer selects a first row per
+# Sample. This is retained for ordinary corrected Stage 5 and intentionally
+# skipped only by corrected_final, which consumes the exported Feather.
+if (correct_batch_mode && !corrected_final_mode) {
   validation_method_id <- if (method == "composition") {
     "ECODA_authors_HR"
   } else if (method == "gloscope") {
@@ -476,16 +499,15 @@ embedding_key <- if (args$view == "batch_effect_corrected") {
   } else {
     "pseudobulk_composite_v1"
   }
-  if (correct_batch_mode) {
-    python_batch_metadata <- validate_h5ad_corrected_batch_metadata(
-      h5ad_path = h5ad_path,
-      batch_keys = as.list(unname(batch_keys)),
-      sample_col = sample_col,
-      biological_label = entry$label_col,
-      method_id = validation_method_id,
-      model_id = validation_model_id
-    )
-  }
+  python_batch_metadata <- validate_h5ad_corrected_batch_metadata(
+    h5ad_path = h5ad_path,
+    batch_keys = as.list(unname(batch_keys)),
+    sample_col = sample_col,
+    biological_label = entry$label_col,
+    method_id = validation_method_id,
+    model_id = validation_model_id
+  )
+}
 required_hvg <- if (identical(args$view, "benchmark_analysis")) 3000L else 2000L
 hvg_rank_genes <- NULL
 embedding_matrices <- NULL
@@ -512,8 +534,10 @@ if (pseudobulk_metadata_method) {
     )),
     expected_batch_contract = h5ad_expected_batch_contract,
     view = args$view,
-    method = method
+    method = method,
+    allow_missing_summary = corrected_final_mode
   )
+  obs <- metadata_info$obs
   hvg_rank_genes <- metadata_info$hvg_rank_genes
 } else if (method == "gloscope" || method == "composition") {
   # Both methods are counts-free, but GloScope has a deliberately minimal
@@ -561,7 +585,8 @@ if (pseudobulk_metadata_method) {
     obs_prefixes = if (method == "composition") "leiden_res_" else character(),
     view = args$view,
     method = method,
-    expected_batch_contract = h5ad_expected_batch_contract
+    expected_batch_contract = h5ad_expected_batch_contract,
+    allow_missing_summary = corrected_final_mode
   )
   obs <- py_to_r(adata$obs)
   hvg_rank_genes <- get_hvg_rank_genes(adata)
@@ -590,7 +615,8 @@ if (pseudobulk_metadata_method) {
     obs = obs,
     view = args$view,
     method = method,
-    expected_batch_contract = h5ad_expected_batch_contract
+    expected_batch_contract = h5ad_expected_batch_contract,
+    allow_missing_summary = corrected_final_mode
   )
   hvg_rank_genes <- get_hvg_rank_genes(adata)
 }
@@ -600,20 +626,38 @@ if (!sample_col %in% colnames(obs)) {
 }
 blind_mode <- is.null(analysis_pass) || analysis_pass == "uncorrected"
 if (correct_batch_mode) {
-  missing_batch_keys <- setdiff(batch_keys, colnames(obs))
-  if (length(missing_batch_keys) > 0L) {
-    stop(
-      "Confirmed batch column(s) missing from obs of ", h5ad_path, ": ",
-      paste(missing_batch_keys, collapse = ", ")
+  if (corrected_final_mode) {
+    missing_batch_keys <- setdiff(batch_keys, colnames(obs))
+    if (length(missing_batch_keys) > 0L) {
+      stop(
+        "Confirmed batch column(s) missing from obs of ", h5ad_path, ": ",
+        paste(missing_batch_keys, collapse = ", ")
+      )
+    }
+    expected_sample_ids <- unique(as.character(obs[[sample_col]]))
+    allow_unknown_keys <- if (identical(ds, "Breast_cancer")) {
+      intersect(batch_keys, "suspension_dissociation_time")
+    } else {
+      character()
+    }
+    batch_context <- ecoda_hpc_load_sample_metadata_contract(
+      path = ecoda_hpc_sample_metadata_path(ds),
+      expected_sample_ids = expected_sample_ids,
+      batch_keys = batch_keys,
+      sample_col = sample_col,
+      biological_label = entry$label_col,
+      required_columns = entry$label_col,
+      allow_unknown_keys = allow_unknown_keys
+    )
+  } else {
+    batch_context <- ecoda_hpc_batch_context(
+      metadata = obs,
+      batch_keys = as.list(unname(batch_keys)),
+      sample_col = sample_col,
+      biological_label = entry$label_col,
+      python_metadata = python_batch_metadata
     )
   }
-  batch_context <- ecoda_hpc_batch_context(
-    metadata = obs,
-    batch_keys = as.list(unname(batch_keys)),
-    sample_col = sample_col,
-    biological_label = entry$label_col,
-    python_metadata = python_batch_metadata
-  )
   batch_col <- batch_context$scalar_batch_col
 }
 if (correct_batch_mode) {
@@ -674,7 +718,7 @@ if (!combo_supplied && ecoda_local_cache_valid(method_rds) && !force) {
         )
       }
       for (composition_method in required_composition_methods) {
-        composition_contract <- ecoda_batch_augment_contract(
+        composition_contract <- ecoda_hpc_augment_batch_contract(
           identity = ecoda_hpc_batch_contract_identity(
             batch_keys,
             sample_col = sample_col,
@@ -682,18 +726,8 @@ if (!combo_supplied && ecoda_local_cache_valid(method_rds) && !force) {
             model_id = "ecoda_additive_random_intercepts_v1"
           ),
           validation = batch_context$validation,
-          correction_mode = "additive_random_intercepts",
-          correction_formula = if (length(batch_keys) == 1L) {
-            "y ~ 1 + (1 | batch)"
-          } else {
-            paste0(
-              "y ~ 1 + ",
-              paste0(
-                "(1 | batch_key_", seq_along(batch_keys), ")",
-                collapse = " + "
-              )
-            )
-          }
+          method_id = composition_method,
+          batch_keys = batch_keys
         )
         ecoda_hpc_validate_batch_contract(
           cached[[composition_method]][["batch_contract"]],
@@ -793,6 +827,13 @@ if (method %in% c("mofa", "pseudobulk")) {
     expected_h5ad_batch_contract = h5ad_expected_batch_contract
   )
   metadata <- collapse_sample_metadata(obs, sample_col = sample_col)
+  if (correct_batch_mode) {
+    metadata <- ecoda_hpc_apply_batch_context(
+      metadata,
+      batch_context,
+      sample_col = sample_col
+    )
+  }
   labels <- as.factor(metadata[[entry$label_col]])
   names(labels) <- metadata[[sample_col]]
 } else if (method == "composition") {

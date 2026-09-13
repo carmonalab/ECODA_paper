@@ -115,6 +115,8 @@ def _sampling_day_audit(series: pd.Series, include_values) -> dict:
         (~missing) & (~blank) & numeric.notna() & ~np.isfinite(numeric_values)
     )
     non_numeric = (~missing) & (~blank) & numeric.isna()
+    if isinstance(include_values, str):
+        include_values = [include_values]
     include_text = {
         str(value).strip().casefold()
         for value in (include_values or [])

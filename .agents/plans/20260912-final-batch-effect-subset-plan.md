@@ -5,11 +5,11 @@
 Implement the approved final batch-effect analysis without rerunning completed
 cohorts or broad historical selections. The production source of truth is the
 current `datasets.json` plus the authoritative full-cohort data on Bamboo/HPC;
-local subset mirrors are diagnostic only. The final run must correct the Covid
-same-column subset rule, regenerate the remaining changed batch views, recover
-only the missing Kidney uncorrected Stage 5 rows, synchronize the new results to
-the workstation, and run the final uncorrected analysis notebook without
-writing into the legacy analysis lane.
+local subset mirrors are diagnostic only. Pipeline 3 uses separate parallel
+uncorrected and corrected selections. The uncorrected lane feeds the final
+uncorrected Stage 5 analysis, while the corrected lane feeds its own
+`corrected_final` Stage 5 lane; both lanes reuse valid outputs idempotently and
+write outside the legacy analysis lane.
 
 The repository already contains user-approved changes to `AGENTS.md` and the
 concise onboarding README. Preserve unrelated working-tree changes. Do not
@@ -35,8 +35,9 @@ Wave 1 is the subset/preflight contract unit. It owns
 `src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh`, and the new
 `src/utils/bash/h5ad_obs_audit_worker.sh`. A separate focused regression
 subtask owns `tests/test_subset_vars.py`. These changes define the mask,
-sample-consistency audit, strict direct-H5AD obs-only preflight, and the
-eight-row Stage 3 release gate.
+sample-consistency audit, strict direct-H5AD obs-only preflight, and two
+separate Stage 3 release gates: exactly four uncorrected rows and exactly nine
+configured corrected rows.
 
 After Wave 1 passes the focused test, the Stage 5 variant unit and final
 analysis unit run in parallel because they own disjoint files. The Stage 5
@@ -70,11 +71,13 @@ touch frozen rows.
 The parent then runs the focused configuration/routing checks and integrates
 all source/test units before any HPC launch.
 
-Stage 2/3/5 launch preparation is serialized after all code/config units are
-integrated: Stage 2 Joanito first, Stage 3 eight-row array second, Stage 5
-changed-dataset wave third, and targeted Kidney Stage 5 recovery last. The
-changed-dataset Stage 5 wave and Kidney recovery share the final analysis root
-and therefore do not launch concurrently.
+Stage 2/3/5 launch preparation is serialized only across code/config
+integration and documented data dependencies: Stage 2 Joanito precedes both
+Stage 3 selections; each Stage 5 lane follows its own reviewed Stage 3
+predecessor. The uncorrected and corrected Stage 3 gates are separate and
+their dataset rows dispatch in parallel. The uncorrected changed wave and
+targeted Kidney recovery share one root and therefore remain serialized with
+each other; the distinct corrected Stage 5 root may run concurrently later.
 
 
 ## Decisions and traceability
@@ -89,15 +92,15 @@ and therefore do not launch concurrently.
 | Stage 5 metadata source | `benchmark_hpc_utils.R:782-818` reads sample metadata, but Stage 5 workers only publish method RDS/embedding and execution-time artifacts | Add an explicit obs-only exporter and checksum its Feather output before final manifest creation; never assume a method worker created it. |
 | Pseudobulk path contract | `1.1.1_run_benchmark_methods_r.R:337-341,419-423` names the result as `<stem>_<method>.rds`; the cache is separately named by `1.1.1_prepare_pseudobulk.R:293-296,411-470` | Manifest `Pseudobulk_hvg2000` points to the final result bundle; the pseudobulk cache is a dependency-only path. |
 | Final registry size | `batch_candidate_registry():221-240` and `dataset_specs.py:486-502` enforce the historical twelve-row order | Generalize only the R registry caller to accept an explicit final nine-row subset while retaining the historical twelve-row assertion. |
-| Corrected Stage 5 boundary | User decision and final lane contract | `corrected_final` is Stage 3-only in this run; no corrected Stage 5 work or artifact root is created. |
+| Corrected Stage 5 lane | Latest user clarification | Run `--pass corrected --analysis-variant corrected_final` against the nine current configured corrected datasets at `batch_effect/corrected_final`, with seven methods, concurrent dataset rows, and an explicit eight-key artifact manifest; reuse valid rows idempotently. |
 | Batch annotation scope | User-approved `AGENTS.md` exception | Batch-effect views do not run Pipeline 4. Preserve configured source/author cell-type columns. |
-| Frozen cohorts | User decision | `Alzheimer`, `Breast_cancer`, `Lupus_PBMC`, and `Stephenson` are final, must not occur in any new job, validator selection, or compute manifest, and are included in final notebook plots only through their approved legacy result artifacts; no legacy dataset H5AD is read for the final analysis. |
+| Frozen cohorts | User decision | `Alzheimer`, `Breast_cancer`, `Lupus_PBMC`, and `Stephenson` are frozen and absent from new uncorrected/final-lane jobs, validator selections, and compute manifests; they remain eligible in the independently configured corrected Stage 3 and corrected Stage 5 nine-dataset lanes. Final notebook plots use their approved legacy result artifacts only; no legacy dataset H5AD is read for the final analysis. |
 | Changed final-view targets | User decision and current registry | `Covid19_PBMC`, `Diabetes`, `Joanito`, and `Lung`, both uncorrected and corrected Stage 3 views. |
 | Kidney recovery | User decision | `Kidney_KPMP_full` receives only missing uncorrected Stage 5 method rows; do not run Stage 2/3/4 for Kidney. |
 | Disabled cohorts | Current registry flags | `CombinedPBMC`, `Kidney_KPMP`, `Myocardial_infarction`, and `Parkinson` receive no new work. `_debug` is not a production target. |
 | Stage 2 coverage | `src/2_dataset_specific_preprocessing/1_submit_hpc.sh:233-259,394-444` | Only `Joanito` has a target-specific Stage 2 hook. Covid, Diabetes, and Lung use already staged direct H5AD inputs; do not invent Stage 2 jobs for them. |
-| Corrected batch variables | `datasets.json` target contracts | The corrected Stage 3 views use `Covid19_PBMC=datasets`, `Diabetes=dataset`, `Joanito=seqtec`, and `Lung=dataset`; biological labels remain evaluation-only. |
-| Final naming | User decision | Target H5ADs and uncorrected Stage 5 artifacts use `_final`; `corrected_final` is reserved for corrected Stage 3 H5AD/view outputs and is not a Stage 5 root in this run. |
+| Corrected batch variables | `datasets.json` target contracts | Every corrected Stage 3 row uses its configured technical batch variables directly; the current corrected examples include `Covid19_PBMC=datasets`, `Diabetes=dataset`, `Joanito=seqtec`, and `Lung=dataset`. Biological labels remain evaluation-only. |
+| Final naming and roots | Latest user clarification | Uncorrected Stage 5 uses `_final` stems under `batch_effect/uncorrected_final`; corrected Stage 5 uses `_corrected_final` stems under `batch_effect/corrected_final`. Corrected Stage 3 H5ADs remain distinct inputs to the corrected Stage 5 lane. |
 | Notebook boundary | User decision and current notebook code | `batch_effect_analysis_uncorrected.rmd` becomes final-only; the contingency notebook remains legacy-only and untouched; `batch_effect_analysis_legacy.rmd` remains out of scope. |
 | Current gate policy | `AGENTS.md`, durable profile, submitters | Existing durable-gate/snapshot/accounting/checksum policy remains unchanged for new target work. Avoid redundant rows, but do not bypass required target-run contracts. |
 
@@ -122,38 +125,64 @@ selection/step manifest from that selector and record exactly one `Joanito`
 `joanito` row. Do not hand this selector text to a manifest parser expecting
 `DATASET<TAB>VIEW` rows.
 
-Stage 3 selection, exactly eight rows:
+Pipeline 3 uses two separate selection manifests and gates. Dataset rows
+dispatch concurrently within each selection; manifest order is deterministic
+ordering only.
+
+Uncorrected Stage 3 selection, exactly four rows:
 
 ```text
 Covid19_PBMC<TAB>batch_effect_uncorrected
-Covid19_PBMC<TAB>batch_effect_corrected
 Diabetes<TAB>batch_effect_uncorrected
-Diabetes<TAB>batch_effect_corrected
 Joanito<TAB>batch_effect_uncorrected
-Joanito<TAB>batch_effect_corrected
 Lung<TAB>batch_effect_uncorrected
+```
+
+Corrected Stage 3 selection, exactly every current non-underscore
+`datasets.json` entry with `use_for_batch_effect=true`, in config order:
+
+```text
+Joanito<TAB>batch_effect_corrected
+Stephenson<TAB>batch_effect_corrected
+Alzheimer<TAB>batch_effect_corrected
+Breast_cancer<TAB>batch_effect_corrected
+Covid19_PBMC<TAB>batch_effect_corrected
+Kidney_KPMP_full<TAB>batch_effect_corrected
+Diabetes<TAB>batch_effect_corrected
+Lupus_PBMC<TAB>batch_effect_corrected
 Lung<TAB>batch_effect_corrected
 ```
 
-Stage 5 final changed-dataset selection, exactly four rows:
+Uncorrected Stage 5 final selection, exactly five datasets:
 
 ```text
 Covid19_PBMC<TAB>batch_effect_uncorrected<TAB>batch_effect_uncorrected
 Diabetes<TAB>batch_effect_uncorrected<TAB>batch_effect_uncorrected
 Joanito<TAB>batch_effect_uncorrected<TAB>batch_effect_uncorrected
 Lung<TAB>batch_effect_uncorrected<TAB>batch_effect_uncorrected
-```
-
-Kidney Stage 5 selection, exactly one dataset row:
-
-```text
 Kidney_KPMP_full<TAB>batch_effect_uncorrected<TAB>batch_effect_uncorrected
 ```
 
+Corrected Stage 5 final selection, exactly the nine corrected datasets above,
+in the same order:
+
+```text
+Joanito<TAB>batch_effect_corrected<TAB>batch_effect_corrected
+Stephenson<TAB>batch_effect_corrected<TAB>batch_effect_corrected
+Alzheimer<TAB>batch_effect_corrected<TAB>batch_effect_corrected
+Breast_cancer<TAB>batch_effect_corrected<TAB>batch_effect_corrected
+Covid19_PBMC<TAB>batch_effect_corrected<TAB>batch_effect_corrected
+Kidney_KPMP_full<TAB>batch_effect_corrected<TAB>batch_effect_corrected
+Diabetes<TAB>batch_effect_corrected<TAB>batch_effect_corrected
+Lupus_PBMC<TAB>batch_effect_corrected<TAB>batch_effect_corrected
+Lung<TAB>batch_effect_corrected<TAB>batch_effect_corrected
+```
+
 The four frozen cohorts, `_debug`, and all disabled cohorts must be absent from
-every new scheduler selection and validator input. Do not pass
-`--exact-batch-selection`, because that mode requires the obsolete historical
-twelve-row matrix.
+new uncorrected jobs and validator inputs. Frozen cohorts may occur in the
+independent corrected selections above only when present in the current
+configuration rule. Do not pass `--exact-batch-selection`, because that mode
+requires the obsolete historical twelve-row matrix.
 
 ### 2. Replace the shared subset evaluator
 
@@ -246,13 +275,20 @@ old changed-dataset outputs, in place on HPC. The new names are the canonical
 paths for the final target views after this change; old files are not deleted
 or overwritten.
 Before implementation launches, replace the stale batch-effect baseline
-paragraphs in `AGENTS.md:177-219` with the approved current scope: final
-Stage 3 targets are `Covid19_PBMC`, `Diabetes`, `Joanito`, and `Lung`; the
-final Stage 5 changed wave uses those four; `Kidney_KPMP_full` receives only
-targeted missing uncorrected Stage 5 rows; `Alzheimer`, `Breast_cancer`,
-`Lupus_PBMC`, and `Stephenson` are frozen and absent from all new jobs and
-validator selections; disabled cohorts and `_debug` are absent from production
-selection. Preserve the existing durable-gate and snapshot requirements while
+paragraphs in `AGENTS.md:177-219` with the approved current scope: Pipeline 3
+uses separate parallel selections, exactly four uncorrected target rows and
+exactly nine current configured corrected rows; dataset rows dispatch
+concurrently and manifest order is deterministic only. The corrected Pipeline 3
+path uses original cell-level technical metadata directly, with no
+sample-level constancy/majority check and no retired corrected-source RDS
+preflight; configuration/content/provenance checks and the Covid obs-only
+subset preflight remain. Stage 5 has separate uncorrected and corrected lanes:
+the uncorrected changed wave plus targeted Kidney recovery uses
+`batch_effect/uncorrected_final`, while the corrected nine-dataset lane uses
+`--pass corrected --analysis-variant corrected_final` and
+`batch_effect/corrected_final`, the seven methods, and an explicit eight-key
+artifact manifest. Valid rows are reused idempotently. Preserve the existing
+durable-gate, snapshot, and separate structural-cleanup-plan boundaries while
 updating only the stale scope statements.
 The registry/configuration unit must update the focused registry contract
 test (currently `tests/test_batch_effect_registry_and_modes.py`) to cover the
@@ -390,55 +426,70 @@ wait, inspect every emitted Stage 2/watchdog ID once, and obtain the required
 terminal review before Stage 3. Do not poll repeatedly or rerun an ambiguous
 wrapper.
 
-### 6. Regenerate the four final Stage 3 views
+### 6. Regenerate the separate Stage 3 selections
 
-Run Stage 3 only with the eight-row manifest from step 1:
+Run two separate Stage 3 manifests and durable gates. The uncorrected manifest
+contains exactly the four rows in step 1; the corrected manifest contains
+exactly the nine current configured rows in step 1. Dataset rows dispatch
+concurrently within each gate. Do not combine the selections or serialize the
+four and nine rows behind one matrix.
+
+Uncorrected Stage 3:
 
 ```text
 Covid19_PBMC<TAB>batch_effect_uncorrected
-Covid19_PBMC<TAB>batch_effect_corrected
 Diabetes<TAB>batch_effect_uncorrected
-Diabetes<TAB>batch_effect_corrected
 Joanito<TAB>batch_effect_uncorrected
-Joanito<TAB>batch_effect_corrected
 Lung<TAB>batch_effect_uncorrected
+```
+
+Corrected Stage 3:
+
+```text
+Joanito<TAB>batch_effect_corrected
+Stephenson<TAB>batch_effect_corrected
+Alzheimer<TAB>batch_effect_corrected
+Breast_cancer<TAB>batch_effect_corrected
+Covid19_PBMC<TAB>batch_effect_corrected
+Kidney_KPMP_full<TAB>batch_effect_corrected
+Diabetes<TAB>batch_effect_corrected
+Lupus_PBMC<TAB>batch_effect_corrected
 Lung<TAB>batch_effect_corrected
 ```
 
-Use the canonical Stage 3 submitter with `--selection-file`; do not use the
-historical exact-selection mode and do not include Kidney or any
-frozen/disabled cohort. Before the worker array is released, require the
-Covid read-only HPC `obs` preflight from step 4 for both declared views. The
-preflight report is run-owned evidence of the current source; it is not an
-H5AD artifact record and must not write beside the immutable direct input.
+Use the canonical Stage 3 submitter with each explicit `--selection-file`; do
+not use the historical exact-selection mode. The uncorrected gate excludes
+Kidney, frozen cohorts, disabled cohorts, and `_debug`; the corrected gate
+includes the nine config-selected rows above. Before the Covid row in either
+gate is released, require the corresponding read-only HPC `obs` preflight.
+Those reports are run-owned evidence of the current source, not H5AD artifact
+records, and must not write beside the immutable direct input. The retired
+corrected-source metadata/RDS release preflight is not part of either gate.
 
-The Stage 3 worker must resolve the final output names from the updated
-`datasets.json` and write:
+The Stage 3 worker must resolve output names from the updated `datasets.json`.
+The four uncorrected targets use their final-qualified names. Corrected rows
+use their configured corrected-view names, including the corrected outputs for
+the nine current config-selected datasets.
 
-- Covid19_PBMC: final uncorrected and corrected views;
-- Diabetes: final uncorrected and corrected views using existing
-  `cell_type`/`cell_type_reannotatedIntegrated` columns;
-- Joanito: final uncorrected and corrected views after the targeted Stage 2
-  metadata repair, using `cell.type`/`cell.type_new`;
-- Lung: final uncorrected and corrected views using `ann_coarse`/`ann_fine`.
+The uncorrected representation remains `Sample`-keyed raw
+PCA/neighbors/Leiden without Harmony. The corrected representation passes each
+cell's original configured technical batch metadata directly to Harmony/HVG,
+with the biological label excluded from all processing covariates. Do not
+perform a sample-level batch constancy check, within-`Sample` check, or
+cell-level majority rewrite in Pipeline 3. Configuration, content, provenance,
+and the Covid subset preflight remain required.
 
-The uncorrected representation remains `Sample`-keyed raw PCA/neighbors/Leiden
-without Harmony. The corrected representation uses the configured technical
-batch variables and Harmony, with the biological label excluded from all
-processing covariates. Both views use the same final subset for each dataset.
-The corrected view is a Stage 3 output only; it does not authorize a
-corrected Stage 5 run.
+Preserve source/author cell-type metadata in every output. Do not call
+Pipeline 4, prepare annotation chunks, run annotation workers, merge
+annotation Feathers, or add HiTME/scATOMIC columns.
 
-Preserve source/author cell-type metadata in every output. Do not call Pipeline
-4, prepare annotation chunks, run annotation workers, merge annotation
-Feathers, or add HiTME/scATOMIC columns.
+Each selected row is idempotent: validate non-empty output, schema, checksum,
+and ownership before dispatch; reconcile any prior owner-state discrepancy
+validator-only before reuse. A valid output from the prior reviewed gate is
+skipped as `NOOP_VALIDATED`; only missing or invalid rows are recomputed, and
+never through a broad `--force` selection.
 
-The Stage 3 run must be snapshot-backed and use the current durable gate. Do
-not set `--force` for a broad target list. If a final target row has a valid
-existing final artifact, skip that row; if it is absent or invalid, recompute
-only that explicitly selected row.
-
-After terminal review, record the eight output paths and their subset audit
+After terminal review, record all selected output paths and their subset audit
 summaries in the run-owned manifest. Each audit must include dataset, view,
 configured raw sample column, total/retained/dropped cell counts,
 total/retained/dropped sample counts, the exact HPC input identity, and
@@ -446,16 +497,19 @@ split-sample count (which must be zero).
 
 ### 7. Add a final variant to Stage 5 without changing legacy mode
 
-Extend the canonical Stage 5 wrapper and shared artifact-path helpers with an
-explicit `--analysis-variant final` option. The default with no variant must
+Extend the canonical Stage 5 wrapper and shared artifact-path helpers with
+explicit `--analysis-variant final` and
+`--analysis-variant corrected_final` options. The default with no variant must
 remain byte-for-byte compatible with the existing legacy roots and stems.
-`final` is valid only for the approved uncorrected batch-effect selection
-files; reject it with `benchmark_analysis`, a corrected Stage 5 pass, a broad
-default selection, or a missing explicit selection file.
+`final` is valid only for the explicit five-dataset uncorrected batch-effect
+selection; `corrected_final` is valid only for the explicit nine-dataset
+corrected selection. Reject either variant with `benchmark_analysis`, the
+wrong pass, a broad default selection, or a missing explicit selection file.
 
 Set `ANALYSIS_VARIANT`, `ANALYSIS_ROOT`, `ANALYSIS_NAS_ROOT`,
 `ANALYSIS_PASS`, and `ANALYSIS_LOG_PREFIX` before constructing pending
-selection state or writing run metadata. Final run metadata must contain:
+selection state or writing run metadata. The two final run metadata contracts
+must contain:
 
 ```text
 ANALYSIS_VARIANT=final
@@ -464,21 +518,28 @@ ANALYSIS_NAS_ROOT=${NAS_TARGET_DIR}/batch_effect/uncorrected_final
 ANALYSIS_PASS=uncorrected
 PASS=uncorrected
 ROOT=${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final
+
+ANALYSIS_VARIANT=corrected_final
+ANALYSIS_ROOT=${HPC_SCRATCH_DIR}/batch_effect/corrected_final
+ANALYSIS_NAS_ROOT=${NAS_TARGET_DIR}/batch_effect/corrected_final
+ANALYSIS_PASS=corrected
+PASS=corrected
+ROOT=${HPC_SCRATCH_DIR}/batch_effect/corrected_final
 ```
 
 Move or refactor the current root assignment before the `RUN_METADATA` block
 around `src/5_run_benchmark_methods/1_submit_hpc_array.sh:2398-2425`, so the
-metadata cannot record a legacy root for a final run. `ecoda_run_audit.sh`,
-artifact ownership records, worker environments, validator path
-reconstruction, watchdogs, and synchronization must consume the same
-variant-qualified root. The legacy mode must continue to emit
+metadata cannot record a legacy root for either final run.
+`ecoda_run_audit.sh`, artifact ownership records, worker environments,
+validator path reconstruction, watchdogs, and synchronization must consume the
+same variant-qualified root. The legacy mode must continue to emit
 `batch_effect/uncorrected` or `benchmark` roots exactly as before.
 
 Update these exact layers together:
 
-- `src/5_run_benchmark_methods/1_submit_hpc_array.sh`: parse/validate the
-  option, establish final roots, export the variant, and record the fields
-  above in both active and `NOOP_VALIDATED` metadata.
+- `src/5_run_benchmark_methods/1_submit_hpc_array.sh`: parse/validate both
+  options, establish the selected final root, export the variant, and record
+  the fields above in both active and `NOOP_VALIDATED` metadata.
 - `src/utils/bash/ecoda_run_common.sh:_ecoda_stage5_artifacts_for`: derive
   variant-qualified stems for ownership and sync expansion.
 - `src/5_run_benchmark_methods/1_submit_hpc_array.sh:benchmark_artifacts_for`:
@@ -486,15 +547,15 @@ Update these exact layers together:
 - `src/5_run_benchmark_methods/benchmark_submit_common.sh:878-945`:
   enumerate the same variant-qualified paths during sync and validation.
 - `src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1.1_benchmark_methods_py.py:1857-1863`:
-  add `_final` to batch output names when `ANALYSIS_VARIANT=final` while
-  keeping embedding keys semantic-view based.
+  add `_final` or `_corrected_final` to batch output names for the selected
+  variant while keeping embedding keys semantic-view based.
 - `src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1.1_run_benchmark_methods_r.R:337-342,419-423`:
-  add `_final` to batch cache/result stems when the final variant is set.
-  The result stem is the cache stem followed by the method name; it is not
-  the pseudobulk cache filename.
+  add the selected final suffix to batch cache/result stems. The result stem
+  is the cache stem followed by the method name; it is not the pseudobulk
+  cache filename.
 - `src/5_run_benchmark_methods/run_r_sample_embedding_methods/1.1.1_prepare_pseudobulk.R`:
   accept the variant-qualified cache root and preserve legacy cache behavior.
-- Both worker wrappers must forward `ANALYSIS_VARIANT=final` and use it in
+- Both worker wrappers must forward the selected variant and use it in
   execution-log filenames.
 - `src/5_run_benchmark_methods/validate_benchmark_rds_contract.R` and
   `src/utils/bash/ecoda_run_common.sh` must validate direct final paths and
@@ -505,14 +566,16 @@ Final Stage 5 roots:
 ```text
 ${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final
 ${NAS_TARGET_DIR}/batch_effect/uncorrected_final
+${HPC_SCRATCH_DIR}/batch_effect/corrected_final
+${NAS_TARGET_DIR}/batch_effect/corrected_final
 ```
 
-The name `corrected_final` is reserved for corrected Stage 3 H5AD/view
-outputs only. This run creates no corrected Stage 5 root, selection,
-metadata, method artifact, sync list, or notebook lane.
+The two roots are independent lanes. The corrected lane is a Stage 5
+benchmark lane, not a Stage 3-only namespace; its outputs consume corrected
+Stage 3 H5ADs and remain separate from the uncorrected analysis lane.
 
-Final Stage 5 paths must distinguish the pseudobulk cache from the result
-bundle:
+Each final Stage 5 lane must distinguish the pseudobulk cache from the result
+bundle. Uncorrected paths are:
 
 ```text
 ${ANALYSIS_ROOT}/pseudobulks/<DS>_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds
@@ -525,13 +588,29 @@ ${ANALYSIS_ROOT}/embeddings/<DS>_batch_effect_uncorrected_final_hvg2000_highres_
 ${ANALYSIS_ROOT}/embeddings/<DS>_batch_effect_uncorrected_final_hvg2000_highres_qot_dists.feather
 ```
 
-The final manifest key `Pseudobulk_hvg2000` maps to
-`results/<DS>_batch_effect_uncorrected_final_pseudobulk.rds` and its
-`Pseudobulk_hvg2000` bundle key. The `pseudobulks/..._pseudobulk_hvg2000.rds`
-path is only the dependency cache. The final composition RDS contains
-`ECODA_authors_HR`, `ECODA_seuratres_2`, and
-`ECODA_authors_HR_NULL`; the null manifest row intentionally shares the
-composition path and selects the null bundle key.
+Corrected paths are analogous, with the corrected suffix:
+
+```text
+${ANALYSIS_ROOT}/pseudobulks/<DS>_batch_effect_corrected_final_pseudobulk_hvg2000.rds
+${ANALYSIS_ROOT}/results/<DS>_batch_effect_corrected_final_pseudobulk.rds
+${ANALYSIS_ROOT}/results/<DS>_batch_effect_corrected_final_gloscope.rds
+${ANALYSIS_ROOT}/results/<DS>_batch_effect_corrected_final_composition.rds
+${ANALYSIS_ROOT}/results/<DS>_batch_effect_corrected_final_metadata.rds
+${ANALYSIS_ROOT}/embeddings/<DS>_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather
+${ANALYSIS_ROOT}/embeddings/<DS>_batch_effect_corrected_final_hvg2000_highres_pilot_dists.feather
+${ANALYSIS_ROOT}/embeddings/<DS>_batch_effect_corrected_final_hvg2000_highres_qot_dists.feather
+```
+
+For either lane, the logical manifest has exactly these eight keys:
+`ECODA_authors_HR`, `ECODA_seuratres_2`, `Pseudobulk_hvg2000`,
+`GloScope_hvg2000_pcadims30`, `MrVI_hvg2000`, `PILOT_hvg2000`,
+`QOT_hvg2000`, and `ECODA_authors_HR_NULL`. The composition path is shared by
+`ECODA_authors_HR`/`ECODA_seuratres_2` and the null key, with explicit bundle
+keys `ECODA_authors_HR`, `ECODA_seuratres_2`, and
+`ECODA_authors_HR_NULL`. `Pseudobulk_hvg2000` maps to the pseudobulk result
+bundle, not the cache. Distance rows use the corresponding Feather paths and
+an explicitly empty `bundle_key`; the physical manifest always retains its
+sixth field.
 
 The final Stage 5 suite is exactly:
 
@@ -540,11 +619,14 @@ prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot
 ```
 
 Do not select `mofa`, `scitd`, `scpoli`, `pilotgm`, `trans`, `zeroimp`, or
-any post-baseline method. The four changed datasets form one explicit final
-Stage 5 wave: four dataset rows and seven method rows per dataset (28 method
-rows, with `prepare_pseudobulk` as the declared dependency/method row).
-Before either Stage 5 gate, record the exact remote wrapper command and
-expected row count in the durable-gate manifest. The changed-dataset gate’s
+any post-baseline method. The uncorrected changed wave contains four dataset
+rows and seven method rows per dataset (28 rows), while its one explicit
+five-dataset selection also includes the targeted Kidney recovery. The
+corrected wave contains nine dataset rows and at most 63 method rows. Dataset
+rows dispatch concurrently within each lane, and valid rows are skipped
+individually.
+Before each Stage 5 gate, record the exact remote wrapper command and expected
+row count in the durable-gate manifest. The uncorrected changed-dataset gate’s
 `--exact-command` must be the snapshot `ecoda_source_snapshot.sh exec`
 wrapper required by `AGENTS.md`, with this script/argument tail:
 
@@ -561,6 +643,20 @@ step 1. The wrapper must emit exactly four dataset rows times seven methods,
 28 method rows including the declared `prepare_pseudobulk` dependency. No
 `--analyses`, `--exact-batch-selection`, broad dataset list, corrected pass,
 or `--force` is permitted.
+
+The corrected gate uses the same snapshot wrapper and this tail:
+
+```text
+--script src/5_run_benchmark_methods/1_submit_hpc_array.sh -- \
+  --selection-file <run-root>/manifests/stage5_corrected_final.tsv \
+  --pass corrected \
+  --analysis-variant corrected_final \
+  --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot
+```
+
+Its recorded selection is exactly the nine corrected rows from step 1 and its
+maximum method-row count is 63. No broad dataset list, wrong pass, or `--force`
+is permitted.
 
 After the changed gate reaches terminal review, construct the Kidney
 run-owned missing-method manifest from the current validated legacy inventory
@@ -580,52 +676,66 @@ That manifest contains only
 The recorded `<comma-separated-missing-methods>` is the missing subset of
 `prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot`, and the
 expected method-row count equals its length. If its length is zero, record
-`NOOP_VALIDATED` and submit no Kidney method array. These two gates are
-serialized because both own `batch_effect/uncorrected_final`.
+`NOOP_VALIDATED` and submit no Kidney method array. The changed wave and
+Kidney recovery are serialized only because they share
+`batch_effect/uncorrected_final`; the independent corrected lane uses
+`batch_effect/corrected_final` and may run concurrently after its Stage 3
+predecessor review.
 
 
-Add an explicit, idempotent metadata-only export for the four regenerated
-H5ADs and `Kidney_KPMP_full`; current Stage 5 workers do not emit the
-notebook’s sample-metadata Feather. Add
+Add explicit, idempotent metadata-only exports for both final lanes; current
+Stage 5 workers do not emit the notebook’s sample-metadata Feather. Add
 `src/utils/py/export_h5ad_sample_metadata.py`, using the existing h5py-only
-reader in `src/utils/py/h5ad_pseudobulk.py`, and add the separate
-read-only worker `src/utils/bash/h5ad_obs_audit_worker.sh`. The worker must
-never call `ecoda_write_artifact_record` against the inspected H5AD.
+reader in `src/utils/py/h5ad_pseudobulk.py`, and add the separate read-only
+worker `src/utils/bash/h5ad_obs_audit_worker.sh`. The worker must never call
+`ecoda_write_artifact_record` against the inspected H5AD.
 
-For final Stage 5 rows, the worker reads only `obs` from the selected
-uncorrected H5AD and atomically writes:
+For uncorrected final rows, the worker reads only `obs` from the four
+regenerated final H5ADs and existing `Kidney_KPMP_full` uncorrected H5AD and
+atomically writes:
 
 ```text
 ${ANALYSIS_ROOT}/metadata/<DS>_sample_metadata.feather
 ${ANALYSIS_ROOT}/metadata/<DS>_sample_metadata.feather.md5
 ```
 
-The export includes `Sample`, the configured primary biological label,
-configured batch keys, configured cell-type columns, and every candidate
-column required by `dataset_specs.py` for the final registry. It validates
-non-empty unique sample IDs, preserves source sample order, and never opens
-`X`, `raw`, or `layers["counts"]`. The final Stage 5 wrapper records the
-exporter’s run-owned manifest, checksum, and terminal status before method
-no-op selection; an already valid final metadata Feather is skipped
-individually. This covers the four changed H5ADs and the existing Kidney
-H5AD without copying any H5AD to the workstation.
+For corrected final rows it reads only `obs` from the nine corrected Stage 3
+H5ADs and writes the same metadata/checksum pair below the corrected root.
+Corrected sample-level consumers read this explicit Feather path, verify its
+MD5 sidecar and Sample order against the selected H5AD, and do not recompute
+votes. The exporter applies majority only to
+`Alzheimer/assay`, `Breast_cancer/suspension_dissociation_time` (literal
+`unknown` is an ordinary configured class), and `Lupus_PBMC/batch_cov`.
+Uncorrected exports perform no majority assignment; cell-level corrected
+methods retain source cell values.
 
-Run a separate targeted Kidney Stage 5 recovery against the same final
+Each export includes `Sample`, the configured primary biological label,
+configured batch keys, configured cell-type columns, and every candidate
+column required by `dataset_specs.py` for the applicable registry. It
+validates non-empty unique sample IDs, preserves source sample order, and
+never opens `X`, `raw`, or `layers["counts"]`. Each Stage 5 wrapper records
+the exporter’s run-owned manifest, checksum, and terminal status before method
+no-op selection; an already valid metadata Feather is skipped individually.
+
+Run a separate targeted Kidney Stage 5 recovery against the uncorrected final
 analysis root. Before submission, inspect only the existing
 `Kidney_KPMP_full/batch_effect_uncorrected` method artifacts and emit a
 run-owned method manifest containing the missing subset of the seven-method
 suite. Existing valid Kidney rows remain outside the recovery selection. If
 no method is missing, write a no-op report and submit no Kidney method job;
-the required obs-only metadata export still runs or validates independently.
-If methods are missing, submit only those method rows with `--target-methods`
-and a specific dependency reason; never force or rerun the full suite.
+the required uncorrected obs-only metadata export still runs or validates
+independently. If methods are missing, submit only those method rows with
+`--target-methods` and a specific dependency reason; never force or rerun the
+full suite.
 
-Both Stage 5 runs use the existing snapshot-backed durable workflow, exact
-selection files, and current gate policy. They must be serialized when they
-share the final analysis root. The four frozen cohorts and all disabled
-cohorts are absent from both runs. Stage 5 runs only the uncorrected pass; the
-corrected outputs required here are Stage 3 inputs for future use, not a
-request to run corrected Stage 5 methods now.
+Both final Stage 5 lanes use the existing snapshot-backed durable workflow,
+exact selection files, and current gate policy. Their dataset rows and method
+rows dispatch concurrently within each distinct root; the two roots may be
+gated in parallel after their respective Stage 3 predecessors are terminally
+reviewed. Only the uncorrected root has the targeted Kidney recovery. The
+uncorrected lane excludes the frozen cohorts and all disabled cohorts; the
+corrected lane uses exactly the nine current config-selected corrected
+datasets. Existing valid rows remain reusable and are never forced.
 
 ### 8. Build the mixed-source final analysis manifests
 
@@ -788,11 +898,11 @@ historical `dataset_specs.py` order or its diagnostic twelve-row contract.
 The final notebook uses the nine-row registry; the contingency notebook keeps
 its legacy twelve-row call.
 
-### 9. Synchronize only final Stage 5 outputs to the workstation
+### 9. Synchronize only approved final Stage 5 outputs to the workstation
 
-After each final Stage 5 gate reaches terminal completion and review, sync
-only the explicit final result artifacts, final metadata exports, checksums,
-and final manifests:
+After each final Stage 5 gate reaches terminal completion and review, sync only
+the explicit lane-specific result artifacts, metadata exports, checksums, and
+run-owned manifests. The uncorrected lane is:
 
 ```text
 data/batch_effect/uncorrected_final/
@@ -804,19 +914,33 @@ data/batch_effect/uncorrected_final/
   final_analysis_artifacts.tsv
 ```
 
-Generate the HPC `rsync --files-from` list from the final Stage 5 method
-manifest plus the separate metadata-export manifest. Include final outputs
-for the four changed datasets, any newly produced Kidney method/cache/result
-rows, and the four regenerated-target/Kidney sample-metadata Feathers. Include
-the exact `.md5` sidecars. Do not copy full H5ADs, raw counts, annotation
-unions, or legacy frozen result files. The frozen rows in the local mixed
-manifest point to their existing legacy paths.
+The corrected lane is a separate synchronized root:
+
+```text
+data/batch_effect/corrected_final/
+  results/
+  embeddings/
+  pseudobulks/
+  metadata/
+  final_analysis_artifacts.tsv
+```
+
+Generate each HPC `rsync --files-from` list from that lane's final Stage 5
+method manifest plus its separate metadata-export manifest. Include uncorrected
+outputs for the four changed datasets, any newly produced Kidney
+method/cache/result rows, and the four regenerated-target/Kidney
+sample-metadata Feathers. Include corrected outputs for the nine configured
+corrected datasets and their metadata Feathers. Include the exact `.md5`
+sidecars. Do not copy full H5ADs, raw counts, annotation unions, or legacy
+frozen result files. The frozen rows in the uncorrected local mixed manifest
+point to their existing legacy paths; corrected artifacts remain in their
+separate lane and are not inferred from that manifest.
 
 Resolve `BAMBOO_HOME` with `ssh bamboo 'printf %s "$HOME"'` and use an
 explicit `rsync --files-from` list rooted at the HPC scratch tree. Preserve
-relative paths and do not use a recursive all-dataset sync. Verify the local
-manifest paths, checksums, and file sizes against the terminal HPC manifest
-before running the notebook.
+relative paths and do not use a recursive all-dataset sync. Verify each local
+lane's manifest paths, checksums, and file sizes against its terminal HPC
+manifest before running the uncorrected notebook.
 
 ### 10. Run the final uncorrected notebook only against the final lane
 
@@ -934,19 +1058,26 @@ Run verification in this order and stop before the next stage on failure:
    with no accidental other dataset/step rows. If valid `seqtec` and
    `cell.type_new` already exist, the run must be `NOOP_VALIDATED`, not a
    reprocessing job.
-6. **Stage 3:** for each of the eight target views, confirm the final H5AD
-   exists on HPC with valid checksum and required configured sample/label/
-   cell-type columns; subset audits have zero split samples; uncorrected and
-   corrected embedding keys match the semantic view; and the Covid output
-   counts agree with the accepted HPC preflight. Confirm no frozen/disabled
-   H5AD was selected or modified and no Pipeline 4 artifacts were created.
-7. **Stage 5 changed wave:** expected selection is four rows and the fixed
-   seven-method suite; expected method-row count is 28. Confirm final run
-   metadata contains `ANALYSIS_VARIANT=final`, `PASS=uncorrected`,
-   `ANALYSIS_PASS=uncorrected`, `ANALYSIS_ROOT`/`ROOT` ending in
-   `batch_effect/uncorrected_final`, and no legacy root. Confirm the separate
-   sample-metadata export exists and every final cache/result/embedding path
-   has the exact `_final` stem and checksum.
+6. **Stage 3:** validate each of the four uncorrected and nine corrected
+   selected outputs independently. Confirm non-empty files, required schema,
+   checksum, ownership, configured sample/label/cell-type columns, and
+   zero-split subset audits. Confirm uncorrected and corrected embedding keys
+   match their semantic views, the Covid counts agree with the accepted
+   obs-only preflight, and no Pipeline 4 artifacts were created. Frozen rows
+   are excluded from the uncorrected gate but appear in corrected validation
+   only when selected by the current configuration rule.
+7. **Stage 5 final lanes:** the uncorrected changed wave has four rows and 28
+   method rows, with the separate five-dataset manifest also covering
+   `Kidney_KPMP_full` recovery. Confirm its metadata contains
+   `ANALYSIS_VARIANT=final`, `PASS=uncorrected`,
+   `ANALYSIS_PASS=uncorrected`, and a root ending in
+   `batch_effect/uncorrected_final`. The corrected wave has nine dataset rows
+   and at most 63 method rows; confirm
+   `ANALYSIS_VARIANT=corrected_final`, `PASS=corrected`,
+   `ANALYSIS_PASS=corrected`, and a root ending in
+   `batch_effect/corrected_final`. Both lanes must use exact `_final` or
+   `_corrected_final` stems, explicit eight-key manifests, checksums, and
+   individual valid-row reuse.
 8. **Stage 5 Kidney recovery:** inspect the current legacy artifact inventory
    immediately before submission. The emitted method manifest contains only
    missing Kidney rows; valid legacy rows are not selected. If the missing set
@@ -958,12 +1089,12 @@ Run verification in this order and stop before the next stage on failure:
    pseudobulk result path (not its cache), all required `.md5` sidecars are
    present, no H5AD/raw-count/legacy frozen file is copied, and the four
    frozen rows remain references to existing local legacy artifacts.
-10. **Final notebook:** execute only the final notebook chunks and confirm
-    non-empty final funky heatmap, per-dataset MDS and ANOSIM PDFs for all nine
-    rows, and final scores/decomposition/NMI tables. Confirm no legacy dataset
-    H5AD was read, all paths came from manifests, `corrected_final` was not
-    created as a Stage 5 lane, and legacy plot/analysis files retain their
-    pre-run modification state.
+10. **Final notebook:** execute only the uncorrected final notebook chunks and
+    confirm non-empty final funky heatmap, per-dataset MDS and ANOSIM PDFs for
+    all nine rows, and final scores/decomposition/NMI tables. Confirm no legacy
+    dataset H5AD was read, all paths came from manifests, corrected Stage 5
+    artifacts remain in their separate lane, and legacy plot/analysis files
+    retain their pre-run modification state.
 
 All full-cohort Stage 2/3/5 launches and their required preflight workers must
 use the checked-in snapshot-backed `durable-hpc-gate-ecoda` workflow. After
@@ -979,10 +1110,12 @@ matrix.
   `Covid19_PBMC_meta.json`, never qualifies as a production source or as
   evidence that a target H5AD is complete. The current HPC obs-only Covid
   report is the required pre-compute evidence.
-- The four frozen cohorts are complete by user declaration. Do not schedule,
-  preflight, validate, or recompute them. If a final notebook cannot find a
-  declared local legacy result, stop with a missing-input report rather than
-  adding that cohort to a job.
+- The four frozen cohorts are complete by user declaration for the
+  uncorrected/final analysis lane. Do not schedule, preflight, validate, or
+  recompute them in that lane. They remain eligible for the independently
+  configured corrected Pipeline 3 and corrected Pipeline 5 selections. If the
+  final notebook cannot find a declared local legacy result, stop with a
+  missing-input report rather than adding that cohort to an uncorrected job.
 - The Covid obs preflight is a distinct read-only path. Never substitute the
   standard `h5ad_preflight_worker.sh`, which may publish run-owned artifact
   records. A preflight failure stops the run before Stage 3 processing.
@@ -992,27 +1125,32 @@ matrix.
 - Covid, Diabetes, and Lung direct H5AD inputs are already staged on HPC. If a
   direct input is missing, stop before submission; do not invent a Stage 2
   conversion hook.
-- The existing Kidney uncorrected H5AD is present and is reused read-only. If
-  it is absent, do not silently add Stage 3/4; stop and report the missing
-  prerequisite because the approved scope is Stage 5-only.
+- The existing Kidney uncorrected H5AD is present and is reused read-only for
+  the uncorrected/final Stage 5 lane. If it is absent, do not silently add
+  uncorrected Stage 3/4; stop and report the missing prerequisite because the
+  approved uncorrected scope is Stage 5-only. The independent corrected
+  nine-dataset lane follows its own corrected Stage 3 input contract.
 - Kidney’s missing method set is determined from the current legacy artifact
   inventory immediately before its targeted Stage 5 gate. Valid rows are
   skipped individually; only missing rows are submitted. Its obs-only sample
   metadata export is independent of the method-row decision.
 - Existing final target paths are skipped only when their current contract is
   valid. An invalid selected final path is recomputed as that same targeted
-  row, never through a broad `--force` selection.
-- `corrected_final` is a reserved Stage 3 namespace only. No corrected Stage 5
-  root or artifact may be created by this run.
-- If any emitted selection contains `Alzheimer`, `Breast_cancer`,
-  `Lupus_PBMC`, or `Stephenson`, cancel the emitted scheduler IDs and durable
-  runner, preserve evidence, and mark the run failed; do not let the
-  unintended wave finish.
+  row, never through a broad `--force` selection. This idempotent contract
+  applies independently to both final Stage 5 roots.
+- `corrected_final` is the corrected Stage 5 root and variant. It is distinct
+  from corrected Stage 3 H5AD/view paths and must not be reconstructed under
+  the legacy pass root.
+- If an emitted **uncorrected** selection contains `Alzheimer`,
+  `Breast_cancer`, `Lupus_PBMC`, or `Stephenson`, cancel the emitted scheduler
+  IDs and durable runner, preserve evidence, and mark the run failed; do not
+  let the unintended wave finish. The corrected nine-dataset selection is
+  governed by the current non-underscore, batch-enabled configuration rule.
 - If the submitted wrapper emits any dataset, view, method, or output path
   outside the written manifests, stop immediately and inspect the run as a
   scope mismatch.
-- `PILOT-GM-VAE`, MOFA, scITD, scPoli, ordinary benchmark views, corrected
-  Stage 5, and Pipeline 4 annotation work are not part of this plan.
+- `PILOT-GM-VAE`, MOFA, scITD, scPoli, ordinary benchmark views, and Pipeline 4
+  annotation work are not part of these final Stage 5 lanes.
 - Legacy analysis outputs remain untouched. Final notebook plots/tables and
   final Stage 5 artifacts are separate even when a frozen cohort contributes
   a legacy result path to the mixed-source final manifest.
@@ -1105,34 +1243,28 @@ frozen-cohort/four-plus-four Stage 3 wording.
    fail closed, preserve all evidence, and repair only failed dataset/view
    rows with a recorded dependency reason. A corrected failure must not trigger
    a broad rerun of successful corrected rows, the uncorrected subset, or
-   frozen artifacts. Corrected Pipeline 3 output is separate from the final
-   uncorrected Pipeline 5 analysis; no corrected Pipeline 5 lane is authorized
-   by this clarification.
+   frozen artifacts. Corrected Pipeline 3 output feeds the independent
+   corrected Stage 5 lane as well as remaining downstream contracts; valid
+   Stage 5 rows remain reusable.
 
 ### Feasibility assessment
 
-This clarified workflow is feasible. Pipeline 3 already accepts explicit
-selection manifests, corrected and uncorrected views have distinct output
-contracts, and the corrected wave can be isolated in its own durable run.
-Pipeline 5 can remain serialized on the shared final uncorrected root while
-the independent corrected Pipeline 3 run uses its own view/output namespace.
-The parallelism constraint is explicit: the current durable profile uses one
-`ecoda-benchmark` serialization group, and the custom Stage 3 Covid obs-only
-preflight is intentionally triggered only by the exact four-dataset
-uncorrected target selection. Therefore “parallel corrected mode” cannot be
-implemented by inventing a second serialization group or by silently
-bypassing the Covid release evidence. The safest supported design is one
-validated Stage 3 scheduler manifest/wave containing the four uncorrected
-target rows plus the dynamically generated corrected rows, while retaining
-the exact target-row Covid preflight, or a separately implemented independent
-gate with an explicit corrected-mode preflight/release contract. This choice
-must be fixed in source and manifests before resuming; no ad hoc concurrent
-gate is safe under the current shared lock.
-The main feasibility risk is not the decomposition; it is first-run behavior
-of the corrected multi-batch path on full cohorts: missing/constant batch
-levels, unexpected metadata encodings, Harmony/resource failures, and
-dataset-specific source columns may require targeted code or configuration
-repairs.
+This clarified workflow is feasible. Pipeline 3 accepts two explicit
+selection manifests and distinct output contracts: exactly four uncorrected
+rows and exactly nine corrected rows. Each gate dispatches its dataset rows in
+parallel; manifest order is deterministic only. Pipeline 5 has distinct
+uncorrected and corrected roots, so their independent gates may run in
+parallel after their respective Pipeline 3 predecessors are reviewed. Only
+the uncorrected changed wave and targeted Kidney recovery share a root and
+remain serialized with each other.
+
+The corrected Pipeline 3 contract passes each cell's original technical batch
+metadata directly to Harmony/HVG. It performs no sample-level batch constancy
+or majority check and does not invoke the retired corrected-source metadata/RDS
+release preflight. Configuration, content, provenance, and the Covid obs-only
+subset preflight remain required. The main first-run risks are malformed
+metadata encodings, missing configured columns, Harmony/resource failures, and
+dataset-specific source columns; any repair must remain row-targeted.
 
 Before the one final SIF publication and any resumed gate, complete this
 stabilization checklist:
@@ -1172,10 +1304,12 @@ No further shell, SSH, test, durable-gate, scheduler, or SIF-build command is
 authorized until the user completes clarification and compacts the main-agent
 context. The initial implementation commits, failed-gate evidence, and local
 plan history remain preserved. After compaction, resume with the checklist
-above, then publish one final runtime identity, then launch the four-row
-uncorrected Pipeline 3 subset, the independent all-configured corrected
-Pipeline 3 wave, and the serialized targeted Pipeline 5 recoveries only after
-their exact manifests and predecessor reviews are complete.
+above, then publish one final runtime identity, then launch the separate
+four-row uncorrected and nine-row corrected Pipeline 3 gates, followed by the
+uncorrected five-dataset and corrected nine-dataset Pipeline 5 lanes after
+their exact manifests and predecessor reviews are complete. Dataset rows in
+each selection dispatch concurrently; only same-root uncorrected recovery
+dependencies are serialized.
 ### Plan maintenance
 
 All subsequent implementation, verification, gate, SIF, failure, repair, and
@@ -1188,36 +1322,37 @@ full rationale when a short evidence-linked update is sufficient.
 - 2026-09-12, resumed after the user-authorized context compaction; local
   stabilization work is dispatched in disjoint units for the obs worker,
   obs-only/onboarding paths, Stage 5 root ownership, final analysis/export,
-  and the combined Stage 3 wave. No new gate or SIF command is authorized
+  and the separate Stage 3 gates. No new gate or SIF command is authorized
   until those units are integrated and the focused contracts pass.
 
-- 2026-09-12, corrected-contract scout confirmed exactly nine dynamic corrected
-  datasets and their configured sample/label/batch keys; evidence is the
-  current `datasets.json` plus `src/utils/py/batch_contract.py`. The
-  pre-allocation contract must inspect authoritative source `obs` for required
-  batch columns, at least two levels, within-sample constancy, missing/sentinel
-  values, near-unique levels, and full-rank composite design. Biological
-  labels remain evaluation-only. No source-level counts can be inferred from
-  static configuration.
+- 2026-09-12, corrected-contract scout confirmed exactly nine dynamic
+  corrected datasets and their configured sample/label/batch keys; evidence
+  was the current `datasets.json` plus `src/utils/py/batch_contract.py`.
+  This was exploratory evidence, not a release requirement. The later
+  approved contract passes each cell's original technical metadata directly
+  to Harmony/HVG and does not require sample-level constancy, majority
+  rewriting, or the retired corrected-source RDS preflight. Configuration,
+  content, provenance, and Covid obs-only subset checks remain required.
 
 - 2026-09-12, local verification caught a red combined Stage 3 fixture:
   `tests/test_preprocessing_stage_submitter.sh` reaches the validator-only
   combined run but its stubbed Covid preflight evidence is rejected. A
   focused test repair is dispatched; no HPC/SIF action is allowed until it
   passes.
-- 2026-09-12, advisory-driven Stage 3 repairs now classify exact four-row
-  uncorrected manifests independently (with the required Covid preflight),
-  reserve combined mode for four-plus-dynamic-corrected rows, and fail closed
-  when corrected RDS inputs lack a bound raw H5AD metadata cache. The
-  corrected dynamic set remains the nine current config rows; missing RDS
-  source metadata is now an explicit blocker rather than `CONFIG_ONLY_RDS`.
+- 2026-09-12, advisory-driven Stage 3 repairs classified exact four-row
+  uncorrected and nine-row corrected manifests independently. The earlier
+  combined-mode and corrected-source RDS preflight proposals are historical
+  implementation evidence only and are superseded by the separate-gate,
+  direct-cell-metadata contract above. Corrected rows must not be rejected for
+  lack of the retired RDS release evidence.
 
 - 2026-09-12, reconciled `AGENTS.md` with the clarification: frozen cohorts
   remain excluded from uncorrected/final-lane work but are explicitly allowed
-  in the independent corrected Stage 3 wave when selected by current
-  `datasets.json`; disabled cohorts and `_debug` remain excluded everywhere.
-  The corrected RDS prerequisite/source audit remains pending before runtime
-  publication.
+  in the independent corrected Stage 3 and corrected Stage 5 lanes when
+  selected by current `datasets.json`; disabled cohorts and `_debug` remain
+  excluded everywhere. The later clarification retires the corrected RDS
+  prerequisite as a release condition; historical audit evidence remains
+  preserved below.
 
 - 2026-09-12, stabilization contracts and the combined Stage 3 regression
   fixture pass the focused Python/R/shell checks, including the new 13-row
@@ -1385,3 +1520,302 @@ full rationale when a short evidence-linked update is sufficient.
   The failed run and logs remain preserved; no retry or downstream Stage 5
   action is authorized until the container source-root bootstrap fix is in a
   fresh full-hash snapshot.
+
+### Latest findings and pause boundary
+
+- 2026-09-12, the authoritative corrected H5AD audit on snapshot
+  `b8f7aec15dfc91bc493caeb04f3d2cc066db8c5d` passed
+  `Covid19_PBMC`, `Kidney_KPMP_full`, `Diabetes`, and `Lung`, but failed
+  `Alzheimer` (`assay` disagrees within 21 `donor_id` samples),
+  `Breast_cancer` (`suspension_dissociation_time` has 65,359 `unknown`
+  sentinel cells), and `Lupus_PBMC` (`batch_cov` disagrees within
+  `sampleID`). The direct Joanito RDS audit remains exit-137/OOM; its raw
+  H5AD cache has no producer record and is not authoritative.
+- 2026-09-12, the container-spool bootstrap repair is committed/pushed as
+  full commit `734b174a0b0b2a9c4e07edbf1e11d03c9fbf8206`; local syntax,
+  subset, H5AD-auditor, Stage 3, Stage 5, and R contract checks passed before
+  this commit. A fresh snapshot for this commit has not yet been created.
+- 2026-09-12, terminal inspect of failed gate
+  `stage3_uncorrected_final_20260912` queried accounting once for preflight
+  ID `4403790` and observed an additional `4403791|RUNNING|0:0` row beside
+  `4403790|FAILED|1:0`. The extra scheduler job is unresolved; do not
+  relaunch, cancel, mark the failed gate settled, or treat the four-row
+  selection as validated until its identity and terminal state are resolved.
+  Preserve the existing wait/inspect evidence.
+- 2026-09-12, the user requested context compaction and a pause after this
+  status update. No further snapshot, scheduler, gate, Stage 5, sync, or
+  analysis action is authorized until the next explicit resume signal.
+
+### Explicit resume and repaired gate
+
+- 2026-09-12, the user’s later instruction to “forget about Snakemake, and
+  continue with the plan implementation” is the explicit resume signal that
+  supersedes the earlier pause boundary. The prior extra job
+  `4403791|RUNNING|0:0` was identified as `h5ad_obs_audit_worker.sh` and
+  subsequently settled `COMPLETED|0:0`; it required no cancellation.
+- 2026-09-12, the container source-root repair was snapshotted at
+  `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/734b174a0b0b2a9c4e07edbf1e11d03c9fbf8206`.
+  A new exact four-row uncorrected gate
+  `stage3_uncorrected_final_20260912b` was prepared, reconciled, launched
+  once, and placed under its single unbounded durable waiter. The gate uses
+  no `--force`; terminal scheduler IDs/status remain pending waiter
+  completion and the required single inspect/review sequence.
+- 2026-09-13, the user clarified that `majority_v1` is the approved
+  sample-level technical metadata policy for Alzheimer, Breast_cancer, and
+  Lupus_PBMC. No minimum winner fraction is required; exact ties and actual
+  missing/blank/non-finite values remain hard failures. Breast treats only the
+  literal `unknown` value in `suspension_dissociation_time` as an ordinary
+  configured class.
+- The authoritative Bamboo obs-only audit measured majority fractions of
+  66.96--100% for Alzheimer `assay` (median 100%), 100% for every configured
+  Breast technical key (including 65,359 `unknown` dissociation-time cells
+  across 11 samples), and 30.95--100% for Lupus `batch_cov` (median 100%).
+  It found no ties. The audit read only configured `obs` metadata through the
+  pinned container and found no source `.md5` sidecars.
+- Majority implementation is Python-canonical: the shared Python validator
+  extracts H5AD/RDS metadata, selects unique per-sample technical winners,
+  and records winner values, counts, and fractions. Corrected R consumers
+  consume that serialized result through `reticulate`; they do not recompute
+  votes. Original cell-level batch values remain unchanged for Harmony/HVG,
+  while ECODA/limma/pseudobulk receive the sample-level technical winners.
+  Biological labels and sample IDs are never voted.
+- New majority summaries use schema 2; strict schema-1 summaries and legacy
+  first-observation paths remain readable. The policy is carried in
+  `datasets.json` only for the three approved datasets. Focused Python,
+  R/Python handoff, H5AD/RDS, Stage 3 submitter, Stage 5 selection/sync,
+  batch-correction, and multibatch contract checks pass. No pipeline rerun,
+  scheduler submission, or existing-artifact invalidation occurred for this
+  policy change.
+- The completed gate `stage3_uncorrected_final_20260912b` used the intended
+  four-row uncorrected scope. Scheduler roots `4403794` and `4403795`
+  completed successfully; terminal inspect passed and Luna Max approved the
+  gate. Its run-scoped audit still reports a NAS owner-state discrepancy:
+  scratch H5AD ownership is terminal `OK`, while the synchronized NAS owner
+  remains `ACTIVE`. Do not advance to further pipeline work until that
+  ownership issue and the explicit user approval for any rerun are resolved.
+- 2026-09-13, the user narrowed the majority policy to downstream
+  sample-level metadata only. The implementation must not apply majority to
+  Pipeline 3, Harmony, HVG, or any cell-level batch column. A separate
+  Pipeline 3 cell-level cutover is pending verification: it removes only
+  sample-level batch checks while retaining ordinary H5AD content and
+  configuration/provenance checks.
+- The remaining policy is one obs-only Python Feather exporter. The scoped
+  `datasets.json` policies use `majority_keys=["assay"]` for Alzheimer,
+  `["suspension_dissociation_time"]` for Breast_cancer, and `["batch_cov"]`
+  for Lupus_PBMC. Breast accepts literal `unknown` only for its dissociation
+  key. Other technical keys, biological labels, and Sample IDs retain
+  first-observation behavior.
+- The exporter streams per-sample counts, selects the unique highest-count
+  class without a minimum fraction threshold, and writes only sample-level
+  metadata plus its checksum. Focused exporter, configuration, source
+  storage, subset, Stage 5 selection/sync, RDS, batch-correction, and
+  analysis contract checks pass. `NOTES.md` now records the audit ranges,
+  Lupus lower-tail distribution, policy, and limitation.
+- The user authorized remaining HPC processing after this implementation and
+  documentation step. No new pipeline launch, rerun, artifact rewrite, or
+  existing-artifact invalidation has occurred. Before the next launch, resolve
+  the existing `stage3_uncorrected_final_20260912b` NAS owner-state audit
+  discrepancy and record the exact approved selection/runtime command.
+- 2026-09-13, the user superseded the earlier corrected-Stage-5 exclusion
+  boundary: the end goal now includes a separate corrected Stage 5 benchmark
+  lane. This does not change the cell-level Stage 3 contract:
+  Harmony/HVG continue to use each cell's original batch metadata, while
+  sample-level corrected Stage 5 consumers use the approved majority
+  assignments only for affected keys.
+- Corrected Stage 5 must use a separate non-legacy analysis root and explicit
+  run-owned selection/manifests. It is a separate submission from uncorrected
+  Stage 5; independent corrected/uncorrected dataset and method rows may run
+  in parallel after their required Stage 3 inputs are reviewed. Existing
+  valid rows remain reusable; only missing/invalid rows are selected.
+- The corrected Stage 5 contract is now frozen in section 7: nine configured
+  datasets, seven methods, `_corrected_final` stems, the
+  `batch_effect/corrected_final` root, and an explicit eight-key artifact
+  manifest. No corrected Stage 5 scheduler job has been submitted.
+- 2026-09-13, the user clarified that uncorrected and corrected processing
+  are separate jobs/gates and may run in parallel. `CombinedPBMC` is removed
+  from the active analysis registry (`use_for_batch_effect=false`) and must
+  not appear in any new selection. The current corrected registry therefore
+  contains the nine non-underscore, batch-enabled datasets only.
+- Pipeline 3 corrected processing has no sample-level batch check. It keeps
+  each cell's original technical metadata for Harmony/HVG; no cell-level
+  majority assignment is performed. The old corrected-source metadata
+  release/evidence preflight is no longer invoked. The separate Covid
+  obs-only subset preflight remains for both declared views because it audits
+  the approved subset, not batch constancy.
+- Corrected Stage 5 is now an explicit end-goal lane. It consumes the
+  corrected Stage 3 H5ADs, writes to a separate `batch_effect/corrected_final`
+  root, and uses majority-derived sample metadata only for the affected
+  `Alzheimer/assay`, `Breast_cancer/suspension_dissociation_time` (with
+  literal `unknown` as a class), and `Lupus_PBMC/batch_cov` covariates.
+  Uncorrected Stage 5 performs no batch correction and no majority assignment.
+  Corrected and uncorrected Stage 5 gates are separate and may run in
+  parallel after their respective Stage 3 predecessors are terminally
+  reviewed; no corrected Stage 5 scheduler job has yet been submitted.
+- The uncorrected final Stage 5 selection is one five-dataset wave:
+  `Covid19_PBMC`, `Diabetes`, `Joanito`, `Lung`, and `Kidney_KPMP_full`.
+  It uses the seven-method batch suite and reuses valid Kidney rows, selecting
+  only missing/invalid methods. The corrected Stage 5 selection is one
+  nine-dataset wave with the same seven methods, concurrent dataset rows,
+  explicit `_corrected_final` stems, and the separate corrected root described
+  in section 7.
+- 2026-09-13, the user clarified that Pipeline 3 has no sample-level batch
+  constancy check: each cell's original technical metadata is passed directly
+  to Harmony/HVG, with no within-`Sample` constancy check and no cell-level
+  majority assignment. The majority assignment is exclusively a corrected
+  Stage 5 sample-level metadata operation.
+- The user confirmed the execution topology: uncorrected and corrected
+  processing use separate jobs/gates and may run in parallel. `CombinedPBMC`
+  is excluded from all new selections because its current
+  `use_for_batch_effect` flag is false. The corrected Stage 3 selection is
+  the nine current non-underscore, batch-enabled datasets.
+- The corrected Stage 5 lane is part of the end goal. It is a separate
+  submission/root from uncorrected Stage 5; it consumes corrected Stage 3
+  H5ADs, applies majority only to corrected sample-level technical
+  covariates for the three affected datasets/keys, and otherwise preserves
+  native cell-level handling. Uncorrected Stage 5 performs no batch
+  correction and no majority assignment.
+- The uncorrected Stage 5 wave contains the four changed datasets plus
+  `Kidney_KPMP_full` in one explicit selection. The corrected Stage 5 wave
+  contains the nine active corrected datasets in one explicit selection.
+  Both use seven baseline batch methods; existing valid artifacts remain
+  reusable and valid Kidney rows are not forced.
+- Implementation and HPC launch are paused at the user's request for memory
+  compaction. No pipeline job is to be submitted until the user explicitly
+  resumes execution. The next resume must verify the pending code cutover,
+  update manifests/runtime identity, reconcile the prior NAS owner-state
+  discrepancy, and then launch the separate reviewed gates in this order
+  (or concurrently where the documented dependencies permit).
+
+### Documentation-only clarification status
+
+- 2026-09-13, the latest user clarification was reconciled into `AGENTS.md`
+  and this plan: Pipeline 3 now has separate parallel four-row uncorrected
+  and nine-row corrected selections; corrected Pipeline 3 uses original
+  cell-level batch metadata without sample-level constancy/majority checks or
+  the retired source-RDS release preflight; and both Stage 5 lanes are
+  explicit, idempotent, and root-separated.
+- The corrected Stage 5 contract is
+  `--pass corrected --analysis-variant corrected_final`, root
+  `batch_effect/corrected_final`, nine datasets, seven methods, concurrent
+  dataset rows, and an explicit eight-key artifact manifest. No scheduler
+  launch, test, or validation was performed by this documentation-only update.
+  Historical gate evidence and the separate structural-cleanup follow-up plan
+  remain preserved.
+
+### Interrupted-agent audit
+
+- **(a) Canceled partial work superseded and restored.** `FixRPolicyBoundaries`
+  (R majority/validator plumbing), `InferCompositionPolicy` (R composition
+  fallback), `FixPythonPolicyAndMrvi` (corrected Stage 5 Python worker),
+  and `StreamMetadataExporter` (overbroad exporter cache/streaming changes)
+  were cancelled while their broad implementations were in progress.
+  `RestoreRCoreBaseline`, `RestoreStage5Baseline`, and
+  `RestorePythonCoreBaseline` replaced their assigned source files with exact
+  `734b174a0b0b2a9c4e07edbf1e11d03c9fbf8206` blobs; each restoration reported
+  a clean baseline diff for its assigned paths. `WriteMetadataDecisionNotes`
+  was cancelled before its documentation result; the parent later wrote and
+  re-read the final `NOTES.md` section.
+- **(b) Completed edits retained but stopped for compaction.**
+  `CellLevelPreprocess` owns the pending Pipeline 3 cell-level cutover in
+  `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py`;
+  `AdjustH5ADContentContract` and `FixStage3H5ADCli` own the corresponding
+  summary-optional Pipeline 3 H5AD validation in
+  `src/utils/py/benchmark_h5ad_contract.py`;
+  `RemoveCorrectedPreflights` owns the removal of corrected sample-level
+  source-preflight invocations in
+  `src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh` (and its focused test).
+  These agents were stopped after reporting completed edits when the user
+  requested documentation-only work for compaction. Their agent-local
+  `py_compile`, H5AD smoke, and `bash -n` checks passed, but the parent must
+  re-read and run the final union of focused checks before launch; they are
+  not marked as a completed clean cutover yet.
+- **(c) V2 shell/test work superseded by Stage 3 restoration.**
+  `HardenV2Evidence`, `ScopeConfigOnlyEvidence`, and `AddPolicySchemaTest`
+  modified the temporary schema-2 Stage 3 shell/test path. Those changes were
+  superseded and removed by `RestoreStage3Baseline`; no V2 shell gate or
+  V2-only test edits are retained. The restoration agent checked the assigned
+  Stage 3 files against the exact baseline before the retained cell-level
+  cutover edits above.
+- The cancelled exporter left a malformed intermediate block, but
+  `MinimalMetadataExporter` restored the exporter from the baseline and
+  implemented the final narrow obs-only Feather reducer; `FixAffectedKeyLoop`
+  made the final affected-key-only correction. The focused
+  `tests/test_batch_majority_contract.py` regression passed, including
+  source-storage preservation, tie/missing handling, Breast `unknown`, and
+  first-row preservation for unaffected fields.
+- No interrupted agent launched a scheduler job or intentionally rewrote an
+  existing production artifact. The prior completed uncorrected gate and
+  its preserved NAS owner-state discrepancy remain separate evidence.
+- On resume, first inspect the retained Pipeline 3 edits and current
+  `datasets.json`/plan scope, run the focused cutover checks, verify the
+  separate Stage 3 and Stage 5 manifests/runtime identities, and only then
+  submit the explicitly reviewed HPC gates.
+### Resume implementation status
+
+- 2026-09-13, the user resumed implementation after compaction. The local
+  implementation wave is integrated across the clarified Pipeline 3 split,
+  corrected-final Stage 5 lane, majority metadata handoff, Kidney legacy
+  inventory reuse, run-audit variant binding, and corrected-final watchdog
+  retry identity. `AGENTS.md` and this plan now describe the same separate
+  parallel scopes and roots.
+- The corrected Stage 5 lane is frozen as
+  `--pass corrected --analysis-variant corrected_final`, with the nine current
+  configured datasets, seven methods, `_batch_effect_corrected_final_` stems,
+  root `batch_effect/corrected_final`, and explicit eight-key artifact mapping.
+  The uncorrected final lane is one five-dataset wave including
+  `Kidney_KPMP_full`; valid legacy Kidney methods are recorded in a
+  run-owned inventory and skipped rather than recomputed.
+- Pipeline 3 retains original cell-level batch metadata for Harmony/HVG and
+  performs no sample-level batch constancy or majority operation. Pending
+  Covid work in either approved Stage 3 selection requires both run-owned
+  obs-only reports; the retired corrected-source metadata/RDS release
+  preflight is not invoked.
+- Parent verification is green for the subset, majority/exporter, Stage 3
+  submitter, Stage 5 selection (including Kidney legacy reuse), Stage 5 sync,
+  RDS, batch-analysis, registry, multibatch, corrected-source, batch-correction,
+  and corrected-final watchdog regressions. Shell syntax, Python compilation,
+  R parsing, and `datasets.json` validation also pass. The new
+  `tests/test_ecoda_run_audit.sh` fixture has received several test-only
+  repairs; its latest remaining failure was a literal-tab encoding in the
+  synthetic metadata-export row, corrected by `FixAuditManifestTabs`, but the
+  parent has not rerun that test after the edit.
+- The no-variant corrected R path remains strict and legacy-compatible after
+  `FixLegacyCorrectedMode`. Corrected-final Breast cell composites accept only
+  the configured literal `unknown` for
+  `suspension_dissociation_time`; all other sentinel paths remain strict.
+  The prior Joanito RDS audit exit 137 remains historical evidence and is not
+  a Pipeline 3 prerequisite under the clarified contract.
+- `FixAuditManifestTabs` was canceled when the user requested this
+  documentation update after reporting its test-only edit; that edit remains
+  unverified. No implementation agent launched HPC work, submitted a
+  scheduler job, rewrote an existing production artifact, or invalidated a
+  gate. The prior reviewed Stage 2/Stage 3 evidence and the Stage 3 NAS owner
+  discrepancy remain preserved.
+- On the next resume, first rerun `tests/test_ecoda_run_audit.sh` and the full
+  focused union after the last test-fixture edit. Then perform the
+  validator-only NAS owner reconciliation, validate the reviewed Joanito
+  Stage 2 predecessor contract, freeze one full-hash source snapshot/runtime,
+  and generate exact idempotent Stage 3/Stage 5 manifests. Only after those
+  checks pass may the separate durable Stage 3 and Stage 5 gates be prepared
+  or launched, with one durable wait, terminal inspect, and reviewer approval
+  per gate.
+- The Stage 3 artifact-owner lifecycle blocker is resolved. The watchdog now
+  reconstructs both scratch and NAS owners from the bound root selection,
+  persists those artifact owners beside the stage-owner manifest, keeps them
+  `ACTIVE` until the submitter verifies scratch-to-NAS sync, and transitions
+  every tracked owner to `FAIL` on failure without deleting owner directories.
+  `bash tests/test_preprocessing_stage_submitter.sh` passed with explicit
+  scratch/NAS `ACTIVE` → `OK` and `ACTIVE` → `FAIL` assertions.
+- Validator-only reconciliation of the reviewed
+  `stage3_uncorrected_final_20260912b` gate verified the stale NAS owner PID
+  was absent, all four NAS H5ADs were regular/nonempty, their sizes and
+  sidecar/checksum identities matched the run records, and their owners were
+  `RUN_ID`/`STAGE`-bound before changing only those four owner records to
+  terminal `OK`. No H5AD, checksum, or artifact record was rewritten.
+- The reviewed Joanito Stage 2 predecessor remains release-eligible and its
+  run-owned records are `PUBLISHED`. The terminal watchdog log records the
+  exact `joanito` hook, 373,058 cells across 189 samples, current
+  `seqtec`/`cell.type_new`, and the 2,500-cell five-sample debug artifact.
+  A separate read-only direct RDS recheck was attempted but terminated with
+  remote exit 255 during startup; it did not mutate the RDS, so the reviewed
+  watchdog semantic evidence remains authoritative.

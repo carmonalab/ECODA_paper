@@ -127,6 +127,56 @@ matrix_require_source_script() {
     [[ -f "${candidate}" && -r "${candidate}" && ! -L "${candidate}" ]]
   fi
 }
+matrix_retry_requires_corrected_final_identity() {
+  case "${ANALYSIS_VARIANT:-}" in
+    corrected_final)
+      return 0
+      ;;
+  esac
+  # A partially propagated corrected-final identity is unsafe even when the
+  # variant marker itself was dropped.  Ordinary no-variant corrected runs
+  # keep their historical root/log values and therefore do not match these
+  # exact corrected-final signals.
+  if [[ -n "${ANALYSIS_VARIANT:-}" &&
+        "${ANALYSIS_PASS:-}" == "corrected" ]]; then
+    return 0
+  fi
+  case "${ANALYSIS_ROOT:-}" in
+    */batch_effect/corrected_final*) return 0 ;;
+  esac
+  case "${ANALYSIS_NAS_ROOT:-}" in
+    */batch_effect/corrected_final*) return 0 ;;
+  esac
+  case "${ANALYSIS_LOG_PREFIX:-}" in
+    *execution_times_batch_effect_corrected_final*) return 0 ;;
+  esac
+  return 1
+}
+
+matrix_validate_corrected_final_identity() {
+  local expected_log_prefix="execution_times_batch_effect_corrected_final_"
+  [[ "${ANALYSIS_VARIANT:-}" == "corrected_final" ]] || {
+    echo "ERROR: corrected-final matrix retry requires ANALYSIS_VARIANT=corrected_final." >&2
+    return 1
+  }
+  [[ "${ANALYSIS_PASS:-}" == "corrected" ]] || {
+    echo "ERROR: corrected-final matrix retry requires ANALYSIS_PASS=corrected." >&2
+    return 1
+  }
+  [[ -n "${ANALYSIS_ROOT:-}" && -n "${ANALYSIS_NAS_ROOT:-}" ]] || {
+    echo "ERROR: corrected-final matrix retry requires analysis roots." >&2
+    return 1
+  }
+  [[ "${ANALYSIS_LOG_PREFIX:-}" == "${expected_log_prefix}" ]] || {
+    echo "ERROR: corrected-final matrix retry log prefix is missing or mismatched." >&2
+    return 1
+  }
+  ecoda_stage5_validate_identity corrected corrected_final || {
+    echo "ERROR: corrected-final matrix retry roots are not bound to the corrected pass." >&2
+    return 1
+  }
+}
+
 validated_runtime_export="$(ecoda_runtime_export_csv \
   "${ECODA_RUNTIME_PROFILE}" "${ECODA_APPTAINER_NV:-0}")" ||
   fail "matrix watchdog runtime export construction failed"
@@ -160,7 +210,13 @@ while :; do
   mem_ge "${CURRENT_MEMORY}" "${MAX_MEMORY}" && fail "matrix OOM at ${MAX_MEMORY} ceiling: ${OOM_TASKS[*]}"
   NEXT_MEMORY="$(bump_mem "${CURRENT_MEMORY}")" || fail "unparseable matrix memory"; mem_ge "${NEXT_MEMORY}" "${MAX_MEMORY}" && NEXT_MEMORY="${MAX_MEMORY}"
   RETRY_INDEX=$((RETRY_INDEX + 1)); [[ ${RETRY_INDEX} -le 4 ]] || fail "exceeded matrix OOM retry attempts"
-  RETRY_MANIFEST="${RUN_ROOT}/manifests/${safe_label}.retry_${RETRY_INDEX}.tsv"
+  RETRY_PATH_SUFFIX=""
+  if matrix_retry_requires_corrected_final_identity; then
+    matrix_validate_corrected_final_identity ||
+      fail "matrix corrected-final retry identity validation failed"
+    RETRY_PATH_SUFFIX="_corrected_final"
+  fi
+  RETRY_MANIFEST="${RUN_ROOT}/manifests/${safe_label}${RETRY_PATH_SUFFIX}.retry_${RETRY_INDEX}.tsv"
   RETRY_TMP="${RETRY_MANIFEST}.build.$$"
   : > "${RETRY_TMP}"
   for task in "${OOM_TASKS[@]}"; do
@@ -174,8 +230,11 @@ while :; do
     fail "matrix retry manifest escaped the run root"
   ecoda_validate_manifest "${RETRY_MANIFEST}" "${MATRIX_MANIFEST_COLUMNS}" || fail "matrix retry manifest is invalid"
   retry_count="$(wc -l < "${RETRY_MANIFEST}" | tr -d '[:space:]')"
-  retry_export="ALL,MATRIX_RETRY_MANIFEST=${RETRY_MANIFEST},ANALYSIS_MANIFEST=${RETRY_MANIFEST},MATRIX_RETRY=1,JOB_LOG_PREFIX=${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX},ECODA_RUN_ROOT=${RUN_ROOT},ECODA_RUN_ID=${ECODA_RUN_ID},ECODA_SELECTION_MANIFEST=${ROOT_MANIFEST},FORCE_BENCHMARK=${WATCHDOG_FORCE_BENCHMARK}"
-  if [[ -n "${ANALYSIS_PASS:-}" ]]; then
+  RETRY_LOG_PREFIX="${LOGS_DIR}/5_matrix_${safe_label}${RETRY_PATH_SUFFIX}_retry${RETRY_INDEX}"
+  retry_export="ALL,MATRIX_RETRY_MANIFEST=${RETRY_MANIFEST},ANALYSIS_MANIFEST=${RETRY_MANIFEST},MATRIX_RETRY=1,JOB_LOG_PREFIX=${RETRY_LOG_PREFIX},ECODA_RUN_ROOT=${RUN_ROOT},ECODA_RUN_ID=${ECODA_RUN_ID},ECODA_SELECTION_MANIFEST=${ROOT_MANIFEST},FORCE_BENCHMARK=${WATCHDOG_FORCE_BENCHMARK}"
+  if [[ "${ANALYSIS_VARIANT:-}" == "corrected_final" ]]; then
+    retry_export="${retry_export},ANALYSIS_VARIANT=${ANALYSIS_VARIANT},ANALYSIS_PASS=${ANALYSIS_PASS},ANALYSIS_ROOT=${ANALYSIS_ROOT},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT},ANALYSIS_LOG_PREFIX=${ANALYSIS_LOG_PREFIX}"
+  elif [[ -n "${ANALYSIS_PASS:-}" ]]; then
     unset BENCHMARK_MANIFEST
     retry_export="${retry_export},ANALYSIS_PASS=${ANALYSIS_PASS}"
   else
@@ -192,7 +251,7 @@ while :; do
     fail "matrix retry worker script is outside the immutable source root"
   set +e
   retry_msg="$(sbatch --parsable --array="1-${retry_count}%${THROTTLE}" --partition="${PARTITION}" "${WORKER_FLAGS[@]}" --time="${WORKER_TIME_LIMIT}" --mem="${NEXT_MEMORY}" \
-    --output="${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX}_%A_%a.log" --error="${LOGS_DIR}/5_matrix_${safe_label}_retry${RETRY_INDEX}_%A_%a.err" \
+    --output="${RETRY_LOG_PREFIX}_%A_%a.log" --error="${RETRY_LOG_PREFIX}_%A_%a.err" \
     --mail-user="${USER_EMAIL}" --export="${retry_export}" "${WORKER_SCRIPT}")"
   retry_rc=$?
   set -e

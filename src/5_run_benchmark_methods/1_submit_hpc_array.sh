@@ -39,16 +39,26 @@ MEMORY="${BENCHMARK_MEM}"
 MAX_MEMORY="${BENCHMARK_MEM_MAX}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 RUNTIME_EXPORT=""
+unset H5AD_ALLOW_MISSING_SUMMARY
+
 GPU_POLICY="auto"
 BASELINE_METHODS=(gloscope mofa pseudobulk composition scitd mrvi scpoli pilot qot pilotgm)
 STAGE5_INPUT_PRODUCER_RUN_ID="${STAGE5_INPUT_PRODUCER_RUN_ID:-${STAGE4_RUN_ID:-${ANNOTATION_RUN_ID:-${PREPROCESS_RUN_ID:-${STAGE3_RUN_ID:-${INPUT_PRODUCER_RUN_ID:-${ECODA_ARTIFACT_PRODUCER_RUN_ID:-${ECODA_PRODUCER_RUN_ID:-}}}}}}}}"
+KIDNEY_LEGACY_INVENTORY=""
+KIDNEY_LEGACY_INVENTORY_MD5=""
+KIDNEY_LEGACY_INVENTORY_SIZE=""
+KIDNEY_LEGACY_INVENTORY_STATUS=""
+KIDNEY_LEGACY_INVENTORY_STATUS_ROWS=""
+KIDNEY_LEGACY_VALID_METHODS=""
+KIDNEY_LEGACY_MISSING_METHODS=""
+KIDNEY_LEGACY_INVALID_METHODS=""
 
 usage() {
   cat <<'EOF'
 Usage: 1_submit_hpc_array.sh [--datasets LIST] [--methods LIST]
        [--target-methods LIST] [--analyses trans,zeroimp] [--selection-file TSV]
        [--exact-batch-selection] [--pass uncorrected|corrected]
-       [--analysis-variant final]
+       [--analysis-variant final|corrected_final]
        [--gpu-policy auto|default|any] [--force]
        [--force-targeted --force-reason REASON] [--sync-only RUN_ID]
        [--partition NAME] [--mem VALUE] [--max-mem VALUE] [--throttle N]
@@ -56,6 +66,9 @@ Usage: 1_submit_hpc_array.sh [--datasets LIST] [--methods LIST]
 Selection-file rows are DATASET<TAB>VIEW<TAB>LABEL. Ordinary methods use the
 benchmark_analysis view; batch mode uses the selected explicit pass view.
 Exact batch mode requires the immutable twelve-row uncorrected matrix.
+Final variants require an explicit, variant-matching selection file and the
+fixed seven-method batch-effect suite; uncorrected final additionally permits
+the explicit Kidney targeted-recovery exception.
 --target-methods is an explicit selection-file-scoped partial batch recovery;
 it requires --pass and preserves the fixed suite as the default.
 --force-targeted force-reclaims only the explicit target methods; it requires
@@ -196,8 +209,8 @@ if [[ ${ANALYSIS_VARIANT_SET} -eq 1 && -z "${ANALYSIS_VARIANT_ARG}" ]]; then
 fi
 case "${ANALYSIS_VARIANT_ARG}" in
   "") ;;
-  final) ;;
-  *) echo "ERROR: --analysis-variant must be final." >&2; exit 1 ;;
+  final|corrected_final) ;;
+  *) echo "ERROR: --analysis-variant must be final or corrected_final." >&2; exit 1 ;;
 esac
 if [[ ${SYNC_ONLY_SET} -eq 1 && -z "${SYNC_ONLY_RUN}" ]]; then
   echo "ERROR: --sync-only requires a run ID." >&2
@@ -255,71 +268,119 @@ if [[ -n "${PASS_ARG}" && -n "${SELECTION_FILE_ARG}" ]]; then
   }
 fi
 stage5_validate_final_selection() {
-  local row_count=0 ds view label extra final_line
-  local expected_order="Covid19_PBMC Diabetes Joanito Lung"
-  local seen_order=""
-  [[ "${ANALYSIS_VARIANT_ARG:-}" == final ]] || return 0
-  [[ ${PASS_SET} -eq 1 && "${PASS_ARG}" == uncorrected ]] || {
-    echo "ERROR: final analysis variant requires --pass uncorrected." >&2
+  local variant="${ANALYSIS_VARIANT_ARG:-}" expected_pass expected_view
+  local row_count=0 ds view label extra final_line expected_ds
+  local -a expected_datasets=()
+  case "${variant}" in
+    "")
+      return 0
+      ;;
+    final)
+      expected_pass="uncorrected"
+      expected_view="batch_effect_uncorrected"
+      if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
+        expected_datasets=(Kidney_KPMP_full)
+      else
+        expected_datasets=(Covid19_PBMC Diabetes Joanito Lung Kidney_KPMP_full)
+      fi
+      ;;
+    corrected_final)
+      expected_pass="corrected"
+      expected_view="batch_effect_corrected"
+      [[ ${TARGET_METHODS_SET} -eq 0 && ${FORCE_TARGETED_ARG} -eq 0 ]] || {
+        echo "ERROR: corrected_final does not support partial or targeted selections." >&2
+        return 1
+      }
+      [[ ${FORCE_ARG} -eq 0 ]] || {
+        echo "ERROR: corrected_final does not support --force; valid rows are skipped." >&2
+        return 1
+      }
+      [[ -r "${DATASETS_JSON_FILE}" ]] || {
+        echo "ERROR: corrected_final requires the configured datasets.json." >&2
+        return 1
+      }
+      while IFS= read -r expected_ds; do
+        [[ -n "${expected_ds}" ]] && expected_datasets+=("${expected_ds}")
+      done < <(
+        jq -r '
+          to_entries[]
+          | select((.key | startswith("_") | not)
+                   and (.value | type == "object")
+                   and (.value.use_for_batch_effect == true)
+                   and (.value.views.batch_effect_corrected != null))
+          | .key
+        ' "${DATASETS_JSON_FILE}"
+      )
+      [[ ${#expected_datasets[@]} -gt 0 ]] || {
+        echo "ERROR: corrected_final has no configured corrected datasets." >&2
+        return 1
+      }
+      ;;
+    *)
+      echo "ERROR: unsupported Stage 5 analysis variant: ${variant}" >&2
+      return 1
+      ;;
+  esac
+  [[ ${PASS_SET} -eq 1 && "${PASS_ARG}" == "${expected_pass}" ]] || {
+    echo "ERROR: ${variant} analysis variant requires --pass ${expected_pass}." >&2
     return 1
   }
   [[ ${SELECTION_FILE_SET} -eq 1 && -n "${SELECTION_FILE_ARG}" ]] || {
-    echo "ERROR: final analysis variant requires an explicit --selection-file." >&2
+    echo "ERROR: ${variant} analysis variant requires an explicit --selection-file." >&2
     return 1
   }
   [[ ${DATASETS_SET} -eq 0 && ${ANALYSES_SET} -eq 0 &&
      ${EXACT_BATCH_SELECTION} -eq 0 ]] || {
-    echo "ERROR: final analysis variant rejects broad/default, ordinary, or exact selection modes." >&2
+    echo "ERROR: ${variant} analysis variant rejects broad/default, ordinary, or exact selection modes." >&2
     return 1
   }
+  if [[ ${FORCE_ARG} -eq 1 && ${TARGET_METHODS_SET} -eq 0 ]]; then
+    echo "ERROR: ${variant} analysis variant does not support --force; valid rows are skipped." >&2
+    return 1
+  fi
   if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
-    [[ ${METHODS_SET} -eq 0 ]] || {
-      echo "ERROR: final targeted recovery cannot combine --target-methods with --methods." >&2
+    [[ "${variant}" == final && "${PASS_ARG}" == uncorrected &&
+       ${METHODS_SET} -eq 0 && ${FORCE_ARG} -eq 0 ]] || {
+      echo "ERROR: targeted final recovery is restricted to uncorrected Kidney_KPMP_full." >&2
       return 1
     }
   else
     [[ ${METHODS_SET} -eq 1 &&
        "${METHODS_ARG}" == "${EXPECTED_BATCH_METHODS}" ]] || {
-      echo "ERROR: final analysis variant requires explicit --methods ${EXPECTED_BATCH_METHODS}." >&2
+      echo "ERROR: ${variant} analysis variant requires explicit --methods ${EXPECTED_BATCH_METHODS}." >&2
       return 1
     }
   fi
   [[ -r "${SELECTION_FILE_ARG}" ]] || {
-    echo "ERROR: final selection file is unreadable." >&2
+    echo "ERROR: ${variant} selection file is unreadable." >&2
     return 1
   }
   ecoda_validate_manifest "${SELECTION_FILE_ARG}" 3 || {
-    echo "ERROR: final selection file must contain exactly three columns per row." >&2
+    echo "ERROR: ${variant} selection file must contain exactly three columns per row." >&2
     return 1
   }
   while IFS= read -r final_line || [[ -n "${final_line}" ]]; do
     IFS=$'\t' read -r ds view label extra <<< "${final_line}"
-    [[ -n "${ds}" && "${view}" == batch_effect_uncorrected &&
-       "${label}" == batch_effect_uncorrected && -z "${extra}" ]] || {
-      echo "ERROR: final selection rows must be uncorrected batch-effect rows." >&2
+    [[ -n "${ds}" && "${view}" == "${expected_view}" &&
+       "${label}" == "${expected_view}" && -z "${extra}" ]] || {
+      echo "ERROR: ${variant} selection rows must use ${expected_view}." >&2
       return 1
     }
-    case "${ds}" in
-      Covid19_PBMC|Diabetes|Joanito|Lung|Kidney_KPMP_full) ;;
-      *)
-        echo "ERROR: final selection contains an unapproved dataset: ${ds}" >&2
-        return 1
-        ;;
-    esac
+    expected_ds="${expected_datasets[${row_count}]:-}"
+    [[ "${ds}" == "${expected_ds}" ]] || {
+      echo "ERROR: ${variant} selection must use the exact configured dataset order." >&2
+      return 1
+    }
     row_count=$((row_count + 1))
-    seen_order="${seen_order} ${ds}"
   done < "${SELECTION_FILE_ARG}"
-  if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
-    [[ ${row_count} -eq 1 && "${seen_order}" == " Kidney_KPMP_full" ]] || {
+  [[ ${row_count} -eq ${#expected_datasets[@]} ]] || {
+    if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
       echo "ERROR: targeted final recovery is restricted to one Kidney_KPMP_full row." >&2
-      return 1
-    }
-  else
-    [[ ${row_count} -eq 4 && "${seen_order}" == " Covid19_PBMC Diabetes Joanito Lung" ]] || {
-      echo "ERROR: final changed-dataset selection must contain the exact four-row order." >&2
-      return 1
-    }
-  fi
+    else
+      echo "ERROR: ${variant} selection has an incomplete or overbroad dataset scope." >&2
+    fi
+    return 1
+  }
 }
 if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   ecoda_validate_run_id "${SYNC_ONLY_RUN}" || exit 1
@@ -338,7 +399,8 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     PASS_SET=1
   fi
   sync_variant="$(sed -n 's/^ANALYSIS_VARIANT=//p' "${sync_metadata}" | head -1 || true)"
-  [[ -z "${sync_variant}" || "${sync_variant}" == final ]] || {
+  [[ -z "${sync_variant}" || "${sync_variant}" == final ||
+     "${sync_variant}" == corrected_final ]] || {
     echo "ERROR: sync-only run has an unknown analysis variant." >&2
     exit 1
   }
@@ -350,7 +412,8 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     }
     ANALYSIS_VARIANT_ARG="${sync_variant}"
   fi
-  if [[ "${ANALYSIS_VARIANT_ARG:-}" == final ]]; then
+  if [[ "${ANALYSIS_VARIANT_ARG:-}" == final ||
+        "${ANALYSIS_VARIANT_ARG:-}" == corrected_final ]]; then
     expected_selection="${HPC_SCRATCH_DIR}/_ecoda_runs/${SYNC_ONLY_RUN}/manifests/selection.tsv"
     if [[ -z "${SELECTION_FILE_ARG}" ]]; then
       SELECTION_FILE_ARG="${expected_selection}"
@@ -364,6 +427,10 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     stored_methods="$(sed -n 's/^METHODS=//p' "${sync_metadata}" | head -1 || true)"
     stored_target_methods="$(sed -n 's/^TARGET_METHODS=//p' "${sync_metadata}" | head -1 || true)"
     if [[ -n "${stored_target_methods}" ]]; then
+      [[ "${ANALYSIS_VARIANT_ARG}" != corrected_final ]] || {
+        echo "ERROR: corrected_final sync-only metadata cannot contain target methods." >&2
+        exit 1
+      }
       [[ ${METHODS_SET} -eq 0 &&
          ( ${TARGET_METHODS_SET} -eq 0 ||
            "${TARGET_METHODS_ARG}" == "${stored_target_methods}" ) ]] || {
@@ -509,38 +576,54 @@ if [[ "${PASS_ARG}" == corrected ]]; then
 fi
 
 # Pass-sensitive helper paths (notably watchdog status roots) are resolved
-# only after --pass has been parsed and validated.
-if [[ -n "${PASS_ARG}" ]]; then
-  export ANALYSIS_PASS="${PASS_ARG}"
-else
-  unset ANALYSIS_PASS
-fi
-case "${ANALYSIS_VARIANT_ARG:-}" in
-  final)
-    [[ "${PASS_ARG}" == uncorrected ]] || {
-      echo "ERROR: final analysis variant requires uncorrected pass." >&2
-      exit 1
-    }
-    export ANALYSIS_VARIANT=final
-    ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final"
-    ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/uncorrected_final"
-    ANALYSIS_LOG_PREFIX="execution_times_batch_effect_uncorrected_final_"
-    ;;
-  "")
-    unset ANALYSIS_VARIANT
-    if [[ -n "${PASS_ARG}" ]]; then
-      ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${PASS_ARG}"
-      ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/${PASS_ARG}"
-      ANALYSIS_LOG_PREFIX="execution_times_batch_effect_${PASS_ARG}_"
-    else
-      ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/benchmark"
-      ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/benchmark"
-      ANALYSIS_LOG_PREFIX="execution_times_"
-    fi
-    ;;
-  *) echo "ERROR: unsupported analysis variant." >&2; exit 1 ;;
-esac
-export ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_LOG_PREFIX
+# only after --pass and --analysis-variant have been parsed and validated.
+stage5_configure_analysis_context() {
+  case "${ANALYSIS_VARIANT_ARG:-}" in
+    final)
+      [[ "${PASS_ARG}" == uncorrected ]] || {
+        echo "ERROR: final analysis variant requires uncorrected pass." >&2
+        return 1
+      }
+      export ANALYSIS_VARIANT=final
+      ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final"
+      ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/uncorrected_final"
+      ANALYSIS_LOG_PREFIX="execution_times_batch_effect_uncorrected_final_"
+      ;;
+    corrected_final)
+      [[ "${PASS_ARG}" == corrected ]] || {
+        echo "ERROR: corrected_final analysis variant requires corrected pass." >&2
+        return 1
+      }
+      export ANALYSIS_VARIANT=corrected_final
+      ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final"
+      ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
+      ANALYSIS_LOG_PREFIX="execution_times_batch_effect_corrected_final_"
+      ;;
+    "")
+      unset ANALYSIS_VARIANT
+      if [[ -n "${PASS_ARG}" ]]; then
+        ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${PASS_ARG}"
+        ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/${PASS_ARG}"
+        ANALYSIS_LOG_PREFIX="execution_times_batch_effect_${PASS_ARG}_"
+      else
+        ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/benchmark"
+        ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/benchmark"
+        ANALYSIS_LOG_PREFIX="execution_times_"
+      fi
+      ;;
+    *)
+      echo "ERROR: unsupported analysis variant." >&2
+      return 1
+      ;;
+  esac
+  export ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_LOG_PREFIX
+  if [[ -n "${PASS_ARG}" ]]; then
+    export ANALYSIS_PASS="${PASS_ARG}"
+  else
+    unset ANALYSIS_PASS
+  fi
+}
+stage5_configure_analysis_context || exit 1
 if [[ -n "${PASS_ARG}" ]]; then
   unset BENCHMARK_MANIFEST
 fi
@@ -717,6 +800,23 @@ stage5_batch_contract_identity_path() {
   done < "${manifest}"
   [[ ${found} -eq 1 ]]
 }
+stage5_build_batch_contract_identity() {
+  local ds="${1:-}" view="${2:-}" method_id="${3:-}" model_id="${4:-}"
+  local source_path="${5:-}"
+  [[ -n "${ds}" && -n "${view}" && -n "${method_id}" &&
+     -n "${model_id}" ]] || return 1
+  if [[ "${ANALYSIS_VARIANT_ARG:-${ANALYSIS_VARIANT:-}}" == corrected_final ]]; then
+    ecoda_batch_contract_identity \
+      "${DATASETS_JSON_FILE}" "${ds}" "${view}" "${method_id}" \
+      "${model_id}"
+  else
+    [[ -n "${source_path}" ]] || return 1
+    ecoda_batch_contract_identity \
+      "${DATASETS_JSON_FILE}" "${ds}" "${view}" "${method_id}" \
+      "${model_id}" "${source_path}"
+  fi
+}
+
 
 stage5_record_batch_contract_metadata() {
   [[ "${PASS_ARG:-}" == corrected ]] || return 0
@@ -793,12 +893,15 @@ stage5_validate_batch_contract_manifest() {
        "${row_size}" == "${ECODA_CHECKSUM_SIZE}" ]] || return 1
     ecoda_corrected_batch_method_policy "${row_method}" || return 1
     source_path="$(stage5_input_path "${row_ds}" "${row_view}")" || return 1
-    [[ -s "${source_path}" ]] || return 1
+    if [[ "${BENCHMARK_MATRIX_TEST:-0}" != "1" ]]; then
+      [[ -s "${source_path}" ]] || return 1
+    fi
     expected_identity="$(
-      ecoda_batch_contract_identity "${DATASETS_JSON_FILE}" "${row_ds}" \
-        "${row_view}" "${ECODA_CORRECTED_BATCH_METHOD_ID}" \
+      stage5_build_batch_contract_identity "${row_ds}" "${row_view}" \
+        "${ECODA_CORRECTED_BATCH_METHOD_ID}" \
         "${ECODA_CORRECTED_BATCH_MODEL_ID}" "${source_path}"
     )" || return 1
+
     cmp -s "${row_path}" <(printf '%s\n' "${expected_identity}") || {
       echo "ERROR: corrected Stage 5 batch-contract identity mismatches ${key}." >&2
       return 1
@@ -874,9 +977,10 @@ stage5_create_batch_contract_manifest() {
     case " ${seen_views} " in
       *" ${key} "*) continue ;;
     esac
-    seen_views="${seen_views} ${key}"
     source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
-    [[ -s "${source_path}" ]] || return 1
+    if [[ "${BENCHMARK_MATRIX_TEST:-0}" != "1" ]]; then
+      [[ -s "${source_path}" ]] || return 1
+    fi
     for contract_method in "${contract_methods[@]}"; do
       key="${ds}|${view}|${contract_method}"
       case " ${seen_contracts} " in
@@ -885,8 +989,8 @@ stage5_create_batch_contract_manifest() {
       seen_contracts="${seen_contracts} ${key}"
       ecoda_corrected_batch_method_policy "${contract_method}" || return 1
       identity_json="$(
-        ecoda_batch_contract_identity "${DATASETS_JSON_FILE}" "${ds}" \
-          "${view}" "${ECODA_CORRECTED_BATCH_METHOD_ID}" \
+        stage5_build_batch_contract_identity "${ds}" "${view}" \
+          "${ECODA_CORRECTED_BATCH_METHOD_ID}" \
           "${ECODA_CORRECTED_BATCH_MODEL_ID}" "${source_path}"
       )" || return 1
       [[ -n "${identity_json}" ]] || return 1
@@ -1215,6 +1319,21 @@ stage5_canonical_output_path() {
 stage5_input_path() {
   stage5_canonical_output_path "${HPC_SCRATCH_DIR}" "$1" "$2"
 }
+stage5_validate_corrected_h5ad_contract() {
+  local validator="${1:-}" path="${2:-}" view="${3:-}" identity_path="${4:-}"
+  local -a validator_args=(
+    --path "${path}"
+    --view "${view}"
+    --method "Stage 3 preprocessing"
+    --expected-batch-contract "${identity_path}"
+  )
+  [[ -r "${validator}" && -s "${path}" && -s "${identity_path}" ]] || return 1
+  if [[ "${ANALYSIS_VARIANT_ARG:-${ANALYSIS_VARIANT:-}}" == corrected_final ]]; then
+    validator_args+=(--allow-missing-corrected-summary)
+  fi
+  "${PYTHON_BIN}" "${validator}" "${validator_args[@]}"
+}
+
 
 validate_input_row() {
   local ds="$1" view="$2" path
@@ -1241,9 +1360,10 @@ stage5_validate_corrected_source_contracts() {
     identity_path="$(
       stage5_batch_contract_identity_path "${ds}" "${view}" preprocess
     )" || return 1
-    "${PYTHON_BIN}" "${validator}" --path "${source_path}" \
-      --view "${view}" --method "Stage 5 corrected source" \
-      --expected-batch-contract "${identity_path}" >/dev/null 2>&1 || return 1
+    stage5_validate_corrected_h5ad_contract \
+      "${validator}" "${source_path}" "${view}" "${identity_path}" \
+      >/dev/null 2>&1 || return 1
+
   done < "${MANIFEST}"
 }
 
@@ -1329,10 +1449,10 @@ stage5_validate_source_artifact_records() {
       identity_path="$(
         stage5_batch_contract_identity_path "${ds}" "${view}" preprocess
       )" || return 1
-      "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
-        --path "${source_path}" --view "${view}" \
-        --method "Stage 5 source preflight" \
-        --expected-batch-contract "${identity_path}" || return 1
+      stage5_validate_corrected_h5ad_contract \
+        "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+        "${source_path}" "${view}" "${identity_path}" || return 1
+
     else
       "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
         --path "${source_path}" --view "${view}" \
@@ -1397,13 +1517,13 @@ stage5_repair_missing_h5ad_sidecars() {
             rm -f "${repair_tmp}"
             return 1
           }
-          "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
-            --path "${path}" --view "${view}" \
-            --method "Stage 5 source checksum repair" \
-            --expected-batch-contract "${identity_path}" >/dev/null 2>&1 || {
+          stage5_validate_corrected_h5ad_contract \
+            "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
+            "${path}" "${view}" "${identity_path}" >/dev/null 2>&1 || {
             rm -f "${repair_tmp}"
             return 1
           }
+
         else
           "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
             --path "${path}" --view "${view}" \
@@ -1505,9 +1625,11 @@ stage5_compute_h5ad_preflight() {
         identity_path="$(
           stage5_batch_contract_identity_path "${ds}" "${view}" preprocess
         )" || return 1
-        "${PYTHON_BIN}" "$(stage5_source_script src/utils/py/benchmark_h5ad_contract.py)" \
-          --path "${source_path}" --view "${view}" --method "Stage 5 sync recovery" \
-          --expected-batch-contract "${identity_path}" >/dev/null 2>&1 || return 1
+        stage5_validate_corrected_h5ad_contract \
+          "$(stage5_source_script src/utils/py/benchmark_h5ad_contract.py)" \
+          "${source_path}" "${view}" "${identity_path}" \
+          >/dev/null 2>&1 || return 1
+
       else
         "${PYTHON_BIN}" "$(stage5_source_script src/utils/py/benchmark_h5ad_contract.py)" \
           --path "${source_path}" --view "${view}" --method "Stage 5 sync recovery" \
@@ -1558,8 +1680,14 @@ stage5_compute_h5ad_preflight() {
     stage5_validate_bound_runtime || return 1
     stage5_require_source_script "${preflight_worker}" || return 1
     preflight_runtime_export="${RUNTIME_EXPORT}"
-    [[ "${PASS_ARG:-}" == corrected ]] &&
+    if [[ "${PASS_ARG:-}" == corrected ]]; then
       preflight_runtime_export="${preflight_runtime_export},ECODA_BATCH_CONTRACT_MANIFEST=${ECODA_BATCH_CONTRACT_MANIFEST}"
+      if [[ "${ANALYSIS_VARIANT_ARG:-${ANALYSIS_VARIANT:-}}" == corrected_final ]]; then
+        preflight_runtime_export="${preflight_runtime_export},H5AD_ALLOW_MISSING_SUMMARY=1"
+      else
+        preflight_runtime_export="${preflight_runtime_export},H5AD_ALLOW_MISSING_SUMMARY=0"
+      fi
+    fi
     set +e
     preflight_id="$(
       ecoda_submit_h5ad_preflight "${preflight_manifest}" "${status_dir}" \
@@ -1628,7 +1756,10 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   ecoda_validate_checksum "${MANIFEST}" ||
     stage5_abort "Stage 5 selection checksum is invalid"
   methods_meta="$(sed -n 's/^METHODS=//p' "${ECODA_RUN_ROOT}/metadata" | head -1 || true)"
-  [[ -n "${METHODS_ARG}" ]] || METHODS_ARG="${methods_meta}"
+  if [[ -z "${METHODS_ARG}" ]]; then
+    METHODS_ARG="${methods_meta}"
+    METHODS_SET=1
+  fi
   pass_meta="$(sed -n 's/^PASS=//p' "${ECODA_RUN_ROOT}/metadata" | head -1 || true)"
   [[ -n "${PASS_ARG}" ]] || PASS_ARG="${pass_meta}"
   [[ -n "${PASS_ARG}" ]] && unset BENCHMARK_MANIFEST
@@ -1660,14 +1791,13 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
       TARGET_METHODS=("${ECODA_ARRAY[@]}")
     fi
     stage5_validate_final_selection || stage5_abort "stored final selection is invalid"
-    if [[ "${ANALYSIS_VARIANT_ARG}" == final ]]; then
-      export ANALYSIS_VARIANT=final
-      ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final"
-      ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/uncorrected_final"
-      ANALYSIS_LOG_PREFIX="execution_times_batch_effect_uncorrected_final_"
-      export ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_LOG_PREFIX
-      WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/uncorrected_final"
-    fi
+    stage5_configure_analysis_context ||
+      stage5_abort "stored Stage 5 analysis context is invalid"
+    case "${ANALYSIS_VARIANT_ARG}" in
+      final|corrected_final)
+        WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/${ANALYSIS_VARIANT_ARG}"
+        ;;
+    esac
   fi
 else
   ecoda_init_run stage5 "${RUN_ID}" >/dev/null
@@ -1919,81 +2049,391 @@ stage5_validate_corrected_source_contracts ||
 
 benchmark_artifacts_for() {
   local ds="$1" view="$2" label="$3"
-  local pass="${PASS_ARG:-${ANALYSIS_PASS:-}}"
-  local stem batch_stem suffix n
   ARTIFACT_PATHS=()
-  ecoda_stage5_validate_identity "${pass}" || return 1
-  if [[ "${ANALYSIS_VARIANT:-}" == final &&
-        "${view}" != "batch_effect_uncorrected" ]]; then
-    echo "ERROR: final Stage 5 artifacts require the uncorrected batch-effect view." >&2
-    return 1
-  fi
-  ecoda_stage5_validate_final_method "${label}" || return 1
-  if [[ -n "${pass}" ]]; then
-    batch_stem="$(ecoda_stage5_batch_stem "${ds}" "${pass}" "${ANALYSIS_VARIANT:-}")" ||
-      return 1
+  _ecoda_stage5_artifacts_for "${ds}" "${view}" "${label}" || return 1
+  ARTIFACT_PATHS=("${ECODA_BENCHMARK_ARTIFACTS[@]}")
+  [[ ${#ARTIFACT_PATHS[@]} -gt 0 ]]
+}
+
+stage5_kidney_legacy_root() {
+  local scratch="${HPC_SCRATCH_DIR:-}"
+  [[ "${scratch}" = /* && "${scratch}" != *$'\n'* &&
+     "${scratch}" != *$'\r'* && "${scratch}" != *$'\t'* &&
+     "${scratch}" != *';'* ]] || return 1
+  scratch="${scratch%/}"
+  [[ -n "${scratch}" ]] || scratch="/"
+  if [[ "${scratch}" == "/" ]]; then
+    printf '/batch_effect/uncorrected'
   else
-    batch_stem="${ds}"
+    printf '%s/batch_effect/uncorrected' "${scratch}"
   fi
-  if [[ "${label}" == prepare_pseudobulk ]]; then
-    if [[ -n "${pass}" ]]; then
-      ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/pseudobulks/${batch_stem}_pseudobulk_hvg2000.rds")
-    else
-      for stem in schvg2000 hvg2000 hvg500 hvg2000_bl hvg1000 hvg3000; do
-        ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/pseudobulks/${ds}_pseudobulk_${stem}.rds")
-      done
-    fi
-    return 0
+}
+
+stage5_kidney_legacy_path_allowed() {
+  local root="$1" path="$2" root_real path_real
+  [[ "${root}" = /* && "${path}" = /* &&
+     "${path}" != *$'\n'* && "${path}" != *$'\r'* &&
+     "${path}" != *$'\t'* && "${path}" != *';'* ]] || return 1
+  case "${path}" in
+    "${root}"/*) ;;
+    *) return 1 ;;
+  esac
+  _ecoda_validate_path_ancestors "${path}" "${root}" || return 1
+  if [[ -e "${path}" || -L "${path}" ]]; then
+    root_real="$(ecoda_realpath_existing "${root}")" || return 1
+    path_real="$(ecoda_realpath_existing "${path}")" || return 1
+    case "${path_real}" in
+      "${root_real}"/*) ;;
+      *) return 1 ;;
+    esac
   fi
-  case "${label}" in
-    mrvi)
-      if [[ -n "${pass}" ]]; then
-        ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${batch_stem}_hvg2000_highres_mrvi_dists.feather")
-      else
-        for n in 1000 2000 3000; do
-          ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg${n}_mrvi_dists.feather")
-        done
-      fi
+}
+
+stage5_kidney_legacy_artifact_paths() {
+  local method="$1" root stem path
+  LEGACY_KIDNEY_ARTIFACT_PATHS=()
+  LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED=""
+  root="$(stage5_kidney_legacy_root)" || return 1
+  stage5_validate_path_component "Kidney_KPMP_full" dataset || return 1
+  stage5_validate_path_component "${method}" method || return 1
+  stem="Kidney_KPMP_full_batch_effect_uncorrected"
+  case "${method}" in
+    prepare_pseudobulk)
+      LEGACY_KIDNEY_ARTIFACT_PATHS=(
+        "${root}/pseudobulks/${stem}_pseudobulk_hvg2000.rds"
+      )
       ;;
-    scpoli)
-      for n in 2000; do ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg${n}_lowres_scpoli_dims15_embs.feather"); done
-      for n in 1000 3000; do ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg${n}_highres_scpoli_dims15_embs.feather"); done
-      for n in 2 3 5 10 15; do ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg2000_highres_scpoli_dims${n}_embs.feather"); done
-      ;;
-    pilot|qot)
-      suffix="${label}"
-      if [[ -n "${pass}" ]]; then
-        ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${batch_stem}_hvg2000_highres_${suffix}_dists.feather")
-      else
-        ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg2000_lowres_${suffix}_dists.feather")
-        for n in 1000 2000 3000; do
-          ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg${n}_highres_${suffix}_dists.feather")
-        done
-      fi
-      ;;
-    pilotgm)
-      [[ -z "${pass}" ]] || {
-        echo "ERROR: PILOT-GM-VAE is not scheduled for batch-effect analyses." >&2
-        return 1
-      }
-      ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/embeddings/${ds}_hvg2000_highres_pilotgm_dists.feather")
-      ;;
-    trans|zeroimp)
-      ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/results/${ds}_${label}.rds")
-      ;;
-    gloscope|mofa|pseudobulk|scitd)
-      stem="${batch_stem}"
-      ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/results/${stem}_${label}.rds")
+    pseudobulk|gloscope)
+      LEGACY_KIDNEY_ARTIFACT_PATHS=(
+        "${root}/results/${stem}_${method}.rds"
+      )
       ;;
     composition)
-      stem="${batch_stem}"
-      ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/results/${stem}_composition.rds")
-      ARTIFACT_PATHS+=("${ANALYSIS_ROOT}/results/${stem}_metadata.rds")
+      LEGACY_KIDNEY_ARTIFACT_PATHS=(
+        "${root}/results/${stem}_composition.rds"
+        "${root}/results/${stem}_metadata.rds"
+      )
+      ;;
+    mrvi|pilot|qot)
+      LEGACY_KIDNEY_ARTIFACT_PATHS=(
+        "${root}/embeddings/${stem}_hvg2000_highres_${method}_dists.feather"
+      )
       ;;
     *)
-      echo "ERROR: unsupported benchmark artifact label '${label}'." >&2
       return 1
       ;;
+  esac
+  for path in "${LEGACY_KIDNEY_ARTIFACT_PATHS[@]}"; do
+    stage5_kidney_legacy_path_allowed "${root}" "${path}" || return 1
+    if [[ -n "${LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED}" ]]; then
+      LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED="${LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED};"
+    fi
+    LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED="${LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED}${path}"
+  done
+  [[ ${#LEGACY_KIDNEY_ARTIFACT_PATHS[@]} -gt 0 &&
+     -n "${LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED}" ]]
+}
+
+stage5_kidney_legacy_validate_rds() {
+  local path="$1" method="$2" metadata="${3:-0}"
+  local -a args=(
+    --artifact "${path}"
+    --method "${method}"
+    --dataset Kidney_KPMP_full
+    --view batch_effect_uncorrected
+    --batch-pass uncorrected
+    --config "${DATASETS_JSON_FILE}"
+    --input-root "${HPC_SCRATCH_DIR}"
+  )
+  [[ "${metadata}" == "1" ]] && args+=(--metadata)
+  ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
+    "${args[@]}" >/dev/null 2>&1
+}
+
+stage5_kidney_legacy_validate_runtime() {
+  local metadata_path="$1" output_path="$2" output_md5="$3"
+  local expected_method="${4:-}" saved_variant="" had_variant=0 rc=0
+  case "${expected_method}" in
+    mrvi) expected_method="MrVI_hvg2000" ;;
+    pilot) expected_method="PILOT_hvg2000_highres" ;;
+    qot) expected_method="QOT_hvg2000_highres" ;;
+    *) return 1 ;;
+  esac
+  if [[ -n "${ANALYSIS_VARIANT+x}" ]]; then
+    had_variant=1
+    saved_variant="${ANALYSIS_VARIANT}"
+  fi
+  # The shared runtime validator intentionally enforces the active final root.
+  # Clear only that guard while validating the explicitly legacy path.
+  unset ANALYSIS_VARIANT
+  if benchmark_validate_runtime_metadata \
+      "${metadata_path}" "${output_path}" "${output_md5}"; then
+    :
+  else
+    rc=$?
+  fi
+  if [[ ${rc} -eq 0 ]]; then
+    jq -e --arg expected_dataset Kidney_KPMP_full \
+      --arg expected_method "${expected_method}" \
+      'type == "object" and .dataset == $expected_dataset and
+       .method == $expected_method' "${metadata_path}" >/dev/null 2>&1 || rc=$?
+  fi
+  if [[ ${had_variant} -eq 1 ]]; then
+    ANALYSIS_VARIANT="${saved_variant}"
+    export ANALYSIS_VARIANT
+  fi
+  return "${rc}"
+}
+
+stage5_kidney_legacy_validate_feather() {
+  local root="$1" method="$2" path="$3"
+  local selection="${ECODA_RUN_ROOT}/manifests/kidney_legacy_feather_validation.tsv"
+  local selection_tmp="${selection}.build.$$"
+  local runtime_path artifact_md5
+  if [[ ! -f "${selection}" || -L "${selection}" ]]; then
+    printf 'Kidney_KPMP_full\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' \
+      > "${selection_tmp}" || return 1
+    ecoda_atomic_install_manifest "${selection_tmp}" "${selection}" 3 || {
+      rm -f "${selection_tmp}"
+      return 1
+    }
+    rm -f "${selection_tmp}"
+    ecoda_write_checksum "${selection}" || return 1
+  else
+    ecoda_validate_run_owned_path "${selection}" "${ECODA_RUN_ROOT}" || return 1
+    ecoda_validate_manifest "${selection}" 3 || return 1
+    ecoda_validate_checksum "${selection}" || return 1
+  fi
+  "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
+    --root "${root}" --selection "${selection}" --labels "${method}" \
+    --batch --batch-pass uncorrected --input-root "${HPC_SCRATCH_DIR}" \
+    --config "${DATASETS_JSON_FILE}" >/dev/null 2>&1 || return 1
+  ecoda_validate_checksum "${path}" || return 1
+  artifact_md5="${ECODA_CHECKSUM_MD5}"
+  runtime_path="${path}.runtime.json"
+  stage5_kidney_legacy_path_allowed "${root}" "${runtime_path}" || return 1
+  stage5_kidney_legacy_path_allowed "${root}" "${runtime_path}.md5" || return 1
+  ecoda_validate_checksum "${runtime_path}" || return 1
+  stage5_kidney_legacy_validate_runtime \
+    "${runtime_path}" "${path}" "${artifact_md5}" "${method}"
+}
+
+stage5_kidney_legacy_method_status() {
+  local method="$1" root path missing=0 invalid=0
+  root="$(stage5_kidney_legacy_root)" || return 1
+  stage5_kidney_legacy_artifact_paths "${method}" || return 1
+  for path in "${LEGACY_KIDNEY_ARTIFACT_PATHS[@]}"; do
+    # A derived path that resolves outside the immutable legacy root is a
+    # malformed inventory boundary, not an invalid artifact to recompute.
+    stage5_kidney_legacy_path_allowed "${root}" "${path}" || return 1
+    stage5_kidney_legacy_path_allowed "${root}" "${path}.md5" || return 1
+    if [[ ! -e "${path}" ]]; then
+      missing=1
+      continue
+    fi
+    [[ -s "${path}" ]] || {
+      invalid=1
+      continue
+    }
+    ecoda_validate_checksum "${path}" || invalid=1
+  done
+  if [[ ${missing} -eq 0 && ${invalid} -eq 0 ]]; then
+    case "${method}" in
+      prepare_pseudobulk)
+        stage5_kidney_legacy_validate_rds \
+          "${LEGACY_KIDNEY_ARTIFACT_PATHS[0]}" "${method}" || invalid=1
+        ;;
+      pseudobulk|gloscope)
+        stage5_kidney_legacy_validate_rds \
+          "${LEGACY_KIDNEY_ARTIFACT_PATHS[0]}" "${method}" || invalid=1
+        ;;
+      composition)
+        stage5_kidney_legacy_validate_rds \
+          "${LEGACY_KIDNEY_ARTIFACT_PATHS[0]}" "${method}" 0 || invalid=1
+        stage5_kidney_legacy_validate_rds \
+          "${LEGACY_KIDNEY_ARTIFACT_PATHS[1]}" "${method}" 1 || invalid=1
+        ;;
+      mrvi|pilot|qot)
+        stage5_kidney_legacy_validate_feather \
+          "${root}" "${method}" "${LEGACY_KIDNEY_ARTIFACT_PATHS[0]}" || invalid=1
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  fi
+  if [[ ${invalid} -eq 1 ]]; then
+    KIDNEY_LEGACY_METHOD_STATUS=invalid
+  elif [[ ${missing} -eq 1 ]]; then
+    KIDNEY_LEGACY_METHOD_STATUS=missing
+  else
+    KIDNEY_LEGACY_METHOD_STATUS=valid
+  fi
+  [[ "${KIDNEY_LEGACY_METHOD_STATUS}" == valid ||
+     "${KIDNEY_LEGACY_METHOD_STATUS}" == missing ||
+     "${KIDNEY_LEGACY_METHOD_STATUS}" == invalid ]]
+}
+
+stage5_kidney_legacy_inventory_set_status() {
+  local method="$1" status="$2"
+  [[ "${status}" == valid || "${status}" == missing ||
+     "${status}" == invalid ]] || return 1
+  KIDNEY_LEGACY_INVENTORY_STATUS_ROWS="${KIDNEY_LEGACY_INVENTORY_STATUS_ROWS}${method}=${status};"
+  case "${status}" in
+    valid)
+      KIDNEY_LEGACY_VALID_METHODS="${KIDNEY_LEGACY_VALID_METHODS}${method} "
+      ;;
+    missing)
+      KIDNEY_LEGACY_MISSING_METHODS="${KIDNEY_LEGACY_MISSING_METHODS}${method} "
+      ;;
+    invalid)
+      KIDNEY_LEGACY_INVALID_METHODS="${KIDNEY_LEGACY_INVALID_METHODS}${method} "
+      ;;
+  esac
+}
+
+stage5_build_kidney_legacy_inventory() {
+  local root inventory="${ECODA_RUN_ROOT}/manifests/kidney_legacy_inventory.tsv"
+  local inventory_tmp="${inventory}.build.$$"
+  local method status path
+  local feather_selection="${ECODA_RUN_ROOT}/manifests/kidney_legacy_feather_validation.tsv"
+  local -a methods=(
+    prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
+  )
+  [[ "${ANALYSIS_VARIANT:-}" == final &&
+     "${PASS_ARG:-}" == uncorrected &&
+     ${TARGET_METHODS_SET} -eq 0 ]] || return 0
+  root="$(stage5_kidney_legacy_root)" || return 1
+  KIDNEY_LEGACY_INVENTORY="${inventory}"
+  KIDNEY_LEGACY_INVENTORY_MD5=""
+  KIDNEY_LEGACY_INVENTORY_SIZE=""
+  KIDNEY_LEGACY_INVENTORY_STATUS=""
+  KIDNEY_LEGACY_INVENTORY_STATUS_ROWS=""
+  KIDNEY_LEGACY_VALID_METHODS=""
+  KIDNEY_LEGACY_MISSING_METHODS=""
+  KIDNEY_LEGACY_INVALID_METHODS=""
+  : > "${inventory_tmp}" || return 1
+  for method in "${methods[@]}"; do
+    stage5_kidney_legacy_method_status "${method}" || {
+      rm -f "${inventory_tmp}" "${feather_selection}" "${feather_selection}.md5"
+      return 1
+    }
+    status="${KIDNEY_LEGACY_METHOD_STATUS}"
+    stage5_kidney_legacy_artifact_paths "${method}" || {
+      rm -f "${inventory_tmp}" "${feather_selection}" "${feather_selection}.md5"
+      return 1
+    }
+    printf 'Kidney_KPMP_full\t%s\t%s\t%s\n' "${method}" "${status}" \
+      "${LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED}" >> "${inventory_tmp}" || {
+      rm -f "${inventory_tmp}" "${feather_selection}" "${feather_selection}.md5"
+      return 1
+    }
+    stage5_kidney_legacy_inventory_set_status "${method}" "${status}" || {
+      rm -f "${inventory_tmp}" "${feather_selection}" "${feather_selection}.md5"
+      return 1
+    }
+  done
+  ecoda_atomic_install_manifest "${inventory_tmp}" "${inventory}" 4 || {
+    rm -f "${inventory_tmp}" "${feather_selection}" "${feather_selection}.md5"
+    return 1
+  }
+  rm -f "${inventory_tmp}"
+  ecoda_write_checksum "${inventory}" || {
+    rm -f "${inventory}" "${inventory}.md5" "${feather_selection}" "${feather_selection}.md5"
+    return 1
+  }
+  ecoda_validate_run_owned_path "${inventory}" "${ECODA_RUN_ROOT}" || return 1
+  ecoda_validate_run_owned_path "${inventory}.md5" "${ECODA_RUN_ROOT}" || return 1
+  ecoda_validate_checksum "${inventory}" || return 1
+  KIDNEY_LEGACY_INVENTORY_MD5="${ECODA_CHECKSUM_MD5}"
+  KIDNEY_LEGACY_INVENTORY_SIZE="${ECODA_CHECKSUM_SIZE}"
+  KIDNEY_LEGACY_INVENTORY_STATUS="${KIDNEY_LEGACY_INVENTORY_STATUS_ROWS%;}"
+  rm -f "${feather_selection}" "${feather_selection}.md5"
+}
+
+stage5_load_kidney_legacy_inventory() {
+  local inventory declared_md5 declared_size declared_status
+  local row_ds row_method row_status row_paths extra expected_method expected_paths check_path
+  local row_count=0 index=0 computed_status=""
+  local -a row_path_array=()
+  local -a methods=(
+    prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
+  )
+  [[ "${ANALYSIS_VARIANT:-}" == final &&
+     "${PASS_ARG:-}" == uncorrected &&
+     ${TARGET_METHODS_SET} -eq 0 ]] || return 0
+  inventory="$(stage5_manifest_value "${ECODA_RUN_ROOT}/metadata" \
+    KIDNEY_LEGACY_INVENTORY)" || return 1
+  [[ "${inventory}" == "${ECODA_RUN_ROOT}/manifests/kidney_legacy_inventory.tsv" &&
+     -f "${inventory}" && ! -L "${inventory}" && -r "${inventory}" ]] || return 1
+  ecoda_validate_run_owned_path "${inventory}" "${ECODA_RUN_ROOT}" || return 1
+  ecoda_validate_run_owned_path "${inventory}.md5" "${ECODA_RUN_ROOT}" || return 1
+  ecoda_validate_checksum "${inventory}" || return 1
+  declared_md5="$(stage5_manifest_value "${ECODA_RUN_ROOT}/metadata" \
+    KIDNEY_LEGACY_INVENTORY_MD5)" || return 1
+  declared_size="$(stage5_manifest_value "${ECODA_RUN_ROOT}/metadata" \
+    KIDNEY_LEGACY_INVENTORY_SIZE)" || return 1
+  declared_status="$(stage5_manifest_value "${ECODA_RUN_ROOT}/metadata" \
+    KIDNEY_LEGACY_INVENTORY_STATUS)" || return 1
+  [[ "${declared_md5}" == "${ECODA_CHECKSUM_MD5}" &&
+     "${declared_size}" == "${ECODA_CHECKSUM_SIZE}" &&
+     "${declared_md5}" =~ ^[[:xdigit:]]{32}$ &&
+     "${declared_size}" =~ ^[1-9][0-9]*$ ]] || return 1
+  ecoda_validate_manifest "${inventory}" 4 || return 1
+  KIDNEY_LEGACY_INVENTORY="${inventory}"
+  KIDNEY_LEGACY_INVENTORY_MD5="${declared_md5}"
+  KIDNEY_LEGACY_INVENTORY_SIZE="${declared_size}"
+  KIDNEY_LEGACY_INVENTORY_STATUS_ROWS=""
+  KIDNEY_LEGACY_VALID_METHODS=""
+  KIDNEY_LEGACY_MISSING_METHODS=""
+  KIDNEY_LEGACY_INVALID_METHODS=""
+  while IFS=$'\t' read -r row_ds row_method row_status row_paths extra; do
+    expected_method="${methods[${index}]:-}"
+    [[ -n "${expected_method}" && "${row_ds}" == Kidney_KPMP_full &&
+       "${row_method}" == "${expected_method}" && -z "${extra}" ]] || return 1
+    [[ "${row_status}" == valid || "${row_status}" == missing ||
+       "${row_status}" == invalid ]] || return 1
+    stage5_kidney_legacy_artifact_paths "${row_method}" || return 1
+    expected_paths="${LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED}"
+    [[ "${row_paths}" == "${expected_paths}" ]] || return 1
+    IFS=';' read -r -a row_path_array <<< "${row_paths}"
+    [[ ${#row_path_array[@]} -eq ${#LEGACY_KIDNEY_ARTIFACT_PATHS[@]} ]] || return 1
+    for check_path in "${row_path_array[@]}"; do
+      stage5_kidney_legacy_path_allowed \
+        "$(stage5_kidney_legacy_root)" "${check_path}" || return 1
+    done
+    stage5_kidney_legacy_inventory_set_status \
+      "${row_method}" "${row_status}" || return 1
+    row_count=$((row_count + 1))
+    index=$((index + 1))
+  done < "${inventory}"
+  [[ ${row_count} -eq ${#methods[@]} && ${index} -eq ${#methods[@]} ]] || return 1
+  computed_status="${KIDNEY_LEGACY_INVENTORY_STATUS_ROWS%;}"
+  [[ "${declared_status}" == "${computed_status}" ]] || return 1
+  KIDNEY_LEGACY_INVENTORY_STATUS="${computed_status}"
+}
+
+stage5_kidney_legacy_inventory_metadata() {
+  [[ -n "${KIDNEY_LEGACY_INVENTORY:-}" ]] || return 0
+  [[ "${KIDNEY_LEGACY_INVENTORY_MD5:-}" =~ ^[[:xdigit:]]{32}$ &&
+     "${KIDNEY_LEGACY_INVENTORY_SIZE:-}" =~ ^[1-9][0-9]*$ &&
+     -n "${KIDNEY_LEGACY_INVENTORY_STATUS:-}" ]] || return 1
+  printf 'KIDNEY_LEGACY_INVENTORY=%s\nKIDNEY_LEGACY_INVENTORY_MD5=%s\nKIDNEY_LEGACY_INVENTORY_SIZE=%s\nKIDNEY_LEGACY_INVENTORY_STATUS=%s\nKIDNEY_LEGACY_VALID_METHODS=%s\nKIDNEY_LEGACY_MISSING_METHODS=%s\nKIDNEY_LEGACY_INVALID_METHODS=%s\n' \
+    "${KIDNEY_LEGACY_INVENTORY}" "${KIDNEY_LEGACY_INVENTORY_MD5}" \
+    "${KIDNEY_LEGACY_INVENTORY_SIZE}" "${KIDNEY_LEGACY_INVENTORY_STATUS}" \
+    "${KIDNEY_LEGACY_VALID_METHODS% }" \
+    "${KIDNEY_LEGACY_MISSING_METHODS% }" \
+    "${KIDNEY_LEGACY_INVALID_METHODS% }"
+}
+
+stage5_kidney_legacy_method_valid() {
+  local ds="$1" method="$2"
+  [[ "${ANALYSIS_VARIANT:-}" == final &&
+     "${PASS_ARG:-}" == uncorrected &&
+     "${ds}" == Kidney_KPMP_full ]] || return 1
+  case " ${KIDNEY_LEGACY_VALID_METHODS:-} " in
+    *" ${method} "*) return 0 ;;
+    *) return 1 ;;
   esac
 }
 
@@ -2058,8 +2498,9 @@ benchmark_rds_group_valid() {
   [[ -s "${SOURCE_IDENTITY}" ]] &&
     rds_args+=(--source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
   [[ -n "${pass}" ]] && rds_args+=(--batch-pass "${pass}")
-  [[ "${ANALYSIS_VARIANT:-}" == final ]] &&
-    rds_args+=(--analysis-variant final)
+  if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
+    rds_args+=(--analysis-variant "${ANALYSIS_VARIANT}")
+  fi
   set +e
   ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
     "${rds_args[@]}" >/dev/null 2>&1
@@ -2077,7 +2518,7 @@ benchmark_rds_group_valid() {
 stage5_validate_reusable_artifact() {
   local path="$1" producer="$2" record="" recorded_producer
   local owner_run owner_stage owner_state
-  if [[ "${ANALYSIS_VARIANT:-}" == "final" ]]; then
+  if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
     # Final artifacts are reusable across runs only after the immutable path,
     # terminal global owner, and producer-run record all agree.  A record in
     # the current recovery run is not required; the owner identifies the
@@ -2161,8 +2602,9 @@ stage5_prepare_pseudobulk_valid() {
     --dataset "${ds}" --view "${view}" --input-root "${HPC_SCRATCH_DIR}"
     --config "${DATASETS_JSON_FILE}")
   prepare_rds_args+=(--batch-pass "${PASS_ARG}")
-  [[ "${ANALYSIS_VARIANT:-}" == final ]] &&
-    prepare_rds_args+=(--analysis-variant final)
+  if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
+    prepare_rds_args+=(--analysis-variant "${ANALYSIS_VARIANT}")
+  fi
   [[ -s "${SOURCE_IDENTITY}" ]] &&
     prepare_rds_args+=(--source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
   ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
@@ -2200,9 +2642,9 @@ benchmark_selected_artifacts_valid() {
         [[ ${rds_grouped} -eq 1 ]] && continue
         rds_args=(--artifact "${path}" --method "${label}" --dataset "${ds}" --view "${view}" \
           --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}")
-        [[ -n "${PASS_ARG}" ]] && rds_args+=(--batch-pass "${PASS_ARG}")
-        [[ "${ANALYSIS_VARIANT:-}" == final ]] &&
-          rds_args+=(--analysis-variant final)
+        if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
+          rds_args+=(--analysis-variant "${ANALYSIS_VARIANT}")
+        fi
         [[ "${path}" == *_metadata.rds ]] && rds_args+=(--metadata)
         [[ -s "${SOURCE_IDENTITY}" ]] && rds_args+=(--source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
         [[ -n "${batch_identity}" ]] &&
@@ -2226,8 +2668,9 @@ benchmark_selected_artifacts_valid() {
       artifact_validator_args=(--root "${ANALYSIS_ROOT}" --selection "${artifact_check}" \
         --labels "${label}" --batch --batch-pass "${PASS_ARG}" \
         --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}")
-      [[ "${ANALYSIS_VARIANT:-}" == final ]] &&
-        artifact_validator_args+=(--analysis-variant final)
+      if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
+        artifact_validator_args+=(--analysis-variant "${ANALYSIS_VARIANT}")
+      fi
       [[ -s "${SOURCE_IDENTITY}" ]] &&
         artifact_validator_args+=(--source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
       [[ -n "${batch_identity}" ]] &&
@@ -2422,6 +2865,8 @@ stage5_validate_corrected_matrix_rows() {
       --source-identity "${SOURCE_IDENTITY}" --source-identity-verified \
       --expected-batch-contract "${identity_path}" \
       --producer "stage5_${label}" --producer-run-id "${RUN_ID}")
+    [[ -n "${ANALYSIS_VARIANT:-}" ]] &&
+      validation_args+=(--analysis-variant "${ANALYSIS_VARIANT}")
     if ! "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
         "${validation_args[@]}" >/dev/null 2>&1; then
       rm -f "${selection}" "${selection}.md5"
@@ -2462,6 +2907,9 @@ stage5_selection_has_pending_rows() {
       if stage5_method_is_forced "${method}"; then
         return 0
       fi
+      if stage5_kidney_legacy_method_valid "${ds}" "${method}"; then
+        continue
+      fi
       if [[ ${FORCE_TARGETED_ARG} -eq 1 &&
             "${method}" == "prepare_pseudobulk" ]]; then
         stage5_prepare_pseudobulk_valid "${ds}" "${view}" || return 0
@@ -2474,10 +2922,11 @@ stage5_selection_has_pending_rows() {
 }
 
 stage5_variant_metadata() {
-  if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
+  if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
     ecoda_stage5_validate_identity "${PASS_ARG:-${ANALYSIS_PASS:-}}" || return 1
-    printf 'ANALYSIS_VARIANT=final\nANALYSIS_ROOT=%s\nANALYSIS_NAS_ROOT=%s\nANALYSIS_PASS=uncorrected\nANALYSIS_LOG_PREFIX=execution_times_batch_effect_uncorrected_final_\nMETADATA_EXPORT_MANIFEST=%s\nMETADATA_EXPORT_STATUS=%s\n' \
-      "${ANALYSIS_ROOT}" "${ANALYSIS_NAS_ROOT}" \
+    printf 'ANALYSIS_VARIANT=%s\nANALYSIS_ROOT=%s\nANALYSIS_NAS_ROOT=%s\nANALYSIS_PASS=%s\nANALYSIS_LOG_PREFIX=%s\nMETADATA_EXPORT_MANIFEST=%s\nMETADATA_EXPORT_STATUS=%s\n' \
+      "${ANALYSIS_VARIANT}" "${ANALYSIS_ROOT}" "${ANALYSIS_NAS_ROOT}" \
+      "${ANALYSIS_PASS:-${PASS_ARG}}" "${ANALYSIS_LOG_PREFIX}" \
       "${ECODA_RUN_ROOT}/manifests/metadata_export.tsv" \
       "${ECODA_RUN_ROOT}/status/metadata_export.report"
   fi
@@ -2492,8 +2941,8 @@ stage5_export_final_sample_metadata() {
   local status_report="${ECODA_RUN_ROOT}/status/metadata_export.report"
   local exporter worker export_runtime export_msg export_id export_rc
   local ds view input output safe state status_task pending_count=0 pending_index=0
-  local row extra seen=""
-  [[ "${ANALYSIS_VARIANT:-}" == final ]] || return 0
+  local row extra seen="" required_view="batch_effect_${PASS_ARG:-}"
+  [[ -n "${ANALYSIS_VARIANT:-}" ]] || return 0
   ecoda_stage5_validate_identity "${PASS_ARG:-${ANALYSIS_PASS:-}}" || return 1
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
   exporter="$(stage5_source_script src/utils/py/export_h5ad_sample_metadata.py)"
@@ -2503,7 +2952,7 @@ stage5_export_final_sample_metadata() {
     ecoda_validate_manifest "${manifest}" 4 || return 1
     ecoda_validate_checksum "${manifest}" || return 1
     while IFS=$'\t' read -r ds view input output extra; do
-      [[ -n "${ds}" && "${view}" == batch_effect_uncorrected &&
+      [[ -n "${ds}" && "${view}" == "${required_view}" &&
          -n "${input}" && -n "${output}" && -z "${extra}" ]] || return 1
       ecoda_validate_checksum "${output}" || return 1
     done < "${manifest}"
@@ -2515,7 +2964,7 @@ stage5_export_final_sample_metadata() {
     return 1
   }
   while IFS=$'\t' read -r ds view _row_label extra; do
-    [[ -n "${ds}" && "${view}" == batch_effect_uncorrected &&
+    [[ -n "${ds}" && "${view}" == "${required_view}" &&
        -z "${extra}" ]] || {
       rm -f "${manifest_tmp}" "${pending_tmp}"
       return 1
@@ -2569,7 +3018,7 @@ stage5_export_final_sample_metadata() {
     export_runtime="${RUNTIME_EXPORT}"
     [[ -n "${ECODA_SOURCE_ROOT:-}" ]] &&
       export_runtime="${export_runtime},ECODA_SOURCE_ROOT=${ECODA_SOURCE_ROOT},ECODA_SOURCE_MANIFEST=${ECODA_SOURCE_MANIFEST},ECODA_SOURCE_SNAPSHOT_REQUIRED=1"
-    export_runtime="${export_runtime},ANALYSIS_VARIANT=final,ANALYSIS_ROOT=${ANALYSIS_ROOT}"
+    export_runtime="${export_runtime},ANALYSIS_VARIANT=${ANALYSIS_VARIANT},ANALYSIS_PASS=${PASS_ARG},ANALYSIS_ROOT=${ANALYSIS_ROOT},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT},ANALYSIS_LOG_PREFIX=${ANALYSIS_LOG_PREFIX}"
     set +e
     export_msg="$(sbatch --parsable --wait \
       --array="1-${pending_count}%${THROTTLE}" \
@@ -2592,7 +3041,7 @@ stage5_export_final_sample_metadata() {
   fi
   pending_index=0
   while IFS=$'\t' read -r ds view input output extra; do
-    [[ -n "${ds}" && "${view}" == batch_effect_uncorrected &&
+    [[ -n "${ds}" && "${view}" == "${required_view}" &&
        -n "${input}" && -n "${output}" && -z "${extra}" ]] || return 1
     safe="$(_ecoda_safe_component "${ds}__${view}")"
     status="${status_dir}/${safe}.status"
@@ -2618,13 +3067,24 @@ stage5_export_final_sample_metadata() {
   done < "${manifest}"
   [[ ${pending_count} -eq 0 || ${pending_index} -eq ${pending_count} ]] || return 1
   ecoda_atomic_write "${status_report}" \
-    "STATE=OK\nANALYSIS_VARIANT=final\nRUN_ID=${RUN_ID}\nMANIFEST=${manifest}\nCOUNT=$(awk 'END { print NR }' "${manifest}")\nPENDING=${pending_count}\n" || return 1
+    "STATE=OK\nANALYSIS_VARIANT=${ANALYSIS_VARIANT}\nANALYSIS_ROOT=${ANALYSIS_ROOT}\nANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT}\nANALYSIS_PASS=${PASS_ARG}\nANALYSIS_LOG_PREFIX=${ANALYSIS_LOG_PREFIX}\nRUN_ID=${RUN_ID}\nMANIFEST=${manifest}\nCOUNT=$(awk 'END { print NR }' "${manifest}")\nPENDING=${pending_count}\n" || return 1
   ecoda_write_checksum "${status_report}" || return 1
   return 0
 }
 
 stage5_export_final_sample_metadata ||
   stage5_abort "final sample metadata export failed"
+
+if [[ -n "${SYNC_ONLY_RUN}" ]]; then
+  stage5_load_kidney_legacy_inventory ||
+    stage5_abort "Kidney legacy inventory is missing, malformed, or untrusted"
+else
+  stage5_build_kidney_legacy_inventory ||
+    stage5_abort "failed to build Kidney legacy inventory"
+fi
+
+KIDNEY_LEGACY_INVENTORY_METADATA="$(stage5_kidney_legacy_inventory_metadata)" ||
+  stage5_abort "failed to record Kidney legacy inventory metadata"
 
 PENDING_SELECTION="${ECODA_RUN_ROOT}/manifests/pending_selection.tsv"
 if [[ -z "${SYNC_ONLY_RUN}" ]] &&
@@ -2635,6 +3095,8 @@ if [[ -z "${SYNC_ONLY_RUN}" ]] &&
     stage5_abort "failed to create empty Stage 5 owner manifest"
   identity_metadata="$(stage5_record_run_identity_metadata)" ||
     stage5_abort "failed to read Stage 5 source/runtime identity"
+  [[ -z "${identity_metadata}" ]] ||
+    identity_metadata="${identity_metadata}"$'\n'
   batch_contract_metadata="$(stage5_record_batch_contract_metadata)" ||
     stage5_abort "failed to read corrected Stage 5 batch-contract metadata"
   batch_contract_metadata_suffix=""
@@ -2648,19 +3110,19 @@ if [[ -z "${SYNC_ONLY_RUN}" ]] &&
   if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
     target_methods_csv="$(IFS=,; echo "${TARGET_METHODS[*]}")"
   fi
-  analysis_variant_metadata="$(stage5_variant_metadata)"
   target_methods_metadata=""
-  [[ "${ANALYSIS_VARIANT:-}" == final ]] &&
-    target_methods_metadata="TARGET_METHODS=${target_methods_csv}\n"
-  if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
-    root_metadata="ROOT=${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final\n"
-  elif [[ -n "${PASS_ARG}" ]]; then
-    root_metadata="ROOT=${HPC_SCRATCH_DIR}/batch_effect/${PASS_ARG}\n"
-  else
-    root_metadata="ROOT=${HPC_SCRATCH_DIR}/benchmark\n"
-  fi
+  analysis_variant_metadata="$(stage5_variant_metadata)"
+  [[ -z "${analysis_variant_metadata}" ]] ||
+    analysis_variant_metadata="${analysis_variant_metadata}"$'\n'
+  legacy_inventory_metadata="${KIDNEY_LEGACY_INVENTORY_METADATA:-}"
+  [[ -z "${legacy_inventory_metadata}" ]] ||
+    legacy_inventory_metadata="${legacy_inventory_metadata}"$'\n'
+  [[ -z "${legacy_inventory_metadata}" ||
+     -n "${KIDNEY_LEGACY_INVENTORY:-}" ]] ||
+    stage5_abort "Kidney legacy inventory metadata is incomplete"
+  root_metadata="ROOT=${ANALYSIS_ROOT}\n"
   ecoda_atomic_write "${ECODA_RUN_ROOT}/metadata" \
-    "STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\n${analysis_variant_metadata}${target_methods_metadata}${root_metadata}${identity_metadata}\n${batch_contract_metadata_suffix}" ||
+    "STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\n${analysis_variant_metadata}${legacy_inventory_metadata}${target_methods_metadata}${root_metadata}${identity_metadata}\n${batch_contract_metadata_suffix}" ||
     stage5_abort "failed to write Stage 5 NOOP metadata"
   ecoda_atomic_write "${ECODA_RUN_ROOT}/status/report" \
     "STATE=NOOP_VALIDATED\nRUN_ID=${RUN_ID}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nREASON=all selected benchmark artifacts are valid; no rerun selected\n" ||
@@ -2754,6 +3216,11 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
         *" ${owner_key} "*) continue ;;
       esac
       OWNER_SEEN="${OWNER_SEEN} ${owner_key}"
+      if [[ ${method_force} -eq 0 ]] &&
+         stage5_kidney_legacy_method_valid "${ds}" "${method}"; then
+        echo "Skipping validated legacy Stage 5 artifact ${ds}/${view}/${method}."
+        continue
+      fi
       if [[ ${FORCE_TARGETED_ARG} -eq 1 &&
             "${method}" == "prepare_pseudobulk" &&
             ${method_force} -eq 0 ]]; then
@@ -2825,43 +3292,39 @@ else
     target_methods_csv="$(IFS=,; echo "${TARGET_METHODS[*]}")"
   fi
   analysis_variant_metadata="$(stage5_variant_metadata)"
+  [[ -z "${analysis_variant_metadata}" ]] ||
+    analysis_variant_metadata="${analysis_variant_metadata}"$'\n'
+  legacy_inventory_metadata="${KIDNEY_LEGACY_INVENTORY_METADATA:-}"
+  [[ -z "${legacy_inventory_metadata}" ]] ||
+    legacy_inventory_metadata="${legacy_inventory_metadata}"$'\n'
+  [[ -z "${legacy_inventory_metadata}" ||
+     -n "${KIDNEY_LEGACY_INVENTORY:-}" ]] ||
+    stage5_abort "Kidney legacy inventory metadata is incomplete"
   target_methods_metadata=""
-  [[ "${ANALYSIS_VARIANT:-}" == final ]] &&
+  [[ -n "${ANALYSIS_VARIANT:-}" ]] &&
     target_methods_metadata="TARGET_METHODS=${target_methods_csv}\n"
   identity_metadata="$(stage5_record_run_identity_metadata)" ||
     stage5_abort "failed to read Stage 5 source/runtime identity"
+  [[ -z "${identity_metadata}" ]] ||
+    identity_metadata="${identity_metadata}"$'\n'
   batch_contract_metadata="$(stage5_record_batch_contract_metadata)" ||
     stage5_abort "failed to read corrected Stage 5 batch-contract metadata"
   batch_contract_metadata_suffix=""
   [[ "${PASS_ARG:-}" == corrected ]] &&
     batch_contract_metadata_suffix="${batch_contract_metadata}\n"
-  if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
-    root_metadata="ROOT=${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final\n"
-  elif [[ -n "${PASS_ARG}" ]]; then
-    root_metadata="ROOT=${HPC_SCRATCH_DIR}/batch_effect/${PASS_ARG}\n"
-  else
-    root_metadata="ROOT=${HPC_SCRATCH_DIR}/benchmark\n"
-  fi
-  RUN_METADATA="STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\nH5AD_PREFLIGHT=${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv\nPENDING_SELECTION=${PENDING_SELECTION}\nPENDING_SELECTION_MD5=${PENDING_SELECTION_MD5}\nPENDING_SELECTION_SIZE=${PENDING_SELECTION_SIZE}\n${analysis_variant_metadata}${target_methods_metadata}${root_metadata}${identity_metadata}\n${batch_contract_metadata_suffix}"
+  root_metadata="ROOT=${ANALYSIS_ROOT}\n"
+  RUN_METADATA="STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\nH5AD_PREFLIGHT=${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv\nPENDING_SELECTION=${PENDING_SELECTION}\nPENDING_SELECTION_MD5=${PENDING_SELECTION_MD5}\nPENDING_SELECTION_SIZE=${PENDING_SELECTION_SIZE}\n${analysis_variant_metadata}${legacy_inventory_metadata}${target_methods_metadata}${root_metadata}${identity_metadata}\n${batch_contract_metadata_suffix}"
   ecoda_atomic_write "${ECODA_RUN_ROOT}/metadata" "${RUN_METADATA}" ||
     stage5_abort "failed to write Stage 5 run metadata"
 fi
 
 
-if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
-  ecoda_stage5_validate_identity "${PASS_ARG:-${ANALYSIS_PASS:-}}" ||
-    stage5_abort "final Stage 5 analysis identity is not bound to uncorrected_final"
-  export ANALYSIS_PASS=uncorrected ANALYSIS_HIGH_RES_ONLY=1
-elif [[ -n "${PASS_ARG}" ]]; then
-  ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${PASS_ARG}"
-  ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/${PASS_ARG}"
-  ANALYSIS_LOG_PREFIX="execution_times_batch_effect_${PASS_ARG}_"
-  export ANALYSIS_PASS="${PASS_ARG}" ANALYSIS_HIGH_RES_ONLY=1
+stage5_configure_analysis_context ||
+  stage5_abort "Stage 5 analysis context is not bound to the selected variant"
+if [[ -n "${PASS_ARG}" ]]; then
+  export ANALYSIS_HIGH_RES_ONLY=1
 else
-  ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/benchmark"
-  ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/benchmark"
-  ANALYSIS_LOG_PREFIX="execution_times_"
-  unset ANALYSIS_PASS ANALYSIS_HIGH_RES_ONLY ANALYSIS_VARIANT
+  unset ANALYSIS_HIGH_RES_ONLY
 fi
 RUN_LOG_DIR="${ECODA_RUN_ROOT}/logs"
 export ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_LOG_PREFIX FORCE_BENCHMARK="${FORCE_ARG}"
@@ -2940,10 +3403,8 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     local worker_env="METHOD=${method},ANALYSIS=${method},ANALYSIS_MANIFEST=${manifest},ANALYSIS_VIEW=${view},ANALYSIS_ROOT=${ANALYSIS_ROOT},EXECUTION_LOG_DIR=${RUN_LOG_DIR},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${RUN_ID},ECODA_SELECTION_MANIFEST=${manifest},FORCE_BENCHMARK=${method_force},METHOD_TIME_LIMIT=${method_time_limit},METHOD_GPU_POLICY=${method_gpu_policy},ECODA_ARTIFACT_PRODUCER=stage5_${method},JOB_LOG_PREFIX=${RUN_LOG_DIR}/5_matrix_${safe}"
     if [[ -n "${PASS_ARG}" ]]; then
       worker_env="${worker_env},ANALYSIS_PASS=${PASS_ARG}"
-      [[ -n "${ANALYSIS_VARIANT:-}" ]] &&
-        worker_env="${worker_env},ANALYSIS_VARIANT=${ANALYSIS_VARIANT}"
-      if [[ "${ANALYSIS_VARIANT:-}" == "final" ]]; then
-        worker_env="${worker_env},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT},ANALYSIS_LOG_PREFIX=execution_times_batch_effect_uncorrected_final_"
+      if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
+        worker_env="${worker_env},ANALYSIS_VARIANT=${ANALYSIS_VARIANT},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT},ANALYSIS_LOG_PREFIX=${ANALYSIS_LOG_PREFIX}"
       fi
       [[ "${PASS_ARG}" == corrected ]] &&
         worker_env="${worker_env},ECODA_BATCH_CONTRACT_MANIFEST=${ECODA_BATCH_CONTRACT_MANIFEST}"
@@ -3216,39 +3677,85 @@ for label in "${LABELS[@]}"; do
       ;;
   esac
 done
-for label in "${FEATHER_LABELS[@]}"; do
-  if [[ "${PASS_ARG:-}" == corrected ]]; then
-    stage5_validate_corrected_matrix_rows "${label}" ||
-      stage5_abort "Stage 5 corrected ${label} matrix artifact validation failed"
-    continue
-  fi
-  if stage5_matrix_validation_selection "${label}"; then
-    :
-  else
-    selection_rc=$?
-    [[ ${selection_rc} -eq 2 ]] && continue
-    stage5_abort "failed to build Stage 5 ${label} validation selection"
-  fi
-  validation_args=(--root "${ANALYSIS_ROOT}" \
-    --selection "${STAGE5_MATRIX_VALIDATION_SELECTION}" --labels "${label}" \
-    --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}" \
-    --source-identity "${SOURCE_IDENTITY}" --source-identity-verified \
-    --producer "stage5_${label}" --producer-run-id "${RUN_ID}")
-  [[ -n "${PASS_ARG}" ]] && validation_args+=(--batch --batch-pass "${PASS_ARG}")
-  [[ "${ANALYSIS_VARIANT:-}" == final ]] &&
-    validation_args+=(--analysis-variant final)
-  [[ ${EXACT_SELECTION} -eq 1 ]] && validation_args+=(--exact)
-  if ! "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
-      "${validation_args[@]}"; then
+stage5_validate_final_matrix_rows() {
+  local label ds view row_label selection tmp
+  local -a validation_args
+  [[ "${ANALYSIS_VARIANT:-}" == final ]] || return 1
+  for label in "${FEATHER_LABELS[@]}"; do
+    while IFS=$'\t' read -r ds view row_label; do
+      stage5_kidney_legacy_method_valid "${ds}" "${label}" && continue
+      selection="${ECODA_RUN_ROOT}/manifests/matrix_validation_final_${label}.tsv"
+      tmp="${selection}.build.$$"
+      printf '%s\t%s\t%s\n' "${ds}" "${view}" "${row_label}" > "${tmp}" ||
+        return 1
+      ecoda_atomic_install_manifest "${tmp}" "${selection}" 3 || {
+        rm -f "${tmp}"
+        return 1
+      }
+      rm -f "${tmp}"
+      ecoda_write_checksum "${selection}" || return 1
+      validation_args=(
+        --root "${ANALYSIS_ROOT}"
+        --selection "${selection}"
+        --labels "${label}"
+        --input-root "${HPC_SCRATCH_DIR}"
+        --config "${DATASETS_JSON_FILE}"
+        --source-identity "${SOURCE_IDENTITY}"
+        --source-identity-verified
+        --producer "stage5_${label}"
+        --producer-run-id "${RUN_ID}"
+        --batch
+        --batch-pass uncorrected
+        --analysis-variant final
+      )
+      if ! "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
+          "${validation_args[@]}" >/dev/null 2>&1; then
+        rm -f "${selection}" "${selection}.md5"
+        return 1
+      fi
+      rm -f "${selection}" "${selection}.md5"
+    done < "${MANIFEST}"
+  done
+}
+
+if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
+  stage5_validate_final_matrix_rows ||
+    stage5_abort "Stage 5 final matrix artifact validation failed"
+else
+  for label in "${FEATHER_LABELS[@]}"; do
+    if [[ "${PASS_ARG:-}" == corrected ]]; then
+      stage5_validate_corrected_matrix_rows "${label}" ||
+        stage5_abort "Stage 5 corrected ${label} matrix artifact validation failed"
+      continue
+    fi
+    if stage5_matrix_validation_selection "${label}"; then
+      :
+    else
+      selection_rc=$?
+      [[ ${selection_rc} -eq 2 ]] && continue
+      stage5_abort "failed to build Stage 5 ${label} validation selection"
+    fi
+    validation_args=(--root "${ANALYSIS_ROOT}" \
+      --selection "${STAGE5_MATRIX_VALIDATION_SELECTION}" --labels "${label}" \
+      --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}" \
+      --source-identity "${SOURCE_IDENTITY}" --source-identity-verified \
+      --producer "stage5_${label}" --producer-run-id "${RUN_ID}")
+    [[ -n "${PASS_ARG}" ]] && validation_args+=(--batch --batch-pass "${PASS_ARG}")
+    [[ -n "${ANALYSIS_VARIANT:-}" ]] &&
+      validation_args+=(--analysis-variant "${ANALYSIS_VARIANT}")
+    [[ ${EXACT_SELECTION} -eq 1 ]] && validation_args+=(--exact)
+    if ! "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
+        "${validation_args[@]}"; then
+      [[ -n "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}" ]] &&
+        rm -f "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}" \
+          "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}.md5"
+      stage5_abort "Stage 5 ${label} matrix artifact validation failed"
+    fi
     [[ -n "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}" ]] &&
       rm -f "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}" \
         "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}.md5"
-    stage5_abort "Stage 5 ${label} matrix artifact validation failed"
-  fi
-  [[ -n "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}" ]] &&
-    rm -f "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}" \
-      "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}.md5"
-done
+  done
+fi
 RDS_LABELS=()
 for label in "${LABELS[@]}"; do
   case "${label}" in
@@ -3274,6 +3781,8 @@ stage5_validate_corrected_rds_rows() {
           --input-root "${HPC_SCRATCH_DIR}" --batch-pass corrected \
           --source-identity "${SOURCE_IDENTITY}" --source-identity-verified \
           --expected-batch-contract "${identity_path}")
+        [[ -n "${ANALYSIS_VARIANT:-}" ]] &&
+          corrected_rds_args+=(--analysis-variant "${ANALYSIS_VARIANT}")
         [[ "${path}" == *_metadata.rds ]] &&
           corrected_rds_args+=(--metadata)
         ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
@@ -3283,29 +3792,91 @@ stage5_validate_corrected_rds_rows() {
   done < "${MANIFEST}"
 }
 
+stage5_validate_final_rds_rows() {
+  local label ds view row_label path metadata
+  local list tmp
+  local -a rds_args
+  [[ "${ANALYSIS_VARIANT:-}" == final ]] || return 1
+  for label in "${RDS_LABELS[@]}"; do
+    list="${ECODA_RUN_ROOT}/manifests/rds_validation_final_${label}.tsv"
+    tmp="${list}.build.$$"
+    : > "${tmp}" || return 1
+    while IFS=$'\t' read -r ds view row_label; do
+      stage5_kidney_legacy_method_valid "${ds}" "${label}" && continue
+      benchmark_artifacts_for "${ds}" "${view}" "${label}" || {
+        rm -f "${tmp}"
+        return 1
+      }
+      for path in "${ARTIFACT_PATHS[@]}"; do
+        metadata=0
+        [[ "${path}" == *_metadata.rds ]] && metadata=1
+        printf '%s\t%s\t%s\t%s\t%s\n' \
+          "${path}" "${label}" "${ds}" "${view}" "${metadata}" >> "${tmp}" ||
+          return 1
+      done
+    done < "${MANIFEST}"
+    if [[ ! -s "${tmp}" ]]; then
+      rm -f "${tmp}"
+      continue
+    fi
+    ecoda_atomic_install_manifest "${tmp}" "${list}" 5 || {
+      rm -f "${tmp}"
+      return 1
+    }
+    rm -f "${tmp}"
+    ecoda_write_checksum "${list}" || return 1
+    rds_args=(
+      --artifact-list "${list}"
+      --config "${DATASETS_JSON_FILE}"
+      --input-root "${HPC_SCRATCH_DIR}"
+      --batch-pass uncorrected
+      --source-identity "${SOURCE_IDENTITY}"
+      --source-identity-verified
+    )
+    if ! ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
+        "${rds_args[@]}" >/dev/null 2>&1; then
+      rm -f "${list}" "${list}.md5"
+      return 1
+    fi
+    rm -f "${list}" "${list}.md5"
+  done
+}
+
 if [[ "${PASS_ARG:-}" == corrected ]]; then
   stage5_validate_corrected_rds_rows ||
     stage5_abort "Stage 5 corrected RDS artifact validation failed"
 elif [[ ${#RDS_LABELS[@]} -gt 0 ]]; then
   stage5_validate_pending_rds_records ||
     stage5_abort "Stage 5 RDS artifact record validation failed"
-  rds_args=(--root "${ANALYSIS_ROOT}" --selection "${MANIFEST}" \
-    --labels "$(IFS=,; echo "${RDS_LABELS[*]}")" \
-    --config "${DATASETS_JSON_FILE}" --input-root "${HPC_SCRATCH_DIR}" \
-    --source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
-  [[ -n "${PASS_ARG}" ]] && rds_args+=(--batch-pass "${PASS_ARG}")
-  [[ "${ANALYSIS_VARIANT:-}" == final ]] &&
-    rds_args+=(--analysis-variant final)
-  [[ ${EXACT_SELECTION} -eq 1 ]] && rds_args+=(--exact)
-  if ! ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" "${rds_args[@]}"; then
-    stage5_abort "Stage 5 RDS artifact validation failed"
+  if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
+    stage5_validate_final_rds_rows ||
+      stage5_abort "Stage 5 final RDS artifact validation failed"
+  else
+    rds_args=(--root "${ANALYSIS_ROOT}" --selection "${MANIFEST}" \
+      --labels "$(IFS=,; echo "${RDS_LABELS[*]}")" \
+      --config "${DATASETS_JSON_FILE}" --input-root "${HPC_SCRATCH_DIR}" \
+      --source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
+    [[ -n "${PASS_ARG}" ]] && rds_args+=(--batch-pass "${PASS_ARG}")
+    [[ ${EXACT_SELECTION} -eq 1 ]] && rds_args+=(--exact)
+    if ! ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
+        "${rds_args[@]}"; then
+      stage5_abort "Stage 5 RDS artifact validation failed"
+    fi
   fi
 fi
 stage5_publish_output_records ||
   stage5_abort "Stage 5 artifact record publication failed"
+unset ECODA_STAGE5_LEGACY_SYNC_SKIP ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS
+if [[ "${ANALYSIS_VARIANT:-}" == final &&
+      -n "${KIDNEY_LEGACY_VALID_METHODS:-}" ]]; then
+  export ECODA_STAGE5_LEGACY_SYNC_SKIP=1
+  export ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS="${KIDNEY_LEGACY_VALID_METHODS% }"
+fi
 if ! benchmark_merge_sync_cleanup "${LABELS[@]}"; then
+  unset ECODA_STAGE5_LEGACY_SYNC_SKIP ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS
   stage5_abort "Stage 5 benchmark synchronization failed"
 fi
+unset ECODA_STAGE5_LEGACY_SYNC_SKIP ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS
 stage5_track_pending_artifact_owners ||
   stage5_abort "Stage 5 artifact ownership changed before finalization"
 ecoda_owner_finalize_tracked OK "benchmark matrix sync completed" ||
