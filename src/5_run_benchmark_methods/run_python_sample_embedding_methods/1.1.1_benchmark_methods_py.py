@@ -608,13 +608,23 @@ def _align_square_frame(frame, sample_ids, path):
 def recorded_feather_valid(
     path, producer=None, producer_run_id=None, expected_batch_contract=None
 ):
-    """Validate a cache Feather and its semantic frame before reading callers use it."""
+    """Validate a complete Feather cache before reading callers use it."""
     path = Path(path)
     sidecar = Path(f"{path}.md5")
     present = path.exists() or sidecar.exists()
     if not present:
         return False
     if not path.is_file() or not sidecar.is_file():
+        # The Stage 5 submitter removes the sidecar before an explicitly
+        # selected repair while retaining the stale payload for rollback.
+        # Treat that incomplete pair as a cache miss so the atomic writer can
+        # replace it; directories and symlinked artifacts remain hard errors.
+        replaceable_payload = path.is_file() and not path.is_symlink()
+        replaceable_sidecar = (
+            not path.exists() and sidecar.is_file() and not sidecar.is_symlink()
+        )
+        if replaceable_payload or replaceable_sidecar:
+            return False
         raise ValueError(f"Feather cache is incomplete: {path}")
     if expected_batch_contract is None:
         # This full check is mandatory immediately before Feather deserialization.
@@ -1899,8 +1909,9 @@ def process_dataset(args, ds_name, entry):
     """Run all combos of the requested method for one dataset.
 
     Loads the h5ad once per task (not per combo); skips only a valid,
-    recorded Feather cache unless --force. Existing incomplete or invalid
-    artifacts fail closed instead of being silently recomputed.
+    recorded Feather cache unless --force. An incomplete pair left by the
+    submitter's explicit repair invalidation is a cache miss; malformed or
+    checksum-invalid artifacts still fail closed.
     """
     artifact_producer = stage5_artifact_producer(args.method)
     # The method supplied by the Stage 5 submitter is authoritative for all
