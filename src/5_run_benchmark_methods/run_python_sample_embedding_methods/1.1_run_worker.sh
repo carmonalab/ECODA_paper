@@ -253,6 +253,9 @@ fi
 if [[ ${#COMBO_FLAG[@]} -gt 0 ]]; then
   PYTHON_ARGS+=("${COMBO_FLAG[@]}")
 fi
+if [[ ${#GPU_DEVICE_ARGS[@]} -gt 0 ]]; then
+  PYTHON_ARGS+=("${GPU_DEVICE_ARGS[@]}")
+fi
 set +e
 "${PYTHON_BIN}" "${SCRIPT_DIR}/1.1.1_benchmark_methods_py.py" "${PYTHON_ARGS[@]}"
 RC=$?

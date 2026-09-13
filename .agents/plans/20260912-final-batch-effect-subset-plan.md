@@ -74,10 +74,18 @@ all source/test units before any HPC launch.
 Stage 2/3/5 launch preparation is serialized only across code/config
 integration and documented data dependencies: Stage 2 Joanito precedes both
 Stage 3 selections; each Stage 5 lane follows its own reviewed Stage 3
-predecessor. The uncorrected and corrected Stage 3 gates are separate and
-their dataset rows dispatch in parallel. The uncorrected changed wave and
-targeted Kidney recovery share one root and therefore remain serialized with
-each other; the distinct corrected Stage 5 root may run concurrently later.
+predecessor. The uncorrected Stage 5 final lane is one five-dataset wave:
+its four regenerated datasets and `Kidney_KPMP_full` are selected together.
+The reviewed uncorrected Stage 3 predecessor and the current four-row
+`NOOP_VALIDATED` check are complete, so the uncorrected Stage 5 gate may be
+prepared and launched now while corrected Stage 3 is still running. Once
+corrected Stage 3 reaches terminal `COMPLETED` and Luna Max review, the
+corrected Stage 5 gate may be prepared and launched without waiting for the
+uncorrected Stage 5 gate to finish. The corrected Stage 5 lane is a distinct
+nine-dataset root and serialization group; the two Stage 5 gates are
+independent and may run concurrently. Valid Kidney artifacts are skipped
+individually inside the uncorrected five-dataset wave; there is no separate
+uncorrected Kidney gate or same-root gate serialization.
 
 
 ## Decisions and traceability
@@ -96,7 +104,7 @@ each other; the distinct corrected Stage 5 root may run concurrently later.
 | Batch annotation scope | User-approved `AGENTS.md` exception | Batch-effect views do not run Pipeline 4. Preserve configured source/author cell-type columns. |
 | Frozen cohorts | User decision | `Alzheimer`, `Breast_cancer`, `Lupus_PBMC`, and `Stephenson` are frozen and absent from new uncorrected/final-lane jobs, validator selections, and compute manifests; they remain eligible in the independently configured corrected Stage 3 and corrected Stage 5 nine-dataset lanes. Final notebook plots use their approved legacy result artifacts only; no legacy dataset H5AD is read for the final analysis. |
 | Changed final-view targets | User decision and current registry | `Covid19_PBMC`, `Diabetes`, `Joanito`, and `Lung`, both uncorrected and corrected Stage 3 views. |
-| Kidney recovery | User decision | `Kidney_KPMP_full` receives only missing uncorrected Stage 5 method rows; do not run Stage 2/3/4 for Kidney. |
+| Kidney coverage | User decision | `Kidney_KPMP_full` is included in the one uncorrected five-dataset Stage 5 wave; a run-owned legacy inventory skips valid rows individually and leaves only missing/invalid rows pending in that same wave. No separate Kidney gate is created. |
 | Disabled cohorts | Current registry flags | `CombinedPBMC`, `Kidney_KPMP`, `Myocardial_infarction`, and `Parkinson` receive no new work. `_debug` is not a production target. |
 | Stage 2 coverage | `src/2_dataset_specific_preprocessing/1_submit_hpc.sh:233-259,394-444` | Only `Joanito` has a target-specific Stage 2 hook. Covid, Diabetes, and Lung use already staged direct H5AD inputs; do not invent Stage 2 jobs for them. |
 | Corrected batch variables | `datasets.json` target contracts | Every corrected Stage 3 row uses its configured technical batch variables directly; the current corrected examples include `Covid19_PBMC=datasets`, `Diabetes=dataset`, `Joanito=seqtec`, and `Lung=dataset`. Biological labels remain evaluation-only. |
@@ -274,16 +282,16 @@ Leave all existing legacy output names, including the frozen cohorts and the
 old changed-dataset outputs, in place on HPC. The new names are the canonical
 paths for the final target views after this change; old files are not deleted
 or overwritten.
-Before implementation launches, replace the stale batch-effect baseline
-paragraphs in `AGENTS.md:177-219` with the approved current scope: Pipeline 3
-uses separate parallel selections, exactly four uncorrected target rows and
-exactly nine current configured corrected rows; dataset rows dispatch
+Before full-cohort launch, `AGENTS.md` records the approved current scope:
+Pipeline 3 uses separate parallel selections, exactly four uncorrected target
+rows and exactly nine current configured corrected rows; dataset rows dispatch
 concurrently and manifest order is deterministic only. The corrected Pipeline 3
 path uses original cell-level technical metadata directly, with no
 sample-level constancy/majority check and no retired corrected-source RDS
 preflight; configuration/content/provenance checks and the Covid obs-only
 subset preflight remain. Stage 5 has separate uncorrected and corrected lanes:
-the uncorrected changed wave plus targeted Kidney recovery uses
+the uncorrected five-dataset selection
+(`Covid19_PBMC`, `Diabetes`, `Joanito`, `Lung`, and `Kidney_KPMP_full`) uses
 `batch_effect/uncorrected_final`, while the corrected nine-dataset lane uses
 `--pass corrected --analysis-variant corrected_final` and
 `batch_effect/corrected_final`, the seven methods, and an explicit eight-key
@@ -619,30 +627,42 @@ prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot
 ```
 
 Do not select `mofa`, `scitd`, `scpoli`, `pilotgm`, `trans`, `zeroimp`, or
-any post-baseline method. The uncorrected changed wave contains four dataset
-rows and seven method rows per dataset (28 rows), while its one explicit
-five-dataset selection also includes the targeted Kidney recovery. The
-corrected wave contains nine dataset rows and at most 63 method rows. Dataset
-rows dispatch concurrently within each lane, and valid rows are skipped
-individually.
+any post-baseline method. The uncorrected final lane is one explicit
+five-dataset selection in the order from step 1:
+`Covid19_PBMC`, `Diabetes`, `Joanito`, `Lung`, and `Kidney_KPMP_full`. It
+declares a maximum of five dataset rows times seven methods, 35 method rows;
+the run-owned Kidney legacy inventory skips valid legacy artifacts
+individually, so only missing or invalid Kidney methods remain pending in this
+same wave. The corrected wave contains nine dataset rows and at most 63
+method rows. Dataset rows dispatch concurrently within each lane, and valid
+rows are skipped individually.
 Before each Stage 5 gate, record the exact remote wrapper command and expected
-row count in the durable-gate manifest. The uncorrected changed-dataset gate’s
-`--exact-command` must be the snapshot `ecoda_source_snapshot.sh exec`
-wrapper required by `AGENTS.md`, with this script/argument tail:
+selection/method-row ceiling in the durable-gate manifest. The uncorrected
+final gate's `--exact-command` must be the snapshot
+`ecoda_source_snapshot.sh exec` wrapper required by `AGENTS.md`, with this
+script/argument tail:
 
 ```text
 --script src/5_run_benchmark_methods/1_submit_hpc_array.sh -- \
-  --selection-file <run-root>/manifests/stage5_changed_final.tsv \
+  --selection-file <run-root>/manifests/stage5_uncorrected_final.tsv \
   --pass uncorrected \
   --analysis-variant final \
   --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot
 ```
 
-The recorded selection file is exactly the four changed-dataset rows from
-step 1. The wrapper must emit exactly four dataset rows times seven methods,
-28 method rows including the declared `prepare_pseudobulk` dependency. No
-`--analyses`, `--exact-batch-selection`, broad dataset list, corrected pass,
-or `--force` is permitted.
+The recorded selection file is exactly the five uncorrected dataset rows from
+step 1. The wrapper's declared method-row ceiling is 35, including the
+`prepare_pseudobulk` dependency row for each selected dataset; valid legacy
+Kidney rows are omitted from pending/owner/validation/sync expansion by the
+run-owned inventory. No `--target-methods`, `--analyses`,
+`--exact-batch-selection`, broad dataset list, corrected pass, or `--force` is
+permitted for this five-dataset wave.
+
+Before the uncorrected gate is released, the same run-owned validator-only
+legacy inventory records all seven Kidney methods. Valid legacy artifacts stay
+outside the pending selection, while missing/invalid methods are submitted in
+the same five-dataset wave. Do not construct a second `kidney_missing_final`
+manifest or launch a separate Kidney recovery gate.
 
 The corrected gate uses the same snapshot wrapper and this tail:
 
@@ -658,33 +678,20 @@ Its recorded selection is exactly the nine corrected rows from step 1 and its
 maximum method-row count is 63. No broad dataset list, wrong pass, or `--force`
 is permitted.
 
-After the changed gate reaches terminal review, construct the Kidney
-run-owned missing-method manifest from the current validated legacy inventory
-and record the resulting exact method list before submission. Its
-`--exact-command` uses the same snapshot wrapper and this tail:
-
-```text
---script src/5_run_benchmark_methods/1_submit_hpc_array.sh -- \
-  --selection-file <run-root>/manifests/kidney_missing_final.tsv \
-  --pass uncorrected \
-  --analysis-variant final \
-  --target-methods <comma-separated-missing-methods>
-```
-
-That manifest contains only
-`Kidney_KPMP_full<TAB>batch_effect_uncorrected<TAB>batch_effect_uncorrected`.
-The recorded `<comma-separated-missing-methods>` is the missing subset of
-`prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot`, and the
-expected method-row count equals its length. If its length is zero, record
-`NOOP_VALIDATED` and submit no Kidney method array. The changed wave and
-Kidney recovery are serialized only because they share
-`batch_effect/uncorrected_final`; the independent corrected lane uses
-`batch_effect/corrected_final` and may run concurrently after its Stage 3
-predecessor review.
+Both final Stage 5 lanes use the existing snapshot-backed durable workflow,
+exact selection files, and current gate policy. The uncorrected five-dataset
+gate may start now from its reviewed uncorrected Stage 3 predecessor. The
+corrected nine-dataset gate may start as soon as its corrected Stage 3
+predecessor reaches terminal `COMPLETED` and Luna Max review; it does not wait
+for the uncorrected gate to finish. Their dataset rows and method rows dispatch
+concurrently within each distinct root, and the two roots may be gated in
+parallel. The uncorrected five-dataset wave owns the only uncorrected final
+root; the corrected lane uses exactly the nine current config-selected
+corrected datasets. Existing valid rows remain reusable and are never forced.
 
 
 Add explicit, idempotent metadata-only exports for both final lanes; current
-Stage 5 workers do not emit the notebook’s sample-metadata Feather. Add
+Stage 5 workers do not emit the notebook's sample-metadata Feather. Add
 `src/utils/py/export_h5ad_sample_metadata.py`, using the existing h5py-only
 reader in `src/utils/py/h5ad_pseudobulk.py`, and add the separate read-only
 worker `src/utils/bash/h5ad_obs_audit_worker.sh`. The worker must never call
@@ -711,31 +718,19 @@ methods retain source cell values.
 
 Each export includes `Sample`, the configured primary biological label,
 configured batch keys, configured cell-type columns, and every candidate
-column required by `dataset_specs.py` for the applicable registry. It
+column required by `dataset_specs.py` for the applicable final registry. It
 validates non-empty unique sample IDs, preserves source sample order, and
-never opens `X`, `raw`, or `layers["counts"]`. Each Stage 5 wrapper records
-the exporter’s run-owned manifest, checksum, and terminal status before method
-no-op selection; an already valid metadata Feather is skipped individually.
+never opens `X`, `raw`, or `layers["counts"]`. Each final Stage 5 wrapper
+records the exporter's run-owned manifest, checksum, and terminal status
+before method no-op selection; an already valid metadata Feather is skipped
+individually.
 
-Run a separate targeted Kidney Stage 5 recovery against the uncorrected final
-analysis root. Before submission, inspect only the existing
-`Kidney_KPMP_full/batch_effect_uncorrected` method artifacts and emit a
-run-owned method manifest containing the missing subset of the seven-method
-suite. Existing valid Kidney rows remain outside the recovery selection. If
-no method is missing, write a no-op report and submit no Kidney method job;
-the required uncorrected obs-only metadata export still runs or validates
-independently. If methods are missing, submit only those method rows with
-`--target-methods` and a specific dependency reason; never force or rerun the
-full suite.
-
-Both final Stage 5 lanes use the existing snapshot-backed durable workflow,
-exact selection files, and current gate policy. Their dataset rows and method
-rows dispatch concurrently within each distinct root; the two roots may be
-gated in parallel after their respective Stage 3 predecessors are terminally
-reviewed. Only the uncorrected root has the targeted Kidney recovery. The
-uncorrected lane excludes the frozen cohorts and all disabled cohorts; the
-corrected lane uses exactly the nine current config-selected corrected
-datasets. Existing valid rows remain reusable and are never forced.
+For the uncorrected five-dataset wave, the run-owned Kidney legacy inventory
+is computed and validated before pending method selection. Valid legacy
+Kidney rows remain outside the pending/owner/validation/sync sets; missing or
+invalid methods join the same uncorrected wave. The required uncorrected
+obs-only metadata export still runs or validates independently. There is no
+separate targeted Kidney Stage 5 recovery.
 
 ### 8. Build the mixed-source final analysis manifests
 
@@ -1066,24 +1061,24 @@ Run verification in this order and stop before the next stage on failure:
    obs-only preflight, and no Pipeline 4 artifacts were created. Frozen rows
    are excluded from the uncorrected gate but appear in corrected validation
    only when selected by the current configuration rule.
-7. **Stage 5 final lanes:** the uncorrected changed wave has four rows and 28
-   method rows, with the separate five-dataset manifest also covering
-   `Kidney_KPMP_full` recovery. Confirm its metadata contains
-   `ANALYSIS_VARIANT=final`, `PASS=uncorrected`,
+7. **Stage 5 final lanes:** the uncorrected final lane is one five-dataset
+   selection and has a maximum of 35 declared method rows. Confirm its
+   metadata contains `ANALYSIS_VARIANT=final`, `PASS=uncorrected`,
    `ANALYSIS_PASS=uncorrected`, and a root ending in
-   `batch_effect/uncorrected_final`. The corrected wave has nine dataset rows
-   and at most 63 method rows; confirm
-   `ANALYSIS_VARIANT=corrected_final`, `PASS=corrected`,
-   `ANALYSIS_PASS=corrected`, and a root ending in
+   `batch_effect/uncorrected_final`. Confirm the run-owned Kidney inventory
+   proves valid legacy rows were skipped individually and only missing/invalid
+   rows entered the same wave. The corrected wave has nine dataset rows and at
+   most 63 method rows; confirm `ANALYSIS_VARIANT=corrected_final`,
+   `PASS=corrected`, `ANALYSIS_PASS=corrected`, and a root ending in
    `batch_effect/corrected_final`. Both lanes must use exact `_final` or
    `_corrected_final` stems, explicit eight-key manifests, checksums, and
    individual valid-row reuse.
-8. **Stage 5 Kidney recovery:** inspect the current legacy artifact inventory
-   immediately before submission. The emitted method manifest contains only
-   missing Kidney rows; valid legacy rows are not selected. If the missing set
-   is empty, proof is a no-op report with no Kidney method job. Otherwise
-   every submitted row is one of the seven methods, the final metadata export
-   is present, and no valid old Kidney row appears.
+8. **Stage 5 Kidney coverage:** inspect the current legacy artifact inventory
+   immediately before the uncorrected five-dataset gate. Valid legacy rows
+   must remain outside the pending selection; missing/invalid rows must be
+   submitted in that same wave. The metadata export is independent of the
+   method-row decision. There is no separate Kidney method job or
+   `--target-methods` recovery gate.
 9. **Local sync:** compare the explicit sync list with terminal final method
    and metadata-export manifests. Confirm result bundles map to the actual
    pseudobulk result path (not its cache), all required `.md5` sidecars are
@@ -1130,10 +1125,10 @@ matrix.
   uncorrected Stage 3/4; stop and report the missing prerequisite because the
   approved uncorrected scope is Stage 5-only. The independent corrected
   nine-dataset lane follows its own corrected Stage 3 input contract.
-- Kidney’s missing method set is determined from the current legacy artifact
-  inventory immediately before its targeted Stage 5 gate. Valid rows are
-  skipped individually; only missing rows are submitted. Its obs-only sample
-  metadata export is independent of the method-row decision.
+- Kidney's legacy artifact inventory is determined immediately before the
+  uncorrected five-dataset Stage 5 gate. Valid rows are skipped individually
+  inside that wave; only missing or invalid methods are submitted there. Its
+  obs-only sample metadata export is independent of the method-row decision.
 - Existing final target paths are skipped only when their current contract is
   valid. An invalid selected final path is recomputed as that same targeted
   row, never through a broad `--force` selection. This idempotent contract
@@ -1253,10 +1248,11 @@ This clarified workflow is feasible. Pipeline 3 accepts two explicit
 selection manifests and distinct output contracts: exactly four uncorrected
 rows and exactly nine corrected rows. Each gate dispatches its dataset rows in
 parallel; manifest order is deterministic only. Pipeline 5 has distinct
-uncorrected and corrected roots, so their independent gates may run in
-parallel after their respective Pipeline 3 predecessors are reviewed. Only
-the uncorrected changed wave and targeted Kidney recovery share a root and
-remain serialized with each other.
+uncorrected and corrected roots, so their independent five- and nine-dataset
+gates may run in parallel after their respective Pipeline 3 predecessors are
+reviewed. The uncorrected lane is one five-dataset wave; its Kidney inventory
+filters valid legacy rows within that wave, so no same-root recovery gate is
+serialized afterward.
 
 The corrected Pipeline 3 contract passes each cell's original technical batch
 metadata directly to Harmony/HVG. It performs no sample-level batch constancy
@@ -1308,8 +1304,9 @@ above, then publish one final runtime identity, then launch the separate
 four-row uncorrected and nine-row corrected Pipeline 3 gates, followed by the
 uncorrected five-dataset and corrected nine-dataset Pipeline 5 lanes after
 their exact manifests and predecessor reviews are complete. Dataset rows in
-each selection dispatch concurrently; only same-root uncorrected recovery
-dependencies are serialized.
+each selection dispatch concurrently; the uncorrected five-dataset inventory
+filters valid Kidney rows inside that single wave, and no separate uncorrected
+recovery dependency is serialized.
 ### Plan maintenance
 
 All subsequent implementation, verification, gate, SIF, failure, repair, and
@@ -1819,3 +1816,95 @@ full rationale when a short evidence-linked update is sufficient.
   A separate read-only direct RDS recheck was attempted but terminated with
   remote exit 255 during startup; it did not mutate the RDS, so the reviewed
   watchdog semantic evidence remains authoritative.
+- Implementation commit `59b781fa31e6d9fb015e1d7911aa283f5131ea6c` was
+  pushed to `origin/master`. Its verified source snapshot is
+  `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/59b781fa31e6d9fb015e1d7911aa283f5131ea6c`
+  with `COMPLETE`, a full source archive, and a matching
+  `identity/source.manifest`. The first create attempt was rejected before
+  writing because the textual `$HOME/scratch` path is a symlink; retrying with
+  the canonical `/srv/beegfs/scratch` parent succeeded.
+- Versioned runtime
+  `ecoda-py-cuda13-6bbf70b-relocated` was reused after direct SHA-256, size,
+  regular-file, and manifest checks. The image identity is
+  `8fcd00b7a02592f82e8ad96ec9dffdcfb40214b3c47218f770dfb8e828e05e34` and
+  the runtime-manifest identity is
+  `1c4c2cc340353fe86f1b89235f1f3e5c7b3545f7f303d2b85612cfa8cdedfd50`;
+  its Pixi TOML/lock hashes match the source snapshot. No SIF build or
+  scheduler work was performed.
+- The exact Stage 3 manifests are now run-owned under the canonical scratch
+  gate tree: `stage3_uncorrected_final_20260913a/selection.tsv` has four
+  rows, MD5 `b06c87a68cabce5d6ce792aa03ee80e4`, and size 135; 
+  `stage3_corrected_final_20260913a/selection.tsv` has the nine rows in the
+  declared config order, MD5 `3c43044510b35ab9b88a86fdd3b8d467`, and size
+  305. No frozen or disabled cohort appears in the uncorrected manifest;
+  the corrected manifest is exactly the approved nine-dataset lane.
+- The snapshot-backed uncorrected Stage 3 selection was validator-only:
+  `stage3_uncorrected_final_20260913a` validated all four existing final
+  H5ADs, synchronized their checksums, wrote `NOOP_VALIDATED`, and emitted no
+  scheduler IDs. Its reviewed predecessor therefore releases the independent
+  uncorrected Stage 5 lane.
+- Corrected Stage 3 gate `stage3_corrected_final_20260913a` was prepared,
+  reconciled as absent, and launched once through `durable-hpc-gate-ecoda`
+  with the 59b781f snapshot, validated relocated runtime, reviewed Joanito
+  predecessor, and nine-row corrected selection. Its initial unbounded wait
+  later entered `PRELAUNCH_STOP` after the remote completion marker could not
+  be recovered; the remote runner remains active, so terminal accounting,
+  run-scoped audit, and Luna Max review are still pending. Run-owned evidence
+  records preflight `4403877`, initial array `4403887`, OOM retry array
+  `4403903`, and watchdog log
+  `3_scrnaseq_preprocessing_watchdog_4403888.log`. Corrected Stage 5 remains
+  blocked until that runner reaches durable terminal state and the required
+  inspect/review sequence completes.
+- User clarification on 2026-09-13 supersedes the stale split wording in
+  earlier Stage 5 subsections: all five uncorrected datasets run together in
+  one explicit `final` wave. The canonical selection is
+  `Covid19_PBMC`, `Diabetes`, `Joanito`, `Lung`, and `Kidney_KPMP_full`, with a
+  35-row method ceiling and validator-only per-method Kidney reuse. Missing
+  or invalid Kidney methods remain part of that same wave; no separate
+  `--target-methods` recovery gate or same-root serialization follows it.
+- The first uncorrected Stage 5 gate attempt,
+  `stage5_uncorrected_final_20260913a`, failed closed before emitting any
+  scheduler ID because the active corrected Stage 3 executor held the shared
+  source-snapshot parent lock. Its one terminal inspect attempt stopped before
+  accounting because no scheduler ID existed; this was not a dataset or
+  artifact result, and no worker or production artifact was created.
+- To preserve the requested overlap, a separate same-commit read-only source
+  snapshot was created under
+  `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots_stage5_uncorrected`.
+  Recovery gate `stage5_uncorrected_final_20260913b` uses that snapshot,
+  retains the exact five-row selection and reviewed uncorrected Stage 3
+  dependency, was prepared, reconciled, and launched successfully, and has
+  one unbounded durable wait active. Its terminal scheduler IDs, accounting,
+  run-scoped audit, and Luna Max review remain pending.
+- The recovered uncorrected Stage 5 gate
+  `stage5_uncorrected_final_20260913b` reached terminal `FAILED` at the
+  aggregate gate. Its one terminal inspect queried all recorded metadata,
+  preflight, method-array, watchdog, and aggregate IDs exactly once; the
+  audit is not release-eligible and no reviewer approval was requested.
+  Metadata export `4403898`, H5AD preflight `4403904`, R-environment
+  preflight `4403909`, preparation/pseudobulk/pilot/qot watchdogs and their
+  arrays completed. The failed method classes are GloScope
+  (`4403920`/`4403925`), composition (`4403931`/`4403940`), and MRVI
+  (`4403946`/`4403947`); aggregate gate `4403988` failed accordingly.
+- The terminal worker evidence is concrete and row-scoped: MRVI rejected
+  implicit `auto` execution because the worker omitted its already-built
+  `--device cuda` argument; GloScope fell through to the count-backed
+  `load_benchmark_seurat` path even though the selected H5ADs contain
+  `layers=['counts']`; composition found no visible final `hvg2000`
+  pseudobulk cache at worker time. The four final hvg2000 caches are now
+  present, checksummed, and run-owned. The valid Kidney legacy inventory
+  skipped six methods; only Kidney GloScope was missing and remains a
+  targeted affected row.
+- Successful prepare, pseudobulk, pilot, and qot artifacts remain immutable
+  and reusable. A targeted source repair is in progress for the MRVI GPU
+  argument and explicit GloScope no-fall-through boundary. Any retry must
+  use a new commit-keyed snapshot and select only the failed method/dataset
+  rows; no broad five-dataset rerun or corrected Stage 5 launch is allowed.
+- Targeted repair is now implemented: the Python worker appends its explicit
+  `GPU_DEVICE_ARGS`, and the R worker has a standalone GloScope counts-free
+  path plus a separate post-cache no-op branch before scITD. The focused
+  worker regressions pass (`test_benchmark_matrix_submitter.sh` and
+  `test_benchmark_worker_dispatch.R`), as do the Stage 5 selection,
+  synchronization, RDS, and batch-analysis contracts. No production artifact
+  was changed by the repair; a new snapshot and affected-row recovery gate
+  are required next.

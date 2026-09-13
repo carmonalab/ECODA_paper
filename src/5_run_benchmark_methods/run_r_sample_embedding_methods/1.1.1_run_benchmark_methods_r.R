@@ -539,50 +539,29 @@ if (pseudobulk_metadata_method) {
   )
   obs <- metadata_info$obs
   hvg_rank_genes <- metadata_info$hvg_rank_genes
-} else if (method == "gloscope" || method == "composition") {
-  # Both methods are counts-free, but GloScope has a deliberately minimal
-  # metadata contract: it needs only Sample/label and its stored embeddings.
-  # In particular, do not request the CT annotations used by composition and
-  # never let GloScope fall through to the count-backed Seurat branch below.
-  embedding_keys <- if (method == "gloscope" && is.null(analysis_pass)) {
+} else if (method == "gloscope") {
+  # GloScope is explicitly counts-free: validate the persisted counts-layer
+  # contract through load_h5ad_counts_free(), but materialize only the
+  # configured metadata and stored semantic PCA embeddings.  Keep seurat NULL
+  # so this branch cannot fall through to the count-backed Seurat path.
+  embedding_names <- if (is.null(analysis_pass)) {
     c(
-      "X_pca_benchmark_analysis_hvg1000",
-      "X_pca_benchmark_analysis_hvg2000",
-      "X_pca_benchmark_analysis_hvg3000"
+      hvg1000 = "X_pca_benchmark_analysis_hvg1000",
+      hvg2000 = "X_pca_benchmark_analysis_hvg2000",
+      hvg3000 = "X_pca_benchmark_analysis_hvg3000"
     )
   } else {
-    embedding_key
-  }
-  composition_obs_columns <- if (
-    method == "composition" &&
-    is.null(analysis_pass) &&
-    length(entry$not_suitable_for_auto_annotation) == 0
-  ) {
-    c("layer2", "scATOMIC_pred")
-  } else {
-    character()
-  }
-  obs_columns <- if (method == "gloscope") {
-    c(
-      sample_col,
-      entry$label_col,
-      if (correct_batch_mode) batch_keys else NULL
-    )
-  } else {
-    c(
-      sample_col,
-      entry$label_col,
-      entry$cell_type_low_res,
-      entry$cell_type_high_res,
-      if (correct_batch_mode) batch_keys else batch_col,
-      composition_obs_columns
-    )
+    c(hvg2000 = embedding_key)
   }
   adata <- load_h5ad_counts_free(
     h5ad_path,
-    unique(obs_columns[!is.na(obs_columns) & nzchar(obs_columns)]),
-    embedding_keys,
-    obs_prefixes = if (method == "composition") "leiden_res_" else character(),
+    unique(c(
+      sample_col,
+      entry$label_col,
+      if (correct_batch_mode) batch_keys else NULL
+    )),
+    unname(embedding_names),
+    obs_prefixes = character(),
     view = args$view,
     method = method,
     expected_batch_contract = h5ad_expected_batch_contract,
@@ -590,22 +569,43 @@ if (pseudobulk_metadata_method) {
   )
   obs <- py_to_r(adata$obs)
   hvg_rank_genes <- get_hvg_rank_genes(adata)
-  if (method == "gloscope") {
-    embedding_names <- if (is.null(analysis_pass)) {
-      c(
-        hvg1000 = "X_pca_benchmark_analysis_hvg1000",
-        hvg2000 = "X_pca_benchmark_analysis_hvg2000",
-        hvg3000 = "X_pca_benchmark_analysis_hvg3000"
-      )
-    } else {
-      c(hvg2000 = embedding_key)
-    }
-    embedding_matrices <- lapply(unname(embedding_names), function(key) {
-      py_to_r(adata$obsm[[key]])
-    })
-    names(embedding_matrices) <- names(embedding_names)
-    embedding_sample_ids <- as.character(obs[[sample_col]])
+  embedding_matrices <- lapply(unname(embedding_names), function(key) {
+    py_to_r(adata$obsm[[key]])
+  })
+  names(embedding_matrices) <- names(embedding_names)
+  embedding_sample_ids <- as.character(obs[[sample_col]])
+} else if (method == "composition") {
+  # Composition keeps its existing obs-only path.  It consumes the stored
+  # hvg2000 PCA embedding, configured annotations, and the cached pseudobulk
+  # variants without materializing a Seurat object.
+  composition_obs_columns <- if (
+    is.null(analysis_pass) &&
+    length(entry$not_suitable_for_auto_annotation) == 0
+  ) {
+    c("layer2", "scATOMIC_pred")
+  } else {
+    character()
   }
+  obs_columns <- c(
+    sample_col,
+    entry$label_col,
+    entry$cell_type_low_res,
+    entry$cell_type_high_res,
+    if (correct_batch_mode) batch_keys else batch_col,
+    composition_obs_columns
+  )
+  adata <- load_h5ad_counts_free(
+    h5ad_path,
+    unique(obs_columns[!is.na(obs_columns) & nzchar(obs_columns)]),
+    embedding_key,
+    obs_prefixes = "leiden_res_",
+    view = args$view,
+    method = method,
+    expected_batch_contract = h5ad_expected_batch_contract,
+    allow_missing_summary = corrected_final_mode
+  )
+  obs <- py_to_r(adata$obs)
+  hvg_rank_genes <- get_hvg_rank_genes(adata)
 } else {
   ad <- import("anndata", convert = FALSE)
   adata <- ad$read_h5ad(h5ad_path, backed = "r")
@@ -789,9 +789,7 @@ metadata <- NULL
 labels <- NULL
 if (method == "gloscope") {
   metadata <- collapse_sample_metadata(obs, sample_col = sample_col)
-}
-
-if (method %in% c("mofa", "pseudobulk")) {
+} else if (method %in% c("mofa", "pseudobulk")) {
   # Both methods consume direct matrix pseudobulks.  Cache validation occurs
   # inside load_pb_variants before the H5AD raw counts pass; a complete cache
   # set therefore performs no aggregation and creates no Seurat object.

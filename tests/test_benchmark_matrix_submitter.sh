@@ -294,6 +294,50 @@ case "$(cat "${PY_CALL_LOG}")" in
   *"--device cuda"*) ;;
   *) echo "GPU worker did not force --device cuda" >&2; exit 1 ;;
 esac
+printf 'Adams\tbenchmark_analysis\tmrvi\thvg1000\n' > "${WORKER_MANIFEST}"
+: > "${PY_CALL_LOG}"
+PY_CALL_LOG="${PY_CALL_LOG}" \
+HOME="${TMP_DIR}/home" PATH="/usr/bin:/bin" TMPDIR="${TMP_DIR}" \
+HPC_SCRATCH_DIR="${WORKER_SCRATCH}" LOGS_DIR="${TMP_DIR}/worker-logs" \
+ECODA_RUNTIME_MODE=host ECODA_RUNTIME_IN_CONTAINER=1 \
+ECODA_SOURCE_ROOT="${SOURCE_TREE}" ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST}" \
+ECODA_SOURCE_SNAPSHOT_REQUIRED=1 ECODA_AUX_ROOT="${SOURCE_TREE}/aux" \
+ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}" \
+ECODA_RUN_ROOT="${WORKER_RUN_ROOT}" ECODA_RUN_ID="${WORKER_RUN_ID}" \
+ECODA_RUNTIME_IMAGE="${RUNTIME_IMAGE}" \
+ECODA_RUNTIME_MANIFEST="${RUNTIME_MANIFEST}" \
+ECODA_RUNTIME_PREFIX="${FAKE_PREFIX}" ECODA_APPTAINER_NV=0 \
+ECODA_RUNTIME_PROFILE=stage5 METHOD_GPU_POLICY=default METHOD=mrvi \
+ANALYSIS_MANIFEST="${WORKER_MANIFEST}" ANALYSIS_ROOT="${WORKER_ROOT}" \
+EXECUTION_LOG_DIR="${WORKER_ROOT}/embeddings" \
+SLURM_ARRAY_TASK_ID=1 SLURM_ARRAY_JOB_ID=91002 \
+  bash "${SOURCE_TREE}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh"
+case "$(cat "${PY_CALL_LOG}")" in
+  *"--combo hvg1000"*"--device cpu"*) ;;
+  *) echo "CPU MRVI combo omitted --device cpu" >&2; exit 1 ;;
+esac
+printf 'Adams\tbenchmark_analysis\tmrvi\n' > "${WORKER_MANIFEST}"
+: > "${PY_CALL_LOG}"
+PY_CALL_LOG="${PY_CALL_LOG}" \
+HOME="${TMP_DIR}/home" PATH="/usr/bin:/bin" TMPDIR="${TMP_DIR}" \
+HPC_SCRATCH_DIR="${WORKER_SCRATCH}" LOGS_DIR="${TMP_DIR}/worker-logs" \
+ECODA_RUNTIME_MODE=host ECODA_RUNTIME_IN_CONTAINER=1 \
+ECODA_SOURCE_ROOT="${SOURCE_TREE}" ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST}" \
+ECODA_SOURCE_SNAPSHOT_REQUIRED=1 ECODA_AUX_ROOT="${SOURCE_TREE}/aux" \
+ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}" \
+ECODA_RUN_ROOT="${WORKER_RUN_ROOT}" ECODA_RUN_ID="${WORKER_RUN_ID}" \
+ECODA_RUNTIME_IMAGE="${RUNTIME_IMAGE}" \
+ECODA_RUNTIME_MANIFEST="${RUNTIME_MANIFEST}" \
+ECODA_RUNTIME_PREFIX="${FAKE_PREFIX}" ECODA_APPTAINER_NV=0 \
+ECODA_RUNTIME_PROFILE=stage5 METHOD_GPU_POLICY=default METHOD=mrvi \
+ANALYSIS_MANIFEST="${WORKER_MANIFEST}" ANALYSIS_ROOT="${WORKER_ROOT}" \
+EXECUTION_LOG_DIR="${WORKER_ROOT}/embeddings" \
+SLURM_ARRAY_TASK_ID=1 SLURM_ARRAY_JOB_ID=91003 \
+  bash "${SOURCE_TREE}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh"
+if grep -q -- '--device cpu' "${PY_CALL_LOG}"; then
+  echo "CPU MRVI without an explicit combo unexpectedly received --device cpu" >&2
+  exit 1
+fi
 
 
 : > "${CAPTURE}"
