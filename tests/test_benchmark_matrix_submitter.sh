@@ -83,6 +83,28 @@ export CAPTURE
 cat > "${TMP_DIR}/bin/sbatch" <<'STUB'
 #!/bin/bash
 set -euo pipefail
+if [[ "${FAIL_OWNER_FINALIZATION_GATE:-0}" == "1" &&
+      "$*" == *"matrix_gate.sh"* ]]; then
+  gate_root="${ECODA_RUN_ROOT:?}"
+  mkdir -p "${gate_root}/status/watchdogs"
+  for method in pilot qot; do
+    cat > "${gate_root}/status/watchdogs/benchmark_analysis__${method}.status" <<EOF
+STATE=$([[ "${method}" == pilot ]] && printf OK || printf FAIL)
+LABEL=benchmark_analysis__${method}
+ARRAY_JOB_ID=81001
+WATCHDOG_JOB_ID=81002
+SCHEDULER_ID=81001
+SCHEDULER_ID=81002
+EOF
+  done
+  cat > "${gate_root}/status/aggregate" <<EOF
+STATE=FAIL
+REASON=synthetic aggregate failure
+WATCHDOG_LABELS=benchmark_analysis__pilot,benchmark_analysis__qot,benchmark_analysis__trans
+EOF
+  printf '81099\n'
+  exit 1
+fi
 printf 'ENV ECODA_SOURCE_ROOT=%s ECODA_SOURCE_MANIFEST=%s ECODA_RUNTIME_IMAGE=%s ECODA_RUNTIME_MANIFEST=%s ECODA_RUN_ROOT=%s ECODA_RUN_ID=%s ARGS %s\n' \
   "${ECODA_SOURCE_ROOT:-}" "${ECODA_SOURCE_MANIFEST:-}" \
   "${ECODA_RUNTIME_IMAGE:-}" "${ECODA_RUNTIME_MANIFEST:-}" \
@@ -851,4 +873,240 @@ if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example
   exit 1
 fi
 [[ ! -s "${CAPTURE}" ]]
+# Exercise aggregate failure finalization with successful, failed, and missing
+# watchdog records in one run.
+set +e
+OWNER_FINALIZATION_RUN_ID="stage5-owner-finalization-regression"
+OWNER_FINALIZATION_ROOT="${HPC_ROOT}/_ecoda_runs/${OWNER_FINALIZATION_RUN_ID}"
+FAIL_OWNER_FINALIZATION_GATE=1 \
+  ECODA_RUN_ID="${OWNER_FINALIZATION_RUN_ID}" \
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  BENCHMARK_MATRIX_TEST=1 \
+  bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+  --datasets Adams --methods pilot,qot,trans \
+  > "${TMP_DIR}/owner-finalization.out" 2> "${TMP_DIR}/owner-finalization.err"
+OWNER_FINALIZATION_RC=$?
+set -e
+[[ ${OWNER_FINALIZATION_RC} -eq 1 ]] || {
+  cat "${TMP_DIR}/owner-finalization.err" >&2
+  echo "Stage 5 aggregate failure did not invoke failure finalization" >&2
+  exit 1
+}
+OWNER_FINALIZATION_KEYS=(
+  ordinary_Adams_benchmark_analysis_pilot
+  ordinary_Adams_benchmark_analysis_qot
+  ordinary_Adams_benchmark_analysis_trans
+)
+OWNER_FINALIZATION_STATES=(OK FAIL FAIL)
+for owner_idx in "${!OWNER_FINALIZATION_KEYS[@]}"; do
+  owner_dir="${HPC_ROOT}/_ecoda_owners/stage5/${OWNER_FINALIZATION_KEYS[${owner_idx}]}"
+  [[ -d "${owner_dir}" && ! -L "${owner_dir}" ]] || {
+    echo "Stage 5 failure finalization deleted an owner directory" >&2
+    exit 1
+  }
+  [[ "$(sed -n 's/^STATE=//p' "${owner_dir}/owner" | sed -n '1p')" == \
+     "${OWNER_FINALIZATION_STATES[${owner_idx}]}" ]] || {
+    echo "unexpected Stage 5 owner terminal state: ${owner_dir}" >&2
+    exit 1
+  }
+done
+[[ -s "${OWNER_FINALIZATION_ROOT}/status/watchdogs/benchmark_analysis__pilot.status" ]]
+[[ -s "${OWNER_FINALIZATION_ROOT}/status/watchdogs/benchmark_analysis__qot.status" ]]
+[[ ! -e "${OWNER_FINALIZATION_ROOT}/status/watchdogs/benchmark_analysis__trans.status" ]]
+[[ "$(sed -n 's/^STATE=//p' "${OWNER_FINALIZATION_ROOT}/status/aggregate" | sed -n '1p')" == FAIL ]]
+# A sync-only recovery must also preserve global artifact owners for methods
+# whose watchdog succeeded, while failing global owners for failed/missing
+# methods.  This path uses the real ownership acquisition and later sync-fail
+# abort rather than the matrix-test short circuit.
+SYNC_OWNER_RUN_ID="stage5-owner-sync-finalization"
+SYNC_OWNER_ROOT="${HPC_ROOT}/_ecoda_runs/${SYNC_OWNER_RUN_ID}"
+SYNC_NAS_ROOT="${TMP_DIR}/nas/ECODA_paper"
+mkdir -p "${SYNC_NAS_ROOT}/Adams/output" "${HPC_ROOT}/Adams/output" \
+  "${HPC_ROOT}/benchmark/results" "${SYNC_NAS_ROOT}/benchmark/results"
+SYNC_INITIAL_OUTPUT="$(
+  NAS_TARGET_DIR="${SYNC_NAS_ROOT}" \
+  ECODA_RUN_ID="${SYNC_OWNER_RUN_ID}" \
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  BENCHMARK_MATRIX_TEST=1 \
+  bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+  --datasets Adams --methods trans,zeroimp
+)"
+[[ -n "${SYNC_INITIAL_OUTPUT}" ]]
+SYNC_TRANS_KEY="ordinary/Adams/benchmark_analysis/trans"
+SYNC_ZEROIMP_KEY="ordinary/Adams/benchmark_analysis/zeroimp"
+SYNC_PILOT_KEY="ordinary/Adams/benchmark_analysis/pilot"
+SYNC_TRANS_OWNER="${HPC_ROOT}/_ecoda_owners/stage5/ordinary_Adams_benchmark_analysis_trans"
+SYNC_ZEROIMP_OWNER="${HPC_ROOT}/_ecoda_owners/stage5/ordinary_Adams_benchmark_analysis_zeroimp"
+SYNC_PILOT_OWNER="${HPC_ROOT}/_ecoda_owners/stage5/ordinary_Adams_benchmark_analysis_pilot"
+for sync_stage_owner in "${SYNC_TRANS_OWNER}" "${SYNC_ZEROIMP_OWNER}"; do
+  [[ -d "${sync_stage_owner}" && ! -L "${sync_stage_owner}" ]] || {
+    echo "initial sync fixture did not create a stage owner" >&2
+    exit 1
+  }
+done
+mkdir -p "${SYNC_PILOT_OWNER}"
+printf 'RUN_ID=%s\nSTATE=ACTIVE\nSTAGE=stage5\nKEY=%s\nPID=%s\n' \
+  "${SYNC_OWNER_RUN_ID}" "${SYNC_PILOT_KEY}" "$$" > "${SYNC_PILOT_OWNER}/owner"
+printf '%s\t%s\n' \
+  "${SYNC_TRANS_KEY}" "${SYNC_TRANS_OWNER}" \
+  "${SYNC_ZEROIMP_KEY}" "${SYNC_ZEROIMP_OWNER}" \
+  "${SYNC_PILOT_KEY}" "${SYNC_PILOT_OWNER}" \
+  > "${SYNC_OWNER_ROOT}/manifests/owners.tsv"
+printf 'Adams\tbenchmark_analysis\ttrans\n' \
+  > "${SYNC_OWNER_ROOT}/manifests/matrix_benchmark_analysis_trans.tsv"
+printf 'Adams\tbenchmark_analysis\tzeroimp\n' \
+  > "${SYNC_OWNER_ROOT}/manifests/matrix_benchmark_analysis_zeroimp.tsv"
+printf 'Adams\tbenchmark_analysis\tpilot\n' \
+  > "${SYNC_OWNER_ROOT}/manifests/matrix_benchmark_analysis_pilot.tsv"
+cat > "${SYNC_OWNER_ROOT}/status/watchdogs/benchmark_analysis__trans.status" <<'EOF'
+STATE=OK
+LABEL=benchmark_analysis__trans
+SCHEDULER_ID=82000
+EOF
+cat > "${SYNC_OWNER_ROOT}/status/watchdogs/benchmark_analysis__zeroimp.status" <<'EOF'
+STATE=FAIL
+LABEL=benchmark_analysis__zeroimp
+REASON=synthetic failed watchdog
+SCHEDULER_ID=82001
+EOF
+SYNC_INPUT_NAME="$(jq -r '.Adams.views.benchmark_analysis.output_file_name' \
+  "${ROOT}/datasets.json")"
+SYNC_SCRATCH_INPUT="${HPC_ROOT}/Adams/output/${SYNC_INPUT_NAME}"
+SYNC_NAS_INPUT="${SYNC_NAS_ROOT}/Adams/output/${SYNC_INPUT_NAME}"
+for sync_input in "${SYNC_SCRATCH_INPUT}" "${SYNC_NAS_INPUT}"; do
+  printf 'synthetic source h5ad fixture\n' > "${sync_input}"
+  sync_digest="$(md5sum "${sync_input}" | cut -d' ' -f1)"
+  printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${sync_digest}" \
+    "$(wc -c < "${sync_input}" | tr -d '[:space:]')" "${sync_input}" \
+    > "${sync_input}.md5"
+done
+SYNC_PRODUCER_RUN_ID="stage5-owner-sync-source"
+(
+  export HOME="${TMP_DIR}/home" HPC_SCRATCH_DIR="${HPC_ROOT}" \
+    NAS_TARGET_DIR="${SYNC_NAS_ROOT}" ECODA_SOURCE_ROOT="${SOURCE_TREE}" \
+    ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST}" \
+    ECODA_SOURCE_SNAPSHOT_REQUIRED=1 ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}" \
+    ECODA_HOST_PYTHON_BIN="${HOST_PREFIX}/bin/python" \
+    ECODA_RUNTIME_MODE=apptainer ECODA_RUNTIME_PROFILE=stage3 \
+    ECODA_RUN_ID="${SYNC_PRODUCER_RUN_ID}"
+  source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1
+  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  ecoda_init_run stage3 "${SYNC_PRODUCER_RUN_ID}" >/dev/null
+  ecoda_write_artifact_record "${SYNC_SCRATCH_INPUT}" stage3 \
+    "${SYNC_PRODUCER_RUN_ID}" >/dev/null
+  ecoda_artifact_owner_acquire "${SYNC_SCRATCH_INPUT}" stage3 \
+    "${SYNC_PRODUCER_RUN_ID}" 0 0 0 >/dev/null
+  ecoda_artifact_owner_set_state "${SYNC_SCRATCH_INPUT}" OK \
+    "source fixture published"
+)
+SYNC_GLOBAL_OWNER_LIST="${SYNC_OWNER_ROOT}/manifests/global_owners.tsv"
+(
+  export HOME="${TMP_DIR}/home" HPC_SCRATCH_DIR="${HPC_ROOT}" \
+    NAS_TARGET_DIR="${SYNC_NAS_ROOT}" ECODA_RUN_ROOT="${SYNC_OWNER_ROOT}" \
+    ECODA_RUN_ID="${SYNC_OWNER_RUN_ID}"
+  source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1
+  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  export ANALYSIS_ROOT="${HPC_ROOT}/benchmark" \
+    ANALYSIS_NAS_ROOT="${SYNC_NAS_ROOT}/benchmark"
+  unset ANALYSIS_VARIANT ANALYSIS_PASS PASS_ARG
+  : > "${SYNC_GLOBAL_OWNER_LIST}"
+  for sync_method in trans zeroimp; do
+    _ecoda_stage5_artifacts_for Adams benchmark_analysis "${sync_method}"
+    for sync_artifact in "${ECODA_BENCHMARK_ARTIFACTS[@]}" \
+                         "${ECODA_BENCHMARK_ARTIFACT_NAS[@]}"; do
+      sync_owner="$(ecoda_artifact_owner_acquire "${sync_artifact}" stage5 \
+        "${SYNC_OWNER_RUN_ID}" 1 0 0)"
+      printf '%s\t%s\n' "${sync_method}" "${sync_owner}" \
+        >> "${SYNC_GLOBAL_OWNER_LIST}"
+    done
+  done
+)
+(
+  export HOME="${TMP_DIR}/home" HPC_SCRATCH_DIR="${HPC_ROOT}" \
+    NAS_TARGET_DIR="${SYNC_NAS_ROOT}" ECODA_RUN_ROOT="${SYNC_OWNER_ROOT}" \
+    ECODA_RUN_ID="${SYNC_OWNER_RUN_ID}"
+  source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1
+  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  export ANALYSIS_ROOT="${HPC_ROOT}/benchmark" \
+    ANALYSIS_NAS_ROOT="${SYNC_NAS_ROOT}/benchmark"
+  unset ANALYSIS_VARIANT ANALYSIS_PASS PASS_ARG
+  for sync_method in trans zeroimp; do
+    _ecoda_stage5_artifacts_for Adams benchmark_analysis "${sync_method}"
+    for sync_artifact in "${ECODA_BENCHMARK_ARTIFACTS[@]}"; do
+      printf 'synthetic %s output\n' "${sync_method}" > "${sync_artifact}"
+      sync_digest="$(md5sum "${sync_artifact}" | cut -d' ' -f1)"
+      printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${sync_digest}" \
+        "$(wc -c < "${sync_artifact}" | tr -d '[:space:]')" \
+        "${sync_artifact}" > "${sync_artifact}.md5"
+      ecoda_write_artifact_record "${sync_artifact}" \
+        "stage5_${sync_method}" "${SYNC_OWNER_RUN_ID}" >/dev/null
+      sync_runtime="${sync_artifact}.runtime.json"
+      printf '{}\n' > "${sync_runtime}"
+      sync_runtime_digest="$(md5sum "${sync_runtime}" | cut -d' ' -f1)"
+      printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${sync_runtime_digest}" \
+        "$(wc -c < "${sync_runtime}" | tr -d '[:space:]')" \
+        "${sync_runtime}" > "${sync_runtime}.md5"
+    done
+  done
+)
+SYNC_SOURCE_IDENTITY="${SYNC_OWNER_ROOT}/manifests/source_identity.json"
+printf '{}\n' > "${SYNC_SOURCE_IDENTITY}"
+sync_identity_digest="$(md5sum "${SYNC_SOURCE_IDENTITY}" | cut -d' ' -f1)"
+printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${sync_identity_digest}" \
+  "$(wc -c < "${SYNC_SOURCE_IDENTITY}" | tr -d '[:space:]')" \
+  "${SYNC_SOURCE_IDENTITY}" > "${SYNC_SOURCE_IDENTITY}.md5"
+set +e
+NAS_TARGET_DIR="${SYNC_NAS_ROOT}" \
+  ECODA_RUN_ID="${SYNC_OWNER_RUN_ID}" \
+  STAGE5_INPUT_PRODUCER_RUN_ID="${SYNC_PRODUCER_RUN_ID}" \
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+  --sync-only "${SYNC_OWNER_RUN_ID}" \
+  > "${TMP_DIR}/owner-sync-finalization.out" \
+  2> "${TMP_DIR}/owner-sync-finalization.err"
+SYNC_OWNER_RC=$?
+set -e
+[[ ${SYNC_OWNER_RC} -eq 1 ]] || {
+  cat "${TMP_DIR}/owner-sync-finalization.err" >&2
+  echo "sync failure did not invoke Stage 5 failure finalization" >&2
+  exit 1
+}
+SYNC_OWNER_KEYS=(
+  ordinary_Adams_benchmark_analysis_trans
+  ordinary_Adams_benchmark_analysis_zeroimp
+  ordinary_Adams_benchmark_analysis_pilot
+)
+SYNC_OWNER_STATES=(OK FAIL FAIL)
+for sync_idx in "${!SYNC_OWNER_KEYS[@]}"; do
+  sync_owner_dir="${HPC_ROOT}/_ecoda_owners/stage5/${SYNC_OWNER_KEYS[${sync_idx}]}"
+  [[ -d "${sync_owner_dir}" && ! -L "${sync_owner_dir}" ]] || {
+    echo "sync failure finalization deleted a Stage 5 owner directory" >&2
+    exit 1
+  }
+  [[ "$(sed -n 's/^STATE=//p' "${sync_owner_dir}/owner" | sed -n '1p')" == \
+     "${SYNC_OWNER_STATES[${sync_idx}]}" ]] || {
+    echo "unexpected sync Stage 5 owner state: ${sync_owner_dir}" >&2
+    exit 1
+  }
+done
+SYNC_GLOBAL_OWNER_COUNT=0
+while IFS=$'\t' read -r sync_method sync_owner_dir; do
+  [[ -n "${sync_method}" && -n "${sync_owner_dir}" ]] || continue
+  [[ -d "${sync_owner_dir}" && ! -L "${sync_owner_dir}" ]] || {
+    echo "sync failure finalization deleted a global artifact owner" >&2
+    exit 1
+  }
+  case "${sync_method}" in
+    trans) sync_expected_state=OK ;;
+    zeroimp) sync_expected_state=FAIL ;;
+    *) echo "unexpected global owner fixture method" >&2; exit 1 ;;
+  esac
+  [[ "$(sed -n 's/^STATE=//p' "${sync_owner_dir}/owner" | sed -n '1p')" == \
+     "${sync_expected_state}" ]] || {
+    echo "unexpected sync global owner state: ${sync_owner_dir}" >&2
+    exit 1
+  }
+  SYNC_GLOBAL_OWNER_COUNT=$((SYNC_GLOBAL_OWNER_COUNT + 1))
+done < "${SYNC_GLOBAL_OWNER_LIST}"
+[[ ${SYNC_GLOBAL_OWNER_COUNT} -gt 0 ]]
 echo "benchmark matrix submitter: OK"

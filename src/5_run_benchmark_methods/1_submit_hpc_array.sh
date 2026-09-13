@@ -1032,15 +1032,286 @@ stage5_create_batch_contract_manifest() {
   stage5_validate_batch_contract_manifest
 }
 
+stage5_watchdog_status_value() {
+  local status="$1" field="$2"
+  awk -F= -v wanted="${field}" '
+    $1 == wanted {
+      count++
+      value=substr($0, length(wanted) + 2)
+    }
+    END {
+      if (count != 1 || value == "" ||
+          value ~ /[\t\r\n]/) {
+        exit 1
+      }
+      print value
+    }
+  ' "${status}"
+}
+
+stage5_watchdog_safe_label() {
+  printf '%s' "$1" | tr '/:,\t |' '______'
+}
+
+# Resolve one method owner to the exact run-owned watchdog status that covers
+# its dataset/view row.  A method is successful only when every matching
+# watchdog record is a terminal STATE=OK record; an absent, malformed, or
+# failed record remains fail-closed.
+stage5_watchdog_state_for_method() {
+  local ds="$1" view="$2" method="$3"
+  local status_dir="${ECODA_RUN_ROOT:-}/status/watchdogs"
+  local matrix status status_label expected_label safe
+  local matrix_base matrix_prefix matrix_suffix matrix_columns matrix_match state
+  local row_ds row_view row_method row_extra
+  local expected_count=0 saw_ok=0 saw_fail=0
+  STAGE5_WATCHDOG_STATE=FAIL
+  [[ -d "${status_dir}" && ! -L "${status_dir}" ]] || return 0
+  matrix_prefix="${view}_${method}"
+  for matrix in "${ECODA_RUN_ROOT:-}"/manifests/matrix_*.tsv; do
+    [[ -e "${matrix}" ]] || continue
+    [[ -f "${matrix}" && ! -L "${matrix}" && -r "${matrix}" ]] || continue
+    ecoda_validate_run_owned_path "${matrix}" "${ECODA_RUN_ROOT}" \
+      >/dev/null 2>&1 || continue
+    matrix_columns=0
+    if ecoda_validate_manifest "${matrix}" 3 >/dev/null 2>&1; then
+      matrix_columns=3
+    elif ecoda_validate_manifest "${matrix}" 4 >/dev/null 2>&1; then
+      matrix_columns=4
+    else
+      continue
+    fi
+    matrix_match=0
+    while IFS=$'\t' read -r row_ds row_view row_method row_extra; do
+      if [[ "${row_ds}" == "${ds}" && "${row_view}" == "${view}" &&
+            "${row_method}" == "${method}" ]]; then
+        matrix_match=1
+      fi
+    done < "${matrix}"
+    [[ ${matrix_match} -eq 1 ]] || continue
+    matrix_base="${matrix##*/}"
+    matrix_base="${matrix_base#matrix_}"
+    matrix_base="${matrix_base%.tsv}"
+    if [[ "${matrix_base}" == "${matrix_prefix}" ]]; then
+      expected_label="${view}__${method}"
+    elif [[ "${matrix_base}" == "${matrix_prefix}_"* ]]; then
+      matrix_suffix="${matrix_base#${matrix_prefix}_}"
+      case "${matrix_suffix}" in
+        cpu|default_gpu|any_gpu) ;;
+        *) saw_fail=1; continue ;;
+      esac
+      expected_label="${view}__${method}__${matrix_suffix}"
+    else
+      saw_fail=1
+      continue
+    fi
+    expected_count=$((expected_count + 1))
+    safe="$(stage5_watchdog_safe_label "${expected_label}")" || {
+      saw_fail=1
+      continue
+    }
+    status="${status_dir}/${safe}.status"
+    [[ -s "${status}" && -f "${status}" && ! -L "${status}" &&
+       -r "${status}" ]] || {
+      saw_fail=1
+      continue
+    }
+    ecoda_validate_run_owned_path "${status}" "${ECODA_RUN_ROOT}" \
+      >/dev/null 2>&1 || {
+      saw_fail=1
+      continue
+    }
+    if ! status_label="$(stage5_watchdog_status_value "${status}" LABEL \
+        2>/dev/null)"; then
+      saw_fail=1
+      continue
+    fi
+    [[ "${status_label}" == "${expected_label}" ]] || {
+      saw_fail=1
+      continue
+    }
+    if ! state="$(stage5_watchdog_status_value "${status}" STATE \
+        2>/dev/null)"; then
+      saw_fail=1
+      continue
+    fi
+    case "${state}" in
+      OK) saw_ok=$((saw_ok + 1)) ;;
+      FAIL) saw_fail=1 ;;
+      *) saw_fail=1 ;;
+    esac
+  done
+  if [[ ${expected_count} -gt 0 && ${saw_ok} -eq ${expected_count} &&
+        ${saw_fail} -eq 0 ]]; then
+    STAGE5_WATCHDOG_STATE=OK
+  fi
+}
+
+stage5_watchdog_state_for_owner_key() {
+  local owner_key="$1"
+  local scope ds view method extra
+  STAGE5_WATCHDOG_STATE=FAIL
+  IFS='/' read -r scope ds view method extra <<< "${owner_key}"
+  case "${scope}" in
+    ordinary|uncorrected|corrected) ;;
+    *) return 0 ;;
+  esac
+  [[ -n "${ds}" && -n "${view}" && -n "${method}" &&
+     -z "${extra}" ]] || return 0
+  stage5_watchdog_state_for_method "${ds}" "${view}" "${method}"
+}
+
+# Global artifact owners are keyed only by their canonical path.  Resolve that
+# path through the exact stage5 owner manifest and centralized artifact
+# contract before consulting its method watchdog state; never infer success
+# from a method name or artifact presence.
+stage5_watchdog_state_for_artifact_path() {
+  local target_path="$1"
+  local owner_file="${ECODA_RUN_ROOT:-}/manifests/owners.tsv"
+  local owner_key owner extra owner_metadata_key expected_owner
+  local scope ds view method owner_path expected_path
+  local found=0 saw_ok=0 saw_fail=0
+  STAGE5_WATCHDOG_STATE=FAIL
+  [[ -r "${owner_file}" && ! -L "${owner_file}" ]] || return 0
+  ecoda_validate_run_owned_path "${owner_file}" "${ECODA_RUN_ROOT}" \
+    >/dev/null 2>&1 || return 0
+  while IFS=$'\t' read -r owner_key owner extra; do
+    [[ -n "${owner_key}" && -n "${owner}" && -z "${extra}" ]] || continue
+    expected_owner="$(ecoda_owner_dir stage5 "${owner_key}" 2>/dev/null ||
+      true)"
+    owner_metadata_key="$(ecoda_owner_field "${owner}" KEY 2>/dev/null ||
+      true)"
+    [[ "${owner}" == "${expected_owner}" &&
+       "${owner_metadata_key}" == "${owner_key}" ]] || continue
+    IFS='/' read -r scope ds view method extra <<< "${owner_key}"
+    case "${scope}" in
+      ordinary|uncorrected|corrected) ;;
+      *) continue ;;
+    esac
+    [[ -n "${ds}" && -n "${view}" && -n "${method}" &&
+       -z "${extra}" ]] || continue
+    _ecoda_stage5_artifacts_for "${ds}" "${view}" "${method}" \
+      >/dev/null 2>&1 || continue
+    for owner_path in "${ECODA_BENCHMARK_ARTIFACTS[@]}" \
+                      "${ECODA_BENCHMARK_ARTIFACT_NAS[@]}"; do
+      [[ -n "${owner_path}" ]] || continue
+      if ! expected_path="$(ecoda_canonical_path "${owner_path}" \
+          2>/dev/null)"; then
+        continue
+      fi
+      [[ "${expected_path}" == "${target_path}" ]] || continue
+      found=1
+      stage5_watchdog_state_for_method "${ds}" "${view}" "${method}"
+      if [[ "${STAGE5_WATCHDOG_STATE}" == OK ]]; then
+        saw_ok=1
+      else
+        saw_fail=1
+      fi
+    done
+  done < "${owner_file}"
+  if [[ ${found} -eq 1 && ${saw_ok} -eq 1 && ${saw_fail} -eq 0 ]]; then
+    STAGE5_WATCHDOG_STATE=OK
+  fi
+}
+
+stage5_finalize_tracked_owner_states() {
+  local reason="$1"
+  local owner owner_state owner_key owner_path owner_run owner_stage expected_owner
+  local current_run="${RUN_ID:-${ECODA_RUN_ID:-${ECODA_RUN_ROOT##*/}}}"
+  local owner_reason rc=0
+  declare -p ECODA_ACQUIRED_OWNERS >/dev/null 2>&1 ||
+    ECODA_ACQUIRED_OWNERS=()
+  if [[ ${#ECODA_ACQUIRED_OWNERS[@]} -eq 0 ]]; then
+    return 0
+  fi
+  for owner in "${ECODA_ACQUIRED_OWNERS[@]}"; do
+    [[ -n "${owner}" ]] || { rc=1; continue; }
+    owner_state=FAIL
+    case "${owner}" in
+      "${ECODA_OWNERS_ROOT:-}/artifact/"*)
+        if _ecoda_artifact_owner_validate_dir "${owner}" \
+            >/dev/null 2>&1; then
+          owner_run="${ECODA_ARTIFACT_OWNER_RUN:-}"
+          owner_stage="${ECODA_ARTIFACT_OWNER_STAGE:-}"
+          owner_path="${ECODA_ARTIFACT_OWNER_CANONICAL_PATH:-}"
+          if [[ -n "${owner_path}" && "${owner_run}" == "${current_run}" &&
+                "${owner_stage}" == stage5 ]]; then
+            stage5_watchdog_state_for_artifact_path "${owner_path}"
+            owner_state="${STAGE5_WATCHDOG_STATE}"
+          fi
+        fi
+        ;;
+      *)
+        owner_key="$(ecoda_owner_field "${owner}" KEY 2>/dev/null || true)"
+        expected_owner="$(ecoda_owner_dir stage5 "${owner_key}" \
+          2>/dev/null || true)"
+        owner_run="$(ecoda_owner_field "${owner}" RUN_ID 2>/dev/null ||
+          true)"
+        owner_stage="$(ecoda_owner_field "${owner}" STAGE 2>/dev/null ||
+          true)"
+        if [[ -n "${owner_key}" && "${owner}" == "${expected_owner}" &&
+              "${owner_run}" == "${current_run}" &&
+              "${owner_stage}" == stage5 ]]; then
+          stage5_watchdog_state_for_owner_key "${owner_key}"
+          owner_state="${STAGE5_WATCHDOG_STATE}"
+        fi
+        ;;
+    esac
+    if [[ "${owner_state}" == OK ]]; then
+      owner_reason="method watchdog terminal OK; ${reason}"
+    else
+      owner_reason="${reason}"
+    fi
+    ecoda_owner_set_state "${owner}" "${owner_state}" "${owner_reason}" ||
+      rc=1
+  done
+  return "${rc}"
+}
 stage5_finalize_owner_manifest() {
   local state="$1" reason="$2" owner_file="${ECODA_RUN_ROOT:-}/manifests/owners.tsv"
-  local owner_key owner rc=0
-  [[ -r "${owner_file}" ]] || return 1
-  [[ -s "${owner_file}" ]] || return 0
-  while IFS=$'\t' read -r owner_key owner; do
-    [[ -n "${owner_key}" && -n "${owner}" ]] || { rc=1; continue; }
-    if ! ecoda_owner_set_state "${owner}" "${state}" "${reason}"; then
+  local owner_key owner extra owner_metadata_key expected_owner owner_run owner_stage owner_state
+  local current_run="${RUN_ID:-${ECODA_RUN_ID:-${ECODA_RUN_ROOT##*/}}}"
+  local owner_reason owner_mutable rc=0
+  [[ "${state}" == "OK" || "${state}" == "FAIL" ]] || return 1
+  [[ -r "${owner_file}" && ! -L "${owner_file}" ]] || return 1
+  ecoda_validate_run_owned_path "${owner_file}" "${ECODA_RUN_ROOT}" \
+    >/dev/null 2>&1 || return 1
+  while IFS=$'\t' read -r owner_key owner extra; do
+    if [[ -z "${owner_key}" || -z "${owner}" || -n "${extra}" ]]; then
       rc=1
+      continue
+    fi
+    expected_owner="$(ecoda_owner_dir stage5 "${owner_key}" 2>/dev/null ||
+      true)"
+    owner_metadata_key="$(ecoda_owner_field "${owner}" KEY 2>/dev/null ||
+      true)"
+    owner_run="$(ecoda_owner_field "${owner}" RUN_ID 2>/dev/null || true)"
+    owner_stage="$(ecoda_owner_field "${owner}" STAGE 2>/dev/null || true)"
+    owner_state="${state}"
+    owner_mutable=0
+    if [[ "${state}" == "FAIL" ]]; then
+      if [[ "${owner}" == "${expected_owner}" &&
+            "${owner_metadata_key}" == "${owner_key}" &&
+            "${owner_run}" == "${current_run}" &&
+            "${owner_stage}" == stage5 ]]; then
+        owner_mutable=1
+        stage5_watchdog_state_for_owner_key "${owner_key}"
+        owner_state="${STAGE5_WATCHDOG_STATE}"
+      else
+        rc=1
+      fi
+    elif [[ "${owner}" == "${expected_owner}" ]]; then
+      owner_mutable=1
+    else
+      rc=1
+    fi
+    if [[ "${state}" == "FAIL" && "${owner_state}" == OK ]]; then
+      owner_reason="method watchdog terminal OK; ${reason}"
+    else
+      owner_reason="${reason}"
+    fi
+    if [[ ${owner_mutable} -eq 1 ]]; then
+      ecoda_owner_set_state "${owner}" "${owner_state}" "${owner_reason}" ||
+        rc=1
     fi
   done < "${owner_file}"
   return "${rc}"
@@ -1049,7 +1320,7 @@ stage5_finalize_owner_manifest() {
 stage5_abort() {
   local reason="$1"
   local rc=0
-  ecoda_owner_finalize_tracked FAIL "${reason}" || rc=1
+  stage5_finalize_tracked_owner_states "${reason}" || rc=1
   if [[ -n "${ECODA_RUN_ROOT:-}" && -r "${ECODA_RUN_ROOT}/manifests/owners.tsv" ]]; then
     stage5_finalize_owner_manifest FAIL "${reason}" || rc=1
   fi
@@ -1059,6 +1330,7 @@ stage5_abort() {
   echo "ERROR: ${reason}" >&2
   exit 1
 }
+
 stage5_record_scheduler() {
   local kind="$1" scheduler_id="$2"
   local tmp="${SCHEDULER_FILE}.record.$$" existing_kind existing_id
@@ -3722,7 +3994,8 @@ if [[ "${ANALYSIS_VARIANT:-}" == final ]]; then
   stage5_validate_final_matrix_rows ||
     stage5_abort "Stage 5 final matrix artifact validation failed"
 else
-  for label in "${FEATHER_LABELS[@]}"; do
+  if [[ ${#FEATHER_LABELS[@]} -gt 0 ]]; then
+    for label in "${FEATHER_LABELS[@]}"; do
     if [[ "${PASS_ARG:-}" == corrected ]]; then
       stage5_validate_corrected_matrix_rows "${label}" ||
         stage5_abort "Stage 5 corrected ${label} matrix artifact validation failed"
@@ -3754,7 +4027,8 @@ else
     [[ -n "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}" ]] &&
       rm -f "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}" \
         "${STAGE5_MATRIX_VALIDATION_SELECTION_TEMP}.md5"
-  done
+    done
+  fi
 fi
 RDS_LABELS=()
 for label in "${LABELS[@]}"; do
@@ -3872,7 +4146,7 @@ if [[ "${ANALYSIS_VARIANT:-}" == final &&
   export ECODA_STAGE5_LEGACY_SYNC_SKIP=1
   export ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS="${KIDNEY_LEGACY_VALID_METHODS% }"
 fi
-if ! benchmark_merge_sync_cleanup "${LABELS[@]}"; then
+if ! ( benchmark_merge_sync_cleanup "${LABELS[@]}" ); then
   unset ECODA_STAGE5_LEGACY_SYNC_SKIP ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS
   stage5_abort "Stage 5 benchmark synchronization failed"
 fi

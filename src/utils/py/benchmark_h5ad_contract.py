@@ -1024,21 +1024,40 @@ def validate_benchmark_h5ad_path(
 def _load_batch_contract_argument(value):
     if value is None:
         return None
-    candidate = Path(value)
+
+    # Inline identities are commonly serialized as JSON objects.  Detect
+    # object-looking values before constructing a filesystem candidate:
+    # an inline token can exceed the platform's filename limit, making
+    # ``Path.is_file()`` raise ``ENAMETOOLONG`` instead of reaching
+    # ``json.loads``.
+    if isinstance(value, str) and value.lstrip().startswith("{"):
+        text = value
+    else:
+        try:
+            candidate = Path(value)
+            text = (
+                candidate.read_text(encoding="utf-8")
+                if candidate.is_file()
+                else value
+            )
+        except (OSError, TypeError, ValueError, UnicodeError) as exc:
+            raise ValueError(
+                "batch contract identity must be a JSON object "
+                "or a readable JSON path"
+            ) from exc
+
     try:
-        text = (
-            candidate.read_text(encoding="utf-8")
-            if candidate.is_file()
-            else value
-        )
         identity = json.loads(text)
-    except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as exc:
+    except (UnicodeError, json.JSONDecodeError, TypeError) as exc:
         raise ValueError(
-            "batch contract identity must be a JSON object or a readable JSON path"
+            "batch contract identity must be a JSON object "
+            "or a readable JSON path"
         ) from exc
     if not isinstance(identity, Mapping):
         raise ValueError("batch contract identity JSON must be an object")
     return identity
+
+
 def main():
     import argparse
 

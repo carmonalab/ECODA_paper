@@ -1846,15 +1846,24 @@ full rationale when a short evidence-linked update is sufficient.
 - Corrected Stage 3 gate `stage3_corrected_final_20260913a` was prepared,
   reconciled as absent, and launched once through `durable-hpc-gate-ecoda`
   with the 59b781f snapshot, validated relocated runtime, reviewed Joanito
-  predecessor, and nine-row corrected selection. Its initial unbounded wait
-  later entered `PRELAUNCH_STOP` after the remote completion marker could not
-  be recovered; the remote runner remains active, so terminal accounting,
-  run-scoped audit, and Luna Max review are still pending. Run-owned evidence
-  records preflight `4403877`, initial array `4403887`, OOM retry array
-  `4403903`, and watchdog log
-  `3_scrnaseq_preprocessing_watchdog_4403888.log`. Corrected Stage 5 remains
-  blocked until that runner reaches durable terminal state and the required
-  inspect/review sequence completes.
+  predecessor, and nine-row corrected selection. The initial durable wait
+  lost its completion transport and entered `PRELAUNCH_STOP`; recovery
+  `status` later found the remote runner terminal `FAILED` with exit 1 at
+  `2026-09-13T11:05:07Z`. The single terminal inspect used every emitted
+  scheduler ID: preflight `4403877`, initial array `4403887`, OOM retry
+  arrays `4403903` and `4403989`, and watchdog `4403888`. Accounting failed
+  closed because `4403903` was `OUT_OF_MEMORY|0:125` while its later retry
+  `4403989` completed; no Luna Max reviewer approval was requested.
+- All nine corrected scratch H5ADs and run-owned artifact records passed
+  content, layer, sidecar, and checksum validation. The wrapper failed during
+  NAS synchronization because the corrected batch-contract validator tried to
+  treat its long inline JSON identity as a filesystem path and hit the
+  platform filename-length limit; this was a validator parser defect, not
+  invalid H5AD content. A later unsafe sync-only probe was stopped before
+  synchronization and overwrote only the remote terminal reason; the original
+  durable inspect evidence remains preserved locally, and the failed gate is
+  not release-eligible. Corrected Stage 5 remains blocked pending a distinct
+  validator-only repair path, terminal evidence, and required review.
 - User clarification on 2026-09-13 supersedes the stale split wording in
   earlier Stage 5 subsections: all five uncorrected datasets run together in
   one explicit `final` wave. The canonical selection is
@@ -1896,15 +1905,44 @@ full rationale when a short evidence-linked update is sufficient.
   skipped six methods; only Kidney GloScope was missing and remains a
   targeted affected row.
 - Successful prepare, pseudobulk, pilot, and qot artifacts remain immutable
-  and reusable. A targeted source repair is in progress for the MRVI GPU
-  argument and explicit GloScope no-fall-through boundary. Any retry must
-  use a new commit-keyed snapshot and select only the failed method/dataset
-  rows; no broad five-dataset rerun or corrected Stage 5 launch is allowed.
-- Targeted repair is now implemented: the Python worker appends its explicit
+  and reusable. The four final hvg2000 pseudobulk caches were revalidated
+  against their checksums and run-owned publication records. The valid Kidney
+  legacy inventory skipped six methods; only Kidney GloScope was missing.
+- Targeted repair is implemented: the Python worker appends its explicit
   `GPU_DEVICE_ARGS`, and the R worker has a standalone GloScope counts-free
   path plus a separate post-cache no-op branch before scITD. The focused
   worker regressions pass (`test_benchmark_matrix_submitter.sh` and
   `test_benchmark_worker_dispatch.R`), as do the Stage 5 selection,
   synchronization, RDS, and batch-analysis contracts. No production artifact
-  was changed by the repair; a new snapshot and affected-row recovery gate
-  are required next.
+  was changed by the repair.
+- The affected-row manifest
+  `stage5_uncorrected_repair_20260913a/affected_methods.tsv` records exactly
+  13 failed method/dataset rows: five GloScope, four composition, and four
+  MRVI. Its durable gate was launched but stopped through a verified
+  process-tree termination before `pending_selection.tsv` or any scheduler
+  ID was emitted, after validation showed that the failed producer had marked
+  successful prepare/pseudobulk/pilot/qot owners `FAIL`. No recovery compute
+  or production artifact was created by that attempt.
+- All 16 successful method rows were independently verified against their
+  terminal `STATE=OK` watchdogs, checksums, artifact records, and exact owner
+  paths. The failure-finalization repair is now locally validated to preserve
+  only those matching successful owners, but the historical owner records
+  remain `FAIL` until a validator-only promotion explicitly rechecks and
+  updates those 16 rows. Failed GloScope/composition/MRVI rows remain outside
+  that promotion and require the exact 13-row targeted recovery. No corrected
+  Stage 5 gate is permitted before corrected Stage 3 review.
+- The corrected-batch H5AD contract loader now recognizes long inline JSON
+  identities before filesystem probing, while preserving readable-path and
+  malformed/object validation. `tests/test_benchmark_h5ad_contract.py` passes
+  for long inline JSON, file-backed JSON, malformed JSON, and non-object JSON.
+- Stage 5 failure finalization now preserves a run-owned stage or global
+  artifact owner only when every matching run-owned matrix manifest has a
+  correctly labeled terminal watchdog `STATE=OK`; missing, malformed, failed,
+  foreign, or empty-array cases remain fail-closed without deleting owner
+  directories. Sync cleanup is subshell-wrapped so failures return through
+  `stage5_abort`. `tests/test_benchmark_matrix_submitter.sh` passes its
+  aggregate-failure and true sync-boundary owner-state regressions.
+- The focused repair union is green after these fixes: Stage 5 matrix
+  ownership, H5AD contract parsing, exact selection, synchronization, worker
+  dispatch, RDS contracts, and batch-effect analysis. The expected negative
+  runtime/source-escape diagnostics remain covered by the matrix test.
