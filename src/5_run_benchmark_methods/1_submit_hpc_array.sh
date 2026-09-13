@@ -67,8 +67,8 @@ Selection-file rows are DATASET<TAB>VIEW<TAB>LABEL. Ordinary methods use the
 benchmark_analysis view; batch mode uses the selected explicit pass view.
 Exact batch mode requires the immutable twelve-row uncorrected matrix.
 Final variants require an explicit, variant-matching selection file and the
-fixed seven-method batch-effect suite; uncorrected final additionally permits
-the explicit Kidney targeted-recovery exception.
+fixed seven-method batch-effect suite; uncorrected final also permits an
+explicit one-row Kidney targeted recovery or an exact five-row method repair.
 --target-methods is an explicit selection-file-scoped partial batch recovery;
 it requires --pass and preserves the fixed suite as the default.
 --force-targeted force-reclaims only the explicit target methods; it requires
@@ -269,7 +269,7 @@ if [[ -n "${PASS_ARG}" && -n "${SELECTION_FILE_ARG}" ]]; then
 fi
 stage5_validate_final_selection() {
   local variant="${ANALYSIS_VARIANT_ARG:-}" expected_pass expected_view
-  local row_count=0 ds view label extra final_line expected_ds
+  local row_count=0 ds view label extra final_line expected_ds target_row_count
   local -a expected_datasets=()
   case "${variant}" in
     "")
@@ -279,7 +279,16 @@ stage5_validate_final_selection() {
       expected_pass="uncorrected"
       expected_view="batch_effect_uncorrected"
       if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
-        expected_datasets=(Kidney_KPMP_full)
+        [[ -r "${SELECTION_FILE_ARG}" ]] || {
+          echo "ERROR: targeted final recovery selection is unreadable." >&2
+          return 1
+        }
+        target_row_count="$(awk 'END { print NR }' "${SELECTION_FILE_ARG}")" || return 1
+        case "${target_row_count}" in
+          1) expected_datasets=(Kidney_KPMP_full) ;;
+          5) expected_datasets=(Covid19_PBMC Diabetes Joanito Lung Kidney_KPMP_full) ;;
+          *) echo "ERROR: targeted final recovery requires one Kidney or exact five-row selection." >&2; return 1 ;;
+        esac
       else
         expected_datasets=(Covid19_PBMC Diabetes Joanito Lung Kidney_KPMP_full)
       fi
@@ -341,7 +350,7 @@ stage5_validate_final_selection() {
   if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
     [[ "${variant}" == final && "${PASS_ARG}" == uncorrected &&
        ${METHODS_SET} -eq 0 && ${FORCE_ARG} -eq 0 ]] || {
-      echo "ERROR: targeted final recovery is restricted to uncorrected Kidney_KPMP_full." >&2
+      echo "ERROR: targeted final recovery requires --pass uncorrected and no explicit --methods." >&2
       return 1
     }
   else
@@ -375,7 +384,7 @@ stage5_validate_final_selection() {
   done < "${SELECTION_FILE_ARG}"
   [[ ${row_count} -eq ${#expected_datasets[@]} ]] || {
     if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
-      echo "ERROR: targeted final recovery is restricted to one Kidney_KPMP_full row." >&2
+      echo "ERROR: targeted final recovery requires one Kidney or exact five-row selection." >&2
     else
       echo "ERROR: ${variant} selection has an incomplete or overbroad dataset scope." >&2
     fi
@@ -2583,8 +2592,7 @@ stage5_build_kidney_legacy_inventory() {
     prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
   )
   [[ "${ANALYSIS_VARIANT:-}" == final &&
-     "${PASS_ARG:-}" == uncorrected &&
-     ${TARGET_METHODS_SET} -eq 0 ]] || return 0
+     "${PASS_ARG:-}" == uncorrected ]] || return 0
   root="$(stage5_kidney_legacy_root)" || return 1
   KIDNEY_LEGACY_INVENTORY="${inventory}"
   KIDNEY_LEGACY_INVENTORY_MD5=""
@@ -2642,8 +2650,7 @@ stage5_load_kidney_legacy_inventory() {
     prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
   )
   [[ "${ANALYSIS_VARIANT:-}" == final &&
-     "${PASS_ARG:-}" == uncorrected &&
-     ${TARGET_METHODS_SET} -eq 0 ]] || return 0
+     "${PASS_ARG:-}" == uncorrected ]] || return 0
   inventory="$(stage5_manifest_value "${ECODA_RUN_ROOT}/metadata" \
     KIDNEY_LEGACY_INVENTORY)" || return 1
   [[ "${inventory}" == "${ECODA_RUN_ROOT}/manifests/kidney_legacy_inventory.tsv" &&
@@ -3503,12 +3510,16 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
         echo "Skipping validated legacy Stage 5 artifact ${ds}/${view}/${method}."
         continue
       fi
-      if [[ ${FORCE_TARGETED_ARG} -eq 1 &&
-            "${method}" == "prepare_pseudobulk" &&
-            ${method_force} -eq 0 ]]; then
+      if [[ "${method}" == "prepare_pseudobulk" &&
+            ${method_force} -eq 0 ]] &&
+         [[ ${FORCE_TARGETED_ARG} -eq 1 || ${TARGET_METHODS_SET} -eq 1 ]]; then
         if stage5_prepare_pseudobulk_valid "${ds}" "${view}"; then
           echo "Skipping validated Stage 5 pseudobulk cache ${ds}/${view}/${method}."
           continue
+        fi
+        if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
+          stage5_abort \
+            "targeted Stage 5 methods require a validated pseudobulk cache for ${ds}/${view}"
         fi
       elif [[ ${method_force} -eq 0 ]] &&
            benchmark_selected_artifacts_valid "${ds}" "${view}" "${method}"; then

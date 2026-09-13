@@ -474,3 +474,72 @@ if grep -F -q "${LEGACY_KIDNEY_PREP}" "${KIDNEY_FIXTURE_CAPTURE}"; then
   exit 1
 fi
 echo "validator-only Kidney legacy inventory reuse: OK"
+# Final targeted recovery may name only the failed method classes across the
+# exact five-row final selection.  The legacy Kidney composition and MRVI
+# artifacts are valid, so only the five GloScope plus four composition and four
+# MRVI rows may enter pending selection.
+LEGACY_KIDNEY_COMPOSITION="${LEGACY_KIDNEY_ROOT}/results/Kidney_KPMP_full_batch_effect_uncorrected_composition.rds"
+LEGACY_KIDNEY_METADATA="${LEGACY_KIDNEY_ROOT}/results/Kidney_KPMP_full_batch_effect_uncorrected_metadata.rds"
+LEGACY_KIDNEY_MRVI="${LEGACY_KIDNEY_ROOT}/embeddings/Kidney_KPMP_full_batch_effect_uncorrected_hvg2000_highres_mrvi_dists.feather"
+LEGACY_KIDNEY_MRVI_RUNTIME="${LEGACY_KIDNEY_MRVI}.runtime.json"
+for legacy_path in "${LEGACY_KIDNEY_COMPOSITION}" "${LEGACY_KIDNEY_METADATA}" \
+  "${LEGACY_KIDNEY_MRVI}" "${LEGACY_KIDNEY_MRVI_RUNTIME}"; do
+  mkdir -p "$(dirname "${legacy_path}")"
+  printf 'valid legacy targeted fixture\n' > "${legacy_path}"
+  digest="$(md5_file_for_fixture "${legacy_path}")"
+  printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${digest}" \
+    "$(wc -c < "${legacy_path}" | tr -d '[:space:]')" "${legacy_path}" \
+    > "${legacy_path}.md5"
+done
+printf '{"dataset":"Kidney_KPMP_full","method":"MrVI_hvg2000"}\n' \
+  > "${LEGACY_KIDNEY_MRVI_RUNTIME}"
+digest="$(md5_file_for_fixture "${LEGACY_KIDNEY_MRVI_RUNTIME}")"
+printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${digest}" \
+  "$(wc -c < "${LEGACY_KIDNEY_MRVI_RUNTIME}" | tr -d '[:space:]')" \
+  "${LEGACY_KIDNEY_MRVI_RUNTIME}" > "${LEGACY_KIDNEY_MRVI_RUNTIME}.md5"
+rm -rf "${HPC_ROOT}/_ecoda_owners"
+TARGETED_PREP_PRODUCER_RUN_ID="targeted-final-prep-cache"
+TARGETED_PREP_ROOT="${HPC_ROOT}/_ecoda_runs/${TARGETED_PREP_PRODUCER_RUN_ID}"
+mkdir -p "${TARGETED_PREP_ROOT}/manifests"
+for targeted_ds in Covid19_PBMC Diabetes Joanito Lung; do
+  targeted_prep="${HPC_ROOT}/batch_effect/uncorrected_final/pseudobulks/${targeted_ds}_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds"
+  mkdir -p "$(dirname "${targeted_prep}")"
+  printf 'valid targeted final pseudobulk cache\n' > "${targeted_prep}"
+  (
+    export HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}"
+    export HPC_SCRATCH_DIR="${HPC_ROOT}" ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}"
+    export ECODA_RUN_ROOT="${TARGETED_PREP_ROOT}" \
+      ECODA_RUN_ID="${TARGETED_PREP_PRODUCER_RUN_ID}"
+    source "${ROOT}/src/slurm_config.sh"
+    source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+    ecoda_write_checksum "${targeted_prep}" >/dev/null
+    ecoda_write_artifact_record "${targeted_prep}" \
+      stage5_prepare_pseudobulk_hvg2000 "${TARGETED_PREP_PRODUCER_RUN_ID}" >/dev/null
+    ecoda_artifact_owner_acquire "${targeted_prep}" stage5 \
+      "${TARGETED_PREP_PRODUCER_RUN_ID}" 0 0 0 >/dev/null
+    ecoda_artifact_owner_set_state "${targeted_prep}" OK \
+      "targeted final dependency cache fixture"
+  )
+done
+TARGETED_FINAL_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+    BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
+    bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${FINAL_SELECTION}" --pass uncorrected \
+    --analysis-variant final --target-methods gloscope,composition,mrvi
+)"
+TARGETED_FINAL_RUN_ID="$(printf '%s\n' "${TARGETED_FINAL_OUTPUT}" |
+  sed -n 's/^BATCH_EFFECT_RUN_ID=//p')"
+test -n "${TARGETED_FINAL_RUN_ID}"
+TARGETED_FINAL_ROOT="${HPC_ROOT}/_ecoda_runs/${TARGETED_FINAL_RUN_ID}"
+TARGETED_FINAL_PENDING="$(sed -n 's/^PENDING_SELECTION=//p' \
+  "${TARGETED_FINAL_ROOT}/metadata")"
+EXPECTED_TARGETED_FINAL_PENDING=$'Covid19_PBMC\tbatch_effect_uncorrected\tgloscope\nDiabetes\tbatch_effect_uncorrected\tgloscope\nJoanito\tbatch_effect_uncorrected\tgloscope\nLung\tbatch_effect_uncorrected\tgloscope\nKidney_KPMP_full\tbatch_effect_uncorrected\tgloscope\nCovid19_PBMC\tbatch_effect_uncorrected\tcomposition\nDiabetes\tbatch_effect_uncorrected\tcomposition\nJoanito\tbatch_effect_uncorrected\tcomposition\nLung\tbatch_effect_uncorrected\tcomposition\nCovid19_PBMC\tbatch_effect_uncorrected\tmrvi\nDiabetes\tbatch_effect_uncorrected\tmrvi\nJoanito\tbatch_effect_uncorrected\tmrvi\nLung\tbatch_effect_uncorrected\tmrvi'
+test "$(cat "${TARGETED_FINAL_PENDING}")" = "${EXPECTED_TARGETED_FINAL_PENDING}"
+test "$(wc -l < "${TARGETED_FINAL_PENDING}" | tr -d '[:space:]')" = 13
+test "$(grep -c $'\tgloscope$' "${TARGETED_FINAL_PENDING}")" = 5
+test "$(grep -c $'\tcomposition$' "${TARGETED_FINAL_PENDING}")" = 4
+test "$(grep -c $'\tmrvi$' "${TARGETED_FINAL_PENDING}")" = 4
+! grep -Eq $'\t(prepare_pseudobulk|pseudobulk|pilot|qot)$' \
+  "${TARGETED_FINAL_PENDING}"
+echo "targeted final five-row repair selection contract: OK"

@@ -1923,14 +1923,27 @@ full rationale when a short evidence-linked update is sufficient.
   ID was emitted, after validation showed that the failed producer had marked
   successful prepare/pseudobulk/pilot/qot owners `FAIL`. No recovery compute
   or production artifact was created by that attempt.
-- All 16 successful method rows were independently verified against their
-  terminal `STATE=OK` watchdogs, checksums, artifact records, and exact owner
-  paths. The failure-finalization repair is now locally validated to preserve
-  only those matching successful owners, but the historical owner records
-  remain `FAIL` until a validator-only promotion explicitly rechecks and
-  updates those 16 rows. Failed GloScope/composition/MRVI rows remain outside
-  that promotion and require the exact 13-row targeted recovery. No corrected
-  Stage 5 gate is permitted before corrected Stage 3 review.
+- The 16 successful method rows were revalidated validator-only against their
+  terminal watchdog states, exact run-owned matrix manifests, scratch
+  checksums, records, producer identities, and stage/global owner metadata.
+  The run-owned `owner_promotion_16.tsv` report records one validated scratch
+  payload per prepare/pseudobulk row and payload plus runtime metadata for each
+  pilot/qot row. The historical stage and scratch payload owners were promoted
+  to `OK`; the missing NAS destinations were explicitly left unsettled.
+- A separately scoped no-compute selected sync then transferred exactly those
+  16 method rows (30 payload/runtime files plus the five metadata outputs and
+  merged execution log), normalized NAS sidecar `PATH` fields atomically, and
+  verified every transferred digest. Its run-owned
+  `selected_sync_16_post_audit.tsv` and status report record 16 `NAS_OWNER_OK`
+  rows and 16 finalized NAS payload owners. No worker or scheduler job was
+  created; the original aggregate `FAIL` evidence remains preserved.
+- The targeted final selector now permits either the one-row Kidney exception
+  or an exact five-row selection with explicit method classes. A targeted
+  composition repair requires a validated hvg2000 prepare cache and never
+  broadens the pending method scope. The five-row
+  `gloscope,composition,mrvi` selector produces exactly 13 pending rows
+  (5 + 4 + 4), verified by `tests/test_benchmark_selection_file.sh`. No
+  corrected Stage 5 gate is permitted before corrected Stage 3 review.
 - The corrected-batch H5AD contract loader now recognizes long inline JSON
   identities before filesystem probing, while preserving readable-path and
   malformed/object validation. `tests/test_benchmark_h5ad_contract.py` passes
