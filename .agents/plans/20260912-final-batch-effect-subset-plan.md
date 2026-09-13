@@ -1960,3 +1960,35 @@ full rationale when a short evidence-linked update is sufficient.
   ownership, H5AD contract parsing, exact selection, synchronization, worker
   dispatch, RDS contracts, and batch-effect analysis. The expected negative
   runtime/source-escape diagnostics remain covered by the matrix test.
+- The selected-sync post-audit is run-owned under
+  `stage5_uncorrected_final_20260913b/manifests/selected_sync_16_post_audit.tsv`
+  and its `STATE=OK` status. It covers 30 method payload/runtime files plus
+  five metadata outputs and the merged execution log; no scheduler work was
+  emitted by either validator-only command.
+- Commit `837eafb80c5b204ba6999f3c51ec8e4d95b09ddb` contains the exact
+  five-row targeted selector contract and its validated hvg2000 dependency
+  reuse. Its verified snapshot is
+  `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots_stage5_targeted_recovery/837eafb80c5b204ba6999f3c51ec8e4d95b09ddb`;
+  source archive SHA-256 is
+  `d0034d6730f5496bb8041d60c5edcbdb4f029e5b4097d2df833f3d72a320a36d`.
+  The reused runtime remains the versioned
+  `ecoda-py-cuda13-6bbf70b-relocated` identity recorded above.
+- A first targeted Stage 5 recovery manifest was prepared with the obsolete
+  `ecoda-stage5-uncorrected` serialization group, then canceled before any
+  remote launch; its local `launch_intent` and absence of remote status,
+  runner, and scheduler IDs are preserved. It was superseded by
+  `stage5_uncorrected_targeted_recovery_20260913b`, prepared and launched
+  with `ecoda-benchmark`, the exact five-row selection, explicit target
+  methods `gloscope,composition,mrvi`, and expected pending count 13. Its
+  single unbounded durable wait is armed; terminal accounting, run-scoped
+  audit, and Luna Max review remain pending.
+- A validator-only corrected Stage 3 sync repair is now implemented without
+  changing `stage3_load_bound_run`: the new report utility validates all
+  corrected H5AD content with the new validator while recording both the
+  failed run's immutable 59b source identity and the repair snapshot identity.
+  `--validated-sync-report` makes the existing sync-only path consume that
+  report while retaining H5AD artifact-record/owner checks and selected sync.
+  The focused report generator and Stage 3 submitter tests pass. The repair
+  source changes are not yet committed or snapshotted; corrected Stage 5
+  remains blocked until the new sync repair is terminally inspected and
+  reviewed.

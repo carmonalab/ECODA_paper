@@ -21,6 +21,8 @@ EXACT_BATCH_SELECTION=0
 FORCE_ARG=0
 SYNC_ONLY_RUN=""
 SYNC_ONLY_SET=0
+VALIDATED_SYNC_REPORT=""
+VALIDATED_SYNC_REPORT_SET=0
 MEMORY="128G"
 MAX_MEMORY="500G"
 PARTITION="${SLURM_PARTITION}"
@@ -32,13 +34,14 @@ STAGE3_CORRECTED_SELECTION=0
 STAGE3_COVID_PREFLIGHT_REQUIRED=0
 STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED="${STAGE3_COVID_PREFLIGHT_ROOT:-${ECODA_COVID_PREFLIGHT_ROOT:-}}"
 STAGE3_COVID_PREFLIGHT_ROOT=""
+STAGE3_EXEC_SOURCE_MANIFEST="${ECODA_SOURCE_MANIFEST:-}"
 
 usage() {
   cat <<'EOF'
 Usage: 1_submit_hpc_array.sh [--datasets LIST] [--views LIST]
        [--selection-file TSV] [--exact-batch-selection] [--force]
-       [--sync-only RUN_ID] [--mem VALUE] [--max-mem VALUE]
-       [--partition NAME] [--throttle N]
+       [--sync-only RUN_ID] [--validated-sync-report PATH]
+       [--mem VALUE] [--max-mem VALUE]
 
 Each manifest row is DATASET<TAB>VIEW. --ds_name and --view remain accepted
 as compatibility aliases for one dataset/view selection. Exact batch mode
@@ -71,6 +74,8 @@ while [[ $# -gt 0 ]]; do
     --force) FORCE_ARG=1; shift ;;
     --sync-only) SYNC_ONLY_RUN="${2:-}"; SYNC_ONLY_SET=1; shift 2 ;;
     --sync-only=*) SYNC_ONLY_RUN="${1#*=}"; SYNC_ONLY_SET=1; shift ;;
+    --validated-sync-report) VALIDATED_SYNC_REPORT="${2:-}"; VALIDATED_SYNC_REPORT_SET=1; shift 2 ;;
+    --validated-sync-report=*) VALIDATED_SYNC_REPORT="${1#*=}"; VALIDATED_SYNC_REPORT_SET=1; shift ;;
     --mem) MEMORY="${2:-}"; shift 2 ;;
     --mem=*) MEMORY="${1#*=}"; shift ;;
     --max-mem) MAX_MEMORY="${2:-}"; shift 2 ;;
@@ -86,6 +91,16 @@ done
 
 if [[ -n "${SYNC_ONLY_RUN}" && ${FORCE_ARG} -eq 1 ]]; then
   echo "ERROR: --sync-only cannot be combined with --force." >&2
+  exit 1
+fi
+if [[ ${VALIDATED_SYNC_REPORT_SET} -eq 1 &&
+      ${SYNC_ONLY_SET} -eq 0 ]]; then
+  echo "ERROR: --validated-sync-report requires --sync-only." >&2
+  exit 1
+fi
+if [[ ${VALIDATED_SYNC_REPORT_SET} -eq 1 &&
+      "${SYNC_ONLY_RUN}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+  echo "ERROR: --validated-sync-report cannot be used with numeric --sync-only." >&2
   exit 1
 fi
 if [[ ${DATASETS_SET} -eq 1 && -z "${DATASETS_ARG}" ]]; then
@@ -789,6 +804,177 @@ validate_h5ad() {
       >/dev/null 2>&1
   fi
 }
+stage3_sync_report_field() {
+  local report="$1" expression="$2"
+  jq -e -r "${expression}" "${report}"
+}
+
+stage3_validate_sync_report() {
+  local report="$1" expected_rows validator_source validator_snapshot
+  local source_run_root expected_original validator_commit report_validator_commit
+  local report_source_sha report_source_size actual_source_sha actual_source_size
+  local report_validator_sha report_validator_size actual_validator_sha actual_validator_size
+  local report_runtime_sha report_runtime_size actual_runtime_sha actual_runtime_size
+  local report_selection_sha report_selection_size actual_selection_sha actual_selection_size
+  local report_config_sha report_config_size actual_config_sha actual_config_size
+  local report_prior_sha report_prior_size actual_prior_sha actual_prior_size
+  expected_rows="$(wc -l < "${MANIFEST}" | tr -d '[:space:]')" || return 1
+  [[ "${report}" = /* && -f "${report}" && ! -L "${report}" && -s "${report}" ]] || return 1
+  ecoda_validate_checksum "${report}" >/dev/null || return 1
+  source_run_root="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ROOT)" || return 1
+  expected_original="${source_run_root%/tree}/identity/source.manifest"
+  [[ "${SOURCE_MANIFEST_ORIGINAL}" == "${expected_original}" ]] || return 1
+  ecoda_validate_run_owned_path "${report}" "${ECODA_RUN_ROOT}" || return 1
+  jq -e --arg run "${RUN_ID}" --arg stage_manifest "${SOURCE_MANIFEST_RUN}" \
+    --arg selection "${MANIFEST}" --arg runtime "${RUNTIME_IDENTITY}" \
+    --arg config "${DATASETS_JSON_FILE}" \
+    --arg prior "${ECODA_RUN_ROOT}/status/terminal" \
+    --argjson rows "${expected_rows}" '
+      type == "object" and .format == 1 and .stage == "stage3" and
+      .run_id == $run and .run_source_manifest.path == $stage_manifest and
+      .selection.path == $selection and .runtime_identity.path == $runtime and
+      .config.path == $config and .prior_terminal.path == $prior and
+      (.rows | type) == "array" and
+      (.rows | length) == $rows and
+      ([.rows[].path] | length) == ([.rows[].path] | unique | length) and
+      all(.rows[];
+        (.dataset | type) == "string" and (.view | type) == "string" and
+        (.path | type) == "string" and
+        (.md5 | test("^[0-9a-f]{32}$")) and
+        ((.size | tostring) | test("^[1-9][0-9]*$")) and
+        .contract == "batch_effect_corrected_h5ad_v1")
+    ' "${report}" >/dev/null || return 1
+  report_prior_sha="$(stage3_sync_report_field "${report}" \
+    '.prior_terminal.sha256')" || return 1
+  report_prior_size="$(stage3_sync_report_field "${report}" \
+    '.prior_terminal.size')" || return 1
+  actual_prior_sha="$(sha256sum "${ECODA_RUN_ROOT}/status/terminal" | awk '{print $1}')" ||
+    return 1
+  actual_prior_size="$(wc -c < "${ECODA_RUN_ROOT}/status/terminal" | tr -d '[:space:]')" ||
+    return 1
+  [[ "${report_prior_sha}" == "${actual_prior_sha}" &&
+     "${report_prior_size}" == "${actual_prior_size}" ]] || return 1
+  validator_source="$(stage3_sync_report_field "${report}" \
+    '.validator_source_manifest.path // empty')" || return 1
+  [[ "${validator_source}" = /*/identity/source.manifest &&
+     -f "${validator_source}" && ! -L "${validator_source}" &&
+     -r "${validator_source}" ]] || return 1
+  [[ -n "${STAGE3_EXEC_SOURCE_MANIFEST:-}" &&
+     "${validator_source}" == "${STAGE3_EXEC_SOURCE_MANIFEST}" ]] || return 1
+  validator_snapshot="${validator_source%/identity/source.manifest}"
+  [[ -f "${validator_snapshot}/COMPLETE" &&
+     ! -L "${validator_snapshot}/COMPLETE" ]] || return 1
+  validator_commit="$(stage3_manifest_value "${validator_source}" SOURCE_COMMIT)" ||
+    return 1
+  report_validator_commit="$(stage3_sync_report_field "${report}" \
+    '.validator_source_manifest.source_commit')" || return 1
+  [[ -n "${validator_commit}" && "${report_validator_commit}" == "${validator_commit}" ]] ||
+    return 1
+  report_source_sha="$(stage3_sync_report_field "${report}" \
+    '.run_source_manifest.sha256')" || return 1
+  report_source_size="$(stage3_sync_report_field "${report}" \
+    '.run_source_manifest.size')" || return 1
+  actual_source_sha="$(sha256sum "${SOURCE_MANIFEST_RUN}" | awk '{print $1}')" ||
+    return 1
+  actual_source_size="$(wc -c < "${SOURCE_MANIFEST_RUN}" | tr -d '[:space:]')" ||
+    return 1
+  [[ "${report_source_sha}" == "${actual_source_sha}" &&
+     "${report_source_size}" == "${actual_source_size}" ]] || return 1
+  cmp -s "${SOURCE_MANIFEST_RUN}" "${SOURCE_MANIFEST_ORIGINAL}" || return 1
+  report_validator_sha="$(stage3_sync_report_field "${report}" \
+    '.validator_source_manifest.sha256')" || return 1
+  report_validator_size="$(stage3_sync_report_field "${report}" \
+    '.validator_source_manifest.size')" || return 1
+  actual_validator_sha="$(sha256sum "${validator_source}" | awk '{print $1}')" ||
+    return 1
+  actual_validator_size="$(wc -c < "${validator_source}" | tr -d '[:space:]')" ||
+    return 1
+  [[ "${report_validator_sha}" == "${actual_validator_sha}" &&
+     "${report_validator_size}" == "${actual_validator_size}" ]] || return 1
+  report_runtime_sha="$(stage3_sync_report_field "${report}" \
+    '.runtime_identity.sha256')" || return 1
+  report_runtime_size="$(stage3_sync_report_field "${report}" \
+    '.runtime_identity.size')" || return 1
+  actual_runtime_sha="$(sha256sum "${RUNTIME_IDENTITY}" | awk '{print $1}')" ||
+    return 1
+  actual_runtime_size="$(wc -c < "${RUNTIME_IDENTITY}" | tr -d '[:space:]')" ||
+    return 1
+  [[ "${report_runtime_sha}" == "${actual_runtime_sha}" &&
+     "${report_runtime_size}" == "${actual_runtime_size}" ]] || return 1
+  report_selection_sha="$(stage3_sync_report_field "${report}" \
+    '.selection.sha256')" || return 1
+  report_selection_size="$(stage3_sync_report_field "${report}" \
+    '.selection.size')" || return 1
+  actual_selection_sha="$(sha256sum "${MANIFEST}" | awk '{print $1}')" ||
+    return 1
+  actual_selection_size="$(wc -c < "${MANIFEST}" | tr -d '[:space:]')" ||
+    return 1
+  [[ "${report_selection_sha}" == "${actual_selection_sha}" &&
+     "${report_selection_size}" == "${actual_selection_size}" ]] || return 1
+  report_config_sha="$(stage3_sync_report_field "${report}" \
+    '.config.sha256')" || return 1
+  report_config_size="$(stage3_sync_report_field "${report}" \
+    '.config.size')" || return 1
+  actual_config_sha="$(sha256sum "${DATASETS_JSON_FILE}" | awk '{print $1}')" ||
+    return 1
+  actual_config_size="$(wc -c < "${DATASETS_JSON_FILE}" | tr -d '[:space:]')" ||
+    return 1
+  [[ "${report_config_sha}" == "${actual_config_sha}" &&
+     "${report_config_size}" == "${actual_config_size}" ]] || return 1
+  STAGE3_SYNC_REPORT_ACTIVE=1
+}
+
+stage3_sync_report_row_valid() {
+  local ds="$1" view="$2" path="$3" md5 size
+  [[ "${STAGE3_SYNC_REPORT_ACTIVE:-0}" == 1 ]] || return 1
+  ecoda_validate_checksum "${path}" >/dev/null || return 1
+  md5="${ECODA_CHECKSUM_MD5}"
+  size="${ECODA_CHECKSUM_SIZE}"
+  jq -e --arg ds "${ds}" --arg view "${view}" --arg path "${path}" \
+    --arg md5 "${md5}" --arg size "${size}" '
+      [.rows[] | select(.dataset == $ds and .view == $view and
+                        .path == $path)] as $matches |
+      ($matches | length) == 1 and
+      $matches[0].md5 == $md5 and
+      (($matches[0].size | tostring) == $size) and
+      $matches[0].contract == "batch_effect_corrected_h5ad_v1"
+    ' "${VALIDATED_SYNC_REPORT}" >/dev/null
+}
+stage3_preserve_terminal_before_validated_sync() {
+  local prior="${ECODA_RUN_ROOT}/status/terminal"
+  local preserved="${ECODA_RUN_ROOT}/status/terminal.pre_validated_sync"
+  local temporary
+  [[ -f "${prior}" && ! -L "${prior}" && -s "${prior}" ]] || return 1
+  ecoda_validate_run_owned_path "${prior}" "${ECODA_RUN_ROOT}" || return 1
+  if [[ -e "${preserved}" || -L "${preserved}" ]]; then
+    [[ -f "${preserved}" && ! -L "${preserved}" && -s "${preserved}" ]] ||
+      return 1
+    ecoda_validate_run_owned_path "${preserved}" "${ECODA_RUN_ROOT}" || return 1
+    [[ -s "${preserved}.md5" ]] || ecoda_write_checksum "${preserved}" || return 1
+    ecoda_validate_checksum "${preserved}" >/dev/null || return 1
+  else
+    temporary="${preserved}.build.$$"
+    cp "${prior}" "${temporary}" || return 1
+    mv -f "${temporary}" "${preserved}" || {
+      rm -f "${temporary}"
+      return 1
+    }
+    ecoda_write_checksum "${preserved}" >/dev/null || return 1
+  fi
+  STAGE3_PRESERVED_TERMINAL="${preserved}"
+}
+
+stage3_record_validated_sync_repair() {
+  local status="${ECODA_RUN_ROOT}/status/validated_sync_repair"
+  [[ -n "${STAGE3_PRESERVED_TERMINAL:-}" &&
+     -f "${STAGE3_PRESERVED_TERMINAL}" ]] || return 1
+  ecoda_atomic_write "${status}" \
+    "STATE=OK\nRUN_ID=${RUN_ID}\nREPORT=${VALIDATED_SYNC_REPORT}\nPRESERVED_TERMINAL=${STAGE3_PRESERVED_TERMINAL}\nREASON=validator-only corrected H5AD contract and selected sync completed\n" ||
+    return 1
+  ecoda_write_checksum "${status}" >/dev/null
+}
+
+
 
 stage3_existing_artifact_owner_valid() {
   local path="$1" require_record="${2:-1}" canonical owner_dir owner_run
@@ -1021,9 +1207,20 @@ sync_selected() {
     output="$(basename "${path}")"
     remote_dir="${NAS_TARGET_DIR}/${ds}/output"
     expected_output="${ds}/output/${output}"
-    if ! mkdir -p "${remote_dir}" || ! validate_h5ad "${ds}" "${view}" "${path}"; then
+    if ! mkdir -p "${remote_dir}"; then
       rc=1
       continue
+    fi
+    if [[ ${VALIDATED_SYNC_REPORT_SET} -eq 1 ]]; then
+      stage3_sync_report_row_valid "${ds}" "${view}" "${path}" || {
+        rc=1
+        continue
+      }
+    else
+      validate_h5ad "${ds}" "${view}" "${path}" || {
+        rc=1
+        continue
+      }
     fi
     if [[ -n "${ECODA_RUN_ROOT:-}" &&
           -s "${ECODA_RUN_ROOT}/manifests/source.manifest" ]]; then
@@ -1180,6 +1377,10 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     stage3_abort "Stage 3 selection manifest is invalid"
   ecoda_validate_checksum "${MANIFEST}" ||
     stage3_abort "Stage 3 selection checksum is invalid"
+  if [[ ${VALIDATED_SYNC_REPORT_SET} -eq 1 ]]; then
+    stage3_validate_sync_report "${VALIDATED_SYNC_REPORT}" ||
+      stage3_abort "Stage 3 validated sync report is invalid"
+  fi
   stage3_classify_selection "${MANIFEST}" "${DATASETS_JSON_FILE}" ||
     stage3_abort "Stage 3 selection classification is invalid"
   case "${STAGE3_SELECTION_CLASSIFICATION}" in
@@ -1226,17 +1427,33 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   while IFS=$'\t' read -r ds view; do
     [[ -n "${ds}" && -n "${view}" ]] || { failed=1; continue; }
     path="$(output_path_for "${ds}" "${view}")" || { failed=1; continue; }
-    validate_h5ad "${ds}" "${view}" "${path}" || failed=1
+    if [[ ${VALIDATED_SYNC_REPORT_SET} -eq 1 ]]; then
+      stage3_sync_report_row_valid "${ds}" "${view}" "${path}" || failed=1
+    else
+      validate_h5ad "${ds}" "${view}" "${path}" || failed=1
+    fi
     stage3_artifact_record_any "${path}" || failed=1
   done < "${MANIFEST}"
   [[ ${failed} -eq 0 ]] ||
     stage3_abort "Stage 3 sync-only h5ad contract/checksum failed"
+  if [[ ${VALIDATED_SYNC_REPORT_SET} -eq 1 ]]; then
+    stage3_preserve_terminal_before_validated_sync ||
+      stage3_abort "failed to preserve pre-repair Stage 3 terminal evidence"
+    validated_watchdog_id="$(awk -F '\t' '$1 == "WATCHDOG" {print $2; exit}' \
+      "${SCHEDULER_IDS_FILE}")"
+    [[ "${validated_watchdog_id}" =~ ^[0-9]+$ ]] ||
+      stage3_abort "validated Stage 3 sync lacks a recorded watchdog ID"
+  fi
   if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" != "1" ]]; then
     sync_selected "${MANIFEST}" ||
       stage3_abort "selected Stage 3 sync failed"
   fi
   stage3_finalize_owner_manifest OK "Stage 3 sync-only completed" ||
     stage3_abort "failed to finalize Stage 3 owners after sync"
+  if [[ ${VALIDATED_SYNC_REPORT_SET} -eq 1 ]]; then
+    stage3_record_validated_sync_repair ||
+      stage3_abort "failed to record validated Stage 3 sync repair"
+  fi
   ecoda_set_run_state OK "sync-only Stage 3 validation and selected sync passed" ||
     stage3_abort "failed to write Stage 3 terminal OK state"
   echo "PREPROCESS_RUN_ID=${SYNC_ONLY_RUN}"
