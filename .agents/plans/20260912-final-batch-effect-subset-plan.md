@@ -1976,19 +1976,33 @@ full rationale when a short evidence-linked update is sufficient.
 - A first targeted Stage 5 recovery manifest was prepared with the obsolete
   `ecoda-stage5-uncorrected` serialization group, then canceled before any
   remote launch; its local `launch_intent` and absence of remote status,
-  runner, and scheduler IDs are preserved. It was superseded by
-  `stage5_uncorrected_targeted_recovery_20260913b`, prepared and launched
-  with `ecoda-benchmark`, the exact five-row selection, explicit target
-  methods `gloscope,composition,mrvi`, and expected pending count 13. Its
-  single unbounded durable wait is armed; terminal accounting, run-scoped
-  audit, and Luna Max review remain pending.
-- A validator-only corrected Stage 3 sync repair is now implemented without
-  changing `stage3_load_bound_run`: the new report utility validates all
-  corrected H5AD content with the new validator while recording both the
-  failed run's immutable 59b source identity and the repair snapshot identity.
-  `--validated-sync-report` makes the existing sync-only path consume that
-  report while retaining H5AD artifact-record/owner checks and selected sync.
-  The focused report generator and Stage 3 submitter tests pass. The repair
-  source changes are not yet committed or snapshotted; corrected Stage 5
-  remains blocked until the new sync repair is terminally inspected and
-  reviewed.
+  runner, and scheduler IDs are preserved.
+- The superseding targeted Stage 5 gate
+  `stage5_uncorrected_targeted_recovery_20260913b` was prepared with
+  `ecoda-benchmark`, launched from the 837eafb snapshot, and waited durably.
+  Its terminal inspect covered all nine recorded IDs: preflights `4404168`
+  and `4404173`, arrays `4404174`, `4404180`, `4404185`, watchdogs `4404179`,
+  `4404184`, `4404186`, and aggregate gate `4404187`. GloScope and MRVI
+  completed; composition failed non-OOM for all four targeted rows, so the
+  aggregate failed. No reviewer approval was requested.
+- Corrected Stage 3 validator-only repair is implemented without changing
+  `stage3_load_bound_run`. Commit `912e403d20dbc2c15653ca025ef7b13851e62cbc`
+  adds the pinned report launcher; its snapshot generated a nine-row report
+  from the new validator while recording the failed run's immutable 59b
+  source identity, runtime identity, selection, and prior terminal. The
+  repair gate `stage3_corrected_sync_repair_20260913a` completed and passed
+  the single accounting query for the recorded completed watchdog `4403888`;
+  Luna Max approved it. The original `STATE=FAIL` terminal remains preserved
+  at `status/terminal.pre_validated_sync`, the repair status is `STATE=OK`,
+  and the corrected run terminal is now `STATE=OK`. The selected sync verified
+  all nine NAS H5AD destinations; an out-of-band checksum audit was stopped
+  after its timeout without additional artifact writes.
+- The R pseudobulk cache loader now resolves the exact prior producer run ID
+  from the validated global cache owner and passes that ID through both cache
+  validation and `read_rds_checked`; it does not publish a false recovery-run
+  record for a reused immutable cache. The next uncorrected recovery is
+  restricted to the four failed composition rows, while reusing successful
+  GloScope/MRVI outputs and syncing their exact NAS payloads in the same
+  final-root wave. Corrected Stage 5 remains prepared but not launched until
+  this targeted source repair is snapshotted and the uncorrected composition
+  recovery is resolved.

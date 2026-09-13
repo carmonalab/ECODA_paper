@@ -859,6 +859,56 @@ ecoda_hpc_apply_batch_context <- function(
   metadata
 }
 
+.artifact_owner_run_id <- function(path, runs_root) {
+  canonical <- .artifact_canonical_path(path)
+  owners_root <- Sys.getenv("ECODA_OWNERS_ROOT", unset = "")
+  if (!nzchar(owners_root)) {
+    owners_root <- file.path(dirname(runs_root), "_ecoda_owners")
+  }
+  digest <- .artifact_sha256_text(canonical)
+  safe_basename <- gsub("[/:,\\t |]", "_", basename(canonical), perl = TRUE)
+  owner_key <- paste0(safe_basename, "_", substr(digest, 1L, 32L))
+  if (nchar(owner_key, type = "bytes") > 100L) {
+    owner_key <- paste0("artifact_", substr(digest, 1L, 32L))
+  }
+  owner_file <- file.path(owners_root, "artifact", owner_key, "owner")
+  if (!file.exists(owner_file) || isTRUE(file.info(owner_file)$isdir)) {
+    return(NULL)
+  }
+  lines <- tryCatch(readLines(owner_file, warn = FALSE),
+                    error = function(e) character())
+  if (length(lines) < 5L || any(!nzchar(lines))) return(NULL)
+  keys <- sub("=.*$", "", lines)
+  values <- sub("^[^=]*=", "", lines)
+  owner <- as.list(values)
+  names(owner) <- keys
+  if (!identical(owner[["PATH"]], canonical) ||
+      !identical(owner[["STAGE"]], "stage5") ||
+      !identical(owner[["STATE"]], "OK") ||
+      is.null(owner[["RUN_ID"]]) ||
+      !grepl("^[A-Za-z0-9][A-Za-z0-9_-]*$", owner[["RUN_ID"]])) {
+    return(NULL)
+  }
+  owner[["RUN_ID"]]
+}
+
+.pb_variant_record_run_id <- function(path, producer) {
+  context <- .artifact_context(producer = producer)
+  if (is.null(context)) return(NULL)
+  current_record <- artifact_record_path(
+    path, context$run_id, runs_root = context$runs_root
+  )
+  if (file.exists(current_record)) return(context$run_id)
+  owner_run <- .artifact_owner_run_id(path, context$runs_root)
+  if (!is.null(owner_run)) {
+    owner_record <- artifact_record_path(
+      path, owner_run, runs_root = context$runs_root
+    )
+    if (file.exists(owner_record)) return(owner_run)
+  }
+  context$run_id
+}
+
 # Validate a prepared pseudobulk cache against its canonical producer. A
 # run-owned record is authoritative: malformed or mismatched records fail
 # closed instead of being treated as a cache miss. Artifacts from before
@@ -869,7 +919,11 @@ ecoda_hpc_apply_batch_context <- function(
   expected_batch_contract = NULL
 ) {
   producer <- PB_VARIANT_PRODUCERS[[variant]]
-  context <- .artifact_context(producer = producer)
+  cache_run_id <- .pb_variant_record_run_id(path, producer)
+  context <- .artifact_context(
+    producer = producer,
+    run_id = cache_run_id
+  )
   cache_valid <- FALSE
   if (!is.null(context)) {
     record_path <- artifact_record_path(
@@ -1835,6 +1889,9 @@ load_pb_variants <- function(
     cache_path <- file.path(
       pseudobulk_dir, paste0(cache_stem, "_pseudobulk_", v, ".rds")
     )
+    cache_run_id <- .pb_variant_record_run_id(
+      cache_path, PB_VARIANT_PRODUCERS[[v]]
+    )
     if (force || !.pb_variant_cache_valid(
       cache_path,
       v,
@@ -1845,7 +1902,8 @@ load_pb_variants <- function(
     }
     value <- read_rds_checked(
       cache_path,
-      producer = PB_VARIANT_PRODUCERS[[v]]
+      producer = PB_VARIANT_PRODUCERS[[v]],
+      run_id = cache_run_id
     )
     validate_pseudobulk_timing_record(value, variant = v)
     if (!is.null(expected_contract)) {
