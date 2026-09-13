@@ -2006,3 +2006,39 @@ full rationale when a short evidence-linked update is sufficient.
   final-root wave. Corrected Stage 5 remains prepared but not launched until
   this targeted source repair is snapshotted and the uncorrected composition
   recovery is resolved.
+- Commit `001243f351037590dc8df7db22cb2d34561e1452` carries the
+  producer-bound pseudobulk-cache fix. Its verified snapshot is
+  `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots_stage5_composition_recovery/001243f351037590dc8df7db22cb2d34561e1452`;
+  source archive SHA-256 is
+  `9eeae457100fea125e8d54bdd84590d98c4d93eb9bc921b0cbd06c83c931affe`.
+- `stage5_uncorrected_composition_recovery_20260913a` was launched from the
+  001243f snapshot with target methods `gloscope,composition,mrvi`, but the
+  post-submission HPC scope audit found 5 GloScope + 4 composition + 4 MRVI
+  rows instead of four composition rows. All emitted arrays/watchdogs and the
+  aggregate were canceled immediately; terminal inspect recorded the two
+  preflights (`4404199`, `4404204`), arrays (`4404406`, `4404408`, `4404410`),
+  watchdogs (`4404407`, `4404409`, `4404411`), and aggregate (`4404412`) as
+  canceled. The gate is failed and has no reviewer approval.
+- The next uncorrected repair must use `--target-methods composition` only,
+  the same exact five-row selection, and a validated hvg2000 cache dependency.
+  Its approved compute scope is exactly four composition rows; no GloScope,
+  MRVI, pilot, QOT, or GPU method may appear in its pending/matrix manifests.
+  Previously successful GloScope/MRVI outputs remain immutable and receive
+  only a later separately scoped no-compute sync if required.
+- Corrected Stage 5 gate `stage5_corrected_final_20260913b` was launched
+  concurrently from a separate source-snapshot parent and failed before
+  scheduler submission because the shared composition-recovery snapshot
+  parent was locked; its required no-ID inspection recorded the lock stop.
+  It is not release-eligible and must not be reused.
+- User resource decision: every batch-view MRVI run (`analysis_pass` set to
+  `uncorrected` or `corrected`) must execute on CPU nodes. Its validity check
+  is validator-only and must never allocate a GPU node. Benchmark-view MRVI
+  remains GPU-backed. No queue-time fallback is added: queue estimates would
+  require another scheduler decision path and the deterministic CPU policy
+  avoids hours-long GPU queue waits.
+- User-mandated launch checkpoint: immediately after every HPC submission,
+  inspect the emitted scheduler rows and run-owned pending/matrix manifests
+  once, compare dataset/view/method/parameter scope and row counts with the
+  approval, and cancel the full scheduler/runner tree on any redundant row.
+  This is a single launch-boundary check, not periodic scheduler polling, and
+  is required before a wave is allowed to continue to terminal wait/review.

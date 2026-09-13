@@ -360,6 +360,29 @@ if grep -q -- '--device cpu' "${PY_CALL_LOG}"; then
   echo "CPU MRVI without an explicit combo unexpectedly received --device cpu" >&2
   exit 1
 fi
+printf 'Adams\tbatch_effect_uncorrected\tmrvi\n' > "${WORKER_MANIFEST}"
+: > "${PY_CALL_LOG}"
+PY_CALL_LOG="${PY_CALL_LOG}" \
+HOME="${TMP_DIR}/home" PATH="/usr/bin:/bin" TMPDIR="${TMP_DIR}" \
+HPC_SCRATCH_DIR="${WORKER_SCRATCH}" LOGS_DIR="${TMP_DIR}/worker-logs" \
+ECODA_RUNTIME_MODE=host ECODA_RUNTIME_IN_CONTAINER=1 \
+ECODA_SOURCE_ROOT="${SOURCE_TREE}" ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST}" \
+ECODA_SOURCE_SNAPSHOT_REQUIRED=1 ECODA_AUX_ROOT="${SOURCE_TREE}/aux" \
+ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}" \
+ECODA_RUN_ROOT="${WORKER_RUN_ROOT}" ECODA_RUN_ID="${WORKER_RUN_ID}" \
+ECODA_RUNTIME_IMAGE="${RUNTIME_IMAGE}" \
+ECODA_RUNTIME_MANIFEST="${RUNTIME_MANIFEST}" \
+ECODA_RUNTIME_PREFIX="${FAKE_PREFIX}" ECODA_APPTAINER_NV=0 \
+ECODA_RUNTIME_PROFILE=stage5 METHOD_GPU_POLICY=cpu METHOD=mrvi \
+ANALYSIS_PASS=uncorrected ANALYSIS_VIEW=batch_effect_uncorrected \
+ANALYSIS_MANIFEST="${WORKER_MANIFEST}" ANALYSIS_ROOT="${WORKER_ROOT}" \
+EXECUTION_LOG_DIR="${WORKER_ROOT}/embeddings" \
+SLURM_ARRAY_TASK_ID=1 SLURM_ARRAY_JOB_ID=91004 \
+  bash "${SOURCE_TREE}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh"
+case "$(cat "${PY_CALL_LOG}")" in
+  *"--device cpu"*) ;;
+  *) echo "batch-view MRVI worker omitted --device cpu" >&2; exit 1 ;;
+esac
 
 
 : > "${CAPTURE}"
@@ -418,9 +441,23 @@ case "${PASS_CALLS}" in *"ANALYSIS_MANIFEST="*) ;; *) echo "batch ANALYSIS_MANIF
 case "${PASS_CALLS}" in *"BENCHMARK_MANIFEST="*) echo "batch BENCHMARK_MANIFEST export leaked" >&2; exit 1 ;; esac
 case "${PASS_CALLS}" in *"/batch_effect/uncorrected"*) ;; *) echo "batch analysis root was not pass-scoped" >&2; exit 1 ;; esac
 case "${PASS_CALLS}" in *"--array=1-12"*) ;; *) echo "batch matrix arrays did not use twelve rows" >&2; exit 1 ;; esac
-case "${PASS_CALLS}" in *"--partition=${BENCHMARK_GPU_ANY_PARTITION}"*) ;; *) echo "batch GPU method did not use any-GPU partition" >&2; exit 1 ;; esac
-case "${PASS_CALLS}" in *"--constraint=${BENCHMARK_GPU_CONSTRAINT}"*) echo "batch GPU method retained H200 constraint" >&2; exit 1 ;; esac
-case "${PASS_CALLS}" in *"--time=${BENCHMARK_GPU_ANY_TIME_LIMIT}"*) ;; *) echo "batch GPU method time limit missing" >&2; exit 1 ;; esac
+# Batch-view MrVI is deterministic CPU work; validity/recompute selection must
+# not request a GPU partition or GPU allocation.
+MRVI_BATCH_CALL="$(printf '%s\n' "${PASS_CALLS}" | grep 'METHOD=mrvi' | sed -n '1p')"
+case "${MRVI_BATCH_CALL}" in
+  *"METHOD_GPU_POLICY=cpu"*) ;;
+  *) echo "batch-view MrVI did not use CPU policy" >&2; exit 1 ;;
+esac
+case "${MRVI_BATCH_CALL}" in
+  *"--partition=${SLURM_PARTITION_BENCHMARK_CPU}"*"--time=${BENCHMARK_CPU_TIME_LIMIT}"*) ;;
+  *) echo "batch-view MrVI did not use the CPU partition/time policy" >&2; exit 1 ;;
+esac
+case "${MRVI_BATCH_CALL}" in
+  *"--gpus="*|*"--gres="*|*"shared-gpu"*|*"private-carmona-gpu"*)
+    echo "batch-view MrVI requested a GPU resource" >&2
+    exit 1
+    ;;
+esac
 rm -rf "${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_owners"
 TARGET_SELECTION="${TMP_DIR}/batch-target.tsv"
 printf 'Alzheimer\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' > "${TARGET_SELECTION}"

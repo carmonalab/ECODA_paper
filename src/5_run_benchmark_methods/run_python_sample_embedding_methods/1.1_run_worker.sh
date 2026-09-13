@@ -220,13 +220,18 @@ HIGH_RES_FLAG=()
 [[ "${ANALYSIS_HIGH_RES_ONLY:-0}" == 1 ]] && HIGH_RES_FLAG=(--high_resolution_only)
 COMBO_FLAG=()
 [[ -n "${ROW_COMBO:-}" ]] && COMBO_FLAG=(--combo "${ROW_COMBO}")
-# GPU-backed methods must receive an explicit CUDA device.  The Python entry
-# point rejects the default "auto" value so a missing runtime export cannot
-# silently move a scheduled GPU job onto CPU.
+# GPU-backed benchmark methods receive an explicit CUDA device. Batch-view
+# MrVI is explicitly CPU-bound so a GPU queue cannot delay its run; the Python
+# entry point rejects the default "auto" value for both paths.
 GPU_DEVICE_ARGS=()
 case "${ECODA_APPTAINER_NV:-0}" in
   0)
-    if [[ "${METHOD}" == "mrvi" && -n "${ROW_COMBO:-}" ]]; then
+    if [[ "${METHOD}" == "mrvi" &&
+          ( -n "${ROW_COMBO:-}" ||
+            "${ANALYSIS_PASS:-}" == "uncorrected" ||
+            "${ANALYSIS_PASS:-}" == "corrected" ||
+            "${ANALYSIS_VIEW:-}" == "batch_effect_uncorrected" ||
+            "${ANALYSIS_VIEW:-}" == "batch_effect_corrected" ) ]]; then
       GPU_DEVICE_ARGS=(--device cpu)
     fi
     ;;

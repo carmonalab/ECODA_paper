@@ -87,6 +87,16 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   ID and the durable runner, preserve all logs/manifests/partial artifacts,
   and perform one terminal inspect as `FAILED`. Never let an unintended wave
   finish and never manually mark it complete.
+- **Post-submission scope audit is mandatory:** Immediately after every
+  approved launch, perform one HPC-side scope check of the emitted scheduler
+  rows and the run-owned selection/matrix manifests. Compare each emitted
+  dataset, view, method, parameter shard, array row count, watchdog, and
+  aggregate dependency against the recorded approval before allowing the wave
+  to continue. Any redundant or missing dataset/method/parameter row is an
+  immediate scope mismatch: cancel every emitted scheduler ID and the durable
+  runner, preserve evidence, and terminal-inspect the run as `FAILED`. This is
+  one launch-boundary audit, not periodic `squeue`/`sacct` polling; it never
+  replaces the required durable wait or terminal accounting inspect.
 - **Targeted recovery is mandatory:** Before any Pipeline 2–5 rerun, inspect
   the failed run's terminal status, manifests, watchdog records, and artifact
   contracts. Re-run only the failed dataset/view/method/parameter rows; never

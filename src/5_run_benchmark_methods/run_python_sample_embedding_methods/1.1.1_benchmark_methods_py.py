@@ -1300,8 +1300,19 @@ def report_gpu_memory(method_str):
 GPU_BACKED_METHODS = frozenset(("mrvi", "scpoli"))
 
 
-def validate_gpu_execution(method, device, combo=None):
+def validate_gpu_execution(method, device, combo=None, analysis_pass=None, view=None):
     """Validate the resource class selected by the Stage 5 submitter."""
+    batch_view = analysis_pass in {"uncorrected", "corrected"} or view in {
+        "batch_effect_uncorrected",
+        "batch_effect_corrected",
+    }
+    if method == "mrvi" and batch_view:
+        if device != "cpu":
+            raise RuntimeError(
+                "Batch-view MrVI must run with --device cpu; "
+                "GPU allocation is reserved for benchmark views"
+            )
+        return
     if method == "mrvi" and device == "cpu":
         if combo is None or combo == "hvg2000":
             raise RuntimeError(
@@ -2378,14 +2389,20 @@ def main():
                         help="Recompute combos whose output feather already exists")
     parser.add_argument("--device", default="auto",
                         choices=["auto", "cpu", "cuda"],
-                        help="Training device; default MrVI/scPoli combos "
-                             "require CUDA, non-default MrVI may use CPU")
+                        help="Training device; benchmark MrVI/scPoli combos "
+                             "require CUDA, batch-view MrVI requires CPU")
     args = parser.parse_args()
 
     args.hvg = sorted(set(args.hvg))
     if args.analysis_pass is not None:
         args.hvg = [2000]
-    validate_gpu_execution(args.method, args.device, args.combo)
+    validate_gpu_execution(
+        args.method,
+        args.device,
+        args.combo,
+        analysis_pass=args.analysis_pass,
+        view=args.view,
+    )
 
     scvi.settings.seed = 0
     print("scvi-tools version:", scvi.__version__)
