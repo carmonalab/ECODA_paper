@@ -848,7 +848,7 @@ stage5_validate_batch_contract_manifest() {
   local manifest="${ECODA_BATCH_CONTRACT_MANIFEST:-}"
   local row_ds row_view row_method row_path row_md5 row_size extra
   local source_path
-  local expected_path expected_identity actual_count=0 duplicate_key
+  local expected_path expected_identity actual_count=0 duplicate_key=""
   local safe key found expected_count=0
   local -a actual_ds=() actual_views=() actual_methods=() actual_paths=()
   local -a contract_methods=(preprocess)

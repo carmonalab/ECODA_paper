@@ -543,3 +543,31 @@ test "$(grep -c $'\tmrvi$' "${TARGETED_FINAL_PENDING}")" = 4
 ! grep -Eq $'\t(prepare_pseudobulk|pseudobulk|pilot|qot)$' \
   "${TARGETED_FINAL_PENDING}"
 echo "targeted final five-row repair selection contract: OK"
+rm -rf "${HPC_ROOT}/_ecoda_owners/stage5"
+COMPOSITION_ONLY_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+    BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
+    bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${FINAL_SELECTION}" --pass uncorrected \
+    --analysis-variant final --target-methods composition
+)"
+COMPOSITION_ONLY_RUN_ID="$(printf '%s\n' "${COMPOSITION_ONLY_OUTPUT}" |
+  sed -n 's/^BATCH_EFFECT_RUN_ID=//p')"
+test -n "${COMPOSITION_ONLY_RUN_ID}"
+COMPOSITION_ONLY_ROOT="${HPC_ROOT}/_ecoda_runs/${COMPOSITION_ONLY_RUN_ID}"
+COMPOSITION_ONLY_PENDING="$(sed -n 's/^PENDING_SELECTION=//p' \
+  "${COMPOSITION_ONLY_ROOT}/metadata")"
+EXPECTED_COMPOSITION_ONLY_PENDING=$'Covid19_PBMC\tbatch_effect_uncorrected\tcomposition\nDiabetes\tbatch_effect_uncorrected\tcomposition\nJoanito\tbatch_effect_uncorrected\tcomposition\nLung\tbatch_effect_uncorrected\tcomposition'
+test "$(cat "${COMPOSITION_ONLY_PENDING}")" = \
+  "${EXPECTED_COMPOSITION_ONLY_PENDING}"
+test "$(wc -l < "${COMPOSITION_ONLY_PENDING}" | tr -d '[:space:]')" = 4
+test "$(grep -c $'\tcomposition$' "${COMPOSITION_ONLY_PENDING}")" = 4
+! grep -Eq $'\t(gloscope|mrvi|prepare_pseudobulk|pseudobulk|pilot|qot)$' \
+  "${COMPOSITION_ONLY_PENDING}"
+COMPOSITION_ONLY_CAPTURE="${TMP_DIR}/composition-only-calls"
+printf '%s\n' "${COMPOSITION_ONLY_OUTPUT}" |
+  grep -E 'BATCH_EFFECT_(ARRAY|WATCHDOG|AGGREGATE_GATE)_JOB_ID=' \
+  > "${COMPOSITION_ONLY_CAPTURE}"
+! grep -Eq '(gloscope|mrvi|pilot|qot|prepare_pseudobulk|pseudobulk)' \
+  "${COMPOSITION_ONLY_CAPTURE}"
+echo "targeted composition-only recovery selection contract: OK"
