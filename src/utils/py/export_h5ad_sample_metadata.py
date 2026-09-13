@@ -3,8 +3,11 @@
 
 ``X``, ``raw``, and ``layers['counts']`` are never opened. It retains the first
 observation for each configured sample ID in source order by default. An
-explicit ``majority_v1`` policy replaces only its configured ``majority_keys``
-with unique technical winners; every other metadata field remains first-row.
+explicit ``majority_v1`` policy replaces only its configured technical winners
+with unique sample-level winners; every other metadata field remains first-row.
+Batch-effect exports require the configured high-resolution cell-type column
+when a cell-type column is needed; low-resolution annotations are not inputs to
+batch-effect calculations and are carried only when present.
 It writes the output and its strict MD5 sidecar atomically, and never publishes
 an H5AD artifact record.
 """
@@ -158,6 +161,8 @@ def requested_columns(
     dataset: str,
     entry: dict,
     view: dict | None = None,
+    *,
+    batch_view: bool = False,
 ) -> tuple[str, list[str], list[str]]:
     columns = _effective_columns(entry, view)
     raw_sample_column = columns.get("sample")
@@ -170,17 +175,74 @@ def requested_columns(
     # grouping/order key for final Stage 5; the configured raw identity remains
     # an optional source metadata column when it is still present.
     required: list[str] = ["Sample", label_column]
-    for key in ("batch", "cell_type_low_res", "cell_type_high_res"):
+    required_keys = ["batch", "cell_type_low_res", "cell_type_high_res"]
+    if batch_view:
+        # Batch-effect methods use only the configured high-resolution
+        # annotation. The low-resolution column remains optional carry-through.
+        required_keys.remove("cell_type_low_res")
+    for key in required_keys:
         value = columns.get(key)
         if isinstance(value, str) and value.strip():
             required.append(value)
         elif isinstance(value, (list, tuple)):
-            required.extend(str(item) for item in value if isinstance(item, str) and item.strip())
+            required.extend(
+                str(item) for item in value if isinstance(item, str) and item.strip()
+            )
     required = list(dict.fromkeys(required))
-    optional = list(dict.fromkeys([raw_sample_column, *_dataset_spec_columns(config_path, dataset)]))
+    optional_configured = []
+    if batch_view:
+        value = columns.get("cell_type_low_res")
+        if isinstance(value, str) and value.strip():
+            optional_configured.append(value)
+        elif isinstance(value, (list, tuple)):
+            optional_configured.extend(
+                str(item) for item in value if isinstance(item, str) and item.strip()
+            )
+    optional = list(
+        dict.fromkeys(
+            [
+                *optional_configured,
+                raw_sample_column,
+                *_dataset_spec_columns(config_path, dataset),
+            ]
+        )
+    )
     optional = [column for column in optional if column not in required]
     all_columns = required + optional
     return "Sample", required, all_columns
+
+def _ordered_metadata_columns(
+    config_path: Path,
+    dataset: str,
+    entry: dict,
+    view: dict,
+    frame_columns: Iterable[str],
+) -> list[str]:
+    """Preserve the configured metadata order while omitting absent optional fields."""
+    columns = _effective_columns(entry, view)
+    available = [str(column) for column in frame_columns]
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        if isinstance(value, str):
+            values = [value]
+        elif isinstance(value, (list, tuple)):
+            values = value
+        else:
+            return
+        for column in values:
+            if isinstance(column, str) and column in available and column not in seen:
+                seen.add(column)
+                ordered.append(column)
+
+    add("Sample")
+    for key in ("label", "batch", "cell_type_low_res", "cell_type_high_res", "sample"):
+        add(columns.get(key))
+    add(_dataset_spec_columns(config_path, dataset))
+    for column in available:
+        add(column)
+    return ordered
 
 _APPROVED_MAJORITY_DATASETS = frozenset(
     {"Alzheimer", "Breast_cancer", "Lupus_PBMC"}
@@ -742,8 +804,17 @@ def write_metadata(frame: pd.DataFrame, output: Path) -> None:
 def export(args: argparse.Namespace) -> None:
     config_path = args.config.resolve()
     entry, view = _config_entry(config_path, args.dataset, args.view)
+    selected_variant = (
+        getattr(args, "analysis_variant", None)
+        or os.environ.get("ANALYSIS_VARIANT", "")
+    )
     sample_column, required, candidates = requested_columns(
-        config_path, args.dataset, entry, view
+        config_path,
+        args.dataset,
+        entry,
+        view,
+        batch_view=args.view
+        in {"batch_effect_uncorrected", "batch_effect_corrected"},
     )
     columns = _effective_columns(entry, view)
     label_column = columns["label"]
@@ -759,10 +830,6 @@ def export(args: argparse.Namespace) -> None:
         args.dataset,
         args.view,
         getattr(args, "analysis_variant", None),
-    )
-    selected_variant = (
-        getattr(args, "analysis_variant", None)
-        or os.environ.get("ANALYSIS_VARIANT", "")
     )
     if args.view == "batch_effect_uncorrected" and selected_variant == "final":
         # The explicit uncorrected-final lane retains the first source row for
@@ -790,6 +857,16 @@ def export(args: argparse.Namespace) -> None:
         batch_metadata_policy=policy,
         biological_column=label_column,
     )
+    frame = frame.loc[
+        :,
+        _ordered_metadata_columns(
+            config_path,
+            args.dataset,
+            entry,
+            view,
+            frame.columns,
+        ),
+    ]
     write_metadata(frame, output)
     print(f"METADATA_EXPORT=OK PATH={output} SAMPLES={len(frame)}")
 

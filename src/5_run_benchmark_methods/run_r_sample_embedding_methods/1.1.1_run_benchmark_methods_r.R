@@ -575,9 +575,9 @@ if (pseudobulk_metadata_method) {
   names(embedding_matrices) <- names(embedding_names)
   embedding_sample_ids <- as.character(obs[[sample_col]])
 } else if (method == "composition") {
-  # Composition keeps its existing obs-only path.  It consumes the stored
-  # hvg2000 PCA embedding, configured annotations, and the cached pseudobulk
-  # variants without materializing a Seurat object.
+  # Composition keeps its existing obs-only path. It consumes the stored
+  # hvg2000 PCA embedding, the configured high-resolution cell-type column for
+  # batch-effect views, and cached pseudobulk variants.
   composition_obs_columns <- if (
     is.null(analysis_pass) &&
     length(entry$not_suitable_for_auto_annotation) == 0
@@ -586,11 +586,15 @@ if (pseudobulk_metadata_method) {
   } else {
     character()
   }
+  composition_cell_type_columns <- if (!is.null(analysis_pass)) {
+    entry$cell_type_high_res
+  } else {
+    c(entry$cell_type_low_res, entry$cell_type_high_res)
+  }
   obs_columns <- c(
     sample_col,
     entry$label_col,
-    entry$cell_type_low_res,
-    entry$cell_type_high_res,
+    composition_cell_type_columns,
     if (correct_batch_mode) batch_keys else batch_col,
     composition_obs_columns
   )

@@ -433,13 +433,14 @@ Standardized protocol for onboarding new external cohorts:
 
 The batch-effect onboarding scope is the ordered twelve-dataset selection
 maintained in `dataset_specs.py`: nine audit cohorts, Joanito, Stephenson, and
-CombinedPBMC. Stage 4 records `not_suitable_for_auto_annotation` as an
-a-priori exclusion for non-immune/unsupported cohorts; it is not an annotation
-failure. The annotation contract requires all dual-method columns, exact
-`(Sample, cell_barcode)` union coverage, checksums, and dataset-level
-`layer1`/`scATOMIC_pred` anchors. The batch analysis consumes only configured
-high-resolution cell-type columns. scATOMIC `breast_mode` remains at default
-`FALSE` and must not be passed by callers.
+CombinedPBMC. This registry/audit scope does not schedule Stage 4 annotation
+for batch-effect views. Those views preserve the source/author metadata
+already present in `obs`; calculations use only each dataset's configured
+high-resolution cell-type column from `datasets.json`. Low-resolution
+annotations, including `layer1`, are not batch-effect calculation inputs.
+The universal dual-method annotation contract applies to benchmark-analysis
+views. scATOMIC `breast_mode` remains at default `FALSE` and must not be passed
+by callers.
 
 ---
 

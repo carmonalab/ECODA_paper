@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import json
 from pathlib import Path
 import sys
@@ -592,6 +593,84 @@ def _check_export_boundary(root: Path) -> None:
         f"PATH={output_path}",
     ]
 
+def _check_corrected_lupus_highres_contract(root: Path) -> None:
+    """Corrected-final export requires configured high-res louvain only."""
+
+    input_path = (root / "Lupus_Perez2022.h5ad").resolve()
+    corrected_root = (root / "batch_effect" / "corrected_final").resolve()
+    output_path = (
+        corrected_root
+        / "metadata"
+        / "Lupus_PBMC_sample_metadata.feather"
+    )
+    config_path = (root / "lupus-datasets.json").resolve()
+    columns = {
+        "Sample": ["sample-a", "sample-a", "sample-b", "sample-b"],
+        "sampleID": ["raw-a", "raw-a", "raw-b", "raw-b"],
+        "Status": ["case", "case", "control", "control"],
+        "batch_cov": ["batch-1", "batch-1", "batch-2", "batch-2"],
+        "louvain": ["B", "B", "A", "A"],
+    }
+    _write_obs_only_h5ad(
+        input_path,
+        columns,
+        [f"lupus-cell-{number}" for number in range(4)],
+    )
+    config = {
+        "Lupus_PBMC": {
+            "columns": {
+                "sample": "sampleID",
+                "label": "Status",
+                "batch": "batch_cov",
+                "cell_type_low_res": "layer1",
+                "cell_type_high_res": "louvain",
+            },
+            "batch_metadata_policy": {
+                "sample_aggregation": "majority_v1",
+                "majority_keys": ["batch_cov"],
+                "accepted_sentinel_values": {},
+            },
+            "views": {
+                "batch_effect_corrected": {
+                    "input_file_name": input_path.name,
+                    "output_file_name": "Lupus_corrected.h5ad",
+                }
+            },
+        }
+    }
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    previous_pass = os.environ.get("ANALYSIS_PASS")
+    previous_root = os.environ.get("ANALYSIS_ROOT")
+    os.environ["ANALYSIS_PASS"] = "corrected"
+    os.environ["ANALYSIS_ROOT"] = str(corrected_root)
+    try:
+        export(
+            argparse.Namespace(
+                config=config_path,
+                dataset="Lupus_PBMC",
+                view="batch_effect_corrected",
+                analysis_variant="corrected_final",
+                input_file=input_path,
+                output=output_path,
+                chunk_size=2,
+                check=False,
+            )
+        )
+    finally:
+        if previous_pass is None:
+            os.environ.pop("ANALYSIS_PASS", None)
+        else:
+            os.environ["ANALYSIS_PASS"] = previous_pass
+        if previous_root is None:
+            os.environ.pop("ANALYSIS_ROOT", None)
+        else:
+            os.environ["ANALYSIS_ROOT"] = previous_root
+    metadata = pd.read_feather(output_path)
+    assert metadata["Sample"].tolist() == ["sample-a", "sample-b"]
+    assert metadata["louvain"].tolist() == ["B", "A"]
+    assert "layer1" not in metadata.columns
+    assert not {"X", "raw", "layers", "counts"} & set(metadata.columns)
+
 
 
 
@@ -651,6 +730,7 @@ def main() -> None:
         _check_breast_fixture(root)
         _check_breast_three_key_composite()
         _check_export_boundary(root)
+        _check_corrected_lupus_highres_contract(root)
     print("H5AD metadata majority contracts: OK")
 
 
