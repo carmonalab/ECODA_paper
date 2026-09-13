@@ -78,6 +78,16 @@ def _file_identity(path: Path, label: str) -> dict[str, Any]:
         "size": path.stat().st_size,
     }
 
+def _prior_terminal_identity(path: Path, run_id: str) -> dict[str, Any]:
+    identity = _file_identity(path, "prior Stage 3 terminal status")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    state_lines = [line for line in lines if line.startswith("STATE=")]
+    run_lines = [line for line in lines if line.startswith("RUN_ID=")]
+    if state_lines != ["STATE=FAIL"] or run_lines != [f"RUN_ID={run_id}"]:
+        raise ValueError(
+            "prior Stage 3 terminal status must be STATE=FAIL for the target run"
+        )
+    return identity
 
 def _manifest(path: Path, label: str) -> dict[str, str]:
     _regular_file(path, label)
@@ -252,8 +262,8 @@ def main() -> None:
     if not isinstance(config, dict):
         raise ValueError("config must contain a JSON object")
     rows, selection_info = _selection(selection, run_root, config, input_root)
-    prior_terminal = _file_identity(
-        run_root / "status" / "terminal", "prior Stage 3 terminal status"
+    prior_terminal = _prior_terminal_identity(
+        run_root / "status" / "terminal", run_root.name
     )
     payload = {
         "format": 1,

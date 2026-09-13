@@ -818,6 +818,7 @@ stage3_validate_sync_report() {
   local report_selection_sha report_selection_size actual_selection_sha actual_selection_size
   local report_config_sha report_config_size actual_config_sha actual_config_size
   local report_prior_sha report_prior_size actual_prior_sha actual_prior_size
+  local prior_terminal_state prior_terminal_run
   expected_rows="$(wc -l < "${MANIFEST}" | tr -d '[:space:]')" || return 1
   [[ "${report}" = /* && -f "${report}" && ! -L "${report}" && -s "${report}" ]] || return 1
   ecoda_validate_checksum "${report}" >/dev/null || return 1
@@ -825,6 +826,14 @@ stage3_validate_sync_report() {
   expected_original="${source_run_root%/tree}/identity/source.manifest"
   [[ "${SOURCE_MANIFEST_ORIGINAL}" == "${expected_original}" ]] || return 1
   ecoda_validate_run_owned_path "${report}" "${ECODA_RUN_ROOT}" || return 1
+  prior_terminal_state="$(awk -F= '$1 == "STATE" {count++; value=$2}
+    END {if (count != 1) exit 1; print value}' \
+    "${ECODA_RUN_ROOT}/status/terminal")" || return 1
+  prior_terminal_run="$(awk -F= '$1 == "RUN_ID" {count++; value=$2}
+    END {if (count != 1) exit 1; print value}' \
+    "${ECODA_RUN_ROOT}/status/terminal")" || return 1
+  [[ "${prior_terminal_state}" == FAIL && "${prior_terminal_run}" == "${RUN_ID}" ]] ||
+    return 1
   jq -e --arg run "${RUN_ID}" --arg stage_manifest "${SOURCE_MANIFEST_RUN}" \
     --arg selection "${MANIFEST}" --arg runtime "${RUNTIME_IDENTITY}" \
     --arg config "${DATASETS_JSON_FILE}" \
@@ -943,8 +952,13 @@ stage3_sync_report_row_valid() {
 stage3_preserve_terminal_before_validated_sync() {
   local prior="${ECODA_RUN_ROOT}/status/terminal"
   local preserved="${ECODA_RUN_ROOT}/status/terminal.pre_validated_sync"
-  local temporary
+  local temporary prior_state prior_run
   [[ -f "${prior}" && ! -L "${prior}" && -s "${prior}" ]] || return 1
+  prior_state="$(awk -F= '$1 == "STATE" {count++; value=$2}
+    END {if (count != 1) exit 1; print value}' "${prior}")" || return 1
+  prior_run="$(awk -F= '$1 == "RUN_ID" {count++; value=$2}
+    END {if (count != 1) exit 1; print value}' "${prior}")" || return 1
+  [[ "${prior_state}" == FAIL && "${prior_run}" == "${RUN_ID}" ]] || return 1
   ecoda_validate_run_owned_path "${prior}" "${ECODA_RUN_ROOT}" || return 1
   if [[ -e "${preserved}" || -L "${preserved}" ]]; then
     [[ -f "${preserved}" && ! -L "${preserved}" && -s "${preserved}" ]] ||

@@ -126,7 +126,7 @@ def main() -> None:
         prior_terminal = run_root / "status" / "terminal"
         prior_terminal.parent.mkdir(parents=True)
         prior_terminal.write_text(
-            "STATE=FAIL\nRUN_ID=fixture\nREASON=prior failure\n", encoding="utf-8"
+            "STATE=FAIL\nRUN_ID=run\nREASON=prior failure\n", encoding="utf-8"
         )
         run_snapshot = root / "run-snapshot"
         validator_snapshot = root / "validator-snapshot"
@@ -143,26 +143,25 @@ def main() -> None:
         h5ad.parent.mkdir(parents=True)
         make_h5ad(h5ad)
         output = run_manifests / "validated_sync_report.json"
-        invoke(
-            [
-                "--run-root",
-                str(run_root),
-                "--run-source-manifest",
-                str(run_source_copy),
-                "--validator-source-manifest",
-                str(validator_source),
-                "--runtime-identity",
-                str(runtime_identity),
-                "--selection",
-                str(selection),
-                "--input-root",
-                str(input_root),
-                "--config",
-                str(run_snapshot / "tree" / "datasets.json"),
-                "--output",
-                str(output),
-            ]
-        )
+        report_args: list[str] = [
+            "--run-root",
+            str(run_root),
+            "--run-source-manifest",
+            str(run_source_copy),
+            "--validator-source-manifest",
+            str(validator_source),
+            "--runtime-identity",
+            str(runtime_identity),
+            "--selection",
+            str(selection),
+            "--input-root",
+            str(input_root),
+            "--config",
+            str(run_snapshot / "tree" / "datasets.json"),
+            "--output",
+            str(output),
+        ]
+        invoke(report_args)
         payload = json.loads(output.read_text(encoding="utf-8"))
         assert payload["stage"] == "stage3"
         assert payload["run_id"] == run_root.name
@@ -173,6 +172,17 @@ def main() -> None:
         assert payload["rows"][0]["md5"] == md5(h5ad)
         assert payload["rows"][0]["size"] == str(h5ad.stat().st_size)
         assert output.with_name(output.name + ".md5").is_file()
+        for invalid_terminal in (
+            "STATE=OK\nRUN_ID=run\nREASON=not a prior failure\n",
+            "STATE=FAIL\nRUN_ID=foreign\nREASON=foreign run\n",
+        ):
+            prior_terminal.write_text(invalid_terminal, encoding="utf-8")
+            try:
+                invoke(report_args)
+            except ValueError as exc:
+                assert "prior Stage 3 terminal status" in str(exc)
+            else:
+                raise AssertionError("invalid prior terminal status was accepted")
 
 
     print("stage3 sync report contract: OK")
