@@ -1938,10 +1938,11 @@ full rationale when a short evidence-linked update is sufficient.
 - Stage 5 failure finalization now preserves a run-owned stage or global
   artifact owner only when every matching run-owned matrix manifest has a
   correctly labeled terminal watchdog `STATE=OK`; missing, malformed, failed,
-  foreign, or empty-array cases remain fail-closed without deleting owner
-  directories. Sync cleanup is subshell-wrapped so failures return through
-  `stage5_abort`. `tests/test_benchmark_matrix_submitter.sh` passes its
-  aggregate-failure and true sync-boundary owner-state regressions.
+  or foreign status/owner records remain fail-closed without deleting owner
+  directories. An empty acquisition list is treated as “nothing to finalize,”
+  not as a malformed owner. Sync cleanup is subshell-wrapped so failures
+  return through `stage5_abort`. `tests/test_benchmark_matrix_submitter.sh`
+  passes its aggregate-failure and true sync-boundary owner-state regressions.
 - The focused repair union is green after these fixes: Stage 5 matrix
   ownership, H5AD contract parsing, exact selection, synchronization, worker
   dispatch, RDS contracts, and batch-effect analysis. The expected negative

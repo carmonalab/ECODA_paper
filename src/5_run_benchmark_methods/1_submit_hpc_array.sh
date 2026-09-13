@@ -1217,7 +1217,7 @@ stage5_finalize_tracked_owner_states() {
   local reason="$1"
   local owner owner_state owner_key owner_path owner_run owner_stage expected_owner
   local current_run="${RUN_ID:-${ECODA_RUN_ID:-${ECODA_RUN_ROOT##*/}}}"
-  local owner_reason rc=0
+  local owner_reason owner_mutable rc=0
   declare -p ECODA_ACQUIRED_OWNERS >/dev/null 2>&1 ||
     ECODA_ACQUIRED_OWNERS=()
   if [[ ${#ECODA_ACQUIRED_OWNERS[@]} -eq 0 ]]; then
@@ -1226,6 +1226,7 @@ stage5_finalize_tracked_owner_states() {
   for owner in "${ECODA_ACQUIRED_OWNERS[@]}"; do
     [[ -n "${owner}" ]] || { rc=1; continue; }
     owner_state=FAIL
+    owner_mutable=0
     case "${owner}" in
       "${ECODA_OWNERS_ROOT:-}/artifact/"*)
         if _ecoda_artifact_owner_validate_dir "${owner}" \
@@ -1235,6 +1236,7 @@ stage5_finalize_tracked_owner_states() {
           owner_path="${ECODA_ARTIFACT_OWNER_CANONICAL_PATH:-}"
           if [[ -n "${owner_path}" && "${owner_run}" == "${current_run}" &&
                 "${owner_stage}" == stage5 ]]; then
+            owner_mutable=1
             stage5_watchdog_state_for_artifact_path "${owner_path}"
             owner_state="${STAGE5_WATCHDOG_STATE}"
           fi
@@ -1251,11 +1253,16 @@ stage5_finalize_tracked_owner_states() {
         if [[ -n "${owner_key}" && "${owner}" == "${expected_owner}" &&
               "${owner_run}" == "${current_run}" &&
               "${owner_stage}" == stage5 ]]; then
+          owner_mutable=1
           stage5_watchdog_state_for_owner_key "${owner_key}"
           owner_state="${STAGE5_WATCHDOG_STATE}"
         fi
         ;;
     esac
+    if [[ ${owner_mutable} -ne 1 ]]; then
+      rc=1
+      continue
+    fi
     if [[ "${owner_state}" == OK ]]; then
       owner_reason="method watchdog terminal OK; ${reason}"
     else
@@ -1299,7 +1306,10 @@ stage5_finalize_owner_manifest() {
       else
         rc=1
       fi
-    elif [[ "${owner}" == "${expected_owner}" ]]; then
+    elif [[ "${owner}" == "${expected_owner}" &&
+            "${owner_metadata_key}" == "${owner_key}" &&
+            "${owner_run}" == "${current_run}" &&
+            "${owner_stage}" == stage5 ]]; then
       owner_mutable=1
     else
       rc=1
@@ -3953,6 +3963,7 @@ stage5_validate_final_matrix_rows() {
   local label ds view row_label selection tmp
   local -a validation_args
   [[ "${ANALYSIS_VARIANT:-}" == final ]] || return 1
+  [[ ${#FEATHER_LABELS[@]} -gt 0 ]] || return 0
   for label in "${FEATHER_LABELS[@]}"; do
     while IFS=$'\t' read -r ds view row_label; do
       stage5_kidney_legacy_method_valid "${ds}" "${label}" && continue
@@ -4043,6 +4054,7 @@ stage5_validate_corrected_rds_rows() {
   local ds view row_label label path identity_path
   local -a corrected_rds_args
   [[ "${PASS_ARG:-}" == corrected ]] || return 1
+  [[ ${#RDS_LABELS[@]} -gt 0 ]] || return 0
   while IFS=$'\t' read -r ds view row_label; do
     for label in "${RDS_LABELS[@]}"; do
       identity_path="$(
@@ -4071,6 +4083,7 @@ stage5_validate_final_rds_rows() {
   local list tmp
   local -a rds_args
   [[ "${ANALYSIS_VARIANT:-}" == final ]] || return 1
+  [[ ${#RDS_LABELS[@]} -gt 0 ]] || return 0
   for label in "${RDS_LABELS[@]}"; do
     list="${ECODA_RUN_ROOT}/manifests/rds_validation_final_${label}.tsv"
     tmp="${list}.build.$$"
