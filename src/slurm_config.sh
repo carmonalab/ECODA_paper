@@ -323,7 +323,12 @@ export SAMPLE_COLNAME="Sample"
 # Ordinary heavy-method shards are resource-classed by parameter: default
 # MrVI/scPoli combinations stay on H200; non-default MrVI runs on CPU and
 # non-default scPoli runs use the flexible any-GPU class.
-SLURM_PARTITION_PRIVATE="${SLURM_PARTITION_PRIVATE:-private-carmona-gpu}"
+if [[ "${ECODA_HPC_CLUSTER:-}" == "yggdrasil" ]]; then
+  # Yggdrasil has no private-carmona-gpu partition.
+  SLURM_PARTITION_PRIVATE="${SLURM_PARTITION_PRIVATE:-public-gpu}"
+else
+  SLURM_PARTITION_PRIVATE="${SLURM_PARTITION_PRIVATE:-private-carmona-gpu}"
+fi
 SLURM_PARTITION_BENCHMARK_GPU="${SLURM_PARTITION_BENCHMARK_GPU:-shared-gpu}"
 SLURM_PARTITION_BENCHMARK_CPU="${SLURM_PARTITION_BENCHMARK_CPU:-shared-cpu}"
 BENCHMARK_GPU_CONSTRAINT="${BENCHMARK_GPU_CONSTRAINT:-nvidia_h200_nvl}"
@@ -369,7 +374,11 @@ WATCHDOG_TIME_LIMIT="${WATCHDOG_TIME_LIMIT:-12:00:00}"
 # Used by stages 2-4 submit scripts (CPU + GPU shared nodes and the private
 # node). Stage 5 uses the explicit default/flexible GPU classes above rather
 # than inheriting this mixed pipeline partition list.
-SLURM_PARTITION="shared-cpu,shared-gpu,private-carmona-gpu"
+if [[ "${ECODA_HPC_CLUSTER:-}" == "yggdrasil" ]]; then
+  SLURM_PARTITION="${SLURM_PARTITION:-shared-cpu,shared-gpu}"
+else
+  SLURM_PARTITION="${SLURM_PARTITION:-shared-cpu,shared-gpu,private-carmona-gpu}"
+fi
 
 # --- User Info ---
 # USER_EMAIL is the recipient for Slurm --mail-user and sync-status emails

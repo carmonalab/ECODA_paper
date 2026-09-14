@@ -37,6 +37,46 @@ run_nas_config() {
         "${NAS_PREFIX}" "${NAS_SC_DIR}" "${NAS_TARGET_DIR}"
     ' _ "${ROOT}/src/slurm_config.sh"
 }
+run_partition_config() {
+  local cluster="$1"
+  local partition_override="${2:-}"
+  local private_partition_override="${3:-}"
+  env -i \
+    PATH="/usr/bin:/bin" \
+    USER="ecoda-test" \
+    ECODA_HPC_CLUSTER="${cluster}" \
+    ECODA_HOST_ENV_PREFIX="${NAS_TEST_HOST_ENV}" \
+    HPC_SCRATCH_DIR="${NAS_TEST_ROOT}/partition-scratch" \
+    HOME="${NAS_TEST_ROOT}/partition-home" \
+    ECODA_NAS_PREFIX="${NAS_TEST_ROOT}/nas/partition-prefix" \
+    ECODA_NAS_SC_DIR="${NAS_TEST_ROOT}/nas/partition-sc" \
+    ECODA_NAS_TARGET_DIR="${NAS_TEST_ROOT}/nas/partition-target" \
+    SLURM_PARTITION="${partition_override}" \
+    SLURM_PARTITION_PRIVATE="${private_partition_override}" \
+    bash -c '
+      set -euo pipefail
+      unset NAS_PREFIX NAS_BASE_DIR NAS_SC_DIR NAS_TARGET_DIR SLURM_CLUSTER_NAME
+      [[ -n "${SLURM_PARTITION:-}" ]] || unset SLURM_PARTITION
+      [[ -n "${SLURM_PARTITION_PRIVATE:-}" ]] || unset SLURM_PARTITION_PRIVATE
+      source "$1"
+      printf "%s\t%s\n" \
+        "${SLURM_PARTITION}" "${SLURM_PARTITION_PRIVATE}"
+    ' _ "${ROOT}/src/slurm_config.sh"
+}
+
+BAMBOO_PARTITIONS="$(run_partition_config bamboo)"
+[[ "${BAMBOO_PARTITIONS}" == \
+  $'shared-cpu,shared-gpu,private-carmona-gpu\tprivate-carmona-gpu' ]]
+
+YGGDRASIL_PARTITIONS="$(run_partition_config yggdrasil)"
+[[ "${YGGDRASIL_PARTITIONS}" == $'shared-cpu,shared-gpu\tpublic-gpu' ]]
+
+YGGDRASIL_PARTITION_OVERRIDES="$(
+  run_partition_config yggdrasil custom-cpu,custom-gpu custom-private-gpu
+)"
+[[ "${YGGDRASIL_PARTITION_OVERRIDES}" == \
+  $'custom-cpu,custom-gpu\tcustom-private-gpu' ]]
+
 
 BAMBOO_NAS="$(run_nas_config bamboo)"
 [[ "${BAMBOO_NAS}" == \
