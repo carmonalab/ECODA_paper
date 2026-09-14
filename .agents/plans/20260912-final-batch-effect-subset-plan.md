@@ -566,14 +566,15 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
 
 ### Open items and exact next steps
 
-1. **Implementation checkpoint committed.** The verified source, tests,
-   documentation, and plan changes were committed and pushed as
-   `b4e1135`. Unrelated user worktree changes remain unstaged. `datasets.json`,
-   `pixi.toml`, and `pixi.lock` were not changed by this checkpoint. Bamboo's
-   canonical checkout and the Yggdrasil repository backup still point to the
-   prior plan commit `751c3f7`; the next source snapshot must use the current
-   full branch HEAD containing the implementation and latest plan checkpoint,
-   not a stale hardcoded commit.
+1. **Implementation checkpoint committed.** The verified implementation
+   sources, tests, and documentation were committed and pushed as
+   `b4e1135`; the active H5AD identity regression fixture was added in
+   `0097e5e`. Unrelated user worktree changes remain unstaged.
+   `datasets.json`, `pixi.toml`, and `pixi.lock` were not changed by this
+   checkpoint. Bamboo's canonical checkout and the Yggdrasil repository backup
+   still point to the prior plan commit `751c3f7`; the next source snapshot
+   must use the current full branch HEAD containing the implementation and
+   latest plan checkpoint, not a stale hardcoded commit.
 2. **Finish backup before production compute.** The repository clone is
    verified; the complete 2.3 TB scratch clone has not started. Use only
    direct Bamboo→Yggdrasil rsync, never Mac staging. Agent forwarding is
