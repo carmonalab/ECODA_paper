@@ -35,6 +35,7 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   `durable-hpc-gate-ecoda` profile. Direct SSH-launched long-running wrappers
   are not an acceptable substitute.
 - Route full-cohort HPC work through the durable HPC gate; do not launch full cohorts for routine checks.
+- **Canonical host policy:** `bamboo` remains the default and only canonical host for full-cohort ECODA Pipeline 1–5 durable compute and normal gates. `yggdrasil` (reachable as `ssh yggdrasil` from the approved user setup) is not an implicit compute fallback and MUST NOT be used for ECODA pipeline jobs unless a future user-approved plan explicitly names it. For the 2026-09-15–18 Bamboo maintenance window only, it is authorized as the temporary backup destination for the separately planned repository/scratch clone and restore checks. This exception does not change durable-gate profile `remote_host=bamboo`, runtime/source contracts, or NAS result synchronization. Direct Bamboo↔Yggdrasil transfer remains blocked until an explicit SSH-key or agent-forwarding setup is in place. Every backup command MUST state its host, source/destination path, and scope explicitly; never store passwords, and use SSH keys/agent authentication only.
 - Independent datasets MAY and SHOULD run in one SLURM array for a pipeline
   stage. The durable gate owns the array's terminal wait, accounting
   inspection, checksum/NAS audit, and Luna Max review; the next pipeline stage
@@ -148,10 +149,6 @@ Operational concurrency is explicit rather than application-async: R uses `forea
 - Existing benchmark H5ADs, RDS bundles, pseudobulks, checksums, manifests,
   and gates remain valid and immutable. New derived outputs MUST use separate
   run-owned output roots and MUST NOT overwrite or invalidate those artifacts.
-- MOFAcellulaR MAY use explicitly approved test scripts or allocations, but
-  MUST NOT launch unrelated HPC jobs or any existing Pipeline 1–5 script.
-  Changes to pinned Pixi, MOFA2, or mofapy2 versions still require explicit
-  user confirmation.
 
 ### Local resource boundary for full-cohort derived analyses
 
@@ -224,15 +221,9 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   in metadata/source identity, omit one-level keys from the effective design,
   and apply `NO_CORRECTION` when no key has at least two levels. Full-cell
   validation remains strict.
-- **Uncorrected/final frozen and disabled cohorts:** `Alzheimer`,
-  `Breast_cancer`, `Lupus_PBMC`, and `Stephenson` are frozen and MUST be
-  absent from every new uncorrected Stage 3 selection, Stage 2/4/5 job,
-  final-lane validator selection, and compute manifest. They remain eligible
-  in the independent corrected Pipeline 3 and corrected Pipeline 5 selections
-  above because those selections are defined by the current config contract.
-  Disabled cohorts `CombinedPBMC`, `Kidney_KPMP`, `Myocardial_infarction`, and
-  `Parkinson`, plus `_debug`, remain non-production and MUST be absent from all
-  production selections.
+- **Disabled cohorts:** `CombinedPBMC`, `Kidney_KPMP`, `Myocardial_infarction`,
+  and `Parkinson`, plus `_debug`, remain non-production and MUST be absent from
+  all production selections.
 - **Diagnostic fixture boundary:** `_debug` remains available only for
   explicitly separate diagnostic probes and is never a production target,
   validator input, or scheduler selection.

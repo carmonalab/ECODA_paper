@@ -17,6 +17,22 @@ repository-aware: it checks the ECODA checkout, canonical configuration and
 artifact roots, scientific invariants, benchmark wave serialization, and the
 terminal accounting/audit contract.
 
+## Canonical host policy
+
+`bamboo` remains the default and only canonical host for full-cohort ECODA
+Pipeline 1–5 durable compute and normal gates. `yggdrasil` (reachable as
+`ssh yggdrasil` from the approved user setup) is not an implicit compute
+fallback and MUST NOT be used for ECODA pipeline jobs unless a future
+user-approved plan explicitly names it. For the 2026-09-15–18 Bamboo
+maintenance window only, it is authorized as the temporary backup destination
+for the separately planned repository/scratch clone and restore checks. This
+exception does not change durable-gate profile `remote_host=bamboo`,
+runtime/source contracts, or NAS result synchronization. Direct
+Bamboo↔Yggdrasil transfer remains blocked until an explicit SSH-key or
+agent-forwarding setup is in place. Every backup command MUST state its host,
+source/destination path, and scope explicitly; never store passwords, and use
+SSH keys/agent authentication only.
+
 ## Repository-defined exceptions
 
 For this checkout, `AGENTS.md` is authoritative for explicit user-requested
