@@ -214,7 +214,11 @@ def _runtime_number(value, field, *, allow_none=False):
         raise ValueError(f"runtime metadata has invalid {field}")
 
 
-def _read_feather_batch_contract(path: Path) -> dict | None:
+def _read_feather_batch_contract(
+    path: Path,
+    *,
+    require_summary: bool = True,
+) -> dict | None:
     """Read and verify the corrected identity beside one Feather artifact."""
     metadata_path = Path(f"{path}.runtime.json")
     if not metadata_path.is_file():
@@ -277,7 +281,7 @@ def _read_feather_batch_contract(path: Path) -> dict | None:
         identity,
         identity,
         require_recorded=True,
-        require_summary=True,
+        require_summary=require_summary,
         label=f"Feather runtime metadata {metadata_path}",
     )
     return identity
@@ -524,6 +528,7 @@ def require_nonempty(
     expected_batch_contract=None,
     batch_contract=None,
     require_runtime_batch_contract: bool = False,
+    require_corrected_summary: bool = True,
 ) -> None:
     if not paths:
         raise ValueError(f"missing/invalid {description}: []")
@@ -557,7 +562,10 @@ def require_nonempty(
                         path, producer, producer_run_id, require=True
                     )
                 if require_runtime_batch_contract:
-                    runtime_batch_contract = _read_feather_batch_contract(path)
+                    runtime_batch_contract = _read_feather_batch_contract(
+                        path,
+                        require_summary=require_corrected_summary,
+                    )
                     if runtime_batch_contract is None:
                         raise ValueError(
                             "missing recorded corrected batch contract identity"
@@ -567,14 +575,14 @@ def require_nonempty(
                             batch_contract,
                             runtime_batch_contract,
                             require_recorded=True,
-                            require_summary=True,
+                            require_summary=require_corrected_summary,
                             label=f"{description} embedded identity",
                         )
                     validate_batch_contract_identity(
                         expected_batch_contract,
                         runtime_batch_contract,
                         require_recorded=expected_batch_contract is not None,
-                        require_summary=True,
+                        require_summary=require_corrected_summary,
                         label=description,
                     )
             elif record_present:
@@ -885,6 +893,7 @@ def validate(
                 expected_batch_contract=row_expected_batch_contract,
                 batch_contract=batch_contract,
                 require_runtime_batch_contract=corrected,
+                require_corrected_summary=analysis_variant != "corrected_final",
             )
     _reject_selected_partials(selected_paths, producer_run_id)
 
@@ -934,6 +943,7 @@ def validate_single(
         expected_batch_contract=expected_batch_contract,
         batch_contract=batch_contract,
         require_runtime_batch_contract=corrected,
+        require_corrected_summary=analysis_variant != "corrected_final",
     )
     _reject_selected_partials([Path(path)], producer_run_id)
 def _load_batch_contract_argument(value):

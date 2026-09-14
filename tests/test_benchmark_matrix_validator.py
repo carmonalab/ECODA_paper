@@ -29,6 +29,7 @@ from src.utils.py.h5ad_source_identity import (
     verify_source_identity,
 )
 from src.utils.py.gene_utils import standardize_gene_symbols
+from src.utils.py.batch_contract import build_batch_contract_identity
 
 
 def write_feather(path: Path, frame: pd.DataFrame) -> None:
@@ -154,6 +155,74 @@ def main() -> None:
             pass
         else:
             raise AssertionError("changed source identity was accepted")
+
+        corrected_root = root / "batch_effect" / "corrected_final"
+        corrected_root.joinpath("embeddings").mkdir(parents=True)
+        corrected_config = root / "corrected-datasets.json"
+        corrected_config.write_text(json.dumps({
+            "Adams": {
+                "use_for_batch_effect": True,
+                "columns": {"batch": "batch"},
+                "views": {
+                    "batch_effect_corrected": {
+                        "output_file_name": "source.h5ad"
+                    }
+                }
+            }
+        }))
+        corrected_identity = build_batch_contract_identity(
+            ["batch"],
+            sample_column="Sample",
+            method_id="PILOT",
+            model_id="embedding_consumer_harmony_v1",
+        )
+        corrected_artifact = (
+            corrected_root
+            / "embeddings"
+            / "Adams_batch_effect_corrected_final_hvg2000_highres_pilot_dists.feather"
+        )
+        write_feather(corrected_artifact, frame)
+        corrected_runtime = Path(f"{corrected_artifact}.runtime.json")
+        corrected_runtime.write_text(json.dumps({
+            "schema_version": 1,
+            "artifact_path": str(corrected_artifact),
+            "artifact_md5": hashlib.md5(corrected_artifact.read_bytes()).hexdigest(),
+            "dataset": "Adams",
+            "method": "PILOT_hvg2000",
+            "time_secs": 1.0,
+            "mem_GB": 1.0,
+            "batch_contract": corrected_identity,
+        }))
+        write_file_sidecar(corrected_runtime)
+        corrected_selection = root / "corrected-selection.tsv"
+        corrected_selection.write_text(
+            "Adams\tbatch_effect_corrected\tbatch_effect_corrected\n"
+        )
+        write_file_sidecar(corrected_selection)
+        matrix_artifact_validator.validate(
+            corrected_root,
+            corrected_selection,
+            ["pilot"],
+            batch=True,
+            batch_pass="corrected",
+            analysis_variant="corrected_final",
+            config_path=corrected_config,
+        )
+        try:
+            matrix_artifact_validator.require_nonempty(
+                [corrected_artifact],
+                "ordinary corrected Feather consumer",
+                expected_batch_contract=corrected_identity,
+                require_runtime_batch_contract=True,
+                require_corrected_summary=True,
+            )
+        except ValueError as exc:
+            assert exc.__cause__ is not None
+            assert "missing validation_summary" in str(exc.__cause__), str(exc)
+        else:
+            raise AssertionError(
+                "ordinary corrected Feather consumer accepted a summary-free runtime"
+            )
 
         wrong_scope = root / "batch-wrong-scope.tsv"
         wrong_scope.write_text("Adams\tbatch_effect_uncorrected\twrong_scope\n")
