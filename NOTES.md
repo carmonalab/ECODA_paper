@@ -58,11 +58,12 @@ retained.
 | Alzheimer | `donor_id` | 83 | 0 | 83 | 83 |
 | Breast cancer | `sample_id` | 167$ | 2 | 165 | 126$ |
 | Covid-19 PBMC | `sampleID` | 172 | 8 | 164 | 151 |
-| Kidney (KPMP) | `specimen` | 47 | 2 | 45 | 45 |
-| Myocardial infarction (MI-2) | `orig_ident` | 24 | 0 | 24 | 23 |
 | Diabetes | `donor_id` | 56 | 0 | 56 | 52* |
-| Lupus PBMC | `sampleID` | 261 | 1 | 260 | 261 |
+| Kidney (KPMP) | `specimen` | 47 | 2 | 45 | 45 |
+| Kidney (KPMP) full (sc/sn) | `specimen` | 88 | 4 | 84 | not reported |
+| Myocardial infarction (MI-2) | `orig_ident` | 24 | 0 | 24 | 23 |
 | Lung atlas | `sample` | 304† | 19 | 285 | 165‡ |
+| Lupus PBMC | `sampleID` | 261 | 1 | 260 | 261 |
 | Parkinson | `donor_id` | 97 | 1 | 96 | 97 |
 
 The PILOT-GM-VAE column is the reported count from [Table 1 of the
@@ -118,8 +119,8 @@ To reconcile the configured registry units with the units in the batch-effect on
 | [Covid-19 PBMC](https://pubmed.ncbi.nlm.nih.gov/33657410/) | `sampleID` (configured); `Sample` (canonical) | `PatientID` | 164 Samples; 991,227 cells | 149 | 138×1, 8×2, 2×3, 1×4 | 11 repeated patients contribute 26 retained samples; `Sample` maps to at most one patient. |
 | [Diabetes](https://pubmed.ncbi.nlm.nih.gov/37697055/) | `donor_id` (configured); `dataset__design__sample` | `donor_id` | 56 Samples; 301,796 cells | 56 | 56×1 | One-to-one donor/sample view; no repeated donor/sample IDs. |
 | [Kidney (KPMP)](https://pubmed.ncbi.nlm.nih.gov/37468583/) | `specimen` (configured/canonical) | `donor_id` | 45 specimens; 103,642 cells | 43 | 42×1, PRE019×3 | `specimen` maps to at most one donor; PRE019 is the sole repeated donor. |
-| [Lupus PBMC](https://pubmed.ncbi.nlm.nih.gov/35389781/) | `sampleID` (configured); `Sample` (canonical) | unavailable | 260 Samples; 1,263,220 cells | unavailable | unavailable | No donor/patient/subject column exists, so repeated-donor status cannot be inferred. |
 | [Lung atlas](https://pubmed.ncbi.nlm.nih.gov/37291214/) | `sample` (configured); `Sample` (canonical; registry `platform=10x AND tissue=lung`) | `donor_id` | 285 Samples; 936,636 cells | 156 | 82×1, 53×2, 5×3, 14×4, 1×10, 1×16 | 74 repeated donors contribute 203 samples; `Sample` maps to at most one donor. |
+| [Lupus PBMC](https://pubmed.ncbi.nlm.nih.gov/35389781/) | `sampleID` (configured); `Sample` (canonical) | unavailable | 260 Samples; 1,263,220 cells | unavailable | unavailable | No donor/patient/subject column exists, so repeated-donor status cannot be inferred. |
 | [Myocardial infarction](https://pubmed.ncbi.nlm.nih.gov/35948637/) | `orig_ident` (configured); `Sample` (canonical) | `patient` | 24 Samples; 132,888 cells | 19 | 15×1, P2/P3/P15×2, P9×3 | Four repeated patients contribute 9 samples; current 24 `orig_ident` values differ from the QMD/PILOT 23-sample report. |
 | [Parkinson](https://pubmed.ncbi.nlm.nih.gov/35513515/) ([PMID 39580497](https://pubmed.ncbi.nlm.nih.gov/39580497/)) | `donor_id` (configured); `Sample` (canonical) | `donor_id` | 96 Samples; 2,095,732 cells | 96 | 96×1 | One Sample per donor, but donor-level aggregation does not remove within-donor tissue heterogeneity. |
 
@@ -214,6 +215,19 @@ the raw-versus-post-filter and canonical-unit clarification.
   `experiment` and `library` are sample-specific technical identifiers;
   `10x 3' v3` assay and biopsy tissue occur for all samples.
 
+- **Kidney_KPMP_full (combined sc/sn).** The user-confirmed CellxGene download
+  passes the full-file audit with 304,652 cells and 88 `specimen` units.
+  The audit also observes 67 `donor_id` values and 93 `library` values; the
+  declared `specimen` role is the passing canonical unit, while donor/library
+  alternatives remain audit evidence. `subclass.l1` and `subclass.l3` both
+  pass the declared author-annotation gates, `condition.l1` is the biological
+  label, and count sanity passes on sparse integer `raw.X`. The
+  `suspension_type` modality split is 104,314 single-cell (`cell`) and 200,338
+  single-nucleus (`nucleus`) cells. The uncorrected view uses `Sample` and no
+  technical correction covariate; `suspension_type` and `sex` remain explicit
+  batch candidates. This is a separate active cohort; the legacy
+  `Kidney_KPMP` record and its historical counts remain unchanged.
+
 - **Lupus PBMC.** The canonical output has 1,263,220 cells and 260 Sample IDs;
   the raw/local audit has 261 `sampleID` values and one is dropped by the
   `<500` filter. No donor, patient, or subject column exists in canonical
@@ -284,6 +298,35 @@ the raw-versus-post-filter and canonical-unit clarification.
   `donor_id`/`Sample`, `tissue`, `tissue_type`, `disease`, `Brain_bank`, `PMI`,
   `RIN`, and `assay`; the existing 96-donor/multi-tissue warning is retained.
 
+
+### 1.6 Inclusion or exclusion of cohorts
+
+Some cohorts were either completely or partially excluded from the analysis for the following reasons:
+- No high resolution cell type annotations provided by the authors
+- Too few samples
+- Biological group completely confounded with batch (biological signal cannot be separated from batch signal)
+- No clear biological signal
+
+
+Detailed overview of cohorts. Can be used or biased by batch?
+
+Included:
+- [X] Alzheimer -> very few multiome
+- [X] Breast -> imbalanced assay and sequencing_platform, but suspension_dissociation_time very mixed
+- [X] Covid-19 -> use only accute COVID, i.e. <=30 days (above, no separation) (ECODA still shows separation on mds1/2 dims)
+- [X] Diabetes -> heavily biased (only “normal” strongly mixed, with 9 datasets. “type 1 diabetes” only one dataset, “endocrine pancreas disorder” only one dataset, “type 2 diabetes” only two datasets) -> drop confounded batch/bio groups (endo + type 1)
+- [X] Joanito -> seqtec mostly balanced (except a few lymphnode all 5’), tissue site imbalanced but very mixed for all -> drop lymphnode
+- [X] Kidney_KPMP_full -> very well balanced
+- [X] Lung -> copd (chronic obstructive pulmonary disease) only in one dataset (adams, which also makes up half of all normal samples. adams seems to cluster away the most) -> drop adams? or at least drop copd?
+- [X] Lupus -> well mixed
+- [X] Stephenson -> well mixed
+
+Excluded:
+- [  ] CombinedPBMC -> biased
+- [  ] Myocardial -> very low batch effect but two bio conds mostly from same batch, third bio cond balanced -> ischemic confounded -> after exclusion too few samples
+- [  ] Parkinson -> quite well mixed but overall almost no signal -> show in appendix, not for ranking. Also no high resolution cell type annotation
+
+
 ---
 
 ## 2. Batch Effects in Single-Cell Cohorts: Expression vs. Composition
@@ -307,33 +350,42 @@ the raw-versus-post-filter and canonical-unit clarification.
 
 ### Executive Summary
 
-Batch-effect analysis is a validated two-pass workflow over the explicit
-registry views `batch_effect_uncorrected` and `batch_effect_corrected`. The
-uncorrected pass is the evidence gate: it always preprocesses with
-`batch_key=Sample`, runs the method suite without technical correction, and
-selects no batch column automatically. Only after reviewing its evidence may
-one confirmed technical column per cohort be written to `datasets.json`.
-Corrected execution is fail-closed while that column is `null`.
+Batch-effect analysis uses the canonical logical views
+`batch_effect_uncorrected` and `batch_effect_corrected`. The final analysis
+uses an artifact variant with `_final` H5AD/result names and separate
+`uncorrected_final`/`corrected_final` roots; the historical legacy roots remain
+unchanged.
+
+The final mixed-source scope includes the existing uncorrected results for
+`Alzheimer`, `Breast_cancer`, `Lupus_PBMC`, and `Stephenson`, newly regenerated
+final views for `Covid19_PBMC`, `Diabetes`, `Joanito`, and `Lung`, and only the
+missing targeted uncorrected Stage 5 rows for `Kidney_KPMP_full`. `CombinedPBMC`,
+`Kidney_KPMP`, `Myocardial_infarction`, and `Parkinson` receive no new work.
 
 The biological label is evaluation-only. It never enters filtering, HVG
 selection, normalization, PCA, Harmony, CLR correction, pseudobulk design,
 MrVI covariates, or any other model input.
 
-The exact batch roles for the onboarding pass are `Joanito` low/high
-`cell.type`/`cell.type_new` and `CombinedPBMC` low/high `layer1`/`layer2`.
-Batch composition consumes only the configured high-resolution role; low
-resolution remains a registry consistency field. `not_suitable_for_auto_annotation`
-is an a-priori skip for `Alzheimer`, `Diabetes`, and `Parkinson`, not a failed
-annotation result.
+Batch-effect views do not run Pipeline 4. They use the configured source/author
+cell-type columns:
 
-The annotation worker intentionally leaves scATOMIC `breast_mode` at its
-default `FALSE` for cross-cohort comparability. No caller may pass that option.
+| Dataset | Low-resolution column | High-resolution column |
+| :--- | :--- | :--- |
+| Covid19_PBMC | `majorType` | `celltype` |
+| Diabetes | `cell_type` | `cell_type_reannotatedIntegrated` |
+| Joanito | `cell.type` | `cell.type_new` |
+| Lung | `ann_coarse` | `ann_fine` |
 
-Stephenson's batch-effect view uses the full declared subset and candidate
-`Site`. CombinedPBMC's raw input is `combined_pbmc.h5ad`, with explicit
-uncorrected/corrected outputs `combined_pbmc_batch_effect_uncorrected_ECODAprocessed.h5ad`
-and `combined_pbmc_batch_effect_corrected_ECODAprocessed.h5ad`. The old raw
-basename is accepted only for guarded one-time migration.
+The frozen cohorts use their already-produced uncorrected result artifacts
+read-only and are absent from all new jobs and validator selections. Diabetes
+also remains covered by its explicit automatic-annotation exemption, but the
+batch workflow does not invoke annotation work for any target.
+
+The approved Covid final subset is same-column filtering on
+`Sampling day (Days after symptom onset)`: retain the literal `control` level
+or a finite numeric value `<= 30`; exclude blank, unknown, malformed, and
+missing values. The source column is categorical with string-valued levels, so
+numeric-looking values require explicit parsing.
 
 ### 3.1 Fixed method contract
 
@@ -377,9 +429,9 @@ Pass-qualified keys are literal and never fall back:
 - `X_pca_harmony_batch_effect_corrected_hvg2000`;
 - `leiden_res_<r>_batch_effect_corrected_hvg2000_harmony`.
 
-All cohorts retain Leiden resolutions `(0.1, 0.4, 2, 5, 20, 50)`. The fixed
-suite consumes resolution 2, except Parkinson's configured high tier, which
-uses res-5 from the corresponding pass.
+All configured batch-effect datasets use the cell-type columns documented in
+the final-scope table above. Disabled cohorts and the four frozen cohorts are
+not part of new final computation.
 
 ### 3.3 Modality-specific corrected inputs
 
@@ -401,13 +453,13 @@ uses res-5 from the corresponding pass.
 
 ### 3.4 Artifact and evidence contract
 
-Every pass is isolated under
+Existing legacy pass artifacts remain under
 `${HPC_SCRATCH_DIR}/batch_effect/<pass>/` and
-`${NAS_TARGET_DIR}/batch_effect/<pass>/`. Method bundles, distances,
-pseudobulks, execution logs, manifests, watchdog status, and checksums are
-pass-scoped. Active filenames and runtime identifiers use
-`batch_effect_uncorrected` or `batch_effect_corrected`; no pass artifact uses a
-benchmark-named identifier.
+`${NAS_TARGET_DIR}/batch_effect/<pass>/` at their current paths. New final
+method bundles, distances, pseudobulks, execution logs, manifests, and plots
+use separate `_final` analysis/plot roots and variant-qualified names. The
+final analysis manifest records which rows reuse legacy results and which rows
+use newly generated final artifacts.
 
 The uncorrected evidence report records completeness, levels and samples per
 candidate, NMI with biology, marginal and joint PERMANOVA $R^2$ and
@@ -415,11 +467,10 @@ Holm-adjusted p-values, and constant/sample-unique/perfect-confounding
 warnings. It uses 999 deterministic permutations and strict sample-order
 checks. It emits one CSV per cohort plus `batch_candidate_review.csv`.
 
-The evidence checkpoint keeps all nine new `columns.batch` values `null`.
-After explicit user confirmation, each corrected run verifies paired
-cell/sample identities, pass-specific checksums, NAS synchronization, CLR
-zero-sum recentering, batch-only pseudobulk mode, exact Harmony keys, and
-native MrVI batch arguments.
+The final run is targeted rather than a historical twelve-row rerun. The four
+frozen cohorts are read-only analysis inputs and are absent from all new
+selection, validation, and scheduler manifests. `Diabetes` receives no
+annotation work; the final batch H5ADs retain its configured source columns.
 
 ### 3.5 No-leakage invariant
 
@@ -430,15 +481,175 @@ missing labels, empty derived annotations, invalid hierarchies, and missing
 exact pass keys remain hard failures.
 
 
-### 3.6 Historical notebook and publication boundary
+### Majority-vote technical batch-covariate policy
 
-`notebooks/batch_effect_analysis.rmd` remains intentionally unchanged in this
-remediation. Its historical analysis surface is not part of the uncorrected
-pipeline cutover; a future extension must consume the explicit
-`batch_effect_uncorrected`/`batch_effect_corrected` contracts without changing
-the biological-label or `columns.batch` invariants. The future handoff is to
-add any new pass-specific analysis in a separate notebook or an explicitly
-reviewed revision, after the scientific decision checkpoint.
+On 2026-09-13, the user approved `majority_v1` per configured sample for
+technical batch covariates. No minimum winner fraction threshold is applied;
+exact ties still fail because they have no majority, and real NA/blank/non-finite
+values still fail.
+
+Breast treats literal `unknown` as an ordinary
+`suspension_dissociation_time` class only; it does not ignore other
+dissociation times or impute/filter them. Unknown sentinels are not globally
+accepted.
+
+| Dataset | Configured sample column | Cells / samples | Read-only Bamboo audit |
+| :--- | :--- | :--- | :--- |
+| Alzheimer | `donor_id` | 1,395,601 cells/83 samples | `assay` mixed in 21 samples; winner fraction 66.96–100% (median 100%); `10x 3' v3` winner in all 83; `sex` 100% in every sample. |
+| Breast_cancer | `sample_id` | 714,331 cells/167 samples | `assay`, `sequencing_platform`, and `suspension_dissociation_time` each 100% within every sample; 65,359 cells/11 samples have literal `unknown` dissociation time. |
+| Lupus_PBMC | `sampleID` | 1,263,676 cells/261 samples | `batch_cov` winner fraction 30.95–100% (median 100%); 70 samples mixed, 23 levels, no ties. |
+For Lupus, the all-sample winner-fraction quantiles (minimum, 1%, 5%, 10%,
+25%, median, 75%, 90%, 95%, 99%, maximum) were 30.95%, 33.40%, 42.66%,
+51.95%, 65.81%, 100%, 100%, 100%, 100%, 100%, and 100%. Among the 70 mixed
+samples, 10 were in the 30--40% bin, 9 in 40--50%, 33 in 50--60%, 17 in
+60--70%, none in 70--80% or 80--90%, and one in 90--<100%. The lowest
+sample was `IGTB195_IGTB195` at 3,952/12,768 (30.95%), followed by
+`IGTB514_IGTB514` at 4,022/12,491 (32.20%) and `IGTB469_IGTB469` at
+4,374/13,543 (32.30%).
+
+
+**Implementation boundary.** The majority policy is downstream-only. The
+obs-only Python exporter reads H5AD `obs` metadata and writes the
+sample-level Feather table plus its checksum; it does not alter H5ADs or
+open `X`, `raw`, or `layers`. It votes only the explicitly affected keys:
+`assay` for Alzheimer, `suspension_dissociation_time` for Breast_cancer, and
+`batch_cov` for Lupus_PBMC. All other technical covariates remain at their
+first-observation values, and labels and Sample IDs are never voted.
+
+The exporter implementation is
+`src/utils/py/export_h5ad_sample_metadata.py`, with the scoped policy in
+`datasets.json`. Pipeline 3 corrected processing keeps the original
+cell-level batch metadata for Harmony/HVG and performs no sample-level batch
+check or majority assignment; ordinary H5AD content, checksum, and
+configuration/provenance gates remain. The majority assignments are used only
+by corrected Stage 5 sample-level consumers such as ECODA composition and
+pseudobulk/limma. Uncorrected Stage 5 performs no batch correction and does
+not use the majority assignments.
+
+**Interpretation and limitation.** The mode is a declared pragmatic metadata
+policy, not proof that minority cells are mislabeled. Exact ties and actual
+missing/blank/non-finite values remain errors, and no minimum winner fraction
+is imposed. Future source changes require rerunning the obs-only metadata
+export/audit. Existing H5AD/RDS/Feather artifacts remain untouched.
+
+No pipeline rerun or existing artifact invalidation occurred while implementing
+this policy.
+
+#### Lupus_PBMC: `batch_cov` and replicate-aware sample metadata
+
+##### Summary of findings
+
+1. The authors explicitly used `batch_cov`, representing the 23 multiplexed
+   library pools, to correct single-cell batch effects with ComBat.
+2. `sampleID` is the donor/patient identifier (261 unique donors). The
+   experiment deliberately included replicates across pools and processing
+   batches: 355 total sample runs across 23 pools. Consequently, 70 donors
+   were sequenced in multiple pools, so their cells naturally split across
+   multiple `batch_cov` levels.
+3. `Processing_Cohort` is not a better substitute. Donors were also replicated
+   across the four processing cohorts, while that variable is much coarser
+   than the 23-pool `batch_cov` variable.
+
+##### 1. What the original study did (Perez et al. 2022, *Science*)
+
+The main text and supplementary methods (`science.abf1970_sm.v2 (1.pdf)`)
+describe the following:
+
+- **Experimental design (Fig. S1A–B and Supplementary Methods pp. 2–3):**
+  - 355 total sample runs were profiled across 23 multiplexed pools over four
+    processing batches.
+  - The 355 runs came from 264 individuals (162 SLE cases, 49 CLUES healthy
+    controls, 50 ImmVar healthy controls, and 19 flare cases), including 94
+    replicates and 10 longitudinal samples.
+  - Each pool contained 7–19 multiplexed donors processed in one 10x Chromium
+    channel and demultiplexed with freemuxlet.
+- **Single-cell batch correction (Supplementary Methods p. 3):**
+
+  > “In total, 1,263,676 cells remained in the final dataset. The data was
+  > then adjusting for pool using COMBAT (60). The most variable 1,999 were
+  > retained and the count matrix was rescaled.”
+
+  In the released AnnData/Seurat object, the covariate encoding these 23 pools
+  is named `batch_cov`, with values such as
+  `dmx_YS-JY-21_pool2` and `dmx_YE_7-19`.
+- **Visualization (Fig. S2C–D):**
+  - Fig. S2C displays “UMAP projection colored by processing pool
+    (batch_cov).”
+  - Fig. S2D displays “UMAP projection colored by processing batch
+    (Processing_Cohort).”
+- **Pseudobulk/differential expression (Supplementary Methods p. 5):**
+  - For cell-type-specific pseudobulk EdgeR differential expression, the
+    authors aggregated counts per individual donor and included processing
+    batch (that is, `Processing_Cohort`) and age as covariates.
+
+##### 2. Relationship between the metadata columns
+
+In the canonical dataset:
+
+| Column | Unique levels | Meaning |
+| :--- | ---: | :--- |
+| `sampleID` | 261 | Individual donors/patients after excluding ImmVar case-control samples and samples with fewer than 100 cells. |
+| `batch_cov` | 23 | Multiplexed 10x library pools: the 23 physical capture pools, for example `dmx_*`. |
+| `Processing_Cohort` | 4 | Processing batches: Batch 1 = 10 pools, Batch 2 = 3 pools, Batch 3 = 4 pools, Batch 4 = 6 pools. |
+| `ind_cov_batch_cov` | 355 | Donor × pool runs (`<sampleID>:<batch_cov>`), the physical sequencing units. |
+
+Because `sampleID` is defined at the donor level (261 donors), rather than at
+the run level (355 runs):
+
+- 191 donors were sequenced in exactly one pool, giving 100% constant
+  `batch_cov`.
+- 70 donors were intentionally sequenced as replicates across multiple pools
+  and batches, giving mixed `batch_cov` values; the lowest observed majority
+  was 30.95%.
+
+##### 3. Would `Processing_Cohort` be better?
+
+No. Switching to `Processing_Cohort` does not resolve the issue:
+
+1. Replicates also span processing cohorts. Fig. S1B specifically notes
+   “Processing Batch 1: Repeated samples” and “Processing Batch 3: Repeated
+   samples”; Fig. S2E assesses correlation between cell-type percentages for
+   biological replicates from different batches. In the test subset, 9 of 10
+   samples are split across multiple `Processing_Cohort` levels.
+2. `Processing_Cohort` is coarser: it collapses 10 pools into batch 1, 3 into
+   batch 2, and so on. The primary technical batch drivers in droplet
+   scRNA-seq (cell capture efficiency, ambient RNA contamination, GEM
+   emulsion, and sequencing lane) occurred at the individual-pool level
+   represented by `batch_cov`, which is why the authors applied ComBat to the
+   pools.
+
+##### 4. Does `batch_cov` make sense to correct for?
+
+- **Cell-level workflows (Harmony, Scanpy, or ComBat):** Yes. Every cell
+  belongs unambiguously to one library pool, so correcting for `batch_cov`
+  directly mirrors the original study’s ComBat strategy.
+- **Sample-level workflows (pseudobulk, CLR composition, or limma/DESeq2):**
+  - With `sampleID` (261 donors) as the sample unit, assigning one batch label
+    requires the documented majority vote. This is a pragmatic heuristic; 70
+    replicated donors contain cells from other pools, and 19 have a majority
+    below 50%.
+  - `ind_cov_batch_cov` is the only column that is 100% unmixed per sample
+    (355 samples). Treating it as the sample column would create replicate
+    samples for the same patient and introduce pseudoreplication into patient
+    classification (Case vs. Healthy).
+  - Keeping `batch_cov` as the configured batch covariate is therefore
+    scientifically justified and matches the original paper’s batch
+    definition.
+
+
+### 3.6 Notebook and publication boundary
+
+`notebooks/batch_effect_analysis_uncorrected_batchconfounding_contingency.rmd`
+remains legacy-only and is not updated. It continues to read and write its
+existing legacy paths.
+
+`notebooks/batch_effect_analysis_uncorrected.rmd` is the final-only analysis
+notebook. It reads the mixed-source final manifest and writes only to the
+`uncorrected_final` analysis and plot roots. `notebooks/batch_effect_analysis_legacy.rmd`
+is out of scope and remains untouched.
+
+No publication figure is renamed, removed, or rewritten as part of this
+batch-analysis processing work.
 
 The `Supp_fig_22` publication-figure name and placement remain deferred. No
 publication figure is renamed, removed, or rewritten while the naming and
@@ -691,24 +902,42 @@ Leiden, and Harmony is never mapped to an `RNA_snn_res.*` alias.
 
 The cell-subsetting run is a separate explicit run-owned directory selected by
 `ECODA_DERIVED_CELL_SUBSETTING_DIR`; it is opt-in and has no notebook default.
-Its artifacts are:
-`ECODA_authors_HR_cell_subsetting.rds` (+ `.rds.md5`) and
-`ECODA_authors_HR_cell_subsetting.csv`.  In ordinary H5AD mode the runner
-reads only the configured `Sample`, `cell_type_high_res`, and biological label
-columns from the authoritative `benchmark_analysis` H5ADs; in snapshot mode
-the same contract is served from the compact cache.  The biological label is
-used only for scoring.
+The local-composition invocation is:
+`run_local_ecoda_derived.R --analysis cell_subsetting
+--scope benchmark_union --composition_dir data/benchmark/results --cores 8`.
+Selection comes from the `datasets.json` benchmark union, excludes underscore-
+prefixed keys in production scope, and requires exactly one local
+`<DS>_ECODA_authors_HR.rds` plus `<DS>_metadata.rds` pair per selected dataset.
+
+The local source bundles persist `counts_all, 0.5` values rather than raw
+integer counts.  The runner first verifies the integer-plus-0.5 contract,
+recovers counts by subtracting 0.5, and preserves the metadata
+`cells_per_sample` totals as diagnostics.  When those totals exceed recovered
+annotated counts (Bassez, Kim, Lee, and Zhang), the recovered annotated totals
+define the subsetting population; metadata totals are never forced into the HR
+composition.  Source paths, size, mtime, and computed MD5 are recorded and
+rechecked; canonical input RDS files and their missing sidecars are untouched.
 
 The exact target order is `all cells, 2000, 1000, 500, 400, 300, 200, 150,
 100, 50`.  The `all cells` baseline is one unmodified row
 (`replicate = 0`, `seed = NA`).  Every other target has exactly 20
 without-replacement subsamples with seeds `101:120`; each sample keeps
-`min(original_cell_count, target)` cells and all samples remain present.
-Replicate-level ANOSIM values, sample IDs, effective per-sample counts, total
-cell counts, target, replicate, and seed remain in the RDS/CSV diagnostics.
+`min(recovered_annotated_cells, target)` cells and all samples remain present.
+Because cell IDs are absent, the runner uses category-level
+multivariate-hypergeometric sampling.  This has the same distribution as
+uniform cell-level sampling but is explicitly an aggregate approximation.
+
+Independent datasets run in parallel PSOCK workers (`--cores 8`); each worker
+reads one source pair and returns its 181 validated result rows.  Replicate-
+level ANOSIM values, sample IDs, effective per-sample counts, metadata totals,
+recovered annotated counts, target, replicate, seed, and the approximation
+method remain in the RDS/CSV diagnostics.  The completed run is
+`data/benchmark/results/derived/local_composition_subsetting_parallel_20260910_release/run/`.
+
 The final notebook plot uses dataset means across the 20 subsamples, connects
 dataset-level points with lines, and draws aggregate dataset-mean bars with
-standard-error whiskers as
+standard-error whiskers.  Error bars are drawn first so bars cover their
+central segment; bar width is 0.9 and the output is 4 x 3.2 inches:
 `Supp_fig_X_ECODA_authors_HR_cell_subsetting.pdf`.
 
 ### 9.3 One-time HPC composition snapshot and local reuse
@@ -750,6 +979,7 @@ current Pixi lock cannot represent the verified SHA natively.  A separate
 production MOFAcellulaR artifact or durable HPC launch.  Until that decision
 and debug review are complete, Figure 2A defaults and all existing MOFA
 artifacts remain unchanged.
+
 ### 9.5 Fast obs-only figure refresh — 2026-09-10
 
 For the immediate Figure 3A/Supp fig 18 refresh, Bamboo job `4398864` read
@@ -779,3 +1009,75 @@ The fast MOFA sanity check found `MOFA2` and `reticulate`, but
 source-only and fail-closed. Its debug source check uses the current source's
 actual unique Sample IDs (at least two), rather than assuming a fixed
 five-sample universe.
+
+### 9.6 One-off cell-type filtering diagnostic — 2026-09-10
+
+One read-only diagnostic used the same `datasets.json` benchmark-union
+selection and recovered HR counts.  It retained all-zero factor levels for
+reporting and used metadata total cells as the low-abundance denominator;
+annotated totals were reported alongside them.  No diagnostic artifact was
+written.
+
+The number of cell types zero in more than 50/60/70/80/90% of samples was:
+
+| Dataset | >50% | >60% | >70% | >80% | >90% |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Adams | 3 | 2 | 2 | 1 | 0 |
+| Bassez | 4 | 2 | 1 | 1 | 1 |
+| GongSharma | 2 | 1 | 1 | 0 | 0 |
+| Kfoury | 3 | 2 | 2 | 0 | 0 |
+| Kim | 28 | 22 | 13 | 11 | 3 |
+| Lee | 21 | 19 | 18 | 14 | 9 |
+| Pelka | 22 | 9 | 5 | 3 | 1 |
+| Smillie | 4 | 1 | 1 | 1 | 1 |
+| Stephenson | 3 | 1 | 1 | 0 | 0 |
+| Wu | 5 | 3 | 2 | 1 | 1 |
+| Zhang | 17 | 16 | 9 | 4 | 1 |
+
+The corresponding all-cell ANOSIM results are shown below as
+`score (change from the all-cell baseline)` after removing cell types zero in
+more than the indicated fraction of samples:
+
+| Dataset | Baseline | >50% | >60% | >70% | >80% | >90% |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Adams | 0.4605 | 0.4311 (-0.0294) | 0.4472 (-0.0133) | 0.4472 (-0.0133) | 0.4592 (-0.0013) | 0.4605 (0) |
+| Bassez | 0.4046 | 0.3643 (-0.0403) | 0.3874 (-0.0172) | 0.3880 (-0.0166) | 0.3880 (-0.0166) | 0.3880 (-0.0166) |
+| GongSharma | 0.6953 | 0.6952 (-0.0000) | 0.6950 (-0.0003) | 0.6950 (-0.0003) | 0.6953 (0) | 0.6953 (0) |
+| Kfoury | 0.4252 | 0.4368 (+0.0116) | 0.4376 (+0.0124) | 0.4376 (+0.0124) | 0.4252 (0) | 0.4252 (0) |
+| Kim | 0.8757 | 0.8421 (-0.0335) | 0.8419 (-0.0338) | 0.8685 (-0.0072) | 0.8693 (-0.0064) | 0.8804 (+0.0047) |
+| Lee | 0.2423 | 0.2839 (+0.0416) | 0.2821 (+0.0399) | 0.2655 (+0.0232) | 0.2468 (+0.0046) | 0.2327 (-0.0096) |
+| Pelka | 0.8448 | 0.8017 (-0.0432) | 0.8083 (-0.0366) | 0.8524 (+0.0076) | 0.8502 (+0.0053) | 0.8448 (-0.0000) |
+| Smillie | 0.1227 | 0.1280 (+0.0053) | 0.1251 (+0.0024) | 0.1251 (+0.0024) | 0.1251 (+0.0024) | 0.1251 (+0.0024) |
+| Stephenson | 0.3953 | 0.3795 (-0.0158) | 0.3806 (-0.0147) | 0.3806 (-0.0147) | 0.3953 (0) | 0.3953 (0) |
+| Wu | 0.1799 | 0.2361 (+0.0562) | 0.1991 (+0.0192) | 0.1935 (+0.0136) | 0.1855 (+0.0057) | 0.1855 (+0.0057) |
+| Zhang | 0.7556 | 0.6815 (-0.0741) | 0.6741 (-0.0815) | 0.7887 (+0.0331) | 0.7666 (+0.0110) | 0.7566 (+0.0010) |
+
+The effect is dataset-specific rather than uniformly inflationary: removal
+increases ANOSIM for Kfoury, Lee, and Wu at the 50% threshold, while it
+decreases ANOSIM for Adams, Bassez, GongSharma, Kim, Pelka, and Stephenson.
+Smillie changes only slightly.  Zhang decreases at 50--60% but increases
+after the stricter filters.  Bassez and Kim baseline values include their
+pre-existing all-zero `NA` factor level, which is retained here to reproduce
+the persisted all-cell composition.
+
+Bassez and Kim each contain an all-zero `NA` factor level; it is included in
+the table but is not a biological annotation.  For Wu, the five >50% zero
+types are `B cells Naive`, `Mature Luminal`,
+`Myeloid_c5_Macrophage_3_SIGLEC1`, `Myoepithelial`, and
+`T_cells_c5_CD8+_GZMK`.  Removing those from the all-cell composition changes
+ANOSIM from 0.1799 to 0.2361.  At >60%, >70%, >80%, and >90%, the corresponding
+scores are 0.1991, 0.1935, 0.1855, and 0.1855.
+
+At the 50-cell target, Wu has at least one all-zero category in 19/20
+replicates, with 2.05 all-zero categories on average (maximum 4).  The
+repeatedly affected types include `Myeloid_c5_Macrophage_3_SIGLEC1` (zero in
+17/20 replicates), `Cycling PVL` (8/20), `Myeloid_c7_Monocyte_3_FCGR3A`
+(6/20), and `Myeloid_c0_DC_LAMP3` (5/20).  The 50-cell Wu ANOSIM mean is
+0.2486 (range 0.1678–0.3201), so the upward shift is sampling variability
+consistent with rare-category loss rather than a monotone depth effect.
+
+Low-abundance all-cell filtering also changes scores in both directions.  For
+Wu, removing types below 1% of metadata-total cells removes 17 types and
+changes ANOSIM to 0.2072 (+0.0273); below 0.1% removes 3 types and changes it
+to 0.1887 (+0.0088).  The diagnostic was informational only and is not used
+by the production subsetting run.
