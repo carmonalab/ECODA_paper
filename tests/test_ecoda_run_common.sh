@@ -4,6 +4,86 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1 || true
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ecoda-common.XXXXXX")"
 trap 'rm -rf "${TMP_DIR}"' EXIT
+NAS_TEST_ROOT="$(cd "${TMP_DIR}" && pwd -P)"
+NAS_TEST_HOST_ENV="${NAS_TEST_ROOT}/fake-host-env"
+mkdir -p "${NAS_TEST_HOST_ENV}/bin"
+printf '#!/bin/sh\n' > "${NAS_TEST_HOST_ENV}/bin/python"
+printf '#!/bin/sh\n' > "${NAS_TEST_HOST_ENV}/bin/Rscript"
+chmod +x "${NAS_TEST_HOST_ENV}/bin/python" "${NAS_TEST_HOST_ENV}/bin/Rscript"
+
+run_nas_config() {
+  local cluster="$1"
+  local nas_prefix="${2:-}"
+  local nas_sc_dir="${3:-}"
+  local nas_target_dir="${4:-}"
+  env -i \
+    PATH="/usr/bin:/bin" \
+    USER="ecoda-test" \
+    ECODA_HPC_CLUSTER="${cluster}" \
+    ECODA_HOST_ENV_PREFIX="${NAS_TEST_HOST_ENV}" \
+    HPC_SCRATCH_DIR="${NAS_TEST_ROOT}/nas-scratch" \
+    HOME="${NAS_TEST_ROOT}/nas-home" \
+    ECODA_NAS_PREFIX="${nas_prefix}" \
+    ECODA_NAS_SC_DIR="${nas_sc_dir}" \
+    ECODA_NAS_TARGET_DIR="${nas_target_dir}" \
+    bash -c '
+      set -euo pipefail
+      unset NAS_PREFIX NAS_BASE_DIR NAS_SC_DIR NAS_TARGET_DIR SLURM_CLUSTER_NAME
+      [[ -n "${ECODA_NAS_PREFIX:-}" ]] || unset ECODA_NAS_PREFIX
+      [[ -n "${ECODA_NAS_SC_DIR:-}" ]] || unset ECODA_NAS_SC_DIR
+      [[ -n "${ECODA_NAS_TARGET_DIR:-}" ]] || unset ECODA_NAS_TARGET_DIR
+      source "$1"
+      printf "%s\t%s\t%s\n" \
+        "${NAS_PREFIX}" "${NAS_SC_DIR}" "${NAS_TARGET_DIR}"
+    ' _ "${ROOT}/src/slurm_config.sh"
+}
+
+BAMBOO_NAS="$(run_nas_config bamboo)"
+[[ "${BAMBOO_NAS}" == \
+  $'/srv/smednas515.unige.ch/carmona_smb\t/srv/smednas515.unige.ch/carmona_smb/DataCollections/Standardized_SingleCell_Datasets\t/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper' ]]
+
+if YGGDRASIL_NAS="$(run_nas_config yggdrasil 2>&1)"; then
+  echo "Yggdrasil configuration unexpectedly inherited a NAS default." >&2
+  exit 1
+else
+  YGGDRASIL_RC=$?
+fi
+[[ ${YGGDRASIL_RC} -ne 0 ]]
+[[ "${YGGDRASIL_NAS}" == *"explicit"* ]]
+[[ "${YGGDRASIL_NAS}" == *"configuration"* ]]
+
+YGG_PREFIX="${NAS_TEST_ROOT}/nas/ygg-prefix"
+YGG_SC_DIR="${NAS_TEST_ROOT}/nas/ygg-sc"
+YGG_TARGET_DIR="${NAS_TEST_ROOT}/nas/ygg-target"
+YGGDRASIL_OVERRIDE_NAS="$(
+  run_nas_config yggdrasil "${YGG_PREFIX}" "${YGG_SC_DIR}" "${YGG_TARGET_DIR}"
+)"
+[[ "${YGGDRASIL_OVERRIDE_NAS}" == \
+  "${YGG_PREFIX}"$'\t'"${YGG_SC_DIR}"$'\t'"${YGG_TARGET_DIR}" ]]
+
+for relative_nas_var in ECODA_NAS_PREFIX ECODA_NAS_SC_DIR ECODA_NAS_TARGET_DIR; do
+  relative_prefix="${YGG_PREFIX}"
+  relative_sc_dir="${YGG_SC_DIR}"
+  relative_target_dir="${YGG_TARGET_DIR}"
+  case "${relative_nas_var}" in
+    ECODA_NAS_PREFIX) relative_prefix="relative/nas-prefix" ;;
+    ECODA_NAS_SC_DIR) relative_sc_dir="relative/nas-sc" ;;
+    ECODA_NAS_TARGET_DIR) relative_target_dir="relative/nas-target" ;;
+  esac
+  if relative_nas_output="$(
+    run_nas_config yggdrasil \
+      "${relative_prefix}" "${relative_sc_dir}" "${relative_target_dir}" \
+      2>&1
+  )"; then
+    echo "${relative_nas_var} unexpectedly accepted a relative path." >&2
+    exit 1
+  else
+    relative_nas_rc=$?
+  fi
+  [[ ${relative_nas_rc} -ne 0 ]]
+  [[ "${relative_nas_output}" == *"absolute"* ]]
+done
+
 export HPC_SCRATCH_DIR="${TMP_DIR}/scratch"
 export LOGS_DIR="${TMP_DIR}/logs"
 export DATASETS_JSON_FILE="${ROOT}/datasets.json"

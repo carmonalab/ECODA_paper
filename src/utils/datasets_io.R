@@ -74,9 +74,9 @@ read_datasets_json <- function(path = "datasets.json", view = NULL) {
 }
 
 # Resolve the preprocessed view h5ad file name for a dataset (mirrors
-# get_h5ad_path in benchmark_hpc_utils.R, but returns the bare file name —
-# the notebook composes the full path from its own NAS mount). `datasets` is
-# the read_datasets_json(view = ...) output; `ds` the datasets.json key.
+# get_h5ad_path in benchmark_hpc_utils.R, but returns the bare file name).
+# Callers combine it with the configured scratch/NAS root; `datasets` is the
+# read_datasets_json(view = ...) output and `ds` the datasets.json key.
 get_view_h5ad_path <- function(datasets, ds, view) {
   entry <- datasets[[ds]]
   if (is.null(entry)) {

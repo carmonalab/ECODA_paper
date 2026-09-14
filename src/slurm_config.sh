@@ -24,11 +24,109 @@ else
   export LOGS_DIR="${PROJECT_ROOT}/logs"
 fi
 
+# --- HPC Cluster ---
+# Prefer explicit cluster metadata, then Slurm's name, and finally an
+# unambiguous hostname match. Unknown hosts retain Bamboo-compatible defaults.
+if [[ -n "${ECODA_HPC_CLUSTER:-}" ]]; then
+  export ECODA_HPC_CLUSTER
+elif [[ -n "${SLURM_CLUSTER_NAME:-}" ]]; then
+  export ECODA_HPC_CLUSTER="${SLURM_CLUSTER_NAME}"
+else
+  _ecoda_hostname="$(printf '%s' "${HOSTNAME:-}" | tr '[:upper:]' '[:lower:]')"
+  case "${_ecoda_hostname}" in
+    bamboo|*.bamboo|bamboo.*|*.bamboo.*)
+      case "${_ecoda_hostname}" in
+        yggdrasil|*.yggdrasil|yggdrasil.*|*.yggdrasil.*)
+          export ECODA_HPC_CLUSTER=""
+          ;;
+        *)
+          export ECODA_HPC_CLUSTER="bamboo"
+          ;;
+      esac
+      ;;
+    yggdrasil|*.yggdrasil|yggdrasil.*|*.yggdrasil.*)
+      export ECODA_HPC_CLUSTER="yggdrasil"
+      ;;
+    *)
+      export ECODA_HPC_CLUSTER=""
+      ;;
+  esac
+  unset _ecoda_hostname
+fi
+_ecoda_hpc_cluster="$(printf '%s' "${ECODA_HPC_CLUSTER}" | tr '[:upper:]' '[:lower:]')"
+
 # --- NAS Paths ---
-export NAS_PREFIX="${NAS_PREFIX:-/srv/smednas515.unige.ch/carmona_smb}"
-NAS_BASE_DIR="${NAS_BASE_DIR:-${NAS_PREFIX}/DataCollections}"
-export NAS_SC_DIR="${NAS_SC_DIR:-${NAS_BASE_DIR}/Standardized_SingleCell_Datasets}"
-export NAS_TARGET_DIR="${NAS_TARGET_DIR:-${NAS_PREFIX}/Projects/ECODA_paper}"
+# Yggdrasil NAS mounts are explicit and may use a user-scoped mounted path.
+_ecoda_nas_explicit=0
+if [[ -n "${NAS_PREFIX:-}" ]]; then
+  _ecoda_nas_explicit=1
+elif [[ -n "${ECODA_NAS_PREFIX:-}" ]]; then
+  NAS_PREFIX="${ECODA_NAS_PREFIX}"
+  _ecoda_nas_explicit=1
+fi
+if [[ -n "${NAS_SC_DIR:-}" ]]; then
+  _ecoda_nas_explicit=1
+elif [[ -n "${ECODA_NAS_SC_DIR:-}" ]]; then
+  NAS_SC_DIR="${ECODA_NAS_SC_DIR}"
+  _ecoda_nas_explicit=1
+fi
+if [[ -n "${NAS_TARGET_DIR:-}" ]]; then
+  _ecoda_nas_explicit=1
+elif [[ -n "${ECODA_NAS_TARGET_DIR:-}" ]]; then
+  NAS_TARGET_DIR="${ECODA_NAS_TARGET_DIR}"
+  _ecoda_nas_explicit=1
+fi
+
+if [[ "${_ecoda_hpc_cluster}" == "yggdrasil" &&
+      "${_ecoda_nas_explicit}" -eq 0 ]]; then
+  echo "ERROR: yggdrasil requires explicit NAS configuration; set NAS_PREFIX, NAS_SC_DIR, or NAS_TARGET_DIR (or the ECODA_NAS_* equivalents) to absolute paths." >&2
+  return 1
+fi
+
+if [[ -z "${NAS_PREFIX:-}" ]]; then
+  if [[ "${_ecoda_hpc_cluster}" == "yggdrasil" ]]; then
+    export NAS_PREFIX=""
+  else
+    export NAS_PREFIX="/srv/smednas515.unige.ch/carmona_smb"
+  fi
+else
+  export NAS_PREFIX
+fi
+
+NAS_BASE_DIR="${NAS_BASE_DIR:-}"
+if [[ -z "${NAS_BASE_DIR}" && -n "${NAS_PREFIX}" ]]; then
+  NAS_BASE_DIR="${NAS_PREFIX}/DataCollections"
+fi
+
+if [[ -z "${NAS_SC_DIR:-}" && -n "${NAS_BASE_DIR}" ]]; then
+  export NAS_SC_DIR="${NAS_BASE_DIR}/Standardized_SingleCell_Datasets"
+else
+  export NAS_SC_DIR="${NAS_SC_DIR:-}"
+fi
+if [[ -z "${NAS_TARGET_DIR:-}" && -n "${NAS_PREFIX}" ]]; then
+  export NAS_TARGET_DIR="${NAS_PREFIX}/Projects/ECODA_paper"
+else
+  export NAS_TARGET_DIR="${NAS_TARGET_DIR:-}"
+fi
+
+if [[ -n "${NAS_PREFIX}" && "${NAS_PREFIX}" != /* ]]; then
+  echo "ERROR: NAS_PREFIX must be absolute: ${NAS_PREFIX}" >&2
+  return 1
+fi
+if [[ -n "${NAS_BASE_DIR}" && "${NAS_BASE_DIR}" != /* ]]; then
+  echo "ERROR: NAS_BASE_DIR must be absolute: ${NAS_BASE_DIR}" >&2
+  return 1
+fi
+if [[ -n "${NAS_SC_DIR}" && "${NAS_SC_DIR}" != /* ]]; then
+  echo "ERROR: NAS_SC_DIR must be absolute: ${NAS_SC_DIR}" >&2
+  return 1
+fi
+if [[ -n "${NAS_TARGET_DIR}" && "${NAS_TARGET_DIR}" != /* ]]; then
+  echo "ERROR: NAS_TARGET_DIR must be absolute: ${NAS_TARGET_DIR}" >&2
+  return 1
+fi
+unset _ecoda_nas_explicit
+unset _ecoda_hpc_cluster
 
 # --- HPC Scratch Paths ---
 # Workers inside the immutable container use --containall --no-home and
@@ -179,7 +277,15 @@ if [[ "${ECODA_RUNTIME_IN_CONTAINER}" == "1" ]]; then
 fi
 
 # --- Reference atlas paths (cell type annotation) ---
-export NAS_REF_DIR="${NAS_REF_DIR:-${NAS_PREFIX}/DataCollections/reference_atlases/sketched_200ct/}"
+if [[ -n "${NAS_PREFIX}" ]]; then
+  export NAS_REF_DIR="${NAS_REF_DIR:-${NAS_PREFIX}/DataCollections/reference_atlases/sketched_200ct/}"
+else
+  export NAS_REF_DIR="${NAS_REF_DIR:-}"
+fi
+if [[ -n "${NAS_REF_DIR}" && "${NAS_REF_DIR}" != /* ]]; then
+  echo "ERROR: NAS_REF_DIR must be absolute: ${NAS_REF_DIR}" >&2
+  return 1
+fi
 if [[ -n "${HOME_REF_DIR:-}" ]]; then
   [[ "${HOME_REF_DIR}" = /* ]] || {
     echo "ERROR: inherited HOME_REF_DIR must be absolute: ${HOME_REF_DIR}" >&2
