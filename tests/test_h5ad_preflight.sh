@@ -50,6 +50,8 @@ for source_file in ecoda_run_common.sh ecoda_runtime.sh h5ad_preflight_worker.sh
 done
 cp "${ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
   "${SOURCE_ROOT}/src/utils/py/benchmark_h5ad_contract.py"
+cp "${ROOT}/src/utils/py/batch_contract.py" \
+  "${SOURCE_ROOT}/src/utils/py/batch_contract.py"
 for source_file in config_helper.R datasets.json pixi.toml pixi.lock; do
   cp "${ROOT}/${source_file}" "${SOURCE_ROOT}/${source_file}"
 done

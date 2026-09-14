@@ -108,12 +108,15 @@ ecoda_submit_h5ad_preflight() {
 }
 
 # A completed Slurm array can publish its run-owned status files a short time
-# after sbatch --wait returns on the shared filesystem.  Wait only on those
-# local files; this never polls scheduler state and never treats missing or
-# malformed status as success.
+# after sbatch --wait returns on the shared filesystem.  Large immutable H5AD
+# checksum validation can also leave the final worker status pending for
+# several minutes, so keep this grace bound materially above metadata latency.
+# Override it for a stricter site-specific limit.
+# Wait only on those local files; this never polls scheduler state and never
+# treats missing or malformed status as success.
 ecoda_wait_h5ad_preflight_status_files() {
   local manifest="$1" status_dir="$2"
-  local max_wait="${H5AD_PREFLIGHT_STATUS_GRACE_SECONDS:-60}"
+  local max_wait="${H5AD_PREFLIGHT_STATUS_GRACE_SECONDS:-1800}"
   local elapsed=0 missing ds view path safe status
   [[ "${max_wait}" =~ ^[0-9]+$ ]] || return 1
   while :; do

@@ -244,6 +244,7 @@ if [[ ! -s "${path}" ]]; then
   contract_rc=1
   checksum_rc=1
 else
+  set +e
   if [[ -n "${corrected_identity_path}" ]]; then
     "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
       --path "${path}" --view "${view}" --method "${validator_method}" \
@@ -254,11 +255,14 @@ else
       --path "${path}" --view "${view}" --method "${validator_method}" >/dev/null 2>&1
   fi
   contract_rc=$?
-  ecoda_validate_checksum "${path}"
-  checksum_rc=$?
+  if [[ ${contract_rc} -eq 0 ]]; then
+    ecoda_validate_checksum "${path}"
+    checksum_rc=$?
+  else
+    checksum_rc=1
+  fi
   set -e
 fi
-
 if [[ ${contract_rc} -ne 0 || ${checksum_rc} -ne 0 ]]; then
   if [[ "${mode}" == "classify" ]]; then
     state="REBUILD"
