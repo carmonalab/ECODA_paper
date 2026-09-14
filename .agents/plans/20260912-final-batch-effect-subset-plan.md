@@ -21,51 +21,72 @@ Every operation remains narrowly scoped: no broad or inferred selection, no over
   or overwrite is allowed.
 - Batch-effect views do not invoke Pipeline 4 annotation. Preserve configured
   source/author cell-type columns and keep biological labels evaluation-only.
-- Bamboo remains the default compute host for all production work. Yggdrasil
-  is never an implicit compute host; it is a temporary backup destination
-  only during the 2026-09-15–18 Bamboo maintenance window and only when
-  explicitly named by the approved backup plan or by the user.
+- Bamboo remains the default compute host for ordinary production work. The
+  user has now explicitly authorized Yggdrasil as a temporary compute host for
+  the named remaining Stage 3/Stage 5 lanes during the Bamboo maintenance
+  window; it is not an implicit fallback.
+- Yggdrasil remains the explicitly authorized backup destination. Yggdrasil
+  compute is permitted only after a read-only portability audit proves that
+  the current source, runtime, scheduler, configured paths, data layout,
+  ownership, and durable-gate contract work without pipeline-file changes.
 - Every future full-cohort operation uses the checked-in
   `durable-hpc-gate-ecoda` workflow, an exact run-owned selection, immutable
   source/runtime/auxiliary identities, atomic outputs, checksums, one
   unbounded durable wait, one terminal inspection over every emitted ID, and
   the required Luna Max review.
+### Explicit Yggdrasil compute handoff
+
+The user has explicitly authorized Yggdrasil as the temporary compute host for
+the remaining named work during the Bamboo maintenance window. This is a
+run-specific exception, not an implicit fallback and not a change to the
+canonical Bamboo default. No Yggdrasil job or pipeline script may run until a
+read-only portability audit proves that the current source snapshot, runtime
+identity, scheduler, configured paths, scratch/data layout, ownership,
+checksums, NAS/result handling, and durable-gate workflow work without
+pipeline-file changes.
+
+If the audit requires any pipeline-file, configuration, runtime, or durable
+profile change, stop and report the required overhaul; update this plan only
+and wait for explicit user approval. If it passes unchanged, the remaining
+selections on Yggdrasil are exactly the two Alzheimer Stage 3 view rows, the
+two explicit Alzheimer Stage 5 lanes, and the eight-dataset corrected-final
+Stage 5 recovery with all 32 rows. No partial dataset/method subset is
+authorized.
 
 ### Phase order
 
-1. **Local selector and source-contract implementation.** Implement and
-  focused-test the exact eight-row corrected-final selector and mandatory
-  32-row corrected Stage 5 recovery (8 prepare, 8 pseudobulk, 8 GloScope,
-  8 composition), the strict Alzheimer donor-by-assay selector/derivative
-  contract, corrected method path and sync validation, fixed-effect limma
-  consumers, and all no-op/reuse guards. Do not launch compute while these
-  contracts are incomplete.
-2. **Backup feasibility and deferred clone.** Resolve canonical paths, access,
-  quotas, capacities, symlink targets, and active writers; retain the tiny
-  non-production transfer proof and establish the alternate-cluster clone
-  plan. The complete clone must not overlap any active Stage 2 or Stage 5
-  writer. NAS is not a repository or scratch backup. It receives only the
-  explicitly expected processed/results data and their checksums.
-3. **Controlled Alzheimer Stage 2 exception.** After the current source is
-  verified, first seal the required eight-dataset full-hash source/runtime
-  snapshot under its own parent, then seal a separate full-hash Stage 2
-  source/runtime snapshot and exact run-owned selector. Use exactly
-  `--datasets Alzheimer --steps alzheimer_donor_assay` and run only the
-  donor-by-assay derivative. This may precede the eight-dataset compute gate,
-  but its Stage 2 snapshot parent, raw input, derivative, owner, and run root
-  must remain disjoint. Do not change `datasets.json` in this snapshot; the
-  derivative must be terminally validated before the post-derivative
-  configuration snapshot.
-4. **Eight-dataset corrected-final recovery.** After the complete scratch
-  clone is verified, seal a separate full-hash source/runtime snapshot and
-  exact eight-row/32-method-row manifest, then run this gate if and only if
-  the maintenance feasibility envelope is provable. It is not launched in
-  parallel with the Stage 2 exception in this run; the full scratch clone
-  must remain quiescent and verified before the gate starts.
-5. **Alzheimer follow-up.** Only after the reviewed eight-row gate and the
-  terminal Stage 2 derivative may the Alzheimer derivative-bound
-  configuration be changed and snapshotted. Run the one-row Stage 3 views
-  and one-row Stage 5 lanes under the contracts below.
+1. **Local selector and source-contract implementation.** Complete. The
+   focused contracts cover the exact eight-dataset corrected-final recovery,
+   all 32 mandatory method rows, the strict Alzheimer donor-by-assay
+   derivative, corrected method paths, fixed-effect limma consumers, and
+   no-op/reuse guards.
+2. **Alzheimer Stage 2 derivative.** Complete provisionally: the exact
+   one-step gate ran worker `4407671` and watchdog `4407672`, both completed
+   with exit `0:0`, and the derivative validator passed for 1,395,601 cells
+   and 104 samples. The local gate retains a completion-transport
+   `PRELAUNCH_STOP`; its accounting/artifact audit evidence is preserved and
+   requires explicit reviewer disposition before formal release.
+3. **Full scratch backup.** Run the complete
+   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper` clone to the explicitly
+   authorized Yggdrasil destination after Stage 2 is terminal and no writer
+   remains. The Mac is now available. Use direct Bamboo→Yggdrasil rsync,
+   preserve manifests/checksums/logs, and do not use a live-tree clone.
+4. **Yggdrasil portability audit.** Before any Yggdrasil compute, perform
+   read-only checks of scheduler availability, partitions/resources, current
+   source/repository identity, runtime FORMAT 2 image and manifest,
+   configured paths, scratch/data layout, ownership/checksum handling, NAS
+   visibility, and durable-gate host support. Do not run pipeline scripts or
+   submit jobs during this audit.
+5. **Remaining Yggdrasil compute, only if unchanged portability passes.**
+   Run the explicit Alzheimer Stage 3 uncorrected/corrected rows, the
+   explicit Alzheimer Stage 5 uncorrected/corrected lanes, and the exact
+   eight-dataset corrected-final Stage 5 recovery with 32 rows. If the audit
+   requires pipeline-file, configuration, runtime, or durable-profile
+   changes, update this plan only and wait for user approval; do not launch
+   Yggdrasil compute.
+6. **Final synchronization and analysis.** After reviewed terminal artifacts,
+   synchronize only manifest-listed outputs, checksums, and metadata, then
+   execute the final analysis lane.
 
 ### Eight-dataset corrected-final Stage 5 recovery
 
@@ -330,12 +351,12 @@ is a symlink, so backup, snapshot, and gate commands must resolve the
 canonical `/srv/beegfs/scratch/users/h/halterc` path. Bamboo remains the
 default compute host. The user's local setup reaches Yggdrasil with
 `ssh yggdrasil`; no local staging is needed.
-Yggdrasil is a temporary backup destination only for the 2026-09-15–18 Bamboo
-maintenance window when explicitly named by the approved backup plan or user,
-never an implicit compute host. The direct Bamboo→Yggdrasil route is proven
-conditionally via `ssh -A bamboo` and the documented FQDN
-`login1.yggdrasil.hpc.unige.ch` while the originating Mac agent session
-remains alive.
+Yggdrasil is the explicitly authorized temporary backup destination and,
+for this run, an explicitly authorized temporary compute host for the named
+remaining Stage 3/Stage 5 lanes during the 2026-09-15–18 Bamboo maintenance
+window. It is never an implicit fallback. Yggdrasil compute still requires
+the read-only portability audit above; backup requires the direct
+Bamboo→Yggdrasil route and a quiescent source.
 The remote-only POC root
 `/srv/beegfs/scratch/users/h/halterc/_ecoda_backup_poc_20260914_direct`
 transferred a non-production file without local staging: source and destination
