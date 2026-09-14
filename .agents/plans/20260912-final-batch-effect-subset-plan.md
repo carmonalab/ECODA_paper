@@ -6,14 +6,13 @@ This section is the single active contract for this plan. It supersedes every
 older active Context, Approach, Verification, Assumptions, and status section
 that conflicts with it. The incident appendix is evidence only; it does not
 create selectors, authorize a launch, or preserve an obsolete nine-row scope.
-This plan has moved from design-only into implementation and controlled execution. The local selector/source-contract implementation and focused checks are complete. The immediate operational priority is the full scratch backup; production compute may be considered only after a fresh source/runtime snapshot, exact run-owned selections, source and ownership checks, and the maintenance feasibility audit.
-The user has explicitly authorized this implementation and backup sequence. Every operation remains narrowly scoped: no broad or inferred selection, no overwrite, no active-tree clone, and no production launch without the required durable gate, terminal accounting, artifact audit, synchronization, and Luna Max review.
+This plan has moved from design-only into implementation and controlled execution. The user has now prioritized the explicitly scoped Alzheimer Stage 2 derivative before the complete scratch clone. The eight-dataset corrected-final gate remains after the verified full backup; it is not a current parallel launch candidate.
+Every operation remains narrowly scoped: no broad or inferred selection, no overwrite, no active-tree clone, and no production launch without the required exact snapshot/runtime identity, durable gate, terminal accounting, artifact audit, synchronization, and Luna Max review.
 
 ### Objective and hard boundaries
 
-- First complete the local selector/source-contract implementation and the
-  backup-feasibility work. No compute may start before both are complete and
-  reviewed.
+- Local selector/source-contract implementation and focused checks are complete. Backup feasibility inventory, capacity, access, and tiny-transfer evidence are recorded; the complete clone is deferred until the selected Alzheimer Stage 2 writer is terminal. Only that controlled Stage 2 exception may proceed before the clone, with fresh identities, exact scope, disjoint ownership, and a durable review.
+- The controlled Alzheimer Stage 2 exception may start before the full scratch clone only after its own fresh source/runtime snapshot, exact run-owned selector, raw/derivative ownership checks, and durable-gate preparation pass. It reads the immutable raw H5AD and writes only the new derivative; it does not authorize an Alzheimer configuration change, Stage 3, or Stage 5 work.
 - The production source is the current `datasets.json` plus authoritative HPC
   data. Local mirrors and historical JSON reports are diagnostic evidence only.
 - Existing H5ADs, RDS bundles, pseudobulk caches, Feather files, manifests,
@@ -41,19 +40,30 @@ The user has explicitly authorized this implementation and backup sequence. Ever
   contract, corrected method path and sync validation, fixed-effect limma
   consumers, and all no-op/reuse guards. Do not launch compute while these
   contracts are incomplete.
-2. **Backup feasibility before compute.** Resolve canonical paths, access,
-  quotas, capacities, symlink targets, and active writers; prove a tiny
-  non-production transfer; then establish the alternate-cluster clone plan
-  below. NAS is not a repository or scratch backup. It receives only the
-  explicitly expected processed/results data and its checksums/sidecars.
-3. **Eight-dataset corrected-final recovery.** Seal the full-hash
-  source/runtime snapshot and exact eight-row/32-method-row manifest, then
-  run this gate if and only if the maintenance feasibility envelope below is
-  provable.
-4. **Alzheimer follow-up.** Only after the eight-row snapshot is sealed may
-  the Alzheimer derivative/configuration be changed and snapshotted. Run the
-  strict donor-by-assay Stage 2, one-row Stage 3 views, and one-row Stage 5
-  lanes under the contracts below.
+2. **Backup feasibility and deferred clone.** Resolve canonical paths, access,
+  quotas, capacities, symlink targets, and active writers; retain the tiny
+  non-production transfer proof and establish the alternate-cluster clone
+  plan. The complete clone must not overlap any active Stage 2 or Stage 5
+  writer. NAS is not a repository or scratch backup. It receives only the
+  explicitly expected processed/results data and their checksums.
+3. **Controlled Alzheimer Stage 2 exception.** Seal a fresh full-hash
+  source/runtime snapshot of the current committed source, use the exact
+  `--datasets Alzheimer --steps alzheimer_donor_assay` selector, and run only
+  the donor-by-assay derivative. This may precede the eight-dataset compute
+  gate because its raw input, derivative, Stage 2 owner, run root, and
+  snapshot parent are disjoint. Do not change `datasets.json` in this
+  snapshot; the derivative must be terminally validated before the
+  post-derivative configuration snapshot.
+4. **Eight-dataset corrected-final recovery.** After the complete scratch
+  clone is verified, seal a separate full-hash source/runtime snapshot and
+  exact eight-row/32-method-row manifest, then run this gate if and only if
+  the maintenance feasibility envelope is provable. It is not launched in
+  parallel with the Stage 2 exception in this run; the full scratch clone
+  must remain quiescent and verified before the gate starts.
+5. **Alzheimer follow-up.** Only after the reviewed eight-row gate and the
+  terminal Stage 2 derivative may the Alzheimer derivative-bound
+  configuration be changed and snapshotted. Run the one-row Stage 3 views
+  and one-row Stage 5 lanes under the contracts below.
 
 ### Eight-dataset corrected-final Stage 5 recovery
 
@@ -274,14 +284,14 @@ artifact owners, and locks are disjoint; the default is serialization.
   32-row gate completes terminal audit/review before the one-row Alzheimer
   corrected gate begins. A different durable group cannot make same-root
   synchronization safe.
-- Safe parallelism is limited to genuinely disjoint contracts: local
-  selector/limma implementation and backup feasibility; the sealed eight-row,
-  32-method-row corrected-final compute and Alzheimer Stage 2 if their
-  snapshots, roots, and owners are disjoint; and the two Alzheimer Stage 3
-  rows only when the disjointness test passes. The eight-row corrected-final
-  gate and Alzheimer corrected-final Stage 5 gate never overlap. Alzheimer
-  uncorrected Stage 5 may overlap only with an explicit disjoint-root proof.
-- A complete repository or scratch clone must not run against active writers.
+- Safe parallelism is limited to genuinely disjoint contracts. The explicitly
+  authorized Alzheimer Stage 2 exception may precede the eight-row gate, but
+  the eight-dataset corrected-final gate is not launched in parallel with it
+  in this run. The complete scratch clone must wait until the Stage 2 writer
+  is terminal and must never overlap any active writer. The eight-row
+  corrected-final gate and Alzheimer corrected-final Stage 5 gate never
+  overlap. Alzheimer uncorrected Stage 5 may overlap only with an explicit
+  disjoint-root proof.
   Take a quiescence checkpoint and hold stable path/size/hash manifests before
   declaring that backup complete. A failed row releases only its own target;
   successful rows and validated sync fragments remain immutable.
@@ -407,12 +417,17 @@ Before the first eight-dataset compute gate, the run owner must have:
 - recorded one durable gate command, selector checksum, expected rows, roots,
   and dependency/review boundary.
 
-Before Alzheimer work, additionally require the reviewed eight-dataset gate,
-a new full-hash source/runtime snapshot, the strict derivative schema and
-104-sample contract, and explicit one-row Stage 3/Stage 5 manifests. The
-Alzheimer corrected-final Stage 5 lane is serialized behind the completed
-eight-dataset corrected-final root; no stale nine-row artifact or donor-only
-metadata may authorize it.
+Before the controlled Alzheimer Stage 2 exception, additionally require a
+fresh full-hash source/runtime snapshot, the exact one-step selector, the
+strict derivative schema and 104-sample contract, and explicit Stage 2
+ownership. This exception does not change `datasets.json` or authorize
+Stage 3/5 work.
+Before Alzheimer Stage 3 or Stage 5 work, additionally require the reviewed
+eight-dataset gate, a new post-derivative full-hash source/runtime snapshot,
+the strict derivative schema and 104-sample contract, and explicit one-row
+Stage 3/Stage 5 manifests. The Alzheimer corrected-final Stage 5 lane is
+serialized behind the completed eight-dataset corrected-final root; no stale
+nine-row artifact or donor-only metadata may authorize it.
 
 After all approved lanes, synchronize only manifest-listed processed/results
 artifacts and metadata/checksums to the workstation/NAS. Final analysis must
@@ -565,38 +580,46 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
 
 ### Open items and exact next steps
 
-1. **Implementation checkpoint committed.** The verified implementation
-   sources, tests, and documentation were committed and pushed as
-   `b4e1135`; the active H5AD identity regression fixture was added in
-   `0097e5e`. Unrelated user worktree changes remain unstaged.
-   `datasets.json`, `pixi.toml`, and `pixi.lock` were not changed by this
-   checkpoint. Bamboo's canonical checkout and the Yggdrasil repository backup
-   still point to the prior plan commit `751c3f7`; the next source snapshot
-   must use the current full branch HEAD containing the implementation and
-   latest plan checkpoint, not a stale hardcoded commit.
-2. **Finish backup before production compute.** The repository clone is
-   verified; the complete 2.3 TB scratch clone has not started. Use only
-   direct Bamboo→Yggdrasil rsync, never Mac staging. Agent forwarding is
-   conditional on the originating Mac session remaining alive; a persistent
-   centrally registered Bamboo key is preferable for a multi-hour transfer.
-   Quiesce writers, split scratch into explicit top-level batches, preserve
-   logs/gates/manifests/checksums, and verify source/destination manifests.
-3. **Run the eight-dataset corrected-final gate.** After the current full-hash
-   source snapshot is sealed; use the exact eight-row selection and emit exactly
-   32 method rows (8 prepare, 8 pseudobulk, 8 GloScope, 8 composition). The old
-   eight combined-key prepare caches remain immutable
-   and stale; none may be reused. Launch only if the
-   `2026-09-15 07:00 UTC` cutoff envelope is provable.
-4. **Run the Alzheimer follow-up from a new configuration snapshot.** Preserve
-   the raw H5AD, execute the guarded Stage 2 derivative, then the explicit
-   derivative-bound Stage 3 views and one-row Stage 5 lanes. Corrected Stage 5
-   serializes behind the eight-dataset corrected-final gate because the root
-   and synchronization owner are shared.
-5. **Finalize analysis only after reviewed artifacts are available.** Sync
-   explicit processed/result files and manifests to NAS; do not copy full
-   H5ADs to the Mac or run final notebooks from stale local mirrors.
+1. **Current source is prepared for controlled execution.** The verified
+   implementation and plan update are committed and pushed at the current
+   branch head. Bamboo was updated to that same full commit; unrelated local
+   worktree changes remain unstaged. `datasets.json`, `pixi.toml`, and
+   `pixi.lock` remain unchanged for this Stage 2 snapshot.
+2. **Run the controlled Alzheimer Stage 2 exception.** Create a fresh
+   full-hash source/runtime snapshot from the current commit, use exactly
+   `--datasets Alzheimer --steps alzheimer_donor_assay`, and launch only the
+   donor-by-assay derivative through the durable gate. It may precede the
+   eight-dataset gate because its raw input, derivative, owner, run root, and
+   snapshot parent are disjoint. It does not authorize a configuration change
+   or any Stage 3/5 work.
+3. **Complete the full scratch backup after Stage 2 is terminal.** The user
+   explicitly deferred the clone behind controlled compute. Never copy the
+   active Stage 2 or Stage 5 tree. Use direct Bamboo→Yggdrasil rsync only
+   after stable destination identity and authentication that survives Mac
+   sleep. The fresh BatchMode test without forwarded agent currently fails;
+   a centrally registered Bamboo key or an awake Mac session is therefore
+   still required. Split the 2.3 TB tree into explicit top-level batches,
+   preserve logs/gates/manifests/checksums, and verify source/destination
+   manifests.
+4. **Run the eight-dataset corrected-final gate after the verified backup.**
+   Create a separate current full-hash source/runtime snapshot and the exact
+   eight-row/32-method-row manifest, then launch only if the maintenance
+   feasibility envelope is provable. Do not overlap this gate with the
+   Alzheimer Stage 2 exception in this run; no historical matrix or stale
+   combined-key cache is eligible.
+5. **Continue the Alzheimer follow-up.** After the terminal Stage 2
+   derivative and reviewed eight-dataset gate, change `datasets.json` to
+   `donor_id_assay`, create a new post-derivative source/runtime snapshot,
+   then run the explicit Stage 3 views and one-row Stage 5 lanes. Corrected
+   Alzheimer Stage 5 remains serialized behind the eight-dataset
+   corrected-final root.
+6. **Finalize analysis only after reviewed artifacts are available.**
+   Synchronize only manifest-listed processed/results artifacts and
+   metadata/checksums; do not copy full H5ADs to the Mac or use stale local
+   mirrors.
 
-No new full-cohort Stage 2/3/5 job, durable gate, or full scratch transfer is
-authorized merely by this checkpoint. The next session must re-read this
-checkpoint, verify the working-tree allowlist, and continue with item 1 or the
-explicitly authorized backup item.
+The user explicitly authorized the controlled Stage 2-before-backup priority
+change. The eight-dataset corrected-final gate remains serialized after the
+verified full scratch clone in this run; no live-tree clone, broad selection,
+implicit snapshot reuse, or launch without exact scope, fresh identities,
+durable terminal audit, synchronization, and review is allowed.
