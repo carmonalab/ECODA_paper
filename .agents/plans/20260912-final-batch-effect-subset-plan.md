@@ -582,11 +582,12 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
 
 1. **Current source is prepared for controlled execution.** The verified
    implementation and plan update are committed and pushed at the current
-   branch head. Bamboo was updated to that same full commit; unrelated local
-   worktree changes remain unstaged. `datasets.json`, `pixi.toml`, and
-   `pixi.lock` remain unchanged for this Stage 2 snapshot.
-2. **Run the controlled Alzheimer Stage 2 exception.** Create a fresh
-   full-hash source/runtime snapshot from the current commit, use exactly
+   branch head `393237a32d56ecf61cc512634f429a959d685303`. Bamboo still points
+   to the prior committed source `d6e970b`; update it only after the current
+   checkout/worktree allowlist passes. The Yggdrasil repository backup remains
+   at the older baseline. Unrelated local worktree changes remain unstaged.
+   `datasets.json`, `pixi.toml`, and `pixi.lock` remain unchanged for this
+   Stage 2 snapshot.
    `--datasets Alzheimer --steps alzheimer_donor_assay`, and launch only the
    donor-by-assay derivative through the durable gate. It may precede the
    eight-dataset gate because its raw input, derivative, owner, run root, and
