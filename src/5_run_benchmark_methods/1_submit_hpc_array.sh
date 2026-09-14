@@ -3242,6 +3242,11 @@ stage5_variant_metadata() {
       "${ANALYSIS_PASS:-${PASS_ARG}}" "${ANALYSIS_LOG_PREFIX}" \
       "${ECODA_RUN_ROOT}/manifests/metadata_export.tsv" \
       "${ECODA_RUN_ROOT}/status/metadata_export.report"
+    if [[ "${ANALYSIS_VARIANT}" == corrected_final &&
+          -s "${ECODA_RUN_ROOT}/manifests/corrected_final_consumer_contract.json" ]]; then
+      printf 'CORRECTED_FINAL_CONSUMER_CONTRACT=%s\n' \
+        "${ECODA_RUN_ROOT}/manifests/corrected_final_consumer_contract.json"
+    fi
   fi
 }
 
@@ -3499,6 +3504,31 @@ if [[ -z "${SYNC_ONLY_RUN}" && ${R_ENV_PREFLIGHT_REQUIRED} -eq 1 ]]; then
   stage5_run_r_environment_preflight ||
     stage5_abort "Stage 5 compute-node R environment preflight failed"
 fi
+
+stage5_run_corrected_final_consumer_barrier() {
+  local validator report
+  [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
+  [[ "${ANALYSIS_VARIANT:-}" == corrected_final &&
+     -z "${SYNC_ONLY_RUN}" ]] || return 0
+  validator="$(
+    stage5_source_script \
+      src/5_run_benchmark_methods/validate_corrected_final_consumer_contracts.R
+  )" || return 1
+  stage5_require_source_script "${validator}" || return 1
+  report="${ECODA_RUN_ROOT}/manifests/corrected_final_consumer_contract.json"
+  stage5_validate_bound_runtime || return 1
+  ${PIXI_RSCRIPT} "${validator}" \
+    --config "${DATASETS_JSON_FILE}" \
+    --selection "${MANIFEST}" \
+    --analysis-root "${ANALYSIS_ROOT}" \
+    --input-root "${HPC_SCRATCH_DIR}" \
+    --output "${report}" >/dev/null 2>&1 || return 1
+  [[ -s "${report}" && -s "${report}.md5" ]] || return 1
+  ecoda_validate_checksum "${report}" || return 1
+}
+
+stage5_run_corrected_final_consumer_barrier ||
+  stage5_abort "corrected-final consumer contract barrier failed"
 
 OWNERS_FILE="${ECODA_RUN_ROOT}/manifests/owners.tsv"
 PENDING_SELECTION_MD5=""

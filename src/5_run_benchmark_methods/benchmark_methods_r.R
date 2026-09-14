@@ -253,7 +253,7 @@ correct_clr_batch_lmm <- function(
     values <- canonical_metadata[[key]]
     levels <- validation[["per_key_levels"]][[key]]
     if (length(values) != nrow(feat_mat) ||
-        length(levels) < 2L ||
+        length(levels) < 1L ||
         anyNA(values) || any(!values %in% levels)) {
       stop("correct_clr_batch_lmm: invalid levels for batch key ", key)
     }
@@ -262,15 +262,23 @@ correct_clr_batch_lmm <- function(
       levels = as.character(levels)
     )
   }
+  active_aliases <- aliases[vapply(batch_keys, function(key) {
+    levels <- validation[["per_key_levels"]][[key]]
+    is.character(levels) && length(levels) >= 2L
+  }, logical(1))]
+  if (!length(active_aliases)) {
+    return(feat_mat)
+  }
 
-  # Keep the scalar formula literal for the established one-key path.  The
-  # multi-key branch is generated only from the fixed aliases above.
-  model_formula <- if (length(aliases) == 1L) {
+  # Keep the scalar formula literal for the established one-key path.  A
+  # constant key in a multi-key final contract is retained in metadata but
+  # omitted from the random-effects model because it is not estimable.
+  model_formula <- if (length(batch_keys) == 1L) {
     y ~ 1 + (1 | batch)
   } else {
     stats::as.formula(paste0(
       "y ~ 1 + ",
-      paste0("(1 | ", aliases, ")", collapse = " + ")
+      paste0("(1 | ", active_aliases, ")", collapse = " + ")
     ))
   }
 
@@ -298,7 +306,7 @@ correct_clr_batch_lmm <- function(
 
     random_effects <- numeric(nrow(feat_mat))
     random_tables <- lme4::ranef(fit)
-    for (alias in aliases) {
+    for (alias in active_aliases) {
       random_table <- random_tables[[alias]]
       if (is.null(random_table) ||
           !"(Intercept)" %in% colnames(random_table)) {

@@ -312,7 +312,11 @@ aggregation contracts:
   metadata alignment. Ordinary pseudobulk uses `~1`, `blind=TRUE`, and no
   batch correction. Corrected batch-effect pseudobulk uses only the configured
   technical batch, `blind=FALSE`, and batch-only correction; biological
-  labels remain outside the model.
+  labels remain outside the model. In the corrected-final sample-level path,
+  configured technical keys remain in the identity, but one-level keys are
+  marked non-estimable and omitted from the effective model; if all keys are
+  constant, no batch correction is applied. Full-cell validation remains
+  strict for its own contract.
 - **Shared full-gene fit.** `fit_pseudobulk_deseq2()` performs the full-gene
   DESeq2 size-factor/normalization/VST fit once and returns the normalized/VST
   matrix plus its variance ordering. `select_pseudobulk_deseq2()` derives

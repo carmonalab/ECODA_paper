@@ -220,6 +220,10 @@ Operational concurrency is explicit rather than application-async: R uses `forea
   needed; `columns.cell_type_low_res` is never a calculation input. Lupus
   therefore uses its configured `louvain` column. Corrected cell-level methods
   retain source cell values. The uncorrected lane has no majority assignment.
+  Corrected-final sample-level consumers retain all configured technical keys
+  in metadata/source identity, omit one-level keys from the effective design,
+  and apply `NO_CORRECTION` when no key has at least two levels. Full-cell
+  validation remains strict.
 - **Uncorrected/final frozen and disabled cohorts:** `Alzheimer`,
   `Breast_cancer`, `Lupus_PBMC`, and `Stephenson` are frozen and MUST be
   absent from every new uncorrected Stage 3 selection, Stage 2/4/5 job,

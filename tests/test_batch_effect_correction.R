@@ -450,6 +450,47 @@ stopifnot(
   identical(captured$aggregate$metadata_columns, "Sample"),
   !"label" %in% captured$aggregate$metadata_columns
 )
+
+no_correction_metadata <- fake_metadata
+no_correction_metadata$tech <- factor(rep("A", nrow(no_correction_metadata)))
+no_correction_validation <- ecoda_hpc_sample_metadata_validation(
+  no_correction_metadata,
+  batch_keys = "tech",
+  sample_col = "Sample"
+)
+no_correction_context <- list(
+  ordered_keys = "tech",
+  scalar_batch_col = "tech",
+  sample_ids = no_correction_validation$sample_ids,
+  sample_metadata = no_correction_validation$sample_metadata,
+  canonical_sample_metadata = no_correction_validation$canonical_sample_metadata,
+  composite_values = no_correction_validation$composite_values,
+  validation = no_correction_validation
+)
+invisible(prepare_pseudobulks_hpc(
+  h5ad_path = fixture_h5ad,
+  hvg_rank_genes = c("g1", "g2"),
+  variants = "hvg2000",
+  batch_col = "tech",
+  blind = FALSE,
+  correct_batch = TRUE,
+  cache_stem = "fixture-no-correction",
+  view = "batch_effect_corrected",
+  analysis_pass = "corrected",
+  run_id = "fixture-no-correction-run",
+  batch_context = no_correction_context,
+  batch_contract = ecoda_hpc_batch_contract_identity(
+    batch_keys = "tech",
+    sample_col = "Sample",
+    method_id = "Pseudobulk",
+    model_id = "pseudobulk_composite_v1"
+  )
+))
+stopifnot(
+  identical(captured$fit$batch_col, NULL),
+  identical(captured$fit$blind, TRUE),
+  identical(captured$fit$correct_batch, FALSE)
+)
 assign(
   "load_h5ad_sample_aggregate",
   old_h5ad_aggregate,
@@ -469,11 +510,134 @@ assign("exec_time", old_exec_time, envir = prepare_pseudobulk_env)
 assign("peak_rss_gb", old_peak_rss, envir = prepare_pseudobulk_env)
 unlink(fixture_h5ad)
 
-single_batch_error <- tryCatch(
-  correct_clr_batch_lmm(feat, transform(meta, tech = factor("A")), "tech"),
+single_batch_meta <- transform(meta, tech = factor("A"))
+single_batch_validation <- ecoda_hpc_sample_metadata_validation(
+  single_batch_meta,
+  batch_keys = "tech",
+  sample_col = "Sample"
+)
+single_batch_result <- correct_clr_batch_lmm(
+  feat,
+  single_batch_meta,
+  "tech",
+  metadata_validation = single_batch_validation
+)
+stopifnot(
+  identical(single_batch_validation$correction_state, "NO_CORRECTION"),
+  identical(single_batch_result, feat)
+)
+
+# A constant component of a multi-key technical design is retained in the
+# contract while the estimable varying component drives CLR correction.
+multikey_meta <- data.frame(
+  Sample = rownames(feat),
+  assay = factor(rep("10x 3' v3", n)),
+  sex = factor(batch),
+  stringsAsFactors = FALSE
+)
+multikey_validation <- ecoda_hpc_sample_metadata_validation(
+  multikey_meta,
+  batch_keys = list("assay", "sex"),
+  sample_col = "Sample"
+)
+stopifnot(
+  identical(multikey_validation$key_level_counts, list(assay = 1L, sex = 2L)),
+  identical(multikey_validation$effective_batch_keys, "sex"),
+  identical(multikey_validation$non_estimable_batch_keys, "assay"),
+  identical(multikey_validation$correction_state, "BATCH_CORRECTION"),
+  length(multikey_validation$composite_levels) == 2L
+)
+multikey_identity <- ecoda_hpc_batch_contract_identity(
+  batch_keys = list("assay", "sex"),
+  sample_col = "Sample",
+  method_id = "ECODA_authors_HR",
+  model_id = "ecoda_additive_random_intercepts_v1"
+)
+multikey_contract <- ecoda_hpc_augment_batch_contract(
+  identity = multikey_identity,
+  validation = multikey_validation,
+  method_id = "ECODA_authors_HR",
+  batch_keys = list("assay", "sex")
+)
+multikey_contract_again <- ecoda_hpc_augment_batch_contract(
+  identity = multikey_contract,
+  validation = multikey_validation,
+  method_id = "ECODA_authors_HR",
+  batch_keys = list("assay", "sex")
+)
+stopifnot(
+  identical(multikey_contract_again, multikey_contract),
+  identical(multikey_contract$effective_batch_keys, "sex"),
+  identical(multikey_contract$non_estimable_batch_keys, "assay"),
+  identical(multikey_contract$correction_state, "BATCH_CORRECTION"),
+  grepl("batch_key_2", multikey_contract$correction_formula, fixed = TRUE)
+)
+ecoda_hpc_validate_batch_contract(
+  multikey_identity,
+  multikey_contract,
+  label = "legacy corrected batch contract"
+)
+strict_legacy_error <- tryCatch(
+  ecoda_hpc_validate_batch_contract(
+    multikey_identity,
+    multikey_contract,
+    label = "strict corrected batch contract",
+    require_effective_metadata = TRUE
+  ),
   error = identity
 )
-stopifnot(inherits(single_batch_error, "error"))
+stopifnot(inherits(strict_legacy_error, "error"))
+multikey_corrected <- correct_clr_batch_lmm(
+  feat,
+  multikey_meta,
+  batch_col = list("assay", "sex"),
+  metadata_validation = multikey_validation
+)
+stopifnot(max(abs(rowSums(multikey_corrected))) < 1e-8)
+
+# If every configured technical key is constant, the corrected-final contract
+# remains valid but the CLR matrix and correction formula are unchanged.
+all_constant_meta <- data.frame(
+  Sample = rownames(feat),
+  assay = factor(rep("10x 3' v3", n)),
+  sex = factor(rep("F", n)),
+  stringsAsFactors = FALSE
+)
+all_constant_validation <- ecoda_hpc_sample_metadata_validation(
+  all_constant_meta,
+  batch_keys = list("assay", "sex"),
+  sample_col = "Sample"
+)
+strict_full_cell_error <- tryCatch(
+  ecoda_batch_validate_metadata(
+    all_constant_meta,
+    batch_keys = list("assay", "sex"),
+    sample_col = "Sample"
+  ),
+  error = identity
+)
+stopifnot(inherits(strict_full_cell_error, "error"))
+all_constant_corrected <- correct_clr_batch_lmm(
+  feat,
+  all_constant_meta,
+  batch_col = list("assay", "sex"),
+  metadata_validation = all_constant_validation
+)
+all_constant_contract <- ecoda_hpc_augment_batch_contract(
+  identity = multikey_identity,
+  validation = all_constant_validation,
+  method_id = "ECODA_authors_HR",
+  batch_keys = list("assay", "sex")
+)
+stopifnot(
+  identical(all_constant_validation$correction_state, "NO_CORRECTION"),
+  identical(all_constant_corrected, feat),
+  identical(all_constant_contract$correction_state, "NO_CORRECTION"),
+  identical(
+    all_constant_contract$correction_formula,
+    "NO_CORRECTION: no estimable technical batch key"
+  )
+)
 
 # The correction model is batch-only by construction.
 correction_body <- paste(deparse(body(correct_clr_batch_lmm)), collapse = " ")

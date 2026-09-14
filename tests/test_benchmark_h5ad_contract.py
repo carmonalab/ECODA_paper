@@ -109,8 +109,44 @@ def assert_batch_contract_argument_boundary():
         raise AssertionError("non-object batch contract JSON was accepted")
 
 
+def assert_corrected_final_consumer_policy():
+    identity = build_batch_contract_identity(
+        ["batch"],
+        sample_column="Sample",
+        method_id="preprocess",
+        model_id="hvg_composite_v1",
+    )
+    adata = make_valid_adata("batch_effect_corrected")
+    adata.uns["batch_contract"] = identity
+    validate_benchmark_h5ad_contract(
+        adata,
+        "batch_effect_corrected",
+        "gloscope",
+        expected_batch_contract=identity,
+        batch_contract=identity,
+        corrected_final_consumer=True,
+    )
+    try:
+        validate_benchmark_h5ad_contract(
+            adata,
+            "batch_effect_corrected",
+            "gloscope",
+            expected_batch_contract=identity,
+            batch_contract=identity,
+            require_corrected_summary=False,
+        )
+    except ValueError as exc:
+        assert "missing validation_summary" in str(exc), str(exc)
+    else:
+        raise AssertionError(
+            "ordinary corrected GloScope consumer accepted a summary-free H5AD"
+        )
+
+
+
 def main():
     assert_batch_contract_argument_boundary()
+    assert_corrected_final_consumer_policy()
 
     for view in REQUIRED_OBSM:
         kwargs = {}

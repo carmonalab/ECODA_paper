@@ -1198,6 +1198,10 @@ prepare_pseudobulks_hpc <- function(
   # column for the DESeq2/limma boundary.
   corrected_context_required <- isTRUE(correct_batch)
   corrected_batch_keys <- NULL
+  effective_batch_keys <- NULL
+  batch_correction_active <- FALSE
+  effective_blind <- blind
+  fit_batch_col <- NULL
   if (isTRUE(correct_batch)) {
     key_source <- batch_keys
     if (is.null(key_source)) {
@@ -1254,7 +1258,8 @@ prepare_pseudobulks_hpc <- function(
         required_nonmissing_columns = c(sample_col, corrected_batch_keys),
         expected_batch_contract = expected_h5ad_batch_contract,
         view = view,
-        method = "preprocessing"
+        method = "preprocessing",
+        allow_missing_summary = ecoda_hpc_corrected_final_mode()
       )
       batch_context <- ecoda_hpc_batch_context(
         metadata = metadata_pass$obs,
@@ -1278,6 +1283,20 @@ prepare_pseudobulks_hpc <- function(
       batch_keys = corrected_batch_keys,
       scalar_batch_col = batch_context$scalar_batch_col
     )
+  }
+  if (isTRUE(correct_batch)) {
+    effective_batch_keys <- batch_context$validation[["effective_batch_keys"]]
+    if (is.null(effective_batch_keys)) {
+      effective_batch_keys <- unname(corrected_batch_keys[vapply(
+        batch_context$validation[["per_key_levels"]],
+        function(levels) length(levels) >= 2L,
+        logical(1)
+      )])
+    }
+    effective_batch_keys <- unname(as.character(effective_batch_keys))
+    batch_correction_active <- length(effective_batch_keys) > 0L
+    effective_blind <- if (batch_correction_active) blind else TRUE
+    fit_batch_col <- if (batch_correction_active) batch_col else NULL
   }
 
   specs <- list(
@@ -1334,9 +1353,9 @@ prepare_pseudobulks_hpc <- function(
       shared_fit <- fit_pseudobulk_deseq2(
         aggregated$counts,
         metadata = aggregated$metadata,
-        batch_col = batch_col,
-        blind = blind,
-        correct_batch = correct_batch
+        batch_col = fit_batch_col,
+        blind = effective_blind,
+        correct_batch = batch_correction_active
       )
     )
     shared_fit_time <- as.numeric(shared_fit_time, units = "secs")
@@ -1359,9 +1378,9 @@ prepare_pseudobulks_hpc <- function(
         selected_fit <- fit_pseudobulk_deseq2(
           aggregated$counts[positions, , drop = FALSE],
           metadata = aggregated$metadata,
-          batch_col = batch_col,
-          blind = blind,
-          correct_batch = correct_batch
+          batch_col = fit_batch_col,
+          blind = effective_blind,
+          correct_batch = batch_correction_active
         )
       )
       selected_fit_time <- as.numeric(schvg_fit_time, units = "secs")

@@ -138,6 +138,79 @@ ecoda_hpc_augment_batch_contract <- function(
       derived,
       label = "Corrected sample metadata batch contract"
     )
+    effective_batch_keys <- validation[["effective_batch_keys"]]
+    if (is.null(effective_batch_keys)) {
+      effective_batch_keys <- unname(keys[vapply(
+        validation[["per_key_levels"]],
+        function(levels) length(levels) >= 2L,
+        logical(1)
+      )])
+    }
+    effective_batch_keys <- unname(as.character(effective_batch_keys))
+    non_estimable_batch_keys <- unname(setdiff(keys, effective_batch_keys))
+    correction_state <- if (length(effective_batch_keys)) {
+      "BATCH_CORRECTION"
+    } else {
+      "NO_CORRECTION"
+    }
+    if (length(keys) == 1L) {
+      active_aliases <- "batch"
+    } else {
+      active_aliases <- paste0(
+        "batch_key_", match(effective_batch_keys, keys)
+      )
+    }
+    effective_text <- if (length(effective_batch_keys)) {
+      paste(effective_batch_keys, collapse = ",")
+    } else {
+      "none"
+    }
+    correction_formula <- if (!length(effective_batch_keys)) {
+      "NO_CORRECTION: no estimable technical batch key"
+    } else if (method_id %in% c(
+      "ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2"
+    )) {
+      paste0(
+        "y ~ 1 + ",
+        paste0(
+          "(1 | ", active_aliases, ")",
+          collapse = " + "
+        ),
+        "; effective_batch_keys=[", effective_text, "]"
+      )
+    } else if (identical(method_id, "Pseudobulk")) {
+      scalar <- scalar_batch_col
+      if (is.null(scalar)) {
+        scalar <- if (length(keys) >= 2L) {
+          "__ecoda_batch_combined_v1"
+        } else {
+          keys[[1L]]
+        }
+      }
+      paste0(
+        "DESeq2 design=~ 1; limma removeBatchEffect(batch=",
+        scalar, "); effective_batch_keys=[", effective_text, "]"
+      )
+    } else if (method_id %in% c("GloScope", "PILOT", "QOT")) {
+      paste0(
+        "embedding=X_pca_harmony_batch_effect_corrected_hvg2000",
+        "; effective_batch_keys=[", effective_text, "]"
+      )
+    } else if (identical(method_id, "preprocess")) {
+      paste0(
+        "HVG/Harmony configured keys=[", paste(keys, collapse = ","),
+        "]; effective_batch_keys=[", effective_text, "]"
+      )
+    } else {
+      paste0(
+        "configured batch correction; effective_batch_keys=[",
+        effective_text, "]"
+      )
+    }
+    derived[["effective_batch_keys"]] <- effective_batch_keys
+    derived[["non_estimable_batch_keys"]] <- non_estimable_batch_keys
+    derived[["correction_state"]] <- correction_state
+    derived[["correction_formula"]] <- correction_formula
     return(derived)
   }
   spec <- ecoda_batch_correction_spec(
@@ -156,12 +229,41 @@ ecoda_hpc_augment_batch_contract <- function(
 ecoda_hpc_validate_batch_contract <- function(
   recorded,
   expected,
-  label = "corrected batch artifact"
+  label = "corrected batch artifact",
+  require_effective_metadata = FALSE
 ) {
   if (is.null(expected)) return(invisible(NULL))
+  if (!is.logical(require_effective_metadata) ||
+      length(require_effective_metadata) != 1L ||
+      is.na(require_effective_metadata)) {
+    stop("require_effective_metadata must be one logical scalar")
+  }
   if (is.null(recorded) || !is.list(recorded) ||
-      !identical(recorded, expected)) {
+      !is.list(expected)) {
     stop(label, " is missing or has a mismatched corrected batch contract")
+  }
+  optional_fields <- c(
+    "effective_batch_keys", "non_estimable_batch_keys",
+    "correction_state", "correction_formula"
+  )
+  recorded_core <- recorded
+  expected_core <- expected
+  for (field in optional_fields) {
+    recorded_core[[field]] <- NULL
+    expected_core[[field]] <- NULL
+  }
+  if (!identical(recorded_core, expected_core)) {
+    stop(label, " is missing or has a mismatched corrected batch contract")
+  }
+  for (field in optional_fields) {
+    if (field %in% names(recorded) && field %in% names(expected) &&
+        !identical(recorded[[field]], expected[[field]])) {
+      stop(label, " has mismatched ", field)
+    }
+    if (isTRUE(require_effective_metadata) &&
+        (!field %in% names(recorded) || !field %in% names(expected))) {
+      stop(label, " is missing ", field)
+    }
   }
   invisible(TRUE)
 }
@@ -176,8 +278,15 @@ ecoda_hpc_validate_batch_contract_source <- function(
 ) {
   recorded_source <- recorded
   expected_source <- expected
-  if (is.list(recorded_source)) recorded_source[["validation_summary"]] <- NULL
-  if (is.list(expected_source)) expected_source[["validation_summary"]] <- NULL
+  metadata_fields <- c(
+    "validation_summary", "effective_batch_keys",
+    "non_estimable_batch_keys", "correction_state",
+    "correction_formula"
+  )
+  for (field in metadata_fields) {
+    if (is.list(recorded_source)) recorded_source[[field]] <- NULL
+    if (is.list(expected_source)) expected_source[[field]] <- NULL
+  }
   ecoda_hpc_validate_batch_contract(
     recorded_source,
     expected_source,
@@ -253,6 +362,10 @@ ecoda_hpc_validate_h5ad_path_identity <- function(
   allow_missing_summary <- ecoda_hpc_allow_missing_corrected_summary(
     allow_missing_summary
   )
+  producer_summary_opt_in <- allow_missing_summary &&
+    identical(as.character(method), "preprocessing")
+  consumer_summary_opt_in <- allow_missing_summary &&
+    !producer_summary_opt_in
   project_root <- Sys.getenv("PROJECT_ROOT")
   if (!nzchar(project_root)) {
     stop("PROJECT_ROOT not set; cannot validate corrected H5AD identity.")
@@ -268,20 +381,18 @@ ecoda_hpc_validate_h5ad_path_identity <- function(
     path = module_dir,
     convert = FALSE
   )
-  validation_method <- if (allow_missing_summary) {
-    "preprocessing"
-  } else {
-    as.character(method)
-  }
   validator$validate_benchmark_h5ad_path(
     h5ad_path,
     as.character(view),
-    validation_method,
+    as.character(method),
     expected_batch_contract = ecoda_hpc_identity_for_python(
       expected_batch_contract
     ),
-    require_corrected_summary = !allow_missing_summary,
-    allow_missing_corrected_summary = allow_missing_summary
+    require_corrected_summary = !(
+      producer_summary_opt_in || consumer_summary_opt_in
+    ),
+    allow_missing_corrected_summary = producer_summary_opt_in,
+    corrected_final_consumer = consumer_summary_opt_in
   )
   invisible(TRUE)
 }
@@ -299,6 +410,10 @@ ecoda_hpc_validate_h5ad_object_identity <- function(
   allow_missing_summary <- ecoda_hpc_allow_missing_corrected_summary(
     allow_missing_summary
   )
+  producer_summary_opt_in <- allow_missing_summary &&
+    identical(as.character(method), "preprocessing")
+  consumer_summary_opt_in <- allow_missing_summary &&
+    !producer_summary_opt_in
   project_root <- Sys.getenv("PROJECT_ROOT")
   if (!nzchar(project_root)) {
     stop("PROJECT_ROOT not set; cannot validate corrected H5AD identity.")
@@ -314,25 +429,22 @@ ecoda_hpc_validate_h5ad_object_identity <- function(
     path = module_dir,
     convert = FALSE
   )
-  validation_method <- if (allow_missing_summary) {
-    "preprocessing"
-  } else {
-    as.character(method)
-  }
   validator$validate_benchmark_h5ad_contract(
     adata,
     as.character(view),
-    validation_method,
+    as.character(method),
     expected_batch_contract = ecoda_hpc_identity_for_python(
       expected_batch_contract
     ),
-    require_corrected_summary = !allow_missing_summary,
-    allow_missing_corrected_summary = allow_missing_summary
+    require_corrected_summary = !(
+      producer_summary_opt_in || consumer_summary_opt_in
+    ),
+    allow_missing_corrected_summary = producer_summary_opt_in,
+    corrected_final_consumer = consumer_summary_opt_in
   )
   invisible(TRUE)
 }
 
-# Resolve the run's serialized sample-level metadata handoff.  Stage 5
 # corrected workers must receive this path from ANALYSIS_ROOT rather than
 # reconstructing a legacy result-root path.
 ecoda_hpc_sample_metadata_path <- function(
@@ -388,7 +500,9 @@ ecoda_hpc_sample_metadata_path <- function(
 # Build the in-memory validation object consumed by the existing DESeq2/CLR
 # routines.  This validates the already serialized one-row-per-Sample table;
 # it never inspects cells or performs a majority vote.  Breast's literal
-# ``unknown`` class is explicitly allowed by the exporter policy.
+# ``unknown`` class is explicitly allowed by the exporter policy.  In a
+# multi-key design, an individual constant technical key is retained in the
+# contract when the combined design still has at least two levels.
 ecoda_hpc_sample_metadata_validation <- function(
   metadata,
   batch_keys,
@@ -441,8 +555,8 @@ ecoda_hpc_sample_metadata_validation <- function(
     levels <- .ecoda_batch_raw_sort(
       unique(canonical), paste0(key, " sample levels")
     )
-    if (length(levels) < 2L) {
-      stop("Corrected sample metadata technical key has one level: ", key)
+    if (length(levels) < 1L) {
+      stop("Corrected sample metadata technical key has no levels: ", key)
     }
     canonical_columns[[key]] <- canonical
     per_key_levels[[key]] <- levels
@@ -474,8 +588,16 @@ ecoda_hpc_sample_metadata_validation <- function(
   } else {
     character()
   }
-  if (length(keys) >= 2L && length(composite_levels) < 2L) {
-    stop("Corrected sample metadata composite batch has one level")
+  effective_batch_keys <- unname(keys[vapply(
+    per_key_levels,
+    function(levels) length(levels) >= 2L,
+    logical(1)
+  )])
+  non_estimable_batch_keys <- unname(setdiff(keys, effective_batch_keys))
+  correction_state <- if (length(effective_batch_keys)) {
+    "BATCH_CORRECTION"
+  } else {
+    "NO_CORRECTION"
   }
   list(
     valid = TRUE,
@@ -487,6 +609,9 @@ ecoda_hpc_sample_metadata_validation <- function(
     ordered_keys = unname(keys),
     keys = unname(keys),
     key_count = as.integer(length(keys)),
+    effective_batch_keys = effective_batch_keys,
+    non_estimable_batch_keys = non_estimable_batch_keys,
+    correction_state = correction_state,
     scalarization = if (length(keys) >= 2L) "composite_v1" else "direct_v1",
     sample_ids = sample_ids,
     sample_group_ids = sample_ids,

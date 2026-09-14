@@ -130,6 +130,18 @@ _PIPELINE3_METHODS = frozenset(
     }
 )
 
+_CORRECTED_FINAL_CONSUMER_METHODS = frozenset(
+    {
+        "pseudobulk",
+        "gloscope",
+        "composition",
+        "Pseudobulk",
+        "GloScope",
+        "ECODA_authors_HR",
+    }
+)
+
+
 
 def _corrected_summary_required(
     view,
@@ -137,8 +149,21 @@ def _corrected_summary_required(
     require_corrected_summary,
     allow_missing_corrected_summary,
     expected_batch_contract,
+    corrected_final_consumer=False,
 ):
     """Resolve the explicit summary policy for corrected H5AD validation."""
+    if corrected_final_consumer:
+        if (
+            view != "batch_effect_corrected"
+            or method not in _CORRECTED_FINAL_CONSUMER_METHODS
+            or expected_batch_contract is None
+            or allow_missing_corrected_summary
+        ):
+            raise ValueError(
+                "corrected_final_consumer requires a corrected Stage 5 "
+                "consumer method and expected configuration identity"
+            )
+        return False
     if allow_missing_corrected_summary:
         if (
             view != "batch_effect_corrected"
@@ -759,16 +784,17 @@ def validate_benchmark_h5ad_contract(
     batch_contract=None,
     require_corrected_summary=True,
     allow_missing_corrected_summary=False,
+    corrected_final_consumer=False,
 ):
-
     """Reject incomplete AnnData artifacts before benchmark computation.
 
     Pipeline 3 may explicitly pass ``allow_missing_corrected_summary=True``
     (with an expected configuration identity) because its corrected H5AD
-    persists configuration identity only.  The option is rejected for
-    ordinary corrected consumers; their default summary requirement remains
-    strict.  ``require_corrected_summary=False`` is retained as the
-    equivalent explicit Python API.
+    persists configuration identity only.  Corrected-final Stage 5 consumers
+    use the separate ``corrected_final_consumer=True`` flag; this preserves
+    the consumer method name while allowing the summary-free producer
+    identity.  Both opt-ins are explicit and ordinary corrected consumers
+    remain strict.
     """
     if view not in REQUIRED_OBSM:
         raise ValueError(f"Unknown preprocessing view for h5ad contract: {view}")
@@ -778,6 +804,7 @@ def validate_benchmark_h5ad_contract(
         require_corrected_summary,
         allow_missing_corrected_summary,
         expected_batch_contract,
+        corrected_final_consumer,
     )
     if (
         view == "batch_effect_corrected"
@@ -880,14 +907,15 @@ def validate_benchmark_h5ad_path(
     batch_contract=None,
     require_corrected_summary=True,
     allow_missing_corrected_summary=False,
+    corrected_final_consumer=False,
 ):
     """Validate persisted h5ad structure without materializing AnnData.
 
     Pipeline 3 may explicitly pass ``allow_missing_corrected_summary=True``
     (with an expected configuration identity) because its corrected H5AD
-    persists configuration identity only.  Ordinary corrected consumers keep
-    the strict summary requirement.  ``require_corrected_summary=False`` is
-    retained as the equivalent explicit Python API.
+    persists configuration identity only.  Corrected-final Stage 5 consumers
+    use the separate ``corrected_final_consumer=True`` flag; ordinary
+    corrected consumers retain the strict summary requirement.
     """
     import h5py
 
@@ -901,6 +929,7 @@ def validate_benchmark_h5ad_path(
         require_corrected_summary,
         allow_missing_corrected_summary,
         expected_batch_contract,
+        corrected_final_consumer,
     )
     if (
         view == "batch_effect_corrected"
