@@ -657,11 +657,13 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
 3. **Repository backup transfer completed with transfer sanity verification.**
    The timestamped Yggdrasil copy
    `ECODA_paper_repo_20260914T212143Z_69a7443` is approximately `23G` and
-   has the expected source commit
-   `69a744344c6ce0cb1a91a3904a07daabc6bb8070`. The full content checksum dry
-   run was stopped after exceeding the practical time budget; its repository
-   status scan was also not used as a gate. Record
-   `CONTENT_CHECKSUM=DEFERRED` and rely on the successful rsync marker,
+   includes source commit
+   `69a744344c6ce0cb1a91a3904a07daabc6bb8070`. The subsequent plan-status
+   commit(s), including this checkpoint, are not in that mirror; treat it as
+   a historical repository backup rather than current compute provenance.
+   The full content checksum dry run was stopped after exceeding the
+   practical time budget; its repository status scan was not used as a gate.
+   Record `CONTENT_CHECKSUM=DEFERRED` and rely on the successful rsync marker,
    destination presence, commit identity, and optional rough size sanity.
 4. **Yggdrasil compute portability is blocked.** The read-only audit found
    Slurm and Apptainer but no `pixi`, `uv`, or `Rscript`; canonical
