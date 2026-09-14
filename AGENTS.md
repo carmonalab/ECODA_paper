@@ -89,16 +89,25 @@ checksum mismatch, worker failure, or exhausted OOM retry must fail closed.
 - Every full-cohort preprocessing, annotation, benchmark, evidence, or
   correction run MUST use the checked-in `durable-hpc-gate-ecoda` profile.
   Direct SSH-launched long-running wrappers are not an acceptable substitute.
-- **Canonical host policy:** `bamboo` is the default and canonical host for
-  normal ECODA Pipeline 1–5 durable compute and gates. `yggdrasil`, reached as
-  `ssh yggdrasil`, is never an implicit compute host. Only for the
-  2026-09-15–18 Bamboo maintenance window may it be used as the explicitly
-  named temporary backup destination for repository/scratch clone and restore
-  checks. This does not change the durable-gate `remote_host=bamboo` policy,
-  source/runtime contracts, or NAS synchronization. Bamboo↔Yggdrasil transfer
-  requires an explicitly configured SSH key or agent forwarding; passwords
-  must never be stored or used. Every backup command states its host,
-  source, destination, and scope.
+- **Current user-directed host policy:** `YGGDRASIL_ACTIVE_TARGET=1` and
+  `YGGDRASIL_DEFAULT=1` are in force for this plan until the user explicitly
+  directs a return to Bamboo. Do not infer a host change from the date or
+  maintenance window. All authoring and pipeline-file changes happen on the
+  local workstation, then are committed and pushed; Yggdrasil pulls the exact
+  committed revision. Never edit the Yggdrasil checkout directly.
+- Yggdrasil is the default compute, data, results, and backup host for the
+  remaining named work. Bamboo is source/fallback infrastructure only unless
+  the user explicitly reverses this policy. No Yggdrasil pipeline job may run
+  until the portability gate and Ygg-compatible durable profile pass; the
+  current profile still declares `remote_host=bamboo`, which is an active
+  migration constraint.
+- Yggdrasil and Bamboo have separate storage. The mirrored working paths are
+  `~/ECODA_paper` for the repository and `~/scratch/ECODA_paper` for data and
+  results. NAS mounts and runtime/tool paths must be checked on the active
+  host rather than assumed from Bamboo.
+- Bamboo↔Yggdrasil transfer requires an explicitly configured SSH key or
+  agent forwarding; passwords must never be stored or used. Every backup
+  command states its host, source, destination, and scope.
 - Arrays that can OOM MUST use a compute-node watchdog with OOM-only
   resubmission of affected manifest rows, bounded memory escalation, and
   fail-closed handling of non-OOM failures or an exhausted ceiling.
@@ -195,8 +204,10 @@ checksum mismatch, worker failure, or exhausted OOM retry must fail closed.
 - `tests/` — focused standalone regressions.
 - `data/` — large/gitignored data; never scan recursively or delete
   recursively without explicit confirmation.
-- On `bamboo`, `$HOME/scratch/ECODA_paper` is data storage, not a git clone;
-  the HPC repository is `$HOME/ECODA_paper`.
+- On Yggdrasil, `$HOME/scratch/ECODA_paper` is the active data/results tree;
+  the active HPC repository is `$HOME/ECODA_paper`. Bamboo paths are
+  source/fallback paths only until the user explicitly reverses the host
+  policy.
 
 ## Runtime and tooling
 

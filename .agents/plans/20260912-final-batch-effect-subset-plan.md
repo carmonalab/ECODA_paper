@@ -21,58 +21,60 @@ Every operation remains narrowly scoped: no broad or inferred selection, no over
   or overwrite is allowed.
 - Batch-effect views do not invoke Pipeline 4 annotation. Preserve configured
   source/author cell-type columns and keep biological labels evaluation-only.
-- Bamboo remains the default compute host for ordinary production work. The
-  user has now explicitly authorized Yggdrasil as a temporary compute host for
-  the named remaining Stage 3/Stage 5 lanes during the Bamboo maintenance
-  window; it is not an implicit fallback.
-- Yggdrasil remains the explicitly authorized backup destination. Yggdrasil
-  compute is permitted only after a read-only portability audit proves that
-  the current source, runtime, scheduler, configured paths, data layout,
-  ownership, and durable-gate contract work without pipeline-file changes.
+- Yggdrasil is the default compute, data, results, and backup host for this
+  plan until the user explicitly directs a return to Bamboo. Bamboo is
+  source/fallback infrastructure only during this active handoff; do not
+  infer a return from the date or maintenance window.
+- All authoring and pipeline-file changes remain local-workstation changes:
+  commit and push them, then pull the exact committed revision on Yggdrasil.
+  Never edit the Yggdrasil checkout directly. Yggdrasil compute still requires
+  the portability gate and a Ygg-compatible durable profile.
 - Every future full-cohort operation uses the checked-in
   `durable-hpc-gate-ecoda` workflow, an exact run-owned selection, immutable
   source/runtime/auxiliary identities, atomic outputs, checksums, one
   unbounded durable wait, one terminal inspection over every emitted ID, and
   the required Luna Max review.
-### Explicit Yggdrasil compute handoff
+### Yggdrasil default compute policy
 
-The user has explicitly authorized Yggdrasil as the temporary compute host for
-the remaining named work during the Bamboo maintenance window. This is a
-run-specific exception, not an implicit fallback and not a change to the
-canonical Bamboo default. No Yggdrasil job or pipeline script may run until a
-read-only portability audit proves that the current source snapshot, runtime
-identity, scheduler, configured paths, scratch/data layout, ownership,
-checksums, NAS/result handling, and durable-gate workflow work without
-pipeline-file changes.
+Yggdrasil is the user-directed default compute, data, results, and backup host
+for this plan until the user explicitly directs a return to Bamboo. All
+authoring and pipeline-file changes happen on the local workstation, then are
+committed and pushed; Yggdrasil pulls the exact committed revision. Never edit
+the Yggdrasil checkout directly. Bamboo is source/fallback infrastructure only.
 
-If the audit requires any pipeline-file, configuration, runtime, or durable
-profile change, stop and report the required overhaul; update this plan only
-and wait for explicit user approval. If it passes unchanged, the remaining
-selections on Yggdrasil are exactly the two Alzheimer Stage 3 view rows, the
-two explicit Alzheimer Stage 5 lanes, and the eight-dataset corrected-final
-Stage 5 recovery with all 32 rows. No partial dataset/method subset is
-authorized.
-### Yggdrasil portability audit — 2026-09-14
+Operationally, `PORTABILITY_AUDIT=IN_PROGRESS`: no Yggdrasil pipeline job may
+run until the canonical repository move, scratch paths, pinned runtime,
+scheduler, NAS/result handling, and Ygg-compatible durable profile pass the
+minimal checks. If a pipeline-file or configuration change is required, make
+it locally, commit and push it, pull the exact revision on Yggdrasil, and
+record the change. The remaining selections are exactly the two Alzheimer
+Stage 3 view rows, the two explicit Alzheimer Stage 5 lanes, and the full
+eight-dataset corrected-final Stage 5 recovery with all 32 rows.
+### Yggdrasil portability audit — 2026-09-14 (in progress)
 
-`PORTABILITY_AUDIT=BLOCKED`. Read-only checks found Slurm and Apptainer on
-Yggdrasil, but no `pixi`, `uv`, or `Rscript`; the canonical
-`~/ECODA_paper`, `~/scratch/ECODA_paper`, runtime, and source-snapshot paths
-are absent. The only repository copy is the older backup clone at
-`~/scratch/_ecoda_backups/ECODA_paper_repo_20260914`, still at
-`751c3f7fd8d9a863d6940bc37b1269fa785c06d4` with an untracked verification
-file. Yggdrasil and Bamboo have separate storage, and the HPC documentation
-states that jobs cannot be submitted from one cluster to the other. The
-checked-in durable profile also restricts `remote_host` to `bamboo`.
+`YGGDRASIL_DEFAULT=1` and `PORTABILITY_AUDIT=IN_PROGRESS`. The complete
+scratch mirror has been reclassified by explicit user decision as the active
+Yggdrasil working tree at `~/scratch/ECODA_paper`; the separate scratch backup
+path no longer exists as an independent copy. The repository mirror is still
+being moved from scratch to the canonical `~/ECODA_paper` home path; its
+source remains present until the cross-filesystem move completes.
 
-The required migration is therefore a major control-plane/runtime handoff:
-transfer or reconstruct the current repository, host environment, FORMAT 2
-runtime, frozen auxiliary root, source/data tree, scheduler/resource
-selection, durable-gate host/path contracts, and result/NAS handling on
-Yggdrasil. No Yggdrasil pipeline script or job may run, and no pipeline file
-may be edited, until that migration is explicitly designed and approved.
-The separately authorized full Bamboo→Yggdrasil rsync remains allowed as a
-backup only after the Stage 2 writer is terminal and the source is quiescent;
-it is not compute setup and must not be treated as a portability pass.
+Minimal checks so far: Yggdrasil has Slurm, Apptainer, `rsync`, Git, and `jq`;
+the copied FORMAT 2 container runs Python `3.13.14` and R `4.5.2`; the
+canonical scratch tree is present; and CPU partitions are visible. System
+`pixi`, `uv`, and `Rscript` are absent, but the repository mirror contains its
+`.pixi` environment and must be checked from the completed canonical repo.
+The first CPU smoke submission did not yield a usable completed result and is
+not a scheduler pass. The durable profile still declares `remote_host=bamboo`,
+and the Bamboo NAS mount is not present on Yggdrasil.
+
+Before any Yggdrasil pipeline script or job, complete the repository move,
+pull the exact local committed revision, validate the canonical runtime and
+source/auxiliary paths, and resolve the Yggdrasil durable-gate host/path and
+NAS contracts. If pipeline-file or control-plane changes are required, make
+them locally, commit and push them, pull the exact revision on Yggdrasil, and
+record the change. No direct Yggdrasil checkout edits, pipeline jobs, or
+partial dataset/method selections are allowed.
 
 ### Phase order
 
@@ -87,25 +89,25 @@ it is not compute setup and must not be treated as a portability pass.
    and 104 samples. The local gate retains a completion-transport
    `PRELAUNCH_STOP`; its accounting/artifact audit evidence is preserved and
    requires explicit reviewer disposition before formal release.
-3. **Full scratch backup.** Run the complete
-   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper` clone to the explicitly
-   authorized Yggdrasil destination after Stage 2 is terminal and no writer
-   remains. The Mac is now available. Use direct Bamboo→Yggdrasil rsync,
-   preserve manifests/checksums/logs, and do not use a live-tree clone.
-4. **Yggdrasil portability audit.** Before any Yggdrasil compute, perform
-   read-only checks of scheduler availability, partitions/resources, current
-   source/repository identity, runtime FORMAT 2 image and manifest,
-   configured paths, scratch/data layout, ownership/checksum handling, NAS
-   visibility, and durable-gate host support. Do not run pipeline scripts or
-   submit jobs during this audit.
-5. **Remaining Yggdrasil compute, only if unchanged portability passes.**
-   Run the explicit Alzheimer Stage 3 uncorrected/corrected rows, the
-   explicit Alzheimer Stage 5 uncorrected/corrected lanes, and the exact
-   eight-dataset corrected-final Stage 5 recovery with 32 rows. If the audit
-   requires pipeline-file, configuration, runtime, or durable-profile
-   changes, update this plan only and wait for user approval; do not launch
-   Yggdrasil compute.
-6. **Final synchronization and analysis.** After reviewed terminal artifacts,
+3. **Yggdrasil scratch working tree.** Complete. The transfer-sanity-passed
+   scratch mirror was moved to the active canonical
+   `~/scratch/ECODA_paper` path on Yggdrasil. It is now a working tree, not an
+   independent immutable backup.
+4. **Yggdrasil repository working tree.** In progress. Move the repository
+   mirror to the canonical `~/ECODA_paper` home path, then pull the exact
+   latest local committed revision. Do not use the partial cross-filesystem
+   move or run any pipeline script while it is incomplete.
+5. **Minimal Yggdrasil portability checks.** After the repository move,
+   verify canonical source/data/runtime/auxiliary paths, the mirrored Pixi
+   environment, CPU Slurm execution, NAS availability, and the
+   Yggdrasil-compatible durable-gate host/path contract. No pipeline job is
+   authorized during this audit.
+6. **Remaining Yggdrasil compute.** Only after the minimal checks pass, run
+   the explicit Alzheimer Stage 3 uncorrected/corrected rows, the two
+   Alzheimer Stage 5 lanes, and the full eight-dataset corrected-final Stage 5
+   recovery with all 32 rows. Keep all authoring local: commit/push, then pull
+   the exact revision on Yggdrasil.
+7. **Final synchronization and analysis.** After reviewed terminal artifacts,
    synchronize only manifest-listed outputs, checksums, and metadata, then
    execute the final analysis lane.
 
