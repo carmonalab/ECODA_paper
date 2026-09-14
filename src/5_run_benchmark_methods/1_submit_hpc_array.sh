@@ -296,8 +296,8 @@ stage5_validate_final_selection() {
     corrected_final)
       expected_pass="corrected"
       expected_view="batch_effect_corrected"
-      [[ ${TARGET_METHODS_SET} -eq 0 && ${FORCE_TARGETED_ARG} -eq 0 ]] || {
-        echo "ERROR: corrected_final does not support partial or targeted selections." >&2
+      [[ ${FORCE_TARGETED_ARG} -eq 0 ]] || {
+        echo "ERROR: corrected_final does not support --force-targeted." >&2
         return 1
       }
       [[ ${FORCE_ARG} -eq 0 ]] || {
@@ -348,9 +348,11 @@ stage5_validate_final_selection() {
     return 1
   fi
   if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
-    [[ "${variant}" == final && "${PASS_ARG}" == uncorrected &&
-       ${METHODS_SET} -eq 0 && ${FORCE_ARG} -eq 0 ]] || {
-      echo "ERROR: targeted final recovery requires --pass uncorrected and no explicit --methods." >&2
+    [[ (
+         ( "${variant}" == final && "${PASS_ARG}" == uncorrected ) ||
+         ( "${variant}" == corrected_final && "${PASS_ARG}" == corrected )
+       ) && ${METHODS_SET} -eq 0 && ${FORCE_ARG} -eq 0 ]] || {
+      echo "ERROR: targeted final recovery requires the matching batch pass and no explicit --methods." >&2
       return 1
     }
   else
@@ -436,10 +438,6 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     stored_methods="$(sed -n 's/^METHODS=//p' "${sync_metadata}" | head -1 || true)"
     stored_target_methods="$(sed -n 's/^TARGET_METHODS=//p' "${sync_metadata}" | head -1 || true)"
     if [[ -n "${stored_target_methods}" ]]; then
-      [[ "${ANALYSIS_VARIANT_ARG}" != corrected_final ]] || {
-        echo "ERROR: corrected_final sync-only metadata cannot contain target methods." >&2
-        exit 1
-      }
       [[ ${METHODS_SET} -eq 0 &&
          ( ${TARGET_METHODS_SET} -eq 0 ||
            "${TARGET_METHODS_ARG}" == "${stored_target_methods}" ) ]] || {
@@ -1568,6 +1566,15 @@ stage5_method_is_forced() {
   done
   return 1
 }
+stage5_target_method_selected() {
+  local method="$1" target_method
+  [[ ${TARGET_METHODS_SET} -eq 1 ]] || return 1
+  for target_method in "${TARGET_METHODS[@]}"; do
+    [[ "${target_method}" == "${method}" ]] && return 0
+  done
+  return 1
+}
+
 
 
 stage5_configured_output_name() {
@@ -3571,7 +3578,8 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
           echo "Skipping validated Stage 5 pseudobulk cache ${ds}/${view}/${method}."
           continue
         fi
-        if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
+        if [[ ${TARGET_METHODS_SET} -eq 1 ]] &&
+           ! stage5_target_method_selected prepare_pseudobulk; then
           stage5_abort \
             "targeted Stage 5 methods require a validated pseudobulk cache for ${ds}/${view}"
         fi

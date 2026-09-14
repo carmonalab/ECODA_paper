@@ -111,6 +111,30 @@ def main() -> None:
         worker_data.write_h5ad(worker_path)
 
         worker = load_python_worker()
+        policy_data = SimpleNamespace(
+            obs=pd.DataFrame(
+                {
+                    "assay": ["rna", "rna", "rna"],
+                    "sex": ["F", "M", "F"],
+                }
+            )
+        )
+        assert worker._effective_batch_keys_from_obs(
+            policy_data, ("assay", "sex")
+        ) == ("sex",)
+        assert worker._effective_batch_keys_from_obs(
+            policy_data, ("assay",)
+        ) == ()
+        annotated = worker._annotate_corrected_final_batch_contract(
+            {"method_id": "mrvi"},
+            ("assay", "sex"),
+            ("sex",),
+            "mrvi",
+        )
+        assert annotated["correction_state"] == "BATCH_CORRECTION"
+        assert annotated["effective_batch_keys"] == ["sex"]
+        assert annotated["non_estimable_batch_keys"] == ["assay"]
+
         captured = {}
 
         def fake_run_mrvi(adata, device, output_path, batch_key=None):

@@ -257,6 +257,48 @@ def _build_cell_batch_composite(
     adata.obs[RESERVED_OBS_NAME] = values
     return RESERVED_OBS_NAME
 
+def _effective_batch_keys_from_obs(adata, batch_keys):
+    """Return technical keys with at least two nonmissing cell levels."""
+    effective = []
+    for key in tuple(batch_keys):
+        if key not in adata.obs.columns:
+            raise ValueError(
+                f"corrected batch column {key!r} is missing from loaded H5AD"
+            )
+        values = adata.obs[key]
+        values = values.loc[~values.isna()].astype(str)
+        if values.nunique(dropna=True) >= 2:
+            effective.append(key)
+    return tuple(effective)
+
+
+def _annotate_corrected_final_batch_contract(
+    identity, configured_batch_keys, effective_batch_keys, method
+):
+    """Record the effective corrected-final technical design explicitly."""
+    configured = tuple(configured_batch_keys)
+    effective = tuple(effective_batch_keys)
+    non_estimable = tuple(key for key in configured if key not in effective)
+    if not effective:
+        state = "NO_CORRECTION"
+        formula = "NO_CORRECTION: no estimable technical batch key"
+    elif method == "mrvi":
+        scalar = effective[0] if len(effective) == 1 else RESERVED_OBS_NAME
+        state = "BATCH_CORRECTION"
+        formula = f"MRVI.setup_anndata(batch_key={scalar}); effective_batch_keys=[{','.join(effective)}]"
+    else:
+        state = "BATCH_CORRECTION"
+        formula = (
+            "embedding=X_pca_harmony_batch_effect_corrected"
+            f"; effective_batch_keys=[{','.join(effective)}]"
+        )
+    annotated = dict(identity)
+    annotated["effective_batch_keys"] = list(effective)
+    annotated["non_estimable_batch_keys"] = list(non_estimable)
+    annotated["correction_state"] = state
+    annotated["correction_formula"] = formula
+    return annotated
+
 
 def _validate_h5ad_path(
     path,
@@ -1986,6 +2028,7 @@ def process_dataset(args, ds_name, entry):
     view_output = entry["views"][view_name]["output_file"]
     input_path = Path(args.input_dir) / view_output
     corrected_batch_keys = ()
+    effective_batch_keys = ()
     corrected_validation_summary = None
     expected_h5ad_batch_contract = None
     expected_stage5_batch_contract = None
@@ -2009,6 +2052,7 @@ def process_dataset(args, ds_name, entry):
             corrected_batch_keys,
             corrected_validation_summary,
         )
+        effective_batch_keys = corrected_batch_keys
         if args.method == "pilotgm":
             raise ValueError(
                 "PILOT-GM-VAE is not scheduled for corrected batch-effect runs"
@@ -2212,6 +2256,23 @@ def process_dataset(args, ds_name, entry):
             require_corrected_summary=require_corrected_summary,
         )
         adata = adata.to_memory()
+    if analysis_variant == "corrected_final":
+        effective_batch_keys = _effective_batch_keys_from_obs(
+            adata,
+            corrected_batch_keys,
+        )
+        expected_stage5_batch_contract = (
+            _annotate_corrected_final_batch_contract(
+                expected_stage5_batch_contract,
+                corrected_batch_keys,
+                effective_batch_keys,
+                args.method,
+            )
+        )
+        technical_batch = (
+            effective_batch_keys[0] if len(effective_batch_keys) == 1 else None
+        )
+
     profile_shape = source_shape or (adata.n_obs, adata.n_vars)
     selected_suffix = (
         f" selected_genes={adata.n_vars}" if source_shape is not None else ""
@@ -2262,7 +2323,9 @@ def process_dataset(args, ds_name, entry):
                 f"Cell type column '{ct_col}' not found in obs of {ds_name} "
                 f"(available: {list(sub.obs.columns)})."
             )
-        run_batch_key = technical_batch
+        run_batch_key = (
+            effective_batch_keys[0] if len(effective_batch_keys) == 1 else None
+        )
         temporary_batch_key = None
 
         # Exact legacy method strings (constants.R + notebook recodes depend
@@ -2278,18 +2341,18 @@ def process_dataset(args, ds_name, entry):
             if (
                 args.method == "mrvi"
                 and analysis_pass == "corrected"
-                and len(corrected_batch_keys) >= 2
+                and len(effective_batch_keys) >= 2
             ):
                 if analysis_variant == "corrected_final":
                     temporary_batch_key = _build_cell_batch_composite(
                         sub,
-                        corrected_batch_keys,
+                        effective_batch_keys,
                         accepted_sentinel_values=accepted_sentinel_values,
                     )
                 else:
                     batch_composite = build_batch_composite(
                         sub.obs,
-                        corrected_batch_keys,
+                        effective_batch_keys,
                     )
                     sub.obs = batch_composite.frame
                     temporary_batch_key = batch_composite.column_name

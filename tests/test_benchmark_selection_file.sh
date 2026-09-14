@@ -278,6 +278,43 @@ if grep -Eq 'ANALYSIS_ROOT=.*/batch_effect/(uncorrected|uncorrected_final)(,|$)'
   echo "corrected-final worker selection leaked an uncorrected analysis root" >&2
   exit 1
 fi
+# The validator-only full corrected fixture owns the same method keys.  Clear
+# those inert fixture owners before exercising the independent targeted scope.
+rm -rf "${HPC_ROOT}/_ecoda_owners"
+
+CORRECTED_TARGET_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+    BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
+    bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${CORRECTED_FINAL_SELECTION}" \
+    --pass corrected \
+    --analysis-variant corrected_final \
+    --target-methods "prepare_pseudobulk,pseudobulk,gloscope,composition"
+)"
+CORRECTED_TARGET_RUN_ID="$(printf '%s\n' "${CORRECTED_TARGET_OUTPUT}" | sed -n 's/^BATCH_EFFECT_RUN_ID=//p')"
+
+test -n "${CORRECTED_TARGET_RUN_ID}"
+CORRECTED_TARGET_METADATA="${HPC_ROOT}/_ecoda_runs/${CORRECTED_TARGET_RUN_ID}/metadata"
+grep -q '^TARGET_METHODS=prepare_pseudobulk,pseudobulk,gloscope,composition$' \
+  "${CORRECTED_TARGET_METADATA}"
+set +e
+CORRECTED_TARGET_SYNC_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+    BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
+    bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --sync-only "${CORRECTED_TARGET_RUN_ID}" 2>&1
+)"
+CORRECTED_TARGET_SYNC_RC=$?
+set -e
+[[ ${CORRECTED_TARGET_SYNC_RC} -ne 0 ]] || {
+  echo "targeted corrected-final sync unexpectedly succeeded without artifacts" >&2
+  exit 1
+}
+if printf '%s\n' "${CORRECTED_TARGET_SYNC_OUTPUT}" |
+   grep -q 'corrected_final sync-only metadata cannot contain target methods'; then
+  echo "targeted corrected-final sync rejected its run-bound target methods" >&2
+  exit 1
+fi
 CORRECTED_FINAL_SHORT_SELECTION="${TMP_DIR}/corrected-final-short-selection.tsv"
 printf 'Joanito\tbatch_effect_corrected\tbatch_effect_corrected\nStephenson\tbatch_effect_corrected\tbatch_effect_corrected\nAlzheimer\tbatch_effect_corrected\tbatch_effect_corrected\nBreast_cancer\tbatch_effect_corrected\tbatch_effect_corrected\nCovid19_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nKidney_KPMP_full\tbatch_effect_corrected\tbatch_effect_corrected\nDiabetes\tbatch_effect_corrected\tbatch_effect_corrected\nLupus_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\n' \
   > "${CORRECTED_FINAL_SHORT_SELECTION}"
