@@ -2341,6 +2341,7 @@ ecoda_wait_scalar_accounting() {
 ecoda_wait_array_accounting() {
   local job="$1" expected="$2" poll_seconds="${3:-30}"
   local rows jid state found pending empty=0 missing=0 scheduler_active active_jobs
+  [[ "${expected}" =~ ^[1-9][0-9]*$ ]] || return 1
   while :; do
     rows="$(sacct -j "${job}" -n -P --format=JobID,State,ExitCode 2>/dev/null || true)"
     scheduler_active=0

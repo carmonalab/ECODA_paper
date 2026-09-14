@@ -1915,7 +1915,7 @@ stage5_compute_h5ad_preflight() {
   local status_dir="${ECODA_RUN_ROOT}/status/h5ad_preflight"
   local preflight_logs="${ECODA_RUN_ROOT}/logs"
   local ds view source_path safe status state status_run status_dataset status_view status_task
-  local preflight_id preflight_rc count=0
+  local preflight_id preflight_rc count=0 preflight_expected
   local identity_path
   local preflight_runtime_export
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
@@ -2010,11 +2010,16 @@ stage5_compute_h5ad_preflight() {
       echo "ERROR: Stage 5 H5AD preflight scheduler wait failed: job=${preflight_id:-unknown} rc=${preflight_rc}" >&2
       return 1
     fi
-  if ! ecoda_wait_array_accounting "${preflight_id}" "${count}" \
-      "${H5AD_PREFLIGHT_ACCOUNTING_POLL_SECONDS:-30}"; then
-    echo "ERROR: Stage 5 H5AD preflight array did not settle: job=${preflight_id}" >&2
-    return 1
-  fi
+    preflight_expected="$(awk 'END { print NR }' "${preflight_manifest}")" || return 1
+    [[ "${preflight_expected}" =~ ^[1-9][0-9]*$ ]] || {
+      echo "ERROR: Stage 5 H5AD preflight manifest has no rows" >&2
+      return 1
+    }
+    if ! ecoda_wait_array_accounting "${preflight_id}" "${preflight_expected}" \
+        "${H5AD_PREFLIGHT_ACCOUNTING_POLL_SECONDS:-30}"; then
+      echo "ERROR: Stage 5 H5AD preflight array did not settle: job=${preflight_id}" >&2
+      return 1
+    fi
   ecoda_wait_h5ad_preflight_status_files "${preflight_manifest}" "${status_dir}" || {
     echo "ERROR: Stage 5 H5AD preflight statuses did not settle within ${H5AD_PREFLIGHT_STATUS_GRACE_SECONDS:-60}s" >&2
     return 1

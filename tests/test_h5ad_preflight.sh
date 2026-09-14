@@ -264,6 +264,31 @@ STUB
 chmod +x "${TMP_DIR}/bin/sbatch"
 export PATH="${TMP_DIR}/bin:${PATH}"
 source "${ROOT}/src/utils/bash/h5ad_preflight_submit.sh"
+if ecoda_wait_array_accounting 812345 0 0 >/dev/null 2>&1; then
+  echo "array accounting accepted an empty expected count" >&2
+  exit 1
+fi
+cat > "${TMP_DIR}/bin/sacct" <<'STUB'
+#!/bin/bash
+case "$*" in
+  *812345*) printf '812345_1|COMPLETED|0:0\n' ;;
+  *812346*) ;;
+  *) exit 1 ;;
+esac
+STUB
+cat > "${TMP_DIR}/bin/squeue" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+chmod +x "${TMP_DIR}/bin/sacct" "${TMP_DIR}/bin/squeue"
+if ! ecoda_wait_array_accounting 812345 1 0 >/dev/null 2>&1; then
+  echo "array accounting rejected complete task evidence" >&2
+  exit 1
+fi
+if ecoda_wait_array_accounting 812346 1 0 >/dev/null 2>&1; then
+  echo "array accounting accepted incomplete task evidence" >&2
+  exit 1
+fi
 ecoda_wait_h5ad_preflight_status_files "${MANIFEST}" "${STATUS_DIR}"
 runtime_export="$(ecoda_runtime_export_csv stage3 0)"
 IFS=, read -r -a runtime_fields <<< "${runtime_export}"
