@@ -11,7 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from anndata import AnnData
 
 from src.utils.py import benchmark_h5ad_contract as validator
-from src.utils.py.batch_contract import build_batch_contract_identity
+from src.utils.py.batch_contract import (
+    build_batch_contract_identity,
+    build_historical_batch_contract_identity,
+)
 from src.utils.py.benchmark_h5ad_contract import (
     REQUIRED_OBSM,
     validate_benchmark_h5ad_contract,
@@ -143,10 +146,52 @@ def assert_corrected_final_consumer_policy():
         )
 
 
+def assert_active_corrected_model_policy():
+    """Accept active limma identities and reject retired model IDs."""
+    for method_id, model_id in (
+        ("ECODA_authors_HR", "limma_fixed_effects_v1"),
+        ("Pseudobulk", "pseudobulk_limma_fixed_effects_v1"),
+    ):
+        identity = build_batch_contract_identity(
+            ["batch"],
+            sample_column="Sample",
+            method_id=method_id,
+            model_id=model_id,
+        )
+        validator.validate_batch_contract_identity(
+            batch_contract=identity,
+            label=f"{method_id} active identity",
+        )
+
+    historical_identities = (
+        ("ECODA_authors_HR", "ecoda_additive_random_intercepts_v1"),
+        ("Pseudobulk", "pseudobulk_composite_v1"),
+    )
+    for method_id, model_id in historical_identities:
+        identity = build_historical_batch_contract_identity(
+            ["batch"],
+            sample_column="Sample",
+            method_id=method_id,
+            model_id=model_id,
+        )
+        try:
+            validator.validate_batch_contract_identity(
+                batch_contract=identity,
+                label=f"{method_id} historical identity",
+            )
+        except ValueError as exc:
+            assert "unsupported model policy" in str(exc), str(exc)
+        else:
+            raise AssertionError(
+                f"historical model ID {model_id!r} was accepted by the "
+                "active H5AD identity validator"
+            )
+
 
 def main():
     assert_batch_contract_argument_boundary()
     assert_corrected_final_consumer_policy()
+    assert_active_corrected_model_policy()
 
     for view in REQUIRED_OBSM:
         kwargs = {}
