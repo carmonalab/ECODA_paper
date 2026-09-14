@@ -641,7 +641,7 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    `donor_id_assay` samples. The local gate retains a completion-transport
    `PRELAUNCH_STOP`; its accounting/artifact audit evidence is preserved and
    requires explicit reviewer disposition before formal release.
-2. **Full scratch backup completed with transfer sanity verification.** After a
+2. **Full scratch backup passed the transfer-sanity gate.**
    fresh quiescence check found no user Slurm jobs or ECODA writers, direct
    Bamboo→Yggdrasil rsync completed in tmux:
    `ecoda-bak-20260914T193751Z_4c6003c`. The source was
@@ -651,9 +651,10 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    and tmux processes are absent, and the destination is approximately
    `2.3T` with a coarse inode sanity count of `87,764`. It used no
    `--delete` or `--inplace`. Exact size equality and content hashes were
-   intentionally not required; record `CONTENT_CHECKSUM=DEFERRED`.
-   Temporary rsync metadata/partial directories are not integrity failures
-   under this explicitly approved temporary-backup policy.
+   intentionally not required. Record `TRANSFER_SANITY_ONLY=PASSED` and
+   `CONTENT_CHECKSUM=DEFERRED`; temporary rsync metadata/partial directories
+   are not integrity failures under this explicitly approved temporary-backup
+   policy.
 3. **Repository backup transfer completed with transfer sanity verification.**
    The timestamped Yggdrasil copy
    `ECODA_paper_repo_20260914T212143Z_69a7443` is approximately `23G` and
