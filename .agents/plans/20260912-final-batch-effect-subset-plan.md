@@ -52,6 +52,27 @@ selections on Yggdrasil are exactly the two Alzheimer Stage 3 view rows, the
 two explicit Alzheimer Stage 5 lanes, and the eight-dataset corrected-final
 Stage 5 recovery with all 32 rows. No partial dataset/method subset is
 authorized.
+### Yggdrasil portability audit — 2026-09-14
+
+`PORTABILITY_AUDIT=BLOCKED`. Read-only checks found Slurm and Apptainer on
+Yggdrasil, but no `pixi`, `uv`, or `Rscript`; the canonical
+`~/ECODA_paper`, `~/scratch/ECODA_paper`, runtime, and source-snapshot paths
+are absent. The only repository copy is the older backup clone at
+`~/scratch/_ecoda_backups/ECODA_paper_repo_20260914`, still at
+`751c3f7fd8d9a863d6940bc37b1269fa785c06d4` with an untracked verification
+file. Yggdrasil and Bamboo have separate storage, and the HPC documentation
+states that jobs cannot be submitted from one cluster to the other. The
+checked-in durable profile also restricts `remote_host` to `bamboo`.
+
+The required migration is therefore a major control-plane/runtime handoff:
+transfer or reconstruct the current repository, host environment, FORMAT 2
+runtime, frozen auxiliary root, source/data tree, scheduler/resource
+selection, durable-gate host/path contracts, and result/NAS handling on
+Yggdrasil. No Yggdrasil pipeline script or job may run, and no pipeline file
+may be edited, until that migration is explicitly designed and approved.
+The separately authorized full Bamboo→Yggdrasil rsync remains allowed as a
+backup only after the Stage 2 writer is terminal and the source is quiescent;
+it is not compute setup and must not be treated as a portability pass.
 
 ### Phase order
 
