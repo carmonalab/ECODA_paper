@@ -641,29 +641,38 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    `donor_id_assay` samples. The local gate retains a completion-transport
    `PRELAUNCH_STOP`; its accounting/artifact audit evidence is preserved and
    requires explicit reviewer disposition before formal release.
-2. **Full scratch backup is in progress.** After a fresh quiescence check
-   found no user Slurm jobs or ECODA writers, direct Bamboo→Yggdrasil rsync
-   started under tmux with the Mac awake:
-   `ecoda-bak-20260914T193751Z_4c6003c`. The source is
-   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper`; the destination is
+2. **Full scratch backup completed with transfer sanity verification.** After a
+   fresh quiescence check found no user Slurm jobs or ECODA writers, direct
+   Bamboo→Yggdrasil rsync completed in tmux:
+   `ecoda-bak-20260914T193751Z_4c6003c`. The source was
+   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper`; the destination was
    `/srv/beegfs/scratch/users/h/halterc/_ecoda_backups/ECODA_paper_scratch_20260914T193751Z_4c6003c`.
-   It uses no `--delete` or `--inplace`. Completion is recorded after rsync
-   exit `0`, no failure marker, destination presence, and the success marker.
-   A rough `du -sh` or coarse file-count sanity check may be recorded if
-   inexpensive, but exact size equality and content hashes are not required.
-   Record `CONTENT_CHECKSUM=DEFERRED`; temporary rsync metadata or partial
-   files may differ and are not a transfer failure.
-3. **Repository backup transfer completed.** The timestamped Yggdrasil copy
-   has the expected current source commit and a clean Git worktree. Its full
-   content checksum dry run was stopped after exceeding the practical time
-   budget; record `CONTENT_CHECKSUM=DEFERRED` and rely on rsync exit status,
-   destination presence, and an optional rough size sanity check.
+   The success marker was written at `2026-09-14 22:06:57 UTC`; the rsync
+   and tmux processes are absent, and the destination is approximately
+   `2.3T` with a coarse inode sanity count of `87,764`. It used no
+   `--delete` or `--inplace`. Exact size equality and content hashes were
+   intentionally not required; record `CONTENT_CHECKSUM=DEFERRED`.
+   Temporary rsync metadata/partial directories are not integrity failures
+   under this explicitly approved temporary-backup policy.
+3. **Repository backup transfer completed with transfer sanity verification.**
+   The timestamped Yggdrasil copy
+   `ECODA_paper_repo_20260914T212143Z_69a7443` is approximately `23G` and
+   has the expected source commit
+   `69a744344c6ce0cb1a91a3904a07daabc6bb8070`. The full content checksum dry
+   run was stopped after exceeding the practical time budget; its repository
+   status scan was also not used as a gate. Record
+   `CONTENT_CHECKSUM=DEFERRED` and rely on the successful rsync marker,
+   destination presence, commit identity, and optional rough size sanity.
 4. **Yggdrasil compute portability is blocked.** The read-only audit found
    Slurm and Apptainer but no `pixi`, `uv`, or `Rscript`; canonical
-   `~/ECODA_paper` and `~/scratch/ECODA_paper` are absent; only the old
-   repository backup exists; Bamboo/Yggdrasil storage is separate; and the
-   durable profile restricts `remote_host` to `bamboo`. Record
-   `PORTABILITY_AUDIT=BLOCKED`. No Yggdrasil pipeline script or job may run.
+   `~/ECODA_paper` and `~/scratch/ECODA_paper` are absent; only the current
+   backup copies exist; Bamboo/Yggdrasil storage is separate; and the
+   durable profile restricts `remote_host` to `bamboo`. Bamboo has the
+   `/srv/smednas515.unige.ch/carmona_smb` NAS mount; Yggdrasil does not.
+   Yggdrasil resolves `nasac-evs2.unige.ch` and has `gio`/D-Bus clients, so a
+   user-scoped interactive NASAC mount would be required before any Ygg
+   result/NAS sync. Record `PORTABILITY_AUDIT=BLOCKED`. No Yggdrasil
+   pipeline script or job may run.
 5. **Await explicit migration approval.** The remaining work is the exact
    Alzheimer Stage 3 uncorrected/corrected rows, the two Alzheimer Stage 5
    lanes, and the eight-dataset corrected-final Stage 5 recovery with all 32
