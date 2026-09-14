@@ -625,50 +625,44 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
 
 ### Open items and exact next steps
 
-1. **Verify the current source before snapshotting.** The local implementation
-   and plan update are committed and pushed; unrelated local worktree changes
-   remain unstaged. Bamboo still points to the prior committed source
-   `d6e970b`, and the Yggdrasil repository backup remains at the older
-   baseline. First pass the Bamboo checkout/worktree allowlist, update the
-   clean checkout safely to the current full 40-hex branch commit, and verify
-   that exact hash before any source snapshot or gate preparation.
-2. **Run the controlled Alzheimer Stage 2 exception.** After the current
-   source is verified, first seal the required eight-dataset source/runtime
-   snapshot under its own parent, then create a separate full-hash Stage 2
-   source/runtime snapshot and exact run-owned selector. Use exactly
-   `--datasets Alzheimer --steps alzheimer_donor_assay`, and launch only the
-   donor-by-assay derivative through the durable gate. It may precede the
-   eight-dataset gate because its raw input, derivative, owner, run root, and
-   snapshot parent are disjoint. It does not authorize a configuration change
-   or any Stage 3/5 work.
-3. **Complete the full scratch backup after Stage 2 is terminal.** The user
-   explicitly deferred the clone behind controlled compute. Never copy the
-   active Stage 2 or Stage 5 tree. Use direct Bamboo→Yggdrasil rsync only
-   after stable destination identity and authentication that survives Mac
-   sleep. The fresh BatchMode test without forwarded agent currently fails;
-   a centrally registered Bamboo key or an awake Mac session is therefore
-   still required. Split the 2.3 TB tree into explicit top-level batches,
-   preserve logs/gates/manifests/checksums, and verify source/destination
-   manifests.
-4. **Run the eight-dataset corrected-final gate after the verified backup.**
-   Create a separate current full-hash source/runtime snapshot and the exact
-   eight-row/32-method-row manifest, then launch only if the maintenance
-   feasibility envelope is provable. Do not overlap this gate with the
-   Alzheimer Stage 2 exception in this run; no historical matrix or stale
-   combined-key cache is eligible.
-5. **Continue the Alzheimer follow-up.** After the terminal Stage 2
-   derivative and reviewed eight-dataset gate, change `datasets.json` to
-   `donor_id_assay`, create a new post-derivative source/runtime snapshot,
-   then run the explicit Stage 3 views and one-row Stage 5 lanes. Corrected
-   Alzheimer Stage 5 remains serialized behind the eight-dataset
-   corrected-final root.
-6. **Finalize analysis only after reviewed artifacts are available.**
-   Synchronize only manifest-listed processed/results artifacts and
-   metadata/checksums; do not copy full H5ADs to the Mac or use stale local
-   mirrors.
+1. **Alzheimer Stage 2 is provisionally complete.** The exact one-step gate
+   ran worker `4407671` and watchdog `4407672`; both completed with exit
+   `0:0`. The derivative validator passed for 1,395,601 cells and 104
+   `donor_id_assay` samples. The local gate retains a completion-transport
+   `PRELAUNCH_STOP`; its accounting/artifact audit evidence is preserved and
+   requires explicit reviewer disposition before formal release.
+2. **Full scratch backup is in progress.** After a fresh quiescence check
+   found no user Slurm jobs or ECODA writers, direct Bamboo→Yggdrasil rsync
+   started under tmux with the Mac awake:
+   `ecoda-bak-20260914T193751Z_4c6003c`. The source is
+   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper`; the destination is
+   `/srv/beegfs/scratch/users/h/halterc/_ecoda_backups/ECODA_paper_scratch_20260914T193751Z_4c6003c`.
+   It uses no `--delete` or `--inplace`. Do not declare completion until
+   source/destination path, size, checksum, permission, and second dry-run
+   manifests agree.
+3. **Refresh the repository backup after the scratch transfer is stable.**
+   Bamboo's canonical checkout was safely updated to the current full source
+   commit before the transfer. Refresh the timestamped Yggdrasil repository
+   backup from that verified checkout; preserve the older `751c3f7` clone as
+   historical evidence and do not use it as current compute provenance.
+4. **Yggdrasil compute portability is blocked.** The read-only audit found
+   Slurm and Apptainer but no `pixi`, `uv`, or `Rscript`; canonical
+   `~/ECODA_paper` and `~/scratch/ECODA_paper` are absent; only the old
+   repository backup exists; Bamboo/Yggdrasil storage is separate; and the
+   durable profile restricts `remote_host` to `bamboo`. Record
+   `PORTABILITY_AUDIT=BLOCKED`. No Yggdrasil pipeline script or job may run.
+5. **Await explicit migration approval.** The remaining work is the exact
+   Alzheimer Stage 3 uncorrected/corrected rows, the two Alzheimer Stage 5
+   lanes, and the eight-dataset corrected-final Stage 5 recovery with all 32
+   rows. Running them on Yggdrasil requires an approved migration for the
+   repository, host environment, FORMAT 2 runtime, auxiliary root, scratch
+   data, scheduler/profile/path contracts, and result/NAS handling. If any
+   pipeline-file or configuration change is required, update this plan only
+   and wait.
+6. **Finalize only after reviewed artifacts.** Synchronize manifest-listed
+   outputs and checksums, then execute the final analysis lane.
 
-The user explicitly authorized the controlled Stage 2-before-backup priority
-change. The eight-dataset corrected-final gate remains after the verified
-full scratch clone in this run. No live-tree clone, broad selection, implicit
-snapshot reuse, or launch without exact scope, fresh identities, durable
-terminal audit, synchronization, and review is allowed.
+The user explicitly reprioritized the completed Stage 2 derivative and backup
+over immediate compute migration. The full backup is a backup operation only,
+not evidence that Yggdrasil is compute-ready. No Yggdrasil compute or pipeline
+file edit is authorized until the portability overhaul is approved.
