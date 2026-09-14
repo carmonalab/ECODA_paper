@@ -571,8 +571,9 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    `b4e1135`. Unrelated user worktree changes remain unstaged. `datasets.json`,
    `pixi.toml`, and `pixi.lock` were not changed by this checkpoint. Bamboo's
    canonical checkout and the Yggdrasil repository backup still point to the
-   prior plan commit `751c3f7`; create a new full-hash source snapshot from
-   the latest plan/source commit `041347d` before any compute gate.
+   prior plan commit `751c3f7`; the next source snapshot must use the current
+   full branch HEAD containing the implementation and latest plan checkpoint,
+   not a stale hardcoded commit.
 2. **Finish backup before production compute.** The repository clone is
    verified; the complete 2.3 TB scratch clone has not started. Use only
    direct Bamboo→Yggdrasil rsync, never Mac staging. Agent forwarding is
@@ -580,7 +581,7 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    centrally registered Bamboo key is preferable for a multi-hour transfer.
    Quiesce writers, split scratch into explicit top-level batches, preserve
    logs/gates/manifests/checksums, and verify source/destination manifests.
-3. **Run the eight-dataset corrected-final gate.** After the `041347d`
+3. **Run the eight-dataset corrected-final gate.** After the current full-hash
    source snapshot is sealed; use the exact eight-row selection and emit exactly
    32 method rows (8 prepare, 8 pseudobulk, 8 GloScope, 8 composition). The old
    eight combined-key prepare caches remain immutable
