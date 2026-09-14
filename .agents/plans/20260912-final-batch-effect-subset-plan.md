@@ -63,10 +63,13 @@ Minimal checks so far: Yggdrasil has Slurm, Apptainer, `rsync`, Git, and `jq`;
 the copied FORMAT 2 container runs Python `3.13.14` and R `4.5.2`; the
 canonical scratch tree is present; and CPU partitions are visible. System
 `pixi`, `uv`, and `Rscript` are absent, but the repository mirror contains its
-`.pixi` environment and must be checked from the completed canonical repo.
+`.pixi` environment and is still being moved into the canonical repo path.
 The first CPU smoke submission did not yield a usable completed result and is
-not a scheduler pass. The durable profile still declares `remote_host=bamboo`,
-and the Bamboo NAS mount is not present on Yggdrasil.
+not a scheduler pass. The local NAS contract now detects the active cluster,
+preserves Bamboo defaults, and requires explicit absolute NAS overrides on
+Yggdrasil; its focused regression and shell syntax checks pass. The durable
+profile still declares `remote_host=bamboo`, and the Bamboo NAS mount is not
+present on Yggdrasil.
 
 Before any Yggdrasil pipeline script or job, complete the repository move,
 pull the exact local committed revision, validate the canonical runtime and
@@ -622,20 +625,12 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    `donor_id_assay` samples. The local gate retains a completion-transport
    `PRELAUNCH_STOP`; its accounting/artifact audit evidence is preserved and
    requires explicit reviewer disposition before formal release.
-2. **Full scratch backup passed the transfer-sanity gate.**
-   fresh quiescence check found no user Slurm jobs or ECODA writers, direct
-   Bamboo→Yggdrasil rsync completed in tmux:
-   `ecoda-bak-20260914T193751Z_4c6003c`. The source was
-   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper`; the destination was
-   `/srv/beegfs/scratch/users/h/halterc/_ecoda_backups/ECODA_paper_scratch_20260914T193751Z_4c6003c`.
-   The success marker was written at `2026-09-14 22:06:57 UTC`; the rsync
-   and tmux processes are absent, and the destination is approximately
-   `2.3T` with a coarse inode sanity count of `87,764`. It used no
-   `--delete` or `--inplace`. Exact size equality and content hashes were
-   intentionally not required. Record `TRANSFER_SANITY_ONLY=PASSED` and
-   `CONTENT_CHECKSUM=DEFERRED`; temporary rsync metadata/partial directories
-   are not integrity failures under this explicitly approved temporary-backup
-   policy.
+2. **Yggdrasil scratch working tree is active.** The transfer-sanity-passed
+   scratch mirror was moved from its backup path to the active canonical
+   `~/scratch/ECODA_paper` path on Yggdrasil. It is now a writable working
+   tree, not an independent immutable backup. The transfer used no
+   `--delete` or `--inplace`; exact equality and content hashes remain
+   intentionally deferred under `TRANSFER_SANITY_ONLY=PASSED`.
 3. **Repository backup transfer completed with transfer sanity verification.**
    The timestamped Yggdrasil copy
    `ECODA_paper_repo_20260914T212143Z_69a7443` is approximately `23G` and
@@ -647,16 +642,16 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    practical time budget; its repository status scan was not used as a gate.
    Record `CONTENT_CHECKSUM=DEFERRED` and rely on the successful rsync marker,
    destination presence, commit identity, and optional rough size sanity.
-4. **Yggdrasil compute portability is blocked.** The read-only audit found
-   Slurm and Apptainer but no `pixi`, `uv`, or `Rscript`; canonical
-   `~/ECODA_paper` and `~/scratch/ECODA_paper` are absent; only the current
-   backup copies exist; Bamboo/Yggdrasil storage is separate; and the
-   durable profile restricts `remote_host` to `bamboo`. Bamboo has the
-   `/srv/smednas515.unige.ch/carmona_smb` NAS mount; Yggdrasil does not.
-   Yggdrasil resolves `nasac-evs2.unige.ch` and has `gio`/D-Bus clients, so a
-   user-scoped interactive NASAC mount would be required before any Ygg
-   result/NAS sync. Record `PORTABILITY_AUDIT=BLOCKED`. No Yggdrasil
-   pipeline script or job may run.
+4. **Yggdrasil portability remains in progress.** Canonical
+   `~/scratch/ECODA_paper` is present and the copied FORMAT 2 runtime smoke
+   passed with Python `3.13.14` and R `4.5.2`. The canonical repository move
+   is still incomplete. The first CPU smoke submission did not yield a usable
+   completed result. The dynamic NAS contract is implemented and its focused
+   local syntax/regression checks pass, but the Bamboo NAS mount is absent on
+   Yggdrasil and the durable profile still declares `remote_host=bamboo`.
+   Record `PORTABILITY_AUDIT=IN_PROGRESS`; no Yggdrasil pipeline script or job
+   may run until the canonical repository, scheduler, NAS, and durable-gate
+   checks pass.
 5. **Await explicit migration approval.** The remaining work is the exact
    Alzheimer Stage 3 uncorrected/corrected rows, the two Alzheimer Stage 5
    lanes, and the eight-dataset corrected-final Stage 5 recovery with all 32
@@ -668,7 +663,8 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
 6. **Finalize only after reviewed artifacts.** Synchronize manifest-listed
    outputs and checksums, then execute the final analysis lane.
 
-The user explicitly reprioritized the completed Stage 2 derivative and backup
-over immediate compute migration. The full backup is a backup operation only,
-not evidence that Yggdrasil is compute-ready. No Yggdrasil compute or pipeline
-file edit is authorized until the portability overhaul is approved.
+The user explicitly set Yggdrasil as the default host for this plan while
+keeping all authoring local and synchronized by commit/push/pull. The
+portability audit is still in progress; no Yggdrasil pipeline compute starts
+until its remaining canonical-repository, scheduler, NAS, and durable-gate
+checks pass.
