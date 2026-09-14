@@ -85,6 +85,17 @@ combo <- function(ids = c("s1", "s2")) {
   )
 }
 
+pseudobulk_result <- function(ids = c("s1", "s2")) {
+  values <- matrix(
+    seq_len(length(ids) * 2L),
+    nrow = length(ids),
+    ncol = 2L,
+    byrow = TRUE,
+    dimnames = list(ids, c("g1", "g2"))
+  )
+  list(pb = values, time_secs = 0, mem_GB = 0)
+}
+
 withTemporary <- function(code) {
   directory <- tempfile("ecoda-rds-contract-")
   dir.create(directory)
@@ -92,6 +103,10 @@ withTemporary <- function(code) {
   eval(substitute(code), envir = environment())
 }
 sys.source(file.path(root, "src", "utils", "batch_contract.R"), envir = .GlobalEnv)
+sys.source(
+  file.path(root, "src", "5_run_benchmark_methods", "benchmark_hpc_utils.R"),
+  envir = .GlobalEnv
+)
 
 withTemporary({
   batch_args <- function(path, method) c(
@@ -194,7 +209,7 @@ withTemporary({
   )
   write_checked(
     final_pseudobulk,
-    list(Pseudobulk_hvg2000 = combo())
+    list(Pseudobulk_hvg2000 = pseudobulk_result())
   )
   final_pseudobulk_cache <- file.path(
     final_cache,
@@ -234,7 +249,7 @@ withTemporary({
     ),
     "final pseudobulk cache is not a result bundle"
   )
-  write_checked(final_pseudobulk, list(Pseudobulk_hvg2000 = combo()))
+  write_checked(final_pseudobulk, list(Pseudobulk_hvg2000 = pseudobulk_result()))
   expect_ok(
     c(
       "--root", final_root,
@@ -245,17 +260,50 @@ withTemporary({
     ),
     "final composition result and metadata paths"
   )
-  corrected_identity <- function(method_id, model_id) {
-    ecoda_batch_contract_identity(
-      batch_keys = "batch",
-      sample_col = "Sample",
+  corrected_sample_metadata <- data.frame(
+    Sample = c("s1", "s2", "s3", "s4"),
+    batch = factor(c("A", "B", "A", "B")),
+    stringsAsFactors = FALSE
+  )
+  corrected_validation <- ecoda_batch_validate_metadata(
+    corrected_sample_metadata,
+    batch_keys = "batch",
+    sample_col = "Sample"
+  )
+  corrected_identity <- function(method_id) {
+    model_id <- if (identical(method_id, "Pseudobulk")) {
+      "pseudobulk_limma_fixed_effects_v1"
+    } else {
+      "limma_fixed_effects_v1"
+    }
+    ecoda_hpc_augment_batch_contract(
+      identity = ecoda_hpc_batch_contract_identity(
+        batch_keys = "batch",
+        sample_col = "Sample",
+        method_id = method_id,
+        model_id = model_id
+      ),
+      validation = corrected_validation,
       method_id = method_id,
-      model_id = model_id
+      batch_keys = "batch"
     )
   }
-  corrected_combo <- function(method_id, model_id = "ecoda_additive_random_intercepts_v1") {
-    result <- combo()
-    result$batch_contract <- corrected_identity(method_id, model_id)
+  corrected_combo <- function(method_id) {
+    ids <- corrected_sample_metadata$Sample
+    feature <- matrix(
+      c(1, 0, 0, 1, 1, 2, 2, 3),
+      nrow = length(ids),
+      byrow = TRUE,
+      dimnames = list(ids, c("f1", "f2"))
+    )
+    labels <- structure(factor(c("A", "B", "A", "B")), names = ids)
+    result <- list(
+      scores = list(sil_score = 0.5),
+      feat_mat = feature,
+      dist_mat = as.matrix(dist(feature)),
+      labels = labels
+    )
+    result$batch_contract <- corrected_identity(method_id)
     result
   }
   corrected_root <- file.path(directory, "batch_effect", "corrected_final")
@@ -277,10 +325,7 @@ withTemporary({
     "Synthetic_batch_effect_corrected_final_composition.rds"
   )
   corrected_composition_bundle <- list(
-    batch_contract = corrected_identity(
-      "ECODA_authors_HR",
-      "ecoda_additive_random_intercepts_v1"
-    ),
+    batch_contract = corrected_identity("ECODA_authors_HR"),
     ECODA_authors_HR = corrected_combo("ECODA_authors_HR"),
     ECODA_seuratres_2 = corrected_combo("ECODA_seuratres_2"),
     ECODA_authors_HR_NULL = corrected_combo("ECODA_authors_HR_NULL")
@@ -299,6 +344,147 @@ withTemporary({
     corrected_batch_args(corrected_composition, "composition"),
     "corrected-final composition shared bundle with explicit null key"
   )
+  stopifnot(
+    identical(
+      corrected_composition_bundle$batch_contract$model_id,
+      "limma_fixed_effects_v1"
+    ),
+    identical(
+      corrected_composition_bundle$batch_contract$correction_mode,
+      "limma_fixed_effects"
+    ),
+    identical(
+      corrected_composition_bundle$batch_contract$fixed_effect_aliases,
+      c(batch = "batch_key_1")
+    ),
+    identical(
+      corrected_composition_bundle$batch_contract$correction_design_formula,
+      "~1 + batch_key_1"
+    ),
+    identical(
+      corrected_composition_bundle$batch_contract$effective_batch_keys,
+      "batch"
+    ),
+    identical(
+      corrected_composition_bundle$batch_contract$non_estimable_batch_keys,
+      character()
+    ),
+    identical(
+      corrected_composition_bundle$batch_contract$correction_state,
+      "BATCH_CORRECTION"
+    ),
+    identical(
+      corrected_composition_bundle$batch_contract$design_rank,
+      2L
+    ),
+    identical(
+      corrected_composition_bundle$batch_contract$design_columns,
+      2L
+    ),
+    corrected_composition_bundle$batch_contract$design_residual_df > 0L,
+    identical(
+      corrected_composition_bundle$batch_contract$validation_summary$schema_version,
+      1L
+    ),
+    all(c("batch", "Sample") %in%
+      corrected_composition_bundle$batch_contract$required_source_obs_columns),
+    isTRUE(corrected_composition_bundle$batch_contract$reserved_obs_absent),
+    !grepl(
+      "__ecoda_batch_combined_v1|lme4|lmer|\\(1 \\|",
+      paste(
+        vapply(
+          corrected_composition_bundle[
+            c("ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL")
+          ],
+          function(value) value$batch_contract$correction_formula,
+          character(1)
+        ),
+        collapse = "\n"
+      ),
+      perl = TRUE
+    )
+  )
+
+  # Active limma identities are rejected when their advertised design loses
+  # rank or has no residual degrees of freedom.
+  bad_rank_bundle <- corrected_composition_bundle
+  bad_rank_bundle$ECODA_authors_HR$batch_contract$design_rank <- 1L
+  write_checked(corrected_composition, bad_rank_bundle)
+  expect_fail_capture(
+    corrected_batch_args(corrected_composition, "composition"),
+    "active limma design rank",
+    "design"
+  )
+  bad_residual_bundle <- corrected_composition_bundle
+  bad_residual_bundle$ECODA_authors_HR$batch_contract$design_residual_df <- 0L
+  write_checked(corrected_composition, bad_residual_bundle)
+  expect_fail_capture(
+    corrected_batch_args(corrected_composition, "composition"),
+    "active limma residual degrees of freedom",
+    "design"
+  )
+  write_checked(corrected_composition, corrected_composition_bundle)
+
+  # An active limma identity with no estimable technical key is a valid exact
+  # no-op, provided its empty effective set and intercept-only dimensions are
+  # explicit.
+  no_correction_sample_metadata <- corrected_sample_metadata
+  no_correction_sample_metadata$batch <- factor(rep("A", nrow(
+    no_correction_sample_metadata
+  )))
+  no_correction_validation <- ecoda_batch_validate_metadata(
+    no_correction_sample_metadata,
+    batch_keys = "batch",
+    sample_col = "Sample"
+  )
+  no_correction_identity <- function(method_id) {
+    model_id <- if (identical(method_id, "Pseudobulk")) {
+      "pseudobulk_limma_fixed_effects_v1"
+    } else {
+      "limma_fixed_effects_v1"
+    }
+    ecoda_hpc_augment_batch_contract(
+      identity = ecoda_hpc_batch_contract_identity(
+        batch_keys = "batch",
+        sample_col = "Sample",
+        method_id = method_id,
+        model_id = model_id
+      ),
+      validation = no_correction_validation,
+      method_id = method_id,
+      batch_keys = "batch"
+    )
+  }
+  no_correction_bundle <- corrected_composition_bundle
+  no_correction_bundle$batch_contract <- no_correction_identity("ECODA_authors_HR")
+  for (method_id in c(
+    "ECODA_authors_HR",
+    "ECODA_seuratres_2",
+    "ECODA_authors_HR_NULL"
+  )) {
+    no_correction_bundle[[method_id]]$batch_contract <-
+      no_correction_identity(method_id)
+  }
+  write_checked(corrected_composition, no_correction_bundle)
+  expect_ok(
+    corrected_batch_args(corrected_composition, "composition"),
+    "active limma all-constant no-op"
+  )
+  stopifnot(
+    identical(
+      no_correction_bundle$batch_contract$effective_batch_keys,
+      character()
+    ),
+    identical(
+      no_correction_bundle$batch_contract$correction_state,
+      "NO_CORRECTION"
+    ),
+    identical(
+      no_correction_bundle$batch_contract$correction_formula,
+      "NO_CORRECTION: no estimable technical batch key"
+    )
+  )
+  write_checked(corrected_composition, corrected_composition_bundle)
   rejected_final_variant_args <- corrected_batch_args(
     corrected_composition,
     "composition"
@@ -316,16 +502,17 @@ withTemporary({
   )
   write_checked(
     corrected_metadata,
-    c(
-      list(batch_contract = corrected_identity(
-        "ECODA_authors_HR",
-        "ecoda_additive_random_intercepts_v1"
-      )),
-      list(
-        labels = structure(factor(c("A", "B")), names = c("s1", "s2")),
-        n_cells = 200,
-        n_samples = 2,
-        cells_per_sample = structure(c(100, 100), names = c("s1", "s2"))
+    list(
+      batch_contract = corrected_identity("ECODA_authors_HR"),
+      labels = structure(
+        factor(c("A", "B", "A", "B")),
+        names = c("s1", "s2", "s3", "s4")
+      ),
+      n_cells = 400,
+      n_samples = 4,
+      cells_per_sample = structure(
+        c(100, 100, 100, 100),
+        names = c("s1", "s2", "s3", "s4")
       )
     )
   )
@@ -333,12 +520,20 @@ withTemporary({
     corrected_results,
     "Synthetic_batch_effect_corrected_final_pseudobulk.rds"
   )
+  corrected_pseudobulk_result <- list(
+    pb = matrix(
+      c(1, 2, 3, 4, 5, 6, 7, 8),
+      nrow = 4L,
+      byrow = TRUE,
+      dimnames = list(c("s1", "s2", "s3", "s4"), c("g1", "g2"))
+    ),
+    time_secs = 0,
+    mem_GB = 0,
+    batch_contract = corrected_identity("Pseudobulk")
+  )
   corrected_pseudobulk_bundle <- list(
-    batch_contract = corrected_identity("Pseudobulk", "pseudobulk_composite_v1"),
-    Pseudobulk_hvg2000 = corrected_combo(
-      "Pseudobulk",
-      "pseudobulk_composite_v1"
-    )
+    batch_contract = corrected_identity("Pseudobulk"),
+    Pseudobulk_hvg2000 = corrected_pseudobulk_result
   )
   write_checked(corrected_pseudobulk, corrected_pseudobulk_bundle)
   corrected_pseudobulk_cache <- file.path(
@@ -362,6 +557,99 @@ withTemporary({
     ),
     "corrected-final pseudobulk result bundle"
   )
+  stopifnot(
+    identical(
+      corrected_pseudobulk_bundle$batch_contract$model_id,
+      "pseudobulk_limma_fixed_effects_v1"
+    ),
+    identical(
+      corrected_pseudobulk_result$batch_contract$correction_mode,
+      "limma_fixed_effects_pseudobulk"
+    ),
+    identical(
+      corrected_pseudobulk_bundle$batch_contract$correction_mode,
+      "limma_fixed_effects_pseudobulk"
+    ),
+    identical(
+      corrected_pseudobulk_bundle$batch_contract$fixed_effect_aliases,
+      c(batch = "batch_key_1")
+    ),
+    identical(
+      corrected_pseudobulk_result$batch_contract$correction_design_formula,
+      "~1 + batch_key_1"
+    ),
+    identical(
+      corrected_pseudobulk_bundle$batch_contract$effective_batch_keys,
+      "batch"
+    ),
+    identical(
+      corrected_pseudobulk_bundle$batch_contract$non_estimable_batch_keys,
+      character()
+    ),
+    identical(
+      corrected_pseudobulk_bundle$batch_contract$correction_state,
+      "BATCH_CORRECTION"
+    ),
+    identical(
+      corrected_pseudobulk_bundle$batch_contract$design_rank,
+      2L
+    ),
+    identical(
+      corrected_pseudobulk_bundle$batch_contract$design_columns,
+      2L
+    ),
+    corrected_pseudobulk_bundle$batch_contract$design_residual_df > 0L,
+    identical(
+      corrected_pseudobulk_bundle$batch_contract$validation_summary$schema_version,
+      1L
+    ),
+    all(is.finite(corrected_pseudobulk_result$pb)),
+    identical(
+      rownames(corrected_pseudobulk_result$pb),
+      corrected_sample_metadata$Sample
+    ),
+    grepl(
+      "DESeq2 design=~ 1; model.matrix(~ 1 + batch_key_1); limma::removeBatchEffect(covariates=technical_covariates, design=intercept)",
+      corrected_pseudobulk_result$batch_contract$correction_formula,
+      fixed = TRUE
+    ),
+    !grepl(
+      "__ecoda_batch_combined_v1|lme4|lmer|\\(1 \\|",
+      corrected_pseudobulk_result$batch_contract$correction_formula,
+      perl = TRUE
+    )
+  )
+  bad_pseudobulk_rank <- corrected_pseudobulk_bundle
+  bad_pseudobulk_rank$Pseudobulk_hvg2000$batch_contract$design_rank <- 1L
+  write_checked(corrected_pseudobulk, bad_pseudobulk_rank)
+  expect_fail_capture(
+    c(
+      "--root", corrected_root,
+      "--selection", corrected_selection,
+      "--labels", "pseudobulk",
+      "--batch-pass", "corrected",
+      "--analysis-variant", "corrected_final",
+      "--config", corrected_config
+    ),
+    "active pseudobulk limma design rank",
+    "design"
+  )
+  bad_pseudobulk_residual <- corrected_pseudobulk_bundle
+  bad_pseudobulk_residual$Pseudobulk_hvg2000$batch_contract$design_residual_df <- 0L
+  write_checked(corrected_pseudobulk, bad_pseudobulk_residual)
+  expect_fail_capture(
+    c(
+      "--root", corrected_root,
+      "--selection", corrected_selection,
+      "--labels", "pseudobulk",
+      "--batch-pass", "corrected",
+      "--analysis-variant", "corrected_final",
+      "--config", corrected_config
+    ),
+    "active pseudobulk limma residual degrees of freedom",
+    "design"
+  )
+  write_checked(corrected_pseudobulk, corrected_pseudobulk_bundle)
   unlink(corrected_pseudobulk)
   expect_fail(
     c(
@@ -398,16 +686,17 @@ withTemporary({
   write_checked(wrong_root_composition, corrected_composition_bundle)
   write_checked(
     wrong_root_metadata,
-    c(
-      list(batch_contract = corrected_identity(
-        "ECODA_authors_HR",
-        "ecoda_additive_random_intercepts_v1"
-      )),
-      list(
-        labels = structure(factor(c("A", "B")), names = c("s1", "s2")),
-        n_cells = 200,
-        n_samples = 2,
-        cells_per_sample = structure(c(100, 100), names = c("s1", "s2"))
+    list(
+      batch_contract = corrected_identity("ECODA_authors_HR"),
+      labels = structure(
+        factor(c("A", "B", "A", "B")),
+        names = c("s1", "s2", "s3", "s4")
+      ),
+      n_cells = 400,
+      n_samples = 4,
+      cells_per_sample = structure(
+        c(100, 100, 100, 100),
+        names = c("s1", "s2", "s3", "s4")
       )
     )
   )
@@ -432,8 +721,7 @@ withTemporary({
   write_checked(corrected_composition, corrected_composition_bundle)
   wrong_key_bundle <- corrected_composition_bundle
   wrong_key_bundle$ECODA_authors_HR_NULL$batch_contract <- corrected_identity(
-    "ECODA_authors_HR",
-    "ecoda_additive_random_intercepts_v1"
+    "ECODA_authors_HR"
   )
   write_checked(corrected_composition, wrong_key_bundle)
   expect_fail(

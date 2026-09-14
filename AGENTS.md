@@ -2,470 +2,217 @@
 
 ## Project Overview
 
-ECODA (Exploratory Compositional Data Analysis) is a reproducible R/Python workflow for unsupervised patient stratification from single-cell cohorts. It compares CLR-based cell-type composition, pseudobulk, and sample-embedding methods, then scores recovery of known biological groups.
+ECODA (Exploratory Compositional Data Analysis) is a reproducible R/Python
+workflow for unsupervised patient stratification from single-cell cohorts. It
+compares CLR-based cell-type composition, pseudobulk, and sample-embedding
+methods, then scores recovery of known biological groups.
 
 ### Non-negotiable scientific and repository rules
 
-- **No label leakage.** Biological labels such as `Status`, `sample.origin`, `cond`, and `Disease_Identity` are ground truth only. Never pass them to preprocessing, HVG selection, normalization, batch correction, embeddings, or model covariates.
-- `DESeq2.normalize()` benchmark defaults are `blind=TRUE`, `batch_col=NULL`, `correct_batch=FALSE` (`~ 1`). Batch-effect mode is batch-only: `blind=FALSE`, `batch_col=<batch>`, `correct_batch=TRUE`; never protect biological labels in `removeBatchEffect`.
-- `datasets.json` is the dataset/view ground truth. **Do not modify it without explicit user confirmation.**
-- **Universal cell-type annotation with HiTME & scATOMIC.** All benchmark-analysis datasets and all suitable cohorts used by benchmark workflows must undergo dual automated cell-type annotation with HiTME (layers 1–3) and scATOMIC (layers 1–6, predicted labels, confidence, cell cycle scores). Author annotations are preserved as baseline ground truth metadata in `obs`, while HiTME and scATOMIC provide standardized, uniform cross-cohort cell-type annotations. Datasets explicitly flagged with `"not_suitable_for_auto_annotation"` in `datasets.json` (e.g., `Alzheimer`, `Diabetes`, `Parkinson`) are exempt and must be cleanly skipped by the automated annotation pipeline.
-- **Batch-effect-only annotation exception.** The `batch_effect_uncorrected` and `batch_effect_corrected` views do not require HiTME/scATOMIC Pipeline 4. Do not schedule Pipeline 4 solely for batch-effect analysis; preserve and use the configured author/source cell-type columns. This exception is view-scoped and does not remove the universal annotation requirement for `benchmark_analysis` datasets or the existing `"not_suitable_for_auto_annotation"` exemptions.
-- **Multi-dataset parallel execution & fail-closed idempotency.** Pipeline stages (preprocessing, cell-type annotation, benchmarks) must dispatch all eligible datasets concurrently in parallel SLURM arrays. All stages must implement strict, fail-closed safety checks that verify existing output file integrity, non-emptiness, valid schema, and checksums before skipping already-completed runs, with full `--force` recomputation support across all submitters and workers. But keep every job launch explicit to targeted datasets and stages. Do not blindly re-run broad, global cohorts for routine checks that were already processed!
-- Files beginning with `Figure` or `Supp_fig` are publication figures: fix them, never remove them. Figure hierarchy: `Figure 2A` uses default/main settings; `Supp fig 15` contains extended methods; `Supp fig 2` is parameter screening. Exclude legacy `ECODA_PB_combo_*` from publication figures.
+- **No label leakage.** Biological labels such as `Status`, `sample.origin`,
+  `cond`, and `Disease_Identity` are ground truth only. Never pass them to
+  preprocessing, HVG selection, normalization, batch correction, embeddings,
+  or model covariates.
+- `DESeq2.normalize()` benchmark defaults are `blind=TRUE`, `batch_col=NULL`,
+  `correct_batch=FALSE` (`~ 1`). Batch-effect mode is batch-only:
+  `blind=FALSE`, `batch_col=<batch>`, `correct_batch=TRUE`; never protect
+  biological labels in `removeBatchEffect`.
+- `datasets.json` is the dataset/view ground truth. **Do not modify it without
+  explicit user confirmation.**
+- **Universal cell-type annotation with HiTME and scATOMIC.** All
+  benchmark-analysis datasets and all suitable cohorts used by benchmark
+  workflows must undergo dual automated annotation with HiTME (layers 1–3)
+  and scATOMIC (layers 1–6, predicted labels, confidence, and cell-cycle
+  scores). Author annotations remain baseline ground-truth metadata in `obs`.
+  Datasets marked `not_suitable_for_auto_annotation` in `datasets.json` are
+  exempt and must be cleanly skipped by the annotation pipeline.
+- **Batch-effect-only annotation exception.** The
+  `batch_effect_uncorrected` and `batch_effect_corrected` views do not require
+  HiTME/scATOMIC Pipeline 4. Do not schedule Pipeline 4 solely for
+  batch-effect analysis; preserve and use configured source/author cell-type
+  columns. This view-scoped exception does not weaken the universal
+  annotation rule for benchmark-analysis data or configured exemptions.
+- **Fail-closed idempotency.** Every stage verifies existing outputs for
+  integrity, non-emptiness, schema, ownership, and checksums before reuse.
+  `--force` is reserved for explicitly scoped recomputation with a recorded
+  dependency or integrity reason; routine checks must not trigger broad
+  reruns.
+- Files beginning with `Figure` or `Supp_fig` are publication figures: fix
+  them, never remove them. `Figure 2A` uses default/main settings, `Supp fig
+  15` contains extended methods, and `Supp fig 2` is parameter screening.
+  Exclude legacy `ECODA_PB_combo_*` from publication figures.
 - Preserve all version constraints in `pixi.toml` and the resolved `pixi.lock`.
-- Use focused tests and the `_debug` Joanito five-sample subset for routine verification. Do not launch full cohorts for routine checks.
+- Use focused tests and the `_debug` Joanito five-sample subset for routine
+  verification. Do not launch full cohorts for routine checks.
 
 ## Architecture & Data Flow
 
-1. **Configuration:** `datasets.json` defines datasets, metadata columns, views, and filenames. `src/utils/datasets_io.R` and `src/utils/py/datasets_io.py` are the language-specific access layer.
-2. **Data staging:** `src/1_stage_data/1_stage_data.sh` copies raw data from NAS to `$HOME/scratch/ECODA_paper`; `src/2_dataset_specific_preprocessing/` converts cohort-specific inputs.
-3. **Canonical preprocessing:** `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py` filters data, preserves raw counts in `layers["counts"]`, normalizes/log-transforms `X`, ranks HVGs, computes PCA, and creates Harmony/neighbors/Leiden outputs. RDS conversion and subset validation live in `src/utils/py/preprocess_utils.py`.
-4. **Cell-type annotation:** `src/4_cell_type_annotation/` prepares sample chunks for eligible benchmark-analysis datasets, runs dual annotation workers (HiTME and scATOMIC), checkpoints per-sample Feather output, validates chunk completeness, and merges annotations into benchmark-analysis view `.h5ad` files. Batch-effect views are an explicit no-Pipeline-4 path and retain their configured source/author cell-type columns.
-5. **Benchmarking:** `src/5_run_benchmark_methods/` runs R and Python methods through SLURM arrays. Methods converge on sample feature matrices, distance matrices, or `create_result_bundle(feat_mat, labels, dist_mat)` bundles.
-6. **Scoring and persistence:** `src/utils/scoring_metrics.R` computes silhouette, modularity, ANOSIM, ARI, and LISI. Results are saved atomically as `.rds` bundles with `checksums.md5`; Feather carries cross-language embeddings, distances, and execution logs.
-7. **Analysis:** local notebooks consume precomputed results and generate publication figures; they do not rerun cohort preprocessing.
+1. **Configuration:** `datasets.json` defines datasets, metadata columns,
+   views, and filenames. `src/utils/datasets_io.R` and
+   `src/utils/py/datasets_io.py` are the language-specific access layer.
+2. **Data staging:** `src/1_stage_data/1_stage_data.sh` stages raw data from
+   NAS to scratch; `src/2_dataset_specific_preprocessing/` performs
+   cohort-specific conversion and harmonization.
+3. **Canonical preprocessing:** `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py`
+   filters data, preserves raw counts in `layers["counts"]`, normalizes
+   `X`, ranks HVGs, computes PCA, and creates Harmony/neighbors/Leiden
+   outputs.
+4. **Cell-type annotation:** `src/4_cell_type_annotation/` prepares chunks,
+   runs the configured annotation workers, checkpoints per-sample Feather
+   output, validates completeness, and merges annotations into eligible
+   benchmark-analysis `.h5ad` files. Batch-effect views use the exception
+   above and retain configured source/author columns.
+5. **Benchmarking:** `src/5_run_benchmark_methods/` runs R and Python methods
+   through SLURM arrays. Methods converge on sample feature matrices,
+   distance matrices, or `create_result_bundle(feat_mat, labels, dist_mat)`
+   bundles.
+6. **Scoring and persistence:** `src/utils/scoring_metrics.R` computes
+   silhouette, modularity, ANOSIM, ARI, and LISI. Results are written
+   atomically as `.rds` bundles with checksum sidecars; Feather carries
+   cross-language embeddings, distances, and execution logs.
+7. **Analysis:** local notebooks consume precomputed results and generate
+   publication figures; they do not rerun cohort preprocessing.
 
-Operational concurrency is explicit rather than application-async: R uses `foreach`/`doParallel`, Python/R workers run in SLURM arrays, and shell watchdogs gate synchronization on `sacct`/`squeue`. Missing status, checksum mismatch, worker failure, or exhausted OOM retry must fail closed.
+Operational concurrency is explicit rather than application-async: R uses
+`foreach`/`doParallel`, Python/R workers run in SLURM arrays, and shell
+watchdogs gate synchronization on scheduler accounting. Missing status,
+checksum mismatch, worker failure, or exhausted OOM retry must fail closed.
 
-### Durable HPC execution
+### Pipeline ordering and durable HPC execution
 
+- Numbered pipelines remain ordered: Pipeline 1 is the NAS-bound serial
+  staging step; Pipeline 2 performs dataset-specific preprocessing, Pipeline
+  3 canonical preprocessing, Pipeline 4 annotation, and Pipeline 5
+  benchmarking. Independent selected rows within a stage MAY and SHOULD run
+  concurrently in one SLURM array; only documented dependencies may serialize
+  work.
 - Every full-cohort preprocessing, annotation, benchmark, evidence, or
-  correction run MUST be launched through the checked-in
-  `durable-hpc-gate-ecoda` profile. Direct SSH-launched long-running wrappers
-  are not an acceptable substitute.
-- Route full-cohort HPC work through the durable HPC gate; do not launch full cohorts for routine checks.
-- **Canonical host policy:** `bamboo` remains the default and only canonical host for full-cohort ECODA Pipeline 1–5 durable compute and normal gates. `yggdrasil` (reachable as `ssh yggdrasil` from the approved user setup) is not an implicit compute fallback and MUST NOT be used for ECODA pipeline jobs unless a future user-approved plan explicitly names it. For the 2026-09-15–18 Bamboo maintenance window only, it is authorized as the temporary backup destination for the separately planned repository/scratch clone and restore checks. This exception does not change durable-gate profile `remote_host=bamboo`, runtime/source contracts, or NAS result synchronization. Direct Bamboo↔Yggdrasil transfer remains blocked until an explicit SSH-key or agent-forwarding setup is in place. Every backup command MUST state its host, source/destination path, and scope explicitly; never store passwords, and use SSH keys/agent authentication only.
-- Independent datasets MAY and SHOULD run in one SLURM array for a pipeline
-  stage. The durable gate owns the array's terminal wait, accounting
-  inspection, checksum/NAS audit, and Luna Max review; the next pipeline stage
-  starts only after that gate is reviewed `COMPLETED`.
-- **Bottleneck parallelism:** Pipelines 2–5 are the major time-consuming
-  bottlenecks. Submit all independent selected datasets, views, preparation
-  tasks, merges, and benchmark methods in the same pipeline concurrently
-  whenever resources permit; only documented data dependencies may serialize
-  work. Numbered pipelines remain ordered. Pipeline 1 is the NAS-bound serial
-  staging exception and is intentionally unchanged.
+  correction run MUST use the checked-in `durable-hpc-gate-ecoda` profile.
+  Direct SSH-launched long-running wrappers are not an acceptable substitute.
+- **Canonical host policy:** `bamboo` is the default and canonical host for
+  normal ECODA Pipeline 1–5 durable compute and gates. `yggdrasil`, reached as
+  `ssh yggdrasil`, is never an implicit compute host. Only for the
+  2026-09-15–18 Bamboo maintenance window may it be used as the explicitly
+  named temporary backup destination for repository/scratch clone and restore
+  checks. This does not change the durable-gate `remote_host=bamboo` policy,
+  source/runtime contracts, or NAS synchronization. Bamboo↔Yggdrasil transfer
+  requires an explicitly configured SSH key or agent forwarding; passwords
+  must never be stored or used. Every backup command states its host,
+  source, destination, and scope.
+- Arrays that can OOM MUST use a compute-node watchdog with OOM-only
+  resubmission of affected manifest rows, bounded memory escalation, and
+  fail-closed handling of non-OOM failures or an exhausted ceiling.
 
-#### Stage 5 cross-gate synchronization boundary
+#### Stage 5 synchronization and gate contract
 
-- Independent Stage 5 datasets and methods **MUST** be submitted together in
-  one explicit selection manifest/SLURM wave whenever they share an
-  `ANALYSIS_ROOT`; the worker arrays and method watchdogs are designed for
-  that concurrency.
-- Separate durable Stage 5 gates targeting the same analysis root (for
-  example, two `batch_effect/uncorrected` gates) are **not currently
-  safe to launch concurrently**. `benchmark_submit_common.sh` acquires one
-  global `stage5` owner at `sync/${ANALYSIS_ROOT}` before NAS synchronization.
-  A second gate can compute independently but will fail closed at
-  synchronization when that owner is active.
-- The durable profile therefore serializes these gates with the
-  `ecoda-benchmark` serialization group. Do not bypass this boundary by
-  inventing a distinct serialization group; that only moves the conflict to
-  artifact ownership/NAS synchronization.
-- A future parallel-gate implementation must replace the shared sync owner
-  with a per-dataset/method merge contract or an explicit serialized merge
-  queue, while retaining atomic checksums and fail-closed ownership. Until
-  then, queue later same-root gates after terminal wait, inspect, and Luna Max
-  review of the current gate.
-- **Repair/validation is no-compute by default (hard stop):** A gate repair,
-  validator or schema fix, checksum audit, or reviewer/release audit MUST NOT
-  submit preprocessing, annotation, or benchmark workers. First inspect
-  existing terminal artifacts, run-owned manifests, and checksums; use a
-  validator-only or local contract check where possible. A durable gate is
-  not a reason to create compute or to obtain scheduler IDs. The benchmark
-  submitter `1_submit_hpc_array.sh` MUST NOT be invoked for repair work unless
-  the user explicitly names the dataset/view/method rows that must be
-  recomputed and records the dependency or integrity reason.
-- **Launch scope must be explicit:** Before any approved compute launch,
-  record the exact wrapper, dataset/view selection, method list, and expected
-  row count. A broad `--methods` list, an all-dataset selection, or `--force`
-  is prohibited for repair work. Validated artifacts MUST remain outside the
-  recomputation selection. Contract-only changes to already-written results
-  require revalidation, not worker execution.
-- **Scope mismatch is an immediate stop:** If the emitted wrapper or scheduler
-  rows exceed the approved scope, immediately cancel every emitted scheduler
-  ID and the durable runner, preserve all logs/manifests/partial artifacts,
-  and perform one terminal inspect as `FAILED`. Never let an unintended wave
-  finish and never manually mark it complete.
-- **Targeted recovery is mandatory:** Before any Pipeline 2–5 rerun, inspect
-  the failed run's terminal status, manifests, watchdog records, and artifact
-  contracts. Re-run only the failed dataset/view/method/parameter rows; never
-  add `--force` to a broad selection that includes current-source artifacts
-  already validated successfully. Preserve successful run outputs and record
-  the exact failure scope and rationale for every repair gate. If a full
-  recomputation is genuinely required, document the dependency or integrity
-  reason before launching it.
-- Any array that can OOM MUST use a compute-node watchdog with automatic
-  OOM-only resubmission of the affected manifest rows, bounded memory
-  escalation, and fail-closed handling of non-OOM failures or an exhausted
-  ceiling.
+- Independent Stage 5 datasets and methods sharing an `ANALYSIS_ROOT` MUST be
+  submitted together in one explicit selection-manifest/SLURM wave. A single
+  global synchronization owner protects `sync/${ANALYSIS_ROOT}`; separate
+  gates using the same root are serialized through the durable profile's
+  `ecoda-benchmark` group.
+- Do not invent a second serialization group or bypass the shared owner.
+  Queue later same-root gates only after the current gate's terminal wait,
+  inspect, and reviewer approval. Atomic ownership and checksum checks remain
+  mandatory.
+- Before each approved launch, record the exact wrapper, selected
+  dataset/view/method rows, and expected row count. If emitted rows exceed
+  that scope, cancel every scheduler ID and the durable runner, preserve
+  evidence, and terminal-inspect the run as `FAILED`.
+- Repair, validation, checksum, and reviewer/release audits are no-compute
+  operations by default. Inspect existing artifacts, manifests, statuses, and
+  checksums first. Valid rows remain outside recomputation selections.
+- Targeted recovery is mandatory: rerun only failed, missing, or invalid
+  dataset/view/method/parameter rows, and record the dependency or integrity
+  reason. Never use broad `--force` selection for repair or recovery.
 - After `launch`, arm exactly one unbounded durable `wait`; do not repeatedly
-  poll `squeue`/`sacct` from the agent session. Perform one terminal `inspect`
-  with every scheduler ID emitted by the wrapper, then the reviewer approval
-  inspect. Use `status` only for non-mutating recovery checks.
-- Short SSH commands for staging, code synchronization, and reading terminal
-  evidence remain allowed. If the durable gate or required watchdog cannot
-  represent a new wrapper, stop before launching full-cohort work and
-  generalize the shared wrapper rather than bypassing the gate.
-- Exception: When the user explicitly requests a temporary, noncanonical,
-  full-cohort scoring run and the scope/output location are clear, the run may
-  bypass durable-hpc-gate-ecoda and the normal src/ pipeline. If scope, input
-  artifacts, or output location is unclear, ask before launching. The run must
-  use only explicitly named datasets/annotation columns, write outside canonical
-  benchmark/NAS outputs, and leave existing validated artifacts outside the
-  recomputation selection. I.e. do not overwrite existing artifacts or gates
-  (or explicitly ask the user to do so or not).
-  This exception does not authorize unpinned direct stage submitter commands;
-  they remain legacy/validator-only unless the required immutable
-  source/runtime/auxiliary manifests and explicit row scope are supplied.
-  In short: Upon specific user request, short-lived HPC sessions may be launched, e.g.
-  to run tests or create temporary artifacts for local analysis.
+  poll `squeue` or `sacct` from the agent session. Perform one terminal
+  `inspect` with every scheduler/watchdog ID emitted by the wrapper, followed
+  by the required Luna Max reviewer approval. Use `status` only for
+  non-mutating recovery checks, and never rerun a wrapper after an ambiguous
+  launch.
 
+### Current plans and immutable run identity
+- **Baseline provenance:** The processing plan was prepared from repository
+  anchor `5302671ad94556edcf9acccf372d2dc34121d714`; record later
+  implementation and documentation commits separately.
 
-## Current processing baseline
+- Current dataset/view/method selections, output roots and stems, row counts,
+  gate IDs, incidents, maintenance details, and one-off recovery history are
+  task-specific. Keep them in the authoritative active plan, e.g.
+  (this is just an example, as suggested by the user. use specific plans as needed and discussed with the user)
+  `.agents/plans/20260912-final-batch-effect-subset-plan.md`, not in this
+  durable guide. Use the checked-in
+  `.agents/skills/durable-hpc-gate-ecoda/SKILL.md` and its durable-hpc-gate
+  references for operational command details.
+- Full-cohort runs require a commit-keyed source snapshot and a versioned
+  runtime identity before durable-gate `prepare`. Create the snapshot from a
+  clean full-commit checkout and execute from the snapshot, never from the
+  mutable canonical checkout or an unversioned runtime.
+- The run-owned manifest MUST bind the immutable source manifest, runtime
+  image and manifest, auxiliary-root identity, exact run ID, scratch/log
+  roots, wrapper, and explicit selected-row scope. Resolve Bamboo's home
+  before composing remote paths (for example with
+  `ssh bamboo 'printf %s "$HOME"'`).
+- The run-scoped `ecoda_run_audit.sh` checks the selected stage, manifest,
+  source identity, runtime identity, and artifacts before terminal review; it
+  must not scan all run roots or submit repair compute.
+- Unpinned direct stage submitters are legacy/validator-only. They may submit
+  new work only when invoked by the immutable snapshot executor with the
+  required source/runtime/auxiliary identities, exact run ID, and explicit
+  row scope. Validator checks may inspect existing artifacts but must not
+  create scheduler work.
+- A user-explicit temporary noncanonical scoring run may bypass the durable
+  profile only when its scope, inputs, and output location are clear; it must
+  use named datasets/columns, write outside canonical outputs, and preserve
+  validated artifacts. This exception does not authorize unpinned submitter
+  commands.
 
-- **Baseline anchor:** `5302671ad94556edcf9acccf372d2dc34121d714` is the
-  repository HEAD captured while preparing the processing plan. Preserve this
-  anchor even when the implementation or documentation lands in a later
-  commit; record a later implementation/documentation commit separately.
-- **Completed production benchmark (`benchmark_analysis`):** the
-  user-confirmed completed dataset view is `Adams`, `Bassez`,
-  `Gongsharma_cmv_young_males`, `Kfoury`, `Kim`, `Lee`, `Pelka`, `Smillie`,
-  `Stephenson`, `Wu`, and `Zhang`. This is the completed baseline, not a
-  request to recompute those rows.
-### Explicit user override for the derived-analysis work
+### Local resource boundary
 
-- **Pipeline 1–5 benchmark completion is authoritative.** The user confirms
-  that all existing benchmark-analysis processing completed successfully.
-  Stale, failed, or outdated gate records MUST NOT be interpreted as evidence
-  that the completed baseline requires rerunning or invalidation.
-- Local Harmony, standalone unsupervised Leiden resolution 50, and
-  ECODA-authors cell-subsetting analyses are derived analyses only. They MUST
-  NOT launch any Pipeline 1–5 or other `src/` pipeline jobs on HPC. They read
-  the fully processed `benchmark_analysis` H5ADs from HPC scratch when local
-  subset mirrors are unavailable; local subset mirrors MUST NOT be treated as
-  the full-cohort source.
-- Existing benchmark H5ADs, RDS bundles, pseudobulks, checksums, manifests,
-  and gates remain valid and immutable. New derived outputs MUST use separate
-  run-owned output roots and MUST NOT overwrite or invalidate those artifacts.
-
-### Local resource boundary for full-cohort derived analyses
-
-- The local workstation has 64 GB RAM and less than 100 GB free disk.
-  Full benchmark H5ADs MUST NOT be copied, staged, or retained on the local
-  workstation.
-- Local execution MUST NOT materialize whole-cohort expression/count matrices.
-  When full H5ADs are needed, operate against their authoritative HPC-scratch
-  or NAS location and read only the metadata required for the derived result:
-  `Sample`, configured biological-label/cell-type columns, and the persisted
-  Leiden columns/embeddings required by the standalone contract.
-- Derived computation MUST aggregate the required cell-type composition
-  dataset-by-dataset and release each dataset’s metadata before processing the
-  next. Local subset mirrors are not substitutes for full-cohort H5ADs.
-- A standalone `run_local_ecoda_derived.R` invocation against existing full
-  `benchmark_analysis` H5ADs on HPC scratch is allowed for these derived
-  analyses when it uses a fresh separate derived output root; only Pipeline
-  1--5, preprocessing, annotation, and Stage 5 submitters are forbidden.
-  Local subset mirrors are never valid substitutes for those full sources.
+- Full-cohort H5ADs and whole expression/count matrices MUST NOT be copied,
+  staged, or retained on the local workstation. Operate against authoritative
+  HPC scratch or NAS and read only the metadata needed by the local result.
+- Aggregate derived results dataset-by-dataset and release each dataset's
+  metadata before processing the next. Local subset mirrors are diagnostic
+  only and never replace authoritative full-cohort sources.
 - The only permitted local transfer is an explicitly scoped small debug or
-  metadata artifact. Never pull full benchmark H5ADs to satisfy a local
-  runner.
-
-- **Approved final batch-effect Pipeline 3 scope and topology:** Pipeline 3 uses
-  two separate parallel selections/gates/arrays, not one combined or
-  serialized four-plus-nine matrix. The uncorrected selection is exactly four
-  rows: `Covid19_PBMC`, `Diabetes`, `Joanito`, and `Lung`, each using
-  `batch_effect_uncorrected`. The corrected selection is exactly every current
-  non-underscore `datasets.json` entry with `use_for_batch_effect == true`, in
-  configuration order: `Joanito`, `Stephenson`, `Alzheimer`, `Breast_cancer`,
-  `Covid19_PBMC`, `Kidney_KPMP_full`, `Diabetes`, `Lupus_PBMC`, and `Lung`,
-  each using `batch_effect_corrected`. Dataset rows dispatch concurrently;
-  manifest order is deterministic ordering only. The four uncorrected rows use
-  final-qualified output names. Each selected output is validated for
-  non-emptiness, schema, checksum, and ownership; any prior owner-state
-  discrepancy is reconciled validator-only before reuse. A valid output from
-  the prior reviewed gate is skipped as `NOOP_VALIDATED`, never implicitly
-  rerun.
-- **Pipeline 3 corrected contract:** Pass each cell's original technical batch
-  metadata directly to Harmony/HVG. Do not perform a sample-level batch
-  constancy check, within-`Sample` constancy check, cell-level majority
-  rewrite, or retired corrected-source metadata/RDS release preflight.
-  Configuration, content, and provenance checks remain required. The separate
-  Covid obs-only subset preflight remains required for both declared views.
-- **Approved final Pipeline 5 scopes:** The uncorrected lane uses
-  `--pass uncorrected --analysis-variant final`, root
-  `batch_effect/uncorrected_final`, one five-dataset selection containing the
-  four uncorrected targets above plus `Kidney_KPMP_full`, and exactly
-  `prepare_pseudobulk`, `pseudobulk`, `gloscope`, `composition`, `mrvi`,
-  `pilot`, and `qot`. The corrected lane uses
-  `--pass corrected --analysis-variant corrected_final`, root
-  `batch_effect/corrected_final`, one nine-dataset selection in the corrected
-  order above, and the same seven methods. It has at most 63 method rows.
-  Both lanes use explicit eight-key artifact manifests; dataset rows dispatch
-  concurrently within each lane, and distinct corrected/uncorrected roots may
-  run in parallel after their respective Pipeline 3 predecessors are
-  reviewed. Valid rows are skipped individually; only missing or invalid rows
-  are selected.
-- **Pipeline 5 metadata boundary:** Corrected sample-level consumers read the
-  obs-only metadata Feather under the corrected analysis root and apply
-  majority only to `Alzheimer/assay`,
-  `Breast_cancer/suspension_dissociation_time` (literal `unknown` is an
-  ordinary configured class), and `Lupus_PBMC/batch_cov`. For every
-  batch-effect calculation, `datasets.json` is authoritative and only the
-  configured `columns.cell_type_high_res` is used when a cell-type column is
-  needed; `columns.cell_type_low_res` is never a calculation input. Lupus
-  therefore uses its configured `louvain` column. Corrected cell-level methods
-  retain source cell values. The uncorrected lane has no majority assignment.
-  Corrected-final sample-level consumers retain all configured technical keys
-  in metadata/source identity, omit one-level keys from the effective design,
-  and apply `NO_CORRECTION` when no key has at least two levels. Full-cell
-  validation remains strict.
-- **Disabled cohorts:** `CombinedPBMC`, `Kidney_KPMP`, `Myocardial_infarction`,
-  and `Parkinson`, plus `_debug`, remain non-production and MUST be absent from
-  all production selections.
-- **Diagnostic fixture boundary:** `_debug` remains available only for
-  explicitly separate diagnostic probes and is never a production target,
-  validator input, or scheduler selection.
-- **Annotation exemption:** `Alzheimer`, `Diabetes`, and `Parkinson` remain
-  covered by the existing `not_suitable_for_auto_annotation` exemption.
-  Historical batch processing does not imply that automatic HiTME/scATOMIC
-  annotation was required for those datasets.
-- Batch-effect-only `batch_effect_uncorrected` and `batch_effect_corrected`
-  views do not run Pipeline 4; their final H5ADs use the configured
-  source/author cell-type columns without HiTME/scATOMIC annotation work.
-- **Legacy baseline selection:** benchmark methods are `gloscope`, `mofa`,
-  `pseudobulk`, `composition`, `scitd`, `mrvi`, `scpoli`, `pilot`, `qot`, and
-  `pilotgm`; analyses are `trans` and `zeroimp`; the legacy batch-effect suite
-  is `prepare_pseudobulk`, `pseudobulk`, `gloscope`, `composition`, `mrvi`,
-  `pilot`, and `qot`.
-- The approved final Pipeline 5 suite is exactly the seven methods above and
-  is valid only for the explicit uncorrected five-dataset or corrected
-  nine-dataset selections. Ordinary benchmark, post-baseline, and broad
-  selections remain outside these final lanes.
-- The Stage 5 default method list remains the baseline list above. Methods or
-  scripts registered after this baseline are not defaults and run only when
-  named explicitly with `--methods` or an explicit selection manifest.
-  Existing valid benchmark rows and unaffected legacy batch rows are skipped
-  individually without `--force`; valid rows remain outside every
-  recomputation selection.
-- A `datasets.json` change invalidates only dependent downstream rows; it
-  never triggers a blanket rerun. Gate history is evidence only: an old
-  `FAILED`, `PRELAUNCH_STOP`, or stale gate manifest cannot select rows for
-  reuse or recomputation. Existing valid artifacts remain outside every
-  recomputation selection, and `--force` is allowed only for explicitly
-  scoped rows with a recorded dependency or integrity reason.
-- Selection starts with a validator-only preflight. If every requested row
-  satisfies its artifact contract, write `NOOP_VALIDATED` to the specified run
-  report and do not call durable-gate `prepare` or `launch`. If a row is
-  missing or invalid, submit only those rows through a new snapshot-backed
-  durable gate; actual compute still requires emitted scheduler IDs, terminal
-  accounting, and reviewer approval.
-
-### Snapshot-backed full-cohort workflow
-
-Full-cohort preprocessing, annotation, benchmark, evidence, and correction
-runs use a commit-keyed source snapshot and a versioned runtime identity
-before durable-gate `prepare`. Resolve Bamboo's remote home before composing
-paths; the repository clone is `${BAMBOO_HOME}/ECODA_paper`, while scratch is
-`${BAMBOO_HOME}/scratch/ECODA_paper`. Create the source snapshot from a clean
-full-commit checkout, then use the snapshot's own executor:
-
-Publish and validate the versioned runtime image and manifest under
-`${RUNTIME_ROOT}` before `prepare`; do not fall back to the mutable canonical
-checkout or an unversioned runtime path.
-
-
-```bash
-BAMBOO_HOME="$(ssh bamboo 'printf %s "$HOME"')"
-SOURCE_COMMIT="<full-40-hex-commit>"
-SNAPSHOT_PARENT="${BAMBOO_HOME}/scratch/ECODA_paper/_ecoda_source_snapshots"
-RUNTIME_ID="<versioned-runtime-id>"
-RUN_ID="<run-id>"
-SNAPSHOT_ROOT="${SNAPSHOT_PARENT}/${SOURCE_COMMIT}"
-RUNTIME_ROOT="${BAMBOO_HOME}/scratch/ECODA_paper/_ecoda_runtime/${RUNTIME_ID}"
-
-/bin/bash "${BAMBOO_HOME}/ECODA_paper/src/utils/bash/ecoda_source_snapshot.sh" \
-  create --source-root "${BAMBOO_HOME}/ECODA_paper" \
-  --snapshot-parent "${SNAPSHOT_PARENT}" --commit "${SOURCE_COMMIT}"
-
-WRAPPER="/bin/bash \
-  \"${SNAPSHOT_ROOT}/tree/src/utils/bash/ecoda_source_snapshot.sh\" exec \
-  --source-root \"${SNAPSHOT_ROOT}/tree\" \
-  --source-manifest \"${SNAPSHOT_ROOT}/identity/source.manifest\" \
-  --host-env-prefix \"${BAMBOO_HOME}/ECODA_paper/.pixi/envs/py-cuda13\" \
-  --runtime-image \"${RUNTIME_ROOT}/ecoda-py-cuda13.sif\" \
-  --runtime-manifest \"${RUNTIME_ROOT}/ecoda-py-cuda13.sif.manifest\" \
-  --run-id \"${RUN_ID}\" \
-  --scratch-root \"${BAMBOO_HOME}/scratch/ECODA_paper\" \
-  --logs-root \"${BAMBOO_HOME}/scratch/ECODA_paper/_ecoda_logs/${RUN_ID}\" \
-  --script \"src/<stage>/<submitter>.sh\" -- <explicit-selection-arguments>"
-
-uv run "$HOME/.agents/skills/durable-hpc-gate/scripts/durable_hpc_gate.py" prepare \
-  --profile "$PWD/.agents/skills/durable-hpc-gate-ecoda/references/profile.json" \
-  --manifest "$PWD/.gate/${RUN_ID}.json" \
-  --output "$PWD/.gate/${RUN_ID}.prepare.json" \
-  --project ECODA --gate-id "${RUN_ID}" --remote-host bamboo \
-  --remote-workdir "${BAMBOO_HOME}/ECODA_paper" --exact-command "${WRAPPER}" \
-  --serialization-group ecoda-benchmark \
-  --tmux-session "${RUN_ID}" \
-  --completion-channel "file:${BAMBOO_HOME}/scratch/ECODA_paper/gates/${RUN_ID}.done" \
-  --remote-manifest "${BAMBOO_HOME}/scratch/ECODA_paper/gates/${RUN_ID}.manifest.json" \
-  --remote-runner "${BAMBOO_HOME}/scratch/ECODA_paper/gates/${RUN_ID}.runner.sh" \
-  --remote-log "${BAMBOO_HOME}/scratch/ECODA_paper/gates/${RUN_ID}.log" \
-  --remote-status "${BAMBOO_HOME}/scratch/ECODA_paper/gates/${RUN_ID}.status.json"
-uv run "$HOME/.agents/skills/durable-hpc-gate/scripts/durable_hpc_gate.py" reconcile \
-  --manifest "$PWD/.gate/${RUN_ID}.json" --profile "$PWD/.agents/skills/durable-hpc-gate-ecoda/references/profile.json" \
-  --output "$PWD/.gate/${RUN_ID}.reconcile.json"
-uv run "$HOME/.agents/skills/durable-hpc-gate/scripts/durable_hpc_gate.py" launch \
-  --manifest "$PWD/.gate/${RUN_ID}.json" --profile "$PWD/.agents/skills/durable-hpc-gate-ecoda/references/profile.json" \
-  --output "$PWD/.gate/${RUN_ID}.launch.json"
-```
-
-After `launch`, arm exactly one unbounded durable `wait`, then perform one
-terminal `inspect` with every scheduler array/watchdog ID emitted by the
-wrapper and obtain the required Luna Max reviewer approval. The durable
-workflow owns the terminal accounting and artifact audit; do not rerun the
-wrapper after an ambiguous launch.
-
-Before that inspect, the completion task runs the exact run-scoped
-`ecoda_run_audit.sh` invocation with the run root, stage, selection, source
-manifest, and runtime identity; it never scans all run roots or submits repair
-compute.
-
-Unpinned direct invocations of stage submitters (for example, the scripts
-under `src/2_dataset_specific_preprocessing/`,
-`src/3_scrnaseq_preprocessing/`, `src/4_cell_type_annotation/`, and
-`src/5_run_benchmark_methods/`) are **legacy/validator-only**. They may not
-submit compute for a new run unless they carry the required immutable source
-manifest, runtime identity, auxiliary-root identity, exact run ID, and
-selected-row scope. Validator-only checks may inspect existing artifacts but
-must not create scheduler work.
+  metadata artifact. Existing H5ADs, RDS bundles, pseudobulks, manifests,
+  checksums, and gates are immutable; new derived outputs use separate
+  run-owned roots.
 
 ## Key Directories
 
 - `src/1_stage_data/` — NAS-to-scratch staging.
-- `src/2_dataset_specific_preprocessing/` — cohort-specific conversion and harmonization.
-- `src/3_scrnaseq_preprocessing/` — shared Scanpy preprocessing and h5ad production.
-- `src/4_cell_type_annotation/` — chunk preparation, annotation workers, and merge.
-- `src/5_run_benchmark_methods/` — R/Python benchmark workers, submitters, watchdogs, and result synchronization.
-- `src/utils/` — dataset I/O, scoring, imports, environment checks, preprocessing utilities, and shell environment setup.
-- `notebooks/` — local analysis, publication figures, and dataset-onboarding reports.
-- `tests/` — focused standalone regressions. Shell watchdog tests remain beside benchmark code.
-- `data/` — large/gitignored data; never scan recursively or delete recursively without explicit confirmation.
-- `$HOME/scratch/ECODA_paper` on `bamboo` — data storage only, not a git clone. The HPC repository is `$HOME/ECODA_paper`.
+- `src/2_dataset_specific_preprocessing/` — cohort-specific conversion.
+- `src/3_scrnaseq_preprocessing/` — shared Scanpy preprocessing and H5AD
+  production.
+- `src/4_cell_type_annotation/` — annotation preparation, workers, and merge.
+- `src/5_run_benchmark_methods/` — benchmark workers, submitters, watchdogs,
+  and result synchronization.
+- `src/utils/` — dataset I/O, scoring, imports, environment checks,
+  preprocessing utilities, and shell environment setup.
+- `notebooks/` — local analysis, publication figures, and onboarding reports.
+- `tests/` — focused standalone regressions.
+- `data/` — large/gitignored data; never scan recursively or delete
+  recursively without explicit confirmation.
+- On `bamboo`, `$HOME/scratch/ECODA_paper` is data storage, not a git clone;
+  the HPC repository is `$HOME/ECODA_paper`.
 
-## Development Commands
+## Runtime and tooling
 
-### Local macOS setup and analysis
-
-```bash
-pixi install
-bash src/5_run_benchmark_methods/test_oom_retry.sh
-pixi run check-r-deps
-```
-HPC-only pinned R source packages are installed through the guarded
-`src/utils/bash/setup_env_sbatch.sh` or `src/utils/bash/refresh_env.sh` entry
-points; do not run `pixi run setup` directly.
-
-### HPC setup
-
-From the repository clone on `bamboo`:
-
-```bash
-cd "$HOME/ECODA_paper"
-sbatch src/utils/bash/setup_env_sbatch.sh
-```
-
-For a guarded login-node refresh, first ensure no array jobs are active and use a persistent session:
-
-```bash
-tmux new -s env-refresh
-cd "$HOME/ECODA_paper"
-source src/slurm_config.sh
-src/utils/bash/refresh_env.sh
-```
-
-### Representative pipeline commands
-
-For any full-cohort preprocessing, annotation, benchmark, evidence, or
-correction run, use the **Snapshot-backed full-cohort workflow** above. The
-durable gate must receive the exact wrapper that executes from the immutable
-source snapshot, with the run-bound source/runtime/auxiliary manifests and
-explicit selected-row scope recorded before `prepare`.
-
-After `launch`, arm the single unbounded durable `wait`, use the terminal
-`inspect` and Luna Max reviewer flow, and use `status` only for a
-non-mutating recovery view. Never monitor a full-cohort run with ad hoc
-`squeue`/`sacct` polling or invoke an unpinned stage submitter directly.
-
-Direct submitter commands without the required immutable source/runtime
-identity are legacy/validator-only; validator checks may inspect existing
-artifacts but may not submit workers, retries, or new scheduler jobs.
-
-
-## Code Conventions & Common Patterns
-
-- **Configuration over duplication:** resolve datasets and columns through `datasets.json` helpers; source `src/slurm_config.sh` in every HPC shell entry point.
-- **Clean cross-language contracts:** h5ad stores raw counts in `layers["counts"]`; Feather stores tabular matrices with sample identity; RDS result bundles carry features, labels, and distances. Preserve row names/sample order and reject NA or mismatched identifiers.
-- **scITD sample-universe exception:** scITD may legitimately drop samples
-  during cell-type filtering/tensor factorization when it cannot produce a
-  feature row for a sample. Its result bundles can therefore contain fewer
-  sample IDs than the source H5AD. Validators must report the dropped IDs and
-  apply this exception only to scITD; all other benchmark methods must retain
-  the current sample universe. Dropped scITD samples are a known method
-  limitation, not a reason to rerun unrelated datasets or methods.
-- **Fail closed:** R uses `stop()`/`stopifnot()` and benchmark parallelism uses `.errorhandling="stop"`; shell scripts use strict status gates; Python validates required observation columns. Warn-and-skip is reserved for explicitly optional/missing artifacts.
-- **Artifact safety:** use temporary files plus atomic rename, per-sample checkpoints, and MD5 verification before `readRDS`. Do not weaken checksum checks.
-- **Naming:** numbered scripts encode pipeline order (`1_submit...`, `2_process...`, `3_merge...`); dataset-specific code stays under stage 2; shared helpers belong in `src/utils/`; shell environment variables are uppercase.
-- **Dependencies/state:** there is no framework dependency-injection container or centralized in-memory state manager. Pass data/config explicitly through functions and CLI arguments; persistent state is files, manifests, status files, and checksums.
-- **Performance:** retain sparse matrices and subset before densifying. Do not add avoidable full-cohort copies. `scPoli` intentionally densifies only the selected HVG subset.
-- **R/Python imports:** use namespaced R package calls in HPC workers where established. Keep lazy imports for optional heavyweight Python methods.
-- **Shell compatibility:** shared benchmark shell helpers and tests support Bash 3.2; avoid unsupported newer Bash syntax unless the target script explicitly requires it.
-- **Comments/docs:** document scientific invariants and non-obvious scheduler behavior, not line-by-line mechanics. Update commands when entry points change.
-- **SLURM spool recovery:** submitted scripts may execute from `/var/spool/slurmd/`. Recover their source directory before sourcing configuration:
-
-  ```bash
-  if [[ -n "${SLURM_JOB_ID:-}" ]]; then
-      SCRIPT_DIR="$(scontrol show job "${SLURM_JOB_ID}" | awk -F= '/Command=/ {print $2}' | xargs dirname)"
-  else
-      SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  fi
-  ```
-
-- Plans should always be saved in `.agents/plans/` within this repo. The plan file name should be short and descriptive and prepended by the date and time, e.g. `1787688946000-onboarding-datasets-json-plan.md`.
-- **Completed implementation plans:** move plans from `.agents/plans/` to `.agents/plans/archive/`, stage the implementation and archived plan, then commit and push.
-
-## Important Files
-
-- `datasets.json` — central dataset, metadata, and view contract; confirmation required before edits.
-- `pixi.toml`, `pixi.lock` — runtime environments, pinned dependencies, and Pixi tasks.
-- `src/slurm_config.sh` — canonical HPC paths, interpreters, modules, resources, and retry ceilings.
-- `src/utils/datasets_io.R`, `src/utils/py/datasets_io.py` — shared dataset configuration access.
-- `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py` — canonical single-cell preprocessing entry point.
-- `src/5_run_benchmark_methods/benchmark_pipeline.R` — transformations, zero imputation, distances, and parallel scoring.
-- `src/5_run_benchmark_methods/benchmark_methods_r.R` — R method wrappers and result-bundle contract.
-- `src/5_run_benchmark_methods/benchmark_submit_common.sh` — submission, retry, synchronization, and checksum logic.
-- `src/utils/scoring_metrics.R` — benchmark metrics.
-- `src/utils/bash/setup_env_sbatch.sh`, `src/utils/bash/refresh_env.sh` — serialized environment mutation and smoke checks.
-- `README.md`, `docs/ARCHITECTURE.md` — operator workflow and pipeline map.
-- `notebooks/benchmark_analysis.rmd` - analysis code to summarize the processed benchmark data (sample embedding methods), e.g. to show the separation scores, MDS plots, runtime, etc.
-- `notebooks/batch_effect_analysis.rmd` - (mostly implemented now, should preferably re-use existing functions and code snippets from the `notebooks/benchmark_analysis.rmd`) analysis code to summarize the processed batch effect analysis data (sample embedding methods), e.g. to show the separation scores, MDS plots
-  - do not knitr render the notebooks `notebooks/benchmark_analysis.rmd` and `notebooks/batch_effect_analysis.rmd`. just execute the code chunks (as needed) to create the pdf figure output (saved in the `plots/` directory).
-
-## Runtime/Tooling Preferences
-
-- **Package/environment manager:** Pixi. Do not introduce Conda, renv, pip-only, npm, or a second lockfile for project dependencies.
-- **Local Python (macOS):** Do not assume a system `python` or `python3` exists.
-  - Prefer `pixi run -e default python ...` (or the equivalent Pixi interpreter) for Python-dependent repository work.
-  - Do not switch to JavaScript/Node.js merely because bare Python is unavailable; an intentional JS fallback is acceptable when the task does not require Python-specific code or packages.
-- **OMP Python eval:** OMP's Python eval backend does not automatically select this repository's Pixi interpreter.
-  - If using Python `eval`, set `python.interpreter` to the repository's absolute Pixi path, for example `/absolute/path/to/ECODA_paper/.pixi/envs/default/bin/python`, or run the script through `bash` with `pixi run -e default python ...`.
-- **Remote binary artifacts:** `read ssh://host/path` reads remote UTF-8 text files and directory listings only; it cannot return arbitrary binary bytes, and `:raw` does not change that.
-  - Never use it for `.feather`, `.parquet`, `.arrow`, `.h5`, `.h5ad`, `.rds`, `.sqlite`, or other binary artifacts.
-  - Inspect remotely with `bash` plus `ssh` using the configured Pixi interpreter, or copy with `scp`/`rsync` and inspect locally; use `sshfs` when a mount is appropriate.
-- **Required versions:** R `4.5.2`; Python `3.13.*`. Supported base platforms are `osx-arm64` and `linux-64`; HPC workers use the `py-cuda13` Pixi environment.
-- **Worker invocation:** never use bare `python`, `Rscript`, or ordinary `pixi run` inside jobs. Source the config and use its immutable commands:
+- Pixi is the package/environment manager. Do not introduce Conda, renv,
+  pip-only, npm, or a second lockfile.
+- Do not assume a system `python` or `python3`. Prefer
+  `pixi run -e default python ...` for local Python work. OMP Python eval
+  must use this repository's absolute Pixi interpreter.
+- Remote binary artifacts (`.feather`, `.parquet`, `.arrow`, `.h5`,
+  `.h5ad`, `.rds`, `.sqlite`, and similar) must be inspected with the
+  configured Pixi interpreter over SSH or copied with an explicitly scoped
+  `scp`/`rsync`; text-only remote reads are insufficient.
+- Required runtimes are R `4.5.2` and Python `3.13.*`; HPC workers use the
+  `py-cuda13` Pixi environment.
+- Worker jobs must source `src/slurm_config.sh`, enter `${PROJECT_ROOT}`, and
+  invoke the immutable configured commands:
 
   ```bash
   source src/slurm_config.sh
@@ -474,24 +221,79 @@ artifacts but may not submit workers, retries, or new scheduler jobs.
   ${PIXI_RSCRIPT} path/to/worker.R
   ```
 
-  `PYTHON_BIN` and `PIXI_RSCRIPT` resolve to the `py-cuda13` environment; do not invoke `pixi` inside workers because activation can mutate shared environment state.
-- Environment setup and refresh serialize on `logs/env_refresh.lock` and must not run while arrays are active.
-- `bamboo` is the HPC cluster. Login nodes are for editing, compilation, staging, NAS sync, and SLURM submission only.
-- Never run `rm -rf` against `$HOME/scratch` or `data/` without explicit user confirmation.
-- No project-wide formatter, linter, Makefile, or CI workflow is configured. Match surrounding R, Python, and shell style rather than inventing a second convention.
+  Never use bare `python`, `Rscript`, or ordinary `pixi run` inside jobs;
+  `PYTHON_BIN` and `PIXI_RSCRIPT` resolve to the pinned worker environment.
+- Environment setup and refresh serialize on `logs/env_refresh.lock` and must
+  not run while arrays are active. Login nodes are for editing, compilation,
+  staging, NAS sync, and SLURM submission only.
+- Shared benchmark shell helpers and tests support Bash 3.2; avoid newer Bash
+  syntax unless a target script explicitly requires it. Submitted jobs may
+  start in `/var/spool/slurmd/`; recover the source directory before sourcing
+  configuration.
+- Never run `rm -rf` against `$HOME/scratch` or `data/` without explicit user
+  confirmation. No project-wide formatter, linter, Makefile, or CI workflow
+  is configured; match surrounding style.
 
-## Testing & QA
+## Code conventions
 
-QA is focused and script-based; there is no aggregate test runner, CI gate, coverage threshold, `pytest`, or `testthat` suite.
+- Resolve datasets and columns through `datasets.json` helpers; source
+  `src/slurm_config.sh` in every HPC shell entry point.
+- Preserve cross-language contracts: H5AD raw counts in `layers["counts"]`,
+  Feather tabular sample identity, and RDS feature/label/distance bundles.
+  Preserve row names and sample order; reject NA or mismatched identifiers.
+- scITD may legitimately drop samples during cell-type filtering or tensor
+  factorization. Validators must report dropped IDs and apply this exception
+  only to scITD; other methods retain the current sample universe.
+- Use `stop()`/`stopifnot()`, parallel `.errorhandling="stop"`, strict shell
+  status gates, and required-column validation. Warn-and-skip is only for
+  explicitly optional artifacts.
+- Write artifacts through temporary files plus atomic rename, checkpoint
+  per-sample work, and verify MD5 before `readRDS`. Never weaken ownership,
+  provenance, schema, or checksum checks.
+- Numbered scripts encode pipeline order; dataset-specific code stays under
+  stage 2; shared helpers belong in `src/utils/`; shell variables are
+  uppercase. Pass configuration/state explicitly through functions and CLI
+  arguments rather than adding a global state manager.
+- Retain sparse matrices and subset before densifying. Use namespaced R calls
+  where established and lazy imports for optional heavyweight Python methods.
+- Document scientific invariants and non-obvious scheduler behavior, not
+  line-by-line mechanics. Save plans in `.agents/plans/` with a
+  date-prefixed descriptive name; archive completed implementation plans
+  under `.agents/plans/archive/`.
 
-- `src/5_run_benchmark_methods/test_oom_retry.sh` uses deterministic shell stubs. It covers memory escalation, scheduler states, status files, notifications, retry ceilings, and fail-closed watchdog behavior.
-- `tests/test_ecoda_run_common.sh`, `tests/test_stage2_submitter.sh`,
-  `tests/test_stage2_watchdog.sh`, `tests/test_preprocessing_stage_submitter.sh`,
-  `tests/test_annotation_stage_submitter.sh`, and the benchmark matrix/sync
-  tests cover selection, ownership, dependency edges, OOM-only retries, and
-  one final synchronization owner.
-- `tests/test_artifact_contracts.py` and `tests/test_prepare_chunks.py` cover
-  incomplete artifact rejection, complete annotation key coverage, and
-  run-owned multi-view chunk preparation.
+## Important files
 
-For changes, run the narrow contract test and exercise the `_debug` path. Add tests only for new observable behavior, boundary conditions, failure handling, or scientific invariants. Keep fixtures temporary and deterministic; stub Slurm/NAS effects rather than requiring live infrastructure.
+- `datasets.json` — central dataset, metadata, and view contract.
+- `pixi.toml`, `pixi.lock` — pinned environments and dependencies.
+- `src/slurm_config.sh` — canonical HPC paths, interpreters, modules,
+  resources, and retry ceilings.
+- `src/utils/datasets_io.R`, `src/utils/py/datasets_io.py` — shared config
+  access.
+- `src/3_scrnaseq_preprocessing/1.1.1_preprocess.py` — canonical H5AD
+  preprocessing entry point.
+- `src/5_run_benchmark_methods/benchmark_pipeline.R`,
+  `benchmark_methods_r.R`, and `benchmark_submit_common.sh` — benchmark
+  transforms, method contracts, submission, retry, sync, and checksums.
+- `src/utils/scoring_metrics.R` — benchmark metrics.
+- `src/utils/bash/setup_env_sbatch.sh` and `refresh_env.sh` — serialized
+  environment mutation and smoke checks.
+- `README.md` and `docs/ARCHITECTURE.md` — operator workflow and pipeline map.
+- `notebooks/` — execute relevant code chunks as needed; do not knitr-render
+  benchmark notebooks merely to produce their PDF outputs.
+
+## Testing and QA
+
+QA is focused and script-based; there is no aggregate test runner, CI gate,
+coverage threshold, `pytest`, or `testthat` suite.
+
+- Deterministic shell watchdog tests cover memory escalation, scheduler
+  states, status files, notifications, retry ceilings, and fail-closed
+  behavior.
+- Focused stage submitter, watchdog, artifact-contract, chunk-preparation,
+  benchmark-matrix, selection, ownership, and synchronization tests cover
+  the corresponding contracts.
+- For changes, run the narrow contract test and exercise the `_debug` path
+  when appropriate. Add tests only for new observable behavior, boundaries,
+  failure handling, or scientific invariants. Keep fixtures temporary and
+  deterministic, and stub Slurm/NAS effects instead of requiring live
+  infrastructure.

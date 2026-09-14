@@ -569,7 +569,7 @@ ecoda_corrected_batch_method_policy() {
       ;;
     prepare_pseudobulk|pseudobulk)
       ECODA_CORRECTED_BATCH_METHOD_ID="Pseudobulk"
-      ECODA_CORRECTED_BATCH_MODEL_ID="pseudobulk_composite_v1"
+      ECODA_CORRECTED_BATCH_MODEL_ID="pseudobulk_limma_fixed_effects_v1"
       ;;
     gloscope)
       ECODA_CORRECTED_BATCH_METHOD_ID="GloScope"
@@ -589,7 +589,7 @@ ecoda_corrected_batch_method_policy() {
       ;;
     composition)
       ECODA_CORRECTED_BATCH_METHOD_ID="ECODA_authors_HR"
-      ECODA_CORRECTED_BATCH_MODEL_ID="ecoda_additive_random_intercepts_v1"
+      ECODA_CORRECTED_BATCH_MODEL_ID="limma_fixed_effects_v1"
       ;;
     *)
       _ecoda_die "unsupported corrected batch method policy: ${method}"
@@ -2012,7 +2012,7 @@ _ecoda_stage5_artifacts_for() {
 _ecoda_expand_output_selection() {
   local stage="${1:-}" selection="${2:-}" step script ds view label outputs extra
   local path name pass nas_path artifact_index write_flag
-  local old_ifs
+  local old_ifs expected_script expected_outputs
   _ecoda_init_output_arrays
 
   [[ -r "${selection}" && ! -L "${selection}" ]] || {
@@ -2029,20 +2029,26 @@ _ecoda_expand_output_selection() {
         [[ "${step}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ &&
            -n "${script}" && -n "${outputs}" && -n "${dependency}" &&
            -n "${owner}" && -z "${extra}" ]] || return 1
-        if type step_script >/dev/null 2>&1; then
+        if type step_script >/dev/null 2>&1 &&
+           type step_outputs >/dev/null 2>&1; then
           expected_script="$(step_script "${step}" 2>/dev/null || true)"
-          [[ -n "${expected_script}" && "${script}" == "${expected_script}" ]] || {
-            _ecoda_die "Stage 2 script contract mismatch for ${step}"
-            return 1
-          }
-        fi
-        if type step_outputs >/dev/null 2>&1; then
           expected_outputs="$(step_outputs "${step}" 2>/dev/null || true)"
-          [[ -n "${expected_outputs}" && "${outputs}" == "${expected_outputs}" ]] || {
-            _ecoda_die "Stage 2 output contract mismatch for ${step}"
-            return 1
-          }
+        elif type stage2_step_script >/dev/null 2>&1 &&
+             type stage2_step_outputs >/dev/null 2>&1; then
+          expected_script="$(stage2_step_script "${step}" 2>/dev/null || true)"
+          expected_outputs="$(stage2_step_outputs "${step}" 2>/dev/null || true)"
+        else
+          _ecoda_die "Stage 2 step/output contract resolver is unavailable"
+          return 1
         fi
+        [[ -n "${expected_script}" && "${script}" == "${expected_script}" ]] || {
+          _ecoda_die "Stage 2 script contract mismatch for ${step}"
+          return 1
+        }
+        [[ -n "${expected_outputs}" && "${outputs}" == "${expected_outputs}" ]] || {
+          _ecoda_die "Stage 2 output contract mismatch for ${step}"
+          return 1
+        }
         write_flag=1
         [[ "${owner}" == "-" ]] && write_flag=0
         old_ifs="${IFS}"
@@ -2399,6 +2405,7 @@ ecoda_validate_artifacts() {
     ecoda_validate_checksum "${path}" || return 1
   done
 }
+
 # Validate Stage 2 derived outputs semantically after checksum validation.
 # These checks are intentionally delegated to the pinned Python/R runtimes so
 # a stale or structurally plausible artifact cannot satisfy a prerequisite.
@@ -2406,6 +2413,37 @@ ecoda_validate_stage2_output() {
   local step="$1"
   local path="$2"
   case "${step}" in
+    alzheimer_donor_assay)
+      # The donor-by-assay worker owns the complete source/output contract:
+      # source obs preservation, collision and mixed-metadata checks, fixed
+      # observed counts, deterministic IDs, and the output checksum. Invoke
+      # it from the immutable run snapshot rather than accepting a structural
+      # H5AD check or a mutable checkout path.
+      local source_root validator raw expected_output validation_output
+      source_root="${ECODA_SOURCE_ROOT:-${SOURCE_ROOT:-}}"
+      [[ "${source_root}" = /* && "${source_root##*/}" == "tree" ]] || return 1
+      validator="$(ecoda_require_source_script_path \
+        "${source_root}/src/2_dataset_specific_preprocessing/1.7.1_create_alzheimer_donor_assay.py" \
+        "${source_root}")" || return 1
+      raw="${HPC_SCRATCH_DIR:-}/Alzheimer/data/SEAAD_Alzheimer.h5ad"
+      expected_output="${HPC_SCRATCH_DIR:-}/Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad"
+      [[ "${raw}" = /* && -f "${raw}" && ! -L "${raw}" && -r "${raw}" ]] || return 1
+      [[ "${path}" == "${expected_output}" ]] || return 1
+      [[ "${PYTHON_BIN:-}" = /* && -x "${PYTHON_BIN}" ]] || return 1
+      if ! validation_output="$("${PYTHON_BIN}" "${validator}" \
+        --input-file "${raw}" \
+        --output-file "${path}" \
+        --expected-samples 104 \
+        --expected-donors 83 \
+        --expected-assay-counts "10x3v3=83,10xmultiome=21" \
+        --expected-sex-counts "female=59,male=45" \
+        --require-example-ids \
+        --validate-only)"; then
+        return 1
+      fi
+      [[ "${validation_output}" == \
+        "ALZHEIMER_DONOR_ASSAY_VALIDATED=1 cells=1395601 samples=104" ]]
+      ;;
     myocardial_counts)
       "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/derived_prerequisite_contract.py" \
         --path "${path}" --kind myocardial >/dev/null 2>&1

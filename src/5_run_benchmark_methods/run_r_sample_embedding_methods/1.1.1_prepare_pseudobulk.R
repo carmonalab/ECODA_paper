@@ -318,25 +318,24 @@ if (is.null(entry)) {
 sample_col <- "Sample"
 batch_keys <- NULL
 batch_context <- NULL
+effective_batch_keys <- NULL
 pseudobulk_batch_contract <- NULL
 h5ad_expected_batch_contract <- NULL
 python_batch_metadata <- NULL
-batch_col <- if (!is.null(analysis_pass) && analysis_pass == "corrected") {
+batch_col <- NULL
+if (!is.null(analysis_pass) && analysis_pass == "corrected") {
   if (is.null(entry$batch_col)) {
     stop("corrected batch-effect view requires a confirmed columns.batch")
   }
-  batch_keys <- ecoda_batch_normalize_keys(
+  # Keep the configured technical columns separate.  The corrected core
+  # derives estimable keys from batch_context; batch_col is only a direct
+  # original column for the one-key compatibility boundary.
+  batch_keys <- ecoda_hpc_normalize_keys(
     entry$batch_col,
     sample_col = sample_col,
     biological_label = entry$label_col
   )
-  if (length(batch_keys) >= 2L) {
-    "__ecoda_batch_combined_v1"
-  } else {
-    batch_keys[[1L]]
-  }
-} else {
-  NULL
+  if (length(batch_keys) == 1L) batch_col <- batch_keys[[1L]]
 }
 blind_mode <- is.null(analysis_pass) || analysis_pass == "uncorrected"
 correct_batch_mode <- identical(analysis_pass, "corrected")
@@ -374,7 +373,9 @@ if (correct_batch_mode && !corrected_final_mode) {
     h5ad_path = h5ad_path,
     batch_keys = as.list(unname(batch_keys)),
     sample_col = sample_col,
-    biological_label = entry$label_col
+    biological_label = entry$label_col,
+    method_id = "preprocess",
+    model_id = "hvg_composite_v1"
   )
 }
 dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
@@ -439,18 +440,34 @@ if (correct_batch_mode) {
       python_metadata = python_batch_metadata
     )
   }
-  batch_col <- batch_context$scalar_batch_col
+  effective_batch_keys <- batch_context[["effective_batch_keys"]]
+  if (is.null(effective_batch_keys)) {
+    effective_batch_keys <- batch_context$validation[["effective_batch_keys"]]
+  }
+  if (is.null(effective_batch_keys)) effective_batch_keys <- character()
+  effective_batch_keys <- unname(as.character(effective_batch_keys))
+  if (length(effective_batch_keys) &&
+      any(!effective_batch_keys %in% batch_keys)) {
+    stop("Corrected pseudobulk effective keys are not configured technical columns")
+  }
+  # A constant key remains in metadata but never enters the correction design.
+  # Multiple effective keys are supplied through batch_context as separate
+  # original columns; no synthetic/composite column is created.
+  batch_col <- if (length(effective_batch_keys) == 1L) {
+    effective_batch_keys[[1L]]
+  } else {
+    NULL
+  }
   pseudobulk_batch_contract <- ecoda_hpc_augment_batch_contract(
     identity = ecoda_hpc_batch_contract_identity(
       batch_keys = batch_keys,
       sample_col = sample_col,
       method_id = "Pseudobulk",
-      model_id = "pseudobulk_composite_v1"
+      model_id = "pseudobulk_limma_fixed_effects_v1"
     ),
     validation = batch_context$validation,
     method_id = "Pseudobulk",
-    batch_keys = batch_keys,
-    scalar_batch_col = batch_context$scalar_batch_col
+    batch_keys = batch_keys
   )
 }
 
@@ -513,6 +530,7 @@ if (length(pending) > 0) {
     view = args$view,
     analysis_pass = analysis_pass,
     run_id = ecoda_local_current_run_id(),
+    batch_keys = if (correct_batch_mode) as.list(unname(batch_keys)) else NULL,
     batch_context = if (correct_batch_mode) batch_context else NULL,
     batch_contract = if (correct_batch_mode) pseudobulk_batch_contract else NULL,
     expected_h5ad_batch_contract = h5ad_expected_batch_contract

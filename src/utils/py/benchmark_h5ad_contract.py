@@ -65,12 +65,15 @@ _BATCH_METHOD_IDS = frozenset(
 )
 _BATCH_MODEL_IDS = frozenset(
     {
+        # Active corrected artifact identities.  Historical lme4/combined
+        # model IDs are intentionally excluded from this releasing validator;
+        # read-only compatibility must use an explicit historical branch.
         "hvg_composite_v1",
         "harmony_native_list_v1",
-        "ecoda_additive_random_intercepts_v1",
-        "pseudobulk_composite_v1",
         "mrvi_composite_v1",
         "embedding_consumer_harmony_v1",
+        "limma_fixed_effects_v1",
+        "pseudobulk_limma_fixed_effects_v1",
     }
 )
 _BATCH_KEY_FIELDS = (

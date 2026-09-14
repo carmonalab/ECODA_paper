@@ -18,6 +18,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.utils.py.batch_contract import (  # noqa: E402
     build_batch_contract_identity,
+    batch_correction_spec_for_keys,
+    validate_batch_validation_summary,
 )
 from src.utils.py.datasets_io import read_datasets_json  # noqa: E402
 from src.utils.py.h5ad_source_identity import (  # noqa: E402
@@ -27,7 +29,7 @@ from src.utils.py.h5ad_source_identity import (  # noqa: E402
     verify_source_identity,
 )
 from src.utils.py.benchmark_h5ad_contract import (  # noqa: E402
-    validate_batch_contract_identity,
+    validate_batch_contract_identity as _legacy_validate_batch_contract_identity,
 )
 BATCH_DATASET_ORDER = (
     "Alzheimer",
@@ -45,20 +47,39 @@ BATCH_DATASET_ORDER = (
 )
 PYTHON_METHODS = {"mrvi", "scpoli", "pilot", "qot", "pilotgm"}
 R_METHODS = {"gloscope", "mofa", "pseudobulk", "composition", "scitd"}
-CONSUMES_PSEUDOBULK = {"mofa", "pseudobulk", "composition"}
-
 _CORRECTED_METHOD_IDENTITIES = {
-    "prepare_pseudobulk": ("Pseudobulk", "pseudobulk_composite_v1"),
-    "pseudobulk": ("Pseudobulk", "pseudobulk_composite_v1"),
+    "prepare_pseudobulk": (
+        "Pseudobulk",
+        "pseudobulk_limma_fixed_effects_v1",
+    ),
+    "pseudobulk": (
+        "Pseudobulk",
+        "pseudobulk_limma_fixed_effects_v1",
+    ),
     "composition": (
         "ECODA_authors_HR",
-        "ecoda_additive_random_intercepts_v1",
+        "limma_fixed_effects_v1",
     ),
     "gloscope": ("GloScope", "embedding_consumer_harmony_v1"),
     "mrvi": ("MrVI", "mrvi_composite_v1"),
     "pilot": ("PILOT", "embedding_consumer_harmony_v1"),
     "qot": ("QOT", "embedding_consumer_harmony_v1"),
 }
+
+_NEW_LIMMA_MODEL_IDS = frozenset(
+    {"limma_fixed_effects_v1", "pseudobulk_limma_fixed_effects_v1"}
+)
+_HISTORICAL_LIMMA_MODEL_IDS = frozenset(
+    {"ecoda_additive_random_intercepts_v1", "pseudobulk_composite_v1"}
+)
+_FORBIDDEN_LIMMA_CORRECTION_TOKENS = (
+    "__ecoda_batch_combined_v1",
+    "additive_random_intercepts",
+    "pseudobulk_composite",
+    "limma::lmFit",
+    "remove technical contribution",
+    "(1 |",
+)
 
 FINAL_BATCH_METHODS = (
     "prepare_pseudobulk",
@@ -78,6 +99,306 @@ FINAL_UNCORRECTED_DATASETS = (
     "Kidney_KPMP_full",
 )
 
+
+def _identity_value(identity: dict, fields: tuple[str, ...], label: str):
+    present = [field for field in fields if field in identity]
+    if not present:
+        raise ValueError(f"{label} is missing")
+    value = identity[present[0]]
+    if any(identity[field] != value for field in present[1:]):
+        raise ValueError(f"{label} aliases disagree")
+    return value
+
+
+def _identity_model(identity: object) -> str | None:
+    if not isinstance(identity, dict):
+        return None
+    value = identity.get("model_id", identity.get("model"))
+    return value if isinstance(value, str) else None
+
+
+def _validate_new_limma_identity(
+    identity: object,
+    label: str,
+    *,
+    require_metadata: bool,
+    require_summary: bool,
+) -> dict:
+    if not isinstance(identity, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    keys = tuple(
+        _identity_value(
+            identity,
+            (
+                "ordered_source_keys",
+                "ordered_keys",
+                "source_keys",
+                "batch_keys",
+                "keys",
+            ),
+            f"{label} ordered source keys",
+        )
+    )
+    if (
+        not keys
+        or any(not isinstance(key, str) or not key or key != key.strip() for key in keys)
+        or len(set(keys)) != len(keys)
+    ):
+        raise ValueError(f"{label} has invalid ordered source keys")
+    method_id = _identity_value(
+        identity, ("method_id", "method", "method_policy"), f"{label} method"
+    )
+    model_id = _identity_value(
+        identity, ("model_id", "model", "model_policy"), f"{label} model"
+    )
+    expected_model = {
+        "Pseudobulk": "pseudobulk_limma_fixed_effects_v1",
+        "ECODA_authors_HR": "limma_fixed_effects_v1",
+        "ECODA_seuratres_2": "limma_fixed_effects_v1",
+        "ECODA_authors_HR_NULL": "limma_fixed_effects_v1",
+    }.get(method_id)
+    if expected_model is None or model_id != expected_model:
+        raise ValueError(
+            f"{label} must use the active fixed-effect model for its method"
+        )
+    expected = build_batch_contract_identity(
+        keys,
+        sample_column="Sample",
+        method_id=method_id,
+        model_id=model_id,
+    )
+    for field in (
+        "contract_version",
+        "token_version",
+        "ordered_source_keys",
+        "scalarization",
+        "method_id",
+        "model_id",
+        "required_source_obs_columns",
+        "reserved_obs_name",
+        "reserved_obs_absent",
+        "fingerprint",
+    ):
+        if identity.get(field) != expected[field]:
+            raise ValueError(f"{label} has mismatched {field}")
+
+    metadata_fields = (
+        "effective_batch_keys",
+        "non_estimable_batch_keys",
+        "correction_state",
+        "correction_mode",
+        "correction_formula",
+        "fixed_effect_aliases",
+        "correction_design_formula",
+        "design_rank",
+        "design_columns",
+        "design_residual_df",
+    )
+    has_metadata = any(field in identity for field in metadata_fields)
+    if require_metadata and not all(field in identity for field in metadata_fields):
+        missing = [field for field in metadata_fields if field not in identity]
+        raise ValueError(f"{label} is missing fixed-effect metadata: {missing}")
+    if has_metadata:
+        effective = identity.get("effective_batch_keys")
+        non_estimable = identity.get("non_estimable_batch_keys")
+        if (
+            not isinstance(effective, (list, tuple))
+            or not isinstance(non_estimable, (list, tuple))
+            or any(not isinstance(key, str) for key in (*effective, *non_estimable))
+            or len(set(effective)) != len(effective)
+            or len(set(non_estimable)) != len(non_estimable)
+            or list(effective) != [key for key in keys if key in effective]
+            or list(non_estimable) != [key for key in keys if key in non_estimable]
+            or set(effective).union(non_estimable) != set(keys)
+            or set(effective).intersection(non_estimable)
+        ):
+            raise ValueError(f"{label} has invalid effective/non-estimable keys")
+        expected_mode, expected_formula = batch_correction_spec_for_keys(
+            method_id,
+            keys,
+            effective_batch_keys=effective,
+            non_estimable_batch_keys=non_estimable,
+        )
+        expected_state = "BATCH_CORRECTION" if effective else "NO_CORRECTION"
+        if (
+            identity["correction_state"] != expected_state
+            or identity["correction_mode"] != expected_mode
+            or identity["correction_formula"] != expected_formula
+        ):
+            raise ValueError(f"{label} has the wrong fixed-effect correction policy")
+        expected_aliases = {
+            key: f"batch_key_{index}"
+            for index, key in enumerate(keys, start=1)
+            if key in effective
+        }
+        if identity["fixed_effect_aliases"] != expected_aliases:
+            raise ValueError(f"{label} has the wrong fixed-effect aliases")
+        expected_design = (
+            "~1"
+            if not effective
+            else "~1 + " + " + ".join(expected_aliases.values())
+        )
+        design = identity["correction_design_formula"]
+        if (
+            not isinstance(design, str)
+            or "".join(design.split()) != "".join(expected_design.split())
+        ):
+            raise ValueError(f"{label} has the wrong separate-covariate design")
+        for field in ("design_rank", "design_columns", "design_residual_df"):
+            value = identity[field]
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 0
+            ):
+                raise ValueError(f"{label} has invalid {field}")
+        if identity["design_rank"] != identity["design_columns"]:
+            raise ValueError(f"{label} design rank is not full rank")
+        if identity["design_residual_df"] <= 0:
+            raise ValueError(f"{label} design has no residual degrees of freedom")
+        if identity["correction_mode"] in {
+            "limma_fixed_effects",
+            "limma_fixed_effects_pseudobulk",
+        } and any(
+            token in identity["correction_formula"]
+            for token in _FORBIDDEN_LIMMA_CORRECTION_TOKENS
+        ):
+            raise ValueError(f"{label} advertises a historical/scalarized correction")
+
+    if "validation_summary" in identity:
+        if require_summary and identity["validation_summary"] is None:
+            raise ValueError(f"{label} validation_summary is missing")
+        if identity["validation_summary"] is not None:
+            try:
+                summary = validate_batch_validation_summary(
+                    identity["validation_summary"], keys
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{label} has an invalid validation_summary") from exc
+            if has_metadata and (
+                summary["correction_mode"] != identity["correction_mode"]
+                or summary["correction_formula"] != identity["correction_formula"]
+            ):
+                raise ValueError(f"{label} summary correction policy disagrees")
+    elif require_summary:
+        raise ValueError(f"{label} is missing validation_summary")
+    return identity
+
+
+def validate_batch_contract_identity(
+    expected_batch_contract=None,
+    batch_contract=None,
+    *,
+    source_obs_columns=None,
+    reserved_absent=None,
+    require_recorded=False,
+    label="batch contract",
+    require_summary=None,
+    historical_compatibility=False,
+    require_effective_metadata=False,
+):
+    """Validate active limma identities, with an explicit historical branch."""
+    source = (
+        expected_batch_contract
+        if expected_batch_contract is not None
+        else batch_contract
+    )
+    model = _identity_model(source)
+    if model in _HISTORICAL_LIMMA_MODEL_IDS:
+        if not historical_compatibility:
+            raise ValueError(
+                f"{label} uses a historical correction identity; "
+                "pass historical_compatibility only for read-only legacy validation"
+            )
+        # Historical identities may carry the old correction formula.  Strip
+        # only that optional summary before the legacy structural reader; the
+        # explicit compatibility flag prevents this branch from validating a
+        # variant-qualified/new-policy output.
+        historical_expected = (
+            dict(expected_batch_contract)
+            if isinstance(expected_batch_contract, dict)
+            else expected_batch_contract
+        )
+        historical_recorded = (
+            dict(batch_contract)
+            if isinstance(batch_contract, dict)
+            else batch_contract
+        )
+        for identity in (historical_expected, historical_recorded):
+            if isinstance(identity, dict):
+                identity.pop("validation_summary", None)
+        return _legacy_validate_batch_contract_identity(
+            historical_expected,
+            historical_recorded,
+            source_obs_columns=source_obs_columns,
+            reserved_absent=reserved_absent,
+            require_recorded=require_recorded,
+            label=label,
+            require_summary=False,
+        )
+    if model in _NEW_LIMMA_MODEL_IDS:
+        required_summary = bool(require_summary)
+        if expected_batch_contract is not None:
+            _validate_new_limma_identity(
+                expected_batch_contract,
+                f"{label} expected identity",
+                require_metadata=False,
+                require_summary=False,
+            )
+        if batch_contract is not None:
+            metadata_fields = (
+                "effective_batch_keys",
+                "non_estimable_batch_keys",
+                "correction_state",
+                "correction_mode",
+                "correction_formula",
+                "fixed_effect_aliases",
+                "correction_design_formula",
+                "design_rank",
+                "design_columns",
+                "design_residual_df",
+            )
+            recorded_metadata = any(
+                field in batch_contract for field in metadata_fields
+            )
+            _validate_new_limma_identity(
+                batch_contract,
+                f"{label} recorded identity",
+                require_metadata=(
+                    require_effective_metadata or recorded_metadata
+                ),
+                require_summary=required_summary,
+            )
+        elif require_recorded:
+            raise ValueError(f"{label} is missing recorded corrected batch identity")
+        if expected_batch_contract is not None and batch_contract is not None:
+            for field in (
+                "ordered_source_keys",
+                "scalarization",
+                "method_id",
+                "model_id",
+                "fingerprint",
+            ):
+                if expected_batch_contract.get(field) != batch_contract.get(field):
+                    raise ValueError(f"{label} source/config identity does not match")
+        if source_obs_columns is not None:
+            required_columns = expected_batch_contract or batch_contract
+            required = required_columns["required_source_obs_columns"]
+            missing = [column for column in required if column not in source_obs_columns]
+            if missing:
+                raise ValueError(f"{label} source obs columns are missing: {missing}")
+        if reserved_absent is not None and reserved_absent is not True:
+            raise ValueError(f"{label} source obs contains a reserved temporary column")
+        return batch_contract or expected_batch_contract
+    return _legacy_validate_batch_contract_identity(
+        expected_batch_contract,
+        batch_contract,
+        source_obs_columns=source_obs_columns,
+        reserved_absent=reserved_absent,
+        require_recorded=require_recorded,
+        label=label,
+        require_summary=require_summary,
+    )
 
 def _configured_batch_effect_datasets(config_path: Path, view: str) -> tuple[str, ...]:
     """Return the non-private batch-effect datasets in config order."""
@@ -218,6 +539,7 @@ def _read_feather_batch_contract(
     path: Path,
     *,
     require_summary: bool = True,
+    historical_compatibility: bool = False,
 ) -> dict | None:
     """Read and verify the corrected identity beside one Feather artifact."""
     metadata_path = Path(f"{path}.runtime.json")
@@ -282,6 +604,8 @@ def _read_feather_batch_contract(
         identity,
         require_recorded=True,
         require_summary=require_summary,
+        historical_compatibility=historical_compatibility,
+        require_effective_metadata=True,
         label=f"Feather runtime metadata {metadata_path}",
     )
     return identity
@@ -529,6 +853,7 @@ def require_nonempty(
     batch_contract=None,
     require_runtime_batch_contract: bool = False,
     require_corrected_summary: bool = True,
+    historical_compatibility: bool = False,
 ) -> None:
     if not paths:
         raise ValueError(f"missing/invalid {description}: []")
@@ -540,6 +865,7 @@ def require_nonempty(
                 expected_batch_contract is not None and batch_contract is not None
             ),
             require_summary=False,
+            historical_compatibility=historical_compatibility,
             label=description,
         )
     expected = None if expected_samples is None else list(expected_samples)
@@ -565,6 +891,7 @@ def require_nonempty(
                     runtime_batch_contract = _read_feather_batch_contract(
                         path,
                         require_summary=require_corrected_summary,
+                        historical_compatibility=historical_compatibility,
                     )
                     if runtime_batch_contract is None:
                         raise ValueError(
@@ -576,6 +903,7 @@ def require_nonempty(
                             runtime_batch_contract,
                             require_recorded=True,
                             require_summary=require_corrected_summary,
+                            historical_compatibility=historical_compatibility,
                             label=f"{description} embedded identity",
                         )
                     validate_batch_contract_identity(
@@ -583,6 +911,7 @@ def require_nonempty(
                         runtime_batch_contract,
                         require_recorded=expected_batch_contract is not None,
                         require_summary=require_corrected_summary,
+                        historical_compatibility=historical_compatibility,
                         label=description,
                     )
             elif record_present:
@@ -764,6 +1093,7 @@ def validate(
     analysis_variant: str | None = None,
     expected_batch_contract=None,
     batch_contract=None,
+    historical_compatibility: bool = False,
 ) -> None:
     rows = read_selection(selection)
     selected_paths = [Path(selection)]
@@ -788,6 +1118,11 @@ def validate(
         raise ValueError("no selected benchmark labels")
     if analysis_variant not in (None, "", "final", "corrected_final"):
         raise ValueError(f"unknown analysis variant: {analysis_variant}")
+    if historical_compatibility and analysis_variant:
+        raise ValueError(
+            "historical compatibility is read-only and cannot validate a "
+            "variant-qualified corrected output"
+        )
     variant_datasets: tuple[str, ...] | None = None
     if analysis_variant in {"final", "corrected_final"}:
         expected_pass = (
@@ -877,6 +1212,7 @@ def validate(
                         expected_batch_contract,
                         require_recorded=True,
                         require_summary=False,
+                        historical_compatibility=historical_compatibility,
                         label=f"{ds}/{view}/{label} supplied identity",
                     )
                     row_expected_batch_contract = expected_batch_contract
@@ -894,6 +1230,7 @@ def validate(
                 batch_contract=batch_contract,
                 require_runtime_batch_contract=corrected,
                 require_corrected_summary=analysis_variant != "corrected_final",
+                historical_compatibility=historical_compatibility,
             )
     _reject_selected_partials(selected_paths, producer_run_id)
 
@@ -908,9 +1245,15 @@ def validate_single(
     analysis_variant: str | None = None,
     expected_batch_contract=None,
     batch_contract=None,
+    historical_compatibility: bool = False,
 ) -> None:
     if analysis_variant not in (None, "", "final", "corrected_final"):
         raise ValueError(f"unknown analysis variant: {analysis_variant}")
+    if historical_compatibility and analysis_variant:
+        raise ValueError(
+            "historical compatibility is read-only and cannot validate a "
+            "variant-qualified corrected output"
+        )
     if analysis_variant == "final" and corrected:
         raise ValueError("final analysis variant cannot validate corrected Stage 5 artifacts")
     if analysis_variant == "corrected_final" and not corrected:
@@ -944,6 +1287,7 @@ def validate_single(
         batch_contract=batch_contract,
         require_runtime_batch_contract=corrected,
         require_corrected_summary=analysis_variant != "corrected_final",
+        historical_compatibility=historical_compatibility,
     )
     _reject_selected_partials([Path(path)], producer_run_id)
 def _load_batch_contract_argument(value):
@@ -985,6 +1329,11 @@ def main() -> None:
     parser.add_argument("--batch-contract", default=None)
     parser.add_argument("--producer", default=None)
     parser.add_argument("--producer-run-id", default=None)
+    parser.add_argument(
+        "--historical-compatibility",
+        action="store_true",
+        help="read-only compatibility for immutable historical corrected artifacts",
+    )
     args = parser.parse_args()
     expected_batch_contract = _load_batch_contract_argument(
         args.expected_batch_contract
@@ -996,6 +1345,7 @@ def main() -> None:
             producer=args.producer,
             producer_run_id=args.producer_run_id,
             corrected=args.batch_pass == "corrected",
+            historical_compatibility=args.historical_compatibility,
             analysis_variant=args.analysis_variant,
             expected_batch_contract=expected_batch_contract,
             batch_contract=batch_contract,
@@ -1019,6 +1369,7 @@ def main() -> None:
             analysis_variant=args.analysis_variant,
             expected_batch_contract=expected_batch_contract,
             batch_contract=batch_contract,
+            historical_compatibility=args.historical_compatibility,
         )
     print("matrix artifact contract OK")
 

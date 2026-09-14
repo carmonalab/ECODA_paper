@@ -35,21 +35,34 @@ STAGE3_COVID_PREFLIGHT_REQUIRED=0
 STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED="${STAGE3_COVID_PREFLIGHT_ROOT:-${ECODA_COVID_PREFLIGHT_ROOT:-}}"
 STAGE3_COVID_PREFLIGHT_ROOT=""
 STAGE3_EXEC_SOURCE_MANIFEST="${ECODA_SOURCE_MANIFEST:-}"
-
+STAGE3_SCOPE_ARG=""
+STAGE3_INPUT_PRODUCER_RUN_ID="${STAGE3_INPUT_PRODUCER_RUN_ID:-${STAGE2_RUN_ID:-${INPUT_PRODUCER_RUN_ID:-}}}"
+STAGE3_ALZHEIMER_INPUT_PRODUCER="alzheimer_donor_assay"
+STAGE3_ALZHEIMER_INPUT_NAME="SEAAD_Alzheimer_donor_assay.h5ad"
+STAGE3_ALZHEIMER_SAMPLE_COLUMN="donor_id_assay"
+STAGE3_ALZHEIMER_INPUT_VIEW=""
+STAGE3_ALZHEIMER_INPUT_PATH=""
+STAGE3_ALZHEIMER_INPUT_SAMPLE_COLUMN=""
 usage() {
   cat <<'EOF'
 Usage: 1_submit_hpc_array.sh [--datasets LIST] [--views LIST]
        [--selection-file TSV] [--exact-batch-selection] [--force]
+       [--corrected-recovery|--corrected-final-selection]
+       [--alzheimer-followup|--alzheimer-follow-up-selection]
        [--sync-only RUN_ID] [--validated-sync-report PATH]
        [--mem VALUE] [--max-mem VALUE]
 
 Each manifest row is DATASET<TAB>VIEW. --ds_name and --view remain accepted
 as compatibility aliases for one dataset/view selection. Exact batch mode
 requires the immutable twelve-row uncorrected selection file. The approved
-batch-effect selectors are separate: the uncorrected selector is exactly the
-four target rows in fixed order, while the corrected selector is every current
-non-underscore use_for_batch_effect dataset in config order. A combined
-uncorrected-plus-corrected launch is not supported.
+batch-effect selectors are explicit and disjoint: the uncorrected selector is
+exactly the four target rows in fixed order; corrected recovery is exactly the
+eight non-Alzheimer rows in fixed order; and an Alzheimer follow-up is exactly
+one explicitly selected view. Corrected recovery and Alzheimer follow-up
+selection files are required; broad/default and combined selections are
+rejected. Alzheimer follow-up additionally requires the reviewed Stage 2
+donor-by-assay producer output and an immutable source snapshot whose bound
+config names SEAAD_Alzheimer_donor_assay.h5ad with sample column donor_id_assay.
 EOF
 }
 
@@ -66,6 +79,22 @@ while [[ $# -gt 0 ]]; do
     --view=*) VIEWS_ARG="${1#*=}"; VIEWS_SET=1; shift ;;
     --selection-file) SELECTION_FILE_ARG="${2:-}"; SELECTION_FILE_SET=1; shift 2 ;;
     --selection-file=*) SELECTION_FILE_ARG="${1#*=}"; SELECTION_FILE_SET=1; shift ;;
+    --corrected-recovery|--corrected-final-selection)
+      [[ -z "${STAGE3_SCOPE_ARG}" ]] || {
+        echo "ERROR: only one Stage 3 scoped selection may be named." >&2
+        exit 1
+      }
+      STAGE3_SCOPE_ARG="corrected_recovery"
+      shift
+      ;;
+    --alzheimer-followup|--alzheimer-follow-up-selection)
+      [[ -z "${STAGE3_SCOPE_ARG}" ]] || {
+        echo "ERROR: only one Stage 3 scoped selection may be named." >&2
+        exit 1
+      }
+      STAGE3_SCOPE_ARG="alzheimer_followup"
+      shift
+      ;;
     --combined-batch-selection)
       echo "ERROR: combined Stage 3 selection is retired; submit uncorrected and corrected arrays separately." >&2
       exit 1
@@ -102,6 +131,17 @@ if [[ ${VALIDATED_SYNC_REPORT_SET} -eq 1 &&
       "${SYNC_ONLY_RUN}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
   echo "ERROR: --validated-sync-report cannot be used with numeric --sync-only." >&2
   exit 1
+fi
+if [[ -n "${STAGE3_SCOPE_ARG}" ]]; then
+  [[ ${SELECTION_FILE_SET} -eq 1 && -n "${SELECTION_FILE_ARG}" ]] || {
+    echo "ERROR: ${STAGE3_SCOPE_ARG} requires an explicit --selection-file." >&2
+    exit 1
+  }
+  [[ ${DATASETS_SET} -eq 0 && ${VIEWS_SET} -eq 0 &&
+     ${EXACT_BATCH_SELECTION} -eq 0 && ${SYNC_ONLY_SET} -eq 0 ]] || {
+    echo "ERROR: scoped Stage 3 selections reject broad/default, exact, or sync-only modes." >&2
+    exit 1
+  }
 fi
 if [[ ${DATASETS_SET} -eq 1 && -z "${DATASETS_ARG}" ]]; then
   echo "ERROR: --datasets must not be empty." >&2
@@ -174,7 +214,7 @@ stage3_load_bound_run() {
   local source_copy="${ECODA_RUN_ROOT:-}/manifests/source.manifest"
   local runtime_identity="${ECODA_RUN_ROOT:-}/manifests/runtime.identity"
   local source_root source_manifest_original runtime_image runtime_manifest
-  local snapshot_root source_format runtime_format identity_count
+  local snapshot_root source_format runtime_format identity_count bound_input_producer
   [[ -n "${ECODA_RUN_ROOT:-}" && -d "${ECODA_RUN_ROOT}" ]] || return 2
   [[ -s "${source_copy}" && ! -L "${source_copy}" && -r "${source_copy}" ]] || return 2
   [[ -s "${runtime_identity}" && ! -L "${runtime_identity}" && -r "${runtime_identity}" ]] || return 2
@@ -221,6 +261,8 @@ stage3_load_bound_run() {
   export PROJECT_ROOT DATASETS_JSON_FILE
   LOGS_DIR="${ECODA_LOGS_DIR:-${LOGS_DIR:-${ECODA_RUN_ROOT}/logs}}"
   export LOGS_DIR ECODA_LOGS_DIR="${LOGS_DIR}"
+  bound_input_producer="$(stage3_manifest_value "${ECODA_RUN_ROOT}/metadata" INPUT_PRODUCER_RUN_ID 2>/dev/null || true)"
+  [[ -n "${bound_input_producer}" ]] && STAGE3_INPUT_PRODUCER_RUN_ID="${bound_input_producer}"
   return 0
 }
 
@@ -268,6 +310,73 @@ stage3_record_identity_metadata() {
     return 1
   }
 }
+stage3_record_selection_metadata() {
+  local selection_md5 selection_size selection_sha256 snapshot_parent
+  local metadata_tmp ownership ownership_tmp ds view scratch_path nas_path owner
+  [[ -n "${MANIFEST:-}" && -f "${MANIFEST}" && ! -L "${MANIFEST}" ]] || return 1
+  ecoda_validate_checksum "${MANIFEST}" || return 1
+  selection_md5="${ECODA_CHECKSUM_MD5}"
+  selection_size="${ECODA_CHECKSUM_SIZE}"
+  selection_sha256="$(sha256sum "${MANIFEST}" | awk '{print $1}')" || return 1
+  snapshot_parent="$(dirname "${SOURCE_ROOT%/tree}")"
+  metadata_tmp="${ECODA_RUN_ROOT}/metadata.selection.build.$$"
+  {
+    cat "${ECODA_RUN_ROOT}/metadata"
+    printf 'SELECTION_CLASSIFICATION=%s\nSELECTION_PATH=%s\nSELECTION_MD5=%s\nSELECTION_SHA256=%s\nSELECTION_SIZE=%s\nSELECTION_ROWS=%s\nSNAPSHOT_PARENT=%s\n' \
+      "${STAGE3_SELECTION_CLASSIFICATION}" "${MANIFEST}" \
+      "${selection_md5}" "${selection_sha256}" "${selection_size}" \
+      "$(wc -l < "${MANIFEST}" | tr -d '[:space:]')" "${snapshot_parent}"
+    if [[ "${STAGE3_SELECTION_CLASSIFICATION}" == "alzheimer_followup" &&
+          -n "${STAGE3_INPUT_PRODUCER_RUN_ID:-}" &&
+          -n "${STAGE3_ALZHEIMER_INPUT_PATH:-}" &&
+          -n "${STAGE3_ALZHEIMER_INPUT_SAMPLE_COLUMN:-}" ]]; then
+      printf 'INPUT_PRODUCER_RUN_ID=%s\nINPUT_PRODUCER_STAGE=stage2\nINPUT_PRODUCER_STEP=%s\nINPUT_PATH=%s\nINPUT_SAMPLE_COLUMN=%s\nINPUT_MANIFEST=%s\n' \
+        "${STAGE3_INPUT_PRODUCER_RUN_ID}" "${STAGE3_ALZHEIMER_INPUT_PRODUCER}" \
+        "${STAGE3_ALZHEIMER_INPUT_PATH}" "${STAGE3_ALZHEIMER_INPUT_SAMPLE_COLUMN}" \
+        "${ECODA_RUN_ROOT}/manifests/input_ownership.tsv"
+    fi
+  } > "${metadata_tmp}" || {
+    rm -f "${metadata_tmp}"
+    return 1
+  }
+  mv -f "${metadata_tmp}" "${ECODA_RUN_ROOT}/metadata" || {
+    rm -f "${metadata_tmp}"
+    return 1
+  }
+
+  ownership="${ECODA_RUN_ROOT}/manifests/output_ownership.tsv"
+  ownership_tmp="${ownership}.build.$$"
+  : > "${ownership_tmp}" || return 1
+  while IFS=$'\t' read -r ds view; do
+    scratch_path="$(output_path_for "${ds}" "${view}")" || {
+      rm -f "${ownership_tmp}"
+      return 1
+    }
+    nas_path="$(stage3_nas_output_path "${ds}" "${view}")" || {
+      rm -f "${ownership_tmp}"
+      return 1
+    }
+    owner="$(awk -F '\t' -v wanted="${ds}/${view}" \
+      '$1 == wanted {print $2; exit}' "${ECODA_RUN_ROOT}/manifests/owners.tsv" 2>/dev/null || true)"
+    [[ -n "${owner}" ]] || owner="VALIDATED"
+    printf '%s\t%s\t%s\t%s\t%s\n' \
+      "${ds}" "${view}" "${scratch_path}" "${nas_path}" "${owner}" \
+      >> "${ownership_tmp}" || {
+      rm -f "${ownership_tmp}"
+      return 1
+    }
+  done < "${MANIFEST}"
+  ecoda_validate_manifest "${ownership_tmp}" 5 || {
+    rm -f "${ownership_tmp}"
+    return 1
+  }
+  ecoda_atomic_install_manifest "${ownership_tmp}" "${ownership}" 5 || {
+    rm -f "${ownership_tmp}"
+    return 1
+  }
+  rm -f "${ownership_tmp}"
+  ecoda_write_checksum "${ownership}" >/dev/null || return 1
+}
 
 stage3_artifact_record_valid() {
   local path="$1" producer="$2" record
@@ -291,6 +400,124 @@ stage3_require_new_snapshot() {
   }
   [[ -f "${ECODA_SOURCE_MANIFEST}" && ! -L "${ECODA_SOURCE_MANIFEST}" &&
      -r "${ECODA_SOURCE_MANIFEST}" ]] || return 1
+}
+stage3_validate_alzheimer_input_dependency() {
+  local classification="${STAGE3_SELECTION_CLASSIFICATION:-}"
+  local producer="${STAGE3_INPUT_PRODUCER_RUN_ID:-}"
+  local view input_name input_path sample_column producer_output
+  local producer_root producer_state
+  case "${classification}" in
+    alzheimer_followup) ;;
+    *) return 0 ;;
+  esac
+  [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" &&
+     "${ECODA_SOURCE_ROOT:-}" = /* &&
+     "${ECODA_SOURCE_MANIFEST:-}" = /* ]] || {
+    echo "ERROR: Alzheimer follow-up requires an immutable source snapshot." >&2
+    return 1
+  }
+  [[ "${producer}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
+    echo "ERROR: Alzheimer follow-up requires the reviewed Stage 2 producer run ID." >&2
+    return 1
+  }
+  producer_root="${ECODA_RUNS_ROOT}/${producer}"
+  [[ -d "${producer_root}" && ! -L "${producer_root}" ]] || {
+    echo "ERROR: Alzheimer Stage 2 producer run root is missing: ${producer}" >&2
+    return 1
+  }
+  [[ "$(stage3_manifest_value "${producer_root}/metadata" STAGE 2>/dev/null || true)" == "stage2" ]] || {
+    echo "ERROR: Alzheimer producer run is not a Stage 2 run: ${producer}" >&2
+    return 1
+  }
+  producer_state="$(sed -n 's/^STATE=//p' \
+    "${producer_root}/status/terminal" 2>/dev/null | sed -n '1p' || true)"
+  [[ "${producer_state}" == "OK" || "${producer_state}" == "NOOP_VALIDATED" ]] || {
+    echo "ERROR: Alzheimer Stage 2 producer run is not terminally successful: ${producer}" >&2
+    return 1
+  }
+  [[ -r "${producer_root}/manifests/steps.tsv" ]] || {
+    echo "ERROR: Alzheimer producer run lacks its Stage 2 steps manifest." >&2
+    return 1
+  }
+  producer_output="$(awk -F '\t' \
+    -v step="${STAGE3_ALZHEIMER_INPUT_PRODUCER}" '
+      $1 == step {count++; output=$3}
+      END {
+        if (count != 1 || output == "") exit 1
+        print output
+      }
+    ' "${producer_root}/manifests/steps.tsv" 2>/dev/null)" || {
+    echo "ERROR: Alzheimer producer run lacks one reviewed donor-by-assay output." >&2
+    return 1
+  }
+  view="$(awk -F '\t' 'NF {print $2; exit}' "${MANIFEST}" 2>/dev/null || true)"
+  [[ "${view}" == "batch_effect_uncorrected" ||
+     "${view}" == "batch_effect_corrected" ]] || return 1
+  input_name="$(ecoda_view_input_name Alzheimer "${view}")" || return 1
+  [[ "${input_name}" == "${STAGE3_ALZHEIMER_INPUT_NAME}" ]] || {
+    echo "ERROR: Alzheimer follow-up is bound to a non-derivative input: ${input_name:-<empty>}" >&2
+    return 1
+  }
+  sample_column="$(jq -r --arg view "${view}" '
+    ((.Alzheimer.columns // {}) * (.Alzheimer.views[$view].columns // {})).sample // empty
+  ' "${DATASETS_JSON_FILE}")" || {
+    echo "ERROR: Alzheimer follow-up sample-column configuration is malformed." >&2
+    return 1
+  }
+  [[ "${sample_column}" == "${STAGE3_ALZHEIMER_SAMPLE_COLUMN}" ]] || {
+    echo "ERROR: Alzheimer follow-up requires sample column ${STAGE3_ALZHEIMER_SAMPLE_COLUMN}; got ${sample_column:-<empty>}." >&2
+    return 1
+  }
+  input_path="${HPC_SCRATCH_DIR}/Alzheimer/data/${input_name}"
+  [[ "${producer_output}" == "${input_path}" ]] || {
+    echo "ERROR: Alzheimer producer output is not the configured donor-assay derivative: ${producer_output}" >&2
+    return 1
+  }
+  [[ -f "${input_path}" && ! -L "${input_path}" && -r "${input_path}" ]] || {
+    echo "ERROR: Alzheimer Stage 2 derivative input is missing or unsafe: ${input_path}" >&2
+    return 1
+  }
+  ecoda_validate_input_artifact "${input_path}" \
+    "${STAGE3_ALZHEIMER_INPUT_PRODUCER}" "${producer}" || {
+    echo "ERROR: Alzheimer Stage 2 derivative input failed producer/owner validation." >&2
+    return 1
+  }
+  STAGE3_ALZHEIMER_INPUT_VIEW="${view}"
+  STAGE3_ALZHEIMER_INPUT_PATH="${input_path}"
+  STAGE3_ALZHEIMER_INPUT_SAMPLE_COLUMN="${sample_column}"
+  stage3_record_alzheimer_input_binding
+}
+
+stage3_record_alzheimer_input_binding() {
+  local classification="${STAGE3_SELECTION_CLASSIFICATION:-}"
+  local manifest="${ECODA_RUN_ROOT:-}/manifests/input_ownership.tsv"
+  local manifest_tmp="${manifest}.build.$$"
+  case "${classification}" in
+    alzheimer_followup) ;;
+    *) return 0 ;;
+  esac
+  [[ -n "${ECODA_RUN_ROOT:-}" && "${ECODA_RUN_ROOT}" = /* &&
+     -n "${STAGE3_ALZHEIMER_INPUT_VIEW:-}" &&
+     -n "${STAGE3_ALZHEIMER_INPUT_PATH:-}" &&
+     -n "${STAGE3_ALZHEIMER_INPUT_SAMPLE_COLUMN:-}" &&
+     -n "${STAGE3_INPUT_PRODUCER_RUN_ID:-}" ]] || return 1
+  mkdir -p "$(dirname "${manifest}")" || return 1
+  printf 'Alzheimer\t%s\t%s\t%s\t%s\n' \
+    "${STAGE3_ALZHEIMER_INPUT_VIEW}" "${STAGE3_ALZHEIMER_INPUT_PATH}" \
+    "${STAGE3_ALZHEIMER_INPUT_SAMPLE_COLUMN}" "${STAGE3_INPUT_PRODUCER_RUN_ID}" \
+    > "${manifest_tmp}" || return 1
+  ecoda_validate_manifest "${manifest_tmp}" 5 || {
+    rm -f "${manifest_tmp}"
+    return 1
+  }
+  ecoda_atomic_install_manifest "${manifest_tmp}" "${manifest}" 5 || {
+    rm -f "${manifest_tmp}"
+    return 1
+  }
+  rm -f "${manifest_tmp}"
+  ecoda_validate_run_owned_path "${manifest}" "${ECODA_RUN_ROOT}" || return 1
+  ecoda_write_checksum "${manifest}" >/dev/null || return 1
+  ecoda_validate_run_owned_path "${manifest}.md5" "${ECODA_RUN_ROOT}" || return 1
 }
 
 stage3_install_source_manifest() {
@@ -352,22 +579,6 @@ validate_external_selection() {
   done < "${selection}"
 }
 
-stage3_corrected_dataset_list() {
-  local config="${1:-${DATASETS_JSON_FILE:-}}"
-  [[ -r "${config}" && ! -L "${config}" ]] || return 1
-  jq -r -e '
-    if type != "object" then
-      error("datasets configuration must be a JSON object")
-    elif any(to_entries[]; (.value | type) != "object") then
-      error("dataset entries must be JSON objects")
-    else
-      to_entries[]
-      | select((.key | startswith("_") | not) and
-               (.value.use_for_batch_effect == true))
-      | .key
-    end
-  ' "${config}"
-}
 
 stage3_validate_selection_row() {
   local ds="$1" view="$2"
@@ -447,6 +658,10 @@ stage3_validate_uncorrected_four_selection() {
   local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
   local ds view count=0
   [[ -r "${selection}" && -r "${config}" && ! -L "${config}" ]] || return 1
+  [[ -z "${STAGE3_SCOPE_ARG}" ]] || {
+    echo "ERROR: scoped Stage 3 selector does not match the four-row uncorrected contract." >&2
+    return 1
+  }
   stage3_selection_is_uncorrected_four_candidate "${selection}" || return 1
   while IFS=$'\t' read -r ds view; do
     stage3_validate_selection_row "${ds}" "${view}" || return 1
@@ -463,7 +678,107 @@ stage3_validate_uncorrected_four_selection() {
   STAGE3_CORRECTED_SELECTION=0
 }
 
+stage3_selection_is_corrected_recovery_candidate() {
+  local selection="${1:-}" ds view extra
+  local count=0
+  local expected_datasets=(
+    Joanito
+    Stephenson
+    Breast_cancer
+    Covid19_PBMC
+    Kidney_KPMP_full
+    Diabetes
+    Lupus_PBMC
+    Lung
+  )
+  [[ -r "${selection}" ]] || return 1
+  ecoda_validate_manifest "${selection}" 2 || return 1
+  while IFS=$'\t' read -r ds view extra; do
+    count=$((count + 1))
+    [[ ${count} -le 8 &&
+       "${ds}" == "${expected_datasets[$((count - 1))]}" &&
+       "${view}" == "batch_effect_corrected" &&
+       -z "${extra}" ]] || return 1
+  done < "${selection}"
+  [[ ${count} -eq 8 ]]
+}
 
+stage3_validate_corrected_recovery_selection() {
+  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
+  local ds view count=0
+  [[ -r "${selection}" && -r "${config}" && ! -L "${config}" ]] || return 1
+  [[ ${SELECTION_FILE_SET} -eq 1 || ${SYNC_ONLY_SET} -eq 1 ]] || {
+    echo "ERROR: corrected Stage 3 recovery requires an explicit selection file." >&2
+    return 1
+  }
+  [[ -z "${STAGE3_SCOPE_ARG}" || "${STAGE3_SCOPE_ARG}" == "corrected_recovery" ]] || {
+    echo "ERROR: Stage 3 selection scope does not match corrected recovery." >&2
+    return 1
+  }
+  stage3_selection_is_corrected_recovery_candidate "${selection}" || {
+    echo "ERROR: corrected Stage 3 recovery must contain exactly the eight non-Alzheimer rows in plan order." >&2
+    return 1
+  }
+  while IFS=$'\t' read -r ds view; do
+    stage3_validate_configured_corrected_row \
+      "${config}" "${ds}" "${view}" || return 1
+    count=$((count + 1))
+  done < "${selection}"
+  [[ ${count} -eq 8 ]] || return 1
+  STAGE3_SELECTION_CLASSIFICATION="corrected_recovery"
+  STAGE3_UNCORRECTED_BATCH_SELECTION=0
+  STAGE3_CORRECTED_SELECTION=1
+}
+
+stage3_selection_is_alzheimer_followup_candidate() {
+  local selection="${1:-}" ds view extra
+  local count=0
+  [[ -r "${selection}" ]] || return 1
+  ecoda_validate_manifest "${selection}" 2 || return 1
+  while IFS=$'\t' read -r ds view extra; do
+    count=$((count + 1))
+    [[ ${count} -eq 1 && "${ds}" == "Alzheimer" &&
+       ( "${view}" == "batch_effect_uncorrected" ||
+         "${view}" == "batch_effect_corrected" ) &&
+       -z "${extra}" ]] || return 1
+  done < "${selection}"
+  [[ ${count} -eq 1 ]]
+}
+
+stage3_validate_alzheimer_followup_selection() {
+  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
+  local ds view count=0
+  [[ -r "${selection}" && -r "${config}" && ! -L "${config}" ]] || return 1
+  [[ ${SELECTION_FILE_SET} -eq 1 || ${SYNC_ONLY_SET} -eq 1 ]] || {
+    echo "ERROR: Alzheimer Stage 3 follow-up requires an explicit selection file." >&2
+    return 1
+  }
+  [[ -z "${STAGE3_SCOPE_ARG}" || "${STAGE3_SCOPE_ARG}" == "alzheimer_followup" ]] || {
+    echo "ERROR: Stage 3 selection scope does not match Alzheimer follow-up." >&2
+    return 1
+  }
+  stage3_selection_is_alzheimer_followup_candidate "${selection}" || {
+    echo "ERROR: Alzheimer Stage 3 follow-up must contain exactly one view-specific row." >&2
+    return 1
+  }
+  while IFS=$'\t' read -r ds view; do
+    stage3_validate_selection_row "${ds}" "${view}" || return 1
+    jq -e --arg ds "${ds}" \
+      '.[$ds].use_for_batch_effect == true' "${config}" >/dev/null || {
+      echo "ERROR: Alzheimer Stage 3 follow-up is not batch-enabled." >&2
+      return 1
+    }
+    if [[ "${view}" == "batch_effect_corrected" ]]; then
+      stage3_validate_configured_corrected_row \
+        "${config}" "${ds}" "${view}" || return 1
+    fi
+    count=$((count + 1))
+  done < "${selection}"
+  [[ ${count} -eq 1 ]] || return 1
+  STAGE3_SELECTION_CLASSIFICATION="alzheimer_followup"
+  STAGE3_UNCORRECTED_BATCH_SELECTION=0
+  STAGE3_CORRECTED_SELECTION=0
+}
 
 stage3_selection_contains_corrected() {
   local selection="${1:-}" ds view extra
@@ -475,38 +790,17 @@ stage3_selection_contains_corrected() {
   return 1
 }
 
-stage3_validate_corrected_selection() {
-  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
-  local corrected_rows corrected_count expected_ds ds view extra count=0
-  [[ -r "${selection}" && -r "${config}" && ! -L "${config}" ]] || return 1
-  ecoda_validate_manifest "${selection}" 2 || return 1
-  corrected_rows="$(stage3_corrected_dataset_list "${config}")" || return 1
-  corrected_count="$(printf '%s\n' "${corrected_rows}" |
-    awk 'NF {count++} END {print count + 0}')"
-  [[ "${corrected_count}" =~ ^[1-9][0-9]*$ ]] || {
-    echo "ERROR: configured corrected Stage 3 selection is empty." >&2
-    return 1
-  }
+stage3_selection_contains_alzheimer() {
+  local selection="${1:-}" ds view extra
+  [[ -r "${selection}" ]] || return 1
   while IFS=$'\t' read -r ds view extra; do
-    count=$((count + 1))
-    expected_ds="$(printf '%s\n' "${corrected_rows}" | sed -n "${count}p")"
-    [[ -n "${expected_ds}" && "${ds}" == "${expected_ds}" &&
-       "${view}" == "batch_effect_corrected" && -z "${extra}" ]] || {
-      echo "ERROR: corrected-only Stage 3 selection must contain every current configured corrected dataset in config order." >&2
-      return 1
-    }
-    stage3_validate_configured_corrected_row \
-      "${config}" "${ds}" "${view}" || return 1
+    [[ -n "${ds}" && -n "${view}" && -z "${extra}" ]] || return 1
+    [[ "${ds}" == "Alzheimer" &&
+       ( "${view}" == "batch_effect_uncorrected" ||
+         "${view}" == "batch_effect_corrected" ) ]] && return 0
   done < "${selection}"
-  [[ ${count} -eq ${corrected_count} ]] || {
-    echo "ERROR: corrected-only Stage 3 selection is partial; expected exactly ${corrected_count} configured corrected rows." >&2
-    return 1
-  }
-  STAGE3_SELECTION_CLASSIFICATION="corrected_only"
-  STAGE3_UNCORRECTED_BATCH_SELECTION=0
-  STAGE3_CORRECTED_SELECTION=1
+  return 1
 }
-
 stage3_selection_contains_target_uncorrected() {
   local selection="${1:-}" ds view extra
   [[ -r "${selection}" ]] || return 1
@@ -530,13 +824,18 @@ stage3_classify_selection() {
     STAGE3_SELECTION_CLASSIFICATION="historical_exact"
     return 0
   fi
-  if stage3_selection_is_uncorrected_four_candidate "${selection}"; then
+  if stage3_selection_contains_alzheimer "${selection}"; then
+    stage3_validate_alzheimer_followup_selection "${selection}" "${config}" || return 1
+  elif stage3_selection_is_corrected_recovery_candidate "${selection}"; then
+    stage3_validate_corrected_recovery_selection "${selection}" "${config}" || return 1
+  elif stage3_selection_is_uncorrected_four_candidate "${selection}"; then
     stage3_validate_uncorrected_four_selection "${selection}" "${config}" || return 1
   elif stage3_selection_contains_target_uncorrected "${selection}"; then
     echo "ERROR: target uncorrected Stage 3 selection must be exactly the approved four rows." >&2
     return 1
   elif stage3_selection_contains_corrected "${selection}"; then
-    stage3_validate_corrected_selection "${selection}" "${config}" || return 1
+    echo "ERROR: corrected Stage 3 selection must be the explicit eight-row recovery; Alzheimer uses one explicit follow-up row." >&2
+    return 1
   fi
 }
 
@@ -698,7 +997,7 @@ stage3_run_covid_obs_preflight() {
   local status_task="" status_path="" status_count=0
   local preflight_script="" preflight_id="" preflight_rc=0
   case "${STAGE3_SELECTION_CLASSIFICATION}" in
-    uncorrected_four|corrected_only) ;;
+    uncorrected_four|corrected_recovery) ;;
     *) return 0 ;;
   esac
   stage3_selection_contains_covid "${selection}" || return 0
@@ -1407,6 +1706,10 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
       stage3_validate_covid_obs_reports ||
         stage3_abort "Stage 3 sync-only Covid obs preflight validation failed"
       ;;
+    alzheimer_followup)
+      stage3_validate_alzheimer_input_dependency ||
+        stage3_abort "Stage 3 sync-only Alzheimer Stage 2 dependency validation failed"
+      ;;
   esac
   [[ -r "${PENDING_MANIFEST}" ]] ||
     stage3_abort "Stage 3 pending manifest is missing"
@@ -1633,9 +1936,15 @@ stage3_record_identity_metadata ||
   stage3_abort "failed to record Stage 3 source/runtime identity"
 stage3_classify_selection "${MANIFEST}" "${DATASETS_JSON_FILE}" ||
   stage3_abort "Stage 3 selection classification is invalid"
+stage3_validate_alzheimer_input_dependency ||
+  stage3_abort "Stage 3 Alzheimer Stage 2 dependency validation failed"
 RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage3 0)" ||
   stage3_abort "Stage 3 runtime export construction failed"
 RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_RUNTIME_IDENTITY=${RUNTIME_IDENTITY},ECODA_SOURCE_MANIFEST_RUN=${SOURCE_MANIFEST_RUN}"
+if [[ "${STAGE3_SELECTION_CLASSIFICATION}" == "alzheimer_followup" &&
+      -n "${STAGE3_INPUT_PRODUCER_RUN_ID:-}" ]]; then
+  RUNTIME_EXPORT="${RUNTIME_EXPORT},STAGE3_INPUT_PRODUCER_RUN_ID=${STAGE3_INPUT_PRODUCER_RUN_ID}"
+fi
 SCHEDULER_IDS_FILE="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
 ecoda_atomic_write "${SCHEDULER_IDS_FILE}" "" ||
   stage3_abort "failed to initialize Stage 3 scheduler manifest"
@@ -1696,6 +2005,8 @@ else
     stage3_abort "failed to create empty Stage 3 owner manifest"
 fi
 rm -f "${PENDING_TMP}" "${OWNERS_TMP}"
+stage3_record_selection_metadata ||
+  stage3_abort "failed to record scoped Stage 3 selection and output ownership"
 
 # The immutable watchdog validates every row in the root selection, including
 # rows skipped here.  Reserve global artifact owners and publish current-run

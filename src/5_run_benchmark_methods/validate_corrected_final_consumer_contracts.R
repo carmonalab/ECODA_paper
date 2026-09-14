@@ -60,17 +60,16 @@ if (any(selection$view != "batch_effect_corrected") ||
 
 method_specs <- list(
   prepare_pseudobulk = list(
-    method_id = "Pseudobulk", model_id = "pseudobulk_composite_v1"
+    method_id = "Pseudobulk", model_id = "pseudobulk_limma_fixed_effects_v1"
   ),
   pseudobulk = list(
-    method_id = "Pseudobulk", model_id = "pseudobulk_composite_v1"
+    method_id = "Pseudobulk", model_id = "pseudobulk_limma_fixed_effects_v1"
   ),
   gloscope = list(
     method_id = "GloScope", model_id = "embedding_consumer_harmony_v1"
   ),
   composition = list(
-    method_id = "ECODA_authors_HR",
-    model_id = "ecoda_additive_random_intercepts_v1"
+    method_id = "ECODA_authors_HR", model_id = "limma_fixed_effects_v1"
   ),
   mrvi = list(
     method_id = "MrVI", model_id = "mrvi_composite_v1"
@@ -84,6 +83,121 @@ method_specs <- list(
 )
 
 rows <- vector("list", nrow(selection))
+validate_fixed_effect_consumer <- function(
+  contract,
+  spec,
+  batch_keys,
+  biological_label,
+  label
+) {
+  if (!is.list(contract)) stop(label, " contract is not a list")
+  if (!identical(contract[["model_id"]], spec$model_id)) {
+    stop(label, " has the wrong active corrected model identity")
+  }
+  required <- c(
+    "effective_batch_keys", "non_estimable_batch_keys", "correction_state",
+    "correction_mode", "correction_formula", "fixed_effect_aliases",
+    "correction_design_formula", "design_rank", "design_columns",
+    "design_residual_df"
+  )
+  missing <- setdiff(required, names(contract))
+  if (length(missing)) {
+    stop(label, " is missing fixed-effect metadata: ",
+         paste(missing, collapse = ", "))
+  }
+  effective <- unname(as.character(contract[["effective_batch_keys"]]))
+  non_estimable <- unname(as.character(contract[["non_estimable_batch_keys"]]))
+  keys <- unname(as.character(batch_keys))
+  if (
+    anyNA(effective) || anyNA(non_estimable) ||
+    any(!effective %in% keys) || any(!non_estimable %in% keys) ||
+    anyDuplicated(effective) || anyDuplicated(non_estimable) ||
+    !identical(effective, keys[keys %in% effective]) ||
+    !identical(non_estimable, keys[keys %in% non_estimable]) ||
+    !setequal(c(effective, non_estimable), keys) ||
+    length(intersect(effective, non_estimable))
+  ) {
+    stop(label, " has invalid effective/non-estimable technical keys")
+  }
+  expected_aliases <- if (length(effective)) {
+    setNames(paste0("batch_key_", match(effective, keys)), effective)
+  } else {
+    character()
+  }
+  aliases <- contract[["fixed_effect_aliases"]]
+  if (
+    !is.character(aliases) ||
+    !identical(names(aliases), names(expected_aliases)) ||
+    !identical(unname(aliases), unname(expected_aliases))
+  ) {
+    stop(label, " has the wrong fixed-effect aliases")
+  }
+  expected_spec <- ecoda_batch_correction_spec(
+    method_id = spec$method_id,
+    batch_keys = keys,
+    effective_batch_keys = effective,
+    non_estimable_batch_keys = non_estimable
+  )
+  expected_state <- if (length(effective)) "BATCH_CORRECTION" else "NO_CORRECTION"
+  if (
+    !identical(contract[["correction_state"]], expected_state) ||
+    !identical(contract[["correction_mode"]], expected_spec$correction_mode) ||
+    !identical(contract[["correction_formula"]], expected_spec$correction_formula)
+  ) {
+    stop(label, " has the wrong fixed-effect correction policy")
+  }
+  expected_design <- if (length(effective)) {
+    paste0("~1 + ", paste(unname(expected_aliases), collapse = " + "))
+  } else {
+    "~1"
+  }
+  if (
+    !is.character(contract[["correction_design_formula"]]) ||
+    length(contract[["correction_design_formula"]]) != 1L ||
+    gsub("[[:space:]]", "", contract[["correction_design_formula"]]) !=
+      gsub("[[:space:]]", "", expected_design)
+  ) {
+    stop(label, " has the wrong separate-covariate design formula")
+  }
+  for (field in c("design_rank", "design_columns", "design_residual_df")) {
+    value <- contract[[field]]
+    if (
+      !is.numeric(value) || length(value) != 1L || is.na(value) ||
+      !is.finite(value) || value < 0 || value != floor(value)
+    ) {
+      stop(label, " has invalid ", field)
+    }
+  }
+  if (
+    contract[["design_rank"]] != contract[["design_columns"]] ||
+    contract[["design_residual_df"]] <= 0
+  ) {
+    stop(label, " design is not full rank with positive residual degrees of freedom")
+  }
+  if (contract[["design_rank"]] > contract[["design_columns"]]) {
+    stop(label, " design rank exceeds design columns")
+  }
+  formula <- contract[["correction_formula"]]
+  if (
+    grepl(
+      "__ecoda_batch_combined_v1|additive_random_intercepts|pseudobulk_composite|lmFit|remove technical contribution|\\(1 \\|",
+      formula,
+      perl = TRUE
+    ) ||
+    (nzchar(biological_label) && (
+      grepl(biological_label, formula, fixed = TRUE) ||
+      grepl(
+        biological_label,
+        contract[["correction_design_formula"]],
+        fixed = TRUE
+      )
+    ))
+  ) {
+    stop(label, " advertises a historical/scalarized or biological design")
+  }
+  invisible(TRUE)
+}
+
 failures <- character()
 for (index in seq_len(nrow(selection))) {
   ds <- selection$dataset[[index]]
@@ -175,13 +289,23 @@ for (index in seq_len(nrow(selection))) {
         method_id = spec$method_id,
         model_id = spec$model_id
       )
-      consumer_contracts[[method]] <- ecoda_hpc_augment_batch_contract(
+      consumer_contract <- ecoda_hpc_augment_batch_contract(
         identity = identity,
         validation = validation,
         method_id = spec$method_id,
         batch_keys = batch_keys,
         scalar_batch_col = metadata_context$scalar_batch_col
       )
+      if (method %in% c("prepare_pseudobulk", "pseudobulk", "composition")) {
+        validate_fixed_effect_consumer(
+          consumer_contract,
+          spec,
+          batch_keys,
+          entry$label_col,
+          paste0(ds, "/", view, "/", method)
+        )
+      }
+      consumer_contracts[[method]] <- consumer_contract
       checked_r_consumers <- c(checked_r_consumers, method)
     }
     method_identities <- lapply(method_specs, function(spec) {

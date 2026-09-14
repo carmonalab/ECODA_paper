@@ -13,6 +13,7 @@ cd "${PROJECT_ROOT}"
 
 DATASETS_ARG=""
 DATASETS_SET=0
+DATASETS_OPTION_KIND=""
 STEPS_ARG=""
 STEPS_SET=0
 FORCE_ARG=0
@@ -35,16 +36,17 @@ Usage: 1_submit_hpc.sh [--datasets LIST] [--steps LIST] [--force]
        [--partition NAME] [--throttle N]
 
 Steps: gongsharma_cap, combinedpbmc, joanito, kfoury_lowres_ct,
-       myocardial_counts, bassez_cellsubtype
+       myocardial_counts, bassez_cellsubtype,
+       alzheimer_donor_assay (Alzheimer-only explicit selector)
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --datasets) DATASETS_ARG="${2:-}"; DATASETS_SET=1; shift 2 ;;
-    --datasets=*) DATASETS_ARG="${1#*=}"; DATASETS_SET=1; shift ;;
-    --ds_name) DATASETS_ARG="${2:-}"; DATASETS_SET=1; shift 2 ;;
-    --ds_name=*) DATASETS_ARG="${1#*=}"; DATASETS_SET=1; shift ;;
+    --datasets) DATASETS_ARG="${2:-}"; DATASETS_SET=1; DATASETS_OPTION_KIND="datasets"; shift 2 ;;
+    --datasets=*) DATASETS_ARG="${1#*=}"; DATASETS_SET=1; DATASETS_OPTION_KIND="datasets"; shift ;;
+    --ds_name) DATASETS_ARG="${2:-}"; DATASETS_SET=1; DATASETS_OPTION_KIND="ds_name"; shift 2 ;;
+    --ds_name=*) DATASETS_ARG="${1#*=}"; DATASETS_SET=1; DATASETS_OPTION_KIND="ds_name"; shift ;;
     --steps) STEPS_ARG="${2:-}"; STEPS_SET=1; shift 2 ;;
     --steps=*) STEPS_ARG="${1#*=}"; STEPS_SET=1; shift ;;
     --force) FORCE_ARG=1; shift ;;
@@ -83,6 +85,25 @@ fi
 if [[ ${SYNC_ONLY_SET} -eq 1 && -z "${SYNC_ONLY_RUN}" ]]; then
   echo "ERROR: --sync-only requires a run ID." >&2
   exit 1
+fi
+
+ALZHEIMER_STEP="alzheimer_donor_assay"
+alzheimer_dataset_requested=0
+alzheimer_step_requested=0
+case ",${DATASETS_ARG}," in
+  *,Alzheimer,*) alzheimer_dataset_requested=1 ;;
+esac
+case ",${STEPS_ARG}," in
+  *,${ALZHEIMER_STEP},*) alzheimer_step_requested=1 ;;
+esac
+if [[ ${alzheimer_dataset_requested} -eq 1 || ${alzheimer_step_requested} -eq 1 ]]; then
+  if [[ ${DATASETS_SET} -ne 1 || ${STEPS_SET} -ne 1 ||
+        "${DATASETS_OPTION_KIND}" != "datasets" ||
+        "${DATASETS_ARG}" != "Alzheimer" ||
+        "${STEPS_ARG}" != "${ALZHEIMER_STEP}" ]]; then
+    echo "ERROR: ${ALZHEIMER_STEP} requires exactly --datasets Alzheimer --steps ${ALZHEIMER_STEP}." >&2
+    exit 1
+  fi
 fi
 
 stage2_abort() {
@@ -229,6 +250,48 @@ stage2_artifact_record_write() {
   ecoda_write_artifact_record "${path}" "${producer}" "${RUN_ID}" >/dev/null
 }
 
+stage2_alzheimer_input_path() {
+  printf '%s/Alzheimer/data/SEAAD_Alzheimer.h5ad' "${HPC_SCRATCH_DIR}"
+}
+
+stage2_alzheimer_destination_safe() {
+  local path="$1"
+  local raw parent
+  raw="$(stage2_alzheimer_input_path)"
+  parent="$(dirname "${path}")"
+  [[ "${path}" != "${raw}" ]] || return 1
+  [[ ! -L "${path}" ]] || return 1
+  [[ -d "${parent}" && ! -L "${parent}" ]] || return 1
+  if [[ -e "${path}" ]] && [[ "${path}" -ef "${raw}" ]]; then
+    return 1
+  fi
+}
+
+stage2_semantic_output_valid() {
+  local step="$1"
+  local path="$2"
+  case "${step}" in
+    alzheimer_donor_assay)
+      local validator raw
+      validator="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.7.1_create_alzheimer_donor_assay.py"
+      raw="$(stage2_alzheimer_input_path)"
+      [[ -f "${validator}" && ! -L "${validator}" && -r "${validator}" ]] || return 1
+      "${PYTHON_BIN}" "${validator}" \
+        --input-file "${raw}" \
+        --output-file "${path}" \
+        --expected-samples 104 \
+        --expected-donors 83 \
+        --expected-assay-counts "10x3v3=83,10xmultiome=21" \
+        --expected-sex-counts "female=59,male=45" \
+        --require-example-ids \
+        --validate-only
+      ;;
+    *)
+      ecoda_validate_stage2_output "${step}" "${path}"
+      ;;
+  esac
+}
+
 
 step_script() {
   local root="${SCRIPT_DIR}"
@@ -242,10 +305,10 @@ step_script() {
     kfoury_lowres_ct) printf '%s/1.4_submit_kfoury_lowres_ct.sh' "${root}" ;;
     myocardial_counts) printf '%s/1.5_submit_myocardial.sh' "${root}" ;;
     bassez_cellsubtype) printf '%s/1.6_submit_bassez.sh' "${root}" ;;
+    alzheimer_donor_assay) printf '%s/1.7_submit_alzheimer_donor_assay.sh' "${root}" ;;
     *) return 1 ;;
   esac
 }
-
 step_outputs() {
   case "$1" in
     gongsharma_cap) printf '%s;%s' \
@@ -257,6 +320,7 @@ step_outputs() {
     kfoury_lowres_ct) printf '%s/Kfoury/data/Kfoury_2021_34719426.rds' "${HPC_SCRATCH_DIR}" ;;
     myocardial_counts) printf '%s/Myocardial_infarction/data/Myocardial_Infarc_2.h5ad' "${HPC_SCRATCH_DIR}" ;;
     bassez_cellsubtype) printf '%s/Bassez/data/BassezA_2021_33958794whole.rds' "${HPC_SCRATCH_DIR}" ;;
+    alzheimer_donor_assay) printf '%s/Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad' "${HPC_SCRATCH_DIR}" ;;
     *) return 1 ;;
   esac
 }
@@ -329,11 +393,11 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     read -r -a output_paths <<< "${outputs}"
     for path in "${output_paths[@]}"; do
       if stage2_artifact_record_valid "${path}" "${step}" &&
-         ecoda_validate_stage2_output "${step}" "${path}"; then
+         stage2_semantic_output_valid "${step}" "${path}"; then
         continue
       fi
       if ! ecoda_validate_checksum "${path}" ||
-         ! ecoda_validate_stage2_output "${step}" "${path}"; then
+         ! stage2_semantic_output_valid "${step}" "${path}"; then
         echo "ERROR: Stage 2 sync-only artifact failed semantic integrity: ${path}" >&2
         failed=1
       fi
@@ -393,7 +457,10 @@ fi
 
 ALL_STEPS=(gongsharma_cap combinedpbmc joanito kfoury_lowres_ct myocardial_counts bassez_cellsubtype)
 SELECTED_STEPS=()
-if [[ -n "${STEPS_ARG}" ]]; then
+if [[ ${alzheimer_dataset_requested} -eq 1 ]]; then
+  # The argument guard above makes this the only legal Alzheimer request.
+  SELECTED_STEPS=("${ALZHEIMER_STEP}")
+elif [[ -n "${STEPS_ARG}" ]]; then
   ecoda_split_csv "${STEPS_ARG}"
   SELECTED_STEPS=("${ECODA_ARRAY[@]}")
   ecoda_assert_unique_items "${SELECTED_STEPS[@]}"
@@ -401,15 +468,22 @@ else
   SELECTED_STEPS=("${ALL_STEPS[@]}")
 fi
 for step in "${SELECTED_STEPS[@]}"; do
-  case " ${ALL_STEPS[*]} " in
-    *" ${step} "*) ;;
-    *) echo "ERROR: unknown Stage 2 step '${step}'." >&2; exit 1 ;;
-  esac
+  if [[ "${step}" == "${ALZHEIMER_STEP}" ]]; then
+    [[ ${alzheimer_dataset_requested} -eq 1 && ${#SELECTED_STEPS[@]} -eq 1 ]] || {
+      echo "ERROR: ${ALZHEIMER_STEP} is restricted to the explicit Alzheimer selector." >&2
+      exit 1
+    }
+  else
+    case " ${ALL_STEPS[*]} " in
+      *" ${step} "*) ;;
+      *) echo "ERROR: unknown Stage 2 step '${step}'." >&2; exit 1 ;;
+    esac
+  fi
 done
 
 # Dataset selection narrows fixed hooks without changing their scientific code.
 # Generated datasets pull in their real prerequisites automatically.
-if [[ -n "${DATASETS_ARG}" ]]; then
+if [[ ${alzheimer_dataset_requested} -eq 0 && -n "${DATASETS_ARG}" ]]; then
   FILTERED_STEPS=()
   for step in "${SELECTED_STEPS[@]}"; do
     keep=0
@@ -429,18 +503,23 @@ if [[ -n "${DATASETS_ARG}" ]]; then
     exit 1
   fi
 fi
-if [[ " ${SELECTED_STEPS[*]} " == *" combinedpbmc "* ]]; then
+if [[ ${alzheimer_dataset_requested} -eq 0 &&
+      " ${SELECTED_STEPS[*]} " == *" combinedpbmc "* ]]; then
   case " ${SELECTED_STEPS[*]} " in
     *" gongsharma_cap "*) ;;
     *) SELECTED_STEPS=(gongsharma_cap "${SELECTED_STEPS[@]}") ;;
   esac
 fi
 ORDERED_STEPS=()
-for known_step in "${ALL_STEPS[@]}"; do
-  for selected_step in "${SELECTED_STEPS[@]}"; do
-    [[ "${selected_step}" == "${known_step}" ]] && ORDERED_STEPS+=("${known_step}")
+if [[ ${alzheimer_dataset_requested} -eq 1 ]]; then
+  ORDERED_STEPS=("${ALZHEIMER_STEP}")
+else
+  for known_step in "${ALL_STEPS[@]}"; do
+    for selected_step in "${SELECTED_STEPS[@]}"; do
+      [[ "${selected_step}" == "${known_step}" ]] && ORDERED_STEPS+=("${known_step}")
+    done
   done
-done
+fi
 SELECTED_STEPS=("${ORDERED_STEPS[@]}")
 
 if [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" != "1" ||
@@ -542,8 +621,12 @@ for step in "${SELECTED_STEPS[@]}"; do
   IFS="${old_ifs}"
   valid=1
   for path in "${output_paths[@]}"; do
+    if [[ "${step}" == "${ALZHEIMER_STEP}" ]] &&
+       ! stage2_alzheimer_destination_safe "${path}"; then
+      stage2_abort "Alzheimer donor-assay output aliases or redirects to the raw input: ${path}"
+    fi
     if [[ ${FORCE_ARG} -eq 1 ]] || ! ecoda_validate_checksum "${path}" ||
-       ! ecoda_validate_stage2_output "${step}" "${path}"; then
+       ! stage2_semantic_output_valid "${step}" "${path}"; then
       valid=0
     fi
   done

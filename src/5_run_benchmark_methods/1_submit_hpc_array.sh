@@ -69,8 +69,9 @@ Exact batch mode requires the immutable twelve-row uncorrected matrix.
 Final variants require an explicit, variant-matching selection file and the
 fixed seven-method batch-effect suite; uncorrected final also permits an
 explicit one-row Kidney targeted recovery or an exact five-row method repair.
+corrected_final additionally permits an exact eight-row non-Alzheimer recovery
+with the four-method target set, or an exact one-row Alzheimer follow-up.
 --target-methods is an explicit selection-file-scoped partial batch recovery;
-it requires --pass and preserves the fixed suite as the default.
 --force-targeted force-reclaims only the explicit target methods; it requires
 --target-methods, --pass, --selection-file, and --force-reason.
 EOF
@@ -217,6 +218,14 @@ if [[ ${SYNC_ONLY_SET} -eq 1 && -z "${SYNC_ONLY_RUN}" ]]; then
   exit 1
 fi
 EXPECTED_BATCH_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot"
+CORRECTED_FINAL_RECOVERY_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition"
+CORRECTED_FINAL_RECOVERY_DATASETS=(
+  Joanito Stephenson Breast_cancer Covid19_PBMC Kidney_KPMP_full Diabetes
+  Lupus_PBMC Lung
+)
+# This recovery contract deliberately excludes Alzheimer; its separate
+# one-row follow-up uses the ordinary fixed method suite.
+
 if [[ -n "${PASS_ARG}" && ${METHODS_SET} -eq 1 &&
       ${TARGET_METHODS_SET} -eq 0 &&
       "${METHODS_ARG}" != "${EXPECTED_BATCH_METHODS}" ]]; then
@@ -270,7 +279,8 @@ fi
 stage5_validate_final_selection() {
   local variant="${ANALYSIS_VARIANT_ARG:-}" expected_pass expected_view
   local row_count=0 ds view label extra final_line expected_ds target_row_count
-  local -a expected_datasets=()
+  local configured_ds expected_index
+  local -a expected_datasets=() configured_non_alzheimer=()
   case "${variant}" in
     "")
       return 0
@@ -324,6 +334,32 @@ stage5_validate_final_selection() {
         echo "ERROR: corrected_final has no configured corrected datasets." >&2
         return 1
       }
+      if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
+        [[ "${TARGET_METHODS_ARG}" == "${CORRECTED_FINAL_RECOVERY_METHODS}" ]] || {
+          echo "ERROR: corrected_final eight-row recovery requires target methods ${CORRECTED_FINAL_RECOVERY_METHODS}." >&2
+          return 1
+        }
+        configured_non_alzheimer=()
+        for configured_ds in "${expected_datasets[@]}"; do
+          [[ "${configured_ds}" == Alzheimer ]] || configured_non_alzheimer+=("${configured_ds}")
+        done
+        [[ ${#configured_non_alzheimer[@]} -eq ${#CORRECTED_FINAL_RECOVERY_DATASETS[@]} ]] || {
+          echo "ERROR: corrected_final recovery scope does not match the configured non-Alzheimer rows." >&2
+          return 1
+        }
+        for expected_index in "${!CORRECTED_FINAL_RECOVERY_DATASETS[@]}"; do
+          [[ "${configured_non_alzheimer[${expected_index}]}" == "${CORRECTED_FINAL_RECOVERY_DATASETS[${expected_index}]}" ]] || {
+            echo "ERROR: corrected_final recovery scope is not in the plan's config order." >&2
+            return 1
+          }
+        done
+        expected_datasets=("${CORRECTED_FINAL_RECOVERY_DATASETS[@]}")
+      elif [[ -r "${SELECTION_FILE_ARG}" ]]; then
+        target_row_count="$(awk 'END { print NR }' "${SELECTION_FILE_ARG}")" || return 1
+        if [[ "${target_row_count}" == 1 ]]; then
+          expected_datasets=(Alzheimer)
+        fi
+      fi
       ;;
     *)
       echo "ERROR: unsupported Stage 5 analysis variant: ${variant}" >&2
@@ -385,7 +421,10 @@ stage5_validate_final_selection() {
     row_count=$((row_count + 1))
   done < "${SELECTION_FILE_ARG}"
   [[ ${row_count} -eq ${#expected_datasets[@]} ]] || {
-    if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
+    if [[ ${TARGET_METHODS_SET} -eq 1 &&
+          "${variant}" == corrected_final ]]; then
+      echo "ERROR: corrected_final recovery requires the exact eight-row non-Alzheimer selection." >&2
+    elif [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
       echo "ERROR: targeted final recovery requires one Kidney or exact five-row selection." >&2
     else
       echo "ERROR: ${variant} selection has an incomplete or overbroad dataset scope." >&2
@@ -1574,6 +1613,15 @@ stage5_target_method_selected() {
   done
   return 1
 }
+# The corrected-final non-Alzheimer recovery must rebuild stale prepare
+# caches (and its dependent method rows) rather than reuse any final artifact.
+stage5_corrected_final_recovery_mode() {
+  [[ "${ANALYSIS_VARIANT:-${ANALYSIS_VARIANT_ARG:-}}" == corrected_final &&
+     "${PASS_ARG:-}" == corrected &&
+     ${TARGET_METHODS_SET} -eq 1 &&
+     "${TARGET_METHODS_ARG:-}" == "${CORRECTED_FINAL_RECOVERY_METHODS}" ]]
+}
+
 
 
 
@@ -2078,7 +2126,9 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   ecoda_validate_checksum "${MANIFEST}" ||
     stage5_abort "Stage 5 selection checksum is invalid"
   methods_meta="$(sed -n 's/^METHODS=//p' "${ECODA_RUN_ROOT}/metadata" | head -1 || true)"
-  if [[ -z "${METHODS_ARG}" ]]; then
+  target_methods_meta="$(sed -n 's/^TARGET_METHODS=//p' \
+    "${ECODA_RUN_ROOT}/metadata" | head -1 || true)"
+  if [[ -z "${target_methods_meta}" && -z "${METHODS_ARG}" ]]; then
     METHODS_ARG="${methods_meta}"
     METHODS_SET=1
   fi
@@ -2096,21 +2146,37 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   if [[ -n "${ANALYSIS_VARIANT_ARG}" ]]; then
     ANALYSIS_VARIANT_SET=1
     PASS_SET=1
-    SELECTION_FILE_SET=1
-    SELECTION_FILE_ARG="${MANIFEST}"
-    if [[ -z "${METHODS_ARG}" ]]; then
-      METHODS_ARG="${methods_meta}"
-      METHODS_SET=1
-    fi
-    target_methods_meta="$(sed -n 's/^TARGET_METHODS=//p' \
-      "${ECODA_RUN_ROOT}/metadata" | head -1 || true)"
     if [[ -n "${target_methods_meta}" ]]; then
-      TARGET_METHODS_ARG="${target_methods_meta}"
-      TARGET_METHODS_SET=1
-      ecoda_split_csv "${TARGET_METHODS_ARG}" || stage5_abort "invalid stored target methods"
+      [[ ${METHODS_SET} -eq 0 ]] || {
+        stage5_abort "final sync-only metadata contains target methods and a full METHODS selection"
+      }
+      if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
+        [[ "${TARGET_METHODS_ARG}" == "${target_methods_meta}" ]] || {
+          stage5_abort "final sync-only target methods do not match run metadata"
+        }
+      else
+        TARGET_METHODS_ARG="${target_methods_meta}"
+        TARGET_METHODS_SET=1
+      fi
+      METHODS_ARG=""
+      METHODS_SET=0
+      ecoda_split_csv "${TARGET_METHODS_ARG}" ||
+        stage5_abort "invalid stored target methods"
       ecoda_assert_unique_items "${ECODA_ARRAY[@]}" ||
         stage5_abort "duplicate stored target methods"
       TARGET_METHODS=("${ECODA_ARRAY[@]}")
+      for stored_target_method in "${TARGET_METHODS[@]}"; do
+        case ",${EXPECTED_BATCH_METHODS}," in
+          *,"${stored_target_method}",*) ;;
+          *) stage5_abort "final sync-only metadata contains an unsupported target method" ;;
+        esac
+      done
+    elif [[ -z "${METHODS_ARG}" ]]; then
+      METHODS_ARG="${methods_meta}"
+      METHODS_SET=1
+    fi
+    if [[ -z "${target_methods_meta}" && ${TARGET_METHODS_SET} -eq 1 ]]; then
+      stage5_abort "final sync-only target methods are missing from run metadata"
     fi
     stage5_validate_final_selection || stage5_abort "stored final selection is invalid"
     stage5_configure_analysis_context ||
@@ -2888,6 +2954,7 @@ stage5_prepare_pseudobulk_valid() {
   local ds="$1" view="$2" path owner_dir producer_run record recorded_producer expected_cache
   local prepare_rds_args=()
   [[ -n "${PASS_ARG}" ]] || return 1
+  stage5_corrected_final_recovery_mode && return 1
   benchmark_artifacts_for "${ds}" "${view}" prepare_pseudobulk || return 1
   [[ ${#ARTIFACT_PATHS[@]} -eq 1 ]] || return 1
   path="${ARTIFACT_PATHS[0]}"
@@ -3197,10 +3264,12 @@ stage5_validate_corrected_matrix_rows() {
 }
 
 stage5_track_pending_artifact_owners() {
-  local owner_dir
+  local owner_dir reclaim_terminal=0
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
   [[ -s "${PENDING_SELECTION}" ]] || return 0
-  ecoda_validate_output_ownership stage5 "${PENDING_SELECTION}" "${RUN_ID}" ||
+  stage5_corrected_final_recovery_mode && reclaim_terminal=1
+  ecoda_validate_output_ownership stage5 "${PENDING_SELECTION}" "${RUN_ID}" \
+    "${reclaim_terminal}" ||
     return 1
   for owner_dir in "${ECODA_OUTPUT_OWNER_DIRS[@]:-}"; do
     [[ -n "${owner_dir}" ]] || return 1
@@ -3223,6 +3292,9 @@ stage5_selection_has_pending_rows() {
           *:"${method}") ;;
           *) continue ;;
         esac
+      fi
+      if stage5_corrected_final_recovery_mode; then
+        return 0
       fi
       if stage5_method_is_forced "${method}"; then
         return 0
@@ -3436,6 +3508,9 @@ if [[ -z "${SYNC_ONLY_RUN}" ]] &&
     target_methods_csv="$(IFS=,; echo "${TARGET_METHODS[*]}")"
   fi
   target_methods_metadata=""
+  if [[ -n "${ANALYSIS_VARIANT:-}" && ${TARGET_METHODS_SET} -eq 1 ]]; then
+    target_methods_metadata="TARGET_METHODS=${target_methods_csv}\n"
+  fi
   analysis_variant_metadata="$(stage5_variant_metadata)"
   [[ -z "${analysis_variant_metadata}" ]] ||
     analysis_variant_metadata="${analysis_variant_metadata}"$'\n'
@@ -3574,7 +3649,9 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
       if [[ "${method}" == "prepare_pseudobulk" &&
             ${method_force} -eq 0 ]] &&
          [[ ${FORCE_TARGETED_ARG} -eq 1 || ${TARGET_METHODS_SET} -eq 1 ]]; then
-        if stage5_prepare_pseudobulk_valid "${ds}" "${view}"; then
+        if stage5_corrected_final_recovery_mode; then
+          :
+        elif stage5_prepare_pseudobulk_valid "${ds}" "${view}"; then
           echo "Skipping validated Stage 5 pseudobulk cache ${ds}/${view}/${method}."
           continue
         fi
@@ -3584,6 +3661,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
             "targeted Stage 5 methods require a validated pseudobulk cache for ${ds}/${view}"
         fi
       elif [[ ${method_force} -eq 0 ]] &&
+           ! stage5_corrected_final_recovery_mode &&
            benchmark_selected_artifacts_valid "${ds}" "${view}" "${method}"; then
         echo "Skipping validated Stage 5 artifact ${ds}/${view}/${method}."
         continue
@@ -3982,8 +4060,16 @@ else
   METHODS=(_ecoda_none_)
   ANALYSES=(_ecoda_none_)
   ANALYSES_SELECTED=0
+  target_methods_line="$(sed -n 's/^TARGET_METHODS=//p' \
+    "${ECODA_RUN_ROOT}/metadata" | head -1 || true)"
   methods_line="$(sed -n 's/^METHODS=//p' "${ECODA_RUN_ROOT}/metadata" | head -1 || true)"
-  if [[ -n "${methods_line}" ]]; then ecoda_split_csv "${methods_line}"; METHODS=("${ECODA_ARRAY[@]}"); fi
+  if [[ -n "${target_methods_line}" ]]; then
+    ecoda_split_csv "${target_methods_line}"
+    METHODS=("${ECODA_ARRAY[@]}")
+  elif [[ -n "${methods_line}" ]]; then
+    ecoda_split_csv "${methods_line}"
+    METHODS=("${ECODA_ARRAY[@]}")
+  fi
   labels_line="$(sed -n 's/^ANALYSES=//p' "${ECODA_RUN_ROOT}/metadata" | head -1 || true)"
   if [[ -n "${labels_line}" ]]; then ecoda_split_csv "${labels_line}"; ANALYSES=("${ECODA_ARRAY[@]}"); ANALYSES_SELECTED=1; fi
   [[ -s "${ECODA_RUN_ROOT}/status/aggregate" ]] &&

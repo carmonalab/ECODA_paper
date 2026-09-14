@@ -66,8 +66,8 @@ with_temporary({
     "from src.utils.py.batch_contract import build_batch_contract_identity;",
     "h5ad = Path(sys.argv[1]); metadata = Path(sys.argv[3]);",
     "obs = pd.DataFrame({'Sample': ['s1','s2','s3','s4'],",
-    "'label': ['A','A','B','B'], 'assay': ['a']*4,",
-    "'sex': ['F','M','F','M']}, index=['c1','c2','c3','c4']);",
+    "'label': ['A','A','B','B'], 'assay': ['a','b','a','b'],",
+    "'sex': ['F','F','M','M']}, index=['c1','c2','c3','c4']);",
     "n = 2000; adata = ad.AnnData(X=np.ones((4,n), dtype=np.float32), obs=obs,",
     "var=pd.DataFrame({'hvg_rank': np.arange(1,n+1,dtype=float)},",
     "index=[f'g{i}' for i in range(n)]));",
@@ -136,12 +136,34 @@ with_temporary({
   report <- jsonlite::fromJSON(report_path, simplifyVector = FALSE)
   row <- report$rows[[1L]]
   stopifnot(
-    identical(report$status, "CORRECTED_FINAL_CONSUMERS_VALIDATED"),
     identical(row$status, "OK"),
-    identical(unname(unlist(row$estimable_batch_keys)), "sex"),
-    identical(unname(unlist(row$non_estimable_batch_keys)), "assay"),
+    identical(
+      unname(unlist(row$estimable_batch_keys)),
+      c("assay", "sex")
+    ),
+    length(unname(unlist(row$non_estimable_batch_keys))) == 0L,
     identical(row$correction_state, "BATCH_CORRECTION"),
-    grepl("batch_key_2", row$correction_formulas$composition, fixed = TRUE),
+    identical(
+      row$correction_formulas$composition,
+      paste0(
+        "model.matrix(~ 1 + batch_key_1 + batch_key_2); ",
+        "limma::removeBatchEffect(covariates=technical_covariates, ",
+        "design=intercept); effective_batch_keys=[assay,sex]"
+      )
+    ),
+    identical(
+      row$correction_formulas$pseudobulk,
+      paste0(
+        "DESeq2 design=~ 1; model.matrix(~ 1 + batch_key_1 + batch_key_2); ",
+        "limma::removeBatchEffect(covariates=technical_covariates, ",
+        "design=intercept); effective_batch_keys=[assay,sex]"
+      )
+    ),
+    !grepl(
+      "__ecoda_batch_combined_v1|lme4|lmer|\\(1 \\|",
+      paste(unlist(row$correction_formulas), collapse = "\n"),
+      perl = TRUE
+    ),
     file.exists(paste0(report_path, ".md5"))
   )
 
@@ -171,10 +193,26 @@ with_temporary({
     simplifyVector = FALSE
   )
   stopifnot(
-    identical(no_correction_report$rows[[1L]]$correction_state, "NO_CORRECTION"),
+    identical(
+      no_correction_report$rows[[1L]]$correction_state,
+      "NO_CORRECTION"
+    ),
+    length(unname(unlist(no_correction_report$rows[[1L]]$estimable_batch_keys))) == 0L,
     identical(
       no_correction_report$rows[[1L]]$correction_formulas$composition,
       "NO_CORRECTION: no estimable technical batch key"
+    ),
+    identical(
+      no_correction_report$rows[[1L]]$correction_formulas$pseudobulk,
+      "NO_CORRECTION: no estimable technical batch key"
+    ),
+    !grepl(
+      "__ecoda_batch_combined_v1|lme4|lmer|\\(1 \\|",
+      paste(
+        unlist(no_correction_report$rows[[1L]]$correction_formulas),
+        collapse = "\n"
+      ),
+      perl = TRUE
     )
   )
 })

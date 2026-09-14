@@ -1192,10 +1192,9 @@ prepare_pseudobulks_hpc <- function(
     stop("prepare_pseudobulks_hpc received invalid ranked HVG genes.")
   }
 
-  # Corrected pseudobulk always validates every cell before the raw
-  # first-observation Sample aggregate.  The scalar/one-key path keeps its
-  # original column; two or more ordered keys receive one in-memory composite
-  # column for the DESeq2/limma boundary.
+  # Corrected pseudobulk validates every cell before the raw first-observation
+  # Sample aggregate. All configured technical columns remain in metadata;
+  # only effective keys become separate limma model terms.
   corrected_context_required <- isTRUE(correct_batch)
   corrected_batch_keys <- NULL
   effective_batch_keys <- NULL
@@ -1229,7 +1228,7 @@ prepare_pseudobulks_hpc <- function(
       corrected_batch_keys,
       sample_col = sample_col,
       method_id = "Pseudobulk",
-      model_id = "pseudobulk_composite_v1"
+      model_id = "pseudobulk_limma_fixed_effects_v1"
     )
     if (is.null(batch_contract)) {
       batch_contract <- expected_pb_contract
@@ -1248,7 +1247,7 @@ prepare_pseudobulks_hpc <- function(
         batch_keys = as.list(unname(corrected_batch_keys)),
         sample_col = sample_col,
         method_id = "Pseudobulk",
-        model_id = "pseudobulk_composite_v1"
+        model_id = "pseudobulk_limma_fixed_effects_v1"
       )
       metadata_pass <- load_h5ad_pseudobulk_metadata(
         h5ad_path = h5ad_path,
@@ -1275,7 +1274,6 @@ prepare_pseudobulks_hpc <- function(
         stop("Corrected pseudobulk batch context key order differs")
       }
     }
-    batch_col <- batch_context$scalar_batch_col
     batch_contract <- ecoda_hpc_augment_batch_contract(
       identity = batch_contract,
       validation = batch_context$validation,
@@ -1296,7 +1294,9 @@ prepare_pseudobulks_hpc <- function(
     effective_batch_keys <- unname(as.character(effective_batch_keys))
     batch_correction_active <- length(effective_batch_keys) > 0L
     effective_blind <- if (batch_correction_active) blind else TRUE
-    fit_batch_col <- if (batch_correction_active) batch_col else NULL
+    # Corrected DESeq2 fitting is intercept-only; limma receives the separate
+    # effective technical keys after normalization.
+    fit_batch_col <- NULL
   }
 
   specs <- list(
@@ -1342,6 +1342,28 @@ prepare_pseudobulks_hpc <- function(
       sample_col = sample_col
     )
   }
+  fit_pseudobulk_for_variants <- function(counts) {
+    fitted <- fit_pseudobulk_deseq2(
+      counts,
+      metadata = aggregated$metadata,
+      # Corrected fitting is always DESeq2 design=~ 1. Uncorrected callers
+      # retain their historical fit_batch_col behavior.
+      batch_col = fit_batch_col,
+      blind = effective_blind,
+      correct_batch = FALSE
+    )
+    if (isTRUE(correct_batch)) {
+      fitted <- ecoda_hpc_apply_limma_batch_correction(
+        fit = fitted,
+        metadata = aggregated$metadata,
+        batch_keys = corrected_batch_keys,
+        batch_context = batch_context,
+        sample_col = sample_col
+      )
+    }
+    fitted
+  }
+
 
   full_names <- c("hvg500", "hvg1000", "hvg2000", "hvg2000_bl", "hvg3000")
   shared_names <- intersect(variants, full_names)
@@ -1350,13 +1372,7 @@ prepare_pseudobulks_hpc <- function(
   shared_mem <- NA_real_
   if (length(shared_names) > 0L) {
     shared_fit_time <- exec_time(
-      shared_fit <- fit_pseudobulk_deseq2(
-        aggregated$counts,
-        metadata = aggregated$metadata,
-        batch_col = fit_batch_col,
-        blind = effective_blind,
-        correct_batch = batch_correction_active
-      )
+      shared_fit <- fit_pseudobulk_for_variants(aggregated$counts)
     )
     shared_fit_time <- as.numeric(shared_fit_time, units = "secs")
     shared_mem <- peak_rss_gb()
@@ -1375,12 +1391,8 @@ prepare_pseudobulks_hpc <- function(
         stop("schvg2000 has no ranked genes in the H5AD gene universe.")
       }
       schvg_fit_time <- exec_time(
-        selected_fit <- fit_pseudobulk_deseq2(
-          aggregated$counts[positions, , drop = FALSE],
-          metadata = aggregated$metadata,
-          batch_col = fit_batch_col,
-          blind = effective_blind,
-          correct_batch = batch_correction_active
+        selected_fit <- fit_pseudobulk_for_variants(
+          aggregated$counts[positions, , drop = FALSE]
         )
       )
       selected_fit_time <- as.numeric(schvg_fit_time, units = "secs")
@@ -1753,7 +1765,7 @@ run_pseudobulk_hpc <- function(
         key_source,
         sample_col = sample_col,
         method_id = "Pseudobulk",
-        model_id = "pseudobulk_composite_v1"
+        model_id = "pseudobulk_limma_fixed_effects_v1"
       )
     }
     batch_contract <- ecoda_hpc_augment_batch_contract(
@@ -2507,7 +2519,7 @@ run_composition_methods_hpc <- function(
       correction_batch_keys,
       sample_col = sample_col,
       method_id = "ECODA_authors_HR",
-      model_id = "ecoda_additive_random_intercepts_v1"
+      model_id = "limma_fixed_effects_v1"
     )
     if (is.null(batch_contract)) {
       batch_contract <- expected_composition_contract
@@ -2534,18 +2546,13 @@ run_composition_methods_hpc <- function(
         correction_batch_keys,
         sample_col = sample_col,
         method_id = "Pseudobulk",
-        model_id = "pseudobulk_composite_v1"
+        model_id = "pseudobulk_limma_fixed_effects_v1"
       )
       pseudobulk_contract <- ecoda_hpc_augment_batch_contract(
         identity = pseudobulk_contract,
         validation = metadata_validation,
         method_id = "Pseudobulk",
-        batch_keys = correction_batch_keys,
-        scalar_batch_col = if (length(correction_batch_keys) >= 2L) {
-          .ecoda_batch_reserved_name
-        } else {
-          correction_batch_keys[[1L]]
-        }
+        batch_keys = correction_batch_keys
       )
       ecoda_hpc_validate_batch_contract(
         pb_hvg2000[["batch_contract"]],
@@ -2616,17 +2623,13 @@ run_composition_methods_hpc <- function(
       correction_args <- list(
         feat_mat = res[["feat_mat"]],
         sample_meta = correction_metadata,
-        batch_col = if (length(correction_batch_keys) >= 2L) {
-          as.list(unname(correction_batch_keys))
-        } else {
-          correction_batch_keys[[1L]]
-        },
+        batch_keys = as.list(unname(correction_batch_keys)),
         sample_col = sample_col
       )
       if (!is.null(metadata_validation)) {
         correction_args$metadata_validation <- metadata_validation
       }
-      corrected_feat <- do.call(correct_clr_batch_lmm, correction_args)
+      corrected_feat <- do.call(correct_clr_batch_limma, correction_args)
       corrected_dist <- dist(corrected_feat)
       corrected_labels <- res[["labels"]]
       if (length(corrected_labels) != nrow(corrected_feat)) {
@@ -2653,7 +2656,7 @@ run_composition_methods_hpc <- function(
         correction_batch_keys,
         sample_col = sample_col,
         method_id = name,
-        model_id = "ecoda_additive_random_intercepts_v1"
+        model_id = "limma_fixed_effects_v1"
       )
       ecoda_hpc_augment_batch_contract(
         identity = contract,

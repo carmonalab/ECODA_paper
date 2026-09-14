@@ -507,3 +507,91 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
   messages. This is historical evidence for the final global limma policy
   only; lme4 is removed from all new corrected work and its payloads are not
   reuse candidates.
+
+## Execution checkpoint — 2026-09-14
+
+### Completed
+
+- Consolidated this file into the single authoritative plan. The separate
+  Alzheimer/backup draft was archived at
+  `.agents/plans/archive/1789391587-alzheimer-donor-assay-backup-plan.md`.
+- Simplified `AGENTS.md` to durable scientific, artifact, snapshot, ownership,
+  and gate rules while preserving the required baseline anchor
+  `5302671ad94556edcf9acccf372d2dc34121d714`, the full HiTME/scATOMIC
+  annotation contract, the user-authored plan-reference text, Bamboo as the
+  default host, and the explicitly named Yggdrasil backup exception.
+- Updated `docs/ARCHITECTURE.md` to remain a general config-driven overview;
+  exact dataset/method/row selections now belong here in the active plan.
+  Updated `NOTES.md` with current Alzheimer, global-limma, 32-row, and backup
+  evidence while retaining detailed historical notes. Updated the onboarding
+  README with source/paper-reported major cell-type counts and the
+  CombinedPBMC legacy/confounding rationale.
+- Implemented and focused-tested the global separate-covariate limma boundary:
+  corrected composition and pseudobulk use categorical factor designs and
+  `limma::removeBatchEffect` with an intercept-preservation design; DESeq2
+  corrected fitting is `design=~1`, `batch_col=NULL`, followed by limma.
+  New identities are `limma_fixed_effects_v1` and
+  `pseudobulk_limma_fixed_effects_v1`. lme4 and artificial combined keys are
+  prohibited for new corrected artifacts.
+- Implemented strict Alzheimer donor-by-assay Stage 2 source/worker/hook
+  contracts, including exact assay tokens, 104 samples, 83/21 assay sample
+  counts, 59/45 sex sample counts, collision/mixed-metadata rejection, raw
+  immutability, and derivative-bound Stage 3 input validation.
+- Implemented explicit corrected-final eight-row and one-row Alzheimer
+  selector contracts, Stage 3 derivative binding, Stage 2 watchdog/common
+  validation, keyed pseudobulk RDS validation, active identity whitelist
+  migration, and focused test fixtures.
+- Parent verification is green for shell syntax, Python compilation,
+  H5AD/matrix/multibatch contracts, Stage 2 submitter/watchdog, Stage 3
+  submitter, Stage 5 selection, benchmark matrix submitter/synchronization,
+  H5AD preflight, batch registry, corrected limma, corrected consumer, and RDS
+  contracts. Expected negative diagnostics and DESeq2/`cmdscale` warnings are
+  non-fatal.
+- Real-data smoke passed without writing artifacts using existing uncorrected
+  Alzheimer Stage 5 files:
+  `data/batch_effect/uncorrected/results/Alzheimer_batch_effect_uncorrected_composition.rds`
+  (83 samples × 131 composition features) and
+  `data/batch_effect/uncorrected/results/Alzheimer_batch_effect_uncorrected_Pseudobulk_hvg2000.rds`
+  (83 samples × 2,000 pseudobulk features), with one-key and two-key designs,
+  finite outputs, preserved identifiers, exact CLR row sums, and pseudobulk
+  design rank 3.
+- The remote-only transfer proof and repository backup succeeded without local
+  staging. `ssh -A bamboo` reached
+  `login1.yggdrasil.hpc.unige.ch`; source/destination POC SHA-256 was
+  `ac5944fad030a07ad4257a3d7b7b44a83925c3e0fcba83196f9cbec6d670dcb2`, and the
+  second checksum-aware dry run was empty. The repository clone is at
+  `yggdrasil:~/scratch/_ecoda_backups/ECODA_paper_repo_20260914`; both clones
+  report `751c3f7fd8d9a863d6940bc37b1269fa785c06d4`, and the full checksum
+  dry run was empty. No Mac staging was used.
+
+### Open items and exact next steps
+
+1. **Commit/push this implementation checkpoint.** Review the explicit
+   allowlist, preserve unrelated user worktree changes, and commit/push the
+   source, tests, documentation, and plan changes. `datasets.json`,
+   `pixi.toml`, and `pixi.lock` have not been changed by this checkpoint.
+2. **Finish backup before production compute.** The repository clone is
+   verified; the complete 2.3 TB scratch clone has not started. Use only
+   direct Bamboo→Yggdrasil rsync, never Mac staging. Agent forwarding is
+   conditional on the originating Mac session remaining alive; a persistent
+   centrally registered Bamboo key is preferable for a multi-hour transfer.
+   Quiesce writers, split scratch into explicit top-level batches, preserve
+   logs/gates/manifests/checksums, and verify source/destination manifests.
+3. **Run the eight-dataset corrected-final gate.** After the source checkpoint
+   is snapshotted, use the exact eight-row selection and mandatory 32 method
+   rows (8 prepare, 8 pseudobulk, 8 GloScope, 8 composition). The old eight
+   combined-key prepare caches remain immutable and stale; none may be reused.
+   Launch only if the `2026-09-15 07:00 UTC` cutoff envelope is provable.
+4. **Run the Alzheimer follow-up from a new configuration snapshot.** Preserve
+   raw H5AD, execute the guarded Stage 2 derivative, then the explicit
+   derivative-bound Stage 3 views and one-row Stage 5 lanes. Corrected Stage 5
+   serializes behind the eight-dataset corrected-final gate because the root
+   and synchronization owner are shared.
+5. **Finalize analysis only after reviewed artifacts are available.** Sync
+   explicit processed/result files and manifests to NAS; do not copy full
+   H5ADs to the Mac or run final notebooks from stale local mirrors.
+
+No new full-cohort Stage 2/3/5 job, durable gate, or full scratch transfer is
+authorized merely by this checkpoint. The next session must re-read this
+checkpoint, verify the working-tree allowlist, and continue with item 1 or the
+explicitly authorized backup item.

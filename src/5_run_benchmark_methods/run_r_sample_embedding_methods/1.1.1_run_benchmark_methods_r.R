@@ -397,6 +397,7 @@ if (corrected_final_mode) {
 }
 batch_keys <- NULL
 batch_context <- NULL
+effective_batch_keys <- NULL
 batch_col <- NULL
 h5ad_expected_batch_contract <- NULL
 pseudobulk_batch_contract <- NULL
@@ -405,16 +406,15 @@ if (correct_batch_mode) {
   if (is.null(entry$batch_col)) {
     stop("corrected batch-effect view requires a confirmed columns.batch")
   }
-  batch_keys <- ecoda_batch_normalize_keys(
+  batch_keys <- ecoda_hpc_normalize_keys(
     entry$batch_col,
     sample_col = sample_col,
     biological_label = entry$label_col
   )
-  batch_col <- if (length(batch_keys) >= 2L) {
-    "__ecoda_batch_combined_v1"
-  } else {
-    batch_keys[[1L]]
-  }
+  # Preserve the original configured columns.  Only a one-key design uses
+  # batch_col as a direct compatibility argument; multi-key correction is
+  # supplied through batch_keys and batch_context.
+  if (length(batch_keys) == 1L) batch_col <- batch_keys[[1L]]
   h5ad_expected_batch_contract <- ecoda_hpc_batch_contract_identity(
     batch_keys,
     sample_col = sample_col,
@@ -425,7 +425,7 @@ if (correct_batch_mode) {
     batch_keys,
     sample_col = sample_col,
     method_id = "Pseudobulk",
-    model_id = "pseudobulk_composite_v1"
+    model_id = "pseudobulk_limma_fixed_effects_v1"
   )
   method_batch_contract <- switch(
     method,
@@ -433,7 +433,7 @@ if (correct_batch_mode) {
       batch_keys,
       sample_col = sample_col,
       method_id = "ECODA_authors_HR",
-      model_id = "ecoda_additive_random_intercepts_v1"
+      model_id = "limma_fixed_effects_v1"
     ),
     gloscope = ecoda_hpc_batch_contract_identity(
       batch_keys,
@@ -485,20 +485,11 @@ embedding_key <- if (args$view == "batch_effect_corrected") {
 # Sample. This is retained for ordinary corrected Stage 5 and intentionally
 # skipped only by corrected_final, which consumes the exported Feather.
 if (correct_batch_mode && !corrected_final_mode) {
-  validation_method_id <- if (method == "composition") {
-    "ECODA_authors_HR"
-  } else if (method == "gloscope") {
-    "GloScope"
-  } else {
-    "Pseudobulk"
-  }
-  validation_model_id <- if (method == "composition") {
-    "ecoda_additive_random_intercepts_v1"
-  } else if (method == "gloscope") {
-    "embedding_consumer_harmony_v1"
-  } else {
-    "pseudobulk_composite_v1"
-  }
+  # The Python check validates the selected H5AD's source/preprocessing
+  # metadata. Its identity is intentionally the persisted H5AD contract; the
+  # Stage 5 consumer contract uses the separate limma model identity.
+  validation_method_id <- "preprocess"
+  validation_model_id <- "hvg_composite_v1"
   python_batch_metadata <- validate_h5ad_corrected_batch_metadata(
     h5ad_path = h5ad_path,
     batch_keys = as.list(unname(batch_keys)),
@@ -662,15 +653,31 @@ if (correct_batch_mode) {
       python_metadata = python_batch_metadata
     )
   }
-  batch_col <- batch_context$scalar_batch_col
+  effective_batch_keys <- batch_context[["effective_batch_keys"]]
+  if (is.null(effective_batch_keys)) {
+    effective_batch_keys <- batch_context$validation[["effective_batch_keys"]]
+  }
+  if (is.null(effective_batch_keys)) effective_batch_keys <- character()
+  effective_batch_keys <- unname(as.character(effective_batch_keys))
+  if (length(effective_batch_keys) &&
+      any(!effective_batch_keys %in% batch_keys)) {
+    stop("Corrected worker effective keys are not configured technical columns")
+  }
+  # Keep non-estimable configured keys in metadata, but pass only an original
+  # varying key through the scalar compatibility slot. Multi-key correction
+  # uses the separate columns carried by batch_context.
+  batch_col <- if (length(effective_batch_keys) == 1L) {
+    effective_batch_keys[[1L]]
+  } else {
+    NULL
+  }
 }
 if (correct_batch_mode) {
   pseudobulk_batch_contract <- ecoda_hpc_augment_batch_contract(
     identity = pseudobulk_batch_contract,
     validation = batch_context$validation,
     method_id = "Pseudobulk",
-    batch_keys = batch_keys,
-    scalar_batch_col = batch_context$scalar_batch_col
+    batch_keys = batch_keys
   )
   method_batch_contract <- switch(
     method,
@@ -684,8 +691,7 @@ if (correct_batch_mode) {
       identity = method_batch_contract,
       validation = batch_context$validation,
       method_id = "GloScope",
-      batch_keys = batch_keys,
-      scalar_batch_col = batch_context$scalar_batch_col
+      batch_keys = batch_keys
     ),
     pseudobulk = pseudobulk_batch_contract,
     NULL
@@ -727,7 +733,7 @@ if (!combo_supplied && ecoda_local_cache_valid(method_rds) && !force) {
             batch_keys,
             sample_col = sample_col,
             method_id = composition_method,
-            model_id = "ecoda_additive_random_intercepts_v1"
+            model_id = "limma_fixed_effects_v1"
           ),
           validation = batch_context$validation,
           method_id = composition_method,

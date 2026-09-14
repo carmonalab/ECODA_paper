@@ -170,6 +170,10 @@ NAS_ROOT="${TMP_DIR}/nas/project"
 mkdir -p "${NAS_ROOT}"
 export NAS_TARGET_DIR="${NAS_ROOT}"
 FINAL_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot"
+CORRECTED_FINAL_RECOVERY_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition"
+CORRECTED_FINAL_RECOVERY_SELECTION="${TMP_DIR}/corrected-final-recovery-selection.tsv"
+printf 'Joanito\tbatch_effect_corrected\tbatch_effect_corrected\nStephenson\tbatch_effect_corrected\tbatch_effect_corrected\nBreast_cancer\tbatch_effect_corrected\tbatch_effect_corrected\nCovid19_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nKidney_KPMP_full\tbatch_effect_corrected\tbatch_effect_corrected\nDiabetes\tbatch_effect_corrected\tbatch_effect_corrected\nLupus_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nLung\tbatch_effect_corrected\tbatch_effect_corrected\n' \
+  > "${CORRECTED_FINAL_RECOVERY_SELECTION}"
 FINAL_SELECTION="${TMP_DIR}/final-selection.tsv"
 printf 'Covid19_PBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nKidney_KPMP_full\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' \
   > "${FINAL_SELECTION}"
@@ -281,15 +285,42 @@ fi
 # The validator-only full corrected fixture owns the same method keys.  Clear
 # those inert fixture owners before exercising the independent targeted scope.
 rm -rf "${HPC_ROOT}/_ecoda_owners"
+CORRECTED_STALE_PREP_PRODUCER_RUN_ID="corrected-final-stale-prep-cache"
+CORRECTED_STALE_PREP_ROOT="${HPC_ROOT}/_ecoda_runs/${CORRECTED_STALE_PREP_PRODUCER_RUN_ID}"
+mkdir -p "${CORRECTED_STALE_PREP_ROOT}/manifests"
+for corrected_ds in Joanito Stephenson Breast_cancer Covid19_PBMC \
+  Kidney_KPMP_full Diabetes Lupus_PBMC Lung; do
+  corrected_stale_prep="${HPC_ROOT}/batch_effect/corrected_final/pseudobulks/${corrected_ds}_batch_effect_corrected_final_pseudobulk_hvg2000.rds"
+  mkdir -p "$(dirname "${corrected_stale_prep}")"
+  printf 'stale __ecoda_batch_combined_v1 corrected pseudobulk cache\n' \
+    > "${corrected_stale_prep}"
+  (
+    export HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}"
+    export HPC_SCRATCH_DIR="${HPC_ROOT}" ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}"
+    export ECODA_RUN_ROOT="${CORRECTED_STALE_PREP_ROOT}" \
+      ECODA_RUN_ID="${CORRECTED_STALE_PREP_PRODUCER_RUN_ID}"
+    source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1
+    source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+    ecoda_write_checksum "${corrected_stale_prep}" >/dev/null
+    ecoda_write_artifact_record "${corrected_stale_prep}" \
+      stage5_prepare_pseudobulk_hvg2000 \
+      "${CORRECTED_STALE_PREP_PRODUCER_RUN_ID}" >/dev/null
+    ecoda_artifact_owner_acquire "${corrected_stale_prep}" stage5 \
+      "${CORRECTED_STALE_PREP_PRODUCER_RUN_ID}" 0 0 0 >/dev/null
+    ecoda_artifact_owner_set_state "${corrected_stale_prep}" OK \
+      "stale corrected-final prepare cache fixture"
+  )
+done
+CORRECTED_TARGET_CAPTURE_BEFORE="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
 
 CORRECTED_TARGET_OUTPUT="$(
   HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
     BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
     bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
-    --selection-file "${CORRECTED_FINAL_SELECTION}" \
+    --selection-file "${CORRECTED_FINAL_RECOVERY_SELECTION}" \
     --pass corrected \
     --analysis-variant corrected_final \
-    --target-methods "prepare_pseudobulk,pseudobulk,gloscope,composition"
+    --target-methods "${CORRECTED_FINAL_RECOVERY_METHODS}"
 )"
 CORRECTED_TARGET_RUN_ID="$(printf '%s\n' "${CORRECTED_TARGET_OUTPUT}" | sed -n 's/^BATCH_EFFECT_RUN_ID=//p')"
 
@@ -297,30 +328,134 @@ test -n "${CORRECTED_TARGET_RUN_ID}"
 CORRECTED_TARGET_METADATA="${HPC_ROOT}/_ecoda_runs/${CORRECTED_TARGET_RUN_ID}/metadata"
 grep -q '^TARGET_METHODS=prepare_pseudobulk,pseudobulk,gloscope,composition$' \
   "${CORRECTED_TARGET_METADATA}"
-set +e
+grep -q '^ANALYSIS_ROOT=.*/batch_effect/corrected_final$' \
+  "${CORRECTED_TARGET_METADATA}"
+grep -q '^ROOT=.*/batch_effect/corrected_final$' \
+  "${CORRECTED_TARGET_METADATA}"
+grep -q '^SOURCE_MANIFEST=.*/manifests/source.manifest$' \
+  "${CORRECTED_TARGET_METADATA}"
+grep -q '^RUNTIME_IDENTITY=.*/manifests/runtime.identity$' \
+  "${CORRECTED_TARGET_METADATA}"
+grep -q '^BATCH_CONTRACT_MANIFEST=.*/manifests/batch_contract.tsv$' \
+  "${CORRECTED_TARGET_METADATA}"
+test -s "${HPC_ROOT}/_ecoda_runs/${CORRECTED_TARGET_RUN_ID}/manifests/owners.tsv"
+CORRECTED_TARGET_SELECTION="${HPC_ROOT}/_ecoda_runs/${CORRECTED_TARGET_RUN_ID}/manifests/selection.tsv"
+test "$(cat "${CORRECTED_TARGET_SELECTION}")" = \
+  "$(cat "${CORRECTED_FINAL_RECOVERY_SELECTION}")"
+test "$(wc -l < "${CORRECTED_TARGET_SELECTION}" | tr -d '[:space:]')" = 8
+CORRECTED_TARGET_PENDING="$(sed -n 's/^PENDING_SELECTION=//p' \
+  "${CORRECTED_TARGET_METADATA}")"
+test -s "${CORRECTED_TARGET_PENDING}"
+test "$(wc -l < "${CORRECTED_TARGET_PENDING}" | tr -d '[:space:]')" = 32
+for corrected_method in prepare_pseudobulk pseudobulk gloscope composition; do
+  test "$(grep -c $'\t'"${corrected_method}"$ "${CORRECTED_TARGET_PENDING}")" = 8
+  corrected_matrix="${HPC_ROOT}/_ecoda_runs/${CORRECTED_TARGET_RUN_ID}/manifests/matrix_batch_effect_corrected_${corrected_method}.tsv"
+  test -s "${corrected_matrix}"
+  test "$(wc -l < "${corrected_matrix}" | tr -d '[:space:]')" = 8
+  test "$(awk -F $'\t' '$1 == "Alzheimer" { bad=1 } END { print bad + 0 }' \
+    "${corrected_matrix}")" = 0
+done
+if printf '%s\n' "${CORRECTED_TARGET_OUTPUT}" |
+   grep -q 'Skipping validated Stage 5 pseudobulk cache'; then
+  echo "stale corrected-final prepare cache was reused" >&2
+  exit 1
+fi
+# Deliberately make the stored METHODS line the full suite while retaining
+# the run-scoped TARGET_METHODS line; sync-only must honor the latter.
+sed -i.bak "s/^METHODS=.*/METHODS=${FINAL_METHODS}/" \
+  "${CORRECTED_TARGET_METADATA}"
+rm -f "${CORRECTED_TARGET_METADATA}.bak"
+CORRECTED_TARGET_CAPTURE="${TMP_DIR}/corrected-target-calls"
+sed -n "$((CORRECTED_TARGET_CAPTURE_BEFORE + 1)),\$p" "${CAPTURE}" \
+  > "${CORRECTED_TARGET_CAPTURE}"
+test "$(grep -c -- '--array=1-8' "${CORRECTED_TARGET_CAPTURE}")" = 4
+if grep -Eq -- '--array=1-(1|2|5|9)' "${CORRECTED_TARGET_CAPTURE}"; then
+  echo "corrected-final recovery expanded beyond the exact eight-row scope" >&2
+  exit 1
+fi
+CORRECTED_TARGET_CAPTURE_AFTER="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
 CORRECTED_TARGET_SYNC_OUTPUT="$(
   HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
     BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
     bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
     --sync-only "${CORRECTED_TARGET_RUN_ID}" 2>&1
 )"
-CORRECTED_TARGET_SYNC_RC=$?
-set -e
-[[ ${CORRECTED_TARGET_SYNC_RC} -ne 0 ]] || {
-  echo "targeted corrected-final sync unexpectedly succeeded without artifacts" >&2
-  exit 1
-}
-if printf '%s\n' "${CORRECTED_TARGET_SYNC_OUTPUT}" |
-   grep -q 'corrected_final sync-only metadata cannot contain target methods'; then
-  echo "targeted corrected-final sync rejected its run-bound target methods" >&2
+test "$(printf '%s\n' "${CORRECTED_TARGET_SYNC_OUTPUT}" |
+  sed -n 's/^BATCH_EFFECT_RUN_ID=//p')" = "${CORRECTED_TARGET_RUN_ID}"
+test "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" = \
+  "${CORRECTED_TARGET_CAPTURE_AFTER}"
+ALZHEIMER_CORRECTED_FINAL_SELECTION="${TMP_DIR}/corrected-final-alzheimer-selection.tsv"
+printf 'Alzheimer\tbatch_effect_corrected\tbatch_effect_corrected\n' \
+  > "${ALZHEIMER_CORRECTED_FINAL_SELECTION}"
+ALZHEIMER_CAPTURE_BEFORE="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
+ALZHEIMER_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+    BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
+    bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${ALZHEIMER_CORRECTED_FINAL_SELECTION}" \
+    --pass corrected \
+    --analysis-variant corrected_final \
+    --methods "${FINAL_METHODS}"
+)"
+ALZHEIMER_RUN_ID="$(printf '%s\n' "${ALZHEIMER_OUTPUT}" |
+  sed -n 's/^BATCH_EFFECT_RUN_ID=//p')"
+test -n "${ALZHEIMER_RUN_ID}"
+ALZHEIMER_RUN_ROOT="${HPC_ROOT}/_ecoda_runs/${ALZHEIMER_RUN_ID}"
+ALZHEIMER_METADATA="${ALZHEIMER_RUN_ROOT}/metadata"
+grep -q '^ANALYSIS_VARIANT=corrected_final$' "${ALZHEIMER_METADATA}"
+grep -q '^PASS=corrected$' "${ALZHEIMER_METADATA}"
+ALZHEIMER_SELECTION="${ALZHEIMER_RUN_ROOT}/manifests/selection.tsv"
+test "$(cat "${ALZHEIMER_SELECTION}")" = \
+  "$(cat "${ALZHEIMER_CORRECTED_FINAL_SELECTION}")"
+ALZHEIMER_PENDING="$(sed -n 's/^PENDING_SELECTION=//p' \
+  "${ALZHEIMER_METADATA}")"
+test -s "${ALZHEIMER_PENDING}"
+test "$(wc -l < "${ALZHEIMER_PENDING}" | tr -d '[:space:]')" = 7
+for alzheimer_method in prepare_pseudobulk pseudobulk gloscope composition \
+  mrvi pilot qot; do
+  test "$(grep -c $'\t'"${alzheimer_method}"$ "${ALZHEIMER_PENDING}")" = 1
+  alzheimer_matrix="${ALZHEIMER_RUN_ROOT}/manifests/matrix_batch_effect_corrected_${alzheimer_method}.tsv"
+  test -s "${alzheimer_matrix}"
+  test "$(wc -l < "${alzheimer_matrix}" | tr -d '[:space:]')" = 1
+  test "$(awk -F $'\t' '$1 != "Alzheimer" { bad=1 } END { print bad + 0 }' \
+    "${alzheimer_matrix}")" = 0
+done
+ALZHEIMER_CAPTURE="${TMP_DIR}/alzheimer-calls"
+sed -n "$((ALZHEIMER_CAPTURE_BEFORE + 1)),\$p" "${CAPTURE}" \
+  > "${ALZHEIMER_CAPTURE}"
+test "$(grep -c -- '--array=1-1' "${ALZHEIMER_CAPTURE}")" = 7
+if grep -Eq -- '--array=1-(8|9)' "${ALZHEIMER_CAPTURE}"; then
+  echo "Alzheimer corrected-final follow-up expanded beyond its one-row scope" >&2
   exit 1
 fi
+echo "corrected-final Alzheimer follow-up selection contract: OK"
 CORRECTED_FINAL_SHORT_SELECTION="${TMP_DIR}/corrected-final-short-selection.tsv"
 printf 'Joanito\tbatch_effect_corrected\tbatch_effect_corrected\nStephenson\tbatch_effect_corrected\tbatch_effect_corrected\nAlzheimer\tbatch_effect_corrected\tbatch_effect_corrected\nBreast_cancer\tbatch_effect_corrected\tbatch_effect_corrected\nCovid19_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nKidney_KPMP_full\tbatch_effect_corrected\tbatch_effect_corrected\nDiabetes\tbatch_effect_corrected\tbatch_effect_corrected\nLupus_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\n' \
   > "${CORRECTED_FINAL_SHORT_SELECTION}"
-expect_submit_failure "corrected-final variant with incomplete nine-row selection" \
+expect_submit_failure "corrected-final variant with incomplete ordinary scope" \
   --selection-file "${CORRECTED_FINAL_SHORT_SELECTION}" --pass corrected \
   --analysis-variant corrected_final --methods "${FINAL_METHODS}"
+expect_submit_failure "corrected-final recovery with an Alzheimer row" \
+  --selection-file "${CORRECTED_FINAL_SHORT_SELECTION}" --pass corrected \
+  --analysis-variant corrected_final \
+  --target-methods "${CORRECTED_FINAL_RECOVERY_METHODS}"
+expect_submit_failure "corrected-final recovery without its target method set" \
+  --selection-file "${CORRECTED_FINAL_RECOVERY_SELECTION}" --pass corrected \
+  --analysis-variant corrected_final --methods "${FINAL_METHODS}"
+expect_submit_failure "corrected-final recovery with reordered target methods" \
+  --selection-file "${CORRECTED_FINAL_RECOVERY_SELECTION}" --pass corrected \
+  --analysis-variant corrected_final \
+  --target-methods "composition,pseudobulk,gloscope,prepare_pseudobulk"
+CORRECTED_FINAL_NON_ALZHEIMER_ONE_ROW="${TMP_DIR}/corrected-final-non-alzheimer-one-row.tsv"
+printf 'Joanito\tbatch_effect_corrected\tbatch_effect_corrected\n' \
+  > "${CORRECTED_FINAL_NON_ALZHEIMER_ONE_ROW}"
+expect_submit_failure "corrected-final one-row follow-up with non-Alzheimer dataset" \
+  --selection-file "${CORRECTED_FINAL_NON_ALZHEIMER_ONE_ROW}" --pass corrected \
+  --analysis-variant corrected_final --methods "${FINAL_METHODS}"
+expect_submit_failure "corrected-final Alzheimer follow-up with recovery target methods" \
+  --selection-file "${ALZHEIMER_CORRECTED_FINAL_SELECTION}" --pass corrected \
+  --analysis-variant corrected_final \
+  --target-methods "${CORRECTED_FINAL_RECOVERY_METHODS}"
 CORRECTED_FINAL_REORDERED_SELECTION="${TMP_DIR}/corrected-final-reordered-selection.tsv"
 printf 'Stephenson\tbatch_effect_corrected\tbatch_effect_corrected\nJoanito\tbatch_effect_corrected\tbatch_effect_corrected\nAlzheimer\tbatch_effect_corrected\tbatch_effect_corrected\nBreast_cancer\tbatch_effect_corrected\tbatch_effect_corrected\nCovid19_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nKidney_KPMP_full\tbatch_effect_corrected\tbatch_effect_corrected\nDiabetes\tbatch_effect_corrected\tbatch_effect_corrected\nLupus_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nLung\tbatch_effect_corrected\tbatch_effect_corrected\n' \
   > "${CORRECTED_FINAL_REORDERED_SELECTION}"

@@ -5,6 +5,62 @@
 
 ---
 
+## Current Status — 2026-09-14
+
+This subsection is the current approved status. It supersedes only the
+scoped descriptions explicitly marked historical below; the detailed audit
+history remains intact. This notes-only update does not claim that the
+corrected compute gate or an Alzheimer derivative is complete.
+
+### Alzheimer source and strict sample identity
+
+- The raw Alzheimer H5AD is unchanged. No source mutation or derivative
+  completion is claimed here.
+- The strict sample key is `donor_id_assay`. Normalize assay labels exactly as
+  `10x 3' v3` → `10x3v3` and `10x multiome` → `10xmultiome`; do not collapse
+  these records to donor-only identities.
+- The read-only observation contains 1,395,601 cells, 83 donors, and 104
+  donor×assay samples. The assay sample counts are 83 `10x3v3` and 21
+  `10xmultiome`; sex is 100% consistent within the observed mapped samples.
+
+### Corrected-method and recovery status
+
+- The approved global correction contract for composition and pseudobulk is
+  limma fixed effects with the original technical covariates retained as
+  separate terms. Combined or artificial batch keys are prohibited, and the
+  former `lme4` correction path is prohibited/removed.
+- Current provenance IDs are composition `limma_fixed_effects_v1` and
+  pseudobulk/prepare `pseudobulk_limma_fixed_effects_v1`. The nested summary
+  schema remains v1; top-level identities carry effective/non-estimable/state,
+  mode/formula, aliases, design rank, and degrees of freedom.
+- The first corrected-final recovery target is exactly eight corrected
+  datasets and 32 rows. This is the scoped recovery target, not evidence that
+  its compute gate has completed. Old combined-key prepare caches are stale
+  and must not be reused.
+
+### Remote execution and transfer policy
+
+- The direct remote-only `ssh -A bamboo` → Yggdrasil transfer proof of concept
+  succeeded with recorded hash
+  `ac5944fad030a07ad4257a3d7b7b44a83925c3e0fcba83196f9cbec6d670dcb2`; no
+  local staging was used.
+- The Yggdrasil repository clone and checksum-aware second dry run are complete
+  (not running). Source and destination HEAD are both
+  `751c3f7fd8d9a863d6940bc37b1269fa785c06d4`, and the destination is
+  `~/scratch/_ecoda_backups/ECODA_paper_repo_20260914`.
+- Any future Yggdrasil use remains conditional on the live transfer agent and
+  central key being available; this remains transfer/backup evidence only, not
+  a claim of production compute or final synchronization.
+- Bamboo remains the default execution and authoritative environment.
+  Yggdrasil is temporary backup-only and must not become the production default
+  or a substitute for the Bamboo lane.
+
+> **Historical-note boundary.** The donor-only Alzheimer snapshot, majority-vote
+> policy, `lme4` correction description, and pre-change final-lane descriptions
+> below are retained for provenance and are explicitly labelled historical;
+> they do not override this status.
+
+
 ## 1. Dataset Onboarding & Quality Control Pipeline
 
 ### Executive Summary
@@ -45,15 +101,15 @@ Each onboarding notebook adheres to the following sequence:
   - Evaluated via permutation Pseudo-$F$ tests ($B=999$ permutations) with Benjamini-Hochberg FDR correction.
   - Visualized via a dual-panel plot: (1) Global 100% variance decomposition stacked bar, and (2) Marginal $R^2$ bar chart with permutation $p$-values and significance codes.
 
-### 1.4 New onboarding cohorts: sample-count comparison with PILOT-GM-VAE
+### 1.4 Historical onboarding cohort sample-count comparison with PILOT-GM-VAE
 
-The current counts below come from the full-file onboarding audits in
+The historical counts below come from the full-file onboarding audits in
 `data/new_dataset_checks/subsets/*_meta.json`, using the sample column registered
 in [`datasets.json`](datasets.json). The cell threshold is strict: samples with
 fewer than 500 cells are dropped, while samples with exactly 500 cells are
 retained.
 
-| Dataset | Current sample column | Current samples | Dropped (<500) | Retained | PILOT-GM-VAE reported samples |
+| Dataset | Historical sample column | Historical samples | Dropped (<500) | Retained | PILOT-GM-VAE reported samples |
 | :--- | :--- | ---: | ---: | ---: | ---: |
 | Alzheimer | `donor_id` | 83 | 0 | 83 | 83 |
 | Breast cancer | `sample_id` | 167$ | 2 | 165 | 126$ |
@@ -108,9 +164,12 @@ table follows the configured column in `datasets.json`.
   choice: ECODA's configured column counts `sample` IDs, while PILOT reports
   donors.
 
-### 1.5 HPC-backed donor-to-sample audit for the batch-effect onboarding view
+### 1.5 Historical HPC-backed donor-to-sample audit for the batch-effect onboarding view
 
-To reconcile the configured registry units with the units in the batch-effect onboarding view, a read-only audit targeted the canonical `batch_effect_uncorrected` output on Bamboo. It used the configured `py-cuda13` runtime for HDF5/AnnData-backed metadata reads only; the larger cohort reads were dispatched through `srun` on Bamboo. Only `obs` metadata and categorical codes were read, and `.X`/count matrices were never materialized. Canonical HPC sample/donor counts below are post-500-cell-filter output units, whereas raw/local audit counts are pre-filter source metadata; the PILOT values remain publication-reported units.
+This is a historical, read-only audit snapshot. Its donor-only/configured-column
+descriptions predate the strict `donor_id_assay` mapping in the current status
+and remain for provenance; they are not the current Alzheimer sample identity.
+The audit targeted the canonical `batch_effect_uncorrected` output on Bamboo. It used the configured `py-cuda13` runtime for HDF5/AnnData-backed metadata reads only; the larger cohort reads were dispatched through `srun` on Bamboo. Only `obs` metadata and categorical codes were read, and `.X`/count matrices were never materialized. Canonical HPC sample/donor counts below are post-500-cell-filter output units, whereas raw/local audit counts are pre-filter source metadata; the PILOT values remain publication-reported units.
 
 | Cohort | Configured / sample-like column | Donor/patient column | Canonical HPC sample units | Donor/patient units | Exact donor→sample frequency | Observed explanation |
 | :--- | :--- | :--- | ---: | ---: | :--- | :--- |
@@ -134,7 +193,7 @@ automatically identical to the configured column or to the canonical
 and all Section 1.4 footnotes above remain verbatim; the details below add
 the raw-versus-post-filter and canonical-unit clarification.
 
-- **Alzheimer.** The audit unit is `Specimen ID` (202) against `donor_id` (83):
+- **Alzheimer (historical donor-only/configured-column snapshot).** The audit unit is `Specimen ID` (202) against `donor_id` (83):
   53 donors have 2 specimens, 24 have 3, and 6 have 4, for 202 specimens
   total, and every specimen maps to one donor. All specimens have stable
   `Cognitive status`, `disease`, `sex`, and `tissue`/`tissue_type`; 21 donors
@@ -348,7 +407,11 @@ Excluded:
 
 ## 3. Batch Effect Correction & Benchmark Strategy (`batch_effect_analysis.rmd`)
 
-### Executive Summary
+### Historical pre-change final-lane summary
+
+> This subsection records the pre-change uncorrected mixed-source final-lane
+> plan. Keep it for provenance; it is not current corrected-final
+> compute-completion evidence.
 
 Batch-effect analysis uses the canonical logical views
 `batch_effect_uncorrected` and `batch_effect_corrected`. The final analysis
@@ -433,9 +496,13 @@ All configured batch-effect datasets use the cell-type columns documented in
 the final-scope table above. Disabled cohorts and the four frozen cohorts are
 not part of new final computation.
 
-### 3.3 Modality-specific corrected inputs
+### Historical modality-specific corrected-input descriptions (pre-limma)
 
-- **ECODA composition:** each CLR cell-type feature is fit with
+The following correction paths are retained as historical implementation
+notes. Current composition and pseudobulk correction uses separate-covariate
+limma fixed effects; combined/artificial keys and `lme4` are prohibited.
+
+- **Historical ECODA composition:** each CLR cell-type feature is fit with
   `lme4::lmer(y ~ 1 + (1 | batch), REML=TRUE)`. Subtract only the fitted batch
   random effect, then recenter every corrected row to an exact zero sum.
   Missing IDs, fewer than two batch levels, nonconvergence, and sample-order
@@ -451,7 +518,11 @@ not part of new final computation.
 - **MrVI:** uncorrected receives no technical covariate; corrected receives
   only the confirmed technical column as native `batch_key`.
 
-### 3.4 Artifact and evidence contract
+### 3.4 Historical pre-change final-lane artifact and evidence contract
+
+The paths and mixed-source artifact descriptions in this subsection are
+historical pre-change notes; they are not completion evidence for the current
+corrected-final recovery.
 
 Existing legacy pass artifacts remain under
 `${HPC_SCRATCH_DIR}/batch_effect/<pass>/` and
@@ -481,7 +552,11 @@ missing labels, empty derived annotations, invalid hierarchies, and missing
 exact pass keys remain hard failures.
 
 
-### Majority-vote technical batch-covariate policy
+### Historical majority-vote technical batch-covariate policy (2026-09-13; superseded)
+
+This is a historical policy snapshot retained for provenance. It is superseded
+by the current strict `donor_id_assay`/limma contract and must not be read as
+the current correction policy.
 
 On 2026-09-13, the user approved `majority_v1` per configured sample for
 technical batch covariates. No minimum winner fraction threshold is applied;
@@ -508,7 +583,7 @@ sample was `IGTB195_IGTB195` at 3,952/12,768 (30.95%), followed by
 4,374/13,543 (32.30%).
 
 
-**Implementation boundary.** The majority policy is downstream-only. The
+**Historical implementation boundary.** The majority policy is downstream-only. The
 obs-only Python exporter reads H5AD `obs` metadata and writes the
 sample-level Feather table plus its checksum; it does not alter H5ADs or
 open `X`, `raw`, or `layers`. It votes only the explicitly affected keys:
@@ -637,7 +712,11 @@ No. Switching to `Processing_Cohort` does not resolve the issue:
     definition.
 
 
-### 3.6 Notebook and publication boundary
+### 3.6 Historical pre-change notebook and publication boundary
+
+The notebook and publication-path statements below are historical pre-change
+final-lane notes retained for provenance; they do not establish completion of
+the current corrected-final recovery.
 
 `notebooks/batch_effect_analysis_uncorrected_batchconfounding_contingency.rmd`
 remains legacy-only and is not updated. It continues to read and write its

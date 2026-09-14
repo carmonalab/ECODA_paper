@@ -25,9 +25,12 @@ from src.utils.py.batch_contract import (  # noqa: E402
     BatchContractError,
     COMPOSITE_SCALARIZATION,
     DIRECT_SCALARIZATION,
+    LIMMA_COMPOSITION_CORRECTION_MODE,
+    LIMMA_PSEUDOBULK_CORRECTION_MODE,
     METHOD_IDS,
     RESERVED_OBS_NAME,
     batch_contract_fingerprint,
+    batch_correction_spec_for_keys,
     build_batch_composite,
     canonicalize_batch_value,
     canonicalize_batch_values,
@@ -50,6 +53,19 @@ CORRECTED_METHOD_IDS = frozenset(
         "QOT",
     }
 )
+
+# Stage 5 corrected consumers carry method-specific active model identities.
+# ``prepare_pseudobulk`` dispatches the same Pseudobulk identity.
+CORRECTED_METHOD_MODELS = {
+    "ECODA_authors_HR": "limma_fixed_effects_v1",
+    "ECODA_seuratres_2": "limma_fixed_effects_v1",
+    "ECODA_authors_HR_NULL": "limma_fixed_effects_v1",
+    "Pseudobulk": "pseudobulk_limma_fixed_effects_v1",
+    "GloScope": "embedding_consumer_harmony_v1",
+    "PILOT": "embedding_consumer_harmony_v1",
+    "MrVI": "mrvi_composite_v1",
+    "QOT": "embedding_consumer_harmony_v1",
+}
 
 # This vector intentionally contains separators, a literal backslash, and
 # multibyte key/value text.  Lengths are UTF-8 byte lengths, not character
@@ -75,9 +91,9 @@ EXPECTED_FINGERPRINT_PAYLOAD = (
     "4:6b657973,24:327c343a37333639373436353b343a37343635363336383b;"
     "13:7363616c6172697a6174696f6e,12:636f6d706f736974655f7631;"
     "6:6d6574686f64,5:50494c4f54;"
-    "5:6d6f64656c,16:6876675f636f6d706f736974655f7631;"
+    "5:6d6f64656c,29:656d62656464696e675f636f6e73756d65725f6861726d6f6e795f7631;"
 )
-EXPECTED_FINGERPRINT = "d0d08e80561fa7c013f1495b18b8b713fb5dec74278949d0b90312810c9e7cc3"
+EXPECTED_FINGERPRINT = "1066c15e72323d04c9725b078ce50dae9b45ba6f47e28c62ac441dab0d997030"
 
 
 def expect_failure(callback: Callable[[], object], *needles: str) -> None:
@@ -356,22 +372,24 @@ def check_metadata_identity_and_temporary_column(
     scalar_metadata = serialize_batch_metadata(
         scalar_validation,
         method_id="ECODA_authors_HR",
-        model_id="ecoda_additive_random_intercepts_v1",
+        model_id="limma_fixed_effects_v1",
     )
     assert scalar_metadata["ordered_keys"] == ["site"]
     assert scalar_metadata["scalarization"] == DIRECT_SCALARIZATION
     assert scalar_metadata["composite_levels"] == []
     assert scalar_metadata["composite_values"] == list(scalar_validation.scalarized_values)
     assert scalar_metadata["reserved_obs_name"] == RESERVED_OBS_NAME
+    assert scalar_metadata["model_id"] == CORRECTED_METHOD_MODELS["ECODA_authors_HR"]
 
     two_validation = validate_batch_metadata(two, ["site", "tech"], biological_column="cell_type")
     metadata = serialize_batch_metadata(
         two_validation,
         method_id="PILOT",
-        model_id="hvg_composite_v1",
+        model_id="embedding_consumer_harmony_v1",
         include_tokens=True,
     )
     assert metadata["contract_version"] == "ecoda_batch_contract_v1"
+    assert metadata["model_id"] == CORRECTED_METHOD_MODELS["PILOT"]
     assert metadata["token_version"] == "ecoda_batch_composite_v1"
     assert metadata["ordered_keys"] == ["site", "tech"]
     assert metadata["keys"] == metadata["ordered_keys"]
@@ -388,7 +406,7 @@ def check_metadata_identity_and_temporary_column(
             ["site", "tech"],
             scalarization=COMPOSITE_SCALARIZATION,
             method_id="PILOT",
-            model_id="hvg_composite_v1",
+            model_id="embedding_consumer_harmony_v1",
         )
         == EXPECTED_FINGERPRINT
     )
@@ -404,6 +422,7 @@ def check_metadata_identity_and_temporary_column(
         model_id="mrvi_composite_v1",
     )
     assert three_metadata["ordered_keys"] == ["site", "tech", "lane"]
+    assert three_metadata["model_id"] == CORRECTED_METHOD_MODELS["MrVI"]
     assert three_metadata["composite_level_count"] == 8
     assert three_metadata["fingerprint"] == batch_contract_fingerprint(
         ["site", "tech", "lane"],
@@ -527,25 +546,40 @@ def check_rejections(two: pd.DataFrame, three: pd.DataFrame) -> None:
 
 def check_method_policy(two: pd.DataFrame) -> None:
     assert set(METHOD_IDS) == set(CORRECTED_METHOD_IDS) | {"preprocess"}
+    assert set(CORRECTED_METHOD_MODELS) == set(CORRECTED_METHOD_IDS)
+    assert RESERVED_OBS_NAME not in CORRECTED_METHOD_MODELS.values()
     assert "pilot-gm-vae" not in METHOD_IDS
     assert "PILOT-GM-VAE" not in METHOD_IDS
     assert "pilotgm" not in METHOD_IDS
 
     validation = validate_batch_metadata(two, ["site", "tech"])
+    composition_mode, composition_formula = batch_correction_spec_for_keys(
+        "ECODA_authors_HR", ["site", "tech"]
+    )
+    pseudobulk_mode, pseudobulk_formula = batch_correction_spec_for_keys(
+        "Pseudobulk", ["site", "tech"]
+    )
+    assert composition_mode == LIMMA_COMPOSITION_CORRECTION_MODE
+    assert pseudobulk_mode == LIMMA_PSEUDOBULK_CORRECTION_MODE
+    for formula in (composition_formula, pseudobulk_formula):
+        assert "batch_key_1 + batch_key_2" in formula
+        assert "technical_covariates" in formula
+        assert RESERVED_OBS_NAME not in formula
     for method_id in sorted(CORRECTED_METHOD_IDS):
         metadata = serialize_batch_metadata(
             validation,
             method_id=method_id,
-            model_id="hvg_composite_v1",
+            model_id=CORRECTED_METHOD_MODELS[method_id],
         )
         assert metadata["method_id"] == method_id
+        assert metadata["model_id"] == CORRECTED_METHOD_MODELS[method_id]
 
     for forbidden in ("pilot-gm-vae", "PILOT-GM-VAE", "pilotgm"):
         expect_failure(
             lambda forbidden=forbidden: serialize_batch_metadata(
                 validation,
                 method_id=forbidden,
-                model_id="hvg_composite_v1",
+                model_id=CORRECTED_METHOD_MODELS["PILOT"],
             ),
             "unsupported",
             "recognized",
@@ -554,11 +588,20 @@ def check_method_policy(two: pd.DataFrame) -> None:
             lambda forbidden=forbidden: batch_contract_fingerprint(
                 ["site", "tech"],
                 method_id=forbidden,
-                model_id="hvg_composite_v1",
+                model_id=CORRECTED_METHOD_MODELS["PILOT"],
             ),
             "unsupported",
             "recognized",
         )
+    expect_failure(
+        lambda: serialize_batch_metadata(
+            validation,
+            method_id="ECODA_authors_HR",
+            model_id=RESERVED_OBS_NAME,
+        ),
+        "unsupported",
+        "model_id",
+    )
 
 
 def _r_utf8_expression(value: str) -> str:
@@ -613,10 +656,10 @@ if (!requireNamespace("digest", quietly = TRUE)) {{
   quit(status = 0)
 }}
 cat(ecoda_batch_fingerprint_payload_hex(
-  list({r_fingerprint_keys}), "PILOT", "hvg_composite_v1"
+  list({r_fingerprint_keys}), "PILOT", "embedding_consumer_harmony_v1"
 ), "\\n", sep = "")
 cat(ecoda_batch_fingerprint(
-  list({r_fingerprint_keys}), "PILOT", "hvg_composite_v1"
+  list({r_fingerprint_keys}), "PILOT", "embedding_consumer_harmony_v1"
 ), "\\n", sep = "")
 """
     pixi = shutil.which("pixi")

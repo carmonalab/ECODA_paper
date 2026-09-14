@@ -63,6 +63,8 @@ for source_file in 1.1_run_worker.sh 1.2_preprocess_watchdog.sh; do
 done
 cp "${ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
   "${SOURCE_ROOT}/src/utils/py/benchmark_h5ad_contract.py"
+cp "${ROOT}/src/utils/py/artifact_contract.py" \
+  "${SOURCE_ROOT}/src/utils/py/artifact_contract.py"
 cp "${ROOT}/src/utils/py/batch_contract.py" \
   "${SOURCE_ROOT}/src/utils/py/batch_contract.py"
 for source_file in config_helper.R datasets.json pixi.toml pixi.lock; do
@@ -441,6 +443,8 @@ UNCORRECTED_RUN_ROOT="$(cd "${UNCORRECTED_RUN_ROOT}" && pwd)"
 cmp -s "${UNCORRECTED_SELECTION}" "${UNCORRECTED_MANIFEST}"
 cmp -s "${UNCORRECTED_SELECTION}" \
   "${UNCORRECTED_RUN_ROOT}/manifests/pending.tsv"
+[[ "$(wc -l < "${UNCORRECTED_RUN_ROOT}/manifests/output_ownership.tsv" |
+  tr -d '[:space:]')" == 4 ]]
 case "$(cat "${CAPTURE}")" in
   *"--array=1-4%1000"*) ;;
   *) echo "uncorrected array escaped its four-row scope" >&2; exit 1 ;;
@@ -486,29 +490,27 @@ done
 [[ ! -e "${UNCORRECTED_RUN_ROOT}/manifests/corrected_batch_preflight" ]]
 [[ ! -e "${UNCORRECTED_RUN_ROOT}/status/corrected_batch_preflight" ]]
 
-# The corrected release is a separate, config-ordered array.  Its pending
-# Covid row also requires the direct obs-only reports, but never the retired
-# corrected-source metadata/RDS preflight.
+# The corrected recovery is explicit and excludes Alzheimer.  Its pending
+# Covid row requires the direct obs-only reports, never retired metadata/RDS
+# preflight state.
 rm -rf "${ECODA_OWNERS_ROOT}"
-CORRECTED_DATASETS=()
-while IFS= read -r corrected_dataset; do
-  CORRECTED_DATASETS+=("${corrected_dataset}")
-done < <(
-  jq -r '
-    to_entries[]
-    | select((.key | startswith("_") | not) and
-             (.value.use_for_batch_effect == true))
-    | .key
-  ' "${SOURCE_ROOT}/datasets.json"
+CORRECTED_DATASETS=(
+  Joanito
+  Stephenson
+  Breast_cancer
+  Covid19_PBMC
+  Kidney_KPMP_full
+  Diabetes
+  Lupus_PBMC
+  Lung
 )
-[[ "${#CORRECTED_DATASETS[@]}" -eq 9 ]]
 CORRECTED_SELECTION="${TMP_DIR}/corrected-selection.tsv"
 for corrected_dataset in "${CORRECTED_DATASETS[@]}"; do
   printf '%s	batch_effect_corrected\n' "${corrected_dataset}"
 done > "${CORRECTED_SELECTION}"
 : > "${CAPTURE}"
 CORRECTED_OUTPUT="$(
-  run_stage3 --selection-file "${CORRECTED_SELECTION}"
+  run_stage3 --selection-file "${CORRECTED_SELECTION}" --corrected-recovery
 )"
 case "${CORRECTED_OUTPUT}" in
   *"PREPROCESS_ARRAY_JOB_ID=600001"*) ;;
@@ -521,12 +523,14 @@ esac
 CORRECTED_MANIFEST="$(printf '%s\n' "${CORRECTED_OUTPUT}" |
   sed -n 's/^PREPROCESS_DATASET_MANIFEST=//p')"
 [[ -s "${CORRECTED_MANIFEST}" ]]
-[[ "$(wc -l < "${CORRECTED_MANIFEST}" | tr -d '[:space:]')" == 9 ]]
+[[ "$(wc -l < "${CORRECTED_MANIFEST}" | tr -d '[:space:]')" == 8 ]]
 CORRECTED_RUN_ROOT="$(dirname "${CORRECTED_MANIFEST}")/.."
 CORRECTED_RUN_ROOT="$(cd "${CORRECTED_RUN_ROOT}" && pwd)"
 cmp -s "${CORRECTED_SELECTION}" "${CORRECTED_MANIFEST}"
 cmp -s "${CORRECTED_SELECTION}" \
   "${CORRECTED_RUN_ROOT}/manifests/pending.tsv"
+[[ "$(wc -l < "${CORRECTED_RUN_ROOT}/manifests/output_ownership.tsv" |
+  tr -d '[:space:]')" == 8 ]]
 [[ "$(wc -l < "${CORRECTED_RUN_ROOT}/manifests/scheduler_ids.tsv" |
   tr -d '[:space:]')" == 3 ]]
 CORRECTED_PREFLIGHT_RECORDS="$(awk -F '	' '$1 == "PREFLIGHT" && $2 == "600003" { count++ } END { print count + 0 }' \
@@ -545,8 +549,8 @@ done
 [[ ! -e "${CORRECTED_RUN_ROOT}/status/corrected_batch_preflight" ]]
 CORRECTED_CALLS="$(cat "${CAPTURE}")"
 case "${CORRECTED_CALLS}" in
-  *"--array=1-9%1000"*) ;;
-  *) echo "corrected array escaped its nine-row scope" >&2; exit 1 ;;
+  *"--array=1-8%1000"*) ;;
+  *) echo "corrected array escaped its eight-row scope" >&2; exit 1 ;;
 esac
 case "${CORRECTED_CALLS}" in
   *"audit_corrected_source_metadata"*|*"audit_corrected_h5ad_source"*|*"corrected_batch_preflight"*)
@@ -565,11 +569,220 @@ if run_stage3 --selection-file "${UNCORRECTED_SELECTION}" \
 fi
 [[ ! -s "${CAPTURE}" ]]
 [[ "${BEFORE_RUNS}" == "$(printf '%s\n' "${RUNS_ROOT}"/*)" ]]
+CORRECTED_DATASETS_CSV="$(IFS=,; printf '%s' "${CORRECTED_DATASETS[*]}")"
+: > "${CAPTURE}"
+BEFORE_RUNS="$(printf '%s\n' "${RUNS_ROOT}"/*)"
+if run_stage3 --datasets "${CORRECTED_DATASETS_CSV}" \
+    --views batch_effect_corrected >/dev/null 2>&1; then
+  echo "generated eight-row corrected recovery bypassed explicit selection-file guard" >&2
+  exit 1
+fi
+[[ ! -s "${CAPTURE}" ]]
+[[ "${BEFORE_RUNS}" == "$(printf '%s\n' "${RUNS_ROOT}"/*)" ]]
+
+: > "${CAPTURE}"
+BEFORE_RUNS="$(printf '%s\n' "${RUNS_ROOT}"/*)"
+if run_stage3 >/dev/null 2>&1; then
+  echo "default broad Stage 3 selection was accepted" >&2
+  exit 1
+fi
+[[ ! -s "${CAPTURE}" ]]
+[[ "${BEFORE_RUNS}" == "$(printf '%s\n' "${RUNS_ROOT}"/*)" ]]
+
 
 # Validator-only idempotency checks use the same run/ownership primitives as
 # the submitter.  Source the immutable fixture copy before initializing runs.
 source "${SOURCE_ROOT}/src/slurm_config.sh"
 source "${SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
+# Alzheimer follow-up first proves that a reviewed producer cannot authorize
+# the raw donor-only input.  The producer/output fixture is intentionally
+# complete; only the bound config is wrong.
+ALZ_RAW_PRODUCER_RUN_ID="alzheimer-stage2-raw-fixture"
+ALZ_RAW_INPUT_NAME="$(jq -r '.Alzheimer.views.batch_effect_uncorrected.input_file_name' \
+  "${SOURCE_ROOT}/datasets.json")"
+ALZ_RAW_INPUT="${HPC_SCRATCH_DIR}/Alzheimer/data/${ALZ_RAW_INPUT_NAME}"
+mkdir -p "$(dirname "${ALZ_RAW_INPUT}")"
+printf 'stub-alzheimer-raw-h5ad\n' > "${ALZ_RAW_INPUT}"
+(
+  set -euo pipefail
+  source "${SOURCE_ROOT}/src/slurm_config.sh"
+  source "${SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
+  ecoda_init_run stage2 "${ALZ_RAW_PRODUCER_RUN_ID}" >/dev/null
+  ALZ_PRODUCER_ROOT="${ECODA_RUN_ROOT}"
+  printf 'alzheimer_donor_assay\tfixture\t%s\t-\t-\n' "${ALZ_RAW_INPUT}" \
+    > "${ALZ_PRODUCER_ROOT}/manifests/steps.tsv"
+  ecoda_write_checksum "${ALZ_RAW_INPUT}" >/dev/null
+  ecoda_artifact_owner_acquire "${ALZ_RAW_INPUT}" stage2 "${ALZ_RAW_PRODUCER_RUN_ID}" 0 0 0 >/dev/null
+  ecoda_write_artifact_record "${ALZ_RAW_INPUT}" alzheimer_donor_assay \
+    "${ALZ_RAW_PRODUCER_RUN_ID}" >/dev/null
+  ecoda_artifact_owner_set_state "${ALZ_RAW_INPUT}" OK "fixture raw producer published" >/dev/null
+  ecoda_set_run_state OK "fixture raw producer validated" >/dev/null
+)
+export STAGE3_INPUT_PRODUCER_RUN_ID="${ALZ_RAW_PRODUCER_RUN_ID}"
+ALZ_UNCORRECTED_SELECTION="${TMP_DIR}/alzheimer-uncorrected-selection.tsv"
+printf 'Alzheimer\tbatch_effect_uncorrected\n' > "${ALZ_UNCORRECTED_SELECTION}"
+: > "${CAPTURE}"
+if run_stage3 --selection-file "${ALZ_UNCORRECTED_SELECTION}" \
+    --alzheimer-followup >/dev/null 2>&1; then
+  echo "raw donor-only Alzheimer follow-up was accepted" >&2
+  exit 1
+fi
+[[ ! -s "${CAPTURE}" ]]
+
+# Bind the acceptance cases to a separate immutable post-derivative snapshot.
+DERIV_SNAPSHOT_COMMIT="0000000000000000000000000000000000000002"
+DERIV_SNAPSHOT_ROOT="${TMP_DIR}/snapshots/${DERIV_SNAPSHOT_COMMIT}"
+DERIV_SOURCE_ROOT="${DERIV_SNAPSHOT_ROOT}/tree"
+DERIV_SOURCE_IDENTITY="${DERIV_SNAPSHOT_ROOT}/identity"
+DERIV_SOURCE_MANIFEST="${DERIV_SOURCE_IDENTITY}/source.manifest"
+DERIV_SOURCE_ARCHIVE="${DERIV_SOURCE_IDENTITY}/source.tar"
+mkdir -p "${DERIV_SNAPSHOT_ROOT}" "${DERIV_SOURCE_IDENTITY}"
+cp -R "${SOURCE_ROOT}" "${DERIV_SOURCE_ROOT}"
+chmod -R u+w "${DERIV_SOURCE_ROOT}"
+jq '
+  .Alzheimer.columns.sample = "donor_id_assay" |
+  .Alzheimer.views.batch_effect_uncorrected.input_file_name = "SEAAD_Alzheimer_donor_assay.h5ad" |
+  .Alzheimer.views.batch_effect_corrected.input_file_name = "SEAAD_Alzheimer_donor_assay.h5ad"
+' "${DERIV_SOURCE_ROOT}/datasets.json" > "${DERIV_SOURCE_ROOT}/datasets.json.build"
+mv "${DERIV_SOURCE_ROOT}/datasets.json.build" "${DERIV_SOURCE_ROOT}/datasets.json"
+tar -cf "${DERIV_SOURCE_ARCHIVE}" -C "${DERIV_SOURCE_ROOT}" .
+DERIV_SOURCE_ARCHIVE_SHA256="$(sha256_file "${DERIV_SOURCE_ARCHIVE}")"
+DERIV_SOURCE_CONFIG_SHA256="$(sha256_file "${DERIV_SOURCE_ROOT}/config_helper.R")"
+DERIV_SOURCE_DATASETS_SHA256="$(sha256_file "${DERIV_SOURCE_ROOT}/datasets.json")"
+DERIV_SOURCE_TOML_SHA256="$(sha256_file "${DERIV_SOURCE_ROOT}/pixi.toml")"
+DERIV_SOURCE_LOCK_SHA256="$(sha256_file "${DERIV_SOURCE_ROOT}/pixi.lock")"
+chmod -R a-w "${DERIV_SOURCE_ROOT}"
+printf '%s\n' \
+  'FORMAT=1' \
+  "SOURCE_ROOT=${DERIV_SOURCE_ROOT}" \
+  "SOURCE_COMMIT=${DERIV_SNAPSHOT_COMMIT}" \
+  "SOURCE_ARCHIVE_PATH=${DERIV_SOURCE_ARCHIVE}" \
+  "SOURCE_ARCHIVE_SHA256=${DERIV_SOURCE_ARCHIVE_SHA256}" \
+  "CONFIG_HELPER_SHA256=${DERIV_SOURCE_CONFIG_SHA256}" \
+  "DATASETS_SHA256=${DERIV_SOURCE_DATASETS_SHA256}" \
+  "PIXI_TOML_SHA256=${DERIV_SOURCE_TOML_SHA256}" \
+  "PIXI_LOCK_SHA256=${DERIV_SOURCE_LOCK_SHA256}" \
+  "AUX_ROOT=${DERIV_SOURCE_ROOT}/aux" \
+  'SCGATE_DB_BRANCH=41a45cd3f8bb5f5a7daf21ec276f6a726f6ee0d4' > "${DERIV_SOURCE_MANIFEST}"
+touch "${DERIV_SNAPSHOT_ROOT}/COMPLETE"
+chmod a-w "${DERIV_SOURCE_MANIFEST}" "${DERIV_SOURCE_ARCHIVE}" "${DERIV_SNAPSHOT_ROOT}/COMPLETE"
+SOURCE_ROOT="${DERIV_SOURCE_ROOT}"
+SOURCE_MANIFEST="${DERIV_SOURCE_MANIFEST}"
+PROJECT_ROOT="${SOURCE_ROOT}"
+DATASETS_JSON_FILE="${SOURCE_ROOT}/datasets.json"
+export ECODA_SOURCE_ROOT="${SOURCE_ROOT}" ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST}" \
+  PROJECT_ROOT DATASETS_JSON_FILE
+
+# The derivative producer/output and both one-row follow-ups must now pass.
+source "${SOURCE_ROOT}/src/slurm_config.sh"
+source "${SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
+ALZ_PRODUCER_RUN_ID="alzheimer-stage2-derivative-fixture"
+ALZ_INPUT_NAME="$(jq -r '.Alzheimer.views.batch_effect_uncorrected.input_file_name' \
+  "${SOURCE_ROOT}/datasets.json")"
+ALZ_INPUT="${HPC_SCRATCH_DIR}/Alzheimer/data/${ALZ_INPUT_NAME}"
+mkdir -p "$(dirname "${ALZ_INPUT}")"
+printf 'stub-alzheimer-derivative-h5ad\n' > "${ALZ_INPUT}"
+(
+  set -euo pipefail
+  source "${SOURCE_ROOT}/src/slurm_config.sh"
+  source "${SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
+  ecoda_init_run stage2 "${ALZ_PRODUCER_RUN_ID}" >/dev/null
+  ALZ_PRODUCER_ROOT="${ECODA_RUN_ROOT}"
+  printf 'alzheimer_donor_assay\tfixture\t%s\t-\t-\n' "${ALZ_INPUT}" \
+    > "${ALZ_PRODUCER_ROOT}/manifests/steps.tsv"
+  ecoda_write_checksum "${ALZ_INPUT}" >/dev/null
+  ecoda_artifact_owner_acquire "${ALZ_INPUT}" stage2 "${ALZ_PRODUCER_RUN_ID}" 0 0 0 >/dev/null
+  ecoda_write_artifact_record "${ALZ_INPUT}" alzheimer_donor_assay \
+    "${ALZ_PRODUCER_RUN_ID}" >/dev/null
+  ecoda_artifact_owner_set_state "${ALZ_INPUT}" OK "fixture derivative published" >/dev/null
+  ecoda_set_run_state OK "fixture derivative validated" >/dev/null
+)
+export STAGE3_INPUT_PRODUCER_RUN_ID="${ALZ_PRODUCER_RUN_ID}"
+: > "${CAPTURE}"
+ALZ_UNCORRECTED_OUTPUT="$(
+  run_stage3 --selection-file "${ALZ_UNCORRECTED_SELECTION}" --alzheimer-followup
+)"
+case "${ALZ_UNCORRECTED_OUTPUT}" in
+  *"PREPROCESS_ARRAY_JOB_ID=600001"*) ;;
+  *) echo "Alzheimer uncorrected follow-up did not submit its array" >&2; exit 1 ;;
+esac
+case "${ALZ_UNCORRECTED_OUTPUT}" in
+  *"PREPROCESS_WATCHDOG_JOB_ID=600002"*) ;;
+  *) echo "Alzheimer uncorrected follow-up did not submit its watchdog" >&2; exit 1 ;;
+esac
+ALZ_UNCORRECTED_MANIFEST="$(printf '%s\n' "${ALZ_UNCORRECTED_OUTPUT}" |
+  sed -n 's/^PREPROCESS_DATASET_MANIFEST=//p')"
+ALZ_UNCORRECTED_ROOT="$(dirname "${ALZ_UNCORRECTED_MANIFEST}")/.."
+ALZ_UNCORRECTED_ROOT="$(cd "${ALZ_UNCORRECTED_ROOT}" && pwd)"
+[[ "$(wc -l < "${ALZ_UNCORRECTED_MANIFEST}" | tr -d '[:space:]')" == 1 ]]
+[[ "$(cat "${ALZ_UNCORRECTED_MANIFEST}")" == $'Alzheimer\tbatch_effect_uncorrected' ]]
+[[ "$(wc -l < "${ALZ_UNCORRECTED_ROOT}/manifests/output_ownership.tsv" |
+  tr -d '[:space:]')" == 1 ]]
+ALZ_INPUT_RECORD="$(printf 'Alzheimer\tbatch_effect_uncorrected\t%s\tdonor_id_assay\t%s\n' \
+  "${ALZ_INPUT}" "${ALZ_PRODUCER_RUN_ID}")"
+[[ "$(cat "${ALZ_UNCORRECTED_ROOT}/manifests/input_ownership.tsv")" == "${ALZ_INPUT_RECORD}" ]]
+[[ "$(sed -n 's/^INPUT_PATH=//p' "${ALZ_UNCORRECTED_ROOT}/metadata")" == "${ALZ_INPUT}" ]]
+[[ "$(sed -n 's/^INPUT_SAMPLE_COLUMN=//p' "${ALZ_UNCORRECTED_ROOT}/metadata")" == "donor_id_assay" ]]
+[[ "$(sed -n 's/^SELECTION_CLASSIFICATION=//p' \
+  "${ALZ_UNCORRECTED_ROOT}/metadata")" == "alzheimer_followup" ]]
+[[ "$(sed -n 's/^INPUT_PRODUCER_RUN_ID=//p' \
+  "${ALZ_UNCORRECTED_ROOT}/metadata")" == "${ALZ_PRODUCER_RUN_ID}" ]]
+[[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == 2 ]]
+if awk '$0 ~ /h5ad_obs_audit_worker/ {found=1} END {exit found ? 0 : 1}' \
+    "${CAPTURE}"; then
+  echo "Alzheimer follow-up unexpectedly submitted Covid obs preflight" >&2
+  exit 1
+fi
+
+ALZ_CORRECTED_SELECTION="${TMP_DIR}/alzheimer-corrected-selection.tsv"
+printf 'Alzheimer\tbatch_effect_corrected\n' > "${ALZ_CORRECTED_SELECTION}"
+: > "${CAPTURE}"
+ALZ_CORRECTED_OUTPUT="$(
+  run_stage3 --selection-file "${ALZ_CORRECTED_SELECTION}" \
+    --alzheimer-follow-up-selection
+)"
+case "${ALZ_CORRECTED_OUTPUT}" in
+  *"PREPROCESS_ARRAY_JOB_ID=600001"*) ;;
+  *) echo "Alzheimer corrected follow-up did not submit its array" >&2; exit 1 ;;
+esac
+case "${ALZ_CORRECTED_OUTPUT}" in
+  *"PREPROCESS_WATCHDOG_JOB_ID=600002"*) ;;
+  *) echo "Alzheimer corrected follow-up did not submit its watchdog" >&2; exit 1 ;;
+esac
+ALZ_CORRECTED_MANIFEST="$(printf '%s\n' "${ALZ_CORRECTED_OUTPUT}" |
+  sed -n 's/^PREPROCESS_DATASET_MANIFEST=//p')"
+ALZ_CORRECTED_ROOT="$(dirname "${ALZ_CORRECTED_MANIFEST}")/.."
+ALZ_CORRECTED_ROOT="$(cd "${ALZ_CORRECTED_ROOT}" && pwd)"
+[[ "$(cat "${ALZ_CORRECTED_MANIFEST}")" == $'Alzheimer\tbatch_effect_corrected' ]]
+[[ "$(wc -l < "${ALZ_CORRECTED_ROOT}/manifests/output_ownership.tsv" |
+  tr -d '[:space:]')" == 1 ]]
+ALZ_CORRECTED_INPUT_RECORD="$(printf 'Alzheimer\tbatch_effect_corrected\t%s\tdonor_id_assay\t%s\n' \
+  "${ALZ_INPUT}" "${ALZ_PRODUCER_RUN_ID}")"
+[[ "$(cat "${ALZ_CORRECTED_ROOT}/manifests/input_ownership.tsv")" == "${ALZ_CORRECTED_INPUT_RECORD}" ]]
+[[ "$(sed -n 's/^INPUT_PATH=//p' "${ALZ_CORRECTED_ROOT}/metadata")" == "${ALZ_INPUT}" ]]
+[[ "$(sed -n 's/^INPUT_SAMPLE_COLUMN=//p' "${ALZ_CORRECTED_ROOT}/metadata")" == "donor_id_assay" ]]
+[[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == 2 ]]
+
+ALZ_COMBINED_SELECTION="${TMP_DIR}/alzheimer-combined-selection.tsv"
+printf 'Alzheimer\tbatch_effect_uncorrected\nAlzheimer\tbatch_effect_corrected\n' \
+  > "${ALZ_COMBINED_SELECTION}"
+: > "${CAPTURE}"
+if run_stage3 --selection-file "${ALZ_COMBINED_SELECTION}" >/dev/null 2>&1; then
+  echo "combined Alzheimer follow-up was accepted" >&2
+  exit 1
+fi
+[[ ! -s "${CAPTURE}" ]]
+
+: > "${CAPTURE}"
+if ECODA_SOURCE_SNAPSHOT_REQUIRED=0 \
+  run_stage3 --selection-file "${ALZ_UNCORRECTED_SELECTION}" \
+    --alzheimer-followup >/dev/null 2>&1; then
+  echo "snapshot-unbound Alzheimer follow-up was accepted" >&2
+  exit 1
+fi
+[[ ! -s "${CAPTURE}" ]]
+unset STAGE3_INPUT_PRODUCER_RUN_ID
+
 
 # Valid rows are published into the new run's artifact manifest and skipped;
 # a mixed selection submits only its missing/invalid row.

@@ -29,6 +29,9 @@ import pandas as pd
 
 TOKEN_VERSION = "ecoda_batch_composite_v1"
 FINGERPRINT_VERSION = "ecoda_batch_contract_v1"
+# This temporary name is retained for the preprocessing/Harmony boundary and
+# for explicitly requested historical reads.  New corrected consumers never
+# use it as a model covariate.
 RESERVED_OBS_NAME = "__ecoda_batch_combined_v1"
 DIRECT_SCALARIZATION = "direct_v1"
 COMPOSITE_SCALARIZATION = "composite_v1"
@@ -41,8 +44,16 @@ VALIDATION_SUMMARY_SCHEMA_VERSION = 1
 PREPROCESS_CORRECTION_MODE = "preprocess_hvg_harmony"
 NATIVE_HARMONY_CORRECTION_MODE = "native_harmony_embedding"
 MRVI_CORRECTION_MODE = "mrvi_composite_batch"
-PSEUDOBULK_CORRECTION_MODE = "batch_only_pseudobulk"
-ECODA_CORRECTION_MODE = "additive_random_intercepts"
+LIMMA_COMPOSITION_CORRECTION_MODE = "limma_fixed_effects"
+LIMMA_PSEUDOBULK_CORRECTION_MODE = "limma_fixed_effects_pseudobulk"
+# Backwards-compatible constant names now resolve to the active fixed-effect
+# modes; historical mode tokens are kept separately and are never active.
+PSEUDOBULK_CORRECTION_MODE = LIMMA_PSEUDOBULK_CORRECTION_MODE
+ECODA_CORRECTION_MODE = LIMMA_COMPOSITION_CORRECTION_MODE
+# Historical aliases are deliberately not active policies.  They are exposed
+# only through ``historical_compatibility=True`` below.
+HISTORICAL_ECODA_CORRECTION_MODE = "additive_random_intercepts"
+HISTORICAL_PSEUDOBULK_CORRECTION_MODE = "batch_only_pseudobulk"
 _VALIDATION_SUMMARY_FIELDS = frozenset(
     {
         "schema_version",
@@ -83,16 +94,26 @@ METHOD_IDS = frozenset(
     }
 )
 
-# Model IDs are likewise fixed policy tokens; changing one changes cache
-# identity and therefore requires an explicit contract change.
+# Active model IDs are the only identities accepted for new corrected
+# composition/pseudobulk artifacts.
 MODEL_IDS = frozenset(
     {
         "hvg_composite_v1",
         "harmony_native_list_v1",
-        "ecoda_additive_random_intercepts_v1",
-        "pseudobulk_composite_v1",
         "mrvi_composite_v1",
         "embedding_consumer_harmony_v1",
+        "limma_fixed_effects_v1",
+        "pseudobulk_limma_fixed_effects_v1",
+    }
+)
+
+# Explicit read-only compatibility IDs for immutable historical artifacts.
+# They are intentionally excluded from MODEL_IDS and cannot be used by a new
+# identity builder unless the caller opts into the compatibility branch.
+HISTORICAL_MODEL_IDS = frozenset(
+    {
+        "ecoda_additive_random_intercepts_v1",
+        "pseudobulk_composite_v1",
     }
 )
 
@@ -106,11 +127,16 @@ __all__ = [
     "PREPROCESS_CORRECTION_MODE",
     "NATIVE_HARMONY_CORRECTION_MODE",
     "MRVI_CORRECTION_MODE",
+    "LIMMA_COMPOSITION_CORRECTION_MODE",
+    "LIMMA_PSEUDOBULK_CORRECTION_MODE",
     "PSEUDOBULK_CORRECTION_MODE",
     "ECODA_CORRECTION_MODE",
+    "HISTORICAL_ECODA_CORRECTION_MODE",
+    "HISTORICAL_PSEUDOBULK_CORRECTION_MODE",
     "MISSING_SENTINELS",
     "METHOD_IDS",
     "MODEL_IDS",
+    "HISTORICAL_MODEL_IDS",
     "BatchContractError",
     "BatchValidation",
     "BatchComposite",
@@ -122,6 +148,7 @@ __all__ = [
     "build_batch_composite",
     "batch_contract_fingerprint",
     "build_batch_contract_identity",
+    "build_historical_batch_contract_identity",
     "build_batch_validation_summary",
     "validate_batch_validation_summary",
     "read_h5ad_validation_summary",
@@ -1020,7 +1047,12 @@ def _ordered_key_vector(keys: tuple[str, ...]) -> str:
     return "".join(parts)
 
 
-def _validate_method_model(method_id: object, model_id: object) -> tuple[str, str]:
+def _validate_method_model(
+    method_id: object,
+    model_id: object,
+    *,
+    historical_compatibility: bool = False,
+) -> tuple[str, str]:
     if not isinstance(method_id, str) or not method_id or not method_id.strip():
         raise BatchContractError("method_id must be a nonempty string")
     if method_id not in METHOD_IDS:
@@ -1028,7 +1060,28 @@ def _validate_method_model(method_id: object, model_id: object) -> tuple[str, st
     if not isinstance(model_id, str) or not model_id or not model_id.strip():
         raise BatchContractError("model_id must be a nonempty string")
     if model_id not in MODEL_IDS:
-        raise BatchContractError(f"unsupported corrected batch model_id {model_id!r}")
+        if not (
+            historical_compatibility
+            and model_id in HISTORICAL_MODEL_IDS
+            and (
+                (
+                    model_id == "ecoda_additive_random_intercepts_v1"
+                    and method_id
+                    in {
+                        "ECODA_authors_HR",
+                        "ECODA_seuratres_2",
+                        "ECODA_authors_HR_NULL",
+                    }
+                )
+                or (
+                    model_id == "pseudobulk_composite_v1"
+                    and method_id == "Pseudobulk"
+                )
+            )
+        ):
+            raise BatchContractError(
+                f"unsupported active corrected batch model_id {model_id!r}"
+            )
     return method_id, model_id
 
 
@@ -1052,6 +1105,8 @@ def batch_contract_fingerprint(
     scalarization: str | None = None,
     method_id: str | None = None,
     model_id: str | None = None,
+    *,
+    historical_compatibility: bool = False,
 ) -> str:
     """Return the lowercase SHA-256 key/configuration fingerprint.
 
@@ -1071,7 +1126,11 @@ def batch_contract_fingerprint(
         )
     if method_id is None or model_id is None:
         raise BatchContractError("method_id and model_id are required for fingerprinting")
-    method_id, model_id = _validate_method_model(method_id, model_id)
+    method_id, model_id = _validate_method_model(
+        method_id,
+        model_id,
+        historical_compatibility=historical_compatibility,
+    )
     return hashlib.sha256(
         _batch_contract_payload(keys, scalarization, method_id, model_id)
     ).hexdigest()
@@ -1082,6 +1141,8 @@ def build_batch_contract_identity(
     sample_column: str = "Sample",
     method_id: str | None = None,
     model_id: str | None = None,
+    *,
+    historical_compatibility: bool = False,
 ) -> dict[str, Any]:
     """Build lightweight source/configuration identity for corrected batches.
 
@@ -1110,7 +1171,11 @@ def build_batch_contract_identity(
             f"corrected batch keys contain the reserved temporary name {RESERVED_OBS_NAME!r}"
         )
 
-    method_id, model_id = _validate_method_model(method_id, model_id)
+    method_id, model_id = _validate_method_model(
+        method_id,
+        model_id,
+        historical_compatibility=historical_compatibility,
+    )
     scalarization = (
         COMPOSITE_SCALARIZATION if len(keys) >= 2 else DIRECT_SCALARIZATION
     )
@@ -1129,6 +1194,27 @@ def build_batch_contract_identity(
         "reserved_obs_absent": True,
         "fingerprint": fingerprint,
     }
+
+def build_historical_batch_contract_identity(
+    batch_keys: str | Sequence[str] | None,
+    sample_column: str = "Sample",
+    method_id: str | None = None,
+    model_id: str | None = None,
+) -> dict[str, Any]:
+    """Build an immutable historical identity for read-only compatibility.
+
+    This branch is intentionally separate from the active builder.  Callers
+    must opt in explicitly, and new corrected validators never use its output
+    as a releasing identity.
+    """
+
+    return build_batch_contract_identity(
+        batch_keys,
+        sample_column=sample_column,
+        method_id=method_id,
+        model_id=model_id,
+        historical_compatibility=True,
+    )
 
 def _validated_batch_value(
     validation: BatchValidation | BatchComposite,
@@ -1234,12 +1320,44 @@ def build_batch_validation_summary(
 def batch_correction_spec_for_keys(
     method_id: str,
     batch_keys: str | Sequence[str],
+    *,
+    effective_batch_keys: Sequence[str] | None = None,
+    non_estimable_batch_keys: Sequence[str] | None = None,
 ) -> tuple[str, str]:
-    """Return one deterministic correction policy from configured key order."""
+    """Return one deterministic correction policy from configured key order.
+
+    Composition and pseudobulk use separate fixed-effect covariates.  The
+    optional effective/non-estimable vectors are metadata only; no composite
+    or scalarized column is ever introduced into those designs.
+    """
 
     keys = normalize_batch_keys(batch_keys)
     if not isinstance(method_id, str) or not method_id:
         raise BatchContractError("method_id must be a nonblank string")
+    effective = keys if effective_batch_keys is None else tuple(effective_batch_keys)
+    if (
+        any(key not in keys for key in effective)
+        or len(set(effective)) != len(effective)
+        or effective != tuple(key for key in keys if key in effective)
+    ):
+        raise BatchContractError(
+            "effective_batch_keys must preserve configured key order"
+        )
+    non_estimable = (
+        tuple(key for key in keys if key not in effective)
+        if non_estimable_batch_keys is None
+        else tuple(non_estimable_batch_keys)
+    )
+    if (
+        any(key not in keys for key in non_estimable)
+        or len(set(non_estimable)) != len(non_estimable)
+        or non_estimable != tuple(key for key in keys if key in non_estimable)
+        or set(effective).union(non_estimable) != set(keys)
+        or set(effective).intersection(non_estimable)
+    ):
+        raise BatchContractError(
+            "non_estimable_batch_keys must complement effective_batch_keys"
+        )
     scalar = keys[0] if len(keys) == 1 else RESERVED_OBS_NAME
     ordered_keys = f"[{','.join(keys)}]"
     if method_id == "preprocess":
@@ -1255,27 +1373,37 @@ def batch_correction_spec_for_keys(
     if method_id == "MrVI":
         return (
             MRVI_CORRECTION_MODE,
-            f"MRVI.setup_anndata(batch_key={scalar})",
-        )
-    if method_id == "Pseudobulk":
-        return (
-            PSEUDOBULK_CORRECTION_MODE,
-            f"DESeq2 design=~ 1; limma removeBatchEffect(batch={scalar})",
+            f"MRVI.setup_anndata(batch_keys={ordered_keys})",
         )
     if method_id in {
+        "Pseudobulk",
         "ECODA_authors_HR",
         "ECODA_seuratres_2",
         "ECODA_authors_HR_NULL",
     }:
-        aliases = (
-            ["batch"]
-            if len(keys) == 1
-            else [f"batch_key_{index}" for index in range(1, len(keys) + 1)]
+        mode = (
+            LIMMA_PSEUDOBULK_CORRECTION_MODE
+            if method_id == "Pseudobulk"
+            else LIMMA_COMPOSITION_CORRECTION_MODE
         )
-        formula = "y ~ 1 + " + " + ".join(
-            f"(1 | {alias})" for alias in aliases
+        if not effective:
+            return mode, "NO_CORRECTION: no estimable technical batch key"
+        aliases = [
+            f"batch_key_{index}"
+            for index, key in enumerate(keys, start=1)
+            if key in effective
+        ]
+        alias_text = " + ".join(aliases)
+        effective_text = ",".join(effective)
+        prefix = "DESeq2 design=~ 1; " if method_id == "Pseudobulk" else ""
+        return (
+            mode,
+            prefix
+            + f"model.matrix(~ 1 + {alias_text}); "
+            "limma::removeBatchEffect(covariates=technical_covariates, "
+            "design=intercept); "
+            f"effective_batch_keys=[{effective_text}]",
         )
-        return ECODA_CORRECTION_MODE, formula
     raise BatchContractError(
         f"unsupported corrected batch consumer {method_id!r}"
     )
@@ -1352,8 +1480,6 @@ def validate_batch_validation_summary(
 ) -> dict[str, Any]:
     """Validate and copy one persisted vector-free validation summary."""
 
-    if not isinstance(summary, Mapping):
-        raise BatchContractError("validation_summary must be a mapping")
     if set(summary) != _VALIDATION_SUMMARY_FIELDS:
         raise BatchContractError(
             "validation_summary has an invalid field set"
@@ -1610,6 +1736,7 @@ def serialize_batch_metadata(
     method_id: str,
     model_id: str,
     include_tokens: bool = False,
+    historical_compatibility: bool = False,
 ) -> dict[str, Any]:
     """Return fresh JSON-safe run-owned metadata for a validated contract."""
 
@@ -1617,7 +1744,11 @@ def serialize_batch_metadata(
         validation = validation.validation
     if not isinstance(validation, BatchValidation):
         raise BatchContractError("serialize_batch_metadata expects BatchValidation")
-    method_id, model_id = _validate_method_model(method_id, model_id)
+    method_id, model_id = _validate_method_model(
+        method_id,
+        model_id,
+        historical_compatibility=historical_compatibility,
+    )
     fingerprint_payload = _batch_contract_payload(
         validation.keys,
         validation.scalarization,

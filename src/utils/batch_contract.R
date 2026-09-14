@@ -26,10 +26,17 @@
 .ecoda_batch_model_ids <- c(
   "hvg_composite_v1",
   "harmony_native_list_v1",
-  "ecoda_additive_random_intercepts_v1",
-  "pseudobulk_composite_v1",
   "mrvi_composite_v1",
-  "embedding_consumer_harmony_v1"
+  "embedding_consumer_harmony_v1",
+  "limma_fixed_effects_v1",
+  "pseudobulk_limma_fixed_effects_v1"
+)
+# Historical combined/LMM model IDs are intentionally not accepted by the
+# active identity builder. They remain named here solely for explicit
+# read-only inventory/diagnostic callers outside the corrected path.
+.ecoda_batch_historical_model_ids <- c(
+  "ecoda_additive_random_intercepts_v1",
+  "pseudobulk_composite_v1"
 )
 
 .ecoda_batch_stop <- function(...) {
@@ -381,6 +388,30 @@ ecoda_batch_composite_token <- function(batch_keys, values) {
   unname(labels)
 }
 
+.ecoda_batch_design_summary <- function(
+  design,
+  label,
+  require_residual_df = TRUE
+) {
+  if (is.null(dim(design)) || length(dim(design)) != 2L ||
+      !is.numeric(design) || any(!is.finite(design))) {
+    .ecoda_batch_stop(label, " contains non-finite or invalid design values")
+  }
+  rank <- qr(design, tol = 1e-10)$rank
+  if (rank < ncol(design)) {
+    .ecoda_batch_stop(label, " is rank deficient or perfectly confounded")
+  }
+  residual_df <- nrow(design) - rank
+  if (isTRUE(require_residual_df) && residual_df <= 0L) {
+    .ecoda_batch_stop(label, " is non-estimable: no residual degrees of freedom")
+  }
+  list(
+    rank = as.integer(rank),
+    columns = as.integer(ncol(design)),
+    residual_df = as.integer(residual_df)
+  )
+}
+
 .ecoda_batch_sample_design <- function(sample_frame, label) {
   if (!is.data.frame(sample_frame) || nrow(sample_frame) == 0L) {
     .ecoda_batch_stop(label, " has no sample rows")
@@ -391,21 +422,160 @@ ecoda_batch_composite_token <- function(batch_keys, values) {
       .ecoda_batch_stop(label, " could not be constructed: ", conditionMessage(error))
     }
   )
-  if (!is.numeric(design) || any(!is.finite(design))) {
-    .ecoda_batch_stop(label, " contains non-finite design values")
+  .ecoda_batch_design_summary(design, label)
+}
+
+.ecoda_batch_fixed_effect_design_from_validation <- function(
+  validation,
+  sample_metadata,
+  keys,
+  label = "limma batch design"
+) {
+  if (!is.list(validation) || !isTRUE(validation[["valid"]])) {
+    .ecoda_batch_stop(label, " requires valid batch metadata")
   }
-  rank <- qr(design, tol = 1e-10)$rank
-  if (rank < ncol(design)) {
-    .ecoda_batch_stop(label, " is rank deficient or perfectly confounded")
+  keys <- .ecoda_batch_key_vector(as.list(unname(keys)))
+  ordered_keys <- validation[["ordered_keys"]]
+  if (!is.character(ordered_keys) ||
+      !identical(unname(ordered_keys), unname(keys))) {
+    .ecoda_batch_stop(label, " key order differs from validated metadata")
   }
-  residual_df <- nrow(design) - rank
-  if (residual_df < 1L) {
-    .ecoda_batch_stop(label, " is non-estimable: no residual degrees of freedom")
+  sample_ids <- unname(as.character(validation[["sample_ids"]]))
+  if (length(sample_ids) < 2L || anyNA(sample_ids) ||
+      any(!nzchar(trimws(sample_ids))) || anyDuplicated(sample_ids)) {
+    .ecoda_batch_stop(label, " requires unique sample identifiers")
   }
+  canonical_metadata <- validation[["canonical_sample_metadata"]]
+  if (!is.data.frame(canonical_metadata)) {
+    canonical_metadata <- sample_metadata
+  }
+  if (!is.data.frame(canonical_metadata) ||
+      nrow(canonical_metadata) != length(sample_ids)) {
+    .ecoda_batch_stop(label, " metadata does not cover validated samples")
+  }
+  levels <- validation[["per_key_levels"]]
+  if (is.null(levels)) levels <- validation[["levels"]]
+  if (!is.list(levels) || is.null(names(levels)) ||
+      !identical(names(levels), unname(keys))) {
+    .ecoda_batch_stop(label, " is missing per-key levels")
+  }
+  effective <- validation[["effective_batch_keys"]]
+  if (is.null(effective)) {
+    effective <- unname(keys[vapply(
+      levels,
+      function(values) is.character(values) && length(values) >= 2L,
+      logical(1)
+    )])
+  }
+  effective <- unname(as.character(effective))
+  if ((length(effective) > 0L &&
+       (anyNA(effective) || any(!effective %in% keys) ||
+        anyDuplicated(effective)))) {
+    .ecoda_batch_stop(label, " has invalid effective batch keys")
+  }
+  non_estimable <- validation[["non_estimable_batch_keys"]]
+  if (is.null(non_estimable)) {
+    non_estimable <- unname(setdiff(keys, effective))
+  }
+  non_estimable <- unname(as.character(non_estimable))
+  if ((length(non_estimable) > 0L &&
+       (anyNA(non_estimable) || any(!non_estimable %in% keys) ||
+        anyDuplicated(non_estimable))) ||
+      !setequal(c(effective, non_estimable), keys)) {
+    .ecoda_batch_stop(label, " has invalid non-estimable batch keys")
+  }
+  aliases <- if (length(effective)) {
+    setNames(
+      paste0("batch_key_", match(effective, keys)),
+      effective
+    )
+  } else {
+    character()
+  }
+  model_data <- data.frame(
+    row.names = sample_ids,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  for (key in effective) {
+    if (!key %in% colnames(canonical_metadata)) {
+      .ecoda_batch_stop(label, " metadata is missing key ", key)
+    }
+    values <- canonical_metadata[[key]]
+    key_levels <- levels[[key]]
+    if (length(values) != length(sample_ids) ||
+        !is.character(key_levels) || length(key_levels) < 2L ||
+        anyNA(values) || any(!as.character(values) %in% key_levels)) {
+      .ecoda_batch_stop(label, " has invalid values for key ", key)
+    }
+    model_data[[unname(aliases[[key]])]] <- factor(
+      as.character(values),
+      levels = key_levels
+    )
+  }
+  model_formula <- if (length(effective)) {
+    stats::as.formula(paste0(
+      "~ 1 + ", paste(unname(aliases), collapse = " + ")
+    ))
+  } else {
+    stats::formula("~ 1")
+  }
+  design <- tryCatch(
+    stats::model.matrix(model_formula, data = model_data),
+    error = function(error) {
+      .ecoda_batch_stop(label, " could not be constructed: ", conditionMessage(error))
+    }
+  )
+  if (nrow(design) != length(sample_ids)) {
+    .ecoda_batch_stop(label, " row count does not match sample identifiers")
+  }
+  rownames(design) <- sample_ids
+  summary <- .ecoda_batch_design_summary(design, label)
+  technical_columns <- which(colnames(design) != "(Intercept)")
   list(
-    rank = as.integer(rank),
-    columns = as.integer(ncol(design)),
-    residual_df = as.integer(residual_df)
+    data = model_data,
+    formula = model_formula,
+    design = design,
+    aliases = aliases,
+    configured_batch_keys = unname(keys),
+    effective_batch_keys = effective,
+    non_estimable_batch_keys = non_estimable,
+    technical_columns = as.integer(technical_columns),
+    correction_state = if (length(effective)) {
+      "BATCH_CORRECTION"
+    } else {
+      "NO_CORRECTION"
+    },
+    rank = summary$rank,
+    columns = summary$columns,
+    residual_df = summary$residual_df
+  )
+}
+
+# Construct the one fixed-effect design shared by CLR composition and
+# corrected pseudobulk. Only effective (at least two-level) technical keys
+# become model terms; non-estimable keys remain metadata-only.
+ecoda_batch_fixed_effect_design <- function(
+  metadata,
+  batch_keys,
+  validation = NULL,
+  sample_col = "Sample"
+) {
+  if (!is.data.frame(metadata)) {
+    .ecoda_batch_stop("limma batch metadata must be a data.frame")
+  }
+  keys <- ecoda_batch_normalize_keys(batch_keys, sample_col = sample_col)
+  if (is.null(validation)) {
+    validation <- ecoda_batch_validate_metadata(
+      metadata = metadata,
+      batch_keys = as.list(unname(keys)),
+      sample_col = sample_col
+    )
+  }
+  .ecoda_batch_fixed_effect_design_from_validation(
+    validation = validation,
+    sample_metadata = metadata,
+    keys = keys
   )
 }
 
@@ -515,14 +685,12 @@ ecoda_batch_validate_metadata <- function(
     original_samples[[key_index]] <- column[first_indices]
 
     levels <- .ecoda_batch_unique_raw_sorted(collapsed, paste0(key, " levels"))
-    if (length(levels) < 2L) {
-      .ecoda_batch_stop(
-        "configured batch column '", key, "' has fewer than two observed levels"
-      )
-    }
+    # A one-level technical key is metadata-only. It is retained in the
+    # validated source contract but omitted from the fixed-effect model.
     key_level_counts[[key]] <- length(levels)
     key_near_unique_fraction[[key]] <- length(levels) / n_samples
-    if (key_near_unique_fraction[[key]] > near_unique_fraction) {
+    if (length(levels) >= 2L &&
+        key_near_unique_fraction[[key]] > near_unique_fraction) {
       .ecoda_batch_stop(
         "configured batch column '", key, "' is near-unique: ",
         length(levels), "/", n_samples,
@@ -550,57 +718,99 @@ ecoda_batch_validate_metadata <- function(
   rownames(canonical_sample_metadata) <- sample_group_order
   rownames(sample_metadata) <- sample_ids
 
-  scalarization <- if (length(keys) >= 2L) "composite_v1" else "direct_v1"
 
-  additive_frame <- canonical_sample_metadata[keys]
-  for (key_index in seq_along(keys)) {
-    key <- keys[[key_index]]
-    additive_frame[[key]] <- factor(
-      canonical_samples[[key_index]],
-      levels = per_key_levels[[key_index]]
-    )
-  }
-  key_design <- .ecoda_batch_sample_design(
-    additive_frame, "additive batch design"
+  # Build the additive model from separate original technical keys. Constants
+  # remain in metadata but never become model terms. The provisional object
+  # supplies the already-validated canonical values to the shared design
+  # constructor without recursively validating the same cell metadata.
+  effective_batch_keys <- unname(keys[vapply(
+    per_key_levels,
+    function(levels) length(levels) >= 2L,
+    logical(1)
+  )])
+  non_estimable_batch_keys <- unname(setdiff(keys, effective_batch_keys))
+  provisional_validation <- list(
+    valid = TRUE,
+    ordered_keys = keys,
+    sample_ids = sample_ids,
+    canonical_sample_metadata = canonical_sample_metadata,
+    per_key_levels = per_key_levels,
+    effective_batch_keys = effective_batch_keys,
+    non_estimable_batch_keys = non_estimable_batch_keys
+  )
+  fixed_design <- .ecoda_batch_fixed_effect_design_from_validation(
+    validation = provisional_validation,
+    sample_metadata = sample_metadata,
+    keys = keys,
+    label = "additive batch design"
+  )
+  key_design <- list(
+    rank = fixed_design$rank,
+    columns = fixed_design$columns,
+    residual_df = fixed_design$residual_df
   )
 
-  if (length(keys) >= 2L) {
-    canonical_composite_values <- vapply(seq_len(n_samples), function(sample_index_value) {
+  scalarization <- if (length(keys) >= 2L) "composite_v1" else "direct_v1"
+  canonical_composite_values <- if (length(keys) >= 2L) {
+    vapply(seq_len(n_samples), function(sample_index_value) {
       .ecoda_batch_composite_token_canonical(
         keys,
         lapply(canonical_samples, function(values) values[[sample_index_value]])
       )
     }, character(1))
-    composite_values <- canonical_composite_values
-    composite_levels <- .ecoda_batch_unique_raw_sorted(
+  } else {
+    canonical_samples[[1L]]
+  }
+  composite_values <- canonical_composite_values
+  composite_levels <- if (length(keys) >= 2L) {
+    .ecoda_batch_unique_raw_sorted(
       canonical_composite_values, "composite levels"
     )
-    if (length(composite_levels) < 2L) {
-      .ecoda_batch_stop("combined batch design has fewer than two observed levels")
-    }
-    composite_near_unique_fraction <- length(composite_levels) / n_samples
-    if (composite_near_unique_fraction > near_unique_fraction) {
-      .ecoda_batch_stop(
-        "combined batch design is near-unique: ", length(composite_levels), "/",
-        n_samples, " levels (threshold ", format(near_unique_fraction, trim = TRUE), ")"
+  } else {
+    character()
+  }
+  composite_near_unique_fraction <- if (length(keys) >= 2L) {
+    as.numeric(length(composite_levels) / n_samples)
+  } else {
+    NA_real_
+  }
+  # Composite tokens remain source identity metadata only. They are never
+  # passed to a corrected model; this descriptive matrix is retained solely
+  # for compatibility with historical serializers.
+  composite_design <- if (length(keys) >= 2L) {
+    composite_matrix <- if (length(composite_levels) < 2L) {
+      matrix(
+        1,
+        nrow = n_samples,
+        ncol = 1L,
+        dimnames = list(sample_ids, "(Intercept)")
+      )
+    } else {
+      composite_frame <- data.frame(
+        composite = factor(
+          canonical_composite_values,
+          levels = composite_levels
+        ),
+        stringsAsFactors = FALSE,
+        check.names = FALSE
+      )
+      tryCatch(
+        stats::model.matrix(~ ., data = composite_frame),
+        error = function(error) {
+          .ecoda_batch_stop(
+            "combined batch identity design could not be constructed: ",
+            conditionMessage(error)
+          )
+        }
       )
     }
-    composite_frame <- data.frame(
-      composite = factor(canonical_composite_values, levels = composite_levels),
-      stringsAsFactors = FALSE,
-      check.names = FALSE
-    )
-    composite_design <- .ecoda_batch_sample_design(
-      composite_frame, "combined batch design"
+    .ecoda_batch_design_summary(
+      composite_matrix,
+      "combined batch identity design",
+      require_residual_df = FALSE
     )
   } else {
-    canonical_composite_values <- canonical_samples[[1L]]
-    composite_values <- canonical_composite_values
-    # Direct scalarization does not create a composite factor.  Keep the
-    # direct key's levels in per_key_levels and expose no composite levels.
-    composite_levels <- character()
-    composite_near_unique_fraction <- NA_real_
-    composite_design <- key_design
+    key_design
   }
 
   list(
@@ -631,6 +841,18 @@ ecoda_batch_validate_metadata <- function(
     key_level_counts = key_level_counts,
     key_near_unique_fraction = key_near_unique_fraction,
     near_unique_fraction = as.numeric(near_unique_fraction),
+    effective_batch_keys = effective_batch_keys,
+    non_estimable_batch_keys = non_estimable_batch_keys,
+    correction_state = fixed_design$correction_state,
+    fixed_effect_aliases = fixed_design$aliases,
+    correction_design_formula = paste(
+      deparse(fixed_design$formula),
+      collapse = ""
+    ),
+    effective_design = key_design,
+    effective_design_rank = key_design$rank,
+    effective_design_columns = key_design$columns,
+    effective_design_residual_df = key_design$residual_df,
     composite_values = composite_values,
     composite_levels = composite_levels,
     composite_level_count = as.integer(length(composite_levels)),
@@ -639,6 +861,7 @@ ecoda_batch_validate_metadata <- function(
     additive_design = key_design,
     design_rank = key_design$rank,
     design_columns = key_design$columns,
+    design_residual_df = key_design$residual_df,
     composite_design = composite_design,
     composite_design_rank = composite_design$rank,
     composite_design_columns = composite_design$columns
@@ -960,6 +1183,12 @@ ecoda_batch_build_validation_summary <- function(
       "compact corrected batch summary composite levels are not canonically sorted"
     )
   }
+  if ((length(composite_levels) > 0L && length(keys) < 2L) ||
+      (length(composite_levels) == 0L && length(keys) >= 2L)) {
+    .ecoda_batch_stop(
+      "compact corrected batch summary has an invalid composite-level contract"
+    )
+  }
 
   n_cells <- validation[["n_cells"]]
   if (is.null(n_cells)) n_cells <- validation[["n_obs"]]
@@ -972,17 +1201,48 @@ ecoda_batch_build_validation_summary <- function(
       "compact corrected batch summary requires positive integer cell/sample counts"
     )
   }
-  if (length(composite_levels) > 0L && length(keys) < 2L) {
-    .ecoda_batch_stop(
-      "direct scalar corrected batch summary must have empty composite levels"
-    )
+  effective_batch_keys <- validation[["effective_batch_keys"]]
+  if (is.null(effective_batch_keys)) {
+    effective_batch_keys <- unname(keys[vapply(
+      per_key_levels,
+      function(values) length(values) >= 2L,
+      logical(1)
+    )])
   }
-  if (length(composite_levels) == 0L && length(keys) >= 2L) {
-    .ecoda_batch_stop(
-      "composite corrected batch summary must include composite levels"
-    )
+  effective_batch_keys <- unname(as.character(effective_batch_keys))
+  non_estimable_batch_keys <- validation[["non_estimable_batch_keys"]]
+  if (is.null(non_estimable_batch_keys)) {
+    non_estimable_batch_keys <- unname(setdiff(keys, effective_batch_keys))
   }
-
+  non_estimable_batch_keys <- unname(as.character(non_estimable_batch_keys))
+  if ((length(effective_batch_keys) > 0L &&
+       (anyNA(effective_batch_keys) ||
+        any(!effective_batch_keys %in% keys) ||
+        anyDuplicated(effective_batch_keys))) ||
+      (length(non_estimable_batch_keys) > 0L &&
+       (anyNA(non_estimable_batch_keys) ||
+        any(!non_estimable_batch_keys %in% keys) ||
+        anyDuplicated(non_estimable_batch_keys))) ||
+      !setequal(c(effective_batch_keys, non_estimable_batch_keys), keys)) {
+    .ecoda_batch_stop("compact corrected batch summary has invalid effective keys")
+  }
+  summary_validation <- validation
+  summary_validation[["effective_batch_keys"]] <- effective_batch_keys
+  summary_validation[["non_estimable_batch_keys"]] <- non_estimable_batch_keys
+  design_info <- tryCatch(
+    .ecoda_batch_fixed_effect_design_from_validation(
+      validation = summary_validation,
+      sample_metadata = validation[["sample_metadata"]],
+      keys = keys,
+      label = "compact limma batch design"
+    ),
+    error = function(error) {
+      .ecoda_batch_stop(
+        "compact corrected batch summary has invalid limma design: ",
+        conditionMessage(error)
+      )
+    }
+  )
   list(
     schema_version = 1L,
     validated_before_reduction = TRUE,
@@ -1050,7 +1310,9 @@ ecoda_batch_augment_contract_identity <- ecoda_batch_augment_contract
 ecoda_batch_correction_spec <- function(
   method_id,
   batch_keys,
-  scalar_batch_col = NULL
+  scalar_batch_col = NULL,
+  effective_batch_keys = NULL,
+  non_estimable_batch_keys = NULL
 ) {
   batch_keys_input <- if (
     is.character(batch_keys) && length(batch_keys) > 1L
@@ -1060,56 +1322,158 @@ ecoda_batch_correction_spec <- function(
     batch_keys
   }
   keys <- ecoda_batch_normalize_keys(batch_keys_input)
-  scalar <- if (is.null(scalar_batch_col)) {
-    if (length(keys) >= 2L) .ecoda_batch_reserved_name else keys[[1L]]
+  method_id <- .ecoda_batch_config_name(method_id, "method_id")
+  if (is.null(effective_batch_keys)) {
+    effective <- unname(keys)
   } else {
-    .ecoda_batch_config_name(scalar_batch_col, "scalar batch column")
+    effective <- unname(as.character(effective_batch_keys))
+  }
+  if (length(effective) > 0L &&
+      (anyNA(effective) || any(!effective %in% keys) ||
+       anyDuplicated(effective))) {
+    .ecoda_batch_stop("correction spec has invalid effective batch keys")
+  }
+  if (is.null(non_estimable_batch_keys)) {
+    non_estimable <- unname(setdiff(keys, effective))
+  } else {
+    non_estimable <- unname(as.character(non_estimable_batch_keys))
+  }
+  if ((length(non_estimable) > 0L &&
+       (anyNA(non_estimable) || any(!non_estimable %in% keys) ||
+        anyDuplicated(non_estimable))) ||
+      !setequal(c(effective, non_estimable), keys)) {
+    .ecoda_batch_stop("correction spec has invalid non-estimable batch keys")
+  }
+  if (!is.null(scalar_batch_col)) {
+    scalar_batch_col <- .ecoda_batch_config_name(
+      scalar_batch_col, "scalar batch column"
+    )
+  }
+  # A scalar name is a compatibility field for one-key callers only. Never
+  # synthesize or consume the historical combined name for a multi-key model.
+  scalar <- if (length(keys) == 1L) keys[[1L]] else NULL
+  if (!is.null(scalar_batch_col) && length(keys) == 1L &&
+      !identical(scalar_batch_col, scalar)) {
+    .ecoda_batch_stop("scalar batch column differs from the configured key")
+  }
+  aliases <- if (length(effective)) {
+    setNames(
+      paste0("batch_key_", match(effective, keys)),
+      effective
+    )
+  } else {
+    character()
+  }
+  alias_text <- if (length(aliases)) {
+    paste(unname(aliases), collapse = " + ")
+  } else {
+    "none"
   }
   key_text <- paste(keys, collapse = ",")
-  method_id <- .ecoda_batch_config_name(method_id, "method_id")
+  effective_text <- if (length(effective)) {
+    paste(effective, collapse = ",")
+  } else {
+    "none"
+  }
+  correction_state <- if (length(effective)) {
+    "BATCH_CORRECTION"
+  } else {
+    "NO_CORRECTION"
+  }
+  if (!length(effective) && method_id %in% c(
+    "preprocess", "Pseudobulk",
+    "ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2",
+    "GloScope", "PILOT", "QOT", "MrVI"
+  )) {
+    no_op_mode <- if (identical(method_id, "Pseudobulk")) {
+      "limma_fixed_effects_pseudobulk"
+    } else if (method_id %in% c(
+      "ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2"
+    )) {
+      "limma_fixed_effects"
+    } else if (identical(method_id, "preprocess")) {
+      "preprocess_hvg_harmony"
+    } else if (method_id %in% c("GloScope", "PILOT", "QOT")) {
+      "native_harmony_embedding"
+    } else {
+      "mrvi_separate_batch_keys"
+    }
+    return(list(
+      correction_mode = no_op_mode,
+      correction_formula = "NO_CORRECTION: no estimable technical batch key",
+      correction_state = "NO_CORRECTION",
+      effective_batch_keys = character(),
+      non_estimable_batch_keys = non_estimable,
+      aliases = character()
+    ))
+  }
   if (identical(method_id, "preprocess")) {
     return(list(
       correction_mode = "preprocess_hvg_harmony",
       correction_formula = paste0(
-        "HVG batch_key=", scalar, "; Harmony vars_use=[", key_text, "]"
-      )
+        "HVG batch_keys=[", key_text, "]; Harmony vars_use=[",
+        alias_text, "]; effective_batch_keys=[", effective_text, "]"
+      ),
+      correction_state = correction_state,
+      effective_batch_keys = effective,
+      non_estimable_batch_keys = non_estimable,
+      aliases = aliases
     ))
   }
   if (identical(method_id, "Pseudobulk")) {
     return(list(
-      correction_mode = "batch_only_pseudobulk",
+      correction_mode = "limma_fixed_effects_pseudobulk",
       correction_formula = paste0(
-        "DESeq2 design=~ 1; limma removeBatchEffect(batch=", scalar, ")"
-      )
+        "DESeq2 design=~ 1; model.matrix(~ 1 + ", alias_text,
+        "); limma::removeBatchEffect(covariates=technical_covariates, ",
+        "design=intercept); effective_batch_keys=[", effective_text, "]"
+      ),
+      correction_state = correction_state,
+      effective_batch_keys = effective,
+      non_estimable_batch_keys = non_estimable,
+      aliases = aliases
     ))
   }
   if (method_id %in% c(
     "ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2"
   )) {
-    aliases <- if (length(keys) == 1L) {
-      "batch"
-    } else {
-      paste0("batch_key_", seq_along(keys))
-    }
     return(list(
-      correction_mode = "additive_random_intercepts",
+      correction_mode = "limma_fixed_effects",
       correction_formula = paste0(
-        "y ~ 1 + ", paste0("(1 | ", aliases, ")", collapse = " + ")
-      )
+        "model.matrix(~ 1 + ", alias_text,
+        "); limma::removeBatchEffect(covariates=technical_covariates, ",
+        "design=intercept); effective_batch_keys=[", effective_text, "]"
+      ),
+      correction_state = correction_state,
+      effective_batch_keys = effective,
+      non_estimable_batch_keys = non_estimable,
+      aliases = aliases
     ))
   }
   if (method_id %in% c("GloScope", "PILOT", "QOT")) {
     return(list(
       correction_mode = "native_harmony_embedding",
-      correction_formula = "embedding=X_pca_harmony_batch_effect_corrected_hvg2000"
+      correction_formula = paste0(
+        "embedding=X_pca_harmony_batch_effect_corrected_hvg2000",
+        "; effective_batch_keys=[", effective_text, "]"
+      ),
+      correction_state = correction_state,
+      effective_batch_keys = effective,
+      non_estimable_batch_keys = non_estimable,
+      aliases = aliases
     ))
   }
   if (identical(method_id, "MrVI")) {
     return(list(
-      correction_mode = "mrvi_composite_batch",
+      correction_mode = "mrvi_separate_batch_keys",
       correction_formula = paste0(
-        "MRVI.setup_anndata(batch_key=", scalar, ")"
-      )
+        "MRVI.setup_anndata(batch_keys=[", key_text, "])",
+        "; effective_batch_keys=[", effective_text, "]"
+      ),
+      correction_state = correction_state,
+      effective_batch_keys = effective,
+      non_estimable_batch_keys = non_estimable,
+      aliases = aliases
     ))
   }
   .ecoda_batch_stop(
@@ -1152,6 +1516,11 @@ ecoda_batch_build_composite <- function(
     composite_name = composite_name,
     reserved_name = .ecoda_batch_reserved_name,
     sample_ids = validation$sample_ids,
+    effective_batch_keys = validation$effective_batch_keys,
+    non_estimable_batch_keys = validation$non_estimable_batch_keys,
+    correction_state = validation$correction_state,
+    fixed_effect_aliases = validation$fixed_effect_aliases,
+    correction_design_formula = validation$correction_design_formula,
     composite_values = validation$composite_values,
     composite_levels = validation$composite_levels,
     composite_level_count = validation$composite_level_count,
@@ -1236,6 +1605,11 @@ ecoda_batch_serialize_metadata <- function(
     sample_ids = validation$sample_ids,
     sample_group_ids = validation$sample_group_ids,
     sample_constancy = validation$sample_constancy,
+    effective_batch_keys = validation$effective_batch_keys,
+    non_estimable_batch_keys = validation$non_estimable_batch_keys,
+    correction_state = validation$correction_state,
+    fixed_effect_aliases = validation$fixed_effect_aliases,
+    correction_design_formula = validation$correction_design_formula,
     estimable = TRUE,
     near_unique_fraction = as.numeric(near_unique_fraction),
     key_level_counts = validation$key_level_counts,
@@ -1244,9 +1618,10 @@ ecoda_batch_serialize_metadata <- function(
     composite_name = composite$composite_name,
     design_rank = validation$additive_design$rank,
     design_columns = validation$additive_design$columns,
+    design_residual_df = validation$additive_design$residual_df,
     composite_design_rank = validation$composite_design$rank,
     composite_design_columns = validation$composite_design$columns,
-    additive_design = validation$additive_design,
-    composite_design = validation$composite_design
+    composite_design = validation$composite_design,
+    additive_design = validation$additive_design
   )
 }

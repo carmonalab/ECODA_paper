@@ -73,7 +73,10 @@ STAGE2_SOURCE_FILES=(
   src/2_dataset_specific_preprocessing/1.4_submit_kfoury_lowres_ct.sh
   src/2_dataset_specific_preprocessing/1.5_submit_myocardial.sh
   src/2_dataset_specific_preprocessing/1.6_submit_bassez.sh
+  src/2_dataset_specific_preprocessing/1.7_submit_alzheimer_donor_assay.sh
+  src/2_dataset_specific_preprocessing/1.7.1_create_alzheimer_donor_assay.py
   src/utils/py/derived_prerequisite_contract.py
+  src/utils/py/h5ad_source_identity.py
   src/2_dataset_specific_preprocessing/stage2_watchdog.sh
 )
 for source_file in "${STAGE2_SOURCE_FILES[@]}"; do
@@ -216,6 +219,32 @@ grep -q "ERROR: unknown Stage 2 step '${INVALID_STEP}'." "${TMP_DIR}/invalid.sub
 [[ ! -s "${CAPTURE}" ]]
 [[ ! -e "${RUNS_ROOT}" ]]
 
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  bash "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1_submit_hpc.sh" \
+    --datasets Alzheimer --steps joanito > "${TMP_DIR}/alzheimer_wrong_step.log" 2>&1; then
+  echo "Alzheimer accepted a non-donor-assay step" >&2
+  exit 1
+fi
+grep -q "ERROR: alzheimer_donor_assay requires exactly --datasets Alzheimer --steps alzheimer_donor_assay." \
+  "${TMP_DIR}/alzheimer_wrong_step.log"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  bash "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1_submit_hpc.sh" \
+    --datasets Alzheimer > "${TMP_DIR}/alzheimer_broad.log" 2>&1; then
+  echo "Alzheimer broad selection unexpectedly accepted" >&2
+  exit 1
+fi
+grep -q "ERROR: alzheimer_donor_assay requires exactly --datasets Alzheimer --steps alzheimer_donor_assay." \
+  "${TMP_DIR}/alzheimer_broad.log"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  bash "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1_submit_hpc.sh" \
+    --steps alzheimer_donor_assay > "${TMP_DIR}/alzheimer_no_dataset.log" 2>&1; then
+  echo "Alzheimer hook accepted without an explicit dataset" >&2
+  exit 1
+fi
+grep -q "ERROR: alzheimer_donor_assay requires exactly --datasets Alzheimer --steps alzheimer_donor_assay." \
+  "${TMP_DIR}/alzheimer_no_dataset.log"
+[[ ! -s "${CAPTURE}" ]]
+
 SUBMIT_RUN_ID="stage2_submitter_combined"
 export ECODA_RUN_ID="${SUBMIT_RUN_ID}"
 export EXPECT_RUN_ID="${SUBMIT_RUN_ID}"
@@ -264,6 +293,55 @@ case "${JOANITO_CALL}" in *"--dependency="*) echo "Joanito was artificially seri
 WATCHDOG_CALL="$(sed -n '4p' "${CAPTURE}")"
 case "${WATCHDOG_CALL}" in *"--dependency=afterany:710001:710002:710003"*) ;; *) echo "aggregate watchdog dependency missing" >&2; exit 1 ;; esac
 case "${WATCHDOG_CALL}" in *"--mem=64G"*) ;; *) echo "watchdog default memory missing" >&2; exit 1 ;; esac
+
+mkdir -p "${TMP_DIR}/home/scratch/ECODA_paper/Alzheimer/data"
+ALZ_SUBMIT_RUN_ID="stage2_submitter_alzheimer"
+export ECODA_RUN_ID="${ALZ_SUBMIT_RUN_ID}"
+export EXPECT_RUN_ID="${ALZ_SUBMIT_RUN_ID}"
+export EXPECT_RUN_ROOT="${RUNS_ROOT}/${ALZ_SUBMIT_RUN_ID}"
+ALZ_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  STAGE2_SUBMITTER_TEST=1 bash "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1_submit_hpc.sh" \
+    --datasets Alzheimer --steps alzheimer_donor_assay
+)"
+ALZ_RUN_ID="$(printf '%s\n' "${ALZ_OUTPUT}" | sed -n 's/^STAGE2_RUN_ID=//p')"
+[[ "${ALZ_RUN_ID}" == "${ALZ_SUBMIT_RUN_ID}" ]]
+ALZ_MANIFEST="${RUNS_ROOT}/${ALZ_RUN_ID}/manifests/steps.tsv"
+[[ "$(wc -l < "${ALZ_MANIFEST}" | tr -d '[:space:]')" == 1 ]]
+IFS=$'\t' read -r ALZ_STEP ALZ_SCRIPT ALZ_OUTPUTS ALZ_DEPENDENCY ALZ_OWNER \
+  < "${ALZ_MANIFEST}"
+[[ "${ALZ_STEP}" == "alzheimer_donor_assay" ]]
+[[ "${ALZ_SCRIPT}" == "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.7_submit_alzheimer_donor_assay.sh" ]]
+case "${ALZ_SCRIPT}" in "${ROOT}"/*) echo "Alzheimer manifest used mutable script" >&2; exit 1 ;; esac
+[[ "${ALZ_OUTPUTS}" == "${TMP_DIR}/home/scratch/ECODA_paper/Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad" ]]
+[[ "${ALZ_DEPENDENCY}" == "-" && "${ALZ_OWNER}" != "-" ]]
+ALZ_CALL="$(sed -n '5p' "${CAPTURE}")"
+case "${ALZ_CALL}" in *"${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.7_submit_alzheimer_donor_assay.sh"*) ;; *) echo "Alzheimer hook missing from scheduler call" >&2; exit 1 ;; esac
+case "${ALZ_CALL}" in *"ECODA_SOURCE_SNAPSHOT_REQUIRED=1"*"ECODA_RUNTIME_IDENTITY=${RUNS_ROOT}/${ALZ_RUN_ID}/manifests/runtime.identity"*) ;; *) echo "Alzheimer immutable runtime export missing" >&2; exit 1 ;; esac
+ALZ_WATCHDOG_CALL="$(sed -n '6p' "${CAPTURE}")"
+case "${ALZ_WATCHDOG_CALL}" in *"--dependency=afterany:710005"*) ;; *) echo "Alzheimer watchdog dependency missing" >&2; exit 1 ;; esac
+
+ALZ_ALIAS_DIR="${TMP_DIR}/home/scratch/ECODA_paper/Alzheimer/data"
+mkdir -p "${ALZ_ALIAS_DIR}"
+ALZ_RAW_PATH="${ALZ_ALIAS_DIR}/SEAAD_Alzheimer.h5ad"
+ALZ_ALIAS_PATH="${ALZ_ALIAS_DIR}/SEAAD_Alzheimer_donor_assay.h5ad"
+printf 'immutable raw sentinel\n' > "${ALZ_RAW_PATH}"
+ln -s "$(basename "${ALZ_RAW_PATH}")" "${ALZ_ALIAS_PATH}"
+ALZ_RAW_BEFORE="$(cat "${ALZ_RAW_PATH}")"
+ALZ_ALIAS_RUN_ID="stage2_submitter_alzheimer_alias"
+export ECODA_RUN_ID="${ALZ_ALIAS_RUN_ID}"
+export EXPECT_RUN_ID="${ALZ_ALIAS_RUN_ID}"
+export EXPECT_RUN_ROOT="${RUNS_ROOT}/${ALZ_ALIAS_RUN_ID}"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  bash "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1_submit_hpc.sh" \
+    --datasets Alzheimer --steps alzheimer_donor_assay --force \
+    > "${TMP_DIR}/alzheimer_alias.log" 2>&1; then
+  echo "Alzheimer output alias was not rejected before force invalidation" >&2
+  exit 1
+fi
+grep -q "aliases or redirects to the raw input" "${TMP_DIR}/alzheimer_alias.log"
+[[ -L "${ALZ_ALIAS_PATH}" && "$(cat "${ALZ_RAW_PATH}")" == "${ALZ_RAW_BEFORE}" ]]
+rm -f "${ALZ_ALIAS_PATH}" "${ALZ_RAW_PATH}"
 BASSEZ_SUBMIT_RUN_ID="stage2_submitter_bassez"
 export ECODA_RUN_ID="${BASSEZ_SUBMIT_RUN_ID}"
 export EXPECT_RUN_ID="${BASSEZ_SUBMIT_RUN_ID}"
@@ -400,4 +478,115 @@ ECODA_RUNTIME_IN_CONTAINER=1 ECODA_RUNTIME_MODE=apptainer \
   PATH="${HOOK_ROOT}/bin:${TMP_DIR}/bin:${PATH}" \
   bash "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/1.2_submit_combinedpbmc.sh"
 [[ ! -e "${HOOK_ROOT}/module.called" ]] || { echo "CombinedPBMC loaded host module inside container" >&2; exit 1; }
+ALZ_FIXTURE_DIR="${TMP_DIR}/alzheimer-fixtures"
+mkdir -p "${ALZ_FIXTURE_DIR}"
+pixi run -e default python - "${ALZ_FIXTURE_DIR}" <<'PY'
+import pathlib
+import sys
+
+import anndata as ad
+import numpy as np
+import pandas as pd
+import scipy.sparse as sp
+
+root = pathlib.Path(sys.argv[1])
+
+
+def write(name, *, donors=None, assays=None, sexes=None, index=None):
+    donors = donors or ["H20.33.001"] * 4
+    assays = assays or ["10x 3' v3", "10x 3' v3", "10x multiome", "10x multiome"]
+    sexes = sexes or ["Female", "Female", "Male", "Male"]
+    index = index or ["c0", "c1", "c2", "c3"]
+    obs = pd.DataFrame(
+        {
+            "donor_id": donors,
+            "assay": assays,
+            "sex": sexes,
+            "Cognitive status": ["Reference"] * len(index),
+            "cell_type": ["Neuron", "Astrocyte", "Neuron", "Astrocyte"][: len(index)],
+        },
+        index=index,
+    )
+    matrix = sp.csr_matrix(np.eye(len(index), 2, dtype=np.float32))
+    data = ad.AnnData(X=matrix, obs=obs, var=pd.DataFrame(index=["g1", "g2"]))
+    data.layers["counts"] = matrix.copy()
+    data.write_h5ad(root / name)
+
+
+write("raw.h5ad")
+write("unsupported.h5ad", assays=["10x 3' v3", "10x 4' v4", "10x multiome", "10x multiome"])
+write("blank_donor.h5ad", donors=["H20.33.001", "", "H20.33.001", "H20.33.001"])
+write("missing_assay.h5ad", assays=["10x 3' v3", None, "10x multiome", "10x multiome"])
+write("mixed_sex.h5ad", sexes=["Female", "Male", "Female", "Female"])
+write("duplicate_obs.h5ad", index=["c0", "c0", "c2", "c3"])
+PY
+ALZ_WORKER="${ROOT}/src/2_dataset_specific_preprocessing/1.7.1_create_alzheimer_donor_assay.py"
+ALZ_RAW="${ALZ_FIXTURE_DIR}/raw.h5ad"
+ALZ_DERIVATIVE="${ALZ_FIXTURE_DIR}/derived.h5ad"
+ALZ_RAW_MD5="$(md5sum "${ALZ_RAW}" | cut -d' ' -f1)"
+pixi run -e default python "${ALZ_WORKER}" \
+  --input-file "${ALZ_RAW}" \
+  --output-file "${ALZ_DERIVATIVE}" \
+  --expected-samples 2 \
+  --expected-donors 1 \
+  --expected-assay-counts "10x3v3=1,10xmultiome=1" \
+  --expected-sex-counts "female=1,male=1" \
+  --require-example-ids
+[[ "$(md5sum "${ALZ_RAW}" | cut -d' ' -f1)" == "${ALZ_RAW_MD5}" ]]
+[[ -s "${ALZ_DERIVATIVE}" && -s "${ALZ_DERIVATIVE}.md5" ]]
+grep -q "^PATH=${ALZ_DERIVATIVE}$" "${ALZ_DERIVATIVE}.md5"
+[[ "$(pixi run -e default python -c 'import anndata as ad,sys; print(",".join(ad.read_h5ad(sys.argv[1]).obs["donor_id_assay"].tolist()))' "${ALZ_DERIVATIVE}")" == \
+  "H20.33.001_10x3v3,H20.33.001_10x3v3,H20.33.001_10xmultiome,H20.33.001_10xmultiome" ]]
+NOOP_OUTPUT="$(pixi run -e default python "${ALZ_WORKER}" \
+  --input-file "${ALZ_RAW}" --output-file "${ALZ_DERIVATIVE}" \
+  --expected-samples 2 --expected-donors 1 \
+  --expected-assay-counts "10x3v3=1,10xmultiome=1" \
+  --expected-sex-counts "female=1,male=1" --require-example-ids)"
+case "${NOOP_OUTPUT}" in *"NOOP_VALIDATED=1"*) ;; *) echo "valid Alzheimer derivative was not NOOP_VALIDATED" >&2; exit 1 ;; esac
+if pixi run -e default python "${ALZ_WORKER}" --validate-only \
+    --input-file "${ALZ_RAW}" --output-file "${ALZ_DERIVATIVE}" \
+    --expected-samples 2 --expected-donors 1 \
+    --expected-assay-counts "10x3v3=1,10xmultiome=1" \
+    --expected-sex-counts "female=2,male=0" --require-example-ids \
+    > "${ALZ_FIXTURE_DIR}/sex_count_drift.log" 2>&1; then
+  echo "sex-count-drift Alzheimer derivative unexpectedly validated" >&2
+  exit 1
+fi
+grep -q "sex sample counts mismatch" "${ALZ_FIXTURE_DIR}/sex_count_drift.log"
+for invalid_source in unsupported blank_donor missing_assay mixed_sex duplicate_obs; do
+  invalid_output="${ALZ_FIXTURE_DIR}/${invalid_source}.derived.h5ad"
+  if pixi run -e default python "${ALZ_WORKER}" \
+      --input-file "${ALZ_FIXTURE_DIR}/${invalid_source}.h5ad" \
+      --output-file "${invalid_output}" \
+      --expected-samples 2 --expected-donors 1 \
+      --expected-assay-counts "10x3v3=1,10xmultiome=1" --require-example-ids \
+      --expected-sex-counts "female=1,male=1" \
+      > "${ALZ_FIXTURE_DIR}/${invalid_source}.log" 2>&1; then
+    echo "invalid Alzheimer ${invalid_source} fixture unexpectedly succeeded" >&2
+    exit 1
+  fi
+  [[ ! -e "${invalid_output}" ]]
+done
+ALZ_BAD_ROWS="${ALZ_FIXTURE_DIR}/bad_rows.h5ad"
+cp "${ALZ_DERIVATIVE}" "${ALZ_BAD_ROWS}"
+pixi run -e default python - "${ALZ_BAD_ROWS}" <<'PY'
+import h5py
+import sys
+
+with h5py.File(sys.argv[1], "r+") as handle:
+    del handle["obs"]["donor_id_assay"]
+    node = handle["obs"].create_dataset("donor_id_assay", shape=(3,), dtype=h5py.string_dtype())
+    node[:] = ["H20.33.001_10x3v3", "H20.33.001_10x3v3", "H20.33.001_10xmultiome"]
+    node.attrs["encoding-type"] = "string-array"
+    node.attrs["encoding-version"] = "0.2.0"
+PY
+if pixi run -e default python "${ALZ_WORKER}" --validate-only \
+    --input-file "${ALZ_RAW}" --output-file "${ALZ_BAD_ROWS}" \
+    --expected-samples 2 --expected-donors 1 \
+    --expected-assay-counts "10x3v3=1,10xmultiome=1" --require-example-ids \
+    --expected-sex-counts "female=1,male=1" \
+    > "${ALZ_FIXTURE_DIR}/bad_rows.log" 2>&1; then
+  echo "row-count-changed Alzheimer derivative unexpectedly validated" >&2
+  exit 1
+fi
 echo "stage2 submitter: OK"

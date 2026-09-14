@@ -2,6 +2,12 @@
 
 This document serves as the single technical source of truth for the **ECODA** reproducible benchmark suite: pipeline stages, HPC execution layout, data flow, and module reference.
 
+> **Current production contract.** Production scope is resolved from
+> `datasets.json` and immutable run-owned manifests. View and analysis lanes
+> are variant-qualified and bound to immutable source/runtime/auxiliary
+> identities. Exact active selections, lane roots, method dependencies, and
+> run-specific gates are maintained in the [active authoritative plan](../.agents/plans/20260912-final-batch-effect-subset-plan.md).
+
 ---
 
 ## 1. System Overview & Core Design Principles
@@ -15,21 +21,24 @@ The ECODA benchmarking pipeline is designed for **cohort-level exploratory analy
                                                   |
                                                   v (1_stage_data.sh)
 +---------------------------------------------------------------------------------------------------+
-|                               STAGE 2: PREPROCESSING & ANNOTATION                                 |
-|                                                                                                   |
-|  [2_dataset_specific_preprocessing] -> [3_scrnaseq_preprocessing] -> [4_cell_type_annotation]       |
-|    - GongSharma sample cap               - Standardized HVG, PCA       - Chunked scATOMIC & HiTME |
-|    - CombinedPBMC combine                - Harmony batch correction    - Backed CSR union reads   |
-|    - Joanito seqtec & _debug             - Leiden clusterings          - Atomic obs metadata join |
+|                         STAGE 2: DATASET-SPECIFIC HOOKS -> STAGE 3: VIEW PROCESSING                    |
+|                                                                                                        |
+|  [2_dataset_specific_preprocessing] ----------------> [3_scrnaseq_preprocessing]                      |
+|   - Dataset-specific conversion and repair                - Explicit DATASET<TAB>VIEW rows                |
+|   - Metadata validation and staging                       - View-specific processing and representations  |
+|                                                                                                        |
+|  STAGE 4: CELL-TYPE ANNOTATION (separate; benchmark-analysis views only)                               |
+|  [4_cell_type_annotation] -> run-owned unions, chunks, and merged annotation metadata                 |
 +---------------------------------------------------------------------------------------------------+
+
                                                   |
                                                   v
 +---------------------------------------------------------------------------------------------------+
 |                             STAGE 5: BENCHMARK & TRANSFORMATION ARRAYS                                |
 |                                                                                                   |
 |  [Python Benchmark Array]           [R Benchmark Array]            [Transformation & Zero-Imp]    |
-|   - MrVI, scPoli, PILOT-GM-VAE       - GloScope, MOFA, Pseudobulk   - 7 CLR transformations       |
-|   - PILOT (EMD), QOT                 - scITD, Composition (ECODA)   - 6 Zero-imputation methods   |
+|   - Embedding and distance methods   - R result-bundle methods       - Configurable transformations        |
+|   - Python and R workers             - Composition and pseudobulk    - Zero-imputation methods            |
 |   -> Emits .feather dists/embs       -> Emits .rds result bundles   -> Emits .rds bundles         |
 +---------------------------------------------------------------------------------------------------+
                                                   |
@@ -37,18 +46,24 @@ The ECODA benchmarking pipeline is designed for **cohort-level exploratory analy
 +---------------------------------------------------------------------------------------------------+
 |                             EVALUATION & PUBLICATION NOTEBOOKS                                    |
 |                                                                                                   |
-|  notebooks/benchmark_analysis.rmd                      notebooks/batch_effect_analysis.rmd        |
-|  - Ingests precomputed .rds & .feather results          - Evaluates bio vs batch separation       |
-|  - Computes ANOSIM, ARI, Silhouette, Modularity, LISI   - Tests batch-correction robustness       |
-|  - Renders Figure 2A, Supp Fig 2, Supp Fig 14-21       - Generates batch evaluation panels        |
+|  notebooks/benchmark_analysis.rmd                      notebooks/batch_effect_analysis_uncorrected.rmd      |
+|  - Ingests precomputed .rds & .feather results          - Loads explicit pass/variant manifests              |
+|  - Computes ANOSIM, ARI, Silhouette, Modularity, LISI   - Evaluates bio vs batch separation                  |
+|  - Renders Figure 2A, Supp Fig 2, Supp Fig 14-21       - Generates batch evaluation panels                  |
 +---------------------------------------------------------------------------------------------------+
 ```
 
 ### Key Technical Contracts
 1. **Backed HDF5 / CSR on Disk:** Preprocessed `.h5ad` files retain raw counts in `layers["counts"]` and use CSR storage. Annotation unions deliberately contain only raw counts in `X`, so their backed chunk workers can slice samples selectively. Login-side source-ID and annotation-contract validators use h5py-only metadata/`obs` reads; they must not use `anndata.read_h5ad(..., backed="r")`, because anndata 0.12.x may eagerly materialize `layers`.
-2. **Run-Owned Minimal Annotation Union:** Each Stage 4 run writes a minimal union at `${HPC_SCRATCH_DIR}/_ecoda_runs/<RUN_ID>/datasets/<DS_NAME>/union/union.h5ad` (`X` = raw counts CSR, `obs` + `var` only, no `layers`/`obsp`/`obsm`). Feathers are validated once against the complete union `(Sample, cell_barcode)` key set, then projected onto each selected view.
-3. **Cross-Language Data Exchange (`.feather`):** Python methods serialize embeddings and pairwise distance matrices to Apache Arrow `.feather` files, which R consumers read with zero format drift.
-4. **Atomic Writes & MD5 Checksums:** All R result bundles, annotation feathers, unions, and merged h5ads are written atomically (temp file + rename) with MD5/SIZE/PATH sidecars before synchronization to persistent NAS storage.
+2. **Metadata-only H5AD access:** Obs-only audits and the sample-metadata exporter read only HDF5 shape/`obs` data through the h5py/read-dataframe path. They never open `X`, `raw`, or `layers["counts"]`; methods that genuinely require raw counts use the separate checked CSR contract.
+3. **Run-Owned Minimal Annotation Union:** Each Stage 4 run writes a minimal union at `${HPC_SCRATCH_DIR}/_ecoda_runs/<RUN_ID>/datasets/<DS_NAME>/union/union.h5ad` (`X` = raw counts CSR, `obs` + `var` only, no `layers`/`obsp`/`obsm`). Feathers are validated once against the complete union `(Sample, cell_barcode)` key set, then projected onto each selected view.
+4. **Explicit selection manifests:** Stage 3 consumes one immutable `DATASET<TAB>VIEW` row per selected view. Stage 5 lanes consume explicit dataset/view/scope manifests with variant-appropriate method selections; no broad or inferred production scope is permitted. Analysis notebooks load physical artifact paths from their manifests rather than reconstructing a common root.
+5. **Global separate technical fixed effects:** Active corrected composition and pseudobulk use limma fixed effects with each original categorical technical covariate represented separately. They never synthesize or consume a combined/artificial batch key, and biological labels remain evaluation-only. Top-level identities carry effective and non-estimable keys, correction state/mode/formula, aliases, design rank, and residual degrees of freedom; the nested validation-summary schema remains v1.
+6. **Cross-Language Data Exchange (`.feather`):** Python methods serialize embeddings and pairwise distance matrices to Apache Arrow `.feather` files, which R consumers read with zero format drift.
+7. **Atomic Writes & MD5 Checksums:** R result bundles, metadata exports, annotation feathers, unions, and merged h5ads are written atomically (temp file + rename) with MD5/SIZE/PATH sidecars before synchronization to persistent NAS storage.
+8. **Immutable run identity and gated progression:** A run binds a commit-keyed source snapshot and source manifest, versioned runtime image/manifest, auxiliary-root identity, exact run ID, and selected-row scope. After launch, the durable workflow arms one unbounded wait, then performs one terminal inspection and required reviewer approval before dependent work or same-root synchronization proceeds.
+
+
 
 ---
 
@@ -95,10 +110,10 @@ All evaluated cohorts and views are configured in [`datasets.json`](../datasets.
 }
 ```
 
-### The `_debug` Dataset
-- Built by `src/2_dataset_specific_preprocessing/1.3.1_prepare_joanito.R` into `${HPC_SCRATCH_DIR}/_debug/data/`.
-- A 5-sample subset (500 cells/sample) covering combinations of biological origin and technical batches.
-- Used for fast end-to-end integration tests of stages 2, 3, and 4. Default execution scripts skip `_*` entries unless `--ds_name _debug` is explicitly specified.
+### Diagnostic `_debug` Dataset
+- `_debug` is a small, non-production Joanito diagnostic fixture generated by dataset-specific preprocessing only when explicitly requested; it is not a production cohort or a default scheduler target.
+- The generated fixture's actual `Sample` IDs are recorded in run-owned provenance and validated through the obs-only H5AD contract. The fixture is accepted only when those IDs are non-empty, unique, and include at least two valid samples; the recorded IDs, rather than a nominal fixture size, define its contents.
+- Default production execution excludes diagnostic entries unless an explicit selection names one.
 
 ---
 
@@ -112,12 +127,17 @@ ${HPC_SCRATCH_DIR}/
 ├── <DS_NAME>/data/               # Staged raw inputs per dataset (1_stage_data.sh)
 ├── <DS_NAME>/output/             # Preprocessed .h5ad, annotation chunks, and merged outputs
 ├── <DS_NAME>/annotation_union/   # legacy fixed-path location; new runs use _ecoda_runs/<RUN_ID>/datasets/<DS_NAME>/union/
-├── benchmark/
+├── benchmark/                    # ordinary benchmark lane (legacy-compatible)
 │   ├── embeddings/               # Python & R method distance matrices (.feather)
 │   ├── results/                  # Evaluated R result bundles (<ds>_<method>.rds)
 │   ├── pseudobulks/              # Shared DESeq2 normalized pseudobulk matrices
 │   ├── gloscope_dists/           # Cached GloScope distance matrices
 │   └── checksums.md5             # MD5 verification sidecar
+├── batch_effect/
+│   ├── uncorrected/              # legacy-compatible batch-effect lane
+│   ├── corrected/                # legacy-compatible corrected lane
+│   └── <variant-qualified>/      # active Stage 5 lane selected by the run contract
+
 ├── chunks_manifest_<pid>.txt     # Per-submission chunk manifests
 ├── _worker_retries/              # Worker transient retry counters
 └── _benchmark_watchdog/          # SLURM watchdog status logs
@@ -125,18 +145,29 @@ ${HPC_SCRATCH_DIR}/
 # Run ownership / manifests (scratch only)
 ${HPC_SCRATCH_DIR}/_ecoda_runs/<RUN_ID>/
 ├── metadata
-├── manifests/                 # immutable selected dataset/view/method rows
-└── status/                    # atomic watchdog/aggregate/terminal records
+├── manifests/                    # selected rows plus source/runtime/aux identities
+└── status/                       # atomic watchdog/aggregate/terminal records
 ${HPC_SCRATCH_DIR}/_ecoda_owners/<stage>/<artifact>/
-└── owner                      # ACTIVE/OK/FAIL ownership state
+└── owner                         # ACTIVE/OK/FAIL ownership state
 
 # NAS Storage (carmona_smb / Shared Collections; login node only)
 ${NAS_SC_DIR}/                    # Standardized raw source datasets
 ${NAS_REF_DIR}/                   # Carmona Lab reference maps (HiTME)
 ${NAS_TARGET_DIR}/                # Synced project results
 ├── <DS_NAME>/output/             # Rsynced preprocessed and annotated .h5ad files
-└── benchmark/                    # Rsynced embeddings, results, and execution times
+├── benchmark/                    # Rsynced ordinary embeddings, results, and times
+└── batch_effect/
+    ├── uncorrected/              # legacy batch-effect lane
+    ├── corrected/                # legacy corrected lane
+    └── <variant-qualified>/      # active Stage 5 lane selected by the run contract
 ```
+**Execution host and transfer policy.** `bamboo` is the canonical default host
+for durable compute, gates, and NAS synchronization. Any backup host or
+alternate transfer route requires explicit approval under [`AGENTS.md`](../AGENTS.md)
+and the [active authoritative plan](../.agents/plans/20260912-final-batch-effect-subset-plan.md);
+no backup host is implicit compute or transfer target.
+
+
 
 ### Centralized Environment Variables (`src/slurm_config.sh`)
 
@@ -161,36 +192,55 @@ Per-dataset R Markdown notebooks performing study-specific initial quality contr
 
 ---
 
-### Stage 2 — Preprocessing & Cell Type Annotation
+### Stage 2 — Dataset-Specific Preprocessing Hooks (separate from Stage 4 annotation)
 
 ```
-+------------------+      +--------------------------------+      +-------------------------------+      +--------------------------+
-| 1_stage_data.sh  | ---> | 2_dataset_specific_preproc     | ---> | 3_scrnaseq_preprocessing      | ---> | 4_cell_type_annotation   |
-| (NAS -> Scratch) |      | (GongSharma, Combined, Joanito)|      | (Standardized Scanpy array)   |      | (scATOMIC + HiTME array) |
-+------------------+      +--------------------------------+      +-------------------------------+      +--------------------------+
++------------------+      +--------------------------------+      +-------------------------------+
+| 1_stage_data.sh  | ---> | 2_dataset_specific_preproc     | ---> | 3_scrnaseq_preprocessing      |
+| (NAS -> Scratch) |      | (conversion and repair hooks)  |      | (standardized view processing)|
++------------------+      +--------------------------------+      +-------------------------------+
+                                                        \
+                                                         \--> Stage 4 annotation only for eligible
+                                                              benchmark-analysis views
 ```
+
 
 #### 1. Data Staging (`src/1_stage_data/`)
 - `1_stage_data.sh`: Login-node utility that queries `datasets.json` and rsyncs required raw input files from `${NAS_SC_DIR}` to `${HPC_SCRATCH_DIR}/<DS_NAME>/data/`. Supports `--ds_name <DS>`.
 
 #### 2. Dataset-Specific Preprocessing (`src/2_dataset_specific_preprocessing/`)
 - `1_submit_hpc.sh`: selected hook gate. Independent hooks are submitted in
-  one wave; only the GongSharma cap -> CombinedPBMC read/write edge uses
-  `afterok`. `stage2_watchdog.sh` owns terminal accounting, OOM-only retries,
-  semantic prerequisite validation, and atomic checksums. Stage 2 remains
-  scratch-only.
+  one wave; declared prerequisite edges use `afterok`. `stage2_watchdog.sh`
+  owns terminal accounting, OOM-only retries, semantic prerequisite
+  validation, and atomic checksums. Stage 2 remains scratch-only and is not
+  the cell-type annotation pipeline.
 - Hook outputs are installed atomically before the next numbered stage reads
-  them. The CombinedPBMC legacy raw basename is accepted only for guarded
-  content/checksum validation and one-time rename to `combined_pbmc.h5ad`.
+  them. Legacy source basenames are accepted only for guarded
+  content/checksum validation and one-time migration to the configured name.
+- Dataset-specific metadata-repair and conversion hooks are selected through
+  explicit run-owned selectors and may use an obs-only reader to validate
+  source contracts without replacing the raw input. Their exact dataset and
+  hook scope belongs in the authoritative run plan.
 
 #### 3. Standardized Preprocessing (`src/3_scrnaseq_preprocessing/`)
 - `1_submit_hpc_array.sh` -> `1.1_run_worker.sh` -> `1.1.1_preprocess.py`
-  consumes one immutable `DATASET<TAB>VIEW` row per selected view. The exact
-  batch mode requires the canonical twelve-row uncorrected selection and
-  rejects legacy/corrected rows before scheduler submission.
-- Standardizes gene names using Ensembl 105, applies view-specific subsets,
-  preserves raw counts in `layers["counts"]`, normalizes/log-transforms,
-  ranks HVGs, and computes PCA/Harmony/Leiden outputs.
+  consumes explicit immutable `DATASET<TAB>VIEW` rows for selected views.
+  Selected datasets and views are resolved from `datasets.json` and
+  run-owned manifests. Stage 3 supports view-specific selections and
+  validates each configured input before processing; exact production scope
+  belongs in the [active authoritative plan](../.agents/plans/20260912-final-batch-effect-subset-plan.md),
+  not in this general overview.
+- Applies view-specific subset masks and sample-consistency audits before
+  sample standardization and low-count filtering; preserves raw counts in
+  `layers["counts"]`, normalizes/log-transforms, ranks HVGs, and computes
+  view-specific PCA/Harmony/Leiden outputs. Uncorrected views remain
+  `Sample`-keyed; corrected views use configured technical batch variables
+  for Harmony, with biological labels excluded from all processing covariates.
+- Where required by a selected view, a direct-input obs-only preflight
+  reports configured metadata predicates, raw values, source identity, and
+  split-sample results before the applicable array is released. It writes only
+  a run-owned report/checksum and never creates an artifact record beside the
+  immutable input.
 - `1.2_preprocess_watchdog.sh` performs OOM-only reduced-row retries and full
   H5AD schema/checksum validation. Existing output candidates are validated by
   the compute-node H5AD preflight array before idempotent skip decisions, so
@@ -201,12 +251,19 @@ Per-dataset R Markdown notebooks performing study-specific initial quality contr
   logical view; historical filename components are migration/documentation
   text only.
 
-#### 4. Parallel Cell Type Annotation (`src/4_cell_type_annotation/`)
+#### 4. Parallel Cell-Type Annotation (`src/4_cell_type_annotation/`)
+Stage 4 is a separate annotation pipeline, not an extension of the Stage 2
+dataset-specific hooks. It is required for eligible benchmark-analysis views
+and intentionally skipped for `batch_effect_uncorrected` and
+`batch_effect_corrected`, which preserve configured source/author cell-type
+columns in `obs`.
 - `1_submit_onboarding_stage.sh` is the only production entrypoint. It stages
   and validates reference maps/scGate once, submits dataset-parallel
   preparation rows, one global annotation chunk array, and a dataset-parallel
   merge array (`3.2_merge_worker.sh`). View updates remain serial inside each
   dataset.
+
+
 - Run-owned union/chunk/checkpoint/feather paths prevent concurrent runs from
   deleting one another. Watchdogs retry OOM rows only and validate union
   membership, Feather key uniqueness, full `(Sample, cell_barcode)` coverage, and
@@ -222,12 +279,12 @@ Per-dataset R Markdown notebooks performing study-specific initial quality contr
   parallel after merge validation. Stage 4 batches each dataset's H5AD and
   sidecar transfer with an rsync files-from manifest, then compares every
   remote artifact checksum; failed sync preserves run artifacts.
-All runnable datasets must produce the complete HiTME (`layer1`, `layer2`,
-`layer3`) and scATOMIC (`layer_1` through `layer_6`, `scATOMIC_pred`,
-confidence, and cell-cycle) schema. A sample with zero output is retained as
-an all-NA checkpoint and reported in per-sample stats; the dataset-level
-`layer1` and `scATOMIC_pred` anchors remain mandatory. The three
-`not_suitable_for_auto_annotation` cohorts are skipped a priori and are not
+Eligible benchmark-analysis datasets must produce the complete HiTME
+(`layer1`, `layer2`, `layer3`) and scATOMIC (`layer_1` through `layer_6`,
+`scATOMIC_pred`, confidence, and cell-cycle) schema. A sample with zero output
+is retained as an all-NA checkpoint and reported in per-sample stats; the
+dataset-level `layer1` and `scATOMIC_pred` anchors remain mandatory. Cohorts marked
+`not_suitable_for_auto_annotation` are skipped a priori and are not
 failed annotation results. scATOMIC `breast_mode` is intentionally disabled:
 all callers use the upstream default `FALSE` for cross-cohort comparability.
 
@@ -235,29 +292,67 @@ all callers use the upstream default `FALSE` for cross-cohort comparability.
 
 ### Stage 5 — Benchmark & Method Analyses (`src/5_run_benchmark_methods/`)
 
-`1_submit_hpc_array.sh` is the canonical coordinated wrapper. In ordinary
-mode it accepts the benchmark matrix. The default batch mode requires
-`--pass uncorrected` and the exact three-column twelve-row matrix selection.
-The immutable batch matrix selection is
-`DATASET<TAB>VIEW<TAB>SCOPE`; in pass mode `VIEW` and `SCOPE` must both equal
-the selected `batch_effect_<pass>` view. `SCOPE` is not a method label; the
-default batch methods are the fixed ordered suite
-`prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot`.
-For fail-closed recovery, an explicit `--target-methods LIST` may be combined
-with `--pass`, `--selection-file`, and an explicit `--partition` to select only
-the named batch methods for the supplied rows. It cannot be combined with the
-exact twelve-row selection or ordinary analyses; the fixed suite remains the
-default.
+`1_submit_hpc_array.sh` is the canonical coordinated wrapper. Ordinary
+benchmark mode remains compatible with its legacy selections. Active analysis
+variants require explicit, variant-matching selection files and reject
+broad/default scope. Each selected row declares its dataset, view, scope, and
+method set; exact active selections, lane roots, dependencies, and expected
+row/method counts are resolved from `datasets.json`, run-owned manifests, and
+the [active authoritative plan](../.agents/plans/20260912-final-batch-effect-subset-plan.md),
+not from this overview.
+Targeted recovery uses the same explicit selection file with
+`--target-methods` to submit only missing or invalid rows; valid rows remain
+outside the recovery selection.
 
+#### Legacy compatibility note
+The historical three-column batch matrix, including its twelve-row dataset
+order, combined/artificial batch key, and lme4/random-intercept correction,
+remains available only to explicitly marked legacy or contingency readers.
+Historical exact-selection modes must not infer or authorize current
+production scope; none of these compatibility behaviors is an active
+selection or correction policy.
+
+#### Variant-qualified roots, paths, and synchronization
+Each active Stage 5 variant establishes `ANALYSIS_VARIANT`,
+`ANALYSIS_PASS`, `PASS`, `ROOT`, `ANALYSIS_ROOT`, and `ANALYSIS_NAS_ROOT`
+before pending selection state or run metadata is constructed. The
+variant-aware run contract selects the scratch and NAS analysis roots and
+artifact namespace; exact current lane names and roots belong in the
+[active authoritative plan](../.agents/plans/20260912-final-batch-effect-subset-plan.md),
+not in this overview.
+Corrected Stage 3 view outputs and Stage 5 analysis lanes are separate
+contracts; a corrected view does not implicitly create an analysis lane.
+Logs, watchdogs, ownership records, manifests, and artifacts consume the same
+variant-qualified root as their lane.
+
+Variant stems use the configured dataset/view/pass/variant naming rule so
+outputs from distinct lanes cannot collide. The pseudobulk cache under
+`pseudobulks/` is distinct from the result bundle under `results/`, and the
+manifest's pseudobulk key points to the result bundle rather than the cache.
+Legacy roots and stems remain unchanged when no analysis variant is set.
+
+Independent Stage 5 datasets and methods sharing an `ANALYSIS_ROOT` are
+submitted in one explicit selection-manifest wave. A single synchronization
+owner protects `sync/${ANALYSIS_ROOT}`; later gates using that root wait for
+the current gate's terminal wait, inspection, and reviewer approval.
+
+
+- Pass roots, logs, watchdog status, manifests, and markers are scoped to
+  the configured legacy or variant-qualified analysis root. Batch markers use
+  the `BATCH_EFFECT_*` namespace; ordinary benchmark markers retain
+  `BENCHMARK_*`.
 - `matrix_watchdog.sh`: compute-node OOM-only retry and terminal task gate for
   one method matrix. Retries bind both `MATRIX_RETRY_MANIFEST` and
   `ANALYSIS_MANIFEST` to the reduced run-owned manifest; batch retries never
   export `BENCHMARK_MANIFEST`.
 - `matrix_gate.sh`: aggregate gate that requires every child watchdog to report
   `STATE=OK`.
+
+
 - RDS validation requires the ordered source sample universe for every method
-  except scITD. scITD may report an ordered subset and its dropped sample IDs;
-  no other method receives this exception.
+  whose contract is full-universe. Methods whose declared contract permits an
+  ordered subset must report dropped sample IDs; validators enforce each
+  method's declared contract.
 - Each Stage 5 run records a run-owned `manifests/source_identity.json` with
   source path, size, MD5, and ordered sample IDs. The identity sidecar is
   verified against current source contents at stage entry and before final
@@ -265,34 +360,48 @@ default.
 - Source Sample IDs and annotation H5AD contracts use h5py-only `obs` reads.
   Full persisted-count H5AD validation is performed by the compute-node
   preflight array, avoiding anndata 0.12.x backed opens on the login node.
-- GloScope, composition, PILOT, QOT, and PILOT-GM-VAE use the h5py-backed
-  counts-free loader and receive only required obs columns plus stored
-  embeddings. MrVI and scPoli require raw counts, but their loaders stream
-  only the stored HVG columns into a minimal AnnData; scPoli densifies only
-  that selected subset.
+- The metadata export reads only `obs` from each selected batch-effect H5AD
+  and atomically writes
+  `${ANALYSIS_ROOT}/metadata/<DS>_sample_metadata.feather` plus its checksum.
+  It validates non-empty unique sample IDs and required configured metadata;
+  it never opens `X`, `raw`, or `layers["counts"]`, and it is a metadata
+  artifact rather than a benchmark method result.
+- Methods that do not need count matrices use the h5py-backed, counts-free
+  loader and receive only required `obs` columns plus stored embeddings.
+- Methods requiring raw counts stream only the stored HVG columns into a
+  minimal AnnData; any densification is limited to that selected subset.
 - Canonical Stage 5 pseudobulk uses only the persisted raw CSR counts in
   `layers["counts"]`; normalized/log-transformed `X`, labels, and Seurat
-  aggregates are never a source of canonical counts. The Sample-only and
-  Sample × cell-type paths below are separate contracts. MOFA consumes
-  precomputed pseudobulks and only uses the bounded raw-count path when a
-  required cache is missing.
+  aggregates are never a source of canonical counts. Sample-only and
+  Sample × cell-type paths remain separate contracts, and dependent analyses
+  consume precomputed pseudobulks or a bounded raw-count path only when their
+  declared cache contract requires it.
 - The canonical path passes raw aggregate matrices directly to the R
   matrix-to-DESeq2 boundary. It does not create a one-sample-per-column
   Seurat object or call `AggregateExpression()` a second time.
-- Batch composition requires `ECODA_authors_HR`,
-  `ECODA_authors_HR_NULL`, and `ECODA_seuratres_2`. Existing
-  `ECODA_HiTME_HR_layer2` and `ECODA_scATOMIC_HR` bundles are recognized
-  legacy extras but are not required or regenerated in batch mode; ordinary
-  benchmark composition retains its annotation-specific outputs.
+- **Active fixed-effect correction.** Corrected composition bundles use model
+  identity `limma_fixed_effects_v1`; corrected pseudobulk uses
+  `pseudobulk_limma_fixed_effects_v1`. Both apply
+  `limma::removeBatchEffect` with each original categorical technical
+  covariate represented separately and an intercept-preservation design. In
+  the corrected pseudobulk pipeline, DESeq2 normalization is intercept-only
+  (`design=~1`, `batch_col=NULL`); limma applies those separate technical
+  covariates after normalization. The configured keys, effective/non-estimable
+  keys, correction state/mode/formula, aliases, design rank, and residual
+  degrees of freedom remain explicit in the artifact identity. No biological
+  label or artificial combined batch key enters the correction.
+- Batch composition artifacts declare explicit logical bundle keys for each
+  configured output, including normal and null results where applicable.
+- Compatibility readers may recognize historical extras; active lanes do not
+  require or regenerate undeclared bundles. Ordinary benchmark composition
+  retains its configured annotation-specific outputs.
 - Batch Feather skip checks use one-row dataset manifests, and fully populated
   per-dataset RDS skip checks are grouped into one R validator invocation.
-- Pass roots, logs, watchdog status, manifests, and markers are scoped to
-  `batch_effect/uncorrected` or `batch_effect/corrected`. Batch markers use the
-  `BATCH_EFFECT_*` namespace; ordinary benchmark markers retain
-  `BENCHMARK_*`.
+
 - The family submitters are compatibility entrypoints that delegate to the
   canonical wrapper; they do not own independent synchronization.
 - `batch_effect_analysis` is never a logical view or loader fallback.
+
 
 #### Canonical pseudobulk dataflow
 
@@ -310,22 +419,25 @@ aggregation contracts:
   `get_pb_deseq2_from_counts()` consumes that matrix directly and publishes
   canonical samples-by-genes output with the same sample universe and
   metadata alignment. Ordinary pseudobulk uses `~1`, `blind=TRUE`, and no
-  batch correction. Corrected batch-effect pseudobulk uses only the configured
-  technical batch, `blind=FALSE`, and batch-only correction; biological
-  labels remain outside the model. In the corrected-final sample-level path,
-  configured technical keys remain in the identity, but one-level keys are
-  marked non-estimable and omitted from the effective model; if all keys are
-  constant, no batch correction is applied. Full-cell validation remains
-  strict for its own contract.
+  batch correction. Corrected batch-effect pseudobulk uses intercept-only
+  DESeq2 normalization (`design=~1`, `batch_col=NULL`), then limma removes
+  the separate original categorical technical covariates post-normalization;
+  the biological label remains outside the model. No composite/artificial
+  batch column is constructed. Effective and non-estimable keys, correction
+  state, formula, aliases, design rank, and residual degrees of freedom are
+  recorded; if no technical key is estimable, the correction state is
+  `NO_CORRECTION`.
+  Full-cell validation remains strict for its own contract.
 - **Shared full-gene fit.** `fit_pseudobulk_deseq2()` performs the full-gene
   DESeq2 size-factor/normalization/VST fit once and returns the normalized/VST
-  matrix plus its variance ordering. `select_pseudobulk_deseq2()` derives
-  `hvg500`, `hvg1000`, `hvg2000`, and `hvg3000` from that fit, so shared work
-  is not repeated per variant. `schvg2000` remains a separate restricted
-  gene-universe fit. The documented `hvg2000_bl` no-op behavior is preserved.
-  `validate_pseudobulk_counts_matrix()` enforces the R-side boundary before
+  matrix plus its variance ordering. Configured feature-size variants derive
+  from that shared fit, so shared work is not repeated per variant. Restricted
+  gene-universe fits remain separate, and documented compatibility no-op
+  behavior is preserved.
+- `validate_pseudobulk_counts_matrix()` enforces the R-side boundary before
   `DESeqDataSetFromMatrix`; `get_pb()` and `get_pb_deseq2()` are not part of
   this canonical path.
+
 - **Sample × cell-type contract.** Group only present `(Sample, cell_type)`
   combinations; never materialize the Cartesian product. Cell types retain
   first-observation order (missing values excluded), and a group is eligible
@@ -415,14 +527,24 @@ adapter.
   summary rank heatmaps.
 ---
 
-### Stage 4 — Batch Effect Analysis (`notebooks/batch_effect_analysis.rmd`)
+### Batch-Effect Evaluation (Notebook; not Stage 4 annotation)
 
-The notebook retains its historical filename, but registry/submitter identifiers
-are the explicit `batch_effect_uncorrected` and `batch_effect_corrected` views.
-The uncorrected twelve-cohort pass is the evidence gate; no corrected processing
-is launched before its scientific review. Batch formulas consume only configured
-high-resolution cell types. Pseudobulk, Harmony, and native MrVI correction
-settings are batch-only and never protect biological labels.
+The notebook retains historical filename compatibility, but current
+batch-effect inputs are selected through explicit pass/variant manifests.
+The manifest records dataset order, lane, artifact kind, physical path, and
+(for RDS bundles) the explicit bundle key; the notebook never infers a common
+root or treats a scheduler matrix as its analysis scope. A mixed-source
+manifest may combine approved legacy read-only artifacts with
+variant-qualified results and independently exported sample metadata, but
+that analysis manifest is not a Stage 3 or Stage 5 scheduler selection.
+
+Manifest-driven analysis keeps legacy and active lanes explicit: approved
+legacy contributions are read-only, while newly produced rows use their
+declared variant paths. Legacy dataset H5ADs are not read for such
+mixed-source analyses. Composition and null outputs use explicit bundle keys
+where applicable; distance Feather rows carry an explicitly empty bundle key.
+
+
 
 ---
 
@@ -435,16 +557,19 @@ Standardized protocol for onboarding new external cohorts:
 4. **Standalone LISI Scoring (`onboarding_metrics.R`):** Calculates cell-level biological and batch LISI on unintegrated PCA space.
 5. **Onboarding Check Notebooks (`dataset_check_<Name>.qmd`):** Diagnostic Quarto notebooks for review before registering cohorts into `datasets.json`.
 
-The batch-effect onboarding scope is the ordered twelve-dataset selection
-maintained in `dataset_specs.py`: nine audit cohorts, Joanito, Stephenson, and
-CombinedPBMC. This registry/audit scope does not schedule Stage 4 annotation
-for batch-effect views. Those views preserve the source/author metadata
-already present in `obs`; calculations use only each dataset's configured
-high-resolution cell-type column from `datasets.json`. Low-resolution
+The onboarding checks are diagnostic and may retain historical registry
+fixtures; they do not override `datasets.json` or authorize production
+compute. Registry compatibility fixtures are not active scheduler selections.
+Any mixed-source analysis order belongs to its explicit analysis manifest,
+with legacy/variant lane and physical artifact paths recorded per row.
+Batch-effect views do not schedule Stage 4 annotation: they preserve
+source/author metadata already present in `obs` and use only each dataset's
+configured high-resolution cell-type column from `datasets.json`. Low-resolution
 annotations, including `layer1`, are not batch-effect calculation inputs.
 The universal dual-method annotation contract applies to benchmark-analysis
-views. scATOMIC `breast_mode` remains at default `FALSE` and must not be passed
-by callers.
+views. scATOMIC `breast_mode` remains at default `FALSE` and must not be
+passed by callers.
+
 
 ---
 
@@ -461,10 +586,14 @@ by callers.
 | `src/utils/datasets_io.R` | `read_datasets_json()`, `get_dataset_view_info()` (R parser) |
 | `src/utils/py/datasets_io.py` | `read_datasets_json()` (Python parser matching R semantics) |
 | `src/utils/py/h5ad_pseudobulk.py` | Checked-int64 Sample-only aggregation plus `prepare_h5ad_ct_group_store()`, `read_h5ad_ct_group_store()`, and `audit_h5ad_ct_group_store()` for bounded run-owned Sample × cell-type CSR stores |
+| `src/utils/py/export_h5ad_sample_metadata.py` | Obs-only H5AD sample metadata export for the variant-qualified Stage 5 metadata lane; never opens count matrices |
+| `src/utils/bash/h5ad_obs_audit_worker.sh` | Read-only H5AD `obs` audit/preflight; writes run-owned reports and checksums, never H5AD artifact records |
+| `src/utils/batch_contract.R` | Active separate-key limma correction identities and historical compatibility markers |
+
 | `src/5_run_benchmark_methods/benchmark_hpc_utils.R` | H5AD source/metadata validation, direct raw aggregate bridge, cache identity, and schema-2 timing integration |
 | `src/5_run_benchmark_methods/benchmark_methods_r.R` | `process_pseudobulk_ct_h5ad_fig()` canonical raw-matrix CT processing; `process_pseudobulk_ct_fig()` retained only as a legacy Seurat boundary |
 | `src/5_run_benchmark_methods/benchmark_pipeline.R` | Stage 5 orchestration; `run_benchmark_analysis()` is deprecated notebook-only compatibility code, not a canonical pseudobulk entry point |
-| `src/utils/py/h5ad_counts_subset.py` | Stored-HVG raw-count loading for MrVI/scPoli without full-gene materialization |
+| `src/utils/py/h5ad_counts_subset.py` | Stored-HVG raw-count loading for methods requiring bounded raw-count access without full-gene materialization |
 | `src/utils/py/gene_utils.py` | `standardize_gene_symbols()` using Ensembl 105 reference dictionary |
 | `src/utils/bash/worker_retry.sh` | Sourced by SLURM workers for automated self-requeue on transient I/O faults |
 | `src/utils/bash/sync_status_email.sh` | Best-effort email notification utility with per-task duration reports |
@@ -475,5 +604,8 @@ by callers.
 ## 6. Resilience & Fault-Tolerance Mechanisms
 1. **Transient Fault Recovery:** Array workers source `worker_retry.sh`. On non-zero exit codes caused by transient BeeGFS cache misses, workers grep the task `.err` log for known signatures and self-requeue via `scontrol requeue` (capped at `WORKER_MAX_RETRIES=3`).
 2. **Deterministic Locking:** Environment refreshes acquire the atomic directory lock `logs/env_refresh.lock`; interrupted locks fail closed and require independent verification before removal. This prevents concurrent Pixi/R writes to the shared library.
-3. **Fail-Closed Verification:** All submitter sync tails verify terminal scheduler/accounting state, artifact schemas, and MD5/SIZE/PATH sidecars before initiating NAS synchronization. If any task or transfer fails, synchronization is aborted and an alert email is dispatched.
-4. **Run-ID Recovery:** `--sync-only RUN_ID` validates the immutable run manifests, scheduler records, watchdog/aggregate state, fresh artifacts, and owners before completing an interrupted login tail; it never resubmits. Numeric/CSV scheduler-ID recovery remains a separate compatibility path and requires the caller's original dataset/view selection.
+3. **Immutable identity binding:** Durable runs verify the commit-keyed source snapshot and source manifest, runtime image/manifest, auxiliary-root identity, run-owned selection, exact wrapper, and artifact ownership before compute and again before synchronization.
+4. **Fail-Closed Verification:** All submitter sync tails verify terminal scheduler/accounting state, artifact schemas, and MD5/SIZE/PATH sidecars before initiating NAS synchronization. If any task or transfer fails, synchronization is aborted and an alert email is dispatched.
+5. **One-wait terminal gate:** After each launch, the workflow arms exactly one unbounded durable wait. It then performs one terminal inspection with every emitted scheduler/watchdog ID and obtains the required reviewer approval before releasing dependent work or a same-root gate; repeated polling and ambiguous reruns are prohibited.
+6. **Same-root synchronization:** A single synchronization owner protects each `sync/${ANALYSIS_ROOT}` namespace. Independent rows sharing a root are grouped in one explicit wave, and later same-root gates are serialized after terminal review.
+7. **Run-ID Recovery:** `--sync-only RUN_ID` validates the immutable run manifests, scheduler records, watchdog/aggregate state, fresh artifacts, and owners before completing an interrupted login tail; it never resubmits. Numeric/CSV scheduler-ID recovery remains a separate compatibility path and requires the caller's original dataset/view selection. Host selection and temporary-backup exceptions follow `AGENTS.md` and the active authoritative plan.

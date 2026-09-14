@@ -4,12 +4,16 @@ raw_args <- commandArgs(trailingOnly = FALSE)
 script_arg <- raw_args[grepl("^--file=", raw_args)][1]
 script_path <- sub("^--file=", "", script_arg)
 root <- normalizePath(file.path(dirname(script_path), ".."))
+if (!nzchar(Sys.getenv("PROJECT_ROOT", unset = ""))) {
+  Sys.setenv(PROJECT_ROOT = root)
+}
 suppressPackageStartupMessages({
   library(Seurat)
   library(dplyr)
 })
 source(file.path(root, "src/utils/seurat_utils.R"))
 source(file.path(root, "src/utils/pseudobulk.R"))
+source(file.path(root, "src/utils/scoring_metrics.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_hpc_utils.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_methods_r.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_pipeline.R"))
@@ -228,8 +232,9 @@ exec_time <- original_exec_time
 peak_rss_gb <- original_peak_rss_gb
 log_exec_row <- original_log_exec_row
 
-# Corrected CLR removes the fitted technical effect and preserves the CLR
-# invariant exactly after row recentering.
+# Corrected CLR uses limma's documented fixed-effect boundary: build a
+# separate technical-key model matrix, preserve only the intercept in
+# removeBatchEffect(), and restore the CLR row-sum invariant.
 set.seed(11)
 n <- 12
 feat <- matrix(
@@ -241,13 +246,69 @@ batch <- rep(c("A", "B"), each = n / 2)
 feat[batch == "B", 1:2] <- feat[batch == "B", 1:2] + 4
 feat <- feat - rowMeans(feat)
 meta <- data.frame(Sample = rownames(feat), tech = factor(batch))
-corrected <- correct_clr_batch_lmm(feat, meta, "tech")
-stopifnot(max(abs(rowSums(corrected))) < 1e-8)
-stopifnot(identical(dimnames(corrected), dimnames(feat)))
+one_key_validation <- ecoda_batch_validate_metadata(
+  meta,
+  batch_keys = "tech",
+  sample_col = "Sample"
+)
+one_key_design <- ecoda_batch_fixed_effect_design(
+  metadata = meta,
+  batch_keys = "tech",
+  validation = one_key_validation,
+  sample_col = "Sample"
+)
+corrected <- correct_clr_batch_limma(
+  feat,
+  meta,
+  batch_keys = "tech",
+  sample_col = "Sample",
+  metadata_validation = one_key_validation
+)
+limma_reference <- limma::removeBatchEffect(
+  x = t(feat),
+  covariates = one_key_design$design[
+    , one_key_design$technical_columns,
+    drop = FALSE
+  ],
+  design = matrix(
+    1,
+    nrow = nrow(one_key_design$design),
+    ncol = 1L,
+    dimnames = list(rownames(one_key_design$design), "(Intercept)")
+  )
+)
+limma_reference <- t(limma_reference)
+limma_reference <- sweep(
+  limma_reference,
+  1L,
+  rowMeans(limma_reference),
+  FUN = "-"
+)
+limma_reference[, ncol(limma_reference)] <- -rowSums(
+  limma_reference[, -ncol(limma_reference), drop = FALSE]
+)
+dimnames(limma_reference) <- dimnames(feat)
+stopifnot(
+  identical(one_key_validation$effective_batch_keys, "tech"),
+  identical(one_key_validation$non_estimable_batch_keys, character()),
+  identical(one_key_design$rank, 2L),
+  identical(one_key_design$columns, 2L),
+  one_key_design$residual_df > 0L,
+  isTRUE(all.equal(corrected, limma_reference, tolerance = 1e-8)),
+  all(is.finite(corrected)),
+  max(abs(rowSums(corrected))) < 1e-8,
+  identical(dimnames(corrected), dimnames(feat)),
+  !"__ecoda_batch_combined_v1" %in% colnames(meta)
+)
 
 bad_order <- meta[rev(seq_len(nrow(meta))), , drop = FALSE]
 order_error <- tryCatch(
-  correct_clr_batch_lmm(feat, bad_order, "tech"),
+  correct_clr_batch_limma(
+    feat,
+    bad_order,
+    batch_keys = "tech",
+    sample_col = "Sample"
+  ),
   error = identity
 )
 stopifnot(inherits(order_error, "error"))
@@ -255,13 +316,19 @@ stopifnot(inherits(order_error, "error"))
 missing_batch <- meta
 missing_batch$tech[1] <- NA
 missing_error <- tryCatch(
-  correct_clr_batch_lmm(feat, missing_batch, "tech"),
+  correct_clr_batch_limma(
+    feat,
+    missing_batch,
+    batch_keys = "tech",
+    sample_col = "Sample"
+  ),
   error = identity
 )
 stopifnot(inherits(missing_error, "error"))
 
 # The canonical pseudobulk driver uses one raw H5AD aggregate and forwards the
-# two batch modes to the direct DESeq2 fit without exposing biological labels.
+# limma-corrected path through an intercept-only DESeq2 fit without exposing
+# biological labels or synthesizing a combined batch column.
 captured <- new.env(parent = emptyenv())
 fake_counts <- matrix(
   c(1, 2, 3, 4, 5, 6, 7, 8),
@@ -409,7 +476,7 @@ fixture_h5ad_status <- system2(
 if (!identical(fixture_h5ad_status, 0L) || !file.exists(fixture_h5ad)) {
   stop("could not create the synthetic pseudobulk H5AD fixture")
 }
-invisible(prepare_pseudobulks_hpc(
+corrected_pb <- prepare_pseudobulks_hpc(
   h5ad_path = fixture_h5ad,
   hvg_rank_genes = c("g1", "g2"),
   variants = "hvg2000",
@@ -421,16 +488,41 @@ invisible(prepare_pseudobulks_hpc(
   analysis_pass = "corrected",
   run_id = "fixture-run",
   batch_context = fixture_batch_context
-))
+)
 stopifnot(
   identical(captured$fit$counts, fake_counts),
   identical(captured$fit$metadata, fake_metadata),
   !"label" %in% colnames(captured$fit$metadata),
-  identical(captured$fit$batch_col, "tech"),
+  identical(captured$fit$batch_col, NULL),
   identical(captured$fit$blind, FALSE),
-  identical(captured$fit$correct_batch, TRUE),
+  identical(captured$fit$correct_batch, FALSE),
   identical(captured$aggregate$metadata_columns, c("Sample", "tech")),
-  !"label" %in% captured$aggregate$metadata_columns
+  !"label" %in% captured$aggregate$metadata_columns,
+  !"__ecoda_batch_combined_v1" %in% colnames(captured$fit$metadata),
+  is.matrix(corrected_pb$hvg2000$pb),
+  all(is.finite(corrected_pb$hvg2000$pb)),
+  identical(
+    dimnames(corrected_pb$hvg2000$pb),
+    list(paste0("s", 1:4), c("g1", "g2"))
+  ),
+  identical(
+    corrected_pb$hvg2000$batch_contract$model_id,
+    "pseudobulk_limma_fixed_effects_v1"
+  ),
+  identical(
+    corrected_pb$hvg2000$batch_contract$correction_mode,
+    "limma_fixed_effects_pseudobulk"
+  ),
+  grepl(
+    "DESeq2 design=~ 1; model.matrix(~ 1 + batch_key_1); limma::removeBatchEffect",
+    corrected_pb$hvg2000$batch_contract$correction_formula,
+    fixed = TRUE
+  ),
+  !grepl(
+    "__ecoda_batch_combined_v1|lme4|lmer|\\(1 \\|",
+    corrected_pb$hvg2000$batch_contract$correction_formula,
+    perl = TRUE
+  )
 )
 invisible(prepare_pseudobulks_hpc(
   h5ad_path = fixture_h5ad,
@@ -451,23 +543,21 @@ stopifnot(
   !"label" %in% captured$aggregate$metadata_columns
 )
 
-no_correction_metadata <- fake_metadata
-no_correction_metadata$tech <- factor(rep("A", nrow(no_correction_metadata)))
-no_correction_validation <- ecoda_hpc_sample_metadata_validation(
-  no_correction_metadata,
+no_correction_cell_metadata <- fixture_cell_metadata
+no_correction_cell_metadata$tech <- factor(
+  rep("A", nrow(no_correction_cell_metadata))
+)
+no_correction_validation <- ecoda_batch_validate_metadata(
+  no_correction_cell_metadata,
   batch_keys = "tech",
   sample_col = "Sample"
 )
-no_correction_context <- list(
-  ordered_keys = "tech",
-  scalar_batch_col = "tech",
-  sample_ids = no_correction_validation$sample_ids,
-  sample_metadata = no_correction_validation$sample_metadata,
-  canonical_sample_metadata = no_correction_validation$canonical_sample_metadata,
-  composite_values = no_correction_validation$composite_values,
-  validation = no_correction_validation
+no_correction_context <- ecoda_hpc_batch_context(
+  metadata = no_correction_cell_metadata,
+  batch_keys = "tech",
+  sample_col = "Sample"
 )
-invisible(prepare_pseudobulks_hpc(
+no_correction_pb <- prepare_pseudobulks_hpc(
   h5ad_path = fixture_h5ad,
   hvg_rank_genes = c("g1", "g2"),
   variants = "hvg2000",
@@ -483,13 +573,26 @@ invisible(prepare_pseudobulks_hpc(
     batch_keys = "tech",
     sample_col = "Sample",
     method_id = "Pseudobulk",
-    model_id = "pseudobulk_composite_v1"
+    model_id = "pseudobulk_limma_fixed_effects_v1"
   )
-))
+)
 stopifnot(
+  identical(no_correction_validation$correction_state, "NO_CORRECTION"),
   identical(captured$fit$batch_col, NULL),
   identical(captured$fit$blind, TRUE),
-  identical(captured$fit$correct_batch, FALSE)
+  identical(captured$fit$correct_batch, FALSE),
+  identical(
+    no_correction_pb$hvg2000$pb,
+    t(fake_counts)
+  ),
+  identical(
+    no_correction_pb$hvg2000$batch_contract$correction_state,
+    "NO_CORRECTION"
+  ),
+  identical(
+    no_correction_pb$hvg2000$batch_contract$correction_formula,
+    "NO_CORRECTION: no estimable technical batch key"
+  )
 )
 assign(
   "load_h5ad_sample_aggregate",
@@ -511,24 +614,27 @@ assign("peak_rss_gb", old_peak_rss, envir = prepare_pseudobulk_env)
 unlink(fixture_h5ad)
 
 single_batch_meta <- transform(meta, tech = factor("A"))
-single_batch_validation <- ecoda_hpc_sample_metadata_validation(
+single_batch_validation <- ecoda_batch_validate_metadata(
   single_batch_meta,
   batch_keys = "tech",
   sample_col = "Sample"
 )
-single_batch_result <- correct_clr_batch_lmm(
+single_batch_result <- correct_clr_batch_limma(
   feat,
   single_batch_meta,
-  "tech",
+  batch_keys = "tech",
+  sample_col = "Sample",
   metadata_validation = single_batch_validation
 )
 stopifnot(
   identical(single_batch_validation$correction_state, "NO_CORRECTION"),
+  identical(single_batch_validation$effective_batch_keys, character()),
   identical(single_batch_result, feat)
 )
 
-# A constant component of a multi-key technical design is retained in the
-# contract while the estimable varying component drives CLR correction.
+# A constant component of a multi-key technical design remains in the
+# contract and in the metadata, while the estimable varying component drives
+# the separate limma covariate correction.
 multikey_meta <- data.frame(
   Sample = rownames(feat),
   assay = factor(rep("10x 3' v3", n)),
@@ -544,14 +650,20 @@ stopifnot(
   identical(multikey_validation$key_level_counts, list(assay = 1L, sex = 2L)),
   identical(multikey_validation$effective_batch_keys, "sex"),
   identical(multikey_validation$non_estimable_batch_keys, "assay"),
+  identical(multikey_validation$fixed_effect_aliases, c(sex = "batch_key_2")),
   identical(multikey_validation$correction_state, "BATCH_CORRECTION"),
-  length(multikey_validation$composite_levels) == 2L
+  identical(multikey_validation$design_rank, 2L),
+  identical(multikey_validation$design_columns, 2L),
+  multikey_validation$design_residual_df > 0L,
+  length(multikey_validation$composite_levels) == 2L,
+  all(c("assay", "sex") %in% colnames(multikey_validation$sample_metadata)),
+  !"__ecoda_batch_combined_v1" %in% colnames(multikey_validation$sample_metadata)
 )
 multikey_identity <- ecoda_hpc_batch_contract_identity(
   batch_keys = list("assay", "sex"),
   sample_col = "Sample",
   method_id = "ECODA_authors_HR",
-  model_id = "ecoda_additive_random_intercepts_v1"
+  model_id = "limma_fixed_effects_v1"
 )
 multikey_contract <- ecoda_hpc_augment_batch_contract(
   identity = multikey_identity,
@@ -570,14 +682,29 @@ stopifnot(
   identical(multikey_contract$effective_batch_keys, "sex"),
   identical(multikey_contract$non_estimable_batch_keys, "assay"),
   identical(multikey_contract$correction_state, "BATCH_CORRECTION"),
-  grepl("batch_key_2", multikey_contract$correction_formula, fixed = TRUE)
+  identical(multikey_contract$correction_mode, "limma_fixed_effects"),
+  identical(multikey_contract$fixed_effect_aliases, c(sex = "batch_key_2")),
+  identical(multikey_contract$design_rank, 2L),
+  identical(multikey_contract$design_columns, 2L),
+  multikey_contract$design_residual_df > 0L,
+  grepl(
+    "model.matrix(~ 1 + batch_key_2); limma::removeBatchEffect",
+    multikey_contract$correction_formula,
+    fixed = TRUE
+  ),
+  !grepl(
+    "__ecoda_batch_combined_v1|lme4|lmer|\\(1 \\|",
+    multikey_contract$correction_formula,
+    perl = TRUE
+  )
 )
 ecoda_hpc_validate_batch_contract(
-  multikey_identity,
   multikey_contract,
-  label = "legacy corrected batch contract"
+  multikey_contract,
+  label = "strict limma corrected batch contract",
+  require_effective_metadata = TRUE
 )
-strict_legacy_error <- tryCatch(
+strict_source_error <- tryCatch(
   ecoda_hpc_validate_batch_contract(
     multikey_identity,
     multikey_contract,
@@ -586,41 +713,497 @@ strict_legacy_error <- tryCatch(
   ),
   error = identity
 )
-stopifnot(inherits(strict_legacy_error, "error"))
-multikey_corrected <- correct_clr_batch_lmm(
+stopifnot(inherits(strict_source_error, "error"))
+multikey_corrected <- correct_clr_batch_limma(
   feat,
   multikey_meta,
-  batch_col = list("assay", "sex"),
+  batch_keys = list("assay", "sex"),
+  sample_col = "Sample",
   metadata_validation = multikey_validation
 )
-stopifnot(max(abs(rowSums(multikey_corrected))) < 1e-8)
+stopifnot(
+  all(is.finite(multikey_corrected)),
+  identical(dimnames(multikey_corrected), dimnames(feat)),
+  max(abs(rowSums(multikey_corrected))) < 1e-8
+)
 
-# If every configured technical key is constant, the corrected-final contract
-# remains valid but the CLR matrix and correction formula are unchanged.
+# A two-level assay/sex design keeps both original categorical columns as
+# separate estimable limma covariates.
+assay_sex_meta <- data.frame(
+  Sample = rownames(feat),
+  assay = factor(rep(c("10x 3' v3", "10x multiome"), each = 6)),
+  sex = factor(rep(c("F", "M"), times = 6)),
+  stringsAsFactors = FALSE
+)
+assay_sex_validation <- ecoda_batch_validate_metadata(
+  assay_sex_meta,
+  batch_keys = list("assay", "sex"),
+  sample_col = "Sample"
+)
+assay_sex_design <- ecoda_batch_fixed_effect_design(
+  metadata = assay_sex_meta,
+  batch_keys = list("assay", "sex"),
+  validation = assay_sex_validation,
+  sample_col = "Sample"
+)
+assay_sex_corrected <- correct_clr_batch_limma(
+  feat,
+  assay_sex_meta,
+  batch_keys = list("assay", "sex"),
+  sample_col = "Sample",
+  metadata_validation = assay_sex_validation
+)
+assay_sex_contract <- ecoda_hpc_augment_batch_contract(
+  identity = ecoda_hpc_batch_contract_identity(
+    batch_keys = list("assay", "sex"),
+    sample_col = "Sample",
+    method_id = "ECODA_authors_HR",
+    model_id = "limma_fixed_effects_v1"
+  ),
+  validation = assay_sex_validation,
+  method_id = "ECODA_authors_HR",
+  batch_keys = list("assay", "sex")
+)
+stopifnot(
+  identical(assay_sex_validation$effective_batch_keys, c("assay", "sex")),
+  identical(assay_sex_validation$non_estimable_batch_keys, character()),
+  identical(assay_sex_validation$fixed_effect_aliases, c(
+    assay = "batch_key_1",
+    sex = "batch_key_2"
+  )),
+  identical(assay_sex_design$rank, 3L),
+  identical(assay_sex_design$columns, 3L),
+  assay_sex_design$residual_df > 0L,
+  identical(assay_sex_contract$correction_mode, "limma_fixed_effects"),
+  identical(assay_sex_contract$design_rank, 3L),
+  identical(assay_sex_contract$design_columns, 3L),
+  assay_sex_contract$design_residual_df > 0L,
+  all(c("assay", "sex") %in% names(assay_sex_contract$validation_summary$per_key_levels)),
+  all(is.finite(assay_sex_corrected)),
+  identical(dimnames(assay_sex_corrected), dimnames(feat)),
+  max(abs(rowSums(assay_sex_corrected))) < 1e-8,
+  grepl(
+    "model.matrix(~ 1 + batch_key_1 + batch_key_2); limma::removeBatchEffect(covariates=technical_covariates, design=intercept)",
+    assay_sex_contract$correction_formula,
+    fixed = TRUE
+  ),
+  !grepl(
+    "__ecoda_batch_combined_v1|lme4|lmer|\\(1 \\|",
+    assay_sex_contract$correction_formula,
+    perl = TRUE
+  )
+)
+
+assay_sex_pb_matrix <- matrix(
+  rnorm(3L * n),
+  nrow = 3L,
+  dimnames = list(paste0("pb-g", 1:3), rownames(feat))
+)
+assay_sex_pb <- ecoda_hpc_apply_limma_batch_correction(
+  fit = list(norm_matrix = assay_sex_pb_matrix),
+  metadata = assay_sex_meta,
+  batch_keys = list("assay", "sex"),
+  sample_col = "Sample"
+)
+stopifnot(
+  isTRUE(assay_sex_pb$correct_batch),
+  is.null(assay_sex_pb$batch_col),
+  all(is.finite(assay_sex_pb$norm_matrix)),
+  identical(dimnames(assay_sex_pb$norm_matrix), dimnames(assay_sex_pb_matrix)),
+  identical(assay_sex_pb$batch_correction$correction_mode, "limma_fixed_effects_pseudobulk"),
+  identical(
+    assay_sex_pb$batch_correction$configured_batch_keys,
+    c("assay", "sex")
+  ),
+  identical(
+    assay_sex_pb$batch_correction$effective_batch_keys,
+    c("assay", "sex")
+  ),
+  assay_sex_pb$batch_correction$design_rank == 3L,
+  assay_sex_pb$batch_correction$design_columns == 3L,
+  assay_sex_pb$batch_correction$design_residual_df > 0L,
+  grepl(
+    "DESeq2 design=~ 1; model.matrix(~ 1 + batch_key_1 + batch_key_2); limma::removeBatchEffect(covariates=technical_covariates, design=intercept)",
+    assay_sex_pb$batch_correction$correction_formula,
+    fixed = TRUE
+  ),
+  !grepl(
+    "__ecoda_batch_combined_v1|lme4|lmer|\\(1 \\|",
+    assay_sex_pb$batch_correction$correction_formula,
+    perl = TRUE
+  )
+)
+
+# A Breast-like three-key design uses the real configured technical names.
+# Every key remains an original metadata column; only fixed internal aliases
+# enter the additive model.
+breast_samples <- paste0("breast-s", seq_len(12))
+breast_sample_meta <- data.frame(
+  Sample = breast_samples,
+  disease = factor(rep(c("tumor", "normal"), each = 6)),
+  assay = factor(rep(c("10x 3' v3", "10x multiome"), each = 6)),
+  sequencing_platform = factor(
+    rep(rep(c("NovaSeq", "Illumina"), each = 3), 2)
+  ),
+  suspension_dissociation_time = factor(
+    rep(c("fresh", "frozen", "ambient"), 4)
+  ),
+  stringsAsFactors = FALSE
+)
+breast_keys <- c(
+  "assay",
+  "sequencing_platform",
+  "suspension_dissociation_time"
+)
+breast_cell_meta <- breast_sample_meta[
+  rep(seq_len(nrow(breast_sample_meta)), each = 2L),
+  ,
+  drop = FALSE
+]
+rownames(breast_cell_meta) <- paste0("breast-cell-", seq_len(nrow(breast_cell_meta)))
+breast_validation <- ecoda_batch_validate_metadata(
+  breast_cell_meta,
+  batch_keys = as.list(breast_keys),
+  sample_col = "Sample",
+  biological_label = "disease"
+)
+breast_context <- ecoda_hpc_batch_context(
+  metadata = breast_cell_meta,
+  batch_keys = as.list(breast_keys),
+  sample_col = "Sample",
+  biological_label = "disease"
+)
+breast_design <- ecoda_batch_fixed_effect_design(
+  metadata = breast_context$sample_metadata,
+  batch_keys = as.list(breast_keys),
+  validation = breast_context$validation,
+  sample_col = "Sample"
+)
+breast_feat <- matrix(
+  rnorm(length(breast_samples) * 4L),
+  nrow = length(breast_samples),
+  dimnames = list(breast_samples, paste0("breast-ct", 1:4))
+)
+breast_feat <- breast_feat - rowMeans(breast_feat)
+breast_corrected <- correct_clr_batch_limma(
+  breast_feat,
+  breast_sample_meta,
+  batch_keys = as.list(breast_keys),
+  sample_col = "Sample",
+  metadata_validation = breast_validation
+)
+breast_contract <- ecoda_hpc_augment_batch_contract(
+  identity = ecoda_hpc_batch_contract_identity(
+    batch_keys = as.list(breast_keys),
+    sample_col = "Sample",
+    method_id = "ECODA_authors_HR",
+    model_id = "limma_fixed_effects_v1"
+  ),
+  validation = breast_validation,
+  method_id = "ECODA_authors_HR",
+  batch_keys = as.list(breast_keys)
+)
+breast_applied_metadata <- ecoda_hpc_apply_batch_context(
+  breast_sample_meta[, c("Sample", "disease"), drop = FALSE],
+  breast_context,
+  sample_col = "Sample"
+)
+stopifnot(
+  identical(breast_validation$effective_batch_keys, breast_keys),
+  identical(breast_validation$non_estimable_batch_keys, character()),
+  identical(breast_validation$fixed_effect_aliases, c(
+    assay = "batch_key_1",
+    sequencing_platform = "batch_key_2",
+    suspension_dissociation_time = "batch_key_3"
+  )),
+  identical(breast_design$rank, 5L),
+  identical(breast_design$columns, 5L),
+  identical(breast_design$residual_df, 7L),
+  identical(
+    colnames(breast_applied_metadata),
+    c("Sample", "disease", breast_keys)
+  ),
+  identical(
+    as.character(breast_applied_metadata$assay),
+    as.character(breast_sample_meta$assay)
+  ),
+  identical(
+    as.character(breast_applied_metadata$sequencing_platform),
+    as.character(breast_sample_meta$sequencing_platform)
+  ),
+  identical(
+    as.character(breast_applied_metadata$suspension_dissociation_time),
+    as.character(breast_sample_meta$suspension_dissociation_time)
+  ),
+  !("__ecoda_batch_combined_v1" %in% colnames(breast_applied_metadata)),
+  all(is.finite(breast_corrected)),
+  identical(dimnames(breast_corrected), dimnames(breast_feat)),
+  max(abs(rowSums(breast_corrected))) < 1e-8,
+  identical(breast_contract$model_id, "limma_fixed_effects_v1"),
+  identical(breast_contract$correction_mode, "limma_fixed_effects"),
+  identical(breast_contract$design_rank, 5L),
+  identical(breast_contract$design_columns, 5L),
+  identical(breast_contract$design_residual_df, 7L),
+  grepl(
+    "model.matrix(~ 1 + batch_key_1 + batch_key_2 + batch_key_3); limma::removeBatchEffect(covariates=technical_covariates, design=intercept); effective_batch_keys=[assay,sequencing_platform,suspension_dissociation_time]",
+    breast_contract$correction_formula,
+    fixed = TRUE
+  ),
+  !grepl(
+    "__ecoda_batch_combined_v1|lme4|lmer|\\(1 \\|",
+    breast_contract$correction_formula,
+    perl = TRUE
+  )
+)
+
+breast_pb_matrix <- matrix(
+  rnorm(3L * length(breast_samples)),
+  nrow = 3L,
+  dimnames = list(paste0("breast-g", 1:3), breast_samples)
+)
+breast_pb <- ecoda_hpc_apply_limma_batch_correction(
+  fit = list(norm_matrix = breast_pb_matrix),
+  metadata = breast_sample_meta,
+  batch_keys = as.list(breast_keys),
+  sample_col = "Sample"
+)
+stopifnot(
+  isTRUE(breast_pb$correct_batch),
+  is.null(breast_pb$batch_col),
+  all(is.finite(breast_pb$norm_matrix)),
+  identical(dimnames(breast_pb$norm_matrix), dimnames(breast_pb_matrix)),
+  identical(
+    breast_pb$batch_correction$configured_batch_keys,
+    breast_keys
+  ),
+  identical(
+    breast_pb$batch_correction$effective_batch_keys,
+    breast_keys
+  ),
+  identical(
+    breast_pb$batch_correction$correction_mode,
+    "limma_fixed_effects_pseudobulk"
+  ),
+  identical(breast_pb$batch_correction$design_rank, 5L),
+  identical(breast_pb$batch_correction$design_columns, 5L),
+  identical(breast_pb$batch_correction$design_residual_df, 7L),
+  grepl(
+    "DESeq2 design=~ 1; model.matrix(~ 1 + batch_key_1 + batch_key_2 + batch_key_3); limma::removeBatchEffect(covariates=technical_covariates, design=intercept); effective_batch_keys=[assay,sequencing_platform,suspension_dissociation_time]",
+    breast_pb$batch_correction$correction_formula,
+    fixed = TRUE
+  ),
+  !grepl(
+    "__ecoda_batch_combined_v1|lme4|lmer|\\(1 \\|",
+    breast_pb$batch_correction$correction_formula,
+    perl = TRUE
+  )
+)
+
+# Exercise the composition driver itself for a one-key and a three-key
+# corrected run. The fixture process emits deterministic CLR features, so the
+# observable contract is the corrected matrix, identifiers, and bundle policy.
+run_corrected_composition_fixture <- function(
+  sample_metadata,
+  cell_metadata,
+  batch_keys,
+  validation,
+  result_stem
+) {
+  old_process <- process_coda_fig
+  old_save <- save_rds_atomic
+  old_exec <- exec_time
+  old_peak <- peak_rss_gb
+  old_log <- log_exec_row
+  on.exit({
+    process_coda_fig <<- old_process
+    save_rds_atomic <<- old_save
+    exec_time <<- old_exec
+    peak_rss_gb <<- old_peak
+    log_exec_row <<- old_log
+  }, add = TRUE)
+
+  sample_ids <- as.character(sample_metadata[["Sample"]])
+  features <- matrix(
+    rnorm(length(sample_ids) * 3L),
+    nrow = length(sample_ids),
+    dimnames = list(sample_ids, paste0("composition-ct", 1:3))
+  )
+  features <- features - rowMeans(features)
+  process_coda_fig <<- local({
+    template <- features
+    function(seurat, labels, ...) {
+      ids <- names(labels)
+      feature <- template[ids, , drop = FALSE]
+      list(
+        scores = list(sil_score = 0.5),
+        feat_mat = feature,
+        dist_mat = dist(feature),
+        labels = labels
+      )
+    }
+  })
+  save_rds_atomic <<- function(...) invisible(NULL)
+  exec_time <<- function(expr) {
+    force(expr)
+    0
+  }
+  peak_rss_gb <<- function() 0
+  log_exec_row <<- function(...) invisible(NULL)
+
+  if (!"label" %in% colnames(sample_metadata)) {
+    sample_metadata[["label"]] <- factor(
+      rep(c("A", "B"), length.out = nrow(sample_metadata))
+    )
+  }
+  labels <- structure(
+    factor(rep(c("A", "B"), length.out = length(sample_ids))),
+    names = sample_ids
+  )
+  cell_metadata[["author_cell_type"]] <- rep(
+    c("T", "B"),
+    length.out = nrow(cell_metadata)
+  )
+  cell_metadata[["RNA_snn_res.2"]] <- rep(
+    c("0", "1"),
+    length.out = nrow(cell_metadata)
+  )
+  identity <- ecoda_hpc_batch_contract_identity(
+    batch_keys = as.list(unname(batch_keys)),
+    sample_col = "Sample",
+    method_id = "ECODA_authors_HR",
+    model_id = "limma_fixed_effects_v1"
+  )
+  contract <- ecoda_hpc_augment_batch_contract(
+    identity = identity,
+    validation = validation,
+    method_id = "ECODA_authors_HR",
+    batch_keys = as.list(unname(batch_keys))
+  )
+  run_composition_methods_hpc(
+    labels = labels,
+    metadata = sample_metadata,
+    pca_emb = NULL,
+    pb_hvg2000 = NULL,
+    obs = cell_metadata,
+    label_col = "label",
+    ct_col_high_res = "author_cell_type",
+    sample_col = "Sample",
+    results_dir = tempfile("composition-limma-"),
+    ds = "Synthetic",
+    batch_mode = TRUE,
+    result_stem = result_stem,
+    corrected = TRUE,
+    batch_keys = as.list(unname(batch_keys)),
+    metadata_validation = validation,
+    batch_contract = contract
+  )
+}
+
+one_key_composition <- run_corrected_composition_fixture(
+  sample_metadata = meta,
+  cell_metadata = meta[rep(seq_len(nrow(meta)), each = 2L), , drop = FALSE],
+  batch_keys = "tech",
+  validation = one_key_validation,
+  result_stem = "Synthetic_batch_effect_uncorrected_one_key"
+)
+stopifnot(
+  identical(
+    names(one_key_composition),
+    c("ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2", "batch_contract")
+  ),
+  identical(
+    one_key_composition$batch_contract$model_id,
+    "limma_fixed_effects_v1"
+  ),
+  identical(
+    one_key_composition$batch_contract$effective_batch_keys,
+    "tech"
+  ),
+  all(vapply(
+    one_key_composition[c(
+      "ECODA_authors_HR",
+      "ECODA_authors_HR_NULL",
+      "ECODA_seuratres_2"
+    )],
+    function(result) {
+      all(is.finite(result$feat_mat)) &&
+        identical(rownames(result$feat_mat), rownames(feat)) &&
+        max(abs(rowSums(result$feat_mat))) < 1e-8 &&
+        !grepl(
+          "__ecoda_batch_combined_v1|lme4|lmer|\\(1 \\|",
+          result$batch_contract$correction_formula,
+          perl = TRUE
+        )
+    },
+    logical(1)
+  ))
+)
+
+breast_composition <- run_corrected_composition_fixture(
+  sample_metadata = breast_sample_meta,
+  cell_metadata = breast_cell_meta,
+  batch_keys = breast_keys,
+  validation = breast_validation,
+  result_stem = "Synthetic_breast_batch_effect_uncorrected"
+)
+stopifnot(
+  identical(
+    names(breast_composition),
+    c("ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2", "batch_contract")
+  ),
+  identical(
+    breast_composition$batch_contract$effective_batch_keys,
+    breast_keys
+  ),
+  all(vapply(
+    breast_composition[c(
+      "ECODA_authors_HR",
+      "ECODA_authors_HR_NULL",
+      "ECODA_seuratres_2"
+    )],
+    function(result) {
+      all(is.finite(result$feat_mat)) &&
+        identical(rownames(result$feat_mat), breast_samples) &&
+        identical(names(result$labels), breast_samples) &&
+        max(abs(rowSums(result$feat_mat))) < 1e-8 &&
+        grepl(
+          "model.matrix(~ 1 + batch_key_1 + batch_key_2 + batch_key_3); limma::removeBatchEffect",
+          result$batch_contract$correction_formula,
+          fixed = TRUE
+        ) &&
+        !grepl(
+          "__ecoda_batch_combined_v1|lme4|lmer|\\(1 \\|",
+          result$batch_contract$correction_formula,
+          perl = TRUE
+        )
+    },
+    logical(1)
+  ))
+)
+# All configured technical keys may be constant. The full-cell validator still
+# validates every row, while both corrected consumers retain an exact no-op.
 all_constant_meta <- data.frame(
   Sample = rownames(feat),
   assay = factor(rep("10x 3' v3", n)),
   sex = factor(rep("F", n)),
   stringsAsFactors = FALSE
 )
-all_constant_validation <- ecoda_hpc_sample_metadata_validation(
-  all_constant_meta,
+all_constant_cells <- all_constant_meta[
+  rep(seq_len(nrow(all_constant_meta)), each = 2L),
+  ,
+  drop = FALSE
+]
+rownames(all_constant_cells) <- paste0("constant-cell-", seq_len(nrow(all_constant_cells)))
+all_constant_validation <- ecoda_batch_validate_metadata(
+  all_constant_cells,
   batch_keys = list("assay", "sex"),
   sample_col = "Sample"
 )
-strict_full_cell_error <- tryCatch(
-  ecoda_batch_validate_metadata(
-    all_constant_meta,
-    batch_keys = list("assay", "sex"),
-    sample_col = "Sample"
-  ),
-  error = identity
-)
-stopifnot(inherits(strict_full_cell_error, "error"))
-all_constant_corrected <- correct_clr_batch_lmm(
+all_constant_corrected <- correct_clr_batch_limma(
   feat,
   all_constant_meta,
-  batch_col = list("assay", "sex"),
+  batch_keys = list("assay", "sex"),
+  sample_col = "Sample",
   metadata_validation = all_constant_validation
 )
 all_constant_contract <- ecoda_hpc_augment_batch_contract(
@@ -631,18 +1214,419 @@ all_constant_contract <- ecoda_hpc_augment_batch_contract(
 )
 stopifnot(
   identical(all_constant_validation$correction_state, "NO_CORRECTION"),
+  identical(all_constant_validation$effective_batch_keys, character()),
   identical(all_constant_corrected, feat),
+  identical(all_constant_contract$effective_batch_keys, character()),
   identical(all_constant_contract$correction_state, "NO_CORRECTION"),
+  identical(all_constant_contract$correction_mode, "limma_fixed_effects"),
+  identical(all_constant_contract$fixed_effect_aliases, character()),
+  identical(all_constant_contract$correction_design_formula, "~1"),
+  identical(all_constant_contract$design_rank, 1L),
+  identical(all_constant_contract$design_columns, 1L),
+  all_constant_contract$design_residual_df > 0L,
   identical(
     all_constant_contract$correction_formula,
     "NO_CORRECTION: no estimable technical batch key"
+  ),
+  !"__ecoda_batch_combined_v1" %in% colnames(all_constant_validation$sample_metadata)
+)
+ecoda_hpc_validate_batch_contract(
+  all_constant_contract,
+  all_constant_contract,
+  label = "all-constant limma no-op",
+  require_effective_metadata = TRUE
+)
+
+# Full-cell strictness remains mandatory and catches a within-Sample
+# disagreement or a pre-existing reserved temporary column.
+inconsistent_cells <- all_constant_cells
+inconsistent_cells$sex <- as.character(inconsistent_cells$sex)
+inconsistent_cells$sex[2L] <- "M"
+strict_full_cell_error <- tryCatch(
+  ecoda_batch_validate_metadata(
+    inconsistent_cells,
+    batch_keys = list("assay", "sex"),
+    sample_col = "Sample"
+  ),
+  error = identity
+)
+reserved_cells <- all_constant_cells
+reserved_cells[["__ecoda_batch_combined_v1"]] <- "forbidden"
+reserved_column_error <- tryCatch(
+  ecoda_batch_validate_metadata(
+    reserved_cells,
+    batch_keys = list("assay", "sex"),
+    sample_col = "Sample"
+  ),
+  error = identity
+)
+stopifnot(
+  inherits(strict_full_cell_error, "error"),
+  grepl("disagrees within Sample", conditionMessage(strict_full_cell_error), fixed = TRUE),
+  inherits(reserved_column_error, "error"),
+  grepl("__ecoda_batch_combined_v1", conditionMessage(reserved_column_error), fixed = TRUE)
+)
+
+# A rank-deficient additive design and a saturated design with no residual
+# degrees of freedom are both rejected before any limma call.
+rank_deficient_meta <- data.frame(
+  Sample = paste0("rank-s", 1:4),
+  assay = factor(c("rna", "rna", "atac", "atac")),
+  sex = factor(c("F", "F", "M", "M")),
+  stringsAsFactors = FALSE
+)
+rank_error <- tryCatch(
+  ecoda_batch_validate_metadata(
+    rank_deficient_meta,
+    batch_keys = list("assay", "sex"),
+    sample_col = "Sample"
+  ),
+  error = identity
+)
+zero_residual_meta <- data.frame(
+  Sample = paste0("df-s", 1:4),
+  assay = factor(c("rna", "atac", "rna", "rna")),
+  sex = factor(c("F", "F", "M", "F")),
+  sequencing_platform = factor(c("NovaSeq", "NovaSeq", "NovaSeq", "Illumina")),
+  stringsAsFactors = FALSE
+)
+residual_df_error <- tryCatch(
+  ecoda_batch_validate_metadata(
+    zero_residual_meta,
+    batch_keys = list("assay", "sex", "sequencing_platform"),
+    sample_col = "Sample"
+  ),
+  error = identity
+)
+stopifnot(
+  inherits(rank_error, "error"),
+  grepl("rank deficient|confounded", conditionMessage(rank_error), ignore.case = TRUE),
+  inherits(residual_df_error, "error"),
+  grepl("residual degrees of freedom", conditionMessage(residual_df_error), fixed = TRUE)
+)
+# Direct pseudobulk correction uses one, two, or three original technical
+# factors. The fixture includes categorical suspension-like values and a
+# biological label that must never enter the corrected fit.
+utility_pb_samples <- paste0("utility-pb-s", seq_len(12L))
+utility_pb_counts <- outer(
+  seq_len(8L),
+  seq_len(12L),
+  FUN = function(gene, sample) as.integer(20L + 3L * gene + sample + (sample %% 3L) * gene)
+)
+dimnames(utility_pb_counts) <- list(
+  paste0("utility-pb-g", seq_len(nrow(utility_pb_counts))),
+  utility_pb_samples
+)
+utility_pb_metadata <- data.frame(
+  Sample = utility_pb_samples,
+  assay = factor(rep(c("10x 3' v3", "10x multiome"), each = 6L)),
+  platform = factor(rep(c("NovaSeq", "NextSeq"), times = 6L)),
+  suspension_dissociation_time = factor(
+    rep(c("fresh 0 min", "frozen 30 min", "ambient 2 h"), each = 4L)
+  ),
+  biological_label = factor(rep(c("T cell", "B cell"), times = 6L)),
+  row.names = utility_pb_samples,
+  stringsAsFactors = FALSE
+)
+utility_pb_one <- fit_pseudobulk_deseq2(
+  utility_pb_counts,
+  utility_pb_metadata,
+  batch_col = "assay",
+  blind = FALSE,
+  correct_batch = TRUE
+)
+utility_pb_two <- fit_pseudobulk_deseq2(
+  utility_pb_counts,
+  utility_pb_metadata,
+  batch_col = c("assay", "platform"),
+  blind = FALSE,
+  correct_batch = TRUE
+)
+utility_pb_three <- fit_pseudobulk_deseq2(
+  utility_pb_counts,
+  utility_pb_metadata,
+  batch_col = c("assay", "platform", "suspension_dissociation_time"),
+  blind = FALSE,
+  correct_batch = TRUE
+)
+stopifnot(
+  identical(
+    utility_pb_one$batch_correction$configured_batch_keys,
+    "assay"
+  ),
+  identical(
+    utility_pb_two$batch_correction$configured_batch_keys,
+    c("assay", "platform")
+  ),
+  identical(
+    utility_pb_three$batch_correction$configured_batch_keys,
+    c("assay", "platform", "suspension_dissociation_time")
+  ),
+  identical(
+    utility_pb_three$batch_correction$effective_batch_keys,
+    c("assay", "platform", "suspension_dissociation_time")
+  ),
+  identical(utility_pb_one$batch_correction$design_columns, 2L),
+  identical(utility_pb_two$batch_correction$design_columns, 3L),
+  identical(utility_pb_three$batch_correction$design_columns, 5L),
+  is.factor(utility_pb_three$metadata[["assay"]]),
+  is.factor(utility_pb_three$metadata[["platform"]]),
+  is.factor(utility_pb_three$metadata[["suspension_dissociation_time"]]),
+  !"__ecoda_batch_combined_v1" %in% colnames(utility_pb_three$metadata),
+  !"biological_label" %in% colnames(utility_pb_three$metadata),
+  all(is.finite(utility_pb_one$norm_matrix)),
+  all(is.finite(utility_pb_two$norm_matrix)),
+  all(is.finite(utility_pb_three$norm_matrix)),
+  identical(dimnames(utility_pb_three$norm_matrix), dimnames(utility_pb_counts)),
+  grepl(
+    "DESeq2 design=~ 1; model.matrix(~ 1 + batch_key_1 + batch_key_2 + batch_key_3)",
+    utility_pb_three$batch_correction$correction_formula,
+    fixed = TRUE
+  ),
+  !grepl(
+    "__ecoda_batch_combined_v1|biological_label|label|Status|disease",
+    utility_pb_three$batch_correction$correction_formula,
+    ignore.case = TRUE,
+    perl = TRUE
+  )
+)
+# The utility's output is the documented limma fixed-effect operation on the
+# uncorrected intercept-only normalized matrix, with separate dummy columns
+# and an intercept-only protected design.
+utility_pb_reference <- fit_pseudobulk_deseq2(
+  utility_pb_counts,
+  utility_pb_metadata,
+  blind = FALSE,
+  correct_batch = FALSE
+)
+utility_pb_reference_data <- data.frame(
+  batch_key_1 = factor(
+    as.character(utility_pb_metadata$assay),
+    levels = unique(as.character(utility_pb_metadata$assay))
+  ),
+  batch_key_2 = factor(
+    as.character(utility_pb_metadata$platform),
+    levels = unique(as.character(utility_pb_metadata$platform))
+  ),
+  batch_key_3 = factor(
+    as.character(utility_pb_metadata$suspension_dissociation_time),
+    levels = unique(as.character(utility_pb_metadata$suspension_dissociation_time))
+  ),
+  row.names = utility_pb_samples
+)
+utility_pb_reference_design <- model.matrix(
+  ~ 1 + batch_key_1 + batch_key_2 + batch_key_3,
+  data = utility_pb_reference_data
+)
+utility_pb_reference_expected <- limma::removeBatchEffect(
+  x = utility_pb_reference$norm_matrix,
+  covariates = utility_pb_reference_design[, -1L, drop = FALSE],
+  design = matrix(
+    1,
+    nrow = nrow(utility_pb_reference_design),
+    ncol = 1L,
+    dimnames = list(utility_pb_samples, "(Intercept)")
+  )
+)
+dimnames(utility_pb_reference_expected) <- dimnames(utility_pb_counts)
+stopifnot(isTRUE(all.equal(
+  utility_pb_three$norm_matrix,
+  utility_pb_reference_expected,
+  tolerance = 1e-8
+)))
+
+
+# DESeq2.normalize retains the public scalar batch_col argument while exposing
+# the same corrected genes-by-samples orientation and identifiers.
+utility_pb_normalized <- DESeq2.normalize(
+  utility_pb_counts,
+  utility_pb_metadata,
+  n_hvg = 4L,
+  batch_col = c("assay", "platform", "suspension_dissociation_time"),
+  blind = FALSE,
+  correct_batch = TRUE
+)
+stopifnot(
+  is.matrix(utility_pb_normalized),
+  identical(
+    dimnames(utility_pb_normalized),
+    list(
+      utility_pb_three$variance_order[seq_len(4L)],
+      utility_pb_samples
+    )
+  ),
+  all(is.finite(utility_pb_normalized))
+)
+
+# A biological-label permutation cannot affect the technical-only corrected
+# fit. This also guards against accidental use of all metadata columns.
+utility_pb_label_permuted <- utility_pb_metadata
+utility_pb_label_permuted$biological_label <- factor(
+  rev(as.character(utility_pb_label_permuted$biological_label)),
+  levels = levels(utility_pb_metadata$biological_label)
+)
+utility_pb_three_label_permuted <- fit_pseudobulk_deseq2(
+  utility_pb_counts,
+  utility_pb_label_permuted,
+  batch_col = c("assay", "platform", "suspension_dissociation_time"),
+  blind = FALSE,
+  correct_batch = TRUE
+)
+stopifnot(isTRUE(all.equal(
+  utility_pb_three$norm_matrix,
+  utility_pb_three_label_permuted$norm_matrix,
+  tolerance = 1e-8
+)))
+
+# All-constant technical keys are an exact no-op after the same intercept-only
+# DESeq2 normalization.
+utility_pb_constant_metadata <- utility_pb_metadata
+utility_pb_constant_metadata$assay <- factor(rep("single assay", 12L))
+utility_pb_constant_metadata$platform <- factor(rep("single platform", 12L))
+utility_pb_unbatched <- utility_pb_reference
+utility_pb_constant <- fit_pseudobulk_deseq2(
+  utility_pb_counts,
+  utility_pb_constant_metadata,
+  batch_col = c("assay", "platform"),
+  blind = FALSE,
+  correct_batch = TRUE
+)
+stopifnot(
+  identical(
+    utility_pb_constant$batch_correction$effective_batch_keys,
+    character()
+  ),
+  isTRUE(all.equal(
+    utility_pb_constant$norm_matrix,
+    utility_pb_unbatched$norm_matrix,
+    tolerance = 1e-8
+  )),
+  identical(
+    dimnames(utility_pb_constant$norm_matrix),
+    dimnames(utility_pb_counts)
   )
 )
 
-# The correction model is batch-only by construction.
-correction_body <- paste(deparse(body(correct_clr_batch_lmm)), collapse = " ")
-stopifnot(grepl("y ~ 1 \\+ \\(1 \\| batch\\)", correction_body))
-stopifnot(!grepl("label|Status|disease", correction_body, ignore.case = TRUE))
+utility_pb_expect_error <- function(value, pattern) {
+  captured_error <- tryCatch(value, error = identity)
+  stopifnot(
+    inherits(captured_error, "error"),
+    grepl(pattern, conditionMessage(captured_error), ignore.case = TRUE)
+  )
+  invisible(TRUE)
+}
+# Breast's configured suspension-duration key accepts the literal ``unknown``
+# category, while the same value remains invalid for unrelated technical keys.
+utility_pb_suspension_unknown <- .pseudobulk_factor_column(
+  c("fresh 0 min", "unknown", "ambient 2 h"),
+  "suspension_dissociation_time"
+)
+stopifnot(
+  is.factor(utility_pb_suspension_unknown),
+  identical(
+    levels(utility_pb_suspension_unknown),
+    c("fresh 0 min", "unknown", "ambient 2 h")
+  ),
+  identical(
+    as.character(utility_pb_suspension_unknown),
+    c("fresh 0 min", "unknown", "ambient 2 h")
+  )
+)
+utility_pb_expect_error(
+  .pseudobulk_factor_column(c("NovaSeq", "unknown"), "assay"),
+  "missing or blank"
+)
+utility_pb_expect_error(
+  .pseudobulk_factor_column(c("NovaSeq", "unknown"), "platform"),
+  "missing or blank"
+)
+utility_pb_expect_error(
+  .pseudobulk_factor_column(
+    c("fresh 0 min", "Unknown"),
+    "suspension_dissociation_time"
+  ),
+  "missing or blank"
+)
+utility_pb_expect_error(
+  .pseudobulk_factor_column(
+    c("fresh 0 min", " unknown "),
+    "suspension_dissociation_time"
+  ),
+  "missing or blank"
+)
+utility_pb_expect_error(
+  .pseudobulk_factor_column(
+    c("fresh 0 min", NA_character_),
+    "suspension_dissociation_time"
+  ),
+  "missing"
+)
+utility_pb_expect_error(
+  .pseudobulk_factor_column(
+    c(1, Inf),
+    "suspension_dissociation_time"
+  ),
+  "non-finite"
+)
+
+utility_pb_rank_deficient_metadata <- utility_pb_metadata
+utility_pb_rank_deficient_metadata$platform <- utility_pb_rank_deficient_metadata$assay
+utility_pb_expect_error(
+  fit_pseudobulk_deseq2(
+    utility_pb_counts,
+    utility_pb_rank_deficient_metadata,
+    batch_col = c("assay", "platform"),
+    blind = FALSE,
+    correct_batch = TRUE
+  ),
+  "rank deficient"
+)
+utility_pb_saturated_metadata <- utility_pb_metadata
+utility_pb_saturated_metadata$unique_batch <- factor(utility_pb_samples)
+utility_pb_expect_error(
+  fit_pseudobulk_deseq2(
+    utility_pb_counts,
+    utility_pb_saturated_metadata,
+    batch_col = "unique_batch",
+    blind = FALSE,
+    correct_batch = TRUE
+  ),
+  "residual degrees of freedom"
+)
+utility_pb_blank_metadata <- utility_pb_metadata
+utility_pb_blank_metadata$assay <- as.character(utility_pb_blank_metadata$assay)
+utility_pb_blank_metadata$assay[[1L]] <- " "
+utility_pb_expect_error(
+  fit_pseudobulk_deseq2(
+    utility_pb_counts,
+    utility_pb_blank_metadata,
+    batch_col = "assay",
+    blind = FALSE,
+    correct_batch = TRUE
+  ),
+  "blank"
+)
+utility_pb_expect_error(
+  fit_pseudobulk_deseq2(
+    utility_pb_counts,
+    utility_pb_metadata,
+    batch_col = "__ecoda_batch_combined_v1",
+    blind = FALSE,
+    correct_batch = TRUE
+  ),
+  "reserved"
+)
+
+
+# The active composition correction is limma-only and never advertises the
+# retired lme4/random-intercept or combined-key model.
+correction_body <- paste(deparse(body(correct_clr_batch_limma)), collapse = " ")
+stopifnot(
+  grepl("limma::removeBatchEffect", correction_body, fixed = TRUE),
+  !grepl("lme4|lmer|lmerTest|\\(1 \\|", correction_body, perl = TRUE),
+  !grepl("__ecoda_batch_combined_v1", correction_body, fixed = TRUE),
+  !grepl("label|Status|disease", correction_body, ignore.case = TRUE)
+)
 
 # Batch pseudobulk result bundles use a pass-qualified stem and only the
 # hvg2000 high-resolution result.

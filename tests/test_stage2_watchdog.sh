@@ -76,11 +76,32 @@ export BASH_ENV="${TMP_DIR}/bash_env"
 export HPC_SCRATCH_DIR="${TMP_DIR}/home/scratch/ECODA_paper"
 mkdir -p "${HPC_SCRATCH_DIR}" "${HPC_SCRATCH_DIR}/logs" \
   "${TMP_DIR}/source-checkout/src/2_dataset_specific_preprocessing" \
-  "${TMP_DIR}/source-checkout/src/utils/bash" "${TMP_DIR}/source-checkout/aux" \
+  "${TMP_DIR}/source-checkout/src/utils/bash" \
+  "${TMP_DIR}/source-checkout/src/utils/py" "${TMP_DIR}/source-checkout/aux" \
   "${TMP_DIR}/source-snapshots" "${TMP_DIR}/runtime/_ecoda_runtime"
 HOST_ENV="${TMP_DIR}/host/.pixi/envs/py-cuda13"
-mkdir -p "${HOST_ENV}/bin" "${HOST_ENV}/lib"
-printf '#!/bin/bash\nexit 0\n' > "${HOST_ENV}/bin/python"
+mkdir -p "${HOST_ENV}/bin" "${HOST_ENV}/lib/R"
+cat > "${HOST_ENV}/bin/python" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+if [[ "${1:-}" == *"1.7.1_create_alzheimer_donor_assay.py"* ]]; then
+  printf '%s\n' "$*" >> "${ALZHEIMER_VALIDATION_CAPTURE:-/dev/null}"
+  raw="${HPC_SCRATCH_DIR:?}/Alzheimer/data/SEAAD_Alzheimer.h5ad"
+  output="${HPC_SCRATCH_DIR:?}/Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad"
+  [[ "$(cat "${raw}")" == "immutable Alzheimer raw fixture" ]] || exit 50
+  if grep -q "semantically mismatched" "${output}"; then exit 42; fi
+  [[ "$*" == *"--input-file ${raw}"* ]] || exit 43
+  [[ "$*" == *"--output-file ${output}"* ]] || exit 44
+  [[ "$*" == *"--expected-samples 104"* ]] || exit 45
+  [[ "$*" == *"--expected-donors 83"* ]] || exit 46
+  [[ "$*" == *"--expected-assay-counts 10x3v3=83,10xmultiome=21"* ]] || exit 47
+  [[ "$*" == *"--expected-sex-counts female=59,male=45"* ]] || exit 48
+  [[ "$*" == *"--require-example-ids"* ]] || exit 49
+  [[ "$*" == *"--validate-only"* ]] || exit 50
+  printf 'ALZHEIMER_DONOR_ASSAY_VALIDATED=1 cells=1395601 samples=104\n'
+fi
+exit 0
+STUB
 printf '#!/bin/bash\nexit 0\n' > "${HOST_ENV}/bin/Rscript"
 chmod +x "${HOST_ENV}/bin/python" "${HOST_ENV}/bin/Rscript"
 
@@ -91,6 +112,11 @@ STAGE2_SOURCE_FILES=(
   src/2_dataset_specific_preprocessing/1.4_submit_kfoury_lowres_ct.sh
   src/2_dataset_specific_preprocessing/1.5_submit_myocardial.sh
   src/2_dataset_specific_preprocessing/1.6_submit_bassez.sh
+  src/2_dataset_specific_preprocessing/1.7_submit_alzheimer_donor_assay.sh
+  src/2_dataset_specific_preprocessing/1.7.1_create_alzheimer_donor_assay.py
+  src/utils/py/artifact_contract.py
+  src/utils/py/derived_prerequisite_contract.py
+  src/utils/py/h5ad_source_identity.py
   src/2_dataset_specific_preprocessing/stage2_watchdog.sh
 )
 for source_file in "${STAGE2_SOURCE_FILES[@]}"; do
@@ -419,5 +445,154 @@ grep -q '^REASON=legacy_source_unpinned$' "${LEGACY_ROOT}/status/watchdog"
 [[ "$(grep '^STATE=' "${LEGACY_ROOT}/status/watchdog")" == "STATE=FAIL" ]]
 [[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == "${LEGACY_CALLS_BEFORE}" ]]
 [[ ! -e "${INVALID_ROOT}/manifests/jobs.retry_1.tsv" ]]
+
+MYOCARDIAL_RUN_ID="myocardial_watchdog"
+MYOCARDIAL_ROOT="${RUNS_ROOT}/${MYOCARDIAL_RUN_ID}"
+MYOCARDIAL_OUTPUT="${HPC_SCRATCH_DIR}/Myocardial_infarction/data/Myocardial_Infarc_2.h5ad"
+mkdir -p "$(dirname "${MYOCARDIAL_OUTPUT}")"
+printf 'myocardial H5AD fixture\n' > "${MYOCARDIAL_OUTPUT}"
+make_bound_run "${MYOCARDIAL_RUN_ID}"
+MYOCARDIAL_OWNER="${HPC_SCRATCH_DIR}/_ecoda_owners/stage2/myocardial_counts"
+mkdir -p "${MYOCARDIAL_OWNER}"
+printf 'RUN_ID=%s\nSTATE=ACTIVE\nSTAGE=stage2\nKEY=myocardial_counts\n' \
+  "${MYOCARDIAL_RUN_ID}" > "${MYOCARDIAL_OWNER}/owner"
+MYOCARDIAL_MANIFEST="${MYOCARDIAL_ROOT}/manifests/steps.tsv"
+MYOCARDIAL_JOB_FILE="${MYOCARDIAL_ROOT}/manifests/jobs.tsv"
+printf 'myocardial_counts\t%s\t%s\t-\t%s\n' \
+  "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.5_submit_myocardial.sh" \
+  "${MYOCARDIAL_OUTPUT}" "${MYOCARDIAL_OWNER}" > "${MYOCARDIAL_MANIFEST}"
+write_md5 "${MYOCARDIAL_MANIFEST}"
+printf 'myocardial_counts\t2501\n' > "${MYOCARDIAL_JOB_FILE}"
+cp "${MYOCARDIAL_MANIFEST}" "${MYOCARDIAL_ROOT}/manifests/ownership.tsv"
+export WATCHDOG_EXPECT_RUN_ROOT="${MYOCARDIAL_ROOT}"
+export WATCHDOG_EXPECT_SOURCE_SCRIPT="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.5_submit_myocardial.sh"
+export WATCHDOG_EXPECT_RUN_ID="${MYOCARDIAL_RUN_ID}"
+HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.invalid \
+  STAGE2_FORCE=0 STAGE2_WATCHDOG_MAX_POLLS=1 \
+  bash "${SOURCE_WATCHDOG}" "${MYOCARDIAL_RUN_ID}" \
+  "${MYOCARDIAL_MANIFEST}" "${MYOCARDIAL_JOB_FILE}" 128G 256G shared-cpu 1000
+[[ "$(grep '^STATE=' "${MYOCARDIAL_ROOT}/status/watchdog")" == "STATE=OK" ]]
+[[ "$(grep '^STATE=' "${MYOCARDIAL_OWNER}/owner")" == "STATE=OK" ]]
+[[ -s "${MYOCARDIAL_OUTPUT}.md5" ]]
+rm -rf "${HPC_SCRATCH_DIR}/_ecoda_owners/artifact"
+
+ALZHEIMER_RAW="${HPC_SCRATCH_DIR}/Alzheimer/data/SEAAD_Alzheimer.h5ad"
+ALZHEIMER_OUTPUT="${HPC_SCRATCH_DIR}/Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad"
+mkdir -p "$(dirname "${ALZHEIMER_RAW}")"
+printf 'immutable Alzheimer raw fixture\n' > "${ALZHEIMER_RAW}"
+printf 'valid Alzheimer derivative fixture\n' > "${ALZHEIMER_OUTPUT}"
+export ALZHEIMER_VALIDATION_CAPTURE="${TMP_DIR}/alzheimer-validation.calls"
+: > "${ALZHEIMER_VALIDATION_CAPTURE}"
+
+ALZHEIMER_RUN_ID="alzheimer_valid"
+ALZHEIMER_ROOT="${RUNS_ROOT}/${ALZHEIMER_RUN_ID}"
+make_bound_run "${ALZHEIMER_RUN_ID}"
+ALZHEIMER_OWNER="${HPC_SCRATCH_DIR}/_ecoda_owners/stage2/alzheimer_donor_assay"
+mkdir -p "${ALZHEIMER_OWNER}"
+printf 'RUN_ID=%s\nSTATE=ACTIVE\nSTAGE=stage2\nKEY=alzheimer_donor_assay\n' \
+  "${ALZHEIMER_RUN_ID}" > "${ALZHEIMER_OWNER}/owner"
+ALZHEIMER_MANIFEST="${ALZHEIMER_ROOT}/manifests/steps.tsv"
+ALZHEIMER_JOB_FILE="${ALZHEIMER_ROOT}/manifests/jobs.tsv"
+printf 'alzheimer_donor_assay\t%s\t%s\t-\t%s\n' \
+  "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.7_submit_alzheimer_donor_assay.sh" \
+  "${ALZHEIMER_OUTPUT}" "${ALZHEIMER_OWNER}" > "${ALZHEIMER_MANIFEST}"
+write_md5 "${ALZHEIMER_MANIFEST}"
+printf 'alzheimer_donor_assay\t3001\n' > "${ALZHEIMER_JOB_FILE}"
+cp "${ALZHEIMER_MANIFEST}" "${ALZHEIMER_ROOT}/manifests/ownership.tsv"
+export WATCHDOG_EXPECT_RUN_ROOT="${ALZHEIMER_ROOT}"
+export WATCHDOG_EXPECT_SOURCE_ROOT="${SOURCE_ROOT}"
+export WATCHDOG_EXPECT_SOURCE_SCRIPT="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.7_submit_alzheimer_donor_assay.sh"
+export WATCHDOG_EXPECT_RUN_ID="${ALZHEIMER_RUN_ID}"
+HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.invalid \
+  STAGE2_FORCE=0 STAGE2_WATCHDOG_MAX_POLLS=1 \
+  bash "${SOURCE_WATCHDOG}" "${ALZHEIMER_RUN_ID}" \
+  "${ALZHEIMER_MANIFEST}" "${ALZHEIMER_JOB_FILE}" 128G 256G shared-cpu 1000
+[[ "$(grep '^STATE=' "${ALZHEIMER_ROOT}/status/watchdog")" == "STATE=OK" ]]
+[[ "$(grep '^STATE=' "${ALZHEIMER_OWNER}/owner")" == "STATE=OK" ]]
+[[ -s "${ALZHEIMER_OUTPUT}.md5" ]]
+[[ "$(wc -l < "${ALZHEIMER_VALIDATION_CAPTURE}" | tr -d '[:space:]')" == 1 ]]
+ALZHEIMER_VALIDATION_CALL="$(cat "${ALZHEIMER_VALIDATION_CAPTURE}")"
+case "${ALZHEIMER_VALIDATION_CALL}" in
+  *"${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.7.1_create_alzheimer_donor_assay.py"*) ;;
+  *) echo "watchdog skipped the immutable Alzheimer worker" >&2; exit 1 ;;
+esac
+case "${ALZHEIMER_VALIDATION_CALL}" in
+  *"--input-file ${ALZHEIMER_RAW}"*"--output-file ${ALZHEIMER_OUTPUT}"*) ;;
+  *) echo "watchdog passed the wrong Alzheimer source/output paths" >&2; exit 1 ;;
+esac
+case "${ALZHEIMER_VALIDATION_CALL}" in
+  *"--expected-samples 104"*"--expected-donors 83"*"--expected-assay-counts 10x3v3=83,10xmultiome=21"*"--expected-sex-counts female=59,male=45"*"--require-example-ids"*"--validate-only"*) ;;
+  *) echo "watchdog omitted Alzheimer semantic expectations" >&2; exit 1 ;;
+esac
+
+
+# A broad step spelling must fail in the owner/step contract before any
+# scheduler action, even when its row otherwise resembles the explicit hook.
+ALZHEIMER_BROAD_RUN_ID="alzheimer_broad"
+ALZHEIMER_BROAD_ROOT="${RUNS_ROOT}/${ALZHEIMER_BROAD_RUN_ID}"
+make_bound_run "${ALZHEIMER_BROAD_RUN_ID}"
+ALZHEIMER_BROAD_STEP="alzheimer_donor_assay,joanito"
+ALZHEIMER_BROAD_OWNER="${HPC_SCRATCH_DIR}/_ecoda_owners/stage2/alzheimer_donor_assay_joanito"
+mkdir -p "${ALZHEIMER_BROAD_OWNER}"
+printf 'RUN_ID=%s\nSTATE=ACTIVE\nSTAGE=stage2\nKEY=%s\n' \
+  "${ALZHEIMER_BROAD_RUN_ID}" "${ALZHEIMER_BROAD_STEP}" \
+  > "${ALZHEIMER_BROAD_OWNER}/owner"
+ALZHEIMER_BROAD_MANIFEST="${ALZHEIMER_BROAD_ROOT}/manifests/steps.tsv"
+ALZHEIMER_BROAD_JOB_FILE="${ALZHEIMER_BROAD_ROOT}/manifests/jobs.tsv"
+printf '%s\t%s\t%s\t-\t%s\n' "${ALZHEIMER_BROAD_STEP}" \
+  "${WATCHDOG_EXPECT_SOURCE_SCRIPT}" "${ALZHEIMER_OUTPUT}" \
+  "${ALZHEIMER_BROAD_OWNER}" > "${ALZHEIMER_BROAD_MANIFEST}"
+write_md5 "${ALZHEIMER_BROAD_MANIFEST}"
+printf '%s\t3002\n' "${ALZHEIMER_BROAD_STEP}" > "${ALZHEIMER_BROAD_JOB_FILE}"
+cp "${ALZHEIMER_BROAD_MANIFEST}" \
+  "${ALZHEIMER_BROAD_ROOT}/manifests/ownership.tsv"
+BROAD_CALLS_BEFORE="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.invalid \
+  STAGE2_FORCE=0 STAGE2_WATCHDOG_MAX_POLLS=1 \
+  bash "${SOURCE_WATCHDOG}" "${ALZHEIMER_BROAD_RUN_ID}" \
+  "${ALZHEIMER_BROAD_MANIFEST}" "${ALZHEIMER_BROAD_JOB_FILE}" \
+  128G 256G shared-cpu 1000 > "${TMP_DIR}/alzheimer-broad.watchdog.log" 2>&1; then
+  echo "broad Alzheimer watchdog step unexpectedly succeeded" >&2
+  exit 1
+fi
+[[ "$(grep '^STATE=' "${ALZHEIMER_BROAD_ROOT}/status/watchdog")" == "STATE=FAIL" ]]
+[[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == "${BROAD_CALLS_BEFORE}" ]]
+
+# Reuse the canonical output path with a fresh run, but make the immutable
+# worker report a semantic mismatch.  The watchdog must not write a checksum
+# or reach terminal OK after that failure.
+rm -rf "${HPC_SCRATCH_DIR}/_ecoda_owners/artifact" "${ALZHEIMER_OWNER}"
+chmod u+w "${ALZHEIMER_OUTPUT}"
+rm -f "${ALZHEIMER_OUTPUT}.md5"
+printf 'semantically mismatched Alzheimer derivative fixture\n' > "${ALZHEIMER_OUTPUT}"
+ALZHEIMER_BAD_RUN_ID="alzheimer_semantic_failure"
+ALZHEIMER_BAD_ROOT="${RUNS_ROOT}/${ALZHEIMER_BAD_RUN_ID}"
+make_bound_run "${ALZHEIMER_BAD_RUN_ID}"
+mkdir -p "${ALZHEIMER_OWNER}"
+printf 'RUN_ID=%s\nSTATE=ACTIVE\nSTAGE=stage2\nKEY=alzheimer_donor_assay\n' \
+  "${ALZHEIMER_BAD_RUN_ID}" > "${ALZHEIMER_OWNER}/owner"
+ALZHEIMER_BAD_MANIFEST="${ALZHEIMER_BAD_ROOT}/manifests/steps.tsv"
+ALZHEIMER_BAD_JOB_FILE="${ALZHEIMER_BAD_ROOT}/manifests/jobs.tsv"
+printf 'alzheimer_donor_assay\t%s\t%s\t-\t%s\n' \
+  "${WATCHDOG_EXPECT_SOURCE_SCRIPT}" "${ALZHEIMER_OUTPUT}" \
+  "${ALZHEIMER_OWNER}" > "${ALZHEIMER_BAD_MANIFEST}"
+write_md5 "${ALZHEIMER_BAD_MANIFEST}"
+printf 'alzheimer_donor_assay\t3003\n' > "${ALZHEIMER_BAD_JOB_FILE}"
+cp "${ALZHEIMER_BAD_MANIFEST}" \
+  "${ALZHEIMER_BAD_ROOT}/manifests/ownership.tsv"
+export WATCHDOG_EXPECT_RUN_ROOT="${ALZHEIMER_BAD_ROOT}"
+export WATCHDOG_EXPECT_RUN_ID="${ALZHEIMER_BAD_RUN_ID}"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.invalid \
+  STAGE2_FORCE=0 STAGE2_WATCHDOG_MAX_POLLS=1 \
+  bash "${SOURCE_WATCHDOG}" "${ALZHEIMER_BAD_RUN_ID}" \
+  "${ALZHEIMER_BAD_MANIFEST}" "${ALZHEIMER_BAD_JOB_FILE}" \
+  128G 256G shared-cpu 1000 > "${TMP_DIR}/alzheimer-semantic.watchdog.log" 2>&1; then
+  echo "semantically invalid Alzheimer derivative unexpectedly succeeded" >&2
+  exit 1
+fi
+[[ "$(grep '^STATE=' "${ALZHEIMER_BAD_ROOT}/status/watchdog")" == "STATE=FAIL" ]]
+[[ "$(grep '^STATE=' "${ALZHEIMER_OWNER}/owner")" == "STATE=FAIL" ]]
+[[ ! -e "${ALZHEIMER_OUTPUT}.md5" ]]
+[[ "$(wc -l < "${ALZHEIMER_VALIDATION_CAPTURE}" | tr -d '[:space:]')" == 2 ]]
 
 echo "stage2 watchdog: OK"

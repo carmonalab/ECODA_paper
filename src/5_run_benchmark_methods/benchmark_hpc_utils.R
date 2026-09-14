@@ -113,117 +113,100 @@ ecoda_hpc_augment_batch_contract <- function(
   if (is.null(identity)) {
     stop("cannot augment a missing corrected batch contract identity")
   }
-  keys <- ecoda_hpc_normalize_batch_keys(batch_keys)
-  if (is.list(validation) &&
-      identical(validation[["validation_scope"]], "sample_metadata_feather")) {
-    model_id <- if (identical(method_id, "Pseudobulk")) {
-      "pseudobulk_composite_v1"
-    } else if (identical(method_id, "GloScope") ||
-               identical(method_id, "PILOT") ||
-               identical(method_id, "QOT")) {
-      "embedding_consumer_harmony_v1"
-    } else if (identical(method_id, "preprocess")) {
-      "hvg_composite_v1"
-    } else {
-      "ecoda_additive_random_intercepts_v1"
-    }
-    derived <- ecoda_hpc_batch_contract_identity(
-      keys,
-      sample_col = "Sample",
-      method_id = method_id,
-      model_id = model_id
-    )
-    ecoda_hpc_validate_batch_contract_source(
-      identity,
-      derived,
-      label = "Corrected sample metadata batch contract"
-    )
-    effective_batch_keys <- validation[["effective_batch_keys"]]
-    if (is.null(effective_batch_keys)) {
+  sample_col <- if (is.list(validation) &&
+                    is.character(validation[["sample_col"]]) &&
+                    length(validation[["sample_col"]]) == 1L) {
+    validation[["sample_col"]]
+  } else {
+    "Sample"
+  }
+  keys <- ecoda_hpc_normalize_batch_keys(
+    batch_keys,
+    sample_col = sample_col
+  )
+  effective_batch_keys <- if (is.list(validation)) {
+    validation[["effective_batch_keys"]]
+  } else {
+    NULL
+  }
+  if (is.null(effective_batch_keys) && is.list(validation)) {
+    levels <- validation[["per_key_levels"]]
+    if (is.null(levels)) levels <- validation[["levels"]]
+    if (is.list(levels) && !is.null(names(levels))) {
       effective_batch_keys <- unname(keys[vapply(
-        validation[["per_key_levels"]],
-        function(levels) length(levels) >= 2L,
+        levels[unname(keys)],
+        function(values) length(values) >= 2L,
         logical(1)
       )])
     }
-    effective_batch_keys <- unname(as.character(effective_batch_keys))
-    non_estimable_batch_keys <- unname(setdiff(keys, effective_batch_keys))
-    correction_state <- if (length(effective_batch_keys)) {
-      "BATCH_CORRECTION"
-    } else {
-      "NO_CORRECTION"
-    }
-    if (length(keys) == 1L) {
-      active_aliases <- "batch"
-    } else {
-      active_aliases <- paste0(
-        "batch_key_", match(effective_batch_keys, keys)
-      )
-    }
-    effective_text <- if (length(effective_batch_keys)) {
-      paste(effective_batch_keys, collapse = ",")
-    } else {
-      "none"
-    }
-    correction_formula <- if (!length(effective_batch_keys)) {
-      "NO_CORRECTION: no estimable technical batch key"
-    } else if (method_id %in% c(
-      "ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2"
-    )) {
-      paste0(
-        "y ~ 1 + ",
-        paste0(
-          "(1 | ", active_aliases, ")",
-          collapse = " + "
-        ),
-        "; effective_batch_keys=[", effective_text, "]"
-      )
-    } else if (identical(method_id, "Pseudobulk")) {
-      scalar <- scalar_batch_col
-      if (is.null(scalar)) {
-        scalar <- if (length(keys) >= 2L) {
-          "__ecoda_batch_combined_v1"
-        } else {
-          keys[[1L]]
-        }
-      }
-      paste0(
-        "DESeq2 design=~ 1; limma removeBatchEffect(batch=",
-        scalar, "); effective_batch_keys=[", effective_text, "]"
-      )
-    } else if (method_id %in% c("GloScope", "PILOT", "QOT")) {
-      paste0(
-        "embedding=X_pca_harmony_batch_effect_corrected_hvg2000",
-        "; effective_batch_keys=[", effective_text, "]"
-      )
-    } else if (identical(method_id, "preprocess")) {
-      paste0(
-        "HVG/Harmony configured keys=[", paste(keys, collapse = ","),
-        "]; effective_batch_keys=[", effective_text, "]"
-      )
-    } else {
-      paste0(
-        "configured batch correction; effective_batch_keys=[",
-        effective_text, "]"
-      )
-    }
-    derived[["effective_batch_keys"]] <- effective_batch_keys
-    derived[["non_estimable_batch_keys"]] <- non_estimable_batch_keys
-    derived[["correction_state"]] <- correction_state
-    derived[["correction_formula"]] <- correction_formula
-    return(derived)
   }
+  if (is.null(effective_batch_keys)) effective_batch_keys <- unname(keys)
+  effective_batch_keys <- unname(as.character(effective_batch_keys))
+  non_estimable_batch_keys <- if (is.list(validation)) {
+    validation[["non_estimable_batch_keys"]]
+  } else {
+    NULL
+  }
+  if (is.null(non_estimable_batch_keys)) {
+    non_estimable_batch_keys <- unname(setdiff(keys, effective_batch_keys))
+  }
+  non_estimable_batch_keys <- unname(as.character(non_estimable_batch_keys))
+  is_composition <- method_id %in% c(
+    "ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2"
+  )
+  model_id <- if (identical(method_id, "Pseudobulk")) {
+    "pseudobulk_limma_fixed_effects_v1"
+  } else if (is_composition) {
+    "limma_fixed_effects_v1"
+  } else if (identical(method_id, "GloScope") ||
+             identical(method_id, "PILOT") ||
+             identical(method_id, "QOT")) {
+    "embedding_consumer_harmony_v1"
+  } else if (identical(method_id, "preprocess")) {
+    "hvg_composite_v1"
+  } else {
+    "mrvi_composite_v1"
+  }
+  expected_identity <- ecoda_hpc_batch_contract_identity(
+    keys,
+    sample_col = sample_col,
+    method_id = method_id,
+    model_id = model_id
+  )
+  ecoda_hpc_validate_batch_contract_source(
+    identity,
+    expected_identity,
+    label = "Corrected batch contract"
+  )
   spec <- ecoda_batch_correction_spec(
     method_id = method_id,
     batch_keys = keys,
-    scalar_batch_col = scalar_batch_col
+    scalar_batch_col = scalar_batch_col,
+    effective_batch_keys = effective_batch_keys,
+    non_estimable_batch_keys = non_estimable_batch_keys
   )
-  ecoda_batch_augment_contract(
-    identity = identity,
+  augmented <- ecoda_batch_augment_contract(
+    identity = expected_identity,
     validation = validation,
     correction_mode = spec$correction_mode,
     correction_formula = spec$correction_formula
   )
+  # Keep the policy fields explicit at the artifact boundary even when a
+  # sample-metadata validation object was supplied by a final worker.
+  augmented[["effective_batch_keys"]] <- effective_batch_keys
+  augmented[["non_estimable_batch_keys"]] <- non_estimable_batch_keys
+  augmented[["correction_state"]] <- spec$correction_state
+  augmented[["correction_mode"]] <- spec$correction_mode
+  augmented[["correction_formula"]] <- spec$correction_formula
+  augmented[["fixed_effect_aliases"]] <- spec$aliases
+  if (is.list(validation)) {
+    augmented[["design_rank"]] <- validation[["design_rank"]]
+    augmented[["design_columns"]] <- validation[["design_columns"]]
+    augmented[["design_residual_df"]] <- validation[["design_residual_df"]]
+    augmented[["correction_design_formula"]] <-
+      validation[["correction_design_formula"]]
+  }
+  augmented
 }
 
 ecoda_hpc_validate_batch_contract <- function(
@@ -233,18 +216,11 @@ ecoda_hpc_validate_batch_contract <- function(
   require_effective_metadata = FALSE
 ) {
   if (is.null(expected)) return(invisible(NULL))
-  if (!is.logical(require_effective_metadata) ||
-      length(require_effective_metadata) != 1L ||
-      is.na(require_effective_metadata)) {
-    stop("require_effective_metadata must be one logical scalar")
-  }
-  if (is.null(recorded) || !is.list(recorded) ||
-      !is.list(expected)) {
-    stop(label, " is missing or has a mismatched corrected batch contract")
-  }
   optional_fields <- c(
     "effective_batch_keys", "non_estimable_batch_keys",
-    "correction_state", "correction_formula"
+    "correction_state", "correction_mode", "correction_formula",
+    "fixed_effect_aliases", "correction_design_formula",
+    "design_rank", "design_columns", "design_residual_df"
   )
   recorded_core <- recorded
   expected_core <- expected
@@ -255,12 +231,20 @@ ecoda_hpc_validate_batch_contract <- function(
   if (!identical(recorded_core, expected_core)) {
     stop(label, " is missing or has a mismatched corrected batch contract")
   }
+  new_model_ids <- c(
+    "limma_fixed_effects_v1",
+    "pseudobulk_limma_fixed_effects_v1"
+  )
+  strict_fields <- isTRUE(require_effective_metadata) ||
+    (length(intersect(optional_fields, names(expected))) > 0L &&
+     any(as.character(c(expected[["model_id"]], expected[["model"]])) %in%
+         new_model_ids))
   for (field in optional_fields) {
     if (field %in% names(recorded) && field %in% names(expected) &&
         !identical(recorded[[field]], expected[[field]])) {
       stop(label, " has mismatched ", field)
     }
-    if (isTRUE(require_effective_metadata) &&
+    if (isTRUE(strict_fields) &&
         (!field %in% names(recorded) || !field %in% names(expected))) {
       stop(label, " is missing ", field)
     }
@@ -281,7 +265,9 @@ ecoda_hpc_validate_batch_contract_source <- function(
   metadata_fields <- c(
     "validation_summary", "effective_batch_keys",
     "non_estimable_batch_keys", "correction_state",
-    "correction_formula"
+    "correction_mode", "correction_formula", "fixed_effect_aliases",
+    "correction_design_formula", "design_rank", "design_columns",
+    "design_residual_df"
   )
   for (field in metadata_fields) {
     if (is.list(recorded_source)) recorded_source[[field]] <- NULL
@@ -294,9 +280,8 @@ ecoda_hpc_validate_batch_contract_source <- function(
   )
 }
 
-
 # Reticulate simplifies one-element R character vectors to Python strings,
-# while the structural validator intentionally requires ordered lists.  Keep
+# while the structural validator intentionally requires ordered lists. Keep
 # identity key fields list-shaped even for scalar corrected configurations.
 ecoda_hpc_identity_for_python <- function(identity) {
   if (!is.list(identity) || is.null(names(identity))) {
@@ -497,12 +482,12 @@ ecoda_hpc_sample_metadata_path <- function(
   )
 }
 
-# Build the in-memory validation object consumed by the existing DESeq2/CLR
-# routines.  This validates the already serialized one-row-per-Sample table;
-# it never inspects cells or performs a majority vote.  Breast's literal
-# ``unknown`` class is explicitly allowed by the exporter policy.  In a
-# multi-key design, an individual constant technical key is retained in the
-# contract when the combined design still has at least two levels.
+# Build the in-memory validation object consumed by the fixed-effect limma
+# routines. This validates the already serialized one-row-per-Sample table;
+# it never inspects cells or performs a majority vote. Breast's literal
+# ``unknown`` class is explicitly allowed by the exporter policy. An
+# individual constant technical key remains in metadata but is excluded from
+# the separate-key design.
 ecoda_hpc_sample_metadata_validation <- function(
   metadata,
   batch_keys,
@@ -594,11 +579,21 @@ ecoda_hpc_sample_metadata_validation <- function(
     logical(1)
   )])
   non_estimable_batch_keys <- unname(setdiff(keys, effective_batch_keys))
-  correction_state <- if (length(effective_batch_keys)) {
-    "BATCH_CORRECTION"
-  } else {
-    "NO_CORRECTION"
-  }
+  provisional_validation <- list(
+    valid = TRUE,
+    ordered_keys = unname(keys),
+    sample_ids = sample_ids,
+    canonical_sample_metadata = canonical_sample_metadata,
+    per_key_levels = per_key_levels,
+    effective_batch_keys = effective_batch_keys,
+    non_estimable_batch_keys = non_estimable_batch_keys
+  )
+  design_info <- ecoda_batch_fixed_effect_design(
+    metadata = metadata,
+    batch_keys = as.list(unname(keys)),
+    validation = provisional_validation,
+    sample_col = sample_col
+  )
   list(
     valid = TRUE,
     validation_scope = "sample_metadata_feather",
@@ -611,7 +606,15 @@ ecoda_hpc_sample_metadata_validation <- function(
     key_count = as.integer(length(keys)),
     effective_batch_keys = effective_batch_keys,
     non_estimable_batch_keys = non_estimable_batch_keys,
-    correction_state = correction_state,
+    correction_state = design_info$correction_state,
+    fixed_effect_aliases = design_info$aliases,
+    correction_design_formula = paste(
+      deparse(design_info$formula),
+      collapse = ""
+    ),
+    design_rank = design_info$rank,
+    design_columns = design_info$columns,
+    design_residual_df = design_info$residual_df,
     scalarization = if (length(keys) >= 2L) "composite_v1" else "direct_v1",
     sample_ids = sample_ids,
     sample_group_ids = sample_ids,
@@ -637,7 +640,12 @@ ecoda_hpc_sample_metadata_validation <- function(
       as.numeric(length(composite_levels) / nrow(metadata))
     } else {
       NA_real_
-    }
+    },
+    additive_design = list(
+      rank = design_info$rank,
+      columns = design_info$columns,
+      residual_df = design_info$residual_df
+    )
   )
 }
 
@@ -731,11 +739,22 @@ ecoda_hpc_load_sample_metadata_contract <- function(
   )
   list(
     ordered_keys = validation$ordered_keys,
-    scalar_batch_col = if (length(normalized_keys) >= 2L) {
-      "__ecoda_batch_combined_v1"
-    } else {
+    # A scalar name is retained only for one-key compatibility callers. The
+    # corrected multi-key boundary consumes separate raw columns.
+    scalar_batch_col = if (length(normalized_keys) == 1L) {
       normalized_keys[[1L]]
+    } else {
+      NULL
     },
+    batch_keys = unname(normalized_keys),
+    effective_batch_keys = validation$effective_batch_keys,
+    non_estimable_batch_keys = validation$non_estimable_batch_keys,
+    correction_state = validation$correction_state,
+    fixed_effect_aliases = validation$fixed_effect_aliases,
+    correction_design_formula = validation$correction_design_formula,
+    design_rank = validation$design_rank,
+    design_columns = validation$design_columns,
+    design_residual_df = validation$design_residual_df,
     scalarization = validation$scalarization,
     sample_ids = validation$sample_ids,
     sample_metadata = validation$sample_metadata,
@@ -747,9 +766,6 @@ ecoda_hpc_load_sample_metadata_contract <- function(
     metadata_checksum = metadata_checksum
   )
 }
-
-
-# Call the full-cell Python validator before any R/Python first-observation
 # reducer.  The validator reads only obs metadata and returns the serialized
 # cross-language contract, including sample-order composite values.
 validate_h5ad_corrected_batch_metadata <- function(
@@ -759,7 +775,7 @@ validate_h5ad_corrected_batch_metadata <- function(
   biological_label = NULL,
   near_unique_fraction = 0.50,
   method_id = "Pseudobulk",
-  model_id = "pseudobulk_composite_v1",
+  model_id = "pseudobulk_limma_fixed_effects_v1",
   chunk_size = 4096L
 ) {
   batch_keys_input <- if (
@@ -933,14 +949,18 @@ ecoda_hpc_batch_context <- function(
       stop("Python/R corrected batch fingerprint differs")
     }
   }
-  scalar_batch_col <- if (length(keys) >= 2L) {
-    "__ecoda_batch_combined_v1"
-  } else {
-    keys[[1L]]
-  }
   list(
     ordered_keys = unname(keys),
-    scalar_batch_col = scalar_batch_col,
+    scalar_batch_col = if (length(keys) == 1L) keys[[1L]] else NULL,
+    batch_keys = unname(keys),
+    effective_batch_keys = validation$effective_batch_keys,
+    non_estimable_batch_keys = validation$non_estimable_batch_keys,
+    correction_state = validation$correction_state,
+    fixed_effect_aliases = validation$fixed_effect_aliases,
+    correction_design_formula = validation$correction_design_formula,
+    design_rank = validation$design_rank,
+    design_columns = validation$design_columns,
+    design_residual_df = validation$design_residual_df,
     scalarization = validation$scalarization,
     sample_ids = as.character(validation$sample_ids),
     sample_metadata = validation$sample_metadata,
@@ -955,10 +975,157 @@ ecoda_hpc_batch_context <- function(
     }
   )
 }
-
-# Add the validated sample-level technical values to an aggregate or a
-# collapsed metadata copy.  This never changes the caller's data frame and
-# keeps all original batch columns alongside the ephemeral scalar composite.
+# Apply the shared fixed-effect limma boundary to a DESeq2-normalized
+# genes-by-samples matrix. DESeq2 fitting itself receives no technical column;
+# this helper removes only non-intercept technical terms and leaves source
+# metadata untouched.
+ecoda_hpc_apply_limma_batch_correction <- function(
+  fit,
+  metadata = NULL,
+  batch_keys = NULL,
+  batch_context = NULL,
+  sample_col = "Sample"
+) {
+  if (!is.list(fit) || is.null(fit[["norm_matrix"]])) {
+    stop("limma pseudobulk correction requires a fitted normalized matrix")
+  }
+  norm_matrix <- fit[["norm_matrix"]]
+  if (inherits(norm_matrix, "Matrix")) norm_matrix <- as.matrix(norm_matrix)
+  if (is.null(dim(norm_matrix)) || length(dim(norm_matrix)) != 2L ||
+      nrow(norm_matrix) < 1L || ncol(norm_matrix) < 2L ||
+      is.null(rownames(norm_matrix)) || is.null(colnames(norm_matrix)) ||
+      anyNA(rownames(norm_matrix)) || anyNA(colnames(norm_matrix)) ||
+      anyDuplicated(rownames(norm_matrix)) ||
+      anyDuplicated(colnames(norm_matrix)) ||
+      any(!nzchar(rownames(norm_matrix))) ||
+      any(!nzchar(colnames(norm_matrix))) ||
+      !is.numeric(norm_matrix) || any(!is.finite(norm_matrix))) {
+    stop("limma pseudobulk correction requires finite genes-by-samples values")
+  }
+  if (is.null(batch_context)) {
+    if (is.null(metadata) || is.null(batch_keys)) {
+      stop("limma pseudobulk correction requires batch metadata and keys")
+    }
+    validation <- ecoda_batch_validate_metadata(
+      metadata = metadata,
+      batch_keys = batch_keys,
+      sample_col = sample_col
+    )
+    context <- list(
+      ordered_keys = validation$ordered_keys,
+      sample_ids = validation$sample_ids,
+      sample_metadata = validation$sample_metadata,
+      validation = validation
+    )
+  } else {
+    if (!is.list(batch_context) ||
+        is.null(batch_context[["validation"]]) ||
+        is.null(batch_context[["ordered_keys"]])) {
+      stop("limma pseudobulk correction received an invalid batch context")
+    }
+    context <- batch_context
+    validation <- context[["validation"]]
+  }
+  keys <- context[["ordered_keys"]]
+  if (is.null(keys)) keys <- batch_keys
+  keys <- ecoda_hpc_normalize_batch_keys(keys, sample_col = sample_col)
+  sample_ids <- unname(as.character(context[["sample_ids"]]))
+  if (length(sample_ids) != ncol(norm_matrix) ||
+      anyNA(sample_ids) || any(!nzchar(sample_ids)) ||
+      anyDuplicated(sample_ids) ||
+      !identical(sample_ids, colnames(norm_matrix))) {
+    stop("limma pseudobulk correction sample order differs from normalized matrix")
+  }
+  design_info <- ecoda_batch_fixed_effect_design(
+    metadata = if (is.data.frame(context[["sample_metadata"]])) {
+      context[["sample_metadata"]]
+    } else {
+      metadata
+    },
+    batch_keys = as.list(unname(keys)),
+    validation = validation,
+    sample_col = sample_col
+  )
+  if (!identical(rownames(design_info$design), sample_ids)) {
+    stop("limma pseudobulk correction design identifiers are misaligned")
+  }
+  if (identical(design_info$correction_state, "NO_CORRECTION")) {
+    return(fit)
+  }
+  technical_columns <- design_info$technical_columns
+  if (!length(technical_columns)) {
+    return(fit)
+  }
+  if (!requireNamespace("limma", quietly = TRUE)) {
+    stop("limma is required for corrected pseudobulk batch correction")
+  }
+  technical_covariates <- design_info$design[
+    , technical_columns, drop = FALSE
+  ]
+  policy <- ecoda_batch_correction_spec(
+    method_id = "Pseudobulk",
+    batch_keys = as.list(unname(keys)),
+    effective_batch_keys = design_info$effective_batch_keys,
+    non_estimable_batch_keys = design_info$non_estimable_batch_keys
+  )
+  preserve_design <- matrix(
+    1,
+    nrow = nrow(design_info$design),
+    ncol = 1L,
+    dimnames = list(sample_ids, "(Intercept)")
+  )
+  corrected <- tryCatch(
+    limma::removeBatchEffect(
+      x = norm_matrix,
+      covariates = technical_covariates,
+      design = preserve_design
+    ),
+    error = function(error) {
+      stop(
+        "limma pseudobulk correction failed to remove fixed effects: ",
+        conditionMessage(error)
+      )
+    }
+  )
+  if (is.null(dim(corrected)) ||
+      !identical(dim(corrected), dim(norm_matrix)) ||
+      any(!is.finite(corrected))) {
+    stop("limma pseudobulk correction produced nonfinite output")
+  }
+  dimnames(corrected) <- dimnames(norm_matrix)
+  row_means <- rowMeans(corrected)
+  row_variances <- rowSums(
+    (corrected - row_means)^2
+  ) / (ncol(corrected) - 1)
+  if (any(!is.finite(row_variances))) {
+    stop("limma pseudobulk correction produced invalid row variances")
+  }
+  variance_order <- rownames(corrected)[
+    order(row_variances, decreasing = TRUE, method = "radix")
+  ]
+  fit[["norm_matrix"]] <- corrected
+  fit[["normalized_matrix"]] <- corrected
+  fit[["row_variances"]] <- row_variances
+  fit[["variance_order"]] <- variance_order
+  fit[["variance_ordering"]] <- variance_order
+  fit[["batch_col"]] <- NULL
+  fit[["correct_batch"]] <- TRUE
+  fit[["batch_correction"]] <- list(
+    correction_mode = policy$correction_mode,
+    correction_formula = policy$correction_formula,
+    configured_batch_keys = design_info$configured_batch_keys,
+    effective_batch_keys = design_info$effective_batch_keys,
+    non_estimable_batch_keys = design_info$non_estimable_batch_keys,
+    aliases = design_info$aliases,
+    design_rank = design_info$rank,
+    design_columns = design_info$columns,
+    design_residual_df = design_info$residual_df
+  )
+  fit
+}
+# Add validated sample-level technical values to an aggregate or collapsed
+# metadata copy. This never creates a composite correction column and keeps
+# every original configured batch column alongside the Sample identifier.
 ecoda_hpc_apply_batch_context <- function(
   metadata,
   context,
@@ -967,15 +1134,12 @@ ecoda_hpc_apply_batch_context <- function(
   if (is.null(context)) return(metadata)
   if (!is.data.frame(metadata)) {
     metadata <- as.data.frame(metadata, stringsAsFactors = FALSE)
-  } else {
-    metadata <- metadata
   }
   if (!sample_col %in% colnames(metadata)) {
     stop("Corrected batch metadata is missing ", sample_col)
   }
-  if ("__ecoda_batch_combined_v1" %in% colnames(metadata) &&
-      !identical(context$scalar_batch_col, "__ecoda_batch_combined_v1")) {
-    stop("Metadata already contains the reserved corrected batch column")
+  if ("__ecoda_batch_combined_v1" %in% colnames(metadata)) {
+    stop("Metadata contains a forbidden composite corrected batch column")
   }
   sample_ids <- unname(as.character(metadata[[sample_col]]))
   context_ids <- unname(as.character(context$sample_ids))
@@ -989,9 +1153,6 @@ ecoda_hpc_apply_batch_context <- function(
       stop("Validated corrected batch metadata is missing key ", key)
     }
     metadata[[key]] <- sample_metadata[[key]]
-  }
-  if (identical(context$scalar_batch_col, "__ecoda_batch_combined_v1")) {
-    metadata[[context$scalar_batch_col]] <- context$composite_values
   }
   metadata
 }
@@ -1993,7 +2154,7 @@ load_pb_variants <- function(
       normalized_keys,
       sample_col = sample_col,
       method_id = "Pseudobulk",
-      model_id = "pseudobulk_composite_v1"
+      model_id = "pseudobulk_limma_fixed_effects_v1"
     )
     if (is.null(expected_contract)) {
       expected_contract <- derived_contract

@@ -29,7 +29,11 @@ from src.utils.py.h5ad_source_identity import (
     verify_source_identity,
 )
 from src.utils.py.gene_utils import standardize_gene_symbols
-from src.utils.py.batch_contract import build_batch_contract_identity
+from src.utils.py.batch_contract import (
+    batch_correction_spec_for_keys,
+    build_batch_contract_identity,
+    build_historical_batch_contract_identity,
+)
 
 
 def write_feather(path: Path, frame: pd.DataFrame) -> None:
@@ -55,6 +59,30 @@ def write_file_sidecar(path: Path) -> None:
     path.with_name(f"{path.name}.md5").write_text(
         f"MD5={digest}\nSIZE={path.stat().st_size}\nPATH={path}\n"
     )
+
+
+def write_runtime_identity(
+    path: Path,
+    frame: pd.DataFrame,
+    identity: dict,
+    *,
+    dataset: str = "Adams",
+    method: str = "PILOT_hvg2000",
+) -> None:
+    write_feather(path, frame)
+    runtime = Path(f"{path}.runtime.json")
+    runtime.write_text(json.dumps({
+        "schema_version": 1,
+        "artifact_path": str(path),
+        "artifact_md5": hashlib.md5(path.read_bytes()).hexdigest(),
+        "dataset": dataset,
+        "method": method,
+        "time_secs": 1.0,
+        "mem_GB": 1.0,
+        "batch_contract": identity,
+    }))
+    write_file_sidecar(runtime)
+
 
 
 
@@ -181,19 +209,12 @@ def main() -> None:
             / "embeddings"
             / "Adams_batch_effect_corrected_final_hvg2000_highres_pilot_dists.feather"
         )
-        write_feather(corrected_artifact, frame)
-        corrected_runtime = Path(f"{corrected_artifact}.runtime.json")
-        corrected_runtime.write_text(json.dumps({
-            "schema_version": 1,
-            "artifact_path": str(corrected_artifact),
-            "artifact_md5": hashlib.md5(corrected_artifact.read_bytes()).hexdigest(),
-            "dataset": "Adams",
-            "method": "PILOT_hvg2000",
-            "time_secs": 1.0,
-            "mem_GB": 1.0,
-            "batch_contract": corrected_identity,
-        }))
-        write_file_sidecar(corrected_runtime)
+        write_runtime_identity(
+            corrected_artifact,
+            frame,
+            corrected_identity,
+            method="PILOT_hvg2000",
+        )
         corrected_selection = root / "corrected-selection.tsv"
         corrected_selection.write_text(
             "Adams\tbatch_effect_corrected\tbatch_effect_corrected\n"
@@ -223,6 +244,117 @@ def main() -> None:
             raise AssertionError(
                 "ordinary corrected Feather consumer accepted a summary-free runtime"
             )
+        limma_keys = ["site", "platform"]
+        limma_identity = build_batch_contract_identity(
+            limma_keys,
+            sample_column="Sample",
+            method_id="ECODA_authors_HR",
+            model_id="limma_fixed_effects_v1",
+        )
+        limma_mode, limma_formula = batch_correction_spec_for_keys(
+            "ECODA_authors_HR", limma_keys
+        )
+        assert (
+            "limma::removeBatchEffect(covariates=technical_covariates, "
+            "design=intercept)"
+            in limma_formula
+        )
+        limma_identity.update({
+            "effective_batch_keys": limma_keys,
+            "non_estimable_batch_keys": [],
+            "correction_state": "BATCH_CORRECTION",
+            "correction_mode": limma_mode,
+            "correction_formula": limma_formula,
+            "fixed_effect_aliases": {
+                "site": "batch_key_1",
+                "platform": "batch_key_2",
+            },
+            "correction_design_formula": "~1 + batch_key_1 + batch_key_2",
+            "design_rank": 3,
+            "design_columns": 3,
+            "design_residual_df": 1,
+        })
+        limma_frame = pd.DataFrame(
+            np.eye(4),
+            index=["s1", "s2", "s3", "s4"],
+            columns=["s1", "s2", "s3", "s4"],
+        )
+        limma_artifact = (
+            corrected_root
+            / "embeddings"
+            / "Adams_batch_effect_corrected_final_limma_dists.feather"
+        )
+        write_runtime_identity(
+            limma_artifact,
+            limma_frame,
+            limma_identity,
+            method="ECODA_authors_HR",
+        )
+        matrix_artifact_validator.validate_single(
+            limma_artifact,
+            corrected=True,
+            analysis_variant="corrected_final",
+            expected_batch_contract=limma_identity,
+        )
+
+        old_lme4_identity = build_historical_batch_contract_identity(
+            limma_keys,
+            sample_column="Sample",
+            method_id="ECODA_authors_HR",
+            model_id="ecoda_additive_random_intercepts_v1",
+        )
+        old_lme4_artifact = (
+            corrected_root
+            / "embeddings"
+            / "Adams_batch_effect_corrected_final_old_lme4_dists.feather"
+        )
+        write_runtime_identity(
+            old_lme4_artifact,
+            limma_frame,
+            old_lme4_identity,
+            method="ECODA_authors_HR",
+        )
+        try:
+            matrix_artifact_validator.validate_single(
+                old_lme4_artifact,
+                corrected=True,
+                analysis_variant="corrected_final",
+                expected_batch_contract=old_lme4_identity,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("historical lme4 identity was accepted")
+
+        old_combined_identity = build_historical_batch_contract_identity(
+            limma_keys,
+            sample_column="Sample",
+            method_id="Pseudobulk",
+            model_id="pseudobulk_composite_v1",
+        )
+        old_combined_artifact = (
+            corrected_root
+            / "embeddings"
+            / "Adams_batch_effect_corrected_final_old_combined_dists.feather"
+        )
+        write_runtime_identity(
+            old_combined_artifact,
+            limma_frame,
+            old_combined_identity,
+            method="Pseudobulk",
+        )
+        try:
+            matrix_artifact_validator.validate_single(
+                old_combined_artifact,
+                corrected=True,
+                analysis_variant="corrected_final",
+                expected_batch_contract=old_combined_identity,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("historical combined identity was accepted")
+
 
         wrong_scope = root / "batch-wrong-scope.tsv"
         wrong_scope.write_text("Adams\tbatch_effect_uncorrected\twrong_scope\n")

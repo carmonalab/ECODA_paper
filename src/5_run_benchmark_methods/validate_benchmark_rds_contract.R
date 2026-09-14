@@ -237,6 +237,207 @@ if (nzchar(artifact_path)) {
   unname(value)
 }
 
+.batch_identity_effective_metadata <- function(
+  identity,
+  keys,
+  label = "corrected batch identity",
+  required = TRUE,
+  strict_fields = FALSE
+) {
+  base_fields <- c(
+    "effective_batch_keys",
+    "non_estimable_batch_keys",
+    "correction_state",
+    "correction_formula"
+  )
+  design_fields <- c(
+    "correction_mode",
+    "fixed_effect_aliases",
+    "correction_design_formula",
+    "design_rank",
+    "design_columns",
+    "design_residual_df"
+  )
+  fields <- if (isTRUE(strict_fields)) {
+    c(base_fields, design_fields)
+  } else {
+    base_fields
+  }
+  present <- fields[fields %in% names(identity)]
+  if (!isTRUE(required) && !length(present)) return(NULL)
+  missing <- setdiff(fields, names(identity))
+  if (length(missing)) {
+    stop(label, " is missing limma correction metadata: ",
+         paste(missing, collapse = ", "))
+  }
+  effective <- .batch_identity_string_list(
+    identity[["effective_batch_keys"]],
+    paste0(label, "$effective_batch_keys"),
+    nonempty = FALSE
+  )
+  non_estimable <- .batch_identity_string_list(
+    identity[["non_estimable_batch_keys"]],
+    paste0(label, "$non_estimable_batch_keys"),
+    nonempty = FALSE
+  )
+  expected_effective <- keys[keys %in% effective]
+  if (!identical(effective, unname(expected_effective))) {
+    stop(label, "$effective_batch_keys must preserve configured key order")
+  }
+  if (!identical(non_estimable, unname(setdiff(keys, effective)))) {
+    stop(label, "$non_estimable_batch_keys is not the configured complement")
+  }
+  correction_state <- .batch_identity_scalar(
+    identity[["correction_state"]],
+    paste0(label, "$correction_state")
+  )
+  if (!identical(correction_state, trimws(correction_state)) ||
+      !correction_state %in% c("BATCH_CORRECTION", "NO_CORRECTION")) {
+    stop(label, "$correction_state is invalid")
+  }
+  correction_formula <- .batch_identity_scalar(
+    identity[["correction_formula"]],
+    paste0(label, "$correction_formula")
+  )
+  if (!identical(correction_formula, trimws(correction_formula))) {
+    stop(label, "$correction_formula must not be padded")
+  }
+  expected_state <- if (length(effective)) {
+    "BATCH_CORRECTION"
+  } else {
+    "NO_CORRECTION"
+  }
+  if (!identical(correction_state, expected_state)) {
+    stop(label, "$correction_state does not match effective keys")
+  }
+  metadata <- list(
+    effective_batch_keys = effective,
+    non_estimable_batch_keys = non_estimable,
+    correction_state = correction_state,
+    correction_formula = correction_formula
+  )
+  if (!isTRUE(strict_fields)) return(metadata)
+
+  method_id <- .batch_identity_scalar(
+    .batch_identity_alias(
+      identity, c("method_id", "method", "method_policy"), "method policy"
+    ),
+    paste0(label, "$method_id")
+  )
+  expected_mode <- if (identical(method_id, "Pseudobulk")) {
+    "limma_fixed_effects_pseudobulk"
+  } else {
+    "limma_fixed_effects"
+  }
+  correction_mode <- .batch_identity_scalar(
+    identity[["correction_mode"]],
+    paste0(label, "$correction_mode")
+  )
+  if (!identical(correction_mode, expected_mode)) {
+    stop(label, "$correction_mode is not the limma policy for ", method_id)
+  }
+  aliases <- identity[["fixed_effect_aliases"]]
+  if (!is.character(aliases) ||
+      (length(aliases) > 0L &&
+       (is.null(names(aliases)) || anyNA(names(aliases)) ||
+        any(!nzchar(names(aliases))) || anyDuplicated(names(aliases))))) {
+    stop(label, "$fixed_effect_aliases must be a named character vector")
+  }
+  expected_aliases <- if (length(effective)) {
+    setNames(
+      paste0("batch_key_", match(effective, keys)),
+      effective
+    )
+  } else {
+    character()
+  }
+  if (!identical(aliases, expected_aliases)) {
+    stop(label, "$fixed_effect_aliases does not match effective keys")
+  }
+  correction_design_formula <- .batch_identity_scalar(
+    identity[["correction_design_formula"]],
+    paste0(label, "$correction_design_formula")
+  )
+  expected_design_formula <- if (length(effective)) {
+    paste0(
+      "~1 + ",
+      paste(unname(expected_aliases), collapse = " + ")
+    )
+  } else {
+    "~1"
+  }
+  if (!identical(correction_design_formula, expected_design_formula)) {
+    stop(label, "$correction_design_formula is not the validated limma design")
+  }
+  design_rank <- .batch_summary_integer(
+    identity[["design_rank"]], paste0(label, "$design_rank"), minimum = 1L
+  )
+  design_columns <- .batch_summary_integer(
+    identity[["design_columns"]], paste0(label, "$design_columns"), minimum = 1L
+  )
+  design_residual_df <- .batch_summary_integer(
+    identity[["design_residual_df"]],
+    paste0(label, "$design_residual_df"),
+    minimum = 1L
+  )
+  expected_columns <- NULL
+  summary <- identity[["validation_summary"]]
+  if (is.list(summary) && is.list(summary[["key_level_counts"]]) &&
+      !is.null(names(summary[["key_level_counts"]])) &&
+      all(effective %in% names(summary[["key_level_counts"]])) &&
+      is.numeric(summary[["n_samples"]]) &&
+      length(summary[["n_samples"]]) == 1L &&
+      is.finite(summary[["n_samples"]])) {
+    level_counts <- vapply(
+      effective,
+      function(key) suppressWarnings(as.numeric(
+        summary[["key_level_counts"]][[key]]
+      )),
+      numeric(1L)
+    )
+    if (all(is.finite(level_counts)) && all(level_counts >= 1) &&
+        all(level_counts == floor(level_counts))) {
+      non_effective <- setdiff(keys, effective)
+      non_effective_counts <- if (length(non_effective)) {
+        vapply(
+          non_effective,
+          function(key) suppressWarnings(as.numeric(
+            summary[["key_level_counts"]][[key]]
+          )),
+          numeric(1L)
+        )
+      } else {
+        numeric()
+      }
+      if (any(level_counts < 2L) ||
+          (length(non_effective_counts) &&
+           any(!is.finite(non_effective_counts) |
+               non_effective_counts != 1L))) {
+        stop(label, " effective/non-estimable keys disagree with level counts")
+      }
+      expected_columns <- as.integer(1L + sum(level_counts - 1L))
+      expected_residual <- as.integer(summary[["n_samples"]] - expected_columns)
+      if (!identical(design_columns, expected_columns) ||
+          !identical(design_rank, expected_columns) ||
+          !identical(design_residual_df, expected_residual) ||
+          expected_residual < 1L) {
+        stop(label, " design dimensions do not match the validated metadata")
+      }
+    }
+  }
+  if (!identical(design_rank, design_columns) || design_residual_df < 1L) {
+    stop(label, " design dimensions are non-estimable")
+  }
+  metadata[["correction_mode"]] <- correction_mode
+  metadata[["fixed_effect_aliases"]] <- aliases
+  metadata[["correction_design_formula"]] <- correction_design_formula
+  metadata[["design_rank"]] <- design_rank
+  metadata[["design_columns"]] <- design_columns
+  metadata[["design_residual_df"]] <- design_residual_df
+  metadata
+}
+
+
 .batch_identity_vector_fields <- c(
   "composite_values", "sample_composite_values", "sample_ids",
   "sample_group_ids", "canonical_values", "canonical_cell_values",
@@ -387,7 +588,7 @@ validate_batch_validation_summary <- function(
     key_levels <- .batch_summary_string_list(
       levels[[key]], paste0(label, "$per_key_levels$", key)
     )
-    if (anyDuplicated(key_levels) || length(key_levels) < 2L ||
+    if (anyDuplicated(key_levels) || length(key_levels) < 1L ||
         !identical(
           unname(key_levels),
           .batch_summary_raw_sort(key_levels, paste0(key, " levels"))
@@ -502,12 +703,46 @@ validate_batch_validation_summary <- function(
            conditionMessage(error))
     }
   )
+  effective_batch_keys <- NULL
+  non_estimable_batch_keys <- NULL
+  effective_metadata <- .batch_identity_effective_metadata(
+    identity,
+    keys,
+    label = paste0(label, " limma metadata"),
+    required = FALSE
+  )
+  if (!is.null(effective_metadata)) {
+    effective_batch_keys <- effective_metadata[["effective_batch_keys"]]
+    non_estimable_batch_keys <- effective_metadata[["non_estimable_batch_keys"]]
+  } else {
+    summary_counts <- normalized[["key_level_counts"]]
+    if (is.list(summary_counts) && identical(names(summary_counts), keys)) {
+      effective_batch_keys <- keys[vapply(
+        summary_counts,
+        function(value) {
+          value <- suppressWarnings(as.numeric(value))
+          length(value) == 1L && !is.na(value) && is.finite(value) &&
+            value >= 2
+        },
+        logical(1L)
+      )]
+      non_estimable_batch_keys <- setdiff(keys, effective_batch_keys)
+    }
+  }
+  if (is.null(effective_batch_keys)) {
+    effective_batch_keys <- keys
+    non_estimable_batch_keys <- character()
+  }
+  effective_batch_keys <- unname(as.character(effective_batch_keys))
+  non_estimable_batch_keys <- unname(as.character(non_estimable_batch_keys))
   if (!is.null(method_id)) {
     .batch_identity_load_contract()
     spec <- tryCatch(
       ecoda_batch_correction_spec(
         method_id = method_id,
-        batch_keys = as.list(unname(keys))
+        batch_keys = as.list(unname(keys)),
+        effective_batch_keys = as.list(unname(effective_batch_keys)),
+        non_estimable_batch_keys = as.list(unname(non_estimable_batch_keys))
       ),
       error = function(error) {
         stop(label, " has an invalid validation_summary: ",
@@ -614,7 +849,7 @@ validate_batch_validation_summary <- function(
   )
   model_ids <- c(
     "hvg_composite_v1", "harmony_native_list_v1",
-    "ecoda_additive_random_intercepts_v1", "pseudobulk_composite_v1",
+    "limma_fixed_effects_v1", "pseudobulk_limma_fixed_effects_v1",
     "mrvi_composite_v1", "embedding_consumer_harmony_v1"
   )
   if (!method_id %in% method_ids) {
@@ -727,6 +962,76 @@ validate_batch_validation_summary <- function(
   normalized
 }
 
+.batch_identity_require_limma <- function(
+  identity,
+  label = "corrected batch identity",
+  expected = NULL
+) {
+  normalized <- .batch_identity_normalize(identity, label)
+  strict_methods <- c(
+    "Pseudobulk",
+    "ECODA_authors_HR",
+    "ECODA_authors_HR_NULL",
+    "ECODA_seuratres_2"
+  )
+  if (!normalized[["method_id"]] %in% strict_methods) {
+    # Corrected native embedding/MRVI artifacts are independently governed
+    # historical contracts; this validator's limma migration only tightens
+    # the R composition and pseudobulk consumers.
+    return(invisible(NULL))
+  }
+  expected_model <- if (identical(normalized[["method_id"]], "Pseudobulk")) {
+    "pseudobulk_limma_fixed_effects_v1"
+  } else {
+    "limma_fixed_effects_v1"
+  }
+  if (!identical(normalized[["model_id"]], expected_model)) {
+    stop(
+      label, " has a historical or unsupported corrected model identity: ",
+      normalized[["model_id"]]
+    )
+  }
+  metadata <- .batch_identity_effective_metadata(
+    identity,
+    normalized[["ordered_source_keys"]],
+    label = label,
+    required = TRUE,
+    strict_fields = TRUE
+  )
+  expected_metadata <- if (is.list(expected)) {
+    .batch_identity_effective_metadata(
+      expected,
+      normalized[["ordered_source_keys"]],
+      label = paste0(label, " expected"),
+      required = FALSE,
+      strict_fields = TRUE
+    )
+  } else {
+    NULL
+  }
+  if (!is.null(expected_metadata) && !identical(metadata, expected_metadata)) {
+    stop(label, " limma correction metadata does not match the expected identity")
+  }
+  .batch_identity_load_contract()
+  spec <- tryCatch(
+    ecoda_batch_correction_spec(
+      method_id = normalized[["method_id"]],
+      batch_keys = as.list(normalized[["ordered_source_keys"]]),
+      effective_batch_keys = as.list(metadata[["effective_batch_keys"]]),
+      non_estimable_batch_keys = as.list(metadata[["non_estimable_batch_keys"]])
+    ),
+    error = function(error) {
+      stop(label, " has an invalid limma correction policy: ",
+           conditionMessage(error))
+    }
+  )
+  if (!identical(metadata[["correction_formula"]], spec[["correction_formula"]])) {
+    stop(label, " has an invalid or stale limma design formula")
+  }
+  invisible(metadata)
+}
+
+
 validate_batch_contract_identity <- function(
   expected_batch_contract = NULL,
   batch_contract = NULL,
@@ -777,6 +1082,12 @@ validate_batch_contract_identity <- function(
       required = isTRUE(summary_required),
       validate_optional = TRUE
     )
+    if (identical(batch_pass, "corrected")) {
+      .batch_identity_require_limma(
+        batch_contract,
+        label = paste0(label, " recorded")
+      )
+    }
     if (!identical(recorded, expected)) {
       stop(
         label,
@@ -973,7 +1284,7 @@ config <- if (nzchar(config_path) && file.exists(config_path)) {
   if (identical(label, "composition")) {
     return(list(
       method_id = "ECODA_authors_HR",
-      model_id = "ecoda_additive_random_intercepts_v1"
+      model_id = "limma_fixed_effects_v1"
     ))
   }
   if (identical(label, "gloscope")) {
@@ -985,7 +1296,7 @@ config <- if (nzchar(config_path) && file.exists(config_path)) {
   if (label %in% c("prepare_pseudobulk", "pseudobulk")) {
     return(list(
       method_id = "Pseudobulk",
-      model_id = "pseudobulk_composite_v1"
+      model_id = "pseudobulk_limma_fixed_effects_v1"
     ))
   }
   stop("unsupported corrected batch method for identity: ", label)
@@ -1112,6 +1423,16 @@ batch_allowed_extra_keys <- function(ds, label) {
       required = TRUE
     )
   }
+  source_limma_metadata <- if (!corrected_final_mode) {
+    .batch_identity_effective_metadata(
+      source_summary_identity,
+      normalized_source[["ordered_source_keys"]],
+      label = paste0("RDS composition (", file, ") source limma metadata"),
+      required = TRUE
+    )
+  } else {
+    NULL
+  }
   methods <- c(
     "ECODA_authors_HR",
     "ECODA_authors_HR_NULL",
@@ -1132,7 +1453,7 @@ batch_allowed_extra_keys <- function(ds, label) {
         batch_keys = batch_keys,
         sample_col = "Sample",
         method_id = method_id,
-        model_id = "ecoda_additive_random_intercepts_v1"
+        model_id = "limma_fixed_effects_v1"
       ),
       error = function(error) {
         stop(
@@ -1145,7 +1466,13 @@ batch_allowed_extra_keys <- function(ds, label) {
       correction_spec <- tryCatch(
         ecoda_batch_correction_spec(
           method_id = method_id,
-          batch_keys = batch_keys
+          batch_keys = batch_keys,
+          effective_batch_keys = as.list(
+            unname(source_limma_metadata[["effective_batch_keys"]])
+          ),
+          non_estimable_batch_keys = as.list(
+            unname(source_limma_metadata[["non_estimable_batch_keys"]])
+          )
         ),
         error = function(error) {
           stop(
@@ -1279,6 +1606,13 @@ validate_combo <- function(combo, file, expected = NULL, method = "") {
         require_summary = corrected_summary_required,
         label = paste0(label, " embedded identity aliases")
       )
+      if (identical(batch_pass, "corrected")) {
+        .batch_identity_require_limma(
+          value[[field]],
+          label = paste0(label, " ", field),
+          expected = embedded
+        )
+      }
     }
   }
   embedded
@@ -1316,6 +1650,13 @@ validate_combo <- function(combo, file, expected = NULL, method = "") {
     )
   }
   recorded <- embedded %||% batch_contract
+  if (identical(batch_pass, "corrected") && !is.null(recorded)) {
+    .batch_identity_require_limma(
+      recorded,
+      label = label,
+      expected = expected_batch_contract
+    )
+  }
   validate_batch_contract_identity(
     expected_batch_contract,
     recorded,
@@ -1340,16 +1681,24 @@ validate_result_file <- function(
   }
   if (!checksum_ok(file)) stop("Missing or invalid result checksum: ", file)
   bundle <- readRDS(file)
+  identity_label <- paste0("RDS ", method, " (", file, ")")
+  embedded_batch_contract <- .rds_embedded_batch_contract(
+    bundle,
+    identity_label
+  )
   identity_values <- .rds_batch_contract_values(
     bundle,
     expected_batch_contract,
     batch_contract,
-    paste0("RDS ", method, " (", file, ")")
+    identity_label
   )
   recorded_batch_contract <- identity_values[["recorded"]]
   identity_validation_active <- !is.null(expected_batch_contract) ||
     !is.null(batch_contract) || !is.null(recorded_batch_contract)
-  if (identity_validation_active && is.list(bundle)) {
+  if (
+    identity_validation_active &&
+    is.list(bundle)
+  ) {
     bundle <- bundle[
       setdiff(
         names(bundle),
@@ -1360,6 +1709,71 @@ validate_result_file <- function(
       )
     ]
   }
+
+  # Batch-effect pseudobulk results are keyed bundles.  The key is the
+  # semantic method name and its value is the pseudobulk payload
+  # (pb/timing/batch_contract), unlike ordinary benchmark result bundles
+  # whose values are score/feature/distance combinations.  Handle this
+  # shape before the generic combo validator so it never tries to inspect
+  # the outer key as a matrix or reports a spurious missing pb.
+  if (batch && identical(method, "pseudobulk")) {
+    key <- "Pseudobulk_hvg2000"
+    contract_aliases <- c(
+      "batch_contract", "batch_contract_identity",
+      "ecoda_batch_contract", "_ecoda_batch_contract"
+    )
+    if (
+      !is.list(bundle) ||
+      is.data.frame(bundle) ||
+      is.null(names(bundle)) ||
+      anyNA(names(bundle)) ||
+      any(!nzchar(names(bundle)))
+    ) {
+      stop("batch pseudobulk result bundle must be a named list: ", file)
+    }
+    actual_keys <- setdiff(names(bundle), contract_aliases)
+    if (
+      length(actual_keys) != 1L ||
+      anyDuplicated(actual_keys) ||
+      !identical(actual_keys, key) ||
+      is.null(bundle[[key]]) ||
+      !is.list(bundle[[key]]) ||
+      is.data.frame(bundle[[key]])
+    ) {
+      stop(
+        "batch pseudobulk result bundle must contain only ",
+        key, " as a list: ", file
+      )
+    }
+    if (identical(batch_pass, "corrected")) {
+      if (is.null(embedded_batch_contract)) {
+        stop(
+          "corrected pseudobulk result bundle is missing its top-level ",
+          "batch contract: ", file
+        )
+      }
+      if (is.null(.rds_embedded_batch_contract(
+        bundle[[key]],
+        paste0(identity_label, " ", key)
+      ))) {
+        stop(
+          "corrected pseudobulk ", key,
+          " is missing its batch contract: ", file
+        )
+      }
+    }
+    .validate_pseudobulk_value(
+      bundle[[key]],
+      file = file,
+      expected = expected,
+      expected_batch_contract = expected_batch_contract,
+      batch_contract = recorded_batch_contract,
+      allow_legacy_value_pb = TRUE,
+      label = paste0(identity_label, " ", key)
+    )
+    return(invisible(NULL))
+  }
+
   required <- c("scores", "feat_mat", "dist_mat", "labels")
   is_combo <- is.list(bundle) && all(required %in% names(bundle))
   if (is_combo) {
@@ -1395,75 +1809,6 @@ validate_result_file <- function(
       }
     }
     combos <- bundle
-  }
-  if (identical(batch_pass, "corrected") && identical(method, "pseudobulk")) {
-    nested <- if (is.list(bundle)) bundle[["Pseudobulk_hvg2000"]] else NULL
-    if (!is.list(nested)) {
-      stop(
-        "corrected pseudobulk bundle Pseudobulk_hvg2000 is missing or not a list: ",
-        file
-      )
-    }
-    identity_source <- expected_batch_contract %||% recorded_batch_contract
-    if (is.null(identity_source)) {
-      stop("corrected pseudobulk bundle is missing its source identity: ", file)
-    }
-    summary_source_identity <- expected_batch_contract
-    source_summary <- if (is.list(summary_source_identity)) {
-      summary_source_identity[["validation_summary"]]
-    } else {
-      NULL
-    }
-    if (is.null(source_summary)) {
-      summary_source_identity <- recorded_batch_contract
-      source_summary <- if (is.list(summary_source_identity)) {
-        summary_source_identity[["validation_summary"]]
-      } else {
-        NULL
-      }
-    }
-    if (!corrected_final_mode && is.null(source_summary)) {
-      stop(
-        "corrected pseudobulk bundle is missing its source validation_summary: ",
-        file
-      )
-    }
-    normalized_source <- .batch_identity_normalize(
-      identity_source,
-      paste0("RDS pseudobulk (", file, ")")
-    )
-    .batch_identity_load_contract()
-    expected_nested <- tryCatch(
-      ecoda_batch_contract_identity(
-        batch_keys = as.list(unname(normalized_source$ordered_source_keys)),
-        sample_col = "Sample",
-        method_id = "Pseudobulk",
-        model_id = "pseudobulk_composite_v1"
-      ),
-      error = function(error) {
-        stop(
-          "invalid corrected pseudobulk nested identity in ", file, ": ",
-          conditionMessage(error)
-        )
-      }
-    )
-    if (!corrected_final_mode) {
-      source_summary <- .batch_identity_summary(
-        summary_source_identity,
-        normalized_source$ordered_source_keys,
-        paste0("RDS pseudobulk (", file, ") source identity"),
-        method_id = "Pseudobulk",
-        required = TRUE
-      )
-      expected_nested[["validation_summary"]] <- source_summary
-    }
-    .rds_batch_contract_values(
-      nested,
-      expected_nested,
-      NULL,
-      paste0("RDS pseudobulk Pseudobulk_hvg2000 (", file, ")"),
-      require_summary = corrected_summary_required
-    )
   }
   if (identical(batch_pass, "corrected") && identical(method, "composition")) {
     .validate_corrected_composition_nested(
@@ -1501,40 +1846,46 @@ validate_memory_scalar <- function(value, field, file) {
   invisible(TRUE)
 }
 
-validate_pseudobulk <- function(
+.pseudobulk_contract_aliases <- c(
+  "batch_contract", "batch_contract_identity",
+  "ecoda_batch_contract", "_ecoda_batch_contract"
+)
+
+.validate_pseudobulk_value <- function(
+  value,
   file,
   expected = NULL,
   expected_batch_contract = NULL,
-  batch_contract = NULL
-){
-  if (!checksum_ok(file)) stop("Missing or invalid pseudobulk checksum: ", file)
-  value <- readRDS(file)
+  batch_contract = NULL,
+  allow_legacy_value_pb = FALSE,
+  label = paste0("RDS pseudobulk (", file, ")")
+) {
   identity_values <- .rds_batch_contract_values(
     value,
     expected_batch_contract,
     batch_contract,
-    paste0("RDS pseudobulk (", file, ")")
+    label
   )
   recorded_batch_contract <- identity_values[["recorded"]]
-  if (
-    (!is.null(expected_batch_contract) ||
-     !is.null(batch_contract) ||
-     !is.null(recorded_batch_contract)) &&
-    is.list(value)
-  ) {
+  identity_validation_active <- !is.null(expected_batch_contract) ||
+    !is.null(batch_contract) || !is.null(recorded_batch_contract)
+  if (identity_validation_active && is.list(value)) {
     value <- value[
-      setdiff(
-        names(value),
-        c(
-          "batch_contract", "batch_contract_identity",
-          "ecoda_batch_contract", "_ecoda_batch_contract"
-        )
-      )
+      setdiff(names(value), .pseudobulk_contract_aliases)
     ]
   }
   timing <- NULL
   memory <- NULL
-  if (is.list(value) && !is.data.frame(value) && !is.null(value$pb)) {
+  has_pb <- is.list(value) && !is.data.frame(value) &&
+    "pb" %in% names(value)
+  if (has_pb) {
+    if (!isTRUE(allow_legacy_value_pb)) {
+      stop(
+        label,
+        " is a keyless value$pb wrapper; only legacy prepare_pseudobulk ",
+        "cache artifacts may use this shape"
+      )
+    }
     timing <- value$time_secs
     memory <- value$mem_GB
     schema_fields <- c(
@@ -1548,16 +1899,8 @@ validate_pseudobulk <- function(
         "shared_fit_time_secs", "shared_time_secs", "variant_time_secs",
         "shared_mem_GB", "timing_id", "timing_schema"
       )
-      actual_fields <- if (
-        !is.null(expected_batch_contract) || !is.null(batch_contract)
-      ) {
-        setdiff(
-          names(value),
-          c(
-            "batch_contract", "batch_contract_identity",
-            "ecoda_batch_contract", "_ecoda_batch_contract"
-          )
-        )
+      actual_fields <- if (identity_validation_active) {
+        setdiff(names(value), .pseudobulk_contract_aliases)
       } else {
         names(value)
       }
@@ -1583,8 +1926,10 @@ validate_pseudobulk <- function(
         validate_memory_scalar(value[[field]], field, file)
       }
       timing_id <- value$timing_id
-      timing_id_parts <- if (is.character(timing_id) && length(timing_id) == 1L &&
-                             !is.na(timing_id)) {
+      timing_id_parts <- if (
+        is.character(timing_id) && length(timing_id) == 1L &&
+        !is.na(timing_id)
+      ) {
         strsplit(timing_id, ":", fixed = TRUE)[[1L]]
       } else {
         character()
@@ -1644,6 +1989,26 @@ validate_pseudobulk <- function(
   if (!finite_numeric(value)) stop("Pseudobulk values are nonfinite: ", file)
   if (!is.null(timing)) validate_timing_scalar(timing, "timing", file)
   if (!is.null(memory)) validate_memory_scalar(memory, "memory", file)
+  invisible(NULL)
+}
+
+validate_pseudobulk <- function(
+  file,
+  expected = NULL,
+  expected_batch_contract = NULL,
+  batch_contract = NULL,
+  allow_legacy_value_pb = FALSE
+){
+  if (!checksum_ok(file)) stop("Missing or invalid pseudobulk checksum: ", file)
+  value <- readRDS(file)
+  .validate_pseudobulk_value(
+    value,
+    file = file,
+    expected = expected,
+    expected_batch_contract = expected_batch_contract,
+    batch_contract = batch_contract,
+    allow_legacy_value_pb = allow_legacy_value_pb
+  )
 }
 
 validate_trans <- function(file) {
@@ -1852,7 +2217,10 @@ validate_artifact_contract <- function(
       file,
       expected,
       row_expected_batch_contract,
-      batch_contract
+      batch_contract,
+      allow_legacy_value_pb =
+        identical(method, "prepare_pseudobulk") ||
+        identical(basename(dirname(path.expand(file))), "pseudobulks")
     )
   } else {
     required_keys <- if (batch && method %in% c("gloscope", "pseudobulk", "composition")) {
@@ -1982,7 +2350,8 @@ for (part in parts) {
           file,
           expected,
           row_expected_batch_contract,
-          batch_contract
+          batch_contract,
+          allow_legacy_value_pb = TRUE
         )
       }
     } else if (label == "trans") {

@@ -309,7 +309,7 @@ def validate_h5ad_corrected_batch_metadata(
     sample_col: str = "Sample",
     biological_column: str | None = None,
     method_id: str = "Pseudobulk",
-    model_id: str = "pseudobulk_composite_v1",
+    model_id: str = "pseudobulk_limma_fixed_effects_v1",
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     near_unique_fraction: float = 0.50,
 ) -> dict[str, Any]:
