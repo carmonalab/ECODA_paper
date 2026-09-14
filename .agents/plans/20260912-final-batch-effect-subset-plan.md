@@ -6,9 +6,8 @@ This section is the single active contract for this plan. It supersedes every
 older active Context, Approach, Verification, Assumptions, and status section
 that conflicts with it. The incident appendix is evidence only; it does not
 create selectors, authorize a launch, or preserve an obsolete nine-row scope.
-This maintenance change is plan-only: it makes no source/configuration edits,
-runs no validation command, and launches no HPC, scheduler, backup, or SIF
-operation.
+This plan has moved from design-only into implementation and controlled execution. The local selector/source-contract implementation and focused checks are complete. The immediate operational priority is the full scratch backup; production compute may be considered only after a fresh source/runtime snapshot, exact run-owned selections, source and ownership checks, and the maintenance feasibility audit.
+The user has explicitly authorized this implementation and backup sequence. Every operation remains narrowly scoped: no broad or inferred selection, no overwrite, no active-tree clone, and no production launch without the required durable gate, terminal accounting, artifact audit, synchronization, and Luna Max review.
 
 ### Objective and hard boundaries
 
