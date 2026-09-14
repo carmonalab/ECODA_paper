@@ -2,11 +2,11 @@
 
 This document serves as the single technical source of truth for the **ECODA** reproducible benchmark suite: pipeline stages, HPC execution layout, data flow, and module reference.
 
-> **Current production contract.** Production scope is resolved from
-> `datasets.json` and immutable run-owned manifests. View and analysis lanes
-> are variant-qualified and bound to immutable source/runtime/auxiliary
-> identities. Exact active selections, lane roots, method dependencies, and
-> run-specific gates are maintained in the [active authoritative plan](../.agents/plans/20260912-final-batch-effect-subset-plan.md).
+> **Production contract.** Production scope comes from `datasets.json` and
+> immutable run-owned manifests. View and analysis lanes are variant-qualified
+> and bound to immutable source/runtime/auxiliary identities. Exact selections,
+> lane roots, method dependencies, and gate state are carried by each run's
+> manifests and are not defined by this general overview.
 
 ---
 
@@ -161,11 +161,12 @@ ${NAS_TARGET_DIR}/                # Synced project results
     ├── corrected/                # legacy corrected lane
     └── <variant-qualified>/      # active Stage 5 lane selected by the run contract
 ```
-**Execution host and transfer policy.** `bamboo` is the canonical default host
-for durable compute, gates, and NAS synchronization. Any backup host or
-alternate transfer route requires explicit approval under [`AGENTS.md`](../AGENTS.md)
-and the [active authoritative plan](../.agents/plans/20260912-final-batch-effect-subset-plan.md);
-no backup host is implicit compute or transfer target.
+**Execution host and transfer policy.** Host selection, storage, and transfer
+routes are explicit environment and run contracts. Durable compute uses the
+configured scheduler and immutable source/runtime identities; backup and
+alternate transfer destinations are never inferred. The pipeline reads its
+paths from the centralized environment configuration rather than hardcoding
+operator-specific locations.
 
 
 
@@ -219,17 +220,16 @@ Per-dataset R Markdown notebooks performing study-specific initial quality contr
   content/checksum validation and one-time migration to the configured name.
 - Dataset-specific metadata-repair and conversion hooks are selected through
   explicit run-owned selectors and may use an obs-only reader to validate
-  source contracts without replacing the raw input. Their exact dataset and
-  hook scope belongs in the authoritative run plan.
+  source contracts without replacing the raw input. Hook scope belongs in the
+  explicit run-owned selector and manifest.
 
 #### 3. Standardized Preprocessing (`src/3_scrnaseq_preprocessing/`)
 - `1_submit_hpc_array.sh` -> `1.1_run_worker.sh` -> `1.1.1_preprocess.py`
   consumes explicit immutable `DATASET<TAB>VIEW` rows for selected views.
   Selected datasets and views are resolved from `datasets.json` and
   run-owned manifests. Stage 3 supports view-specific selections and
-  validates each configured input before processing; exact production scope
-  belongs in the [active authoritative plan](../.agents/plans/20260912-final-batch-effect-subset-plan.md),
-  not in this general overview.
+  validates each configured input before processing; exact production scope is
+  carried by the run-owned selection manifests, not by this general overview.
 - Applies view-specific subset masks and sample-consistency audits before
   sample standardization and low-count filtering; preserves raw counts in
   `layers["counts"]`, normalizes/log-transforms, ranks HVGs, and computes
@@ -297,8 +297,7 @@ benchmark mode remains compatible with its legacy selections. Active analysis
 variants require explicit, variant-matching selection files and reject
 broad/default scope. Each selected row declares its dataset, view, scope, and
 method set; exact active selections, lane roots, dependencies, and expected
-row/method counts are resolved from `datasets.json`, run-owned manifests, and
-the [active authoritative plan](../.agents/plans/20260912-final-batch-effect-subset-plan.md),
+row/method counts are resolved from `datasets.json` and run-owned manifests,
 not from this overview.
 Targeted recovery uses the same explicit selection file with
 `--target-methods` to submit only missing or invalid rows; valid rows remain
@@ -317,9 +316,8 @@ Each active Stage 5 variant establishes `ANALYSIS_VARIANT`,
 `ANALYSIS_PASS`, `PASS`, `ROOT`, `ANALYSIS_ROOT`, and `ANALYSIS_NAS_ROOT`
 before pending selection state or run metadata is constructed. The
 variant-aware run contract selects the scratch and NAS analysis roots and
-artifact namespace; exact current lane names and roots belong in the
-[active authoritative plan](../.agents/plans/20260912-final-batch-effect-subset-plan.md),
-not in this overview.
+artifact namespace; exact lane names and roots are carried by the run-owned
+manifests, not by this overview.
 Corrected Stage 3 view outputs and Stage 5 analysis lanes are separate
 contracts; a corrected view does not implicitly create an analysis lane.
 Logs, watchdogs, ownership records, manifests, and artifacts consume the same
@@ -608,4 +606,10 @@ passed by callers.
 4. **Fail-Closed Verification:** All submitter sync tails verify terminal scheduler/accounting state, artifact schemas, and MD5/SIZE/PATH sidecars before initiating NAS synchronization. If any task or transfer fails, synchronization is aborted and an alert email is dispatched.
 5. **One-wait terminal gate:** After each launch, the workflow arms exactly one unbounded durable wait. It then performs one terminal inspection with every emitted scheduler/watchdog ID and obtains the required reviewer approval before releasing dependent work or a same-root gate; repeated polling and ambiguous reruns are prohibited.
 6. **Same-root synchronization:** A single synchronization owner protects each `sync/${ANALYSIS_ROOT}` namespace. Independent rows sharing a root are grouped in one explicit wave, and later same-root gates are serialized after terminal review.
-7. **Run-ID Recovery:** `--sync-only RUN_ID` validates the immutable run manifests, scheduler records, watchdog/aggregate state, fresh artifacts, and owners before completing an interrupted login tail; it never resubmits. Numeric/CSV scheduler-ID recovery remains a separate compatibility path and requires the caller's original dataset/view selection. Host selection and temporary-backup exceptions follow `AGENTS.md` and the active authoritative plan.
+7. **Run-ID Recovery:** `--sync-only RUN_ID` validates the immutable run
+   manifests, scheduler records, watchdog/aggregate state, fresh artifacts,
+   and owners before completing an interrupted login tail; it never
+   resubmits. Numeric/CSV scheduler-ID recovery remains a separate
+   compatibility path and requires the caller's original dataset/view
+   selection. Host and storage selection are explicit deployment
+   configuration; recovery never infers a different host or transfer target.

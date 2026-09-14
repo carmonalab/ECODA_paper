@@ -378,59 +378,38 @@ Recorded Bamboo measurements are:
 /srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper             92 TB free
 ```
 
-Home is backed up; scratch is operational and not backed up. `$HOME/scratch`
-is a symlink, so backup, snapshot, and gate commands must resolve the
-canonical `/srv/beegfs/scratch/users/h/halterc` path. Bamboo remains the
-default compute host. The user's local setup reaches Yggdrasil with
-`ssh yggdrasil`; no local staging is needed.
-Yggdrasil is the explicitly authorized temporary backup destination and,
-for this run, an explicitly authorized temporary compute host for the named
-remaining Stage 3/Stage 5 lanes during the 2026-09-15–18 Bamboo maintenance
-window. It is never an implicit fallback. Yggdrasil compute still requires
-the read-only portability audit above; backup requires the direct
-Bamboo→Yggdrasil route and a quiescent source.
-The remote-only POC root
-`/srv/beegfs/scratch/users/h/halterc/_ecoda_backup_poc_20260914_direct`
-transferred a non-production file without local staging: source and destination
-SHA-256 both matched
-`ac5944fad030a07ad4257a3d7b7b44a83925c3e0fcba83196f9cbec6d670dcb2`, and the
-second checksum-aware dry run was empty.
-The Bamboo `yggdrasil` alias remains optional/unconfigured and currently fails
-DNS; do not treat its local success as evidence for a Bamboo transfer.
-Agent-forwarded SSH (for example, `ssh -A`) depends on the originating Mac
-session and agent remaining alive: a sleeping or disconnected Mac can break a
-multi-hour Bamboo-launched `rsync` even inside `tmux`. Require either an alive
-agent session or a separately approved Bamboo key registered centrally; never
-copy or store a private key or password.
+Yggdrasil is the active default host for this plan. `$HOME/scratch` is the
+Yggdrasil BeeGFS scratch link; the canonical active paths are
+`/home/users/h/halterc/ECODA_paper` for the repository and
+`/srv/beegfs/scratch/users/h/halterc/ECODA_paper` for data/results. All
+pipeline-file authoring remains on the local workstation, followed by commit,
+push, and an exact revision pull on Yggdrasil.
 
-Execute the backup priority in this order, without copying an active tree:
+The complete Bamboo→Yggdrasil scratch transfer passed the approved
+`TRANSFER_SANITY_ONLY` check and was explicitly reclassified by the user as
+the active writable `~/scratch/ECODA_paper` working tree. It is no longer an
+independent immutable backup. The repository mirror is still completing its
+cross-filesystem move into `~/ECODA_paper`; do not use that partial directory.
 
-1. Inventory canonical source/destination paths, cluster access, quotas,
-   capacities, file counts, symlink targets, and active writers.
-2. After explicit backup authorization, retain the direct POC above as the
-   tiny-transfer proof and require an alive forwarded agent session or a
-   separately approved Bamboo key registered centrally for any multi-hour
-   transfer. For the large mirrors, record `CONTENT_CHECKSUM=DEFERRED` and
-   verify only the bounded completion contract above; do not launch a
-   terabyte-scale checksum dry run as a gate. This is a pragmatic temporary
-   mirror check, not cryptographic archival verification.
-3. Clone the complete repository (including `.git`, hidden files, source,
-   plans, and runtime references) to an explicitly authorized, timestamped
-   Yggdrasil backup path by resumable, non-destructive `rsync`; keep a sorted
-   path/size/hash manifest and do not use `--delete` or `--inplace` for the
-   first mirror.
-4. At a quiescence checkpoint, clone the complete scratch `ECODA_paper` tree
-   to that explicitly authorized Yggdrasil backup path in top-level batches.
-   Include raw, processed, results, logs, gates, manifests, and checksums;
-   retain per-batch logs, source/destination hash manifests, and a second dry
-   run. Do not rely on scratch retention.
-5. Send NAS only the expected validated processed/results artifacts, metadata,
-   checksums, sidecars, and explicit manifests required by the active lanes.
-   Do not copy the complete repository, control plane, logs/gates, full
-   scratch tree, raw H5ADs, or unrelated legacy artifacts to NAS.
-6. Restore small and large samples from the Yggdrasil backup clone, compare
-   complete manifests and source/runtime identities, and obtain human review
-   before declaring the clone complete.
+Large mirrors use bounded verification only: a quiescent source, rsync exit
+`0`, no failure marker, destination presence, and a success marker. Rough
+size or file-count checks are optional. Full content checksum scans and exact
+source/destination equality are intentionally deferred and recorded as
+`CONTENT_CHECKSUM=DEFERRED`.
+
+The Bamboo NAS mount
+`/srv/smednas515.unige.ch/carmona_smb` is not present on Yggdrasil. Yggdrasil
+resolves `nasac-evs2.unige.ch` and has `gio`/D-Bus clients; a user-scoped
+interactive NASAC mount is required before result/NAS synchronization. No
+password or private key may be stored.
+
+The active migration sequence is: finish the repository move; pull the exact
+local committed revision; verify canonical source, runtime, auxiliary,
+scheduler, and scratch paths; validate result handling and the durable-gate
+host contract; then run only the explicit remaining selections. If any
+pipeline-file or control-plane change is required, make it locally, commit
+and push it, pull the exact revision on Yggdrasil, update this plan, and stop
+for approval before compute.
 
 ### Maintenance feasibility gate
 
