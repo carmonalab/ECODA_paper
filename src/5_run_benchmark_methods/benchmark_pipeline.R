@@ -1217,7 +1217,8 @@ prepare_pseudobulks_hpc <- function(
         h5ad_path = h5ad_path,
         view = view,
         method = "preprocessing",
-        expected_batch_contract = expected_h5ad_batch_contract
+        expected_batch_contract = expected_h5ad_batch_contract,
+        allow_missing_summary = ecoda_hpc_corrected_final_mode()
       )
     }
     expected_pb_contract <- ecoda_hpc_batch_contract_identity(

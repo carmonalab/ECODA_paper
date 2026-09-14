@@ -268,14 +268,20 @@ ecoda_hpc_validate_h5ad_path_identity <- function(
     path = module_dir,
     convert = FALSE
   )
+  validation_method <- if (allow_missing_summary) {
+    "preprocessing"
+  } else {
+    as.character(method)
+  }
   validator$validate_benchmark_h5ad_path(
     h5ad_path,
     as.character(view),
-    as.character(method),
+    validation_method,
     expected_batch_contract = ecoda_hpc_identity_for_python(
       expected_batch_contract
     ),
-    require_corrected_summary = !allow_missing_summary
+    require_corrected_summary = !allow_missing_summary,
+    allow_missing_corrected_summary = allow_missing_summary
   )
   invisible(TRUE)
 }
@@ -308,14 +314,20 @@ ecoda_hpc_validate_h5ad_object_identity <- function(
     path = module_dir,
     convert = FALSE
   )
+  validation_method <- if (allow_missing_summary) {
+    "preprocessing"
+  } else {
+    as.character(method)
+  }
   validator$validate_benchmark_h5ad_contract(
     adata,
     as.character(view),
-    as.character(method),
+    validation_method,
     expected_batch_contract = ecoda_hpc_identity_for_python(
       expected_batch_contract
     ),
-    require_corrected_summary = !allow_missing_summary
+    require_corrected_summary = !allow_missing_summary,
+    allow_missing_corrected_summary = allow_missing_summary
   )
   invisible(TRUE)
 }

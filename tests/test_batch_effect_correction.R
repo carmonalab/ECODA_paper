@@ -14,6 +14,78 @@ source(file.path(root, "src/5_run_benchmark_methods/benchmark_hpc_utils.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_methods_r.R"))
 source(file.path(root, "src/5_run_benchmark_methods/benchmark_pipeline.R"))
 
+# Corrected-final H5ADs intentionally carry configuration-only identity. The R
+# path validator must pass the explicit summary-free opt-in through to Python,
+# even when the consumer method is not a Pipeline 3 method name.
+summary_free_h5ad <- tempfile(
+  "ecoda-summary-free-h5ad-", fileext = ".h5ad"
+)
+summary_free_h5ad_python <- paste(
+  "import anndata as ad, numpy as np, pandas as pd, scipy.sparse as sp, sys;",
+  "sys.path.insert(0, sys.argv[2]);",
+  "from src.utils.py.batch_contract import build_batch_contract_identity;",
+  "n_genes = 2000;",
+  "obs = pd.DataFrame({'Sample': ['s1', 's2'],",
+  "                    'assay': ['a', 'a'], 'sex': ['F', 'M']},",
+  "                   index=['c1', 'c2']);",
+  "adata = ad.AnnData(",
+  "X=np.ones((2, n_genes), dtype=np.float32), obs=obs,",
+  "var=pd.DataFrame({'hvg_rank': np.arange(1, n_genes + 1, dtype=float)},",
+  "                  index=[f'g{i}' for i in range(n_genes)]));",
+  "adata.layers['counts'] = sp.csr_matrix(",
+  "np.ones((2, n_genes), dtype=np.int64));",
+  "adata.obsm['X_pca_batch_effect_corrected_hvg2000'] =",
+  "np.ones((2, 2), dtype=np.float32);",
+  "adata.obsm['X_pca_harmony_batch_effect_corrected_hvg2000'] =",
+  "np.ones((2, 2), dtype=np.float32);",
+  "adata.uns['batch_contract'] = build_batch_contract_identity(",
+  "['assay', 'sex'], sample_column='Sample', method_id='preprocess',",
+  "model_id='hvg_composite_v1');",
+  "adata.write_h5ad(sys.argv[1])"
+)
+summary_free_h5ad_status <- system2(
+  "pixi",
+  c(
+    "run", "python", "-c", shQuote(summary_free_h5ad_python),
+    shQuote(summary_free_h5ad), shQuote(root)
+  ),
+  stdout = FALSE,
+  stderr = FALSE
+)
+if (!identical(summary_free_h5ad_status, 0L)) {
+  stop("could not create the summary-free corrected H5AD fixture")
+}
+old_analysis_variant <- Sys.getenv("ANALYSIS_VARIANT", unset = "")
+old_analysis_pass <- Sys.getenv("ANALYSIS_PASS", unset = "")
+Sys.setenv(
+  ANALYSIS_VARIANT = "corrected_final",
+  ANALYSIS_PASS = "corrected"
+)
+summary_free_identity <- ecoda_hpc_batch_contract_identity(
+  batch_keys = list("assay", "sex"),
+  sample_col = "Sample",
+  method_id = "preprocess",
+  model_id = "hvg_composite_v1"
+)
+ecoda_hpc_validate_h5ad_path_identity(
+  h5ad_path = summary_free_h5ad,
+  view = "batch_effect_corrected",
+  method = "gloscope",
+  expected_batch_contract = summary_free_identity,
+  allow_missing_summary = TRUE
+)
+if (nzchar(old_analysis_variant)) {
+  Sys.setenv(ANALYSIS_VARIANT = old_analysis_variant)
+} else {
+  Sys.unsetenv("ANALYSIS_VARIANT")
+}
+if (nzchar(old_analysis_pass)) {
+  Sys.setenv(ANALYSIS_PASS = old_analysis_pass)
+} else {
+  Sys.unsetenv("ANALYSIS_PASS")
+}
+unlink(summary_free_h5ad)
+
 # CT timing method names use injective UTF-8 byte tokens.  In particular,
 # punctuation and underscores must not collapse into one four-column log key.
 ct_dot_token <- ct_timing_token("cell.type")
