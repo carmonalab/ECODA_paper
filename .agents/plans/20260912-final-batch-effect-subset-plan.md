@@ -46,14 +46,16 @@ Every operation remains narrowly scoped: no broad or inferred selection, no over
   plan. The complete clone must not overlap any active Stage 2 or Stage 5
   writer. NAS is not a repository or scratch backup. It receives only the
   explicitly expected processed/results data and their checksums.
-3. **Controlled Alzheimer Stage 2 exception.** Seal a fresh full-hash
-  source/runtime snapshot of the current committed source, use the exact
-  `--datasets Alzheimer --steps alzheimer_donor_assay` selector, and run only
-  the donor-by-assay derivative. This may precede the eight-dataset compute
-  gate because its raw input, derivative, Stage 2 owner, run root, and
-  snapshot parent are disjoint. Do not change `datasets.json` in this
-  snapshot; the derivative must be terminally validated before the
-  post-derivative configuration snapshot.
+3. **Controlled Alzheimer Stage 2 exception.** After the current source is
+  verified, first seal the required eight-dataset full-hash source/runtime
+  snapshot under its own parent, then seal a separate full-hash Stage 2
+  source/runtime snapshot and exact run-owned selector. Use exactly
+  `--datasets Alzheimer --steps alzheimer_donor_assay` and run only the
+  donor-by-assay derivative. This may precede the eight-dataset compute gate,
+  but its Stage 2 snapshot parent, raw input, derivative, owner, and run root
+  must remain disjoint. Do not change `datasets.json` in this snapshot; the
+  derivative must be terminally validated before the post-derivative
+  configuration snapshot.
 4. **Eight-dataset corrected-final recovery.** After the complete scratch
   clone is verified, seal a separate full-hash source/runtime snapshot and
   exact eight-row/32-method-row manifest, then run this gate if and only if
@@ -417,11 +419,12 @@ Before the first eight-dataset compute gate, the run owner must have:
 - recorded one durable gate command, selector checksum, expected rows, roots,
   and dependency/review boundary.
 
-Before the controlled Alzheimer Stage 2 exception, additionally require a
-fresh full-hash source/runtime snapshot, the exact one-step selector, the
-strict derivative schema and 104-sample contract, and explicit Stage 2
-ownership. This exception does not change `datasets.json` or authorize
-Stage 3/5 work.
+Before the controlled Alzheimer Stage 2 exception, additionally require the
+required eight-dataset source/runtime snapshot to be sealed under its own
+parent, then require a separate fresh full-hash Stage 2 source/runtime
+snapshot, the exact one-step selector, the strict derivative schema and
+104-sample contract, and explicit Stage 2 ownership. This exception does not
+change `datasets.json` or authorize Stage 3/5 work.
 Before Alzheimer Stage 3 or Stage 5 work, additionally require the reviewed
 eight-dataset gate, a new post-derivative full-hash source/runtime snapshot,
 the strict derivative schema and 104-sample contract, and explicit one-row
@@ -580,14 +583,17 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
 
 ### Open items and exact next steps
 
-1. **Current source is prepared for controlled execution.** The verified
-   implementation and plan update are committed and pushed at the current
-   branch head `393237a32d56ecf61cc512634f429a959d685303`. Bamboo still points
-   to the prior committed source `d6e970b`; update it only after the current
-   checkout/worktree allowlist passes. The Yggdrasil repository backup remains
-   at the older baseline. Unrelated local worktree changes remain unstaged.
-   `datasets.json`, `pixi.toml`, and `pixi.lock` remain unchanged for this
-   Stage 2 snapshot.
+1. **Verify the current source before snapshotting.** The local implementation
+   and plan update are committed and pushed; unrelated local worktree changes
+   remain unstaged. Bamboo still points to the prior committed source
+   `d6e970b`, and the Yggdrasil repository backup remains at the older
+   baseline. First pass the Bamboo checkout/worktree allowlist, update the
+   clean checkout safely to the current full 40-hex branch commit, and verify
+   that exact hash before any source snapshot or gate preparation.
+2. **Run the controlled Alzheimer Stage 2 exception.** After the current
+   source is verified, first seal the required eight-dataset source/runtime
+   snapshot under its own parent, then create a separate full-hash Stage 2
+   source/runtime snapshot and exact run-owned selector. Use exactly
    `--datasets Alzheimer --steps alzheimer_donor_assay`, and launch only the
    donor-by-assay derivative through the durable gate. It may precede the
    eight-dataset gate because its raw input, derivative, owner, run root, and
@@ -620,7 +626,7 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    mirrors.
 
 The user explicitly authorized the controlled Stage 2-before-backup priority
-change. The eight-dataset corrected-final gate remains serialized after the
-verified full scratch clone in this run; no live-tree clone, broad selection,
-implicit snapshot reuse, or launch without exact scope, fresh identities,
-durable terminal audit, synchronization, and review is allowed.
+change. The eight-dataset corrected-final gate remains after the verified
+full scratch clone in this run. No live-tree clone, broad selection, implicit
+snapshot reuse, or launch without exact scope, fresh identities, durable
+terminal audit, synchronization, and review is allowed.
