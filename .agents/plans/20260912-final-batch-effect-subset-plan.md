@@ -69,14 +69,15 @@ artifact, owner, and failed-gate evidence unchanged; do not launch a fresh
 Stage 2 acceptance gate or mutate the old gate.
 
 No further Stage 2/3/5 processing is launched until the revised selector
-contract, acceptance validator, focused tests, and read-only artifact
-reviews pass. After that confirmation boundary:
+contract, acceptance validator, and focused tests pass. Breast Stage 3 is
+already accepted as passed by its terminal inspect and Luna Max review. After
+that confirmation boundary:
 
-1. Complete the Alzheimer Stage 3 validator-only acceptance records and the
-   seven-dataset current-input inventory as independent review-only work
-   wherever possible. Breast Stage 3 is already accepted as passed by its
-   terminal inspect and Luna Max review. The Stage 3 acceptance records do not
-   submit Stage 2/3 workers.
+1. Complete the Alzheimer Stage 3 validator-only acceptance records as
+   review-only work. The seven non-Breast corrected inputs are validated by
+   the 35-row gate's own source-H5AD, metadata, checksum, and consumer
+   preflight immediately before pending selection; no separate inventory
+   report is required.
 2. Run one corrected-final 35-row durable gate. It owns the single
    `batch_effect/corrected_final/recovery_35row` synchronization boundary, so
    the Breast seven-row and non-Breast 28-row scopes are not separate
@@ -292,9 +293,10 @@ Before any new Stage 5 launch:
   `columns.batch = ["assay", "suspension_dissociation_time"]`; the user
   explicitly accepts this as passed, so no additional semantic review gate is
   required before corrected Stage 5.
-- the seven non-Breast corrected inputs and any historical method artifacts
-  have passed current source, configuration, ownership, checksum, and method
-  validation; valid rows remain outside recomputation;
+- the seven non-Breast corrected inputs are validated by the 35-row gate's
+  source-H5AD, metadata, checksum, ownership, and corrected-consumer preflight
+  before pending selection; no separate inventory report is required, and
+  valid rows remain outside recomputation;
 - the no-compute Alzheimer retry-acceptance validator has passed its focused
   regression, including immutable snapshot/runtime binding, exact scheduler
   role chronology, full OOM attempt preservation, and no `sbatch`/rehash
