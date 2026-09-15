@@ -1173,7 +1173,7 @@ json_quote() {
 
 create_new_run() {
   local root_parent source_copy runtime_copy selection_copy prior_copy attempts_copy
-  local watchdog_copy ownership_copy owners_copy scheduler_copy source_terminal_copy
+  local watchdog_copy ownership_copy owners_copy scheduler_copy source_scheduler_copy source_terminal_copy
   local report metadata terminal report_content attempts_json line id role state exit_code comma=0
   root_parent="$(dirname "${NEW_RUN_ROOT}")"
   [[ -d "${root_parent}" && ! -L "${root_parent}" ]] || die "new run root parent is missing or symlinked: ${root_parent}"
@@ -1189,6 +1189,7 @@ create_new_run() {
   ownership_copy="${NEW_RUN_ROOT}/manifests/output_ownership.tsv"
   owners_copy="${NEW_RUN_ROOT}/manifests/owners.tsv"
   scheduler_copy="${NEW_RUN_ROOT}/manifests/scheduler_ids.tsv"
+  source_scheduler_copy="${NEW_RUN_ROOT}/manifests/source_scheduler_ids.tsv"
   source_terminal_copy="${NEW_RUN_ROOT}/manifests/source_terminal"
   attempts_copy="${NEW_RUN_ROOT}/manifests/accepted_attempts.tsv"
   cp -p "${SOURCE_RUN_ROOT}/manifests/source.manifest" "${source_copy}" || die "could not copy source identity"
@@ -1198,14 +1199,18 @@ create_new_run() {
   cp -p "${WATCHDOG_STATUS_PATH}" "${watchdog_copy}" || die "could not copy watchdog evidence"
   cp -p "${OUTPUT_OWNERSHIP_PATH}" "${ownership_copy}" || die "could not copy output ownership evidence"
   cp -p "${OWNERS_MANIFEST_PATH}" "${owners_copy}" || die "could not copy owners evidence"
-  cp -p "${SCHEDULER_MANIFEST_PATH}" "${scheduler_copy}" || die "could not copy scheduler evidence"
+  cp -p "${SCHEDULER_MANIFEST_PATH}" "${source_scheduler_copy}" || die "could not copy scheduler evidence"
+  write_atomic "${scheduler_copy}" \
+    "ARRAY\t${ACCEPTED_ARRAY_ID}\nWATCHDOG\t${ACCEPTED_WATCHDOG_ID}\n" ||
+    die "could not write accepted scheduler manifest"
   cp -p "${SOURCE_TERMINAL_PATH}" "${source_terminal_copy}" || die "could not copy source terminal evidence"
   {
     printf 'ATTEMPT_ID\tROLE\tSTATE\tEXIT_CODE\n'
     cat "${TMP_DIR}/attempts.tsv"
   } > "${attempts_copy}" || die "could not write accepted attempt table"
   chmod a-w "${source_copy}" "${runtime_copy}" "${selection_copy}" "${prior_copy}" "${attempts_copy}" \
-    "${watchdog_copy}" "${ownership_copy}" "${owners_copy}" "${scheduler_copy}" "${source_terminal_copy}" ||
+    "${watchdog_copy}" "${ownership_copy}" "${owners_copy}" "${scheduler_copy}" \
+    "${source_scheduler_copy}" "${source_terminal_copy}" ||
     die "could not seal copied acceptance evidence"
   report="${NEW_RUN_ROOT}/reports/stage3_retry_acceptance.json"
   attempts_json=""
