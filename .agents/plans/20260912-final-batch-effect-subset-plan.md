@@ -738,13 +738,17 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    `columns.batch=["assay","suspension_dissociation_time"]`. The first
    replacement Breast Stage 3 gate
    `stage3_breast_corrected_assay_dissociation_ygg_20260915T154236Z` failed
-   before scheduler submission on its unsupported one-row classification; it
+   before scheduler submission on its unsupported one-row classification. It
    emitted no scheduler IDs or H5AD. The targeted `--corrected-recovery`
-   Breast-one-row selector is now implemented and its focused submitter test
-   passes. Commit/push/pull that selector revision, create a fresh immutable
-   source snapshot/run, and rerun only the explicit Breast corrected row.
-   Validate the new H5AD before preparing the selected-eight Stage 5 gate with
-   the exact 32-row scope. Never reuse the failed manifests.
+   Breast-one-row selector is implemented in source commit
+   `63c124568aa3f2ccb30e27553a799707b43133da`; its focused submitter test
+   passes, and that exact revision was pulled on Yggdrasil. Fresh snapshot
+   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/stage3_breast_corrected_assay_dissociation_retry2/63c124568aa3f2ccb30e27553a799707b43133da`
+   and one-row selection are sealed. Gate
+   `stage3_breast_corrected_assay_dissociation_retry2_ygg_20260915T161013Z`
+   launched once at `2026-09-15T16:11:32Z`; its single durable wait is armed.
+   Validate its terminal H5AD before preparing the selected-eight Stage 5 gate
+   with the exact 32-row scope. Never reuse the failed manifests.
 6. **Alzheimer Stage 5 follow-up.** After the two Alzheimer Stage 3 lanes
    reach terminal accounting, run-scoped audit, synchronization, and required
    review, run the two explicit one-row Alzheimer Stage 5 lanes under the
