@@ -438,7 +438,12 @@ stage5_validate_final_selection() {
           *) echo "ERROR: targeted final recovery requires one Kidney or exact five-row selection." >&2; return 1 ;;
         esac
       else
-        expected_datasets=(Covid19_PBMC Diabetes Joanito Lung Kidney_KPMP_full)
+        target_row_count="$(awk 'END { print NR }' "${SELECTION_FILE_ARG}")" || return 1
+        if [[ "${target_row_count}" == 1 ]]; then
+          expected_datasets=(Alzheimer)
+        else
+          expected_datasets=(Covid19_PBMC Diabetes Joanito Lung Kidney_KPMP_full)
+        fi
       fi
       ;;
     corrected_final)
