@@ -1,7 +1,6 @@
 #!/bin/bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1 || true
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ecoda-common.XXXXXX")"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 NAS_TEST_ROOT="$(cd "${TMP_DIR}" && pwd -P)"
@@ -140,6 +139,15 @@ jq -e --arg remote_path "${REMOTE_PATH}" '
   | (length > 0 and
      (to_entries
       | all(.[]; any(.value[]; . as $pattern | ($remote_path | test($pattern))))))
+' "${PROFILE}" >/dev/null
+BAMBOO_NAS_PATH="/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper"
+jq -e --arg path "${BAMBOO_NAS_PATH}" '
+  [
+    .policy.manifest_constraints.remote_path_patterns
+    | to_entries[] | .value[] as $pattern
+    | select($path | test($pattern))
+  ]
+  | length == 0
 ' "${PROFILE}" >/dev/null
 jq -e --arg bamboo_nas_mount "${BAMBOO_NAS_MOUNT}" '
   [

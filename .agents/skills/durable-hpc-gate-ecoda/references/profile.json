@@ -21,18 +21,18 @@
         "completion_channel": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"]
       },
       "remote_path_patterns": {
-        "remote_manifest": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"],
-        "remote_runner": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"],
-        "remote_log": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"],
-        "remote_status": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"],
-        "remote_failure_status": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"],
-        "remote_exit_code": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"],
-        "completion_channel": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/smednas515\\.unige\\.ch/carmona_smb/Projects/ECODA_paper(/|$)"]
+        "remote_manifest": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)"],
+        "remote_runner": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)"],
+        "remote_log": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)"],
+        "remote_status": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)"],
+        "remote_failure_status": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)"],
+        "remote_exit_code": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)"],
+        "completion_channel": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)"]
       }
     },
     "invariants": [
       {
-        "name": "bamboo-repository-root",
+        "name": "yggdrasil-repository-root",
         "command": "cd \"$HOME/ECODA_paper\" && test \"$(pwd -P)\" = \"$HOME/ECODA_paper\"",
         "expected_exit": 0
       },
