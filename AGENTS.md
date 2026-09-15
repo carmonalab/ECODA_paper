@@ -161,9 +161,10 @@ checksum mismatch, worker failure, or exhausted OOM retry must fail closed.
   mutable canonical checkout or an unversioned runtime.
 - The run-owned manifest MUST bind the immutable source manifest, runtime
   image and manifest, auxiliary-root identity, exact run ID, scratch/log
-  roots, wrapper, and explicit selected-row scope. Resolve Bamboo's home
+  roots, wrapper, and explicit selected-row scope. Resolve Yggdrasil's home
   before composing remote paths (for example with
-  `ssh bamboo 'printf %s "$HOME"'`).
+  `ssh yggdrasil 'printf %s "$HOME"'`). Bamboo paths are used only after the
+  user explicitly directs a return to Bamboo.
 - The run-scoped `ecoda_run_audit.sh` checks the selected stage, manifest,
   source identity, runtime identity, and artifacts before terminal review; it
   must not scan all run roots or submit repair compute.
