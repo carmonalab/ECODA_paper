@@ -61,7 +61,7 @@ def main():
         datasets = json.load(handle)
 
     expected_final_roles = {
-        "Alzheimer": ("donor_id", "Cognitive status", "Subclass", "Supertype"),
+        "Alzheimer": ("donor_id_assay", "Cognitive status", "Subclass", "Supertype"),
         "Breast_cancer": ("sample_id", "disease", "broad_cell_type", "author_cell_type"),
         "Covid19_PBMC": ("sampleID", "CoVID-19 severity", "majorType", "celltype"),
         "Kidney_KPMP_full": ("specimen", "condition.l1", "subclass.l1", "subclass.l3"),
@@ -118,8 +118,8 @@ def main():
 
     legacy_batch_output_names = {
         "Alzheimer": (
-            "SEAAD_Alzheimer_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
-            "SEAAD_Alzheimer_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+            "SEAAD_Alzheimer_donor_assay_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+            "SEAAD_Alzheimer_donor_assay_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
         ),
         "Breast_cancer": (
             "BreastCncr_processed_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",

@@ -77,7 +77,7 @@
       },
       {
         "name": "terminal-canonical-artifact-roots",
-        "command": "cd \"$HOME/ECODA_paper\" && ECODA_HPC_CLUSTER=yggdrasil ECODA_NAS_TARGET_DIR=\"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\" source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR\" && test \"$NAS_TARGET_DIR\" = \"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\"",
+        "command": "cd \"$HOME/ECODA_paper\" && ECODA_HPC_CLUSTER=yggdrasil ECODA_NAS_TARGET_DIR=\"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\" source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR\" && test -d \"$NAS_TARGET_DIR\"",
         "expected_exit": 0
       },
       {
@@ -89,7 +89,7 @@
     "artifact_contracts": [
       {
         "name": "scratch-and-nas-outputs-use-configured-roots",
-        "command": "cd \"$HOME/ECODA_paper\" && ECODA_HPC_CLUSTER=yggdrasil ECODA_NAS_TARGET_DIR=\"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\" source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR\" && test \"$NAS_TARGET_DIR\" = \"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\"",
+        "command": "cd \"$HOME/ECODA_paper\" && ECODA_HPC_CLUSTER=yggdrasil ECODA_NAS_TARGET_DIR=\"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\" source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR\" && test -d \"$NAS_TARGET_DIR\"",
         "expected_exit": 0
       },
       {

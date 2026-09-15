@@ -444,7 +444,7 @@
       "scatomic"
     ],
     "columns": {
-      "sample": "donor_id",
+      "sample": "donor_id_assay",
       "label": "Cognitive status",
       "batch": ["assay", "sex"],
       "cell_type_low_res": "Subclass",
@@ -457,13 +457,13 @@
     },
     "views": {
       "batch_effect_uncorrected": {
-        "input_file_name": "SEAAD_Alzheimer.h5ad",
-        "output_file_name": "SEAAD_Alzheimer_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
+        "input_file_name": "SEAAD_Alzheimer_donor_assay.h5ad",
+        "output_file_name": "SEAAD_Alzheimer_donor_assay_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
         "subset_vars": {}
       },
       "batch_effect_corrected": {
-        "input_file_name": "SEAAD_Alzheimer.h5ad",
-        "output_file_name": "SEAAD_Alzheimer_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        "input_file_name": "SEAAD_Alzheimer_donor_assay.h5ad",
+        "output_file_name": "SEAAD_Alzheimer_donor_assay_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
         "subset_vars": {}
       }
     }

@@ -97,10 +97,12 @@ checksum mismatch, worker failure, or exhausted OOM retry must fail closed.
   committed revision. Never edit the Yggdrasil checkout directly.
 - Yggdrasil is the default compute, data, results, and backup host for the
   remaining named work. Bamboo is source/fallback infrastructure only unless
-  the user explicitly reverses this policy. No Yggdrasil pipeline job may run
-  until the portability gate and Ygg-compatible durable profile pass; the
-  current profile still declares `remote_host=bamboo`, which is an active
-  migration constraint.
+  the user explicitly reverses this policy. The checked-in durable profile now
+  targets `remote_host=yggdrasil`; pipeline jobs still require the scoped
+  portability/preflight contract before submission.
+- Yggdrasil has no implicit Bamboo NAS path. Use an explicit absolute
+  `NAS_*`/`ECODA_NAS_*` configuration, including the approved local scratch
+  result mirror when NASAC is not mounted; never silently fall back to Bamboo.
 - Yggdrasil and Bamboo have separate storage. The mirrored working paths are
   `~/ECODA_paper` for the repository and `~/scratch/ECODA_paper` for data and
   results. NAS mounts and runtime/tool paths must be checked on the active
