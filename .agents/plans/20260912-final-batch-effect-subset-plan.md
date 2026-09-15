@@ -273,15 +273,19 @@ Alzheimer<TAB>batch_effect_uncorrected
 Alzheimer<TAB>batch_effect_corrected
 ```
 
-Each has its own run root, output path, source/runtime identity, ownership and
-checksums. The two gates may run concurrently only when exact manifests prove
-disjoint mutable output paths, metadata/export/checksum owners, serialization
-locks, and source snapshots. Otherwise they are serialized. Do not use a
-full configured corrected selector that could include the eight other
-cohorts. Both outputs must contain the ordered 104 `donor_id_assay` samples,
-preserve original technical metadata and raw counts, exclude biological labels
-from processing covariates, and use semantic uncorrected/corrected
-representations respectively.
+Each gate must export
+`STAGE3_INPUT_PRODUCER_RUN_ID=stage2_alzheimer_donor_assay_20260914T172421Z`.
+The submitter then materializes and validates its run-owned
+`input_ownership.tsv`, binding the derivative
+`Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad` to the validated Stage 2
+producer before selecting either view. The two gates have separate run roots,
+output paths, source/runtime identities, ownership/checksum records, and
+snapshot parents. They may run concurrently only when those exact manifests
+remain disjoint. Do not use a full configured selector that could include the
+eight other cohorts. Both outputs must contain the ordered 104
+`donor_id_assay` samples, preserve original technical metadata and raw counts,
+exclude biological labels from processing covariates, and use semantic
+uncorrected/corrected representations respectively.
 
 #### Alzheimer Stage 5
 
