@@ -101,8 +101,9 @@ direct checkout edits, broad selection, or partial method subset is allowed.
    FORMAT 2 Python/R runtime smoke, and a CPU Slurm smoke on `cpu001` pass.
    The dynamic NAS contract and Ygg profile checks pass. NASAC remains
    unmounted, so the explicit local scratch result mirror is used for the
-   current lanes. GPU hardware/constraint compatibility remains a separate
-   check for any Alzheimer GPU method.
+   current lanes. All approved batch-effect lanes run on CPU; GPU
+   compatibility is not a blocker because GPU resources were only required
+   for benchmark views, which are complete.
 6. **Remaining Yggdrasil compute.** After a current Ygg source snapshot and
    exact run-owned manifests, run the explicit Alzheimer Stage 3
    uncorrected/corrected rows, the two Alzheimer Stage 5 lanes, and the full
@@ -647,8 +648,9 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    (`45683950`). Host-aware defaults select `shared-cpu,shared-gpu` and
    `public-gpu`; local NAS routing and the Ygg profile tests pass. NASAC is
    unmounted, so the explicit local scratch result mirror is required.
-   GPU method compatibility and any external NAS synchronization remain
-   separate checks. `PORTABILITY_AUDIT=READY_FOR_SCOPED_LANES`; no broad
+   All approved batch-effect lanes run on CPU; GPU compatibility is not a
+   blocker because GPU resources were only required for benchmark views, which
+   are complete. `PORTABILITY_AUDIT=READY_FOR_SCOPED_LANES`; no broad
    selection or partial method subset is allowed.
 5. **Await explicit migration approval.** The remaining work is the exact
    Alzheimer Stage 3 uncorrected/corrected rows, the two Alzheimer Stage 5
@@ -660,9 +662,8 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    and wait.
 6. **Finalize only after reviewed artifacts.** Synchronize manifest-listed
    outputs and checksums, then execute the final analysis lane.
-
 The user explicitly set Yggdrasil as the default host for this plan while
 keeping all authoring local and synchronized by commit/push/pull. The
-portability checks now pass for scoped CPU lanes using the explicit local
-scratch result mirror. GPU-method and external-NAS checks remain separate
-before any lane that requires them.
+portability checks pass for the approved CPU lanes using the explicit local
+scratch result mirror; NASAC remains optional external synchronization, not a
+prerequisite for these CPU runs.
