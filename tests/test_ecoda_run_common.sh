@@ -123,6 +123,33 @@ for relative_nas_var in ECODA_NAS_PREFIX ECODA_NAS_SC_DIR ECODA_NAS_TARGET_DIR; 
   [[ ${relative_nas_rc} -ne 0 ]]
   [[ "${relative_nas_output}" == *"absolute"* ]]
 done
+PROFILE="${ROOT}/.agents/skills/durable-hpc-gate-ecoda/references/profile.json"
+BAMBOO_NAS_MOUNT="/srv/smednas515.unige.ch/carmona_smb"
+
+jq -e '.policy.manifest_constraints.remote_host == ["yggdrasil"]' \
+  "${PROFILE}" >/dev/null
+REMOTE_WORKDIR="/home/users/h/halterc/ECODA_paper"
+REMOTE_PATH="/home/users/h/halterc/scratch/ECODA_paper"
+jq -e --arg remote_workdir "${REMOTE_WORKDIR}" '
+  .policy.manifest_constraints.remote_workdir_patterns
+  | (length > 0 and
+     any(.[]; . as $pattern | ($remote_workdir | test($pattern))))
+' "${PROFILE}" >/dev/null
+jq -e --arg remote_path "${REMOTE_PATH}" '
+  .policy.manifest_constraints.remote_path_patterns
+  | (length > 0 and
+     (to_entries
+      | all(.[]; any(.value[]; . as $pattern | ($remote_path | test($pattern))))))
+' "${PROFILE}" >/dev/null
+jq -e --arg bamboo_nas_mount "${BAMBOO_NAS_MOUNT}" '
+  [
+    .policy.invariants[]?.command,
+    .policy.audit_commands[]?.command,
+    .policy.artifact_contracts[]?.command
+  ]
+  | all(.[]; contains($bamboo_nas_mount) | not)
+' "${PROFILE}" >/dev/null
+
 
 export HPC_SCRATCH_DIR="${TMP_DIR}/scratch"
 export LOGS_DIR="${TMP_DIR}/logs"

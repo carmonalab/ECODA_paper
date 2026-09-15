@@ -8,7 +8,7 @@
   },
   "policy": {
     "manifest_constraints": {
-      "remote_host": ["bamboo"],
+      "remote_host": ["yggdrasil"],
       "remote_workdir_suffix": ["/ECODA_paper"],
       "remote_workdir_patterns": ["^/home/users/[^/]+/[^/]+/ECODA_paper$", "^/Users/[^/]+/ECODA_paper$"],
       "remote_path_suffixes": {
@@ -43,7 +43,7 @@
       },
       {
         "name": "canonical-slurm-configuration",
-        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test \"$PROJECT_ROOT\" = \"$HOME/ECODA_paper\" && test \"$HPC_SCRATCH_DIR\" = \"$HOME/scratch/ECODA_paper\" && test \"$NAS_TARGET_DIR\" = \"/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper\"",
+        "command": "cd \"$HOME/ECODA_paper\" && ECODA_HPC_CLUSTER=yggdrasil ECODA_NAS_TARGET_DIR=\"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\" source src/slurm_config.sh >/dev/null 2>&1 && test \"$PROJECT_ROOT\" = \"$HOME/ECODA_paper\" && test \"$HPC_SCRATCH_DIR\" = \"$HOME/scratch/ECODA_paper\" && test \"$NAS_TARGET_DIR\" = \"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\"",
         "expected_exit": 0
       },
       {
@@ -54,7 +54,7 @@
       },
       {
         "name": "configured-worker-entrypoints",
-        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test -n \"$PYTHON_BIN\" && test -n \"$PIXI_RSCRIPT\"",
+        "command": "cd \"$HOME/ECODA_paper\" && ECODA_HPC_CLUSTER=yggdrasil ECODA_NAS_TARGET_DIR=\"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\" source src/slurm_config.sh >/dev/null 2>&1 && test -n \"$PYTHON_BIN\" && test -n \"$PIXI_RSCRIPT\"",
         "expected_exit": 0
       },
       {
@@ -64,7 +64,7 @@
       },
       {
         "name": "scratch-is-not-the-repository",
-        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test \"$HPC_SCRATCH_DIR\" != \"$PROJECT_ROOT\"",
+        "command": "cd \"$HOME/ECODA_paper\" && ECODA_HPC_CLUSTER=yggdrasil ECODA_NAS_TARGET_DIR=\"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\" source src/slurm_config.sh >/dev/null 2>&1 && test \"$HPC_SCRATCH_DIR\" != \"$PROJECT_ROOT\"",
         "expected_exit": 0
       }
     ],
@@ -77,7 +77,7 @@
       },
       {
         "name": "terminal-canonical-artifact-roots",
-        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR\" && test -d \"$NAS_TARGET_DIR\"",
+        "command": "cd \"$HOME/ECODA_paper\" && ECODA_HPC_CLUSTER=yggdrasil ECODA_NAS_TARGET_DIR=\"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\" source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR\" && test \"$NAS_TARGET_DIR\" = \"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\"",
         "expected_exit": 0
       },
       {
@@ -89,17 +89,17 @@
     "artifact_contracts": [
       {
         "name": "scratch-and-nas-outputs-use-configured-roots",
-        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR\" && test -d \"$NAS_TARGET_DIR\"",
+        "command": "cd \"$HOME/ECODA_paper\" && ECODA_HPC_CLUSTER=yggdrasil ECODA_NAS_TARGET_DIR=\"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\" source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR\" && test \"$NAS_TARGET_DIR\" = \"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\"",
         "expected_exit": 0
       },
       {
         "name": "dataset-identifiers-come-from-ground-truth",
-        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && jq -e 'has(\"Bassez\") and (.Bassez.columns.sample != null) and (.Bassez.columns.label != null)' datasets.json >/dev/null",
+        "command": "cd \"$HOME/ECODA_paper\" && ECODA_HPC_CLUSTER=yggdrasil ECODA_NAS_TARGET_DIR=\"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\" source src/slurm_config.sh >/dev/null 2>&1 && jq -e 'has(\"Bassez\") and (.Bassez.columns.sample != null) and (.Bassez.columns.label != null)' datasets.json >/dev/null",
         "expected_exit": 0
       },
       {
         "name": "stage-neutral-scratch-contract",
-        "command": "cd \"$HOME/ECODA_paper\" && source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR\" && test \"$HPC_SCRATCH_DIR\" != \"$PROJECT_ROOT\"",
+        "command": "cd \"$HOME/ECODA_paper\" && ECODA_HPC_CLUSTER=yggdrasil ECODA_NAS_TARGET_DIR=\"$HOME/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper\" source src/slurm_config.sh >/dev/null 2>&1 && test -d \"$HPC_SCRATCH_DIR\" && test \"$HPC_SCRATCH_DIR\" != \"$PROJECT_ROOT\"",
         "expected_exit": 0
       }
     ],

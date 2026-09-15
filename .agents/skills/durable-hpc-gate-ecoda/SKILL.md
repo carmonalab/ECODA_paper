@@ -1,17 +1,17 @@
 ---
 name: durable-hpc-gate-ecoda
 description: >-
-  Applies durable-hpc-gate to ECODA on Bamboo, adding repository invariants,
+  Applies durable-hpc-gate to ECODA on Yggdrasil, adding repository invariants,
   authoritative-plan checkpoints, canonical scratch/NAS contracts, clean
   benchmark serialization, and Luna Max task/reviewer requirements.
 ---
 
-# Durable HPC Gate — ECODA/Bamboo Profile
+# Durable HPC Gate — ECODA/Yggdrasil Profile
 
 ## Overview
 
 This is the ECODA policy layer for the global `durable-hpc-gate` skill. It
-keeps long-running Slurm wrappers on Bamboo durable across SSH/session loss
+keeps long-running Slurm wrappers on Yggdrasil durable across SSH/session loss
 without copying the global orchestration implementation. The profile is
 repository-aware: it checks the ECODA checkout, canonical configuration and
 artifact roots, scientific invariants, benchmark wave serialization, and the
@@ -19,19 +19,32 @@ terminal accounting/audit contract.
 
 ## Canonical host policy
 
-`bamboo` remains the default and only canonical host for full-cohort ECODA
-Pipeline 1–5 durable compute and normal gates. `yggdrasil` (reachable as
-`ssh yggdrasil` from the approved user setup) is not an implicit compute
-fallback and MUST NOT be used for ECODA pipeline jobs unless a future
-user-approved plan explicitly names it. For the 2026-09-15–18 Bamboo
-maintenance window only, it is authorized as the temporary backup destination
-for the separately planned repository/scratch clone and restore checks. This
-exception does not change durable-gate profile `remote_host=bamboo`,
-runtime/source contracts, or NAS result synchronization. Direct
-Bamboo↔Yggdrasil transfer remains blocked until an explicit SSH-key or
-agent-forwarding setup is in place. Every backup command MUST state its host,
-source/destination path, and scope explicitly; never store passwords, and use
-SSH keys/agent authentication only.
+`yggdrasil` is the current default and canonical host for full-cohort ECODA
+Pipeline 1–5 durable compute, data, results, backup, and normal gates until
+the user explicitly directs a return to Bamboo. All authoring and
+pipeline-file changes happen on the local workstation: commit and push them,
+then pull the exact committed revision on Yggdrasil. Never edit the Yggdrasil
+checkout directly.
+
+The active Yggdrasil repository and scratch paths are `~/ECODA_paper` and
+`~/scratch/ECODA_paper`, respectively. Bamboo is an explicit user-directed
+fallback/source host only; do not infer a host change from maintenance dates
+or use Bamboo paths by default. The current checked-in
+`references/profile.json` and effective workflow configuration MUST be
+Ygg-compatible before any gate runs, including `remote_host`, repository and
+scratch roots, scheduler/runtime settings, and result handling. A profile
+that still encodes Bamboo as its active host is not valid for a Yggdrasil
+gate.
+
+Yggdrasil has no implicit Bamboo NAS path. `NAS_TARGET_DIR` (or an explicit
+`ECODA_NAS_TARGET_DIR` override) MUST point to a configured Yggdrasil result
+location, such as the approved local scratch result mirror, or a verified
+user-scoped NAS mount MUST be established before launch. Never silently fall
+back to Bamboo NAS storage. Any Bamboo↔Yggdrasil transfer is exceptional and
+requires an explicitly configured SSH key or agent-forwarding setup. Every
+transfer/backup command MUST state its host, source/destination path, and
+scope explicitly; never store passwords, and use SSH keys/agent
+authentication only.
 
 ## Repository-defined exceptions
 
@@ -55,14 +68,20 @@ alternate runtime. Use the global CLI and the checked-in profile at
 
 ## Quick Start
 
-Run these commands from the ECODA repository. Substitute a new gate ID,
-wrapper, and artifact paths for the gate being run. Resolve Bamboo's home
-directory remotely; local `$HOME` is not a valid prefix for remote artifact
-paths. The remote checkout is `${BAMBOO_HOME}/ECODA_paper`; its scratch data
-root is `${BAMBOO_HOME}/scratch/ECODA_paper` (not a git clone).
-The exact wrapper must invoke the immutable snapshot's own executor with its
-source manifest, frozen `tree/aux` root, versioned runtime image/manifest,
-run ID, separate logs root, and explicit selected-row arguments.
+Run these commands from the local ECODA repository. All authoring and
+pipeline-file changes must be made locally, then committed and pushed; before
+any gate runs, Yggdrasil must pull that exact committed revision. Never edit
+the Yggdrasil checkout directly. Substitute a new gate ID, wrapper, and
+artifact paths for the gate being run. Resolve Yggdrasil's home directory
+remotely; local `$HOME` is not a valid prefix for remote artifact paths. The
+remote checkout is `${YGGDRASIL_HOME}/ECODA_paper`; its scratch data root is
+`${YGGDRASIL_HOME}/scratch/ECODA_paper` (not a git clone). The checked-in
+profile must be Ygg-compatible, and `NAS_TARGET_DIR` must be explicitly
+configured for Yggdrasil or backed by a verified user-scoped mount; never
+silently use a Bamboo NAS path. The exact wrapper must invoke the immutable
+snapshot's own executor with its source manifest, frozen `tree/aux` root,
+versioned runtime image/manifest, run ID, separate logs root, and explicit
+selected-row arguments.
 
 
 ```bash
@@ -70,16 +89,16 @@ GLOBAL="$HOME/.agents/skills/durable-hpc-gate/scripts/durable_hpc_gate.py"
 PROFILE="$PWD/.agents/skills/durable-hpc-gate-ecoda/references/profile.json"
 GATE_ID="ecoda_<unique-id>"
 MANIFEST="$PWD/.gate/${GATE_ID}.json"
-BAMBOO_HOME="$(ssh bamboo 'printf %s "$HOME"')"
-REMOTE_WORKDIR="${BAMBOO_HOME}/ECODA_paper"
+YGGDRASIL_HOME="$(ssh yggdrasil 'printf %s "$HOME"')"
+REMOTE_WORKDIR="${YGGDRASIL_HOME}/ECODA_paper"
 WRAPPER='/bin/bash "<resolved-snapshot>/tree/src/utils/bash/ecoda_source_snapshot.sh" exec --source-root "<resolved-snapshot>/tree" --source-manifest "<resolved-snapshot>/identity/source.manifest" --host-env-prefix "<pinned-env-prefix>" --runtime-image "<versioned-runtime>.sif" --runtime-manifest "<versioned-runtime>.sif.manifest" --run-id "<run-id>" --scratch-root "<scratch-root>" --logs-root "<logs-root>" --script "src/<stage>/<submitter>.sh" -- <explicit-selection-arguments>'
-REMOTE_ROOT="${BAMBOO_HOME}/scratch/ECODA_paper/gates/${GATE_ID}"
+REMOTE_ROOT="${YGGDRASIL_HOME}/scratch/ECODA_paper/gates/${GATE_ID}"
 REMOTE_RUNNER="${REMOTE_ROOT}.runner.sh"
 
 uv run "$GLOBAL" prepare \
   --profile "$PROFILE" --manifest "$MANIFEST" \
   --output "$PWD/.gate/${GATE_ID}.prepare.json" \
-  --project ECODA --gate-id "$GATE_ID" --remote-host bamboo \
+  --project ECODA --gate-id "$GATE_ID" --remote-host yggdrasil \
   --remote-workdir "$REMOTE_WORKDIR" --exact-command "$WRAPPER" \
   --serialization-group ecoda-benchmark \
   --tmux-session "$GATE_ID" --completion-channel "file:${REMOTE_ROOT}.done" \
@@ -179,12 +198,14 @@ Python implementation.
 - Never create a competing plan, edit the current plan during skill
   installation, or mark a gate complete before `inspect` and review.
 
-### 2. Enforce Bamboo and repository invariants
+### 2. Enforce Yggdrasil and repository invariants
 
-- Remote host is `bamboo`; the durable gate's `remote_workdir` remains the
+- Remote host is `yggdrasil`; the durable gate's `remote_workdir` remains the
   repository clone `$HOME/ECODA_paper`. The clone is not
-  `$HOME/scratch/ECODA_paper`; the exact wrapper executes the
-  `/bin/bash` executor from the commit-keyed immutable source snapshot.
+  `$HOME/scratch/ECODA_paper`; all source changes reach this checkout only
+  through the exact local commit/push and Yggdrasil pull workflow. The exact
+  wrapper executes the `/bin/bash` executor from the commit-keyed immutable
+  source snapshot.
 - Create one verified source snapshot per full source commit before gate
   `prepare`. It contains the complete committed tree, `COMPLETE`,
   `identity/source.manifest`, `identity/source.tar`, and the tracked
@@ -204,11 +225,14 @@ Python implementation.
   retry ceilings. Snapshot-backed format-2 runs use the relocated immutable
   source/runtime layout; format-1 images and runs retain their legacy
   validation path.
-- Scratch data belongs under `$HOME/scratch/ECODA_paper`; NAS artifacts belong
-  under the configured `NAS_TARGET_DIR`. Do not hard-code a second path or
-  treat scratch as a git checkout. The frozen `tree/aux` is the only source
-  of auxiliary inputs, and Stage 4 validates (rather than rewrites) its
-  pre-existing scGate database.
+- On Yggdrasil, scratch data belongs under `$HOME/scratch/ECODA_paper`; NAS
+  artifacts belong under the explicitly configured `NAS_TARGET_DIR`. That
+  variable MUST resolve to an approved Yggdrasil result location, such as the
+  explicit `ECODA_NAS_TARGET_DIR` local scratch result mirror, or to a
+  verified user-scoped NAS mount. There is no implicit Bamboo NAS fallback.
+  Do not hard-code a second path or treat scratch as a git checkout. The
+  frozen `tree/aux` is the only source of auxiliary inputs, and Stage 4
+  validates (rather than rewrites) its pre-existing scGate database.
 - Workers use the immutable config-provided interpreter commands; never invoke
   bare `python`, `Rscript`, or an ordinary lock-mutating `pixi run` in a job.
   Login nodes are for editing, staging, synchronization, and submission;
@@ -272,7 +296,7 @@ Python implementation.
 - A bounded Luna Max **task** executes `reconcile → prepare → launch` and
   exits after updating the checkpoint. Main arms exactly one harness-owned
   asynchronous `wait` with no periodic update requests.
-- The runner uses `/bin/bash` on Bamboo, starts in the declared
+- The runner uses `/bin/bash` on Yggdrasil, starts in the declared
   `remote_workdir`, and changes to that directory before invoking the exact
   wrapper. It writes terminal status atomically and signals completion only
   after a durable primary or fallback failure status exists. Every terminal
@@ -435,7 +459,10 @@ and must never be converted into a polling loop.
 ## Common Mistakes
 
 - Running the wrapper from `$HOME/scratch/ECODA_paper`, a login node, or a
-  second tmux session instead of the Bamboo git clone and explicit gate session.
+  second tmux session instead of the Yggdrasil git clone and explicit gate
+  session.
+- Editing the Yggdrasil checkout directly instead of making the change locally,
+  committing and pushing it, and pulling the exact revision on Yggdrasil.
 - Using bare interpreters, mutating `datasets.json`/the lockfile, passing labels
   into a method, or skipping `src/slurm_config.sh`.
 - Relaunching after an SSH drop, treating event delivery as completion, or
