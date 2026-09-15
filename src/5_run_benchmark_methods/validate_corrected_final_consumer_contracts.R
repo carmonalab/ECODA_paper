@@ -26,8 +26,8 @@ selection_path <- normalizePath(args[["selection"]], mustWork = TRUE)
 analysis_root <- normalizePath(args[["analysis-root"]], mustWork = FALSE)
 input_root <- normalizePath(args[["input-root"]], mustWork = FALSE)
 output_path <- normalizePath(args[["output"]], mustWork = FALSE)
-if (!grepl("/batch_effect/corrected_final$", analysis_root, perl = TRUE)) {
-  stop("corrected-final consumer barrier requires batch_effect/corrected_final")
+if (!grepl("/batch_effect/corrected_final(/recovery_35row)?$", analysis_root, perl = TRUE)) {
+  stop("corrected-final consumer barrier requires batch_effect/corrected_final or its recovery_35row replacement root")
 }
 if (!grepl("^/", analysis_root, perl = TRUE) ||
     !grepl("^/", input_root, perl = TRUE) ||
@@ -56,6 +56,173 @@ if (any(selection$view != "batch_effect_corrected") ||
     any(!nzchar(selection$dataset)) ||
     anyDuplicated(selection$dataset)) {
   stop("corrected-final consumer selection has invalid rows")
+}
+method_matrix_mode <- "method-matrix" %in% names(args)
+method_matrix_path <- NULL
+method_matrix_rows <- NULL
+method_matrix_md5 <- NULL
+method_matrix_size <- NULL
+method_matrix_sha256 <- NULL
+method_matrix_identity <- NULL
+method_matrix_declared_count <- NULL
+if (method_matrix_mode) {
+  raw_matrix_path <- args[["method-matrix"]]
+  if (
+    isTRUE(raw_matrix_path) ||
+    length(raw_matrix_path) != 1L ||
+    is.na(raw_matrix_path) ||
+    !nzchar(as.character(raw_matrix_path))
+  ) {
+    stop("--method-matrix requires a readable path")
+  }
+  method_matrix_path <- normalizePath(
+    as.character(raw_matrix_path), mustWork = TRUE
+  )
+  if (
+    !grepl("^/", method_matrix_path, perl = TRUE) ||
+    !file.exists(method_matrix_path) ||
+    isTRUE(file.info(method_matrix_path)$isdir) ||
+    nzchar(Sys.readlink(method_matrix_path))
+  ) {
+    stop("--method-matrix must be an absolute regular file, not a symlink")
+  }
+  matrix_sidecar <- paste0(method_matrix_path, ".md5")
+  if (!file.exists(matrix_sidecar) || nzchar(Sys.readlink(matrix_sidecar))) {
+    stop("run-owned method matrix checksum sidecar is missing or unsafe")
+  }
+  sidecar_lines <- readLines(matrix_sidecar, warn = FALSE)
+  sidecar_md5_values <- sub("^MD5=", "", sidecar_lines[grepl("^MD5=", sidecar_lines)])
+  sidecar_size_values <- sub("^SIZE=", "", sidecar_lines[grepl("^SIZE=", sidecar_lines)])
+  sidecar_path_values <- sub("^PATH=", "", sidecar_lines[grepl("^PATH=", sidecar_lines)])
+  if (
+    length(sidecar_md5_values) != 1L ||
+    length(sidecar_size_values) != 1L ||
+    length(sidecar_path_values) != 1L
+  ) {
+    stop("run-owned method matrix checksum sidecar is malformed")
+  }
+  sidecar_md5 <- sidecar_md5_values[[1L]]
+  sidecar_size <- sidecar_size_values[[1L]]
+  sidecar_path <- sidecar_path_values[[1L]]
+  method_matrix_md5 <- tolower(unname(tools::md5sum(method_matrix_path)))
+  method_matrix_size <- as.numeric(file.info(method_matrix_path)$size)
+  sidecar_path_normalized <- normalizePath(sidecar_path, mustWork = FALSE)
+  if (
+    !identical(sidecar_md5, method_matrix_md5) ||
+    !identical(suppressWarnings(as.numeric(sidecar_size)), method_matrix_size) ||
+    !identical(sidecar_path_normalized, method_matrix_path)
+  ) {
+    stop("run-owned method matrix checksum sidecar does not match the matrix")
+  }
+  if (!grepl("/batch_effect/corrected_final/recovery_35row$", analysis_root, perl = TRUE)) {
+    stop("method-matrix corrected-final validation requires the recovery_35row root")
+  }
+  matrix_lines <- readLines(method_matrix_path, warn = FALSE)
+  if (!length(matrix_lines) || any(!nzchar(matrix_lines))) {
+    stop("method matrix is empty or contains blank rows")
+  }
+  matrix_parts <- strsplit(matrix_lines, "\t", fixed = TRUE)
+  if (any(lengths(matrix_parts) != 3L)) {
+    stop("method matrix must have exactly three columns")
+  }
+  matrix_values <- data.frame(
+    dataset = vapply(matrix_parts, `[[`, character(1), 1L),
+    view = vapply(matrix_parts, `[[`, character(1), 2L),
+    method = vapply(matrix_parts, `[[`, character(1), 3L),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+  expected_matrix_datasets <- c(
+    "Breast_cancer", "Joanito", "Stephenson", "Covid19_PBMC",
+    "Kidney_KPMP_full", "Diabetes", "Lupus_PBMC", "Lung"
+  )
+  expected_matrix_methods <- c(
+    "prepare_pseudobulk", "pseudobulk", "gloscope", "composition",
+    "mrvi", "pilot", "qot"
+  )
+  if (
+    any(!nzchar(matrix_values$dataset)) ||
+    any(matrix_values$view != "batch_effect_corrected") ||
+    any(!matrix_values$method %in% expected_matrix_methods) ||
+    anyDuplicated(paste(matrix_values$dataset, matrix_values$view,
+                        matrix_values$method, sep = "|"))
+  ) {
+    stop("method matrix has malformed, unsupported, or duplicate rows")
+  }
+  if (
+    !setequal(unique(matrix_values$dataset), unique(selection$dataset)) ||
+    any(!selection$dataset %in% matrix_values$dataset)
+  ) {
+    stop("method matrix does not cover exactly the selected datasets")
+  }
+  method_matrix_rows <- matrix_values
+  method_matrix_declared_count <- nrow(matrix_values)
+  method_matrix_md5 <- tolower(unname(tools::md5sum(method_matrix_path)))
+  method_matrix_size <- as.numeric(file.info(method_matrix_path)$size)
+  method_matrix_sha256_arg <- args[["method-matrix-sha256"]]
+  method_matrix_identity_arg <- args[["method-matrix-identity"]]
+  if (!is.null(args[["method-matrix-md5"]])) {
+    supplied_md5 <- as.character(args[["method-matrix-md5"]])
+    if (!identical(supplied_md5, method_matrix_md5)) {
+      stop("method matrix MD5 does not match the bound file")
+    }
+  }
+  if (!is.null(args[["method-matrix-size"]])) {
+    supplied_size <- suppressWarnings(as.numeric(args[["method-matrix-size"]]))
+    if (length(supplied_size) != 1L || is.na(supplied_size) ||
+        supplied_size != method_matrix_size) {
+      stop("method matrix size does not match the bound file")
+    }
+  }
+  sha256_bin <- Sys.which("sha256sum")
+  sha256_args <- character()
+  if (!nzchar(sha256_bin)) {
+    sha256_bin <- Sys.which("shasum")
+    sha256_args <- "-a 256"
+  }
+  if (!nzchar(sha256_bin)) {
+    stop("a SHA-256 utility is required for method matrix identity")
+  }
+  sha256_output <- system2(
+    sha256_bin, c(sha256_args, method_matrix_path),
+    stdout = TRUE, stderr = TRUE
+  )
+  computed_sha256 <- strsplit(trimws(sha256_output[[1L]]), "[[:space:]]+")[[1L]][[1L]]
+  if (!grepl("^[[:xdigit:]]{64}$", computed_sha256)) {
+    stop("could not compute method matrix SHA-256 identity")
+  }
+  method_matrix_sha256 <- tolower(computed_sha256)
+  if (!is.null(method_matrix_sha256_arg)) {
+    supplied_sha256 <- as.character(method_matrix_sha256_arg)
+    if (!identical(supplied_sha256, method_matrix_sha256)) {
+      stop("method matrix SHA-256 does not match the bound file")
+    }
+  }
+  if (!is.null(method_matrix_identity_arg)) {
+    method_matrix_identity <- as.character(method_matrix_identity_arg)
+    if (length(method_matrix_identity) != 1L ||
+        !grepl("^[[:xdigit:]]{64}$", method_matrix_identity)) {
+      stop("method matrix identity is malformed")
+    }
+    if (!is.null(method_matrix_sha256) &&
+        !identical(method_matrix_identity, method_matrix_sha256)) {
+      stop("method matrix identity disagrees with its SHA-256 identity")
+    }
+  } else {
+    method_matrix_identity <- method_matrix_sha256
+  }
+  if (is.null(method_matrix_identity)) {
+    # The wrapper records the SHA-256 identity.  An isolated validator can
+    # still enforce the exact rows and file checksum without requiring a
+    # platform-specific SHA utility.
+    method_matrix_identity <- method_matrix_md5
+  }
+}
+method_matrix_methods_for <- function(dataset) {
+  if (!method_matrix_mode) {
+    return(c("prepare_pseudobulk", "pseudobulk", "gloscope", "composition"))
+  }
+  unname(method_matrix_rows$method[method_matrix_rows$dataset == dataset])
 }
 
 method_specs <- list(
@@ -278,10 +445,15 @@ for (index in seq_len(nrow(selection))) {
     } else {
       "NO_CORRECTION"
     }
-    estimable_keys <- effective_batch_keys
-    checked_r_consumers <- character()
-    consumer_contracts <- list()
-    for (method in c("prepare_pseudobulk", "pseudobulk", "gloscope", "composition")) {
+    declared_methods <- method_matrix_methods_for(ds)
+    if (
+      !length(declared_methods) ||
+      any(!declared_methods %in% names(method_specs)) ||
+      anyDuplicated(declared_methods)
+    ) {
+      stop("method scope is missing, duplicated, or unsupported for ", ds)
+    }
+    for (method in declared_methods) {
       spec <- method_specs[[method]]
       identity <- ecoda_hpc_batch_contract_identity(
         batch_keys,
@@ -308,20 +480,25 @@ for (index in seq_len(nrow(selection))) {
       consumer_contracts[[method]] <- consumer_contract
       checked_r_consumers <- c(checked_r_consumers, method)
     }
-    method_identities <- lapply(method_specs, function(spec) {
-      ecoda_hpc_batch_contract_identity(
-        batch_keys,
-        sample_col = "Sample",
-        method_id = spec$method_id,
-        model_id = spec$model_id
-      )
-    })
+    method_identities <- lapply(
+      if (method_matrix_mode) declared_methods else names(method_specs),
+      function(method) {
+        spec <- method_specs[[method]]
+        ecoda_hpc_batch_contract_identity(
+          batch_keys,
+          sample_col = "Sample",
+          method_id = spec$method_id,
+          model_id = spec$model_id
+        )
+      }
+    )
     row_result <- list(
       dataset = ds,
       view = view,
       status = "OK",
       h5ad_path = h5ad_path,
       metadata_path = metadata_path,
+      declared_methods = declared_methods,
       batch_keys = unname(batch_keys),
       key_level_counts = as.list(level_counts),
       estimable_batch_keys = unname(estimable_keys),
@@ -360,6 +537,17 @@ report <- list(
   rows = rows,
   failures = unname(failures)
 )
+if (method_matrix_mode) {
+  report$method_matrix <- list(
+    path = method_matrix_path,
+    md5 = method_matrix_md5,
+    size = method_matrix_size,
+    sha256 = method_matrix_sha256,
+    identity = method_matrix_identity,
+    declared_method_rows = method_matrix_declared_count,
+    dataset_order = unname(unique(selection$dataset))
+  )
+}
 
 output_dir <- dirname(output_path)
 dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)

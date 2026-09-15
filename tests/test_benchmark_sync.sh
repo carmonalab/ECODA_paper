@@ -565,6 +565,51 @@ _ecoda_stage5_artifacts_for Adams batch_effect_uncorrected composition
   "${FINAL_ANALYSIS_ROOT}/results/Adams_batch_effect_uncorrected_final_metadata.rds" ]]
 
 echo "final benchmark variant paths: OK"
+export ANALYSIS_VARIANT=corrected_final ANALYSIS_PASS=corrected
+MATRIX_CORRECTED_ANALYSIS_ROOT="${TMP_DIR}/scratch/batch_effect/corrected_final/recovery_35row"
+MATRIX_CORRECTED_ANALYSIS_NAS_ROOT="${TMP_DIR}/nas/project/batch_effect/corrected_final/recovery_35row"
+mkdir -p "${MATRIX_CORRECTED_ANALYSIS_ROOT}" \
+  "${MATRIX_CORRECTED_ANALYSIS_NAS_ROOT}"
+export ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION=recovery_35row \
+  ANALYSIS_ROOT="${MATRIX_CORRECTED_ANALYSIS_ROOT}" \
+  ANALYSIS_NAS_ROOT="${MATRIX_CORRECTED_ANALYSIS_NAS_ROOT}"
+benchmark_sync_artifacts_for Adams pseudobulk
+[[ "${SYNC_ARTIFACTS[0]}" == \
+  "${MATRIX_CORRECTED_ANALYSIS_ROOT}/results/Adams_batch_effect_corrected_final_pseudobulk.rds" ]]
+_ecoda_stage5_artifacts_for Adams batch_effect_corrected composition
+[[ "${ECODA_BENCHMARK_ARTIFACTS[0]}" == \
+  "${MATRIX_CORRECTED_ANALYSIS_ROOT}/results/Adams_batch_effect_corrected_final_composition.rds" ]]
+MATRIX_METHOD_FILTER_SOURCE="${TMP_DIR}/matrix-method-filter.tsv"
+MATRIX_METHOD_FILTER="${ECODA_RUN_ROOT}/manifests/method_matrix.tsv"
+printf 'Adams\tbatch_effect_corrected\tmrvi\n' > "${MATRIX_METHOD_FILTER_SOURCE}"
+ecoda_atomic_install_manifest "${MATRIX_METHOD_FILTER_SOURCE}" \
+  "${MATRIX_METHOD_FILTER}" 3
+ecoda_write_checksum "${MATRIX_METHOD_FILTER}"
+MATRIX_METHOD_FILTER_MD5="${ECODA_CHECKSUM_MD5}"
+MATRIX_METHOD_FILTER_SIZE="${ECODA_CHECKSUM_SIZE}"
+MATRIX_METHOD_FILTER_SHA256="$(ecoda_sha256_file "${MATRIX_METHOD_FILTER}")"
+ecoda_validate_manifest "${MATRIX_METHOD_FILTER}" 3
+ecoda_validate_checksum "${MATRIX_METHOD_FILTER}"
+export ECODA_STAGE5_METHOD_MATRIX="${MATRIX_METHOD_FILTER}" \
+  METHOD_MATRIX="${MATRIX_METHOD_FILTER}" \
+  METHOD_MATRIX_SOURCE_PATH="${MATRIX_METHOD_FILTER_SOURCE}" \
+  METHOD_MATRIX_MD5="${MATRIX_METHOD_FILTER_MD5}" \
+  METHOD_MATRIX_SIZE="${MATRIX_METHOD_FILTER_SIZE}" \
+  METHOD_MATRIX_SHA256="${MATRIX_METHOD_FILTER_SHA256}" \
+  METHOD_MATRIX_IDENTITY="${MATRIX_METHOD_FILTER_SHA256}" \
+  METHOD_MATRIX_DECLARED_COUNT=1 ECODA_STAGE5_METHOD_MATRIX_MODE=1
+benchmark_sync_artifacts_for Adams mrvi
+[[ "${SYNC_ARTIFACTS[0]}" == \
+  "${MATRIX_CORRECTED_ANALYSIS_ROOT}/embeddings/Adams_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather" ]]
+benchmark_sync_artifacts_for Adams pilot
+[[ "${#SYNC_ARTIFACTS[@]}" == 0 ]]
+unset ECODA_STAGE5_METHOD_MATRIX METHOD_MATRIX METHOD_MATRIX_SOURCE_PATH \
+  METHOD_MATRIX_MD5 METHOD_MATRIX_SIZE METHOD_MATRIX_SHA256 METHOD_MATRIX_IDENTITY \
+  METHOD_MATRIX_DECLARED_COUNT ECODA_STAGE5_METHOD_MATRIX_MODE
+unset ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION
+export ANALYSIS_VARIANT=final ANALYSIS_PASS=uncorrected \
+  ANALYSIS_ROOT="${FINAL_ANALYSIS_ROOT}" \
+  ANALYSIS_NAS_ROOT="${FINAL_ANALYSIS_NAS_ROOT}"
 
 FINAL_PAYLOAD="${FINAL_ANALYSIS_ROOT}/embeddings/Adams_batch_effect_uncorrected_final_hvg2000_highres_mrvi_dists.feather"
 mkdir -p "$(dirname "${FINAL_PAYLOAD}")"
@@ -626,10 +671,11 @@ fi
 [[ ! -e "${FINAL_ANALYSIS_NAS_ROOT}/pseudobulks/Adams_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds" ]]
 echo "final benchmark sync variant: OK"
 export ANALYSIS_VARIANT=corrected_final ANALYSIS_PASS=corrected \
-  ANALYSIS_ROOT="${CORRECTED_FINAL_ANALYSIS_ROOT}" \
-  ANALYSIS_NAS_ROOT="${CORRECTED_FINAL_ANALYSIS_NAS_ROOT}" \
+  ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION=recovery_35row \
+  ANALYSIS_ROOT="${MATRIX_CORRECTED_ANALYSIS_ROOT}" \
+  ANALYSIS_NAS_ROOT="${MATRIX_CORRECTED_ANALYSIS_NAS_ROOT}" \
   ANALYSIS_LOG_PREFIX="execution_times_batch_effect_corrected_final_"
-CORRECTED_PAYLOAD="${CORRECTED_FINAL_ANALYSIS_ROOT}/embeddings/Adams_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather"
+CORRECTED_PAYLOAD="${MATRIX_CORRECTED_ANALYSIS_ROOT}/embeddings/Adams_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather"
 mkdir -p "$(dirname "${CORRECTED_PAYLOAD}")"
 pixi run python -c 'import pandas as pd,sys; pd.DataFrame({"s1":[1.0,0.0],"s2":[0.0,1.0]},index=["s1","s2"]).to_feather(sys.argv[1])' \
   "${CORRECTED_PAYLOAD}"
@@ -639,10 +685,43 @@ CORRECTED_RUNTIME="${CORRECTED_PAYLOAD}.runtime.json"
 printf '{"schema_version":1,"artifact_path":"%s","artifact_md5":"%s","dataset":"Adams","method":"MrVI_hvg2000","time_secs":1.0,"mem_GB":1.0}\n' \
   "${CORRECTED_PAYLOAD}" "${CORRECTED_PAYLOAD_MD5}" > "${CORRECTED_RUNTIME}"
 ecoda_write_checksum "${CORRECTED_RUNTIME}"
-CORRECTED_METADATA_OUTPUT="${CORRECTED_FINAL_ANALYSIS_ROOT}/metadata/Adams_sample_metadata.feather"
+CORRECTED_METADATA_OUTPUT="${MATRIX_CORRECTED_ANALYSIS_ROOT}/metadata/Adams_sample_metadata.feather"
 mkdir -p "$(dirname "${CORRECTED_METADATA_OUTPUT}")"
 printf 'Sample\ns1\ns2\n' > "${CORRECTED_METADATA_OUTPUT}"
 ecoda_write_checksum "${CORRECTED_METADATA_OUTPUT}"
+
+# A failed recovery-root synchronization leaves a FAIL owner that a later
+# run must be able to reclaim. Remove only the checksum sidecar so the
+# selected payload itself remains unchanged.
+CORRECTED_FAILED_RUN_ID="corrected_final_sync_failed"
+ecoda_init_run stage5 "${CORRECTED_FAILED_RUN_ID}" >/dev/null
+export ECODA_RUN_ID="${CORRECTED_FAILED_RUN_ID}" ECODA_RUN_ROOT
+CORRECTED_FAILED_SELECTION="${ECODA_RUN_ROOT}/manifests/selection.tsv"
+printf 'Adams\tbatch_effect_corrected\tbatch_effect_corrected\n' \
+  > "${CORRECTED_FAILED_SELECTION}"
+export ECODA_SELECTION_MANIFEST="${CORRECTED_FAILED_SELECTION}" \
+  ECODA_EXACT_SELECTION=0
+DATASET_NAMES=(Adams)
+LABELS=(mrvi)
+export DATASET_NAMES LABELS
+EXECUTION_LOG_DIR="${ECODA_RUN_ROOT}/logs"
+export EXECUTION_LOG_DIR
+CORRECTED_FAILED_METADATA_EXPORT="${ECODA_RUN_ROOT}/manifests/metadata_export.tsv"
+printf 'Adams\tbatch_effect_corrected\t/immutable/Adams-corrected.h5ad\t%s\n' \
+  "${CORRECTED_METADATA_OUTPUT}" > "${CORRECTED_FAILED_METADATA_EXPORT}"
+CORRECTED_PAYLOAD_MD5_SAVED="${CORRECTED_PAYLOAD}.md5.failed-recovery"
+cp "${CORRECTED_PAYLOAD}.md5" "${CORRECTED_PAYLOAD_MD5_SAVED}"
+rm -f "${CORRECTED_PAYLOAD}.md5"
+if analysis_merge_sync_cleanup mrvi >/dev/null 2>&1; then
+  echo "failed corrected-final synchronization unexpectedly succeeded" >&2
+  exit 1
+fi
+CORRECTED_FAILED_SYNC_OWNER="$(ecoda_owner_dir stage5 \
+  "sync/${MATRIX_CORRECTED_ANALYSIS_ROOT}")"
+[[ "$(ecoda_owner_state "${CORRECTED_FAILED_SYNC_OWNER}")" == "FAIL" ]]
+[[ "$(ecoda_owner_run "${CORRECTED_FAILED_SYNC_OWNER}")" == \
+  "${CORRECTED_FAILED_RUN_ID}" ]]
+mv -f "${CORRECTED_PAYLOAD_MD5_SAVED}" "${CORRECTED_PAYLOAD}.md5"
 
 CORRECTED_RUN_ID="corrected_final_sync_run"
 ecoda_init_run stage5 "${CORRECTED_RUN_ID}" >/dev/null
@@ -675,8 +754,59 @@ grep -q '^embeddings/Adams_batch_effect_corrected_final_hvg2000_highres_mrvi_dis
   "${CORRECTED_SYNC_FILES}"
 grep -q '^metadata/Adams_sample_metadata.feather$' "${CORRECTED_SYNC_FILES}"
 grep -q '^metadata/Adams_sample_metadata.feather.md5$' "${CORRECTED_SYNC_FILES}"
-[[ -s "${CORRECTED_FINAL_ANALYSIS_NAS_ROOT}/metadata/Adams_sample_metadata.feather" ]]
-[[ -s "${CORRECTED_FINAL_ANALYSIS_NAS_ROOT}/metadata/Adams_sample_metadata.feather.md5" ]]
-[[ -s "${CORRECTED_FINAL_ANALYSIS_NAS_ROOT}/embeddings/Adams_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather" ]]
-[[ ! -e "${CORRECTED_FINAL_ANALYSIS_NAS_ROOT}/pseudobulks/Adams_batch_effect_corrected_final_pseudobulk_hvg2000.rds" ]]
+[[ -s "${MATRIX_CORRECTED_ANALYSIS_NAS_ROOT}/metadata/Adams_sample_metadata.feather" ]]
+[[ -s "${MATRIX_CORRECTED_ANALYSIS_NAS_ROOT}/metadata/Adams_sample_metadata.feather.md5" ]]
+[[ -s "${MATRIX_CORRECTED_ANALYSIS_NAS_ROOT}/embeddings/Adams_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather" ]]
+[[ ! -e "${MATRIX_CORRECTED_ANALYSIS_NAS_ROOT}/pseudobulks/Adams_batch_effect_corrected_final_pseudobulk_hvg2000.rds" ]]
 echo "corrected-final benchmark sync variant: OK"
+CORRECTED_SYNC_OWNER="$(ecoda_owner_dir stage5 \
+  "sync/${MATRIX_CORRECTED_ANALYSIS_ROOT}")"
+[[ "$(ecoda_owner_state "${CORRECTED_SYNC_OWNER}")" == "OK" ]]
+[[ "$(ecoda_owner_run "${CORRECTED_SYNC_OWNER}")" == \
+  "corrected_final_sync_run" ]]
+CORRECTED_SYNC_OWNER_SNAPSHOT="${TMP_DIR}/corrected_sync_owner.before_conflict"
+cp "${CORRECTED_SYNC_OWNER}/owner" "${CORRECTED_SYNC_OWNER_SNAPSHOT}"
+CORRECTED_SYNC_OWNER_STATE="$(ecoda_owner_state "${CORRECTED_SYNC_OWNER}")"
+CORRECTED_SYNC_OWNER_RUN="$(ecoda_owner_run "${CORRECTED_SYNC_OWNER}")"
+CORRECTED_SYNC_OWNER_BYTES="$(wc -c < "${CORRECTED_SYNC_OWNER}/owner" | tr -d '[:space:]')"
+
+
+# A second run cannot claim a second synchronization owner for the same
+# corrected-final root, even when it presents the same selected row.
+CORRECTED_CONFLICT_RUN_ID="corrected_final_sync_conflict"
+ecoda_init_run stage5 "${CORRECTED_CONFLICT_RUN_ID}" >/dev/null
+export ECODA_RUN_ID="${CORRECTED_CONFLICT_RUN_ID}" ECODA_RUN_ROOT
+CORRECTED_CONFLICT_SELECTION="${ECODA_RUN_ROOT}/manifests/selection.tsv"
+printf 'Adams\tbatch_effect_corrected\tbatch_effect_corrected\n' \
+  > "${CORRECTED_CONFLICT_SELECTION}"
+export ECODA_SELECTION_MANIFEST="${CORRECTED_CONFLICT_SELECTION}" \
+  ECODA_EXACT_SELECTION=0
+DATASET_NAMES=(Adams)
+LABELS=(mrvi)
+export DATASET_NAMES LABELS
+export EXECUTION_LOG_DIR="${ECODA_RUN_ROOT}/logs"
+mkdir -p "${EXECUTION_LOG_DIR}"
+pixi run python -c 'import pandas as pd,sys; pd.DataFrame({"dataset":["Adams"],"method":["MrVI_hvg2000"],"time_secs":[1.0],"mem_GB":[1.0]}).to_feather(sys.argv[1])' \
+  "${EXECUTION_LOG_DIR}/execution_times_batch_effect_corrected_final_mrvi_Adams.feather"
+ecoda_write_checksum \
+  "${EXECUTION_LOG_DIR}/execution_times_batch_effect_corrected_final_mrvi_Adams.feather"
+ecoda_write_artifact_record \
+  "${EXECUTION_LOG_DIR}/execution_times_batch_effect_corrected_final_mrvi_Adams.feather" \
+  stage5_execution_log "${ECODA_RUN_ID}" >/dev/null
+CORRECTED_CONFLICT_METADATA_EXPORT="${ECODA_RUN_ROOT}/manifests/metadata_export.tsv"
+printf 'Adams\tbatch_effect_corrected\t/immutable/Adams-corrected.h5ad\t%s\n' \
+  "${CORRECTED_METADATA_OUTPUT}" > "${CORRECTED_CONFLICT_METADATA_EXPORT}"
+if analysis_merge_sync_cleanup mrvi >/dev/null 2>&1; then
+  echo "second corrected-final synchronization owner was admitted" >&2
+  exit 1
+fi
+cmp "${CORRECTED_SYNC_OWNER}/owner" "${CORRECTED_SYNC_OWNER_SNAPSHOT}"
+[[ "$(ecoda_owner_state "${CORRECTED_SYNC_OWNER}")" == \
+  "${CORRECTED_SYNC_OWNER_STATE}" ]]
+[[ "$(ecoda_owner_run "${CORRECTED_SYNC_OWNER}")" == \
+  "${CORRECTED_SYNC_OWNER_RUN}" ]]
+[[ "$(wc -c < "${CORRECTED_SYNC_OWNER}/owner" | tr -d '[:space:]')" == \
+  "${CORRECTED_SYNC_OWNER_BYTES}" ]]
+[[ "$(ecoda_owner_run "${CORRECTED_SYNC_OWNER}")" == \
+  "corrected_final_sync_run" ]]
+echo "corrected-final synchronization owner exclusivity: OK"

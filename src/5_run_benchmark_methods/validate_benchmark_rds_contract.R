@@ -34,6 +34,14 @@ batch_contract_arg <- value_for("--batch-contract", "")
 source_identity_verified <- has_flag("--source-identity-verified")
 exact <- has_flag("--exact")
 batch <- nzchar(batch_pass)
+corrected_final_root_version_env <- Sys.getenv(
+  "ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION",
+  unset = ""
+)
+analysis_root_version_env <- Sys.getenv("ANALYSIS_ROOT_VERSION", unset = "")
+analysis_root_identity_env <- Sys.getenv("ANALYSIS_ROOT_IDENTITY", unset = "")
+analysis_root_env <- Sys.getenv("ANALYSIS_ROOT", unset = "")
+analysis_nas_root_env <- Sys.getenv("ANALYSIS_NAS_ROOT", unset = "")
 if (!analysis_variant %in% c("", "final", "corrected_final")) {
   stop("unknown analysis variant: ", analysis_variant)
 }
@@ -45,6 +53,178 @@ if (identical(analysis_variant, "corrected_final") &&
     (!batch || !identical(batch_pass, "corrected"))) {
   stop("corrected_final analysis variant requires corrected batch-effect validation")
 }
+
+.variant_root_identity_from_path <- function(path) {
+  normalized <- normalizePath(
+    path.expand(path),
+    winslash = "/",
+    mustWork = FALSE
+  )
+  name <- basename(normalized)
+  parent <- basename(dirname(normalized))
+  grandparent <- basename(dirname(dirname(normalized)))
+  if (identical(name, "uncorrected_final")) return("uncorrected_final")
+  if (identical(name, "corrected_final")) return("corrected_final")
+  if (identical(name, "recovery_35row") &&
+      identical(parent, "corrected_final") &&
+      identical(grandparent, "batch_effect")) {
+    return("corrected_final/recovery_35row")
+  }
+  NULL
+}
+
+root_version_values <- unique(c(
+  corrected_final_root_version_env[nzchar(corrected_final_root_version_env)],
+  analysis_root_version_env[nzchar(analysis_root_version_env)]
+))
+if (length(setdiff(root_version_values, "recovery_35row"))) {
+  stop(
+    "corrected-final root version must be recovery_35row: ",
+    paste(setdiff(root_version_values, "recovery_35row"), collapse = ", ")
+  )
+}
+if (length(root_version_values) > 1L) {
+  stop("corrected-final root version declarations disagree")
+}
+
+root_identity_values <- character()
+if (nzchar(analysis_root_identity_env)) {
+  if (!nzchar(analysis_variant)) {
+    stop("ANALYSIS_ROOT_IDENTITY requires an explicit analysis variant")
+  }
+  if (!analysis_root_identity_env %in%
+      c("corrected_final", "corrected_final/recovery_35row")) {
+    stop("invalid ANALYSIS_ROOT_IDENTITY: ", analysis_root_identity_env)
+  }
+  root_identity_values <- c(root_identity_values, analysis_root_identity_env)
+}
+if (length(root_version_values)) {
+  if (!identical(analysis_variant, "corrected_final")) {
+    stop(
+      "ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION requires ",
+      "analysis_variant=corrected_final"
+    )
+  }
+  root_identity_values <- c(
+    root_identity_values,
+    paste0("corrected_final/", root_version_values[[1L]])
+  )
+}
+if (nzchar(analysis_root_env) && nzchar(analysis_variant)) {
+  declared_identity <- .variant_root_identity_from_path(analysis_root_env)
+  if (is.null(declared_identity)) {
+    stop("ANALYSIS_ROOT is not a supported variant root: ", analysis_root_env)
+  }
+  root_identity_values <- c(root_identity_values, declared_identity)
+}
+if (nzchar(analysis_nas_root_env) && nzchar(analysis_variant)) {
+  declared_nas_identity <- .variant_root_identity_from_path(analysis_nas_root_env)
+  if (is.null(declared_nas_identity)) {
+    stop(
+      "ANALYSIS_NAS_ROOT is not a supported variant root: ",
+      analysis_nas_root_env
+    )
+  }
+  root_identity_values <- c(root_identity_values, declared_nas_identity)
+}
+root_identity_values <- unique(root_identity_values)
+if (length(root_identity_values) > 1L) {
+  stop(
+    "corrected-final root declarations disagree: ",
+    paste(root_identity_values, collapse = ", ")
+  )
+}
+if (length(root_identity_values) &&
+    !analysis_variant %in% c("corrected_final", "final")) {
+  stop("variant root metadata requires an explicit analysis variant")
+}
+if (identical(analysis_variant, "final") &&
+    length(root_identity_values) &&
+    !identical(root_identity_values[[1L]], "uncorrected_final")) {
+  stop("final analysis variant cannot use a corrected-final root")
+}
+corrected_final_root_version <- if (
+  length(root_identity_values) &&
+  identical(root_identity_values[[1L]], "corrected_final/recovery_35row")
+) {
+  "recovery_35row"
+} else {
+  ""
+}
+variant_bound_root_identity <- if (length(root_identity_values)) {
+  root_identity_values[[1L]]
+} else {
+  NULL
+}
+variant_bound_root_path <- if (nzchar(analysis_root_env) &&
+                                nzchar(analysis_variant)) {
+  normalizePath(path.expand(analysis_root_env), winslash = "/", mustWork = FALSE)
+} else {
+  NULL
+}
+
+.expected_variant_root_identity <- function() {
+  if (!batch || !nzchar(analysis_variant)) return(NULL)
+  if (identical(analysis_variant, "final")) return("uncorrected_final")
+  if (identical(analysis_variant, "corrected_final")) {
+    if (identical(corrected_final_root_version, "recovery_35row")) {
+      return("corrected_final/recovery_35row")
+    }
+    return("corrected_final")
+  }
+  stop("unsupported analysis variant: ", analysis_variant)
+}
+
+.bind_variant_root <- function(path, context) {
+  normalized_path <- normalizePath(
+    path.expand(path),
+    winslash = "/",
+    mustWork = FALSE
+  )
+  actual_identity <- .variant_root_identity_from_path(normalized_path)
+  if (is.null(actual_identity)) {
+    stop(context, " is not a supported variant root: ", path)
+  }
+  expected_identity <- .expected_variant_root_identity()
+  if (is.null(expected_identity)) return(invisible(actual_identity))
+
+  # An explicit run root (from metadata) always wins. For standalone artifact
+  # validation, the supplied path itself may select the replacement root; once
+  # selected, every reconstructed artifact must remain in that same root.
+  if (is.null(variant_bound_root_identity) &&
+      identical(analysis_variant, "corrected_final") &&
+      identical(actual_identity, "corrected_final/recovery_35row")) {
+    variant_bound_root_identity <<- actual_identity
+    corrected_final_root_version <<- "recovery_35row"
+    expected_identity <- actual_identity
+  }
+  if (!identical(actual_identity, expected_identity)) {
+    stop(
+      analysis_variant, " ", context, " is under the wrong analysis root: ",
+      path
+    )
+  }
+  if (!is.null(variant_bound_root_path) &&
+      !identical(variant_bound_root_path, normalized_path)) {
+    stop(
+      analysis_variant, " artifact root mixing is not allowed: expected ",
+      variant_bound_root_path, " but found ", normalized_path
+    )
+  }
+  variant_bound_root_path <<- normalized_path
+  invisible(actual_identity)
+}
+
+.validate_reconstructed_artifact_path <- function(file) {
+  if (batch && nzchar(analysis_variant)) {
+    .bind_variant_root(
+      dirname(dirname(path.expand(file))),
+      "reconstructed artifact"
+    )
+  }
+  invisible(NULL)
+}
+
 corrected_final_mode <- identical(analysis_variant, "corrected_final") &&
   identical(batch_pass, "corrected")
 corrected_summary_required <- identical(batch_pass, "corrected") &&
@@ -63,24 +243,9 @@ if (!nzchar(artifact_path) && !nzchar(artifact_list) &&
     (is.null(root) || is.null(selection) || !length(labels) || any(!nzchar(labels)))) {
   stop("--root, --selection, and --labels are required")
 }
-if (!nzchar(artifact_path) && !nzchar(artifact_list) &&
-    nzchar(analysis_variant)) {
-  expected_root_name <- if (identical(analysis_variant, "final")) {
-    "uncorrected_final"
-  } else {
-    "corrected_final"
-  }
-  resolved_root_name <- basename(
-    normalizePath(path.expand(root), winslash = "/", mustWork = FALSE)
-  )
-  if (!identical(resolved_root_name, expected_root_name)) {
-    stop(
-      analysis_variant, " validation root must end in ",
-      expected_root_name, ": ", root
-    )
-  }
+if (nzchar(analysis_variant) && !is.null(root) && nzchar(root)) {
+  .bind_variant_root(root, "validation root")
 }
-
 checksum_ok <- function(file) {
   sidecar <- paste0(file, ".md5")
   info <- if (file.exists(file)) file.info(file) else NULL
@@ -1346,6 +1511,9 @@ config <- if (nzchar(config_path) && file.exists(config_path)) {
 }
 
 .expected_row_batch_contract <- function(ds, view, label, supplied = NULL) {
+  # Row identities are a corrected-pass contract.  Do not derive or require
+  # one while validating ordinary uncorrected benchmark bundles.
+  if (!identical(batch_pass, "corrected")) return(supplied)
   derived <- .corrected_batch_row_identity(ds, view, label)
   if (is.null(derived)) return(supplied)
   if (!is.null(supplied)) {
@@ -2088,23 +2256,10 @@ validate_metadata <- function(
   if (!batch || !nzchar(analysis_variant) || !nzchar(method)) {
     return(invisible(NULL))
   }
-  expected_root_name <- if (identical(analysis_variant, "final")) {
-    "uncorrected_final"
-  } else {
-    "corrected_final"
-  }
-  root_name <- basename(
-    normalizePath(
-      dirname(dirname(path.expand(file))),
-      winslash = "/",
-      mustWork = FALSE
-    )
+  .bind_variant_root(
+    dirname(dirname(path.expand(file))),
+    "artifact"
   )
-  if (!identical(root_name, expected_root_name)) {
-    stop(
-      analysis_variant, " artifact is under the wrong analysis root: ", file
-    )
-  }
   expected_directory <- if (
     identical(method, "prepare_pseudobulk") && !isTRUE(metadata)
   ) {
@@ -2159,7 +2314,6 @@ validate_metadata <- function(
   }
   invisible(NULL)
 }
-
 validate_artifact_contract <- function(
   file,
   method,
@@ -2178,7 +2332,7 @@ validate_artifact_contract <- function(
   )
   row_expected_batch_contract <- expected_batch_contract
   if (
-    identical(view, "batch_effect_corrected") &&
+    identical(batch_pass, "corrected") &&
     nzchar(ds) && nzchar(view)
   ) {
     row_expected_batch_contract <- .expected_row_batch_contract(
@@ -2186,7 +2340,7 @@ validate_artifact_contract <- function(
     )
   }
   if (
-    identical(view, "batch_effect_corrected") &&
+    identical(batch_pass, "corrected") &&
     is.null(row_expected_batch_contract) && is.null(batch_contract)
   ) {
     stop(
@@ -2343,6 +2497,7 @@ for (part in parts) {
       stem <- .batch_result_stem(ds)
       for (variant in variants) {
         file <- file.path(root, "pseudobulks", paste0(stem, "_pseudobulk_", variant, ".rds"))
+        .validate_reconstructed_artifact_path(file)
         selected_artifacts <- c(selected_artifacts, file)
         validate_pseudobulk(
           file,
@@ -2354,15 +2509,18 @@ for (part in parts) {
       }
     } else if (label == "trans") {
       file <- file.path(root, "results", paste0(ds, "_trans.rds"))
+      .validate_reconstructed_artifact_path(file)
       selected_artifacts <- c(selected_artifacts, file)
       validate_trans(file)
     } else if (label == "zeroimp") {
       file <- file.path(root, "results", paste0(ds, "_zeroimp.rds"))
+      .validate_reconstructed_artifact_path(file)
       selected_artifacts <- c(selected_artifacts, file)
       validate_zeroimp(file)
     } else {
       stem <- .batch_result_stem(ds)
       file <- file.path(root, "results", paste0(stem, "_", label, ".rds"))
+      .validate_reconstructed_artifact_path(file)
       selected_artifacts <- c(selected_artifacts, file)
       required_keys <- if (batch) batch_required_keys(ds, label) else NULL
       allowed_extra_keys <- if (batch) batch_allowed_extra_keys(ds, label) else character()
@@ -2377,6 +2535,7 @@ for (part in parts) {
       )
       if (label == "composition") {
         metadata_file <- file.path(root, "results", paste0(stem, "_metadata.rds"))
+        .validate_reconstructed_artifact_path(metadata_file)
         selected_artifacts <- c(selected_artifacts, metadata_file)
         validate_metadata(
           metadata_file,

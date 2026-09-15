@@ -88,6 +88,62 @@ make_source_fixture() {
         "output_file_name": "Fixture_batch_effect_analysis_uncorrected.h5ad"
       }
     }
+  },
+  "Breast_cancer": {
+    "columns": {"sample": "Sample", "label": "label", "batch": "batch"},
+    "views": {"batch_effect_corrected": {
+      "output_file_name": "Breast_cancer_batch_effect_corrected.h5ad",
+      "columns": {"batch": "batch"}
+    }}
+  },
+  "Joanito": {
+    "columns": {"sample": "Sample", "label": "label", "batch": "batch"},
+    "views": {"batch_effect_corrected": {
+      "output_file_name": "Joanito_batch_effect_corrected.h5ad",
+      "columns": {"batch": "batch"}
+    }}
+  },
+  "Stephenson": {
+    "columns": {"sample": "Sample", "label": "label", "batch": "batch"},
+    "views": {"batch_effect_corrected": {
+      "output_file_name": "Stephenson_batch_effect_corrected.h5ad",
+      "columns": {"batch": "batch"}
+    }}
+  },
+  "Covid19_PBMC": {
+    "columns": {"sample": "Sample", "label": "label", "batch": "batch"},
+    "views": {"batch_effect_corrected": {
+      "output_file_name": "Covid19_PBMC_batch_effect_corrected.h5ad",
+      "columns": {"batch": "batch"}
+    }}
+  },
+  "Kidney_KPMP_full": {
+    "columns": {"sample": "Sample", "label": "label", "batch": "batch"},
+    "views": {"batch_effect_corrected": {
+      "output_file_name": "Kidney_KPMP_full_batch_effect_corrected.h5ad",
+      "columns": {"batch": "batch"}
+    }}
+  },
+  "Diabetes": {
+    "columns": {"sample": "Sample", "label": "label", "batch": "batch"},
+    "views": {"batch_effect_corrected": {
+      "output_file_name": "Diabetes_batch_effect_corrected.h5ad",
+      "columns": {"batch": "batch"}
+    }}
+  },
+  "Lupus_PBMC": {
+    "columns": {"sample": "Sample", "label": "label", "batch": "batch"},
+    "views": {"batch_effect_corrected": {
+      "output_file_name": "Lupus_PBMC_batch_effect_corrected.h5ad",
+      "columns": {"batch": "batch"}
+    }}
+  },
+  "Lung": {
+    "columns": {"sample": "Sample", "label": "label", "batch": "batch"},
+    "views": {"batch_effect_corrected": {
+      "output_file_name": "Lung_batch_effect_corrected.h5ad",
+      "columns": {"batch": "batch"}
+    }}
   }
 }
 JSON
@@ -240,6 +296,211 @@ prepare_contract_identity() {
   CONTRACT_IDENTITY_PATH="${path}"
   CONTRACT_IDENTITY_MD5="${md5}"
   CONTRACT_IDENTITY_SIZE="${size}"
+}
+prepare_matrix_contract_identity() {
+  local run_root="$1" dataset="$2" file_method="$3" model_id="$4"
+  local identity_method="${5:-${file_method}}" path identity
+  path="${run_root}/manifests/batch_contracts/${dataset}__batch_effect_corrected__${file_method}.json"
+  mkdir -p "$(dirname "${path}")"
+  identity="$(
+    cd "${ROOT}"
+    ECODA_SOURCE_ROOT="${SOURCE_TREE}" PROJECT_ROOT="${ROOT}" \
+      DATASETS_JSON_FILE="${SOURCE_CONFIG}" \
+      BENCHMARK_MATRIX_TEST=0 PYTHON_BIN="${PIXI_PYTHON}" \
+      ecoda_batch_contract_identity "${SOURCE_CONFIG}" "${dataset}" \
+      batch_effect_corrected "${identity_method}" "${model_id}"
+  )"
+  printf '%s\n' "${identity}" > "${path}"
+  ecoda_write_checksum "${path}" >/dev/null
+}
+prepare_matrix_run() {
+  local run_root="${SCRATCH}/_ecoda_runs/matrix_fixture"
+  local analysis_root="${SCRATCH}/batch_effect/corrected_final/recovery_35row"
+  local analysis_nas_root="${NAS}/batch_effect/corrected_final/recovery_35row"
+  local selection matrix pending contract_manifest status_report metadata_manifest
+  local matrix_md5 matrix_size matrix_sha pending_md5 pending_size
+  local dataset method output_name input metadata_output path
+  local identity_method model_id
+  local -a datasets=(
+    Breast_cancer Joanito Stephenson Covid19_PBMC Kidney_KPMP_full
+    Diabetes Lupus_PBMC Lung
+  )
+  local -a methods=(
+    prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
+  )
+  local -a contract_methods=()
+  mkdir -p "${run_root}/manifests" "${run_root}/status" \
+    "${run_root}/status/metadata_export" "${analysis_root}"
+  make_run_identities "${run_root}" "${SOURCE_MANIFEST}" "${RUNTIME_IDENTITY}"
+
+  selection="${run_root}/manifests/selection.tsv"
+  : > "${selection}"
+  for dataset in "${datasets[@]}"; do
+    printf '%s\tbatch_effect_corrected\tbatch_effect_corrected\n' \
+      "${dataset}" >> "${selection}"
+  done
+  ecoda_write_checksum "${selection}" >/dev/null
+
+  matrix="${run_root}/manifests/method_matrix.tsv"
+  : > "${matrix}"
+  for method in "${methods[@]}"; do
+    printf 'Breast_cancer\tbatch_effect_corrected\t%s\n' "${method}" \
+      >> "${matrix}"
+  done
+  for dataset in "${datasets[@]:1}"; do
+    for method in prepare_pseudobulk pseudobulk gloscope composition; do
+      printf '%s\tbatch_effect_corrected\t%s\n' "${dataset}" "${method}" \
+        >> "${matrix}"
+    done
+  done
+  ecoda_write_checksum "${matrix}" >/dev/null
+  matrix_md5="${ECODA_CHECKSUM_MD5}"
+  matrix_size="${ECODA_CHECKSUM_SIZE}"
+  matrix_sha="$(sha256_file "${matrix}")"
+
+  pending="${run_root}/manifests/pending_selection.tsv"
+  printf 'Breast_cancer\tbatch_effect_corrected\tmrvi\n' > "${pending}"
+  ecoda_write_checksum "${pending}" >/dev/null
+  pending_md5="${ECODA_CHECKSUM_MD5}"
+  pending_size="${ECODA_CHECKSUM_SIZE}"
+
+  contract_manifest="${run_root}/manifests/batch_contract.tsv"
+  : > "${contract_manifest}"
+  for dataset in "${datasets[@]}"; do
+    prepare_matrix_contract_identity \
+      "${run_root}" "${dataset}" preprocess hvg_composite_v1
+    path="${run_root}/manifests/batch_contracts/${dataset}__batch_effect_corrected__preprocess.json"
+    ecoda_validate_checksum "${path}" >/dev/null
+    printf '%s\tbatch_effect_corrected\tpreprocess\t%s\t%s\t%s\n' \
+      "${dataset}" "${path}" "${ECODA_CHECKSUM_MD5}" "${ECODA_CHECKSUM_SIZE}" \
+      >> "${contract_manifest}"
+    if [[ "${dataset}" == Breast_cancer ]]; then
+      contract_methods=("${methods[@]}")
+    else
+      contract_methods=(prepare_pseudobulk pseudobulk gloscope composition)
+    fi
+    for method in "${contract_methods[@]}"; do
+      case "${method}" in
+        prepare_pseudobulk|pseudobulk)
+          identity_method=Pseudobulk
+          model_id=pseudobulk_limma_fixed_effects_v1
+          ;;
+        gloscope)
+          identity_method=GloScope
+          model_id=embedding_consumer_harmony_v1
+          ;;
+        composition)
+          identity_method=ECODA_authors_HR
+          model_id=limma_fixed_effects_v1
+          ;;
+        mrvi)
+          identity_method=MrVI
+          model_id=mrvi_composite_v1
+          ;;
+        pilot)
+          identity_method=PILOT
+          model_id=embedding_consumer_harmony_v1
+          ;;
+        qot)
+          identity_method=QOT
+          model_id=embedding_consumer_harmony_v1
+          ;;
+        *) return 1 ;;
+      esac
+      prepare_matrix_contract_identity \
+        "${run_root}" "${dataset}" "${method}" "${model_id}" \
+        "${identity_method}"
+      path="${run_root}/manifests/batch_contracts/${dataset}__batch_effect_corrected__${method}.json"
+      printf '%s\tbatch_effect_corrected\t%s\t%s\t%s\t%s\n' \
+        "${dataset}" "${method}" "${path}" \
+        "$(sed -n 's/^MD5=//p' "${path}.md5" | sed -n '1p' | tr -d '[:space:]')" \
+        "$(sed -n 's/^SIZE=//p' "${path}.md5" | sed -n '1p' | tr -d '[:space:]')" \
+        >> "${contract_manifest}"
+    done
+  done
+  ecoda_write_checksum "${contract_manifest}" >/dev/null
+  contract_md5="${ECODA_CHECKSUM_MD5}"
+  contract_size="${ECODA_CHECKSUM_SIZE}"
+  contract_sha="$(sha256_file "${contract_manifest}")"
+
+  metadata_manifest="${run_root}/manifests/metadata_export.tsv"
+  : > "${metadata_manifest}"
+  for dataset in "${datasets[@]}"; do
+    output_name="${dataset}_batch_effect_corrected.h5ad"
+    input="${SCRATCH}/${dataset}/output/${output_name}"
+    metadata_output="${analysis_root}/metadata/${dataset}_sample_metadata.feather"
+    make_artifact "${input}" 0
+    mkdir -p "$(dirname "${metadata_output}")"
+    printf 'sample metadata fixture\n' > "${metadata_output}"
+    ecoda_write_checksum "${metadata_output}" >/dev/null
+    printf '%s\tbatch_effect_corrected\t%s\t%s\n' \
+      "${dataset}" "${input}" "${metadata_output}" >> "${metadata_manifest}"
+  done
+  ecoda_write_checksum "${metadata_manifest}" >/dev/null
+
+  make_artifact \
+    "${analysis_root}/embeddings/Breast_cancer_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather" \
+    1
+  make_artifact \
+    "${analysis_nas_root}/embeddings/Breast_cancer_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather" \
+    0
+
+  status_report="${run_root}/status/metadata_export.report"
+  cat > "${status_report}" <<EOF
+STATE=OK
+ANALYSIS_VARIANT=corrected_final
+ANALYSIS_ROOT=${analysis_root}
+ANALYSIS_NAS_ROOT=${analysis_nas_root}
+ANALYSIS_PASS=corrected
+ANALYSIS_LOG_PREFIX=execution_times_batch_effect_corrected_final_
+RUN_ID=matrix_fixture
+MANIFEST=${metadata_manifest}
+COUNT=8
+PENDING=1
+EOF
+  ecoda_write_checksum "${status_report}" >/dev/null
+  cat > "${run_root}/metadata" <<EOF
+STAGE=stage5
+RUN_ID=matrix_fixture
+STATE=ACTIVE
+SOURCE_MANIFEST=${run_root}/manifests/source.manifest
+RUNTIME_IDENTITY=${run_root}/manifests/runtime.identity
+METHODS=prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot
+PASS=corrected
+ROOT=${analysis_root}
+ANALYSIS_VARIANT=corrected_final
+ANALYSIS_ROOT=${analysis_root}
+ANALYSIS_NAS_ROOT=${analysis_nas_root}
+ANALYSIS_PASS=corrected
+ANALYSIS_LOG_PREFIX=execution_times_batch_effect_corrected_final_
+ANALYSIS_ROOT_VERSION=recovery_35row
+ANALYSIS_ROOT_IDENTITY=corrected_final/recovery_35row
+METHOD_MATRIX=${matrix}
+METHOD_MATRIX_MD5=${matrix_md5}
+METHOD_MATRIX_SIZE=${matrix_size}
+METHOD_MATRIX_SHA256=${matrix_sha}
+METHOD_MATRIX_IDENTITY=${matrix_sha}
+DECLARED_METHOD_ROWS=35
+PENDING_METHOD_ROWS=1
+METADATA_EXPORT_MANIFEST=${metadata_manifest}
+METADATA_EXPORT_STATUS=${status_report}
+PENDING_SELECTION=${pending}
+PENDING_SELECTION_MD5=${pending_md5}
+PENDING_SELECTION_SIZE=${pending_size}
+BATCH_CONTRACT_MANIFEST=${contract_manifest}
+BATCH_CONTRACT_MANIFEST_MD5=${contract_md5}
+BATCH_CONTRACT_MANIFEST_SIZE=${contract_size}
+BATCH_CONTRACT_MANIFEST_SHA256=${contract_sha}
+EOF
+  cat > "${run_root}/status/terminal" <<EOF
+STATE=OK
+RUN_ID=matrix_fixture
+EOF
+  : > "${run_root}/manifests/scheduler_ids.tsv"
+  MATRIX_RUN_ROOT="${run_root}"
+  MATRIX_ROOT="${analysis_root}"
+  MATRIX_MANIFEST="${matrix}"
+  export MATRIX_RUN_ROOT MATRIX_ROOT MATRIX_MANIFEST
 }
 
 prepare_corrected_final_run() {
@@ -406,6 +667,44 @@ grep -F -- "${CORRECTED_ROOT}/metadata/Fixture_sample_metadata.feather" \
   "${CORRECTED_METADATA_MANIFEST}" >/dev/null
 ! grep -F -- "${SCRATCH}/batch_effect/corrected/" "${VALIDATOR_LOG}" >/dev/null
 ! grep -F -- "${SCRATCH}/batch_effect/uncorrected/" "${CORRECTED_METADATA_MANIFEST}" >/dev/null
+# A root-version-only corrected-final run (the shape used by the Alzheimer
+# one-row follow-up) is accepted without a method matrix.
+VERSION_ROOT="${SCRATCH}/batch_effect/corrected_final/recovery_35row"
+VERSION_NAS_ROOT="${NAS}/batch_effect/corrected_final/recovery_35row"
+VERSION_ARTIFACT="${VERSION_ROOT}/embeddings/Fixture_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather"
+VERSION_NAS_ARTIFACT="${VERSION_NAS_ROOT}/embeddings/Fixture_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather"
+VERSION_METADATA_OUTPUT="${VERSION_ROOT}/metadata/Fixture_sample_metadata.feather"
+make_artifact "${VERSION_ARTIFACT}" 1
+make_artifact "${VERSION_NAS_ARTIFACT}" 0
+mkdir -p "$(dirname "${VERSION_METADATA_OUTPUT}")"
+printf 'versioned sample metadata fixture\n' > "${VERSION_METADATA_OUTPUT}"
+ecoda_write_checksum "${VERSION_METADATA_OUTPUT}" >/dev/null
+printf 'Fixture\tbatch_effect_corrected\t%s\t%s\n' \
+  "${SCRATCH}/Fixture/output/Fixture_batch_effect_analysis_corrected.h5ad" \
+  "${VERSION_METADATA_OUTPUT}" > "${CORRECTED_METADATA_MANIFEST}"
+ecoda_write_checksum "${CORRECTED_METADATA_MANIFEST}" >/dev/null
+VERSION_STATUS="${CORRECTED_RUN_ROOT}/status/metadata_export.report"
+sed \
+  -e "s#^ANALYSIS_ROOT=.*#ANALYSIS_ROOT=${VERSION_ROOT}#" \
+  -e "s#^ANALYSIS_NAS_ROOT=.*#ANALYSIS_NAS_ROOT=${VERSION_NAS_ROOT}#" \
+  "${VERSION_STATUS}" > "${VERSION_STATUS}.bad"
+mv "${VERSION_STATUS}.bad" "${VERSION_STATUS}"
+ecoda_write_checksum "${VERSION_STATUS}" >/dev/null
+sed \
+  -e "s#^ROOT=.*#ROOT=${VERSION_ROOT}#" \
+  -e "s#^ANALYSIS_ROOT=.*#ANALYSIS_ROOT=${VERSION_ROOT}#" \
+  -e "s#^ANALYSIS_NAS_ROOT=.*#ANALYSIS_NAS_ROOT=${VERSION_NAS_ROOT}#" \
+  "${CORRECTED_RUN_ROOT}/metadata" > "${CORRECTED_RUN_ROOT}/metadata.bad"
+mv "${CORRECTED_RUN_ROOT}/metadata.bad" "${CORRECTED_RUN_ROOT}/metadata"
+printf 'ANALYSIS_ROOT_VERSION=recovery_35row\nANALYSIS_ROOT_IDENTITY=corrected_final/recovery_35row\n' \
+  >> "${CORRECTED_RUN_ROOT}/metadata"
+run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 0
+sed \
+  -e '/^ANALYSIS_ROOT_VERSION=/d' \
+  -e '/^ANALYSIS_ROOT_IDENTITY=/d' \
+  "${CORRECTED_RUN_ROOT}/metadata" > "${CORRECTED_RUN_ROOT}/metadata.bad"
+mv "${CORRECTED_RUN_ROOT}/metadata.bad" "${CORRECTED_RUN_ROOT}/metadata"
+
 
 # A corrected-final run cannot be made to consume a legacy root by changing
 # metadata after the producer finished: the run-scoped identity must fail
@@ -458,5 +757,75 @@ EOF
 run_audit "${LEGACY_RUN_ROOT}" stage5 "${LEGACY_SELECTION}" 0
 grep -F -- "${LEGACY_ARTIFACT}" "${VALIDATOR_LOG}" >/dev/null
 ! grep -F -- '_batch_effect_uncorrected_final_' "${VALIDATOR_LOG}" >/dev/null
+# A corrected-final recovery run binds an independent eight-row dataset
+# selection to the exact 35-row method matrix.  Only one pending row is
+# materialized here; the other declared rows represent validated reuse.
+prepare_matrix_run
+MATRIX_SELECTION="${MATRIX_RUN_ROOT}/manifests/selection.tsv"
+MATRIX_METADATA="${MATRIX_RUN_ROOT}/metadata"
+MATRIX_METADATA_GOOD="${TMP_DIR}/matrix.metadata.good"
+MATRIX_MANIFEST_GOOD="${TMP_DIR}/matrix.manifest.good"
+cp "${MATRIX_METADATA}" "${MATRIX_METADATA_GOOD}"
+cp "${MATRIX_MANIFEST}" "${MATRIX_MANIFEST_GOOD}"
+run_audit "${MATRIX_RUN_ROOT}" stage5 "${MATRIX_SELECTION}" 0
+grep -F -- "${MATRIX_ROOT}/embeddings/Breast_cancer_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather" \
+  "${VALIDATOR_LOG}" >/dev/null
 
-echo "ecoda run audit variant identity: OK"
+MATRIX_MUTATION_DIR="${TMP_DIR}/matrix-mutations"
+mkdir -p "${MATRIX_MUTATION_DIR}"
+for matrix_case in duplicate missing extra; do
+  cp "${MATRIX_MANIFEST_GOOD}" "${MATRIX_MANIFEST}"
+  case "${matrix_case}" in
+    duplicate)
+      printf 'Breast_cancer\tbatch_effect_corrected\tprepare_pseudobulk\n' \
+        >> "${MATRIX_MANIFEST}"
+      ;;
+    missing)
+      sed '/^Breast_cancer\tbatch_effect_corrected\tqot$/d' \
+        "${MATRIX_MANIFEST}" > "${MATRIX_MUTATION_DIR}/missing.tsv"
+      mv "${MATRIX_MUTATION_DIR}/missing.tsv" "${MATRIX_MANIFEST}"
+      ;;
+    extra)
+      printf 'Lung\tbatch_effect_corrected\tqot\n' >> "${MATRIX_MANIFEST}"
+      ;;
+  esac
+  ecoda_write_checksum "${MATRIX_MANIFEST}" >/dev/null
+  # Keep metadata's declared count at 35 while refreshing only the file
+  # identity, so each mutation reaches the ordered matrix contract.
+  MATRIX_MUTATION_SHA="$(sha256_file "${MATRIX_MANIFEST}")"
+  MATRIX_MUTATION_MD5="$(sed -n 's/^MD5=//p' "${MATRIX_MANIFEST}.md5" |
+    sed -n '1p' | tr -d '[:space:]')"
+  MATRIX_MUTATION_SIZE="$(sed -n 's/^SIZE=//p' "${MATRIX_MANIFEST}.md5" |
+    sed -n '1p' | tr -d '[:space:]')"
+  sed \
+    -e "s#^METHOD_MATRIX_MD5=.*#METHOD_MATRIX_MD5=${MATRIX_MUTATION_MD5}#" \
+    -e "s#^METHOD_MATRIX_SIZE=.*#METHOD_MATRIX_SIZE=${MATRIX_MUTATION_SIZE}#" \
+    -e "s#^METHOD_MATRIX_SHA256=.*#METHOD_MATRIX_SHA256=${MATRIX_MUTATION_SHA}#" \
+    -e "s#^METHOD_MATRIX_IDENTITY=.*#METHOD_MATRIX_IDENTITY=${MATRIX_MUTATION_SHA}#" \
+    "${MATRIX_METADATA_GOOD}" > "${MATRIX_METADATA}"
+  run_audit "${MATRIX_RUN_ROOT}" stage5 "${MATRIX_SELECTION}" 1
+done
+cp "${MATRIX_MANIFEST_GOOD}" "${MATRIX_MANIFEST}"
+cp "${MATRIX_METADATA_GOOD}" "${MATRIX_METADATA}"
+
+sed 's/^METHOD_MATRIX_MD5=.*/METHOD_MATRIX_MD5=00000000000000000000000000000000/' \
+  "${MATRIX_METADATA}" > "${MATRIX_METADATA}.bad"
+mv "${MATRIX_METADATA}.bad" "${MATRIX_METADATA}"
+run_audit "${MATRIX_RUN_ROOT}" stage5 "${MATRIX_SELECTION}" 1
+cp "${MATRIX_METADATA_GOOD}" "${MATRIX_METADATA}"
+sed 's/^DECLARED_METHOD_ROWS=.*/DECLARED_METHOD_ROWS=34/' \
+  "${MATRIX_METADATA}" > "${MATRIX_METADATA}.bad"
+mv "${MATRIX_METADATA}.bad" "${MATRIX_METADATA}"
+run_audit "${MATRIX_RUN_ROOT}" stage5 "${MATRIX_SELECTION}" 1
+cp "${MATRIX_METADATA_GOOD}" "${MATRIX_METADATA}"
+
+# Passing the matrix as the dataset selection must fail, as must binding the
+# metadata to the source selection instead of the copied matrix.
+run_audit "${MATRIX_RUN_ROOT}" stage5 "${MATRIX_MANIFEST}" 1
+sed "s#^METHOD_MATRIX=.*#METHOD_MATRIX=${MATRIX_SELECTION}#" \
+  "${MATRIX_METADATA}" > "${MATRIX_METADATA}.bad"
+mv "${MATRIX_METADATA}.bad" "${MATRIX_METADATA}"
+run_audit "${MATRIX_RUN_ROOT}" stage5 "${MATRIX_SELECTION}" 1
+cp "${MATRIX_METADATA_GOOD}" "${MATRIX_METADATA}"
+
+echo "ecoda run audit matrix binding and legacy identity: OK"

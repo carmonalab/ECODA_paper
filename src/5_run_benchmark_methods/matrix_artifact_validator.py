@@ -400,38 +400,161 @@ def validate_batch_contract_identity(
         require_summary=require_summary,
     )
 
-def _configured_batch_effect_datasets(config_path: Path, view: str) -> tuple[str, ...]:
-    """Return the non-private batch-effect datasets in config order."""
-    try:
-        entries = read_datasets_json(config_path, view=view)
-    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise ValueError(f"cannot read batch-effect config: {config_path}") from exc
-    return tuple(
-        ds
-        for ds, entry in entries.items()
-        if not ds.startswith("_")
-        and entry.get("use_for_batch_effect") is True
-        and isinstance(entry.get("views"), dict)
-        and view in entry["views"]
-    )
+def _normalized_absolute_path(value: str, label: str) -> Path:
+    if not isinstance(value, str) or not value or "\n" in value or "\t" in value:
+        raise ValueError(f"{label} must be a non-empty absolute path")
+    candidate = Path(os.path.normpath(value))
+    if not candidate.is_absolute():
+        raise ValueError(f"{label} must be an absolute path: {value}")
+    return candidate
+
+
+def _variant_root_identity(root: Path) -> str | None:
+    normalized = Path(os.path.normpath(str(root)))
+    if not normalized.is_absolute():
+        return None
+    if normalized.name == "uncorrected_final" and normalized.parent.name == "batch_effect":
+        return "uncorrected_final"
+    if normalized.name == "corrected_final" and normalized.parent.name == "batch_effect":
+        return "corrected_final"
+    if (
+        normalized.name == "recovery_35row"
+        and normalized.parent.name == "corrected_final"
+        and normalized.parent.parent.name == "batch_effect"
+    ):
+        return "corrected_final/recovery_35row"
+    return None
+
+
+def _validate_variant_root_binding(
+    root: Path, analysis_variant: str
+) -> None:
+    """Bind a variant to one physical scratch/NAS root identity.
+
+    The historical direct ``corrected_final`` root remains valid when no
+    replacement-root metadata is present.  The disjoint recovery root is
+    intentionally fail-closed: a path below it is accepted only when the
+    scheduler-bound root version/identity says exactly
+    ``corrected_final/recovery_35row``.  This keeps direct historical
+    artifacts immutable while preventing a matrix run from mixing roots.
+    """
+
+    if analysis_variant not in {"final", "corrected_final"}:
+        raise ValueError(f"unknown analysis variant: {analysis_variant}")
+    root = _normalized_absolute_path(str(root), "variant validation root")
+    actual_identity = _variant_root_identity(root)
+    if actual_identity is None:
+        raise ValueError(
+            f"{analysis_variant} artifact validation requires a supported "
+            "batch_effect variant root"
+        )
+
+    version_values: list[tuple[str, str]] = []
+    for field in (
+        "ANALYSIS_ROOT_VERSION",
+        "ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION",
+    ):
+        value = os.environ.get(field, "")
+        if value:
+            if "\n" in value or "\t" in value:
+                raise ValueError(f"{field} contains a record delimiter")
+            version_values.append((field, value))
+    distinct_versions = {value for _, value in version_values}
+    if distinct_versions - {"recovery_35row"}:
+        raise ValueError(
+            "corrected-final root version must be recovery_35row: "
+            + ", ".join(sorted(distinct_versions - {"recovery_35row"}))
+        )
+    if len(distinct_versions) > 1:
+        raise ValueError("corrected-final root version declarations disagree")
+
+    declared_identity = os.environ.get("ANALYSIS_ROOT_IDENTITY", "")
+    if declared_identity and ("\n" in declared_identity or "\t" in declared_identity):
+        raise ValueError("ANALYSIS_ROOT_IDENTITY contains a record delimiter")
+    if analysis_variant == "final":
+        if distinct_versions:
+            raise ValueError(
+                "ANALYSIS_ROOT_VERSION is only valid for corrected_final"
+            )
+        if declared_identity and declared_identity != "uncorrected_final":
+            raise ValueError(
+                "final analysis cannot use a corrected-final root identity"
+            )
+        expected_identity = "uncorrected_final"
+    else:
+        if declared_identity not in {
+            "",
+            "corrected_final",
+            "corrected_final/recovery_35row",
+        }:
+            raise ValueError(
+                f"invalid ANALYSIS_ROOT_IDENTITY: {declared_identity}"
+            )
+        if distinct_versions:
+            expected_identity = "corrected_final/recovery_35row"
+            if (
+                declared_identity
+                and declared_identity != expected_identity
+            ):
+                raise ValueError(
+                    "corrected-final root version and identity disagree"
+                )
+        elif declared_identity:
+            expected_identity = declared_identity
+        else:
+            expected_identity = "corrected_final"
+
+    env_root_paths: list[tuple[str, Path]] = []
+    for field in ("ANALYSIS_ROOT", "ANALYSIS_NAS_ROOT"):
+        value = os.environ.get(field, "")
+        if value:
+            env_root_paths.append(
+                (field, _normalized_absolute_path(value, field))
+            )
+    env_identities: list[tuple[str, str]] = []
+    for field, env_path in env_root_paths:
+        env_identity = _variant_root_identity(env_path)
+        if env_identity is None:
+            raise ValueError(f"{field} is not a supported variant root: {env_path}")
+        env_identities.append((field, env_identity))
+    if (
+        analysis_variant == "corrected_final"
+        and not distinct_versions
+        and not declared_identity
+        and any(identity == "corrected_final/recovery_35row"
+                for _, identity in env_identities)
+    ):
+        raise ValueError(
+            "replacement corrected_final root requires a bound root identity"
+        )
+    if env_identities and len({identity for _, identity in env_identities}) > 1:
+        raise ValueError("ANALYSIS_ROOT and ANALYSIS_NAS_ROOT root identities disagree")
+    if env_identities and env_identities[0][1] != expected_identity:
+        raise ValueError(
+            "variant root metadata disagrees with ANALYSIS_ROOT/ANALYSIS_NAS_ROOT"
+        )
+    for field, env_path in env_root_paths:
+        if field == "ANALYSIS_ROOT" and env_path != root:
+            raise ValueError(
+                "variant artifact root mixing is not allowed: "
+                f"expected {env_path} but found {root}"
+            )
+    if actual_identity != expected_identity:
+        if (
+            actual_identity == "corrected_final/recovery_35row"
+            and analysis_variant == "corrected_final"
+        ):
+            raise ValueError(
+                "replacement corrected_final root requires a bound root identity"
+            )
+        raise ValueError(
+            f"{analysis_variant} artifact validation requires the "
+            f"{expected_identity} root"
+        )
 
 
 def _validate_variant_root(root: Path, analysis_variant: str) -> None:
-    expected_root = (
-        "uncorrected_final"
-        if analysis_variant == "final"
-        else "corrected_final"
-    )
-    if (
-        not root.is_absolute()
-        or root.name != expected_root
-        or root.parent.name != "batch_effect"
-    ):
-        raise ValueError(
-            f"{analysis_variant} artifact validation requires a "
-            f"batch_effect/{expected_root} root"
-        )
-
+    _validate_variant_root_binding(root, analysis_variant)
 
 def batch_artifact_stem(
     ds: str,
@@ -1261,6 +1384,10 @@ def validate_single(
             "corrected_final analysis variant requires corrected Stage 5 artifacts"
         )
     if analysis_variant:
+        # Every selected artifact must stay under the same bound variant root.
+        # ``expected_artifacts`` places outputs one directory below that root
+        # (results/, embeddings/, or pseudobulks/).
+        _validate_variant_root(Path(path).parent.parent, analysis_variant)
         marker = (
             "_batch_effect_uncorrected_final_"
             if analysis_variant == "final"

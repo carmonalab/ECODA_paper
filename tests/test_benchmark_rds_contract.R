@@ -273,6 +273,8 @@ withTemporary({
   corrected_identity <- function(method_id) {
     model_id <- if (identical(method_id, "Pseudobulk")) {
       "pseudobulk_limma_fixed_effects_v1"
+    } else if (identical(method_id, "GloScope")) {
+      "embedding_consumer_harmony_v1"
     } else {
       "limma_fixed_effects_v1"
     }
@@ -344,6 +346,60 @@ withTemporary({
     corrected_batch_args(corrected_composition, "composition"),
     "corrected-final composition shared bundle with explicit null key"
   )
+  # Corrected-final GloScope uses its semantic result key and final-qualified
+  # path, just like the worker and synchronization contracts.
+  corrected_gloscope_identity <- ecoda_hpc_augment_batch_contract(
+    identity = ecoda_hpc_batch_contract_identity(
+      batch_keys = "batch",
+      sample_col = "Sample",
+      method_id = "GloScope",
+      model_id = "embedding_consumer_harmony_v1"
+    ),
+    validation = corrected_validation,
+    method_id = "GloScope",
+    batch_keys = "batch"
+  )
+  corrected_gloscope_value <- corrected_combo("GloScope")
+  corrected_gloscope_value$batch_contract <- corrected_gloscope_identity
+  corrected_gloscope <- file.path(
+    corrected_results,
+    "Synthetic_batch_effect_corrected_final_gloscope.rds"
+  )
+  corrected_gloscope_bundle <- list(
+    batch_contract = corrected_gloscope_identity,
+    GloScope_hvg2000_pcadims30 = corrected_gloscope_value
+  )
+  write_checked(corrected_gloscope, corrected_gloscope_bundle)
+  expect_ok(
+    corrected_batch_args(corrected_gloscope, "gloscope"),
+    "corrected-final GloScope result path and bundle key"
+  )
+  corrected_matrix_root <- file.path(
+    directory, "batch_effect", "corrected_final", "recovery_35row"
+  )
+  corrected_matrix_results <- file.path(corrected_matrix_root, "results")
+  corrected_matrix_gloscope <- file.path(
+    corrected_matrix_results,
+    "Synthetic_batch_effect_corrected_final_gloscope.rds"
+  )
+  write_checked(corrected_matrix_gloscope, corrected_gloscope_bundle)
+  expect_ok(
+    corrected_batch_args(corrected_matrix_gloscope, "gloscope"),
+    "corrected-final matrix recovery root and direct GloScope path"
+  )
+  # Recovery roots must retain the same strict corrected identity checks as
+  # the canonical corrected-final root; root binding is not an identity
+  # validation bypass.
+  bad_recovery_bundle <- corrected_gloscope_bundle
+  bad_recovery_bundle$batch_contract$required_source_obs_columns <-
+    c("batch", "Sample")
+  write_checked(corrected_matrix_gloscope, bad_recovery_bundle)
+  expect_fail_capture(
+    corrected_batch_args(corrected_matrix_gloscope, "gloscope"),
+    "corrected-final recovery root identity",
+    "source/config identity"
+  )
+  write_checked(corrected_matrix_gloscope, corrected_gloscope_bundle)
   stopifnot(
     identical(
       corrected_composition_bundle$batch_contract$model_id,

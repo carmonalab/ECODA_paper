@@ -730,6 +730,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--require-example-ids", action="store_true")
     parser.add_argument("--validate-only", action="store_true")
+    parser.add_argument(
+        "--skip-checksum",
+        action="store_true",
+        help=(
+            "With --validate-only, skip rehashing the output H5AD; callers must "
+            "validate the persisted .md5 sidecar separately."
+        ),
+    )
     parser.add_argument("--force", action="store_true")
     return parser
 
@@ -737,6 +745,8 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Iterable[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
+        if args.skip_checksum and not args.validate_only:
+            raise ContractError("--skip-checksum requires --validate-only")
         expected_counts = _normalise_expected_assay_counts(args.expected_assay_counts)
         expected_sex_counts = _normalise_expected_sex_counts(args.expected_sex_counts)
         if args.validate_only:
@@ -748,7 +758,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 expected_assay_counts=expected_counts,
                 expected_sex_counts=expected_sex_counts,
                 require_example_ids=args.require_example_ids,
-                require_checksum=True,
+                require_checksum=not args.skip_checksum,
             )
             print(
                 f"ALZHEIMER_DONOR_ASSAY_VALIDATED=1 cells={contract['n_obs']} "

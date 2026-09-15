@@ -22,6 +22,25 @@ TARGET_METHODS_ARG=""
 TARGET_METHODS_SET=0
 TARGET_METHODS=()
 SELECTION_FILE_ARG=""
+METHOD_MATRIX_ARG=""
+METHOD_MATRIX_SET=0
+METHOD_MATRIX_MODE=0
+METHOD_MATRIX=""
+METHOD_MATRIX_SOURCE_PATH=""
+METHOD_MATRIX_MD5=""
+METHOD_MATRIX_SIZE=""
+METHOD_MATRIX_SHA256=""
+METHOD_MATRIX_IDENTITY=""
+METHOD_MATRIX_DECLARED_COUNT=0
+METHOD_MATRIX_PENDING_COUNT=0
+METHOD_MATRIX_ROOT_VERSION=""
+METHOD_MATRIX_METADATA_MD5=""
+METHOD_MATRIX_METADATA_SIZE=""
+METHOD_MATRIX_METADATA_SHA256=""
+METHOD_MATRIX_METADATA_DECLARED_COUNT=""
+METHOD_MATRIX_METADATA_IDENTITY=""
+METHOD_MATRIX_METADATA_PENDING_COUNT=""
+CORRECTED_FINAL_ROOT_LEGACY=0
 SELECTION_FILE_SET=0
 PASS_ARG=""
 ANALYSIS_VARIANT_ARG=""
@@ -56,7 +75,8 @@ KIDNEY_LEGACY_INVALID_METHODS=""
 usage() {
   cat <<'EOF'
 Usage: 1_submit_hpc_array.sh [--datasets LIST] [--methods LIST]
-       [--target-methods LIST] [--analyses trans,zeroimp] [--selection-file TSV]
+       [--target-methods LIST] [--method-matrix TSV]
+       [--analyses trans,zeroimp] [--selection-file TSV]
        [--exact-batch-selection] [--pass uncorrected|corrected]
        [--analysis-variant final|corrected_final]
        [--gpu-policy auto|default|any] [--force]
@@ -69,8 +89,9 @@ Exact batch mode requires the immutable twelve-row uncorrected matrix.
 Final variants require an explicit, variant-matching selection file and the
 fixed seven-method batch-effect suite; uncorrected final also permits an
 explicit one-row Kidney targeted recovery or an exact five-row method repair.
-corrected_final additionally permits an exact eight-row non-Alzheimer recovery
-with the four-method target set, or an exact one-row Alzheimer follow-up.
+corrected_final additionally permits the exact 35-row method matrix for the
+eight corrected dataset rows, an exact eight-row non-Alzheimer recovery with
+the four-method target set, or an exact one-row Alzheimer follow-up.
 --target-methods is an explicit selection-file-scoped partial batch recovery;
 --force-targeted force-reclaims only the explicit target methods; it requires
 --target-methods, --pass, --selection-file, and --force-reason.
@@ -88,6 +109,8 @@ while [[ $# -gt 0 ]]; do
     --analyses=*|--analysis=*) ANALYSES_ARG="${1#*=}"; ANALYSES_SET=1; shift ;;
     --selection-file) SELECTION_FILE_ARG="${2:-}"; SELECTION_FILE_SET=1; shift 2 ;;
     --selection-file=*) SELECTION_FILE_ARG="${1#*=}"; SELECTION_FILE_SET=1; shift ;;
+    --method-matrix) METHOD_MATRIX_ARG="${2:-}"; METHOD_MATRIX_SET=1; shift 2 ;;
+    --method-matrix=*) METHOD_MATRIX_ARG="${1#*=}"; METHOD_MATRIX_SET=1; shift ;;
     --target-methods) TARGET_METHODS_ARG="${2:-}"; TARGET_METHODS_SET=1; shift 2 ;;
     --target-methods=*) TARGET_METHODS_ARG="${1#*=}"; TARGET_METHODS_SET=1; shift ;;
     --exact-batch-selection) EXACT_BATCH_SELECTION=1; shift ;;
@@ -200,6 +223,10 @@ if [[ ${SELECTION_FILE_SET} -eq 1 && -z "${SELECTION_FILE_ARG}" ]]; then
   echo "ERROR: --selection-file must not be empty." >&2
   exit 1
 fi
+if [[ ${METHOD_MATRIX_SET} -eq 1 && -z "${METHOD_MATRIX_ARG}" ]]; then
+  echo "ERROR: --method-matrix must not be empty." >&2
+  exit 1
+fi
 if [[ ${PASS_SET} -eq 1 && -z "${PASS_ARG}" ]]; then
   echo "ERROR: --pass must not be empty." >&2
   exit 1
@@ -225,6 +252,103 @@ CORRECTED_FINAL_RECOVERY_DATASETS=(
 )
 # This recovery contract deliberately excludes Alzheimer; its separate
 # one-row follow-up uses the ordinary fixed method suite.
+METHOD_MATRIX_DATASETS=(
+  Breast_cancer Joanito Stephenson Covid19_PBMC Kidney_KPMP_full Diabetes
+  Lupus_PBMC Lung
+)
+METHOD_MATRIX_BREAST_METHODS=(
+  prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
+)
+METHOD_MATRIX_OTHER_METHODS=(
+  prepare_pseudobulk pseudobulk gloscope composition
+)
+METHOD_MATRIX_ROOT_VERSION="recovery_35row"
+METHOD_MATRIX_EXPECTED_COUNT=35
+# The method matrix is deliberately validated before ecoda_init_run creates
+# any run-owned state.  Its row order is part of the release contract.
+stage5_validate_method_matrix_source() {
+  local matrix="${METHOD_MATRIX_ARG:-}" row_ds row_view row_method extra
+  local expected_ds expected_method expected_view index=0 method_index
+  local actual_md5 actual_size actual_sha256
+  [[ -n "${matrix}" ]] || return 0
+  [[ "${ANALYSIS_VARIANT_ARG:-}" == corrected_final &&
+     "${PASS_ARG:-}" == corrected && ${PASS_SET} -eq 1 &&
+     ${SELECTION_FILE_SET} -eq 1 && -n "${SELECTION_FILE_ARG}" &&
+     ${METHODS_SET} -eq 1 &&
+     "${METHODS_ARG}" == "${EXPECTED_BATCH_METHODS}" ]] || {
+    echo "ERROR: --method-matrix requires --pass corrected, --analysis-variant corrected_final, an explicit selection file, and the fixed seven-method suite." >&2
+    return 1
+  }
+  [[ ${CORRECTED_FINAL_ROOT_LEGACY} -eq 0 ]] || {
+    echo "ERROR: method-matrix mode cannot bind the historical direct corrected_final root." >&2
+    return 1
+  }
+  [[ ${DATASETS_SET} -eq 0 && ${ANALYSES_SET} -eq 0 &&
+     ${TARGET_METHODS_SET} -eq 0 && ${EXACT_BATCH_SELECTION} -eq 0 &&
+     ${FORCE_ARG} -eq 0 && ${FORCE_TARGETED_ARG} -eq 0 ]] || {
+    echo "ERROR: --method-matrix rejects broad/default, ordinary, exact, targeted, and force modes." >&2
+    return 1
+  }
+  [[ -f "${matrix}" && ! -L "${matrix}" && -r "${matrix}" ]] || {
+    echo "ERROR: method matrix is missing, unreadable, or symlinked: ${matrix}" >&2
+    return 1
+  }
+  [[ "${matrix}" != *$'\n'* && "${matrix}" != *$'\r'* &&
+     "${matrix}" != *$'\t'* ]] || {
+    echo "ERROR: method matrix path contains a record delimiter." >&2
+    return 1
+  }
+  ecoda_validate_manifest "${matrix}" 3 || {
+    echo "ERROR: method matrix must be a non-empty headerless three-column TSV." >&2
+    return 1
+  }
+  while IFS=$'\t' read -r row_ds row_view row_method extra; do
+    if [[ ${index} -lt 7 ]]; then
+      expected_ds="${METHOD_MATRIX_DATASETS[0]}"
+      expected_method="${METHOD_MATRIX_BREAST_METHODS[${index}]}"
+    else
+      method_index=$((index - 7))
+      expected_ds="${METHOD_MATRIX_DATASETS[$((1 + method_index / 4))]}"
+      expected_method="${METHOD_MATRIX_OTHER_METHODS[$((method_index % 4))]}"
+    fi
+    expected_view="batch_effect_corrected"
+    [[ "${row_ds}" == "${expected_ds}" &&
+       "${row_view}" == "${expected_view}" &&
+       "${row_method}" == "${expected_method}" &&
+       -z "${extra}" ]] || {
+      echo "ERROR: method matrix row $((index + 1)) is outside the exact 35-row dataset-major scope/order." >&2
+      return 1
+    }
+    [[ "${row_ds}" =~ ^[A-Za-z0-9_.-]+$ &&
+       "${row_method}" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+      echo "ERROR: method matrix contains an unsafe dataset or method token." >&2
+      return 1
+    }
+    ecoda_dataset_exists "${row_ds}" &&
+      ecoda_view_exists "${row_ds}" "${row_view}" || {
+      echo "ERROR: method matrix references an unknown dataset/view: ${row_ds}/${row_view}" >&2
+      return 1
+    }
+    index=$((index + 1))
+  done < "${matrix}"
+  [[ ${index} -eq ${METHOD_MATRIX_EXPECTED_COUNT} ]] || {
+    echo "ERROR: method matrix must contain exactly ${METHOD_MATRIX_EXPECTED_COUNT} rows; found ${index}." >&2
+    return 1
+  }
+  actual_md5="$(ecoda_md5_file "${matrix}")" || return 1
+  actual_size="$(wc -c < "${matrix}" | tr -d '[:space:]')" || return 1
+  actual_sha256="$(ecoda_sha256_file "${matrix}")" || return 1
+  [[ "${actual_md5}" =~ ^[[:xdigit:]]{32}$ &&
+     "${actual_size}" =~ ^[1-9][0-9]*$ &&
+     "${actual_sha256}" =~ ^[[:xdigit:]]{64}$ ]] || return 1
+  METHOD_MATRIX_MODE=1
+  METHOD_MATRIX_SOURCE_PATH="${matrix}"
+  METHOD_MATRIX_MD5="${actual_md5}"
+  METHOD_MATRIX_SIZE="${actual_size}"
+  METHOD_MATRIX_SHA256="${actual_sha256}"
+  METHOD_MATRIX_IDENTITY="${actual_sha256}"
+  METHOD_MATRIX_DECLARED_COUNT=${METHOD_MATRIX_EXPECTED_COUNT}
+}
 
 if [[ -n "${PASS_ARG}" && ${METHODS_SET} -eq 1 &&
       ${TARGET_METHODS_SET} -eq 0 &&
@@ -232,6 +356,20 @@ if [[ -n "${PASS_ARG}" && ${METHODS_SET} -eq 1 &&
   echo "ERROR: batch-effect pass requires the fixed ordered method suite: ${EXPECTED_BATCH_METHODS}" >&2
   exit 1
 fi
+STAGE5_MATRIX_METHODS=()
+stage5_method_matrix_methods_for() {
+  local ds="${1:-}" view="${2:-}" row_ds row_view row_method extra
+  STAGE5_MATRIX_METHODS=()
+  [[ ${METHOD_MATRIX_MODE} -eq 1 ]] || return 0
+  [[ -s "${METHOD_MATRIX:-}" ]] || return 1
+  while IFS=$'\t' read -r row_ds row_view row_method extra; do
+    [[ -z "${extra}" ]] || return 1
+    if [[ "${row_ds}" == "${ds}" && "${row_view}" == "${view}" ]]; then
+      STAGE5_MATRIX_METHODS+=("${row_method}")
+    fi
+  done < "${METHOD_MATRIX}"
+  [[ ${#STAGE5_MATRIX_METHODS[@]} -gt 0 ]]
+}
 if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
   [[ -n "${TARGET_METHODS_ARG}" ]] || {
     echo "ERROR: --target-methods must not be empty." >&2
@@ -318,23 +456,33 @@ stage5_validate_final_selection() {
         echo "ERROR: corrected_final requires the configured datasets.json." >&2
         return 1
       }
-      while IFS= read -r expected_ds; do
-        [[ -n "${expected_ds}" ]] && expected_datasets+=("${expected_ds}")
-      done < <(
-        jq -r '
-          to_entries[]
-          | select((.key | startswith("_") | not)
-                   and (.value | type == "object")
-                   and (.value.use_for_batch_effect == true)
-                   and (.value.views.batch_effect_corrected != null))
-          | .key
-        ' "${DATASETS_JSON_FILE}"
-      )
+      if [[ ${METHOD_MATRIX_MODE} -eq 1 ]]; then
+        expected_datasets=("${METHOD_MATRIX_DATASETS[@]}")
+      else
+        while IFS= read -r expected_ds; do
+          [[ -n "${expected_ds}" ]] && expected_datasets+=("${expected_ds}")
+        done < <(
+          jq -r '
+            to_entries[]
+            | select((.key | startswith("_") | not)
+                     and (.value | type == "object")
+                     and (.value.use_for_batch_effect == true)
+                     and (.value.views.batch_effect_corrected != null))
+            | .key
+          ' "${DATASETS_JSON_FILE}"
+        )
+      fi
       [[ ${#expected_datasets[@]} -gt 0 ]] || {
         echo "ERROR: corrected_final has no configured corrected datasets." >&2
         return 1
       }
-      if [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
+      if [[ ${METHOD_MATRIX_MODE} -eq 1 ]]; then
+        [[ ${TARGET_METHODS_SET} -eq 0 && ${METHODS_SET} -eq 1 &&
+           "${METHODS_ARG}" == "${EXPECTED_BATCH_METHODS}" ]] || {
+          echo "ERROR: corrected_final method-matrix mode requires the fixed seven-method suite and no targeted methods." >&2
+          return 1
+        }
+      elif [[ ${TARGET_METHODS_SET} -eq 1 ]]; then
         [[ "${TARGET_METHODS_ARG}" == "${CORRECTED_FINAL_RECOVERY_METHODS}" ]] || {
           echo "ERROR: corrected_final eight-row recovery requires target methods ${CORRECTED_FINAL_RECOVERY_METHODS}." >&2
           return 1
@@ -462,6 +610,20 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     }
     ANALYSIS_VARIANT_ARG="${sync_variant}"
   fi
+  stored_root_version="$(sed -n 's/^ANALYSIS_ROOT_VERSION=//p' "${sync_metadata}" | head -1 || true)"
+  stored_root_identity="$(sed -n 's/^ANALYSIS_ROOT_IDENTITY=//p' "${sync_metadata}" | head -1 || true)"
+  stored_analysis_root="$(sed -n 's/^ANALYSIS_ROOT=//p' "${sync_metadata}" | head -1 || true)"
+  if [[ "${ANALYSIS_VARIANT_ARG:-}" == corrected_final ]]; then
+    if [[ -n "${stored_root_version}" || -n "${stored_root_identity}" ]]; then
+      [[ "${stored_root_version}" == "${METHOD_MATRIX_ROOT_VERSION}" &&
+         "${stored_root_identity}" == "corrected_final/${METHOD_MATRIX_ROOT_VERSION}" ]] || {
+        echo "ERROR: sync-only corrected-final root-version identity is invalid." >&2
+        exit 1
+      }
+    elif [[ "${stored_analysis_root}" == */batch_effect/corrected_final ]]; then
+      CORRECTED_FINAL_ROOT_LEGACY=1
+    fi
+  fi
   if [[ "${ANALYSIS_VARIANT_ARG:-}" == final ||
         "${ANALYSIS_VARIANT_ARG:-}" == corrected_final ]]; then
     expected_selection="${HPC_SCRATCH_DIR}/_ecoda_runs/${SYNC_ONLY_RUN}/manifests/selection.tsv"
@@ -473,6 +635,29 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
         echo "ERROR: final sync-only selection is not the run-bound selection." >&2
         exit 1
       }
+    fi
+    stored_method_matrix="$(sed -n 's/^METHOD_MATRIX=//p' "${sync_metadata}" | head -1 || true)"
+    if [[ -n "${stored_method_matrix}" ]]; then
+      expected_method_matrix="${ECODA_RUNS_ROOT}/${SYNC_ONLY_RUN}/manifests/method_matrix.tsv"
+      [[ "${stored_method_matrix}" == "${expected_method_matrix}" ]] || {
+        echo "ERROR: sync-only method matrix is not the run-bound manifest." >&2
+        exit 1
+      }
+      if [[ ${METHOD_MATRIX_SET} -eq 1 ]]; then
+        [[ "${METHOD_MATRIX_ARG}" == "${stored_method_matrix}" ]] || {
+          echo "ERROR: sync-only method matrix does not match run metadata." >&2
+          exit 1
+        }
+      else
+        METHOD_MATRIX_ARG="${stored_method_matrix}"
+        METHOD_MATRIX_SET=1
+      fi
+      METHOD_MATRIX_METADATA_MD5="$(sed -n 's/^METHOD_MATRIX_MD5=//p' "${sync_metadata}" | head -1 || true)"
+      METHOD_MATRIX_METADATA_SIZE="$(sed -n 's/^METHOD_MATRIX_SIZE=//p' "${sync_metadata}" | head -1 || true)"
+      METHOD_MATRIX_METADATA_SHA256="$(sed -n 's/^METHOD_MATRIX_SHA256=//p' "${sync_metadata}" | head -1 || true)"
+      METHOD_MATRIX_METADATA_DECLARED_COUNT="$(sed -n 's/^DECLARED_METHOD_ROWS=//p' "${sync_metadata}" | head -1 || true)"
+      METHOD_MATRIX_METADATA_IDENTITY="$(sed -n 's/^METHOD_MATRIX_IDENTITY=//p' "${sync_metadata}" | head -1 || true)"
+      METHOD_MATRIX_METADATA_PENDING_COUNT="$(sed -n 's/^PENDING_METHOD_ROWS=//p' "${sync_metadata}" | head -1 || true)"
     fi
     stored_methods="$(sed -n 's/^METHODS=//p' "${sync_metadata}" | head -1 || true)"
     stored_target_methods="$(sed -n 's/^TARGET_METHODS=//p' "${sync_metadata}" | head -1 || true)"
@@ -511,6 +696,7 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     fi
   fi
 fi
+stage5_validate_method_matrix_source || exit 1
 stage5_validate_final_selection || exit 1
 
 # Exact validation is a preflight: reject malformed input before any run-root,
@@ -630,6 +816,7 @@ stage5_configure_analysis_context() {
         echo "ERROR: final analysis variant requires uncorrected pass." >&2
         return 1
       }
+      unset ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION
       export ANALYSIS_VARIANT=final
       ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final"
       ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/uncorrected_final"
@@ -640,13 +827,25 @@ stage5_configure_analysis_context() {
         echo "ERROR: corrected_final analysis variant requires corrected pass." >&2
         return 1
       }
+      # The direct corrected_final root is an immutable historical lane.  All
+      # newly submitted corrected-final work (the matrix gate and the later
+      # Alzheimer one-row gate) uses the disjoint replacement subtree.  A
+      # sync-only invocation may still resume an older direct-root run.
       export ANALYSIS_VARIANT=corrected_final
-      ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final"
-      ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
+      if [[ ${CORRECTED_FINAL_ROOT_LEGACY} -eq 1 &&
+            ${METHOD_MATRIX_MODE} -eq 0 ]]; then
+        unset ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION
+        ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final"
+        ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
+      else
+        export ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION="${METHOD_MATRIX_ROOT_VERSION}"
+        ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final/${METHOD_MATRIX_ROOT_VERSION}"
+        ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final/${METHOD_MATRIX_ROOT_VERSION}"
+      fi
       ANALYSIS_LOG_PREFIX="execution_times_batch_effect_corrected_final_"
       ;;
     "")
-      unset ANALYSIS_VARIANT
+      unset ANALYSIS_VARIANT ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION
       if [[ -n "${PASS_ARG}" ]]; then
         ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${PASS_ARG}"
         ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/${PASS_ARG}"
@@ -662,7 +861,7 @@ stage5_configure_analysis_context() {
       return 1
       ;;
   esac
-  export ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_LOG_PREFIX
+  export ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_LOG_PREFIX ROOT="${ANALYSIS_ROOT}"
   if [[ -n "${PASS_ARG}" ]]; then
     export ANALYSIS_PASS="${PASS_ARG}"
   else
@@ -706,6 +905,69 @@ stage5_atomic_copy() {
     rm -f "${temporary}"
     return 1
   }
+}
+stage5_bind_method_matrix() {
+  local destination="${ECODA_RUN_ROOT}/manifests/method_matrix.tsv"
+  local source="${METHOD_MATRIX_SOURCE_PATH:-${METHOD_MATRIX_ARG:-}}"
+  local source_sha256 destination_sha256 pending_rows
+  [[ ${METHOD_MATRIX_MODE} -eq 1 ]] || {
+    unset ECODA_STAGE5_METHOD_MATRIX METHOD_MATRIX
+    return 0
+  }
+  if [[ -n "${SYNC_ONLY_RUN}" ]]; then
+    [[ "${METHOD_MATRIX_ARG}" == "${destination}" ]] || return 1
+    [[ -f "${destination}" && ! -L "${destination}" && -r "${destination}" ]] || return 1
+  else
+    [[ -f "${source}" && ! -L "${source}" && -r "${source}" ]] || return 1
+    source_sha256="$(ecoda_sha256_file "${source}")" || return 1
+    ecoda_atomic_install_manifest "${source}" "${destination}" 3 || return 1
+    destination_sha256="$(ecoda_sha256_file "${destination}")" || return 1
+    [[ "${source_sha256}" == "${destination_sha256}" ]] || {
+      echo "ERROR: method matrix changed while being copied." >&2
+      return 1
+    }
+  fi
+  if [[ -z "${SYNC_ONLY_RUN}" ]]; then
+    ecoda_write_checksum "${destination}" || return 1
+  fi
+  ecoda_validate_run_owned_path "${destination}" "${ECODA_RUN_ROOT}" || return 1
+  ecoda_validate_manifest "${destination}" 3 || return 1
+  ecoda_validate_checksum "${destination}" || return 1
+  METHOD_MATRIX="${destination}"
+  METHOD_MATRIX_MD5="${ECODA_CHECKSUM_MD5}"
+  METHOD_MATRIX_SIZE="${ECODA_CHECKSUM_SIZE}"
+  METHOD_MATRIX_SHA256="$(ecoda_sha256_file "${destination}")" || return 1
+  METHOD_MATRIX_IDENTITY="${METHOD_MATRIX_SHA256}"
+  METHOD_MATRIX_DECLARED_COUNT="${METHOD_MATRIX_EXPECTED_COUNT}"
+  export METHOD_MATRIX ECODA_STAGE5_METHOD_MATRIX="${METHOD_MATRIX}"
+  export ECODA_STAGE5_METHOD_MATRIX_MODE=1
+  if [[ -n "${SYNC_ONLY_RUN}" ]]; then
+    [[ "${METHOD_MATRIX_METADATA_MD5}" =~ ^[[:xdigit:]]{32}$ &&
+       "${METHOD_MATRIX_METADATA_SIZE}" =~ ^[1-9][0-9]*$ &&
+       "${METHOD_MATRIX_METADATA_SHA256}" =~ ^[[:xdigit:]]{64}$ &&
+       "${METHOD_MATRIX_METADATA_IDENTITY}" =~ ^[[:xdigit:]]{64}$ &&
+       "${METHOD_MATRIX_METADATA_DECLARED_COUNT}" == "${METHOD_MATRIX_EXPECTED_COUNT}" &&
+       "${METHOD_MATRIX_METADATA_PENDING_COUNT}" =~ ^[0-9]+$ ]] || return 1
+  fi
+  [[ -z "${METHOD_MATRIX_METADATA_MD5}" ||
+     "${METHOD_MATRIX_METADATA_MD5}" == "${METHOD_MATRIX_MD5}" ]] || return 1
+  [[ -z "${METHOD_MATRIX_METADATA_SIZE}" ||
+     "${METHOD_MATRIX_METADATA_SIZE}" == "${METHOD_MATRIX_SIZE}" ]] || return 1
+  [[ -z "${METHOD_MATRIX_METADATA_SHA256}" ||
+     "${METHOD_MATRIX_METADATA_SHA256}" == "${METHOD_MATRIX_SHA256}" ]] || return 1
+  [[ -z "${METHOD_MATRIX_METADATA_DECLARED_COUNT}" ||
+     "${METHOD_MATRIX_METADATA_DECLARED_COUNT}" == "${METHOD_MATRIX_DECLARED_COUNT}" ]] || return 1
+  [[ -z "${METHOD_MATRIX_METADATA_IDENTITY}" ||
+     "${METHOD_MATRIX_METADATA_IDENTITY}" == "${METHOD_MATRIX_IDENTITY}" ]] || return 1
+  if [[ -n "${METHOD_MATRIX_METADATA_PENDING_COUNT}" ]]; then
+    pending_rows=0
+    if [[ -r "${ECODA_RUN_ROOT}/manifests/pending_selection.tsv" ]]; then
+      pending_rows="$(awk 'END { print NR }' \
+        "${ECODA_RUN_ROOT}/manifests/pending_selection.tsv")" || return 1
+    fi
+    [[ "${METHOD_MATRIX_METADATA_PENDING_COUNT}" =~ ^[0-9]+$ &&
+       "${pending_rows}" == "${METHOD_MATRIX_METADATA_PENDING_COUNT}" ]] || return 1
+  fi
 }
 
 stage5_source_script() {
@@ -890,6 +1152,7 @@ stage5_validate_batch_contract_manifest() {
   local -a actual_ds=() actual_views=() actual_methods=() actual_paths=()
   local -a contract_methods=(preprocess)
   local contract_method ds view method
+  local -a expected_contract_methods=()
   [[ "${PASS_ARG:-}" == corrected ]] || return 0
   [[ -n "${manifest}" && "${manifest}" == "${ECODA_RUN_ROOT}/manifests/batch_contract.tsv" &&
      -f "${manifest}" && ! -L "${manifest}" && -r "${manifest}" ]] || {
@@ -960,7 +1223,14 @@ stage5_validate_batch_contract_manifest() {
   done < "${manifest}"
   while IFS=$'\t' read -r ds view _row_label; do
     [[ -n "${ds}" && -n "${view}" ]] || return 1
-    for contract_method in "${contract_methods[@]}"; do
+    expected_contract_methods=(preprocess)
+    if [[ ${METHOD_MATRIX_MODE} -eq 1 ]]; then
+      stage5_method_matrix_methods_for "${ds}" "${view}" || return 1
+      expected_contract_methods+=("${STAGE5_MATRIX_METHODS[@]}")
+    else
+      expected_contract_methods=("${contract_methods[@]}")
+    fi
+    for contract_method in "${expected_contract_methods[@]}"; do
       found=0
       for index in "${!actual_ds[@]}"; do
         if [[ "${actual_ds[${index}]}" == "${ds}" &&
@@ -993,6 +1263,7 @@ stage5_create_batch_contract_manifest() {
   local seen_views="" seen_contracts=""
   local -a contract_methods=(preprocess)
   [[ "${PASS_ARG:-}" == corrected ]] || return 0
+  local -a contract_methods_for=()
   for method in "${METHODS[@]:-}"; do
     [[ "${method}" == _ecoda_none_ ]] || contract_methods+=("${method}")
   done
@@ -1027,7 +1298,14 @@ stage5_create_batch_contract_manifest() {
     if [[ "${BENCHMARK_MATRIX_TEST:-0}" != "1" ]]; then
       [[ -s "${source_path}" ]] || return 1
     fi
-    for contract_method in "${contract_methods[@]}"; do
+    contract_methods_for=(preprocess)
+    if [[ ${METHOD_MATRIX_MODE} -eq 1 ]]; then
+      stage5_method_matrix_methods_for "${ds}" "${view}" || return 1
+      contract_methods_for+=("${STAGE5_MATRIX_METHODS[@]}")
+    else
+      contract_methods_for=("${contract_methods[@]}")
+    fi
+    for contract_method in "${contract_methods_for[@]}"; do
       key="${ds}|${view}|${contract_method}"
       case " ${seen_contracts} " in
         *" ${key} "*) return 1 ;;
@@ -2290,6 +2568,8 @@ else
   rm -f "${MANIFEST_TMP}"
   ecoda_write_checksum "${MANIFEST}" || stage5_abort "failed to checksum Stage 5 selection"
 fi
+stage5_bind_method_matrix ||
+  stage5_abort "failed to bind the run-owned method matrix"
 SOURCE_IDENTITY="${ECODA_RUN_ROOT}/manifests/source_identity.json"
 SCHEDULER_FILE="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
 if [[ -z "${SYNC_ONLY_RUN}" ]]; then
@@ -2843,6 +3123,10 @@ benchmark_rds_group_valid() {
   : > "${list_tmp}" || return 1
   for label in "${METHODS[@]}" "${ANALYSES[@]}"; do
     [[ "${label}" == _ecoda_none_ ]] && continue
+    if [[ ${METHOD_MATRIX_MODE} -eq 1 ]] &&
+       ! ecoda_stage5_method_matrix_allows "${ds}" "${view}" "${label}"; then
+      continue
+    fi
     case " ${seen_label} " in *" ${label} "*) continue ;; esac
     seen_label="${seen_label} ${label}"
     case "${label}" in
@@ -3230,6 +3514,10 @@ stage5_validate_corrected_matrix_rows() {
   local -a validation_args
   [[ "${PASS_ARG:-}" == corrected ]] || return 1
   while IFS=$'\t' read -r ds view row_label; do
+    if [[ ${METHOD_MATRIX_MODE} -eq 1 ]] &&
+       ! ecoda_stage5_method_matrix_allows "${ds}" "${view}" "${label}"; then
+      continue
+    fi
     identity_path="$(
       stage5_batch_contract_identity_path "${ds}" "${view}" "${label}"
     )" || return 1
@@ -3293,6 +3581,13 @@ stage5_selection_has_pending_rows() {
           *) continue ;;
         esac
       fi
+      if [[ ${METHOD_MATRIX_MODE} -eq 1 ]] &&
+         ! ecoda_stage5_method_matrix_allows "${ds}" "${view}" "${method}"; then
+        continue
+      fi
+      if [[ ${METHOD_MATRIX_MODE} -eq 1 && "${ds}" == "Breast_cancer" ]]; then
+        return 0
+      fi
       if stage5_corrected_final_recovery_mode; then
         return 0
       fi
@@ -3321,6 +3616,26 @@ stage5_variant_metadata() {
       "${ANALYSIS_PASS:-${PASS_ARG}}" "${ANALYSIS_LOG_PREFIX}" \
       "${ECODA_RUN_ROOT}/manifests/metadata_export.tsv" \
       "${ECODA_RUN_ROOT}/status/metadata_export.report"
+    if [[ "${ANALYSIS_VARIANT}" == corrected_final &&
+          "${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}" == "recovery_35row" ]]; then
+      printf 'ANALYSIS_ROOT_VERSION=%s\nANALYSIS_ROOT_IDENTITY=%s\n' \
+        "${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION}" \
+        "corrected_final/${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION}"
+    fi
+    if [[ ${METHOD_MATRIX_MODE} -eq 1 ]]; then
+      [[ -s "${METHOD_MATRIX}" && -s "${METHOD_MATRIX}.md5" ]] || return 1
+      METHOD_MATRIX_PENDING_COUNT=0
+      if [[ -r "${PENDING_SELECTION:-}" ]]; then
+        METHOD_MATRIX_PENDING_COUNT="$(awk 'END { print NR }' \
+          "${PENDING_SELECTION}")" || return 1
+      fi
+      [[ "${METHOD_MATRIX_PENDING_COUNT}" =~ ^[0-9]+$ ]] || return 1
+      printf 'METHOD_MATRIX=%s\nMETHOD_MATRIX_SOURCE=%s\nMETHOD_MATRIX_MD5=%s\nMETHOD_MATRIX_SIZE=%s\nMETHOD_MATRIX_SHA256=%s\nMETHOD_MATRIX_IDENTITY=%s\nDECLARED_METHOD_ROWS=%s\nPENDING_METHOD_ROWS=%s\n' \
+        "${METHOD_MATRIX}" "${METHOD_MATRIX_SOURCE_PATH}" \
+        "${METHOD_MATRIX_MD5}" "${METHOD_MATRIX_SIZE}" \
+        "${METHOD_MATRIX_SHA256}" "${METHOD_MATRIX_IDENTITY}" \
+        "${METHOD_MATRIX_DECLARED_COUNT}" "${METHOD_MATRIX_PENDING_COUNT}"
+    fi
     if [[ "${ANALYSIS_VARIANT}" == corrected_final &&
           -s "${ECODA_RUN_ROOT}/manifests/corrected_final_consumer_contract.json" ]]; then
       printf 'CORRECTED_FINAL_CONSUMER_CONTRACT=%s\n' \
@@ -3589,6 +3904,7 @@ fi
 
 stage5_run_corrected_final_consumer_barrier() {
   local validator report
+  local -a consumer_args=()
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
   [[ "${ANALYSIS_VARIANT:-}" == corrected_final &&
      -z "${SYNC_ONLY_RUN}" ]] || return 0
@@ -3599,12 +3915,23 @@ stage5_run_corrected_final_consumer_barrier() {
   stage5_require_source_script "${validator}" || return 1
   report="${ECODA_RUN_ROOT}/manifests/corrected_final_consumer_contract.json"
   stage5_validate_bound_runtime || return 1
-  ${PIXI_RSCRIPT} "${validator}" \
-    --config "${DATASETS_JSON_FILE}" \
-    --selection "${MANIFEST}" \
-    --analysis-root "${ANALYSIS_ROOT}" \
-    --input-root "${HPC_SCRATCH_DIR}" \
-    --output "${report}" >/dev/null 2>&1 || return 1
+  consumer_args=(
+    --config "${DATASETS_JSON_FILE}"
+    --selection "${MANIFEST}"
+    --analysis-root "${ANALYSIS_ROOT}"
+    --input-root "${HPC_SCRATCH_DIR}"
+    --output "${report}"
+  )
+  if [[ ${METHOD_MATRIX_MODE} -eq 1 ]]; then
+    consumer_args+=(
+      --method-matrix "${METHOD_MATRIX}"
+      --method-matrix-md5 "${METHOD_MATRIX_MD5}"
+      --method-matrix-size "${METHOD_MATRIX_SIZE}"
+      --method-matrix-sha256 "${METHOD_MATRIX_SHA256}"
+      --method-matrix-identity "${METHOD_MATRIX_IDENTITY}"
+    )
+  fi
+  ${PIXI_RSCRIPT} "${validator}" "${consumer_args[@]}" >/dev/null 2>&1 || return 1
   [[ -s "${report}" && -s "${report}.md5" ]] || return 1
   ecoda_validate_checksum "${report}" || return 1
 }
@@ -3623,66 +3950,100 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   : > "${PENDING_SELECTION_TMP}"
   OWNER_SEEN=""
   ecoda_owner_clear_tracked
-  for method in "${METHODS[@]}" "${ANALYSES[@]}"; do
-    [[ "${method}" == _ecoda_none_ ]] && continue
-    method_force=0
+  stage5_add_pending_row() {
+    local ds="$1" view="$2" method="$3"
+    local row_label="${4:-}" owner_key owner_dir owner_rc method_force=0
+    local matrix_breast_pending=0 path
+    [[ "${method}" == _ecoda_none_ ]] && return 0
     stage5_method_is_forced "${method}" && method_force=1
-    while IFS=$'\t' read -r ds view row_label; do
-      if [[ ${EXACT_SELECTION} -eq 1 && -z "${PASS_ARG}" ]]; then
-        case "${method}:${row_label}" in
-          prepare_pseudobulk:mofa|prepare_pseudobulk:pseudobulk|prepare_pseudobulk:composition|prepare_pseudobulk:prepare_pseudobulk) ;;
-          prepare_pseudobulk:*) continue ;;
-          *:"${method}") ;;
-          *) continue ;;
-        esac
-      fi
-      owner_key="${PASS_ARG:-ordinary}/${ds}/${view}/${method}"
-      case " ${OWNER_SEEN} " in
-        *" ${owner_key} "*) continue ;;
+    [[ ${METHOD_MATRIX_MODE} -eq 1 && "${ds}" == "Breast_cancer" ]] &&
+      matrix_breast_pending=1
+    if [[ ${EXACT_SELECTION} -eq 1 && -z "${PASS_ARG}" ]]; then
+      case "${method}:${row_label}" in
+        prepare_pseudobulk:mofa|prepare_pseudobulk:pseudobulk|prepare_pseudobulk:composition|prepare_pseudobulk:prepare_pseudobulk) ;;
+        prepare_pseudobulk:*) return 0 ;;
+        *:"${method}") ;;
+        *) return 0 ;;
       esac
-      OWNER_SEEN="${OWNER_SEEN} ${owner_key}"
-      if [[ ${method_force} -eq 0 ]] &&
-         stage5_kidney_legacy_method_valid "${ds}" "${method}"; then
-        echo "Skipping validated legacy Stage 5 artifact ${ds}/${view}/${method}."
-        continue
+    fi
+    if [[ ${METHOD_MATRIX_MODE} -eq 1 ]] &&
+       ! ecoda_stage5_method_matrix_allows "${ds}" "${view}" "${method}"; then
+      return 0
+    fi
+    owner_key="${PASS_ARG:-ordinary}/${ds}/${view}/${method}"
+    case " ${OWNER_SEEN} " in
+      *" ${owner_key} "*) return 0 ;;
+    esac
+    OWNER_SEEN="${OWNER_SEEN} ${owner_key}"
+    if [[ ${method_force} -eq 0 ]] &&
+       stage5_kidney_legacy_method_valid "${ds}" "${method}"; then
+      echo "Skipping validated legacy Stage 5 artifact ${ds}/${view}/${method}."
+      return 0
+    fi
+    if [[ "${method}" == "prepare_pseudobulk" &&
+          ${method_force} -eq 0 && ${matrix_breast_pending} -eq 0 ]] &&
+       [[ ${FORCE_TARGETED_ARG} -eq 1 || ${TARGET_METHODS_SET} -eq 1 ]]; then
+      if stage5_corrected_final_recovery_mode; then
+        :
+      elif stage5_prepare_pseudobulk_valid "${ds}" "${view}"; then
+        echo "Skipping validated Stage 5 pseudobulk cache ${ds}/${view}/${method}."
+        return 0
       fi
-      if [[ "${method}" == "prepare_pseudobulk" &&
-            ${method_force} -eq 0 ]] &&
-         [[ ${FORCE_TARGETED_ARG} -eq 1 || ${TARGET_METHODS_SET} -eq 1 ]]; then
-        if stage5_corrected_final_recovery_mode; then
-          :
-        elif stage5_prepare_pseudobulk_valid "${ds}" "${view}"; then
-          echo "Skipping validated Stage 5 pseudobulk cache ${ds}/${view}/${method}."
-          continue
-        fi
-        if [[ ${TARGET_METHODS_SET} -eq 1 ]] &&
-           ! stage5_target_method_selected prepare_pseudobulk; then
-          stage5_abort \
-            "targeted Stage 5 methods require a validated pseudobulk cache for ${ds}/${view}"
-        fi
-      elif [[ ${method_force} -eq 0 ]] &&
-           ! stage5_corrected_final_recovery_mode &&
-           benchmark_selected_artifacts_valid "${ds}" "${view}" "${method}"; then
-        echo "Skipping validated Stage 5 artifact ${ds}/${view}/${method}."
-        continue
+      if [[ ${TARGET_METHODS_SET} -eq 1 ]] &&
+         ! stage5_target_method_selected prepare_pseudobulk; then
+        stage5_abort \
+          "targeted Stage 5 methods require a validated pseudobulk cache for ${ds}/${view}"
       fi
-      benchmark_artifacts_for "${ds}" "${view}" "${method}" ||
-        stage5_abort "cannot resolve output contract for ${ds}/${view}/${method}"
-      set +e
-      owner_dir="$(ecoda_owner_acquire stage5 "${owner_key}" "${RUN_ID}" "${method_force}" 0)"
-      owner_rc=$?
-      set -e
-      [[ ${owner_rc} -eq 0 ]] || stage5_abort "ownership conflict for ${owner_key}"
-      ecoda_owner_track "${owner_dir}" ||
-        stage5_abort "failed to track owner for ${owner_key}"
+    elif [[ ${method_force} -eq 0 &&
+            ${matrix_breast_pending} -eq 0 ]] &&
+         ! stage5_corrected_final_recovery_mode &&
+         benchmark_selected_artifacts_valid "${ds}" "${view}" "${method}"; then
+      echo "Skipping validated Stage 5 artifact ${ds}/${view}/${method}."
+      return 0
+    fi
+    benchmark_artifacts_for "${ds}" "${view}" "${method}" ||
+      stage5_abort "cannot resolve output contract for ${ds}/${view}/${method}"
+    if [[ ${METHOD_MATRIX_MODE} -eq 1 &&
+          "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
       for path in "${ARTIFACT_PATHS[@]}"; do
-        ecoda_invalidate_artifact "${path}" ||
-          stage5_abort "failed to invalidate Stage 5 artifact ${path}"
+        for existing_target in "${path}" "${path}.md5" \
+          "${path}.runtime.json" "${path}.runtime.json.md5"; do
+          [[ ! -e "${existing_target}" && ! -L "${existing_target}" ]] || {
+            stage5_abort "corrected-final method matrix target already exists; refusing to invalidate ${existing_target}"
+          }
+        done
       done
-      printf '%s\t%s\t%s\n' "${ds}" "${view}" "${method}" >> "${PENDING_SELECTION_TMP}"
-      printf '%s\t%s\n' "${owner_key}" "${owner_dir}" >> "${OWNERS_TMP}"
+    fi
+    set +e
+    owner_dir="$(ecoda_owner_acquire stage5 "${owner_key}" "${RUN_ID}" "${method_force}" 0)"
+    owner_rc=$?
+    set -e
+    [[ ${owner_rc} -eq 0 ]] || stage5_abort "ownership conflict for ${owner_key}"
+    ecoda_owner_track "${owner_dir}" ||
+      stage5_abort "failed to track owner for ${owner_key}"
+    for path in "${ARTIFACT_PATHS[@]}"; do
+      ecoda_invalidate_artifact "${path}" ||
+        stage5_abort "failed to invalidate Stage 5 artifact ${path}"
+    done
+    printf '%s\t%s\t%s\n' "${ds}" "${view}" "${method}" >> "${PENDING_SELECTION_TMP}"
+    printf '%s\t%s\n' "${owner_key}" "${owner_dir}" >> "${OWNERS_TMP}"
+  }
+  if [[ ${METHOD_MATRIX_MODE} -eq 1 ]]; then
+    while IFS=$'\t' read -r ds view row_label; do
+      while IFS=$'\t' read -r matrix_ds matrix_view matrix_method matrix_extra; do
+        [[ -n "${matrix_ds}" && "${matrix_ds}" == "${ds}" &&
+           "${matrix_view}" == "${view}" && -n "${matrix_method}" &&
+           -z "${matrix_extra}" ]] || continue
+        stage5_add_pending_row "${ds}" "${view}" "${matrix_method}" "${row_label}"
+      done < "${METHOD_MATRIX}"
     done < "${MANIFEST}"
-  done
+  else
+    for method in "${METHODS[@]}" "${ANALYSES[@]}"; do
+      while IFS=$'\t' read -r ds view row_label; do
+        stage5_add_pending_row "${ds}" "${view}" "${method}" "${row_label}"
+      done < "${MANIFEST}"
+    done
+  fi
   if [[ -s "${PENDING_SELECTION_TMP}" ]]; then
     ecoda_atomic_install_manifest "${PENDING_SELECTION_TMP}" "${PENDING_SELECTION}" 3 ||
       stage5_abort "failed to install Stage 5 pending manifest atomically"
@@ -3838,11 +4199,18 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
       worker_env="${worker_env},ANALYSIS_PASS=${PASS_ARG}"
       if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
         worker_env="${worker_env},ANALYSIS_VARIANT=${ANALYSIS_VARIANT},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT},ANALYSIS_LOG_PREFIX=${ANALYSIS_LOG_PREFIX}"
+    if [[ ${METHOD_MATRIX_MODE} -eq 0 &&
+          -n "${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}" ]]; then
+      worker_env="${worker_env},ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION=${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION}"
+    fi
       fi
       [[ "${PASS_ARG}" == corrected ]] &&
         worker_env="${worker_env},ECODA_BATCH_CONTRACT_MANIFEST=${ECODA_BATCH_CONTRACT_MANIFEST}"
     else
       worker_env="${worker_env},BENCHMARK_MANIFEST=${manifest}"
+    fi
+    if [[ ${METHOD_MATRIX_MODE} -eq 1 ]]; then
+      worker_env="${worker_env},METHOD_MATRIX=${METHOD_MATRIX},ECODA_STAGE5_METHOD_MATRIX=${METHOD_MATRIX},ECODA_STAGE5_METHOD_MATRIX_MODE=1,METHOD_MATRIX_IDENTITY=${METHOD_MATRIX_IDENTITY},METHOD_MATRIX_MD5=${METHOD_MATRIX_MD5},METHOD_MATRIX_SIZE=${METHOD_MATRIX_SIZE},ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION=${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}"
     fi
     worker_env="${worker_env},${method_runtime_export}"
     array_args=(--parsable --array="1-$(wc -l < "${manifest}" | tr -d '[:space:]')%${throttle}" --partition="${worker_partition}" "${METHOD_FLAGS[@]}" --time="${method_time_limit}" --mem="${MEMORY}" \
@@ -3916,6 +4284,8 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     ecoda_atomic_install_manifest "${GROUP_TMP_FILES[${idx}]}" "${GROUP_MANIFESTS[${idx}]}" \
       "${GROUP_MANIFEST_COLUMNS[${idx}]}" ||
       stage5_abort "failed to install Stage 5 matrix manifest"
+    ecoda_write_checksum "${GROUP_MANIFESTS[${idx}]}" ||
+      stage5_abort "failed to checksum Stage 5 matrix manifest"
     rm -f "${GROUP_TMP_FILES[${idx}]}"
   done
 
@@ -4216,6 +4586,10 @@ stage5_validate_corrected_rds_rows() {
   [[ ${#RDS_LABELS[@]} -gt 0 ]] || return 0
   while IFS=$'\t' read -r ds view row_label; do
     for label in "${RDS_LABELS[@]}"; do
+      if [[ ${METHOD_MATRIX_MODE} -eq 1 ]] &&
+         ! ecoda_stage5_method_matrix_allows "${ds}" "${view}" "${label}"; then
+        continue
+      fi
       identity_path="$(
         stage5_batch_contract_identity_path "${ds}" "${view}" "${label}"
       )" || return 1

@@ -113,6 +113,11 @@ benchmark_stage5_identity_guard() {
     corrected_final)
       expected_pass="corrected"
       expected_suffix="corrected_final"
+      if [[ "${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}" == "recovery_35row" ||
+            "${ANALYSIS_ROOT:-}" == */batch_effect/corrected_final/recovery_35row ||
+            "${ANALYSIS_NAS_ROOT:-}" == */batch_effect/corrected_final/recovery_35row ]]; then
+        expected_suffix="corrected_final/recovery_35row"
+      fi
       ;;
     *)
       echo "ERROR: unsupported Stage 5 analysis variant: ${variant}" >&2
@@ -181,7 +186,11 @@ if [[ -n "${STAGE5_STATUS_PASS}" ]]; then
   WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/${STAGE5_STATUS_PASS}"
   case "${ANALYSIS_VARIANT:-}" in
     final) WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/uncorrected_final" ;;
-    corrected_final) WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/corrected_final" ;;
+    corrected_final)
+      WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/corrected_final"
+      [[ "${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}" == "recovery_35row" ]] &&
+        WATCHDOG_STATUS_DIR="${WATCHDOG_STATUS_DIR}/recovery_35row"
+      ;;
   esac
 else
   WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_benchmark_watchdog"
@@ -1011,10 +1020,19 @@ benchmark_sync_artifacts_for() {
   SYNC_ARTIFACTS=()
   benchmark_stage5_identity_guard "${pass}" || return 1
   benchmark_stage5_method_guard "${label}" || return 1
+  if [[ -n "${ECODA_STAGE5_METHOD_MATRIX:-${METHOD_MATRIX:-}}" ]] &&
+     ! ecoda_stage5_method_matrix_allows "${ds}" \
+       "batch_effect_${pass}" "${label}"; then
+    # A declared dataset row can have a narrower method scope than the
+    # global fixed suite.  Treat unauthorized methods as absent from sync,
+    # never reconstruct or claim their paths.
+    SYNC_ARTIFACTS=()
+    return 0
+  fi
   root="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
   if [[ -n "${pass}" && -z "${ANALYSIS_ROOT:-}" ]]; then
     if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
-      root="${HPC_SCRATCH_DIR}/batch_effect/${pass}_final"
+      root="${HPC_SCRATCH_DIR}/batch_effect/$(ecoda_stage5_analysis_root_suffix)"
     else
       root="${HPC_SCRATCH_DIR}/batch_effect/${pass}"
     fi
@@ -1157,14 +1175,14 @@ analysis_merge_sync_cleanup() (
   benchmark_stage5_identity_guard "${STAGE5_PASS}" || exit 1
   if [[ -z "${ANALYSIS_ROOT:-}" && -n "${STAGE5_PASS}" ]]; then
     if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
-      LOCAL_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${STAGE5_PASS}_final"
+      LOCAL_ROOT="${HPC_SCRATCH_DIR}/batch_effect/$(ecoda_stage5_analysis_root_suffix)"
     else
       LOCAL_ROOT="${HPC_SCRATCH_DIR}/batch_effect/${STAGE5_PASS}"
     fi
   fi
   if [[ -z "${ANALYSIS_NAS_ROOT:-}" && -n "${STAGE5_PASS}" ]]; then
     if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
-      REMOTE_ROOT="${NAS_TARGET_DIR}/batch_effect/${STAGE5_PASS}_final"
+      REMOTE_ROOT="${NAS_TARGET_DIR}/batch_effect/$(ecoda_stage5_analysis_root_suffix)"
     else
       REMOTE_ROOT="${NAS_TARGET_DIR}/batch_effect/${STAGE5_PASS}"
     fi
@@ -1175,6 +1193,8 @@ analysis_merge_sync_cleanup() (
   local RUN_LOG_DIR="${EXECUTION_LOG_DIR:-${RUN_ROOT}/logs}"
   local KIND="benchmark" KIND_CAP="Benchmark"
   local SYNC_OWNER_DIR="" SYNC_LOCK_DIR="" SYNC_FINAL_STATE="FAIL"
+  local sync_owner_artifact_valid=0
+  local recovery_sync_owner_dir="" recovery_sync_owner_state=""
   local SYNC_FILES SYNC_FILES_TMP NO_CHECKSUM_FILES_TMP CLEANUP_MANIFEST
   local CHECKSUM_TMP REMOTE_CHECKSUM_TMP EXISTING_LOG
   local merge_script="${ANALYSIS_MERGE_SCRIPT}"
@@ -1228,7 +1248,38 @@ analysis_merge_sync_cleanup() (
   [[ -n "${ECODA_SOURCE_ROOT:-}" ]] &&
     merge_script="$(benchmark_source_script_path src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1.2_merge_execution_times.py)"
   ECODA_RUN_ROOT="${RUN_ROOT}"
-  SYNC_OWNER_DIR="$(ecoda_owner_acquire stage5 "sync/${LOCAL_ROOT}" "${RUN_ID}" 0 0)" || {
+  # The replacement corrected-final lane is a terminal publication root.
+  # Reject a successful owner without touching it, but preserve the
+  # established terminal-failure recovery path. Direct legacy roots
+  # intentionally retain their historical reentry behavior.
+  if [[ "${LOCAL_ROOT}" == */batch_effect/corrected_final/recovery_35row &&
+        "${REMOTE_ROOT}" == */batch_effect/corrected_final/recovery_35row ]]; then
+    sync_owner_artifact_valid=1
+    recovery_sync_owner_dir="$(ecoda_owner_dir stage5 "sync/${LOCAL_ROOT}")" ||
+      sync_fail "cannot resolve shared Stage 5 sync owner"
+    if [[ -e "${recovery_sync_owner_dir}" || -L "${recovery_sync_owner_dir}" ]]; then
+      recovery_sync_owner_state="$(
+        ecoda_owner_state "${recovery_sync_owner_dir}" 2>/dev/null || true
+      )"
+      case "${recovery_sync_owner_state}" in
+        FAIL)
+          # A failed synchronization may be reclaimed by a later run.
+          sync_owner_artifact_valid=0
+          ;;
+        OK)
+          sync_fail "shared Stage 5 sync owner is already finalized successfully"
+          ;;
+        ACTIVE)
+          sync_fail "shared Stage 5 sync owner is active"
+          ;;
+        *)
+          sync_fail "shared Stage 5 sync owner has an invalid state"
+          ;;
+      esac
+    fi
+  fi
+  SYNC_OWNER_DIR="$(ecoda_owner_acquire stage5 "sync/${LOCAL_ROOT}" "${RUN_ID}" 0 \
+    "${sync_owner_artifact_valid}")" || {
     sync_fail "shared Stage 5 sync owner is unavailable"
   }
   SYNC_LOCK_DIR="${RUN_ROOT}/sync.lock"

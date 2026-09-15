@@ -70,6 +70,62 @@ else
 fi
 source "${SOURCE_ROOT%/}/src/slurm_config.sh"
 source "${SOURCE_ROOT%/}/src/utils/bash/ecoda_runtime.sh"
+PREEXEC_ROOT_VERSION="${ANALYSIS_ROOT_VERSION:-}"
+PREEXEC_ROOT_IDENTITY="${ANALYSIS_ROOT_IDENTITY:-}"
+PREEXEC_ROOT_ALIAS="${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}"
+if [[ -n "${PREEXEC_ROOT_ALIAS}" &&
+      -n "${PREEXEC_ROOT_VERSION}" &&
+      "${PREEXEC_ROOT_ALIAS}" != "${PREEXEC_ROOT_VERSION}" ]]; then
+  echo "ERROR: Stage 5 root-version aliases disagree before runtime reexec." >&2
+  exit 1
+fi
+if [[ -n "${PREEXEC_ROOT_ALIAS}" ]]; then
+  [[ "${PREEXEC_ROOT_ALIAS}" == "recovery_35row" ]] || {
+    echo "ERROR: unsupported corrected-final root version before runtime reexec: ${PREEXEC_ROOT_ALIAS}" >&2
+    exit 1
+  }
+  PREEXEC_ROOT_VERSION="${PREEXEC_ROOT_ALIAS}"
+fi
+[[ -z "${PREEXEC_ROOT_VERSION}" ||
+   "${PREEXEC_ROOT_VERSION}" == "recovery_35row" ]] || {
+  echo "ERROR: unsupported ANALYSIS_ROOT_VERSION before runtime reexec: ${PREEXEC_ROOT_VERSION}" >&2
+  exit 1
+}
+if [[ "${PREEXEC_ROOT_VERSION}" == "recovery_35row" ]]; then
+  [[ -z "${PREEXEC_ROOT_IDENTITY}" ||
+     "${PREEXEC_ROOT_IDENTITY}" == "corrected_final/recovery_35row" ]] || {
+    echo "ERROR: replacement root identity disagrees before runtime reexec." >&2
+    exit 1
+  }
+  PREEXEC_ROOT_IDENTITY="corrected_final/recovery_35row"
+fi
+ANALYSIS_ROOT_VERSION="${PREEXEC_ROOT_VERSION}"
+ANALYSIS_ROOT_IDENTITY="${PREEXEC_ROOT_IDENTITY}"
+export ANALYSIS_VARIANT="${ANALYSIS_VARIANT:-}" \
+  ANALYSIS_PASS="${ANALYSIS_PASS:-}" \
+  ANALYSIS_ROOT="${ANALYSIS_ROOT:-}" \
+  ANALYSIS_NAS_ROOT="${ANALYSIS_NAS_ROOT:-}" \
+  ANALYSIS_LOG_PREFIX="${ANALYSIS_LOG_PREFIX:-}"
+if [[ -n "${ANALYSIS_ROOT_VERSION}" ]]; then
+  export ANALYSIS_ROOT_VERSION
+else
+  unset ANALYSIS_ROOT_VERSION
+fi
+if [[ -n "${ANALYSIS_ROOT_IDENTITY}" ]]; then
+  export ANALYSIS_ROOT_IDENTITY
+else
+  unset ANALYSIS_ROOT_IDENTITY
+fi
+PREEXEC_MATRIX="${ECODA_STAGE5_METHOD_MATRIX:-${METHOD_MATRIX:-}}"
+if [[ -n "${ECODA_STAGE5_METHOD_MATRIX:-}" &&
+      -n "${METHOD_MATRIX:-}" &&
+      "${ECODA_STAGE5_METHOD_MATRIX}" != "${METHOD_MATRIX}" ]]; then
+  echo "ERROR: Stage 5 method-matrix aliases disagree before runtime reexec." >&2
+  exit 1
+fi
+if [[ -n "${PREEXEC_MATRIX}" ]]; then
+  export METHOD_MATRIX="${PREEXEC_MATRIX}"
+fi
 export ECODA_SOURCE_ROOT="${SOURCE_ROOT}"
 export ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST}"
 export ECODA_SOURCE_SNAPSHOT_REQUIRED=1
@@ -149,24 +205,89 @@ ANALYSIS_PASS="${ANALYSIS_PASS:-}"
 ANALYSIS_ROOT="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
 ANALYSIS_NAS_ROOT="${ANALYSIS_NAS_ROOT:-}"
 ANALYSIS_LOG_PREFIX="${ANALYSIS_LOG_PREFIX:-}"
+ANALYSIS_ROOT_VERSION="${ANALYSIS_ROOT_VERSION:-}"
+ANALYSIS_ROOT_IDENTITY="${ANALYSIS_ROOT_IDENTITY:-}"
+ROOT_VERSION_ALIAS="${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}"
+if [[ -n "${ROOT_VERSION_ALIAS}" ]]; then
+  [[ "${ROOT_VERSION_ALIAS}" == "recovery_35row" ]] || {
+    echo "ERROR: unsupported corrected-final root version: ${ROOT_VERSION_ALIAS}" >&2
+    exit 1
+  }
+  if [[ -n "${ANALYSIS_ROOT_VERSION}" &&
+        "${ANALYSIS_ROOT_VERSION}" != "${ROOT_VERSION_ALIAS}" ]]; then
+    echo "ERROR: Stage 5 root-version aliases disagree." >&2
+    exit 1
+  fi
+  ANALYSIS_ROOT_VERSION="${ROOT_VERSION_ALIAS}"
+fi
+[[ -z "${ANALYSIS_ROOT_VERSION}" ||
+   "${ANALYSIS_ROOT_VERSION}" == "recovery_35row" ]] || {
+  echo "ERROR: unsupported Stage 5 ANALYSIS_ROOT_VERSION: ${ANALYSIS_ROOT_VERSION}" >&2
+  exit 1
+}
 EXPECTED_VARIANT_PASS=""
 EXPECTED_ANALYSIS_ROOT=""
 EXPECTED_ANALYSIS_NAS_ROOT=""
 EXPECTED_LOG_PREFIX=""
 case "${ANALYSIS_VARIANT}" in
   "")
+    [[ -z "${ANALYSIS_ROOT_VERSION}" &&
+       -z "${ANALYSIS_ROOT_IDENTITY}" &&
+       -z "${ROOT_VERSION_ALIAS}" ]] || {
+      echo "ERROR: root-version identity requires an explicit Stage 5 variant." >&2
+      exit 1
+    }
     ;;
   final)
     EXPECTED_VARIANT_PASS="uncorrected"
     EXPECTED_ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final"
     EXPECTED_ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/uncorrected_final"
     EXPECTED_LOG_PREFIX="execution_times_batch_effect_uncorrected_final_"
+    [[ -z "${ANALYSIS_ROOT_VERSION}" &&
+       ( -z "${ANALYSIS_ROOT_IDENTITY}" ||
+         "${ANALYSIS_ROOT_IDENTITY}" == "uncorrected_final" ) ]] || {
+      echo "ERROR: final Stage 5 workers cannot use a corrected-final root identity." >&2
+      exit 1
+    }
     ;;
   corrected_final)
     EXPECTED_VARIANT_PASS="corrected"
-    EXPECTED_ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final"
-    EXPECTED_ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
     EXPECTED_LOG_PREFIX="execution_times_batch_effect_corrected_final_"
+    if [[ -n "${ANALYSIS_ROOT_VERSION}" ||
+          "${ANALYSIS_ROOT_IDENTITY}" == "corrected_final/recovery_35row" ]]; then
+      ANALYSIS_ROOT_VERSION="${ANALYSIS_ROOT_VERSION:-recovery_35row}"
+      [[ "${ANALYSIS_ROOT_VERSION}" == "recovery_35row" ]] || {
+        echo "ERROR: replacement corrected-final root requires recovery_35row." >&2
+        exit 1
+      }
+      [[ -z "${ANALYSIS_ROOT_IDENTITY}" ||
+         "${ANALYSIS_ROOT_IDENTITY}" == "corrected_final/recovery_35row" ]] || {
+        echo "ERROR: corrected-final root identity disagrees with its version." >&2
+        exit 1
+      }
+      ANALYSIS_ROOT_IDENTITY="corrected_final/recovery_35row"
+      EXPECTED_ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final/recovery_35row"
+      EXPECTED_ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final/recovery_35row"
+    else
+      [[ -z "${ANALYSIS_ROOT_IDENTITY}" ||
+         "${ANALYSIS_ROOT_IDENTITY}" == "corrected_final" ]] || {
+        echo "ERROR: invalid direct corrected-final root identity." >&2
+        exit 1
+      }
+      EXPECTED_ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final"
+      EXPECTED_ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
+      case "${ANALYSIS_ROOT}:${ANALYSIS_NAS_ROOT}" in
+        */batch_effect/corrected_final/recovery_35row:*)
+          echo "ERROR: replacement corrected-final root is missing its bound identity." >&2
+          exit 1
+          ;;
+        *:*/batch_effect/corrected_final/recovery_35row)
+          echo "ERROR: replacement corrected-final NAS root is missing its bound identity." >&2
+          exit 1
+          ;;
+      esac
+      ANALYSIS_ROOT_IDENTITY="corrected_final"
+    fi
     ;;
   *)
     echo "ERROR: unsupported Stage 5 Python analysis variant: ${ANALYSIS_VARIANT}" >&2
@@ -191,6 +312,63 @@ if [[ -n "${ANALYSIS_VARIANT}" ]]; then
   fi
   ANALYSIS_LOG_PREFIX="${EXPECTED_LOG_PREFIX}"
 fi
+if [[ -n "${ANALYSIS_ROOT_VERSION}" ]]; then
+  ROOT_VERSION_ALIAS="${ANALYSIS_ROOT_VERSION}"
+  export ANALYSIS_ROOT_VERSION
+  export ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION="${ROOT_VERSION_ALIAS}"
+else
+  unset ANALYSIS_ROOT_VERSION ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION
+fi
+if [[ -n "${ANALYSIS_ROOT_IDENTITY}" ]]; then
+  export ANALYSIS_ROOT_IDENTITY
+else
+  unset ANALYSIS_ROOT_IDENTITY
+fi
+validate_method_matrix_environment() {
+  local matrix="${ECODA_STAGE5_METHOD_MATRIX:-${METHOD_MATRIX:-}}"
+  local legacy_matrix="${METHOD_MATRIX:-}"
+  local expected_md5="${METHOD_MATRIX_MD5:-}"
+  local expected_size="${METHOD_MATRIX_SIZE:-}"
+  local expected_sha256="${METHOD_MATRIX_SHA256:-}"
+  local expected_identity="${METHOD_MATRIX_IDENTITY:-}"
+  local expected_count="${METHOD_MATRIX_DECLARED_COUNT:-}"
+  local actual_sha256 actual_count
+  if [[ -n "${ECODA_STAGE5_METHOD_MATRIX:-}" &&
+        -n "${legacy_matrix}" &&
+        "${ECODA_STAGE5_METHOD_MATRIX}" != "${legacy_matrix}" ]]; then
+    echo "ERROR: Stage 5 method-matrix aliases disagree." >&2
+    return 1
+  fi
+  [[ -z "${matrix}" ]] && return 0
+  [[ "${matrix}" = /* && "${matrix}" != *$'\n'* &&
+     "${matrix}" != *$'\r'* && "${matrix}" != *$'\t'* &&
+     -f "${matrix}" && ! -L "${matrix}" && -r "${matrix}" ]] || {
+    echo "ERROR: Stage 5 method matrix is missing or unsafe: ${matrix}" >&2
+    return 1
+  }
+  ecoda_validate_run_owned_path "${matrix}" "${ECODA_RUN_ROOT}" || {
+    echo "ERROR: Stage 5 method matrix is outside the bound run root: ${matrix}" >&2
+    return 1
+  }
+  ecoda_validate_manifest "${matrix}" 3 || {
+    echo "ERROR: Stage 5 method matrix is not a valid three-column TSV." >&2
+    return 1
+  }
+  ecoda_validate_checksum "${matrix}" || {
+    echo "ERROR: Stage 5 method matrix checksum is invalid: ${matrix}" >&2
+    return 1
+  }
+  [[ -z "${expected_md5}" || "${expected_md5}" == "${ECODA_CHECKSUM_MD5}" ]] || return 1
+  [[ -z "${expected_size}" || "${expected_size}" == "${ECODA_CHECKSUM_SIZE}" ]] || return 1
+  actual_sha256="$(ecoda_sha256_file "${matrix}")" || return 1
+  [[ -z "${expected_sha256}" || "${expected_sha256}" == "${actual_sha256}" ]] || return 1
+  [[ -z "${expected_identity}" || "${expected_identity}" == "${actual_sha256}" ]] || return 1
+  actual_count="$(wc -l < "${matrix}" | tr -d '[:space:]')" || return 1
+  [[ -z "${expected_count}" || "${expected_count}" == "${actual_count}" ]] || return 1
+  export METHOD_MATRIX="${matrix}" ECODA_STAGE5_METHOD_MATRIX="${matrix}"
+  export ECODA_STAGE5_METHOD_MATRIX_MODE=1
+}
+validate_method_matrix_environment || exit 1
 export ANALYSIS_VARIANT ANALYSIS_PASS ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_LOG_PREFIX
 PASS="${ANALYSIS_PASS}"
 ROOT="${ANALYSIS_ROOT}"

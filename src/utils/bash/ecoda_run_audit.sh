@@ -16,6 +16,16 @@ AUDIT_METADATA_ANALYSIS_ROOT=""
 AUDIT_METADATA_ANALYSIS_NAS_ROOT=""
 AUDIT_METADATA_ANALYSIS_PASS=""
 AUDIT_METADATA_ANALYSIS_LOG_PREFIX=""
+AUDIT_METADATA_ANALYSIS_ROOT_VERSION=""
+AUDIT_METADATA_ANALYSIS_ROOT_IDENTITY=""
+AUDIT_METADATA_METHOD_MATRIX=""
+AUDIT_METADATA_METHOD_MATRIX_MD5=""
+AUDIT_METADATA_METHOD_MATRIX_SIZE=""
+AUDIT_METADATA_METHOD_MATRIX_SHA256=""
+AUDIT_METADATA_METHOD_MATRIX_IDENTITY=""
+AUDIT_METADATA_DECLARED_METHOD_ROWS=""
+AUDIT_METADATA_PENDING_METHOD_ROWS=""
+AUDIT_METADATA_METHOD_MATRIX_MODE=0
 AUDIT_METADATA_EXPORT_MANIFEST=""
 AUDIT_METADATA_EXPORT_STATUS=""
 AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY=""
@@ -26,6 +36,9 @@ AUDIT_METADATA_KIDNEY_LEGACY_VALID_METHODS=""
 AUDIT_METADATA_KIDNEY_LEGACY_MISSING_METHODS=""
 AUDIT_METADATA_KIDNEY_LEGACY_INVALID_METHODS=""
 AUDIT_METADATA_METHODS=""
+AUDIT_METADATA_PENDING_SELECTION=""
+AUDIT_METADATA_PENDING_MD5=""
+AUDIT_METADATA_PENDING_SIZE=""
 AUDIT_METADATA_BATCH_CONTRACT_MANIFEST=""
 AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_MD5=""
 AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SIZE=""
@@ -449,8 +462,9 @@ _audit_stage5_identity() {
   local analysis_root="${AUDIT_METADATA_ANALYSIS_ROOT:-}"
   local analysis_nas_root="${AUDIT_METADATA_ANALYSIS_NAS_ROOT:-}"
   local analysis_pass="${AUDIT_METADATA_ANALYSIS_PASS:-}"
+  local matrix_mode="${AUDIT_METADATA_METHOD_MATRIX_MODE:-0}"
   local expected_suffix expected_pass expected_root expected_nas
-  local expected_log_prefix
+  local expected_log_prefix root_versioned_hint=0
   local analysis_log_prefix="${AUDIT_METADATA_ANALYSIS_LOG_PREFIX:-}"
   local scratch_root nas_target nas_base
 
@@ -467,10 +481,11 @@ _audit_stage5_identity() {
       ;;
   esac
 
-  # Do not let a caller-provided variant or PASS_ARG influence an audit.  The
-  # run metadata is the only identity source for selected Stage 5 paths.
+  # Do not let caller-provided analysis or matrix state influence an audit.
+  # Run metadata and the run-owned matrix copy are the only identity sources.
   unset ANALYSIS_VARIANT ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_PASS \
-    ANALYSIS_LOG_PREFIX PASS_ARG
+    ANALYSIS_LOG_PREFIX PASS_ARG ECODA_STAGE5_METHOD_MATRIX METHOD_MATRIX \
+    ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION
   unset ECODA_STAGE5_LEGACY_SYNC_SKIP ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS
 
   if [[ -n "${variant}" ]]; then
@@ -478,10 +493,16 @@ _audit_stage5_identity() {
       final)
         expected_suffix="uncorrected_final"
         expected_pass="uncorrected"
-        expected_log_prefix="execution_times_batch_effect_uncorrected_final_"
         ;;
       corrected_final)
-        expected_suffix="corrected_final"
+        if [[ "${matrix_mode}" == 1 ||
+              "${analysis_root}" == */batch_effect/corrected_final/recovery_35row ||
+              "${analysis_nas_root}" == */batch_effect/corrected_final/recovery_35row ]]; then
+          root_versioned_hint=1
+          expected_suffix="corrected_final/recovery_35row"
+        else
+          expected_suffix="corrected_final"
+        fi
         expected_pass="corrected"
         expected_log_prefix="execution_times_batch_effect_corrected_final_"
         ;;
@@ -507,6 +528,12 @@ _audit_stage5_identity() {
       _audit_die "Stage 5 variant metadata has mismatched pass/root/log identity"
       return 1
     }
+    if [[ "${variant}" == corrected_final &&
+          "${root_versioned_hint}" == 0 &&
+          -n "${AUDIT_METADATA_ANALYSIS_ROOT_VERSION}" ]]; then
+      _audit_die "corrected-final root identity fields require the versioned root"
+      return 1
+    fi
 
     case "${analysis_nas_root}" in
       */batch_effect/${expected_suffix})
@@ -551,6 +578,9 @@ _audit_stage5_identity() {
     export ANALYSIS_PASS="${analysis_pass}"
     export ANALYSIS_LOG_PREFIX="${analysis_log_prefix}"
     export PASS_ARG="${pass}"
+    if [[ "${matrix_mode}" == 1 ]]; then
+      export ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION=recovery_35row
+    fi
     return 0
   fi
 
@@ -586,8 +616,6 @@ _audit_stage5_identity() {
       if [[ -n "${AUDIT_METADATA_ROOT}" &&
             "${AUDIT_METADATA_ROOT}" == "${HPC_SCRATCH_DIR}"/* ]]; then
         export ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR%/}/${AUDIT_METADATA_ROOT#${HPC_SCRATCH_DIR}/}"
-      else
-        export ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR%/}/benchmark"
       fi
     fi
   fi
@@ -596,7 +624,8 @@ _audit_stage5_identity() {
 _audit_run_metadata() {
   local metadata="${RUN_ROOT_REAL}/metadata" metadata_stage metadata_run
   local field field_count variant_count identity_count
-  local inventory_count export_count
+  local inventory_count export_count matrix_count
+  local root_version_count root_identity_count matrix_field_count
   local -a identity_fields=(
     ANALYSIS_VARIANT ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_PASS
     ANALYSIS_LOG_PREFIX
@@ -652,6 +681,33 @@ _audit_run_metadata() {
   AUDIT_METADATA_ANALYSIS_LOG_PREFIX="$(
     _audit_metadata_value "${metadata}" ANALYSIS_LOG_PREFIX
   )"
+  AUDIT_METADATA_ANALYSIS_ROOT_VERSION="$(
+    _audit_metadata_value "${metadata}" ANALYSIS_ROOT_VERSION
+  )"
+  AUDIT_METADATA_ANALYSIS_ROOT_IDENTITY="$(
+    _audit_metadata_value "${metadata}" ANALYSIS_ROOT_IDENTITY
+  )"
+  AUDIT_METADATA_METHOD_MATRIX="$(
+    _audit_metadata_value "${metadata}" METHOD_MATRIX
+  )"
+  AUDIT_METADATA_METHOD_MATRIX_MD5="$(
+    _audit_metadata_value "${metadata}" METHOD_MATRIX_MD5
+  )"
+  AUDIT_METADATA_METHOD_MATRIX_SIZE="$(
+    _audit_metadata_value "${metadata}" METHOD_MATRIX_SIZE
+  )"
+  AUDIT_METADATA_METHOD_MATRIX_SHA256="$(
+    _audit_metadata_value "${metadata}" METHOD_MATRIX_SHA256
+  )"
+  AUDIT_METADATA_METHOD_MATRIX_IDENTITY="$(
+    _audit_metadata_value "${metadata}" METHOD_MATRIX_IDENTITY
+  )"
+  AUDIT_METADATA_DECLARED_METHOD_ROWS="$(
+    _audit_metadata_value "${metadata}" DECLARED_METHOD_ROWS
+  )"
+  AUDIT_METADATA_PENDING_METHOD_ROWS="$(
+    _audit_metadata_value "${metadata}" PENDING_METHOD_ROWS
+  )"
 
   variant_count="$(_audit_metadata_count "${metadata}" ANALYSIS_VARIANT)"
   for field in "${identity_fields[@]}"; do
@@ -685,6 +741,109 @@ _audit_run_metadata() {
       }
     done
   fi
+  # Matrix metadata is a separate contract from the dataset/view selection.
+  # It is present only for the corrected-final recovery lane; legacy
+  # corrected-final and Alzheimer one-row runs retain their direct root and
+  # do not acquire any of these fields.
+  matrix_count="$(_audit_metadata_count "${metadata}" METHOD_MATRIX)"
+  [[ "${matrix_count}" == 0 || "${matrix_count}" == 1 ]] || {
+    _audit_die "run metadata has duplicate METHOD_MATRIX fields: ${metadata}"
+    return 1
+  }
+  AUDIT_METADATA_METHOD_MATRIX_MODE=0
+  for field in METHOD_MATRIX METHOD_MATRIX_MD5 METHOD_MATRIX_SIZE \
+    METHOD_MATRIX_SHA256 METHOD_MATRIX_IDENTITY DECLARED_METHOD_ROWS \
+    PENDING_METHOD_ROWS ANALYSIS_ROOT_VERSION ANALYSIS_ROOT_IDENTITY; do
+    matrix_field_count="$(_audit_metadata_count "${metadata}" "${field}")"
+    [[ "${matrix_field_count}" =~ ^[01]$ ]] || {
+      _audit_die "run metadata has duplicate ${field} fields: ${metadata}"
+      return 1
+    }
+  done
+  if [[ "${matrix_count}" == 1 ]]; then
+    AUDIT_METADATA_METHOD_MATRIX_MODE=1
+    [[ "${STAGE_ARG}" == stage5 &&
+       "${AUDIT_METADATA_VARIANT}" == corrected_final &&
+       "${AUDIT_METADATA_PASS}" == corrected ]] || {
+      _audit_die "METHOD_MATRIX is only valid for corrected-final Stage 5 runs"
+      return 1
+    }
+    for field in METHOD_MATRIX METHOD_MATRIX_MD5 METHOD_MATRIX_SIZE \
+      METHOD_MATRIX_SHA256 METHOD_MATRIX_IDENTITY DECLARED_METHOD_ROWS \
+      PENDING_METHOD_ROWS ANALYSIS_ROOT_VERSION ANALYSIS_ROOT_IDENTITY; do
+      matrix_field_count="$(_audit_metadata_count "${metadata}" "${field}")"
+      [[ "${matrix_field_count}" == 1 &&
+         -n "$(_audit_metadata_value "${metadata}" "${field}")" ]] || {
+        _audit_die "matrix run metadata is missing ${field}: ${metadata}"
+        return 1
+      }
+    done
+    [[ "${AUDIT_METADATA_METHOD_MATRIX_MD5}" =~ ^[[:xdigit:]]{32}$ &&
+       "${AUDIT_METADATA_METHOD_MATRIX_SIZE}" =~ ^[1-9][0-9]*$ &&
+       "${AUDIT_METADATA_METHOD_MATRIX_SHA256}" =~ ^[[:xdigit:]]{64}$ &&
+       "${AUDIT_METADATA_METHOD_MATRIX_IDENTITY}" =~ ^[[:xdigit:]]{64}$ &&
+       "${AUDIT_METADATA_METHOD_MATRIX_IDENTITY}" == "${AUDIT_METADATA_METHOD_MATRIX_SHA256}" &&
+       "${AUDIT_METADATA_DECLARED_METHOD_ROWS}" == 35 &&
+       "${AUDIT_METADATA_PENDING_METHOD_ROWS}" =~ ^(0|[1-9][0-9]*)$ &&
+       "${AUDIT_METADATA_PENDING_METHOD_ROWS}" -le 35 &&
+       "${AUDIT_METADATA_ANALYSIS_ROOT_VERSION}" == recovery_35row &&
+       "${AUDIT_METADATA_ANALYSIS_ROOT_IDENTITY}" == corrected_final/recovery_35row ]] || {
+      _audit_die "corrected-final matrix metadata values are invalid: ${metadata}"
+      return 1
+    }
+    matrix_field_count="$(_audit_metadata_count "${metadata}" PENDING_SELECTION)"
+    [[ "${matrix_field_count}" == 1 &&
+       -n "${AUDIT_METADATA_PENDING_SELECTION}" ]] || {
+      _audit_die "matrix run metadata is missing PENDING_SELECTION: ${metadata}"
+      return 1
+    }
+    for field in PENDING_SELECTION_MD5 PENDING_SELECTION_SIZE; do
+      matrix_field_count="$(_audit_metadata_count "${metadata}" "${field}")"
+      [[ "${matrix_field_count}" =~ ^[01]$ ]] || {
+        _audit_die "matrix run metadata duplicates ${field}: ${metadata}"
+        return 1
+      }
+    done
+    if [[ "${AUDIT_METADATA_PENDING_METHOD_ROWS}" -gt 0 ]]; then
+      [[ "$(_audit_metadata_count "${metadata}" PENDING_SELECTION_MD5)" == 1 &&
+         "$(_audit_metadata_count "${metadata}" PENDING_SELECTION_SIZE)" == 1 &&
+         -n "${AUDIT_METADATA_PENDING_MD5}" &&
+         -n "${AUDIT_METADATA_PENDING_SIZE}" &&
+         "${AUDIT_METADATA_PENDING_MD5}" =~ ^[[:xdigit:]]{32}$ &&
+         "${AUDIT_METADATA_PENDING_SIZE}" =~ ^[1-9][0-9]*$ ]] || {
+        _audit_die "matrix pending-selection metadata values are invalid: ${metadata}"
+        return 1
+      }
+    else
+      [[ -z "${AUDIT_METADATA_PENDING_MD5}" &&
+         -z "${AUDIT_METADATA_PENDING_SIZE}" ]] || {
+        _audit_die "NOOP matrix metadata must not claim pending bytes: ${metadata}"
+        return 1
+      }
+    fi
+  else
+    for field in METHOD_MATRIX_MD5 METHOD_MATRIX_SIZE METHOD_MATRIX_SHA256 \
+      METHOD_MATRIX_IDENTITY DECLARED_METHOD_ROWS PENDING_METHOD_ROWS; do
+      matrix_field_count="$(_audit_metadata_count "${metadata}" "${field}")"
+      [[ "${matrix_field_count}" == 0 ]] || {
+        _audit_die "run metadata contains partial METHOD_MATRIX identity: ${metadata}"
+        return 1
+      }
+    done
+    root_version_count="$(_audit_metadata_count "${metadata}" ANALYSIS_ROOT_VERSION)"
+    root_identity_count="$(_audit_metadata_count "${metadata}" ANALYSIS_ROOT_IDENTITY)"
+    [[ "${root_version_count}" == "${root_identity_count}" &&
+       ( "${root_version_count}" == 0 ||
+         ( "${root_version_count}" == 1 &&
+           "${STAGE_ARG}" == stage5 &&
+           "${AUDIT_METADATA_VARIANT}" == corrected_final &&
+           "${AUDIT_METADATA_ANALYSIS_ROOT_VERSION}" == recovery_35row &&
+           "${AUDIT_METADATA_ANALYSIS_ROOT_IDENTITY}" == corrected_final/recovery_35row ) ) ]] || {
+      _audit_die "run metadata has an invalid corrected-final root identity"
+      return 1
+    }
+  fi
+
 
   AUDIT_METADATA_EXPORT_MANIFEST="$(
     _audit_metadata_value "${metadata}" METADATA_EXPORT_MANIFEST
@@ -825,6 +984,202 @@ _audit_selection() {
   AUDIT_SELECTION_ROWS="${rows}"
 }
 
+_audit_stage5_method_matrix() {
+  local matrix="${AUDIT_METADATA_METHOD_MATRIX:-}"
+  local matrix_real matrix_md5 matrix_size matrix_sha
+  local pending="${AUDIT_METADATA_PENDING_SELECTION:-}"
+  local pending_md5 pending_size pending_actual_md5 pending_actual_size
+  local row_dataset row_view row_method extra expected_dataset expected_method
+  local pending_dataset pending_view pending_method pending_extra
+  local selection_dataset selection_view selection_label selection_extra
+  local key matrix_keys="" pending_keys="" index=0 dataset_index method_index
+  local pending_count=0 selection_count=0
+  local -a expected_datasets=(
+    Breast_cancer Joanito Stephenson Covid19_PBMC Kidney_KPMP_full
+    Diabetes Lupus_PBMC Lung
+  )
+  local -a breast_methods=(
+    prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
+  )
+  local -a other_methods=(
+    prepare_pseudobulk pseudobulk gloscope composition
+  )
+
+  [[ "${STAGE_ARG}" == stage5 ]] || return 0
+  if [[ "${AUDIT_METADATA_METHOD_MATRIX_MODE:-0}" != 1 ]]; then
+    unset ECODA_STAGE5_METHOD_MATRIX METHOD_MATRIX
+    return 0
+  fi
+  [[ "${AUDIT_METADATA_VARIANT:-}" == corrected_final &&
+     "${AUDIT_METADATA_PASS:-}" == corrected ]] || {
+    _audit_die "METHOD_MATRIX requires the corrected-final Stage 5 pass"
+    return 1
+  }
+  [[ "${AUDIT_METADATA_METHODS}" == "prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot" ]] || {
+    _audit_die "corrected-final matrix metadata has the wrong method suite"
+    return 1
+  }
+  [[ "${matrix}" == "${RUN_ROOT_REAL}/manifests/method_matrix.tsv" ]] || {
+    _audit_die "METHOD_MATRIX is not the canonical run-owned matrix path"
+    return 1
+  }
+  _audit_regular_file "${matrix}" || return 1
+  _audit_regular_file "${matrix}.md5" || return 1
+  matrix_real="$(ecoda_realpath_existing "${matrix}")" || return 1
+  [[ "${matrix_real}" == "${matrix}" ]] || {
+    _audit_die "METHOD_MATRIX path is not canonical: ${matrix}"
+    return 1
+  }
+  ecoda_validate_run_owned_path "${matrix}" "${RUN_ROOT_REAL}" || return 1
+  ecoda_validate_run_owned_path "${matrix}.md5" "${RUN_ROOT_REAL}" || return 1
+  ecoda_validate_manifest "${matrix}" 3 || return 1
+  ecoda_validate_checksum "${matrix}" || {
+    _audit_die "METHOD_MATRIX checksum is invalid: ${matrix}"
+    return 1
+  }
+  matrix_md5="${ECODA_CHECKSUM_MD5}"
+  matrix_size="${ECODA_CHECKSUM_SIZE}"
+  matrix_sha="$(_audit_sha256_file "${matrix}")" || return 1
+  [[ "${AUDIT_METADATA_METHOD_MATRIX_MD5}" == "${matrix_md5}" &&
+     "${AUDIT_METADATA_METHOD_MATRIX_SIZE}" == "${matrix_size}" &&
+     "${AUDIT_METADATA_METHOD_MATRIX_SHA256}" == "${matrix_sha}" &&
+     "${AUDIT_METADATA_METHOD_MATRIX_IDENTITY}" == "${matrix_sha}" ]] || {
+    _audit_die "METHOD_MATRIX checksum/size metadata mismatches: ${matrix}"
+    return 1
+  }
+
+  # The matrix is an ordered declaration, not a discoverable permission list.
+  # Require the exact eight-dataset corrected-final contract and method order.
+  while IFS=$'\t' read -r row_dataset row_view row_method extra; do
+    if [[ ${index} -lt 7 ]]; then
+      dataset_index=0
+      method_index=${index}
+      expected_method="${breast_methods[${method_index}]}"
+    else
+      dataset_index=$((1 + (index - 7) / 4))
+      method_index=$(((index - 7) % 4))
+      expected_method="${other_methods[${method_index}]}"
+    fi
+    expected_dataset="${expected_datasets[${dataset_index}]:-}"
+    [[ -n "${expected_dataset}" &&
+       "${row_dataset}" == "${expected_dataset}" &&
+       "${row_view}" == batch_effect_corrected &&
+       "${row_method}" == "${expected_method}" &&
+       -z "${extra}" ]] || {
+      _audit_die "METHOD_MATRIX row ${index} violates the corrected-final contract"
+      return 1
+    }
+    key="${row_dataset}|${row_view}|${row_method}"
+    case " ${matrix_keys} " in
+      *" ${key} "*)
+        _audit_die "METHOD_MATRIX contains a duplicate triple: ${key}"
+        return 1
+        ;;
+    esac
+    matrix_keys="${matrix_keys} ${key}"
+    index=$((index + 1))
+  done < "${matrix}"
+  [[ ${index} -eq 35 ]] || {
+    _audit_die "METHOD_MATRIX must contain exactly 35 declared rows"
+    return 1
+  }
+  [[ "${AUDIT_METADATA_DECLARED_METHOD_ROWS}" == "${index}" ]] || {
+    _audit_die "DECLARED_METHOD_ROWS disagrees with METHOD_MATRIX"
+    return 1
+  }
+
+  # The dataset selection remains a separate eight-row manifest.  A swapped
+  # matrix/selection file must fail before artifact expansion.
+  [[ "${SELECTION_ARG}" != "${matrix}" ]] || {
+    _audit_die "dataset selection and METHOD_MATRIX cannot be the same file"
+    return 1
+  }
+  while IFS=$'\t' read -r selection_dataset selection_view \
+    selection_label selection_extra; do
+    expected_dataset="${expected_datasets[${selection_count}]:-}"
+    [[ -n "${expected_dataset}" &&
+       "${selection_dataset}" == "${expected_dataset}" &&
+       "${selection_view}" == batch_effect_corrected &&
+       "${selection_label}" == batch_effect_corrected &&
+       -z "${selection_extra}" ]] || {
+      _audit_die "corrected-final dataset selection does not match METHOD_MATRIX scope"
+      return 1
+    }
+    selection_count=$((selection_count + 1))
+  done < "${SELECTION_ARG}"
+  [[ ${selection_count} -eq 8 ]] || {
+    _audit_die "corrected-final matrix mode requires exactly eight dataset rows"
+    return 1
+  }
+
+  # PENDING_SELECTION is the derived method subset.  It must be run-owned,
+  # checksummed independently, and contain only declared matrix triples.
+  [[ "${pending}" == "${RUN_ROOT_REAL}/manifests/pending_selection.tsv" ]] || {
+    _audit_die "matrix PENDING_SELECTION is not the canonical run-owned path"
+    return 1
+  }
+  [[ -f "${pending}" && ! -L "${pending}" && -r "${pending}" ]] || {
+    _audit_die "matrix PENDING_SELECTION is missing or unsafe: ${pending}"
+    return 1
+  }
+  if [[ -s "${pending}" ]]; then
+    _audit_regular_file "${pending}.md5" || return 1
+    ecoda_validate_manifest "${pending}" 3 || return 1
+    ecoda_validate_checksum "${pending}" || {
+      _audit_die "matrix PENDING_SELECTION checksum is invalid: ${pending}"
+      return 1
+    }
+    pending_actual_md5="${ECODA_CHECKSUM_MD5}"
+    pending_actual_size="${ECODA_CHECKSUM_SIZE}"
+    pending_md5="${AUDIT_METADATA_PENDING_MD5}"
+    pending_size="${AUDIT_METADATA_PENDING_SIZE}"
+    [[ "${pending_md5}" == "${pending_actual_md5}" &&
+       "${pending_size}" == "${pending_actual_size}" ]] || {
+      _audit_die "PENDING_SELECTION checksum/size metadata mismatches: ${pending}"
+      return 1
+    }
+  else
+    [[ "${AUDIT_TERMINAL_STATE}" == NOOP_VALIDATED &&
+       "${AUDIT_METADATA_PENDING_METHOD_ROWS}" == 0 &&
+       -z "${AUDIT_METADATA_PENDING_MD5}" &&
+       -z "${AUDIT_METADATA_PENDING_SIZE}" ]] || {
+      _audit_die "empty matrix PENDING_SELECTION is only valid for a NOOP run"
+      return 1
+    }
+  fi
+  if [[ -s "${pending}" ]]; then
+    while IFS=$'\t' read -r pending_dataset pending_view \
+      pending_method pending_extra; do
+      [[ -n "${pending_dataset}" && -n "${pending_view}" &&
+         -n "${pending_method}" && -z "${pending_extra}" ]] || {
+        _audit_die "matrix PENDING_SELECTION row is malformed"
+        return 1
+      }
+      key="${pending_dataset}|${pending_view}|${pending_method}"
+      case " ${matrix_keys} " in
+        *" ${key} "*) ;;
+        *)
+          _audit_die "PENDING_SELECTION escapes METHOD_MATRIX: ${key}"
+          return 1
+          ;;
+      esac
+      case " ${pending_keys} " in
+        *" ${key} "*)
+          _audit_die "PENDING_SELECTION contains a duplicate triple: ${key}"
+          return 1
+          ;;
+      esac
+      pending_keys="${pending_keys} ${key}"
+      pending_count=$((pending_count + 1))
+    done < "${pending}"
+  fi
+  [[ "${AUDIT_METADATA_PENDING_METHOD_ROWS}" == "${pending_count}" ]] || {
+    _audit_die "PENDING_METHOD_ROWS disagrees with PENDING_SELECTION"
+    return 1
+  }
+  AUDIT_MATRIX_PENDING_ROWS="${pending_count}"
+}
+
 _audit_batch_contract_identity_path() {
   local dataset="${1:-}" view="${2:-}" method="${3:-}"
   local index row_dataset row_view row_method row_path row_md5 row_size extra
@@ -842,6 +1197,39 @@ _audit_batch_contract_identity_path() {
   done
   [[ ${found} -eq 1 ]]
 }
+_audit_batch_contract_identity_for_label() {
+  local dataset="${1:-}" view="${2:-}" label="${3:-}"
+  local source_path="${4:-}" method_id model_id
+  [[ -n "${dataset}" && -n "${view}" && -n "${label}" ]] || {
+    _audit_die "corrected batch-contract identity requires dataset, view, and method"
+    return 1
+  }
+  # Manifest and matrix rows use the stable shell labels.  The Python/R
+  # contract builders accept only the canonical semantic method IDs, so map
+  # each label together with its method-specific model before invoking them.
+  ecoda_corrected_batch_method_policy "${label}" || {
+    _audit_die "unsupported corrected batch method label: ${label}"
+    return 1
+  }
+  method_id="${ECODA_CORRECTED_BATCH_METHOD_ID}"
+  model_id="${ECODA_CORRECTED_BATCH_MODEL_ID}"
+  [[ -n "${method_id}" && -n "${model_id}" ]] || {
+    _audit_die "corrected batch method policy produced an empty identity: ${label}"
+    return 1
+  }
+  if [[ "${AUDIT_METADATA_VARIANT:-}" == corrected_final ]]; then
+    ecoda_batch_contract_identity "${DATASETS_JSON_FILE}" "${dataset}" \
+      "${view}" "${method_id}" "${model_id}"
+  else
+    [[ -n "${source_path}" ]] || {
+      _audit_die "direct-root corrected batch contract requires a source H5AD: ${label}"
+      return 1
+    }
+    ecoda_batch_contract_identity "${DATASETS_JSON_FILE}" "${dataset}" \
+      "${view}" "${method_id}" "${model_id}" "${source_path}"
+  fi
+}
+
 
 _audit_batch_contract_manifest() {
   local manifest="${AUDIT_METADATA_BATCH_CONTRACT_MANIFEST:-}"
@@ -850,7 +1238,15 @@ _audit_batch_contract_manifest() {
   local manifest_real row_path_real
   local source_path output_name
   local duplicate_keys="" dataset view label method contract_method found index
-  local -a expected_methods=(preprocess)
+  local matrix_mode="${AUDIT_METADATA_METHOD_MATRIX_MODE:-0}"
+  local -a configured_methods=()
+  local -a expected_methods=()
+  local -a matrix_breast_methods=(
+    prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
+  )
+  local -a matrix_other_methods=(
+    prepare_pseudobulk pseudobulk gloscope composition
+  )
   local -a scope_datasets=() scope_views=()
   local -a actual_datasets=() actual_views=() actual_methods=() actual_paths=()
   [[ "${STAGE_ARG}" == stage5 && "${AUDIT_METADATA_PASS:-}" == corrected ]] ||
@@ -893,7 +1289,7 @@ _audit_batch_contract_manifest() {
   for method in "${ECODA_ARRAY[@]}"; do
     [[ "${method}" != _ecoda_none_ ]] || return 1
     ecoda_corrected_batch_method_policy "${method}" || return 1
-    expected_methods+=("${method}")
+    configured_methods+=("${method}")
   done
   while IFS=$'\t' read -r dataset view label extra; do
     [[ -n "${dataset}" && -n "${view}" && -n "${label}" && -z "${extra}" &&
@@ -959,7 +1355,6 @@ _audit_batch_contract_manifest() {
     }
     [[ "${row_md5}" == "${ECODA_CHECKSUM_MD5}" &&
        "${row_size}" == "${ECODA_CHECKSUM_SIZE}" ]] || return 1
-    ecoda_corrected_batch_method_policy "${row_method}" || return 1
     output_name="$(ecoda_view_output_name "${row_dataset}" "${row_view}")" ||
       return 1
     source_path="${HPC_SCRATCH_DIR}/${row_dataset}/output/${output_name}"
@@ -967,19 +1362,10 @@ _audit_batch_contract_manifest() {
       _audit_die "corrected source H5AD is missing or empty: ${source_path}"
       return 1
     }
-    if [[ "${AUDIT_METADATA_VARIANT:-}" == corrected_final ]]; then
-      expected_identity="$(
-        ecoda_batch_contract_identity "${DATASETS_JSON_FILE}" "${row_dataset}" \
-          "${row_view}" "${ECODA_CORRECTED_BATCH_METHOD_ID}" \
-          "${ECODA_CORRECTED_BATCH_MODEL_ID}"
-      )" || return 1
-    else
-      expected_identity="$(
-        ecoda_batch_contract_identity "${DATASETS_JSON_FILE}" "${row_dataset}" \
-          "${row_view}" "${ECODA_CORRECTED_BATCH_METHOD_ID}" \
-          "${ECODA_CORRECTED_BATCH_MODEL_ID}" "${source_path}"
-      )" || return 1
-    fi
+    expected_identity="$(
+      _audit_batch_contract_identity_for_label \
+        "${row_dataset}" "${row_view}" "${row_method}" "${source_path}"
+    )" || return 1
     cmp -s "${row_path}" <(printf '%s\n' "${expected_identity}") || {
       _audit_die "corrected batch-contract identity or validated summary mismatches ${key}"
       return 1
@@ -993,6 +1379,16 @@ _audit_batch_contract_manifest() {
   for index in "${!scope_datasets[@]}"; do
     dataset="${scope_datasets[${index}]}"
     view="${scope_views[${index}]}"
+    if [[ "${matrix_mode}" == 1 ]]; then
+      expected_methods=(preprocess)
+      if [[ "${dataset}" == Breast_cancer ]]; then
+        expected_methods+=("${matrix_breast_methods[@]}")
+      else
+        expected_methods+=("${matrix_other_methods[@]}")
+      fi
+    else
+      expected_methods=(preprocess "${configured_methods[@]}")
+    fi
     for contract_method in "${expected_methods[@]}"; do
       found=0
       for method_index in "${!actual_datasets[@]}"; do
@@ -1865,10 +2261,23 @@ _audit_prepare_output_semantics() {
 
 _audit_selected_artifacts() {
   local path owner_dir owner_run metadata_root metadata_pass scope_selection
-  local artifact_marker semantic_index=0
+  local scope_rows
+  local semantic_index=0 semantic_dataset="" semantic_view="" semantic_label=""
+  local artifact_marker=""
   scope_selection="${SELECTION_ARG}"
   export DATASETS_JSON_FILE="${AUDIT_SOURCE_ROOT}/datasets.json"
   export PROJECT_ROOT="${AUDIT_SOURCE_ROOT}"
+  if [[ "${STAGE_ARG}" == stage5 ]]; then
+    if [[ "${AUDIT_METADATA_METHOD_MATRIX_MODE:-0}" == 1 ]]; then
+      # Keep the eight-row dataset selection as the scope source.  The
+      # run-owned matrix is an independent authorization input consumed by
+      # _ecoda_stage5_artifacts_for for each derived pending method row.
+      export ECODA_STAGE5_METHOD_MATRIX="${AUDIT_METADATA_METHOD_MATRIX}"
+      unset METHOD_MATRIX
+    else
+      unset ECODA_STAGE5_METHOD_MATRIX METHOD_MATRIX
+    fi
+  fi
   metadata_root="${AUDIT_METADATA_ROOT:-}"
   metadata_pass="${AUDIT_METADATA_PASS:-}"
   if [[ -n "${AUDIT_METADATA_VARIANT:-}" ]]; then
@@ -1902,6 +2311,11 @@ _audit_selected_artifacts() {
   if [[ "${STAGE_ARG}" == stage5 ]]; then
     _audit_stage5_scope_selection || return 1
     scope_selection="${AUDIT_STAGE5_SCOPE_SELECTION}"
+    scope_rows="$(wc -l < "${scope_selection}" | tr -d '[:space:]')"
+    [[ "${scope_rows}" == "${AUDIT_MATRIX_PENDING_ROWS:-${scope_rows}}" ]] || {
+      _audit_die "expanded Stage 5 scope disagrees with PENDING_METHOD_ROWS"
+      return 1
+    }
     [[ -s "${scope_selection}" ]] || return 0
   fi
   if [[ -n "${NAS_TARGET_DIR:-}" ]]; then
@@ -1964,6 +2378,15 @@ _audit_selected_artifacts() {
     _audit_semantic_artifact "${path}" "${semantic_dataset}" \
       "${semantic_view}" "${semantic_label}" "${owner_run}" || return 1
   done
+  if [[ "${STAGE_ARG}" == stage3 ||
+        "${STAGE_ARG}" == stage4 ||
+        "${STAGE_ARG}" == stage5 ]]; then
+    [[ ${semantic_index} -eq ${#AUDIT_OUTPUT_CANONICAL_PATHS[@]} ]] || {
+      _audit_die "selected artifact semantic paths were not compared in full"
+      return 1
+    }
+  fi
+
 }
 
 # Validate the supplied source/runtime identities before looking at any
@@ -1986,6 +2409,7 @@ _audit_corrected_source_contracts || exit 1
 _audit_runtime_identity "${RUNTIME_IDENTITY_ARG}" || exit 1
 _audit_selection || exit 1
 _audit_terminal_status || exit 1
+_audit_stage5_method_matrix || exit 1
 _audit_metadata_export_manifest || exit 1
 _audit_kidney_legacy_inventory || exit 1
 _audit_scheduler_ids || exit 1

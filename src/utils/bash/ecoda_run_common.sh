@@ -1740,6 +1740,11 @@ ecoda_stage5_validate_identity() {
         _ecoda_die "corrected_final Stage 5 analysis requires the corrected pass"
         return 1
       }
+      if [[ "${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}" == "recovery_35row" ||
+            "${ANALYSIS_ROOT:-}" == */batch_effect/corrected_final/recovery_35row ||
+            "${ANALYSIS_NAS_ROOT:-}" == */batch_effect/corrected_final/recovery_35row ]]; then
+        expected_suffix="corrected_final/recovery_35row"
+      fi
       ;;
     *)
       _ecoda_die "unsupported Stage 5 analysis variant: ${variant}"
@@ -1790,16 +1795,59 @@ ecoda_stage5_validate_final_method() {
   esac
 }
 
+ecoda_stage5_method_matrix_allows() {
+  local ds="${1:-}" view="${2:-}" method="${3:-}"
+  local matrix="${ECODA_STAGE5_METHOD_MATRIX:-${METHOD_MATRIX:-}}"
+  local row_ds row_view row_method extra
+  # Legacy and non-matrix runs retain their historical unrestricted method
+  # expansion.  A bound matrix is authoritative only when explicitly set.
+  [[ -f "${matrix}" && ! -L "${matrix}" && -r "${matrix}" ]] || return 1
+  if [[ -n "${ECODA_RUN_ROOT:-}" ]]; then
+    ecoda_validate_run_owned_path "${matrix}" "${ECODA_RUN_ROOT}" || return 1
+  fi
+  while IFS=$'\t' read -r row_ds row_view row_method extra; do
+    [[ -z "${extra}" ]] || return 1
+    if [[ "${row_ds}" == "${ds}" && "${row_view}" == "${view}" &&
+          "${row_method}" == "${method}" ]]; then
+      return 0
+    fi
+  done < "${matrix}"
+  return 1
+}
+
+ecoda_stage5_method_matrix_path() {
+  local matrix="${ECODA_STAGE5_METHOD_MATRIX:-${METHOD_MATRIX:-}}"
+  [[ -n "${matrix}" ]] || return 1
+  printf '%s' "${matrix}"
+}
+
+ecoda_stage5_analysis_root_suffix() {
+  local variant="${1:-${ANALYSIS_VARIANT:-}}"
+  case "${variant}" in
+    final)
+      printf 'uncorrected_final'
+      ;;
+    corrected_final)
+      if [[ "${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}" == "recovery_35row" ||
+            "${ANALYSIS_ROOT:-}" == */batch_effect/corrected_final/recovery_35row ||
+            "${ANALYSIS_NAS_ROOT:-}" == */batch_effect/corrected_final/recovery_35row ]]; then
+        printf 'corrected_final/recovery_35row'
+      else
+        printf 'corrected_final'
+      fi
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 ecoda_stage5_validate_artifact_path() {
   local path="${1:-}" canonical scratch_root nas_root expected_root expected_nas
   local variant="${ANALYSIS_VARIANT:-}" expected_suffix
   [[ -n "${variant}" ]] || return 0
   ecoda_stage5_validate_identity || return 1
-  case "${variant}" in
-    final) expected_suffix="uncorrected_final" ;;
-    corrected_final) expected_suffix="corrected_final" ;;
-    *) return 1 ;;
-  esac
+  expected_suffix="$(ecoda_stage5_analysis_root_suffix "${variant}")" || return 1
   [[ -n "${path}" ]] || {
     _ecoda_die "final Stage 5 artifact path is empty"
     return 1
@@ -1881,6 +1929,12 @@ _ecoda_stage5_artifacts_for() {
   # A missing pass is ordinary mode even when a caller supplies a batch view.
   # Batch callers bind PASS_ARG/ANALYSIS_PASS before ownership expansion.
   ecoda_stage5_validate_identity "${pass}" || return 1
+  if [[ -n "${ECODA_STAGE5_METHOD_MATRIX:-${METHOD_MATRIX:-}}" ]]; then
+    ecoda_stage5_method_matrix_allows "${ds}" "${view}" "${label}" || {
+      _ecoda_die "Stage 5 method is not authorized by the bound method matrix: ${ds}/${view}/${label}"
+      return 1
+    }
+  fi
   case "${ANALYSIS_VARIANT:-}" in
     final)
       [[ "${pass}" == "uncorrected" &&
@@ -1908,16 +1962,22 @@ _ecoda_stage5_artifacts_for() {
   if [[ -n "${ANALYSIS_ROOT:-}" ]]; then
     root="${ANALYSIS_ROOT}"
   elif [[ -n "${pass}" ]]; then
-    root="${HPC_SCRATCH_DIR}/batch_effect/${pass}"
-    [[ -n "${ANALYSIS_VARIANT:-}" ]] &&
-      root="${HPC_SCRATCH_DIR}/batch_effect/${pass}_final"
+    if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
+      root="${HPC_SCRATCH_DIR}/batch_effect/$(ecoda_stage5_analysis_root_suffix)"
+    else
+      root="${HPC_SCRATCH_DIR}/batch_effect/${pass}"
+    fi
   else
     root="${HPC_SCRATCH_DIR}/benchmark"
   fi
   if [[ -n "${ANALYSIS_NAS_ROOT:-}" ]]; then
     nas_root="${ANALYSIS_NAS_ROOT}"
   elif [[ -n "${pass}" && -n "${NAS_TARGET_DIR:-}" ]]; then
-    [[ -n "${ANALYSIS_VARIANT:-}" ]] && nas_root="${NAS_TARGET_DIR}/batch_effect/${pass}_final"
+    if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
+      nas_root="${NAS_TARGET_DIR}/batch_effect/$(ecoda_stage5_analysis_root_suffix)"
+    else
+      nas_root="${NAS_TARGET_DIR}/batch_effect/${pass}"
+    fi
   elif [[ -n "${NAS_TARGET_DIR:-}" ]]; then
     nas_root="${NAS_TARGET_DIR}/benchmark"
   else
