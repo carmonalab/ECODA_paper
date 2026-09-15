@@ -1,21 +1,21 @@
 # ECODA final batch-effect subset processing
 
-## Current scope — authoritative (2026-09-14)
+## Current scope — authoritative (2026-09-15)
 
 This section is the single active contract for this plan. It supersedes every
 older active Context, Approach, Verification, Assumptions, and status section
 that conflicts with it. The incident appendix is evidence only; it does not
 create selectors, authorize a launch, or preserve an obsolete nine-row scope.
-This plan has moved from design-only into implementation and controlled execution. The user has now prioritized the explicitly scoped Alzheimer Stage 2 derivative before the complete scratch clone. The eight-dataset corrected-final gate remains after the verified full backup; it is not a current parallel launch candidate.
+This plan has moved from design-only into implementation and controlled execution. The verified full backup and migration are complete. Controlled Yggdrasil Wave 1 execution is active; the first Wave 1 attempt is preserved as failed evidence, the corrected Stage 3 retries are running, and the eight-dataset Stage 5 retry is held only for destination-side sidecar normalization.
 Every operation remains narrowly scoped: no broad or inferred selection, no overwrite, no active-tree clone, and no production launch without the required exact snapshot/runtime identity, durable gate, terminal accounting, artifact audit, synchronization, and Luna Max review.
 
 ### Objective and hard boundaries
 
 - Local selector/source-contract implementation, backup feasibility, and the
-  completed transfer-sanity mirror are recorded. The scratch mirror is now the
-  active Yggdrasil working tree; the repository mirror is being finalized at
-  the canonical Yggdrasil home path. Remaining work is portability validation,
-  not Bamboo-first execution.
+  completed transfer-sanity mirror are recorded. The scratch mirror is now
+  the active Yggdrasil working tree and the repository is at its canonical
+  Yggdrasil home path. Remaining work is scoped execution, not Bamboo-first
+  migration.
 - The Alzheimer Stage 2 derivative is complete on Bamboo under its exact
   snapshot/run contract. Its validated derivative is an input for the
   Yggdrasil follow-up; it must not be recomputed or modified outside an
@@ -397,8 +397,10 @@ push, and an exact revision pull on Yggdrasil.
 The complete Bamboo→Yggdrasil scratch transfer passed the approved
 `TRANSFER_SANITY_ONLY` check and was explicitly reclassified by the user as
 the active writable `~/scratch/ECODA_paper` working tree. It is no longer an
-independent immutable backup. The repository mirror is still completing its
-cross-filesystem move into `~/ECODA_paper`; do not use that partial directory.
+independent immutable backup.
+
+The repository mirror move also completed. The canonical Yggdrasil repository
+is `~/ECODA_paper`; the active data/results tree is `~/scratch/ECODA_paper`.
 
 Large mirrors use bounded verification only: a quiescent source, rsync exit
 `0`, no failure marker, destination presence, and a success marker. Rough
@@ -412,34 +414,26 @@ resolves `nasac-evs2.unige.ch` and has `gio`/D-Bus clients; a user-scoped
 interactive NASAC mount is required before result/NAS synchronization. No
 password or private key may be stored.
 
-The active migration sequence is: finish the repository move; pull the exact
-local committed revision; verify canonical source, runtime, auxiliary,
-scheduler, and scratch paths; validate result handling and the durable-gate
-host contract; then run only the explicit remaining selections. If any
-pipeline-file or control-plane change is required, make it locally, commit
-and push it, pull the exact revision on Yggdrasil, update this plan, and stop
-for approval before compute.
+The migration sequence completed: the repository move, exact local
+commit/push and Yggdrasil revision pull, canonical source/runtime/auxiliary
+checks, scheduler/profile/path checks, scratch activation, and explicit NAS
+mirror routing were verified. The remaining operations are only the exact
+approved selections below, each through a new snapshot-backed durable gate.
 
-### Maintenance feasibility gate
+### Maintenance feasibility gate — superseded for Yggdrasil
 
-The hard maintenance boundary is:
+The prior Bamboo maintenance boundary of `2026-09-15 07:00 UTC` remains
+historical evidence only. It no longer constrains the active run because the
+user explicitly selected Yggdrasil as the default host and approved controlled
+Wave 1 execution there.
 
-```text
-2026-09-15 08:00 +0100
-= 2026-09-15 07:00 UTC
-= 2026-09-15 09:00 Bamboo local time (UTC+0200)
-```
-
-The last recorded Bamboo time check was `2026-09-14 12:22 UTC`. A launch is
-permitted only when the complete chain—wrapper and source preflight, queue
-start, dependency release, worker/watchdog compute, terminal accounting,
-artifact validation, review, backup/synchronization, and recovery margin—fits
-before that boundary. The planning envelope is **at most 8 hours of submitted
-worker/watchdog compute plus 2 hours of operational preparation, queue/review,
-and synchronization**. Treat this as a feasibility budget, not merely a
-worker walltime request; reject a launch when the bound and a safety margin
-cannot be demonstrated.
-
+Every new Yggdrasil launch still requires validator-only preflight, an exact
+immutable source/runtime/auxiliary identity, explicit selected rows and
+expected counts, no active serialization conflict, and queue feasibility for
+the declared CPU resources. Record those checks in the run manifest before
+launch. This supersession does not authorize a broad selection, a stale
+manifest reuse, or a bypass of terminal accounting, artifact audit, or Luna
+Max review.
 ## Release checklist
 
 Before the first eight-dataset compute gate, the run owner must have:
@@ -456,8 +450,9 @@ Before the first eight-dataset compute gate, the run owner must have:
 - recorded the fixed-effect limma identity/design for corrected composition and
   pseudobulk, separate original technical covariates, no composite key, and
   no lme4 path;
-- sealed a full-hash source/runtime snapshot under a verified parent lock
-  and proved the 8h + 2h cutoff envelope; and
+- recorded current per-gate queue and walltime feasibility for the declared
+  Yggdrasil CPU resources; the historical Bamboo maintenance cutoff is
+  superseded for this host;
 - recorded one durable gate command, selector checksum, expected rows, roots,
   and dependency/review boundary.
 
@@ -467,12 +462,15 @@ parent, then require a separate fresh full-hash Stage 2 source/runtime
 snapshot, the exact one-step selector, the strict derivative schema and
 104-sample contract, and explicit Stage 2 ownership. This exception does not
 change `datasets.json` or authorize Stage 3/5 work.
-Before Alzheimer Stage 3 or Stage 5 work, additionally require the reviewed
-eight-dataset gate, a new post-derivative full-hash source/runtime snapshot,
-the strict derivative schema and 104-sample contract, and explicit one-row
-Stage 3/Stage 5 manifests. The Alzheimer corrected-final Stage 5 lane is
-serialized behind the completed eight-dataset corrected-final root; no stale
-nine-row artifact or donor-only metadata may authorize it.
+Before the remaining Alzheimer Stage 5 lanes, additionally require the
+reviewed eight-dataset corrected-final gate, a new post-derivative full-hash
+source/runtime snapshot, the strict derivative schema and 104-sample
+contract, and explicit one-row Stage 5 manifests. The current Wave 1 exception
+is limited to the producer-bound Alzheimer Stage 3 one-row retries and the
+eight-dataset corrected-final Stage 5 recovery after the validated Stage 2
+derivative; it does not release either Alzheimer Stage 5 lane. The Alzheimer
+corrected-final Stage 5 lane remains serialized behind the completed
+eight-dataset corrected-final root.
 
 After all approved lanes, synchronize only manifest-listed processed/results
 artifacts and metadata/checksums to the workstation/NAS. Final analysis must
@@ -528,6 +526,8 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
 | `stage5_corrected_final_20260913f`, `...g`, `...h` | Wrong serialization group, stale parent lock, and zero preflight-row counter respectively; all stopped before compute with no reusable gate. |
 | `stage5_corrected_final_20260913i` | Scheduler rows launched; Alzheimer prepare and GloScope rows failed, while MRVI/PILOT/QOT completed. Completion transport could not be recovered, so the durable gate stopped in `PRELAUNCH_STOP`; this is not evidence that the launched rows were dependency-blocked. Its Alzheimer row is invalid under donor-by-assay scope. |
 
+| `stage3_alzheimer_wave_ygg_20260915T115500Z`, `stage5_eight_corrected_wave_ygg_20260915T115439Z` | First Yggdrasil Wave 1 attempt failed before scheduler submission: Stage 3 supplied a combined Alzheimer selection, and Stage 5 supplied a four-method option reserved by the submitter for the fixed seven-method suite. No scheduler IDs or reusable artifacts. |
+| `stage5_eight_corrected_ygg_retry_20260915T115439Z` | Corrected four-method selector reached source-H5AD sidecar validation and failed because the explicit NAS mirror was empty; no scheduler IDs. The eight affected destination sidecars are being normalized validator-only with the same verified MD5/SIZE and destination `PATH`; the failed manifest remains unreused. |
 ### Validator-only reports and accepted historical artifacts
 
 - The source-bound H5AD audit from snapshot
@@ -567,7 +567,7 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
   only; lme4 is removed from all new corrected work and its payloads are not
   reuse candidates.
 
-## Execution checkpoint — 2026-09-14
+## Execution checkpoint — 2026-09-15
 
 ### Completed
 
@@ -577,8 +577,8 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
 - Simplified `AGENTS.md` to durable scientific, artifact, snapshot, ownership,
   and gate rules while preserving the required baseline anchor
   `5302671ad94556edcf9acccf372d2dc34121d714`, the full HiTME/scATOMIC
-  annotation contract, the user-authored plan-reference text, Bamboo as the
-  default host, and the explicitly named Yggdrasil backup exception.
+  annotation contract, the user-authored plan-reference text, Yggdrasil as the
+  default host, and the explicit Bamboo fallback policy.
 - Updated `docs/ARCHITECTURE.md` to remain a general config-driven overview;
   exact dataset/method/row selections now belong here in the active plan.
   Updated `NOTES.md` with current Alzheimer, global-limma, 32-row, and backup
@@ -659,18 +659,22 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    blocker because GPU resources were only required for benchmark views, which
    are complete. `PORTABILITY_AUDIT=READY_FOR_SCOPED_LANES`; no broad
    selection or partial method subset is allowed.
-5. **Await explicit migration approval.** The remaining work is the exact
-   Alzheimer Stage 3 uncorrected/corrected rows, the two Alzheimer Stage 5
-   lanes, and the eight-dataset corrected-final Stage 5 recovery with all 32
-   rows. Running them on Yggdrasil requires an approved migration for the
-   repository, host environment, FORMAT 2 runtime, auxiliary root, scratch
-   data, scheduler/profile/path contracts, and result/NAS handling. If any
-   pipeline-file or configuration change is required, update this plan only
-   and wait.
-6. **Finalize only after reviewed artifacts.** Synchronize manifest-listed
+5. **Wave 1 execution status.** The original combined Stage 3 and four-method
+   Stage 5 gates are preserved as failed pre-scheduler evidence. The corrected
+   Stage 3 retries use separate one-row manifests and the validated Stage 2
+   producer run; their emitted preprocessing array IDs are `45686974` and
+   `45686975`, and their durable waits remain the source of terminal status.
+   The corrected eight-dataset Stage 5 retry failed before scheduler submission
+   because the destination mirror lacked the eight source H5AD sidecars. The
+   destination-only sidecar normalization is validator-only and must complete
+   with `SIDECAR_SUCCESS` plus explicit checksum/path validation before a new
+   Stage 5 gate is prepared. The new gate must use a new run ID, the exact
+   eight rows, and `--target-methods
+   prepare_pseudobulk,pseudobulk,gloscope,composition`; never reuse the failed
+   manifest.
+6. **Remaining Yggdrasil compute.** After reviewed terminal artifacts, run the
+   two Alzheimer Stage 5 one-row lanes in their declared order and shared-root
+   serialization boundary. Keep all existing validated artifacts outside every
+   recomputation selection.
+7. **Finalize only after reviewed artifacts.** Synchronize manifest-listed
    outputs and checksums, then execute the final analysis lane.
-The user explicitly set Yggdrasil as the default host for this plan while
-keeping all authoring local and synchronized by commit/push/pull. The
-portability checks pass for the approved CPU lanes using the explicit local
-scratch result mirror; NASAC remains optional external synchronization, not a
-prerequisite for these CPU runs.
