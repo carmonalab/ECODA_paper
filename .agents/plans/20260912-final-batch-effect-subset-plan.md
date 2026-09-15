@@ -61,34 +61,36 @@ The no-compute Alzheimer acceptance path remains authoritative. The original
 Alzheimer Stage 3 gates remain failed and unreleased because their complete
 attempt chains include the initial and retry1 OOM roots; their retry-2 H5ADs
 are accepted only through new reviewed acceptance records.
-The original Alzheimer Stage 2 gate is also irreversibly `PRELAUNCH_STOP`: its
+The original Alzheimer Stage 2 gate is irreversibly `PRELAUNCH_STOP`: its
 audit passed, but the completion-transport discrepancy and bound Bamboo
-profile prevent reviewer approval. A fresh validator-only Stage 2 acceptance
-record must bind the existing Yggdrasil derivative, copied prior inspect
-evidence, and current snapshot/runtime identity without mutating old evidence.
+profile prevent reviewer approval. The user explicitly waives this Stage 2
+review as a prerequisite for the remaining work. Preserve the derivative,
+artifact, owner, and failed-gate evidence unchanged; do not launch a fresh
+Stage 2 acceptance gate or mutate the old gate.
 
 No further Stage 2/3/5 processing is launched until the revised selector
 contract, acceptance validator, focused tests, and read-only artifact
 reviews pass. After that confirmation boundary:
 
-1. Complete the Alzheimer Stage 2 and Stage 3 validator-only acceptance
-   records, the Breast semantic H5AD review, and the seven-dataset
-   current-input inventory as independent review-only work wherever possible.
-   The acceptance records do not submit Stage 2/3 workers.
+1. Complete the Alzheimer Stage 3 validator-only acceptance records and the
+   seven-dataset current-input inventory as independent review-only work
+   wherever possible. Breast Stage 3 is already accepted as passed by its
+   terminal inspect and Luna Max review. The Stage 3 acceptance records do not
+   submit Stage 2/3 workers.
 2. Run one corrected-final 35-row durable gate. It owns the single
    `batch_effect/corrected_final/recovery_35row` synchronization boundary, so
    the Breast seven-row and non-Breast 28-row scopes are not separate
    concurrent gates.
-3. Once the Alzheimer Stage 2 and Stage 3 acceptance predecessors are
-   reviewed, run the one-row Alzheimer uncorrected Stage 5 gate in parallel
-   with the corrected-final 35-row gate; its `uncorrected_final` root is
-   disjoint.
+3. Once the Alzheimer Stage 3 acceptance predecessors are reviewed, run the
+   one-row Alzheimer uncorrected Stage 5 gate in parallel with the
+   corrected-final 35-row gate; its `uncorrected_final` root is disjoint.
 4. After terminal inspection and review of the 35-row corrected-final gate,
    run the one-row Alzheimer corrected Stage 5 gate. It remains serialized
    behind the shared corrected-final owner.
 
-The validator-only Stage 2/3 records preserve complete historical attempt
-chains and are separate from the failed original gates.
+The validator-only Stage 3 records preserve complete historical attempt
+chains and are separate from the failed original gates. Alzheimer Stage 2
+review is an explicit user-waived prerequisite and is not a launch blocker.
 
 This section is the active authorization and ordering contract; later
 historical sections cannot expand or replace it.
@@ -285,11 +287,11 @@ Before any new Stage 5 launch:
   removal of individually valid non-Breast rows;
 - the Stage 5 submitter and shared helpers accept and validate the explicit
   per-dataset method matrix while preserving legacy root/stem behavior;
-- the focused selection, synchronization, RDS, and acceptance regressions
-  pass; no `--force`, broad selection, or historical 8×32 manifest is used;
-- Breast's regenerated corrected H5AD has passed the independent read-only
-  semantic contract check and remains bound to
-  `columns.batch = ["assay", "suspension_dissociation_time"]`;
+- Breast's regenerated corrected H5AD has passed its terminal Stage 3
+  inspection and Luna Max review under
+  `columns.batch = ["assay", "suspension_dissociation_time"]`; the user
+  explicitly accepts this as passed, so no additional semantic review gate is
+  required before corrected Stage 5.
 - the seven non-Breast corrected inputs and any historical method artifacts
   have passed current source, configuration, ownership, checksum, and method
   validation; valid rows remain outside recomputation;
@@ -298,9 +300,9 @@ Before any new Stage 5 launch:
   role chronology, full OOM attempt preservation, and no `sbatch`/rehash
   tripwires;
 - the old Stage 2 `PRELAUNCH_STOP` gate remains immutable and unreviewable;
-  a fresh validator-only Stage 2 acceptance predecessor must bind its
-  Yggdrasil artifact, copied prior inspect evidence, current snapshot/runtime,
-  and semantic metadata contract without submitting or rehashing H5AD data;
+  its review is explicitly waived by the user. Preserve its passing audit and
+  completion-transport discrepancy as evidence; do not create a fresh Stage 2
+  acceptance gate or mutate the old run;
 - both fresh Alzheimer Stage 3 acceptance lanes have terminal audit and
   reviewer evidence before either Alzheimer Stage 5 lane is launched;
 - the corrected-final 35-row gate records the exact method matrix, expected
