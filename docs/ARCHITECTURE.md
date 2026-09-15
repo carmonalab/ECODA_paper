@@ -58,10 +58,36 @@ The ECODA benchmarking pipeline is designed for **cohort-level exploratory analy
 2. **Metadata-only H5AD access:** Obs-only audits and the sample-metadata exporter read only HDF5 shape/`obs` data through the h5py/read-dataframe path. They never open `X`, `raw`, or `layers["counts"]`; methods that genuinely require raw counts use the separate checked CSR contract.
 3. **Run-Owned Minimal Annotation Union:** Each Stage 4 run writes a minimal union at `${HPC_SCRATCH_DIR}/_ecoda_runs/<RUN_ID>/datasets/<DS_NAME>/union/union.h5ad` (`X` = raw counts CSR, `obs` + `var` only, no `layers`/`obsp`/`obsm`). Feathers are validated once against the complete union `(Sample, cell_barcode)` key set, then projected onto each selected view.
 4. **Explicit selection manifests:** Stage 3 consumes one immutable `DATASET<TAB>VIEW` row per selected view. Stage 5 lanes consume explicit dataset/view/scope manifests with variant-appropriate method selections; no broad or inferred production scope is permitted. Analysis notebooks load physical artifact paths from their manifests rather than reconstructing a common root.
-5. **Global separate technical fixed effects:** Active corrected composition and pseudobulk use limma fixed effects with each original categorical technical covariate represented separately. They never synthesize or consume a combined/artificial batch key, and biological labels remain evaluation-only. Top-level identities carry effective and non-estimable keys, correction state/mode/formula, aliases, design rank, and residual degrees of freedom; the nested validation-summary schema remains v1.
+5. **Dataset-level technical correction fields:** Active corrected Stage 3 and
+   Stage 5 composition/pseudobulk resolve correction columns only from each
+   dataset's top-level `columns.batch` list. They never synthesize or consume a
+   combined/artificial batch key, and biological labels remain evaluation-only.
+   Top-level identities may report effective and non-estimable fields,
+   correction state/mode/formula, aliases, design rank, and residual degrees
+   of freedom, but those reports never become an independent column authority;
+   the nested validation-summary schema remains v1.
 6. **Cross-Language Data Exchange (`.feather`):** Python methods serialize embeddings and pairwise distance matrices to Apache Arrow `.feather` files, which R consumers read with zero format drift.
 7. **Atomic Writes & MD5 Checksums:** R result bundles, metadata exports, annotation feathers, unions, and merged h5ads are written atomically (temp file + rename) with MD5/SIZE/PATH sidecars before synchronization to persistent NAS storage.
 8. **Immutable run identity and gated progression:** A run binds a commit-keyed source snapshot and source manifest, versioned runtime image/manifest, auxiliary-root identity, exact run ID, and selected-row scope. After launch, the durable workflow arms one unbounded wait, then performs one terminal inspection and required reviewer approval before dependent work or same-root synchronization proceeds.
+
+### Dataset-level column authority
+
+The top-level `columns` object in `datasets.json` is the sole production
+source for sample, label, batch, and cell-type fields. A view may select
+input/output/subset behavior, but `views.*.columns` objects are prohibited and
+cannot override, narrow, or add dataset-level columns. Stage 5 always uses the
+same dataset-level correction fields; no historical cohort-specific override
+is active.
+
+For `Breast_cancer`, the configured batch list is exactly
+`columns.batch = ["assay", "suspension_dissociation_time"]`. The
+`sequencing_platform` field remains in H5AD `obs` and exported metadata when
+present, but it is not a correction column. The biological `disease` field is
+evaluation-only and never enters correction. The corrected Breast Stage 3
+H5AD must be regenerated as
+`BreastCncr_processed_batch_effect_analysis_corrected_assay_dissociation_ECODAprocessed.h5ad`
+and validated before any corrected Breast Stage 5 work is launched or reused.
+
 
 
 
@@ -233,9 +259,16 @@ Per-dataset R Markdown notebooks performing study-specific initial quality contr
 - Applies view-specific subset masks and sample-consistency audits before
   sample standardization and low-count filtering; preserves raw counts in
   `layers["counts"]`, normalizes/log-transforms, ranks HVGs, and computes
-  view-specific PCA/Harmony/Leiden outputs. Uncorrected views remain
-  `Sample`-keyed; corrected views use configured technical batch variables
-  for Harmony, with biological labels excluded from all processing covariates.
+  view-specific PCA/Harmony/Leiden outputs. Correction fields are resolved
+  only from the dataset-level `columns.batch` list; views cannot override
+  those fields. Uncorrected views remain `Sample`-keyed; corrected views use
+  the configured technical batch variables for Harmony, with biological labels
+  excluded from all processing covariates.
+- A corrected Breast Stage 3 output is a required predecessor for any
+  corrected Breast Stage 5 work. Regenerate and validate the final H5AD under
+  the current dataset-level pair before releasing or reusing its corrected
+  Stage 5 row.
+
 - Where required by a selected view, a direct-input obs-only preflight
   reports configured metadata predicates, raw values, source identity, and
   split-sample results before the applicable array is released. It writes only
@@ -377,17 +410,23 @@ the current gate's terminal wait, inspection, and reviewer approval.
 - The canonical path passes raw aggregate matrices directly to the R
   matrix-to-DESeq2 boundary. It does not create a one-sample-per-column
   Seurat object or call `AggregateExpression()` a second time.
-- **Active fixed-effect correction.** Corrected composition bundles use model
-  identity `limma_fixed_effects_v1`; corrected pseudobulk uses
-  `pseudobulk_limma_fixed_effects_v1`. Both apply
-  `limma::removeBatchEffect` with each original categorical technical
-  covariate represented separately and an intercept-preservation design. In
-  the corrected pseudobulk pipeline, DESeq2 normalization is intercept-only
-  (`design=~1`, `batch_col=NULL`); limma applies those separate technical
-  covariates after normalization. The configured keys, effective/non-estimable
-  keys, correction state/mode/formula, aliases, design rank, and residual
-  degrees of freedom remain explicit in the artifact identity. No biological
-  label or artificial combined batch key enters the correction.
+- **Active fixed-effect correction.** Corrected composition bundles and
+  corrected pseudobulk resolve their correction fields only from the
+  dataset-level `columns.batch` list. They use model identity
+  `limma_fixed_effects_v1` and `pseudobulk_limma_fixed_effects_v1`,
+  respectively, applying `limma::removeBatchEffect` with each configured
+  dataset-declared categorical technical covariate represented separately and
+  an intercept-preservation design. For `Breast_cancer`, the exact list is
+  `["assay", "suspension_dissociation_time"]`; `sequencing_platform` remains
+  visible metadata when present but is not a correction column. In the
+  corrected pseudobulk pipeline, DESeq2 normalization is intercept-only
+  (`design=~1`, `batch_col=NULL`); limma applies the configured separate
+  technical covariates after normalization. Effective/non-estimable fields
+  are validation results derived from dataset-level columns, never an
+  independent Stage 5 override. No biological label or artificial combined
+  batch key enters the correction. Corrected Breast Stage 5 must wait for the
+  regenerated corrected Stage 3 H5AD.
+
 - Batch composition artifacts declare explicit logical bundle keys for each
   configured output, including normal and null results where applicable.
 - Compatibility readers may recognize historical extras; active lanes do not
@@ -419,8 +458,9 @@ aggregation contracts:
   metadata alignment. Ordinary pseudobulk uses `~1`, `blind=TRUE`, and no
   batch correction. Corrected batch-effect pseudobulk uses intercept-only
   DESeq2 normalization (`design=~1`, `batch_col=NULL`), then limma removes
-  the separate original categorical technical covariates post-normalization;
-  the biological label remains outside the model. No composite/artificial
+  the separate dataset-declared categorical technical covariates
+  post-normalization; the biological label remains outside the model. No
+  composite/artificial
   batch column is constructed. Effective and non-estimable keys, correction
   state, formula, aliases, design rank, and residual degrees of freedom are
   recorded; if no technical key is estimable, the correction state is
@@ -535,6 +575,14 @@ root or treats a scheduler matrix as its analysis scope. A mixed-source
 manifest may combine approved legacy read-only artifacts with
 variant-qualified results and independently exported sample metadata, but
 that analysis manifest is not a Stage 3 or Stage 5 scheduler selection.
+For every dataset, correction fields for both corrected Stage 3 and corrected
+Stage 5 are read from the top-level dataset `columns.batch` list only. No
+view-level columns object is supported, and Stage 5 cannot select a separate
+correction key.
+For Breast, this list is exactly `["assay", "suspension_dissociation_time"]`;
+`sequencing_platform` remains metadata when present and `disease` remains an
+evaluation-only label. The new corrected Breast Stage 3 H5AD must be validated
+before any corrected Stage 5 row is launched or reused.
 
 Manifest-driven analysis keeps legacy and active lanes explicit: approved
 legacy contributions are read-only, while newly produced rows use their

@@ -474,9 +474,10 @@ ecoda_view_input_name() {
   printf '%s' "${value}"
 }
 # Validate one corrected-mode dataset's columns.batch schema without creating
-# files, run state, manifests, ownership, or scheduler state.  The caller
-# supplies the dataset/view so view-level column overrides are resolved before
-# the batch key is checked.
+# files, run state, manifests, ownership, or scheduler state.  Column
+# contracts are resolved from the dataset-level mapping only; the selected
+# view contributes I/O/subset settings, never a column override.
+
 ecoda_validate_corrected_batch_columns() {
   local config_path="${1:-${DATASETS_JSON_FILE:-}}"
   local dataset="${2:-}"
@@ -495,11 +496,6 @@ ecoda_validate_corrected_batch_columns() {
       elif length == 0 then false
       else test("[^[:space:]]")
       end;
-    def object_or_empty:
-      if . == null then {}
-      elif type == "object" then .
-      else error("expected a JSON object")
-      end;
 
     if type != "object" then
       error("datasets configuration must be a JSON object")
@@ -517,10 +513,10 @@ ecoda_validate_corrected_batch_columns() {
         $entry.views[$view] as $view_spec |
         if ($view_spec | type) != "object" then
           error("corrected view must be a JSON object")
+        elif (($entry.columns // null) | type) != "object" then
+          error("dataset columns must be a JSON object")
         else
-          ($entry.columns | object_or_empty) as $base_columns |
-          ($view_spec.columns | object_or_empty) as $view_columns |
-          ($base_columns * $view_columns) as $columns |
+          ($entry.columns) as $columns |
           ($columns.batch) as $raw_batch |
           (if ($raw_batch | type) == "string" then
              [$raw_batch]
@@ -556,7 +552,9 @@ ecoda_validate_corrected_batch_columns() {
     _ecoda_die "invalid corrected columns.batch for dataset ${dataset}"
     return 1
   fi
+
 }
+
 
 ecoda_corrected_batch_method_policy() {
   local method="${1:-}"
@@ -651,16 +649,9 @@ if not isinstance(entry, dict):
 views = entry.get("views")
 if not isinstance(views, dict) or not isinstance(views.get(view), dict):
     raise ValueError(f"corrected view is not configured: {dataset}/{view}")
-base_columns = entry.get("columns")
-view_columns = views[view].get("columns")
-if base_columns is None:
-    base_columns = {}
-if view_columns is None:
-    view_columns = {}
-if not isinstance(base_columns, dict) or not isinstance(view_columns, dict):
-    raise ValueError(f"dataset/view columns must be JSON objects: {dataset}/{view}")
-columns = dict(base_columns)
-columns.update(view_columns)
+columns = entry.get("columns")
+if not isinstance(columns, dict):
+    raise ValueError(f"dataset columns must be a JSON object: {dataset}")
 sample_column = "Sample"
 identity = module.build_batch_contract_identity(
     columns.get("batch"),

@@ -479,7 +479,7 @@
     "columns": {
       "sample": "sample_id",
       "label": "disease",
-      "batch": ["assay", "sequencing_platform", "suspension_dissociation_time"],
+      "batch": ["assay", "suspension_dissociation_time"],
       "cell_type_low_res": "broad_cell_type",
       "cell_type_high_res": "author_cell_type"
     },
@@ -498,7 +498,7 @@
       },
       "batch_effect_corrected": {
         "input_file_name": "BreastCncr_processed.h5ad",
-        "output_file_name": "BreastCncr_processed_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+        "output_file_name": "BreastCncr_processed_batch_effect_analysis_corrected_assay_dissociation_ECODAprocessed.h5ad",
         "subset_vars": {}
       }
     }
@@ -763,18 +763,12 @@
       "batch_effect_uncorrected": {
         "input_file_name": "Parkinson.h5ad",
         "output_file_name": "Parkinson_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
-        "subset_vars": {},
-        "columns": {
-          "cell_type_high_res": "cell_type"
-        }
+        "subset_vars": {}
       },
       "batch_effect_corrected": {
         "input_file_name": "Parkinson.h5ad",
         "output_file_name": "Parkinson_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
-        "subset_vars": {},
-        "columns": {
-          "cell_type_high_res": "leiden_res_5_batch_effect_corrected_hvg2000_harmony"
-        }
+        "subset_vars": {}
       }
     },
     "not_suitable_for_auto_annotation": [

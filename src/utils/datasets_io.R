@@ -13,20 +13,27 @@ read_datasets_json <- function(path = "datasets.json", view = NULL) {
 
     matched_views <- list()
     for (v_name in names(views)) {
+      v <- views[[v_name]]
+      if (!is.null(v[["columns"]])) {
+        stop(
+          "Unsupported view-level columns declaration for dataset '",
+          ds_name,
+          "', view '",
+          v_name,
+          "'; configure columns at the dataset level."
+        )
+      }
       if (!is.null(view) && v_name != view) next
 
-      v <- views[[v_name]]
       output_file <- v[["output_file_name"]]
       if (is.null(output_file)) next
 
-      view_columns <- v[["columns"]]
-      if (is.null(view_columns)) view_columns <- list()
       matched_views[[v_name]] <- list(
         view_name = v_name,
         input_file = v[["input_file_name"]],
         output_file = output_file,
         subset_vars = v[["subset_vars"]],
-        columns = modifyList(base_columns, view_columns)
+        columns = base_columns
       )
     }
 
@@ -34,7 +41,7 @@ read_datasets_json <- function(path = "datasets.json", view = NULL) {
 
     first_v_name <- names(matched_views)[1]
     first_v <- matched_views[[first_v_name]]
-    columns <- first_v[["columns"]]
+    columns <- base_columns
 
     entry <- list(
       # dataset-level fields (order mirrors datasets.json)

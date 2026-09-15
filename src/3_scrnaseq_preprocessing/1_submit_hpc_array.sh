@@ -458,8 +458,8 @@ stage3_validate_alzheimer_input_dependency() {
     echo "ERROR: Alzheimer follow-up is bound to a non-derivative input: ${input_name:-<empty>}" >&2
     return 1
   }
-  sample_column="$(jq -r --arg view "${view}" '
-    ((.Alzheimer.columns // {}) * (.Alzheimer.views[$view].columns // {})).sample // empty
+  sample_column="$(jq -r '
+    .Alzheimer.columns.sample // empty
   ' "${DATASETS_JSON_FILE}")" || {
     echo "ERROR: Alzheimer follow-up sample-column configuration is malformed." >&2
     return 1
@@ -601,7 +601,7 @@ stage3_validate_configured_corrected_row() {
   stage3_validate_selection_row "${ds}" "${view}" || return 1
   jq -e --arg ds "${ds}" --arg view "${view}" '
     .[$ds] as $entry
-    | (($entry.columns // {}) * ($entry.views[$view].columns // {})) as $columns
+    | ($entry.columns // {}) as $columns
     | ($columns.sample | type) == "string"
     and (($columns.sample | test("[^[:space:]]")))
     and (($columns.label | type) == "string")
@@ -617,11 +617,11 @@ stage3_validate_configured_corrected_row() {
     return 1
   }
   ecoda_validate_corrected_batch_columns "${config}" "${ds}" "${view}" || return 1
-  sample_col="$(jq -r --arg ds "${ds}" --arg view "${view}" \
-    '((.[$ds].columns // {}) * (.[$ds].views[$view].columns // {})).sample' \
+  sample_col="$(jq -r --arg ds "${ds}" \
+    '.[$ds].columns.sample // empty' \
     "${config}")" || return 1
-  label_col="$(jq -r --arg ds "${ds}" --arg view "${view}" \
-    '((.[$ds].columns // {}) * (.[$ds].views[$view].columns // {})).label' \
+  label_col="$(jq -r --arg ds "${ds}" \
+    '.[$ds].columns.label // empty' \
     "${config}")" || return 1
   input_name="$(jq -r --arg ds "${ds}" --arg view "${view}" \
     '.[$ds].views[$view].input_file_name // .[$ds].views[$view].input_file // empty' \

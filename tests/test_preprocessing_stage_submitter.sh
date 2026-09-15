@@ -598,8 +598,7 @@ source "${SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
 # the raw donor-only input.  The producer/output fixture is intentionally
 # complete; only the bound config is wrong.
 ALZ_RAW_PRODUCER_RUN_ID="alzheimer-stage2-raw-fixture"
-ALZ_RAW_INPUT_NAME="$(jq -r '.Alzheimer.views.batch_effect_uncorrected.input_file_name' \
-  "${SOURCE_ROOT}/datasets.json")"
+ALZ_RAW_INPUT_NAME="SEAAD_Alzheimer.h5ad"
 ALZ_RAW_INPUT="${HPC_SCRATCH_DIR}/Alzheimer/data/${ALZ_RAW_INPUT_NAME}"
 mkdir -p "$(dirname "${ALZ_RAW_INPUT}")"
 printf 'stub-alzheimer-raw-h5ad\n' > "${ALZ_RAW_INPUT}"
@@ -929,7 +928,7 @@ fi
 [[ ! -s "${CAPTURE}" ]]
 CORRECTED_BATCH_BASE="${TMP_DIR}/corrected-batch-base.json"
 cat > "${CORRECTED_BATCH_BASE}" <<'JSON'
-{"Fixture":{"columns":{"sample":"sample_id","label":"label","batch":"batch_a"},"views":{"batch_effect_corrected":{"columns":{}}}}}
+{"Fixture":{"columns":{"sample":"sample_id","label":"label","batch":"batch_a"},"views":{"batch_effect_corrected":{}}}}
 JSON
 CORRECTED_BATCH_STATE="${TMP_DIR}/corrected-batch-state"
 CORRECTED_BATCH_RUNS="${CORRECTED_BATCH_STATE}/_ecoda_runs"

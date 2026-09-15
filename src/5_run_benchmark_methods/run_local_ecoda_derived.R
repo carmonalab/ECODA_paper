@@ -1780,10 +1780,10 @@ ECODA_DERIVED_METHODS <- list(
       next
     }
     view_spec <- views$benchmark_analysis
-    entry$columns <- modifyList(
-      entry$columns %||% list(),
-      view_spec$columns %||% list()
-    )
+    if (!is.null(view_spec$columns)) {
+      block("benchmark_analysis view-level columns are unsupported; configure columns at dataset level")
+      next
+    }
     h5ad_path <- tryCatch(
       .ecoda_resolve_source(input_dir, dataset, view_spec),
       error = function(error) {

@@ -88,7 +88,10 @@ def _config_entry(config_path: Path, dataset: str, view: str) -> tuple[dict, dic
     views = entry.get("views")
     if not isinstance(views, dict) or view not in views:
         raise ValueError(f"dataset view is missing from config: {dataset}/{view}")
-    return entry, views[view]
+    view_config = views[view]
+    if not isinstance(view_config, dict):
+        raise ValueError(f"dataset view is malformed: {dataset}/{view}")
+    return entry, view_config
 
 
 def _dataset_spec_columns(config_path: Path, dataset: str) -> list[str]:
@@ -140,20 +143,12 @@ def _dataset_spec_columns(config_path: Path, dataset: str) -> list[str]:
     add(batch_candidates)
     return list(dict.fromkeys(columns))
 
-def _effective_columns(entry: dict, view: dict | None = None) -> dict:
+def _dataset_columns(entry: dict) -> dict:
+    """Return the authoritative dataset-level metadata column contract."""
     columns = entry.get("columns")
     if not isinstance(columns, dict):
         raise ValueError("dataset columns are malformed")
-    if view is None:
-        return columns
-    if not isinstance(view, dict):
-        raise ValueError("dataset view is malformed")
-    view_columns = view.get("columns")
-    if view_columns is None:
-        return columns
-    if not isinstance(view_columns, dict):
-        raise ValueError("dataset view columns are malformed")
-    return {**columns, **view_columns}
+    return columns
 
 
 def requested_columns(
@@ -164,7 +159,7 @@ def requested_columns(
     *,
     batch_view: bool = False,
 ) -> tuple[str, list[str], list[str]]:
-    columns = _effective_columns(entry, view)
+    columns = _dataset_columns(entry)
     raw_sample_column = columns.get("sample")
     label_column = columns.get("label")
     if not isinstance(raw_sample_column, str) or not raw_sample_column.strip():
@@ -219,7 +214,7 @@ def _ordered_metadata_columns(
     frame_columns: Iterable[str],
 ) -> list[str]:
     """Preserve the configured metadata order while omitting absent optional fields."""
-    columns = _effective_columns(entry, view)
+    columns = _dataset_columns(entry)
     available = [str(column) for column in frame_columns]
     ordered: list[str] = []
     seen: set[str] = set()
@@ -386,7 +381,7 @@ def _resolved_batch_configuration(
     dataset: str | None = None,
 ) -> tuple[list[str], dict[str, Any] | None]:
     """Resolve configured technical keys and the authoritative dataset policy."""
-    columns = _effective_columns(entry, view)
+    columns = _dataset_columns(entry)
     batch_keys = _normalise_batch_keys(
         columns.get("batch"),
         sample_column="Sample",
@@ -816,7 +811,7 @@ def export(args: argparse.Namespace) -> None:
         batch_view=args.view
         in {"batch_effect_uncorrected", "batch_effect_corrected"},
     )
-    columns = _effective_columns(entry, view)
+    columns = _dataset_columns(entry)
     label_column = columns["label"]
     batch_keys, policy = _resolved_batch_configuration(
         entry,

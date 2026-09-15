@@ -407,18 +407,11 @@ def _validate_identity_manifests(
     }
 
 
-def _merge_columns(entry: Mapping[str, Any], view: Mapping[str, Any], dataset: str) -> dict[str, Any]:
-    base = entry.get("columns")
-    override = view.get("columns")
-    if base is None:
-        base = {}
-    if override is None:
-        override = {}
-    if not isinstance(base, Mapping) or not isinstance(override, Mapping):
+def _dataset_columns(entry: Mapping[str, Any], dataset: str) -> dict[str, Any]:
+    columns = entry.get("columns")
+    if not isinstance(columns, Mapping):
         raise ValueError(f"{dataset} columns must be objects")
-    columns = dict(base)
-    columns.update(override)
-    return columns
+    return dict(columns)
 
 
 def _resolve_config(
@@ -464,7 +457,10 @@ def _resolve_config(
     if "/" in output_name or output_name.startswith("."):
         raise ValueError(f"configured output_file_name is unsafe: {output_name}")
 
-    columns = _merge_columns(entry, view, dataset)
+    # Column contracts are dataset-level.  View specifications contribute
+    # only view-specific I/O and subset settings; they cannot override the
+    # authoritative dataset columns mapping.
+    columns = _dataset_columns(entry, dataset)
     sample_column = _safe_text(columns.get("sample"), "configured sample column")
     label_column = _safe_text(columns.get("label"), "configured label column")
     if sample_column == label_column:

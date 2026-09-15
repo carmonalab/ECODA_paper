@@ -15,13 +15,13 @@ CORRECTED_OUTPUT="$(bash "${SUBMITTER}" --pass corrected --ds_name Alzheimer 2>&
 CORRECTED_RC=$?
 set -e
 if [[ ${CORRECTED_RC} -eq 0 ]]; then
-  echo "corrected null-batch guard unexpectedly submitted" >&2
+  echo "unpinned corrected Stage 5 invocation unexpectedly submitted" >&2
   exit 1
 fi
 case "${CORRECTED_OUTPUT}" in
-  *"corrected batch-effect view requires a confirmed columns.batch"*) ;;
+  *"new Stage 5 runs require an immutable source snapshot."*) ;;
   *)
-    echo "unexpected corrected guard output: ${CORRECTED_OUTPUT}" >&2
+    echo "unexpected unpinned-source guard output: ${CORRECTED_OUTPUT}" >&2
     exit 1
     ;;
 esac

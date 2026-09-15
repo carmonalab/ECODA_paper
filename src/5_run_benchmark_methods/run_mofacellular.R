@@ -400,9 +400,6 @@
 .mofa_annotation_column <- function(entry, name, dataset) {
   columns <- entry$columns
   value <- if (is.list(columns)) columns[[name]] else NULL
-  if (is.null(value) && is.list(entry$views$benchmark_analysis)) {
-    value <- entry$views$benchmark_analysis$columns[[name]]
-  }
   if (!is.character(value) || length(value) != 1L || is.na(value) ||
       !nzchar(value)) {
     stop(dataset, " has no configured ", name, " annotation column")

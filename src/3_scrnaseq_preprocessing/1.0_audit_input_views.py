@@ -241,7 +241,7 @@ def audit_view(
         adata = read_obs_only(input_path)
 
     try:
-        sample_col = (view.get("columns") or {}).get("sample") or entry["sample_col"]
+        sample_col = entry["sample_col"]
         subset_vars = view.get("subset_vars", {})
         subset_mask = evaluate_subset_mask(adata, subset_vars)
         subset_audit = assert_subset_sample_consistency(
@@ -262,9 +262,7 @@ def audit_view(
         )
         sample_counts = Counter(sample_ids)
 
-        high_res_col = (view.get("columns") or {}).get(
-            "cell_type_high_res"
-        ) or entry["cell_type_high_res"]
+        high_res_col = entry["cell_type_high_res"]
         if high_res_col in subset.obs.columns:
             coverage = annotation_coverage(subset.obs[high_res_col])
             coverage["status"] = "present"

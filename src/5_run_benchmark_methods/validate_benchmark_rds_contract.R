@@ -1316,12 +1316,10 @@ config <- if (nzchar(config_path) && file.exists(config_path)) {
   if (is.null(view_spec) || !is.list(view_spec)) {
     stop("dataset ", ds, " is missing the selected view ", view)
   }
-  columns <- entry[["columns"]] %||% list()
-  view_columns <- view_spec[["columns"]] %||% list()
-  if (!is.list(columns) || !is.list(view_columns)) {
+  columns <- entry[["columns"]]
+  if (!is.list(columns)) {
     stop("batch column configuration is malformed for ", ds, "/", view)
   }
-  columns <- modifyList(columns, view_columns)
   batch_keys <- columns[["batch"]]
   if (is.null(batch_keys)) {
     stop(

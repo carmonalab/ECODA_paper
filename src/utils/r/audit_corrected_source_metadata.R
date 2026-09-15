@@ -233,19 +233,6 @@ options(stringsAsFactors = FALSE)
   .safe_text(value, label)
 }
 
-.merge_columns <- function(entry, view, dataset) {
-  base <- entry[["columns"]] %||% list()
-  override <- view[["columns"]] %||% list()
-  if (!is.list(base) || !is.list(override)) .stop(dataset, " columns must be objects")
-  columns <- base
-  if (length(override) > 0L) {
-    if (is.null(names(override)) || anyNA(names(override)) || any(!nzchar(names(override)))) {
-      .stop(dataset, " view columns have malformed names")
-    }
-    for (key in names(override)) columns[[key]] <- override[[key]]
-  }
-  columns
-}
 
 .batch_keys <- function(value, dataset) {
   if (is.character(value) && length(value) == 1L) {
@@ -282,6 +269,12 @@ options(stringsAsFactors = FALSE)
     .stop("corrected view is not configured: ", dataset, "/", view_name)
   }
   view <- views[[view_name]]
+  if (!is.null(view[["columns"]])) {
+    .stop(
+      dataset, "/", view_name,
+      " view-level columns are unsupported; configure columns at dataset level"
+    )
+  }
   input_name <- view[["input_file_name"]] %||% view[["input_file"]]
   output_name <- view[["output_file_name"]] %||% view[["output_file"]]
   input_name <- .scalar_string(input_name, "configured input_file_name")
@@ -292,7 +285,8 @@ options(stringsAsFactors = FALSE)
   if (grepl("/", output_name, fixed = TRUE) || startsWith(output_name, ".")) {
     .stop("configured output_file_name is unsafe: ", output_name)
   }
-  columns <- .merge_columns(entry, view, dataset)
+  columns <- entry[["columns"]] %||% list()
+  if (!is.list(columns)) .stop(dataset, " columns must be objects")
   sample_col <- .scalar_string(columns[["sample"]], "configured sample column")
   label_col <- .scalar_string(columns[["label"]], "configured label column")
   if (identical(sample_col, label_col)) .stop("configured sample and label columns must differ")

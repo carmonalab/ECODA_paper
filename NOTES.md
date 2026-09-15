@@ -5,17 +5,23 @@
 
 ---
 
-## Current Status — 2026-09-14
+## Current Status — 2026-09-15
 
-This subsection is the current approved status. It supersedes only the
-scoped descriptions explicitly marked historical below; the detailed audit
-history remains intact. This notes-only update does not claim that the
-corrected compute gate or an Alzheimer derivative is complete.
+This subsection records the current implementation and execution status. The
+strict Alzheimer donor-by-assay derivative is validated and present. Both
+Alzheimer Stage 3 durable waits report remote `COMPLETED`, but both first
+terminal inspections are `state=FAILED`, `audit.passed=false`, and
+`release_eligible=false` because recorded OOM attempts remain part of the
+all-ID accounting contract. Retry2 H5AD outputs were produced and preserved;
+the Stage 3 gates remain failed/unreleased and do not authorize Alzheimer
+Stage 5.
 
 ### Alzheimer source and strict sample identity
 
-- The raw Alzheimer H5AD is unchanged. No source mutation or derivative
-  completion is claimed here.
+- The raw Alzheimer source H5AD is unchanged. The validated donor-by-assay
+  derivative is a separate output; its Stage 3 gates remain failed/unreleased
+  until their recorded OOM attempts are resolved through the durable review
+  process.
 - The strict sample key is `donor_id_assay`. Normalize assay labels exactly as
   `10x 3' v3` → `10x3v3` and `10x multiome` → `10xmultiome`; do not collapse
   these records to donor-only identities.
@@ -26,9 +32,10 @@ corrected compute gate or an Alzheimer derivative is complete.
 ### Corrected-method and recovery status
 
 - The approved global correction contract for composition and pseudobulk is
-  limma fixed effects with the original technical covariates retained as
-  separate terms. Combined or artificial batch keys are prohibited, and the
-  former `lme4` correction path is prohibited/removed.
+  limma fixed effects with the configured dataset-level technical covariates
+  retained as separate terms. No view-level or Stage 5-only override may alter
+  the configured correction columns. Combined or artificial batch keys are
+  prohibited, and the former `lme4` correction path is prohibited/removed.
 - Current provenance IDs are composition `limma_fixed_effects_v1` and
   pseudobulk/prepare `pseudobulk_limma_fixed_effects_v1`. The nested summary
   schema remains v1; top-level identities carry effective/non-estimable/state,
@@ -38,22 +45,59 @@ corrected compute gate or an Alzheimer derivative is complete.
   its compute gate has completed. Old combined-key prepare caches are stale
   and must not be reused.
 
+### Breast cancer corrected batch policy
+
+- **Decision:** Breast's production configuration uses the dataset-level
+  `columns.batch` list exactly
+  `["assay", "suspension_dissociation_time"]`. Corrected Stage 3 and corrected
+  Stage 5 consume this same list; no `views.*.columns` override is active and
+  Stage 5 cannot select a separate correction key.
+- `sequencing_platform` remains in H5AD `obs` and exported sample metadata
+  when present, but is not a configured Breast correction column.
+- `disease` is a biological label and remains evaluation-only; it never enters
+  filtering, preprocessing, Harmony, or corrected Stage 5 models.
+- The previous Breast corrected Stage 3 output was generated under the
+  superseded column contract. Regenerate it as
+  `BreastCncr_processed_batch_effect_analysis_corrected_assay_dissociation_ECODAprocessed.h5ad`
+  and validate its sample, metadata, and checksum contract before any Breast
+  corrected Stage 5 row is launched or reused.
+- **Historical rank evidence (retained, non-authoritative):** The 165-sample
+  validator report showed the full additive design at rank `8/10` with
+  residual degrees of freedom `157`. The observed dependencies are exact: all
+  141 `10x 3' v3` samples use NovaSeq; the 24 `10x 3' v2` samples use HiSeq
+  3000/4000; and all 11 `unknown` dissociation-time samples use HiSeq 4000.
+  The pairwise ranks were `assay + sequencing_platform = 3/4`,
+  `sequencing_platform + suspension_dissociation_time = 8/9`, and
+  `assay + suspension_dissociation_time = 8/8`. This historical evidence
+  supports the selected dataset-level pair; it does not establish a separate
+  Stage 5 policy.
+- **Historical implementation interpretation (retained, non-authoritative):**
+  The prior report described an intercept-preserving design equivalent to
+  `~ 1 + batch_key_1 + batch_key_2` after internal aliasing and noted that no
+  `assay__sequencing_platform` composite was introduced. These statements
+  document the superseded analysis interpretation only; they do not establish
+  a separate Stage 5 key or replace the dataset-level configuration.
+- The historical durable validator evidence is
+  `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_logs/stage5_eight_corrected_ygg_parallel_20260915T131349Z/BREAST_BATCH_RANK_DIAGNOSIS.tsv`.
+  The failed eight-dataset gate validated seven dataset-level consumer
+  contracts and failed only Breast; no target method array was emitted. This
+  is historical run evidence. The Breast corrected Stage 5 row remains
+  blocked until the regenerated Stage 3 output is validated under the current
+  dataset-level contract.
+
 ### Remote execution and transfer policy
 
 - The direct remote-only `ssh -A bamboo` → Yggdrasil transfer proof of concept
   succeeded with recorded hash
   `ac5944fad030a07ad4257a3d7b7b44a83925c3e0fcba83196f9cbec6d670dcb2`; no
   local staging was used.
-- The Yggdrasil repository clone and checksum-aware second dry run are complete
-  (not running). Source and destination HEAD are both
-  `751c3f7fd8d9a863d6940bc37b1269fa785c06d4`, and the destination is
-  `~/scratch/_ecoda_backups/ECODA_paper_repo_20260914`.
-- Any future Yggdrasil use remains conditional on the live transfer agent and
-  central key being available; this remains transfer/backup evidence only, not
-  a claim of production compute or final synchronization.
-- Bamboo remains the default execution and authoritative environment.
-  Yggdrasil is temporary backup-only and must not become the production default
-  or a substitute for the Bamboo lane.
+- The Yggdrasil repository clone and checksum-aware transfer are historical
+  transfer evidence. The active repository is `~/ECODA_paper` and the active
+  data/results tree is `~/scratch/ECODA_paper`; current revision and gate
+  provenance are recorded in the active plan.
+- Yggdrasil is the current default execution and authoritative data/results
+  host because Bamboo is under maintenance. Bamboo is source/fallback
+  infrastructure only until the user explicitly reverses that policy.
 
 > **Historical-note boundary.** The donor-only Alzheimer snapshot, majority-vote
 > policy, `lme4` correction description, and pre-change final-lane descriptions
@@ -479,9 +523,13 @@ same features and deterministic label shuffling; labels remain evaluation-only.
 `batch_effect_uncorrected` performs one hvg2000 pass with `batch_key=Sample`,
 raw PCA, neighbors, and Leiden only. It emits no Harmony representation.
 
-`batch_effect_corrected` requires a confirmed non-null `columns.batch`. It
-performs one hvg2000 pass with HVGs selected by that technical column, computes
-raw PCA, then Harmony and neighbors/Leiden on Harmony. The biological label is
+`batch_effect_corrected` requires a confirmed non-null top-level dataset
+`columns.batch`; view-level column objects cannot replace or narrow that
+dataset-level source. It performs one hvg2000 pass with HVGs selected by the
+configured technical columns, computes raw PCA, then Harmony and
+neighbors/Leiden on Harmony. For `Breast_cancer`, the exact correction list is
+`["assay", "suspension_dissociation_time"]`; `sequencing_platform` remains
+metadata when present but is not a correction column. The biological label is
 never protected in correction.
 
 Pass-qualified keys are literal and never fall back:

@@ -845,13 +845,12 @@ ecoda_snapshot_extract <- function(
       stop("benchmark_analysis view is missing or invalid: ", dataset)
     }
     view_spec <- views$benchmark_analysis
-    merged_columns <- entry$columns %||% list()
-    if (!is.list(merged_columns)) merged_columns <- list()
-    if (is.list(view_spec$columns)) {
-      merged_columns <- modifyList(merged_columns, view_spec$columns)
+    columns <- entry$columns %||% list()
+    if (!is.list(columns)) {
+      stop("configured dataset columns are malformed: ", dataset)
     }
-    label_col <- merged_columns$label %||% entry$label_col
-    high_res_col <- merged_columns$cell_type_high_res %||% entry$cell_type_high_res
+    label_col <- columns$label
+    high_res_col <- columns$cell_type_high_res
     if (!is.character(label_col) || length(label_col) != 1L || is.na(label_col) ||
         !nzchar(label_col) || !is.character(high_res_col) ||
         length(high_res_col) != 1L || is.na(high_res_col) || !nzchar(high_res_col)) {

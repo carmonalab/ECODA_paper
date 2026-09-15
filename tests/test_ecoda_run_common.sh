@@ -204,7 +204,7 @@ set -e
 [[ ${RC} -ne 0 ]]
 CORRECTED_BATCH_BASE="${TMP_DIR}/corrected-batch-base.json"
 cat > "${CORRECTED_BATCH_BASE}" <<'JSON'
-{"Fixture":{"columns":{"sample":"sample_id","label":"label","batch":"batch_a"},"views":{"batch_effect_corrected":{"columns":{}}}}}
+{"Fixture":{"columns":{"sample":"sample_id","label":"label","batch":"batch_a"},"views":{"batch_effect_corrected":{}}}}
 JSON
 CORRECTED_BATCH_STATE="${TMP_DIR}/corrected-batch-state"
 CORRECTED_BATCH_SBATCH="${TMP_DIR}/corrected-batch.sbatch.calls"

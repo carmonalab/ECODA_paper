@@ -6,8 +6,30 @@ This section is the single active contract for this plan. It supersedes every
 older active Context, Approach, Verification, Assumptions, and status section
 that conflicts with it. The incident appendix is evidence only; it does not
 create selectors, authorize a launch, or preserve an obsolete nine-row scope.
-This plan has moved from design-only into implementation and controlled execution. The verified full backup and migration are complete. Controlled Yggdrasil Wave 1 execution is active: Alzheimer Stage 3 uncorrected and corrected run concurrently, and the independent eight-dataset corrected-final Stage 5 recovery is explicitly allowed to run concurrently with them. The first Wave 1 attempt is preserved as failed evidence; the replacement Stage 5 gate uses a new run ID.
+This plan has moved from design-only into implementation and controlled execution. The verified full backup and migration are complete. Controlled Yggdrasil Wave 1 execution is active: Alzheimer Stage 3 uncorrected and corrected run concurrently, while the selected-eight corrected-final Stage 5 recovery remains gated on the Breast corrected Stage 3 regeneration below and cannot be released before that predecessor. The first Wave 1 attempt is preserved as failed evidence; the replacement Stage 5 gate uses a new run ID.
 Every operation remains narrowly scoped: no broad or inferred selection, no overwrite, no active-tree clone, and no production launch without the required exact snapshot/runtime identity, durable gate, terminal accounting, artifact audit, synchronization, and Luna Max review.
+### Global dataset-level column authority — current decision
+
+The production correction contract resolves metadata columns only from each
+dataset's top-level `columns` object. `views.*.columns` is prohibited: views
+may select input/output/subset behavior, but they cannot replace, narrow, or
+add correction columns. Stage 5 cannot select a separate correction key, and
+no historical cohort-specific override is active.
+
+For `Breast_cancer`, `columns.batch` is exactly
+`["assay", "suspension_dissociation_time"]`. Corrected Stage 3 and corrected
+Stage 5 consume this same dataset-level pair. `sequencing_platform` remains
+in H5AD `obs` and exported sample metadata when present, but it is not a
+Breast correction column. `disease` remains a biological label and never
+enters correction.
+
+The previous Breast corrected Stage 3 output was produced under the
+superseded column contract. Regenerate and validate the corrected Stage 3
+H5AD as
+`BreastCncr_processed_batch_effect_analysis_corrected_assay_dissociation_ECODAprocessed.h5ad`
+before releasing or reusing any Breast corrected Stage 5 row. The corrected
+Stage 5 consumer must bind to that regenerated Stage 3 metadata contract.
+
 
 ### Objective and hard boundaries
 
@@ -84,15 +106,17 @@ is permitted.
    current lanes. All approved batch-effect lanes run on CPU; GPU
    compatibility is not a blocker because GPU resources were only required
    for benchmark views, which are complete.
-6. **Remaining Yggdrasil compute.** Follow the explicit execution ordering and
-   parallelism contract below: run Alzheimer Stage 3 uncorrected/corrected
-   concurrently, launch the independent selected-eight corrected-final Stage 5
-   recovery concurrently, then run the downstream Alzheimer Stage 5 lanes
-   after their Stage 3 predecessors. Keep all authoring local: commit/push,
-   then pull the exact revision on Yggdrasil.
-7. **Final synchronization and analysis.** After reviewed terminal artifacts,
-   synchronize only manifest-listed outputs, checksums, and metadata, then
-   execute the final analysis lane.
+6. **Remaining Yggdrasil compute.** Keep the two Alzheimer Stage 3
+   uncorrected/corrected one-row lanes concurrent with the targeted Breast
+   corrected Stage 3 regeneration; these are independent inputs and owners.
+   After the new Breast H5AD passes its source, metadata, checksum, and
+   corrected-batch contract, launch the selected-eight corrected-final Stage 5
+   recovery as one 32-row gate. After the Alzheimer Stage 3 lanes are
+   terminally audited and reviewed, run the two downstream Alzheimer Stage 5
+   lanes under their declared dependency and shared-root boundaries. Keep all
+   authoring local: commit/push, then pull the exact revision on Yggdrasil.
+
+
 
 ### Explicit execution ordering and parallelism
 
@@ -101,22 +125,30 @@ parallel lane:
 
 1. Alzheimer Stage 3 uncorrected and corrected are separate one-row gates
    and run concurrently from the validated donor-by-assay Stage 2 derivative.
-2. The selected-eight corrected-final Stage 5 gate is independent of those
-   Alzheimer Stage 3 outputs. It contains exactly 32 rows: the eight declared
-   datasets multiplied by `prepare_pseudobulk`, `pseudobulk`, `gloscope`, and
-   `composition`. It may be prepared and launched concurrently with both
-   Alzheimer Stage 3 gates, subject to its own snapshot, sidecar, root,
-   serialization, accounting, and review contracts. It is one gate, not
-   eight per-dataset gates.
-3. Alzheimer Stage 5 uncorrected and corrected are downstream of the two
+2. Breast corrected Stage 3 regeneration is a hard predecessor for any
+   corrected Stage 5 work for `Breast_cancer`. Produce and validate
+   `BreastCncr_processed_batch_effect_analysis_corrected_assay_dissociation_ECODAprocessed.h5ad`
+   under the dataset-level `columns.batch` pair before that corrected Stage 5
+   row is released or reused.
+3. The selected-eight corrected-final Stage 5 gate is independent of the
+   Alzheimer Stage 3 outputs only after the Breast predecessor above passes.
+   It contains exactly 32 rows: the eight declared datasets multiplied by
+   `prepare_pseudobulk`, `pseudobulk`, `gloscope`, and `composition`. It may be
+   prepared and launched concurrently with the Alzheimer Stage 3 gates only
+   after the Breast corrected Stage 3 validation, subject to its own snapshot,
+   sidecar, root, serialization, accounting, and review contracts. It is one
+   gate, not eight per-dataset gates.
+4. Alzheimer Stage 5 uncorrected and corrected are downstream of the two
    Alzheimer Stage 3 lanes. They begin only after those Stage 3 outputs have
    their terminal accounting, audit, and required review. The corrected
    Alzheimer Stage 5 lane remains serialized behind the selected-eight
    corrected-final Stage 5 root; no same-root parallel gate is allowed.
 
-The Stage 3→Alzheimer Stage 5 dependency does not block the independent
+The Stage 3→Breast Stage 5 dependency is mandatory even though the
+Stage 3→Alzheimer Stage 5 dependency does not block the independent
 selected-eight corrected-final Stage 5 gate. Valid existing method rows remain
 outside the 32-row selection.
+
 
 ### Eight-dataset corrected-final Stage 5 recovery
 
@@ -179,6 +211,11 @@ variant-qualified roots:
 ${HPC_SCRATCH_DIR}/batch_effect/corrected_final
 ${NAS_TARGET_DIR}/batch_effect/corrected_final
 ```
+No corrected Stage 5 work for `Breast_cancer` may be released from this
+selection until the regenerated Stage 3 H5AD and its metadata/checksum have
+passed validation. Any earlier Breast corrected-final Stage 5 decision that
+used a view or separate Stage 5 correction key is historical evidence only.
+
 
 All output paths, run metadata, ownership records, watchdogs, validators,
 sync lists, and execution logs must use this root and the
@@ -197,23 +234,35 @@ submitter reserves `--methods` for the seven-method batch suite; using
 
 This is a final policy, not an experiment or an alternative:
 
+- **Dataset-level authority is mandatory.** Corrected Stage 3/Harmony and
+  corrected Stage 5 composition/pseudobulk resolve correction columns only
+  from each dataset's top-level `columns.batch`. Views cannot replace, narrow,
+  or add those fields, and Stage 5 cannot select a separate correction key.
+  No historical cohort-specific override can change that source of truth.
 - **Every corrected composition and corrected pseudobulk mode uses limma
-  fixed effects with the original technical covariates as separate design
-  columns.** For effective keys, use a fixed internal-alias design such as
-  `model.matrix(~ 1 + technical_key_1 + technical_key_2 + ...)`.
+  fixed effects with the configured dataset-level technical covariates as
+  separate design columns.** For effective keys, use a fixed internal-alias
+  design such as `model.matrix(~ 1 + technical_key_1 + technical_key_2 + ...)`;
+  any effective/non-estimable report is derived from those dataset-level
+  fields and is not an independent configuration.
+- For `Breast_cancer`, `columns.batch` is exactly
+  `["assay", "suspension_dissociation_time"]`. `sequencing_platform` remains
+  visible metadata in H5AD `obs` and exported sample metadata when present,
+  but it is not a configured correction column. The biological `disease`
+  label is never a covariate.
 - Never construct a combined/artificial batch key such as an interaction or
   concatenated `batch_key` in place of the separate technical columns. Keep
-  `assay`, `sex`, and other configured technical fields separately visible in
-  metadata, source identity, manifests, and the exact recorded design string.
-- Biological labels (including Alzheimer `Cognitive status`) and sample IDs
-  are never model covariates. A one-level technical field is retained as
-  metadata but omitted from the effective design; if no technical field varies,
-  record `NO_CORRECTION` and return the uncorrected object for that method.
+  configured technical fields separately visible in metadata, source identity,
+  manifests, and the exact recorded design string.
+- Biological labels and sample IDs are never model covariates. A one-level
+  dataset-level technical field is retained as metadata but omitted from the
+  effective design; if no technical field varies, record `NO_CORRECTION` and
+  return the uncorrected object for that method.
 - Fail closed on missing metadata, non-finite output, rank deficiency, or
   non-positive residual degrees of freedom. Do not silently drop an aliased
-  technical column. Remove only the non-intercept technical contribution,
-  preserve the intercept, and restore the CLR row-sum invariant for
-  composition.
+  configured technical column. Remove only the non-intercept technical
+  contribution, preserve the intercept, and restore the CLR row-sum invariant
+  for composition.
 - Record a stable identity such as `ecoda_additive_fixed_effects_v1`, the
   exact formula/design, effective and non-estimable keys, and correction state
   in both composition and pseudobulk results. The limma pseudobulk operation
@@ -223,6 +272,7 @@ This is a final policy, not an experiment or an alternative:
   corrected worker, validator, selector, or recovery may call or advertise it
   as a supported path. Existing lme4 payloads are immutable historical files
   only and are not corrected-result reuse candidates under this policy.
+
 
 ### Strict Alzheimer donor-by-assay follow-up
 
@@ -432,19 +482,37 @@ Before the selected-eight corrected-final Stage 5 gate, the run owner must have:
   and mandatory 32-row recovery scope recorded;
 - completed backup inventory and tiny transfer proof, with alternate-cluster
   repository/scratch clone capacity and quiescence plan recorded;
+- regenerated the corrected Breast Stage 3 H5AD under the dataset-level
+  `columns.batch = ["assay", "suspension_dissociation_time"]` contract, using
+  the new run-owned output
+  `BreastCncr_processed_batch_effect_analysis_corrected_assay_dissociation_ECODAprocessed.h5ad`;
+  its source, metadata, checksum, and sample contract must be validated before
+  any corrected Breast Stage 5 preflight or method row is released;
 - marked all eight old `__ecoda_batch_combined_v1` prepare caches
   immutable-but-stale historical artifacts; each must be recomputed for this
   recovery and none is eligible for reuse. All eight prepare rows remain
   mandatory in the 32-row selection;
 - Valid `MRVI`/`PILOT`/`QOT` rows remain outside the eight-row pending selection;
 - recorded the fixed-effect limma identity/design for corrected composition and
-  pseudobulk, separate original technical covariates, no composite key, and
-  no lme4 path;
+  pseudobulk using dataset-declared `columns.batch` fields as separate
+  technical covariates, no composite key, and no lme4 path;
 - recorded current per-gate queue and walltime feasibility for the declared
   Yggdrasil CPU resources; the historical Bamboo maintenance cutoff is
   superseded for this host;
 - recorded one durable gate command, selector checksum, expected rows, roots,
-  and dependency/review boundary.
+  and dependency/review boundary. Any earlier failed-before-compute gate is
+  historical evidence only and does not authorize this release.
+
+Before the remaining Alzheimer Stage 5 lanes, require their reviewed
+Alzheimer Stage 3 predecessors, a new post-derivative full-hash
+source/runtime snapshot, the strict derivative schema and 104-sample
+contract, and explicit one-row Stage 5 manifests. Before the selected-eight
+corrected-final Stage 5 gate, require the newly regenerated and validated
+Breast corrected Stage 3 H5AD and its dataset-level metadata/checksum contract;
+the selected-eight gate is not independent of that Breast predecessor and
+cannot treat any earlier failed-before-compute attempt as authorization. The
+corrected Alzheimer Stage 5 lane remains serialized behind its shared
+corrected-final root.
 
 Before the controlled Alzheimer Stage 2 exception, additionally require the
 required eight-dataset source/runtime snapshot to be sealed under its own
@@ -452,13 +520,6 @@ parent, then require a separate fresh full-hash Stage 2 source/runtime
 snapshot, the exact one-step selector, the strict derivative schema and
 104-sample contract, and explicit Stage 2 ownership. This exception does not
 change `datasets.json` or authorize Stage 3/5 work.
-Before the remaining Alzheimer Stage 5 lanes, require their reviewed
-Alzheimer Stage 3 predecessors, a new post-derivative full-hash
-source/runtime snapshot, the strict derivative schema and 104-sample
-contract, and explicit one-row Stage 5 manifests. The selected-eight
-corrected-final Stage 5 gate is the independent Wave 1 lane and may run before
-those predecessor reviews; the corrected Alzheimer Stage 5 lane remains
-serialized behind its shared corrected-final root.
 
 After all approved lanes, synchronize only manifest-listed processed/results
 artifacts and metadata/checksums to the workstation/NAS. Final analysis must
@@ -516,6 +577,7 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
 
 | `stage3_alzheimer_wave_ygg_20260915T115500Z`, `stage5_eight_corrected_wave_ygg_20260915T115439Z` | First Yggdrasil Wave 1 attempt failed before scheduler submission: Stage 3 supplied a combined Alzheimer selection, and Stage 5 supplied a four-method option reserved by the submitter for the fixed seven-method suite. No scheduler IDs or reusable artifacts. |
 | `stage5_eight_corrected_ygg_retry_20260915T115439Z` | Corrected four-method selector reached source-H5AD sidecar validation and failed because the explicit NAS mirror was empty; no scheduler IDs. Destination-only normalization then completed validator-only for all eight H5ADs. Durable report: `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_logs/20260915T123309Z_stage5_inputs/SIDECAR_VALIDATION.tsv`; marker `SIDECAR_SUCCESS`; report `ROWS=8`, `COMPARISON=SOURCE_DESTINATION_MD5_SIZE_PATH_PASS`. The failed manifest remains unreused. |
+| `stage5_eight_corrected_ygg_parallel_20260915T131349Z` / preflights `45687614`, `45687624` | Corrected-final consumer barrier passed seven dataset rows but failed `Breast_cancer` on the rank-deficient `assay`/`sequencing_platform`/`suspension_dissociation_time` design. No target method array was emitted; the first terminal inspect accounted for both preflight IDs once and recorded `FAILED`. This gate is historical evidence only and cannot authorize a retry. |
 ### Validator-only reports and accepted historical artifacts
 
 - The source-bound H5AD audit from snapshot
@@ -647,32 +709,29 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    blocker because GPU resources were only required for benchmark views, which
    are complete. `PORTABILITY_AUDIT=READY_FOR_SCOPED_LANES`; no broad
    selection or partial method subset is allowed.
-5. **Wave 1 execution status.** The original combined Stage 3 and four-method
-   Stage 5 gates are preserved as failed pre-scheduler evidence. The
-   producer-bound Alzheimer Stage 3 retries use separate one-row manifests;
-   uncorrected watchdog `45686976` owns retry2 array task `45687166_1`, and
-   corrected watchdog `45686977` owns retry2 array task `45687165_1`. Their
-   durable waits remain armed and are the source of terminal status.
-   The selected-eight corrected-final Stage 5 retry failed before scheduler
-   submission because the destination mirror initially lacked the source
-   H5AD sidecars. Destination-only normalization completed validator-only:
-   `SIDECAR_SUCCESS` records eight files, and
-   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_logs/20260915T123309Z_stage5_inputs/SIDECAR_VALIDATION.tsv`
-   records all eight source/destination paths, matching MD5/SIZE values, and
-   destination `PATH` values. The report records
-   `COMPARISON=SOURCE_DESTINATION_MD5_SIZE_PATH_PASS`.
-   A new selected-eight Stage 5 gate is authorized in parallel with the
-   active Alzheimer Stage 3 gates, using source commit
-   `03e2a77f4a52053cfc0af108ef6f076336a678f`, a new snapshot/run ID, the
-   exact 32-row scope, and
-   `--target-methods prepare_pseudobulk,pseudobulk,gloscope,composition`.
-   Launched as `stage5_eight_corrected_ygg_parallel_20260915T131349Z` at
-   `2026-09-15T13:14:51Z` from snapshot
-   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/stage5_eight_corrected_retry3/5f284a8541af5049dd0c3881370fb1f0ad2cbbe9`.
-   Its exact selection is
-   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ygg_selection_manifests/stage5_eight_corrected_20260915T131349Z_parallel.tsv`;
-   the single durable wait is armed.
-   Never reuse the failed manifest.
+5. **Wave 1 execution status.** The first combined Stage 3 and four-method
+   Stage 5 attempts are preserved as failed pre-scheduler evidence. The
+   producer-bound Alzheimer Stage 3 retries used separate one-row manifests;
+   uncorrected watchdog `45686976` owned retry2 array task `45687166_1`, and
+   corrected watchdog `45686977` owned retry2 array task `45687165_1`. Their
+   first terminal inspections accounted for all emitted IDs exactly once but
+   both gates are `FAILED`/unreleased because the initial and retry1
+   preprocessing attempts were recorded `OUT_OF_MEMORY|0:125`. Retry2 H5AD
+   outputs were produced and preserved; do not rerun merely to erase OOM
+   history.
+   The selected-eight corrected-final Stage 5 retry
+   `stage5_eight_corrected_ygg_parallel_20260915T131349Z` also remains failed:
+   all source checks passed, seven dataset consumer rows passed, and the
+   Breast row failed on the rank-deficient three-key design. Preflight IDs
+   `45687614` and `45687624` were accounted for exactly once; no target method
+   array ran. Its durable sidecar report remains historical evidence at
+   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_logs/20260915T123309Z_stage5_inputs/SIDECAR_VALIDATION.tsv`.
+   The current global policy is
+   `columns.batch=["assay","suspension_dissociation_time"]`; the corrected
+   Breast Stage 3 output must be regenerated and validated under that policy
+   before a new selected-eight Stage 5 gate is prepared. That new gate must
+   use a fresh source snapshot/run ID and the exact 32-row scope; never reuse
+   the failed manifest.
 6. **Alzheimer Stage 5 follow-up.** After the two Alzheimer Stage 3 lanes
    reach terminal accounting, run-scoped audit, synchronization, and required
    review, run the two explicit one-row Alzheimer Stage 5 lanes under the

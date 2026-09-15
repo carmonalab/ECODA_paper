@@ -246,7 +246,57 @@ negative_report <- file.path(run_root, "reports", "Fixture_missing_batch.json")
 negative <- run_auditor(missing_batch_rds, negative_report)
 stopifnot(negative$status != 0L, !file.exists(negative_report))
 
+# The direct raw-config auditor must reject a view-level column declaration
+# after the snapshot's bound DATASETS_SHA256 is updated to that fixture.
+original_config_bytes <- readBin(
+  config_path, what = "raw", n = file.info(config_path)$size
+)
+original_manifest_bytes <- readBin(
+  source_manifest, what = "raw", n = file.info(source_manifest)$size
+)
+override_active <- FALSE
+restore_override_fixture <- function() {
+  if (!isTRUE(override_active)) return(invisible(NULL))
+  Sys.chmod(config_path, mode = "0644")
+  writeBin(original_config_bytes, config_path)
+  Sys.chmod(source_manifest, mode = "0644")
+  writeBin(original_manifest_bytes, source_manifest)
+  Sys.chmod(config_path, mode = "0444")
+  Sys.chmod(source_manifest, mode = "0444")
+  invisible(NULL)
+}
+on.exit(restore_override_fixture(), add = TRUE)
+
+view_override_config <- config
+view_override_config$Fixture$views$batch_effect_corrected$columns <- list(
+  sample = "sample_id"
+)
+override_active <- TRUE
+Sys.chmod(config_path, mode = "0644")
+jsonlite::write_json(
+  view_override_config, config_path, auto_unbox = TRUE, pretty = TRUE
+)
+manifest_lines <- readLines(source_manifest, warn = FALSE)
+manifest_lines[grepl("^DATASETS_SHA256=", manifest_lines)] <-
+  paste0("DATASETS_SHA256=", sha256(config_path))
+Sys.chmod(source_manifest, mode = "0644")
+writeLines(manifest_lines, source_manifest, useBytes = TRUE)
+Sys.chmod(config_path, mode = "0444")
+Sys.chmod(source_manifest, mode = "0444")
+view_override_report <- file.path(
+  run_root, "reports", "Fixture_view_columns.json"
+)
+view_override <- run_auditor(source_rds, view_override_report)
+stopifnot(
+  view_override$status != 0L,
+  any(grepl("view-level columns", view_override$output, fixed = TRUE)),
+  !file.exists(view_override_report)
+)
+restore_override_fixture()
+override_active <- FALSE
+
 cat("corrected source metadata regression: OK\n")
+
 }
 
 main()

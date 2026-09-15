@@ -19,6 +19,18 @@ methods, then scores recovery of known biological groups.
   biological labels in `removeBatchEffect`.
 - `datasets.json` is the dataset/view ground truth. **Do not modify it without
   explicit user confirmation.**
+- **Dataset-level column authority.** The top-level `datasets.json` `columns`
+  object is the sole production source for sample, label, batch, and cell-type
+  fields. `views.*.columns` objects are prohibited; views may select
+  input/output/subset behavior but cannot override, narrow, or add dataset
+  columns. For `Breast_cancer`, `columns.batch` is exactly
+  `["assay", "suspension_dissociation_time"]`; `sequencing_platform` remains
+  in H5AD `obs` and exported metadata when present but is not a correction
+  column. `disease` is evaluation-only, and no historical cohort-specific
+  override is active. Regenerate and validate
+  `BreastCncr_processed_batch_effect_analysis_corrected_assay_dissociation_ECODAprocessed.h5ad`
+  before any corrected Breast Stage 5 work is launched or reused.
+
 - **Universal cell-type annotation with HiTME and scATOMIC.** All
   benchmark-analysis datasets and all suitable cohorts used by benchmark
   workflows must undergo dual automated annotation with HiTME (layers 1–3)
@@ -47,8 +59,10 @@ methods, then scores recovery of known biological groups.
 
 ## Architecture & Data Flow
 
-1. **Configuration:** `datasets.json` defines datasets, metadata columns,
-   views, and filenames. `src/utils/datasets_io.R` and
+1. **Configuration:** `datasets.json` defines each dataset's top-level
+   metadata columns, views, and filenames. The top-level `columns` object is
+   the sole source for sample, label, batch, and cell-type fields; no
+   `views.*.columns` objects are permitted. `src/utils/datasets_io.R` and
    `src/utils/py/datasets_io.py` are the language-specific access layer.
 2. **Data staging:** `src/1_stage_data/1_stage_data.sh` stages raw data from
    NAS to scratch; `src/2_dataset_specific_preprocessing/` performs

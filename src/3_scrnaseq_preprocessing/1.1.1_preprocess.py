@@ -653,13 +653,9 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                 raise ValueError(
                     f"Unknown preprocessing view {view_name!r} for dataset {current_ds}"
                 )
-            # datasets_io merges dataset-level and view-level columns into each
-            # view entry.  Resolve them here so a view override never falls
-            # through to the first matching view's top-level summary.
-            view_columns = view_info.get("columns") or {}
-            sample_col = view_columns.get("sample")
-            label_col = view_columns.get("label")
-            batch_col = view_columns.get("batch")
+            sample_col = entry["sample_col"]
+            label_col = entry["label_col"]
+            batch_col = entry["batch_col"]
             is_uncorrected = view_name == "batch_effect_uncorrected"
             is_corrected = view_name == "batch_effect_corrected"
             is_batch_view = is_uncorrected or is_corrected

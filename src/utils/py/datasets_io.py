@@ -24,26 +24,31 @@ def read_datasets_json(path="datasets.json", view=None):
     result = {}
     for ds_name, ds in datasets.items():
         views = ds.get("views") or {}
+        dataset_columns = ds.get("columns") or {}
 
         matched_views = {}
         for v_name, v in views.items():
+            if "columns" in v:
+                raise ValueError(
+                    "Unsupported view-level columns declaration for "
+                    f"dataset {ds_name!r}, view {v_name!r}; "
+                    "configure columns at the dataset level."
+                )
             if view is not None and v_name != view:
                 continue
             output_file = v.get("output_file_name")
             if not output_file:
                 continue
-            view_columns = v.get("columns") or {}
             matched_views[v_name] = {
                 "input_file": v.get("input_file_name"),
                 "output_file": output_file,
                 "subset_vars": v.get("subset_vars", {}),
-                "columns": {**(ds.get("columns") or {}), **view_columns},
+                "columns": dict(dataset_columns),
             }
 
         first_name = next(iter(matched_views), None)
         first = matched_views.get(first_name)
-        columns = (first or {}).get("columns") or (ds.get("columns") or {})
-
+        columns = dataset_columns
         result[ds_name] = {
             # dataset-level fields (order mirrors datasets.json)
             "display_name": ds.get("display_name"),

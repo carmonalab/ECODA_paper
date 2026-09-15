@@ -59,6 +59,12 @@ def load_subset_worker():
 def main():
     with DATASETS.open() as handle:
         datasets = json.load(handle)
+    for dataset_name, entry in datasets.items():
+        for view_name, view in entry.get("views", {}).items():
+            assert "columns" not in view, (
+                f"{dataset_name}.{view_name} declares view-level columns"
+            )
+
 
     expected_final_roles = {
         "Alzheimer": ("donor_id_assay", "Cognitive status", "Subclass", "Supertype"),
@@ -115,6 +121,11 @@ def main():
     }
     assert datasets["Covid19_PBMC"]["views"]["batch_effect_uncorrected"]["subset_vars"] == covid_subset
     assert datasets["Covid19_PBMC"]["views"]["batch_effect_corrected"]["subset_vars"] == covid_subset
+    assert datasets["Breast_cancer"]["columns"]["batch"] == [
+        "assay",
+        "suspension_dissociation_time",
+    ]
+
 
     legacy_batch_output_names = {
         "Alzheimer": (
@@ -123,7 +134,7 @@ def main():
         ),
         "Breast_cancer": (
             "BreastCncr_processed_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
-            "BreastCncr_processed_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
+            "BreastCncr_processed_batch_effect_analysis_corrected_assay_dissociation_ECODAprocessed.h5ad",
         ),
         "Kidney_KPMP": (
             "Kidney_KPMP_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
@@ -216,9 +227,6 @@ def main():
         assert view["input_file_name"] == "Kidney_KPMP_full.h5ad"
 
 
-    assert datasets["Parkinson"]["views"]["batch_effect_corrected"]["columns"][
-        "cell_type_high_res"
-    ] == "leiden_res_5_batch_effect_corrected_hvg2000_harmony"
     assert datasets["Joanito"]["columns"]["batch"] == "seqtec"
     assert datasets["Stephenson"]["columns"]["batch"] == "Site"
 

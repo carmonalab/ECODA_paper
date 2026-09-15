@@ -178,9 +178,7 @@ def _selection(path: Path, run_root: Path, config: dict[str, Any], input_root: P
             raise ValueError(f"corrected output filename is unsafe: {dataset}/{view}")
         path_value = input_root / dataset / "output" / output_name
         _regular_file(path_value, f"{dataset}/{view} H5AD")
-        columns = dict(entry.get("columns") or {})
-        columns.update(view_entry.get("columns") or {})
-        batch_keys = columns.get("batch")
+        batch_keys = (entry.get("columns") or {}).get("batch")
         expected_identity = build_batch_contract_identity(
             batch_keys,
             sample_column="Sample",
