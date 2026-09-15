@@ -49,32 +49,32 @@ authoring and pipeline-file changes happen on the local workstation, then are
 committed and pushed; Yggdrasil pulls the exact committed revision. Never edit
 the Yggdrasil checkout directly. Bamboo is source/fallback infrastructure only.
 
-Operationally, `PORTABILITY_AUDIT=IN_PROGRESS`: no Yggdrasil pipeline job may
-run until the canonical repository, scratch paths, pinned runtime, scheduler,
-NAS/result handling, and Ygg-compatible durable profile pass the minimal
-checks. The complete scratch mirror is the active Yggdrasil working tree at
-`~/scratch/ECODA_paper`; its separate backup path was explicitly reclassified
-and no longer exists as an independent copy. The cross-filesystem repository
-move completed, but the canonical repository must be pulled to the latest local
-committed revision before compute.
+Operationally, `PORTABILITY_AUDIT=READY_FOR_SCOPED_LANES`: Yggdrasil is the
+default host, and no Yggdrasil pipeline job may run until each new gate has
+its exact local commit, source snapshot, runtime identity, selection, and
+durable manifest. The user selected `NAS_MODE=LOCAL_SCRATCH_MIRROR` for the
+current run because the external NAS mount is absent; the explicit target is
+`~/scratch/ECODA_paper/_nas_mirror/Projects/ECODA_paper`.
 
-Minimal checks so far: Yggdrasil has Slurm, Apptainer, `rsync`, Git, and `jq`;
-the copied FORMAT 2 container runs Python `3.13.14` and R `4.5.2`; and CPU
-partitions are visible. System `pixi`, `uv`, and `Rscript` are absent, but the
-repository mirror contains its `.pixi` environment. The first CPU smoke
-submission did not yield a usable completed result and is not a scheduler
-pass. The local NAS contract now detects the active cluster, preserves Bamboo
-defaults, and requires explicit absolute NAS overrides on Yggdrasil; its
-focused syntax/regression checks pass. The durable profile still declares
-`remote_host=bamboo`, and the Bamboo NAS mount is not present on Yggdrasil.
+The completed scratch mirror is the active Yggdrasil working tree at
+`~/scratch/ECODA_paper`. The cross-filesystem repository move completed and
+the canonical repository was pulled from the local pushed revision. Minimal
+canonical checks pass: the mirrored `.pixi` environment provides Python
+`3.13.14` and R `4.5.2`; a CPU Slurm smoke job ran on `cpu001`; and the
+host-aware defaults select `shared-cpu,shared-gpu` and `public-gpu`.
+The local NAS routing regression and profile JSON checks pass. System
+`pixi`, `uv`, and `Rscript` remain absent, but workers use the mirrored pinned
+environment directly.
 
-Before any Yggdrasil pipeline script or job, pull the exact local committed
-revision, validate canonical source/runtime/auxiliary paths, and resolve the
-Yggdrasil scheduler, NAS, and durable-gate host/path contracts. If
-pipeline-file or control-plane changes are required, make them locally, commit
-and push them, pull the exact revision on Yggdrasil, and record the change. No
-direct Yggdrasil checkout edits, pipeline jobs, or partial selections are
-allowed.
+Yggdrasil does not mount Bamboo's NAS path. NASAC DNS, `gio`, and D-Bus are
+available, but mounting would require interactive credentials. The local
+scratch mirror is therefore an explicit temporary result target, not an
+assertion that NASAC is mounted. The durable profile now targets
+`remote_host=yggdrasil` and its checks use the explicit local mirror.
+Before any pipeline script or job, create the current Yggdrasil source
+snapshot, validate its canonical runtime/auxiliary paths, and keep all
+authoring local with commit/push followed by an exact Yggdrasil pull. No
+direct checkout edits, broad selection, or partial method subset is allowed.
 
 ### Phase order
 
@@ -93,20 +93,21 @@ allowed.
    scratch mirror was moved to the active canonical
    `~/scratch/ECODA_paper` path on Yggdrasil. It is now a working tree, not an
    independent immutable backup.
-4. **Yggdrasil repository working tree.** In progress. Move the repository
-   mirror to the canonical `~/ECODA_paper` home path, then pull the exact
-   latest local committed revision. Do not use the partial cross-filesystem
-   move or run any pipeline script while it is incomplete.
-5. **Minimal Yggdrasil portability checks.** After the repository move,
-   verify canonical source/data/runtime/auxiliary paths, the mirrored Pixi
-   environment, CPU Slurm execution, NAS availability, and the
-   Yggdrasil-compatible durable-gate host/path contract. No pipeline job is
-   authorized during this audit.
-6. **Remaining Yggdrasil compute.** Only after the minimal checks pass, run
-   the explicit Alzheimer Stage 3 uncorrected/corrected rows, the two
-   Alzheimer Stage 5 lanes, and the full eight-dataset corrected-final Stage 5
-   recovery with all 32 rows. Keep all authoring local: commit/push, then pull
-   the exact revision on Yggdrasil.
+4. **Yggdrasil repository working tree.** Complete. The cross-filesystem move
+   finished, and the canonical repository was pulled from the local pushed
+   revision. The active paths are now `~/ECODA_paper` and
+   `~/scratch/ECODA_paper`; the mirrored `.pixi` environment is present.
+5. **Minimal Yggdrasil portability checks.** The canonical config smoke,
+   FORMAT 2 Python/R runtime smoke, and a CPU Slurm smoke on `cpu001` pass.
+   The dynamic NAS contract and Ygg profile checks pass. NASAC remains
+   unmounted, so the explicit local scratch result mirror is used for the
+   current lanes. GPU hardware/constraint compatibility remains a separate
+   check for any Alzheimer GPU method.
+6. **Remaining Yggdrasil compute.** After a current Ygg source snapshot and
+   exact run-owned manifests, run the explicit Alzheimer Stage 3
+   uncorrected/corrected rows, the two Alzheimer Stage 5 lanes, and the full
+   eight-dataset corrected-final Stage 5 recovery with all 32 rows. Keep all
+   authoring local: commit/push, then pull the exact revision on Yggdrasil.
 7. **Final synchronization and analysis.** After reviewed terminal artifacts,
    synchronize only manifest-listed outputs, checksums, and metadata, then
    execute the final analysis lane.
@@ -639,16 +640,16 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    practical time budget; its repository status scan was not used as a gate.
    Record `CONTENT_CHECKSUM=DEFERRED` and rely on the successful rsync marker,
    destination presence, commit identity, and optional rough size sanity.
-4. **Yggdrasil portability remains in progress.** Canonical
-   `~/scratch/ECODA_paper` is present and the copied FORMAT 2 runtime smoke
-   passed with Python `3.13.14` and R `4.5.2`. The canonical repository move
-   is still incomplete. The first CPU smoke submission did not yield a usable
-   completed result. The dynamic NAS contract is implemented and its focused
-   local syntax/regression checks pass, but the Bamboo NAS mount is absent on
-   Yggdrasil and the durable profile still declares `remote_host=bamboo`.
-   Record `PORTABILITY_AUDIT=IN_PROGRESS`; no Yggdrasil pipeline script or job
-   may run until the canonical repository, scheduler, NAS, and durable-gate
-   checks pass.
+4. **Yggdrasil portability checks pass for the scoped CPU lanes.** Canonical
+   `~/scratch/ECODA_paper` and `~/ECODA_paper` are present, the mirrored
+   `.pixi` environment provides Python `3.13.14` and R `4.5.2`, the FORMAT 2
+   runtime smoke passes, and CPU Slurm execution passes on `cpu001`
+   (`45683950`). Host-aware defaults select `shared-cpu,shared-gpu` and
+   `public-gpu`; local NAS routing and the Ygg profile tests pass. NASAC is
+   unmounted, so the explicit local scratch result mirror is required.
+   GPU method compatibility and any external NAS synchronization remain
+   separate checks. `PORTABILITY_AUDIT=READY_FOR_SCOPED_LANES`; no broad
+   selection or partial method subset is allowed.
 5. **Await explicit migration approval.** The remaining work is the exact
    Alzheimer Stage 3 uncorrected/corrected rows, the two Alzheimer Stage 5
    lanes, and the eight-dataset corrected-final Stage 5 recovery with all 32
@@ -662,6 +663,6 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
 
 The user explicitly set Yggdrasil as the default host for this plan while
 keeping all authoring local and synchronized by commit/push/pull. The
-portability audit is still in progress; no Yggdrasil pipeline compute starts
-until its remaining canonical-repository, scheduler, NAS, and durable-gate
-checks pass.
+portability checks now pass for scoped CPU lanes using the explicit local
+scratch result mirror. GPU-method and external-NAS checks remain separate
+before any lane that requires them.
