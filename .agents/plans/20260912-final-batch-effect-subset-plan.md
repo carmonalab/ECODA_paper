@@ -183,6 +183,10 @@ corrected-final root and its synchronization boundary; independent dataset
 and method rows may dispatch concurrently within this gate subject to
 declared dependencies, but no other corrected-final gate may overlap or share
 this root.
+For this exact eight-dataset recovery, pass the four-method list through
+`--target-methods prepare_pseudobulk,pseudobulk,gloscope,composition`. The
+submitter reserves `--methods` for the seven-method batch suite; using
+`--methods` here fails closed before scheduler submission.
 
 ### Final corrected-method policy
 
@@ -265,27 +269,27 @@ sample identity is donor-only.
 
 #### Alzheimer Stage 3
 
-After the reviewed Stage 2 derivative, use one explicit two-row,
-view-specific selection manifest:
+After the reviewed Stage 2 derivative, use two separate one-row,
+view-specific selection manifests:
 
 ```text
 Alzheimer<TAB>batch_effect_uncorrected
 Alzheimer<TAB>batch_effect_corrected
 ```
 
-The gate must export
+Each gate must export
 `STAGE3_INPUT_PRODUCER_RUN_ID=stage2_alzheimer_donor_assay_20260914T172421Z`.
-The submitter materializes and validates one run-owned `input_ownership.tsv`,
-binding the derivative `Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad` to
-that validated Stage 2 producer before submitting both independent view rows
-in one Stage 3 array. The rows share one durable gate/serialization owner but
-have separate output paths and view-specific processing. Do not use a full
-configured selector that could include the eight other cohorts. Both outputs
-must contain the ordered 104 `donor_id_assay` samples, preserve original
-technical metadata and raw counts, exclude biological labels from processing
-covariates, and use semantic uncorrected/corrected representations
+The submitter materializes and validates its run-owned `input_ownership.tsv`,
+binding `Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad` to that validated
+Stage 2 producer before selecting the view. The current Stage 3 submitter
+rejects a combined Alzheimer selection, so the two one-row gates use separate
+serialization groups and separate run roots, output paths, source/runtime
+identities, ownership/checksum records, and snapshot parents; these groups
+represent disjoint view owners rather than a bypass of a shared owner. Both
+outputs must contain the ordered 104 `donor_id_assay` samples, preserve
+original technical metadata and raw counts, exclude biological labels from
+processing covariates, and use semantic uncorrected/corrected representations
 respectively.
-
 #### Alzheimer Stage 5
 
 Use explicit one-row lanes, never a broad/default selection:
