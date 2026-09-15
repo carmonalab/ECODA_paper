@@ -134,12 +134,15 @@ jq -e --arg remote_workdir "${REMOTE_WORKDIR}" '
   | (length > 0 and
      any(.[]; . as $pattern | ($remote_workdir | test($pattern))))
 ' "${PROFILE}" >/dev/null
-jq -e --arg remote_path "${REMOTE_PATH}" '
-  .policy.manifest_constraints.remote_path_patterns
-  | (length > 0 and
-     (to_entries
-      | all(.[]; any(.value[]; . as $pattern | ($remote_path | test($pattern))))))
-' "${PROFILE}" >/dev/null
+REMOTE_CANONICAL_PATH="/srv/beegfs/scratch/users/h/halterc/ECODA_paper"
+for remote_path in "${REMOTE_PATH}" "${REMOTE_CANONICAL_PATH}"; do
+  jq -e --arg remote_path "${remote_path}" '
+    .policy.manifest_constraints.remote_path_patterns
+    | (length > 0 and
+       (to_entries
+        | all(.[]; any(.value[]; . as $pattern | ($remote_path | test($pattern))))))
+  ' "${PROFILE}" >/dev/null
+done
 BAMBOO_NAS_PATH="/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper"
 jq -e --arg path "${BAMBOO_NAS_PATH}" '
   [
