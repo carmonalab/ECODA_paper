@@ -558,6 +558,74 @@ case "${CORRECTED_CALLS}" in
     exit 1
     ;;
 esac
+# The corrected-recovery scope also admits exactly one targeted Breast row.
+# It keeps corrected processing state distinct from the historical eight-row
+# recovery and does not trigger a Covid preflight for this one-row input.
+rm -rf "${ECODA_OWNERS_ROOT}"
+BREAST_TARGET_SELECTION="${TMP_DIR}/breast-target-selection.tsv"
+printf 'Breast_cancer\tbatch_effect_corrected\n' > "${BREAST_TARGET_SELECTION}"
+: > "${CAPTURE}"
+BREAST_TARGET_OUTPUT="$(
+  run_stage3 --selection-file "${BREAST_TARGET_SELECTION}" --corrected-recovery
+)"
+case "${BREAST_TARGET_OUTPUT}" in
+  *"PREPROCESS_ARRAY_JOB_ID=600001"*) ;;
+  *) echo "targeted Breast corrected selection did not submit its own array" >&2; exit 1 ;;
+esac
+case "${BREAST_TARGET_OUTPUT}" in
+  *"PREPROCESS_WATCHDOG_JOB_ID=600002"*) ;;
+  *) echo "targeted Breast corrected selection did not submit its own watchdog" >&2; exit 1 ;;
+esac
+BREAST_TARGET_MANIFEST="$(printf '%s\n' "${BREAST_TARGET_OUTPUT}" |
+  sed -n 's/^PREPROCESS_DATASET_MANIFEST=//p')"
+[[ -s "${BREAST_TARGET_MANIFEST}" ]]
+[[ "$(wc -l < "${BREAST_TARGET_MANIFEST}" | tr -d '[:space:]')" == 1 ]]
+[[ "$(cat "${BREAST_TARGET_MANIFEST}")" == $'Breast_cancer\tbatch_effect_corrected' ]]
+BREAST_TARGET_RUN_ROOT="$(dirname "${BREAST_TARGET_MANIFEST}")/.."
+BREAST_TARGET_RUN_ROOT="$(cd "${BREAST_TARGET_RUN_ROOT}" && pwd)"
+cmp -s "${BREAST_TARGET_SELECTION}" "${BREAST_TARGET_MANIFEST}"
+cmp -s "${BREAST_TARGET_SELECTION}" \
+  "${BREAST_TARGET_RUN_ROOT}/manifests/pending.tsv"
+[[ "$(wc -l < "${BREAST_TARGET_RUN_ROOT}/manifests/output_ownership.tsv" |
+  tr -d '[:space:]')" == 1 ]]
+[[ "$(sed -n 's/^SELECTION_CLASSIFICATION=//p' \
+  "${BREAST_TARGET_RUN_ROOT}/metadata")" == "corrected_breast_targeted" ]]
+BREAST_TARGET_CALLS="$(cat "${CAPTURE}")"
+case "${BREAST_TARGET_CALLS}" in
+  *"--array=1-1%1000"*) ;;
+  *) echo "targeted Breast corrected array escaped its one-row scope" >&2; exit 1 ;;
+esac
+case "${BREAST_TARGET_CALLS}" in
+  *"h5ad_obs_audit_worker.sh"*)
+    echo "targeted Breast corrected selection unexpectedly submitted Covid obs preflight" >&2
+    exit 1
+    ;;
+esac
+
+# A one-row corrected selection without the explicit corrected-recovery scope
+# remains rejected before run initialization or scheduler submission.
+: > "${CAPTURE}"
+BEFORE_RUNS="$(printf '%s\n' "${RUNS_ROOT}"/*)"
+if run_stage3 --selection-file "${BREAST_TARGET_SELECTION}" >/dev/null 2>&1; then
+  echo "accidental one-row Breast corrected selection was accepted" >&2
+  exit 1
+fi
+[[ ! -s "${CAPTURE}" ]]
+[[ "${BEFORE_RUNS}" == "$(printf '%s\n' "${RUNS_ROOT}"/*)" ]]
+
+# The scoped selector also rejects a one-row shape that is not the approved
+# corrected Breast row.
+BREAST_BAD_SCOPE_SELECTION="${TMP_DIR}/breast-bad-scope-selection.tsv"
+printf 'Breast_cancer\tbatch_effect_uncorrected\n' > "${BREAST_BAD_SCOPE_SELECTION}"
+: > "${CAPTURE}"
+BEFORE_RUNS="$(printf '%s\n' "${RUNS_ROOT}"/*)"
+if run_stage3 --selection-file "${BREAST_BAD_SCOPE_SELECTION}" \
+    --corrected-recovery >/dev/null 2>&1; then
+  echo "non-approved corrected-recovery shape was accepted" >&2
+  exit 1
+fi
+[[ ! -s "${CAPTURE}" ]]
+[[ "${BEFORE_RUNS}" == "$(printf '%s\n' "${RUNS_ROOT}"/*)" ]]
 
 # A combined launch is retired rather than silently broadening either array.
 : > "${CAPTURE}"

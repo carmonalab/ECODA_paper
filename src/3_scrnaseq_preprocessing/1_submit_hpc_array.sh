@@ -57,10 +57,11 @@ as compatibility aliases for one dataset/view selection. Exact batch mode
 requires the immutable twelve-row uncorrected selection file. The approved
 batch-effect selectors are explicit and disjoint: the uncorrected selector is
 exactly the four target rows in fixed order; corrected recovery is exactly the
-eight non-Alzheimer rows in fixed order; and an Alzheimer follow-up is exactly
-one explicitly selected view. Corrected recovery and Alzheimer follow-up
-selection files are required; broad/default and combined selections are
-rejected. Alzheimer follow-up additionally requires the reviewed Stage 2
+eight non-Alzheimer rows in fixed order or one explicitly selected
+Breast_cancer corrected row; and an Alzheimer follow-up is exactly one
+explicitly selected view. Corrected recovery and Alzheimer follow-up selection
+files are required; broad/default and combined selections are rejected.
+Alzheimer follow-up additionally requires the reviewed Stage 2
 donor-by-assay producer output and an immutable source snapshot whose bound
 config names SEAAD_Alzheimer_donor_assay.h5ad with sample column donor_id_assay.
 EOF
@@ -111,7 +112,7 @@ while [[ $# -gt 0 ]]; do
     --max-mem=*) MAX_MEMORY="${1#*=}"; shift ;;
     --partition) PARTITION="${2:-}"; shift 2 ;;
     --partition=*) PARTITION="${1#*=}"; shift ;;
-    --throttle) THROTTLE="${2:-}"; shift 2 ;;
+    --throttle) THROTTLE="${2:-}"; shift ;;
     --throttle=*) THROTTLE="${1#*=}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 1 ;;
@@ -173,7 +174,6 @@ if [[ "${ECODA_SOURCE_ROOT:-}" = */tree &&
   DATASETS_JSON_FILE="${ECODA_SOURCE_ROOT}/datasets.json"
   export DATASETS_JSON_FILE
 fi
-
 stage3_manifest_value() {
   local manifest="$1" key="$2" value
   [[ -f "${manifest}" && ! -L "${manifest}" && -r "${manifest}" ]] || return 1
@@ -729,6 +729,48 @@ stage3_validate_corrected_recovery_selection() {
   STAGE3_UNCORRECTED_BATCH_SELECTION=0
   STAGE3_CORRECTED_SELECTION=1
 }
+stage3_selection_is_targeted_breast_corrected_candidate() {
+  local selection="${1:-}" ds view extra
+  local count=0
+  [[ -r "${selection}" ]] || return 1
+  ecoda_validate_manifest "${selection}" 2 || return 1
+  while IFS=$'\t' read -r ds view extra; do
+    count=$((count + 1))
+    [[ ${count} -eq 1 &&
+       "${ds}" == "Breast_cancer" &&
+       "${view}" == "batch_effect_corrected" &&
+       -z "${extra}" ]] || return 1
+  done < "${selection}"
+  [[ ${count} -eq 1 ]]
+}
+
+stage3_validate_targeted_breast_corrected_selection() {
+  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
+  local ds view count=0
+  [[ -r "${selection}" && -r "${config}" && ! -L "${config}" ]] || return 1
+  [[ ${SELECTION_FILE_SET} -eq 1 || ${SYNC_ONLY_SET} -eq 1 ]] || {
+    echo "ERROR: targeted Breast corrected Stage 3 recovery requires an explicit selection file." >&2
+    return 1
+  }
+  [[ "${STAGE3_SCOPE_ARG}" == "corrected_recovery" ||
+     ${SYNC_ONLY_SET} -eq 1 ]] || {
+    echo "ERROR: targeted Breast corrected Stage 3 recovery requires --corrected-recovery." >&2
+    return 1
+  }
+  stage3_selection_is_targeted_breast_corrected_candidate "${selection}" || {
+    echo "ERROR: targeted Breast corrected Stage 3 recovery must contain exactly Breast_cancer/batch_effect_corrected." >&2
+    return 1
+  }
+  while IFS=$'\t' read -r ds view; do
+    stage3_validate_configured_corrected_row \
+      "${config}" "${ds}" "${view}" || return 1
+    count=$((count + 1))
+  done < "${selection}"
+  [[ ${count} -eq 1 ]] || return 1
+  STAGE3_SELECTION_CLASSIFICATION="corrected_breast_targeted"
+  STAGE3_UNCORRECTED_BATCH_SELECTION=0
+  STAGE3_CORRECTED_SELECTION=1
+}
 
 stage3_selection_is_alzheimer_followup_candidate() {
   local selection="${1:-}" ds view extra
@@ -824,17 +866,31 @@ stage3_classify_selection() {
     STAGE3_SELECTION_CLASSIFICATION="historical_exact"
     return 0
   fi
+  if [[ "${STAGE3_SCOPE_ARG}" == "corrected_recovery" ]]; then
+    if stage3_selection_is_corrected_recovery_candidate "${selection}"; then
+      stage3_validate_corrected_recovery_selection "${selection}" "${config}" || return 1
+      return 0
+    fi
+    if stage3_selection_is_targeted_breast_corrected_candidate "${selection}"; then
+      stage3_validate_targeted_breast_corrected_selection "${selection}" "${config}" || return 1
+      return 0
+    fi
+    echo "ERROR: corrected recovery scope must contain exactly the approved eight-row selection or one Breast_cancer corrected row." >&2
+    return 1
+  fi
   if stage3_selection_contains_alzheimer "${selection}"; then
     stage3_validate_alzheimer_followup_selection "${selection}" "${config}" || return 1
   elif stage3_selection_is_corrected_recovery_candidate "${selection}"; then
     stage3_validate_corrected_recovery_selection "${selection}" "${config}" || return 1
+  elif stage3_selection_is_targeted_breast_corrected_candidate "${selection}"; then
+    stage3_validate_targeted_breast_corrected_selection "${selection}" "${config}" || return 1
   elif stage3_selection_is_uncorrected_four_candidate "${selection}"; then
     stage3_validate_uncorrected_four_selection "${selection}" "${config}" || return 1
   elif stage3_selection_contains_target_uncorrected "${selection}"; then
     echo "ERROR: target uncorrected Stage 3 selection must be exactly the approved four rows." >&2
     return 1
   elif stage3_selection_contains_corrected "${selection}"; then
-    echo "ERROR: corrected Stage 3 selection must be the explicit eight-row recovery; Alzheimer uses one explicit follow-up row." >&2
+    echo "ERROR: corrected Stage 3 selection must be the explicit eight-row recovery or the targeted Breast_cancer row; Alzheimer uses one explicit follow-up row." >&2
     return 1
   fi
 }
