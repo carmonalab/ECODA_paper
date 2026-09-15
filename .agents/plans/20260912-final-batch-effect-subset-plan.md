@@ -11,8 +11,15 @@ Every operation remains narrowly scoped: no broad or inferred selection, no over
 
 ### Objective and hard boundaries
 
-- Local selector/source-contract implementation and focused checks are complete. Backup feasibility inventory, capacity, access, and tiny-transfer evidence are recorded; the complete clone is deferred until the selected Alzheimer Stage 2 writer is terminal. Only that controlled Stage 2 exception may proceed before the clone, with fresh identities, exact scope, disjoint ownership, and a durable review.
-- The controlled Alzheimer Stage 2 exception may start before the full scratch clone only after its own fresh source/runtime snapshot, exact run-owned selector, raw/derivative ownership checks, and durable-gate preparation pass. It reads the immutable raw H5AD and writes only the new derivative; it does not authorize an Alzheimer configuration change, Stage 3, or Stage 5 work.
+- Local selector/source-contract implementation, backup feasibility, and the
+  completed transfer-sanity mirror are recorded. The scratch mirror is now the
+  active Yggdrasil working tree; the repository mirror is being finalized at
+  the canonical Yggdrasil home path. Remaining work is portability validation,
+  not Bamboo-first execution.
+- The Alzheimer Stage 2 derivative is complete on Bamboo under its exact
+  snapshot/run contract. Its validated derivative is an input for the
+  Yggdrasil follow-up; it must not be recomputed or modified outside an
+  explicitly approved recovery.
 - The production source is the current `datasets.json` plus authoritative HPC
   data. Local mirrors and historical JSON reports are diagnostic evidence only.
 - Existing H5ADs, RDS bundles, pseudobulk caches, Feather files, manifests,
@@ -43,41 +50,31 @@ committed and pushed; Yggdrasil pulls the exact committed revision. Never edit
 the Yggdrasil checkout directly. Bamboo is source/fallback infrastructure only.
 
 Operationally, `PORTABILITY_AUDIT=IN_PROGRESS`: no Yggdrasil pipeline job may
-run until the canonical repository move, scratch paths, pinned runtime,
-scheduler, NAS/result handling, and Ygg-compatible durable profile pass the
-minimal checks. If a pipeline-file or configuration change is required, make
-it locally, commit and push it, pull the exact revision on Yggdrasil, and
-record the change. The remaining selections are exactly the two Alzheimer
-Stage 3 view rows, the two explicit Alzheimer Stage 5 lanes, and the full
-eight-dataset corrected-final Stage 5 recovery with all 32 rows.
-### Yggdrasil portability audit — 2026-09-14 (in progress)
-
-`YGGDRASIL_DEFAULT=1` and `PORTABILITY_AUDIT=IN_PROGRESS`. The complete
-scratch mirror has been reclassified by explicit user decision as the active
-Yggdrasil working tree at `~/scratch/ECODA_paper`; the separate scratch backup
-path no longer exists as an independent copy. The repository mirror is still
-being moved from scratch to the canonical `~/ECODA_paper` home path; its
-source remains present until the cross-filesystem move completes.
+run until the canonical repository, scratch paths, pinned runtime, scheduler,
+NAS/result handling, and Ygg-compatible durable profile pass the minimal
+checks. The complete scratch mirror is the active Yggdrasil working tree at
+`~/scratch/ECODA_paper`; its separate backup path was explicitly reclassified
+and no longer exists as an independent copy. The cross-filesystem repository
+move completed, but the canonical repository must be pulled to the latest local
+committed revision before compute.
 
 Minimal checks so far: Yggdrasil has Slurm, Apptainer, `rsync`, Git, and `jq`;
-the copied FORMAT 2 container runs Python `3.13.14` and R `4.5.2`; the
-canonical scratch tree is present; and CPU partitions are visible. System
-`pixi`, `uv`, and `Rscript` are absent, but the repository mirror contains its
-`.pixi` environment and is still being moved into the canonical repo path.
-The first CPU smoke submission did not yield a usable completed result and is
-not a scheduler pass. The local NAS contract now detects the active cluster,
-preserves Bamboo defaults, and requires explicit absolute NAS overrides on
-Yggdrasil; its focused regression and shell syntax checks pass. The durable
-profile still declares `remote_host=bamboo`, and the Bamboo NAS mount is not
-present on Yggdrasil.
+the copied FORMAT 2 container runs Python `3.13.14` and R `4.5.2`; and CPU
+partitions are visible. System `pixi`, `uv`, and `Rscript` are absent, but the
+repository mirror contains its `.pixi` environment. The first CPU smoke
+submission did not yield a usable completed result and is not a scheduler
+pass. The local NAS contract now detects the active cluster, preserves Bamboo
+defaults, and requires explicit absolute NAS overrides on Yggdrasil; its
+focused syntax/regression checks pass. The durable profile still declares
+`remote_host=bamboo`, and the Bamboo NAS mount is not present on Yggdrasil.
 
-Before any Yggdrasil pipeline script or job, complete the repository move,
-pull the exact local committed revision, validate the canonical runtime and
-source/auxiliary paths, and resolve the Yggdrasil durable-gate host/path and
-NAS contracts. If pipeline-file or control-plane changes are required, make
-them locally, commit and push them, pull the exact revision on Yggdrasil, and
-record the change. No direct Yggdrasil checkout edits, pipeline jobs, or
-partial dataset/method selections are allowed.
+Before any Yggdrasil pipeline script or job, pull the exact local committed
+revision, validate canonical source/runtime/auxiliary paths, and resolve the
+Yggdrasil scheduler, NAS, and durable-gate host/path contracts. If
+pipeline-file or control-plane changes are required, make them locally, commit
+and push them, pull the exact revision on Yggdrasil, and record the change. No
+direct Yggdrasil checkout edits, pipeline jobs, or partial selections are
+allowed.
 
 ### Phase order
 
