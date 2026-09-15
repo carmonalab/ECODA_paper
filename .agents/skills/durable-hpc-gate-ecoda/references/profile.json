@@ -12,13 +12,13 @@
       "remote_workdir_suffix": ["/ECODA_paper"],
       "remote_workdir_patterns": ["^/home/users/[^/]+/[^/]+/ECODA_paper$", "^/Users/[^/]+/ECODA_paper$"],
       "remote_path_suffixes": {
-        "remote_manifest": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"],
-        "remote_runner": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"],
-        "remote_log": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"],
-        "remote_status": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"],
-        "remote_failure_status": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"],
-        "remote_exit_code": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"],
-        "completion_channel": ["/scratch/ECODA_paper", "/Projects/ECODA_paper"]
+        "remote_manifest": ["/scratch/ECODA_paper", "/Projects/ECODA_paper", "/ECODA_paper"],
+        "remote_runner": ["/scratch/ECODA_paper", "/Projects/ECODA_paper", "/ECODA_paper"],
+        "remote_log": ["/scratch/ECODA_paper", "/Projects/ECODA_paper", "/ECODA_paper"],
+        "remote_status": ["/scratch/ECODA_paper", "/Projects/ECODA_paper", "/ECODA_paper"],
+        "remote_failure_status": ["/scratch/ECODA_paper", "/Projects/ECODA_paper", "/ECODA_paper"],
+        "remote_exit_code": ["/scratch/ECODA_paper", "/Projects/ECODA_paper", "/ECODA_paper"],
+        "completion_channel": ["/scratch/ECODA_paper", "/Projects/ECODA_paper", "/ECODA_paper"]
       },
       "remote_path_patterns": {
         "remote_manifest": ["^/home/users/[^/]+/[^/]+/scratch/ECODA_paper(/|$)", "^/Users/[^/]+/scratch/ECODA_paper(/|$)", "^/srv/beegfs/scratch/users/[^/]+/[^/]+/ECODA_paper(/|$)"],
