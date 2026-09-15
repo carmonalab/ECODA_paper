@@ -265,27 +265,26 @@ sample identity is donor-only.
 
 #### Alzheimer Stage 3
 
-After the reviewed Stage 2 derivative, use two separate one-row,
-view-specific selections:
+After the reviewed Stage 2 derivative, use one explicit two-row,
+view-specific selection manifest:
 
 ```text
 Alzheimer<TAB>batch_effect_uncorrected
 Alzheimer<TAB>batch_effect_corrected
 ```
 
-Each gate must export
+The gate must export
 `STAGE3_INPUT_PRODUCER_RUN_ID=stage2_alzheimer_donor_assay_20260914T172421Z`.
-The submitter then materializes and validates its run-owned
-`input_ownership.tsv`, binding the derivative
-`Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad` to the validated Stage 2
-producer before selecting either view. The two gates have separate run roots,
-output paths, source/runtime identities, ownership/checksum records, and
-snapshot parents. They may run concurrently only when those exact manifests
-remain disjoint. Do not use a full configured selector that could include the
-eight other cohorts. Both outputs must contain the ordered 104
-`donor_id_assay` samples, preserve original technical metadata and raw counts,
-exclude biological labels from processing covariates, and use semantic
-uncorrected/corrected representations respectively.
+The submitter materializes and validates one run-owned `input_ownership.tsv`,
+binding the derivative `Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad` to
+that validated Stage 2 producer before submitting both independent view rows
+in one Stage 3 array. The rows share one durable gate/serialization owner but
+have separate output paths and view-specific processing. Do not use a full
+configured selector that could include the eight other cohorts. Both outputs
+must contain the ordered 104 `donor_id_assay` samples, preserve original
+technical metadata and raw counts, exclude biological labels from processing
+covariates, and use semantic uncorrected/corrected representations
+respectively.
 
 #### Alzheimer Stage 5
 
