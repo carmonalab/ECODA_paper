@@ -666,6 +666,12 @@ all lme4 payloads remain immutable historical artifacts, not reuse candidates.
    `03e2a77f4a52053cfc0af108ef6f076336a678f`, a new snapshot/run ID, the
    exact 32-row scope, and
    `--target-methods prepare_pseudobulk,pseudobulk,gloscope,composition`.
+   Launched as `stage5_eight_corrected_ygg_parallel_20260915T131349Z` at
+   `2026-09-15T13:14:51Z` from snapshot
+   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/stage5_eight_corrected_retry3/5f284a8541af5049dd0c3881370fb1f0ad2cbbe9`.
+   Its exact selection is
+   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ygg_selection_manifests/stage5_eight_corrected_20260915T131349Z_parallel.tsv`;
+   the single durable wait is armed.
    Never reuse the failed manifest.
 6. **Alzheimer Stage 5 follow-up.** After the two Alzheimer Stage 3 lanes
    reach terminal accounting, run-scoped audit, synchronization, and required
