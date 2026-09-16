@@ -758,38 +758,6 @@ if [[ -n "${PASS_ARG}" ]]; then
 fi
 source "${SCRIPT_DIR}/benchmark_submit_common.sh"
 
-stage5_manifest_value() {
-  local manifest="$1" key="$2"
-  awk -v wanted="${key}" '
-    index($0, wanted "=") == 1 {
-      count++
-      value=substr($0, length(wanted) + 2)
-    }
-    END {
-      if (count != 1 || value == "") exit 1
-      print value
-    }
-  ' "${manifest}"
-}
-
-stage5_atomic_copy() {
-  local source="$1" destination="$2" temporary
-  [[ -f "${source}" && -r "${source}" && ! -L "${source}" ]] || return 1
-  mkdir -p "$(dirname "${destination}")" || return 1
-  temporary="${destination}.build.$$"
-  cp "${source}" "${temporary}" || {
-    rm -f "${temporary}"
-    return 1
-  }
-  chmod 600 "${temporary}" || {
-    rm -f "${temporary}"
-    return 1
-  }
-  mv -f "${temporary}" "${destination}" || {
-    rm -f "${temporary}"
-    return 1
-  }
-}
 stage5_bind_method_matrix() {
   local destination="${ECODA_RUN_ROOT}/manifests/method_matrix.tsv"
   local source="${METHOD_MATRIX_SOURCE_PATH:-${METHOD_MATRIX_ARG:-}}"
@@ -880,10 +848,10 @@ stage5_install_source_manifest() {
     echo "ERROR: new Stage 5 runs require an immutable source snapshot." >&2
     return 1
   fi
-  stage5_atomic_copy "${incoming}" "${destination}" || return 1
+  ecoda_atomic_copy "${incoming}" "${destination}" || return 1
   ecoda_validate_run_owned_path "${destination}" "${ECODA_RUN_ROOT}" || return 1
-  [[ "$(stage5_manifest_value "${destination}" FORMAT)" == "1" ]] || return 1
-  [[ "$(stage5_manifest_value "${destination}" SOURCE_ROOT)" == "${ECODA_SOURCE_ROOT}" ]] ||
+  [[ "$(_ecoda_runtime_require_manifest_value "${destination}" FORMAT)" == "1" ]] || return 1
+  [[ "$(_ecoda_runtime_require_manifest_value "${destination}" SOURCE_ROOT)" == "${ECODA_SOURCE_ROOT}" ]] ||
     return 1
 }
 stage5_validate_output_ownership() {
@@ -917,7 +885,7 @@ stage5_bind_run_identity() {
   }
   ecoda_validate_run_owned_path "${source_copy}" "${ECODA_RUN_ROOT}" || return 1
   ecoda_validate_run_owned_path "${runtime_identity}" "${ECODA_RUN_ROOT}" || return 1
-  source_root="$(stage5_manifest_value "${source_copy}" SOURCE_ROOT)" || return 1
+  source_root="$(_ecoda_runtime_require_manifest_value "${source_copy}" SOURCE_ROOT)" || return 1
   [[ "${source_root}" = /* ]] || return 1
   source_manifest="${source_root%/tree}/identity/source.manifest"
   [[ -f "${source_manifest}" && -r "${source_manifest}" ]] || return 1
@@ -925,8 +893,8 @@ stage5_bind_run_identity() {
     echo "ERROR: run-owned source manifest differs from the immutable snapshot manifest." >&2
     return 1
   }
-  image="$(stage5_manifest_value "${runtime_identity}" RUNTIME_IMAGE)" || return 1
-  manifest="$(stage5_manifest_value "${runtime_identity}" RUNTIME_MANIFEST)" || return 1
+  image="$(_ecoda_runtime_require_manifest_value "${runtime_identity}" RUNTIME_IMAGE)" || return 1
+  manifest="$(_ecoda_runtime_require_manifest_value "${runtime_identity}" RUNTIME_MANIFEST)" || return 1
   [[ "${image}" = /* && "${manifest}" = /* ]] || return 1
   export ECODA_SOURCE_ROOT="${source_root}"
   export ECODA_SOURCE_MANIFEST="${source_manifest}"
@@ -960,7 +928,7 @@ stage5_record_run_identity_metadata() {
   for key in FORMAT SOURCE_ROOT SOURCE_COMMIT SOURCE_ARCHIVE_PATH SOURCE_ARCHIVE_SHA256 \
     CONFIG_HELPER_SHA256 DATASETS_SHA256 PIXI_TOML_SHA256 PIXI_LOCK_SHA256 AUX_ROOT \
     SCGATE_DB_BRANCH; do
-    value="$(stage5_manifest_value "${source_copy}" "${key}")" || return 1
+    value="$(_ecoda_runtime_require_manifest_value "${source_copy}" "${key}")" || return 1
     printf '%s=%s\n' "SOURCE_${key}" "${value}"
   done
   while IFS='=' read -r key value; do

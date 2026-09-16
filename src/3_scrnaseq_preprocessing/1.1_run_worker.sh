@@ -9,9 +9,14 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -n "${SLURM_JOB_ID:-}" &&
-      "${ECODA_RUNTIME_IN_CONTAINER:-0}" != "1" ]]; then
-  SCRIPT_DIR="$(dirname "$(scontrol show job "${SLURM_JOB_ID}" -o | grep -o 'Command=[^ ]*' | head -1 | cut -d= -f2)")"
+if [[ ! -f "${SCRIPT_DIR}/../slurm_config.sh" ]]; then
+  if [[ -n "${ECODA_SOURCE_ROOT:-}" &&
+        -f "${ECODA_SOURCE_ROOT}/src/slurm_config.sh" ]]; then
+    SCRIPT_DIR="${ECODA_SOURCE_ROOT}/src/3_scrnaseq_preprocessing"
+  elif [[ -n "${SLURM_SUBMIT_DIR:-}" &&
+          -f "${SLURM_SUBMIT_DIR}/src/slurm_config.sh" ]]; then
+    SCRIPT_DIR="${SLURM_SUBMIT_DIR}/src/3_scrnaseq_preprocessing"
+  fi
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 RUN_ROOT_FROM_ENV="${ECODA_RUN_ROOT:-}"
@@ -146,18 +151,6 @@ export ECODA_RUNTIME_PROFILE=stage3
 ecoda_runtime_reexec_worker stage3 "${WORKER_SCRIPT}" || exit 1
 cd "${PROJECT_ROOT}"
 
-if [[ -n "${SLURM_JOB_ID:-}" &&
-      "${ECODA_RUNTIME_IN_CONTAINER:-0}" != "1" ]]; then
-  SCHEDULER_SCRIPT="$(scontrol show job "${SLURM_JOB_ID}" -o |
-    grep -o 'Command=[^ ]*' | head -1 | cut -d= -f2)" || {
-    echo "ERROR: could not recover Stage 3 worker script from Slurm." >&2
-    exit 1
-  }
-  [[ "${SCHEDULER_SCRIPT}" == "${WORKER_SCRIPT}" ]] || {
-    echo "ERROR: Slurm worker command is not the immutable snapshot script." >&2
-    exit 1
-  }
-fi
 
 MANIFEST_PATH="${PREPROCESS_SELECTION_FILE:-${PREPROCESS_DATASETS_FILE:-}}"
 DS_NAME=""

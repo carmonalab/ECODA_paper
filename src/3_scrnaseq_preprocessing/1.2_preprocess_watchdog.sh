@@ -3,8 +3,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -n "${SLURM_JOB_ID:-}" ]]; then
-  SCRIPT_DIR="$(dirname "$(scontrol show job "${SLURM_JOB_ID}" -o | grep -o 'Command=[^ ]*' | head -1 | cut -d= -f2)")"
+if [[ ! -f "${SCRIPT_DIR}/../slurm_config.sh" ]]; then
+  if [[ -n "${ECODA_SOURCE_ROOT:-}" &&
+        -f "${ECODA_SOURCE_ROOT}/src/slurm_config.sh" ]]; then
+    SCRIPT_DIR="${ECODA_SOURCE_ROOT}/src/3_scrnaseq_preprocessing"
+  elif [[ -n "${SLURM_SUBMIT_DIR:-}" &&
+          -f "${SLURM_SUBMIT_DIR}/src/slurm_config.sh" ]]; then
+    SCRIPT_DIR="${SLURM_SUBMIT_DIR}/src/3_scrnaseq_preprocessing"
+  fi
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
@@ -38,21 +44,6 @@ CURRENT_MANIFEST="${PREPROCESS_PENDING_MANIFEST:-${ROOT_MANIFEST}}"
 RETRY_INDEX=0
 SCHEDULER_IDS=("${ARRAY_ID}")
 RUNTIME_EXPORT=""
-stage3_manifest_value() {
-  local manifest="$1" key="$2" value
-  [[ -f "${manifest}" && ! -L "${manifest}" && -r "${manifest}" ]] || return 1
-  value="$(awk -v wanted="${key}" '
-    index($0, wanted "=") == 1 {
-      count++
-      result=substr($0, length(wanted) + 2)
-    }
-    END {
-      if (count != 1 || result == "") exit 1
-      print result
-    }
-  ' "${manifest}")" || return 1
-  printf '%s\n' "${value}"
-}
 
 stage3_load_bound_run() {
   local source_copy="${RUN_ROOT}/manifests/source.manifest"
@@ -64,8 +55,8 @@ stage3_load_bound_run() {
   [[ -s "${runtime_identity}" && ! -L "${runtime_identity}" && -r "${runtime_identity}" ]] || return 2
   ecoda_validate_run_owned_path "${source_copy}" "${RUN_ROOT}" || return 1
   ecoda_validate_run_owned_path "${runtime_identity}" "${RUN_ROOT}" || return 1
-  [[ "$(stage3_manifest_value "${source_copy}" FORMAT)" == "1" ]] || return 1
-  source_root="$(stage3_manifest_value "${source_copy}" SOURCE_ROOT)" || return 1
+  [[ "$(_ecoda_runtime_require_manifest_value "${source_copy}" FORMAT)" == "1" ]] || return 1
+  source_root="$(_ecoda_runtime_require_manifest_value "${source_copy}" SOURCE_ROOT)" || return 1
   [[ "${source_root}" = /* && "${source_root}" == */tree ]] || return 1
   snapshot_root="${source_root%/tree}"
   source_manifest_original="${snapshot_root}/identity/source.manifest"
@@ -78,12 +69,12 @@ stage3_load_bound_run() {
   if [[ -n "${ECODA_SOURCE_MANIFEST_RUN:-}" ]]; then
     [[ "${ECODA_SOURCE_MANIFEST_RUN}" == "${source_copy}" ]] || return 1
   fi
-  runtime_image="$(stage3_manifest_value "${runtime_identity}" RUNTIME_IMAGE)" || return 1
-  identity_image_sha="$(stage3_manifest_value "${runtime_identity}" RUNTIME_IMAGE_SHA256)" || return 1
-  identity_manifest_sha="$(stage3_manifest_value "${runtime_identity}" RUNTIME_MANIFEST_SHA256)" || return 1
-  identity_image_size="$(stage3_manifest_value "${runtime_identity}" RUNTIME_IMAGE_SIZE)" || return 1
-  identity_manifest_size="$(stage3_manifest_value "${runtime_identity}" RUNTIME_MANIFEST_SIZE)" || return 1
-  runtime_manifest="$(stage3_manifest_value "${runtime_identity}" RUNTIME_MANIFEST)" || return 1
+  runtime_image="$(_ecoda_runtime_require_manifest_value "${runtime_identity}" RUNTIME_IMAGE)" || return 1
+  identity_image_sha="$(_ecoda_runtime_require_manifest_value "${runtime_identity}" RUNTIME_IMAGE_SHA256)" || return 1
+  identity_manifest_sha="$(_ecoda_runtime_require_manifest_value "${runtime_identity}" RUNTIME_MANIFEST_SHA256)" || return 1
+  identity_image_size="$(_ecoda_runtime_require_manifest_value "${runtime_identity}" RUNTIME_IMAGE_SIZE)" || return 1
+  identity_manifest_size="$(_ecoda_runtime_require_manifest_value "${runtime_identity}" RUNTIME_MANIFEST_SIZE)" || return 1
+  runtime_manifest="$(_ecoda_runtime_require_manifest_value "${runtime_identity}" RUNTIME_MANIFEST)" || return 1
   [[ "${runtime_image}" = /* && "${runtime_manifest}" = /* &&
      -f "${runtime_manifest}" && ! -L "${runtime_manifest}" ]] || return 1
   if [[ -n "${ECODA_RUNTIME_IDENTITY:-}" ]]; then

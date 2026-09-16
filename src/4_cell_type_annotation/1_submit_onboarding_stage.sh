@@ -274,26 +274,6 @@ stage4_submit_watchdog() {
 }
 
 
-stage4_atomic_copy() {
-  local source="$1" destination="$2" parent tmp
-  [[ -f "${source}" && -r "${source}" ]] || return 1
-  parent="$(dirname "${destination}")"
-  mkdir -p "${parent}" || return 1
-  tmp="${destination}.tmp.$$"
-  cp "${source}" "${tmp}" || {
-    rm -f "${tmp}"
-    return 1
-  }
-  mv -f "${tmp}" "${destination}" || {
-    rm -f "${tmp}"
-    return 1
-  }
-}
-
-stage4_identity_value() {
-  local file="$1" key="$2"
-  sed -n "s/^${key}=//p" "${file}" | head -1
-}
 
 stage4_validate_snapshot_inputs() {
   local source_root="${ECODA_SOURCE_ROOT:-}"
@@ -321,7 +301,7 @@ stage4_validate_snapshot_inputs() {
 stage4_copy_new_source_manifest() {
   stage4_validate_snapshot_inputs || return 1
   if stage4_is_snapshot_mode; then
-    stage4_atomic_copy "${ECODA_SOURCE_MANIFEST}" \
+    ecoda_atomic_copy "${ECODA_SOURCE_MANIFEST}" \
       "${ECODA_RUN_ROOT}/manifests/source.manifest" || return 1
   fi
 }
@@ -341,7 +321,7 @@ stage4_record_run_identity_metadata() {
   for key in FORMAT SOURCE_ROOT SOURCE_COMMIT SOURCE_ARCHIVE_PATH \
     SOURCE_ARCHIVE_SHA256 CONFIG_HELPER_SHA256 DATASETS_SHA256 \
     PIXI_TOML_SHA256 PIXI_LOCK_SHA256 AUX_ROOT SCGATE_DB_BRANCH; do
-    value="$(stage4_identity_value "${source_manifest}" "${key}")"
+    value="$(_ecoda_runtime_require_manifest_value "${source_manifest}" "${key}")"
     [[ -n "${value}" ]] || {
       rm -f "${metadata_tmp}"
       return 1
@@ -361,7 +341,7 @@ stage4_record_run_identity_metadata() {
   for key in RUNTIME_IMAGE RUNTIME_MANIFEST RUNTIME_IMAGE_SHA256 \
     RUNTIME_MANIFEST_SHA256 RUNTIME_IMAGE_SIZE RUNTIME_MANIFEST_SIZE \
     IMAGE_PIXI_TOML_SHA256 IMAGE_PIXI_LOCK_SHA256; do
-    value="$(stage4_identity_value "${runtime_identity}" "${key}")"
+    value="$(_ecoda_runtime_require_manifest_value "${runtime_identity}" "${key}")"
     [[ -n "${value}" ]] || {
       rm -f "${metadata_tmp}"
       return 1
@@ -386,13 +366,13 @@ stage4_load_bound_identity() {
     echo "ERROR: legacy_source_unpinned: Stage 4 run lacks source/runtime identity manifests." >&2
     return 1
   }
-  source_root="$(stage4_identity_value "${source_copy}" SOURCE_ROOT)"
+  source_root="$(_ecoda_runtime_require_manifest_value "${source_copy}" SOURCE_ROOT)"
   [[ "${source_root}" = /* && "${source_root##*/}" == tree ]] || return 1
   expected_source_manifest="${source_root%/tree}/identity/source.manifest"
   [[ -f "${expected_source_manifest}" && -r "${expected_source_manifest}" ]] || return 1
   cmp -s "${source_copy}" "${expected_source_manifest}" || return 1
-  runtime_image="$(stage4_identity_value "${runtime_identity}" RUNTIME_IMAGE)"
-  runtime_manifest="$(stage4_identity_value "${runtime_identity}" RUNTIME_MANIFEST)"
+  runtime_image="$(_ecoda_runtime_require_manifest_value "${runtime_identity}" RUNTIME_IMAGE)"
+  runtime_manifest="$(_ecoda_runtime_require_manifest_value "${runtime_identity}" RUNTIME_MANIFEST)"
   [[ "${runtime_image}" = /* && "${runtime_manifest}" = /* ]] || return 1
   export ECODA_SOURCE_ROOT="${source_root}"
   export ECODA_SOURCE_MANIFEST="${expected_source_manifest}"

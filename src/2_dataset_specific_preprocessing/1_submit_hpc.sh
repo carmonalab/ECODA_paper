@@ -170,42 +170,6 @@ stage2_abort() {
   exit 1
 }
 
-stage2_manifest_value() {
-  local manifest="$1"
-  local key="$2"
-  local value
-  [[ -f "${manifest}" && ! -L "${manifest}" ]] || return 1
-  value="$(awk -v wanted="${key}" '
-    index($0, wanted "=") == 1 {
-      count++
-      result = substr($0, length(wanted) + 2)
-    }
-    END {
-      if (count != 1) exit 1
-      print result
-    }
-  ' "${manifest}")" || return 1
-  [[ -n "${value}" ]] || return 1
-  printf '%s\n' "${value}"
-}
-
-stage2_copy_atomic() {
-  local source="$1"
-  local destination="$2"
-  local tmp
-  [[ -f "${source}" && ! -L "${source}" && -r "${source}" ]] || return 1
-  mkdir -p "$(dirname "${destination}")" || return 1
-  tmp="${destination}.tmp.$$"
-  rm -f "${tmp}"
-  cp "${source}" "${tmp}" || {
-    rm -f "${tmp}"
-    return 1
-  }
-  mv -f "${tmp}" "${destination}" || {
-    rm -f "${tmp}"
-    return 1
-  }
-}
 
 stage2_load_bound_run() {
   local source_manifest="${ECODA_RUN_ROOT}/manifests/source.manifest"
@@ -215,15 +179,15 @@ stage2_load_bound_run() {
   [[ -f "${source_manifest}" && ! -L "${source_manifest}" &&
      -r "${source_manifest}" ]] || return 2
   [[ -f "${identity}" && ! -L "${identity}" && -r "${identity}" ]] || return 2
-  source_root="$(stage2_manifest_value "${source_manifest}" SOURCE_ROOT)" || return 1
+  source_root="$(_ecoda_runtime_require_manifest_value "${source_manifest}" SOURCE_ROOT)" || return 1
   [[ "${source_root}" = /* && "${source_root}" == */tree ]] || return 1
   snapshot_root="${source_root%/tree}"
   source_manifest_original="${snapshot_root}/identity/source.manifest"
   [[ -f "${source_manifest_original}" && ! -L "${source_manifest_original}" &&
      -r "${source_manifest_original}" ]] || return 1
   cmp -s "${source_manifest}" "${source_manifest_original}" || return 1
-  runtime_image="$(stage2_manifest_value "${identity}" RUNTIME_IMAGE)" || return 1
-  runtime_manifest="$(stage2_manifest_value "${identity}" RUNTIME_MANIFEST)" || return 1
+  runtime_image="$(_ecoda_runtime_require_manifest_value "${identity}" RUNTIME_IMAGE)" || return 1
+  runtime_manifest="$(_ecoda_runtime_require_manifest_value "${identity}" RUNTIME_MANIFEST)" || return 1
   [[ "${runtime_image}" = /* && "${runtime_manifest}" = /* ]] || return 1
   SOURCE_ROOT="${source_root}"
   SOURCE_MANIFEST_ORIGINAL="${source_manifest_original}"
@@ -248,23 +212,23 @@ stage2_record_identity_metadata() {
   local source_toml source_lock source_aux source_branch tmp
   local runtime_image runtime_manifest image_sha manifest_sha image_size manifest_size
   local image_toml image_lock
-  source_commit="$(stage2_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_COMMIT)" || return 1
-  source_archive="$(stage2_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ARCHIVE_PATH)" || return 1
-  source_archive_sha="$(stage2_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ARCHIVE_SHA256)" || return 1
-  source_config="$(stage2_manifest_value "${SOURCE_MANIFEST_RUN}" CONFIG_HELPER_SHA256)" || return 1
-  source_datasets="$(stage2_manifest_value "${SOURCE_MANIFEST_RUN}" DATASETS_SHA256)" || return 1
-  source_toml="$(stage2_manifest_value "${SOURCE_MANIFEST_RUN}" PIXI_TOML_SHA256)" || return 1
-  source_lock="$(stage2_manifest_value "${SOURCE_MANIFEST_RUN}" PIXI_LOCK_SHA256)" || return 1
-  source_aux="$(stage2_manifest_value "${SOURCE_MANIFEST_RUN}" AUX_ROOT)" || return 1
-  source_branch="$(stage2_manifest_value "${SOURCE_MANIFEST_RUN}" SCGATE_DB_BRANCH)" || return 1
-  runtime_image="$(stage2_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE)" || return 1
-  runtime_manifest="$(stage2_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST)" || return 1
-  image_sha="$(stage2_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SHA256)" || return 1
-  manifest_sha="$(stage2_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SHA256)" || return 1
-  image_size="$(stage2_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SIZE)" || return 1
-  manifest_size="$(stage2_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SIZE)" || return 1
-  image_toml="$(stage2_manifest_value "${RUNTIME_IDENTITY}" IMAGE_PIXI_TOML_SHA256 2>/dev/null || true)"
-  image_lock="$(stage2_manifest_value "${RUNTIME_IDENTITY}" IMAGE_PIXI_LOCK_SHA256 2>/dev/null || true)"
+  source_commit="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_COMMIT)" || return 1
+  source_archive="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ARCHIVE_PATH)" || return 1
+  source_archive_sha="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ARCHIVE_SHA256)" || return 1
+  source_config="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" CONFIG_HELPER_SHA256)" || return 1
+  source_datasets="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" DATASETS_SHA256)" || return 1
+  source_toml="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" PIXI_TOML_SHA256)" || return 1
+  source_lock="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" PIXI_LOCK_SHA256)" || return 1
+  source_aux="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" AUX_ROOT)" || return 1
+  source_branch="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" SCGATE_DB_BRANCH)" || return 1
+  runtime_image="$(_ecoda_runtime_require_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE)" || return 1
+  runtime_manifest="$(_ecoda_runtime_require_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST)" || return 1
+  image_sha="$(_ecoda_runtime_require_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SHA256)" || return 1
+  manifest_sha="$(_ecoda_runtime_require_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SHA256)" || return 1
+  image_size="$(_ecoda_runtime_require_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SIZE)" || return 1
+  manifest_size="$(_ecoda_runtime_require_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SIZE)" || return 1
+  image_toml="$(_ecoda_runtime_manifest_value "${RUNTIME_IDENTITY}" IMAGE_PIXI_TOML_SHA256 2>/dev/null || true)"
+  image_lock="$(_ecoda_runtime_manifest_value "${RUNTIME_IDENTITY}" IMAGE_PIXI_LOCK_SHA256 2>/dev/null || true)"
   tmp="${ECODA_RUN_ROOT}/metadata.tmp.$$"
   {
     cat "${ECODA_RUN_ROOT}/metadata"
@@ -595,9 +559,9 @@ ecoda_init_run stage2 "${RUN_ID}" >/dev/null ||
 export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT="${ECODA_RUN_ROOT}"
 SOURCE_MANIFEST_RUN="${ECODA_RUN_ROOT}/manifests/source.manifest"
 RUNTIME_IDENTITY="${ECODA_RUN_ROOT}/manifests/runtime.identity"
-stage2_copy_atomic "${SOURCE_MANIFEST_ORIGINAL}" "${SOURCE_MANIFEST_RUN}" ||
+ecoda_atomic_copy "${SOURCE_MANIFEST_ORIGINAL}" "${SOURCE_MANIFEST_RUN}" ||
   stage2_abort "failed to copy immutable Stage 2 source manifest"
-manifest_source_root="$(stage2_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ROOT)" ||
+manifest_source_root="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ROOT)" ||
   stage2_abort "Stage 2 source manifest is malformed"
 [[ "${manifest_source_root}" == "${SOURCE_ROOT}" ]] ||
   stage2_abort "Stage 2 source manifest does not match executor source root"

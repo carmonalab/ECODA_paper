@@ -132,41 +132,6 @@ if [[ "${ECODA_SOURCE_ROOT:-}" = */tree &&
   DATASETS_JSON_FILE="${ECODA_SOURCE_ROOT}/datasets.json"
   export DATASETS_JSON_FILE
 fi
-stage3_manifest_value() {
-  local manifest="$1" key="$2" value
-  [[ -f "${manifest}" && ! -L "${manifest}" && -r "${manifest}" ]] || return 1
-  value="$(awk -v wanted="${key}" '
-    index($0, wanted "=") == 1 {
-      count++
-      result=substr($0, length(wanted) + 2)
-    }
-    END {
-      if (count != 1 || result == "") exit 1
-      print result
-    }
-  ' "${manifest}")" || return 1
-  printf '%s\n' "${value}"
-}
-
-stage3_copy_atomic() {
-  local source="$1" destination="$2" temporary
-  [[ -f "${source}" && ! -L "${source}" && -r "${source}" ]] || return 1
-  mkdir -p "$(dirname "${destination}")" || return 1
-  temporary="${destination}.build.$$"
-  rm -f "${temporary}"
-  cp "${source}" "${temporary}" || {
-    rm -f "${temporary}"
-    return 1
-  }
-  chmod 600 "${temporary}" || {
-    rm -f "${temporary}"
-    return 1
-  }
-  mv -f "${temporary}" "${destination}" || {
-    rm -f "${temporary}"
-    return 1
-  }
-}
 
 stage3_load_bound_run() {
   local source_copy="${ECODA_RUN_ROOT:-}/manifests/source.manifest"
@@ -178,9 +143,9 @@ stage3_load_bound_run() {
   [[ -s "${runtime_identity}" && ! -L "${runtime_identity}" && -r "${runtime_identity}" ]] || return 2
   ecoda_validate_run_owned_path "${source_copy}" "${ECODA_RUN_ROOT}" || return 1
   ecoda_validate_run_owned_path "${runtime_identity}" "${ECODA_RUN_ROOT}" || return 1
-  source_format="$(stage3_manifest_value "${source_copy}" FORMAT)" || return 1
+  source_format="$(_ecoda_runtime_require_manifest_value "${source_copy}" FORMAT)" || return 1
   [[ "${source_format}" == "1" ]] || return 1
-  source_root="$(stage3_manifest_value "${source_copy}" SOURCE_ROOT)" || return 1
+  source_root="$(_ecoda_runtime_require_manifest_value "${source_copy}" SOURCE_ROOT)" || return 1
   [[ "${source_root}" = /* && "${source_root}" == */tree ]] || return 1
   snapshot_root="${source_root%/tree}"
   source_manifest_original="${snapshot_root}/identity/source.manifest"
@@ -190,8 +155,8 @@ stage3_load_bound_run() {
     echo "ERROR: run-owned Stage 3 source manifest differs from immutable snapshot." >&2
     return 1
   }
-  runtime_image="$(stage3_manifest_value "${runtime_identity}" RUNTIME_IMAGE)" || return 1
-  runtime_manifest="$(stage3_manifest_value "${runtime_identity}" RUNTIME_MANIFEST)" || return 1
+  runtime_image="$(_ecoda_runtime_require_manifest_value "${runtime_identity}" RUNTIME_IMAGE)" || return 1
+  runtime_manifest="$(_ecoda_runtime_require_manifest_value "${runtime_identity}" RUNTIME_MANIFEST)" || return 1
   [[ "${runtime_image}" = /* && "${runtime_manifest}" = /* ]] || return 1
   identity_count="$(wc -l < "${runtime_identity}" | tr -d '[:space:]')" || return 1
   runtime_format="$(_ecoda_runtime_manifest_value "${runtime_manifest}" FORMAT 2>/dev/null || true)"
@@ -219,7 +184,7 @@ stage3_load_bound_run() {
   export PROJECT_ROOT DATASETS_JSON_FILE
   LOGS_DIR="${ECODA_LOGS_DIR:-${LOGS_DIR:-${ECODA_RUN_ROOT}/logs}}"
   export LOGS_DIR ECODA_LOGS_DIR="${LOGS_DIR}"
-  bound_input_producer="$(stage3_manifest_value "${ECODA_RUN_ROOT}/metadata" INPUT_PRODUCER_RUN_ID 2>/dev/null || true)"
+  bound_input_producer="$(_ecoda_runtime_manifest_value "${ECODA_RUN_ROOT}/metadata" INPUT_PRODUCER_RUN_ID 2>/dev/null || true)"
   [[ -n "${bound_input_producer}" ]] && STAGE3_INPUT_PRODUCER_RUN_ID="${bound_input_producer}"
   return 0
 }
@@ -229,23 +194,23 @@ stage3_record_identity_metadata() {
   local source_toml source_lock source_aux source_branch key value tmp
   local runtime_image runtime_manifest image_sha manifest_sha image_size manifest_size
   local image_toml image_lock
-  source_commit="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_COMMIT)" || return 1
-  source_archive="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ARCHIVE_PATH)" || return 1
-  source_archive_sha="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ARCHIVE_SHA256)" || return 1
-  source_config="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" CONFIG_HELPER_SHA256)" || return 1
-  source_datasets="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" DATASETS_SHA256)" || return 1
-  source_toml="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" PIXI_TOML_SHA256)" || return 1
-  source_lock="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" PIXI_LOCK_SHA256)" || return 1
-  source_aux="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" AUX_ROOT)" || return 1
-  source_branch="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SCGATE_DB_BRANCH)" || return 1
-  runtime_image="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE)" || return 1
-  runtime_manifest="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST)" || return 1
-  image_sha="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SHA256)" || return 1
-  manifest_sha="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SHA256)" || return 1
-  image_size="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SIZE)" || return 1
-  manifest_size="$(stage3_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SIZE)" || return 1
-  image_toml="$(stage3_manifest_value "${RUNTIME_IDENTITY}" IMAGE_PIXI_TOML_SHA256 2>/dev/null || true)"
-  image_lock="$(stage3_manifest_value "${RUNTIME_IDENTITY}" IMAGE_PIXI_LOCK_SHA256 2>/dev/null || true)"
+  source_commit="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_COMMIT)" || return 1
+  source_archive="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ARCHIVE_PATH)" || return 1
+  source_archive_sha="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ARCHIVE_SHA256)" || return 1
+  source_config="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" CONFIG_HELPER_SHA256)" || return 1
+  source_datasets="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" DATASETS_SHA256)" || return 1
+  source_toml="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" PIXI_TOML_SHA256)" || return 1
+  source_lock="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" PIXI_LOCK_SHA256)" || return 1
+  source_aux="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" AUX_ROOT)" || return 1
+  source_branch="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" SCGATE_DB_BRANCH)" || return 1
+  runtime_image="$(_ecoda_runtime_require_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE)" || return 1
+  runtime_manifest="$(_ecoda_runtime_require_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST)" || return 1
+  image_sha="$(_ecoda_runtime_require_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SHA256)" || return 1
+  manifest_sha="$(_ecoda_runtime_require_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SHA256)" || return 1
+  image_size="$(_ecoda_runtime_require_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_IMAGE_SIZE)" || return 1
+  manifest_size="$(_ecoda_runtime_require_manifest_value "${RUNTIME_IDENTITY}" RUNTIME_MANIFEST_SIZE)" || return 1
+  image_toml="$(_ecoda_runtime_manifest_value "${RUNTIME_IDENTITY}" IMAGE_PIXI_TOML_SHA256 2>/dev/null || true)"
+  image_lock="$(_ecoda_runtime_manifest_value "${RUNTIME_IDENTITY}" IMAGE_PIXI_LOCK_SHA256 2>/dev/null || true)"
   tmp="${ECODA_RUN_ROOT}/metadata.build.$$"
   {
     cat "${ECODA_RUN_ROOT}/metadata"
@@ -378,7 +343,7 @@ stage3_validate_alzheimer_input_dependency() {
     echo "ERROR: Alzheimer Stage 2 producer run root is missing: ${producer}" >&2
     return 1
   }
-  [[ "$(stage3_manifest_value "${producer_root}/metadata" STAGE 2>/dev/null || true)" == "stage2" ]] || {
+  [[ "$(_ecoda_runtime_manifest_value "${producer_root}/metadata" STAGE 2>/dev/null || true)" == "stage2" ]] || {
     echo "ERROR: Alzheimer producer run is not a Stage 2 run: ${producer}" >&2
     return 1
   }
@@ -473,10 +438,10 @@ stage3_install_source_manifest() {
   local incoming="${ECODA_SOURCE_MANIFEST:-}"
   local destination="${ECODA_RUN_ROOT}/manifests/source.manifest"
   stage3_require_new_snapshot || return 1
-  stage3_copy_atomic "${incoming}" "${destination}" || return 1
+  ecoda_atomic_copy "${incoming}" "${destination}" 600 || return 1
   ecoda_validate_run_owned_path "${destination}" "${ECODA_RUN_ROOT}" || return 1
-  [[ "$(stage3_manifest_value "${destination}" FORMAT)" == "1" ]] || return 1
-  [[ "$(stage3_manifest_value "${destination}" SOURCE_ROOT)" == "${ECODA_SOURCE_ROOT}" ]] ||
+  [[ "$(_ecoda_runtime_require_manifest_value "${destination}" FORMAT)" == "1" ]] || return 1
+  [[ "$(_ecoda_runtime_require_manifest_value "${destination}" SOURCE_ROOT)" == "${ECODA_SOURCE_ROOT}" ]] ||
     return 1
   cmp -s "${destination}" "${incoming}" || return 1
 }
@@ -649,7 +614,7 @@ stage3_install_covid_obs_evidence() {
   for view in batch_effect_uncorrected batch_effect_corrected; do
     report="${source_root}/Covid19_PBMC_${view}.json"
     target="${destination}/$(basename "${report}")"
-    stage3_copy_atomic "${report}" "${target}" || {
+    ecoda_atomic_copy "${report}" "${target}" 600 || {
       rm -f "${tmp}"
       return 1
     }
@@ -815,7 +780,7 @@ stage3_validate_sync_report() {
   expected_rows="$(wc -l < "${MANIFEST}" | tr -d '[:space:]')" || return 1
   [[ "${report}" = /* && -f "${report}" && ! -L "${report}" && -s "${report}" ]] || return 1
   ecoda_validate_checksum "${report}" >/dev/null || return 1
-  source_run_root="$(stage3_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ROOT)" || return 1
+  source_run_root="$(_ecoda_runtime_require_manifest_value "${SOURCE_MANIFEST_RUN}" SOURCE_ROOT)" || return 1
   expected_original="${source_run_root%/tree}/identity/source.manifest"
   [[ "${SOURCE_MANIFEST_ORIGINAL}" == "${expected_original}" ]] || return 1
   ecoda_validate_run_owned_path "${report}" "${ECODA_RUN_ROOT}" || return 1
@@ -866,7 +831,7 @@ stage3_validate_sync_report() {
   validator_snapshot="${validator_source%/identity/source.manifest}"
   [[ -f "${validator_snapshot}/COMPLETE" &&
      ! -L "${validator_snapshot}/COMPLETE" ]] || return 1
-  validator_commit="$(stage3_manifest_value "${validator_source}" SOURCE_COMMIT)" ||
+  validator_commit="$(_ecoda_runtime_require_manifest_value "${validator_source}" SOURCE_COMMIT)" ||
     return 1
   report_validator_commit="$(stage3_sync_report_field "${report}" \
     '.validator_source_manifest.source_commit')" || return 1

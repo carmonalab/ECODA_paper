@@ -1163,6 +1163,39 @@ _ecoda_runtime_require_source_script() {
   esac
 }
 
+_ecoda_runtime_require_worker_entrypoint() {
+  local expected="${1:-}" caller="${2:-}"
+  local expected_real scheduled_command scheduled_script scheduled_real caller_real
+  [[ -n "${expected}" ]] || {
+    _ecoda_runtime_die "worker entrypoint is missing"
+    return 1
+  }
+  [[ "${ECODA_RUNTIME_IN_CONTAINER:-0}" == "1" ]] && return 0
+  expected_real="$(_ecoda_runtime_realpath_existing "${expected}")" || return 1
+  if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    command -v scontrol >/dev/null 2>&1 || {
+      _ecoda_runtime_die "scontrol is required to verify the immutable worker command"
+      return 1
+    }
+    scheduled_command="$(scontrol show job "${SLURM_JOB_ID}" -o 2>/dev/null || true)"
+    scheduled_script="${scheduled_command#*Command=}"
+    scheduled_script="${scheduled_script%% *}"
+    scheduled_real="$(_ecoda_runtime_realpath_existing \
+      "${scheduled_script}" 2>/dev/null || true)"
+    [[ -n "${scheduled_real}" && "${scheduled_real}" == "${expected_real}" ]] || {
+      _ecoda_runtime_die "Slurm worker command is not the immutable source worker"
+      return 1
+    }
+    return 0
+  fi
+  [[ -n "${caller}" ]] || return 0
+  caller_real="$(_ecoda_runtime_realpath_existing "${caller}" 2>/dev/null || true)"
+  [[ -n "${caller_real}" && "${caller_real}" == "${expected_real}" ]] || {
+    _ecoda_runtime_die "worker entrypoint is not the immutable source worker"
+    return 1
+  }
+}
+
 ecoda_runtime_reexec_worker() {
   local profile="${1:-}"
   local script="${2:-}"
@@ -1205,6 +1238,9 @@ ecoda_runtime_reexec_worker() {
       return 1
     }
   fi
+
+  _ecoda_runtime_require_worker_entrypoint "${script}" \
+    "${BASH_SOURCE[1]:-}" || return 1
 
   if [[ "${ECODA_RUNTIME_IN_CONTAINER:-0}" == "1" ]]; then
     if [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]]; then

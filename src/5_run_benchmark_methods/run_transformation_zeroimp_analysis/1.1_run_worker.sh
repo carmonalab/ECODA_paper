@@ -42,32 +42,6 @@ SNAPSHOT_WORKER="${SOURCE_ROOT%/}/${WORKER_SOURCE_RELATIVE}"
   echo "ERROR: immutable Stage 5 worker is missing or unreadable: ${SNAPSHOT_WORKER}" >&2
   exit 1
 }
-command -v realpath >/dev/null 2>&1 || {
-  echo "ERROR: realpath is required for immutable Stage 5 workers." >&2
-  exit 1
-}
-SNAPSHOT_WORKER_REAL="$(realpath "${SNAPSHOT_WORKER}" 2>/dev/null || true)"
-if [[ -n "${SLURM_JOB_ID:-}" &&
-      "${ECODA_RUNTIME_IN_CONTAINER:-0}" != "1" ]]; then
-  command -v scontrol >/dev/null 2>&1 || {
-    echo "ERROR: scontrol is required to verify the immutable worker command." >&2
-    exit 1
-  }
-  SCHEDULED_COMMAND="$(scontrol show job "${SLURM_JOB_ID}" -o 2>/dev/null || true)"
-  SCHEDULED_SCRIPT="${SCHEDULED_COMMAND#*Command=}"
-  SCHEDULED_SCRIPT="${SCHEDULED_SCRIPT%% *}"
-  SCHEDULED_SCRIPT_REAL="$(realpath "${SCHEDULED_SCRIPT}" 2>/dev/null || true)"
-  [[ -n "${SCHEDULED_SCRIPT_REAL}" && "${SCHEDULED_SCRIPT_REAL}" == "${SNAPSHOT_WORKER_REAL}" ]] || {
-    echo "ERROR: mutable or non-snapshot Stage 5 worker command rejected." >&2
-    exit 1
-  }
-else
-  CURRENT_SCRIPT_REAL="$(realpath "${BASH_SOURCE[0]}" 2>/dev/null || true)"
-  [[ -n "${CURRENT_SCRIPT_REAL}" && "${CURRENT_SCRIPT_REAL}" == "${SNAPSHOT_WORKER_REAL}" ]] || {
-    echo "ERROR: mutable or non-snapshot Stage 5 worker path rejected." >&2
-    exit 1
-  }
-fi
 source "${SOURCE_ROOT%/}/src/slurm_config.sh"
 source "${SOURCE_ROOT%/}/src/utils/bash/ecoda_runtime.sh"
 export ECODA_SOURCE_ROOT="${SOURCE_ROOT}"

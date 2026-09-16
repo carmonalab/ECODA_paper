@@ -152,6 +152,32 @@ ecoda_atomic_write() {
   printf '%b' "${content}" > "${tmp}"
   mv -f "${tmp}" "${destination}"
 }
+ecoda_atomic_copy() {
+  local source="$1" destination="$2" mode="${3:-}" parent tmp
+  [[ -f "${source}" && ! -L "${source}" && -r "${source}" ]] || {
+    _ecoda_die "atomic-copy source is missing or unsafe: ${source}"
+    return 1
+  }
+  parent="$(dirname "${destination}")"
+  mkdir -p "${parent}" || return 1
+  tmp="${destination}.tmp.$$"
+  rm -f "${tmp}"
+  cp "${source}" "${tmp}" || {
+    rm -f "${tmp}"
+    return 1
+  }
+  if [[ -n "${mode}" ]]; then
+    chmod "${mode}" "${tmp}" || {
+      rm -f "${tmp}"
+      return 1
+    }
+  fi
+  mv -f "${tmp}" "${destination}" || {
+    rm -f "${tmp}"
+    return 1
+  }
+}
+
 
 ecoda_atomic_install_manifest() {
   local source="$1"

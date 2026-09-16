@@ -4,8 +4,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -n "${SLURM_JOB_ID:-}" ]]; then
-  SCRIPT_DIR="$(dirname "$(scontrol show job "${SLURM_JOB_ID}" -o | grep -o 'Command=[^ ]*' | head -1 | cut -d= -f2)")"
+if [[ ! -f "${SCRIPT_DIR}/../slurm_config.sh" ]]; then
+  if [[ -n "${ECODA_SOURCE_ROOT:-}" &&
+        -f "${ECODA_SOURCE_ROOT}/src/slurm_config.sh" ]]; then
+    SCRIPT_DIR="${ECODA_SOURCE_ROOT}/src/2_dataset_specific_preprocessing"
+  elif [[ -n "${SLURM_SUBMIT_DIR:-}" &&
+          -f "${SLURM_SUBMIT_DIR}/src/slurm_config.sh" ]]; then
+    SCRIPT_DIR="${SLURM_SUBMIT_DIR}/src/2_dataset_specific_preprocessing"
+  fi
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
@@ -86,24 +92,6 @@ stage2_step_retry_memory() {
 }
 
 
-stage2_manifest_value() {
-  local manifest="$1"
-  local key="$2"
-  local value
-  [[ -f "${manifest}" && ! -L "${manifest}" ]] || return 1
-  value="$(awk -v wanted="${key}" '
-    index($0, wanted "=") == 1 {
-      count++
-      result = substr($0, length(wanted) + 2)
-    }
-    END {
-      if (count != 1) exit 1
-      print result
-    }
-  ' "${manifest}")" || return 1
-  [[ -n "${value}" ]] || return 1
-  printf '%s\n' "${value}"
-}
 
 stage2_load_bound_run() {
   local source_manifest="${RUN_ROOT}/manifests/source.manifest"
@@ -113,15 +101,15 @@ stage2_load_bound_run() {
   [[ -f "${source_manifest}" && ! -L "${source_manifest}" &&
      -r "${source_manifest}" ]] || return 2
   [[ -f "${identity}" && ! -L "${identity}" && -r "${identity}" ]] || return 2
-  source_root="$(stage2_manifest_value "${source_manifest}" SOURCE_ROOT)" || return 1
+  source_root="$(_ecoda_runtime_require_manifest_value "${source_manifest}" SOURCE_ROOT)" || return 1
   [[ "${source_root}" = /* && "${source_root}" == */tree ]] || return 1
   snapshot_root="${source_root%/tree}"
   source_manifest_original="${snapshot_root}/identity/source.manifest"
   [[ -f "${source_manifest_original}" && ! -L "${source_manifest_original}" &&
      -r "${source_manifest_original}" ]] || return 1
   cmp -s "${source_manifest}" "${source_manifest_original}" || return 1
-  runtime_image="$(stage2_manifest_value "${identity}" RUNTIME_IMAGE)" || return 1
-  runtime_manifest="$(stage2_manifest_value "${identity}" RUNTIME_MANIFEST)" || return 1
+  runtime_image="$(_ecoda_runtime_require_manifest_value "${identity}" RUNTIME_IMAGE)" || return 1
+  runtime_manifest="$(_ecoda_runtime_require_manifest_value "${identity}" RUNTIME_MANIFEST)" || return 1
   [[ "${runtime_image}" = /* && "${runtime_manifest}" = /* ]] || return 1
   SOURCE_ROOT="${source_root}"
   SOURCE_MANIFEST_ORIGINAL="${source_manifest_original}"

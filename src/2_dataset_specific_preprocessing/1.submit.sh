@@ -99,15 +99,6 @@ WORKER_SCRIPT="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/${WORKER_RELA
 [[ -f "${WORKER_SCRIPT}" && ! -L "${WORKER_SCRIPT}" && -r "${WORKER_SCRIPT}" ]] ||
   fail "scientific Stage 2 worker is missing from the source snapshot: ${WORKER_SCRIPT}"
 
-if [[ -n "${SLURM_JOB_ID:-}" && "${ECODA_RUNTIME_IN_CONTAINER:-0}" != "1" ]]; then
-  command -v scontrol >/dev/null 2>&1 ||
-    fail "scontrol is required to verify the immutable Stage 2 worker boundary"
-  SCHEDULER_SCRIPT="$(scontrol show job "${SLURM_JOB_ID}" -o |
-    grep -o 'Command=[^ ]*' | head -1 | cut -d= -f2)" ||
-    fail "could not recover Stage 2 worker script from Slurm"
-  [[ "${SCHEDULER_SCRIPT}" == "${GENERIC_SCRIPT}" ]] ||
-    fail "Slurm worker command is not the immutable generic Stage 2 boundary"
-fi
 
 export ECODA_RUN_ROOT="${RUN_ROOT}" ECODA_RUN_ID="${RUN_ID}"
 IDENTITY_IMAGE="$(_ecoda_runtime_require_identity_value "${RUN_RUNTIME_IDENTITY}" RUNTIME_IMAGE)" || exit 1

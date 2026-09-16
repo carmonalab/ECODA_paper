@@ -5,8 +5,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -n "${SLURM_JOB_ID:-}" ]]; then
-  SCRIPT_DIR="$(dirname "$(scontrol show job "${SLURM_JOB_ID}" -o | grep -o 'Command=[^ ]*' | head -1 | cut -d= -f2)")"
+if [[ ! -f "${SCRIPT_DIR}/../slurm_config.sh" ]]; then
+  if [[ -n "${ECODA_SOURCE_ROOT:-}" &&
+        -f "${ECODA_SOURCE_ROOT}/src/slurm_config.sh" ]]; then
+    SCRIPT_DIR="${ECODA_SOURCE_ROOT}/src/4_cell_type_annotation"
+  elif [[ -n "${SLURM_SUBMIT_DIR:-}" &&
+          -f "${SLURM_SUBMIT_DIR}/src/slurm_config.sh" ]]; then
+    SCRIPT_DIR="${SLURM_SUBMIT_DIR}/src/4_cell_type_annotation"
+  fi
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
