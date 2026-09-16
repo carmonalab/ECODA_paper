@@ -5,6 +5,8 @@ script_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
 stopifnot(length(script_arg) == 1L)
 script_path <- normalizePath(sub("^--file=", "", script_arg), mustWork = TRUE)
 root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
+rscript <- file.path(root, ".pixi", "envs", "default", "bin", "Rscript")
+if (!file.exists(rscript)) stop("Pixi default Rscript not found: ", rscript)
 validator <- file.path(root, "src", "5_run_benchmark_methods", "validate_benchmark_rds_contract.R")
 RDS_TEST_ENV <- c(
   paste0("RETICULATE_PYTHON=", file.path(root, ".pixi", "envs", "default", "bin", "python"))
@@ -34,14 +36,14 @@ write_checked_text <- function(path, lines) {
 
 run_validator <- function(arguments) {
   system2(
-    "pixi", c("run", "Rscript", "--vanilla", validator, arguments),
+    rscript, c("--vanilla", validator, arguments),
     stdout = FALSE, stderr = FALSE, env = RDS_TEST_ENV
   )
 }
 
 run_validator_capture <- function(arguments) {
   output <- system2(
-    "pixi", c("run", "Rscript", "--vanilla", validator, arguments),
+    rscript, c("--vanilla", validator, arguments),
     stdout = TRUE, stderr = TRUE, env = RDS_TEST_ENV
   )
   status <- attr(output, "status")
