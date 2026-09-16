@@ -4,6 +4,13 @@ raw_args <- commandArgs(trailingOnly = FALSE)
 script_arg <- raw_args[grepl("^--file=", raw_args)][1]
 script_path <- sub("^--file=", "", script_arg)
 root <- normalizePath(file.path(dirname(script_path), ".."))
+reticulate_python <- file.path(
+  root, ".pixi", "envs", "default", "bin", "python"
+)
+if (!file.exists(reticulate_python)) {
+  stop("Pixi default Python not found: ", reticulate_python)
+}
+Sys.setenv(RETICULATE_PYTHON = reticulate_python)
 if (!nzchar(Sys.getenv("PROJECT_ROOT", unset = ""))) {
   Sys.setenv(PROJECT_ROOT = root)
 }
@@ -1703,7 +1710,7 @@ get_pb_deseq2_from_counts <- function(counts, metadata, ...) {
   if (max(counts) >= 400) stop("synthetic C normalization failure")
   sample_ids <- colnames(counts)
   matrix(
-    as.numeric(colSums(counts)),
+    as.numeric(colSums(as.matrix(counts))),
     nrow = length(sample_ids),
     ncol = 1L,
     dimnames = list(sample_ids, "score")
