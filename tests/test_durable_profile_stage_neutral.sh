@@ -49,7 +49,7 @@ done
 # The retained profile contracts remain stage-neutral: canonical roots and
 # wrapper presence are checked, while the durable gate owns exact-command
 # identity, one accounting query, and reviewer release.
-jq -e 'any(.policy.invariants[]; .name == "bamboo-repository-root")' "${PROFILE}" >/dev/null
+jq -e 'any(.policy.invariants[]; .name == "yggdrasil-repository-root")' "${PROFILE}" >/dev/null
 jq -e 'any(.policy.audit_commands[]; .name == "terminal-repository-root")' "${PROFILE}" >/dev/null
 jq -e 'any(.policy.audit_commands[]; .name == "terminal-canonical-artifact-roots")' "${PROFILE}" >/dev/null
 jq -e 'any(.policy.audit_commands[]; .name == "terminal-canonical-wrapper-set")' "${PROFILE}" >/dev/null
