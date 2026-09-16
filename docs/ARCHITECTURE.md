@@ -242,8 +242,8 @@ Per-dataset R Markdown notebooks performing study-specific initial quality contr
   validation, and atomic checksums. Stage 2 remains scratch-only and is not
   the cell-type annotation pipeline.
 - Hook outputs are installed atomically before the next numbered stage reads
-  them. Legacy source basenames are accepted only for guarded
-  content/checksum validation and one-time migration to the configured name.
+  them. Configured dataset basenames are authoritative; legacy source basenames
+  are not migrated.
 - Dataset-specific metadata-repair and conversion hooks are selected through
   explicit run-owned selectors and may use an obs-only reader to validate
   source contracts without replacing the raw input. Hook scope belongs in the

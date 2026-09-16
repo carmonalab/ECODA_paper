@@ -429,35 +429,6 @@ grep -q "script mismatch" "${TMP_DIR}/outside.sync.log"
 [[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == "${OUTSIDE_CALLS_BEFORE}" ]]
 
 
-# Guarded CombinedPBMC legacy-raw migration: valid content and sidecar move to
-# the canonical raw basename, with PATH rewritten and no duplicate left.
-COMBINED_DIR="${TMP_DIR}/home/scratch/ECODA_paper/CombinedPBMC/data"
-mkdir -p "${COMBINED_DIR}"
-OLD="${COMBINED_DIR}/combined_pbmc_batch_effect_analysis.h5ad"
-NEW="${COMBINED_DIR}/combined_pbmc.h5ad"
-pixi run python -c 'import anndata as ad,numpy as np,pandas as pd,scipy.sparse as sp,sys; a=ad.AnnData(X=sp.csr_matrix([[1,0],[0,2]],dtype="float32"),obs=pd.DataFrame({"Sample":["s1","s2"],"cond":["Healthy","Healthy"],"batch":["A","B"]},index=["c1","c2"]),var=pd.DataFrame(index=["g1","g2"])); a.write_h5ad(sys.argv[1])' "${OLD}"
-digest="$(md5sum "${OLD}" | cut -d' ' -f1)"
-printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${digest}" "$(wc -c < "${OLD}" | tr -d '[:space:]')" "${OLD}" > "${OLD}.md5"
-rm -rf "${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_owners"
-: > "${CAPTURE}"
-MIGRATION_RUN_ID="stage2_submitter_migration"
-export ECODA_RUN_ID="${MIGRATION_RUN_ID}"
-export EXPECT_RUN_ID="${MIGRATION_RUN_ID}"
-export EXPECT_RUN_ROOT="${RUNS_ROOT}/${MIGRATION_RUN_ID}"
-export STAGE2_RUN_ROOT="${RUNS_ROOT}/${MIGRATION_RUN_ID}"
-HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
-  STAGE2_SUBMITTER_TEST=1 bash "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1_submit_hpc.sh" \
-  --datasets CombinedPBMC --steps combinedpbmc >/dev/null
-[[ -s "${NEW}" && -s "${NEW}.md5" ]]
-[[ ! -e "${OLD}" && ! -e "${OLD}.md5" ]]
-grep -q "^PATH=${NEW}$" "${NEW}.md5"
-MIGRATION_ROOT="${RUNS_ROOT}/${MIGRATION_RUN_ID}"
-export ECODA_LOGS_DIR="${MIGRATION_ROOT}/logs"
-export ECODA_RUNTIME_IMAGE_SHA256="${IMAGE_SHA}"
-export ECODA_RUNTIME_MANIFEST_SHA256="${RUNTIME_MANIFEST_SHA}"
-export ECODA_RUNTIME_IMAGE_SIZE="${IMAGE_SIZE}"
-export ECODA_RUNTIME_MANIFEST_SIZE="${RUNTIME_MANIFEST_SIZE}"
-
 # Hook-level force propagation with a temporary slurm_config/python stub.
 HOOK_ROOT="${TMP_DIR}/hook-project"
 mkdir -p "${HOOK_ROOT}/src/2_dataset_specific_preprocessing" "${HOOK_ROOT}/src/utils/bash" "${HOOK_ROOT}/bin"
@@ -468,6 +439,11 @@ printf 'PROJECT_ROOT="%s"\nPYTHON_BIN="%s/bin/python"\n' "${HOOK_ROOT}" "${HOOK_
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" > "%s/force.args"\n' "${HOOK_ROOT}" > "${HOOK_ROOT}/bin/python"
 printf '#!/bin/bash\n: > "%s/module.called"\n' "${HOOK_ROOT}" > "${HOOK_ROOT}/bin/module"
 chmod +x "${HOOK_ROOT}/bin/python" "${HOOK_ROOT}/bin/module"
+export ECODA_RUN_ID="${SUBMIT_RUN_ID}" ECODA_RUN_ROOT="${SUBMIT_ROOT}"
+export ECODA_RUNTIME_IMAGE_SHA256="${IMAGE_SHA}" \
+  ECODA_RUNTIME_MANIFEST_SHA256="${RUNTIME_MANIFEST_SHA}" \
+  ECODA_RUNTIME_IMAGE_SIZE="${IMAGE_SIZE}" \
+  ECODA_RUNTIME_MANIFEST_SIZE="${RUNTIME_MANIFEST_SIZE}"
 HOME="${TMP_DIR}/home" FORCE_PREPROCESS=1 HOOK_FORCE_FILE="${HOOK_ROOT}/force.args" \
   ECODA_RUNTIME_MODE=host ECODA_RUNTIME_IN_CONTAINER=0 \
   bash "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/1.5_submit_myocardial.sh"

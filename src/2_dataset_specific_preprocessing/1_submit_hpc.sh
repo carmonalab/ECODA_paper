@@ -568,44 +568,6 @@ JOB_FILE_TMP="${JOB_FILE}.build.$$"
 : > "${MANIFEST_TMP}"
 : > "${JOB_FILE_TMP}"
 
-
-combinedpbmc_raw_migrate() {
-  local data_dir="${HPC_SCRATCH_DIR}/CombinedPBMC/data"
-  local old_path="${data_dir}/combined_pbmc_batch_effect_analysis.h5ad"
-  local new_path="${data_dir}/combined_pbmc.h5ad"
-
-  if [[ -f "${old_path}" && ! -e "${new_path}" ]]; then
-    if ecoda_validate_checksum "${old_path}" &&
-       ecoda_validate_stage2_output combinedpbmc "${old_path}"; then
-      if ! cp "${old_path}" "${new_path}"; then
-        return 1
-      fi
-      if ! ecoda_write_checksum "${new_path}" ||
-         ! ecoda_validate_checksum_record "${new_path}" "${ECODA_CHECKSUM_MD5}" \
-           "${ECODA_CHECKSUM_SIZE}" ||
-         ! ecoda_validate_stage2_output combinedpbmc "${new_path}"; then
-        rm -f "${new_path}" "${new_path}.md5"
-        return 1
-      fi
-      if ! rm -f "${old_path}" "${old_path}.md5"; then
-        rm -f "${new_path}" "${new_path}.md5"
-        return 1
-      fi
-      echo "Migrated validated CombinedPBMC raw input to ${new_path}."
-    else
-      echo "Existing legacy CombinedPBMC raw input failed migration validation; regeneration required." >&2
-    fi
-  fi
-  if [[ -f "${new_path}" && -f "${old_path}" ]] &&
-     ecoda_validate_checksum "${new_path}" &&
-     ecoda_validate_stage2_output combinedpbmc "${new_path}"; then
-    rm -f "${old_path}" "${old_path}.md5"
-    echo "Removed duplicate legacy CombinedPBMC raw input after canonical validation."
-  fi
-}
-if [[ " ${SELECTED_STEPS[*]} " == *" combinedpbmc "* ]]; then
-  combinedpbmc_raw_migrate || stage2_abort "CombinedPBMC raw input migration failed"
-fi
 MEMORY_CURRENT="${MEMORY}"
 CAP_JOB_ID=""
 PENDING_STEPS=()
