@@ -348,23 +348,13 @@ BENCHMARK_GPU_ANY_VRAM_PER_GPU="${BENCHMARK_GPU_ANY_VRAM_PER_GPU:-}"
 # Backward-compatible name used by older callers/tests for the default class.
 BENCHMARK_GPU_ARRAY_THROTTLE="${BENCHMARK_GPU_ARRAY_THROTTLE:-${BENCHMARK_GPU_DEFAULT_ARRAY_THROTTLE}}"
 BENCHMARK_MEM="${BENCHMARK_MEM:-128G}"
-# Doubling ceiling for the benchmark submitters' OOM auto-escalation: an
-# OUT_OF_MEMORY task is re-submitted with doubled --mem (128G -> 256G -> 500G),
-# with the doubled value CLAMPED to this ceiling — a retry never requests
-# more memory than the nodes fit (500G = 512000 MB = exactly the pinned
-# shared-cpu node RAM, so it only schedules on a fully idle big node; 512G =
-# 524288 MB would never fit and would hang the retry PENDING forever, which
-# the submitter's squeue poll has no timeout for). OOM at the ceiling fails
-# closed with a per-task MaxRSS report. Env-overridable per command, e.g.
-# BENCHMARK_MEM_MAX=256G ./1_submit_hpc_array.sh.
+# Stage 5 matrix watchdogs retry only OUT_OF_MEMORY rows with doubled
+# --mem (128G -> 256G -> 500G), clamped to this ceiling so a retry never
+# requests more memory than the nodes fit. OOM at the ceiling fails closed
+# with the matrix watchdog's per-task report. Env-overridable per command,
+# e.g. BENCHMARK_MEM_MAX=256G ./1_submit_hpc_array.sh.
 BENCHMARK_MEM_MAX="${BENCHMARK_MEM_MAX:-500G}"
-# Compute-node watchdog jobs (watchdog_main.sh, one per method array): own the
-# terminal wait + OOM escalation so an SSH drop of the login tail cannot
-# interrupt escalation. 1 cpu / 2G jobs on the method's partition (no
-# constraint pin). WATCHDOG_TIME_LIMIT bounds them — the 12h default is the
-# shared-* partition MaxTime (the workers' #SBATCH --time=12:00:00 is the
-# partition max); a higher value is rejected by sbatch at submit time, so it
-# must never be set above the target partition's MaxTime.
+# Stage 5 matrix watchdog and aggregate gate jobs use this time limit.
 WATCHDOG_TIME_LIMIT="${WATCHDOG_TIME_LIMIT:-12:00:00}"
 
 # --- SLURM Configuration ---

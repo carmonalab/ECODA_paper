@@ -165,8 +165,7 @@ ${HPC_SCRATCH_DIR}/
 │   └── <variant-qualified>/      # active Stage 5 lane selected by the run contract
 
 ├── chunks_manifest_<pid>.txt     # Per-submission chunk manifests
-├── _worker_retries/              # Worker transient retry counters
-└── _benchmark_watchdog/          # SLURM watchdog status logs
+└── _worker_retries/              # Worker transient retry counters
 
 # Run ownership / manifests (scratch only)
 ${HPC_SCRATCH_DIR}/_ecoda_runs/<RUN_ID>/

@@ -702,8 +702,8 @@ if [[ "${PASS_ARG}" == corrected ]]; then
   stage5_validate_corrected_batch_selection || exit 1
 fi
 
-# Pass-sensitive helper paths (notably watchdog status roots) are resolved
-# only after --pass and --analysis-variant have been parsed and validated.
+# Pass-sensitive helper paths are resolved only after --pass and
+# --analysis-variant have been parsed and validated.
 stage5_configure_analysis_context() {
   case "${ANALYSIS_VARIANT_ARG:-}" in
     final)
@@ -939,7 +939,6 @@ stage5_bind_run_identity() {
   DATASETS_JSON_FILE="${PROJECT_ROOT}/datasets.json"
   export PROJECT_ROOT DATASETS_JSON_FILE
   SCRIPT_DIR="${PROJECT_ROOT}/src/5_run_benchmark_methods"
-  WATCHDOG_MAIN_SCRIPT="${SCRIPT_DIR}/watchdog_main.sh"
   ANALYSIS_MERGE_SCRIPT="${SCRIPT_DIR}/run_python_sample_embedding_methods/1.1.2_merge_execution_times.py"
 }
 
@@ -2334,11 +2333,6 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     stage5_validate_final_selection || stage5_abort "stored final selection is invalid"
     stage5_configure_analysis_context ||
       stage5_abort "stored Stage 5 analysis context is invalid"
-    case "${ANALYSIS_VARIANT_ARG}" in
-      final|corrected_final)
-        WATCHDOG_STATUS_DIR="${HPC_SCRATCH_DIR}/_batch_effect_watchdog/${ANALYSIS_VARIANT_ARG}"
-        ;;
-    esac
   fi
 else
   ecoda_init_run stage5 "${RUN_ID}" >/dev/null
