@@ -226,6 +226,53 @@ stage4_source_script() {
   local root="${ECODA_SOURCE_ROOT:-${PROJECT_ROOT}}"
   ecoda_require_source_script_path "${candidate}" "${root}"
 }
+if stage4_is_snapshot_mode; then
+  ecoda_require_source_script_path \
+    "${SCRIPT_DIR}/1_submit_onboarding_stage.sh" "${ECODA_SOURCE_ROOT}" >/dev/null || {
+    echo "ERROR: Stage 4 submitter is outside the immutable source root" >&2
+    exit 1
+  }
+fi
+
+stage4_submit_watchdog() {
+  local phase="$1" manifest="$2" array_id="$3" watchdog_memory="$4"
+  local retry_worker="$5" retry_manifest_env="$6" retry_manifest_stem="$7"
+  local retry_log_prefix="$8" retry_time_limit="$9" retry_exports="${10}"
+  local watchdog_log_prefix="${11}" output_prefix="${12}"
+  local watchdog_msg watchdog_rc watchdog_id
+  ecoda_validate_output_ownership stage4 "${WORK_MANIFEST}" "${RUN_ID}" 1 ||
+    stage4_abort "Stage 4 ${phase} watchdog ownership validation failed"
+  [[ -n "${retry_time_limit}" ]] || retry_time_limit="-"
+  [[ -n "${retry_exports}" ]] || retry_exports="-"
+  set +e
+  watchdog_msg="$(sbatch --parsable --wait --dependency="afterany:${array_id}" \
+    --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem="${watchdog_memory}" \
+    --time="${ANNOTATION_WATCHDOG_TIME_LIMIT:-12:00:00}" \
+    --output="${watchdog_log_prefix}_%j.log" \
+    --error="${watchdog_log_prefix}_%j.err" --mail-user="${USER_EMAIL}" \
+    --export="ALL,ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" \
+    "${STAGE4_WATCHDOG_SCRIPT}" "${phase}" "${RUN_ID}" "${manifest}" "${WORK_MANIFEST}" \
+    "${array_id}" "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}" \
+    "${retry_worker}" "${retry_manifest_env}" "${retry_manifest_stem}" \
+    "${retry_log_prefix}" "${retry_time_limit}" "${retry_exports}" \
+    "${STAGE4_OUTPUT_VALIDATOR_SCRIPT}")"
+  watchdog_rc=$?
+  set -e
+  watchdog_id="${watchdog_msg%%;*}"
+  if [[ "${watchdog_id}" =~ ^[0-9]+$ ]]; then
+    stage4_record_scheduler WATCHDOG "${watchdog_id}" ||
+      stage4_abort "failed to persist Stage 4 ${phase} watchdog ID"
+  fi
+  [[ ${watchdog_rc} -eq 0 && "${watchdog_id}" =~ ^[0-9]+$ ]] ||
+    stage4_abort "Stage 4 ${phase} watchdog submission or execution failed"
+  STAGE4_WATCHDOG_ID="${watchdog_id}"
+  echo "${output_prefix}_WATCHDOG_JOB_ID=${watchdog_id}"
+  if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
+    emit_watchdog_status_ids "${phase}" "${ECODA_RUN_ROOT}/status/${phase}_watchdog" ||
+      stage4_abort "Stage 4 ${phase} watchdog status missing"
+  fi
+}
+
 
 stage4_atomic_copy() {
   local source="$1" destination="$2" parent tmp
@@ -1022,6 +1069,13 @@ if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
   fi
 fi
 export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT="${ECODA_RUN_ROOT}"
+STAGE4_SOURCE_ROOT="${ECODA_SOURCE_ROOT:-${PROJECT_ROOT}}"
+STAGE4_WATCHDOG_SCRIPT="$(stage4_source_script \
+  "${STAGE4_SOURCE_ROOT}/src/4_cell_type_annotation/stage4_watchdog.sh")" ||
+  stage4_abort "Stage 4 watchdog is outside the immutable source root"
+STAGE4_OUTPUT_VALIDATOR_SCRIPT="$(stage4_source_script \
+  "${STAGE4_SOURCE_ROOT}/src/4_cell_type_annotation/stage4_validate_outputs.sh")" ||
+  stage4_abort "Stage 4 output validator is outside the immutable source root"
 if [[ ${SKIP_PREPARE} -eq 0 ]]; then
   prep_count="$(wc -l < "${PREP_MANIFEST}" | tr -d '[:space:]')"
   [[ "${prep_count}" =~ ^[1-9][0-9]*$ ]] || stage4_abort "Stage 4 preparation manifest is empty"
@@ -1029,7 +1083,7 @@ if [[ ${SKIP_PREPARE} -eq 0 ]]; then
   ecoda_validate_output_ownership stage4 "${WORK_MANIFEST}" "${RUN_ID}" 1 ||
     stage4_abort "Stage 4 preparation output ownership validation failed"
   prep_script="$(stage4_source_script \
-    "${SCRIPT_DIR}/1.2_prepare_chunks_worker.sh")" ||
+    "${STAGE4_SOURCE_ROOT}/src/4_cell_type_annotation/1.2_prepare_chunks_worker.sh")" ||
     stage4_abort "Stage 4 preparation worker is outside the immutable source root"
   set +e
   prep_msg="$(sbatch --parsable --array="1-${prep_count}%${THROTTLE}" --mem="${MEMORY}" --partition="${PARTITION}" \
@@ -1046,31 +1100,12 @@ if [[ ${SKIP_PREPARE} -eq 0 ]]; then
   [[ ${prep_rc} -eq 0 && "${PREP_ARRAY}" =~ ^[0-9]+$ ]] ||
     stage4_abort "Stage 4 preparation array submission failed"
   echo "ANNOTATION_PREP_ARRAY_JOB_ID=${PREP_ARRAY}"
-  ecoda_validate_output_ownership stage4 "${WORK_MANIFEST}" "${RUN_ID}" ||
-    stage4_abort "Stage 4 preparation watchdog ownership validation failed"
-  prep_watchdog_script="$(stage4_source_script \
-    "${SCRIPT_DIR}/1.3_prepare_chunks_watchdog.sh")" ||
-    stage4_abort "Stage 4 preparation watchdog is outside the immutable source root"
-  set +e
-  prep_watchdog_msg="$(sbatch --parsable --wait --dependency="afterany:${PREP_ARRAY}" --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem=2G \
-    --time="${ANNOTATION_WATCHDOG_TIME_LIMIT:-12:00:00}" --output="${LOGS_DIR}/4_annotation_prepare_watchdog_%j.log" \
-    --error="${LOGS_DIR}/4_annotation_prepare_watchdog_%j.err" --mail-user="${USER_EMAIL}" \
-    --export="ALL,ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" "${prep_watchdog_script}" "${RUN_ID}" "${PREP_MANIFEST}" \
-    "${PREP_ARRAY}" "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
-  prep_watchdog_rc=$?
-  set -e
-  PREP_WATCHDOG="${prep_watchdog_msg%%;*}"
-  if [[ "${PREP_WATCHDOG}" =~ ^[0-9]+$ ]]; then
-    stage4_record_scheduler WATCHDOG "${PREP_WATCHDOG}" ||
-      stage4_abort "failed to persist Stage 4 preparation watchdog ID"
-  fi
-  [[ ${prep_watchdog_rc} -eq 0 && "${PREP_WATCHDOG}" =~ ^[0-9]+$ ]] ||
-    stage4_abort "Stage 4 preparation watchdog submission or execution failed"
-  echo "ANNOTATION_PREP_WATCHDOG_JOB_ID=${PREP_WATCHDOG}"
-  if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
-    emit_watchdog_status_ids preparation "${ECODA_RUN_ROOT}/status/preparation_watchdog" ||
-      stage4_abort "Stage 4 preparation watchdog status missing"
-  fi
+  stage4_submit_watchdog preparation "${PREP_MANIFEST}" "${PREP_ARRAY}" 2G \
+    "${prep_script}" ANNOTATION_PREP_MANIFEST preparation \
+    "${LOGS_DIR}/4_annotation_prepare_retry" "" \
+    "ANNOTATION_TEST_MODE=0,FORCE_ANNOTATION=1" \
+    "${LOGS_DIR}/4_annotation_prepare_watchdog" ANNOTATION_PREP
+  PREP_WATCHDOG="${STAGE4_WATCHDOG_ID}"
 fi
 
 CHUNK_MANIFEST="${ECODA_RUN_ROOT}/manifests/chunks.tsv"
@@ -1113,7 +1148,7 @@ fi
 ecoda_validate_output_ownership stage4 "${WORK_MANIFEST}" "${RUN_ID}" 1 ||
   stage4_abort "Stage 4 annotation output ownership validation failed"
 annotation_script="$(stage4_source_script \
-  "${SCRIPT_DIR}/2.1_run_worker.sh")" ||
+  "${STAGE4_SOURCE_ROOT}/src/4_cell_type_annotation/2.1_run_worker.sh")" ||
   stage4_abort "Stage 4 annotation worker is outside the immutable source root"
 set +e
 annot_msg="$(sbatch --parsable --array="1-${TOTAL_CHUNKS}%${THROTTLE}" --mem="${MEMORY}" --time="${ANNOTATION_WORKER_TIME_LIMIT}" --partition="${PARTITION}" \
@@ -1130,31 +1165,12 @@ fi
 [[ ${annot_rc} -eq 0 && "${ANNOT_ARRAY}" =~ ^[0-9]+$ ]] ||
   stage4_abort "Stage 4 annotation array submission failed"
 echo "ANNOTATION_ARRAY_JOB_ID=${ANNOT_ARRAY}"
-ecoda_validate_output_ownership stage4 "${WORK_MANIFEST}" "${RUN_ID}" ||
-  stage4_abort "Stage 4 annotation watchdog ownership validation failed"
-annotation_watchdog_script="$(stage4_source_script \
-  "${SCRIPT_DIR}/1.2_annotation_watchdog.sh")" ||
-  stage4_abort "Stage 4 annotation watchdog is outside the immutable source root"
-set +e
-annot_watchdog_msg="$(sbatch --parsable --wait --dependency="afterany:${ANNOT_ARRAY}" --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem=2G \
-  --time="${ANNOTATION_WATCHDOG_TIME_LIMIT:-12:00:00}" --output="${LOGS_DIR}/4_cell_type_annotation_watchdog_%j.log" \
-  --error="${LOGS_DIR}/4_cell_type_annotation_watchdog_%j.err" --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" \
-  "${annotation_watchdog_script}" "${RUN_ID}" "${CHUNK_MANIFEST}" "${ANNOT_ARRAY}" \
-  "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
-annot_watchdog_rc=$?
-set -e
-ANNOT_WATCHDOG="${annot_watchdog_msg%%;*}"
-if [[ "${ANNOT_WATCHDOG}" =~ ^[0-9]+$ ]]; then
-  stage4_record_scheduler WATCHDOG "${ANNOT_WATCHDOG}" ||
-    stage4_abort "failed to persist Stage 4 annotation watchdog ID"
-fi
-[[ ${annot_watchdog_rc} -eq 0 && "${ANNOT_WATCHDOG}" =~ ^[0-9]+$ ]] ||
-  stage4_abort "Stage 4 annotation watchdog submission or execution failed"
-echo "ANNOTATION_WATCHDOG_JOB_ID=${ANNOT_WATCHDOG}"
-if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
-  emit_watchdog_status_ids annotation "${ECODA_RUN_ROOT}/status/annotation_watchdog" ||
-    stage4_abort "Stage 4 annotation watchdog status missing"
-fi
+stage4_submit_watchdog annotation "${CHUNK_MANIFEST}" "${ANNOT_ARRAY}" 2G \
+  "${annotation_script}" CHUNKS_MANIFEST chunks \
+  "${LOGS_DIR}/4_cell_type_annotation_retry" "${ANNOTATION_WORKER_TIME_LIMIT}" \
+  "ANNOTATION_ERROR_PREFIX=${LOGS_DIR}/4_cell_type_annotation_retry@RETRY_INDEX@" \
+  "${LOGS_DIR}/4_cell_type_annotation_watchdog" ANNOTATION
+ANNOT_WATCHDOG="${STAGE4_WATCHDOG_ID}"
 MERGE_MANIFEST="${ECODA_RUN_ROOT}/manifests/merge.tsv"
 MERGE_TMP="${MERGE_MANIFEST}.build.$$"
 : > "${MERGE_TMP}"
@@ -1175,7 +1191,7 @@ rm -f "${MERGE_TMP}"
 ecoda_validate_output_ownership stage4 "${WORK_MANIFEST}" "${RUN_ID}" 1 ||
   stage4_abort "Stage 4 merge output ownership validation failed"
 merge_script="$(stage4_source_script \
-  "${SCRIPT_DIR}/3.2_merge_worker.sh")" ||
+  "${STAGE4_SOURCE_ROOT}/src/4_cell_type_annotation/3.2_merge_worker.sh")" ||
   stage4_abort "Stage 4 merge worker is outside the immutable source root"
 set +e
 merge_msg="$(sbatch --parsable --array="1-${MERGE_COUNT}%${THROTTLE}" --mem="${MEMORY}" --time="${ANNOTATION_WORKER_TIME_LIMIT}" --partition="${PARTITION}" \
@@ -1192,31 +1208,13 @@ fi
 [[ ${merge_rc} -eq 0 && "${MERGE_ARRAY}" =~ ^[0-9]+$ ]] ||
   stage4_abort "Stage 4 merge array submission failed"
 echo "ANNOTATION_MERGE_ARRAY_JOB_ID=${MERGE_ARRAY}"
-ecoda_validate_output_ownership stage4 "${WORK_MANIFEST}" "${RUN_ID}" ||
-  stage4_abort "Stage 4 merge watchdog ownership validation failed"
-merge_watchdog_script="$(stage4_source_script \
-  "${SCRIPT_DIR}/3.3_merge_watchdog.sh")" ||
-  stage4_abort "Stage 4 merge watchdog is outside the immutable source root"
-set +e
-merge_watchdog_msg="$(sbatch --parsable --wait --dependency="afterany:${MERGE_ARRAY}" --partition="${PARTITION}" --ntasks=1 --cpus-per-task=1 --mem="${ANNOTATION_MERGE_WATCHDOG_MEMORY}" \
-  --time="${ANNOTATION_WATCHDOG_TIME_LIMIT:-12:00:00}" --output="${LOGS_DIR}/4_annotation_merge_watchdog_%j.log" \
-  --error="${LOGS_DIR}/4_annotation_merge_watchdog_%j.err" --mail-user="${USER_EMAIL}" --export="ALL,ANNOTATION_RUN_ID=${RUN_ID},${RUNTIME_EXPORT}" \
-  "${merge_watchdog_script}" "${RUN_ID}" "${MERGE_MANIFEST}" "${MERGE_ARRAY}" \
-  "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
-merge_watchdog_rc=$?
-set -e
-MERGE_WATCHDOG="${merge_watchdog_msg%%;*}"
-if [[ "${MERGE_WATCHDOG}" =~ ^[0-9]+$ ]]; then
-  stage4_record_scheduler WATCHDOG "${MERGE_WATCHDOG}" ||
-    stage4_abort "failed to persist Stage 4 merge watchdog ID"
-fi
-[[ ${merge_watchdog_rc} -eq 0 && "${MERGE_WATCHDOG}" =~ ^[0-9]+$ ]] ||
-  stage4_abort "Stage 4 merge watchdog submission or execution failed"
-echo "ANNOTATION_MERGE_WATCHDOG_JOB_ID=${MERGE_WATCHDOG}"
-if [[ "${ANNOTATION_SUBMITTER_TEST:-0}" != "1" ]]; then
-  emit_watchdog_status_ids merge "${ECODA_RUN_ROOT}/status/merge_watchdog" ||
-    stage4_abort "Stage 4 merge watchdog status missing"
-fi
+stage4_submit_watchdog merge "${MERGE_MANIFEST}" "${MERGE_ARRAY}" \
+  "${ANNOTATION_MERGE_WATCHDOG_MEMORY}" \
+  "${merge_script}" ANNOTATION_MERGE_MANIFEST merge \
+  "${LOGS_DIR}/4_annotation_merge_retry" "${ANNOTATION_WORKER_TIME_LIMIT}" \
+  "FORCE_ANNOTATION=1" \
+  "${LOGS_DIR}/4_annotation_merge_watchdog" ANNOTATION_MERGE
+MERGE_WATCHDOG="${STAGE4_WATCHDOG_ID}"
 SCHEDULER_IDS_FILE="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
 [[ -r "${SCHEDULER_IDS_FILE}" ]] ||
   stage4_abort "Stage 4 scheduler manifest is missing"

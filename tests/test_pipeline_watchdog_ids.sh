@@ -180,6 +180,7 @@ export ECODA_RUNTIME_MANIFEST_SHA256="$(sha256_file "${RUNTIME_MANIFEST}")"
 export ECODA_RUNTIME_IMAGE_SIZE="$(wc -c < "${RUNTIME_IMAGE}" | tr -d '[:space:]')"
 export ECODA_RUNTIME_MANIFEST_SIZE="$(wc -c < "${RUNTIME_MANIFEST}" | tr -d '[:space:]')"
 export USER_EMAIL="test@example.invalid"
+source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
 
 
 write_artifact_record() {
@@ -212,6 +213,11 @@ run_stage3() {
   local run="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs/stage3"
   local owner_dir="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_owners/stage3/Stephenson_batch_effect_uncorrected"
   mkdir -p "${owner_dir}"
+  ecoda_artifact_owner_acquire "${BATCH_H5AD}" stage3 stage3 0 0 0 >/dev/null
+  mkdir -p "${NAS_TARGET_DIR}/Stephenson/output"
+  ecoda_artifact_owner_acquire \
+    "${NAS_TARGET_DIR}/Stephenson/output/$(basename "${BATCH_H5AD}")" \
+    stage3 stage3 0 0 0 >/dev/null
   write_run_identity "${run}" stage3
   printf 'Stephenson\tbatch_effect_uncorrected\n' > "${run}/manifests/selection.tsv"
   printf 'Stephenson\tbatch_effect_uncorrected\n' > "${run}/manifests/pending.tsv"
@@ -272,8 +278,13 @@ run_stage4_prepare() {
     ECODA_SOURCE_SNAPSHOT_REQUIRED=1 ECODA_AUX_ROOT="${SOURCE_ROOT}/aux" \
     SCGATE_DB_PATH="${SOURCE_ROOT}/aux/scGateDB.rds" \
     SBATCH_ID=4002 ECODA_ACCOUNTING_EMPTY_GRACE=2 \
-    bash "${SOURCE_ROOT}/src/4_cell_type_annotation/1.3_prepare_chunks_watchdog.sh" \
-      stage4 "${run}/manifests/preparation.tsv" 4001 32G 64G shared-cpu 1000
+    bash "${SOURCE_ROOT}/src/4_cell_type_annotation/stage4_watchdog.sh" \
+      preparation stage4 "${run}/manifests/preparation.tsv" \
+      "${run}/manifests/selection.tsv" 4001 32G 64G shared-cpu 1000 \
+      "${SOURCE_ROOT}/src/4_cell_type_annotation/1.2_prepare_chunks_worker.sh" \
+      ANNOTATION_PREP_MANIFEST preparation "${TMP_DIR}/logs/preparation_retry" - \
+      "ANNOTATION_TEST_MODE=0,FORCE_ANNOTATION=1" \
+      "${SOURCE_ROOT}/src/4_cell_type_annotation/stage4_validate_outputs.sh"
   [[ "$(grep '^STATE=' "${run}/status/preparation_watchdog")" == "STATE=OK" ]]
   [[ "$(grep -c '^SCHEDULER_ID=' "${run}/status/preparation_watchdog")" == 2 ]]
 }
@@ -289,6 +300,8 @@ run_stage4_annotation() {
   printf 'Stephenson\t%s\t%s\n' "${chunk}" "${run}/datasets/Stephenson/annotations" > "${run}/manifests/chunks.tsv"
   write_checksum "${run}/manifests/chunks.tsv"
   pixi run python -c 'import hashlib,pandas as pd,sys; from pathlib import Path; p=Path(sys.argv[1]); d={"Sample":["s1"],"cell_barcode":["c1"],"layer1":["T"],"layer2":["T"],"layer3":["T"],"layer_1":["1"],"layer_2":["2"],"layer_3":["3"],"layer_4":["4"],"layer_5":["5"],"layer_6":["6"],"scATOMIC_pred":["T"],"classification_confidence":[.9],"S.Score":[.1],"G2M.Score":[.2],"Phase":["G1"]}; pd.DataFrame(d).to_feather(p); p.with_name(p.name+".md5").write_text(f"MD5={hashlib.md5(p.read_bytes()).hexdigest()}\nSIZE={p.stat().st_size}\nPATH={p}\n")' "${run}/datasets/Stephenson/annotations/annotations_chunk_1.feather"
+  printf 'Stephenson\tbenchmark_analysis\n' > "${run}/manifests/selection.tsv"
+  write_checksum "${run}/manifests/selection.tsv"
   HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
     HPC_SCRATCH_DIR="${HPC_SCRATCH_DIR}" NAS_TARGET_DIR="${NAS_TARGET_DIR}" \
     ECODA_LOGS_DIR="${ECODA_LOGS_DIR}" TMPDIR="${TMPDIR}" \
@@ -300,8 +313,13 @@ run_stage4_annotation() {
     ECODA_SOURCE_SNAPSHOT_REQUIRED=1 ECODA_AUX_ROOT="${SOURCE_ROOT}/aux" \
     SCGATE_DB_PATH="${SOURCE_ROOT}/aux/scGateDB.rds" \
     SBATCH_ID=5002 ECODA_ACCOUNTING_EMPTY_GRACE=2 \
-    bash "${SOURCE_ROOT}/src/4_cell_type_annotation/1.2_annotation_watchdog.sh" \
-      stage4 "${run}/manifests/chunks.tsv" 5001 32G 64G shared-cpu 1000
+    bash "${SOURCE_ROOT}/src/4_cell_type_annotation/stage4_watchdog.sh" \
+      annotation stage4 "${run}/manifests/chunks.tsv" \
+      "${run}/manifests/selection.tsv" 5001 32G 64G shared-cpu 1000 \
+      "${SOURCE_ROOT}/src/4_cell_type_annotation/2.1_run_worker.sh" \
+      CHUNKS_MANIFEST chunks "${TMP_DIR}/logs/annotation_retry" 02:00:00 \
+      "ANNOTATION_ERROR_PREFIX=${TMP_DIR}/logs/annotation_retry@RETRY_INDEX@" \
+      "${SOURCE_ROOT}/src/4_cell_type_annotation/stage4_validate_outputs.sh"
   [[ "$(grep '^STATE=' "${run}/status/annotation_watchdog")" == "STATE=OK" ]]
   [[ "$(grep -c '^SCHEDULER_ID=' "${run}/status/annotation_watchdog")" == 2 ]]
   [[ "$(grep -c '^SCHEDULER_ID=5001$' "${run}/status/annotation_watchdog")" == 1 ]]
@@ -324,6 +342,8 @@ run_stage4_merge() {
   union_size="$(wc -c < "${union}" | tr -d '[:space:]')"
   printf 'STATE=OK\nDATASET=Stephenson\nVIEWS=benchmark_analysis\nSOURCE_H5ADS=%s\nSOURCE_RECORDS=%s\nUNION_PATH=%s\nUNION_MD5=%s\nUNION_SIZE=%s\n' \
     "${SOURCE_H5AD}" "${source_record}" "${union}" "${union_md5}" "${union_size}" > "${run}/datasets/Stephenson/merge.ok"
+  printf 'Stephenson\tbenchmark_analysis\n' > "${run}/manifests/selection.tsv"
+  write_checksum "${run}/manifests/selection.tsv"
   HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
     HPC_SCRATCH_DIR="${HPC_SCRATCH_DIR}" NAS_TARGET_DIR="${NAS_TARGET_DIR}" \
     ECODA_LOGS_DIR="${ECODA_LOGS_DIR}" TMPDIR="${TMPDIR}" \
@@ -335,8 +355,13 @@ run_stage4_merge() {
     ECODA_SOURCE_SNAPSHOT_REQUIRED=1 ECODA_AUX_ROOT="${SOURCE_ROOT}/aux" \
     SCGATE_DB_PATH="${SOURCE_ROOT}/aux/scGateDB.rds" \
     SBATCH_ID=6002 ECODA_ACCOUNTING_EMPTY_GRACE=2 \
-    bash "${SOURCE_ROOT}/src/4_cell_type_annotation/3.3_merge_watchdog.sh" \
-      stage4 "${run}/manifests/merge.tsv" 6001 32G 64G shared-cpu 1000 >/dev/null
+    bash "${SOURCE_ROOT}/src/4_cell_type_annotation/stage4_watchdog.sh" \
+      merge stage4 "${run}/manifests/merge.tsv" \
+      "${run}/manifests/selection.tsv" 6001 32G 64G shared-cpu 1000 \
+      "${SOURCE_ROOT}/src/4_cell_type_annotation/3.2_merge_worker.sh" \
+      ANNOTATION_MERGE_MANIFEST merge "${TMP_DIR}/logs/merge_retry" 02:00:00 \
+      "FORCE_ANNOTATION=1" \
+      "${SOURCE_ROOT}/src/4_cell_type_annotation/stage4_validate_outputs.sh" >/dev/null
   [[ "$(grep '^STATE=' "${run}/status/merge_watchdog")" == "STATE=OK" ]]
   [[ "$(grep -c '^SCHEDULER_ID=' "${run}/status/merge_watchdog")" == 2 ]]
 }

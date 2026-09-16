@@ -11,17 +11,17 @@ source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 cd "${PROJECT_ROOT}"
 
-if [[ $# -eq 7 ]]; then
-  RUN_ID="$1"; ROOT_MANIFEST="$2"; ARRAY_ID="$3"; CURRENT_MEMORY="$4"; MAX_MEMORY="$5"; PARTITION="$6"; THROTTLE="$7"
-elif [[ $# -eq 6 ]]; then
-  # Compatibility for the former batch-effect submitter. New callers always
-  # pass the explicit run id and root selection manifest.
-  ARRAY_ID="$1"; ROOT_MANIFEST="$2"; CURRENT_MEMORY="$3"; MAX_MEMORY="$4"; PARTITION="$5"; THROTTLE="$6"
-  RUN_ID="${PREPROCESS_RUN_ID:-legacy_${ARRAY_ID}}"
-else
+if [[ $# -ne 7 ]]; then
   echo "Usage: 1.2_preprocess_watchdog.sh RUN_ID MANIFEST ARRAY_ID MEM MAX_MEM PARTITION THROTTLE" >&2
   exit 2
 fi
+RUN_ID="$1"
+ROOT_MANIFEST="$2"
+ARRAY_ID="$3"
+CURRENT_MEMORY="$4"
+MAX_MEMORY="$5"
+PARTITION="$6"
+THROTTLE="$7"
 ecoda_validate_run_id "${RUN_ID}" || exit 1
 ecoda_open_run "${RUN_ID}" || exit 1
 RUN_ROOT="${ECODA_RUN_ROOT}"

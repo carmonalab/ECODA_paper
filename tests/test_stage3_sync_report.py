@@ -139,7 +139,13 @@ def main() -> None:
         selection = run_manifests / "selection.tsv"
         selection.write_text("Alzheimer\tbatch_effect_corrected\n", encoding="utf-8")
         input_root = root / "input"
-        h5ad = input_root / "Alzheimer" / "output" / "SEAAD_Alzheimer_batch_effect_analysis_corrected_ECODAprocessed.h5ad"
+        config = json.loads(
+            (run_snapshot / "tree" / "datasets.json").read_text(encoding="utf-8")
+        )
+        output_name = config["Alzheimer"]["views"]["batch_effect_corrected"][
+            "output_file_name"
+        ]
+        h5ad = input_root / "Alzheimer" / "output" / output_name
         h5ad.parent.mkdir(parents=True)
         make_h5ad(h5ad)
         output = run_manifests / "validated_sync_report.json"

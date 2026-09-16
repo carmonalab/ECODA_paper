@@ -372,8 +372,11 @@ run_stage3() {
 
 SELECTION="${TMP_DIR}/selection.tsv"
 printf 'Alzheimer\tbatch_effect_uncorrected\nBreast_cancer\tbatch_effect_uncorrected\nCovid19_PBMC\tbatch_effect_uncorrected\nKidney_KPMP_full\tbatch_effect_uncorrected\nMyocardial_infarction\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\nLupus_PBMC\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\nParkinson\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\nStephenson\tbatch_effect_uncorrected\nCombinedPBMC\tbatch_effect_uncorrected\n' > "${SELECTION}"
+COVID_INPUT="${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
+mkdir -p "$(dirname "${COVID_INPUT}")"
+printf 'stub-direct-h5ad\n' > "${COVID_INPUT}"
 
-OUTPUT="$(run_stage3 --selection-file "${SELECTION}" --exact-batch-selection)"
+OUTPUT="$(run_stage3 --selection-file "${SELECTION}")"
 case "${OUTPUT}" in *"PREPROCESS_ARRAY_JOB_ID=600001"*) ;; *) echo "missing array marker" >&2; exit 1 ;; esac
 case "${OUTPUT}" in *"PREPROCESS_WATCHDOG_JOB_ID=600002"*) ;; *) echo "missing watchdog marker" >&2; exit 1 ;; esac
 MANIFEST="$(printf '%s\n' "${OUTPUT}" | sed -n 's/^PREPROCESS_DATASET_MANIFEST=//p')"
@@ -403,7 +406,7 @@ case "${CALLS}" in *"${SOURCE_ROOT}/src/3_scrnaseq_preprocessing/1.1_run_worker.
 case "${CALLS}" in *"${SOURCE_ROOT}/src/3_scrnaseq_preprocessing/1.2_preprocess_watchdog.sh"*) ;; *) echo "watchdog did not use immutable watchdog script" >&2; exit 1 ;; esac
 case "${CALLS}" in *"ECODA_RUNTIME_MODE=apptainer"*"ECODA_RUNTIME_PROFILE=stage3"*) ;; *) echo "Stage 3 runtime export missing" >&2; exit 1 ;; esac
 
-# The exact historical run leaves its fixture owners active; discard only
+# The initial historical manifest leaves its fixture owners active; discard
 # those temporary owners before the independent batch-effect arrays.
 ECODA_OWNERS_ROOT="${HPC_SCRATCH_DIR}/_ecoda_owners"
 rm -rf "${ECODA_OWNERS_ROOT}"
@@ -411,9 +414,6 @@ rm -rf "${ECODA_OWNERS_ROOT}"
 # The approved batch-effect release uses two independent arrays.  Each array
 # runs the direct Covid obs-only preflight when its Covid row needs compute.
 RUNS_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs"
-COVID_INPUT="${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
-mkdir -p "$(dirname "${COVID_INPUT}")"
-printf 'stub-direct-h5ad\n' > "${COVID_INPUT}"
 COVID_INPUT_DIR="$(cd "$(dirname "${COVID_INPUT}")" && pwd -P)"
 COVID_INPUT_CANONICAL="${COVID_INPUT_DIR}/$(basename "${COVID_INPUT}")"
 
@@ -510,7 +510,7 @@ for corrected_dataset in "${CORRECTED_DATASETS[@]}"; do
 done > "${CORRECTED_SELECTION}"
 : > "${CAPTURE}"
 CORRECTED_OUTPUT="$(
-  run_stage3 --selection-file "${CORRECTED_SELECTION}" --corrected-recovery
+  run_stage3 --selection-file "${CORRECTED_SELECTION}"
 )"
 case "${CORRECTED_OUTPUT}" in
   *"PREPROCESS_ARRAY_JOB_ID=600001"*) ;;
@@ -558,15 +558,15 @@ case "${CORRECTED_CALLS}" in
     exit 1
     ;;
 esac
-# The corrected-recovery scope also admits exactly one targeted Breast row.
-# It keeps corrected processing state distinct from the historical eight-row
-# recovery and does not trigger a Covid preflight for this one-row input.
+# A one-row corrected selection remains independent of the eight-row selection.
+# It keeps corrected processing state distinct and does not trigger a Covid
+# preflight for this one-row input.
 rm -rf "${ECODA_OWNERS_ROOT}"
 BREAST_TARGET_SELECTION="${TMP_DIR}/breast-target-selection.tsv"
 printf 'Breast_cancer\tbatch_effect_corrected\n' > "${BREAST_TARGET_SELECTION}"
 : > "${CAPTURE}"
 BREAST_TARGET_OUTPUT="$(
-  run_stage3 --selection-file "${BREAST_TARGET_SELECTION}" --corrected-recovery
+  run_stage3 --selection-file "${BREAST_TARGET_SELECTION}"
 )"
 case "${BREAST_TARGET_OUTPUT}" in
   *"PREPROCESS_ARRAY_JOB_ID=600001"*) ;;
@@ -588,8 +588,6 @@ cmp -s "${BREAST_TARGET_SELECTION}" \
   "${BREAST_TARGET_RUN_ROOT}/manifests/pending.tsv"
 [[ "$(wc -l < "${BREAST_TARGET_RUN_ROOT}/manifests/output_ownership.tsv" |
   tr -d '[:space:]')" == 1 ]]
-[[ "$(sed -n 's/^SELECTION_CLASSIFICATION=//p' \
-  "${BREAST_TARGET_RUN_ROOT}/metadata")" == "corrected_breast_targeted" ]]
 BREAST_TARGET_CALLS="$(cat "${CAPTURE}")"
 case "${BREAST_TARGET_CALLS}" in
   *"--array=1-1%1000"*) ;;
@@ -602,51 +600,6 @@ case "${BREAST_TARGET_CALLS}" in
     ;;
 esac
 
-# A one-row corrected selection without the explicit corrected-recovery scope
-# remains rejected before run initialization or scheduler submission.
-: > "${CAPTURE}"
-BEFORE_RUNS="$(printf '%s\n' "${RUNS_ROOT}"/*)"
-if run_stage3 --selection-file "${BREAST_TARGET_SELECTION}" >/dev/null 2>&1; then
-  echo "accidental one-row Breast corrected selection was accepted" >&2
-  exit 1
-fi
-[[ ! -s "${CAPTURE}" ]]
-[[ "${BEFORE_RUNS}" == "$(printf '%s\n' "${RUNS_ROOT}"/*)" ]]
-
-# The scoped selector also rejects a one-row shape that is not the approved
-# corrected Breast row.
-BREAST_BAD_SCOPE_SELECTION="${TMP_DIR}/breast-bad-scope-selection.tsv"
-printf 'Breast_cancer\tbatch_effect_uncorrected\n' > "${BREAST_BAD_SCOPE_SELECTION}"
-: > "${CAPTURE}"
-BEFORE_RUNS="$(printf '%s\n' "${RUNS_ROOT}"/*)"
-if run_stage3 --selection-file "${BREAST_BAD_SCOPE_SELECTION}" \
-    --corrected-recovery >/dev/null 2>&1; then
-  echo "non-approved corrected-recovery shape was accepted" >&2
-  exit 1
-fi
-[[ ! -s "${CAPTURE}" ]]
-[[ "${BEFORE_RUNS}" == "$(printf '%s\n' "${RUNS_ROOT}"/*)" ]]
-
-# A combined launch is retired rather than silently broadening either array.
-: > "${CAPTURE}"
-BEFORE_RUNS="$(printf '%s\n' "${RUNS_ROOT}"/*)"
-if run_stage3 --selection-file "${UNCORRECTED_SELECTION}" \
-    --combined-batch-selection >/dev/null 2>&1; then
-  echo "retired combined Stage 3 selection was accepted" >&2
-  exit 1
-fi
-[[ ! -s "${CAPTURE}" ]]
-[[ "${BEFORE_RUNS}" == "$(printf '%s\n' "${RUNS_ROOT}"/*)" ]]
-CORRECTED_DATASETS_CSV="$(IFS=,; printf '%s' "${CORRECTED_DATASETS[*]}")"
-: > "${CAPTURE}"
-BEFORE_RUNS="$(printf '%s\n' "${RUNS_ROOT}"/*)"
-if run_stage3 --datasets "${CORRECTED_DATASETS_CSV}" \
-    --views batch_effect_corrected >/dev/null 2>&1; then
-  echo "generated eight-row corrected recovery bypassed explicit selection-file guard" >&2
-  exit 1
-fi
-[[ ! -s "${CAPTURE}" ]]
-[[ "${BEFORE_RUNS}" == "$(printf '%s\n' "${RUNS_ROOT}"/*)" ]]
 
 : > "${CAPTURE}"
 BEFORE_RUNS="$(printf '%s\n' "${RUNS_ROOT}"/*)"
@@ -689,8 +642,7 @@ export STAGE3_INPUT_PRODUCER_RUN_ID="${ALZ_RAW_PRODUCER_RUN_ID}"
 ALZ_UNCORRECTED_SELECTION="${TMP_DIR}/alzheimer-uncorrected-selection.tsv"
 printf 'Alzheimer\tbatch_effect_uncorrected\n' > "${ALZ_UNCORRECTED_SELECTION}"
 : > "${CAPTURE}"
-if run_stage3 --selection-file "${ALZ_UNCORRECTED_SELECTION}" \
-    --alzheimer-followup >/dev/null 2>&1; then
+if run_stage3 --selection-file "${ALZ_UNCORRECTED_SELECTION}" >/dev/null 2>&1; then
   echo "raw donor-only Alzheimer follow-up was accepted" >&2
   exit 1
 fi
@@ -767,7 +719,7 @@ printf 'stub-alzheimer-derivative-h5ad\n' > "${ALZ_INPUT}"
 export STAGE3_INPUT_PRODUCER_RUN_ID="${ALZ_PRODUCER_RUN_ID}"
 : > "${CAPTURE}"
 ALZ_UNCORRECTED_OUTPUT="$(
-  run_stage3 --selection-file "${ALZ_UNCORRECTED_SELECTION}" --alzheimer-followup
+  run_stage3 --selection-file "${ALZ_UNCORRECTED_SELECTION}"
 )"
 case "${ALZ_UNCORRECTED_OUTPUT}" in
   *"PREPROCESS_ARRAY_JOB_ID=600001"*) ;;
@@ -790,8 +742,6 @@ ALZ_INPUT_RECORD="$(printf 'Alzheimer\tbatch_effect_uncorrected\t%s\tdonor_id_as
 [[ "$(cat "${ALZ_UNCORRECTED_ROOT}/manifests/input_ownership.tsv")" == "${ALZ_INPUT_RECORD}" ]]
 [[ "$(sed -n 's/^INPUT_PATH=//p' "${ALZ_UNCORRECTED_ROOT}/metadata")" == "${ALZ_INPUT}" ]]
 [[ "$(sed -n 's/^INPUT_SAMPLE_COLUMN=//p' "${ALZ_UNCORRECTED_ROOT}/metadata")" == "donor_id_assay" ]]
-[[ "$(sed -n 's/^SELECTION_CLASSIFICATION=//p' \
-  "${ALZ_UNCORRECTED_ROOT}/metadata")" == "alzheimer_followup" ]]
 [[ "$(sed -n 's/^INPUT_PRODUCER_RUN_ID=//p' \
   "${ALZ_UNCORRECTED_ROOT}/metadata")" == "${ALZ_PRODUCER_RUN_ID}" ]]
 [[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == 2 ]]
@@ -805,8 +755,7 @@ ALZ_CORRECTED_SELECTION="${TMP_DIR}/alzheimer-corrected-selection.tsv"
 printf 'Alzheimer\tbatch_effect_corrected\n' > "${ALZ_CORRECTED_SELECTION}"
 : > "${CAPTURE}"
 ALZ_CORRECTED_OUTPUT="$(
-  run_stage3 --selection-file "${ALZ_CORRECTED_SELECTION}" \
-    --alzheimer-follow-up-selection
+  run_stage3 --selection-file "${ALZ_CORRECTED_SELECTION}"
 )"
 case "${ALZ_CORRECTED_OUTPUT}" in
   *"PREPROCESS_ARRAY_JOB_ID=600001"*) ;;
@@ -830,20 +779,10 @@ ALZ_CORRECTED_INPUT_RECORD="$(printf 'Alzheimer\tbatch_effect_corrected\t%s\tdon
 [[ "$(sed -n 's/^INPUT_SAMPLE_COLUMN=//p' "${ALZ_CORRECTED_ROOT}/metadata")" == "donor_id_assay" ]]
 [[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == 2 ]]
 
-ALZ_COMBINED_SELECTION="${TMP_DIR}/alzheimer-combined-selection.tsv"
-printf 'Alzheimer\tbatch_effect_uncorrected\nAlzheimer\tbatch_effect_corrected\n' \
-  > "${ALZ_COMBINED_SELECTION}"
-: > "${CAPTURE}"
-if run_stage3 --selection-file "${ALZ_COMBINED_SELECTION}" >/dev/null 2>&1; then
-  echo "combined Alzheimer follow-up was accepted" >&2
-  exit 1
-fi
-[[ ! -s "${CAPTURE}" ]]
 
 : > "${CAPTURE}"
 if ECODA_SOURCE_SNAPSHOT_REQUIRED=0 \
-  run_stage3 --selection-file "${ALZ_UNCORRECTED_SELECTION}" \
-    --alzheimer-followup >/dev/null 2>&1; then
+  run_stage3 --selection-file "${ALZ_UNCORRECTED_SELECTION}" >/dev/null 2>&1; then
   echo "snapshot-unbound Alzheimer follow-up was accepted" >&2
   exit 1
 fi
@@ -930,7 +869,7 @@ if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
   ECODA_RUNTIME_MANIFEST="${TMP_DIR}/missing.sif.manifest" \
   PREPROCESS_SUBMITTER_TEST=1 \
   bash "${ROOT}/src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh" \
-  --selection-file "${SELECTION}" --exact-batch-selection >/dev/null 2>&1; then
+  --selection-file "${SELECTION}" >/dev/null 2>&1; then
   echo "Stage 3 accepted missing immutable runtime image" >&2
   exit 1
 fi
@@ -950,7 +889,7 @@ for bad_kind in legacy corrected missing; do
   BEFORE_RUNS="$(printf '%s\n' "${RUNS_ROOT}"/*)"
   : > "${CAPTURE}"
   set +e
-  run_stage3 --selection-file "${BAD}" --exact-batch-selection >/dev/null 2>&1
+  run_stage3 --selection-file "${BAD}" >/dev/null 2>&1
   RC=$?
   set -e
   [[ ${RC} -ne 0 ]]

@@ -17,7 +17,6 @@ VIEWS_ARG=""
 VIEWS_SET=0
 SELECTION_FILE_ARG=""
 SELECTION_FILE_SET=0
-EXACT_BATCH_SELECTION=0
 FORCE_ARG=0
 SYNC_ONLY_RUN=""
 SYNC_ONLY_SET=0
@@ -28,14 +27,10 @@ MAX_MEMORY="500G"
 PARTITION="${SLURM_PARTITION}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 RUNTIME_EXPORT=""
-STAGE3_SELECTION_CLASSIFICATION=""
-STAGE3_UNCORRECTED_BATCH_SELECTION=0
-STAGE3_CORRECTED_SELECTION=0
 STAGE3_COVID_PREFLIGHT_REQUIRED=0
 STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED="${STAGE3_COVID_PREFLIGHT_ROOT:-${ECODA_COVID_PREFLIGHT_ROOT:-}}"
 STAGE3_COVID_PREFLIGHT_ROOT=""
 STAGE3_EXEC_SOURCE_MANIFEST="${ECODA_SOURCE_MANIFEST:-}"
-STAGE3_SCOPE_ARG=""
 STAGE3_INPUT_PRODUCER_RUN_ID="${STAGE3_INPUT_PRODUCER_RUN_ID:-${STAGE2_RUN_ID:-${INPUT_PRODUCER_RUN_ID:-}}}"
 STAGE3_ALZHEIMER_INPUT_PRODUCER="alzheimer_donor_assay"
 STAGE3_ALZHEIMER_INPUT_NAME="SEAAD_Alzheimer_donor_assay.h5ad"
@@ -46,24 +41,14 @@ STAGE3_ALZHEIMER_INPUT_SAMPLE_COLUMN=""
 usage() {
   cat <<'EOF'
 Usage: 1_submit_hpc_array.sh [--datasets LIST] [--views LIST]
-       [--selection-file TSV] [--exact-batch-selection] [--force]
-       [--corrected-recovery|--corrected-final-selection]
-       [--alzheimer-followup|--alzheimer-follow-up-selection]
+       [--selection-file TSV] [--force]
        [--sync-only RUN_ID] [--validated-sync-report PATH]
        [--mem VALUE] [--max-mem VALUE]
 
 Each manifest row is DATASET<TAB>VIEW. --ds_name and --view remain accepted
-as compatibility aliases for one dataset/view selection. Exact batch mode
-requires the immutable twelve-row uncorrected selection file. The approved
-batch-effect selectors are explicit and disjoint: the uncorrected selector is
-exactly the four target rows in fixed order; corrected recovery is exactly the
-eight non-Alzheimer rows in fixed order or one explicitly selected
-Breast_cancer corrected row; and an Alzheimer follow-up is exactly one
-explicitly selected view. Corrected recovery and Alzheimer follow-up selection
-files are required; broad/default and combined selections are rejected.
-Alzheimer follow-up additionally requires the reviewed Stage 2
-donor-by-assay producer output and an immutable source snapshot whose bound
-config names SEAAD_Alzheimer_donor_assay.h5ad with sample column donor_id_assay.
+as compatibility aliases for one dataset/view selection. Release scope is
+validated by separate audit tooling after the run.
+Alzheimer Stage 2 derivative inputs remain producer-bound when selected.
 EOF
 }
 
@@ -80,27 +65,6 @@ while [[ $# -gt 0 ]]; do
     --view=*) VIEWS_ARG="${1#*=}"; VIEWS_SET=1; shift ;;
     --selection-file) SELECTION_FILE_ARG="${2:-}"; SELECTION_FILE_SET=1; shift 2 ;;
     --selection-file=*) SELECTION_FILE_ARG="${1#*=}"; SELECTION_FILE_SET=1; shift ;;
-    --corrected-recovery|--corrected-final-selection)
-      [[ -z "${STAGE3_SCOPE_ARG}" ]] || {
-        echo "ERROR: only one Stage 3 scoped selection may be named." >&2
-        exit 1
-      }
-      STAGE3_SCOPE_ARG="corrected_recovery"
-      shift
-      ;;
-    --alzheimer-followup|--alzheimer-follow-up-selection)
-      [[ -z "${STAGE3_SCOPE_ARG}" ]] || {
-        echo "ERROR: only one Stage 3 scoped selection may be named." >&2
-        exit 1
-      }
-      STAGE3_SCOPE_ARG="alzheimer_followup"
-      shift
-      ;;
-    --combined-batch-selection)
-      echo "ERROR: combined Stage 3 selection is retired; submit uncorrected and corrected arrays separately." >&2
-      exit 1
-      ;;
-    --exact-batch-selection) EXACT_BATCH_SELECTION=1; shift ;;
     --force) FORCE_ARG=1; shift ;;
     --sync-only) SYNC_ONLY_RUN="${2:-}"; SYNC_ONLY_SET=1; shift 2 ;;
     --sync-only=*) SYNC_ONLY_RUN="${1#*=}"; SYNC_ONLY_SET=1; shift ;;
@@ -133,17 +97,6 @@ if [[ ${VALIDATED_SYNC_REPORT_SET} -eq 1 &&
   echo "ERROR: --validated-sync-report cannot be used with numeric --sync-only." >&2
   exit 1
 fi
-if [[ -n "${STAGE3_SCOPE_ARG}" ]]; then
-  [[ ${SELECTION_FILE_SET} -eq 1 && -n "${SELECTION_FILE_ARG}" ]] || {
-    echo "ERROR: ${STAGE3_SCOPE_ARG} requires an explicit --selection-file." >&2
-    exit 1
-  }
-  [[ ${DATASETS_SET} -eq 0 && ${VIEWS_SET} -eq 0 &&
-     ${EXACT_BATCH_SELECTION} -eq 0 && ${SYNC_ONLY_SET} -eq 0 ]] || {
-    echo "ERROR: scoped Stage 3 selections reject broad/default, exact, or sync-only modes." >&2
-    exit 1
-  }
-fi
 if [[ ${DATASETS_SET} -eq 1 && -z "${DATASETS_ARG}" ]]; then
   echo "ERROR: --datasets must not be empty." >&2
   exit 1
@@ -158,6 +111,11 @@ if [[ ${SELECTION_FILE_SET} -eq 1 && -z "${SELECTION_FILE_ARG}" ]]; then
 fi
 if [[ ${SYNC_ONLY_SET} -eq 1 && -z "${SYNC_ONLY_RUN}" ]]; then
   echo "ERROR: --sync-only requires a scheduler ID or run ID." >&2
+  exit 1
+fi
+if [[ ${SELECTION_FILE_SET} -eq 0 && ${DATASETS_SET} -eq 0 &&
+      ${SYNC_ONLY_SET} -eq 0 ]]; then
+  echo "ERROR: an explicit Stage 3 selection is required." >&2
   exit 1
 fi
 if ! command -v jq >/dev/null 2>&1; then
@@ -322,12 +280,10 @@ stage3_record_selection_metadata() {
   metadata_tmp="${ECODA_RUN_ROOT}/metadata.selection.build.$$"
   {
     cat "${ECODA_RUN_ROOT}/metadata"
-    printf 'SELECTION_CLASSIFICATION=%s\nSELECTION_PATH=%s\nSELECTION_MD5=%s\nSELECTION_SHA256=%s\nSELECTION_SIZE=%s\nSELECTION_ROWS=%s\nSNAPSHOT_PARENT=%s\n' \
-      "${STAGE3_SELECTION_CLASSIFICATION}" "${MANIFEST}" \
-      "${selection_md5}" "${selection_sha256}" "${selection_size}" \
+    printf 'SELECTION_PATH=%s\nSELECTION_MD5=%s\nSELECTION_SHA256=%s\nSELECTION_SIZE=%s\nSELECTION_ROWS=%s\nSNAPSHOT_PARENT=%s\n' \
+      "${MANIFEST}" "${selection_md5}" "${selection_sha256}" "${selection_size}" \
       "$(wc -l < "${MANIFEST}" | tr -d '[:space:]')" "${snapshot_parent}"
-    if [[ "${STAGE3_SELECTION_CLASSIFICATION}" == "alzheimer_followup" &&
-          -n "${STAGE3_INPUT_PRODUCER_RUN_ID:-}" &&
+    if [[ -n "${STAGE3_INPUT_PRODUCER_RUN_ID:-}" &&
           -n "${STAGE3_ALZHEIMER_INPUT_PATH:-}" &&
           -n "${STAGE3_ALZHEIMER_INPUT_SAMPLE_COLUMN:-}" ]]; then
       printf 'INPUT_PRODUCER_RUN_ID=%s\nINPUT_PRODUCER_STAGE=stage2\nINPUT_PRODUCER_STEP=%s\nINPUT_PATH=%s\nINPUT_SAMPLE_COLUMN=%s\nINPUT_MANIFEST=%s\n' \
@@ -402,14 +358,11 @@ stage3_require_new_snapshot() {
      -r "${ECODA_SOURCE_MANIFEST}" ]] || return 1
 }
 stage3_validate_alzheimer_input_dependency() {
-  local classification="${STAGE3_SELECTION_CLASSIFICATION:-}"
   local producer="${STAGE3_INPUT_PRODUCER_RUN_ID:-}"
   local view input_name input_path sample_column producer_output
   local producer_root producer_state
-  case "${classification}" in
-    alzheimer_followup) ;;
-    *) return 0 ;;
-  esac
+  [[ -n "${producer}" ]] || return 0
+  stage3_selection_contains_alzheimer "${MANIFEST}" || return 0
   [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" &&
      "${ECODA_SOURCE_ROOT:-}" = /* &&
      "${ECODA_SOURCE_MANIFEST:-}" = /* ]] || {
@@ -489,13 +442,9 @@ stage3_validate_alzheimer_input_dependency() {
 }
 
 stage3_record_alzheimer_input_binding() {
-  local classification="${STAGE3_SELECTION_CLASSIFICATION:-}"
   local manifest="${ECODA_RUN_ROOT:-}/manifests/input_ownership.tsv"
   local manifest_tmp="${manifest}.build.$$"
-  case "${classification}" in
-    alzheimer_followup) ;;
-    *) return 0 ;;
-  esac
+  [[ -n "${STAGE3_ALZHEIMER_INPUT_VIEW:-}" ]] || return 0
   [[ -n "${ECODA_RUN_ROOT:-}" && "${ECODA_RUN_ROOT}" = /* &&
      -n "${STAGE3_ALZHEIMER_INPUT_VIEW:-}" &&
      -n "${STAGE3_ALZHEIMER_INPUT_PATH:-}" &&
@@ -545,17 +494,6 @@ stage3_require_source_script() {
 }
 
 
-if [[ ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
-  [[ -n "${SELECTION_FILE_ARG}" ]] || {
-    echo "ERROR: --exact-batch-selection requires --selection-file." >&2
-    exit 1
-  }
-  [[ -r "${SELECTION_FILE_ARG}" ]] || {
-    echo "ERROR: exact batch selection file is unreadable: ${SELECTION_FILE_ARG}" >&2
-    exit 1
-  }
-  ecoda_validate_exact_batch_selection "${SELECTION_FILE_ARG}" 2 || exit 1
-fi
 
 output_path_for() {
   local ds="$1" view="$2" output
@@ -591,247 +529,6 @@ stage3_validate_selection_row() {
      -n "$(ecoda_view_output_name "${ds}" "${view}")" ]] || return 1
 }
 
-stage3_validate_configured_corrected_row() {
-  local config="${1:-${DATASETS_JSON_FILE:-}}" ds="${2:-}" view="${3:-}"
-  local sample_col label_col input_name output_name
-  [[ "${view}" == "batch_effect_corrected" && "${ds}" != _* ]] || {
-    echo "ERROR: corrected Stage 3 row is not a production corrected view: ${ds}/${view}" >&2
-    return 1
-  }
-  stage3_validate_selection_row "${ds}" "${view}" || return 1
-  jq -e --arg ds "${ds}" --arg view "${view}" '
-    .[$ds] as $entry
-    | ($entry.columns // {}) as $columns
-    | ($columns.sample | type) == "string"
-    and (($columns.sample | test("[^[:space:]]")))
-    and (($columns.label | type) == "string")
-    and (($columns.label | test("[^[:space:]]")))
-    and ($columns.sample != $columns.label)
-    and (($entry.use_for_batch_effect // false) == true)
-    and (($entry.views[$view].input_file_name // $entry.views[$view].input_file)
-         | type) == "string"
-    and (($entry.views[$view].output_file_name // $entry.views[$view].output_file)
-         | type) == "string"
-  ' "${config}" >/dev/null || {
-    echo "ERROR: corrected Stage 3 row lacks a complete configured sample/label/input/output contract: ${ds}/${view}" >&2
-    return 1
-  }
-  ecoda_validate_corrected_batch_columns "${config}" "${ds}" "${view}" || return 1
-  sample_col="$(jq -r --arg ds "${ds}" \
-    '.[$ds].columns.sample // empty' \
-    "${config}")" || return 1
-  label_col="$(jq -r --arg ds "${ds}" \
-    '.[$ds].columns.label // empty' \
-    "${config}")" || return 1
-  input_name="$(jq -r --arg ds "${ds}" --arg view "${view}" \
-    '.[$ds].views[$view].input_file_name // .[$ds].views[$view].input_file // empty' \
-    "${config}")" || return 1
-  output_name="$(jq -r --arg ds "${ds}" --arg view "${view}" \
-    '.[$ds].views[$view].output_file_name // .[$ds].views[$view].output_file // empty' \
-    "${config}")" || return 1
-  [[ -n "${sample_col}" && -n "${label_col}" &&
-     -n "${input_name}" && -n "${output_name}" ]]
-}
-
-stage3_selection_is_uncorrected_four_candidate() {
-  local selection="${1:-}" ds view extra
-  local count=0
-  local expected_datasets=(
-    Covid19_PBMC
-    Diabetes
-    Joanito
-    Lung
-  )
-  [[ -r "${selection}" ]] || return 1
-  ecoda_validate_manifest "${selection}" 2 || return 1
-  while IFS=$'\t' read -r ds view extra; do
-    count=$((count + 1))
-    [[ ${count} -le 4 &&
-       "${ds}" == "${expected_datasets[$((count - 1))]}" &&
-       "${view}" == "batch_effect_uncorrected" &&
-       -z "${extra}" ]] || return 1
-  done < "${selection}"
-  [[ ${count} -eq 4 ]]
-}
-
-stage3_validate_uncorrected_four_selection() {
-  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
-  local ds view count=0
-  [[ -r "${selection}" && -r "${config}" && ! -L "${config}" ]] || return 1
-  [[ -z "${STAGE3_SCOPE_ARG}" ]] || {
-    echo "ERROR: scoped Stage 3 selector does not match the four-row uncorrected contract." >&2
-    return 1
-  }
-  stage3_selection_is_uncorrected_four_candidate "${selection}" || return 1
-  while IFS=$'\t' read -r ds view; do
-    stage3_validate_selection_row "${ds}" "${view}" || return 1
-    jq -e --arg ds "${ds}" \
-      '.[$ds].use_for_batch_effect == true' "${config}" >/dev/null || {
-      echo "ERROR: uncorrected Stage 3 target row is not batch-enabled: ${ds}" >&2
-      return 1
-    }
-    count=$((count + 1))
-  done < "${selection}"
-  [[ ${count} -eq 4 ]] || return 1
-  STAGE3_SELECTION_CLASSIFICATION="uncorrected_four"
-  STAGE3_UNCORRECTED_BATCH_SELECTION=1
-  STAGE3_CORRECTED_SELECTION=0
-}
-
-stage3_selection_is_corrected_recovery_candidate() {
-  local selection="${1:-}" ds view extra
-  local count=0
-  local expected_datasets=(
-    Joanito
-    Stephenson
-    Breast_cancer
-    Covid19_PBMC
-    Kidney_KPMP_full
-    Diabetes
-    Lupus_PBMC
-    Lung
-  )
-  [[ -r "${selection}" ]] || return 1
-  ecoda_validate_manifest "${selection}" 2 || return 1
-  while IFS=$'\t' read -r ds view extra; do
-    count=$((count + 1))
-    [[ ${count} -le 8 &&
-       "${ds}" == "${expected_datasets[$((count - 1))]}" &&
-       "${view}" == "batch_effect_corrected" &&
-       -z "${extra}" ]] || return 1
-  done < "${selection}"
-  [[ ${count} -eq 8 ]]
-}
-
-stage3_validate_corrected_recovery_selection() {
-  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
-  local ds view count=0
-  [[ -r "${selection}" && -r "${config}" && ! -L "${config}" ]] || return 1
-  [[ ${SELECTION_FILE_SET} -eq 1 || ${SYNC_ONLY_SET} -eq 1 ]] || {
-    echo "ERROR: corrected Stage 3 recovery requires an explicit selection file." >&2
-    return 1
-  }
-  [[ -z "${STAGE3_SCOPE_ARG}" || "${STAGE3_SCOPE_ARG}" == "corrected_recovery" ]] || {
-    echo "ERROR: Stage 3 selection scope does not match corrected recovery." >&2
-    return 1
-  }
-  stage3_selection_is_corrected_recovery_candidate "${selection}" || {
-    echo "ERROR: corrected Stage 3 recovery must contain exactly the eight non-Alzheimer rows in plan order." >&2
-    return 1
-  }
-  while IFS=$'\t' read -r ds view; do
-    stage3_validate_configured_corrected_row \
-      "${config}" "${ds}" "${view}" || return 1
-    count=$((count + 1))
-  done < "${selection}"
-  [[ ${count} -eq 8 ]] || return 1
-  STAGE3_SELECTION_CLASSIFICATION="corrected_recovery"
-  STAGE3_UNCORRECTED_BATCH_SELECTION=0
-  STAGE3_CORRECTED_SELECTION=1
-}
-stage3_selection_is_targeted_breast_corrected_candidate() {
-  local selection="${1:-}" ds view extra
-  local count=0
-  [[ -r "${selection}" ]] || return 1
-  ecoda_validate_manifest "${selection}" 2 || return 1
-  while IFS=$'\t' read -r ds view extra; do
-    count=$((count + 1))
-    [[ ${count} -eq 1 &&
-       "${ds}" == "Breast_cancer" &&
-       "${view}" == "batch_effect_corrected" &&
-       -z "${extra}" ]] || return 1
-  done < "${selection}"
-  [[ ${count} -eq 1 ]]
-}
-
-stage3_validate_targeted_breast_corrected_selection() {
-  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
-  local ds view count=0
-  [[ -r "${selection}" && -r "${config}" && ! -L "${config}" ]] || return 1
-  [[ ${SELECTION_FILE_SET} -eq 1 || ${SYNC_ONLY_SET} -eq 1 ]] || {
-    echo "ERROR: targeted Breast corrected Stage 3 recovery requires an explicit selection file." >&2
-    return 1
-  }
-  [[ "${STAGE3_SCOPE_ARG}" == "corrected_recovery" ||
-     ${SYNC_ONLY_SET} -eq 1 ]] || {
-    echo "ERROR: targeted Breast corrected Stage 3 recovery requires --corrected-recovery." >&2
-    return 1
-  }
-  stage3_selection_is_targeted_breast_corrected_candidate "${selection}" || {
-    echo "ERROR: targeted Breast corrected Stage 3 recovery must contain exactly Breast_cancer/batch_effect_corrected." >&2
-    return 1
-  }
-  while IFS=$'\t' read -r ds view; do
-    stage3_validate_configured_corrected_row \
-      "${config}" "${ds}" "${view}" || return 1
-    count=$((count + 1))
-  done < "${selection}"
-  [[ ${count} -eq 1 ]] || return 1
-  STAGE3_SELECTION_CLASSIFICATION="corrected_breast_targeted"
-  STAGE3_UNCORRECTED_BATCH_SELECTION=0
-  STAGE3_CORRECTED_SELECTION=1
-}
-
-stage3_selection_is_alzheimer_followup_candidate() {
-  local selection="${1:-}" ds view extra
-  local count=0
-  [[ -r "${selection}" ]] || return 1
-  ecoda_validate_manifest "${selection}" 2 || return 1
-  while IFS=$'\t' read -r ds view extra; do
-    count=$((count + 1))
-    [[ ${count} -eq 1 && "${ds}" == "Alzheimer" &&
-       ( "${view}" == "batch_effect_uncorrected" ||
-         "${view}" == "batch_effect_corrected" ) &&
-       -z "${extra}" ]] || return 1
-  done < "${selection}"
-  [[ ${count} -eq 1 ]]
-}
-
-stage3_validate_alzheimer_followup_selection() {
-  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
-  local ds view count=0
-  [[ -r "${selection}" && -r "${config}" && ! -L "${config}" ]] || return 1
-  [[ ${SELECTION_FILE_SET} -eq 1 || ${SYNC_ONLY_SET} -eq 1 ]] || {
-    echo "ERROR: Alzheimer Stage 3 follow-up requires an explicit selection file." >&2
-    return 1
-  }
-  [[ -z "${STAGE3_SCOPE_ARG}" || "${STAGE3_SCOPE_ARG}" == "alzheimer_followup" ]] || {
-    echo "ERROR: Stage 3 selection scope does not match Alzheimer follow-up." >&2
-    return 1
-  }
-  stage3_selection_is_alzheimer_followup_candidate "${selection}" || {
-    echo "ERROR: Alzheimer Stage 3 follow-up must contain exactly one view-specific row." >&2
-    return 1
-  }
-  while IFS=$'\t' read -r ds view; do
-    stage3_validate_selection_row "${ds}" "${view}" || return 1
-    jq -e --arg ds "${ds}" \
-      '.[$ds].use_for_batch_effect == true' "${config}" >/dev/null || {
-      echo "ERROR: Alzheimer Stage 3 follow-up is not batch-enabled." >&2
-      return 1
-    }
-    if [[ "${view}" == "batch_effect_corrected" ]]; then
-      stage3_validate_configured_corrected_row \
-        "${config}" "${ds}" "${view}" || return 1
-    fi
-    count=$((count + 1))
-  done < "${selection}"
-  [[ ${count} -eq 1 ]] || return 1
-  STAGE3_SELECTION_CLASSIFICATION="alzheimer_followup"
-  STAGE3_UNCORRECTED_BATCH_SELECTION=0
-  STAGE3_CORRECTED_SELECTION=0
-}
-
-stage3_selection_contains_corrected() {
-  local selection="${1:-}" ds view extra
-  [[ -r "${selection}" ]] || return 1
-  while IFS=$'\t' read -r ds view extra; do
-    [[ -n "${ds}" && -n "${view}" && -z "${extra}" ]] || return 1
-    [[ "${view}" == "batch_effect_corrected" ]] && return 0
-  done < "${selection}"
-  return 1
-}
-
 stage3_selection_contains_alzheimer() {
   local selection="${1:-}" ds view extra
   [[ -r "${selection}" ]] || return 1
@@ -842,63 +539,6 @@ stage3_selection_contains_alzheimer() {
          "${view}" == "batch_effect_corrected" ) ]] && return 0
   done < "${selection}"
   return 1
-}
-stage3_selection_contains_target_uncorrected() {
-  local selection="${1:-}" ds view extra
-  [[ -r "${selection}" ]] || return 1
-  while IFS=$'\t' read -r ds view extra; do
-    [[ -n "${ds}" && -n "${view}" && -z "${extra}" ]] || return 1
-    if [[ "${view}" == "batch_effect_uncorrected" &&
-          ( "${ds}" == "Covid19_PBMC" || "${ds}" == "Diabetes" ||
-            "${ds}" == "Joanito" || "${ds}" == "Lung" ) ]]; then
-      return 0
-    fi
-  done < "${selection}"
-  return 1
-}
-
-stage3_classify_selection() {
-  local selection="${1:-}" config="${2:-${DATASETS_JSON_FILE:-}}"
-  stage3_reset_selection_classification
-  # --exact-batch-selection has already validated the immutable historical
-  # twelve-row matrix before this function is reached.
-  if [[ ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
-    STAGE3_SELECTION_CLASSIFICATION="historical_exact"
-    return 0
-  fi
-  if [[ "${STAGE3_SCOPE_ARG}" == "corrected_recovery" ]]; then
-    if stage3_selection_is_corrected_recovery_candidate "${selection}"; then
-      stage3_validate_corrected_recovery_selection "${selection}" "${config}" || return 1
-      return 0
-    fi
-    if stage3_selection_is_targeted_breast_corrected_candidate "${selection}"; then
-      stage3_validate_targeted_breast_corrected_selection "${selection}" "${config}" || return 1
-      return 0
-    fi
-    echo "ERROR: corrected recovery scope must contain exactly the approved eight-row selection or one Breast_cancer corrected row." >&2
-    return 1
-  fi
-  if stage3_selection_contains_alzheimer "${selection}"; then
-    stage3_validate_alzheimer_followup_selection "${selection}" "${config}" || return 1
-  elif stage3_selection_is_corrected_recovery_candidate "${selection}"; then
-    stage3_validate_corrected_recovery_selection "${selection}" "${config}" || return 1
-  elif stage3_selection_is_targeted_breast_corrected_candidate "${selection}"; then
-    stage3_validate_targeted_breast_corrected_selection "${selection}" "${config}" || return 1
-  elif stage3_selection_is_uncorrected_four_candidate "${selection}"; then
-    stage3_validate_uncorrected_four_selection "${selection}" "${config}" || return 1
-  elif stage3_selection_contains_target_uncorrected "${selection}"; then
-    echo "ERROR: target uncorrected Stage 3 selection must be exactly the approved four rows." >&2
-    return 1
-  elif stage3_selection_contains_corrected "${selection}"; then
-    echo "ERROR: corrected Stage 3 selection must be the explicit eight-row recovery or the targeted Breast_cancer row; Alzheimer uses one explicit follow-up row." >&2
-    return 1
-  fi
-}
-
-stage3_reset_selection_classification() {
-  STAGE3_SELECTION_CLASSIFICATION=""
-  STAGE3_UNCORRECTED_BATCH_SELECTION=0
-  STAGE3_CORRECTED_SELECTION=0
 }
 
 stage3_validate_covid_obs_report() {
@@ -1038,7 +678,9 @@ stage3_selection_contains_covid() {
   [[ -r "${selection}" ]] || return 1
   while IFS=$'\t' read -r ds view extra; do
     [[ -n "${ds}" && -n "${view}" && -z "${extra}" ]] || return 1
-    [[ "${ds}" == "Covid19_PBMC" ]] && return 0
+    [[ "${ds}" == "Covid19_PBMC" &&
+       ( "${view}" == "batch_effect_uncorrected" ||
+         "${view}" == "batch_effect_corrected" ) ]] && return 0
   done < "${selection}"
   return 1
 }
@@ -1052,10 +694,6 @@ stage3_run_covid_obs_preflight() {
   local view="" path="" status="" safe="" state="" status_run="" status_dataset="" status_view=""
   local status_task="" status_path="" status_count=0
   local preflight_script="" preflight_id="" preflight_rc=0
-  case "${STAGE3_SELECTION_CLASSIFICATION}" in
-    uncorrected_four|corrected_recovery) ;;
-    *) return 0 ;;
-  esac
   stage3_selection_contains_covid "${selection}" || return 0
   STAGE3_COVID_PREFLIGHT_REQUIRED=1
   if [[ -n "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" &&
@@ -1654,9 +1292,6 @@ build_recovery_selection() {
     done
   fi
   ecoda_validate_manifest "${target}" 2 || return 1
-  if [[ ${EXACT_BATCH_SELECTION} -eq 1 ]]; then
-    ecoda_validate_exact_batch_selection "${target}" 2 || return 1
-  fi
 }
 
 gate_recovery_scheduler_id() {
@@ -1750,23 +1385,8 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     stage3_validate_sync_report "${VALIDATED_SYNC_REPORT}" ||
       stage3_abort "Stage 3 validated sync report is invalid"
   fi
-  stage3_classify_selection "${MANIFEST}" "${DATASETS_JSON_FILE}" ||
-    stage3_abort "Stage 3 selection classification is invalid"
-  case "${STAGE3_SELECTION_CLASSIFICATION}" in
-    uncorrected_four)
-      if [[ -n "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" &&
-            "${STAGE3_COVID_PREFLIGHT_ROOT_REQUESTED}" != "${ECODA_RUN_ROOT}/preflight" ]]; then
-        stage3_abort "Stage 3 sync-only Covid preflight root override is not run-bound"
-      fi
-      STAGE3_COVID_PREFLIGHT_ROOT="${ECODA_RUN_ROOT}/preflight"
-      stage3_validate_covid_obs_reports ||
-        stage3_abort "Stage 3 sync-only Covid obs preflight validation failed"
-      ;;
-    alzheimer_followup)
-      stage3_validate_alzheimer_input_dependency ||
-        stage3_abort "Stage 3 sync-only Alzheimer Stage 2 dependency validation failed"
-      ;;
-  esac
+  stage3_validate_alzheimer_input_dependency ||
+    stage3_abort "Stage 3 Alzheimer Stage 2 dependency validation failed"
   [[ -r "${PENDING_MANIFEST}" ]] ||
     stage3_abort "Stage 3 pending manifest is missing"
   ecoda_validate_run_owned_path "${PENDING_MANIFEST}" "${ECODA_RUN_ROOT}" ||
@@ -1885,21 +1505,12 @@ if [[ -z "${SELECTION_FILE_ARG}" ]]; then
     echo "ERROR: generated Stage 3 selection is malformed." >&2
     exit 1
   }
-  stage3_classify_selection "${PREVALIDATION_SELECTION}" "${DATASETS_JSON_FILE}" || {
-    rm -f "${PREVALIDATION_SELECTION}"
-    echo "ERROR: generated Stage 3 selection classification is invalid." >&2
-    exit 1
-  }
   rm -f "${PREVALIDATION_SELECTION}"
 fi
 
 if [[ -n "${SELECTION_FILE_ARG}" ]]; then
   validate_external_selection "${SELECTION_FILE_ARG}" || {
     echo "ERROR: Stage 3 selection file is malformed or semantically invalid." >&2
-    exit 1
-  }
-  stage3_classify_selection "${SELECTION_FILE_ARG}" "${DATASETS_JSON_FILE}" || {
-    echo "ERROR: Stage 3 selection classification is invalid." >&2
     exit 1
   }
 fi
@@ -1990,15 +1601,13 @@ stage3_load_bound_run ||
   stage3_abort "Stage 3 run-bound source/runtime identity is invalid"
 stage3_record_identity_metadata ||
   stage3_abort "failed to record Stage 3 source/runtime identity"
-stage3_classify_selection "${MANIFEST}" "${DATASETS_JSON_FILE}" ||
-  stage3_abort "Stage 3 selection classification is invalid"
 stage3_validate_alzheimer_input_dependency ||
   stage3_abort "Stage 3 Alzheimer Stage 2 dependency validation failed"
 RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage3 0)" ||
   stage3_abort "Stage 3 runtime export construction failed"
 RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_RUNTIME_IDENTITY=${RUNTIME_IDENTITY},ECODA_SOURCE_MANIFEST_RUN=${SOURCE_MANIFEST_RUN}"
-if [[ "${STAGE3_SELECTION_CLASSIFICATION}" == "alzheimer_followup" &&
-      -n "${STAGE3_INPUT_PRODUCER_RUN_ID:-}" ]]; then
+if [[ -n "${STAGE3_INPUT_PRODUCER_RUN_ID:-}" &&
+      -n "${STAGE3_ALZHEIMER_INPUT_PATH:-}" ]]; then
   RUNTIME_EXPORT="${RUNTIME_EXPORT},STAGE3_INPUT_PRODUCER_RUN_ID=${STAGE3_INPUT_PRODUCER_RUN_ID}"
 fi
 SCHEDULER_IDS_FILE="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"

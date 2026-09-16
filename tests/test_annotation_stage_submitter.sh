@@ -110,20 +110,22 @@ for arg in "$@"; do
       ;;
   esac
 done
-if [[ "$*" == *"1.2_prepare_chunks_worker.sh"* ]]; then
+if [[ "$*" == *"stage4_watchdog.sh "* ]]; then
+  :
+elif [[ "$*" == *"1.2_prepare_chunks_worker.sh"* ]]; then
   "${SBATCH_HELPER}" prepare "${ECODA_RUN_ROOT}" >/dev/null
 elif [[ "$*" == *"2.1_run_worker.sh"* ]]; then
   "${SBATCH_HELPER}" annotation "${ECODA_RUN_ROOT}" >/dev/null
 elif [[ "$*" == *"3.2_merge_worker.sh"* ]]; then
   "${SBATCH_HELPER}" merge "${ECODA_RUN_ROOT}" >/dev/null
 fi
-if [[ "$*" == *"1.3_prepare_chunks_watchdog.sh"* ]]; then
+if [[ "$*" == *"stage4_watchdog.sh preparation"* ]]; then
   printf 'STATE=OK\nSCHEDULER_ID=%s\n' "72000$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" \
     > "${ECODA_RUN_ROOT}/status/preparation_watchdog"
-elif [[ "$*" == *"1.2_annotation_watchdog.sh"* ]]; then
+elif [[ "$*" == *"stage4_watchdog.sh annotation"* ]]; then
   printf 'STATE=OK\nSCHEDULER_ID=%s\n' "72000$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" \
     > "${ECODA_RUN_ROOT}/status/annotation_watchdog"
-elif [[ "$*" == *"3.3_merge_watchdog.sh"* ]]; then
+elif [[ "$*" == *"stage4_watchdog.sh merge"* ]]; then
   printf 'STATE=OK\nSCHEDULER_ID=%s\n' "72000$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" \
     > "${ECODA_RUN_ROOT}/status/merge_watchdog"
 fi
@@ -501,6 +503,10 @@ case " ${R_CALL} " in *' --wrap '*|*' --force '*) fail "snapshot scGate validati
 PREP_CALL=""
 ANNOT_CALL=""
 MERGE_CALL=""
+PREP_WATCHDOG_CALL=""
+ANNOT_WATCHDOG_CALL=""
+MERGE_WATCHDOG_CALL=""
+WATCHDOG_COUNT=0
 while IFS= read -r call; do
   for token in \
     "ECODA_SOURCE_ROOT=${VALID_TREE}" \
@@ -524,17 +530,34 @@ while IFS= read -r call; do
     *) fail "scheduler command was not rooted in the immutable source tree" ;;
   esac
   case "${call}" in
+    *"stage4_watchdog.sh preparation "*) PREP_WATCHDOG_CALL="${call}"; WATCHDOG_COUNT=$((WATCHDOG_COUNT + 1)) ;;
+    *"stage4_watchdog.sh annotation "*) ANNOT_WATCHDOG_CALL="${call}"; WATCHDOG_COUNT=$((WATCHDOG_COUNT + 1)) ;;
+    *"stage4_watchdog.sh merge "*) MERGE_WATCHDOG_CALL="${call}"; WATCHDOG_COUNT=$((WATCHDOG_COUNT + 1)) ;;
     *"1.2_prepare_chunks_worker.sh"*) PREP_CALL="${call}" ;;
-    *"1.3_prepare_chunks_watchdog.sh"*) ;;
     *"2.1_run_worker.sh"*) ANNOT_CALL="${call}" ;;
-    *"1.2_annotation_watchdog.sh"*) ;;
     *"3.2_merge_worker.sh"*) MERGE_CALL="${call}" ;;
-    *"3.3_merge_watchdog.sh"*) ;;
     *) fail "captured an unknown Stage 4 scheduler script" ;;
   esac
 done < "${CAPTURE}"
 [[ -n "${PREP_CALL}" && -n "${ANNOT_CALL}" && -n "${MERGE_CALL}" ]] ||
   fail "preparation, annotation, and merge scheduler commands were not all captured"
+[[ ${WATCHDOG_COUNT} -eq 3 &&
+   -n "${PREP_WATCHDOG_CALL}" &&
+   -n "${ANNOT_WATCHDOG_CALL}" &&
+   -n "${MERGE_WATCHDOG_CALL}" ]] ||
+  fail "the three Stage 4 phases did not share the parameterized watchdog"
+case "${PREP_WATCHDOG_CALL}" in
+  *"stage4_watchdog.sh preparation "* ) ;;
+  *) fail "preparation did not pass its watchdog phase" ;;
+esac
+case "${ANNOT_WATCHDOG_CALL}" in
+  *"stage4_watchdog.sh annotation "* ) ;;
+  *) fail "annotation did not pass its watchdog phase" ;;
+esac
+case "${MERGE_WATCHDOG_CALL}" in
+  *"stage4_watchdog.sh merge "* ) ;;
+  *) fail "merge did not pass its watchdog phase" ;;
+esac
 case "${PREP_CALL}" in *"ANNOTATION_PREP_MANIFEST=${RUN_ROOT}/manifests/preparation.tsv"*) ;; *) fail "preparation command omitted its run-owned manifest" ;; esac
 case "${ANNOT_CALL}" in *"CHUNKS_MANIFEST=${RUN_ROOT}/manifests/chunks.tsv"*) ;; *) fail "annotation command omitted its run-owned chunk manifest" ;; esac
 case "${MERGE_CALL}" in *"ANNOTATION_MERGE_MANIFEST=${RUN_ROOT}/manifests/merge.tsv"*) ;; *) fail "merge command omitted its run-owned manifest" ;; esac
