@@ -29,13 +29,14 @@ from src.utils.py.batch_contract import (  # noqa: E402
     LIMMA_PSEUDOBULK_CORRECTION_MODE,
     METHOD_IDS,
     RESERVED_OBS_NAME,
+    normalize_batch_keys,
     batch_contract_fingerprint,
     batch_correction_spec_for_keys,
     build_batch_composite,
     canonicalize_batch_value,
     canonicalize_batch_values,
     composite_token,
-    normalize_batch_keys,
+    serialize_batch_contract_identity,
     serialize_batch_metadata,
     validate_batch_metadata,
 )
@@ -381,13 +382,38 @@ def check_metadata_identity_and_temporary_column(
     assert scalar_metadata["reserved_obs_name"] == RESERVED_OBS_NAME
     assert scalar_metadata["model_id"] == CORRECTED_METHOD_MODELS["ECODA_authors_HR"]
 
-    two_validation = validate_batch_metadata(two, ["site", "tech"], biological_column="cell_type")
+    two_validation = validate_batch_metadata(
+        two,
+        ["site", "tech"],
+        biological_column="cell_type",
+    )
     metadata = serialize_batch_metadata(
         two_validation,
         method_id="PILOT",
         model_id="embedding_consumer_harmony_v1",
         include_tokens=True,
     )
+    compact = serialize_batch_contract_identity(
+        two_validation,
+        method_id="PILOT",
+        model_id="embedding_consumer_harmony_v1",
+    )
+    assert compact["validation_summary"]["n_cells"] == two_validation.n_obs
+    assert compact["validation_summary"]["n_samples"] == two_validation.n_samples
+    assert all(
+        field not in compact
+        for field in (
+            "composite_values",
+            "sample_composite_values",
+            "sample_ids",
+            "sample_group_ids",
+            "tokens",
+        )
+    )
+    assert compact["validation_summary"]["per_key_levels"] == {
+        "site": ["s:A", "s:B"],
+        "tech": ["s:x", "s:y"],
+    }
     assert metadata["contract_version"] == "ecoda_batch_contract_v1"
     assert metadata["model_id"] == CORRECTED_METHOD_MODELS["PILOT"]
     assert metadata["token_version"] == "ecoda_batch_composite_v1"

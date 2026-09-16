@@ -1,7 +1,7 @@
 """Deterministic corrected-mode batch metadata and composite contract.
 
 The corrected pipeline has several consumers that cannot all accept the same
-batch representation.  This module is the small, dependency-shared boundary:
+batch representation.  This module is the single source of truth:
 configuration is normalized here, cell metadata is validated before any
 sample-level reduction, and scalar composite values use one byte-exact
 cross-language encoding.
@@ -9,7 +9,8 @@ cross-language encoding.
 Nothing in this module writes an AnnData object or mutates the caller's
 metadata.  :func:`build_batch_composite` returns a copied, in-memory frame for
 callers that need a temporary scalar column; the reserved column is never
-persisted by this module.
+persisted by this module.  :func:`serialize_batch_contract_identity` returns
+the compact JSON-safe identity consumed by non-Python callers.
 """
 
 from __future__ import annotations
@@ -147,6 +148,8 @@ __all__ = [
     "validate_batch_metadata",
     "build_batch_composite",
     "batch_contract_fingerprint",
+    "batch_contract_fingerprint_payload",
+    "batch_contract_fingerprint_payload_hex",
     "build_batch_contract_identity",
     "build_historical_batch_contract_identity",
     "build_batch_validation_summary",
@@ -155,6 +158,7 @@ __all__ = [
     "batch_correction_spec_for_keys",
     "batch_correction_spec",
     "augment_batch_contract",
+    "serialize_batch_contract_identity",
     "serialize_batch_metadata",
 ]
 
@@ -565,15 +569,29 @@ def canonicalize_batch_value(value: object, *, factor: bool = False) -> str:
 
 
 def canonicalize_batch_values(
-    values: Sequence[object], *, factor: bool = False
+    values: Sequence[object],
+    *,
+    factor: bool = False,
+    accepted_sentinel_values: Sequence[object] | None = None,
 ) -> tuple[str, ...]:
     """Canonicalize a sequence in input order without modifying it."""
 
     if isinstance(values, (str, bytes, bytearray)):
         raise BatchContractError("batch values must be a sequence of scalar values")
+    accepted = frozenset()
+    if accepted_sentinel_values is not None:
+        accepted = _normalize_accepted_sentinel_values(
+            ("__value__",),
+            {"__value__": accepted_sentinel_values},
+        )["__value__"]
     try:
         return tuple(
-            canonicalize_batch_value(value, factor=factor) for value in values
+            (
+                f"s:{str(value)}"
+                if isinstance(value, (str, np.str_)) and str(value) in accepted
+                else canonicalize_batch_value(value, factor=factor)
+            )
+            for value in values
         )
     except TypeError as exc:
         raise BatchContractError("batch values must be a sequence") from exc
@@ -795,13 +813,18 @@ def validate_batch_metadata(
     sample_column: str = "Sample",
     biological_column: str | None = None,
     near_unique_fraction: float = 0.50,
+    accepted_sentinel_values: Mapping[str, Sequence[object]] | None = None,
+    enforce_near_unique: bool = True,
+    enforce_composite_near_unique: bool = True,
 ) -> BatchValidation:
     """Validate every cell's corrected batch metadata before reduction.
 
     The check rejects missing/sentinel values, within-``Sample`` disagreement,
-    constant or near-unique factors, disconnected/rank-deficient additive
-    designs, and non-estimable composite levels.  It consumes the entire cell
-    table and never chooses a first observation as a fallback.
+    near-unique factors, disconnected/rank-deficient additive designs, and
+    empty composite identities. A constant technical key is valid metadata-only
+    input and is excluded from the fitted fixed-effect design.
+    It consumes the entire cell table and never chooses a first observation as
+    a fallback.
     """
 
     sample_column = _validate_column_name(sample_column, "sample_column")
@@ -809,6 +832,10 @@ def validate_batch_metadata(
         biological_column = _validate_column_name(
             biological_column, "biological_column"
         )
+    if not isinstance(enforce_near_unique, (bool, np.bool_)):
+        raise BatchContractError("enforce_near_unique must be boolean")
+    if not isinstance(enforce_composite_near_unique, (bool, np.bool_)):
+        raise BatchContractError("enforce_composite_near_unique must be boolean")
     if (
         isinstance(near_unique_fraction, (bool, np.bool_))
         or not isinstance(near_unique_fraction, (int, float, np.number))
@@ -822,6 +849,10 @@ def validate_batch_metadata(
         batch_keys,
         sample_column=sample_column,
         biological_column=biological_column,
+    )
+    accepted_by_key = _normalize_accepted_sentinel_values(
+        keys,
+        accepted_sentinel_values,
     )
     columns, n_obs = _data_columns(data)
     available = set(columns)
@@ -857,7 +888,13 @@ def validate_batch_metadata(
     for key in keys:
         values, factor = _column_values(data, key, n_obs)
         canonical_by_key[key] = tuple(
-            canonicalize_batch_value(value, factor=factor) for value in values
+            _canonicalize_composite_value(
+                key,
+                value,
+                factor=factor,
+                accepted_sentinel_values=accepted_by_key,
+            )
+            for value in values
         )
 
     # Full-cell constancy check.  A sample's first value is used only as a
@@ -885,12 +922,17 @@ def validate_batch_metadata(
     }
     for key in keys:
         key_levels = levels[key]
-        if len(key_levels) < 2:
+        if not key_levels:
             raise BatchContractError(
-                f"corrected batch key {key!r} has fewer than two observed levels"
+                f"corrected batch key {key!r} has no observed levels"
             )
-        ratio = len(key_levels) / len(sample_group_ids)
-        if ratio > near_unique_fraction:
+        # One-level technical keys remain validated source metadata but are
+        # omitted from the fitted fixed-effect model.
+        if (
+            bool(enforce_near_unique)
+            and len(key_levels) >= 2
+            and len(key_levels) / len(sample_group_ids) > near_unique_fraction
+        ):
             raise BatchContractError(
                 f"corrected batch key {key!r} is near-unique: "
                 f"{len(key_levels)}/{len(sample_group_ids)} levels "
@@ -903,7 +945,13 @@ def validate_batch_metadata(
     design_rank, design_columns = _design_rank(sample_rows, keys, levels)
     if design_rank < design_columns:
         raise BatchContractError(
-            "corrected additive batch design is rank-deficient or disconnected"
+            "corrected additive batch design is rank deficient or disconnected"
+        )
+    design_residual_df = len(sample_group_ids) - design_rank
+    if design_residual_df <= 0:
+        raise BatchContractError(
+            "corrected additive batch design is non-estimable: "
+            "no residual degrees of freedom"
         )
 
     scalarization = (
@@ -918,12 +966,16 @@ def validate_batch_metadata(
             for row_number in range(n_obs)
         )
         composite_levels = _sorted_levels(row_tokens)
-        if len(composite_levels) < 2:
+        if not composite_levels:
             raise BatchContractError(
-                "corrected composite batch has fewer than two observed levels"
+                "corrected composite batch has no observed levels"
             )
         composite_ratio = len(composite_levels) / len(sample_group_ids)
-        if composite_ratio > near_unique_fraction:
+        if (
+            bool(enforce_composite_near_unique)
+            and len(composite_levels) >= 2
+            and composite_ratio > near_unique_fraction
+        ):
             raise BatchContractError(
                 "corrected composite batch is near-unique: "
                 f"{len(composite_levels)}/{len(sample_group_ids)} levels "
@@ -1114,6 +1166,26 @@ def batch_contract_fingerprint(
     locale, map iteration, or platform-native integer representation is used.
     """
 
+    payload = batch_contract_fingerprint_payload(
+        batch_keys,
+        scalarization=scalarization,
+        method_id=method_id,
+        model_id=model_id,
+        historical_compatibility=historical_compatibility,
+    )
+    return hashlib.sha256(payload).hexdigest()
+
+
+def batch_contract_fingerprint_payload(
+    batch_keys: str | Sequence[str],
+    scalarization: str | None = None,
+    method_id: str | None = None,
+    model_id: str | None = None,
+    *,
+    historical_compatibility: bool = False,
+) -> bytes:
+    """Return the exact byte payload hashed for one contract identity."""
+
     keys = normalize_batch_keys(batch_keys)
     expected_scalarization = (
         COMPOSITE_SCALARIZATION if len(keys) >= 2 else DIRECT_SCALARIZATION
@@ -1131,9 +1203,26 @@ def batch_contract_fingerprint(
         model_id,
         historical_compatibility=historical_compatibility,
     )
-    return hashlib.sha256(
-        _batch_contract_payload(keys, scalarization, method_id, model_id)
-    ).hexdigest()
+    return _batch_contract_payload(keys, scalarization, method_id, model_id)
+
+
+def batch_contract_fingerprint_payload_hex(
+    batch_keys: str | Sequence[str],
+    scalarization: str | None = None,
+    method_id: str | None = None,
+    model_id: str | None = None,
+    *,
+    historical_compatibility: bool = False,
+) -> str:
+    """Return the exact fingerprint payload in lowercase hexadecimal form."""
+
+    return batch_contract_fingerprint_payload(
+        batch_keys,
+        scalarization=scalarization,
+        method_id=method_id,
+        model_id=model_id,
+        historical_compatibility=historical_compatibility,
+    ).hex()
 
 
 def build_batch_contract_identity(
@@ -1240,7 +1329,7 @@ def _validated_batch_value(
             raise BatchContractError(
                 f"batch validation summary is missing levels for {key!r}"
             ) from exc
-        if tuple(levels) != _sorted_levels(levels) or len(levels) < 2:
+        if tuple(levels) != _sorted_levels(levels) or len(levels) < 1:
             raise BatchContractError(
                 f"batch validation summary has invalid sorted levels for {key!r}"
             )
@@ -1416,7 +1505,18 @@ def batch_correction_spec(
     """Return the explicit corrected-mode summary policy for one consumer."""
 
     validation = _validated_batch_value(validation)
-    return batch_correction_spec_for_keys(method_id, validation.keys)
+    effective = tuple(
+        key for key in validation.keys if len(validation.levels[key]) >= 2
+    )
+    non_estimable = tuple(
+        key for key in validation.keys if key not in effective
+    )
+    return batch_correction_spec_for_keys(
+        method_id,
+        validation.keys,
+        effective_batch_keys=effective,
+        non_estimable_batch_keys=non_estimable,
+    )
 
 
 def augment_batch_contract(
@@ -1473,6 +1573,31 @@ def augment_batch_contract(
     }
     augmented["validation_summary"] = summary
     return augmented
+def serialize_batch_contract_identity(
+    validation: BatchValidation | BatchComposite,
+    *,
+    method_id: str,
+    model_id: str,
+) -> dict[str, Any]:
+    """Serialize one validated contract without cell/sample vectors."""
+
+    validation = _validated_batch_value(validation)
+    identity = build_batch_contract_identity(
+        validation.keys,
+        sample_column=validation.sample_column,
+        method_id=method_id,
+        model_id=model_id,
+    )
+    correction_mode, correction_formula = batch_correction_spec(
+        method_id,
+        validation,
+    )
+    return augment_batch_contract(
+        identity,
+        validation,
+        correction_mode,
+        correction_formula,
+    )
 
 def validate_batch_validation_summary(
     summary: Mapping[str, Any],
@@ -1480,10 +1605,10 @@ def validate_batch_validation_summary(
 ) -> dict[str, Any]:
     """Validate and copy one persisted vector-free validation summary."""
 
+    if not isinstance(summary, Mapping):
+        raise BatchContractError("validation_summary must be a mapping")
     if set(summary) != _VALIDATION_SUMMARY_FIELDS:
-        raise BatchContractError(
-            "validation_summary has an invalid field set"
-        )
+        raise BatchContractError("validation_summary has an invalid field set")
 
     def _normalize_numpy_scalar(value: Any) -> Any:
         if isinstance(value, np.bool_):
@@ -1506,24 +1631,23 @@ def validate_batch_validation_summary(
         "n_samples",
     ):
         normalized[field] = _normalize_numpy_scalar(summary[field])
-    constancy = summary["sample_constancy"]
-    if isinstance(constancy, Mapping):
-        normalized["sample_constancy"] = {
-            key: _normalize_numpy_scalar(value)
-            for key, value in constancy.items()
-        }
-    levels = summary["per_key_levels"]
-    if isinstance(levels, Mapping):
-        normalized["per_key_levels"] = {
-            key: _normalize_numpy_vector(value)
-            for key, value in levels.items()
-        }
-    counts = summary["key_level_counts"]
-    if isinstance(counts, Mapping):
-        normalized["key_level_counts"] = {
-            key: _normalize_numpy_scalar(value)
-            for key, value in counts.items()
-        }
+    for field, normalizer in (
+        ("sample_constancy", lambda value: {
+            key: _normalize_numpy_scalar(item)
+            for key, item in value.items()
+        }),
+        ("per_key_levels", lambda value: {
+            key: _normalize_numpy_vector(item)
+            for key, item in value.items()
+        }),
+        ("key_level_counts", lambda value: {
+            key: _normalize_numpy_scalar(item)
+            for key, item in value.items()
+        }),
+    ):
+        value = summary[field]
+        if isinstance(value, Mapping):
+            normalized[field] = normalizer(value)
     normalized["composite_levels"] = _normalize_numpy_vector(
         summary["composite_levels"]
     )
@@ -1564,9 +1688,6 @@ def validate_batch_validation_summary(
             raise BatchContractError(
                 "validation_summary keys do not match configured batch keys"
             )
-        # HDF5 group iteration may be lexical even though the source summary
-        # was written in configured order.  Return a canonical configured map
-        # order after checking that no key was added or dropped.
         keys = list(expected_keys)
     else:
         if level_keys != constancy_keys or level_keys != count_keys:
@@ -1589,7 +1710,7 @@ def validate_batch_validation_summary(
             or not isinstance(key_levels, (list, tuple))
             or any(not isinstance(level, str) for level in key_levels)
             or tuple(key_levels) != _sorted_levels(key_levels)
-            or len(key_levels) < 2
+            or len(key_levels) < 1
         ):
             raise BatchContractError(
                 f"validation_summary has invalid levels for {key!r}"
@@ -1611,12 +1732,11 @@ def validate_batch_validation_summary(
         or tuple(composite_levels) != _sorted_levels(composite_levels)
     ):
         raise BatchContractError("validation_summary has invalid composite_levels")
-    expected_composite_count = len(composite_levels)
     composite_count = summary["composite_level_count"]
     if (
         isinstance(composite_count, bool)
         or not isinstance(composite_count, int)
-        or composite_count != expected_composite_count
+        or composite_count != len(composite_levels)
     ):
         raise BatchContractError(
             "validation_summary has an invalid composite_level_count"

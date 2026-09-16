@@ -20,62 +20,38 @@ REQUIRED_OBSM = {
     },
 }
 from collections.abc import Mapping
-import hashlib
 import json
 from pathlib import Path
 
 try:
     from src.utils.py.batch_contract import (  # noqa: E402
+        COMPOSITE_SCALARIZATION as _BATCH_COMPOSITE_SCALARIZATION,
+        DIRECT_SCALARIZATION as _BATCH_DIRECT_SCALARIZATION,
+        FINGERPRINT_VERSION as _BATCH_CONTRACT_VERSION,
+        METHOD_IDS as _BATCH_METHOD_IDS,
+        MODEL_IDS as _BATCH_MODEL_IDS,
+        RESERVED_OBS_NAME as _BATCH_RESERVED_OBS_NAME,
+        TOKEN_VERSION as _BATCH_TOKEN_VERSION,
+        batch_contract_fingerprint as _batch_contract_fingerprint,
         batch_correction_spec_for_keys as _batch_correction_spec_for_keys,
         validate_batch_validation_summary as _validate_batch_validation_summary,
     )
 except ModuleNotFoundError:  # pragma: no cover - direct script execution
     from batch_contract import (  # type: ignore[no-redef]
+        COMPOSITE_SCALARIZATION as _BATCH_COMPOSITE_SCALARIZATION,
+        DIRECT_SCALARIZATION as _BATCH_DIRECT_SCALARIZATION,
+        FINGERPRINT_VERSION as _BATCH_CONTRACT_VERSION,
+        METHOD_IDS as _BATCH_METHOD_IDS,
+        MODEL_IDS as _BATCH_MODEL_IDS,
+        RESERVED_OBS_NAME as _BATCH_RESERVED_OBS_NAME,
+        TOKEN_VERSION as _BATCH_TOKEN_VERSION,
+        batch_contract_fingerprint as _batch_contract_fingerprint,
         batch_correction_spec_for_keys as _batch_correction_spec_for_keys,
         validate_batch_validation_summary as _validate_batch_validation_summary,
     )
 
-
-# The identity is an explicit corrected-mode caller contract.  Pipeline 3
-# preprocessing persists configuration identity without a sample-level
-# validation summary; consumers other than preprocessing remain strict.
-#
-# These values are duplicated here deliberately rather than inferred from an
-# audit/checksum sidecar.
-#
-_BATCH_TOKEN_VERSION = "ecoda_batch_composite_v1"
-_BATCH_CONTRACT_VERSION = "ecoda_batch_contract_v1"
-_BATCH_RESERVED_OBS_NAME = "__ecoda_batch_combined_v1"
-_BATCH_DIRECT_SCALARIZATION = "direct_v1"
-_BATCH_COMPOSITE_SCALARIZATION = "composite_v1"
 _BATCH_H5AD_METHOD_ID = "preprocess"
 _BATCH_H5AD_MODEL_ID = "hvg_composite_v1"
-_BATCH_METHOD_IDS = frozenset(
-    {
-        "preprocess",
-        "ECODA_authors_HR",
-        "ECODA_seuratres_2",
-        "ECODA_authors_HR_NULL",
-        "Pseudobulk",
-        "GloScope",
-        "PILOT",
-        "MrVI",
-        "QOT",
-    }
-)
-_BATCH_MODEL_IDS = frozenset(
-    {
-        # Active corrected artifact identities.  Historical lme4/combined
-        # model IDs are intentionally excluded from this releasing validator;
-        # read-only compatibility must use an explicit historical branch.
-        "hvg_composite_v1",
-        "harmony_native_list_v1",
-        "mrvi_composite_v1",
-        "embedding_consumer_harmony_v1",
-        "limma_fixed_effects_v1",
-        "pseudobulk_limma_fixed_effects_v1",
-    }
-)
 _BATCH_KEY_FIELDS = (
     "ordered_source_keys",
     "ordered_keys",
@@ -265,9 +241,18 @@ def _validate_identity_summary(
             keys,
         )
         if method_id is not None:
+            effective = tuple(
+                key
+                for key in keys
+                if len(normalized["per_key_levels"][key]) >= 2
+            )
             expected_mode, expected_formula = _batch_correction_spec_for_keys(
                 method_id,
                 keys,
+                effective_batch_keys=effective,
+                non_estimable_batch_keys=tuple(
+                    key for key in keys if key not in effective
+                ),
             )
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{label} has an invalid validation_summary") from exc
@@ -282,39 +267,14 @@ def _validate_identity_summary(
 
 
 def _identity_fingerprint(keys, scalarization, method_id, model_id):
-    """Compute the byte-exact fingerprint without serializing an object."""
-    def field(name, value):
-        name_bytes = name.encode("utf-8")
-        value_bytes = value.encode("utf-8")
-        return (
-            str(len(name_bytes)).encode("ascii")
-            + b":"
-            + name_bytes.hex().encode("ascii")
-            + b","
-            + str(len(value_bytes)).encode("ascii")
-            + b":"
-            + value_bytes.hex().encode("ascii")
-            + b";"
-        )
+    """Compute the byte-exact fingerprint through the batch contract module."""
 
-    key_parts = [f"{len(keys)}|".encode("ascii")]
-    for key in keys:
-        key_bytes = key.encode("utf-8")
-        key_parts.extend(
-            (
-                str(len(key_bytes)).encode("ascii"),
-                b":",
-                key_bytes.hex().encode("ascii"),
-                b";",
-            )
-        )
-    payload = bytearray(_BATCH_CONTRACT_VERSION.encode("utf-8") + b"\0")
-    payload.extend(field("encoding", _BATCH_TOKEN_VERSION))
-    payload.extend(field("keys", b"".join(key_parts).decode("ascii")))
-    payload.extend(field("scalarization", scalarization))
-    payload.extend(field("method", method_id))
-    payload.extend(field("model", model_id))
-    return hashlib.sha256(bytes(payload)).hexdigest()
+    return _batch_contract_fingerprint(
+        keys,
+        scalarization=scalarization,
+        method_id=method_id,
+        model_id=model_id,
+    )
 
 
 def _normalize_batch_contract_identity(identity, label="batch contract"):

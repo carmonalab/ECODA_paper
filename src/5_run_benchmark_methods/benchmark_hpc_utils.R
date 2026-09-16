@@ -54,9 +54,9 @@ PB_VARIANT_PRODUCERS <- setNames(
   paste0("stage5_prepare_pseudobulk_", PB_VARIANT_NAMES),
   PB_VARIANT_NAMES
 )
-# Corrected-mode consumers share the independent R batch contract.  The worker
-# loader predates that module, so source it here once for both Pipeline A
-# scripts and for direct utility callers.
+# Corrected-mode consumers share the Python batch contract through the compact
+# R adapter. The worker loader sources it once for Pipeline A and direct
+# utility callers.
 if (!exists("ecoda_batch_normalize_keys", mode = "function", inherits = TRUE)) {
   .ecoda_hpc_project_root <- Sys.getenv("PROJECT_ROOT", unset = "")
   .ecoda_hpc_contract_path <- if (nzchar(.ecoda_hpc_project_root)) {
@@ -84,7 +84,7 @@ if (!exists("ecoda_batch_normalize_keys", mode = "function", inherits = TRUE)) {
   }
   if (!file.exists(.ecoda_hpc_contract_path)) {
     stop(
-      "R corrected batch contract not found: ",
+      "R batch contract adapter not found: ",
       .ecoda_hpc_contract_path
     )
   }
@@ -493,36 +493,6 @@ ecoda_hpc_sample_metadata_path <- function(
   )
 }
 
-.ecoda_hpc_sample_canonical_value <- function(
-  value,
-  key,
-  allow_unknown_keys = character()
-) {
-  if (is.factor(value)) value <- as.character(value)
-  # Arrow may expose integer columns as bit64::integer64.  Keep the original
-  # Feather value in sample_metadata but canonicalize its numeric value here.
-  if (inherits(value, "integer64")) value <- as.numeric(value)
-  if (is.character(value) && length(value) == 1L &&
-      key %in% allow_unknown_keys && identical(value, "unknown")) {
-    return("s:unknown")
-  }
-  tryCatch(
-    ecoda_batch_canonical_value(value, paste0(key, " sample value")),
-    error = function(error) {
-      stop(
-        "Corrected sample metadata column '", key, "' is invalid: ",
-        conditionMessage(error)
-      )
-    }
-  )
-}
-
-# Build the in-memory validation object consumed by the fixed-effect limma
-# routines. This validates the already serialized one-row-per-Sample table;
-# it never inspects cells or performs a majority vote. Breast's literal
-# ``unknown`` class is explicitly allowed by the exporter policy. An
-# individual constant technical key remains in metadata but is excluded from
-# the separate-key design.
 ecoda_hpc_sample_metadata_validation <- function(
   metadata,
   batch_keys,
@@ -530,158 +500,33 @@ ecoda_hpc_sample_metadata_validation <- function(
   biological_label = NULL,
   allow_unknown_keys = character()
 ) {
-  if (!is.data.frame(metadata)) {
-    metadata <- as.data.frame(metadata, stringsAsFactors = FALSE)
-  }
-  if (!is.character(sample_col) || length(sample_col) != 1L ||
-      is.na(sample_col) || !nzchar(sample_col) ||
-      !sample_col %in% colnames(metadata)) {
-    stop("Corrected sample metadata is missing ", sample_col)
-  }
+  allow_unknown_keys <- unname(as.character(allow_unknown_keys))
   keys <- ecoda_hpc_normalize_batch_keys(
     batch_keys,
     sample_col = sample_col,
     biological_label = biological_label
   )
-  allow_unknown_keys <- as.character(allow_unknown_keys)
   if (any(!allow_unknown_keys %in% keys)) {
     stop("allow_unknown_keys contains an unconfigured technical key")
   }
-  sample_ids <- unname(as.character(metadata[[sample_col]]))
-  if (!length(sample_ids) || anyNA(sample_ids) ||
-      any(!nzchar(trimws(sample_ids))) || anyDuplicated(sample_ids)) {
-    stop("Corrected sample metadata has missing or duplicate Sample IDs")
-  }
-  if (nrow(metadata) < 2L) {
-    stop("Corrected sample metadata requires at least two Samples")
-  }
-  canonical_columns <- setNames(vector("list", length(keys)), keys)
-  per_key_levels <- setNames(vector("list", length(keys)), keys)
-  for (key in keys) {
-    if (!key %in% colnames(metadata)) {
-      stop("Corrected sample metadata is missing technical key ", key)
-    }
-    column <- metadata[[key]]
-    if (is.list(column) && !is.factor(column)) {
-      stop("Corrected sample metadata technical key is list-valued: ", key)
-    }
-    canonical <- vapply(
-      seq_len(nrow(metadata)),
-      function(index) .ecoda_hpc_sample_canonical_value(
-        column[[index]], key, allow_unknown_keys
-      ),
-      character(1)
-    )
-    levels <- .ecoda_batch_raw_sort(
-      unique(canonical), paste0(key, " sample levels")
-    )
-    if (length(levels) < 1L) {
-      stop("Corrected sample metadata technical key has no levels: ", key)
-    }
-    canonical_columns[[key]] <- canonical
-    per_key_levels[[key]] <- levels
-  }
-  canonical_sample_metadata <- data.frame(
-    Sample = sample_ids,
-    stringsAsFactors = FALSE,
-    check.names = FALSE
-  )
-  for (key in keys) {
-    canonical_sample_metadata[[key]] <- canonical_columns[[key]]
-  }
-  rownames(metadata) <- sample_ids
-  rownames(canonical_sample_metadata) <- sample_ids
-  composite_values <- if (length(keys) >= 2L) {
-    vapply(seq_len(nrow(metadata)), function(index) {
-      .ecoda_batch_composite_token_canonical(
-        keys,
-        lapply(keys, function(key) canonical_columns[[key]][[index]])
-      )
-    }, character(1))
-  } else {
-    canonical_columns[[keys[[1L]]]]
-  }
-  composite_levels <- if (length(keys) >= 2L) {
-    .ecoda_batch_raw_sort(
-      unique(composite_values), "sample composite levels"
+  accepted_sentinel_values <- if (length(allow_unknown_keys)) {
+    setNames(
+      lapply(allow_unknown_keys, function(key) "unknown"),
+      allow_unknown_keys
     )
   } else {
-    character()
+    NULL
   }
-  effective_batch_keys <- unname(keys[vapply(
-    per_key_levels,
-    function(levels) length(levels) >= 2L,
-    logical(1)
-  )])
-  non_estimable_batch_keys <- unname(setdiff(keys, effective_batch_keys))
-  provisional_validation <- list(
-    valid = TRUE,
-    ordered_keys = unname(keys),
-    sample_ids = sample_ids,
-    canonical_sample_metadata = canonical_sample_metadata,
-    per_key_levels = per_key_levels,
-    effective_batch_keys = effective_batch_keys,
-    non_estimable_batch_keys = non_estimable_batch_keys
-  )
-  design_info <- ecoda_batch_fixed_effect_design(
+  validation <- ecoda_batch_validate_metadata(
     metadata = metadata,
-    batch_keys = as.list(unname(keys)),
-    validation = provisional_validation,
-    sample_col = sample_col
-  )
-  list(
-    valid = TRUE,
-    validation_scope = "sample_metadata_feather",
+    batch_keys = keys,
     sample_col = sample_col,
-    sample_column = sample_col,
     biological_label = biological_label,
-    biological_column = biological_label,
-    ordered_keys = unname(keys),
-    keys = unname(keys),
-    key_count = as.integer(length(keys)),
-    effective_batch_keys = effective_batch_keys,
-    non_estimable_batch_keys = non_estimable_batch_keys,
-    correction_state = design_info$correction_state,
-    fixed_effect_aliases = design_info$aliases,
-    correction_design_formula = paste(
-      deparse(design_info$formula),
-      collapse = ""
-    ),
-    design_rank = design_info$rank,
-    design_columns = design_info$columns,
-    design_residual_df = design_info$residual_df,
-    scalarization = if (length(keys) >= 2L) "composite_v1" else "direct_v1",
-    sample_ids = sample_ids,
-    sample_group_ids = sample_ids,
-    n_cells = as.integer(nrow(metadata)),
-    n_obs = as.integer(nrow(metadata)),
-    n_samples = as.integer(nrow(metadata)),
-    sample_constancy = setNames(
-      lapply(keys, function(key) TRUE), keys
-    ),
-    sample_metadata = metadata,
-    canonical_sample_metadata = canonical_sample_metadata,
-    canonical_values = canonical_columns,
-    canonical_cell_values = canonical_columns,
-    per_key_levels = per_key_levels,
-    levels = per_key_levels,
-    key_level_counts = setNames(
-      lapply(per_key_levels, length), keys
-    ),
-    composite_values = composite_values,
-    composite_levels = composite_levels,
-    composite_level_count = as.integer(length(composite_levels)),
-    composite_near_unique_fraction = if (length(keys) >= 2L) {
-      as.numeric(length(composite_levels) / nrow(metadata))
-    } else {
-      NA_real_
-    },
-    additive_design = list(
-      rank = design_info$rank,
-      columns = design_info$columns,
-      residual_df = design_info$residual_df
-    )
+    accepted_sentinel_values = accepted_sentinel_values,
+    enforce_near_unique = FALSE
   )
+  validation[["validation_scope"]] <- "sample_metadata_feather"
+  validation
 }
 
 # Read and verify one exporter-produced Feather table.  The H5AD Sample order
@@ -801,8 +646,8 @@ ecoda_hpc_load_sample_metadata_contract <- function(
     metadata_checksum = metadata_checksum
   )
 }
-# reducer.  The validator reads only obs metadata and returns the serialized
-# cross-language contract, including sample-order composite values.
+# The validator reads only obs metadata and returns Python's compact
+# vector-free identity/validation summary.
 validate_h5ad_corrected_batch_metadata <- function(
   h5ad_path,
   batch_keys,
@@ -861,16 +706,25 @@ validate_h5ad_corrected_batch_metadata <- function(
       as.numeric(near_unique_fraction)
     )
   )
-  if (!is.list(result) || is.null(result[["composite_values"]]) ||
-      is.null(result[["sample_ids"]])) {
-    stop("Python corrected batch validator returned malformed metadata")
+  vector_fields <- c(
+    "composite_values", "sample_composite_values", "sample_ids",
+    "sample_group_ids", "canonical_values", "canonical_cell_values",
+    "canonical_sample_metadata", "sample_metadata", "row_tokens", "tokens",
+    "scalarized_values", "sample_scalarized_values", "batch_values",
+    "batch_levels", "sample_batch_values", "sample_batch_levels"
+  )
+  if (!is.list(result) || is.null(result[["validation_summary"]]) ||
+      length(intersect(vector_fields, names(result)))) {
+    stop(
+      "Python corrected batch validator must return a compact identity"
+    )
   }
   result
 }
 
-# Ordinary corrected Stage 5 retains this full-cell validator/context path.
-# Only corrected_final workers use ecoda_hpc_load_sample_metadata_contract()
-# instead, with its sample-level Feather validation object.
+# Ordinary corrected Stage 5 validates cell metadata in Python and consumes only
+# its compact identity/summary in R. The R validation view is used solely to
+# construct the limma design and preserve sample metadata for fitting.
 ecoda_hpc_batch_context <- function(
   metadata,
   batch_keys,
@@ -879,109 +733,53 @@ ecoda_hpc_batch_context <- function(
   python_metadata = NULL,
   near_unique_fraction = 0.50
 ) {
-  batch_keys_input <- if (
-    is.character(batch_keys) && length(batch_keys) > 1L
-  ) {
-    as.list(batch_keys)
-  } else {
-    batch_keys
-  }
   keys <- ecoda_batch_normalize_keys(
-    batch_keys_input,
+    batch_keys,
     sample_col = sample_col,
     biological_label = biological_label
   )
   validation <- ecoda_batch_validate_metadata(
     metadata = metadata,
-    batch_keys = as.list(unname(keys)),
+    batch_keys = keys,
     sample_col = sample_col,
     biological_label = biological_label,
     near_unique_fraction = near_unique_fraction
   )
   if (!is.null(python_metadata)) {
-    python_key_field <- python_metadata[["ordered_keys"]]
-    if (is.null(python_key_field)) python_key_field <- python_metadata[["keys"]]
-    python_keys <- as.character(python_key_field)
-    if (!identical(python_keys, unname(keys))) {
-      stop("Python/R corrected batch key order differs")
+    python_keys <- python_metadata[["ordered_source_keys"]]
+    if (is.null(python_keys)) python_keys <- python_metadata[["ordered_keys"]]
+    if (!identical(as.character(python_keys), unname(keys))) {
+      stop("Python corrected batch key order differs")
     }
-    python_samples <- as.character(python_metadata[["sample_ids"]])
-    python_sample_groups <- python_metadata[["sample_group_ids"]]
-    if (is.null(python_sample_groups)) {
-      same_raw_order <- identical(
-        python_samples,
-        as.character(validation$sample_ids)
-      )
-      same_canonical_order <- identical(
-        python_samples,
-        as.character(validation$sample_group_ids)
-      )
-      if (!same_raw_order && !same_canonical_order) {
-        stop("Python/R corrected batch sample order differs")
-      }
-    } else {
-      if (!identical(python_samples, as.character(validation$sample_ids))) {
-        stop("Python/R corrected batch raw sample order differs")
-      }
-      if (!identical(
-        as.character(python_sample_groups),
-        as.character(validation$sample_group_ids)
-      )) {
-        stop("Python/R corrected batch canonical sample order differs")
-      }
+    python_summary <- python_metadata[["validation_summary"]]
+    local_summary <- validation[["validation_summary"]]
+    if (!is.list(python_summary) || !is.list(local_summary)) {
+      stop("Python corrected batch validator returned no compact summary")
     }
-    python_values <- as.character(python_metadata[["composite_values"]])
-    python_sample_values <- python_metadata[["sample_composite_values"]]
-    cell_samples <- as.character(metadata[[sample_col]])
-    first_indices <- match(as.character(validation$sample_ids), cell_samples)
-    if (anyNA(first_indices)) {
-      stop("R corrected batch validation lost a validated Sample")
-    }
-    if (is.null(python_sample_values)) {
-      if (length(python_values) != length(validation$sample_ids)) {
-        stop(
-          "Python corrected batch sample composite values do not cover ",
-          "every validated Sample"
-        )
-      }
-      python_sample_values <- python_values
-    } else {
-      python_sample_values <- as.character(python_sample_values)
-      if (length(python_sample_values) != length(validation$sample_ids)) {
-        stop(
-          "Python corrected batch sample composite values do not cover ",
-          "every validated Sample"
-        )
-      }
-    }
-    if (!identical(
-      python_sample_values,
-      as.character(validation$composite_values)
+    for (field in c(
+      "validated_before_reduction", "per_key_levels",
+      "key_level_counts", "composite_levels", "composite_level_count",
+      "n_cells", "n_samples"
     )) {
-      stop("Python/R corrected batch composite values differ")
+      if (!identical(python_summary[[field]], local_summary[[field]])) {
+        stop("Python/R corrected batch compact summary differs in ", field)
+      }
     }
-    python_scalarization <- as.character(python_metadata[["scalarization"]])
-    if (!identical(python_scalarization, as.character(validation$scalarization))) {
-      stop("Python/R corrected batch scalarization differs")
-    }
-    python_method_id <- python_metadata[["method_id"]]
-    if (is.null(python_method_id)) python_method_id <- python_metadata[["method"]]
-    python_model_id <- python_metadata[["model_id"]]
-    if (is.null(python_model_id)) python_model_id <- python_metadata[["model"]]
-    python_fingerprint <- as.character(python_metadata[["fingerprint"]])
-    if (length(python_method_id) != 1L || length(python_model_id) != 1L ||
-        length(python_fingerprint) != 1L || is.na(python_fingerprint) ||
-        !nzchar(python_fingerprint)) {
-      stop("Python corrected batch validator returned incomplete fingerprint metadata")
-    }
-    r_fingerprint <- ecoda_batch_fingerprint(
-      batch_keys = as.list(unname(keys)),
-      method_id = as.character(python_method_id),
-      model_id = as.character(python_model_id),
-      scalarization = validation$scalarization
+    forbidden <- intersect(
+      names(python_metadata),
+      c(
+        "composite_values", "sample_composite_values", "sample_ids",
+        "sample_group_ids", "canonical_values", "canonical_cell_values",
+        "canonical_sample_metadata", "sample_metadata", "row_tokens", "tokens",
+        "scalarized_values", "sample_scalarized_values", "batch_values",
+        "batch_levels", "sample_batch_values", "sample_batch_levels"
+      )
     )
-    if (!identical(as.character(r_fingerprint), python_fingerprint)) {
-      stop("Python/R corrected batch fingerprint differs")
+    if (length(forbidden)) {
+      stop(
+        "Python corrected batch identity contains forbidden vectors: ",
+        paste(forbidden, collapse = ", ")
+      )
     }
   }
   list(

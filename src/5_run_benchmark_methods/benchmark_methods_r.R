@@ -121,14 +121,11 @@ shuffle_result_labels_deterministic <- function(res, seed = 123) {
   res
 }
 
-# Load the corrected-mode contract lazily. Ordinary benchmark and
-# uncorrected batch paths do not need this module and retain their existing
-# package/source behavior.
+# Load the compact R adapter for the authoritative Python corrected-mode
+# contract. Ordinary benchmark and uncorrected batch paths do not need it.
 .ecoda_require_batch_contract <- function() {
-  # Corrected CLR is part of the full corrected-contract boundary.  Keep the
-  # dependency check broader than the three functions called directly below:
-  # corrected callers also attach the correction policy and compact validation
-  # summary after the CLR result is produced.  A partially preloaded contract
+  # Corrected callers also attach the correction policy and compact validation
+  # summary after the CLR result is produced. A partially preloaded adapter
   # must not make this lazy loader return early.
   required <- c(
     "ecoda_batch_normalize_keys",
@@ -166,7 +163,7 @@ shuffle_result_labels_deterministic <- function(res, seed = 123) {
   candidates <- unique(candidates[file.exists(candidates)])
   if (length(candidates) == 0L) {
     stop(
-      "Corrected CLR composition requires the complete batch contract; ",
+      "Corrected CLR composition requires the compact batch contract adapter; ",
       "src/utils/batch_contract.R was not found."
     )
   }
@@ -174,9 +171,9 @@ shuffle_result_labels_deterministic <- function(res, seed = 123) {
   missing <- missing_helpers()
   if (length(missing)) {
     stop(
-      "Corrected CLR composition requires the complete batch contract; ",
+      "Corrected CLR composition requires the compact batch contract adapter; ",
       "missing helper(s): ", paste(missing, collapse = ", "),
-      ". Refusing to run with a partial contract."
+      ". Refusing to run with a partial adapter."
     )
   }
   invisible(TRUE)

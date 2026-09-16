@@ -34,7 +34,7 @@ try:  # import_from_path exposes this directory as a top-level module path
         BatchContractError,
         RESERVED_OBS_NAME,
         normalize_batch_keys,
-        serialize_batch_metadata,
+        serialize_batch_contract_identity,
         validate_batch_metadata,
     )
 except ImportError:  # package imports used by focused tests
@@ -42,7 +42,7 @@ except ImportError:  # package imports used by focused tests
         BatchContractError,
         RESERVED_OBS_NAME,
         normalize_batch_keys,
-        serialize_batch_metadata,
+        serialize_batch_contract_identity,
         validate_batch_metadata,
     )
 
@@ -313,12 +313,13 @@ def validate_h5ad_corrected_batch_metadata(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     near_unique_fraction: float = 0.50,
 ) -> dict[str, Any]:
-    """Validate corrected batch metadata across every selected cell.
+    """Validate every selected cell and return a compact identity.
 
-    This is the metadata-only boundary for corrected callers.  It reads the
+    This is the metadata-only boundary for corrected callers. It reads the
     complete ``obs`` vectors needed by the batch contract in bounded chunks,
-    before any sample or cell-type reducer can retain first-observation
-    values.  The H5AD expression/count nodes are never opened or materialized.
+    before any sample or cell-type reducer can retain first-observation values.
+    The H5AD expression/count nodes are never opened or materialized, and the
+    returned JSON-safe identity contains no cell/sample vectors.
     """
     keys = normalize_batch_keys(
         batch_keys,
@@ -361,8 +362,11 @@ def validate_h5ad_corrected_batch_metadata(
         sample_column=sample_col,
         biological_column=biological_column,
         near_unique_fraction=near_unique_fraction,
+        enforce_composite_near_unique=False,
     )
-    serialized = serialize_batch_metadata(
+    # R consumers need only the bounded identity/summary; per-cell and
+    # per-sample vectors stay inside the Python validation boundary.
+    serialized = serialize_batch_contract_identity(
         validation,
         method_id=method_id,
         model_id=model_id,

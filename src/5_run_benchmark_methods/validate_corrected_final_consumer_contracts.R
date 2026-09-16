@@ -370,6 +370,8 @@ for (index in seq_len(nrow(selection))) {
     view = view,
     status = "FAIL"
   )
+  consumer_contracts <- list()
+  checked_r_consumers <- character()
   tryCatch({
     entry <- config[[ds]]
     if (is.null(entry)) stop("dataset is absent from datasets.json")
@@ -495,9 +497,8 @@ for (index in seq_len(nrow(selection))) {
       h5ad_path = h5ad_path,
       metadata_path = metadata_path,
       declared_methods = declared_methods,
-      batch_keys = unname(batch_keys),
+      estimable_batch_keys = unname(effective_batch_keys),
       key_level_counts = as.list(level_counts),
-      estimable_batch_keys = unname(estimable_keys),
       non_estimable_batch_keys = unname(non_estimable_batch_keys),
       correction_state = correction_state,
       composite_level_count = length(validation$composite_levels),
