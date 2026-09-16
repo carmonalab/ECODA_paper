@@ -401,7 +401,7 @@ if [[ -n "${PASS_ARG}" && -n "${SELECTION_FILE_ARG}" ]]; then
 fi
 stage5_validate_final_selection() {
   local variant="${ANALYSIS_VARIANT_ARG:-}" expected_pass expected_view
-  local row_count=0 ds view label extra final_line row_key matrix_key selected
+  local row_count=0 ds view label extra final_line row_key matrix_key selected=""
   case "${variant}" in
     "") return 0 ;;
     final)
