@@ -72,7 +72,8 @@ make_source_fixture() {
   identity="${snapshot}/identity"
   source_tar="${identity}/source.tar"
   source_manifest="${identity}/source.manifest"
-  mkdir -p "${tree}/src/utils/py" "${tree}/src/5_run_benchmark_methods" \
+  mkdir -p "${tree}/src/utils/py" "${tree}/src/utils/bash" \
+    "${tree}/src/5_run_benchmark_methods" \
     "${aux}" "${identity}"
   printf 'fixture helper\n' > "${tree}/config_helper.R"
   cat > "${tree}/datasets.json" <<'JSON'
@@ -152,6 +153,10 @@ JSON
   cp "${ROOT}/src/slurm_config.sh" "${tree}/src/slurm_config.sh"
   cp "${ROOT}/src/utils/py/batch_contract.py" \
     "${tree}/src/utils/py/batch_contract.py"
+  cp "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh" \
+    "${tree}/src/utils/bash/ecoda_stage5_policy.sh"
+  cp "${ROOT}/src/utils/bash/ecoda_run_audit_stage5.sh" \
+    "${tree}/src/utils/bash/ecoda_run_audit_stage5.sh"
   printf '# fixture matrix validator\n' > \
     "${tree}/src/5_run_benchmark_methods/matrix_artifact_validator.py"
   printf '# fixture h5ad validator\n' > \

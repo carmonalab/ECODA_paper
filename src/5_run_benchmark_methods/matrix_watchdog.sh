@@ -27,6 +27,7 @@ if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/../slurm_config.sh" ]]; then
 fi
 source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_stage5_policy.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 cd "${PROJECT_ROOT}"
 [[ $# -ge 10 ]] || { echo "Usage: matrix_watchdog.sh RUN_ROOT LABEL MANIFEST ARRAY_ID MEM MAX_MEM PARTITION THROTTLE WORKER RUNTIME_EXPORT [flags...]" >&2; exit 2; }
@@ -113,7 +114,7 @@ matrix_validate_output_ownership() {
       "${manifest}" > "${ownership_tmp}" || return 1
     ownership_manifest="${ownership_tmp}"
   fi
-  ecoda_validate_output_ownership stage5 "${ownership_manifest}" "${ECODA_RUN_ID}"
+  ecoda_stage5_validate_output_ownership "${ownership_manifest}" "${ECODA_RUN_ID}"
   rc=$?
   [[ -n "${ownership_tmp}" ]] && rm -f "${ownership_tmp}"
   return "${rc}"

@@ -243,9 +243,9 @@ done
 export DATASETS_JSON_FILE="${ROOT}/datasets.json"
 OWNER_SELECTION="${TMP_DIR}/owner-selection.tsv"
 printf 'Adams\tbenchmark_analysis\tmrvi\n' > "${OWNER_SELECTION}"
-ecoda_validate_output_ownership stage5 "${OWNER_SELECTION}" "${ECODA_RUN_ID}" >/dev/null
-ecoda_validate_output_ownership stage5 "${OWNER_SELECTION}" "${ECODA_RUN_ID}" >/dev/null
-if ecoda_validate_output_ownership stage5 "${OWNER_SELECTION}" other_sync_run \
+ecoda_stage5_validate_output_ownership "${OWNER_SELECTION}" "${ECODA_RUN_ID}" >/dev/null
+ecoda_stage5_validate_output_ownership "${OWNER_SELECTION}" "${ECODA_RUN_ID}" >/dev/null
+if ecoda_stage5_validate_output_ownership "${OWNER_SELECTION}" other_sync_run \
     >/dev/null 2>&1; then
   sbatch --wrap=unexpected-owner-retry
   echo "other-run active owner was accepted before retry boundary" >&2

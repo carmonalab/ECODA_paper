@@ -925,6 +925,7 @@ set -e
 source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1 || true
 export PROJECT_ROOT="${ROOT}" DATASETS_JSON_FILE="${ROOT}/datasets.json"
 source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
 OUTSIDE_SCRIPT="${TMP_DIR}/outside-worker.sh"
 printf '#!/bin/bash\n' > "${OUTSIDE_SCRIPT}"
 chmod +x "${OUTSIDE_SCRIPT}"

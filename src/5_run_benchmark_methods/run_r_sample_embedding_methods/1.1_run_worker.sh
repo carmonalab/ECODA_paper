@@ -155,6 +155,7 @@ SCRIPT_DIR="${SOURCE_ROOT%/}/src/5_run_benchmark_methods/run_r_sample_embedding_
 source "${SOURCE_ROOT%/}/src/slurm_config.sh"
 source "${SOURCE_ROOT%/}/src/utils/bash/ecoda_runtime.sh"
 source "${SOURCE_ROOT%/}/src/utils/bash/ecoda_run_common.sh"
+source "${SOURCE_ROOT%/}/src/utils/bash/ecoda_stage5_policy.sh"
 export ECODA_SOURCE_ROOT="${SOURCE_ROOT}"
 export ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST}"
 export ECODA_SOURCE_SNAPSHOT_REQUIRED=1

@@ -9,6 +9,7 @@ source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 export ECODA_GATE_STAGE=stage5
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
+source "${SCRIPT_DIR}/../utils/bash/ecoda_stage5_policy.sh"
 source "${SCRIPT_DIR}/../utils/bash/h5ad_preflight_submit.sh"
 cd "${PROJECT_ROOT}"
 
@@ -899,7 +900,7 @@ stage5_validate_output_ownership() {
       "${manifest}" > "${ownership_tmp}" || return 1
     ownership_manifest="${ownership_tmp}"
   fi
-  ecoda_validate_output_ownership stage5 "${ownership_manifest}" "${RUN_ID}" \
+  ecoda_stage5_validate_output_ownership "${ownership_manifest}" "${RUN_ID}" \
     "${reclaim_terminal}"
   rc=$?
   [[ -n "${ownership_tmp}" ]] && rm -f "${ownership_tmp}"
@@ -1902,7 +1903,7 @@ stage5_validate_input_provenance() {
   local producer owner_dir producer_ok
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
   [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]] || return 0
-  command -v ecoda_artifact_owner_validate >/dev/null 2>&1 || return 1
+  command -v ecoda_stage5_artifact_owner_validate >/dev/null 2>&1 || return 1
   command -v ecoda_validate_input_artifact >/dev/null 2>&1 || return 1
   while IFS=$'\t' read -r ds view _scope; do
     row="${ds}/${view}"
@@ -1912,7 +1913,7 @@ stage5_validate_input_provenance() {
     seen_sources="${seen_sources} ${row}"
     source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
     ECODA_ARTIFACT_OWNER_CANONICAL_PATH=""
-    ecoda_artifact_owner_validate "${source_path}" >/dev/null 2>&1 || return 1
+    ecoda_stage5_artifact_owner_validate "${source_path}" >/dev/null 2>&1 || return 1
     owner_dir="$(ecoda_artifact_owner_dir \
       "${ECODA_ARTIFACT_OWNER_CANONICAL_PATH}")" || return 1
     owner_stage="${ECODA_ARTIFACT_OWNER_STAGE:-}"
@@ -2752,7 +2753,7 @@ stage5_validate_reusable_artifact() {
     ecoda_stage5_validate_identity "${PASS_ARG:-${ANALYSIS_PASS:-}}" || return 1
     ecoda_stage5_validate_artifact_path "${path}" || return 1
     ecoda_require_input_ownership "${path}" "${RUN_ID}" || return 1
-    ecoda_artifact_owner_validate "${path}" >/dev/null 2>&1 || return 1
+    ecoda_stage5_artifact_owner_validate "${path}" >/dev/null 2>&1 || return 1
     owner_state="${ECODA_ARTIFACT_OWNER_STATE:-}"
     owner_stage="${ECODA_ARTIFACT_OWNER_STAGE:-}"
     [[ "${owner_state}" == "OK" && "${owner_stage}" == "stage5" ]] || return 1
@@ -2807,7 +2808,7 @@ stage5_prepare_pseudobulk_valid() {
   # against its terminal global owner first, then resolve the record under
   # that producer run rather than the recovery run.
   ecoda_validate_checksum "${path}" || return 1
-  ecoda_artifact_owner_validate "${path}" >/dev/null 2>&1 || return 1
+  ecoda_stage5_artifact_owner_validate "${path}" >/dev/null 2>&1 || return 1
   owner_dir="${ECODA_ARTIFACT_OWNER_DIR:-}"
   [[ -n "${owner_dir}" &&
      "${ECODA_ARTIFACT_OWNER_STATE:-}" == "OK" &&
@@ -3112,7 +3113,7 @@ stage5_track_pending_artifact_owners() {
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
   [[ -s "${PENDING_SELECTION}" ]] || return 0
   stage5_corrected_final_recovery_mode && reclaim_terminal=1
-  ecoda_validate_output_ownership stage5 "${PENDING_SELECTION}" "${RUN_ID}" \
+  ecoda_stage5_validate_output_ownership "${PENDING_SELECTION}" "${RUN_ID}" \
     "${reclaim_terminal}" ||
     return 1
   for owner_dir in "${ECODA_OUTPUT_OWNER_DIRS[@]:-}"; do

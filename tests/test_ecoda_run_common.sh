@@ -166,6 +166,7 @@ export HPC_SCRATCH_DIR="${TMP_DIR}/scratch"
 export LOGS_DIR="${TMP_DIR}/logs"
 export DATASETS_JSON_FILE="${ROOT}/datasets.json"
 source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
 RUN_ID="test_run_$$"
 ecoda_init_run test "${RUN_ID}" >/dev/null
 MANIFEST_SOURCE="${TMP_DIR}/manifest.source"

@@ -279,6 +279,7 @@ printf 'valid corrected-final prepare cache fixture\n' > "${MATRIX_VALID_CACHE}"
     ANALYSIS_NAS_ROOT="${NAS_ROOT}/batch_effect/corrected_final/recovery_35row"
   source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1
   source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
   ecoda_write_checksum "${MATRIX_VALID_CACHE}" >/dev/null
   ecoda_write_artifact_record "${MATRIX_VALID_CACHE}" \
     stage5_prepare_pseudobulk_hvg2000 "${MATRIX_VALID_PRODUCER_RUN_ID}" >/dev/null
@@ -575,6 +576,7 @@ for targeted_ds in Covid19_PBMC Diabetes Joanito Lung; do
       ECODA_RUN_ID="${TARGETED_PREP_PRODUCER_RUN_ID}"
     source "${ROOT}/src/slurm_config.sh"
     source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+    source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
     ecoda_write_checksum "${targeted_prep}" >/dev/null
     ecoda_write_artifact_record "${targeted_prep}" \
       stage5_prepare_pseudobulk_hvg2000 "${TARGETED_PREP_PRODUCER_RUN_ID}" >/dev/null

@@ -544,6 +544,7 @@ for ds in Lupus_PBMC Parkinson; do
       ECODA_RUN_ID="${TARGET_FORCE_PREP_RUN_ID}"
     source "${ROOT}/src/slurm_config.sh"
     source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+    source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
     ecoda_write_checksum "${prep_path}" >/dev/null
     ecoda_write_artifact_record "${prep_path}" \
       stage5_prepare_pseudobulk_hvg2000 "${TARGET_FORCE_PREP_RUN_ID}" >/dev/null
@@ -611,6 +612,7 @@ for ds in Lupus_PBMC Parkinson; do
       ECODA_RUN_ID="${TARGET_FORCE_PREP_RUN_ID}"
     source "${ROOT}/src/slurm_config.sh"
     source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+    source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
     ecoda_validate_checksum "${prep_path}" >/dev/null
     prior_record="$(ecoda_artifact_record_path "${prep_path}" \
       "${TARGET_FORCE_PREP_RUN_ID}")"
@@ -1050,6 +1052,7 @@ SYNC_GLOBAL_OWNER_LIST="${SYNC_OWNER_ROOT}/manifests/global_owners.tsv"
     ECODA_RUN_ID="${SYNC_OWNER_RUN_ID}"
   source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1
   source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
   export ANALYSIS_ROOT="${HPC_ROOT}/benchmark" \
     ANALYSIS_NAS_ROOT="${SYNC_NAS_ROOT}/benchmark"
   unset ANALYSIS_VARIANT ANALYSIS_PASS PASS_ARG
@@ -1071,6 +1074,7 @@ SYNC_GLOBAL_OWNER_LIST="${SYNC_OWNER_ROOT}/manifests/global_owners.tsv"
     ECODA_RUN_ID="${SYNC_OWNER_RUN_ID}"
   source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1
   source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
   export ANALYSIS_ROOT="${HPC_ROOT}/benchmark" \
     ANALYSIS_NAS_ROOT="${SYNC_NAS_ROOT}/benchmark"
   unset ANALYSIS_VARIANT ANALYSIS_PASS PASS_ARG

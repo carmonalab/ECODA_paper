@@ -199,11 +199,13 @@ mkdir -p "${TMP_DIR}/nas/batch_effect/uncorrected/embeddings"
   export HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}"
   export HPC_SCRATCH_DIR="${HPC_ROOT}" ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}"
   export ECODA_RUN_ROOT="${RUN_ROOT}" ECODA_RUN_ID=watchdog-run
-  export NAS_TARGET_DIR="${TMP_DIR}/nas"
+  export ANALYSIS_PASS=uncorrected
   source "${ROOT}/src/slurm_config.sh"
   source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
+  export PASS_ARG=uncorrected
   ecoda_artifact_owner_acquire "${RETRY_ARTIFACT}" stage5 watchdog-run 1 0 0 >/dev/null
-  ecoda_validate_output_ownership stage5 "${OWNERSHIP_SELECTION}" watchdog-run
+  ecoda_stage5_validate_output_ownership "${OWNERSHIP_SELECTION}" watchdog-run
 )
 [[ ! -s "${CAPTURE}" ]]
 rm -rf "${HPC_ROOT}/_ecoda_owners/artifact"
@@ -213,11 +215,13 @@ rm -rf "${HPC_ROOT}/_ecoda_owners/artifact"
   export HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}"
   export HPC_SCRATCH_DIR="${HPC_ROOT}" ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}"
   export ECODA_RUN_ROOT="${RUN_ROOT}" ECODA_RUN_ID=watchdog-run
-  export NAS_TARGET_DIR="${TMP_DIR}/nas"
+  export ANALYSIS_PASS=uncorrected
   source "${ROOT}/src/slurm_config.sh"
   source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
+  export PASS_ARG=uncorrected
   ecoda_artifact_owner_acquire "${RETRY_ARTIFACT}" stage5 other-run 1 0 0 >/dev/null
-  if ecoda_validate_output_ownership stage5 "${OWNERSHIP_SELECTION}" watchdog-run; then
+  if ecoda_stage5_validate_output_ownership "${OWNERSHIP_SELECTION}" watchdog-run; then
     exit 1
   fi
 )

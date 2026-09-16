@@ -93,6 +93,9 @@ ANALYSIS_MERGE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/run_python_
 
 # Compute-node watchdog entry script (same directory as this file).
 WATCHDOG_MAIN_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/watchdog_main.sh"
+if ! command -v ecoda_stage5_validate_identity >/dev/null 2>&1; then
+  source "$(dirname "${BASH_SOURCE[0]}")/../utils/bash/ecoda_stage5_policy.sh"
+fi
 benchmark_stage5_identity_guard() {
   local requested_pass="${1:-${PASS_ARG:-${ANALYSIS_PASS:-}}}"
   local scratch_root="${HPC_SCRATCH_DIR:-}" nas_root="${NAS_TARGET_DIR:-}"
@@ -245,7 +248,7 @@ benchmark_validate_output_scope() {
   benchmark_stage5_identity_guard || return 1
   [[ -n "${ECODA_RUN_ID:-}" ]] || return 0
   [[ -r "${selection}" ]] || return 1
-  command -v ecoda_validate_output_ownership >/dev/null 2>&1 || return 1
+  command -v ecoda_stage5_validate_output_ownership >/dev/null 2>&1 || return 1
   if awk -F '\t' '
       NF != 3 { saw_extended=1 }
       END { exit(saw_extended ? 0 : 1) }
@@ -253,7 +256,7 @@ benchmark_validate_output_scope() {
     ownership_tmp="${selection}.ownership.$$"
     ownership_selection="${ownership_tmp}"
   fi
-  ecoda_validate_output_ownership stage5 "${ownership_selection}" "${ECODA_RUN_ID}"
+  ecoda_stage5_validate_output_ownership "${ownership_selection}" "${ECODA_RUN_ID}"
   rc=$?
   [[ -n "${ownership_tmp}" ]] && rm -f "${ownership_tmp}"
   return "${rc}"
