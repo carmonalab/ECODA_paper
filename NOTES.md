@@ -5,45 +5,6 @@
 
 ---
 
-## Current Status — 2026-09-15
-
-This subsection records the current implementation and execution status. The
-strict Alzheimer donor-by-assay derivative is validated and present. Both
-Alzheimer Stage 3 durable waits report remote `COMPLETED`, but both first
-terminal inspections are `state=FAILED`, `audit.passed=false`, and
-`release_eligible=false` because recorded OOM attempts remain part of the
-all-ID accounting contract. Retry2 H5AD outputs were produced and preserved;
-the Stage 3 gates remain failed/unreleased and do not authorize Alzheimer
-Stage 5.
-
-### Alzheimer source and strict sample identity
-
-- The raw Alzheimer source H5AD is unchanged. The validated donor-by-assay
-  derivative is a separate output; its Stage 3 gates remain failed/unreleased
-  until their recorded OOM attempts are resolved through the durable review
-  process.
-- The strict sample key is `donor_id_assay`. Normalize assay labels exactly as
-  `10x 3' v3` → `10x3v3` and `10x multiome` → `10xmultiome`; do not collapse
-  these records to donor-only identities.
-- The read-only observation contains 1,395,601 cells, 83 donors, and 104
-  donor×assay samples. The assay sample counts are 83 `10x3v3` and 21
-  `10xmultiome`; sex is 100% consistent within the observed mapped samples.
-
-### Corrected-method and recovery status
-
-- The approved global correction contract for composition and pseudobulk is
-  limma fixed effects with the configured dataset-level technical covariates
-  retained as separate terms. No view-level or Stage 5-only override may alter
-  the configured correction columns. Combined or artificial batch keys are
-  prohibited, and the former `lme4` correction path is prohibited/removed.
-- Current provenance IDs are composition `limma_fixed_effects_v1` and
-  pseudobulk/prepare `pseudobulk_limma_fixed_effects_v1`. The nested summary
-  schema remains v1; top-level identities carry effective/non-estimable/state,
-  mode/formula, aliases, design rank, and degrees of freedom.
-- The first corrected-final recovery target is exactly eight corrected
-  datasets and 32 rows. This is the scoped recovery target, not evidence that
-  its compute gate has completed. Old combined-key prepare caches are stale
-  and must not be reused.
 
 ### Breast cancer corrected batch policy
 
@@ -57,10 +18,11 @@ Stage 5.
 - `disease` is a biological label and remains evaluation-only; it never enters
   filtering, preprocessing, Harmony, or corrected Stage 5 models.
 - The previous Breast corrected Stage 3 output was generated under the
-  superseded column contract. Regenerate it as
+  superseded column contract. The regenerated output
   `BreastCncr_processed_batch_effect_analysis_corrected_assay_dissociation_ECODAprocessed.h5ad`
-  and validate its sample, metadata, and checksum contract before any Breast
-  corrected Stage 5 row is launched or reused.
+  completed under the global pair. Its Stage 3 gate was terminally inspected
+  and reviewed; a separate read-only semantic contract check remains before
+  corrected Stage 5 release.
 - **Historical rank evidence (retained, non-authoritative):** The 165-sample
   validator report showed the full additive design at rank `8/10` with
   residual degrees of freedom `157`. The observed dependencies are exact: all
@@ -79,25 +41,12 @@ Stage 5.
   a separate Stage 5 key or replace the dataset-level configuration.
 - The historical durable validator evidence is
   `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_logs/stage5_eight_corrected_ygg_parallel_20260915T131349Z/BREAST_BATCH_RANK_DIAGNOSIS.tsv`.
-  The failed eight-dataset gate validated seven dataset-level consumer
-  contracts and failed only Breast; no target method array was emitted. This
-  is historical run evidence. The Breast corrected Stage 5 row remains
-  blocked until the regenerated Stage 3 output is validated under the current
-  dataset-level contract.
+  The old eight-dataset gate validated seven dataset-level consumer rows and
+  failed only Breast under the obsolete three-key design; no target method
+  array was emitted. That gate is historical evidence only. The current
+  regenerated Breast Stage 3 gate is the reviewed predecessor for the
+  confirmed seven-method Breast Stage 5 scope.
 
-### Remote execution and transfer policy
-
-- The direct remote-only `ssh -A bamboo` → Yggdrasil transfer proof of concept
-  succeeded with recorded hash
-  `ac5944fad030a07ad4257a3d7b7b44a83925c3e0fcba83196f9cbec6d670dcb2`; no
-  local staging was used.
-- The Yggdrasil repository clone and checksum-aware transfer are historical
-  transfer evidence. The active repository is `~/ECODA_paper` and the active
-  data/results tree is `~/scratch/ECODA_paper`; current revision and gate
-  provenance are recorded in the active plan.
-- Yggdrasil is the current default execution and authoritative data/results
-  host because Bamboo is under maintenance. Bamboo is source/fallback
-  infrastructure only until the user explicitly reverses that policy.
 
 > **Historical-note boundary.** The donor-only Alzheimer snapshot, majority-vote
 > policy, `lme4` correction description, and pre-change final-lane descriptions
@@ -426,8 +375,11 @@ Included:
 
 Excluded:
 - [  ] CombinedPBMC -> biased
+- [  ] Kidney Cancer -> too few samples, no high resolution cell type annotation, two biological groups defined by presence/absence of one specific annotated cell type ("tumor cells")
 - [  ] Myocardial -> very low batch effect but two bio conds mostly from same batch, third bio cond balanced -> ischemic confounded -> after exclusion too few samples
+- [  ] Pancreas (PDAC) -> o high resolution cell type annotation, biological groups defined by presence/absence of one specific annotated cell type ("ductal cells") -> Separates by "Ductal 2" cells (which might be cancer cells)
 - [  ] Parkinson -> quite well mixed but overall almost no signal -> show in appendix, not for ranking. Also no high resolution cell type annotation
+- [  ] Kidney Cancer -> too few samples, no high resolution cell type annotation, biological groups defined by presence/absence of one specific annotated cell type
 
 
 ---
