@@ -132,10 +132,6 @@ if (method_matrix_mode) {
     stringsAsFactors = FALSE,
     check.names = FALSE
   )
-  expected_matrix_datasets <- c(
-    "Breast_cancer", "Joanito", "Stephenson", "Covid19_PBMC",
-    "Kidney_KPMP_full", "Diabetes", "Lupus_PBMC", "Lung"
-  )
   expected_matrix_methods <- c(
     "prepare_pseudobulk", "pseudobulk", "gloscope", "composition",
     "mrvi", "pilot", "qot"
@@ -212,8 +208,8 @@ if (method_matrix_mode) {
     method_matrix_identity <- method_matrix_sha256
   }
   if (is.null(method_matrix_identity)) {
-    # The wrapper records the SHA-256 identity.  An isolated validator can
-    # still enforce the exact rows and file checksum without requiring a
+    # The wrapper records the SHA-256 identity.  An isolated validator can still
+    # enforce the declared rows and file checksum without requiring a
     # platform-specific SHA utility.
     method_matrix_identity <- method_matrix_md5
   }

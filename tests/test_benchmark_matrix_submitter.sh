@@ -133,6 +133,13 @@ RUN_ID="$(printf '%s\n' "${OUTPUT}" | sed -n 's/^BENCHMARK_RUN_ID=//p')"
 [[ -n "${RUN_ID}" ]]
 RUN_ROOT="${TMP_DIR}/home/scratch/ECODA_paper/_ecoda_runs/${RUN_ID}"
 [[ -s "${RUN_ROOT}/manifests/selection.tsv" ]]
+DISPATCH_MANIFEST="${RUN_ROOT}/manifests/dispatch_selection.tsv"
+[[ -s "${DISPATCH_MANIFEST}" && -s "${DISPATCH_MANIFEST}.md5" ]]
+[[ "$(wc -l < "${DISPATCH_MANIFEST}" | tr -d '[:space:]')" == 8 ]]
+while IFS=$'\t' read -r dispatch_ds dispatch_view dispatch_method dispatch_extra; do
+  [[ -n "${dispatch_ds}" && "${dispatch_view}" == benchmark_analysis &&
+     -n "${dispatch_method}" && -z "${dispatch_extra}" ]]
+done < "${DISPATCH_MANIFEST}"
 MANIFEST_NAMES=(
   matrix_benchmark_analysis_mrvi_default_gpu.tsv
   matrix_benchmark_analysis_mrvi_cpu.tsv
@@ -202,8 +209,8 @@ done
 grep -q "^SOURCE_SOURCE_ROOT=${SOURCE_TREE}$" "${RUN_ROOT}/metadata"
 grep -q "^RUNTIME_IMAGE=${RUNTIME_IMAGE}$" "${RUN_ROOT}/metadata"
 grep -q "^RUNTIME_MANIFEST=${RUNTIME_MANIFEST}$" "${RUN_ROOT}/metadata"
-PREFLIGHT_LINE="$(awk '/^stage5_compute_h5ad_preflight \|\|/{print NR; exit}' "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh")"
-IDENTITY_LINE="$(awk '/^stage5_prepare_source_identity \|\|/{print NR; exit}' "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh")"
+PREFLIGHT_LINE="$(awk '/^stage5_compute_h5ad_preflight \|\|/{print NR; exit}' "${ROOT}/src/5_run_benchmark_methods/stage5_dispatcher.sh")"
+IDENTITY_LINE="$(awk '/^stage5_prepare_source_identity \|\|/{print NR; exit}' "${ROOT}/src/5_run_benchmark_methods/stage5_dispatcher.sh")"
 [[ -n "${PREFLIGHT_LINE}" && -n "${IDENTITY_LINE}" && ${PREFLIGHT_LINE} -lt ${IDENTITY_LINE} ]] ||
   { echo "Stage 5 source identity was trusted before strict H5AD preflight" >&2; exit 1; }
 case "${CALLS}" in *"matrix_gate.sh"*) ;; *) echo "aggregate gate was not submitted" >&2; exit 1 ;; esac

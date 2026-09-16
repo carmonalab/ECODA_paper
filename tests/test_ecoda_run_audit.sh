@@ -505,8 +505,8 @@ EOF
 
 prepare_corrected_final_run() {
   local run_root="${SCRATCH}/_ecoda_runs/corrected_final_fixture"
-  local analysis_root="${SCRATCH}/batch_effect/corrected_final"
-  local analysis_nas_root="${NAS}/batch_effect/corrected_final"
+  local analysis_root="${SCRATCH}/batch_effect/corrected_final/recovery_35row"
+  local analysis_nas_root="${NAS}/batch_effect/corrected_final/recovery_35row"
   local input="${SCRATCH}/Fixture/output/Fixture_batch_effect_analysis_corrected.h5ad"
   local metadata_output="${analysis_root}/metadata/Fixture_sample_metadata.feather"
   local selection pending contract_manifest contract_md5 contract_size contract_sha
@@ -612,6 +612,8 @@ ANALYSIS_ROOT=${analysis_root}
 ANALYSIS_NAS_ROOT=${analysis_nas_root}
 ANALYSIS_PASS=corrected
 ANALYSIS_LOG_PREFIX=execution_times_batch_effect_corrected_final_
+ANALYSIS_ROOT_VERSION=recovery_35row
+ANALYSIS_ROOT_IDENTITY=corrected_final/recovery_35row
 METADATA_EXPORT_MANIFEST=${run_root}/manifests/metadata_export.tsv
 METADATA_EXPORT_STATUS=${status_report}
 PENDING_SELECTION=${pending}
@@ -667,43 +669,6 @@ grep -F -- "${CORRECTED_ROOT}/metadata/Fixture_sample_metadata.feather" \
   "${CORRECTED_METADATA_MANIFEST}" >/dev/null
 ! grep -F -- "${SCRATCH}/batch_effect/corrected/" "${VALIDATOR_LOG}" >/dev/null
 ! grep -F -- "${SCRATCH}/batch_effect/uncorrected/" "${CORRECTED_METADATA_MANIFEST}" >/dev/null
-# A root-version-only corrected-final run (the shape used by the Alzheimer
-# one-row follow-up) is accepted without a method matrix.
-VERSION_ROOT="${SCRATCH}/batch_effect/corrected_final/recovery_35row"
-VERSION_NAS_ROOT="${NAS}/batch_effect/corrected_final/recovery_35row"
-VERSION_ARTIFACT="${VERSION_ROOT}/embeddings/Fixture_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather"
-VERSION_NAS_ARTIFACT="${VERSION_NAS_ROOT}/embeddings/Fixture_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather"
-VERSION_METADATA_OUTPUT="${VERSION_ROOT}/metadata/Fixture_sample_metadata.feather"
-make_artifact "${VERSION_ARTIFACT}" 1
-make_artifact "${VERSION_NAS_ARTIFACT}" 0
-mkdir -p "$(dirname "${VERSION_METADATA_OUTPUT}")"
-printf 'versioned sample metadata fixture\n' > "${VERSION_METADATA_OUTPUT}"
-ecoda_write_checksum "${VERSION_METADATA_OUTPUT}" >/dev/null
-printf 'Fixture\tbatch_effect_corrected\t%s\t%s\n' \
-  "${SCRATCH}/Fixture/output/Fixture_batch_effect_analysis_corrected.h5ad" \
-  "${VERSION_METADATA_OUTPUT}" > "${CORRECTED_METADATA_MANIFEST}"
-ecoda_write_checksum "${CORRECTED_METADATA_MANIFEST}" >/dev/null
-VERSION_STATUS="${CORRECTED_RUN_ROOT}/status/metadata_export.report"
-sed \
-  -e "s#^ANALYSIS_ROOT=.*#ANALYSIS_ROOT=${VERSION_ROOT}#" \
-  -e "s#^ANALYSIS_NAS_ROOT=.*#ANALYSIS_NAS_ROOT=${VERSION_NAS_ROOT}#" \
-  "${VERSION_STATUS}" > "${VERSION_STATUS}.bad"
-mv "${VERSION_STATUS}.bad" "${VERSION_STATUS}"
-ecoda_write_checksum "${VERSION_STATUS}" >/dev/null
-sed \
-  -e "s#^ROOT=.*#ROOT=${VERSION_ROOT}#" \
-  -e "s#^ANALYSIS_ROOT=.*#ANALYSIS_ROOT=${VERSION_ROOT}#" \
-  -e "s#^ANALYSIS_NAS_ROOT=.*#ANALYSIS_NAS_ROOT=${VERSION_NAS_ROOT}#" \
-  "${CORRECTED_RUN_ROOT}/metadata" > "${CORRECTED_RUN_ROOT}/metadata.bad"
-mv "${CORRECTED_RUN_ROOT}/metadata.bad" "${CORRECTED_RUN_ROOT}/metadata"
-printf 'ANALYSIS_ROOT_VERSION=recovery_35row\nANALYSIS_ROOT_IDENTITY=corrected_final/recovery_35row\n' \
-  >> "${CORRECTED_RUN_ROOT}/metadata"
-run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 0
-sed \
-  -e '/^ANALYSIS_ROOT_VERSION=/d' \
-  -e '/^ANALYSIS_ROOT_IDENTITY=/d' \
-  "${CORRECTED_RUN_ROOT}/metadata" > "${CORRECTED_RUN_ROOT}/metadata.bad"
-mv "${CORRECTED_RUN_ROOT}/metadata.bad" "${CORRECTED_RUN_ROOT}/metadata"
 
 
 # A corrected-final run cannot be made to consume a legacy root by changing

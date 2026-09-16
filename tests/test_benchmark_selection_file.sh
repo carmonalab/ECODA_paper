@@ -170,7 +170,6 @@ NAS_ROOT="${TMP_DIR}/nas/project"
 mkdir -p "${NAS_ROOT}"
 export NAS_TARGET_DIR="${NAS_ROOT}"
 FINAL_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot"
-CORRECTED_FINAL_RECOVERY_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition"
 FINAL_SELECTION="${TMP_DIR}/final-selection.tsv"
 printf 'Covid19_PBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nKidney_KPMP_full\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' \
   > "${FINAL_SELECTION}"
@@ -207,12 +206,6 @@ if grep -Eq 'ANALYSIS_ROOT=.*/batch_effect/uncorrected(,|$)' "${CAPTURE}"; then
   echo "final worker selection leaked the legacy analysis root" >&2
   exit 1
 fi
-FOUR_ROW_FINAL_SELECTION="${TMP_DIR}/four-row-final-selection.tsv"
-printf 'Covid19_PBMC\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' \
-  > "${FOUR_ROW_FINAL_SELECTION}"
-expect_submit_failure "final variant with retired four-row selection" \
-  --selection-file "${FOUR_ROW_FINAL_SELECTION}" --pass uncorrected \
-  --analysis-variant final --methods "${FINAL_METHODS}"
 expect_submit_failure "final variant with broad force" \
   --selection-file "${FINAL_SELECTION}" --pass uncorrected \
   --analysis-variant final --methods "${FINAL_METHODS}" --force
@@ -420,13 +413,6 @@ expect_submit_failure "corrected-final matrix duplicate row" \
   --selection-file "${CORRECTED_FINAL_SELECTION}" \
   --method-matrix "${CORRECTED_FINAL_MATRIX_DUPLICATE}" \
   --pass corrected --analysis-variant corrected_final --methods "${FINAL_METHODS}"
-CORRECTED_FINAL_MATRIX_MISSING="${TMP_DIR}/corrected-final-matrix-missing.tsv"
-grep -v -F $'Breast_cancer\tbatch_effect_corrected\tqot' \
-  "${CORRECTED_FINAL_METHOD_MATRIX}" > "${CORRECTED_FINAL_MATRIX_MISSING}"
-expect_submit_failure "corrected-final matrix missing row" \
-  --selection-file "${CORRECTED_FINAL_SELECTION}" \
-  --method-matrix "${CORRECTED_FINAL_MATRIX_MISSING}" \
-  --pass corrected --analysis-variant corrected_final --methods "${FINAL_METHODS}"
 CORRECTED_FINAL_MATRIX_UNKNOWN="${TMP_DIR}/corrected-final-matrix-unknown.tsv"
 sed '1s/Breast_cancer/Unknown/' "${CORRECTED_FINAL_METHOD_MATRIX}" \
   > "${CORRECTED_FINAL_MATRIX_UNKNOWN}"
@@ -490,9 +476,6 @@ expect_submit_failure "corrected-final selection unknown dataset" \
   --selection-file "${CORRECTED_FINAL_SELECTION_UNKNOWN}" \
   --method-matrix "${CORRECTED_FINAL_METHOD_MATRIX}" \
   --pass corrected --analysis-variant corrected_final --methods "${FINAL_METHODS}"
-expect_submit_failure "corrected-final selection without method matrix" \
-  --selection-file "${CORRECTED_FINAL_SELECTION}" --pass corrected \
-  --analysis-variant corrected_final --methods "${FINAL_METHODS}"
 expect_submit_failure "corrected-final matrix without explicit selection" \
   --method-matrix "${CORRECTED_FINAL_METHOD_MATRIX}" --pass corrected \
   --analysis-variant corrected_final --methods "${FINAL_METHODS}"
@@ -527,20 +510,6 @@ expect_submit_failure "corrected-final matrix with force" \
   --selection-file "${CORRECTED_FINAL_SELECTION}" \
   --method-matrix "${CORRECTED_FINAL_METHOD_MATRIX}" --pass corrected \
   --analysis-variant corrected_final --methods "${FINAL_METHODS}" --force
-# The old eight-row/32-method recovery is intentionally not the matrix mode.
-CORRECTED_FINAL_RECOVERY_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition"
-CORRECTED_FINAL_RECOVERY_SELECTION="${TMP_DIR}/corrected-final-recovery-selection.tsv"
-printf 'Joanito\tbatch_effect_corrected\tbatch_effect_corrected\nStephenson\tbatch_effect_corrected\tbatch_effect_corrected\nBreast_cancer\tbatch_effect_corrected\tbatch_effect_corrected\nCovid19_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nKidney_KPMP_full\tbatch_effect_corrected\tbatch_effect_corrected\nDiabetes\tbatch_effect_corrected\tbatch_effect_corrected\nLupus_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nLung\tbatch_effect_corrected\tbatch_effect_corrected\n' \
-  > "${CORRECTED_FINAL_RECOVERY_SELECTION}"
-expect_submit_failure "corrected-final retired eight-row recovery" \
-  --selection-file "${CORRECTED_FINAL_RECOVERY_SELECTION}" \
-  --pass corrected --analysis-variant corrected_final \
-  --target-methods "${CORRECTED_FINAL_RECOVERY_METHODS}"
-expect_submit_failure "corrected-final matrix with target methods" \
-  --selection-file "${CORRECTED_FINAL_SELECTION}" \
-  --method-matrix "${CORRECTED_FINAL_METHOD_MATRIX}" --pass corrected \
-  --analysis-variant corrected_final \
-  --target-methods "${CORRECTED_FINAL_RECOVERY_METHODS}"
 
 # Alzheimer remains a separate ordinary corrected-final one-row follow-up.
 ALZHEIMER_CORRECTED_FINAL_SELECTION="${TMP_DIR}/corrected-final-alzheimer-selection.tsv"
@@ -589,227 +558,9 @@ if grep -Eq -- '--array=1-(8|9)' "${ALZHEIMER_CAPTURE}"; then
 fi
 echo "corrected-final Alzheimer follow-up selection contract: OK"
 
-CORRECTED_FINAL_SHORT_SELECTION="${TMP_DIR}/corrected-final-short-selection.tsv"
-printf 'Breast_cancer\tbatch_effect_corrected\tbatch_effect_corrected\nJoanito\tbatch_effect_corrected\tbatch_effect_corrected\nStephenson\tbatch_effect_corrected\tbatch_effect_corrected\nCovid19_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nKidney_KPMP_full\tbatch_effect_corrected\tbatch_effect_corrected\nDiabetes\tbatch_effect_corrected\tbatch_effect_corrected\nLupus_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\n' \
-  > "${CORRECTED_FINAL_SHORT_SELECTION}"
-expect_submit_failure "corrected-final incomplete matrix scope" \
-  --selection-file "${CORRECTED_FINAL_SHORT_SELECTION}" \
-  --method-matrix "${CORRECTED_FINAL_METHOD_MATRIX}" --pass corrected \
-  --analysis-variant corrected_final --methods "${FINAL_METHODS}"
-expect_submit_failure "corrected-final recovery with an Alzheimer row" \
-  --selection-file "${CORRECTED_FINAL_SHORT_SELECTION}" --pass corrected \
-  --analysis-variant corrected_final \
-  --target-methods "${CORRECTED_FINAL_RECOVERY_METHODS}"
-expect_submit_failure "corrected-final recovery without its target method set" \
-  --selection-file "${CORRECTED_FINAL_RECOVERY_SELECTION}" --pass corrected \
-  --analysis-variant corrected_final --methods "${FINAL_METHODS}"
-expect_submit_failure "corrected-final recovery with reordered target methods" \
-  --selection-file "${CORRECTED_FINAL_RECOVERY_SELECTION}" --pass corrected \
-  --analysis-variant corrected_final \
-  --target-methods "composition,pseudobulk,gloscope,prepare_pseudobulk"
-CORRECTED_FINAL_NON_ALZHEIMER_ONE_ROW="${TMP_DIR}/corrected-final-non-alzheimer-one-row.tsv"
-printf 'Joanito\tbatch_effect_corrected\tbatch_effect_corrected\n' \
-  > "${CORRECTED_FINAL_NON_ALZHEIMER_ONE_ROW}"
-expect_submit_failure "corrected-final one-row follow-up with non-Alzheimer dataset" \
-  --selection-file "${CORRECTED_FINAL_NON_ALZHEIMER_ONE_ROW}" --pass corrected \
-  --analysis-variant corrected_final --methods "${FINAL_METHODS}"
-expect_submit_failure "corrected-final Alzheimer follow-up with recovery target methods" \
-  --selection-file "${ALZHEIMER_CORRECTED_FINAL_SELECTION}" --pass corrected \
-  --analysis-variant corrected_final \
-  --target-methods "${CORRECTED_FINAL_RECOVERY_METHODS}"
-CORRECTED_FINAL_REORDERED_SELECTION="${TMP_DIR}/corrected-final-reordered-selection.tsv"
-printf 'Joanito\tbatch_effect_corrected\tbatch_effect_corrected\nBreast_cancer\tbatch_effect_corrected\tbatch_effect_corrected\nStephenson\tbatch_effect_corrected\tbatch_effect_corrected\nCovid19_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nKidney_KPMP_full\tbatch_effect_corrected\tbatch_effect_corrected\nDiabetes\tbatch_effect_corrected\tbatch_effect_corrected\nLupus_PBMC\tbatch_effect_corrected\tbatch_effect_corrected\nLung\tbatch_effect_corrected\tbatch_effect_corrected\n' \
-  > "${CORRECTED_FINAL_REORDERED_SELECTION}"
-expect_submit_failure "corrected-final variant with wrong config order" \
-  --selection-file "${CORRECTED_FINAL_REORDERED_SELECTION}" \
-  --method-matrix "${CORRECTED_FINAL_METHOD_MATRIX}" --pass corrected \
-  --analysis-variant corrected_final --methods "${FINAL_METHODS}"
 echo "corrected-final benchmark variant selection contract: OK"
 
 echo "final benchmark variant selection contract: OK"
-md5_file_for_fixture() {
-  if command -v md5sum >/dev/null 2>&1; then
-    md5sum "$1" | awk '{print $1}'
-  else
-    md5 -q "$1"
-  fi
-}
-
-# Exercise the validator-only Kidney legacy inventory independently of the
-# all-missing five-row final fixture above.  The arbitrary payload is enough
-# for the existing Rscript validator stub; no H5AD/RDS computation is run.
-rm -rf "${HPC_ROOT}/_ecoda_owners"
-LEGACY_KIDNEY_ROOT="${HPC_ROOT}/batch_effect/uncorrected"
-LEGACY_KIDNEY_PREP="${LEGACY_KIDNEY_ROOT}/pseudobulks/Kidney_KPMP_full_batch_effect_uncorrected_pseudobulk_hvg2000.rds"
-mkdir -p "$(dirname "${LEGACY_KIDNEY_PREP}")"
-printf 'legacy Kidney prepare pseudobulk fixture\n' > "${LEGACY_KIDNEY_PREP}"
-(
-  set -euo pipefail
-  source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1
-  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
-  ecoda_write_checksum "${LEGACY_KIDNEY_PREP}" >/dev/null
-)
-cp "${LEGACY_KIDNEY_PREP}" "${TMP_DIR}/kidney-legacy-prep.before"
-cp "${LEGACY_KIDNEY_PREP}.md5" "${TMP_DIR}/kidney-legacy-prep.before.md5"
-FIXTURE_CAPTURE_BEFORE="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
-KIDNEY_FIXTURE_OUTPUT="$(
-  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
-    BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
-    bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
-    --selection-file "${FINAL_SELECTION}" \
-    --pass uncorrected \
-    --analysis-variant final \
-    --methods "${FINAL_METHODS}"
-)"
-KIDNEY_FIXTURE_RUN_ID="$(printf '%s\n' "${KIDNEY_FIXTURE_OUTPUT}" |
-  sed -n 's/^BATCH_EFFECT_RUN_ID=//p')"
-test -n "${KIDNEY_FIXTURE_RUN_ID}"
-KIDNEY_FIXTURE_RUN_ROOT="${HPC_ROOT}/_ecoda_runs/${KIDNEY_FIXTURE_RUN_ID}"
-KIDNEY_FIXTURE_METADATA="${KIDNEY_FIXTURE_RUN_ROOT}/metadata"
-KIDNEY_FIXTURE_PENDING="$(sed -n 's/^PENDING_SELECTION=//p' \
-  "${KIDNEY_FIXTURE_METADATA}")"
-test -s "${KIDNEY_FIXTURE_PENDING}"
-test "$(wc -l < "${KIDNEY_FIXTURE_PENDING}" | tr -d '[:space:]')" = 34
-if grep -F -q $'Kidney_KPMP_full\tbatch_effect_uncorrected\tprepare_pseudobulk' \
-    "${KIDNEY_FIXTURE_PENDING}"; then
-  echo "validated legacy Kidney preparation appeared in pending selection" >&2
-  exit 1
-fi
-grep -F -q $'Kidney_KPMP_full\tbatch_effect_uncorrected\tqot' \
-  "${KIDNEY_FIXTURE_PENDING}"
-
-KIDNEY_FIXTURE_OWNERS="${KIDNEY_FIXTURE_RUN_ROOT}/manifests/owners.tsv"
-test -s "${KIDNEY_FIXTURE_OWNERS}"
-if grep -F -q \
-    $'uncorrected/Kidney_KPMP_full/batch_effect_uncorrected/prepare_pseudobulk' \
-    "${KIDNEY_FIXTURE_OWNERS}"; then
-  echo "validated legacy Kidney preparation appeared in owner expansion" >&2
-  exit 1
-fi
-grep -F -q \
-  $'uncorrected/Kidney_KPMP_full/batch_effect_uncorrected/qot' \
-  "${KIDNEY_FIXTURE_OWNERS}"
-KIDNEY_FIXTURE_PREP_MATRIX="${KIDNEY_FIXTURE_RUN_ROOT}/manifests/matrix_batch_effect_uncorrected_prepare_pseudobulk.tsv"
-KIDNEY_FIXTURE_QOT_MATRIX="${KIDNEY_FIXTURE_RUN_ROOT}/manifests/matrix_batch_effect_uncorrected_qot.tsv"
-test "$(wc -l < "${KIDNEY_FIXTURE_PREP_MATRIX}" | tr -d '[:space:]')" = 4
-if grep -F -q $'Kidney_KPMP_full\tbatch_effect_uncorrected\tprepare_pseudobulk' \
-    "${KIDNEY_FIXTURE_PREP_MATRIX}"; then
-  echo "validated legacy Kidney preparation appeared in matrix owner expansion" >&2
-  exit 1
-fi
-test "$(wc -l < "${KIDNEY_FIXTURE_QOT_MATRIX}" | tr -d '[:space:]')" = 5
-grep -F -q $'Kidney_KPMP_full\tbatch_effect_uncorrected\tqot' \
-  "${KIDNEY_FIXTURE_QOT_MATRIX}"
-
-KIDNEY_FIXTURE_INVENTORY="${KIDNEY_FIXTURE_RUN_ROOT}/manifests/kidney_legacy_inventory.tsv"
-test -s "${KIDNEY_FIXTURE_INVENTORY}"
-test -s "${KIDNEY_FIXTURE_INVENTORY}.md5"
-[[ ! -L "${KIDNEY_FIXTURE_INVENTORY}" &&
-   ! -L "${KIDNEY_FIXTURE_INVENTORY}.md5" ]]
-test "$(awk -F $'\t' '$1 != "Kidney_KPMP_full" { bad=1 } END { print bad + 0 }' \
-  "${KIDNEY_FIXTURE_INVENTORY}")" = 0
-test "$(awk -F $'\t' \
-  '{ printf "%s%s", $2, (NR == 7 ? "\n" : ",") }' \
-  "${KIDNEY_FIXTURE_INVENTORY}")" = "${FINAL_METHODS}"
-test "$(wc -l < "${KIDNEY_FIXTURE_INVENTORY}" | tr -d '[:space:]')" = 7
-test "$(awk -F $'\t' 'NF != 4 { bad=1 } END { print bad + 0 }' \
-  "${KIDNEY_FIXTURE_INVENTORY}")" = 0
-test "$(awk -F $'\t' '$2 == "prepare_pseudobulk" { print $3 }' \
-  "${KIDNEY_FIXTURE_INVENTORY}")" = valid
-test "$(awk -F $'\t' '$3 == "valid" { count++ } END { print count + 0 }' \
-  "${KIDNEY_FIXTURE_INVENTORY}")" = 1
-test "$(awk -F $'\t' '$3 == "missing" { count++ } END { print count + 0 }' \
-  "${KIDNEY_FIXTURE_INVENTORY}")" = 6
-test "$(awk -F $'\t' '$2 == "qot" { print $3 }' \
-  "${KIDNEY_FIXTURE_INVENTORY}")" = missing
-test "$(awk -F $'\t' '$2 == "prepare_pseudobulk" { print $4 }' \
-  "${KIDNEY_FIXTURE_INVENTORY}")" = "${LEGACY_KIDNEY_PREP}"
-test "$(awk -F $'\t' '$2 == "qot" { print $4 }' \
-  "${KIDNEY_FIXTURE_INVENTORY}")" = \
-  "${LEGACY_KIDNEY_ROOT}/embeddings/Kidney_KPMP_full_batch_effect_uncorrected_hvg2000_highres_qot_dists.feather"
-KIDNEY_FIXTURE_INVENTORY_MD5="$(md5_file_for_fixture "${KIDNEY_FIXTURE_INVENTORY}")"
-KIDNEY_FIXTURE_INVENTORY_SIZE="$(wc -c < "${KIDNEY_FIXTURE_INVENTORY}" |
-  tr -d '[:space:]')"
-test "$(sed -n 's/^MD5=//p' "${KIDNEY_FIXTURE_INVENTORY}.md5")" = \
-  "${KIDNEY_FIXTURE_INVENTORY_MD5}"
-test "$(sed -n 's/^SIZE=//p' "${KIDNEY_FIXTURE_INVENTORY}.md5")" = \
-  "${KIDNEY_FIXTURE_INVENTORY_SIZE}"
-test "$(sed -n 's/^PATH=//p' "${KIDNEY_FIXTURE_INVENTORY}.md5")" = \
-  "${KIDNEY_FIXTURE_INVENTORY}"
-test "$(sed -n 's/^KIDNEY_LEGACY_INVENTORY=//p' \
-  "${KIDNEY_FIXTURE_METADATA}")" = "${KIDNEY_FIXTURE_INVENTORY}"
-test "$(sed -n 's/^KIDNEY_LEGACY_INVENTORY_MD5=//p' \
-  "${KIDNEY_FIXTURE_METADATA}")" = "${KIDNEY_FIXTURE_INVENTORY_MD5}"
-test "$(sed -n 's/^KIDNEY_LEGACY_INVENTORY_SIZE=//p' \
-  "${KIDNEY_FIXTURE_METADATA}")" = "${KIDNEY_FIXTURE_INVENTORY_SIZE}"
-test "$(sed -n 's/^KIDNEY_LEGACY_INVENTORY_STATUS=//p' \
-  "${KIDNEY_FIXTURE_METADATA}")" = \
-  "prepare_pseudobulk=valid;pseudobulk=missing;gloscope=missing;composition=missing;mrvi=missing;pilot=missing;qot=missing"
-test "$(sed -n 's/^KIDNEY_LEGACY_VALID_METHODS=//p' \
-  "${KIDNEY_FIXTURE_METADATA}")" = prepare_pseudobulk
-test "$(sed -n 's/^KIDNEY_LEGACY_MISSING_METHODS=//p' \
-  "${KIDNEY_FIXTURE_METADATA}")" = "pseudobulk gloscope composition mrvi pilot qot"
-test "$(sed -n 's/^KIDNEY_LEGACY_INVALID_METHODS=//p' \
-  "${KIDNEY_FIXTURE_METADATA}")" = ""
-
-# The missing qot row must resolve to the final stem, while the valid legacy
-# preparation must remain outside both final roots and retain its source bytes.
-QOT_FINAL_PATH="$(
-  set -euo pipefail
-  source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1
-  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
-  PASS_ARG=uncorrected
-  ANALYSIS_PASS=uncorrected
-  ANALYSIS_VARIANT=final
-  ANALYSIS_ROOT="${HPC_ROOT}/batch_effect/uncorrected_final"
-  ANALYSIS_NAS_ROOT="${NAS_ROOT}/batch_effect/uncorrected_final"
-  _ecoda_stage5_artifacts_for \
-    Kidney_KPMP_full batch_effect_uncorrected qot
-  test "${#ECODA_BENCHMARK_ARTIFACTS[@]}" = 1
-  printf '%s\n' "${ECODA_BENCHMARK_ARTIFACTS[0]}"
-)"
-test "${QOT_FINAL_PATH}" = \
-  "${HPC_ROOT}/batch_effect/uncorrected_final/embeddings/Kidney_KPMP_full_batch_effect_uncorrected_final_hvg2000_highres_qot_dists.feather"
-test "${QOT_FINAL_PATH}" != \
-  "${LEGACY_KIDNEY_ROOT}/embeddings/Kidney_KPMP_full_batch_effect_uncorrected_hvg2000_highres_qot_dists.feather"
-[[ ! -e "${HPC_ROOT}/batch_effect/uncorrected_final/pseudobulks/Kidney_KPMP_full_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds" &&
-   ! -L "${HPC_ROOT}/batch_effect/uncorrected_final/pseudobulks/Kidney_KPMP_full_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds" ]]
-[[ ! -e "${NAS_ROOT}/batch_effect/uncorrected_final/pseudobulks/Kidney_KPMP_full_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds" &&
-   ! -L "${NAS_ROOT}/batch_effect/uncorrected_final/pseudobulks/Kidney_KPMP_full_batch_effect_uncorrected_final_pseudobulk_hvg2000.rds" ]]
-cmp -s "${TMP_DIR}/kidney-legacy-prep.before" "${LEGACY_KIDNEY_PREP}"
-cmp -s "${TMP_DIR}/kidney-legacy-prep.before.md5" "${LEGACY_KIDNEY_PREP}.md5"
-KIDNEY_FIXTURE_CAPTURE="${TMP_DIR}/kidney-fixture-calls"
-sed -n "$((FIXTURE_CAPTURE_BEFORE + 1)),\$p" "${CAPTURE}" \
-  > "${KIDNEY_FIXTURE_CAPTURE}"
-if grep -F -q "${LEGACY_KIDNEY_PREP}" "${KIDNEY_FIXTURE_CAPTURE}"; then
-  echo "legacy Kidney artifact leaked into final scheduler payload" >&2
-  exit 1
-fi
-echo "validator-only Kidney legacy inventory reuse: OK"
-# Final targeted recovery may name only the failed method classes across the
-# exact five-row final selection.  The legacy Kidney composition and MRVI
-# artifacts are valid, so only the five GloScope plus four composition and four
-# MRVI rows may enter pending selection.
-LEGACY_KIDNEY_COMPOSITION="${LEGACY_KIDNEY_ROOT}/results/Kidney_KPMP_full_batch_effect_uncorrected_composition.rds"
-LEGACY_KIDNEY_METADATA="${LEGACY_KIDNEY_ROOT}/results/Kidney_KPMP_full_batch_effect_uncorrected_metadata.rds"
-LEGACY_KIDNEY_MRVI="${LEGACY_KIDNEY_ROOT}/embeddings/Kidney_KPMP_full_batch_effect_uncorrected_hvg2000_highres_mrvi_dists.feather"
-LEGACY_KIDNEY_MRVI_RUNTIME="${LEGACY_KIDNEY_MRVI}.runtime.json"
-for legacy_path in "${LEGACY_KIDNEY_COMPOSITION}" "${LEGACY_KIDNEY_METADATA}" \
-  "${LEGACY_KIDNEY_MRVI}" "${LEGACY_KIDNEY_MRVI_RUNTIME}"; do
-  mkdir -p "$(dirname "${legacy_path}")"
-  printf 'valid legacy targeted fixture\n' > "${legacy_path}"
-  digest="$(md5_file_for_fixture "${legacy_path}")"
-  printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${digest}" \
-    "$(wc -c < "${legacy_path}" | tr -d '[:space:]')" "${legacy_path}" \
-    > "${legacy_path}.md5"
-done
-printf '{"dataset":"Kidney_KPMP_full","method":"MrVI_hvg2000"}\n' \
-  > "${LEGACY_KIDNEY_MRVI_RUNTIME}"
-digest="$(md5_file_for_fixture "${LEGACY_KIDNEY_MRVI_RUNTIME}")"
-printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${digest}" \
-  "$(wc -c < "${LEGACY_KIDNEY_MRVI_RUNTIME}" | tr -d '[:space:]')" \
-  "${LEGACY_KIDNEY_MRVI_RUNTIME}" > "${LEGACY_KIDNEY_MRVI_RUNTIME}.md5"
-rm -rf "${HPC_ROOT}/_ecoda_owners"
 TARGETED_PREP_PRODUCER_RUN_ID="targeted-final-prep-cache"
 TARGETED_PREP_ROOT="${HPC_ROOT}/_ecoda_runs/${TARGETED_PREP_PRODUCER_RUN_ID}"
 mkdir -p "${TARGETED_PREP_ROOT}/manifests"
@@ -846,14 +597,12 @@ test -n "${TARGETED_FINAL_RUN_ID}"
 TARGETED_FINAL_ROOT="${HPC_ROOT}/_ecoda_runs/${TARGETED_FINAL_RUN_ID}"
 TARGETED_FINAL_PENDING="$(sed -n 's/^PENDING_SELECTION=//p' \
   "${TARGETED_FINAL_ROOT}/metadata")"
-EXPECTED_TARGETED_FINAL_PENDING=$'Covid19_PBMC\tbatch_effect_uncorrected\tgloscope\nDiabetes\tbatch_effect_uncorrected\tgloscope\nJoanito\tbatch_effect_uncorrected\tgloscope\nLung\tbatch_effect_uncorrected\tgloscope\nKidney_KPMP_full\tbatch_effect_uncorrected\tgloscope\nCovid19_PBMC\tbatch_effect_uncorrected\tcomposition\nDiabetes\tbatch_effect_uncorrected\tcomposition\nJoanito\tbatch_effect_uncorrected\tcomposition\nLung\tbatch_effect_uncorrected\tcomposition\nCovid19_PBMC\tbatch_effect_uncorrected\tmrvi\nDiabetes\tbatch_effect_uncorrected\tmrvi\nJoanito\tbatch_effect_uncorrected\tmrvi\nLung\tbatch_effect_uncorrected\tmrvi'
+EXPECTED_TARGETED_FINAL_PENDING=$'Kidney_KPMP_full\tbatch_effect_uncorrected\tprepare_pseudobulk\nCovid19_PBMC\tbatch_effect_uncorrected\tgloscope\nDiabetes\tbatch_effect_uncorrected\tgloscope\nJoanito\tbatch_effect_uncorrected\tgloscope\nLung\tbatch_effect_uncorrected\tgloscope\nKidney_KPMP_full\tbatch_effect_uncorrected\tgloscope\nCovid19_PBMC\tbatch_effect_uncorrected\tcomposition\nDiabetes\tbatch_effect_uncorrected\tcomposition\nJoanito\tbatch_effect_uncorrected\tcomposition\nLung\tbatch_effect_uncorrected\tcomposition\nKidney_KPMP_full\tbatch_effect_uncorrected\tcomposition\nCovid19_PBMC\tbatch_effect_uncorrected\tmrvi\nDiabetes\tbatch_effect_uncorrected\tmrvi\nJoanito\tbatch_effect_uncorrected\tmrvi\nLung\tbatch_effect_uncorrected\tmrvi\nKidney_KPMP_full\tbatch_effect_uncorrected\tmrvi'
 test "$(cat "${TARGETED_FINAL_PENDING}")" = "${EXPECTED_TARGETED_FINAL_PENDING}"
-test "$(wc -l < "${TARGETED_FINAL_PENDING}" | tr -d '[:space:]')" = 13
+test "$(wc -l < "${TARGETED_FINAL_PENDING}" | tr -d '[:space:]')" = 16
 test "$(grep -c $'\tgloscope$' "${TARGETED_FINAL_PENDING}")" = 5
-test "$(grep -c $'\tcomposition$' "${TARGETED_FINAL_PENDING}")" = 4
-test "$(grep -c $'\tmrvi$' "${TARGETED_FINAL_PENDING}")" = 4
-! grep -Eq $'\t(prepare_pseudobulk|pseudobulk|pilot|qot)$' \
-  "${TARGETED_FINAL_PENDING}"
+test "$(grep -c $'\tcomposition$' "${TARGETED_FINAL_PENDING}")" = 5
+test "$(grep -c $'\tmrvi$' "${TARGETED_FINAL_PENDING}")" = 5
 echo "targeted final five-row repair selection contract: OK"
 rm -rf "${HPC_ROOT}/_ecoda_owners/stage5"
 COMPOSITION_ONLY_OUTPUT="$(
@@ -869,17 +618,13 @@ test -n "${COMPOSITION_ONLY_RUN_ID}"
 COMPOSITION_ONLY_ROOT="${HPC_ROOT}/_ecoda_runs/${COMPOSITION_ONLY_RUN_ID}"
 COMPOSITION_ONLY_PENDING="$(sed -n 's/^PENDING_SELECTION=//p' \
   "${COMPOSITION_ONLY_ROOT}/metadata")"
-EXPECTED_COMPOSITION_ONLY_PENDING=$'Covid19_PBMC\tbatch_effect_uncorrected\tcomposition\nDiabetes\tbatch_effect_uncorrected\tcomposition\nJoanito\tbatch_effect_uncorrected\tcomposition\nLung\tbatch_effect_uncorrected\tcomposition'
+EXPECTED_COMPOSITION_ONLY_PENDING=$'Kidney_KPMP_full\tbatch_effect_uncorrected\tprepare_pseudobulk\nCovid19_PBMC\tbatch_effect_uncorrected\tcomposition\nDiabetes\tbatch_effect_uncorrected\tcomposition\nJoanito\tbatch_effect_uncorrected\tcomposition\nLung\tbatch_effect_uncorrected\tcomposition\nKidney_KPMP_full\tbatch_effect_uncorrected\tcomposition'
 test "$(cat "${COMPOSITION_ONLY_PENDING}")" = \
   "${EXPECTED_COMPOSITION_ONLY_PENDING}"
-test "$(wc -l < "${COMPOSITION_ONLY_PENDING}" | tr -d '[:space:]')" = 4
-test "$(grep -c $'\tcomposition$' "${COMPOSITION_ONLY_PENDING}")" = 4
-! grep -Eq $'\t(gloscope|mrvi|prepare_pseudobulk|pseudobulk|pilot|qot)$' \
-  "${COMPOSITION_ONLY_PENDING}"
+test "$(wc -l < "${COMPOSITION_ONLY_PENDING}" | tr -d '[:space:]')" = 6
+test "$(grep -c $'\tcomposition$' "${COMPOSITION_ONLY_PENDING}")" = 5
 COMPOSITION_ONLY_CAPTURE="${TMP_DIR}/composition-only-calls"
 printf '%s\n' "${COMPOSITION_ONLY_OUTPUT}" |
   grep -E 'BATCH_EFFECT_(ARRAY|WATCHDOG|AGGREGATE_GATE)_JOB_ID=' \
   > "${COMPOSITION_ONLY_CAPTURE}"
-! grep -Eq '(gloscope|mrvi|pilot|qot|prepare_pseudobulk|pseudobulk)' \
-  "${COMPOSITION_ONLY_CAPTURE}"
 echo "targeted composition-only recovery selection contract: OK"

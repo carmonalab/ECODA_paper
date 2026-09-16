@@ -325,13 +325,15 @@ all callers use the upstream default `FALSE` for cross-cohort comparability.
 
 ### Stage 5 — Benchmark & Method Analyses (`src/5_run_benchmark_methods/`)
 
-`1_submit_hpc_array.sh` is the canonical coordinated wrapper. Ordinary
+`1_submit_hpc_array.sh` is the thin canonical entrypoint for the single
+manifest-driven Stage 5 dispatcher in `stage5_dispatcher.sh`. Ordinary
 benchmark mode remains compatible with its legacy selections. Active analysis
 variants require explicit, variant-matching selection files and reject
-broad/default scope. Each selected row declares its dataset, view, scope, and
-method set; exact active selections, lane roots, dependencies, and expected
-row/method counts are resolved from `datasets.json` and run-owned manifests,
-not from this overview.
+broad/default scope. Each selected row declares its dataset and view; the
+run-owned `dispatch_selection.tsv` records the exact dataset/view/method rows
+submitted by the dispatcher. Method matrices are validated as non-empty,
+checksummed scope manifests; row counts and cohort-specific inventories are
+not encoded in the dispatcher.
 Targeted recovery uses the same explicit selection file with
 `--target-methods` to submit only missing or invalid rows; valid rows remain
 outside the recovery selection.

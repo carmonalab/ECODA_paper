@@ -495,10 +495,11 @@ _ecoda_stage5_artifacts_for Adams batch_effect_uncorrected composition
 [[ "${ECODA_BENCHMARK_ARTIFACTS[1]}" == \
   "${FINAL_ANALYSIS_ROOT}/results/Adams_batch_effect_uncorrected_final_metadata.rds" ]]
 
-CORRECTED_FINAL_ANALYSIS_ROOT="${TMP_DIR}/scratch/batch_effect/corrected_final"
-CORRECTED_FINAL_ANALYSIS_NAS_ROOT="${TMP_DIR}/nas/project/batch_effect/corrected_final"
+CORRECTED_FINAL_ANALYSIS_ROOT="${TMP_DIR}/scratch/batch_effect/corrected_final/recovery_35row"
+CORRECTED_FINAL_ANALYSIS_NAS_ROOT="${TMP_DIR}/nas/project/batch_effect/corrected_final/recovery_35row"
 mkdir -p "${CORRECTED_FINAL_ANALYSIS_ROOT}" "${CORRECTED_FINAL_ANALYSIS_NAS_ROOT}"
 export ANALYSIS_VARIANT=corrected_final ANALYSIS_PASS=corrected \
+  ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION=recovery_35row \
   ANALYSIS_ROOT="${CORRECTED_FINAL_ANALYSIS_ROOT}" \
   ANALYSIS_NAS_ROOT="${CORRECTED_FINAL_ANALYSIS_NAS_ROOT}" \
   ANALYSIS_LOG_PREFIX="execution_times_batch_effect_corrected_final_"

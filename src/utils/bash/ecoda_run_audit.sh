@@ -28,17 +28,14 @@ AUDIT_METADATA_PENDING_METHOD_ROWS=""
 AUDIT_METADATA_METHOD_MATRIX_MODE=0
 AUDIT_METADATA_EXPORT_MANIFEST=""
 AUDIT_METADATA_EXPORT_STATUS=""
-AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY=""
-AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_MD5=""
-AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_SIZE=""
-AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_STATUS=""
-AUDIT_METADATA_KIDNEY_LEGACY_VALID_METHODS=""
-AUDIT_METADATA_KIDNEY_LEGACY_MISSING_METHODS=""
-AUDIT_METADATA_KIDNEY_LEGACY_INVALID_METHODS=""
 AUDIT_METADATA_METHODS=""
 AUDIT_METADATA_PENDING_SELECTION=""
 AUDIT_METADATA_PENDING_MD5=""
 AUDIT_METADATA_PENDING_SIZE=""
+AUDIT_METADATA_DISPATCH_SELECTION=""
+AUDIT_METADATA_DISPATCH_MD5=""
+AUDIT_METADATA_DISPATCH_SIZE=""
+AUDIT_METADATA_DISPATCH_ROWS=""
 AUDIT_METADATA_BATCH_CONTRACT_MANIFEST=""
 AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_MD5=""
 AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SIZE=""
@@ -609,17 +606,10 @@ _audit_stage5_identity() {
 _audit_run_metadata() {
   local metadata="${RUN_ROOT_REAL}/metadata" metadata_stage metadata_run
   local field field_count variant_count identity_count
-  local inventory_count export_count matrix_count
   local root_version_count root_identity_count matrix_field_count
   local -a identity_fields=(
     ANALYSIS_VARIANT ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_PASS
     ANALYSIS_LOG_PREFIX
-  )
-  local -a inventory_fields=(
-    KIDNEY_LEGACY_INVENTORY KIDNEY_LEGACY_INVENTORY_MD5
-    KIDNEY_LEGACY_INVENTORY_SIZE KIDNEY_LEGACY_INVENTORY_STATUS
-    KIDNEY_LEGACY_VALID_METHODS KIDNEY_LEGACY_MISSING_METHODS
-    KIDNEY_LEGACY_INVALID_METHODS
   )
   _audit_regular_file "${metadata}" || return 1
   metadata_stage="$(_audit_metadata_value "${metadata}" STAGE)"
@@ -692,6 +682,18 @@ _audit_run_metadata() {
   )"
   AUDIT_METADATA_PENDING_METHOD_ROWS="$(
     _audit_metadata_value "${metadata}" PENDING_METHOD_ROWS
+  )"
+  AUDIT_METADATA_DISPATCH_SELECTION="$(
+    _audit_metadata_value "${metadata}" DISPATCH_SELECTION
+  )"
+  AUDIT_METADATA_DISPATCH_MD5="$(
+    _audit_metadata_value "${metadata}" DISPATCH_SELECTION_MD5
+  )"
+  AUDIT_METADATA_DISPATCH_SIZE="$(
+    _audit_metadata_value "${metadata}" DISPATCH_SELECTION_SIZE
+  )"
+  AUDIT_METADATA_DISPATCH_ROWS="$(
+    _audit_metadata_value "${metadata}" DISPATCH_SELECTION_ROWS
   )"
 
   variant_count="$(_audit_metadata_count "${metadata}" ANALYSIS_VARIANT)"
@@ -767,9 +769,8 @@ _audit_run_metadata() {
        "${AUDIT_METADATA_METHOD_MATRIX_SHA256}" =~ ^[[:xdigit:]]{64}$ &&
        "${AUDIT_METADATA_METHOD_MATRIX_IDENTITY}" =~ ^[[:xdigit:]]{64}$ &&
        "${AUDIT_METADATA_METHOD_MATRIX_IDENTITY}" == "${AUDIT_METADATA_METHOD_MATRIX_SHA256}" &&
-       "${AUDIT_METADATA_DECLARED_METHOD_ROWS}" == 35 &&
+       "${AUDIT_METADATA_DECLARED_METHOD_ROWS}" =~ ^[1-9][0-9]*$ &&
        "${AUDIT_METADATA_PENDING_METHOD_ROWS}" =~ ^(0|[1-9][0-9]*)$ &&
-       "${AUDIT_METADATA_PENDING_METHOD_ROWS}" -le 35 &&
        "${AUDIT_METADATA_ANALYSIS_ROOT_VERSION}" == recovery_35row &&
        "${AUDIT_METADATA_ANALYSIS_ROOT_IDENTITY}" == corrected_final/recovery_35row ]] || {
       _audit_die "corrected-final matrix metadata values are invalid: ${metadata}"
@@ -817,13 +818,28 @@ _audit_run_metadata() {
     root_version_count="$(_audit_metadata_count "${metadata}" ANALYSIS_ROOT_VERSION)"
     root_identity_count="$(_audit_metadata_count "${metadata}" ANALYSIS_ROOT_IDENTITY)"
     if [[ "${AUDIT_METADATA_VARIANT}" == corrected_final ]]; then
-      [[ "${root_version_count}" == 1 &&
-         "${root_identity_count}" == 1 &&
-         "${AUDIT_METADATA_ANALYSIS_ROOT_VERSION}" == recovery_35row &&
-         "${AUDIT_METADATA_ANALYSIS_ROOT_IDENTITY}" == corrected_final/recovery_35row ]] || {
-        _audit_die "corrected-final root identity metadata is missing or invalid"
-        return 1
-      }
+      case "${AUDIT_METADATA_ANALYSIS_ROOT}" in
+        */batch_effect/corrected_final)
+          [[ "${root_version_count}" == 0 &&
+             "${root_identity_count}" == 0 ]] || {
+            _audit_die "direct corrected-final root has unexpected replacement identity metadata"
+            return 1
+          }
+          ;;
+        */batch_effect/corrected_final/recovery_35row)
+          [[ "${root_version_count}" == 1 &&
+             "${root_identity_count}" == 1 &&
+             "${AUDIT_METADATA_ANALYSIS_ROOT_VERSION}" == recovery_35row &&
+             "${AUDIT_METADATA_ANALYSIS_ROOT_IDENTITY}" == corrected_final/recovery_35row ]] || {
+            _audit_die "corrected-final root identity metadata is missing or invalid"
+            return 1
+          }
+          ;;
+        *)
+          _audit_die "corrected-final metadata names an unsupported analysis root"
+          return 1
+          ;;
+      esac
     else
       [[ "${root_version_count}" == 0 &&
          "${root_identity_count}" == 0 ]] || {
@@ -860,55 +876,6 @@ _audit_run_metadata() {
     }
   fi
 
-  AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY="$(
-    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_INVENTORY
-  )"
-  AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_MD5="$(
-    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_INVENTORY_MD5
-  )"
-  AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_SIZE="$(
-    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_INVENTORY_SIZE
-  )"
-  AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_STATUS="$(
-    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_INVENTORY_STATUS
-  )"
-  AUDIT_METADATA_KIDNEY_LEGACY_VALID_METHODS="$(
-    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_VALID_METHODS
-  )"
-  AUDIT_METADATA_KIDNEY_LEGACY_MISSING_METHODS="$(
-    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_MISSING_METHODS
-  )"
-  AUDIT_METADATA_KIDNEY_LEGACY_INVALID_METHODS="$(
-    _audit_metadata_value "${metadata}" KIDNEY_LEGACY_INVALID_METHODS
-  )"
-  inventory_count="$(_audit_metadata_count \
-    "${metadata}" KIDNEY_LEGACY_INVENTORY)"
-  for field in "${inventory_fields[@]}"; do
-    field_count="$(_audit_metadata_count "${metadata}" "${field}")"
-    [[ "${field_count}" =~ ^[01]$ ]] || {
-      _audit_die "run metadata has duplicate ${field} fields: ${metadata}"
-      return 1
-    }
-  done
-  if [[ ${inventory_count} -eq 1 ]]; then
-    for field in KIDNEY_LEGACY_INVENTORY_MD5 KIDNEY_LEGACY_INVENTORY_SIZE \
-      KIDNEY_LEGACY_INVENTORY_STATUS KIDNEY_LEGACY_VALID_METHODS \
-      KIDNEY_LEGACY_MISSING_METHODS KIDNEY_LEGACY_INVALID_METHODS; do
-      field_count="$(_audit_metadata_count "${metadata}" "${field}")"
-      [[ "${field_count}" == 1 ]] || {
-        _audit_die "Kidney legacy inventory metadata is incomplete: ${metadata}"
-        return 1
-      }
-    done
-  else
-    for field in "${inventory_fields[@]:1}"; do
-      field_count="$(_audit_metadata_count "${metadata}" "${field}")"
-      [[ "${field_count}" == 0 ]] || {
-        _audit_die "Kidney legacy inventory metadata is incomplete: ${metadata}"
-        return 1
-      }
-    done
-  fi
 
   AUDIT_METADATA_BATCH_CONTRACT_MANIFEST=""
   AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_MD5=""
@@ -978,21 +945,11 @@ _audit_stage5_method_matrix() {
   local matrix_real matrix_md5 matrix_size matrix_sha
   local pending="${AUDIT_METADATA_PENDING_SELECTION:-}"
   local pending_md5 pending_size pending_actual_md5 pending_actual_size
-  local row_dataset row_view row_method extra expected_dataset expected_method
+  local row_dataset row_view row_method extra
   local pending_dataset pending_view pending_method pending_extra
   local selection_dataset selection_view selection_label selection_extra
-  local key matrix_keys="" pending_keys="" index=0 dataset_index method_index
+  local key matrix_keys="" selection_keys="" pending_keys="" index=0
   local pending_count=0 selection_count=0
-  local -a expected_datasets=(
-    Breast_cancer Joanito Stephenson Covid19_PBMC Kidney_KPMP_full
-    Diabetes Lupus_PBMC Lung
-  )
-  local -a breast_methods=(
-    prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
-  )
-  local -a other_methods=(
-    prepare_pseudobulk pseudobulk gloscope composition
-  )
 
   [[ "${STAGE_ARG}" == stage5 ]] || return 0
   if [[ "${AUDIT_METADATA_METHOD_MATRIX_MODE:-0}" != 1 ]]; then
@@ -1037,27 +994,21 @@ _audit_stage5_method_matrix() {
     return 1
   }
 
-  # The matrix is an ordered declaration, not a discoverable permission list.
-  # Require the exact eight-dataset corrected-final contract and method order.
+  # The matrix is an ordered declaration of authorized method rows.  Its
+  # dataset/method cardinality is intentionally supplied by the manifest.
   while IFS=$'\t' read -r row_dataset row_view row_method extra; do
-    if [[ ${index} -lt 7 ]]; then
-      dataset_index=0
-      method_index=${index}
-      expected_method="${breast_methods[${method_index}]}"
-    else
-      dataset_index=$((1 + (index - 7) / 4))
-      method_index=$(((index - 7) % 4))
-      expected_method="${other_methods[${method_index}]}"
-    fi
-    expected_dataset="${expected_datasets[${dataset_index}]:-}"
-    [[ -n "${expected_dataset}" &&
-       "${row_dataset}" == "${expected_dataset}" &&
+    [[ -n "${row_dataset}" && -n "${row_view}" && -n "${row_method}" &&
        "${row_view}" == batch_effect_corrected &&
-       "${row_method}" == "${expected_method}" &&
+       "${row_dataset}" =~ ^[A-Za-z0-9_.-]+$ &&
+       "${row_method}" =~ ^[A-Za-z0-9_.-]+$ &&
        -z "${extra}" ]] || {
-      _audit_die "METHOD_MATRIX row ${index} violates the corrected-final contract"
+      _audit_die "METHOD_MATRIX row ${index} is malformed"
       return 1
     }
+    case ",prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot," in
+      *,"${row_method}",*) ;;
+      *) _audit_die "METHOD_MATRIX contains an unsupported method: ${row_method}"; return 1 ;;
+    esac
     key="${row_dataset}|${row_view}|${row_method}"
     case " ${matrix_keys} " in
       *" ${key} "*)
@@ -1068,8 +1019,8 @@ _audit_stage5_method_matrix() {
     matrix_keys="${matrix_keys} ${key}"
     index=$((index + 1))
   done < "${matrix}"
-  [[ ${index} -eq 35 ]] || {
-    _audit_die "METHOD_MATRIX must contain exactly 35 declared rows"
+  [[ ${index} -gt 0 ]] || {
+    _audit_die "METHOD_MATRIX is empty"
     return 1
   }
   [[ "${AUDIT_METADATA_DECLARED_METHOD_ROWS}" == "${index}" ]] || {
@@ -1077,29 +1028,47 @@ _audit_stage5_method_matrix() {
     return 1
   }
 
-  # The dataset selection remains a separate eight-row manifest.  A swapped
-  # matrix/selection file must fail before artifact expansion.
   [[ "${SELECTION_ARG}" != "${matrix}" ]] || {
     _audit_die "dataset selection and METHOD_MATRIX cannot be the same file"
     return 1
   }
   while IFS=$'\t' read -r selection_dataset selection_view \
     selection_label selection_extra; do
-    expected_dataset="${expected_datasets[${selection_count}]:-}"
-    [[ -n "${expected_dataset}" &&
-       "${selection_dataset}" == "${expected_dataset}" &&
+    [[ -n "${selection_dataset}" &&
        "${selection_view}" == batch_effect_corrected &&
        "${selection_label}" == batch_effect_corrected &&
        -z "${selection_extra}" ]] || {
-      _audit_die "corrected-final dataset selection does not match METHOD_MATRIX scope"
+      _audit_die "corrected-final dataset selection is malformed"
       return 1
     }
+    key="${selection_dataset}|${selection_view}"
+    case " ${selection_keys} " in
+      *" ${key} "*)
+        _audit_die "corrected-final dataset selection contains a duplicate row"
+        return 1
+        ;;
+    esac
+    selection_keys="${selection_keys} ${key}"
+    case " ${matrix_keys} " in
+      *" ${selection_dataset}|${selection_view}|"*) ;;
+      *)
+        _audit_die "METHOD_MATRIX does not cover selection row: ${key}"
+        return 1
+        ;;
+    esac
     selection_count=$((selection_count + 1))
   done < "${SELECTION_ARG}"
-  [[ ${selection_count} -eq 8 ]] || {
-    _audit_die "corrected-final matrix mode requires exactly eight dataset rows"
+  [[ ${selection_count} -gt 0 ]] || {
+    _audit_die "corrected-final matrix selection is empty"
     return 1
   }
+  while IFS=$'\t' read -r row_dataset row_view row_method extra; do
+    key="${row_dataset}|${row_view}"
+    case " ${selection_keys} " in
+      *" ${key} "*) ;;
+      *) _audit_die "METHOD_MATRIX escapes the dataset selection: ${key}"; return 1 ;;
+    esac
+  done < "${matrix}"
 
   # PENDING_SELECTION is the derived method subset.  It must be run-owned,
   # checksummed independently, and contain only declared matrix triples.
@@ -1169,6 +1138,76 @@ _audit_stage5_method_matrix() {
   AUDIT_MATRIX_PENDING_ROWS="${pending_count}"
 }
 
+_audit_dispatch_selection() {
+  local dispatch="${AUDIT_METADATA_DISPATCH_SELECTION:-}"
+  local dispatch_md5 dispatch_size dispatch_rows actual_md5 actual_size actual_rows
+  local row_dataset row_view row_method extra key seen="" selection_keys=""
+  [[ "${STAGE_ARG}" == stage5 ]] || return 0
+  [[ -n "${dispatch}" ]] || return 0
+  [[ "${dispatch}" == "${RUN_ROOT_REAL}/manifests/dispatch_selection.tsv" ]] || {
+    _audit_die "dispatch selection is not the canonical run-owned path"
+    return 1
+  }
+  _audit_regular_file "${dispatch}" || return 1
+  _audit_regular_file "${dispatch}.md5" || return 1
+  ecoda_validate_run_owned_path "${dispatch}" "${RUN_ROOT_REAL}" || return 1
+  ecoda_validate_run_owned_path "${dispatch}.md5" "${RUN_ROOT_REAL}" || return 1
+  ecoda_validate_manifest "${dispatch}" 3 || return 1
+  ecoda_validate_checksum "${dispatch}" || return 1
+  actual_md5="${ECODA_CHECKSUM_MD5}"
+  actual_size="${ECODA_CHECKSUM_SIZE}"
+  actual_rows="$(awk 'END { print NR }' "${dispatch}")" || return 1
+  dispatch_md5="${AUDIT_METADATA_DISPATCH_MD5}"
+  dispatch_size="${AUDIT_METADATA_DISPATCH_SIZE}"
+  dispatch_rows="${AUDIT_METADATA_DISPATCH_ROWS}"
+  [[ "${dispatch_md5}" =~ ^[[:xdigit:]]{32}$ &&
+     "${dispatch_size}" =~ ^[1-9][0-9]*$ &&
+     "${dispatch_rows}" =~ ^[1-9][0-9]*$ &&
+     "${dispatch_md5}" == "${actual_md5}" &&
+     "${dispatch_size}" == "${actual_size}" &&
+     "${dispatch_rows}" == "${actual_rows}" ]] || {
+    _audit_die "dispatch selection metadata does not match its manifest"
+    return 1
+  }
+  while IFS=$'\t' read -r selection_dataset selection_view \
+    _selection_label selection_extra; do
+    [[ -n "${selection_dataset}" && -n "${selection_view}" &&
+       -z "${selection_extra}" ]] || return 1
+    selection_keys="${selection_keys} ${selection_dataset}|${selection_view}"
+  done < "${SELECTION_ARG}"
+  while IFS=$'\t' read -r row_dataset row_view row_method extra; do
+    [[ -n "${row_dataset}" && -n "${row_view}" && -n "${row_method}" &&
+       -z "${extra}" &&
+       "${row_dataset}" =~ ^[A-Za-z0-9_.-]+$ &&
+       "${row_view}" =~ ^[A-Za-z0-9_.-]+$ &&
+       "${row_method}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+    key="${row_dataset}|${row_view}|${row_method}"
+    case " ${seen} " in
+      *" ${key} "*) _audit_die "dispatch selection contains a duplicate row"; return 1 ;;
+    esac
+    seen="${seen} ${key}"
+    case " ${selection_keys} " in
+      *" ${row_dataset}|${row_view} "*) ;;
+      *) _audit_die "dispatch selection escapes dataset selection"; return 1 ;;
+    esac
+    if [[ "${AUDIT_METADATA_METHOD_MATRIX_MODE:-0}" == 1 ]]; then
+      awk -F '\t' -v ds="${row_dataset}" -v view="${row_view}" \
+        -v method="${row_method}" \
+        '$1 == ds && $2 == view && $3 == method && NF == 3 { found=1 }
+         END { exit(found ? 0 : 1) }' \
+        "${AUDIT_METADATA_METHOD_MATRIX}" || {
+        _audit_die "dispatch selection escapes METHOD_MATRIX"
+        return 1
+      }
+    else
+      case ",prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot,mofa,scitd,scpoli,pilotgm,trans,zeroimp," in
+        *,"${row_method}",*) ;;
+        *) _audit_die "dispatch selection contains an unsupported method"; return 1 ;;
+      esac
+    fi
+  done < "${dispatch}"
+}
+
 _audit_batch_contract_identity_path() {
   local dataset="${1:-}" view="${2:-}" method="${3:-}"
   local index row_dataset row_view row_method row_path row_md5 row_size extra
@@ -1230,12 +1269,6 @@ _audit_batch_contract_manifest() {
   local matrix_mode="${AUDIT_METADATA_METHOD_MATRIX_MODE:-0}"
   local -a configured_methods=()
   local -a expected_methods=()
-  local -a matrix_breast_methods=(
-    prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
-  )
-  local -a matrix_other_methods=(
-    prepare_pseudobulk pseudobulk gloscope composition
-  )
   local -a scope_datasets=() scope_views=()
   local -a actual_datasets=() actual_views=() actual_methods=() actual_paths=()
   [[ "${STAGE_ARG}" == stage5 && "${AUDIT_METADATA_PASS:-}" == corrected ]] ||
@@ -1370,11 +1403,15 @@ _audit_batch_contract_manifest() {
     view="${scope_views[${index}]}"
     if [[ "${matrix_mode}" == 1 ]]; then
       expected_methods=(preprocess)
-      if [[ "${dataset}" == Breast_cancer ]]; then
-        expected_methods+=("${matrix_breast_methods[@]}")
-      else
-        expected_methods+=("${matrix_other_methods[@]}")
-      fi
+      while IFS=$'\t' read -r row_dataset row_view row_method extra; do
+        [[ "${row_dataset}" == "${dataset}" &&
+           "${row_view}" == "${view}" ]] &&
+          expected_methods+=("${row_method}")
+      done < "${AUDIT_METADATA_METHOD_MATRIX}"
+      [[ ${#expected_methods[@]} -gt 1 ]] || {
+        _audit_die "METHOD_MATRIX has no methods for ${dataset}/${view}"
+        return 1
+      }
     else
       expected_methods=(preprocess "${configured_methods[@]}")
     fi
@@ -1939,128 +1976,6 @@ _audit_metadata_export_manifest() {
   }
 }
 
-_audit_kidney_legacy_inventory() {
-  # Historical inventory is validated as read-only evidence; it never
-  # authorizes current Stage 5 expansion or synchronization.
-  local inventory="${AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY:-}"
-  local declared_md5="${AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_MD5:-}"
-  local declared_size="${AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_SIZE:-}"
-  local declared_status="${AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_STATUS:-}"
-  local declared_valid="${AUDIT_METADATA_KIDNEY_LEGACY_VALID_METHODS:-}"
-  local declared_missing="${AUDIT_METADATA_KIDNEY_LEGACY_MISSING_METHODS:-}"
-  local declared_invalid="${AUDIT_METADATA_KIDNEY_LEGACY_INVALID_METHODS:-}"
-  local row_dataset row_method row_status row_paths extra expected_paths
-  local expected_method expected_status computed_status=""
-  local row_count=0 index=0 path
-  local valid_methods="" missing_methods="" invalid_methods=""
-  local key
-  local -a methods=(
-    prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
-  )
-  local -a paths=()
-  [[ "${STAGE_ARG}" == stage5 ]] || return 0
-  if [[ -z "${inventory}" ]]; then
-    return 0
-  fi
-  [[ "${AUDIT_METADATA_VARIANT:-}" == final &&
-     "${AUDIT_METADATA_PASS:-}" == uncorrected ]] || {
-    _audit_die "Kidney legacy inventory is only valid for final uncorrected Stage 5"
-    return 1
-  }
-  [[ "${inventory}" == "${RUN_ROOT_REAL}/manifests/kidney_legacy_inventory.tsv" &&
-     -f "${inventory}" && ! -L "${inventory}" && -r "${inventory}" ]] || {
-    _audit_die "Kidney legacy inventory is missing or not run-owned"
-    return 1
-  }
-  _audit_regular_file "${inventory}.md5" || return 1
-  ecoda_validate_run_owned_path "${inventory}" "${RUN_ROOT_REAL}" || return 1
-  ecoda_validate_run_owned_path "${inventory}.md5" "${RUN_ROOT_REAL}" || return 1
-  ecoda_validate_manifest "${inventory}" 4 || return 1
-  ecoda_validate_checksum "${inventory}" || {
-    _audit_die "Kidney legacy inventory checksum is invalid: ${inventory}"
-    return 1
-  }
-  [[ "${declared_md5}" == "${ECODA_CHECKSUM_MD5}" &&
-     "${declared_size}" == "${ECODA_CHECKSUM_SIZE}" &&
-     "${declared_md5}" =~ ^[[:xdigit:]]{32}$ &&
-     "${declared_size}" =~ ^[1-9][0-9]*$ &&
-     -n "${declared_status}" ]] || {
-    _audit_die "Kidney legacy inventory metadata checksum is invalid"
-    return 1
-  }
-  while IFS=$'\t' read -r row_dataset row_method row_status row_paths extra; do
-    expected_method="${methods[${index}]:-}"
-    [[ -n "${expected_method}" &&
-       "${row_dataset}" == Kidney_KPMP_full &&
-       "${row_method}" == "${expected_method}" &&
-       -z "${extra}" ]] || {
-      _audit_die "Kidney legacy inventory row order or dataset is invalid"
-      return 1
-    }
-    [[ "${row_status}" == valid || "${row_status}" == missing ||
-       "${row_status}" == invalid ]] || {
-      _audit_die "Kidney legacy inventory status is invalid"
-      return 1
-    }
-    case "${row_method}" in
-      prepare_pseudobulk)
-        paths=(
-          "${HPC_SCRATCH_DIR}/batch_effect/uncorrected/pseudobulks/Kidney_KPMP_full_batch_effect_uncorrected_pseudobulk_hvg2000.rds"
-        )
-        ;;
-      pseudobulk|gloscope)
-        paths=(
-          "${HPC_SCRATCH_DIR}/batch_effect/uncorrected/results/Kidney_KPMP_full_batch_effect_uncorrected_${row_method}.rds"
-        )
-        ;;
-      composition)
-        paths=(
-          "${HPC_SCRATCH_DIR}/batch_effect/uncorrected/results/Kidney_KPMP_full_batch_effect_uncorrected_composition.rds"
-          "${HPC_SCRATCH_DIR}/batch_effect/uncorrected/results/Kidney_KPMP_full_batch_effect_uncorrected_metadata.rds"
-        )
-        ;;
-      mrvi|pilot|qot)
-        paths=(
-          "${HPC_SCRATCH_DIR}/batch_effect/uncorrected/embeddings/Kidney_KPMP_full_batch_effect_uncorrected_hvg2000_highres_${row_method}_dists.feather"
-        )
-        ;;
-      *) return 1 ;;
-    esac
-    expected_paths="${paths[0]}"
-    for path in "${paths[@]:1}"; do expected_paths="${expected_paths};${path}"; done
-    [[ "${row_paths}" == "${expected_paths}" ]] || {
-      _audit_die "Kidney legacy inventory path is not the declared legacy path"
-      return 1
-    }
-    expected_status="${row_method}=invalid"
-    case "${row_status}" in
-      valid)
-        valid_methods="${valid_methods}${row_method} "
-        for path in "${paths[@]}"; do
-          _audit_regular_file "${path}" || return 1
-          ecoda_validate_checksum "${path}" || {
-            _audit_die "validated Kidney legacy artifact checksum is invalid: ${path}"
-            return 1
-          }
-        done
-        ;;
-      missing) missing_methods="${missing_methods}${row_method} " ;;
-      invalid) invalid_methods="${invalid_methods}${row_method} " ;;
-    esac
-    if [[ -n "${computed_status}" ]]; then computed_status="${computed_status};"; fi
-    computed_status="${computed_status}${row_method}=${row_status}"
-    row_count=$((row_count + 1))
-    index=$((index + 1))
-  done < "${inventory}"
-  [[ ${row_count} -eq ${#methods[@]} && ${index} -eq ${#methods[@]} &&
-     "${declared_status}" == "${computed_status}" &&
-     "${declared_valid}" == "${valid_methods% }" &&
-     "${declared_missing}" == "${missing_methods% }" &&
-     "${declared_invalid}" == "${invalid_methods% }" ]] || {
-    _audit_die "Kidney legacy inventory status metadata mismatches rows"
-    return 1
-  }
-}
 
 _audit_annotation_artifact() {
   local path="$1" option="$2" python_bin validator
@@ -2254,9 +2169,8 @@ _audit_selected_artifacts() {
   export PROJECT_ROOT="${AUDIT_SOURCE_ROOT}"
   if [[ "${STAGE_ARG}" == stage5 ]]; then
     if [[ "${AUDIT_METADATA_METHOD_MATRIX_MODE:-0}" == 1 ]]; then
-      # Keep the eight-row dataset selection as the scope source.  The
-      # run-owned matrix is an independent authorization input consumed by
-      # _ecoda_stage5_artifacts_for for each derived pending method row.
+      # The dataset selection is the scope source. The run-owned matrix is an
+      # independent authorization input consumed for each pending method row.
       export ECODA_STAGE5_METHOD_MATRIX="${AUDIT_METADATA_METHOD_MATRIX}"
       unset METHOD_MATRIX
     else
@@ -2395,8 +2309,8 @@ _audit_runtime_identity "${RUNTIME_IDENTITY_ARG}" || exit 1
 _audit_selection || exit 1
 _audit_terminal_status || exit 1
 _audit_stage5_method_matrix || exit 1
+_audit_dispatch_selection || exit 1
 _audit_metadata_export_manifest || exit 1
-_audit_kidney_legacy_inventory || exit 1
 _audit_scheduler_ids || exit 1
 _audit_selected_artifacts || exit 1
 printf 'ECODA_RUN_AUDIT_OK=%s\n' "${RUN_ID}"

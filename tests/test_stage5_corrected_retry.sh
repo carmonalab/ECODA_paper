@@ -167,8 +167,9 @@ CORRECTED_RUNTIME_EXPORT="$(runtime_export_for "${CORRECTED_RUN_ROOT}")"
 export ECODA_RUN_ROOT="${CORRECTED_RUN_ROOT}" ECODA_RUN_ID=corrected-retry
 export ECODA_LOGS_DIR="${CORRECTED_RUN_ROOT}/logs"
 export ANALYSIS_VARIANT=corrected_final ANALYSIS_PASS=corrected
-export ANALYSIS_ROOT="${HPC_ROOT}/batch_effect/corrected_final"
-export ANALYSIS_NAS_ROOT="${NAS_ROOT}/batch_effect/corrected_final"
+export ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION=recovery_35row
+export ANALYSIS_ROOT="${HPC_ROOT}/batch_effect/corrected_final/recovery_35row"
+export ANALYSIS_NAS_ROOT="${NAS_ROOT}/batch_effect/corrected_final/recovery_35row"
 export ANALYSIS_LOG_PREFIX="execution_times_batch_effect_corrected_final_"
 export SBATCH_RESULT_ID=7002
 : > "${CAPTURE}"
@@ -187,8 +188,8 @@ CORRECTED_CALLS="$(<"${CAPTURE}")"
 for required_identity in \
   "ANALYSIS_VARIANT=corrected_final" \
   "ANALYSIS_PASS=corrected" \
-  "ANALYSIS_ROOT=${HPC_ROOT}/batch_effect/corrected_final" \
-  "ANALYSIS_NAS_ROOT=${NAS_ROOT}/batch_effect/corrected_final" \
+  "ANALYSIS_ROOT=${HPC_ROOT}/batch_effect/corrected_final/recovery_35row" \
+  "ANALYSIS_NAS_ROOT=${NAS_ROOT}/batch_effect/corrected_final/recovery_35row" \
   "ANALYSIS_LOG_PREFIX=execution_times_batch_effect_corrected_final_" \
   "ECODA_SOURCE_ROOT=${SOURCE_TREE}" \
   "ECODA_SOURCE_MANIFEST=${SOURCE_MANIFEST}" \
