@@ -28,7 +28,7 @@ ecoda_stage5_validate_identity() {
       }
       ;;
     corrected_final)
-      expected_suffix="corrected_final/recovery_35row"
+      expected_suffix="corrected_final"
       [[ "${pass}" == "corrected" ]] || {
         _ecoda_die "corrected_final Stage 5 analysis requires the corrected pass"
         return 1
@@ -116,7 +116,7 @@ ecoda_stage5_analysis_root_suffix() {
       printf 'uncorrected_final'
       ;;
     corrected_final)
-      printf 'corrected_final/recovery_35row'
+      printf 'corrected_final'
       ;;
     *)
       return 1

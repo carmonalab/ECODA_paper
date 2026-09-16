@@ -93,7 +93,7 @@ _audit_stage5_identity() {
         expected_pass="uncorrected"
         ;;
       corrected_final)
-        expected_suffix="corrected_final/recovery_35row"
+        expected_suffix="corrected_final"
         expected_pass="corrected"
         expected_log_prefix="execution_times_batch_effect_corrected_final_"
         ;;
@@ -163,9 +163,6 @@ _audit_stage5_identity() {
     export ANALYSIS_PASS="${analysis_pass}"
     export ANALYSIS_LOG_PREFIX="${analysis_log_prefix}"
     export PASS_ARG="${pass}"
-    if [[ "${variant}" == corrected_final ]]; then
-      export ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION=recovery_35row
-    fi
     return 0
   fi
 

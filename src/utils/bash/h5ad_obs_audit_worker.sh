@@ -252,14 +252,8 @@ if [[ "${AUDIT_MODE}" == metadata ]]; then
       ;;
     corrected_final)
       EXPECTED_METADATA_PASS="corrected"
-      if [[ "${METADATA_ROOT}" == */batch_effect/corrected_final/recovery_35row ||
-            "${METADATA_NAS_ROOT}" == */batch_effect/corrected_final/recovery_35row ]]; then
-        EXPECTED_METADATA_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final/recovery_35row"
-        EXPECTED_METADATA_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final/recovery_35row"
-      else
-        EXPECTED_METADATA_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final"
-        EXPECTED_METADATA_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
-      fi
+      EXPECTED_METADATA_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final"
+      EXPECTED_METADATA_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
       ;;
     *)
       fail "metadata export requires analysis variant final or corrected_final"

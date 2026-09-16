@@ -480,12 +480,10 @@ analysis_merge_sync_cleanup() (
   [[ -n "${ECODA_SOURCE_ROOT:-}" ]] &&
     merge_script="$(benchmark_source_script_path src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1.2_merge_execution_times.py)"
   ECODA_RUN_ROOT="${RUN_ROOT}"
-  # The replacement corrected-final lane is a terminal publication root.
-  # Reject a successful owner without touching it, but preserve the
-  # established terminal-failure recovery path. Direct legacy roots
-  # intentionally retain their historical reentry behavior.
-  if [[ "${LOCAL_ROOT}" == */batch_effect/corrected_final/recovery_35row &&
-        "${REMOTE_ROOT}" == */batch_effect/corrected_final/recovery_35row ]]; then
+  # Corrected-final synchronization owns the direct corrected-final root.
+  # Existing successful owners remain immutable; failed owners are recoverable.
+  if [[ "${LOCAL_ROOT}" == */batch_effect/corrected_final &&
+        "${REMOTE_ROOT}" == */batch_effect/corrected_final ]]; then
     sync_owner_artifact_valid=1
     recovery_sync_owner_dir="$(ecoda_owner_dir stage5 "sync/${LOCAL_ROOT}")" ||
       sync_fail "cannot resolve shared Stage 5 sync owner"

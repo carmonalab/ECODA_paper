@@ -62,7 +62,6 @@ unset H5AD_ALLOW_MISSING_SUMMARY
 
 GPU_POLICY="auto"
 BASELINE_METHODS=(gloscope mofa pseudobulk composition scitd mrvi scpoli pilot qot pilotgm)
-STAGE5_INPUT_PRODUCER_RUN_ID="${STAGE5_INPUT_PRODUCER_RUN_ID:-${STAGE4_RUN_ID:-${ANNOTATION_RUN_ID:-${PREPROCESS_RUN_ID:-${STAGE3_RUN_ID:-${INPUT_PRODUCER_RUN_ID:-${ECODA_ARTIFACT_PRODUCER_RUN_ID:-${ECODA_PRODUCER_RUN_ID:-}}}}}}}}"
 
 usage() {
   cat <<'EOF'
@@ -234,7 +233,6 @@ if [[ ${SYNC_ONLY_SET} -eq 1 && -z "${SYNC_ONLY_RUN}" ]]; then
   exit 1
 fi
 EXPECTED_BATCH_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot"
-METHOD_MATRIX_ROOT_VERSION="recovery_35row"
 
 # Scope is declared by the caller's manifests.  The dispatcher validates
 # syntax, configured dataset/view identity, uniqueness, and method membership;
@@ -521,9 +519,8 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   stored_root_version="$(sed -n 's/^ANALYSIS_ROOT_VERSION=//p' "${sync_metadata}" | head -1 || true)"
   stored_root_identity="$(sed -n 's/^ANALYSIS_ROOT_IDENTITY=//p' "${sync_metadata}" | head -1 || true)"
   if [[ "${ANALYSIS_VARIANT_ARG:-}" == corrected_final ]]; then
-    [[ "${stored_root_version}" == "${METHOD_MATRIX_ROOT_VERSION}" &&
-       "${stored_root_identity}" == "corrected_final/${METHOD_MATRIX_ROOT_VERSION}" ]] || {
-      echo "ERROR: sync-only corrected-final root-version identity is invalid." >&2
+    [[ -z "${stored_root_version}" && -z "${stored_root_identity}" ]] || {
+      echo "ERROR: direct corrected-final sync cannot use replacement-root identity metadata." >&2
       exit 1
     }
   fi
@@ -723,9 +720,9 @@ stage5_configure_analysis_context() {
         return 1
       }
       export ANALYSIS_VARIANT=corrected_final
-      export ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION="${METHOD_MATRIX_ROOT_VERSION}"
-      ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final/${METHOD_MATRIX_ROOT_VERSION}"
-      ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final/${METHOD_MATRIX_ROOT_VERSION}"
+      unset ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION
+      ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final"
+      ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
       ANALYSIS_LOG_PREFIX="execution_times_batch_effect_corrected_final_"
       ;;
     "")
@@ -1865,55 +1862,6 @@ stage5_require_input_ownerships() {
   done < "${MANIFEST}"
 }
 
-stage5_validate_input_provenance() {
-  local ds view source_path row seen_sources="" owner_stage producer_run
-  local producer owner_dir producer_ok
-  [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
-  [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" ]] || return 0
-  command -v ecoda_stage5_artifact_owner_validate >/dev/null 2>&1 || return 1
-  command -v ecoda_validate_input_artifact >/dev/null 2>&1 || return 1
-  while IFS=$'\t' read -r ds view _scope; do
-    row="${ds}/${view}"
-    case " ${seen_sources} " in
-      *" ${row} "*) continue ;;
-    esac
-    seen_sources="${seen_sources} ${row}"
-    source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
-    ECODA_ARTIFACT_OWNER_CANONICAL_PATH=""
-    ecoda_artifact_owner_validate "${source_path}" >/dev/null 2>&1 || return 1
-    owner_dir="$(ecoda_artifact_owner_dir \
-      "${ECODA_ARTIFACT_OWNER_CANONICAL_PATH}")" || return 1
-    owner_stage="${ECODA_ARTIFACT_OWNER_STAGE:-}"
-    [[ -n "${owner_dir}" && "${ECODA_ARTIFACT_OWNER_STATE:-}" == "OK" ]] ||
-      return 1
-    case "${owner_stage}" in
-      stage3)
-        producer_run="${STAGE5_INPUT_PRODUCER_RUN_ID:-${ECODA_ARTIFACT_OWNER_RUN:-}}"
-        producer_ok=0
-        for producer in stage3 stage3_preflight; do
-          if ecoda_validate_input_artifact \
-              "${source_path}" "${producer}" "${producer_run}" >/dev/null 2>&1; then
-            producer_ok=1
-            break
-          fi
-        done
-        ;;
-      stage4)
-        producer_run="${STAGE5_INPUT_PRODUCER_RUN_ID:-${ECODA_ARTIFACT_OWNER_RUN:-}}"
-        producer_ok=0
-        if ecoda_validate_input_artifact \
-            "${source_path}" stage4_merge "${producer_run}" >/dev/null 2>&1; then
-          producer_ok=1
-        fi
-        ;;
-      *)
-        return 1
-        ;;
-    esac
-    ecoda_validate_run_id "${producer_run}" || return 1
-    [[ ${producer_ok} -eq 1 ]] || return 1
-  done < "${MANIFEST}"
-}
 
 stage5_validate_source_artifact_records() {
   local ds view source_path identity_path row seen_sources="" producer="stage5_preflight"
@@ -2423,8 +2371,6 @@ fi
 # a processing covariate; LABEL is only a scheduler/output grouping token.
 ecoda_validate_manifest "${MANIFEST}" 3 ||
   stage5_abort "invalid Stage 5 selection"
-stage5_validate_input_provenance ||
-  stage5_abort "Stage 5 source H5AD lacks a terminal upstream owner/record"
 DATASET_NAMES=(); SEEN_DS=""; SEEN_ROW=""
 while IFS=$'\t' read -r ds view row_label; do
   stage5_validate_path_component "${ds}" dataset ||
@@ -3119,12 +3065,6 @@ stage5_variant_metadata() {
       "${ANALYSIS_PASS:-${PASS_ARG}}" "${ANALYSIS_LOG_PREFIX}" \
       "${ECODA_RUN_ROOT}/manifests/metadata_export.tsv" \
       "${ECODA_RUN_ROOT}/status/metadata_export.report"
-    if [[ "${ANALYSIS_VARIANT}" == corrected_final &&
-          "${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}" == "recovery_35row" ]]; then
-      printf 'ANALYSIS_ROOT_VERSION=%s\nANALYSIS_ROOT_IDENTITY=%s\n' \
-        "${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION}" \
-        "corrected_final/${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION}"
-    fi
     if [[ ${METHOD_MATRIX_MODE} -eq 1 ]]; then
       [[ -s "${METHOD_MATRIX}" && -s "${METHOD_MATRIX}.md5" ]] || return 1
       METHOD_MATRIX_PENDING_COUNT=0
@@ -3653,10 +3593,6 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
       worker_env="${worker_env},ANALYSIS_PASS=${PASS_ARG}"
       if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
         worker_env="${worker_env},ANALYSIS_VARIANT=${ANALYSIS_VARIANT},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT},ANALYSIS_LOG_PREFIX=${ANALYSIS_LOG_PREFIX}"
-    if [[ ${METHOD_MATRIX_MODE} -eq 0 &&
-          -n "${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}" ]]; then
-      worker_env="${worker_env},ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION=${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION}"
-    fi
       fi
       [[ "${PASS_ARG}" == corrected ]] &&
         worker_env="${worker_env},ECODA_BATCH_CONTRACT_MANIFEST=${ECODA_BATCH_CONTRACT_MANIFEST}"
@@ -3664,7 +3600,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
       worker_env="${worker_env},BENCHMARK_MANIFEST=${manifest}"
     fi
     if [[ ${METHOD_MATRIX_MODE} -eq 1 ]]; then
-      worker_env="${worker_env},METHOD_MATRIX=${METHOD_MATRIX},ECODA_STAGE5_METHOD_MATRIX=${METHOD_MATRIX},ECODA_STAGE5_METHOD_MATRIX_MODE=1,METHOD_MATRIX_IDENTITY=${METHOD_MATRIX_IDENTITY},METHOD_MATRIX_MD5=${METHOD_MATRIX_MD5},METHOD_MATRIX_SIZE=${METHOD_MATRIX_SIZE},ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION=${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}"
+      worker_env="${worker_env},METHOD_MATRIX=${METHOD_MATRIX},ECODA_STAGE5_METHOD_MATRIX=${METHOD_MATRIX},ECODA_STAGE5_METHOD_MATRIX_MODE=1,METHOD_MATRIX_IDENTITY=${METHOD_MATRIX_IDENTITY},METHOD_MATRIX_MD5=${METHOD_MATRIX_MD5},METHOD_MATRIX_SIZE=${METHOD_MATRIX_SIZE}"
     fi
     worker_env="${worker_env},${method_runtime_export}"
     array_args=(--parsable --array="1-$(wc -l < "${manifest}" | tr -d '[:space:]')%${throttle}" --partition="${worker_partition}" "${METHOD_FLAGS[@]}" --time="${method_time_limit}" --mem="${MEMORY}" \

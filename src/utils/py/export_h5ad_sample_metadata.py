@@ -449,15 +449,11 @@ def _validate_variant_output_binding(
             f"{selected_variant} metadata export requires an absolute ANALYSIS_ROOT"
         )
     root_text = analysis_root.rstrip("/")
-    expected_suffixes = (f"/batch_effect/{expected_pass}_final",)
-    if selected_variant == "corrected_final":
-        expected_suffixes += (
-            "/batch_effect/corrected_final/recovery_35row",
-        )
-    if not any(root_text.endswith(suffix) for suffix in expected_suffixes):
+    expected_suffix = f"/batch_effect/{expected_pass}_final"
+    if not root_text.endswith(expected_suffix):
         raise ValueError(
-            f"{selected_variant} metadata export is not bound to a "
-            "supported corrected-final output root"
+            f"{selected_variant} metadata export is not bound to "
+            "the variant-qualified output root"
         )
     expected = Path(root_text) / "metadata" / f"{dataset}_sample_metadata.feather"
     if output != expected:

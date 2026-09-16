@@ -55,8 +55,8 @@ Alzheimer uncorrected job declares 7 logical rows.
 
 There is no separate corrected Alzheimer Stage 5 gate. The two jobs are
 launched independently and in parallel. The corrected job uses
-`batch_effect/corrected_final/recovery_35row`; the Alzheimer uncorrected job
-uses `batch_effect/uncorrected_final`.
+`batch_effect/corrected_final`; the Alzheimer uncorrected job uses
+`batch_effect/uncorrected_final`.
 
 All historical Stage 2, Stage 3, and corrected Stage 5 gate records are
 evidence only. The user explicitly declines Stage 2/3 review or acceptance
