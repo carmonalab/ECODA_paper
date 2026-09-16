@@ -23,8 +23,8 @@
 #
 # The canonical Stage 5 launcher (`stage5_dispatcher.sh`) owns matrix
 # submission, `matrix_watchdog.sh` owns per-method retries and task gates,
-# and `matrix_gate.sh` owns the aggregate gate. Compatibility entrypoints
-# delegate to that launcher.
+# and `matrix_gate.sh` owns the aggregate gate. Invoke the root launcher
+# directly; family-specific compatibility entrypoints were removed.
 # ============================================================================
 
 # Path to the shared exec-log merge script, resolved from THIS file's location

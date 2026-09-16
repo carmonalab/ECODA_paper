@@ -307,8 +307,9 @@ columns in `obs`.
   only matching keys into each target view. Reuse requires matching source
   h5ad path/MD5/SIZE records and canonical run-owned paths.
 - `--skip-prepare` is only a reuse operation and requires
-  `--reuse-run RUN_ID`; it never creates a new empty run root. The old
-  preparation/annotation/merge submitters fail closed.
+  `--reuse-run RUN_ID`; it never creates a new empty run root. The retired
+  split preparation/annotation/merge submitters were removed; invoke
+  `1_submit_onboarding_stage.sh` directly for all Stage 4 work.
 - Login-side synchronization runs once per selected dataset in bounded
   parallel after merge validation. Stage 4 batches each dataset's H5AD and
   sidecar transfer with an rsync files-from manifest, then compares every
@@ -438,8 +439,8 @@ the current gate's terminal wait, inspection, and reviewer approval.
 - Batch Feather skip checks use one-row dataset manifests, and fully populated
   per-dataset RDS skip checks are grouped into one R validator invocation.
 
-- The family submitters are compatibility entrypoints that delegate to the
-  canonical wrapper; they do not own independent synchronization.
+- There are no family-specific submitters; invoke the canonical
+  `1_submit_hpc_array.sh` directly for all Stage 5 method and analysis runs.
 - `batch_effect_analysis` is never a logical view or loader fallback.
 
 

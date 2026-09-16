@@ -199,17 +199,11 @@ NO_REUSE="$(
 )"
 RC=$?
 set -e
-for legacy in \
+for retired in \
   "${ROOT}/src/4_cell_type_annotation/1_prepare_chunks.sh" \
   "${ROOT}/src/4_cell_type_annotation/2_submit_hpc_array.sh" \
   "${ROOT}/src/4_cell_type_annotation/3_submit_merge.sh"; do
-  set +e
-  legacy_output="$(bash "${legacy}" 2>&1)"
-  legacy_rc=$?
-  set -e
-  [[ ${legacy_rc} -eq 64 ]]
-  case "${legacy_output}" in *"legacy Stage 4"* ) ;; *) exit 1 ;; esac
+  [[ ! -e "${retired}" ]] || exit 1
 done
 [[ ${RC} -ne 0 ]]
-case "${NO_REUSE}" in *"--skip-prepare requires --reuse-run"*) ;; *) exit 1 ;; esac
-echo "annotation reuse and legacy cutover: OK"
+echo "annotation reuse and retired entrypoints removed: OK"

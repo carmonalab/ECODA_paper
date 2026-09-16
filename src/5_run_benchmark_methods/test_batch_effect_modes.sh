@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SUBMITTER="${ROOT_DIR}/src/5_run_benchmark_methods/run_batch_effect_methods/1_submit_hpc_array.sh"
+SUBMITTER="${ROOT_DIR}/src/5_run_benchmark_methods/1_submit_hpc_array.sh"
 [[ ! -e "${ROOT_DIR}/src/3_scrnaseq_preprocessing/1_submit_batch_effect_stage.sh" ]]
 
 bash -n "${SUBMITTER}"
@@ -35,11 +35,11 @@ if [[ ${ALLOWLIST_RC} -eq 0 ]]; then
   exit 1
 fi
 case "${ALLOWLIST_OUTPUT}" in
-  *"Unknown batch-effect method 'scpoli'"*) ;;
+  *"fixed ordered method suite"*) ;;
   *)
-    echo "unexpected allow-list output: ${ALLOWLIST_OUTPUT}" >&2
+    echo "unexpected batch-effect method guard output: ${ALLOWLIST_OUTPUT}" >&2
     exit 1
     ;;
 esac
 
-printf '%s\n' "batch-effect submitter guards OK"
+printf '%s\n' "canonical batch-effect submitter guards OK"
