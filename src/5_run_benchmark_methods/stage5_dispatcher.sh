@@ -1880,7 +1880,7 @@ stage5_validate_input_provenance() {
     seen_sources="${seen_sources} ${row}"
     source_path="$(stage5_input_path "${ds}" "${view}")" || return 1
     ECODA_ARTIFACT_OWNER_CANONICAL_PATH=""
-    ecoda_stage5_artifact_owner_validate "${source_path}" >/dev/null 2>&1 || return 1
+    ecoda_artifact_owner_validate "${source_path}" >/dev/null 2>&1 || return 1
     owner_dir="$(ecoda_artifact_owner_dir \
       "${ECODA_ARTIFACT_OWNER_CANONICAL_PATH}")" || return 1
     owner_stage="${ECODA_ARTIFACT_OWNER_STAGE:-}"
