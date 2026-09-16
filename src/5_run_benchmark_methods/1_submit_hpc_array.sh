@@ -40,7 +40,6 @@ METHOD_MATRIX_METADATA_SHA256=""
 METHOD_MATRIX_METADATA_DECLARED_COUNT=""
 METHOD_MATRIX_METADATA_IDENTITY=""
 METHOD_MATRIX_METADATA_PENDING_COUNT=""
-CORRECTED_FINAL_ROOT_LEGACY=0
 SELECTION_FILE_SET=0
 PASS_ARG=""
 ANALYSIS_VARIANT_ARG=""
@@ -63,14 +62,6 @@ unset H5AD_ALLOW_MISSING_SUMMARY
 GPU_POLICY="auto"
 BASELINE_METHODS=(gloscope mofa pseudobulk composition scitd mrvi scpoli pilot qot pilotgm)
 STAGE5_INPUT_PRODUCER_RUN_ID="${STAGE5_INPUT_PRODUCER_RUN_ID:-${STAGE4_RUN_ID:-${ANNOTATION_RUN_ID:-${PREPROCESS_RUN_ID:-${STAGE3_RUN_ID:-${INPUT_PRODUCER_RUN_ID:-${ECODA_ARTIFACT_PRODUCER_RUN_ID:-${ECODA_PRODUCER_RUN_ID:-}}}}}}}}"
-KIDNEY_LEGACY_INVENTORY=""
-KIDNEY_LEGACY_INVENTORY_MD5=""
-KIDNEY_LEGACY_INVENTORY_SIZE=""
-KIDNEY_LEGACY_INVENTORY_STATUS=""
-KIDNEY_LEGACY_INVENTORY_STATUS_ROWS=""
-KIDNEY_LEGACY_VALID_METHODS=""
-KIDNEY_LEGACY_MISSING_METHODS=""
-KIDNEY_LEGACY_INVALID_METHODS=""
 
 usage() {
   cat <<'EOF'
@@ -277,10 +268,6 @@ stage5_validate_method_matrix_source() {
      ${METHODS_SET} -eq 1 &&
      "${METHODS_ARG}" == "${EXPECTED_BATCH_METHODS}" ]] || {
     echo "ERROR: --method-matrix requires --pass corrected, --analysis-variant corrected_final, an explicit selection file, and the fixed seven-method suite." >&2
-    return 1
-  }
-  [[ ${CORRECTED_FINAL_ROOT_LEGACY} -eq 0 ]] || {
-    echo "ERROR: method-matrix mode cannot bind the historical direct corrected_final root." >&2
     return 1
   }
   [[ ${DATASETS_SET} -eq 0 && ${ANALYSES_SET} -eq 0 &&
@@ -617,17 +604,12 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   fi
   stored_root_version="$(sed -n 's/^ANALYSIS_ROOT_VERSION=//p' "${sync_metadata}" | head -1 || true)"
   stored_root_identity="$(sed -n 's/^ANALYSIS_ROOT_IDENTITY=//p' "${sync_metadata}" | head -1 || true)"
-  stored_analysis_root="$(sed -n 's/^ANALYSIS_ROOT=//p' "${sync_metadata}" | head -1 || true)"
   if [[ "${ANALYSIS_VARIANT_ARG:-}" == corrected_final ]]; then
-    if [[ -n "${stored_root_version}" || -n "${stored_root_identity}" ]]; then
-      [[ "${stored_root_version}" == "${METHOD_MATRIX_ROOT_VERSION}" &&
-         "${stored_root_identity}" == "corrected_final/${METHOD_MATRIX_ROOT_VERSION}" ]] || {
-        echo "ERROR: sync-only corrected-final root-version identity is invalid." >&2
-        exit 1
-      }
-    elif [[ "${stored_analysis_root}" == */batch_effect/corrected_final ]]; then
-      CORRECTED_FINAL_ROOT_LEGACY=1
-    fi
+    [[ "${stored_root_version}" == "${METHOD_MATRIX_ROOT_VERSION}" &&
+       "${stored_root_identity}" == "corrected_final/${METHOD_MATRIX_ROOT_VERSION}" ]] || {
+      echo "ERROR: sync-only corrected-final root-version identity is invalid." >&2
+      exit 1
+    }
   fi
   if [[ "${ANALYSIS_VARIANT_ARG:-}" == final ||
         "${ANALYSIS_VARIANT_ARG:-}" == corrected_final ]]; then
@@ -832,21 +814,10 @@ stage5_configure_analysis_context() {
         echo "ERROR: corrected_final analysis variant requires corrected pass." >&2
         return 1
       }
-      # The direct corrected_final root is an immutable historical lane.  All
-      # newly submitted corrected-final work (the matrix gate and the later
-      # Alzheimer one-row gate) uses the disjoint replacement subtree.  A
-      # sync-only invocation may still resume an older direct-root run.
       export ANALYSIS_VARIANT=corrected_final
-      if [[ ${CORRECTED_FINAL_ROOT_LEGACY} -eq 1 &&
-            ${METHOD_MATRIX_MODE} -eq 0 ]]; then
-        unset ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION
-        ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final"
-        ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
-      else
-        export ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION="${METHOD_MATRIX_ROOT_VERSION}"
-        ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final/${METHOD_MATRIX_ROOT_VERSION}"
-        ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final/${METHOD_MATRIX_ROOT_VERSION}"
-      fi
+      export ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION="${METHOD_MATRIX_ROOT_VERSION}"
+      ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final/${METHOD_MATRIX_ROOT_VERSION}"
+      ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final/${METHOD_MATRIX_ROOT_VERSION}"
       ANALYSIS_LOG_PREFIX="execution_times_batch_effect_corrected_final_"
       ;;
     "")
@@ -2728,385 +2699,6 @@ benchmark_artifacts_for() {
   [[ ${#ARTIFACT_PATHS[@]} -gt 0 ]]
 }
 
-stage5_kidney_legacy_root() {
-  local scratch="${HPC_SCRATCH_DIR:-}"
-  [[ "${scratch}" = /* && "${scratch}" != *$'\n'* &&
-     "${scratch}" != *$'\r'* && "${scratch}" != *$'\t'* &&
-     "${scratch}" != *';'* ]] || return 1
-  scratch="${scratch%/}"
-  [[ -n "${scratch}" ]] || scratch="/"
-  if [[ "${scratch}" == "/" ]]; then
-    printf '/batch_effect/uncorrected'
-  else
-    printf '%s/batch_effect/uncorrected' "${scratch}"
-  fi
-}
-
-stage5_kidney_legacy_path_allowed() {
-  local root="$1" path="$2" root_real path_real
-  [[ "${root}" = /* && "${path}" = /* &&
-     "${path}" != *$'\n'* && "${path}" != *$'\r'* &&
-     "${path}" != *$'\t'* && "${path}" != *';'* ]] || return 1
-  case "${path}" in
-    "${root}"/*) ;;
-    *) return 1 ;;
-  esac
-  _ecoda_validate_path_ancestors "${path}" "${root}" || return 1
-  if [[ -e "${path}" || -L "${path}" ]]; then
-    root_real="$(ecoda_realpath_existing "${root}")" || return 1
-    path_real="$(ecoda_realpath_existing "${path}")" || return 1
-    case "${path_real}" in
-      "${root_real}"/*) ;;
-      *) return 1 ;;
-    esac
-  fi
-}
-
-stage5_kidney_legacy_artifact_paths() {
-  local method="$1" root stem path
-  LEGACY_KIDNEY_ARTIFACT_PATHS=()
-  LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED=""
-  root="$(stage5_kidney_legacy_root)" || return 1
-  stage5_validate_path_component "Kidney_KPMP_full" dataset || return 1
-  stage5_validate_path_component "${method}" method || return 1
-  stem="Kidney_KPMP_full_batch_effect_uncorrected"
-  case "${method}" in
-    prepare_pseudobulk)
-      LEGACY_KIDNEY_ARTIFACT_PATHS=(
-        "${root}/pseudobulks/${stem}_pseudobulk_hvg2000.rds"
-      )
-      ;;
-    pseudobulk|gloscope)
-      LEGACY_KIDNEY_ARTIFACT_PATHS=(
-        "${root}/results/${stem}_${method}.rds"
-      )
-      ;;
-    composition)
-      LEGACY_KIDNEY_ARTIFACT_PATHS=(
-        "${root}/results/${stem}_composition.rds"
-        "${root}/results/${stem}_metadata.rds"
-      )
-      ;;
-    mrvi|pilot|qot)
-      LEGACY_KIDNEY_ARTIFACT_PATHS=(
-        "${root}/embeddings/${stem}_hvg2000_highres_${method}_dists.feather"
-      )
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-  for path in "${LEGACY_KIDNEY_ARTIFACT_PATHS[@]}"; do
-    stage5_kidney_legacy_path_allowed "${root}" "${path}" || return 1
-    if [[ -n "${LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED}" ]]; then
-      LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED="${LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED};"
-    fi
-    LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED="${LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED}${path}"
-  done
-  [[ ${#LEGACY_KIDNEY_ARTIFACT_PATHS[@]} -gt 0 &&
-     -n "${LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED}" ]]
-}
-
-stage5_kidney_legacy_validate_rds() {
-  local path="$1" method="$2" metadata="${3:-0}"
-  local -a args=(
-    --artifact "${path}"
-    --method "${method}"
-    --dataset Kidney_KPMP_full
-    --view batch_effect_uncorrected
-    --batch-pass uncorrected
-    --config "${DATASETS_JSON_FILE}"
-    --input-root "${HPC_SCRATCH_DIR}"
-  )
-  [[ "${metadata}" == "1" ]] && args+=(--metadata)
-  ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
-    "${args[@]}" >/dev/null 2>&1
-}
-
-stage5_kidney_legacy_validate_runtime() {
-  local metadata_path="$1" output_path="$2" output_md5="$3"
-  local expected_method="${4:-}" saved_variant="" had_variant=0 rc=0
-  case "${expected_method}" in
-    mrvi) expected_method="MrVI_hvg2000" ;;
-    pilot) expected_method="PILOT_hvg2000_highres" ;;
-    qot) expected_method="QOT_hvg2000_highres" ;;
-    *) return 1 ;;
-  esac
-  if [[ -n "${ANALYSIS_VARIANT+x}" ]]; then
-    had_variant=1
-    saved_variant="${ANALYSIS_VARIANT}"
-  fi
-  # The shared runtime validator intentionally enforces the active final root.
-  # Clear only that guard while validating the explicitly legacy path.
-  unset ANALYSIS_VARIANT
-  if benchmark_validate_runtime_metadata \
-      "${metadata_path}" "${output_path}" "${output_md5}"; then
-    :
-  else
-    rc=$?
-  fi
-  if [[ ${rc} -eq 0 ]]; then
-    jq -e --arg expected_dataset Kidney_KPMP_full \
-      --arg expected_method "${expected_method}" \
-      'type == "object" and .dataset == $expected_dataset and
-       .method == $expected_method' "${metadata_path}" >/dev/null 2>&1 || rc=$?
-  fi
-  if [[ ${had_variant} -eq 1 ]]; then
-    ANALYSIS_VARIANT="${saved_variant}"
-    export ANALYSIS_VARIANT
-  fi
-  return "${rc}"
-}
-
-stage5_kidney_legacy_validate_feather() {
-  local root="$1" method="$2" path="$3"
-  local selection="${ECODA_RUN_ROOT}/manifests/kidney_legacy_feather_validation.tsv"
-  local selection_tmp="${selection}.build.$$"
-  local runtime_path artifact_md5
-  if [[ ! -f "${selection}" || -L "${selection}" ]]; then
-    printf 'Kidney_KPMP_full\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n' \
-      > "${selection_tmp}" || return 1
-    ecoda_atomic_install_manifest "${selection_tmp}" "${selection}" 3 || {
-      rm -f "${selection_tmp}"
-      return 1
-    }
-    rm -f "${selection_tmp}"
-    ecoda_write_checksum "${selection}" || return 1
-  else
-    ecoda_validate_run_owned_path "${selection}" "${ECODA_RUN_ROOT}" || return 1
-    ecoda_validate_manifest "${selection}" 3 || return 1
-    ecoda_validate_checksum "${selection}" || return 1
-  fi
-  "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
-    --root "${root}" --selection "${selection}" --labels "${method}" \
-    --batch --batch-pass uncorrected --input-root "${HPC_SCRATCH_DIR}" \
-    --config "${DATASETS_JSON_FILE}" >/dev/null 2>&1 || return 1
-  ecoda_validate_checksum "${path}" || return 1
-  artifact_md5="${ECODA_CHECKSUM_MD5}"
-  runtime_path="${path}.runtime.json"
-  stage5_kidney_legacy_path_allowed "${root}" "${runtime_path}" || return 1
-  stage5_kidney_legacy_path_allowed "${root}" "${runtime_path}.md5" || return 1
-  ecoda_validate_checksum "${runtime_path}" || return 1
-  stage5_kidney_legacy_validate_runtime \
-    "${runtime_path}" "${path}" "${artifact_md5}" "${method}"
-}
-
-stage5_kidney_legacy_method_status() {
-  local method="$1" root path missing=0 invalid=0
-  root="$(stage5_kidney_legacy_root)" || return 1
-  stage5_kidney_legacy_artifact_paths "${method}" || return 1
-  for path in "${LEGACY_KIDNEY_ARTIFACT_PATHS[@]}"; do
-    # A derived path that resolves outside the immutable legacy root is a
-    # malformed inventory boundary, not an invalid artifact to recompute.
-    stage5_kidney_legacy_path_allowed "${root}" "${path}" || return 1
-    stage5_kidney_legacy_path_allowed "${root}" "${path}.md5" || return 1
-    if [[ ! -e "${path}" ]]; then
-      missing=1
-      continue
-    fi
-    [[ -s "${path}" ]] || {
-      invalid=1
-      continue
-    }
-    ecoda_validate_checksum "${path}" || invalid=1
-  done
-  if [[ ${missing} -eq 0 && ${invalid} -eq 0 ]]; then
-    case "${method}" in
-      prepare_pseudobulk)
-        stage5_kidney_legacy_validate_rds \
-          "${LEGACY_KIDNEY_ARTIFACT_PATHS[0]}" "${method}" || invalid=1
-        ;;
-      pseudobulk|gloscope)
-        stage5_kidney_legacy_validate_rds \
-          "${LEGACY_KIDNEY_ARTIFACT_PATHS[0]}" "${method}" || invalid=1
-        ;;
-      composition)
-        stage5_kidney_legacy_validate_rds \
-          "${LEGACY_KIDNEY_ARTIFACT_PATHS[0]}" "${method}" 0 || invalid=1
-        stage5_kidney_legacy_validate_rds \
-          "${LEGACY_KIDNEY_ARTIFACT_PATHS[1]}" "${method}" 1 || invalid=1
-        ;;
-      mrvi|pilot|qot)
-        stage5_kidney_legacy_validate_feather \
-          "${root}" "${method}" "${LEGACY_KIDNEY_ARTIFACT_PATHS[0]}" || invalid=1
-        ;;
-      *)
-        return 1
-        ;;
-    esac
-  fi
-  if [[ ${invalid} -eq 1 ]]; then
-    KIDNEY_LEGACY_METHOD_STATUS=invalid
-  elif [[ ${missing} -eq 1 ]]; then
-    KIDNEY_LEGACY_METHOD_STATUS=missing
-  else
-    KIDNEY_LEGACY_METHOD_STATUS=valid
-  fi
-  [[ "${KIDNEY_LEGACY_METHOD_STATUS}" == valid ||
-     "${KIDNEY_LEGACY_METHOD_STATUS}" == missing ||
-     "${KIDNEY_LEGACY_METHOD_STATUS}" == invalid ]]
-}
-
-stage5_kidney_legacy_inventory_set_status() {
-  local method="$1" status="$2"
-  [[ "${status}" == valid || "${status}" == missing ||
-     "${status}" == invalid ]] || return 1
-  KIDNEY_LEGACY_INVENTORY_STATUS_ROWS="${KIDNEY_LEGACY_INVENTORY_STATUS_ROWS}${method}=${status};"
-  case "${status}" in
-    valid)
-      KIDNEY_LEGACY_VALID_METHODS="${KIDNEY_LEGACY_VALID_METHODS}${method} "
-      ;;
-    missing)
-      KIDNEY_LEGACY_MISSING_METHODS="${KIDNEY_LEGACY_MISSING_METHODS}${method} "
-      ;;
-    invalid)
-      KIDNEY_LEGACY_INVALID_METHODS="${KIDNEY_LEGACY_INVALID_METHODS}${method} "
-      ;;
-  esac
-}
-
-stage5_build_kidney_legacy_inventory() {
-  local root inventory="${ECODA_RUN_ROOT}/manifests/kidney_legacy_inventory.tsv"
-  local inventory_tmp="${inventory}.build.$$"
-  local method status path
-  local feather_selection="${ECODA_RUN_ROOT}/manifests/kidney_legacy_feather_validation.tsv"
-  local -a methods=(
-    prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
-  )
-  [[ "${ANALYSIS_VARIANT:-}" == final &&
-     "${PASS_ARG:-}" == uncorrected ]] || return 0
-  root="$(stage5_kidney_legacy_root)" || return 1
-  KIDNEY_LEGACY_INVENTORY="${inventory}"
-  KIDNEY_LEGACY_INVENTORY_MD5=""
-  KIDNEY_LEGACY_INVENTORY_SIZE=""
-  KIDNEY_LEGACY_INVENTORY_STATUS=""
-  KIDNEY_LEGACY_INVENTORY_STATUS_ROWS=""
-  KIDNEY_LEGACY_VALID_METHODS=""
-  KIDNEY_LEGACY_MISSING_METHODS=""
-  KIDNEY_LEGACY_INVALID_METHODS=""
-  : > "${inventory_tmp}" || return 1
-  for method in "${methods[@]}"; do
-    stage5_kidney_legacy_method_status "${method}" || {
-      rm -f "${inventory_tmp}" "${feather_selection}" "${feather_selection}.md5"
-      return 1
-    }
-    status="${KIDNEY_LEGACY_METHOD_STATUS}"
-    stage5_kidney_legacy_artifact_paths "${method}" || {
-      rm -f "${inventory_tmp}" "${feather_selection}" "${feather_selection}.md5"
-      return 1
-    }
-    printf 'Kidney_KPMP_full\t%s\t%s\t%s\n' "${method}" "${status}" \
-      "${LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED}" >> "${inventory_tmp}" || {
-      rm -f "${inventory_tmp}" "${feather_selection}" "${feather_selection}.md5"
-      return 1
-    }
-    stage5_kidney_legacy_inventory_set_status "${method}" "${status}" || {
-      rm -f "${inventory_tmp}" "${feather_selection}" "${feather_selection}.md5"
-      return 1
-    }
-  done
-  ecoda_atomic_install_manifest "${inventory_tmp}" "${inventory}" 4 || {
-    rm -f "${inventory_tmp}" "${feather_selection}" "${feather_selection}.md5"
-    return 1
-  }
-  rm -f "${inventory_tmp}"
-  ecoda_write_checksum "${inventory}" || {
-    rm -f "${inventory}" "${inventory}.md5" "${feather_selection}" "${feather_selection}.md5"
-    return 1
-  }
-  ecoda_validate_run_owned_path "${inventory}" "${ECODA_RUN_ROOT}" || return 1
-  ecoda_validate_run_owned_path "${inventory}.md5" "${ECODA_RUN_ROOT}" || return 1
-  ecoda_validate_checksum "${inventory}" || return 1
-  KIDNEY_LEGACY_INVENTORY_MD5="${ECODA_CHECKSUM_MD5}"
-  KIDNEY_LEGACY_INVENTORY_SIZE="${ECODA_CHECKSUM_SIZE}"
-  KIDNEY_LEGACY_INVENTORY_STATUS="${KIDNEY_LEGACY_INVENTORY_STATUS_ROWS%;}"
-  rm -f "${feather_selection}" "${feather_selection}.md5"
-}
-
-stage5_load_kidney_legacy_inventory() {
-  local inventory declared_md5 declared_size declared_status
-  local row_ds row_method row_status row_paths extra expected_method expected_paths check_path
-  local row_count=0 index=0 computed_status=""
-  local -a row_path_array=()
-  local -a methods=(
-    prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot
-  )
-  [[ "${ANALYSIS_VARIANT:-}" == final &&
-     "${PASS_ARG:-}" == uncorrected ]] || return 0
-  inventory="$(stage5_manifest_value "${ECODA_RUN_ROOT}/metadata" \
-    KIDNEY_LEGACY_INVENTORY)" || return 1
-  [[ "${inventory}" == "${ECODA_RUN_ROOT}/manifests/kidney_legacy_inventory.tsv" &&
-     -f "${inventory}" && ! -L "${inventory}" && -r "${inventory}" ]] || return 1
-  ecoda_validate_run_owned_path "${inventory}" "${ECODA_RUN_ROOT}" || return 1
-  ecoda_validate_run_owned_path "${inventory}.md5" "${ECODA_RUN_ROOT}" || return 1
-  ecoda_validate_checksum "${inventory}" || return 1
-  declared_md5="$(stage5_manifest_value "${ECODA_RUN_ROOT}/metadata" \
-    KIDNEY_LEGACY_INVENTORY_MD5)" || return 1
-  declared_size="$(stage5_manifest_value "${ECODA_RUN_ROOT}/metadata" \
-    KIDNEY_LEGACY_INVENTORY_SIZE)" || return 1
-  declared_status="$(stage5_manifest_value "${ECODA_RUN_ROOT}/metadata" \
-    KIDNEY_LEGACY_INVENTORY_STATUS)" || return 1
-  [[ "${declared_md5}" == "${ECODA_CHECKSUM_MD5}" &&
-     "${declared_size}" == "${ECODA_CHECKSUM_SIZE}" &&
-     "${declared_md5}" =~ ^[[:xdigit:]]{32}$ &&
-     "${declared_size}" =~ ^[1-9][0-9]*$ ]] || return 1
-  ecoda_validate_manifest "${inventory}" 4 || return 1
-  KIDNEY_LEGACY_INVENTORY="${inventory}"
-  KIDNEY_LEGACY_INVENTORY_MD5="${declared_md5}"
-  KIDNEY_LEGACY_INVENTORY_SIZE="${declared_size}"
-  KIDNEY_LEGACY_INVENTORY_STATUS_ROWS=""
-  KIDNEY_LEGACY_VALID_METHODS=""
-  KIDNEY_LEGACY_MISSING_METHODS=""
-  KIDNEY_LEGACY_INVALID_METHODS=""
-  while IFS=$'\t' read -r row_ds row_method row_status row_paths extra; do
-    expected_method="${methods[${index}]:-}"
-    [[ -n "${expected_method}" && "${row_ds}" == Kidney_KPMP_full &&
-       "${row_method}" == "${expected_method}" && -z "${extra}" ]] || return 1
-    [[ "${row_status}" == valid || "${row_status}" == missing ||
-       "${row_status}" == invalid ]] || return 1
-    stage5_kidney_legacy_artifact_paths "${row_method}" || return 1
-    expected_paths="${LEGACY_KIDNEY_ARTIFACT_PATHS_SERIALIZED}"
-    [[ "${row_paths}" == "${expected_paths}" ]] || return 1
-    IFS=';' read -r -a row_path_array <<< "${row_paths}"
-    [[ ${#row_path_array[@]} -eq ${#LEGACY_KIDNEY_ARTIFACT_PATHS[@]} ]] || return 1
-    for check_path in "${row_path_array[@]}"; do
-      stage5_kidney_legacy_path_allowed \
-        "$(stage5_kidney_legacy_root)" "${check_path}" || return 1
-    done
-    stage5_kidney_legacy_inventory_set_status \
-      "${row_method}" "${row_status}" || return 1
-    row_count=$((row_count + 1))
-    index=$((index + 1))
-  done < "${inventory}"
-  [[ ${row_count} -eq ${#methods[@]} && ${index} -eq ${#methods[@]} ]] || return 1
-  computed_status="${KIDNEY_LEGACY_INVENTORY_STATUS_ROWS%;}"
-  [[ "${declared_status}" == "${computed_status}" ]] || return 1
-  KIDNEY_LEGACY_INVENTORY_STATUS="${computed_status}"
-}
-
-stage5_kidney_legacy_inventory_metadata() {
-  [[ -n "${KIDNEY_LEGACY_INVENTORY:-}" ]] || return 0
-  [[ "${KIDNEY_LEGACY_INVENTORY_MD5:-}" =~ ^[[:xdigit:]]{32}$ &&
-     "${KIDNEY_LEGACY_INVENTORY_SIZE:-}" =~ ^[1-9][0-9]*$ &&
-     -n "${KIDNEY_LEGACY_INVENTORY_STATUS:-}" ]] || return 1
-  printf 'KIDNEY_LEGACY_INVENTORY=%s\nKIDNEY_LEGACY_INVENTORY_MD5=%s\nKIDNEY_LEGACY_INVENTORY_SIZE=%s\nKIDNEY_LEGACY_INVENTORY_STATUS=%s\nKIDNEY_LEGACY_VALID_METHODS=%s\nKIDNEY_LEGACY_MISSING_METHODS=%s\nKIDNEY_LEGACY_INVALID_METHODS=%s\n' \
-    "${KIDNEY_LEGACY_INVENTORY}" "${KIDNEY_LEGACY_INVENTORY_MD5}" \
-    "${KIDNEY_LEGACY_INVENTORY_SIZE}" "${KIDNEY_LEGACY_INVENTORY_STATUS}" \
-    "${KIDNEY_LEGACY_VALID_METHODS% }" \
-    "${KIDNEY_LEGACY_MISSING_METHODS% }" \
-    "${KIDNEY_LEGACY_INVALID_METHODS% }"
-}
-
-stage5_kidney_legacy_method_valid() {
-  local ds="$1" method="$2"
-  [[ "${ANALYSIS_VARIANT:-}" == final &&
-     "${PASS_ARG:-}" == uncorrected &&
-     "${ds}" == Kidney_KPMP_full ]] || return 1
-  case " ${KIDNEY_LEGACY_VALID_METHODS:-} " in
-    *" ${method} "*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 
 RDS_PREFLIGHT_DONE=""
 RDS_PREFLIGHT_FAILED=""
@@ -3599,9 +3191,6 @@ stage5_selection_has_pending_rows() {
       if stage5_method_is_forced "${method}"; then
         return 0
       fi
-      if stage5_kidney_legacy_method_valid "${ds}" "${method}"; then
-        continue
-      fi
       if [[ ${FORCE_TARGETED_ARG} -eq 1 &&
             "${method}" == "prepare_pseudobulk" ]]; then
         stage5_prepare_pseudobulk_valid "${ds}" "${view}" || return 0
@@ -3792,16 +3381,6 @@ stage5_export_final_sample_metadata() {
 stage5_export_final_sample_metadata ||
   stage5_abort "final sample metadata export failed"
 
-if [[ -n "${SYNC_ONLY_RUN}" ]]; then
-  stage5_load_kidney_legacy_inventory ||
-    stage5_abort "Kidney legacy inventory is missing, malformed, or untrusted"
-else
-  stage5_build_kidney_legacy_inventory ||
-    stage5_abort "failed to build Kidney legacy inventory"
-fi
-
-KIDNEY_LEGACY_INVENTORY_METADATA="$(stage5_kidney_legacy_inventory_metadata)" ||
-  stage5_abort "failed to record Kidney legacy inventory metadata"
 
 PENDING_SELECTION="${ECODA_RUN_ROOT}/manifests/pending_selection.tsv"
 if [[ -z "${SYNC_ONLY_RUN}" ]] &&
@@ -3834,15 +3413,9 @@ if [[ -z "${SYNC_ONLY_RUN}" ]] &&
   analysis_variant_metadata="$(stage5_variant_metadata)"
   [[ -z "${analysis_variant_metadata}" ]] ||
     analysis_variant_metadata="${analysis_variant_metadata}"$'\n'
-  legacy_inventory_metadata="${KIDNEY_LEGACY_INVENTORY_METADATA:-}"
-  [[ -z "${legacy_inventory_metadata}" ]] ||
-    legacy_inventory_metadata="${legacy_inventory_metadata}"$'\n'
-  [[ -z "${legacy_inventory_metadata}" ||
-     -n "${KIDNEY_LEGACY_INVENTORY:-}" ]] ||
-    stage5_abort "Kidney legacy inventory metadata is incomplete"
   root_metadata="ROOT=${ANALYSIS_ROOT}\n"
   ecoda_atomic_write "${ECODA_RUN_ROOT}/metadata" \
-    "STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\n${analysis_variant_metadata}${legacy_inventory_metadata}${target_methods_metadata}${root_metadata}${identity_metadata}\n${batch_contract_metadata_suffix}" ||
+    "STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\n${analysis_variant_metadata}${target_methods_metadata}${root_metadata}${identity_metadata}\n${batch_contract_metadata_suffix}" ||
     stage5_abort "failed to write Stage 5 NOOP metadata"
   ecoda_atomic_write "${ECODA_RUN_ROOT}/status/report" \
     "STATE=NOOP_VALIDATED\nRUN_ID=${RUN_ID}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nREASON=all selected benchmark artifacts are valid; no rerun selected\n" ||
@@ -3980,11 +3553,6 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
       *" ${owner_key} "*) return 0 ;;
     esac
     OWNER_SEEN="${OWNER_SEEN} ${owner_key}"
-    if [[ ${method_force} -eq 0 ]] &&
-       stage5_kidney_legacy_method_valid "${ds}" "${method}"; then
-      echo "Skipping validated legacy Stage 5 artifact ${ds}/${view}/${method}."
-      return 0
-    fi
     if [[ "${method}" == "prepare_pseudobulk" &&
           ${method_force} -eq 0 && ${matrix_breast_pending} -eq 0 ]] &&
        [[ ${FORCE_TARGETED_ARG} -eq 1 || ${TARGET_METHODS_SET} -eq 1 ]]; then
@@ -4093,12 +3661,6 @@ else
   analysis_variant_metadata="$(stage5_variant_metadata)"
   [[ -z "${analysis_variant_metadata}" ]] ||
     analysis_variant_metadata="${analysis_variant_metadata}"$'\n'
-  legacy_inventory_metadata="${KIDNEY_LEGACY_INVENTORY_METADATA:-}"
-  [[ -z "${legacy_inventory_metadata}" ]] ||
-    legacy_inventory_metadata="${legacy_inventory_metadata}"$'\n'
-  [[ -z "${legacy_inventory_metadata}" ||
-     -n "${KIDNEY_LEGACY_INVENTORY:-}" ]] ||
-    stage5_abort "Kidney legacy inventory metadata is incomplete"
   target_methods_metadata=""
   [[ -n "${ANALYSIS_VARIANT:-}" ]] &&
     target_methods_metadata="TARGET_METHODS=${target_methods_csv}\n"
@@ -4112,7 +3674,7 @@ else
   [[ "${PASS_ARG:-}" == corrected ]] &&
     batch_contract_metadata_suffix="${batch_contract_metadata}\n"
   root_metadata="ROOT=${ANALYSIS_ROOT}\n"
-  RUN_METADATA="STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\nH5AD_PREFLIGHT=${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv\nPENDING_SELECTION=${PENDING_SELECTION}\nPENDING_SELECTION_MD5=${PENDING_SELECTION_MD5}\nPENDING_SELECTION_SIZE=${PENDING_SELECTION_SIZE}\n${analysis_variant_metadata}${legacy_inventory_metadata}${target_methods_metadata}${root_metadata}${identity_metadata}\n${batch_contract_metadata_suffix}"
+  RUN_METADATA="STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\nH5AD_PREFLIGHT=${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv\nPENDING_SELECTION=${PENDING_SELECTION}\nPENDING_SELECTION_MD5=${PENDING_SELECTION_MD5}\nPENDING_SELECTION_SIZE=${PENDING_SELECTION_SIZE}\n${analysis_variant_metadata}${target_methods_metadata}${root_metadata}${identity_metadata}\n${batch_contract_metadata_suffix}"
   ecoda_atomic_write "${ECODA_RUN_ROOT}/metadata" "${RUN_METADATA}" ||
     stage5_abort "failed to write Stage 5 run metadata"
 fi
@@ -4500,7 +4062,6 @@ stage5_validate_final_matrix_rows() {
   [[ ${#FEATHER_LABELS[@]} -gt 0 ]] || return 0
   for label in "${FEATHER_LABELS[@]}"; do
     while IFS=$'\t' read -r ds view row_label; do
-      stage5_kidney_legacy_method_valid "${ds}" "${label}" && continue
       selection="${ECODA_RUN_ROOT}/manifests/matrix_validation_final_${label}.tsv"
       tmp="${selection}.build.$$"
       printf '%s\t%s\t%s\n' "${ds}" "${view}" "${row_label}" > "${tmp}" ||
@@ -4627,7 +4188,6 @@ stage5_validate_final_rds_rows() {
     tmp="${list}.build.$$"
     : > "${tmp}" || return 1
     while IFS=$'\t' read -r ds view row_label; do
-      stage5_kidney_legacy_method_valid "${ds}" "${label}" && continue
       benchmark_artifacts_for "${ds}" "${view}" "${label}" || {
         rm -f "${tmp}"
         return 1
@@ -4691,17 +4251,9 @@ elif [[ ${#RDS_LABELS[@]} -gt 0 ]]; then
 fi
 stage5_publish_output_records ||
   stage5_abort "Stage 5 artifact record publication failed"
-unset ECODA_STAGE5_LEGACY_SYNC_SKIP ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS
-if [[ "${ANALYSIS_VARIANT:-}" == final &&
-      -n "${KIDNEY_LEGACY_VALID_METHODS:-}" ]]; then
-  export ECODA_STAGE5_LEGACY_SYNC_SKIP=1
-  export ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS="${KIDNEY_LEGACY_VALID_METHODS% }"
-fi
 if ! ( benchmark_merge_sync_cleanup "${LABELS[@]}" ); then
-  unset ECODA_STAGE5_LEGACY_SYNC_SKIP ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS
   stage5_abort "Stage 5 benchmark synchronization failed"
 fi
-unset ECODA_STAGE5_LEGACY_SYNC_SKIP ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS
 stage5_track_pending_artifact_owners ||
   stage5_abort "Stage 5 artifact ownership changed before finalization"
 ecoda_owner_finalize_tracked OK "benchmark matrix sync completed" ||

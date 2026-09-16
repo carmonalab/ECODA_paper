@@ -462,9 +462,8 @@ _audit_stage5_identity() {
   local analysis_root="${AUDIT_METADATA_ANALYSIS_ROOT:-}"
   local analysis_nas_root="${AUDIT_METADATA_ANALYSIS_NAS_ROOT:-}"
   local analysis_pass="${AUDIT_METADATA_ANALYSIS_PASS:-}"
-  local matrix_mode="${AUDIT_METADATA_METHOD_MATRIX_MODE:-0}"
   local expected_suffix expected_pass expected_root expected_nas
-  local expected_log_prefix root_versioned_hint=0
+  local expected_log_prefix
   local analysis_log_prefix="${AUDIT_METADATA_ANALYSIS_LOG_PREFIX:-}"
   local scratch_root nas_target nas_base
 
@@ -486,7 +485,6 @@ _audit_stage5_identity() {
   unset ANALYSIS_VARIANT ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_PASS \
     ANALYSIS_LOG_PREFIX PASS_ARG ECODA_STAGE5_METHOD_MATRIX METHOD_MATRIX \
     ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION
-  unset ECODA_STAGE5_LEGACY_SYNC_SKIP ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS
 
   if [[ -n "${variant}" ]]; then
     case "${variant}" in
@@ -495,14 +493,7 @@ _audit_stage5_identity() {
         expected_pass="uncorrected"
         ;;
       corrected_final)
-        if [[ "${matrix_mode}" == 1 ||
-              "${analysis_root}" == */batch_effect/corrected_final/recovery_35row ||
-              "${analysis_nas_root}" == */batch_effect/corrected_final/recovery_35row ]]; then
-          root_versioned_hint=1
-          expected_suffix="corrected_final/recovery_35row"
-        else
-          expected_suffix="corrected_final"
-        fi
+        expected_suffix="corrected_final/recovery_35row"
         expected_pass="corrected"
         expected_log_prefix="execution_times_batch_effect_corrected_final_"
         ;;
@@ -528,12 +519,6 @@ _audit_stage5_identity() {
       _audit_die "Stage 5 variant metadata has mismatched pass/root/log identity"
       return 1
     }
-    if [[ "${variant}" == corrected_final &&
-          "${root_versioned_hint}" == 0 &&
-          -n "${AUDIT_METADATA_ANALYSIS_ROOT_VERSION}" ]]; then
-      _audit_die "corrected-final root identity fields require the versioned root"
-      return 1
-    fi
 
     case "${analysis_nas_root}" in
       */batch_effect/${expected_suffix})
@@ -578,7 +563,7 @@ _audit_stage5_identity() {
     export ANALYSIS_PASS="${analysis_pass}"
     export ANALYSIS_LOG_PREFIX="${analysis_log_prefix}"
     export PASS_ARG="${pass}"
-    if [[ "${matrix_mode}" == 1 ]]; then
+    if [[ "${variant}" == corrected_final ]]; then
       export ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION=recovery_35row
     fi
     return 0
@@ -742,9 +727,8 @@ _audit_run_metadata() {
     done
   fi
   # Matrix metadata is a separate contract from the dataset/view selection.
-  # It is present only for the corrected-final recovery lane; legacy
-  # corrected-final and Alzheimer one-row runs retain their direct root and
-  # do not acquire any of these fields.
+  # Corrected-final metadata always binds the recovery_35row root; matrix
+  # metadata adds the independent method-scope contract.
   matrix_count="$(_audit_metadata_count "${metadata}" METHOD_MATRIX)"
   [[ "${matrix_count}" == 0 || "${matrix_count}" == 1 ]] || {
     _audit_die "run metadata has duplicate METHOD_MATRIX fields: ${metadata}"
@@ -832,16 +816,21 @@ _audit_run_metadata() {
     done
     root_version_count="$(_audit_metadata_count "${metadata}" ANALYSIS_ROOT_VERSION)"
     root_identity_count="$(_audit_metadata_count "${metadata}" ANALYSIS_ROOT_IDENTITY)"
-    [[ "${root_version_count}" == "${root_identity_count}" &&
-       ( "${root_version_count}" == 0 ||
-         ( "${root_version_count}" == 1 &&
-           "${STAGE_ARG}" == stage5 &&
-           "${AUDIT_METADATA_VARIANT}" == corrected_final &&
-           "${AUDIT_METADATA_ANALYSIS_ROOT_VERSION}" == recovery_35row &&
-           "${AUDIT_METADATA_ANALYSIS_ROOT_IDENTITY}" == corrected_final/recovery_35row ) ) ]] || {
-      _audit_die "run metadata has an invalid corrected-final root identity"
-      return 1
-    }
+    if [[ "${AUDIT_METADATA_VARIANT}" == corrected_final ]]; then
+      [[ "${root_version_count}" == 1 &&
+         "${root_identity_count}" == 1 &&
+         "${AUDIT_METADATA_ANALYSIS_ROOT_VERSION}" == recovery_35row &&
+         "${AUDIT_METADATA_ANALYSIS_ROOT_IDENTITY}" == corrected_final/recovery_35row ]] || {
+        _audit_die "corrected-final root identity metadata is missing or invalid"
+        return 1
+      }
+    else
+      [[ "${root_version_count}" == 0 &&
+         "${root_identity_count}" == 0 ]] || {
+        _audit_die "run metadata contains an unexpected root identity"
+        return 1
+      }
+    fi
   fi
 
 
@@ -1951,6 +1940,8 @@ _audit_metadata_export_manifest() {
 }
 
 _audit_kidney_legacy_inventory() {
+  # Historical inventory is validated as read-only evidence; it never
+  # authorizes current Stage 5 expansion or synchronization.
   local inventory="${AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY:-}"
   local declared_md5="${AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_MD5:-}"
   local declared_size="${AUDIT_METADATA_KIDNEY_LEGACY_INVENTORY_SIZE:-}"
@@ -2069,12 +2060,6 @@ _audit_kidney_legacy_inventory() {
     _audit_die "Kidney legacy inventory status metadata mismatches rows"
     return 1
   }
-  # This is deliberately the only context passed to the common expansion
-  # helper.  It contains valid methods from this run-owned inventory only.
-  if [[ -n "${valid_methods}" ]]; then
-    export ECODA_STAGE5_LEGACY_SYNC_SKIP=1
-    export ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS="${valid_methods% }"
-  fi
 }
 
 _audit_annotation_artifact() {

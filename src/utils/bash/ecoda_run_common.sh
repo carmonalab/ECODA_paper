@@ -1735,16 +1735,11 @@ ecoda_stage5_validate_identity() {
       }
       ;;
     corrected_final)
-      expected_suffix="corrected_final"
+      expected_suffix="corrected_final/recovery_35row"
       [[ "${pass}" == "corrected" ]] || {
         _ecoda_die "corrected_final Stage 5 analysis requires the corrected pass"
         return 1
       }
-      if [[ "${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}" == "recovery_35row" ||
-            "${ANALYSIS_ROOT:-}" == */batch_effect/corrected_final/recovery_35row ||
-            "${ANALYSIS_NAS_ROOT:-}" == */batch_effect/corrected_final/recovery_35row ]]; then
-        expected_suffix="corrected_final/recovery_35row"
-      fi
       ;;
     *)
       _ecoda_die "unsupported Stage 5 analysis variant: ${variant}"
@@ -1799,8 +1794,8 @@ ecoda_stage5_method_matrix_allows() {
   local ds="${1:-}" view="${2:-}" method="${3:-}"
   local matrix="${ECODA_STAGE5_METHOD_MATRIX:-${METHOD_MATRIX:-}}"
   local row_ds row_view row_method extra
-  # Legacy and non-matrix runs retain their historical unrestricted method
-  # expansion.  A bound matrix is authoritative only when explicitly set.
+  # Non-matrix runs retain unrestricted method expansion.  A bound matrix is
+  # authoritative only when explicitly set.
   [[ -f "${matrix}" && ! -L "${matrix}" && -r "${matrix}" ]] || return 1
   if [[ -n "${ECODA_RUN_ROOT:-}" ]]; then
     ecoda_validate_run_owned_path "${matrix}" "${ECODA_RUN_ROOT}" || return 1
@@ -1828,13 +1823,7 @@ ecoda_stage5_analysis_root_suffix() {
       printf 'uncorrected_final'
       ;;
     corrected_final)
-      if [[ "${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}" == "recovery_35row" ||
-            "${ANALYSIS_ROOT:-}" == */batch_effect/corrected_final/recovery_35row ||
-            "${ANALYSIS_NAS_ROOT:-}" == */batch_effect/corrected_final/recovery_35row ]]; then
-        printf 'corrected_final/recovery_35row'
-      else
-        printf 'corrected_final'
-      fi
+      printf 'corrected_final/recovery_35row'
       ;;
     *)
       return 1
@@ -1911,21 +1900,6 @@ ecoda_stage5_batch_stem() {
 _ecoda_stage5_artifacts_for() {
   local ds="$1" view="$2" label="$3" pass="${PASS_ARG:-${ANALYSIS_PASS:-}}"
   local root nas_root stem batch_stem suffix n
-  if [[ "${ECODA_STAGE5_LEGACY_SYNC_SKIP:-0}" == 1 &&
-        "${ANALYSIS_VARIANT:-}" == final &&
-        "${pass}" == uncorrected &&
-        "${view}" == batch_effect_uncorrected &&
-        "${ds}" == Kidney_KPMP_full ]]; then
-    case " ${ECODA_STAGE5_LEGACY_SYNC_SKIP_METHODS:-} " in
-      *" ${label} "*)
-        # The submitter's run-owned legacy inventory has already validated
-        # this exact method.  It has no final-root payload to synchronize.
-        ECODA_BENCHMARK_ARTIFACTS=()
-        ECODA_BENCHMARK_ARTIFACT_NAS=()
-        return 0
-        ;;
-    esac
-  fi
   # A missing pass is ordinary mode even when a caller supplies a batch view.
   # Batch callers bind PASS_ARG/ANALYSIS_PASS before ownership expansion.
   ecoda_stage5_validate_identity "${pass}" || return 1
