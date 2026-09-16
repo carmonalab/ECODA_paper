@@ -32,37 +32,57 @@ RETRY_INDEX=0
 SCHEDULER_IDS=()
 RUNTIME_EXPORT=""
 
-stage2_step_script() {
-  local root="${SCRIPT_DIR}"
+stage2_step_table_row() {
+  local gate
   if [[ -n "${SOURCE_ROOT:-}" ]]; then
-    root="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing"
+    gate="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1_submit_hpc.sh"
+  else
+    gate="${SCRIPT_DIR}/1_submit_hpc.sh"
   fi
-  case "$1" in
-    gongsharma_cap) printf '%s/1.1_submit_gongsharma.sh' "${root}" ;;
-    combinedpbmc) printf '%s/1.2_submit_combinedpbmc.sh' "${root}" ;;
-    joanito) printf '%s/1.3_submit_joanito.sh' "${root}" ;;
-    kfoury_lowres_ct) printf '%s/1.4_submit_kfoury_lowres_ct.sh' "${root}" ;;
-    myocardial_counts) printf '%s/1.5_submit_myocardial.sh' "${root}" ;;
-    bassez_cellsubtype) printf '%s/1.6_submit_bassez.sh' "${root}" ;;
-    alzheimer_donor_assay) printf '%s/1.7_submit_alzheimer_donor_assay.sh' "${root}" ;;
-    *) return 1 ;;
-  esac
+  [[ -f "${gate}" && ! -L "${gate}" && -r "${gate}" ]] || return 1
+  BASH_ENV=/dev/null bash "${gate}" --step-config "$1"
+}
+
+stage2_step_script() {
+  if [[ -n "${SOURCE_ROOT:-}" ]]; then
+    printf '%s/src/2_dataset_specific_preprocessing/1.submit.sh\n' "${SOURCE_ROOT}"
+  else
+    printf '%s/1.submit.sh\n' "${SCRIPT_DIR}"
+  fi
 }
 
 stage2_step_outputs() {
-  case "$1" in
-    gongsharma_cap) printf '%s;%s' \
-      "${HPC_SCRATCH_DIR}/Gongsharma_cmv_young_males/data/SoundLife_YoungAdult_Male_CMVneg.h5ad" \
-      "${HPC_SCRATCH_DIR}/Gongsharma_cmv_young_males/data/SoundLife_YoungAdult_Male_CMVpos.h5ad" ;;
-    combinedpbmc) printf '%s/CombinedPBMC/data/combined_pbmc.h5ad' "${HPC_SCRATCH_DIR}" ;;
-    joanito) printf '%s/Joanito/data/%s;%s/_debug/data/JoaI_2022_35773407_debug_5samples.h5ad' \
-      "${HPC_SCRATCH_DIR}" "$(ecoda_view_input_name Joanito batch_effect_uncorrected)" "${HPC_SCRATCH_DIR}" ;;
-    kfoury_lowres_ct) printf '%s/Kfoury/data/Kfoury_2021_34719426.rds' "${HPC_SCRATCH_DIR}" ;;
-    myocardial_counts) printf '%s/Myocardial_infarction/data/Myocardial_Infarc_2.h5ad' "${HPC_SCRATCH_DIR}" ;;
-    bassez_cellsubtype) printf '%s/Bassez/data/BassezA_2021_33958794whole.rds' "${HPC_SCRATCH_DIR}" ;;
-    alzheimer_donor_assay) printf '%s/Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad' "${HPC_SCRATCH_DIR}" ;;
-    *) return 1 ;;
-  esac
+  local row_step row_job row_time row_cpus row_memory row_executor
+  local row_worker outputs row_dependency row
+  row="$(stage2_step_table_row "$1")" || return 1
+  IFS='|' read -r row_step row_job row_time row_cpus row_memory row_executor \
+    row_worker outputs row_dependency <<< "${row}"
+  printf '%s\n' "${outputs}"
+}
+
+
+stage2_step_initial_memory() {
+  local step="$1" row_step row_job row_time row_cpus row_memory row_executor
+  local row_worker row_outputs row_dependency row
+  if [[ "${CURRENT_MEMORY}" != "TABLE" ]]; then
+    printf '%s\n' "${CURRENT_MEMORY}"
+    return 0
+  fi
+  row="$(stage2_step_table_row "${step}")" || return 1
+  IFS='|' read -r row_step row_job row_time row_cpus row_memory row_executor \
+    row_worker row_outputs row_dependency <<< "${row}"
+  printf '%s\n' "${row_memory}"
+}
+
+stage2_step_retry_memory() {
+  local step="$1" value count=0
+  value="$(stage2_step_initial_memory "${step}")" || return 1
+  while [[ ${count} -lt ${RETRY_INDEX} ]]; do
+    value="$(bump_memory "${value}")" || return 1
+    if mem_ge "${value}" "${MAX_MEMORY}"; then value="${MAX_MEMORY}"; fi
+    count=$((count + 1))
+  done
+  printf '%s\n' "${value}"
 }
 
 
@@ -273,15 +293,20 @@ validate_manifests() {
   ecoda_validate_checksum "${MANIFEST}" || return 1
   ecoda_validate_run_owned_path "${JOB_FILE}" "${RUN_ROOT}" || return 1
   ecoda_validate_manifest "${JOB_FILE}" 2 || return 1
-  local seen_steps="" step script outputs dependency owner expected_script expected_outputs ownership_tmp
+  local seen_steps="" step script outputs dependency owner expected_script expected_outputs
+  local expected_dependency ownership_tmp
   while IFS=$'\t' read -r step script outputs dependency owner; do
     expected_script="$(stage2_step_script "${step}" 2>/dev/null || true)"
     expected_script="$(ecoda_require_source_script_path "${expected_script}" "${SOURCE_ROOT}" 2>/dev/null || true)"
     expected_outputs="$(stage2_step_outputs "${step}" 2>/dev/null || true)"
     [[ -n "${expected_script}" && "${script}" == "${expected_script}" ]] || return 1
     [[ -n "${expected_outputs}" && "${outputs}" == "${expected_outputs}" ]] || return 1
-    expected_dependency="-"
-    [[ "${step}" == "combinedpbmc" ]] && expected_dependency="gongsharma_cap"
+    row="$(stage2_step_table_row "${step}" 2>/dev/null || true)"
+    expected_dependency=""
+    if [[ -n "${row}" ]]; then
+      IFS='|' read -r row_step row_job row_time row_cpus row_memory row_executor \
+        row_worker row_outputs expected_dependency <<< "${row}"
+    fi
     [[ "${dependency}" == "${expected_dependency}" ]] || return 1
     expected_owner="-"
     [[ "${owner}" == "-" ]] || expected_owner="$(ecoda_owner_dir stage2 "${step}")"
@@ -432,44 +457,83 @@ while :; do
   if [[ ${#OOM_STEPS[@]} -eq 0 ]]; then
     break
   fi
-  if mem_ge "${CURRENT_MEMORY}" "${MAX_MEMORY}"; then
-    fail "OUT_OF_MEMORY Stage 2 hooks at ${MAX_MEMORY} ceiling: ${OOM_STEPS[*]}"
-  fi
+  for step in "${OOM_STEPS[@]}"; do
+    current_step_memory="$(stage2_step_retry_memory "${step}")" ||
+      fail "unparseable Stage 2 memory for ${step}"
+    if mem_ge "${current_step_memory}" "${MAX_MEMORY}"; then
+      fail "OUT_OF_MEMORY Stage 2 hooks at ${MAX_MEMORY} ceiling: ${OOM_STEPS[*]}"
+    fi
+  done
   ecoda_validate_output_ownership stage2 "${OWNERSHIP_MANIFEST}" "${RUN_ID}" ||
     fail "Stage 2 output ownership validation failed before OOM retry"
-  NEXT_MEMORY="$(bump_memory "${CURRENT_MEMORY}")" || fail "unparseable Stage 2 memory '${CURRENT_MEMORY}'"
-  if mem_ge "${NEXT_MEMORY}" "${MAX_MEMORY}"; then NEXT_MEMORY="${MAX_MEMORY}"; fi
   RETRY_INDEX=$((RETRY_INDEX + 1))
   [[ ${RETRY_INDEX} -le 4 ]] || fail "exceeded Stage 2 OOM retry attempts"
 
   RETRY_JOB_FILE="${RUN_ROOT}/manifests/jobs.retry_${RETRY_INDEX}.tsv"
   RETRY_JOB_TMP="${RETRY_JOB_FILE}.build.$$"
   : > "${RETRY_JOB_TMP}"
-  RETRY_CAP_JOB=""
   for step in "${OOM_STEPS[@]}"; do
     script=""; dependency=""
     while IFS=$'\t' read -r mstep mscript outputs mdependency owner; do
-      if [[ "${mstep}" == "${step}" ]]; then script="${mscript}"; dependency="${mdependency}"; break; fi
+      if [[ "${mstep}" == "${step}" ]]; then
+        script="${mscript}"
+        dependency="${mdependency}"
+        break
+      fi
     done < "${MANIFEST}"
     [[ -n "${script}" ]] || fail "OOM step missing from manifest: ${step}"
+    step_row="$(stage2_step_table_row "${step}")" ||
+      fail "OOM step is missing from the Stage 2 step table: ${step}"
+    IFS='|' read -r row_step row_job row_time row_cpus row_memory row_executor \
+      row_worker row_outputs row_dependency <<< "${step_row}"
+    [[ "${row_step}" == "${step}" && "${dependency}" == "${row_dependency}" ]] ||
+      fail "OOM step contract changed during retry: ${step}"
+    next_memory="$(stage2_step_retry_memory "${step}")" ||
+      fail "unparseable retry memory for ${step}"
     retry_export="ALL,STAGE2_RUN_ROOT=${RUN_ROOT},FORCE_PREPROCESS=${STAGE2_FORCE:-0},${RUNTIME_EXPORT}"
-    retry_args=(--parsable --partition="${PARTITION}" --mem="${NEXT_MEMORY}" \
+    retry_args=(--parsable --job-name="${row_job}" --time="${row_time}" \
+      --nodes=1 --ntasks=1 --cpus-per-task="${row_cpus}" \
+      --partition="${PARTITION}" --mem="${next_memory}" \
       --output="${LOGS_DIR}/stage2_${step}_retry${RETRY_INDEX}_%j.log" \
       --error="${LOGS_DIR}/stage2_${step}_retry${RETRY_INDEX}_%j.err" \
-      --mail-user="${USER_EMAIL}" --export="${retry_export}")
-    if [[ "${step}" == "combinedpbmc" && -n "${dependency}" ]]; then
-      dep_job="${RETRY_CAP_JOB}"
+      --mail-type=END,FAIL --mail-user="${USER_EMAIL}" \
+      --export="${retry_export}")
+    if [[ "${dependency}" != "-" ]]; then
+      dep_job=""
+      while IFS=$'\t' read -r dep_step dep_id; do
+        if [[ "${dep_step}" == "${dependency}" ]]; then
+          dep_job="${dep_id}"
+          break
+        fi
+      done < "${RETRY_JOB_TMP}"
       if [[ -z "${dep_job}" ]]; then
         while IFS=$'\t' read -r dep_step dep_id; do
-          [[ "${dep_step}" == "${dependency}" ]] && dep_job="${dep_id}"
+          if [[ "${dep_step}" == "${dependency}" ]]; then
+            dep_job="${dep_id}"
+            break
+          fi
         done < "${JOB_FILE}"
       fi
-      [[ -n "${dep_job}" ]] && retry_args+=(--dependency="afterok:${dep_job}")
+      if [[ -n "${dep_job}" ]]; then
+        retry_args+=(--dependency="afterok:${dep_job}")
+      else
+        dependency_owner="$(awk -F '\t' -v wanted="${dependency}" \
+          '$1 == wanted {print $5}' "${MANIFEST}")"
+        if [[ "${dependency_owner}" == "-" ]]; then
+          :
+        else
+          [[ -n "${dependency_owner}" ]] ||
+            fail "OOM step dependency is missing from the manifest: ${step}"
+          dependency_state="$(ecoda_owner_state "${dependency_owner}" 2>/dev/null || true)"
+          [[ "${dependency_state}" == "OK" ]] ||
+            fail "OOM step dependency is not terminal OK: ${step}"
+        fi
+      fi
     fi
     script="$(ecoda_require_source_script_path "${script}" "${SOURCE_ROOT}")" ||
       fail "Stage 2 retry script escaped immutable source root: ${step}"
     set +e
-    retry_output="$(sbatch "${retry_args[@]}" "${script}")"
+    retry_output="$(sbatch "${retry_args[@]}" "${script}" --step "${step}")"
     retry_rc=$?
     set -e
     [[ ${retry_rc} -eq 0 ]] || fail "sbatch rejected Stage 2 OOM retry for ${step}"
@@ -477,7 +541,6 @@ while :; do
     [[ "${retry_id}" =~ ^[0-9]+$ ]] || fail "invalid retry id for ${step}: ${retry_id}"
     printf '%s\t%s\n' "${step}" "${retry_id}" >> "${RETRY_JOB_TMP}"
     SCHEDULER_IDS+=("${retry_id}")
-    [[ "${step}" == gongsharma_cap ]] && RETRY_CAP_JOB="${retry_id}"
     echo "STAGE2_RETRY_JOB_ID=${step}:${retry_id}"
   done
   if ! ecoda_atomic_install_manifest "${RETRY_JOB_TMP}" "${RETRY_JOB_FILE}" 2; then
@@ -489,7 +552,6 @@ while :; do
   ecoda_validate_manifest "${RETRY_JOB_FILE}" 2 ||
     fail "Stage 2 retry scheduler manifest is invalid"
   JOB_FILE="${RETRY_JOB_FILE}"
-  CURRENT_MEMORY="${NEXT_MEMORY}"
   if ! ecoda_atomic_install_manifest "${JOB_FILE}" "${RUN_ROOT}/manifests/jobs.tsv" 2; then
     fail "failed to install Stage 2 scheduler manifest atomically"
   fi

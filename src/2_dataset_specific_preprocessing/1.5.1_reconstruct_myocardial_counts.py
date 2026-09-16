@@ -14,7 +14,7 @@ step inversion:
 The reconstructed raw integer counts are vaulted to adata.layers["counts"] and set as
 adata.X (CSR format) in place (atomic write via temp file + os.replace).
 
-Usage (HPC, via 1.5_submit_myocardial.sh):
+Usage (HPC, via `1.submit.sh --step myocardial_counts`):
     ${PYTHON_BIN} 1.5.1_reconstruct_myocardial_counts.py [--config_path ...] [--data_dir ...]
 """
 

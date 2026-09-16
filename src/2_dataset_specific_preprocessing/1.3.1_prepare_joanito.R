@@ -1,7 +1,7 @@
 # ==============================================================================
 # 1.3.1_prepare_joanito.R — Joanito seqtec batch column + _debug 5-sample subset
 # ==============================================================================
-# HPC script (submitted via 1_submit_hpc.sh -> 1.3_submit_joanito.sh). Reads
+# HPC script (submitted via `1_submit_hpc.sh` -> `1.submit.sh --step joanito`). Reads
 # the staged Joanito raw .rds into memory once and:
 #
 #   1. Computes deterministic `seqtec` and idempotent `cell.type_new` metadata

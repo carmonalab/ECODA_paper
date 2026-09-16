@@ -10,6 +10,56 @@ export ECODA_GATE_STAGE=stage2
 source "${SCRIPT_DIR}/../utils/bash/sync_status_email.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
 cd "${PROJECT_ROOT}"
+# step|job-name|time|cpus|default-memory|executor|scientific-worker|outputs|dependency
+stage2_step_table() {
+  printf '%s\n' \
+    "gongsharma_cap|gongsharma_cap|02:00:00|4|128G|python|1.1.1_subset_gongsharma.py|${HPC_SCRATCH_DIR}/Gongsharma_cmv_young_males/data/SoundLife_YoungAdult_Male_CMVneg.h5ad;${HPC_SCRATCH_DIR}/Gongsharma_cmv_young_males/data/SoundLife_YoungAdult_Male_CMVpos.h5ad|-" \
+    "combinedpbmc|combine_pbmc|01:00:00|16|256G|python_module|1.2.1_create_combinedpbmc_dataset.py|${HPC_SCRATCH_DIR}/CombinedPBMC/data/combined_pbmc.h5ad|gongsharma_cap" \
+    "joanito|joanito_prep|01:00:00|4|64G|r|1.3.1_prepare_joanito.R|${HPC_SCRATCH_DIR}/Joanito/data/@JOANITO_INPUT;${HPC_SCRATCH_DIR}/_debug/data/JoaI_2022_35773407_debug_5samples.h5ad|-" \
+    "kfoury_lowres_ct|kfoury_lowres_ct|01:00:00|4|64G|r|1.4.1_create_kfoury_lowres_ct.R|${HPC_SCRATCH_DIR}/Kfoury/data/Kfoury_2021_34719426.rds|-" \
+    "myocardial_counts|myocardial_prep|01:00:00|4|32G|python_force|1.5.1_reconstruct_myocardial_counts.py|${HPC_SCRATCH_DIR}/Myocardial_infarction/data/Myocardial_Infarc_2.h5ad|-" \
+    "bassez_cellsubtype|bassez_fill_subtype|01:00:00|4|64G|r|1.6.1_fill_bassez_cellsubtype.R|${HPC_SCRATCH_DIR}/Bassez/data/BassezA_2021_33958794whole.rds|-" \
+    "alzheimer_donor_assay|alzheimer_donor_assay|02:00:00|2|64G|python_alzheimer|1.7.1_create_alzheimer_donor_assay.py|${HPC_SCRATCH_DIR}/Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad|-"
+}
+
+stage2_step_config() {
+  local wanted="${1:-}" row
+  local row_step row_job row_time row_cpus row_memory row_executor
+  local row_worker row_outputs row_dependency joanito_input
+  [[ $# -eq 1 ]] || return 1
+  while IFS= read -r row; do
+    IFS='|' read -r row_step row_job row_time row_cpus row_memory \
+      row_executor row_worker row_outputs row_dependency <<< "${row}"
+    [[ "${row_step}" == "${wanted}" ]] || continue
+    [[ -n "${row_job}" && -n "${row_time}" && -n "${row_cpus}" &&
+       -n "${row_memory}" && -n "${row_executor}" && -n "${row_worker}" &&
+       -n "${row_outputs}" && -n "${row_dependency}" ]] || return 1
+    case "${row_outputs}" in
+      *'@JOANITO_INPUT'*)
+        joanito_input="$(ecoda_view_input_name Joanito batch_effect_uncorrected)" ||
+          return 1
+        row_outputs="${row_outputs/@JOANITO_INPUT/${joanito_input}}"
+        ;;
+    esac
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+      "${row_step}" "${row_job}" "${row_time}" "${row_cpus}" "${row_memory}" \
+      "${row_executor}" "${row_worker}" "${row_outputs}" "${row_dependency}"
+    return 0
+  done < <(stage2_step_table)
+  return 1
+}
+
+if [[ "${1:-}" == "--step-config" ]]; then
+  [[ $# -eq 2 ]] || {
+    echo "ERROR: --step-config requires exactly one Stage 2 step." >&2
+    exit 2
+  }
+  stage2_step_config "$2" || {
+    echo "ERROR: unknown or malformed Stage 2 step: $2" >&2
+    exit 1
+  }
+  exit 0
+fi
 
 DATASETS_ARG=""
 DATASETS_SET=0
@@ -19,7 +69,9 @@ STEPS_SET=0
 FORCE_ARG=0
 SYNC_ONLY_RUN=""
 SYNC_ONLY_SET=0
-MEMORY="${STAGE2_MEM:-128G}"
+MEMORY="${STAGE2_MEM:-}"
+MEMORY_SET=0
+if [[ -n "${MEMORY}" ]]; then MEMORY_SET=1; fi
 MAX_MEMORY="${STAGE2_MEM_MAX:-500G}"
 PARTITION="${SLURM_PARTITION}"
 RUNTIME_EXPORT=""
@@ -28,6 +80,7 @@ SOURCE_ROOT="${ECODA_SOURCE_ROOT:-}"
 SOURCE_MANIFEST_ORIGINAL="${ECODA_SOURCE_MANIFEST:-}"
 SOURCE_MANIFEST_RUN=""
 RUNTIME_IDENTITY=""
+
 
 usage() {
   cat <<'EOF'
@@ -52,8 +105,8 @@ while [[ $# -gt 0 ]]; do
     --force) FORCE_ARG=1; shift ;;
     --sync-only) SYNC_ONLY_RUN="${2:-}"; SYNC_ONLY_SET=1; shift 2 ;;
     --sync-only=*) SYNC_ONLY_RUN="${1#*=}"; SYNC_ONLY_SET=1; shift ;;
-    --mem) MEMORY="${2:-}"; shift 2 ;;
-    --mem=*) MEMORY="${1#*=}"; shift ;;
+    --mem) MEMORY="${2:-}"; MEMORY_SET=1; shift 2 ;;
+    --mem=*) MEMORY="${1#*=}"; MEMORY_SET=1; shift ;;
     --max-mem) MAX_MEMORY="${2:-}"; shift 2 ;;
     --max-mem=*) MAX_MEMORY="${1#*=}"; shift ;;
     --partition) PARTITION="${2:-}"; shift 2 ;;
@@ -294,36 +347,32 @@ stage2_semantic_output_valid() {
 
 
 step_script() {
-  local root="${SCRIPT_DIR}"
   if [[ -n "${SOURCE_ROOT:-}" ]]; then
-    root="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing"
+    printf '%s/src/2_dataset_specific_preprocessing/1.submit.sh\n' "${SOURCE_ROOT}"
+  else
+    printf '%s/1.submit.sh\n' "${SCRIPT_DIR}"
   fi
-  case "$1" in
-    gongsharma_cap) printf '%s/1.1_submit_gongsharma.sh' "${root}" ;;
-    combinedpbmc) printf '%s/1.2_submit_combinedpbmc.sh' "${root}" ;;
-    joanito) printf '%s/1.3_submit_joanito.sh' "${root}" ;;
-    kfoury_lowres_ct) printf '%s/1.4_submit_kfoury_lowres_ct.sh' "${root}" ;;
-    myocardial_counts) printf '%s/1.5_submit_myocardial.sh' "${root}" ;;
-    bassez_cellsubtype) printf '%s/1.6_submit_bassez.sh' "${root}" ;;
-    alzheimer_donor_assay) printf '%s/1.7_submit_alzheimer_donor_assay.sh' "${root}" ;;
-    *) return 1 ;;
-  esac
 }
+
 step_outputs() {
-  case "$1" in
-    gongsharma_cap) printf '%s;%s' \
-      "${HPC_SCRATCH_DIR}/Gongsharma_cmv_young_males/data/SoundLife_YoungAdult_Male_CMVneg.h5ad" \
-      "${HPC_SCRATCH_DIR}/Gongsharma_cmv_young_males/data/SoundLife_YoungAdult_Male_CMVpos.h5ad" ;;
-    combinedpbmc) printf '%s/CombinedPBMC/data/combined_pbmc.h5ad' "${HPC_SCRATCH_DIR}" ;;
-    joanito) printf '%s/Joanito/data/%s;%s/_debug/data/JoaI_2022_35773407_debug_5samples.h5ad' \
-      "${HPC_SCRATCH_DIR}" "$(ecoda_view_input_name Joanito batch_effect_uncorrected)" "${HPC_SCRATCH_DIR}" ;;
-    kfoury_lowres_ct) printf '%s/Kfoury/data/Kfoury_2021_34719426.rds' "${HPC_SCRATCH_DIR}" ;;
-    myocardial_counts) printf '%s/Myocardial_infarction/data/Myocardial_Infarc_2.h5ad' "${HPC_SCRATCH_DIR}" ;;
-    bassez_cellsubtype) printf '%s/Bassez/data/BassezA_2021_33958794whole.rds' "${HPC_SCRATCH_DIR}" ;;
-    alzheimer_donor_assay) printf '%s/Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad' "${HPC_SCRATCH_DIR}" ;;
-    *) return 1 ;;
-  esac
+  local row_step row_job row_time row_cpus row_memory row_executor
+  local row_worker outputs row_dependency
+  local row
+  row="$(stage2_step_config "$1")" || return 1
+  IFS='|' read -r row_step row_job row_time row_cpus row_memory row_executor \
+    row_worker outputs row_dependency <<< "${row}"
+  printf '%s\n' "${outputs}"
 }
+
+step_dependency() {
+  local row_step row_job row_time row_cpus row_memory row_executor
+  local row_worker row_outputs dependency row
+  row="$(stage2_step_config "$1")" || return 1
+  IFS='|' read -r row_step row_job row_time row_cpus row_memory row_executor \
+    row_worker row_outputs dependency <<< "${row}"
+  printf '%s\n' "${dependency}"
+}
+
 
 if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   ecoda_open_run "${SYNC_ONLY_RUN}" || exit 1
@@ -368,8 +417,7 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
       echo "ERROR: Stage 2 step output mismatch: ${step}" >&2
       failed=1
     }
-    expected_dependency="-"
-    [[ "${step}" == "combinedpbmc" ]] && expected_dependency="gongsharma_cap"
+    expected_dependency="$(step_dependency "${step}" 2>/dev/null || true)"
     [[ "${dependency}" == "${expected_dependency}" ]] || {
       echo "ERROR: Stage 2 dependency mismatch: ${step}" >&2
       failed=1
@@ -455,7 +503,12 @@ else
   while IFS= read -r ds; do DATASET_NAMES+=("${ds}"); done < <(jq -r 'keys[] | select(startswith("_") | not)' "${DATASETS_JSON_FILE}")
 fi
 
-ALL_STEPS=(gongsharma_cap combinedpbmc joanito kfoury_lowres_ct myocardial_counts bassez_cellsubtype)
+ALL_STEPS=()
+while IFS='|' read -r table_step table_rest; do
+  if [[ -n "${table_step}" && "${table_step}" != "${ALZHEIMER_STEP}" ]]; then
+    ALL_STEPS+=("${table_step}")
+  fi
+done < <(stage2_step_table)
 SELECTED_STEPS=()
 if [[ ${alzheimer_dataset_requested} -eq 1 ]]; then
   # The argument guard above makes this the only legal Alzheimer request.
@@ -568,15 +621,19 @@ JOB_FILE_TMP="${JOB_FILE}.build.$$"
 : > "${MANIFEST_TMP}"
 : > "${JOB_FILE_TMP}"
 
-MEMORY_CURRENT="${MEMORY}"
-CAP_JOB_ID=""
 PENDING_STEPS=()
 OWNER_DIRS=()
 ecoda_owner_clear_tracked
 for step in "${SELECTED_STEPS[@]}"; do
+  step_row="$(stage2_step_config "${step}")" ||
+    stage2_abort "missing Stage 2 step table row: ${step}"
+  IFS='|' read -r row_step row_job row_time row_cpus row_memory row_executor \
+    row_worker row_outputs row_dependency <<< "${step_row}"
+  [[ "${row_step}" == "${step}" && -n "${row_outputs}" ]] ||
+    stage2_abort "malformed Stage 2 step table row: ${step}"
   script="$(step_script "${step}")"
-  [[ -f "${script}" ]] || stage2_abort "missing hook script: ${script}"
-  outputs="$(step_outputs "${step}")"
+  [[ -f "${script}" ]] || stage2_abort "missing generic worker boundary: ${script}"
+  outputs="${row_outputs}"
   old_ifs="${IFS}"
   IFS=';'
   read -r -a output_paths <<< "${outputs}"
@@ -593,7 +650,8 @@ for step in "${SELECTED_STEPS[@]}"; do
     fi
   done
   if [[ ${FORCE_ARG} -eq 0 && ${valid} -eq 1 ]]; then
-    printf '%s\t%s\t%s\t%s\t-\n' "${step}" "${script}" "${outputs}" "-" >> "${MANIFEST_TMP}"
+    printf '%s\t%s\t%s\t%s\t-\n' "${step}" "${script}" "${outputs}" \
+      "${row_dependency}" >> "${MANIFEST_TMP}"
     echo "Skipping validated Stage 2 step ${step}."
     continue
   fi
@@ -612,9 +670,8 @@ for step in "${SELECTED_STEPS[@]}"; do
         stage2_abort "failed to invalidate Stage 2 artifact: ${path}"
     done
   fi
-  dependency="-"
-  [[ "${step}" == "combinedpbmc" ]] && dependency="gongsharma_cap"
-  printf '%s\t%s\t%s\t%s\t%s\n' "${step}" "${script}" "${outputs}" "${dependency}" "${owner_dir}" >> "${MANIFEST_TMP}"
+  printf '%s\t%s\t%s\t%s\t%s\n' "${step}" "${script}" "${outputs}" \
+    "${row_dependency}" "${owner_dir}" >> "${MANIFEST_TMP}"
   PENDING_STEPS+=("${step}")
   OWNER_DIRS+=("${owner_dir}")
 done
@@ -659,21 +716,46 @@ fi
 ecoda_validate_output_ownership stage2 "${OWNERSHIP_MANIFEST}" "${RUN_ID}" 1 ||
   stage2_abort "Stage 2 output ownership validation failed before worker submission"
 
-# Submit every independent hook immediately. CombinedPBMC is the only explicit
-# dependency edge; dependency submission does not serialize unrelated hooks.
+# Submit independent workers immediately. Dependencies come from the step
+# table and do not serialize unrelated workers.
 for step in "${PENDING_STEPS[@]}"; do
-  script="$(step_script "${step}")"
-  SBATCH_ARGS=(--parsable --partition="${PARTITION}" --mem="${MEMORY_CURRENT}" \
+  step_row="$(stage2_step_config "${step}")" ||
+    stage2_abort "missing Stage 2 step table row: ${step}"
+  IFS='|' read -r row_step row_job row_time row_cpus row_memory row_executor \
+    row_worker row_outputs row_dependency <<< "${step_row}"
+  [[ "${row_step}" == "${step}" ]] ||
+    stage2_abort "malformed Stage 2 step table row: ${step}"
+  worker_memory="${row_memory}"
+  if [[ ${MEMORY_SET} -eq 1 ]]; then worker_memory="${MEMORY}"; fi
+  SBATCH_ARGS=(--parsable --job-name="${row_job}" --time="${row_time}" \
+    --nodes=1 --ntasks=1 --cpus-per-task="${row_cpus}" \
+    --partition="${PARTITION}" --mem="${worker_memory}" \
     --output="${LOGS_DIR}/stage2_${step}_%j.log" \
-    --error="${LOGS_DIR}/stage2_${step}_%j.err" --mail-user="${USER_EMAIL}" \
+    --error="${LOGS_DIR}/stage2_${step}_%j.err" \
+    --mail-type=END,FAIL --mail-user="${USER_EMAIL}" \
     --export="ALL,STAGE2_RUN_ROOT=${ECODA_RUN_ROOT},FORCE_PREPROCESS=${FORCE_ARG},${RUNTIME_EXPORT}")
-  if [[ "${step}" == "combinedpbmc" && -n "${CAP_JOB_ID}" ]]; then
-    SBATCH_ARGS+=(--dependency="afterok:${CAP_JOB_ID}")
+  if [[ "${row_dependency}" != "-" ]]; then
+    dependency_job=""
+    while IFS=$'\t' read -r dependency_step dependency_job_id; do
+      if [[ "${dependency_step}" == "${row_dependency}" ]]; then
+        dependency_job="${dependency_job_id}"
+        break
+      fi
+    done < "${JOB_FILE_TMP}"
+    if [[ -n "${dependency_job}" ]]; then
+      SBATCH_ARGS+=(--dependency="afterok:${dependency_job}")
+    else
+      dependency_owner="$(awk -F '\t' -v wanted="${row_dependency}" \
+        '$1 == wanted {print $5}' "${MANIFEST_TMP}")"
+      [[ "${dependency_owner}" == "-" ]] ||
+        stage2_abort "pending Stage 2 dependency was not submitted: ${step}"
+    fi
   fi
+  script="$(step_script "${step}")"
   script="$(ecoda_require_source_script_path "${script}" "${SOURCE_ROOT}")" ||
     stage2_abort "Stage 2 worker script escaped immutable source root: ${step}"
   set +e
-  job_output="$(sbatch "${SBATCH_ARGS[@]}" "${script}")"
+  job_output="$(sbatch "${SBATCH_ARGS[@]}" "${script}" --step "${step}")"
   submit_rc=$?
   set -e
   if [[ ${submit_rc} -ne 0 ]]; then
@@ -685,7 +767,6 @@ for step in "${PENDING_STEPS[@]}"; do
   if ! ecoda_atomic_install_manifest "${JOB_FILE_TMP}" "${JOB_FILE}" 2; then
     stage2_abort "failed to install Stage 2 scheduler manifest after ${step}"
   fi
-  [[ "${step}" == "gongsharma_cap" ]] && CAP_JOB_ID="${job_id}"
   echo "STAGE2_STEP_JOB_ID=${step}:${job_id}"
 done
 rm -f "${JOB_FILE_TMP}"
@@ -718,7 +799,7 @@ watchdog_output="$(sbatch --parsable --wait --dependency="afterany:${JOB_IDS}" \
   --error="${LOGS_DIR}/stage2_watchdog_%j.err" --mail-user="${USER_EMAIL}" \
   --export="ALL,STAGE2_RUN_ROOT=${ECODA_RUN_ROOT},STAGE2_FORCE=${FORCE_ARG},${RUNTIME_EXPORT}" \
   "${watchdog_script}" "${RUN_ID}" "${MANIFEST}" "${JOB_FILE}" \
-  "${MEMORY}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
+  "${MEMORY:-TABLE}" "${MAX_MEMORY}" "${PARTITION}" "${THROTTLE}")"
 watchdog_rc=$?
 set -e
 WATCHDOG_ID="${watchdog_output%%;*}"

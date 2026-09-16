@@ -106,14 +106,16 @@ printf '#!/bin/bash\nexit 0\n' > "${HOST_ENV}/bin/Rscript"
 chmod +x "${HOST_ENV}/bin/python" "${HOST_ENV}/bin/Rscript"
 
 STAGE2_SOURCE_FILES=(
-  src/2_dataset_specific_preprocessing/1.1_submit_gongsharma.sh
-  src/2_dataset_specific_preprocessing/1.2_submit_combinedpbmc.sh
-  src/2_dataset_specific_preprocessing/1.3_submit_joanito.sh
-  src/2_dataset_specific_preprocessing/1.4_submit_kfoury_lowres_ct.sh
-  src/2_dataset_specific_preprocessing/1.5_submit_myocardial.sh
-  src/2_dataset_specific_preprocessing/1.6_submit_bassez.sh
-  src/2_dataset_specific_preprocessing/1.7_submit_alzheimer_donor_assay.sh
+  src/2_dataset_specific_preprocessing/1_submit_hpc.sh
+  src/2_dataset_specific_preprocessing/1.submit.sh
+  src/2_dataset_specific_preprocessing/1.1.1_subset_gongsharma.py
+  src/2_dataset_specific_preprocessing/1.2.1_create_combinedpbmc_dataset.py
+  src/2_dataset_specific_preprocessing/1.3.1_prepare_joanito.R
+  src/2_dataset_specific_preprocessing/1.4.1_create_kfoury_lowres_ct.R
+  src/2_dataset_specific_preprocessing/1.5.1_reconstruct_myocardial_counts.py
+  src/2_dataset_specific_preprocessing/1.6.1_fill_bassez_cellsubtype.R
   src/2_dataset_specific_preprocessing/1.7.1_create_alzheimer_donor_assay.py
+  src/utils/bash/sync_status_email.sh
   src/utils/py/artifact_contract.py
   src/utils/py/derived_prerequisite_contract.py
   src/utils/py/h5ad_source_identity.py
@@ -170,6 +172,7 @@ SNAPSHOT_ROOT="${TMP_DIR}/source-snapshots/${SOURCE_COMMIT}"
 SOURCE_ROOT="${SNAPSHOT_ROOT}/tree"
 SOURCE_MANIFEST="${SNAPSHOT_ROOT}/identity/source.manifest"
 SOURCE_WATCHDOG="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/stage2_watchdog.sh"
+GENERIC_WORKER="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.submit.sh"
 
 RUNTIME_ID_DIR="${TMP_DIR}/runtime/_ecoda_runtime/stage2-test"
 mkdir -p "${RUNTIME_ID_DIR}"
@@ -269,7 +272,7 @@ printf 'RUN_ID=%s\nSTATE=ACTIVE\nSTAGE=stage2\nKEY=kfoury_lowres_ct\n' \
   "${RUN_ID}" > "${OWNER_DIR}/owner"
 MANIFEST="${RUN_ROOT}/manifests/steps.tsv"
 JOB_FILE="${RUN_ROOT}/manifests/jobs.tsv"
-SOURCE_SCRIPT="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.4_submit_kfoury_lowres_ct.sh"
+SOURCE_SCRIPT="${GENERIC_WORKER}"
 printf 'kfoury_lowres_ct\t%s\t%s\t-\t%s\n' "${SOURCE_SCRIPT}" \
   "${KFOURY_OUTPUT}" "${OWNER_DIR}" > "${MANIFEST}"
 write_md5 "${MANIFEST}"
@@ -374,7 +377,7 @@ printf 'RUN_ID=%s\nSTATE=ACTIVE\nSTAGE=stage2\nKEY=bassez_cellsubtype\n' \
 BASSEZ_MANIFEST="${BASSEZ_ROOT}/manifests/steps.tsv"
 BASSEZ_JOB_FILE="${BASSEZ_ROOT}/manifests/jobs.tsv"
 printf 'bassez_cellsubtype\t%s\t%s\t-\t%s\n' \
-  "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.6_submit_bassez.sh" \
+  "${GENERIC_WORKER}" \
   "${BASSEZ_OUTPUT}" "${BASSEZ_OWNER}" > "${BASSEZ_MANIFEST}"
 write_md5 "${BASSEZ_MANIFEST}"
 printf 'bassez_cellsubtype\t2001\n' > "${BASSEZ_JOB_FILE}"
@@ -459,13 +462,13 @@ printf 'RUN_ID=%s\nSTATE=ACTIVE\nSTAGE=stage2\nKEY=myocardial_counts\n' \
 MYOCARDIAL_MANIFEST="${MYOCARDIAL_ROOT}/manifests/steps.tsv"
 MYOCARDIAL_JOB_FILE="${MYOCARDIAL_ROOT}/manifests/jobs.tsv"
 printf 'myocardial_counts\t%s\t%s\t-\t%s\n' \
-  "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.5_submit_myocardial.sh" \
+  "${GENERIC_WORKER}" \
   "${MYOCARDIAL_OUTPUT}" "${MYOCARDIAL_OWNER}" > "${MYOCARDIAL_MANIFEST}"
 write_md5 "${MYOCARDIAL_MANIFEST}"
 printf 'myocardial_counts\t2501\n' > "${MYOCARDIAL_JOB_FILE}"
 cp "${MYOCARDIAL_MANIFEST}" "${MYOCARDIAL_ROOT}/manifests/ownership.tsv"
 export WATCHDOG_EXPECT_RUN_ROOT="${MYOCARDIAL_ROOT}"
-export WATCHDOG_EXPECT_SOURCE_SCRIPT="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.5_submit_myocardial.sh"
+export WATCHDOG_EXPECT_SOURCE_SCRIPT="${GENERIC_WORKER}"
 export WATCHDOG_EXPECT_RUN_ID="${MYOCARDIAL_RUN_ID}"
 HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.invalid \
   STAGE2_FORCE=0 STAGE2_WATCHDOG_MAX_POLLS=1 \
@@ -494,14 +497,14 @@ printf 'RUN_ID=%s\nSTATE=ACTIVE\nSTAGE=stage2\nKEY=alzheimer_donor_assay\n' \
 ALZHEIMER_MANIFEST="${ALZHEIMER_ROOT}/manifests/steps.tsv"
 ALZHEIMER_JOB_FILE="${ALZHEIMER_ROOT}/manifests/jobs.tsv"
 printf 'alzheimer_donor_assay\t%s\t%s\t-\t%s\n' \
-  "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.7_submit_alzheimer_donor_assay.sh" \
+  "${GENERIC_WORKER}" \
   "${ALZHEIMER_OUTPUT}" "${ALZHEIMER_OWNER}" > "${ALZHEIMER_MANIFEST}"
 write_md5 "${ALZHEIMER_MANIFEST}"
 printf 'alzheimer_donor_assay\t3001\n' > "${ALZHEIMER_JOB_FILE}"
 cp "${ALZHEIMER_MANIFEST}" "${ALZHEIMER_ROOT}/manifests/ownership.tsv"
 export WATCHDOG_EXPECT_RUN_ROOT="${ALZHEIMER_ROOT}"
 export WATCHDOG_EXPECT_SOURCE_ROOT="${SOURCE_ROOT}"
-export WATCHDOG_EXPECT_SOURCE_SCRIPT="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.7_submit_alzheimer_donor_assay.sh"
+export WATCHDOG_EXPECT_SOURCE_SCRIPT="${GENERIC_WORKER}"
 export WATCHDOG_EXPECT_RUN_ID="${ALZHEIMER_RUN_ID}"
 HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.invalid \
   STAGE2_FORCE=0 STAGE2_WATCHDOG_MAX_POLLS=1 \

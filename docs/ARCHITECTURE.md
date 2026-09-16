@@ -236,11 +236,13 @@ Per-dataset R Markdown notebooks performing study-specific initial quality contr
 - `1_stage_data.sh`: Login-node utility that queries `datasets.json` and rsyncs required raw input files from `${NAS_SC_DIR}` to `${HPC_SCRATCH_DIR}/<DS_NAME>/data/`. Supports `--ds_name <DS>`.
 
 #### 2. Dataset-Specific Preprocessing (`src/2_dataset_specific_preprocessing/`)
-- `1_submit_hpc.sh`: selected hook gate. Independent hooks are submitted in
-  one wave; declared prerequisite edges use `afterok`. `stage2_watchdog.sh`
-  owns terminal accounting, OOM-only retries, semantic prerequisite
-  validation, and atomic checksums. Stage 2 remains scratch-only and is not
-  the cell-type annotation pipeline.
+- `1_submit_hpc.sh`: selected hook gate. Its step/resource/output table
+  drives one immutable worker boundary; independent hooks are submitted in
+  one wave and declared prerequisite edges use `afterok`.
+- `1.submit.sh`: generic immutable worker boundary that dispatches only the
+  selected scientific worker. `stage2_watchdog.sh` owns terminal accounting,
+  OOM-only retries, semantic prerequisite validation, and atomic checksums.
+  Stage 2 remains scratch-only and is not the cell-type annotation pipeline.
 - Hook outputs are installed atomically before the next numbered stage reads
   them. Configured dataset basenames are authoritative; legacy source basenames
   are not migrated.

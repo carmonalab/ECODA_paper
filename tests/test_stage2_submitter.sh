@@ -67,13 +67,13 @@ chmod +x "${HOST_ENV}/bin/python" "${HOST_ENV}/bin/Rscript"
 
 STAGE2_SOURCE_FILES=(
   src/2_dataset_specific_preprocessing/1_submit_hpc.sh
-  src/2_dataset_specific_preprocessing/1.1_submit_gongsharma.sh
-  src/2_dataset_specific_preprocessing/1.2_submit_combinedpbmc.sh
-  src/2_dataset_specific_preprocessing/1.3_submit_joanito.sh
-  src/2_dataset_specific_preprocessing/1.4_submit_kfoury_lowres_ct.sh
-  src/2_dataset_specific_preprocessing/1.5_submit_myocardial.sh
-  src/2_dataset_specific_preprocessing/1.6_submit_bassez.sh
-  src/2_dataset_specific_preprocessing/1.7_submit_alzheimer_donor_assay.sh
+  src/2_dataset_specific_preprocessing/1.submit.sh
+  src/2_dataset_specific_preprocessing/1.1.1_subset_gongsharma.py
+  src/2_dataset_specific_preprocessing/1.2.1_create_combinedpbmc_dataset.py
+  src/2_dataset_specific_preprocessing/1.3.1_prepare_joanito.R
+  src/2_dataset_specific_preprocessing/1.4.1_create_kfoury_lowres_ct.R
+  src/2_dataset_specific_preprocessing/1.5.1_reconstruct_myocardial_counts.py
+  src/2_dataset_specific_preprocessing/1.6.1_fill_bassez_cellsubtype.R
   src/2_dataset_specific_preprocessing/1.7.1_create_alzheimer_donor_assay.py
   src/utils/py/derived_prerequisite_contract.py
   src/utils/py/h5ad_source_identity.py
@@ -133,6 +133,7 @@ bash "${ROOT}/src/utils/bash/ecoda_source_snapshot.sh" create \
 SNAPSHOT_ROOT="${TMP_DIR}/source-snapshots/${SOURCE_COMMIT}"
 SOURCE_ROOT="${SNAPSHOT_ROOT}/tree"
 SOURCE_MANIFEST="${SNAPSHOT_ROOT}/identity/source.manifest"
+GENERIC_WORKER="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.submit.sh"
 
 RUNTIME_ID_DIR="${TMP_DIR}/runtime/_ecoda_runtime/stage2-test"
 mkdir -p "${RUNTIME_ID_DIR}"
@@ -284,9 +285,13 @@ case "${CALLS}" in *"ECODA_RUNTIME_IMAGE=${IMAGE}"*"ECODA_RUNTIME_MANIFEST=${RUN
 case "${CALLS}" in *"ECODA_RUNTIME_IMAGE_SHA256=${IMAGE_SHA}"*"ECODA_RUNTIME_MANIFEST_SHA256=${RUNTIME_MANIFEST_SHA}"*) ;; *) echo "runtime digest identity missing" >&2; exit 1 ;; esac
 case "${CALLS}" in *"ECODA_RUNTIME_IDENTITY=${SUBMIT_ROOT}/manifests/runtime.identity"*) ;; *) echo "runtime identity path missing" >&2; exit 1 ;; esac
 case "${CALLS}" in *"ECODA_RUN_ID=${SUBMIT_RUN_ID}"*) ;; *) echo "run ID missing" >&2; exit 1 ;; esac
-case "${CALLS}" in *"${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.1_submit_gongsharma.sh"*) ;; *) echo "snapshot GongSharma script missing" >&2; exit 1 ;; esac
-case "${CALLS}" in *"${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.2_submit_combinedpbmc.sh"*) ;; *) echo "snapshot CombinedPBMC script missing" >&2; exit 1 ;; esac
-case "${CALLS}" in *"${ROOT}/src/2_dataset_specific_preprocessing/1.1_submit_gongsharma.sh"*) echo "mutable GongSharma script submitted" >&2; exit 1 ;; esac
+case "${CALLS}" in *"${GENERIC_WORKER}"*"--step gongsharma_cap"*) ;; *) echo "snapshot GongSharma worker boundary missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"${GENERIC_WORKER}"*"--step combinedpbmc"*) ;; *) echo "snapshot CombinedPBMC worker boundary missing" >&2; exit 1 ;; esac
+case "${CALLS}" in *"1.submit.sh"*) ;; *) echo "generic Stage 2 worker boundary missing" >&2; exit 1 ;; esac
+GONG_CALL="$(sed -n '1p' "${CAPTURE}")"
+case "${GONG_CALL}" in *"--job-name=gongsharma_cap"*"--time=02:00:00"*"--cpus-per-task=4"*"--mem=128G"*) ;; *) echo "GongSharma resource table row missing" >&2; exit 1 ;; esac
+COMBINED_CALL="$(sed -n '2p' "${CAPTURE}")"
+case "${COMBINED_CALL}" in *"--job-name=combine_pbmc"*"--time=01:00:00"*"--cpus-per-task=16"*"--mem=256G"*) ;; *) echo "CombinedPBMC resource table row missing" >&2; exit 1 ;; esac
 case "${CALLS}" in *"--dependency=afterok:710001"*) ;; *) echo "CombinedPBMC cap dependency missing" >&2; exit 1 ;; esac
 JOANITO_CALL="$(sed -n '3p' "${CAPTURE}")"
 case "${JOANITO_CALL}" in *"--dependency="*) echo "Joanito was artificially serialized" >&2; exit 1 ;; esac
@@ -307,16 +312,14 @@ ALZ_OUTPUT="$(
 ALZ_RUN_ID="$(printf '%s\n' "${ALZ_OUTPUT}" | sed -n 's/^STAGE2_RUN_ID=//p')"
 [[ "${ALZ_RUN_ID}" == "${ALZ_SUBMIT_RUN_ID}" ]]
 ALZ_MANIFEST="${RUNS_ROOT}/${ALZ_RUN_ID}/manifests/steps.tsv"
-[[ "$(wc -l < "${ALZ_MANIFEST}" | tr -d '[:space:]')" == 1 ]]
 IFS=$'\t' read -r ALZ_STEP ALZ_SCRIPT ALZ_OUTPUTS ALZ_DEPENDENCY ALZ_OWNER \
   < "${ALZ_MANIFEST}"
 [[ "${ALZ_STEP}" == "alzheimer_donor_assay" ]]
-[[ "${ALZ_SCRIPT}" == "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.7_submit_alzheimer_donor_assay.sh" ]]
-case "${ALZ_SCRIPT}" in "${ROOT}"/*) echo "Alzheimer manifest used mutable script" >&2; exit 1 ;; esac
+[[ "${ALZ_SCRIPT}" == "${GENERIC_WORKER}" ]]
 [[ "${ALZ_OUTPUTS}" == "${TMP_DIR}/home/scratch/ECODA_paper/Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad" ]]
 [[ "${ALZ_DEPENDENCY}" == "-" && "${ALZ_OWNER}" != "-" ]]
 ALZ_CALL="$(sed -n '5p' "${CAPTURE}")"
-case "${ALZ_CALL}" in *"${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.7_submit_alzheimer_donor_assay.sh"*) ;; *) echo "Alzheimer hook missing from scheduler call" >&2; exit 1 ;; esac
+case "${ALZ_CALL}" in *"${GENERIC_WORKER}"*"--step alzheimer_donor_assay"*) ;; *) echo "Alzheimer worker boundary missing" >&2; exit 1 ;; esac
 case "${ALZ_CALL}" in *"ECODA_SOURCE_SNAPSHOT_REQUIRED=1"*"ECODA_RUNTIME_IDENTITY=${RUNS_ROOT}/${ALZ_RUN_ID}/manifests/runtime.identity"*) ;; *) echo "Alzheimer immutable runtime export missing" >&2; exit 1 ;; esac
 ALZ_WATCHDOG_CALL="$(sed -n '6p' "${CAPTURE}")"
 case "${ALZ_WATCHDOG_CALL}" in *"--dependency=afterany:710005"*) ;; *) echo "Alzheimer watchdog dependency missing" >&2; exit 1 ;; esac
@@ -357,7 +360,7 @@ BASSEZ_MANIFEST="${RUNS_ROOT}/${BASSEZ_RUN_ID}/manifests/steps.tsv"
 IFS=$'\t' read -r BASSEZ_STEP BASSEZ_SCRIPT BASSEZ_OUTPUTS BASSEZ_DEPENDENCY BASSEZ_OWNER \
   < "${BASSEZ_MANIFEST}"
 [[ "${BASSEZ_STEP}" == "bassez_cellsubtype" ]]
-[[ "${BASSEZ_SCRIPT}" == "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.6_submit_bassez.sh" ]]
+[[ "${BASSEZ_SCRIPT}" == "${GENERIC_WORKER}" ]]
 case "${BASSEZ_SCRIPT}" in "${ROOT}"/*) echo "Bassez manifest used mutable script" >&2; exit 1 ;; esac
 [[ "${BASSEZ_OUTPUTS}" == "${TMP_DIR}/home/scratch/ECODA_paper/Bassez/data/BassezA_2021_33958794whole.rds" ]]
 [[ "${BASSEZ_DEPENDENCY}" == "-" && "${BASSEZ_OWNER}" != "-" ]]
@@ -432,9 +435,8 @@ grep -q "script mismatch" "${TMP_DIR}/outside.sync.log"
 # Hook-level force propagation with a temporary slurm_config/python stub.
 HOOK_ROOT="${TMP_DIR}/hook-project"
 mkdir -p "${HOOK_ROOT}/src/2_dataset_specific_preprocessing" "${HOOK_ROOT}/src/utils/bash" "${HOOK_ROOT}/bin"
-cp "${ROOT}/src/2_dataset_specific_preprocessing/1.5_submit_myocardial.sh" "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/"
+cp "${ROOT}/src/2_dataset_specific_preprocessing/1.submit.sh" "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/"
 cp "${ROOT}/src/utils/bash/ecoda_runtime.sh" "${HOOK_ROOT}/src/utils/bash/"
-cp "${ROOT}/src/2_dataset_specific_preprocessing/1.2_submit_combinedpbmc.sh" "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/"
 printf 'PROJECT_ROOT="%s"\nPYTHON_BIN="%s/bin/python"\n' "${HOOK_ROOT}" "${HOOK_ROOT}" > "${HOOK_ROOT}/src/slurm_config.sh"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" > "%s/force.args"\n' "${HOOK_ROOT}" > "${HOOK_ROOT}/bin/python"
 printf '#!/bin/bash\n: > "%s/module.called"\n' "${HOOK_ROOT}" > "${HOOK_ROOT}/bin/module"
@@ -446,13 +448,15 @@ export ECODA_RUNTIME_IMAGE_SHA256="${IMAGE_SHA}" \
   ECODA_RUNTIME_MANIFEST_SIZE="${RUNTIME_MANIFEST_SIZE}"
 HOME="${TMP_DIR}/home" FORCE_PREPROCESS=1 HOOK_FORCE_FILE="${HOOK_ROOT}/force.args" \
   ECODA_RUNTIME_MODE=host ECODA_RUNTIME_IN_CONTAINER=0 \
-  bash "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/1.5_submit_myocardial.sh"
+  bash "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/1.submit.sh" \
+  --step myocardial_counts
 case "$(cat "${HOOK_ROOT}/force.args")" in *"--force"*) ;; *) echo "myocardial hook dropped --force" >&2; exit 1 ;; esac
 ECODA_RUNTIME_IN_CONTAINER=1 ECODA_RUNTIME_MODE=apptainer \
   ECODA_RUNTIME_PREFIX="${HOST_ENV}" SLURM_JOB_ID=999999 \
   HOME="${TMP_DIR}/home" HOOK_FORCE_FILE="${HOOK_ROOT}/force.args" \
   PATH="${HOOK_ROOT}/bin:${TMP_DIR}/bin:${PATH}" \
-  bash "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/1.2_submit_combinedpbmc.sh"
+  bash "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/1.submit.sh" \
+  --step combinedpbmc
 [[ ! -e "${HOOK_ROOT}/module.called" ]] || { echo "CombinedPBMC loaded host module inside container" >&2; exit 1; }
 ALZ_FIXTURE_DIR="${TMP_DIR}/alzheimer-fixtures"
 mkdir -p "${ALZ_FIXTURE_DIR}"
