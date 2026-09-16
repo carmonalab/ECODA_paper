@@ -551,14 +551,13 @@ the legacy Seurat pseudobulk APIs. The disposition is:
 | API | Observed callers and disposition |
 |---|---|
 | `get_pb()` | Called internally by legacy `get_pb_deseq2()` and by historical `notebooks/batch_effect_analysis_legacy.rmd` sections. No canonical Stage 5 caller remains; retain as an isolated legacy boundary. |
-| `get_pb_deseq2()` | Former canonical calls in `prepare_pseudobulks_hpc()` and `process_pseudobulk_ct_fig()` migrate to the direct matrix APIs. The Seurat branch of deprecated `run_benchmark_analysis()` and the historical batch-effect notebook remain legacy-only callers; retain the wrapper and do not use it for canonical production pseudobulk. |
+| `get_pb_deseq2()` | Former canonical calls in `prepare_pseudobulks_hpc()` and the removed Seurat cell-type path now use direct matrix APIs. The historical batch-effect notebook remains the only legacy caller; retain the wrapper and do not use it for canonical production pseudobulk. |
 | `load_h5ad_pseudobulk_seurat()` | Former preparation and missing-cache fallback callsites in the Stage 5 workers migrate to the raw CSR reducer/direct matrix path. The focused adapter fixture may exercise this helper, but it is not a maintained production caller; no canonical path may construct a sample-level Seurat object solely for pseudobulk. |
-| `run_benchmark_analysis()` | Explicitly deprecated and notebook-only. `notebooks/benchmark_analysis.rmd` loads HPC result bundles rather than invoking it; its retained Seurat branch is a compatibility boundary and is not a canonical Stage 5 dependency. |
 
-This audit does not edit historical notebooks or delete the legacy
-implementations. Cell-level Seurat loaders needed by methods with a genuine
+The retained Seurat helpers above serve only historical batch-effect
+compatibility. Cell-level Seurat loaders needed by methods with a genuine
 cell-count contract remain distinct from the legacy sample-pseudobulk
-adapter.
+helpers.
 
 #### Benchmark Analysis Notebook (`notebooks/benchmark_analysis.rmd`)
 - Loads precomputed `.rds` result bundles and `.feather` matrices via
@@ -641,8 +640,8 @@ passed by callers.
 | `src/utils/batch_contract.R` | Active separate-key limma correction identities and historical compatibility markers |
 
 | `src/5_run_benchmark_methods/benchmark_hpc_utils.R` | H5AD source/metadata validation, direct raw aggregate bridge, cache identity, and schema-2 timing integration |
-| `src/5_run_benchmark_methods/benchmark_methods_r.R` | `process_pseudobulk_ct_h5ad_fig()` canonical raw-matrix CT processing; `process_pseudobulk_ct_fig()` retained only as a legacy Seurat boundary |
-| `src/5_run_benchmark_methods/benchmark_pipeline.R` | Stage 5 orchestration; `run_benchmark_analysis()` is deprecated notebook-only compatibility code, not a canonical pseudobulk entry point |
+| `src/5_run_benchmark_methods/benchmark_methods_r.R` | `process_pseudobulk_ct_h5ad_fig()` canonical raw-matrix CT processing |
+| `src/5_run_benchmark_methods/benchmark_pipeline.R` | Stage 5 orchestration and HPC worker entry points; notebook analysis loads precomputed bundles |
 | `src/utils/py/h5ad_counts_subset.py` | Stored-HVG raw-count loading for methods requiring bounded raw-count access without full-gene materialization |
 | `src/utils/py/gene_utils.py` | `standardize_gene_symbols()` using Ensembl 105 reference dictionary |
 | `src/utils/bash/worker_retry.sh` | Sourced by SLURM workers for automated self-requeue on transient I/O faults |

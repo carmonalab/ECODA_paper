@@ -355,102 +355,15 @@ process_pseudobulk_fig <- function(
   return(create_result_bundle(feat_mat, labels))
 }
 
-# Cell type pseudobulk processing
-process_pseudobulk_ct_fig <- function(
-  seurat,
-  labels,
-  hvg = 500,
-  sample_col = "Sample",
-  ct_col,
-  min_cells = 5
-) {
-  all_samples <- sort(unique(seurat[[sample_col, drop = TRUE]]))
-  n_samples <- length(all_samples)
-  total_dist <- matrix(
-    0,
-    nrow = n_samples,
-    ncol = n_samples,
-    dimnames = list(all_samples, all_samples)
-  )
-  count_mat <- matrix(
-    0,
-    nrow = n_samples,
-    ncol = n_samples,
-    dimnames = list(all_samples, all_samples)
-  )
-  cell_types <- unique(seurat[[ct_col, drop = TRUE]])
-  cell_types <- cell_types[!is.na(cell_types)]
-  successful_cts <- character()
-  n_ct_pair_contributions <- 0L
-
-  for (ct in cell_types) {
-    sub <- subset(x = seurat, subset = !!sym(ct_col) == ct)
-    counts_per_sample <- table(sub@meta.data[, sample_col])
-    keep_samples <- names(counts_per_sample)[counts_per_sample >= min_cells]
-    if (length(keep_samples) < 2) {
-      next
-    }
-    sub <- subset(sub, subset = !!sym(sample_col) %in% keep_samples)
-    # One sparse CT must never kill the whole method: skip on error
-    # (label alignment is centralized in create_result_bundle()).
-    pb_norm <- tryCatch(
-      get_pb_deseq2(sub, sample_col = sample_col, n_hvg = hvg),
-      error = function(e) {
-        warning(
-          "process_pseudobulk_ct_fig: pseudobulk failed for cell type '", ct,
-          "': ", conditionMessage(e)
-        )
-        NULL
-      }
-    )
-    if (is.null(pb_norm)) {
-      next
-    }
-    dist_mat_ct <- as.matrix(dist(pb_norm))
-    total_dist[rownames(dist_mat_ct), colnames(dist_mat_ct)] <-
-      total_dist[rownames(dist_mat_ct), colnames(dist_mat_ct)] + dist_mat_ct
-    count_mat[rownames(dist_mat_ct), colnames(dist_mat_ct)] <-
-      count_mat[rownames(dist_mat_ct), colnames(dist_mat_ct)] + 1
-    successful_cts <- c(successful_cts, as.character(ct))
-    n_ct_pair_contributions <- n_ct_pair_contributions +
-      sum(upper.tri(dist_mat_ct))
-  }
-
-  n_sample_pairs_contributed <- sum(
-    count_mat[upper.tri(count_mat)] > 0
-  )
-  if (length(successful_cts) == 0L || n_sample_pairs_contributed == 0L) {
-    stop(
-      "process_pseudobulk_ct_fig: no successful cell-type pseudobulks ",
-      "contributed sample-pair distances for ct_col='", ct_col,
-      "', hvg=", hvg, " (", length(cell_types), " cell types inspected)."
-    )
-  }
-
-  final_dist_mat <- total_dist / count_mat
-  final_dist_mat[is.nan(final_dist_mat)] <- 0
-  return(create_result_bundle(
-    feat_mat = final_dist_mat,
-    labels,
-    dist_mat = as.dist(final_dist_mat),
-    extra = list(
-      n_ct_success = length(successful_cts),
-      successful_cell_types = successful_cts,
-      n_sample_pairs_contributed = n_sample_pairs_contributed,
-      n_ct_pair_contributions = n_ct_pair_contributions
-    )
-  ))
-}
 if (!exists("DEFAULT_CHUNK_SIZE", inherits = TRUE)) {
   DEFAULT_CHUNK_SIZE <- 4096L
 }
 # Canonical cell-type pseudobulk processing from a raw H5AD CSR store.
 #
-# Unlike process_pseudobulk_ct_fig(), this boundary never accepts a Seurat
-# object.  The Python helper performs the metadata-only eligibility pass and
-# the single raw counts pass, retaining only sparse Sample x cell-type
-# contribution rows in a run-owned store.  One cell type is materialized at a
-# time at the direct DESeq2 boundary.
+# The Python helper performs the metadata-only eligibility pass and the single
+# raw counts pass, retaining only sparse Sample x cell-type contribution rows
+# in a run-owned store. One cell type is materialized at a time at the direct
+# DESeq2 boundary.
 process_pseudobulk_ct_h5ad_fig <- function(
   h5ad_path,
   labels,

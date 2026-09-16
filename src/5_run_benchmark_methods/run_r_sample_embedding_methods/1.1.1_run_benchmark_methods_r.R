@@ -658,8 +658,7 @@ if (method == "gloscope") {
     counts_layer = "counts"
   )
   # Sample names are already standardized in the preprocessed obs
-  # (1.1.1_preprocess.py): no standardize_sample_names() re-application
-  # (kept only in the legacy Seurat path of run_benchmark_analysis).
+  # (1.1.1_preprocess.py); no standardize_sample_names() re-application.
   if (length(hvg_rank_genes) > 0) {
     VariableFeatures(seurat) <- hvg_rank_genes[
       seq_len(min(2000, length(hvg_rank_genes)))
@@ -708,7 +707,6 @@ results <- switch(
     log_file = args$log_file
   ),
   pseudobulk = run_pseudobulk_hpc(
-    seurat = NULL,
     labels = labels,
     pb_variants = pb_variants,
     sample_col = sample_col,

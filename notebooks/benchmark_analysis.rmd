@@ -1735,7 +1735,7 @@ if (!dir.exists(path_nas_embeddings)) {
 }
 
 sample_col <- "Sample"
-# HVG levels / factor (PCA-dim) levels mirror run_benchmark_analysis'
+# HVG levels / factor (PCA-dim) levels mirror the former notebook pipeline's
 # defaults (now computed on HPC by run_composition_methods_hpc).
 HVGs <- c(1000, 2000, 3000)
 factors_test <- c(2, 3, 5, 10, 15)
@@ -3417,10 +3417,9 @@ ggsave(file.path(path_plots, "Supp_fig_2_methodparameter_screening.pdf"),
 ### Combined ECODA and PB
 
 LEGACY (internal testing only, NOT shown in the publication): the
-`ECODA_PB_combo_*` methods are not implemented in the benchmark pipeline
-(`run_benchmark_analysis` is now deprecated — the notebook loads all R
-methods from the HPC bundles), so the three chunks below would produce
-nothing. Kept as documentation — see TODO.md "Ideas for later".
+`ECODA_PB_combo_*` methods are not implemented in the canonical benchmark
+pipeline, so the three chunks below would produce nothing. Kept as
+documentation — see TODO.md "Ideas for later".
 
 #### Plot distance distribution after different normalization methods applied
 

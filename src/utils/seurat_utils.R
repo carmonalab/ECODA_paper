@@ -200,7 +200,7 @@ get_ct_comp_df <- function(obs, sample_col, ct_col) {
 
 # Map the new-pipeline Leiden resolution columns
 # (leiden_res_<r>_<view>_hvg2000, written by 1.1.1_preprocess.py) to the
-# legacy RNA_snn_res.<r> names used by run_benchmark_analysis' ECODA_seuratres_*
+# RNA_snn_res.<r> names used by the ECODA_seuratres_* methods.
 # methods. Only columns that exist in `obs` are mapped; when
 # `preserve_source=TRUE`, the configured source column is retained so a
 # dataset whose author annotation is itself a Leiden column remains addressable.
@@ -309,11 +309,6 @@ load_h5ad_to_seurat <- function(file_name) {
   return(seurat)
 }
 
-# Get current variable features from seurat object
-# NOTE: get_current_hvgs was removed with the HPC benchmark refactor (its
-# only callers, the Pseudobulk_schvg2000 and non-default-HVG blocks of
-# run_benchmark_analysis, were deleted); the HPC workers consume the stored
-# var["hvg_rank"] instead (get_hvg_rank_genes in benchmark_hpc_utils.R).
 
 # Standardize sample names (prevent leading digits, replace hyphens)
 standardize_sample_names <- function(sample_names) {
