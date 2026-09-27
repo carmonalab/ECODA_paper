@@ -46,14 +46,6 @@
   is.na(value) | text %in% c("", "na", "nan", "none", "<na>", "null")
 }
 
-.ecoda_example_standardize_sample_ids <- function(sample_ids) {
-  sample_ids <- as.character(sample_ids)
-  ifelse(
-    grepl("^\\d", sample_ids),
-    paste0("g", sample_ids),
-    gsub("-", "_", sample_ids, fixed = TRUE)
-  )
-}
 
 .ecoda_example_drop_obs_column <- function(column, source_cell_type_columns) {
   column %in% c(
@@ -212,6 +204,11 @@ extract_scecoda_example_data <- function(project_root = .ecoda_example_project_r
       builtins,
       get_ct_comp_df
     )
+    if (identical(dataset, "Gongsharma_cmv_young_males")) {
+      sample_ids <- gsub("-", "_", rownames(obs$metadata), fixed = TRUE)
+      obs$metadata[[sample_column]] <- sample_ids
+      rownames(obs$metadata) <- sample_ids
+    }
 
     if (dataset %in% c("Lee", "Zhang")) {
       cell_counts <- list(
