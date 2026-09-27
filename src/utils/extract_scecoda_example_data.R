@@ -89,7 +89,6 @@
   sample_values <- as.character(.ecoda_example_python_vector(
     decoder$read_obs_column_values(obs, sample_column)
   ))
-  sample_values <- .ecoda_example_standardize_sample_ids(sample_values)
   sample_ids <- unique(sample_values[!.ecoda_example_is_missing(sample_values)])
   sample_rows <- split(
     seq_along(sample_values),
