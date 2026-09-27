@@ -46,6 +46,15 @@
   is.na(value) | text %in% c("", "na", "nan", "none", "<na>", "null")
 }
 
+.ecoda_example_standardize_sample_ids <- function(sample_ids) {
+  sample_ids <- as.character(sample_ids)
+  ifelse(
+    grepl("^\\d", sample_ids),
+    paste0("g", sample_ids),
+    gsub("-", "_", sample_ids, fixed = TRUE)
+  )
+}
+
 .ecoda_example_drop_obs_column <- function(column, source_cell_type_columns) {
   column %in% c(
     source_cell_type_columns,
@@ -88,6 +97,7 @@
   sample_values <- as.character(.ecoda_example_python_vector(
     decoder$read_obs_column_values(obs, sample_column)
   ))
+  sample_values <- .ecoda_example_standardize_sample_ids(sample_values)
   sample_ids <- unique(sample_values[!.ecoda_example_is_missing(sample_values)])
   sample_rows <- split(
     seq_along(sample_values),
@@ -126,6 +136,7 @@
   rownames(metadata) <- sample_ids
   list(metadata = metadata, layer1_counts = layer1_counts)
 }
+
 
 .ecoda_example_result_counts <- function(results_dir, dataset, method) {
   bundle <- readRDS(file.path(results_dir, paste0(dataset, "_", method, ".rds")))
