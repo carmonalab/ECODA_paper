@@ -59,6 +59,22 @@ Stage 3: Benchmark Methods      -> src/5_run_benchmark_methods/ (Python & R arra
 Stage 4: Batch Effect Analysis  -> notebooks/batch_effect_analysis.rmd
 ```
 
+### scECODA example data
+
+`src/utils/extract_scecoda_example_data.R` writes `example_data.rda` at the repository root from the existing benchmark result bundles, H5AD `obs` metadata, and Gongsharma AIFI frequency CSVs. It opens only H5AD `obs`; expression matrices and count layers are not read.
+
+On Yggdrasil, configure `NAS_SC_DIR` and run the extractor with the existing result and source-data paths:
+
+```bash
+source src/slurm_config.sh
+ECODA_BENCHMARK_RESULTS_DIR="${HPC_SCRATCH_DIR}/benchmark/results" \
+ECODA_GONGSHARMA_DATA_DIR="${NAS_SC_DIR}/GongSharma_2024_PrePrintTBD/data" \
+${PIXI_RSCRIPT} src/utils/extract_scecoda_example_data.R
+```
+
+The saved `example_data` list contains 12 studies, each with sample-level metadata and cell-type-by-sample count matrices.
+
+
 ---
 
 ## Repository Structure
