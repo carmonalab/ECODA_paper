@@ -75,7 +75,6 @@
   path,
   sample_column,
   source_cell_type_columns,
-  include_hitme_lr,
   decoder,
   h5py,
   builtins,
@@ -86,6 +85,16 @@
   obs <- handle[["obs"]]
   index_name <- as.character(reticulate::py_to_r(obs$attrs$get("_index")))
   obs_columns <- as.character(reticulate::py_to_r(builtins$list(obs$keys())))
+  required_annotation_columns <- c("layer1", paste0("layer_", seq_len(6L)))
+  missing_columns <- setdiff(required_annotation_columns, obs_columns)
+  if (length(missing_columns)) {
+    stop(
+      sprintf(
+        "H5AD '%s' is missing required annotation columns: %s",
+        path, paste(missing_columns, collapse = ", ")
+      )
+    )
+  }
   sample_values <- as.character(.ecoda_example_python_vector(
     decoder$read_obs_column_values(obs, sample_column)
   ))
@@ -95,21 +104,30 @@
     factor(match(sample_values, sample_ids), levels = seq_along(sample_ids))
   )
 
+  compose_counts <- function(column) {
+    values <- .ecoda_example_python_vector(
+      decoder$read_obs_column_values(obs, column)
+    )
+    annotation_obs <- data.frame(
+      sample_values, values,
+      check.names = FALSE, stringsAsFactors = FALSE
+    )
+    names(annotation_obs) <- c(sample_column, column)
+    get_ct_comp_df(
+      annotation_obs, sample_col = sample_column, ct_col = column
+    )
+  }
+
   metadata <- list()
-  layer1_counts <- NULL
+  hitme_lr_counts <- NULL
+  scatomic_layer_counts <- setNames(
+    vector("list", 6L), paste0("layer_", seq_len(6L))
+  )
   for (column in setdiff(obs_columns, index_name)) {
-    if (include_hitme_lr && identical(column, "layer1")) {
-      layer1_values <- .ecoda_example_python_vector(
-        decoder$read_obs_column_values(obs, column)
-      )
-      layer1_obs <- data.frame(
-        sample_values, layer1_values,
-        check.names = FALSE, stringsAsFactors = FALSE
-      )
-      names(layer1_obs) <- c(sample_column, "layer1")
-      layer1_counts <- get_ct_comp_df(
-        layer1_obs, sample_col = sample_column, ct_col = "layer1"
-      )
+    if (identical(column, "layer1")) {
+      hitme_lr_counts <- compose_counts(column)
+    } else if (column %in% names(scatomic_layer_counts)) {
+      scatomic_layer_counts[[column]] <- compose_counts(column)
     }
     if (.ecoda_example_drop_obs_column(column, source_cell_type_columns)) next
     values <- if (identical(column, sample_column)) {
@@ -125,8 +143,14 @@
     metadata, check.names = FALSE, stringsAsFactors = FALSE
   )
   rownames(metadata) <- sample_ids
-  list(metadata = metadata, layer1_counts = layer1_counts)
+  list(
+    metadata = metadata,
+    hitme_lr_counts = hitme_lr_counts,
+    scatomic_layer_counts = scatomic_layer_counts
+  )
 }
+
+
 
 
 .ecoda_example_result_counts <- function(results_dir, dataset, method) {
@@ -197,7 +221,6 @@ extract_scecoda_example_data <- function(project_root = .ecoda_example_project_r
       h5ad_path,
       sample_column,
       unlist(config[source_cell_types], use.names = FALSE),
-      dataset %in% c("Lee", "Zhang"),
       decoder,
       h5py,
       builtins,
@@ -207,34 +230,49 @@ extract_scecoda_example_data <- function(project_root = .ecoda_example_project_r
       sample_ids <- gsub("-", "_", rownames(obs$metadata), fixed = TRUE)
       obs$metadata[[sample_column]] <- sample_ids
       rownames(obs$metadata) <- sample_ids
+      colnames(obs$hitme_lr_counts) <- gsub(
+        "-", "_", colnames(obs$hitme_lr_counts), fixed = TRUE
+      )
+      obs$scatomic_layer_counts <- lapply(
+        obs$scatomic_layer_counts,
+        function(counts) {
+          colnames(counts) <- gsub("-", "_", colnames(counts), fixed = TRUE)
+          counts
+        }
+      )
     }
 
-    if (dataset %in% c("Lee", "Zhang")) {
-      cell_counts <- list(
-        HiTME_LR = t(as.matrix(obs$layer1_counts)),
-        HiTME_HR = .ecoda_example_result_counts(
-          results_dir, dataset, "ECODA_HiTME_HR_layer2"
-        ),
-        scATOMIC_HR = .ecoda_example_result_counts(
-          results_dir, dataset, "ECODA_scATOMIC_HR"
-        )
+    automated_counts <- list(
+      HiTME_LR = t(as.matrix(obs$hitme_lr_counts)),
+      HiTME_HR = .ecoda_example_result_counts(
+        results_dir, dataset, "ECODA_HiTME_HR_layer2"
+      ),
+      scATOMIC_HR = .ecoda_example_result_counts(
+        results_dir, dataset, "ECODA_scATOMIC_HR"
       )
+    )
+    scatomic_layer_counts <- lapply(
+      obs$scatomic_layer_counts, function(counts) t(as.matrix(counts))
+    )
+    names(scatomic_layer_counts) <- sub(
+      "^layer_", "scATOMIC_L", names(scatomic_layer_counts)
+    )
+    if (dataset %in% c("Lee", "Zhang")) {
+      cell_counts <- automated_counts
     } else {
-      cell_counts <- list(
-        authors_LR = .ecoda_example_result_counts(
-          results_dir, dataset, "ECODA_authors_LR"
+      cell_counts <- c(
+        list(
+          authors_LR = .ecoda_example_result_counts(
+            results_dir, dataset, "ECODA_authors_LR"
+          ),
+          authors_HR = .ecoda_example_result_counts(
+            results_dir, dataset, "ECODA_authors_HR"
+          )
         ),
-        authors_HR = .ecoda_example_result_counts(
-          results_dir, dataset, "ECODA_authors_HR"
-        ),
-        HiTME_HR = .ecoda_example_result_counts(
-          results_dir, dataset, "ECODA_HiTME_HR_layer2"
-        ),
-        scATOMIC_HR = .ecoda_example_result_counts(
-          results_dir, dataset, "ECODA_scATOMIC_HR"
-        )
+        automated_counts
       )
     }
+    cell_counts <- c(cell_counts, scatomic_layer_counts)
     sample_ids <- rownames(obs$metadata)
     cell_counts <- lapply(cell_counts, function(counts) {
       counts[, sample_ids, drop = FALSE]
