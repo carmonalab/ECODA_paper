@@ -230,13 +230,13 @@ extract_scecoda_example_data <- function(project_root = .ecoda_example_project_r
       sample_ids <- gsub("-", "_", rownames(obs$metadata), fixed = TRUE)
       obs$metadata[[sample_column]] <- sample_ids
       rownames(obs$metadata) <- sample_ids
-      colnames(obs$hitme_lr_counts) <- gsub(
-        "-", "_", colnames(obs$hitme_lr_counts), fixed = TRUE
+      rownames(obs$hitme_lr_counts) <- gsub(
+        "-", "_", rownames(obs$hitme_lr_counts), fixed = TRUE
       )
       obs$scatomic_layer_counts <- lapply(
         obs$scatomic_layer_counts,
         function(counts) {
-          colnames(counts) <- gsub("-", "_", colnames(counts), fixed = TRUE)
+          rownames(counts) <- gsub("-", "_", rownames(counts), fixed = TRUE)
           counts
         }
       )
