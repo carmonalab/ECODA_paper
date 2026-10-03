@@ -9,6 +9,13 @@ cleanup() {
   rm -rf "${TMP_DIR}"
 }
 trap cleanup EXIT
+mode_of() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
+  fi
+}
 
 ORIGINAL_PATH="${PATH}"
 BIN="${TMP_DIR}/bin"
@@ -138,11 +145,13 @@ cat > "${BIN}/rsync" <<'STUB'
 #!/bin/bash
 set -euo pipefail
 FILES_FROM=""
+CHMOD_SPEC=""
 SOURCE=""
 DEST=""
 for arg in "$@"; do
   case "${arg}" in
     --files-from=*) FILES_FROM="${arg#*=}" ;;
+    --chmod=*) CHMOD_SPEC="${arg#*=}" ;;
     -*) ;;
     *)
       if [[ -z "${SOURCE}" ]]; then SOURCE="${arg}"
@@ -156,6 +165,17 @@ while IFS= read -r relative; do
   [[ -n "${relative}" ]] || continue
   mkdir -p "${DEST%/}/$(dirname "${relative}")"
   cp "${SOURCE%/}/${relative}" "${DEST%/}/${relative}"
+  if [[ "${CHMOD_SPEC}" == "ugo+rwX" ]]; then
+    chmod 666 "${DEST%/}/${relative}"
+    dir="${DEST%/}/$(dirname "${relative}")"
+    while [[ "${dir}" != "${DEST%/}" ]]; do
+      chmod 777 "${dir}"
+      next_dir="$(dirname "${dir}")"
+      [[ "${next_dir}" != "${dir}" ]] || break
+      dir="${next_dir}"
+    done
+    chmod 777 "${DEST%/}"
+  fi
 done < "${FILES_FROM}"
 STUB
 chmod +x "${BIN}/rsync"
@@ -591,6 +611,13 @@ case "${MERGE_CALL}" in *"ANNOTATION_MERGE_MANIFEST=${RUN_ROOT}/manifests/merge.
   merge_path="${SUCCESS_BASE}/scratch/ECODA_paper/Breast_cancer/output/${merge_name}"
   merge_record="$(ecoda_artifact_record_path "${merge_path}" "${RUN_ID}")"
   [[ -s "${merge_record}" ]] || exit 1
+  NAS_MERGE_PATH="${SUCCESS_BASE}/nas/Breast_cancer/output/${merge_name}"
+  [[ "$(mode_of "${NAS_MERGE_PATH}")" == "666" ]] ||
+    fail "Stage 4 NAS H5AD was not made shared-readable/writable"
+  [[ "$(mode_of "${NAS_MERGE_PATH}.md5")" == "666" ]] ||
+    fail "Stage 4 NAS sidecar was not made shared-readable/writable"
+  [[ "$(mode_of "$(dirname "${NAS_MERGE_PATH}")")" == "777" ]] ||
+    fail "Stage 4 NAS output directory was not made shared"
   ecoda_validate_artifact_record "${merge_path}" stage4_merge "${RUN_ID}" >/dev/null
   if ecoda_validate_artifact_record "${first_feather}" stage4_merge "${RUN_ID}" >/dev/null 2>&1; then
     exit 1

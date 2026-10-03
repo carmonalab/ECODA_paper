@@ -54,6 +54,7 @@ methods, then scores recovery of known biological groups.
   15` contains extended methods, and `Supp fig 2` is parameter screening.
   Exclude legacy `ECODA_PB_combo_*` from publication figures.
 - Preserve all version constraints in `pixi.toml` and the resolved `pixi.lock`.
+- **QOT source protection.** Treat `src/5_run_benchmark_methods/run_python_sample_embedding_methods/qot_utils_re.py` as immutable vendored source. Do not modify it unless the user explicitly requests a QOT change.
 - Use focused tests and the `_debug` Joanito five-sample subset for routine
   verification. Do not launch full cohorts for routine checks.
 
@@ -155,6 +156,19 @@ checksum mismatch, worker failure, or exhausted OOM retry must fail closed.
   by the required Luna Max reviewer approval. Use `status` only for
   non-mutating recovery checks, and never rerun a wrapper after an ambiguous
   launch.
+
+#### NAS publication permissions
+
+- HPC scratch and home permissions are cluster policy; never change them to
+  solve NAS access. The three production HPC-to-NAS sync paths MUST normalize
+  only selected NAS destinations after transfer: regular files to `666` and
+  directories to `777` (`rsync --chmod=ugo+rwX`). Stage 5's manually copied
+  `checksums.md5` MUST receive the same file mode before final checksum
+  verification.
+- Permission normalization MUST occur before a sync reports success and MUST
+  fail closed if it cannot apply or verify the selected NAS paths. Do not run
+  a recursive permission change over the entire NAS root; NAS metadata and
+  unrelated artifacts are outside the selected sync scope.
 
 ### Current plans and immutable run identity
 - **Baseline provenance:** The processing plan was prepared from repository

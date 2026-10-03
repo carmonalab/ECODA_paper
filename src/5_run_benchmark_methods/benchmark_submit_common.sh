@@ -695,16 +695,35 @@ analysis_merge_sync_cleanup() (
         sync_fail "failed to build no-checksum sync manifest"
     fi
   done < "${SYNC_FILES}"
-  rsync -rlptDv --files-from="${NO_CHECKSUM_FILES_TMP}" \
+  rsync -rlptDv --chmod=ugo+rwX --files-from="${NO_CHECKSUM_FILES_TMP}" \
     "${LOCAL_ROOT}/" "${REMOTE_ROOT}/" || sync_fail "selected benchmark rsync failed"
   REMOTE_CHECKSUM_TMP="${REMOTE_ROOT}/.checksums.md5.tmp.${RUN_ID}"
   cp "${LOCAL_ROOT}/checksums.md5" "${REMOTE_CHECKSUM_TMP}" || {
     sync_fail "cannot stage remote checksum manifest"
   }
+  chmod 666 "${REMOTE_CHECKSUM_TMP}" || {
+    sync_fail "cannot set NAS checksum manifest permissions"
+  }
   mv -f "${REMOTE_CHECKSUM_TMP}" "${REMOTE_ROOT}/checksums.md5" || {
     sync_fail "cannot atomically install remote checksum manifest"
   }
   (cd "${REMOTE_ROOT}" && md5sum -c checksums.md5) || sync_fail "remote checksum verification failed"
+  chmod 777 "${REMOTE_ROOT}" ||
+    sync_fail "cannot set NAS benchmark root permissions"
+  while IFS= read -r rel || [[ -n "${rel}" ]]; do
+    [[ -n "${rel}" ]] || continue
+    chmod 666 "${REMOTE_ROOT}/${rel}" ||
+      sync_fail "cannot set NAS file permissions: ${rel}"
+    remote_dir="${REMOTE_ROOT}/$(dirname "${rel}")"
+    while [[ "${remote_dir}" != "${REMOTE_ROOT}" ]]; do
+      chmod 777 "${remote_dir}" ||
+        sync_fail "cannot set NAS directory permissions: ${remote_dir}"
+      next_dir="$(dirname "${remote_dir}")"
+      [[ "${next_dir}" != "${remote_dir}" ]] ||
+        sync_fail "NAS permission path did not converge: ${remote_dir}"
+      remote_dir="${next_dir}"
+    done
+  done < "${SYNC_FILES}"
   if [[ -s "${CLEANUP_MANIFEST}" ]]; then
     while IFS= read -r path || [[ -n "${path}" ]]; do
       [[ "${path}" == "${RUN_LOG_DIR}/"* ]] ||

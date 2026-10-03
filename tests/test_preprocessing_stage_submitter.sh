@@ -10,6 +10,13 @@ cleanup() {
   rm -rf "${TMP_DIR}"
 }
 trap cleanup EXIT
+mode_of() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
+  fi
+}
 mkdir -p "${TMP_DIR}/bin" "${TMP_DIR}/home" "${TMP_DIR}/nas" "${TMP_DIR}/logs"
 
 CAPTURE="${TMP_DIR}/sbatch.calls"
@@ -1106,6 +1113,8 @@ esac
 [[ "$(sed -n 's/^STATE=//p' "${WD_SCRATCH_OWNER}/owner" | sed -n '1p')" == OK ]]
 [[ "$(sed -n 's/^STATE=//p' "${WD_NAS_OWNER}/owner" | sed -n '1p')" == OK ]]
 [[ "$(sed -n 's/^STATE=//p' "${WD_STAGE_OWNER}/owner" | sed -n '1p')" == OK ]]
+[[ "$(mode_of "${WD_NAS_OUTPUT}")" == "666" ]]
+[[ "$(mode_of "$(dirname "${WD_NAS_OUTPUT}")")" == "777" ]]
 
 # A submitter-preacquired same-run owner is also finalized FAIL when the
 # watchdog reaches a terminal non-OOM scheduler failure.

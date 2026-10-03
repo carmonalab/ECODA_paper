@@ -664,3 +664,7 @@ passed by callers.
    compatibility path and requires the caller's original dataset/view
    selection. Host and storage selection are explicit deployment
    configuration; recovery never infers a different host or transfer target.
+8. **NAS publication permissions:** HPC scratch permissions remain
+   cluster-managed. Selected NAS files and directories are normalized with
+   `rsync --chmod=ugo+rwX` after transfer, and synchronization fails closed if
+   permission normalization or checksum verification fails.

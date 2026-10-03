@@ -9,25 +9,47 @@ cleanup() {
   rm -rf "${TMP_DIR}"
 }
 trap cleanup EXIT
+mode_of() {
+  if stat -c '%a' "$1" >/dev/null 2>&1; then
+    stat -c '%a' "$1"
+  else
+    stat -f '%Lp' "$1"
+  fi
+}
 mkdir -p "${TMP_DIR}/bin" "${TMP_DIR}/home" "${TMP_DIR}/scratch/benchmark/embeddings" "${TMP_DIR}/nas/project"
 cat > "${TMP_DIR}/bin/rsync" <<'STUB'
 #!/bin/bash
 set -euo pipefail
 files_from=""
+chmod_spec=""
 for arg in "$@"; do
   case "${arg}" in
     --files-from=*) files_from="${arg#--files-from=}" ;;
+    --chmod=*) chmod_spec="${arg#--chmod=}" ;;
   esac
 done
 n="$#"
 eval "src=\${$((n - 1))}"
 eval "dst=\${$n}"
+src="${src%/}"
+dst="${dst%/}"
 mkdir -p "${dst}"
 if [[ -n "${files_from}" ]]; then
   while IFS= read -r rel || [[ -n "${rel}" ]]; do
     [[ -n "${rel}" ]] || continue
     mkdir -p "${dst}/$(dirname "${rel}")"
     cp -f "${src}/${rel}" "${dst}/${rel}"
+    if [[ "${chmod_spec}" == "ugo+rwX" ]]; then
+      chmod 666 "${dst}/${rel}"
+      dir="${dst}/$(dirname "${rel}")"
+      while [[ "${dir}" != "${dst}" ]]; do
+        chmod 777 "${dir}"
+        next_dir="$(dirname "${dir}")"
+        [[ "${next_dir}" != "${dir}" ]] || break
+        dir="${next_dir}"
+      done
+      chmod 777 "${dst}"
+    fi
   done < "${files_from}"
 else
   cp -R "${src}". "${dst}"
@@ -254,12 +276,18 @@ fi
 [[ ! -e "${SCHEDULER_CAPTURE}" ]]
 ecoda_owner_finalize_tracked OK "benchmark sync test publication" >/dev/null
 printf 'unrelated remote\n' > "${ANALYSIS_NAS_ROOT}/unrelated.txt"
+UNRELATED_MODE="$(mode_of "${ANALYSIS_NAS_ROOT}/unrelated.txt")"
 analysis_merge_sync_cleanup "${LABELS[@]}"
 [[ "$(pixi run python -c 'import pandas as pd,sys; print(len(pd.read_feather(sys.argv[1])))' "${ANALYSIS_NAS_ROOT}/embeddings/execution_times.feather")" == 3 ]]
 [[ -s "${ANALYSIS_NAS_ROOT}/checksums.md5" ]]
 [[ -s "${ANALYSIS_NAS_ROOT}/embeddings/execution_times.feather" ]]
 [[ -s "${ANALYSIS_NAS_ROOT}/embeddings/Adams_hvg1000_mrvi_dists.feather" ]]
 [[ -s "${ANALYSIS_NAS_ROOT}/unrelated.txt" ]]
+[[ "$(mode_of "${ANALYSIS_NAS_ROOT}/embeddings/Adams_hvg1000_mrvi_dists.feather")" == "666" ]]
+[[ "$(mode_of "${ANALYSIS_NAS_ROOT}/embeddings/Adams_hvg1000_mrvi_dists.feather.md5")" == "666" ]]
+[[ "$(mode_of "${ANALYSIS_NAS_ROOT}/embeddings")" == "777" ]]
+[[ "$(mode_of "${ANALYSIS_NAS_ROOT}/checksums.md5")" == "666" ]]
+[[ "$(mode_of "${ANALYSIS_NAS_ROOT}/unrelated.txt")" == "${UNRELATED_MODE}" ]]
 [[ ! -e "${ECODA_RUN_ROOT}/logs/execution_times_mrvi_Adams.feather" ]]
 [[ ! -d "${ANALYSIS_ROOT}/.sync.lock" ]]
 [[ "$(ecoda_owner_state "$(ecoda_owner_dir stage5 "sync/${ANALYSIS_ROOT}")")" == "OK" ]]

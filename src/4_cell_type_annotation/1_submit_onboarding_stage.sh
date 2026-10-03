@@ -516,16 +516,22 @@ sync_one_dataset() {
   fi
   [[ ${selected} -eq 1 ]] || rc=1
   if [[ ${rc} -eq 0 && -s "${transfer_manifest}" ]]; then
-    rsync -rlptDv --files-from="${transfer_manifest}" \
+    rsync -rlptDv --chmod=ugo+rwX --files-from="${transfer_manifest}" \
       "${HPC_SCRATCH_DIR}/${ds}/output/" "${remote_dir}/" || rc=1
   elif [[ ${rc} -eq 0 ]]; then
     rc=1
   fi
   if [[ ${rc} -eq 0 ]]; then
     while IFS=$'\t' read -r view path output local_digest local_size; do
-      ecoda_compare_checksum_remote "${path}" \
-        "${remote_dir}/${output}" "${remote_dir}/${output}.md5" \
-        "${local_digest}" "${local_size}" || rc=1
+      if ! ecoda_compare_checksum_remote \
+          "${path}" "${remote_dir}/${output}" \
+          "${remote_dir}/${output}.md5" "${local_digest}" "${local_size}"; then
+        rc=1
+        continue
+      fi
+      chmod 666 "${remote_dir}/${output}" "${remote_dir}/${output}.md5" ||
+        rc=1
+      chmod 777 "${remote_dir}" "${remote_dir%/*}" || rc=1
     done < "${verify_manifest}"
   fi
   if [[ ${rc} -eq 0 ]]; then
