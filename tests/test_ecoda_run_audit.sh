@@ -680,9 +680,20 @@ export PATH="${TMP_DIR}/accounting-bin:${PATH}"
 printf 'array\t123\nwatchdog\t124\n' > "${CORRECTED_RUN_ROOT}/manifests/scheduler_ids.tsv"
 run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 0
 [[ "$(wc -l < "${ACCOUNTING_CALLS}" | tr -d '[:space:]')" == 1 ]]
-printf '123|COMPLETED|0:0\n124|COMPLETED|0:0\n' > "${ACCOUNTING}"
+printf '123_1|COMPLETED|0:0\n123_2|COMPLETED|0:0\n124|COMPLETED|0:0\n' > "${ACCOUNTING}"
 ecoda_write_checksum "${ACCOUNTING}" >/dev/null
 run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 0 --scheduler-accounting "${ACCOUNTING}"
+printf '123_1|COMPLETED|0:0\n125|COMPLETED|0:0\n124|COMPLETED|0:0\n' > "${ACCOUNTING}"
+ecoda_write_checksum "${ACCOUNTING}" >/dev/null
+run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 1 --scheduler-accounting "${ACCOUNTING}"
+printf '123_1|COMPLETED|0:0\n123_2|COMPLETED|0:0\n' > "${ACCOUNTING}"
+ecoda_write_checksum "${ACCOUNTING}" >/dev/null
+run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 1 --scheduler-accounting "${ACCOUNTING}"
+for task_status in 'FAILED|1:0' 'RUNNING|0:0'; do
+  printf '123_1|COMPLETED|0:0\n123_2|%s\n124|COMPLETED|0:0\n' "${task_status}" > "${ACCOUNTING}"
+  ecoda_write_checksum "${ACCOUNTING}" >/dev/null
+  run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 1 --scheduler-accounting "${ACCOUNTING}"
+done
 printf '123|COMPLETED|0:0\n' > "${ACCOUNTING}"
 run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 1 --scheduler-accounting "${ACCOUNTING}"
 ecoda_write_checksum "${ACCOUNTING}" >/dev/null
@@ -700,6 +711,11 @@ ln -s "${ACCOUNTING}.saved" "${ACCOUNTING}"
 run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 1 --scheduler-accounting "${ACCOUNTING}"
 rm "${ACCOUNTING}"
 mv "${ACCOUNTING}.saved" "${ACCOUNTING}"
+mv "${ACCOUNTING}.md5" "${TMP_DIR}/foreign-accounting.md5"
+ln -s "${TMP_DIR}/foreign-accounting.md5" "${ACCOUNTING}.md5"
+run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 1 --scheduler-accounting "${ACCOUNTING}"
+rm "${ACCOUNTING}.md5"
+mv "${TMP_DIR}/foreign-accounting.md5" "${ACCOUNTING}.md5"
 [[ "$(wc -l < "${ACCOUNTING_CALLS}" | tr -d '[:space:]')" == 1 ]]
 : > "${CORRECTED_RUN_ROOT}/manifests/scheduler_ids.tsv"
 export PATH="${ACCOUNTING_OLD_PATH}"

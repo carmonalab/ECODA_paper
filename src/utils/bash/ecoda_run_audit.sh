@@ -548,6 +548,8 @@ _audit_scheduler_ids() {
     }
     _audit_regular_file "${SCHEDULER_ACCOUNTING_ARG}" || return 1
     [[ "$(realpath "${SCHEDULER_ACCOUNTING_ARG}")" == "${SCHEDULER_ACCOUNTING_ARG}" ]] || return 1
+    _audit_regular_file "${SCHEDULER_ACCOUNTING_ARG}.md5" || return 1
+    [[ "$(realpath "${SCHEDULER_ACCOUNTING_ARG}.md5")" == "${SCHEDULER_ACCOUNTING_ARG}.md5" ]] || return 1
     ecoda_validate_checksum "${SCHEDULER_ACCOUNTING_ARG}" || return 1
     rows="$(cat "${SCHEDULER_ACCOUNTING_ARG}")" || return 1
   elif ! rows="$(sacct -n -P -X -j "${id_list}" \
@@ -575,10 +577,9 @@ _audit_scheduler_ids() {
       state="${field3}"
       exit_code="${field4}"
     else
-      # Keep compatibility with three-column local accounting stubs. Production
-      # Slurm output uses JobID plus JobIDRaw so array children can be tied to
-      # their requested array root without mistaking their numeric raw IDs for
-      # independent jobs.
+      # Gate captures use array-qualified JobID in three columns. Standalone
+      # four-column queries also include numeric JobIDRaw. Raw child IDs alone
+      # cannot be routed to their array root.
       display_id="${field1}"
       raw_id="${field1%%_*}"
       state="${field2}"
