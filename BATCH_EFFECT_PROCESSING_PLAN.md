@@ -2,13 +2,13 @@
 
 ## Current checkpoint — 2026-10-22
 
-### Compaction pause — latest controlling boundary
+### Post-compaction resume — latest controlling boundary
 
-- **PAUSED at the user's request, before inventory launch.** Do not resume commands, edits, remote work or jobs until the user continues after compaction. `proc://` confirmed no background jobs/services at this boundary.
+- **RESUMED by the user after compaction.** Proceed first with the validation-only inventory below, on Bamboo only. No method jobs are authorized until the inventory, exact residual scope, archive/backup barriers and required review pass.
 - Final implementation `9bb0f228f57137bbf7b0dec5a961b96a0208a333` is committed, pushed, deployed and snapshotted; runtime bytes/dependencies and the real NAS utility smoke are verified. Another agent's `notebooks/benchmark_analysis.rmd` remains outside this task's edits/commits.
 - Prerequisite installation v2 is **COMPLETED / audited PASS / release eligible**: 672 files installed, 307 reused unchanged, zero conflicts; both historical source trees verified. Failed v1 remains FAILED with its original evidence preserved. All operations are Bamboo-only.
 - **No method jobs, canonical result adoption/publication or cohort NAS backups have started.** All 27 MrVI/PILOT/QOT rows remain excluded from recomputation. Exact production R/preparation triples/count remain unknown.
-- Next: prepare/reconcile/launch only the already specified **validation-only** inventory `corrected_bamboo_20261022T141427Z_inventory_gate`, using `.gate/corrected_bamboo_20261022T141427Z/inventory_command.txt` and `inventory_profile.json`. Controls are already staged read-only on Bamboo; source/runtime/aux and report/log roots are explicit. The inventory gate itself has not been prepared/launched. It validates 63 logical rows and schedules zero methods.
+- **Inventory RUNNING:** `corrected_bamboo_20261022T141427Z_inventory_gate` launched once at `2026-10-22T14:55:31Z`, command digest `b062c22a0d442da2415624dfeab53d295330a1dbe03ca67273bc8aa44568740d`. Reconciliation found ABSENT/no discrepancies and all nine invariants passed. Exactly one unbounded durable waiter (`bg_58`) is armed. It validates 63 logical rows and schedules zero methods.
 - After its single durable wait, terminal audit and independent reviewer acceptance, inspect `artifact_decisions.tsv`/`expected_pending.tsv`, resolve any real discrepancy without rerunning excluded methods, and present the exact residual scope before the archive/backup/promotion/compute release below. No broad all-methods invocation.
 
 ### Resumed local blocker completion — 2026-10-22
@@ -71,7 +71,7 @@
 - Compute/cutover identity `corrected_bamboo_20261022T141427Z`; inventory gate `corrected_bamboo_20261022T141427Z_inventory_gate`; report `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runs/corrected_bamboo_20261022T141427Z_inventory`. Executor logs are separately bound at `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_executor_logs/corrected_bamboo_20261022T141427Z`.
 - Explicit coverage: Joanito, Stephenson, Alzheimer, Breast_cancer, Covid19_PBMC, Kidney_KPMP_full, Diabetes, Lupus_PBMC, Lung; view `batch_effect_corrected`; seven methods in established order. **63 logical validation rows, zero scheduler/model rows.** All 27 MrVI/PILOT/QOT rows remain excluded from recomputation; production residual R/preparation count is unknown until the inventory succeeds.
 - Local controls `.gate/corrected_bamboo_20261022T141427Z/`; remote `/home/users/h/halterc/ecoda_corrected_runs/corrected_bamboo_20261022T141427Z/`. Selection, full coverage matrix and strict remote-PATH sidecars are staged read-only and SHA-verified. Exact immutable command is `.gate/corrected_bamboo_20261022T141427Z/inventory_command.txt`, invoking source snapshot `9bb0f228f57137bbf7b0dec5a961b96a0208a333` with pinned source/runtime/aux, exact identity and `--inventory-only`. The historical source-run identifier containing `ygg` is stored provenance already on Bamboo, not another host operation.
-- Profile `.gate/corrected_bamboo_20261022T141427Z/inventory_profile.json` is derived from the checked-in ECODA profile, host Bamboo, group `ecoda-benchmark`, no accounting/required scheduler IDs, reviewer required. Prepare/reconcile/launch are pending; no compute authorization follows from this inventory.
+- Profile `.gate/corrected_bamboo_20261022T141427Z/inventory_profile.json` is derived from the checked-in ECODA profile, host Bamboo, group `ecoda-benchmark`, no accounting/required scheduler IDs, reviewer required. Prepare/reconcile/launch completed; inventory is RUNNING, not yet audited/reviewed. No compute authorization follows from this inventory.
 
 ## Historical checkpoints — superseded, not current instructions
 
