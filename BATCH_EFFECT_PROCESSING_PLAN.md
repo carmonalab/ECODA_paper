@@ -2,6 +2,15 @@
 
 ## Current checkpoint — 2026-10-22
 
+### Compaction pause — latest controlling boundary
+
+- **PAUSED at the user's request, before inventory launch.** Do not resume commands, edits, remote work or jobs until the user continues after compaction. `proc://` confirmed no background jobs/services at this boundary.
+- Final implementation `9bb0f228f57137bbf7b0dec5a961b96a0208a333` is committed, pushed, deployed and snapshotted; runtime bytes/dependencies and the real NAS utility smoke are verified. Another agent's `notebooks/benchmark_analysis.rmd` remains outside this task's edits/commits.
+- Prerequisite installation v2 is **COMPLETED / audited PASS / release eligible**: 672 files installed, 307 reused unchanged, zero conflicts; both historical source trees verified. Failed v1 remains FAILED with its original evidence preserved. All operations are Bamboo-only.
+- **No method jobs, canonical result adoption/publication or cohort NAS backups have started.** All 27 MrVI/PILOT/QOT rows remain excluded from recomputation. Exact production R/preparation triples/count remain unknown.
+- Next: prepare/reconcile/launch only the already specified **validation-only** inventory `corrected_bamboo_20261022T141427Z_inventory_gate`, using `.gate/corrected_bamboo_20261022T141427Z/inventory_command.txt` and `inventory_profile.json`. Controls are already staged read-only on Bamboo; source/runtime/aux and report/log roots are explicit. The inventory gate itself has not been prepared/launched. It validates 63 logical rows and schedules zero methods.
+- After its single durable wait, terminal audit and independent reviewer acceptance, inspect `artifact_decisions.tsv`/`expected_pending.tsv`, resolve any real discrepancy without rerunning excluded methods, and present the exact residual scope before the archive/backup/promotion/compute release below. No broad all-methods invocation.
+
 ### Resumed local blocker completion — 2026-10-22
 
 - User explicitly instructed continuation. The sleep pause below is historical; resume only the planned local blockers first. No HPC submission, canonical adoption or publication is authorized by resuming local work.
@@ -21,6 +30,7 @@
 - Versioned runtime bytes were freshly verified: image `.../_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif`, **8863477760 bytes**, SHA256 `8fcd00b7a02592f82e8ad96ec9dffdcfb40214b3c47218f770dfb8e828e05e34`; adjacent manifest SHA256 `1c4c2cc340353fe86f1b89235f1f3e5c7b3545f7f303d2b85612cfa8cdedfd50`. Image/manifest/parent are read-only; dependency hashes match the source. Evidence `.gate/corrected_return_20261021T130330Z/bamboo_runtime_verification.json`.
 - **Canonical producer-status follow-up:** ordinary run metadata remains an initialization record; lifecycle authority is `status/terminal`. The importer now requires matching terminal RUN_ID and OK/FAIL rather than metadata STATE. The dispatcher explicitly writes successful terminal status after final publication/owner completion. Targeted terminal-status CLI PASS **72.04 s**; foreign-promotion regression remains PASS **244.35 s**. This follow-up must receive its own commit/snapshot before any benchmark launch.
 - **Concurrent notebook work:** another agent owns `notebooks/benchmark_analysis.rmd` and will not commit/push. Do not edit, stage, commit or push that work. Task commits use explicit paths and `git commit --only`; unrelated working/index changes remain intact.
+- **Final implementation identity:** canonical producer-status follow-up commit `9bb0f228f57137bbf7b0dec5a961b96a0208a333` is pushed, deployed exactly, and snapshotted at `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots_corrected_bamboo_20261022/9bb0f228f57137bbf7b0dec5a961b96a0208a333`. Its source archive SHA256 is `e3da70481bd635f52030a1025122b0907a658961671b5846a960225310fd9b26`; frozen auxiliary root is `tree/aux`, branch `41a45cd3f8bb5f5a7daf21ec276f6a726f6ee0d4`. The earlier `7ad9a3d` snapshot is preserved, not the final benchmark implementation.
 
 ### Storage-only missing-prerequisite installation — prelaunch scope
 
@@ -33,7 +43,35 @@
 /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13/bin/python -u /home/users/h/halterc/ecoda_transfer_runs/corrected_return_20261021T130330Z/materialize.py --self-sha256 09143e9c32b8508f29636df6dca7c4561eea10e0223be8adf0cc76f2d8c5d631 --inventory-sha256 2ec2cb4becda72b07453816acf3e55d804b631bfc4661217c580723c50bc6ea1 --receipt-sha256 384c05591a0643feac8ee762bd101d9aaf7980ad758bdc2e2741863f57f2240a
 ```
 
-- **RUNNING:** launched once at `2026-10-22T13:17:38Z` in tmux `corrected_materialize_20261022T131227Z`; command digest `08595fb9b98b0bf8d15e148bf0bbdf3b13ba704f762f90f29fff3d5435d8ad98`. Preparation passed; reconciliation was ABSENT with no discrepancies and all three invariants PASS. Exactly one unbounded durable wait is armed (`bg_55`), with no scheduler query/polling. Terminal storage audit remains pending. This byte-installation operation does not authorize the R/preparation wave.
+- **FAILED / exit 1:** launched once `2026-10-22T13:17:38Z`, stopped safely `13:34:48Z` while publishing the first Alzheimer file. Actual BeeGFS probes reproduce `renameat2(RENAME_NOREPLACE)` returning EINVAL for files/directories, while exclusive hardlinks correctly reject existing targets. One wait and one terminal inspect completed; audit failed because no materialization receipt was written, release eligibility false, scheduler query count zero. Failed gate/controller/profile remain unchanged. Incoming data are preserved; no method jobs ran.
+
+### Isolated live NAS utility smoke — explicit diagnostic scope
+
+- Host Bamboo; diagnostic run `corrected_nas_smoke_20261022T132921Z`, using the committed utility from immutable source `9bb0f228f57137bbf7b0dec5a961b96a0208a333`.
+- Source `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runs/corrected_nas_smoke_20261022T132921Z/source`; destination `/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper/_ecoda_backups/corrected_final/corrected_nas_smoke_20261022T132921Z/data`.
+- Scope exactly four synthetic payload/sidecar files, including one nested path; finite preflight, copy, verify and scoped replacement/readback checks. No cohort inputs/results, canonical NAS output, model execution or scheduler submission. This small live filesystem check is independent of the durable prerequisite installation.
+- **Live NAS utility smoke PASS:** four synthetic files totaling **404 bytes** copied, deliberately changed only within this probe, repaired, and both receipts verified with the committed utility. Real mount source `smednas515:/volume1/Shared`; selected files mode 666, directories 777. Verification from a fresh SSH session also passed. Evidence `.gate/corrected_nas_smoke_20261022T132921Z.json`; this is not a cohort backup or canonical publication.
+
+### Storage-only installation retry — BeeGFS-compatible v2
+
+- **Bamboo only. No further Yggdrasil access or processing.** “Both filesystems” refers only to Bamboo scratch (data) and Bamboo home (control receipts), not two clusters.
+- Retry ID `corrected_materialize_v2_20261022T140646Z`; manifest `.gate/corrected_materialize_v2_20261022T140646Z.json`; profile `.gate/corrected_return_20261021T130330Z/materialize_v2_profile.json`; group `ecoda-prerequisite-return`. Same 979-file/216585344427-byte prerequisite scope and two fixed historical source archives; zero scheduler/model rows. Scope is not widened.
+- Controller `/home/users/h/halterc/ecoda_transfer_runs/corrected_return_20261021T130330Z/materialize_v2.py`, SHA256 `acd25fe1e913f6589d964f1a0b04408feacfe6a5b07f9dfab296a8e391cd12db`, is read-only and staged separately from failed v1. It uses exclusive file links, exclusive new-tree creation and the existing COMPLETE commit barrier; existing targets are never replaced. Tiny actual-BeeGFS/control-home capability and no-clobber checks pass before large reads; corrupt/missing/link/extra source-tree checks remain green. Scoped security review reports no new finding; profile/COMPLETE audit fixtures pass.
+- The failed run published no retry5 source-root/tree/COMPLETE/identity paths; all were confirmed absent. V2 defers new COMPLETE markers until verified read-only trees exist. Mid-link aliases or partial uncommitted trees fail closed for reconciliation, not success.
+- Exact retry command:
+
+```sh
+/home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13/bin/python -u /home/users/h/halterc/ecoda_transfer_runs/corrected_return_20261021T130330Z/materialize_v2.py --self-sha256 acd25fe1e913f6589d964f1a0b04408feacfe6a5b07f9dfab296a8e391cd12db --inventory-sha256 2ec2cb4becda72b07453816acf3e55d804b631bfc4661217c580723c50bc6ea1 --receipt-sha256 384c05591a0643feac8ee762bd101d9aaf7980ad758bdc2e2741863f57f2240a
+```
+
+- **COMPLETED / exit 0:** `2026-10-22T14:10:25Z`–`14:44:23Z`; one unbounded wait (`bg_57`) and one terminal inspect PASS, release eligible, scheduler query count zero. Installed **672 files / 216549199730 bytes**, reused **307 / 36144697 bytes**, zero conflicts; 274 files remain incoming/archive-only. New retry5 source tree restored/verified (1163 files); existing preflight-final tree verified unchanged (1168). Receipt `/home/users/h/halterc/ecoda_transfer_runs/corrected_return_20261021T130330Z/materialized.json`; no original incoming file, canonical direct-root result or global owner was replaced.
+
+### Validation-only production inventory — exact scope
+
+- Compute/cutover identity `corrected_bamboo_20261022T141427Z`; inventory gate `corrected_bamboo_20261022T141427Z_inventory_gate`; report `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runs/corrected_bamboo_20261022T141427Z_inventory`. Executor logs are separately bound at `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_executor_logs/corrected_bamboo_20261022T141427Z`.
+- Explicit coverage: Joanito, Stephenson, Alzheimer, Breast_cancer, Covid19_PBMC, Kidney_KPMP_full, Diabetes, Lupus_PBMC, Lung; view `batch_effect_corrected`; seven methods in established order. **63 logical validation rows, zero scheduler/model rows.** All 27 MrVI/PILOT/QOT rows remain excluded from recomputation; production residual R/preparation count is unknown until the inventory succeeds.
+- Local controls `.gate/corrected_bamboo_20261022T141427Z/`; remote `/home/users/h/halterc/ecoda_corrected_runs/corrected_bamboo_20261022T141427Z/`. Selection, full coverage matrix and strict remote-PATH sidecars are staged read-only and SHA-verified. Exact immutable command is `.gate/corrected_bamboo_20261022T141427Z/inventory_command.txt`, invoking source snapshot `9bb0f228f57137bbf7b0dec5a961b96a0208a333` with pinned source/runtime/aux, exact identity and `--inventory-only`. The historical source-run identifier containing `ygg` is stored provenance already on Bamboo, not another host operation.
+- Profile `.gate/corrected_bamboo_20261022T141427Z/inventory_profile.json` is derived from the checked-in ECODA profile, host Bamboo, group `ecoda-benchmark`, no accounting/required scheduler IDs, reviewer required. Prepare/reconcile/launch are pending; no compute authorization follows from this inventory.
 
 ## Historical checkpoints — superseded, not current instructions
 
