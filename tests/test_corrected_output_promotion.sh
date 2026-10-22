@@ -34,7 +34,7 @@ body = entrypoint.read_text().split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
 ns = {'__name__': 'promotion_fixture'}
 exec(compile(body, str(entrypoint), 'exec'), ns)
 main_ast = next(node for node in ast.parse(body).body if isinstance(node, ast.FunctionDef) and node.name == 'main')
-for name in ('receipt_binds', 'promotion_sources', 'owner', 'original_evidence', 'collision_evidence', 'scientific', 'inspect'):
+for name in ('receipt_binds', 'promotion_sources', 'owner', 'original_evidence', 'legacy_runtime_evidence', 'collision_evidence', 'scientific', 'inspect'):
     node = next(node for node in main_ast.body if isinstance(node, ast.FunctionDef) and node.name == name)
     exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])), str(entrypoint), 'exec'), ns)
 sys.path.insert(0, str(repo / 'src/utils/py'))
@@ -198,6 +198,26 @@ with tempfile.TemporaryDirectory(prefix='ecoda-promotion-') as temporary:
     runtime_owner.mkdir()
     (runtime_owner / 'owner').write_bytes(owner_bytes)
     ns['inspect']([candidate], 'Breast_cancer', 'mrvi', True)
+    recovery_runtime_owner = Path(local_shell('ecoda_artifact_owner_dir "$1"', candidate_runtime).strip())
+    recovery_runtime_owner_bytes = (recovery_runtime_owner / 'owner').read_bytes()
+    (recovery_runtime_owner / 'owner').unlink()
+    recovery_runtime_owner.rmdir()
+    recovery_record = Path(local_shell('ecoda_artifact_record_path "$1" "$2"', candidate_runtime, source_run).strip())
+    for path in (candidate_runtime, Path(str(candidate_runtime) + '.md5'), recovery_record):
+        ns['transfer_rows'][str(path.relative_to(scratch))] = (path.stat().st_size, ns['digest'](path))
+    recovered_run, recovered_states, recovered_proof = ns['inspect']([candidate], 'Breast_cancer', 'mrvi', True)
+    assert recovered_run == source_run and recovered_states == ['FAIL']
+    assert recovery_record in recovered_proof and not recovery_runtime_owner.exists()
+    rejects(lambda: ns['inspect']([candidate], 'Breast_cancer', 'mrvi'), 'legacy recovery proof weakened ordinary runtime ownership')
+    del ns['transfer_rows'][str(recovery_record.relative_to(scratch))]
+    rejects(lambda: ns['inspect']([candidate], 'Breast_cancer', 'mrvi', True), 'unbound legacy recovery runtime accepted')
+    ns['transfer_rows'][str(recovery_record.relative_to(scratch))] = (recovery_record.stat().st_size, ns['digest'](recovery_record))
+    watchdog_before = watchdog.read_bytes()
+    watchdog.write_bytes(watchdog_before.replace(b'STATE=OK', b'STATE=FAIL'))
+    rejects(lambda: ns['inspect']([candidate], 'Breast_cancer', 'mrvi', True), 'unowned recovery runtime bypassed failed producer watchdog')
+    watchdog.write_bytes(watchdog_before)
+    recovery_runtime_owner.mkdir()
+    (recovery_runtime_owner / 'owner').write_bytes(recovery_runtime_owner_bytes)
     assert candidate.read_bytes() == candidate_before
     assert (old / 'metadata').read_bytes() == original_status
     watchdog_before = watchdog.read_bytes()

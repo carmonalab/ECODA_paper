@@ -532,32 +532,39 @@ def main(argv):
         evidence.update(paths)
         return paths
 
+    def legacy_runtime_evidence(item, ds, method, recovery_candidate=False):
+        # Original producers published runtime records without runtime owners.
+        # Authenticate those immutable records; never manufacture ownership.
+        if method not in PYTHON_METHODS or not str(item).endswith('.runtime.json'):
+            raise ValueError(f'BLOCKED: missing collision owner: {item}')
+        payload = Path(str(item)[:-len('.runtime.json')])
+        owner_dir, data = owner(payload, recovery_candidate)
+        run = data['RUN_ID']
+        if run == run_id or (recovery_candidate and run != source_run):
+            raise ValueError('BLOCKED: legacy runtime has an unapproved producer')
+        record = Path(shell('ecoda_artifact_record_path "$1" "$2"', item, run).strip())
+        paths = {item, Path(str(item) + '.md5'), record}
+        for path in paths:
+            safe_path(str(path), True)
+            if transfer_rows.get(str(path.relative_to(scratch))) != (path.stat().st_size, digest(path)):
+                raise ValueError(f'BLOCKED: unbound legacy runtime collision: {path}')
+        shell('ecoda_validate_checksum "$1"; ecoda_validate_artifact_record "$1" "$2" "$3"',
+              item, producer(method), run)
+        original_evidence(run, ds, method, recovery_candidate)
+        return run, paths | {owner_dir / 'owner'}
+
     def collision_evidence(item, ds, method):
         owner_path = safe_path(shell('ecoda_artifact_owner_dir "$1"', item).strip()) / 'owner'
-        if owner_path.parent.exists():
-            owner_dir, data = owner(item)
-            owners = {owner_dir / 'owner'}
-        else:
-            # Archive-only reconciliation of legacy runtime metadata. Never use
-            # a payload's ownership to authorize runtime reuse or invent an owner.
-            if method not in PYTHON_METHODS or not str(item).endswith('.runtime.json'):
-                raise ValueError(f'BLOCKED: missing collision owner: {item}')
-            payload = Path(str(item)[:-len('.runtime.json')])
-            owner_dir, data = owner(payload)
-            owners = {owner_dir / 'owner'}
+        if not owner_path.parent.exists():
+            return legacy_runtime_evidence(item, ds, method)[1]
+        owner_dir, data = owner(item)
         if data['RUN_ID'] == run_id:
             raise ValueError('BLOCKED: promoted owner without a sealed predecessor archive')
         record = Path(shell('ecoda_artifact_record_path "$1" "$2"', item, data['RUN_ID']).strip())
-        paths = {item, Path(str(item) + '.md5'), record}
-        if not owner_path.parent.exists():
-            for path in paths:
-                safe_path(str(path), True)
-                if transfer_rows.get(str(path.relative_to(scratch))) != (path.stat().st_size, digest(path)):
-                    raise ValueError(f'BLOCKED: unbound legacy runtime collision: {path}')
         shell('ecoda_validate_checksum "$1"; ecoda_validate_artifact_record "$1" "$2" "$3"',
               item, producer(method), data['RUN_ID'])
         original_evidence(data['RUN_ID'], ds, method, False)
-        return paths | owners
+        return {item, Path(str(item) + '.md5'), record, owner_dir / 'owner'}
 
 
     def scientific(paths, ds, method, run):
@@ -598,6 +605,14 @@ def main(argv):
             companion = [path, Path(str(path) + '.runtime.json')] if method in PYTHON_METHODS else [path]
             for item in companion:
                 shell('ecoda_validate_checksum "$1"', item)
+                if recovery_candidate and item != path:
+                    owner_path = safe_path(shell('ecoda_artifact_owner_dir "$1"', item).strip()) / 'owner'
+                    relative_owner = str(owner_path.relative_to(scratch))
+                    if not owner_path.parent.exists() and relative_owner not in transfer_rows:
+                        run, proof = legacy_runtime_evidence(item, ds, method, True)
+                        all_evidence.update(proof)
+                        producer_runs.add(run)
+                        continue
                 owner_dir, data = owner(item, recovery_candidate)
                 run = data['RUN_ID']
                 if recovery_candidate and run != source_run:
