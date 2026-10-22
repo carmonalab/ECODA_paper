@@ -228,8 +228,11 @@ def main(argv):
     current_records = identity_module.load_source_identity(identity)
     old_root = safe_path(str(runs / source_run), True)
     old_metadata = fields(old_root / 'metadata')
-    if old_metadata.get('RUN_ID') != source_run or old_metadata.get('STATE') not in ('FAIL', 'OK'):
-        raise ValueError('source run is active/malformed or lacks terminal evidence')
+    old_terminal_path = old_root / 'status/terminal'
+    old_terminal = fields(old_terminal_path) if old_terminal_path.is_file() else {}
+    if (old_metadata.get('RUN_ID') != source_run
+            or old_terminal.get('RUN_ID') != source_run or old_terminal.get('STATE') not in ('FAIL', 'OK')):
+        raise ValueError('source run lacks matching terminal evidence')
     historical_identity = old_root / 'manifests/source_identity.json'
     historical = identity_module.load_source_identity(historical_identity)
     for key, value in current_records.items():
@@ -448,9 +451,12 @@ def main(argv):
             return paths
         run_root = safe_path(str(runs / run), True)
         meta = fields(run_root / 'metadata')
-        if meta.get('RUN_ID') != run or meta.get('STATE') not in ('OK', 'FAIL'):
-            raise ValueError('BLOCKED: producer run is not terminal')
-        paths = {run_root / 'metadata', run_root / 'manifests/source.manifest',
+        terminal_path = run_root / 'status/terminal'
+        terminal = fields(terminal_path) if terminal_path.is_file() else {}
+        if (meta.get('RUN_ID') != run or terminal.get('RUN_ID') != run
+                or terminal.get('STATE') not in ('OK', 'FAIL')):
+            raise ValueError('BLOCKED: producer run lacks matching terminal evidence')
+        paths = {run_root / 'metadata', terminal_path, run_root / 'manifests/source.manifest',
                  run_root / 'manifests/runtime.identity', run_root / 'manifests/source_identity.json',
                  run_root / 'manifests/source_identity.json.md5'}
         source = fields(run_root / 'manifests/source.manifest')

@@ -3,6 +3,7 @@
 # validation. No scheduler or scientific worker is allowed in maintenance.
 # --sealed-import-only narrows to the sealed-source tamper regression.
 # --foreign-promotion-only skips interruptions and checks fresh-run reuse.
+# --terminal-status-only checks authoritative producer terminal-file inventory.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON_BIN:-${ROOT}/.pixi/envs/py-cuda13/bin/python}"
@@ -25,8 +26,9 @@ repo = Path(sys.argv[1]).resolve()
 entrypoint = repo / 'src/5_run_benchmark_methods/finalize_corrected_outputs.sh'
 sealed_import_only = sys.argv[2:] == ['--sealed-import-only']
 foreign_promotion_only = sys.argv[2:] == ['--foreign-promotion-only']
-if sys.argv[2:] and not (sealed_import_only or foreign_promotion_only):
-    raise SystemExit('usage: test_corrected_output_promotion.sh [--sealed-import-only|--foreign-promotion-only]')
+terminal_status_only = sys.argv[2:] == ['--terminal-status-only']
+if sys.argv[2:] and not (sealed_import_only or foreign_promotion_only or terminal_status_only):
+    raise SystemExit('usage: test_corrected_output_promotion.sh [--sealed-import-only|--foreign-promotion-only|--terminal-status-only]')
 # Exercise the embedded finite I/O module without executing its CLI main.
 body = entrypoint.read_text().split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
 ns = {'__name__': 'promotion_fixture'}
@@ -83,7 +85,8 @@ with tempfile.TemporaryDirectory(prefix='ecoda-promotion-') as temporary:
     old = runs / source_run
     (old / 'manifests').mkdir(parents=True)
     (old / 'status/watchdogs').mkdir(parents=True)
-    (old / 'metadata').write_text(f'STAGE=stage5\nRUN_ID={source_run}\nSTATE=FAIL\n')
+    (old / 'metadata').write_text(f'STAGE=stage5\nRUN_ID={source_run}\nSTATE=ACTIVE\n')
+    (old / 'status/terminal').write_text(f'STATE=FAIL\nRUN_ID={source_run}\nREASON=fixture\nTIME=fixture\n')
     original_status = (old / 'metadata').read_bytes()
     source_record = {'dataset': 'Breast_cancer', 'view': ns['VIEW'], 'path': str(scratch / 'input.h5ad'),
                      'size': 10, 'md5': 'a' * 32, 'sample_ids': ['s1', 's2']}
@@ -254,7 +257,7 @@ inventory_fixture = repo / '.gate/corrected_return_20261021T130330Z/inventory.ts
 assert inventory_fixture.is_file(), 'the pinned finite return inventory is required'
 assert hashlib.sha256(inventory_fixture.read_bytes()).hexdigest() == '2ec2cb4becda72b07453816acf3e55d804b631bfc4661217c580723c50bc6ea1'
 
-for zero_residual in ((False,) if sealed_import_only or foreign_promotion_only else (False, True)):
+for zero_residual in ((False,) if sealed_import_only or foreign_promotion_only or terminal_status_only else (False, True)):
     with tempfile.TemporaryDirectory(prefix='ecoda-promotion-cli-') as temporary:
         base = Path(temporary).resolve()
         tree = base / 'source'
@@ -342,7 +345,8 @@ for zero_residual in ((False,) if sealed_import_only or foreign_promotion_only e
             ''.join(f'{key}={ns["digest"](tree / name, "sha256")}\n' for name, key in
             (('datasets.json', 'DATASETS_SHA256'), ('pixi.toml', 'PIXI_TOML_SHA256'), ('pixi.lock', 'PIXI_LOCK_SHA256'))))
         shutil.copyfile(source_manifest, old / 'manifests/source.manifest')
-        (old / 'metadata').write_text(f'RUN_ID={source_run}\nSTAGE=stage5\nSTATE=FAIL\n')
+        (old / 'metadata').write_text(f'RUN_ID={source_run}\nSTAGE=stage5\nSTATE=ACTIVE\n')
+        (old / 'status/terminal').write_text(f'STATE=FAIL\nRUN_ID={source_run}\nREASON=fixture\nTIME=fixture\n')
         fixture_env['ECODA_SOURCE_MANIFEST'] = str(source_manifest)
         evidence_manifest = base / 'inventory.tsv'
         shutil.copyfile(inventory_fixture, evidence_manifest)
@@ -521,6 +525,38 @@ else:
             for ds in ns['DATASETS'] for method in ns['METHODS'][:4])
         assert expected.read_text() == expected_text
         assert all(path.read_bytes() == content for path, content in collisions.items())
+        if terminal_status_only:
+            rows = list(__import__('csv').DictReader(
+                (inventory_report / 'manifests/artifact_decisions.tsv').open(), delimiter='\t'))
+            python_rows = [row for row in rows if row['method'] in ns['PYTHON_METHODS']]
+            assert len(python_rows) == 27 and all(row['action'] in ('REUSE', 'IMPORT') for row in python_rows)
+            assert ns['fields'](old / 'metadata')['STATE'] == 'ACTIVE'
+            terminal = old / 'status/terminal'
+            protected_paths = [path for directory in (canonical, old, scratch / '_ecoda_owners')
+                for path in directory.rglob('*') if path.is_file() and path != terminal]
+            protected = live_snapshot(protected_paths)
+            terminal_before = live_snapshot([terminal])
+            saved_terminal = terminal.with_name('terminal.fixture-original')
+            for case in ('missing', 'mismatched'):
+                os.replace(terminal, saved_terminal)
+                try:
+                    if case == 'mismatched':
+                        terminal.write_text('STATE=FAIL\nRUN_ID=wrong_producer\nREASON=fixture\nTIME=fixture\n')
+                    fixture_env['ECODA_RUN_ID'] = compute + '_' + case
+                    rejected_report = runs / (fixture_env['ECODA_RUN_ID'] + '_inventory')
+                    rejected_terminal = invoke(['--inventory-only', '--report-root', str(rejected_report)])
+                    assert rejected_terminal.returncode != 0 and (
+                        'source run lacks matching terminal evidence' in rejected_terminal.stderr
+                    ), rejected_terminal.stderr
+                    assert live_snapshot(protected) == protected, 'terminal rejection changed artifacts or owners'
+                    assert {path for directory in (canonical, old, scratch / '_ecoda_owners')
+                        for path in directory.rglob('*') if path.is_file()
+                        and path not in (terminal, saved_terminal)} == set(protected_paths)
+                    assert not (base / 'events').exists(), 'terminal rejection crossed an external boundary'
+                finally:
+                    os.replace(saved_terminal, terminal)
+                assert live_snapshot([terminal]) == terminal_before
+            continue
         if foreign_promotion_only:
             # Skip already-proven interruption injections, not production guards.
             for marker in ('metadata_interrupted', 'owner_finalization_interrupted', 'interrupted'):
@@ -690,7 +726,8 @@ else:
         assert (manifests / 'promotion_lineage.tsv').read_bytes() == lineage_before
         assert (manifests / 'pending_after_promotion.tsv').read_text() == expected_text
         assert all(path.read_bytes() == content for path, content in original_evidence.items())
-print('PASS corrected promotion foreign-promotion fresh inventory CLI regression' if foreign_promotion_only else
+print('PASS corrected promotion producer terminal-status CLI regression' if terminal_status_only else
+      'PASS corrected promotion foreign-promotion fresh inventory CLI regression' if foreign_promotion_only else
       'PASS corrected promotion sealed IMPORT source CLI regression' if sealed_import_only else
       'PASS corrected promotion finite I/O, real scientific/schema/sample validation and ownership fixtures')
 PY

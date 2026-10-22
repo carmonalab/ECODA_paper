@@ -4271,6 +4271,8 @@ ecoda_owner_finalize_tracked OK "benchmark matrix sync completed" ||
   stage5_abort "failed to finalize global Stage 5 artifact owners"
 stage5_finalize_owner_manifest OK "benchmark matrix sync completed" ||
   stage5_abort "failed to finalize Stage 5 owners"
+ecoda_set_run_state OK "benchmark matrix processing and synchronization completed" ||
+  stage5_abort "failed to persist final Stage 5 terminal state"
 if [[ -n "${PASS_ARG}" ]]; then
   echo "BATCH_EFFECT_RUN_ID=${RUN_ID}"
 else
