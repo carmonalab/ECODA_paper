@@ -1283,6 +1283,10 @@ ecoda_runtime_reexec_worker() {
     logs_dest="${ECODA_LOGS_DIR:-${LOGS_DIR}}"
     scgate_path="${source_aux}/scGateDB.rds"
   fi
+  # Apptainer splits --env values at commas; NAS/GVFS paths are opaque values.
+  export APPTAINERENV_ANALYSIS_NAS_ROOT="${ANALYSIS_NAS_ROOT:-}"
+  export APPTAINERENV_NAS_TARGET_DIR="${NAS_TARGET_DIR:-}"
+  export APPTAINERENV_ECODA_NAS_TARGET_DIR="${ECODA_NAS_TARGET_DIR:-}"
 
   apptainer_args=(
     exec
@@ -1297,6 +1301,7 @@ ecoda_runtime_reexec_worker() {
     case "${env_name}" in
       PROJECT_ROOT|DATASETS_JSON_FILE|HPC_SCRATCH_DIR|LOGS_DIR|HOME_REF_DIR|\
       NAS_PREFIX|NAS_SC_DIR|NAS_TARGET_DIR|NAS_REF_DIR|SCGATE_DB_PATH|\
+      ANALYSIS_NAS_ROOT|ECODA_NAS_TARGET_DIR|\
       SCGATE_DB_BRANCH|SCGATE_MODEL_CACHE_DIR|SCGATE_ONTOLOGY_BRANCH|\
       SAMPLE_COLNAME|PATH|LD_LIBRARY_PATH|TMPDIR|HOME|\
       PWD|OLDPWD|SHLVL|_|PYTHON_BIN|PIXI_RSCRIPT|R_HOME|RETICULATE_PYTHON|\
@@ -1328,7 +1333,6 @@ ecoda_runtime_reexec_worker() {
     --env "HOME_REF_DIR=${HOME_REF_DIR:-}"
     --env "NAS_PREFIX=${NAS_PREFIX:-}"
     --env "NAS_SC_DIR=${NAS_SC_DIR:-}"
-    --env "NAS_TARGET_DIR=${NAS_TARGET_DIR:-}"
     --env "NAS_REF_DIR=${NAS_REF_DIR:-}"
     --env "SCGATE_DB_PATH=${scgate_path}"
     --env "SCGATE_DB_BRANCH=${SCGATE_DB_BRANCH:-}"

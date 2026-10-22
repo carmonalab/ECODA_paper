@@ -42,49 +42,43 @@ SNAPSHOT_WORKER="${SOURCE_ROOT%/}/${WORKER_SOURCE_RELATIVE}"
   echo "ERROR: immutable Stage 5 worker is missing or unreadable: ${SNAPSHOT_WORKER}" >&2
   exit 1
 }
-source "${SOURCE_ROOT%/}/src/slurm_config.sh"
-source "${SOURCE_ROOT%/}/src/utils/bash/ecoda_runtime.sh"
-PREEXEC_ROOT_VERSION="${ANALYSIS_ROOT_VERSION:-}"
-PREEXEC_ROOT_IDENTITY="${ANALYSIS_ROOT_IDENTITY:-}"
-PREEXEC_ROOT_ALIAS="${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}"
-if [[ -n "${PREEXEC_ROOT_ALIAS}" &&
-      -n "${PREEXEC_ROOT_VERSION}" &&
-      "${PREEXEC_ROOT_ALIAS}" != "${PREEXEC_ROOT_VERSION}" ]]; then
-  echo "ERROR: Stage 5 root-version aliases disagree before runtime reexec." >&2
-  exit 1
-fi
-if [[ -n "${PREEXEC_ROOT_ALIAS}" ]]; then
-  [[ "${PREEXEC_ROOT_ALIAS}" == "recovery_35row" ]] || {
-    echo "ERROR: unsupported corrected-final root version before runtime reexec: ${PREEXEC_ROOT_ALIAS}" >&2
-    exit 1
-  }
-  PREEXEC_ROOT_VERSION="${PREEXEC_ROOT_ALIAS}"
-fi
-[[ -z "${PREEXEC_ROOT_VERSION}" ||
-   "${PREEXEC_ROOT_VERSION}" == "recovery_35row" ]] || {
-  echo "ERROR: unsupported ANALYSIS_ROOT_VERSION before runtime reexec: ${PREEXEC_ROOT_VERSION}" >&2
+[[ -z "${ANALYSIS_ROOT_VERSION:-}" &&
+   -z "${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}" ]] || {
+  echo "ERROR: Stage 5 root-version aliases cannot authorize new workers." >&2
   exit 1
 }
-if [[ "${PREEXEC_ROOT_VERSION}" == "recovery_35row" ]]; then
-  [[ -z "${PREEXEC_ROOT_IDENTITY}" ||
-     "${PREEXEC_ROOT_IDENTITY}" == "corrected_final/recovery_35row" ]] || {
-    echo "ERROR: replacement root identity disagrees before runtime reexec." >&2
+case "${ANALYSIS_ROOT_IDENTITY:-}" in
+  ""|corrected_final|uncorrected_final) ;;
+  *) echo "ERROR: invalid Stage 5 worker root identity." >&2; exit 1 ;;
+esac
+for worker_root in "${ANALYSIS_ROOT:-}" "${ANALYSIS_NAS_ROOT:-}"; do
+  case "${worker_root}" in
+    */batch_effect/corrected_final/*)
+      echo "ERROR: historical corrected-final subroots cannot authorize new workers." >&2
+      exit 1
+      ;;
+  esac
+done
+ANALYSIS_ROOT_IDENTITY="${ANALYSIS_ROOT_IDENTITY:-}"
+source "${SOURCE_ROOT%/}/src/slurm_config.sh"
+if [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
+  [[ "${ANALYSIS_PASS:-}" == corrected &&
+     "${ANALYSIS_ROOT:-}" == "${HPC_SCRATCH_DIR}/batch_effect/corrected_final" &&
+     ( -z "${ANALYSIS_NAS_ROOT:-}" ||
+       "${ANALYSIS_NAS_ROOT}" == "${NAS_TARGET_DIR}/batch_effect/corrected_final" ) &&
+     ( -z "${ANALYSIS_ROOT_IDENTITY}" ||
+       "${ANALYSIS_ROOT_IDENTITY}" == corrected_final ) ]] || {
+    echo "ERROR: corrected-final workers require the direct root before runtime reexec." >&2
     exit 1
   }
-  PREEXEC_ROOT_IDENTITY="corrected_final/recovery_35row"
 fi
-ANALYSIS_ROOT_VERSION="${PREEXEC_ROOT_VERSION}"
-ANALYSIS_ROOT_IDENTITY="${PREEXEC_ROOT_IDENTITY}"
+source "${SOURCE_ROOT%/}/src/utils/bash/ecoda_runtime.sh"
 export ANALYSIS_VARIANT="${ANALYSIS_VARIANT:-}" \
   ANALYSIS_PASS="${ANALYSIS_PASS:-}" \
   ANALYSIS_ROOT="${ANALYSIS_ROOT:-}" \
   ANALYSIS_NAS_ROOT="${ANALYSIS_NAS_ROOT:-}" \
   ANALYSIS_LOG_PREFIX="${ANALYSIS_LOG_PREFIX:-}"
-if [[ -n "${ANALYSIS_ROOT_VERSION}" ]]; then
-  export ANALYSIS_ROOT_VERSION
-else
-  unset ANALYSIS_ROOT_VERSION
-fi
+unset ANALYSIS_ROOT_VERSION ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION
 if [[ -n "${ANALYSIS_ROOT_IDENTITY}" ]]; then
   export ANALYSIS_ROOT_IDENTITY
 else
@@ -180,35 +174,14 @@ ANALYSIS_PASS="${ANALYSIS_PASS:-}"
 ANALYSIS_ROOT="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
 ANALYSIS_NAS_ROOT="${ANALYSIS_NAS_ROOT:-}"
 ANALYSIS_LOG_PREFIX="${ANALYSIS_LOG_PREFIX:-}"
-ANALYSIS_ROOT_VERSION="${ANALYSIS_ROOT_VERSION:-}"
 ANALYSIS_ROOT_IDENTITY="${ANALYSIS_ROOT_IDENTITY:-}"
-ROOT_VERSION_ALIAS="${ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION:-}"
-if [[ -n "${ROOT_VERSION_ALIAS}" ]]; then
-  [[ "${ROOT_VERSION_ALIAS}" == "recovery_35row" ]] || {
-    echo "ERROR: unsupported corrected-final root version: ${ROOT_VERSION_ALIAS}" >&2
-    exit 1
-  }
-  if [[ -n "${ANALYSIS_ROOT_VERSION}" &&
-        "${ANALYSIS_ROOT_VERSION}" != "${ROOT_VERSION_ALIAS}" ]]; then
-    echo "ERROR: Stage 5 root-version aliases disagree." >&2
-    exit 1
-  fi
-  ANALYSIS_ROOT_VERSION="${ROOT_VERSION_ALIAS}"
-fi
-[[ -z "${ANALYSIS_ROOT_VERSION}" ||
-   "${ANALYSIS_ROOT_VERSION}" == "recovery_35row" ]] || {
-  echo "ERROR: unsupported Stage 5 ANALYSIS_ROOT_VERSION: ${ANALYSIS_ROOT_VERSION}" >&2
-  exit 1
-}
 EXPECTED_VARIANT_PASS=""
 EXPECTED_ANALYSIS_ROOT=""
 EXPECTED_ANALYSIS_NAS_ROOT=""
 EXPECTED_LOG_PREFIX=""
 case "${ANALYSIS_VARIANT}" in
   "")
-    [[ -z "${ANALYSIS_ROOT_VERSION}" &&
-       -z "${ANALYSIS_ROOT_IDENTITY}" &&
-       -z "${ROOT_VERSION_ALIAS}" ]] || {
+    [[ -z "${ANALYSIS_ROOT_IDENTITY}" ]] || {
       echo "ERROR: root-version identity requires an explicit Stage 5 variant." >&2
       exit 1
     }
@@ -218,9 +191,8 @@ case "${ANALYSIS_VARIANT}" in
     EXPECTED_ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/uncorrected_final"
     EXPECTED_ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/uncorrected_final"
     EXPECTED_LOG_PREFIX="execution_times_batch_effect_uncorrected_final_"
-    [[ -z "${ANALYSIS_ROOT_VERSION}" &&
-       ( -z "${ANALYSIS_ROOT_IDENTITY}" ||
-         "${ANALYSIS_ROOT_IDENTITY}" == "uncorrected_final" ) ]] || {
+    [[ -z "${ANALYSIS_ROOT_IDENTITY}" ||
+       "${ANALYSIS_ROOT_IDENTITY}" == "uncorrected_final" ]] || {
       echo "ERROR: final Stage 5 workers cannot use a corrected-final root identity." >&2
       exit 1
     }
@@ -228,41 +200,14 @@ case "${ANALYSIS_VARIANT}" in
   corrected_final)
     EXPECTED_VARIANT_PASS="corrected"
     EXPECTED_LOG_PREFIX="execution_times_batch_effect_corrected_final_"
-    if [[ -n "${ANALYSIS_ROOT_VERSION}" ||
-          "${ANALYSIS_ROOT_IDENTITY}" == "corrected_final/recovery_35row" ]]; then
-      ANALYSIS_ROOT_VERSION="${ANALYSIS_ROOT_VERSION:-recovery_35row}"
-      [[ "${ANALYSIS_ROOT_VERSION}" == "recovery_35row" ]] || {
-        echo "ERROR: replacement corrected-final root requires recovery_35row." >&2
-        exit 1
-      }
-      [[ -z "${ANALYSIS_ROOT_IDENTITY}" ||
-         "${ANALYSIS_ROOT_IDENTITY}" == "corrected_final/recovery_35row" ]] || {
-        echo "ERROR: corrected-final root identity disagrees with its version." >&2
-        exit 1
-      }
-      ANALYSIS_ROOT_IDENTITY="corrected_final/recovery_35row"
-      EXPECTED_ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final/recovery_35row"
-      EXPECTED_ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final/recovery_35row"
-    else
-      [[ -z "${ANALYSIS_ROOT_IDENTITY}" ||
-         "${ANALYSIS_ROOT_IDENTITY}" == "corrected_final" ]] || {
-        echo "ERROR: invalid direct corrected-final root identity." >&2
-        exit 1
-      }
-      EXPECTED_ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final"
-      EXPECTED_ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
-      case "${ANALYSIS_ROOT}:${ANALYSIS_NAS_ROOT}" in
-        */batch_effect/corrected_final/recovery_35row:*)
-          echo "ERROR: replacement corrected-final root is missing its bound identity." >&2
-          exit 1
-          ;;
-        *:*/batch_effect/corrected_final/recovery_35row)
-          echo "ERROR: replacement corrected-final NAS root is missing its bound identity." >&2
-          exit 1
-          ;;
-      esac
-      ANALYSIS_ROOT_IDENTITY="corrected_final"
-    fi
+    [[ -z "${ANALYSIS_ROOT_IDENTITY}" ||
+       "${ANALYSIS_ROOT_IDENTITY}" == "corrected_final" ]] || {
+      echo "ERROR: invalid direct corrected-final root identity." >&2
+      exit 1
+    }
+    EXPECTED_ANALYSIS_ROOT="${HPC_SCRATCH_DIR}/batch_effect/corrected_final"
+    EXPECTED_ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
+    ANALYSIS_ROOT_IDENTITY="corrected_final"
     ;;
   *)
     echo "ERROR: unsupported Stage 5 Python analysis variant: ${ANALYSIS_VARIANT}" >&2
@@ -287,13 +232,7 @@ if [[ -n "${ANALYSIS_VARIANT}" ]]; then
   fi
   ANALYSIS_LOG_PREFIX="${EXPECTED_LOG_PREFIX}"
 fi
-if [[ -n "${ANALYSIS_ROOT_VERSION}" ]]; then
-  ROOT_VERSION_ALIAS="${ANALYSIS_ROOT_VERSION}"
-  export ANALYSIS_ROOT_VERSION
-  export ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION="${ROOT_VERSION_ALIAS}"
-else
-  unset ANALYSIS_ROOT_VERSION ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION
-fi
+unset ANALYSIS_ROOT_VERSION ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION
 if [[ -n "${ANALYSIS_ROOT_IDENTITY}" ]]; then
   export ANALYSIS_ROOT_IDENTITY
 else

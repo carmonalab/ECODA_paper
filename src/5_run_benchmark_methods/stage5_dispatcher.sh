@@ -58,6 +58,11 @@ MEMORY="${BENCHMARK_MEM}"
 MAX_MEMORY="${BENCHMARK_MEM_MAX}"
 THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 RUNTIME_EXPORT=""
+PRECOMPUTE_BACKUP_RECEIPT_ARG=""
+EXPECTED_PENDING_ARG=""
+export ECODA_PRECOMPUTE_BACKUP_RECEIPT=""
+export ECODA_EXPECTED_PENDING=""
+source "${SCRIPT_DIR}/stage5_pending.sh"
 unset H5AD_ALLOW_MISSING_SUMMARY
 
 GPU_POLICY="auto"
@@ -68,6 +73,7 @@ usage() {
 Usage: 1_submit_hpc_array.sh [--datasets LIST] [--methods LIST]
        [--target-methods LIST] [--method-matrix TSV]
        [--analyses trans,zeroimp] [--selection-file TSV]
+       [--precompute-backup-receipt JSON --expected-pending TSV]
        [--exact-batch-selection] [--pass uncorrected|corrected]
        [--analysis-variant final|corrected_final]
        [--gpu-policy auto|default|any] [--force]
@@ -99,6 +105,10 @@ while [[ $# -gt 0 ]]; do
     --selection-file=*) SELECTION_FILE_ARG="${1#*=}"; SELECTION_FILE_SET=1; shift ;;
     --method-matrix) METHOD_MATRIX_ARG="${2:-}"; METHOD_MATRIX_SET=1; shift 2 ;;
     --method-matrix=*) METHOD_MATRIX_ARG="${1#*=}"; METHOD_MATRIX_SET=1; shift ;;
+    --precompute-backup-receipt) PRECOMPUTE_BACKUP_RECEIPT_ARG="${2:-}"; shift 2 ;;
+    --precompute-backup-receipt=*) PRECOMPUTE_BACKUP_RECEIPT_ARG="${1#*=}"; shift ;;
+    --expected-pending) EXPECTED_PENDING_ARG="${2:-}"; shift 2 ;;
+    --expected-pending=*) EXPECTED_PENDING_ARG="${1#*=}"; shift ;;
     --target-methods) TARGET_METHODS_ARG="${2:-}"; TARGET_METHODS_SET=1; shift 2 ;;
     --target-methods=*) TARGET_METHODS_ARG="${1#*=}"; TARGET_METHODS_SET=1; shift ;;
     --exact-batch-selection) EXACT_BATCH_SELECTION=1; shift ;;
@@ -1731,13 +1741,6 @@ stage5_method_is_forced() {
   done
   return 1
 }
-# Corrected-final targeted manifests rebuild stale prepare caches and their
-# dependent method rows instead of reusing terminal final artifacts.
-stage5_corrected_final_recovery_mode() {
-  [[ "${ANALYSIS_VARIANT:-${ANALYSIS_VARIANT_ARG:-}}" == corrected_final &&
-     "${PASS_ARG:-}" == corrected &&
-     ${TARGET_METHODS_SET} -eq 1 ]]
-}
 
 
 
@@ -2177,6 +2180,12 @@ stage5_compute_h5ad_preflight() {
 RUN_ID="${ECODA_RUN_ID:-$(ecoda_new_run_id stage5)}"
 if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   ecoda_open_run "${SYNC_ONLY_RUN}" || exit 1
+  [[ -f "${ECODA_RUN_ROOT}/status/aggregate" && ! -L "${ECODA_RUN_ROOT}/status/aggregate" ]] &&
+    awk -F= '$1=="STATE" {n++; if($2!="OK") bad=1} END {exit(n==1 && !bad ? 0 : 1)}' \
+      "${ECODA_RUN_ROOT}/status/aggregate" || {
+        echo "BLOCKED: sync-only requires the original successful aggregate" >&2
+        exit 1
+      }
   RUN_ID="${SYNC_ONLY_RUN}"
   export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT
   stage5_bind_run_identity ||
@@ -2673,7 +2682,7 @@ stage5_validate_reusable_artifact() {
     stage5_producer_allowed "${path}" "${producer}" "${recorded_producer}" ||
       return 1
     ecoda_validate_artifact_record \
-      "${path}" "${recorded_producer}" "${owner_run}" || return 1
+      "${path}" "${recorded_producer}" "${owner_run}" >/dev/null || return 1
     return 0
   fi
   # A checksum/record is not enough to declare a reusable artifact: a live
@@ -2687,7 +2696,7 @@ stage5_validate_reusable_artifact() {
       stage5_producer_allowed "${path}" "${producer}" "${recorded_producer}" ||
         return 1
       ecoda_validate_artifact_record \
-        "${path}" "${recorded_producer}" "${RUN_ID}" || return 1
+        "${path}" "${recorded_producer}" "${RUN_ID}" >/dev/null || return 1
       return 0
     fi
   fi
@@ -2703,7 +2712,6 @@ stage5_prepare_pseudobulk_valid() {
   local ds="$1" view="$2" path owner_dir producer_run record recorded_producer expected_cache
   local prepare_rds_args=()
   [[ -n "${PASS_ARG}" ]] || return 1
-  stage5_corrected_final_recovery_mode && return 1
   benchmark_artifacts_for "${ds}" "${view}" prepare_pseudobulk || return 1
   [[ ${#ARTIFACT_PATHS[@]} -eq 1 ]] || return 1
   path="${ARTIFACT_PATHS[0]}"
@@ -2975,7 +2983,7 @@ stage5_matrix_validation_selection() {
 }
 
 stage5_validate_corrected_matrix_rows() {
-  local label="$1" ds view row_label identity_path safe selection tmp
+  local label="$1" ds view row_label identity_path safe selection tmp producer_run
   local -a validation_args
   [[ "${PASS_ARG:-}" == corrected ]] || return 1
   while IFS=$'\t' read -r ds view row_label; do
@@ -2999,12 +3007,19 @@ stage5_validate_corrected_matrix_rows() {
       rm -f "${selection}"
       return 1
     }
+    producer_run="${RUN_ID}"
+    if [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
+      benchmark_artifacts_for "${ds}" "${view}" "${label}" || return 1
+      ecoda_stage5_artifact_owner_validate "${ARTIFACT_PATHS[0]}" >/dev/null 2>&1 || return 1
+      producer_run="${ECODA_ARTIFACT_OWNER_RUN:-}"
+      ecoda_validate_run_id "${producer_run}" || return 1
+    fi
     validation_args=(--root "${ANALYSIS_ROOT}" --selection "${selection}" \
       --labels "${label}" --batch --batch-pass corrected \
       --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}" \
       --source-identity "${SOURCE_IDENTITY}" --source-identity-verified \
       --expected-batch-contract "${identity_path}" \
-      --producer "stage5_${label}" --producer-run-id "${RUN_ID}")
+      --producer "stage5_${label}" --producer-run-id "${producer_run}")
     [[ -n "${ANALYSIS_VARIANT:-}" ]] &&
       validation_args+=(--analysis-variant "${ANALYSIS_VARIANT}")
     if ! "${PYTHON_BIN}" "${SCRIPT_DIR}/matrix_artifact_validator.py" \
@@ -3020,7 +3035,6 @@ stage5_track_pending_artifact_owners() {
   local owner_dir reclaim_terminal=0
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
   [[ -s "${PENDING_SELECTION}" ]] || return 0
-  stage5_corrected_final_recovery_mode && reclaim_terminal=1
   ecoda_stage5_validate_output_ownership "${PENDING_SELECTION}" "${RUN_ID}" \
     "${reclaim_terminal}" ||
     return 1
@@ -3038,12 +3052,6 @@ stage5_selection_has_pending_rows() {
   while IFS=$'\t' read -r ds view method extra; do
     [[ -n "${ds}" && -n "${view}" && -n "${method}" && -z "${extra}" ]] ||
       return 1
-    if [[ ${METHOD_MATRIX_MODE} -eq 1 && "${ds}" == "Breast_cancer" ]]; then
-      return 0
-    fi
-    if stage5_corrected_final_recovery_mode; then
-      return 0
-    fi
     if stage5_method_is_forced "${method}"; then
       return 0
     fi
@@ -3097,6 +3105,7 @@ stage5_export_final_sample_metadata() {
   local exporter worker export_runtime export_msg export_id export_rc
   local ds view input output safe state status_task pending_count=0 pending_index=0
   local row extra seen="" required_view="batch_effect_${PASS_ARG:-}"
+  local validate_only="${1:-0}"
   [[ -n "${ANALYSIS_VARIANT:-}" ]] || return 0
   ecoda_stage5_validate_identity "${PASS_ARG:-${ANALYSIS_PASS:-}}" || return 1
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
@@ -3136,6 +3145,11 @@ stage5_export_final_sample_metadata() {
     if ! "${PYTHON_BIN}" "${exporter}" \
         --config "${DATASETS_JSON_FILE}" --dataset "${ds}" --view "${view}" \
         --input-file "${input}" --output "${output}" --check >/dev/null 2>&1; then
+      if [[ "${validate_only}" == 1 ]]; then
+        echo "BLOCKED: zero-residual publication requires current valid sample metadata for ${ds}/${view}" >&2
+        rm -f "${manifest_tmp}" "${pending_tmp}"
+        return 1
+      fi
       printf '%s\t%s\t%s\t%s\n' "${ds}" "${view}" "${input}" "${output}" >> "${pending_tmp}" ||
         return 1
       pending_count=$((pending_count + 1))
@@ -3227,7 +3241,165 @@ stage5_export_final_sample_metadata() {
   return 0
 }
 
-stage5_export_final_sample_metadata ||
+stage5_verify_precompute_binding() {
+  local receipt="${PRECOMPUTE_BACKUP_RECEIPT_ARG}" expected="${EXPECTED_PENDING_ARG}"
+  local utility source_root nas child key value recorded
+  [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]] || return 0
+  if [[ -n "${SYNC_ONLY_RUN}" ]]; then
+    recorded="$(awk -F= '$1=="PRECOMPUTE_BACKUP_RECEIPT" {print substr($0,index($0,"=")+1)}' "${ECODA_RUN_ROOT}/metadata")"
+    [[ -n "${recorded}" || "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] || return 1
+    [[ -z "${receipt}" || "${receipt}" == "${recorded}" ]] || return 1
+    receipt="${recorded}"
+    expected="$(awk -F= '$1=="EXPECTED_PENDING" {print substr($0,index($0,"=")+1)}' "${ECODA_RUN_ROOT}/metadata")"
+  fi
+  [[ ${FORCE_ARG} -eq 0 && ${FORCE_TARGETED_ARG} -eq 0 ]] || {
+    echo "BLOCKED: corrected-final does not permit force" >&2
+    return 1
+  }
+  if [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 && -z "${receipt}" ]]; then
+    export ECODA_EXPECTED_PENDING="${expected}"
+    return 0
+  fi
+  [[ ${FORCE_ARG} -eq 0 && ${FORCE_TARGETED_ARG} -eq 0 &&
+     ${METHOD_MATRIX_MODE} -eq 1 && -n "${receipt}" && -n "${expected}" ]] || {
+    echo "BLOCKED: corrected-final requires bound backup receipt and exact pending selection; force is prohibited" >&2
+    return 1
+  }
+  ecoda_validate_run_owned_path "${expected}" "${ECODA_RUN_ROOT}" || return 1
+  stage5_validate_pending_checksum "${expected}" || return 1
+  utility="$(stage5_source_script src/utils/bash/ecoda_nas_backup.sh)"
+  bash "${utility}" verify --receipt "${receipt}" || return 1
+  nas="$(jq -er '.nas_root' "${receipt}")" || return 1
+  [[ "${nas}" == "${NAS_TARGET_DIR}" && "${nas}" == "${ECODA_NAS_TARGET_DIR:-${NAS_TARGET_DIR}}" &&
+     "${ANALYSIS_NAS_ROOT}" == "${nas}/batch_effect/corrected_final" ]] || return 1
+  source_root="$(jq -er '.source_root' "${receipt}")" || return 1
+  stage5_bind_precompute_evidence "${receipt}" "${expected}" || return 1
+  [[ "$(jq -er '.source_manifest_sha256' "${receipt}")" == \
+     "$(ecoda_sha256_file "${ECODA_RUN_ROOT}/manifests/source.manifest")" ]] || return 1
+  for child in inputs canonical archive; do
+    bash "${utility}" verify --receipt "${source_root}/manifests/${child}.receipt.json" || return 1
+    [[ "$(jq -er '.nas_root' "${source_root}/manifests/${child}.receipt.json")" == "${nas}" &&
+       "$(jq -er '.run_id' "${source_root}/manifests/${child}.receipt.json")" == "$(jq -er '.run_id' "${receipt}")" &&
+       "$(jq -er '.source_manifest_sha256' "${source_root}/manifests/${child}.receipt.json")" == \
+       "$(jq -er '.source_manifest_sha256' "${receipt}")" ]] || return 1
+  done
+  export ECODA_PRECOMPUTE_BACKUP_RECEIPT="${receipt}" ECODA_EXPECTED_PENDING="${expected}"
+  if [[ -n "${ECODA_PRECOMPUTE_BACKUP_RECEIPT_SHA256:-}" ]]; then
+    [[ "$(ecoda_sha256_file "${receipt}")" == "${ECODA_PRECOMPUTE_BACKUP_RECEIPT_SHA256}" ]] || return 1
+  fi
+  ECODA_PRECOMPUTE_BACKUP_RECEIPT_SHA256="$(ecoda_sha256_file "${receipt}")" || return 1
+  if [[ -s "${expected}" ]]; then
+    ECODA_EXPECTED_PENDING_SHA256="$(ecoda_sha256_file "${expected}")" || return 1
+  else
+    ECODA_EXPECTED_PENDING_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+  fi
+  export ECODA_PRECOMPUTE_BACKUP_RECEIPT_SHA256 ECODA_EXPECTED_PENDING_SHA256
+  if [[ -n "${SYNC_ONLY_RUN}" ]]; then
+    for key in PRECOMPUTE_BACKUP_RECEIPT_SHA256 EXPECTED_PENDING_SHA256; do
+      recorded="$(awk -F= -v k="${key}" '$1==k {print substr($0,index($0,"=")+1)}' "${ECODA_RUN_ROOT}/metadata")"
+      value="ECODA_${key}"
+      [[ "${!value}" == "${recorded}" ]] || return 1
+    done
+  fi
+}
+
+
+stage5_pending_owner_valid() {
+  local ds="$1" view="$2" method="$3" owner state promotion mapping archive target digest size root relative
+  owner="$(ecoda_owner_dir stage5 "${PASS_ARG}/${ds}/${view}/${method}")" || return 1
+  [[ -e "${owner}" || -L "${owner}" ]] || return 0
+  [[ -d "${owner}" && ! -L "${owner}" && -f "${owner}/owner" && ! -L "${owner}/owner" ]] || return 1
+  state="$(ecoda_owner_state "${owner}")" || return 1
+  [[ "${state}" == OK || "${state}" == FAIL ]] || return 1
+  awk -F= -v k="${PASS_ARG}/${ds}/${view}/${method}" '
+    $1=="STATE" {ns++; if($2!="OK" && $2!="FAIL") bad=1}
+    $1=="RUN_ID" {nr++; if($2=="") bad=1}
+    $1=="STAGE" {nt++; if($2!="stage5") bad=1}
+    $1=="KEY" {nk++; if($2!=k) bad=1}
+    END {exit(ns==1 && nr==1 && nt==1 && nk==1 && !bad ? 0 : 1)}
+  ' "${owner}/owner" || return 1
+  [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 && -z "${ECODA_PRECOMPUTE_BACKUP_RECEIPT}" ]] && return 0
+  promotion="$(jq -er '.source_root' "${ECODA_PRECOMPUTE_BACKUP_RECEIPT}")" || return 1
+  mapping="${promotion}/manifests/archive_mapping.tsv"
+  stage5_inventory_binds_file "${ECODA_PRECOMPUTE_BACKUP_RECEIPT}" "${mapping}" || return 1
+  target="$(awk -F '\t' -v p="${owner}/owner" 'NR>1 && $1==p {n++; t=$2} END {if(n==1) print t; else exit 1}' "${mapping}")" || return 1
+  archive="${promotion}/manifests/archive.receipt.json"
+  root="$(jq -er '.destination_root' "${archive}")" || return 1
+  case "${target}" in "${root}/"*) relative="${target#"${root}/"}" ;; *) return 1 ;; esac
+  cmp -s "${owner}/owner" "${target}" || return 1
+  digest="$(ecoda_md5_file "${target}")" || return 1
+  size="$(wc -c < "${target}" | tr -d '[:space:]')" || return 1
+  awk -F '\t' -v p="${relative}" -v d="${digest}" -v s="${size}" \
+    '$1==p {n++; if($2!=d || $3!=s) bad=1} END {exit(n==1 && !bad ? 0 : 1)}' \
+    "$(jq -er '.inventory_path' "${archive}")" || return 1
+  awk -F '\t' -v p="${owner}/owner" -v t="${target}" -v d="${digest}" -v s="${size}" \
+    'NR>1 && $1==p {n++; if($2!=t || $3!=d || $4!=s) bad=1} END {exit(n==1 && !bad ? 0 : 1)}' "${mapping}"
+}
+
+stage5_pending_target_valid() {
+  [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
+  ecoda_require_input_ownership "$1" "${RUN_ID}"
+}
+
+stage5_import_execution_shards() {
+  local promotion manifest canonical original copy digest size extra target
+  [[ -n "${ECODA_PRECOMPUTE_BACKUP_RECEIPT}" && -z "${SYNC_ONLY_RUN}" ]] || return 0
+  promotion="$(jq -er '.source_root' "${ECODA_PRECOMPUTE_BACKUP_RECEIPT}")" || return 1
+  manifest="${promotion}/manifests/reused_execution_times.tsv"
+  [[ -e "${manifest}" ]] || return 0
+  canonical="${promotion}/manifests/canonical.receipt.json"
+  stage5_inventory_binds_file "${canonical}" "${manifest}" || return 1
+  while IFS=$'\t' read -r original copy digest size extra; do
+    [[ -n "${original}" && -n "${copy}" && "${digest}" =~ ^[[:xdigit:]]{32}$ &&
+       "${size}" =~ ^[0-9]+$ && -z "${extra}" ]] || return 1
+    case "${copy}" in "${promotion}/"*) ;; *) return 1 ;; esac
+    case "${copy##*/}" in execution_times_batch_effect_corrected_final_*.feather) ;; *) return 1 ;; esac
+    stage5_inventory_binds_file "${canonical}" "${copy}" || return 1
+    [[ "$(ecoda_md5_file "${copy}")" == "${digest}" &&
+       "$(wc -c < "${copy}" | tr -d '[:space:]')" == "${size}" ]] || return 1
+    target="${ECODA_RUN_ROOT}/logs/${copy##*/}"
+    if [[ -e "${target}" || -L "${target}" ]]; then
+      ecoda_validate_artifact_record "${target}" stage5_execution_log "${RUN_ID}" || return 1
+      cmp -s "${copy}" "${target}" || return 1
+    else
+      ecoda_atomic_copy "${copy}" "${target}" || return 1
+      ecoda_write_checksum "${target}" || return 1
+      ecoda_write_artifact_record "${target}" stage5_execution_log "${RUN_ID}" || return 1
+    fi
+  done < "${manifest}"
+}
+
+if [[ -z "${SYNC_ONLY_RUN}" && -n "${EXPECTED_PENDING_ARG}" ]]; then
+  [[ "${EXPECTED_PENDING_ARG}" == /* &&
+     "$(ecoda_realpath_existing "${EXPECTED_PENDING_ARG}")" == "${EXPECTED_PENDING_ARG}" ]] || exit 1
+  stage5_validate_pending_checksum "${EXPECTED_PENDING_ARG}" || exit 1
+  if [[ "${ANALYSIS_VARIANT:-}" == corrected_final && -n "${PRECOMPUTE_BACKUP_RECEIPT_ARG}" ]]; then
+    stage5_bind_precompute_evidence "${PRECOMPUTE_BACKUP_RECEIPT_ARG}" "${EXPECTED_PENDING_ARG}" || exit 1
+  fi
+  expected_bound="${ECODA_RUN_ROOT}/manifests/expected_pending.tsv"
+  if [[ "${EXPECTED_PENDING_ARG}" != "${expected_bound}" ]]; then
+    ecoda_atomic_copy "${EXPECTED_PENDING_ARG}" "${expected_bound}" || exit 1
+    cmp -s "${EXPECTED_PENDING_ARG}" "${expected_bound}" || exit 1
+    stage5_write_pending_checksum "${expected_bound}" || exit 1
+    EXPECTED_PENDING_ARG="${expected_bound}"
+  fi
+fi
+stage5_verify_precompute_binding || exit 1
+CLASSIFIED_PENDING="${ECODA_RUN_ROOT}/manifests/classified_pending.tsv"
+if [[ -z "${SYNC_ONLY_RUN}" && "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
+  stage5_prepare_source_identity || exit 1
+  stage5_classify_pending_rows "${DISPATCH_MANIFEST}" "${CLASSIFIED_PENDING}" || exit 1
+  stage5_write_pending_checksum "${CLASSIFIED_PENDING}" || exit 1
+  if [[ -n "${ECODA_EXPECTED_PENDING}" ]]; then
+    stage5_validate_pending_binding "${ECODA_EXPECTED_PENDING}" "${CLASSIFIED_PENDING}" || exit 1
+  fi
+fi
+stage5_import_execution_shards || exit 1
+metadata_validate_only=0
+if [[ "${ANALYSIS_VARIANT:-}" == corrected_final && -z "${SYNC_ONLY_RUN}" && ! -s "${CLASSIFIED_PENDING}" ]]; then
+  metadata_validate_only=1
+fi
+stage5_export_final_sample_metadata "${metadata_validate_only}" ||
   stage5_abort "final sample metadata export failed"
 
 
@@ -3235,7 +3407,7 @@ PENDING_SELECTION="${ECODA_RUN_ROOT}/manifests/pending_selection.tsv"
 DISPATCH_ROWS="$(awk 'END { print NR }' "${DISPATCH_MANIFEST}")" ||
   stage5_abort "failed to count Stage 5 dispatch manifest rows"
 dispatch_metadata="DISPATCH_SELECTION=${DISPATCH_MANIFEST}\nDISPATCH_SELECTION_MD5=${DISPATCH_MANIFEST_MD5}\nDISPATCH_SELECTION_SIZE=${DISPATCH_MANIFEST_SIZE}\nDISPATCH_SELECTION_ROWS=${DISPATCH_ROWS}\n"
-if [[ -z "${SYNC_ONLY_RUN}" ]] &&
+if [[ -z "${SYNC_ONLY_RUN}" && "${ANALYSIS_VARIANT:-}" != corrected_final ]] &&
    ! stage5_selection_has_pending_rows; then
   ecoda_atomic_write "${PENDING_SELECTION}" "" ||
     stage5_abort "failed to create empty Stage 5 pending manifest"
@@ -3284,6 +3456,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]] &&
 fi
 
 
+if [[ "${ANALYSIS_VARIANT:-}" != corrected_final || -n "${SYNC_ONLY_RUN}" || -s "${CLASSIFIED_PENDING}" ]]; then
 if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   stage5_repair_missing_h5ad_sidecars ||
     stage5_abort "Stage 5 source H5AD sidecar validation failed"
@@ -3294,6 +3467,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ||
       -s "${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv" ]]; then
   stage5_validate_source_artifact_records ||
     stage5_abort "Stage 5 H5AD preflight artifact record validation failed"
+fi
 fi
 stage5_prepare_source_identity ||
   stage5_abort "failed to build or verify Stage 5 source identity"
@@ -3327,7 +3501,8 @@ stage5_run_r_environment_preflight() {
   echo "BENCHMARK_R_ENV_PREFLIGHT_JOB_ID=${preflight_id}"
 }
 
-if [[ -z "${SYNC_ONLY_RUN}" && ${R_ENV_PREFLIGHT_REQUIRED} -eq 1 ]]; then
+if [[ -z "${SYNC_ONLY_RUN}" && ${R_ENV_PREFLIGHT_REQUIRED} -eq 1 &&
+      ( "${ANALYSIS_VARIANT:-}" != corrected_final || -s "${CLASSIFIED_PENDING}" ) ]]; then
   stage5_run_r_environment_preflight ||
     stage5_abort "Stage 5 compute-node R environment preflight failed"
 fi
@@ -3380,31 +3555,39 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   : > "${PENDING_SELECTION_TMP}"
   OWNER_SEEN=""
   ecoda_owner_clear_tracked
+  if [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
+    stage5_verify_precompute_binding || exit 1
+    stage5_classify_pending_rows "${DISPATCH_MANIFEST}" "${CLASSIFIED_PENDING}.recheck" || exit 1
+    cmp -s "${CLASSIFIED_PENDING}" "${CLASSIFIED_PENDING}.recheck" || exit 1
+    if [[ -n "${ECODA_EXPECTED_PENDING}" ]]; then
+      stage5_validate_pending_binding "${ECODA_EXPECTED_PENDING}" "${CLASSIFIED_PENDING}.recheck" || exit 1
+    fi
+    rm -f "${CLASSIFIED_PENDING}.recheck"
+  fi
   stage5_add_pending_row() {
     local ds="$1" view="$2" method="$3"
     local owner_key owner_dir owner_rc method_force=0
-    local matrix_breast_pending=0 path
+    local path
     [[ "${method}" == _ecoda_none_ ]] && return 0
+    if [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
+      awk -F '\t' -v d="${ds}" -v v="${view}" -v m="${method}" \
+        '$1==d && $2==v && $3==m {found=1} END {exit(found ? 0 : 1)}' \
+        "${CLASSIFIED_PENDING}" || return 0
+    fi
     stage5_method_is_forced "${method}" && method_force=1
-    [[ ${METHOD_MATRIX_MODE} -eq 1 && "${ds}" == "Breast_cancer" ]] &&
-      matrix_breast_pending=1
     owner_key="${PASS_ARG:-ordinary}/${ds}/${view}/${method}"
     case " ${OWNER_SEEN} " in
       *" ${owner_key} "*) return 0 ;;
     esac
     OWNER_SEEN="${OWNER_SEEN} ${owner_key}"
-    if [[ "${method}" == "prepare_pseudobulk" &&
-          ${method_force} -eq 0 && ${matrix_breast_pending} -eq 0 ]] &&
+    if [[ "${ANALYSIS_VARIANT:-}" != corrected_final &&
+          "${method}" == "prepare_pseudobulk" && ${method_force} -eq 0 ]] &&
        [[ ${FORCE_TARGETED_ARG} -eq 1 || ${TARGET_METHODS_SET} -eq 1 ]]; then
-      if stage5_corrected_final_recovery_mode; then
-        :
-      elif stage5_prepare_pseudobulk_valid "${ds}" "${view}"; then
+      if stage5_prepare_pseudobulk_valid "${ds}" "${view}"; then
         echo "Skipping validated Stage 5 pseudobulk cache ${ds}/${view}/${method}."
         return 0
       fi
-    elif [[ ${method_force} -eq 0 &&
-            ${matrix_breast_pending} -eq 0 ]] &&
-         ! stage5_corrected_final_recovery_mode &&
+    elif [[ "${ANALYSIS_VARIANT:-}" != corrected_final && ${method_force} -eq 0 ]] &&
          benchmark_selected_artifacts_valid "${ds}" "${view}" "${method}"; then
       echo "Skipping validated Stage 5 artifact ${ds}/${view}/${method}."
       return 0
@@ -3453,6 +3636,8 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   else
     ecoda_atomic_write "${PENDING_SELECTION}" "" ||
       stage5_abort "failed to create empty Stage 5 pending manifest"
+    stage5_write_pending_checksum "${PENDING_SELECTION}" ||
+      stage5_abort "failed to checksum empty Stage 5 pending manifest"
     ecoda_atomic_write "${OWNERS_FILE}" "" ||
       stage5_abort "failed to create empty Stage 5 owner manifest"
   fi
@@ -3502,6 +3687,9 @@ else
   dispatch_metadata="DISPATCH_SELECTION=${DISPATCH_MANIFEST}\nDISPATCH_SELECTION_MD5=${DISPATCH_MANIFEST_MD5}\nDISPATCH_SELECTION_SIZE=${DISPATCH_MANIFEST_SIZE}\nDISPATCH_SELECTION_ROWS=${dispatch_rows}\n"
   root_metadata="ROOT=${ANALYSIS_ROOT}\n"
   RUN_METADATA="STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\nH5AD_PREFLIGHT=${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv\nPENDING_SELECTION=${PENDING_SELECTION}\nPENDING_SELECTION_MD5=${PENDING_SELECTION_MD5}\nPENDING_SELECTION_SIZE=${PENDING_SELECTION_SIZE}\n${dispatch_metadata}${analysis_variant_metadata}${target_methods_metadata}${root_metadata}${identity_metadata}\n${batch_contract_metadata_suffix}"
+  if [[ -n "${ECODA_PRECOMPUTE_BACKUP_RECEIPT}" ]]; then
+    RUN_METADATA="${RUN_METADATA}\nPRECOMPUTE_BACKUP_RECEIPT=${ECODA_PRECOMPUTE_BACKUP_RECEIPT}\nPRECOMPUTE_BACKUP_RECEIPT_SHA256=${ECODA_PRECOMPUTE_BACKUP_RECEIPT_SHA256}\nEXPECTED_PENDING=${ECODA_EXPECTED_PENDING}\nEXPECTED_PENDING_SHA256=${ECODA_EXPECTED_PENDING_SHA256}\n"
+  fi
   ecoda_atomic_write "${ECODA_RUN_ROOT}/metadata" "${RUN_METADATA}" ||
     stage5_abort "failed to write Stage 5 run metadata"
 fi

@@ -26,8 +26,8 @@ selection_path <- normalizePath(args[["selection"]], mustWork = TRUE)
 analysis_root <- normalizePath(args[["analysis-root"]], mustWork = FALSE)
 input_root <- normalizePath(args[["input-root"]], mustWork = FALSE)
 output_path <- normalizePath(args[["output"]], mustWork = FALSE)
-if (!grepl("/batch_effect/corrected_final(/recovery_35row)?$", analysis_root, perl = TRUE)) {
-  stop("corrected-final consumer barrier requires batch_effect/corrected_final or its recovery_35row replacement root")
+if (!grepl("/batch_effect/corrected_final$", analysis_root, perl = TRUE)) {
+  stop("corrected-final consumer barrier requires the direct batch_effect/corrected_final root")
 }
 if (!grepl("^/", analysis_root, perl = TRUE) ||
     !grepl("^/", input_root, perl = TRUE) ||
@@ -113,9 +113,6 @@ if (method_matrix_mode) {
     !identical(sidecar_path_normalized, method_matrix_path)
   ) {
     stop("run-owned method matrix checksum sidecar does not match the matrix")
-  }
-  if (!grepl("/batch_effect/corrected_final/recovery_35row$", analysis_root, perl = TRUE)) {
-    stop("method-matrix corrected-final validation requires the recovery_35row root")
   }
   matrix_lines <- readLines(method_matrix_path, warn = FALSE)
   if (!length(matrix_lines) || any(!nzchar(matrix_lines))) {

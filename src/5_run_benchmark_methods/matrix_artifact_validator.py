@@ -47,6 +47,9 @@ BATCH_DATASET_ORDER = (
 )
 PYTHON_METHODS = {"mrvi", "scpoli", "pilot", "qot", "pilotgm"}
 R_METHODS = {"gloscope", "mofa", "pseudobulk", "composition", "scitd"}
+PB_VARIANTS = (
+    "schvg2000", "hvg2000", "hvg500", "hvg2000_bl", "hvg1000", "hvg3000",
+)
 _CORRECTED_METHOD_IDENTITIES = {
     "prepare_pseudobulk": (
         "Pseudobulk",
@@ -429,14 +432,10 @@ def _variant_root_identity(root: Path) -> str | None:
 def _validate_variant_root_binding(
     root: Path, analysis_variant: str
 ) -> None:
-    """Bind a variant to one physical scratch/NAS root identity.
+    """Bind read-only artifact inspection to one scratch/NAS root identity.
 
-    The historical direct ``corrected_final`` root remains valid when no
-    replacement-root metadata is present.  The disjoint recovery root is
-    intentionally fail-closed: a path below it is accepted only when the
-    scheduler-bound root version/identity says exactly
-    ``corrected_final/recovery_35row``.  This keeps direct historical
-    artifacts immutable while preventing a matrix run from mixing roots.
+    Historical recovery inspection requires its explicit original root binding.
+    New-run consumer barriers and workers separately require the direct root.
     """
 
     if analysis_variant not in {"final", "corrected_final"}:
@@ -1179,6 +1178,19 @@ def read_selection(selection: Path) -> list[tuple[str, str, str]]:
     return rows
 
 
+def _configured_batch_effect_datasets(
+    config_path: Path, view: str
+) -> tuple[str, ...]:
+    return tuple(
+        dataset
+        for dataset, entry in read_datasets_json(config_path, view=view).items()
+        if not dataset.endswith("_debug")
+        and entry.get("use_for_batch_effect") is True
+        and entry.get("view_name") == view
+        and entry.get("output_file")
+    )
+
+
 def expected_sample_ids(
     input_root: Path | None,
     config_path: Path | None,
@@ -1286,14 +1298,6 @@ def validate(
             raise ValueError(
                 "corrected batch artifact validation requires an existing --config"
             )
-    if (
-        variant_datasets is not None
-        and len(rows) > 1
-        and tuple(row[0] for row in rows) != variant_datasets
-    ):
-        raise ValueError(
-            f"{analysis_variant} selection must use its exact configured dataset order"
-        )
     if batch and exact:
         expected_rows = [
             (ds, "batch_effect_uncorrected", "batch_effect_uncorrected")

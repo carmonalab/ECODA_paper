@@ -95,16 +95,20 @@ with_temporary({
     root, "src", "5_run_benchmark_methods",
     "validate_corrected_final_consumer_contracts.R"
   )
-  invoke <- function(output_path) {
+  invoke <- function(output_path, selected_root = analysis_root,
+                     method_matrix_path = NULL) {
     result <- system2(
       "pixi",
       c(
         "run", "-e", "default", "Rscript", "--vanilla", validator,
         "--config", config_path,
         "--selection", selection_path,
-        "--analysis-root", analysis_root,
+        "--analysis-root", selected_root,
         "--input-root", input_root,
-        "--output", output_path
+        "--output", output_path,
+        if (!is.null(method_matrix_path)) {
+          c("--method-matrix", method_matrix_path)
+        }
       ),
       stdout = TRUE,
       stderr = TRUE,
@@ -166,6 +170,75 @@ with_temporary({
     ),
     file.exists(paste0(report_path, ".md5"))
   )
+  matrix_path <- file.path(directory, "method-matrix.tsv")
+  writeLines(
+    c(
+      "Synthetic\tbatch_effect_corrected\tpseudobulk",
+      "Synthetic\tbatch_effect_corrected\tcomposition"
+    ),
+    matrix_path,
+    useBytes = TRUE
+  )
+  writeLines(
+    c(
+      paste0("MD5=", tolower(unname(tools::md5sum(matrix_path)))),
+      paste0("SIZE=", file.info(matrix_path)$size),
+      paste0("PATH=", matrix_path)
+    ),
+    paste0(matrix_path, ".md5"),
+    useBytes = TRUE
+  )
+  matrix_report_path <- file.path(directory, "consumer-contract-matrix.json")
+  matrix_positive <- invoke(matrix_report_path, method_matrix_path = matrix_path)
+  if (matrix_positive$status != 0L) {
+    stop("direct-root matrix barrier failed: ",
+         paste(matrix_positive$output, collapse = "\n"))
+  }
+  matrix_report <- jsonlite::fromJSON(
+    matrix_report_path, simplifyVector = FALSE
+  )
+  stopifnot(
+    identical(matrix_report$analysis_root, analysis_root),
+    identical(matrix_report$rows[[1L]]$status, "OK"),
+    identical(
+      unname(unlist(matrix_report$rows[[1L]]$declared_methods)),
+      c("pseudobulk", "composition")
+    ),
+    identical(matrix_report$method_matrix$declared_method_rows, 2L),
+    file.exists(paste0(matrix_report_path, ".md5"))
+  )
+  historical_root <- file.path(analysis_root, "recovery_35row")
+  historical_metadata_dir <- file.path(historical_root, "metadata")
+  dir.create(historical_metadata_dir, recursive = TRUE)
+  historical_metadata_path <- file.path(
+    historical_metadata_dir, basename(metadata_path)
+  )
+  stopifnot(file.copy(metadata_path, historical_metadata_path))
+  writeLines(
+    c(
+      paste0("MD5=", tolower(unname(tools::md5sum(historical_metadata_path)))),
+      paste0("SIZE=", file.info(historical_metadata_path)$size),
+      paste0("PATH=", historical_metadata_path)
+    ),
+    paste0(historical_metadata_path, ".md5"),
+    useBytes = TRUE
+  )
+  for (matrix_scope in list(NULL, matrix_path)) {
+    historical_report_path <- file.path(
+      directory,
+      if (is.null(matrix_scope)) "historical.json" else "historical-matrix.json"
+    )
+    historical <- invoke(
+      historical_report_path,
+      selected_root = historical_root,
+      method_matrix_path = matrix_scope
+    )
+    stopifnot(
+      historical$status != 0L,
+      any(grepl("requires the direct", historical$output, fixed = TRUE)),
+      !file.exists(historical_report_path)
+    )
+  }
 
   constant_metadata <- data.frame(
     Sample = paste0("s", 1:4),

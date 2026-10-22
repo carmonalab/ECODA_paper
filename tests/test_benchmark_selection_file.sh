@@ -102,6 +102,82 @@ N="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
 printf '79000%s\n' "${N}"
 STUB
 chmod +x "${TMP_DIR}/bin/sbatch"
+
+# Fast public-CLI reproduction of the corrected matrix's empty-pending path.
+# Keep the normal 35/63-row selection fixtures and their capture counts intact.
+if [[ "${1:-}" == --zero-residual-only ]]; then
+  export NAS_TARGET_DIR="${TMP_DIR}/nas/project"
+  mkdir -p "${NAS_TARGET_DIR}"
+  ZERO_PRODUCER_ID=zero-residual-producer
+  ZERO_PRODUCER_ROOT="${HPC_ROOT}/_ecoda_runs/${ZERO_PRODUCER_ID}"
+  mkdir -p "${ZERO_PRODUCER_ROOT}/manifests"
+  printf 'Joanito\tbatch_effect_corrected\tbatch_effect_corrected\n' > "${TMP_DIR}/zero-selection.tsv"
+  printf 'Joanito\tbatch_effect_corrected\tprepare_pseudobulk\nJoanito\tbatch_effect_corrected\tcomposition\n' > "${TMP_DIR}/zero-matrix.tsv"
+  : > "${TMP_DIR}/zero-artifacts.tsv"
+  (
+    export HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}"
+    export ECODA_RUN_ROOT="${ZERO_PRODUCER_ROOT}" ECODA_RUN_ID="${ZERO_PRODUCER_ID}"
+    export ANALYSIS_VARIANT=corrected_final PASS_ARG=corrected ANALYSIS_PASS=corrected
+    export ANALYSIS_ROOT="${HPC_ROOT}/batch_effect/corrected_final"
+    export ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
+    source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+    source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
+    while IFS=$'\t' read -r ds view method; do
+      _ecoda_stage5_artifacts_for "${ds}" "${view}" "${method}"
+      for artifact in "${ECODA_BENCHMARK_ARTIFACTS[@]}"; do
+        mkdir -p "$(dirname "${artifact}")"
+        printf 'valid zero-residual %s fixture\n' "${method}" > "${artifact}"
+        ecoda_write_checksum "${artifact}" >/dev/null
+        producer="stage5_${method}"
+        [[ "${method}" != prepare_pseudobulk ]] || producer=stage5_prepare_pseudobulk_hvg2000
+        ecoda_write_artifact_record "${artifact}" "${producer}" "${ZERO_PRODUCER_ID}" >/dev/null
+        ecoda_artifact_owner_acquire "${artifact}" stage5 \
+          "${ZERO_PRODUCER_ID}" 0 0 0 >/dev/null
+        ecoda_artifact_owner_set_state "${artifact}" OK "zero-residual fixture"
+        for unchanged in "${artifact}" "${artifact}.md5"; do
+          printf '%s\t%s\n' "$(sha256_file "${unchanged}")" "${unchanged}" \
+            >> "${TMP_DIR}/zero-artifacts.tsv"
+        done
+      done
+    done < "${TMP_DIR}/zero-matrix.tsv"
+  )
+  : > "${CAPTURE}"
+  ZERO_OUTPUT="$(
+    HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+      BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
+      bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+      --selection-file "${TMP_DIR}/zero-selection.tsv" \
+      --method-matrix "${TMP_DIR}/zero-matrix.tsv" \
+      --pass corrected --analysis-variant corrected_final \
+      --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot
+  )"
+  test ! -s "${CAPTURE}"
+  ZERO_PUBLIC_RUN_ID="$(printf '%s\n' "${ZERO_OUTPUT}" | sed -n 's/^BATCH_EFFECT_RUN_ID=//p')"
+  ZERO_RUN_ID="${ZERO_PUBLIC_RUN_ID}"
+  if [[ -z "${ZERO_RUN_ID}" ]]; then
+    # Diagnostic only: inspect terminal/scope before rejecting a polluted marker.
+    ZERO_RUN_ID="$(printf '%s\n' "${ZERO_OUTPUT}" | sed -n 's/.*BATCH_EFFECT_RUN_ID=//p')"
+  fi
+  test -n "${ZERO_RUN_ID}"
+  ZERO_RUN_ROOT="${HPC_ROOT}/_ecoda_runs/${ZERO_RUN_ID}"
+  test ! -s "${ZERO_RUN_ROOT}/manifests/pending_selection.tsv"
+  grep -q '^STATE=OK$' "${ZERO_RUN_ROOT}/status/aggregate"
+  grep -q '^STATE=OK$' "${ZERO_RUN_ROOT}/status/terminal"
+  grep -q "^RUN_ID=${ZERO_RUN_ID}$" "${ZERO_RUN_ROOT}/metadata"
+  grep -q '^DECLARED_METHOD_ROWS=2$' "${ZERO_RUN_ROOT}/metadata"
+  grep -q '^PENDING_METHOD_ROWS=0$' "${ZERO_RUN_ROOT}/metadata"
+  cmp -s "${TMP_DIR}/zero-matrix.tsv" "${ZERO_RUN_ROOT}/manifests/method_matrix.tsv"
+  while IFS=$'\t' read -r digest artifact; do
+    test "$(sha256_file "${artifact}")" = "${digest}"
+  done < "${TMP_DIR}/zero-artifacts.tsv"
+  if [[ "$(printf '%s\n' "${ZERO_OUTPUT}" | grep -c '^BATCH_EFFECT_RUN_ID=' || true)" != 1 ||
+        "${ZERO_PUBLIC_RUN_ID}" != "${ZERO_RUN_ID}" ]]; then
+    printf 'Zero-residual lifecycle/scope validated, but public stdout is polluted:\n%s\n' "${ZERO_OUTPUT}" >&2
+    exit 1
+  fi
+  echo "zero-residual corrected matrix CLI: OK"
+  exit 0
+fi
 printf 'Adams\tbenchmark_analysis\tmrvi\nBassez\tbenchmark_analysis\tgloscope\nKfoury\ttrans\ttrans\nKim\tzeroimp\tzeroimp\n' > "${TMP_DIR}/selection.tsv"
 OUTPUT="$(
   HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
@@ -259,12 +335,12 @@ test "$(grep -F -c $'Breast_cancer\tbatch_effect_corrected\t' \
 test "$(grep -F -c $'Joanito\tbatch_effect_corrected\t' \
   "${CORRECTED_FINAL_METHOD_MATRIX}")" = 4
 
-# A valid non-Breast cache is independently owned and recorded so the matrix
-# run must skip exactly that one declared row while retaining every Breast row.
+# Reuse valid preparation and Breast Python outputs; only missing R consumers
+# belong in the residual matrix.
 rm -rf "${HPC_ROOT}/_ecoda_owners"
 MATRIX_VALID_PRODUCER_RUN_ID="corrected-final-valid-prep"
 MATRIX_VALID_PRODUCER_ROOT="${HPC_ROOT}/_ecoda_runs/${MATRIX_VALID_PRODUCER_RUN_ID}"
-MATRIX_VALID_CACHE="${HPC_ROOT}/batch_effect/corrected_final/recovery_35row/pseudobulks/Joanito_batch_effect_corrected_final_pseudobulk_hvg2000.rds"
+MATRIX_VALID_CACHE="${HPC_ROOT}/batch_effect/corrected_final/pseudobulks/Joanito_batch_effect_corrected_final_pseudobulk_hvg2000.rds"
 mkdir -p "${MATRIX_VALID_PRODUCER_ROOT}/manifests" "$(dirname "${MATRIX_VALID_CACHE}")"
 printf 'valid corrected-final prepare cache fixture\n' > "${MATRIX_VALID_CACHE}"
 (
@@ -275,8 +351,8 @@ printf 'valid corrected-final prepare cache fixture\n' > "${MATRIX_VALID_CACHE}"
     ECODA_RUN_ID="${MATRIX_VALID_PRODUCER_RUN_ID}"
   export ANALYSIS_VARIANT=corrected_final PASS_ARG=corrected \
     ANALYSIS_PASS=corrected \
-    ANALYSIS_ROOT="${HPC_ROOT}/batch_effect/corrected_final/recovery_35row" \
-    ANALYSIS_NAS_ROOT="${NAS_ROOT}/batch_effect/corrected_final/recovery_35row"
+    ANALYSIS_ROOT="${HPC_ROOT}/batch_effect/corrected_final" \
+    ANALYSIS_NAS_ROOT="${NAS_ROOT}/batch_effect/corrected_final"
   source "${ROOT}/src/slurm_config.sh" >/dev/null 2>&1
   source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
   source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
@@ -287,6 +363,21 @@ printf 'valid corrected-final prepare cache fixture\n' > "${MATRIX_VALID_CACHE}"
     "${MATRIX_VALID_PRODUCER_RUN_ID}" 0 0 0 >/dev/null
   ecoda_artifact_owner_set_state "${MATRIX_VALID_CACHE}" OK \
     "valid corrected-final matrix fixture"
+  for python_dataset in Breast_cancer Alzheimer; do
+  for method in mrvi pilot qot; do
+    _ecoda_stage5_artifacts_for "${python_dataset}" batch_effect_corrected "${method}"
+    for artifact in "${ECODA_BENCHMARK_ARTIFACTS[@]}"; do
+      mkdir -p "$(dirname "${artifact}")"
+      printf 'valid Breast %s payload\n' "${method}" > "${artifact}"
+      ecoda_write_checksum "${artifact}" >/dev/null
+      ecoda_write_artifact_record "${artifact}" "stage5_${method}" \
+        "${MATRIX_VALID_PRODUCER_RUN_ID}" >/dev/null
+      ecoda_artifact_owner_acquire "${artifact}" stage5 \
+        "${MATRIX_VALID_PRODUCER_RUN_ID}" 0 0 0 >/dev/null
+      ecoda_artifact_owner_set_state "${artifact}" OK "valid Breast Python fixture"
+    done
+  done
+  done
 )
 CORRECTED_FINAL_CAPTURE_BEFORE="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
 CORRECTED_FINAL_OUTPUT="$(
@@ -314,9 +405,9 @@ test "$(wc -l < "${CORRECTED_FINAL_RUN_MATRIX}" | tr -d '[:space:]')" = 35
 test "$(sort -u "${CORRECTED_FINAL_RUN_MATRIX}" | wc -l | tr -d '[:space:]')" = 35
 CORRECTED_FINAL_METADATA="${CORRECTED_FINAL_RUN_ROOT}/metadata"
 grep -q '^ANALYSIS_VARIANT=corrected_final$' "${CORRECTED_FINAL_METADATA}"
-grep -q '^ANALYSIS_ROOT=.*/batch_effect/corrected_final/recovery_35row$' \
+grep -q '^ANALYSIS_ROOT=.*/batch_effect/corrected_final$' \
   "${CORRECTED_FINAL_METADATA}"
-grep -q "^ANALYSIS_NAS_ROOT=${NAS_ROOT}/batch_effect/corrected_final/recovery_35row$" \
+grep -q "^ANALYSIS_NAS_ROOT=${NAS_ROOT}/batch_effect/corrected_final$" \
   "${CORRECTED_FINAL_METADATA}"
 grep -q '^ANALYSIS_PASS=corrected$' "${CORRECTED_FINAL_METADATA}"
 grep -q '^PASS=corrected$' "${CORRECTED_FINAL_METADATA}"
@@ -326,10 +417,10 @@ grep -q '^METHOD_MATRIX=.*/manifests/method_matrix.tsv$' \
 grep -q "^METHOD_MATRIX_SOURCE=${CORRECTED_FINAL_METHOD_MATRIX}$" \
   "${CORRECTED_FINAL_METADATA}"
 test "${CORRECTED_FINAL_RUN_MATRIX}" != "${CORRECTED_FINAL_METHOD_MATRIX}"
-grep -q '^ANALYSIS_ROOT_VERSION=recovery_35row$' \
-  "${CORRECTED_FINAL_METADATA}"
-grep -q '^ANALYSIS_ROOT_IDENTITY=corrected_final/recovery_35row$' \
-  "${CORRECTED_FINAL_METADATA}"
+if grep -Eq '^ANALYSIS_ROOT_(VERSION|IDENTITY)=' "${CORRECTED_FINAL_METADATA}"; then
+  echo "new corrected-final metadata retained historical root identity" >&2
+  exit 1
+fi
 grep -q '^METHOD_MATRIX_MD5=[0-9a-f]\{32\}$' "${CORRECTED_FINAL_METADATA}"
 grep -q '^METHOD_MATRIX_SIZE=[1-9][0-9]*$' "${CORRECTED_FINAL_METADATA}"
 CORRECTED_FINAL_MATRIX_SHA="$(sha256_file "${CORRECTED_FINAL_RUN_MATRIX}")"
@@ -346,14 +437,14 @@ test "$(sed -n 's/^MD5=//p' "${CORRECTED_FINAL_RUN_MATRIX}.md5")" = \
 test "${CORRECTED_FINAL_MATRIX_SIZE}" = \
   "$(wc -c < "${CORRECTED_FINAL_RUN_MATRIX}" | tr -d '[:space:]')"
 grep -q '^DECLARED_METHOD_ROWS=35$' "${CORRECTED_FINAL_METADATA}"
-grep -q '^PENDING_METHOD_ROWS=34$' "${CORRECTED_FINAL_METADATA}"
+grep -q '^PENDING_METHOD_ROWS=31$' "${CORRECTED_FINAL_METADATA}"
 CORRECTED_FINAL_PENDING="$(sed -n 's/^PENDING_SELECTION=//p' \
   "${CORRECTED_FINAL_METADATA}")"
 test -s "${CORRECTED_FINAL_PENDING}"
 test -s "${CORRECTED_FINAL_PENDING}.md5"
-test "$(wc -l < "${CORRECTED_FINAL_PENDING}" | tr -d '[:space:]')" = 34
-EXPECTED_CORRECTED_FINAL_PENDING="$(grep -v -F \
-  $'Joanito\tbatch_effect_corrected\tprepare_pseudobulk' \
+test "$(wc -l < "${CORRECTED_FINAL_PENDING}" | tr -d '[:space:]')" = 31
+EXPECTED_CORRECTED_FINAL_PENDING="$(grep -v -E \
+  $'^Joanito\tbatch_effect_corrected\tprepare_pseudobulk$|^Breast_cancer\tbatch_effect_corrected\t(mrvi|pilot|qot)$' \
   "${CORRECTED_FINAL_METHOD_MATRIX}")"
 test "$(cat "${CORRECTED_FINAL_PENDING}")" = \
   "${EXPECTED_CORRECTED_FINAL_PENDING}"
@@ -371,20 +462,22 @@ for corrected_pending_method in prepare_pseudobulk pseudobulk gloscope \
     "${CORRECTED_FINAL_RUN_MATRIX}"
 done
 for corrected_pending_method in prepare_pseudobulk pseudobulk gloscope \
-  composition mrvi pilot qot; do
+  composition; do
   corrected_worker_matrix="${CORRECTED_FINAL_RUN_ROOT}/manifests/matrix_batch_effect_corrected_${corrected_pending_method}.tsv"
   test -s "${corrected_worker_matrix}"
   test -s "${corrected_worker_matrix}.md5"
   case "${corrected_pending_method}" in
     prepare_pseudobulk) corrected_expected_rows=7 ;;
     pseudobulk|gloscope|composition) corrected_expected_rows=8 ;;
-    mrvi|pilot|qot) corrected_expected_rows=1 ;;
   esac
   test "$(wc -l < "${corrected_worker_matrix}" | tr -d '[:space:]')" = \
     "${corrected_expected_rows}"
   while IFS= read -r corrected_worker_row; do
     grep -F -q "${corrected_worker_row}" "${CORRECTED_FINAL_PENDING}"
   done < "${corrected_worker_matrix}"
+done
+for reused_python in mrvi pilot qot; do
+  test ! -e "${CORRECTED_FINAL_RUN_ROOT}/manifests/matrix_batch_effect_corrected_${reused_python}.tsv"
 done
 CORRECTED_FINAL_CAPTURE="${TMP_DIR}/corrected-final-calls"
 sed -n "$((CORRECTED_FINAL_CAPTURE_BEFORE + 1)),\$p" "${CAPTURE}" \
@@ -397,14 +490,74 @@ if grep -Eq 'ANALYSIS_ROOT=.*/batch_effect/(uncorrected|uncorrected_final)' \
   echo "corrected-final worker selection leaked an uncorrected analysis root" >&2
   exit 1
 fi
-if grep -Eq 'ANALYSIS_ROOT=.*/batch_effect/corrected_final(,|$)' \
-    "${CORRECTED_FINAL_CAPTURE}"; then
-  echo "corrected-final matrix worker leaked the historical root" >&2
+if grep -q 'recovery_35row' "${CORRECTED_FINAL_CAPTURE}"; then
+  echo "corrected-final matrix worker leaked the historical recovery root" >&2
   exit 1
 fi
 grep -q "ECODA_STAGE5_METHOD_MATRIX=${CORRECTED_FINAL_RUN_MATRIX}" \
   "${CORRECTED_FINAL_CAPTURE}"
+if grep -Eq 'METHOD=(mrvi|pilot|qot)(,| |$)' "${CORRECTED_FINAL_CAPTURE}"; then
+  echo "valid Breast Python row reached a worker array" >&2
+  exit 1
+fi
 echo "corrected-final explicit 35-row method matrix contract: OK"
+# Scheduler stubs leave method owners ACTIVE. Finish only this fixture run's
+# selected owners so the next launch reaches its residual guard, not that lock.
+(
+  export HPC_SCRATCH_DIR="${HPC_ROOT}"
+  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  while IFS=$'\t' read -r ds view method; do
+    owner="$(ecoda_owner_dir stage5 "corrected/${ds}/${view}/${method}")"
+    if [[ -f "${owner}/owner" && "$(ecoda_owner_run "${owner}")" == "${CORRECTED_FINAL_RUN_ID}" ]]; then
+      ecoda_owner_set_state "${owner}" FAIL "fixture scheduler finished"
+    fi
+  done < "${CORRECTED_FINAL_PENDING}"
+)
+
+# The explicit pending guard is evaluated before metadata publication or sbatch.
+PENDING_GUARD_RUN_ID="corrected-pending-mismatch"
+PENDING_GUARD_ROOT="${HPC_ROOT}/_ecoda_runs/${PENDING_GUARD_RUN_ID}"
+mkdir -p "${TMP_DIR}/pending-promotion/manifests" "${HPC_ROOT}/batch_effect/corrected_final/metadata"
+PENDING_GUARD_EXPECTED="${TMP_DIR}/pending-promotion/manifests/expected_pending.tsv"
+printf 'Breast_cancer\tbatch_effect_corrected\tmrvi\n' > "${PENDING_GUARD_EXPECTED}"
+(
+  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  ecoda_write_checksum "${PENDING_GUARD_EXPECTED}"
+)
+METADATA_SENTINEL="${HPC_ROOT}/batch_effect/corrected_final/metadata/Breast_cancer_sample_metadata.feather"
+printf 'untouched metadata\n' > "${METADATA_SENTINEL}"
+METADATA_BEFORE="$(sha256_file "${METADATA_SENTINEL}")"
+PENDING_GUARD_CALLS="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
+VALID_CACHE_BEFORE="$(sha256_file "${MATRIX_VALID_CACHE}")"
+VALID_CACHE_SIDECAR_BEFORE="$(sha256_file "${MATRIX_VALID_CACHE}.md5")"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+  ECODA_RUN_ID="${PENDING_GUARD_RUN_ID}" ECODA_RUN_ROOT="${PENDING_GUARD_ROOT}" \
+  BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
+  bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+  --selection-file "${CORRECTED_FINAL_SELECTION}" \
+  --method-matrix "${CORRECTED_FINAL_METHOD_MATRIX}" \
+  --pass corrected --analysis-variant corrected_final --methods "${FINAL_METHODS}" \
+  --expected-pending "${PENDING_GUARD_EXPECTED}" \
+  > "${TMP_DIR}/pending-mismatch.out" 2>&1; then
+  echo "corrected pending mismatch was accepted" >&2; exit 1
+fi
+test "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" = "${PENDING_GUARD_CALLS}"
+if [[ ! -s "${PENDING_GUARD_ROOT}/manifests/classified_pending.tsv" ]]; then
+  cat "${TMP_DIR}/pending-mismatch.out" >&2
+  echo "pending guard fixture did not reach classification" >&2; exit 1
+fi
+if cmp -s "${PENDING_GUARD_EXPECTED}" "${PENDING_GUARD_ROOT}/manifests/classified_pending.tsv"; then
+  echo "fixture failed to create a residual-selection mismatch" >&2; exit 1
+fi
+test "$(sha256_file "${METADATA_SENTINEL}")" = "${METADATA_BEFORE}"
+test "$(sha256_file "${MATRIX_VALID_CACHE}")" = "${VALID_CACHE_BEFORE}"
+test "$(sha256_file "${MATRIX_VALID_CACHE}.md5")" = "${VALID_CACHE_SIDECAR_BEFORE}"
+expect_submit_failure "missing precompute receipt" \
+  --selection-file "${CORRECTED_FINAL_SELECTION}" \
+  --method-matrix "${CORRECTED_FINAL_METHOD_MATRIX}" \
+  --pass corrected --analysis-variant corrected_final --methods "${FINAL_METHODS}" \
+  --expected-pending "${PENDING_GUARD_EXPECTED}" \
+  --precompute-backup-receipt "${TMP_DIR}/missing-receipt.json"
 
 CORRECTED_FINAL_MATRIX_DUPLICATE="${TMP_DIR}/corrected-final-matrix-duplicate.tsv"
 cp "${CORRECTED_FINAL_METHOD_MATRIX}" "${CORRECTED_FINAL_MATRIX_DUPLICATE}"
@@ -512,7 +665,7 @@ expect_submit_failure "corrected-final matrix with force" \
   --method-matrix "${CORRECTED_FINAL_METHOD_MATRIX}" --pass corrected \
   --analysis-variant corrected_final --methods "${FINAL_METHODS}" --force
 
-# Alzheimer remains a separate ordinary corrected-final one-row follow-up.
+# A targeted Alzheimer selection also reuses its valid Python rows.
 ALZHEIMER_CORRECTED_FINAL_SELECTION="${TMP_DIR}/corrected-final-alzheimer-selection.tsv"
 printf 'Alzheimer\tbatch_effect_corrected\tbatch_effect_corrected\n' \
   > "${ALZHEIMER_CORRECTED_FINAL_SELECTION}"
@@ -539,9 +692,8 @@ test "$(cat "${ALZHEIMER_SELECTION}")" = \
 ALZHEIMER_PENDING="$(sed -n 's/^PENDING_SELECTION=//p' \
   "${ALZHEIMER_METADATA}")"
 test -s "${ALZHEIMER_PENDING}"
-test "$(wc -l < "${ALZHEIMER_PENDING}" | tr -d '[:space:]')" = 7
-for alzheimer_method in prepare_pseudobulk pseudobulk gloscope composition \
-  mrvi pilot qot; do
+test "$(wc -l < "${ALZHEIMER_PENDING}" | tr -d '[:space:]')" = 4
+for alzheimer_method in prepare_pseudobulk pseudobulk gloscope composition; do
   test "$(grep -c $'\t'"${alzheimer_method}"$ "${ALZHEIMER_PENDING}")" = 1
   alzheimer_matrix="${ALZHEIMER_RUN_ROOT}/manifests/matrix_batch_effect_corrected_${alzheimer_method}.tsv"
   test -s "${alzheimer_matrix}"
@@ -552,12 +704,58 @@ done
 ALZHEIMER_CAPTURE="${TMP_DIR}/alzheimer-calls"
 sed -n "$((ALZHEIMER_CAPTURE_BEFORE + 1)),\$p" "${CAPTURE}" \
   > "${ALZHEIMER_CAPTURE}"
-test "$(grep -c -- '--array=1-1' "${ALZHEIMER_CAPTURE}")" = 7
+test "$(grep -c -- '--array=1-1' "${ALZHEIMER_CAPTURE}")" = 4
 if grep -Eq -- '--array=1-(8|9)' "${ALZHEIMER_CAPTURE}"; then
   echo "Alzheimer corrected-final follow-up expanded beyond its one-row scope" >&2
   exit 1
 fi
 echo "corrected-final Alzheimer follow-up selection contract: OK"
+
+# Complete every declared row with independently recorded/owned fixture outputs.
+# A second dispatch must validate reuse without metadata/preflight/method jobs.
+(
+  export HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}"
+  export ECODA_RUN_ROOT="${MATRIX_VALID_PRODUCER_ROOT}" \
+    ECODA_RUN_ID="${MATRIX_VALID_PRODUCER_RUN_ID}"
+  export ANALYSIS_VARIANT=corrected_final PASS_ARG=corrected ANALYSIS_PASS=corrected \
+    ANALYSIS_ROOT="${HPC_ROOT}/batch_effect/corrected_final" \
+    ANALYSIS_NAS_ROOT="${NAS_ROOT}/batch_effect/corrected_final"
+  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
+  while IFS=$'\t' read -r ds view method; do
+    _ecoda_stage5_artifacts_for "${ds}" "${view}" "${method}"
+    for artifact in "${ECODA_BENCHMARK_ARTIFACTS[@]}"; do
+      [[ -e "${artifact}" ]] && continue
+      mkdir -p "$(dirname "${artifact}")"
+      printf 'valid %s %s fixture\n' "${ds}" "${method}" > "${artifact}"
+      ecoda_write_checksum "${artifact}"
+      producer="stage5_${method}"
+      [[ "${method}" != prepare_pseudobulk ]] || producer=stage5_prepare_pseudobulk_hvg2000
+      ecoda_write_artifact_record "${artifact}" "${producer}" \
+        "${MATRIX_VALID_PRODUCER_RUN_ID}" >/dev/null
+      ecoda_artifact_owner_acquire "${artifact}" stage5 \
+        "${MATRIX_VALID_PRODUCER_RUN_ID}" 0 0 0 >/dev/null
+      ecoda_artifact_owner_set_state "${artifact}" OK "all-valid corrected fixture"
+    done
+  done < "${CORRECTED_FINAL_METHOD_MATRIX}"
+)
+ALL_VALID_CAPTURE_BEFORE="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
+ALL_VALID_OUTPUT="$(
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+    BENCHMARK_MATRIX_TEST=1 USER_EMAIL=test@example.invalid \
+    bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${CORRECTED_FINAL_SELECTION}" \
+    --method-matrix "${CORRECTED_FINAL_METHOD_MATRIX}" \
+    --pass corrected --analysis-variant corrected_final --methods "${FINAL_METHODS}" \
+)"
+test "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" = "${ALL_VALID_CAPTURE_BEFORE}"
+ALL_VALID_RUN_ID="$(printf '%s\n' "${ALL_VALID_OUTPUT}" | sed -n 's/^BATCH_EFFECT_RUN_ID=//p')"
+if [[ -z "${ALL_VALID_RUN_ID}" ]]; then
+  printf 'All-valid dispatch returned without a batch run ID:\n%s\n' "${ALL_VALID_OUTPUT}" >&2
+  exit 1
+fi
+test ! -s "${HPC_ROOT}/_ecoda_runs/${ALL_VALID_RUN_ID}/manifests/pending_selection.tsv"
+echo "all-valid corrected matrix submits zero jobs: OK"
 
 echo "corrected-final benchmark variant selection contract: OK"
 

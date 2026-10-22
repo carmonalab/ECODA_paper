@@ -80,7 +80,7 @@ if (!is.null(analysis_pass) && analysis_pass == "corrected") {
   # Keep the configured technical columns separate.  The corrected core
   # derives estimable keys from batch_context; batch_col is only a direct
   # original column for the one-key compatibility boundary.
-  batch_keys <- ecoda_hpc_normalize_keys(
+  batch_keys <- ecoda_hpc_normalize_batch_keys(
     entry$batch_col,
     sample_col = sample_col,
     biological_label = entry$label_col

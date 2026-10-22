@@ -1,17 +1,17 @@
 ---
 name: durable-hpc-gate-ecoda
 description: >-
-  Applies durable-hpc-gate to ECODA on Yggdrasil, adding repository invariants,
+  Applies durable-hpc-gate to ECODA HPC runs, adding repository invariants,
   authoritative-plan checkpoints, canonical scratch/NAS contracts, clean
   benchmark serialization, and Luna Max task/reviewer requirements.
 ---
 
-# Durable HPC Gate — ECODA/Yggdrasil Profile
+# Durable HPC Gate — ECODA Profile
 
 ## Overview
 
 This is the ECODA policy layer for the global `durable-hpc-gate` skill. It
-keeps long-running Slurm wrappers on Yggdrasil durable across SSH/session loss
+keeps long-running Slurm wrappers durable across SSH/session loss
 without copying the global orchestration implementation. The profile is
 repository-aware: it checks the ECODA checkout, canonical configuration and
 artifact roots, scientific invariants, benchmark wave serialization, and the
@@ -19,32 +19,21 @@ terminal accounting/audit contract.
 
 ## Canonical host policy
 
-`yggdrasil` is the current default and canonical host for full-cohort ECODA
-Pipeline 1–5 durable compute, data, results, backup, and normal gates until
-the user explicitly directs a return to Bamboo. All authoring and
-pipeline-file changes happen on the local workstation: commit and push them,
-then pull the exact committed revision on Yggdrasil. Never edit the Yggdrasil
-checkout directly.
+Resolve the execution host from the user's explicit decision recorded in the
+authoritative active plan. `references/profile.json` must pin that same host
+before preparing any gate; maintenance dates never imply a host change.
+Author locally, commit/push, then pull the exact revision on the selected
+host. Execute from the verified immutable snapshot, not the mutable checkout.
 
-The active Yggdrasil repository and scratch paths are `~/ECODA_paper` and
-`~/scratch/ECODA_paper`, respectively. Bamboo is an explicit user-directed
-fallback/source host only; do not infer a host change from maintenance dates
-or use Bamboo paths by default. The current checked-in
-`references/profile.json` and effective workflow configuration MUST be
-Ygg-compatible before any gate runs, including `remote_host`, repository and
-scratch roots, scheduler/runtime settings, and result handling. A profile
-that still encodes Bamboo as its active host is not valid for a Yggdrasil
-gate.
+Repository and scratch remain separate (`~/ECODA_paper` and
+`~/scratch/ECODA_paper`). Bind an explicit absolute NAS destination and prove
+the actual mount; a scratch mirror is not a durable NAS backup. Transfers
+state host, source, destination and finite scope and require approved SSH
+authentication without stored passwords.
 
-Yggdrasil has no implicit Bamboo NAS path. `NAS_TARGET_DIR` (or an explicit
-`ECODA_NAS_TARGET_DIR` override) MUST point to a configured Yggdrasil result
-location, such as the approved local scratch result mirror, or a verified
-user-scoped NAS mount MUST be established before launch. Never silently fall
-back to Bamboo NAS storage. Any Bamboo↔Yggdrasil transfer is exceptional and
-requires an explicitly configured SSH key or agent-forwarding setup. Every
-transfer/backup command MUST state its host, source/destination path, and
-scope explicitly; never store passwords, and use SSH keys/agent
-authentication only.
+The Yggdrasil-specific examples below describe that host's branch. When the
+active plan selects Bamboo, substitute its resolved paths/settings and use
+the Bamboo-pinned profile; those examples do not authorize a Yggdrasil launch.
 
 ## Repository-defined exceptions
 

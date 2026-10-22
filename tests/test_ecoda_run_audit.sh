@@ -320,8 +320,8 @@ prepare_matrix_contract_identity() {
 }
 prepare_matrix_run() {
   local run_root="${SCRATCH}/_ecoda_runs/matrix_fixture"
-  local analysis_root="${SCRATCH}/batch_effect/corrected_final/recovery_35row"
-  local analysis_nas_root="${NAS}/batch_effect/corrected_final/recovery_35row"
+  local analysis_root="${SCRATCH}/batch_effect/corrected_final"
+  local analysis_nas_root="${NAS}/batch_effect/corrected_final"
   local selection matrix pending contract_manifest status_report metadata_manifest
   local matrix_md5 matrix_size matrix_sha pending_md5 pending_size
   local dataset method output_name input metadata_output path
@@ -478,8 +478,6 @@ ANALYSIS_ROOT=${analysis_root}
 ANALYSIS_NAS_ROOT=${analysis_nas_root}
 ANALYSIS_PASS=corrected
 ANALYSIS_LOG_PREFIX=execution_times_batch_effect_corrected_final_
-ANALYSIS_ROOT_VERSION=recovery_35row
-ANALYSIS_ROOT_IDENTITY=corrected_final/recovery_35row
 METHOD_MATRIX=${matrix}
 METHOD_MATRIX_MD5=${matrix_md5}
 METHOD_MATRIX_SIZE=${matrix_size}
@@ -510,8 +508,8 @@ EOF
 
 prepare_corrected_final_run() {
   local run_root="${SCRATCH}/_ecoda_runs/corrected_final_fixture"
-  local analysis_root="${SCRATCH}/batch_effect/corrected_final/recovery_35row"
-  local analysis_nas_root="${NAS}/batch_effect/corrected_final/recovery_35row"
+  local analysis_root="${SCRATCH}/batch_effect/corrected_final"
+  local analysis_nas_root="${NAS}/batch_effect/corrected_final"
   local input="${SCRATCH}/Fixture/output/Fixture_batch_effect_analysis_corrected.h5ad"
   local metadata_output="${analysis_root}/metadata/Fixture_sample_metadata.feather"
   local selection pending contract_manifest contract_md5 contract_size contract_sha
@@ -617,8 +615,6 @@ ANALYSIS_ROOT=${analysis_root}
 ANALYSIS_NAS_ROOT=${analysis_nas_root}
 ANALYSIS_PASS=corrected
 ANALYSIS_LOG_PREFIX=execution_times_batch_effect_corrected_final_
-ANALYSIS_ROOT_VERSION=recovery_35row
-ANALYSIS_ROOT_IDENTITY=corrected_final/recovery_35row
 METADATA_EXPORT_MANIFEST=${run_root}/manifests/metadata_export.tsv
 METADATA_EXPORT_STATUS=${status_report}
 PENDING_SELECTION=${pending}
@@ -727,7 +723,7 @@ EOF
 run_audit "${LEGACY_RUN_ROOT}" stage5 "${LEGACY_SELECTION}" 0
 grep -F -- "${LEGACY_ARTIFACT}" "${VALIDATOR_LOG}" >/dev/null
 ! grep -F -- '_batch_effect_uncorrected_final_' "${VALIDATOR_LOG}" >/dev/null
-# A corrected-final recovery run binds an independent eight-row dataset
+# A direct corrected-final run binds an independent eight-row dataset
 # selection to the exact 35-row method matrix.  Only one pending row is
 # materialized here; the other declared rows represent validated reuse.
 prepare_matrix_run
@@ -740,6 +736,16 @@ cp "${MATRIX_MANIFEST}" "${MATRIX_MANIFEST_GOOD}"
 run_audit "${MATRIX_RUN_ROOT}" stage5 "${MATRIX_SELECTION}" 0
 grep -F -- "${MATRIX_ROOT}/embeddings/Breast_cancer_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather" \
   "${VALIDATOR_LOG}" >/dev/null
+
+# Replacement-root metadata cannot authorize a current direct-root audit.
+for stale_identity in \
+  ANALYSIS_ROOT_VERSION=recovery_35row \
+  ANALYSIS_ROOT_IDENTITY=corrected_final/recovery_35row; do
+  cp "${MATRIX_METADATA_GOOD}" "${MATRIX_METADATA}"
+  printf '%s\n' "${stale_identity}" >> "${MATRIX_METADATA}"
+  run_audit "${MATRIX_RUN_ROOT}" stage5 "${MATRIX_SELECTION}" 1
+done
+cp "${MATRIX_METADATA_GOOD}" "${MATRIX_METADATA}"
 
 MATRIX_MUTATION_DIR="${TMP_DIR}/matrix-mutations"
 mkdir -p "${MATRIX_MUTATION_DIR}"

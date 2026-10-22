@@ -156,7 +156,7 @@ if (correct_batch_mode) {
   if (is.null(entry$batch_col)) {
     stop("corrected batch-effect view requires a confirmed columns.batch")
   }
-  batch_keys <- ecoda_hpc_normalize_keys(
+  batch_keys <- ecoda_hpc_normalize_batch_keys(
     entry$batch_col,
     sample_col = sample_col,
     biological_label = entry$label_col

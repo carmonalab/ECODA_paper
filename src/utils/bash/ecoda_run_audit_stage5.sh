@@ -327,9 +327,7 @@ _audit_run_metadata() {
       }
     done
   fi
-  # Matrix metadata is a separate contract from the dataset/view selection.
-  # Corrected-final metadata always binds the recovery_35row root; matrix
-  # metadata adds the independent method-scope contract.
+  # Method scope is independent of the direct-root dataset/view identity.
   matrix_count="$(_audit_metadata_count "${metadata}" METHOD_MATRIX)"
   [[ "${matrix_count}" == 0 || "${matrix_count}" == 1 ]] || {
     _audit_die "run metadata has duplicate METHOD_MATRIX fields: ${metadata}"
@@ -355,7 +353,7 @@ _audit_run_metadata() {
     }
     for field in METHOD_MATRIX METHOD_MATRIX_MD5 METHOD_MATRIX_SIZE \
       METHOD_MATRIX_SHA256 METHOD_MATRIX_IDENTITY DECLARED_METHOD_ROWS \
-      PENDING_METHOD_ROWS ANALYSIS_ROOT_VERSION ANALYSIS_ROOT_IDENTITY; do
+      PENDING_METHOD_ROWS; do
       matrix_field_count="$(_audit_metadata_count "${metadata}" "${field}")"
       [[ "${matrix_field_count}" == 1 &&
          -n "$(_audit_metadata_value "${metadata}" "${field}")" ]] || {
@@ -369,9 +367,7 @@ _audit_run_metadata() {
        "${AUDIT_METADATA_METHOD_MATRIX_IDENTITY}" =~ ^[[:xdigit:]]{64}$ &&
        "${AUDIT_METADATA_METHOD_MATRIX_IDENTITY}" == "${AUDIT_METADATA_METHOD_MATRIX_SHA256}" &&
        "${AUDIT_METADATA_DECLARED_METHOD_ROWS}" =~ ^[1-9][0-9]*$ &&
-       "${AUDIT_METADATA_PENDING_METHOD_ROWS}" =~ ^(0|[1-9][0-9]*)$ &&
-       "${AUDIT_METADATA_ANALYSIS_ROOT_VERSION}" == recovery_35row &&
-       "${AUDIT_METADATA_ANALYSIS_ROOT_IDENTITY}" == corrected_final/recovery_35row ]] || {
+       "${AUDIT_METADATA_PENDING_METHOD_ROWS}" =~ ^(0|[1-9][0-9]*)$ ]] || {
       _audit_die "corrected-final matrix metadata values are invalid: ${metadata}"
       return 1
     }
@@ -414,39 +410,14 @@ _audit_run_metadata() {
         return 1
       }
     done
-    root_version_count="$(_audit_metadata_count "${metadata}" ANALYSIS_ROOT_VERSION)"
-    root_identity_count="$(_audit_metadata_count "${metadata}" ANALYSIS_ROOT_IDENTITY)"
-    if [[ "${AUDIT_METADATA_VARIANT}" == corrected_final ]]; then
-      case "${AUDIT_METADATA_ANALYSIS_ROOT}" in
-        */batch_effect/corrected_final)
-          [[ "${root_version_count}" == 0 &&
-             "${root_identity_count}" == 0 ]] || {
-            _audit_die "direct corrected-final root has unexpected replacement identity metadata"
-            return 1
-          }
-          ;;
-        */batch_effect/corrected_final/recovery_35row)
-          [[ "${root_version_count}" == 1 &&
-             "${root_identity_count}" == 1 &&
-             "${AUDIT_METADATA_ANALYSIS_ROOT_VERSION}" == recovery_35row &&
-             "${AUDIT_METADATA_ANALYSIS_ROOT_IDENTITY}" == corrected_final/recovery_35row ]] || {
-            _audit_die "corrected-final root identity metadata is missing or invalid"
-            return 1
-          }
-          ;;
-        *)
-          _audit_die "corrected-final metadata names an unsupported analysis root"
-          return 1
-          ;;
-      esac
-    else
-      [[ "${root_version_count}" == 0 &&
-         "${root_identity_count}" == 0 ]] || {
-        _audit_die "run metadata contains an unexpected root identity"
-        return 1
-      }
-    fi
   fi
+  root_version_count="$(_audit_metadata_count "${metadata}" ANALYSIS_ROOT_VERSION)"
+  root_identity_count="$(_audit_metadata_count "${metadata}" ANALYSIS_ROOT_IDENTITY)"
+  [[ "${root_version_count}" == 0 &&
+     "${root_identity_count}" == 0 ]] || {
+    _audit_die "run metadata contains an unexpected replacement root identity"
+    return 1
+  }
 
 
   AUDIT_METADATA_EXPORT_MANIFEST="$(

@@ -11,7 +11,7 @@ cleanup() {
 trap cleanup EXIT
 
 HPC_ROOT="${TMP_DIR}/home/scratch/ECODA_paper"
-NAS_ROOT="${TMP_DIR}/nas/project"
+NAS_ROOT="${TMP_DIR}/nas,shared/project"
 SOURCE_COMMIT="cccccccccccccccccccccccccccccccccccccccc"
 SNAPSHOT_ROOT="${HPC_ROOT}/_ecoda_source_snapshots/${SOURCE_COMMIT}"
 SOURCE_TREE="${SNAPSHOT_ROOT}/tree"
@@ -121,6 +121,27 @@ cat > "${TMP_DIR}/bin/sbatch" <<'STUB'
 #!/bin/bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${CAPTURE}"
+worker_env=()
+for argument in "$@"; do
+  case "${argument}" in
+    --export=*)
+      IFS=, read -r -a exports <<< "${argument#--export=}"
+      for entry in "${exports[@]}"; do
+        case "${entry}" in
+          ALL|NONE) ;;
+          *=*) worker_env+=("${entry}") ;;
+          *)
+            if value="$(printenv "${entry}")"; then
+              worker_env+=("${entry}=${value}")
+            fi
+            ;;
+        esac
+      done
+      ;;
+  esac
+done
+env -i "${worker_env[@]}" /bin/bash -c \
+  'printf "%s" "${ANALYSIS_NAS_ROOT:-}" > "$1"' _ "${RETRY_NAS_CAPTURE}"
 printf '%s\n' "${SBATCH_RESULT_ID}"
 STUB
 chmod +x "${TMP_DIR}/bin/sacct" "${TMP_DIR}/bin/sbatch"
@@ -147,6 +168,13 @@ runtime_export_for() {
     ' _ "${SOURCE_TREE}"
 }
 
+export RETRY_NAS_CAPTURE="${TMP_DIR}/retry-worker-nas-root"
+write_manifest_checksum() (
+  source "${SOURCE_TREE}/src/slurm_config.sh"
+  source "${SOURCE_TREE}/src/utils/bash/ecoda_run_common.sh"
+  ecoda_write_checksum "$1" >/dev/null
+)
+
 export CAPTURE HOME="${TMP_DIR}/home" HPC_SCRATCH_DIR="${HPC_ROOT}" ECODA_SCRATCH_ROOT="${HPC_ROOT}"
 export NAS_TARGET_DIR="${NAS_ROOT}" TMPDIR="${TEST_TMP}"
 export PATH="${TMP_DIR}/bin:${PATH}"
@@ -163,13 +191,14 @@ export WORKER_SCRIPT="${SOURCE_TREE}/src/5_run_benchmark_methods/run_r_sample_em
 
 CORRECTED_MANIFEST="${CORRECTED_RUN_ROOT}/manifests/composition.tsv"
 printf 'Joanito\tbatch_effect_corrected\tcomposition\n' > "${CORRECTED_MANIFEST}"
+write_manifest_checksum "${CORRECTED_MANIFEST}"
 CORRECTED_RUNTIME_EXPORT="$(runtime_export_for "${CORRECTED_RUN_ROOT}")"
 export ECODA_RUN_ROOT="${CORRECTED_RUN_ROOT}" ECODA_RUN_ID=corrected-retry
 export ECODA_LOGS_DIR="${CORRECTED_RUN_ROOT}/logs"
 export ANALYSIS_VARIANT=corrected_final ANALYSIS_PASS=corrected
-export ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION=recovery_35row
-export ANALYSIS_ROOT="${HPC_ROOT}/batch_effect/corrected_final/recovery_35row"
-export ANALYSIS_NAS_ROOT="${NAS_ROOT}/batch_effect/corrected_final/recovery_35row"
+unset ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION ANALYSIS_ROOT_VERSION ANALYSIS_ROOT_IDENTITY
+export ANALYSIS_ROOT="${HPC_ROOT}/batch_effect/corrected_final"
+export ANALYSIS_NAS_ROOT="${NAS_ROOT}/batch_effect/corrected_final"
 export ANALYSIS_LOG_PREFIX="execution_times_batch_effect_corrected_final_"
 export SBATCH_RESULT_ID=7002
 : > "${CAPTURE}"
@@ -185,11 +214,11 @@ case "${CORRECTED_OUTPUT}" in
 esac
 [[ -s "${CORRECTED_RETRY_MANIFEST}" ]]
 CORRECTED_CALLS="$(<"${CAPTURE}")"
+[[ "$(<"${RETRY_NAS_CAPTURE}")" == "${NAS_ROOT}/batch_effect/corrected_final" ]]
 for required_identity in \
   "ANALYSIS_VARIANT=corrected_final" \
   "ANALYSIS_PASS=corrected" \
-  "ANALYSIS_ROOT=${HPC_ROOT}/batch_effect/corrected_final/recovery_35row" \
-  "ANALYSIS_NAS_ROOT=${NAS_ROOT}/batch_effect/corrected_final/recovery_35row" \
+  "ANALYSIS_ROOT=${HPC_ROOT}/batch_effect/corrected_final" \
   "ANALYSIS_LOG_PREFIX=execution_times_batch_effect_corrected_final_" \
   "ECODA_SOURCE_ROOT=${SOURCE_TREE}" \
   "ECODA_SOURCE_MANIFEST=${SOURCE_MANIFEST}" \
@@ -217,8 +246,43 @@ for required_path in \
   esac
 done
 
+# Stale root aliases must fail before runtime entry or scientific execution.
+cat > "${TMP_DIR}/bin/apptainer" <<'STUB'
+#!/bin/bash
+printf 'runtime entered\n' >> "${CAPTURE}"
+exit 1
+STUB
+chmod +x "${TMP_DIR}/bin/apptainer"
+for worker_language in r python; do
+  worker="${SOURCE_TREE}/src/5_run_benchmark_methods/run_${worker_language}_sample_embedding_methods/1.1_run_worker.sh"
+  : > "${CAPTURE}"
+  if bash "${worker}" > "${TMP_DIR}/worker-direct.log" 2>&1; then
+    echo "direct-root worker unexpectedly passed the failing runtime stub" >&2
+    exit 1
+  fi
+  [[ -s "${CAPTURE}" ]] || {
+    echo "direct-root worker did not reach runtime entry" >&2
+    cat "${TMP_DIR}/worker-direct.log" >&2
+    exit 1
+  }
+  for stale_identity in \
+    ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION=recovery_35row \
+    ANALYSIS_ROOT_VERSION=recovery_35row \
+    ANALYSIS_ROOT_IDENTITY=corrected_final/recovery_35row \
+    "ANALYSIS_ROOT=${HPC_ROOT}/batch_effect/corrected_final/recovery_35row" \
+    "ANALYSIS_NAS_ROOT=${NAS_ROOT}/batch_effect/corrected_final/recovery_35row"; do
+    : > "${CAPTURE}"
+    if env "${stale_identity}" bash "${worker}" > "${TMP_DIR}/worker-rejected.log" 2>&1; then
+      echo "worker accepted stale identity: ${stale_identity}" >&2
+      exit 1
+    fi
+    [[ ! -s "${CAPTURE}" ]]
+  done
+done
+
 LEGACY_MANIFEST="${LEGACY_RUN_ROOT}/manifests/composition.tsv"
 printf 'Joanito\tbatch_effect_uncorrected\tcomposition\n' > "${LEGACY_MANIFEST}"
+write_manifest_checksum "${LEGACY_MANIFEST}"
 LEGACY_RUNTIME_EXPORT="$(runtime_export_for "${LEGACY_RUN_ROOT}")"
 unset ANALYSIS_VARIANT ANALYSIS_PASS
 export ECODA_RUN_ROOT="${LEGACY_RUN_ROOT}" ECODA_RUN_ID=legacy-retry

@@ -96,6 +96,16 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="ecoda-matrix-validator-") as raw:
         root = Path(raw)
         (root / "embeddings").mkdir()
+        prepared_paths = matrix_artifact_validator.expected_artifacts(
+            root, "Adams", "prepare_pseudobulk", False, None
+        )
+        assert prepared_paths == [
+            root / "pseudobulks" / f"Adams_pseudobulk_{variant}.rds"
+            for variant in (
+                "schvg2000", "hvg2000", "hvg500",
+                "hvg2000_bl", "hvg1000", "hvg3000",
+            )
+        ]
         selection = root / "selection.tsv"
         selection.write_text("Adams\tbenchmark_analysis\tmrvi\n")
         write_file_sidecar(selection)
@@ -229,6 +239,63 @@ def main() -> None:
             analysis_variant="corrected_final",
             config_path=corrected_config,
         )
+        configured = json.loads(corrected_config.read_text())
+        for dataset in ("Baker", "Clark", "Excluded", "WrongView", "NoOutput", "Adams_debug", "NotBoolean"):
+            configured[dataset] = json.loads(json.dumps(configured["Adams"]))
+        configured["Excluded"]["use_for_batch_effect"] = False
+        configured["NotBoolean"]["use_for_batch_effect"] = "true"
+        configured["WrongView"]["views"] = {
+            "batch_effect_uncorrected": {"output_file_name": "source.h5ad"}
+        }
+        configured["NoOutput"]["views"]["batch_effect_corrected"] = {}
+        corrected_config.write_text(json.dumps(configured))
+        assert matrix_artifact_validator._configured_batch_effect_datasets(
+            corrected_config, "batch_effect_corrected"
+        ) == ("Adams", "Baker", "Clark")
+        baker_artifact = corrected_artifact.with_name(
+            corrected_artifact.name.replace("Adams_", "Baker_", 1)
+        )
+        write_runtime_identity(
+            baker_artifact, frame.loc[["s2", "s1"], ["s2", "s1"]],
+            corrected_identity, dataset="Baker",
+        )
+        corrected_selection.write_text(
+            "Baker\tbatch_effect_corrected\tbatch_effect_corrected\n"
+            "Adams\tbatch_effect_corrected\tbatch_effect_corrected\n"
+        )
+        write_file_sidecar(corrected_selection)
+        assert [row[0] for row in matrix_artifact_validator.read_selection(
+            corrected_selection
+        )] == ["Baker", "Adams"]
+        matrix_artifact_validator.validate(
+            corrected_root, corrected_selection, ["pilot"], batch=True,
+            batch_pass="corrected", analysis_variant="corrected_final",
+            config_path=corrected_config,
+        )
+        invalid_rows = [
+            f"{dataset}\tbatch_effect_corrected\tbatch_effect_corrected\n"
+            for dataset in (
+                "Excluded", "WrongView", "NoOutput", "Adams_debug", "NotBoolean",
+            )
+        ] + [
+            "Adams\tbatch_effect_uncorrected\tbatch_effect_uncorrected\n",
+            "Adams\tbatch_effect_corrected\tbatch_effect_corrected\n" * 2,
+        ]
+        for invalid_rows_text in invalid_rows:
+            corrected_selection.write_text(invalid_rows_text)
+            write_file_sidecar(corrected_selection)
+            try:
+                matrix_artifact_validator.validate(
+                    corrected_root, corrected_selection, ["pilot"], batch=True,
+                    batch_pass="corrected", analysis_variant="corrected_final",
+                    config_path=corrected_config,
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    f"invalid corrected selection was accepted: {invalid_rows_text!r}"
+                )
         try:
             matrix_artifact_validator.require_nonempty(
                 [corrected_artifact],

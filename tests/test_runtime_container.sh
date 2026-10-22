@@ -107,11 +107,18 @@ if [[ "${1:-}" == "inspect" ]]; then
 fi
 [[ "${1:-}" == "exec" ]] || exit 2
 shift
+unset ANALYSIS_NAS_ROOT NAS_TARGET_DIR ECODA_NAS_TARGET_DIR
 image=''
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --env)
-      export "$2"
+      case "$2" in
+        ANALYSIS_NAS_ROOT=*|NAS_TARGET_DIR=*|ECODA_NAS_TARGET_DIR=*)
+          echo 'comma-sensitive NAS value passed through raw --env' >&2
+          exit 3 ;;
+      esac
+      IFS=',' read -r -a assignments <<< "$2"
+      for assignment in "${assignments[@]}"; do export "${assignment}"; done
       shift 2
       ;;
     --bind)
@@ -132,6 +139,9 @@ while [[ $# -gt 0 ]]; do
       shift
       script="$1"
       shift
+      export ANALYSIS_NAS_ROOT="${APPTAINERENV_ANALYSIS_NAS_ROOT:-}"
+      export NAS_TARGET_DIR="${APPTAINERENV_NAS_TARGET_DIR:-}"
+      export ECODA_NAS_TARGET_DIR="${APPTAINERENV_ECODA_NAS_TARGET_DIR:-}"
       exec "${command}" "${script}" "$@"
       ;;
   esac
@@ -252,6 +262,7 @@ if [[ "${1:-}" == "containerize" && "${2:-}" == "--help" ]]; then
 fi
 output=""
 dryrun=0
+post_command=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --output)
@@ -261,6 +272,10 @@ while [[ $# -gt 0 ]]; do
     --dry-run)
       dryrun=1
       shift
+      ;;
+    --post-command)
+      post_command="$2"
+      shift 2
       ;;
     *)
       shift
@@ -273,7 +288,7 @@ if [[ "${dryrun}" == 1 ]]; then
     'From: rockylinux:9' \
     "$(realpath "${BUILDER_PROJECT}/.pixi/envs/py-cuda13")" \
     '/opt/ecoda/py-cuda13' \
-    'dnf install -y which jq' \
+    "${post_command}" \
     'exec "$@"'
 else
   printf 'sif-bytes\n' > "${output}"
@@ -544,6 +559,12 @@ printf 'f2 ensembl map\n' > \
 cat > "${F2_SOURCE_ROOT}/src/snapshot_worker.sh" <<F2_SNAPSHOT_WORKER
 #!/bin/bash
 set -euo pipefail
+source "${F2_SOURCE_ROOT}/src/utils/bash/ecoda_runtime.sh"
+ecoda_runtime_reexec_worker stage4 "${F2_SOURCE_ROOT}/src/snapshot_worker.sh"
+if [[ "\${ECODA_RUNTIME_MODE}" == host ]]; then
+  printf 'host-A\n' > "${F2_EXEC_MARKER}"
+  exit 0
+fi
 [[ "\${ECODA_SOURCE_ROOT}" == "${F2_SOURCE_ROOT}" ]] || exit 31
 [[ "\${ECODA_SOURCE_MANIFEST}" == "${F2_SOURCE_MANIFEST}" ]] || exit 32
 [[ "\${ECODA_SOURCE_SNAPSHOT_REQUIRED}" == 1 ]] || exit 33
@@ -551,6 +572,9 @@ set -euo pipefail
 [[ "\${ECODA_LOGS_DIR}" == "${F2_LOGS}" ]] || exit 35
 [[ "\${PYTHONDONTWRITEBYTECODE}" == 1 ]] || exit 36
 [[ -f "\${ECODA_AUX_ROOT}/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz" ]] || exit 37
+[[ "\${ANALYSIS_NAS_ROOT}" == "${TEST_ROOT}/unmounted/gvfs/server=nas,share=Shared/batch_effect/corrected_final" ]] || exit 40
+[[ "\${NAS_TARGET_DIR}" == "${TEST_ROOT}/unmounted/gvfs/server=nas,share=Shared/project" ]] || exit 41
+[[ "\${ECODA_NAS_TARGET_DIR}" == "${TEST_ROOT}/unmounted/gvfs/server=nas,share=Shared/other" ]] || exit 42
 if mkdir "\${ECODA_SOURCE_ROOT}/__pycache__" 2>/dev/null; then
   exit 38
 fi
@@ -800,16 +824,12 @@ set -euo pipefail
 printf 'mutable-checkout\n' > "${F2_EXEC_MARKER}"
 MUTABLE_WORKER
 chmod +x "${PROJECT}/src/snapshot_worker.sh"
-cat > "${PROJECT}/src/f2_outer_worker.sh" <<F2_OUTER_WORKER
-#!/bin/bash
-set -euo pipefail
-source "${ROOT}/src/utils/bash/ecoda_runtime.sh"
-ecoda_runtime_reexec_worker stage4 "${F2_SOURCE_ROOT}/src/snapshot_worker.sh"
-F2_OUTER_WORKER
-chmod +x "${PROJECT}/src/f2_outer_worker.sh"
 : > "${FAKE_APPTAINER_LOG}"
 rm -f "${F2_EXEC_MARKER}"
-bash "${PROJECT}/src/f2_outer_worker.sh"
+export ANALYSIS_NAS_ROOT="${TEST_ROOT}/unmounted/gvfs/server=nas,share=Shared/batch_effect/corrected_final"
+export NAS_TARGET_DIR="${TEST_ROOT}/unmounted/gvfs/server=nas,share=Shared/project"
+export ECODA_NAS_TARGET_DIR="${TEST_ROOT}/unmounted/gvfs/server=nas,share=Shared/other"
+bash "${F2_SOURCE_ROOT}/src/snapshot_worker.sh"
 assert_eq snapshot-A "$(cat "${F2_EXEC_MARKER}")" \
   "relocated worker executes snapshot source"
 f2_apptainer_log="$(cat "${FAKE_APPTAINER_LOG}")"
@@ -824,17 +844,9 @@ assert_contains "${f2_apptainer_log}" "bind=${F2_LOGS}:${F2_LOGS}:rw" \
 
 # Snapshot-backed host workers must validate the run-bound runtime identity
 # before their worker body is allowed to execute.
-cat > "${PROJECT}/src/f2_host_worker.sh" <<F2_HOST_WORKER
-#!/bin/bash
-set -euo pipefail
-source "${ROOT}/src/utils/bash/ecoda_runtime.sh"
-ecoda_runtime_reexec_worker stage4 "${F2_SOURCE_ROOT}/src/snapshot_worker.sh"
-printf 'host-A\n' > "${F2_EXEC_MARKER}"
-F2_HOST_WORKER
-chmod +x "${PROJECT}/src/f2_host_worker.sh"
 export ECODA_RUNTIME_MODE=host
 rm -f "${F2_EXEC_MARKER}"
-bash "${PROJECT}/src/f2_host_worker.sh"
+bash "${F2_SOURCE_ROOT}/src/snapshot_worker.sh"
 assert_eq host-A "$(cat "${F2_EXEC_MARKER}")" \
   "host worker executes after bound runtime validation"
 cp "${F2_RUN_ROOT}/manifests/runtime.identity" \
@@ -847,7 +859,7 @@ f2_replace_key "${F2_RUN_ROOT}/manifests/runtime.identity" \
 chmod 600 "${F2_RUN_ROOT}/manifests/runtime.identity"
 chmod a-w "${F2_RUN_ROOT}/manifests"
 rm -f "${F2_EXEC_MARKER}"
-expect_fail bash "${PROJECT}/src/f2_host_worker.sh"
+expect_fail bash "${F2_SOURCE_ROOT}/src/snapshot_worker.sh"
 [[ ! -e "${F2_EXEC_MARKER}" ]] || \
   fail "host worker executed after bound runtime identity mutation"
 chmod u+w "${F2_RUN_ROOT}/manifests"
@@ -862,7 +874,7 @@ cp "${ECODA_HOST_ENV_PREFIX}/bin/python" \
 printf 'mutated host Python\n' > "${ECODA_HOST_ENV_PREFIX}/bin/python"
 chmod +x "${ECODA_HOST_ENV_PREFIX}/bin/python"
 rm -f "${F2_EXEC_MARKER}"
-expect_fail bash "${PROJECT}/src/f2_host_worker.sh"
+expect_fail bash "${F2_SOURCE_ROOT}/src/snapshot_worker.sh"
 [[ ! -e "${F2_EXEC_MARKER}" ]] || \
   fail "host worker executed after host Python mutation"
 cp "${TEST_ROOT}/f2-host-python.saved" \

@@ -79,6 +79,13 @@ printf 'RUNTIME_IMAGE=%s\nRUNTIME_MANIFEST=%s\nRUNTIME_IMAGE_SHA256=%s\nRUNTIME_
 chmod 600 "${RUN_ROOT}/manifests/source.manifest" "${RUN_ROOT}/manifests/runtime.identity"
 cat > "${TMP_DIR}/bin/sacct" <<'STUB'
 #!/bin/bash
+if [[ -n "${TAMPER_MANIFEST:-}" ]]; then
+  printf 'Lung\tbatch_effect_uncorrected\tmrvi\thvg2000\n' >> "${TAMPER_MANIFEST}"
+fi
+if [[ "${ACCOUNTING_CASE:-}" == nonoom ]]; then
+  printf '1001|FAILED|1:0\n1001_1|COMPLETED|0:0\n1001_2|FAILED|1:0\n'
+  exit 0
+fi
 case "$*" in
   *"-j 1001"*) printf '1001|COMPLETED|0:0\n1001_1|COMPLETED|0:0\n1001_2|OUT_OF_MEMORY|0:0\n' ;;
   *"-j 1002"*) printf '1002|COMPLETED|0:0\n1002_1|COMPLETED|0:0\n' ;;
@@ -92,6 +99,22 @@ printf 'ENV ECODA_SOURCE_ROOT=%s ECODA_SOURCE_MANIFEST=%s ECODA_RUNTIME_IMAGE=%s
   "${ECODA_SOURCE_ROOT:-}" "${ECODA_SOURCE_MANIFEST:-}" \
   "${ECODA_RUNTIME_IMAGE:-}" "${ECODA_RUNTIME_MANIFEST:-}" \
   "${ECODA_RUN_ROOT:-}" "${ECODA_RUN_ID:-}" "$*" >> "${CAPTURE}"
+for arg in "$@"; do
+  case "${arg}" in
+    --export=*)
+      IFS=',' read -r -a entries <<< "${arg#--export=}"
+      for entry in "${entries[@]}"; do
+        case "${entry}" in
+          ALL) ;;
+          *=*) export "${entry}" ;;
+          *) [[ -z "${entry}" ]] || export "${entry}" ;;
+        esac
+      done ;;
+  esac
+done
+if [[ -n "${RETRY_ENV_CAPTURE:-}" ]]; then
+  /bin/bash -c 'printf "%s\n" "$ANALYSIS_NAS_ROOT" "$NAS_TARGET_DIR" "$ECODA_NAS_TARGET_DIR" > "$RETRY_ENV_CAPTURE"'
+fi
 printf '1002\n'
 STUB
 chmod +x "${TMP_DIR}/bin/sacct" "${TMP_DIR}/bin/sbatch"
@@ -133,6 +156,8 @@ RUNTIME_EXPORT="$(
 )"
 MANIFEST="${RUN_ROOT}/manifests/mrvi.tsv"
 printf 'Joanito\tbatch_effect_uncorrected\tmrvi\thvg2000\nStephenson\tbatch_effect_uncorrected\tmrvi\thvg1000\n' > "${MANIFEST}"
+source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+ecoda_write_checksum "${MANIFEST}"
 WATCHDOG_OUTPUT="$(HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" ANALYSIS_PASS=uncorrected \
   PROJECT_ROOT="${SOURCE_TREE}" \
   ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}" \
@@ -228,6 +253,7 @@ rm -rf "${HPC_ROOT}/_ecoda_owners/artifact"
 [[ ! -s "${CAPTURE}" ]]
 rm -rf "${HPC_ROOT}/_ecoda_owners/artifact"
 case "${RETRY_CALLS}" in *"--time=03:00:00"*) ;; *) echo "matrix retry worker time limit missing" >&2; exit 1 ;; esac
+case "${RETRY_CALLS}" in *"--mem=256G"*) ;; *) echo "matrix retry did not respect memory ceiling" >&2; exit 1 ;; esac
 case "${RETRY_CALLS}" in *"ECODA_RUNTIME_PROFILE=stage5"*"ECODA_APPTAINER_NV=1"*) ;; *) echo "matrix retry runtime export missing" >&2; exit 1 ;; esac
 SCHEDULER_MANIFEST="${RUN_ROOT}/manifests/scheduler_ids.tsv"
 printf 'ARRAY\t1001\nWATCHDOG\t1003\n' > "${SCHEDULER_MANIFEST}"
@@ -254,3 +280,80 @@ if PROJECT_ROOT="${ROOT}" SLURM_JOB_ID=1005 HOME="${TMP_DIR}/home" PATH="${TMP_D
   exit 1
 fi
 [[ ! -e "${BAD_GATE_ROOT}/status/aggregate" ]]
+
+# Invalid bindings and widened retry writes must fail before any sbatch.
+run_watchdog() {
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
+    PROJECT_ROOT="${SOURCE_TREE}" ANALYSIS_PASS="${TEST_PASS:-uncorrected}" \
+    METHOD_TIME_LIMIT=03:00:00 MATRIX_WATCHDOG_MAX_POLLS=1 \
+    bash "${ROOT}/src/5_run_benchmark_methods/matrix_watchdog.sh" \
+    "${RUN_ROOT}" "${TEST_LABEL:-guard}" "${MANIFEST}" 1001 \
+    "${TEST_MEMORY:-128G}" 256G shared-gpu 4 \
+    "${SOURCE_TREE}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh" \
+    "${RUNTIME_EXPORT}" --gpus=1
+}
+reject_without_submit() {
+  : > "${CAPTURE}"
+  if run_watchdog; then
+    echo 'unsafe matrix retry accepted' >&2
+    exit 1
+  fi
+  [[ ! -s "${CAPTURE}" ]]
+}
+cp "${MANIFEST}" "${TMP_DIR}/initial.tsv"
+rm -f "${MANIFEST}.md5"
+reject_without_submit
+ecoda_write_checksum "${MANIFEST}"
+printf 'Lung\tbatch_effect_uncorrected\tmrvi\thvg2000\n' >> "${MANIFEST}"
+reject_without_submit
+cp "${TMP_DIR}/initial.tsv" "${MANIFEST}"
+ecoda_write_checksum "${MANIFEST}"
+export TAMPER_MANIFEST="${MANIFEST}"
+reject_without_submit
+unset TAMPER_MANIFEST
+cp "${TMP_DIR}/initial.tsv" "${MANIFEST}"
+ecoda_write_checksum "${MANIFEST}"
+BOUND_MANIFEST="${MANIFEST}"
+MANIFEST="${TMP_DIR}/outside-run.tsv"
+cp "${TMP_DIR}/initial.tsv" "${MANIFEST}"
+ecoda_write_checksum "${MANIFEST}"
+reject_without_submit
+MANIFEST="${BOUND_MANIFEST}"
+
+# Fault-inject a widened atomic manifest copy; its newly written checksum is
+# valid, but it is not the exact expected OOM subset.
+REAL_CP="$(command -v cp)"
+export REAL_CP MANIFEST
+cat > "${TMP_DIR}/bin/cp" <<'STUB'
+#!/bin/bash
+set -euo pipefail
+"${REAL_CP}" "$@"
+case "${2:-}" in
+  *.retry_*.tsv.tmp.*)
+    awk 'NR == 1 { print; exit }' "${MANIFEST}" >> "$2" ;;
+esac
+STUB
+chmod +x "${TMP_DIR}/bin/cp"
+reject_without_submit
+rm -f "${TMP_DIR}/bin/cp"
+export ACCOUNTING_CASE=nonoom
+reject_without_submit
+unset ACCOUNTING_CASE
+TEST_MEMORY=256G reject_without_submit
+
+# Execute the stub retry worker with Slurm's comma-separated export semantics.
+TEST_PASS=corrected
+TEST_LABEL=comma
+printf 'Joanito\tbatch_effect_corrected\tmrvi\nStephenson\tbatch_effect_corrected\tmrvi\n' > "${MANIFEST}"
+ecoda_write_checksum "${MANIFEST}"
+export ANALYSIS_VARIANT=corrected_final
+export ANALYSIS_ROOT="${HPC_ROOT}/batch_effect/corrected_final"
+export NAS_TARGET_DIR="${TMP_DIR}/gvfs/server=nas,share=Shared/project"
+export ECODA_NAS_TARGET_DIR="${NAS_TARGET_DIR}"
+export ANALYSIS_NAS_ROOT="${NAS_TARGET_DIR}/batch_effect/corrected_final"
+export ANALYSIS_LOG_PREFIX=execution_times_batch_effect_corrected_final_
+export RETRY_ENV_CAPTURE="${TMP_DIR}/retry-worker.env"
+mkdir -p "${ANALYSIS_ROOT}" "${ANALYSIS_NAS_ROOT}"
+run_watchdog
+printf '%s\n' "${ANALYSIS_NAS_ROOT}" "${NAS_TARGET_DIR}" "${ECODA_NAS_TARGET_DIR}" > "${TMP_DIR}/expected-worker.env"
+cmp "${TMP_DIR}/expected-worker.env" "${RETRY_ENV_CAPTURE}"

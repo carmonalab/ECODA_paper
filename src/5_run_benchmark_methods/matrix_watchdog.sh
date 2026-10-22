@@ -36,6 +36,8 @@ WORKER_TIME_LIMIT="${METHOD_TIME_LIMIT:-${BENCHMARK_CPU_TIME_LIMIT}}"
 [[ -d "${RUN_ROOT}" ]] || { echo "ERROR: matrix run root is missing: ${RUN_ROOT}" >&2; exit 1; }
 export ECODA_RUN_ROOT="${RUN_ROOT}"
 export ECODA_RUN_ID="${ECODA_RUN_ID:-${RUN_ROOT##*/}}"
+ecoda_validate_run_owned_path "${ROOT_MANIFEST}" "${RUN_ROOT}" ||
+  { echo "ERROR: matrix manifest escaped the run root." >&2; exit 1; }
 MATRIX_MANIFEST_COLUMNS="$(
   awk -F '\t' '
     NF == 3 { saw_three = 1 }
@@ -49,6 +51,10 @@ MATRIX_MANIFEST_COLUMNS="$(
 )" || { echo "ERROR: matrix manifest must have uniform three or four columns." >&2; exit 1; }
 ecoda_validate_manifest "${ROOT_MANIFEST}" "${MATRIX_MANIFEST_COLUMNS}" ||
   { echo "ERROR: matrix manifest is invalid." >&2; exit 1; }
+ecoda_validate_checksum "${ROOT_MANIFEST}" ||
+  { echo "ERROR: matrix manifest checksum is invalid." >&2; exit 1; }
+ROOT_MANIFEST_MD5="${ECODA_CHECKSUM_MD5}"
+CURRENT_MANIFEST_MD5="${ROOT_MANIFEST_MD5}"
 if [[ -n "${ANALYSIS_PASS:-}" ]]; then
   unset BENCHMARK_MANIFEST
   # ROOT_MANIFEST is method-scoped (column 3 is the method); the immutable
@@ -82,6 +88,13 @@ status_write() {
   mv -f "${tmp}" "${STATUS_FILE}"
 }
 fail() { status_write FAIL "$1"; exit 1; }
+matrix_validate_bound_manifest() {
+  local manifest="$1" digest="$2"
+  ecoda_validate_run_owned_path "${manifest}" "${RUN_ROOT}" &&
+    ecoda_validate_manifest "${manifest}" "${MATRIX_MANIFEST_COLUMNS}" &&
+    ecoda_validate_checksum "${manifest}" &&
+    [[ "${ECODA_CHECKSUM_MD5}" == "${digest}" ]]
+}
 [[ -n "${RUNTIME_EXPORT}" ]] || fail "matrix watchdog runtime export is missing"
 export ECODA_RUNTIME_PROFILE="${ECODA_RUNTIME_PROFILE:-stage5}"
 if [[ -n "${RUN_ROOT:-}" ]]; then
@@ -196,6 +209,10 @@ expected="$(wc -l < "${CURRENT_MANIFEST}" | tr -d '[:space:]')"
 [[ "${expected}" =~ ^[1-9][0-9]*$ ]] || fail "benchmark matrix manifest empty"
 while :; do
   classify "${ARRAY_ID}" "${expected}" || fail "sacct did not provide terminal matrix task rows"
+  matrix_validate_bound_manifest "${ROOT_MANIFEST}" "${ROOT_MANIFEST_MD5}" ||
+    fail "initial matrix manifest changed or lost its binding"
+  matrix_validate_bound_manifest "${CURRENT_MANIFEST}" "${CURRENT_MANIFEST_MD5}" ||
+    fail "current matrix manifest changed or lost its binding"
   [[ ${#FAILED_TASKS[@]} -eq 0 ]] || fail "non-OOM matrix task failure: ${FAILED_TASKS[*]}"
   [[ ${#OOM_TASKS[@]} -eq 0 ]] && break
   mem_ge "${CURRENT_MEMORY}" "${MAX_MEMORY}" && fail "matrix OOM at ${MAX_MEMORY} ceiling: ${OOM_TASKS[*]}"
@@ -211,20 +228,31 @@ while :; do
   RETRY_TMP="${RETRY_MANIFEST}.build.$$"
   : > "${RETRY_TMP}"
   for task in "${OOM_TASKS[@]}"; do
-    sed -n "${task}p" "${CURRENT_MANIFEST}" >> "${RETRY_TMP}"
+    [[ "${task}" =~ ^[1-9][0-9]*$ && "${task}" -le "${expected}" ]] ||
+      fail "OOM task index is outside the bound matrix manifest"
+    awk -v task="${task}" 'NR == task { print }' "${CURRENT_MANIFEST}" >> "${RETRY_TMP}"
   done
+  # Exact rows (including any fourth column), never a dataset/method projection.
+  awk 'NR == FNR { allowed[$0]=1; next }
+       !($0 in allowed) || seen[$0]++ { exit 1 }' \
+    "${ROOT_MANIFEST}" "${RETRY_TMP}" ||
+    fail "matrix retry is not an OOM-only subset of the initial manifest"
+  RETRY_MANIFEST_MD5="$(ecoda_md5_file "${RETRY_TMP}")" ||
+    fail "failed to bind expected matrix OOM subset"
   if ! ecoda_atomic_install_manifest "${RETRY_TMP}" "${RETRY_MANIFEST}" "${MATRIX_MANIFEST_COLUMNS}"; then
     fail "failed to install matrix retry manifest atomically"
   fi
+  ecoda_write_checksum "${RETRY_MANIFEST}" ||
+    fail "failed to checksum matrix retry manifest"
   rm -f "${RETRY_TMP}"
-  ecoda_validate_run_owned_path "${RETRY_MANIFEST}" "${RUN_ROOT}" ||
-    fail "matrix retry manifest escaped the run root"
-  ecoda_validate_manifest "${RETRY_MANIFEST}" "${MATRIX_MANIFEST_COLUMNS}" || fail "matrix retry manifest is invalid"
+  matrix_validate_bound_manifest "${RETRY_MANIFEST}" "${RETRY_MANIFEST_MD5}" ||
+    fail "matrix retry differs from the exact bound OOM subset"
   retry_count="$(wc -l < "${RETRY_MANIFEST}" | tr -d '[:space:]')"
   RETRY_LOG_PREFIX="${LOGS_DIR}/5_matrix_${safe_label}${RETRY_PATH_SUFFIX}_retry${RETRY_INDEX}"
   retry_export="ALL,MATRIX_RETRY_MANIFEST=${RETRY_MANIFEST},ANALYSIS_MANIFEST=${RETRY_MANIFEST},MATRIX_RETRY=1,JOB_LOG_PREFIX=${RETRY_LOG_PREFIX},ECODA_RUN_ROOT=${RUN_ROOT},ECODA_RUN_ID=${ECODA_RUN_ID},ECODA_SELECTION_MANIFEST=${ROOT_MANIFEST},FORCE_BENCHMARK=${WATCHDOG_FORCE_BENCHMARK}"
   if [[ "${ANALYSIS_VARIANT:-}" == "corrected_final" ]]; then
-    retry_export="${retry_export},ANALYSIS_VARIANT=${ANALYSIS_VARIANT},ANALYSIS_PASS=${ANALYSIS_PASS},ANALYSIS_ROOT=${ANALYSIS_ROOT},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT},ANALYSIS_LOG_PREFIX=${ANALYSIS_LOG_PREFIX}"
+    export ANALYSIS_NAS_ROOT
+    retry_export="${retry_export},ANALYSIS_VARIANT=${ANALYSIS_VARIANT},ANALYSIS_PASS=${ANALYSIS_PASS},ANALYSIS_ROOT=${ANALYSIS_ROOT},ANALYSIS_NAS_ROOT,ANALYSIS_LOG_PREFIX=${ANALYSIS_LOG_PREFIX}"
   elif [[ -n "${ANALYSIS_PASS:-}" ]]; then
     unset BENCHMARK_MANIFEST
     retry_export="${retry_export},ANALYSIS_PASS=${ANALYSIS_PASS}"
@@ -240,6 +268,12 @@ while :; do
     fail "matrix retry output ownership validation failed"
   matrix_require_source_script "${WORKER_SCRIPT}" ||
     fail "matrix retry worker script is outside the immutable source root"
+  matrix_validate_bound_manifest "${ROOT_MANIFEST}" "${ROOT_MANIFEST_MD5}" ||
+    fail "initial matrix manifest changed before retry submission"
+  matrix_validate_bound_manifest "${CURRENT_MANIFEST}" "${CURRENT_MANIFEST_MD5}" ||
+    fail "current matrix manifest changed before retry submission"
+  matrix_validate_bound_manifest "${RETRY_MANIFEST}" "${RETRY_MANIFEST_MD5}" ||
+    fail "matrix retry changed before submission"
   set +e
   retry_msg="$(sbatch --parsable --array="1-${retry_count}%${THROTTLE}" --partition="${PARTITION}" "${WORKER_FLAGS[@]}" --time="${WORKER_TIME_LIMIT}" --mem="${NEXT_MEMORY}" \
     --output="${RETRY_LOG_PREFIX}_%A_%a.log" --error="${RETRY_LOG_PREFIX}_%A_%a.err" \
@@ -256,5 +290,6 @@ while :; do
     echo "MATRIX_RETRY_ARRAY_JOB_ID=${ARRAY_ID}"
   fi
   CURRENT_MANIFEST="${RETRY_MANIFEST}"; expected="${retry_count}"; CURRENT_MEMORY="${NEXT_MEMORY}"
+  CURRENT_MANIFEST_MD5="${RETRY_MANIFEST_MD5}"
 done
 status_write OK "matrix array and OOM retries completed"

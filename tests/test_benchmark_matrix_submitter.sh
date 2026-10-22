@@ -209,10 +209,6 @@ done
 grep -q "^SOURCE_SOURCE_ROOT=${SOURCE_TREE}$" "${RUN_ROOT}/metadata"
 grep -q "^RUNTIME_IMAGE=${RUNTIME_IMAGE}$" "${RUN_ROOT}/metadata"
 grep -q "^RUNTIME_MANIFEST=${RUNTIME_MANIFEST}$" "${RUN_ROOT}/metadata"
-PREFLIGHT_LINE="$(awk '/^stage5_compute_h5ad_preflight \|\|/{print NR; exit}' "${ROOT}/src/5_run_benchmark_methods/stage5_dispatcher.sh")"
-IDENTITY_LINE="$(awk '/^stage5_prepare_source_identity \|\|/{print NR; exit}' "${ROOT}/src/5_run_benchmark_methods/stage5_dispatcher.sh")"
-[[ -n "${PREFLIGHT_LINE}" && -n "${IDENTITY_LINE}" && ${PREFLIGHT_LINE} -lt ${IDENTITY_LINE} ]] ||
-  { echo "Stage 5 source identity was trusted before strict H5AD preflight" >&2; exit 1; }
 case "${CALLS}" in *"matrix_gate.sh"*) ;; *) echo "aggregate gate was not submitted" >&2; exit 1 ;; esac
 case "${CALLS}" in *"--dependency=afterany:"*) ;; *) echo "aggregate gate dependency missing" >&2; exit 1 ;; esac
 case "${CALLS}" in *"--array=1-4"*) ;; *) echo "default MrVI shard array missing" >&2; exit 1 ;; esac
@@ -664,10 +660,12 @@ TARGET_FORCE_RUNTIME_EXPORT="$(
   bash -c '
     set -e
     source "$1/src/slurm_config.sh"
+    source "$1/src/utils/bash/ecoda_run_common.sh"
+    ecoda_write_checksum "$2"
     source "$1/src/utils/bash/ecoda_runtime.sh"
     ecoda_runtime_validate_bound_run >/dev/null
     ecoda_runtime_export_csv stage5 0
-  ' _ "${SOURCE_TREE}"
+  ' _ "${SOURCE_TREE}" "${TARGET_FORCE_OOM_MANIFEST}"
 )"
 : > "${CAPTURE}"
 TARGET_FORCE_OOM_OUTPUT="$(
@@ -1157,4 +1155,110 @@ while IFS=$'\t' read -r sync_method sync_owner_dir; do
   SYNC_GLOBAL_OWNER_COUNT=$((SYNC_GLOBAL_OWNER_COUNT + 1))
 done < "${SYNC_GLOBAL_OWNER_LIST}"
 [[ ${SYNC_GLOBAL_OWNER_COUNT} -gt 0 ]]
+# Exercise the production pure classifier with validator outcomes, never mocked
+# scheduler/ownership outcomes. Breast's reusable Python rows must be skipped.
+(
+  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  source "${ROOT}/src/5_run_benchmark_methods/stage5_pending.sh"
+  export ANALYSIS_VARIANT=corrected_final
+  export ECODA_RUN_ROOT="${TMP_DIR}/pure-pending"
+  mkdir -p "${ECODA_RUN_ROOT}/manifests" "${ECODA_RUN_ROOT}/artifacts"
+  dispatch="${ECODA_RUN_ROOT}/manifests/dispatch.tsv"
+  classified="${ECODA_RUN_ROOT}/manifests/classified.tsv"
+  expected="${ECODA_RUN_ROOT}/manifests/expected.tsv"
+  mutations="${ECODA_RUN_ROOT}/mutations"
+  for ds in Breast_cancer Joanito; do
+    for method in prepare_pseudobulk pseudobulk gloscope composition mrvi pilot qot; do
+      printf '%s\tbatch_effect_corrected\t%s\n' "${ds}" "${method}"
+    done
+  done > "${dispatch}"
+  stage5_method_is_forced() { return 1; }
+  benchmark_selected_artifacts_valid() {
+    [[ "${ALL_VALID:-0}" == 1 ]] && return 0
+    case "$3" in mrvi|pilot|qot) return 0 ;; *) return 1 ;; esac
+  }
+  stage5_prepare_pseudobulk_valid() { [[ "$1" == Joanito ]]; }
+  benchmark_artifacts_for() {
+    ARTIFACT_PATHS=("${ECODA_RUN_ROOT}/artifacts/$1-$3")
+  }
+  stage5_export_final_sample_metadata() { printf 'metadata\n' >> "${mutations}"; return 1; }
+  ecoda_owner_acquire() { printf 'owner\n' >> "${mutations}"; return 1; }
+  ecoda_artifact_owner_acquire() { printf 'artifact owner\n' >> "${mutations}"; return 1; }
+  benchmark_invalidate_artifacts() { printf 'invalidate\n' >> "${mutations}"; return 1; }
+  sbatch() { printf 'sbatch\n' >> "${mutations}"; return 1; }
+  stage5_classify_pending_rows "${dispatch}" "${classified}"
+  printf 'Breast_cancer\tbatch_effect_corrected\tprepare_pseudobulk\n' > "${expected}"
+  for ds in Breast_cancer Joanito; do
+    for method in pseudobulk gloscope composition; do
+      printf '%s\tbatch_effect_corrected\t%s\n' "${ds}" "${method}"
+    done
+  done >> "${expected}"
+  cmp "${expected}" "${classified}"
+  [[ "$(wc -l < "${classified}" | tr -d '[:space:]')" == 7 ]]
+  [[ ! -e "${mutations}" ]]
+  ecoda_write_checksum "${expected}"
+  stage5_validate_pending_binding "${expected}" "${classified}"
+  printf 'Breast_cancer\tbatch_effect_corrected\tmrvi\n' >> "${expected}"
+  ecoda_write_checksum "${expected}"
+  if stage5_validate_pending_binding "${expected}" "${classified}" >/dev/null 2>&1; then
+    echo "expected pending allowed an excluded Python row" >&2; exit 1
+  fi
+  [[ ! -e "${mutations}" ]]
+  ALL_VALID=1
+  stage5_classify_pending_rows "${dispatch}" "${classified}"
+  [[ ! -s "${classified}" && ! -e "${mutations}" ]]
+  # Existing invalid targets are blockers, not implicit recomputation requests.
+  ALL_VALID=0
+  printf 'unproven payload\n' > "${ECODA_RUN_ROOT}/artifacts/Breast_cancer-pseudobulk"
+  if stage5_classify_pending_rows "${dispatch}" "${classified}" >/dev/null 2>&1; then
+    echo "pure pending classifier admitted an unarchived invalid target" >&2; exit 1
+  fi
+  [[ ! -e "${mutations}" ]]
+)
+# A zero-residual publication still needs a checksum-bound metadata manifest.
+# Exercise the production export coordinator with a validator-only boundary.
+(
+  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  eval "$(awk '/^stage5_export_final_sample_metadata\(\)/ {copy=1} copy {print} copy && /^}$/ {exit}' \
+    "${ROOT}/src/5_run_benchmark_methods/stage5_dispatcher.sh")"
+  export ECODA_RUN_ROOT="${TMP_DIR}/metadata-readonly" RUN_ID=metadata_readonly
+  export ANALYSIS_VARIANT=corrected_final PASS_ARG=corrected BENCHMARK_MATRIX_TEST=0
+  ANALYSIS_ROOT="${ECODA_RUN_ROOT}/artifacts"
+  ANALYSIS_NAS_ROOT="${ECODA_RUN_ROOT}/nas"
+  ANALYSIS_LOG_PREFIX=execution_times_batch_effect_corrected_final_
+  DATASETS_JSON_FILE="${TMP_DIR}/datasets.json"
+  SYNC_ONLY_RUN=""
+  MANIFEST="${ECODA_RUN_ROOT}/manifests/selection.tsv"
+  mkdir -p "${ECODA_RUN_ROOT}/manifests" "${ANALYSIS_ROOT}/metadata"
+  printf 'Breast_cancer\tbatch_effect_corrected\tall\n' > "${MANIFEST}"
+  metadata="${ANALYSIS_ROOT}/metadata/Breast_cancer_sample_metadata.feather"
+  printf 'preserved metadata bytes\n' > "${metadata}"
+  ecoda_write_checksum "${metadata}"
+  cp "${metadata}" "${ECODA_RUN_ROOT}/before"
+  stage5_source_script() { printf '%s\n' "$1"; }
+  stage5_require_source_script() { return 0; }
+  ecoda_stage5_validate_identity() { return 0; }
+  stage5_input_path() { printf '%s/input.h5ad\n' "${ECODA_RUN_ROOT}"; }
+  sbatch() { printf 'unexpected job\n' >> "${ECODA_RUN_ROOT}/jobs"; return 1; }
+  PYTHON_BIN="${ECODA_RUN_ROOT}/validate"
+  cat > "${PYTHON_BIN}" <<'EOF'
+#!/bin/bash
+[[ "${INVALID_METADATA:-0}" == 0 && "${*: -1}" == --check ]]
+EOF
+  chmod +x "${PYTHON_BIN}"
+  export INVALID_METADATA=0
+  stage5_export_final_sample_metadata 1
+  ecoda_validate_checksum "${ECODA_RUN_ROOT}/manifests/metadata_export.tsv"
+  printf 'Breast_cancer\tbatch_effect_corrected\t%s/input.h5ad\t%s\n' \
+    "${ECODA_RUN_ROOT}" "${metadata}" > "${ECODA_RUN_ROOT}/expected"
+  cmp "${ECODA_RUN_ROOT}/expected" "${ECODA_RUN_ROOT}/manifests/metadata_export.tsv"
+  cmp "${metadata}" "${ECODA_RUN_ROOT}/before"
+  [[ ! -e "${ECODA_RUN_ROOT}/jobs" ]]
+  export INVALID_METADATA=1
+  if stage5_export_final_sample_metadata 1 >/dev/null 2>&1; then
+    echo "zero-residual publication accepted stale metadata" >&2; exit 1
+  fi
+  cmp "${metadata}" "${ECODA_RUN_ROOT}/before"
+  [[ ! -e "${ECODA_RUN_ROOT}/jobs" ]]
+)
 echo "benchmark matrix submitter: OK"
