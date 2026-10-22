@@ -95,11 +95,13 @@ def digest(path, algorithm='md5'):
     return h.hexdigest()
 
 
-def fields(path):
+def fields(path, *, metadata=False):
     result = {}
     for line in safe_path(str(path), True).read_text().splitlines():
+        if metadata and not line:
+            continue
         key, sep, value = line.partition('=')
-        if not sep or not key or not value or key in result:
+        if not sep or not key or (not value and not metadata) or key in result:
             raise ValueError(f'malformed evidence: {path}')
         result[key] = value
     return result
@@ -201,7 +203,7 @@ def main(argv):
         shell('ecoda_init_run stage5 "$1"', run_id)
     else:
         shell('ecoda_open_run "$1" stage5', run_id)
-        prior = fields(report / 'metadata')
+        prior = fields(report / 'metadata', metadata=True)
         if prior.get('CUTOVER_ID') != compute_id:
             raise ValueError('report root is not a matching interrupted maintenance run')
     os.environ.update(ECODA_RUN_ID=run_id, ECODA_RUN_ROOT=str(report))
@@ -215,7 +217,7 @@ def main(argv):
             checksum(dst)
     shell('ecoda_runtime_validate_submission apptainer')
     shell('ecoda_runtime_validate_bound_run')
-    metadata = fields(report / 'metadata')
+    metadata = fields(report / 'metadata', metadata=True)
     metadata.update(CUTOVER_ID=compute_id, MAINTENANCE_MODE=mode[2:], NAS_ROOT=str(nas),
                     SOURCE_RUN=source_run, SOURCE_MANIFEST_SHA256=digest(source_manifest, 'sha256'))
     atomic(report / 'metadata', ''.join(f'{k}={v}\n' for k, v in metadata.items()))
@@ -227,7 +229,7 @@ def main(argv):
     write_report(identity, json.dumps(current, indent=2) + '\n')
     current_records = identity_module.load_source_identity(identity)
     old_root = safe_path(str(runs / source_run), True)
-    old_metadata = fields(old_root / 'metadata')
+    old_metadata = fields(old_root / 'metadata', metadata=True)
     old_terminal_path = old_root / 'status/terminal'
     old_terminal = fields(old_terminal_path) if old_terminal_path.is_file() else {}
     if (old_metadata.get('RUN_ID') != source_run
@@ -322,7 +324,7 @@ def main(argv):
 
     def promotion_sources(run, ds, method):
         run_root = safe_path(str(runs / run), True)
-        meta = fields(run_root / 'metadata')
+        meta = fields(run_root / 'metadata', metadata=True)
         if run != run_id and meta.get('MAINTENANCE_MODE') != 'execute':
             return None
         foreign = run != run_id
@@ -450,7 +452,7 @@ def main(argv):
                 paths.update(original_evidence(original_run, ds, method, require_success, (*trail, run)))
             return paths
         run_root = safe_path(str(runs / run), True)
-        meta = fields(run_root / 'metadata')
+        meta = fields(run_root / 'metadata', metadata=True)
         terminal_path = run_root / 'status/terminal'
         terminal = fields(terminal_path) if terminal_path.is_file() else {}
         if (meta.get('RUN_ID') != run or terminal.get('RUN_ID') != run
@@ -1093,7 +1095,7 @@ stage5_classify_pending_rows "$1" "$2"
     checksum(final_receipt)
     atomic(report / 'status/maintenance', 'STATE=BACKUP_VERIFIED\nNO_COMPUTE=1\n')
     shell('ecoda_set_run_state OK "corrected promotion backups verified; compute outcome is independent"')
-    completed_metadata = fields(report / 'metadata')
+    completed_metadata = fields(report / 'metadata', metadata=True)
     completed_metadata['STATE'] = 'OK'
     atomic(report / 'metadata', ''.join(f'{key}={value}\n' for key, value in completed_metadata.items()))
     env = os.environ.copy()

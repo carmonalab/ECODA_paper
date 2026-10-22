@@ -53,6 +53,14 @@ def rejects(operation, message):
 
 with tempfile.TemporaryDirectory(prefix='ecoda-promotion-') as temporary:
     base = Path(temporary).resolve()
+    metadata_probe = base / 'metadata'
+    metadata_probe.write_text('RUN_ID=producer\nFORCE_REASON=\n\nTARGET_METHODS=\n')
+    assert ns['fields'](metadata_probe, metadata=True) == {
+        'RUN_ID': 'producer', 'FORCE_REASON': '', 'TARGET_METHODS': ''}
+    rejects(lambda: ns['fields'](metadata_probe), 'empty checksum/owner evidence accepted')
+    for malformed in ('RUN_ID=producer\nRUN_ID=other\n', 'RUN_ID=producer\nmissing_equals\n', '=value\n'):
+        metadata_probe.write_text(malformed)
+        rejects(lambda: ns['fields'](metadata_probe, metadata=True), 'malformed/duplicate metadata accepted')
     scratch = base / 'scratch'
     runs = scratch / '_ecoda_runs'
     owners = scratch / '_ecoda_owners'
@@ -85,7 +93,7 @@ with tempfile.TemporaryDirectory(prefix='ecoda-promotion-') as temporary:
     old = runs / source_run
     (old / 'manifests').mkdir(parents=True)
     (old / 'status/watchdogs').mkdir(parents=True)
-    (old / 'metadata').write_text(f'STAGE=stage5\nRUN_ID={source_run}\nSTATE=ACTIVE\n')
+    (old / 'metadata').write_text(f'STAGE=stage5\nRUN_ID={source_run}\nSTATE=ACTIVE\nANALYSES=\nFORCE_REASON=\n\nTARGET_METHODS=\n')
     (old / 'status/terminal').write_text(f'STATE=FAIL\nRUN_ID={source_run}\nREASON=fixture\nTIME=fixture\n')
     original_status = (old / 'metadata').read_bytes()
     source_record = {'dataset': 'Breast_cancer', 'view': ns['VIEW'], 'path': str(scratch / 'input.h5ad'),
@@ -345,7 +353,7 @@ for zero_residual in ((False,) if sealed_import_only or foreign_promotion_only o
             ''.join(f'{key}={ns["digest"](tree / name, "sha256")}\n' for name, key in
             (('datasets.json', 'DATASETS_SHA256'), ('pixi.toml', 'PIXI_TOML_SHA256'), ('pixi.lock', 'PIXI_LOCK_SHA256'))))
         shutil.copyfile(source_manifest, old / 'manifests/source.manifest')
-        (old / 'metadata').write_text(f'RUN_ID={source_run}\nSTAGE=stage5\nSTATE=ACTIVE\n')
+        (old / 'metadata').write_text(f'RUN_ID={source_run}\nSTAGE=stage5\nSTATE=ACTIVE\nANALYSES=\nFORCE_REASON=\n\nTARGET_METHODS=\n')
         (old / 'status/terminal').write_text(f'STATE=FAIL\nRUN_ID={source_run}\nREASON=fixture\nTIME=fixture\n')
         fixture_env['ECODA_SOURCE_MANIFEST'] = str(source_manifest)
         evidence_manifest = base / 'inventory.tsv'
@@ -530,7 +538,7 @@ else:
                 (inventory_report / 'manifests/artifact_decisions.tsv').open(), delimiter='\t'))
             python_rows = [row for row in rows if row['method'] in ns['PYTHON_METHODS']]
             assert len(python_rows) == 27 and all(row['action'] in ('REUSE', 'IMPORT') for row in python_rows)
-            assert ns['fields'](old / 'metadata')['STATE'] == 'ACTIVE'
+            assert ns['fields'](old / 'metadata', metadata=True)['STATE'] == 'ACTIVE'
             terminal = old / 'status/terminal'
             protected_paths = [path for directory in (canonical, old, scratch / '_ecoda_owners')
                 for path in directory.rglob('*') if path.is_file() and path != terminal]
@@ -565,7 +573,7 @@ else:
             assert completed.returncode != 0, 'fixture must stop at external dispatcher runtime'
             assert 'DISPATCH_RUNTIME_BOUNDARY' in (base / 'events').read_text(), completed.stderr
             assert 'UNEXPECTED_SBATCH' not in (base / 'events').read_text()
-            assert ns['fields'](promotion / 'metadata')['STATE'] == 'OK', completed.stderr
+            assert ns['fields'](promotion / 'metadata', metadata=True)['STATE'] == 'OK', completed.stderr
             assert (promotion / 'manifests/precompute_backup.json').is_file()
             canonical_paths = [path for path in canonical.rglob('*') if path.is_file()]
             owner_paths = list((scratch / '_ecoda_owners').rglob('owner'))
