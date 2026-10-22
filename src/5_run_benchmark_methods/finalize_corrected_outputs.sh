@@ -495,7 +495,15 @@ def main(argv):
         for manifest in matrices:
             lines = [line.split('\t') for line in manifest.read_text().splitlines()]
             if any(row[:3] == [ds, VIEW, method] for row in lines):
-                shell('ecoda_validate_checksum "$1"', manifest)
+                sidecar = safe_path(str(manifest) + '.md5')
+                if sidecar.exists():
+                    shell('ecoda_validate_checksum "$1"', manifest)
+                else:
+                    # Legacy producer matrices predate sidecar sealing. Their
+                    # exact bytes must instead match the pinned return inventory.
+                    relative = str(manifest.relative_to(scratch))
+                    if transfer_rows.get(relative) != (manifest.stat().st_size, digest(manifest)):
+                        raise ValueError(f'BLOCKED: unbound historical producer matrix: {manifest}')
                 label = manifest.stem[len('matrix_'):]
                 prefix = VIEW + '_' + method
                 if label == prefix:
@@ -513,7 +521,9 @@ def main(argv):
                     status_fields[key] = value
                 if status_fields.get('LABEL') != label or (require_success and status_fields.get('STATE') != 'OK'):
                     raise ValueError('BLOCKED: producer watchdog is not exact terminal OK')
-                matches.extend([manifest, Path(str(manifest) + '.md5'), status])
+                matches.extend([manifest, status])
+                if sidecar.exists():
+                    matches.append(sidecar)
         if not matches:
             raise ValueError(f'BLOCKED: missing exact method watchdog: {ds}/{method}')
         paths.update(matches)

@@ -155,6 +155,25 @@ with tempfile.TemporaryDirectory(prefix='ecoda-promotion-') as temporary:
     # Valid canonical wins independently; different recovery bytes are irrelevant.
     run, states, _ = ns['inspect']([canonical_path], 'Breast_cancer', 'mrvi')
     assert run == source_run and states == ['OK', 'OK']
+    # Older transferred producer matrices have no original sidecar. Accept only
+    # their exact pinned transfer bytes, never fabricate evidence or bypass a bad sidecar.
+    matrix_sidecar = Path(str(matrix) + '.md5')
+    matrix_checksum = matrix_sidecar.read_bytes()
+    matrix_bytes = matrix.read_bytes()
+    matrix_relative = str(matrix.relative_to(scratch))
+    ns['transfer_rows'][matrix_relative] = (matrix.stat().st_size, ns['digest'](matrix))
+    matrix_sidecar.unlink()
+    ns['inspect']([canonical_path], 'Breast_cancer', 'mrvi')
+    assert not matrix_sidecar.exists(), 'historical checksum was fabricated'
+    matrix.write_bytes(matrix_bytes + b'other\tbatch_effect_corrected\tmrvi\n')
+    rejects(lambda: ns['inspect']([canonical_path], 'Breast_cancer', 'mrvi'), 'changed unchecksummed producer matrix accepted')
+    matrix.write_bytes(matrix_bytes)
+    del ns['transfer_rows'][matrix_relative]
+    rejects(lambda: ns['inspect']([canonical_path], 'Breast_cancer', 'mrvi'), 'unbound producer matrix accepted')
+    ns['transfer_rows'][matrix_relative] = (matrix.stat().st_size, ns['digest'](matrix))
+    matrix_sidecar.write_bytes(matrix_checksum.replace(b'MD5=', b'MD5=bad'))
+    rejects(lambda: ns['inspect']([canonical_path], 'Breast_cancer', 'mrvi'), 'bad existing sidecar bypassed via transfer evidence')
+    matrix_sidecar.write_bytes(matrix_checksum)
     ns['inspect']([candidate], 'Breast_cancer', 'mrvi', True)
     assert candidate.read_bytes() == candidate_before
     assert (old / 'metadata').read_bytes() == original_status
