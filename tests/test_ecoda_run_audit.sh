@@ -639,6 +639,7 @@ EOF
 
 run_audit() {
   local run_root="$1" stage="$2" selection="$3" expected_rc="$4"
+  shift 4
   local rc audit_log
   audit_log="${AUDIT_LOG_DIR}/audit-${run_root##*/}.log"
   : > "${audit_log}"
@@ -648,7 +649,7 @@ run_audit() {
     bash "${ROOT}/src/utils/bash/ecoda_run_audit.sh" \
       --run-root "${run_root}" --stage "${stage}" --selection "${selection}" \
       --source-manifest "${SOURCE_MANIFEST}" \
-      --runtime-identity "${RUNTIME_IDENTITY}"
+      --runtime-identity "${RUNTIME_IDENTITY}" "$@"
   ) >"${audit_log}" 2>&1
   rc=$?
   set -e
@@ -662,6 +663,47 @@ run_audit() {
 prepare_corrected_final_run
 CORRECTED_SELECTION="${CORRECTED_RUN_ROOT}/manifests/selection.tsv"
 run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 0
+
+# One gate accounting capture feeds the run audit without querying Slurm again.
+ACCOUNTING="${CORRECTED_RUN_ROOT}/manifests/scheduler_accounting.tsv"
+ACCOUNTING_CALLS="${TMP_DIR}/accounting.calls"
+mkdir -p "${TMP_DIR}/accounting-bin"
+cat > "${TMP_DIR}/accounting-bin/sacct" <<'SH'
+#!/bin/bash
+printf 'query\n' >> "${ACCOUNTING_CALLS}"
+printf '123|COMPLETED|0:0\n124|COMPLETED|0:0\n'
+SH
+chmod +x "${TMP_DIR}/accounting-bin/sacct"
+export ACCOUNTING_CALLS
+ACCOUNTING_OLD_PATH="${PATH}"
+export PATH="${TMP_DIR}/accounting-bin:${PATH}"
+printf 'array\t123\nwatchdog\t124\n' > "${CORRECTED_RUN_ROOT}/manifests/scheduler_ids.tsv"
+run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 0
+[[ "$(wc -l < "${ACCOUNTING_CALLS}" | tr -d '[:space:]')" == 1 ]]
+printf '123|COMPLETED|0:0\n124|COMPLETED|0:0\n' > "${ACCOUNTING}"
+ecoda_write_checksum "${ACCOUNTING}" >/dev/null
+run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 0 --scheduler-accounting "${ACCOUNTING}"
+printf '123|COMPLETED|0:0\n' > "${ACCOUNTING}"
+run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 1 --scheduler-accounting "${ACCOUNTING}"
+ecoda_write_checksum "${ACCOUNTING}" >/dev/null
+run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 1 --scheduler-accounting "${ACCOUNTING}"
+printf '123|RUNNING|0:0\n124|COMPLETED|0:0\n' > "${ACCOUNTING}"
+ecoda_write_checksum "${ACCOUNTING}" >/dev/null
+run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 1 --scheduler-accounting "${ACCOUNTING}"
+printf '123|COMPLETED|0:0\n124|COMPLETED|0:0\n' > "${ACCOUNTING}"
+ecoda_write_checksum "${ACCOUNTING}" >/dev/null
+cp "${ACCOUNTING}" "${TMP_DIR}/foreign-accounting.tsv"
+ecoda_write_checksum "${TMP_DIR}/foreign-accounting.tsv" >/dev/null
+run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 1 --scheduler-accounting "${TMP_DIR}/foreign-accounting.tsv"
+mv "${ACCOUNTING}" "${ACCOUNTING}.saved"
+ln -s "${ACCOUNTING}.saved" "${ACCOUNTING}"
+run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 1 --scheduler-accounting "${ACCOUNTING}"
+rm "${ACCOUNTING}"
+mv "${ACCOUNTING}.saved" "${ACCOUNTING}"
+[[ "$(wc -l < "${ACCOUNTING_CALLS}" | tr -d '[:space:]')" == 1 ]]
+: > "${CORRECTED_RUN_ROOT}/manifests/scheduler_ids.tsv"
+export PATH="${ACCOUNTING_OLD_PATH}"
+echo "run audit reuses exact run-owned accounting without repeat scheduler queries: OK"
 
 grep -F -- "${CORRECTED_ROOT}/embeddings/Fixture_batch_effect_corrected_final_hvg2000_highres_mrvi_dists.feather" \
   "${VALIDATOR_LOG}" >/dev/null

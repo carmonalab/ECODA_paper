@@ -10,6 +10,7 @@ STAGE_ARG=""
 SELECTION_ARG=""
 SOURCE_MANIFEST_ARG=""
 RUNTIME_IDENTITY_ARG=""
+SCHEDULER_ACCOUNTING_ARG=""
 
 
 _audit_die() {
@@ -22,7 +23,8 @@ _audit_usage() {
 Usage: ecoda_run_audit.sh --run-root ABSOLUTE_RUN_ROOT --stage STAGE \
        --selection ABSOLUTE_SELECTION \
        --source-manifest ABSOLUTE_SOURCE_MANIFEST \
-       --runtime-identity ABSOLUTE_RUNTIME_IDENTITY
+       --runtime-identity ABSOLUTE_RUNTIME_IDENTITY \
+       [--scheduler-accounting ABSOLUTE_RUN_OWNED_ACCOUNTING_TSV]
 EOF
 }
 
@@ -66,6 +68,16 @@ while [[ $# -gt 0 ]]; do
       ;;
     --runtime-identity=*)
       RUNTIME_IDENTITY_ARG="${1#*=}"
+      shift
+      ;;
+    --scheduler-accounting)
+      [[ -n "${2:-}" ]] || { _audit_die "--scheduler-accounting requires a path"; exit 1; }
+      SCHEDULER_ACCOUNTING_ARG="$2"
+      shift 2
+      ;;
+    --scheduler-accounting=*)
+      SCHEDULER_ACCOUNTING_ARG="${1#*=}"
+      [[ -n "${SCHEDULER_ACCOUNTING_ARG}" ]] || { _audit_die "--scheduler-accounting requires a path"; exit 1; }
       shift
       ;;
     -h|--help)
@@ -527,7 +539,18 @@ _audit_scheduler_ids() {
     fi
   done < "${scheduler_file}"
   [[ ${#requested_ids[@]} -gt 0 ]] || return 1
-  if ! rows="$(sacct -n -P -X -j "${id_list}" \
+  if [[ -n "${SCHEDULER_ACCOUNTING_ARG}" ]]; then
+    # Durable-gate inspect captures its one real query before artifact audits.
+    # Consume those exact bytes; never issue another query as a fallback.
+    [[ "${SCHEDULER_ACCOUNTING_ARG}" == "${RUN_ROOT_REAL}/manifests/scheduler_accounting.tsv" ]] || {
+      _audit_die "scheduler accounting capture must belong to this exact run"
+      return 1
+    }
+    _audit_regular_file "${SCHEDULER_ACCOUNTING_ARG}" || return 1
+    [[ "$(realpath "${SCHEDULER_ACCOUNTING_ARG}")" == "${SCHEDULER_ACCOUNTING_ARG}" ]] || return 1
+    ecoda_validate_checksum "${SCHEDULER_ACCOUNTING_ARG}" || return 1
+    rows="$(cat "${SCHEDULER_ACCOUNTING_ARG}")" || return 1
+  elif ! rows="$(sacct -n -P -X -j "${id_list}" \
     --format=JobID,JobIDRaw,State,ExitCode 2>/dev/null)"; then
     _audit_die "scheduler accounting query failed for requested IDs: ${id_list}"
     return 1
