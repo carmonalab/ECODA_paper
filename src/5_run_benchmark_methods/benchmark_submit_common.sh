@@ -53,11 +53,19 @@ stage5_inventory_binds_file() {
 }
 
 stage5_bind_precompute_evidence() {
-  local receipt="$1" expected="$2" promotion child
+  local receipt="$1" expected="$2" promotion child inputs nas
   promotion="$(jq -er '.source_root' "${receipt}")" || return 1
   for child in inputs canonical archive; do
     stage5_inventory_binds_file "${receipt}" "${promotion}/manifests/${child}.receipt.json" || return 1
   done
+  inputs="${promotion}/manifests/inputs.receipt.json"
+  nas="$(jq -er '.nas_root' "${receipt}")" || return 1
+  # New releases require the normal dataset/output paths. Utility verification
+  # enforces the exact configured H5AD/sidecar set for this canonical root;
+  # historical completed-promotion readers remain read-only and separate.
+  [[ "$(jq -er '.destination_root' "${inputs}")" == "${nas}" &&
+     "$(jq -er '.nas_root' "${inputs}")" == "${nas}" &&
+     "$(jq -er '.selection_sha256' "${inputs}")" == "$(jq -er '.selection_sha256' "${receipt}")" ]] || return 1
   stage5_inventory_binds_file "${receipt}" "${promotion}/manifests/expected_pending.tsv" || return 1
   [[ -f "${expected}" && ! -L "${expected}" ]] || return 1
   cmp -s "${expected}" "${promotion}/manifests/expected_pending.tsv"

@@ -66,7 +66,10 @@ def fchmod(fd, mode):
         current, pinned = os.stat(attack, follow_symlinks=False), os.fstat(fd)
         if (current.st_dev, current.st_ino) == (pinned.st_dev, pinned.st_ino):
             os.rename(attack, attack + '.saved')
-            os.symlink(os.environ['SWAP_TARGET'], attack)
+            if os.environ.get('SWAP_HARDLINK') == '1':
+                os.link(os.environ['SWAP_TARGET'], attack)
+            else:
+                os.symlink(os.environ['SWAP_TARGET'], attack)
             with open(os.environ['FIXTURE_ROOT'] + '/swap.triggered', 'w') as stream:
                 stream.write(attack)
     if os.environ.get('INEFFECTIVE_CHMOD') != '1':
@@ -104,6 +107,30 @@ def descriptor_open(path, flags, mode=0o777, *, dir_fd=None):
                     stream.write('changed\n')
     return original_open(path, flags, mode, dir_fd=dir_fd)
 os.open = descriptor_open
+original_rename, original_link = os.rename, os.link
+def inject_publication_race():
+    target = os.environ.get('PUBLICATION_RACE_TARGET')
+    marker = os.environ['FIXTURE_ROOT'] + '/publication-race.triggered'
+    if target and not os.path.exists(marker):
+        with open(target + '.racing', 'w') as stream:
+            stream.write('unexpected concurrent canonical bytes\n')
+        os.replace(target + '.racing', target)
+        with open(marker, 'w') as stream:
+            stream.write(target)
+def race_rename(src, dst, *, src_dir_fd=None, dst_dir_fd=None):
+    if dst == 'predecessor' and os.environ.get('PUBLICATION_RACE_KIND') == 'conflict':
+        inject_publication_race()
+    return original_rename(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
+def race_link(src, dst, *, src_dir_fd=None, dst_dir_fd=None, follow_symlinks=True):
+    late = os.environ.get('LATE_RECEIPT_TARGET')
+    if late and dst == os.path.basename(late) and str(src).startswith('.nas-receipt-'):
+        with open(late, 'x') as stream:
+            stream.write('late bad control file\n')
+    if str(src).startswith('.ecoda-copy-') and os.environ.get('PUBLICATION_RACE_KIND') == 'absent':
+        inject_publication_race()
+    return original_link(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd,
+                         follow_symlinks=follow_symlinks)
+os.rename, os.link = race_rename, race_link
 PY
 "${real_chmod}" +x "${work}/bin/"*
 export PATH="${work}/bin:${PATH}" PYTHONPATH="${work}/python${PYTHONPATH:+:${PYTHONPATH}}"
@@ -125,6 +152,8 @@ printf 'complete\n' > "${work}/snapshot/COMPLETE"
 for name in config_helper.R datasets.json pixi.toml pixi.lock; do
   printf 'immutable fixture %s\n' "${name}" > "${work}/snapshot/tree/${name}"
 done
+printf '{"fixture":{"folder_name":"fixture-data","views":{"batch_effect_corrected":{"output_file_name":"corrected.h5ad"}}}}\n' \
+  > "${work}/snapshot/tree/datasets.json"
 manifest="${work}/snapshot/identity/source.manifest"
 printf 'FORMAT=1\nSOURCE_ROOT=%s/snapshot/tree\nSOURCE_COMMIT=1111111111111111111111111111111111111111\nSOURCE_ARCHIVE_PATH=%s/snapshot/identity/source.tar\nSOURCE_ARCHIVE_SHA256=%s\nCONFIG_HELPER_SHA256=%s\nDATASETS_SHA256=%s\nPIXI_TOML_SHA256=%s\nPIXI_LOCK_SHA256=%s\nAUX_ROOT=%s/snapshot/tree/aux\nSCGATE_DB_BRANCH=fixture\n' \
   "${work}" "${work}" "$(ecoda_sha256_file "${work}/snapshot/identity/source.tar")" \
@@ -311,6 +340,185 @@ printf 'other\tcorrected\n' > "${ECODA_RUN_ROOT}/manifests/selection.tsv"
 ecoda_write_checksum "${ECODA_RUN_ROOT}/manifests/selection.tsv"
 receipt="${ECODA_RUN_ROOT}/manifests/restored.json"
 reject verify
+# Canonical inputs publish only configured selected companions, never walk NAS.
+printf 'fixture\tbatch_effect_corrected\tbatch_effect_corrected\n' > "${ECODA_RUN_ROOT}/manifests/selection.tsv"
+ecoda_write_checksum "${ECODA_RUN_ROOT}/manifests/selection.tsv"
+input_name='fixture/output/corrected.h5ad'
+mkdir -p "${work}/source/fixture/output" "${nas}/fixture/output" "${nas}/unrelated"
+printf 'corrected canonical bytes\n' > "${work}/source/${input_name}"
+ecoda_write_checksum "${work}/source/${input_name}"
+printf 'unrelated private bytes\n' > "${nas}/unrelated/private"
+"${real_chmod}" 700 "${nas}/unrelated"
+"${real_chmod}" 600 "${nas}/unrelated/private"
+printf 'old canonical bytes\n' > "${nas}/${input_name}"
+printf 'old sidecar bytes\n' > "${nas}/${input_name}.md5"
+mkdir -p "${work}/archive-source"
+cp "${nas}/${input_name}" "${work}/archive-source/old"
+cp "${nas}/${input_name}.md5" "${work}/archive-source/old.md5"
+archive_destination="${nas}/_ecoda_backups/corrected_final/${ECODA_RUN_ID}/before"
+archive_receipt="${ECODA_RUN_ROOT}/manifests/archive.receipt.json"
+mapping="${ECODA_RUN_ROOT}/manifests/archive_mapping.tsv"
+printf 'old\nold.md5\n' > "${work}/archive-files"
+for name in old old.md5; do
+  printf '%s\t%s\t%s\n' "${name}" "$(ecoda_md5_file "${work}/archive-source/${name}")" \
+    "$(wc -c < "${work}/archive-source/${name}" | tr -d '[:space:]')"
+done > "${ECODA_RUN_ROOT}/manifests/archive_inventory.tsv"
+ecoda_write_checksum "${ECODA_RUN_ROOT}/manifests/archive_inventory.tsv"
+bash "${utility}" copy --source-root "${work}/archive-source" --nas-root "${nas}" \
+  --destination-root "${archive_destination}" --files-from "${work}/archive-files" \
+  --inventory "${ECODA_RUN_ROOT}/manifests/archive_inventory.tsv" --receipt "${archive_receipt}" \
+  --selection-file "${ECODA_RUN_ROOT}/manifests/selection.tsv" --source-manifest "${manifest}"
+printf 'original_path\tarchive_path\tmd5\tsize\n' > "${mapping}"
+for suffix in '' .md5; do
+  printf '%s\t%s\t%s\t%s\n' "${nas}/${input_name}${suffix}" "${archive_destination}/old${suffix}" \
+    "$(ecoda_md5_file "${nas}/${input_name}${suffix}")" \
+    "$(wc -c < "${nas}/${input_name}${suffix}" | tr -d '[:space:]')" >> "${mapping}"
+done
+ecoda_write_checksum "${mapping}"
+printf '%s\n%s.md5\n' "${input_name}" "${input_name}" > "${work}/input-files"
+input_inventory="${ECODA_RUN_ROOT}/manifests/input_inventory.tsv"
+make_input_inventory() {
+  while IFS= read -r name; do
+    printf '%s\t%s\t%s\n' "${name}" "$(ecoda_md5_file "${work}/source/${name}")" \
+      "$(wc -c < "${work}/source/${name}" | tr -d '[:space:]')"
+  done < "${work}/input-files" > "${input_inventory}"
+  ecoda_write_checksum "${input_inventory}"
+}
+make_input_inventory
+receipt="${ECODA_RUN_ROOT}/manifests/inputs.receipt.json"
+publish() {
+  bash "${utility}" publish-inputs --source-root "${work}/source" --nas-root "${nas}" \
+    --destination-root "${nas}" --files-from "${work}/input-files" --inventory "${input_inventory}" \
+    --receipt "${receipt}" --selection-file "${ECODA_RUN_ROOT}/manifests/selection.tsv" \
+    --source-manifest "${manifest}" --archive-receipt "${archive_receipt}" --archive-mapping "${mapping}"
+}
+# Mutations at the actual publication syscall, after all pathname prechecks,
+# cannot overwrite unarchived bytes or create a success receipt.
+quarantine="$("${real_python}" -c \
+  'import hashlib,sys; from pathlib import Path; p=Path(sys.argv[1]); print(p.parent / (".ecoda-displaced-" + hashlib.sha256(p.name.encode()).hexdigest()))' \
+  "${nas}/${input_name}")"
+PUBLICATION_RACE_TARGET="${nas}/${input_name}" PUBLICATION_RACE_KIND=conflict reject publish
+[[ ! -e "${receipt}" && -e "${work}/publication-race.triggered" ]]
+[[ "$(cat "${quarantine}/predecessor")" == 'unexpected concurrent canonical bytes' ]]
+[[ ! -e "${nas}/${input_name}" ]]
+# An interrupted/failed displacement remains a fail-closed barrier on retry.
+reject publish
+[[ "$(cat "${quarantine}/predecessor")" == 'unexpected concurrent canonical bytes' ]]
+rm "${quarantine}/predecessor" "${work}/publication-race.triggered"
+rmdir "${quarantine}"
+PUBLICATION_RACE_TARGET="${nas}/${input_name}" PUBLICATION_RACE_KIND=absent reject publish
+[[ ! -e "${receipt}" && -e "${work}/publication-race.triggered" ]]
+[[ "$(cat "${nas}/${input_name}")" == 'unexpected concurrent canonical bytes' ]]
+reject publish
+[[ "$(cat "${nas}/${input_name}")" == 'unexpected concurrent canonical bytes' ]]
+rm "${work}/publication-race.triggered"
+cp "${work}/archive-source/old" "${nas}/${input_name}"
+# A changed predecessor is not authorization to overwrite even with sealed archive.
+printf 'not archived\n' > "${nas}/${input_name}"
+reject publish
+[[ ! -e "${receipt}" ]]
+cp "${work}/archive-source/old" "${nas}/${input_name}"
+# Missing proof, bad scope, omitted companion, duplicate selection all fail closed.
+mv "${mapping}.md5" "${mapping}.saved"
+reject publish
+mv "${mapping}.saved" "${mapping}.md5"
+cp "${work}/input-files" "${work}/input-files.saved"
+printf 'nested/payload\n' >> "${work}/input-files"
+make_input_inventory
+reject publish
+cp "${work}/input-files.saved" "${work}/input-files"
+printf '%s\n' "${input_name}" > "${work}/input-files"
+make_input_inventory
+reject publish
+cp "${work}/input-files.saved" "${work}/input-files"
+make_input_inventory
+cp "${ECODA_RUN_ROOT}/manifests/selection.tsv" "${work}/canonical-selection"
+cat "${work}/canonical-selection" >> "${ECODA_RUN_ROOT}/manifests/selection.tsv"
+ecoda_write_checksum "${ECODA_RUN_ROOT}/manifests/selection.tsv"
+reject publish
+cp "${work}/canonical-selection" "${ECODA_RUN_ROOT}/manifests/selection.tsv"
+ecoda_write_checksum "${ECODA_RUN_ROOT}/manifests/selection.tsv"
+printf 'fixture\tbatch_effect_uncorrected\tbatch_effect_corrected\n' > "${ECODA_RUN_ROOT}/manifests/selection.tsv"
+ecoda_write_checksum "${ECODA_RUN_ROOT}/manifests/selection.tsv"
+reject publish
+cp "${work}/canonical-selection" "${ECODA_RUN_ROOT}/manifests/selection.tsv"
+ecoda_write_checksum "${ECODA_RUN_ROOT}/manifests/selection.tsv"
+WRONG_MOUNT_TARGET="${nas}/fixture" reject publish
+ln "${nas}/${input_name}" "${work}/canonical-hardlink"
+reject publish
+rm "${work}/canonical-hardlink"
+mv "${nas}/fixture/output" "${nas}/fixture/output.saved"
+ln -s "${work}/home-copy" "${nas}/fixture/output"
+reject publish
+rm "${nas}/fixture/output"
+mv "${nas}/fixture/output.saved" "${nas}/fixture/output"
+# Directory swap while creating the copy cannot redirect canonical publication.
+COPY_SWAP_PATH="${nas}/fixture/output" COPY_SWAP_TARGET="${work}/home-copy" reject publish
+[[ ! -e "${receipt}" && -e "${work}/copy-swap.triggered" ]]
+rm "${nas}/fixture/output" "${work}/copy-swap.triggered"
+mv "${nas}/fixture/output.saved" "${nas}/fixture/output"
+# A byte-identical source hardlink and malformed producer sidecar fail closed.
+ln "${work}/source/${input_name}" "${work}/source-hardlink"
+reject publish
+rm "${work}/source-hardlink"
+cp "${work}/source/${input_name}.md5" "${work}/input-sidecar.saved"
+printf 'MD5=wrong\n' > "${work}/source/${input_name}.md5"
+make_input_inventory
+reject publish
+cp "${work}/input-sidecar.saved" "${work}/source/${input_name}.md5"
+make_input_inventory
+publish
+# Reused matching bytes never copy, and a descriptor-time hardlink swap cannot
+# chmod unrelated private files even when a selected mode needs repair.
+receipt="${ECODA_RUN_ROOT}/manifests/hardlink-race-input.receipt.json"
+"${real_chmod}" 600 "${nas}/${input_name}"
+SWAP_PATH="${nas}/${input_name}" SWAP_TARGET="${work}/home/private" SWAP_HARDLINK=1 reject publish
+[[ ! -e "${receipt}" && -e "${work}/swap.triggered" ]]
+rm "${nas}/${input_name}" "${work}/swap.triggered"
+mv "${nas}/${input_name}.saved" "${nas}/${input_name}"
+"${real_chmod}" 666 "${nas}/${input_name}"
+publish
+verify
+cmp "${work}/source/${input_name}" "${nas}/${input_name}"
+cmp "${work}/source/${input_name}.md5" "${nas}/${input_name}.md5"
+# A protected receipt cannot be overwritten, including malformed prior receipts.
+reject publish
+receipt="${ECODA_RUN_ROOT}/manifests/bad-input.receipt.json"
+printf 'bad existing receipt\n' > "${receipt}"
+reject publish
+[[ "$(cat "${receipt}")" == 'bad existing receipt' ]]
+# A non-cooperating late writer cannot have its receipt or sidecar overwritten.
+receipt="${ECODA_RUN_ROOT}/manifests/late-input.receipt.json"
+LATE_RECEIPT_TARGET="${receipt}" reject publish
+[[ "$(cat "${receipt}")" == 'late bad control file' ]]
+reject verify
+receipt="${ECODA_RUN_ROOT}/manifests/late-sidecar-input.receipt.json"
+LATE_RECEIPT_TARGET="${receipt}.md5" reject publish
+[[ ! -e "${receipt}" && "$(cat "${receipt}.md5")" == 'late bad control file' ]]
+# Matching targets are reused; an absent selected companion can be resumed.
+receipt="${ECODA_RUN_ROOT}/manifests/matching-input.receipt.json"
+count="$(wc -l < "${work}/copy.calls")"
+publish
+[[ "$(wc -l < "${work}/copy.calls")" == "${count}" ]]
+verify
+rm "${nas}/${input_name}.md5"
+reject verify
+receipt="${ECODA_RUN_ROOT}/manifests/resumed-input.receipt.json"
+publish
+verify
+printf 'changed canonical bytes\n' > "${nas}/${input_name}"
+reject verify
+"${real_python}" - "${nas}" "${work}/home/private" <<'PY'
+import os, stat, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+assert (root / 'unrelated/private').read_text() == 'unrelated private bytes\n'
+assert stat.S_IMODE((root / 'unrelated').stat().st_mode) == 0o700
+assert stat.S_IMODE((root / 'unrelated/private').stat().st_mode) == 0o600
+assert not list(root.glob('.ecoda-nas-probe-*'))
+assert stat.S_IMODE(Path(sys.argv[2]).stat().st_mode) == 0o600
+assert Path(sys.argv[2]).read_text() == 'private\n'
+PY
 [[ ! -e "${work}/sbatch.calls" ]]
 [[ ! -s "${work}/rsync.calls" ]]
 echo 'PASS: finite NAS backup fixtures (not live NAS proof)'

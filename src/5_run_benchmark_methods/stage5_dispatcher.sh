@@ -3279,6 +3279,7 @@ stage5_verify_precompute_binding() {
   for child in inputs canonical archive; do
     bash "${utility}" verify --receipt "${source_root}/manifests/${child}.receipt.json" || return 1
     [[ "$(jq -er '.nas_root' "${source_root}/manifests/${child}.receipt.json")" == "${nas}" &&
+       "$(jq -er '.selection_sha256' "${source_root}/manifests/${child}.receipt.json")" == "$(jq -er '.selection_sha256' "${receipt}")" &&
        "$(jq -er '.run_id' "${source_root}/manifests/${child}.receipt.json")" == "$(jq -er '.run_id' "${receipt}")" &&
        "$(jq -er '.source_manifest_sha256' "${source_root}/manifests/${child}.receipt.json")" == \
        "$(jq -er '.source_manifest_sha256' "${receipt}")" ]] || return 1

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Finite, non-publishing backups. Login-side only; never mounts or submits work.
+# Finite NAS backups and selected canonical input publication; never submits work.
 set -euo pipefail
 utility_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 : "${HPC_SCRATCH_DIR:=${TMPDIR:-/tmp}}"
@@ -9,6 +9,8 @@ export ECODA_RUN_ROOT ECODA_RUN_ID
 "${PYTHON_BIN}" - "${utility_dir}/ecoda_run_common.sh" "$@" <<'PY'
 import argparse
 from contextlib import contextmanager
+import csv
+import fcntl
 import secrets
 import datetime
 import hashlib
@@ -69,7 +71,7 @@ def strict_checksum(p):
     shared('ecoda_validate_checksum', p)
 
 
-def atomic_json(destination, data, checksum=False):
+def atomic_json(destination, data, checksum=False, exclusive=False):
     path(str(destination))
     destination.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix='.nas-receipt-', dir=str(destination.parent))
@@ -79,9 +81,34 @@ def atomic_json(destination, data, checksum=False):
             stream.write('\n')
             stream.flush()
             os.fsync(stream.fileno())
-        shared('ecoda_atomic_copy', temporary, destination)
-        if checksum:
-            shared('ecoda_write_checksum', destination)
+        if exclusive:
+            require(checksum, 'exclusive receipts require checksum')
+            sidecar_fd, sidecar_temporary = tempfile.mkstemp(prefix='.nas-receipt-md5-',
+                                                            dir=str(destination.parent))
+            try:
+                with os.fdopen(sidecar_fd, 'w') as stream:
+                    stream.write('MD5=' + digest(Path(temporary), 'md5') + '\nSIZE=' +
+                                 str(os.stat(temporary).st_size) + '\nPATH=' + str(destination) + '\n')
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                with opened(destination.parent) as (parent, unchanged):
+                    unchanged()
+                    # Install proof first and the receipt last. Neither may replace
+                    # another writer's control file, even outside our flock.
+                    os.link(Path(sidecar_temporary).name, destination.name + '.md5',
+                            src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+                    os.fsync(parent)
+                    unchanged()
+                    os.link(Path(temporary).name, destination.name,
+                            src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
+                    os.fsync(parent)
+                    unchanged()
+            finally:
+                os.unlink(sidecar_temporary)
+        else:
+            shared('ecoda_atomic_copy', temporary, destination)
+            if checksum:
+                shared('ecoda_write_checksum', destination)
     finally:
         os.unlink(temporary)
 
@@ -186,7 +213,12 @@ def destination_directory(directory):
         unchanged()
 
 
-def copy_file(source, destination, md5, size):
+def publication_quarantine(destination):
+    return destination.parent / ('.ecoda-displaced-' +
+                                  hashlib.sha256(destination.name.encode()).hexdigest())
+
+
+def copy_file(source, destination, md5, size, predecessor=None):
     destination_directory(destination.parent)
     with opened(destination.parent) as (parent, unchanged):
         mount(destination.parent)
@@ -213,7 +245,50 @@ def copy_file(source, destination, md5, size):
                         'ineffective or unsafe NAS copy mode')
                 os.fsync(output.fileno())
             unchanged()
-            os.replace(temporary, destination.name, src_dir_fd=parent, dst_dir_fd=parent)
+            if predecessor is None:
+                os.replace(temporary, destination.name, src_dir_fd=parent, dst_dir_fd=parent)
+            else:
+                expected_md5, expected_size = predecessor
+                quarantine = publication_quarantine(destination)
+                require(not os.path.lexists(quarantine), 'unfinished canonical displacement: ' + str(quarantine))
+                require(mount(destination.parent) == EXPECTED_SOURCE, 'copy mount changed')
+                unchanged()
+                if expected_md5 is None:
+                    # link(2) is atomic no-clobber on the mounted NFS filesystem.
+                    os.link(temporary, destination.name, src_dir_fd=parent,
+                            dst_dir_fd=parent, follow_symlinks=False)
+                else:
+                    # Exclusive/private quarantine gives rename an empty, protected
+                    # destination. Never discard an unexpected displaced predecessor.
+                    os.mkdir(quarantine.name, mode=0o700, dir_fd=parent)
+                    os.fsync(parent)
+                    with opened(quarantine) as (saved, saved_unchanged):
+                        os.fchmod(saved, 0o700)
+                        require(stat.S_IMODE(os.fstat(saved).st_mode) == 0o700,
+                                'ineffective displacement protection')
+                        unchanged()
+                        saved_unchanged()
+                        os.rename(destination.name, 'predecessor', src_dir_fd=parent, dst_dir_fd=saved)
+                        os.fsync(saved)
+                        os.fsync(parent)
+                        saved_unchanged()
+                        displaced = quarantine / 'predecessor'
+                        require(pinned_matches(displaced, expected_md5, expected_size),
+                                'unexpected canonical predecessor preserved at ' + str(displaced))
+                        unchanged()
+                        saved_unchanged()
+                        # A concurrently created target is preserved, never replaced.
+                        os.link(temporary, destination.name, src_dir_fd=parent,
+                                dst_dir_fd=parent, follow_symlinks=False)
+                        os.unlink(temporary, dir_fd=parent)
+                        os.fsync(parent)
+                        # Only verified archived bytes are eligible for cleanup.
+                        require(pinned_matches(displaced, expected_md5, expected_size),
+                                'displaced predecessor changed; retained at ' + str(displaced))
+                        saved_unchanged()
+                        os.unlink('predecessor', dir_fd=saved)
+                        os.fsync(saved)
+                    os.rmdir(quarantine.name, dir_fd=parent)
             os.fsync(parent)
             unchanged()
         finally:
@@ -318,6 +393,73 @@ def matches(p, md5, size):
     return p.is_file() and p.stat().st_size == size and digest(p, 'md5') == md5
 
 
+def pinned_matches(p, md5, size):
+    path(str(p))
+    if not p.exists():
+        return False
+    with opened(p) as (fd, unchanged):
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode), 'nonregular selected file: ' + str(p))
+        mount(p)
+        identity = hashlib.md5()
+        for block in iter(lambda: os.read(fd, 1024 * 1024), b''):
+            identity.update(block)
+        unchanged()
+        return info.st_size == size and identity.hexdigest() == md5
+
+
+def input_scope(selection, manifest, rows):
+    source = dict(line.split('=', 1) for line in manifest.read_text().splitlines())
+    config = json.loads((path(source['SOURCE_ROOT']) / 'datasets.json').read_text())
+    selected, names = set(), set()
+    for line in selection.read_text().splitlines():
+        fields = line.split('\t')
+        require(len(fields) == 3 and fields[1:] ==
+                ['batch_effect_corrected', 'batch_effect_corrected'],
+                'canonical inputs require corrected selection/view')
+        dataset = fields[0]
+        require(dataset in config and dataset not in selected, 'unknown or duplicate selected dataset')
+        selected.add(dataset)
+        # Stage 3 publication and source identities use the dataset key;
+        # folder_name is the raw staging label, not the canonical output path.
+        folder = dataset
+        output = config[dataset]['views']['batch_effect_corrected']['output_file_name']
+        require(isinstance(folder, str) and folder and '/' not in folder and
+                folder not in ('.', '..') and isinstance(output, str) and
+                output.endswith('.h5ad') and '/' not in output,
+                'unsafe configured canonical input')
+        name = folder + '/output/' + output
+        require(name not in names, 'duplicate configured canonical input')
+        names.update((name, name + '.md5'))
+    require(selected and {row[0] for row in rows} == names,
+            'inventory differs from exact selected corrected inputs and companions')
+
+
+def input_sidecars(root, source, rows, source_check=False):
+    for name, md5, size in rows:
+        if name.endswith('.h5ad'):
+            p = path(str(root / (name + '.md5')))
+            require(p.read_text().splitlines() ==
+                    ['MD5=' + md5, 'SIZE=' + str(size), 'PATH=' + str(source / name)],
+                    'invalid original-path input sidecar: ' + name)
+            if source_check:
+                strict_checksum(source / name)
+
+
+def inspect_inputs(nas, rows, source, change=False):
+    directories = set()
+    for name, md5, size in rows:
+        p = nas / name
+        require(pinned_matches(p, md5, size), 'incomplete or corrupt canonical input: ' + str(p))
+        require(not os.path.lexists(publication_quarantine(p)),
+                'unfinished canonical displacement: ' + str(publication_quarantine(p)))
+        mode(p, 0o666, change and stat.S_IMODE(p.stat().st_mode) != 0o666)
+        directories.update(parent for parent in p.parents if nas in parent.parents)
+    for directory in directories:
+        mode(directory, 0o777, change and stat.S_IMODE(directory.stat().st_mode) != 0o777)
+    input_sidecars(nas, source, rows)
+
+
 def bindings(selection, inv, manifest, run_id, run_root):
     require(re.fullmatch('[A-Za-z0-9][A-Za-z0-9_-]*', run_id), 'invalid promotion run ID')
     require(run_root.name == run_id, 'promotion root/run ID mismatch')
@@ -392,15 +534,127 @@ def inspect_destination(destination, rows, change=False):
         mode(directory, 0o777, change)
 
 
+def publish_inputs(args):
+    source, nas, destination = map(path, (args.source_root, args.nas_root, args.destination_root))
+    require(destination == nas, 'publish-inputs destination-root must equal nas-root')
+    require(source != nas and nas not in source.parents and source not in nas.parents,
+            'canonical source/destination overlap')
+    selection, inv, manifest, receipt, files, archive_receipt, mapping = map(path, (
+        args.selection_file, args.inventory, args.source_manifest, args.receipt, args.files_from,
+        args.archive_receipt, args.archive_mapping))
+    run_id = os.environ.get('ECODA_RUN_ID', '')
+    run_root = path(os.environ.get('ECODA_RUN_ROOT', ''))
+    require(run_root in receipt.parents and run_root in mapping.parents and
+            run_root in archive_receipt.parents, 'publication control outside promotion run')
+    for control in (receipt.parent, mapping, archive_receipt):
+        shared('ecoda_validate_run_owned_path', control, run_root)
+    pins = bindings(selection, inv, manifest, run_id, run_root)
+    rows = inventory(inv)
+    input_scope(selection, manifest, rows)
+    require(files.read_text().splitlines() == [row[0] for row in rows],
+            'files-from differs from exact inventory')
+    files_digest = digest(files)
+    # The existing verifier validates the entire sealed, isolated archive.
+    subprocess.run(['bash', str(Path(common).with_name('ecoda_nas_backup.sh')),
+                    'verify', '--receipt', str(archive_receipt)], check=True)
+    archived = json.loads(archive_receipt.read_text())
+    require(archived['run_id'] == run_id and archived['nas_root'] == str(nas) and
+            archived['selection_path'] == str(selection) and
+            archived['selection_sha256'] == pins['selection_sha256'] and
+            archived['source_manifest_path'] == str(manifest) and
+            archived['source_manifest_sha256'] == pins['source_manifest_sha256'] and
+            archived['destination_root'] != str(nas), 'archive receipt binding mismatch')
+    strict_checksum(mapping)
+    mapping_digest, archive_digest = digest(mapping), digest(archive_receipt)
+    archive_root = path(archived['destination_root'])
+    archive_inventory = {name: (md5, size) for name, md5, size in
+                         inventory(path(archived['inventory_path']))}
+    predecessors, archive_names, archive_paths = {}, set(), {}
+    with mapping.open() as stream:
+        reader = csv.DictReader(stream, delimiter='\t')
+        require(reader.fieldnames == ['original_path', 'archive_path', 'md5', 'size'],
+                'invalid archive mapping header')
+        for row in reader:
+            require(set(row) == set(reader.fieldnames), 'invalid archive mapping row')
+            original, archived_path = path(row['original_path']), path(row['archive_path'])
+            require(original not in predecessors and archived_path not in archive_names,
+                    'duplicate archive mapping')
+            require(archive_root in archived_path.parents, 'mapped bytes outside archive receipt')
+            identity = (row['md5'], int(row['size']))
+            require(re.fullmatch('[0-9a-f]{32}', row['md5']) and
+                    re.fullmatch('0|[1-9][0-9]*', row['size']) and
+                    archive_inventory.get(str(archived_path.relative_to(archive_root))) == identity and
+                    pinned_matches(archived_path, *identity), 'unverified archive mapping bytes')
+            predecessors[original] = identity
+            archive_names.add(archived_path)
+            archive_paths[original] = archived_path
+    require(set(archive_inventory) == {str(p.relative_to(archive_root)) for p in archive_names},
+            'archive mapping does not cover exact receipt inventory')
+    input_sidecars(source, source, rows, True)
+    for name, md5, size in rows:
+        require(matches(source / name, md5, size), 'source inventory changed: ' + name)
+        with opened(source / name):
+            pass
+    mount_source = destination_mount(nas, nas, rows)
+    # Serialize the protected receipt without leaving stale interruption locks.
+    lock_path = path(str(receipt) + '.publish-lock')
+    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(lock_fd, 'r+') as lock:
+        require(os.fstat(lock.fileno()).st_nlink == 1, 'hard-linked publication lock')
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        require(not receipt.exists() and not Path(str(receipt) + '.md5').exists(),
+                'receipt already exists; verify it or use a new run-owned receipt')
+        missing = []
+        for name, md5, size in rows:
+            target = nas / name
+            require(not os.path.lexists(publication_quarantine(target)),
+                    'unfinished canonical displacement: ' + str(publication_quarantine(target)))
+            if pinned_matches(target, md5, size):
+                continue
+            prior = predecessors.get(target)
+            if target.exists():
+                require(prior is not None and pinned_matches(target, *prior),
+                        'canonical conflict lacks exact archived predecessor: ' + name)
+            else:
+                prior = (None, None)
+            missing.append((name, md5, size, prior))
+        require(available(nas) >= sum(row[2] for row in missing), 'insufficient NAS capacity')
+        for name, md5, size, prior in missing:
+            require(digest(mapping) == mapping_digest and digest(archive_receipt) == archive_digest,
+                    'archive evidence changed during publication')
+            if prior[0] is not None:
+                require(pinned_matches(archive_paths[nas / name], *prior),
+                        'archived predecessor changed before publication')
+            copy_file(source / name, nas / name, md5, size, prior)
+        require(digest(files) == files_digest and digest(mapping) == mapping_digest and
+                digest(archive_receipt) == archive_digest, 'publication evidence changed')
+        require(bindings(selection, inv, manifest, run_id, run_root) == pins,
+                'control identity changed during publication')
+        for name, md5, size in rows:
+            require(matches(source / name, md5, size), 'source changed during publication: ' + name)
+        require(destination_mount(nas, nas, rows) == mount_source, 'publication mount changed')
+        inspect_inputs(nas, rows, source, True)
+        data = dict(schema_version=1, state='OK', run_id=run_id, host=socket.gethostname(),
+                    nas_root=str(nas), mount_source=mount_source, source_root=str(source),
+                    destination_root=str(nas), selection_path=str(selection),
+                    inventory_path=str(inv), source_manifest_path=str(manifest),
+                    completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(), **pins)
+        atomic_json(receipt, data, True, exclusive=True)
+
+
 parser = argparse.ArgumentParser(description=__doc__)
 commands = parser.add_subparsers(dest='command', required=True)
 p = commands.add_parser('preflight')
 p.add_argument('--nas-root', required=True)
 p.add_argument('--report', required=True)
-p = commands.add_parser('copy')
-for name in ('source-root', 'nas-root', 'destination-root', 'files-from', 'inventory',
-             'receipt', 'selection-file', 'source-manifest'):
-    p.add_argument('--' + name, required=True)
+for command in ('copy', 'publish-inputs'):
+    p = commands.add_parser(command)
+    for name in ('source-root', 'nas-root', 'destination-root', 'files-from', 'inventory',
+                 'receipt', 'selection-file', 'source-manifest'):
+        p.add_argument('--' + name, required=True)
+    if command == 'publish-inputs':
+        p.add_argument('--archive-receipt', required=True)
+        p.add_argument('--archive-mapping', required=True)
 p = commands.add_parser('verify')
 p.add_argument('--receipt', required=True)
 args = parser.parse_args(sys.argv[2:])
@@ -411,6 +665,8 @@ try:
         probe(nas)
         atomic_json(report, {'mount_source': mount_source, 'nas_root': str(nas),
                              'available_bytes': available(nas)})
+    elif args.command == 'publish-inputs':
+        publish_inputs(args)
     elif args.command == 'copy':
         source, nas, destination = map(path, (args.source_root, args.nas_root, args.destination_root))
         selection, inv, manifest, receipt, files = map(path, (args.selection_file, args.inventory,
@@ -491,11 +747,16 @@ try:
         pins = bindings(selection, inv, manifest, data['run_id'], run_root)
         require(all(data[k] == v for k, v in pins.items()), 'stale receipt bindings')
         nas, destination, source = map(path, (data['nas_root'], data['destination_root'], data['source_root']))
-        destination_scope(nas, destination, data['run_id'], source)
+        if destination != nas:
+            destination_scope(nas, destination, data['run_id'], source)
         rows = inventory(inv)
         require(destination_mount(nas, destination, rows) == data['mount_source'],
                 'receipt mount identity changed')
-        inspect_destination(destination, rows)
+        if destination == nas:
+            input_scope(selection, manifest, rows)
+            inspect_inputs(nas, rows, source)
+        else:
+            inspect_destination(destination, rows)
         run_boundary = nas / '_ecoda_backups' / 'corrected_final' / data['run_id']
         current = destination
         while current == run_boundary or run_boundary in current.parents:

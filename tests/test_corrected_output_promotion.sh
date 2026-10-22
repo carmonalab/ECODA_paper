@@ -34,7 +34,7 @@ body = entrypoint.read_text().split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
 ns = {'__name__': 'promotion_fixture'}
 exec(compile(body, str(entrypoint), 'exec'), ns)
 main_ast = next(node for node in ast.parse(body).body if isinstance(node, ast.FunctionDef) and node.name == 'main')
-for name in ('receipt_binds', 'promotion_sources', 'owner', 'original_evidence', 'scientific', 'inspect'):
+for name in ('receipt_binds', 'promotion_sources', 'owner', 'original_evidence', 'collision_evidence', 'scientific', 'inspect'):
     node = next(node for node in main_ast.body if isinstance(node, ast.FunctionDef) and node.name == name)
     exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])), str(entrypoint), 'exec'), ns)
 sys.path.insert(0, str(repo / 'src/utils/py'))
@@ -174,6 +174,29 @@ with tempfile.TemporaryDirectory(prefix='ecoda-promotion-') as temporary:
     matrix_sidecar.write_bytes(matrix_checksum.replace(b'MD5=', b'MD5=bad'))
     rejects(lambda: ns['inspect']([canonical_path], 'Breast_cancer', 'mrvi'), 'bad existing sidecar bypassed via transfer evidence')
     matrix_sidecar.write_bytes(matrix_checksum)
+    runtime_owner = Path(local_shell('ecoda_artifact_owner_dir "$1"', canonical_runtime).strip())
+    owner_bytes = (runtime_owner / 'owner').read_bytes()
+    (runtime_owner / 'owner').unlink()
+    runtime_owner.rmdir()
+    runtime_record = Path(local_shell('ecoda_artifact_record_path "$1" "$2"', canonical_runtime, source_run).strip())
+    runtime_proof = [canonical_runtime, Path(str(canonical_runtime) + '.md5'), runtime_record]
+    rejects(lambda: ns['collision_evidence'](canonical_runtime, 'Breast_cancer', 'mrvi'), 'unbound unowned runtime archived')
+    for path in runtime_proof:
+        ns['transfer_rows'][str(path.relative_to(scratch))] = (path.stat().st_size, ns['digest'](path))
+    archived = ns['collision_evidence'](canonical_runtime, 'Breast_cancer', 'mrvi')
+    assert set(runtime_proof).issubset(archived) and not runtime_owner.exists()
+    rejects(lambda: ns['inspect']([canonical_path], 'Breast_cancer', 'mrvi'), 'archive-only proof authorized runtime reuse')
+    runtime_bytes = canonical_runtime.read_bytes()
+    ns['atomic'](canonical_runtime, runtime_bytes + b' ')
+    rejects(lambda: ns['collision_evidence'](canonical_runtime, 'Breast_cancer', 'mrvi'), 'changed unowned runtime archived')
+    ns['atomic'](canonical_runtime, runtime_bytes)
+    payload_owner = Path(local_shell('ecoda_artifact_owner_dir "$1"', canonical_path).strip()) / 'owner'
+    payload_owner_bytes = payload_owner.read_bytes()
+    payload_owner.write_bytes(payload_owner_bytes.replace(b'STATE=OK', b'STATE=ACTIVE'))
+    rejects(lambda: ns['collision_evidence'](canonical_runtime, 'Breast_cancer', 'mrvi'), 'active paired payload authorized archival replacement')
+    payload_owner.write_bytes(payload_owner_bytes)
+    runtime_owner.mkdir()
+    (runtime_owner / 'owner').write_bytes(owner_bytes)
     ns['inspect']([candidate], 'Breast_cancer', 'mrvi', True)
     assert candidate.read_bytes() == candidate_before
     assert (old / 'metadata').read_bytes() == original_status
@@ -349,6 +372,37 @@ for zero_residual in ((False,) if sealed_import_only or foreign_promotion_only o
             target.parent.mkdir(parents=True, exist_ok=True)
             frame.to_feather(target)
             fixture_checksum(target)
+        input_sources = [identity_module.resolve_h5ad_path(scratch, tree / 'datasets.json', ds, ns['VIEW'])
+            for ds in ns['DATASETS']]
+        input_sources = [item for path in input_sources for item in (path, Path(str(path) + '.md5'))]
+        (base / 'canonical_inputs.txt').write_text(''.join(str(path.relative_to(scratch)) + '\n' for path in input_sources))
+        # One reused input, one conflicting predecessor, and unrelated older
+        # derivatives exercise normal NAS discovery without broad mutation.
+        matching_targets = []
+        for path in input_sources[:2]:
+            target = nas / path.relative_to(scratch)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, target)
+            matching_targets.append(target)
+        matching_stats = {path: (path.stat().st_ino, path.stat().st_mtime_ns) for path in matching_targets}
+        # Equivalent strict fields do not imply identical predecessor bytes:
+        # publish-inputs must archive this reordered sidecar before replacement.
+        sidecar_payload = nas / input_sources[4].relative_to(scratch)
+        sidecar_payload.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(input_sources[4], sidecar_payload)
+        sidecar_conflict = nas / input_sources[5].relative_to(scratch)
+        sidecar_conflict.write_text('\n'.join(reversed(input_sources[5].read_text().splitlines())) + '\n')
+        assert ns['fields'](sidecar_conflict) == ns['fields'](input_sources[5])
+        assert sidecar_conflict.read_bytes() != input_sources[5].read_bytes()
+        matching_targets.append(sidecar_payload)
+        matching_stats[sidecar_payload] = (sidecar_payload.stat().st_ino, sidecar_payload.stat().st_mtime_ns)
+        input_conflict = nas / input_sources[2].relative_to(scratch)
+        input_conflict.parent.mkdir(parents=True, exist_ok=True)
+        input_conflict.write_bytes(b'historical input predecessor')
+        unrelated = input_conflict.parent / 'older_derivative.h5ad'
+        unrelated.write_bytes(b'preserve unrelated NAS derivative')
+        unrelated.chmod(0o640)
+        unrelated_before = (unrelated.read_bytes(), unrelated.stat().st_mode, unrelated.stat().st_ino, unrelated.stat().st_mtime_ns)
         historical_identity = old / 'manifests/source_identity.json'
         historical_identity.write_text(json.dumps(identity_module.build_source_identity(selection, scratch, tree / 'datasets.json')))
         fixture_checksum(historical_identity)
@@ -434,6 +488,17 @@ for zero_residual in ((False,) if sealed_import_only or foreign_promotion_only o
         fixture_shell('ecoda_artifact_owner_acquire "$1" stage5 "$2"; ecoda_write_artifact_record "$1" stage5_mrvi "$2"; ecoda_artifact_owner_release "$1" FAIL fixture', collision, source_run)
         collision_owner = Path(fixture_shell('ecoda_artifact_owner_dir "$1"', collision).strip()) / 'owner'
         collisions = {collision: collision.read_bytes(), collision_owner: collision_owner.read_bytes()}
+        if not zero_residual:
+            cache = Path(fixture_shell('_ecoda_stage5_artifacts_for Joanito "$1" prepare_pseudobulk; printf "%s" "${ECODA_BENCHMARK_ARTIFACTS[0]}"', ns['VIEW']))
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_bytes(b'outdated composite-model pseudobulk cache')
+            fixture_checksum(cache)
+            fixture_shell('ecoda_artifact_owner_acquire "$1" stage5 "$2"; ecoda_write_artifact_record "$1" stage5_prepare_pseudobulk_hvg2000 "$2"; ecoda_artifact_owner_release "$1" OK fixture', cache, source_run)
+            (old / 'status/watchdogs' / (ns['VIEW'] + '__prepare_pseudobulk.status')).write_text(
+                'STATE=FAIL\nLABEL=' + ns['VIEW'] + '__prepare_pseudobulk\n')
+            collisions[cache] = cache.read_bytes()
+        collisions[input_conflict] = input_conflict.read_bytes()
+        collisions[sidecar_conflict] = sidecar_conflict.read_bytes()
         original_evidence = {path: path.read_bytes() for path in old.rglob('*') if path.is_file()}
         rscript = base / 'Rscript'
         rscript.write_text('#!/bin/bash\nset -euo pipefail\nwhile [[ $# -gt 0 ]]; do\n'
@@ -467,6 +532,9 @@ if [[ "${1:-}" == "$HPC_SCRATCH_DIR/batch_effect/corrected_final/embeddings/Joan
 fi
 ecoda_runtime_validate_submission() {
   if [[ "$ECODA_RUN_ID" == "$FIXTURE_COMPUTE_ID" ]]; then
+    while IFS= read -r relative; do
+      cmp "$HPC_SCRATCH_DIR/$relative" "$NAS_TARGET_DIR/$relative" || return 87
+    done < "$FIXTURE_BASE/canonical_inputs.txt"
     printf 'DISPATCH_RUNTIME_BOUNDARY\\n' >> "$FIXTURE_BASE/events"
     return 86
   fi
@@ -489,16 +557,36 @@ args = dict(zip(sys.argv[2::2], sys.argv[3::2]))
 base = P(os.environ['FIXTURE_BASE'])
 if command == 'preflight':
     P(args['--report']).write_text('{}')
-elif command == 'copy':
+elif command in ('copy', 'publish-inputs'):
     source, destination = P(args['--source-root']), P(args['--destination-root'])
     inv = P(args['--inventory'])
-    assert destination.parts[-2] == os.environ['ECODA_RUN_ID']
+    if command == 'publish-inputs':
+        assert destination == P(args['--nas-root'])
+        expected = set((base / 'canonical_inputs.txt').read_text().splitlines())
+        assert {line.split('\\t')[0] for line in inv.read_text().splitlines()} == expected
+        assert len(expected) == 18
+        archive = json.loads(P(args['--archive-receipt']).read_text())
+        import csv
+        mapping = {row['original_path']: row for row in csv.DictReader(P(args['--archive-mapping']).open(), delimiter='\\t')}
+        for line in inv.read_text().splitlines():
+            relative, digest, size = line.split('\\t')
+            dst = destination / relative
+            if dst.exists() and (md5(dst) != digest or dst.stat().st_size != int(size)):
+                row = mapping[str(dst)]
+                archived = P(row['archive_path'])
+                assert dst.stat().st_size == archived.stat().st_size == int(row['size'])
+                assert md5(dst) == md5(archived) == row['md5']
+                archived_rel = str(archived.relative_to(archive['destination_root']))
+                assert f"{archived_rel}\\t{row['md5']}\\t{row['size']}" in P(archive['inventory_path']).read_text().splitlines()
+    else:
+        assert destination.parts[-2] == os.environ['ECODA_RUN_ID']
     for line in inv.read_text().splitlines():
         relative, digest, size = line.split('\\t')
         src, dst = source / relative, destination / relative
         assert md5(src) == digest and src.stat().st_size == int(size)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, dst)
+        if not dst.exists() or md5(dst) != digest or dst.stat().st_size != int(size):
+            shutil.copyfile(src, dst)
     receipt = P(args['--receipt'])
     data = dict(schema_version=1, state='VERIFIED', run_id=os.environ['ECODA_RUN_ID'], host='fixture',
         nas_root=args['--nas-root'], mount_source='fixture', source_root=str(source), destination_root=str(destination),
@@ -657,12 +745,35 @@ else:
         manifests = promotion / 'manifests'
         sealed = {path: path.read_bytes() for name in ('archive', 'canonical', 'inputs', 'precompute')
             for path in (manifests / (name + '.receipt.json'), manifests / (name + '.inventory.tsv'))}
+        input_receipt = json.loads((manifests / 'inputs.receipt.json').read_text())
+        assert input_receipt['destination_root'] == str(nas)
+        assert len((manifests / 'inputs.inventory.tsv').read_text().splitlines()) == 18
+        assert 'input_comparisons.tsv' not in (manifests / 'inputs.inventory.tsv').read_text()
+        assert not (nas / '_ecoda_backups/corrected_final' / promotion.name / 'inputs').exists()
+        assert all((nas / path.relative_to(scratch)).read_bytes() == path.read_bytes() for path in input_sources)
+        assert {path: (path.stat().st_ino, path.stat().st_mtime_ns) for path in matching_targets} == matching_stats
+        assert (unrelated.read_bytes(), unrelated.stat().st_mode, unrelated.stat().st_ino, unrelated.stat().st_mtime_ns) == unrelated_before
+        # A sealed receipt must never release compute when canonical input
+        # bytes disappear/change, even though all isolated archives still match.
+        canonical_input = nas / input_sources[-2].relative_to(scratch)
+        saved_input = canonical_input.read_bytes()
+        for case in ('missing', 'changed'):
+            if case == 'missing':
+                canonical_input.unlink()
+            else:
+                canonical_input.write_bytes(b'changed canonical input')
+            events_before = (base / 'events').read_bytes()
+            rejected_input = invoke(execute)
+            assert rejected_input.returncode != 0, rejected_input.stderr
+            assert (base / 'events').read_bytes() == events_before, 'invalid canonical input reached dispatcher'
+            canonical_input.write_bytes(saved_input)
         decisions_before = (manifests / 'artifact_decisions.tsv').read_bytes()
         lineage_before = (manifests / 'promotion_lineage.tsv').read_bytes()
         for destination, content in original_payloads.items():
             assert destination.read_bytes() == content, destination
         assert len(original_payloads) == 27
         mapping = list(__import__('csv').DictReader((manifests / 'archive_mapping.tsv').open(), delimiter='\t'))
+        assert str(sidecar_payload) not in {row['original_path'] for row in mapping}, 'matching H5AD redundantly archived for sidecar-only repair'
         for path, content in collisions.items():
             archived = next(row for row in mapping if row['original_path'] == str(path))
             assert Path(archived['archive_path']).read_bytes() == content

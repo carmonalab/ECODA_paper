@@ -141,7 +141,7 @@ seal_publication_receipt() {
   cp "${ECODA_EXPECTED_PENDING}" "${promotion}/manifests/expected_pending.tsv"
   pixi run python - "${promotion}" "${TMP_DIR}" "${NAS_TARGET_DIR}" \
     "${ANALYSIS_NAS_ROOT}" "${owner}" "${SOURCE_MANIFEST}" "${ECODA_RUN_ID}" <<'PY'
-import csv, hashlib, json, pathlib, shutil, sys
+import csv, hashlib, json, os, pathlib, shutil, sys
 p, base, nas, remote, owner, source = map(pathlib.Path, sys.argv[1:7])
 run_id = sys.argv[7]
 def digest(path, algorithm="sha256"):
@@ -175,7 +175,8 @@ with mapping.open("w") as stream:
     for f in archived:
         writer.writerow([f, archive_destination / f.relative_to(base),
                          digest(f, "md5"), f.stat().st_size])
-receipt("inputs", p, nas / "_ecoda_backups" / run_id / "inputs", [])
+receipt("inputs", p, nas / "_ecoda_backups" / run_id / "inputs"
+        if os.environ.get("FIXTURE_ISOLATED_INPUTS") == "1" else nas, [])
 receipt("canonical", p, nas / "_ecoda_backups" / run_id / "canonical", [])
 auth = p / "manifests/global_sync_owner.tsv"
 with auth.open("w") as stream:
@@ -910,6 +911,17 @@ ecoda_write_artifact_record \
 CORRECTED_METADATA_EXPORT_MANIFEST="${ECODA_RUN_ROOT}/manifests/metadata_export.tsv"
 printf 'Adams\tbatch_effect_corrected\t/immutable/Adams-corrected.h5ad\t%s\n' \
   "${CORRECTED_METADATA_OUTPUT}" > "${CORRECTED_METADATA_EXPORT_MANIFEST}"
+# A fully sealed historical isolated-input chain remains inspectable, but must
+# not authorize a new corrected publication even when its files verify.
+export FIXTURE_ISOLATED_INPUTS=1
+seal_publication_receipt
+unset FIXTURE_ISOLATED_INPUTS
+ISOLATED_RSYNC_BEFORE="$(wc -l < "${RSYNC_CAPTURE}" | tr -d '[:space:]')"
+if analysis_merge_sync_cleanup mrvi >/dev/null 2>&1; then
+  echo "publication accepted isolated-only input receipt" >&2; exit 1
+fi
+[[ ! -e "$(ecoda_owner_dir stage5 "sync/${ANALYSIS_ROOT}")/owner" ]]
+[[ "$(wc -l < "${RSYNC_CAPTURE}" | tr -d '[:space:]')" == "${ISOLATED_RSYNC_BEFORE}" ]]
 seal_publication_receipt
 
 # Replacing a child with a newly self-checksummed receipt cannot change the

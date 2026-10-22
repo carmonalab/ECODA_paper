@@ -532,6 +532,34 @@ def main(argv):
         evidence.update(paths)
         return paths
 
+    def collision_evidence(item, ds, method):
+        owner_path = safe_path(shell('ecoda_artifact_owner_dir "$1"', item).strip()) / 'owner'
+        if owner_path.parent.exists():
+            owner_dir, data = owner(item)
+            owners = {owner_dir / 'owner'}
+        else:
+            # Archive-only reconciliation of legacy runtime metadata. Never use
+            # a payload's ownership to authorize runtime reuse or invent an owner.
+            if method not in PYTHON_METHODS or not str(item).endswith('.runtime.json'):
+                raise ValueError(f'BLOCKED: missing collision owner: {item}')
+            payload = Path(str(item)[:-len('.runtime.json')])
+            owner_dir, data = owner(payload)
+            owners = {owner_dir / 'owner'}
+        if data['RUN_ID'] == run_id:
+            raise ValueError('BLOCKED: promoted owner without a sealed predecessor archive')
+        record = Path(shell('ecoda_artifact_record_path "$1" "$2"', item, data['RUN_ID']).strip())
+        paths = {item, Path(str(item) + '.md5'), record}
+        if not owner_path.parent.exists():
+            for path in paths:
+                safe_path(str(path), True)
+                if transfer_rows.get(str(path.relative_to(scratch))) != (path.stat().st_size, digest(path)):
+                    raise ValueError(f'BLOCKED: unbound legacy runtime collision: {path}')
+        shell('ecoda_validate_checksum "$1"; ecoda_validate_artifact_record "$1" "$2" "$3"',
+              item, producer(method), data['RUN_ID'])
+        original_evidence(data['RUN_ID'], ds, method, False)
+        return paths | owners
+
+
     def scientific(paths, ds, method, run):
         if method in PYTHON_METHODS:
             batch = validator._build_corrected_batch_contract(
@@ -564,6 +592,7 @@ def main(argv):
     def inspect(paths, ds, method, recovery_candidate=False):
         all_evidence = set()
         states = []
+        producer_runs = set()
         for path in paths:
             safe_path(str(path), True)
             companion = [path, Path(str(path) + '.runtime.json')] if method in PYTHON_METHODS else [path]
@@ -576,9 +605,13 @@ def main(argv):
                 record = Path(shell('ecoda_validate_artifact_record "$1" "$2" "$3"', item, producer(method), run).strip())
                 all_evidence.update([item, Path(str(item) + '.md5'), owner_dir / 'owner', record])
                 states.append(data['STATE'])
-                original_evidence(run, ds, method)
+                producer_runs.add(run)
         run = owner(paths[0], recovery_candidate)[1]['RUN_ID']
         scientific(paths, ds, method, run)
+        # A scientifically invalid R cache is a repair candidate even if the
+        # historical wave failed. Collision archival still verifies provenance.
+        for producer_run in producer_runs:
+            original_evidence(producer_run, ds, method)
         return run, states, all_evidence
 
     for ds in DATASETS:
@@ -602,14 +635,7 @@ def main(argv):
                         for item in companions:
                             if not item.exists():
                                 continue
-                            owner_dir, data = owner(item)
-                            if data['RUN_ID'] == run_id:
-                                raise ValueError('BLOCKED: promoted owner without a sealed predecessor archive')
-                            shell('ecoda_validate_checksum "$1"; ecoda_validate_artifact_record "$1" "$2" "$3"',
-                                  item, producer(method), data['RUN_ID'])
-                            record = Path(shell('ecoda_artifact_record_path "$1" "$2"', item, data['RUN_ID']).strip())
-                            original_evidence(data['RUN_ID'], ds, method, False)
-                            archives.update([item, Path(str(item) + '.md5'), owner_dir / 'owner', record])
+                            archives.update(collision_evidence(item, ds, method))
                 logical[(ds, method)] = action
                 decisions.extend(original_group)
                 continue
@@ -628,16 +654,7 @@ def main(argv):
                 for path in paths:
                     for item in (path, Path(str(path) + '.runtime.json')):
                         if item.exists():
-                            owner_dir, data = owner(item)
-                            record = Path(shell('ecoda_artifact_record_path "$1" "$2"', item, data['RUN_ID']).strip())
-                            if not record.is_file():
-                                raise ValueError(f'BLOCKED: missing collision provenance: {item}')
-                            try:
-                                shell('ecoda_validate_checksum "$1"; ecoda_validate_artifact_record "$1" "$2" "$3"', item, producer(method), data['RUN_ID'])
-                            except subprocess.CalledProcessError as error:
-                                raise ValueError(f'BLOCKED: contradictory collision producer/checksum evidence: {item}') from error
-                            original_evidence(data['RUN_ID'], ds, method, False)
-                            archives.update([item, Path(str(item) + '.md5'), owner_dir / 'owner', record])
+                            archives.update(collision_evidence(item, ds, method))
                 candidates = [recovery / path.relative_to(canonical) for path in paths]
                 try:
                     run, states, row_evidence = inspect(candidates, ds, method, True)
@@ -845,27 +862,24 @@ stage5_classify_pending_rows "$1" "$2"
         archive_owner = nas / '_ecoda_backups/corrected_final' / run_id / 'before' / str(sync_owner).lstrip('/')
         sync_record += f'{sync_owner}\t{digest(sync_owner)}\t{sync_owner.stat().st_size}\t{data["RUN_ID"]}\t{data["STATE"]}\t{archive_owner}\n'
     write_report(manifests / 'global_sync_owner.tsv', sync_record)
-    # Compare actual NAS dataset/output paths without publishing there. Missing
-    # or mismatched inputs are backed up only in the isolated run-owned tree.
+    # Compare only configured canonical NAS inputs; archive conflicts before
+    # publishing current H5ADs and their original PATH-bound sidecars.
     comparisons = []
     input_files = []
     for record in current_records.values():
         path = Path(record['path'])
         relative = path.relative_to(scratch)
         target = safe_path(str(nas / relative))
-        matches = target.is_file() and target.stat().st_size == record['size'] and digest(target) == record['md5']
-        if matches:
-            try:
-                remote_sidecar = fields(Path(str(target) + '.md5'))
-                matches = remote_sidecar == {'MD5': record['md5'], 'SIZE': str(record['size']), 'PATH': str(path)}
-            except (ValueError, OSError):
-                matches = False
+        payload_matches = target.is_file() and target.stat().st_size == record['size'] and digest(target) == record['md5']
+        target_sidecar = safe_path(str(target) + '.md5')
+        sidecar_matches = (target_sidecar.is_file() and
+            target_sidecar.read_bytes() == Path(str(path) + '.md5').read_bytes())
+        matches = payload_matches and sidecar_matches
         comparisons.append(f'{relative}\t{record["md5"]}\t{record["size"]}\t{"MATCH" if matches else "MISSING_OR_MISMATCH"}\n')
-        if not matches:
-            input_files.extend([path, Path(str(path) + '.md5')])
-            for old in (target, Path(str(target) + '.md5')):
-                if old.is_file():
-                    archives.add(old)
+        input_files.extend([path, Path(str(path) + '.md5')])
+        for old, identical in ((target, payload_matches), (target_sidecar, sidecar_matches)):
+            if old.is_file() and not identical:
+                archives.add(old)
     write_report(manifests / 'input_comparisons.tsv', 'path\tmd5\tsize\tcomparison\n' + ''.join(comparisons))
     if mode == '--inventory-only':
         atomic(report / 'status/maintenance', 'STATE=INVENTORIED\nNO_COMPUTE=1\n')
@@ -873,7 +887,7 @@ stage5_classify_pending_rows "$1" "$2"
 
     utility = root / 'src/utils/bash/ecoda_nas_backup.sh'
     backup_root = nas / '_ecoda_backups/corrected_final' / run_id
-    def backup(name, source_root, files, destination):
+    def backup(name, source_root, files, destination, command='copy', extra=()):
         files = sorted(set(safe_path(str(path), True) for path in files))
         relative = [str(path.relative_to(source_root)) for path in files]
         file_list = manifests / (name + '.files.txt')
@@ -884,13 +898,15 @@ stage5_classify_pending_rows "$1" "$2"
             subprocess.run(['bash', str(utility), 'verify', '--receipt', str(receipt)], check=True)
             if inventory.read_text() != inventory_text:
                 raise ValueError(f'changed sealed backup scope: {name}')
+            if command == 'publish-inputs' and json.loads(receipt.read_text())['destination_root'] != str(nas):
+                raise ValueError('isolated historical inputs cannot authorize new compute')
             return receipt
         write_report(file_list, ''.join(value + '\n' for value in relative))
         write_report(inventory, inventory_text)
-        subprocess.run(['bash', str(utility), 'copy', '--source-root', str(source_root), '--nas-root', str(nas),
+        subprocess.run(['bash', str(utility), command, '--source-root', str(source_root), '--nas-root', str(nas),
             '--destination-root', str(destination), '--files-from', str(file_list), '--inventory', str(inventory),
             '--receipt', str(receipt), '--selection-file', str(manifests / 'selection.tsv'),
-            '--source-manifest', str(source_manifest)], check=True)
+            '--source-manifest', str(source_manifest), *map(str, extra)], check=True)
         subprocess.run(['bash', str(utility), 'verify', '--receipt', str(receipt)], check=True)
         return receipt
 
@@ -1023,7 +1039,15 @@ stage5_classify_pending_rows "$1" "$2"
                 for item in companions:
                     if action == 'ADOPT' and owner(item)[1]['STATE'] == 'OK':
                         continue
-                    if item.exists() and owner(item)[1]['RUN_ID'] != run_id:
+                    owner_path = safe_path(shell('ecoda_artifact_owner_dir "$1"', item).strip())
+                    if item.exists() and not owner_path.exists():
+                        if action != 'IMPORT':
+                            raise ValueError(f'BLOCKED: unowned destination is not an approved import: {item}')
+                        # Original collision proof is sealed before mutation;
+                        # the payload may now legitimately belong to this run.
+                        for old in (item, Path(str(item) + '.md5')):
+                            assert_archived_live(old)
+                    elif item.exists() and owner(item)[1]['RUN_ID'] != run_id:
                         for old in (item, Path(str(item) + '.md5'), owner(item)[0] / 'owner'):
                             assert_archived_live(old)
                     elif item.exists() and action == 'IMPORT':
@@ -1087,10 +1111,10 @@ stage5_classify_pending_rows "$1" "$2"
                      'source_evidence.inventory.tsv', 'source_evidence.receipt.json'):
         selected_files.update([manifests / basename, Path(str(manifests / basename) + '.md5')])
     backup('canonical', scratch, selected_files, backup_root / 'canonical')
-    # Nonempty comparison evidence seals all nine matches even when there are
-    # no H5AD transfers. The fixed archive child already covers NAS conflicts.
-    input_files.extend([manifests / 'input_comparisons.tsv', Path(str(manifests / 'input_comparisons.tsv') + '.md5')])
-    backup('inputs', scratch, input_files, backup_root / 'inputs')
+    # Seal the complete canonical set, including already matching inputs.
+    # Comparison and archive mapping remain separate composite-chain evidence.
+    backup('inputs', scratch, input_files, nas, command='publish-inputs',
+        extra=('--archive-receipt', archive_receipt, '--archive-mapping', manifests / 'archive_mapping.tsv'))
     classify(manifests / 'pending_after_promotion.tsv')
     if pending.read_bytes() != (manifests / 'pending_after_promotion.tsv').read_bytes():
         raise ValueError('pending scope changed during promotion')
