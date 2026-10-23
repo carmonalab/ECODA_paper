@@ -1930,14 +1930,25 @@ stage5_repair_missing_h5ad_sidecars() {
       fi
       sidecar="${path}.md5"
       if [[ -e "${sidecar}" || -L "${sidecar}" ]]; then
-        # Validate the existing sidecar once and reuse its strict digest/size
-        # record for the scratch/NAS identity comparison below.
-        ecoda_validate_checksum "${path}" || {
-          rm -f "${repair_tmp}"
-          return 1
-        }
-        digest="${ECODA_CHECKSUM_MD5}"
-        size="${ECODA_CHECKSUM_SIZE}"
+        if [[ "${ANALYSIS_VARIANT:-}" == corrected_final &&
+              "${root}" == "${NAS_TARGET_DIR}" ]] &&
+           cmp -s "${scratch_path}.md5" "${sidecar}"; then
+          # Canonical NAS publication preserves the validated source PATH.
+          # Require that exact sidecar, then hash the actual NAS payload.
+          ecoda_validate_checksum_remote "${path}" || {
+            rm -f "${repair_tmp}"
+            return 1
+          }
+          digest="${scratch_digest}"
+          size="${scratch_size}"
+        else
+          ecoda_validate_checksum "${path}" || {
+            rm -f "${repair_tmp}"
+            return 1
+          }
+          digest="${ECODA_CHECKSUM_MD5}"
+          size="${ECODA_CHECKSUM_SIZE}"
+        fi
       else
         # A missing sidecar is repaired only after the persisted H5AD content
         # contract passes. Existing invalid sidecars are never overwritten.
