@@ -2803,7 +2803,7 @@ benchmark_selected_artifacts_valid() {
     [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
     if [[ -n "${PASS_ARG}" ]]; then
       artifact_check="${ECODA_RUN_ROOT}/manifests/artifact_check_${ds}_${label}.tsv"
-      printf '%s\t%s\t%s\n' "${ds}" "${view}" "${label}" > "${artifact_check}.build.$$"
+      printf '%s\t%s\t%s\n' "${ds}" "${view}" "${view}" > "${artifact_check}.build.$$"
       mv -f "${artifact_check}.build.$$" "${artifact_check}"
       ecoda_write_checksum "${artifact_check}" || {
         rm -f "${artifact_check}"
