@@ -3,7 +3,7 @@ name: durable-hpc-gate-ecoda
 description: >-
   Applies durable-hpc-gate to ECODA HPC runs, adding repository invariants,
   authoritative-plan checkpoints, canonical scratch/NAS contracts, clean
-  benchmark serialization, and Luna Max task/reviewer requirements.
+  benchmark serialization, and terminal evidence review.
 ---
 
 # Durable HPC Gate — ECODA Profile
@@ -16,6 +16,11 @@ without copying the global orchestration implementation. The profile is
 repository-aware: it checks the ECODA checkout, canonical configuration and
 artifact roots, scientific invariants, benchmark wave serialization, and the
 terminal accounting/audit contract.
+
+The reviewer is normally the same AI agent operating the run, regardless of
+model. A separate agent is optional when useful, not a launch or release
+requirement. Review the terminal evidence before explicitly recording approval;
+see the global skill's **Reviewer role** for approval semantics.
 
 ## Canonical host policy
 
@@ -119,13 +124,13 @@ uv run "$GLOBAL" wait --manifest "$MANIFEST" \
   --output "$PWD/.gate/${GATE_ID}.wait.json"
 ```
 
-When the completion event wakes the workflow, a fresh bounded Luna Max task
-runs one terminal inspection and records the evidence. Before that invocation,
-the task reads the durable wrapper log and extracts every scheduler array or
-watchdog ID the wrapper emitted after launch; it passes those values explicitly
-on the first inspect and never edits the manifest by hand. A passing audit is
-not release-eligible until the Luna Max reviewer explicitly approves it through
-the second inspect invocation:
+When the completion event wakes the workflow, the operating agent runs one
+terminal inspection and records the evidence. Before that invocation, it reads
+the durable wrapper log and extracts every scheduler array or watchdog ID the
+wrapper emitted after launch; it passes those values explicitly on the first
+inspect and never edits the manifest by hand. A passing audit is not
+release-eligible until the reviewer explicitly approves it through the second
+inspect invocation:
 
 ```bash
 uv run "$GLOBAL" inspect --manifest "$MANIFEST" --profile "$PROFILE" \
@@ -133,7 +138,7 @@ uv run "$GLOBAL" inspect --manifest "$MANIFEST" --profile "$PROFILE" \
   --scheduler-watchdog-id "$WATCHDOG_ID" \
   --output "$PWD/.gate/${GATE_ID}.inspect.json"
 uv run "$GLOBAL" inspect --manifest "$MANIFEST" --profile "$PROFILE" \
-  --approve-reviewer "Luna Max" \
+  --approve-reviewer "Operating AI agent" \
   --output "$PWD/.gate/${GATE_ID}.review.json"
 ```
 
@@ -282,9 +287,9 @@ Python implementation.
 
 ### 4. Launch, wait, and inspect durably
 
-- A bounded Luna Max **task** executes `reconcile → prepare → launch` and
-  exits after updating the checkpoint. Main arms exactly one harness-owned
-  asynchronous `wait` with no periodic update requests.
+- The operating agent executes `reconcile → prepare → launch`, updates the
+  checkpoint, and arms exactly one harness-owned asynchronous `wait` with no
+  periodic update requests. A dedicated launch subagent is optional.
 - The runner uses `/bin/bash` on Yggdrasil, starts in the declared
   `remote_workdir`, and changes to that directory before invoking the exact
   wrapper. It writes terminal status atomically and signals completion only
@@ -292,7 +297,7 @@ Python implementation.
   status must carry the current manifest `event_generation`; stale generations
   are rejected. Monitoring files/events may be repaired only when that cannot
   duplicate or disturb the wrapper; stale generation markers are ignored.
-- A fresh bounded Luna Max **task** reads the durable wrapper log, extracts
+- At completion, the operating agent reads the durable wrapper log, extracts
   every scheduler ID emitted after launch, and runs the first `inspect`
   exactly once with repeatable `--scheduler-array-id`/
   `--scheduler-watchdog-id` options. The ECODA profile sets
@@ -309,8 +314,8 @@ Python implementation.
   `audit_state: COMPLETED`; an interrupted retry fails closed on
   `IN_PROGRESS` without repeating accounting or audits. Never poll
   `squeue`/`sacct` or use an event as evidence.
-- A Luna Max **reviewer** invokes the second `inspect --approve-reviewer`
-  phase. That phase records approval without rerunning audit/accounting.
+- The reviewer invokes the second `inspect --approve-reviewer` phase after
+  reviewing the evidence. It records approval without rerunning audit/accounting.
   Only a reviewed `COMPLETED` predecessor releases a dependent gate;
   dependency lineage is independent of `serialization_group`. Before remote
   launch, the deterministic same-group lock rejects an active `RUNNING`
@@ -413,7 +418,7 @@ Audit contracts are evaluated only at the terminal `inspect` step:
 6. nonempty canonical NAS checksums and any plan-defined artifact shape,
    identifier, and provenance checks against artifacts the wrapper actually
    produced; and
-7. the authoritative plan checkpoint and Luna Max reviewer evidence.
+7. the authoritative plan checkpoint and explicit reviewer approval evidence.
 
 The run-bound source snapshot and stage `runtime.identity` are the provenance
 authorities. `profile.json` intentionally has `"immutable_fingerprints": []`
@@ -457,7 +462,7 @@ and must never be converted into a polling loop.
 - Relaunching after an SSH drop, treating event delivery as completion, or
   manually rsyncing partial outputs after a failure.
 - Polling while a subagent remains alive, running more than one terminal
-  `sacct`, releasing a dependent gate before inspect and Luna Max review, or
+  `sacct`, releasing a dependent gate before inspect and reviewer approval, or
   treating `serialization_group` as dependency lineage rather than the
   required mutex identity, or ignoring a `resource_lock_conflict`
   `PRELAUNCH_STOP`.
