@@ -239,6 +239,9 @@ Python implementation.
 - Before terminal inspect, the completion task invokes only the exact
   run-scoped validator
   `ecoda_run_audit.sh --run-root ABSOLUTE_RUN_ROOT --stage STAGE --selection ABSOLUTE_SELECTION --source-manifest ABSOLUTE_SOURCE_MANIFEST --runtime-identity ABSOLUTE_RUNTIME_IDENTITY`.
+  Pass the original immutable snapshot `identity/source.manifest` as
+  `--source-manifest`, not the run-owned copy: the auditor checks its snapshot
+  location and compares its bytes against `RUN_ROOT/manifests/source.manifest`.
   It validates that run's manifests, source/runtime/aux identities,
   selection, scheduler IDs, terminal status, artifact records/owners, and
   selected artifact contracts; it never globs all run roots or submits or

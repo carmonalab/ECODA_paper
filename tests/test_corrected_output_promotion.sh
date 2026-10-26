@@ -4,6 +4,7 @@
 # --sealed-import-only narrows to the sealed-source tamper regression.
 # --foreign-promotion-only skips interruptions and checks fresh-run reuse.
 # --terminal-status-only checks authoritative producer terminal-file inventory.
+# --backup-receipts-only checks fresh receipt bindings and resumed backup tampering.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${PYTHON_BIN:-${ROOT}/.pixi/envs/py-cuda13/bin/python}"
@@ -27,8 +28,9 @@ entrypoint = repo / 'src/5_run_benchmark_methods/finalize_corrected_outputs.sh'
 sealed_import_only = sys.argv[2:] == ['--sealed-import-only']
 foreign_promotion_only = sys.argv[2:] == ['--foreign-promotion-only']
 terminal_status_only = sys.argv[2:] == ['--terminal-status-only']
-if sys.argv[2:] and not (sealed_import_only or foreign_promotion_only or terminal_status_only):
-    raise SystemExit('usage: test_corrected_output_promotion.sh [--sealed-import-only|--foreign-promotion-only|--terminal-status-only]')
+backup_receipts_only = sys.argv[2:] == ['--backup-receipts-only']
+if sys.argv[2:] and not (sealed_import_only or foreign_promotion_only or terminal_status_only or backup_receipts_only):
+    raise SystemExit('usage: test_corrected_output_promotion.sh [--sealed-import-only|--foreign-promotion-only|--terminal-status-only|--backup-receipts-only]')
 # Exercise the embedded finite I/O module without executing its CLI main.
 body = entrypoint.read_text().split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
 ns = {'__name__': 'promotion_fixture'}
@@ -327,7 +329,7 @@ inventory_fixture = repo / '.gate/corrected_return_20261021T130330Z/inventory.ts
 assert inventory_fixture.is_file(), 'the pinned finite return inventory is required'
 assert hashlib.sha256(inventory_fixture.read_bytes()).hexdigest() == '2ec2cb4becda72b07453816acf3e55d804b631bfc4661217c580723c50bc6ea1'
 
-for zero_residual in ((False,) if sealed_import_only or foreign_promotion_only or terminal_status_only else (False, True)):
+for zero_residual in ((False,) if sealed_import_only or foreign_promotion_only or terminal_status_only or backup_receipts_only else (False, True)):
     with tempfile.TemporaryDirectory(prefix='ecoda-promotion-cli-') as temporary:
         base = Path(temporary).resolve()
         tree = base / 'source'
@@ -572,6 +574,9 @@ def md5(p): return hashlib.md5(p.read_bytes()).hexdigest()
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
 def checksum(p):
     P(str(p)+'.md5').write_text(f'MD5={md5(p)}\\nSIZE={p.stat().st_size}\\nPATH={p}\\n')
+def strict(p):
+    assert P(str(p)+'.md5').read_text().splitlines() == [
+        'MD5=' + md5(p), 'SIZE=' + str(p.stat().st_size), 'PATH=' + str(p)]
 command = sys.argv[1]
 args = dict(zip(sys.argv[2::2], sys.argv[3::2]))
 base = P(os.environ['FIXTURE_BASE'])
@@ -608,13 +613,35 @@ elif command in ('copy', 'publish-inputs'):
         if not dst.exists() or md5(dst) != digest or dst.stat().st_size != int(size):
             shutil.copyfile(src, dst)
     receipt = P(args['--receipt'])
-    data = dict(schema_version=1, state='VERIFIED', run_id=os.environ['ECODA_RUN_ID'], host='fixture',
+    data = dict(schema_version=1, state='OK', run_id=os.environ['ECODA_RUN_ID'], host='fixture',
         nas_root=args['--nas-root'], mount_source='fixture', source_root=str(source), destination_root=str(destination),
         selection_path=args['--selection-file'], selection_sha256=sha(P(args['--selection-file'])),
         inventory_path=str(inv), inventory_sha256=sha(inv), source_manifest_path=args['--source-manifest'],
         source_manifest_sha256=sha(P(args['--source-manifest'])), completed_at='fixture')
     receipt.write_text(json.dumps(data, sort_keys=True))
     checksum(receipt)
+    fault_path = base / 'receipt_fault'
+    if fault_path.exists():
+        fault = fault_path.read_text()
+        if fault == 'missing':
+            receipt.unlink()
+        elif fault == 'missing-sidecar':
+            P(str(receipt)+'.md5').unlink()
+        elif fault == 'bad-sidecar':
+            P(str(receipt)+'.md5').write_text('MD5=bad\\n')
+        elif fault == 'malformed':
+            receipt.write_text('{')
+            checksum(receipt)
+        elif fault == 'duplicate':
+            receipt.write_text(receipt.read_text()[:-1] + ', "state": "OK"}')
+            checksum(receipt)
+        else:
+            if fault == 'schema_bool':
+                data['schema_version'] = True
+            else:
+                data[fault] = 'wrong'
+            receipt.write_text(json.dumps(data))
+            checksum(receipt)
     with (base / 'events').open('a') as stream: stream.write('SEALED ' + receipt.name + '\\n')
     if receipt.name == 'precompute.receipt.json' and not (base / 'interrupted').exists():
         (base / 'interrupted').touch()
@@ -622,6 +649,13 @@ elif command in ('copy', 'publish-inputs'):
 elif command == 'verify':
     receipt = P(args['--receipt'])
     data = json.loads(receipt.read_text())
+    strict(receipt)
+    assert data['state'] == 'OK' and data['run_id'] == os.environ['ECODA_RUN_ID']
+    for key in ('inventory', 'selection', 'source_manifest'):
+        control = P(data[key + '_path'])
+        if key != 'source_manifest':
+            strict(control)
+        assert sha(control) == data[key + '_sha256']
     inventory = P(data['inventory_path'])
     assert sha(inventory) == data['inventory_sha256']
     for line in inventory.read_text().splitlines():
@@ -638,6 +672,52 @@ else:
         (bin_dir / 'sbatch').write_text('#!/bin/bash\necho UNEXPECTED_SBATCH >> "$FIXTURE_BASE/events"\nexit 93\n')
         (bin_dir / 'sbatch').chmod(0o755)
         fixture_env['PATH'] = str(bin_dir) + os.pathsep + fixture_env['PATH']
+        if backup_receipts_only:
+            # Exercise actual finite copies through backup(), including hostile
+            # successful-return receipts, without touching scientific outputs.
+            from functools import partial
+            from types import SimpleNamespace
+            controls = base / 'backup_controls'
+            controls.mkdir()
+            probe_source = base / 'backup_source'
+            probe_source.mkdir()
+            probe = probe_source / 'payload'
+            probe.write_bytes(b'finite backup receipt fixture')
+            for control in (controls / 'selection.tsv', controls / 'source.manifest'):
+                control.write_text('fixture control\\n')
+                fixture_checksum(control)
+            backup_ns = {'__name__': 'backup_receipt_fixture'}
+            exec(compile(body, str(entrypoint), 'exec'), backup_ns)
+            backup_ns.update(manifests=controls, root=tree, nas=nas, run_id=compute, shell=fixture_shell,
+                source_manifest=controls / 'source.manifest', validator=validator,
+                utility=tree / 'src/utils/bash/ecoda_nas_backup.sh',
+                subprocess=SimpleNamespace(run=partial(subprocess.run, env=fixture_env)))
+            backup_node = next(node for node in main_ast.body
+                if isinstance(node, ast.FunctionDef) and node.name == 'backup')
+            exec(compile(ast.fix_missing_locations(ast.Module(body=[backup_node], type_ignores=[])),
+                str(entrypoint), 'exec'), backup_ns)
+            fault_path = base / 'receipt_fault'
+            for index, fault in enumerate(('missing', 'missing-sidecar', 'bad-sidecar', 'malformed',
+                    'duplicate', 'schema_version', 'schema_bool', 'extra', 'state', 'run_id', 'source_root', 'nas_root',
+                    'destination_root', 'inventory_path', 'inventory_sha256', 'selection_path',
+                    'selection_sha256', 'source_manifest_path', 'source_manifest_sha256')):
+                fault_path.write_text(fault)
+                name = 'probe_' + str(index)
+                rejects(lambda: backup_ns['backup'](name, probe_source, [probe],
+                    nas / compute / name), 'fresh invalid receipt accepted: ' + fault)
+            fault_path.unlink()
+            destination = nas / compute / 'probe_valid'
+            receipt = backup_ns['backup']('probe_valid', probe_source, [probe], destination)
+            assert (destination / probe.name).read_bytes() == probe.read_bytes()
+            assert backup_ns['backup']('probe_valid', probe_source, [probe], destination) == receipt
+            for path in (receipt, controls / 'source.manifest', destination / probe.name, probe):
+                original = path.read_bytes()
+                path.write_bytes(original + b'tampered')
+                rejects(lambda: backup_ns['backup']('probe_valid', probe_source, [probe], destination),
+                    'resumed tampering accepted: ' + str(path))
+                path.write_bytes(original)
+            if backup_receipts_only:
+                continue
         cli = ['bash', str(tree / 'src/5_run_benchmark_methods/finalize_corrected_outputs.sh'),
             '--selection-file', str(selection), '--method-matrix', str(matrix), '--source-run', source_run, '--nas-root', str(nas)]
         def invoke(arguments):
@@ -884,7 +964,8 @@ else:
         assert (manifests / 'promotion_lineage.tsv').read_bytes() == lineage_before
         assert (manifests / 'pending_after_promotion.tsv').read_text() == expected_text
         assert all(path.read_bytes() == content for path, content in original_evidence.items())
-print('PASS corrected promotion producer terminal-status CLI regression' if terminal_status_only else
+print('PASS corrected promotion backup receipt control and resume regressions' if backup_receipts_only else
+      'PASS corrected promotion producer terminal-status CLI regression' if terminal_status_only else
       'PASS corrected promotion foreign-promotion fresh inventory CLI regression' if foreign_promotion_only else
       'PASS corrected promotion sealed IMPORT source CLI regression' if sealed_import_only else
       'PASS corrected promotion finite I/O, real scientific/schema/sample validation and ownership fixtures')

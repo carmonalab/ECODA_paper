@@ -922,7 +922,24 @@ stage5_classify_pending_rows "$1" "$2"
             '--destination-root', str(destination), '--files-from', str(file_list), '--inventory', str(inventory),
             '--receipt', str(receipt), '--selection-file', str(manifests / 'selection.tsv'),
             '--source-manifest', str(source_manifest), *map(str, extra)], check=True)
-        subprocess.run(['bash', str(utility), 'verify', '--receipt', str(receipt)], check=True)
+        # Fresh publication already verified all content. Bind only its small
+        # success receipt here; resumed receipts still take full verify above.
+        safe_path(str(receipt), True)
+        sidecar = safe_path(str(receipt) + '.md5', True)
+        if sidecar.read_text().splitlines() != [
+                'MD5=' + digest(receipt), 'SIZE=' + str(receipt.stat().st_size), 'PATH=' + str(receipt)]:
+            raise ValueError(f'invalid fresh backup receipt sidecar: {name}')
+        returned = json.loads(receipt.read_text(), object_pairs_hook=validator._reject_duplicate_json_keys)
+        bindings = dict(schema_version=1, state='OK', run_id=run_id,
+            source_root=str(source_root), nas_root=str(nas), destination_root=str(destination),
+            inventory_path=str(inventory), inventory_sha256=digest(inventory, 'sha256'),
+            selection_path=str(manifests / 'selection.tsv'),
+            selection_sha256=digest(manifests / 'selection.tsv', 'sha256'),
+            source_manifest_path=str(source_manifest), source_manifest_sha256=digest(source_manifest, 'sha256'))
+        if (not isinstance(returned, dict) or type(returned.get('schema_version')) is not int
+                or set(returned) != set(bindings) | {'host', 'mount_source', 'completed_at'}
+                or any(returned.get(key) != value for key, value in bindings.items())):
+            raise ValueError(f'fresh backup receipt binding mismatch: {name}')
         return receipt
 
     subprocess.run(['bash', str(utility), 'preflight', '--nas-root', str(nas), '--report', str(manifests / 'nas_preflight.json')], check=True)
@@ -960,10 +977,11 @@ stage5_classify_pending_rows "$1" "$2"
         for path in sorted(archives):
             target = staging / str(path).lstrip('/')
             copy_bytes(path, target)
-            if digest(path) != digest(target):
+            source_digest = digest(path)
+            if source_digest != digest(target):
                 raise ValueError('archive staging bytes changed')
             staged.append(target)
-            mapping += f'{path}\t{backup_root / "before" / target.relative_to(staging)}\t{digest(path)}\t{path.stat().st_size}\n'
+            mapping += f'{path}\t{backup_root / "before" / target.relative_to(staging)}\t{source_digest}\t{path.stat().st_size}\n'
         write_report(manifests / 'archive_mapping.tsv', mapping)
         backup('archive', staging, staged, backup_root / 'before')
     lineage = manifests / 'promotion_lineage.tsv'

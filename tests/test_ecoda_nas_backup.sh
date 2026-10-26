@@ -51,6 +51,51 @@ SH
 # Capacity, ineffective fchmod, and exact descriptor race timing are injected here.
 cat > "${work}/python/sitecustomize.py" <<'PY'
 import os
+import io
+# Count bytes actually returned by binary content reads, including the Python
+# interpreter used by the real hashing PATH adapter below and nested verify.
+def record_read(path, count):
+    targets = os.environ.get('READ_BUDGET_PATHS', '').splitlines()
+    if str(path) in targets and count:
+        with open(os.environ['READ_BUDGET_LOG'], 'a') as log:
+            log.write(str(path) + '\t' + str(count) + '\n')
+    trigger = os.environ.get('MUTATE_AFTER_READ_PATH')
+    marker = os.environ['FIXTURE_ROOT'] + '/read-mutation.triggered'
+    if count == 0 and str(path) == trigger and not os.path.exists(marker):
+        with open(os.environ['MUTATE_AFTER_READ_TARGET'], 'r+b') as stream:
+            stream.write(b'!')
+        with open(marker, 'w') as stream:
+            stream.write(str(path))
+original_io_open, original_read = io.open, os.read
+class CountedReader:
+    def __init__(self, stream, path):
+        self.stream, self.path = stream, path
+    def __enter__(self):
+        self.stream.__enter__()
+        return self
+    def __exit__(self, *args):
+        return self.stream.__exit__(*args)
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+    def read(self, *args):
+        data = self.stream.read(*args)
+        record_read(self.path, len(data))
+        return data
+def counted_open(file, mode='r', *args, **kwargs):
+    stream = original_io_open(file, mode, *args, **kwargs)
+    return CountedReader(stream, file) if mode == 'rb' else stream
+def counted_read(fd, size):
+    data = original_read(fd, size)
+    if os.environ.get('READ_BUDGET_PATHS') or os.environ.get('MUTATE_AFTER_READ_PATH'):
+        info = os.fstat(fd)
+        targets = set(os.environ.get('READ_BUDGET_PATHS', '').splitlines())
+        targets.update(os.environ.get('MUTATE_AFTER_READ_PATH', '').splitlines())
+        for target in targets:
+            current = os.stat(target)
+            if (info.st_dev, info.st_ino) == (current.st_dev, current.st_ino):
+                record_read(target, len(data))
+    return data
+io.open, os.read = counted_open, counted_read
 if os.environ.get('NO_CAPACITY') == '1':
     original = os.statvfs
     def statvfs(path):
@@ -132,6 +177,20 @@ def race_link(src, dst, *, src_dir_fd=None, dst_dir_fd=None, follow_symlinks=Tru
                          follow_symlinks=follow_symlinks)
 os.rename, os.link = race_rename, race_link
 PY
+# Real streaming MD5 (not an echoed checksum): makes shell-validator reads
+# observable with the same cross-process byte counter on either macOS or Linux.
+cat > "${work}/bin/md5sum" <<'SH'
+#!/bin/bash
+exec "${PYTHON_BIN}" - "$@" <<'PY'
+import hashlib, sys
+from pathlib import Path
+identity = hashlib.md5()
+with Path(sys.argv[1]).open('rb') as stream:
+    for block in iter(lambda: stream.read(1024 * 1024), b''):
+        identity.update(block)
+print(identity.hexdigest() + '  ' + sys.argv[1])
+PY
+SH
 "${real_chmod}" +x "${work}/bin/"*
 export PATH="${work}/bin:${PATH}" PYTHONPATH="${work}/python${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHON_BIN="${real_python}"
@@ -265,6 +324,20 @@ rm "${work}/source/input.h5ad"
 mv "${work}/source/payload.saved" "${work}/source/input.h5ad"
 copy
 verify
+# Standalone strict receipt verification hashes its content exactly once.
+READ_BUDGET_PATHS="${receipt}" READ_BUDGET_LOG="${work}/strict-reads" verify
+"${real_python}" - "${receipt}" "${work}/strict-reads" <<'PY'
+import sys
+from pathlib import Path
+receipt, log = map(Path, sys.argv[1:])
+assert sum(int(line.split('\t')[1]) for line in log.read_text().splitlines()) == receipt.stat().st_size
+PY
+# A strict record changed immediately after hashing still fails confirmation.
+cp "${receipt}.md5" "${work}/strict-sidecar.saved"
+MUTATE_AFTER_READ_PATH="${receipt}" MUTATE_AFTER_READ_TARGET="${receipt}.md5" reject verify
+[[ -e "${work}/read-mutation.triggered" ]]
+cp "${work}/strict-sidecar.saved" "${receipt}.md5"
+rm "${work}/read-mutation.triggered"
 cmp "${work}/source/input.h5ad.md5" "${destination}/input.h5ad.md5"
 [[ ! -e "${work}/sbatch.calls" ]]
 # A fully matching inventory means no streaming copy, even with a new receipt.
@@ -498,9 +571,37 @@ LATE_RECEIPT_TARGET="${receipt}.md5" reject publish
 # Matching targets are reused; an absent selected companion can be resumed.
 receipt="${ECODA_RUN_ROOT}/manifests/matching-input.receipt.json"
 count="$(wc -l < "${work}/copy.calls")"
-publish
+READ_BUDGET_PATHS="$(printf '%s\n%s\n' "${work}/source/${input_name}" "${nas}/${input_name}")" \
+  READ_BUDGET_LOG="${work}/publisher-reads" publish
+"${real_python}" - "${work}/source/${input_name}" "${nas}/${input_name}" \
+  "${work}/publisher-reads" <<'PY'
+import sys
+from pathlib import Path
+source, nas, log = map(Path, sys.argv[1:])
+totals = {str(source): 0, str(nas): 0}
+for line in log.read_text().splitlines():
+    name, count = line.split('\t')
+    totals[name] += int(count)
+assert totals == {str(source): 2 * source.stat().st_size, str(nas): 2 * nas.stat().st_size}, totals
+PY
 [[ "$(wc -l < "${work}/copy.calls")" == "${count}" ]]
 verify
+receipt="${ECODA_RUN_ROOT}/manifests/chmod-input.receipt.json"
+"${real_chmod}" 600 "${nas}/${input_name}"
+INEFFECTIVE_CHMOD=1 reject publish
+[[ ! -e "${receipt}" ]]
+"${real_chmod}" 666 "${nas}/${input_name}"
+# Even a no-copy publication must re-read mutable source and NAS bytes before
+# sealing success. Mutate just after the initial NAS content read.
+for target in "${work}/source/${input_name}" "${nas}/${input_name}"; do
+  cp "${target}" "${work}/read-mutation.saved"
+  receipt="${ECODA_RUN_ROOT}/manifests/read-mutation-input.receipt.json"
+  MUTATE_AFTER_READ_PATH="${nas}/${input_name}" MUTATE_AFTER_READ_TARGET="${target}" reject publish
+  [[ -e "${work}/read-mutation.triggered" && ! -e "${receipt}" ]]
+  cp "${work}/read-mutation.saved" "${target}"
+  rm "${work}/read-mutation.triggered"
+done
+receipt="${ECODA_RUN_ROOT}/manifests/matching-input.receipt.json"
 rm "${nas}/${input_name}.md5"
 reject verify
 receipt="${ECODA_RUN_ROOT}/manifests/resumed-input.receipt.json"

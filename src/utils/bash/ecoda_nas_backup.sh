@@ -62,13 +62,21 @@ def shared(function, *args):
 
 
 def strict_checksum(p):
-    path(str(p) + '.md5')
-    require(p.is_file(), 'missing control file: ' + str(p))
-    lines = Path(str(p) + '.md5').read_text().splitlines()
-    require(len(lines) == 3 and lines[0] == 'MD5=' + digest(p, 'md5') and
-            lines[1] == 'SIZE=' + str(p.stat().st_size) and
-            lines[2] == 'PATH=' + str(p), 'invalid strict sidecar: ' + str(p))
-    shared('ecoda_validate_checksum', p)
+    path(str(p))
+    sidecar = path(str(p) + '.md5')
+    require(p.is_file() and sidecar.is_file(), 'missing control file: ' + str(p))
+    lines = sidecar.read_text().splitlines()
+    md5, size = digest(p, 'md5'), p.stat().st_size
+    expected = ['MD5=' + md5, 'SIZE=' + str(size), 'PATH=' + str(p)]
+    require(size > 0 and lines == expected, 'invalid strict sidecar: ' + str(p))
+    # Confirm the strict record immediately after the content read, without
+    # asking the shell validator to hash those same bytes a second time.
+    path(str(p))
+    path(str(sidecar))
+    require(p.is_file() and p.stat().st_size == size and sidecar.is_file() and
+            sidecar.read_text().splitlines() == expected,
+            'strict checksum record changed: ' + str(p))
+    return md5, size
 
 
 def atomic_json(destination, data, checksum=False, exclusive=False):
@@ -435,15 +443,13 @@ def input_scope(selection, manifest, rows):
             'inventory differs from exact selected corrected inputs and companions')
 
 
-def input_sidecars(root, source, rows, source_check=False):
+def input_sidecars(root, source, rows):
     for name, md5, size in rows:
         if name.endswith('.h5ad'):
             p = path(str(root / (name + '.md5')))
             require(p.read_text().splitlines() ==
                     ['MD5=' + md5, 'SIZE=' + str(size), 'PATH=' + str(source / name)],
                     'invalid original-path input sidecar: ' + name)
-            if source_check:
-                strict_checksum(source / name)
 
 
 def inspect_inputs(nas, rows, source, change=False):
@@ -590,9 +596,11 @@ def publish_inputs(args):
             archive_paths[original] = archived_path
     require(set(archive_inventory) == {str(p.relative_to(archive_root)) for p in archive_names},
             'archive mapping does not cover exact receipt inventory')
-    input_sidecars(source, source, rows, True)
+    input_sidecars(source, source, rows)
     for name, md5, size in rows:
-        require(matches(source / name, md5, size), 'source inventory changed: ' + name)
+        valid = (strict_checksum(source / name) == (md5, size)
+                 if name.endswith('.h5ad') else matches(source / name, md5, size))
+        require(valid, 'source inventory changed: ' + name)
         with opened(source / name):
             pass
     mount_source = destination_mount(nas, nas, rows)
