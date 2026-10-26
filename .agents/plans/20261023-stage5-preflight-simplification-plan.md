@@ -1,6 +1,6 @@
 # Stage 5 preflight simplification — 2026-10-23
 
-**Status: LOCAL IMPLEMENTATION VERIFIED. Immutable deployment, native NAS smoke and new recovery controls remain prerequisites to HPC launch.**
+**Status: IMPLEMENTED, VERIFIED AND SELECTED FOR RUNNING RECOVERY. Source `6587509` is deployed and native NAS smoke passed; current gate state and immutable identities are authoritative in `BATCH_EFFECT_PROCESSING_PLAN.md`.**
 
 ## Implemented and locally verified cut
 - Implemented steps 1–3 and adjacent archive-staging digest reuse from step 4: one strict content hash; one initial publisher source hash; no immediate full caller verification after a freshly verified publication; no duplicate original-file hash while constructing the archive mapping.
