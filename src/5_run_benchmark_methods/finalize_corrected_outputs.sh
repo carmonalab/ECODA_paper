@@ -442,14 +442,14 @@ def main(argv):
             raise ValueError(f'BLOCKED: active/malformed artifact owner: {path}')
         return owner_dir, data
 
-    def original_evidence(run, ds, method, require_success=True, trail=()):
+    def original_evidence(run, ds, method, require_current_inputs=True, trail=()):
         if run in trail:
             raise ValueError('BLOCKED: cyclic promotion lineage')
         sources = promotion_sources(run, ds, method)
         if sources is not None:
             paths = set()
             for original_run in sources:
-                paths.update(original_evidence(original_run, ds, method, require_success, (*trail, run)))
+                paths.update(original_evidence(original_run, ds, method, require_current_inputs, (*trail, run)))
             return paths
         run_root = safe_path(str(runs / run), True)
         meta = fields(run_root / 'metadata', metadata=True)
@@ -485,10 +485,10 @@ def main(argv):
             paths.add(runtime_manifest)
         paths.update([archive_path, marker])
         for filename, key in (('datasets.json', 'DATASETS_SHA256'), ('pixi.toml', 'PIXI_TOML_SHA256'), ('pixi.lock', 'PIXI_LOCK_SHA256')):
-            if require_success and source.get(key) != digest(root / filename, 'sha256'):
+            if require_current_inputs and source.get(key) != digest(root / filename, 'sha256'):
                 raise ValueError('BLOCKED: producer scientific configuration mismatch')
         source_records = identity_module.load_source_identity(run_root / 'manifests/source_identity.json')
-        if require_success and source_records.get((ds, VIEW)) != current_records[(ds, VIEW)]:
+        if require_current_inputs and source_records.get((ds, VIEW)) != current_records[(ds, VIEW)]:
             raise ValueError('BLOCKED: producer current source/sample identity mismatch')
         matrices = sorted((run_root / 'manifests').glob('matrix_*.tsv'))
         matches = []
@@ -519,8 +519,11 @@ def main(argv):
                     if not sep or (key in status_fields and key != 'SCHEDULER_ID'):
                         raise ValueError('BLOCKED: malformed watchdog evidence')
                     status_fields[key] = value
-                if status_fields.get('LABEL') != label or (require_success and status_fields.get('STATE') != 'OK'):
-                    raise ValueError('BLOCKED: producer watchdog is not exact terminal OK')
+                # A failed array can contain independently published valid rows.
+                # inspect() still requires their checksums, records, current
+                # source/sample identity and scientific contracts before reuse.
+                if status_fields.get('LABEL') != label or status_fields.get('STATE') not in ('OK', 'FAIL'):
+                    raise ValueError('BLOCKED: producer watchdog lacks exact terminal evidence')
                 matches.extend([manifest, status])
                 if sidecar.exists():
                     matches.append(sidecar)

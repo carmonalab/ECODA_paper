@@ -1876,12 +1876,8 @@ validate_result_file <- function(
     ]
   }
 
-  # Batch-effect pseudobulk results are keyed bundles.  The key is the
-  # semantic method name and its value is the pseudobulk payload
-  # (pb/timing/batch_contract), unlike ordinary benchmark result bundles
-  # whose values are score/feature/distance combinations.  Handle this
-  # shape before the generic combo validator so it never tries to inspect
-  # the outer key as a matrix or reports a spurious missing pb.
+  # Batch pseudobulk results contain the same scored feature/distance bundles
+  # as the producer's other results. Prepared pb/timing caches are separate.
   if (batch && identical(method, "pseudobulk")) {
     key <- "Pseudobulk_hvg2000"
     contract_aliases <- c(
@@ -1928,15 +1924,13 @@ validate_result_file <- function(
         )
       }
     }
-    .validate_pseudobulk_value(
+    .rds_batch_contract_values(
       bundle[[key]],
-      file = file,
-      expected = expected,
-      expected_batch_contract = expected_batch_contract,
-      batch_contract = recorded_batch_contract,
-      allow_legacy_value_pb = TRUE,
-      label = paste0(identity_label, " ", key)
+      expected_batch_contract,
+      recorded_batch_contract,
+      paste0(identity_label, " ", key)
     )
+    validate_combo(bundle[[key]], file, expected, method)
     return(invisible(NULL))
   }
 

@@ -3805,8 +3805,10 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     worker_env="${worker_env},${method_runtime_export}"
     array_args=(--parsable --array="1-$(wc -l < "${manifest}" | tr -d '[:space:]')%${throttle}" --partition="${worker_partition}" "${METHOD_FLAGS[@]}" --time="${method_time_limit}" --mem="${MEMORY}" \
       --output="${RUN_LOG_DIR}/5_matrix_${safe}_%A_%a.log" --error="${RUN_LOG_DIR}/5_matrix_${safe}_%A_%a.err" --mail-user="${USER_EMAIL}" \
-      --export="ALL,${worker_env}" "${worker}")
-    [[ -n "${dependency}" ]] && array_args+=(--dependency="afterok:${dependency}")
+      --export="ALL,${worker_env}")
+    [[ -n "${dependency}" ]] &&
+      array_args+=(--dependency="afterok:${dependency}" --kill-on-invalid-dep=yes)
+    array_args+=("${worker}")
     stage5_validate_bound_runtime || return 1
     stage5_validate_output_ownership "${manifest}" 1 || return 1
     stage5_require_source_script "${worker}" || return 1

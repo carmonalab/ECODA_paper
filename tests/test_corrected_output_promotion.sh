@@ -29,8 +29,9 @@ sealed_import_only = sys.argv[2:] == ['--sealed-import-only']
 foreign_promotion_only = sys.argv[2:] == ['--foreign-promotion-only']
 terminal_status_only = sys.argv[2:] == ['--terminal-status-only']
 backup_receipts_only = sys.argv[2:] == ['--backup-receipts-only']
-if sys.argv[2:] and not (sealed_import_only or foreign_promotion_only or terminal_status_only or backup_receipts_only):
-    raise SystemExit('usage: test_corrected_output_promotion.sh [--sealed-import-only|--foreign-promotion-only|--terminal-status-only|--backup-receipts-only]')
+row_reuse_only = sys.argv[2:] == ['--row-reuse-only']
+if sys.argv[2:] and not (sealed_import_only or foreign_promotion_only or terminal_status_only or backup_receipts_only or row_reuse_only):
+    raise SystemExit('usage: test_corrected_output_promotion.sh [--sealed-import-only|--foreign-promotion-only|--terminal-status-only|--backup-receipts-only|--row-reuse-only]')
 # Exercise the embedded finite I/O module without executing its CLI main.
 body = entrypoint.read_text().split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
 ns = {'__name__': 'promotion_fixture'}
@@ -216,7 +217,7 @@ with tempfile.TemporaryDirectory(prefix='ecoda-promotion-') as temporary:
     ns['transfer_rows'][str(recovery_record.relative_to(scratch))] = (recovery_record.stat().st_size, ns['digest'](recovery_record))
     watchdog_before = watchdog.read_bytes()
     watchdog.write_bytes(watchdog_before.replace(b'STATE=OK', b'STATE=FAIL'))
-    rejects(lambda: ns['inspect']([candidate], 'Breast_cancer', 'mrvi', True), 'unowned recovery runtime bypassed failed producer watchdog')
+    assert ns['inspect']([candidate], 'Breast_cancer', 'mrvi', True)[0] == source_run
     watchdog.write_bytes(watchdog_before)
     recovery_runtime_owner.mkdir()
     (recovery_runtime_owner / 'owner').write_bytes(recovery_runtime_owner_bytes)
@@ -224,7 +225,15 @@ with tempfile.TemporaryDirectory(prefix='ecoda-promotion-') as temporary:
     assert (old / 'metadata').read_bytes() == original_status
     watchdog_before = watchdog.read_bytes()
     watchdog.write_bytes(watchdog_before.replace(b'STATE=OK', b'STATE=FAIL'))
-    rejects(lambda: ns['inspect']([candidate], 'Breast_cancer', 'mrvi', True), 'failed producer watchdog authorized reuse')
+    assert ns['inspect']([candidate], 'Breast_cancer', 'mrvi', True)[0] == source_run
+    # Published, scientifically valid rows survive a failed method group,
+    # but still require the exact current source and terminal provenance.
+    key = ('Breast_cancer', ns['VIEW'])
+    ns['current_records'][key] = dict(source_record, md5='b' * 32)
+    rejects(lambda: ns['inspect']([candidate], 'Breast_cancer', 'mrvi', True), 'failed-group reuse accepted changed source bytes')
+    ns['current_records'][key] = source_record
+    watchdog.write_bytes(watchdog_before.replace(b'STATE=OK', b'STATE=RUNNING'))
+    rejects(lambda: ns['inspect']([candidate], 'Breast_cancer', 'mrvi', True), 'active method group authorized reuse')
     watchdog.write_bytes(watchdog_before)
     # Same-byte destination and path-only JSON rebasing, strict new sidecars.
     imported = canonical / 'embeddings/imported.feather'
@@ -316,6 +325,9 @@ stage5_classify_pending_rows "$1" "$2"
     for arguments in ([], ['--inventory-only', '--execute'], ['--force'], ['--execute', '--source-run', 'other']):
         result = subprocess.run(['bash', str(entrypoint), *arguments], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert result.returncode != 0
+if row_reuse_only:
+    print('PASS published row reuse from terminal failed groups with unchanged source and strict artifact contracts')
+    raise SystemExit(0)
 # The operational seam is the complete Bash CLI, not an extracted function.
 # Only the external runtime and NAS boundary are replaced in the private tree.
 # The dispatcher, policy, owners, checksums, records and Python consumers remain

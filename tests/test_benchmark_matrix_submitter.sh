@@ -444,6 +444,49 @@ case "${PASS_CALLS}" in *"ANALYSIS_MANIFEST="*) ;; *) echo "batch ANALYSIS_MANIF
 case "${PASS_CALLS}" in *"BENCHMARK_MANIFEST="*) echo "batch BENCHMARK_MANIFEST export leaked" >&2; exit 1 ;; esac
 case "${PASS_CALLS}" in *"/batch_effect/uncorrected"*) ;; *) echo "batch analysis root was not pass-scoped" >&2; exit 1 ;; esac
 case "${PASS_CALLS}" in *"--array=1-12"*) ;; *) echo "batch matrix arrays did not use twelve rows" >&2; exit 1 ;; esac
+# Slurm stops parsing options at the script; trailing options are script args.
+# Exercise readiness and failure transitions from the submitted job graph.
+"${ROOT}/.pixi/envs/default/bin/python" - "${CAPTURE}" <<'PY'
+import shlex
+import sys
+from pathlib import Path
+
+jobs = []
+for index, line in enumerate(Path(sys.argv[1]).read_text().splitlines(), 1):
+    args = shlex.split(line.split(" ARGS ", 1)[1])
+    script_index = next(i for i, arg in enumerate(args) if not arg.startswith("-"))
+    options = dict(arg[2:].split("=", 1) for arg in args[:script_index] if arg.startswith("--") and "=" in arg)
+    exported = dict(item.split("=", 1) for item in options.get("export", "").split(",") if "=" in item)
+    jobs.append(dict(id=f"70000{index}", script=args[script_index], options=options,
+                     method=exported.get("METHOD", "")))
+
+def state(job, completed):
+    dependency = job["options"].get("dependency")
+    if not dependency:
+        return "READY"
+    kind, *ids = dependency.split(":")
+    parents = [completed.get(job_id, "PENDING") for job_id in ids]
+    if kind == "afterok":
+        if any(value in {"FAILED", "CANCELLED"} for value in parents):
+            return "CANCELLED" if job["options"].get("kill-on-invalid-dep") == "yes" else "PENDING"
+        return "READY" if all(value == "COMPLETED" for value in parents) else "PENDING"
+    assert kind == "afterany", kind
+    return "READY" if all(value in {"COMPLETED", "FAILED", "CANCELLED"} for value in parents) else "PENDING"
+
+arrays = [job for job in jobs if job["script"].endswith("/1.1_run_worker.sh")]
+prep = next(job for job in arrays if job["method"] == "prepare_pseudobulk")
+watchdog = next(job for job in jobs if job["script"].endswith("/matrix_watchdog.sh")
+                and job["method"] == "prepare_pseudobulk")
+consumers = [job for job in arrays if job["method"] in {"pseudobulk", "composition"}]
+assert {job["method"] for job in consumers} == {"pseudobulk", "composition"}
+assert all(state(job, {}) == "PENDING" for job in consumers), "consumer could start before preparation"
+assert all(state(job, {prep["id"]: "COMPLETED"}) == "PENDING" for job in consumers), "consumer bypassed preparation watchdog"
+assert all(state(job, {prep["id"]: "COMPLETED", watchdog["id"]: "FAILED"}) == "CANCELLED" for job in consumers), "failed preparation leaves runnable or stranded consumers"
+assert all(state(job, {prep["id"]: "COMPLETED", watchdog["id"]: "COMPLETED"}) == "READY" for job in consumers)
+gloscope = next(job for job in arrays if job["method"] == "gloscope")
+assert state(gloscope, {}) == "READY", "independent GloScope serialized behind preparation"
+print("preparation dependency readiness, failure cancellation and independent work: OK")
+PY
 # Batch-view MrVI is deterministic CPU work; validity/recompute selection must
 # not request a GPU partition or GPU allocation.
 MRVI_BATCH_CALL="$(printf '%s\n' "${PASS_CALLS}" | grep 'METHOD=mrvi' | sed -n '1p')"

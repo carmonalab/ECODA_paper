@@ -8,6 +8,10 @@ root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
 rscript <- file.path(root, ".pixi", "envs", "default", "bin", "Rscript")
 if (!file.exists(rscript)) stop("Pixi default Rscript not found: ", rscript)
 validator <- file.path(root, "src", "5_run_benchmark_methods", "validate_benchmark_rds_contract.R")
+Sys.setenv(
+  PROJECT_ROOT = root,
+  RETICULATE_PYTHON = file.path(root, ".pixi", "envs", "default", "bin", "python")
+)
 RDS_TEST_ENV <- c(
   paste0("RETICULATE_PYTHON=", file.path(root, ".pixi", "envs", "default", "bin", "python"))
 )
@@ -95,7 +99,16 @@ pseudobulk_result <- function(ids = c("s1", "s2")) {
     byrow = TRUE,
     dimnames = list(ids, c("g1", "g2"))
   )
-  list(pb = values, time_secs = 0, mem_GB = 0)
+  labels <- factor(rep(c("A", "B"), length.out = length(ids)))
+  names(labels) <- ids
+  list(
+    scores = list(sil_score = 0.5),
+    feat_mat = values,
+    dist_mat = as.matrix(stats::dist(values)),
+    labels = labels,
+    exec_time = 0,
+    mem_GB = 0
+  )
 }
 
 withTemporary <- function(code) {
@@ -578,17 +591,8 @@ withTemporary({
     corrected_results,
     "Synthetic_batch_effect_corrected_final_pseudobulk.rds"
   )
-  corrected_pseudobulk_result <- list(
-    pb = matrix(
-      c(1, 2, 3, 4, 5, 6, 7, 8),
-      nrow = 4L,
-      byrow = TRUE,
-      dimnames = list(c("s1", "s2", "s3", "s4"), c("g1", "g2"))
-    ),
-    time_secs = 0,
-    mem_GB = 0,
-    batch_contract = corrected_identity("Pseudobulk")
-  )
+  corrected_pseudobulk_result <- pseudobulk_result(c("s1", "s2", "s3", "s4"))
+  corrected_pseudobulk_result$batch_contract <- corrected_identity("Pseudobulk")
   corrected_pseudobulk_bundle <- list(
     batch_contract = corrected_identity("Pseudobulk"),
     Pseudobulk_hvg2000 = corrected_pseudobulk_result
@@ -661,9 +665,9 @@ withTemporary({
       corrected_pseudobulk_bundle$batch_contract$validation_summary$schema_version,
       1L
     ),
-    all(is.finite(corrected_pseudobulk_result$pb)),
+    all(is.finite(corrected_pseudobulk_result$feat_mat)),
     identical(
-      rownames(corrected_pseudobulk_result$pb),
+      rownames(corrected_pseudobulk_result$feat_mat),
       corrected_sample_metadata$Sample
     ),
     grepl(
