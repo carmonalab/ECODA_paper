@@ -1132,7 +1132,7 @@ _audit_stage5_scope_selection() {
   AUDIT_STAGE5_SCOPE_SELECTION="${scope}"
 }
 _audit_corrected_source_contracts() {
-  local dataset view source_path identity_path output_name key seen=""
+  local dataset view source_path source_record identity_path output_name key seen=""
   local index
   [[ "${STAGE_ARG}" == stage5 &&
      "${AUDIT_METADATA_PASS:-}" == corrected ]] || return 0
@@ -1144,6 +1144,17 @@ _audit_corrected_source_contracts() {
     seen="${seen} ${key}"
     output_name="$(ecoda_view_output_name "${dataset}" "${view}")" || return 1
     source_path="${HPC_SCRATCH_DIR}/${dataset}/output/${output_name}"
+    source_record="$(ecoda_artifact_record_path "${source_path}" "${RUN_ID}")" || return 1
+    if [[ -e "${source_record}" || -L "${source_record}" ]]; then
+      # The current run's preflight already checked this input's contract and
+      # bytes. Reuse its published proof; the helper rehashes writable inputs.
+      ecoda_validate_artifact_record "${source_path}" stage5_preflight "${RUN_ID}" \
+        >/dev/null || {
+        _audit_die "current-run source preflight proof is invalid: ${source_path}"
+        return 1
+      }
+      continue
+    fi
     identity_path="$(
       _audit_batch_contract_identity_path "${dataset}" "${view}" preprocess
     )" || return 1
@@ -1259,10 +1270,14 @@ _audit_metadata_export_manifest() {
     }
     _audit_regular_file "${input}" || return 1
     _audit_regular_file "${output}" || return 1
-    ecoda_validate_checksum "${input}" || {
-      _audit_die "metadata-export input H5AD checksum is invalid: ${input}"
-      return 1
-    }
+    # Corrected inputs are checked once by _audit_corrected_source_contracts,
+    # after the batch-contract manifest proves complete selected-row coverage.
+    if [[ "${AUDIT_METADATA_PASS:-}" != corrected ]]; then
+      ecoda_validate_checksum "${input}" || {
+        _audit_die "metadata-export input H5AD checksum is invalid: ${input}"
+        return 1
+      }
+    fi
     ecoda_validate_checksum "${output}" || {
       _audit_die "metadata-export Feather checksum is invalid: ${output}"
       return 1

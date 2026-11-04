@@ -664,6 +664,35 @@ prepare_corrected_final_run
 CORRECTED_SELECTION="${CORRECTED_RUN_ROOT}/manifests/selection.tsv"
 run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 0
 
+if [[ "${1:-}" == --source-proof-only ]]; then
+  SOURCE_INPUT="${SCRATCH}/Fixture/output/Fixture_batch_effect_analysis_corrected.h5ad"
+  ecoda_write_artifact_record "${SOURCE_INPUT}" stage5_preflight \
+    corrected_final_fixture >/dev/null
+  SOURCE_REAL_MD5="$(command -v md5sum)"
+  SOURCE_HASH_CALLS="${TMP_DIR}/source-hash.calls"
+  export SOURCE_INPUT SOURCE_REAL_MD5 SOURCE_HASH_CALLS
+  mkdir "${TMP_DIR}/source-hash-bin"
+  cat > "${TMP_DIR}/source-hash-bin/md5sum" <<'SH'
+#!/bin/bash
+if [[ "${1:-}" == "${SOURCE_INPUT}" ]]; then
+  printf 'source-content-read\n' >> "${SOURCE_HASH_CALLS}"
+fi
+exec "${SOURCE_REAL_MD5}" "$@"
+SH
+  chmod +x "${TMP_DIR}/source-hash-bin/md5sum"
+  export PATH="${TMP_DIR}/source-hash-bin:${PATH}"
+  run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 0
+  [[ ! -e "${SOURCE_HASH_CALLS}" ]] || {
+    echo "terminal audit rehashed a preflight-validated immutable input" >&2
+    exit 1
+  }
+  chmod u+w "${SOURCE_INPUT}"
+  printf X | dd of="${SOURCE_INPUT}" bs=1 count=1 conv=notrunc >/dev/null 2>&1
+  run_audit "${CORRECTED_RUN_ROOT}" stage5 "${CORRECTED_SELECTION}" 1
+  echo "terminal audit reuses validated immutable inputs and rejects writable corruption: OK"
+  exit 0
+fi
+
 # One gate accounting capture feeds the run audit without querying Slurm again.
 ACCOUNTING="${CORRECTED_RUN_ROOT}/manifests/scheduler_accounting.tsv"
 ACCOUNTING_CALLS="${TMP_DIR}/accounting.calls"
