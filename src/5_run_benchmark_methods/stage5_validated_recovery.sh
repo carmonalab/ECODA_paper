@@ -36,9 +36,9 @@ def fields(p):
             fail('malformed record: ' + str(p))
         result[k] = v
     return result
-def rows(p):
+def rows(p, allow_empty=False):
     result = [tuple(row) for row in csv.reader(safe(str(p)).open(), delimiter='\t')]
-    if not result or any(len(r) != 3 or not all(r) for r in result) or len(set(result)) != len(result):
+    if (not result and not allow_empty) or any(len(r) != 3 or not all(r) for r in result) or len(set(result)) != len(result):
         fail('invalid selection')
     return result
 def unique(pairs):
@@ -96,11 +96,13 @@ try:
         fail('R environment accounting is not completed successfully')
     h5ad_rows = rows(proof(m['preflights']['h5ad_manifest']))
     selection = rows(proof(m['selection']))
-    pending = rows(proof(m['pending']))
+    pending = rows(proof(m['pending']), allow_empty=True)
     if m['pending']['sha256'] != m['controls'][control_root + 'expected_pending.tsv']:
         fail('pending differs from validated promotion')
     if len(selection) != 63 or not set(pending) < set(selection):
-        fail('recovery requires full 63 coverage and an exact nonempty pending subset')
+        fail('recovery requires full 63 coverage and an exact pending subset')
+    if (not pending) != (m.get('release_only') is True):
+        fail('empty pending requires explicit publication-only scope')
     if any(r[2] in ('mrvi', 'pilot', 'qot') for r in pending):
         fail('protected Python method pending')
     for actual, expected_rows in ((os.environ.get('ECODA_RECOVERY_DISPATCH'), selection),

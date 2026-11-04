@@ -1136,6 +1136,36 @@ _audit_corrected_source_contracts() {
   local index
   [[ "${STAGE_ARG}" == stage5 &&
      "${AUDIT_METADATA_PASS:-}" == corrected ]] || return 0
+  local recovery="${RUN_ROOT_REAL}/manifests/validated_recovery.json"
+  if [[ "${AUDIT_TERMINAL_STATE}" == NOOP_VALIDATED &&
+        ( -e "${recovery}" || -L "${recovery}" ) ]]; then
+    _audit_regular_file "${recovery}" || return 1
+    [[ "$(_audit_metadata_value "${RUN_ROOT_REAL}/metadata" VALIDATED_RECOVERY_MANIFEST)" == "${recovery}" &&
+       "$(_audit_metadata_value "${RUN_ROOT_REAL}/metadata" VALIDATED_RECOVERY_MANIFEST_SHA256)" == \
+         "$(ecoda_sha256_file "${recovery}")" ]] || {
+      _audit_die "publication-only recovery proof binding changed"
+      return 1
+    }
+    # Publication already hashed source and NAS bytes. Source inputs remain
+    # read-only; reuse their scientific preflight instead of rescanning.
+    (
+      export ECODA_RUN_ROOT="${RUN_ROOT_REAL}" ECODA_RUN_ID="${RUN_ID}"
+      export ECODA_STAGE5_RECOVERY_MANIFEST="${recovery}"
+      export ECODA_STAGE5_RECOVERY_MANIFEST_SHA256="$(ecoda_sha256_file "${recovery}")"
+      export ECODA_STAGE5_RECOVERY_PROMOTION_ROOT="$(
+        _audit_metadata_value "${RUN_ROOT_REAL}/metadata" RECOVERY_PROMOTION_ROOT
+      )"
+      export DATASETS_JSON_FILE="${AUDIT_SOURCE_ROOT}/datasets.json"
+      PYTHON_BIN="$(_audit_python_binary)" || exit 1
+      export PYTHON_BIN
+      source "${AUDIT_SOURCE_ROOT}/src/5_run_benchmark_methods/stage5_validated_recovery.sh"
+      stage5_validate_recovery_manifest submit
+    ) || {
+      _audit_die "publication-only scientific input proof is invalid"
+      return 1
+    }
+    return 0
+  fi
   for index in "${!AUDIT_BATCH_CONTRACT_DATASETS[@]}"; do
     dataset="${AUDIT_BATCH_CONTRACT_DATASETS[${index}]}"
     view="${AUDIT_BATCH_CONTRACT_VIEWS[${index}]}"

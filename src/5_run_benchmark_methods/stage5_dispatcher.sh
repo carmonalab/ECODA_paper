@@ -3882,6 +3882,10 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     local group_label="$1" manifest="$2" dependency="$3" method="$4"
     local view="$5" resource_class="$6"
     if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
+      if jq -e '.release_only == true' "${ECODA_STAGE5_RECOVERY_MANIFEST}" >/dev/null; then
+        echo "BLOCKED: publication-only run cannot submit scientific jobs" >&2
+        return 1
+      fi
       cmp -s "${PENDING_SELECTION}" "$(jq -er '.pending.path' "${ECODA_STAGE5_RECOVERY_MANIFEST}")" || return 1
       [[ "$(ecoda_sha256_file "${ECODA_STAGE5_RECOVERY_MANIFEST}")" == "${ECODA_STAGE5_RECOVERY_MANIFEST_SHA256}" ]] || return 1
     fi
@@ -4282,35 +4286,38 @@ for label in "${LABELS[@]}"; do
 done
 
 stage5_validate_corrected_rds_rows() {
-  local ds view row_label label path identity_path
+  local ds view row_label label path metadata
+  local list="${ECODA_RUN_ROOT}/manifests/rds_validation_corrected.tsv"
+  local tmp="${ECODA_RUN_ROOT}/manifests/rds_validation_corrected.build.$$"
   local -a corrected_rds_args
   [[ "${PASS_ARG:-}" == corrected ]] || return 1
   [[ ${#RDS_LABELS[@]} -gt 0 ]] || return 0
+  : > "${tmp}" || return 1
   while IFS=$'\t' read -r ds view row_label; do
     for label in "${RDS_LABELS[@]}"; do
       if [[ ${METHOD_MATRIX_MODE} -eq 1 ]] &&
          ! ecoda_stage5_method_matrix_allows "${ds}" "${view}" "${label}"; then
         continue
       fi
-      identity_path="$(
-        stage5_batch_contract_identity_path "${ds}" "${view}" "${label}"
-      )" || return 1
       benchmark_artifacts_for "${ds}" "${view}" "${label}" || return 1
       for path in "${ARTIFACT_PATHS[@]}"; do
-        corrected_rds_args=(--artifact "${path}" --method "${label}" \
-          --dataset "${ds}" --view "${view}" --config "${DATASETS_JSON_FILE}" \
-          --input-root "${HPC_SCRATCH_DIR}" --batch-pass corrected \
-          --source-identity "${SOURCE_IDENTITY}" --source-identity-verified \
-          --expected-batch-contract "${identity_path}")
-        [[ -n "${ANALYSIS_VARIANT:-}" ]] &&
-          corrected_rds_args+=(--analysis-variant "${ANALYSIS_VARIANT}")
-        [[ "${path}" == *_metadata.rds ]] &&
-          corrected_rds_args+=(--metadata)
-        ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
-          "${corrected_rds_args[@]}" >/dev/null 2>&1 || return 1
+        metadata=0
+        [[ "${path}" == *_metadata.rds ]] && metadata=1
+        printf '%s\t%s\t%s\t%s\t%s\n' "${path}" "${label}" "${ds}" "${view}" "${metadata}" >> "${tmp}" || return 1
       done
     done
   done < "${MANIFEST}"
+  ecoda_atomic_install_manifest "${tmp}" "${list}" 5 || return 1
+  rm -f "${tmp}"
+  ecoda_write_checksum "${list}" || return 1
+  corrected_rds_args=(--artifact-list "${list}" --config "${DATASETS_JSON_FILE}" \
+    --input-root "${HPC_SCRATCH_DIR}" --batch-pass corrected \
+    --source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
+  [[ -n "${ANALYSIS_VARIANT:-}" ]] &&
+    corrected_rds_args+=(--analysis-variant "${ANALYSIS_VARIANT}")
+  # The existing batch validator derives each row's source identity from the
+  # pinned configuration and still requires fitted metadata in actual results.
+  ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" "${corrected_rds_args[@]}"
 }
 
 stage5_validate_final_rds_rows() {
@@ -4396,7 +4403,12 @@ ecoda_owner_finalize_tracked OK "benchmark matrix sync completed" ||
   stage5_abort "failed to finalize global Stage 5 artifact owners"
 stage5_finalize_owner_manifest OK "benchmark matrix sync completed" ||
   stage5_abort "failed to finalize Stage 5 owners"
-ecoda_set_run_state OK "benchmark matrix processing and synchronization completed" ||
+terminal_state=OK
+if [[ -n "${ECODA_STAGE5_RECOVERY_MANIFEST:-}" ]] &&
+   jq -e '.release_only == true' "${ECODA_STAGE5_RECOVERY_MANIFEST}" >/dev/null; then
+  terminal_state=NOOP_VALIDATED
+fi
+ecoda_set_run_state "${terminal_state}" "benchmark matrix processing and synchronization completed" ||
   stage5_abort "failed to persist final Stage 5 terminal state"
 if [[ -n "${PASS_ARG}" ]]; then
   echo "BATCH_EFFECT_RUN_ID=${RUN_ID}"

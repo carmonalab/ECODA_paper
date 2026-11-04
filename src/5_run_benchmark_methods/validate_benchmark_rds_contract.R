@@ -1517,13 +1517,14 @@ config <- if (nzchar(config_path) && file.exists(config_path)) {
   derived <- .corrected_batch_row_identity(ds, view, label)
   if (is.null(derived)) return(supplied)
   if (!is.null(supplied)) {
-    validate_batch_contract_identity(
-      derived,
-      supplied,
-      require_recorded = TRUE,
-      require_summary = FALSE,
-      label = paste0(ds, "/", view, "/", label, " supplied identity")
-    )
+    # This is the configured expectation, not a materialized result. Actual
+    # artifact contracts still require fitted limma metadata below.
+    if (!identical(
+      .batch_identity_normalize(derived),
+      .batch_identity_normalize(supplied)
+    )) {
+      stop(ds, "/", view, "/", label, " supplied source/config identity mismatch")
+    }
     return(supplied)
   }
   derived
