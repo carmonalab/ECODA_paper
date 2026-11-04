@@ -313,27 +313,16 @@ correct_clr_batch_limma <- function(
   corrected <- t(corrected_transposed)
   dimnames(corrected) <- dimnames(feat_matrix)
 
-  # Recenter rows (not columns), then make the final CLR coordinate the exact
-  # negative sum of its prefix so identifiers and the zero-sum invariant are
-  # preserved without changing feature order.
+  # CLR centering is a floating-point invariant, not a bitwise-zero promise.
+  # Extended-precision summation in Linux R can expose harmless cancellation.
   corrected <- sweep(corrected, 1L, rowMeans(corrected), FUN = "-")
-  final_column <- ncol(corrected)
-  if (final_column == 1L) {
-    corrected[, final_column] <- 0
-  } else {
-    prefix <- seq_len(final_column - 1L)
-    for (row_index in seq_len(nrow(corrected))) {
-      corrected[row_index, final_column] <- -sum(
-        corrected[row_index, prefix, drop = FALSE]
-      )
-    }
-  }
-  dimnames(corrected) <- dimnames(feat_matrix)
   if (any(!is.finite(corrected))) {
     stop("correct_clr_batch_limma: recentered output is nonfinite")
   }
   row_sums <- rowSums(corrected)
-  if (any(!is.finite(row_sums)) || any(row_sums != 0)) {
+  tolerance <- 64 * .Machine$double.eps * pmax(1, rowSums(abs(corrected)))
+  if (any(!is.finite(row_sums)) || any(!is.finite(tolerance)) ||
+      any(abs(row_sums) > tolerance)) {
     stop("correct_clr_batch_limma: row recentering failed to restore zero sums")
   }
   corrected
