@@ -122,6 +122,12 @@ try:
         if key in seen_inputs or key not in entries:
             fail('duplicate or foreign input')
         seen_inputs.add(key)
+        if m.get('release_only') is True:
+            # A result-only publication does not consume the H5AD inputs.
+            e = entries[key]
+            if item['path'] != e['path'] or item['md5'] != e['md5'] or int(item['size']) != int(e['size']):
+                fail('recorded input provenance mismatch')
+            continue
         p = safe(item['path']); st = p.stat(); e = entries[key]
         current = dict(dev=st.st_dev, ino=st.st_ino, size=st.st_size, mtime_ns=st.st_mtime_ns, ctime_ns=st.st_ctime_ns)
         if current != item['stat'] or e['path'] != str(p) or int(e['size']) != st.st_size or e['md5'] != item['md5'] or int(item['size']) != st.st_size:
@@ -287,6 +293,12 @@ PY
 }
 
 stage5_verify_recovery_final_storage() {
+  if jq -e '.release_only == true' "${ECODA_STAGE5_RECOVERY_MANIFEST}" >/dev/null; then
+    # Verify only the already validated result bytes being transferred.
+    # Do not rescan expression inputs or unrelated input-backup payloads.
+    stage5_validate_recovery_manifest submit
+    return $?
+  fi
   stage5_validate_recovery_manifest final || return 1
   local receipt utility
   utility="${ECODA_SOURCE_ROOT:-${PROJECT_ROOT}}/src/utils/bash/ecoda_nas_backup.sh"

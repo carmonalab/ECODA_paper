@@ -1146,8 +1146,8 @@ _audit_corrected_source_contracts() {
       _audit_die "publication-only recovery proof binding changed"
       return 1
     }
-    # Publication already hashed source and NAS bytes. Source inputs remain
-    # read-only; reuse their scientific preflight instead of rescanning.
+    # Publication consumes completed result artifacts, not expression inputs.
+    # Verify their bound byte proofs without reopening unrelated H5AD files.
     (
       export ECODA_RUN_ROOT="${RUN_ROOT_REAL}" ECODA_RUN_ID="${RUN_ID}"
       export ECODA_STAGE5_RECOVERY_MANIFEST="${recovery}"
@@ -1298,7 +1298,10 @@ _audit_metadata_export_manifest() {
       _audit_die "metadata-export row is not bound to the selected variant path: ${key}"
       return 1
     }
-    _audit_regular_file "${input}" || return 1
+    if [[ "${AUDIT_TERMINAL_STATE}" != NOOP_VALIDATED ||
+          ! -f "${RUN_ROOT_REAL}/manifests/validated_recovery.json" ]]; then
+      _audit_regular_file "${input}" || return 1
+    fi
     _audit_regular_file "${output}" || return 1
     # Corrected inputs are checked once by _audit_corrected_source_contracts,
     # after the batch-contract manifest proves complete selected-row coverage.

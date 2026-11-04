@@ -720,7 +720,9 @@ stage5_validate_corrected_batch_selection() {
   done
 }
 
-if [[ "${PASS_ARG}" == corrected ]]; then
+if [[ "${PASS_ARG}" == corrected ]] &&
+   { [[ ${ECODA_RECOVERY_ACTIVE} -eq 0 ]] ||
+     ! jq -e '.release_only == true' "${ECODA_STAGE5_RECOVERY_MANIFEST}" >/dev/null; }; then
   stage5_validate_corrected_batch_selection || exit 1
 fi
 
@@ -1836,6 +1838,10 @@ stage5_validate_corrected_h5ad_contract() {
 
 validate_input_row() {
   local ds="$1" view="$2" path
+  if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]] &&
+     jq -e '.release_only == true' "${ECODA_STAGE5_RECOVERY_MANIFEST}" >/dev/null; then
+    return 0
+  fi
   path="$(stage5_input_path "${ds}" "${view}")" || return 1
   # Full persisted-content validation runs in the compute-node preflight
   # array.  The login submitter only checks presence here; source identity
@@ -1874,6 +1880,10 @@ stage5_output_path_for_root() {
 stage5_require_input_ownerships() {
   local ds view source_path row seen_sources=""
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
+  if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]] &&
+     jq -e '.release_only == true' "${ECODA_STAGE5_RECOVERY_MANIFEST}" >/dev/null; then
+    return 0
+  fi
   while IFS=$'\t' read -r ds view _scope; do
     row="${ds}/${view}"
     case " ${seen_sources} " in *" ${row} "*) continue ;; esac
@@ -3051,6 +3061,7 @@ stage5_validate_corrected_matrix_rows() {
   local label="$1" ds view row_label identity_path safe selection tmp producer_run
   local -a validation_args
   [[ "${PASS_ARG:-}" == corrected ]] || return 1
+  [[ ${ECODA_RECOVERY_ACTIVE} -eq 0 ]] || return 0
   while IFS=$'\t' read -r ds view row_label; do
     if [[ ${METHOD_MATRIX_MODE} -eq 1 ]] &&
        ! ecoda_stage5_method_matrix_allows "${ds}" "${view}" "${label}"; then
@@ -4181,9 +4192,12 @@ if [[ -z "${PASS_ARG}" ]]; then
   fi
 fi
 
-# Recovery reuses scientific proof only before submission. Terminal validation
-# below always performs the ordinary fresh source/scientific checks.
-ECODA_RECOVERY_ACTIVE=0
+# Compute waves perform fresh semantic validation. Publication-only waves
+# transfer already validated result bytes without reopening expression inputs.
+if [[ -z "${ECODA_STAGE5_RECOVERY_MANIFEST:-}" ]] ||
+   ! jq -e '.release_only == true' "${ECODA_STAGE5_RECOVERY_MANIFEST}" >/dev/null; then
+  ECODA_RECOVERY_ACTIVE=0
+fi
 stage5_prepare_source_identity ||
   stage5_abort "Stage 5 source identity changed before final validation"
 LABELS=()
@@ -4295,6 +4309,7 @@ stage5_validate_corrected_rds_rows() {
   local tmp="${ECODA_RUN_ROOT}/manifests/rds_validation_corrected.build.$$"
   local -a corrected_rds_args
   [[ "${PASS_ARG:-}" == corrected ]] || return 1
+  [[ ${ECODA_RECOVERY_ACTIVE} -eq 0 ]] || return 0
   [[ ${#RDS_LABELS[@]} -gt 0 ]] || return 0
   : > "${tmp}" || return 1
   while IFS=$'\t' read -r ds view row_label; do
