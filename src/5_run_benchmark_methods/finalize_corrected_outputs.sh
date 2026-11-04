@@ -774,20 +774,35 @@ def main(argv):
         write_report(metadata_plan_path, 'dataset\tsource_path\tdestination_path\tmd5\tsize\n' + ''.join(metadata_transitions))
     evidence.update([metadata_plan_path, Path(str(metadata_plan_path) + '.md5')])
     log_module = module('cutover_execution_logs', root / 'src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1.2_merge_execution_times.py')
-    source_shards = set()
+    source_shards = {}
     for (ds, method), action in logical.items():
         if action not in ('REUSE', 'IMPORT', 'ADOPT'):
             continue
         row = next(row for row in decisions if row[0] == ds and row[2] == method)
         shard_run = execution_producer(row[6], ds, method)
         shards = sorted((runs / shard_run / 'logs').glob(f'execution_times_batch_effect_corrected_final_{method}_{ds}*.feather'))
+        replayed_cache = None
+        if not shards and method == 'prepare_pseudobulk':
+            # A failed preparation can publish a valid cache before its log.
+            # Replay measured cache timings exactly as the worker's cache-hit
+            # branch does; never fit again or invent historical shard bytes.
+            replayed_cache = row_paths[(ds, method)][0]
+            target = report / 'logs' / f'execution_times_batch_effect_corrected_final_{method}_{ds}.feather'
+            subprocess.run(shlex.split(os.environ['PIXI_RSCRIPT']) + ['-e', '''
+args <- commandArgs(TRUE)
+source(file.path(args[[1]], "src/5_run_benchmark_methods/benchmark_hpc_utils.R"))
+value <- read_rds_checked(args[[2]], producer="stage5_prepare_pseudobulk_hvg2000", run_id=args[[5]])
+emit_pseudobulk_timing_rows(list(hvg2000=value), args[[3]], log_file=args[[4]])
+''', str(root), str(replayed_cache), ds, str(target), shard_run], check=True)
+            shards = [target]
+            shard_run = run_id
         if not shards:
             raise ValueError(f'BLOCKED: missing original execution shard: {ds}/{method}')
         for path in shards:
             frame = log_module._read_recorded_execution_log(path, producer='stage5_execution_log', run_id=shard_run, require_record=True)
             if frame is None or set(frame['dataset'].astype(str)) != {ds}:
                 raise ValueError('BLOCKED: execution shard dataset mismatch')
-            source_shards.add(path)
+            source_shards[path] = replayed_cache if replayed_cache is not None else path
             evidence.update([path, Path(str(path) + '.md5'), Path(shell('ecoda_artifact_record_path "$1" "$2"', path, shard_run).strip())])
     if planned is not None:
         if [(row[0], row[1], row[2], row[5]) for row in decisions] != [
@@ -1131,7 +1146,7 @@ stage5_classify_pending_rows "$1" "$2"
         if not target.exists():
             copy_bytes(path, target)
             checksum(target)
-        copied_logs.append((path, target))
+        copied_logs.append((source_shards[path], target))
         selected_files.update([target, Path(str(target) + '.md5')])
     write_report(manifests / 'reused_execution_times.tsv', ''.join(f'{src}\t{dst}\t{digest(dst)}\t{dst.stat().st_size}\n' for src, dst in copied_logs))
     # Metadata is validated by the existing consumer contract against current
