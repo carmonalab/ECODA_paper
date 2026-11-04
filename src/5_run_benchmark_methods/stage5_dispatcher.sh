@@ -3332,11 +3332,15 @@ stage5_verify_precompute_binding() {
   if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
     [[ -n "${receipt}" && -n "${expected}" ]] || return 1
     stage5_validate_recovery_manifest || return 1
-    [[ "$(ecoda_sha256_file "${expected}")" == "$(jq -er '.pending.sha256' "${ECODA_STAGE5_RECOVERY_MANIFEST}")" ]] || return 1
+    stage5_validate_pending_checksum "${expected}" || return 1
+    local expected_sha="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    [[ ! -s "${expected}" ]] ||
+      expected_sha="$(ecoda_sha256_file "${expected}")" || return 1
+    [[ "${expected_sha}" == "$(jq -er '.pending.sha256' "${ECODA_STAGE5_RECOVERY_MANIFEST}")" ]] || return 1
     jq -e --arg p "${receipt}" 'any(.nas_receipts[]; .path==$p)' "${ECODA_STAGE5_RECOVERY_MANIFEST}" >/dev/null || return 1
     export ECODA_PRECOMPUTE_BACKUP_RECEIPT="${receipt}" ECODA_EXPECTED_PENDING="${expected}"
     ECODA_PRECOMPUTE_BACKUP_RECEIPT_SHA256="$(ecoda_sha256_file "${receipt}")" || return 1
-    ECODA_EXPECTED_PENDING_SHA256="$(ecoda_sha256_file "${expected}")" || return 1
+    ECODA_EXPECTED_PENDING_SHA256="${expected_sha}"
     export ECODA_PRECOMPUTE_BACKUP_RECEIPT_SHA256 ECODA_EXPECTED_PENDING_SHA256
     return 0
   fi
