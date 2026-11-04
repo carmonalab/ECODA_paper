@@ -60,6 +60,9 @@ THROTTLE="${MAX_NUM_CHUNKS_PARALLEL}"
 RUNTIME_EXPORT=""
 PRECOMPUTE_BACKUP_RECEIPT_ARG=""
 EXPECTED_PENDING_ARG=""
+VALIDATED_RECOVERY_MANIFEST_ARG=""
+ECODA_RECOVERY_ACTIVE=0
+source "${SCRIPT_DIR}/stage5_validated_recovery.sh"
 export ECODA_PRECOMPUTE_BACKUP_RECEIPT=""
 export ECODA_EXPECTED_PENDING=""
 source "${SCRIPT_DIR}/stage5_pending.sh"
@@ -74,6 +77,7 @@ Usage: 1_submit_hpc_array.sh [--datasets LIST] [--methods LIST]
        [--target-methods LIST] [--method-matrix TSV]
        [--analyses trans,zeroimp] [--selection-file TSV]
        [--precompute-backup-receipt JSON --expected-pending TSV]
+       [--validated-recovery-manifest JSON]
        [--exact-batch-selection] [--pass uncorrected|corrected]
        [--analysis-variant final|corrected_final]
        [--gpu-policy auto|default|any] [--force]
@@ -109,6 +113,8 @@ while [[ $# -gt 0 ]]; do
     --precompute-backup-receipt=*) PRECOMPUTE_BACKUP_RECEIPT_ARG="${1#*=}"; shift ;;
     --expected-pending) EXPECTED_PENDING_ARG="${2:-}"; shift 2 ;;
     --expected-pending=*) EXPECTED_PENDING_ARG="${1#*=}"; shift ;;
+    --validated-recovery-manifest) VALIDATED_RECOVERY_MANIFEST_ARG="${2:?manifest path required}"; shift 2 ;;
+    --validated-recovery-manifest=*) VALIDATED_RECOVERY_MANIFEST_ARG="${1#*=}"; [[ -n "${VALIDATED_RECOVERY_MANIFEST_ARG}" ]] || exit 1; shift ;;
     --target-methods) TARGET_METHODS_ARG="${2:-}"; TARGET_METHODS_SET=1; shift 2 ;;
     --target-methods=*) TARGET_METHODS_ARG="${1#*=}"; TARGET_METHODS_SET=1; shift ;;
     --exact-batch-selection) EXACT_BATCH_SELECTION=1; shift ;;
@@ -136,6 +142,15 @@ while [[ $# -gt 0 ]]; do
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
+if [[ -n "${VALIDATED_RECOVERY_MANIFEST_ARG}" ]]; then
+  [[ "${VALIDATED_RECOVERY_MANIFEST_ARG}" == /* && ${FORCE_ARG} -eq 0 &&
+     ${FORCE_TARGETED_ARG} -eq 0 && -z "${SYNC_ONLY_RUN}" ]] || exit 1
+  export ECODA_STAGE5_RECOVERY_MANIFEST="${VALIDATED_RECOVERY_MANIFEST_ARG}"
+  ECODA_STAGE5_RECOVERY_MANIFEST_SHA256="$(ecoda_sha256_file "${ECODA_STAGE5_RECOVERY_MANIFEST}")" || exit 1
+  ECODA_STAGE5_RECOVERY_PROMOTION_ROOT="$(jq -er '.promotion_root' "${ECODA_STAGE5_RECOVERY_MANIFEST}")" || exit 1
+  export ECODA_STAGE5_RECOVERY_MANIFEST_SHA256 ECODA_STAGE5_RECOVERY_PROMOTION_ROOT
+  ECODA_RECOVERY_ACTIVE=1
+fi
 if [[ ${FORCE_TARGETED_ARG} -eq 1 ]]; then
   [[ ${FORCE_ARG} -eq 0 ]] || {
     echo "ERROR: --force-targeted cannot be combined with --force." >&2
@@ -2020,6 +2035,18 @@ stage5_repair_missing_h5ad_sidecars() {
 stage5_prepare_source_identity() {
   local identity="${SOURCE_IDENTITY}" identity_sidecar="${SOURCE_IDENTITY}.md5"
   local identity_script
+  if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
+    local prior_identity
+    prior_identity="$(jq -er '.source_identity.path' "${ECODA_STAGE5_RECOVERY_MANIFEST}")" || return 1
+    if [[ -e "${identity}" ]]; then
+      cmp -s "${prior_identity}" "${identity}" || return 1
+    else
+      ecoda_atomic_copy "${prior_identity}" "${identity}" || return 1
+      ecoda_write_checksum "${identity}" || return 1
+    fi
+    ecoda_validate_checksum "${identity}"
+    return $?
+  fi
   if [[ -e "${identity}" || -L "${identity}" ]]; then
     ecoda_validate_run_owned_path "${identity}" "${ECODA_RUN_ROOT}" || return 1
   fi
@@ -2273,6 +2300,13 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
 else
   ecoda_init_run stage5 "${RUN_ID}" >/dev/null
   export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT
+  if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
+    recovery_run_manifest="${ECODA_RUN_ROOT}/manifests/validated_recovery.json"
+    ecoda_atomic_copy "${ECODA_STAGE5_RECOVERY_MANIFEST}" "${recovery_run_manifest}" || exit 1
+    [[ "$(ecoda_sha256_file "${recovery_run_manifest}")" == "${ECODA_STAGE5_RECOVERY_MANIFEST_SHA256}" ]] || exit 1
+    export ECODA_STAGE5_RECOVERY_MANIFEST="${recovery_run_manifest}"
+    ecoda_write_checksum "${ECODA_STAGE5_RECOVERY_MANIFEST}" || exit 1
+  fi
   stage5_install_source_manifest ||
     stage5_abort "new Stage 5 run has no immutable source manifest"
   runtime_submission_mode="${ECODA_RUNTIME_MODE:-host}"
@@ -2512,8 +2546,10 @@ if [[ "${PASS_ARG}" == corrected ]]; then
   stage5_create_batch_contract_manifest ||
     stage5_abort "failed to create or validate corrected Stage 5 batch-contract manifest"
 fi
-stage5_validate_corrected_source_contracts ||
-  stage5_abort "Stage 5 corrected source batch-contract validation failed"
+if [[ ${ECODA_RECOVERY_ACTIVE} -eq 0 ]]; then
+  stage5_validate_corrected_source_contracts ||
+    stage5_abort "Stage 5 corrected source batch-contract validation failed"
+fi
 DISPATCH_MANIFEST="${ECODA_RUN_ROOT}/manifests/dispatch_selection.tsv"
 DISPATCH_MANIFEST_MD5=""
 DISPATCH_MANIFEST_SIZE=""
@@ -2574,6 +2610,12 @@ stage5_build_dispatch_manifest() {
 }
 stage5_build_dispatch_manifest ||
   stage5_abort "failed to build or validate the Stage 5 dispatch manifest"
+if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
+  [[ "${ANALYSIS_VARIANT:-}" == corrected_final && ${METHOD_MATRIX_MODE} -eq 1 ]] || exit 1
+  export ECODA_RECOVERY_DISPATCH="${DISPATCH_MANIFEST}"
+  export DATASETS_JSON_FILE
+  stage5_validate_recovery_manifest || exit 1
+fi
 
 
 
@@ -2722,6 +2764,10 @@ stage5_validate_reusable_artifact() {
 stage5_prepare_pseudobulk_valid() {
   local ds="$1" view="$2" path owner_dir producer_run record recorded_producer expected_cache
   local prepare_rds_args=()
+  if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
+    stage5_recovery_row_valid "${ds}" "${view}" prepare_pseudobulk
+    return $?
+  fi
   [[ -n "${PASS_ARG}" ]] || return 1
   benchmark_artifacts_for "${ds}" "${view}" prepare_pseudobulk || return 1
   [[ ${#ARTIFACT_PATHS[@]} -eq 1 ]] || return 1
@@ -2770,6 +2816,10 @@ benchmark_selected_artifacts_valid() {
   local ds="$1" view="$2" label="$3" path artifact_check batch_identity
   local has_feather=0 rds_grouped=0 group_rc
   local artifact_validator_args=()
+  if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
+    stage5_recovery_row_valid "${ds}" "${view}" "${label}"
+    return $?
+  fi
   batch_identity=""
   if [[ "${PASS_ARG:-}" == corrected ]]; then
     batch_identity="$(
@@ -3120,6 +3170,26 @@ stage5_export_final_sample_metadata() {
   [[ -n "${ANALYSIS_VARIANT:-}" ]] || return 0
   ecoda_stage5_validate_identity "${PASS_ARG:-${ANALYSIS_PASS:-}}" || return 1
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == "1" ]] && return 0
+  if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
+    local recovery_metadata
+    recovery_metadata="${manifest}.build.$$"
+    : > "${recovery_metadata}" || return 1
+    while IFS=$'\t' read -r ds view _row_label; do
+      input="$(stage5_input_path "${ds}" "${view}")" || return 1
+      output="${ANALYSIS_ROOT}/metadata/${ds}_sample_metadata.feather"
+      jq -e --arg ds "${ds}" --arg path "${output}" \
+        'any(.artifacts[]; .kind=="metadata" and .dataset==$ds and .path==$path)' \
+        "${ECODA_STAGE5_RECOVERY_MANIFEST}" >/dev/null || return 1
+      printf '%s\t%s\t%s\t%s\n' "${ds}" "${view}" "${input}" "${output}" >> "${recovery_metadata}" || return 1
+    done < "${MANIFEST}"
+    ecoda_atomic_install_manifest "${recovery_metadata}" "${manifest}" 4 || return 1
+    rm -f "${recovery_metadata}"
+    ecoda_write_checksum "${manifest}" || return 1
+    ecoda_atomic_write "${status_report}" \
+      "STATE=OK\nANALYSIS_VARIANT=${ANALYSIS_VARIANT}\nANALYSIS_ROOT=${ANALYSIS_ROOT}\nANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT}\nANALYSIS_PASS=${PASS_ARG}\nANALYSIS_LOG_PREFIX=${ANALYSIS_LOG_PREFIX}\nRUN_ID=${RUN_ID}\nMANIFEST=${manifest}\nCOUNT=$(awk 'END { print NR }' "${manifest}")\nPENDING=0\n" || return 1
+    ecoda_write_checksum "${status_report}"
+    return $?
+  fi
   exporter="$(stage5_source_script src/utils/py/export_h5ad_sample_metadata.py)"
   stage5_require_source_script "${exporter}" || return 1
   if [[ -n "${SYNC_ONLY_RUN}" ]]; then
@@ -3255,6 +3325,17 @@ stage5_export_final_sample_metadata() {
 stage5_verify_precompute_binding() {
   local receipt="${PRECOMPUTE_BACKUP_RECEIPT_ARG}" expected="${EXPECTED_PENDING_ARG}"
   local utility source_root nas child key value recorded
+  if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
+    [[ -n "${receipt}" && -n "${expected}" ]] || return 1
+    stage5_validate_recovery_manifest || return 1
+    [[ "$(ecoda_sha256_file "${expected}")" == "$(jq -er '.pending.sha256' "${ECODA_STAGE5_RECOVERY_MANIFEST}")" ]] || return 1
+    jq -e --arg p "${receipt}" 'any(.nas_receipts[]; .path==$p)' "${ECODA_STAGE5_RECOVERY_MANIFEST}" >/dev/null || return 1
+    export ECODA_PRECOMPUTE_BACKUP_RECEIPT="${receipt}" ECODA_EXPECTED_PENDING="${expected}"
+    ECODA_PRECOMPUTE_BACKUP_RECEIPT_SHA256="$(ecoda_sha256_file "${receipt}")" || return 1
+    ECODA_EXPECTED_PENDING_SHA256="$(ecoda_sha256_file "${expected}")" || return 1
+    export ECODA_PRECOMPUTE_BACKUP_RECEIPT_SHA256 ECODA_EXPECTED_PENDING_SHA256
+    return 0
+  fi
   [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]] || return 0
   if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     recorded="$(awk -F= '$1=="PRECOMPUTE_BACKUP_RECEIPT" {print substr($0,index($0,"=")+1)}' "${ECODA_RUN_ROOT}/metadata")"
@@ -3330,6 +3411,12 @@ stage5_pending_owner_valid() {
     $1=="KEY" {nk++; if($2!=k) bad=1}
     END {exit(ns==1 && nr==1 && nt==1 && nk==1 && !bad ? 0 : 1)}
   ' "${owner}/owner" || return 1
+  if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
+    local recovery_owner_sha
+    recovery_owner_sha="$(jq -er --arg p "${owner}/owner" '.pending_owners[$p]' "${ECODA_STAGE5_RECOVERY_MANIFEST}")" || return 1
+    [[ "$(ecoda_sha256_file "${owner}/owner")" == "${recovery_owner_sha}" ]]
+    return $?
+  fi
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 && -z "${ECODA_PRECOMPUTE_BACKUP_RECEIPT}" ]] && return 0
   promotion="$(jq -er '.source_root' "${ECODA_PRECOMPUTE_BACKUP_RECEIPT}")" || return 1
   mapping="${promotion}/manifests/archive_mapping.tsv"
@@ -3355,6 +3442,7 @@ stage5_pending_target_valid() {
 
 stage5_import_execution_shards() {
   local promotion manifest canonical original copy digest size extra target
+  [[ ${ECODA_RECOVERY_ACTIVE} -eq 0 ]] || return 0
   [[ -n "${ECODA_PRECOMPUTE_BACKUP_RECEIPT}" && -z "${SYNC_ONLY_RUN}" ]] || return 0
   promotion="$(jq -er '.source_root' "${ECODA_PRECOMPUTE_BACKUP_RECEIPT}")" || return 1
   manifest="${promotion}/manifests/reused_execution_times.tsv"
@@ -3385,7 +3473,7 @@ if [[ -z "${SYNC_ONLY_RUN}" && -n "${EXPECTED_PENDING_ARG}" ]]; then
   [[ "${EXPECTED_PENDING_ARG}" == /* &&
      "$(ecoda_realpath_existing "${EXPECTED_PENDING_ARG}")" == "${EXPECTED_PENDING_ARG}" ]] || exit 1
   stage5_validate_pending_checksum "${EXPECTED_PENDING_ARG}" || exit 1
-  if [[ "${ANALYSIS_VARIANT:-}" == corrected_final && -n "${PRECOMPUTE_BACKUP_RECEIPT_ARG}" ]]; then
+  if [[ ${ECODA_RECOVERY_ACTIVE} -eq 0 && "${ANALYSIS_VARIANT:-}" == corrected_final && -n "${PRECOMPUTE_BACKUP_RECEIPT_ARG}" ]]; then
     stage5_bind_precompute_evidence "${PRECOMPUTE_BACKUP_RECEIPT_ARG}" "${EXPECTED_PENDING_ARG}" || exit 1
   fi
   expected_bound="${ECODA_RUN_ROOT}/manifests/expected_pending.tsv"
@@ -3468,7 +3556,7 @@ if [[ -z "${SYNC_ONLY_RUN}" && "${ANALYSIS_VARIANT:-}" != corrected_final ]] &&
 fi
 
 
-if [[ "${ANALYSIS_VARIANT:-}" != corrected_final || -n "${SYNC_ONLY_RUN}" || -s "${CLASSIFIED_PENDING}" ]]; then
+if [[ ${ECODA_RECOVERY_ACTIVE} -eq 0 ]] && [[ "${ANALYSIS_VARIANT:-}" != corrected_final || -n "${SYNC_ONLY_RUN}" || -s "${CLASSIFIED_PENDING}" ]]; then
 if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   stage5_repair_missing_h5ad_sidecars ||
     stage5_abort "Stage 5 source H5AD sidecar validation failed"
@@ -3488,6 +3576,7 @@ stage5_run_r_environment_preflight() {
   local log_dir="${ECODA_RUN_ROOT}/logs/r_environment_preflight"
   local preflight_msg preflight_id preflight_rc preflight_worker preflight_export
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
+  [[ ${ECODA_RECOVERY_ACTIVE} -eq 0 ]] || return 0
   mkdir -p "${log_dir}" || return 1
   preflight_worker="$(stage5_source_script src/utils/bash/r_environment_preflight_worker.sh)"
   preflight_export="${RUNTIME_EXPORT},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_RUN_ID=${RUN_ID},R_ENV_PREFLIGHT_RUN_ROOT=${ECODA_RUN_ROOT}"
@@ -3522,6 +3611,7 @@ fi
 stage5_run_corrected_final_consumer_barrier() {
   local validator report
   local -a consumer_args=()
+  [[ ${ECODA_RECOVERY_ACTIVE} -eq 0 ]] || return 0
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
   [[ "${ANALYSIS_VARIANT:-}" == corrected_final &&
      -z "${SYNC_ONLY_RUN}" ]] || return 0
@@ -3654,6 +3744,11 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
       stage5_abort "failed to create empty Stage 5 owner manifest"
   fi
   rm -f "${PENDING_SELECTION_TMP}" "${OWNERS_TMP}"
+  if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
+    export ECODA_RECOVERY_PENDING="${PENDING_SELECTION}"
+    cmp -s "${PENDING_SELECTION}" "$(jq -er '.pending.path' "${ECODA_STAGE5_RECOVERY_MANIFEST}")" || exit 1
+    [[ "$(ecoda_sha256_file "${ECODA_STAGE5_RECOVERY_MANIFEST}")" == "${ECODA_STAGE5_RECOVERY_MANIFEST_SHA256}" ]] || exit 1
+  fi
 else
   ecoda_validate_run_owned_path "${OWNERS_FILE}" "${ECODA_RUN_ROOT}" ||
     stage5_abort "Stage 5 owner manifest is missing or not run-owned"
@@ -3701,6 +3796,11 @@ else
   RUN_METADATA="STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\nH5AD_PREFLIGHT=${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv\nPENDING_SELECTION=${PENDING_SELECTION}\nPENDING_SELECTION_MD5=${PENDING_SELECTION_MD5}\nPENDING_SELECTION_SIZE=${PENDING_SELECTION_SIZE}\n${dispatch_metadata}${analysis_variant_metadata}${target_methods_metadata}${root_metadata}${identity_metadata}\n${batch_contract_metadata_suffix}"
   if [[ -n "${ECODA_PRECOMPUTE_BACKUP_RECEIPT}" ]]; then
     RUN_METADATA="${RUN_METADATA}\nPRECOMPUTE_BACKUP_RECEIPT=${ECODA_PRECOMPUTE_BACKUP_RECEIPT}\nPRECOMPUTE_BACKUP_RECEIPT_SHA256=${ECODA_PRECOMPUTE_BACKUP_RECEIPT_SHA256}\nEXPECTED_PENDING=${ECODA_EXPECTED_PENDING}\nEXPECTED_PENDING_SHA256=${ECODA_EXPECTED_PENDING_SHA256}\n"
+  fi
+  if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
+    RUN_METADATA="${RUN_METADATA}\nVALIDATED_RECOVERY_MANIFEST=${ECODA_STAGE5_RECOVERY_MANIFEST}\nVALIDATED_RECOVERY_MANIFEST_SHA256=${ECODA_STAGE5_RECOVERY_MANIFEST_SHA256}\nRECOVERY_PROMOTION_ROOT=${ECODA_STAGE5_RECOVERY_PROMOTION_ROOT}\n"
+    recovery_h5ad_proof="$(jq -er '.preflights.h5ad_manifest.path' "${ECODA_STAGE5_RECOVERY_MANIFEST}")" || exit 1
+    RUN_METADATA="${RUN_METADATA/H5AD_PREFLIGHT=${ECODA_RUN_ROOT}\/manifests\/h5ad_preflight.tsv/H5AD_PREFLIGHT=${recovery_h5ad_proof}}"
   fi
   ecoda_atomic_write "${ECODA_RUN_ROOT}/metadata" "${RUN_METADATA}" ||
     stage5_abort "failed to write Stage 5 run metadata"
@@ -3777,6 +3877,10 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   submit_matrix() {
     local group_label="$1" manifest="$2" dependency="$3" method="$4"
     local view="$5" resource_class="$6"
+    if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
+      cmp -s "${PENDING_SELECTION}" "$(jq -er '.pending.path' "${ECODA_STAGE5_RECOVERY_MANIFEST}")" || return 1
+      [[ "$(ecoda_sha256_file "${ECODA_STAGE5_RECOVERY_MANIFEST}")" == "${ECODA_STAGE5_RECOVERY_MANIFEST_SHA256}" ]] || return 1
+    fi
     method_spec_for_group "${method}" "${resource_class}" || return 1
     local method_force=0
     stage5_method_is_forced "${method}" && method_force=1
@@ -4065,6 +4169,9 @@ if [[ -z "${PASS_ARG}" ]]; then
   fi
 fi
 
+# Recovery reuses scientific proof only before submission. Terminal validation
+# below always performs the ordinary fresh source/scientific checks.
+ECODA_RECOVERY_ACTIVE=0
 stage5_prepare_source_identity ||
   stage5_abort "Stage 5 source identity changed before final validation"
 LABELS=()

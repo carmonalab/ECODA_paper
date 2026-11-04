@@ -453,6 +453,7 @@ analysis_merge_sync_cleanup() (
   local selection="${ECODA_SELECTION_MANIFEST:-}"
   local matrix="${ECODA_STAGE5_METHOD_MATRIX:-${METHOD_MATRIX:-}}"
   local nas_utility receipt="${ECODA_PRECOMPUTE_BACKUP_RECEIPT:-}" promotion_root=""
+  local recovery_manifest="${ECODA_STAGE5_RECOVERY_MANIFEST:-}" recovery_helper=""
   local archive_receipt="" publication_identical=1
   local receipt_hash expected_hash child remote_dir next_dir
   benchmark_stage5_identity_guard "${STAGE5_PASS}" || exit 1
@@ -525,7 +526,19 @@ analysis_merge_sync_cleanup() (
       ecoda_validate_checksum "${matrix}" ||
       sync_fail "explicit run-owned checksum-valid method matrix is required"
   fi
-  if [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
+  if [[ -n "${recovery_manifest}" || -n "${ECODA_STAGE5_RECOVERY_MANIFEST_SHA256:-}" ||
+        -n "${ECODA_STAGE5_RECOVERY_PROMOTION_ROOT:-}" ]]; then
+    [[ "${ANALYSIS_VARIANT:-}" == corrected_final && -n "${recovery_manifest}" &&
+       -n "${ECODA_STAGE5_RECOVERY_MANIFEST_SHA256:-}" &&
+       -n "${ECODA_STAGE5_RECOVERY_PROMOTION_ROOT:-}" ]] ||
+      sync_fail "validated recovery requires the complete corrected publication binding"
+    recovery_helper="$(benchmark_source_script_path src/5_run_benchmark_methods/stage5_validated_recovery.sh)"
+    benchmark_require_source_script_path "${recovery_helper}" ||
+      sync_fail "verified validated recovery helper is unavailable"
+    source "${recovery_helper}" || sync_fail "cannot load validated recovery helper"
+    receipt="${recovery_manifest}"
+    promotion_root="${ECODA_STAGE5_RECOVERY_PROMOTION_ROOT}"
+  elif [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
     [[ -n "${receipt}" && -n "${ECODA_EXPECTED_PENDING:-}" &&
        -n "${ECODA_PRECOMPUTE_BACKUP_RECEIPT_SHA256:-}" &&
        -n "${ECODA_EXPECTED_PENDING_SHA256:-}" ]] ||
@@ -543,7 +556,11 @@ analysis_merge_sync_cleanup() (
   nas_utility="$(benchmark_source_script_path src/utils/bash/ecoda_nas_backup.sh)"
   benchmark_require_source_script_path "${nas_utility}" ||
     sync_fail "verified NAS utility is unavailable"
-  if [[ -n "${receipt}" ]]; then
+  if [[ -n "${recovery_manifest}" ]]; then
+    stage5_verify_recovery_final_storage ||
+      sync_fail "validated recovery NAS input/archive/control verification failed"
+    archive_receipt="${promotion_root}/manifests/archive.receipt.json"
+  elif [[ -n "${receipt}" ]]; then
     bash "${nas_utility}" verify --receipt "${receipt}" ||
       sync_fail "precompute backup receipt verification failed"
     if [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
@@ -572,8 +589,10 @@ analysis_merge_sync_cleanup() (
     sync_fail "failed to canonicalize remote benchmark root"
   RUN_ROOT="$(cd "${RUN_ROOT}" && pwd)" ||
     sync_fail "failed to canonicalize Stage 5 run root"
-  RUN_LOG_DIR="$(cd "${RUN_LOG_DIR}" && pwd)" ||
-    sync_fail "failed to canonicalize Stage 5 run log directory"
+  if [[ -z "${STAGE5_PASS}" ]]; then
+    RUN_LOG_DIR="$(cd "${RUN_LOG_DIR}" && pwd)" ||
+      sync_fail "failed to canonicalize Stage 5 run log directory"
+  fi
   [[ -n "${ECODA_SOURCE_ROOT:-}" ]] &&
     merge_script="$(benchmark_source_script_path src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1.2_merge_execution_times.py)"
   ECODA_RUN_ROOT="${RUN_ROOT}"
@@ -760,11 +779,29 @@ PY
     retry_publication=1
   fi
   if [[ ${retry_publication} -eq 0 && -s "${REMOTE_ROOT}/checksums.md5" ]]; then
-    (cd "${REMOTE_ROOT}" && md5sum -c checksums.md5 >/dev/null 2>&1) || {
-      sync_fail "existing remote checksum manifest failed validation"
-    }
+    if [[ -n "${STAGE5_PASS}" ]]; then
+      # Only standalone timing logs are optional, never scientific artifacts
+      # or their embedded runtime provenance.
+      awk '{p=$2; sub(/^\*/, "", p);
+        if (p != "embeddings/execution_times.feather" &&
+            p != "embeddings/execution_times.feather.md5") print}' \
+        "${REMOTE_ROOT}/checksums.md5" > "${RUN_ROOT}/manifests/sync_existing_scientific_checksums.md5" ||
+        sync_fail "cannot select existing scientific checksum entries"
+      if [[ -s "${RUN_ROOT}/manifests/sync_existing_scientific_checksums.md5" ]]; then
+        (cd "${REMOTE_ROOT}" && md5sum -c "${RUN_ROOT}/manifests/sync_existing_scientific_checksums.md5" >/dev/null 2>&1) ||
+          sync_fail "existing remote scientific checksum manifest failed validation"
+      fi
+    else
+      (cd "${REMOTE_ROOT}" && md5sum -c checksums.md5 >/dev/null 2>&1) ||
+        sync_fail "existing remote checksum manifest failed validation"
+    fi
   fi
 
+  # Batch-effect acceptance is scientific, not a timing-log reconstruction.
+  # Leave historical NAS logs and run-local timing logs untouched; their
+  # standalone timing checksum entries are omitted from the scientific release.
+  EXISTING_LOG=""
+  if [[ -z "${STAGE5_PASS}" ]]; then
   EXISTING_LOG="${REMOTE_ROOT}/embeddings/execution_times.feather"
   if [[ ${retry_publication} -eq 1 ]]; then
     EXISTING_LOG="${retry_continuity}"
@@ -804,6 +841,7 @@ PY
     sync_fail "execution-log merge failed"
   }
   add_sync_artifact "${LOCAL_ROOT}/embeddings/execution_times.feather"
+  fi
 
   CHECKSUM_TMP="${LOCAL_ROOT}/checksums.md5.build.$$"
   if ! : > "${CHECKSUM_TMP}"; then
@@ -812,6 +850,11 @@ PY
   if [[ -s "${REMOTE_ROOT}/checksums.md5" ]]; then
     while IFS= read -r line || [[ -n "${line}" ]]; do
       rel="$(printf '%s\n' "${line}" | awk '{p=$2; sub(/^\*/, "", p); print p}')"
+      if [[ -n "${STAGE5_PASS}" ]]; then
+        case "${rel}" in
+          embeddings/execution_times.feather|embeddings/execution_times.feather.md5) continue ;;
+        esac
+      fi
       case " ${selected_seen} " in
         *" ${rel} "*) ;;
         *) printf '%s\n' "${line}" >> "${CHECKSUM_TMP}" ||
@@ -878,9 +921,9 @@ PY
     [[ -n "${archive_receipt}" ]] || sync_fail "terminal shared sync transition requires archive receipt"
     "${PYTHON_BIN}" - "${receipt}" "${archive_receipt}" "${promotion_root}" \
       "${recovery_sync_owner_dir}/owner" "${SYNC_FILES}" "${LOCAL_ROOT}" "${REMOTE_ROOT}" \
-      "${transition}" "${RUN_ID}" "${EXISTING_LOG}" <<'PY' ||
+      "${transition}" "${RUN_ID}" "${EXISTING_LOG}" "${recovery_manifest}" <<'PY' ||
 import csv, hashlib, json, os, pathlib, sys
-receipt_path, archive_path, promotion, owner, files, local, remote, transition_path, run_id, continuity = sys.argv[1:]
+receipt_path, archive_path, promotion, owner, files, local, remote, transition_path, run_id, continuity, recovery_manifest = sys.argv[1:]
 def identity(path):
     p = pathlib.Path(path)
     if p.is_symlink() or not p.is_file():
@@ -900,20 +943,29 @@ def inventory(path):
     return rows
 try:
     main = json.load(open(receipt_path))
-    composite = inventory(main["inventory_path"])
-    required = ["manifests/global_sync_owner.tsv", "manifests/archive_mapping.tsv"]
-    for kind in ("inputs", "canonical", "archive"):
-        child_rel = "manifests/" + kind + ".receipt.json"
-        required.append(child_rel)
-        child = json.load(open(os.path.join(promotion, child_rel)))
-        required.append(os.path.relpath(child["inventory_path"], promotion))
-    for rel in required:
-        if rel not in composite or identity(os.path.join(promotion, rel)) != composite[rel]:
-            raise ValueError("prerequisite missing from composite")
+    control_root = pathlib.Path(promotion) / "manifests"
+    if recovery_manifest:
+        for name in ("global_sync_owner.tsv", "archive_mapping.tsv", "archive.receipt.json"):
+            path = control_root / name
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("nonregular recovery control")
+            if hashlib.sha256(path.read_bytes()).hexdigest() != main["controls"][str(path)]:
+                raise ValueError("recovery publication control changed")
+    else:
+        composite = inventory(main["inventory_path"])
+        required = ["manifests/global_sync_owner.tsv", "manifests/archive_mapping.tsv"]
+        for kind in ("inputs", "canonical", "archive"):
+            child_rel = "manifests/" + kind + ".receipt.json"
+            required.append(child_rel)
+            child = json.load(open(os.path.join(promotion, child_rel)))
+            required.append(os.path.relpath(child["inventory_path"], promotion))
+        for rel in required:
+            if rel not in composite or identity(os.path.join(promotion, rel)) != composite[rel]:
+                raise ValueError("prerequisite missing from composite")
     archive = json.load(open(archive_path))
     archived = inventory(archive["inventory_path"])
     mapping = {}
-    with open(os.path.join(promotion, "manifests/archive_mapping.tsv")) as f:
+    with (control_root / "archive_mapping.tsv").open() as f:
         reader = csv.DictReader(f, delimiter="\t")
         if reader.fieldnames != ["original_path", "archive_path", "md5", "size"]:
             raise ValueError("invalid archive mapping header")
@@ -932,7 +984,7 @@ try:
         if identity(target) != archived[rel]:
             raise ValueError("archive evidence differs")
         return target
-    with open(os.path.join(promotion, "manifests/global_sync_owner.tsv")) as f:
+    with (control_root / "global_sync_owner.tsv").open() as f:
         rows = list(csv.DictReader(f, delimiter="\t"))
     matches = [r for r in rows if r["path"] == owner]
     if len(matches) > 1:
@@ -1004,6 +1056,8 @@ try:
                 p = pathlib.PurePosixPath(rel)
                 if p.is_absolute() or ".." in p.parts or str(p) != rel:
                     raise ValueError("unsafe canonical checksum path")
+                if rel in ("embeddings/execution_times.feather", "embeddings/execution_times.feather.md5"):
+                    continue
                 if rel not in intent:
                     actual = identity(os.path.join(remote, rel))
                     if actual[0] != digest or rel in authorization["unselected"]:
@@ -1080,7 +1134,7 @@ PY
       remote_dir="${next_dir}"
     done
   done < "${SYNC_FILES}"
-  if [[ -s "${CLEANUP_MANIFEST}" ]]; then
+  if [[ -z "${STAGE5_PASS}" && -s "${CLEANUP_MANIFEST}" ]]; then
     while IFS= read -r path || [[ -n "${path}" ]]; do
       [[ "${path}" == "${RUN_LOG_DIR}/"* ]] ||
         sync_fail "cleanup manifest escapes run log directory: ${path}"
