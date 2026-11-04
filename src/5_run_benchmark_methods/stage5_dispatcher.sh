@@ -1136,6 +1136,10 @@ stage5_create_batch_contract_manifest() {
   local seen_views="" seen_contracts=""
   local -a contract_methods=(preprocess)
   [[ "${PASS_ARG:-}" == corrected ]] || return 0
+  if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
+    stage5_recovery_install_batch_contracts
+    return $?
+  fi
   local -a contract_methods_for=()
   for method in "${METHODS[@]:-}"; do
     [[ "${method}" == _ecoda_none_ ]] || contract_methods+=("${method}")

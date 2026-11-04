@@ -210,10 +210,10 @@ correct_clr_batch_limma <- function(
     batch_keys_input,
     sample_col = sample_col
   )
-  if (!is.numeric(feat_mat)) {
+  feat_matrix <- as.matrix(feat_mat)
+  if (!is.numeric(feat_matrix)) {
     stop("correct_clr_batch_limma: feature matrix must be numeric")
   }
-  feat_matrix <- as.matrix(feat_mat)
   if (length(dim(feat_matrix)) != 2L ||
       nrow(feat_matrix) == 0L || ncol(feat_matrix) == 0L) {
     stop("correct_clr_batch_limma: feature matrix must be non-empty")

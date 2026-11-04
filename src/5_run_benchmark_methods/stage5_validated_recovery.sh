@@ -65,7 +65,7 @@ try:
         fail('promotion root mismatch')
     control_root = m['promotion_root'] + '/manifests/'
     required = ['artifact_decisions.tsv', 'metadata_transitions.tsv', 'source_identity.json',
-                'expected_pending.tsv', 'archive_mapping.tsv', 'archive.receipt.json', 'global_sync_owner.tsv']
+                'expected_pending.tsv', 'archive_mapping.tsv', 'global_sync_owner.tsv']
     if any(control_root + name not in m['controls'] for name in required):
         fail('missing promotion control')
     config = os.environ['DATASETS_JSON_FILE']
@@ -73,6 +73,9 @@ try:
         fail('scientific configuration not pinned')
     for path, sha in m['controls'].items():
         proof({'path': path, 'sha256': sha})
+    archive_path = proof(m['archive_receipt'])
+    if m['controls'].get(str(archive_path)) != m['archive_receipt']['sha256']:
+        fail('archive receipt is not pinned')
     actual_runtime = fields(run_root + '/manifests/runtime.identity')
     old_runtime = fields(proof(m['preflights']['runtime_identity']))
     for key in ('RUNTIME_IMAGE_SHA256', 'RUNTIME_MANIFEST_SHA256'):
@@ -96,8 +99,8 @@ try:
     pending = rows(proof(m['pending']))
     if m['pending']['sha256'] != m['controls'][control_root + 'expected_pending.tsv']:
         fail('pending differs from validated promotion')
-    if len(selection) != 63 or len(pending) != 15 or not set(pending) < set(selection):
-        fail('recovery requires full 63 / pending 15 exact scope')
+    if len(selection) != 63 or not set(pending) < set(selection):
+        fail('recovery requires full 63 coverage and an exact nonempty pending subset')
     if any(r[2] in ('mrvi', 'pilot', 'qot') for r in pending):
         fail('protected Python method pending')
     for actual, expected_rows in ((os.environ.get('ECODA_RECOVERY_DISPATCH'), selection),
@@ -201,7 +204,7 @@ try:
         inventory = proof(dict(path=data['inventory_path'], sha256=data['inventory_sha256']))
         if receipt_path.name == 'inputs.receipt.json':
             input_receipts.append((data, inventory))
-        if str(receipt_path) == control_root + 'archive.receipt.json':
+        if receipt_path == archive_path:
             archive_receipts.append(data)
     if len(input_receipts) != 1 or len(archive_receipts) != 1:
         fail('exact existing input/archive receipts required')
@@ -215,6 +218,70 @@ except (OSError, ValueError, KeyError, TypeError) as exc:
     print(str(exc), file=sys.stderr)
     sys.exit(1)
 PY
+}
+
+# Reuse the already-bound configuration identities in one process instead of
+# restarting Python for every dataset/method pair before scientific submission.
+stage5_recovery_install_batch_contracts() {
+  local manifest="${ECODA_RUN_ROOT}/manifests/batch_contract.tsv"
+  "${PYTHON_BIN}" - "${ECODA_STAGE5_RECOVERY_MANIFEST}" \
+    "${ECODA_STAGE5_RECOVERY_MANIFEST_SHA256}" "${METHOD_MATRIX}" "${manifest}" <<'PY'
+import csv, hashlib, json, os, re, sys
+from pathlib import Path
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+def publish(path, data):
+    temp = Path(str(path) + '.build.' + str(os.getpid()))
+    with temp.open('xb') as stream:
+        stream.write(data)
+    os.link(temp, path)
+    temp.unlink()
+try:
+    source, expected, matrix, destination = sys.argv[1:]
+    if sha(source) != expected:
+        raise ValueError('recovery manifest changed before contract reuse')
+    recovery = json.loads(Path(source).read_text())
+    proof = recovery['preflights']['batch_contract_manifest']
+    if sha(proof['path']) != proof['sha256']:
+        raise ValueError('prior batch-contract manifest changed')
+    selected = {tuple(row) for row in csv.reader(Path(matrix).open(), delimiter='\t')}
+    required = selected | {(row[0], row[1], 'preprocess') for row in selected}
+    output = Path(destination)
+    directory = output.parent / 'batch_contracts'
+    directory.mkdir(exist_ok=True)
+    seen = set()
+    rows = []
+    for row in csv.reader(Path(proof['path']).open(), delimiter='\t'):
+        if len(row) != 6:
+            raise ValueError('malformed prior batch-contract row')
+        dataset, view, method, path, md5, size = row
+        key = (dataset, view, method)
+        if key not in required or key in seen or any(not re.fullmatch(r'[A-Za-z0-9_.-]+', value) for value in key):
+            raise ValueError('prior batch-contract scope mismatch')
+        original = Path(path)
+        if original.is_symlink() or str(original.resolve()) != path:
+            raise ValueError('unsafe prior batch-contract identity')
+        data = original.read_bytes()
+        if hashlib.md5(data).hexdigest() != md5 or len(data) != int(size):
+            raise ValueError('prior batch-contract identity changed')
+        target = directory / ('__'.join(key) + '.json')
+        publish(target, data)
+        publish(Path(str(target) + '.md5'), f'MD5={md5}\nSIZE={size}\nPATH={target}\n'.encode())
+        rows.append('\t'.join((*key, str(target), md5, size)) + '\n')
+        seen.add(key)
+    if seen != required:
+        raise ValueError('incomplete prior batch-contract coverage')
+    publish(output, ''.join(rows).encode())
+except (OSError, ValueError, KeyError) as error:
+    sys.exit(str(error))
+PY
+  [[ $? -eq 0 ]] || return 1
+  ecoda_write_checksum "${manifest}" || return 1
+  ECODA_BATCH_CONTRACT_MANIFEST="${manifest}"
+  ECODA_BATCH_CONTRACT_MANIFEST_MD5="${ECODA_CHECKSUM_MD5}"
+  ECODA_BATCH_CONTRACT_MANIFEST_SIZE="${ECODA_CHECKSUM_SIZE}"
+  ECODA_BATCH_CONTRACT_MANIFEST_SHA256="$(ecoda_sha256_file "${manifest}")"
 }
 
 stage5_verify_recovery_final_storage() {

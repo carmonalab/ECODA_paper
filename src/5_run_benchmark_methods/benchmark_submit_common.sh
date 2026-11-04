@@ -559,7 +559,8 @@ analysis_merge_sync_cleanup() (
   if [[ -n "${recovery_manifest}" ]]; then
     stage5_verify_recovery_final_storage ||
       sync_fail "validated recovery NAS input/archive/control verification failed"
-    archive_receipt="${promotion_root}/manifests/archive.receipt.json"
+    archive_receipt="$(jq -er '.archive_receipt.path' "${recovery_manifest}")" ||
+      sync_fail "validated recovery archive receipt is unavailable"
   elif [[ -n "${receipt}" ]]; then
     bash "${nas_utility}" verify --receipt "${receipt}" ||
       sync_fail "precompute backup receipt verification failed"
@@ -945,8 +946,8 @@ try:
     main = json.load(open(receipt_path))
     control_root = pathlib.Path(promotion) / "manifests"
     if recovery_manifest:
-        for name in ("global_sync_owner.tsv", "archive_mapping.tsv", "archive.receipt.json"):
-            path = control_root / name
+        for path in (control_root / "global_sync_owner.tsv",
+                     control_root / "archive_mapping.tsv", pathlib.Path(archive_path)):
             if path.is_symlink() or not path.is_file():
                 raise ValueError("nonregular recovery control")
             if hashlib.sha256(path.read_bytes()).hexdigest() != main["controls"][str(path)]:
