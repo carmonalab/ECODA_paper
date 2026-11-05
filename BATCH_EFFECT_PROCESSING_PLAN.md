@@ -1,15 +1,15 @@
 # Corrected batch-effect processing — return to Bamboo
 
-## Current checkpoint — 2026-11-04
+## Current checkpoint — 2026-11-05
 
-### Current blocker — Bamboo scratch reads fail; no computation remains
+### All selected results recovered to NAS — canonical publication remains
 
-- **Scientific processing is complete for all63 logical rows.** The result transfer is not complete. No method, publication gate or waiter is running. This checkpoint supersedes historical RUNNING statements below; failed gates remain failed.
-- **The results are small:** all216 selected payload/metadata/checksum files total52,799,866 bytes. Of these,207 files /44,203,219 bytes have been saved on real NAS and matched to the previously recorded SHA256 values. All27 final MrVI/PILOT/QOT result families and all9 GloScope results are recovered; none were rerun. Selected NAS regular files are666 and directories777; scratch/home permissions are unchanged.
-- **Isolated rescue, not canonical publication:** `/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper/_ecoda_backups/corrected_final/result_rescue_20261104T215627Z/results/`. Its sibling `result_rescue_report.json` records the exact verified/missing files and expected hashes. Healthy Home report: `/home/users/h/halterc/ecoda_corrected_runs/corrected_bamboo_20261104T202712Z_publish63_ready/result_rescue_report.json`. No partial canonical release is claimed.
-- **Nine files remain inaccessible: seven RDS payloads and two checksum sidecars,8,596,647 bytes total.** Direct result-only rsync failed with `Remote I/O error (121)` on `login1.bamboo`. One bounded file-copy-only Slurm job `4652559` repeated the transfer from `cpu001.bamboo`; all nine source reads failed there too. It ran no R/Python method. Thus this is an observed cross-client scratch read failure, not a scientific-validation prerequisite. No particular server/target or permanent data loss is established.
+- **Scientific processing is complete for all63 logical rows; all216 selected result files are now recovered to NAS.** No method, publication gate or waiter is running. Canonical publication/reviewer approval remains separate and incomplete. This checkpoint supersedes historical RUNNING and missing-result statements below; failed gates remain failed.
+- **Completed result rescue:**216/216 selected payload/metadata/checksum files,52,799,866 bytes total. The user-requested retry on `2026-11-05T10:13:57Z` recovered the final nine files; each NAS SHA256 matches its original recorded value. Previously recovered207 files retain their earlier verification. All27 final MrVI/PILOT/QOT result families and all9 GloScope results remain preserved; no method was rerun. Selected NAS regular files are666 and directories777; scratch/home permissions are unchanged.
+- **Complete isolated rescue, not canonical publication:** `/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper/_ecoda_backups/corrected_final/result_rescue_20261104T215627Z/results/`. Its sibling `result_rescue_report.json` records `RECOVERY_COMPLETE`,216 verified files, zero missing files and the nine recovered files with original expected hashes. Healthy Home report: `/home/users/h/halterc/ecoda_corrected_runs/corrected_bamboo_20261104T202712Z_publish63_ready/result_rescue_report.json`. Canonical publication is explicitly false in both reports.
+- **Previous storage failure remains historical evidence:** seven RDS payloads and two checksum sidecars,8,596,647 bytes total, previously failed result-only rsync with `Remote I/O error (121)` on `login1.bamboo` and in bounded file-copy-only job4652559 on `cpu001.bamboo`. All nine now copy and match their original SHA256 values. This establishes recovery of the selected files, not resolution of the entire cluster's storage incident; no particular server/target or root cause is established.
 
-| Dataset | Unreadable selected files |
+| Dataset | Formerly unreadable selected files — all now recovered |
 | --- | --- |
 | Joanito | Main composition RDS |
 | Lung | Main composition RDS and its `.md5` sidecar |
@@ -17,8 +17,8 @@
 | Covid19_PBMC | Main pseudobulk RDS |
 | Kidney_KPMP_full | Main pseudobulk RDS; prepared `pseudobulk_hvg2000` RDS |
 
-- Existing NAS backups supplied59 byte-identical recoveries; no stale scientific result was substituted. Four readable per-variant composition caches are separately saved under the rescue root's `composition_components/`, with producer MD5/size and SHA256 evidence. Missing constituent caches and the three independent pseudobulk-result caches also have scratch read errors, so they cannot currently reconstruct the absent complete results without new computation.
-- **Required next action: Bamboo HPC support must restore scratch file readability.** NAS is mounted/read-write; no NAS password or mount action is needed. Do not contact Yggdrasil, rerun models, rewrite unreadable originals, reset failed gates, or launch more scans/copy retries while storage remains unavailable. Once access is restored, recover only the nine missing files, then finish selected-result canonical publication and reviewer approval.
+- Existing NAS backups supplied59 byte-identical recoveries; no stale scientific result was substituted. Four readable per-variant composition caches are separately saved under the rescue root's `composition_components/`, with producer MD5/size and SHA256 evidence. Reconstruction from those caches is unnecessary now that all original selected results are recovered.
+- **Next:** finish selected-result canonical publication and reviewer approval using the preserved scientific/source evidence. No remaining selected-result recovery requires waiting for support. Do not infer general storage health from this successful copy, contact Yggdrasil, rerun models, rewrite originals, reset failed gates, or add H5AD/input-backup rescans. NAS is mounted/read-write; no NAS password or mount action is needed. The focused successful retry launched no jobs and changed no scientific payload.
 - **Result-only implementation is committed/pushed:** `077e2ae1149b8e1246698df7b1a0161bb39bd009`. Scratch source snapshot creation also hit the storage incident; the verified immutable source is instead on healthy Home at `/home/users/h/halterc/ecoda_result_publication_sources/077e2ae1149b8e1246698df7b1a0161bb39bd009/tree`, source-manifest SHA256 `450f14d4da9bba850dc5e704a7c59e906317d05f1550e670e57602901e58fe4b`. Shell parsing and existing source-proof/corruption regression PASS11.55s. The additional native input-access poison smoke could not start because its scratch proof JSON was itself unreadable; do not claim that smoke passed.
 
 ### Scientific computation COMPLETE — publication-only recovery
