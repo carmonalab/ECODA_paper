@@ -353,9 +353,9 @@ benchmark_sync_artifacts_for() {
       ;;
   esac
 }
-# Validate the runtime metadata bound to a selected output. The JSON parser is
-# deliberately standard-library-only so this guard remains usable with the
-# immutable Python interpreter configured by the submitter.
+# Validate the runtime fields and output binding. Scientific batch-contract
+# validation is owned by the method validator; its optional mapping travels
+# unchanged with the producer's runtime record.
 benchmark_validate_runtime_metadata() {
   local metadata_path="$1" output_path="$2" output_md5="$3"
   benchmark_stage5_identity_guard || return 1
@@ -414,8 +414,12 @@ try:
             object_pairs_hook=reject_duplicate_keys,
             parse_constant=reject_nonfinite_json_constant,
         )
-    if not isinstance(payload, dict) or set(payload) != required:
-        raise ValueError("runtime metadata must have exactly seven fields")
+    if not isinstance(payload, dict) or set(payload) not in (
+        required, required | {"batch_contract"}
+    ):
+        raise ValueError("runtime metadata has missing or unknown fields")
+    if "batch_contract" in payload and not isinstance(payload["batch_contract"], dict):
+        raise ValueError("runtime metadata batch_contract must be a mapping")
     if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
         raise ValueError("invalid schema_version")
     if (
