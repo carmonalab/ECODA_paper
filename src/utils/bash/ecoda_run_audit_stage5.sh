@@ -32,6 +32,16 @@ AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_MD5=""
 AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SIZE=""
 AUDIT_METADATA_BATCH_CONTRACT_MANIFEST_SHA256=""
 
+_audit_stage5_input_path() {
+  local dataset="$1" view="$2" name
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    ecoda_derivative_input "${dataset}" "${view}"
+  else
+    name="$(ecoda_view_output_name "${dataset}" "${view}")" || return 1
+    printf '%s/%s/output/%s' "${HPC_SCRATCH_DIR}" "${dataset}" "${name}"
+  fi
+}
+
 _audit_benchmark_h5ad() {
   local path="$1" view="$2" method="$3" identity_path="${4:-}"
   local python_bin validator variant="${AUDIT_METADATA_VARIANT:-}"
@@ -85,6 +95,30 @@ _audit_stage5_identity() {
   unset ANALYSIS_VARIANT ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_PASS \
     ANALYSIS_LOG_PREFIX PASS_ARG ECODA_STAGE5_METHOD_MATRIX METHOD_MATRIX \
     ECODA_STAGE5_CORRECTED_FINAL_ROOT_VERSION
+
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    local context
+    context="$(ecoda_derivative_stage5_context "${pass}" "${variant}")" || return 1
+    expected_root="$(ecoda_derivative_root "${context}")" || return 1
+    expected_nas="$(ecoda_derivative_root "${context}" nas)" || return 1
+    case "${context}" in
+      benchmark) expected_log_prefix=execution_times_ ;;
+      batch_effect/uncorrected_final) expected_log_prefix=execution_times_batch_effect_uncorrected_final_ ;;
+      batch_effect/corrected_final) expected_log_prefix=execution_times_batch_effect_corrected_final_ ;;
+    esac
+    [[ "${AUDIT_METADATA_ROOT}" == "${expected_root}" ]] || return 1
+    if [[ -n "${variant}" ]]; then
+      [[ "${analysis_root}" == "${expected_root}" &&
+         "${analysis_nas_root}" == "${expected_nas}" &&
+         "${analysis_pass}" == "${pass}" &&
+         "${analysis_log_prefix}" == "${expected_log_prefix}" ]] || return 1
+    fi
+    export ANALYSIS_VARIANT="${variant}" ANALYSIS_ROOT="${expected_root}" \
+      ANALYSIS_NAS_ROOT="${expected_nas}" ANALYSIS_PASS="${pass}" PASS_ARG="${pass}" \
+      ANALYSIS_LOG_PREFIX="${expected_log_prefix}"
+    ecoda_derivative_stage5_validate "${pass}" "${variant}"
+    return $?
+  fi
 
   if [[ -n "${variant}" ]]; then
     case "${variant}" in
@@ -934,7 +968,7 @@ _audit_batch_contract_manifest() {
        "${row_size}" == "${ECODA_CHECKSUM_SIZE}" ]] || return 1
     output_name="$(ecoda_view_output_name "${row_dataset}" "${row_view}")" ||
       return 1
-    source_path="${HPC_SCRATCH_DIR}/${row_dataset}/output/${output_name}"
+    source_path="$(_audit_stage5_input_path "${row_dataset}" "${row_view}")" || return 1
     [[ -s "${source_path}" ]] || {
       _audit_die "corrected source H5AD is missing or empty: ${source_path}"
       return 1
@@ -1173,7 +1207,7 @@ _audit_corrected_source_contracts() {
     case " ${seen} " in *" ${key} "*) continue ;; esac
     seen="${seen} ${key}"
     output_name="$(ecoda_view_output_name "${dataset}" "${view}")" || return 1
-    source_path="${HPC_SCRATCH_DIR}/${dataset}/output/${output_name}"
+    source_path="$(_audit_stage5_input_path "${dataset}" "${view}")" || return 1
     source_record="$(ecoda_artifact_record_path "${source_path}" "${RUN_ID}")" || return 1
     if [[ -e "${source_record}" || -L "${source_record}" ]]; then
       # The current run's preflight already checked this input's contract and
@@ -1291,7 +1325,7 @@ _audit_metadata_export_manifest() {
     esac
     actual_keys="${actual_keys} ${key}"
     name="$(ecoda_view_output_name "${dataset}" "${view}")" || return 1
-    expected_input="${HPC_SCRATCH_DIR}/${dataset}/output/${name}"
+    expected_input="$(_audit_stage5_input_path "${dataset}" "${view}")" || return 1
     expected_output="${ANALYSIS_ROOT}/metadata/${dataset}_sample_metadata.feather"
     [[ "${input}" == "${expected_input}" &&
        "${output}" == "${expected_output}" ]] || {
@@ -1377,6 +1411,7 @@ _audit_matrix_feather() {
 }
 _audit_benchmark_rds() {
   local path="$1" dataset="$2" view="$3" label="$4" identity_path="${5:-}"
+  local artifact_label
   local rscript="${PIXI_RSCRIPT:-Rscript}"
   local validator="${AUDIT_SOURCE_ROOT}/src/5_run_benchmark_methods/validate_benchmark_rds_contract.R"
   local variant="${AUDIT_METADATA_VARIANT:-}"
@@ -1400,7 +1435,9 @@ _audit_benchmark_rds() {
     _audit_die "selected RDS checksum is invalid: ${path}"
     return 1
   }
-  rds_args=(--artifact "${path}" --method "${label}" --dataset "${dataset}"
+  artifact_label="$(ecoda_stage5_rds_artifact_method "${label}" "${path}")" || return 1
+  [[ "${artifact_label}" == "${label}" ]] || identity_path=""
+  rds_args=(--artifact "${path}" --method "${artifact_label}" --dataset "${dataset}"
     --view "${view}" --input-root "${HPC_SCRATCH_DIR}"
     --config "${DATASETS_JSON_FILE}")
   [[ -n "${AUDIT_METADATA_PASS:-}" ]] &&
@@ -1532,7 +1569,7 @@ _audit_selected_artifacts() {
     ecoda_stage5_validate_identity "${metadata_pass}" \
       "${AUDIT_METADATA_VARIANT}" || return 1
   fi
-  if [[ "${STAGE_ARG}" == stage5 ]]; then
+  if [[ "${STAGE_ARG}" == stage5 && -z "${ECODA_ARTIFACT_BINDING:-}" ]]; then
     case "${metadata_pass}" in
       ""|uncorrected|corrected) ;;
       *) _audit_die "invalid Stage 5 PASS metadata: ${metadata_pass}"; return 1 ;;

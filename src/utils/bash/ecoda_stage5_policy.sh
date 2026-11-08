@@ -16,6 +16,11 @@ ecoda_stage5_validate_identity() {
     _ecoda_die "Stage 5 pass identity disagrees with ANALYSIS_PASS"
     return 1
   fi
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    source "${PROJECT_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+    ecoda_derivative_stage5_validate "${pass}" "${variant}"
+    return $?
+  fi
   case "${variant}" in
     "")
       return 0
@@ -127,8 +132,15 @@ ecoda_stage5_analysis_root_suffix() {
 ecoda_stage5_validate_artifact_path() {
   local path="${1:-}" canonical scratch_root nas_root expected_root expected_nas
   local variant="${ANALYSIS_VARIANT:-}" expected_suffix
-  [[ -n "${variant}" ]] || return 0
+  [[ -n "${variant}" || -n "${ECODA_ARTIFACT_BINDING:-}" ]] || return 0
   ecoda_stage5_validate_identity || return 1
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    canonical="$(_ecoda_canonical_path "${path}")" || return 1
+    case "${canonical}" in
+      "${ANALYSIS_ROOT}"/*|"${ANALYSIS_NAS_ROOT}"/*) return 0 ;;
+      *) _ecoda_die "Stage 5 artifact escapes bound derivative roots: ${path}"; return 1 ;;
+    esac
+  fi
   expected_suffix="$(ecoda_stage5_analysis_root_suffix "${variant}")" || return 1
   [[ -n "${path}" ]] || {
     _ecoda_die "final Stage 5 artifact path is empty"
@@ -159,6 +171,17 @@ ecoda_stage5_validate_artifact_path() {
       return 1
       ;;
   esac
+}
+
+ecoda_stage5_rds_artifact_method() {
+  local method="$1" path="$2" name
+  if [[ "${method}" == composition && -n "${ECODA_ARTIFACT_BINDING:-}" &&
+        "${PASS_ARG:-${ANALYSIS_PASS:-}}" == corrected ]]; then
+    for name in ECODA_authors_HR ECODA_authors_HR_NULL ecoda_unsupervised_harmony ecoda_unsupervised_harmony_limma; do
+      case "${path}" in *_${name}.rds) printf '%s' "${name}"; return ;; esac
+    done
+  fi
+  printf '%s' "${method}"
 }
 
 ecoda_stage5_batch_stem() {
@@ -304,6 +327,11 @@ _ecoda_stage5_artifacts_for() {
         stem="${batch_stem}"
         ECODA_BENCHMARK_ARTIFACTS+=("${root}/results/${stem}_composition.rds")
         ECODA_BENCHMARK_ARTIFACTS+=("${root}/results/${stem}_metadata.rds")
+        if [[ -n "${ECODA_ARTIFACT_BINDING:-}" && "${pass}" == corrected ]]; then
+          for n in ECODA_authors_HR ECODA_authors_HR_NULL ecoda_unsupervised_harmony ecoda_unsupervised_harmony_limma; do
+            ECODA_BENCHMARK_ARTIFACTS+=("${root}/results/${stem}_${n}.rds")
+          done
+        fi
         ;;
       *)
         # Explicit post-baseline methods use one method-specific result key.

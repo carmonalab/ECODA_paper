@@ -46,6 +46,8 @@ PREPROCESS_CORRECTION_MODE = "preprocess_hvg_harmony"
 NATIVE_HARMONY_CORRECTION_MODE = "native_harmony_embedding"
 MRVI_CORRECTION_MODE = "mrvi_composite_batch"
 LIMMA_COMPOSITION_CORRECTION_MODE = "limma_fixed_effects"
+HARMONY_CLR_CORRECTION_MODE = "harmony_leiden_clr"
+HARMONY_CLR_LIMMA_CORRECTION_MODE = "harmony_leiden_clr_limma"
 LIMMA_PSEUDOBULK_CORRECTION_MODE = "limma_fixed_effects_pseudobulk"
 # Backwards-compatible constant names now resolve to the active fixed-effect
 # modes; historical mode tokens are kept separately and are never active.
@@ -80,12 +82,15 @@ MISSING_SENTINELS = frozenset(
 
 # Corrected method IDs are part of the cache/run identity contract.  The
 # preprocessing boundary uses ``preprocess``; corrected Stage 5 uses exactly
-# the eight method labels below.
+# the explicit method labels below. ECODA_seuratres_2 remains readable for
+# historical artifacts; new corrected producers emit the two named arms.
 METHOD_IDS = frozenset(
     {
         "preprocess",
         "ECODA_authors_HR",
         "ECODA_seuratres_2",
+        "ecoda_unsupervised_harmony",
+        "ecoda_unsupervised_harmony_limma",
         "ECODA_authors_HR_NULL",
         "Pseudobulk",
         "GloScope",
@@ -104,6 +109,8 @@ MODEL_IDS = frozenset(
         "mrvi_composite_v1",
         "embedding_consumer_harmony_v1",
         "limma_fixed_effects_v1",
+        "harmony_leiden_clr_v1",
+        "harmony_leiden_clr_limma_v1",
         "pseudobulk_limma_fixed_effects_v1",
     }
 )
@@ -129,6 +136,8 @@ __all__ = [
     "NATIVE_HARMONY_CORRECTION_MODE",
     "MRVI_CORRECTION_MODE",
     "LIMMA_COMPOSITION_CORRECTION_MODE",
+    "HARMONY_CLR_CORRECTION_MODE",
+    "HARMONY_CLR_LIMMA_CORRECTION_MODE",
     "LIMMA_PSEUDOBULK_CORRECTION_MODE",
     "PSEUDOBULK_CORRECTION_MODE",
     "ECODA_CORRECTION_MODE",
@@ -1134,6 +1143,14 @@ def _validate_method_model(
             raise BatchContractError(
                 f"unsupported active corrected batch model_id {model_id!r}"
             )
+    harmony_models = {
+        "ecoda_unsupervised_harmony": "harmony_leiden_clr_v1",
+        "ecoda_unsupervised_harmony_limma": "harmony_leiden_clr_limma_v1",
+    }
+    if (method_id in harmony_models or model_id in harmony_models.values()) and (
+        harmony_models.get(method_id) != model_id
+    ):
+        raise BatchContractError("mismatched unsupervised Harmony method/model history")
     return method_id, model_id
 
 
@@ -1464,6 +1481,20 @@ def batch_correction_spec_for_keys(
             MRVI_CORRECTION_MODE,
             f"MRVI.setup_anndata(batch_keys={ordered_keys})",
         )
+    if method_id in {"ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma"}:
+        source = (
+            "embedding=X_pca_harmony_batch_effect_corrected_hvg2000; "
+            "Leiden=leiden_res_2_batch_effect_corrected_hvg2000_harmony; "
+            "CLR(counts + 0.5)"
+        )
+        if method_id == "ecoda_unsupervised_harmony":
+            return HARMONY_CLR_CORRECTION_MODE, source + "; sample_level_limma=none"
+        _, limma_formula = batch_correction_spec_for_keys(
+            "ECODA_authors_HR", keys,
+            effective_batch_keys=effective,
+            non_estimable_batch_keys=non_estimable,
+        )
+        return HARMONY_CLR_LIMMA_CORRECTION_MODE, source + "; " + limma_formula
     if method_id in {
         "Pseudobulk",
         "ECODA_authors_HR",

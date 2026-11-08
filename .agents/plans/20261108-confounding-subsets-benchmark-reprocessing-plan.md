@@ -677,7 +677,16 @@ contradictions to the user; do not turn them into silent defaults.
 | 2026-11-08 | First implementation packages published | Pushed `dfad68d` documentation harmonization, `feb3550` pre-fit BL core and exact worker variants, and `1b6969e` approved whole-sample cohort selection, evaluation mappings and create-only Stage 3 Python publication to origin/master. These source packages passed their scoped tests and independent review; no scientific derivatives or scheduler jobs have run yet |
 | 2026-11-08 | Runtime executable probes | The verified relocated image reports Python 3.13.14 and R 4.5.2 under `apptainer exec --cleanenv --containall`; dependency files remain unchanged |
 | 2026-11-08 | Bassez truthful legacy input provenance | Full Bamboo source MD5 `22be4eb1f41433b4a8a33dd8e1a3b7d2`, size 3,301,058,992 bytes; NAS and scratch checksum sidecars agree. Neither exact source has a global artifact owner. The worker-specific assumption of a six-field producer record was withdrawn: an explicit legacy-input mode will verify the existing three-field proof and actual content, check ownership conflicts, and record `legacy_validated_input`; it must never fabricate a published producer/run or fall back from an invalid supplied producer record |
-| 2026-11-08 | Stage 3 integration review in progress | Derivative input references and scratch/NAS roots are implemented and narrow helper tests pass. Review identified optional Alzheimer producer validation and first-manifest-row view selection; implementor is making producer validation mandatory for selected donor-assay inputs and selecting the Alzheimer row explicitly before this slice is committed or launched |
+| 2026-11-08 | Stage 3 integration review in progress | Derivative input references and scratch/NAS roots are implemented and narrow helper tests pass. Review identified optional Alzheimer producer validation and first-manifest-row view selection; both were fixed and the new focused boundary regression passes |
+
+| 2026-11-08 | Stage 3 isolation package published | `5d37aaabaf0d01172652f2a9d64bc40b7fc669cb` pushed to origin/master. Independent helper, submitter, terminal-audit and Alzheimer boundary tests passed. Bamboo clean detached checkout advanced only after ancestry verification; verified immutable snapshot created under the release source-snapshot parent |
+| 2026-11-08 | Input checksum staging complete | Eight unique raw inputs fully MD5-verified, existing checksum proofs compared where present, no active writer before/after; 17-row canonical input references and canonical proof receipts written create-only under `_ecoda_inputs/20261108-confounding-subsets-v1/stage3-inputs-v2`. Original files/sidecars unchanged. Attempt v1 stopped before hashing because the read-only ownership helper required a scope ID; its marker is preserved, v2 completed |
+| 2026-11-08 | Bassez worker independently accepted | Metadata-only create/validate/audit worker and focused tests pass independently. Strict parent mode requires the exact canonical run-owned record and wrapper producer validation; explicit legacy mode is separate. Streamed non-target HDF5 data/attribute preservation, valid HR retention, fallback completeness, and create-only outputs covered. Stage 2 shell integration remains in progress |
+| 2026-11-08 | Harmony backend independently checked | Both arms have distinct method/model/history contracts; actual counts/CLR and technical limma tests prove one shared source and zero versus one sample-level correction. Four focused/broad regressions pass; standalone artifact identity and shell expansion integration continue |
+
+| 2026-11-08 | External application workstream identified | User named `.agents/plans/20261108-cancer-clustering-application-port-plan.md`, session `01a1bd25-d0d9-7bf2-a34c-31a27de20974`, and explicitly authorized two-way coordination. Read its boundaries and sent a coordination message: application notebook/helper/tests/inputs/figures and Yan archive belong there, with no commits/pushes, scheduler work or pipeline/environment edits. Preserve and exclude its changes from this plan's Git packages. Validated existing HiTME compositions may remain usable independently of author-HR repair; record exact input identities |
+| 2026-11-08 | Bassez core checkpoint pushed | `48a6503` contains only the independently accepted metadata worker and preservation tests; pushed to origin/master. No repair jobs submitted; Stage 2 integration continues |
+| 2026-11-08 | Stage 3 gate prepared; reconciliation diagnostic | Prepare succeeded for `ecoda_stage3_confounds_20261108_v1`. Read-only reconciliation is stuck on `ssh bamboo ps -axo pid=,command=` before launch. A separate bounded remote enumeration returned timeout 124. Reviewer is diagnosing process enumeration/transport and the global helper's failure handling; no launch retry, no scheduler jobs and no weakened runner identity check |
 
 ### Active assignments
 
@@ -702,7 +711,53 @@ Checkpoint exceptions: `.vscode/settings.json`, `Rplots.pdf` and the unrelated
 lines were preserved in its backup commit. Backup commits are not scientific
 release validation. No full H5ADs or expression matrices were copied locally.
 
-No gates prepared or launched under this plan. For every future launch append:
+### First Stage 3 gate: launch specification
+
+- Status: PREPARED; launch not attempted. Reconciliation is delayed by the
+  remote all-process enumeration check; diagnosis is in progress and no
+  scheduler work has been submitted.
+- Gate `ecoda_stage3_confounds_20261108_v1`; child run
+  `stage3_confounds_20261108_v1`; host Bamboo.
+- Serialization group `ecoda-preprocess-20261108-confounding-v1` protects
+  this disjoint derivative preprocessing destination. Stage 5 retains its
+  existing `ecoda-benchmark` synchronization group.
+- Source commit `5d37aaabaf0d01172652f2a9d64bc40b7fc669cb`; immutable
+  source archive SHA256 `a1172287c5a7f65e55ce0a34846ec7f30c192576198aed678e554e1b0574eeb9`;
+  snapshot `tree/aux` is the frozen auxiliary root. Reuse the fully verified
+  relocated format-2 runtime recorded above; no environment mutation.
+- Exact selection: the eight approved datasets, each corrected and
+  uncorrected batch view, plus Stephenson benchmark: **17 rows**.
+  The submitter also performs the two selected COVID obs-only preflight rows;
+  these are validation work, not additional cohort preprocessing. Initial
+  memory 128G, OOM-only ceiling 500G, throttle 17 (scheduler availability
+  governs actual concurrency), standard 16 CPUs / four hours per worker.
+- Control root on Bamboo:
+  `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/stage3-inputs-v2`.
+  `selection.tsv` SHA256
+  `e91880b664163ca6480549f2c5ad29839ce7b95956aef9aa1de08bc48dabe54d`;
+  `input_artifacts.tsv` SHA256
+  `ed7464e40cdeaa4a6921119bf5859bc857b1cf42865442470876318b0d0dab20`.
+- Scratch outputs: the child run's `artifacts/datasets/<dataset>/output`;
+  NAS outputs: `releases/20261108-confounding-subsets-v1/stage3_confounds_20261108_v1/datasets/<dataset>/output`.
+  No canonical historical output is replaced.
+- Local gate/spec/evidence prefix:
+  `.gate/ecoda_stage3_confounds_20261108_v1`; remote gate prefix:
+  `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/gates/ecoda_stage3_confounds_20261108_v1`.
+- Before release, wait once, audit the exact child run/selection/source/runtime,
+  collect every emitted scheduler/watchdog ID, terminal-inspect and review.
+  Stephenson benchmark additionally needs a validated Pipeline 4 derivative;
+  existing annotation checkpoints cannot be blindly adopted by changed source
+  identity. Reuse requires exact retained cells/counts/gene inputs and pinned
+  annotator/reference provenance; otherwise recompute the necessary annotations.
+
+Exact immutable wrapper:
+
+```bash
+env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper STAGE3_INPUT_PRODUCER_RUN_ID=stage2_alzheimer_donor_assay_20260914T172421Z /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261108-confounding-subsets-v1/5d37aaabaf0d01172652f2a9d64bc40b7fc669cb/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261108-confounding-subsets-v1/5d37aaabaf0d01172652f2a9d64bc40b7fc669cb/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261108-confounding-subsets-v1/5d37aaabaf0d01172652f2a9d64bc40b7fc669cb/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage3_confounds_20261108_v1 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage3_confounds_20261108_v1 --script src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh -- --selection-file /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/stage3-inputs-v2/selection.tsv --derivative-release 20261108-confounding-subsets-v1 --input-artifacts /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/stage3-inputs-v2/input_artifacts.tsv --throttle 17 --mem 128G --max-mem 500G
+```
+
+The first Stage 3 gate is prepared; no gates have been launched under this
+plan. For every future launch append:
 package, source/runtime/aux identities, host and resolved roots, dependency
 reviews, exact wrapper/selection and expected row count, gate/child run IDs,
 scheduler/watchdog IDs, wait/inspect/reviewer evidence, incident/recovery scope,

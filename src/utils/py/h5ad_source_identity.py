@@ -239,6 +239,13 @@ def resolve_h5ad_path(
     dataset: str,
     view: str,
 ) -> Path:
+    if os.environ.get("ECODA_ARTIFACT_BINDING"):
+        try:
+            from .derivative_artifacts import active_binding, resolve_input
+        except ImportError:  # Direct CLI execution from this utility directory.
+            from derivative_artifacts import active_binding, resolve_input
+        _, binding = active_binding(config_path)
+        return resolve_input(binding, config_path, dataset, view)
     config = json.loads(Path(config_path).read_text())
     view_spec = config.get(dataset, {}).get("views", {}).get(view, {})
     output = view_spec.get("output_file_name") or view_spec.get("output_file")

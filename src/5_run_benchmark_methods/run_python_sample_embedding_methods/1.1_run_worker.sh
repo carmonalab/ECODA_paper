@@ -61,7 +61,18 @@ for worker_root in "${ANALYSIS_ROOT:-}" "${ANALYSIS_NAS_ROOT:-}"; do
 done
 ANALYSIS_ROOT_IDENTITY="${ANALYSIS_ROOT_IDENTITY:-}"
 source "${SOURCE_ROOT%/}/src/slurm_config.sh"
-if [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
+if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+  case "${ANALYSIS_PASS:-}:${ANALYSIS_VARIANT:-}" in
+    :) derivative_context=benchmark ;;
+    uncorrected:final) derivative_context=batch_effect/uncorrected_final ;;
+    corrected:corrected_final) derivative_context=batch_effect/corrected_final ;;
+    *) echo 'ERROR: invalid derivative worker context' >&2; exit 1 ;;
+  esac
+  [[ "${ECODA_ARTIFACT_BINDING}" == "${RUN_ROOT}/manifests/artifact_bindings.json" &&
+     "${ANALYSIS_ROOT:-}" == "${RUN_ROOT}/artifacts/${derivative_context}" ]] || {
+    echo 'ERROR: derivative worker root is not owned by its run' >&2; exit 1
+  }
+elif [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
   [[ "${ANALYSIS_PASS:-}" == corrected &&
      "${ANALYSIS_ROOT:-}" == "${HPC_SCRATCH_DIR}/batch_effect/corrected_final" &&
      ( -z "${ANALYSIS_NAS_ROOT:-}" ||
@@ -214,6 +225,12 @@ case "${ANALYSIS_VARIANT}" in
     exit 1
     ;;
 esac
+if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+  source "${PROJECT_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+  ecoda_derivative_stage5_validate || exit 1
+  EXPECTED_ANALYSIS_ROOT="${ANALYSIS_ROOT}"
+  EXPECTED_ANALYSIS_NAS_ROOT="${ANALYSIS_NAS_ROOT}"
+fi
 if [[ -n "${ANALYSIS_VARIANT}" ]]; then
   [[ "${ANALYSIS_PASS}" == "${EXPECTED_VARIANT_PASS}" &&
      "${ANALYSIS_ROOT}" == "${EXPECTED_ANALYSIS_ROOT}" ]] || {
@@ -330,9 +347,13 @@ case "${ECODA_APPTAINER_NV:-0}" in
   1) GPU_DEVICE_ARGS=(--device cuda) ;;
   *) echo "ERROR: ECODA_APPTAINER_NV must be 0 or 1." >&2; exit 1 ;;
 esac
+INPUT_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/output"
+if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+  INPUT_DIR="$(ecoda_derivative_input "${DS_NAME}" "${ANALYSIS_VIEW}" directory content)" || exit 1
+fi
 PYTHON_ARGS=(
   --config_path "${DATASETS_JSON_FILE}" --ds_name "${DS_NAME}" --view "${ANALYSIS_VIEW}"
-  --method "${METHOD}" --input_dir "${HPC_SCRATCH_DIR}/${DS_NAME}/output"
+  --method "${METHOD}" --input_dir "${INPUT_DIR}"
   --output_dir "${OUT_DIR}" --log_file "${LOG_FILE}"
 )
 if [[ ${#ANALYSIS_VARIANT_FLAG[@]} -gt 0 ]]; then

@@ -485,7 +485,8 @@ if (method_cache_valid) {
       required_composition_methods <- c(
         "ECODA_authors_HR",
         "ECODA_authors_HR_NULL",
-        "ECODA_seuratres_2"
+        "ecoda_unsupervised_harmony",
+        "ecoda_unsupervised_harmony_limma"
       )
       missing_composition_methods <- setdiff(
         required_composition_methods,
@@ -498,13 +499,24 @@ if (method_cache_valid) {
           paste(missing_composition_methods, collapse = ", ")
         )
       }
+      unexpected_composition_methods <- setdiff(
+        names(cached), c(required_composition_methods, "batch_contract", "batch_contract_identity")
+      )
+      if (length(unexpected_composition_methods)) {
+        stop("Cached corrected composition has unexpected methods: ",
+             paste(unexpected_composition_methods, collapse = ", "))
+      }
       for (composition_method in required_composition_methods) {
         composition_contract <- ecoda_hpc_augment_batch_contract(
           identity = ecoda_hpc_batch_contract_identity(
             batch_keys,
             sample_col = sample_col,
             method_id = composition_method,
-            model_id = "limma_fixed_effects_v1"
+            model_id = switch(composition_method,
+              ecoda_unsupervised_harmony = "harmony_leiden_clr_v1",
+              ecoda_unsupervised_harmony_limma = "harmony_leiden_clr_limma_v1",
+              "limma_fixed_effects_v1"
+            )
           ),
           validation = batch_context$validation,
           method_id = composition_method,
@@ -517,6 +529,17 @@ if (method_cache_valid) {
             "Method result ", ds, "/", method, "/", composition_method
           )
         )
+        if (composition_method %in% c("ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma")) {
+          ecoda_batch_validate_unsupervised_composition(
+            cached[[composition_method]], composition_method, batch_keys
+          )
+        }
+      }
+      if (!identical(cached$ecoda_unsupervised_harmony$counts,
+                     cached$ecoda_unsupervised_harmony_limma$counts) ||
+          !identical(cached$ecoda_unsupervised_harmony$labels,
+                     cached$ecoda_unsupervised_harmony_limma$labels)) {
+        stop("Cached corrected unsupervised arms disagree on shared counts/labels")
       }
     }
   }

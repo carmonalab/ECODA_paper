@@ -2125,6 +2125,16 @@ run_composition_methods_hpc <- function(
     if (!"RNA_snn_res.2" %in% colnames(obs)) {
       stop("Batch composition requires RNA_snn_res.2 from the selected pass view")
     }
+    harmony_leiden_key <- "leiden_res_2_batch_effect_corrected_hvg2000_harmony"
+    if (corrected && (!harmony_leiden_key %in% colnames(obs) ||
+        !identical(as.character(obs[[harmony_leiden_key]]),
+                   as.character(obs[["RNA_snn_res.2"]])))) {
+      stop("Corrected unsupervised composition requires the exact Harmony Leiden source")
+    }
+    if (corrected && (anyNA(obs[[harmony_leiden_key]]) ||
+        any(!nzchar(trimws(as.character(obs[[harmony_leiden_key]])))))) {
+      stop("Corrected Harmony Leiden labels must cover every cell")
+    }
 
     correction_metadata <- metadata
     if (!"Sample" %in% colnames(correction_metadata)) {
@@ -2172,7 +2182,8 @@ run_composition_methods_hpc <- function(
       allowed <- c(
         "ECODA_authors_HR",
         "ECODA_authors_HR_NULL",
-        "ECODA_seuratres_2"
+        "ecoda_unsupervised_harmony",
+        "ecoda_unsupervised_harmony_limma"
       )
       if (!name %in% allowed) {
         stop("Unknown corrected composition method identity: ", name)
@@ -2181,7 +2192,11 @@ run_composition_methods_hpc <- function(
         correction_batch_keys,
         sample_col = sample_col,
         method_id = name,
-        model_id = "limma_fixed_effects_v1"
+        model_id = switch(name,
+          ecoda_unsupervised_harmony = "harmony_leiden_clr_v1",
+          ecoda_unsupervised_harmony_limma = "harmony_leiden_clr_limma_v1",
+          "limma_fixed_effects_v1"
+        )
       )
       ecoda_hpc_augment_batch_contract(
         identity = contract,
@@ -2194,6 +2209,25 @@ run_composition_methods_hpc <- function(
 
     combos <- list()
     hr_result <- NULL
+    unsupervised_source <- NULL
+    unsupervised_source_time <- NULL
+    unsupervised_names <- c(
+      "ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma"
+    )
+    unsupervised_history_for <- function(name) {
+      ecoda_batch_unsupervised_history(name, correction_batch_keys)
+    }
+    get_unsupervised_source <- function() {
+      if (is.null(unsupervised_source)) {
+        measured <- exec_time(unsupervised_source <<- process_coda_fig(
+          NULL, labels, ct_col = harmony_leiden_key, obs = obs,
+          sample_col = sample_col,
+          clr_zero_impute_method = "counts_all", clr_zero_impute_num = 0.5
+        ))
+        unsupervised_source_time <<- as.numeric(measured, units = "secs")
+      }
+      unsupervised_source
+    }
     add_coda <- function(name, ct_col, shuffle_labels = FALSE) {
       combos[[name]] <<- function() {
         process_coda_fig(
@@ -2223,7 +2257,12 @@ run_composition_methods_hpc <- function(
         shuffle_labels = TRUE
       )
     }
-    add_coda("ECODA_seuratres_2", "RNA_snn_res.2")
+    if (corrected) {
+      combos[["ecoda_unsupervised_harmony"]] <- get_unsupervised_source
+      combos[["ecoda_unsupervised_harmony_limma"]] <- get_unsupervised_source
+    } else {
+      add_coda("ECODA_seuratres_2", "RNA_snn_res.2")
+    }
 
     results <- list()
     for (nm in names(combos)) {
@@ -2240,6 +2279,17 @@ run_composition_methods_hpc <- function(
         validate_hpc_timing_bundle(
           cached, label = paste0("Composition result ", ds, "/", nm)
         )
+        if (corrected && nm %in% unsupervised_names) {
+          ecoda_batch_validate_unsupervised_composition(cached, nm, correction_batch_keys)
+          if (identical(nm, "ecoda_unsupervised_harmony")) {
+            unsupervised_source <- cached
+            unsupervised_source_time <- cached[["composition_source_time_secs"]]
+          } else if (!is.null(unsupervised_source) &&
+              (!identical(cached[["counts"]], unsupervised_source[["counts"]]) ||
+               !identical(cached[["labels"]], unsupervised_source[["labels"]]))) {
+            stop("Cached unsupervised composition arms disagree on shared counts/labels")
+          }
+        }
         results[[nm]] <- cached
         if (corrected &&
             identical(nm, "ECODA_authors_HR_NULL") &&
@@ -2264,7 +2314,18 @@ run_composition_methods_hpc <- function(
         next
       }
       time_secs <- NULL
-      if (corrected &&
+      if (corrected && nm %in% unsupervised_names) {
+        res <- combos[[nm]]()
+        if (identical(nm, "ecoda_unsupervised_harmony_limma")) {
+          measured <- exec_time(res <- correct_result(res))
+          time_secs <- unsupervised_source_time + as.numeric(measured, units = "secs")
+        } else {
+          time_secs <- unsupervised_source_time
+        }
+        res[["composition_history"]] <- unsupervised_history_for(nm)
+        res[["composition_source_time_secs"]] <- unsupervised_source_time
+        ecoda_batch_validate_unsupervised_composition(res, nm, correction_batch_keys)
+      } else if (corrected &&
           identical(nm, "ECODA_authors_HR_NULL") &&
           !is.null(hr_result)) {
         time_secs <- exec_time(res <- combos[[nm]]())

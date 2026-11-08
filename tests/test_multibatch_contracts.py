@@ -46,6 +46,8 @@ CORRECTED_METHOD_IDS = frozenset(
     {
         "ECODA_authors_HR",
         "ECODA_seuratres_2",
+        "ecoda_unsupervised_harmony",
+        "ecoda_unsupervised_harmony_limma",
         "ECODA_authors_HR_NULL",
         "Pseudobulk",
         "GloScope",
@@ -60,6 +62,8 @@ CORRECTED_METHOD_IDS = frozenset(
 CORRECTED_METHOD_MODELS = {
     "ECODA_authors_HR": "limma_fixed_effects_v1",
     "ECODA_seuratres_2": "limma_fixed_effects_v1",
+    "ecoda_unsupervised_harmony": "harmony_leiden_clr_v1",
+    "ecoda_unsupervised_harmony_limma": "harmony_leiden_clr_limma_v1",
     "ECODA_authors_HR_NULL": "limma_fixed_effects_v1",
     "Pseudobulk": "pseudobulk_limma_fixed_effects_v1",
     "GloScope": "embedding_consumer_harmony_v1",
@@ -577,6 +581,25 @@ def check_method_policy(two: pd.DataFrame) -> None:
     assert "pilot-gm-vae" not in METHOD_IDS
     assert "PILOT-GM-VAE" not in METHOD_IDS
     assert "pilotgm" not in METHOD_IDS
+    harmony_mode, harmony_formula = batch_correction_spec_for_keys(
+        "ecoda_unsupervised_harmony", ["site", "tech"]
+    )
+    double_mode, double_formula = batch_correction_spec_for_keys(
+        "ecoda_unsupervised_harmony_limma", ["site", "tech"]
+    )
+    assert harmony_mode == "harmony_leiden_clr"
+    assert double_mode == "harmony_leiden_clr_limma"
+    assert "sample_level_limma=none" in harmony_formula
+    assert "removeBatchEffect" not in harmony_formula
+    assert "leiden_res_2_batch_effect_corrected_hvg2000_harmony" in harmony_formula
+    assert "removeBatchEffect" in double_formula
+    assert "design=intercept" in double_formula
+    expect_failure(
+        lambda: batch_contract_fingerprint(
+            ["site", "tech"], method_id="ecoda_unsupervised_harmony",
+            model_id="harmony_leiden_clr_limma_v1",
+        ), "mismatched unsupervised Harmony",
+    )
 
     validation = validate_batch_metadata(two, ["site", "tech"])
     composition_mode, composition_formula = batch_correction_spec_for_keys(

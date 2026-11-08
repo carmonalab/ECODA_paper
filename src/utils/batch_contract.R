@@ -793,7 +793,8 @@ ecoda_batch_correction_spec <- function(
     effective_batch_keys = reticulate::r_to_py(as.list(effective)),
     non_estimable_batch_keys = reticulate::r_to_py(as.list(non_estimable))
   ))
-  aliases <- if (length(effective)) {
+  aliases <- if (length(effective) &&
+                 !identical(method_id, "ecoda_unsupervised_harmony")) {
     setNames(paste0("batch_key_", match(effective, keys)), effective)
   } else {
     character()
@@ -810,6 +811,47 @@ ecoda_batch_correction_spec <- function(
     non_estimable_batch_keys = non_estimable,
     aliases = aliases
   )
+}
+
+# The two corrected unsupervised arms have one shared cluster/count source.
+# Keep their small persisted history contract common to producers and readers.
+ecoda_batch_unsupervised_history <- function(method_id, batch_keys) {
+  if (!method_id %in% c("ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma")) {
+    stop("Unknown unsupervised Harmony composition method")
+  }
+  list(
+    embedding_key = "X_pca_harmony_batch_effect_corrected_hvg2000",
+    leiden_obs_key = "leiden_res_2_batch_effect_corrected_hvg2000_harmony",
+    n_hvg = 2000L, leiden_resolution = 2,
+    transform = "CLR(counts + 0.5)",
+    technical_batch_keys = unname(as.character(batch_keys)),
+    sample_level_limma = identical(method_id, "ecoda_unsupervised_harmony_limma")
+  )
+}
+
+ecoda_batch_validate_unsupervised_composition <- function(value, method_id, batch_keys) {
+  if (!identical(value[["composition_history"]],
+                 ecoda_batch_unsupervised_history(method_id, batch_keys)) ||
+      !is.numeric(value[["composition_source_time_secs"]]) ||
+      length(value[["composition_source_time_secs"]]) != 1L ||
+      !is.finite(value[["composition_source_time_secs"]]) ||
+      value[["composition_source_time_secs"]] < 0) {
+    stop("Unsupervised composition has mismatched source/correction history: ", method_id)
+  }
+  counts <- as.matrix(value[["counts"]])
+  features <- as.matrix(value[["feat_mat"]])
+  if (!is.numeric(counts) || any(dim(counts) <= 0L) ||
+      any(!is.finite(counts)) || any(counts <= 0) ||
+      any(abs((counts - 0.5) - round(counts - 0.5)) > 1e-8) ||
+      !identical(dimnames(counts), dimnames(features))) {
+    stop("Unsupervised composition counts do not align with feature rows/columns")
+  }
+  if (identical(method_id, "ecoda_unsupervised_harmony") &&
+      !isTRUE(all.equal(unname(features),
+        unname(log(counts) - rowMeans(log(counts))), tolerance = 1e-10))) {
+    stop("Harmony-only composition features are not its initial count + 0.5 CLR")
+  }
+  invisible(TRUE)
 }
 
 # Build a compact identity from Python-validated metadata. No vector-bearing

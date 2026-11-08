@@ -290,6 +290,10 @@ withTemporary({
       "pseudobulk_limma_fixed_effects_v1"
     } else if (identical(method_id, "GloScope")) {
       "embedding_consumer_harmony_v1"
+    } else if (identical(method_id, "ecoda_unsupervised_harmony")) {
+      "harmony_leiden_clr_v1"
+    } else if (identical(method_id, "ecoda_unsupervised_harmony_limma")) {
+      "harmony_leiden_clr_limma_v1"
     } else {
       "limma_fixed_effects_v1"
     }
@@ -321,6 +325,13 @@ withTemporary({
       labels = labels
     )
     result$batch_contract <- corrected_identity(method_id)
+    if (method_id %in% c("ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma")) {
+      result$counts <- feature + 0.5
+      result$feat_mat <- log(result$counts) - rowMeans(log(result$counts))
+      result$dist_mat <- as.matrix(dist(result$feat_mat))
+      result$composition_history <- ecoda_batch_unsupervised_history(method_id, "batch")
+      result$composition_source_time_secs <- 1
+    }
     result
   }
   corrected_root <- file.path(directory, "batch_effect", "corrected_final")
@@ -344,7 +355,8 @@ withTemporary({
   corrected_composition_bundle <- list(
     batch_contract = corrected_identity("ECODA_authors_HR"),
     ECODA_authors_HR = corrected_combo("ECODA_authors_HR"),
-    ECODA_seuratres_2 = corrected_combo("ECODA_seuratres_2"),
+    ecoda_unsupervised_harmony = corrected_combo("ecoda_unsupervised_harmony"),
+    ecoda_unsupervised_harmony_limma = corrected_combo("ecoda_unsupervised_harmony_limma"),
     ECODA_authors_HR_NULL = corrected_combo("ECODA_authors_HR_NULL")
   )
   write_checked(corrected_composition, corrected_composition_bundle)
@@ -361,6 +373,14 @@ withTemporary({
     corrected_batch_args(corrected_composition, "composition"),
     "corrected-final composition shared bundle with explicit null key"
   )
+  wrong_history_bundle <- corrected_composition_bundle
+  wrong_history_bundle$ecoda_unsupervised_harmony$composition_history$sample_level_limma <- TRUE
+  write_checked(corrected_composition, wrong_history_bundle)
+  expect_fail(
+    corrected_batch_args(corrected_composition, "composition"),
+    "Harmony-only must not claim sample limma"
+  )
+  write_checked(corrected_composition, corrected_composition_bundle)
   # Corrected-final GloScope uses its semantic result key and final-qualified
   # path, just like the worker and synchronization contracts.
   corrected_gloscope_identity <- ecoda_hpc_augment_batch_contract(
@@ -465,7 +485,7 @@ withTemporary({
       paste(
         vapply(
           corrected_composition_bundle[
-            c("ECODA_authors_HR", "ECODA_seuratres_2", "ECODA_authors_HR_NULL")
+            c("ECODA_authors_HR", "ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma", "ECODA_authors_HR_NULL")
           ],
           function(value) value$batch_contract$correction_formula,
           character(1)
@@ -511,6 +531,10 @@ withTemporary({
   no_correction_identity <- function(method_id) {
     model_id <- if (identical(method_id, "Pseudobulk")) {
       "pseudobulk_limma_fixed_effects_v1"
+    } else if (identical(method_id, "ecoda_unsupervised_harmony")) {
+      "harmony_leiden_clr_v1"
+    } else if (identical(method_id, "ecoda_unsupervised_harmony_limma")) {
+      "harmony_leiden_clr_limma_v1"
     } else {
       "limma_fixed_effects_v1"
     }
@@ -530,7 +554,7 @@ withTemporary({
   no_correction_bundle$batch_contract <- no_correction_identity("ECODA_authors_HR")
   for (method_id in c(
     "ECODA_authors_HR",
-    "ECODA_seuratres_2",
+    "ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma",
     "ECODA_authors_HR_NULL"
   )) {
     no_correction_bundle[[method_id]]$batch_contract <-

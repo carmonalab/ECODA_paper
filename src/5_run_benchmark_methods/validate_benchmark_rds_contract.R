@@ -491,6 +491,10 @@ if (nzchar(artifact_path)) {
   )
   expected_mode <- if (identical(method_id, "Pseudobulk")) {
     "limma_fixed_effects_pseudobulk"
+  } else if (identical(method_id, "ecoda_unsupervised_harmony")) {
+    "harmony_leiden_clr"
+  } else if (identical(method_id, "ecoda_unsupervised_harmony_limma")) {
+    "harmony_leiden_clr_limma"
   } else {
     "limma_fixed_effects"
   }
@@ -508,7 +512,8 @@ if (nzchar(artifact_path)) {
         any(!nzchar(names(aliases))) || anyDuplicated(names(aliases))))) {
     stop(label, "$fixed_effect_aliases must be a named character vector")
   }
-  expected_aliases <- if (length(effective)) {
+  expected_aliases <- if (length(effective) &&
+                         !identical(method_id, "ecoda_unsupervised_harmony")) {
     setNames(
       paste0("batch_key_", match(effective, keys)),
       effective
@@ -523,7 +528,7 @@ if (nzchar(artifact_path)) {
     identity[["correction_design_formula"]],
     paste0(label, "$correction_design_formula")
   )
-  expected_design_formula <- if (length(effective)) {
+  expected_design_formula <- if (length(expected_aliases)) {
     paste0(
       "~1 + ",
       paste(unname(expected_aliases), collapse = " + ")
@@ -580,7 +585,9 @@ if (nzchar(artifact_path)) {
                non_effective_counts != 1L))) {
         stop(label, " effective/non-estimable keys disagree with level counts")
       }
-      expected_columns <- as.integer(1L + sum(level_counts - 1L))
+      expected_columns <- if (identical(method_id, "ecoda_unsupervised_harmony")) {
+        1L
+      } else as.integer(1L + sum(level_counts - 1L))
       expected_residual <- as.integer(summary[["n_samples"]] - expected_columns)
       if (!identical(design_columns, expected_columns) ||
           !identical(design_rank, expected_columns) ||
@@ -1009,12 +1016,14 @@ validate_batch_validation_summary <- function(
   )
   method_ids <- c(
     "preprocess", "ECODA_authors_HR", "ECODA_seuratres_2",
+    "ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma",
     "ECODA_authors_HR_NULL", "Pseudobulk", "GloScope", "PILOT",
     "MrVI", "QOT"
   )
   model_ids <- c(
     "hvg_composite_v1", "harmony_native_list_v1",
     "limma_fixed_effects_v1", "pseudobulk_limma_fixed_effects_v1",
+    "harmony_leiden_clr_v1", "harmony_leiden_clr_limma_v1",
     "mrvi_composite_v1", "embedding_consumer_harmony_v1"
   )
   if (!method_id %in% method_ids) {
@@ -1137,7 +1146,8 @@ validate_batch_validation_summary <- function(
     "Pseudobulk",
     "ECODA_authors_HR",
     "ECODA_authors_HR_NULL",
-    "ECODA_seuratres_2"
+    "ECODA_seuratres_2",
+    "ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma"
   )
   if (!normalized[["method_id"]] %in% strict_methods) {
     # Corrected native embedding/MRVI artifacts are independently governed
@@ -1147,6 +1157,10 @@ validate_batch_validation_summary <- function(
   }
   expected_model <- if (identical(normalized[["method_id"]], "Pseudobulk")) {
     "pseudobulk_limma_fixed_effects_v1"
+  } else if (identical(normalized[["method_id"]], "ecoda_unsupervised_harmony")) {
+    "harmony_leiden_clr_v1"
+  } else if (identical(normalized[["method_id"]], "ecoda_unsupervised_harmony_limma")) {
+    "harmony_leiden_clr_limma_v1"
   } else {
     "limma_fixed_effects_v1"
   }
@@ -1360,14 +1374,17 @@ if (nzchar(source_identity_path)) {
 }
 
 source_reader <- NULL
-read_h5ad_sample_ids_h5py <- function(path) {
+get_h5ad_source_reader <- function() {
   if (is.null(source_reader)) {
     module_dir <- normalizePath(file.path(validator_dir, "..", "utils", "py"), mustWork = TRUE)
     source_reader <<- reticulate::import_from_path(
       "h5ad_source_identity", path = module_dir, convert = TRUE
     )
   }
-  as.character(source_reader$read_h5ad_sample_ids(path))
+  source_reader
+}
+read_h5ad_sample_ids_h5py <- function(path) {
+  as.character(get_h5ad_source_reader()$read_h5ad_sample_ids(path))
 }
 
 expected_samples <- function(ds, view) {
@@ -1385,6 +1402,9 @@ expected_samples <- function(ds, view) {
     stop("missing h5ad output contract for ", ds, "/", view)
   }
   path <- file.path(input_root, ds, "output", output)
+  if (nzchar(Sys.getenv("ECODA_ARTIFACT_BINDING", ""))) {
+    path <- as.character(get_h5ad_source_reader()$resolve_h5ad_path(input_root, config_path, ds, view))
+  }
   canonical_path <- gsub("/{2,}", "/", path)
   key <- paste(ds, view, sep = "\t")
   if (nzchar(source_identity_path)) {
@@ -1446,6 +1466,15 @@ config <- if (nzchar(config_path) && file.exists(config_path)) {
 }
 
 .corrected_batch_method_model <- function(label) {
+  if (label %in% c("ECODA_authors_HR", "ECODA_authors_HR_NULL")) {
+    return(list(method_id = label, model_id = "limma_fixed_effects_v1"))
+  }
+  if (identical(label, "ecoda_unsupervised_harmony")) {
+    return(list(method_id = label, model_id = "harmony_leiden_clr_v1"))
+  }
+  if (identical(label, "ecoda_unsupervised_harmony_limma")) {
+    return(list(method_id = label, model_id = "harmony_leiden_clr_limma_v1"))
+  }
   if (identical(label, "composition")) {
     return(list(
       method_id = "ECODA_authors_HR",
@@ -1535,7 +1564,10 @@ batch_required_keys <- function(ds, label) {
   if (label == "composition") {
     # Batch composition has a deliberately smaller contract than ordinary
     # benchmark composition. Optional annotation bundles are legacy extras.
-    return(c("ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2"))
+    return(c("ECODA_authors_HR", "ECODA_authors_HR_NULL",
+      if (identical(batch_pass, "corrected")) {
+        c("ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma")
+      } else "ECODA_seuratres_2"))
   }
   NULL
 }
@@ -1603,7 +1635,7 @@ batch_allowed_extra_keys <- function(ds, label) {
   methods <- c(
     "ECODA_authors_HR",
     "ECODA_authors_HR_NULL",
-    "ECODA_seuratres_2"
+    "ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma"
   )
   .batch_identity_load_contract()
   for (method_id in methods) {
@@ -1620,7 +1652,11 @@ batch_allowed_extra_keys <- function(ds, label) {
         batch_keys = batch_keys,
         sample_col = "Sample",
         method_id = method_id,
-        model_id = "limma_fixed_effects_v1"
+        model_id = switch(method_id,
+          ecoda_unsupervised_harmony = "harmony_leiden_clr_v1",
+          ecoda_unsupervised_harmony_limma = "harmony_leiden_clr_limma_v1",
+          "limma_fixed_effects_v1"
+        )
       ),
       error = function(error) {
         stop(
@@ -1659,6 +1695,15 @@ batch_allowed_extra_keys <- function(ds, label) {
       NULL,
       paste0("RDS composition ", method_id, " (", file, ")")
     )
+    if (method_id %in% c("ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma")) {
+      ecoda_batch_validate_unsupervised_composition(combo, method_id, unlist(batch_keys))
+    }
+  }
+  if (!identical(bundle$ecoda_unsupervised_harmony$counts,
+                 bundle$ecoda_unsupervised_harmony_limma$counts) ||
+      !identical(bundle$ecoda_unsupervised_harmony$labels,
+                 bundle$ecoda_unsupervised_harmony_limma$labels)) {
+    stop("Corrected unsupervised composition arms disagree on shared counts/labels")
   }
   invisible(NULL)
 }
@@ -1937,6 +1982,21 @@ validate_result_file <- function(
 
   required <- c("scores", "feat_mat", "dist_mat", "labels")
   is_combo <- is.list(bundle) && all(required %in% names(bundle))
+  standalone_composition <- identical(batch_pass, "corrected") && method %in% c(
+    "ECODA_authors_HR", "ECODA_authors_HR_NULL",
+    "ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma"
+  )
+  if (standalone_composition && !is_combo) {
+    stop("Standalone corrected composition must contain one scored result: ", file)
+  }
+  if (standalone_composition && method %in% c(
+      "ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma")) {
+    .batch_identity_load_contract()
+    expected_identity <- .batch_identity_normalize(expected_batch_contract)
+    ecoda_batch_validate_unsupervised_composition(
+      bundle, method, expected_identity[["ordered_source_keys"]]
+    )
+  }
   if (is_combo) {
     if (!is.null(required_keys)) {
       stop("result bundle keys do not match the method contract: ", file)
@@ -2248,13 +2308,31 @@ validate_metadata <- function(
   view = "",
   metadata = FALSE
 ) {
+  if (nzchar(Sys.getenv("ECODA_ARTIFACT_BINDING", ""))) {
+    module_dir <- normalizePath(file.path(validator_dir, "..", "utils", "py"), mustWork = TRUE)
+    derivative <- reticulate::import_from_path("derivative_artifacts", path = module_dir, convert = TRUE)
+    binding <- derivative$active_binding(config_path)[[1L]]
+    context <- if (!batch) "benchmark" else switch(analysis_variant,
+      final = "batch_effect/uncorrected_final",
+      corrected_final = "batch_effect/corrected_final",
+      stop("Derivative RDS validation requires an explicit final batch context"))
+    expected_root <- as.character(derivative$context_root(binding, context))
+    expected_nas <- as.character(derivative$context_root(binding, context, nas = TRUE))
+    canonical_file <- normalizePath(file, mustWork = TRUE)
+    if (!identical(analysis_root_env, expected_root) || !identical(analysis_nas_root_env, expected_nas) ||
+        !any(startsWith(canonical_file, paste0(c(expected_root, expected_nas), "/")))) {
+      stop("RDS artifact root disagrees with the immutable derivative binding")
+    }
+  }
   if (!batch || !nzchar(analysis_variant) || !nzchar(method)) {
     return(invisible(NULL))
   }
-  .bind_variant_root(
-    dirname(dirname(path.expand(file))),
-    "artifact"
-  )
+  if (!nzchar(Sys.getenv("ECODA_ARTIFACT_BINDING", ""))) {
+    .bind_variant_root(
+      dirname(dirname(path.expand(file))),
+      "artifact"
+    )
+  }
   expected_directory <- if (
     identical(method, "prepare_pseudobulk") && !isTRUE(metadata)
   ) {

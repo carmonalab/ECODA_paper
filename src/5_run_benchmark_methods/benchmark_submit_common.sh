@@ -542,6 +542,9 @@ analysis_merge_sync_cleanup() (
     source "${recovery_helper}" || sync_fail "cannot load validated recovery helper"
     receipt="${recovery_manifest}"
     promotion_root="${ECODA_STAGE5_RECOVERY_PROMOTION_ROOT}"
+  elif [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    ecoda_derivative_stage5_validate || sync_fail 'invalid derivative publication roots'
+    [[ -z "${receipt}" ]] || sync_fail 'derivative publication cannot use canonical replacement receipts'
   elif [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
     [[ -n "${receipt}" && -n "${ECODA_EXPECTED_PENDING:-}" &&
        -n "${ECODA_PRECOMPUTE_BACKUP_RECEIPT_SHA256:-}" &&
@@ -720,7 +723,7 @@ PY
   [[ ${#SELECTED_RELS[@]} -gt 0 ]] || sync_fail "no selected benchmark artifacts"
   local retry_publication=0 retry_continuity=""
   local transition="${RUN_ROOT}/manifests/sync_transition.json"
-  if [[ "${ANALYSIS_VARIANT:-}" == corrected_final && "${recovery_sync_owner_state}" == FAIL &&
+  if [[ -z "${ECODA_ARTIFACT_BINDING:-}" && "${ANALYSIS_VARIANT:-}" == corrected_final && "${recovery_sync_owner_state}" == FAIL &&
         "$(ecoda_owner_run "${recovery_sync_owner_dir}")" == "${RUN_ID}" &&
         ( -e "${transition}" || -L "${transition}" ) ]]; then
     ecoda_validate_run_owned_path "${transition}" "${RUN_ROOT}" &&
@@ -916,7 +919,15 @@ PY
     echo "Validated identical intended NAS publication; no publication or owner rewrite."
     exit 0
   fi
-  if [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    while IFS= read -r rel; do
+      if [[ -e "${REMOTE_ROOT}/${rel}" || -L "${REMOTE_ROOT}/${rel}" ]]; then
+        [[ -f "${REMOTE_ROOT}/${rel}" && ! -L "${REMOTE_ROOT}/${rel}" ]] &&
+          cmp -s "${LOCAL_ROOT}/${rel}" "${REMOTE_ROOT}/${rel}" ||
+          sync_fail "existing derivative publication preserved: ${rel}"
+      fi
+    done < "${SYNC_FILES}"
+  elif [[ "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
     if [[ -e "${transition}" || -L "${transition}" ]]; then
       ecoda_validate_run_owned_path "${transition}" "${RUN_ROOT}" &&
         ecoda_validate_checksum "${transition}" &&
@@ -1139,7 +1150,7 @@ PY
       remote_dir="${next_dir}"
     done
   done < "${SYNC_FILES}"
-  if [[ -z "${STAGE5_PASS}" && -s "${CLEANUP_MANIFEST}" ]]; then
+  if [[ -z "${ECODA_ARTIFACT_BINDING:-}" && -z "${STAGE5_PASS}" && -s "${CLEANUP_MANIFEST}" ]]; then
     while IFS= read -r path || [[ -n "${path}" ]]; do
       [[ "${path}" == "${RUN_LOG_DIR}/"* ]] ||
         sync_fail "cleanup manifest escapes run log directory: ${path}"

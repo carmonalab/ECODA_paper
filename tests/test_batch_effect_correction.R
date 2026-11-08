@@ -1029,12 +1029,12 @@ run_corrected_composition_fixture <- function(
   }, add = TRUE)
 
   sample_ids <- as.character(sample_metadata[["Sample"]])
-  features <- matrix(
-    rnorm(length(sample_ids) * 3L),
+  source_counts <- matrix(
+    sample(0:20, length(sample_ids) * 3L, replace = TRUE) + 0.5,
     nrow = length(sample_ids),
     dimnames = list(sample_ids, paste0("composition-ct", 1:3))
   )
-  features <- features - rowMeans(features)
+  features <- log(source_counts) - rowMeans(log(source_counts))
   process_coda_fig <<- local({
     template <- features
     function(seurat, labels, ...) {
@@ -1044,7 +1044,8 @@ run_corrected_composition_fixture <- function(
         scores = list(sil_score = 0.5),
         feat_mat = feature,
         dist_mat = dist(feature),
-        labels = labels
+        labels = labels,
+        counts = source_counts[ids, , drop = FALSE]
       )
     }
   })
@@ -1073,6 +1074,8 @@ run_corrected_composition_fixture <- function(
     c("0", "1"),
     length.out = nrow(cell_metadata)
   )
+  cell_metadata[["leiden_res_2_batch_effect_corrected_hvg2000_harmony"]] <-
+    cell_metadata[["RNA_snn_res.2"]]
   identity <- ecoda_hpc_batch_contract_identity(
     batch_keys = as.list(unname(batch_keys)),
     sample_col = "Sample",
@@ -1115,7 +1118,8 @@ one_key_composition <- run_corrected_composition_fixture(
 stopifnot(
   identical(
     names(one_key_composition),
-    c("ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2", "batch_contract")
+    c("ECODA_authors_HR", "ECODA_authors_HR_NULL",
+      "ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma", "batch_contract")
   ),
   identical(
     one_key_composition$batch_contract$model_id,
@@ -1129,7 +1133,7 @@ stopifnot(
     one_key_composition[c(
       "ECODA_authors_HR",
       "ECODA_authors_HR_NULL",
-      "ECODA_seuratres_2"
+      "ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma"
     )],
     function(result) {
       all(is.finite(result$feat_mat)) &&
@@ -1155,7 +1159,8 @@ breast_composition <- run_corrected_composition_fixture(
 stopifnot(
   identical(
     names(breast_composition),
-    c("ECODA_authors_HR", "ECODA_authors_HR_NULL", "ECODA_seuratres_2", "batch_contract")
+    c("ECODA_authors_HR", "ECODA_authors_HR_NULL",
+      "ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma", "batch_contract")
   ),
   identical(
     breast_composition$batch_contract$effective_batch_keys,
@@ -1165,18 +1170,18 @@ stopifnot(
     breast_composition[c(
       "ECODA_authors_HR",
       "ECODA_authors_HR_NULL",
-      "ECODA_seuratres_2"
+      "ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma"
     )],
     function(result) {
       all(is.finite(result$feat_mat)) &&
         identical(rownames(result$feat_mat), breast_samples) &&
         identical(names(result$labels), breast_samples) &&
         max(abs(rowSums(result$feat_mat))) < 1e-8 &&
-        grepl(
+        (identical(result$batch_contract$model_id, "harmony_leiden_clr_v1") || grepl(
           "model.matrix(~ 1 + batch_key_1 + batch_key_2 + batch_key_3); limma::removeBatchEffect",
           result$batch_contract$correction_formula,
           fixed = TRUE
-        ) &&
+        )) &&
         !grepl(
           "__ecoda_batch_combined_v1|lme4|lmer|\\(1 \\|",
           result$batch_contract$correction_formula,

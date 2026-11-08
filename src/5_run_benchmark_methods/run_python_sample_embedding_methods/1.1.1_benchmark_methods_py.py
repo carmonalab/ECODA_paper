@@ -2027,6 +2027,10 @@ def process_dataset(args, ds_name, entry):
             )
     view_output = entry["views"][view_name]["output_file"]
     input_path = Path(args.input_dir) / view_output
+    if os.environ.get("ECODA_ARTIFACT_BINDING"):
+        from src.utils.py.derivative_artifacts import active_binding, resolve_input
+        _, binding = active_binding(args.config_path)
+        input_path = resolve_input(binding, args.config_path, ds_name, view_name)
     corrected_batch_keys = ()
     effective_batch_keys = ()
     corrected_validation_summary = None

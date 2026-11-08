@@ -38,7 +38,14 @@ cp "${ROOT}/aux/scGateDB.rds" "${SOURCE_TREE}/aux/scGateDB.rds"
 cp "${ROOT}/aux/genes.blocklist.rds" "${SOURCE_TREE}/aux/genes.blocklist.rds"
 cp "${ROOT}/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz" \
   "${SOURCE_TREE}/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
-printf '#!/bin/bash\nexit 0\n' > "${HOST_PREFIX}/bin/python"
+cat > "${HOST_PREFIX}/bin/python" <<'PYTHON_STUB'
+#!/bin/bash
+if [[ "${1:-}" == */derivative_artifacts.py ]]; then
+  exec "${TEST_REAL_PYTHON}" "$@"
+fi
+exit 0
+PYTHON_STUB
+export TEST_REAL_PYTHON="${ROOT}/.pixi/envs/default/bin/python"
 printf '#!/bin/bash\nexit 0\n' > "${HOST_PREFIX}/bin/Rscript"
 chmod +x "${HOST_PREFIX}/bin/python" "${HOST_PREFIX}/bin/Rscript"
 sha256_file() {
@@ -1266,6 +1273,7 @@ done < "${SYNC_GLOBAL_OWNER_LIST}"
     "${ROOT}/src/5_run_benchmark_methods/stage5_dispatcher.sh")"
   export ECODA_RUN_ROOT="${TMP_DIR}/metadata-readonly" RUN_ID=metadata_readonly
   export ANALYSIS_VARIANT=corrected_final PASS_ARG=corrected BENCHMARK_MATRIX_TEST=0
+  ECODA_RECOVERY_ACTIVE=0
   ANALYSIS_ROOT="${ECODA_RUN_ROOT}/artifacts"
   ANALYSIS_NAS_ROOT="${ECODA_RUN_ROOT}/nas"
   ANALYSIS_LOG_PREFIX=execution_times_batch_effect_corrected_final_
@@ -1304,4 +1312,29 @@ EOF
   cmp "${metadata}" "${ECODA_RUN_ROOT}/before"
   [[ ! -e "${ECODA_RUN_ROOT}/jobs" ]]
 )
+# Explicit derivative dispatch binds the selected processed input and routes
+# worker outputs into its new run root without touching canonical artifacts.
+DERIVATIVE_NAS="${TMP_DIR}/derivative-nas"
+mkdir -p "${DERIVATIVE_NAS}" "${TMP_DIR}/derivative-inputs" "${HPC_ROOT}/benchmark/results"
+DERIVATIVE_INPUT_NAME="$(jq -r '.Adams.views.benchmark_analysis.output_file_name' "${SOURCE_TREE}/datasets.json")"
+DERIVATIVE_INPUT="${TMP_DIR}/derivative-inputs/${DERIVATIVE_INPUT_NAME}"
+printf 'read-only processed input fixture\n' > "${DERIVATIVE_INPUT}"
+printf 'canonical results preserved\n' > "${HPC_ROOT}/benchmark/results/preserve.rds"
+"${TEST_REAL_PYTHON}" - "${DERIVATIVE_INPUT}" "${TMP_DIR}/derivative-inputs.tsv" <<'PY'
+import hashlib, pathlib, sys
+source = pathlib.Path(sys.argv[1]); md5 = hashlib.md5(source.read_bytes()).hexdigest(); size = source.stat().st_size
+proof = pathlib.Path(str(source)+'.md5'); proof.write_text(f'MD5={md5}\nSIZE={size}\nPATH={source}\n')
+pathlib.Path(sys.argv[2]).write_text(f'Adams\tbenchmark_analysis\t{source}\t{md5}\t{size}\t{proof}\n')
+PY
+: > "${CAPTURE}"
+DERIVATIVE_OUTPUT="$(HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.invalid \
+  BENCHMARK_MATRIX_TEST=1 ECODA_RUN_ID=derivative-dispatch-fixture NAS_TARGET_DIR="${DERIVATIVE_NAS}" \
+  bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+  --datasets Adams --methods mrvi --derivative-release test-release --input-artifacts "${TMP_DIR}/derivative-inputs.tsv")"
+DERIVATIVE_RUN="${HPC_ROOT}/_ecoda_runs/derivative-dispatch-fixture"
+[[ -s "${DERIVATIVE_RUN}/manifests/artifact_bindings.json" ]]
+cmp "${TMP_DIR}/derivative-inputs.tsv" "${DERIVATIVE_RUN}/manifests/input_artifacts.tsv"
+grep -q "ANALYSIS_ROOT=${DERIVATIVE_RUN}/artifacts/benchmark" "${CAPTURE}"
+grep -q "ECODA_ARTIFACT_BINDING=${DERIVATIVE_RUN}/manifests/artifact_bindings.json" "${CAPTURE}"
+[[ "$(cat "${HPC_ROOT}/benchmark/results/preserve.rds")" == 'canonical results preserved' ]]
 echo "benchmark matrix submitter: OK"

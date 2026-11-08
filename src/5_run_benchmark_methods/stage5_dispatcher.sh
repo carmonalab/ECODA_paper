@@ -53,6 +53,8 @@ FORCE_REASON_ARG=""
 FORCE_REASON_SET=0
 SYNC_ONLY_RUN=""
 SYNC_ONLY_SET=0
+DERIVATIVE_RELEASE=""
+INPUT_ARTIFACTS=""
 PARTITION_ARG=""
 MEMORY="${BENCHMARK_MEM}"
 MAX_MEMORY="${BENCHMARK_MEM_MAX}"
@@ -105,6 +107,8 @@ while [[ $# -gt 0 ]]; do
     --methods=*) METHODS_ARG="${1#*=}"; METHODS_SET=1; shift ;;
     --analyses|--analysis) ANALYSES_ARG="${2:-}"; ANALYSES_SET=1; shift 2 ;;
     --analyses=*|--analysis=*) ANALYSES_ARG="${1#*=}"; ANALYSES_SET=1; shift ;;
+    --derivative-release) DERIVATIVE_RELEASE="${2:-}"; [[ -n "${DERIVATIVE_RELEASE}" ]] || exit 1; shift 2 ;;
+    --input-artifacts) INPUT_ARTIFACTS="${2:-}"; [[ -n "${INPUT_ARTIFACTS}" ]] || exit 1; shift 2 ;;
     --selection-file) SELECTION_FILE_ARG="${2:-}"; SELECTION_FILE_SET=1; shift 2 ;;
     --selection-file=*) SELECTION_FILE_ARG="${1#*=}"; SELECTION_FILE_SET=1; shift ;;
     --method-matrix) METHOD_MATRIX_ARG="${2:-}"; METHOD_MATRIX_SET=1; shift 2 ;;
@@ -258,6 +262,17 @@ if [[ ${SYNC_ONLY_SET} -eq 1 && -z "${SYNC_ONLY_RUN}" ]]; then
   exit 1
 fi
 EXPECTED_BATCH_METHODS="prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot"
+if [[ -n "${DERIVATIVE_RELEASE}" || -n "${INPUT_ARTIFACTS}" ]]; then
+  [[ -n "${DERIVATIVE_RELEASE}" && -n "${INPUT_ARTIFACTS}" &&
+     -z "${SYNC_ONLY_RUN}" && -z "${VALIDATED_RECOVERY_MANIFEST_ARG}" &&
+     -z "${PRECOMPUTE_BACKUP_RECEIPT_ARG}" ]] || {
+    echo 'ERROR: derivative mode requires release and input references, without legacy recovery/backup overrides' >&2
+    exit 1
+  }
+fi
+[[ -n "${SYNC_ONLY_RUN}" || -z "${ECODA_ARTIFACT_BINDING:-}" ]] || {
+  echo 'ERROR: new Stage 5 runs must bind derivative mode explicitly' >&2; exit 1
+}
 
 # Scope is declared by the caller's manifests.  The dispatcher validates
 # syntax, configured dataset/view identity, uniqueness, and method membership;
@@ -769,6 +784,14 @@ stage5_configure_analysis_context() {
       return 1
       ;;
   esac
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    source "${PROJECT_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+    ecoda_derivative_load stage5 || return 1
+    local context
+    context="$(ecoda_derivative_stage5_context "${PASS_ARG}" "${ANALYSIS_VARIANT_ARG}")" || return 1
+    ANALYSIS_ROOT="$(ecoda_derivative_root "${context}")" || return 1
+    ANALYSIS_NAS_ROOT="$(ecoda_derivative_root "${context}" nas)" || return 1
+  fi
   export ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_LOG_PREFIX ROOT="${ANALYSIS_ROOT}"
   if [[ -n "${PASS_ARG}" ]]; then
     export ANALYSIS_PASS="${PASS_ARG}"
@@ -1818,6 +1841,10 @@ stage5_canonical_output_path() {
 }
 
 stage5_input_path() {
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    ecoda_derivative_input "$1" "$2"
+    return
+  fi
   stage5_canonical_output_path "${HPC_SCRATCH_DIR}" "$1" "$2"
 }
 stage5_validate_corrected_h5ad_contract() {
@@ -2243,6 +2270,12 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   stage5_bind_run_identity ||
     { echo "legacy_source_unpinned" >&2; exit 1; }
   stage5_validate_bound_runtime || exit 1
+  if [[ -f "${ECODA_RUN_ROOT}/manifests/artifact_bindings.json" ||
+        -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    export ECODA_ARTIFACT_BINDING="${ECODA_RUN_ROOT}/manifests/artifact_bindings.json"
+    source "${PROJECT_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+    ecoda_derivative_load stage5 || exit 1
+  fi
   RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage5 0)" || {
     echo "ERROR: Stage 5 bound runtime export construction failed." >&2
     exit 1
@@ -2420,6 +2453,15 @@ else
     stage5_abort "failed to install Stage 5 selection atomically"
   rm -f "${MANIFEST_TMP}"
   ecoda_write_checksum "${MANIFEST}" || stage5_abort "failed to checksum Stage 5 selection"
+fi
+if [[ -n "${DERIVATIVE_RELEASE}" ]]; then
+  source "${PROJECT_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+  ecoda_derivative_bind stage5 "${DERIVATIVE_RELEASE}" "${MANIFEST}" "${INPUT_ARTIFACTS}" ||
+    stage5_abort 'failed to bind derivative roots and inputs'
+  stage5_configure_analysis_context || stage5_abort 'invalid derivative Stage 5 context'
+fi
+if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+  RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_ARTIFACT_BINDING=${ECODA_ARTIFACT_BINDING}"
 fi
 stage5_bind_method_matrix ||
   stage5_abort "failed to bind the run-owned method matrix"
@@ -2688,7 +2730,7 @@ benchmark_rds_group_valid() {
           metadata=0
           [[ "${path}" == *_metadata.rds ]] && metadata=1
           printf '%s\t%s\t%s\t%s\t%s\n' \
-            "${path}" "${label}" "${ds}" "${view}" "${metadata}" >> "${list_tmp}" || {
+            "${path}" "$(ecoda_stage5_rds_artifact_method "${label}" "${path}")" "${ds}" "${view}" "${metadata}" >> "${list_tmp}" || {
             rm -f "${list_tmp}"
             return 1
           }
@@ -2859,14 +2901,14 @@ benchmark_selected_artifacts_valid() {
         ;;
       *.rds)
         [[ ${rds_grouped} -eq 1 ]] && continue
-        rds_args=(--artifact "${path}" --method "${label}" --dataset "${ds}" --view "${view}" \
+        rds_args=(--artifact "${path}" --method "$(ecoda_stage5_rds_artifact_method "${label}" "${path}")" --dataset "${ds}" --view "${view}" \
           --input-root "${HPC_SCRATCH_DIR}" --config "${DATASETS_JSON_FILE}")
         if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
           rds_args+=(--analysis-variant "${ANALYSIS_VARIANT}")
         fi
         [[ "${path}" == *_metadata.rds ]] && rds_args+=(--metadata)
         [[ -s "${SOURCE_IDENTITY}" ]] && rds_args+=(--source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
-        [[ -n "${batch_identity}" ]] &&
+        [[ -n "${batch_identity}" && "$(ecoda_stage5_rds_artifact_method "${label}" "${path}")" == "${label}" ]] &&
           rds_args+=(--expected-batch-contract "${batch_identity}")
         ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" \
           "${rds_args[@]}" >/dev/null 2>&1 || return 1
@@ -3340,6 +3382,13 @@ stage5_export_final_sample_metadata() {
 stage5_verify_precompute_binding() {
   local receipt="${PRECOMPUTE_BACKUP_RECEIPT_ARG}" expected="${EXPECTED_PENDING_ARG}"
   local utility source_root nas child key value recorded
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    ecoda_derivative_stage5_validate || return 1
+    [[ ${FORCE_ARG} -eq 0 && ${FORCE_TARGETED_ARG} -eq 0 &&
+       -z "${receipt}" && -z "${expected}" ]] || return 1
+    # A new bound run/release root has no canonical predecessor to replace.
+    return 0
+  fi
   if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
     [[ -n "${receipt}" && -n "${expected}" ]] || return 1
     stage5_validate_recovery_manifest || return 1
@@ -3697,6 +3746,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     fi
     stage5_method_is_forced "${method}" && method_force=1
     owner_key="${PASS_ARG:-ordinary}/${ds}/${view}/${method}"
+    [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]] && owner_key="derivative/${RUN_ID}/${owner_key}"
     case " ${OWNER_SEEN} " in
       *" ${owner_key} "*) return 0 ;;
     esac
@@ -3715,13 +3765,13 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     fi
     benchmark_artifacts_for "${ds}" "${view}" "${method}" ||
       stage5_abort "cannot resolve output contract for ${ds}/${view}/${method}"
-    if [[ ${METHOD_MATRIX_MODE} -eq 1 &&
-          "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
+    if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ||
+          ( ${METHOD_MATRIX_MODE} -eq 1 && "${ANALYSIS_VARIANT:-}" == corrected_final ) ]]; then
       for path in "${ARTIFACT_PATHS[@]}"; do
         for existing_target in "${path}" "${path}.md5" \
           "${path}.runtime.json" "${path}.runtime.json.md5"; do
           [[ ! -e "${existing_target}" && ! -L "${existing_target}" ]] || {
-            stage5_abort "corrected-final method matrix target already exists; refusing to invalidate ${existing_target}"
+            stage5_abort "selected target already exists; refusing to invalidate ${existing_target}"
           }
         done
       done
@@ -3733,10 +3783,12 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     [[ ${owner_rc} -eq 0 ]] || stage5_abort "ownership conflict for ${owner_key}"
     ecoda_owner_track "${owner_dir}" ||
       stage5_abort "failed to track owner for ${owner_key}"
-    for path in "${ARTIFACT_PATHS[@]}"; do
-      ecoda_invalidate_artifact "${path}" ||
-        stage5_abort "failed to invalidate Stage 5 artifact ${path}"
-    done
+    if [[ -z "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+      for path in "${ARTIFACT_PATHS[@]}"; do
+        ecoda_invalidate_artifact "${path}" ||
+          stage5_abort "failed to invalidate Stage 5 artifact ${path}"
+      done
+    fi
     printf '%s\t%s\t%s\n' "${ds}" "${view}" "${method}" >> "${PENDING_SELECTION_TMP}"
     printf '%s\t%s\n' "${owner_key}" "${owner_dir}" >> "${OWNERS_TMP}"
   }
@@ -3912,6 +3964,9 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
       method_time_limit="${METHOD_TIME_LIMIT}" method_gpu_policy="${METHOD_GPU_POLICY}"
     local method_runtime_export watchdog_script ownership_manifest ownership_tmp
     method_runtime_export="$(ecoda_runtime_export_csv stage5 "${METHOD_RUNTIME_NV}")" || return 1
+    if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+      method_runtime_export="${method_runtime_export},ECODA_ARTIFACT_BINDING=${ECODA_ARTIFACT_BINDING},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT}"
+    fi
     watchdog_script="$(stage5_source_script src/5_run_benchmark_methods/matrix_watchdog.sh)"
     local safe="$(printf '%s' "${group_label}" | tr '/:,\t ' '_____')"
     local array_msg array_id array_rc wd_msg wd_id wd_rc
@@ -4322,7 +4377,7 @@ stage5_validate_corrected_rds_rows() {
       for path in "${ARTIFACT_PATHS[@]}"; do
         metadata=0
         [[ "${path}" == *_metadata.rds ]] && metadata=1
-        printf '%s\t%s\t%s\t%s\t%s\n' "${path}" "${label}" "${ds}" "${view}" "${metadata}" >> "${tmp}" || return 1
+        printf '%s\t%s\t%s\t%s\t%s\n' "${path}" "$(ecoda_stage5_rds_artifact_method "${label}" "${path}")" "${ds}" "${view}" "${metadata}" >> "${tmp}" || return 1
       done
     done
   done < "${MANIFEST}"

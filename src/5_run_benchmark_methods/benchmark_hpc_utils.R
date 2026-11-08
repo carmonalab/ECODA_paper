@@ -216,6 +216,10 @@ ecoda_hpc_augment_batch_contract <- function(
   )
   model_id <- if (identical(method_id, "Pseudobulk")) {
     "pseudobulk_limma_fixed_effects_v1"
+  } else if (identical(method_id, "ecoda_unsupervised_harmony")) {
+    "harmony_leiden_clr_v1"
+  } else if (identical(method_id, "ecoda_unsupervised_harmony_limma")) {
+    "harmony_leiden_clr_limma_v1"
   } else if (is_composition) {
     "limma_fixed_effects_v1"
   } else if (identical(method_id, "GloScope") ||
@@ -266,6 +270,19 @@ ecoda_hpc_augment_batch_contract <- function(
     augmented[["correction_design_formula"]] <-
       validation[["correction_design_formula"]]
   }
+  if (identical(method_id, "ecoda_unsupervised_harmony")) {
+    n_samples <- validation[["n_samples"]]
+    if (!is.numeric(n_samples) || length(n_samples) != 1L ||
+        !is.finite(n_samples) || n_samples < 2) {
+      stop("Harmony-only composition requires a validated sample count")
+    }
+    # Technical keys describe upstream Harmony. No sample-level fixed-effect
+    # design was fitted for this arm; retain the intercept-only identity.
+    augmented[["correction_design_formula"]] <- "~1"
+    augmented[["design_rank"]] <- 1L
+    augmented[["design_columns"]] <- 1L
+    augmented[["design_residual_df"]] <- as.integer(n_samples - 1L)
+  }
   augmented
 }
 
@@ -293,7 +310,9 @@ ecoda_hpc_validate_batch_contract <- function(
   }
   new_model_ids <- c(
     "limma_fixed_effects_v1",
-    "pseudobulk_limma_fixed_effects_v1"
+    "pseudobulk_limma_fixed_effects_v1",
+    "harmony_leiden_clr_v1",
+    "harmony_leiden_clr_limma_v1"
   )
   strict_fields <- isTRUE(require_effective_metadata) ||
     (length(intersect(optional_fields, names(expected))) > 0L &&
@@ -1162,6 +1181,26 @@ parse_flags <- function(raw_args) {
 # read_datasets_json(config_path, view = view) (datasets_io.R), which already
 # maps columns.label -> label_col and output_file_name -> output_file.
 get_h5ad_path <- function(config, ds, view, input_dir) {
+  binding <- Sys.getenv("ECODA_ARTIFACT_BINDING", "")
+  if (nzchar(binding)) {
+    run_root <- Sys.getenv("ECODA_RUN_ROOT", "")
+    if (!nzchar(run_root) || !identical(binding, file.path(run_root, "manifests", "artifact_bindings.json"))) {
+      stop("Derivative input binding is not owned by the active run")
+    }
+    python <- Sys.getenv("PYTHON_BIN", "")
+    helper <- file.path(Sys.getenv("PROJECT_ROOT", ""), "src/utils/py/derivative_artifacts.py")
+    args <- c(helper, "input", "--binding", binding, "--run-root", run_root,
+      "--stage", "stage5", "--nas-root", Sys.getenv("NAS_TARGET_DIR", ""),
+      "--config", Sys.getenv("DATASETS_JSON_FILE", ""), "--dataset", ds, "--view", view)
+    if (!nzchar(python) || !file.exists(python) || !file.exists(helper)) {
+      stop("Configured derivative input resolver is unavailable")
+    }
+    path <- system2(python, vapply(args, shQuote, character(1)), stdout = TRUE, stderr = TRUE)
+    if (!is.null(attr(path, "status")) || length(path) != 1L || !file.exists(path)) {
+      stop("Derivative H5AD input resolution failed: ", paste(path, collapse = "\n"))
+    }
+    return(path)
+  }
   entry <- config[[ds]]
   if (is.null(entry)) {
     stop("Dataset '", ds, "' not found in datasets.json (view '", view, "').")

@@ -70,7 +70,8 @@ _CORRECTED_METHOD_IDENTITIES = {
 }
 
 _NEW_LIMMA_MODEL_IDS = frozenset(
-    {"limma_fixed_effects_v1", "pseudobulk_limma_fixed_effects_v1"}
+    {"limma_fixed_effects_v1", "pseudobulk_limma_fixed_effects_v1",
+     "harmony_leiden_clr_v1", "harmony_leiden_clr_limma_v1"}
 )
 _HISTORICAL_LIMMA_MODEL_IDS = frozenset(
     {"ecoda_additive_random_intercepts_v1", "pseudobulk_composite_v1"}
@@ -159,6 +160,8 @@ def _validate_new_limma_identity(
         "ECODA_authors_HR": "limma_fixed_effects_v1",
         "ECODA_seuratres_2": "limma_fixed_effects_v1",
         "ECODA_authors_HR_NULL": "limma_fixed_effects_v1",
+        "ecoda_unsupervised_harmony": "harmony_leiden_clr_v1",
+        "ecoda_unsupervised_harmony_limma": "harmony_leiden_clr_limma_v1",
     }.get(method_id)
     if expected_model is None or model_id != expected_model:
         raise ValueError(
@@ -234,11 +237,13 @@ def _validate_new_limma_identity(
             for index, key in enumerate(keys, start=1)
             if key in effective
         }
+        if method_id == "ecoda_unsupervised_harmony":
+            expected_aliases = {}
         if identity["fixed_effect_aliases"] != expected_aliases:
             raise ValueError(f"{label} has the wrong fixed-effect aliases")
         expected_design = (
             "~1"
-            if not effective
+            if not expected_aliases
             else "~1 + " + " + ".join(expected_aliases.values())
         )
         design = identity["correction_design_formula"]
@@ -259,6 +264,10 @@ def _validate_new_limma_identity(
             raise ValueError(f"{label} design rank is not full rank")
         if identity["design_residual_df"] <= 0:
             raise ValueError(f"{label} design has no residual degrees of freedom")
+        if method_id == "ecoda_unsupervised_harmony" and (
+            identity["design_rank"] != 1 or identity["design_columns"] != 1
+        ):
+            raise ValueError(f"{label} Harmony-only CLR must use an intercept-only scoring design")
         if identity["correction_mode"] in {
             "limma_fixed_effects",
             "limma_fixed_effects_pseudobulk",
@@ -283,6 +292,10 @@ def _validate_new_limma_identity(
                 or summary["correction_formula"] != identity["correction_formula"]
             ):
                 raise ValueError(f"{label} summary correction policy disagrees")
+            if method_id == "ecoda_unsupervised_harmony" and has_metadata and (
+                identity["design_residual_df"] != summary["n_samples"] - 1
+            ):
+                raise ValueError(f"{label} Harmony-only CLR residual degrees of freedom disagree")
     elif require_summary:
         raise ValueError(f"{label} is missing validation_summary")
     return identity
@@ -441,6 +454,15 @@ def _validate_variant_root_binding(
     if analysis_variant not in {"final", "corrected_final"}:
         raise ValueError(f"unknown analysis variant: {analysis_variant}")
     root = _normalized_absolute_path(str(root), "variant validation root")
+    if os.environ.get("ECODA_ARTIFACT_BINDING"):
+        from src.utils.py.derivative_artifacts import active_binding, context_root
+        value, _ = active_binding(os.environ["DATASETS_JSON_FILE"])
+        context = "batch_effect/" + ("uncorrected_final" if analysis_variant == "final" else "corrected_final")
+        expected = context_root(value, context)
+        expected_nas = context_root(value, context, nas=True)
+        if root != expected or os.environ.get("ANALYSIS_ROOT") != str(expected) or os.environ.get("ANALYSIS_NAS_ROOT") != str(expected_nas):
+            raise ValueError("variant root disagrees with the immutable derivative binding")
+        return
     actual_identity = _variant_root_identity(root)
     if actual_identity is None:
         raise ValueError(
