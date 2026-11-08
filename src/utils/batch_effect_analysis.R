@@ -603,11 +603,11 @@ load_batch_uncorrected_dataset <- function(input_root, metadata_root, dataset, r
 }
 
 .batch_frozen_datasets <- function() {
-  c("Alzheimer", "Breast_cancer", "Lupus_PBMC", "Stephenson")
+  c("Breast_cancer", "Lupus_PBMC", "Stephenson")
 }
 
 .batch_changed_final_datasets <- function() {
-  c("Covid19_PBMC", "Diabetes", "Joanito", "Lung")
+  c("Alzheimer", "Covid19_PBMC", "Diabetes", "Joanito", "Lung")
 }
 
 .batch_validate_manifest_dataset_lanes <- function(frame, manifest_kind) {
@@ -2041,4 +2041,258 @@ write_batch_analysis_table <- function(data, path) {
   .batch_write_checksum(path)
   validate_batch_artifact(path, "analysis table")
   invisible(path)
+}
+
+.batch_mds_scores <- function(dist_mat, grouping) {
+  values <- .batch_values(grouping)
+  keep <- !is.na(values)
+  n_groups <- length(unique(values[keep]))
+  if (sum(keep) < 3L || n_groups < 2L || n_groups >= sum(keep)) {
+    return(rep(NA_real_, 3L))
+  }
+  distance <- if (all(keep)) dist_mat else stats::as.dist(as.matrix(dist_mat)[keep, keep])
+  labels <- factor(values[keep])
+  c(
+    compute_batch_anosim(distance, labels, permutations = 0L, parallel = 1L)$statistic,
+    clust_eval(distance, labels),
+    calc_modularity(distance, labels, 3)
+  )
+}
+
+plot_batch_mds_panels <- function(dataset_result, batch_cols, method_labels) {
+  selected_methods <- names(method_labels)
+  dataset <- dataset_result$dataset
+  batch_cols <- as.character(unlist(batch_cols, use.names = FALSE))
+  if (length(batch_cols) == 0L || anyNA(batch_cols) || any(!nzchar(batch_cols))) {
+    stop(dataset, ": no configured batch columns")
+  }
+  missing_cols <- setdiff(batch_cols, colnames(dataset_result$metadata))
+  if (length(missing_cols) > 0L) {
+    stop(dataset, ": metadata lacks configured batch columns: ", paste(missing_cols, collapse = ", "))
+  }
+  batch_values <- lapply(batch_cols, function(column) {
+    .batch_values(dataset_result$metadata[[column]])
+  })
+  batch_labels <- lapply(batch_values, factor, exclude = NULL)
+  names(batch_labels) <- paste0("batch_", batch_cols)
+  batch_titles <- paste0("Batch: ", batch_cols)
+  if (length(batch_cols) > 1L) {
+    combined <- do.call(paste, c(batch_values, list(sep = " | ")))
+    combined[!Reduce(`&`, lapply(batch_values, function(x) !is.na(x)))] <- NA_character_
+    batch_labels$batch_combined <- factor(combined, exclude = NULL)
+    batch_titles <- c(batch_titles, paste0("Batch: ", paste(batch_cols, collapse = " + ")))
+  }
+  groupings <- c(
+    list(biological = factor(dataset_result$metadata[[dataset_result$label_col]])),
+    batch_labels
+  )
+  grouping_titles <- c(paste0("Biology: ", dataset_result$label_col), batch_titles)
+  base_plots <- lapply(selected_methods, function(method) {
+    plot_mds(
+      dataset_result$methods[[method]]$dist_mat,
+      groupings[[1L]],
+      title = unname(method_labels[[method]]),
+      cluster_score = FALSE,
+      mod_score = FALSE,
+      sil_score = FALSE,
+      anosim_score = FALSE
+    ) + ggplot2::aes(shape = NULL)
+  })
+  panels <- lapply(seq_along(groupings), function(index) {
+    plots <- lapply(seq_along(selected_methods), function(method_index) {
+      plot <- base_plots[[method_index]]
+      method_result <- dataset_result$methods[[selected_methods[[method_index]]]]
+      plot$data$Cluster <- groupings[[index]]
+      scores <- if (index == 1L && !is.null(method_result$scores)) {
+        as.numeric(unlist(method_result$scores[c("anosim_score", "cluster_score", "mod_knn3_score")]))
+      } else {
+        .batch_mds_scores(method_result$dist_mat, groupings[[index]])
+      }
+      plot +
+        ggplot2::labs(
+          subtitle = sprintf("ANOSIM: %.3f\nSeparation score: %.3f", scores[[1L]], mean(scores)),
+          color = if (index == 1L) "Biology" else "Batch"
+        ) +
+        ggplot2::guides(color = ggplot2::guide_legend(ncol = 2, byrow = TRUE))
+    })
+    (patchwork::wrap_plots(plots, ncol = 2, guides = "collect") +
+      patchwork::plot_annotation(title = dataset, subtitle = grouping_titles[[index]])) &
+      ggplot2::theme(legend.position = "bottom", legend.text = ggplot2::element_text(size = 8))
+  })
+  names(panels) <- names(groupings)
+  panels
+}
+
+plot_batch_mds_comparison <- function(uncorrected, corrected, batch_cols, method_labels) {
+  dataset <- uncorrected$dataset
+  if (length(dataset) != 1L || is.na(dataset) || !nzchar(trimws(dataset)) ||
+      !identical(dataset, corrected$dataset)) {
+    .batch_stop("MDS comparison requires the same nonempty dataset identity in both lanes")
+  }
+  sample_ids <- lapply(list(uncorrected, corrected), function(result) {
+    samples <- as.character(result$metadata[["Sample"]])
+    if (length(samples) == 0L || anyNA(samples) ||
+        any(!nzchar(trimws(samples))) || anyDuplicated(samples)) {
+      .batch_stop(dataset, ": MDS comparison requires unique nonempty metadata$Sample values in both lanes")
+    }
+    samples
+  })
+  if (!identical(sample_ids[[1L]], sample_ids[[2L]])) {
+    .batch_stop(dataset, ": MDS comparison metadata$Sample membership/order mismatch")
+  }
+  left_panels <- plot_batch_mds_panels(uncorrected, batch_cols, method_labels)
+  right_panels <- plot_batch_mds_panels(corrected, batch_cols, method_labels)
+  panels <- lapply(names(left_panels), function(name) {
+    paired <- lapply(seq_along(method_labels), function(index) {
+      left <- left_panels[[name]][[index]]
+      right <- right_panels[[name]][[index]]
+      # Explicit shared limits preserve label colours even if one lane lacks a group.
+      group_levels <- unique(c(levels(left$data$Cluster), levels(right$data$Cluster)))
+      list(
+        left +
+          ggplot2::labs(title = paste0(method_labels[[index]], "\nUncorrected (n = ", nrow(left$data), ")")) +
+          ggplot2::scale_color_discrete(limits = group_levels, drop = FALSE),
+        right +
+          ggplot2::labs(title = paste0(method_labels[[index]], "\nCorrected (n = ", nrow(right$data), ")")) +
+          ggplot2::scale_color_discrete(limits = group_levels, drop = FALSE)
+      )
+    })
+    grouping_title <- if (name == "biological") {
+      paste0("Biology: ", corrected$label_col)
+    } else if (name == "batch_combined") {
+      paste0("Batch: ", paste(unlist(batch_cols, use.names = FALSE), collapse = " + "))
+    } else {
+      paste0("Batch: ", substring(name, nchar("batch_") + 1L))
+    }
+    (patchwork::wrap_plots(do.call(c, paired), ncol = 2, guides = "collect") +
+      patchwork::plot_annotation(title = corrected$dataset, subtitle = grouping_title)) &
+      ggplot2::theme(legend.position = "bottom", legend.text = ggplot2::element_text(size = 8))
+  })
+  names(panels) <- names(left_panels)
+  panels
+}
+
+batch_biology_tables <- function(metadata, label_col, batch_cols) {
+  batch_cols <- as.character(unlist(batch_cols, use.names = FALSE))
+  required <- c("Sample", label_col, batch_cols)
+  if (length(label_col) != 1L || length(batch_cols) == 0L ||
+      anyNA(required) || any(!nzchar(required)) ||
+      !all(required %in% names(metadata))) {
+    .batch_stop("bio/batch tables require Sample and all configured label/batch columns")
+  }
+  sample_ids <- .batch_values(metadata$Sample)
+  if (length(sample_ids) == 0L || anyNA(sample_ids) || anyDuplicated(sample_ids)) {
+    .batch_stop("bio/batch tables require one row per unique nonempty Sample")
+  }
+  display_values <- function(values) {
+    values <- .batch_values(values)
+    values[is.na(values)] <- "<NA>"
+    values
+  }
+  biology <- display_values(metadata[[label_col]])
+  batches <- lapply(batch_cols, function(column) display_values(metadata[[column]]))
+  names(batches) <- paste0("batch_", batch_cols)
+  if (length(batch_cols) > 1L) {
+    batches$batch_combined <- do.call(paste, c(batches, list(sep = " | ")))
+  }
+  lapply(batches, function(batch) table(batch = batch, biology = biology))
+}
+
+write_batch_biology_tables <- function(metadata, dataset, label_col, batch_cols, plot_root, table_root, lane) {
+  tables <- batch_biology_tables(metadata, label_col, batch_cols)
+  dir.create(plot_root, recursive = TRUE, showWarnings = FALSE)
+  dir.create(table_root, recursive = TRUE, showWarnings = FALSE)
+  for (name in names(tables)) {
+    counts <- tables[[name]]
+    stem <- paste0(dataset, "_bio_vs_", name)
+    wide <- data.frame(batch_level = rownames(counts), as.data.frame.matrix(counts), check.names = FALSE)
+    write_batch_analysis_table(wide, file.path(table_root, paste0(stem, "_counts.csv")))
+    composition <- as.data.frame(counts, responseName = "n", stringsAsFactors = FALSE)
+    composition$pct_within_batch <- as.vector(100 * sweep(counts, 1L, rowSums(counts), "/"))
+    composition$pct_within_biology <- as.vector(100 * sweep(counts, 2L, colSums(counts), "/"))
+    write_batch_analysis_table(composition, file.path(table_root, paste0(stem, "_composition.csv")))
+    composition$label <- ifelse(
+      composition$n == 0L, "0",
+      sprintf("%d\n(%.0f%%)", composition$n, composition$pct_within_batch)
+    )
+    batch_title <- if (name == "batch_combined") {
+      paste(unlist(batch_cols, use.names = FALSE), collapse = " + ")
+    } else {
+      substring(name, nchar("batch_") + 1L)
+    }
+    plot <- ggplot2::ggplot(composition, ggplot2::aes(x = biology, y = batch, fill = pct_within_batch)) +
+      ggplot2::geom_tile(color = "grey85", linewidth = 0.25) +
+      ggplot2::geom_text(ggplot2::aes(label = label, color = pct_within_batch >= 60), size = 3) +
+      ggplot2::scale_color_manual(values = c(`FALSE` = "black", `TRUE` = "white"), guide = "none") +
+      ggplot2::scale_fill_gradient(low = "white", high = "#2166AC", limits = c(0, 100), name = "% within batch") +
+      ggplot2::scale_x_discrete(labels = function(x) stringr::str_wrap(x, width = 22)) +
+      ggplot2::scale_y_discrete(limits = rev(rownames(counts))) +
+      ggplot2::labs(
+        title = paste0(dataset, " - ", lane, " (n = ", sum(counts), " samples)"),
+        subtitle = paste0(batch_title, " versus ", label_col),
+        x = label_col, y = batch_title,
+        caption = "Cells show sample counts and within-batch percentages. Missing labels are retained as <NA>."
+      ) +
+      ggplot2::theme_minimal(base_size = 10) +
+      ggplot2::theme(panel.grid = ggplot2::element_blank())
+    path <- file.path(plot_root, paste0(stem, ".pdf"))
+    ggplot2::ggsave(path, plot, width = 14, height = max(4.5, 2.5 + 0.4 * nrow(counts)), units = "in", device = "pdf")
+    if (!file.exists(path) || file.info(path)$size <= 0L) .batch_stop("empty bio/batch heatmap: ", path)
+  }
+  invisible(tables)
+}
+
+# A metadata-only report from the current final lane, independent of distances
+# and the historical mixed-source result manifest.
+write_batch_biology_report <- function(nas_root, source_root, datasets, dataset_order, plot_root, table_root) {
+  provenance <- lapply(dataset_order, function(dataset) {
+    relative <- file.path("metadata", paste0(dataset, "_sample_metadata.feather"))
+    path <- file.path(nas_root, relative)
+    if (!file.exists(path) || file.info(path)$size <= 0L) .batch_stop("missing sample metadata: ", path)
+    fields <- .batch_sidecar_fields(path)
+    if (!identical(fields$PATH, file.path(source_root, relative)) ||
+        !identical(tolower(fields$MD5), tolower(unname(tools::md5sum(path)))) ||
+        !identical(fields$SIZE, as.character(file.info(path)$size))) {
+      .batch_stop("sample metadata ownership/checksum/size mismatch: ", path)
+    }
+    metadata <- as.data.frame(arrow::read_feather(path))
+    config <- datasets[[dataset]]
+    # Canonical Sample may be sanitized relative to the original sample column.
+    # Bind it to the Stage 5 summary rather than comparing raw obs identifiers.
+    summary_relative <- file.path("results", paste0(dataset, "_batch_effect_corrected_final_metadata.rds"))
+    summary_path <- file.path(nas_root, summary_relative)
+    summary_fields <- .batch_sidecar_fields(summary_path)
+    if (!identical(summary_fields$PATH, file.path(source_root, summary_relative)) ||
+        !identical(tolower(summary_fields$MD5), tolower(unname(tools::md5sum(summary_path)))) ||
+        !identical(summary_fields$SIZE, as.character(file.info(summary_path)$size))) {
+      .batch_stop("sample summary ownership/checksum/size mismatch: ", summary_path)
+    }
+    summary <- readRDS(summary_path)
+    if (!identical(as.character(metadata$Sample), names(summary$labels)) ||
+        !identical(.batch_values(metadata[[config$label_col]]), .batch_values(summary$labels))) {
+      .batch_stop(dataset, ": sample metadata disagrees with the Stage 5 sample universe/labels")
+    }
+    write_batch_biology_tables(
+      metadata, dataset, config$label_col, config$batch_col,
+      plot_root, table_root, lane = "current cohort"
+    )
+    if (dataset == "Kidney_KPMP_full") {
+      # Anatomy is a diagnostic grouping, never a correction-column override.
+      write_batch_biology_tables(
+        metadata, dataset, config$label_col, "region.l1",
+        plot_root, table_root, lane = "current cohort; anatomical region"
+      )
+    }
+    data.frame(
+      dataset = dataset, n_samples = nrow(metadata), sample_col = config$sample_col,
+      biological_column = config$label_col,
+      batch_columns = paste(unlist(config$batch_col, use.names = FALSE), collapse = " | "),
+      metadata_path = path, source_path = fields$PATH, metadata_md5 = fields$MD5,
+      metadata_summary_path = summary_path, metadata_summary_md5 = summary_fields$MD5,
+      stringsAsFactors = FALSE
+    )
+  })
+  provenance <- do.call(rbind, provenance)
+  write_batch_analysis_table(provenance, file.path(table_root, "bio_vs_batch_provenance.csv"))
+  invisible(provenance)
 }

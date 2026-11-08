@@ -780,7 +780,7 @@ scope_metadata_lines <- c(
     final_datasets,
     function(dataset) {
       frozen <- dataset %in% c(
-        "Alzheimer", "Breast_cancer", "Lupus_PBMC", "Stephenson"
+        "Breast_cancer", "Lupus_PBMC", "Stephenson"
       )
       summary_lane <- if (frozen || dataset == "Kidney_KPMP_full") {
         "legacy"
@@ -802,7 +802,7 @@ scope_metadata_lines <- c(
 scope_artifact_lines <- c(
   "dataset\tmethod\tlane\tartifact_kind\tartifact_path\tbundle_key",
   unlist(lapply(final_datasets, function(dataset) {
-    lane <- if (dataset %in% c("Alzheimer", "Breast_cancer", "Lupus_PBMC", "Stephenson")) "legacy" else "final"
+    lane <- if (dataset %in% c("Breast_cancer", "Lupus_PBMC", "Stephenson")) "legacy" else "final"
     vapply(final_methods, function(method) {
       kind <- if (method %in% c("MrVI_hvg2000", "PILOT_hvg2000", "QOT_hvg2000")) {
         "distance_feather"
@@ -851,11 +851,11 @@ stopifnot(
   identical(scope_metadata_frame$dataset, final_datasets),
   identical(
     scope_metadata_frame$summary_lane,
-    c("legacy", "legacy", "final", "legacy", "final", "legacy", "final", "final", "legacy")
+    c("final", "legacy", "final", "legacy", "final", "legacy", "final", "final", "legacy")
   ),
   identical(
     scope_metadata_frame$feather_lane,
-    c("legacy", "legacy", "final", "final", "final", "legacy", "final", "final", "legacy")
+    c("final", "legacy", "final", "final", "final", "legacy", "final", "final", "legacy")
   ),
   identical(
     scope_artifact_frame$dataset,
@@ -865,6 +865,40 @@ stopifnot(
     scope_artifact_frame$method,
     rep(final_methods, times = length(final_datasets))
   )
+)
+
+# Donor-only Alzheimer results are historical, not a valid current-final lane.
+legacy_alzheimer_metadata_lines <- scope_metadata_lines
+legacy_alzheimer_metadata_fields <- .batch_split_physical_tsv(legacy_alzheimer_metadata_lines[[2L]])
+legacy_alzheimer_metadata_fields[2:3] <- "legacy"
+legacy_alzheimer_metadata_lines[[2L]] <- manifest_row(legacy_alzheimer_metadata_fields)
+legacy_alzheimer_metadata_manifest <- manifest_write(
+  file.path(root, "legacy-alzheimer-metadata.tsv"), legacy_alzheimer_metadata_lines
+)
+expect_error(
+  read_batch_final_manifest(
+    legacy_alzheimer_metadata_manifest,
+    expected_datasets = final_datasets, expected_methods = final_methods,
+    repository_root = root
+  ),
+  "Alzheimer"
+)
+legacy_alzheimer_artifact_lines <- scope_artifact_lines
+for (index in which(startsWith(legacy_alzheimer_artifact_lines, "Alzheimer\t"))) {
+  fields <- .batch_split_physical_tsv(legacy_alzheimer_artifact_lines[[index]])
+  fields[[3L]] <- "legacy"
+  legacy_alzheimer_artifact_lines[[index]] <- manifest_row(fields)
+}
+legacy_alzheimer_artifact_manifest <- manifest_write(
+  file.path(root, "legacy-alzheimer-artifacts.tsv"), legacy_alzheimer_artifact_lines
+)
+expect_error(
+  read_batch_final_manifest(
+    legacy_alzheimer_artifact_manifest,
+    expected_datasets = final_datasets, expected_methods = final_methods,
+    repository_root = root
+  ),
+  "Alzheimer"
 )
 
 cat("test_batch_effect_analysis.R: all checks passed\n")

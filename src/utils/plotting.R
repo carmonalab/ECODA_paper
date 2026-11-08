@@ -297,6 +297,8 @@ prepare_benchmark_data <- function(
 # aggregates -> column_info -> funky_heatmap -> ggsave. Outputs are identical
 # to the legacy blocks except that only the configured `score_set` metrics
 # are ranked/displayed. Returns the funkyheatmap grob invisibly.
+# `top_padding` adds heatmap-coordinate headroom for long rotated labels;
+# zero preserves the existing layout of other heatmap figures.
 build_funky_heatmap <- function(
   df_results,
   exec_times,
@@ -312,7 +314,8 @@ build_funky_heatmap <- function(
   overall_col_name = "Mean",
   include_rank = FALSE,
   overall_legend_title = "Overall Mean",
-  overall_legend_labels = c(". 0", rep("", 5), "0.5", rep("", 4), "1")
+  overall_legend_labels = c(". 0", rep("", 5), "0.5", rep("", 4), "1"),
+  top_padding = 0
 ) {
   ncolors <- 11
 
@@ -493,7 +496,8 @@ build_funky_heatmap <- function(
     position_args = position_arguments(
       col_width = 1.5,
       col_space = 0.2,
-      col_annot_offset = 5
+      col_annot_offset = 5,
+      expand_ymax = top_padding
     )
   )
   ggsave(file.path(output_dir, output_file),

@@ -1,0 +1,868 @@
+---
+title: "Uncorrected batch-confounding contingency plots"
+author: "Christian Halter"
+date: "`r format(Sys.Date(), '%e de %B, %Y')`"
+output:
+  rmdformats::downcute:
+    lightbox: true
+    thumbnails: false
+    self_contained: true
+    gallery: true
+    code_folding: show
+---
+
+# Scope
+
+This diagnostic uses the persisted sample-level metadata for the twelve active
+`batch_effect_uncorrected` cohorts. It shows how each biological-label group is
+represented across configured and extended batch covariates. Bars are normalized
+within each biological-label group to 100%, while stack labels retain the number
+of unique samples. A potential-confounding flag is descriptive only: a batch
+level is flagged when it occurs in exactly one biological-label group. This
+notebook does not remove batches, rerun preprocessing, or run statistical tests.
+
+```{r setup, message=FALSE, warning=FALSE}
+if (basename(getwd()) == "notebooks") {
+  setwd("..")
+  if (file.exists(".Rprofile")) source(".Rprofile")
+}
+
+suppressPackageStartupMessages({
+  library(arrow)
+  library(ggplot2)
+  library(patchwork)
+  library(viridis)
+})
+source("src/utils/datasets_io.R")
+source("src/utils/batch_effect_analysis.R")
+source("src/utils/plotting.R")
+
+detected_cores <- parallel::detectCores(logical = FALSE)
+if (is.na(detected_cores)) detected_cores <- 1L
+parallel_cores <- min(8L, max(1L, detected_cores))
+options(mc.cores = parallel_cores)
+n_permutations <- 999L
+
+
+
+batch_datasets <- c(
+  "Alzheimer",
+  "Breast_cancer",
+  "Covid19_PBMC",
+  "Kidney_KPMP_full",
+  "Myocardial_infarction",
+  "Diabetes",
+  "Lupus_PBMC",
+  "Lung",
+  "Parkinson",
+  "Joanito",
+  "Stephenson",
+  "CombinedPBMC"
+)
+
+input_root <- file.path(getwd(), "data", "batch_effect", "uncorrected")
+metadata_root <- file.path(input_root, "metadata")
+results_root <- file.path(input_root, "results")
+plot_root <- file.path(getwd(), "plots", "batch_effect_uncorrected_batchconfounding")
+dir.create(plot_root, recursive = TRUE, showWarnings = FALSE)
+
+datasets <- read_datasets_json(view = "batch_effect_uncorrected")
+if (!all(batch_datasets %in% names(datasets))) {
+  stop("datasets.json does not contain every active batch-effect dataset")
+}
+datasets <- datasets[batch_datasets]
+if (!identical(names(datasets), batch_datasets)) {
+  stop("active batch-effect dataset order is not authoritative")
+}
+
+registry <- batch_candidate_registry(datasets, batch_datasets)
+```
+
+# Metadata and candidate helpers
+
+```{r metadata-helpers, message=FALSE, warning=FALSE}
+.as_character_vector <- function(value) {
+  if (is.null(value) || length(value) == 0L) return(character())
+  values <- as.character(unlist(value, use.names = FALSE))
+  values <- trimws(values)
+  unique(values[nzchar(values) & !is.na(values)])
+}
+
+.display_values <- function(value) {
+  values <- .batch_values(value)
+  values <- trimws(values)
+  values[is.na(values) | !nzchar(values)] <- "Missing/unknown"
+  values
+}
+
+.metadata_artifact_paths <- function(dataset_key) {
+  list(
+    summary = file.path(results_root, paste0(dataset_key, "_batch_effect_uncorrected_metadata.rds")),
+    metadata = file.path(metadata_root, paste0(dataset_key, "_sample_metadata.feather"))
+  )
+}
+
+.resolve_metadata_source <- function(dataset) {
+  canonical <- .metadata_artifact_paths(dataset)
+  if (all(file.exists(unlist(canonical)))) {
+    return(list(
+      source_dataset_key = dataset,
+      source_status = "canonical",
+      paths = canonical
+    ))
+  }
+
+  if (identical(dataset, "Kidney_KPMP_full")) {
+    legacy <- .metadata_artifact_paths("Kidney_KPMP")
+    if (all(file.exists(unlist(legacy)))) {
+      warning(
+        "Kidney_KPMP_full metadata artifacts are unavailable; using the existing ",
+        "Kidney_KPMP artifacts explicitly as a legacy source for this diagnostic."
+      )
+      return(list(
+        source_dataset_key = "Kidney_KPMP",
+        source_status = "legacy_Kidney_KPMP_fallback",
+        paths = legacy
+      ))
+    }
+  }
+
+  stop("missing validated metadata artifacts for active dataset ", dataset)
+}
+
+.read_sample_metadata <- function(dataset) {
+  source <- .resolve_metadata_source(dataset)
+  validate_batch_artifact(source$paths$summary, "metadata summary")
+  summary <- tryCatch(
+    readRDS(source$paths$summary),
+    error = function(error) {
+      stop("malformed metadata summary ", source$paths$summary, ": ", conditionMessage(error))
+    }
+  )
+  labels <- summary$labels
+  if (is.null(labels) || is.null(names(labels)) || anyNA(names(labels)) ||
+      any(!nzchar(names(labels))) || anyDuplicated(names(labels)) || anyNA(labels)) {
+    stop(dataset, ": metadata summary labels are malformed")
+  }
+  sample_ids <- as.character(names(labels))
+  if (!identical(as.integer(summary$n_samples), length(sample_ids))) {
+    stop(dataset, ": metadata summary sample count mismatch")
+  }
+  label_col <- as.character(datasets[[dataset]]$label_col)
+  metadata <- read_batch_metadata_sidecar(
+    source$paths$metadata,
+    expected_sample_ids = sample_ids,
+    required_label = label_col
+  )
+  list(
+    dataset = dataset,
+    metadata = metadata,
+    label_col = label_col,
+    sample_ids = sample_ids,
+    source_dataset_key = source$source_dataset_key,
+    source_status = source$source_status,
+    source_paths = source$paths
+  )
+}
+
+configured_candidates <- function(dataset) {
+  candidates <- .as_character_vector(datasets[[dataset]]$batch_col)
+  data.frame(
+    covariate = candidates,
+    candidate_class = rep("configured_batch", length(candidates)),
+    stringsAsFactors = FALSE
+  )
+}
+
+extended_candidates <- function(dataset) {
+  rows <- registry[registry$dataset == dataset & !registry$is_primary, , drop = FALSE]
+  excluded <- switch(
+    dataset,
+    Covid19_PBMC = "PatientID",
+    Lupus_PBMC = "ind_cov_batch_cov",
+    character()
+  )
+  rows <- rows[!rows$candidate %in% excluded, , drop = FALSE]
+  if (nrow(rows) == 0L) {
+    return(data.frame(
+      covariate = character(),
+      candidate_class = character(),
+      stringsAsFactors = FALSE
+    ))
+  }
+  rows <- rows[!duplicated(rows$candidate), c("candidate", "candidate_class"), drop = FALSE]
+  names(rows) <- c("covariate", "candidate_class")
+  rownames(rows) <- NULL
+  rows
+}
+
+.unavailable_summary_row <- function(
+  metadata_info,
+  plot_type,
+  covariate,
+  candidate_class,
+  availability_status,
+  availability_note
+) {
+  data.frame(
+    dataset = metadata_info$dataset,
+    plot_type = plot_type,
+    source_dataset_key = metadata_info$source_dataset_key,
+    source_status = metadata_info$source_status,
+    biological_label = metadata_info$label_col,
+    covariate = covariate,
+    candidate_class = candidate_class,
+    batch_level = NA_character_,
+    sample_count = 0L,
+    biological_groups = NA_character_,
+    n_biological_groups = 0L,
+    potential_confounding = FALSE,
+    availability_status = availability_status,
+    availability_note = availability_note,
+    stringsAsFactors = FALSE
+  )
+}
+
+.candidate_data <- function(metadata_info, plot_type, covariate, candidate_class) {
+  metadata <- metadata_info$metadata
+  if (!covariate %in% colnames(metadata)) {
+    return(list(
+      plot = NULL,
+      summary = .unavailable_summary_row(
+        metadata_info, plot_type, covariate, candidate_class,
+        "MISSING", "column is absent from the sample metadata Feather"
+      )
+    ))
+  }
+
+  biological <- .display_values(metadata[[metadata_info$label_col]])
+  batch <- .batch_values(metadata[[covariate]])
+  if (all(is.na(batch))) {
+    return(list(
+      plot = NULL,
+      summary = .unavailable_summary_row(
+        metadata_info, plot_type, covariate, candidate_class,
+        "NO_NONMISSING", "column has no non-missing sample values"
+      )
+    ))
+  }
+
+  batch <- .display_values(batch)
+  frame <- data.frame(
+    biological_group = biological,
+    batch_level = batch,
+    stringsAsFactors = FALSE
+  )
+  bio_levels <- unique(frame$biological_group)
+  batch_levels <- unique(frame$batch_level)
+  frame$biological_group <- factor(frame$biological_group, levels = bio_levels)
+  frame$batch_level <- factor(frame$batch_level, levels = batch_levels)
+  counts <- as.data.frame(table(frame$biological_group, frame$batch_level), stringsAsFactors = FALSE)
+  names(counts) <- c("biological_group", "batch_level", "sample_count")
+  counts <- counts[counts$sample_count > 0L, , drop = FALSE]
+  counts$biological_group <- as.character(counts$biological_group)
+  counts$batch_level <- as.character(counts$batch_level)
+  totals <- tapply(counts$sample_count, counts$biological_group, sum)
+  counts$percentage <- 100 * counts$sample_count / as.numeric(totals[counts$biological_group])
+  counts$dataset <- metadata_info$dataset
+  counts$plot_type <- plot_type
+  counts$source_dataset_key <- metadata_info$source_dataset_key
+  counts$source_status <- metadata_info$source_status
+  counts$biological_label <- metadata_info$label_col
+  counts$covariate <- covariate
+  counts$candidate_class <- candidate_class
+  counts$fill_key <- paste(covariate, counts$batch_level, sep = ": ")
+  groups_by_level <- split(counts$biological_group, counts$batch_level)
+  level_names <- names(groups_by_level)
+  level_summary <- data.frame(
+    batch_level = level_names,
+    sample_count = vapply(
+      level_names,
+      function(level) sum(counts$sample_count[counts$batch_level == level]),
+      integer(1)
+    ),
+    biological_groups = vapply(
+      level_names,
+      function(level) paste(
+        unique(counts$biological_group[counts$batch_level == level]),
+        collapse = "; "
+      ),
+      character(1)
+    ),
+    n_biological_groups = vapply(
+      level_names,
+      function(level) length(unique(counts$biological_group[counts$batch_level == level])),
+      integer(1)
+    ),
+    stringsAsFactors = FALSE
+  )
+  level_summary$potential_confounding <- level_summary$n_biological_groups == 1L
+  level_summary$dataset <- metadata_info$dataset
+  level_summary$plot_type <- plot_type
+  level_summary$source_dataset_key <- metadata_info$source_dataset_key
+  level_summary$source_status <- metadata_info$source_status
+  level_summary$biological_label <- metadata_info$label_col
+  level_summary$covariate <- covariate
+  level_summary$candidate_class <- candidate_class
+  level_summary$availability_status <- "AVAILABLE"
+  level_summary$availability_note <- ""
+  level_summary[, c(
+    "dataset", "plot_type", "source_dataset_key", "source_status",
+    "biological_label", "covariate", "candidate_class", "batch_level",
+    "sample_count", "biological_groups", "n_biological_groups",
+    "potential_confounding", "availability_status", "availability_note"
+  )] -> summary
+  list(plot = counts, summary = summary)
+}
+```
+
+# Grouped stacked plot builder
+
+```{r plotting-helpers, message=FALSE, warning=FALSE}
+.build_plot <- function(metadata_info, candidate_specs, plot_type) {
+  if (nrow(candidate_specs) == 0L) {
+    blank <- ggplot() +
+      theme_void() +
+      labs(
+        title = paste0(metadata_info$dataset, " - ", plot_type),
+        subtitle = paste0("No candidate covariates are registered for this plot family; n = ", length(metadata_info$sample_ids))
+      )
+    return(list(plot = blank, summary = .unavailable_summary_row(
+      metadata_info, plot_type, "<none>", "none", "NO_CANDIDATES", "no candidate covariates are registered"
+    )))
+  }
+
+  results <- lapply(seq_len(nrow(candidate_specs)), function(index) {
+    .candidate_data(
+      metadata_info,
+      plot_type,
+      candidate_specs$covariate[[index]],
+      candidate_specs$candidate_class[[index]]
+    )
+  })
+  plot_rows <- lapply(results, `[[`, "plot")
+  plot_rows <- plot_rows[!vapply(plot_rows, is.null, logical(1))]
+  summary_rows <- lapply(results, `[[`, "summary")
+  summary_rows <- do.call(rbind, summary_rows)
+
+  if (length(plot_rows) == 0L) {
+    blank <- ggplot() +
+      theme_void() +
+      labs(
+        title = paste0(metadata_info$dataset, " - ", plot_type),
+        subtitle = paste0("No candidate covariates have usable values; n = ", length(metadata_info$sample_ids))
+      )
+    return(list(plot = blank, summary = summary_rows))
+  }
+
+  plot_data <- do.call(rbind, plot_rows)
+  covariate_levels <- candidate_specs$covariate[candidate_specs$covariate %in% unique(plot_data$covariate)]
+  biological_levels <- unique(.display_values(metadata_info$metadata[[metadata_info$label_col]]))
+  plot_data$biological_group <- factor(plot_data$biological_group, levels = biological_levels)
+  plot_data$covariate <- factor(plot_data$covariate, levels = covariate_levels)
+  plot_data$fill_key <- factor(plot_data$fill_key, levels = unique(plot_data$fill_key))
+
+  n_covariates <- length(covariate_levels)
+  bar_spacing <- 0.82 / max(1, n_covariates)
+  plot_data$bio_index <- match(plot_data$biological_group, biological_levels)
+  plot_data$covariate_index <- match(plot_data$covariate, covariate_levels)
+  plot_data$x_position <- plot_data$bio_index +
+    (plot_data$covariate_index - (n_covariates + 1) / 2) * bar_spacing
+  bar_centers <- unique(plot_data[, c("x_position", "covariate"), drop = FALSE])
+  bar_centers$covariate <- as.character(bar_centers$covariate)
+
+  fill_levels <- levels(plot_data$fill_key)
+  fill_values <- stats::setNames(
+    grDevices::hcl(
+      h = seq(15, 375, length.out = length(fill_levels) + 1L)[-length(fill_levels) - 1L],
+      l = 65,
+      c = 100
+    ),
+    fill_levels
+  )
+  flagged <- unique(as.character(summary_rows$covariate[summary_rows$potential_confounding]))
+  flagged <- flagged[!is.na(flagged) & nzchar(flagged)]
+  warning_text <- if (length(flagged) > 0L) {
+    paste0("Potential confounding: ", paste(flagged, collapse = ", "))
+  } else {
+    "Potential confounding: none by the one-biological-group rule"
+  }
+  subtitle <- paste0(
+    "Biological label: ", metadata_info$label_col,
+    " | n = ", length(metadata_info$sample_ids), " unique samples",
+    " | ", plot_type,
+    " | ", warning_text
+  )
+
+  plot <- ggplot(plot_data, aes(x = x_position, y = percentage, fill = fill_key)) +
+    geom_col(
+      width = bar_spacing * 0.82,
+      position = "stack",
+      colour = "white",
+      linewidth = 0.15
+    ) +
+    geom_text(
+      aes(label = paste0("n = ", sample_count)),
+      position = position_stack(vjust = 0.5),
+      size = 2.5,
+      colour = "black"
+    ) +
+    geom_text(
+      data = bar_centers,
+      aes(x = x_position, y = 103, label = covariate),
+      inherit.aes = FALSE,
+      angle = 90,
+      hjust = 0,
+      vjust = 0.5,
+      size = 2.4
+    ) +
+    scale_x_continuous(
+      breaks = seq_along(biological_levels),
+      labels = biological_levels,
+      expand = expansion(mult = c(0.04, 0.08))
+    ) +
+    scale_y_continuous(
+      limits = c(0, 115),
+      breaks = c(0, 25, 50, 75, 100),
+      labels = function(value) paste0(value, "%"),
+      expand = expansion(mult = c(0, 0))
+    ) +
+    scale_fill_manual(values = fill_values, drop = FALSE) +
+    labs(
+      title = paste0(metadata_info$dataset, " - sample-level batch representation"),
+      subtitle = subtitle,
+      x = "Biological label",
+      y = "Samples within biological group",
+      fill = "Batch covariate: level",
+      caption = paste0(
+        "Stack labels are unique-sample counts. Source: ",
+        metadata_info$source_dataset_key, " (", metadata_info$source_status, ")."
+      )
+    ) +
+    theme_classic(base_size = 9) +
+    theme(
+      axis.text.x = element_text(angle = 35, hjust = 1, vjust = 1),
+      legend.position = "bottom",
+      legend.key.height = grid::unit(0.35, "cm"),
+      plot.margin = margin(8, 8, 26, 8)
+    )
+  list(plot = plot, summary = summary_rows)
+}
+
+.save_plot <- function(plot, path, width = 14, height = 8) {
+  ggplot2::ggsave(path, plot = plot, width = width, height = height, units = "in", device = "pdf")
+  if (!file.exists(path) || is.na(file.info(path)$size) || file.info(path)$size <= 0) {
+    stop("empty plot output: ", path)
+  }
+  invisible(path)
+}
+.covid_sampling_day_col <- "Sampling day (Days after symptom onset)"
+
+.covid_sampling_day_plot <- function(metadata_info, candidate_spec) {
+  result <- .candidate_data(
+    metadata_info,
+    plot_type = "extended",
+    covariate = candidate_spec$covariate[[1L]],
+    candidate_class = candidate_spec$candidate_class[[1L]]
+  )
+  if (is.null(result$plot)) {
+    return(result)
+  }
+
+  data <- result$plot
+  raw_levels <- tolower(trimws(as.character(data$batch_level)))
+  data$day_value <- suppressWarnings(as.numeric(as.character(data$batch_level)))
+  data$day_value[raw_levels == "control"] <- 0
+  data$day_value[raw_levels %in% c("unknown", "missing/unknown")] <- NA_real_
+  if (!any(is.finite(data$day_value))) {
+    return(list(
+      plot = NULL,
+      summary = result$summary
+    ))
+  }
+
+  biological_levels <- unique(.display_values(metadata_info$metadata[[metadata_info$label_col]]))
+  data$biological_group <- factor(data$biological_group, levels = biological_levels)
+  data$bio_index <- match(data$biological_group, biological_levels)
+  finite_days <- data$day_value[is.finite(data$day_value)]
+  upper_day <- max(finite_days)
+  day_breaks <- unique(c(0, 15, 30, ceiling(upper_day / 10) * 10))
+  flagged <- unique(as.character(result$summary$covariate[result$summary$potential_confounding]))
+  flagged <- flagged[!is.na(flagged) & nzchar(flagged)]
+  warning_text <- if (length(flagged) > 0L) {
+    paste0("Potential confounding: ", paste(flagged, collapse = ", "))
+  } else {
+    "Potential confounding: none by the one-biological-group rule"
+  }
+
+  plot <- ggplot(data, aes(x = bio_index, y = percentage, fill = day_value)) +
+    geom_col(width = 0.68, position = "stack", colour = "white", linewidth = 0.15) +
+    geom_text(
+      aes(label = paste0("n = ", sample_count)),
+      position = position_stack(vjust = 0.5),
+      size = 2.5,
+      colour = "black",
+      show.legend = FALSE
+    ) +
+    scale_x_continuous(
+      breaks = seq_along(biological_levels),
+      labels = biological_levels,
+      expand = expansion(mult = c(0.08, 0.08))
+    ) +
+    scale_y_continuous(
+      limits = c(0, 100),
+      breaks = c(0, 25, 50, 75, 100),
+      labels = function(value) paste0(value, "%"),
+      expand = expansion(mult = c(0, 0))
+    ) +
+    viridis::scale_fill_viridis(
+      option = "viridis",
+      direction = -1,
+      na.value = "grey70",
+      breaks = day_breaks,
+      limits = c(0, max(day_breaks)),
+      name = "Sampling day\n(days; 0 = control)"
+    ) +
+    labs(
+      title = "Covid19_PBMC - Sampling day",
+      subtitle = paste0(
+        "Biological label: ", metadata_info$label_col,
+        " | n = ", length(metadata_info$sample_ids), " unique samples",
+        " | ", warning_text
+      ),
+      x = "Biological label",
+      y = "Samples within biological group",
+      caption = "Controls are mapped to day 0; nonnumeric unknown values are grey."
+    ) +
+    theme_classic(base_size = 9) +
+    theme(
+      axis.text.x = element_text(angle = 35, hjust = 1, vjust = 1),
+      legend.position = "bottom",
+      plot.margin = margin(8, 8, 12, 8)
+    )
+  list(plot = plot, summary = result$summary)
+}
+
+.build_covid_extended_plot <- function(metadata_info, candidate_specs) {
+  categorical_specs <- candidate_specs[
+    !candidate_specs$covariate %in% c("PatientID", .covid_sampling_day_col),
+    ,
+    drop = FALSE
+  ]
+  categorical <- .build_plot(metadata_info, categorical_specs, "extended")
+  day_spec <- candidate_specs[candidate_specs$covariate == .covid_sampling_day_col, , drop = FALSE]
+  if (nrow(day_spec) == 0L) return(categorical)
+
+  day <- .covid_sampling_day_plot(metadata_info, day_spec)
+  if (is.null(day$plot)) {
+    return(list(
+      plot = categorical$plot,
+      summary = rbind(categorical$summary, day$summary)
+    ))
+  }
+  combined <- categorical$plot / day$plot +
+    patchwork::plot_layout(heights = c(2.8, 1.4), guides = "collect") &
+    theme(legend.position = "bottom")
+  list(
+    plot = combined,
+    summary = rbind(categorical$summary, day$summary)
+  )
+}
+
+.read_temporal_rds <- function(path, kind) {
+  if (!file.exists(path) || isTRUE(file.info(path)$isdir) || file.info(path)$size <= 0) {
+    stop(kind, " is missing or empty: ", path)
+  }
+  fields <- .batch_sidecar_fields(path)
+  actual_md5 <- unname(tools::md5sum(path))
+  actual_size <- as.character(file.info(path)$size)
+  if (!identical(tolower(as.character(fields$MD5)), tolower(actual_md5))) {
+    stop(kind, " MD5 mismatch: ", path)
+  }
+  if (!identical(as.character(fields$SIZE), actual_size)) {
+    stop(kind, " SIZE mismatch: ", path)
+  }
+  expected_path <- normalizePath(path, mustWork = FALSE)
+  if (!identical(as.character(fields$PATH), expected_path)) {
+    warning(
+      kind, " is a validated local mirror with recorded source path '",
+      fields$PATH, "': ", path,
+      call. = FALSE
+    )
+  }
+  tryCatch(
+    readRDS(path),
+    error = function(error) stop("malformed ", kind, " ", path, ": ", conditionMessage(error))
+  )
+}
+
+.validate_temporal_features <- function(features, method, expected_sample_ids) {
+  if (!is.matrix(features) && !is.data.frame(features)) {
+    stop(method, " feature matrix is not tabular")
+  }
+  features <- as.matrix(features)
+  if (is.null(rownames(features)) || anyNA(rownames(features)) ||
+      any(!nzchar(rownames(features))) || anyDuplicated(rownames(features))) {
+    stop(method, " feature matrix has invalid sample IDs")
+  }
+  if (!setequal(rownames(features), expected_sample_ids)) {
+    stop(method, " feature matrix sample IDs do not match metadata")
+  }
+  storage.mode(features) <- "double"
+  if (any(!is.finite(features))) stop(method, " feature matrix contains non-finite values")
+  features[expected_sample_ids, , drop = FALSE]
+}
+
+.load_covid_temporal_features <- function(metadata_info) {
+  composition_path <- file.path(
+    input_root,
+    "results",
+    "Covid19_PBMC_batch_effect_uncorrected_composition.rds"
+  )
+  pseudobulk_path <- file.path(
+    input_root,
+    "results",
+    "Covid19_PBMC_batch_effect_uncorrected_pseudobulk.rds"
+  )
+  composition <- .read_temporal_rds(composition_path, "Covid19 ECODA composition RDS")
+  pseudobulk <- .read_temporal_rds(pseudobulk_path, "Covid19 pseudobulk RDS")
+  if (is.null(composition$ECODA_authors_HR$feat_mat)) {
+    stop("Covid19 ECODA composition RDS lacks ECODA_authors_HR$feat_mat")
+  }
+  if (is.null(pseudobulk$Pseudobulk_hvg2000$feat_mat)) {
+    stop("Covid19 pseudobulk RDS lacks Pseudobulk_hvg2000$feat_mat")
+  }
+  expected_sample_ids <- as.character(metadata_info$sample_ids)
+  list(
+    ECODA = .validate_temporal_features(
+      composition$ECODA_authors_HR$feat_mat,
+      "ECODA",
+      expected_sample_ids
+    ),
+    Pseudobulk = .validate_temporal_features(
+      pseudobulk$Pseudobulk_hvg2000$feat_mat,
+      "Pseudobulk",
+      expected_sample_ids
+    )
+  )
+}
+
+.covid_time_bins <- function(metadata_info) {
+  metadata <- metadata_info$metadata
+  day <- suppressWarnings(as.numeric(as.character(metadata[[.covid_sampling_day_col]])))
+  severity <- tolower(trimws(as.character(metadata[[metadata_info$label_col]])))
+  is_control <- severity == "control"
+  masks <- list(
+    control_and_le15 = is_control | (!is_control & is.finite(day) & day <= 15),
+    day15_30 = !is_control & is.finite(day) & day > 15 & day <= 30,
+    day30_max = !is_control & is.finite(day) & day > 30
+  )
+  assigned <- Reduce("+", lapply(masks, as.integer))
+  union_mask <- assigned > 0L
+  if (any(assigned > 1L)) {
+    stop("Covid19 temporal bins overlap")
+  }
+  list(
+    masks = masks,
+    summary = data.frame(
+      time_bin = names(masks),
+      n_samples = vapply(masks, sum, integer(1)),
+      biological_groups = vapply(
+        masks,
+        function(mask) paste(unique(as.character(metadata[[metadata_info$label_col]][mask])), collapse = "; "),
+        character(1)
+      ),
+      omitted_samples = sum(!union_mask),
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
+.blank_temporal_plot <- function(title, subtitle) {
+  ggplot() + theme_void() + labs(title = title, subtitle = subtitle)
+}
+
+.build_covid_temporal_plots <- function(metadata_info) {
+  temporal_features <- .load_covid_temporal_features(metadata_info)
+  bins <- .covid_time_bins(metadata_info)
+  temporal_plot_root <- file.path(plot_root, "covid19_time_bins")
+  dir.create(temporal_plot_root, recursive = TRUE, showWarnings = FALSE)
+  method_titles <- c(ECODA = "ECODA authors HR", Pseudobulk = "Pseudobulk hvg2000")
+  anosim_rows <- list()
+  row_index <- 0L
+
+  for (bin_name in names(bins$masks)) {
+    mask <- bins$masks[[bin_name]]
+    selected_ids <- rownames(metadata_info$metadata)[mask]
+    labels <- factor(as.character(metadata_info$metadata[selected_ids, metadata_info$label_col]))
+    mds_plots <- lapply(names(temporal_features), function(method) {
+      features <- temporal_features[[method]][selected_ids, , drop = FALSE]
+      dist_mat <- stats::dist(features)
+      anosim <- compute_batch_anosim(
+        dist_mat,
+        labels,
+        permutations = n_permutations,
+        parallel = parallel_cores
+      )
+      row_index <<- row_index + 1L
+      anosim_rows[[row_index]] <<- data.frame(
+        dataset = "Covid19_PBMC",
+        method = method,
+        time_bin = bin_name,
+        n_samples = length(selected_ids),
+        biological_groups = paste(levels(droplevels(labels)), collapse = "; "),
+        anosim_statistic = anosim$statistic,
+        anosim_p_value = anosim$p_value,
+        status = anosim$status,
+        warning = anosim$warning,
+        stringsAsFactors = FALSE
+      )
+      if (!identical(anosim$status, "ESTIMABLE")) {
+        return(.blank_temporal_plot(
+          paste0("Covid19_PBMC - ", method_titles[[method]], " - ", bin_name),
+          paste0("ANOSIM unavailable: ", anosim$warning)
+        ))
+      }
+      plot_mds(
+        dist_mat,
+        labels,
+        title = paste0("Covid19_PBMC - ", method_titles[[method]], " - ", bin_name),
+        cluster_score = FALSE,
+        mod_score = FALSE,
+        sil_score = FALSE,
+        anosim_score = TRUE,
+        anosim_value = anosim$statistic,
+        digits = 3,
+        parallel = parallel_cores
+      )
+    })
+    names(mds_plots) <- names(temporal_features)
+    panel <- patchwork::wrap_plots(mds_plots, ncol = 2, guides = "collect") &
+      theme(legend.position = "bottom")
+    .save_plot(
+      panel,
+      file.path(temporal_plot_root, paste0("Covid19_PBMC_", bin_name, "_mds.pdf")),
+      width = 12,
+      height = 6
+    )
+  }
+
+  anosim_summary <- do.call(rbind, anosim_rows)
+  anosim_summary$time_bin <- factor(
+    anosim_summary$time_bin,
+    levels = names(bins$masks),
+    labels = c("Control / <=15", "15-30", "30-max")
+  )
+  anosim_plot <- ggplot(
+    anosim_summary,
+    aes(x = time_bin, y = anosim_statistic, colour = method, group = method)
+  ) +
+    geom_hline(yintercept = 0, colour = "grey75", linewidth = 0.3) +
+    geom_line(linewidth = 0.7, na.rm = TRUE) +
+    geom_point(size = 2.4, na.rm = TRUE) +
+    geom_text(
+      aes(label = ifelse(is.finite(anosim_statistic), sprintf("%.3f", anosim_statistic), "NA")),
+      vjust = -0.8,
+      size = 3,
+      na.rm = TRUE,
+      show.legend = FALSE
+    ) +
+    scale_colour_manual(values = c(ECODA = "#0072B2", Pseudobulk = "#D55E00")) +
+    labs(
+      title = "Covid19_PBMC - ANOSIM by symptom-onset time bin",
+      subtitle = paste0(
+        "Groups: ", metadata_info$label_col,
+        " | controls are always in the first bin",
+        " | omitted samples: ", bins$summary$omitted_samples[[1L]]
+      ),
+      x = "Sampling-day bin",
+      y = "ANOSIM statistic",
+      colour = "Method"
+    ) +
+    theme_classic(base_size = 10) +
+    theme(legend.position = "bottom")
+  .save_plot(
+    anosim_plot,
+    file.path(temporal_plot_root, "Covid19_PBMC_time_bins_anosim.pdf"),
+    width = 9,
+    height = 6
+  )
+  write_batch_analysis_table(
+    as.data.frame(anosim_summary, stringsAsFactors = FALSE),
+    file.path(temporal_plot_root, "Covid19_PBMC_time_bins_anosim.csv")
+  )
+  list(
+    bins = bins$summary,
+    anosim = anosim_summary,
+    output_root = temporal_plot_root
+  )
+}
+```
+
+# Generate both plot families
+
+```{r generate-plots, message=FALSE, warning=TRUE}
+metadata_results <- lapply(batch_datasets, .read_sample_metadata)
+names(metadata_results) <- batch_datasets
+
+summary_rows <- list()
+summary_index <- 0L
+for (dataset in batch_datasets) {
+  metadata_info <- metadata_results[[dataset]]
+  candidate_sets <- list(
+    configured = configured_candidates(dataset),
+    extended = extended_candidates(dataset)
+  )
+  for (plot_type in names(candidate_sets)) {
+    built <- if (identical(dataset, "Covid19_PBMC") && identical(plot_type, "extended")) {
+      .build_covid_extended_plot(metadata_info, candidate_sets[[plot_type]])
+    } else {
+      .build_plot(metadata_info, candidate_sets[[plot_type]], plot_type)
+    }
+
+    output_name <- if (identical(plot_type, "configured")) {
+      paste0(dataset, ".pdf")
+    } else {
+      paste0(dataset, "_extended.pdf")
+    }
+
+    .save_plot(built$plot, file.path(plot_root, output_name))
+    summary_index <- summary_index + 1L
+    summary_rows[[summary_index]] <- built$summary
+  }
+  }
+
+
+batch_confounding_summary <- do.call(rbind, summary_rows)
+if (is.null(batch_confounding_summary) || nrow(batch_confounding_summary) == 0L) {
+  stop("batch confounding summary is empty")
+}
+summary_path <- file.path(plot_root, "batch_confounding_summary.csv")
+write_batch_analysis_table(batch_confounding_summary, summary_path)
+stopifnot(file.exists(summary_path), file.info(summary_path)$size > 0)
+```
+
+# Summary
+
+```{r summary, message=FALSE, warning=FALSE}
+summary_overview <- aggregate(
+  cbind(sample_count, potential_confounding) ~ dataset + plot_type,
+  data = batch_confounding_summary,
+  FUN = function(value) sum(as.numeric(value), na.rm = TRUE)
+)
+summary_overview
+```
+
+# Covid19 temporal MDS and ANOSIM diagnostics
+
+```{r covid19-temporal-plots, message=FALSE, warning=TRUE}
+covid19_temporal_results <- .build_covid_temporal_plots(metadata_results[["Covid19_PBMC"]])
+covid19_temporal_results$bins
+covid19_temporal_results$anosim
+```
+
+Outputs are written under `plots/batch_effect_uncorrected_batchconfounding/`:
+
+- `<dataset>.pdf`: configured `datasets.json` batch covariates.
+- `<dataset>_extended.pdf`: deduplicated secondary biological and technical onboarding candidates.
+- `batch_confounding_summary.csv` and its checksum sidecar: per-level counts, availability, and conservative potential-confounding flags.
