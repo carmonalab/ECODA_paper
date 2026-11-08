@@ -234,9 +234,9 @@ Python implementation.
   comes from the verified source manifest and the run-bound runtime identity;
   preserve the checked-in `pixi.toml`, resolved `pixi.lock`, and
   `datasets.json` unless explicitly authorized.
-- Before terminal inspect, the completion task invokes only the exact
-  run-scoped validator
-  `ecoda_run_audit.sh --run-root ABSOLUTE_RUN_ROOT --stage STAGE --selection ABSOLUTE_SELECTION --source-manifest ABSOLUTE_SOURCE_MANIFEST --runtime-identity ABSOLUTE_RUNTIME_IDENTITY`.
+- After the first terminal inspect and before reviewer approval, the
+  completion task invokes only the exact run-scoped validator
+  `ecoda_run_audit.sh --run-root ABSOLUTE_RUN_ROOT --stage STAGE --selection ABSOLUTE_SELECTION --source-manifest ABSOLUTE_SOURCE_MANIFEST --runtime-identity ABSOLUTE_RUNTIME_IDENTITY --scheduler-accounting ABSOLUTE_RUN_ROOT/manifests/scheduler_accounting.tsv`.
   Pass the original immutable snapshot `identity/source.manifest` as
   `--source-manifest`, not the run-owned copy: the auditor checks its snapshot
   location and compares its bytes against `RUN_ROOT/manifests/source.manifest`.
@@ -279,9 +279,9 @@ Python implementation.
   pane across all windows whose `pane_start_command` is the declared runner;
   process fallback parses exact argv rather than accepting a runner-path
   substring. Any mismatch is a fail-closed stop.
-- Before the one terminal `inspect`, the completion task invokes the exact
-  run-scoped `ecoda_run_audit.sh` command from Section 2 against the recorded
-  run root. It must validate only the selected run's manifests, scheduler
+- After the one accounting `inspect` and before reviewer approval, the
+  completion task invokes the exact run-scoped `ecoda_run_audit.sh` command
+  from Section 2 against the recorded run root. It must validate only the selected run's manifests, scheduler
   records, status, artifact records/owners, and selected contracts; it must
   not glob `${HPC_SCRATCH_DIR}/_ecoda_runs/*`, inspect mutable current
   `HEAD`/Pixi fingerprints, submit workers, or repair compute.
@@ -315,6 +315,25 @@ Python implementation.
   `audit_state: COMPLETED`; an interrupted retry fails closed on
   `IN_PROGRESS` without repeating accounting or audits. Never poll
   `squeue`/`sacct` or use an event as evidence.
+- Reuse that one accounting query for the run audit. On a successful
+  single-child gate, preserve the post-inspect gate manifest, first inspect
+  JSON and exact profile as small immutable metadata copies. Execute the
+  committed `src/utils/py/gate_accounting_capture.py` with `--gate-manifest`,
+  `--inspect`, `--profile`, `--scheduler-ids RUN_ROOT/manifests/scheduler_ids.tsv`
+  and `--run-root`. It requires complete untruncated evidence, the exact query
+  scope and wrapper identity, every raw row `COMPLETED|0:0`, unique IDs and all
+  recorded roots. It preserves original raw bytes and creates a checksummed,
+  explicitly **derived** projection containing unchanged actual root rows.
+  The run audit consumes those exact projection bytes; it does not issue its
+  own query. Do not invent array-task IDs, omit failed rows, repeat accounting
+  or claim that the projection is the original raw output. Multi-child
+  campaigns require their explicitly reviewed union/child projection adapter;
+  the single-child bridge must not be pointed at a campaign parent.
+- Approve only after the accounting bridge and pinned run-scoped artifact
+  audit both pass. Also verify selected NAS payload checksums/equality and
+  required modes before approval where a producer's generic auditor only
+  verifies NAS ownership. Failed gates remain failed; no projection or
+  reviewer approval may hide failed/OOM accounting rows.
 - The reviewer invokes the second `inspect --approve-reviewer` phase after
   reviewing the evidence. It records approval without rerunning audit/accounting.
   Only a reviewed `COMPLETED` predecessor releases a dependent gate;

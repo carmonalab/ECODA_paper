@@ -52,14 +52,38 @@ Authorization: the user explicitly confirmed shared understanding and asked
 to start implementation with logical checkpoint commits pushed to master,
 then documentation harmonization and parallel independent work. P0 is now
 complete. Later compute remains subject to the recorded integrity, immutable
-source/runtime, exact selection, and durable-gate prerequisites. No scheduler
-jobs have been launched under this plan.
+source/runtime, exact selection, and durable-gate prerequisites. Scheduler
+submissions and their outcomes are recorded in the live checkpoint and launch ledger below.
 
 Provenance: repository planning anchor
 `5302671ad94556edcf9acccf372d2dc34121d714`; inspected HEAD
 `70b6033`. Record subsequent checkpoint, documentation, implementation, and
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
+
+## Live checkpoint — 2026-11-09, Europe/Zurich
+
+- P0/P1 complete; reviewed code pushed through `6551371` (`d4fb10e` NAS
+  topology fix, `6551371` single-query audit bridge). External cancer
+  application files remain excluded from these commits.
+- Stage 3 v3 gate is **FAILED**, terminal-inspected once. Two COVID metadata
+  audit tasks completed; all 17 preprocessing workers and their watchdog
+  failed before fitting because compute nodes lack the NAS mount. Exact
+  artifact inventory confirms **17 missing / 0 existing new H5ADs**.
+- The corrected NAS boundary passed independent real mount-hiding tests:
+  compute validates scratch while retaining bound NAS identity; controllers
+  prove the actual NAS destination and publish there. No existing scientific
+  artifact was removed or overwritten. Recovery selects the 17 missing rows
+  in a fresh run, without force.
+- Bassez first-gate proposal has **not** been prepared or launched. Its older
+  `48dbf0e` snapshot proposal is superseded before execution; use the newly
+  reviewed topology source and a distinct snapshot parent from Stage 3.
+- Exact R HR selectors and public method/variant scope were independently
+  accepted; three-context coordinator accepted. Stage 5 OOM scratch ownership,
+  NAS terminal integrity/failure metadata, and campaign accounting adapter
+  remain implementation/review work before those method launches.
+- Next: deploy immutable repaired source; record exact recovery/Bassez
+  wrappers; launch those independent gates and arm one waiter each.
 
 ## 2. Confirmed scientific decisions
 
@@ -463,7 +487,7 @@ statuses, scientific output roots and one synchronization owner per root.
 | P1: documentation | DONE | NOTES, onboarding README, both AGENTS guides, Bamboo durable-skill examples and historical-plan pointer harmonized; scoped whitespace and skill validation passed; Git publication recorded below |
 | P2: scoped contracts | IN_PROGRESS | Cohort/BL core, derivative roots and two corrected Harmony arms committed; exact rerun selectors, failure isolation, Bassez Stage 2 wrapper and gate evidence integration continue |
 | P3: source reconciliation | IN_PROGRESS | Orchestrator handles bounded read-only Bamboo source/runtime/NAS preflight; targeted Bassez scope is already user-approved, subject to unchanged-input proof |
-| P4: changed inputs | PLANNED | Generate and validate 16 batch-view derivatives, Stephenson benchmark derivative, and only the necessary Bassez repair; satisfy benchmark annotation contracts |
+| P4: changed inputs | IN_PROGRESS | Generate and validate 16 batch-view derivatives, Stephenson benchmark derivative, and only the necessary Bassez repair; satisfy benchmark annotation contracts |
 | P5: method waves | PLANNED | Run three independent concurrent contexts with exact deduplicated scope, durable evidence, focused recovery and root-specific sync |
 | P6: evaluation/reporting | PLANNED | Complete five-metric scores, score both Kidney axes, refresh all affected maintained reports/figures from approved results, verify plots and document limitations/provenance |
 
@@ -691,25 +715,29 @@ contradictions to the user; do not turn them into silent defaults.
 | 2026-11-08 | Current benchmark source inventory | All 11 configured benchmark H5AD paths and MD5/size sidecars exist on Bamboo. Nine unchanged BL candidates still need content verification before use; Bassez and Stephenson must respect their changed-input dependencies. Existing sidecars alone do not prove a source/result is reusable |
 | 2026-11-08 | External application evidence handoff | Application agent completed its isolated task without commits/jobs/canonical mutations. Current obs versus legacy HiTME count differences are preserved in `data/applications/cancer_clustering/20261108-v1/derived/legacy_bundle_reconciliation.rds` plus checksum; exact H5AD/bundle identities and scope are in its own plan. No documented historical-filter explanation was found. It used compact current-obs counts, not those bundles. This is an evidence flag for reuse review, not authorization for additional benchmark fits |
 | 2026-11-08 | Bassez parent receipt ready | Canonical legacy receipt under `_ecoda_inputs/20261108-confounding-subsets-v1/bassez-hr-input-v1/Bassez_benchmark_analysis_input.md5`; full parent MD5/size and ownership conflicts rechecked; receipt SHA256 `8106926f4ee19edd6cc5264dd8ded7a5fb1c413601a44e06d831f5fb31e2d9cd` |
+| 2026-11-08 | Fresh Stage 3 v2 gate reconciled | Profile/tool checkpoint `0e97438` pushed. Gate `ecoda_stage3_confounds_20261108_v2` is PREPARED; reconciliation proves ABSENT with seven passing invariants and no discrepancies. Profile digest `765697b9df3337f5795d3e73e753abf75d196d8d264ae6d1d5513263257e9e1c`; exact wrapper/source/runtime/17-row scope unchanged. Ready for its first launch; v1 is superseded/unlaunched |
+| 2026-11-08 | Stage 3 v2 early controller failure; scoped recovery | Controller ran 22:36:24–22:36:44 UTC and exited1: existing parser mishandles `--throttle 17`. No child run root or scheduler IDs created. Single waiter recorded FAILED; terminal inspect failed closed because no IDs exist (`v2.inspect.json`), so no successful audit/release is claimed. Help-only validation confirms all recovery arguments with `--throttle=17` parse successfully. Fresh gate v3 / child run `stage3_confounds_20261108_v2` uses identical17row/source/runtime scope and separate output root; no force or prior-gate relaunch. Source parser regression fix delegated independently |
+| 2026-11-08 | Stage 3 v3 controller launched | Fresh gate `ecoda_stage3_confounds_20261108_v3`, child `stage3_confounds_20261108_v2`, controller RUNNING at `2026-11-08T22:41:28Z`; wrapper digest `b8ac3b2e7e92f5304b003757374ed5fae8adc48d2c36130e2513aa806443ce81`. All invariants passed before launch. Exactly one unbounded waiter armed (`v3.wait.json`, local exec session95573). Scheduler IDs not yet observed. Continue independent local work; do not relaunch or arm another waiter |
+| 2026-11-09 | Stage 3 v3 failed; exact recovery scope proved | Wait completed FAILED. IDs preflight4663460, array4663462, watchdog4663463; one terminal inspect queried exactly those IDs once and failed as expected (2COMPLETED metadata tasks,18FAILED rows including watchdog). Every expected new H5AD path was checked:17missing,0existing. Worker/watchdog errors occur before preprocessing because compute nodes lack `/srv/smednas...`; preserve all evidence and target only the17missing rows in a fresh source/run |
+| 2026-11-09 | NAS boundary repaired and independently accepted | `d4fb10e` pushed: bound NAS identity may be read without a compute mount; fresh bind/publication still require actual NAS. Explicit scratch-only Stage2/3 ownership preserves NAS identity. Bassez NAS sync, producer records, permissions and owner completion moved to login controller. Independent real-H5AD NAS-hidden, restored/missing mount, four-record, corruption, mode and retained-success tests pass; broad existing watchdog/submitter regressions pass |
+| 2026-11-09 | Single-query accounting bridge accepted | `6551371` pushed; seven focused tests pass. Preserve complete original accounting output, validate every returned row and exact recorded scope, then emit a new labeled root projection/proof. Run first inspect once, bridge, pinned source audit with the projection, selected NAS integrity checks, then reviewer approval only if all pass. This corrects contradictory old prose ordering without a second query, changed running profile, invented child IDs or ignored failures |
+| 2026-11-09 | Exact method scope and coordinator review | R22HR/2CT package, immutable public3/4-field selection, exact7/3/3HR Python rows, valid-owned-prep consumer recovery and three-context concurrent controller accepted independently. Within a failed context, successful scratch artifacts remain preserved but no automatic partial NAS publication is claimed. New Stage5 OOM/NAS ownership and terminal/failure-state findings are being fixed before launch |
 
 ### Active assignments
 
 - Orchestrator `/root`: this plan, Git integration/push, bounded Bamboo
   preflight and run/release coordination; no pipeline implementation.
-- Implementor/reviewer `docs_checkpoint_audit`: Harmony backend returned and
-  accepted; authored the bounded durable process-evidence candidate; now
-  independently reviewing the Bassez Stage 2 wrapper and shared audit seams.
-- Implementor `batch_subset_audit`: cohort and Bassez Python core committed;
-  Stage 2 wrapper is held for independent review, then exact HR composition
-  and CT pseudobulk R selectors are next, coordinated with the HPC implementor.
-- Implementor `benchmark_dependency_audit`: BL and derivative integration
-  committed; owns requested-selection/variant propagation, exact artifact and
-  dependency scope, Python combo routing and the small concurrent launcher.
-  Stage 2 common/audit seams remain held for the Bassez checkpoint.
-- Subagents work locally without escalation. Return any network or protected
-  operation as an exact command to the orchestrator; do not wait silently on
-  a subagent permission-review tool. The orchestrator performs approved remote
-  operations and protected plan/tool updates.
+- Implementor/reviewer `docs_checkpoint_audit`: reviewed topology/R selectors
+  and coordinator; authored accepted single-child accounting bridge. Next
+  reviews and the explicit multi-child accounting extension stay bounded.
+- Implementor/reviewer `batch_subset_audit`: cohort/Bassez core, topology and
+  exact R selectors returned/accepted; independently reviewed requested scope.
+- Implementor `benchmark_dependency_audit`: accepted public request/coordinator
+  packages; now fixes Stage 5 OOM scratch ownership and derivative NAS
+  terminal/failure-state checks. No remote operations.
+- Subagents work locally without escalation. Return network or protected
+  operations to the orchestrator. Use `followup_task` for a new assignment
+  when an agent is completed; `send_message` alone does not resume it.
 
 Checkpoint exceptions: `.vscode/settings.json`, `Rplots.pdf` and the unrelated
 `Halter_etal_bioRxiv_ReviewCommons.docx` remain untouched and uncommitted. The architecture draft's three existing whitespace
@@ -718,11 +746,14 @@ release validation. No full H5ADs or expression matrices were copied locally.
 
 ### First Stage 3 gate: launch specification
 
-- Status: v1 was PREPARED and its read-only reconciliation was stopped before
-  any launch attempt. The updated process-evidence profile requires a fresh
-  v2 gate; v1 is superseded and must never be launched. v2 is NOT_YET_PREPARED.
-- Active gate `ecoda_stage3_confounds_20261108_v2`; child run
-  `stage3_confounds_20261108_v1`; host Bamboo.
+- Status: v1 was superseded before launch. v2 controller launched and FAILED
+  before creating a run root or submitting scheduler work (spaced throttle
+  parser bug). v3 is FAILED after terminal wait/inspection. It submitted preflight4663460,
+  array4663462 and watchdog4663463; NAS-dependent compute validation stopped
+  every preprocessing row. Do not relaunch prior gates. Recovery needs the
+  repaired source and a fresh run/gate.
+- Failed gate `ecoda_stage3_confounds_20261108_v3`; child run
+  `stage3_confounds_20261108_v2`; host Bamboo.
 - Serialization group `ecoda-preprocess-20261108-confounding-v1` protects
   this disjoint derivative preprocessing destination. Stage 5 retains its
   existing `ecoda-benchmark` synchronization group.
@@ -743,11 +774,11 @@ release validation. No full H5ADs or expression matrices were copied locally.
   `input_artifacts.tsv` SHA256
   `ed7464e40cdeaa4a6921119bf5859bc857b1cf42865442470876318b0d0dab20`.
 - Scratch outputs: the child run's `artifacts/datasets/<dataset>/output`;
-  NAS outputs: `releases/20261108-confounding-subsets-v1/stage3_confounds_20261108_v1/datasets/<dataset>/output`.
+  NAS outputs: `releases/20261108-confounding-subsets-v1/stage3_confounds_20261108_v2/datasets/<dataset>/output`.
   No canonical historical output is replaced.
 - Local gate/spec/evidence prefix:
-  `.gate/ecoda_stage3_confounds_20261108_v2`; remote gate prefix:
-  `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/gates/ecoda_stage3_confounds_20261108_v2`.
+  `.gate/ecoda_stage3_confounds_20261108_v3`; remote gate prefix:
+  `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/gates/ecoda_stage3_confounds_20261108_v3`.
 - Before release, wait once, audit the exact child run/selection/source/runtime,
   collect every emitted scheduler/watchdog ID, terminal-inspect and review.
   Stephenson benchmark additionally needs a validated Pipeline 4 derivative;
@@ -758,11 +789,12 @@ release validation. No full H5ADs or expression matrices were copied locally.
 Exact immutable wrapper:
 
 ```bash
-env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper STAGE3_INPUT_PRODUCER_RUN_ID=stage2_alzheimer_donor_assay_20260914T172421Z /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261108-confounding-subsets-v1/5d37aaabaf0d01172652f2a9d64bc40b7fc669cb/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261108-confounding-subsets-v1/5d37aaabaf0d01172652f2a9d64bc40b7fc669cb/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261108-confounding-subsets-v1/5d37aaabaf0d01172652f2a9d64bc40b7fc669cb/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage3_confounds_20261108_v1 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage3_confounds_20261108_v1 --script src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh -- --selection-file /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/stage3-inputs-v2/selection.tsv --derivative-release 20261108-confounding-subsets-v1 --input-artifacts /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/stage3-inputs-v2/input_artifacts.tsv --throttle 17 --mem 128G --max-mem 500G
+env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper STAGE3_INPUT_PRODUCER_RUN_ID=stage2_alzheimer_donor_assay_20260914T172421Z /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261108-confounding-subsets-v1/5d37aaabaf0d01172652f2a9d64bc40b7fc669cb/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261108-confounding-subsets-v1/5d37aaabaf0d01172652f2a9d64bc40b7fc669cb/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261108-confounding-subsets-v1/5d37aaabaf0d01172652f2a9d64bc40b7fc669cb/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage3_confounds_20261108_v2 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage3_confounds_20261108_v2 --script src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh -- --selection-file /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/stage3-inputs-v2/selection.tsv --derivative-release 20261108-confounding-subsets-v1 --input-artifacts /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/stage3-inputs-v2/input_artifacts.tsv --throttle=17 --mem 128G --max-mem 500G
 ```
 
-The superseded Stage 3 v1 gate is prepared but was never launched; v2 is not
-yet prepared. No scheduler jobs have been submitted under this plan. For every
+Stage 3 v1 was never launched; v2 controller failed before scheduler
+submission; v3 failed on compute NAS validation and was terminal-inspected.
+No new H5ADs exist and no successful release is claimed. For every
 future launch append:
 package, source/runtime/aux identities, host and resolved roots, dependency
 reviews, exact wrapper/selection and expected row count, gate/child run IDs,
