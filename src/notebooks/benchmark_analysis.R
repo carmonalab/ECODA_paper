@@ -1973,3 +1973,918 @@ plot_mean_corr <- function(data, metric_var, axis_spec) {
     )
 }
 
+
+# Bassez compact-bundle diagnostics. E/NE denote Expander/Non-expander, not
+# clinical response. All associations are descriptive, not causal/inferential.
+# PCA uses no labels; variance is not group association, signs are arbitrary,
+# and VST feature values do not establish low expression or expression absence.
+bassez_feature_diagnostics <- function(method_results) {
+  main <- c("ECODA_authors_HR", "Pseudobulk_hvg2000")
+  if (!is.list(method_results) || is.null(names(method_results)) ||
+      anyNA(names(method_results)) || any(!nzchar(names(method_results))) ||
+      anyDuplicated(names(method_results))) {
+    stop("Bassez diagnostics require uniquely named method bundles.")
+  }
+  if (!all(main %in% names(method_results)) ||
+      any(vapply(method_results[main], is.null, logical(1)))) {
+    stop("Bassez diagnostics require ECODA_authors_HR and Pseudobulk_hvg2000.")
+  }
+  # Deliberately exclude the shuffled-label NULL control from aligned summaries.
+  selected <- c(
+    main, "ECODA_authors_LR", "Freq_highres",
+    "ECODA_HiTME_HR_layer2", "ECODA_HiTME_HR_layer3", "ECODA_scATOMIC_HR",
+    paste0("ECODA_seuratres_", c("0.1", "0.4", "2", "5", "20")),
+    paste0("Pseudobulk_hvg", c(500, 1000, 3000)), "Pseudobulk_schvg2000",
+    "MOFA_hvg2000_factors15", "scITD_hvg2000_factors5",
+    "MrVI_hvg2000", "scPoli_hvg2000_dims15_highres",
+    "PILOT_hvg2000", "PILOT_hvg2000_HR", "PILOT-GM-VAE_hvg2000",
+    "QOT_hvg2000", "GloScope_hvg2000_pcadims30", "GloProp",
+    "Pseudobulk_CT_HR_hvg2000"
+  )
+  selected <- intersect(selected, names(method_results))
+  selected <- selected[!vapply(method_results[selected], is.null, logical(1))]
+  valid_names <- function(x) {
+    !is.null(x) && !anyNA(x) && all(nzchar(x)) && !anyDuplicated(x)
+  }
+  finite_matrix <- function(x, context, require_columns = TRUE) {
+    x <- as.matrix(x)
+    # Some compact artifacts attach names to their dimname vectors; these
+    # attributes are not sample IDs and must not affect exact ID comparison.
+    dimnames(x) <- lapply(dimnames(x), unname)
+    if (!is.numeric(x) || length(dim(x)) != 2L ||
+        nrow(x) < 1L || ncol(x) < 1L || any(!is.finite(x)) ||
+        !valid_names(rownames(x)) ||
+        (require_columns && !valid_names(colnames(x)))) {
+      stop(context, " must be finite numeric values with unique sample names",
+           if (require_columns) " and unique column names." else ".")
+    }
+    x
+  }
+  matrices <- labels <- distances <- list()
+  reference_samples <- reference_labels <- NULL
+  method_rows <- vector("list", length(selected))
+  for (i in seq_along(selected)) {
+    method <- selected[[i]]
+    bundle <- method_results[[method]]
+    if (!is.list(bundle) ||
+        !all(c("feat_mat", "labels", "dist_mat", "scores") %in% names(bundle))) {
+      stop("Incomplete Bassez bundle: ", method)
+    }
+    x <- finite_matrix(
+      bundle$feat_mat, paste(method, "feat_mat"),
+      require_columns = method %in% c(main, "Pseudobulk_hvg3000")
+    )
+    y <- bundle$labels
+    if (!is.null(names(y))) names(y) <- unname(names(y))
+    if (!is.atomic(y) || !valid_names(names(y)) ||
+        !identical(names(y), rownames(x)) ||
+        anyNA(y) || !setequal(as.character(y), c("E", "NE"))) {
+      stop(method, ": named labels must match feature rows exactly and contain E/NE.")
+    }
+    y <- setNames(as.character(y), names(y))
+    if (is.null(reference_samples)) {
+      reference_samples <- rownames(x)
+      reference_labels <- y
+    } else if (identical(method, "scITD_hvg2000_factors5")) {
+      if (!all(rownames(x) %in% reference_samples) ||
+          !identical(y, reference_labels[rownames(x)])) {
+        stop(method, ": retained sample IDs or E/NE labels do not match reference.")
+      }
+    } else if (!identical(rownames(x), reference_samples) ||
+               !identical(y, reference_labels)) {
+      stop(method, ": sample order or E/NE labels differ across Bassez methods.")
+    }
+    d <- finite_matrix(bundle$dist_mat, paste(method, "dist_mat"))
+    if (!identical(rownames(d), rownames(x)) ||
+        !identical(colnames(d), rownames(x)) ||
+        any(d < 0) || any(diag(d) != 0) ||
+        !isTRUE(all.equal(d, t(d), tolerance = 1e-10))) {
+      stop(method, ": invalid or sample-misaligned distance matrix.")
+    }
+    if (method %in% main && nrow(x) == ncol(x) &&
+        setequal(colnames(x), rownames(x))) {
+      stop(method, ": distance-as-features matrix is not a gene/composition matrix.")
+    }
+    scores <- bundle$scores
+    stored_score <- function(key) {
+      if (!key %in% names(scores)) return(NA_real_)
+      value <- scores[[key]]
+      if (is.null(value)) return(NA_real_)
+      if (!is.numeric(value) || length(value) != 1L || !is.finite(value)) {
+        stop(method, ": invalid stored score ", key)
+      }
+      as.numeric(value)
+    }
+    if ((!is.list(scores) && !is.numeric(scores)) || is.null(names(scores))) {
+      stop(method, ": scores must be named stored values.")
+    }
+    method_rows[[i]] <- data.frame(
+      method = method, n_samples = nrow(x), n_features = ncol(x),
+      n_E = sum(y == "E"), n_NE = sum(y == "NE"),
+      n_samples_overlap = sum(rownames(x) %in% reference_samples),
+      n_samples_missing = length(setdiff(reference_samples, rownames(x))),
+      sample_scope = if (nrow(x) < length(reference_samples)) {
+        "Retained scITD subset; stored scores describe this subset"
+      } else {
+        "Complete reference sample set"
+      },
+      ANOSIM = stored_score("anosim_score"),
+      mod_knn3 = stored_score("mod_knn3_score"),
+      ARI = stored_score("cluster_score"),
+      stringsAsFactors = FALSE
+    )
+    matrices[[method]] <- x
+    labels[[method]] <- y
+    distances[[method]] <- d
+  }
+  if (length(reference_samples) < 3L) {
+    stop("Bassez diagnostics require at least three samples.")
+  }
+  group_r2 <- function(x, y) {
+    total <- sum((x - mean(x))^2)
+    if (total == 0) return(NA_real_)
+    fitted <- ifelse(y == "E", mean(x[y == "E"]), mean(x[y == "NE"]))
+    sum((fitted - mean(x))^2) / total
+  }
+  feature_rows <- pc_rows <- fits <- list()
+  for (method in main) {
+    x <- matrices[[method]]
+    y <- labels[[method]]
+    variance <- apply(x, 2L, stats::var)
+    delta <- colMeans(x[y == "E", , drop = FALSE]) -
+      colMeans(x[y == "NE", , drop = FALSE])
+    fit <- if (any(variance > 0)) {
+      stats::prcomp(x, center = TRUE, scale. = FALSE)
+    } else {
+      NULL
+    }
+    nonzero <- if (is.null(fit)) integer() else {
+      which(fit$sdev > max(fit$sdev) * sqrt(.Machine$double.eps))
+    }
+    pc_percent <- if (is.null(fit)) numeric() else {
+      100 * fit$sdev^2 / sum(fit$sdev^2)
+    }
+    loading <- contribution <- matrix(
+      NA_real_, nrow = ncol(x), ncol = 2L,
+      dimnames = list(colnames(x), c("PC1", "PC2"))
+    )
+    for (pc in intersect(1:2, nonzero)) {
+      loading[, pc] <- fit$rotation[, pc]
+      contribution[, pc] <- 100 * fit$rotation[, pc]^2
+    }
+    first_two <- intersect(1:2, nonzero)
+    weighted <- if (length(first_two)) {
+      as.vector(contribution[, first_two, drop = FALSE] %*%
+                  (pc_percent[first_two] / sum(pc_percent[first_two])))
+    } else {
+      rep(NA_real_, ncol(x))
+    }
+    feature_rows[[method]] <- data.frame(
+      method = method, feature = colnames(x),
+      variance = variance, variance_rank = rank(-variance, ties.method = "min"),
+      mean_E = colMeans(x[y == "E", , drop = FALSE]),
+      mean_NE = colMeans(x[y == "NE", , drop = FALSE]),
+      delta_E_minus_NE = delta,
+      group_R2 = apply(x, 2L, group_r2, y = y),
+      loading_PC1 = loading[, 1L], loading_PC2 = loading[, 2L],
+      contribution_PC1_percent = contribution[, 1L],
+      contribution_PC2_percent = contribution[, 2L],
+      contribution_PC1_PC2_percent = weighted,
+      group_contrast_percent = if (sum(delta^2) > 0) {
+        100 * delta^2 / sum(delta^2)
+      } else {
+        rep(NA_real_, ncol(x))
+      },
+      stringsAsFactors = FALSE, row.names = NULL
+    )
+    pc_rows[[method]] <- data.frame(
+      method = rep(method, length(nonzero)),
+      PC = paste0("PC", nonzero)[seq_along(nonzero)],
+      variance_percent = pc_percent[nonzero],
+      group_R2 = vapply(nonzero, function(pc) group_r2(fit$x[, pc], y), numeric(1)),
+      stringsAsFactors = FALSE
+    )
+    fits[method] <- list(fit)
+  }
+  features <- do.call(rbind, feature_rows)
+  rownames(features) <- NULL
+  hr <- main[[1L]]
+  counts <- finite_matrix(method_results[[hr]]$counts, "ECODA HR counts")
+  if (!identical(rownames(counts), reference_samples) ||
+      !all(colnames(matrices[[hr]]) %in% colnames(counts))) {
+    stop("ECODA HR counts must align exactly with samples and cover retained features.")
+  }
+  # process_coda_fig() stores counts_all +0.5 in every entry. Match the
+  # recovery assertion in run_local_ecoda_derived.R before claiming raw counts.
+  counts <- counts[, colnames(matrices[[hr]]), drop = FALSE] - 0.5
+  if (any(counts < 0) || any(counts != floor(counts))) {
+    stop("ECODA HR counts are not recoverable nonnegative integer+0.5 values.")
+  }
+  totals <- rowSums(counts)
+  if (any(totals <= 0)) stop("ECODA HR retained categories have an empty sample.")
+  proportions <- 100 * counts / totals
+  y <- labels[[hr]]
+  med_E <- apply(proportions[y == "E", , drop = FALSE], 2L, stats::median)
+  med_NE <- apply(proportions[y == "NE", , drop = FALSE], 2L, stats::median)
+  proportions <- data.frame(
+    method = hr, feature = colnames(counts),
+    median_raw_percent_E = med_E, median_raw_percent_NE = med_NE,
+    delta_median_raw_percent_E_minus_NE = med_E - med_NE,
+    prevalence_E = colMeans(counts[y == "E", , drop = FALSE] > 0),
+    prevalence_NE = colMeans(counts[y == "NE", , drop = FALSE] > 0),
+    zero_fraction_E = colMeans(counts[y == "E", , drop = FALSE] == 0),
+    zero_fraction_NE = colMeans(counts[y == "NE", , drop = FALSE] == 0),
+    denominator = paste(
+      "Recovered raw cells in retained author-subtyped HR feature categories",
+      "(T/myeloid in this artifact), not all immune or tumor cells"
+    ),
+    n_denominator_categories = ncol(counts), pseudocount_removed = 0.5,
+    denominator_min_E = min(totals[y == "E"]),
+    denominator_max_E = max(totals[y == "E"]),
+    denominator_min_NE = min(totals[y == "NE"]),
+    denominator_max_NE = max(totals[y == "NE"]),
+    stringsAsFactors = FALSE, row.names = NULL
+  )
+  panel <- c(
+    "CXCL13", "PDCD1", "CTLA4", "LAG3", "TIGIT", "TOX", "IFNG", "GZMB",
+    "TCF7", "CCR7", "CD3D", "CD8A", "CD4", "FOXP3", "MS4A1", "CD79A",
+    "MZB1", "JCHAIN"
+  )
+  marker_rows <- lapply(
+    intersect(c("Pseudobulk_hvg2000", "Pseudobulk_hvg3000"), selected),
+    function(method) {
+      variance <- apply(matrices[[method]], 2L, stats::var)
+      index <- match(panel, names(variance))
+      data.frame(
+        method = method, marker = panel, present = !is.na(index),
+        variance = unname(variance[index]),
+        variance_rank = unname(rank(-variance, ties.method = "min")[index]),
+        interpretation = "Coverage of selected VST features only; absence is not full-expression exclusion",
+        stringsAsFactors = FALSE
+      )
+    }
+  )
+  pb <- main[[2L]]
+  x <- matrices[[pb]]
+  y <- labels[[pb]]
+  ig <- grepl("^IG[HKL][VDJC]", colnames(x))
+  variable <- apply(x, 2L, stats::var) > 0
+  vegan_available <- requireNamespace("vegan", quietly = TRUE)
+  anosim_r <- function(x, y, distance = FALSE) {
+    if (!vegan_available || (!distance && ncol(x) == 0L) ||
+        length(unique(y)) < 2L || length(y) < 3L) return(NA_real_)
+    d <- if (distance) stats::as.dist(x) else stats::dist(x)
+    if (all(as.vector(d) == 0)) return(NA_real_)
+    as.numeric(vegan::anosim(d, grouping = y, permutations = 0)$statistic)
+  }
+  no_ig <- anosim_r(x[, !ig, drop = FALSE], y)
+  unit <- if (any(variable)) {
+    anosim_r(scale(x[, variable, drop = FALSE], center = TRUE, scale = TRUE), y)
+  } else {
+    NA_real_
+  }
+  loo <- vapply(seq_along(reference_samples), function(i) {
+    anosim_r(distances[[hr]][-i, -i, drop = FALSE], labels[[hr]][-i], TRUE)
+  }, numeric(1))
+  valid_loo <- loo[is.finite(loo)]
+  pb_features <- feature_rows[[pb]]
+  sensitivity <- data.frame(
+    method = c(pb, pb, hr),
+    comparison = c("Exclude immunoglobulin genes ^IG[HKL][VDJC]",
+                   "Unit-variance features; zero-variance features dropped",
+                   "Leave one sample out; stored Euclidean HR distances"),
+    ANOSIM_R = c(no_ig, unit, NA_real_),
+    ANOSIM_R_min = c(NA_real_, NA_real_,
+                     if (length(valid_loo)) min(valid_loo) else NA_real_),
+    ANOSIM_R_max = c(NA_real_, NA_real_,
+                     if (length(valid_loo)) max(valid_loo) else NA_real_),
+    n_samples = c(nrow(x), nrow(x), nrow(x) - 1L),
+    n_features = c(sum(!ig), sum(variable), ncol(matrices[[hr]])),
+    n_features_removed = c(sum(ig), sum(!variable), 0L),
+    n_evaluable = c(as.integer(is.finite(no_ig)), as.integer(is.finite(unit)),
+                    length(valid_loo)),
+    status = if (!vegan_available) {
+      rep("Skipped: optional vegan namespace unavailable", 3L)
+    } else {
+      ifelse(c(is.finite(no_ig), is.finite(unit), length(valid_loo) > 0),
+             "Exploratory descriptive statistic; permutations=0", "Not estimable")
+    },
+    stringsAsFactors = FALSE
+  )
+  # Shares describe selected PB2000 features, not immune-cell causality/noise.
+  sensitivity$IG_variance_percent <- c(
+    if (sum(pb_features$variance) > 0) {
+      100 * sum(pb_features$variance[ig]) / sum(pb_features$variance)
+    } else NA_real_, NA_real_, NA_real_
+  )
+  sensitivity$IG_PC1_contribution_percent <- c(
+    if (all(is.finite(pb_features$contribution_PC1_percent))) {
+      sum(pb_features$contribution_PC1_percent[ig])
+    } else NA_real_, NA_real_, NA_real_
+  )
+  sensitivity$IG_PC2_contribution_percent <- c(
+    if (all(is.finite(pb_features$contribution_PC2_percent))) {
+      sum(pb_features$contribution_PC2_percent[ig])
+    } else NA_real_, NA_real_, NA_real_
+  )
+  hr_labels <- labels[[hr]]
+  keep_non_EX <- !grepl("_EX", colnames(matrices[[hr]]))
+  without_EX <- anosim_r(
+    matrices[[hr]][, keep_non_EX, drop = FALSE], hr_labels
+  )
+  # Exact multivariate-hypergeometric sampling without replacement, conditional
+  # on the retained HR categories only. Neither sampling nor CLR uses labels.
+  depth <- min(totals)
+  rarefied <- rep(NA_real_, 100L)
+  if (vegan_available) {
+    old_rng_kind <- RNGkind()
+    had_seed <- exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)
+    if (had_seed) old_seed <- get(".Random.seed", envir = .GlobalEnv)
+    on.exit({
+      do.call(RNGkind, as.list(old_rng_kind))
+      if (had_seed) {
+        assign(".Random.seed", old_seed, envir = .GlobalEnv)
+      } else if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE)) {
+        rm(".Random.seed", envir = .GlobalEnv)
+      }
+    }, add = TRUE)
+    set.seed(20261023, kind = "Mersenne-Twister", normal.kind = "Inversion",
+             sample.kind = "Rejection")
+    for (draw in seq_along(rarefied)) {
+      sampled <- matrix(0, nrow(counts), ncol(counts), dimnames = dimnames(counts))
+      for (i in seq_len(nrow(counts))) {
+        remaining_draw <- depth
+        remaining_total <- totals[[i]]
+        for (j in seq_len(ncol(counts) - 1L)) {
+          value <- if (remaining_draw == 0 || counts[i, j] == 0) 0 else {
+            stats::rhyper(1L, counts[i, j],
+                          remaining_total - counts[i, j], remaining_draw)
+          }
+          sampled[i, j] <- value
+          remaining_draw <- remaining_draw - value
+          remaining_total <- remaining_total - counts[i, j]
+        }
+        sampled[i, ncol(counts)] <- remaining_draw
+      }
+      log_counts <- log(sampled + 0.5)
+      rarefied[[draw]] <- anosim_r(log_counts - rowMeans(log_counts), hr_labels)
+    }
+  }
+  valid_rarefied <- rarefied[is.finite(rarefied)]
+  extra <- sensitivity[rep(3L, 2L), , drop = FALSE]
+  extra$comparison <- c(
+    "Exclude _EX features from existing CLR feature space; no re-CLR",
+    "Retained-HR depth-matched rarefaction; 100 draws; CLR(counts+0.5)"
+  )
+  extra$ANOSIM_R <- c(
+    without_EX, if (length(valid_rarefied)) mean(valid_rarefied) else NA_real_
+  )
+  extra$ANOSIM_R_min <- c(
+    NA_real_, if (length(valid_rarefied)) min(valid_rarefied) else NA_real_
+  )
+  extra$ANOSIM_R_max <- c(
+    NA_real_, if (length(valid_rarefied)) max(valid_rarefied) else NA_real_
+  )
+  extra$n_samples <- nrow(counts)
+  extra$n_features <- c(sum(keep_non_EX), ncol(counts))
+  extra$n_features_removed <- c(sum(!keep_non_EX), 0L)
+  extra$n_evaluable <- c(as.integer(is.finite(without_EX)), length(valid_rarefied))
+  extra$status <- if (!vegan_available) {
+    rep("Skipped: optional vegan namespace unavailable", 2L)
+  } else {
+    ifelse(extra$n_evaluable > 0,
+           "Exploratory descriptive statistic; permutations=0", "Not estimable")
+  }
+  sensitivity <- rbind(sensitivity, extra)
+  rownames(sensitivity) <- NULL
+  sensitivity$retained_raw_cells_median_E <- c(
+    NA_real_, NA_real_, rep(stats::median(totals[hr_labels == "E"]), 3L)
+  )
+  sensitivity$retained_raw_cells_median_NE <- c(
+    NA_real_, NA_real_, rep(stats::median(totals[hr_labels == "NE"]), 3L)
+  )
+  hr_fit <- fits[[hr]]
+  pc1_depth_cor <- if (!is.null(hr_fit) && hr_fit$sdev[[1L]] > 0 &&
+                       stats::sd(log(totals)) > 0) {
+    stats::cor(hr_fit$x[, 1L], log(totals))
+  } else NA_real_
+  sensitivity$PC1_log_retained_cells_correlation <- c(
+    NA_real_, NA_real_, rep(pc1_depth_cor, 3L)
+  )
+  sensitivity$rarefaction_depth <- c(rep(NA_real_, 4L), depth)
+  sensitivity$seed <- c(rep(NA_integer_, 4L), 20261023L)
+  list(
+    methods = do.call(rbind, method_rows), features = features,
+    pcs = do.call(rbind, pc_rows), proportions = proportions,
+    marker_coverage = do.call(rbind, marker_rows), sensitivity = sensitivity,
+    fits = fits
+  )
+}
+
+# Matched all-cell comparison from original metadata, never an HR/LR append:
+# subtype-missing T/myeloid cells must also enter the broad fallback categories.
+bassez_allcell_comparison <- function(annotation_counts, method_results) {
+  required <- c("ECODA_authors_HR", "ECODA_authors_LR", "Pseudobulk_hvg2000")
+  if (!is.list(method_results) || is.null(names(method_results)) ||
+      anyNA(names(method_results)) || anyDuplicated(names(method_results)) ||
+      !all(required %in% names(method_results)) ||
+      any(vapply(method_results[required], is.null, logical(1)))) {
+    stop("All-cell comparison requires unique HR, LR and PB HVG2000 bundles.")
+  }
+  valid_names <- function(x) {
+    !is.null(x) && !anyNA(x) && all(nzchar(x)) && !anyDuplicated(x)
+  }
+  matrix_values <- function(x, context) {
+    x <- as.matrix(x)
+    dimnames(x) <- lapply(dimnames(x), unname)
+    if (!is.numeric(x) || nrow(x) < 1L || ncol(x) < 1L ||
+        any(!is.finite(x)) || !valid_names(rownames(x)) ||
+        !valid_names(colnames(x))) {
+      stop(context, ": expected finite numeric matrix with unique dimnames.")
+    }
+    x
+  }
+  hr <- method_results[["ECODA_authors_HR"]]
+  samples <- unname(rownames(hr$feat_mat))
+  labels <- hr$labels
+  if (!is.atomic(labels) || !valid_names(names(labels)) ||
+      !identical(unname(names(labels)), samples) || length(samples) != 26L ||
+      anyNA(labels) || sum(labels == "E") != 9L || sum(labels == "NE") != 17L) {
+    stop("Expected the original 26 Bassez samples with named 9 E / 17 NE labels.")
+  }
+  labels <- setNames(as.character(labels), samples)
+  selected <- c(required, "ECODA_seuratres_2")
+  selected <- selected[selected %in% names(method_results)]
+  selected <- selected[!vapply(method_results[selected], is.null, logical(1))]
+  features <- distances <- list()
+  for (method in selected) {
+    bundle <- method_results[[method]]
+    x <- matrix_values(bundle$feat_mat, paste(method, "features"))
+    y <- setNames(as.character(bundle$labels), unname(names(bundle$labels)))
+    if (!identical(rownames(x), samples) || !identical(y, labels)) {
+      stop(method, ": sample IDs, order or E/NE labels differ from HR.")
+    }
+    d <- matrix_values(bundle$dist_mat, paste(method, "distances"))
+    if (!identical(rownames(d), samples) || !identical(colnames(d), samples) ||
+        any(d < 0) || any(diag(d) != 0) ||
+        !isTRUE(all.equal(d, t(d), tolerance = 1e-10))) {
+      stop(method, ": invalid or misaligned distance matrix.")
+    }
+    features[[method]] <- x
+    distances[[method]] <- stats::as.dist(d)
+  }
+  recover_counts <- function(method) {
+    raw <- matrix_values(method_results[[method]]$counts,
+                         paste(method, "counts")) - 0.5
+    if (!identical(rownames(raw), samples) ||
+        any(raw < 0) || any(raw != floor(raw))) {
+      stop(method, ": counts must align with samples and be integer+0.5.")
+    }
+    raw
+  }
+  hr_raw <- recover_counts("ECODA_authors_HR")
+  lr_raw <- recover_counts("ECODA_authors_LR")
+  if (ncol(hr_raw) != 33L || sum(hr_raw) != 24139 ||
+      sum(lr_raw) != 74948 ||
+      !all(colnames(features[["ECODA_authors_HR"]]) %in% colnames(hr_raw))) {
+    stop("Baseline counts do not match original HR33 (24139) / all-cell (74948) scope.")
+  }
+  columns <- c("Sample", "cellType", "cellSubType", "count")
+  if (!is.data.frame(annotation_counts) ||
+      !all(columns %in% names(annotation_counts)) || !nrow(annotation_counts)) {
+    stop("annotation_counts requires Sample, cellType, cellSubType, count.")
+  }
+  tab <- annotation_counts[, columns, drop = FALSE]
+  tab[1:3] <- lapply(tab[1:3], as.character)
+  if (anyNA(tab$Sample) || any(!nzchar(tab$Sample)) ||
+      !setequal(tab$Sample, samples) ||
+      anyNA(tab$cellType) ||
+      any(tab$cellType %in% c("NA", "nan", "None", "Unknown", "")) ||
+      !is.numeric(tab$count) || any(!is.finite(tab$count)) ||
+      any(tab$count < 0) || any(tab$count != floor(tab$count)) ||
+      anyDuplicated(tab[1:3])) {
+    stop("Cross-tab must have unique keys, exact sample IDs, valid broad types and nonnegative integer counts.")
+  }
+  fine <- !is.na(tab$cellSubType) &
+    !tab$cellSubType %in% c("NA", "nan", "None", "Unknown", "")
+  if (!setequal(tab$cellSubType[fine], colnames(hr_raw)) ||
+      !setequal(tab$cellType, colnames(lr_raw))) {
+    stop("Cross-tab fine/broad categories differ from original HR/LR counts.")
+  }
+  # Original metadata can assign the same fine subtype to different broad
+  # parents. Preserve the author fine labels; broad parentage is not a filter.
+  # Broad and fine pDC intentionally denote the same population: literal
+  # coalescing combines its 241 fine-labelled and 10 fallback cells.
+  aliases <- intersect(tab$cellType[!fine], tab$cellSubType[fine])
+  if (length(setdiff(aliases, "pDC"))) {
+    stop("Unsupported fine/fallback category collision beyond source-verified pDC.")
+  }
+  count_matrix <- function(rows, categories, levels) {
+    out <- matrix(0, length(samples), length(levels),
+                  dimnames = list(samples, levels))
+    for (i in which(rows)) {
+      s <- match(tab$Sample[[i]], samples)
+      c <- match(categories[[i]], levels)
+      out[s, c] <- out[s, c] + tab$count[[i]]
+    }
+    out
+  }
+  reconstructed_hr <- count_matrix(fine, tab$cellSubType, colnames(hr_raw))
+  reconstructed_lr <- count_matrix(rep(TRUE, nrow(tab)), tab$cellType,
+                                   colnames(lr_raw))
+  if (!identical(as.vector(reconstructed_hr), as.vector(hr_raw)) ||
+      !identical(as.vector(reconstructed_lr), as.vector(lr_raw))) {
+    stop("Original metadata must reconstruct every raw HR and LR sample/category exactly.")
+  }
+  category <- ifelse(fine, tab$cellSubType, tab$cellType)
+  raw_counts <- count_matrix(rep(TRUE, nrow(tab)), category, sort(unique(category)))
+  if (sum(raw_counts) != 74948 ||
+      !identical(unname(rowSums(raw_counts)), unname(rowSums(lr_raw)))) {
+    stop("Mixed-resolution counts do not conserve all 74948 original cells.")
+  }
+  counts <- raw_counts + 0.5
+  # Existing row-wise CLR convention; all features retained without E/NE input.
+  feat_mat <- as.matrix(clr(counts))
+  dimnames(feat_mat) <- dimnames(counts)
+  mixed <- "ECODA_authors_mixed_allcells"
+  features[[mixed]] <- feat_mat
+  distances[[mixed]] <- stats::dist(feat_mat)
+  methods <- c("ECODA_authors_HR", mixed, "Pseudobulk_hvg2000",
+               intersect("ECODA_seuratres_2", selected))
+  n_cells <- c(ECODA_authors_HR = sum(hr_raw),
+               ECODA_authors_mixed_allcells = sum(raw_counts),
+               Pseudobulk_hvg2000 = sum(lr_raw))
+  if ("ECODA_seuratres_2" %in% methods) {
+    leiden_raw <- recover_counts("ECODA_seuratres_2")
+    if (!identical(unname(rowSums(leiden_raw)), unname(rowSums(lr_raw)))) {
+      stop("Leiden2 counts do not describe the same all-cell sample totals.")
+    }
+    n_cells["ECODA_seuratres_2"] <- sum(leiden_raw)
+  }
+  comparison <- do.call(rbind, lapply(methods, function(method) {
+    d <- distances[[method]]
+    data.frame(
+      method = method, n_cells = unname(n_cells[[method]]),
+      n_samples = nrow(features[[method]]), n_features = ncol(features[[method]]),
+      ANOSIM = unname(vegan::anosim(d, labels, permutations = 0,
+                                   parallel = 1)[["statistic"]]),
+      mod_knn3 = calc_modularity(d, labels, knn_k = 3),
+      ARI = clust_eval(d, labels, return_mean = TRUE),
+      stringsAsFactors = FALSE
+    )
+  }))
+  fallback <- count_matrix(!fine, tab$cellType, colnames(lr_raw))
+  coverage <- data.frame(
+    Sample = samples, expansion = unname(labels),
+    n_cells = rowSums(raw_counts), n_fine = rowSums(reconstructed_hr),
+    n_fallback = rowSums(fallback),
+    fallback_fraction = rowSums(fallback) / rowSums(raw_counts),
+    row.names = NULL
+  )
+  fallback_counts <- data.frame(Sample = samples, fallback, check.names = FALSE,
+                                row.names = NULL)
+  list(methods = comparison, raw_counts = raw_counts, counts = counts,
+       feat_mat = feat_mat, labels = labels, dist = distances[[mixed]],
+       coverage = coverage, fallback_counts = fallback_counts)
+}
+
+# Stephenson metadata-only cell scores: no H5AD/expression matrix is opened.
+load_stephenson_ucell_cell_scores <- function(root) {
+  root <- .derived_require_scalar(root, "Stephenson cell-score root")
+  manifest <- .derived_read_json(file.path(root, "manifest.json"),
+                                 "Stephenson cell-score manifest")
+  .derived_require_fields(
+    manifest,
+    c("schema_version", "dataset", "view", "n_cells", "n_samples",
+      "sample_ids", "thresholds", "files", "source"),
+    "Stephenson cell-score manifest"
+  )
+  if (!identical(manifest$schema_version, 1L) &&
+      !identical(manifest$schema_version, 1)) {
+    stop("Unsupported Stephenson cell-score schema_version.")
+  }
+  if (!identical(manifest$dataset, "Stephenson") ||
+      !identical(manifest$view, "benchmark_analysis") ||
+      !is.numeric(manifest$n_cells) || length(manifest$n_cells) != 1L ||
+      !isTRUE(manifest$n_cells == 418768) ||
+      !is.numeric(manifest$n_samples) || length(manifest$n_samples) != 1L ||
+      !isTRUE(manifest$n_samples == 55) ||
+      !is.list(manifest$source) || !length(manifest$source)) {
+    stop("Stephenson cell-score manifest identity or source provenance is invalid.")
+  }
+  sample_ids <- manifest$sample_ids
+  if (!is.list(sample_ids) || length(sample_ids) != 55L ||
+      !all(vapply(sample_ids, function(x) {
+        is.character(x) && length(x) == 1L && !is.na(x) &&
+          nzchar(trimws(x)) && !grepl("[[:cntrl:]]", x)
+      }, logical(1)))) {
+    stop("Stephenson manifest requires 55 nonempty sample IDs.")
+  }
+  sample_ids <- unname(unlist(sample_ids, use.names = FALSE))
+  if (anyDuplicated(sample_ids) ||
+      !identical(sample_ids, sort(sample_ids, method = "radix"))) {
+    stop("Stephenson manifest sample IDs must be unique and sorted.")
+  }
+  scores <- c("cellCycle.G1S_UCell", "cellCycle.G2M_UCell", "IFN_UCell")
+  if (!is.list(manifest$thresholds) ||
+      !setequal(names(manifest$thresholds), scores) ||
+      anyDuplicated(names(manifest$thresholds))) {
+    stop("Stephenson manifest must define exactly the G1/S, G2/M and IFN thresholds.")
+  }
+  thresholds <- do.call(rbind, lapply(scores, function(score) {
+    entry <- manifest$thresholds[[score]]
+    .derived_require_fields(entry, c("threshold", "comparison"), score)
+    value <- entry$threshold
+    if (!is.numeric(value) || length(value) != 1L || !is.finite(value) ||
+        value < 0 || value > 1 || !identical(entry$comparison, ">")) {
+      stop(score, ": threshold must be numeric in [0, 1] with comparison '>'.")
+    }
+    data.frame(score = score, threshold = value, comparison = ">",
+               stringsAsFactors = FALSE)
+  }))
+  .derived_require_fields(manifest$files, "cells.feather", "Stephenson files")
+  expected_digest <- .derived_require_scalar(
+    manifest$files[["cells.feather"]], "cells.feather SHA256"
+  )
+  if (!grepl("^[[:xdigit:]]{64}$", expected_digest)) {
+    stop("Invalid cells.feather SHA256.")
+  }
+  path <- .derived_run_artifact_path(root, "cells.feather", "Stephenson cells")
+  if (!file.exists(path) || !isTRUE(file.info(path)$isdir == FALSE) ||
+      !isTRUE(file.info(path)$size > 0) ||
+      !identical(digest::digest(file = path, algo = "sha256"),
+                 tolower(expected_digest))) {
+    stop("Missing, empty or SHA256-mismatched Stephenson cells.feather.")
+  }
+  # Select only the bounded metadata contract, never expression columns.
+  columns <- c("Sample", "Status", "layer2", "layer3", "initial_clustering",
+               "full_clustering", "IFN_UCell", "HeatShock_UCell",
+               "cellCycle.G1S_UCell", "cellCycle.G2M_UCell")
+  cells <- as.data.frame(arrow::read_feather(path, col_select = tidyselect::all_of(columns)))
+  if (!identical(names(cells), columns) || nrow(cells) != 418768L) {
+    stop("Stephenson cell-score columns or 418768-cell scope do not match.")
+  }
+  for (column in columns[1:6]) {
+    value <- cells[[column]]
+    if (!is.character(value) && !is.factor(value)) {
+      stop(column, ": expected character metadata.")
+    }
+    cells[[column]] <- as.character(value)
+    present <- !is.na(cells[[column]])
+    if (any(!nzchar(trimws(cells[[column]][present]))) ||
+        any(grepl("[[:cntrl:]]", cells[[column]][present]))) {
+      stop(column, ": empty or control-character metadata labels are invalid.")
+    }
+  }
+  if (anyNA(cells$Sample) || anyNA(cells$Status) ||
+      !identical(sort(unique(cells$Sample), method = "radix"), sample_ids) ||
+      !all(cells$Status %in% c("Covid", "Healthy"))) {
+    stop("Stephenson cells require the manifest sample IDs and Covid/Healthy labels.")
+  }
+  sample_status <- unique(cells[c("Sample", "Status")])
+  if (nrow(sample_status) != 55L || anyDuplicated(sample_status$Sample) ||
+      sum(sample_status$Status == "Covid") != 43L ||
+      sum(sample_status$Status == "Healthy") != 12L) {
+    stop("Expected constant per-sample labels: 43 Covid and 12 Healthy.")
+  }
+  for (score in columns[7:10]) {
+    value <- cells[[score]]
+    if (!is.numeric(value) || any(is.nan(value)) ||
+        any(!is.na(value) & (!is.finite(value) | value < 0 | value > 1))) {
+      stop(score, ": expected numeric scores in [0, 1] or NA, without imputation.")
+    }
+  }
+  list(cells = cells, thresholds = thresholds, manifest = manifest)
+}
+
+# Individual-cell distributions pooled across samples, not sample means.
+plot_stephenson_ucell_score_violins <- function(artifacts, annotation = "layer2") {
+  annotations <- c("layer2", "layer3", "initial_clustering", "full_clustering")
+  if (!is.character(annotation) || length(annotation) != 1L ||
+      is.na(annotation) || !annotation %in% annotations) {
+    stop("annotation must be layer2, layer3, initial_clustering or full_clustering.")
+  }
+  cells <- artifacts$cells
+  thresholds <- artifacts$thresholds
+  scores <- c(G1S = "cellCycle.G1S_UCell", G2M = "cellCycle.G2M_UCell",
+              IFN = "IFN_UCell")
+  if (!is.data.frame(cells) || !is.data.frame(thresholds) ||
+      !all(c(annotation, unname(scores)) %in% names(cells)) ||
+      !all(c("score", "threshold", "comparison") %in% names(thresholds)) ||
+      nrow(thresholds) != 3L ||
+      !setequal(thresholds$score, unname(scores)) ||
+      anyDuplicated(thresholds$score) ||
+      !is.numeric(thresholds$threshold) ||
+      any(!is.finite(thresholds$threshold)) ||
+      any(thresholds$threshold < 0 | thresholds$threshold > 1) ||
+      anyNA(thresholds$comparison) || any(thresholds$comparison != ">")) {
+    stop("Expected validated Stephenson cell-score artifacts and strict thresholds.")
+  }
+  category <- as.character(cells[[annotation]])
+  category[is.na(category)] <- "(unclassified)"
+  levels <- sort(unique(category), method = "radix")
+  groups <- split(seq_len(nrow(cells)), factor(category, levels = levels))
+  titles <- c(G1S = "G1/S cell cycle", G2M = "G2/M cell cycle", IFN = "IFN response")
+  plots <- summaries <- list()
+  for (key in names(scores)) {
+    score <- scores[[key]]
+    value <- cells[[score]]
+    if (!is.numeric(value) || any(is.nan(value)) ||
+        any(!is.na(value) & (!is.finite(value) | value < 0 | value > 1))) {
+      stop(score, ": expected scores in [0, 1] or NA.")
+    }
+    cutoff <- thresholds$threshold[match(score, thresholds$score)]
+    tab <- do.call(rbind, lapply(names(groups), function(type) {
+      values <- value[groups[[type]]]
+      finite <- values[is.finite(values)]
+      n <- length(finite)
+      data.frame(
+        score = score, annotation = annotation, cell_type = type,
+        threshold = cutoff, comparison = ">", n_cells = length(values),
+        n_finite = n, n_missing = sum(is.na(values)),
+        n_positive = sum(finite > cutoff),
+        pct_positive = if (n) 100 * sum(finite > cutoff) / n else NA_real_,
+        median = if (n) stats::median(finite) else NA_real_,
+        minimum = if (n) min(finite) else NA_real_,
+        maximum = if (n) max(finite) else NA_real_,
+        stringsAsFactors = FALSE
+      )
+    }))
+    tab$cell_type <- factor(tab$cell_type, levels = levels)
+    # Constant/single-cell groups have a median marker instead of a spurious
+    # density; entirely missing groups retain their axis position and table row.
+    density_types <- as.character(tab$cell_type[
+      tab$n_finite >= 2L & !is.na(tab$minimum) & tab$minimum < tab$maximum
+    ])
+    draw <- data.frame(cell_type = factor(category, levels = levels), score = value)
+    draw <- draw[is.finite(draw$score) &
+                   as.character(draw$cell_type) %in% density_types, , drop = FALSE]
+    missing_types <- as.character(tab$cell_type[tab$n_finite == 0L])
+    axis_labels <- setNames(levels, levels)
+    axis_labels[missing_types] <- paste0(missing_types, " [no scores]")
+    boundary <- paste0("Positive: score > ", format(cutoff, trim = TRUE))
+    upper <- min(1, 1.1 * max(0.05, cutoff, value[is.finite(value)]))
+    p <- ggplot2::ggplot() +
+      ggplot2::geom_violin(
+        data = draw, ggplot2::aes(x = cell_type, y = score),
+        fill = "#80B1D3", colour = "#4D4D4D", linewidth = 0.25,
+        scale = "width", trim = TRUE
+      ) +
+      ggplot2::geom_hline(yintercept = cutoff, linetype = "dashed",
+                          colour = "#B2182B", linewidth = 0.4) +
+      ggplot2::geom_point(
+        data = tab[tab$n_finite > 0L, , drop = FALSE],
+        ggplot2::aes(x = cell_type, y = median), size = 0.9
+      ) +
+      ggplot2::annotate("text", x = Inf, y = cutoff, label = boundary,
+                        hjust = 1.02, vjust = -0.5, size = 3,
+                        colour = "#B2182B") +
+      ggplot2::scale_x_discrete(limits = levels, labels = axis_labels, drop = FALSE) +
+      ggplot2::scale_y_continuous(limits = c(0, upper),
+                                breaks = pretty(c(0, upper), n = 5)) +
+      ggplot2::labs(
+        title = paste("Stephenson:", titles[[key]]),
+        subtitle = paste("Individual cells pooled across samples; grouped by", annotation),
+        x = annotation, y = "UCell score",
+        caption = paste(
+          "Dashed line: strict positivity threshold (equality is not positive).",
+          "Points: medians. NA scores are not imputed;",
+          "[no scores] categories contain no finite scores.",
+          "Positive percentages use finite-score cells only."
+        )
+      ) +
+      ggplot2::theme_bw(base_size = 10) +
+      ggplot2::theme(
+        axis.text.x = ggplot2::element_text(angle = 60, hjust = 1, vjust = 1,
+                                           size = 8),
+        panel.grid.major.x = ggplot2::element_blank(),
+        plot.caption = ggplot2::element_text(hjust = 0)
+      )
+    plots[[key]] <- p
+    tab$cell_type <- as.character(tab$cell_type)
+    summaries[[key]] <- tab
+  }
+  list(plots = plots, summary = do.call(rbind, unname(summaries)))
+}
+
+# Exploratory author-HR split; does not change the cell-score manifest cutoffs.
+# Unobserved states are omitted from feature_map (per_type records their zero
+# counts), so no globally empty state creates a pseudocount-only CLR feature.
+stephenson_ifn_split_composition <- function(cell_artifacts, bundle, threshold = 0.1) {
+  if (!is.numeric(threshold) || length(threshold) != 1L ||
+      !is.finite(threshold) || threshold < 0 || threshold > 1) {
+    stop("IFN threshold must be a finite numeric scalar in [0, 1].")
+  }
+  cells <- cell_artifacts$cells
+  required <- c("Sample", "Status", "full_clustering", "IFN_UCell")
+  if (!is.data.frame(cells) || !nrow(cells) ||
+      !all(required %in% names(cells))) {
+    stop("Stephenson IFN split requires Sample, Status, full_clustering and IFN_UCell.")
+  }
+  for (column in required[1:3]) {
+    value <- cells[[column]]
+    if ((!is.character(value) && !is.factor(value)) || anyNA(value) ||
+        any(!nzchar(trimws(as.character(value)))) ||
+        any(grepl("[[:cntrl:]]", value))) {
+      stop(column, ": expected complete, nonempty metadata labels.")
+    }
+  }
+  score <- cells$IFN_UCell
+  if (!is.numeric(score) || any(!is.finite(score)) ||
+      any(score < 0 | score > 1)) {
+    stop("IFN_UCell must contain only finite scores in [0, 1]; missing scores cannot be classified.")
+  }
+  if (!is.list(bundle) ||
+      !all(c("counts", "feat_mat", "labels") %in% names(bundle))) {
+    stop("Stephenson IFN split requires an author-HR counts/feat_mat/labels bundle.")
+  }
+  counts <- as.matrix(bundle$counts)
+  valid_names <- function(x) {
+    !is.null(x) && length(x) > 0L && !anyNA(x) &&
+      all(nzchar(trimws(x))) && !anyDuplicated(x) &&
+      !any(grepl("[[:cntrl:]]", x))
+  }
+  if (!is.numeric(counts) || !nrow(counts) || !ncol(counts) ||
+      !valid_names(rownames(counts)) || !valid_names(colnames(counts)) ||
+      any(!is.finite(counts)) || any(counts < 0.5) ||
+      any(counts - 0.5 != round(counts - 0.5))) {
+    stop("Author-HR counts must have unique named axes and equal nonnegative integer raw counts + 0.5.")
+  }
+  samples <- rownames(counts)
+  types <- colnames(counts)
+  if (!identical(rownames(bundle$feat_mat), samples) ||
+      !identical(colnames(bundle$feat_mat), types)) {
+    stop("Author-HR counts and feat_mat sample/category axes must match exactly.")
+  }
+  labels <- bundle$labels
+  if (!is.atomic(labels) || !is.null(dim(labels)) ||
+      length(labels) != length(samples) || !valid_names(names(labels)) ||
+      !identical(names(labels), samples) || anyNA(labels) ||
+      !all(as.character(labels) %in% c("Covid", "Healthy"))) {
+    stop("Author-HR labels must be named Covid/Healthy values in exact sample order.")
+  }
+  sample <- as.character(cells$Sample)
+  category <- as.character(cells$full_clustering)
+  if (!setequal(unique(sample), samples) || !setequal(unique(category), types)) {
+    stop("Cell metadata samples/categories must match the complete author-HR bundle.")
+  }
+  sample_status <- unique(data.frame(
+    Sample = sample, Status = as.character(cells$Status), stringsAsFactors = FALSE
+  ))
+  if (anyDuplicated(sample_status$Sample) ||
+      !identical(sample_status$Status[match(samples, sample_status$Sample)],
+                 unname(as.character(labels)))) {
+    stop("Cell Status must be constant within each sample and match author-HR labels.")
+  }
+  original_raw <- counts - 0.5
+  recovered <- table(
+    factor(sample, levels = samples), factor(category, levels = types)
+  )
+  if (any(recovered != original_raw)) {
+    stop("Cell metadata does not exactly recover the original author-HR raw counts.")
+  }
+  positive_names <- paste0(types, "_IFN_responding")
+  if (any(positive_names %in% types) || anyDuplicated(positive_names)) {
+    stop("IFN-responding feature names collide with original author-HR categories.")
+  }
+  # Labels are checked above only; assignment uses the strict score cutoff alone.
+  responding <- score > threshold
+  positive <- table(
+    factor(sample[responding], levels = samples),
+    factor(category[responding], levels = types)
+  )
+  negative <- original_raw - positive
+  keep_negative <- colSums(negative) > 0
+  keep_positive <- colSums(positive) > 0
+  feature_map <- data.frame(
+    feature = c(types[keep_negative], positive_names[keep_positive]),
+    cell_type = c(types[keep_negative], types[keep_positive]),
+    ifn_responding = c(rep(FALSE, sum(keep_negative)), rep(TRUE, sum(keep_positive))),
+    stringsAsFactors = FALSE
+  )
+  raw_counts <- cbind(
+    negative[, keep_negative, drop = FALSE],
+    positive[, keep_positive, drop = FALSE]
+  )
+  dimnames(raw_counts) <- list(samples, feature_map$feature)
+  collapsed <- t(rowsum(t(raw_counts), feature_map$cell_type, reorder = FALSE))
+  collapsed <- collapsed[, types, drop = FALSE]
+  if (any(raw_counts < 0) ||
+      any(rowSums(raw_counts) != rowSums(original_raw)) ||
+      any(collapsed != original_raw) || sum(raw_counts) != nrow(cells) ||
+      sum(raw_counts[, feature_map$ifn_responding, drop = FALSE]) != sum(responding)) {
+    stop("IFN split failed sample/category count conservation.")
+  }
+  per_type <- data.frame(
+    cell_type = types, n_total = unname(colSums(original_raw)),
+    n_ifn_responding = unname(colSums(positive)),
+    n_nonresponding = unname(colSums(negative)), stringsAsFactors = FALSE
+  )
+  counts <- raw_counts + 0.5
+  log_counts <- log(counts)
+  list(
+    raw_counts = raw_counts, counts = counts,
+    feat_mat = log_counts - rowMeans(log_counts), labels = labels,
+    per_type = per_type, feature_map = feature_map, threshold = threshold
+  )
+}

@@ -151,6 +151,9 @@ default_methods <- c(
 default_methods_regex <- paste(default_methods, collapse = "|")
 
 set.seed(123)
+
+data(example_data)
+test <- calc_freq(example_data$Zhang$cell_counts$authors_HR)
 ```
 
 # Create results list to fill
@@ -1341,7 +1344,298 @@ ggsave(file.path(path_plots, paste0("PCA_arrows_", ds, ".pdf")),
        width = 6,
        height = 6)
 ```
+
+### Bassez: descriptive feature and PCA diagnostics
+
+This diagnostic uses only the already-loaded compact Bassez result bundles.
+E means **Expander** and NE means **Non-expander**, referring to the study's
+T-cell expansion grouping, **not clinical response** ([Bassez et al.,
+2021](https://doi.org/10.1038/s41591-021-01323-8)).
+The ECODA authors-HR and pseudobulk HVG2000 feature matrices are centered but
+not variance-scaled for PCA; labels are used only for post-hoc descriptions.
+Feature variance is not group association, PCA signs are arbitrary, and
+descriptive associations do not establish a causal mechanism. Pseudobulk VST
+values do not support a low-expression claim. The fixed marker panel checks
+coverage in the available HVG2000/HVG3000 bundles, not exclusion from the full
+expression data. In this compact snapshot, composition percentages use the
+retained author-subtyped HR T/myeloid categories as their denominator, not all
+immune or tumor cells; B and mast cells and cells without an author subtype
+are excluded. The helper documents count recovery and the denominator in the
+exported table. Sensitivity ANOSIM
+statistics are exploratory, with no permutation tests or p-values.
+
+```{r bassez-feature-diagnostics, fig.height=6, fig.width=12, results='asis'}
+if (!exists("result_list") ||
+    is.null(result_list[["bmark"]][["Bassez"]])) {
+  message("Skipping Bassez feature diagnostics: no loaded Bassez bundles.")
+} else if (!all(c("ECODA_authors_HR", "Pseudobulk_hvg2000") %in%
+                names(result_list[["bmark"]][["Bassez"]]))) {
+  message(paste(
+    "Skipping Bassez feature diagnostics:",
+    "ECODA_authors_HR and Pseudobulk_hvg2000 are both required."
+  ))
+} else {
+  bassez_diagnostics <- local({
+    bundles <- result_list[["bmark"]][["Bassez"]]
+    output_dir <- file.path(
+      if (exists("path_plots")) path_plots else file.path(getwd(), "plots"),
+      "Bassez_diagnostics_2026-10-23",
+      format(Sys.time(), "%Y%m%dT%H%M%S")
+    )
+    if (file.exists(output_dir)) {
+      stop("Refusing to overwrite existing Bassez diagnostic outputs: ",
+           output_dir)
+    }
+    diagnostics <- bassez_feature_diagnostics(bundles)
+    table_names <- c(
+      "methods", "features", "pcs", "proportions",
+      "marker_coverage", "sensitivity"
+    )
+    print(knitr::kable(
+      diagnostics$methods, digits = 4,
+      caption = "Available selected methods: stored benchmark metrics (not recomputed)."
+    ))
+    method_titles <- c(
+      ECODA_authors_HR = "ECODA authors HR",
+      Pseudobulk_hvg2000 = "Pseudobulk HVG2000"
+    )
+    panels <- lapply(names(method_titles), function(method) {
+      features <- diagnostics$features[
+        diagnostics$features$method == method, , drop = FALSE
+      ]
+      print(knitr::kable(
+        utils::head(features[order(features$variance_rank), c(
+          "feature", "variance", "variance_rank", "group_R2",
+          "delta_E_minus_NE", "group_contrast_percent"
+        )], 10),
+        digits = 4, row.names = FALSE,
+        caption = paste(method_titles[[method]], "— top 10 features by variance")
+      ))
+      for (pc in c("PC1", "PC2")) {
+        loading <- paste0("loading_", pc)
+        contribution <- paste0("contribution_", pc, "_percent")
+        print(knitr::kable(
+          utils::head(features[
+            order(-abs(features[[loading]]), features$feature),
+            c("feature", loading, contribution, "variance_rank", "group_R2")
+          ], 10),
+          digits = 4, row.names = FALSE,
+          caption = paste(
+            method_titles[[method]], "— top 10 absolute", pc,
+            "loadings (signed values shown; no label-based selection)"
+          )
+        ))
+      }
+      bundle <- bundles[[method]]
+      label_names <- c(E = "Expander (E)", NE = "Non-expander (NE)")
+      plot_labels <- factor(
+        unname(label_names[as.character(bundle$labels)]),
+        levels = unname(label_names)
+      )
+      plot_pca(
+        feat_mat = bundle$feat_mat,
+        labels = plot_labels,
+        scale. = FALSE,
+        n_ct_show = 7,
+        invisible = "quali",
+        repel = TRUE,
+        coord_equal = FALSE,
+        title = method_titles[[method]],
+        cluster_score = FALSE,
+        mod_score = FALSE,
+        sil_score = FALSE,
+        anosim_score = FALSE
+      )
+    })
+    pca_plot <- patchwork::wrap_plots(panels, nrow = 1) +
+      patchwork::plot_layout(guides = "collect") +
+      patchwork::plot_annotation(
+        title = "Bassez: centered, unscaled feature PCA",
+        subtitle = "E/NE denotes expansion, not clinical response; arrows selected without labels"
+      )
+    print(pca_plot)
+    if (!dir.create(output_dir, recursive = TRUE)) {
+      stop("Could not create Bassez diagnostic output directory: ", output_dir)
+    }
+    for (table_name in table_names) {
+      utils::write.csv(
+        diagnostics[[table_name]],
+        file.path(output_dir, paste0("Bassez_", table_name, ".csv")),
+        row.names = FALSE
+      )
+    }
+    for (extension in c("png", "pdf")) {
+      ggplot2::ggsave(
+        filename = file.path(
+          output_dir, paste0("Bassez_feature_PCA_ECODA_HR_PB2000.", extension)
+        ),
+        plot = pca_plot, width = 12, height = 6, dpi = 300
+      )
+    }
+    attr(diagnostics, "output_dir") <- output_dir
+    diagnostics
+  })
+  if (exists("df_results_list")) {
+    for (bassez_table_name in c(
+      "methods", "features", "pcs", "proportions", "marker_coverage", "sensitivity"
+    )) {
+      df_results_list[[paste0("Bassez_", bassez_table_name)]] <-
+        bassez_diagnostics[[bassez_table_name]]
+    }
+  }
+}
+```
+
+### Bassez: opt-in matched all-cell composition comparison
+
+The original authors-HR composition covers 24,139 cells in 33 retained fine
+categories, whereas all-cell pseudobulk covers 74,948 cells in the same 26
+samples. Merely appending nonimmune broad categories to HR misses T/myeloid
+cells without a retained subtype. This comparison instead uses the original
+metadata cross-tab: retain valid author `cellSubType`, otherwise use author
+`cellType`. Missing subtypes are actual missing values or the exact strings
+`NA`, `nan`, `None`, `Unknown`, and the empty string. It verifies the original
+HR and broad LR counts **exactly for every sample/category** before including
+all cells. The source broad/fine annotations are not a strict hierarchy:
+for example, fine `pDC` occurs under both `Myeloid_cell` and `pDC`, and fine
+`ASDC`/`cDC2` can occur under broad `pDC`. Fine labels are preserved regardless
+of broad parentage; no such cells are discarded or reassigned. The original
+fine `pDC` label and broad fallback `pDC` denote the same population, so the
+literal fine-otherwise-broad rule combines 241 fine-labelled and 10 fallback
+cells into one `pDC` category (251 cells). This verified overlap produces 40
+mixed categories: 33 fine + 8 fallback − 1 shared `pDC`. Fallback coverage
+still counts those 10 cells as fallback; other unsupported label collisions
+stop the comparison rather than silently pooling distinct categories.
+
+This section is disabled unless `ECODA_BASSEZ_ANNOTATION_COUNTS` names a local
+CSV with columns `Sample,cellType,cellSubType,count`. Its adjacent file
+`<CSV path>.md5` must contain one bare 32-character MD5 digest, with optional
+surrounding whitespace. This compact input is a tabulation of original
+metadata, not expression data. No remote input is required by the rest of
+the notebook. Each opted-in run writes a new
+`plots/Bassez_matched_cells_<timestamp>` directory and refuses overwrites.
+The checksum and input path are recorded beside its output tables.
+
+All categories enter count+0.5 row-wise CLR, Euclidean distance and centered,
+unscaled PCA without biological labels. The comparison reports ANOSIM R
+without permutations, k=3 modularity, and mean Ward/PAM ARI from full-feature
+distances, not the first two PCs. E/NE denotes **Expander/Non-expander T-cell
+expansion, not clinical response**. These are descriptive separation scores:
+matching cells removes the HR/all-cell scope difference, but does not imply
+a causal or clinical interpretation. This does not replace pseudobulk on the
+exact original HR33 cell subset; that requires expression-level subsetting.
+
+```{r bassez-matched-allcell-comparison, fig.height=6, fig.width=18, results='asis'}
+bassez_annotation_path <- Sys.getenv("ECODA_BASSEZ_ANNOTATION_COUNTS", unset = "")
+if (!nzchar(bassez_annotation_path)) {
+  message("Skipping matched all-cell comparison: ECODA_BASSEZ_ANNOTATION_COUNTS is unset.")
+} else {
+  bassez_matched_cells <- local({
+    input_path <- normalizePath(bassez_annotation_path, mustWork = TRUE)
+    checksum_path <- paste0(input_path, ".md5")
+    if (!file.exists(checksum_path)) {
+      stop("Missing adjacent bare MD5 checksum file: ", checksum_path)
+    }
+    expected_md5 <- trimws(paste(readLines(checksum_path, warn = FALSE),
+                                collapse = "\n"))
+    actual_md5 <- unname(tools::md5sum(input_path))
+    if (!grepl("^[0-9a-fA-F]{32}$", expected_md5) ||
+        is.na(actual_md5) || tolower(expected_md5) != tolower(actual_md5)) {
+      stop("Bassez annotation cross-tab MD5 does not match its checksum file.")
+    }
+    if (!exists("result_list") ||
+        is.null(result_list[["bmark"]][["Bassez"]])) {
+      stop("Opted-in all-cell comparison requires loaded Bassez method bundles.")
+    }
+    annotation_counts <- utils::read.csv(
+      input_path, stringsAsFactors = FALSE, check.names = FALSE,
+      na.strings = NULL,
+      colClasses = c(Sample = "character", cellType = "character",
+                     cellSubType = "character", count = "numeric")
+    )
+    bundles <- result_list[["bmark"]][["Bassez"]]
+    comparison <- bassez_allcell_comparison(annotation_counts, bundles)
+    method_titles <- c(
+      ECODA_authors_HR = "ECODA authors HR (24,139 cells)",
+      ECODA_authors_mixed_allcells = "ECODA mixed all cells (74,948 cells)",
+      Pseudobulk_hvg2000 = "Pseudobulk HVG2000 (74,948 cells)"
+    )
+    label_names <- c(E = "Expander (E)", NE = "Non-expander (NE)")
+    plot_labels <- factor(unname(label_names[comparison$labels]),
+                          levels = unname(label_names))
+    panels <- lapply(names(method_titles), function(method) {
+      x <- if (method == "ECODA_authors_mixed_allcells") {
+        comparison$feat_mat
+      } else {
+        bundles[[method]]$feat_mat
+      }
+      plot_pca(
+        feat_mat = x, labels = plot_labels, scale. = FALSE,
+        n_ct_show = 7, invisible = "quali", repel = TRUE,
+        coord_equal = FALSE, title = method_titles[[method]],
+        cluster_score = FALSE, mod_score = FALSE,
+        sil_score = FALSE, anosim_score = FALSE
+      )
+    })
+    pca_plot <- patchwork::wrap_plots(panels, nrow = 1) +
+      patchwork::plot_layout(guides = "collect") +
+      patchwork::plot_annotation(
+        title = "Bassez: HR versus matched all-cell composition and pseudobulk",
+        subtitle = "E/NE is expansion, not clinical response; seven label-blind contribution arrows per panel"
+      )
+    print(knitr::kable(comparison$methods, digits = 4,
+                       caption = "Full-feature separation; no ANOSIM permutation tests."))
+    print(knitr::kable(comparison$coverage, digits = 4,
+                       caption = "Original metadata coverage: fine subtype versus broad fallback."))
+    print(pca_plot)
+    output_dir <- file.path(
+      if (exists("path_plots")) path_plots else file.path(getwd(), "plots"),
+      paste0("Bassez_matched_cells_", format(Sys.time(), "%Y%m%dT%H%M%S"))
+    )
+    if (file.exists(output_dir)) {
+      stop("Refusing to overwrite matched-cell outputs: ", output_dir)
+    }
+    if (!dir.create(output_dir, recursive = TRUE)) {
+      stop("Could not create matched-cell output directory: ", output_dir)
+    }
+    for (table_name in c("methods", "coverage", "fallback_counts")) {
+      utils::write.csv(comparison[[table_name]],
+                       file.path(output_dir, paste0("Bassez_", table_name, ".csv")),
+                       row.names = FALSE)
+    }
+    for (table_name in c("raw_counts", "counts")) {
+      count_table <- data.frame(
+        Sample = rownames(comparison[[table_name]]),
+        comparison[[table_name]], check.names = FALSE, row.names = NULL
+      )
+      utils::write.csv(count_table,
+                       file.path(output_dir, paste0("Bassez_", table_name, ".csv")),
+                       row.names = FALSE)
+    }
+    utils::write.csv(
+      data.frame(input_path = input_path, md5 = actual_md5),
+      file.path(output_dir, "Bassez_annotation_source.csv"), row.names = FALSE
+    )
+    for (extension in c("pdf", "png")) {
+      ggplot2::ggsave(
+        file.path(output_dir, paste0("Bassez_matched_cells_PCA.", extension)),
+        plot = pca_plot, width = 18, height = 6, dpi = 300
+      )
+    }
+    attr(comparison, "output_dir") <- output_dir
+    comparison
+  })
+}
+```
+
 ### Figure 3 A: ECODA annotation method comparison
+
+The original Figure 3A export is retained. The additional
+`Figure_3_A_annotationmethods_barplot_anosim_cleanlabels_45deg.pdf` uses the
+same data and comparisons, removes `ECODA_` from display labels, capitalizes
+their first letter, and rotates them 45° with extra left margin.
+The `_noharmony.pdf` variant additionally excludes Harmony Leiden resolution 2,
+retaining the remaining methods, their order, and the paired comparisons.
 
 ### Supp fig 18: paired annotation-method Modularity and ARI comparison
 
@@ -1432,6 +1726,33 @@ p <- ggplot(df_plot, aes(x = method, y = value)) +
 print(p)
 ggsave(file.path(path_plots, "Figure_3_A_annotationmethods_barplot_anosim.pdf"),
        plot = p,
+       width = 5,
+       height = 5)
+
+# Display-only variant: retain method keys, ordering, and paired comparisons.
+# Extra left margin keeps the first right-aligned, rotated label on the page.
+p_annotation_clean_labels <- p +
+  scale_x_discrete(labels = function(x) {
+    labels <- sub("^ECODA_", "", x)
+    paste0(toupper(substr(labels, 1, 1)), substring(labels, 2))
+  }) +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+    plot.margin = margin(t = 5.5, r = 5.5, b = 5.5, l = 24)
+  )
+print(p_annotation_clean_labels)
+ggsave(file.path(path_plots, "Figure_3_A_annotationmethods_barplot_anosim_cleanlabels_45deg.pdf"),
+       plot = p_annotation_clean_labels,
+       width = 5,
+       height = 5)
+
+p_annotation_clean_labels_noharmony <- p_annotation_clean_labels
+p_annotation_clean_labels_noharmony$data <- filter(
+  p_annotation_clean_labels$data, method != "ECODA_Leiden_res_2_harmony"
+)
+print(p_annotation_clean_labels_noharmony)
+ggsave(file.path(path_plots, "Figure_3_A_annotationmethods_barplot_anosim_cleanlabels_45deg_noharmony.pdf"),
+       plot = p_annotation_clean_labels_noharmony,
        width = 5,
        height = 5)
 
@@ -1573,14 +1894,17 @@ ggsave(
 
 #### Figure 3 B: Plot PCA for selected annot. methods (Adams)
 
+Panel titles omit `ECODA_` and start with a capital letter. The unsupervised
+panel uses non-Harmony Leiden resolution 0.4; the other PCA inputs are unchanged.
+
 ```{r fig.height=8, fig.width=8}
 ds <- "Adams"
 
 methods <- list(
-  "ECODA_authors_HR" = "ECODA_authors_HR",
-  "ECODA_seuratres_5" = "ECODA_Leiden_res_5",
-  "ECODA_HiTME_HR_layer2" = "ECODA_HiTME",
-  "ECODA_authors_LR" = "ECODA_authors_LR"
+  "ECODA_authors_HR" = "Authors_HR",
+  "ECODA_seuratres_0.4" = "Leiden_res_0.4",
+  "ECODA_HiTME_HR_layer2" = "HiTME",
+  "ECODA_authors_LR" = "Authors_LR"
   # "ECODA_scATOMIC_HR" = "ECODA_scATOMIC",
   # "ECODA_deconv" = "ECODA_deconv"
   # "ECODA_seuratres_0.1" = "ECODA_Leiden_res_0.1"
@@ -1609,6 +1933,145 @@ wrap_plots(plot_list) +
 ggsave(file.path(path_plots, "Figure_3_B_annotationmethods_pca_adams.pdf"),
        width = 8,
        height = 7)
+```
+
+#### Presentation: Adams annotation correspondence matrix
+
+This cell-level correspondence table compares Authors_HR (columns) with the
+persisted, non-Harmony Leiden_res_0.4 clusters (rows); cluster IDs are not
+predicted author labels. Each author column sums to 100% before rounding.
+Clusters are hierarchically ordered by their author-type composition; author
+types are grouped by their strongest matching cluster, then decreasing match.
+All entries, including zeros, show two decimal places. The large-format PDF
+retains all 38 author types and 21 clusters rather than merging annotations.
+The ordering exposes a stair-step diagonal band without merging categories or
+changing percentages; several author types can share the same Leiden cluster.
+
+The notebook reads only compact counts. Generate them once with the repository
+Pixi Python and `src/extract_adams_annotation_correspondence.py --h5ad
+<NAS-Adams-benchmark-H5AD> --output-dir
+data/derived/adams_annotation_correspondence_res0.4_20261023`. The exporter reads
+only the configured author annotation, the persisted Leiden column, and cell IDs, never expression or
+embedding values. Its manifest records source identity and selected-metadata
+SHA256; it does not claim a fresh whole-H5AD checksum.
+
+```{r adams_annotation_correspondence, fig.width=18, fig.height=12}
+adams_correspondence_override <- Sys.getenv(
+  "ECODA_ADAMS_CORRESPONDENCE_DIR", unset = NA_character_
+)
+adams_correspondence_root <- if (is.na(adams_correspondence_override)) {
+  file.path(path_data, "derived", "adams_annotation_correspondence_res0.4_20261023")
+} else {
+  adams_correspondence_override
+}
+if (is.na(adams_correspondence_override) && !dir.exists(adams_correspondence_root)) {
+  message("Optional Adams correspondence figure skipped: no compact export at ",
+          adams_correspondence_root)
+} else {
+  adams_correspondence_manifest <- jsonlite::read_json(
+    file.path(adams_correspondence_root, "manifest.json"), simplifyVector = TRUE
+  )
+  adams_correspondence_path <- file.path(adams_correspondence_root, "counts.csv")
+  adams_correspondence_identity <- .derived_sidecar(adams_correspondence_path)
+  stopifnot(
+    identical(adams_correspondence_manifest$dataset, "Adams"),
+    identical(adams_correspondence_manifest$view, "benchmark_analysis"),
+    identical(adams_correspondence_manifest$author_column,
+              datasets[["Adams"]]$cell_type_high_res),
+    identical(adams_correspondence_manifest$leiden_column,
+              "leiden_res_0.4_benchmark_analysis_hvg2000"),
+    identical(adams_correspondence_identity$md5,
+              adams_correspondence_manifest$counts_md5),
+    adams_correspondence_identity$size == adams_correspondence_manifest$counts_size
+  )
+  adams_correspondence_counts <- as.matrix(read.csv(
+    adams_correspondence_path, row.names = 1, check.names = FALSE
+  ))
+  stopifnot(
+    is.numeric(adams_correspondence_counts),
+    all(is.finite(adams_correspondence_counts)),
+    all(adams_correspondence_counts >= 0),
+    all(adams_correspondence_counts == floor(adams_correspondence_counts)),
+    nrow(adams_correspondence_counts) == adams_correspondence_manifest$n_author_types,
+    ncol(adams_correspondence_counts) == adams_correspondence_manifest$n_leiden_clusters,
+    sum(adams_correspondence_counts) == adams_correspondence_manifest$n_cells,
+    all(rowSums(adams_correspondence_counts) > 0),
+    all(colSums(adams_correspondence_counts) > 0)
+  )
+  # Similar cluster compositions stay adjacent; names do not determine order.
+  adams_cluster_purity <- sweep(
+    adams_correspondence_counts, 2, colSums(adams_correspondence_counts), "/"
+  )
+  adams_cluster_order <- hclust(
+    dist(t(adams_cluster_purity)), method = "average"
+  )$order
+  adams_correspondence_counts <- adams_correspondence_counts[
+    , adams_cluster_order, drop = FALSE
+  ]
+  adams_author_percent <- 100 * prop.table(adams_correspondence_counts, 1)
+  adams_author_order <- order(
+    max.col(adams_author_percent, ties.method = "first"),
+    -apply(adams_author_percent, 1, max)
+  )
+  adams_correspondence_counts <- adams_correspondence_counts[
+    adams_author_order, , drop = FALSE
+  ]
+  adams_correspondence_percent <- 100 * prop.table(adams_correspondence_counts, 1)
+  stopifnot(all(abs(rowSums(adams_correspondence_percent) - 100) < 1e-8))
+  adams_correspondence_df <- as.data.frame(
+    as.table(adams_correspondence_percent),
+    responseName = "percentage", stringsAsFactors = FALSE
+  )
+  names(adams_correspondence_df)[1:2] <- c("Authors_HR", "Leiden_res_0.4")
+  adams_correspondence_df$Authors_HR <- factor(
+    adams_correspondence_df$Authors_HR,
+    levels = rownames(adams_correspondence_counts)
+  )
+  adams_correspondence_df$Leiden_res_0.4 <- factor(
+    adams_correspondence_df$Leiden_res_0.4,
+    levels = rev(colnames(adams_correspondence_counts))
+  )
+  p_adams_correspondence <- ggplot(
+    adams_correspondence_df,
+    aes(x = Authors_HR, y = Leiden_res_0.4, fill = percentage)
+  ) +
+    geom_tile(color = "white", linewidth = 0.15) +
+    geom_text(
+      aes(label = sprintf("%.2f", percentage),
+          color = ifelse(percentage >= 50, "white",
+                         ifelse(percentage == 0, "grey65", "black"))),
+      size = 2.8
+    ) +
+    scale_color_identity() +
+    scale_fill_gradient(
+      low = "white", high = "#2166AC", limits = c(0, 100),
+      breaks = c(0, 25, 50, 75, 100), name = "% of author type"
+    ) +
+    scale_x_discrete(expand = c(0, 0)) +
+    scale_y_discrete(expand = c(0, 0)) +
+    coord_fixed() +
+    labs(
+      title = "Adams: Authors_HR and Leiden_res_0.4 annotation correspondence",
+      subtitle = paste0(
+        format(sum(adams_correspondence_counts), big.mark = ","),
+        " cells | Column-normalized percentages; each author type sums to 100%"
+      ),
+      x = "Authors_HR cell type (grouped by strongest Leiden match)",
+      y = "Leiden_res_0.4 cluster"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      panel.grid = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+      axis.text.y = element_text(size = 10),
+      plot.margin = margin(12, 18, 12, 18)
+    )
+  print(p_adams_correspondence)
+  ggsave(
+    file.path(path_plots, "presentation_Figure_3_B_correspondance_matrix.pdf"),
+    plot = p_adams_correspondence, width = 18, height = 12
+  )
+}
 ```
 
 #### Supp fig 19: Plot PCA for selected annot. methods (GongSharma)
@@ -2632,7 +3095,13 @@ ggsave(file.path(path_plots, "Supp_fig_14B_benchmark_mem_GB.pdf"),
 
 ## Main plot (with funkyheatmap)
 
-```{r fig.height=6, fig.width=12}
+Figure 2A reserves extra space above the rotated dataset labels and exports at
+6.5 inches high to avoid top clipping. The layout-only publication refresh
+reuses `data/raw_data_for_publication.xlsx` and the checksum-verified preserved
+`execution_times_OLD.feather` snapshot to retain the existing runtime bars;
+ordinary notebook execution continues to use its configured current inputs.
+
+```{r fig.height=6.5, fig.width=12}
 # Parameterized funky-heatmap builder (src/utils/plotting.R): merges exec
 # times, filters/recodes, ranks + min-max scales, aggregates and plots.
 # Metrics are restricted to the notebook-level benchmark_metrics parameter
@@ -2674,7 +3143,8 @@ build_funky_heatmap(
   output_file = "Figure_2_A_benchmark_mainmethods.pdf",
   output_dir = path_plots,
   plot_width = 10,
-  plot_height = 6
+  plot_height = 6.5,
+  top_padding = 2
 )
 ```
 
@@ -4185,3 +4655,765 @@ ggsave(
 }
 ```
 
+
+# Exploratory Stephenson UCell activity versus ECODA
+
+This optional analysis reads only the compact, checksum-verified local export
+and cached benchmark results; it never opens the full H5AD, exports data, or
+contacts HPC. The raw named list
+`stephenson_ucell_matrices` retains all 16 annotation-by-score matrices, including
+missing sample/type groups. `stephenson_ucell_coverage` describes every matrix.
+
+The export was generated on Bamboo by `src/extract_stephenson_ucell.py` from the
+configured Stephenson benchmark H5AD (418,768 cells; 55 samples), reading only
+selected `obs` columns. No minimum-cell cutoff is applied to the exported means;
+`stephenson_ucell_artifacts$counts` retains the corresponding sample/type counts
+for threshold exploration. The manifest records selected-metadata and output
+SHA256 hashes. The original H5AD checksum sidecar is recorded as provenance,
+not claimed as a freshly verified whole-file checksum.
+
+Aggregation and feature selection are label independent. For PCA we retain only
+cell-type columns that are finite in **every sample** and nonconstant, without
+dropping samples. This restriction can be substantial (especially for rare
+types); the tables report retained coverage and **names** of excluded columns.
+Absent activity is not zero and is never zero-imputed. UCell activities are
+centered but **unscaled**, with no CLR or log transform. Matching ECODA features
+are aligned by exact sample IDs, not row position; their own complete,
+nonconstant feature set need not match the UCell cell-type subset. Labels enter
+only after feature selection, for colors and evaluation. ANOSIM, modularity
+(k=3), and ARI are recomputed from full feature-space distances, not PC1/2 or
+cached benchmark scores. These exploratory scores are not added to the canonical
+benchmark results and are not combined into an aggregate score.
+Only ANOSIM is displayed on the plots; ARI and modularity remain in the saved tables.
+
+For IFN, arrows can share the same PC1 direction despite correct centering:
+the retained cell-type activities are strongly positively correlated.
+Centering removes feature means, not shared variation; the axis sign is arbitrary.
+
+All panels use the reference Stephenson benchmark Status colors (Covid:
+`#F8766D`; Healthy: `#00BFC4`). PC1–PC2 biplots show feature arrows ranked by
+variance-weighted contribution across PC1 and PC2, not additional principal-component
+axes: the defaults are up to 12 cell-type loadings for UCell/ECODA and 15 gene loadings
+for pseudobulk (adjust the latter to 10–20 below). Fewer arrows are shown when fewer features remain.
+
+The separate gene-expression PCA uses the cached, normalized
+`Pseudobulk_hvg2000` matrix, excluding the 155 `IGH`/`IGK`/`IGL`-prefixed features
+before PCA (55 samples × 1,845 remaining genes). This is an explicit exploratory
+IG exclusion, not the legacy `_bl` bundle: that cached variant is identical to
+the unfiltered matrix. Normalization is unchanged; excluded genes are not
+replaced by other HVGs. Exact sample IDs and labels are checked before comparison.
+No pseudobulk is generated here, and canonical benchmark artifacts remain unchanged.
+
+```{r stephenson_ucell_exploration, fig.width=10, fig.height=4}
+source("src/notebooks/stephenson_ucell.R")
+stephenson_ucell_override <- Sys.getenv("ECODA_STEPHENSON_UCELL_DIR", unset = NA_character_)
+stephenson_ucell_root <- if (is.na(stephenson_ucell_override)) {
+  file.path("data", "derived", "stephenson_ucell_20261022")
+} else {
+  stephenson_ucell_override
+}
+
+# Adjust these simple variables for interactive exploration.
+# Author HR produces UCell + matching ECODA panels side by side.
+# HiTME keys (UCell-only) are "hitme_layer1" and "hitme_layer2".
+stephenson_ucell_score <- "IFN_UCell"
+stephenson_ucell_annotations_selected <- "authors_highres"
+stephenson_ucell_n_loadings <- 12L
+stephenson_pseudobulk_n_loadings <- 15L
+# Other scores: HeatShock_UCell, cellCycle.G1S_UCell, cellCycle.G2M_UCell.
+
+if (is.na(stephenson_ucell_override) && !dir.exists(stephenson_ucell_root)) {
+  message("Optional Stephenson UCell section skipped: no compact export at ",
+          stephenson_ucell_root)
+} else {
+  # Explicit override paths must exist; malformed or corrupt artifacts fail.
+  stephenson_ucell_artifacts <- load_stephenson_ucell(stephenson_ucell_root)
+  stephenson_ucell_matrices <- stephenson_ucell_artifacts$matrices
+  stephenson_ucell_coverage <- stephenson_ucell_artifacts$coverage
+  print(names(stephenson_ucell_matrices))
+  print(stephenson_ucell_coverage, row.names = FALSE)
+  stephenson_ucell_comparison <- compare_stephenson_ucell(
+    stephenson_ucell_artifacts,
+    ecoda_bundles = result_list[["bmark"]][["Stephenson"]],
+    score = stephenson_ucell_score,
+    annotations = stephenson_ucell_annotations_selected,
+    n_loadings = stephenson_ucell_n_loadings,
+    seed = 20261022L
+  )
+  print(stephenson_ucell_comparison$table, row.names = FALSE)
+  print(stephenson_ucell_comparison$plot)
+  if (is.null(result_list[["bmark"]][["Stephenson"]][["Pseudobulk_hvg2000"]])) {
+    stop("Missing cached Stephenson Pseudobulk_hvg2000 bundle; load the local benchmark results before running this section.")
+  }
+  stephenson_pseudobulk_comparison <- compare_stephenson_pseudobulk(
+    stephenson_ucell_artifacts,
+    result_list[["bmark"]][["Stephenson"]][["Pseudobulk_hvg2000"]],
+    n_loadings = stephenson_pseudobulk_n_loadings,
+    seed = 20261022L
+  )
+  print(stephenson_pseudobulk_comparison$table, row.names = FALSE)
+  print(stephenson_pseudobulk_comparison$plot)
+  dir.create(path_plots, recursive = TRUE, showWarnings = FALSE)
+  stephenson_ucell_output <- paste0(
+    "exploratory_Stephenson_UCell_", stephenson_ucell_score, "_",
+    paste(stephenson_ucell_annotations_selected, collapse = "_")
+  )
+  ggplot2::ggsave(
+    file.path(path_plots, paste0(stephenson_ucell_output, ".pdf")),
+    plot = stephenson_ucell_comparison$plot, width = 10,
+    height = 4 * ceiling(length(stephenson_ucell_comparison$features) / 2)
+  )
+  utils::write.csv(
+    stephenson_ucell_comparison$table,
+    file.path(path_plots, paste0(stephenson_ucell_output, "_scores_coverage.csv")),
+    row.names = FALSE, na = ""
+  )
+  utils::write.csv(
+    stephenson_ucell_coverage,
+    file.path(path_plots, "exploratory_Stephenson_UCell_all_matrix_coverage.csv"),
+    row.names = FALSE, na = ""
+  )
+  stephenson_pseudobulk_output <- "exploratory_Stephenson_Pseudobulk_hvg2000_IGexcluded_PCA"
+  ggplot2::ggsave(
+    file.path(path_plots, paste0(stephenson_pseudobulk_output, ".pdf")),
+    plot = stephenson_pseudobulk_comparison$plot, width = 5, height = 4
+  )
+  utils::write.csv(
+    stephenson_pseudobulk_comparison$table,
+    file.path(path_plots, paste0(stephenson_pseudobulk_output, "_scores.csv")),
+    row.names = FALSE, na = ""
+  )
+  utils::write.csv(
+    data.frame(gene = stephenson_pseudobulk_comparison$excluded_genes),
+    file.path(path_plots, paste0(stephenson_pseudobulk_output, "_excluded_genes.csv")),
+    row.names = FALSE
+  )
+}
+```
+
+# Exploratory Stephenson author-LR CD14 pseudobulk
+
+This independent optional section reads only a compact local normalized export.
+It does not require the UCell export, open an H5AD, access HPC, or insert anything
+into `result_list`. The selection is exactly dataset-level
+`initial_clustering == "CD14"` (author low resolution), **not** high-resolution
+`CD14_mono`. All 55 benchmark samples must be present, each with at least five
+selected cells; missing samples are errors, not zero-imputed observations.
+
+Upstream, raw `layers["counts"]` are summed within CD14 by Sample, retaining
+all genes for DESeq2 size factors and blind VST. The existing pseudobulk helper
+then selects the 2,000 most variable transformed genes **within CD14** using
+`hvg=NULL`, `n_hvg=2000`, `black_list="none"`, `batch_col=NULL`, `blind=TRUE`,
+and `correct_batch=FALSE`. Only Sample metadata enters that helper. Status is
+reserved for evaluation and colors, never normalization, HVG selection, or PCA.
+This is plain HVG2000: **no IG exclusion**, unlike the separate whole-sample
+pseudobulk exploration above. Actual feature dimensions and minimum/maximum
+CD14 cell counts are displayed from the validated export, not inferred from
+the whole-sample pseudobulk.
+
+The current export contains 103,326 author-LR CD14 cells across all 55 samples
+(159–5,661 cells per sample), summed over 18,561 genes before normalization.
+The 55 × 2,000 normalized feature matrix, cell counts, labels, source identity,
+and checksums are stored separately from canonical benchmark artifacts.
+
+The centered, unscaled gene-expression PCA uses the same Covid (`#F8766D`) and
+Healthy (`#00BFC4`) colors, with 8 contribution-ranked gene arrows by default.
+ANOSIM, modularity (k=3), and ARI use full-feature distances. When the local
+author-LR/HR ECODA bundles are loaded, their complete sample universes and
+Status labels must agree exactly with this export. Scores remain exploratory.
+Only ANOSIM is displayed on the plot; the other metrics remain in the saved table.
+
+```{r stephenson_cd14_pseudobulk_exploration, fig.width=5, fig.height=4}
+source("src/notebooks/stephenson_ucell.R")
+stephenson_cd14_override <- Sys.getenv("ECODA_STEPHENSON_CD14_DIR", unset = NA_character_)
+stephenson_cd14_root <- if (is.na(stephenson_cd14_override)) {
+  file.path("data", "derived", "stephenson_cd14_pseudobulk_20261022")
+} else {
+  stephenson_cd14_override
+}
+stephenson_cd14_n_loadings <- 8L
+
+if (is.na(stephenson_cd14_override) && !dir.exists(stephenson_cd14_root)) {
+  message("Optional Stephenson CD14 section skipped: no compact export at ",
+          stephenson_cd14_root)
+} else {
+  # An explicitly set override, even empty, must resolve to a valid export.
+  stephenson_cd14_bundle <- load_stephenson_cd14_pseudobulk(stephenson_cd14_root)
+  if (exists("result_list")) {
+    for (method in c("ECODA_authors_LR", "ECODA_authors_HR")) {
+      cached <- result_list[["bmark"]][["Stephenson"]][[method]]
+      if (!is.null(cached)) {
+        invisible(align_stephenson_bundle(
+          cached, rownames(stephenson_cd14_bundle$feat_mat), stephenson_cd14_bundle$labels
+        ))
+      }
+    }
+  }
+  validate_stephenson_n_loadings(stephenson_cd14_n_loadings)
+  stephenson_cd14_comparison <- stephenson_pca_comparison(
+    stephenson_cd14_bundle$feat_mat, stephenson_cd14_bundle$labels,
+    title = "CD14+ monocytes pseudobulk: HVG2000",
+    n_loadings = stephenson_cd14_n_loadings, seed = 20261022L
+  )
+  stephenson_cd14_scores <- data.frame(
+    method = "Pseudobulk_CD14LR_hvg2000",
+    n_samples = nrow(stephenson_cd14_bundle$feat_mat),
+    n_features = ncol(stephenson_cd14_bundle$feat_mat),
+    min_CD14_cells = min(stephenson_cd14_bundle$metadata$n_cells),
+    max_CD14_cells = max(stephenson_cd14_bundle$metadata$n_cells),
+    ANOSIM = stephenson_cd14_comparison$ANOSIM,
+    modularity_k3 = stephenson_cd14_comparison$modularity_k3,
+    ARI = stephenson_cd14_comparison$ARI
+  )
+  print(stephenson_cd14_scores, row.names = FALSE)
+  print(stephenson_cd14_comparison$plot)
+  dir.create(path_plots, recursive = TRUE, showWarnings = FALSE)
+  stephenson_cd14_output <- "exploratory_Stephenson_CD14_LR_pseudobulk_hvg2000_PCA"
+  ggplot2::ggsave(
+    file.path(path_plots, paste0(stephenson_cd14_output, ".pdf")),
+    plot = stephenson_cd14_comparison$plot, width = 5, height = 4
+  )
+  utils::write.csv(
+    stephenson_cd14_scores,
+    file.path(path_plots, paste0(stephenson_cd14_output, "_scores.csv")),
+    row.names = FALSE
+  )
+}
+```
+
+# Exploratory Stephenson HiTME composition PCAs
+
+These are two separate PCAs of the cached CLR composition features, not of
+sample-distance matrices or UCell means. They retain all benchmark samples,
+use centered, unscaled PCA and display ANOSIM from the complete feature space.
+Layer 3 includes HiTME functional-state tags; layer 2 does not. No annotations,
+positivity cutoffs or canonical benchmark outputs are changed.
+
+```{r stephenson_hitme_pca_exploration, fig.width=7, fig.height=5}
+source("src/notebooks/stephenson_ucell.R")
+if (!exists("result_list") || is.null(result_list[["bmark"]][["Stephenson"]])) {
+  message("Optional Stephenson HiTME PCAs skipped: no loaded Stephenson bundles.")
+} else {
+  stephenson_hitme_bundles <- result_list[["bmark"]][["Stephenson"]]
+  stephenson_hitme_reference <- stephenson_hitme_bundles[["ECODA_authors_HR"]]
+  if (is.null(stephenson_hitme_reference)) stop("Missing Stephenson reference labels.")
+  stephenson_hitme_ids <- rownames(stephenson_hitme_reference$feat_mat)
+  stephenson_hitme_labels <- stephenson_hitme_reference$labels
+  stephenson_hitme_methods <- c(
+    ECODA_HiTME_HR_layer2 = "HiTME layer 2",
+    ECODA_HiTME_HR_layer3 = "HiTME layer 3"
+  )
+  stephenson_hitme_plots <- stephenson_hitme_score_rows <- list()
+  dir.create(path_plots, recursive = TRUE, showWarnings = FALSE)
+  for (method in names(stephenson_hitme_methods)) {
+    bundle <- stephenson_hitme_bundles[[method]]
+    if (is.null(bundle)) stop("Missing requested Stephenson bundle: ", method)
+    selected <- align_stephenson_bundle(
+      bundle, stephenson_hitme_ids, stephenson_hitme_labels
+    )
+    comparison <- stephenson_pca_comparison(
+      selected$features, stephenson_hitme_labels,
+      title = paste("Stephenson:", stephenson_hitme_methods[[method]]),
+      n_loadings = 8L, seed = 20261026L
+    )
+    stephenson_hitme_plots[[method]] <- comparison$plot
+    stephenson_hitme_score_rows[[method]] <- data.frame(
+      method = method, n_samples = nrow(selected$features),
+      n_features = ncol(selected$features), ANOSIM = comparison$ANOSIM,
+      modularity_k3 = comparison$modularity_k3, ARI = comparison$ARI
+    )
+    print(comparison$plot)
+    prefix <- paste0("exploratory_Stephenson_HiTME_",
+                     sub("^ECODA_HiTME_HR_", "", method), "_PCA")
+    for (extension in c("pdf", "png")) {
+      ggplot2::ggsave(
+        file.path(path_plots, paste0(prefix, ".", extension)),
+        plot = comparison$plot, width = 7, height = 5, dpi = 300
+      )
+    }
+  }
+  stephenson_hitme_scores <- do.call(rbind, stephenson_hitme_score_rows)
+  rownames(stephenson_hitme_scores) <- NULL
+  print(stephenson_hitme_scores, row.names = FALSE)
+  utils::write.csv(
+    stephenson_hitme_scores,
+    file.path(path_plots, "exploratory_Stephenson_HiTME_PCA_scores.csv"),
+    row.names = FALSE
+  )
+}
+```
+
+# Exploratory Stephenson cell-level UCell cutoff diagnostics
+
+The default HiTME layer-3 rule is **score > 0.2**, strictly, for G1/S, G2/M
+and IFN. The new compact metadata export reproduces all 418,768 stored layer-3
+annotations with that rule, including HeatShock when checking combined tags.
+It contains only selected cell metadata, never expression/count matrices.
+Its manifest records source identity, threshold evidence and a verified
+SHA256 for the exported Feather file; the full source H5AD was not rehashed.
+
+Each plot pools individual cells across samples and shows every HiTME layer-2
+cell type, including an explicit unclassified category. Larger samples have
+more weight in these distributions; these are not violins of sample means.
+The dashed line is the actual annotation cutoff, not an independently
+calibrated biological boundary. In this cohort only 11 cells exceed the IFN
+cutoff, so its suitability deserves particular scrutiny. No cutoff is changed.
+Median points retain constant or rare categories; missing scores are reported,
+not imputed. The CSV reports positive fractions separately for every type.
+Each score's axis includes its full observed range and the cutoff; tails are
+not removed to enlarge the distributions.
+
+```{r stephenson_ucell_threshold_violins, fig.width=22, fig.height=8}
+stephenson_cell_score_override <- Sys.getenv(
+  "ECODA_STEPHENSON_UCELL_CELLS_DIR", unset = NA_character_
+)
+stephenson_cell_score_root <- if (is.na(stephenson_cell_score_override)) {
+  file.path("data", "derived", "stephenson_ucell_cells_20261026")
+} else {
+  stephenson_cell_score_override
+}
+# Change to "full_clustering" for author HR, or "initial_clustering" for author LR.
+# Layer 2 avoids grouping cells by the functional tags being evaluated.
+stephenson_violin_annotation <- "layer2"
+if (is.na(stephenson_cell_score_override) && !dir.exists(stephenson_cell_score_root)) {
+  message("Optional cell-level UCell violins skipped: no compact metadata at ",
+          stephenson_cell_score_root)
+} else {
+  stephenson_cell_scores <- load_stephenson_ucell_cell_scores(stephenson_cell_score_root)
+  if (exists("result_list") &&
+      !is.null(result_list[["bmark"]][["Stephenson"]][["ECODA_authors_HR"]])) {
+    reference <- result_list[["bmark"]][["Stephenson"]][["ECODA_authors_HR"]]
+    sample_status <- unique(stephenson_cell_scores$cells[c("Sample", "Status")])
+    if (!setequal(sample_status$Sample, names(reference$labels)) ||
+        !identical(sample_status$Status[match(names(reference$labels), sample_status$Sample)],
+                   as.character(reference$labels))) {
+      stop("Cell-score export and Stephenson benchmark samples/labels disagree.")
+    }
+  }
+  stephenson_score_violins <- plot_stephenson_ucell_score_violins(
+    stephenson_cell_scores, annotation = stephenson_violin_annotation
+  )
+  dir.create(path_plots, recursive = TRUE, showWarnings = FALSE)
+  for (score in names(stephenson_score_violins$plots)) {
+    panel <- stephenson_score_violins$plots[[score]]
+    print(panel)
+    prefix <- paste0("exploratory_Stephenson_UCell_", score, "_violin_",
+                     stephenson_violin_annotation)
+    for (extension in c("pdf", "png")) {
+      ggplot2::ggsave(
+        file.path(path_plots, paste0(prefix, ".", extension)),
+        plot = panel, width = 22, height = 8, dpi = 200
+      )
+    }
+  }
+  utils::write.csv(
+    stephenson_score_violins$summary,
+    file.path(path_plots, paste0("exploratory_Stephenson_UCell_threshold_summary_",
+                                stephenson_violin_annotation, ".csv")),
+    row.names = FALSE, na = ""
+  )
+  print(stephenson_cell_scores$thresholds, row.names = FALSE)
+}
+```
+
+# Stephenson: Healthy ECODA MDS outliers
+
+The two visually isolated Healthy samples in Supp fig 11 are `MH8919226` and
+`MH8919227`. This diagnostic uses the same classical MDS coordinates and
+author-HR CLR features as that panel. Raw proportions recover integer counts
+by subtracting the stored 0.5 pseudocount. Feature contributions are squared
+CLR deviations from the other ten Healthy samples' mean, not causal effects.
+The table also includes median proportions among all other 53 samples.
+The absence of major T-cell populations explains the distance; its technical
+or biological origin is not established by these abundance data.
+
+```{r stephenson_healthy_outlier_diagnostics, fig.width=7, fig.height=5}
+if (exists("result_list") &&
+    !is.null(result_list[["bmark"]][["Stephenson"]][["ECODA_authors_HR"]])) {
+  bundle <- result_list[["bmark"]][["Stephenson"]][["ECODA_authors_HR"]]
+  x <- as.matrix(bundle$feat_mat)
+  counts <- as.matrix(bundle$counts) - 0.5
+  stopifnot(all(is.finite(counts)), all(counts >= 0), all(counts == floor(counts)),
+            identical(dimnames(counts), dimnames(x)))
+  outliers <- c("MH8919226", "MH8919227")
+  stopifnot(all(outliers %in% rownames(x)),
+            all(bundle$labels[outliers] == "Healthy"))
+  healthy_reference <- bundle$labels == "Healthy" & !rownames(x) %in% outliers
+  proportions <- 100 * counts / rowSums(counts)
+  driver_rows <- lapply(outliers, function(id) {
+    delta <- x[id, ] - colMeans(x[healthy_reference, , drop = FALSE])
+    data.frame(
+      Sample = id, cell_type = colnames(x), n_cells = counts[id, ],
+      percent = proportions[id, ],
+      other_healthy_median_percent = apply(
+        proportions[healthy_reference, , drop = FALSE], 2, stats::median
+      ),
+      other_samples_median_percent = apply(
+        proportions[!rownames(x) %in% outliers, , drop = FALSE], 2, stats::median
+      ),
+      delta_CLR = delta,
+      distance_contribution_percent = 100 * delta^2 / sum(delta^2),
+      row.names = NULL
+    )
+  })
+  stephenson_outlier_drivers <- do.call(rbind, driver_rows)
+  stephenson_outlier_drivers <- stephenson_outlier_drivers[
+    order(stephenson_outlier_drivers$Sample,
+          -stephenson_outlier_drivers$distance_contribution_percent), ]
+  mds <- stats::cmdscale(bundle$dist_mat, k = 2)
+  highlight <- data.frame(
+    Sample = outliers, Dim1 = mds[outliers, 1], Dim2 = mds[outliers, 2]
+  )
+  stephenson_outlier_plot <- plot_mds(
+    bundle$dist_mat, bundle$labels, cluster_score = FALSE, mod_score = FALSE,
+    anosim_score = FALSE, title = "Stephenson ECODA: Healthy outliers"
+  ) + ggrepel::geom_text_repel(
+    data = highlight, ggplot2::aes(x = Dim1, y = Dim2, label = Sample),
+    inherit.aes = FALSE, seed = 20261026L, size = 3
+  )
+  print(stephenson_outlier_plot)
+  for (extension in c("pdf", "png")) {
+    ggplot2::ggsave(
+      file.path(path_plots, paste0("exploratory_Stephenson_Healthy_outliers_MDS.", extension)),
+      plot = stephenson_outlier_plot, width = 7, height = 5, dpi = 200
+    )
+  }
+  utils::write.csv(
+    stephenson_outlier_drivers,
+    file.path(path_plots, "exploratory_Stephenson_Healthy_outlier_abundance_drivers.csv"),
+    row.names = FALSE
+  )
+}
+```
+
+# Exploratory Stephenson author-annotation abundances
+
+Each box pools all 55 samples for one author-defined cell type; points show
+individual samples, with Covid in red and Healthy in cyan. Crosses identify
+the Healthy outliers `MH8919226` and `MH8919227` (not additional observations).
+Percentages use recovered raw integer counts and preserve true zeros. CLR
+values are the cached features: `log(raw count + 0.5)` minus its within-sample
+mean across all cell types, not a transform of percentages.
+
+```{r stephenson_author_abundance_boxplots, fig.width=c(12,12,20,20), fig.height=c(6,6,7,7)}
+if (!exists("result_list") || is.null(result_list[["bmark"]][["Stephenson"]])) {
+  message("Optional Stephenson author abundance plots skipped: no loaded Stephenson bundles.")
+} else {
+  stephenson_author_abundance <- local({
+    bundles <- result_list[["bmark"]][["Stephenson"]]
+    methods <- c(ECODA_authors_LR = "authors_LR", ECODA_authors_HR = "authors_HR")
+    outliers <- c("MH8919226", "MH8919227")
+    tables <- plots <- list()
+    reference_labels <- NULL
+    dir.create(path_plots, recursive = TRUE, showWarnings = FALSE)
+    for (method in names(methods)) {
+      bundle <- bundles[[method]]
+      if (is.null(bundle)) stop("Missing requested Stephenson bundle: ", method)
+      counts <- as.matrix(bundle$counts)
+      clr <- as.matrix(bundle$feat_mat)
+      ids <- rownames(counts)
+      types <- colnames(counts)
+      labels <- bundle$labels
+      stopifnot(
+        is.numeric(counts), is.numeric(clr),
+        nrow(counts) == 55L, ncol(counts) > 0L,
+        !is.null(ids), !anyNA(ids), all(nzchar(ids)), !anyDuplicated(ids),
+        !is.null(types), !anyNA(types), all(nzchar(types)), !anyDuplicated(types),
+        identical(dimnames(counts), dimnames(clr)),
+        identical(names(labels), ids), !anyNA(labels),
+        all(as.character(labels) %in% c("Covid", "Healthy")),
+        sum(labels == "Covid") == 43L, sum(labels == "Healthy") == 12L,
+        all(is.finite(counts)), all(is.finite(clr))
+      )
+      raw <- counts - 0.5
+      stopifnot(
+        all(raw >= 0), all(raw == floor(raw)), all(rowSums(raw) > 0),
+        isTRUE(all.equal(clr, log(counts) - rowMeans(log(counts)),
+                         tolerance = 1e-10, check.attributes = FALSE)),
+        all(outliers %in% ids), all(labels[outliers] == "Healthy")
+      )
+      if (!is.null(reference_labels)) {
+        stopifnot(setequal(ids, names(reference_labels)),
+                  identical(as.character(labels),
+                            as.character(reference_labels[ids])))
+      }
+      reference_labels <- labels
+      percent <- 100 * raw / rowSums(raw)
+      annotation <- unname(methods[[method]])
+      tab <- data.frame(
+        Sample = rep(ids, times = length(types)),
+        Status = rep(as.character(labels), times = length(types)),
+        celltype = rep(types, each = length(ids)),
+        annotation = annotation, percent = as.vector(percent),
+        CLR = as.vector(clr), stringsAsFactors = FALSE
+      )
+      tab$is_outlier <- tab$Sample %in% outliers
+      tables[[annotation]] <- tab
+      tab$celltype <- factor(tab$celltype, levels = types)
+      tab$Status <- factor(tab$Status, levels = c("Covid", "Healthy"))
+      tab$sample_marker <- factor(
+        ifelse(tab$is_outlier, "Healthy outliers", "Other samples"),
+        levels = c("Other samples", "Healthy outliers")
+      )
+      for (measure in c("percent", "CLR")) {
+        tab$value <- tab[[measure]]
+        panel <- ggplot2::ggplot(tab, ggplot2::aes(x = celltype, y = value)) +
+          ggplot2::geom_boxplot(
+            fill = "white", colour = "black", outlier.shape = NA, width = 0.65
+          ) +
+          ggplot2::geom_point(
+            ggplot2::aes(colour = Status, shape = sample_marker),
+            position = ggplot2::position_jitter(
+              width = 0.18, height = 0, seed = 20261027L
+            ), size = 1.6, alpha = 0.8
+          ) +
+          ggplot2::scale_colour_manual(
+            values = c(Covid = "#F8766D", Healthy = "#00BFC4"), drop = FALSE
+          ) +
+          ggplot2::scale_shape_manual(
+            values = c("Other samples" = 16, "Healthy outliers" = 4), drop = FALSE
+          ) +
+          ggplot2::labs(
+            title = paste("Stephenson:", gsub("_", " ", annotation), measure),
+            x = "Cell type", y = if (measure == "percent") "Raw cell percentage (%)" else "CLR",
+            colour = "Status", shape = "Sample",
+            caption = paste(
+              "Crosses: Healthy MH8919226 and MH8919227. Raw percentages preserve zeros;",
+              "CLR = log(raw count + 0.5) minus the within-sample mean log count."
+            )
+          ) +
+          ggplot2::theme_classic() +
+          ggplot2::theme(
+            axis.text.x = ggplot2::element_text(angle = 60, hjust = 1, colour = "black"),
+            axis.text.y = ggplot2::element_text(colour = "black"),
+            legend.position = "top"
+          )
+        plots[[paste(annotation, measure, sep = "_")]] <- panel
+        print(panel)
+        prefix <- paste0("exploratory_Stephenson_", annotation, "_", measure, "_boxplot")
+        for (extension in c("pdf", "png")) {
+          ggplot2::ggsave(
+            file.path(path_plots, paste0(prefix, ".", extension)),
+            plot = panel, width = if (annotation == "authors_HR") 20 else 12,
+            height = if (annotation == "authors_HR") 7 else 6, dpi = 300
+          )
+        }
+      }
+    }
+    tidy <- do.call(rbind, tables)
+    rownames(tidy) <- NULL
+    utils::write.csv(
+      tidy, file.path(path_plots, "exploratory_Stephenson_author_abundances.csv"),
+      row.names = FALSE
+    )
+    list(table = tidy, plots = plots)
+  })
+}
+```
+
+# Exploratory Stephenson author-HR IFN-responding composition PCA
+
+This is count splitting, not duplicate augmentation: each cell with
+`IFN_UCell > 0.1` moves from its author-HR type into that type's
+`*_IFN_responding` state. Equality at 0.1 is nonresponding. Original names
+contain only the remaining cells; unobserved responding states are omitted.
+Every cell and sample is retained, and disease labels are used only for
+evaluation/plotting, never to assign states. This exploratory threshold does
+not change the HiTME annotation rule of strictly greater than 0.2 or its
+manifest. PCA uses centered, unscaled CLR of split raw counts plus 0.5;
+ANOSIM uses the complete CLR feature space, not only the displayed PCs.
+
+```{r stephenson_author_hr_ifn_pca, fig.width=8, fig.height=6}
+source("src/notebooks/stephenson_ucell.R")
+if (!exists("result_list") || is.null(result_list[["bmark"]][["Stephenson"]])) {
+  message("Optional Stephenson author-HR IFN PCA skipped: no loaded Stephenson bundles.")
+} else {
+  stephenson_author_hr_ifn <- local({
+    bundle <- result_list[["bmark"]][["Stephenson"]][["ECODA_authors_HR"]]
+    if (is.null(bundle)) stop("Missing requested Stephenson bundle: ECODA_authors_HR")
+    override <- Sys.getenv("ECODA_STEPHENSON_UCELL_CELLS_DIR", unset = NA_character_)
+    root <- if (is.na(override)) {
+      file.path("data", "derived", "stephenson_ucell_cells_20261026")
+    } else {
+      override
+    }
+    if (is.na(override) && !dir.exists(root)) {
+      message("Optional Stephenson author-HR IFN PCA skipped: no compact metadata at ", root)
+      return(NULL)
+    }
+    artifacts <- load_stephenson_ucell_cell_scores(root)
+    split <- stephenson_ifn_split_composition(artifacts, bundle, threshold = 0.1)
+    comparison <- stephenson_pca_comparison(
+      split$feat_mat, split$labels,
+      title = "Stephenson: author HR split by IFN_UCell > 0.1",
+      n_loadings = 8L, seed = 20261027L
+    )
+    prefix <- "exploratory_Stephenson_authors_HR_IFNresponding_threshold0.1_PCA"
+    dir.create(path_plots, recursive = TRUE, showWarnings = FALSE)
+    print(comparison$plot)
+    for (extension in c("pdf", "png")) {
+      ggplot2::ggsave(
+        file.path(path_plots, paste0(prefix, ".", extension)),
+        plot = comparison$plot, width = 8, height = 6, dpi = 300
+      )
+    }
+    scores <- data.frame(
+      method = "authors_HR_IFNresponding", threshold = split$threshold,
+      n_samples = nrow(split$feat_mat), n_features = ncol(split$feat_mat),
+      ANOSIM = comparison$ANOSIM, modularity_k3 = comparison$modularity_k3,
+      ARI = comparison$ARI
+    )
+    # Match the split analysis on the complete original CLR feature space.
+    original_distances <- stats::dist(bundle$feat_mat)
+    set.seed(20261027L)
+    original_anosim <- unname(
+      vegan::anosim(original_distances, split$labels, parallel = 1)$statistic
+    )
+    set.seed(20261027L)
+    original_ari <- clust_eval(original_distances, split$labels)
+    set.seed(20261027L)
+    original_modularity <- calc_modularity(original_distances, split$labels, knn_k = 3)
+    scores <- rbind(
+      data.frame(
+        method = "authors_HR_original", threshold = NA_real_,
+        n_samples = nrow(bundle$feat_mat), n_features = ncol(bundle$feat_mat),
+        ANOSIM = original_anosim, modularity_k3 = original_modularity,
+        ARI = original_ari
+      ),
+      scores
+    )
+    print(scores, row.names = FALSE)
+    utils::write.csv(
+      scores, file.path(path_plots, paste0(prefix, "_scores.csv")), row.names = FALSE
+    )
+    utils::write.csv(
+      data.frame(Sample = rownames(split$raw_counts), split$raw_counts,
+                 check.names = FALSE),
+      file.path(path_plots, paste0(prefix, "_raw_counts.csv")), row.names = FALSE
+    )
+    utils::write.csv(
+      split$per_type, file.path(path_plots, paste0(prefix, "_per_type.csv")),
+      row.names = FALSE
+    )
+    utils::write.csv(
+      split$feature_map, file.path(path_plots, paste0(prefix, "_feature_map.csv")),
+      row.names = FALSE
+    )
+    list(composition = split, comparison = comparison, scores = scores)
+  })
+}
+```
+
+# for presentation
+
+## MDS for all datasets
+
+The methods, dataset scope, distances, and group labels match Supp figs 3–13.
+Separation Score is the unscaled arithmetic mean of the stored ANOSIM, ARI,
+and k=3 Modularity scores, calculated before rounding.
+
+```{r presentation_mds, fig.height=7, fig.width=18}
+presentation_mds_methods <- methods_in_scope_named(list(
+  "ECODA_authors_HR" = "ECODA",
+  "Pseudobulk_hvg2000" = "Pseudobulk",
+  "GloScope_hvg2000_pcadims30" = "GloScope",
+  "GloProp" = "GloProp",
+  "MrVI_hvg2000" = "MrVI",
+  "scPoli_hvg2000_dims15_highres" = "scPoli",
+  "MOFA_hvg2000_factors15" = "MOFA",
+  "PILOT_hvg2000" = "PILOT",
+  "scITD_hvg2000_factors5" = "scITD",
+  "QOT_hvg2000" = "QOT",
+  "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"
+))
+presentation_score_names <- c(
+  "anosim_score", "cluster_score", "mod_knn3_score"
+)
+
+for (ds in names(result_list[["bmark"]])) {
+  presentation_mds_plots <- list()
+  presentation_label_levels <- sort(unique(unlist(lapply(
+    names(presentation_mds_methods), function(m) {
+      as.character(result_list[["bmark"]][[ds]][[m]][["labels"]])
+    }
+  ))))
+  if (ds == "Bassez") {
+    presentation_label_levels <- sort(c("Responders", "Non-responders"))
+  }
+
+  for (m in names(presentation_mds_methods)) {
+    bundle <- result_list[["bmark"]][[ds]][[m]]
+    labels <- as.character(bundle$labels)
+    if (ds == "Bassez") {
+      labels[labels == "E"] <- "Responders"
+      labels[labels == "NE"] <- "Non-responders"
+    }
+    labels <- factor(labels, levels = presentation_label_levels)
+    presentation_scores <- vapply(
+      presentation_score_names, function(s) bundle$scores[[s]], numeric(1)
+    )
+    stopifnot(all(is.finite(presentation_scores)))
+
+    presentation_mds_plots[[m]] <- plot_mds(
+      bundle$dist_mat, labels,
+      cluster_score = FALSE, mod_score = FALSE, anosim_score = FALSE,
+      coord_equal = TRUE, pointsize = 2,
+      title = presentation_mds_methods[[m]]
+    ) +
+      labs(subtitle = sprintf(
+        "Separation Score: %.2f", mean(presentation_scores)
+      )) +
+      scale_color_discrete(limits = presentation_label_levels, drop = FALSE) +
+      guides(shape = "none")
+  }
+
+  presentation_mds_plot <- wrap_plots(presentation_mds_plots) +
+    plot_layout(nrow = 2, guides = "collect") &
+    theme(legend.position = "bottom")
+  print(presentation_mds_plot)
+  ggsave(
+    file.path(path_plots, paste0("presentation_mds_", ds, ".pdf")),
+    plot = presentation_mds_plot, width = 18, height = 7
+  )
+}
+```
+
+## Zhang: frequency versus ECODA PCA
+
+The two PCA plots use author high-resolution cell types without cell-type
+arrows or labels. Scores use the complete feature-space distances, not just
+PC1–PC2.
+The shared tissue legend sits between the panels.
+
+```{r presentation_pca_zhang, fig.height=3.85, fig.width=8.4}
+presentation_pca_methods <- c(
+  "Freq_highres" = "Cell type frequency (%)",
+  "ECODA_authors_HR" = "ECODA"
+)
+if ("Zhang" %in% names(result_list[["bmark"]])) {
+  presentation_pca_plots <- lapply(names(presentation_pca_methods), function(m) {
+    bundle <- result_list[["bmark"]][["Zhang"]][[m]]
+    labels <- factor(bundle$labels)
+    levels(labels) <- tools::toTitleCase(levels(labels))
+
+    plot_pca(
+      feat_mat = bundle$feat_mat, labels = labels,
+      title = presentation_pca_methods[[m]],
+      cluster_score = TRUE, mod_score = TRUE, anosim_score = TRUE,
+      knn_k = 3, pointsize = 3, coord_equal = TRUE,
+      invisible = c("var", "quali")
+    ) +
+      labs(color = "Tissue", shape = "Tissue")
+  })
+
+  presentation_pca_zhang <- wrap_plots(
+    presentation_pca_plots[[1]], guide_area(), presentation_pca_plots[[2]],
+    nrow = 1, widths = c(1, 0.3, 1), guides = "collect"
+  ) & theme(legend.position = "right")
+  print(presentation_pca_zhang)
+  ggsave(
+    file.path(path_plots, "presentation_pca_Zhang.pdf"),
+    plot = presentation_pca_zhang, width = 8.4, height = 3.85
+  )
+}
+```
