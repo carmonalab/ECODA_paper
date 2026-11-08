@@ -11,7 +11,18 @@
   - Axis limits are appropriate for the data.
   - No points fall outside of the axis limits.
   - When possible, choose meaningful tick intervals (e.g. 0.00, 0.25, 0.50, 0.75, 1.00 etc. or -0.25, 0.00, 0.25, 0.50 etc. or 0.0, 0.5, 1.0 with additional subticks at 0.25 or 0.1 intervals). Usually 3-5 major ticks are enough (and minor ticks if needed, e.g. most points fall within 0-1 (so major ticks at 0.0, 0.5, 1.0) but some points might be around -0.1 to -0.2).
-- the default scoring methods should be anosim, modularity (knn3), adjusted rand index (ari) (the other scoring methods are for comparison only and are shown in diagnostic supplemental figures such as Supp_fig_X2; Supp_fig_2 is the explicit five-metric screening exception).
+- Default scoring uses ANOSIM, adjusted kNN-3 modularity, mean Ward/PAM ARI,
+  silhouette, and LISI separation. For aggregate figures, min–max normalize
+  within each dataset/evaluation and metric across compared methods, then
+  weight all five equally in means and rankings. LISI is already transformed
+  to higher-is-better separation; do not invert it again. Reject incomplete or
+  nonfinite metric grids before aggregation. Explicitly single-metric figures
+  retain their stated metric. Other modularity neighborhoods remain diagnostic.
+- Before refreshing the current benchmark/batch figures, read
+  `../.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md`
+  for approved inputs, Kidney evaluation weights, correction-arm identities,
+  and release status. Reuse validated scores or complete missing scores from
+  persisted distances; metric reporting alone does not justify embedding reruns.
 - New additional figures will be highlighted with an "X" (e.g. Supp_fig_1 and a new figure after that should be added as Supp_fig_X2). Renumbering will be done in the end and will be initiated by the user.
 
 ## Findings

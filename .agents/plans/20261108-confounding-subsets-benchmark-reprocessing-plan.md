@@ -1,6 +1,6 @@
 # Confounding subsets, benchmark repairs, and Bamboo reprocessing
 
-Status: **Scope decisions settled; ready for final shared-understanding confirmation before implementation.**
+Status: **IMPLEMENTING. User confirmed shared understanding and authorized implementation, checkpoint/push, documentation harmonization and parallel work.**
 Created: 2026-11-08, Europe/Zurich. Owner: the orchestrator of this chat.
 
 ## 1. Roles, authority, and update contract
@@ -19,6 +19,25 @@ your role and scope. If either is unclear, ask your supervisor before continuing
   durable-gate review; a separate reviewer is useful for implementation work.
 - The orchestrator alone changes authoritative decisions and the launch ledger.
   Other agents return updates; they do not concurrently rewrite the plan.
+- **Concurrent external agents:** the user is assigning separate agents to
+  `notebooks/` and other files outside this task, mainly downstream analysis.
+  The user will give them this plan and instruct them not to commit or push.
+  Their working-tree changes are expected, are not evidence of corruption,
+  and remain owned by those assignments. Preserve them and exclude them from
+  this task's commits/pushes unless explicit shared ownership is agreed.
+  Before touching an overlapping file, coordinate scope rather than replacing,
+  stashing, reverting, or indiscriminately staging their work. Use exact file/
+  hunk staging and verify ownership immediately before each commit.
+- P6 notebook/plot implementation must coordinate with those external agents;
+  the scientific reporting requirements here remain the agreed contract, but
+  downstream execution is not automatically claimed by this orchestrator.
+  The current P1 documentation assignment includes only `notebooks/AGENTS.md`
+  and `notebooks/dataset_onboarding/README.md` inside the notebook tree; flag
+  any overlap there explicitly. Notebook source/helper edits outside those
+  assigned documentation files are not part of the current P1 package.
+- Scientific workers execute the exact committed immutable snapshot. Never
+  pull uncommitted notebook changes into run sources, refresh a running
+  snapshot, or broaden a commit to make the shared working tree appear clean.
 - Keep each work package marked `PLANNED`, `IN_PROGRESS`, `BLOCKED`, `REVIEW`, or
   `DONE`, with commit/evidence links and an explicit completion criterion.
   Configuration recorded, derivative generated, validated, synchronized, and
@@ -29,13 +48,12 @@ immutable manifests retain their original meaning. Link older overlapping
 plans to this checkpoint during documentation harmonization; preserve their
 historical records and unrelated proposals.
 
-Authorization at this checkpoint: maintain this document; the user has chosen
-the scientific scope, including targeted Bassez HR repair and reruns. Complete
-the grilling workflow's final shared-understanding confirmation before starting
-implementation. No implementation, Git commit/push, full-cohort processing, or
-scheduler launch has been performed by this chat. The first implementation
-action is the Git safety checkpoint in section 5; the agreed later compute
-scope remains subject to the recorded integrity and durable-gate prerequisites.
+Authorization: the user explicitly confirmed shared understanding and asked
+to start implementation with logical checkpoint commits pushed to master,
+then documentation harmonization and parallel independent work. P0 is now
+complete. Later compute remains subject to the recorded integrity, immutable
+source/runtime, exact selection, and durable-gate prerequisites. No scheduler
+jobs have been launched under this plan.
 
 Provenance: repository planning anchor
 `5302671ad94556edcf9acccf372d2dc34121d714`; inspected HEAD
@@ -441,10 +459,10 @@ statuses, scientific output roots and one synchronization owner per root.
 
 | Package | Status | Work and completion criterion |
 |---|---|---|
-| P0: safety checkpoint | PLANNED | Inventory/review existing work, commit logical substantive packages directly on current `master`, push to `origin/master`, verify remote commit identities; record exact checkpoint commits |
-| P1: documentation | PLANNED | Harmonize NOTES, onboarding README, AGENTS, durable profile prose and relevant current-plan pointers; consistent participation, host, selection and pending/applied statuses |
-| P2: scoped contracts | PLANNED | Implement whole-sample selection/provenance, safe derivative paths/input references, evaluation metadata, narrow variant selection, and failure isolation; focused tests pass |
-| P3: source reconciliation | PLANNED | On Bamboo verify exact sources/runtime/NAS and extract scoped metadata; resolve counts, Bassez coverage and gene mapping without submitting repair compute; report Bassez impact and obtain its scope decision |
+| P0: safety checkpoint | DONE | Six logical commits pushed to origin/master; remote head verified as `6a1726d4a79f74998c54e968bb045b452b9c93bd` |
+| P1: documentation | DONE | NOTES, onboarding README, both AGENTS guides, Bamboo durable-skill examples and historical-plan pointer harmonized; scoped whitespace and skill validation passed; Git publication recorded below |
+| P2: scoped contracts | IN_PROGRESS | Separate implementors assigned cohort selection and BL core/cache fix; derivative roots, failure isolation and remaining interfaces follow integration |
+| P3: source reconciliation | IN_PROGRESS | Orchestrator handles bounded read-only Bamboo source/runtime/NAS preflight; targeted Bassez scope is already user-approved, subject to unchanged-input proof |
 | P4: changed inputs | PLANNED | Generate and validate 16 batch-view derivatives, Stephenson benchmark derivative, and only the necessary Bassez repair; satisfy benchmark annotation contracts |
 | P5: method waves | PLANNED | Run three independent concurrent contexts with exact deduplicated scope, durable evidence, focused recovery and root-specific sync |
 | P6: evaluation/reporting | PLANNED | Complete five-metric scores, score both Kidney axes, refresh all affected maintained reports/figures from approved results, verify plots and document limitations/provenance |
@@ -607,8 +625,9 @@ knitr render. Review labels, clipping, numeric precision, scales and layout.
 
 **No unresolved scientific scope preferences remain from the clarification
 rounds.** The user selected targeted Bassez HR metadata repair and dependent
-reruns after the impact report. Complete the final shared-understanding
-confirmation required by the invoked grilling workflow, then begin with P0.
+reruns after the impact report. The user subsequently confirmed shared
+understanding and explicitly authorized implementation; the grilling
+confirmation requirement is satisfied. P0 has completed.
 
 Bamboo producer reconciliation, exact input identities and focused contract
 checks are implementation/prelaunch prerequisites; they are not unanswered
@@ -643,6 +662,40 @@ contradictions to the user; do not turn them into silent defaults.
 | 2026-11-08 | Bassez bounded NAS obs audit and dependency report | Current published H5AD has 50,809 missing HR labels; all have valid LR fallbacks; mixed labels give 40 categories. Exact conditional affected/reusable scopes above. Bamboo SSH read did not complete; no repair or compute performed |
 | 2026-11-08 | Bassez repair scope selected (Q22) | User chose targeted HR metadata repair and dependent reruns, with unchanged-input proof and Bamboo producer verification; no broader preprocessing rebuild authorized |
 | 2026-11-08 | Corrected unsupervised ECODA split | User requested `ecoda_unsupervised_harmony` and `ecoda_unsupervised_harmony_limma`; code path confirms both correction stages currently occur. Add two composition branches from the same Harmony/Leiden inputs; no extra preprocessing |
+| 2026-11-08 | Implementation authorized | User confirmed shared understanding, requested checkpoint commits/push to master, documentation harmonization, subagents, and parallel subset/Bassez/BL work |
+| 2026-11-08 | P0 complete | `a325e82` registry decisions; `3039302` batch diagnostics; `b15288d` local composition subsetting; `ae75c1c` benchmark/Stephenson diagnostics; `0d89c6c` Kidney research/limitation; `6a1726d` proposals and this plan. Push succeeded; `git ls-remote` independently verified remote master `6a1726d4a79f74998c54e968bb045b452b9c93bd` |
+| 2026-11-08 | Bamboo connectivity and bounded metadata preflight | Scoped permission-enabled SSH succeeded. Home `/home/users/h/halterc`, host `login1.bamboo`, scratch exists, NAS mounted with about 90T free; checkout clean at `b1854c6e786c998f3a786e6885e3119c11d772e2` (must pull exact new source later). Configured py-cuda13 Python is 3.13.14. Obs-only Bassez read independently confirms 74,948 cells / 26 samples / 24,139 valid HR / 50,809 missing HR / zero invalid fallback / 40 mixed categories. No matrix read or scheduler submission |
+| 2026-11-08 | Runtime selection prerequisite | Generic `ecoda-py-cuda13.sif` and its manifest are absent on Bamboo; finite runtime-directory inspection confirms versioned images/manifests exist. Select and verify an explicit compatible runtime identity before prepare; no implicit alias fallback or environment refresh |
+| 2026-11-08 | BL timing implementation choice | Keep ordinary shared-fit timing unchanged. BL is a self-contained preparation unit with its own timing ID, zero shared-time charge, and measured aggregation + BL fit + selection in its local cost. Mixed ordinary/BL requests run the BL preparation unit separately; this bounded extra aggregation avoids charging an unrelated ordinary fit or inventing a new timing-accounting framework |
+| 2026-11-08 | Concurrent external downstream agents | User reported separate agents will edit notebooks and unrelated downstream-analysis files, will receive this plan, and will not commit/push. Preserve and exclude their uncommitted work from this task's Git packages; coordinate overlapping files, particularly the two P1 notebook documentation files and future P6 work |
+| 2026-11-08 | P1 documentation QA | Harmonized active host, participation, subsets, pending/applied status, Bassez repair, unchanged aux BL, two unsupervised corrected arms and five-metric reporting. Preserved historical evidence with a supersession banner. Scoped `git diff --check` passed; skill-creator `quick_validate.py` reports `Skill is valid!` |
+| 2026-11-08 | BL core and worker review | New BL pre-fit regression failed before implementation, then passed; independent reviewer accepted core and three new BL/worker checks. Existing Bassez benchmark and batch correction regressions also pass. R workers support exact standalone variant outputs; top-level dispatcher/release integration remains in progress |
+| 2026-11-08 | Cohort implementation returned | Approved registry filters, evaluation mapping loaders, whole-sample selection/source/config/membership proof, create-only publication and isolated RDS conversion implemented. Six focused checks pass, including evaluation-only mapping reuse; independent review in progress. Shell/sync root wiring remains in progress, so no production launch yet |
+| 2026-11-08 | Runtime candidate fully verified | Selected existing format-2 image `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif` and adjacent `.manifest`. Full SHA256 verified as `8fcd00b7a02592f82e8ad96ec9dffdcfb40214b3c47218f770dfb8e828e05e34`; image size 8,863,477,760 bytes; image/manifest/parent have no write bits; manifest dependency hashes match unchanged local Pixi files. Runtime tooling present; this verification submitted no scheduler work |
+| 2026-11-08 | Cohort package independently accepted | Reviewer found no material issues and independently passed `test_cohort_selection.py` and `test_datasets_evaluation_columns.R`; existing registry, subset, corrected-source and atomic-preservation regressions also pass. Release remains gated on shell/sync/audit integration and real-source campaign preflight |
+
+### Active assignments
+
+- Orchestrator `/root`: this plan, Git integration/push, bounded Bamboo
+  preflight and run/release coordination; no pipeline implementation.
+- Implementor `docs_checkpoint_audit`: documentation harmonization, no current
+  plan edits or production code/config changes. P1 returned; now independently
+  reviewing BL and cohort packages. The orchestrator completed the remaining
+  protected coordination-prose edits through scoped approved execution after
+  the subagent's editing tool stalled; no pipeline implementation by root.
+- Implementor `batch_subset_audit`: cohort/loader/Stage 3 Python package returned
+  for review; now owns new Stage 2 Bassez metadata-only derivative worker and
+  its fixtures. No shell submitter or Stage 5 edits.
+- Implementor `benchmark_dependency_audit`: BL core/worker package returned and
+  independently accepted; now owns derivative root/input-reference integration
+  in submitter/worker/sync/audit seams, followed by exact variant propagation.
+  No downstream notebook changes. Previously completed BL files stay frozen
+  until their separate commit is recorded.
+
+Checkpoint exceptions: `.vscode/settings.json` and `Rplots.pdf` remain local
+and uncommitted as agreed. The architecture draft's three existing whitespace
+lines were preserved in its backup commit. Backup commits are not scientific
+release validation. No full H5ADs or expression matrices were copied locally.
 
 No gates prepared or launched under this plan. For every future launch append:
 package, source/runtime/aux identities, host and resolved roots, dependency

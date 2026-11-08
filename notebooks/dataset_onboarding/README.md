@@ -12,10 +12,18 @@ not a production job manifest.
 
 - `datasets.json` is the production registry for inputs, views, subsets,
   activation flags, and configured cell-type columns.
-- The full-cohort data on Bamboo/HPC is authoritative. Local subset mirrors
-  under `data/` are diagnostic and may be stale.
+- Production participation requires both the appropriate activation flag and
+  configured view; view existence alone does not enable a cohort.
+- Bamboo is the active HPC host after maintenance. The user reports that the
+  latest data was synchronized back; Yggdrasil is stale/unmaintained. Verify
+  selected Bamboo sources and provenance before reuse. Local subset mirrors
+  under `data/` remain diagnostic and may be stale.
 - `dataset_specs.py`, rendered QMDs, and `<key>_meta.json` files provide
   onboarding evidence and notes. They do not override `datasets.json`.
+- The [active reprocessing plan](../../.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md)
+  owns approved decisions, exact raw-ID selection, execution scope, and applied
+  status. The selections below are approved targets; registry edits or valid
+  historical checksums do not establish that existing results already use them.
 
 ## Cohorts examined
 
@@ -29,15 +37,15 @@ high-resolution labels.
 
 | Cohort | General description | Configured batch variable(s) | Source/paper-reported major cell types | Current batch-analysis decision |
 |---|---|---|---:|---|
-| `Alzheimer` | Brain multiome cohort with limited assay diversity. | `assay + sex` | 18 | Included |
-| `Breast_cancer` | Breast-tumor cohort with assay and sequencing imbalances. | `assay + sequencing_platform + suspension_dissociation_time` | 10 | Included |
-| `Covid19_PBMC` | PBMC cohort with healthy controls and COVID samples across time after symptom onset. | `datasets` | 10 | Included with an approved acute/control subset |
+| `Alzheimer` | Brain multiome cohort with limited assay diversity. | `assay` | 18 | Included after Reference exclusion |
+| `Breast_cancer` | Breast-tumor cohort with assay and sequencing imbalances. | `assay + suspension_dissociation_time` | 10 | Included with two retained v3/dissociation batches |
+| `Covid19_PBMC` | PBMC cohort with healthy controls and COVID samples across time after symptom onset. | `datasets` | 10 | Included with acute/control and d02/d09/d13 restrictions |
 | `Diabetes` | Pancreatic cohort spanning multiple studies and disease groups. | `dataset` | 13 | Excluded because most batches have samples from only one condition. After removal of confounded batches, too few samples remain and the remaining two batches are both heavily imbalanced (3 normal and 12 type 2 diabetes left). |
-| `Kidney_KPMP_full` | Combined single-cell/single-nucleus KPMP cohort. | `suspension_type + sex` | 14 | Included |
-| `Lupus_PBMC` | PBMC cohort with case/healthy metadata and technical batch candidates. | `batch_cov` | 11 | Included |
-| `Lung` | Lung atlas with platform, tissue, disease, and assay metadata. | `dataset` | 12 | Included after the configured COPD exclusion |
-| `Joanito` | Cohort with sample-origin, sequencing, and site metadata. | `seqtec` | Unavailable (not documented in onboarding specs) | Included after the configured LymphNode exclusion |
-| `Stephenson` | Cohort with biological status and site/batch metadata. | `Site` | Unavailable (not documented in onboarding specs) | Included |
+| `Kidney_KPMP_full` | Combined single-cell/single-nucleus KPMP cohort. | `suspension_type` | 14 | Included after Papilla exclusion; no sex correction |
+| `Lupus_PBMC` | PBMC cohort with case/healthy metadata and technical batch candidates. | `batch_cov` | 11 | Included with AbFlare-4 and selected pools 20–22 |
+| `Lung` | Lung atlas with platform, tissue, disease, and assay metadata. | `dataset` | 12 | Included with six retained batches and the existing COPD exclusion |
+| `Joanito` | Cohort with sample-origin, sequencing, and site metadata. | `seqtec` | Unavailable (not documented in onboarding specs) | Included after LymphNode and Tumor-2 exclusions |
+| `Stephenson` | Cohort with biological status and site/batch metadata. | `Site` | Unavailable (not documented in onboarding specs) | Included after Sanger and sample-quality exclusions |
 | `Myocardial_infarction` | Small myocardial-infarction cohort with biological/technical confounding concerns. | — | 11 | Excluded |
 | `Parkinson` | Brain multi-tissue cohort with weak overall batch-analysis signal. | — | 11 | Excluded |
 | `Kidney_KPMP` | Preserved legacy Kidney key. | — | — | Disabled; not interchangeable with `Kidney_KPMP_full` |
@@ -59,10 +67,12 @@ identifiable. It is retained only as stale legacy code/artefact context; it is
 disabled, excluded from the active/current-final cohorts, and must not be
 re-enabled.
 
-The current final batch-analysis set is the nine included cohorts above; it
+The approved batch-analysis set is the eight included cohorts above; it
 excludes `CombinedPBMC` and all other disabled or diagnostic entries:
-`Alzheimer`, `Breast_cancer`, `Covid19_PBMC`, `Diabetes`,
+`Alzheimer`, `Breast_cancer`, `Covid19_PBMC`,
 `Kidney_KPMP_full`, `Lupus_PBMC`, `Lung`, `Joanito`, and `Stephenson`.
+The benchmark set has 11 enabled production datasets; only `Stephenson`
+overlaps these batch cohorts. Alzheimer, Joanito and Kidney full are batch-only.
 The exact processing rows and artifact handling belong in the implementation
 plan, not in this README.
 
@@ -86,27 +96,81 @@ to run HiTME or scATOMIC Pipeline 4 for these views.
 
 ## Confounding and subset decisions
 
-Onboarding showed that some biological conditions are confounded with batch
-or study structure. The registry records the resulting decisions:
+The sample-level matrices in `plots/batch_effect_bio_vs_batch/` motivated the
+approved restrictions below. Apply fixed selections, then validate balance;
+do not substitute an automatic pruning algorithm. Each batch must represent
+at least two biological groups. Every represented batch/group combination
+needs at least two samples and at least 20% of its batch for two represented
+groups, or 10% for three. Equality passes. Absent global groups are reported
+structural zeros. More than three represented groups needs an explicit decision.
 
-- `Diabetes`: exclude `endocrine pancreas disorder` and `type 1 diabetes
-  mellitus`, whose biological groups are strongly tied to study structure.
-- `Joanito`: exclude `sample.origin == "LymphNode"`.
-- `Kidney_KPMP_full`: exclude `region.l1 == "Papilla"` because those were only sequenced with nuclei from deceased donors and are only 4 samples. The single-cell samples which are `region.l1 == "NA"` (or equal to `tissue == "kidney`) were obtained from biopsies (typically mainly from the cortex to not injure the kidney, so they normally don't go all the way down to the papilla). As such, it would not be expected to have papilla in the single-cell samples, while the single-cell biopsies are expected to contain varying amounts of cortex or medulla.
-- `Lung`: retain `platform == "10x"` and `tissue == "lung"`, and exclude
-  `disease == "chronic obstructive pulmonary disease"`.
-- `Covid19_PBMC`: the approved final rule retains the sampling-day literal
-  `control` or a finite numeric value `<= 30`; unknown, malformed, blank, and
-  missing values are excluded. The current categorical/string encoding
-  requires an explicit registry/helper correction before this is final.
-- `Myocardial_infarction`, `Parkinson`, and `CombinedPBMC` are excluded from
-  the current batch-analysis decision for the documented confounding, sample,
-  or signal concerns.
+| Cohort | Approved restriction | Expected samples per batch view |
+|---|---|---:|
+| Alzheimer | Remove all three `Reference` donor-by-assay samples; retain Dementia/No dementia | 101 |
+| Breast_cancer | Keep only `10x 3' v3` with `12 hour` or `15 minute` dissociation | 33 |
+| Covid19_PBMC | Keep d02 (22), d09 (12), d13 (10), intersected with literal `control` or finite numeric sampling day <=30; d07 excluded | 44 |
+| Joanito | Remove `Tumor-2` and retain the LymphNode exclusion | 124 |
+| Kidney_KPMP_full | Remove `region.l1 == "Papilla"`; retain unknown region and correct only suspension type | 80 |
+| Lupus_PBMC | Keep `dmx_AbFlare-4` (11), `dmx_YS-JY-20_pool3/4`, `dmx_YS-JY-21_pool1/2`, `dmx_YS-JY-22_pool5/6` (83 combined) | 94 |
+| Lung | Keep Goveia 2020, Lambrechts 6149v2/6653, and Leader beads_cite/digest-deadcell_cite/5p_v1_CD2 batches; preserve 10x/lung/COPD restrictions | 80 |
+| Stephenson | Remove Sanger and the four excluded sample IDs documented below | 110 |
 
-Wholly batch-collinear biological groups were excluded rather than treated as
-identifiable biological signal.
-When a biological group was perfectly collinear with a technical batch/cohort, that group was excluded rather than protected or corrected; this is a scientific subset decision.
+The active plan records exact Lung literals and all expected counts. These
+are expectations to reconcile against Bamboo and >=500-cell/QC eligibility,
+not proof of regenerated artifacts. Preserve whole samples: resolve approved
+sample membership from audited sample-level batch assignments, then keep all
+cells of those raw IDs. Cell-level batch predicates can otherwise split samples.
 
-These are scientific registry decisions. Implementation-specific pipeline
-selection, targeted rows, output paths, and artifact reuse belong in the
-implementation plan.
+- **COVID verification:** the existing matrix's checksum-bound sample metadata
+  already satisfies the control/day<=30 rule. Intersecting the three retained
+  batches gives 44 samples; each retained batch includes controls. Unknown,
+  malformed, blank, missing and nonfinite day values fail the temporal rule.
+- **Stephenson exception:** after removing `MH8919226` and `MH8919227`
+  (Healthy/Ncl samples with no annotated T cells), Ncl has 43 Covid / 10 Healthy
+  (18.87% Healthy). The user explicitly retains this below-20% batch. Preserve
+  the earlier exclusions `BGCV10_CV0198` and `MH8919230`. The Ncl-only benchmark
+  target has 53 samples and requires all affected method/screen results refreshed.
+- **Papilla rationale:** the four Papilla specimens were nuclei from deceased
+  donors. Single-cell biopsies have literal `region.l1 == "NA"` and
+  `tissue == "kidney"`; do not infer Cortex/Medulla for them. The lack of
+  expected papillary tissue in biopsies motivates the exclusion, without
+  treating unknown biopsy anatomy as a known compartment.
+- **Diabetes:** disable the cohort entirely. Removing confounded batches leaves
+  only three normal and 12 type 2 diabetes samples; the earlier two-group
+  exclusion rule is superseded. Myocardial infarction, Parkinson and
+  CombinedPBMC remain excluded.
+
+These are prespecified scientific cohort decisions. Biological labels remain
+ground truth for evaluation and approved cohort selection; they never enter
+normalization, HVG selection, embeddings or correction-model covariates.
+
+## Approved evaluation and repair work
+
+- Kidney reports `condition.l1` and literal `tissue` separately on the same 80
+  samples/distances: kidney (45), cortex of kidney (23), renal medulla (12).
+  Initially both evaluations count equally as independent summary entries.
+  Tissue recovery is confounded with suspension and must be described as
+  recorded tissue/sampling-category recovery. Region is diagnostic only.
+- Default benchmark and batch summaries use five metrics: ANOSIM, adjusted
+  kNN-3 modularity, mean Ward/PAM ARI, silhouette and LISI separation. Min–max
+  normalize within dataset/evaluation x metric, weight all five equally and
+  include the two added right-hand metric columns. LISI is already inverted
+  to higher-is-better separation. Missing/nonfinite scores fail release.
+- Corrected batch comparisons will distinguish unsupervised
+  `ecoda_unsupervised_harmony` (Harmony -> Leiden -> CLR) from
+  `ecoda_unsupervised_harmony_limma` (the same CLR followed once by technical-only
+  limma). Both use HVG2000/Leiden resolution 2 and share the same clusters;
+  uncorrected comparisons retain non-Harmony PCA -> Leiden -> CLR.
+- Bassez has an approved targeted HR metadata repair: retain valid
+  `cellSubType`, otherwise use `cellType`, preserving cells/counts/embeddings.
+  The NAS audit found 50,809 missing HR labels among 74,948 cells; all have
+  valid broad fallbacks. Bamboo obs verification confirmed the same counts;
+  complete run-specific integrity and unchanged-dependency checks before
+  repair and targeted dependent reruns.
+- Recompute the whole-sample blacklist pseudobulk variant across all 11
+  benchmark datasets. The chosen exclusion source is the unchanged frozen
+  human aux groups G1/S, G2/M, Mito, Ribo, TCR. Filter before fitting and select
+  2,000 eligible genes afterward. Add no sex/chromosome mask or exemption.
+
+These changes are approved work, not a declaration that production artifacts
+have already been repaired. The active plan tracks implementation and release.

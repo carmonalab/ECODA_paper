@@ -6,6 +6,60 @@
 ---
 
 
+## Current approved work — 2026-11-08
+
+The [active reprocessing plan](.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md)
+owns current decisions, implementation status and release evidence. The
+[onboarding summary](notebooks/dataset_onboarding/README.md) records the fixed
+cohort restrictions and expected counts. Approval and configuration edits do
+not establish that existing artifacts have been regenerated.
+
+- **Bamboo is active after maintenance.** The user reports the latest data was
+  synchronized back; Yggdrasil is stale/unmaintained. Scoped Bamboo access,
+  NAS-mount and Bassez obs checks passed. Full artifact/source/runtime identity
+  still requires run-specific validation. Author locally, commit/push and pull
+  the exact revision on Bamboo.
+- **Participation and cohorts:** both activation flag and view must permit a
+  production row: 11 benchmark datasets, eight batch datasets (16 views), with
+  only Stephenson overlapping. Diabetes is disabled. Apply the approved fixed
+  selections and whole-sample membership before Stage 3 transforms, then
+  validate two samples per represented batch/group and 20%/10% balance.
+  Preserve the explicit Stephenson Ncl exception (43 Covid/10 Healthy; 18.87%).
+  COVID's verified matrix already satisfies control/day<=30; d02/d09/d13 give
+  44 samples. Lupus includes selected pools 20, 21 and 22.
+- **Input repairs:** the new Stephenson exclusions apply to all three views;
+  Sanger is excluded from batch views. Kidney full loses Papilla and sex
+  correction. NAS and Bamboo obs checks confirmed Bassez has 50,809 missing HR
+  labels among 74,948 cells, all with valid broad fallbacks. The approved
+  targeted metadata derivative retains valid `cellSubType`, otherwise uses
+  `cellType`, preserving cells/counts/embeddings; verify full dependency
+  identity before repair and rerun only affected consumers.
+- **Blacklist pseudobulk:** repair the historical no-op across all 11 benchmark
+  datasets using the unchanged frozen human aux G1/S, G2/M, Mito, Ribo and TCR
+  groups (1,928 unique symbols; TCR has 228 entries). Exclude before fitting,
+  then select 2,000 eligible genes. Add no sex/chromosome mask or exemption;
+  version the BL fit/cache policy separately from ordinary pseudobulk.
+- **Corrected unsupervised composition:** report separate
+  `ecoda_unsupervised_harmony` and `ecoda_unsupervised_harmony_limma` results
+  for eight corrected batch views. They share Harmony-derived Leiden labels
+  (HVG2000/resolution 2), counts and count+0.5 CLR. Only the second applies
+  technical-only sample CLR limma once. Uncorrected PCA/Leiden/CLR stays
+  distinct. Historical unqualified outputs need explicit provenance mapping.
+- **Reporting:** ANOSIM, adjusted kNN-3 modularity, mean Ward/PAM ARI,
+  silhouette and LISI separation contribute equally after min–max scaling per
+  dataset/evaluation and metric. Refresh affected maintained figures/results,
+  including the two added right-hand metric columns and per-metric supplements.
+  LISI is already higher-is-better separation; never invert it again. Reuse
+  valid scores or complete missing metrics from saved distances; incomplete
+  or nonfinite grids fail release. Explicitly single-metric plots stay so.
+  Kidney reports condition and literal tissue over the same 80 samples and
+  distances, initially weighted as two independent evaluation entries; disclose
+  tissue/suspension confounding and never infer generic biopsy anatomy.
+- **Status and preservation:** these are approved work targets, not completed
+  scientific results. New outputs use run-owned derivative roots; existing
+  artifacts/checksums/gates remain immutable. The Kidney feature-coverage split
+  below remains a retained limitation, without additional remediation runs.
+
 ### Breast cancer corrected batch policy
 
 - **Decision:** Breast's production configuration uses the dataset-level
@@ -17,7 +71,8 @@
   when present, but is not a configured Breast correction column.
 - `disease` is a biological label and remains evaluation-only; it never enters
   filtering, preprocessing, Harmony, or corrected Stage 5 models.
-- The previous Breast corrected Stage 3 output was generated under the
+- **Historical scope, before the new 33-sample selection:** the previous
+  Breast corrected Stage 3 output was generated under the
   superseded column contract. The regenerated output
   `BreastCncr_processed_batch_effect_analysis_corrected_assay_dissociation_ECODAprocessed.h5ad`
   completed under the global pair. Its Stage 3 gate was terminally inspected
@@ -392,7 +447,11 @@ the raw-versus-post-filter and canonical-unit clarification.
   proposed follow-up.
 
 
-### 1.6 Inclusion or exclusion of cohorts
+### 1.6 Historical inclusion brainstorming — superseded
+
+The following checklist preserves earlier provisional decisions, including
+Diabetes inclusion. Use the active plan and onboarding summary for current
+eight-cohort selections; this checklist is not a launch authority.
 
 Some cohorts were either completely or partially excluded from the analysis for the following reasons:
 - No high resolution cell type annotations provided by the authors
@@ -784,8 +843,10 @@ figure-hierarchy decision is pending.
   Lee, six Smillie samples (`N58.LPB2=498`, `N19.LPB=485`, `N8.LPB=482`,
   `N12.LPB=441`, `N14.LPA=432`, `N12.LPA=243`), and Zhang
   `Pre_P010_t=8`/`Pre_P018_b=437`. Current processed mirrors are evidence only.
-- Missing high-resolution Bassez annotations are filled from the configured
-  low-resolution/broad annotation. This is an accepted annotation-contract
+- The accepted Bassez rule fills missing HR from configured broad annotation.
+  This is not proof of production application: NAS and Bamboo obs checks on
+  2026-11-08 still found 50,809 missing HR labels. The current plan authorizes
+  a targeted metadata derivative after full dependency-identity validation. This is an accepted annotation-contract
   change, not a biological-label substitute. Bassez and Smillie still run the
   supported HiTME/scATOMIC Stage 4 path after Stage 3 changes so derived
   annotation artifacts used by Figure 3 and Supp fig 19 are fresh.

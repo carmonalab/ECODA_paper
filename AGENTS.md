@@ -19,6 +19,11 @@ methods, then scores recovery of known biological groups.
   biological labels in `removeBatchEffect`.
 - `datasets.json` is the dataset/view ground truth. **Do not modify it without
   explicit user confirmation.**
+- **Production participation requires both the dataset flag and its view.**
+  Resolve `use_for_benchmark` or `use_for_batch_effect` before selecting a
+  configured view; view existence alone does not enable a cohort. Exclude
+  underscore-prefixed diagnostic datasets from production. The active plan
+  records the current 11 benchmark datasets and eight batch datasets.
 - **Dataset-level column authority.** The top-level `datasets.json` `columns`
   object is the sole production source for sample, label, batch, and cell-type
   fields. `views.*.columns` objects are prohibited; views may select
@@ -104,20 +109,20 @@ checksum mismatch, worker failure, or exhausted OOM retry must fail closed.
 - Every full-cohort preprocessing, annotation, benchmark, evidence, or
   correction run MUST use the checked-in `durable-hpc-gate-ecoda` profile.
   Direct SSH-launched long-running wrappers are not an acceptable substitute.
-- **Current user-directed host policy:** `YGGDRASIL_ACTIVE_TARGET=1` and
-  `YGGDRASIL_DEFAULT=1` are in force for this plan until the user explicitly
-  directs a return to Bamboo. Do not infer a host change from the date or
-  maintenance window. All authoring and pipeline-file changes happen on the
-  local workstation, then are committed and pushed; Yggdrasil pulls the exact
-  committed revision. Never edit the Yggdrasil checkout directly.
-- Yggdrasil is the default compute, data, results, and backup host for the
-  remaining named work. Bamboo is source/fallback infrastructure only unless
-  the user explicitly reverses this policy. The checked-in durable profile now
-  targets `remote_host=yggdrasil`; pipeline jobs still require the scoped
-  portability/preflight contract before submission.
-- Yggdrasil has no implicit Bamboo NAS path. Use an explicit absolute
-  `NAS_*`/`ECODA_NAS_*` configuration, including the approved local scratch
-  result mirror when NASAC is not mounted; never silently fall back to Bamboo.
+- **Current user-directed host policy:** Bamboo is the active compute,
+  data, results, and backup host following completed maintenance. The user
+  reports that the current data was synchronized back to Bamboo; Yggdrasil is
+  stale and unmaintained. Reconcile selected Bamboo artifacts and runtime
+  identities before reuse; do not resynchronize from Yggdrasil automatically.
+  This explicitly supersedes the earlier `YGGDRASIL_ACTIVE_TARGET` /
+  `YGGDRASIL_DEFAULT` policy. Host changes require an explicit user decision.
+- All authoring and pipeline-file changes happen on the local workstation,
+  then are committed and pushed; Bamboo pulls the exact committed revision.
+  Never edit the HPC checkout directly. The checked-in durable profile pins
+  `remote_host=bamboo`; verify its scoped storage/runtime preflight before
+  submission.
+- Resolve absolute `NAS_*`/`ECODA_NAS_*` paths and verify the active mount.
+  Scratch is not a durable NAS backup; a missing mount must fail closed.
 - Yggdrasil and Bamboo have separate storage. The mirrored working paths are
   `~/ECODA_paper` for the repository and `~/scratch/ECODA_paper` for data and
   results. NAS mounts and runtime/tool paths must be checked on the active
@@ -179,10 +184,12 @@ checksum mismatch, worker failure, or exhausted OOM retry must fail closed.
 
 - Current dataset/view/method selections, output roots and stems, row counts,
   gate IDs, incidents, maintenance details, and one-off recovery history are
-  task-specific. Keep them in the authoritative active plan, e.g.
-  (this is just an example, as suggested by the user. use specific plans as needed and discussed with the user)
-  `.agents/plans/20260912-final-batch-effect-subset-plan.md`, not in this
-  durable guide. Use the checked-in
+  task-specific. For the current confounding, annotation, blacklist, correction
+  arms, and reporting work, read
+  `.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md`
+  before implementation, selection, launch, or release. Keep its decisions and
+  progress there, rather than copying its run ledger into this durable guide.
+  Earlier plans retain historical evidence. Use the checked-in
   `.agents/skills/durable-hpc-gate-ecoda/SKILL.md` and its durable-hpc-gate
   references for operational command details.
 - Full-cohort runs require a commit-keyed source snapshot and a versioned
@@ -191,10 +198,10 @@ checksum mismatch, worker failure, or exhausted OOM retry must fail closed.
   mutable canonical checkout or an unversioned runtime.
 - The run-owned manifest MUST bind the immutable source manifest, runtime
   image and manifest, auxiliary-root identity, exact run ID, scratch/log
-  roots, wrapper, and explicit selected-row scope. Resolve Yggdrasil's home
+  roots, wrapper, and explicit selected-row scope. Resolve Bamboo's home
   before composing remote paths (for example with
-  `ssh yggdrasil 'printf %s "$HOME"'`). Bamboo paths are used only after the
-  user explicitly directs a return to Bamboo.
+  `ssh bamboo 'printf %s "$HOME"'`); local `$HOME` and historical Yggdrasil
+  paths do not establish current remote locations.
 - The run-scoped `ecoda_run_audit.sh` checks the selected stage, manifest,
   source identity, runtime identity, and artifacts before terminal review; it
   must not scan all run roots or submit repair compute.
@@ -237,10 +244,9 @@ checksum mismatch, worker failure, or exhausted OOM retry must fail closed.
 - `tests/` — focused standalone regressions.
 - `data/` — large/gitignored data; never scan recursively or delete
   recursively without explicit confirmation.
-- On Yggdrasil, `$HOME/scratch/ECODA_paper` is the active data/results tree;
-  the active HPC repository is `$HOME/ECODA_paper`. Bamboo paths are
-  source/fallback paths only until the user explicitly reverses the host
-  policy.
+- On Bamboo, `$HOME/scratch/ECODA_paper` is the active data/results tree;
+  the HPC repository is `$HOME/ECODA_paper`. Resolve symlinks/mounts on Bamboo
+  and bind the selected derivative roots explicitly in each run manifest.
 
 ## Runtime and tooling
 

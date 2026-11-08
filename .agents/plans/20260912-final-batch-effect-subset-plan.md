@@ -1,5 +1,11 @@
 # ECODA final batch-effect subset processing
 
+> **Historical execution record — superseded for new work on 2026-11-08.**
+> The authoritative current scope, Bamboo policy and implementation status
+> are in [the active reprocessing plan](20261108-confounding-subsets-benchmark-reprocessing-plan.md).
+> All older “current” scopes and Yggdrasil launch instructions below are
+> historical evidence; they do not authorize new selections or launches.
+
 ## Current scope — authoritative (2026-09-15)
 
 This section is the single active contract for this plan. It supersedes every
