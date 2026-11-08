@@ -350,6 +350,47 @@ the raw-versus-post-filter and canonical-unit clarification.
   `donor_id`/`Sample`, `tissue`, `tissue_type`, `disease`, `Brain_bank`, `PMI`,
   `RIN`, and `assay`; the existing 96-donor/multi-tissue warning is retained.
 
+#### Kidney_KPMP_full: unresolved source-level gene-coverage effect (2026-11-08)
+
+- **Finding:** The 45 retained single-cell specimens form two pseudobulk
+  groups in both uncorrected and corrected distances. The distinguishing
+  gene-coverage pattern is already present in the **original downloaded
+  `Kidney_KPMP_full.h5ad` source data, before any of our processing**.
+  An upstream technical/processing difference is suspected, but the cause is unresolved.
+- **Investigation:** Reconstructed the plotted MDS from checksum-validated
+  results, compared sample metadata and gene loadings, and read 16 evenly
+  spaced source cells per specimen from both `raw/X` and `X`.
+  `MT-RNR1`, `MT-RNR2` and `MTATP6P1` were zero in
+  all 448 sampled cells from the left group but detected in every right-group
+  specimen's diagnostic slice; controls `ACTB` and `MALAT1` were detected on
+  both sides. The 39 nuclei specimens were not assessed for this
+  source-gene signature.
+
+| Observed single-cell group | Specimens | Reference family | AKI / CKD / Ref |
+| :--- | ---: | :--- | :--- |
+| Left / signature A (`sc_left`) | 28 | All 11 `Sample1153/1157/1158/1162_EO*` references | 8 / 9 / 11 |
+| Right / signature B (`sc_right`) | 17 | All 9 `PRE*` references | 3 / 5 / 9 |
+
+- **Interpretation:** PRE/EO naming is not a complete causal batch definition:
+  disease specimens occur on both sides. Available metadata supplies no
+  complete explanation. A historical reference/reprocessing note covers only
+  13/17 right-group specimens and does not establish current mixed genome
+  builds; neither group is designated defective.
+- **Evidence and exact sample lists:** See the
+  [investigation report](notebooks/Kidney_KPMP_full_pseudobulk_single_cell_clusters_research_2026-11-08.md)
+  and [sample inventory](data/derived/kidney_pseudobulk_sc_clusters_20261108/sample_diagnostics.csv)
+  (`cluster` column). The same
+  [evidence directory](data/derived/kidney_pseudobulk_sc_clusters_20261108/)
+  contains source-gene spot checks, gene loadings, metadata summaries,
+  before/after diagnostics and a checksum/provenance manifest.
+- **Decision — retained limitation:** Due to time constraints, we cannot
+  pursue further investigation or clarification with the original authors.
+  Leave the analysis unchanged: do not model this additional effect, filter
+  genes, exclude specimens or rerun the pipeline to address it. The earlier
+  [remediation brainstorming](.agents/plans/20261108-kidney-pseudobulk-feature-coverage-options.md)
+  remains discussion only, not approved work; this decision closes that
+  proposed follow-up.
+
 
 ### 1.6 Inclusion or exclusion of cohorts
 
