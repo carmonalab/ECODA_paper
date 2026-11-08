@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify failed installed-path validation preserves a prior h5ad artifact."""
+"""Preserve prior artifacts and roll back only a failed new publication."""
 from __future__ import annotations
 
 import hashlib
@@ -43,6 +43,14 @@ def main() -> None:
         module._write_h5ad_atomic(make_adata(), path, "benchmark_analysis")
         old_bytes = path.read_bytes()
         old_sidecar = Path(f"{path}.md5").read_bytes()
+        try:
+            module._write_h5ad_atomic(make_adata(), path, "benchmark_analysis")
+        except FileExistsError:
+            pass
+        else:
+            raise AssertionError("writer replaced an existing scientific artifact")
+        assert path.read_bytes() == old_bytes
+        assert Path(f"{path}.md5").read_bytes() == old_sidecar
         validator = module.validate_benchmark_h5ad_path
         calls = {"count": 0}
 
@@ -53,12 +61,15 @@ def main() -> None:
             return validator(candidate, view, method)
 
         module.validate_benchmark_h5ad_path = fail_installed
+        failed_path = path.with_name("failed-new-publication.h5ad")
         try:
-            module._write_h5ad_atomic(make_adata(), path, "benchmark_analysis")
+            module._write_h5ad_atomic(make_adata(), failed_path, "benchmark_analysis")
         except ValueError as exc:
             assert str(exc) == "installed validation failure"
         else:
             raise AssertionError("installed-path validation failure was ignored")
+        assert not failed_path.exists()
+        assert not Path(f"{failed_path}.md5").exists()
         assert path.read_bytes() == old_bytes
         assert Path(f"{path}.md5").read_bytes() == old_sidecar
         assert hashlib.md5(path.read_bytes()).hexdigest() == module._checksum(path)

@@ -25,6 +25,19 @@ def read_datasets_json(path="datasets.json", view=None):
     for ds_name, ds in datasets.items():
         views = ds.get("views") or {}
         dataset_columns = ds.get("columns") or {}
+        evaluation_labels = dataset_columns.get("evaluation_labels")
+        if evaluation_labels is None:
+            evaluation_labels = {"primary": dataset_columns.get("label")}
+        elif (
+            not isinstance(evaluation_labels, dict)
+            or not evaluation_labels
+            or any(
+                not isinstance(name, str) or not name.strip()
+                or not isinstance(column, str) or not column.strip()
+                for name, column in evaluation_labels.items()
+            )
+        ):
+            raise ValueError(f"Invalid dataset-level evaluation_labels for {ds_name!r}")
 
         matched_views = {}
         for v_name, v in views.items():
@@ -58,9 +71,11 @@ def read_datasets_json(path="datasets.json", view=None):
             "normal_tissue": ds.get("normal_tissue"),
             "use_for_benchmark": ds.get("use_for_benchmark"),
             "use_for_batch_effect": ds.get("use_for_batch_effect"),
+            "batch_metadata_policy": ds.get("batch_metadata_policy"),
             # columns (order mirrors datasets.json "columns")
             "sample_col": columns.get("sample"),
             "label_col": columns.get("label"),
+            "evaluation_labels": dict(evaluation_labels),
             "batch_col": columns.get("batch"),
             "cell_type_low_res": columns.get("cell_type_low_res"),
             "cell_type_high_res": columns.get("cell_type_high_res"),

@@ -130,14 +130,14 @@
         "input_file_name": "JoaI_2022_35773407_Nofilt_whole.rds",
         "output_file_name": "JoaI_2022_35773407_Nofilt_whole_batch_effect_analysis_uncorrected_final_ECODAprocessed.h5ad",
         "subset_vars": {
-          "sample.origin": {"values": "LymphNode", "op": "notin"}
+          "sample.origin": {"values": ["LymphNode", "Tumor-2"], "op": "notin"}
         }
       },
       "batch_effect_corrected": {
         "input_file_name": "JoaI_2022_35773407_Nofilt_whole.rds",
         "output_file_name": "JoaI_2022_35773407_Nofilt_whole_batch_effect_analysis_corrected_final_ECODAprocessed.h5ad",
         "subset_vars": {
-          "sample.origin": {"values": "LymphNode", "op": "notin"}
+          "sample.origin": {"values": ["LymphNode", "Tumor-2"], "op": "notin"}
         }
       }
     }
@@ -303,6 +303,7 @@
         "input_file_name": "StephensonE_2021_33879890_preprocessed.rds",
         "output_file_name": "StephensonE_2021_33879890_preprocessed_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
         "subset_vars": {
+          "Site": {"values": ["Sanger"], "op": "notin"},
           "Status": {
             "values": [
               "Healthy",
@@ -325,6 +326,7 @@
         "input_file_name": "StephensonE_2021_33879890_preprocessed.rds",
         "output_file_name": "StephensonE_2021_33879890_preprocessed_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
         "subset_vars": {
+          "Site": {"values": ["Sanger"], "op": "notin"},
           "Status": {
             "values": [
               "Healthy",
@@ -465,12 +467,16 @@
       "batch_effect_uncorrected": {
         "input_file_name": "SEAAD_Alzheimer_donor_assay.h5ad",
         "output_file_name": "SEAAD_Alzheimer_donor_assay_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "subset_vars": {
+          "Cognitive status": {"values": ["Reference"], "op": "notin"}
+        }
       },
       "batch_effect_corrected": {
         "input_file_name": "SEAAD_Alzheimer_donor_assay.h5ad",
         "output_file_name": "SEAAD_Alzheimer_donor_assay_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "subset_vars": {
+          "Cognitive status": {"values": ["Reference"], "op": "notin"}
+        }
       }
     }
   },
@@ -500,12 +506,18 @@
       "batch_effect_uncorrected": {
         "input_file_name": "BreastCncr_processed.h5ad",
         "output_file_name": "BreastCncr_processed_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "subset_vars": {
+          "assay": {"values": ["10x 3' v3"], "op": "in"},
+          "suspension_dissociation_time": {"values": ["12 hour", "15 minute"], "op": "in"}
+        }
       },
       "batch_effect_corrected": {
         "input_file_name": "BreastCncr_processed.h5ad",
         "output_file_name": "BreastCncr_processed_batch_effect_analysis_corrected_assay_dissociation_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "subset_vars": {
+          "assay": {"values": ["10x 3' v3"], "op": "in"},
+          "suspension_dissociation_time": {"values": ["12 hour", "15 minute"], "op": "in"}
+        }
       }
     }
   },
@@ -529,6 +541,7 @@
         "input_file_name": "Covid19_Ren2021.h5ad",
         "output_file_name": "Covid19_Ren2021_batch_effect_analysis_uncorrected_final_ECODAprocessed.h5ad",
         "subset_vars": {
+          "datasets": {"values": ["d02", "d09", "d13"], "op": "in"},
           "Sampling day (Days after symptom onset)": {"values": 30, "op": "<=", "include_values": ["control"]}
         }
       },
@@ -536,6 +549,7 @@
         "input_file_name": "Covid19_Ren2021.h5ad",
         "output_file_name": "Covid19_Ren2021_batch_effect_analysis_corrected_final_ECODAprocessed.h5ad",
         "subset_vars": {
+          "datasets": {"values": ["d02", "d09", "d13"], "op": "in"},
           "Sampling day (Days after symptom onset)": {"values": 30, "op": "<=", "include_values": ["control"]}
         }
       }
@@ -580,6 +594,10 @@
     "columns": {
       "sample": "specimen",
       "label": "condition.l1",
+      "evaluation_labels": {
+        "condition": "condition.l1",
+        "tissue": "tissue"
+      },
       "batch": "suspension_type",
       "cell_type_low_res": "subclass.l1",
       "cell_type_high_res": "subclass.l3"
@@ -689,12 +707,22 @@
       "batch_effect_uncorrected": {
         "input_file_name": "Lupus_Perez2022.h5ad",
         "output_file_name": "Lupus_Perez2022_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "subset_vars": {
+          "batch_cov": {
+            "values": ["dmx_AbFlare-4", "dmx_YS-JY-20_pool3", "dmx_YS-JY-20_pool4", "dmx_YS-JY-21_pool1", "dmx_YS-JY-21_pool2", "dmx_YS-JY-22_pool5", "dmx_YS-JY-22_pool6"],
+            "op": "in"
+          }
+        }
       },
       "batch_effect_corrected": {
         "input_file_name": "Lupus_Perez2022.h5ad",
         "output_file_name": "Lupus_Perez2022_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "subset_vars": {
+          "batch_cov": {
+            "values": ["dmx_AbFlare-4", "dmx_YS-JY-20_pool3", "dmx_YS-JY-20_pool4", "dmx_YS-JY-21_pool1", "dmx_YS-JY-21_pool2", "dmx_YS-JY-22_pool5", "dmx_YS-JY-22_pool6"],
+            "op": "in"
+          }
+        }
       }
     }
   },
@@ -718,6 +746,10 @@
         "input_file_name": "lungatlas.h5ad",
         "output_file_name": "lungatlas_batch_effect_analysis_uncorrected_final_ECODAprocessed.h5ad",
         "subset_vars": {
+          "dataset": {
+            "values": ["Goveia_Carmeliet_2020", "Lambrechts_Thienpont_2018_6149v2", "Lambrechts_Thienpont_2018_6653", "Leader_Merad_2021_10x_3p_v2_beads_cite", "Leader_Merad_2021_10x_3p_v2_digest-deadcell_cite", "Leader_Merad_2021_10x_5p_v1_CD2"],
+            "op": "in"
+          },
           "platform": {
             "values": [
               "10x"
@@ -737,6 +769,10 @@
         "input_file_name": "lungatlas.h5ad",
         "output_file_name": "lungatlas_batch_effect_analysis_corrected_final_ECODAprocessed.h5ad",
         "subset_vars": {
+          "dataset": {
+            "values": ["Goveia_Carmeliet_2020", "Lambrechts_Thienpont_2018_6149v2", "Lambrechts_Thienpont_2018_6653", "Leader_Merad_2021_10x_3p_v2_beads_cite", "Leader_Merad_2021_10x_3p_v2_digest-deadcell_cite", "Leader_Merad_2021_10x_5p_v1_CD2"],
+            "op": "in"
+          },
           "platform": {
             "values": [
               "10x"

@@ -4,8 +4,8 @@
 The audit deliberately stops before ``base_preprocessing``. It applies the
 same registry subset and sample-ID standardization as the Stage 3 worker,
 then records raw per-sample counts and configured high-resolution annotation
-coverage. Biological labels are reported only as metadata; they never enter
-selection or validation decisions.
+coverage. Approved biological-group exclusions are explicit cohort decisions;
+biological labels never become preprocessing or correction covariates.
 """
 
 from __future__ import annotations
@@ -31,10 +31,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.utils.py.datasets_io import read_datasets_json
 from src.utils.py.preprocess_utils import (
-    assert_subset_sample_consistency,
-    evaluate_subset_mask,
     load_input,
 )
+from src.utils.py.cohort_selection import cohort_configuration, resolve_cohort_selection
 
 
 def read_obs_only(path: Path) -> ad.AnnData:
@@ -243,12 +242,15 @@ def audit_view(
     try:
         sample_col = entry["sample_col"]
         subset_vars = view.get("subset_vars", {})
-        subset_mask = evaluate_subset_mask(adata, subset_vars)
-        subset_audit = assert_subset_sample_consistency(
-            adata,
-            subset_mask,
-            sample_col,
-            context=f"{dataset} / {view_name}",
+        configuration = cohort_configuration(
+            dataset=dataset, view=view_name, sample_column=sample_col,
+            label_column=entry["label_col"], batch_keys=entry.get("batch_col"),
+            subset_vars=subset_vars,
+            batch_metadata_policy=entry.get("batch_metadata_policy"),
+            evaluation_labels=entry.get("evaluation_labels"),
+        )
+        subset_mask, _, subset_audit = resolve_cohort_selection(
+            adata.obs, configuration
         )
         subset = adata[subset_mask]
         if subset.n_obs == 0:

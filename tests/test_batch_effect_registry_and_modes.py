@@ -25,7 +25,6 @@ FINAL_BATCH_DATASET_ORDER = (
     "Breast_cancer",
     "Covid19_PBMC",
     "Kidney_KPMP_full",
-    "Diabetes",
     "Lupus_PBMC",
     "Lung",
     "Joanito",
@@ -71,15 +70,14 @@ def main():
         "Breast_cancer": ("sample_id", "disease", "broad_cell_type", "author_cell_type"),
         "Covid19_PBMC": ("sampleID", "CoVID-19 severity", "majorType", "celltype"),
         "Kidney_KPMP_full": ("specimen", "condition.l1", "subclass.l1", "subclass.l3"),
-        "Diabetes": ("donor_id", "disease", "cell_type", "cell_type_reannotatedIntegrated"),
         "Lupus_PBMC": ("sampleID", "Status", "layer1", "louvain"),
         "Lung": ("sample", "disease", "ann_coarse", "ann_fine"),
         "Joanito": ("sample.ID", "sample.origin", "cell.type", "cell.type_new"),
         "Stephenson": ("Sample", "Status", "initial_clustering", "full_clustering"),
     }
     assert tuple(expected_final_roles) == FINAL_BATCH_DATASET_ORDER
-    assert len(FINAL_BATCH_DATASET_ORDER) == 9
-    assert len(set(FINAL_BATCH_DATASET_ORDER)) == 9
+    assert len(FINAL_BATCH_DATASET_ORDER) == 8
+    assert len(set(FINAL_BATCH_DATASET_ORDER)) == 8
     assert all(name in datasets for name in FINAL_BATCH_DATASET_ORDER)
     assert tuple(
         name for name in FINAL_BATCH_DATASET_ORDER if datasets[name]["use_for_batch_effect"]
@@ -113,6 +111,7 @@ def main():
         ),
     }
     covid_subset = {
+        "datasets": {"values": ["d02", "d09", "d13"], "op": "in"},
         "Sampling day (Days after symptom onset)": {
             "values": 30,
             "op": "<=",
@@ -180,7 +179,7 @@ def main():
         else:
             assert output_names == legacy_batch_output_names[name]
 
-    for name in ("CombinedPBMC", "Kidney_KPMP", "Myocardial_infarction", "Parkinson"):
+    for name in ("CombinedPBMC", "Kidney_KPMP", "Myocardial_infarction", "Parkinson", "Diabetes"):
         assert datasets[name]["use_for_benchmark"] is False
         assert datasets[name]["use_for_batch_effect"] is False
     legacy_target_output_names = {
@@ -293,15 +292,16 @@ def main():
             "Site": {"values": ["Ncl"], "op": "in"},
             "Status": {"values": ["Healthy", "Covid"], "op": "in"},
             "Sample": {
-                "values": ["BGCV10_CV0198", "MH8919230"],
+                "values": ["BGCV10_CV0198", "MH8919230", "MH8919226", "MH8919227"],
                 "op": "notin",
             },
         },
     }
     expected_stephenson_batch_subset = {
+        "Site": {"values": ["Sanger"], "op": "notin"},
         "Status": {"values": ["Healthy", "Covid"], "op": "in"},
         "Sample": {
-            "values": ["BGCV10_CV0198", "MH8919230"],
+            "values": ["BGCV10_CV0198", "MH8919230", "MH8919226", "MH8919227"],
             "op": "notin",
         },
     }

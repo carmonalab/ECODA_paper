@@ -179,7 +179,7 @@ def _write_h5ad(path: Path, *, split_sample: bool = False) -> None:
 
 
 def _invoke(
-    fixture: dict[str, Path], input_path: Path, output_path: Path
+    fixture: dict[str, Path], input_path: Path, output_path: Path, dataset: str = DATASET
 ) -> subprocess.CompletedProcess[str]:
     command = [
         sys.executable,
@@ -191,7 +191,7 @@ def _invoke(
         "--output",
         str(output_path),
         "--dataset",
-        DATASET,
+        dataset,
         "--view",
         VIEW,
         "--source-root",
@@ -343,6 +343,45 @@ def main() -> None:
             # TemporaryDirectory removes it, including when an assertion
             # fails and the fixture exits early.
             _make_writable(base / "snapshot")
+
+        # Approved technical winners select complete samples while leaving the
+        # source cell-level disagreements untouched for Harmony preprocessing.
+        dataset = "Lupus_PBMC"
+        policy = {"sample_aggregation": "majority_v1", "majority_keys": ["batch_cov"],
+                  "accepted_sentinel_values": {}}
+        groups = ["dmx_AbFlare-4", "dmx_YS-JY-22_pool5"]
+        majority_config = {dataset: {
+            "use_for_batch_effect": True,
+            "columns": {"sample": "sample_id", "label": "label", "batch": "batch_cov"},
+            "batch_metadata_policy": policy,
+            "views": {VIEW: {"input_file_name": f"{dataset}.h5ad",
+                             "output_file_name": f"{dataset}_derived.h5ad",
+                             "subset_vars": {"batch_cov": {"op": "in", "values": groups}}}},
+        }}
+        majority_base = base / "majority"
+        fixture = _make_snapshot(majority_base, majority_config)
+        try:
+            input_path = majority_base / f"{dataset}.h5ad"
+            obs = pd.DataFrame({
+                "sample_id": np.repeat(["S1", "S2", "S3", "S4", "S5"], 3),
+                "label": np.repeat(["case", "control", "case", "control", "case"], 3),
+                "batch_cov": [groups[0], groups[0], "excluded"] * 2
+                             + [groups[1], groups[1], "excluded"] * 2 + ["excluded"] * 3,
+            }, index=[f"cell_{index}" for index in range(15)])
+            ad.AnnData(obs=obs).write_h5ad(input_path)
+            before = input_path.read_bytes()
+            report_path = fixture["run_root"] / "reports" / "majority.json"
+            _assert_completed(_invoke(fixture, input_path, report_path, dataset), "whole-sample majority audit")
+            report = json.loads(report_path.read_text())
+            assert report["subset_audit"]["retained_cells"] == 12
+            assert report["subset_audit"]["retained_sample_ids"] == ["S1", "S2", "S3", "S4"]
+            assert report["subset_audit"]["cohort_membership_sha256"]
+            assert report["validation_summary"]["n_cells"] == 12
+            assert report["validation_summary"]["n_samples"] == 4
+            assert report["validation_summary"]["key_level_counts"] == {"batch_cov": 2}
+            assert input_path.read_bytes() == before
+        finally:
+            _make_writable(majority_base / "snapshot")
 
     print("corrected H5AD source metadata regression: OK")
 

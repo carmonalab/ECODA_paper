@@ -39,10 +39,7 @@ try:
         read_obs_column_values,
         read_str_dataset,
     )
-    from src.utils.py.subset_vars import (
-        assert_subset_sample_consistency,
-        evaluate_subset_mask,
-    )
+    from src.utils.py.cohort_selection import cohort_configuration, resolve_cohort_selection
 except ModuleNotFoundError:  # direct execution with src/utils/py on sys.path
     from batch_contract import (  # type: ignore[no-redef]
         RESERVED_OBS_NAME,
@@ -54,10 +51,7 @@ except ModuleNotFoundError:  # direct execution with src/utils/py on sys.path
         read_obs_column_values,
         read_str_dataset,
     )
-    from subset_vars import (  # type: ignore[no-redef]
-        assert_subset_sample_consistency,
-        evaluate_subset_mask,
-    )
+    from cohort_selection import cohort_configuration, resolve_cohort_selection
 
 
 REPORT_SCHEMA_VERSION = 1
@@ -68,16 +62,6 @@ _SOURCE_DIGEST_SIZE = 1024 * 1024
 _HEX_SHA256 = re.compile(r"^[0-9A-Fa-f]{64}$")
 _MANIFEST_KEY = re.compile(r"^[A-Za-z0-9_]+$")
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
-
-
-class _ObsOnly:
-    """Small AnnData-compatible view consumed by shared subset helpers."""
-
-    __slots__ = ("obs", "obs_names")
-
-    def __init__(self, obs: pd.DataFrame):
-        self.obs = obs
-        self.obs_names = obs.index
 
 
 def _safe_text(value: object, label: str, *, allow_empty: bool = False) -> str:
@@ -441,6 +425,8 @@ def _resolve_config(
     views = entry.get("views")
     if not isinstance(views, Mapping) or not isinstance(views.get(view_name), Mapping):
         raise ValueError(f"corrected view is not configured: {dataset}/{view_name}")
+    if any(isinstance(candidate, Mapping) and "columns" in candidate for candidate in views.values()):
+        raise ValueError(f"Unsupported view-level columns declaration for dataset {dataset!r}")
     if view_name != CORRECTED_VIEW:
         raise ValueError(f"audit requires {CORRECTED_VIEW} view")
     view = views[view_name]
@@ -634,30 +620,38 @@ def _audit(
     label_column = resolved["label_column"]
     batch_keys = resolved["batch_keys"]
     subset_vars = resolved["subset_vars"]
+    configuration = cohort_configuration(
+        dataset=dataset, view=view_name, sample_column=sample_column,
+        label_column=label_column, batch_keys=batch_keys, subset_vars=subset_vars,
+        batch_metadata_policy=resolved["entry"].get("batch_metadata_policy"),
+        evaluation_labels=resolved["columns"].get("evaluation_labels"),
+    )
     required_columns = list(
-        dict.fromkeys([sample_column, label_column, *batch_keys, *subset_vars.keys()])
+        dict.fromkeys([sample_column, label_column, *batch_keys, *subset_vars.keys(),
+                       *configuration["evaluation_labels"].values()])
     )
     metadata = _read_obs_metadata(input_path, required_columns)
-    adata = _ObsOnly(metadata)
 
     # These calls are intentionally the shared production implementations.  In
     # particular, no comparison operator is reproduced in this source audit.
-    subset_mask = evaluate_subset_mask(adata, subset_vars)
-    subset_audit = assert_subset_sample_consistency(
-        adata,
-        subset_mask,
-        sample_column,
-        context=f"{dataset}/{view_name} corrected source subset",
-    )
+    subset_mask, sample_metadata, subset_audit = resolve_cohort_selection(metadata, configuration)
     if subset_audit["retained_cells"] < 1:
         raise ValueError("corrected source subset retained no cells")
     retained_metadata = metadata.loc[subset_mask]
     validation_columns = list(dict.fromkeys([sample_column, *batch_keys, label_column]))
+    validation_metadata = retained_metadata[validation_columns].copy()
+    policy = configuration["batch_metadata_policy"]
+    if policy is not None:
+        # Validate the same sample winners used for cohort selection. Original
+        # cell-level technical metadata remains untouched in the source H5AD.
+        for key in policy["majority_keys"]:
+            validation_metadata[key] = validation_metadata[sample_column].astype("string").map(sample_metadata[key])
     validation = validate_batch_metadata(
-        retained_metadata[validation_columns],
+        validation_metadata,
         batch_keys,
         sample_column=sample_column,
         biological_column=label_column,
+        accepted_sentinel_values=policy["accepted_sentinel_values"] if policy else None,
     )
     contract_identity = build_batch_contract_identity(
         batch_keys,
@@ -696,6 +690,8 @@ def _audit(
             "label_column": label_column,
             "batch_keys": batch_keys,
             "subset_vars": subset_vars,
+            "batch_metadata_policy": configuration["batch_metadata_policy"],
+            "evaluation_labels": configuration["evaluation_labels"],
         },
         "subset_audit": subset_audit,
         "validation_summary": validation_summary,

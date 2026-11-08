@@ -8,6 +8,7 @@ import scipy.sparse as sp
 from pathlib import Path
 import pandas as pd
 import re
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from src.utils.py.gene_utils import standardize_gene_symbols
@@ -23,9 +24,11 @@ from src.utils.py.batch_contract import (
 )
 from src.utils.py.preprocess_utils import (
     load_input,
-    evaluate_subset_mask,
-    assert_subset_sample_consistency,
     remove_low_cellcount_samples,
+)
+from src.utils.py.cohort_selection import (
+    cohort_configuration, cohort_record, input_file_identities,
+    resolve_cohort_selection, validate_cohort_h5ad_path,
 )
 
 
@@ -44,13 +47,17 @@ def _write_checksum(path):
     tmp.write_text(
         f"MD5={_checksum(path)}\nSIZE={path.stat().st_size}\nPATH={path}\n"
     )
-    os.replace(tmp, sidecar)
+    try:
+        os.link(tmp, sidecar)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _validate_recorded_checksum(path):
     path = Path(path)
     sidecar = Path(f"{path}.md5")
-    if not path.is_file() or path.stat().st_size == 0 or not sidecar.is_file():
+    if (path.is_symlink() or sidecar.is_symlink() or not path.is_file()
+            or path.stat().st_size == 0 or not sidecar.is_file()):
         return False
     records = {}
     for line in sidecar.read_text().splitlines():
@@ -110,10 +117,10 @@ def _write_h5ad_atomic(adata, path, view_name, corrected_identity=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
     sidecar = Path(f"{path}.md5")
-    backup = path.with_name(f".{path.name}.previous.{os.getpid()}")
-    sidecar_backup = sidecar.with_name(f".{sidecar.name}.previous.{os.getpid()}")
-    had_path = path.is_file()
-    had_sidecar = sidecar.is_file()
+    if path.exists() or path.is_symlink() or sidecar.exists() or sidecar.is_symlink():
+        raise FileExistsError(f"Existing artifact is preserved; select a new derivative destination: {path}")
+    installed = False
+    checksum_installed = False
 
     validator_kwargs = {}
     if view_name == "batch_effect_corrected":
@@ -139,29 +146,24 @@ def _write_h5ad_atomic(adata, path, view_name, corrected_identity=None):
             str(tmp), view_name, "preprocessing", **validator_kwargs
         )
 
-        if had_path:
-            os.link(path, backup)
-        if had_sidecar:
-            os.link(sidecar, sidecar_backup)
-        os.replace(tmp, path)
+        # Hard-link publication fails atomically if another writer claimed the
+        # destination. Never replace a prior scientific artifact.
+        os.link(tmp, path)
+        installed = True
         validate_benchmark_h5ad_path(
             str(path), view_name, "preprocessing", **validator_kwargs
         )
         _write_checksum(path)
+        checksum_installed = True
     except Exception:
-        if backup.exists():
-            os.replace(backup, path)
-        elif not had_path and path.exists():
+        if installed and path.exists():
             path.unlink()
-        if sidecar_backup.exists():
-            os.replace(sidecar_backup, sidecar)
-        elif not had_sidecar and sidecar.exists():
+        if checksum_installed and sidecar.exists():
             sidecar.unlink()
         raise
     finally:
-        for temporary in (tmp, backup, sidecar_backup):
-            if temporary.exists():
-                temporary.unlink()
+        if tmp.exists():
+            tmp.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -664,6 +666,8 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                     f"Dataset {current_ds} declares {view_name} but "
                     "use_for_batch_effect is false"
                 )
+            if view_name == "benchmark_analysis" and not entry.get("use_for_benchmark"):
+                raise ValueError(f"Dataset {current_ds} is not enabled for benchmark processing")
 
             input_file_name = view_info.get("input_file")
             if not input_file_name:
@@ -674,6 +678,15 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                 print(f"Skipping {current_ds} / {view_name}: No output_file_name.")
                 continue
             processed_file_path = output_dir / output_file_name
+            subset_vars = view_info.get("subset_vars", {})
+            selection_configuration = cohort_configuration(
+                dataset=current_ds, view=view_name, sample_column=sample_col,
+                label_column=label_col, batch_keys=batch_col,
+                subset_vars=subset_vars,
+                batch_metadata_policy=entry.get("batch_metadata_policy"),
+                evaluation_labels=entry.get("evaluation_labels"),
+            )
+            source_identities = input_file_identities(input_file_name, input_dir)
             expected_batch_contract = None
             if is_corrected:
                 corrected_sample_column = "Sample"
@@ -698,7 +711,14 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                 else {}
             )
 
-            if processed_file_path.exists() and not force:
+            sidecar_path = Path(f"{processed_file_path}.md5")
+            if (processed_file_path.exists() or processed_file_path.is_symlink()
+                    or sidecar_path.exists() or sidecar_path.is_symlink()):
+                if force:
+                    raise FileExistsError(
+                        f"--force cannot replace preserved artifacts: {processed_file_path}; "
+                        "select a new derivative destination"
+                    )
                 try:
                     validate_benchmark_h5ad_path(
                         str(processed_file_path),
@@ -706,28 +726,36 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                         "preprocessing",
                         **path_validator_kwargs,
                     )
-                    if _validate_recorded_checksum(processed_file_path):
-                        print(f"Already processed and validated: {current_ds} / {view_name}")
-                        continue
-                except (OSError, ValueError, KeyError) as exc:
-                    print(
-                        f"Existing artifact invalid for {current_ds} / {view_name}; "
-                        f"recomputing ({exc})"
+                    if not _validate_recorded_checksum(processed_file_path):
+                        raise ValueError("missing or mismatched recorded checksum")
+                    validate_cohort_h5ad_path(
+                        processed_file_path, selection_configuration, source_identities
                     )
+                except (OSError, ValueError, KeyError) as exc:
+                    raise ValueError(
+                        f"Existing artifact preserved for {current_ds} / {view_name}; "
+                        f"select a new derivative destination ({exc})"
+                    ) from exc
+                print(f"Already processed and validated: {current_ds} / {view_name}")
+                continue
 
             print(f"Loading {current_ds} / {view_name} ...")
-            adata_full = load_input(input_file_name, input_dir, output_dir)
+            input_names = input_file_name if isinstance(input_file_name, list) else [input_file_name]
+            if any(str(name).endswith(".rds") for name in input_names):
+                # Legacy raw caches are not bound to their RDS source checksum
+                # and their loader may repair/delete them. Convert into an
+                # attempt-owned temporary directory; old caches stay immutable
+                # and parallel views cannot race over the same conversion.
+                with tempfile.TemporaryDirectory(prefix=f".{current_ds}_{view_name}_source_", dir=output_dir) as cache:
+                    adata_full = load_input(input_file_name, input_dir, cache)
+            else:
+                adata_full = load_input(input_file_name, input_dir, output_dir)
 
             # Evaluate and audit against ORIGINAL sample/label values before
             # slicing.  Standardizing the sample column first could hide a
             # split sample (and can alter '-' or leading digits).
-            subset_vars = view_info.get("subset_vars", {})
-            subset_mask = evaluate_subset_mask(adata_full, subset_vars)
-            assert_subset_sample_consistency(
-                adata_full,
-                subset_mask,
-                sample_col,
-                context=f"{current_ds} / {view_name}",
+            subset_mask, _, subset_audit = resolve_cohort_selection(
+                adata_full.obs, selection_configuration
             )
             adata_view = adata_full[subset_mask].copy()
             # Drop the parent binding so copied subsets do not retain the
@@ -816,6 +844,9 @@ def main(config_path, input_dir, output_dir, ds_name=None, force=False, view=Non
                 # values and any sample-level reduction remain out of the
                 # corrected H5AD provenance contract.
                 adata_view.uns["batch_contract"] = dict(expected_batch_contract)
+            adata_view.uns["cohort_selection"] = cohort_record(
+                subset_audit, source_identities, adata_view.obs, sample_col_out
+            )
             if is_corrected:
                 _write_h5ad_atomic(
                     adata_view,
@@ -842,9 +873,8 @@ if __name__ == "__main__":
     parser.add_argument("--view", default=None,
                         help="Process exactly one declared view (default: all declared views)")
     parser.add_argument("--force", action="store_true", default=False,
-                        help="Recompute views whose output .h5ad already exists "
-                             "(bypasses the 'Already processed' skip; needed for "
-                             "debug re-runs or after code changes)")
+                        help="Explicit recomputation requires a new derivative destination; "
+                             "existing artifacts are never replaced")
     args = parser.parse_args()
     main(config_path=args.config_path, input_dir=args.input_dir,
          output_dir=args.output_dir, ds_name=args.ds_name, force=args.force,

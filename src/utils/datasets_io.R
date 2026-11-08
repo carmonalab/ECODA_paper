@@ -8,6 +8,17 @@ read_datasets_json <- function(path = "datasets.json", view = NULL) {
     views <- ds[["views"]]
     base_columns <- ds[["columns"]]
     if (is.null(base_columns)) base_columns <- list()
+    evaluation_labels <- base_columns[["evaluation_labels"]]
+    if (is.null(evaluation_labels)) {
+      evaluation_labels <- list(primary = base_columns[["label"]])
+    } else if (!is.list(evaluation_labels) || length(evaluation_labels) == 0L ||
+               is.null(names(evaluation_labels)) || any(!nzchar(trimws(names(evaluation_labels)))) ||
+               !all(vapply(evaluation_labels, function(column) {
+                 is.character(column) && length(column) == 1L &&
+                   !is.na(column) && nzchar(trimws(column))
+               }, logical(1)))) {
+      stop("Invalid dataset-level evaluation_labels for '", ds_name, "'")
+    }
 
     if (is.null(views)) next
 
@@ -52,9 +63,11 @@ read_datasets_json <- function(path = "datasets.json", view = NULL) {
       normal_tissue = ds[["normal_tissue"]],
       use_for_benchmark = ds[["use_for_benchmark"]],
       use_for_batch_effect = ds[["use_for_batch_effect"]],
+      batch_metadata_policy = ds[["batch_metadata_policy"]],
       # columns (order mirrors datasets.json "columns")
       sample_col = columns[["sample"]],
       label_col = columns[["label"]],
+      evaluation_labels = evaluation_labels,
       batch_col = columns[["batch"]],
       cell_type_low_res = columns[["cell_type_low_res"]],
       cell_type_high_res = columns[["cell_type_high_res"]],
