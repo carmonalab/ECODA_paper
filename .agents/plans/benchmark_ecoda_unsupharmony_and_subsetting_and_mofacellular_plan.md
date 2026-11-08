@@ -239,10 +239,16 @@ No verification is performed during plan approval. After implementation, run onl
 1. The compact snapshot extractor job `4398845` was stopped before
    publication because the immediate figure request only required a faster
    metadata-only matrix. The exact run-owned snapshot workflow remains
-   available for the later full subsetting analysis.
-2. Full cell-subsetting output has not been produced. The source-level
-   implementation now drops missing high-resolution cells before grouping and
-   sampling and records total versus annotated counts.
+   available if a full-source analysis is later required.
+2. The local-only cell-subsetting run is complete from the available
+   composition bundles. It selected the 11 `datasets.json` benchmark-union
+   datasets, ran 181 rows per dataset with eight PSOCK workers, and published
+   the run-owned RDS/CSV pair under
+   `data/benchmark/results/derived/local_composition_subsetting_parallel_20260910_release/run/`.
+   The source contract recovers integer HR counts from `bundle$counts - 0.5`,
+   preserves metadata totals as diagnostics, aligns sample order to the
+   canonical baseline, and uses aggregate multivariate-hypergeometric draws
+   because cell IDs are unavailable.
 3. MOFAcellulaR has not been executed. The existing Bamboo environment has
    `MOFA2` and `reticulate`, but not `MOFAcellulaR`; no package installation or
    Pixi mutation was performed. The wrapper remains conditional and
@@ -267,6 +273,22 @@ log10 y-axis at 2 cell types, labels it `Number of cell types (log10 scale)`,
 uses intermediate 2–3–5 ticks through 1000, and remains 5×5 inches so the
 legend is not clipped.
 
+### Local-only subsetting verification — 2026-09-10
+
+- The finalized local run status is `COMPLETED`; its output has 1,991 rows
+  (`11 * 181`) and the exact target/replicate/seed schedule.
+- All-cell ANOSIM values match the persisted HR baselines to numerical
+  tolerance for all 11 datasets.
+- Source composition and metadata paths were rechecked by MD5, size, and mtime
+  against the run-owned source manifest; canonical input files were not
+  modified.
+- A fresh targeted notebook process loaded all 11 canonical HR baseline bundles,
+  derived the expected sample IDs from those baselines, passed the strict
+  derived loader, and rendered
+  `plots/Supp_fig_X_ECODA_authors_HR_cell_subsetting.pdf`.
+- The standalone notebook figure uses 4 x 3.2 inch output, 0.9-width bars,
+  and draws whiskers before bars so bars cover their central segment.
+
 ### Resource and execution boundary
 
 - Do not stage full benchmark H5ADs on the 64-GB-RAM workstation with less
@@ -275,3 +297,12 @@ legend is not clipped.
 - Do not invoke any existing `src/` Pipeline 1–5 submitter or repair path.
 - Future full-source extraction must remain standalone, explicitly scoped,
   run-owned, and metadata-only for these derived analyses.
+
+### Scope update — 2026-09-11
+
+- The user has completed review of the res50, Harmony, and local
+  cell-subsetting work and does not want further tests or implementation for
+  those analyses tracked here.
+- The active plan scope is now MOFAcellulaR implementation only.
+- No additional res50, Harmony, or cell-subsetting work is authorized until
+  the user explicitly reopens that scope.

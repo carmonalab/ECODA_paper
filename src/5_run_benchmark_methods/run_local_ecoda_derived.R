@@ -217,6 +217,18 @@ ecoda_validate_derived_manifest <- function(
       stop("derived manifest ", field, " is invalid")
     }
   }
+# Source manifests may reference validated H5AD inputs or the local legacy
+# composition bundles used by the aggregate cell-depth approximation.
+  manifest_source_mode <- if (is.null(manifest$source_mode)) {
+    "h5ad"
+  } else {
+    as.character(manifest$source_mode)
+  }
+  if (length(manifest_source_mode) != 1L ||
+      !manifest_source_mode %in%
+        c("h5ad", "composition_snapshot", "local_composition")) {
+    stop("derived manifest source_mode is invalid")
+  }
   snapshot_config_fields <- c("snapshot_config_path", "snapshot_config_md5")
   snapshot_config_present <- snapshot_config_fields %in% names(manifest)
   if (any(snapshot_config_present) && !all(snapshot_config_present)) {
@@ -242,18 +254,62 @@ ecoda_validate_derived_manifest <- function(
   }
   if (is.list(manifest$sources) && length(manifest$sources)) {
     for (source in manifest$sources) {
-      needed <- c("dataset", "view", "h5ad_path", "h5ad_md5", "analysis")
-      if (!is.list(source) || !all(needed %in% names(source))) {
-        stop("derived source entry is malformed")
-      }
-      if (!identical(source$view, "benchmark_analysis") ||
-          !identical(source$analysis, manifest$analysis) ||
-          !is.character(source$dataset) || length(source$dataset) != 1L ||
-          !nzchar(source$dataset) || !is.character(source$h5ad_path) ||
-          length(source$h5ad_path) != 1L || !nzchar(source$h5ad_path) ||
-          !is.character(source$h5ad_md5) || length(source$h5ad_md5) != 1L ||
-          !grepl("^[0-9a-f]{32}$", tolower(source$h5ad_md5), perl = TRUE)) {
-        stop("derived source entry is invalid")
+      if (identical(manifest_source_mode, "local_composition")) {
+        needed <- c(
+          "dataset", "view", "composition_path", "composition_md5",
+          "composition_size", "composition_mtime", "metadata_path",
+          "metadata_md5", "metadata_size", "metadata_mtime", "analysis"
+        )
+        if (!is.list(source) || !all(needed %in% names(source))) {
+          stop("local composition source entry is malformed")
+        }
+        valid_size <- function(value) {
+          is.numeric(value) && length(value) == 1L &&
+            is.finite(value) && value > 0 && value == floor(value)
+        }
+        valid_mtime <- function(value) {
+          (is.numeric(value) || is.character(value)) &&
+            length(value) == 1L && !is.na(value) &&
+            nzchar(as.character(value))
+        }
+        if (!identical(source$view, "local_composition") ||
+            !identical(source$analysis, manifest$analysis) ||
+            !is.character(source$dataset) || length(source$dataset) != 1L ||
+            !nzchar(source$dataset) ||
+            !is.character(source$composition_path) ||
+            length(source$composition_path) != 1L ||
+            !nzchar(source$composition_path) ||
+            !is.character(source$composition_md5) ||
+            length(source$composition_md5) != 1L ||
+            !grepl("^[0-9a-f]{32}$",
+                   tolower(source$composition_md5), perl = TRUE) ||
+            !valid_size(source$composition_size) ||
+            !valid_mtime(source$composition_mtime) ||
+            !is.character(source$metadata_path) ||
+            length(source$metadata_path) != 1L ||
+            !nzchar(source$metadata_path) ||
+            !is.character(source$metadata_md5) ||
+            length(source$metadata_md5) != 1L ||
+            !grepl("^[0-9a-f]{32}$",
+                   tolower(source$metadata_md5), perl = TRUE) ||
+            !valid_size(source$metadata_size) ||
+            !valid_mtime(source$metadata_mtime)) {
+          stop("local composition source entry is invalid")
+        }
+      } else {
+        needed <- c("dataset", "view", "h5ad_path", "h5ad_md5", "analysis")
+        if (!is.list(source) || !all(needed %in% names(source))) {
+          stop("derived source entry is malformed")
+        }
+        if (!identical(source$view, "benchmark_analysis") ||
+            !identical(source$analysis, manifest$analysis) ||
+            !is.character(source$dataset) || length(source$dataset) != 1L ||
+            !nzchar(source$dataset) || !is.character(source$h5ad_path) ||
+            length(source$h5ad_path) != 1L || !nzchar(source$h5ad_path) ||
+            !is.character(source$h5ad_md5) || length(source$h5ad_md5) != 1L ||
+            !grepl("^[0-9a-f]{32}$", tolower(source$h5ad_md5), perl = TRUE)) {
+          stop("derived source entry is invalid")
+        }
       }
     }
   }
@@ -584,6 +640,252 @@ ECODA_DERIVED_METHODS <- list(
     stop("derived output escapes output_dir: ", path)
   }
   path
+}
+# Local legacy composition inputs have no sidecars.  Their identity is bound
+# by the run manifest and checked again immediately before the computation.
+.ecoda_validate_local_file <- function(path, label) {
+  path <- .ecoda_path(path, must_work = TRUE)
+  info <- file.info(path)
+  if (.ecoda_is_symlink(path) || isTRUE(info$isdir) ||
+      is.na(info$size) || info$size <= 0 || is.na(info$mtime)) {
+    stop(label, " is missing, empty, or not a regular file: ", path)
+  }
+  list(
+    MD5 = .ecoda_md5(path),
+    SIZE = as.numeric(info$size),
+    MTIME = as.numeric(info$mtime),
+    PATH = path
+  )
+}
+
+.ecoda_resolve_local_composition <- function(composition_dir, dataset) {
+  composition_dir <- .ecoda_path(composition_dir, must_work = TRUE)
+  dataset <- .ecoda_validate_path_component(
+    dataset, "local composition dataset key"
+  )
+  composition_path <- .ecoda_path(
+    file.path(composition_dir, paste0(dataset, "_ECODA_authors_HR.rds"))
+  )
+  metadata_path <- .ecoda_path(
+    file.path(composition_dir, paste0(dataset, "_metadata.rds"))
+  )
+  for (candidate in c(composition_path, metadata_path)) {
+    if (!.ecoda_path_within(candidate, composition_dir)) {
+      stop("local composition source escapes composition_dir: ", candidate)
+    }
+    if (!file.exists(candidate) || dir.exists(candidate)) {
+      stop("local composition source is missing: ", candidate)
+    }
+  }
+  list(composition_path = composition_path, metadata_path = metadata_path)
+}
+
+.ecoda_validate_local_identity <- function(
+  identity,
+  source_config,
+  prefix,
+  label
+) {
+  expected_md5 <- source_config[[paste0(prefix, "_md5")]]
+  expected_size <- source_config[[paste0(prefix, "_size")]]
+  expected_mtime <- source_config[[paste0(prefix, "_mtime")]]
+  if (!is.null(expected_md5) &&
+      !identical(identity$MD5, tolower(as.character(expected_md5)))) {
+    stop(label, " checksum changed since source preflight: ", identity$PATH)
+  }
+  if (!is.null(expected_size) &&
+      as.numeric(identity$SIZE) != as.numeric(expected_size)) {
+    stop(label, " size changed since source preflight: ", identity$PATH)
+  }
+  if (!is.null(expected_mtime) &&
+      as.numeric(identity$MTIME) != as.numeric(expected_mtime)) {
+    stop(label, " modification time changed since source preflight: ", identity$PATH)
+  }
+  invisible(identity)
+}
+
+.ecoda_load_local_composition <- function(source_config) {
+  composition_path <- .ecoda_path(
+    source_config$composition_path, must_work = TRUE
+  )
+  metadata_path <- .ecoda_path(
+    source_config$metadata_path, must_work = TRUE
+  )
+  composition_identity <- .ecoda_validate_local_file(
+    composition_path, "local HR composition bundle"
+  )
+  metadata_identity <- .ecoda_validate_local_file(
+    metadata_path, "local metadata bundle"
+  )
+  .ecoda_validate_local_identity(
+    composition_identity, source_config, "composition", "local HR composition bundle"
+  )
+  .ecoda_validate_local_identity(
+    metadata_identity, source_config, "metadata", "local metadata bundle"
+  )
+
+  composition <- tryCatch(
+    readRDS(composition_path),
+    error = function(error) {
+      stop("Could not read local HR composition bundle: ",
+           conditionMessage(error))
+    }
+  )
+  if (!is.list(composition) || !"counts" %in% names(composition) ||
+      !"labels" %in% names(composition)) {
+    stop("local HR composition bundle must contain counts and labels")
+  }
+  counts <- tryCatch(
+    as.matrix(composition$counts),
+    error = function(error) {
+      stop("local HR composition counts are not matrix-like: ",
+           conditionMessage(error))
+    }
+  )
+  if (nrow(counts) <= 0L || ncol(counts) <= 0L ||
+      is.null(rownames(counts)) || is.null(colnames(counts))) {
+    stop("local HR composition counts have invalid dimensions or names")
+  }
+  count_values <- suppressWarnings(as.numeric(counts))
+  if (length(count_values) != length(counts) || anyNA(count_values) ||
+      any(!is.finite(count_values))) {
+    stop("local HR composition counts are not finite numeric values")
+  }
+  counts <- matrix(
+    count_values,
+    nrow = nrow(counts),
+    ncol = ncol(counts),
+    dimnames = dimnames(counts)
+  )
+  sample_ids <- as.character(rownames(counts))
+  categories <- as.character(colnames(counts))
+  if (anyNA(sample_ids) || any(!nzchar(sample_ids)) ||
+      anyDuplicated(sample_ids) || anyNA(categories) ||
+      any(!nzchar(categories)) || anyDuplicated(categories)) {
+    stop("local HR composition counts have invalid sample or cell-type names")
+  }
+
+  # run_composition_methods_hpc() persists counts_all, 0.5: every entry in
+  # bundle$counts is the integer cell count plus 0.5.  Recovering the integer
+  # table is therefore safe only after asserting that exact contract.
+  recovered_counts <- counts - 0.5
+  if (any(!is.finite(recovered_counts)) ||
+      any(recovered_counts < 0) ||
+      any(recovered_counts != floor(recovered_counts))) {
+    stop(
+      "local HR composition counts are not recoverable integer+0.5 values: ",
+      composition_path
+    )
+  }
+  keep_categories <- colSums(recovered_counts) > 0
+  invalid_categories <- .ecoda_is_missing_high_res(categories) &
+    keep_categories
+  if (any(invalid_categories)) {
+    stop(
+      "local HR composition contains invalid annotated cell types: ",
+      paste(categories[invalid_categories], collapse = ", ")
+    )
+  }
+  if (!any(keep_categories)) {
+    stop("local HR composition has no recovered annotated cell types")
+  }
+  empty_categories <- categories[!keep_categories]
+
+  labels <- composition$labels
+  label_ids <- names(labels)
+  if (is.null(label_ids) || length(label_ids) != length(sample_ids) ||
+      anyNA(label_ids) || anyDuplicated(label_ids) ||
+      !identical(as.character(label_ids), sample_ids)) {
+    stop("local HR composition labels are not aligned to count rows")
+  }
+  label_values <- as.character(labels)
+  if (length(label_values) != length(sample_ids) ||
+      any(.ecoda_is_missing_sentinel(label_values))) {
+    stop("local HR composition labels are missing or invalid")
+  }
+  labels <- as.factor(label_values)
+  names(labels) <- sample_ids
+
+  metadata <- tryCatch(
+    readRDS(metadata_path),
+    error = function(error) {
+      stop("Could not read local metadata bundle: ",
+           conditionMessage(error))
+    }
+  )
+  if (!is.list(metadata) || is.null(metadata$cells_per_sample)) {
+    stop("local metadata bundle is missing cells_per_sample")
+  }
+  metadata_counts <- metadata$cells_per_sample
+  if (is.list(metadata_counts)) {
+    metadata_counts <- unlist(metadata_counts, use.names = TRUE)
+  }
+  metadata_ids <- names(metadata_counts)
+  if (is.null(metadata_ids) || length(metadata_ids) != length(sample_ids) ||
+      anyNA(metadata_ids) || anyDuplicated(metadata_ids) ||
+      !setequal(as.character(metadata_ids), sample_ids)) {
+    stop("local metadata cells_per_sample are invalid or incomplete")
+  }
+  # The canonical benchmark result order follows metadata labels, not always
+  # the row order of the standalone HR composition bundle.
+  canonical_sample_ids <- as.character(metadata_ids)
+  if (!identical(canonical_sample_ids, sample_ids)) {
+    recovered_counts <- recovered_counts[canonical_sample_ids, , drop = FALSE]
+    labels <- labels[canonical_sample_ids]
+    sample_ids <- canonical_sample_ids
+  }
+  labels <- as.factor(as.character(labels))
+  names(labels) <- sample_ids
+  metadata_values <- suppressWarnings(
+    as.numeric(metadata_counts[sample_ids])
+  )
+  if (length(metadata_values) != length(sample_ids) ||
+      anyNA(metadata_values) || any(!is.finite(metadata_values)) ||
+      any(metadata_values <= 0) ||
+      any(metadata_values != floor(metadata_values))) {
+    stop("local metadata cells_per_sample values are invalid")
+  }
+  metadata_total_counts <- as.integer(metadata_values)
+  names(metadata_total_counts) <- sample_ids
+  annotated_counts <- as.integer(rowSums(recovered_counts))
+  if (any(annotated_counts <= 0L)) {
+    stop("local HR composition has a sample with no annotated cells")
+  }
+  names(annotated_counts) <- sample_ids
+  mismatch <- which(metadata_total_counts != annotated_counts)
+
+  post_composition_identity <- .ecoda_validate_local_file(
+    composition_path, "local HR composition bundle"
+  )
+  post_metadata_identity <- .ecoda_validate_local_file(
+    metadata_path, "local metadata bundle"
+  )
+  .ecoda_validate_local_identity(
+    post_composition_identity, source_config, "composition",
+    "local HR composition bundle"
+  )
+  .ecoda_validate_local_identity(
+    post_metadata_identity, source_config, "metadata",
+    "local metadata bundle"
+  )
+  if (!identical(post_composition_identity$MD5, composition_identity$MD5) ||
+      !identical(post_metadata_identity$MD5, metadata_identity$MD5)) {
+    stop("local composition source changed during read")
+  }
+
+  list(
+    counts = recovered_counts,
+    empty_categories = empty_categories,
+    labels = labels,
+    sample_ids = sample_ids,
+    total_cells = metadata_total_counts,
+    annotated_cells = annotated_counts,
+    composition_identity = composition_identity,
+    metadata_identity = metadata_identity,
+    mismatch_samples = sample_ids[mismatch],
+    mismatch_metadata = metadata_total_counts[mismatch],
+    mismatch_annotated = annotated_counts[mismatch]
+  )
 }
 
 .ecoda_write_text_atomic <- function(path, text) {
@@ -1102,6 +1404,148 @@ ECODA_DERIVED_METHODS <- list(
   .ecoda_validate_bundle(bundle, expected_samples, method)
   bundle
 }
+.ecoda_counts_bundle <- function(counts, labels, expected_samples, method) {
+  counts <- as.data.frame(
+    counts,
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+  rownames(counts) <- as.character(expected_samples)
+  df_imp <- impute_zeros(
+    counts,
+    clr_zero_impute_method = "counts_all",
+    clr_zero_impute_num = 0.5
+  )
+  feat_mat <- clr(df_imp)
+  bundle <- create_result_bundle(
+    feat_mat,
+    labels,
+    dist_mat = dist(feat_mat),
+    extra = list(counts = df_imp)
+  )
+  .ecoda_validate_bundle(bundle, expected_samples, method)
+  bundle
+}
+
+.ecoda_local_sample_counts <- function(counts, target_cells, seed) {
+  counts <- as.matrix(counts)
+  if (nrow(counts) <= 0L || ncol(counts) <= 0L ||
+      any(!is.finite(counts)) || any(counts < 0) ||
+      any(counts != floor(counts))) {
+    stop("local composition counts are invalid for sampling")
+  }
+  target_cells <- as.integer(target_cells)
+  if (length(target_cells) != 1L || is.na(target_cells) ||
+      target_cells < 1L) {
+    stop("local composition target_cells is invalid")
+  }
+  if (length(seed) != 1L || is.na(seed)) stop("local composition seed is invalid")
+
+  set.seed(as.integer(seed))
+  sampled_counts <- matrix(
+    0L,
+    nrow = nrow(counts),
+    ncol = ncol(counts),
+    dimnames = dimnames(counts)
+  )
+  for (sample_index in seq_len(nrow(counts))) {
+    available <- as.integer(counts[sample_index, ])
+    n_keep <- min(sum(available), target_cells)
+    if (n_keep == sum(available)) {
+      sampled_counts[sample_index, ] <- available
+      next
+    }
+    # A shuffled vector of category IDs is the aggregate representation of
+    # uniformly sampling cell IDs without replacement.  Taking a prefix is
+    # therefore a multivariate-hypergeometric draw, not an independent
+    # multinomial draw.
+    category_ids <- rep.int(seq_len(ncol(counts)), available)
+    selected <- sample(category_ids, size = n_keep, replace = FALSE)
+    sampled_counts[sample_index, ] <-
+      tabulate(selected, nbins = ncol(counts))
+  }
+  sampled_counts
+}
+.ecoda_process_local_dataset <- function(dataset, source_config, seeds) {
+  local_composition <- .ecoda_load_local_composition(source_config)
+  counts <- local_composition$counts
+  labels <- local_composition$labels
+  sample_ids <- local_composition$sample_ids
+  total_counts <- local_composition$total_cells
+  annotated_counts <- local_composition$annotated_cells
+  original_counts <- annotated_counts
+  targets <- ecoda_derived_targets()
+  method <- "ECODA_authors_HR_cell_subsetting"
+  sampling_method <- "category-level multivariate-hypergeometric sampling"
+  source_limitation <-
+    "cell IDs are unavailable; sampling uses aggregate category counts"
+  plan <- ecoda_subsetting_plan(
+    sample_ids, original_counts, seeds = seeds
+  )
+  result_rows <- vector("list", nrow(plan))
+
+  for (plan_row in seq_len(nrow(plan))) {
+    target <- plan$target[[plan_row]]
+    target_cells <- plan$target_cells[[plan_row]]
+    seed <- plan$seed[[plan_row]]
+    counts_sub <- if (identical(target, "all cells")) {
+      counts
+    } else {
+      .ecoda_local_sample_counts(
+        counts,
+        target_cells = target_cells,
+        seed = seed
+      )
+    }
+    effective_counts <- as.integer(rowSums(counts_sub))
+    names(effective_counts) <- sample_ids
+    bundle <- .ecoda_counts_bundle(
+      counts_sub, labels, sample_ids, method
+    )
+    score <- bundle$scores$anosim_score
+    if (!is.numeric(score) || length(score) != 1L || !is.finite(score)) {
+      stop("cell-subsetting ANOSIM is nonfinite for ", dataset, "/", target)
+    }
+    result_rows[[plan_row]] <- data.frame(
+      dataset = dataset,
+      target = target,
+      target_cells = as.integer(target_cells),
+      replicate = as.integer(plan$replicate[[plan_row]]),
+      seed = as.integer(seed),
+      sample_ids = paste(sample_ids, collapse = "|"),
+      total_cells_per_sample = paste(
+        paste0(sample_ids, ":", as.integer(total_counts)),
+        collapse = "|"
+      ),
+      original_cells_per_sample = paste(
+        paste0(sample_ids, ":", as.integer(original_counts)),
+        collapse = "|"
+      ),
+      annotated_cells_per_sample = paste(
+        paste0(sample_ids, ":", as.integer(annotated_counts)),
+        collapse = "|"
+      ),
+      effective_cells_per_sample = paste(
+        paste0(sample_ids, ":", as.integer(effective_counts)),
+        collapse = "|"
+      ),
+      original_total_cells = as.integer(sum(total_counts)),
+      annotated_cells = as.integer(sum(annotated_counts)),
+      total_cells = as.integer(sum(effective_counts)),
+      effective_cells = as.integer(sum(effective_counts)),
+      ANOSIM = as.numeric(score),
+      source_mode = "local_composition",
+      sampling_method = sampling_method,
+      source_limitation = source_limitation,
+      stringsAsFactors = FALSE
+    )
+    rm(counts_sub, effective_counts, bundle, score)
+  }
+
+  result_table <- do.call(rbind, result_rows)
+  .ecoda_validate_cell_subsetting_results(result_table)
+  result_table
+}
 
 
 
@@ -1454,13 +1898,29 @@ ECODA_DERIVED_METHODS <- list(
 }
 
 .ecoda_save_rds <- function(object, path) {
-  # Explicit empty producer/run_id prevent the shared helper from creating an
-  # artifact record under ECODA_RUNS_ROOT.  The only write is the requested
-  # output RDS and its adjacent checksum sidecar.
-  save_rds_atomic(object, path, producer = "", run_id = "")
-  if (!isTRUE(artifact_checksum_ok(path, producer = "", run_id = ""))) {
-    stop("published RDS failed checksum validation: ", path)
+  path <- .ecoda_path(path)
+  if (file.exists(path) || .ecoda_is_symlink(path)) {
+    stop("refusing to replace existing derived RDS: ", path)
   }
+  temporary <- paste0(path, ".tmp.", Sys.getpid())
+  on.exit(if (file.exists(temporary)) unlink(temporary), add = TRUE)
+  saveRDS(object, temporary, version = 3)
+  if (!file.exists(temporary) || is.na(file.info(temporary)$size) ||
+      file.info(temporary)$size <= 0) {
+    stop("Empty derived RDS temporary file: ", temporary)
+  }
+  if (!file.rename(temporary, path)) {
+    stop("Could not atomically publish derived RDS: ", path)
+  }
+  .ecoda_write_text_atomic(
+    paste0(path, ".md5"),
+    c(
+      paste0("MD5=", .ecoda_md5(path)),
+      paste0("SIZE=", as.character(file.info(path)$size)),
+      paste0("PATH=", path)
+    )
+  )
+  .ecoda_validate_output_sidecar(path)
   invisible(path)
 }
 .ecoda_save_csv <- function(object, path) {
@@ -1616,6 +2076,17 @@ ECODA_DERIVED_METHODS <- list(
 .ecoda_run <- function(args) {
   .ecoda_clear_in_process_owner()
   snapshot_mode <- !is.null(args$composition_snapshot)
+  composition_mode <- !is.null(args$composition_dir)
+  source_mode <- if (snapshot_mode) {
+    "composition_snapshot"
+  } else if (composition_mode) {
+    "local_composition"
+  } else {
+    "h5ad"
+  }
+  if (snapshot_mode && composition_mode) {
+    stop("--composition_snapshot and --composition_dir are mutually exclusive")
+  }
   if (snapshot_mode &&
       (identical(args$composition_snapshot, TRUE) ||
        !is.character(args$composition_snapshot) ||
@@ -1624,8 +2095,18 @@ ECODA_DERIVED_METHODS <- list(
        !nzchar(args$composition_snapshot))) {
     stop("--composition_snapshot must be one non-empty RDS path")
   }
+  if (composition_mode &&
+      (identical(args$composition_dir, TRUE) ||
+       !is.character(args$composition_dir) ||
+       length(args$composition_dir) != 1L ||
+       is.na(args$composition_dir) ||
+       !nzchar(args$composition_dir))) {
+    stop("--composition_dir must be one non-empty directory")
+  }
   required <- c("config_path", "output_dir", "analysis", "scope")
-  if (!snapshot_mode) required <- c(required, "input_dir")
+  if (!snapshot_mode && !composition_mode) {
+    required <- c(required, "input_dir")
+  }
   for (name in required) {
     if (is.null(args[[name]]) || identical(args[[name]], TRUE)) {
       stop("Missing required --", name, " argument")
@@ -1635,6 +2116,25 @@ ECODA_DERIVED_METHODS <- list(
     as.character(args$analysis),
     c("res50", "harmony", "cell_subsetting")
   )
+  if (composition_mode && analysis != "cell_subsetting") {
+    stop("--composition_dir is supported only for --analysis cell_subsetting")
+  }
+  cores <- 1L
+  if (composition_mode) {
+    requested_cores <- args$cores %||%
+      Sys.getenv("ECODA_DERIVED_CORES", unset = "8")
+    if (!is.character(requested_cores) || length(requested_cores) != 1L ||
+        is.na(requested_cores) ||
+        !grepl("^[1-9][0-9]*$", requested_cores, perl = TRUE)) {
+      stop("--cores must be a positive integer")
+    }
+    cores <- suppressWarnings(as.integer(requested_cores))
+    if (is.na(cores) || cores < 1L) {
+      stop("--cores is outside the supported integer range")
+    }
+  } else if (!is.null(args$cores)) {
+    stop("--cores is supported only with --composition_dir")
+  }
   scope <- match.arg(as.character(args$scope), c("benchmark_union", "debug"))
   if (analysis != "cell_subsetting" && !is.null(args$seeds)) {
     stop("--seeds is supported only for --analysis cell_subsetting")
@@ -1653,10 +2153,15 @@ ECODA_DERIVED_METHODS <- list(
   derived_root <- .ecoda_derived_root(project_root)
 
   config_path <- .ecoda_path(as.character(args$config_path), must_work = TRUE)
-  input_dir <- if (snapshot_mode) {
+  input_dir <- if (snapshot_mode || composition_mode) {
     NULL
   } else {
     .ecoda_path(as.character(args$input_dir))
+  }
+  composition_dir <- if (composition_mode) {
+    .ecoda_path(as.character(args$composition_dir), must_work = TRUE)
+  } else {
+    NULL
   }
   validated_output <- .ecoda_validate_derived_output_dir(
     args$output_dir, derived_root
@@ -1698,8 +2203,20 @@ ECODA_DERIVED_METHODS <- list(
     } else {
       source(file.path(project_root, "src/utils/imports_worker_core.R"))
     }
-    source(file.path(project_root, "src/utils/load_worker_functions.R"))
-    source(file.path(project_root, "src/5_run_benchmark_methods/benchmark_hpc_utils.R"))
+    if (composition_mode) {
+      # Local composition mode needs only the scoring/composition definitions.
+      # Avoid loading the full worker graph so this standalone path remains
+      # independent of unrelated notebook/helper sources.
+      source(file.path(project_root, "src/utils/math_utils.R"))
+      source(file.path(project_root, "src/utils/scoring_metrics.R"))
+      source(file.path(
+        project_root,
+        "src/5_run_benchmark_methods/benchmark_methods_r.R"
+      ))
+    } else {
+      source(file.path(project_root, "src/utils/load_worker_functions.R"))
+      source(file.path(project_root, "src/5_run_benchmark_methods/benchmark_hpc_utils.R"))
+    }
   }, finally = setwd(oldwd))
   config_md5 <- .ecoda_md5(config_path)
   runner_md5 <- .ecoda_md5(runner_path)
@@ -1761,7 +2278,7 @@ ECODA_DERIVED_METHODS <- list(
                            reason = "raw-config union is empty")
   }
 
-  if (!snapshot_mode) {
+  if (!snapshot_mode && !composition_mode) {
   for (dataset in selected) {
     entry <- raw_config[[dataset]]
     block <- function(reason) {
@@ -1863,11 +2380,120 @@ ECODA_DERIVED_METHODS <- list(
     gc(verbose = FALSE)
   }
   }
+  if (composition_mode) {
+    for (dataset in selected) {
+      entry <- raw_config[[dataset]]
+      block <- function(reason) {
+        blocked[[length(blocked) + 1L]] <<- list(
+          dataset = dataset,
+          view = "local_composition",
+          reason = as.character(reason)
+        )
+      }
+      if (!is.list(entry)) {
+        block("raw config entry is not an object")
+        next
+      }
+      paths <- tryCatch(
+        .ecoda_resolve_local_composition(composition_dir, dataset),
+        error = function(error) {
+          block(conditionMessage(error))
+          NULL
+        }
+      )
+      if (is.null(paths)) next
+      composition_identity <- tryCatch(
+        .ecoda_validate_local_file(
+          paths$composition_path, "local HR composition bundle"
+        ),
+        error = function(error) {
+          block(conditionMessage(error))
+          NULL
+        }
+      )
+      if (is.null(composition_identity)) next
+      metadata_identity <- tryCatch(
+        .ecoda_validate_local_file(
+          paths$metadata_path, "local metadata bundle"
+        ),
+        error = function(error) {
+          block(conditionMessage(error))
+          NULL
+        }
+      )
+      if (is.null(metadata_identity)) next
+      source_config <- list(
+        composition_path = composition_identity$PATH,
+        composition_md5 = composition_identity$MD5,
+        composition_size = composition_identity$SIZE,
+        composition_mtime = composition_identity$MTIME,
+        metadata_path = metadata_identity$PATH,
+        metadata_md5 = metadata_identity$MD5,
+        metadata_size = metadata_identity$SIZE,
+        metadata_mtime = metadata_identity$MTIME
+      )
+      preflight_composition <- tryCatch(
+        .ecoda_load_local_composition(source_config),
+        error = function(error) {
+          block(paste0("local composition contract failed: ",
+                       conditionMessage(error)))
+          NULL
+        }
+      )
+      if (is.null(preflight_composition)) {
+        rm(source_config, composition_identity, metadata_identity)
+        gc(verbose = FALSE)
+        next
+      }
+      source_rows[[length(source_rows) + 1L]] <- list(
+        dataset = dataset,
+        view = "local_composition",
+        composition_path = composition_identity$PATH,
+        composition_md5 = composition_identity$MD5,
+        composition_size = composition_identity$SIZE,
+        composition_mtime = composition_identity$MTIME,
+        metadata_path = metadata_identity$PATH,
+        metadata_md5 = metadata_identity$MD5,
+        metadata_size = metadata_identity$SIZE,
+        metadata_mtime = metadata_identity$MTIME,
+        analysis = analysis,
+        annotation_column = "ECODA_authors_HR",
+        empty_categories = preflight_composition$empty_categories,
+        count_recovery = "bundle$counts - 0.5",
+        sampling_method =
+          "category-level multivariate-hypergeometric sampling",
+        source_limitation =
+          "cell IDs are unavailable; sampling uses aggregate category counts",
+        metadata_count_mismatch_samples =
+          preflight_composition$mismatch_samples,
+        metadata_count_mismatch_n =
+          length(preflight_composition$mismatch_samples),
+        metadata_total_cells =
+          as.integer(sum(preflight_composition$total_cells)),
+        annotated_total_cells =
+          as.integer(sum(preflight_composition$annotated_cells))
+      )
+      source_configs[[dataset]] <- source_config
+      if (length(preflight_composition$mismatch_samples)) {
+        message(
+          dataset, ": metadata totals exceed recovered annotated counts for ",
+          length(preflight_composition$mismatch_samples), " sample(s)"
+        )
+      }
+      rm(
+        preflight_composition, source_config,
+        composition_identity, metadata_identity, paths, entry
+      )
+      gc(verbose = FALSE)
+    }
+  }
 
   source_manifest <- list(
     run_id = run_id,
     analysis = analysis,
     scope = scope,
+    source_mode = source_mode,
+    requested_cores = as.integer(cores),
     derived_root = derived_root,
     status = if (length(blocked)) "BLOCKED" else "SOURCES_VERIFIED",
     config_path = config_path,
@@ -1894,6 +2520,8 @@ ECODA_DERIVED_METHODS <- list(
     run_id = run_id,
     analysis = analysis,
     scope = scope,
+    source_mode = source_mode,
+    requested_cores = as.integer(cores),
     status = if (length(blocked)) "BLOCKED" else "RUNNING",
     output_dir = output_dir,
     derived_root = derived_root,
@@ -2104,6 +2732,79 @@ ECODA_DERIVED_METHODS <- list(
         gc(verbose = FALSE)
       }
       result_table <- do.call(rbind, result_rows)
+      .ecoda_validate_cell_subsetting_results(result_table)
+      rds_path <- .ecoda_output_path(
+        file.path(output_dir, "ECODA_authors_HR_cell_subsetting.rds"),
+        output_dir
+      )
+      csv_path <- .ecoda_output_path(
+        file.path(output_dir, "ECODA_authors_HR_cell_subsetting.csv"),
+        output_dir
+      )
+      .ecoda_save_rds(result_table, rds_path)
+      .ecoda_save_csv(result_table, csv_path)
+      .ecoda_validate_output_sidecar(csv_path)
+      artifacts[[1L]] <- .ecoda_artifact_record(
+        rds_path, "ALL", "ECODA_authors_HR_cell_subsetting"
+      )
+      artifacts[[2L]] <- .ecoda_artifact_record(
+        csv_path, "ALL", "ECODA_authors_HR_cell_subsetting"
+      )
+    } else if (composition_mode) {
+      if (!requireNamespace("doParallel", quietly = TRUE) ||
+          !requireNamespace("foreach", quietly = TRUE)) {
+        stop(
+          "doParallel and foreach are required for parallel local subsetting"
+        )
+      }
+      suppressPackageStartupMessages({
+        library("doParallel", character.only = TRUE)
+        library("foreach", character.only = TRUE)
+      })
+      worker_count <- min(as.integer(cores), length(selected))
+      if (worker_count < 1L) {
+        stop("local subsetting requires at least one selected dataset")
+      }
+      cluster <- NULL
+      on.exit(
+        if (!is.null(cluster)) {
+          try(parallel::stopCluster(cluster), silent = TRUE)
+        },
+        add = TRUE
+      )
+      cluster <- parallel::makeCluster(worker_count, type = "PSOCK")
+      doParallel::registerDoParallel(cluster)
+      local_results <- foreach(
+        dataset = selected,
+        .export = c(
+          ".ecoda_missing_label_sentinels",
+          ".ecoda_path", ".ecoda_md5", ".ecoda_is_symlink",
+          ".ecoda_is_missing_sentinel", ".ecoda_is_missing_high_res",
+          ".ecoda_validate_local_file", ".ecoda_validate_local_identity",
+          ".ecoda_load_local_composition", ".ecoda_counts_bundle",
+          ".ecoda_local_sample_counts", ".ecoda_validate_bundle",
+          ".ecoda_validate_cell_subsetting_results",
+          ".ecoda_process_local_dataset",
+          "ecoda_subsetting_plan", "ecoda_derived_targets",
+          "impute_zeros", "clr", "create_result_bundle",
+          "align_result_samples", "calc_sep_score", "calc_sil",
+          "calc_modularity", "compute_KNN_from_dist",
+          "compute_snn_graph", "clust_eval", "calc_lisi"
+        ),
+        .packages = c("dplyr"),
+        .errorhandling = "stop",
+        .inorder = TRUE,
+        .combine = rbind
+      ) %dopar% {
+        .ecoda_process_local_dataset(
+          dataset = dataset,
+          source_config = source_configs[[dataset]],
+          seeds = seeds
+        )
+      }
+      parallel::stopCluster(cluster)
+      cluster <- NULL
+      result_table <- local_results
       .ecoda_validate_cell_subsetting_results(result_table)
       rds_path <- .ecoda_output_path(
         file.path(output_dir, "ECODA_authors_HR_cell_subsetting.rds"),
