@@ -1616,6 +1616,16 @@ _ecoda_output_add_scratch_nas_pair() {
 
 
 
+ecoda_load_stage2_bassez_metadata_helper() {
+  local source_root="${ECODA_SOURCE_ROOT:-${PROJECT_ROOT:-}}" helper
+  [[ "${source_root}" = /* ]] || return 1
+  helper="$(ecoda_require_source_script_path \
+    "${source_root}/src/2_dataset_specific_preprocessing/bassez_metadata_step.sh" \
+    "${source_root}")" || return 1
+  source "${helper}"
+  stage2_bassez_metadata_load
+}
+
 _ecoda_expand_output_selection() {
   local stage="${1:-}" selection="${2:-}" step script ds view outputs extra
   local path name old_ifs expected_script expected_outputs write_flag
@@ -1635,7 +1645,11 @@ _ecoda_expand_output_selection() {
         [[ "${step}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ &&
            -n "${script}" && -n "${outputs}" && -n "${dependency}" &&
            -n "${owner}" && -z "${extra}" ]] || return 1
-        if type step_script >/dev/null 2>&1 &&
+        if [[ "${step}" == bassez_h5ad_metadata ]]; then
+          ecoda_load_stage2_bassez_metadata_helper || return 1
+          expected_script="$(stage2_bassez_metadata_script)" || return 1
+          expected_outputs="$(stage2_bassez_metadata_outputs)" || return 1
+        elif type step_script >/dev/null 2>&1 &&
            type step_outputs >/dev/null 2>&1; then
           expected_script="$(step_script "${step}" 2>/dev/null || true)"
           expected_outputs="$(step_outputs "${step}" 2>/dev/null || true)"
@@ -1665,6 +1679,9 @@ _ecoda_expand_output_selection() {
         for path in "${ECODA_SELECTION_OUTPUTS[@]}"; do
           [[ -n "${path}" ]] || return 1
           _ecoda_output_add_path "${path}" "${write_flag}" || return 1
+          if [[ "${step}" == bassez_h5ad_metadata ]]; then
+            _ecoda_output_add_path "$(stage2_bassez_metadata_nas_path "${path}")" "${write_flag}" || return 1
+          fi
         done
       done < "${selection}"
       ;;
@@ -2011,6 +2028,10 @@ ecoda_validate_stage2_output() {
   local step="$1"
   local path="$2"
   case "${step}" in
+    bassez_h5ad_metadata)
+      ecoda_load_stage2_bassez_metadata_helper || return 1
+      stage2_bassez_metadata_validate "${path}"
+      ;;
     alzheimer_donor_assay)
       # The donor-by-assay worker owns the complete source/output contract:
       # source obs preservation, collision and mixed-metadata checks, fixed

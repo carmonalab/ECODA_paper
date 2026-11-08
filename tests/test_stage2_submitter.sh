@@ -75,6 +75,8 @@ STAGE2_SOURCE_FILES=(
   src/2_dataset_specific_preprocessing/1.5.1_reconstruct_myocardial_counts.py
   src/2_dataset_specific_preprocessing/1.6.1_fill_bassez_cellsubtype.R
   src/2_dataset_specific_preprocessing/1.7.1_create_alzheimer_donor_assay.py
+  src/2_dataset_specific_preprocessing/bassez_h5ad_metadata.py
+  src/2_dataset_specific_preprocessing/bassez_metadata_step.sh
   src/utils/py/derived_prerequisite_contract.py
   src/utils/py/h5ad_source_identity.py
   src/2_dataset_specific_preprocessing/stage2_watchdog.sh
@@ -432,15 +434,11 @@ grep -q "script mismatch" "${TMP_DIR}/outside.sync.log"
 [[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == "${OUTSIDE_CALLS_BEFORE}" ]]
 
 
-# Hook-level force propagation with a temporary slurm_config/python stub.
+# Hook-level force propagation through the immutable worker and host stub.
 HOOK_ROOT="${TMP_DIR}/hook-project"
-mkdir -p "${HOOK_ROOT}/src/2_dataset_specific_preprocessing" "${HOOK_ROOT}/src/utils/bash" "${HOOK_ROOT}/bin"
-cp "${ROOT}/src/2_dataset_specific_preprocessing/1.submit.sh" "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/"
-cp "${ROOT}/src/utils/bash/ecoda_runtime.sh" "${HOOK_ROOT}/src/utils/bash/"
-printf 'PROJECT_ROOT="%s"\nPYTHON_BIN="%s/bin/python"\n' "${HOOK_ROOT}" "${HOOK_ROOT}" > "${HOOK_ROOT}/src/slurm_config.sh"
-printf '#!/bin/bash\nprintf "%%s\\n" "$*" > "%s/force.args"\n' "${HOOK_ROOT}" > "${HOOK_ROOT}/bin/python"
+mkdir -p "${HOOK_ROOT}/bin"
 printf '#!/bin/bash\n: > "%s/module.called"\n' "${HOOK_ROOT}" > "${HOOK_ROOT}/bin/module"
-chmod +x "${HOOK_ROOT}/bin/python" "${HOOK_ROOT}/bin/module"
+chmod +x "${HOOK_ROOT}/bin/module"
 export ECODA_RUN_ID="${SUBMIT_RUN_ID}" ECODA_RUN_ROOT="${SUBMIT_ROOT}"
 export ECODA_RUNTIME_IMAGE_SHA256="${IMAGE_SHA}" \
   ECODA_RUNTIME_MANIFEST_SHA256="${RUNTIME_MANIFEST_SHA}" \
@@ -448,16 +446,51 @@ export ECODA_RUNTIME_IMAGE_SHA256="${IMAGE_SHA}" \
   ECODA_RUNTIME_MANIFEST_SIZE="${RUNTIME_MANIFEST_SIZE}"
 HOME="${TMP_DIR}/home" FORCE_PREPROCESS=1 HOOK_FORCE_FILE="${HOOK_ROOT}/force.args" \
   ECODA_RUNTIME_MODE=host ECODA_RUNTIME_IN_CONTAINER=0 \
-  bash "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/1.submit.sh" \
+  bash "${GENERIC_WORKER}" \
   --step myocardial_counts
 case "$(cat "${HOOK_ROOT}/force.args")" in *"--force"*) ;; *) echo "myocardial hook dropped --force" >&2; exit 1 ;; esac
 ECODA_RUNTIME_IN_CONTAINER=1 ECODA_RUNTIME_MODE=apptainer \
   ECODA_RUNTIME_PREFIX="${HOST_ENV}" SLURM_JOB_ID=999999 \
   HOME="${TMP_DIR}/home" HOOK_FORCE_FILE="${HOOK_ROOT}/force.args" \
   PATH="${HOOK_ROOT}/bin:${TMP_DIR}/bin:${PATH}" \
-  bash "${HOOK_ROOT}/src/2_dataset_specific_preprocessing/1.submit.sh" \
+  bash "${GENERIC_WORKER}" \
   --step combinedpbmc
 [[ ! -e "${HOOK_ROOT}/module.called" ]] || { echo "CombinedPBMC loaded host module inside container" >&2; exit 1; }
+
+# Explicit metadata-only repair binds one processed parent to four new owners.
+export NAS_TARGET_DIR="${TMP_DIR}/nas"
+mkdir -p "${NAS_TARGET_DIR}" "${HPC_SCRATCH_DIR}/Bassez/output"
+METADATA_INPUT="${HPC_SCRATCH_DIR}/Bassez/output/$(jq -r '.Bassez.views.benchmark_analysis.output_file_name' "${SOURCE_ROOT}/datasets.json")"
+printf 'processed parent sentinel\n' > "${METADATA_INPUT}"
+METADATA_MD5="$(md5sum "${METADATA_INPUT}" | cut -d' ' -f1)"
+METADATA_PROOF="${TMP_DIR}/bassez-parent.md5"
+printf 'MD5=%s\nSIZE=%s\nPATH=%s\n' "${METADATA_MD5}" \
+  "$(wc -c < "${METADATA_INPUT}" | tr -d '[:space:]')" "${METADATA_INPUT}" > "${METADATA_PROOF}"
+METADATA_REFERENCE="${TMP_DIR}/bassez-reference.tsv"
+printf '%s\t%s\tlegacy\t%s\t-\t-\t%s\n' "${METADATA_INPUT}" "${METADATA_MD5}" \
+  "${METADATA_PROOF}" "$(sha256_file "${METADATA_PROOF}")" > "${METADATA_REFERENCE}"
+export ECODA_RUN_ID=stage2_submitter_bassez_metadata EXPECT_RUN_ID=stage2_submitter_bassez_metadata
+export EXPECT_RUN_ROOT="${RUNS_ROOT}/${ECODA_RUN_ID}"
+CALLS_BEFORE="$(wc -l < "${CAPTURE}" | tr -d '[:space:]')"
+HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
+  STAGE2_SUBMITTER_TEST=1 bash "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1_submit_hpc.sh" \
+    --datasets Bassez --steps bassez_h5ad_metadata --bassez-reference "${METADATA_REFERENCE}" \
+    --derivative-release stage2-fixture-release > "${TMP_DIR}/bassez-metadata.submit.log"
+export ECODA_RUN_ROOT="${EXPECT_RUN_ROOT}"
+[[ "$(wc -l < "${ECODA_RUN_ROOT}/manifests/steps.tsv" | tr -d '[:space:]')" == 1 ]]
+[[ "$(wc -l < "${CAPTURE}" | tr -d '[:space:]')" == "$((CALLS_BEFORE + 2))" ]]
+IFS=$'\t' read -r META_STEP META_SCRIPT META_OUTPUTS META_DEPENDENCY META_OWNER \
+  < "${ECODA_RUN_ROOT}/manifests/steps.tsv"
+META_H5AD="${ECODA_RUN_ROOT}/artifacts/datasets/Bassez/output/${METADATA_INPUT##*/}"
+[[ "${META_STEP}" == bassez_h5ad_metadata && "${META_SCRIPT}" == "${GENERIC_WORKER}" &&
+   "${META_OUTPUTS}" == "${META_H5AD};${META_H5AD}.repair.json" && "${META_DEPENDENCY}" == - ]]
+HOME="${TMP_DIR}/home" FORCE_PREPROCESS=0 HOOK_FORCE_FILE="${HOOK_ROOT}/metadata.args" \
+  ECODA_RUNTIME_MODE=host ECODA_RUNTIME_IN_CONTAINER=0 \
+  bash "${GENERIC_WORKER}" --step bassez_h5ad_metadata
+grep -Fq "bassez_h5ad_metadata.py create --input-file ${METADATA_INPUT} --expected-md5 ${METADATA_MD5}" "${HOOK_ROOT}/metadata.args"
+grep -Fq -- "--output-file ${META_H5AD} --legacy-input-proof ${METADATA_PROOF}" "${HOOK_ROOT}/metadata.args"
+[[ "$(cat "${METADATA_INPUT}")" == 'processed parent sentinel' && ! -e "${META_H5AD}" ]]
+
 ALZ_FIXTURE_DIR="${TMP_DIR}/alzheimer-fixtures"
 mkdir -p "${ALZ_FIXTURE_DIR}"
 pixi run -e default python - "${ALZ_FIXTURE_DIR}" <<'PY'

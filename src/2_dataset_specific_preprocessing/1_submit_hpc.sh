@@ -19,6 +19,7 @@ stage2_step_table() {
     "kfoury_lowres_ct|kfoury_lowres_ct|01:00:00|4|64G|r|1.4.1_create_kfoury_lowres_ct.R|${HPC_SCRATCH_DIR}/Kfoury/data/Kfoury_2021_34719426.rds|-" \
     "myocardial_counts|myocardial_prep|01:00:00|4|32G|python_force|1.5.1_reconstruct_myocardial_counts.py|${HPC_SCRATCH_DIR}/Myocardial_infarction/data/Myocardial_Infarc_2.h5ad|-" \
     "bassez_cellsubtype|bassez_fill_subtype|01:00:00|4|64G|r|1.6.1_fill_bassez_cellsubtype.R|${HPC_SCRATCH_DIR}/Bassez/data/BassezA_2021_33958794whole.rds|-" \
+    "bassez_h5ad_metadata|bassez_metadata|04:00:00|1|16G|python_bassez_metadata|bassez_h5ad_metadata.py|@BASSEZ_METADATA_OUTPUTS|-" \
     "alzheimer_donor_assay|alzheimer_donor_assay|02:00:00|2|64G|python_alzheimer|1.7.1_create_alzheimer_donor_assay.py|${HPC_SCRATCH_DIR}/Alzheimer/data/SEAAD_Alzheimer_donor_assay.h5ad|-"
 }
 
@@ -35,6 +36,10 @@ stage2_step_config() {
        -n "${row_memory}" && -n "${row_executor}" && -n "${row_worker}" &&
        -n "${row_outputs}" && -n "${row_dependency}" ]] || return 1
     case "${row_outputs}" in
+      '@BASSEZ_METADATA_OUTPUTS')
+        stage2_source_bassez_helper || return 1
+        row_outputs="$(stage2_bassez_metadata_outputs)" || return 1
+        ;;
       *'@JOANITO_INPUT'*)
         joanito_input="$(ecoda_view_input_name Joanito batch_effect_uncorrected)" ||
           return 1
@@ -47,6 +52,12 @@ stage2_step_config() {
     return 0
   done < <(stage2_step_table)
   return 1
+}
+
+stage2_source_bassez_helper() {
+  local helper="${ECODA_SOURCE_ROOT:-${PROJECT_ROOT}}/src/2_dataset_specific_preprocessing/bassez_metadata_step.sh"
+  [[ -f "${helper}" && ! -L "${helper}" && -r "${helper}" ]] || return 1
+  source "${helper}"
 }
 
 if [[ "${1:-}" == "--step-config" ]]; then
@@ -66,6 +77,8 @@ DATASETS_SET=0
 DATASETS_OPTION_KIND=""
 STEPS_ARG=""
 STEPS_SET=0
+BASSEZ_REFERENCE=""
+DERIVATIVE_RELEASE=""
 FORCE_ARG=0
 SYNC_ONLY_RUN=""
 SYNC_ONLY_SET=0
@@ -87,10 +100,12 @@ usage() {
 Usage: 1_submit_hpc.sh [--datasets LIST] [--steps LIST] [--force]
        [--sync-only RUN_ID] [--mem VALUE] [--max-mem VALUE]
        [--partition NAME] [--throttle N]
+       [--bassez-reference TSV --derivative-release ID]
 
 Steps: gongsharma_cap, combinedpbmc, joanito, kfoury_lowres_ct,
        myocardial_counts, bassez_cellsubtype,
        alzheimer_donor_assay (Alzheimer-only explicit selector)
+       bassez_h5ad_metadata (Bassez-only explicit selector; no --force)
 EOF
 }
 
@@ -102,6 +117,8 @@ while [[ $# -gt 0 ]]; do
     --ds_name=*) DATASETS_ARG="${1#*=}"; DATASETS_SET=1; DATASETS_OPTION_KIND="ds_name"; shift ;;
     --steps) STEPS_ARG="${2:-}"; STEPS_SET=1; shift 2 ;;
     --steps=*) STEPS_ARG="${1#*=}"; STEPS_SET=1; shift ;;
+    --bassez-reference) BASSEZ_REFERENCE="${2:-}"; shift 2 ;;
+    --derivative-release) DERIVATIVE_RELEASE="${2:-}"; shift 2 ;;
     --force) FORCE_ARG=1; shift ;;
     --sync-only) SYNC_ONLY_RUN="${2:-}"; SYNC_ONLY_SET=1; shift 2 ;;
     --sync-only=*) SYNC_ONLY_RUN="${1#*=}"; SYNC_ONLY_SET=1; shift ;;
@@ -141,6 +158,17 @@ if [[ ${SYNC_ONLY_SET} -eq 1 && -z "${SYNC_ONLY_RUN}" ]]; then
 fi
 
 ALZHEIMER_STEP="alzheimer_donor_assay"
+BASSEZ_METADATA_STEP="bassez_h5ad_metadata"
+bassez_metadata_requested=0
+case ",${STEPS_ARG}," in *,${BASSEZ_METADATA_STEP},*) bassez_metadata_requested=1 ;; esac
+if [[ ${bassez_metadata_requested} -eq 1 || -n "${BASSEZ_REFERENCE}" || -n "${DERIVATIVE_RELEASE}" ]]; then
+  if [[ "${DATASETS_OPTION_KIND}" != datasets || "${DATASETS_ARG}" != Bassez ||
+        "${STEPS_ARG}" != "${BASSEZ_METADATA_STEP}" || -z "${BASSEZ_REFERENCE}" ||
+        -z "${DERIVATIVE_RELEASE}" || -n "${SYNC_ONLY_RUN}" || ${FORCE_ARG} -ne 0 ]]; then
+    echo "ERROR: Bassez metadata repair requires only --datasets Bassez --steps bassez_h5ad_metadata --bassez-reference TSV --derivative-release ID, without --force or --sync-only." >&2
+    exit 1
+  fi
+fi
 alzheimer_dataset_requested=0
 alzheimer_step_requested=0
 case ",${DATASETS_ARG}," in
@@ -288,6 +316,10 @@ stage2_semantic_output_valid() {
   local step="$1"
   local path="$2"
   case "${step}" in
+    bassez_h5ad_metadata)
+      stage2_source_bassez_helper || return 1
+      stage2_bassez_metadata_validate "${path}"
+      ;;
     alzheimer_donor_assay)
       local validator raw
       validator="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1.7.1_create_alzheimer_donor_assay.py"
@@ -350,6 +382,10 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   fi
   [[ ${bound_rc} -eq 0 ]] ||
     stage2_abort "Stage 2 run-bound source/runtime identity is invalid"
+  if [[ -f "${ECODA_RUN_ROOT}/manifests/bassez_metadata.json" ]]; then
+    stage2_source_bassez_helper && stage2_bassez_metadata_load ||
+      stage2_abort "Stage 2 Bassez metadata binding is invalid"
+  fi
   ecoda_runtime_validate_bound_run ||
     stage2_abort "Stage 2 run-bound runtime validation failed"
   RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage2 0)" ||
@@ -450,6 +486,9 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   if [[ ${failed} -ne 0 ]]; then
     stage2_abort "Stage 2 sync-only validation failed"
   fi
+  if [[ -f "${ECODA_RUN_ROOT}/manifests/bassez_metadata.json" ]]; then
+    stage2_bassez_metadata_sync || stage2_abort "Stage 2 Bassez NAS synchronization failed"
+  fi
   ecoda_set_run_state OK "sync-only artifact and manifest validation passed" ||
     stage2_abort "failed to write Stage 2 terminal OK state"
   exit 0
@@ -469,7 +508,7 @@ fi
 
 ALL_STEPS=()
 while IFS='|' read -r table_step table_rest; do
-  if [[ -n "${table_step}" && "${table_step}" != "${ALZHEIMER_STEP}" ]]; then
+  if [[ -n "${table_step}" && "${table_step}" != "${ALZHEIMER_STEP}" && "${table_step}" != "${BASSEZ_METADATA_STEP}" ]]; then
     ALL_STEPS+=("${table_step}")
   fi
 done < <(stage2_step_table)
@@ -477,6 +516,8 @@ SELECTED_STEPS=()
 if [[ ${alzheimer_dataset_requested} -eq 1 ]]; then
   # The argument guard above makes this the only legal Alzheimer request.
   SELECTED_STEPS=("${ALZHEIMER_STEP}")
+elif [[ ${bassez_metadata_requested} -eq 1 ]]; then
+  SELECTED_STEPS=("${BASSEZ_METADATA_STEP}")
 elif [[ -n "${STEPS_ARG}" ]]; then
   ecoda_split_csv "${STEPS_ARG}"
   SELECTED_STEPS=("${ECODA_ARRAY[@]}")
@@ -485,7 +526,9 @@ else
   SELECTED_STEPS=("${ALL_STEPS[@]}")
 fi
 for step in "${SELECTED_STEPS[@]}"; do
-  if [[ "${step}" == "${ALZHEIMER_STEP}" ]]; then
+  if [[ "${step}" == "${BASSEZ_METADATA_STEP}" ]]; then
+    [[ ${bassez_metadata_requested} -eq 1 && ${#SELECTED_STEPS[@]} -eq 1 ]] || exit 1
+  elif [[ "${step}" == "${ALZHEIMER_STEP}" ]]; then
     [[ ${alzheimer_dataset_requested} -eq 1 && ${#SELECTED_STEPS[@]} -eq 1 ]] || {
       echo "ERROR: ${ALZHEIMER_STEP} is restricted to the explicit Alzheimer selector." >&2
       exit 1
@@ -506,7 +549,7 @@ if [[ ${alzheimer_dataset_requested} -eq 0 && -n "${DATASETS_ARG}" ]]; then
     keep=0
     for ds in "${DATASET_NAMES[@]}"; do
       case "${step}:${ds}" in
-        gongsharma_cap:Gongsharma_cmv_young_males|gongsharma_cap:CombinedPBMC|combinedpbmc:CombinedPBMC|joanito:Joanito|joanito:_debug|kfoury_lowres_ct:Kfoury|myocardial_counts:Myocardial_infarction|bassez_cellsubtype:Bassez) keep=1 ;;
+        gongsharma_cap:Gongsharma_cmv_young_males|gongsharma_cap:CombinedPBMC|combinedpbmc:CombinedPBMC|joanito:Joanito|joanito:_debug|kfoury_lowres_ct:Kfoury|myocardial_counts:Myocardial_infarction|bassez_cellsubtype:Bassez|bassez_h5ad_metadata:Bassez) keep=1 ;;
       esac
     done
     [[ ${keep} -eq 1 ]] && FILTERED_STEPS+=("${step}")
@@ -530,6 +573,8 @@ fi
 ORDERED_STEPS=()
 if [[ ${alzheimer_dataset_requested} -eq 1 ]]; then
   ORDERED_STEPS=("${ALZHEIMER_STEP}")
+elif [[ ${bassez_metadata_requested} -eq 1 ]]; then
+  ORDERED_STEPS=("${BASSEZ_METADATA_STEP}")
 else
   for known_step in "${ALL_STEPS[@]}"; do
     for selected_step in "${SELECTED_STEPS[@]}"; do
@@ -575,6 +620,10 @@ ecoda_runtime_validate_submission apptainer ||
   stage2_abort "Stage 2 runtime.identity was not written atomically"
 stage2_record_identity_metadata ||
   stage2_abort "failed to record Stage 2 source/runtime identity"
+if [[ ${bassez_metadata_requested} -eq 1 ]]; then
+  stage2_source_bassez_helper && stage2_bassez_metadata_bind "${BASSEZ_REFERENCE}" "${DERIVATIVE_RELEASE}" ||
+    stage2_abort "failed to bind the explicit Bassez metadata input and derivative roots"
+fi
 RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage2 0)" ||
   stage2_abort "Stage 2 runtime export construction failed"
 RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_RUNTIME_IDENTITY=${RUNTIME_IDENTITY},ECODA_RUN_ROOT=${ECODA_RUN_ROOT},ECODA_SOURCE_MANIFEST_RUN=${SOURCE_MANIFEST_RUN},ECODA_HOST_ENV_PREFIX=${ECODA_HOST_ENV_PREFIX:-},ECODA_AUX_ROOT=${ECODA_AUX_ROOT:-${SOURCE_ROOT%/}/aux},ECODA_LOGS_DIR=${LOGS_DIR},ECODA_SCRATCH_ROOT=${ECODA_SCRATCH_ROOT:-${HPC_SCRATCH_DIR}}"

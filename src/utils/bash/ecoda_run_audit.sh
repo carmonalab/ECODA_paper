@@ -763,6 +763,14 @@ _audit_output_metadata_add() {
 _audit_semantic_artifact() {
   local path="$1" dataset="$2" view="$3" input_dir python_bin
   case "${STAGE_ARG}" in
+    stage2)
+      if [[ -f "${RUN_ROOT_REAL}/manifests/bassez_metadata.json" ]]; then
+        ecoda_validate_checksum "${path}" || return 1
+        case "${path}" in
+          *.h5ad) ecoda_validate_stage2_output bassez_h5ad_metadata "${path}" || return 1 ;;
+        esac
+      fi
+      ;;
     stage3)
       case "${path}" in
         *.h5ad)
@@ -832,6 +840,28 @@ _audit_prepare_output_semantics() {
   }
 }
 
+_audit_bassez_nas_artifact() {
+  local path="$1" directory
+  ecoda_validate_stage2_output bassez_h5ad_metadata "${path}" || {
+    _audit_die "Bassez NAS publication validation failed: ${path}"
+    return 1
+  }
+  [[ "$(_ecoda_artifact_mode_bits "${path}")" == 666 &&
+     "$(_ecoda_artifact_mode_bits "${path}.md5")" == 666 ]] || {
+    _audit_die "Bassez NAS files must have mode 666: ${path}"
+    return 1
+  }
+  directory="$(dirname "${path}")"
+  while [[ "${directory}" != "${NAS_TARGET_DIR%/}" ]]; do
+    [[ "${directory}" == "${NAS_TARGET_DIR%/}/"* &&
+       "$(_ecoda_artifact_mode_bits "${directory}")" == 777 ]] || {
+      _audit_die "Bassez selected NAS directories must have mode 777: ${directory}"
+      return 1
+    }
+    directory="$(dirname "${directory}")"
+  done
+}
+
 _audit_selected_artifacts() {
   local path owner_dir owner_run scope_selection
   local semantic_index=0 semantic_dataset="" semantic_view="" semantic_label=""
@@ -876,6 +906,10 @@ _audit_selected_artifacts() {
     owner_run="${ECODA_ARTIFACT_OWNER_RUN}"
     if [[ -n "${NAS_TARGET_DIR:-}" &&
           "${path}" == "${NAS_TARGET_DIR}"/* ]]; then
+      if [[ "${STAGE_ARG}" == stage2 &&
+            -f "${RUN_ROOT_REAL}/manifests/bassez_metadata.json" ]]; then
+        _audit_bassez_nas_artifact "${path}" || return 1
+      fi
       continue
     fi
     _audit_record_for_path "${path}" "${owner_run}" || return 1
@@ -907,7 +941,15 @@ ecoda_validate_run_owned_path "${RUNTIME_COPY}" "${RUN_ROOT_REAL}" || exit 1
 _audit_same_bytes "${SOURCE_MANIFEST_ARG}" "${SOURCE_COPY}" || exit 1
 _audit_same_bytes "${RUNTIME_IDENTITY_ARG}" "${RUNTIME_COPY}" || exit 1
 _audit_source_manifest "${SOURCE_MANIFEST_ARG}" || exit 1
-export ECODA_RUN_ROOT="${RUN_ROOT_REAL}"
+export ECODA_RUN_ROOT="${RUN_ROOT_REAL}" ECODA_RUN_ID="${RUN_ID}"
+if [[ "${STAGE_ARG}" == stage2 &&
+      ( -e "${RUN_ROOT_REAL}/manifests/bassez_metadata.json" ||
+        -e "${RUN_ROOT_REAL}/manifests/bassez_metadata.input.tsv" ) ]]; then
+  export PROJECT_ROOT="${AUDIT_SOURCE_ROOT}" ECODA_SOURCE_ROOT="${AUDIT_SOURCE_ROOT}"
+  export DATASETS_JSON_FILE="${AUDIT_SOURCE_ROOT}/datasets.json"
+  export PYTHON_BIN="$(_audit_python_binary)"
+  ecoda_load_stage2_bassez_metadata_helper || exit 1
+fi
 if [[ -f "${RUN_ROOT_REAL}/manifests/artifact_bindings.json" ||
       -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
   expected_binding="${RUN_ROOT_REAL}/manifests/artifact_bindings.json"

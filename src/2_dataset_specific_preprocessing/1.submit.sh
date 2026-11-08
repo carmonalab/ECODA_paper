@@ -81,6 +81,7 @@ if [[ "${ECODA_RUNTIME_IN_CONTAINER:-0}" != "1" ]]; then
     fail "Stage 2 run source manifest does not match the bound snapshot"
 fi
 
+export ECODA_RUN_ROOT="${RUN_ROOT}" ECODA_RUN_ID="${RUN_ID}"
 STEP_ROW="$(BASH_ENV=/dev/null bash "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/1_submit_hpc.sh" \
   --step-config "${STEP}")" ||
   fail "unknown or malformed Stage 2 step: ${STEP}"
@@ -183,6 +184,21 @@ case "${EXECUTOR}" in
     ;;
   python_alzheimer)
     run_alzheimer
+    ;;
+  python_bassez_metadata)
+    [[ "${FORCE_PREPROCESS:-0}" == 0 ]] || fail "Bassez metadata repair never replaces existing outputs"
+    source "${SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
+    BASSEZ_HELPER="${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/bassez_metadata_step.sh"
+    ecoda_require_source_script_path "${BASSEZ_HELPER}" "${SOURCE_ROOT}" >/dev/null ||
+      fail "Bassez helper escaped the immutable source snapshot"
+    source "${BASSEZ_HELPER}"
+    stage2_bassez_metadata_load || fail "Bassez run-bound input/root identity is invalid"
+    if [[ -e "${BASSEZ_METADATA_OUTPUT}" || -L "${BASSEZ_METADATA_OUTPUT}" ||
+          -e "${BASSEZ_METADATA_OUTPUT}.md5" || -e "${BASSEZ_METADATA_OUTPUT}.repair.json" ]]; then
+      stage2_bassez_metadata_run validate || fail "existing Bassez derivative is invalid and preserved"
+    else
+      stage2_bassez_metadata_run create || fail "Bassez metadata repair failed"
+    fi
     ;;
   r)
     ${PIXI_RSCRIPT} "${WORKER_SCRIPT}"

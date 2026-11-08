@@ -198,6 +198,10 @@ if [[ ${bound_rc} -eq 2 ]]; then
   fail "legacy_source_unpinned"
 fi
 [[ ${bound_rc} -eq 0 ]] || fail "Stage 2 run-bound source/runtime identity is invalid"
+if [[ -f "${RUN_ROOT}/manifests/bassez_metadata.json" ]]; then
+  source "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/bassez_metadata_step.sh"
+  stage2_bassez_metadata_load || fail "Bassez metadata binding is invalid"
+fi
 [[ "${MANIFEST}" == "${RUN_ROOT}/manifests/steps.tsv" &&
    "${JOB_FILE}" == "${RUN_ROOT}/manifests/jobs.tsv" ]] ||
   fail "Stage 2 scheduler manifests are not the exact run-owned paths"
@@ -390,6 +394,9 @@ validate_outputs() {
       fi
     done
   done < "${MANIFEST}"
+  if [[ -f "${RUN_ROOT}/manifests/bassez_metadata.json" ]]; then
+    stage2_bassez_metadata_sync || return 1
+  fi
   local published_path owner_dir
   for published_path in "${ECODA_OUTPUT_PATHS[@]}"; do
     owner_dir="$(ecoda_artifact_owner_dir "${published_path}")" || return 1

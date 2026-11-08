@@ -125,7 +125,7 @@ done
 PROFILE="${ROOT}/.agents/skills/durable-hpc-gate-ecoda/references/profile.json"
 BAMBOO_NAS_MOUNT="/srv/smednas515.unige.ch/carmona_smb"
 
-jq -e '.policy.manifest_constraints.remote_host == ["yggdrasil"]' \
+jq -e '.policy.manifest_constraints.remote_host == ["bamboo"]' \
   "${PROFILE}" >/dev/null
 REMOTE_WORKDIR="/home/users/h/halterc/ECODA_paper"
 REMOTE_PATH="/home/users/h/halterc/scratch/ECODA_paper"
@@ -158,7 +158,10 @@ jq -e --arg bamboo_nas_mount "${BAMBOO_NAS_MOUNT}" '
     .policy.audit_commands[]?.command,
     .policy.artifact_contracts[]?.command
   ]
-  | all(.[]; contains($bamboo_nas_mount) | not)
+  | map(select(contains("source src/slurm_config.sh")))
+  | length > 0 and all(.[];
+      contains("ECODA_HPC_CLUSTER=bamboo") and
+      contains("ECODA_NAS_TARGET_DIR=" + $bamboo_nas_mount + "/Projects/ECODA_paper"))
 ' "${PROFILE}" >/dev/null
 
 
