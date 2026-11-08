@@ -5,7 +5,7 @@
 # Called by 1.1_run_worker.sh via ${PIXI_RSCRIPT} with:
 #   --config_path --ds_name --view benchmark_analysis --method {gloscope,mofa,
 #   pseudobulk,scitd,composition} --input_dir --results_dir --pseudobulk_dir
-#   --gloscope_cache_dir --log_file [--force]
+#   --gloscope_cache_dir --log_file [--force] [--pseudobulk_variants CSV]
 # Canonical ordinary and batch pseudobulk paths use the raw H5AD CSR Sample
 # aggregate plus the direct matrix DESeq2 API.  They never materialize a
 # sample-level Seurat object.  Count-backed Seurat remains reserved for
@@ -27,6 +27,12 @@ source(file.path(project_root, "src/5_run_benchmark_methods/benchmark_hpc_utils.
 
 raw_args <- commandArgs(trailingOnly = TRUE)
 args <- parse_flags(raw_args)
+unknown_args <- setdiff(names(args), c(
+  "config_path", "ds_name", "view", "method", "input_dir", "results_dir",
+  "pseudobulk_dir", "gloscope_cache_dir", "log_file", "force", "analysis_pass",
+  "combo", "pseudobulk_variants"
+))
+if (length(unknown_args)) stop("Unknown method-worker argument: ", paste(unknown_args, collapse = ", "))
 
 for (req in c("config_path", "ds_name", "view", "method", "input_dir",
               "results_dir", "log_file")) {
@@ -53,6 +59,10 @@ if (!method %in% c("gloscope", "mofa", "pseudobulk", "scitd",
   stop("Unknown method '", method,
        "' (expected gloscope, mofa, pseudobulk, scitd or composition)")
 }
+selected_pb_variants <- if (is.null(args[["pseudobulk_variants"]])) NULL else
+  parse_pseudobulk_variant_selection(
+    args, raw_args, method, args$view, args[["analysis_pass"]]
+  )
 combo_supplied <- !is.null(args[["combo"]])
 combo_token <- args[["combo"]]
 if (combo_supplied && method != "gloscope") {
@@ -254,7 +264,8 @@ hvg_rank_genes <- NULL
 embedding_matrices <- NULL
 embedding_sample_ids <- NULL
 if (pseudobulk_metadata_method) {
-  ct_columns <- if (method == "pseudobulk" && is.null(analysis_pass)) {
+  ct_columns <- if (method == "pseudobulk" && is.null(analysis_pass) &&
+                    is.null(selected_pb_variants)) {
     c(entry$cell_type_low_res, entry$cell_type_high_res)
   } else {
     character()
@@ -448,9 +459,19 @@ if (correct_batch_mode) {
   )
 }
 
-if (!combo_supplied && artifact_checksum_ok(method_rds) && !force) {
+method_cache_valid <- !force && !combo_supplied && is.null(selected_pb_variants) &&
+  artifact_checksum_ok(method_rds)
+method_cached <- NULL
+if (method_cache_valid && method == "pseudobulk" && is.null(analysis_pass)) {
+  method_cached <- read_rds_checked(method_rds)
+  method_cache_valid <- is.list(method_cached) && identical(
+    method_cached[["Pseudobulk_hvg2000_bl"]][["blacklist_policy"]],
+    pseudobulk_blacklist()$policy
+  )
+}
+if (method_cache_valid) {
   message("Method results already exist and passed checksum/record validation: ", method_rds)
-  cached <- read_rds_checked(method_rds)
+  cached <- if (is.null(method_cached)) read_rds_checked(method_rds) else method_cached
   if (!is.list(cached)) {
     stop("Method results artifact is not a list: ", method_rds)
   }
@@ -509,7 +530,9 @@ if (!combo_supplied && artifact_checksum_ok(method_rds) && !force) {
     validate_hpc_timing_bundle(
       value, label = paste0("Method result ", ds, "/", method, "/", nm)
     )
-    if ("timing_schema" %in% names(value)) {
+    if ("timing_schema" %in% names(value) &&
+        !(identical(nm, "Pseudobulk_hvg2000_bl") &&
+          !is.null(value[["blacklist_policy"]]))) {
       timing_id <- as.character(value[["timing_id"]])
       shared_method <- if ("shared_timing_method" %in% names(value)) {
         as.character(value[["shared_timing_method"]])
@@ -557,7 +580,11 @@ if (method == "gloscope") {
     stop("Missing required --pseudobulk_dir argument for method ", method)
   }
   dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
-  requested_pb_variants <- if (method == "mofa" || is.null(analysis_pass)) {
+  requested_pb_variants <- if (!is.null(selected_pb_variants)) {
+    selected_pb_variants
+  } else if (method == "mofa") {
+    c("hvg1000", "hvg2000", "hvg3000")
+  } else if (is.null(analysis_pass)) {
     PB_VARIANT_NAMES
   } else {
     "hvg2000"
@@ -642,7 +669,7 @@ if (method == "gloscope") {
     batch_col = batch_col,
     blind = blind_mode,
     correct_batch = correct_batch_mode,
-    variants = if (!is.null(analysis_pass)) "hvg2000" else PB_VARIANT_NAMES,
+    variants = "hvg2000",
     batch_keys = if (correct_batch_mode) as.list(unname(batch_keys)) else NULL,
     batch_context = if (correct_batch_mode) batch_context else NULL,
     batch_contract = if (correct_batch_mode) pseudobulk_batch_contract else NULL,
@@ -725,7 +752,8 @@ results <- switch(
     source_identity = source_identity,
     batch_contract = if (correct_batch_mode) method_batch_contract else NULL,
     batch_context = if (correct_batch_mode) batch_context else NULL,
-    batch_keys = if (correct_batch_mode) as.list(unname(batch_keys)) else NULL
+    batch_keys = if (correct_batch_mode) as.list(unname(batch_keys)) else NULL,
+    variants = selected_pb_variants
   ),
   scitd = run_scitd_hpc(
     seurat, label_col = entry$label_col,
@@ -764,7 +792,12 @@ results <- switch(
   )
 )
 
-if (combo_supplied) {
+if (!is.null(selected_pb_variants)) {
+  message(
+    "Saved pseudobulk variant shards ", paste(selected_pb_variants, collapse = ","),
+    "; method-level RDS deferred to release consolidation"
+  )
+} else if (combo_supplied) {
   message(
     "Saved GloScope combo ", combo_token,
     " per-combo bundle/cache; method-level RDS deferred to consolidation"

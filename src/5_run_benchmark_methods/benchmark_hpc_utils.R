@@ -54,6 +54,31 @@ PB_VARIANT_PRODUCERS <- setNames(
   paste0("stage5_prepare_pseudobulk_", PB_VARIANT_NAMES),
   PB_VARIANT_NAMES
 )
+
+# Explicit ordinary pseudobulk shards select preparation and result variants
+# together. No selector means the existing full method suite.
+parse_pseudobulk_variant_selection <- function(
+  args, raw_args, method, view, analysis_pass = NULL
+) {
+  occurrences <- sum(grepl("^--pseudobulk_variants($|=)", raw_args))
+  if (occurrences > 1L) stop("Duplicate --pseudobulk_variants argument")
+  selection <- args[["pseudobulk_variants"]]
+  if (is.null(selection)) return(NULL)
+  if (!method %in% c("prepare_pseudobulk", "pseudobulk") ||
+      !identical(view, "benchmark_analysis") || !is.null(analysis_pass)) {
+    stop("--pseudobulk_variants requires ordinary benchmark pseudobulk preparation/results")
+  }
+  if (!is.character(selection) || length(selection) != 1L ||
+      is.na(selection) || !nzchar(selection) ||
+      grepl("(^,|,$|,,|[[:space:]])", selection)) {
+    stop("--pseudobulk_variants requires a nonempty comma-separated variant list")
+  }
+  selected <- strsplit(selection, ",", fixed = TRUE)[[1L]]
+  if (anyDuplicated(selected) || any(!selected %in% PB_VARIANT_NAMES)) {
+    stop("Unknown or duplicate --pseudobulk_variants: ", selection)
+  }
+  selected
+}
 # Corrected-mode consumers share the Python batch contract through the compact
 # R adapter. The worker loader sources it once for Pipeline A and direct
 # utility callers.
@@ -1078,7 +1103,20 @@ ecoda_hpc_apply_batch_context <- function(
   } else {
     cache_valid <- artifact_checksum_ok(path, producer = producer)
   }
-  if (!isTRUE(cache_valid) || is.null(expected_batch_contract)) {
+  if (!isTRUE(cache_valid)) return(FALSE)
+  if (identical(variant, "hvg2000_bl")) {
+    value <- readRDS(path)
+    if (!is.list(value) ||
+        !identical(value[["blacklist_policy"]], pseudobulk_blacklist()$policy)) {
+      return(FALSE)
+    }
+    validate_pseudobulk_timing_record(value, variant = variant)
+    if (!all(vapply(
+      c("aggregate_time_secs", "shared_fit_time_secs", "shared_time_secs"),
+      function(field) identical(as.numeric(value[[field]]), 0), logical(1)
+    ))) stop("BL pseudobulk cache must use self-contained timing: ", path)
+  }
+  if (is.null(expected_batch_contract)) {
     return(isTRUE(cache_valid))
   }
   value <- readRDS(path)
@@ -1900,6 +1938,12 @@ emit_pseudobulk_timing_rows <- function(
     ),
     logical(1)
   )
+  # Policy-versioned BL preparation owns its complete cost in variant_time;
+  # it does not consume or contribute to the ordinary shared-fit row.
+  schema2 <- schema2 & !vapply(seq_along(variants), function(index) {
+    identical(names(variants)[[index]], "hvg2000_bl") &&
+      !is.null(variants[[index]][["blacklist_policy"]])
+  }, logical(1))
   if (any(schema2)) {
     shared_ids <- unique(vapply(
       variants[schema2],

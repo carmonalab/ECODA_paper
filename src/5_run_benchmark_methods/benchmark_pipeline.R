@@ -678,6 +678,24 @@ prepare_pseudobulks_hpc <- function(
       anyDuplicated(hvg_rank_genes)) {
     stop("prepare_pseudobulks_hpc received invalid ranked HVG genes.")
   }
+  if ("hvg2000_bl" %in% variants && length(variants) > 1L) {
+    # BL is a separate preparation unit, including its own measured count
+    # aggregation. This bounded extra pass keeps ordinary shared timing intact
+    # and gives BL an honest standalone cost without a new timing schema.
+    prepare_unit <- function(selected_variants) prepare_pseudobulks_hpc(
+      h5ad_path = h5ad_path, sample_col = sample_col,
+      hvg_rank_genes = hvg_rank_genes, variants = selected_variants,
+      batch_col = batch_col, blind = blind, correct_batch = correct_batch,
+      cache_stem = cache_stem, view = view, analysis_pass = analysis_pass,
+      run_id = run_id, source_identity = source_identity,
+      chunk_size = chunk_size, batch_keys = batch_keys,
+      batch_context = batch_context, batch_contract = batch_contract,
+      expected_h5ad_batch_contract = expected_h5ad_batch_contract
+    )
+    ordinary <- prepare_unit(setdiff(variants, "hvg2000_bl"))
+    blacklist <- prepare_unit("hvg2000_bl")
+    return(c(ordinary, blacklist)[variants])
+  }
 
   # Corrected pseudobulk validates every cell before the raw first-observation
   # Sample aggregate. All configured technical columns remain in metadata;
@@ -791,13 +809,15 @@ prepare_pseudobulks_hpc <- function(
     hvg2000 = list(n_hvg = 2000L, black_list = "none"),
     hvg500 = list(n_hvg = 500L, black_list = "none"),
     hvg2000_bl = list(
-      n_hvg = 2000L, black_list = "default_without_sex_genes"
+      n_hvg = 2000L, black_list = "human_aux_five_groups"
     ),
     hvg1000 = list(n_hvg = 1000L, black_list = "none"),
     hvg3000 = list(n_hvg = 3000L, black_list = "none")
   )
   timing_id <- pb_timing_id(
-    cache_stem = cache_stem,
+    cache_stem = if (identical(variants, "hvg2000_bl")) {
+      paste0(cache_stem, ".blacklist_v1")
+    } else cache_stem,
     view = view,
     analysis_pass = analysis_pass,
     run_id = run_id
@@ -852,7 +872,7 @@ prepare_pseudobulks_hpc <- function(
   }
 
 
-  full_names <- c("hvg500", "hvg1000", "hvg2000", "hvg2000_bl", "hvg3000")
+  full_names <- c("hvg500", "hvg1000", "hvg2000", "hvg3000")
   shared_names <- intersect(variants, full_names)
   shared_fit <- NULL
   shared_fit_time <- 0
@@ -870,7 +890,19 @@ prepare_pseudobulks_hpc <- function(
   for (variant in variants) {
     spec <- specs[[variant]]
     variant_start <- Sys.time()
-    if (identical(variant, "schvg2000")) {
+    blacklist_filtered <- NULL
+    if (identical(variant, "hvg2000_bl")) {
+      blacklist_time <- exec_time({
+        blacklist_filtered <- filter_pseudobulk_blacklist(
+          aggregated$counts, spec$black_list
+        )
+        blacklist_fit <- fit_pseudobulk_for_variants(blacklist_filtered$counts)
+        selected <- select_pseudobulk_deseq2(
+          blacklist_fit, n_hvg = spec$n_hvg
+        )
+      })
+      variant_time <- aggregate_time + as.numeric(blacklist_time, units = "secs")
+    } else if (identical(variant, "schvg2000")) {
       ranked <- hvg_rank_genes[seq_len(min(2000L, length(hvg_rank_genes)))]
       positions <- match(ranked, rownames(aggregated$counts))
       positions <- positions[!is.na(positions)]
@@ -918,7 +950,8 @@ prepare_pseudobulks_hpc <- function(
     )
     # Include any unmeasured R-side selection bookkeeping, while keeping the
     # shared aggregate/fit out of every variant-local charge.
-    variant_time <- max(variant_time, variant_elapsed)
+    variant_time <- max(variant_time, variant_elapsed +
+      if (identical(variant, "hvg2000_bl")) aggregate_time else 0)
     variant_mem <- peak_rss_gb()
     result <- list(
       pb = pb,
@@ -932,6 +965,15 @@ prepare_pseudobulks_hpc <- function(
       timing_id = timing_id,
       timing_schema = 2L
     )
+    if (identical(variant, "hvg2000_bl")) {
+      result$blacklist_policy <- blacklist_filtered$policy
+      result$blacklist_audit <- blacklist_filtered$audit
+      result$blacklist_aggregate_time_secs <- aggregate_time
+      result$aggregate_time_secs <- 0
+      result$shared_fit_time_secs <- 0
+      result$shared_time_secs <- 0
+      result$shared_mem_GB <- NA_real_
+    }
     if (isTRUE(correct_batch)) result[["batch_contract"]] <- batch_contract
     results[[variant]] <- result
   }
@@ -1233,8 +1275,16 @@ run_pseudobulk_hpc <- function(
   chunk_size = 4096L,
   batch_contract = NULL,
   batch_context = NULL,
-  batch_keys = NULL
+  batch_keys = NULL,
+  variants = NULL
 ) {
+  if (!is.null(variants) && (batch_mode || !is.null(analysis_pass) ||
+      !identical(view, "benchmark_analysis") || !is.null(batch_contract) ||
+      !is.character(variants) || length(variants) == 0L ||
+      anyNA(variants) || anyDuplicated(variants) ||
+      any(!variants %in% PB_VARIANT_NAMES))) {
+    stop("Explicit pseudobulk variants require a valid ordinary variant selection")
+  }
   corrected_identity_active <- identical(analysis_pass, "corrected") ||
     !is.null(batch_contract)
   if (corrected_identity_active &&
@@ -1358,6 +1408,9 @@ run_pseudobulk_hpc <- function(
     Pseudobulk_hvg1000 = "hvg1000",
     Pseudobulk_hvg3000 = "hvg3000"
   )
+  if (!is.null(variants)) {
+    plain_combos <- plain_combos[unlist(plain_combos, use.names = FALSE) %in% variants]
+  }
   pca_combos <- paste0("Pseudobulk_", c(2, 3, 5, 10, 15), "_PCA_dims")
   ct_combos <- list(
     Pseudobulk_CT_LR_hvg2000 = list(ct_col = ct_col_low_res, hvg = 2000),
@@ -1372,18 +1425,27 @@ run_pseudobulk_hpc <- function(
     if (is.null(pb_variant)) {
       stop("Pseudobulk variant '", plain_combos[[nm]], "' missing for ", nm)
     }
+    is_blacklist <- identical(plain_combos[[nm]], "hvg2000_bl")
+    if (is_blacklist &&
+        !identical(pb_variant[["blacklist_policy"]], pseudobulk_blacklist()$policy)) {
+      stop("BL pseudobulk input is missing the current pre-fit blacklist policy")
+    }
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
     if (artifact_checksum_ok(bundle_file) && !force) {
       cached <- read_rds_checked(bundle_file)
-      validate_hpc_timing_bundle(
-        cached, label = paste0("Pseudobulk result ", ds, "/", nm)
-      )
-      results[[nm]] <- cached
-      if (!is.null(cached$exec_time)) {
-        log_exec_row(ds, nm, cached$exec_time, log_file,
-                     mem_gb = cached$mem_GB)
+      if (!is_blacklist ||
+          (identical(cached[["blacklist_policy"]], pb_variant[["blacklist_policy"]]) &&
+           identical(cached[["blacklist_source_timing_id"]], pb_variant[["timing_id"]]))) {
+        validate_hpc_timing_bundle(
+          cached, label = paste0("Pseudobulk result ", ds, "/", nm)
+        )
+        results[[nm]] <- cached
+        if (!is.null(cached$exec_time)) {
+          log_exec_row(ds, nm, cached$exec_time, log_file,
+                       mem_gb = cached$mem_GB)
+        }
+        next
       }
-      next
     }
     process_time <- exec_time(
       res <- process_pseudobulk_fig(pb_variant$pb, labels)
@@ -1391,12 +1453,20 @@ run_pseudobulk_hpc <- function(
     res <- add_pb_timing(
       res, as.numeric(process_time, units = "secs"), pb_variant
     )
+    if (is_blacklist) {
+      res$blacklist_policy <- pb_variant$blacklist_policy
+      res$blacklist_audit <- pb_variant$blacklist_audit
+      res$blacklist_source_timing_id <- pb_variant$timing_id
+    }
     save_rds_atomic(res, bundle_file)
     log_exec_row(ds, nm, res[["exec_time"]], log_file,
                  mem_gb = res[["mem_GB"]])
     results[[nm]] <- res
   }
 
+  # Explicit ordinary variants are standalone result shards. PCA/CT and the
+  # method-level aggregate belong to the full suite or release consolidation.
+  if (!is.null(variants)) return(results)
   pb_hvg2000 <- pb_variants[["hvg2000"]]
   if (is.null(pb_hvg2000)) {
     stop("Pseudobulk variant 'hvg2000' missing for the PCA-dims combos")

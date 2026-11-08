@@ -164,19 +164,19 @@ IFS=$'\t' read -r DS_NAME ROW_VIEW ROW_LABEL ROW_COMBO ROW_EXTRA <<< "${line}"
   exit 1
 }
 if [[ -n "${ROW_COMBO:-}" ]]; then
-  [[ "${METHOD}" == gloscope ]] || {
-    echo "ERROR: combo token is only supported for method gloscope" >&2
+  [[ -z "${ANALYSIS_PASS:-}" && "${ROW_VIEW}" == benchmark_analysis ]] || {
+    echo "ERROR: R parameter shards are only supported for ordinary benchmark runs" >&2
     exit 1
   }
-  [[ -z "${ANALYSIS_PASS:-}" ]] || {
-    echo "ERROR: GloScope combo shards are only supported for ordinary runs" >&2
-    exit 1
-  }
-  case "${ROW_COMBO}" in
-    hvg2000_pcadims10|hvg2000_pcadims30|hvg2000_pcadims50|\
-      hvg1000_pcadims30|hvg3000_pcadims30) ;;
+  case "${METHOD}:${ROW_COMBO}" in
+    gloscope:hvg2000_pcadims10|gloscope:hvg2000_pcadims30|gloscope:hvg2000_pcadims50|\
+      gloscope:hvg1000_pcadims30|gloscope:hvg3000_pcadims30|\
+      prepare_pseudobulk:schvg2000|prepare_pseudobulk:hvg2000|prepare_pseudobulk:hvg500|\
+      prepare_pseudobulk:hvg2000_bl|prepare_pseudobulk:hvg1000|prepare_pseudobulk:hvg3000|\
+      pseudobulk:schvg2000|pseudobulk:hvg2000|pseudobulk:hvg500|\
+      pseudobulk:hvg2000_bl|pseudobulk:hvg1000|pseudobulk:hvg3000) ;;
     *)
-      echo "ERROR: invalid GloScope combo token: ${ROW_COMBO}" >&2
+      echo "ERROR: invalid R parameter token for ${METHOD}: ${ROW_COMBO}" >&2
       exit 1
       ;;
   esac
@@ -321,7 +321,13 @@ FORCE_FLAG=()
 ANALYSIS_PASS_FLAG=()
 [[ -n "${ANALYSIS_PASS:-}" ]] && ANALYSIS_PASS_FLAG=(--analysis_pass "${ANALYSIS_PASS}")
 COMBO_FLAG=()
-[[ -n "${ROW_COMBO:-}" ]] && COMBO_FLAG=(--combo "${ROW_COMBO}")
+if [[ -n "${ROW_COMBO:-}" ]]; then
+  if [[ "${METHOD}" == gloscope ]]; then
+    COMBO_FLAG=(--combo "${ROW_COMBO}")
+  else
+    COMBO_FLAG=(--pseudobulk_variants "${ROW_COMBO}")
+  fi
+fi
 if [[ "${METHOD}" == prepare_pseudobulk ]]; then
   R_SCRIPT="${SCRIPT_DIR}/1.1.1_prepare_pseudobulk.R"
 else

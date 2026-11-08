@@ -201,19 +201,14 @@ expected_published <- expected_published[
   drop = FALSE
 ]
 assert_matrix_close(direct_published, expected_published)
-stopifnot(isTRUE(all.equal(
+assert_error(
   pseudobulk_env$select_pseudobulk_deseq2(
     shared_fit,
     n_hvg = 5L,
     black_list = "default_without_sex_genes"
   ),
-  pseudobulk_env$select_pseudobulk_deseq2(
-    shared_fit,
-    n_hvg = 5L,
-    black_list = "none"
-  ),
-  tolerance = 1e-7
-)))
+  "requires pre-fit filtering"
+)
 
 # schvg2000 is a separate fit on the prefiltered raw gene universe, rather
 # than a prefix selected from the full-gene fit.
@@ -376,6 +371,7 @@ sys.source(
 )
 
 hpc_env <- new.env(parent = globalenv())
+hpc_env$pseudobulk_blacklist <- pseudobulk_env$pseudobulk_blacklist
 sys.source(
   file.path(
     project_root,
@@ -385,6 +381,9 @@ sys.source(
   ),
   envir = hpc_env
 )
+# The production helper sources this module into the global worker scope;
+# this test uses an isolated environment and calls its exported functions.
+sys.source(file.path(project_root, "src/utils/artifact_records.R"), envir = hpc_env)
 
 write_checked_fixture <- function(path, value) {
   saveRDS(value, path)
@@ -433,7 +432,7 @@ schema2_record <- function(
   variant,
   timing_id = "run-cache:Toy:benchmark_analysis:none"
 ) {
-  list(
+  value <- list(
     pb = matrix(
       match(variant, hpc_env$PB_VARIANT_NAMES),
       nrow = 1L,
@@ -449,6 +448,14 @@ schema2_record <- function(
     timing_id = timing_id,
     timing_schema = 2L
   )
+  if (identical(variant, "hvg2000_bl")) {
+    value$blacklist_policy <- pseudobulk_env$pseudobulk_blacklist()$policy
+    value$aggregate_time_secs <- 0
+    value$shared_fit_time_secs <- 0
+    value$shared_time_secs <- 0
+    value$timing_id <- sub(":Toy:", ":Toy.blacklist_v1:", timing_id, fixed = TRUE)
+  }
+  value
 }
 schema2_dir <- tempfile("ecoda_pseudobulk_schema2-")
 dir.create(schema2_dir, recursive = TRUE)
@@ -619,7 +626,8 @@ dir.create(pseudobulk_dir, recursive = TRUE)
 for (variant in hpc_env$PB_VARIANT_NAMES) {
   path <- file.path(pseudobulk_dir, paste0("Toy_pseudobulk_", variant, ".rds"))
   saveRDS(
-    list(pb = matrix(1, nrow = 1, ncol = 1), time_secs = 0),
+    if (identical(variant, "hvg2000_bl")) schema2_record(variant) else
+      list(pb = matrix(1, nrow = 1, ncol = 1), time_secs = 0),
     path
   )
   writeLines(
@@ -743,6 +751,7 @@ Sys.setenv(
   ECODA_ARTIFACT_PRODUCER = "mofa"
 )
 recorded_object <- function(variant) {
+  if (identical(variant, "hvg2000_bl")) return(schema2_record(variant))
   list(
     pb = matrix(match(variant, hpc_env$PB_VARIANT_NAMES), nrow = 1L),
     time_secs = 0

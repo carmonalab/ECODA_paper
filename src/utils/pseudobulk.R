@@ -575,10 +575,99 @@ fit_pseudobulk_deseq2 <- function(
 }
 
 
-# Select an HVG prefix from a shared full-gene fit.  The historical
-# hvg2000_bl path passed the literal "default_without_sex_genes" into a
-# `%in%` expression and therefore intentionally did not remove genes; retain
-# that no-op here.
+# The BL method uses the frozen human auxiliary groups, independently of the
+# installed STACAS package. No sex/chromosome mask is added or exempted.
+pseudobulk_blacklist <- function() {
+  aux_root <- Sys.getenv("ECODA_AUX_ROOT", unset = NA_character_)
+  if (is.na(aux_root)) {
+    aux_root <- file.path(Sys.getenv("PROJECT_ROOT", unset = "."), "aux")
+  }
+  path <- file.path(aux_root, "genes.blocklist.rds")
+  if (!nzchar(aux_root) || !file.exists(path) || dir.exists(path)) {
+    stop("Frozen pseudobulk blacklist is missing: ", path)
+  }
+  source_md5 <- unname(tools::md5sum(path))
+  source <- readRDS(path)
+  groups <- if (is.list(source)) source[["Hs"]] else NULL
+  wanted <- c("cellCycle.G1S", "cellCycle.G2M", "Mito", "Ribo", "TCR")
+  if (!is.list(groups) || !identical(names(groups), wanted) ||
+      !all(vapply(groups, function(x) {
+        is.character(x) && length(x) > 0L && !anyNA(x) &&
+          all(nzchar(x)) && !is.null(names(x)) &&
+          !anyNA(names(x)) && all(grepl("^ENSG[0-9]+$", names(x)))
+      }, logical(1))) || is.na(source_md5) ||
+      !identical(unname(tools::md5sum(path)), source_md5)) {
+    stop("Frozen pseudobulk blacklist has an invalid or changing human five-group schema")
+  }
+  list(
+    groups = groups,
+    policy = list(
+      version = "human_aux_five_groups_prefit_v1",
+      species = "Hs", groups = wanted, source_md5 = source_md5,
+      exclusion_stage = "before_fit",
+      matching = "symbol_or_stable_id_supported_anndata_suffix_v2"
+    )
+  )
+}
+
+.pseudobulk_symbolic_blacklist <- function(black_list) {
+  is.character(black_list) && length(black_list) == 1L &&
+    !is.na(black_list) && black_list %in%
+      c("human_aux_five_groups", "default", "default_without_sex_genes")
+}
+
+filter_pseudobulk_blacklist <- function(counts, black_list = "none") {
+  if (is.null(black_list) || identical(black_list, "none")) {
+    return(list(counts = counts, policy = NULL, audit = NULL))
+  }
+  if (!is.character(black_list) || anyNA(black_list) ||
+      any(!nzchar(black_list))) {
+    stop("pseudobulk black_list must be a nonmissing character vector")
+  }
+  genes <- rownames(counts)
+  if (is.null(genes) || anyNA(genes) || any(!nzchar(genes))) {
+    stop("pseudobulk blacklist requires named count rows")
+  }
+  policy <- NULL
+  audit <- NULL
+  if (.pseudobulk_symbolic_blacklist(black_list)) {
+    resolved <- pseudobulk_blacklist()
+    # AnnData's duplicate suffix always has an unsuffixed source feature.
+    # Without that evidence, a numeric hyphen suffix may be a genuine symbol;
+    # reject ambiguous blacklist matches rather than inventing gene identity.
+    stable_base <- function(x) sub("^(ENSG[0-9]+)\\.[0-9]+$", "\\1", x)
+    unsuffixed <- sub("-[0-9]+$", "", genes)
+    base <- stable_base(genes)
+    identifiers <- unique(unlist(lapply(resolved$groups, function(group) {
+      c(unname(group), names(group))
+    }), use.names = FALSE))
+    suffix_match <- genes != unsuffixed & stable_base(unsuffixed) %in% identifiers
+    unsupported <- suffix_match & !unsuffixed %in% genes & !base %in% identifiers
+    if (any(unsupported)) {
+      stop("Ambiguous pseudobulk blacklist suffix without an unsuffixed feature: ",
+           paste(genes[unsupported], collapse = ", "))
+    }
+    base[suffix_match] <- stable_base(unsuffixed[suffix_match])
+    matches <- lapply(resolved$groups, function(group) {
+      identifiers <- c(unname(group), names(group))
+      genes %in% identifiers | base %in% identifiers
+    })
+    excluded <- Reduce(`|`, matches)
+    policy <- resolved$policy
+    audit <- list(
+      input_genes = length(genes), excluded_genes = genes[excluded],
+      retained_genes = sum(!excluded),
+      matched_rows_per_group = vapply(matches, sum, integer(1))
+    )
+  } else {
+    excluded <- genes %in% black_list
+  }
+  if (all(excluded)) stop("pseudobulk blacklist excludes every input gene")
+  list(counts = counts[!excluded, , drop = FALSE], policy = policy, audit = audit)
+}
+
+# Select an HVG prefix from an already fitted gene universe. Symbolic BL
+# policies must be applied to raw counts before fitting, never at this seam.
 select_pseudobulk_deseq2 <- function(
   fit,
   n_hvg,
@@ -605,10 +694,10 @@ select_pseudobulk_deseq2 <- function(
       any(!genes %in% rownames(norm_matrix))) {
     stop("pseudobulk DESeq2 fit variance order is invalid")
   }
-  if (length(black_list) == 1L &&
-      is.character(black_list) &&
-      black_list %in% c("none", "default_without_sex_genes")) {
-    # Intentional no-op for both the unfiltered and legacy hvg2000_bl flags.
+  if (.pseudobulk_symbolic_blacklist(black_list)) {
+    stop("Symbolic pseudobulk blacklist requires pre-fit filtering")
+  }
+  if (identical(black_list, "none")) {
   } else if (!is.null(black_list)) {
     if (!is.character(black_list)) {
       stop("pseudobulk black_list must be a character vector")
@@ -676,6 +765,8 @@ get_pb_deseq2_from_counts <- function(
     # separately rather than sharing the full-gene fit.
     fit_counts <- counts[hvg, , drop = FALSE]
   }
+  filtered <- filter_pseudobulk_blacklist(fit_counts, black_list)
+  fit_counts <- filtered$counts
   fit <- .fit_pseudobulk_deseq2_validated(
     fit_counts,
     metadata = metadata,
@@ -686,9 +777,7 @@ get_pb_deseq2_from_counts <- function(
   selected <- select_pseudobulk_deseq2(
     fit,
     n_hvg = n_hvg,
-    # Explicit hvg input is already a prefilter; the legacy wrapper bypassed
-    # blacklist handling in that case as well.
-    black_list = if (is.null(hvg)) black_list else "none"
+    black_list = "none"
   )
   published <- t(selected)
 
@@ -816,37 +905,9 @@ get_pb_deseq2 <- function(
 ) {
   pb <- get_pb(seurat, sample_col = sample_col, hvg = hvg)
 
-  # Get default black list from STACAS. Plain `data("default_black_list")`
-  # only searches ATTACHED packages; on worker nodes STACAS is installed
-  # (pixi.toml, install_github) but never library()-ed, so the data set was
-  # "not found" -> `object 'black.list' not found` -> prepare_pseudobulk task
-  # crashed (observed 2026-08-17: Adams, the first dataset to recompute after
-  # the Aug-12 cache; all other datasets had cached variants and skipped).
-  # Load explicitly from the package when available; fall back to an empty
-  # list otherwise — safe because the hvg2000_bl filter is a documented no-op
-  # anyway (`pb[!rownames(pb) %in% black_list, ]` tests the literal flag
-  # string, not this object).
-  black.list <- NULL
-  if (requireNamespace("STACAS", quietly = TRUE)) {
-    suppressWarnings(
-      data("default_black_list", package = "STACAS", envir = environment())
-    )
-  } else {
-    message("get_pb_deseq2: STACAS unavailable; default_black_list fallback = empty")
-  }
-  if (is.null(black.list)) black.list <- character(0)
-  default_black_list <- black.list
-
-  if (is.null(hvg) & black_list == "default") {
-    default_black_list <- unlist(default_black_list)
-    pb <- pb[!rownames(pb) %in% default_black_list, ]
-  } else if (is.null(hvg) & black_list == "default_without_sex_genes") {
-    default_black_list <- default_black_list[
-      !names(default_black_list) %in% c("Xgenes", "Ygenes")
-    ]
-    default_black_list <- unlist(default_black_list)
-    pb <- pb[!rownames(pb) %in% black_list, ]
-  }
+  # Legacy symbolic flags remain accepted at the input boundary, but resolve
+  # to the same five-group pre-fit policy as canonical preparation.
+  pb <- filter_pseudobulk_blacklist(pb, black_list)$counts
 
   metadata <- get_metadata(seurat, sample_col = sample_col)
   pb_norm <- t(DESeq2.normalize(

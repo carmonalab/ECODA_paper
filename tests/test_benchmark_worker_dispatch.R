@@ -145,7 +145,7 @@ environment$run_gloscope_hpc <- function(
   )
   list(dispatch = "gloscope")
 }
-environment$save_rds_atomic <- function(object, path) {
+environment$save_rds_atomic <- function(object, path, ...) {
   saveRDS(object, path)
   invisible(path)
 }

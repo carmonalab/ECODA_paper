@@ -4,7 +4,7 @@
 #
 # Called by 1.1_run_worker.sh via ${PIXI_RSCRIPT} with:
 #   --config_path --ds_name --view benchmark_analysis --input_dir
-#   --pseudobulk_dir --log_file [--force]
+#   --pseudobulk_dir --log_file [--force] [--pseudobulk_variants CSV]
 # Loads H5AD metadata/HVG ranks without count values, validates the pending
 # cache set, then performs one raw Sample aggregation and one shared full-gene
 # DESeq2 fit where possible.  Each
@@ -25,6 +25,12 @@ source(file.path(project_root, "src/5_run_benchmark_methods/benchmark_hpc_utils.
 
 raw_args <- commandArgs(trailingOnly = TRUE)
 args <- parse_flags(raw_args)
+unknown_args <- setdiff(names(args), c(
+  "config_path", "ds_name", "view", "input_dir", "pseudobulk_dir", "log_file",
+  "force", "analysis_pass", "pseudobulk_variants", "method", "results_dir",
+  "gloscope_cache_dir", "combo"
+))
+if (length(unknown_args)) stop("Unknown preparation argument: ", paste(unknown_args, collapse = ", "))
 
 for (req in c("config_path", "ds_name", "view", "input_dir",
               "pseudobulk_dir", "log_file")) {
@@ -37,6 +43,13 @@ force <- isTRUE(args[["force"]]) || identical(args[["force"]], "TRUE")
 config <- read_datasets_json(args$config_path, view = args$view)
 ds <- args$ds_name
 analysis_pass <- args[["analysis_pass"]]
+selected_pb_variants <- if (is.null(args[["pseudobulk_variants"]])) NULL else
+  parse_pseudobulk_variant_selection(
+    args, raw_args, "prepare_pseudobulk", args$view, analysis_pass
+  )
+if (!is.null(args[["combo"]])) {
+  stop("Use --pseudobulk_variants, not --combo, for pseudobulk preparation")
+}
 analysis_variant <- Sys.getenv("ANALYSIS_VARIANT", unset = "")
 if (!analysis_variant %in% c("", "final", "corrected_final")) {
   stop("Unknown analysis variant: ", analysis_variant)
@@ -226,7 +239,9 @@ if (correct_batch_mode) {
 # it would diverge (hyphen -> underscore) from the obs names for h5ads that
 # predate the python change (e.g. Adams), breaking the bundle label match.
 
-requested_variants <- if (is.null(analysis_pass)) {
+requested_variants <- if (!is.null(selected_pb_variants)) {
+  selected_pb_variants
+} else if (is.null(analysis_pass)) {
   PB_VARIANT_NAMES
 } else {
   "hvg2000"
