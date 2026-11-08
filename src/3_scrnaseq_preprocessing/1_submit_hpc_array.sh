@@ -81,7 +81,7 @@ while [[ $# -gt 0 ]]; do
     --max-mem=*) MAX_MEMORY="${1#*=}"; shift ;;
     --partition) PARTITION="${2:-}"; shift 2 ;;
     --partition=*) PARTITION="${1#*=}"; shift ;;
-    --throttle) THROTTLE="${2:-}"; shift ;;
+    --throttle) THROTTLE="${2:-}"; shift 2 ;;
     --throttle=*) THROTTLE="${1#*=}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 1 ;;
