@@ -291,7 +291,9 @@
           "Sample": {
             "values": [
               "BGCV10_CV0198",
-              "MH8919230"
+              "MH8919230",
+              "MH8919226",
+              "MH8919227"
             ],
             "op": "notin"
           }
@@ -311,7 +313,9 @@
           "Sample": {
             "values": [
               "BGCV10_CV0198",
-              "MH8919230"
+              "MH8919230",
+              "MH8919226",
+              "MH8919227"
             ],
             "op": "notin"
           }
@@ -331,7 +335,9 @@
           "Sample": {
             "values": [
               "BGCV10_CV0198",
-              "MH8919230"
+              "MH8919230",
+              "MH8919226",
+              "MH8919227"
             ],
             "op": "notin"
           }
@@ -446,7 +452,7 @@
     "columns": {
       "sample": "donor_id_assay",
       "label": "Cognitive status",
-      "batch": ["assay", "sex"],
+      "batch": "assay",
       "cell_type_low_res": "Subclass",
       "cell_type_high_res": "Supertype"
     },
@@ -574,7 +580,7 @@
     "columns": {
       "sample": "specimen",
       "label": "condition.l1",
-      "batch": ["suspension_type", "sex"],
+      "batch": "suspension_type",
       "cell_type_low_res": "subclass.l1",
       "cell_type_high_res": "subclass.l3"
     },
@@ -582,12 +588,16 @@
       "batch_effect_uncorrected": {
         "input_file_name": "Kidney_KPMP_full.h5ad",
         "output_file_name": "Kidney_KPMP_full_batch_effect_analysis_uncorrected_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "subset_vars": {
+          "region.l1": {"values": ["Papilla"], "op": "notin"}
+        }
       },
       "batch_effect_corrected": {
         "input_file_name": "Kidney_KPMP_full.h5ad",
         "output_file_name": "Kidney_KPMP_full_batch_effect_analysis_corrected_ECODAprocessed.h5ad",
-        "subset_vars": {}
+        "subset_vars": {
+          "region.l1": {"values": ["Papilla"], "op": "notin"}
+        }
       }
     }
   },
@@ -626,7 +636,7 @@
     "tissue": "Pancreas",
     "normal_tissue": false,
     "use_for_benchmark": false,
-    "use_for_batch_effect": true,
+    "use_for_batch_effect": false,
     "columns": {
       "sample": "donor_id",
       "label": "disease",

@@ -32,7 +32,7 @@ high-resolution labels.
 | `Alzheimer` | Brain multiome cohort with limited assay diversity. | `assay + sex` | 18 | Included |
 | `Breast_cancer` | Breast-tumor cohort with assay and sequencing imbalances. | `assay + sequencing_platform + suspension_dissociation_time` | 10 | Included |
 | `Covid19_PBMC` | PBMC cohort with healthy controls and COVID samples across time after symptom onset. | `datasets` | 10 | Included with an approved acute/control subset |
-| `Diabetes` | Pancreatic cohort spanning multiple studies and disease groups. | `dataset` | 13 | Included after confounded disease groups are excluded |
+| `Diabetes` | Pancreatic cohort spanning multiple studies and disease groups. | `dataset` | 13 | Excluded because most batches have samples from only one condition. After removal of confounded batches, too few samples remain and the remaining two batches are both heavily imbalanced (3 normal and 12 type 2 diabetes left). |
 | `Kidney_KPMP_full` | Combined single-cell/single-nucleus KPMP cohort. | `suspension_type + sex` | 14 | Included |
 | `Lupus_PBMC` | PBMC cohort with case/healthy metadata and technical batch candidates. | `batch_cov` | 11 | Included |
 | `Lung` | Lung atlas with platform, tissue, disease, and assay metadata. | `dataset` | 12 | Included after the configured COPD exclusion |
@@ -92,6 +92,7 @@ or study structure. The registry records the resulting decisions:
 - `Diabetes`: exclude `endocrine pancreas disorder` and `type 1 diabetes
   mellitus`, whose biological groups are strongly tied to study structure.
 - `Joanito`: exclude `sample.origin == "LymphNode"`.
+- `Kidney_KPMP_full`: exclude `region.l1 == "Papilla"` because those were only sequenced with nuclei from deceased donors and are only 4 samples. The single-cell samples which are `region.l1 == "NA"` (or equal to `tissue == "kidney`) were obtained from biopsies (typically mainly from the cortex to not injure the kidney, so they normally don't go all the way down to the papilla). As such, it would not be expected to have papilla in the single-cell samples, while the single-cell biopsies are expected to contain varying amounts of cortex or medulla.
 - `Lung`: retain `platform == "10x"` and `tissue == "lung"`, and exclude
   `disease == "chronic obstructive pulmonary disease"`.
 - `Covid19_PBMC`: the approved final rule retains the sampling-day literal
