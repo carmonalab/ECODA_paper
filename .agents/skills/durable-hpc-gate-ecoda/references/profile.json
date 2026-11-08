@@ -4,7 +4,9 @@
     "mode": "ssh",
     "runner_shell": "/bin/bash",
     "ssh_binary": "ssh",
-    "tmux_binary": "tmux"
+    "tmux_binary": "tmux",
+    "process_backend": "procfs",
+    "process_python_binary": "/home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13/bin/python"
   },
   "policy": {
     "manifest_constraints": {

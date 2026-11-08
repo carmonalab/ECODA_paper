@@ -39,6 +39,12 @@ authentication without stored passwords.
 The examples below target the current Bamboo policy. Historical Yggdrasil
 run records remain evidence only; they do not authorize a host change.
 
+The profile may explicitly select `execution.process_backend="procfs"` with
+an absolute pinned `execution.process_python_binary`. This requires a global
+durable-gate runtime supporting structured process evidence. Process reads
+must be bounded and fail closed; an error cannot establish runner absence.
+Exact argv, PID and tmux checks still apply.
+
 ## Repository-defined exceptions
 
 For this checkout, `AGENTS.md` is authoritative for explicit user-requested
