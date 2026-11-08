@@ -32,6 +32,7 @@ THROTTLE="$7"
 ecoda_validate_run_id "${RUN_ID}" || exit 1
 ecoda_open_run "${RUN_ID}" || exit 1
 RUN_ROOT="${ECODA_RUN_ROOT}"
+OUTPUT_SCOPE=all
 export ECODA_RUN_ID="${RUN_ID}" ECODA_RUN_ROOT="${ECODA_RUN_ROOT}"
 STATUS_FILE="${RUN_ROOT}/status/watchdog"
 RETRY_INDEX=0
@@ -201,6 +202,7 @@ fi
 if [[ -f "${RUN_ROOT}/manifests/bassez_metadata.json" ]]; then
   source "${SOURCE_ROOT}/src/2_dataset_specific_preprocessing/bassez_metadata_step.sh"
   stage2_bassez_metadata_load || fail "Bassez metadata binding is invalid"
+  OUTPUT_SCOPE=scratch
 fi
 [[ "${MANIFEST}" == "${RUN_ROOT}/manifests/steps.tsv" &&
    "${JOB_FILE}" == "${RUN_ROOT}/manifests/jobs.tsv" ]] ||
@@ -224,7 +226,7 @@ ecoda_runtime_validate_bound_run ||
 RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage2 0)" ||
   fail "Stage 2 run-bound runtime export construction failed"
 RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_RUNTIME_IDENTITY=${RUNTIME_IDENTITY},ECODA_RUN_ROOT=${RUN_ROOT},ECODA_SOURCE_MANIFEST_RUN=${SOURCE_MANIFEST_RUN},ECODA_HOST_ENV_PREFIX=${ECODA_HOST_ENV_PREFIX:-},ECODA_AUX_ROOT=${ECODA_AUX_ROOT:-${SOURCE_ROOT%/}/aux},ECODA_LOGS_DIR=${LOGS_DIR},ECODA_SCRATCH_ROOT=${ECODA_SCRATCH_ROOT:-${HPC_SCRATCH_DIR}}"
-ecoda_validate_output_ownership stage2 "${OWNERSHIP_MANIFEST}" "${RUN_ID}" ||
+ecoda_validate_output_ownership stage2 "${OWNERSHIP_MANIFEST}" "${RUN_ID}" 0 "${OUTPUT_SCOPE}" ||
   fail "Stage 2 output ownership validation failed before watchdog accounting"
 
 bump_memory() {
@@ -394,9 +396,6 @@ validate_outputs() {
       fi
     done
   done < "${MANIFEST}"
-  if [[ -f "${RUN_ROOT}/manifests/bassez_metadata.json" ]]; then
-    stage2_bassez_metadata_sync || return 1
-  fi
   local published_path owner_dir
   for published_path in "${ECODA_OUTPUT_PATHS[@]}"; do
     owner_dir="$(ecoda_artifact_owner_dir "${published_path}")" || return 1
@@ -459,7 +458,7 @@ while :; do
       fail "OUT_OF_MEMORY Stage 2 hooks at ${MAX_MEMORY} ceiling: ${OOM_STEPS[*]}"
     fi
   done
-  ecoda_validate_output_ownership stage2 "${OWNERSHIP_MANIFEST}" "${RUN_ID}" ||
+  ecoda_validate_output_ownership stage2 "${OWNERSHIP_MANIFEST}" "${RUN_ID}" 0 "${OUTPUT_SCOPE}" ||
     fail "Stage 2 output ownership validation failed before OOM retry"
   RETRY_INDEX=$((RETRY_INDEX + 1))
   [[ ${RETRY_INDEX} -le 4 ]] || fail "exceeded Stage 2 OOM retry attempts"
@@ -557,6 +556,8 @@ owner_failure=0
 while IFS=$'\t' read -r step script outputs dependency owner; do
   [[ -n "${step}" ]] || fail "Stage 2 step is missing from manifest"
   [[ "${owner}" == "-" ]] && continue
+  # The controller retains the logical owner until login-node NAS publication.
+  [[ "${step}" != bassez_h5ad_metadata ]] || continue
   if ! ecoda_owner_set_state "${owner}" OK "validated by Stage 2 watchdog"; then
     owner_failure=1
   fi

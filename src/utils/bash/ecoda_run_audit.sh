@@ -842,6 +842,10 @@ _audit_prepare_output_semantics() {
 
 _audit_bassez_nas_artifact() {
   local path="$1" directory
+  ecoda_validate_artifact_record "${path}" bassez_h5ad_metadata "${RUN_ID}" || {
+    _audit_die "Bassez NAS producer record is missing or invalid: ${path}"
+    return 1
+  }
   ecoda_validate_stage2_output bassez_h5ad_metadata "${path}" || {
     _audit_die "Bassez NAS publication validation failed: ${path}"
     return 1

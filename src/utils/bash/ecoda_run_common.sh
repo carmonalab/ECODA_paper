@@ -1627,9 +1627,11 @@ ecoda_load_stage2_bassez_metadata_helper() {
 }
 
 _ecoda_expand_output_selection() {
-  local stage="${1:-}" selection="${2:-}" step script ds view outputs extra
+  local stage="${1:-}" selection="${2:-}" scope="${3:-all}" step script ds view outputs extra
   local path name old_ifs expected_script expected_outputs write_flag
   _ecoda_init_output_arrays
+  [[ "${scope}" == all || "${scope}" == scratch ]] || return 1
+  [[ "${scope}" != scratch || "${stage}" == stage2 || "${stage}" == stage3 ]] || return 1
 
   [[ -r "${selection}" && ! -L "${selection}" ]] || {
     _ecoda_die "selection manifest is missing or unreadable: ${selection}"
@@ -1645,6 +1647,7 @@ _ecoda_expand_output_selection() {
         [[ "${step}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ &&
            -n "${script}" && -n "${outputs}" && -n "${dependency}" &&
            -n "${owner}" && -z "${extra}" ]] || return 1
+        [[ "${scope}" != scratch || "${step}" == bassez_h5ad_metadata ]] || return 1
         if [[ "${step}" == bassez_h5ad_metadata ]]; then
           ecoda_load_stage2_bassez_metadata_helper || return 1
           expected_script="$(stage2_bassez_metadata_script)" || return 1
@@ -1679,7 +1682,7 @@ _ecoda_expand_output_selection() {
         for path in "${ECODA_SELECTION_OUTPUTS[@]}"; do
           [[ -n "${path}" ]] || return 1
           _ecoda_output_add_path "${path}" "${write_flag}" || return 1
-          if [[ "${step}" == bassez_h5ad_metadata ]]; then
+          if [[ "${step}" == bassez_h5ad_metadata && "${scope}" != scratch ]]; then
             _ecoda_output_add_path "$(stage2_bassez_metadata_nas_path "${path}")" "${write_flag}" || return 1
           fi
         done
@@ -1699,13 +1702,21 @@ _ecoda_expand_output_selection() {
            "${name}" != *$'\n'* && "${name}" != *$'\t'* ]] || return 1
         if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
           [[ "${stage}" == stage3 ]] || return 1
-          _ecoda_output_add_scratch_nas_pair \
-            "$(ecoda_derivative_dataset_output "${ds}" "${view}")" \
-            "$(ecoda_derivative_dataset_output "${ds}" "${view}" nas)" || return 1
+          if [[ "${scope}" == scratch ]]; then
+            _ecoda_output_add_path "$(ecoda_derivative_dataset_output "${ds}" "${view}")" || return 1
+          else
+            _ecoda_output_add_scratch_nas_pair \
+              "$(ecoda_derivative_dataset_output "${ds}" "${view}")" \
+              "$(ecoda_derivative_dataset_output "${ds}" "${view}" nas)" || return 1
+          fi
         else
-          _ecoda_output_add_scratch_nas_pair \
-            "${HPC_SCRATCH_DIR}/${ds}/output/${name}" \
-            "${NAS_TARGET_DIR:-}/${ds}/output/${name}" || return 1
+          if [[ "${scope}" == scratch ]]; then
+            _ecoda_output_add_path "${HPC_SCRATCH_DIR}/${ds}/output/${name}" || return 1
+          else
+            _ecoda_output_add_scratch_nas_pair \
+              "${HPC_SCRATCH_DIR}/${ds}/output/${name}" \
+              "${NAS_TARGET_DIR:-}/${ds}/output/${name}" || return 1
+          fi
         fi
       done < "${selection}"
       ;;
@@ -1799,7 +1810,7 @@ _ecoda_validate_expanded_output_ownership() {
 
 ecoda_validate_output_ownership() {
   local stage="${1:-}" selection="${2:-}" run_id="${3:-}"
-  local reclaim_terminal="${4:-0}"
+  local reclaim_terminal="${4:-0}" scope="${5:-all}"
   [[ "${stage}" == stage2 || "${stage}" == stage3 ||
      "${stage}" == stage4 ]] || {
     _ecoda_die "shared output ownership does not implement stage policy: ${stage}"
@@ -1809,7 +1820,7 @@ ecoda_validate_output_ownership() {
     _ecoda_die "ownership selection must be an absolute path"
     return 1
   }
-  _ecoda_expand_output_selection "${stage}" "${selection}" || return 1
+  _ecoda_expand_output_selection "${stage}" "${selection}" "${scope}" || return 1
   _ecoda_validate_expanded_output_ownership \
     "${stage}" "${run_id}" "${reclaim_terminal}"
 }

@@ -191,7 +191,12 @@ stage2_abort() {
   local reason="$1"
   local cleanup_rc=0
   if [[ -n "${ECODA_RUN_ROOT:-}" ]]; then
-    ecoda_owner_finalize_tracked FAIL "${reason}" || cleanup_rc=1
+    if [[ -f "${ECODA_RUN_ROOT}/manifests/bassez_metadata.json" ]] &&
+       type stage2_bassez_metadata_fail_owners >/dev/null 2>&1; then
+      stage2_bassez_metadata_fail_owners "${reason}" || cleanup_rc=1
+    else
+      ecoda_owner_finalize_tracked FAIL "${reason}" || cleanup_rc=1
+    fi
     ecoda_set_run_state FAIL "${reason}" || cleanup_rc=1
   fi
   echo "ERROR: ${reason}" >&2
@@ -487,7 +492,7 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     stage2_abort "Stage 2 sync-only validation failed"
   fi
   if [[ -f "${ECODA_RUN_ROOT}/manifests/bassez_metadata.json" ]]; then
-    stage2_bassez_metadata_sync || stage2_abort "Stage 2 Bassez NAS synchronization failed"
+    stage2_bassez_metadata_publish || stage2_abort "Stage 2 Bassez NAS publication failed"
   fi
   ecoda_set_run_state OK "sync-only artifact and manifest validation passed" ||
     stage2_abort "failed to write Stage 2 terminal OK state"
@@ -895,5 +900,8 @@ if ! ecoda_atomic_install_manifest "${COMPLETE_SCHEDULER_TMP}" "${SCHEDULER_IDS_
   stage2_abort "failed to install complete Stage 2 scheduler ID manifest"
 fi
 rm -f "${COMPLETE_SCHEDULER_TMP}"
+if [[ ${bassez_metadata_requested} -eq 1 ]]; then
+  stage2_bassez_metadata_publish || stage2_abort "Stage 2 Bassez login-node publication failed"
+fi
 ecoda_set_run_state OK "Stage 2 watchdog completed and scheduler manifest is complete" ||
   stage2_abort "failed to write Stage 2 terminal OK state"

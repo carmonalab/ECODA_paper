@@ -162,6 +162,8 @@ stage2_bassez_metadata_validate() {
 stage2_bassez_metadata_sync() {
   local source destination md5 size directory mode sidecar temporary
   local -a directories
+  [[ "${NAS_TARGET_DIR:-}" = /* && -d "${NAS_TARGET_DIR}" && ! -L "${NAS_TARGET_DIR}" &&
+     "$(ecoda_realpath_existing "${NAS_TARGET_DIR}")" == "${NAS_TARGET_DIR}" ]] || return 1
   stage2_bassez_metadata_run validate || return 1
   directory="${BASSEZ_METADATA_NAS%/*}"
   ecoda_validate_run_owned_path "${BASSEZ_METADATA_OUTPUT}" "${ECODA_RUN_ROOT}" || return 1
@@ -197,4 +199,56 @@ stage2_bassez_metadata_sync() {
     chmod 777 "${directory}" || return 1
     [[ "$(_ecoda_artifact_mode_bits "${directory}")" == 777 ]] || return 1
   done
+}
+
+# Login-node publication follows the compute watchdog's scratch-only proof.
+stage2_bassez_metadata_publish() {
+  local path owner step_owner
+  stage2_bassez_metadata_load || return 1
+  _ecoda_expand_output_selection stage2 "${ECODA_RUN_ROOT}/manifests/steps.tsv" || return 1
+  [[ ${#ECODA_OUTPUT_PATHS[@]} -eq 4 ]] || return 1
+  for path in "${ECODA_OUTPUT_PATHS[@]}"; do
+    owner="$(ecoda_artifact_owner_dir "${path}")" || return 1
+    _ecoda_artifact_owner_validate_dir "${owner}" "${path}" || return 1
+    [[ "${ECODA_ARTIFACT_OWNER_RUN}" == "${ECODA_RUN_ID}" &&
+       "${ECODA_ARTIFACT_OWNER_STAGE}" == stage2 ]] || return 1
+    case "${path}" in
+      "${BASSEZ_METADATA_OUTPUT}"|"${BASSEZ_METADATA_OUTPUT}.repair.json")
+        [[ "${ECODA_ARTIFACT_OWNER_STATE}" == OK ]] || return 1
+        ecoda_validate_artifact_record "${path}" bassez_h5ad_metadata "${ECODA_RUN_ID}" >/dev/null || return 1 ;;
+      "${BASSEZ_METADATA_NAS}"|"${BASSEZ_METADATA_NAS}.repair.json")
+        [[ "${ECODA_ARTIFACT_OWNER_STATE}" == ACTIVE || "${ECODA_ARTIFACT_OWNER_STATE}" == OK ]] || return 1 ;;
+      *) return 1 ;;
+    esac
+  done
+  step_owner="$(ecoda_owner_dir stage2 bassez_h5ad_metadata)" || return 1
+  [[ "$(ecoda_owner_run "${step_owner}")" == "${ECODA_RUN_ID}" &&
+     "$(ecoda_owner_field "${step_owner}" STAGE)" == stage2 ]] || return 1
+  stage2_bassez_metadata_sync || return 1
+  for path in "${BASSEZ_METADATA_NAS}" "${BASSEZ_METADATA_NAS}.repair.json"; do
+    stage2_bassez_metadata_validate "${path}" || return 1
+    ecoda_write_artifact_record "${path}" bassez_h5ad_metadata "${ECODA_RUN_ID}" >/dev/null || return 1
+    # NAS publication permissions differ from read-only scratch artifacts.
+    chmod 666 "${path}" "${path}.md5" || return 1
+    [[ "$(_ecoda_artifact_mode_bits "${path}")" == 666 &&
+       "$(_ecoda_artifact_mode_bits "${path}.md5")" == 666 ]] || return 1
+    ecoda_validate_artifact_record "${path}" bassez_h5ad_metadata "${ECODA_RUN_ID}" >/dev/null || return 1
+    ecoda_artifact_owner_set_state "${path}" OK "validated and published by Stage 2 login controller" || return 1
+  done
+  ecoda_owner_set_state "${step_owner}" OK "scratch watchdog and NAS publication validated"
+}
+
+stage2_bassez_metadata_fail_owners() {
+  local reason="$1" owner state path rc=0
+  for owner in "${ECODA_ACQUIRED_OWNERS[@]:-}"; do
+    [[ -n "${owner}" ]] || continue
+    path="$(ecoda_owner_field "${owner}" PATH 2>/dev/null || true)"
+    state="$(ecoda_owner_state "${owner}" 2>/dev/null || true)"
+    # Successful scratch evidence remains reusable after publication failure.
+    case "${path}" in "${ECODA_RUN_ROOT}/artifacts/datasets/Bassez/output/"*)
+      [[ "${state}" != OK ]] || continue ;;
+    esac
+    ecoda_owner_set_state "${owner}" FAIL "${reason}" || rc=1
+  done
+  return "${rc}"
 }

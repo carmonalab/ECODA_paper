@@ -152,6 +152,13 @@ def bind(*, run_root: Path, release_id: str, nas_root: Path, stage: str,
                  selection=str(selection), input_artifacts=str(copied_inputs),
                  identities={str(path): digest(path) for path in
                              (source, runtime, selection, copied_inputs, config_path)})
+    requested = source.parent / "requested_selection.tsv"
+    if stage == "stage5" and requested.exists():
+        absolute(requested)
+        if not requested.is_file() or requested.stat().st_size == 0:
+            raise ValueError("requested benchmark selection is empty or invalid")
+        value["requested_selection"] = str(requested)
+        value["identities"][str(requested)] = digest(requested)
     create_only(binding, (json.dumps(value, sort_keys=True) + "\n").encode())
     create_only(Path(f"{binding}.md5"), (
         f"MD5={digest(binding, 'md5')}\nSIZE={binding.stat().st_size}\nPATH={binding}\n"
@@ -164,7 +171,9 @@ def load(binding: str | Path, config_path: str | Path, *, verify_content: bool =
     proof(absolute(f"{binding}.md5"), binding, digest(binding, "md5"), binding.stat().st_size)
     value = json.loads(binding.read_text())
     run_root = absolute(value["run_root"])
-    nas_base = absolute(value["nas_base"])
+    # The immutable bind proves the mounted NAS destination on the controller.
+    # Compute nodes resolve this bound identity without mounting that filesystem.
+    nas_base = absolute(value["nas_base"], exists=False)
     if (value["schema"] != SCHEMA or binding != run_root / "manifests/artifact_bindings.json"
         or run_root.parent.name != "_ecoda_runs" or value["run_id"] != run_root.name
         or value["stage"] not in {"stage2", "stage3", "stage5"}
@@ -174,6 +183,11 @@ def load(binding: str | Path, config_path: str | Path, *, verify_content: bool =
     expected = {str(run_root / "manifests" / name) for name in
                 ("source.manifest", "runtime.identity", "input_artifacts.tsv")}
     expected.update((value["selection"], str(absolute(config_path))))
+    if "requested_selection" in value:
+        requested = binding.parent / "requested_selection.tsv"
+        if value["stage"] != "stage5" or value["requested_selection"] != str(requested):
+            raise ValueError("requested benchmark selection is not run-owned")
+        expected.add(str(requested))
     if set(value["identities"]) != expected or Path(value["selection"]).parent != binding.parent:
         raise ValueError("derivative binding identity scope differs")
     if value["input_artifacts"] != str(binding.parent / "input_artifacts.tsv"):
@@ -222,7 +236,7 @@ def active_binding(config_path: str | Path, *, stage: str = "stage5") -> tuple[d
     if value["run_root"] != str(run_root) or value["stage"] != stage:
         raise ValueError("derivative binding disagrees with the active run/stage")
     nas = os.environ.get("NAS_TARGET_DIR")
-    if nas and value["nas_base"] != str(absolute(nas)):
+    if nas and value["nas_base"] != str(absolute(nas, exists=False)):
         raise ValueError("derivative binding disagrees with the active NAS base")
     return value, binding
 
@@ -253,7 +267,7 @@ def main() -> None:
         value, _ = load(args.binding, args.config,
                         verify_content=args.verify_content and args.command != "input")
         if ((args.run_root is not None and value["run_root"] != str(absolute(args.run_root))) or
-            (args.nas_root is not None and value["nas_base"] != str(absolute(args.nas_root))) or
+            (args.nas_root is not None and value["nas_base"] != str(absolute(args.nas_root, exists=False))) or
             (args.stage is not None and value["stage"] != args.stage)):
             raise ValueError("derivative binding disagrees with the active run/stage/NAS base")
         if args.command == "input":

@@ -1251,6 +1251,32 @@ case "$(cat "${CAPTURE}")" in
   *"ECODA_ARTIFACT_BINDING=${DERIVATIVE_RUN}/manifests/artifact_bindings.json"*) ;;
   *) cat "${TMP_DIR}/derivative-submit.log" >&2; echo 'derivative binding not exported to workers' >&2; exit 1;;
 esac
+# A compute watchdog retains the bound NAS identity while validating only
+# scratch ownership; no mounted NAS directory is needed for this phase.
+(
+  export ECODA_RUN_ID=stage3-unmounted-fixture
+  export ECODA_RUN_ROOT="${HPC_SCRATCH_DIR}/_ecoda_runs/${ECODA_RUN_ID}"
+  mkdir -p "${ECODA_RUN_ROOT}/manifests"
+  cp "${DERIVATIVE_RUN}/manifests/source.manifest" "${ECODA_RUN_ROOT}/manifests/source.manifest"
+  cp "${DERIVATIVE_RUN}/manifests/runtime.identity" "${ECODA_RUN_ROOT}/manifests/runtime.identity"
+  printf 'Adams\tbenchmark_analysis\n' > "${ECODA_RUN_ROOT}/manifests/selection.tsv"
+  export PROJECT_ROOT="${SOURCE_ROOT}" DATASETS_JSON_FILE="${SOURCE_ROOT}/datasets.json"
+  export PYTHON_BIN="${TEST_REAL_PYTHON}"
+  export ECODA_ARTIFACT_BINDING="$("${PYTHON_BIN}" "${ROOT}/src/utils/py/derivative_artifacts.py" bind \
+    --run-root "${ECODA_RUN_ROOT}" --release-id topology-test --nas-root "${NAS_TARGET_DIR}" \
+    --stage stage3 --config "${DATASETS_JSON_FILE}" --selection "${ECODA_RUN_ROOT}/manifests/selection.tsv" \
+    --input-artifacts "${DERIVATIVE_REFS}")"
+  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  source "${ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+  eval "$(awk '/^stage3_validate_scratch_output_ownership\(\)/ {copy=1} copy {print} copy && /^}$/ {exit}' \
+    "${ROOT}/src/3_scrnaseq_preprocessing/1.2_preprocess_watchdog.sh")"
+  RUN_ID="${ECODA_RUN_ID}"
+  bound_nas="${NAS_TARGET_DIR}"
+  mv "${NAS_TARGET_DIR}" "${NAS_TARGET_DIR}.hidden"
+  stage3_validate_scratch_output_ownership "${ECODA_RUN_ROOT}/manifests/selection.tsv"
+  [[ "${NAS_TARGET_DIR}" == "${bound_nas}" && ! -e "${NAS_TARGET_DIR}" && ${#ECODA_OUTPUT_PATHS[@]} -eq 1 ]]
+  mv "${NAS_TARGET_DIR}.hidden" "${NAS_TARGET_DIR}"
+)
 # Existing canonical bytes are preserved even under explicitly requested force.
 : > "${CAPTURE}"
 if run_stage3 --datasets Adams --views benchmark_analysis --force > "${TMP_DIR}/preserve.log" 2>&1; then

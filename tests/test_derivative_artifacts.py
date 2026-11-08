@@ -9,7 +9,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from src.utils.py.derivative_artifacts import bind, load, resolve_input, context_root
+from src.utils.py.derivative_artifacts import bind, load, resolve_input, context_root, active_binding
+from unittest.mock import patch
 
 
 def rejects(call, text):
@@ -71,6 +72,27 @@ def run():
                 env=shell_env, text=True, capture_output=True)
             assert result.returncode == 0, result.stderr
             assert result.stdout.splitlines() == [str(run_root / "artifacts" / context), str(source)]
+            # Compute/watchdog metadata resolution must not require a NAS mount.
+            # The controller already proved that exact destination during bind.
+            hidden_nas = root / "nas-unmounted"
+            nas.rename(hidden_nas)
+            try:
+                value_unmounted, _ = load(binding, config, verify_content=True)
+                assert value_unmounted == value
+                with patch.dict(os.environ, shell_env):
+                    assert active_binding(config, stage=stage)[0] == value
+                unmounted_shell = shell + f'ecoda_derivative_root {context} nas\n'
+                result = subprocess.run(["bash", "-euo", "pipefail", "-c", unmounted_shell],
+                    env=shell_env, text=True, capture_output=True)
+                assert result.returncode == 0, result.stderr
+                assert result.stdout.splitlines() == [str(run_root / "artifacts" / context),
+                    str(source), str(context_root(value, context, nas=True))]
+                assert not nas.exists(), "metadata reads must never create an absent NAS mount"
+                rejects(lambda: bind(run_root=run_root, release_id=value["release_id"],
+                    nas_root=nas, stage=stage, config_path=config, selection=selection,
+                    input_artifacts=manifest), "No such file")
+            finally:
+                hidden_nas.rename(nas)
             bad_env = dict(shell_env, ECODA_RUN_ROOT=str(root))
             assert subprocess.run(["bash", "-euo", "pipefail", "-c", shell],
                 env=bad_env, capture_output=True).returncode != 0

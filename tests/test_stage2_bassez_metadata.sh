@@ -17,6 +17,7 @@ for file in 1_submit_hpc.sh 1.submit.sh bassez_metadata_step.sh bassez_h5ad_meta
   cp "${ROOT}/src/2_dataset_specific_preprocessing/${file}" "${PROJECT_ROOT}/src/2_dataset_specific_preprocessing/${file}"
 done
 cp "${ROOT}/src/utils/py/h5ad_source_identity.py" "${PROJECT_ROOT}/src/utils/py/"
+cp "${ROOT}/src/utils/py/artifact_contract.py" "${PROJECT_ROOT}/src/utils/py/"
 for file in ecoda_run_common.sh ecoda_runtime.sh sync_status_email.sh; do
   cp "${ROOT}/src/utils/bash/${file}" "${PROJECT_ROOT}/src/utils/bash/${file}"
 done
@@ -101,11 +102,44 @@ _ecoda_expand_output_selection stage2 "${ECODA_RUN_ROOT}/manifests/steps.tsv"
 for expected in "${OUTPUT}" "${OUTPUT}.repair.json" "${NAS_OUTPUT}" "${NAS_OUTPUT}.repair.json"; do
   case " ${ECODA_OUTPUT_PATHS[*]} " in *" ${expected} "*) ;; *) exit 1 ;; esac
 done
+STEP_OWNER="$(ecoda_owner_acquire stage2 bassez_h5ad_metadata "${ECODA_RUN_ID}" 0 0)"
+ecoda_owner_track "${STEP_OWNER}"
+ecoda_validate_output_ownership stage2 "${ECODA_RUN_ROOT}/manifests/steps.tsv" "${ECODA_RUN_ID}" 1
+# Bind on the login node, then simulate a compute node without the NAS mount.
+mv "${NAS_TARGET_DIR}" "${NAS_TARGET_DIR}.hidden"
 : > "${EVENTS}"
 stage2_bassez_metadata_run create > "${FIXTURE}/create.json"
 [[ "$(wc -l < "${EVENTS}" | tr -d '[:space:]')" == 2 ]]
 [[ -s "${OUTPUT}" && -s "${OUTPUT}.repair.json" ]]
-ecoda_write_checksum "${OUTPUT}.repair.json"
+ecoda_validate_output_ownership stage2 "${ECODA_RUN_ROOT}/manifests/steps.tsv" "${ECODA_RUN_ID}" 0 scratch
+[[ ${#ECODA_OUTPUT_PATHS[@]} -eq 2 && ! -e "${NAS_TARGET_DIR}" ]]
+for function_name in stage2_artifact_record_valid stage2_artifact_record_write validate_outputs; do
+  eval "$(awk -v wanted="${function_name}()" '$0==wanted" {" {copy=1} copy {print} copy && /^}$/ {exit}' \
+    "${ROOT}/src/2_dataset_specific_preprocessing/stage2_watchdog.sh")"
+done
+RUN_ID="${ECODA_RUN_ID}" RUN_ROOT="${ECODA_RUN_ROOT}"
+MANIFEST="${ECODA_RUN_ROOT}/manifests/steps.tsv"
+validate_outputs > "${FIXTURE}/compute-watchdog.log"
+[[ ! -e "${NAS_TARGET_DIR}" && "$(ecoda_owner_state "${STEP_OWNER}")" == ACTIVE ]]
+for path in "${OUTPUT}" "${OUTPUT}.repair.json"; do
+  [[ "$(ecoda_owner_state "$(ecoda_artifact_owner_dir "${path}")")" == OK ]]
+done
+for path in "${NAS_OUTPUT}" "${NAS_OUTPUT}.repair.json"; do
+  [[ "$(ecoda_owner_state "$(ecoda_artifact_owner_dir "${path}")")" == ACTIVE ]]
+  [[ ! -e "$(ecoda_artifact_record_path "${path}" "${ECODA_RUN_ID}")" ]]
+done
+if stage2_bassez_metadata_publish > "${FIXTURE}/missing-nas-publication.log" 2>&1; then
+  echo "login publication accepted an absent NAS mount" >&2; exit 1
+fi
+[[ ! -e "${NAS_TARGET_DIR}" ]]
+mv "${NAS_TARGET_DIR}.hidden" "${NAS_TARGET_DIR}"
+stage2_bassez_metadata_publish > "${FIXTURE}/login-publication.log"
+[[ "$(ecoda_owner_state "${STEP_OWNER}")" == OK ]]
+for path in "${OUTPUT}" "${OUTPUT}.repair.json" "${NAS_OUTPUT}" "${NAS_OUTPUT}.repair.json"; do
+  [[ "$(ecoda_owner_state "$(ecoda_artifact_owner_dir "${path}")")" == OK ]]
+  ecoda_validate_artifact_record "${path}" bassez_h5ad_metadata "${ECODA_RUN_ID}" >/dev/null
+  [[ "$(wc -l < "$(ecoda_artifact_record_path "${path}" "${ECODA_RUN_ID}")" | tr -d '[:space:]')" == 6 ]]
+done
 stage2_bassez_metadata_validate "${OUTPUT}" > "${FIXTURE}/validate.json"
 BEFORE="$(wc -l < "${CALLS}" | tr -d '[:space:]')"
 if BLOCK_INPUT=1 stage2_bassez_metadata_run validate > /dev/null 2>&1; then
@@ -141,6 +175,20 @@ eval "$(sed -n '/^_audit_bassez_nas_artifact() {$/,/^}$/p' "${ROOT}/src/utils/ba
 declare -F _audit_bassez_nas_artifact >/dev/null
 _audit_die() { echo "$*" >&2; return 1; }
 for path in "${NAS_OUTPUT}" "${NAS_OUTPUT}.repair.json"; do
+  record="$(ecoda_artifact_record_path "${path}" "${ECODA_RUN_ID}")"
+  cp "${record}" "${FIXTURE}/nas-record.backup"
+  mv "${record}" "${record}.hidden"
+  if _audit_bassez_nas_artifact "${path}" > "${FIXTURE}/nas-terminal-missing-record.log" 2>&1; then
+    echo "terminal audit accepted a missing NAS producer record" >&2; exit 1
+  fi
+  mv "${record}.hidden" "${record}"
+  printf 'CORRUPTED=1\n' >> "${record}"
+  if _audit_bassez_nas_artifact "${path}" > "${FIXTURE}/nas-terminal-corrupt-record.log" 2>&1; then
+    echo "terminal audit accepted a corrupted NAS producer record" >&2; exit 1
+  fi
+  cp "${FIXTURE}/nas-record.backup" "${record}"
+done
+for path in "${NAS_OUTPUT}" "${NAS_OUTPUT}.repair.json"; do
   _audit_bassez_nas_artifact "${path}" > "${FIXTURE}/nas-terminal-valid.log"
   cp "${path}" "${FIXTURE}/nas-payload.backup"
   printf 'corrupted after successful sync\n' >> "${path}"
@@ -167,6 +215,14 @@ if stage2_bassez_metadata_sync > "${FIXTURE}/sync-corrupted.log" 2>&1; then
 fi
 [[ "$(ecoda_md5_file "${NAS_OUTPUT}.repair.json")" == "${CORRUPTED_MD5}" ]]
 [[ "$(wc -l < "${RSYNC_CALLS}" | tr -d '[:space:]')" == 2 ]]
+stage2_bassez_metadata_fail_owners "fixture publication failure"
+for path in "${OUTPUT}" "${OUTPUT}.repair.json"; do
+  [[ "$(ecoda_owner_state "$(ecoda_artifact_owner_dir "${path}")")" == OK ]]
+done
+[[ "$(ecoda_owner_state "${STEP_OWNER}")" == FAIL ]]
+for path in "${NAS_OUTPUT}" "${NAS_OUTPUT}.repair.json"; do
+  [[ "$(ecoda_owner_state "$(ecoda_artifact_owner_dir "${path}")")" == FAIL ]]
+done
 
 # Corrupt bound metadata fails closed before the interpreter executes.
 BINDING="${ECODA_RUN_ROOT}/manifests/bassez_metadata.json"

@@ -248,17 +248,8 @@ stage3_install_output_owner_manifest() {
 }
 
 stage3_validate_scratch_output_ownership() {
-  local selection="$1" saved_nas="${NAS_TARGET_DIR-}" had_nas=0 rc
-  [[ -n "${NAS_TARGET_DIR+x}" ]] && had_nas=1
-  unset NAS_TARGET_DIR
-  ecoda_validate_output_ownership stage3 "${selection}" "${RUN_ID}"
-  rc=$?
-  if [[ ${had_nas} -eq 1 ]]; then
-    export NAS_TARGET_DIR="${saved_nas}"
-  else
-    unset NAS_TARGET_DIR
-  fi
-  return "${rc}"
+  # Preserve the bound NAS identity even when the compute node cannot mount it.
+  ecoda_validate_output_ownership stage3 "$1" "${RUN_ID}" 0 scratch
 }
 
 stage3_validate_output_owner() {
