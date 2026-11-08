@@ -198,11 +198,19 @@ stage3_remember_manifest_output_owners() {
     output="$(ecoda_view_output_name "${ds}" "${view}")" || return 1
     [[ -n "${output}" && "${output}" != */* &&
        "${output}" != *$'\n'* && "${output}" != *$'\t'* ]] || return 1
-    scratch_path="${HPC_SCRATCH_DIR%/}/${ds}/output/${output}"
+    if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+      scratch_path="$(ecoda_derivative_dataset_output "${ds}" "${view}")" || return 1
+    else
+      scratch_path="${HPC_SCRATCH_DIR%/}/${ds}/output/${output}"
+    fi
     [[ "${scratch_path}" == "${HPC_SCRATCH_DIR%/}/"* ]] || return 1
     stage3_remember_manifest_output_owner "${scratch_path}" || return 1
     if [[ -n "${NAS_TARGET_DIR:-}" ]]; then
-      nas_path="${NAS_TARGET_DIR%/}/${ds}/output/${output}"
+      if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+        nas_path="$(ecoda_derivative_dataset_output "${ds}" "${view}" nas)" || return 1
+      else
+        nas_path="${NAS_TARGET_DIR%/}/${ds}/output/${output}"
+      fi
       [[ "${nas_path}" == "${NAS_TARGET_DIR%/}/"* ]] || return 1
       stage3_remember_manifest_output_owner "${nas_path}" || return 1
     fi
@@ -378,6 +386,13 @@ export ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST_ORIGINAL}"
 RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage3 0)" ||
   fail "Stage 3 runtime export construction failed"
 RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_RUNTIME_IDENTITY=${RUNTIME_IDENTITY},ECODA_SOURCE_MANIFEST_RUN=${SOURCE_MANIFEST_RUN},ECODA_RUNTIME_RUN_ID=${RUN_ID}"
+if [[ -f "${RUN_ROOT}/manifests/artifact_bindings.json" ||
+      -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+  export ECODA_ARTIFACT_BINDING="${RUN_ROOT}/manifests/artifact_bindings.json"
+  source "${PROJECT_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+  ecoda_derivative_load stage3 || fail "Stage 3 derivative binding is invalid"
+  RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_ARTIFACT_BINDING=${ECODA_ARTIFACT_BINDING}"
+fi
 
 bump_memory() {
   local value="$1"
@@ -415,16 +430,25 @@ wait_and_classify() {
 }
 
 validate_manifest_outputs() {
-  local manifest="$1" ds view output path
+  local manifest="$1" ds view output path input_dir
   while IFS=$'\t' read -r ds view; do
     [[ -n "${ds}" ]] || continue
     output="$(ecoda_view_output_name "${ds}" "${view}")"
     [[ -n "${output}" ]] || return 1
-    path="${HPC_SCRATCH_DIR}/${ds}/output/${output}"
+    if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+      path="$(ecoda_derivative_dataset_output "${ds}" "${view}")" || return 1
+      input_dir="$(ecoda_derivative_input "${ds}" "${view}" directory)" || return 1
+    else
+      path="${HPC_SCRATCH_DIR}/${ds}/output/${output}"
+      input_dir="${HPC_SCRATCH_DIR}/${ds}/data"
+    fi
     [[ -s "${path}" ]] || return 1
     "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_h5ad_contract.py" \
       --path "${path}" --view "${view}" --method "Stage 3 watchdog" >/dev/null 2>&1 || return 1
     stage3_artifact_record_any "${path}" || return 1
+    "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/cohort_selection.py" \
+      --config "${DATASETS_JSON_FILE}" --dataset "${ds}" --view "${view}" \
+      --input-dir "${input_dir}" --path "${path}" >/dev/null 2>&1 || return 1
   done < "${manifest}"
 }
 

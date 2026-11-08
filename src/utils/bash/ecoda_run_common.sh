@@ -1680,9 +1680,16 @@ _ecoda_expand_output_selection() {
         name="$(ecoda_view_output_name "${ds}" "${view}")"
         [[ -n "${name}" && "${name}" != */* &&
            "${name}" != *$'\n'* && "${name}" != *$'\t'* ]] || return 1
-        _ecoda_output_add_scratch_nas_pair \
-          "${HPC_SCRATCH_DIR}/${ds}/output/${name}" \
-          "${NAS_TARGET_DIR:-}/${ds}/output/${name}" || return 1
+        if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+          [[ "${stage}" == stage3 ]] || return 1
+          _ecoda_output_add_scratch_nas_pair \
+            "$(ecoda_derivative_dataset_output "${ds}" "${view}")" \
+            "$(ecoda_derivative_dataset_output "${ds}" "${view}" nas)" || return 1
+        else
+          _ecoda_output_add_scratch_nas_pair \
+            "${HPC_SCRATCH_DIR}/${ds}/output/${name}" \
+            "${NAS_TARGET_DIR:-}/${ds}/output/${name}" || return 1
+        fi
       done < "${selection}"
       ;;
     *)

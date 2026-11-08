@@ -674,26 +674,31 @@ contradictions to the user; do not turn them into silent defaults.
 | 2026-11-08 | Runtime candidate fully verified | Selected existing format-2 image `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif` and adjacent `.manifest`. Full SHA256 verified as `8fcd00b7a02592f82e8ad96ec9dffdcfb40214b3c47218f770dfb8e828e05e34`; image size 8,863,477,760 bytes; image/manifest/parent have no write bits; manifest dependency hashes match unchanged local Pixi files. Runtime tooling present; this verification submitted no scheduler work |
 | 2026-11-08 | Cohort package independently accepted | Reviewer found no material issues and independently passed `test_cohort_selection.py` and `test_datasets_evaluation_columns.R`; existing registry, subset, corrected-source and atomic-preservation regressions also pass. Release remains gated on shell/sync/audit integration and real-source campaign preflight |
 
+| 2026-11-08 | First implementation packages published | Pushed `dfad68d` documentation harmonization, `feb3550` pre-fit BL core and exact worker variants, and `1b6969e` approved whole-sample cohort selection, evaluation mappings and create-only Stage 3 Python publication to origin/master. These source packages passed their scoped tests and independent review; no scientific derivatives or scheduler jobs have run yet |
+| 2026-11-08 | Runtime executable probes | The verified relocated image reports Python 3.13.14 and R 4.5.2 under `apptainer exec --cleanenv --containall`; dependency files remain unchanged |
+| 2026-11-08 | Bassez truthful legacy input provenance | Full Bamboo source MD5 `22be4eb1f41433b4a8a33dd8e1a3b7d2`, size 3,301,058,992 bytes; NAS and scratch checksum sidecars agree. Neither exact source has a global artifact owner. The worker-specific assumption of a six-field producer record was withdrawn: an explicit legacy-input mode will verify the existing three-field proof and actual content, check ownership conflicts, and record `legacy_validated_input`; it must never fabricate a published producer/run or fall back from an invalid supplied producer record |
+| 2026-11-08 | Stage 3 integration review in progress | Derivative input references and scratch/NAS roots are implemented and narrow helper tests pass. Review identified optional Alzheimer producer validation and first-manifest-row view selection; implementor is making producer validation mandatory for selected donor-assay inputs and selecting the Alzheimer row explicitly before this slice is committed or launched |
+
 ### Active assignments
 
 - Orchestrator `/root`: this plan, Git integration/push, bounded Bamboo
   preflight and run/release coordination; no pipeline implementation.
-- Implementor `docs_checkpoint_audit`: documentation harmonization, no current
-  plan edits or production code/config changes. P1 returned; now independently
-  reviewing BL and cohort packages. The orchestrator completed the remaining
-  protected coordination-prose edits through scoped approved execution after
-  the subagent's editing tool stalled; no pipeline implementation by root.
+- Implementor `docs_checkpoint_audit`: P1 returned and independently accepted
+  BL/cohort packages; now owns the corrected unsupervised Harmony versus
+  Harmony-plus-limma composition branches, scientific identity/cache validation,
+  and focused tests. No downstream notebook edits. Shared shell expansion stays
+  with the HPC integration implementor; no current-plan edits or commits.
 - Implementor `batch_subset_audit`: cohort/loader/Stage 3 Python package returned
   for review; now owns new Stage 2 Bassez metadata-only derivative worker and
   its fixtures. No shell submitter or Stage 5 edits.
 - Implementor `benchmark_dependency_audit`: BL core/worker package returned and
   independently accepted; now owns derivative root/input-reference integration
   in submitter/worker/sync/audit seams, followed by exact variant propagation.
-  No downstream notebook changes. Previously completed BL files stay frozen
-  until their separate commit is recorded.
+  No downstream notebook changes. BL core/worker package is committed; shared
+  Stage 3 files are held for integration review before Stage 5 work resumes.
 
-Checkpoint exceptions: `.vscode/settings.json` and `Rplots.pdf` remain local
-and uncommitted as agreed. The architecture draft's three existing whitespace
+Checkpoint exceptions: `.vscode/settings.json`, `Rplots.pdf` and the unrelated
+`Halter_etal_bioRxiv_ReviewCommons.docx` remain untouched and uncommitted. The architecture draft's three existing whitespace
 lines were preserved in its backup commit. Backup commits are not scientific
 release validation. No full H5ADs or expression matrices were copied locally.
 

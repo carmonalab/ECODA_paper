@@ -60,7 +60,8 @@ mkdir -p \
 cp "${ROOT}/src/slurm_config.sh" "${SOURCE_ROOT}/src/slurm_config.sh"
 for source_file in \
   ecoda_run_common.sh ecoda_runtime.sh h5ad_preflight_submit.sh \
-  h5ad_preflight_worker.sh h5ad_obs_audit_worker.sh worker_retry.sh; do
+  h5ad_preflight_worker.sh h5ad_obs_audit_worker.sh worker_retry.sh \
+  ecoda_derivative_artifacts.sh; do
   cp "${ROOT}/src/utils/bash/${source_file}" \
     "${SOURCE_ROOT}/src/utils/bash/${source_file}"
 done
@@ -74,6 +75,8 @@ cp "${ROOT}/src/utils/py/artifact_contract.py" \
   "${SOURCE_ROOT}/src/utils/py/artifact_contract.py"
 cp "${ROOT}/src/utils/py/batch_contract.py" \
   "${SOURCE_ROOT}/src/utils/py/batch_contract.py"
+cp "${ROOT}/src/utils/py/derivative_artifacts.py" \
+  "${SOURCE_ROOT}/src/utils/py/derivative_artifacts.py"
 for source_file in config_helper.R datasets.json pixi.toml pixi.lock; do
   cp "${ROOT}/${source_file}" "${SOURCE_ROOT}/${source_file}"
 done
@@ -111,8 +114,12 @@ mkdir -p "${HOST_ENV_PREFIX}/bin" "${HOST_ENV_PREFIX}/lib" \
   "${TMP_DIR}/home/scratch/ECODA_paper" "${TMP_DIR}/logs"
 cat > "${HOST_ENV_PREFIX}/bin/python" <<'STUB'
 #!/bin/bash
+if [[ "${1:-}" == */derivative_artifacts.py ]]; then
+  exec "${TEST_REAL_PYTHON}" "$@"
+fi
 exit 0
 STUB
+export TEST_REAL_PYTHON="${ROOT}/.pixi/envs/default/bin/python"
 cat > "${HOST_ENV_PREFIX}/bin/Rscript" <<'STUB'
 #!/bin/bash
 exit 0
@@ -377,6 +384,26 @@ run_stage3() {
     bash "${ROOT}/src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh" "$@"
 }
 
+# Every selected donor-assay Alzheimer view has a terminal Stage 2 producer,
+# including the broad scheduler-only compatibility fixtures below.
+INITIAL_ALZ_PRODUCER=stage2-alzheimer-initial-fixture
+INITIAL_ALZ_INPUT_NAME="$(jq -r '.Alzheimer.views.batch_effect_uncorrected.input_file_name' "${SOURCE_ROOT}/datasets.json")"
+INITIAL_ALZ_INPUT="${HPC_SCRATCH_DIR}/Alzheimer/data/${INITIAL_ALZ_INPUT_NAME}"
+mkdir -p "$(dirname "${INITIAL_ALZ_INPUT}")"
+printf 'stub-alzheimer-derivative-h5ad\n' > "${INITIAL_ALZ_INPUT}"
+(
+  source "${SOURCE_ROOT}/src/slurm_config.sh"
+  source "${SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
+  ecoda_init_run stage2 "${INITIAL_ALZ_PRODUCER}" >/dev/null
+  printf 'alzheimer_donor_assay\tfixture\t%s\t-\t-\n' "${INITIAL_ALZ_INPUT}" > "${ECODA_RUN_ROOT}/manifests/steps.tsv"
+  ecoda_write_checksum "${INITIAL_ALZ_INPUT}" >/dev/null
+  ecoda_artifact_owner_acquire "${INITIAL_ALZ_INPUT}" stage2 "${INITIAL_ALZ_PRODUCER}" 0 0 0 >/dev/null
+  ecoda_write_artifact_record "${INITIAL_ALZ_INPUT}" alzheimer_donor_assay "${INITIAL_ALZ_PRODUCER}" >/dev/null
+  ecoda_artifact_owner_set_state "${INITIAL_ALZ_INPUT}" OK 'fixture derivative published' >/dev/null
+  ecoda_set_run_state OK 'fixture derivative validated' >/dev/null
+)
+export STAGE3_INPUT_PRODUCER_RUN_ID="${INITIAL_ALZ_PRODUCER}"
+
 SELECTION="${TMP_DIR}/selection.tsv"
 printf 'Alzheimer\tbatch_effect_uncorrected\nBreast_cancer\tbatch_effect_uncorrected\nCovid19_PBMC\tbatch_effect_uncorrected\nKidney_KPMP_full\tbatch_effect_uncorrected\nMyocardial_infarction\tbatch_effect_uncorrected\nDiabetes\tbatch_effect_uncorrected\nLupus_PBMC\tbatch_effect_uncorrected\nLung\tbatch_effect_uncorrected\nParkinson\tbatch_effect_uncorrected\nJoanito\tbatch_effect_uncorrected\nStephenson\tbatch_effect_uncorrected\nCombinedPBMC\tbatch_effect_uncorrected\n' > "${SELECTION}"
 COVID_INPUT="${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
@@ -459,7 +486,7 @@ esac
 PREFLIGHT_RECORDS="$(awk -F '	' '$1 == "PREFLIGHT" && $2 == "600003" { count++ } END { print count + 0 }' \
   "${UNCORRECTED_RUN_ROOT}/manifests/scheduler_ids.tsv")"
 [[ "${PREFLIGHT_RECORDS}" == 1 ]]
-for preflight_view in batch_effect_uncorrected batch_effect_corrected; do
+for preflight_view in batch_effect_uncorrected; do
   PREFLIGHT_REPORT="${UNCORRECTED_RUN_ROOT}/preflight/Covid19_PBMC_${preflight_view}.json"
   PREFLIGHT_STATUS="${UNCORRECTED_RUN_ROOT}/status/h5ad_obs_audit/Covid19_PBMC__${preflight_view}.status"
   [[ -s "${PREFLIGHT_REPORT}" && -s "${PREFLIGHT_REPORT}.md5" ]]
@@ -543,7 +570,7 @@ cmp -s "${CORRECTED_SELECTION}" \
 CORRECTED_PREFLIGHT_RECORDS="$(awk -F '	' '$1 == "PREFLIGHT" && $2 == "600003" { count++ } END { print count + 0 }' \
   "${CORRECTED_RUN_ROOT}/manifests/scheduler_ids.tsv")"
 [[ "${CORRECTED_PREFLIGHT_RECORDS}" == 1 ]]
-for preflight_view in batch_effect_uncorrected batch_effect_corrected; do
+for preflight_view in batch_effect_corrected; do
   PREFLIGHT_REPORT="${CORRECTED_RUN_ROOT}/preflight/Covid19_PBMC_${preflight_view}.json"
   PREFLIGHT_STATUS="${CORRECTED_RUN_ROOT}/status/h5ad_obs_audit/Covid19_PBMC__${preflight_view}.status"
   [[ -s "${PREFLIGHT_REPORT}" && -s "${PREFLIGHT_REPORT}.md5" ]]
@@ -707,7 +734,7 @@ ALZ_INPUT_NAME="$(jq -r '.Alzheimer.views.batch_effect_uncorrected.input_file_na
   "${SOURCE_ROOT}/datasets.json")"
 ALZ_INPUT="${HPC_SCRATCH_DIR}/Alzheimer/data/${ALZ_INPUT_NAME}"
 mkdir -p "$(dirname "${ALZ_INPUT}")"
-printf 'stub-alzheimer-derivative-h5ad\n' > "${ALZ_INPUT}"
+[[ -s "${ALZ_INPUT}" ]] # Reuse the earlier immutable producer fixture bytes.
 (
   set -euo pipefail
   source "${SOURCE_ROOT}/src/slurm_config.sh"
@@ -1175,12 +1202,14 @@ set -e
 MISSING_HOME="${TMP_DIR}/missing-home"
 MISSING_HPC="${MISSING_HOME}/scratch/ECODA_paper"
 mkdir -p "${MISSING_HPC}" "${MISSING_HOME}/logs"
+MISSING_NAS="${TMP_DIR}/missing-nas"
+mkdir -p "${MISSING_NAS}"
 : > "${CAPTURE}"
 set +e
 HOME="${MISSING_HOME}" PATH="${TMP_DIR}/bin:${PATH}" \
   HPC_SCRATCH_DIR="${MISSING_HPC}" ECODA_SCRATCH_ROOT="${MISSING_HPC}" \
   ECODA_LOGS_DIR="${MISSING_HOME}/logs" \
-  NAS_TARGET_DIR="${NAS_TARGET_DIR}" USER_EMAIL="test@example.invalid" \
+  NAS_TARGET_DIR="${MISSING_NAS}" USER_EMAIL="test@example.invalid" \
   PREPROCESS_SUBMITTER_TEST=0 \
   bash "${ROOT}/src/3_scrnaseq_preprocessing/1_submit_hpc_array.sh" \
   --datasets Adams --views benchmark_analysis >/dev/null 2>&1
@@ -1191,5 +1220,44 @@ MISSING_CALLS="$(cat "${CAPTURE}")"
 case "${MISSING_CALLS}" in *"--array=1-1%1000"*) ;; *) echo "missing-output path did not submit preprocessing work" >&2; exit 1 ;; esac
 case "${MISSING_CALLS}" in *"h5ad_preflight"*) echo "missing-output path submitted an unnecessary preflight" >&2; exit 1 ;; esac
 
+
+# A derivative run accepts explicit read-only raw input references and writes
+# only its exact run-owned scientific root, even while an old row owner exists.
+DERIVATIVE_INPUT_NAME="$(jq -r '.Adams.views.benchmark_analysis.input_file_name' "${SOURCE_ROOT}/datasets.json")"
+DERIVATIVE_INPUT="${HPC_SCRATCH_DIR}/Adams/data/${DERIVATIVE_INPUT_NAME}"
+mkdir -p "$(dirname "${DERIVATIVE_INPUT}")"
+printf 'raw input fixture\n' > "${DERIVATIVE_INPUT}"
+write_sidecar "${DERIVATIVE_INPUT}"
+DERIVATIVE_REFS="${TMP_DIR}/derivative-inputs.tsv"
+printf 'Adams\tbenchmark_analysis\t%s\t%s\t%s\t%s.md5\n' \
+  "${DERIVATIVE_INPUT}" "$(md5_file "${DERIVATIVE_INPUT}")" \
+  "$(wc -c < "${DERIVATIVE_INPUT}" | tr -d '[:space:]')" "${DERIVATIVE_INPUT}" > "${DERIVATIVE_REFS}"
+OLD_OUTPUT_MD5="$(md5_file "${WD_OUTPUT}")"
+OLD_NAS_MD5="$(md5_file "${WD_NAS_OUTPUT}")"
+: > "${CAPTURE}"
+set +e
+ECODA_RUN_ID=stage3-derivative-fixture run_stage3 --datasets Adams --views benchmark_analysis \
+  --derivative-release 20261108-confounding-subsets-v1 --input-artifacts "${DERIVATIVE_REFS}" \
+  > "${TMP_DIR}/derivative-submit.log" 2>&1
+RC=$?
+set -e
+[[ ${RC} -ne 0 ]] # Scheduler is stubbed; no fabricated successful watchdog.
+DERIVATIVE_RUN="${HPC_SCRATCH_DIR}/_ecoda_runs/stage3-derivative-fixture"
+[[ -s "${DERIVATIVE_RUN}/manifests/artifact_bindings.json" ]]
+[[ "$(cat "${DERIVATIVE_RUN}/manifests/pending.tsv")" == $'Adams\tbenchmark_analysis' ]]
+[[ "$(md5_file "${WD_OUTPUT}")" == "${OLD_OUTPUT_MD5}" ]]
+[[ "$(md5_file "${WD_NAS_OUTPUT}")" == "${OLD_NAS_MD5}" ]]
+case "$(cat "${CAPTURE}")" in
+  *"ECODA_ARTIFACT_BINDING=${DERIVATIVE_RUN}/manifests/artifact_bindings.json"*) ;;
+  *) cat "${TMP_DIR}/derivative-submit.log" >&2; echo 'derivative binding not exported to workers' >&2; exit 1;;
+esac
+# Existing canonical bytes are preserved even under explicitly requested force.
+: > "${CAPTURE}"
+if run_stage3 --datasets Adams --views benchmark_analysis --force > "${TMP_DIR}/preserve.log" 2>&1; then
+  echo 'force unexpectedly replaced an existing canonical output' >&2; exit 1
+fi
+[[ ! -s "${CAPTURE}" ]]
+[[ "$(md5_file "${WD_OUTPUT}")" == "${OLD_OUTPUT_MD5}" ]]
+[[ "$(md5_file "${WD_NAS_OUTPUT}")" == "${OLD_NAS_MD5}" ]]
 
 echo "preprocessing stage submitter: OK"

@@ -17,6 +17,8 @@ VIEWS_ARG=""
 VIEWS_SET=0
 SELECTION_FILE_ARG=""
 SELECTION_FILE_SET=0
+DERIVATIVE_RELEASE=""
+INPUT_ARTIFACTS=""
 FORCE_ARG=0
 SYNC_ONLY_RUN=""
 SYNC_ONLY_SET=0
@@ -42,6 +44,7 @@ usage() {
   cat <<'EOF'
 Usage: 1_submit_hpc_array.sh [--datasets LIST] [--views LIST]
        [--selection-file TSV] [--force]
+       [--derivative-release ID --input-artifacts TSV]
        [--sync-only RUN_ID] [--validated-sync-report PATH]
        [--mem VALUE] [--max-mem VALUE]
 
@@ -65,6 +68,8 @@ while [[ $# -gt 0 ]]; do
     --view=*) VIEWS_ARG="${1#*=}"; VIEWS_SET=1; shift ;;
     --selection-file) SELECTION_FILE_ARG="${2:-}"; SELECTION_FILE_SET=1; shift 2 ;;
     --selection-file=*) SELECTION_FILE_ARG="${1#*=}"; SELECTION_FILE_SET=1; shift ;;
+    --derivative-release) DERIVATIVE_RELEASE="${2:-}"; shift 2 ;;
+    --input-artifacts) INPUT_ARTIFACTS="${2:-}"; shift 2 ;;
     --force) FORCE_ARG=1; shift ;;
     --sync-only) SYNC_ONLY_RUN="${2:-}"; SYNC_ONLY_SET=1; shift 2 ;;
     --sync-only=*) SYNC_ONLY_RUN="${1#*=}"; SYNC_ONLY_SET=1; shift ;;
@@ -82,6 +87,24 @@ while [[ $# -gt 0 ]]; do
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
+if [[ -n "${DERIVATIVE_RELEASE}" || -n "${INPUT_ARTIFACTS}" ]]; then
+  [[ -n "${DERIVATIVE_RELEASE}" && -n "${INPUT_ARTIFACTS}" && -z "${SYNC_ONLY_RUN}" ]] || {
+    echo "ERROR: derivative mode requires both release ID and input artifacts for a new run" >&2
+    exit 1
+  }
+fi
+if [[ -n "${ECODA_ARTIFACT_BINDING:-}" && -z "${SYNC_ONLY_RUN}" ]]; then
+  echo "ERROR: new runs require explicit derivative flags, not an ambient binding" >&2
+  exit 1
+fi
+
+stage3_load_derivative_binding() {
+  local binding="${ECODA_RUN_ROOT}/manifests/artifact_bindings.json"
+  [[ -e "${binding}" ]] || return 0
+  source "${PROJECT_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+  export ECODA_ARTIFACT_BINDING="${binding}"
+  ecoda_derivative_load stage3
+}
 
 if [[ -n "${SYNC_ONLY_RUN}" && ${FORCE_ARG} -eq 1 ]]; then
   echo "ERROR: --sync-only cannot be combined with --force." >&2
@@ -324,10 +347,14 @@ stage3_require_new_snapshot() {
 }
 stage3_validate_alzheimer_input_dependency() {
   local producer="${STAGE3_INPUT_PRODUCER_RUN_ID:-}"
-  local view input_name input_path sample_column producer_output
+  local view input_name input_path sample_column producer_output producer_real input_real
+  local selected_ds selected_view selected_extra selected_input
   local producer_root producer_state
-  [[ -n "${producer}" ]] || return 0
   stage3_selection_contains_alzheimer "${MANIFEST}" || return 0
+  [[ -n "${producer}" ]] || {
+    echo 'ERROR: selected Alzheimer donor-assay input requires a reviewed Stage 2 producer run ID' >&2
+    return 1
+  }
   [[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == "1" &&
      "${ECODA_SOURCE_ROOT:-}" = /* &&
      "${ECODA_SOURCE_MANIFEST:-}" = /* ]] || {
@@ -368,7 +395,7 @@ stage3_validate_alzheimer_input_dependency() {
     echo "ERROR: Alzheimer producer run lacks one reviewed donor-by-assay output." >&2
     return 1
   }
-  view="$(awk -F '\t' 'NF {print $2; exit}' "${MANIFEST}" 2>/dev/null || true)"
+  view="$(awk -F '\t' '$1 == "Alzheimer" {print $2; exit}' "${MANIFEST}" 2>/dev/null || true)"
   [[ "${view}" == "batch_effect_uncorrected" ||
      "${view}" == "batch_effect_corrected" ]] || return 1
   input_name="$(ecoda_view_input_name Alzheimer "${view}")" || return 1
@@ -386,8 +413,14 @@ stage3_validate_alzheimer_input_dependency() {
     echo "ERROR: Alzheimer follow-up requires sample column ${STAGE3_ALZHEIMER_SAMPLE_COLUMN}; got ${sample_column:-<empty>}." >&2
     return 1
   }
-  input_path="${HPC_SCRATCH_DIR}/Alzheimer/data/${input_name}"
-  [[ "${producer_output}" == "${input_path}" ]] || {
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    input_path="$(ecoda_derivative_input Alzheimer "${view}")" || return 1
+  else
+    input_path="${HPC_SCRATCH_DIR}/Alzheimer/data/${input_name}"
+  fi
+  producer_real="$(ecoda_realpath_existing "${producer_output}")" || return 1
+  input_real="$(ecoda_realpath_existing "${input_path}")" || return 1
+  [[ "${producer_real}" == "${input_real}" ]] || {
     echo "ERROR: Alzheimer producer output is not the configured donor-assay derivative: ${producer_output}" >&2
     return 1
   }
@@ -395,6 +428,20 @@ stage3_validate_alzheimer_input_dependency() {
     echo "ERROR: Alzheimer Stage 2 derivative input is missing or unsafe: ${input_path}" >&2
     return 1
   }
+  input_path="${input_real}"
+  while IFS=$'\t' read -r selected_ds selected_view selected_extra; do
+    [[ "${selected_ds}" == Alzheimer ]] || continue
+    [[ "$(ecoda_view_input_name Alzheimer "${selected_view}")" == "${input_name}" ]] || return 1
+    if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+      selected_input="$(ecoda_derivative_input Alzheimer "${selected_view}")" || return 1
+    else
+      selected_input="${HPC_SCRATCH_DIR}/Alzheimer/data/${input_name}"
+    fi
+    [[ "$(ecoda_realpath_existing "${selected_input}")" == "${producer_real}" ]] || {
+      echo 'ERROR: selected Alzheimer views disagree with the Stage 2 producer output' >&2
+      return 1
+    }
+  done < "${MANIFEST}"
   ecoda_validate_input_artifact "${input_path}" \
     "${STAGE3_ALZHEIMER_INPUT_PRODUCER}" "${producer}" || {
     echo "ERROR: Alzheimer Stage 2 derivative input failed producer/owner validation." >&2
@@ -416,10 +463,15 @@ stage3_record_alzheimer_input_binding() {
      -n "${STAGE3_ALZHEIMER_INPUT_SAMPLE_COLUMN:-}" &&
      -n "${STAGE3_INPUT_PRODUCER_RUN_ID:-}" ]] || return 1
   mkdir -p "$(dirname "${manifest}")" || return 1
-  printf 'Alzheimer\t%s\t%s\t%s\t%s\n' \
-    "${STAGE3_ALZHEIMER_INPUT_VIEW}" "${STAGE3_ALZHEIMER_INPUT_PATH}" \
-    "${STAGE3_ALZHEIMER_INPUT_SAMPLE_COLUMN}" "${STAGE3_INPUT_PRODUCER_RUN_ID}" \
-    > "${manifest_tmp}" || return 1
+  local ds view extra
+  : > "${manifest_tmp}" || return 1
+  while IFS=$'\t' read -r ds view extra; do
+    [[ "${ds}" == Alzheimer ]] || continue
+    printf 'Alzheimer\t%s\t%s\t%s\t%s\n' \
+      "${view}" "${STAGE3_ALZHEIMER_INPUT_PATH}" \
+      "${STAGE3_ALZHEIMER_INPUT_SAMPLE_COLUMN}" "${STAGE3_INPUT_PRODUCER_RUN_ID}" \
+      >> "${manifest_tmp}" || return 1
+  done < "${MANIFEST}"
   ecoda_validate_manifest "${manifest_tmp}" 5 || {
     rm -f "${manifest_tmp}"
     return 1
@@ -462,6 +514,10 @@ stage3_require_source_script() {
 
 output_path_for() {
   local ds="$1" view="$2" output
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    ecoda_derivative_dataset_output "${ds}" "${view}"
+    return
+  fi
   output="$(ecoda_view_output_name "${ds}" "${view}")"
   [[ -n "${output}" ]] || return 1
   printf '%s/%s/output/%s' "${HPC_SCRATCH_DIR}" "${ds}" "${output}"
@@ -504,6 +560,15 @@ stage3_selection_contains_alzheimer() {
          "${view}" == "batch_effect_corrected" ) ]] && return 0
   done < "${selection}"
   return 1
+}
+
+stage3_covid_input_path() {
+  local view="$1"
+  if [[ -z "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    printf '%s/Covid19_PBMC/data/Covid19_Ren2021.h5ad' "${HPC_SCRATCH_DIR}"
+    return
+  fi
+  ecoda_derivative_input Covid19_PBMC "${view}"
 }
 
 stage3_validate_covid_obs_report() {
@@ -549,7 +614,7 @@ stage3_validate_covid_obs_report() {
     echo "ERROR: Covid ${view} obs-only report does not record the configured subset rule." >&2
     return 1
   }
-  input_path="${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
+  input_path="$(stage3_covid_input_path "${view}")" || return 1
   configured_input_path="${input_path}"
   [[ -f "${configured_input_path}" && ! -L "${configured_input_path}" &&
      -r "${configured_input_path}" ]] || {
@@ -597,8 +662,11 @@ stage3_validate_covid_obs_report() {
 }
 
 stage3_validate_covid_obs_reports() {
-  stage3_validate_covid_obs_report batch_effect_uncorrected || return 1
-  stage3_validate_covid_obs_report batch_effect_corrected || return 1
+  local ds view path
+  while IFS=$'\t' read -r ds view path; do
+    [[ "${ds}" == Covid19_PBMC ]] || return 1
+    stage3_validate_covid_obs_report "${view}" || return 1
+  done < "${ECODA_RUN_ROOT}/manifests/h5ad_obs_audit.tsv"
 }
 
 stage3_install_covid_obs_evidence() {
@@ -606,12 +674,12 @@ stage3_install_covid_obs_evidence() {
   local destination="${ECODA_RUN_ROOT}/manifests/covid_obs_preflight"
   local manifest="${ECODA_RUN_ROOT}/manifests/covid_obs_preflight.tsv"
   local tmp="${manifest}.build.$$"
-  local view report target digest size
+  local view report target digest size ds path
   [[ ${STAGE3_COVID_PREFLIGHT_REQUIRED} -eq 1 ]] || return 0
   [[ "${source_root}" = /* && -d "${source_root}" && ! -L "${source_root}" ]] || return 1
   mkdir -p "${destination}" || return 1
   : > "${tmp}" || return 1
-  for view in batch_effect_uncorrected batch_effect_corrected; do
+  while IFS=$'\t' read -r ds view path; do
     report="${source_root}/Covid19_PBMC_${view}.json"
     target="${destination}/$(basename "${report}")"
     ecoda_atomic_copy "${report}" "${target}" 600 || {
@@ -629,7 +697,7 @@ stage3_install_covid_obs_evidence() {
     digest="${ECODA_CHECKSUM_MD5}"
     size="${ECODA_CHECKSUM_SIZE}"
     printf '%s\t%s\t%s\t%s\n' "${view}" "${target}" "${digest}" "${size}" >> "${tmp}"
-  done
+  done < "${ECODA_RUN_ROOT}/manifests/h5ad_obs_audit.tsv"
   ecoda_atomic_install_manifest "${tmp}" "${manifest}" 4 || {
     rm -f "${tmp}"
     return 1
@@ -656,7 +724,7 @@ stage3_run_covid_obs_preflight() {
   local status_dir="${ECODA_RUN_ROOT}/status/h5ad_obs_audit"
   local input_path="${HPC_SCRATCH_DIR}/Covid19_PBMC/data/Covid19_Ren2021.h5ad"
   local expected_root="${ECODA_RUN_ROOT}/preflight"
-  local view="" path="" status="" safe="" state="" status_run="" status_dataset="" status_view=""
+  local ds="" extra="" view="" path="" status="" safe="" state="" status_run="" status_dataset="" status_view=""
   local status_task="" status_path="" status_count=0
   local preflight_script="" preflight_id="" preflight_rc=0
   stage3_selection_contains_covid "${selection}" || return 0
@@ -671,13 +739,14 @@ stage3_run_covid_obs_preflight() {
   [[ ! -L "${STAGE3_COVID_PREFLIGHT_ROOT}" && ! -L "${status_dir}" ]] || return 1
   ecoda_validate_run_owned_path "${STAGE3_COVID_PREFLIGHT_ROOT}" "${ECODA_RUN_ROOT}" || return 1
   ecoda_validate_run_owned_path "${status_dir}" "${ECODA_RUN_ROOT}" || return 1
-  [[ -f "${input_path}" && ! -L "${input_path}" && -r "${input_path}" ]] || {
-    echo "ERROR: Covid direct H5AD input is missing or unsafe: ${input_path}" >&2
-    return 1
-  }
   : > "${audit_tmp}" || return 1
-  printf 'Covid19_PBMC\tbatch_effect_uncorrected\t%s\n' "${input_path}" >> "${audit_tmp}"
-  printf 'Covid19_PBMC\tbatch_effect_corrected\t%s\n' "${input_path}" >> "${audit_tmp}"
+  while IFS=$'\t' read -r ds view extra; do
+    [[ "${ds}" == Covid19_PBMC ]] || continue
+    [[ "${view}" == batch_effect_uncorrected || "${view}" == batch_effect_corrected ]] || continue
+    input_path="$(stage3_covid_input_path "${view}")" || return 1
+    [[ -f "${input_path}" && ! -L "${input_path}" && -r "${input_path}" ]] || return 1
+    printf 'Covid19_PBMC\t%s\t%s\n' "${view}" "${input_path}" >> "${audit_tmp}"
+  done < "${selection}"
   ecoda_atomic_install_manifest "${audit_tmp}" "${audit_manifest}" 3 || {
     rm -f "${audit_tmp}"
     return 1
@@ -724,13 +793,17 @@ stage3_run_covid_obs_preflight() {
       return 1
     }
   done < "${audit_manifest}"
-  [[ ${status_count} -eq 2 ]] || return 1
+  [[ ${status_count} -gt 0 && ${status_count} -eq $(wc -l < "${audit_manifest}" | tr -d '[:space:]') ]] || return 1
   stage3_validate_covid_obs_reports || return 1
   stage3_install_covid_obs_evidence || return 1
 }
 
 stage3_nas_output_path() {
   local ds="$1" view="$2" output
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    ecoda_derivative_dataset_output "${ds}" "${view}" nas
+    return
+  fi
   output="$(ecoda_view_output_name "${ds}" "${view}")"
   [[ -n "${output}" ]] || return 1
   printf '%s/%s/output/%s' "${NAS_TARGET_DIR}" "${ds}" "${output}"
@@ -986,6 +1059,15 @@ stage3_existing_output_valid() {
   [[ ${owner_rc} -eq 0 ]] || return "${owner_rc}"
   validate_h5ad "${ds}" "${view}" "${path}" || return 1
   ecoda_validate_checksum "${path}" || return 1
+  local input_dir="${HPC_SCRATCH_DIR}/${ds}/data"
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    input_dir="$(ecoda_derivative_input "${ds}" "${view}" directory)" || return 1
+  fi
+  if [[ "${PREPROCESS_SUBMITTER_TEST:-0}" != 1 ]]; then
+    "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/cohort_selection.py" \
+      --config "${DATASETS_JSON_FILE}" --dataset "${ds}" --view "${view}" \
+      --input-dir "${input_dir}" --path "${path}" >/dev/null || return 1
+  fi
 
   # NAS is a synchronization destination, not the compute artifact record.
   # Validate a terminal owner when one exists, but allow a missing/stale
@@ -1016,8 +1098,10 @@ stage3_invalidate_existing_output() {
   local ds="$1" view="$2" path="$3" nas_path candidate
   nas_path="$(stage3_nas_output_path "${ds}" "${view}")" || return 1
   for candidate in "${path}" "${nas_path}"; do
-    [[ ! -L "${candidate}" ]] || return 1
-    ecoda_invalidate_artifact "${candidate}" || return 1
+    if [[ -e "${candidate}" || -L "${candidate}" || -e "${candidate}.md5" ]]; then
+      echo "ERROR: existing Stage 3 artifact preserved; select a new derivative destination: ${candidate}" >&2
+      return 1
+    fi
   done
 }
 
@@ -1154,7 +1238,11 @@ stage3_watchdog_terminal_ok() {
 sync_selected() {
   local manifest="$1" ds view path output remote_dir sync_lock lock_root
   local transfer_manifest verify_manifest expected_output local_digest local_size
-  local rc=0
+  local rc=0 local_base="${HPC_SCRATCH_DIR}" nas_base="${NAS_TARGET_DIR}"
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    local_base="$(ecoda_derivative_root datasets)" || return 1
+    nas_base="$(ecoda_derivative_root datasets nas)" || return 1
+  fi
   [[ -d "${NAS_TARGET_DIR}" ]] || {
     echo "ERROR: NAS path is unreachable: ${NAS_TARGET_DIR}" >&2
     return 1
@@ -1177,7 +1265,7 @@ sync_selected() {
       continue
     fi
     output="$(basename "${path}")"
-    remote_dir="${NAS_TARGET_DIR}/${ds}/output"
+    remote_dir="${nas_base}/${ds}/output"
     expected_output="${ds}/output/${output}"
     if ! mkdir -p "${remote_dir}"; then
       rc=1
@@ -1215,13 +1303,13 @@ sync_selected() {
   done < "${manifest}"
   if [[ ${rc} -eq 0 && -s "${transfer_manifest}" ]]; then
     rsync -rlptDv --chmod=ugo+rwX --files-from="${transfer_manifest}" \
-      "${HPC_SCRATCH_DIR}/" "${NAS_TARGET_DIR}/" || rc=1
+      "${local_base}/" "${nas_base}/" || rc=1
   elif [[ ${rc} -eq 0 ]]; then
     rc=1
   fi
   if [[ ${rc} -eq 0 ]]; then
     while IFS=$'\t' read -r ds view path output local_digest local_size; do
-      remote_dir="${NAS_TARGET_DIR}/${ds}/output"
+      remote_dir="${nas_base}/${ds}/output"
       if ! ecoda_compare_checksum_remote \
           "${path}" "${remote_dir}/${output}" \
           "${remote_dir}/${output}.md5" "${local_digest}" "${local_size}"; then
@@ -1336,6 +1424,7 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
   fi
   [[ ${bound_rc} -eq 0 ]] ||
     stage3_abort "Stage 3 run-bound source/runtime identity is invalid"
+  stage3_load_derivative_binding || stage3_abort "invalid derivative artifact binding"
   ecoda_runtime_validate_bound_run ||
     stage3_abort "Stage 3 run-bound runtime validation failed"
   export ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST_ORIGINAL}"
@@ -1570,6 +1659,11 @@ ecoda_runtime_validate_submission "${ECODA_RUNTIME_MODE:-apptainer}" ||
   stage3_abort "Stage 3 runtime submission did not write runtime.identity"
 stage3_load_bound_run ||
   stage3_abort "Stage 3 run-bound source/runtime identity is invalid"
+if [[ -n "${DERIVATIVE_RELEASE}" ]]; then
+  source "${PROJECT_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+  ecoda_derivative_bind stage3 "${DERIVATIVE_RELEASE}" "${MANIFEST}" "${INPUT_ARTIFACTS}" ||
+    stage3_abort "failed to bind derivative roots and inputs"
+fi
 stage3_record_identity_metadata ||
   stage3_abort "failed to record Stage 3 source/runtime identity"
 stage3_validate_alzheimer_input_dependency ||
@@ -1577,6 +1671,9 @@ stage3_validate_alzheimer_input_dependency ||
 RUNTIME_EXPORT="$(ecoda_runtime_export_csv stage3 0)" ||
   stage3_abort "Stage 3 runtime export construction failed"
 RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_RUNTIME_IDENTITY=${RUNTIME_IDENTITY},ECODA_SOURCE_MANIFEST_RUN=${SOURCE_MANIFEST_RUN}"
+if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+  RUNTIME_EXPORT="${RUNTIME_EXPORT},ECODA_ARTIFACT_BINDING=${ECODA_ARTIFACT_BINDING}"
+fi
 if [[ -n "${STAGE3_INPUT_PRODUCER_RUN_ID:-}" &&
       -n "${STAGE3_ALZHEIMER_INPUT_PATH:-}" ]]; then
   RUNTIME_EXPORT="${RUNTIME_EXPORT},STAGE3_INPUT_PRODUCER_RUN_ID=${STAGE3_INPUT_PRODUCER_RUN_ID}"
@@ -1614,9 +1711,11 @@ while IFS=$'\t' read -r ds view; do
   fi
 
   stage3_invalidate_existing_output "${ds}" "${view}" "${path}" ||
-    stage3_abort "unsafe or unremovable invalid Stage 3 artifact ${ds}/${view}"
+    stage3_abort "existing Stage 3 artifact preserved for ${ds}/${view}; select a new derivative run"
+  owner_key="${ds}/${view}"
+  [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]] && owner_key="derivative/${RUN_ID}/${owner_key}"
   set +e
-  owner_dir="$(ecoda_owner_acquire stage3 "${ds}/${view}" "${RUN_ID}" "${FORCE_ARG}" 0)"
+  owner_dir="$(ecoda_owner_acquire stage3 "${owner_key}" "${RUN_ID}" "${FORCE_ARG}" 0)"
   owner_rc=$?
   set -e
   if [[ ${owner_rc} -ne 0 ]]; then
@@ -1625,7 +1724,7 @@ while IFS=$'\t' read -r ds view; do
   ecoda_owner_track "${owner_dir}" ||
     stage3_abort "failed to track Stage 3 owner for ${ds}/${view}"
   printf '%s\t%s\n' "${ds}" "${view}" >> "${PENDING_TMP}"
-  printf '%s\t%s\n' "${ds}/${view}" "${owner_dir}" >> "${OWNERS_TMP}"
+  printf '%s\t%s\n' "${owner_key}" "${owner_dir}" >> "${OWNERS_TMP}"
   PENDING_COUNT=$((PENDING_COUNT + 1))
 done < "${MANIFEST}"
 

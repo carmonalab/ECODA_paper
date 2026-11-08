@@ -761,13 +761,23 @@ _audit_output_metadata_add() {
 }
 
 _audit_semantic_artifact() {
-  local path="$1" dataset="$2" view="$3"
+  local path="$1" dataset="$2" view="$3" input_dir python_bin
   case "${STAGE_ARG}" in
     stage3)
       case "${path}" in
         *.h5ad)
           ecoda_validate_checksum "${path}" || return 1
           _audit_benchmark_h5ad "${path}" "${view}" "Stage 3 audit" || return 1
+          if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+            input_dir="$(ecoda_derivative_input "${dataset}" "${view}" directory)" || return 1
+          else
+            input_dir="${HPC_SCRATCH_DIR}/${dataset}/data"
+          fi
+          python_bin="$(_audit_python_binary)" || return 1
+          "${python_bin}" "${AUDIT_SOURCE_ROOT}/src/utils/py/cohort_selection.py" \
+            --config "${AUDIT_SOURCE_ROOT}/datasets.json" --dataset "${dataset}" \
+            --view "${view}" --input-dir "${input_dir}" --path "${path}" \
+            >/dev/null 2>&1 || return 1
           ;;
       esac
       ;;
@@ -796,11 +806,19 @@ _audit_prepare_output_semantics() {
     stage3|stage4)
       while IFS=$'\t' read -r dataset view extra; do
         name="$(ecoda_view_output_name "${dataset}" "${view}")" || return 1
-        raw_path="${HPC_SCRATCH_DIR}/${dataset}/output/${name}"
+        if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+          raw_path="$(ecoda_derivative_dataset_output "${dataset}" "${view}")" || return 1
+        else
+          raw_path="${HPC_SCRATCH_DIR}/${dataset}/output/${name}"
+        fi
         _audit_output_metadata_add "${raw_path}" "${dataset}" "${view}" "" ||
           return 1
         if [[ -n "${NAS_TARGET_DIR:-}" ]]; then
-          nas_path="${NAS_TARGET_DIR}/${dataset}/output/${name}"
+          if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+            nas_path="$(ecoda_derivative_dataset_output "${dataset}" "${view}" nas)" || return 1
+          else
+            nas_path="${NAS_TARGET_DIR}/${dataset}/output/${name}"
+          fi
           _audit_output_metadata_add "${nas_path}" "${dataset}" "${view}" "" ||
             return 1
         fi
@@ -889,6 +907,19 @@ ecoda_validate_run_owned_path "${RUNTIME_COPY}" "${RUN_ROOT_REAL}" || exit 1
 _audit_same_bytes "${SOURCE_MANIFEST_ARG}" "${SOURCE_COPY}" || exit 1
 _audit_same_bytes "${RUNTIME_IDENTITY_ARG}" "${RUNTIME_COPY}" || exit 1
 _audit_source_manifest "${SOURCE_MANIFEST_ARG}" || exit 1
+export ECODA_RUN_ROOT="${RUN_ROOT_REAL}"
+if [[ -f "${RUN_ROOT_REAL}/manifests/artifact_bindings.json" ||
+      -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+  expected_binding="${RUN_ROOT_REAL}/manifests/artifact_bindings.json"
+  [[ -z "${ECODA_ARTIFACT_BINDING:-}" ||
+     "${ECODA_ARTIFACT_BINDING}" == "${expected_binding}" ]] || exit 1
+  export ECODA_ARTIFACT_BINDING="${expected_binding}"
+  export PROJECT_ROOT="${AUDIT_SOURCE_ROOT}"
+  export DATASETS_JSON_FILE="${AUDIT_SOURCE_ROOT}/datasets.json"
+  export PYTHON_BIN="$(_audit_python_binary)"
+  source "${AUDIT_SOURCE_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+  ecoda_derivative_load "${STAGE_ARG}" || exit 1
+fi
 if [[ "${STAGE_ARG}" == stage5 ]]; then
   STAGE5_POLICY_SCRIPT="$(
     ecoda_require_source_script_path \

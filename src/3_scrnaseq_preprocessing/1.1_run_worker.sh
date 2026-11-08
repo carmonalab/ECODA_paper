@@ -180,6 +180,13 @@ echo "Processing dataset/view: ${DS_NAME}/${VIEW_NAME:-all} (array task ${SLURM_
 
 DATA_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/data"
 OUTPUT_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/output"
+if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+  source "${PROJECT_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+  ecoda_derivative_load stage3 || exit 1
+  DATA_DIR="$(ecoda_derivative_input "${DS_NAME}" "${VIEW_NAME}" directory content)" || exit 1
+  DERIVATIVE_OUTPUT="$(ecoda_derivative_dataset_output "${DS_NAME}" "${VIEW_NAME}")" || exit 1
+  OUTPUT_DIR="$(dirname "${DERIVATIVE_OUTPUT}")"
+fi
 mkdir -p "${DATA_DIR}" "${OUTPUT_DIR}"
 FORCE_FLAG=()
 [[ "${FORCE_PREPROCESS:-0}" == "1" ]] && FORCE_FLAG=(--force)
@@ -222,10 +229,8 @@ fi
 ERR_PREFIX="${PREPROCESS_ERROR_PREFIX:-${LOGS_DIR}/3_scrnaseq_preprocessing}"
 ERR_FILE="${ERR_PREFIX}_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.err"
 if worker_requeue_if_transient "${ERR_FILE}" "${WORKER_MAX_RETRIES:-3}"; then
-  if [[ -n "${VIEW_NAME}" ]] && command -v jq >/dev/null 2>&1; then
-    output_name="$(jq -r --arg ds "${DS_NAME}" --arg view "${VIEW_NAME}" '.[$ds].views[$view].output_file_name // empty' "${DATASETS_JSON_FILE}")"
-    [[ -n "${output_name}" ]] && rm -f "${OUTPUT_DIR}/${output_name}" "${OUTPUT_DIR}/${output_name}.md5"
-  fi
+  # The Python publisher is create-only. A transient retry must not remove a
+  # pre-existing or completed H5AD; its next invocation validates reuse.
   exit 0
 fi
 exit ${RC}
