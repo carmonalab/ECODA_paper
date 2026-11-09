@@ -22,7 +22,7 @@ source "${ECODA_SOURCE_ROOT}/src/slurm_config.sh"
 source "${ECODA_SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
 source "${ECODA_SOURCE_ROOT}/src/5_run_benchmark_methods/scheduler_recorder_fixture.sh"
 child="${ECODA_RUN_ID}"; context="${child#*_}"
-selection=""; methods_seen=0; prepared=""; prepared_sha=""
+selection=""; methods_seen=0; prepared=""; prepared_sha=""; method_matrix=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --selection-file) selection="$2" ;;
@@ -32,13 +32,15 @@ while [[ $# -gt 0 ]]; do
     --derivative-release|--input-artifacts) ;;
     --prepared-adoption) prepared="$2" ;;
     --prepared-adoption-sha256) prepared_sha="$2" ;;
+    --method-matrix) method_matrix="$2" ;;
     *) exit 1 ;;
   esac
   shift 2
 done
 [[ "${selection}" == */manifests/campaign_"${context}".selection.tsv ]]
 [[ "${context}" == benchmark || ${methods_seen} -eq 1 ]]
-if [[ "${CAMPAIGN_EXPECT_ADOPTION:-0}" == 1 ]]; then
+if [[ "${CAMPAIGN_EXPECT_ADOPTION:-0}" == 1 &&
+      ",${CAMPAIGN_EXPECT_ADOPTION_CONTEXTS:-benchmark,uncorrected,corrected}," == *,"${context}",* ]]; then
   [[ "${prepared}" == */manifests/campaign_prepared_adoption.json &&
      "$(ecoda_sha256_file "${prepared}")" == "${prepared_sha}" ]]
   ecoda_validate_checksum "${prepared}"
@@ -46,6 +48,11 @@ if [[ "${CAMPAIGN_EXPECT_ADOPTION:-0}" == 1 ]]; then
   printf '%s\t%s\t%s\n' "${child}" "${prepared}" "${prepared_sha}" > "${CAMPAIGN_BARRIER}/${context}.adoption"
 else
   [[ -z "${prepared}${prepared_sha}" ]]
+fi
+if [[ -n "${method_matrix}" ]]; then
+  [[ "${context}" == corrected && "${method_matrix}" == */manifests/campaign_corrected.method_matrix.tsv ]]
+  ecoda_validate_checksum "${method_matrix}"
+  printf '%s\n' "${method_matrix}" > "${CAMPAIGN_BARRIER}.matrix"
 fi
 if [[ "${context}" == benchmark ]]; then
   grep -q $'Stephenson\tbenchmark_analysis\ttrans' "${selection}"
@@ -60,7 +67,7 @@ mkdir -p "${CAMPAIGN_BARRIER}"
 touch "${CAMPAIGN_BARRIER}/${context}.started"
 ready=0
 for attempt in {1..100}; do
-  if [[ $(find "${CAMPAIGN_BARRIER}" -name '*.started' | wc -l | tr -d ' ') == 3 ]]; then ready=1; break; fi
+  if [[ $(find "${CAMPAIGN_BARRIER}" -name '*.started' | wc -l | tr -d ' ') == "${CAMPAIGN_EXPECT_CHILDREN:-3}" ]]; then ready=1; break; fi
   sleep 0.02
 done
 [[ ${ready} -eq 1 ]]
@@ -106,7 +113,9 @@ for context,view,lines in (
 PY
 make_contexts() {
   local prefix="$1" context
-  for context in benchmark uncorrected corrected; do
+  shift
+  [[ $# -gt 0 ]] || set -- benchmark uncorrected corrected
+  for context in "$@"; do
     printf '%s\t%s_%s\t%s/%s.selection.tsv\t%s/%s.inputs.tsv\n' \
       "${context}" "${prefix}" "${context}" "${TMP_DIR}" "${context}" "${TMP_DIR}" "${context}"
   done
@@ -119,9 +128,27 @@ HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" NAS_TARGET_DIR="${NAS_BASE}
   --contexts "${TMP_DIR}/contexts.tsv" --derivative-release test-release > "${TMP_DIR}/success.log"
 parent="${HPC_ROOT}/_ecoda_runs/campaign_success"
 grep -q '^STATE=OK$' "${parent}/status/terminal"
+for spec in 'pair benchmark corrected' 'single corrected'; do
+  set -- ${spec}; prefix="$1"; shift; count=$#
+  make_contexts "${prefix}" "$@" > "${TMP_DIR}/${prefix}.tsv"
+  if [[ "${prefix}" == pair ]]; then
+    printf 'Stephenson\tbatch_effect_corrected\tqot\n' > "${TMP_DIR}/corrected.matrix.tsv"
+    awk -v matrix="${TMP_DIR}/corrected.matrix.tsv" 'BEGIN{FS=OFS="\t"} $1=="corrected" {$5=matrix} {print}' \
+      "${TMP_DIR}/${prefix}.tsv" > "${TMP_DIR}/${prefix}.matrix.tsv"
+    cp "${TMP_DIR}/${prefix}.matrix.tsv" "${TMP_DIR}/${prefix}.tsv"
+  fi
+  export CAMPAIGN_BARRIER="${TMP_DIR}/${prefix}-barrier"
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" NAS_TARGET_DIR="${NAS_BASE}" \
+    ECODA_RUN_ID="campaign_${prefix}" CAMPAIGN_EXPECT_CHILDREN="${count}" \
+    bash "${SOURCE_TREE}/src/5_run_benchmark_methods/stage5_campaign.sh" \
+      --contexts "${TMP_DIR}/${prefix}.tsv" --derivative-release test-release > "${TMP_DIR}/${prefix}.log"
+  [[ $(wc -l < "${HPC_ROOT}/_ecoda_runs/campaign_${prefix}/manifests/campaign_scheduler_ids.tsv" | tr -d ' ') == "${count}" ]]
+  [[ ! -e "${HPC_ROOT}/_ecoda_runs/${prefix}_uncorrected" ]]
+done
+cmp "${TMP_DIR}/corrected.matrix.tsv" "${HPC_ROOT}/_ecoda_runs/campaign_pair/manifests/campaign_corrected.method_matrix.tsv"
 [[ $(wc -l < "${parent}/manifests/campaign_scheduler_ids.tsv" | tr -d ' ') == 3 ]]
 cmp "${TMP_DIR}/benchmark.selection.tsv" "${parent}/manifests/campaign_benchmark.selection.tsv"
-[[ $(find "${CAMPAIGN_BARRIER}" -name '*.started' | wc -l | tr -d ' ') == 3 ]]
+[[ $(find "${TMP_DIR}/barrier" -name '*.started' | wc -l | tr -d ' ') == 3 ]]
 "${TEST_REAL_PYTHON}" - "${parent}" <<'PY'
 import hashlib,pathlib,sys
 root=pathlib.Path(sys.argv[1]); manifest=root/'manifests'
@@ -216,4 +243,48 @@ if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" NAS_TARGET_DIR="${NAS_BA
   echo 'campaign accepted altered prepared receipt' >&2; exit 1
 fi
 [[ ! -e "${HPC_ROOT}/_ecoda_runs/campaign_bad_adoption" ]]
+
+# A selected metadata-only receipt is forwarded only to its target context.
+make_contexts meta benchmark corrected > "${TMP_DIR}/metadata-contexts.tsv"
+"${TEST_REAL_PYTHON}" - "${SOURCE_TREE}/datasets.json" "${TMP_DIR}/metadata-copy.json" <<'PY'
+import hashlib,json,pathlib,sys
+config,path=map(pathlib.Path,sys.argv[1:]);ctx='batch_effect/corrected_final'
+path.write_text(json.dumps(dict(schema='ecoda_stage5_metadata_adoption_v1',state='APPROVED_COPY_ONLY',original_gate_state='FAILED',
+ config_sha256=hashlib.sha256(config.read_bytes()).hexdigest(),target_run_ids={ctx:'meta_corrected'},sources={ctx:{}},
+ selected_metadata={ctx:[dict(dataset='Stephenson',view='batch_effect_corrected')]},
+ artifacts=[dict(context=ctx,kind='metadata',dataset='Stephenson',view='batch_effect_corrected')])))
+PY
+metadata_sha="$(shasum -a 256 "${TMP_DIR}/metadata-copy.json" | awk '{print $1}')"
+export CAMPAIGN_BARRIER="${TMP_DIR}/metadata-barrier"
+HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" NAS_TARGET_DIR="${NAS_BASE}" \
+  ECODA_RUN_ID=campaign_metadata CAMPAIGN_EXPECT_CHILDREN=2 CAMPAIGN_EXPECT_ADOPTION=1 CAMPAIGN_EXPECT_ADOPTION_CONTEXTS=corrected \
+  bash "${SOURCE_TREE}/src/5_run_benchmark_methods/stage5_campaign.sh" --contexts "${TMP_DIR}/metadata-contexts.tsv" \
+    --derivative-release test-release --prepared-adoption "${TMP_DIR}/metadata-copy.json" \
+    --prepared-adoption-sha256 "${metadata_sha}" > "${TMP_DIR}/metadata.log"
+[[ -f "${CAMPAIGN_BARRIER}/corrected.adoption" && ! -e "${CAMPAIGN_BARRIER}/benchmark.adoption" && ! -e "${HPC_ROOT}/_ecoda_runs/meta_uncorrected" ]]
+
+make_contexts invalid benchmark corrected > "${TMP_DIR}/invalid-base.tsv"
+for variant in empty unknown extra wrong_matrix duplicate_child matrix_duplicate matrix_foreign matrix_wrongview; do
+  case "${variant}" in
+    empty) : > "${TMP_DIR}/invalid-${variant}.tsv" ;;
+    unknown) sed 's/^benchmark/foreign/' "${TMP_DIR}/invalid-base.tsv" > "${TMP_DIR}/invalid-${variant}.tsv" ;;
+    extra) cat "${TMP_DIR}/invalid-base.tsv" "${TMP_DIR}/invalid-base.tsv" > "${TMP_DIR}/invalid-${variant}.tsv" ;;
+    wrong_matrix) awk -v matrix="${TMP_DIR}/corrected.matrix.tsv" 'BEGIN{FS=OFS="\t"} {$5=matrix;print}' "${TMP_DIR}/invalid-base.tsv" > "${TMP_DIR}/invalid-${variant}.tsv" ;;
+    duplicate_child) sed 's/invalid_corrected/invalid_benchmark/' "${TMP_DIR}/invalid-base.tsv" > "${TMP_DIR}/invalid-${variant}.tsv" ;;
+    matrix_*)
+      case "${variant}" in
+        matrix_duplicate) cat "${TMP_DIR}/corrected.matrix.tsv" "${TMP_DIR}/corrected.matrix.tsv" > "${TMP_DIR}/invalid.matrix.tsv" ;;
+        matrix_foreign) printf 'Diabetes\tbatch_effect_corrected\tqot\n' > "${TMP_DIR}/invalid.matrix.tsv" ;;
+        matrix_wrongview) printf 'Stephenson\tbatch_effect_uncorrected\tqot\n' > "${TMP_DIR}/invalid.matrix.tsv" ;;
+      esac
+      awk -v matrix="${TMP_DIR}/invalid.matrix.tsv" 'BEGIN{FS=OFS="\t"} $1=="corrected" {$5=matrix} {print}' \
+        "${TMP_DIR}/invalid-base.tsv" > "${TMP_DIR}/invalid-${variant}.tsv" ;;
+  esac
+  if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" NAS_TARGET_DIR="${NAS_BASE}" \
+      ECODA_RUN_ID="campaign_invalid_${variant}" bash "${SOURCE_TREE}/src/5_run_benchmark_methods/stage5_campaign.sh" \
+      --contexts "${TMP_DIR}/invalid-${variant}.tsv" --derivative-release test-release > "${TMP_DIR}/invalid-${variant}.log" 2>&1; then
+    echo "invalid campaign accepted: ${variant}" >&2; exit 1
+  fi
+  [[ ! -e "${HPC_ROOT}/_ecoda_runs/invalid_benchmark" && ! -e "${HPC_ROOT}/_ecoda_runs/invalid_corrected" ]]
+done
 echo 'PASS: one pinned parent, concurrent isolated contexts, frozen exact scopes, child-failure isolation, collected scheduler IDs and prepared receipt forwarding'

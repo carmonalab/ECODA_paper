@@ -1,6 +1,6 @@
 #!/bin/bash
-# One durable-gate wrapper; three independent existing Stage 5 dispatchers.
-# Run once through the immutable snapshot executor, never through three executors.
+# One durable-gate wrapper; one to three selected independent dispatchers.
+# Run once through the immutable snapshot executor.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/../slurm_config.sh"
@@ -66,28 +66,49 @@ config = json.loads((project / 'datasets.json').read_text())
 manifest = parent / 'manifests'
 rows = [line.split('\t') for line in (manifest / 'campaign_requested.tsv').read_text().splitlines()]
 expected = {'benchmark': 'benchmark_analysis', 'uncorrected': 'batch_effect_uncorrected', 'corrected': 'batch_effect_corrected'}
-if len(rows) != 3 or any(len(row) != 4 or any(not value for value in row) for row in rows):
-    raise SystemExit('ERROR: campaign requires exactly three four-field context rows')
-if {row[0] for row in rows} != set(expected) or len({row[1] for row in rows}) != 3:
+if not 1 <= len(rows) <= 3 or any(len(row) not in (4, 5) or any(not value for value in row) for row in rows):
+    raise SystemExit('ERROR: campaign requires one to three four-field contexts, with an optional corrected method matrix')
+if (len({row[0] for row in rows}) != len(rows) or not {row[0] for row in rows} <= set(expected)
+        or len({row[1] for row in rows}) != len(rows)):
     raise SystemExit('ERROR: campaign contexts and child run IDs must be unique')
+if any(len(row) == 5 and row[0] != 'corrected' for row in rows):
+    raise SystemExit('ERROR: optional method matrices are corrected-context only')
 adoption = manifest / 'campaign_prepared_adoption.json'
+receipt = None
+context_keys = dict(benchmark='benchmark', uncorrected='batch_effect/uncorrected_final', corrected='batch_effect/corrected_final')
 if adoption.exists():
     receipt = json.loads(adoption.read_text())
-    context_keys = dict(benchmark='benchmark', uncorrected='batch_effect/uncorrected_final', corrected='batch_effect/corrected_final')
-    if (receipt.get('schema') != 'ecoda_stage5_prepared_adoption_v1' or receipt.get('state') != 'APPROVED_COPY_ONLY'
+    targets = {context_keys[row[0]]: row[1] for row in rows}
+    if (receipt.get('state') != 'APPROVED_COPY_ONLY'
             or receipt.get('original_gate_state') != 'FAILED'
-            or receipt.get('config_sha256') != hashlib.sha256((project / 'datasets.json').read_bytes()).hexdigest()
-            or receipt.get('target_run_ids') != {context_keys[row[0]]: row[1] for row in rows}):
+            or receipt.get('config_sha256') != hashlib.sha256((project / 'datasets.json').read_bytes()).hexdigest()):
         raise SystemExit('ERROR: prepared-adoption receipt differs from the exact campaign scope')
+    if receipt.get('schema') == 'ecoda_stage5_prepared_adoption_v1':
+        if len(rows) != 3 or receipt.get('target_run_ids') != targets:
+            raise SystemExit('ERROR: original prepared adoption requires all three exact contexts')
+    elif receipt.get('schema') == 'ecoda_stage5_metadata_adoption_v1':
+        copies = receipt.get('target_run_ids', {})
+        if (not copies or not set(copies) <= {'batch_effect/uncorrected_final', 'batch_effect/corrected_final'}
+                or set(receipt.get('sources', {})) != set(copies)
+                or set(receipt.get('selected_metadata', {})) != set(copies)
+                or any(targets.get(context) != child for context, child in copies.items())):
+            raise SystemExit('ERROR: metadata-only adoption differs from selected batch contexts')
+    else:
+        raise SystemExit('ERROR: unsupported campaign adoption schema')
 staged, identities = [], []
-for context, run_id, selection_text, references_text in rows:
+metadata_union = set()
+for row in rows:
+    context, run_id, selection_text, references_text = row[:4]
     import re
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', run_id) or run_id == parent.name:
         raise SystemExit('ERROR: invalid or parent-equal child run ID')
     if (runs / run_id).exists() or (runs / run_id).is_symlink():
         raise SystemExit('ERROR: child run root already exists; preserve it and select a new run ID')
     destinations = []
-    for source_text, suffix in ((selection_text, 'selection.tsv'), (references_text, 'inputs.tsv')):
+    sources = [(selection_text, 'selection.tsv'), (references_text, 'inputs.tsv')]
+    if len(row) == 5:
+        sources.append((row[4], 'method_matrix.tsv'))
+    for source_text, suffix in sources:
         source = absolute(source_text)
         target = manifest / f'campaign_{context}.{suffix}'
         with target.open('xb') as handle:
@@ -95,7 +116,7 @@ for context, run_id, selection_text, references_text in rows:
         target.chmod(0o444)
         identities.append(f'{target}\t{hashlib.sha256(target.read_bytes()).hexdigest()}\n')
         destinations.append(str(target))
-    selection, references = map(pathlib.Path, destinations)
+    selection, references = map(pathlib.Path, destinations[:2])
     lines = [line.split('\t') for line in selection.read_text().splitlines()]
     if not lines or any(len(row) not in (3, 4) or row[1] != expected[context] for row in lines):
         raise SystemExit('ERROR: selection is outside its campaign context')
@@ -105,10 +126,28 @@ for context, run_id, selection_text, references_text in rows:
         if any(len(row) != 3 or row[2] != expected[context] for row in lines) or len({tuple(row) for row in lines}) != len(lines):
             raise SystemExit('ERROR: batch campaign rows must name unique dataset/view/pass triples')
         declared = lines
+        if len(row) == 5:
+            matrix = [tuple(line.split('\t')) for line in pathlib.Path(destinations[2]).read_text().splitlines()]
+            methods = {'prepare_pseudobulk', 'pseudobulk', 'gloscope', 'composition', 'mrvi', 'pilot', 'qot'}
+            if (not matrix or len(set(matrix)) != len(matrix)
+                    or any(len(item) != 3 or not all(item) or item[1] != expected[context] or item[2] not in methods for item in matrix)
+                    or {item[:2] for item in matrix} != {tuple(item[:2]) for item in declared}):
+                raise SystemExit('ERROR: corrected method matrix differs from exact selected dataset/view scope')
     referenced = inputs(references, config, 'stage5')
     if {key[:2] for key in referenced} != {tuple(row[:2]) for row in declared}:
         raise SystemExit('ERROR: input references differ from selected dataset/views')
+    if receipt and receipt['schema'] == 'ecoda_stage5_metadata_adoption_v1' and context_keys[context] in receipt['target_run_ids']:
+        requested = receipt['selected_metadata'][context_keys[context]]
+        pairs = [(item.get('dataset'), item.get('view')) for item in requested if isinstance(item, dict) and set(item) == {'dataset', 'view'}]
+        if len(pairs) != len(requested) or len(set(pairs)) != len(pairs) or set(pairs) != {tuple(item[:2]) for item in declared}:
+            raise SystemExit('ERROR: metadata-only adoption must cover the exact selected dataset/views')
+        metadata_union.update((context_keys[context], dataset, view) for dataset, view in pairs)
     staged.append('\t'.join((context, run_id, *destinations)) + '\n')
+if receipt and receipt['schema'] == 'ecoda_stage5_metadata_adoption_v1':
+    artifacts = receipt.get('artifacts', [])
+    actual = [(item.get('context'), item.get('dataset'), item.get('view')) for item in artifacts if item.get('kind') == 'metadata']
+    if len(actual) != len(artifacts) or len(set(actual)) != len(actual) or set(actual) != metadata_union:
+        raise SystemExit('ERROR: metadata-only adoption has missing, duplicate or foreign payloads')
 for name, content in (('campaign_contexts.tsv', ''.join(staged)), ('campaign_identities.tsv', ''.join(identities))):
     target = manifest / name
     with target.open('x') as handle:
@@ -141,7 +180,7 @@ campaign_interrupt() {
   exit 1
 }
 trap campaign_interrupt INT TERM
-while IFS=$'\t' read -r context child selection references; do
+while IFS=$'\t' read -r context child selection references method_matrix; do
   (
     unset ECODA_RUN_ROOT ECODA_ARTIFACT_BINDING ECODA_SELECTION_MANIFEST ECODA_STAGE5_METHOD_MATRIX
     unset ECODA_STAGE5_RECOVERY_MANIFEST ECODA_PRECOMPUTE_BACKUP_RECEIPT ECODA_EXPECTED_PENDING
@@ -149,13 +188,17 @@ while IFS=$'\t' read -r context child selection references; do
     unset ANALYSIS_MANIFEST EXECUTION_LOG_DIR FORCE_BENCHMARK
     export ECODA_RUN_ID="${child}" ECODA_LOGS_DIR="${PARENT_ROOT}/logs/${child}"
     args=(--selection-file "${selection}" --derivative-release "${RELEASE}" --input-artifacts "${references}")
-    if [[ -n "${PREPARED_ADOPTION}" ]]; then
+    adoption_context=benchmark
+    case "${context}" in uncorrected) adoption_context=batch_effect/uncorrected_final ;; corrected) adoption_context=batch_effect/corrected_final ;; esac
+    if [[ -n "${PREPARED_ADOPTION}" ]] &&
+       jq -e --arg c "${adoption_context}" '.target_run_ids | has($c)' "${PREPARED_ADOPTION}" >/dev/null; then
       args+=(--prepared-adoption "${PREPARED_ADOPTION}" --prepared-adoption-sha256 "${PREPARED_ADOPTION_SHA}")
     fi
     case "${context}" in
       uncorrected) args+=(--pass uncorrected --analysis-variant final --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot) ;;
       corrected) args+=(--pass corrected --analysis-variant corrected_final --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot) ;;
     esac
+    [[ -z "${method_matrix}" ]] || args+=(--method-matrix "${method_matrix}")
     exec bash "${SCRIPT_DIR}/stage5_dispatcher.sh" "${args[@]}"
   ) > "${PARENT_ROOT}/logs/${context}.log" 2>&1 &
   CHILD_PIDS+=("$!"); CHILD_IDS+=("${child}"); CHILD_CONTEXTS+=("${context}")
@@ -200,6 +243,6 @@ ecoda_atomic_install_manifest "${PARENT_ROOT}/manifests/campaign_scheduler_ids.b
 rm -f "${PARENT_ROOT}/manifests/campaign_scheduler_ids.build.$$"
 ecoda_write_checksum "${PARENT_ROOT}/manifests/campaign_scheduler_ids.tsv"
 if [[ ${failed} -ne 0 ]]; then exit 1; fi
-ecoda_set_run_state OK 'all three selected campaign contexts completed'
+ecoda_set_run_state OK 'all selected campaign contexts completed'
 trap - EXIT
 printf 'CAMPAIGN_RUN_ID=%s\n' "${PARENT_ID}"

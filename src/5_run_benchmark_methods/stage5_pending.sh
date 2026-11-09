@@ -1,14 +1,14 @@
 #!/bin/bash
 # Pure residual selection: callbacks validate artifacts; only the report is written.
 stage5_pending_fresh_corrected_derivative_valid() {
-  local dispatch="$1"
+  local dispatch="$1" matrix="" actual_sha count
   # The historical repair lane never authorizes new excluded Python fits. A
   # fresh derivative wave has separate, immutable roots and exact scope.
   [[ -n "${ECODA_ARTIFACT_BINDING:-}" && "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == 1 &&
      "${RUN_ID:-${ECODA_RUN_ID:-}}" == "${ECODA_RUN_ID:-}" &&
      "${ECODA_RECOVERY_ACTIVE:-0}" == 0 && -z "${SYNC_ONLY_RUN:-}" &&
      "${FORCE_ARG:-0}" == 0 && "${FORCE_TARGETED_ARG:-0}" == 0 &&
-     "${TARGET_METHODS_SET:-0}" == 0 && "${METHOD_MATRIX_MODE:-0}" == 0 &&
+     "${TARGET_METHODS_SET:-0}" == 0 &&
      -z "${EXPECTED_PENDING_ARG:-}${ECODA_EXPECTED_PENDING:-}${PRECOMPUTE_BACKUP_RECEIPT_ARG:-}${ECODA_PRECOMPUTE_BACKUP_RECEIPT:-}" &&
      "${PASS_ARG:-}" == corrected && "${ANALYSIS_VARIANT:-${ANALYSIS_VARIANT_ARG:-}}" == corrected_final &&
      "${METHODS_ARG:-}" == prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot ]] || return 1
@@ -16,12 +16,30 @@ stage5_pending_fresh_corrected_derivative_valid() {
   ecoda_derivative_stage5_validate corrected corrected_final || return 1
   [[ "${ANALYSIS_ROOT}" == "${ECODA_RUN_ROOT}/artifacts/batch_effect/corrected_final" &&
      "${dispatch}" == "${ECODA_RUN_ROOT}/manifests/dispatch_selection.tsv" ]] || return 1
-  "${PYTHON_BIN}" - "${ECODA_ARTIFACT_BINDING}" "${dispatch}" "${DATASETS_JSON_FILE}" <<'PY'
+  case "${METHOD_MATRIX_MODE:-0}" in
+    0) ;;
+    1)
+      matrix="${ECODA_RUN_ROOT}/manifests/method_matrix.tsv"
+      [[ "${METHOD_MATRIX:-}" == "${matrix}" && "${ECODA_STAGE5_METHOD_MATRIX:-}" == "${matrix}" &&
+         "${METHOD_MATRIX_SHA256:-}" =~ ^[0-9a-f]{64}$ &&
+         "${METHOD_MATRIX_IDENTITY:-}" == "${METHOD_MATRIX_SHA256}" ]] || return 1
+      ecoda_validate_run_owned_path "${matrix}" "${ECODA_RUN_ROOT}" &&
+        ecoda_validate_manifest "${matrix}" 3 && ecoda_validate_checksum "${matrix}" || return 1
+      actual_sha="$(ecoda_sha256_file "${matrix}")" || return 1
+      count="$(awk 'END {print NR}' "${matrix}")" || return 1
+      [[ "${actual_sha}" == "${METHOD_MATRIX_SHA256}" &&
+         "${ECODA_CHECKSUM_MD5}" == "${METHOD_MATRIX_MD5:-}" &&
+         "${ECODA_CHECKSUM_SIZE}" == "${METHOD_MATRIX_SIZE:-}" &&
+         "${count}" == "${METHOD_MATRIX_DECLARED_COUNT:-}" && "${count}" -gt 0 ]] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  "${PYTHON_BIN}" - "${ECODA_ARTIFACT_BINDING}" "${dispatch}" "${DATASETS_JSON_FILE}" "${matrix}" <<'PY'
 import itertools,json,pathlib,sys
 binding=json.loads(pathlib.Path(sys.argv[1]).read_text());run=pathlib.Path(binding['run_root'])
 config=json.loads(pathlib.Path(sys.argv[3]).read_text())
-permitted={d for d,v in config.items() if not d.startswith('_') and v.get('use_for_batch_effect') is True}
 view='batch_effect_corrected'
+permitted={d for d,v in config.items() if not d.startswith('_') and v.get('use_for_batch_effect') is True and view in v.get('views',{})}
 methods=('prepare_pseudobulk','pseudobulk','gloscope','composition','mrvi','pilot','qot')
 if binding.get('requested_selection') or binding['selection']!=str(run/'manifests/selection.tsv'):
     raise SystemExit('BLOCKED: fresh corrected derivative selection identity differs')
@@ -29,7 +47,14 @@ selection=[tuple(line.split('\t')) for line in pathlib.Path(binding['selection']
 datasets={row[0] for row in selection if len(row)==3}
 rows=[tuple(line.split('\t')) for line in pathlib.Path(sys.argv[2]).read_text().splitlines()]
 expected_rows={(d,view,m) for d,m in itertools.product(datasets,methods)}
-if not datasets or not datasets<=permitted or len(selection)!=len(datasets) or any(len(r)!=3 or not all(r) or r[1]!=view for r in selection) or len(rows)!=len(expected_rows) or set(rows)!=expected_rows:
+if sys.argv[4]:
+    matrix=[tuple(line.split('\t')) for line in pathlib.Path(sys.argv[4]).read_text().splitlines()]
+    if (not matrix or len(set(matrix))!=len(matrix)
+            or any(len(r)!=3 or not all(r) or r[1]!=view or r[2] not in methods for r in matrix)
+            or {r[0] for r in matrix}!=datasets or rows!=matrix):
+        raise SystemExit('BLOCKED: fresh corrected matrix dispatch differs from its exact declared scope')
+    expected_rows=set(matrix)
+if not datasets or not datasets<=permitted or len(selection)!=len(datasets) or any(len(r)!=3 or not all(r) or r[1]!=view or r[2]!=view for r in selection) or len(rows)!=len(expected_rows) or set(rows)!=expected_rows:
     raise SystemExit('BLOCKED: fresh corrected derivative dispatch differs from its exact selected cohort/family scope')
 PY
 }

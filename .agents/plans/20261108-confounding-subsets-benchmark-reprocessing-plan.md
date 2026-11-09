@@ -3025,3 +3025,46 @@ consumer977 remain untouched. Do not start anotherwait/relaunchwrapper or
 claim a freshRUNNING/COMPLETED state from silence. Noactivev2accountingquery
 hasoccurred. Continuecode checkpointing and retry oneboundedtransportcheck
 later; hostname/clusterpolicy remainsBamboo, without a Yggdrasilfallback.
+
+
+### Exact selected-context recovery controller accepted
+
+The six-file campaign/pending/accounting package is independently accepted.
+Campaigns may select1..3 nonempty recognized UNIQUEcontexts and freshchildIDs;
+all input/config/runtime/source/scope checks remain. Healthyunselected
+contexts get NO childroot, jobs, owners or accountingprojection. A fifth
+context field may carry an explicitcorrected-only methodmatrix; it is
+frozen/hashed with the parent scope and forwarded through the existingCLI.
+Newmetadata-only adoption is forwarded only to its declaredselected target
+contexts; original23payload/all3context behavior remains strictunchanged.
+
+Fresh-bound corrected partialselection now passes ONLY through its exact
+run-owned methodmatrix: strict checksum/MD5/size/SHA/count, uniqueallowed
+three-tuples, enabledANDview participation, exactcohortunion and ordered
+dispatch equality. Existingfull7family CLI remainsfixed; TARGET_METHODS_SET
+stays0. Immutablebinding/disjointfreshroot/no-force/no legacyrecovery/sync/
+residualoverride and ownershipguards remain mandatory. Uncorrectedmatrix
+support is NOT expanded without actualcatalog need.
+
+Accounting capture/audit is limited to the exactselected children and their
+complete schedulerIDunion, with original/staged orderedcontext identity,
+sealedmatrix/childdispatch bytes and strictmetadata identities. It does not
+invent a childmatrix producerrecord for older schemas that have only their
+existing strict sidecar and metadata hashes. The existing single complete
+rawaccounting query contract remains; failedoriginalgates are not approved
+or used as formal dependencies by this code change.
+
+Actual dispatcher/stub fixture proves exactly9scientifictasks: oneStephenson
+GloScope parameter and8correctedQOT rows, with NOpseudobulk preparation,
+uncorrected context or healthy method rows. SixstubIDs are2methodarrays+
+2watchdogs+2aggregates; productionH5AD/R-environment preflights are separate
+and must be counted explicitly in the eventualsealed launchspec. Foreign
+derivativeowner failure remains isolated while its selectedpeer completes;
+oldcanonical ownerbytes remain unchanged.
+
+Final unchanged nine-taskfixturePASS; old56/full7 andsmall7/legacyprotection
+regressionsPASS; campaignfixturePASS; accounting15testsPASS; independent
+repeat of allfocusedchecksPASS. Syntax/AST/whitespacePASS and protectedRplots
+SHA unchanged. NoHPCoperation happened in these tests. Selectedmetadata
+helper checkpointbb16dd0 is committed; actualv3rowcatalog/wrapper/resources
+remainUNSEALED untilmainv2terminalinspection and access recovery.

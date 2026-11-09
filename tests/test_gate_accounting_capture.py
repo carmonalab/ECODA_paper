@@ -236,6 +236,85 @@ class CampaignTests(unittest.TestCase):
         arguments.pop("scheduler_ids")
         return arguments
 
+    def select_contexts(self, contexts):
+        """Reseal a real selected campaign; unselected child trees are untouched."""
+        for name in ("campaign_contexts.tsv", "campaign_requested.tsv", "campaign_scheduler_ids.tsv"):
+            path = self.folder / name
+            lines = [line for line in path.read_text().splitlines(keepends=True)
+                     if line.split("\t", 1)[0] in contexts]
+            self.seal(path, "".join(lines).encode(), None if name == "campaign_scheduler_ids.tsv" else "stage5_campaign_scope")
+        self.context_request.write_bytes((self.folder / "campaign_requested.tsv").read_bytes())
+        paths = [field for line in (self.folder / "campaign_contexts.tsv").read_text().splitlines()
+                 for field in line.split("\t")[2:]]
+        self.seal(self.folder / "campaign_identities.tsv", "".join(
+            f"{path}\t{hashlib.sha256(Path(path).read_bytes()).hexdigest()}\n" for path in paths).encode(),
+            "stage5_campaign_scope")
+        ids = [line.split("\t")[3] for line in (self.folder / "campaign_scheduler_ids.tsv").read_text().splitlines()]
+        self.gate["scheduler_array_ids"] = ids
+        self.accounting["scheduler_ids"] = ids
+        self.accounting["command"] = capture.ACCOUNTING_COMMAND.replace("{scheduler_ids}", ",".join(ids))
+        self.raw("".join(f"{identifier}|COMPLETED|0:0\n" for identifier in ids))
+
+    def add_corrected_matrix(self):
+        data = b"Toy\tbatch_effect_corrected\tqot\n"
+        matrix = self.folder / "campaign_corrected.method_matrix.tsv"
+        self.seal(matrix, data, "stage5_campaign_scope")
+        for name in ("campaign_contexts.tsv", "campaign_requested.tsv"):
+            path = self.folder / name
+            rows = [line.split("\t") for line in path.read_text().splitlines()]
+            for row in rows:
+                if row[0] == "corrected":
+                    row.append(str(matrix))
+            self.seal(path, "".join("\t".join(row) + "\n" for row in rows).encode(), "stage5_campaign_scope")
+        self.context_request.write_bytes((self.folder / "campaign_requested.tsv").read_bytes())
+        identities = self.folder / "campaign_identities.tsv"
+        self.seal(identities, identities.read_bytes() + f"{matrix}\t{hashlib.sha256(data).hexdigest()}\n".encode(), "stage5_campaign_scope")
+        root = self.children["corrected"]
+        child_matrix = root / "manifests/method_matrix.tsv"
+        self.seal(child_matrix, data)
+        self.seal(root / "manifests/dispatch_selection.tsv", data)
+        metadata = dict(METHOD_MATRIX=str(child_matrix), METHOD_MATRIX_SOURCE=str(matrix),
+                        METHOD_MATRIX_MD5=hashlib.md5(data).hexdigest(), METHOD_MATRIX_SIZE=str(len(data)),
+                        METHOD_MATRIX_SHA256=hashlib.sha256(data).hexdigest(),
+                        METHOD_MATRIX_IDENTITY=hashlib.sha256(data).hexdigest(), DECLARED_METHOD_ROWS="1")
+        (root / "metadata").write_text("".join(f"{key}={value}\n" for key, value in metadata.items()))
+
+    def test_selected_pair_and_single_project_only_selected_children(self):
+        self.select_contexts({"benchmark", "corrected"})
+        result = capture.create_campaign_capture(**self.campaign_arguments())
+        self.assertEqual([row["context"] for row in result["children"]], ["benchmark", "corrected"])
+        self.assertFalse((self.children["uncorrected"] / "manifests/scheduler_accounting.tsv").exists())
+        # All selected children remain subject to the one raw successful query.
+        self.assertEqual(result["requested_ids"], ["123", "126"])
+
+    def test_corrected_single_matrix_is_exact_and_tamper_fails(self):
+        self.select_contexts({"corrected"})
+        self.add_corrected_matrix()
+        metadata = self.children["corrected"] / "metadata"
+        original = metadata.read_bytes()
+        metadata.write_bytes(original.replace(b"DECLARED_METHOD_ROWS=1", b"DECLARED_METHOD_ROWS=8"))
+        with self.assertRaisesRegex(ValueError, "child method matrix/dispatch"):
+            capture.create_campaign_capture(**self.campaign_arguments())
+        metadata.write_bytes(original)
+        dispatch = self.children["corrected"] / "manifests/dispatch_selection.tsv"
+        saved = dispatch.read_bytes()
+        self.seal(dispatch, saved.replace(b"qot", b"mrvi"))
+        with self.assertRaisesRegex(ValueError, "child method matrix/dispatch"):
+            capture.create_campaign_capture(**self.campaign_arguments())
+        self.seal(dispatch, saved)
+        result = capture.create_campaign_capture(**self.campaign_arguments())
+        self.assertEqual([row["context"] for row in result["children"]], ["corrected"])
+        self.assertEqual(result["requested_ids"], ["126"])
+
+    def test_unknown_empty_and_extra_contexts_fail_before_projection(self):
+        path = self.folder / "campaign_contexts.tsv"
+        original = path.read_bytes()
+        for data in (b"", original.replace(b"benchmark\t", b"foreign\t", 1), original + original.splitlines(keepends=True)[0]):
+            self.seal(path, data, "stage5_campaign_scope")
+            with self.subTest(data=data), self.assertRaises(ValueError):
+                capture.create_campaign_capture(**self.campaign_arguments())
+        self.seal(path, original, "stage5_campaign_scope")
+
     def test_campaign_success_preserves_one_raw_and_three_actual_root_projections(self):
         result = capture.create_campaign_capture(**self.campaign_arguments())
         self.assertEqual(len(result["children"]), 3)

@@ -3,7 +3,7 @@
 The raw JobIDRaw output remains unchanged. The audit input is explicitly a
 derived projection of actual requested-root rows, after *every* raw row passes.
 Single-child mode requires exact gate/child ID equality. Campaign mode validates
-the sealed three-context receipts and writes one projection per child audit.
+the sealed selected-context receipts and writes one projection per child audit.
 """
 import argparse
 import hashlib
@@ -255,12 +255,14 @@ def create_campaign_capture(*, gate_manifest, inspect, profile, run_root):
     original_rows = [line.split("\t") for line in original.decode().splitlines()]
     expected_views = {"benchmark": "benchmark_analysis", "uncorrected": "batch_effect_uncorrected",
                       "corrected": "batch_effect_corrected"}
-    if (len(context_rows) != 3 or any(len(row) != 4 for row in context_rows)
-            or {row[0] for row in context_rows} != set(expected_views)
-            or len({row[1] for row in context_rows}) != 3 or len(original_rows) != 3
-            or any(len(row) != 4 for row in original_rows)
+    if (not 1 <= len(context_rows) <= 3 or any(len(row) not in (4, 5) or not all(row) for row in context_rows)
+            or len({row[0] for row in context_rows}) != len(context_rows)
+            or not {row[0] for row in context_rows} <= set(expected_views)
+            or len({row[1] for row in context_rows}) != len(context_rows) or len(original_rows) != len(context_rows)
+            or [len(row) for row in original_rows] != [len(row) for row in context_rows]
+            or any(not all(row) or (len(row) == 5 and row[0] != "corrected") for row in context_rows + original_rows)
             or [(row[0], row[1]) for row in original_rows] != [(row[0], row[1]) for row in context_rows]):
-        raise ValueError("campaign requires the three exact unique context/child rows")
+        raise ValueError("campaign requires one to three exact unique selected context/child rows")
     sealed_hashes = {}
     for line in identities.decode().splitlines():
         fields = line.split("\t")
@@ -273,7 +275,8 @@ def create_campaign_capture(*, gate_manifest, inspect, profile, run_root):
     parent_terminal = _fields(_remember(paths, parent / "status/terminal"))
     if parent_terminal.get("RUN_ID") != parent.name or parent_terminal.get("STATE") != "OK":
         raise ValueError("campaign parent terminal receipt is not successful")
-    for index, (context, child, selection_text, references_text) in enumerate(context_rows):
+    for index, context_row in enumerate(context_rows):
+        context, child, selection_text, references_text = context_row[:4]
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", child) or child == parent.name:
             raise ValueError("unsafe campaign child ID")
         root = parent.parent / child
@@ -315,6 +318,31 @@ def create_campaign_capture(*, gate_manifest, inspect, profile, run_root):
                 raise ValueError("child derivative binding input identity differs")
         if binding["identities"].get(str(configuration)) != _sha(config_bytes):
             raise ValueError("child derivative configuration differs")
+        if len(context_row) == 5:
+            matrix_path = folder / f"campaign_{context}.method_matrix.tsv"
+            if context_row[4] != str(matrix_path):
+                raise ValueError("campaign method matrix path differs from its exact sealed namespace")
+            matrix = _receipt(paths, matrix_path, producer="stage5_campaign_scope")
+            scope_paths.add(str(matrix_path))
+            if (sealed_hashes.get(str(matrix_path)) != _sha(matrix)
+                    or _remember(paths, original_rows[index][4]) != matrix):
+                raise ValueError("campaign method matrix identity differs")
+            matrix_rows = [line.split("\t") for line in matrix.decode().splitlines()]
+            allowed = {"prepare_pseudobulk", "pseudobulk", "gloscope", "composition", "mrvi", "pilot", "qot"}
+            if (not matrix_rows or len({tuple(row) for row in matrix_rows}) != len(matrix_rows)
+                    or any(len(row) != 3 or not all(row) or row[1] != expected_views[context] or row[2] not in allowed for row in matrix_rows)
+                    or {tuple(row[:2]) for row in matrix_rows} != {tuple(row[:2]) for row in selection_rows}):
+                raise ValueError("campaign method matrix differs from the exact selected cohort/method scope")
+            child_matrix = child_folder / "method_matrix.tsv"
+            metadata = _fields(_remember(paths, root / "metadata"))
+            expected_matrix = {"METHOD_MATRIX": str(child_matrix), "METHOD_MATRIX_SOURCE": str(matrix_path),
+                "METHOD_MATRIX_MD5": hashlib.md5(matrix).hexdigest(), "METHOD_MATRIX_SIZE": str(len(matrix)),
+                "METHOD_MATRIX_SHA256": _sha(matrix), "METHOD_MATRIX_IDENTITY": _sha(matrix),
+                "DECLARED_METHOD_ROWS": str(len(matrix_rows))}
+            if (any(metadata.get(key) != value for key, value in expected_matrix.items())
+                    or _receipt(paths, child_matrix) != matrix
+                    or _receipt(paths, child_folder / "dispatch_selection.tsv") != matrix):
+                raise ValueError("child method matrix/dispatch differs from its sealed campaign scope")
         if context == "benchmark" and (binding.get("requested_selection") != str(child_selection)
                 or binding["identities"].get(str(child_selection)) != _sha(child_scope)):
             raise ValueError("child benchmark requested-scope binding differs")
@@ -348,7 +376,7 @@ def create_campaign_capture(*, gate_manifest, inspect, profile, run_root):
              "requested_ids": requested, "all_raw_rows_success": True, "raw_row_count": len(rows),
              "raw": {"path": str(raw_path), "sha256": _sha(raw)}, "children": summaries,
              "inputs": {name: {"path": str(path), "sha256": _sha(data)} for name, (path, data) in paths.items()},
-             "audit_rule": "Run all three child audits with their projections; never an ordinary parent audit"}
+             "audit_rule": "Run every selected child audit with its projection; never an ordinary parent audit"}
     payloads.append((folder / "scheduler_accounting.proof.json", _json_bytes(proof)))
     _publish(payloads, paths)
     return proof
