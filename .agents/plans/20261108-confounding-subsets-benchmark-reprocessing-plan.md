@@ -2663,3 +2663,27 @@ control. The separate evidence reader is under review and still needs its
 minimal pinned execution/terminal contract and prior full-H5AD preflight
 witness binding before launch. No model/preprocessing/score recomputation or
 newgate submission occurred during this reporting code work.
+
+
+### Legacy evidence reader independently accepted — 2026-11-09
+
+The two-file evidence-only R reader and its focused tiny-H5AD/Feather/RDS
+fixture passed independent review. Exact scope106physical files/209logical
+rows/9authorHRmetadata pairs is fail-closed; declared sample-ID fields and
+header witnesses are mandatory. Selected payloads are externally MD5-checked
+before/after reads on HPC, one cohort at a time. Existing H5ADs supply only
+configured obs columns; serialized resultRNA fields may materialize on HPC
+but are neither exported nor retained across cohorts. Stored NULL shuffle
+labels and matching author features/distances are preserved; onlyscITD may
+drop IDs and every drop requires explicit review. Current author rawcounts
++.5/CLR/Euclidean distances and metadata are checked, with selected timing
+limitations separated from unrelated old timing rows. No fits, score
+calculations, historical producer/runtime claims or scientific approvals are
+created by the reader. Current H5AD proof/size checking is explicitly
+conditional on a separately bound previous full-content validation witness.
+
+Focused fixture and independent run bothPASS; actualv4/header metadata
+contract alsoPASS without payload reads. The minimal one-job controller and
+terminal-audit integration is a separate pending package; controls are still
+proposals, and no evidence job was launched. Renderer/audit checkpoint0b8729c
+is pushed. Active main9ca source and all completed outputs remain unchanged.
