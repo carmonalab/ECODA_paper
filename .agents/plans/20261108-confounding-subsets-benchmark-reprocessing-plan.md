@@ -61,19 +61,20 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09 04:23 UTC
+## Live checkpoint — 2026-11-09, updated after the 04:43 UTC launch
 
 - **P0/P1 DONE:** logical checkpoints and operator documentation harmonization
-  are committed. Production source through `fc2949f` is pushed and deployed;
+  are committed. Production source through `3794e3e` is pushed;
   later changes are recorded separately. External cancer-application files
   remain outside this task's commits and immutable scientific snapshots.
 - **Bassez metadata repair DONE, audited and approved:** gate
   `ecoda_stage2_bassez_hr_20261108_v1`, worker4663493/watchdog4663494.
   50,809 HR fallbacks filled, 74,948 cells /26 samples /40 valid categories;
   protected counts/cells/features/embeddings unchanged. New H5AD MD5
-  `678656c738597471d884f88e345e6970`. HR-dependent method reruns have not
-  launched. An exact22 author-HR composition-only early wave is being
-  physically scoped; it would be removed from the later main selection.
+  `678656c738597471d884f88e345e6970`. An exact22 author-HR composition-only
+  gate launched04:43:52Z and is RUNNING; its removal from the later main
+  selection stays conditional on terminal audit/reviewer approval. Other
+  affected HR methods remain pending.
 - **Stage3 scientific outputs produced/synchronized: 17/17.** Wrapper finished
   `2026-11-09T02:53:27Z`. The original strict gate remains FAILED because its
   preserved accounting includes historical Alzheimer OOM attempts before
@@ -119,7 +120,7 @@ decisions have been applied to existing artifacts.
   explicitly scoped proposals. They await reviewed inputs and final physical
   manifest validation. Do not report them as running.
 - Future Stage3 selected NAS ancestor-permission fix `29d202e` is committed
-  locally; it does not alter current producer/validator snapshots. P6 reporting
+  and pushed; it does not alter current producer/validator snapshots. P6 reporting
   and screen implementation is committed, but production figures have not
   been regenerated/released yet.
 
@@ -1830,7 +1831,7 @@ Future Stage3 NAS ancestor fix: `29d202e`. These commits are source fixes only;
 active gates remain pinned to their original immutablefc2949f snapshots.
 
 
-## Bassez author-HR22 independent early wave — READY, 2026-11-09
+## Bassez author-HR22 independent early wave — RUNNING, 2026-11-09 04:43:52Z
 
 Purpose: run the already approved repaired-author-HR composition results now,
 while independent Stephenson annotation and Stage3 batch artifact validation
@@ -1902,3 +1903,31 @@ its producer-proven Sample alias, reads only relevant obs columns, and checks
 80 identical sample universes /condition/tissue homogeneity /45kidney+23cortex+
 12medulla /region NA mapping /noPapilla /suspension confounding. No expression
 read, full H5AD transfer/rehash or new fit is authorized by this check.
+
+
+### Bassez HR22 launch recorded — 2026-11-09 04:43:52Z
+
+Prepare passed; reconcile classified ABSENT with all invariants passing and
+no discrepancies. Launch returned RUNNING, exact command digest
+`6fc8dc0e04179be474693dd018eb9e7e650168e83f9de36339907cd50bf3f0a7`.
+Exactly one unbounded durable wait is armed (local exec4481). Initial source/
+runtime verification precedes Slurm submission; the first immediate log read
+was empty and no relaunch occurred. Subsequent scope check proves actual
+requested22 SHA c6d219... and dispatched one-row CSV SHA6320d848... match
+this contract; the exact physical matrix contains only the named22 tokens.
+Current emitted preflight IDs are4663753 and4663754. Terminal completion,
+remaining emitted IDs, output contracts, NAS checks and review are pending.
+No main-wave deduplication or completed-result reuse is claimed yet.
+
+Reviewed no-compute BL publication adapter is committed/pushed as `3794e3e`:
+three new finite files, original20RDS+10timings preserved, fresh copied release,
+original failed gate remains FAILED. Two independent full fixtures, strict
+special-bit permission rejection, atomic create-only receipt and transfer/
+mount/checksum/owner/review failure checks pass. Control has been staged,
+MD5 `fe1ecb6f7d3bd0a8cf81567b8446353b`, SHA256
+`5f70cbd8d4e7ce0ffce0c044d816433dea4098df0a9f68c35085603ba713d84e`;
+unchanged root-review proof SHA256
+`ded1c6ee10b554386208c60378660b5541fc0605af26cd77a92df03c1ba39567`.
+Publication execution remains pending until the current ecoda-benchmark gate
+has terminal inspection/reviewer approval. No dummy Slurm job, second mutex,
+new scientific fit or failed-gate status edit is permitted for this adapter.
