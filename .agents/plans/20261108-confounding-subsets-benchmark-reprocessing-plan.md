@@ -61,7 +61,17 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, remaining97 RUNNING; all three contexts past startup
+## Live checkpoint — 2026-11-09 UTC, benchmark recovery OK; both batch contexts RUNNING
+
+- **23:10 UTC milestone:** benchmark child reports native terminal OK at
+  23:06:37 UTC: all17 selected physical jobs passed allnine watchdog groups,
+  validation and synchronization. The global97 gate remains RUNNING until
+  both batch contexts finish; its single terminal inspect/reviewer approval
+  is still pending. Uncorrected remains3/4 groups OK with QOT unfinished;
+  corrected PILOT is OK and other groups are unfinished. No FAIL watchdog
+  appeared. Evidence: `method_status.observed.v4.json` in the remaining97
+  recovery evidence directory. This does not certify old-main scientific
+  reuse or the final reporting release.
 
 - **22:42 UTC milestone:** all three contexts passed every selected H5AD
   preflight and submitted their scoped method arrays. Benchmark has seven of
@@ -123,10 +133,13 @@ decisions have been applied to existing artifacts.
   destroying its tmux runner and three login-node controllers. The gate was
   honestly transitioned by the existing CLI to `PRELAUNCH_STOP`; its wrapper
   exit remains unknown/null. Surviving jobs and outputs were untouched.
-  Initial inventory has 73 IDs, not yet a complete final retry inventory.
-  No original accounting query or success approval has occurred. Final
-  original inspection/publication must wait for quiescence and complete
-  emitted-ID evidence. Missing watchdog stdout blocks the strict reuse path.
+  Its complete73-ID catalog and scoped no-old-writer/source-preservation
+  evidence are now independently reviewed and staged. The sole original
+  terminal inspect is complete (one successful accounting query, all73 IDs
+  covered,202 terminal rows:103 COMPLETED/95 FAILED/4 CANCELLED). Audit passed
+  is false, wrapper exit stays null, and no old-gate success approval or
+  scientific publication was granted. Missing stdout is covered only by the
+  fixed9ca pre-submission retry-manifest proof and scoped preservation review.
 - **Bassez:** repaired metadata preserves 74,948 cells / 26 samples and fills
   50,809 missing HR labels, producing 40 HR categories with unchanged counts,
   features and embeddings. The author-HR22 release (23 RDS + one timing file)
@@ -4328,3 +4341,95 @@ were omitted by default time-window discovery. Evidence:
 This supplemental diagnostic is not the original sole terminal inspect and
 adds no fabricated scheduler state or gate success. Complete original
 accounting remains reserved for that inspect.
+
+### Input-only witness closure and parallel result audits —22:59 UTC
+
+Reviewed input-witness repair committed/pushed as`53f27b9`; a real historical
+snapshot omitted the optional terminal_status key, so the narrow correction
+`6032f5e` accepts absence or null while retaining explicit STOP/null exit and
+all no-audit guards. Independent production-condition/stat tests and the
+expanded full fixture passed. GitHub transiently rejected the first push
+with an internal server error; the retry succeeded, without scope changes.
+
+Fresh input-only metadata verification at22:54 passed exact50 paths
+(ten H5AD stat-only checks, forty native proof/status/log checks) and both
+pinned9ca native producer sources, with before/after stability and only the
+reviewed device66-to68 transition. Observation SHA
+`c22ba58a9720627664cf3b4676692185890d8fcea461899daadc4afcbd2347da`;
+root-approved input-only review SHA
+`b9ec02c134279a349900390a7b7155d4c5e0be26fad434465753314aeae4ad92`.
+Parent gate, scheduler exits and method science remain unapproved. No H5AD
+payload read/hash, model fit, scoring or scheduler query occurred.
+
+New immutable future evidence/publication source is6032f5e, manifest SHA
+`c69359fe006a05f147b5d645f85de46b34ba90a8ba743d2a913ca78dd220c5bd`,
+archive SHA`67d2781afdd9e86c6ef56d5e57f166bfb47f143f64677e7232de8595fe7bcc0b`,
+under `_ecoda_source_snapshots/20261109-p6-stopped-inputs-v1/6032f5e3b62a39b3b08fb503b2c1982bda26950a/`.
+Bamboo's canonical clean checkout is6032f5e; the active recovery keeps its
+unchanged32769 immutable snapshot and runtime. The first snapshot attempt
+stopped before creation because its dedicated parent did not yet exist;
+creating that exact parent and retrying produced the verified snapshot.
+
+Eight already-owned uncorrected GloScope results passed their native guards
+and validators but the new diagnostic postcheck blocked at its label
+assertion. This does not establish invalid results or require a refit.
+The guarded Joanito diagnostic confirms all124 biological label values match
+independent metadata exactly (no missing values), with the remaining failure
+in strict label-name versus feature-row-ID comparison. Checking vector
+attributes before any narrowly corrected validator retry; original artifacts
+and the blocked observation remain untouched. No methods were recomputed.
+
+Final original-run quiescence observation at22:59 is preserved as rawBLOCKED,
+SHA`1963151f3432f25b87f58dae97e764db4fc910fad0fb2d505b637b0e51373428`.
+All observed queue entries belong to exact current32769 recovery jobs; no
+old source/run token was observed in selected own-process arguments,
+selectors or CWD. Six role classifications require explicit closure:
+four known current controllers omit exported RUN_ROOT, and the diagnostic's
+own SSH-to-bash-to-Python transport adds one ancestry hop. A finite actual
+process-role supplement is being prepared; do not rewrite the raw status or
+approve unknown processes by a source-prefix or argv-token membership rule.
+
+### Original reboot-run sole inspect closed; benchmark tail synchronized —23:10 UTC
+
+Actual process-role supplement SHA
+`47bbde3540f86e76ac1fe5e7f5ec2d115c5cb798a0b658e9b554c246c2785a11`
+closes the four current controller classifications using exact live argv,
+UID/PPID/starttime/CWD and source/run selectors. The three captured diagnostic
+transport lifetimes are closed by exact byte reconstruction SHA
+`e7658c2290c71aa781e78c447271545029e29a5d5a6f3dbf71ce39d3605bb43a`
+and the known own invocation; the expired authentication-parent identity is
+not established or claimed. RawBLOCKED196315 remains untouched. No generic
+source-prefix, argv-membership or future SSH-role exception was introduced.
+
+Root and independent reviews accepted sealed73-ID operational metadata:
+incident SHA`53d82292369c2b9a6c17f348ee95741802af80ea92850db3c33035a80f40f329`,
+20-file seal manifest SHA
+`c1b3aaab808b0bb7867fc6bef27a982230abcd274675df28a11ee6b928826009`.
+All20 small files were staged create-only, SHA-verified and read-only at
+`_ecoda_inputs/20261108-confounding-subsets-v1/old-main-emitted73-review-v1/`.
+The assertion of no retry-manifest deletion/controller reexecution is
+explicitly scoped to reviewed source and authorized/observed workflow
+history; arbitrary unobserved external filesystem action is not independently
+ruled out. The retry-source precondition, stable32-group metadata and selected
+scheduler discovery all agree on initial73 IDs, with no new retry IDs.
+
+Original gate `ecoda_stage5_main_confounds_20261109_v2` received its sole
+terminal inspect with exactly41 array/other IDs and32 watchdog IDs. Inspection
+SHA`1ff30e189130c100bde747bde64b3fab6e6b3bd8c791bdb532d4e60515a9ce06`;
+raw accounting SHA
+`2445bea15c3f8e2e1733a28ba28b6acb9422d3655f171c12126278d548d3e406`.
+One query/exit0, no missing or malformed IDs,202 terminal accounting rows
+(103 COMPLETED,95 FAILED,4 CANCELLED). Gate remains PRELAUNCH_STOP, actual
+wrapper/terminal exit unknown/null; audit state COMPLETED, passed=false,
+release_eligible=false. Do not approve this old gate or repeat its accounting.
+Scientific validation and a new derivative publication remain separate.
+
+The current benchmark recovery child reports native OK at23:06:37 UTC,
+including all17 physical jobs, nine method groups, result validation and NAS
+synchronization. Its production-expanded scientific core is23 payloads
+(one GloScope RDS and22 Python Feathers), because whole-family Step PILOT
+and QOT each emit four outputs. Do not confuse physical jobs with artifacts.
+Both batch children and the global97 gate continue; one official waiter
+remains armed. Independent read-only audits for old24 benchmark RDS, old26
+Feathers, current23 benchmark payloads and P6 finite evidence are being
+prepared in parallel; valid completed fits stay outside recomputation.
