@@ -61,7 +61,7 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, failed16 terminal FAILED; targeted recovery under diagnosis
+## Live checkpoint — 2026-11-09, recovered MrVI published; tail observer RUNNING; remaining95 preparation
 
 - **Current recovery:** `ecoda_stage5_failed16_20261109_v1` launched at
   16:41:50 UTC and reached actual `FAILED` at 17:38:05 UTC. It selected
@@ -69,10 +69,11 @@ decisions have been applied to existing artifacts.
   GloScope 1; uncorrected MrVI 4; corrected MrVI 3 and QOT 8. No healthy row,
   preparation cache or annotation is being recomputed. Initial expected graph:
   16 scheduler IDs / 38 task units, excluding recorded OOM-only retries.
-- **Monitoring:** the single official waiter, session 25146 / consumer cell
-  142, completed normally at the failure event; it is no longer active. Its
-  process-bound sleep assertion ended. A temporary one-hour assertion covers
-  diagnosis; no persistent power setting was changed.
+- **Monitoring:** failed16 waiter 25146 / cell 142 completed and is inactive.
+  The monitor-only observer launched at 18:27:34 UTC; its single official
+  waiter 3808 / cell 236 is active, with sleep prevention bound to PID 60360.
+  It observes the old tail and approves no science. No persistent power
+  setting was changed.
 - **Latest startup/queue evidence, 16:46 UTC:** recovery has reached H5AD
   input preflight; some preflight tasks are pending unavailable/draining
   nodes. This does not establish that all method jobs are already running.
@@ -3804,3 +3805,25 @@ wrapper exit null and the initial 73-ID catalog incomplete; it approves no old
 science. If scientifically ready work supersedes this monitor, retire only its
 own scheduler job and finish its terminal audit before another same-group
 launch. Never invent a second group or interrupt old scientific jobs.
+
+### Tail observer launched — RUNNING at 2026-11-09T18:27:34Z
+
+The approved observer passed prepare/reconcile and launched exactly once.
+Event generation `b789f404c03760b957d01a775cdfcfb5`; command digest
+`12c213aff7bcca65d328ea9659a01637fcd21623d731590ecac85963fd6fcc23`.
+Local control is `.gate/ecoda_stage5_orphaned_main_observer_20261109_v1.control.py`.
+One official unbounded wait is active: unified session 3808, sole output
+consumer cell 236; verified Python PID 60360 / uv parent 60294.
+`caffeinate -i -w 60360`, session 39879, follows that process only. The earlier
+temporary one-hour diagnosis assertion can expire naturally. No scheduler
+polling loop, scientific job, old-run write or extra accounting query was added.
+The monitor submits one afterany scalar; its outcome remains separate from
+all old scientific outcomes. If it is superseded, cancel only this monitor's
+verified scheduler ID and complete its own terminal audit before a same-group
+scientific launch; never cancel the original tail.
+
+The remaining95 proposal is conditional on validated preparation reuse and safe
+placement. The eight uncorrected caches are being audited via bounded metadata/
+hash and then pinned RDS schema checks; existing STOP-parent/ACTIVE-owner state
+must remain truthful. No new95 wave has been launched, and the pending user
+allocation-diagnostic exception has not been executed.
