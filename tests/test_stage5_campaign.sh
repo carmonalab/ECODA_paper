@@ -22,7 +22,7 @@ source "${ECODA_SOURCE_ROOT}/src/slurm_config.sh"
 source "${ECODA_SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
 source "${ECODA_SOURCE_ROOT}/src/5_run_benchmark_methods/scheduler_recorder_fixture.sh"
 child="${ECODA_RUN_ID}"; context="${child#*_}"
-selection=""; methods_seen=0
+selection=""; methods_seen=0; prepared=""; prepared_sha=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --selection-file) selection="$2" ;;
@@ -30,12 +30,23 @@ while [[ $# -gt 0 ]]; do
     --analysis-variant) case "${context}:$2" in uncorrected:final|corrected:corrected_final) ;; *) exit 1;; esac ;;
     --methods) [[ "$2" == "${TEST_EXPECTED_BATCH_METHODS}" ]]; methods_seen=1 ;;
     --derivative-release|--input-artifacts) ;;
+    --prepared-adoption) prepared="$2" ;;
+    --prepared-adoption-sha256) prepared_sha="$2" ;;
     *) exit 1 ;;
   esac
   shift 2
 done
 [[ "${selection}" == */manifests/campaign_"${context}".selection.tsv ]]
 [[ "${context}" == benchmark || ${methods_seen} -eq 1 ]]
+if [[ "${CAMPAIGN_EXPECT_ADOPTION:-0}" == 1 ]]; then
+  [[ "${prepared}" == */manifests/campaign_prepared_adoption.json &&
+     "$(ecoda_sha256_file "${prepared}")" == "${prepared_sha}" ]]
+  ecoda_validate_checksum "${prepared}"
+  mkdir -p "${CAMPAIGN_BARRIER}"
+  printf '%s\t%s\t%s\n' "${child}" "${prepared}" "${prepared_sha}" > "${CAMPAIGN_BARRIER}/${context}.adoption"
+else
+  [[ -z "${prepared}${prepared_sha}" ]]
+fi
 if [[ "${context}" == benchmark ]]; then
   grep -q $'Stephenson\tbenchmark_analysis\ttrans' "${selection}"
   grep -q $'Stephenson\tbenchmark_analysis\tzeroimp' "${selection}"
@@ -177,4 +188,32 @@ if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" NAS_TARGET_DIR="${TMP_DI
   echo 'campaign controller accepted an absent NAS mount' >&2; exit 1
 fi
 [[ ! -e "${HPC_ROOT}/_ecoda_runs/campaign_unmounted" && ! -e "${TMP_DIR}/absent-nas" ]]
-echo 'PASS: one pinned parent, concurrent isolated contexts, frozen exact scopes, child-failure isolation and collected scheduler IDs'
+# Optional prepared receipt is frozen once and forwarded unchanged to every
+# independent child; the ordinary four-column contexts remain unchanged.
+make_contexts adopted > "${TMP_DIR}/adopted.tsv"
+"${TEST_REAL_PYTHON}" - "${SOURCE_TREE}/datasets.json" "${TMP_DIR}/prepared.json" <<'PYADOPT'
+import hashlib,json,pathlib,sys
+config,path=map(pathlib.Path,sys.argv[1:])
+path.write_text(json.dumps(dict(schema='ecoda_stage5_prepared_adoption_v1',state='APPROVED_COPY_ONLY',original_gate_state='FAILED',
+ config_sha256=hashlib.sha256(config.read_bytes()).hexdigest(),target_run_ids={'benchmark':'adopted_benchmark',
+ 'batch_effect/uncorrected_final':'adopted_uncorrected','batch_effect/corrected_final':'adopted_corrected'})))
+PYADOPT
+prepared_sha="$(shasum -a 256 "${TMP_DIR}/prepared.json" | awk '{print $1}')"
+export CAMPAIGN_BARRIER="${TMP_DIR}/adopted-barrier"
+HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" NAS_TARGET_DIR="${NAS_BASE}" \
+  ECODA_RUN_ID=campaign_adoption CAMPAIGN_EXPECT_ADOPTION=1 \
+  bash "${SOURCE_TREE}/src/5_run_benchmark_methods/stage5_campaign.sh" \
+  --contexts "${TMP_DIR}/adopted.tsv" --derivative-release test-release \
+  --prepared-adoption "${TMP_DIR}/prepared.json" --prepared-adoption-sha256 "${prepared_sha}" > "${TMP_DIR}/adopted.log"
+[[ $(find "${CAMPAIGN_BARRIER}" -name '*.adoption' | wc -l | tr -d ' ') == 3 ]]
+parent="${HPC_ROOT}/_ecoda_runs/campaign_adoption"
+cmp "${TMP_DIR}/prepared.json" "${parent}/manifests/campaign_prepared_adoption.json"
+grep -q '^STATE=OK$' "${parent}/status/terminal"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" NAS_TARGET_DIR="${NAS_BASE}" \
+    ECODA_RUN_ID=campaign_bad_adoption bash "${SOURCE_TREE}/src/5_run_benchmark_methods/stage5_campaign.sh" \
+    --contexts "${TMP_DIR}/adopted.tsv" --derivative-release test-release \
+    --prepared-adoption "${TMP_DIR}/prepared.json" --prepared-adoption-sha256 "$(printf '0%.0s' {1..64})" > "${TMP_DIR}/bad-adoption.log" 2>&1; then
+  echo 'campaign accepted altered prepared receipt' >&2; exit 1
+fi
+[[ ! -e "${HPC_ROOT}/_ecoda_runs/campaign_bad_adoption" ]]
+echo 'PASS: one pinned parent, concurrent isolated contexts, frozen exact scopes, child-failure isolation, collected scheduler IDs and prepared receipt forwarding'

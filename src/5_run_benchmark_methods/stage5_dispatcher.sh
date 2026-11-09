@@ -64,6 +64,8 @@ RUNTIME_EXPORT=""
 PRECOMPUTE_BACKUP_RECEIPT_ARG=""
 EXPECTED_PENDING_ARG=""
 VALIDATED_RECOVERY_MANIFEST_ARG=""
+PREPARED_ADOPTION_ARG=""
+PREPARED_ADOPTION_SHA=""
 ECODA_RECOVERY_ACTIVE=0
 source "${SCRIPT_DIR}/stage5_validated_recovery.sh"
 export ECODA_PRECOMPUTE_BACKUP_RECEIPT=""
@@ -82,6 +84,7 @@ Usage: 1_submit_hpc_array.sh [--datasets LIST] [--methods LIST]
        [--derivative-release ID --input-artifacts TSV]
        [--precompute-backup-receipt JSON --expected-pending TSV]
        [--validated-recovery-manifest JSON]
+       [--prepared-adoption JSON --prepared-adoption-sha256 SHA256]
        [--exact-batch-selection] [--pass uncorrected|corrected]
        [--analysis-variant final|corrected_final]
        [--gpu-policy auto|default|any] [--force]
@@ -124,6 +127,8 @@ while [[ $# -gt 0 ]]; do
     --precompute-backup-receipt=*) PRECOMPUTE_BACKUP_RECEIPT_ARG="${1#*=}"; shift ;;
     --expected-pending) EXPECTED_PENDING_ARG="${2:-}"; shift 2 ;;
     --expected-pending=*) EXPECTED_PENDING_ARG="${1#*=}"; shift ;;
+    --prepared-adoption) PREPARED_ADOPTION_ARG="${2:?receipt required}"; shift 2 ;;
+    --prepared-adoption-sha256) PREPARED_ADOPTION_SHA="${2:?receipt SHA256 required}"; shift 2 ;;
     --validated-recovery-manifest) VALIDATED_RECOVERY_MANIFEST_ARG="${2:?manifest path required}"; shift 2 ;;
     --validated-recovery-manifest=*) VALIDATED_RECOVERY_MANIFEST_ARG="${1#*=}"; [[ -n "${VALIDATED_RECOVERY_MANIFEST_ARG}" ]] || exit 1; shift ;;
     --target-methods) TARGET_METHODS_ARG="${2:-}"; TARGET_METHODS_SET=1; shift 2 ;;
@@ -153,6 +158,15 @@ while [[ $# -gt 0 ]]; do
     *) echo "ERROR: unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
+if [[ -n "${PREPARED_ADOPTION_ARG}" || -n "${PREPARED_ADOPTION_SHA}" ]]; then
+  [[ -n "${DERIVATIVE_RELEASE}" && -n "${INPUT_ARTIFACTS}" &&
+     "${PREPARED_ADOPTION_ARG}" == /* && "${PREPARED_ADOPTION_SHA}" =~ ^[0-9a-f]{64}$ &&
+     -z "${SYNC_ONLY_RUN}" && -z "${VALIDATED_RECOVERY_MANIFEST_ARG}" &&
+     ${FORCE_ARG} -eq 0 && ${FORCE_TARGETED_ARG} -eq 0 ]] || {
+    echo 'ERROR: prepared adoption requires a fresh bound derivative run and an exact approved receipt' >&2
+    exit 1
+  }
+fi
 if [[ -n "${VALIDATED_RECOVERY_MANIFEST_ARG}" ]]; then
   [[ "${VALIDATED_RECOVERY_MANIFEST_ARG}" == /* && ${FORCE_ARG} -eq 0 &&
      ${FORCE_TARGETED_ARG} -eq 0 && -z "${SYNC_ONLY_RUN}" ]] || exit 1
@@ -3771,6 +3785,17 @@ if [[ -z "${SYNC_ONLY_RUN}" && -n "${EXPECTED_PENDING_ARG}" ]]; then
   fi
 fi
 stage5_verify_precompute_binding || exit 1
+if [[ -n "${PREPARED_ADOPTION_ARG}" ]]; then
+  source "${SCRIPT_DIR}/stage5_prepared_adoption.sh"
+  stage5_prepare_source_identity || stage5_abort 'prepared adoption source identity failed'
+  adoption_context=benchmark
+  case "${PASS_ARG:-}" in
+    uncorrected) adoption_context=batch_effect/uncorrected_final ;;
+    corrected) adoption_context=batch_effect/corrected_final ;;
+  esac
+  stage5_adopt_prepared_artifacts "${PREPARED_ADOPTION_ARG}" "${PREPARED_ADOPTION_SHA}" "${adoption_context}" ||
+    stage5_abort 'validated prepared-artifact adoption failed'
+fi
 CLASSIFIED_PENDING="${ECODA_RUN_ROOT}/manifests/classified_pending.tsv"
 if [[ -z "${SYNC_ONLY_RUN}" && "${ANALYSIS_VARIANT:-}" == corrected_final ]]; then
   stage5_prepare_source_identity || exit 1
@@ -4085,6 +4110,9 @@ else
   RUN_METADATA="STAGE=stage5\nRUN_ID=${RUN_ID}\nSTATE=ACTIVE\nMETHODS=${methods_csv}\nANALYSES=${analyses_csv}\nPASS=${PASS_ARG}\nEXACT_SELECTION=${EXACT_SELECTION}\nFORCE_TARGETED=${FORCE_TARGETED_ARG}\nFORCE_REASON=${FORCE_REASON_ARG}\nSOURCE_IDENTITY=${SOURCE_IDENTITY}\nH5AD_PREFLIGHT=${ECODA_RUN_ROOT}/manifests/h5ad_preflight.tsv\nPENDING_SELECTION=${PENDING_SELECTION}\nPENDING_SELECTION_MD5=${PENDING_SELECTION_MD5}\nPENDING_SELECTION_SIZE=${PENDING_SELECTION_SIZE}\n${dispatch_metadata}${analysis_variant_metadata}${target_methods_metadata}${root_metadata}${identity_metadata}\n${batch_contract_metadata_suffix}"
   if [[ -n "${ECODA_PRECOMPUTE_BACKUP_RECEIPT}" ]]; then
     RUN_METADATA="${RUN_METADATA}\nPRECOMPUTE_BACKUP_RECEIPT=${ECODA_PRECOMPUTE_BACKUP_RECEIPT}\nPRECOMPUTE_BACKUP_RECEIPT_SHA256=${ECODA_PRECOMPUTE_BACKUP_RECEIPT_SHA256}\nEXPECTED_PENDING=${ECODA_EXPECTED_PENDING}\nEXPECTED_PENDING_SHA256=${ECODA_EXPECTED_PENDING_SHA256}\n"
+  fi
+  if [[ -n "${PREPARED_ADOPTION_ARG}" ]]; then
+    RUN_METADATA="${RUN_METADATA}\nPREPARED_ADOPTION_RECEIPT=${ECODA_RUN_ROOT}/manifests/prepared_adoption.receipt.json\nPREPARED_ADOPTION_SHA256=${PREPARED_ADOPTION_SHA}\nPREPARED_ADOPTION_REPORT=${ECODA_RUN_ROOT}/manifests/prepared_adoption.json\n"
   fi
   if [[ ${ECODA_RECOVERY_ACTIVE} -eq 1 ]]; then
     RUN_METADATA="${RUN_METADATA}\nVALIDATED_RECOVERY_MANIFEST=${ECODA_STAGE5_RECOVERY_MANIFEST}\nVALIDATED_RECOVERY_MANIFEST_SHA256=${ECODA_STAGE5_RECOVERY_MANIFEST_SHA256}\nRECOVERY_PROMOTION_ROOT=${ECODA_STAGE5_RECOVERY_PROMOTION_ROOT}\n"

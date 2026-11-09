@@ -7,18 +7,28 @@ source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
 
-CONTEXTS=""; RELEASE=""
+CONTEXTS=""; RELEASE=""; PREPARED_ADOPTION=""; PREPARED_ADOPTION_SHA=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --contexts) CONTEXTS="${2:-}"; shift 2 ;;
     --derivative-release) RELEASE="${2:-}"; shift 2 ;;
-    *) echo 'Usage: stage5_campaign.sh --contexts TSV --derivative-release ID' >&2; exit 1 ;;
+    --prepared-adoption) PREPARED_ADOPTION="${2:?receipt required}"; shift 2 ;;
+    --prepared-adoption-sha256) PREPARED_ADOPTION_SHA="${2:?receipt SHA256 required}"; shift 2 ;;
+    *) echo 'Usage: stage5_campaign.sh --contexts TSV --derivative-release ID [--prepared-adoption JSON --prepared-adoption-sha256 SHA256]' >&2; exit 1 ;;
   esac
 done
 [[ -n "${CONTEXTS}" && "${RELEASE}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ &&
    "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == 1 ]] || {
   echo 'ERROR: campaign requires an explicit scope, release and immutable executor' >&2; exit 1;
 }
+if [[ -n "${PREPARED_ADOPTION}" || -n "${PREPARED_ADOPTION_SHA}" ]]; then
+  [[ "${PREPARED_ADOPTION}" == /* && ! -L "${PREPARED_ADOPTION}" &&
+     "${PREPARED_ADOPTION_SHA}" =~ ^[0-9a-f]{64}$ &&
+     "$(ecoda_realpath_existing "${PREPARED_ADOPTION}")" == "${PREPARED_ADOPTION}" &&
+     "$(ecoda_sha256_file "${PREPARED_ADOPTION}")" == "${PREPARED_ADOPTION_SHA}" ]] || {
+    echo 'ERROR: campaign prepared-adoption receipt is missing, unsafe or checksum-invalid' >&2; exit 1;
+  }
+fi
 PARENT_ID="${ECODA_RUN_ID:?immutable executor must supply a parent run ID}"
 ecoda_validate_run_id "${PARENT_ID}"
 ecoda_require_source_script_path "${SCRIPT_DIR}/stage5_campaign.sh" "${ECODA_SOURCE_ROOT}"
@@ -36,6 +46,11 @@ ecoda_atomic_copy "${ECODA_SOURCE_MANIFEST}" "${PARENT_ROOT}/manifests/source.ma
 export ECODA_RUNTIME_PROFILE=stage5
 ecoda_runtime_validate_submission apptainer
 ecoda_atomic_copy "${CONTEXTS}" "${PARENT_ROOT}/manifests/campaign_requested.tsv"
+if [[ -n "${PREPARED_ADOPTION}" ]]; then
+  ecoda_atomic_copy "${PREPARED_ADOPTION}" "${PARENT_ROOT}/manifests/campaign_prepared_adoption.json"
+  PREPARED_ADOPTION="${PARENT_ROOT}/manifests/campaign_prepared_adoption.json"
+  [[ "$(ecoda_sha256_file "${PREPARED_ADOPTION}")" == "${PREPARED_ADOPTION_SHA}" ]] || exit 1
+fi
 
 # Freeze every scientific request before starting any dispatcher. The metadata
 # check reads only sizes/proofs; each existing child performs its full preflight.
@@ -55,6 +70,15 @@ if len(rows) != 3 or any(len(row) != 4 or any(not value for value in row) for ro
     raise SystemExit('ERROR: campaign requires exactly three four-field context rows')
 if {row[0] for row in rows} != set(expected) or len({row[1] for row in rows}) != 3:
     raise SystemExit('ERROR: campaign contexts and child run IDs must be unique')
+adoption = manifest / 'campaign_prepared_adoption.json'
+if adoption.exists():
+    receipt = json.loads(adoption.read_text())
+    context_keys = dict(benchmark='benchmark', uncorrected='batch_effect/uncorrected_final', corrected='batch_effect/corrected_final')
+    if (receipt.get('schema') != 'ecoda_stage5_prepared_adoption_v1' or receipt.get('state') != 'APPROVED_COPY_ONLY'
+            or receipt.get('original_gate_state') != 'FAILED'
+            or receipt.get('config_sha256') != hashlib.sha256((project / 'datasets.json').read_bytes()).hexdigest()
+            or receipt.get('target_run_ids') != {context_keys[row[0]]: row[1] for row in rows}):
+        raise SystemExit('ERROR: prepared-adoption receipt differs from the exact campaign scope')
 staged, identities = [], []
 for context, run_id, selection_text, references_text in rows:
     import re
@@ -125,6 +149,9 @@ while IFS=$'\t' read -r context child selection references; do
     unset ANALYSIS_MANIFEST EXECUTION_LOG_DIR FORCE_BENCHMARK
     export ECODA_RUN_ID="${child}" ECODA_LOGS_DIR="${PARENT_ROOT}/logs/${child}"
     args=(--selection-file "${selection}" --derivative-release "${RELEASE}" --input-artifacts "${references}")
+    if [[ -n "${PREPARED_ADOPTION}" ]]; then
+      args+=(--prepared-adoption "${PREPARED_ADOPTION}" --prepared-adoption-sha256 "${PREPARED_ADOPTION_SHA}")
+    fi
     case "${context}" in
       uncorrected) args+=(--pass uncorrected --analysis-variant final --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot) ;;
       corrected) args+=(--pass corrected --analysis-variant corrected_final --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot) ;;

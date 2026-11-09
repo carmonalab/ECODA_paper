@@ -2227,3 +2227,50 @@ Recovery must use a fresh run identity and reviewed committed source, adopt
 only individually validated prepared artifacts, exclude completed BL10 and
 Bassez authorHR22, and record the revised exact selection before launch.
 Current work is controller diagnosis/review; no HPC method arrays are running.
+
+
+## Controller recovery — reviewed fixes and prepared-output audit
+
+User explicitly directed continued controller repair and parallel launch with
+completed-output reuse. Independent subagents implement/review bounded source
+changes; the orchestrator owns Git, plan, controls and HPC execution.
+
+- `cba58c3702c82c73217f82353048924a7c94fc76` committed/pushed: unique family
+  ownership projection preserves every physical parameter row; scheduler IDs
+  receive a checksum at every append and existing evidence must validate first.
+  Real ownership and watchdog fixtures, campaign failure/accounting fixture,
+  syntax and independent cross-review pass.
+- `80e1d88` committed/pushed: metadata acceptance now reports the precise
+  scheduler/checksum/schema/status/report failure boundary. Both8-row context
+  tests and11negative boundaries pass; independent review accepted. This is
+  diagnostics, not a claim to have reproduced the historical batch failure.
+- Actual original16metadata host checks all pass with exact original outputs,
+  status filenames/TASK_ID1..8, MD5/size/PATH. Evidence is
+  `.gate/main_confounds_failure_20261109_v1/metadata_host_checks.json`.
+- Original Stephenson6caches pass the actual c534 strict RDS CLI with53ordered
+  samples, expected feature dimensions, current annotated input identity and
+  unchanged content/proofs/records. BL uses unchanged auxMD5
+  `8cacee7893cbb9d170cc9de87e3bd306`, five approved groups, before-fit policy,
+  and independent370.6966s variant timing. No sex-gene exclusion was added.
+  Original7-row preparation timing is retained; no fit or H5AD expression read
+  occurred during this audit. Cache audit SHA256
+  `5ece0f9a7a5f70bad1509ac731261ce192aed1b7a6f3c55c6bf538d7c691b30c`.
+- All6cache owners were finalizedFAIL by the later controller abort. Preserve
+  that truth. Their preparation watchdog reportsOK and the original sole
+  terminal inspect includes array4665398/watchdog4665399 completed0. Fresh
+  copy-only acceptance is based on independent artifact evidence, not an old
+  owner/gate promotion. No old status, owner, checksum or manifest was edited.
+- Approved exact23-artifact copy-only receipt SHA256
+  `be7cfc7ab3dda369c8167c4fdef043f3501d4f97b87e823f63f194f73cfe1800`:
+  six Stephenson caches +one original timing Feather +16batch sample metadata
+  Feathers. Local controls/review: `.gate/main_recovery_inputs_20261109_v2/`;
+  remote control: `_ecoda_inputs/20261108-confounding-subsets-v1/main-confounds-v2/prepared_adoption.json`.
+  New target children are `stage5_main_{benchmark,uncorrected,corrected}_20261109_v2`.
+- The finite adoption hook is IN_PROGRESS, using existing derivative bindings,
+  strict proofs and create-only new copies. It will not relax the legacy
+  validated-recovery contract or submit work. Existing scientific validators
+  must accept the new copies before completed preparation is excluded.
+- Remaining41public benchmark requests and both8-dataset batch selections are
+  unchanged. No BL10 or Bassez authorHR22 recomputation, no targetedHiTME100.
+  Fresh recovery gate is PLANNED, not launched. Final immutable source,
+  selected pending row count and exact wrapper will be recorded before launch.
