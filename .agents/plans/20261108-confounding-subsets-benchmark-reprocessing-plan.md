@@ -63,7 +63,7 @@ decisions have been applied to existing artifacts.
 
 ## Live checkpoint — 2026-11-09, Europe/Zurich
 
-- P0/P1 complete. Reviewed code pushed through `a9237c1`; `0514b48`
+- P0/P1 complete. Reviewed code pushed through `3f36464`; `0514b48`
   adds the exact HR selectors and `a9237c1` adds explicit variant requests,
   independent campaign contexts and strict derivative NAS/OOM checks.
   External cancer application files remain excluded from these commits.
@@ -82,14 +82,14 @@ decisions have been applied to existing artifacts.
   The new derivative filled 50,809 HR labels (33 to 40 categories), retaining
   74,948 cells and 26 samples. All protected data are unchanged. Its MD5 is
   `678656c738597471d884f88e345e6970`; the legacy input remains unchanged.
-- Stage 5 early BL10 controller is **RUNNING**, launched
-  `2026-11-09T00:17:52Z` from immutable `9b06d15`; its input preflight
-  precedes the ten selected pseudobulk workers. One unbounded waiter is armed
-  (local exec `24353`). This wave excludes Stephenson, using the approved
-  Bassez derivative and nine unchanged benchmark inputs. Stephenson's BL
-  result belongs only to its later full rerun. Retain the one existing
-  `ecoda-benchmark` serialization group and review the early gate before
-  launching the later three-context campaign.
+- Stage 5 early BL10 v1 is **FAILED**, terminal-inspected once. Its sole
+  preflight array `4663527` passed Bassez but failed the nine legacy inputs;
+  no R environment/method jobs launched and **zero scientific RDS outputs**
+  exist. The controller finished `2026-11-09T00:22:47Z`. Do not relaunch it.
+  The repaired Bassez input remains independently approved. A narrow explicit
+  bound-proof fix is underway for compute-side legacy checksum/record checks;
+  no old input or receipt is rewritten. A fresh BL gate is required after
+  review. Stephenson BL remains solely in its later full-method wave.
 - Earlier Stage 3 v3 failed before producing new H5ADs because compute nodes
   cannot mount NAS (17 missing / 0 existing outputs). Its evidence is retained;
   the reviewed fix validates scratch on compute and publishes NAS from the
@@ -503,7 +503,7 @@ statuses, scientific output roots and one synchronization owner per root.
 | P3: source reconciliation | IN_PROGRESS | Orchestrator handles bounded read-only Bamboo source/runtime/NAS preflight; targeted Bassez scope is already user-approved, subject to unchanged-input proof |
 | P4: changed inputs | IN_PROGRESS | Generate and validate 16 batch-view derivatives, Stephenson benchmark derivative, and only the necessary Bassez repair; satisfy benchmark annotation contracts |
 | P5: method waves | IN_PROGRESS | Run three independent concurrent contexts with exact deduplicated scope, durable evidence, focused recovery and root-specific sync |
-| P6: evaluation/reporting | PLANNED | Complete five-metric scores, score both Kidney axes, refresh all affected maintained reports/figures from approved results, verify plots and document limitations/provenance |
+| P6: evaluation/reporting | IN_PROGRESS | Complete five-metric scores, score both Kidney axes, refresh all affected maintained reports/figures from approved results, verify plots and document limitations/provenance |
 
 ### P0: first implementation action, before harmonization or pipeline changes
 
@@ -934,7 +934,8 @@ and approved output-manifest location.
 
 ### Early BL10 gate — exact immutable launch contract
 
-- Status **RUNNING**; launched `2026-11-09T00:17:52Z`; host Bamboo; gate
+- Status **FAILED**, terminal-inspected once after preflight failure; launched
+  `2026-11-09T00:17:52Z`, finished `2026-11-09T00:22:47Z`; host Bamboo; gate
   `ecoda_stage5_benchmark_bl10_20261109_v1`, child
   `stage5_benchmark_bl10_20261109_v1`; serialization group `ecoda-benchmark`.
   This gate is independent of the active Stage 3 gate. Review it before a
@@ -1014,3 +1015,126 @@ The exact expected ten method rows/five initial scheduler IDs remain the scope
 contract above. Stage 3's independent waiter `69025` is still active. Method
 results are not release-eligible until terminal accounting, pinned audits,
 selected NAS integrity checks and reviewer approval pass.
+
+
+### P6 readiness — metadata export complete; result/evaluation helpers underway
+
+- `3f36464` is pushed: sample metadata exports resolve the dataset-level
+  `evaluation_labels` map through the existing config helper. Both Kidney
+  batch views export `condition.l1` and `tissue`, retaining 80 samples and
+  their 45/23/12 tissue counts. Missing, malformed, blank or sample-inconsistent
+  evaluation axes fail closed; technical aggregation cannot absorb biology.
+  Existing scalar-only export behavior remains unchanged. New actual-H5AD
+  export tests and the existing batch-majority contract independently pass.
+- Core `calc_sep_score` already computes all five approved metrics. Reporting
+  is incomplete: default benchmark/shared plots and both batch notebooks still
+  have three-metric/hardcoded legacy paths; standalone BL/HR outputs are not
+  read by the legacy aggregate-only loader. Changes must join explicit approved
+  artifact selections, never silently substitute old required BL/HR/Stephenson
+  or batch results when a new result is missing.
+- Implementor is adding two bounded analysis helpers with focused tests:
+  one explicit finite release-artifact ledger and one evaluation/scaling helper.
+  Source bundles stay immutable. New derived score tables bind labels,
+  distances, input/release identities and scoring policy. Known-compatible
+  stored metrics may be reused; missing or incompatible metrics are rescored
+  from validated distances, without fitting methods. LISI provenance must
+  establish the already-transformed separation definition; do not invert it.
+- Preserve primary NULL's actual stored shuffled labels; a scores-only legacy
+  artifact cannot supply new metrics without recovering its validated distance
+  and label bundle. Do not fabricate a primary shuffle or score true labels.
+  Kidney's additional tissue NULL evaluation uses its own explicit seed 124
+  and records exact shuffled labels. Default overall ranking is the arithmetic
+  mean of the five per-evaluation/per-metric min-max scores, each equally
+  weighted. Constant metric ranges use a documented neutral display value
+  0.5 in the new aggregation helper, so tied methods remain tied; global math
+  utilities and the separate cancer application workflow remain unchanged.
+  Existing separately labeled rank diagnostics may retain their definitions,
+  but must include all five metrics and not replace this default mean.
+- Expected batch report grids: eight physical cohorts per view, nine equally
+  weighted evaluation entries (Kidney condition and tissue separate), five
+  metrics; uncorrected eight comparators including NULL gives 360 values,
+  corrected nine including NULL/two Harmony arms gives 405. Disabled Diabetes
+  is absent. These are score entries, not new preprocessing/method tasks.
+- External cancer-application agent completed without commits, jobs or shared
+  environment changes. Its separate files remain excluded. Its read-only
+  reconciliation found legacy HiTME layer-2 composition counts inconsistent
+  with current obs for Bassez, Zhang and Pelka (max common-type differences
+  25/144/44 cells; Bassez also has one current AS-DC). Evidence is
+  `data/applications/cancer_clustering/20261108-v1/derived/legacy_bundle_reconciliation.rds`.
+  Flag those exact baseline rows for bounded provenance review before current
+  input reuse; this does not authorize broad method fitting or expand the
+  approved HR/BL work. The BL10 wave is independent of that reuse question.
+- Notebook/plot integration follows helper review; no publication figure is
+  refreshed or declared final before its required releases and complete
+  finite five-metric grid are validated.
+
+
+### Bassez conditional PILOT-GM dependency resolved
+
+A bounded metadata-only Bamboo audit read `obs/cellSubType` on the unchanged
+parent and approved repaired derivative with the pinned `9b06d15` helper;
+no counts, embeddings or method fits were loaded. The current worker's exact
+`notna & stripped_nonempty` / `nunique` component rule would request **34**
+components on the parent and **40** on the repaired input. The parent has 33
+valid HR categories plus one placeholder category accepted by that worker's
+older narrow validity rule; this does not change the repair's valid-category
+33-to-40 report. We do not independently claim the historical fitted model's
+component count.
+
+The approved conditional rerun is therefore required for all three Bassez HR
+PILOT-GM variants (HVG 1000/2000/3000). LR remains reusable subject to its
+ordinary input provenance. A tiny public token allowlist extension is needed
+for the 1000/3000 HR rows; the worker already supports those combinations.
+No model/scientific worker or vendored QOT change is required. Metadata audit
+evidence: `.gate/bassez_pilotgm_hr_component_count_20261109.json`.
+
+
+### BL10 v1 terminal failure and narrow recovery dependency
+
+- Single durable wait completed FAILED. First terminal inspection performed
+  once for the only emitted scheduler ID, preflight array `4663527`, recorded
+  nine failed tasks and one completed Bassez task. No second accounting query,
+  bridge projection or success approval is authorized for this failed gate.
+- Exact run-owned status inventory: Bassez OK; Adams, Gongsharma_cmv_young_males,
+  Kfoury, Kim, Lee, Pelka, Smillie, Wu and Zhang FAIL. Run-owned scientific
+  RDS inventory is **zero**. No method fitting, R environment preflight,
+  watchdog or aggregate scheduler jobs were reached. Existing data unchanged.
+- Compute logs were empty because the worker suppresses contract errors and
+  generic checksum validation emits no diagnostic. Pinned Adams metadata/
+  schema contract passes on the login host; all ten bound full content hashes
+  already passed controller validation. Legacy adjacent receipts name a home
+  alias while the runtime uses `--containall --no-home`; Bassez's canonical
+  receipt succeeds. The old source-identity adapter did not cover compute-side
+  generic checksum/validation-record calls.
+- Implementor is wiring an explicit exact-bound checksum proof through all
+  compute input consumers and validation-record checks. Unbound checksum
+  behavior and ordinary output immutability remain strict. A narrow
+  `stage5_preflight` input-validation record mode may preserve input file and
+  receipt modes while writing only its consumer-run evidence; it must fully
+  hash writable inputs and never rewrite/chmod old inputs or proofs. New
+  fixture hides the old home alias and exercises actual worker checks.
+  Future worker failures must log phase/return code/path diagnostics.
+- After independent review/commit/push, use a fresh run/gate/snapshot parent
+  and the same exact ten missing BL result rows, no force and no unrelated
+  rows. Preserve the failed gate and all evidence. Stage 3 remains independent
+  with its original waiter active; do not disturb it.
+
+### Stage 4 implementation checkpoint (not an annotation run)
+
+`51fc6ce` contains the independently accepted 14-file Stage 4 derivative
+package. Root also ran the real create-only copy/preparation/merge fixture;
+full controller, existing derivative, worker-policy, watchdog ID, reuse/cutover
+and shared-run regressions pass. Parent X/raw/counts/embeddings/graph/order/
+author labels are preserved. Copy receipt checks are required at merge,
+publication and terminal audit. New lane explicitly uses registry Blood and
+normal_tissue, validates pinned references without downloads, retains NAS
+identity on compute and publishes only on the login host.
+
+No Stage 4 HPC job is launched yet: it waits for the approved Stage 3
+Stephenson benchmark output. Exact future scope is one dataset/view row,
+53 samples, 27 two-sample dual annotation tasks, one preparation task and one
+merge task, plus three phase watchdogs: **six initial scheduler IDs / 32
+scheduled tasks**. Set `STAGE4_INPUT_PRODUCER_RUN_ID=stage3_confounds_20261108_v3`
+and use a fresh committed immutable source/runtime and new run-owned output.
+The 1000/3000 HR PILOT-GM public tokens are separately checkpointed in `7a474ef`;
+focused exact-three-token selection and LR rejection tests pass.
