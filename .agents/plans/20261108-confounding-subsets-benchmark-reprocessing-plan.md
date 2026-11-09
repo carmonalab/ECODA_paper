@@ -61,7 +61,7 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, recovery RUNNING since09:18 CET
+## Live checkpoint — 2026-11-09, recovery validating inputs; no method jobs yet
 
 - P0/P1 DONE: logical checkpoints and harmonized documentation are pushed.
   Latest reviewed controller/reuse source is9ca2453, committed/pushed and
@@ -2348,3 +2348,32 @@ started or completed. Inspect actual run-owned adoption/classification/ID
 records for scope evidence. The formerv1 gate remainsFAILED unchanged.
 Terminal accounting and pinned artifact/source/runtime/NAS review remain
 required before accepting scientific results or releasing downstream gates.
+
+
+### User-requested one-off startup check — 2026-11-09,09:36–09:40CET
+
+The user requested a current check, any necessary failure repair with reuse,
+then a short status and a pause pending their response. No periodic30-minute
+monitor or additional waiter was created; the existing durable waiter remains
+the sole completion observer. The server-side tmux runner is independent of
+the workstation/SSH connection and can continue while the workstation sleeps.
+
+- Durable status remainsRUNNING/nonterminal. All3named child controllers are
+  alive in the same server runner's process tree; no child terminalFAIL exists.
+- Each child scheduler_ids.tsv is still empty and no pending_selection.tsv
+  has been finalized: **zero method jobs submitted/running/queued at this
+  check**. CampaignRUNNING must not be described as method jobs running.
+- Benchmark has copied6Stephenson caches+originaltiming; the actual strict
+  RDS artifact-list validator reportsOK. Uncorrected copied8sample metadata
+  Feathers and its metadata report isSTATEOK,COUNT8,PENDING0: no export rerun.
+  Corrected is still before adoption, validating its input contracts.
+- One read-only process-tree snapshot (no Slurm polling) identifies active
+  content hashing through derivative_artifacts.py --verify-content for
+  benchmark/uncorrected inputs, including the large Alzheimer input, and
+  benchmark_h5ad_contract.py for corrected Alzheimer. This explains the
+  current startup delay; no demonstrated controller/worker failure warrants
+  interrupting the run or bypassing validation. No fit or valid output was
+  recomputed during this check, and no source/runtime/owner was changed.
+- Existing BL10/HR22 and all original prepared artifacts remain preserved.
+  Further intervention/monitor setup is deferred pending the user's reply;
+  this does not pause or cancel the already launched Bamboo campaign.
