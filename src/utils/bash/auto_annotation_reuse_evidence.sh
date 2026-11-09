@@ -14,13 +14,14 @@ PURPOSE=metadata_only_auto_annotation_reuse_evidence
 PRODUCER=auto_annotation_reuse_evidence
 MODE=controller
 if [[ "${1:-}" == --worker || "${1:-}" == --validate ]]; then MODE="${1#--}"; shift; fi
-SELECTION=""; REFERENCES=""; RESULTS=""; RELEASE=""
+SELECTION=""; REFERENCES=""; RESULTS=""; RELEASE=""; LEGACY_ARTIFACTS=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --selection-file) SELECTION="${2:-}"; shift 2 ;;
     --input-artifacts) REFERENCES="${2:-}"; shift 2 ;;
     --results-root) RESULTS="${2:-}"; shift 2 ;;
     --derivative-release) RELEASE="${2:-}"; shift 2 ;;
+    --legacy-artifacts) LEGACY_ARTIFACTS="${2:-}"; [[ -n "${LEGACY_ARTIFACTS}" ]] || exit 1; shift 2 ;;
     *) echo "ERROR: unknown evidence argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -42,7 +43,7 @@ if [[ "${MODE}" == controller ]]; then
   ecoda_atomic_copy "${SELECTION}" "${ECODA_RUN_ROOT}/manifests/selection.tsv"
   ecoda_derivative_bind stage5 "${RELEASE}" "${ECODA_RUN_ROOT}/manifests/selection.tsv" "${REFERENCES}"
 else
-  [[ -z "${SELECTION}${REFERENCES}${RESULTS}${RELEASE}" ]] || exit 1
+  [[ -z "${SELECTION}${REFERENCES}${RESULTS}${RELEASE}${LEGACY_ARTIFACTS}" ]] || exit 1
   ecoda_open_run "${ECODA_RUN_ID}" stage5
   export ECODA_ARTIFACT_BINDING="${ECODA_RUN_ROOT}/manifests/artifact_bindings.json"
 fi
@@ -56,6 +57,12 @@ export ECODA_ARTIFACT_BINDING
 # The controller freezes discovery once; workers only consume this finite list.
 if [[ "${MODE}" == controller ]]; then
   ecoda_atomic_copy "${RESULTS%/results}/checksums.md5" "${MANIFESTS}/legacy_checksums.md5"
+  if [[ -n "${LEGACY_ARTIFACTS}" ]]; then
+    [[ "${LEGACY_ARTIFACTS}" == /* && -f "${LEGACY_ARTIFACTS}" && ! -L "${LEGACY_ARTIFACTS}" ]] || {
+      echo 'ERROR: --legacy-artifacts requires an absolute regular TSV' >&2; exit 1;
+    }
+    ecoda_atomic_copy "${LEGACY_ARTIFACTS}" "${MANIFESTS}/legacy_artifacts.requested.tsv"
+  fi
   "${PYTHON_BIN}" - "${RUN}" "${RESULTS}" "${PURPOSE}" "${DATASETS_JSON_FILE}" <<'PY'
 import hashlib,json,pathlib,re,sys
 run,results=map(pathlib.Path,sys.argv[1:3]);purpose=sys.argv[3];m=run/'manifests'
@@ -73,27 +80,45 @@ for line in (m/'legacy_checksums.md5').read_text().splitlines():
     name=pathlib.Path(parts[1].lstrip('*')).name
     if name in checks: raise SystemExit('ERROR: duplicate checksum basename')
     checks[name]=parts[0].lower()
+request=m/'legacy_artifacts.requested.tsv'
+explicit=None
+if request.exists():
+    explicit=[line.split('\t') for line in request.read_text().splitlines()]
+    if not explicit or any(len(row)!=2 or row[0] not in {'Bassez','Zhang','Pelka'} or not pathlib.Path(row[1]).is_absolute() for row in explicit): raise SystemExit('ERROR: malformed explicit legacy artifact scope')
+    if len({tuple(row) for row in explicit})!=len(explicit) or len({row[1] for row in explicit})!=len(explicit) or {row[0] for row in explicit}!={'Bassez','Zhang','Pelka'}: raise SystemExit('ERROR: duplicate or incomplete explicit legacy artifact scope')
 inventory=[]
 for dataset in ('Bassez','Zhang','Pelka'):
     columns=config[dataset]['columns']
     author_keys=[key for key,field in [('ECODA_authors_LR','cell_type_low_res'),('ECODA_authors_HR','cell_type_high_res')] if columns.get(field) in known_auto]
     alternatives=['composition','ECODA_HiTME_.*','ECODA_scATOMIC.*']+[re.escape(key) for key in author_keys]
     pattern=re.compile(re.escape(dataset)+r'_('+ '|'.join(alternatives)+r')\.rds$')
-    files=sorted(p for p in results.iterdir() if pattern.fullmatch(p.name))
+    files=sorted(pathlib.Path(row[1]) for row in explicit if row[0]==dataset) if explicit is not None else sorted(p for p in results.iterdir() if pattern.fullmatch(p.name))
     if not files: raise SystemExit('ERROR: no auto-composition evidence artifacts for '+dataset)
     for p in files:
-        if not re.fullmatch(r'[A-Za-z0-9_.-]+',p.name) or p.is_symlink() or not p.is_file() or p.resolve()!=p or p.stat().st_size<=0 or p.name not in checks: raise SystemExit('ERROR: unsafe/unrecorded selected RDS: '+str(p))
+        if p.parent!=results or not pattern.fullmatch(p.name) or not re.fullmatch(r'[A-Za-z0-9_.-]+',p.name) or p.is_symlink() or not p.is_file() or p.resolve()!=p or p.stat().st_size<=0 or p.name not in checks: raise SystemExit('ERROR: unsafe/unrecorded selected RDS: '+str(p))
+        if explicit is not None:
+            expected=checks[p.name]; digest=hashlib.md5()
+            before=p.stat()
+            with p.open('rb') as stream:
+                for block in iter(lambda:stream.read(8*1024*1024),b''): digest.update(block)
+            actual=digest.hexdigest();after=p.stat()
+            if (before.st_size,before.st_mtime_ns)!=(after.st_size,after.st_mtime_ns) or actual!=expected: raise SystemExit(f'ERROR: selected legacy checksum mismatch: {p}; expected={expected}; actual={actual}')
         inventory.append(f'{dataset}\t{p}\t{checks[p.name]}\t{p.stat().st_size}\n')
 (m/'legacy_artifacts.tsv').write_text(''.join(inventory))
 files=['source.manifest','runtime.identity','selection.tsv','input_artifacts.tsv','artifact_bindings.json','legacy_checksums.md5','legacy_artifacts.tsv']
+if explicit is not None: files.append('legacy_artifacts.requested.tsv')
 paths=[pathlib.Path(r[2]) for r in refs]+[pathlib.Path(r.split('\t')[1]) for r in inventory]
-identity={'schema':1,'purpose':purpose,'run_id':run.name,'results_root':str(results),'input_stats':{str(p):[p.stat().st_size,p.stat().st_mtime_ns] for p in paths},'identities':{n:hashlib.sha256((m/n).read_bytes()).hexdigest() for n in files}}
+identity={'schema':1,'purpose':purpose,'run_id':run.name,'results_root':str(results),'legacy_inventory_mode':'explicit' if explicit is not None else 'discovery','input_stats':{str(p):[p.stat().st_size,p.stat().st_mtime_ns] for p in paths},'identities':{n:hashlib.sha256((m/n).read_bytes()).hexdigest() for n in files}}
 (m/'evidence_identity.json').write_text(json.dumps(identity,sort_keys=True)+'\n')
 PY
   for name in source.manifest runtime.identity selection.tsv input_artifacts.tsv artifact_bindings.json legacy_checksums.md5 legacy_artifacts.tsv evidence_identity.json; do
     ecoda_write_checksum "${MANIFESTS}/${name}"
     ecoda_write_artifact_record "${MANIFESTS}/${name}" auto_annotation_reuse_scope "${ECODA_RUN_ID}" >/dev/null
   done
+  if [[ -n "${LEGACY_ARTIFACTS}" ]]; then
+    ecoda_write_checksum "${MANIFESTS}/legacy_artifacts.requested.tsv"
+    ecoda_write_artifact_record "${MANIFESTS}/legacy_artifacts.requested.tsv" auto_annotation_reuse_scope "${ECODA_RUN_ID}" >/dev/null
+  fi
   mkdir -p "${REPORT%/*}"
   ecoda_artifact_owner_acquire "${REPORT}" stage5 "${ECODA_RUN_ID}" 0 0 0 >/dev/null
 fi
@@ -126,6 +151,8 @@ validate_scope() {
 import hashlib,json,pathlib,sys
 run=pathlib.Path(sys.argv[1]);m=run/'manifests';identity=json.loads((m/'evidence_identity.json').read_text())
 expected={'source.manifest','runtime.identity','selection.tsv','input_artifacts.tsv','artifact_bindings.json','legacy_checksums.md5','legacy_artifacts.tsv'}
+if identity.get('legacy_inventory_mode','discovery')=='explicit': expected.add('legacy_artifacts.requested.tsv')
+elif identity.get('legacy_inventory_mode','discovery')!='discovery': raise SystemExit('ERROR: unknown legacy inventory mode')
 if identity['schema']!=1 or identity['purpose']!=sys.argv[2] or identity['run_id']!=run.name or set(identity['identities'])!=expected: raise SystemExit('ERROR: evidence identity scope differs')
 for filename,recorded in identity['input_stats'].items():
     p=pathlib.Path(filename)

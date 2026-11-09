@@ -189,9 +189,10 @@ stopifnot(file.exists(checksum_manifest))
 manifest_lines <- readLines(checksum_manifest,warn=FALSE)
 verify_rds <- function(p) {
  row<-frozen[frozen[[2]]==p,,drop=FALSE]
- stopifnot(nrow(row)==1,file.info(p)$size==as.numeric(row[[4]]))
+ stopifnot(nrow(row)==1)
  expected<-row[[3]]
- actual<-unname(tools::md5sum(p));stopifnot(identical(actual,expected))
+ actual<-unname(tools::md5sum(p))
+ if(!identical(actual,expected)||file.info(p)$size!=as.numeric(row[[4]])) stop('Legacy artifact checksum mismatch: ',p,'; expected=',expected,'; actual=',actual,'; expected_size=',row[[4]],'; actual_size=',file.info(p)$size)
  list(value=readRDS(p),md5=actual)
 }
 output<-list(schema=1L,purpose='metadata_only_auto_annotation_reuse_evidence',run_id=run_id,audit='auto_annotation_composition_reuse',checksum_manifest=checksum_manifest,checksum_manifest_md5=unname(tools::md5sum(checksum_manifest)),scope=c('Bassez','Zhang','Pelka'),cohorts=list())

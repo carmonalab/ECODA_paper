@@ -128,6 +128,47 @@ import hashlib,json,pathlib,stat,sys
 for p,(sha,mode) in json.loads(pathlib.Path(sys.argv[1]).read_text()).items():
     f=pathlib.Path(p);assert hashlib.sha256(f.read_bytes()).hexdigest()==sha and stat.S_IMODE(f.stat().st_mode)==mode
 PY
+# Recovery may select only table-verified aggregates, ignoring conflicting or
+# unrecorded standalones without inspecting/deserializing them.
+explicit="${TMP}/explicit.tsv"
+for ds in Bassez Zhang Pelka; do printf '%s\t%s\n' "${ds}" "${SCRATCH}/benchmark/results/${ds}_composition.rds"; done > "${explicit}"
+ECODA_RUN_ID=explicit_good bash "${entry}" --selection-file "${TMP}/selection.tsv" \
+  --input-artifacts "${TMP}/refs.tsv" --results-root "${SCRATCH}/benchmark/results" \
+  --derivative-release test-release --legacy-artifacts "${explicit}" > "${TMP}/explicit.log" 2>&1
+ECODA_RUN_ID=explicit_good bash "${entry}" --validate
+cmp "${explicit}" "${SCRATCH}/_ecoda_runs/explicit_good/manifests/legacy_artifacts.requested.tsv"
+[[ "$(wc -l < "${SCRATCH}/_ecoda_runs/explicit_good/manifests/legacy_artifacts.tsv" | tr -d ' ')" == 3 ]]
+[[ "$(wc -l < "${TEST_SBATCH_CAPTURE}" | tr -d ' ')" == 2 ]]
+"${TEST_PYTHON}" - "${explicit}" "${TMP}" "${SCRATCH}" <<'PY_EXPLICIT'
+import pathlib,sys
+request,tmp,scratch=map(pathlib.Path,sys.argv[1:]);rows=request.read_text().splitlines()
+(tmp/'duplicate.tsv').write_text('\n'.join(rows+[rows[0]])+'\n')
+(tmp/'missing.tsv').write_text('\n'.join(rows[:2])+'\n')
+(tmp/'foreign.tsv').write_text(rows[0].replace('Bassez_composition','Bassez_ECODA_authors_HR')+'\n'+'\n'.join(rows[1:])+'\n')
+(tmp/'mismatch.tsv').write_text(rows[0].replace('Bassez_composition','Bassez_ECODA_HiTME_bad')+'\n'+'\n'.join(rows[1:])+'\n')
+bad=scratch/'benchmark/results/Bassez_ECODA_HiTME_bad.rds';bad.write_text('must not be submitted or deserialized')
+with (scratch/'benchmark/checksums.md5').open('a') as table: table.write('0'*32+'  results/'+bad.name+'\n')
+PY_EXPLICIT
+for invalid in duplicate missing foreign mismatch; do
+  if ECODA_RUN_ID="explicit_${invalid}" bash "${entry}" --selection-file "${TMP}/selection.tsv" \
+      --input-artifacts "${TMP}/refs.tsv" --results-root "${SCRATCH}/benchmark/results" \
+      --derivative-release test-release --legacy-artifacts "${TMP}/${invalid}.tsv" > "${TMP}/explicit_${invalid}.log" 2>&1; then
+    echo "invalid explicit ${invalid} selection accepted" >&2; exit 1
+  fi
+done
+grep -q 'selected legacy checksum mismatch: .*Bassez_ECODA_HiTME_bad.rds; expected=00000000000000000000000000000000; actual=' "${TMP}/explicit_mismatch.log"
+[[ "$(wc -l < "${TEST_SBATCH_CAPTURE}" | tr -d ' ')" == 2 ]]
+# A changed frozen explicit request is rejected without another scheduler job.
+frozen="${SCRATCH}/_ecoda_runs/explicit_good/manifests/legacy_artifacts.requested.tsv"
+chmod u+w "${frozen}"
+printf 'foreign\n' >> "${frozen}"
+if ECODA_RUN_ID=explicit_good bash "${entry}" --validate > "${TMP}/explicit_tamper.log" 2>&1; then echo 'changed explicit request accepted' >&2; exit 1; fi
+rm "${SCRATCH}/benchmark/results/Bassez_ECODA_HiTME_bad.rds"
+# Restore only our appended fault fixture line in the temporary checksum table.
+"${TEST_PYTHON}" - "${SCRATCH}/benchmark/checksums.md5" <<'PY_RESTORE'
+import pathlib,sys
+p=pathlib.Path(sys.argv[1]);p.write_text(''.join(x+'\n' for x in p.read_text().splitlines() if 'Bassez_ECODA_HiTME_bad.rds' not in x))
+PY_RESTORE
 # New unbound result files cannot broaden a fresh or frozen audit silently.
 if controller unrecorded >"${TMP}/unrecorded.log" 2>&1; then echo 'unrecorded RDS accepted' >&2; exit 1; fi
 for ds in Bassez Zhang Pelka; do rm "${SCRATCH}/benchmark/results/${ds}_ECODA_HiTME_NEW.rds"; done
@@ -151,5 +192,5 @@ report="${SCRATCH}/_ecoda_runs/good/artifacts/evidence/auto_annotation_reuse.jso
 chmod u+w "${report}"
 printf X >> "${report}"
 if ECODA_RUN_ID=good bash "${entry}" --validate >"${TMP}/tamper.log" 2>&1; then echo 'corrupt report accepted' >&2; exit 1; fi
-[[ "$(wc -l < "${TEST_SBATCH_CAPTURE}" | tr -d ' ')" == 3 ]]
+[[ "$(wc -l < "${TEST_SBATCH_CAPTURE}" | tr -d ' ')" == 4 ]]
 printf 'PASS: one finite metadata evidence job, frozen artifact inventory, actual checksum/owner contract, strict failures, no NAS/scientific writes\n'

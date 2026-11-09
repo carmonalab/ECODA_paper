@@ -93,6 +93,9 @@ stopifnot(report$cohorts$Bassez$rows[[1]]$status=='COUNT_MATCH_PROVENANCE_PENDIN
  report$cohorts$Bassez$rows[[1]]$producer$producer_record$MD5==unname(tools::md5sum(producer_path)),
  length(report$cohorts$Bassez$obs_sha256)==1)
 p<-file.path(results,'Bassez_composition.rds');Sys.chmod(p,'0644');saveRDS(list(unexpected='changed'),p)
-reject(auto_annotation_audit(root,tmp,results,refpath,ipath,cpath,file.path(tmp,'_ecoda_owners'),'fixture'))
+failure<-tryCatch(auto_annotation_audit(root,tmp,results,refpath,ipath,cpath,file.path(tmp,'_ecoda_owners'),'fixture'),error=function(e)e)
+stopifnot(inherits(failure,'error'),grepl(p,conditionMessage(failure),fixed=TRUE),
+ grepl('expected=',conditionMessage(failure),fixed=TRUE),
+ grepl(paste0('actual=',unname(tools::md5sum(p))),conditionMessage(failure),fixed=TRUE))
 unlink(tmp,recursive=TRUE)
 cat('PASS: exact auto row inventory/counts, stored CLR/distance/pseudocount boundary, blocked ambiguity, obs-only loader, and checksum-before-RDS\n')
