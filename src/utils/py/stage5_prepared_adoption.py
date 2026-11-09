@@ -1,7 +1,7 @@
-"""Finite copy-only recovery of six prepared caches and sixteen metadata exports.
+"""Copy reviewed preparation artifacts into exact fresh derivative namespaces.
 
-This is not a recovery dispatcher: the approved receipt has exactly 23 payloads,
-uses the existing immutable input binding, and cannot authorize scientific fits.
+The original contract requires all 23 payloads. A separate metadata-only
+contract copies precisely the selected batch dataset/view union, without fits.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import tempfile
 import derivative_artifacts as da
 
 SCHEMA = "ecoda_stage5_prepared_adoption_v1"
+METADATA_SCHEMA = "ecoda_stage5_metadata_adoption_v1"
 CONTEXTS = ("benchmark", "batch_effect/uncorrected_final", "batch_effect/corrected_final")
 VARIANTS = ("schvg2000", "hvg2000", "hvg500", "hvg2000_bl", "hvg1000", "hvg3000")
 
@@ -72,14 +73,18 @@ def prepare(receipt_path, sha256, config_path, context):
     receipt_path = da.absolute(receipt_path)
     require(re.fullmatch("[0-9a-f]{64}", sha256) and digest(receipt_path) == sha256, "receipt checksum differs")
     receipt = json.loads(receipt_path.read_text())
-    require(receipt["schema"] == SCHEMA and receipt["state"] == "APPROVED_COPY_ONLY"
+    require(receipt["schema"] in (SCHEMA, METADATA_SCHEMA) and receipt["state"] == "APPROVED_COPY_ONLY"
             and receipt["original_gate_state"] == "FAILED", "receipt purpose/state differs")
+    metadata_only = receipt["schema"] == METADATA_SCHEMA
     config_path = da.absolute(config_path)
     require(receipt["config_sha256"] == digest(config_path), "configuration differs")
     current, _ = da.active_binding(config_path)
-    require(current["run_id"] == receipt["target_run_ids"][context], "target run differs")
-    require(set(receipt["sources"]) == set(CONTEXTS) == set(receipt["target_run_ids"]), "context coverage differs")
-    require(len(set(receipt["target_run_ids"].values())) == 3, "target runs must be distinct")
+    contexts = set(receipt["target_run_ids"])
+    require(context in contexts and current["run_id"] == receipt["target_run_ids"][context], "target run differs")
+    require(set(receipt["sources"]) == contexts and
+            (bool(contexts) and contexts <= set(CONTEXTS[1:]) if metadata_only else contexts == set(CONTEXTS)),
+            "context coverage differs")
+    require(len(set(receipt["target_run_ids"].values())) == len(contexts), "target runs must be distinct")
     require(len(receipt["evidence"]) == 3 and len({item["path"] for item in receipt["evidence"]}) == 3,
             "missing/duplicate reviewed scientific/accounting evidence")
     for evidence in receipt["evidence"]:
@@ -87,11 +92,26 @@ def prepare(receipt_path, sha256, config_path, context):
     config = json.loads(config_path.read_text())
     batch = {key for key, value in config.items() if not key.startswith("_") and value.get("use_for_batch_effect") is True}
     require(len(batch) == 8, "this finite recovery requires exactly eight configured batch cohorts")
-    expected = {("benchmark", "pseudobulk", "Stephenson", "benchmark_analysis", variant) for variant in VARIANTS}
-    expected.add(("benchmark", "timing", "Stephenson", "benchmark_analysis", ""))
-    for ctx in CONTEXTS[1:]:
-        view = "batch_effect_" + ("uncorrected" if ctx.endswith("uncorrected_final") else "corrected")
-        expected.update((ctx, "metadata", dataset, view, "") for dataset in batch)
+    if metadata_only:
+        require(set(receipt["selected_metadata"]) == contexts, "metadata selection contexts differ")
+        expected = set()
+        for ctx, rows in receipt["selected_metadata"].items():
+            view = "batch_effect_" + ("uncorrected" if ctx.endswith("uncorrected_final") else "corrected")
+            require(isinstance(rows, list) and rows and all(set(row) == {"dataset", "view"} and
+                    row["dataset"] in batch and row["view"] == view and
+                    view in config[row["dataset"]].get("views", {}) for row in rows), "invalid selected batch metadata")
+            keys = {(ctx, "metadata", row["dataset"], row["view"], "") for row in rows}
+            require(len(keys) == len(rows), "duplicate selected metadata")
+            expected.update(keys)
+        selected_scope = {(row["dataset"], row["view"]) for row in receipt["selected_metadata"][context]}
+        binding_scope = {tuple(line.split("\t")[:2]) for line in Path(current["selection"]).read_text().splitlines()}
+        require(binding_scope == selected_scope, "metadata scope differs from selected target dataset/view union")
+    else:
+        expected = {("benchmark", "pseudobulk", "Stephenson", "benchmark_analysis", variant) for variant in VARIANTS}
+        expected.add(("benchmark", "timing", "Stephenson", "benchmark_analysis", ""))
+        for ctx in CONTEXTS[1:]:
+            view = "batch_effect_" + ("uncorrected" if ctx.endswith("uncorrected_final") else "corrected")
+            expected.update((ctx, "metadata", dataset, view, "") for dataset in batch)
     scratch = Path(current["run_root"]).parent.parent
     current_inputs = input_rows(current)
     current_runtime = fields(Path(current["run_root"]) / "manifests/runtime.identity")
@@ -169,13 +189,15 @@ def prepare(receipt_path, sha256, config_path, context):
                     ANALYSIS_PASS=view.removeprefix("batch_effect_"),
                     ANALYSIS_VARIANT="final" if ctx.endswith("uncorrected_final") else "corrected_final").items())
                     and status.get("TASK_ID") == str(metadata_order[ctx].index((dataset, view)) + 1), "metadata status differs")
+            if metadata_only:
+                require(status.get("STATUS") == "EXPORTED", "metadata-only adoption requires an original exported task")
         else:
             require(item["status"] is None, "unexpected metadata status")
         if ctx == context:
             target = Path(current["run_root"]) / "logs" / relative if kind == "timing" else da.context_root(current, ctx) / relative
             selected.append(dict(kind=kind, dataset=dataset, view=view, source=str(source), target=str(target),
                                  producer=producer, md5=item["md5"], size=item["size"]))
-    require(observed == expected and len(receipt["artifacts"]) == 23, "finite 23-payload coverage differs")
+    require(observed == expected and len(receipt["artifacts"]) == len(expected), "finite payload coverage differs")
     return receipt, current, selected
 
 
@@ -212,9 +234,10 @@ def main():
             da.create_only(Path(str(target) + ".md5"), f"MD5={item['md5']}\nSIZE={item['size']}\nPATH={target}\n".encode())
         finally:
             temporary.unlink(missing_ok=True)
-    report = dict(schema=SCHEMA, operation="COPY_WITHOUT_REFIT", original_gate_state="FAILED",
+    report = dict(schema=receipt["schema"], operation="COPY_WITHOUT_REFIT", original_gate_state="FAILED",
                   receipt_path=args.receipt, receipt_sha256=args.sha256, binding_sha256=digest(Path(binding["run_root"]) / "manifests/artifact_bindings.json"),
-                  fit_timing="original cache/timing bytes and timing IDs preserved; copy cost is not a fit", artifacts=selected)
+                  fit_timing=("metadata byte-copy only; no cache, timing payload or scientific refit" if receipt["schema"] == METADATA_SCHEMA else
+                              "original cache/timing bytes and timing IDs preserved; copy cost is not a fit"), artifacts=selected)
     da.create_only(report_path, (json.dumps(report, sort_keys=True, indent=2) + "\n").encode())
 
 

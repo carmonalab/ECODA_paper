@@ -67,10 +67,11 @@ decisions have been applied to existing artifacts.
   Active controller/reuse source is9ca2453, committed/pushed and
   deployed as an immutable Bamboo snapshot. Later reviewed diagnostics6bcf26b
   and compact-analysis code14e6749 are pushed but do not alter active workers. External application work remains excluded.
-- **Current main wave RUNNING:** source9ca, launched08:18:46Z;32method
+- **Main wave last confirmed RUNNING (11:15Z):** source9ca, launched08:18:46Z;32method
   arrays and32watchdogs submitted acrossbenchmark/uncorrected/corrected.
   Allthree contexts have actualmethod execution logs; correctedMrVI is
-  training and correctedPILOT has saved outputs. No terminalaudit yet.
+  training and correctedPILOT has saved outputs. FreshSSH reads laterstalled;
+  no new terminalevent or accounting audit has been observed.
 - **Hardware policy clarified/applied:** benchmarktimings retainEPYC-7742/
   configuredGPU model; bothbatch views permit anyhardwaremodel. Exact18
   pendingbatch tasks had onlySlurmFeatures cleared with before/afterproof;
@@ -2975,3 +2976,52 @@ recoverycontexts/correctedmethodmatrix and eight metadata-only copies. The
 current mainwave must still terminalinspect before sealing actualfailed-row
 scope and launchingrecovery. Its originalone-rowGloScope proposal remains
 incomplete after the correctedQOT startup failures.
+
+
+### Selected metadata-only adoption independently accepted
+
+New helper receipt schemaecoda_stage5_metadata_adoption_v1 supports exactly
+the selected nonempty batchcontext subset and its explicitselected_metadata
+dataset/view union. targets,sources andselected_metadata must have identical
+context keys; targetbindings determine the exact scientificdataset/view
+selection. Artifacts aremetadata ONLY: noPB caches, timing, benchmark copies
+or unusedcontexts. The originalecoda_stage5_prepared_adoption_v1 contract
+remains exactly23payloads/all3contexts. No fake sourceTASK0 provenance is
+accepted: futureselected8 copies use originalv1 EXPORTED task1..8 evidence,
+whose bytes already passed the23copy validation.
+
+Current runtime/config/H5ADidentity, payload/proof/owner/status and fresh
+target checks are retained. Sourcebytes/modes/statuses are untouched; new
+truthful copy records/NOOP statuses/owners reachOK only after actualmetadata
+semanticvalidation. The8Feather fixture proves PENDING0 and NO metadataexport
+Slurm jobs, with no unusedbenchmark/uncorrected roots. Missing/extra/foreign
+contexts/payloads, corruption, alteredinput, TASK0, existingtarget andforeign
+ACTIVE owner failclosed. Review corrected one negativefixture to refresh its
+mutatedbindingproof and assert the exactH5AD-identity rejection; production
+comparison was already intact.
+
+Newselected8 test and independent correctedfixturePASS. Both original23
+metadata and actual6-cache/RDS/BL/timing/no-refit regressionsPASS. Twofile
+implementation/test package accepted, sourceSHA
+`6e31fdf0cd86ced0ead9930c265b755be92f7af65c54ef7edb2bd5923fe8d287`,
+testSHA`14dfb78b84f86bb3d45d97b4a653ba6639866d068b0b5df8f8f03a3d6fc96e8d`.
+This is code acceptance; no productionreceipt/recoverycontext or newgate is
+sealed/launched before the currentwave's terminalcatalog and review.
+
+### SSH observation delay — status remains unconfirmed after lastgoodcheck
+
+The next roughly30minute readonlywatchdog/error collector did not complete.
+A separate minimalSSH date command stalled too. A fresh connection (noSSH
+multiplexing) establishedTCP, verified the knownhostkey and progressed
+through keyexchange/serviceaccept before timingout; localssh-add public-key
+listing returns normally. No key/authconfiguration or accesspolicy changed.
+This does not prove a compute failure or a stoppedgate; remote jobs were
+launched durably and must be reconciled from real evidence whenaccessworks.
+
+Only the two stalled LOCALreadonlydiagnostic SSHclients were terminated,
+verified by exactcommand+collectorparent. ZEROHPCworkers or durablewaiter
+processes were terminated. Original waitsession36153 and its sole output
+consumer977 remain untouched. Do not start anotherwait/relaunchwrapper or
+claim a freshRUNNING/COMPLETED state from silence. Noactivev2accountingquery
+hasoccurred. Continuecode checkpointing and retry oneboundedtransportcheck
+later; hostname/clusterpolicy remainsBamboo, without a Yggdrasilfallback.
