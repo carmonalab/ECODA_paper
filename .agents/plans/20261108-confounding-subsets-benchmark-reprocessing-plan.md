@@ -71,9 +71,8 @@ decisions have been applied to existing artifacts.
   worker outputs; corrected has all7arrays submitted and successful startup
   preflights, but no method-start logs. One-off targeteddiagnostics prove
   EPYC-7742 nodes are draining forRebootASAP, NextStateUNDRAIN. No new method
-  failure was found. User choice is pending on also allowingEPYC-7763 for
-  queuedCPU tasks, with mixed-hardware timing provenance; no job/resource
-  changes have been made.
+  failure was found. The user explicitly chose to retainEPYC-7742 and wait
+  for nodes to return; no CPU-model/resource changes are authorized or made.
 - **Changed inputs ready:** approved Bassez metadata repair (74948cells,
   26samples,40HRtypes); all17 Stage3 outputs produced/NAS-synced;53-sample
   Stephenson benchmark input individually NOOP-reviewed. Original Stage3 gate
@@ -2817,3 +2816,28 @@ No production gate has been prepared/launched: first finish and terminal
 inspectmainv2, review selectedpreflight evidence, seal/stage exactcontrols
 and create the next committed immutable snapshot. Saved-cluster runner
 checkpoint781b166 is committed; active9ca workers remain unchanged.
+
+
+### CPU decision resolved — retain EPYC-7742
+
+The user answered the scheduling question: **Keep EPYC-7742; wait for nodes
+to return.** Retain the existing benchmarkCPU model/threads/memory/runtime
+contract for queued and recovery method jobs. No EPYC-7763 expansion, job
+cancellation, resource adjustment or re-submission is made. Existing running
+work and the original single durable waiter continue. Future one-CPU evidence
+operations do not supply benchmark fit timings and retain their reviewed
+operation-specific resource contracts. Do not ask again or infer a different
+CPU preference from continued maintenance delays.
+
+Reviewed checkpoints781b166 (saved-cluster runner) andf1be3fa (finite legacy
+evidence controller/auditor) are pushed. All scoped local implementation
+packages currently pass focused checks/independent review; remaining work is
+execution/terminal review, the targeted actual failed-row recovery, and P6
+source compatibility/derived/reporting runs with their recorded prerequisites.
+The tracked working tree is otherwise clean; external-agent untracked files
+remain preserved and excluded.
+
+The existing durable waitprocess(session36153) has one asynchronous output
+consumer(cell977). This is not a second gatewait or scheduler poll. Observe
+completion through that consumer; do not attach another consumer directly to
+session36153 or start another durablewait command.
