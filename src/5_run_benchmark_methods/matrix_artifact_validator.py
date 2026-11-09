@@ -1316,6 +1316,15 @@ def validate(
         _validate_variant_root(root, analysis_variant)
         if analysis_variant == "final":
             variant_datasets = FINAL_UNCORRECTED_DATASETS
+            if os.environ.get("ECODA_ARTIFACT_BINDING"):
+                if config_path is None or Path(config_path).resolve() != Path(os.environ["DATASETS_JSON_FILE"]).resolve():
+                    raise ValueError("bound final validation requires the immutable --config")
+                variant_datasets = tuple(
+                    dataset for dataset in _configured_batch_effect_datasets(config_path, "batch_effect_uncorrected")
+                    if not dataset.startswith("_")
+                )
+                if not variant_datasets:
+                    raise ValueError("final config has no selected uncorrected datasets")
         else:
             if config_path is None or not config_path.is_file():
                 raise ValueError(

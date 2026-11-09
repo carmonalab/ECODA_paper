@@ -61,17 +61,18 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, failed16 recovery RUNNING
+## Live checkpoint — 2026-11-09, failed16 terminal FAILED; targeted recovery under diagnosis
 
 - **Current recovery:** `ecoda_stage5_failed16_20261109_v1` launched at
-  16:41:50 UTC / 17:41:50 CET from immutable source `0314f20`. It selects
+  16:41:50 UTC and reached actual `FAILED` at 17:38:05 UTC. It selected
   exactly 16 failed method rows in three fresh, disjoint contexts: benchmark
   GloScope 1; uncorrected MrVI 4; corrected MrVI 3 and QOT 8. No healthy row,
   preparation cache or annotation is being recomputed. Initial expected graph:
   16 scheduler IDs / 38 task units, excluding recorded OOM-only retries.
-- **Monitoring:** one official unbounded waiter, session 25146 / output
-  consumer cell 142, is active. Temporary idle-sleep prevention is bound to
-  its verified local process. No persistent power setting was changed.
+- **Monitoring:** the single official waiter, session 25146 / consumer cell
+  142, completed normally at the failure event; it is no longer active. Its
+  process-bound sleep assertion ended. A temporary one-hour assertion covers
+  diagnosis; no persistent power setting was changed.
 - **Latest startup/queue evidence, 16:46 UTC:** recovery has reached H5AD
   input preflight; some preflight tasks are pending unavailable/draining
   nodes. This does not establish that all method jobs are already running.
@@ -3604,3 +3605,74 @@ watchdog stdout, queued old roots/retries, old writers or changed evidence
 block readiness. `READY_FOR_SOLE_INSPECT` is only an enumeration/absence
 observation, never a terminal science approval. No accounting or submission
 occurs in this collector, and it has not yet been executed on Bamboo.
+
+### Failed16 terminal failure and sole inspection — 2026-11-09 17:38 UTC
+
+The official waiter returned the actual generation-bound FAILED receipt,
+wrapper exit 1; parent and all three child terminal markers are FAIL. Ten
+actual scheduler IDs, not the planned sixteen, were emitted. Strict parent/
+child ledgers agree and both watchdogs report retry index zero. Corrected
+preflight failure prevented its eleven science rows, two watchdogs, aggregate
+and R-environment preflight from being submitted. No overscope occurred.
+Actual submitted task units: 23 (13 H5 preflight + one Renv + five science +
+two watchdogs + two aggregates). These are submission counts, not science
+release claims.
+
+- Benchmark: GloScope `4666183` failed at startup with `0:53`; its watchdog
+  `4666184` and aggregate `4666185` failed. H5/R preflights passed.
+- Uncorrected: MrVI array `4666187`, watchdog `4666191` and aggregate
+  `4666192` completed successfully, but the final controller artifact
+  validation failed. Preserve all four outputs; audit them before any refit.
+  A historical uncorrected-dataset validator allowlist is being investigated.
+- Corrected: H5 preflight `4666196` passed rows 1–5; rows 6–8 lack statuses
+  and failed with `0:53`. No corrected method was submitted by this gate.
+
+The one complete terminal inspect was performed over all ten actual IDs at
+17:40:24 UTC. Its raw 23 rows include the startup failures and remain immutable;
+audit passed=false, reviewer approval=false, gate FAILED. Internal numeric
+JobIDRaw task records must not be mapped to logical array positions by guess.
+No second official inspection/accounting query was issued.
+
+Evidence: `.gate/failed16_inputs_20261109_v1/terminal_text.observed.json` and
+`.gate/ecoda_stage5_failed16_20261109_v1.inspect.json`. Retained scontrol
+allocation descriptors have expired; current failing-node identity is unknown.
+The earlier original QOT failure on CPU046 does not prove CPU046 caused these
+new failures. No node exclusion, hardware change or blind retry is approved.
+A concrete, additional read-only allocation-diagnostic query was presented to
+the user as a narrow exception to the one-accounting-query rule. It remains
+pending; do not execute it or infer approval from elapsed time.
+
+Assignments: batch_subset_audit diagnoses/fixes only the uncorrected validator
+and validates completed outputs without refitting; benchmark_dependency_audit
+checked retained allocation evidence (none available) and existing exclusion
+interfaces; docs_checkpoint_audit independently verified exact terminal scope.
+A native SBATCH_EXCLUDE environment variable was not found in the official
+Slurm source; do not assume it can implement an exclusion. The next science
+scope is not sealed until diagnosis and reuse review are complete.
+Temporary `caffeinate -i -t 3600`, session 80742, started around 17:38 UTC,
+protects the terminal-audit handoff. It changes no persistent setting.
+
+### Uncorrected-final validator repair — independently accepted
+
+The exact four-cohort fixture reproduced the real controller error:
+`final selection contains an unapproved dataset: Lupus_PBMC`. The derivative
+uncorrected validator still used its historical five-cohort list, while the
+current approved registry includes Lupus. The minimal fix resolves current
+flag-and-view-enabled, nonunderscore cohorts only for immutable derivative-bound
+uncorrected final validation. The immutable config and root binding remain
+mandatory. Historical unbound validation and corrected behavior are unchanged.
+The focused fixture and independent negatives pass (disabled/viewless/diagnostic,
+wrong config/root/view, corrupt payload and foreign producer).
+
+Validator SHA `c7b9c7f75a9e3bd0de2544d9befc8cf715e9b56a76d2ca00f6d12a036a090d97`;
+test SHA `fcec8ce985ff5550e6e5c20d8daf3f594062ea40878ad2ff000073a05bf5c257`.
+Next: commit/push an immutable new revision and perform a read-only check of the
+four existing MrVI outputs with that exact validator and their original bound
+producer/config identities. Do not patch old source, owners or gate statuses;
+no refit or H5AD read is authorized by this validation alone.
+
+Official Slurm 26.05.4 source also documents a startup standard-I/O error path
+whose error code 4021 is displayed as `0:53` by accounting. Missing worker logs
+fit that hypothesis; they do not establish Bamboo's actual errno or allocation.
+This is source-level diagnostic context, not a confirmed runtime cause or node.
+The user allocation-diagnostic exception remains pending.
