@@ -1237,7 +1237,7 @@ stage3_watchdog_terminal_ok() {
 
 sync_selected() {
   local manifest="$1" ds view path output remote_dir sync_lock lock_root
-  local transfer_manifest verify_manifest expected_output local_digest local_size
+  local transfer_manifest verify_manifest expected_output local_digest local_size selected_nas_dir
   local rc=0 local_base="${HPC_SCRATCH_DIR}" nas_base="${NAS_TARGET_DIR}"
   if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
     local_base="$(ecoda_derivative_root datasets)" || return 1
@@ -1316,9 +1316,34 @@ sync_selected() {
         rc=1
         continue
       fi
+      if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+        [[ "${remote_dir}" == "${NAS_TARGET_DIR}/"* ]] &&
+          _ecoda_validate_path_ancestors "${remote_dir}/${output}" "${NAS_TARGET_DIR}" || {
+          rc=1
+          continue
+        }
+      fi
       chmod 666 "${remote_dir}/${output}" "${remote_dir}/${output}.md5" ||
         rc=1
-      chmod 777 "${remote_dir}" "${remote_dir%/*}" || rc=1
+      if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+        # mkdir under the private controller umask also creates release/run
+        # ancestors. Normalize only this selected path, never the NAS root.
+        selected_nas_dir="${remote_dir}"
+        while [[ "${selected_nas_dir}" != "${NAS_TARGET_DIR}" ]]; do
+          [[ "${selected_nas_dir}" == "${NAS_TARGET_DIR}/"* &&
+             -d "${selected_nas_dir}" && ! -L "${selected_nas_dir}" ]] &&
+            chmod 777 "${selected_nas_dir}" &&
+            [[ "$(_ecoda_artifact_mode_bits "${selected_nas_dir}")" == 777 ]] || {
+            rc=1
+            break
+          }
+          selected_nas_dir="${selected_nas_dir%/*}"
+        done
+        [[ "$(_ecoda_artifact_mode_bits "${remote_dir}/${output}")" == 666 &&
+           "$(_ecoda_artifact_mode_bits "${remote_dir}/${output}.md5")" == 666 ]] || rc=1
+      else
+        chmod 777 "${remote_dir}" "${remote_dir%/*}" || rc=1
+      fi
     done < "${verify_manifest}"
   fi
   rm -f "${transfer_manifest}" "${verify_manifest}"
