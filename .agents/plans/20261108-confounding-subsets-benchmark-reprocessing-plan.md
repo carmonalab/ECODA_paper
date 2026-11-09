@@ -3481,3 +3481,49 @@ hardware is unchanged. Default campaign behavior remainsbackward-compatible.
 The observer spool-bootstrap and generic auditor routing also passed independent
 review; they remain an unlaunched fallback after the16-row recovery gate.
 This checkpoint includes no scientific job submission or original accounting.
+
+### Failed16 concrete recovery controls — prelaunch review
+
+Reviewed source checkpointsf1a9922 and0314f20 are pushed. Bamboo's clean checkout
+now points to0314f207dfe17f70c2ffdfcc31c4ecd00379b41c, with a verified immutable
+snapshot under_ecoda_source_snapshots/20261109-failed16-recovery-v1/<commit>.
+Archive SHAa0fbb420483231254a2743ef49fa192c35e17af2e6e50ffda298890e3bb5f35c;
+source-manifest SHAd1a775fc43644eab9d643b3cc80546545f8e74d9dea218dfd0ba4d19d6104ca0.
+Actual NFS mount is smednas515:/volume1/Shared at/srv/smednas515.unige.ch/carmona_smb.
+The runtime image was fully rehashed and matches8fcd00b7...e05e34, with unchanged
+manifest1c4c2cc3...edfd50 and pinned R/Python identities. Snapshot creation first
+stopped because its new parent did not exist; creating only that fresh parent
+resolved it. No jobs were submitted by either preparation attempt.
+
+Concrete gateecoda_stage5_failed16_20261109_v1 / parentstage5_failed16_20261109_v1
+uses three fresh childrenstage5_failed16_{benchmark,uncorrected,corrected}_20261109_v1.
+Every artifact/cache/log/NAS/sync-owner namespace is disjoint from originalv2.
+Exact controls live locally.gate/failed16_inputs_20261109_v1 and remotely
+_ecoda_inputs/20261108-confounding-subsets-v1/failed16-v1. All14 production
+control files were uploaded, SHA256-checked and frozen read-only. Wrapper SHA
+bf891bdaad6e6435ecc7f6ce89420116e7bc95c2004b92654a79d8d6ea3dccaf.
+The16 selected rows remain exactly those listed above;13 current H5AD references
+and two already approved healthy Stage2/Stage4 formal dependencies are bound.
+Stopped main-v2 is never a successful formal dependency.
+
+Metadata12 byte-copy receipt46c570a5c65d4a26b7bf01d000eb4a1befc6840cf11f7eb4b1c74b3e12d36737
+was independently approved. It uses originalv1 EXPORTED tasks5–8 uncorrected
+and1–8 corrected, retaining original missing producer/owner records truthfully;
+new copies receive their own provenance. Fresh no-compute remote checks:
+recovery_preflight.observed.json SHAb2830cad9ea00efb2e93658ad0ce13d246771b3d94b5e8adf257d535faa930d4;
+metadata12_source_proofs.observed.json SHA127d72408f3e947977dfbda6575150507ec664bc22efb576e170e5b09073b43b.
+All12 small Feather payloads pass actual configured-Python schema checks and
+exact original MD5/size/sidecar/status/source/runtime/binding/evidence proofs.
+No H5AD or count matrix was read locally or transferred. No cache/timing/refit
+is part of this adoption.
+
+Resource policy is7 MrVI GPU-any,8 QOT CPU-any and1 benchmark GloScope CPU7742.
+The existing batch-view constraint removal covers QOT; no additional source fix
+or benchmark hardware change was required. Expected initial graph is16 IDs /
+38 task units:4 fit arrays(16tasks),4watchdogs,3aggregates,3H5 preflight arrays
+(13tasks),2R-environment preflight scalars. These supersede provisional counts.
+The actual dispatcher stub verifies science graph separately from stubbed
+preflights. Final fixture/launch review is pending at this documentation point.
+GloScope's old error was a missing input_artifacts.tsv during startup despite
+that authoritative file existing; this supports transient filesystem visibility,
+not a demonstrated GloScope model defect. Preserve original error evidence.
