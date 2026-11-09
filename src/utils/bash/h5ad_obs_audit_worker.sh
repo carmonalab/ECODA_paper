@@ -263,6 +263,14 @@ if [[ "${AUDIT_MODE}" == metadata ]]; then
      "${METADATA_PASS}" == "${EXPECTED_METADATA_PASS}" ]] ||
     fail "metadata export variant/pass identity mismatch"
   METADATA_PASS="${EXPECTED_METADATA_PASS}"
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    source "${SOURCE_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+    ecoda_derivative_load stage5 || fail "metadata export derivative binding is invalid"
+    EXPECTED_METADATA_ROOT="$(ecoda_derivative_root "batch_effect/${METADATA_PASS}_final")" ||
+      fail "metadata export derivative scratch root is invalid"
+    EXPECTED_METADATA_NAS_ROOT="$(ecoda_derivative_root "batch_effect/${METADATA_PASS}_final" nas)" ||
+      fail "metadata export derivative NAS identity is invalid"
+  fi
   [[ "${METADATA_ROOT}" == "${EXPECTED_METADATA_ROOT}" ]] ||
     fail "metadata export variant/root identity mismatch"
   if [[ -n "${METADATA_NAS_ROOT}" &&
@@ -311,6 +319,10 @@ if [[ "${AUDIT_MODE}" == metadata ]]; then
        "${expected_input_name}" != *$'\t'* ]] ||
       fail "metadata export configured H5AD output name is unsafe"
     expected_input="${HPC_SCRATCH_DIR%/}/${row_dataset}/output/${expected_input_name}"
+    if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+      expected_input="$(ecoda_derivative_input "${row_dataset}" "${row_view}")" ||
+        fail "metadata export input is outside the immutable derivative binding"
+    fi
     [[ "${row_input}" == "${expected_input}" ]] ||
       fail "metadata export input is not the configured ${METADATA_PASS} H5AD path"
     case " ${seen_metadata_rows} " in
@@ -331,6 +343,12 @@ if [[ "${AUDIT_MODE}" == metadata ]]; then
     fail "metadata export task ID is outside manifest rows"
   [[ -n "${row}" ]] || fail "metadata export selected row is missing"
   IFS=$'\t' read -r row_dataset row_view row_input row_output row_extra <<< "${row}"
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    ecoda_require_input_ownership "${row_input}" "${RUN_ID}" ||
+      fail "metadata export input has an invalid or active owner"
+    ecoda_derivative_input "${row_dataset}" "${row_view}" file content >/dev/null ||
+      fail "metadata export bound input checksum is invalid"
+  fi
   metadata_output_parent="$(dirname "${row_output}")"
   _ecoda_validate_run_owned_directory_for_create \
     "${metadata_output_parent}" "${HPC_SCRATCH_DIR}" ||
