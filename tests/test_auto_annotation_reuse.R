@@ -23,7 +23,7 @@ stopifnot(auto_annotation_compare(bad,raw)$status=='BLOCKED')
 bad<-b;bad$counts<-as.matrix(b$counts)+0.5
 stopifnot(auto_annotation_compare(bad,raw)$status=='BLOCKED')
 # Exercise the real obs loader, manifest-bound RDS reads, and complete cohort loop.
-tmp<-tempfile('ecoda-auto-reuse-');dir.create(tmp)
+tmp<-tempfile('ecoda-auto-reuse-');dir.create(tmp);tmp<-normalizePath(tmp)
 Sys.setenv(RETICULATE_PYTHON=file.path(root,'.pixi/envs/default/bin/python'))
 suppressPackageStartupMessages(library(reticulate))
 py_run_string("import anndata as ad,numpy as np,pandas as pd\ndef fixture(path):\n a=ad.AnnData(X=np.ones((4,2)),obs=pd.DataFrame({'Sample':['s1','s1','s2','s2'],'sample':['s1','s1','s2','s2'],'layer1':['A','B','A','A'],'layer2':['A','B','A','A'],'layer3':['A','B','A','A'],'scATOMIC_pred':['A','B','A','A'],'layer_6':['A','B','A','A']},index=['c1','c2','c3','c4']),var=pd.DataFrame({'hvg_rank':[1.,2.]},index=['g1','g2']))\n a.layers['counts']=a.X.copy();a.uns['ecoda_annotation_version']='fixture';a.write_h5ad(path)\n")
@@ -92,7 +92,26 @@ stopifnot(report$cohorts$Bassez$rows[[1]]$status=='COUNT_MATCH_PROVENANCE_PENDIN
  report$cohorts$Bassez$rows[[1]]$producer$producer_record$RUN_ID=='historical_producer',
  report$cohorts$Bassez$rows[[1]]$producer$producer_record$MD5==unname(tools::md5sum(producer_path)),
  length(report$cohorts$Bassez$obs_sha256)==1)
-p<-file.path(results,'Bassez_composition.rds');Sys.chmod(p,'0644');saveRDS(list(unexpected='changed'),p)
+ # Actual Rscript startup writes its R_HOME warning to stdout before R code.
+ # The explicit create-only output remains pure JSON and cannot be replaced.
+ cli_output<-file.path(tmp,'cli-evidence.json')
+ cli_args<-c('--vanilla',file.path(root,'src/utils/r/audit_auto_annotation_reuse.R'),
+   root,tmp,results,refpath,ipath,cpath,file.path(tmp,'_ecoda_owners'),'fixture',cli_output)
+ inventory_paths<-vapply(strsplit(inventory,'\t'),`[[`,character(1),2)
+ before<-tools::md5sum(c(refpath,ipath,cpath,inventory_paths))
+ invoke_cli<-function() suppressWarnings(system2(file.path(R.home('bin'),'Rscript'),
+   vapply(cli_args,shQuote,character(1)),stdout=TRUE,stderr=TRUE,
+   env=c('R_HOME=/ecoda-deliberately-wrong-r-home')))
+ logs<-invoke_cli()
+ if(!is.null(attr(logs,'status'))) stop(paste(logs,collapse='\n'))
+ stopifnot(is.null(attr(logs,'status')),
+   any(grepl('ignoring environment value of R_HOME',logs,fixed=TRUE)),
+   jsonlite::fromJSON(cli_output,simplifyVector=FALSE)$cohorts$Bassez$n_cells==4L,
+   identical(tools::md5sum(names(before)),before))
+ cli_md5<-unname(tools::md5sum(cli_output));logs<-invoke_cli()
+ stopifnot(!is.null(attr(logs,'status')),unname(tools::md5sum(cli_output))==cli_md5)
+ reject(auto_annotation_cli(c(rep('not-read',8),'relative.json')))
+ p<-file.path(results,'Bassez_composition.rds');Sys.chmod(p,'0644');saveRDS(list(unexpected='changed'),p)
 failure<-tryCatch(auto_annotation_audit(root,tmp,results,refpath,ipath,cpath,file.path(tmp,'_ecoda_owners'),'fixture'),error=function(e)e)
 stopifnot(inherits(failure,'error'),grepl(p,conditionMessage(failure),fixed=TRUE),
  grepl('expected=',conditionMessage(failure),fixed=TRUE),

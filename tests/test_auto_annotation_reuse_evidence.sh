@@ -33,7 +33,7 @@ set -euo pipefail
 shift 2
 "${TEST_PYTHON}" - "$@" <<'PY'
 import hashlib,json,pathlib,sys
-source,scratch,results,refs,inventory,legacy,owners,run=sys.argv[1:]
+source,scratch,results,refs,inventory,legacy,owners,run,output=sys.argv[1:]
 rows=[x.split('\t') for x in pathlib.Path(inventory).read_text().splitlines()]
 config=json.loads((pathlib.Path(source)/'datasets.json').read_text())
 references={x[0]:x for x in (x.split('\t') for x in pathlib.Path(refs).read_text().splitlines())}
@@ -46,7 +46,9 @@ for d in x['scope']:
     fields={f:config[d]['columns'].get(f) for f in ['cell_type_low_res','cell_type_high_res']}
     overlap={k:v for k,v in fields.items() if v in {'layer1','layer2','layer3','scATOMIC_pred'}|{'layer_'+str(i) for i in range(1,7)}}
     x['cohorts'][d]={'configured_ct_fields':fields,'configured_ct_autofield_overlap':overlap,'input':references[d][2],'expected_h5ad_md5':references[d][3],'obs_sha256':'f'*64,'n_cells':4,'artifact_inventory':[dict(zip(['V1','V2','V3','V4'],r)) for r in selected],'artifact_keys':keys,'invalid_methods':[k[0] for k in keys.values()],'blocked_methods':[],'rows':[{'method':keys[r[1]][0],'evidence_role':'dependency_evidence' if keys[r[1]][0].startswith('ECODA_authors_') else 'automatic_composition_evidence','artifact':r[1],'artifact_md5':r[2],'status':'INVALID_CURRENT_COUNTS'} for r in selected]}
-print(json.dumps(x))
+print('WARNING: ignoring environment value of R_HOME')
+with pathlib.Path(output).open('x') as handle:
+    json.dump(x,handle)
 PY
 EOF
 cat > "${TMP}/bin/sbatch" <<'EOF'

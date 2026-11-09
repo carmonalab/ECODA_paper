@@ -1,5 +1,5 @@
-# Read-only, finite audit. No expression reads, model fits, or output writes.
-# CLI: SOURCE_ROOT SCRATCH_ROOT RESULT_ROOT INPUT_REFS INVENTORY CHECKSUM_TABLE OWNERS RUN_ID
+# Finite read-only source audit; CLI creates only its new evidence JSON.
+# CLI: SOURCE_ROOT SCRATCH_ROOT RESULT_ROOT INPUT_REFS INVENTORY CHECKSUM_TABLE OWNERS RUN_ID OUTPUT_JSON
 AUTO_ANNOTATION_FIELDS <- c('layer1','layer2','layer3',paste0('layer_',1:6),'scATOMIC_pred')
 auto_annotation_column <- function(key,columns=list()) {
  if(key %in% c('ECODA_authors_LR','ECODA_authors_HR')) {
@@ -242,9 +242,20 @@ for(ds in output$scope) {
 output
 }
 
-if(sys.nframe()==0L) {
- a<-commandArgs(TRUE)
- stopifnot(length(a)==8L)
+auto_annotation_cli <- function(a) {
+ stopifnot(length(a)==9L)
+ output<-a[[9L]];parent<-dirname(output);link<-Sys.readlink(output)
+ if(!startsWith(output,'/')||!dir.exists(parent)||
+    !identical(normalizePath(parent,mustWork=TRUE),parent)||
+    !identical(file.path(parent,basename(output)),output)||
+    file.exists(output)||(!is.na(link)&&nzchar(link)))
+  stop('Evidence output must be an absent canonical absolute file in an existing directory')
  result<-auto_annotation_audit(a[1],a[2],a[3],a[4],a[5],a[6],a[7],a[8])
- cat(jsonlite::toJSON(result,auto_unbox=TRUE,null='null',na='null',pretty=TRUE,digits=16),'\n')
+ temporary<-tempfile('.annotation-evidence-',tmpdir=parent)
+ on.exit(unlink(temporary),add=TRUE)
+ jsonlite::write_json(result,temporary,auto_unbox=TRUE,null='null',na='null',pretty=TRUE,digits=16)
+ if(!file.link(temporary,output)) stop('Evidence output already exists or cannot be created exclusively')
+ invisible(output)
 }
+
+if(sys.nframe()==0L) auto_annotation_cli(commandArgs(TRUE))

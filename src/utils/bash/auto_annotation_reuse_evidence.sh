@@ -219,7 +219,7 @@ if [[ "${MODE}" == worker ]]; then
   ${PIXI_RSCRIPT} --vanilla "${PROJECT_ROOT}/src/utils/r/audit_auto_annotation_reuse.R" \
     "${PROJECT_ROOT}" "${HPC_SCRATCH_DIR}" "${HPC_SCRATCH_DIR}/benchmark/results" \
     "${MANIFESTS}/input_artifacts.tsv" "${MANIFESTS}/legacy_artifacts.tsv" \
-    "${MANIFESTS}/legacy_checksums.md5" "${ECODA_OWNERS_ROOT}" "${ECODA_RUN_ID}" > "${temporary}"
+    "${MANIFESTS}/legacy_checksums.md5" "${ECODA_OWNERS_ROOT}" "${ECODA_RUN_ID}" "${temporary}"
   validate_scope || exit 1
   ln "${temporary}" "${REPORT}"
   rm -f "${temporary}"
