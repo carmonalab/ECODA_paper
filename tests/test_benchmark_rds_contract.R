@@ -823,23 +823,32 @@ withTemporary({
   write_checked(missing_key, list())
   expect_fail(batch_args(missing_key, "gloscope"), "missing GloScope key")
 
+  # Build the current compact screen through its real producer; no model fits.
+  trans_environment <- new.env(parent = globalenv())
+  for (relative in c(
+    "src/utils/imports_worker_transzeroimp.R", "src/utils/math_utils.R",
+    "src/utils/scoring_metrics.R", "src/utils/seurat_utils.R",
+    "src/5_run_benchmark_methods/benchmark_pipeline.R"
+  )) sys.source(file.path(root, relative), envir = trans_environment)
+  variation <- rep(-5:4, 2)
+  second_variation <- rep(c(-2, 1, 3, -1, 0, 2, -3, 4, 1, -2), 2)
+  trans_counts <- as.data.frame(cbind(
+    reference = rep(10, 20), A = 30 + variation, B = 25 + second_variation,
+    C = 35 - variation - second_variation
+  ))
+  rownames(trans_counts) <- paste0("s", seq_len(20))
+  trans_labels <- stats::setNames(factor(rep(c("A", "B"), each = 10)), rownames(trans_counts))
+  trans_value <- suppressWarnings(trans_environment$run_transformation_analysis(trans_counts, trans_labels))
   trans <- file.path(directory, "trans.rds")
-  write_checked(trans, data.frame(
-    trans_method = "counts",
-    ANOSIM_score = 0.1,
-    Modularity_score = 0.2,
-    Adjusted_Rand_Index = 0.3,
-    stringsAsFactors = FALSE
-  ))
-  expect_ok(c("--artifact", trans, "--method", "trans"), "transformation")
+  write_checked(trans, trans_value)
+  expect_ok(c("--artifact", trans, "--method", "trans"), "five-score transformation policy")
   trans_bad <- file.path(directory, "trans-bad.rds")
-  write_checked(trans_bad, data.frame(
-    trans_method = "counts",
-    ANOSIM_score = "not-numeric",
-    Modularity_score = 0.2,
-    Adjusted_Rand_Index = 0.3,
-    stringsAsFactors = FALSE
-  ))
+  trans_legacy <- trans_value[, c("trans_method", "ANOSIM_score", "Modularity_score", "Adjusted_Rand_Index")]
+  attributes(trans_legacy) <- attributes(trans_legacy)[c("names", "row.names", "class")]
+  write_checked(trans_bad, trans_legacy)
+  expect_fail(c("--artifact", trans_bad, "--method", "trans"), "legacy three-score transformation summary")
+  trans_value$ANOSIM_score <- "not-numeric"
+  write_checked(trans_bad, trans_value)
   expect_fail(c("--artifact", trans_bad, "--method", "trans"), "nonnumeric transformation score")
 
   zeroimp <- file.path(directory, "zeroimp.rds")
