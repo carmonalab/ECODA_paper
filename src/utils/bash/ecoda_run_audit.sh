@@ -531,6 +531,12 @@ _audit_analysis_release() {
   case "${purpose}" in
     analysis_metadata_projection) expected_operation=projection ;;
     analysis_pca_render) expected_operation=render-pca ;;
+    saved_cluster_counts_screen)
+      expected_operation=saved-clusters
+      scope_producer=saved_cluster_scope
+      submission_producer=saved_cluster_submission
+      validator_name=saved_cluster_screen.sh
+      ;;
     legacy_analysis_compatibility_audit)
       expected_operation=legacy-audit
       scope_producer=legacy_analysis_audit_scope
