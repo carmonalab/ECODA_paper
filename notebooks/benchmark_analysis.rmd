@@ -22,16 +22,15 @@ analysis settings, result loading, and figure assembly remain below.
 
 ## Inputs
 
--   HPC benchmark result bundles (`${NAS_TARGET_DIR}/benchmark/results/`),
-    including the composition metadata bundles (`<ds>_metadata.rds`: labels,
-    cell/sample counts) and the python-method sample distance/embedding
-    `.feather` files + the merged `execution_times.feather`
-    (`${NAS_TARGET_DIR}/benchmark/embeddings/`), all rsynced by the benchmark
-    submit scripts from `src/5_run_benchmark_methods/`.
--   Optional standalone derived bundles are loaded from independent,
-    run-owned roots.  In `source_mode=composition_snapshot`, the notebook
-    reads only the compact local composition snapshot and never reopens the
-    remote H5AD provenance paths.
+-   `ECODA_BENCHMARK_RELEASE_RDS` and `ECODA_BENCHMARK_RELEASE_MD5` name and
+    checksum-bind the reviewed release control: exact
+    artifact ledger, expected rows and current-input policies, per-dataset
+    primary reference methods, and checksum-bound execution times. Each
+    result and compact dataset metadata bundle requires its review receipt.
+    Legacy aggregate entries and new standalone BL/HR results are selected
+    explicitly; missing or blocked rows stop publication output.
+-   Optional cell-subsetting diagnostics use their explicitly selected,
+    run-owned compact snapshots. Full cohort H5ADs stay on HPC/NAS.
 
 ## Outputs
 
@@ -49,8 +48,11 @@ if (basename(getwd()) == "notebooks") {
   if (file.exists(".Rprofile")) source(".Rprofile")
 }
 source("src/utils/load_all_functions.R")
+source("src/utils/analysis_release.R")
+source("src/utils/evaluation_scores.R")
 source("src/notebooks/benchmark_analysis.R", local = TRUE)
 datasets <- read_datasets_json(view = "benchmark_analysis")
+datasets <- datasets[vapply(datasets, function(x) isTRUE(x$use_for_benchmark), logical(1))]
 # ============================================================
 # ANALYSIS SCOPE — select which methods + datasets the analysis includes.
 #   analysis_scope:    "preprint" = methods and datasets evaluated in the preprint
@@ -66,6 +68,7 @@ datasets <- read_datasets_json(view = "benchmark_analysis")
 # ============================================================
 analysis_scope <- "all"   # "preprint" | "all" (or "extended")
 analysis_methods <- NULL
+analysis_requested_methods <- analysis_methods
 analysis_datasets <- NULL
 
 # Result-key regex of methods added after the preprint analysis (excluded
@@ -114,22 +117,11 @@ path_nas_embeddings <- file.path(path_nas_project, "benchmark", "embeddings")
 path_data <- file.path(getwd(), "data")
 path_plots <- file.path(getwd(), "plots")
 
-# Separation metrics used in the benchmark figures. Any combination of
-# score_label_map names works, e.g. add "sil_score" or "lisi_score"; the
-# alternate modularity neighborhoods are diagnostic-only in Supp fig X2.
-benchmark_metrics <- c("anosim_score", "mod_knn3_score", "cluster_score")
-stopifnot(all(benchmark_metrics %in% names(score_label_map)))
-
-# Canonical non-Supp fig 1/2 benchmark figures and aggregates use only
-# benchmark_metrics. Supp fig 1 and the Supp fig 2 exception use base_metrics.
-base_metrics <- c(
-  "anosim_score",
-  "mod_knn3_score",
-  "cluster_score",
-  "sil_score",
-  "lisi_score"
-)
-stopifnot(all(base_metrics %in% names(score_label_map)))
+# All aggregate comparisons use five equally weighted metrics after min–max
+# scaling within dataset/view/evaluation/metric. LISI is already separation.
+benchmark_metrics <- evaluation_metrics()
+base_metrics <- benchmark_metrics
+stopifnot(identical(benchmark_metrics, names(score_label_map)))
 
 # Methods treated as "default" (highlighted in the parameter-screening
 # figures): main methods at their default parameter setting. The regex is
@@ -173,365 +165,48 @@ result_list <- list()
 NOTE: Pre-processed (e.g. including cell type annotation, clustering, etc.) dataset .rds files (with shortened names) are deposited online at: <https://doi.org/10.6084/m9.figshare.31456522> . They can be used as input for the following code (after adapting the names according to the names defined in `"datasets.json"`):
 
 ```{r message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
-# Fail fast if the HPC benchmark results are unavailable: the chunk below
-# suppresses warnings, and silently missing bundles would render the whole
-# notebook without GloScope/MOFA/Pseudobulk/scITD/composition/trans/zeroimp.
-if (!dir.exists(path_nas_benchmark)) {
-  stop(
-    "HPC benchmark results dir not found: ", path_nas_benchmark,
-    "\nRun the HPC benchmark pipelines first (src/5_run_benchmark_methods/",
-    "run_r_sample_embedding_methods/ and run_transformation_zeroimp_analysis/)",
-    " and make sure the NAS is mounted."
-  )
+# The control RDS contains ledger, expected_scope, reference_method_key and
+# execution_times = list(artifact_path=ABS, md5=MD5). Each dataset's reviewed
+# __dataset_metadata__ row supplies its existing compact composition metadata;
+# optional __trans__/__zeroimp__ rows supply the maintained diagnostic tables.
+# Required new BL/HR/Stephenson rows are never discovered in old directories.
+benchmark_release_path <- Sys.getenv("ECODA_BENCHMARK_RELEASE_RDS", unset = "")
+if (!nzchar(benchmark_release_path) || !file.exists(benchmark_release_path)) {
+  stop("Set ECODA_BENCHMARK_RELEASE_RDS to an explicit reviewed release control; production figures remain blocked.")
 }
-if (length(list.files(path_nas_benchmark, pattern = "\\.rds$")) == 0) {
-  stop(
-    "No RDS result bundles found in ", path_nas_benchmark,
-    "\nRun the HPC benchmark pipelines first (see TODO.md Phase 3.2)."
-  )
-}
-if (!dir.exists(path_nas_embeddings)) {
-  stop(
-    "Python benchmark embeddings dir not found: ", path_nas_embeddings,
-    "\nRun the HPC python benchmark pipeline first (src/5_run_benchmark_methods/",
-    "run_python_sample_embedding_methods/) and make sure the NAS is mounted."
-  )
-}
-
-sample_col <- "Sample"
-# HVG levels / factor (PCA-dim) levels mirror the former notebook pipeline's
-# defaults (now computed on HPC by run_composition_methods_hpc).
+benchmark_release_md5 <- Sys.getenv("ECODA_BENCHMARK_RELEASE_MD5", unset = "")
+benchmark_control <- read_benchmark_analysis_control(benchmark_release_path, benchmark_release_md5)
+benchmark_release <- load_benchmark_analysis_release(benchmark_control, datasets)
+# Validate the declared timing artifact before any figure chunk is reached.
+benchmark_release_times <- read_benchmark_execution_times(benchmark_control)
+result_list <- benchmark_release$results
+benchmark_expected_grid <- benchmark_release$expected_grid
 HVGs <- c(1000, 2000, 3000)
 factors_test <- c(2, 3, 5, 10, 15)
-# Per-dataset cell-count/statistics collected during the loop (display keys;
-# used by the exec-time figures and Supp table 1 instead of full reloads).
-n_cells_by_ds <- list()
-ds_stats_list <- list()
-
-for (ds in names(datasets)) {
-  # Per-dataset inputs: HPC result bundles + the composition metadata bundle
-  # (<ds>_metadata.rds, written by the composition worker: labels, n_cells,
-  # n_samples, cells_per_sample, n_cell_types_high_res). No h5ad/pseudobulk
-  # reads anywhere in the notebook anymore.
-  metadata_file <- file.path(path_nas_benchmark, paste0(ds, "_metadata.rds"))
-  if (!file.exists(metadata_file)) {
-    stop(
-      "Composition metadata bundle not found: ", metadata_file,
-      "\nRun the HPC composition benchmark for this dataset first ",
-      "(src/5_run_benchmark_methods/run_r_sample_embedding_methods/ ",
-      "--methods composition; auto-prepends prepare_pseudobulk)."
-    )
-  }
-  ds_meta <- readRDS(metadata_file)
-  labels <- ds_meta$labels
-
-  # All R benchmark methods — heavy (GloScope, MOFA, Pseudobulk, scITD) AND
-  # composition-based (ECODA_*, GloProp, Freq_highres, Avg_PCA_embedding,
-  # ECODA_deconv) — run on HPC (src/5_run_benchmark_methods/
-  # run_r_sample_embedding_methods/); the transformation and zero-imputation
-  # analyses too. Bundles are loaded FRESH from the NAS every knit (no
-  # result_list.rds persistence, no rerun semantics). NOTE:
-  # ECODA_authors_HR_NULL (shuffle_labels null control) is computed on HPC
-  # with set.seed(123) per dataset and is NOT bit-identical to the old
-  # notebook-local run (different RNG stream) — irrelevant for a null
-  # control.
-  result_list <- load_hpc_benchmark_results(
-    result_list, ds, path_nas_benchmark,
-    methods = c("gloscope", "mofa", "pseudobulk", "scitd", "composition")
-  )
-
-  # Python-feather methods (MrVI/PILOT/scPoli/QOT/PILOT-GM-VAE): fast
-  # sample-distance/embedding feather reads + scoring, kept in the notebook
-  # (seconds, no h5ad I/O). Labels come from the metadata bundle.
-  for (i in HVGs) {
-    if (i == 2000) {
-      scpoli_dims <- factors_test
-    } else {
-      scpoli_dims <- 15
-    }
-
-    file_mrvi <- file.path(
-      path_nas_embeddings,
-      paste0(ds, "_hvg", i, "_mrvi_dists.feather")
-    )
-    file_pilot <- file.path(
-      path_nas_embeddings,
-      paste0(ds, "_hvg", i, "_highres_pilot_dists.feather")
-    )
-    files_scpoli <- file.path(
-      path_nas_embeddings,
-      paste0(
-        ds, "_hvg", i, "_highres_scpoli_dims", scpoli_dims, "_embs.feather"
-      )
-    )
-    file_highres_pilot <- file.path(
-      path_nas_embeddings,
-      paste0(ds, "_hvg2000_highres_pilot_dists.feather")
-    )
-
-    files_to_check <- c(file_mrvi, file_pilot, files_scpoli, file_highres_pilot)
-    missing_files <- files_to_check[!file.exists(files_to_check)]
-
-    if (length(missing_files) > 0) {
-      stop(
-        "The following file(s) are missing:\n",
-        paste(missing_files, collapse = "\n")
-      )
-    }
-  }
-  for (i in HVGs) {
-    # --- MrVI (Runs once per HVG) ---
-    mrvi_dist_file <- file.path(
-      path_nas_embeddings,
-      paste0(ds, "_hvg", i, "_mrvi_dists.feather")
-    )
-    result_list[["bmark"]][[ds]][[paste0("MrVI_hvg", i)]] <- process_mrvi_fig(
-      mrvi_dist_file = mrvi_dist_file,
-      labels
-    )
-
-    # --- PILOT (Runs once per HVG) ---
-    pilot_dist_file <- file.path(
-      path_nas_embeddings,
-      paste0(ds, "_hvg", i, "_highres_pilot_dists.feather")
-    )
-    result_list[["bmark"]][[ds]][[paste0("PILOT_hvg", i)]] <- process_pilot_fig(
-      pilot_dist_file = pilot_dist_file,
-      labels
-    )
-
-    # --- QOT (Runs once per HVG) ---
-    # Pending method (TODO.md Phase 3): feathers may be absent -> skip with a
-    # message instead of failing the whole dataset.
-    qot_dist_file <- file.path(
-      path_nas_embeddings,
-      paste0(ds, "_hvg", i, "_highres_qot_dists.feather")
-    )
-    if (file.exists(qot_dist_file)) {
-      result_list[["bmark"]][[ds]][[paste0("QOT_hvg", i)]] <- process_qot_fig(
-        qot_dist_file = qot_dist_file,
-        labels
-      )
-    } else {
-      message("QOT_hvg", i, " skipped for ", ds,
-              ": feather not found (pending method, TODO.md Phase 3)")
-    }
-
-    # --- PILOT-GM-VAE (Runs once per HVG) ---
-    # Pending method (TODO.md Phase 3): feathers may be absent -> skip with a
-    # message instead of failing the whole dataset.
-    pilotgm_dist_file <- file.path(
-      path_nas_embeddings,
-      paste0(ds, "_hvg", i, "_highres_pilotgm_dists.feather")
-    )
-    if (file.exists(pilotgm_dist_file)) {
-      result_list[["bmark"]][[ds]][[paste0("PILOT-GM-VAE_hvg", i)]] <-
-        process_pilotgm_fig(
-          pilotgm_dist_file = pilotgm_dist_file,
-          labels
-        )
-    } else {
-      message("PILOT-GM-VAE_hvg", i, " skipped for ", ds,
-              ": feather not found (pending method, TODO.md Phase 3)")
-    }
-
-    scpoli_emb_file <- file.path(
-      path_nas_embeddings,
-      paste0(ds, "_hvg", i, "_highres_scpoli_dims15_embs.feather")
-    )
-    result_list[["bmark"]][[ds]][[paste0(
-      "scPoli_hvg",
-      i,
-      "_dims15_highres"
-    )]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
-
-    # --- scPoli (Runs once OR multiple times depending on HVG) ---
-    if (i == 2000) {
-      target_dims <- factors_test
-      for (f in target_dims) {
-        scpoli_emb_file <- file.path(
-          path_nas_embeddings,
-          paste0(
-            ds,
-            "_hvg",
-            i,
-            "_highres_scpoli_dims",
-            f,
-            "_embs.feather"
-          )
-        )
-        result_list[["bmark"]][[ds]][[paste0(
-          "scPoli_hvg",
-          i,
-          "_dims",
-          f,
-          "_highres"
-        )]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
-      }
-
-      pilot_dist_file <- file.path(
-        path_nas_embeddings,
-        paste0(ds, "_hvg", i, "_lowres_pilot_dists.feather")
-      )
-      result_list[["bmark"]][[ds]][[paste0("PILOT_hvg", i, "_lowres")]] <-
-        process_pilot_fig(
-          pilot_dist_file = pilot_dist_file,
-          labels
-        )
-
-      qot_dist_file <- file.path(
-        path_nas_embeddings,
-        paste0(ds, "_hvg", i, "_lowres_qot_dists.feather")
-      )
-      if (file.exists(qot_dist_file)) {
-        result_list[["bmark"]][[ds]][[paste0("QOT_hvg", i, "_lowres")]] <-
-          process_qot_fig(
-            qot_dist_file = qot_dist_file,
-            labels
-          )
-      } else {
-        message("QOT_hvg", i, "_lowres skipped for ", ds,
-                ": feather not found (pending method, TODO.md Phase 3)")
-      }
-
-      pilotgm_dist_file <- file.path(
-        path_nas_embeddings,
-        paste0(ds, "_hvg", i, "_lowres_pilotgm_dists.feather")
-      )
-      if (file.exists(pilotgm_dist_file)) {
-        result_list[["bmark"]][[ds]][[paste0("PILOT-GM-VAE_hvg", i, "_lowres")]] <-
-          process_pilotgm_fig(
-            pilotgm_dist_file = pilotgm_dist_file,
-            labels
-          )
-      } else {
-        message("PILOT-GM-VAE_hvg", i, "_lowres skipped for ", ds,
-                ": feather not found (pending method, TODO.md Phase 3)")
-      }
-
-      scpoli_emb_file <- file.path(
-        path_nas_embeddings,
-        paste0(ds, "_hvg", i, "_lowres_scpoli_dims15_embs.feather")
-      )
-      result_list[["bmark"]][[ds]][[paste0(
-        "scPoli_hvg",
-        i,
-        "_dims15_lowres"
-      )]] <- process_scpoli_fig(scpoli_emb_file = scpoli_emb_file, labels)
-    }
-  }
-
-  # Per-dataset stats for the exec-time figures + Supp table 1 (from the
-  # metadata bundle; no obs reads).
-  ds_key_out <- if (ds == "Gongsharma_cmv_young_males") "GongSharma" else ds
-  n_cells_by_ds[[ds_key_out]] <- ds_meta$n_cells
-  ct_per_sample <- ds_meta$cells_per_sample
-  ds_stats_list[[ds_key_out]] <- data.frame(
-    dataset = ds_key_out,
-    n_samples = ds_meta$n_samples,
-    n_cells = ds_meta$n_cells,
-    cells_per_sample_mean = mean(ct_per_sample),
-    cells_per_sample_sd = sd(ct_per_sample),
-    n_cell_types = ds_meta$n_cell_types_high_res
-  )
-
-  rm(ds_meta, labels, ct_per_sample)
-  gc()
-}
-
-# Prune any loaded entries of excluded datasets so every later
-# names(result_list[["bmark"]]) loop is scoped (nothing persists to disk;
-# pruning is in-memory only).
-result_list[["bmark"]] <- result_list[["bmark"]][names(datasets)]
-result_list[["trans"]] <- result_list[["trans"]][names(datasets)]
-result_list[["zeroimp"]] <- result_list[["zeroimp"]][names(datasets)]
-# Derived analyses are independent explicit opt-in run roots.  An unset
-# environment variable leaves baseline benchmark loading unchanged; a set
-# variable must name an existing reviewed run directory and is validated
-# strictly by the loader below.  Snapshot-backed runs reuse one verified
-# compact cache for all selected analyses; no notebook code queries HPC H5ADs.
-
-path_derived_res50 <- .derived_requested_root(
-  "ECODA_DERIVED_RES50_DIR", "res50"
-)
-path_derived_harmony <- .derived_requested_root(
-  "ECODA_DERIVED_HARMONY_DIR", "Harmony"
-)
-path_derived_cell_subsetting <- .derived_requested_root(
-  "ECODA_DERIVED_CELL_SUBSETTING_DIR", "cell-subsetting"
-)
-res50_requested <- !is.null(path_derived_res50)
-harmony_requested <- !is.null(path_derived_harmony)
+release_statistics <- benchmark_release$statistics
+release_statistics$dataset[release_statistics$dataset == "Gongsharma_cmv_young_males"] <- "GongSharma"
+n_cells_by_ds <- as.list(setNames(release_statistics$n_cells, release_statistics$dataset))
+ds_stats_list <- split(release_statistics, release_statistics$dataset)
+ds_stats_df <- bind_rows(ds_stats_list)
+# All additional method variants must be explicit rows in the same ledger.
+# No independent derived-root opt-in may append an unreviewed generation.
+path_derived_cell_subsetting <- .derived_requested_root("ECODA_DERIVED_CELL_SUBSETTING_DIR", "cell-subsetting")
 cell_subsetting_requested <- !is.null(path_derived_cell_subsetting)
-
-expected_samples_by_dataset <- NULL
-if (res50_requested || harmony_requested || cell_subsetting_requested) {
-  expected_samples_by_dataset <- setNames(
-    lapply(names(datasets), function(ds) {
-      feat_mat <- result_list[["bmark"]][[ds]][["ECODA_authors_HR"]][["feat_mat"]]
-      if (is.null(feat_mat) || is.null(rownames(feat_mat))) {
-        stop("Cannot resolve expected benchmark samples for ", ds)
-      }
-      rownames(feat_mat)
-    }),
-    names(datasets)
-  )
-}
-if (res50_requested) {
-  for (ds in names(datasets)) {
-    res50_path <- .derived_dataset_artifact_path(
-      path_derived_res50,
-      ds,
-      "_ECODA_seuratres_50.rds",
-      "res50 derived artifact"
-    )
-    result_list[["bmark"]][[ds]][["ECODA_seuratres_50"]] <-
-      load_derived_bundle(
-        res50_path,
-        dataset = ds,
-        method = "ECODA_seuratres_50",
-        expected_samples = expected_samples_by_dataset[[ds]]
-      )
-  }
-}
-if (harmony_requested) {
-  for (ds in names(datasets)) {
-    harmony_path <- .derived_dataset_artifact_path(
-      path_derived_harmony,
-      ds,
-      "_ECODA_seuratres_2_harmony.rds",
-      "Harmony derived artifact"
-    )
-    result_list[["bmark"]][[ds]][["ECODA_seuratres_2_harmony"]] <-
-      load_derived_bundle(
-        harmony_path,
-        dataset = ds,
-        method = "ECODA_seuratres_2_harmony",
-        expected_samples = expected_samples_by_dataset[[ds]]
-      )
-  }
-}
-
 cell_subsetting_results <- NULL
 if (cell_subsetting_requested) {
+  expected_samples_by_dataset <- setNames(lapply(names(datasets), function(ds) {
+    names(result_list$bmark[[ds]][[benchmark_control$reference_method_key[[ds]]]]$labels)
+  }), names(datasets))
+  # This separate, explicitly opted-in diagnostic does not append method rows
+  # to the reviewed benchmark comparison.
   cell_subsetting_results <- load_derived_cell_subsetting(
-    rds_path = .derived_run_artifact_path(
-      path_derived_cell_subsetting,
-      "ECODA_authors_HR_cell_subsetting.rds",
-      "cell-subsetting RDS"
-    ),
-    csv_path = .derived_run_artifact_path(
-      path_derived_cell_subsetting,
-      "ECODA_authors_HR_cell_subsetting.csv",
-      "cell-subsetting CSV"
-    ),
-    expected_datasets = names(datasets),
-    expected_samples_by_dataset = expected_samples_by_dataset
-  )
+    rds_path = .derived_run_artifact_path(path_derived_cell_subsetting,
+      "ECODA_authors_HR_cell_subsetting.rds", "cell-subsetting RDS"),
+    csv_path = .derived_run_artifact_path(path_derived_cell_subsetting,
+      "ECODA_authors_HR_cell_subsetting.csv", "cell-subsetting CSV"),
+    expected_datasets = names(datasets), expected_samples_by_dataset = expected_samples_by_dataset)
 }
 
-# Combined per-dataset stats (used by Supp table 1).
-ds_stats_df <- bind_rows(ds_stats_list)
 ```
 
 # ---------------------------------------------------------------
@@ -554,29 +229,9 @@ bmark_result_list <- result_list[["bmark"]]
 bmark_result_list$GongSharma <- bmark_result_list$Gongsharma_cmv_young_males
 bmark_result_list$Gongsharma_cmv_young_males <- NULL
 
-df_benchmark <- imap_dfr(bmark_result_list, ~ {
-  dataset_name <- .y
-  imap_dfr(.x, ~ {
-    method_name <- .y
-    if ("scores" %in% names(.x)) {
-      n_samples <- nrow(.x$feat_mat)
-      n_features <- ncol(.x$feat_mat)
-      
-      imap_dfr(.x$scores, ~ {
-        tibble(
-          dataset = dataset_name,
-          method = method_name,
-          score = .y,
-          value = .x,
-          n_samples = n_samples,
-          n_features = n_features
-        )
-      })
-    } else {
-      tibble() # Return an empty tibble if "scores" is not found
-    }
-  })
-})
+df_benchmark <- benchmark_release$scores
+df_benchmark$dataset[df_benchmark$dataset == "Gongsharma_cmv_young_males"] <- "GongSharma"
+benchmark_expected_grid$dataset[benchmark_expected_grid$dataset == "Gongsharma_cmv_young_males"] <- "GongSharma"
 
 # Drop old modularity score method
 df_benchmark <- df_benchmark[!df_benchmark$score == "mod_score", ]
@@ -594,6 +249,10 @@ if (analysis_scope == "preprint") {
   ]
 }
 df_benchmark <- df_benchmark[df_benchmark$method %in% analysis_methods, ]
+benchmark_main_normalization_methods <- methods_in_scope(benchmark_main_method_keys)
+benchmark_extended_normalization_methods <- methods_in_scope(benchmark_extended_method_keys)
+# MDS panels use Figure 2A's exact normalization pool, including its saved NULL
+# baseline even when that baseline is not drawn in the MDS panel.
 
 hitme_flagged_ds <- names(datasets)[vapply(names(datasets), function(k) "hitme" %in% flag_status_for(k), logical(1))]
 scatomic_flagged_ds <- names(datasets)[vapply(names(datasets), function(k) "scatomic" %in% flag_status_for(k), logical(1))]
@@ -733,9 +392,23 @@ p3 <- df_plot %>%
   theme_classic() +
   theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
 
-# --- Combine using Patchwork ---
-
-combined_plot <- (p1 | p2 | p3) + 
+# Raw single-metric panels retain their own units. LISI is already separation.
+extra_metric_plots <- lapply(c("sil_score", "lisi_score"), function(metric) {
+  ggplot(filter(df_plot, score == metric),
+         aes(x = fct_reorder(method, value, .desc = TRUE, .fun = mean), y = value)) +
+    stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+    stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
+    geom_point(aes(shape = dataset, color = dataset), size = pointsize) +
+    geom_line(aes(group = dataset, linetype = dataset, color = dataset)) +
+    labs(x = "", y = paste("Raw", score_facet_labels[[metric]])) + theme_classic() +
+    theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
+})
+metric_plots <- setNames(c(list(p1, p2, p3), extra_metric_plots), benchmark_metrics)
+for (metric in benchmark_metrics) {
+  ggsave(file.path(path_plots, paste0("Supp_fig_17_benchmark_unscaled_", metric, ".pdf")),
+         plot = metric_plots[[metric]], width = 5, height = 5)
+}
+combined_plot <- wrap_plots(metric_plots, nrow = 1) +
   plot_layout(guides = "collect") & # Collects all legends into one
   theme(legend.position = "right") # Places the shared legend at the bottom
 combined_plot
@@ -743,7 +416,7 @@ combined_plot
 # Save the combined plot
 ggsave(file.path(path_plots, "Supp_fig_17_benchmark_unscaled_metrics_perdataset.pdf"), 
        plot = combined_plot,
-       width = 12, # Increased width to fit 3 plots
+       width = 20,
        height = 5)
 ```
 
@@ -767,8 +440,8 @@ filter_methods <- methods_in_scope(c(
 ))
 
 
-df_plot_scaled <- df_benchmark %>%
-  filter(score %in% benchmark_metrics, method %in% filter_methods) %>%
+df_plot_scaled <- prepare_evaluation_plot_data(df_benchmark, filter_methods,
+  expected_grid = benchmark_expected_grid) %>%
   # -- Recoding names --
   mutate(method = recode(method,
                          "ECODA_authors_HR" = "ECODA_authors",
@@ -784,11 +457,7 @@ df_plot_scaled <- df_benchmark %>%
                          "PILOT_hvg2000" = "PILOT",
                          "GloScope_hvg2000_pcadims30" = "GloScope",
                          "QOT_hvg2000" = "QOT",
-                         "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE")) %>%
-  # -- CRITICAL STEP: Min-Max Scaling per Dataset and Score --
-  group_by(dataset, score) %>% 
-  mutate(scaled_value = min_max(value)) %>% 
-  ungroup()
+                         "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"))
 
 # 4. Generate the Plot
 # We filter for ANOSIM and use 'scaled_value' instead of 'value'
@@ -893,7 +562,8 @@ plot_mds(
   result_list[["bmark"]][[ds]][[m]][["dist_mat"]],
   labels = result_list[["bmark"]][[ds]][[m]][["labels"]],
   coord_equal = TRUE, cluster_score = FALSE, mod_score = FALSE,
-  title = m
+  title = m,
+  separation_score = benchmark_normalized_mean(df_benchmark, ds, m, benchmark_main_normalization_methods)
 )
 
 m <- "ECODA_HiTME_HR_layer2"
@@ -990,9 +660,6 @@ for (m in names(methods)) {
   dist_mat <- result_list[["bmark"]][[ds]][[m]][["dist_mat"]]
   labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
   
-  if (m == "ECODA_authors_HR_NULL") {
-    labels <- sample(labels)
-  }
   
   plot_list[[m]] <- plot_pca(
     feat_mat = dist_mat,
@@ -1074,6 +741,8 @@ for (ds in names(result_list[["bmark"]])) {
 
 ### Supp fig 3-13: MDS for all datasets
 
+Subtitles use Figure 2A's complete default normalization pool, including NULL.
+
 ```{r fig.height=9, fig.width=11}
 methods <- list(
   "ECODA_authors_HR" = "ECODA",
@@ -1128,7 +797,8 @@ for (ds in names(result_list[["bmark"]])) {
       labels,
       cluster_score = FALSE, mod_score = FALSE, anosim_score = FALSE,
       coord_equal = TRUE,
-      title = methods[[m]]
+      title = methods[[m]],
+      separation_score = benchmark_normalized_mean(df_benchmark, ds, m, benchmark_main_normalization_methods)
     )
   }
   
@@ -1147,6 +817,9 @@ for (ds in names(result_list[["bmark"]])) {
 # Plot MDS of selected datasets and methods
 
 ### Compare PCA based on features vs dist
+
+Five-metric means use Supp fig 15's complete extended normalization pool,
+including NULL; individual metric annotations remain raw.
 
 ```{r fig.height=6, fig.width=18}
 ds <- "Pelka"
@@ -1184,14 +857,8 @@ for (m in names(methods)) {
     labels[labels == "NE"] <- "Non-expanders"
   }
   
-  if (m == "ECODA_authors_HR_NULL") {
-    labels <- sample(labels)
-  }
   
-  avg_sep_score <- result_list[["bmark"]][[ds]][[m]]$scores[c("mod_knn3_score", "anosim_score", "cluster_score")] %>%
-    unlist() %>%
-    mean() %>%
-    round(2)
+  avg_sep_score <- benchmark_normalized_mean(df_benchmark, ds, m, benchmark_extended_normalization_methods)
   
   plot_list[[m]] <- plot_pca(
     feat_mat = feat_mat,
@@ -1199,7 +866,7 @@ for (m in names(methods)) {
     # knn_k = NULL,
     labels = labels,
     coord_equal = FALSE,
-    title = paste0(methods[[m]], "\nSeparation score: ", sprintf("%.2f", avg_sep_score))
+    title = paste0(methods[[m]], "\nFive-metric min–max mean: ", sprintf("%.2f", avg_sep_score))
   )
 }
 
@@ -1219,9 +886,6 @@ for (m in names(methods)) {
     labels[labels == "T"] <- "Tumor"
   }
   
-  if (m == "ECODA_authors_HR_NULL") {
-    labels <- sample(labels)
-  }
   
   plot_list[[m]] <- plot_pca(
     feat_mat = dist_mat,
@@ -1246,9 +910,6 @@ for (m in names(methods)) {
     labels[labels == "T"] <- "Tumor"
   }
   
-  if (m == "ECODA_authors_HR_NULL") {
-    labels <- sample(labels)
-  }
   
   plot_list[[m]] <- plot_pca(
     feat_mat = dist_mat,
@@ -1271,9 +932,6 @@ for (m in names(methods)) {
   feat_mat <- result_list[["bmark"]][[ds]][[m]][["feat_mat"]]
   labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
   
-  if (m == "ECODA_authors_HR_NULL") {
-    labels <- sample(labels)
-  }
   
   plot_list[[m]] <- plot_pca(
     feat_mat = feat_mat,
@@ -1659,26 +1317,8 @@ annotation_filter_methods <- c(
   "ECODA_seuratres_50"
 )
 
-# Standalone roots are opt-in.  Keep only method keys actually present in the
-# loaded benchmark table so an unset/missing optional root cannot fabricate an
-# annotation method in Figure 3 A or Supp fig 18.
-annotation_optional_methods <- c(
-  "ECODA_seuratres_50",
-  "ECODA_seuratres_2_harmony"
-)
+# The selected comparison requires explicit reviewed rows for every arm.
 filter_methods <- methods_in_scope(annotation_filter_methods)
-filter_methods <- intersect(
-  filter_methods,
-  unique(as.character(df_benchmark$method))
-)
-missing_optional_methods <- setdiff(annotation_optional_methods, filter_methods)
-if (length(missing_optional_methods) > 0L) {
-  message(
-    "Figure 3 A/Supp fig 18: optional standalone annotation method(s) not ",
-    "loaded; retaining baseline annotation methods and skipping: ",
-    paste(missing_optional_methods, collapse = ", ")
-  )
-}
 
 # Keep the display labels explicit here while using the centralized map for
 # every annotation plot below.
@@ -2076,6 +1716,9 @@ if (is.na(adams_correspondence_override) && !dir.exists(adams_correspondence_roo
 
 #### Supp fig 19: Plot PCA for selected annot. methods (GongSharma)
 
+MDS subtitles use Supp fig 15's complete extended normalization pool,
+including NULL, even when only selected annotation methods are drawn.
+
 ```{r fig.height=10, fig.width=12}
 requested_datas <- c("Bassez", "Lee", "Stephenson")
 datas <- intersect(requested_datas, names(result_list[["bmark"]]))
@@ -2106,7 +1749,6 @@ plot_list <- list()
 for (ds in datas) {
   pl <- list()
   for (m in names(methods)) {
-    if (ds == "Lee" & m == "ECODA_authors_HR") next
     
     dist_mat <- result_list[["bmark"]][[ds]][[m]]$dist_mat
     labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
@@ -2123,7 +1765,8 @@ for (ds in datas) {
       labels = labels,
       cluster_score = FALSE, mod_score = FALSE, anosim_score = TRUE,
       coord_equal = TRUE,
-      title = methods[[m]]
+      title = methods[[m]],
+      separation_score = benchmark_normalized_mean(df_benchmark, ds, m, benchmark_extended_normalization_methods)
     )
   }
   
@@ -2787,17 +2430,7 @@ for (ds in names(result_list[["bmark"]])) {
 #    methods, python methods, trans/zeroimp, prepare_pseudobulk_*).
 # 2. Bundle-derived rows for methods the feather does not cover — union by
 #    (dataset, method); mem_GB taken from the bundle when present.
-exec_times_feather <- file.path(path_nas_embeddings, "execution_times.feather")
-if (!file.exists(exec_times_feather)) {
-  stop(
-    "Merged execution-times feather not found: ", exec_times_feather,
-    "\nRun the benchmark pipelines (they merge + sync execution_times.feather",
-    " to the NAS) and make sure the NAS is mounted."
-  )
-}
-feather_exec_times <- arrow::read_feather(exec_times_feather) %>%
-  as.data.frame() %>%
-  normalize_exec_times()
+feather_exec_times <- benchmark_release_times
 
 bundle_exec_times <- imap_dfr(result_list[["bmark"]], ~ {
   dataset_name <- .y
@@ -3096,16 +2729,15 @@ ggsave(file.path(path_plots, "Supp_fig_14B_benchmark_mem_GB.pdf"),
 ## Main plot (with funkyheatmap)
 
 Figure 2A reserves extra space above the rotated dataset labels and exports at
-6.5 inches high to avoid top clipping. The layout-only publication refresh
-reuses `data/raw_data_for_publication.xlsx` and the checksum-verified preserved
-`execution_times_OLD.feather` snapshot to retain the existing runtime bars;
-ordinary notebook execution continues to use its configured current inputs.
+6.5 inches high to avoid top clipping. It uses the release control's explicitly
+reviewed timing artifact. Five metrics receive equal weight after min–max
+scaling within each dataset/evaluation/metric; the right columns show all five.
 
 ```{r fig.height=6.5, fig.width=12}
 # Parameterized funky-heatmap builder (src/utils/plotting.R): merges exec
 # times, filters/recodes, ranks + min-max scales, aggregates and plots.
 # Metrics are restricted to the notebook-level benchmark_metrics parameter
-# (default: ANOSIM / Modularity / ARI).
+# (five equal metrics, min–max per dataset/evaluation/metric).
 filter_methods <- methods_in_scope(c(
   "ECODA_authors_HR",
   "ECODA_authors_HR_NULL",
@@ -3140,15 +2772,19 @@ build_funky_heatmap(
   ),
   dataset_recode = dataset_display_map,
   score_set = benchmark_metrics,
+  expected_grid = benchmark_expected_grid,
   output_file = "Figure_2_A_benchmark_mainmethods.pdf",
   output_dir = path_plots,
-  plot_width = 10,
+  plot_width = 13,
   plot_height = 6.5,
   top_padding = 2
 )
 ```
 
 ## Figure 2 B: MDS Bassez
+
+Subtitles use Supp fig 15's complete extended normalization pool, including
+NULL, because this display also includes cell-type frequency.
 
 ```{r}
 ds <- "Bassez"
@@ -3180,7 +2816,8 @@ for (m in names(methods)) {
     labels,
     cluster_score = FALSE,mod_score = FALSE, anosim_score = FALSE,
     coord_equal = TRUE, pointsize = 2,
-    title = methods[[m]]
+    title = methods[[m]],
+    separation_score = benchmark_normalized_mean(df_benchmark, ds, m, benchmark_extended_normalization_methods)
   )
 }
 
@@ -3222,138 +2859,15 @@ filter_methods <- methods_in_scope(c(
   "PILOT-GM-VAE_hvg2000"
 ))
 
-df_results_bmark <- merge_exec_times(df_benchmark, exec_times)
-
-clean_data <- df_results_bmark %>%
-  filter(score %in% benchmark_metrics, method %in% filter_methods) %>%
-  mutate(method = recode(method,
-                         "ECODA_authors_HR" = "ECODA",
-                         "ECODA_authors_HR_NULL" = "Shuffled_baseline",
-                         # "ECODA_HiTME_HR_layer2" = "ECODA_automated",
-                         # "ECODA_HiTME_HR_layer3" = "ECODA_automated_(HiTME_layer3)",
-                         # "ECODA_seuratres_2" = "ECODA_unsupervised",
-                         "ECODA_PB_combo_normquantile_ecodaweight0.5" = "ECODA+Pseudobulk",
-                         # "Pseudobulk_10_PCA_dims" = "Pseudobulk_PCA",
-                         "Pseudobulk_hvg2000" = "Pseudobulk",
-                         # "Pseudobulk_schvg2000" = "Pseudobulk_schvg",
-                         # "Freq_highres" = "ECODA_Freq%",
-                         "MOFA_hvg2000_factors15" = "MOFA",
-                         "scITD_hvg2000_factors5" = "scITD",
-                         "MrVI_hvg2000" = "MrVI",
-                         "scPoli_hvg2000_dims15_highres" = "scPoli",
-                         "scITD_2_factors" = "scITD",
-                         "PILOT_hvg2000" = "PILOT",
-                         "GloScope_hvg2000_pcadims30" = "GloScope",
-                         "QOT_hvg2000" = "QOT",
-                         "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE")) %>%
-  mutate(score = recode(score, !!!score_label_map)) %>%
-  mutate(dataset = recode(dataset,
-                          "GongSharma_all_age" = "GongSharma_age",
-                          "GongSharma_all_cmv" = "GongSharma_cmv",
-                          "GongSharma_all_sex" = "GongSharma_sex"))
-
-# --- 1. TRANSFORMATION TO RANKS ---
-df_ranked <- clean_data %>%
-  group_by(dataset, score) %>%
-  mutate(rank = rank(-value, ties.method = "average")) %>%
-  ungroup()
-
-# --- 2. AGGREGATE RANK-BASED SCORES ---
-df_overall <- df_ranked %>%
-  group_by(method) %>%
-  dplyr::summarise(Overall_Rank = mean(rank, na.rm = TRUE))
-
-df_datasets_wide <- df_ranked %>%
-  group_by(method, dataset) %>%
-  dplyr::summarise(avg_rank = mean(rank, na.rm = TRUE), .groups = "drop") %>%
-  pivot_wider(id_cols = method, names_from = dataset, 
-              values_from = avg_rank, names_prefix = "Dataset__")
-
-target_metric_order <- c("ANOSIM", "Modularity", "ARI")
-
-df_metrics_wide <- df_ranked %>%
-  mutate(score = factor(score, levels = target_metric_order)) %>%
-  group_by(method, score) %>%
-  dplyr::summarise(avg_rank = mean(rank, na.rm = TRUE), .groups = "drop") %>%
-  arrange(score) %>%
-  pivot_wider(id_cols = method, names_from = score, 
-              values_from = avg_rank, names_prefix = "Metric__")
-
-# --- 3. MERGE, INVERT, AND SCALE (Fixes the Error) ---
-final_data <- df_overall %>%
-  left_join(df_datasets_wide, by = "method") %>%
-  left_join(df_metrics_wide, by = "method") %>%
-  # Add mandatory 'id' column for funkyheatmap
-  mutate(id = method)
-
-# Identify all rank-based columns
-rank_cols <- c("Overall_Rank", colnames(final_data)[startsWith(colnames(final_data), "Dataset__")], 
-               colnames(final_data)[startsWith(colnames(final_data), "Metric__")])
-
-# Instead of using min(x) and max(x) which vary per column,
-# we use the theoretical best (1) and worst (total methods).
-num_methods <- length(unique(final_data$method))
-
-
-final_data <- final_data %>%
-  mutate(across(all_of(rank_cols), ~scale_ranks_global(.x, num_methods))) %>%
-  arrange(desc(Overall_Rank))
-
-# --- 4. COLUMN INFO CONFIGURATION ---
-info_method <- tribble(
-  ~id,      ~group, ~name,    ~geom, ~palette, ~options,
-  "id",     "",     "",       "text", NA,       list(hjust = 0, width = 6)
+build_funky_heatmap(
+  df_results = df_benchmark, exec_times = exec_times,
+  filter_methods = filter_methods, method_recode = method_label_map_main,
+  dataset_recode = dataset_display_map, score_set = benchmark_metrics,
+  expected_grid = benchmark_expected_grid, include_rank = TRUE,
+  output_file = "benchmark_summary_funkyheatmap_mainmethods_ranks.pdf",
+  output_dir = path_plots, plot_width = 13, plot_height = 6.5
 )
 
-info_overall <- tribble(
-  ~id,            ~group,   ~name,      ~geom, ~palette,        ~options,
-  "Overall_Rank", "Overall", "Avg Rank", "bar",  "palette_ranks", list(width = 4)
-)
-
-dataset_cols <- colnames(final_data)[startsWith(colnames(final_data), "Dataset__")]
-info_datasets <- tibble(id = dataset_cols) %>%
-  mutate(
-    group = "Avg Rank per Dataset",
-    name = str_remove(id, "Dataset__"), 
-    geom = "circle",
-    palette = "palette_ranks",
-    options = list(list())
-  )
-
-metric_cols <- colnames(final_data)[startsWith(colnames(final_data), "Metric__")]
-info_metrics <- tibble(id = metric_cols) %>%
-  mutate(
-    group = "Avg Rank per Metric",
-    name = str_remove(id, "Metric__"),
-    name_f = factor(name, levels = target_metric_order),
-    geom = "bar",
-    palette = "palette_ranks",
-    options = list(list(width = 2))
-  ) %>% 
-  arrange(name_f) %>% 
-  dplyr::select(-name_f)
-
-column_info <- bind_rows(info_method, info_overall, info_datasets, info_metrics)
-
-# --- 5. PLOT ---
-ncolors <- 11
-funky_heatmap(
-  data = final_data,
-  column_info = column_info,
-  scale_column = FALSE, # Values are already 0-1
-  palettes = list(
-    palette_ranks = brewer.pal(n = ncolors, name = "RdBu")
-  ),
-  column_groups = tibble(
-    group = c("Overall", "Avg Rank per Dataset", "Avg Rank per Metric")
-  ),
-  legends = list(
-    list(palette = "palette_ranks", title = "Rank", labels = c(".       Worst", rep("", round((ncolors-2)/2)+1), "", rep("", round((ncolors-2)/2)), "Best    ."))
-  )
-)
-ggsave(file.path(path_plots, "benchmark_summary_funkyheatmap_mainmethods_ranks.pdf"),
-       width = 10,
-       height = 5)
 ```
 
 ## Supp fig 15: Extended benchmark (with avg rank)
@@ -3369,7 +2883,9 @@ filter_methods <- methods_in_scope(c(
   "ECODA_seuratres_2",
   "Freq_highres",
   "Pseudobulk_hvg2000",
+  "Pseudobulk_hvg2000_bl",
   "Pseudobulk_CT_HR_hvg2000",
+  "Pseudobulk_CT_HR_hvg500",
   "Pseudobulk_CT_LR_hvg500",
   "Pseudobulk_CT_LR_hvg2000",
   "MOFA_hvg2000_factors15",
@@ -3396,6 +2912,7 @@ build_funky_heatmap(
     "ECODA_seuratres_2" = "ECODA_Leiden_res_2",
     "Pseudobulk_10_PCA_dims" = "Pseudobulk_PCA",
     "Pseudobulk_hvg2000" = "Pseudobulk",
+    "Pseudobulk_hvg2000_bl" = "Pseudobulk_BL",
     "Pseudobulk_CT_HR_hvg2000" = "Pseudobulk_CT_HR",
     "Pseudobulk_CT_LR_hvg500" = "Pseudobulk_CT_LR_hvg500",
     "Pseudobulk_CT_LR_hvg2000" = "Pseudobulk_CT_LR_hvg2000",
@@ -3411,6 +2928,7 @@ build_funky_heatmap(
   ),
   dataset_recode = dataset_display_map,
   score_set = benchmark_metrics,
+  expected_grid = benchmark_expected_grid,
   output_file = "Supp_fig_15_benchmark_extended.pdf",
   output_dir = path_plots,
   plot_width = 14,
@@ -3440,9 +2958,10 @@ for (ds in names(result_list[["bmark"]])) {
 
 
 # Apply to your three result objects
-avg_pb2000   <- get_global_avg(pb2000_scores)
-avg_ct_2000 <- get_global_avg(pb_ct_hr_2000_scores)
-avg_ct_500  <- get_global_avg(pb_ct_hr_500_scores)
+pb_comparison <- c("Pseudobulk_hvg2000", "Pseudobulk_CT_HR_hvg2000", "Pseudobulk_CT_HR_hvg500")
+avg_pb2000   <- get_global_avg(df_benchmark, "Pseudobulk_hvg2000", pb_comparison)
+avg_ct_2000 <- get_global_avg(df_benchmark, "Pseudobulk_CT_HR_hvg2000", pb_comparison)
+avg_ct_500  <- get_global_avg(df_benchmark, "Pseudobulk_CT_HR_hvg500", pb_comparison)
 
 cat("Pseudobulk_CT_HR_hvg2000 vs Pseudobulk_hvg2000: ", round(avg_ct_2000 / avg_pb2000, 2), "\n")
 cat("Pseudobulk_CT_HR_hvg500 vs Pseudobulk_hvg2000: ", round(avg_ct_500 / avg_pb2000, 2))
@@ -3496,6 +3015,7 @@ build_funky_heatmap(
   ),
   dataset_recode = dataset_display_map,
   score_set = benchmark_metrics,
+  expected_grid = benchmark_expected_grid,
   output_file = "Presentation_benchmark_extended.pdf",
   output_dir = path_plots,
   plot_width = 14,
@@ -3569,7 +3089,10 @@ stopifnot(
   nrow(mean_score_data) > 0,
   all(complete.cases(mean_score_data))
 )
-df_wide$Mean_Score <- rowMeans(mean_score_data)
+normalized_means <- clean_data %>%
+  group_by(dataset, method) %>%
+  dplyr::summarise(Mean_Score = mean(scaled_value), .groups = "drop")
+df_wide <- left_join(df_wide, normalized_means, by = c("dataset", "method"))
 
 
 benchmark_axis_spec <- build_metric_axis_spec(
@@ -3772,7 +3295,7 @@ modularity_pairwise_panel_with_tag <- wrap_plots(
 
 # --- 4C. MODULARITY VARIANTS AGAINST THE SHARED MEAN SCORE ---
 # Mean_Score is inherited from df_wide and is always:
-# mean(ANOSIM, Modularity [kNN3], ARI, Silhouette, LISI).
+# equal mean of min–max normalized ANOSIM, Modularity [kNN3], ARI, Silhouette and LISI separation.
 df_modularity_vs_mean <- df_modularity_wide %>%
   inner_join(
     dplyr::select(df_wide, dataset, method, Mean_Score),
@@ -4658,6 +4181,12 @@ ggsave(
 
 # Exploratory Stephenson UCell activity versus ECODA
 
+The compact exports in the following UCell, CD14, cell-level cutoff and IFN
+explorations describe the historical 55-sample cohort. Their exploratory
+chunks are disabled for the current 53-sample release after removal of
+MH8919226 and MH8919227. Reproduction requires a separate session with the
+reviewed historical inputs; old exports must not be mixed with current bundles.
+
 This optional analysis reads only the compact, checksum-verified local export
 and cached benchmark results; it never opens the full H5AD, exports data, or
 contacts HPC. The raw named list
@@ -4704,7 +4233,7 @@ the unfiltered matrix. Normalization is unchanged; excluded genes are not
 replaced by other HVGs. Exact sample IDs and labels are checked before comparison.
 No pseudobulk is generated here, and canonical benchmark artifacts remain unchanged.
 
-```{r stephenson_ucell_exploration, fig.width=10, fig.height=4}
+```{r stephenson_ucell_exploration, eval=FALSE, fig.width=10, fig.height=4}
 source("src/notebooks/stephenson_ucell.R")
 stephenson_ucell_override <- Sys.getenv("ECODA_STEPHENSON_UCELL_DIR", unset = NA_character_)
 stephenson_ucell_root <- if (is.na(stephenson_ucell_override)) {
@@ -4823,7 +4352,7 @@ author-LR/HR ECODA bundles are loaded, their complete sample universes and
 Status labels must agree exactly with this export. Scores remain exploratory.
 Only ANOSIM is displayed on the plot; the other metrics remain in the saved table.
 
-```{r stephenson_cd14_pseudobulk_exploration, fig.width=5, fig.height=4}
+```{r stephenson_cd14_pseudobulk_exploration, eval=FALSE, fig.width=5, fig.height=4}
 source("src/notebooks/stephenson_ucell.R")
 stephenson_cd14_override <- Sys.getenv("ECODA_STEPHENSON_CD14_DIR", unset = NA_character_)
 stephenson_cd14_root <- if (is.na(stephenson_cd14_override)) {
@@ -4963,7 +4492,7 @@ not imputed. The CSV reports positive fractions separately for every type.
 Each score's axis includes its full observed range and the cutoff; tails are
 not removed to enlarge the distributions.
 
-```{r stephenson_ucell_threshold_violins, fig.width=22, fig.height=8}
+```{r stephenson_ucell_threshold_violins, eval=FALSE, fig.width=22, fig.height=8}
 stephenson_cell_score_override <- Sys.getenv(
   "ECODA_STEPHENSON_UCELL_CELLS_DIR", unset = NA_character_
 )
@@ -5027,7 +4556,11 @@ The table also includes median proportions among all other 53 samples.
 The absence of major T-cell populations explains the distance; its technical
 or biological origin is not established by these abundance data.
 
-```{r stephenson_healthy_outlier_diagnostics, fig.width=7, fig.height=5}
+This is a historical pre-exclusion diagnostic and is disabled for the current
+release, which excludes these two samples. Reproducing it requires its original
+reviewed historical bundles in a separate analysis session.
+
+```{r stephenson_healthy_outlier_diagnostics, eval=FALSE, fig.width=7, fig.height=5}
 if (exists("result_list") &&
     !is.null(result_list[["bmark"]][["Stephenson"]][["ECODA_authors_HR"]])) {
   bundle <- result_list[["bmark"]][["Stephenson"]][["ECODA_authors_HR"]]
@@ -5095,7 +4628,9 @@ Percentages use recovered raw integer counts and preserve true zeros. CLR
 values are the cached features: `log(raw count + 0.5)` minus its within-sample
 mean across all cell types, not a transform of percentages.
 
-```{r stephenson_author_abundance_boxplots, fig.width=c(12,12,20,20), fig.height=c(6,6,7,7)}
+This historical 55-sample diagnostic is disabled for the current release.
+
+```{r stephenson_author_abundance_boxplots, eval=FALSE, fig.width=c(12,12,20,20), fig.height=c(6,6,7,7)}
 if (!exists("result_list") || is.null(result_list[["bmark"]][["Stephenson"]])) {
   message("Optional Stephenson author abundance plots skipped: no loaded Stephenson bundles.")
 } else {
@@ -5223,7 +4758,7 @@ not change the HiTME annotation rule of strictly greater than 0.2 or its
 manifest. PCA uses centered, unscaled CLR of split raw counts plus 0.5;
 ANOSIM uses the complete CLR feature space, not only the displayed PCs.
 
-```{r stephenson_author_hr_ifn_pca, fig.width=8, fig.height=6}
+```{r stephenson_author_hr_ifn_pca, eval=FALSE, fig.width=8, fig.height=6}
 source("src/notebooks/stephenson_ucell.R")
 if (!exists("result_list") || is.null(result_list[["bmark"]][["Stephenson"]])) {
   message("Optional Stephenson author-HR IFN PCA skipped: no loaded Stephenson bundles.")
@@ -5309,8 +4844,10 @@ if (!exists("result_list") || is.null(result_list[["bmark"]][["Stephenson"]])) {
 ## MDS for all datasets
 
 The methods, dataset scope, distances, and group labels match Supp figs 3–13.
-Separation Score is the unscaled arithmetic mean of the stored ANOSIM, ARI,
-and k=3 Modularity scores, calculated before rounding.
+Separation Score is the arithmetic mean of all five metrics after min–max
+normalization across Figure 2A's full default pool, including the saved NULL
+baseline, within each dataset/evaluation, even when NULL is not drawn.
+The stored per-metric values remain raw and are labeled separately.
 
 ```{r presentation_mds, fig.height=7, fig.width=18}
 presentation_mds_methods <- methods_in_scope_named(list(
@@ -5326,9 +4863,7 @@ presentation_mds_methods <- methods_in_scope_named(list(
   "QOT_hvg2000" = "QOT",
   "PILOT-GM-VAE_hvg2000" = "PILOT-GM-VAE"
 ))
-presentation_score_names <- c(
-  "anosim_score", "cluster_score", "mod_knn3_score"
-)
+presentation_score_names <- benchmark_metrics
 
 for (ds in names(result_list[["bmark"]])) {
   presentation_mds_plots <- list()
@@ -5361,7 +4896,8 @@ for (ds in names(result_list[["bmark"]])) {
       title = presentation_mds_methods[[m]]
     ) +
       labs(subtitle = sprintf(
-        "Separation Score: %.2f", mean(presentation_scores)
+        "Five-metric min–max mean: %.2f",
+        benchmark_normalized_mean(df_benchmark, ds, m, benchmark_main_normalization_methods)
       )) +
       scale_color_discrete(limits = presentation_label_levels, drop = FALSE) +
       guides(shape = "none")

@@ -179,8 +179,12 @@ plot_mds <- function(
   coord_equal = TRUE,
   axes = c(1, 2),
   parallel = getOption("mc.cores"),
-  anosim_value = NULL
+  anosim_value = NULL,
+  separation_score = NULL
 ) {
+  if (!is.null(separation_score) && (!is.numeric(separation_score) || length(separation_score) != 1L ||
+      !is.finite(separation_score) || separation_score < 0 || separation_score > 1))
+    stop("MDS separation_score must be a finite normalized five-metric mean")
   mds_res <- cmdscale(dist_mat, k = max(axes), eig = TRUE)
   format_str <- paste0("%.", digits, "f")
   mds_df <- data.frame(
@@ -203,19 +207,19 @@ plot_mds <- function(
     anosim_score_val <- round(anosim_score_val, 3)
     title <- paste0(
       title,
-      "\nANOSIM score: ",
+      "\nRaw ANOSIM score: ",
       sprintf(format_str, anosim_score_val)
     )
   }
   if (cluster_score) {
     cluster_score_val <- clust_eval(dist_mat, labels)
-    title <- paste0(title, "\nARI: ", sprintf(format_str, cluster_score_val))
+    title <- paste0(title, "\nRaw ARI: ", sprintf(format_str, cluster_score_val))
   }
   if (mod_score) {
     mod_score_val <- round(calc_modularity(dist_mat, labels, knn_k), 3)
     title <- paste0(
       title,
-      "\nModularity score: ",
+      "\nRaw Modularity score: ",
       sprintf(format_str, mod_score_val)
     )
   }
@@ -223,7 +227,7 @@ plot_mds <- function(
     sil_score_val <- round(calc_sil(dist_mat, labels), 3)
     title <- paste0(
       title,
-      "\nSilhouette score: ",
+      "\nRaw Silhouette score: ",
       sprintf(format_str, sil_score_val)
     )
   }
@@ -243,6 +247,7 @@ plot_mds <- function(
       x = lab_x,
       y = lab_y,
       title = title,
+      subtitle = if (!is.null(separation_score)) sprintf("Five-metric min–max mean: %.2f", separation_score),
       color = "Groups",
       shape = "Groups"
     ) +
@@ -263,40 +268,76 @@ plot_mds <- function(
 # `prepare_pseudobulk_shared` and `prepare_pseudobulk_ct_shared_<token>` rows,
 # not method variants.  merge_exec_times() keeps all shared rows out of
 # method-level result joins while preserving schema-2 local and legacy timing.
-# Shared cleaning step for the funky-heatmap figures (Figure 2A, Supp fig 15,
-# "For presentation"): merge exec times, filter methods, recode method/score/
-# dataset display names. `score_set` optionally restricts to the configured
-# metric names (benchmark_metrics); NULL keeps every score column (needed by
-# Supp fig 1, whose correlation matrix includes Silhouette and LISI).
+# Validate the complete raw comparison before calculating any aggregate. The
+# expected grid may be supplied by a reviewed release; otherwise every selected
+# method is required for every declared dataset/view/evaluation entry.
+prepare_evaluation_plot_data <- function(df_results, filter_methods,
+                                         score_set = names(score_label_map), expected_grid = NULL) {
+  if (!exists("aggregate_evaluation_scores", mode = "function"))
+    stop("Source src/utils/evaluation_scores.R before preparing score aggregates")
+  if (!setequal(score_set, evaluation_metrics()) || length(score_set) != 5L)
+    stop("Aggregate plots require the five approved metrics; single-metric plots use raw values")
+  required <- c("dataset", "view", "evaluation_id", "method", "score", "value")
+  if (!all(required %in% names(df_results))) stop("Plot scores lack explicit dataset/view/evaluation/method/metric keys")
+  if (!length(filter_methods) || anyDuplicated(filter_methods) ||
+      any(grepl("^ECODA_PB_combo_", filter_methods))) stop("Invalid publication method selection")
+  frame <- as.data.frame(df_results[df_results$method %in% filter_methods &
+                                      df_results$score %in% score_set, , drop = FALSE])
+  if (!setequal(unique(as.character(frame$method)), filter_methods))
+    stop("Required compared methods are absent from the reviewed score frame")
+  if (("method_key" %in% names(frame) && !identical(as.character(frame$method_key), as.character(frame$method))) ||
+      ("metric" %in% names(frame) && !identical(as.character(frame$metric), as.character(frame$score))))
+    stop("Plot aliases disagree with canonical method/metric keys")
+  frame$method_key <- as.character(frame$method)
+  frame$metric <- as.character(frame$score)
+  if (is.null(expected_grid)) {
+    entries <- unique(frame[c("dataset", "view", "evaluation_id")])
+    expected_grid <- merge(entries, expand.grid(method_key = filter_methods,
+      metric = score_set, stringsAsFactors = FALSE), by = NULL)
+  } else expected_grid <- expected_grid[expected_grid$method_key %in% filter_methods &
+                                         expected_grid$metric %in% score_set, , drop = FALSE]
+  if (!setequal(unique(as.character(expected_grid$method_key)), filter_methods))
+    stop("Required compared methods are absent from the expected evaluation grid")
+  aggregated <- aggregate_evaluation_scores(frame, expected_grid)
+  key <- function(x) do.call(paste, c(x[c("dataset", "view", "evaluation_id", "method_key", "metric")], sep = "\r"))
+  frame$scaled_value <- aggregated$scores$scaled_value[match(key(frame), key(aggregated$scores))]
+  attr(frame, "evaluation_aggregation") <- aggregated
+  frame
+}
+
+# Raw values remain available for explicitly per-metric plots. Display labels
+# are applied only after validation; distinct evaluation axes stay separate.
 prepare_benchmark_data <- function(
   df_results,
   exec_times,
   filter_methods,
   method_recode,
   dataset_recode,
-  score_set = NULL
+  score_set = names(score_label_map),
+  expected_grid = NULL
 ) {
-  clean_data <- merge_exec_times(df_results, exec_times) %>%
-    filter(method %in% filter_methods) %>%
+  clean_data <- prepare_evaluation_plot_data(df_results, filter_methods,
+    if (is.null(score_set)) names(score_label_map) else score_set, expected_grid)
+  clean_data$dataset_key <- as.character(clean_data$dataset)
+  if (!is.null(exec_times)) clean_data <- merge_exec_times(clean_data, exec_times)
+  clean_data <- clean_data %>%
     mutate(method = recode(method, !!!method_recode)) %>%
     mutate(score = recode(score, !!!score_label_map)) %>%
     mutate(dataset = recode(dataset, !!!dataset_recode))
-  if (!is.null(score_set)) {
-    # dplyr::recode keeps unmatched values, so without this filter the raw
-    # mod_knnsqrtn_score / mod_knn6_score / mod_knn9_score leftovers would
-    # leak into the metric columns of the heatmap.
-    clean_data <- clean_data %>%
-      filter(score %in% unname(score_label_map[score_set]))
-  }
+  labels <- unique(clean_data[c("method_key", "method")])
+  if (anyDuplicated(labels$method)) stop("Method display labels collapse distinct compared methods")
+  axes <- unique(clean_data[c("dataset_key", "view", "evaluation_id")])
+  multiple_axes <- axes$dataset_key[duplicated(axes$dataset_key) | duplicated(axes$dataset_key, fromLast = TRUE)]
+  clean_data$dataset <- ifelse(clean_data$dataset_key %in% multiple_axes,
+    paste0(clean_data$dataset, " / ", clean_data$evaluation_id), clean_data$dataset)
+  if (length(unique(clean_data$view)) > 1L)
+    clean_data$dataset <- paste0(clean_data$dataset, " / ", clean_data$view)
   return(clean_data)
 }
 
-# Parameterized funky-heatmap builder (refactor of the previously duplicated
-# Figure 2A / Supp fig 15 / "For presentation" blocks). Mirrors the original
-# pipeline: min-max per (dataset, score) -> rank/overall/dataset/metric/runtime
-# aggregates -> column_info -> funky_heatmap -> ggsave. Outputs are identical
-# to the legacy blocks except that only the configured `score_set` metrics
-# are ranked/displayed. Returns the funkyheatmap grob invisibly.
+# Figure 2A / Supp fig 15 / presentation heatmaps share the same five-metric
+# min-max policy and arithmetic mean. Evaluation entries receive equal weight;
+# ranks follow that mean. Raw values remain available for per-metric figures.
 # `top_padding` adds heatmap-coordinate headroom for long rotated labels;
 # zero preserves the existing layout of other heatmap figures.
 build_funky_heatmap <- function(
@@ -305,7 +346,7 @@ build_funky_heatmap <- function(
   filter_methods,
   method_recode,
   dataset_recode,
-  score_set = c("anosim_score", "mod_knn3_score", "cluster_score"),
+  score_set = names(score_label_map),
   output_file,
   output_dir,
   plot_width = 10,
@@ -315,43 +356,29 @@ build_funky_heatmap <- function(
   include_rank = FALSE,
   overall_legend_title = "Overall Mean",
   overall_legend_labels = c(". 0", rep("", 5), "0.5", rep("", 4), "1"),
-  top_padding = 0
+  top_padding = 0,
+  expected_grid = NULL
 ) {
   ncolors <- 11
 
   clean_data <- prepare_benchmark_data(
     df_results, exec_times, filter_methods, method_recode, dataset_recode,
-    score_set = score_set
+    score_set = score_set, expected_grid = expected_grid
   )
-
-  # --- 2. CALCULATE GEOMETRIC MEAN OF RANKS ---
-  df_ranks <- clean_data %>%
-    group_by(dataset, score) %>%
-    mutate(rank = rank(-value, ties.method = "min")) %>%
-    ungroup() %>%
-    group_by(method) %>%
-    dplyr::summarise(geo_mean_rank = exp(mean(log(rank), na.rm = TRUE))) %>%
-    ungroup() %>%
-    # Normalize so it plots nicely (0 to 1). Invert: best rank (lowest
-    # number) = 1.0 (biggest bar).
-    mutate(Rank_Score = (max(geo_mean_rank) - geo_mean_rank) /
-             (max(geo_mean_rank) - min(geo_mean_rank))) %>%
-    dplyr::select(method, Rank_Score)
-
-  # --- 3. SCALE DATA (0-1) FOR HEATMAP VISUALS ---
-  scaled_data <- clean_data %>%
-    group_by(dataset, score) %>%
-    mutate(value = min_max(value)) %>%
-    ungroup()
+  scaled_data <- clean_data %>% mutate(value = scaled_value)
 
   # --- 4. AGGREGATE SCORES ---
   df_overall <- scaled_data %>%
     group_by(method) %>%
-    dplyr::summarise(Overall_Score = mean(value, na.rm = TRUE))
+    dplyr::summarise(Overall_Score = mean(value), .groups = "drop")
+  df_ranks <- df_overall %>% mutate(rank = rank(-Overall_Score, ties.method = "min"))
+  limits <- range(df_ranks$rank)
+  df_ranks$Rank_Score <- if (diff(limits) == 0) 0.5 else (limits[2] - df_ranks$rank) / diff(limits)
+  df_ranks <- dplyr::select(df_ranks, method, Rank_Score)
 
   df_datasets_wide <- scaled_data %>%
     group_by(method, dataset) %>%
-    dplyr::summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+    dplyr::summarise(value = mean(value), .groups = "drop") %>%
     pivot_wider(
       id_cols = method, names_from = dataset, values_from = value,
       names_prefix = "Dataset__"
@@ -359,7 +386,7 @@ build_funky_heatmap <- function(
 
   df_metrics_wide <- scaled_data %>%
     group_by(method, score) %>%
-    dplyr::summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+    dplyr::summarise(value = mean(value), .groups = "drop") %>%
     pivot_wider(
       id_cols = method, names_from = score, values_from = value,
       names_prefix = "Metric__"
@@ -368,25 +395,28 @@ build_funky_heatmap <- function(
   # Runtime bars use method-local rows.  Both global shared preparation rows
   # are deliberately excluded from clean_data; adding shared work to every
   # variant would charge one timing identity once per method.
-  df_runtime <- clean_data %>%
-    filter(is.finite(time_secs), time_secs >= 0) %>%
-    distinct(method, dataset, time_secs) %>%
+  df_runtime <- NULL
+  if (!is.null(exec_times)) {
+    if (any(!is.finite(clean_data$time_secs) | clean_data$time_secs < 0)) stop("Required runtime rows are missing or invalid")
+    df_runtime <- clean_data %>%
+    distinct(method, dataset_key, time_secs) %>%
     group_by(method) %>%
-    dplyr::summarise(raw_time = mean(time_secs, na.rm = TRUE), .groups = "drop") %>%
+    dplyr::summarise(raw_time = mean(time_secs), .groups = "drop") %>%
     mutate(
       log_time = log10(raw_time + 1),
-      # Inverting so SHORTER time (faster) = BIGGER bar/BETTER score
-      Runtime = min_max(log_time)
+      # The reversed runtime palette distinguishes time from separation scores.
+      Runtime = if (diff(range(log_time)) == 0) 0.5 else (log_time - min(log_time)) / diff(range(log_time))
     ) %>%
     dplyr::select(method, Runtime)
+  }
 
   # --- 5. MERGE EVERYTHING ---
   final_data <- df_overall %>%
     left_join(df_ranks, by = "method") %>%
     left_join(df_datasets_wide, by = "method") %>%
     left_join(df_metrics_wide, by = "method") %>%
-    left_join(df_runtime, by = "method") %>%
     arrange(desc(Overall_Score))
+  if (!is.null(df_runtime)) final_data <- left_join(final_data, df_runtime, by = "method")
 
   # --- 6. BUILD COLUMN INFO ---
   info_method <- tribble(
@@ -399,7 +429,7 @@ build_funky_heatmap <- function(
     "Overall_Score", "Overall", overall_col_name, "bar", "palette_avg_mean", list(width = 4)
   )
 
-  palettes <- list(palette_avg_mean = brewer.pal(n = ncolors, name = "RdBu"))
+  palettes <- list(palette_avg_mean = RColorBrewer::brewer.pal(n = ncolors, name = "RdBu"))
   legends <- list()
   column_info_parts <- list(info_method, info_score_avg)
 
@@ -409,7 +439,7 @@ build_funky_heatmap <- function(
       "Rank_Score", "Overall", "Rank Mean", "bar", "palette_avg_rank", list(width = 4, legend = FALSE)
     )
     column_info_parts <- c(column_info_parts, list(info_rank_avg))
-    palettes[["palette_avg_rank"]] <- brewer.pal(n = ncolors, name = "RdBu")
+    palettes[["palette_avg_rank"]] <- RColorBrewer::brewer.pal(n = ncolors, name = "RdBu")
     legends <- c(legends, list(
       list(palette = "palette_avg_rank", enabled = FALSE, title = "REMOVE PLACEHOLDER")
     ))
@@ -419,7 +449,7 @@ build_funky_heatmap <- function(
   info_datasets <- tibble(id = dataset_cols) %>%
     mutate(
       group = "Datasets",
-      name = str_remove(id, "Dataset__"),
+      name = stringr::str_remove(id, "Dataset__"),
       geom = "circle",
       palette = "Datasets",
       options = list(list())
@@ -431,7 +461,7 @@ build_funky_heatmap <- function(
   info_metrics_main <- tibble(id = metric_cols) %>%
     mutate(
       group = "Metrics",
-      name = str_remove(id, "Metric__"),
+      name = stringr::str_remove(id, "Metric__"),
       geom = "bar",
       palette = "Metrics",
       options = list(list(width = 2)),
@@ -449,12 +479,12 @@ build_funky_heatmap <- function(
     column_info_parts,
     list(info_datasets),
     list(info_metrics_main),
-    list(info_runtime)
+    if (!is.null(df_runtime)) list(info_runtime)
   ))
 
-  palettes[["Datasets"]] <- brewer.pal(n = ncolors, name = "RdBu")
-  palettes[["Metrics"]] <- brewer.pal(n = ncolors, name = "RdBu")
-  palettes[["palette_runtime"]] <- rev(brewer.pal(n = ncolors, name = "RdYlGn"))
+  palettes[["Datasets"]] <- RColorBrewer::brewer.pal(n = ncolors, name = "RdBu")
+  palettes[["Metrics"]] <- RColorBrewer::brewer.pal(n = ncolors, name = "RdBu")
+  palettes[["palette_runtime"]] <- rev(RColorBrewer::brewer.pal(n = ncolors, name = "RdYlGn"))
 
   legends <- c(legends, list(
     list(
@@ -482,25 +512,26 @@ build_funky_heatmap <- function(
       labels = c("secs", "mins", "hours")
     )
   ))
+  if (is.null(df_runtime)) legends <- Filter(function(x) !identical(x$palette, "palette_runtime"), legends)
 
   # --- 7. PLOT ---
-  p <- funky_heatmap(
+  p <- funkyheatmap::funky_heatmap(
     final_data,
     column_info = column_info,
     scale_column = FALSE,
     column_groups = tibble(
-      group = c("Overall", "Datasets", "Metrics", "Runtime")
+      group = c("Overall", "Datasets", "Metrics", if (!is.null(df_runtime)) "Runtime")
     ),
     palettes = palettes,
     legends = legends,
-    position_args = position_arguments(
+    position_args = funkyheatmap::position_arguments(
       col_width = 1.5,
       col_space = 0.2,
       col_annot_offset = 5,
       expand_ymax = top_padding
     )
   )
-  ggsave(file.path(output_dir, output_file),
+  ggplot2::ggsave(file.path(output_dir, output_file), plot = p,
          width = plot_width,
          height = plot_height)
   return(invisible(p))

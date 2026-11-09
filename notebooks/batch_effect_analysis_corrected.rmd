@@ -1,447 +1,131 @@
 ---
 title: "Corrected batch-effect analysis"
 author: "Christian Halter"
-date: "`r format(Sys.Date(), '%e de %B, %Y')`"
-output:
-  rmdformats::downcute:
-    lightbox: true
-    thumbnails: false
-    self_contained: true
-    gallery: true
-    code_folding: show
+output: rmdformats::downcute
 ---
 
-# Scope
+# Approved release scope
 
-Compare the nine corrected batch-effect cohorts using the same MDS panels,
-metrics, and funkyheatmap layout as `batch_effect_analysis_uncorrected.rmd`.
-Biological labels are used for evaluation only. No preprocessing, correction,
-embeddings, or distances are recomputed.
+Eight enabled physical cohorts produce nine evaluation entries because Kidney
+condition and tissue are separate. Nine methods including NULL and exactly two
+unsupervised correction arms produce 405 finite five-metric values. The two arms
+are `ecoda_unsupervised_harmony` and `ecoda_unsupervised_harmony_limma`; the
+ambiguous historical corrected `ECODA_seuratres_2` is never substituted. Its
+uncorrected counterpart retains its original key.
 
-When mounted, read the NAS `batch_effect/corrected_final/results` bundles and
-the sibling `embeddings` and sample `metadata` directories. Reuse persisted R
-scores; score the Python methods' persisted sample distances. Process one cohort
-at a time, writing MDS panels and retaining only heatmap scores. The first
-NAS-backed run saves a small score/provenance snapshot locally; later runs
-without the NAS read that snapshot for the heatmap only. MDS generation requires
-the mounted NAS; an offline score snapshot cannot reconstruct sample coordinates
-or batch labels. No H5AD, pseudobulk, or full result bundle is copied locally.
-A mounted but incomplete/corrupt NAS source fails closed rather than silently
-using an older local snapshot.
+Provide the explicit approved release control and its MD5 through
+`ECODA_BATCH_RELEASE_CONTROL` and `ECODA_BATCH_RELEASE_CONTROL_MD5`. Both batch
+views and their current sample metadata must be covered for paired MDS. Missing
+new results stop the report; there is no legacy or offline-snapshot fallback.
+Only small result/metadata artifacts are read, one cohort at a time. No H5AD,
+method fit, correction or Pipeline 4 annotation is run or rewritten here.
 
-Paired Alzheimer figures require the same 104 donor-by-assay sample IDs, in the
-same order, on both sides. The historical uncorrected manifest still selects
-83 donor-only samples and is rejected; current figures cannot be regenerated
-until the missing uncorrected composition/null/summary artifacts are recovered
-and new source-bound manifests are supplied. Existing 83-versus-104 PDFs are
-stale, not evidence of a correction-induced change in sample count.
-
-Dataset column labels include the number of cell types actually used by
-`ECODA_authors_HR`, counted from its corrected sample-by-cell-type feature matrix
-and preserved in the offline snapshot.
+Kidney tissue labels are the recorded sampling categories: 45 generic kidney
+samples (cells), 23 cortex and 12 medulla (nuclei). Tissue is partly confounded
+with `suspension_type`. The two evaluations use identical features/distances and
+MDS coordinates within each view; neither is protected in batch correction.
+Primary NULL uses its actual stored shuffle, while tissue NULL has seed 124 and
+its exact labels recorded in the derived release provenance.
 
 ```{r setup, message=FALSE, warning=FALSE}
-if (basename(getwd()) == "notebooks") {
-  setwd("..")
-  if (file.exists(".Rprofile")) source(".Rprofile")
-}
-
+if (basename(getwd()) == "notebooks") setwd("..")
 suppressPackageStartupMessages({
-  library(dplyr)
-  library(tidyr)
-  library(ggplot2)
-  library(funkyheatmap)
+  library(dplyr); library(tidyr); library(ggplot2); library(patchwork); library(funkyheatmap)
 })
-source("src/utils/constants.R")
-source("src/utils/datasets_io.R")
-source("src/utils/math_utils.R")
-source("src/utils/scoring_metrics.R")
+source("src/utils/load_all_functions.R")
+source("src/utils/analysis_release.R")
+source("src/utils/evaluation_scores.R")
 source("src/utils/batch_effect_analysis.R")
-source("src/utils/plotting.R")
-
+control_path <- Sys.getenv("ECODA_BATCH_RELEASE_CONTROL")
+control_md5 <- Sys.getenv("ECODA_BATCH_RELEASE_CONTROL_MD5")
+view <- "batch_effect_corrected"
+control <- read_batch_release_control(control_path, control_md5, view)
+uncorrected_control <- read_batch_release_control(control_path, control_md5, "batch_effect_uncorrected")
+datasets <- control$datasets; batch_datasets <- names(datasets)
+selected_methods <- batch_release_method_keys(view)
+stopifnot(!"ECODA_seuratres_2" %in% selected_methods,
+  all(c("ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma") %in% selected_methods),
+  !anyNA(method_label_map_main[selected_methods]))
 set.seed(42)
-# ANOSIM's statistic does not depend on permutation draws; retain the reference
-# notebook's permutation setting and bound its forked workers on macOS.
-n_permutations <- 999L
-detected_cores <- parallel::detectCores(logical = FALSE)
-if (is.na(detected_cores)) detected_cores <- 1L
-parallel_cores <- min(8L, max(1L, detected_cores))
-
-nas_root <- "/Volumes/Shared/Projects/ECODA_paper/batch_effect/corrected_final"
-nas_results_root <- file.path(nas_root, "results")
-analysis_root <- file.path(getwd(), "data", "batch_effect", "corrected")
-# Snapshots are immutable derived outputs. Change this ID deliberately when
-# accepting a new upstream result revision; never overwrite an old snapshot.
-snapshot_id <- "20261105_corrected_heatmap"
-snapshot_path <- file.path(analysis_root, snapshot_id, "heatmap_scores.csv")
+options(mc.cores = 1L)
+# Validate every required new result and complete both score grids before figures.
+report <- score_batch_release(control)
+uncorrected_report <- score_batch_release(uncorrected_control)
+stopifnot(nrow(report$scores) == 405L, nrow(uncorrected_report$scores) == 360L)
 plot_root <- file.path(getwd(), "plots", "batch_effect_corrected")
-plot_path <- file.path(plot_root, "batch_effect_corrected_funkyheatmap.pdf")
-
-batch_datasets <- c(
-  "Alzheimer", "Breast_cancer", "Covid19_PBMC", "Kidney_KPMP_full",
-  "Diabetes", "Lupus_PBMC", "Lung", "Joanito", "Stephenson"
-)
-datasets <- read_datasets_json(view = "batch_effect_corrected")
-stopifnot(all(batch_datasets %in% names(datasets)))
-method_specs <- batch_uncorrected_method_specs()
-method_specs <- lapply(method_specs, function(spec) {
-  spec$relative_path <- sub("batch_effect_uncorrected", "batch_effect_corrected_final", spec$relative_path, fixed = TRUE)
-  spec
-})
-method_specs$ECODA_authors_HR_NULL <- list(
-  method = "ECODA_authors_HR_NULL", kind = "rds",
-  relative_path = "results/{dataset}_batch_effect_corrected_final_composition.rds",
-  bundle_key = "ECODA_authors_HR_NULL"
-)
-selected_methods <- names(method_specs)
-mds_methods <- setdiff(selected_methods, "ECODA_authors_HR_NULL")
-metric_keys <- c(ANOSIM = "anosim_score", Modularity = "mod_knn3_score", ARI = "cluster_score")
-stopifnot(!anyNA(method_label_map_main[selected_methods]))
+analysis_output_root <- file.path(getwd(), "data", "batch_effect", view, control$release_id)
 ```
 
-# Biological groups versus batch: sample contingency tables
+# Five-metric funkyheatmap and metric panels
 
-This chunk writes the same shared current-cohort report as the uncorrected
-notebook, using current corrected-final sample metadata rather than expression
-or distance matrices. Alzheimer has 104 donor-by-assay samples.
+Biological MDS subtitles show the same scaled five-metric entry means, including
+NULL in the comparison ranges. Technical colourings show individual raw metrics
+or an explicit unscorable status for constant axes.
 
-Find heatmaps in `plots/batch_effect_bio_vs_batch/` and count/composition CSVs in
-`data/batch_effect/bio_vs_batch/tables/`. Each batch field and their combination
-gets a matrix with batch rows and biological-group columns. Heatmap cells show
-sample counts and within-batch percentages; composition CSVs additionally show
-within-biological-group percentages. Zeros and missing `<NA>` levels are retained.
-A pure batch provides no within-batch contrast; inspect whether the biological
-groups share batches before interpreting correction as separable from biology.
-Run this chunk after `setup` without loading method results or plotting MDS.
+ANOSIM, adjusted modularity (`k=3`), the mean Ward/PAM ARI, Silhouette and LISI
+separation all enter the arithmetic mean equally. LISI is already higher-is-better
+and is not inverted. Scaling is within dataset/view/evaluation/metric, with
+neutral 0.5 for constant ranges. Kidney's two entries have equal weight to the
+other evaluations. All five right-hand metric summaries and separate raw metric
+plots are retained; runtime is excluded from this batch comparison.
 
-The shared report also writes a Kidney-only `region.l1` versus `condition.l1`
-matrix using the same sample metadata and count/percentage conventions.
-Anatomical region is diagnostic only, not a configured correction field.
-Unrecorded regions are retained in the `<NA>` row.
-
-```{r bio-batch-tables, message=FALSE, warning=FALSE}
-bio_batch_provenance <- write_batch_biology_report(
-  nas_root = nas_root,
-  source_root = "/srv/beegfs/scratch/users/h/halterc/ECODA_paper/batch_effect/corrected_final",
-  datasets = datasets,
-  dataset_order = batch_datasets,
-  plot_root = file.path(getwd(), "plots", "batch_effect_bio_vs_batch"),
-  table_root = file.path(getwd(), "data", "batch_effect", "bio_vs_batch", "tables")
-)
-bio_batch_provenance[, c("dataset", "n_samples", "biological_column", "batch_columns")]
-```
-
-# Load validated corrected scores
-
-NAS sidecars retain the original Yggdrasil scratch `PATH`. Validate that exact
-source-to-NAS mapping, MD5, and size before reading each artifact; do not rewrite
-production sidecars. The local snapshot has its own local `MD5/SIZE/PATH` sidecar
-and records every input checksum, source path, cohort, method, and sample count.
-
-```{r load-scores, message=FALSE, warning=FALSE}
-read_corrected_scores <- function() {
-  # Explicit ownership mapping for this corrected-final publication lane.
-  source_root <- "/srv/beegfs/scratch/users/h/halterc/ECODA_paper/batch_effect/corrected_final"
-  validate_nas <- function(relative_path) {
-    path <- file.path(nas_root, relative_path)
-    if (!file.exists(path) || isTRUE(file.info(path)$isdir) || file.info(path)$size <= 0) {
-      stop("Missing or empty corrected artifact: ", path)
-    }
-    fields <- .batch_sidecar_fields(path)
-    if (!identical(fields$PATH, file.path(source_root, relative_path)) ||
-        !identical(tolower(fields$MD5), tolower(unname(tools::md5sum(path)))) ||
-        !identical(fields$SIZE, as.character(file.info(path)$size))) {
-      stop("Corrected artifact ownership/checksum/size mismatch: ", path)
-    }
-    list(path = path, md5 = fields$MD5)
-  }
-
-  uncorrected_root <- file.path(getwd(), "data", "batch_effect", "uncorrected_final")
-  uncorrected_metadata <- read_batch_final_manifest(
-    file.path(uncorrected_root, "final_analysis_metadata.tsv"),
-    expected_datasets = batch_datasets, expected_methods = selected_methods
-  )
-  uncorrected_artifacts <- read_batch_final_manifest(
-    file.path(uncorrected_root, "final_analysis_artifacts.tsv"),
-    expected_datasets = batch_datasets, expected_methods = selected_methods
-  )
-  uncorrected_registry <- batch_candidate_registry(datasets, batch_datasets)
-
-  dataset_tables <- lapply(batch_datasets, function(dataset) {
-    message("Reading corrected scores: ", dataset)
-    metadata <- validate_nas(file.path("results", paste0(dataset, "_batch_effect_corrected_final_metadata.rds")))
-    summary <- readRDS(metadata$path)
-    labels <- summary$labels
-    sample_ids <- names(labels)
-    if (is.null(sample_ids) || length(labels) < 4L || anyNA(labels) ||
-        anyNA(sample_ids) || any(!nzchar(sample_ids)) || anyDuplicated(sample_ids) ||
-        length(unique(labels)) < 2L || length(unique(labels)) >= length(labels)) {
-      stop(dataset, ": invalid named biological evaluation labels")
-    }
-    if (dataset == "Alzheimer" && length(sample_ids) != 104L) {
-      stop("Alzheimer figures require exactly 104 donor-by-assay samples")
-    }
-    # Read each R bundle only once; discard all matrices before the next cohort.
-    bundles <- list()
-    mds_results <- list()
-    method_tables <- lapply(selected_methods, function(method) {
-      spec <- method_specs[[method]]
-      relative <- gsub("{dataset}", dataset, spec$relative_path, fixed = TRUE)
-      artifact <- validate_nas(relative)
-      if (spec$kind == "rds") {
-        if (is.null(bundles[[relative]])) bundles[[relative]] <<- readRDS(artifact$path)
-        result <- bundles[[relative]][[spec$bundle_key]]
-        if (is.null(result$scores) || !all(unname(metric_keys) %in% names(result$scores))) {
-          stop(dataset, "/", method, ": missing persisted heatmap scores")
-        }
-        matrix <- .batch_validate_matrix(as.matrix(result$dist_mat), sample_ids, paste(dataset, method))
-        distance <- stats::as.dist(matrix)
-        # The null control intentionally uses shuffled rather than primary labels.
-        if (method != "ECODA_authors_HR_NULL" &&
-            (!identical(names(result$labels), sample_ids) ||
-             !identical(as.character(result$labels), as.character(labels)))) {
-          stop(dataset, "/", method, ": result labels disagree with metadata")
-        }
-        values <- vapply(unname(metric_keys), function(key) {
-          value <- result$scores[[key]]
-          if (!is.numeric(value) || length(value) != 1L) stop("Invalid score: ", method, "/", key)
-          as.numeric(value)
-        }, numeric(1))
-        score_source <- "persisted_scores"
-      } else {
-        frame <- as.data.frame(arrow::read_feather(artifact$path))
-        index <- as.character(frame[[ncol(frame)]])
-        matrix <- as.matrix(frame[, -ncol(frame), drop = FALSE])
-        rownames(matrix) <- index
-        matrix <- .batch_validate_matrix(matrix, sample_ids, paste(dataset, method))
-        if (!isTRUE(all.equal(matrix, t(matrix), tolerance = 1e-8)) || any(abs(diag(matrix)) > 1e-8)) {
-          stop(dataset, "/", method, ": invalid symmetric distance matrix")
-        }
-        distance <- stats::as.dist(matrix)
-        anosim <- compute_batch_anosim(distance, labels, permutations = n_permutations, parallel = parallel_cores)
-        if (anosim$status != "ESTIMABLE") stop(dataset, "/", method, ": ", anosim$warning)
-        values <- c(anosim$statistic, calc_modularity(distance, labels, 3), clust_eval(distance, labels))
-        score_source <- "persisted_distance"
-      }
-      if (any(!is.finite(values))) stop(dataset, "/", method, ": non-finite heatmap scores")
-      if (method %in% mds_methods) {
-        mds_results[[method]] <<- list(
-          dist_mat = distance,
-          scores = if (spec$kind == "rds") result$scores else NULL
-        )
-      }
-      data.frame(
-        dataset = dataset, method_key = method, score = names(metric_keys), value = values,
-        source = score_source, n_samples = length(sample_ids),
-        artifact_path = artifact$path, artifact_md5 = artifact$md5,
-        metadata_path = metadata$path, metadata_md5 = metadata$md5,
-        stringsAsFactors = FALSE
-      )
-    })
-    author_features <- bundles[[paste0("results/", dataset, "_batch_effect_corrected_final_composition.rds")]][["ECODA_authors_HR"]]$feat_mat
-    if (length(dim(author_features)) != 2L || ncol(author_features) < 1L ||
-        !identical(rownames(author_features), sample_ids)) {
-      stop(dataset, ": missing or misaligned ECODA_authors cell-type features")
-    }
-    table <- do.call(rbind, method_tables)
-    table$n_cell_types <- ncol(author_features)
-
-    metadata_artifact <- validate_nas(file.path("metadata", paste0(dataset, "_sample_metadata.feather")))
-    sample_metadata <- as.data.frame(arrow::read_feather(metadata_artifact$path))
-    label_col <- datasets[[dataset]]$label_col
-    if (!all(c("Sample", label_col) %in% names(sample_metadata)) ||
-        !identical(as.character(sample_metadata$Sample), sample_ids) ||
-        !identical(.batch_values(sample_metadata[[label_col]]), .batch_values(labels))) {
-      stop(dataset, ": corrected sample metadata does not match the result sample order/labels")
-    }
-    uncorrected_result <- load_batch_uncorrected_dataset_from_manifest(
-      uncorrected_metadata, uncorrected_artifacts, dataset, uncorrected_registry
-    )
-    panels <- plot_batch_mds_comparison(
-      uncorrected_result,
-      list(dataset = dataset, metadata = sample_metadata, label_col = label_col, methods = mds_results),
-      datasets[[dataset]]$batch_col,
-      method_label_map_main[mds_methods]
-    )
-    if (dataset == "Kidney_KPMP_full") {
-      region_col <- "region.l1"
-      if (!region_col %in% names(sample_metadata) ||
-          !region_col %in% names(uncorrected_result$metadata) ||
-          !identical(.batch_values(sample_metadata[[region_col]]),
-                     .batch_values(uncorrected_result$metadata[[region_col]]))) {
-        stop(dataset, ": missing or inconsistent anatomical region between MDS lanes")
-      }
-      region_panels <- plot_batch_mds_comparison(
-        uncorrected_result,
-        list(dataset = dataset, metadata = sample_metadata, label_col = label_col, methods = mds_results),
-        region_col, method_label_map_main[mds_methods]
-      )
-      region_panel <- region_panels[[paste0("batch_", region_col)]]
-      region_panel <- region_panel +
-        patchwork::plot_annotation(subtitle = paste0("Region: ", region_col))
-      panels$region <- region_panel & ggplot2::labs(color = "Region")
-    }
-    dir.create(plot_root, recursive = TRUE, showWarnings = FALSE)
-    for (name in names(panels)) {
-      suffix <- if (name == "biological") "" else paste0("_", name)
-      path <- file.path(plot_root, paste0(dataset, "_mds", suffix, ".pdf"))
-      ggplot2::ggsave(path, plot = panels[[name]], width = 13, height = 24, units = "in", device = "pdf")
-      stopifnot(file.exists(path), file.info(path)$size > 0)
-    }
-    table
-  })
-  do.call(rbind, dataset_tables)
-}
-
-if (dir.exists(nas_root)) {
-  if (!dir.exists(nas_results_root)) stop("Mounted NAS lacks corrected results: ", nas_results_root)
-  funky_metric_data <- read_corrected_scores()
-  if (file.exists(snapshot_path)) {
-    validate_batch_artifact(snapshot_path, "local corrected score snapshot")
-    previous <- read.csv(snapshot_path, stringsAsFactors = FALSE)
-    if (!isTRUE(all.equal(previous, funky_metric_data, check.attributes = FALSE))) {
-      stop("Corrected scores/provenance changed; choose a new snapshot_id before saving a new snapshot")
-    }
-  } else {
-    write_batch_analysis_table(funky_metric_data, snapshot_path)
-  }
-  message("Source: corrected-final NAS results; local snapshot: ", snapshot_path)
-} else {
-  if (!file.exists(snapshot_path)) {
-    stop("NAS is not mounted and no local score snapshot exists. Mount the NAS and run this notebook once: ", snapshot_path)
-  }
-  validate_batch_artifact(snapshot_path, "local corrected score snapshot")
-  funky_metric_data <- read.csv(snapshot_path, stringsAsFactors = FALSE)
-  message("Source: local corrected score snapshot: ", snapshot_path)
-  message("MDS panels are not regenerated offline: mount the corrected-final NAS to create them.")
-}
-
-expected <- expand.grid(dataset = batch_datasets, method_key = selected_methods, score = names(metric_keys), stringsAsFactors = FALSE)
-key <- function(data) paste(data$dataset, data$method_key, data$score, sep = "/")
-if (anyDuplicated(key(funky_metric_data)) || !setequal(key(funky_metric_data), key(expected)) ||
-    any(!is.finite(funky_metric_data$value)) || anyNA(funky_metric_data$n_samples) ||
-    any(funky_metric_data$n_samples < 4L) || anyNA(funky_metric_data$n_cell_types) ||
-    any(funky_metric_data$n_cell_types < 1L)) {
-  stop("Corrected heatmap snapshot must contain exactly nine cohorts × eight methods × three finite metrics")
-}
-funky_metric_data$method <- unname(method_label_map_main[funky_metric_data$method_key])
-dataset_summary <- funky_metric_data %>% distinct(dataset, n_samples, n_cell_types)
-stopifnot(nrow(dataset_summary) == length(batch_datasets))
-dataset_summary
-```
-
-# Biological- and batch-coloured MDS
-
-The NAS-backed `load-scores` chunk writes paired MDS panels for the seven
-non-shuffled methods: **uncorrected on the left, corrected on the right**, one
-method per row. Uncorrected inputs come from the same validated mixed-source
-manifests as `batch_effect_analysis_uncorrected.rmd`; corrected inputs are the
-validated NAS distances and metadata loaded above.
-
-Biological labels, each dataset-level `columns.batch` field from `datasets.json`,
-and the observed combination of all batch fields receive separate panels.
-Label colours are shared between both sides, including groups present on only
-one side. All colourings reuse the same coordinates within each method/lane.
-Both sides must have identical sample IDs and order; incompatible universes
-fail before plotting. MDS axes remain lane-specific. Samples are never
-intersected, padded, or relabelled to make incompatible inputs appear comparable.
-
-Kidney additionally writes `Kidney_KPMP_full_mds_region.pdf`, coloured by
-`region.l1` (Cortex, Medulla, Papilla). This is an anatomical diagnostic, not
-an additional correction covariate; `datasets.json` is unchanged. Region labels
-must agree between both lanes. Unrecorded regions remain visible as NA points
-and are excluded from region-specific scores, without dropping samples or
-changing their MDS coordinates.
-
-Each side displays its own label-specific ANOSIM and **Separation score**:
-the arithmetic mean of ANOSIM, ARI (the existing Ward/PAM average), and adjusted
-SNN modularity with `k = 3`. These are raw scores, not heatmap-normalized scores.
-ANOSIM statistics for the batch panels require no permutations. Missing labels
-remain visible as NA points but are excluded from scoring; non-estimable scores
-are shown as NA. Biological panels reuse persisted R scores when available.
-
-# Corrected funkyheatmap
-
-As in the uncorrected notebook, min–max normalize each metric within each cohort,
-then average the normalized values for the overall, dataset, and metric columns.
-Higher is better for ANOSIM, adjusted kNN-3 modularity, and ARI. Runtime is excluded.
-
-```{r funkyheatmap, message=FALSE, warning=FALSE, fig.width=12, fig.height=7}
-clean_data <- funky_metric_data %>%
-  mutate(score = factor(score, levels = names(metric_keys))) %>%
-  group_by(dataset, score) %>%
-  mutate(value = min_max(value)) %>%
-  ungroup()
-
-df_overall <- clean_data %>%
-  group_by(method) %>%
-  summarise(Overall_Score = mean(value), .groups = "drop")
-df_datasets <- clean_data %>%
-  group_by(method, dataset) %>%
-  summarise(value = mean(value), .groups = "drop") %>%
-  pivot_wider(id_cols = method, names_from = dataset, values_from = value, names_prefix = "Dataset__")
-df_metrics <- clean_data %>%
-  group_by(method, score) %>%
-  summarise(value = mean(value), .groups = "drop") %>%
-  pivot_wider(id_cols = method, names_from = score, values_from = value, names_prefix = "Metric__")
-final_data <- df_overall %>%
-  left_join(df_datasets, by = "method") %>%
-  left_join(df_metrics, by = "method") %>%
-  mutate(id = method) %>%
-  arrange(desc(Overall_Score))
-
-dataset_labels <- dataset_summary %>%
-  arrange(dataset) %>%
-  mutate(label = paste0(dataset, " (n cell types = ", n_cell_types, ")"))
-
-column_info <- bind_rows(
-  tibble(id = "id", group = "", name = "", geom = "text", palette = NA_character_, options = list(list(hjust = 0, width = 6))),
-  tibble(id = "Overall_Score", group = "Overall", name = "Mean", geom = "bar", palette = "palette_overall", options = list(list(width = 4))),
-  tibble(id = paste0("Dataset__", dataset_labels$dataset), group = "Datasets", name = dataset_labels$label, geom = "circle", palette = "Datasets", options = rep(list(list()), length(batch_datasets))),
-  tibble(id = paste0("Metric__", names(metric_keys)), group = "Metrics", name = names(metric_keys), geom = "bar", palette = "Metrics", options = rep(list(list(width = 2)), length(metric_keys)))
-)
-ncolors <- 11L
-heatmap <- funky_heatmap(
-  data = final_data,
-  column_info = column_info,
-  scale_column = FALSE,
-  palettes = list(
-    palette_overall = RColorBrewer::brewer.pal(ncolors, "RdBu"),
-    Datasets = RColorBrewer::brewer.pal(ncolors, "RdBu"),
-    Metrics = RColorBrewer::brewer.pal(ncolors, "RdBu")
-  ),
-  column_groups = tibble(group = c("Overall", "Datasets", "Metrics")),
-  legends = list(
-    list(palette = "palette_overall", enabled = TRUE, title = "Mean normalized score", labels = c(". Min", rep("", ncolors - 2L), "Max .")),
-    list(palette = "Datasets", enabled = TRUE, title = "Dataset score", labels = c(". Min", rep("", ncolors - 2L), "Max .")),
-    list(palette = "Metrics", enabled = TRUE, title = "Metric score", labels = c(". Min", rep("", ncolors - 2L), "Max ."))
-  ),
-  position_args = position_arguments(col_width = 1.5, col_space = 0.2, col_annot_offset = 5)
-)
+```{r five-metric-report, message=FALSE, warning=FALSE}
+write_batch_release_artifact(report, file.path(analysis_output_root, "evaluation_release.rds"))
+write_batch_release_artifact(report$scores, file.path(analysis_output_root, "heatmap_scores.csv"), csv = TRUE)
+plot_data <- report$scores
+plot_data$method <- plot_data$method_key; plot_data$score <- plot_data$metric
 dir.create(plot_root, recursive = TRUE, showWarnings = FALSE)
-ggsave(plot_path, heatmap, width = 12, height = 7, units = "in", device = "pdf")
-stopifnot(file.exists(plot_path), file.info(plot_path)$size > 0)
-heatmap
+build_funky_heatmap(plot_data, exec_times = NULL,
+  filter_methods = selected_methods, method_recode = method_label_map_main,
+  dataset_recode = setNames(batch_datasets, batch_datasets), score_set = evaluation_metrics(),
+  output_file = "batch_effect_corrected_funkyheatmap.pdf", output_dir = plot_root,
+  plot_width = 14, plot_height = 8, expected_grid = control$expected_grid)
+for (metric in evaluation_metrics()) {
+  rows <- plot_data[plot_data$metric == metric, ]
+  rows$entry <- paste(rows$dataset, rows$evaluation_id, sep = " / ")
+  plot <- ggplot(rows, aes(method_key, value, fill = method_key)) + geom_col() +
+    facet_wrap(~entry, scales = "free_y") + theme_bw() +
+    theme(axis.text.x = element_text(angle = 60, hjust = 1), legend.position = "none") +
+    labs(x = NULL, y = metric, title = "Raw separation metric; higher is better")
+  ggsave(file.path(plot_root, paste0("batch_effect_corrected_", metric, ".pdf")), plot, width = 14, height = 9)
+}
 ```
 
-# Outputs
+# Paired MDS and current-cohort confounding tables
 
-- `plots/batch_effect_corrected/batch_effect_corrected_funkyheatmap.pdf`
-- `plots/batch_effect_corrected/<dataset>_mds.pdf` (biological labels)
-- `plots/batch_effect_corrected/<dataset>_mds_batch_<column>.pdf` for each batch column
-- `plots/batch_effect_corrected/<dataset>_mds_batch_combined.pdf` for multiple batch columns;
-  legend values follow the subtitle's column order and are separated by ` | `
-- `plots/batch_effect_corrected/Kidney_KPMP_full_mds_region.pdf` (anatomical `region.l1`)
-- `data/batch_effect/corrected/20261105_corrected_heatmap/heatmap_scores.csv`
-  and its checksum sidecar: the only local data needed for offline heatmap plotting.
-- Shared bio/batch matrices and composition CSVs: `data/batch_effect/bio_vs_batch/tables/`
-- Shared annotated bio/batch heatmaps: `plots/batch_effect_bio_vs_batch/`
-- Kidney region matrix: `plots/batch_effect_bio_vs_batch/Kidney_KPMP_full_bio_vs_batch_region.l1.pdf`,
-  with matching `_counts.csv` and `_composition.csv` files in the shared table directory.
+Uncorrected panels are left and corrected panels right. Both corrected Harmony
+arms compare with the same uncorrected unsupervised result. Each method's MDS
+coordinates are computed once per view and reused for both Kidney axes and all
+technical colourings. Primary biological filenames and batch suffixes are
+preserved; Kidney tissue also uses the maintained `_mds_region.pdf` filename,
+now explicitly labeled with the recorded tissue categories.
 
-All MDS PDFs in this directory are uncorrected-versus-corrected comparisons;
-the uncorrected notebook's standalone panels remain in its separate plot root.
+```{r batch-mds, message=FALSE, warning=FALSE}
+for (dataset in batch_datasets) {
+  left <- load_batch_release_dataset(uncorrected_control, dataset)
+  right <- load_batch_release_dataset(control, dataset)
+  panels <- plot_batch_release_comparison(left, right, datasets[[dataset]]$batch_col,
+    method_label_map_main[selected_methods])
+  for (name in names(panels)) {
+    suffix <- if (name == "biological") "" else paste0("_", name)
+    ggsave(file.path(plot_root, paste0(dataset, "_mds", suffix, ".pdf")), panels[[name]], width = 13, height = 16)
+    if (name == "evaluation_tissue") ggsave(file.path(plot_root, paste0(dataset, "_mds_region.pdf")), panels[[name]], width = 13, height = 16)
+  }
+  for (axis in names(right$evaluations)) {
+    stem <- if (axis == right$primary_evaluation) dataset else paste0(dataset, "_", axis)
+    write_batch_biology_tables(right$metadata, stem, datasets[[dataset]]$evaluation_labels[[axis]],
+      datasets[[dataset]]$batch_col, file.path(getwd(), "plots", "batch_effect_bio_vs_batch"),
+      file.path(analysis_output_root, "bio_vs_batch"), lane = control$release_id)
+  }
+  rm(left, right, panels)
+}
+```
 
-The snapshot contains 216 metric rows (nine cohorts × eight displayed methods,
-including `Shuffled_baseline`, × three metrics). It is a derived plotting artifact,
-not a replacement for the authoritative corrected-final results.
+The maintained corrected funkyheatmap is
+`plots/batch_effect_corrected/batch_effect_corrected_funkyheatmap.pdf`. Primary
+MDS files remain `<dataset>_mds.pdf` and technical files retain their configured
+`_mds_batch_<column>.pdf` and `_mds_batch_combined.pdf` suffixes. Separate metric
+PDFs use the five core metric keys. The new release owns its score/provenance
+snapshot and checksum sidecars under the explicit release ID. Source bundles
+and historical snapshots remain immutable; plots are not declared current until
+all required release rows are approved.

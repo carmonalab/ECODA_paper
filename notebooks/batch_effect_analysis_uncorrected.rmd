@@ -1,195 +1,122 @@
 ---
 title: "Uncorrected batch-effect analysis"
 author: "Christian Halter"
-date: "`r format(Sys.Date(), '%e de %B, %Y')`"
-output:
-  rmdformats::downcute:
-    lightbox: true
-    thumbnails: false
-    self_contained: true
-    gallery: true
-    code_folding: show
+output: rmdformats::downcute
 ---
 
-# Scope
+# Approved release scope
 
-This pass compares the nine batch-effect cohorts in the order recorded by the
-analysis manifests. Alzheimer requires the current **104 donor-by-assay samples**
-and final-lane results; its historical 83-donor-only results are not valid inputs.
-Other frozen cohorts retain their explicitly approved legacy artifacts. No
-preprocessing, H5AD loading, embedding, or distance recomputation occurs here.
-Biological labels are evaluation metadata only.
+This report consumes an explicit, checksum-bound approved release control. The
+registry enables eight physical cohorts and nine evaluation entries: Kidney
+condition and tissue are scored separately. Eight methods including the actual
+stored NULL control contribute five equally weighted separation metrics (360
+values). Missing required new results stop the report; historical manifests
+remain available only through their separate strict historical readers.
 
-The historical local manifests still select legacy Alzheimer and are now
-rejected before any figure is written. The existing Alzheimer MDS PDFs and
-uncorrected funkyheatmap therefore remain stale until the missing 104-sample
-composition/null/summary artifacts are recovered, validated, and published and
-new source-bound analysis manifests are supplied. Do not interpret the old
-heatmap's Alzheimer scores as a 104-sample analysis.
+No method, preprocessing or Pipeline 4 annotation is run here. Batch views use
+configured source annotations. Primary NULL labels are preserved from their
+bundles; Kidney tissue NULL uses its own recorded seed 124. Tissue groups
+(45 generic kidney, 23 cortex, 12 medulla) are partly confounded with suspension:
+the generic kidney samples are cells, while cortex/medulla samples are nuclei.
+Both axes reuse the same features, distances and MDS coordinates; neither axis
+is protected or used as a covariate during correction.
 
 ```{r setup, message=FALSE, warning=FALSE}
-if (basename(getwd()) == "notebooks") {
-  setwd("..")
-  if (file.exists(".Rprofile")) source(".Rprofile")
-}
-
+if (basename(getwd()) == "notebooks") setwd("..")
 suppressPackageStartupMessages({
-  library(ggplot2)
-  library(patchwork)
-  library(rmarkdown)
+  library(dplyr); library(tidyr); library(ggplot2); library(patchwork); library(funkyheatmap)
 })
 source("src/utils/load_all_functions.R")
+source("src/utils/analysis_release.R")
+source("src/utils/evaluation_scores.R")
 source("src/utils/batch_effect_analysis.R")
-
-set.seed(42)
-n_permutations <- 999L
-permanova_permutations <- 99L
-
-# vegan::anosim()/adonis2() use forked permutation workers on macOS. Keep the
-# default bounded to eight physical cores; lower this value for interactive
-# work or constrained machines.
-detected_cores <- parallel::detectCores(logical = FALSE)
-if (is.na(detected_cores)) detected_cores <- 1L
-parallel_cores <- min(8L, max(1L, detected_cores))
-options(mc.cores = parallel_cores)
-
-analysis_root <- file.path(getwd(), "data", "batch_effect", "uncorrected_final")
-metadata_manifest_path <- file.path(analysis_root, "final_analysis_metadata.tsv")
-artifact_manifest_path <- file.path(analysis_root, "final_analysis_artifacts.tsv")
-plot_root <- file.path(getwd(), "plots", "batch_effect_uncorrected_final")
-analysis_output_root <- file.path(analysis_root, "analysis")
-
-batch_datasets <- c(
-  "Alzheimer",
-  "Breast_cancer",
-  "Covid19_PBMC",
-  "Kidney_KPMP_full",
-  "Diabetes",
-  "Lupus_PBMC",
-  "Lung",
-  "Joanito",
-  "Stephenson"
-)
-
-datasets <- read_datasets_json(view = "batch_effect_uncorrected")
-if (!identical(names(datasets)[match(batch_datasets, names(datasets))], batch_datasets)) {
-  stop("datasets.json does not contain the exact nine final batch-effect datasets")
-}
-if (any(vapply(datasets[batch_datasets], function(x) is.null(x$label_col), logical(1)))) {
-  stop("one or more final batch-effect datasets lack a primary biological label")
-}
-registry <- batch_candidate_registry(datasets, batch_datasets)
-method_specs <- batch_uncorrected_method_specs()
-selected_methods <- names(method_specs)
-null_method <- "ECODA_authors_HR_NULL"
-final_method_keys <- c(selected_methods, null_method)
+view <- "batch_effect_uncorrected"
+control <- read_batch_release_control(Sys.getenv("ECODA_BATCH_RELEASE_CONTROL"),
+  Sys.getenv("ECODA_BATCH_RELEASE_CONTROL_MD5"), view)
+datasets <- control$datasets
+batch_datasets <- names(datasets)
+selected_methods <- setdiff(batch_release_method_keys(view), "ECODA_authors_HR_NULL")
 method_labels <- unname(method_label_map_main[selected_methods])
-if (anyNA(method_labels) || length(unique(method_labels)) != length(selected_methods)) {
-  stop("selected methods are not covered by method_label_map_main")
-}
-metadata_manifest <- read_batch_final_manifest(
-  metadata_manifest_path,
-  expected_datasets = batch_datasets,
-  expected_methods = final_method_keys
-)
-artifact_manifest <- read_batch_final_manifest(
-  artifact_manifest_path,
-  expected_datasets = batch_datasets,
-  expected_methods = final_method_keys
-)
-method_colors <- stats::setNames(
-  grDevices::hcl(seq(15, 375, length.out = length(selected_methods) + 1L)[-1L], l = 65, c = 100),
-  method_labels
-)
+stopifnot(!anyNA(method_labels))
+method_colors <- setNames(grDevices::hcl.colors(length(method_labels), "Dark 3"), method_labels)
+registry <- batch_candidate_registry(datasets, batch_datasets)
+set.seed(42)
+options(mc.cores = 1L)
+parallel_cores <- 1L; n_permutations <- 999L; permanova_permutations <- 99L
+# Complete finite-grid preflight precedes every figure and output write.
+report <- score_batch_release(control)
+stopifnot(nrow(report$scores) == 360L)
+plot_root <- file.path(getwd(), "plots", "batch_effect_uncorrected_final")
+analysis_output_root <- file.path(getwd(), "data", "batch_effect", view, control$release_id)
+```
 
-# The preflight is intentionally before any figure work. Both manifests are
-# required and every explicit final/legacy artifact path is loaded exactly as
-# recorded; no path is reconstructed from a common root.
-dataset_results <- lapply(batch_datasets, function(dataset) {
-  load_batch_uncorrected_dataset_from_manifest(
-    metadata_manifest,
-    artifact_manifest,
-    dataset,
-    registry
-  )
-})
-names(dataset_results) <- batch_datasets
-stopifnot(identical(names(dataset_results), batch_datasets))
-if (length(dataset_results$Alzheimer$sample_ids) != 104L) {
-  stop("Alzheimer figures require exactly 104 donor-by-assay samples")
-}
+# Five-metric scores and funkyheatmap
+
+Biological MDS subtitles use the same scaled five-metric entry mean, including
+NULL in the comparison ranges. Technical colourings show individual raw metrics
+or an explicit unscorable status for constant axes.
+
+Each metric is min-max scaled within dataset, view and evaluation axis. Constant
+ranges receive neutral 0.5. Overall rankings are descending arithmetic means of
+all five metrics and nine equally weighted evaluation entries. Kidney therefore
+has two entries. Both Silhouette and already transformed LISI separation appear
+in the right-hand metric summaries and separate per-metric plots.
+
+```{r five-metric-report, message=FALSE, warning=FALSE}
+write_batch_release_artifact(report, file.path(analysis_output_root, "evaluation_release.rds"))
+write_batch_release_artifact(report$scores,
+  file.path(analysis_output_root, "batch_effect_uncorrected_final_heatmap_scores.csv"), csv = TRUE)
+plot_data <- report$scores
+plot_data$method <- plot_data$method_key; plot_data$score <- plot_data$metric
 dir.create(plot_root, recursive = TRUE, showWarnings = FALSE)
-dir.create(analysis_output_root, recursive = TRUE, showWarnings = FALSE)
-```
-
-# Biological groups versus batch: sample contingency tables
-
-The shared current-cohort report is in `plots/batch_effect_bio_vs_batch/`
-(annotated heatmaps) and `data/batch_effect/bio_vs_batch/tables/` (CSV matrices).
-It uses checksum-validated current corrected-final **sample metadata**, not
-expression values or the historical mixed-source result manifest. Alzheimer
-therefore uses 104 donor-by-assay samples, not the historical 83 donor-only samples.
-
-Each configured batch column and their combination gets a `_counts.csv` matrix
-(batch rows × biological-group columns), a `_composition.csv` with percentages
-within batch and within biological group, and a PDF showing counts and
-within-batch percentages. Zeros and missing `<NA>` levels are retained.
-A 100% row has no within-batch biological contrast; check whether the groups
-share any batches to diagnose confounding for a particular contrast.
-This metadata-only chunk requires the mounted NAS but no benchmark rerun.
-The same shared report additionally writes Kidney `region.l1` versus biology
-as an anatomical diagnostic, retaining unrecorded regions as `<NA>`. This does
-not add region to the configured correction covariates.
-
-The legacy uncorrected Lupus metadata differs from the current metadata in 33
-`batch_cov` assignments. Its separate `Lupus_PBMC_uncorrected_manifest_*` tables
-and heatmap preserve the labels actually used by that uncorrected result lane.
-
-```{r bio-batch-tables, message=FALSE, warning=FALSE}
-bio_batch_provenance <- write_batch_biology_report(
-  nas_root = "/Volumes/Shared/Projects/ECODA_paper/batch_effect/corrected_final",
-  source_root = "/srv/beegfs/scratch/users/h/halterc/ECODA_paper/batch_effect/corrected_final",
-  datasets = read_datasets_json(view = "batch_effect_corrected"),
-  dataset_order = batch_datasets,
-  plot_root = file.path(getwd(), "plots", "batch_effect_bio_vs_batch"),
-  table_root = file.path(getwd(), "data", "batch_effect", "bio_vs_batch", "tables")
-)
-write_batch_biology_tables(
-  dataset_results$Lupus_PBMC$metadata, "Lupus_PBMC_uncorrected_manifest",
-  datasets$Lupus_PBMC$label_col, datasets$Lupus_PBMC$batch_col,
-  file.path(getwd(), "plots", "batch_effect_bio_vs_batch"),
-  file.path(getwd(), "data", "batch_effect", "bio_vs_batch", "tables"),
-  lane = "uncorrected manifest"
-)
-bio_batch_provenance[, c("dataset", "n_samples", "biological_column", "batch_columns")]
-```
-
-# Per-dataset sample and covariate contract
-
-```{r metadata-contract, message=FALSE, warning=FALSE}
-metadata_summary <- do.call(rbind, lapply(dataset_results, function(dataset_result) {
-  dataset <- dataset_result$dataset
-  ds_registry <- dataset_result$registry
-  data.frame(
-    dataset = dataset,
-    sample_count = length(dataset_result$sample_ids),
-    primary_label = dataset_result$label_col,
-    candidate_count = nrow(ds_registry),
-    biological_secondary_count = sum(ds_registry$is_secondary_biology),
-    technical_count = sum(ds_registry$is_technical),
-    stringsAsFactors = FALSE
-  )
-}))
-metadata_summary
-```
-
-# Plot and metric helpers
-
-```{r plotting-helpers, message=FALSE, warning=FALSE}
-`%||%` <- function(x, y) {
-  if (is.null(x) || length(x) == 0L || all(is.na(x))) y else x
+build_funky_heatmap(plot_data, exec_times = NULL,
+  filter_methods = batch_release_method_keys(view), method_recode = method_label_map_main,
+  dataset_recode = setNames(batch_datasets, batch_datasets), score_set = evaluation_metrics(),
+  output_file = "batch_effect_uncorrected_final_funkyheatmap.pdf", output_dir = plot_root,
+  plot_width = 14, plot_height = 8, expected_grid = control$expected_grid)
+for (metric in evaluation_metrics()) {
+  rows <- plot_data[plot_data$metric == metric, ]
+  rows$entry <- paste(rows$dataset, rows$evaluation_id, sep = " / ")
+  plot <- ggplot(rows, aes(method_key, value, fill = method_key)) + geom_col() +
+    facet_wrap(~entry, scales = "free_y") + theme_bw() +
+    theme(axis.text.x = element_text(angle = 60, hjust = 1), legend.position = "none") +
+    labs(x = NULL, y = metric, title = "Raw separation metric; higher is better")
+  ggsave(file.path(plot_root, paste0("batch_effect_uncorrected_final_", metric, ".pdf")), plot, width = 14, height = 9)
 }
+```
 
+# MDS and current-cohort confounding tables
+
+Each cohort is loaded and released separately. Biological and technical
+colourings share one MDS solution per method. The primary MDS filename remains
+`<dataset>_mds.pdf`; Kidney additionally writes `_mds_evaluation_tissue.pdf`.
+
+```{r batch-mds, message=FALSE, warning=FALSE}
+for (dataset in batch_datasets) {
+  result <- load_batch_release_dataset(control, dataset)
+  panels <- plot_batch_release_mds(result, datasets[[dataset]]$batch_col, method_label_map_main[selected_methods])
+  for (name in names(panels)) {
+    suffix <- if (name == "biological") "" else paste0("_", name)
+    ggsave(file.path(plot_root, paste0(dataset, "_mds", suffix, ".pdf")), panels[[name]], width = 13, height = 12)
+    if (name == "evaluation_tissue") ggsave(file.path(plot_root, paste0(dataset, "_mds_region.pdf")), panels[[name]], width = 13, height = 12)
+  }
+  for (axis in names(result$evaluations)) {
+    stem <- if (axis == result$primary_evaluation) dataset else paste0(dataset, "_", axis)
+    write_batch_biology_tables(result$metadata, stem, datasets[[dataset]]$evaluation_labels[[axis]],
+      datasets[[dataset]]$batch_col, file.path(getwd(), "plots", "batch_effect_bio_vs_batch"),
+      file.path(analysis_output_root, "bio_vs_batch"), lane = control$release_id)
+  }
+  rm(result, panels)
+}
+```
+
+# Covariate diagnostics
+
+The established ANOSIM, univariate and joint PERMANOVA, decomposition and NMI
+reports retain their definitions and filenames. These are separately labeled
+covariate diagnostics; they do not replace the five-metric default ranking.
+
+```{r plotting-helpers}
 .metric_warning <- function(...) {
   pieces <- as.character(c(...))
   pieces <- pieces[!is.na(pieces) & nzchar(pieces)]
@@ -238,232 +165,24 @@ metadata_summary
 }
 
 
-build_batch_funky_heatmap <- function(metric_data, output_path) {
-  metric_order <- c("ANOSIM", "Modularity", "ARI")
-  clean_data <- metric_data %>%
-    filter(score %in% metric_order, is.finite(value)) %>%
-    mutate(score = factor(score, levels = metric_order)) %>%
-    group_by(dataset, score) %>%
-    mutate(value = min_max(value)) %>%
-    ungroup()
-  if (nrow(clean_data) == 0L) stop("batch funky heatmap has no estimable metrics")
 
-  df_overall <- clean_data %>%
-    group_by(method) %>%
-    summarise(Overall_Score = mean(value, na.rm = TRUE), .groups = "drop")
-  df_datasets_wide <- clean_data %>%
-    group_by(method, dataset) %>%
-    summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
-    pivot_wider(id_cols = method, names_from = dataset, values_from = value, names_prefix = "Dataset__")
-  df_metrics_wide <- clean_data %>%
-    group_by(method, score) %>%
-    summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
-    pivot_wider(id_cols = method, names_from = score, values_from = value, names_prefix = "Metric__")
-  final_data <- df_overall %>%
-    left_join(df_datasets_wide, by = "method") %>%
-    left_join(df_metrics_wide, by = "method") %>%
-    mutate(id = method) %>%
-    arrange(desc(Overall_Score))
-
-  info_method <- tibble::tribble(
-    ~id, ~group, ~name, ~geom, ~palette, ~options,
-    "id", "", "", "text", NA, list(hjust = 0, width = 6)
-  )
-  info_overall <- tibble::tribble(
-    ~id, ~group, ~name, ~geom, ~palette, ~options,
-    "Overall_Score", "Overall", "Mean", "bar", "palette_overall", list(width = 4)
-  )
-  dataset_cols <- colnames(final_data)[startsWith(colnames(final_data), "Dataset__")]
-  info_datasets <- tibble(id = dataset_cols) %>%
-    mutate(
-      group = "Datasets",
-      name = stringr::str_remove(id, "Dataset__"),
-      geom = "circle",
-      palette = "Datasets",
-      options = list(list())
-    ) %>%
-    arrange(name)
-  metric_cols <- colnames(final_data)[startsWith(colnames(final_data), "Metric__")]
-  metric_order <- c("ANOSIM", "Modularity", "ARI")
-  info_metrics <- tibble(id = metric_cols) %>%
-    mutate(
-      group = "Metrics",
-      name = stringr::str_remove(id, "Metric__"),
-      name_f = factor(name, levels = metric_order),
-      geom = "bar",
-      palette = "Metrics",
-      options = list(list(width = 2))
-    ) %>%
-    arrange(name_f) %>%
-    select(-name_f)
-  column_info <- bind_rows(info_method, info_overall, info_datasets, info_metrics)
-  ncolors <- 11
-  p <- funky_heatmap(
-    data = final_data,
-    column_info = column_info,
-    scale_column = FALSE,
-    palettes = list(
-      palette_overall = RColorBrewer::brewer.pal(ncolors, "RdBu"),
-      Datasets = RColorBrewer::brewer.pal(ncolors, "RdBu"),
-      Metrics = RColorBrewer::brewer.pal(ncolors, "RdBu")
-    ),
-    column_groups = tibble(group = c("Overall", "Datasets", "Metrics")),
-    legends = list(
-      list(palette = "palette_overall", enabled = TRUE, title = "Mean normalized score", labels = c(". Min", rep("", ncolors - 2), "Max .")),
-      list(palette = "Datasets", enabled = TRUE, title = "Dataset score", labels = c(". Min", rep("", ncolors - 2), "Max .")),
-      list(palette = "Metrics", enabled = TRUE, title = "Metric score", labels = c(". Min", rep("", ncolors - 2), "Max ."))
-    ),
-    position_args = position_arguments(col_width = 1.5, col_space = 0.2, col_annot_offset = 5)
-  )
-  ggsave(output_path, p, width = 12, height = 7)
-  if (!file.exists(output_path) || file.info(output_path)$size <= 0) {
-    stop("empty batch funky heatmap output: ", output_path)
-  }
-  invisible(p)
-}
 ```
 
-# Biological- and batch-coloured MDS
-
-Batch panels use only the dataset-level `columns.batch` fields from
-`datasets.json`, not the broader exploratory covariate registry. Each method's
-MDS coordinates are calculated once from its stored distances and reused for
-all colourings. Multiple batch columns are shown separately and as their
-observed combinations; missing values remain visible as an explicit NA level.
-Each method displays label-specific ANOSIM and Separation scores. Separation
-is the arithmetic mean of ANOSIM, ARI (the existing Ward/PAM average), and
-adjusted SNN modularity with `k = 3`, matching the heatmap's three metrics.
-Scores use complete labels only; non-estimable scores are displayed as NA.
-Biological panels reuse persisted scores when available. Only ANOSIM's
-statistic is needed, so batch panels do not run permutation tests.
-
-```{r batch-mds, message=FALSE, warning=FALSE, results='hide'}
-
+```{r batch-analysis, message=FALSE, warning=FALSE}
+metric_tables <- list(); joint_tables <- list(); decomposition_tables <- list(); nmi_tables <- list()
+metric_index <- 0L; joint_index <- 0L; decomposition_index <- 0L; nmi_index <- 0L
 for (dataset in batch_datasets) {
-  mds_panels <- plot_batch_mds_panels(
-    dataset_results[[dataset]], datasets[[dataset]]$batch_col,
-    method_label_map_main[selected_methods]
-  )
-  for (name in names(mds_panels)) {
-    suffix <- if (name == "biological") "" else paste0("_", name)
-    .save_plot(
-      mds_panels[[name]],
-      file.path(plot_root, paste0(dataset, "_mds", suffix, ".pdf")),
-      width = 13,
-      height = 12
-    )
-  }
-}
-```
-
-# MDS, metrics, joint decomposition, and NMI
-
-```{r batch-analysis, message=FALSE, warning=FALSE, results='hide'}
-metric_tables <- list()
-joint_tables <- list()
-decomposition_tables <- list()
-nmi_tables <- list()
-funky_metric_tables <- list()
-metric_index <- 0L
-joint_index <- 0L
-decomposition_index <- 0L
-nmi_index <- 0L
-funky_metric_index <- 0L
-
-for (dataset in batch_datasets) {
-  dataset_result <- dataset_results[[dataset]]
+  dataset_result <- load_batch_release_dataset(control, dataset)
   ds_registry <- dataset_result$registry
-  primary <- dataset_result$label_col
-  labels <- factor(as.character(dataset_result$metadata[[primary]]))
-  dataset_heatmap_metrics <- list()
-  for (method in selected_methods) {
-    method_result <- dataset_result$methods[[method]]
-    stored_scores <- method_result$scores
-    score_names <- c("anosim_score", "mod_knn3_score", "cluster_score")
-    if (!is.null(stored_scores)) {
-      if (!is.list(stored_scores) || !all(score_names %in% names(stored_scores))) {
-        stop(dataset, "/", method, ": persisted RDS scores lack the benchmark heatmap metrics")
-      }
-      heatmap_values <- c(
-        stored_scores[["anosim_score"]],
-        stored_scores[["mod_knn3_score"]],
-        stored_scores[["cluster_score"]]
-      )
-      heatmap_source <- "persisted_scores"
-    } else {
-      heatmap_anosim <- compute_batch_anosim(
-        method_result$dist_mat,
-        labels,
-        permutations = n_permutations,
-        parallel = parallel_cores
-      )
-      heatmap_values <- c(
-        heatmap_anosim$statistic,
-        calc_modularity(method_result$dist_mat, labels, 3),
-        clust_eval(method_result$dist_mat, labels)
-      )
-      heatmap_source <- "persisted_distance"
-    }
-    dataset_heatmap_metrics[[method]] <- data.frame(
-      dataset = dataset,
-      method = unname(method_label_map_main[[method]]),
-      score = c("ANOSIM", "Modularity", "ARI"),
-      value = as.numeric(heatmap_values),
-      source = heatmap_source,
-      sample_count = length(dataset_result$sample_ids),
-      artifact_path = method_result$path,
-      artifact_md5 = unname(tools::md5sum(method_result$path)),
-      stringsAsFactors = FALSE
-    )
-  }
-
-  null_result <- dataset_result$methods[[null_method]]
-  null_scores <- null_result$scores
-  if (!is.null(null_scores) && all(score_names %in% names(null_scores))) {
-    null_heatmap_values <- as.numeric(c(
-      null_scores[["anosim_score"]],
-      null_scores[["mod_knn3_score"]],
-      null_scores[["cluster_score"]]
-    ))
-    null_heatmap_source <- "persisted_scores"
-  } else {
-    if (is.null(null_result$dist_mat)) {
-      stop(dataset, "/", null_method, ": manifest null artifact has neither scores nor a distance matrix")
-    }
-    null_anosim <- compute_batch_anosim(
-      null_result$dist_mat,
-      labels,
-      permutations = n_permutations,
-      parallel = parallel_cores
-    )
-    null_heatmap_values <- as.numeric(c(
-      null_anosim$statistic,
-      calc_modularity(null_result$dist_mat, labels, 3),
-      clust_eval(null_result$dist_mat, labels)
-    ))
-    null_heatmap_source <- "persisted_distance"
-  }
-  dataset_heatmap_metrics[[null_method]] <- data.frame(
-    dataset = dataset,
-    method = unname(method_label_map_main[[null_method]]),
-    score = c("ANOSIM", "Modularity", "ARI"),
-    value = null_heatmap_values,
-    source = null_heatmap_source,
-    sample_count = length(dataset_result$sample_ids),
-    artifact_path = null_result$path,
-    artifact_md5 = unname(tools::md5sum(null_result$path)),
-    stringsAsFactors = FALSE
-  )
-
-
-
+  dataset_heatmap_metrics <- lapply(dataset_result$evaluated, function(x) {
+    rows <- x$scores[x$scores$evaluation_id == dataset_result$primary_evaluation, ]
+    data.frame(value = rows$value, score = ifelse(rows$metric == "anosim_score", "ANOSIM", rows$metric))
+  })
   dataset_metrics <- list()
   dataset_joint <- list()
   dataset_decomposition <- list()
   for (method in selected_methods) {
     method_result <- dataset_result$methods[[method]]
-    funky_metric_index <- funky_metric_index + 1L
-    funky_metric_tables[[funky_metric_index]] <- dataset_heatmap_metrics[[method]]
     metric <- make_batch_metric_table(
       dataset = dataset,
       method = method,
@@ -516,8 +235,6 @@ for (dataset in batch_datasets) {
     dataset_decomposition[[method]] <- decomposition
   }
 
-  funky_metric_index <- funky_metric_index + 1L
-  funky_metric_tables[[funky_metric_index]] <- dataset_heatmap_metrics[["ECODA_authors_HR_NULL"]]
 
   metric_data <- do.call(rbind, dataset_metrics)
   metric_data$method_label <- factor(metric_data$method_label, levels = method_labels)
@@ -619,8 +336,8 @@ for (dataset in batch_datasets) {
     width = 11,
     height = 9
   )
+  rm(dataset_result)
 }
-
 scores <- do.call(rbind, metric_tables)
 scores$.row_order <- seq_len(nrow(scores))
 joint_scores <- do.call(rbind, joint_tables)
@@ -644,84 +361,14 @@ scores <- scores[order(scores$.row_order), , drop = FALSE]
 scores$.row_order <- NULL
 row.names(scores) <- NULL
 
-funky_metric_data <- do.call(rbind, funky_metric_tables)
-stopifnot(all(funky_metric_data$sample_count[funky_metric_data$dataset == "Alzheimer"] == 104L))
-write_batch_analysis_table(
-  funky_metric_data,
-  file.path(analysis_output_root, "batch_effect_uncorrected_final_heatmap_scores.csv")
-)
-build_batch_funky_heatmap(
-  funky_metric_data,
-  file.path(plot_root, "batch_effect_uncorrected_final_funkyheatmap.pdf")
-)
-
 decomposition <- do.call(rbind, decomposition_tables)
 nmi <- do.call(rbind, nmi_tables)
-
-write_batch_analysis_table(
-  scores,
-  file.path(analysis_output_root, "batch_effect_uncorrected_final_scores.csv")
-)
-write_batch_analysis_table(
-  decomposition,
-  file.path(analysis_output_root, "batch_effect_uncorrected_final_decomposition.csv")
-)
-write_batch_analysis_table(
-  nmi,
-  file.path(analysis_output_root, "batch_effect_uncorrected_final_nmi.csv")
-)
-
-stopifnot(
-  identical(sort(unique(scores$dataset)), sort(batch_datasets)),
-  identical(sort(unique(scores$method)), sort(selected_methods)),
-  all(vapply(list(
-    file.path(analysis_output_root, "batch_effect_uncorrected_final_scores.csv"),
-    file.path(analysis_output_root, "batch_effect_uncorrected_final_decomposition.csv"),
-    file.path(analysis_output_root, "batch_effect_uncorrected_final_nmi.csv")
-  ), function(path) validate_batch_artifact(path, "analysis table")[["path"]] == normalizePath(path), logical(1)))
-)
+write_batch_release_artifact(scores, file.path(analysis_output_root, "batch_effect_uncorrected_final_scores.csv"), csv = TRUE)
+write_batch_release_artifact(decomposition, file.path(analysis_output_root, "batch_effect_uncorrected_final_decomposition.csv"), csv = TRUE)
+write_batch_release_artifact(nmi, file.path(analysis_output_root, "batch_effect_uncorrected_final_nmi.csv"), csv = TRUE)
 ```
 
-# Outputs
-
-The pass retains the six original PDFs per final dataset:
-
-- `<dataset>_mds.pdf` (biological labels)
-- `<dataset>_anosim.pdf`
-- `<dataset>_permanova_univariate.pdf`
-- `<dataset>_permanova_bio_informed.pdf`
-- `<dataset>_permanova_joint.pdf`
-- `<dataset>_nmi.pdf`
-
-Additional batch-coloured MDS panels are written to the same plot directory:
-
-- `<dataset>_mds_batch_<column>.pdf` for each configured batch column.
-- `<dataset>_mds_batch_combined.pdf` when multiple batch columns are configured.
-  Legend labels follow the column order in the panel subtitle, separated by ` | `.
-
-For example, Alzheimer adds `Alzheimer_mds_batch_assay.pdf`,
-`Alzheimer_mds_batch_sex.pdf`, and `Alzheimer_mds_batch_combined.pdf`.
-The `batch-mds` chunk can be run after `setup` and `plotting-helpers` without
-rerunning the metric/permutation analysis. It also refreshes the biological-label
-MDS panels with both displayed scores.
-
-The shared bio/batch matrices, composition tables, metadata provenance, and
-annotated heatmaps are documented in `bio-batch-tables` above. They are
-metadata-only outputs, independent of methods and correction values.
-
-The batch-level funky heatmap is written as
-`plots/batch_effect_uncorrected_final/batch_effect_uncorrected_final_funkyheatmap.pdf`.
-It follows the Figure 2A layout with overall, per-dataset, and per-metric
-normalized score columns; runtime is intentionally excluded.
-
-Its metric columns are ANOSIM, Modularity, and ARI; the eight displayed methods
-include the persisted `Shuffled_baseline` scores from the explicit
-`ECODA_authors_HR_NULL` manifest rows. The heatmap input table,
-`analysis/batch_effect_uncorrected_final_heatmap_scores.csv`, records each
-dataset/method's sample count and source artifact path/MD5 so the figure's
-sample universe remains auditable independently of the PDF.
-
-The normalized score, global decomposition, and metadata-only NMI tables are
-written under `data/batch_effect/uncorrected_final/analysis/`, each with an
-atomic `MD5/SIZE/PATH` sidecar. Invalid or non-estimable candidates remain in
-the score tables with their status and warning; they are never plotted as zero.
+Maintained dataset filenames include `_anosim.pdf`, `_permanova_univariate.pdf`,
+`_permanova_bio_informed.pdf`, `_permanova_joint.pdf` and `_nmi.pdf`. Source bundles
+are immutable. Derived tables and their checksum sidecars live under the explicit
+release ID; production plots are generated only after its release control is approved.

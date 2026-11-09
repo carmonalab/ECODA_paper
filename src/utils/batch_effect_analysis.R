@@ -2296,3 +2296,208 @@ write_batch_biology_report <- function(nas_root, source_root, datasets, dataset_
   write_batch_analysis_table(provenance, file.path(table_root, "bio_vs_batch_provenance.csv"))
   invisible(provenance)
 }
+
+# Current release reporting is deliberately separate from the strict historical
+# manifest parsers above. Only the finite reviewed ledger supplies artifacts.
+batch_release_method_keys <- function(view) {
+  if (!view %in% c("batch_effect_uncorrected", "batch_effect_corrected"))
+    stop("Unknown batch report view")
+  methods <- c(.batch_method_names(), "ECODA_authors_HR_NULL")
+  if (view == "batch_effect_corrected") {
+    methods <- append(methods[methods != "ECODA_seuratres_2"],
+      c("ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma"), after = 1L)
+  }
+  methods
+}
+
+batch_release_grid <- function(datasets, view) {
+  # _debug is a verification cohort, never a physical report cohort.
+  enabled <- setdiff(names(datasets)[vapply(datasets, function(ds) isTRUE(ds$use_for_batch_effect), logical(1))], "_debug")
+  if (length(enabled) != 8L) stop("Current batch release requires eight enabled physical cohorts")
+  grid <- do.call(rbind, lapply(enabled, function(dataset) {
+    ds <- datasets[[dataset]]
+    axes <- names(ds$evaluation_labels)
+    expand.grid(dataset = dataset, view = view, evaluation_id = axes,
+      method_key = batch_release_method_keys(view), metric = evaluation_metrics(),
+      stringsAsFactors = FALSE)
+  }))
+  if (length(unique(paste(grid$dataset, grid$evaluation_id))) != 9L ||
+      nrow(grid) != if (view == "batch_effect_uncorrected") 360L else 405L)
+    stop("Batch report requires nine evaluation entries and the exact five-metric grid")
+  grid
+}
+
+read_batch_release_control <- function(path, md5, view, config_path = "datasets.json") {
+  .analysis_checked_file(path, md5)
+  control <- readRDS(path)
+  .analysis_checked_file(path, md5)
+  if (!is.list(control) || !identical(control$schema, "ecoda_batch_analysis_release_v1") ||
+      !identical(control$status, "approved") || !is.character(control$release_id) ||
+      length(control$release_id) != 1L || !nzchar(control$release_id))
+    stop("Explicit approved batch release control is required")
+  datasets <- read_datasets_json(config_path, view = view)
+  grid <- batch_release_grid(datasets, view)
+  expected <- unique(grid[c("dataset", "view", "method_key")])
+  metadata <- unique(expected[c("dataset", "view")]); metadata$method_key <- "__sample_metadata__"
+  expected <- rbind(expected, metadata)
+  selected <- control$expected_scope[control$expected_scope$view == view, , drop = FALSE]
+  ledger <- control$ledger[control$ledger$view == view, , drop = FALSE]
+  if (anyDuplicated(.analysis_key(selected)) || !setequal(.analysis_key(selected), .analysis_key(expected)) ||
+      !is.logical(selected$require_new) || anyNA(selected$require_new) || !all(selected$require_new))
+    stop("Current batch release must declare every method and metadata row as required new")
+  # Full receipt/identity validation precedes any score or figure work.
+  validate_analysis_release(ledger, selected)
+  control$ledger <- ledger; control$expected_scope <- selected
+  control$datasets <- datasets[unique(grid$dataset)]; control$view <- view
+  control$expected_grid <- grid; control$control_md5 <- md5
+  control
+}
+
+load_batch_release_dataset <- function(control, dataset, score_fn = calc_sep_score) {
+  selected <- control$expected_scope[control$expected_scope$dataset == dataset, , drop = FALSE]
+  rows <- control$ledger[control$ledger$dataset == dataset, , drop = FALSE]
+  if (!nrow(selected) || !dataset %in% names(control$datasets)) stop("Dataset is outside batch release")
+  if (length(unique(selected$current_input_md5)) != 1L)
+    stop("Method/metadata rows must establish one cohort input identity")
+  loaded <- load_analysis_release(rows, selected)
+  keys <- vapply(loaded, function(entry) entry$source$method_key, character(1))
+  loaded <- setNames(loaded, keys)
+  metadata_entry <- loaded[["__sample_metadata__"]]
+  metadata <- metadata_entry$result$metadata
+  id_col <- metadata_entry$source$sample_id_col
+  ids <- as.character(metadata[[id_col]])
+  metadata$Sample <- ids; rownames(metadata) <- ids
+  ds <- control$datasets[[dataset]]
+  axis_columns <- unlist(ds$evaluation_labels)
+  if (!all(c(axis_columns, unlist(ds$batch_col)) %in% names(metadata)))
+    stop("Release metadata lacks configured evaluation or technical fields")
+  evaluations <- lapply(axis_columns, function(column) setNames(as.character(metadata[[column]]), ids))
+  primary <- names(axis_columns)[axis_columns == ds$label_col]
+  if (length(primary) != 1L) stop("Primary evaluation must resolve to exactly one configured axis")
+  methods <- list(); evaluation_results <- list(); score_rows <- list()
+  for (method in batch_release_method_keys(control$view)) {
+    entry <- loaded[[method]]
+    if (is.null(entry)) stop("Missing required batch release method: ", method)
+    if (!setequal(attr(evaluation_distance(entry$result$dist_mat), "Labels"), ids))
+      stop("Method distances do not match the current metadata sample universe")
+    evaluated <- evaluate_release_result(entry$result, dataset, control$view, method,
+      evaluations, primary, is_null = method == "ECODA_authors_HR_NULL",
+      null_seeds = c(tissue = 124L), stored_policy = entry$receipt$scoring_policy,
+      source_identity = entry$identity, score_fn = score_fn)
+    # Align metadata to a common sample order, never intersect or pad methods.
+    distance <- as.dist(as.matrix(evaluated$dist_mat)[ids, ids, drop = FALSE])
+    methods[[method]] <- list(dist_mat = distance, labels = entry$result$labels,
+      scores = entry$result$scores, path = entry$source$artifact_path)
+    evaluation_results[[method]] <- evaluated
+    score_rows[[method]] <- evaluated$scores
+  }
+  score_frame <- do.call(rbind, score_rows)
+  aggregated <- aggregate_evaluation_scores(score_frame,
+    control$expected_grid[control$expected_grid$dataset == dataset, , drop = FALSE])
+  list(dataset = dataset, view = control$view, metadata = metadata, sample_ids = ids,
+    label_col = ds$label_col, evaluations = evaluations, primary_evaluation = primary,
+    methods = methods, evaluated = evaluation_results, scores = score_frame, entry_means = aggregated$entries,
+    registry = batch_candidate_registry(control$datasets, dataset))
+}
+
+score_batch_release <- function(control, score_fn = calc_sep_score) {
+  tables <- list(); provenance <- list()
+  for (dataset in names(control$datasets)) {
+    result <- load_batch_release_dataset(control, dataset, score_fn)
+    tables[[dataset]] <- result$scores
+    provenance[[dataset]] <- lapply(result$evaluated, function(x) x$provenance)
+    rm(result) # Release each cohort's metadata/distances before reading the next.
+  }
+  ranked <- aggregate_evaluation_scores(do.call(rbind, tables), control$expected_grid)
+  ranked$provenance <- provenance
+  ranked$release_id <- control$release_id; ranked$control_md5 <- control$control_md5
+  ranked
+}
+
+plot_batch_release_mds <- function(result, batch_cols, method_labels, score_fn = calc_sep_score) {
+  methods <- setdiff(names(method_labels), "ECODA_authors_HR_NULL")
+  grouping <- result$evaluations
+  names(grouping) <- ifelse(names(grouping) == result$primary_evaluation, "biological", paste0("evaluation_", names(grouping)))
+  for (column in unlist(batch_cols)) grouping[[paste0("batch_", column)]] <- result$metadata[[column]]
+  if (length(batch_cols) > 1L) {
+    values <- lapply(result$metadata[unlist(batch_cols)], .batch_values)
+    combined <- do.call(paste, c(values, sep = " | "))
+    combined[!Reduce(`&`, lapply(values, function(x) !is.na(x)))] <- NA_character_
+    grouping$batch_combined <- combined
+  }
+  bases <- lapply(methods, function(method) plot_mds(result$methods[[method]]$dist_mat,
+    grouping[[1]], title = method_labels[[method]], cluster_score = FALSE,
+    mod_score = FALSE, sil_score = FALSE, anosim_score = FALSE) + ggplot2::aes(shape = NULL))
+  panels <- lapply(names(grouping), function(name) {
+    plots <- lapply(seq_along(methods), function(i) {
+      plot <- bases[[i]]; plot$data$Cluster <- factor(grouping[[name]], exclude = NULL)
+      axis <- if (name == "biological") result$primary_evaluation else sub("^evaluation_", "", name)
+      if (axis %in% names(result$evaluations)) {
+        table <- result$evaluated[[methods[i]]]$scores
+        values <- table$value[table$evaluation_id == axis]
+        entry <- result$entry_means[result$entry_means$evaluation_id == axis &
+                                     result$entry_means$method_key == methods[i], , drop = FALSE]
+        if (nrow(entry) != 1L || !is.finite(entry$mean_score)) stop("Missing scaled MDS evaluation mean")
+        subtitle <- sprintf("ANOSIM (raw): %.3f\nScaled mean (five metrics): %.3f", values[1], entry$mean_score)
+      } else {
+        labels <- .batch_values(grouping[[name]]); keep <- !is.na(labels)
+        groups <- length(unique(labels[keep]))
+        if (sum(keep) > groups && groups >= 2L) {
+          values <- unlist(score_fn(as.dist(as.matrix(result$methods[[methods[i]]]$dist_mat)[keep, keep]),
+                                    labels[keep])[evaluation_metrics()])
+          subtitle <- sprintf("Raw ANOSIM: %.3f; Modularity: %.3f\nRaw ARI: %.3f; Silhouette: %.3f; LISI separation: %.3f",
+                              values[1], values[2], values[3], values[4], values[5])
+        } else {
+          reason <- if (groups == 1L) "one level" else if (groups == 0L) "no recorded levels" else "no within-level replication"
+          subtitle <- paste0("Technical labels: unscorable (", reason, ")")
+        }
+      }
+      plot + ggplot2::labs(subtitle = subtitle, color = name)
+    })
+    patchwork::wrap_plots(plots, ncol = 2, guides = "collect") + patchwork::plot_annotation(title = result$dataset, subtitle = name)
+  })
+  setNames(panels, names(grouping))
+}
+
+plot_batch_release_comparison <- function(uncorrected, corrected, batch_cols, method_labels, score_fn = calc_sep_score) {
+  if (!identical(uncorrected$dataset, corrected$dataset) || !identical(uncorrected$sample_ids, corrected$sample_ids) ||
+      !identical(uncorrected$evaluations, corrected$evaluations)) stop("Paired batch release cohorts/evaluations must match exactly")
+  mapping <- setNames(names(method_labels), names(method_labels))
+  mapping[c("ecoda_unsupervised_harmony", "ecoda_unsupervised_harmony_limma")] <- "ECODA_seuratres_2"
+  left_labels <- method_labels[!duplicated(mapping)]; names(left_labels) <- unname(mapping[!duplicated(mapping)])
+  left <- plot_batch_release_mds(uncorrected, batch_cols, left_labels, score_fn)
+  right <- plot_batch_release_mds(corrected, batch_cols, method_labels, score_fn)
+  left_methods <- setdiff(names(left_labels), "ECODA_authors_HR_NULL")
+  right_methods <- setdiff(names(method_labels), "ECODA_authors_HR_NULL")
+  panels <- lapply(names(right), function(group) {
+    plots <- unlist(lapply(seq_along(right_methods), function(i) {
+      lp <- left[[group]][[match(mapping[right_methods[i]], left_methods)]]
+      rp <- right[[group]][[i]]
+      limits <- unique(c(levels(lp$data$Cluster), levels(rp$data$Cluster)))
+      list(lp + ggplot2::labs(title = paste(method_labels[right_methods[i]], "Uncorrected", sep = "\n")) + ggplot2::scale_color_discrete(limits = limits, drop = FALSE),
+           rp + ggplot2::labs(title = paste(method_labels[right_methods[i]], "Corrected", sep = "\n")) + ggplot2::scale_color_discrete(limits = limits, drop = FALSE))
+    }), recursive = FALSE)
+    patchwork::wrap_plots(plots, ncol = 2, guides = "collect") + patchwork::plot_annotation(title = corrected$dataset, subtitle = group)
+  })
+  setNames(panels, names(right))
+}
+
+write_batch_release_artifact <- function(value, path, csv = FALSE) {
+  if (file.exists(path)) {
+    validate_batch_artifact(path, "derived release artifact")
+    previous <- if (csv) read.csv(path, check.names = FALSE) else readRDS(path)
+    if (!isTRUE(all.equal(previous, value, check.attributes = FALSE)))
+      stop("Derived release output changed; select a new release/output identity: ", path)
+    return(invisible(path))
+  }
+  if (file.exists(paste0(path, ".md5"))) stop("Orphan checksum blocks create-only release publication: ", path)
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  path <- normalizePath(path, mustWork = FALSE)
+  temporary <- tempfile(".batch-release-", dirname(path))
+  on.exit(unlink(temporary), add = TRUE)
+  if (csv) utils::write.csv(value, temporary, row.names = FALSE) else saveRDS(value, temporary)
+  if (!file.link(temporary, path)) stop("Create-only derived release publication failed: ", path)
+  .batch_write_checksum(path)
+  validate_batch_artifact(path, "derived release artifact")
+  invisible(path)
+}

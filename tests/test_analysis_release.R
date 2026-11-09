@@ -84,5 +84,19 @@ for (kind in c("distance_feather", "embedding_feather")) {
   stopifnot(isTRUE(all.equal(as.matrix(read$result$dist_mat), as.matrix(bundle$dist_mat))))
   if (kind == "embedding_feather") stopifnot(identical(read$result$feat_mat, features))
 }
+metadata <- data.frame(sample_id = ids, diagnosis = c("a", "b", NA, "", "kidney", "cortex"), n_cells = 1:6)
+row <- ledger[2, ]; row$kind <- "metadata_feather"; row$method_key <- "__sample_metadata__"
+row$artifact_path <- file.path(tmp, "metadata.feather"); row$sample_id_col <- "sample_id"
+expected <- scope[2, ]; expected$method_key <- row$method_key
+for (valid in c(TRUE, FALSE)) {
+  frame <- metadata
+  if (!valid) frame$sample_id[2] <- frame$sample_id[1]
+  arrow::write_feather(frame, row$artifact_path); row$md5 <- md5(row$artifact_path)
+  receipt <- readRDS(ledger$receipt_path[2])
+  for (field in c("method_key", "kind", "artifact_path", "md5")) receipt[[field]] <- row[[field]]
+  saveRDS(receipt, row$receipt_path); row$receipt_md5 <- md5(row$receipt_path)
+  if (valid) stopifnot(identical(load_analysis_release(row, expected)[[1]]$result$metadata, metadata))
+  else fail(load_analysis_release(row, expected))
+}
 unlink(tmp, recursive = TRUE)
 cat("analysis release ledger: OK\n")

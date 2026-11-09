@@ -6,8 +6,151 @@
 # Analysis scope
 # Scope helpers (closed over analysis_methods, resolved after df_benchmark is
 # built; only called from figure chunks, which run later).
-methods_in_scope <- function(x) intersect(x, analysis_methods)
-methods_in_scope_named <- function(m) m[names(m) %in% analysis_methods]
+methods_in_scope <- function(x) {
+  requested <- if (exists("analysis_requested_methods", inherits = TRUE)) analysis_requested_methods else analysis_methods
+  selected <- if (is.null(requested)) x else intersect(x, requested)
+  if (exists("analysis_scope", inherits = TRUE) && identical(analysis_scope, "preprint"))
+    selected <- selected[!grepl(extended_method_regex, selected)]
+  missing <- setdiff(selected, analysis_methods)
+  if (length(missing)) stop("Required figure methods are absent from the reviewed release: ", paste(missing, collapse = ", "))
+  selected
+}
+methods_in_scope_named <- function(m) m[names(m) %in% methods_in_scope(names(m))]
+
+# The reviewed control names every artifact and its expected current-input
+# policy. Historical aggregates and new standalone shards use the same loader;
+# absent required rows never fall back to a directory or another generation.
+load_benchmark_analysis_release <- function(control, datasets, score_fn = calc_sep_score) {
+  if (!is.list(control) || !all(c("ledger", "expected_scope", "reference_method_key") %in% names(control)))
+    stop("Benchmark release requires ledger, expected_scope and explicit reference_method_key")
+  selected <- names(datasets)
+  references <- control$reference_method_key
+  if (!is.character(references) || is.null(names(references)) || anyDuplicated(names(references)) ||
+      !all(selected %in% names(references)) || anyNA(references) || any(!nzchar(references)))
+    stop("Each selected dataset requires its explicit reviewed primary reference method")
+  scope <- control$expected_scope
+  ledger <- control$ledger
+  scope <- scope[scope$dataset %in% selected & scope$view == "benchmark_analysis", , drop = FALSE]
+  ledger <- ledger[ledger$dataset %in% selected & ledger$view == "benchmark_analysis", , drop = FALSE]
+  for (dataset in selected) {
+    bl <- scope$dataset == dataset & scope$method_key == "Pseudobulk_hvg2000_bl"
+    if (sum(bl) != 1L || !isTRUE(scope$require_new[bl]))
+      stop("Every benchmark dataset requires its new pseudobulk BL result: ", dataset)
+  }
+  loaded <- load_analysis_release(ledger, scope)
+  reserved <- c("__dataset_metadata__", "__sample_metadata__", "__trans__", "__zeroimp__")
+  result_list <- list(bmark = list(), trans = list(), zeroimp = list())
+  scores <- diagnostics <- provenance <- statistics <- list()
+  diagnostic_metrics <- c("mod_knnsqrtn_score", "mod_knn6_score", "mod_knn9_score")
+  for (dataset in selected) {
+    rows <- loaded[vapply(loaded, function(x) identical(x$source$dataset, dataset), logical(1))]
+    keys <- vapply(rows, function(x) x$source$method_key, character(1))
+    reference_key <- references[[dataset]]
+    if (!reference_key %in% keys || grepl("NULL", reference_key) || grepl("^scITD", reference_key))
+      stop("Primary reference must be a reviewed full-sample non-NULL result: ", dataset)
+    reference <- rows[[match(reference_key, keys)]]
+    labels <- reference$result$labels
+    if (is.null(labels) || is.null(names(labels)) || anyDuplicated(names(labels)) || anyNA(labels) ||
+        anyNA(names(labels)) || any(!nzchar(names(labels)))) stop("Invalid reviewed reference labels: ", dataset)
+    if (any(vapply(rows, function(x) !identical(x$identity$input_md5, reference$identity$input_md5), logical(1))))
+      stop("Benchmark rows disagree on the approved current input: ", dataset)
+    axes <- datasets[[dataset]]$evaluation_labels
+    if (length(axes) != 1L || !identical(unname(unlist(axes)), datasets[[dataset]]$label_col))
+      stop("Benchmark reference labels support exactly the configured scalar primary axis")
+    primary <- names(axes)[1L]
+    evaluations <- setNames(list(labels), primary)
+    metadata_index <- match("__dataset_metadata__", keys)
+    if (is.na(metadata_index)) stop("Reviewed dataset metadata is required for counts/runtime figures: ", dataset)
+    metadata <- rows[[metadata_index]]$result
+    ids <- names(labels)
+    if (is.null(metadata$labels) || !setequal(names(metadata$labels), ids) ||
+        !identical(as.character(metadata$labels[ids]), as.character(labels)) ||
+        !is.numeric(metadata$n_cells) || length(metadata$n_cells) != 1L || !is.finite(metadata$n_cells) || metadata$n_cells <= 0 ||
+        !identical(as.integer(metadata$n_samples), as.integer(length(labels))) ||
+        !setequal(names(metadata$cells_per_sample), ids) || any(!is.finite(metadata$cells_per_sample)) ||
+        any(metadata$cells_per_sample <= 0) || sum(metadata$cells_per_sample) != metadata$n_cells ||
+        !is.numeric(metadata$n_cell_types_high_res) || length(metadata$n_cell_types_high_res) != 1L ||
+        !is.finite(metadata$n_cell_types_high_res) || metadata$n_cell_types_high_res < 1)
+      stop("Reviewed dataset metadata disagrees with the reference sample universe: ", dataset)
+    statistics[[dataset]] <- data.frame(dataset = dataset, n_samples = length(ids), n_cells = metadata$n_cells,
+      cells_per_sample_mean = mean(metadata$cells_per_sample), cells_per_sample_sd = stats::sd(metadata$cells_per_sample),
+      n_cell_types = metadata$n_cell_types_high_res)
+    for (i in seq_along(rows)) {
+      item <- rows[[i]]
+      method <- unname(keys[i])
+      if (method %in% reserved) {
+        if (method == "__trans__") result_list$trans[[dataset]] <- item$result
+        if (method == "__zeroimp__") result_list$zeroimp[[dataset]] <- item$result
+        next
+      }
+      if (grepl("^ECODA_PB_combo_", method)) stop("Legacy ECODA_PB_combo methods are outside publication scope")
+      calculated <- NULL
+      scorer <- function(distance, labels) {
+        calculated <<- score_fn(distance, labels)
+        calculated
+      }
+      is_null <- grepl("(^|_)NULL($|_)", method)
+      evaluated <- evaluate_release_result(item$result, dataset, "benchmark_analysis", method,
+        evaluations, primary, is_null = is_null, score_fn = scorer,
+        stored_policy = item$receipt$scoring_policy, source_identity = item$identity,
+        allowed_dropped_sample_ids = if (is.null(item$receipt$allowed_dropped_sample_ids)) character()
+                                    else item$receipt$allowed_dropped_sample_ids)
+      bundle <- item$result
+      core <- setNames(as.list(evaluated$scores$value), evaluated$scores$metric)
+      bundle$scores <- utils::modifyList(if (is.null(bundle$scores)) list() else bundle$scores,
+                                       if (is.null(calculated)) core else utils::modifyList(calculated, core))
+      bundle$labels <- evaluated$labels[[primary]]
+      result_list$bmark[[dataset]][[method]] <- bundle
+      frame <- evaluated$scores
+      frame$method <- frame$method_key
+      frame$score <- frame$metric
+      frame$n_samples <- length(bundle$labels)
+      frame$n_features <- if (is.null(bundle$feat_mat)) NA_integer_ else ncol(bundle$feat_mat)
+      scores[[length(scores) + 1L]] <- frame
+      provenance[[paste(dataset, method, sep = "/")]] <- evaluated$provenance
+      # Keep the existing neighborhood diagnostics explicitly separate from
+      # the five-metric aggregate. Never let a missing diagnostic alter a mean.
+      diagnostic <- intersect(diagnostic_metrics, names(bundle$scores))
+      if (length(diagnostic)) {
+        extra <- frame[rep(1L, length(diagnostic)), , drop = FALSE]
+        extra$metric <- extra$score <- diagnostic
+        extra$value <- vapply(bundle$scores[diagnostic], function(x) {
+          if (!is.numeric(x) || length(x) != 1L || !is.finite(x)) stop("Nonfinite neighborhood diagnostic")
+          x
+        }, numeric(1))
+        diagnostics[[length(diagnostics) + 1L]] <- extra
+      }
+    }
+  }
+  frame <- do.call(rbind, scores)
+  expected_grid <- frame[c("dataset", "view", "evaluation_id", "method_key", "metric")]
+  # Validate every five-metric result now; individual figures also verify the
+  # rectangular set of methods they compare before calculating means.
+  for (method in unique(frame$method_key)) {
+    selected_rows <- frame$method_key == method
+    aggregate_evaluation_scores(frame[selected_rows, ], expected_grid[selected_rows, ])
+  }
+  list(results = result_list, scores = rbind(frame, if (length(diagnostics)) do.call(rbind, diagnostics)),
+       core_scores = frame, expected_grid = expected_grid, statistics = do.call(rbind, statistics),
+       provenance = provenance, loaded = loaded)
+}
+
+read_benchmark_analysis_control <- function(path, md5) {
+  path <- .analysis_checked_file(path, md5)
+  control <- readRDS(path)
+  .analysis_checked_file(path, md5)
+  control
+}
+
+read_benchmark_execution_times <- function(control) {
+  timing <- control$execution_times
+  if (!is.list(timing) || !all(c("artifact_path", "md5") %in% names(timing)))
+    stop("Explicit reviewed execution_times artifact_path and md5 are required; no legacy timing fallback")
+  path <- .analysis_checked_file(timing$artifact_path, timing$md5)
+  frame <- as.data.frame(arrow::read_feather(path))
+  .analysis_checked_file(path, timing$md5)
+  normalize_exec_times(frame)
+}
 
 # Derived-run loading
 # Strict loader for local, run-owned derived analyses.  A derived RDS is never
@@ -1757,19 +1900,19 @@ scale_ranks_global <- function(x, n_meth) {
   (n_meth - x) / (n_meth - 1)
 }
 
-# Global benchmark averages
-# Define a function to get the global average over the canonical benchmark
-# metrics only. Alternate modularity neighborhoods are diagnostics-only.
-get_global_avg <- function(score_list) {
-  # 1. Calculate the mean for each dataset
-  ds_means <- sapply(score_list, function(ds) {
-    relevant_vals <- unlist(ds[names(ds) %in% benchmark_metrics])
-    # Return the average of ANOSIM, Modularity [kNN3], and ARI.
-    mean(relevant_vals, na.rm = TRUE)
-  })
-  
-  # 2. Return the average of all dataset means
-  return(mean(ds_means, na.rm = TRUE))
+# Means always name their compared methods; raw metric ranges are never mixed.
+get_global_avg <- function(score_frame, method, compared_methods) {
+  frame <- prepare_evaluation_plot_data(score_frame, compared_methods)
+  if (!method %in% compared_methods) stop("Mean requires a selected method")
+  mean(frame$scaled_value[frame$method == method])
+}
+
+benchmark_normalized_mean <- function(score_frame, dataset, method, normalization_methods) {
+  if (identical(dataset, "Gongsharma_cmv_young_males") && !dataset %in% score_frame$dataset)
+    dataset <- "GongSharma"
+  frame <- score_frame[score_frame$dataset == dataset, , drop = FALSE]
+  if (!nrow(frame)) stop("No reviewed score rows for MDS dataset: ", dataset)
+  get_global_avg(frame, method, normalization_methods)
 }
 
 # Metric axes

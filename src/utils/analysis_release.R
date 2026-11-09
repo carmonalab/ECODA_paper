@@ -38,7 +38,7 @@ validate_analysis_release <- function(ledger, expected_scope) {
       !setequal(.analysis_key(ledger), .analysis_key(expected_scope)))
     stop("Release keys must exactly equal the unique expected scope")
   ledger <- ledger[match(.analysis_key(expected_scope), .analysis_key(ledger)), , drop = FALSE]
-  allowed <- c("rds_bundle", "standalone_result", "distance_feather", "embedding_feather")
+  allowed <- c("rds_bundle", "standalone_result", "distance_feather", "embedding_feather", "metadata_feather")
   if (any(!ledger$kind %in% allowed)) stop("Unknown release artifact kind")
   if (any((ledger$kind == "rds_bundle") != nzchar(ledger$bundle_key)))
     stop("Only aggregate RDS rows require a bundle_key")
@@ -47,6 +47,8 @@ validate_analysis_release <- function(ledger, expected_scope) {
     if (!"blocked_reason" %in% names(expected_scope)) stop("Blocked scope requires blocked_reason")
     stop("Blocked release scope: ", paste(expected_scope$blocked_reason[expected_scope$status == "blocked"], collapse = "; "))
   }
+  if (any((ledger$kind == "metadata_feather") != (ledger$method_key == "__sample_metadata__")))
+    stop("Metadata Feather requires the reserved __sample_metadata__ key")
   receipts <- vector("list", nrow(ledger))
   for (i in seq_len(nrow(ledger))) {
     row <- ledger[i, , drop = FALSE]
@@ -106,6 +108,16 @@ load_analysis_release <- function(ledger, expected_scope) {
       frame <- as.data.frame(arrow::read_feather(row$artifact_path))
       if (!row$sample_id_col %in% names(frame)) stop("Feather lacks declared sample identity")
       ids <- as.character(frame[[row$sample_id_col]])
+      if (row$kind == "metadata_feather") {
+        if (anyNA(ids) || any(!nzchar(trimws(ids))) || anyDuplicated(ids) || !length(ids))
+          stop("Metadata Feather requires unique nonmissing sample IDs")
+        results[[i]] <- list(result = list(metadata = frame), source = row, receipt = receipts[[i]],
+          identity = list(dataset = row$dataset, view = row$view, method_key = row$method_key,
+            artifact_md5 = row$md5, receipt_md5 = row$receipt_md5,
+            input_md5 = receipts[[i]]$input_md5, source_policy = receipts[[i]]$source_policy))
+        .analysis_checked_file(row$artifact_path, row$md5)
+        next
+      }
       frame[[row$sample_id_col]] <- NULL
       if (anyNA(ids) || any(!nzchar(trimws(ids))) || anyDuplicated(ids) ||
           !nrow(frame) || !ncol(frame) || !all(vapply(frame, is.numeric, logical(1))))
