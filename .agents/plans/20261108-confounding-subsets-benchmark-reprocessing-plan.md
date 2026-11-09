@@ -61,7 +61,7 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, recovered MrVI published; tail observer RUNNING; remaining95 preparation
+## Live checkpoint — 2026-11-09, recovered MrVI published; tail observer RUNNING; remaining95 rehearsal passed
 
 - **Current recovery:** `ecoda_stage5_failed16_20261109_v1` launched at
   16:41:50 UTC and reached actual `FAILED` at 17:38:05 UTC. It selected
@@ -74,13 +74,21 @@ decisions have been applied to existing artifacts.
   waiter 3808 / cell 236 is active, with sleep prevention bound to PID 60360.
   It observes the old tail and approves no science. No persistent power
   setting was changed.
-- **Latest startup/queue evidence, 16:46 UTC:** recovery has reached H5AD
-  input preflight; some preflight tasks are pending unavailable/draining
-  nodes. This does not establish that all method jobs are already running.
-  The original two benchmark scPoli tasks `4665568_1..2` are still pending
-  their required H200 hardware, with no scheduler start estimate. GPU006 is
-  draining for reboot. Benchmark hardware stays fixed; batch MrVI uses any
-  suitable GPU and batch QOT any CPU.
+- **Latest preserved queue evidence, 19:31:29 UTC:** the original two
+  benchmark scPoli tasks remain pending their required H200 hardware:
+  `4665568_1` is Stephenson and `4665568_2` is Bassez, both HR dims15.
+  Their watchdog, aggregate and monitor-only barrier `4666208` are pending
+  dependencies. No start estimate is established. Benchmark CPU hardware stays
+  EPYC-7742; batch analyses may use any suitable CPU/GPU. The failed16 startup
+  failures remain unresolved; the additional one-off allocation diagnostic
+  query explicitly requested from the user has not been approved or run.
+- **Next recovery scope:** the full finite original inventory identifies 95
+  remaining absent physical rows: benchmark15, uncorrected32, corrected48
+  (including eight corrected preparations). A local real-dispatcher rehearsal
+  passed exact47 initial IDs /138 task units, with synthetic scheduler and
+  science inputs only. This is graph validation, not a real launch. Eight
+  uncorrected preparations plus their original timings and16 exported metadata
+  files have passed scoped copy-only reuse review. No95 run has been launched.
 - **Original main-v2 reboot incident:** login1 rebooted at 14:47:27 UTC,
   destroying its tmux runner and three login-node controllers. The gate was
   honestly transitioned by the existing CLI to `PRELAUNCH_STOP`; its wrapper
@@ -3879,3 +3887,77 @@ transport identities and then narrowly correct any false classification.
 Unknown writer candidates must still block; no blanket unreadable-process
 exception or owner promotion is authorized. The blocked report is unchanged,
 and no cache adoption or new95 launch has occurred.
+
+
+### Selected writer scope cleared; actual remaining95 rehearsal passed
+
+The blocked original writer report remains unchanged. A bounded supplement
+established the two native process roles (user systemd PAM helper and the
+reader's own SSH transport); unknown or unreadable writer candidates still
+fail closed. The corrected real observation at19:31:29 UTC has no blockers,
+all16 preparation identities stable before/after, and only the known benchmark
+tail and fresh observer in the own-user queue. Report SHA
+`cfdc173e79525476f1ee87e89fc46d4e5adf9f00fca0a6554d3662955b34de50`;
+collector SHA
+`c0987e86616ab43fb4e6f7c0124ebadf71b17b322f8f6ea64ea5aa4d621d8f74`.
+Independent review approved only this selected preparation-writer scope.
+Original STOP, null wrapper exit and FAIL/absent owners are unchanged.
+
+The real checked-in dispatcher/adoption/cache validators were rehearsed with
+synthetic scheduler, H5AD and science outputs. Exact observed graph: benchmark
+19 IDs/27 task units/15 science rows; uncorrected11/46/32; corrected17/65/48.
+Total47 initial IDs,138 task units and95 selected science/preparation rows.
+No uncorrected preparation job or metadata export was emitted. Corrected
+composition and pseudobulk depend on the preparation watchdog; independent
+methods remain concurrent. Benchmark EPYC-7742 and OOM retry flags are retained;
+batch views have no CPU model constraint, and corrected MrVI requests one GPU
+with policy any. Proof SHA
+`36e7081befa6f3b4e3bd1d5ff3b71b1c402a74bf0e4edcdb2921ee503e100634`
+at `.gate/remaining95_scope_20261109_v1/combined_dispatch.graph.observed.json`.
+No real scheduler or model fit ran in the rehearsal.
+
+Code checkpoint `24ed61d8f7c13d9c93ee9c8dca05f0618bdca4a9` was pushed and
+pulled into the clean Bamboo checkout, then snapshotted under
+`20261109-remaining95-recovery-v1`. Actual immutable source manifest SHA
+`65b7577e88cf2427604656499b2ae3cabb7388e48d4162ae135f74ebdb743ae0`,
+archive SHA
+`b9c62fa41b822f33af5f96243d590ffa706bf0a7c926c4af9b13de7b09395ed6`.
+No active run source was changed.
+
+Root sealed new copy-only writer/reuse reviews and the exact32 adoption receipt
+under `.gate/remaining95_strict32_sealed_20261109_v1/`, preserving all drafts.
+Receipt SHA
+`1d5eb5246700625f97156a1a0406ece125e1e271c45dcd385b7bd63c371d8c2c`.
+The writer review binds full-preparation-entry SHA `f3496571…` and separately
+retains canonical identity SHA `9cdc1aa9…`; all32-entry SHA is `008493c4…`.
+A second independent review accepted the actual sealed bytes and finite staging.
+No source artifact has been copied into a new run, no95 gate was prepared,
+and no new scientific job was submitted. Startup placement diagnosis, fresh
+preflight and same-group observer terminal handling remain launch prerequisites.
+The user's requested allocation-query exception is still pending; do not repeat
+or supplement accounting without that explicit decision.
+
+
+### Strict32 controls staged and validated; no new compute launched
+
+The accepted16 small control files were staged with exclusive/create-only,
+no-symlink writes into the fresh Bamboo `remaining95-strict32-v1` input
+namespace. Every remote payload SHA and read-only mode was checked; staging
+report SHA `e2a7f6d38d35b9ba3bca9d99fbcdca030df06e8c2acc525c19e373ba9ec84658`.
+The pinned24ed `batch_review` function then passed against the actual remote
+receipt and referenced evidence; report SHA
+`faf1248a36e7078aa7dae70b4a5347be4d68ac8ac10f995b57b048337af7a2fe`.
+Both operations performed zero scheduler submissions and no preparation
+adoption. Exact writer-review SHA
+`7745400e14982ba43b7b38a6d498056de5c62940abae414564fd8555808b68a9`;
+reuse-review SHA
+`76cb27b6659b700c68089775be3cb7c74749e9ec32cfb42409cb4aa6beda7ca9`.
+All campaign launch prerequisites remain open as stated above; root launch
+approval is false. The old tail observer retains its sole active waiter.
+
+A separate no-compute audit is being prepared for56 already-present method
+rows (benchmark36, uncorrected12, corrected8). Presence alone is not scientific
+release approval. The audit must bind current ordered sample labels and check
+all finite payloads/companions without refits. Existing source-identity
+manifests contain sample IDs but not label values, so a small metadata-only
+witness may be required; no expression matrix or full H5AD is transferred.
