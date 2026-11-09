@@ -63,7 +63,7 @@ decisions have been applied to existing artifacts.
 
 ## Live checkpoint — 2026-11-09, Europe/Zurich
 
-- P0/P1 complete. Reviewed code pushed through `3f36464`; `0514b48`
+- P0/P1 complete. Reviewed code pushed through `084f512`; `0514b48`
   adds the exact HR selectors and `a9237c1` adds explicit variant requests,
   independent campaign contexts and strict derivative NAS/OOM checks.
   External cancer application files remain excluded from these commits.
@@ -90,6 +90,22 @@ decisions have been applied to existing artifacts.
   bound-proof fix is underway for compute-side legacy checksum/record checks;
   no old input or receipt is rewritten. A fresh BL gate is required after
   review. Stephenson BL remains solely in its later full-method wave.
+- BL10 recovery v2 is **FAILED at the watchdog/release layer**, terminal-inspected
+  once. It launched `2026-11-09T00:54:50Z` from immutable `084f512` and
+  finished `2026-11-09T01:31:21Z`. Both preflights (`4663549`, `4663561`)
+  and all ten fit workers in array `4663563` completed `0:0`. The expected
+  ten BL pseudobulk caches and ten standalone result RDS files exist.
+  Watchdog `4663573` rejected the augmented derivative runtime export;
+  aggregate `4663574` consequently failed. First inspection preserves all
+  23 raw accounting rows, including both failures; no accounting projection,
+  gate approval or NAS publication is claimed. Preserve these scientific
+  outputs and validate their exact contracts before choosing no-fit recovery.
+  Do not rerun successful fits, edit old statuses or hide failed accounting.
+- Reviewed local commits after `084f512`: `94cf3e6` release/evaluation helpers,
+  `33fa9c9` five-metric benchmark/batch reporting, `c72eb4d` harmonized operator
+  documentation, `7719d4d` metadata-only annotation-reuse evidence, and
+  `f91a2fe` focused physical GM dispatch coverage. These have not changed any
+  running immutable snapshot. Supplemental screen updates remain in progress.
 - Earlier Stage 3 v3 failed before producing new H5ADs because compute nodes
   cannot mount NAS (17 missing / 0 existing outputs). Its evidence is retained;
   the reviewed fix validates scratch on compute and publishes NAS from the
@@ -1138,3 +1154,128 @@ scheduled tasks**. Set `STAGE4_INPUT_PRODUCER_RUN_ID=stage3_confounds_20261108_v
 and use a fresh committed immutable source/runtime and new run-owned output.
 The 1000/3000 HR PILOT-GM public tokens are separately checkpointed in `7a474ef`;
 focused exact-three-token selection and LR rejection tests pass.
+
+
+### BL10 v2 exact recovery launch contract
+
+- Status RUNNING; launched `2026-11-09T00:54:50Z`; fresh gate `ecoda_stage5_benchmark_bl10_20261109_v2`,
+  child `stage5_benchmark_bl10_20261109_v2`; Bamboo; group `ecoda-benchmark`.
+  Failed v1 remains FAILED and terminal-inspected. No scientific RDS exists
+  there, so all ten requested BL results remain legitimate missing rows.
+- Explicit proof fix `084f512` is reviewed, root-tested and pushed. Actual
+  isolated worker fixtures hide the old home alias, retain writable source
+  modes, pass the bound proof through compute/downstream checks, and reject
+  same-size mutation, foreign proof and unsupported preserve-input exceptions.
+  Existing default output freezing and legacy/unbound checks remain unchanged.
+  Shared run audit, derivative-input and R worker regressions pass.
+- Source full commit `084f512cf89f677fd72b98937980a456f6842b1f`; separate snapshot
+  parent `20261109-benchmark-bl10-v2`; archive SHA256
+  `29e114df96db92117516890adb75ddee92a85a4db5075e1334a497fa0504b09d`.
+  Source manifest `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-benchmark-bl10-v2/084f512cf89f677fd72b98937980a456f6842b1f/identity/source.manifest`.
+- Runtime/image/manifest/aux and all ten source/checksum-reference identities
+  are unchanged from v1; selected blacklist aux remains unchanged, no sex mask.
+  Exact selection SHA256 `202dfbe2aaaa433ab7abe1b641735fa6c5dd022647931eb6fcbd73070fb5e371`;
+  input reference SHA256 `69839b146cd86b8032b53117d8e61700d47e40b0a3d5682ce3a6835946dc0dd3`.
+- Exact scope/resources unchanged: ten self-contained `pseudobulk/hvg2000_bl`
+  rows, twenty RDS outputs (cache + standalone each), zero ordinary prep,
+  screens, metadata export, CT or GPU tasks; initial five scheduler IDs /
+  23 tasks (10 H5AD preflight, one R environment, ten fits, one watchdog,
+  one aggregate), plus only documented failed-row OOM retries. Initial128G,
+  ceiling500G, CPU16/four hours, explicit throttle10, no force.
+- New scratch root `/srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runs/stage5_benchmark_bl10_20261109_v2`, outputs `artifacts/benchmark`;
+  NAS release `releases/20261108-confounding-subsets-v1/stage5_benchmark_bl10_20261109_v2`.
+  Fresh scratch/log/NAS roots checked absent and no environment refresh active.
+  Exact wrapper digest `0cc285d59729b806d066b062db7a8b61e4540d18389dbce8cf800f676245fc40`.
+- Local evidence prefix `.gate/ecoda_stage5_benchmark_bl10_20261109_v2`.
+  Prepare/reconcile/launch once, arm exactly one durable waiter; terminal
+  inspect once with every emitted ID, then bound accounting bridge, pinned
+  Stage5/NAS audit and reviewer approval before release.
+
+```bash
+env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper BENCHMARK_CPU_TIME_LIMIT=04:00:00 /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-benchmark-bl10-v2/084f512cf89f677fd72b98937980a456f6842b1f/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-benchmark-bl10-v2/084f512cf89f677fd72b98937980a456f6842b1f/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-benchmark-bl10-v2/084f512cf89f677fd72b98937980a456f6842b1f/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage5_benchmark_bl10_20261109_v2 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage5_benchmark_bl10_20261109_v2 --script src/5_run_benchmark_methods/1_submit_hpc_array.sh -- --selection-file /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/benchmark-bl10-inputs-v1/selection.tsv --derivative-release 20261108-confounding-subsets-v1 --input-artifacts /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/benchmark-bl10-inputs-v1/input_artifacts.tsv --mem=128G --max-mem=500G --throttle=10
+```
+
+### P6 helper implementation accepted
+
+`94cf3e6` checkpoints the four bounded release/evaluation helper and test files.
+Both independent R checks pass after review fixes. Explicit canonical paths,
+MD5-checked row-specific receipts and evidence, expected/blocked scopes and
+new-result requirements prevent discovery/fallback to old results. The
+evaluation helper preserves primary NULL's category/count permutation,
+records tissue's seed124 labels, binds source/distance/label identities,
+rejects invalid LISI separation values and enforces complete finite equally
+weighted five-metric/evaluation grids. Notebook integration and production
+ledger population are next; no figure refresh is yet claimed.
+
+
+### BL10 v2 launch event and ongoing assignments
+
+Prepare and reconcile passed: ABSENT remote execution, no discrepancies.
+Launched once `2026-11-09T00:54:50Z`, wrapper digest
+`0cc285d59729b806d066b062db7a8b61e4540d18389dbce8cf800f676245fc40`.
+One unbounded durable waiter is armed (local exec `66518`); do not duplicate
+the waiter or relaunch the wrapper. Initial recorded preflight ID `4663549`.
+At the one post-launch scope check, the controller had reached strict
+downstream source-record validation for Adams and Bassez, demonstrating that
+the old home-alias preflight failure is resolved for the representative
+legacy source. No final fit/release success is claimed yet.
+
+P6 helpers accepted in `94cf3e6` are now being integrated in parallel:
+`batch_subset_audit` owns the batch helper/two maintained batch notebooks;
+`docs_checkpoint_audit` owns benchmark notebook/helper plus shared plotting
+and constants. They coordinate interfaces and exclude external cancer files.
+The release loader may add one narrow `metadata_feather` kind for explicit
+checked sample metadata, without a second provenance system. Benchmarks can
+use an explicitly selected reviewed non-NULL reference bundle for scalar
+primary labels; no eleven new metadata exports are needed just for labels.
+
+`benchmark_dependency_audit` owns a separate two-file/two-test read-only
+automatic-annotation reuse evidence entry. The existing three-cohort layer2
+differences cannot be generalized to other auto-composition rows without
+inspection. A future **metadata-only** durable evidence gate will freeze the
+exact three-cohort artifact inventory, input refs and expected checksums,
+then use one bounded 64G/1CPU/one-hour job to read obs/compact RDS only and
+produce a JSON evidence report. Same `ecoda-benchmark` group after BLv2
+terminal review; no new sync group, fits, source mutations or NAS publication.
+Unknown annotation mappings/missing producer proof remain blocked/pending;
+no additional method rerun is approved from that audit alone. Exact audit
+wrapper/source/scope must be recorded after code review and before prepare.
+
+
+## Execution checkpoint — BL10 terminal failure and screen coverage, 2026-11-09
+
+BL10 v2 evidence: `.gate/ecoda_stage5_benchmark_bl10_20261109_v2.inspect.json`;
+first terminal accounting inspection was performed `2026-11-09T02:19:27Z`,
+query count exactly one. The 21 successful raw rows cover ten input checks,
+one R-environment check and ten fits; the two failed rows are the watchdog
+and aggregate only. The existing durable waiter has finished. This failed
+gate remains immutable historical evidence and cannot release a dependency.
+
+Root-cause repair is assigned to the reporting/reviewer agent as an urgent,
+bounded implementation: `stage5_dispatcher.sh` appends the explicit
+`ECODA_ARTIFACT_BINDING` and `ANALYSIS_NAS_ROOT` to the worker runtime export,
+but `matrix_watchdog.sh` reconstructs only its base runtime fields before
+strict equality. Restore consistent construction without relaxing source,
+runtime, input, ownership or retry checks. Test actual runtime helpers and
+preserved derivative context. Inspect existing validated-recovery/sync-only
+contracts first; propose a validator-only release path without repeating fits
+or manually synchronizing partial outputs. No new recovery launch is approved
+by this checkpoint alone.
+
+P6 coverage audit additionally found that the maintained cell-depth screen
+retained only ANOSIM summaries, and transformation summaries omitted silhouette
+and LISI and used a noncanonical modularity setting. Existing summaries cannot
+supply the missing scores. The approved five-metric figure scope therefore
+requires lightweight composition-only screen refreshes, with the same draw
+schedule/seeds and persisted per-draw evidence. Transformation refresh covers
+all eleven benchmark datasets; nine additional transformation-only requests
+are added to the proposed later wave. Zero-imputation already contains the
+five scores and needs only input-dependent Bassez/Stephenson reruns unless a
+separate integrity audit proves further invalid rows. None of this authorizes
+unrelated RNA-model refits.
+
+The later three-context proposal is currently 63 public benchmark requests,
+30 normalized benchmark family rows plus 56 uncorrected and 56 corrected
+family rows: **142 family dispatch rows**, not a scheduler-task count.
+Physical task/artifact scope must still be frozen before launch. This wave
+has not launched. The cell-depth job contract is still under review.
