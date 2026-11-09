@@ -1828,3 +1828,77 @@ Reviewed HiTME closure implementation checkpoint: `e776105`; independent reviewe
 reproduced the old failure and passed the current actual-builder regression.
 Future Stage3 NAS ancestor fix: `29d202e`. These commits are source fixes only;
 active gates remain pinned to their original immutablefc2949f snapshots.
+
+
+## Bassez author-HR22 independent early wave — READY, 2026-11-09
+
+Purpose: run the already approved repaired-author-HR composition results now,
+while independent Stephenson annotation and Stage3 batch artifact validation
+continue. No new HiTME refresh scope is selected. This is one selected
+composition worker, not a whole-composition or RNA-method rerun.
+
+- Gate `ecoda_stage5_bassez_author_hr22_20261109_v1`; run
+  `stage5_bassez_author_hr22_20261109_v1`; group `ecoda-benchmark`.
+  Sole formal dependency: approved Bassez Stage2 gate. All same-group gates
+  are terminal; metadata v3 review is approved. Independent Stage4 uses its
+  existing separate annotation group and snapshot.
+- Source `129c1a46ee7d282773eb090448ed3d061ac8ecf5`, separate snapshotparent
+  `20261109-bassez-author-hr22-v2`, archive SHA256
+  `1b9a587450628b6082591aa86279b8544a4c12d8604148f232c5a2d685a2b0f8`.
+  Earlier cc5e470/v1 source snapshot was created but never executed; do not
+  delete/replace it or confuse it with this launch. Existing fc active runs
+  stay unchanged. Same pinned format2 runtime and unchanged frozen auxiliary.
+- Source input is the approved Bassez derivative, MD5
+  `678656c738597471d884f88e345e6970`, size3,301,360,648. Exact six-field
+  reference SHA256 `e972a6c154ae37420c15fb4ea26fa20f5d8fbf5af43950faacbcabd18940eb30`.
+- Public22-row selection SHA256
+  `c6d219bb9c9b99e369467ab79509dbacd9d9cc23a58a4ee2225a5ecb155f23ee`;
+  actual normalized one-row composition CSV SHA256
+  `6320d84831019444bd909648e9cdb77f5e336352199270daa71d9b9e8693532a`.
+  Controls are staged/hashed/sealed under
+  `_ecoda_inputs/20261108-confounding-subsets-v1/bassez-author-hr22-v1`.
+- Exact22 public methods: authorHR baseline and NULL, GloProp, Freq_highres,
+  ten variance thresholds0..0.9, 3most/2least/3least-variable CT settings,
+  and composition PCA2/3/5/10/15. No HiTME, pseudobulk preparation, RNA PCA,
+  Python/GPU, or unrelated composition variant. Output23 RDS: metadata1+
+  standalone22, sidecars and ordinary timing/runtime/owner/log records.
+- Physical dispatcher stub passed: method array1row +watchdog1+aggregate1;
+  production adds H5AD preflight1 and Renv preflight1. Expected initial
+  **5 IDs /5 scheduled task units**. OOM-only bounded retries, if any, remain
+  explicit. Method CPU16/shared-cpu/EPYC-7742,128G→500G ceiling,4h,GPU0;
+  effective concurrency1 (existing method throttle literal1000 over one row).
+- Fresh run/log/NAS/gate namespaces verified before prepare. New Stage5 NAS
+  selected-ancestor fix129c1a4 is independently reviewed; normal, failedchmod,
+  ineffectivechmod and selected-transfer-failure fixtures all pass. NASroot,
+  scratch and unselected metadata are unchanged. A broader legacy canonical
+  retry fixture fails identically against the unchanged pre-fix helper
+  (`post-log transfer failure unexpectedly succeeded`); this separate known
+  failure is preserved in `.gate/stage5_nas_permission_tests_20261109_v1/`.
+  No legacy behavior is weakened to make that test pass.
+- Dedup is conditional on successful terminal audit/review of this wave.
+  Only then remove exactly these22 from the later63-row proposal: remaining
+  41 public /29 normalized families, SHA256
+  `56119d971ed5d1bb2581c2765a1b88c112c9fb8d732e3a387491f22320cbbc79`.
+  Bassez's other20 affected requests remain, as do all Stephenson/all-nine
+  additional transformation requests. A pending user decision on100 HiTME
+  variants stays separate. Release ledger consumes the early reviewed root;
+  do not recompute/copy these22 into the main method root.
+- Exactly one durable waiter after launch, one terminal accounting inspection
+  with every emitted ID, selected pinned artifact/source/NAS audit, then root
+  reviewer approval. No completion/reuse is claimed at readiness.
+
+Exact immutable wrapper (command SHA256
+`6fc8dc0e04179be474693dd018eb9e7e650168e83f9de36339907cd50bf3f0a7`):
+
+```bash
+env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper BENCHMARK_CPU_TIME_LIMIT=04:00:00 /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bassez-author-hr22-v2/129c1a46ee7d282773eb090448ed3d061ac8ecf5/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bassez-author-hr22-v2/129c1a46ee7d282773eb090448ed3d061ac8ecf5/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bassez-author-hr22-v2/129c1a46ee7d282773eb090448ed3d061ac8ecf5/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage5_bassez_author_hr22_20261109_v1 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage5_bassez_author_hr22_20261109_v1 --script src/5_run_benchmark_methods/1_submit_hpc_array.sh -- --selection-file /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/bassez-author-hr22-v1/selection.tsv --derivative-release 20261108-confounding-subsets-v1 --input-artifacts /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/bassez-author-hr22-v1/input_artifacts.tsv --mem=128G --max-mem=500G --throttle=1
+```
+
+Small Kidney secondary-label audit helper is staged read-only at the Stage3
+reuse controlroot, SHA256
+`5c6393f9d49997fcad74b3371af60221213f0c9937fc16e6b6e0086c1a3c797a`.
+It will run after the batch NOOP receipt exists, uses configured specimen and
+its producer-proven Sample alias, reads only relevant obs columns, and checks
+80 identical sample universes /condition/tissue homogeneity /45kidney+23cortex+
+12medulla /region NA mapping /noPapilla /suspension confounding. No expression
+read, full H5AD transfer/rehash or new fit is authorized by this check.
