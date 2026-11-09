@@ -172,6 +172,7 @@ case "$(cat "${ECODA_RUN_ROOT}/manifests/operation")" in
   projection) producer=analysis_metadata_projection; output=analysis_projection ;;
   render-pca) producer=analysis_pca_render; output=benchmark_pca ;;
   legacy-audit) producer=legacy_analysis_compatibility; output=evidence ;;
+  orphaned-main-observer) producer=orphaned_main_dependency_observation; output=evidence ;;
   *) exit 1 ;;
 esac
 path="${ECODA_RUN_ROOT}/artifacts/${output}/result.txt"
@@ -182,6 +183,7 @@ _ecoda_artifact_owner_validate_dir "$(ecoda_artifact_owner_dir "${path}")" "${pa
 printf 'operation-validator:%s\n' "${producer}" >> "${AUDIT_VALIDATOR_LOG}"
 SH
   cp "${tree}/src/utils/bash/project_analysis_release.sh" "${tree}/src/utils/bash/legacy_analysis_audit.sh"
+  cp "${tree}/src/utils/bash/project_analysis_release.sh" "${tree}/src/utils/bash/orphaned_main_observer.sh"
   printf '# fixture matrix validator\n' > \
     "${tree}/src/5_run_benchmark_methods/matrix_artifact_validator.py"
   printf '# fixture h5ad validator\n' > \
@@ -689,13 +691,15 @@ test_analysis_operations() {
   local operation purpose producer output run_root selection accounting path name
   export AUDIT_FIXTURE_COMMON="${ROOT}/src/utils/bash/ecoda_run_common.sh"
   export AUDIT_FIXTURE_RUNTIME="${RUNTIME_IDENTITY}"
-  for operation in projection render-pca legacy-audit; do
+  for operation in projection render-pca legacy-audit orphaned-main-observer; do
     local scope_producer=analysis_projection_scope submission_producer=analysis_projection_submission
     case "${operation}" in
       projection) purpose=analysis_metadata_projection; output=analysis_projection ;;
       render-pca) purpose=analysis_pca_render; output=benchmark_pca ;;
       legacy-audit) purpose=legacy_analysis_compatibility_audit; output=evidence
         scope_producer=legacy_analysis_audit_scope; submission_producer=legacy_analysis_audit_submission ;;
+      orphaned-main-observer) purpose=orphaned_main_dependency_observer; output=evidence
+        scope_producer=orphaned_main_observer_scope; submission_producer=orphaned_main_observer_submission ;;
     esac
     run_root="${SCRATCH}/_ecoda_runs/audit_${operation}"
     mkdir -p "${run_root}/manifests" "${run_root}/status" "${run_root}/artifacts/${output}"
@@ -721,6 +725,7 @@ test_analysis_operations() {
     ecoda_write_checksum "${path}" >/dev/null
     ecoda_artifact_owner_acquire "${path}" stage5 "${run_root##*/}" 0 1 0 >/dev/null
     producer="${purpose}"; [[ "${operation}" != legacy-audit ]] || producer=legacy_analysis_compatibility
+    [[ "${operation}" != orphaned-main-observer ]] || producer=orphaned_main_dependency_observation
     ecoda_write_artifact_record "${path}" "${producer}" "${run_root##*/}" >/dev/null
     ecoda_artifact_owner_set_state "${path}" OK test >/dev/null
     run_audit "${run_root}" stage5 "${selection}" 0 --scheduler-accounting "${accounting}"

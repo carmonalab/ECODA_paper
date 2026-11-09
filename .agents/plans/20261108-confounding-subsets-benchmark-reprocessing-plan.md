@@ -61,8 +61,26 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09 13:57Z, monitoring restored; H200 queue delays terminal recovery
+## Live checkpoint — 2026-11-09, login reboot archived; disjoint failed-row recovery being prepared
 
+- **New infrastructure incident:** login1.bamboo rebooted at14:47:27Z
+  (15:47:27CET), removing the tmux runner and three login-node controllers.
+  The original main-v2 gate is now honestly PRELAUNCH_STOP through the existing
+  CLI's fail-closed adoption path; wrapper exit remainsUNKNOWN/null. Original
+  Slurm jobs, outputs, manifests and statuses were not modified. No accounting
+  query has occurred. Earlier RUNNING/local-wait claims below are historical.
+- **Current remaining old graph:** two benchmark scPoli tasks4665568_1..2,
+  watchdog4665570 and benchmark aggregate4665612; the16:05Z incident queue
+  shows these pending. They retain H200 timing hardware. No other old science
+  job is active in that snapshot. Correct aggregate mapping is benchmark
+  4665612, uncorrected4665594, corrected4665633; earlier prose swapped the
+  firsttwo and is superseded by actual manifests/Slurm descriptors.
+- **Failed-only recovery being prepared:**16 exact rows have terminal watchdog
+  failure reasons, matching frozen matrix rows, and absent expected payloads/
+  producer records. Fresh disjoint roots may run them while old scPoli waits;
+  same profile/group, no stopped-gate success dependency or old output writes.
+  Final original accounting/healthy-copy publication still wait for old graph
+  quiescence. No new science/observer gate has been launched yet.
 - P0/P1 DONE: logical checkpoints and harmonized documentation are pushed.
   Active controller/reuse source is9ca2453, committed/pushed and
   deployed as an immutable Bamboo snapshot. Later reviewed diagnostics6bcf26b
@@ -3346,3 +3364,120 @@ delivered. That agent confirms its scope is applicationfiles only and denies
 ownership of notebooks/benchmark_analysis.rmd. Preserve that notebook as an
 unknown external owner's change; an optional ownership question is pending
 with the user, affecting later P6 coordination only, not HPC recovery.
+
+
+### Login-node reboot recovery — factual evidence and honest STOP
+
+At15:52Z fresh SSH resumed. Operational observation at16:05Z proves host
+login1.bamboo boot epoch2026-11-09T14:47:27Z, after the08:18:46Z launch,
+no tmux server and no exact original runner/child controllers. No original
+remote terminal/failure/event marker exists. Original Slurm jobs persisted.
+The stopped wrapper's actual exit code is unknown; never manufactureFAILED,
+exit1, terminal_status or successful parent/campaign scheduler records.
+
+Evidence under.gate/orphaned_main_20261109_v1/:
+- observation.json schemaecoda_login_reboot_operational_observation_v1,
+  SHA20b1fa03f5a8d6288212a8238874c9465b22263d65041dfe12889eeba9e92b47;
+  bounded text manifests/status/log snapshots, boot/host/process evidence,
+  one incident queue read and three active-job descriptors; zero accounting,
+  scientific-payload reads or remote writes.
+- aggregate_evidence.json SHA42b25a8c1c386866bca319eae126bdcdf1ef0ba1c75a550bda995c6156831e95.
+- initial_scheduler_catalog.tsv SHA88c5d49c0d6e9cf4db49f0387ec48132b792af005cb76db913daccbe1f1823db,
+  schema proofecoda_orphaned_main_initial_scheduler_inventory_v1.71 IDs come
+  from the three strict-checksummed original child ledgers, plus benchmark
+  aggregate4665612 (actual descriptor) and corrected aggregate4665633
+  (original queue and exact Slurm log namespace). Counts39/17/17=73 INITIAL
+  IDs only. Any later watchdog retry IDs must be collected before soleinspect;
+  final_emitted_catalog_complete remainsfalse. No old manifest was invented.
+
+The obsolete LOCAL waiter82670/cell33 was retired by signalling only verified
+local PID80704; its remote runner/event had been destroyed by the reboot.
+The sole output consumer completed143. Zero HPC jobs/processes were signalled.
+Pre/post snapshots and retirement evidence are preserved. The official CLI's
+launch operation was then used only on the ALREADYRUNNING manifest: its
+PREPARED-only execution guard makes wrapper reexecution impossible from that
+state. Actual AMBIGUOUS reconciliation transitioned to literalPRELAUNCH_STOP
+with launch prohibited, unchanged launch evidence/command/generation and
+remote_exit_code=null. No manual manifest edit, global runtime/profile change,
+new serialization group or accounting query was needed. The original gate
+can never receive reviewer-release approval. Its one complete inspect is
+legal onSTOP only AFTER all submitted jobs are terminal.
+
+### Revised parallel recovery: selected failed rows need not wait for old scPoli
+
+Root and independent reviewer accept fresh DISJOINT16-row recovery before the
+old H200 graph finishes. The earlier plan's whole-wave-first waiting assumption
+is superseded only for these independently proved failed rows in fresh roots.
+The AGENTS same-root synchronization/wait/review rule remains strict: these new
+artifact/cache/log/NAS/sync-owner roots are different from every old root.
+The new gate uses the same checked-in profile andecoda-benchmark group after
+actualSTOP; no successful dependency on the stopped gate is asserted. Healthy
+Stage2/3/4/current-input source/runtime proofs remain prerequisites. Old active
+scPoli2/WD/aggregate are explicitly excluded. Healthy-copy publication and final
+old accounting still require complete postmortem evidence after quiescence.
+
+failed16_missing.observed.json SHA986a743f4bb3f9c6febb55e388f3872a448c5b65ca59fd6c9a51a201565d9065
+uses the accepted8f62e89 contract helper and original9ca production contracts.
+Every selected row matches its original watchdog array/task/failure reason and
+frozen matrix. All complete expected payload sets AND producer records are
+absent. The check read no scientific payloads and changed no remote files.
+The initial diagnostic's missing import path was corrected in collector_v2;
+its failed stderr is preserved and was not a science/job failure.
+
+Selected science (16 rows; not yet a sealed launch):
+- Benchmark1: Stephenson/gloscope/hvg2000_pcadims30 (original4665516 task2).
+- Uncorrected4: MrVI for Covid19_PBMC, Kidney_KPMP_full, Lupus_PBMC, Lung
+  (original4665560 tasks5–8, eachFAILED0:53).
+- Corrected3: MrVI for Joanito, Lupus_PBMC, Lung (4665623 tasks1/7/8,
+  eachFAILED0:53).
+- Corrected8: QOT for Joanito, Stephenson, Alzheimer, Breast_cancer,
+  Covid19_PBMC, Kidney_KPMP_full, Lupus_PBMC, Lung (4665627 tasks1–8,
+  eachFAILED0:53).
+The seven batch MrVI rows may use explicit GPU-any under the user's any-CPU/
+GPU batch policy; benchmark hardware remainsunchanged. Campaign forwarding of
+that existing dispatcher policy is being implemented/tested. No broadforce,
+healthy refit, PB preparation, source-H5AD duplication or annotation job is
+part of this recovery. Exact controls, output roots, source revision, wrapper,
+resource classes and scheduler/task counts must be sealed/reviewed beforelaunch.
+
+Package assignments:
+- batch_subset_audit: minimal campaign uncorrected RECTANGLE scope forwarded
+  through existing--target-methods (no dispatcher/pending widening), narrow
+  batch-only GPU-policy forwarding, bridge bindings/tests; then explicit
+  reboot-incident publisher arm preserving normal BL/HR/main guards.
+- benchmark_dependency_audit: source-pinned one-job observer and narrow generic
+  auditor routing, no queries/fits/sync/old writes. Independent tests/review pass.
+- docs_checkpoint_audit: independent code and concrete launch review.
+- Root: factual inventory, controls, plan, Git/deployment, official gates/audits.
+
+The observer is a fallback AFTER the fresh failed-row gate finishes if the old
+scPoli graph is still active, keeping one active same-group gate. It submits
+exactlyone1CPU/2G/5min afterany barrier for the then-declared active roots, writes
+only its fresh run, and records old outcomesUNKNOWN/wrapper_exitnull/final
+catalog unestablished. A barrier is a wake-up, never old science approval;
+refresh actual emitted/retry IDs and confirm no old writers before soleinspect.
+If old work already finishes, do not submit an unnecessary observer. Observer
+bootstrap was tested with an actual copied Slurm spool script. The same latent
+bootstrap pattern in the unlaunched P6 projector/legacy templates remains a
+separate required fix before their first production launches; no broad edit
+was included in the observer package.
+
+A temporary one-hour local idle-sleep assertion (session22290, started16:08Z)
+covers the handoff; replace with a process-bound assertion when the new single
+official waiter is armed. It changes no persistent power settings.
+
+Notebook ownership: the user identified chat01a1c093-4a2f-7e90-81d2-cc472ebbc728
+as benchmark_analysis.rmd owner. Coordination message delivered; its last
+completed work concerns Figure3/Pseudobulk_deconvolution layout. Preserve its
+notebook/preview edits and coordinate later P6 scope; no HPC recovery depends
+on that reply. Application chat01a1bd25... confirms no benchmark-notebook edits.
+
+### Reviewed recovery code checkpoints
+
+Combined campaign rectangle/GPU policy and accounting bindings passed independent
+review and focused fixtures, committed asf1a9922. Four-row uncorrected MrVI uses
+exactlyone4-task GPU-any array; benchmark policy remainsauto and its timing
+hardware is unchanged. Default campaign behavior remainsbackward-compatible.
+The observer spool-bootstrap and generic auditor routing also passed independent
+review; they remain an unlaunched fallback after the16-row recovery gate.
+This checkpoint includes no scientific job submission or original accounting.

@@ -537,6 +537,12 @@ _audit_analysis_release() {
       submission_producer=legacy_analysis_audit_submission
       validator_name=legacy_analysis_audit.sh
       ;;
+    orphaned_main_dependency_observer)
+      expected_operation=orphaned-main-observer
+      scope_producer=orphaned_main_observer_scope
+      submission_producer=orphaned_main_observer_submission
+      validator_name=orphaned_main_observer.sh
+      ;;
     *) _audit_die "unsupported Stage 5 PURPOSE: ${purpose}"; return 1 ;;
   esac
   [[ "${SELECTION_ARG}" == "${RUN_ROOT_REAL}/manifests/selection.tsv" &&
