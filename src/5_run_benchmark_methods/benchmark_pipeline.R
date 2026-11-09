@@ -2520,9 +2520,12 @@ run_composition_methods_hpc <- function(
         next
       }
       hitme_combos <- lapply(ECODA_top_varexp_hvct, function(v) {
+        # Each deferred method retains this iteration's layer and threshold.
+        ct <- hitme_ct
+        force(v)
         function() {
           process_coda_fig(NULL, labels, ECODA_top_varexp_hvct = v,
-                           ct_col = hitme_ct, obs = obs)
+                           ct_col = ct, obs = obs)
         }
       })
       names(hitme_combos) <- paste0(
