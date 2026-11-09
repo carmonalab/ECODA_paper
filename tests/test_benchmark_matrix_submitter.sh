@@ -40,7 +40,7 @@ cp "${ROOT}/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz" \
   "${SOURCE_TREE}/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
 cat > "${HOST_PREFIX}/bin/python" <<'PYTHON_STUB'
 #!/bin/bash
-if [[ "${1:-}" == */derivative_artifacts.py ]]; then
+if [[ "${1:-}" == */derivative_artifacts.py || "${1:-}" == */benchmark_request_scope.py ]]; then
   exec "${TEST_REAL_PYTHON}" "$@"
 fi
 exit 0
@@ -131,6 +131,11 @@ export ECODA_AUX_ROOT="${SOURCE_TREE}/aux"
 export ECODA_RUNTIME_MODE=apptainer ECODA_RUNTIME_IMAGE="${RUNTIME_IMAGE}"
 export ECODA_RUNTIME_MANIFEST="${RUNTIME_MANIFEST}" ECODA_RUNTIME_PROFILE=stage5
 export ECODA_APPTAINER_NV=0 APPTAINER_BIN="${TMP_DIR}/bin/apptainer"
+if [[ "${ECODA_MATRIX_REQUEST_ONLY:-0}" == 1 ]]; then
+  eval "$(awk '/^test_requested_dispatch\(\)/ {copy=1} copy {print} copy && /^}$/ {exit}' "$0")"
+  test_requested_dispatch
+  exit 0
+fi
 OUTPUT="$(
   HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL="test@example.invalid" \
   BENCHMARK_MATRIX_TEST=1 bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
@@ -1337,4 +1342,223 @@ cmp "${TMP_DIR}/derivative-inputs.tsv" "${DERIVATIVE_RUN}/manifests/input_artifa
 grep -q "ANALYSIS_ROOT=${DERIVATIVE_RUN}/artifacts/benchmark" "${CAPTURE}"
 grep -q "ECODA_ARTIFACT_BINDING=${DERIVATIVE_RUN}/manifests/artifact_bindings.json" "${CAPTURE}"
 [[ "$(cat "${HPC_ROOT}/benchmark/results/preserve.rds")" == 'canonical results preserved' ]]
+test_requested_dispatch() {
+(
+  local request_root="${TMP_DIR}/requested-fixture" request_run
+  mkdir -p "${request_root}/nas" "${request_root}/inputs"
+  request_run="${HPC_ROOT}/_ecoda_runs/requested-dispatch-fixture"
+  "${TEST_REAL_PYTHON}" - "${SOURCE_TREE}/datasets.json" "${request_root}" <<'PY'
+import hashlib, json, pathlib, sys
+config=json.loads(pathlib.Path(sys.argv[1]).read_text()); root=pathlib.Path(sys.argv[2]); refs=[]
+for dataset in ('Stephenson','Adams','Bassez'):
+    source=root/'inputs'/config[dataset]['views']['benchmark_analysis']['output_file_name']
+    source.write_bytes(f'input fixture {dataset}'.encode()); md5=hashlib.md5(source.read_bytes()).hexdigest(); size=source.stat().st_size
+    proof=pathlib.Path(str(source)+'.md5'); proof.write_text(f'MD5={md5}\nSIZE={size}\nPATH={source}\n')
+    refs.append(f'{dataset}\tbenchmark_analysis\t{source}\t{md5}\t{size}\t{proof}\n')
+(root/'inputs.tsv').write_text(''.join(refs))
+lines=['Stephenson\tbenchmark_analysis\tall', 'Adams\tbenchmark_analysis\tpseudobulk\thvg2000_bl']
+lines += [f'Bassez\tbenchmark_analysis\tpseudobulk\t{t}' for t in ('hvg2000_bl','CT_HR_hvg2000','CT_HR_hvg500')]
+lines += [f'Bassez\tbenchmark_analysis\tcomposition\t{t}' for t in ('ECODA_authors_HR','ECODA_authors_HR_NULL')]
+lines += [f'Bassez\tbenchmark_analysis\tscpoli\t{t}' for t in ('hvg2000_highres_dims15','hvg1000_highres_dims15','hvg3000_highres_dims15','hvg2000_highres_dims2','hvg2000_highres_dims3','hvg2000_highres_dims5','hvg2000_highres_dims10')]
+lines += [f'Bassez\tbenchmark_analysis\t{m}\thvg{n}_highres' for m in ('pilot','qot') for n in (1000,2000,3000)]
+lines += ['Bassez\tbenchmark_analysis\tpilotgm\thvg2000_highres','Bassez\tbenchmark_analysis\ttrans','Bassez\tbenchmark_analysis\tzeroimp']
+(root/'request.tsv').write_text('\n'.join(lines)+'\n')
+PY
+  : > "${CAPTURE}"
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.invalid \
+    HPC_SCRATCH_DIR="${HPC_ROOT}" NAS_TARGET_DIR="${request_root}/nas" \
+    BENCHMARK_MATRIX_TEST=1 ECODA_RUN_ID=requested-dispatch-fixture \
+    bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+    --selection-file "${request_root}/request.tsv" --derivative-release test-release \
+    --input-artifacts "${request_root}/inputs.tsv" > "${request_root}/submit.log"
+  cmp "${request_root}/request.tsv" "${request_run}/manifests/requested_selection.tsv"
+  "${TEST_REAL_PYTHON}" - "${request_run}" "${CAPTURE}" <<'PY'
+import json, pathlib, shlex, sys
+root=pathlib.Path(sys.argv[1]); calls=pathlib.Path(sys.argv[2]).read_text().splitlines(); jobs=[]
+for number,line in enumerate(calls,1):
+    args=shlex.split(line.split(' ARGS ',1)[1]); options=dict(a[2:].split('=',1) for a in args if a.startswith('--') and '=' in a)
+    env=dict(p.split('=',1) for p in options.get('export','').split(',') if '=' in p)
+    if 'ANALYSIS_MANIFEST' not in env or 'MATRIX_WATCHDOG_ROOT' in env: continue
+    manifest=pathlib.Path(env['ANALYSIS_MANIFEST']); rows=[r.split('\t') for r in manifest.read_text().splitlines()]
+    jobs.append((str(700000+number),env['METHOD'],rows,options))
+prep=[j for j in jobs if j[1]=='prepare_pseudobulk']; assert len(prep)==1, (prep, jobs[:2], calls[:1])
+assert prep[0][2]==[['Stephenson','benchmark_analysis','prepare_pseudobulk']]
+partial=[j for j in jobs if j[1]=='pseudobulk' and any(r[0]=='Adams' for r in j[2])]
+assert len(partial)==1 and 'dependency' not in partial[0][3], partial
+assert partial[0][2]==[['Adams','benchmark_analysis','pseudobulk','hvg2000_bl'],['Bassez','benchmark_analysis','pseudobulk','hvg2000_bl,CT_HR_hvg2000,CT_HR_hvg500']]
+whole=[j for j in jobs if j[1]=='pseudobulk' and j[2][0][0]=='Stephenson']; assert len(whole)==1
+assert whole[0][2]==[['Stephenson','benchmark_analysis','pseudobulk']] and 'afterok:' in whole[0][3].get('dependency','')
+hr=[r for j in jobs if j[1]=='scpoli' for r in j[2] if r[0]=='Bassez']
+assert len(hr)==7 and all('highres' in r[3] for r in hr), hr
+for method in ('pilot','qot'):
+    selected=[r for j in jobs if j[1]==method for r in j[2] if r[0]=='Bassez']
+    assert len(selected)==3 and all('highres' in r[3] for r in selected), selected
+binding=json.loads((root/'manifests/artifact_bindings.json').read_text())
+assert str(root/'manifests/requested_selection.tsv') in binding['identities']
+assert not any(r[0]!='Stephenson' for j in prep for r in j[2])
+PY
+  # A failed Stephenson preparation quarantines its dependent family while
+  # successful self-contained BL rows retain their exact publication scope.
+  export PROJECT_ROOT="${SOURCE_TREE}" DATASETS_JSON_FILE="${SOURCE_TREE}/datasets.json"
+  export HPC_SCRATCH_DIR="${HPC_ROOT}" NAS_TARGET_DIR="${request_root}/nas"
+  export ECODA_RUN_ROOT="${request_run}" ECODA_RUN_ID=requested-dispatch-fixture
+  export ECODA_ARTIFACT_BINDING="${request_run}/manifests/artifact_bindings.json"
+  export ANALYSIS_ROOT="${request_run}/artifacts/benchmark"
+  export ANALYSIS_NAS_ROOT="${request_root}/nas/releases/test-release/requested-dispatch-fixture/benchmark"
+  export PYTHON_BIN="${HOST_PREFIX}/bin/python"
+  RUN_ID=requested-dispatch-fixture
+  source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
+  for function_name in stage5_watchdog_status_value stage5_watchdog_safe_label \
+      stage5_watchdog_state_for_method stage5_watchdog_state_for_owner_key \
+      stage5_watchdog_state_for_artifact_path stage5_finalize_tracked_owner_states \
+      stage5_derivative_nas_publication_valid; do
+    eval "$(awk -v wanted="${function_name}()" '$0==wanted" {" {copy=1} copy {print} copy && /^}$/ {exit}' \
+      "${ROOT}/src/5_run_benchmark_methods/stage5_dispatcher.sh")"
+  done
+  mkdir -p "${request_run}/status/watchdogs"
+  for status_label in benchmark_analysis__prepare_pseudobulk__preparation_Stephenson \
+      benchmark_analysis__pseudobulk__prepare_Stephenson; do
+    printf 'STATE=FAIL\nLABEL=%s\n' "${status_label}" > "${request_run}/status/watchdogs/${status_label}.status"
+  done
+  status_label=benchmark_analysis__pseudobulk__independent__parameters
+  printf 'STATE=OK\nLABEL=%s\n' "${status_label}" > "${request_run}/status/watchdogs/${status_label}.status"
+  stage5_watchdog_state_for_owner_key 'derivative/requested-dispatch-fixture/ordinary/Adams/benchmark_analysis/pseudobulk'
+  [[ "${STAGE5_WATCHDOG_STATE}" == OK ]]
+  stage5_watchdog_state_for_owner_key 'derivative/requested-dispatch-fixture/ordinary/Stephenson/benchmark_analysis/pseudobulk'
+  [[ "${STAGE5_WATCHDOG_STATE}" == FAIL ]]
+  _ecoda_stage5_artifacts_for Adams benchmark_analysis pseudobulk
+  [[ ${#ECODA_BENCHMARK_ARTIFACTS[@]} -eq 2 ]]
+  saved_scratch=("${ECODA_BENCHMARK_ARTIFACTS[@]}")
+  saved_nas=("${ECODA_BENCHMARK_ARTIFACT_NAS[@]}")
+  for path in "${saved_scratch[@]}"; do
+    [[ "${path}" == *Adams*'hvg2000_bl.rds' ]]
+    stage5_watchdog_state_for_artifact_path "${path}"
+    [[ "${STAGE5_WATCHDOG_STATE}" == OK ]]
+  done
+  ecoda_owner_clear_tracked
+  for path in "${saved_scratch[@]}"; do
+    mkdir -p "$(dirname "${path}")"
+    printf 'completed selected BL fixture\n' > "${path}"
+    ecoda_write_checksum "${path}"
+  done
+  for path in "${saved_scratch[@]}" "${saved_nas[@]}"; do
+    ecoda_artifact_owner_acquire "${path}" stage5 "${RUN_ID}" 1 0 0 >/dev/null
+    ecoda_owner_track "${ECODA_ARTIFACT_OWNER_DIR}"
+  done
+  stage5_finalize_tracked_owner_states 'fixture failed Stephenson preparation before synchronization' > "${request_root}/failure-finalization.log"
+  for path in "${saved_scratch[@]}"; do
+    ecoda_artifact_owner_validate "${path}" "${RUN_ID}"
+    [[ "${ECODA_ARTIFACT_OWNER_STATE}" == OK ]]
+  done
+  for path in "${saved_nas[@]}"; do
+    ecoda_artifact_owner_validate "${path}" "${RUN_ID}"
+    [[ "${ECODA_ARTIFACT_OWNER_STATE}" == FAIL && ! -e "${path}" ]]
+  done
+  for function_name in _audit_metadata_count _audit_metadata_value; do
+    eval "$(awk -v wanted="${function_name}()" '$0==wanted" {" {copy=1} copy {print} copy && /^}$/ {exit}' \
+      "${ROOT}/src/utils/bash/ecoda_run_audit.sh")"
+  done
+  source "${ROOT}/src/utils/bash/ecoda_run_audit_stage5.sh"
+  _audit_die() { echo "$*" >&2; return 1; }
+  RUN_ROOT_REAL="${request_run}"
+  AUDIT_METADATA_DISPATCH_SELECTION="${request_run}/manifests/dispatch_selection.tsv"
+  _audit_requested_selection
+  requested="${request_run}/manifests/requested_selection.tsv"
+  cp "${requested}" "${request_root}/requested.saved"
+  chmod u+w "${requested}"
+  printf 'Adams\tbenchmark_analysis\tpseudobulk\thvg500\n' >> "${requested}"
+  if _audit_requested_selection > "${request_root}/tamper.log" 2>&1; then
+    echo 'terminal audit accepted a changed exact request' >&2; exit 1
+  fi
+  cp "${request_root}/requested.saved" "${requested}"
+  chmod a-w "${requested}"
+  _audit_requested_selection
+  for function_name in benchmark_artifacts_for stage5_consolidate_gloscope stage5_validate_requested_rds \
+      stage5_allowed_producers_for stage5_validate_path_component stage5_requested_preparation_dependency; do
+    eval "$(awk -v wanted="${function_name}()" '$0==wanted" {" {copy=1} copy {print} copy && /^}$/ {exit}' \
+      "${ROOT}/src/5_run_benchmark_methods/stage5_dispatcher.sh")"
+  done
+  cat > "${request_root}/r-validator-stub" <<'R_STUB'
+#!/bin/bash
+printf '%s\n' "$@" >> "${REQUESTED_R_CALLS}"
+R_STUB
+  chmod +x "${request_root}/r-validator-stub"
+  export REQUESTED_R_CALLS="${request_root}/r-calls"
+  PIXI_RSCRIPT="${request_root}/r-validator-stub"
+  SCRIPT_DIR="${SOURCE_TREE}/src/5_run_benchmark_methods"
+  DISPATCH_MANIFEST="${request_run}/manifests/dispatch_selection.tsv"
+  SOURCE_IDENTITY="${request_run}/manifests/source_identity.json"
+  stage5_validate_reusable_artifact() { [[ "$1" == "${ANALYSIS_ROOT}/"* ]]; }
+  stage5_consolidate_gloscope
+  stage5_validate_requested_rds
+  stage5_allowed_producers_for "${ANALYSIS_ROOT}/pseudobulks/Adams_pseudobulk_hvg2000_bl.rds" pseudobulk
+  [[ "${STAGE5_ALLOWED_PRODUCERS[*]}" == stage5_prepare_pseudobulk_hvg2000_bl ]]
+  stage5_allowed_producers_for "${ANALYSIS_ROOT}/results/Adams_Pseudobulk_hvg2000_bl.rds" pseudobulk
+  [[ "${STAGE5_ALLOWED_PRODUCERS[*]}" == stage5_pseudobulk ]]
+  # A missing consumer can reuse validated preparation without resubmitting it.
+  PENDING_SELECTION="${request_root}/recovery-pending.tsv"
+  printf 'Stephenson\tbenchmark_analysis\tpseudobulk\n' > "${PENDING_SELECTION}"
+  PREP_VIEWS=(); PREP_DATASETS=(); PREP_WATCHDOGS=()
+  for function_name in benchmark_selected_artifacts_valid benchmark_rds_group_valid \
+      stage5_validate_reusable_artifact stage5_recorded_producer stage5_producer_allowed; do
+    eval "$(awk -v wanted="${function_name}()" '$0==wanted" {" {copy=1} copy {print} copy && /^}$/ {exit}' \
+      "${ROOT}/src/5_run_benchmark_methods/stage5_dispatcher.sh")"
+  done
+  PASS_ARG=""; ANALYSIS_VARIANT=""; ECODA_RECOVERY_ACTIVE=0
+  benchmark_artifacts_for Stephenson benchmark_analysis prepare_pseudobulk
+  for path in "${ARTIFACT_PATHS[@]}"; do
+    mkdir -p "$(dirname "${path}")"
+    printf 'owned cached preparation fixture\n' > "${path}"
+    ecoda_write_checksum "${path}"
+    variant="${path##*pseudobulk_}"; variant="${variant%.rds}"
+    ecoda_write_artifact_record "${path}" "stage5_prepare_pseudobulk_${variant}" "${RUN_ID}" >/dev/null
+  done
+  stage5_requested_preparation_dependency Stephenson benchmark_analysis
+  [[ -z "${STAGE5_PREPARATION_DEPENDENCY}" ]]
+  mv "${path}.md5" "${path}.md5.saved"
+  if stage5_requested_preparation_dependency Stephenson benchmark_analysis 2>/dev/null; then
+    echo 'corrupt cached preparation was accepted' >&2; exit 1
+  fi
+  mv "${path}.md5.saved" "${path}.md5"
+  if stage5_requested_preparation_dependency Adams benchmark_analysis 2>/dev/null; then
+    echo 'missing invalid preparation was accepted' >&2; exit 1
+  fi
+  printf 'Stephenson\tbenchmark_analysis\tprepare_pseudobulk\n' >> "${PENDING_SELECTION}"
+  if stage5_requested_preparation_dependency Stephenson benchmark_analysis 2>/dev/null; then
+    echo 'pending preparation without its watchdog was accepted' >&2; exit 1
+  fi
+  PREP_VIEWS=(benchmark_analysis); PREP_DATASETS=(Stephenson); PREP_WATCHDOGS=(12345)
+  stage5_requested_preparation_dependency Stephenson benchmark_analysis
+  [[ "${STAGE5_PREPARATION_DEPENDENCY}" == 12345 ]]
+  "${TEST_REAL_PYTHON}" - "${request_run}" <<'PY'
+import pathlib, sys
+root=pathlib.Path(sys.argv[1]); rows=[line.split('\t') for line in (root/'manifests/gloscope_consolidation.tsv').read_text().splitlines()]
+assert len(rows)==5 and all(row[0]=='Stephenson' for row in rows), rows
+validation=[line.split('\t') for line in (root/'manifests/rds_validation_requested.tsv').read_text().splitlines()]
+assert len(validation)==23, validation
+adams=[row[0] for row in validation if row[2]=='Adams']
+assert len(adams)==2 and all('hvg2000_bl.rds' in path for path in adams), adams
+bassez=[row[0] for row in validation if row[2]=='Bassez']
+assert not any(path.endswith('Bassez_pseudobulk.rds') or path.endswith('Bassez_composition.rds') for path in bassez), bassez
+assert sum('Pseudobulk_CT_HR' in path for path in bassez)==2
+PY
+  unset ECODA_ARTIFACT_BINDING
+  # An overlapping whole/partial request must fail before Slurm submission.
+  cp "${request_root}/request.tsv" "${request_root}/overlap.tsv"
+  printf 'Adams\tbenchmark_analysis\tpseudobulk\n' >> "${request_root}/overlap.tsv"
+  : > "${CAPTURE}"
+  if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" USER_EMAIL=test@example.invalid \
+      HPC_SCRATCH_DIR="${HPC_ROOT}" NAS_TARGET_DIR="${request_root}/nas" \
+      BENCHMARK_MATRIX_TEST=1 ECODA_RUN_ID=requested-overlap-fixture \
+      bash "${ROOT}/src/5_run_benchmark_methods/1_submit_hpc_array.sh" \
+      --selection-file "${request_root}/overlap.tsv" --derivative-release test-release \
+      --input-artifacts "${request_root}/inputs.tsv" > "${request_root}/overlap.log" 2>&1; then
+    echo 'overlapping whole/partial request was accepted' >&2; exit 1
+  fi
+  [[ ! -s "${CAPTURE}" ]]
+  echo 'exact requested scope, HR-only Python rows and BL/preparation failure isolation: OK'
+)
+}
+test_requested_dispatch
 echo "benchmark matrix submitter: OK"

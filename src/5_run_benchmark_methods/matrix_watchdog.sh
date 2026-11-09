@@ -117,7 +117,7 @@ matrix_validate_output_ownership() {
       "${manifest}" > "${ownership_tmp}" || return 1
     ownership_manifest="${ownership_tmp}"
   fi
-  ecoda_stage5_validate_output_ownership "${ownership_manifest}" "${ECODA_RUN_ID}"
+  ecoda_stage5_validate_output_ownership "${ownership_manifest}" "${ECODA_RUN_ID}" 0 scratch
   rc=$?
   [[ -n "${ownership_tmp}" ]] && rm -f "${ownership_tmp}"
   return "${rc}"

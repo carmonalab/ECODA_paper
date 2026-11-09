@@ -3,6 +3,25 @@
 # Source after ecoda_run_common.sh.
 
 
+ecoda_stage5_requested_active() {
+  [[ -n "${ECODA_ARTIFACT_BINDING:-}" &&
+     -f "${ECODA_RUN_ROOT:-}/manifests/requested_selection.tsv" ]]
+}
+
+ecoda_stage5_requested_cli() {
+  [[ "${PYTHON_BIN:-}" = /* && -x "${PYTHON_BIN}" ]] || return 1
+  "${PYTHON_BIN}" "${PROJECT_ROOT}/src/utils/py/benchmark_request_scope.py" \
+    "$@" --config "${DATASETS_JSON_FILE}"
+}
+
+ecoda_stage5_requested_tokens() {
+  if ecoda_stage5_requested_active; then
+    ecoda_stage5_requested_cli tokens --dataset "$1" --view "$2" --method "$3"
+  else
+    printf 'FULL'
+  fi
+}
+
 ecoda_stage5_validate_identity() {
   local requested_pass="${1:-}" pass variant="${2:-${ANALYSIS_VARIANT:-}}"
   local scratch_root nas_root expected_root expected_nas expected_suffix
@@ -215,7 +234,7 @@ ecoda_stage5_batch_stem() {
 
 _ecoda_stage5_artifacts_for() {
   local ds="$1" view="$2" label="$3" pass="${PASS_ARG:-${ANALYSIS_PASS:-}}"
-  local root nas_root stem batch_stem suffix n
+  local root nas_root stem batch_stem suffix n requested_tokens requested_files
   # A missing pass is ordinary mode even when a caller supplies a batch view.
   # Batch callers bind PASS_ARG/ANALYSIS_PASS before ownership expansion.
   ecoda_stage5_validate_identity "${pass}" || return 1
@@ -272,6 +291,25 @@ _ecoda_stage5_artifacts_for() {
     nas_root="${NAS_TARGET_DIR}/benchmark"
   else
     nas_root=""
+  fi
+  requested_tokens="$(ecoda_stage5_requested_tokens "${ds}" "${view}" "${label}")" || return 1
+  if [[ "${requested_tokens}" != FULL ]]; then
+    [[ "${requested_tokens}" != ABSENT ]] || {
+      _ecoda_die "method is outside the exact benchmark request: ${ds}/${view}/${label}"
+      return 1
+    }
+    requested_files="$(ecoda_stage5_requested_cli files --dataset "${ds}" --view "${view}" --method "${label}")" || return 1
+    [[ -n "${requested_files}" ]] || return 1
+    while IFS= read -r stem; do
+      ECODA_BENCHMARK_ARTIFACTS+=("${stem}")
+    done <<< "${requested_files}"
+    ECODA_BENCHMARK_ARTIFACT_NAS=()
+    if [[ -n "${nas_root}" ]]; then
+      for stem in "${ECODA_BENCHMARK_ARTIFACTS[@]}"; do
+        ECODA_BENCHMARK_ARTIFACT_NAS+=("${nas_root}/${stem#${root}/}")
+      done
+    fi
+    return 0
   fi
   if [[ "${label}" == "prepare_pseudobulk" ]]; then
     if [[ -n "${pass}" ]]; then
@@ -470,7 +508,8 @@ ecoda_corrected_batch_method_policy() {
 }
 
 _ecoda_stage5_expand_output_selection() {
-  local selection="${1:-}" ds view label extra path nas_path artifact_index
+  local selection="${1:-}" scope="${2:-all}" ds view label extra path nas_path artifact_index
+  [[ "${scope}" == all || "${scope}" == scratch ]] || return 1
   _ecoda_init_output_arrays
   [[ -r "${selection}" && ! -L "${selection}" ]] || {
     _ecoda_die "Stage 5 selection manifest is missing or unreadable: ${selection}"
@@ -496,7 +535,7 @@ _ecoda_stage5_expand_output_selection() {
         nas_path="${ECODA_BENCHMARK_ARTIFACT_NAS[${artifact_index}]}"
       fi
       artifact_index=$((artifact_index + 1))
-      if [[ -n "${nas_path}" ]]; then
+      if [[ "${scope}" == all && -n "${nas_path}" ]]; then
         _ecoda_output_add_scratch_nas_pair "${path}" "${nas_path}" || return 1
       else
         _ecoda_output_add_path "${path}" || return 1
@@ -510,14 +549,48 @@ _ecoda_stage5_expand_output_selection() {
 }
 
 ecoda_stage5_validate_output_ownership() {
-  local selection="${1:-}" run_id="${2:-}" reclaim_terminal="${3:-0}"
+  local selection="${1:-}" run_id="${2:-}" reclaim_terminal="${3:-0}" scope="${4:-all}"
   [[ "${selection}" = /* ]] || {
     _ecoda_die "Stage 5 ownership selection must be an absolute path"
     return 1
   }
-  _ecoda_stage5_expand_output_selection "${selection}" || return 1
+  _ecoda_stage5_expand_output_selection "${selection}" "${scope}" || return 1
   _ecoda_validate_expanded_output_ownership \
     stage5 "${run_id}" "${reclaim_terminal}"
+}
+
+# Publication and terminal review share one bounded mirror check. Compute-side
+# metadata/ownership checks never call this mounted-NAS boundary.
+ecoda_stage5_validate_derivative_nas_mirror() {
+  local path="$1" scratch directory
+  [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]] || return 1
+  ecoda_derivative_stage5_validate || return 1
+  [[ "${path}" == "${ANALYSIS_NAS_ROOT}/"* ]] || return 1
+  scratch="${ANALYSIS_ROOT}/${path#${ANALYSIS_NAS_ROOT}/}"
+  [[ "$(_ecoda_canonical_path "${path}")" == "${path}" &&
+     "$(_ecoda_canonical_path "${scratch}")" == "${scratch}" ]] || return 1
+  [[ -f "${path}" && ! -L "${path}" &&
+     -f "${path}.md5" && ! -L "${path}.md5" &&
+     -f "${scratch}" && ! -L "${scratch}" &&
+     -f "${scratch}.md5" && ! -L "${scratch}.md5" ]] || return 1
+  # Stage 5 copies the producer proof unchanged, including its scratch PATH.
+  # Require that exact proof and freshly hash the NAS bytes; do not relax the
+  # generic path-bound checksum validator for unrelated files.
+  ecoda_validate_checksum "${scratch}" || return 1
+  cmp -s "${scratch}.md5" "${path}.md5" &&
+    [[ "$(ecoda_md5_file "${path}")" == "${ECODA_CHECKSUM_MD5}" &&
+       "$(wc -c < "${path}" | tr -d '[:space:]')" == "${ECODA_CHECKSUM_SIZE}" ]] &&
+    cmp -s "${scratch}" "${path}" || return 1
+  [[ "$(_ecoda_artifact_mode_bits "${path}")" == 666 &&
+     "$(_ecoda_artifact_mode_bits "${path}.md5")" == 666 ]] || return 1
+  directory="$(dirname "${path}")"
+  while :; do
+    [[ "${directory}" == "${ANALYSIS_NAS_ROOT}" ||
+       "${directory}" == "${ANALYSIS_NAS_ROOT}/"* ]] || return 1
+    [[ "$(_ecoda_artifact_mode_bits "${directory}")" == 777 ]] || return 1
+    [[ "${directory}" != "${ANALYSIS_NAS_ROOT}" ]] || break
+    directory="$(dirname "${directory}")"
+  done
 }
 
 ecoda_stage5_artifact_owner_acquire() {

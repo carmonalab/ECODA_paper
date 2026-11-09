@@ -106,6 +106,14 @@ IFS=$'\t' read -r DS_NAME ROW_VIEW ROW_LABEL <<< "${line}"
 export DS_NAME
 ANALYSIS_VIEW="${ROW_VIEW:-benchmark_analysis}"
 ANALYSIS_ROOT="${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}"
+if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+  source "${PROJECT_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+  ecoda_derivative_stage5_validate "" "" || exit 1
+  if ecoda_stage5_requested_active; then
+    ecoda_stage5_requested_cli worker --dataset "${DS_NAME}" --view "${ANALYSIS_VIEW}" \
+      --method "${ANALYSIS}" >/dev/null || exit 1
+  fi
+fi
 OUT_DIR="${ANALYSIS_ROOT}/embeddings"
 EXECUTION_LOG_DIR="${EXECUTION_LOG_DIR:-${OUT_DIR}}"
 mkdir -p "${OUT_DIR}" "${EXECUTION_LOG_DIR}"
@@ -114,10 +122,14 @@ FORCE_FLAG=()
 [[ "${FORCE_BENCHMARK:-0}" == 1 ]] && FORCE_FLAG=(--force)
 if [[ "${ANALYSIS}" == trans ]]; then R_SCRIPT="${SCRIPT_DIR}/1.1.1_run_transformation_analysis.R"; else R_SCRIPT="${SCRIPT_DIR}/1.1.1_run_zeroimp_analysis.R"; fi
 set +e
+INPUT_DIR="${HPC_SCRATCH_DIR}/${DS_NAME}/output"
+if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+  INPUT_DIR="$(ecoda_derivative_input "${DS_NAME}" "${ANALYSIS_VIEW}" directory content)" || exit 1
+fi
 R_ARGS=(
   "${R_SCRIPT}"
   --config_path "${DATASETS_JSON_FILE}" --ds_name "${DS_NAME}" --view "${ANALYSIS_VIEW}"
-  --input_dir "${HPC_SCRATCH_DIR}/${DS_NAME}/output"
+  --input_dir "${INPUT_DIR}"
   --output_dir "${ANALYSIS_ROOT:-${HPC_SCRATCH_DIR}/benchmark}/results"
   --log_file "${LOG_FILE}"
 )

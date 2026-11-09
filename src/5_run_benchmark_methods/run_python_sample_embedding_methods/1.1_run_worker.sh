@@ -177,6 +177,10 @@ IFS=$'\t' read -r DS_NAME ROW_VIEW ROW_LABEL ROW_COMBO ROW_EXTRA <<< "${line}"
   echo "ERROR: benchmark row has more than four tab-separated fields" >&2
   exit 1
 }
+if ecoda_stage5_requested_active; then
+  ecoda_stage5_requested_cli worker --dataset "${DS_NAME}" --view "${ROW_VIEW}" \
+    --method "${METHOD}" --token "${ROW_COMBO:-}" >/dev/null || exit 1
+fi
 export DS_NAME
 ANALYSIS_VIEW="${ROW_VIEW:-${ANALYSIS_VIEW:-benchmark_analysis}}"
 export ANALYSIS_VIEW

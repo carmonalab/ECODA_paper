@@ -174,11 +174,18 @@ IFS=$'\t' read -r DS_NAME ROW_VIEW ROW_LABEL ROW_COMBO ROW_EXTRA <<< "${line}"
   echo "ERROR: benchmark row has more than four tab-separated fields" >&2
   exit 1
 }
+if ecoda_stage5_requested_active; then
+  ecoda_stage5_requested_cli worker --dataset "${DS_NAME}" --view "${ROW_VIEW}" \
+    --method "${METHOD}" --token "${ROW_COMBO:-}" >/dev/null || exit 1
+fi
 if [[ -n "${ROW_COMBO:-}" ]]; then
   [[ -z "${ANALYSIS_PASS:-}" && "${ROW_VIEW}" == benchmark_analysis ]] || {
     echo "ERROR: R parameter shards are only supported for ordinary benchmark runs" >&2
     exit 1
   }
+  if ecoda_stage5_requested_active && [[ "${METHOD}" != gloscope ]]; then
+    case "${METHOD}" in prepare_pseudobulk|pseudobulk|composition) ;; *) exit 1 ;; esac
+  else
   case "${METHOD}:${ROW_COMBO}" in
     gloscope:hvg2000_pcadims10|gloscope:hvg2000_pcadims30|gloscope:hvg2000_pcadims50|\
       gloscope:hvg1000_pcadims30|gloscope:hvg3000_pcadims30|\
@@ -191,6 +198,7 @@ if [[ -n "${ROW_COMBO:-}" ]]; then
       exit 1
       ;;
   esac
+  fi
 fi
 export DS_NAME
 ANALYSIS_VIEW="${ROW_VIEW:-${ANALYSIS_VIEW:-benchmark_analysis}}"
@@ -325,7 +333,10 @@ GLOSCOPE_DIR="${ANALYSIS_ROOT}/gloscope_dists"
 EMBED_DIR="${ANALYSIS_ROOT}/embeddings"
 EXECUTION_LOG_DIR="${EXECUTION_LOG_DIR:-${EMBED_DIR}}"
 if [[ -n "${ROW_COMBO:-}" ]]; then
-  LOG_FILE="${EXECUTION_LOG_DIR}/execution_times_${METHOD}_${DS_NAME}_${ROW_COMBO}.feather"
+  ROW_LOG_TOKEN="${ROW_COMBO}"
+  # One selected R unit may contain the complete HR parameter union.
+  case "${ROW_LOG_TOKEN}" in *,*) ROW_LOG_TOKEN=selected ;; esac
+  LOG_FILE="${EXECUTION_LOG_DIR}/execution_times_${METHOD}_${DS_NAME}_${ROW_LOG_TOKEN}.feather"
 elif [[ -n "${ANALYSIS_VARIANT}" ]]; then
   LOG_FILE="${EXECUTION_LOG_DIR}/${ANALYSIS_LOG_PREFIX}${METHOD}_${DS_NAME}.feather"
 elif [[ -n "${ANALYSIS_PASS}" ]]; then
@@ -341,6 +352,8 @@ COMBO_FLAG=()
 if [[ -n "${ROW_COMBO:-}" ]]; then
   if [[ "${METHOD}" == gloscope ]]; then
     COMBO_FLAG=(--combo "${ROW_COMBO}")
+  elif [[ "${METHOD}" == composition ]]; then
+    COMBO_FLAG=(--composition_variants "${ROW_COMBO}")
   else
     COMBO_FLAG=(--pseudobulk_variants "${ROW_COMBO}")
   fi

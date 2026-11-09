@@ -55,6 +55,7 @@ SYNC_ONLY_RUN=""
 SYNC_ONLY_SET=0
 DERIVATIVE_RELEASE=""
 INPUT_ARTIFACTS=""
+REQUESTED_SCOPE_MODE=0
 PARTITION_ARG=""
 MEMORY="${BENCHMARK_MEM}"
 MAX_MEMORY="${BENCHMARK_MEM_MAX}"
@@ -78,6 +79,7 @@ usage() {
 Usage: 1_submit_hpc_array.sh [--datasets LIST] [--methods LIST]
        [--target-methods LIST] [--method-matrix TSV]
        [--analyses trans,zeroimp] [--selection-file TSV]
+       [--derivative-release ID --input-artifacts TSV]
        [--precompute-backup-receipt JSON --expected-pending TSV]
        [--validated-recovery-manifest JSON]
        [--exact-batch-selection] [--pass uncorrected|corrected]
@@ -87,6 +89,11 @@ Usage: 1_submit_hpc_array.sh [--datasets LIST] [--methods LIST]
        [--partition NAME] [--mem VALUE] [--max-mem VALUE] [--throttle N]
 
 Selection-file rows are DATASET<TAB>VIEW<TAB>LABEL. The run-owned
+derivative benchmark mode also accepts a fourth exact parameter token; omit
+it to request the whole family. Whole-family and parameter rows for the same
+dataset/view/family cannot overlap. The original requested_selection.tsv is
+immutable and drives preparation, workers, artifact validation and publication.
+The run-owned
 dispatch_selection.tsv records the exact DATASET<TAB>VIEW<TAB>METHOD rows
 that the dispatcher may submit; no release scope is inferred from dataset
 names or row counts. Ordinary methods use benchmark_analysis; batch mode uses
@@ -273,6 +280,18 @@ fi
 [[ -n "${SYNC_ONLY_RUN}" || -z "${ECODA_ARTIFACT_BINDING:-}" ]] || {
   echo 'ERROR: new Stage 5 runs must bind derivative mode explicitly' >&2; exit 1
 }
+if [[ -n "${DERIVATIVE_RELEASE}" && -n "${SELECTION_FILE_ARG}" && -z "${PASS_ARG}" ]]; then
+  [[ ${METHODS_SET} -eq 0 && ${ANALYSES_SET} -eq 0 && ${METHOD_MATRIX_SET} -eq 0 &&
+     ${TARGET_METHODS_SET} -eq 0 ]] || {
+    echo 'ERROR: exact benchmark requests cannot be combined with another method selector' >&2
+    exit 1
+  }
+  REQUESTED_SCOPE_MODE=1
+elif [[ -n "${SELECTION_FILE_ARG}" && -r "${SELECTION_FILE_ARG}" ]] &&
+     awk -F '\t' 'NF == 4 {found=1} END {exit(!found)}' "${SELECTION_FILE_ARG}"; then
+  echo 'ERROR: parameter requests require an explicit derivative benchmark run' >&2
+  exit 1
+fi
 
 # Scope is declared by the caller's manifests.  The dispatcher validates
 # syntax, configured dataset/view identity, uniqueness, and method membership;
@@ -982,6 +1001,12 @@ stage5_record_run_identity_metadata() {
     [[ -n "${key}" && -n "${value}" ]] || continue
     printf '%s=%s\n' "${key}" "${value}"
   done < "${runtime_identity}"
+  if ecoda_stage5_requested_active; then
+    local requested="${ECODA_RUN_ROOT}/manifests/requested_selection.tsv"
+    ecoda_stage5_requested_cli check >/dev/null || return 1
+    printf 'REQUESTED_SELECTION=%s\nREQUESTED_SELECTION_SHA256=%s\n' \
+      "${requested}" "$(ecoda_sha256_file "${requested}")"
+  fi
 }
 
 ECODA_BATCH_CONTRACT_MANIFEST=""
@@ -1289,6 +1314,7 @@ stage5_watchdog_state_for_method() {
   local matrix status status_label expected_label safe
   local matrix_base matrix_prefix matrix_suffix matrix_columns matrix_match state
   local row_ds row_view row_method row_extra
+  local resource_scope dependency_scope parameter_scope candidate candidate_label
   local expected_count=0 saw_ok=0 saw_fail=0
   STAGE5_WATCHDOG_STATE=FAIL
   [[ -d "${status_dir}" && ! -L "${status_dir}" ]] || return 0
@@ -1317,7 +1343,28 @@ stage5_watchdog_state_for_method() {
     matrix_base="${matrix##*/}"
     matrix_base="${matrix_base#matrix_}"
     matrix_base="${matrix_base%.tsv}"
-    if [[ "${matrix_base}" == "${matrix_prefix}" ]]; then
+    if ecoda_stage5_requested_active; then
+      expected_label=""
+      for resource_scope in base cpu default_gpu any_gpu; do
+        for dependency_scope in independent "prepare_${ds}" "preparation_${ds}"; do
+          for parameter_scope in whole parameters; do
+            candidate="${matrix_prefix}"; candidate_label="${view}__${method}"
+            if [[ "${resource_scope}" != base ]]; then
+              candidate="${candidate}_${resource_scope}"; candidate_label="${candidate_label}__${resource_scope}"
+            fi
+            candidate="${candidate}_${dependency_scope}"; candidate_label="${candidate_label}__${dependency_scope}"
+            if [[ "${parameter_scope}" == parameters ]]; then
+              candidate="${candidate}_parameters"; candidate_label="${candidate_label}__parameters"
+            fi
+            if [[ "${matrix_base}" == "${candidate}" ]]; then
+              expected_label="${candidate_label}"
+              break 3
+            fi
+          done
+        done
+      done
+      [[ -n "${expected_label}" ]] || { saw_fail=1; continue; }
+    elif [[ "${matrix_base}" == "${matrix_prefix}" ]]; then
       expected_label="${view}__${method}"
     elif [[ "${matrix_base}" == "${matrix_prefix}_"* ]]; then
       matrix_suffix="${matrix_base#${matrix_prefix}_}"
@@ -1376,6 +1423,9 @@ stage5_watchdog_state_for_owner_key() {
   local owner_key="$1"
   local scope ds view method extra
   STAGE5_WATCHDOG_STATE=FAIL
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    owner_key="${owner_key#derivative/${RUN_ID:-${ECODA_RUN_ID:-}}/}"
+  fi
   IFS='/' read -r scope ds view method extra <<< "${owner_key}"
   case "${scope}" in
     ordinary|uncorrected|corrected) ;;
@@ -1394,7 +1444,7 @@ stage5_watchdog_state_for_artifact_path() {
   local target_path="$1"
   local owner_file="${ECODA_RUN_ROOT:-}/manifests/owners.tsv"
   local owner_key owner extra owner_metadata_key expected_owner
-  local scope ds view method owner_path expected_path
+  local scope ds view method owner_path expected_path row_key
   local found=0 saw_ok=0 saw_fail=0
   STAGE5_WATCHDOG_STATE=FAIL
   [[ -r "${owner_file}" && ! -L "${owner_file}" ]] || return 0
@@ -1408,7 +1458,11 @@ stage5_watchdog_state_for_artifact_path() {
       true)"
     [[ "${owner}" == "${expected_owner}" &&
        "${owner_metadata_key}" == "${owner_key}" ]] || continue
-    IFS='/' read -r scope ds view method extra <<< "${owner_key}"
+    row_key="${owner_key}"
+    if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+      row_key="${row_key#derivative/${RUN_ID:-${ECODA_RUN_ID:-}}/}"
+    fi
+    IFS='/' read -r scope ds view method extra <<< "${row_key}"
     case "${scope}" in
       ordinary|uncorrected|corrected) ;;
       *) continue ;;
@@ -1439,6 +1493,16 @@ stage5_watchdog_state_for_artifact_path() {
   fi
 }
 
+stage5_derivative_nas_publication_valid() {
+  local path="$1" current_run="$2" sync_owner
+  sync_owner="$(ecoda_owner_dir stage5 "sync/${ANALYSIS_ROOT}")" || return 1
+  [[ "$(ecoda_owner_field "${sync_owner}" RUN_ID)" == "${current_run}" &&
+     "$(ecoda_owner_field "${sync_owner}" STAGE)" == stage5 &&
+     "$(ecoda_owner_field "${sync_owner}" KEY)" == "sync/${ANALYSIS_ROOT}" &&
+     "$(ecoda_owner_field "${sync_owner}" STATE)" == OK ]] || return 1
+  ecoda_stage5_validate_derivative_nas_mirror "${path}"
+}
+
 stage5_finalize_tracked_owner_states() {
   local reason="$1"
   local owner owner_state owner_key owner_path owner_run owner_stage expected_owner
@@ -1463,8 +1527,18 @@ stage5_finalize_tracked_owner_states() {
           if [[ -n "${owner_path}" && "${owner_run}" == "${current_run}" &&
                 "${owner_stage}" == stage5 ]]; then
             owner_mutable=1
-            stage5_watchdog_state_for_artifact_path "${owner_path}"
-            owner_state="${STAGE5_WATCHDOG_STATE}"
+            if [[ -n "${ECODA_ARTIFACT_BINDING:-}" &&
+                  "${owner_path}" == "${ANALYSIS_NAS_ROOT}/"* ]]; then
+              # A completed method proves scratch work, not NAS publication.
+              # Preserve a NAS success only with actual mirror bytes and the
+              # completed shared publisher for this exact run/root.
+              if stage5_derivative_nas_publication_valid "${owner_path}" "${current_run}"; then
+                owner_state=OK
+              fi
+            else
+              stage5_watchdog_state_for_artifact_path "${owner_path}"
+              owner_state="${STAGE5_WATCHDOG_STATE}"
+            fi
           fi
         fi
         ;;
@@ -1490,7 +1564,13 @@ stage5_finalize_tracked_owner_states() {
       continue
     fi
     if [[ "${owner_state}" == OK ]]; then
-      owner_reason="method watchdog terminal OK; ${reason}"
+      if [[ -n "${ECODA_ARTIFACT_BINDING:-}" &&
+            "${owner_path:-}" == "${ANALYSIS_NAS_ROOT}/"* &&
+            "${owner}" == "${ECODA_OWNERS_ROOT:-}/artifact/"* ]]; then
+        owner_reason="validated NAS publication; ${reason}"
+      else
+        owner_reason="method watchdog terminal OK; ${reason}"
+      fi
     else
       owner_reason="${reason}"
     fi
@@ -2281,6 +2361,11 @@ if [[ -n "${SYNC_ONLY_RUN}" ]]; then
     exit 1
   }
   MANIFEST="${ECODA_RUN_ROOT}/manifests/selection.tsv"
+  if ecoda_stage5_requested_active; then
+    REQUESTED_SCOPE_MODE=1
+    SELECTION_FILE_ARG="${MANIFEST}"
+    ecoda_stage5_requested_cli check >/dev/null || stage5_abort 'exact request scope is invalid'
+  fi
   ecoda_validate_run_owned_path "${MANIFEST}" "${ECODA_RUN_ROOT}" ||
     stage5_abort "Stage 5 selection manifest is not run-owned"
   ecoda_validate_manifest "${MANIFEST}" 3 ||
@@ -2376,6 +2461,18 @@ else
   MANIFEST="${ECODA_RUN_ROOT}/manifests/selection.tsv"
   MANIFEST_TMP="${MANIFEST}.build.$$"
   : > "${MANIFEST_TMP}"
+  REQUESTED_NORMALIZED_TMP=""
+  if [[ ${REQUESTED_SCOPE_MODE} -eq 1 ]]; then
+    requested="${ECODA_RUN_ROOT}/manifests/requested_selection.tsv"
+    ecoda_atomic_copy "${SELECTION_FILE_ARG}" "${requested}" || stage5_abort 'failed to preserve the exact request'
+    ecoda_write_checksum "${requested}" || stage5_abort 'failed to checksum the exact request'
+    ecoda_write_artifact_record "${requested}" stage5_requested_selection "${RUN_ID}" >/dev/null ||
+      stage5_abort 'failed to record the exact request identity'
+    REQUESTED_NORMALIZED_TMP="${ECODA_RUN_ROOT}/manifests/selection.normalized.$$"
+    ecoda_stage5_requested_cli normalize --request "${requested}" > "${REQUESTED_NORMALIZED_TMP}" ||
+      stage5_abort 'invalid exact benchmark request'
+    SELECTION_FILE_ARG="${REQUESTED_NORMALIZED_TMP}"
+  fi
   if [[ -n "${SELECTION_FILE_ARG}" ]]; then
     [[ -r "${SELECTION_FILE_ARG}" ]] || stage5_abort "selection file is unreadable"
     ecoda_validate_manifest "${SELECTION_FILE_ARG}" 3 ||
@@ -2453,6 +2550,7 @@ else
     stage5_abort "failed to install Stage 5 selection atomically"
   rm -f "${MANIFEST_TMP}"
   ecoda_write_checksum "${MANIFEST}" || stage5_abort "failed to checksum Stage 5 selection"
+  [[ -z "${REQUESTED_NORMALIZED_TMP}" ]] || rm -f "${REQUESTED_NORMALIZED_TMP}"
 fi
 if [[ -n "${DERIVATIVE_RELEASE}" ]]; then
   source "${PROJECT_ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
@@ -2544,11 +2642,11 @@ if [[ -n "${SELECTION_FILE_ARG}" && -z "${METHODS_ARG}" && -z "${ANALYSES_ARG}" 
   while IFS=$'\t' read -r ds view row_label; do
     case "${row_label}" in
       trans|zeroimp)
-        [[ "${ANALYSES[*]}" == *"${row_label}"* ]] || ANALYSES+=("${row_label}")
+        [[ " ${ANALYSES[*]} " == *" ${row_label} "* ]] || ANALYSES+=("${row_label}")
         ANALYSES_SELECTED=1
         ;;
       *)
-        [[ "${METHODS[*]}" == *"${row_label}"* ]] || METHODS+=("${row_label}")
+        [[ " ${METHODS[*]} " == *" ${row_label} "* ]] || METHODS+=("${row_label}")
         ;;
     esac
   done < "${MANIFEST}"
@@ -2631,6 +2729,10 @@ stage5_build_dispatch_manifest() {
       for method in "${METHODS[@]}" "${ANALYSES[@]}"; do
         [[ "${method}" == _ecoda_none_ ]] && continue
         while IFS=$'\t' read -r ds view row_label; do
+          if ecoda_stage5_requested_active; then
+            requested_tokens="$(ecoda_stage5_requested_tokens "${ds}" "${view}" "${method}")" || return 1
+            [[ "${requested_tokens}" != ABSENT ]] || continue
+          fi
           if [[ ${EXACT_SELECTION} -eq 1 && -z "${PASS_ARG}" ]]; then
             case "${method}:${row_label}" in
               prepare_pseudobulk:mofa|prepare_pseudobulk:pseudobulk|prepare_pseudobulk:composition|prepare_pseudobulk:prepare_pseudobulk) ;;
@@ -2690,6 +2792,7 @@ RDS_PREFLIGHT_DONE=""
 RDS_PREFLIGHT_FAILED=""
 
 benchmark_rds_group_valid() {
+  ecoda_stage5_requested_active && return 2
   local ds="$1" view="$2" pass="${PASS_ARG:-${ANALYSIS_PASS:-}}"
   local key="${pass:-ordinary}/${ds}/${view}"
   local safe list list_tmp label path metadata group_rc
@@ -3013,8 +3116,18 @@ stage5_allowed_producers_for() {
         return 1
       STAGE5_ALLOWED_PRODUCERS=("stage5_prepare_pseudobulk_${variant}")
       ;;
+    pseudobulk)
+      if ecoda_stage5_requested_active && [[ "${path}" == "${ANALYSIS_ROOT}/pseudobulks/"* ]]; then
+        basename="${path##*/}"; variant="${basename##*_pseudobulk_}"; variant="${variant%.rds}"
+        stage5_validate_path_component "${variant}" pseudobulk || return 1
+        STAGE5_ALLOWED_PRODUCERS=("stage5_prepare_pseudobulk_${variant}")
+      else
+        STAGE5_ALLOWED_PRODUCERS=(stage5_pseudobulk)
+      fi
+      ;;
     gloscope)
-      if [[ -n "${PASS_ARG}" ]]; then
+      if [[ -n "${PASS_ARG}" ]] ||
+         { ecoda_stage5_requested_active && [[ "${path##*/}" == *_GloScope_hvg*_pcadims*.rds ]]; }; then
         STAGE5_ALLOWED_PRODUCERS=(stage5_gloscope)
       else
         STAGE5_ALLOWED_PRODUCERS=(stage5_gloscope_consolidate)
@@ -3892,6 +4005,30 @@ unset BENCHMARK_MANIFEST
 mkdir -p "${ANALYSIS_ROOT}/embeddings" "${ANALYSIS_ROOT}/results" \
   "${ANALYSIS_ROOT}/pseudobulks" "${ANALYSIS_ROOT}/gloscope_dists" "${RUN_LOG_DIR}"
 
+stage5_requested_preparation_dependency() {
+  local ds="$1" view="$2" prep_idx
+  STAGE5_PREPARATION_DEPENDENCY=""
+  if awk -F '\t' -v d="${ds}" -v v="${view}" \
+      '$1==d && $2==v && $3=="prepare_pseudobulk" {found=1} END {exit(found ? 0 : 1)}' \
+      "${PENDING_SELECTION}"; then
+    for prep_idx in "${!PREP_VIEWS[@]}"; do
+      if [[ "${PREP_VIEWS[${prep_idx}]}" == "${view}" &&
+            "${PREP_DATASETS[${prep_idx}]}" == "${ds}" ]]; then
+        STAGE5_PREPARATION_DEPENDENCY="${PREP_WATCHDOGS[${prep_idx}]}"
+      fi
+    done
+    [[ -n "${STAGE5_PREPARATION_DEPENDENCY}" ]] || {
+      echo 'ERROR: missing dataset-specific preparation dependency' >&2; return 1;
+    }
+  else
+    # Pending-only recovery may reuse an already validated preparation unit.
+    # Recheck it here rather than submit unnecessary preparation work.
+    benchmark_selected_artifacts_valid "${ds}" "${view}" prepare_pseudobulk || {
+      echo "ERROR: absent preparation is not reusable for ${ds}/${view}" >&2; return 1;
+    }
+  fi
+}
+
 if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   WATCHDOG_LABELS=()
   WATCHDOG_IDS=()
@@ -3902,20 +4039,24 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   GROUP_LABELS=()
   GROUP_STATUS_LABELS=()
   GROUP_RESOURCE_CLASSES=()
+  GROUP_DEPENDENCY_SCOPES=()
   GROUP_MANIFEST_COLUMNS=()
   GROUP_MANIFESTS=()
   GROUP_TMP_FILES=()
   PREP_VIEWS=()
   PREP_WATCHDOGS=()
+  PREP_DATASETS=()
 
   group_add_row() {
-    local ds="$1" view="$2" label="$3" combo="${4:-}" resource_class="${5:-base}"
+    local ds="$1" view="$2" label="$3" combo="${4:-}" resource_class="${5:-base}" dependency_scope="${6:-legacy}"
     local key idx=0 safe status_label
     if [[ "${resource_class}" == base ]]; then
       key="${view}|${label}"
     else
       key="${view}|${label}|${resource_class}"
     fi
+    [[ "${dependency_scope}" == legacy ]] || key="${key}|${dependency_scope}"
+    if [[ "${dependency_scope}" != legacy && -n "${combo}" ]]; then key="${key}|parameters"; fi
     while [[ ${idx} -lt ${#GROUP_KEYS[@]} && "${GROUP_KEYS[${idx}]}" != "${key}" ]]; do
       idx=$((idx + 1))
     done
@@ -3924,11 +4065,14 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
       status_label="${view}__${label}"
       [[ "${resource_class}" == base ]] ||
         status_label="${status_label}__${resource_class}"
+      [[ "${dependency_scope}" == legacy ]] || status_label="${status_label}__${dependency_scope}"
+      if [[ "${dependency_scope}" != legacy && -n "${combo}" ]]; then status_label="${status_label}__parameters"; fi
       GROUP_KEYS+=("${key}")
       GROUP_VIEWS+=("${view}")
       GROUP_LABELS+=("${label}")
       GROUP_STATUS_LABELS+=("${status_label}")
       GROUP_RESOURCE_CLASSES+=("${resource_class}")
+      GROUP_DEPENDENCY_SCOPES+=("${dependency_scope}")
       GROUP_MANIFEST_COLUMNS+=("$([[ -n "${combo}" ]] && printf 4 || printf 3)")
       GROUP_MANIFESTS+=("${ECODA_RUN_ROOT}/manifests/matrix_${safe}.tsv")
       GROUP_TMP_FILES+=("${ECODA_RUN_ROOT}/manifests/matrix_${safe}.build.$$")
@@ -4039,17 +4183,49 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
   if [[ -s "${PENDING_SELECTION}" ]]; then
     while IFS=$'\t' read -r ds view method; do
       [[ -n "${ds}" && -n "${view}" && -n "${method}" ]] || continue
+      if ecoda_stage5_requested_active; then
+        requested_tokens="$(ecoda_stage5_requested_tokens "${ds}" "${view}" "${method}")" ||
+          stage5_abort 'invalid requested worker scope'
+        [[ "${requested_tokens}" != ABSENT ]] || stage5_abort 'pending method is outside the exact request'
+        dependency_scope=independent
+        if [[ "${method}" == prepare_pseudobulk ]]; then
+          dependency_scope="preparation_${ds}"
+        elif [[ "${requested_tokens}" == FULL ]]; then
+          case "${method}" in mofa|pseudobulk|composition) dependency_scope="prepare_${ds}" ;; esac
+        fi
+        if [[ "${requested_tokens}" != FULL ]]; then
+          case "${method}" in
+            prepare_pseudobulk|pseudobulk|composition)
+              group_add_row "${ds}" "${view}" "${method}" "${requested_tokens}" base "${dependency_scope}" ||
+                stage5_abort 'failed to group selected R variants'
+              ;;
+            *)
+              IFS=',' read -r -a requested_token_array <<< "${requested_tokens}"
+              for shard_token in "${requested_token_array[@]}"; do
+                resource_class="$(benchmark_method_shard_rows "${method}" "${view}" | \
+                  awk -F '\t' -v token="${shard_token}" '$1==token {print $2; exit}')"
+                resource_class="${resource_class:-base}"
+                group_add_row "${ds}" "${view}" "${method}" "${shard_token}" "${resource_class}" "${dependency_scope}" ||
+                  stage5_abort 'failed to group selected Python/GloScope parameters'
+              done
+              ;;
+          esac
+          continue
+        fi
+      else
+        dependency_scope=legacy
+      fi
       shard_rows="$(benchmark_method_shard_rows "${method}" "${view}")"
       if [[ -n "${shard_rows}" ]]; then
         while IFS=$'\t' read -r shard_token resource_class; do
           [[ -n "${shard_token}" && -n "${resource_class}" ]] ||
             stage5_abort "invalid parameter-shard row for ${method}"
           group_add_row "${ds}" "${view}" "${method}" \
-            "${shard_token}" "${resource_class}" ||
+            "${shard_token}" "${resource_class}" "${dependency_scope}" ||
             stage5_abort "inconsistent parameter-shard manifest for ${method}"
         done <<< "${shard_rows}"
       else
-        group_add_row "${ds}" "${view}" "${method}" "" base ||
+        group_add_row "${ds}" "${view}" "${method}" "" base "${dependency_scope}" ||
           stage5_abort "failed to build Stage 5 matrix manifest"
       fi
     done < "${PENDING_SELECTION}"
@@ -4074,6 +4250,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
         stage5_abort "submission failed for ${method}/${view}"
       PREP_VIEWS+=("${view}")
       PREP_WATCHDOGS+=("${LAST_WATCHDOG_ID}")
+      PREP_DATASETS+=("${GROUP_DEPENDENCY_SCOPES[${idx}]#preparation_}")
     fi
   done
   for idx in "${!GROUP_KEYS[@]}"; do
@@ -4083,6 +4260,12 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
     group_label="${GROUP_STATUS_LABELS[${idx}]}"
     resource_class="${GROUP_RESOURCE_CLASSES[${idx}]}"
     dependency=""
+    if [[ "${GROUP_DEPENDENCY_SCOPES[${idx}]}" == prepare_* ]]; then
+      stage5_requested_preparation_dependency \
+        "${GROUP_DEPENDENCY_SCOPES[${idx}]#prepare_}" "${view}" ||
+        stage5_abort 'invalid dataset-specific preparation dependency'
+      dependency="${STAGE5_PREPARATION_DEPENDENCY}"
+    elif [[ "${GROUP_DEPENDENCY_SCOPES[${idx}]}" == legacy ]]; then
     case "${method}" in
       mofa|pseudobulk|composition)
         for prep_idx in "${!PREP_VIEWS[@]}"; do
@@ -4091,6 +4274,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
         done
         ;;
     esac
+    fi
     submit_matrix "${group_label}" "${GROUP_MANIFESTS[${idx}]}" "${dependency}" \
       "${method}" "${view}" "${resource_class}" ||
       stage5_abort "submission failed for ${method}/${view}"
@@ -4237,14 +4421,40 @@ if [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]]; then
   exit 0
 fi
 
-if [[ -z "${PASS_ARG}" ]]; then
+stage5_consolidate_gloscope() {
+  local matrix ds view method token extra requested_tokens
+  local target="${ECODA_RUN_ROOT}/manifests/gloscope_consolidation.tsv" temporary="${ECODA_RUN_ROOT}/manifests/gloscope_consolidation.build.$$"
+  if ecoda_stage5_requested_active; then
+    : > "${temporary}" || return 1
+    for matrix in "${ECODA_RUN_ROOT}"/manifests/matrix_benchmark_analysis_gloscope_*.tsv; do
+      [[ -f "${matrix}" ]] || continue
+      ecoda_validate_checksum "${matrix}" || return 1
+      while IFS=$'\t' read -r ds view method token extra; do
+        [[ "${method}" == gloscope && -n "${token}" && -z "${extra}" ]] || return 1
+        requested_tokens="$(ecoda_stage5_requested_tokens "${ds}" "${view}" gloscope)" || return 1
+        [[ "${requested_tokens}" == FULL ]] || continue
+        printf '%s\t%s\t%s\t%s\n' "${ds}" "${view}" "${method}" "${token}" >> "${temporary}" || return 1
+      done < "${matrix}"
+    done
+    if [[ ! -s "${temporary}" ]]; then rm -f "${temporary}"; return 0; fi
+    if [[ -e "${target}" ]]; then
+      cmp -s "${temporary}" "${target}" && ecoda_validate_checksum "${target}" || return 1
+    else
+      ecoda_atomic_install_manifest "${temporary}" "${target}" 4 && ecoda_write_checksum "${target}" || return 1
+    fi
+    rm -f "${temporary}"
+    GLOSCOPE_SHARD_MANIFEST="${target}"
+  else
   GLOSCOPE_SHARD_MANIFEST="${ECODA_RUN_ROOT}/manifests/matrix_benchmark_analysis_gloscope_cpu.tsv"
+  fi
   if [[ -s "${GLOSCOPE_SHARD_MANIFEST}" ]]; then
     ${PIXI_RSCRIPT} "${SCRIPT_DIR}/consolidate_gloscope_results.R" \
       --manifest "${GLOSCOPE_SHARD_MANIFEST}" \
-      --results_dir "${ANALYSIS_ROOT}/results" ||
-      stage5_abort "Stage 5 GloScope shard consolidation failed"
+      --results_dir "${ANALYSIS_ROOT}/results" || return 1
   fi
+}
+if [[ -z "${PASS_ARG}" ]]; then
+  stage5_consolidate_gloscope || stage5_abort 'Stage 5 GloScope shard consolidation failed'
 fi
 
 # Compute waves perform fresh semantic validation. Publication-only waves
@@ -4444,7 +4654,34 @@ stage5_validate_final_rds_rows() {
   done
 }
 
-if [[ "${PASS_ARG:-}" == corrected ]]; then
+stage5_validate_requested_rds() {
+  local ds view label path metadata
+  local list="${ECODA_RUN_ROOT}/manifests/rds_validation_requested.tsv" tmp="${ECODA_RUN_ROOT}/manifests/rds_validation_requested.build.$$"
+  : > "${tmp}" || return 1
+  while IFS=$'\t' read -r ds view label; do
+    benchmark_artifacts_for "${ds}" "${view}" "${label}" || return 1
+    for path in "${ARTIFACT_PATHS[@]}"; do
+      [[ "${path}" == *.rds ]] || continue
+      stage5_validate_reusable_artifact "${path}" "${label}" || return 1
+      metadata=0; [[ "${path}" == *_metadata.rds ]] && metadata=1
+      printf '%s\t%s\t%s\t%s\t%s\n' "${path}" "${label}" "${ds}" "${view}" "${metadata}" >> "${tmp}" || return 1
+    done
+  done < "${DISPATCH_MANIFEST}"
+  if [[ ! -s "${tmp}" ]]; then rm -f "${tmp}"; return 0; fi
+  if [[ -e "${list}" ]]; then
+    cmp -s "${tmp}" "${list}" && ecoda_validate_checksum "${list}" || return 1
+  else
+    ecoda_atomic_install_manifest "${tmp}" "${list}" 5 && ecoda_write_checksum "${list}" || return 1
+  fi
+  rm -f "${tmp}"
+  ${PIXI_RSCRIPT} "${SCRIPT_DIR}/validate_benchmark_rds_contract.R" --artifact-list "${list}" \
+    --config "${DATASETS_JSON_FILE}" --input-root "${HPC_SCRATCH_DIR}" \
+    --source-identity "${SOURCE_IDENTITY}" --source-identity-verified
+}
+
+if ecoda_stage5_requested_active; then
+  stage5_validate_requested_rds || stage5_abort 'Stage 5 exact-request RDS validation failed'
+elif [[ "${PASS_ARG:-}" == corrected ]]; then
   stage5_validate_corrected_rds_rows ||
     stage5_abort "Stage 5 corrected RDS artifact validation failed"
 elif [[ ${#RDS_LABELS[@]} -gt 0 ]]; then

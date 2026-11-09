@@ -727,10 +727,25 @@ _audit_stage5_method_matrix() {
   AUDIT_MATRIX_PENDING_ROWS="${pending_count}"
 }
 
+_audit_requested_selection() {
+  local requested="${RUN_ROOT_REAL}/manifests/requested_selection.tsv"
+  local metadata="${RUN_ROOT_REAL}/metadata" expected_sha
+  ecoda_stage5_requested_active || return 0
+  ecoda_validate_checksum "${requested}" || return 1
+  ecoda_validate_artifact_record "${requested}" stage5_requested_selection "${RUN_ID}" >/dev/null || return 1
+  [[ "$(_audit_metadata_count "${metadata}" REQUESTED_SELECTION)" == 1 &&
+     "$(_audit_metadata_count "${metadata}" REQUESTED_SELECTION_SHA256)" == 1 &&
+     "$(_audit_metadata_value "${metadata}" REQUESTED_SELECTION)" == "${requested}" ]] || return 1
+  expected_sha="$(ecoda_sha256_file "${requested}")" || return 1
+  [[ "$(_audit_metadata_value "${metadata}" REQUESTED_SELECTION_SHA256)" == "${expected_sha}" ]] || return 1
+  ecoda_stage5_requested_cli check --dispatch "${AUDIT_METADATA_DISPATCH_SELECTION}" >/dev/null
+}
+
 _audit_dispatch_selection() {
   local dispatch="${AUDIT_METADATA_DISPATCH_SELECTION:-}"
   local dispatch_md5 dispatch_size dispatch_rows actual_md5 actual_size actual_rows
   local row_dataset row_view row_method extra key seen="" selection_keys=""
+  _audit_requested_selection || return 1
   [[ "${STAGE_ARG}" == stage5 ]] || return 0
   [[ -n "${dispatch}" ]] || return 0
   [[ "${dispatch}" == "${RUN_ROOT_REAL}/manifests/dispatch_selection.tsv" ]] || {
@@ -1235,6 +1250,13 @@ _audit_corrected_source_contracts() {
     fi
   done
 }
+_audit_derivative_stage5_nas_artifact() {
+  ecoda_stage5_validate_derivative_nas_mirror "$1" || {
+    _audit_die "selected derivative NAS mirror is invalid: $1"
+    return 1
+  }
+}
+
 _audit_metadata_export_manifest() {
   local manifest="${AUDIT_METADATA_EXPORT_MANIFEST:-}"
   local status_report="${AUDIT_METADATA_EXPORT_STATUS:-}"
@@ -1349,6 +1371,10 @@ _audit_metadata_export_manifest() {
       _audit_die "metadata-export Feather checksum is invalid: ${output}"
       return 1
     }
+    if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+      _audit_derivative_stage5_nas_artifact \
+        "${ANALYSIS_NAS_ROOT}/${output#${ANALYSIS_ROOT}/}" || return 1
+    fi
     actual_count=$((actual_count + 1))
   done < "${manifest}"
   [[ ${actual_count} -eq ${row_count} ]] || {
@@ -1657,6 +1683,9 @@ _audit_selected_artifacts() {
     owner_run="${ECODA_ARTIFACT_OWNER_RUN}"
     if [[ -n "${NAS_TARGET_DIR:-}" &&
           "${path}" == "${NAS_TARGET_DIR}"/* ]]; then
+      if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+        _audit_derivative_stage5_nas_artifact "${path}" || return 1
+      fi
       continue
     fi
     _audit_record_for_path "${path}" "${owner_run}" || return 1

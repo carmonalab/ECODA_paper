@@ -51,6 +51,54 @@ benchmark_job_durations_block() { return 0; }
 DATASET_NAMES=(Toy)
 analysis_merge_sync_cleanup mrvi
 cmp "${ANALYSIS_ROOT}/results/toy.rds" "${ANALYSIS_NAS_ROOT}/results/toy.rds"
+source "${ROOT}/src/utils/bash/ecoda_run_audit_stage5.sh"
+_audit_die() { echo "$*" >&2; return 1; }
+for path in "${ANALYSIS_NAS_ROOT}/results/toy.rds" \
+    "${ANALYSIS_NAS_ROOT}/metadata/Toy_sample_metadata.feather"; do
+  _audit_derivative_stage5_nas_artifact "${path}"
+  printf 'changed mirror\n' >> "${path}"
+  if _audit_derivative_stage5_nas_artifact "${path}" > "${TMP}/bad-nas.log" 2>&1; then
+    echo 'terminal audit accepted changed NAS bytes' >&2; exit 1
+  fi
+  # A newly consistent NAS checksum still cannot substitute for scratch equality.
+  ecoda_write_checksum "${path}"; chmod 666 "${path}.md5"
+  if _audit_derivative_stage5_nas_artifact "${path}" > "${TMP}/bad-nas-own-checksum.log" 2>&1; then
+    echo 'terminal audit accepted independently checksummed different NAS bytes' >&2; exit 1
+  fi
+  cp "${ANALYSIS_ROOT}/${path#${ANALYSIS_NAS_ROOT}/}" "${path}"
+  cp "${ANALYSIS_ROOT}/${path#${ANALYSIS_NAS_ROOT}/}.md5" "${path}.md5"
+  chmod 666 "${path}" "${path}.md5"
+  _audit_derivative_stage5_nas_artifact "${path}"
+  for target in "${path}" "${path}.md5"; do
+    chmod 640 "${target}"
+    if _audit_derivative_stage5_nas_artifact "${path}" > "${TMP}/bad-nas-mode.log" 2>&1; then
+      echo 'terminal audit accepted incorrect NAS file mode' >&2; exit 1
+    fi
+    chmod 666 "${target}"
+  done
+  directory="$(dirname "${path}")"
+  chmod 750 "${directory}"
+  if _audit_derivative_stage5_nas_artifact "${path}" > "${TMP}/bad-nas-dir.log" 2>&1; then
+    echo 'terminal audit accepted incorrect selected NAS directory mode' >&2; exit 1
+  fi
+  chmod 777 "${directory}"
+done
+# An abort after an actual validated publication can preserve that NAS success;
+# a method watchdog alone cannot manufacture the missing mirror/publication.
+for function_name in stage5_finalize_tracked_owner_states stage5_derivative_nas_publication_valid; do
+  eval "$(awk -v wanted="${function_name}()" '$0==wanted" {" {copy=1} copy {print} copy && /^}$/ {exit}' \
+    "${ROOT}/src/5_run_benchmark_methods/stage5_dispatcher.sh")"
+done
+stage5_watchdog_state_for_artifact_path() { STAGE5_WATCHDOG_STATE=OK; }
+RUN_ID="${ECODA_RUN_ID}"
+ecoda_owner_clear_tracked
+for path in "${ANALYSIS_ROOT}/results/toy.rds" "${ANALYSIS_NAS_ROOT}/results/toy.rds"; do
+  ecoda_artifact_owner_acquire "${path}" stage5 "${RUN_ID}" 1 0 0 >/dev/null
+  ecoda_owner_track "${ECODA_ARTIFACT_OWNER_DIR}"
+done
+stage5_finalize_tracked_owner_states 'fixture abort after successful synchronization' > "${TMP}/published-finalization.log"
+ecoda_artifact_owner_validate "${ANALYSIS_NAS_ROOT}/results/toy.rds" "${RUN_ID}"
+[[ "${ECODA_ARTIFACT_OWNER_STATE}" == OK ]]
 [[ "$(cat "${NAS_TARGET_DIR}/batch_effect/corrected_final/old.rds")" == 'old canonical result' ]]
 [[ -s "${EXECUTION_LOG_DIR}/execution_times_fixture.feather" ]]
 # A repeated identical publication validates; a different existing derivative

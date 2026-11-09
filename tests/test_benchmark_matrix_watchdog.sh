@@ -37,7 +37,14 @@ cp "${ROOT}/aux/scGateDB.rds" "${SOURCE_TREE}/aux/scGateDB.rds"
 cp "${ROOT}/aux/genes.blocklist.rds" "${SOURCE_TREE}/aux/genes.blocklist.rds"
 cp "${ROOT}/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz" \
   "${SOURCE_TREE}/aux/EnsemblGenes105_Hsa_GRCh38.p13.txt.gz"
-printf '#!/bin/bash\nexit 0\n' > "${HOST_PREFIX}/bin/python"
+cat > "${HOST_PREFIX}/bin/python" <<'PYTHON_STUB'
+#!/bin/bash
+if [[ "${1:-}" == */derivative_artifacts.py || "${1:-}" == */benchmark_request_scope.py ]]; then
+  exec "${TEST_REAL_PYTHON}" "$@"
+fi
+exit 0
+PYTHON_STUB
+export TEST_REAL_PYTHON="${ROOT}/.pixi/envs/default/bin/python"
 printf '#!/bin/bash\nexit 0\n' > "${HOST_PREFIX}/bin/Rscript"
 chmod +x "${HOST_PREFIX}/bin/python" "${HOST_PREFIX}/bin/Rscript"
 sha256_file() {
@@ -357,3 +364,61 @@ mkdir -p "${ANALYSIS_ROOT}" "${ANALYSIS_NAS_ROOT}"
 run_watchdog
 printf '%s\n' "${ANALYSIS_NAS_ROOT}" "${NAS_TARGET_DIR}" "${ECODA_NAS_TARGET_DIR}" > "${TMP_DIR}/expected-worker.env"
 cmp "${TMP_DIR}/expected-worker.env" "${RETRY_ENV_CAPTURE}"
+
+# Real OOM retry with a bound derivative destination, then no NAS mount on the
+# compute node. Controller ownership still reserves both exact destinations.
+(
+  original_run="${RUN_ROOT}"
+  export ECODA_RUN_ID=derivative-watchdog
+  export ECODA_RUN_ROOT="${HPC_ROOT}/_ecoda_runs/${ECODA_RUN_ID}"
+  RUN_ROOT="${ECODA_RUN_ROOT}"
+  export NAS_TARGET_DIR="${TMP_DIR}/derivative-nas"
+  unset ECODA_NAS_TARGET_DIR ANALYSIS_PASS ANALYSIS_VARIANT ANALYSIS_ROOT ANALYSIS_NAS_ROOT RETRY_ENV_CAPTURE
+  export ANALYSIS_LOG_PREFIX=execution_times_
+  export PROJECT_ROOT="${SOURCE_TREE}" DATASETS_JSON_FILE="${SOURCE_TREE}/datasets.json"
+  export PYTHON_BIN="${HOST_PREFIX}/bin/python"
+  mkdir -p "${RUN_ROOT}/manifests" "${NAS_TARGET_DIR}" "${TMP_DIR}/processed-inputs"
+  cp "${original_run}/manifests/source.manifest" "${RUN_ROOT}/manifests/source.manifest"
+  cp "${original_run}/manifests/runtime.identity" "${RUN_ROOT}/manifests/runtime.identity"
+  selection="${RUN_ROOT}/manifests/selection.tsv"
+  printf 'Adams\tbenchmark_analysis\tmrvi\nStephenson\tbenchmark_analysis\tmrvi\n' > "${selection}"
+  "${TEST_REAL_PYTHON}" - "${DATASETS_JSON_FILE}" "${TMP_DIR}" <<'PY'
+import hashlib,json,pathlib,sys
+config=json.loads(pathlib.Path(sys.argv[1]).read_text()); root=pathlib.Path(sys.argv[2]); rows=[]
+for dataset in ('Adams','Stephenson'):
+    path=root/'processed-inputs'/config[dataset]['views']['benchmark_analysis']['output_file_name']
+    path.write_bytes(dataset.encode()); md5=hashlib.md5(path.read_bytes()).hexdigest(); size=path.stat().st_size
+    proof=pathlib.Path(f'{path}.md5'); proof.write_text(f'MD5={md5}\nSIZE={size}\nPATH={path}\n')
+    rows.append(f'{dataset}\tbenchmark_analysis\t{path}\t{md5}\t{size}\t{proof}\n')
+(root/'watchdog-inputs.tsv').write_text(''.join(rows))
+PY
+  source "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh"
+  source "${ROOT}/src/utils/bash/ecoda_derivative_artifacts.sh"
+  ecoda_derivative_bind stage5 test-release "${selection}" "${TMP_DIR}/watchdog-inputs.tsv"
+  export ANALYSIS_ROOT="$(ecoda_derivative_root benchmark)"
+  export ANALYSIS_NAS_ROOT="$(ecoda_derivative_root benchmark nas)"
+  ecoda_stage5_validate_output_ownership "${selection}" "${ECODA_RUN_ID}"
+  [[ ${#ECODA_OUTPUT_PATHS[@]} -eq 12 ]]
+  manifest="${RUN_ROOT}/manifests/derivative-mrvi.tsv"
+  printf 'Adams\tbenchmark_analysis\tmrvi\thvg2000\nStephenson\tbenchmark_analysis\tmrvi\thvg1000\n' > "${manifest}"
+  ecoda_write_checksum "${manifest}"
+  source "${ROOT}/src/utils/bash/ecoda_runtime.sh"
+  runtime_export="$(ecoda_runtime_export_csv stage5 1)"
+  mv "${NAS_TARGET_DIR}" "${NAS_TARGET_DIR}.hidden"
+  trap '[[ ! -d "${NAS_TARGET_DIR}.hidden" ]] || mv "${NAS_TARGET_DIR}.hidden" "${NAS_TARGET_DIR}"' EXIT
+  ecoda_stage5_validate_output_ownership "${selection}" "${ECODA_RUN_ID}" 0 scratch
+  [[ ${#ECODA_OUTPUT_PATHS[@]} -eq 6 ]]
+  if ecoda_stage5_validate_output_ownership "${selection}" "${ECODA_RUN_ID}" > "${TMP_DIR}/missing-nas-all.log" 2>&1; then
+    echo 'controller all-destination ownership accepted an unmounted NAS' >&2; exit 1
+  fi
+  HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" SLURM_JOB_ID=999997 \
+    METHOD_TIME_LIMIT=03:00:00 MATRIX_WATCHDOG_MAX_POLLS=1 \
+    bash "${ROOT}/src/5_run_benchmark_methods/matrix_watchdog.sh" \
+    "${RUN_ROOT}" derivative-mrvi "${manifest}" 1001 128G 256G shared-gpu 4 \
+    "${SOURCE_TREE}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh" \
+    "${runtime_export}" --gpus=1 > "${TMP_DIR}/derivative-watchdog.log"
+  grep -q '^STATE=OK$' "${RUN_ROOT}/status/watchdogs/derivative-mrvi.status"
+  [[ "$(cat "${RUN_ROOT}/manifests/derivative-mrvi.retry_1.tsv")" == $'Stephenson\tbenchmark_analysis\tmrvi\thvg1000' ]]
+  [[ ! -e "${NAS_TARGET_DIR}" ]]
+)
+echo 'PASS: derivative OOM retry validates scratch ownership without a NAS mount; controller scope stays complete'

@@ -28,7 +28,7 @@ cat > "${TREE}/src/utils/bash/ecoda_run_common.sh" <<'EOF'
 ecoda_validate_run_id() { [[ "$1" == pb-worker-test ]]; }
 ecoda_validate_run_owned_path() { case "$1" in "$2"/*) return 0;; *) return 1;; esac; }
 EOF
-: > "${TREE}/src/utils/bash/ecoda_stage5_policy.sh"
+printf 'ecoda_stage5_requested_active() { return 1; }\n' > "${TREE}/src/utils/bash/ecoda_stage5_policy.sh"
 cat > "${TREE}/src/utils/bash/worker_retry.sh" <<'EOF'
 worker_clear_retry_count() { return 0; }
 worker_requeue_if_transient() { return 1; }
@@ -43,7 +43,7 @@ cp "${TMP}/source.manifest" "${RUN}/manifests/source.manifest"
 : > "${RUN}/manifests/runtime.identity"
 run_worker() {
   env -i PATH="${PATH}" TEST_PROJECT_ROOT="${TREE}" \
-    TEST_SCRATCH_ROOT="${TMP}/scratch" TEST_RSCRIPT="${TMP}/Rscript" \
+    TEST_SCRATCH_ROOT="${TEST_ACTIVE_SCRATCH:-${TMP}/scratch}" TEST_RSCRIPT="${TMP}/Rscript" \
     TEST_PYTHON="${ROOT}/.pixi/envs/default/bin/python" \
     TEST_CAPTURE="${TMP}/args" ECODA_SOURCE_SNAPSHOT_REQUIRED=1 \
     ECODA_SOURCE_ROOT="${TREE}" ECODA_SOURCE_MANIFEST="${TMP}/source.manifest" \
@@ -117,4 +117,44 @@ TEST_ANALYSIS_ROOT="${TMP}/scratch/benchmark"
 if run_worker pseudobulk >/dev/null 2>&1; then
   echo 'ERROR: derivative worker accepted canonical output root' >&2; exit 1
 fi
+TEST_ACTIVE_SCRATCH="${TMP}/selected-scratch"
+RUN="${TEST_ACTIVE_SCRATCH}/_ecoda_runs/pb-worker-test"
+mkdir -p "${RUN}/manifests" "${TEST_ACTIVE_SCRATCH}/nas"
+cp "${TMP}/source.manifest" "${RUN}/manifests/source.manifest"
+printf 'runtime fixture\n' > "${RUN}/manifests/runtime.identity"
+cp "${ROOT}/src/utils/py/benchmark_request_scope.py" "${TREE}/src/utils/py/benchmark_request_scope.py"
+cp "${ROOT}/src/utils/bash/ecoda_stage5_policy.sh" "${TREE}/src/utils/bash/ecoda_stage5_policy.sh"
+"${ROOT}/.pixi/envs/default/bin/python" - "${ROOT}" "${RUN}" <<'PY'
+import pathlib, sys
+sys.path.insert(0,sys.argv[1]); from src.utils.py.benchmark_request_scope import AUTHOR_HR
+root=pathlib.Path(sys.argv[2]); lines=[f'Toy\tbenchmark_analysis\tpseudobulk\t{t}' for t in ('hvg2000_bl','CT_HR_hvg2000','CT_HR_hvg500')]
+lines += [f'Toy\tbenchmark_analysis\tcomposition\t{t}' for t in AUTHOR_HR]
+(root/'manifests/requested_selection.tsv').write_text('\n'.join(lines)+'\n')
+(root/'composition-tokens').write_text(','.join(AUTHOR_HR))
+PY
+"${ROOT}/.pixi/envs/default/bin/python" "${TREE}/src/utils/py/benchmark_request_scope.py" normalize \
+  --config "${TREE}/datasets.json" --request "${RUN}/manifests/requested_selection.tsv" > "${RUN}/manifests/selection.tsv"
+TEST_ARTIFACT_BINDING="$("${ROOT}/.pixi/envs/default/bin/python" \
+  "${TREE}/src/utils/py/derivative_artifacts.py" bind --stage stage5 \
+  --run-root "${RUN}" --release-id test-release --nas-root "${TEST_ACTIVE_SCRATCH}/nas" \
+  --config "${TREE}/datasets.json" --selection "${RUN}/manifests/selection.tsv" --input-artifacts "${TMP}/inputs.tsv")"
+TEST_ANALYSIS_ROOT="${RUN}/artifacts/benchmark"
+TEST_ANALYSIS_NAS_ROOT="${TEST_ACTIVE_SCRATCH}/nas/releases/test-release/pb-worker-test/benchmark"
+printf 'Toy\tbenchmark_analysis\tpseudobulk\thvg2000_bl,CT_HR_hvg2000,CT_HR_hvg500\n' > "${RUN}/manifests/worker.tsv"
+run_worker pseudobulk
+grep -qx 'hvg2000_bl,CT_HR_hvg2000,CT_HR_hvg500' "${TMP}/args"
+grep -q 'execution_times_pseudobulk_Toy_selected.feather$' "${TMP}/args"
+printf 'Toy\tbenchmark_analysis\tcomposition\t%s\n' "$(cat "${RUN}/composition-tokens")" > "${RUN}/manifests/worker.tsv"
+run_worker composition
+grep -qx -- --composition_variants "${TMP}/args"
+grep -q 'execution_times_composition_Toy_selected.feather$' "${TMP}/args"
+for row in 'Toy\tbenchmark_analysis\tpseudobulk' \
+    'Toy\tbenchmark_analysis\tpseudobulk\tCT_LR_hvg2000' \
+    'Toy\tbenchmark_analysis\tcomposition\tECODA_authors_LR'; do
+  printf '%b\n' "${row}" > "${RUN}/manifests/worker.tsv"
+  method="$(printf '%b' "${row}" | cut -f3)"
+  if run_worker "${method}" >/dev/null 2>&1; then
+    echo 'ERROR: partial request broadened to an ordinary/LR/default worker' >&2; exit 1
+  fi
+done
 printf 'PASS: R worker passes exact PB shard selection, binds derivative roots, and rejects contradictory rows\n'

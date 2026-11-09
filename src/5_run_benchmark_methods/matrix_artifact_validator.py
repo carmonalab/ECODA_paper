@@ -1115,7 +1115,24 @@ def expected_artifacts(
     batch: bool,
     batch_pass: str | None,
     analysis_variant: str | None = None,
+    config_path: Path | None = None,
 ) -> list[Path]:
+    if not batch and os.environ.get("ECODA_ARTIFACT_BINDING") and (
+        Path(os.environ.get("ECODA_RUN_ROOT", "")) / "manifests/requested_selection.tsv"
+    ).is_file():
+        from src.utils.py.benchmark_request_scope import active_scope, selected_files, tokens_for
+        from src.utils.py.derivative_artifacts import active_binding, context_root
+        selected_config = config_path or Path(os.environ["DATASETS_JSON_FILE"])
+        scope = active_scope(selected_config)
+        value, _ = active_binding(selected_config)
+        expected_root = context_root(value, "benchmark")
+        if Path(root) != expected_root or os.environ.get("ANALYSIS_ROOT") != str(expected_root):
+            raise ValueError("matrix artifact root differs from the exact benchmark request")
+        tokens = tokens_for(scope, ds, "benchmark_analysis", label)
+        if tokens == "ABSENT":
+            raise ValueError("matrix method is outside the exact benchmark request")
+        if tokens is not None:
+            return [Path(root) / relative for relative in selected_files(ds, label, tokens)]
     stem = batch_artifact_stem(
         ds, batch_pass if batch else None, analysis_variant if batch else None
     )
@@ -1366,7 +1383,7 @@ def validate(
                     )
                     row_expected_batch_contract = expected_batch_contract
             paths = expected_artifacts(
-                root, ds, label, batch, batch_pass, analysis_variant
+                root, ds, label, batch, batch_pass, analysis_variant, config_path=config_path
             )
             selected_paths.extend(paths)
             require_nonempty(
