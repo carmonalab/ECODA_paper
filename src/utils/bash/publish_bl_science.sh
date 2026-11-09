@@ -57,6 +57,12 @@ case "${campaign_schema}" in
     COPY_PRODUCER=stage5_bassez_hr22_release_copy; SCOPE_PRODUCER=bassez_hr22_publication_scope
     REPORT_PRODUCER=bassez_hr22_science_publication; REPORT_NAME=bassez_hr22_publication.json
     VALIDATION_MARKER=BASSEZ_HR22_PUBLICATION_VALIDATED ;;
+  ecoda_main_v2_login_reboot_publication_control_v1)
+    COPY_PRODUCER=stage5_main_v2_reboot_science_release_copy; SCOPE_PRODUCER=main_v2_reboot_publication_scope
+    REPORT_PRODUCER=main_v2_reboot_science_publication; REPORT_NAME=main_v2_reboot_science_publication.json
+    VALIDATION_MARKER=MAIN_V2_REBOOT_SCIENCE_PUBLICATION_VALIDATED
+    publication_context="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["context"])' "${CONTROL}")"
+    case "${publication_context}" in benchmark|batch_effect/uncorrected_final|batch_effect/corrected_final) ;; *) exit 1 ;; esac ;;
   ecoda_main_v2_science_publication_control_v1)
     COPY_PRODUCER=stage5_main_v2_science_release_copy; SCOPE_PRODUCER=main_v2_publication_scope
     REPORT_PRODUCER=main_v2_science_publication; REPORT_NAME=main_v2_science_publication.json
@@ -157,6 +163,10 @@ ecoda_validate_artifact_record "${REPORT}" "${REPORT_PRODUCER}" "${ECODA_RUN_ID}
 ecoda_artifact_owner_set_state "${REPORT}" OK reviewed_publication_complete >/dev/null
 ecoda_owner_set_state "${SYNC_OWNER}" OK reviewed_publication_complete
 rmdir "${SYNC_LOCK}"; SYNC_LOCK=""
-ecoda_set_run_state NOOP_VALIDATED reviewed_science_published_without_refit_original_gate_failed
+if [[ "${campaign_schema}" == ecoda_main_v2_login_reboot_publication_control_v1 ]]; then
+  ecoda_set_run_state NOOP_VALIDATED reviewed_science_published_without_refit_original_reboot_stop_preserved
+else
+  ecoda_set_run_state NOOP_VALIDATED reviewed_science_published_without_refit_original_gate_failed
+fi
 trap - EXIT
 printf '%s=%s\nPUBLICATION_COMPLETED=1\nNEW_MODEL_FIT=0\n' "${VALIDATION_MARKER}" "${REPORT}"

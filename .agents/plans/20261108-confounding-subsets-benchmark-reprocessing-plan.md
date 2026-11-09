@@ -3558,3 +3558,25 @@ IDs for the one terminal inspect. No new accounting query has occurred.
 Future reboot-publication packageB is independent from this active0314 source.
 Its final catalog must fail closed on missing/truncated retry enumeration;
 missing old evidence cannot be replaced with fabricated worker statuses.
+
+### Reboot-specific publication code reviewed; operational evidence still pending
+
+PackageB's explicit ecoda_main_v2_login_reboot_publication_control_v1 arm passed
+independent review and focused three-context byte-copy fixtures, plus unchanged
+normal BL/HR/main regression tests. Frozen Python SHA52ff899e5ed0beada9d9c0fb0ed51e08be5e2af79050c6ae3bed57c18a4878c0,
+shell8de7d3fc3d49de5aff6f4532144869e4dc62dc103276c63373b2a8063d04c29d,
+test46422c2275a40545baf2ca83570ab3e70f37eac4c89438a65d5212afa9ba73c9.
+This adds no approval or actual publication now. It preserves originalSTOP,
+LOGIN_REBOOT_LOSS/null wrapper exit and all existing artifact/science checks.
+The final emitted-ID inventory must be additive, complete, hash-bound to the
+initial73/three actual child ledgers, every actual watchdog stdout/retry marker,
+and the original sole complete terminal inspect after proven quiescence.
+Missing/truncated watchdog stdout fails closed; do not infer missing retries
+or fabricate worker statuses. Any real missing evidence must be reported as
+an operational gap. The strict arm intentionally cannot publish unresolved
+OOM-retry rows whose producer/task proof is not independently established.
+
+The latent copied-Slurm-spool bootstrap issue in the two future P6 shell
+entrypoints is assigned to benchmark_dependency_audit for a minimal isolated
+fix/fixture before any P6 launch. This does not alter active source0314 or
+external notebook work.
