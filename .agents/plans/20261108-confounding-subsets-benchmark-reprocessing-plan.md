@@ -61,19 +61,24 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09 13:20Z, live MrVI progress confirmed; recovery pending terminal evidence
+## Live checkpoint — 2026-11-09 13:57Z, monitoring restored; H200 queue delays terminal recovery
 
 - P0/P1 DONE: logical checkpoints and harmonized documentation are pushed.
   Active controller/reuse source is9ca2453, committed/pushed and
   deployed as an immutable Bamboo snapshot. Later reviewed diagnostics6bcf26b
   and compact-analysis code14e6749 are pushed but do not alter active workers. External application work remains excluded.
-- **Main wave progress confirmed at13:20Z:** source9ca, launched08:18:46Z;32method
+- **Main wave last checked13:57Z:** source9ca, launched08:18:46Z;32method
   arrays and32watchdogs submitted across benchmark/uncorrected/corrected.
-  Existing Positron SSH terminal confirms uncorrected MrVI task4665560_3
-  around epoch44/50 and corrected task4665623_3 around24/50, with recent
-  log writes. User queue at13:09Z shows both RUNNING and benchmark GPU
-  tasks4665568_1..2 waiting for unavailable/reserved hardware. No context
-  terminal marker or terminal accounting inspection has been observed.
+  Uncorrected MrVI task4665560_3 has reached50/50 training epochs, without
+  method-completion confirmation; corrected task4665623_3 is at31/50.
+  Two benchmarkGPU tasks4665568_1..2 are pending H200 hardware; last explicit
+  start check returnedN/A/Unknown. Matching gpu006 drains for reboot after
+  another allocation (scheduled time-limit end22:00CET, possibly earlier).
+  No child terminal marker or terminal accounting inspection has occurred.
+- **Local monitor restored:** reviewed/tested waiter-only reconnect repair
+  is installed; exactlyone officialwait82670/cell33 retries bounded SSH
+  reads. Existing user terminal stillworks; newSSH failedatlastcheck.
+  Temporary idle-sleep prevention is bound to the waiter, withACpower verified.
 - **Hardware policy clarified/applied:** benchmarktimings retainEPYC-7742/
   configuredGPU model; bothbatch views permit anyhardwaremodel. Exact18
   pendingbatch tasks had onlySlurmFeatures cleared with before/afterproof;
@@ -3224,3 +3229,120 @@ H200 work and terminal evidence. The finite scientific/publication catalog
 remains unsealed. Continue originalone terminal accountinginspect onlyafter
 completion, preserve failedgate evidence, validate completed outputs, and
 select only actual failed/missing/invalid science for freshcompute.
+
+
+### Main-v2 reuse authority: validated artifacts, not inferred worker success
+
+The fixed original accounting query records JobIDRaw,State,ExitCode. Numeric
+physical job IDs cannot generally be mapped back to old array/task indices
+from that output. Main-v2 workers persist logical array/task log names but not
+a universal raw-job mapping. Do not infer mapping from row order, fabricate
+array_task accounting rows, or issue a second accounting query to fill it.
+
+For this fixed main-v2 copy-only recovery, root decides that reuse authority
+is the complete validated scientific artifact contract. A successful scheduler
+exit alone cannot establish correct science; a later cleanup/controller failure
+or an unestablished worker exit does not require refitting valid published
+science. This applies only after the original full terminal accounting is
+preserved and the old gate remainsFAILED. No worker is reclassified as successful.
+
+Each selected physical row must explicitly record completion_criterion=
+VALIDATED_PUBLISHED_ARTIFACTS and worker_exit_not_established=true; root's
+finite-inventory review and new publication receipt must retain that limitation.
+The exact logical row is bound to its frozen matrix/logs, source/runtime/config,
+current input identity and approved parameters. CanonicalPUBLISHED producer
+records, strict sidecars/full checksums, unchanged owner/status snapshots,
+production RDS/Feather validators, current labels/sample order, permitted scITD
+sample drops, timing validity and the COMPLETE expected artifact union all
+remain mandatory. Known startup rows with missing or invalid payloads cannot
+qualify. New outputs use a separate run-owned release; original evidence is
+untouched. BL10/HR22 fixed contracts are unchanged. This is a design decision
+for the requested reuse, not a scientific acceptance or a sealed catalog.
+
+
+### 13:57Z bounded status check and remaining publication scope
+
+Existing-terminal filesystem checks at13:57:52Z show the same watchdog counts:
+benchmark8OK/1FAIL of18, uncorrected1OK of7, corrected1FAIL of7, with no child
+terminal marker. No new failure is established by this observation. The
+uncorrected MrVI task4665560_3 log reached50/50 epochs (lastwrite13:44:02Z);
+this is TRAINING complete, not yet a method/output/publication completion.
+Corrected task4665623_3 is at31/50 (lastwrite13:53:54Z) and progressing.
+No scheduler/accounting query was used for this filesystem/log check.
+
+A temporary local idle-sleep assertion is bound only to repaired waiterPID80704
+(unifiedsession25270, caffeinate -i -w80704). It permits display sleep and
+changes no persistent power settings. The officialwait remains82670/cell33;
+no second HPC monitor exists.
+
+The new main-v2 publisher is deliberately a selected-METHOD artifact release,
+not a self-contained analysis context. Composition's method metadataRDS stays
+in its existing contract. Global batch metadata/<dataset>_sample_metadata.feather
+exports are outside that method-artifact publisher and require their separately
+validated lineage/input binding for P6. Fresh fit children can reuse the already
+accepted selected metadata-adoption helper; healthy-only/P6 metadata sources
+must be explicitly validated and bound separately. Do not fabricate exportTASK
+provenance or claim missing global metadata was copied with method outputs.
+The implementation must state this limitation and enumerate the required
+metadata source paths. Actual publication and scientific acceptance remain
+pending the original terminal catalog.
+
+Concurrent external work has also modified notebooks/benchmark_analysis.rmd;
+this is outside the currently assigned recovery publisher files. Preserve and
+exclude it from commits unless shared ownership is explicitly coordinated.
+
+
+### Main-v2 method-artifact publication code accepted — not yet executed
+
+Implementorbatch_subset_audit and independentreviewerdocs_checkpoint_audit
+completed the bounded existing-publisher extension. New fixed schema
+ ecoda_main_v2_science_publication_control_v1 selects exactlyone recognized
+main-v2 context and a fresh release root. Original BL10/HR22 behavior remains
+covered by passing regressions. The new focused fixture passes allthree
+contexts and targeted negative cases; final independent repeat exit0,
+log/private/tmp/ecoda-independent-main-v2-publisher-final.log. Bash/AST/whitespace
+checks pass; protected userRplots SHA remainsunchanged.
+
+Independent production helpers expand each exact method/parameter payload set,
+including parameterCSV selections without unrelatedLR results and the distinct
+corrected Harmony-only/Harmony+limma arms. Actual RDS artifact-input lists
+(allfivecolumns) and Feather arguments must cover that exact set and bind the
+correct dataset/view/method/metadata and context/correction validation modes.
+Historical compatibility relaxation is rejected. Generic validator success or
+a self-declared inventory cannot substitute for those checks. The separate
+scientific audit still owns current label/sample/scITD/timing validation.
+
+The helper requires complete original first-inspection evidence and exact
+whole-wrapper terminal schema/state/exit/command/digest/generation/timestamps
+before same-old-run ACTIVE owners can be treated as stale. All original failed
+raw accounting, statuses and owners remain untouched; there is no inferred raw
+job mapping or successful-worker claim. Scientific reuse authority remains
+VALIDATED_PUBLISHED_ARTIFACTS withworker_exit_not_established=true. Producer,
+sidecar/fullchecksum, source/runtime/config/input, canonical ownership and
+selected preparation-adoption lineage proofs are revalidated. Fresh-copy
+producer records and existing selected-NAS permission checks are reused.
+Global batch sample-metadata Feathers are explicitly outside this publisher;
+its receipt lists the separate required metadata sources for P6.
+
+Accepted source SHA256:
+- src/utils/py/bl_science_publication.py:
+  f5fe23f06f584a0a8e27a502005a74a03b32a986155a349b9b76875524a6a010
+- src/utils/bash/publish_bl_science.sh:
+  2bc8a052be9345970e1f517171868492b2ccc0515633f8217c51f51379156529
+- tests/test_main_v2_science_publication.py:
+  e69199cd51bf0adbab19bfcafa81bdd71b2fbf0493154469b0c651f87240c74d
+
+This accepts CODE only. There is no real scientific catalog/receipt approval,
+publication control, newgate or HPC launch. Remaining steps: originalterminal
+and single complete inspection; finite physical-row/payload catalog; actual
+source-bound scientific audit and root review; selected copy-only release and
+failed/missing/invalid-only compute. If actualterminalcatalog includes retry
+rows absent from original recorded manifests, preserve those manifests and add
+only a narrowly reviewed evidence contract. Uncorrected heterogeneous fit
+matrix support remains deliberately unexpanded until an actual failure requiresit.
+
+The user-authorized coordination message to the cancer-application chat was
+delivered. That agent confirms its scope is applicationfiles only and denies
+ownership of notebooks/benchmark_analysis.rmd. Preserve that notebook as an
+unknown external owner's change; an optional ownership question is pending
+with the user, affecting later P6 coordination only, not HPC recovery.

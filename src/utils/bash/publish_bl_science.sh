@@ -1,5 +1,5 @@
 #!/bin/bash
-# Fixed BL10/HR22 publication; no scheduler, fit, or old-run write.
+# Fixed reviewed science publication; no scheduler, fit, or old-run write.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${SCRIPT_DIR}/../../slurm_config.sh"
@@ -47,6 +47,7 @@ ecoda_atomic_copy "${CONTROL}" "${ECODA_RUN_ROOT}/manifests/control.json"
    "$(ecoda_md5_file "${ECODA_RUN_ROOT}/manifests/control.json")" == "${CONTROL_MD5}" ]]
 CONTROL="${ECODA_RUN_ROOT}/manifests/control.json"
 campaign_schema="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' "${CONTROL}")"
+publication_context=benchmark
 case "${campaign_schema}" in
   ecoda_bl_publication_control_v1)
     COPY_PRODUCER=stage5_bl_science_release_copy; SCOPE_PRODUCER=bl_publication_scope
@@ -56,6 +57,12 @@ case "${campaign_schema}" in
     COPY_PRODUCER=stage5_bassez_hr22_release_copy; SCOPE_PRODUCER=bassez_hr22_publication_scope
     REPORT_PRODUCER=bassez_hr22_science_publication; REPORT_NAME=bassez_hr22_publication.json
     VALIDATION_MARKER=BASSEZ_HR22_PUBLICATION_VALIDATED ;;
+  ecoda_main_v2_science_publication_control_v1)
+    COPY_PRODUCER=stage5_main_v2_science_release_copy; SCOPE_PRODUCER=main_v2_publication_scope
+    REPORT_PRODUCER=main_v2_science_publication; REPORT_NAME=main_v2_science_publication.json
+    VALIDATION_MARKER=MAIN_V2_SCIENCE_PUBLICATION_VALIDATED
+    publication_context="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["context"])' "${CONTROL}")"
+    case "${publication_context}" in benchmark|batch_effect/uncorrected_final|batch_effect/corrected_final) ;; *) exit 1 ;; esac ;;
   *) echo 'ERROR: unsupported fixed publication campaign' >&2; exit 1 ;;
 esac
 ecoda_atomic_copy "${ECODA_SOURCE_MANIFEST}" "${ECODA_RUN_ROOT}/manifests/source.manifest"
@@ -63,7 +70,7 @@ export ECODA_RUNTIME_PROFILE=stage5
 ecoda_runtime_validate_submission apptainer
 ecoda_runtime_validate_bound_run
 INVENTORY="${ECODA_RUN_ROOT}/manifests/publication_inventory.tsv"
-ANALYSIS_ROOT="${ECODA_RUN_ROOT}/artifacts/benchmark"
+ANALYSIS_ROOT="${ECODA_RUN_ROOT}/artifacts/${publication_context}"
 DESTINATION="$("${PYTHON_BIN}" "${helper}" plan --control "${CONTROL}" --control-md5 "${CONTROL_MD5}" \
   --run-root "${ECODA_RUN_ROOT}" --nas-root "${NAS_TARGET_DIR}" --inventory "${INVENTORY}")"
 bash "${nas_helper}" preflight --nas-root "${NAS_TARGET_DIR}" --report "${ECODA_RUN_ROOT}/manifests/nas_preflight.json"
