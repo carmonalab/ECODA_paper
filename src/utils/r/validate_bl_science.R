@@ -162,6 +162,18 @@ validate_bl_science <- function(control_path, control_md5, report, project) {
   for (name in names(fixed)) bl_require(identical(evidence[[name]], file.path(original, "manifests", fixed[[name]])), "Original proof location differs")
   validation_manifest <- bl_fields(bl_proof(control$validation_source_manifest))
   bl_require(identical(unname(validation_manifest["SOURCE_ROOT"]), project), "Validation source mismatch")
+  validation_source_path <- bl_path(file.path(audit, "manifests/source.manifest"))
+  validation_runtime_path <- bl_path(file.path(audit, "manifests/runtime.identity"))
+  validation_source <- list(path = validation_source_path, sha256 = bl_sha(validation_source_path))
+  validation_runtime <- list(path = validation_runtime_path, sha256 = bl_sha(validation_runtime_path),
+    identity = as.list(bl_fields(validation_runtime_path)))
+  bl_require(identical(validation_source$sha256, control$validation_source_manifest$sha256),
+    "New run source differs from the checked validation source")
+  new_runtime <- validation_runtime$identity
+  bl_require(bl_sha(new_runtime$RUNTIME_MANIFEST) == new_runtime$RUNTIME_MANIFEST_SHA256 &&
+    identical(unname(bl_fields(new_runtime$RUNTIME_MANIFEST)["IMAGE_SHA256"]), new_runtime$RUNTIME_IMAGE_SHA256) &&
+    identical(as.character(file.info(new_runtime$RUNTIME_IMAGE)$size), new_runtime$RUNTIME_IMAGE_SIZE),
+    "New validation runtime identity differs")
   terminal <- bl_failed_gate(control, evidence, original)
   source <- bl_fields(evidence$source_manifest); runtime <- bl_fields(evidence$runtime_identity); source_root <- unname(source["SOURCE_ROOT"])
   bl_require(bl_option(terminal$wrapper, "--source-root") == source_root &&
@@ -279,12 +291,16 @@ validate_bl_science <- function(control_path, control_md5, report, project) {
       bl_sha(ref[6]) == input_proofs[[ds]]$external_proof_sha256, "Input proof changed during audit")
   }
   lapply(control$evidence, bl_proof)
+  bl_proof(validation_source); bl_proof(validation_runtime)
   for (failure in terminal$failures) { bl_proof(failure$stdout, TRUE); bl_proof(failure$stderr, TRUE) }
   bl_require(identical(unname(tools::md5sum(file.path(source_root, "aux/genes.blocklist.rds"))), policy$source_md5), "Frozen auxiliary policy changed during audit")
   bl_require(identical(unname(tools::md5sum(control_path)), control_md5), "Control changed during audit")
   receipt <- list(schema = "ecoda_bl_science_receipt_v1", status = "NOOP_VALIDATED", science_validated = TRUE,
     publication_completed = FALSE, original_gate_status = "FAILED", original_run_root = original, audit_root = audit,
-    control = list(path = control_path, md5 = control_md5), validation_source = control$validation_source_manifest,
+    control = list(path = control_path, md5 = control_md5), validation_source = validation_source,
+    validation_runtime = validation_runtime,
+    validation_execution = list(mode = "synchronous controller; no scheduled worker or model fit",
+      R_version = R.version.string, R_home = R.home(), Rscript = file.path(R.home("bin"), "Rscript")),
     original_evidence = control$evidence, original_source = as.list(source), original_runtime = as.list(runtime),
     original_accounting = list(raw_path = evidence$accounting_raw, sha256 = bl_sha(evidence$accounting_raw), raw_stdout = terminal$raw,
       rows = terminal$accounting$rows, query_count = 1L, scheduler_ids = terminal$ids, orchestration_failures = terminal$failures,

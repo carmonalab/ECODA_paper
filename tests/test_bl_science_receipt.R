@@ -43,6 +43,8 @@ source_manifest <- file.path(original, "manifests/source.manifest")
 writeLines(c(paste0("SOURCE_ROOT=", source_root), paste0("SOURCE_COMMIT=", strrep("a", 40)), paste0("AUX_ROOT=", source_root, "/aux"),
   paste0("DATASETS_SHA256=", bl_sha(file.path(source_root, "datasets.json")))), source_manifest)
 validation_manifest <- file.path(audit, "manifests/validation.manifest"); writeLines(paste0("SOURCE_ROOT=", root), validation_manifest)
+invisible(file.copy(validation_manifest, file.path(audit, "manifests/source.manifest")))
+invisible(file.copy(runtime, file.path(audit, "manifests/runtime.identity")))
 helper <- new.env(parent = globalenv()); sys.source("src/utils/pseudobulk.R", helper)
 Sys.setenv(ECODA_AUX_ROOT = file.path(source_root, "aux"))
 policy <- helper$pseudobulk_blacklist()$policy
@@ -148,6 +150,8 @@ stopifnot(receipt$status == "NOOP_VALIDATED", receipt$original_gate_status == "F
  length(receipt$artifacts) == 10L, length(receipt$timings) == 10L, length(receipt$original_accounting$rows) == 23L,
  identical(receipt$original_accounting$raw_stdout, raw),
  receipt$artifacts[[1]]$owners[[1]]$fields$STATE == "ACTIVE", receipt$artifacts[[1]]$owners[[2]]$fields$STATE == "FAIL",
+ identical(receipt$validation_source$path, file.path(audit, "manifests/source.manifest")),
+ identical(receipt$validation_runtime$path, file.path(audit, "manifests/runtime.identity")),
  identical(tools::md5sum(names(before)), before), identical(file.info(names(before))$mode, before_modes))
 reject(run()); unlink(report)
 # An unmatched failed raw child is never filtered into a success projection.
