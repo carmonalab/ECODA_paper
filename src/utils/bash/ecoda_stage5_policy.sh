@@ -2,6 +2,23 @@
 # Stage 5 recovery, root, method, and artifact-path policy.
 # Source after ecoda_run_common.sh.
 
+# Dispatcher, watchdog comparison and OOM retries must use identical bytes.
+# Derivative fields are accepted only from the exact validated run binding.
+ecoda_stage5_runtime_export_csv() {
+  local runtime_export
+  runtime_export="$(ecoda_runtime_export_csv "$1" "$2")" || return 1
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    ecoda_stage5_validate_identity >/dev/null || return 1
+    case "${ECODA_ARTIFACT_BINDING}${ANALYSIS_NAS_ROOT:-}" in
+      *[,]*|*$'\n'*|*$'\r'*)
+        _ecoda_die "Stage 5 runtime export fields contain CSV delimiters"
+        return 1 ;;
+    esac
+    runtime_export="${runtime_export},ECODA_ARTIFACT_BINDING=${ECODA_ARTIFACT_BINDING},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT}"
+  fi
+  printf '%s' "${runtime_export}"
+}
+
 
 ecoda_stage5_requested_active() {
   [[ -n "${ECODA_ARTIFACT_BINDING:-}" &&

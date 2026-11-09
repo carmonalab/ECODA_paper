@@ -181,7 +181,7 @@ matrix_validate_corrected_final_identity() {
   }
 }
 
-validated_runtime_export="$(ecoda_runtime_export_csv \
+validated_runtime_export="$(ecoda_stage5_runtime_export_csv \
   "${ECODA_RUNTIME_PROFILE}" "${ECODA_APPTAINER_NV:-0}")" ||
   fail "matrix watchdog runtime export construction failed"
 [[ "${validated_runtime_export}" == "${RUNTIME_EXPORT}" ]] ||

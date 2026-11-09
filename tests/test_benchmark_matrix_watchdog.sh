@@ -165,6 +165,7 @@ MANIFEST="${RUN_ROOT}/manifests/mrvi.tsv"
 printf 'Joanito\tbatch_effect_uncorrected\tmrvi\thvg2000\nStephenson\tbatch_effect_uncorrected\tmrvi\thvg1000\n' > "${MANIFEST}"
 source "${ROOT}/src/utils/bash/ecoda_run_common.sh"
 ecoda_write_checksum "${MANIFEST}"
+if [[ "${ECODA_MATRIX_DERIVATIVE_ONLY:-0}" != 1 ]]; then
 WATCHDOG_OUTPUT="$(HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" ANALYSIS_PASS=uncorrected \
   PROJECT_ROOT="${SOURCE_TREE}" \
   ECODA_HOST_ENV_PREFIX="${HOST_PREFIX}" \
@@ -364,6 +365,7 @@ mkdir -p "${ANALYSIS_ROOT}" "${ANALYSIS_NAS_ROOT}"
 run_watchdog
 printf '%s\n' "${ANALYSIS_NAS_ROOT}" "${NAS_TARGET_DIR}" "${ECODA_NAS_TARGET_DIR}" > "${TMP_DIR}/expected-worker.env"
 cmp "${TMP_DIR}/expected-worker.env" "${RETRY_ENV_CAPTURE}"
+fi
 
 # Real OOM retry with a bound derivative destination, then no NAS mount on the
 # compute node. Controller ownership still reserves both exact destinations.
@@ -403,7 +405,11 @@ PY
   printf 'Adams\tbenchmark_analysis\tmrvi\thvg2000\nStephenson\tbenchmark_analysis\tmrvi\thvg1000\n' > "${manifest}"
   ecoda_write_checksum "${manifest}"
   source "${ROOT}/src/utils/bash/ecoda_runtime.sh"
-  runtime_export="$(ecoda_runtime_export_csv stage5 1)"
+  runtime_base="$(ecoda_runtime_export_csv stage5 1)"
+  [[ "$(unset ECODA_ARTIFACT_BINDING; ecoda_stage5_runtime_export_csv stage5 1)" == "${runtime_base}" ]]
+  # Pass the exact derivative CSV used by the real dispatcher's arg10.
+  runtime_export="${runtime_base},ECODA_ARTIFACT_BINDING=${ECODA_ARTIFACT_BINDING},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT}"
+  [[ "$(ecoda_stage5_runtime_export_csv stage5 1)" == "${runtime_export}" ]]
   mv "${NAS_TARGET_DIR}" "${NAS_TARGET_DIR}.hidden"
   trap '[[ ! -d "${NAS_TARGET_DIR}.hidden" ]] || mv "${NAS_TARGET_DIR}.hidden" "${NAS_TARGET_DIR}"' EXIT
   ecoda_stage5_validate_output_ownership "${selection}" "${ECODA_RUN_ID}" 0 scratch
@@ -416,9 +422,36 @@ PY
     bash "${ROOT}/src/5_run_benchmark_methods/matrix_watchdog.sh" \
     "${RUN_ROOT}" derivative-mrvi "${manifest}" 1001 128G 256G shared-gpu 4 \
     "${SOURCE_TREE}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh" \
-    "${runtime_export}" --gpus=1 > "${TMP_DIR}/derivative-watchdog.log"
+    "${runtime_export}" --gpus=1 > "${TMP_DIR}/derivative-watchdog.log" || {
+      cat "${TMP_DIR}/derivative-watchdog.log" "${RUN_ROOT}/status/watchdogs/derivative-mrvi.status" >&2; exit 1;
+    }
   grep -q '^STATE=OK$' "${RUN_ROOT}/status/watchdogs/derivative-mrvi.status"
   [[ "$(cat "${RUN_ROOT}/manifests/derivative-mrvi.retry_1.tsv")" == $'Stephenson\tbenchmark_analysis\tmrvi\thvg1000' ]]
   [[ ! -e "${NAS_TARGET_DIR}" ]]
+  grep -Fq "${runtime_export}" "${CAPTURE}"
+  calls_before="$(wc -l < "${CAPTURE}" | tr -d ' ')"
+  for invalid in missing_pair changed_pair extra_field foreign_binding wrong_nas; do
+    candidate="${runtime_export}"; candidate_binding="${ECODA_ARTIFACT_BINDING}"; candidate_nas="${ANALYSIS_NAS_ROOT}"
+    case "${invalid}" in
+      missing_pair) candidate="${runtime_base}" ;;
+      changed_pair) candidate="${runtime_base},ECODA_ARTIFACT_BINDING=${ECODA_ARTIFACT_BINDING},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT}_foreign" ;;
+      extra_field) candidate="${runtime_export},UNAPPROVED_FIELD=1" ;;
+      foreign_binding) candidate_binding="${RUN_ROOT}/manifests/foreign.json"
+        candidate="${runtime_base},ECODA_ARTIFACT_BINDING=${candidate_binding},ANALYSIS_NAS_ROOT=${candidate_nas}" ;;
+      wrong_nas) candidate_nas="${ANALYSIS_NAS_ROOT}_foreign"
+        candidate="${runtime_base},ECODA_ARTIFACT_BINDING=${candidate_binding},ANALYSIS_NAS_ROOT=${candidate_nas}" ;;
+    esac
+    if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" SLURM_JOB_ID=999997 \
+      METHOD_TIME_LIMIT=03:00:00 MATRIX_WATCHDOG_MAX_POLLS=1 \
+      ECODA_ARTIFACT_BINDING="${candidate_binding}" ANALYSIS_NAS_ROOT="${candidate_nas}" \
+      bash "${ROOT}/src/5_run_benchmark_methods/matrix_watchdog.sh" \
+      "${RUN_ROOT}" "invalid-${invalid}" "${manifest}" 1001 128G 256G shared-gpu 4 \
+      "${SOURCE_TREE}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh" \
+      "${candidate}" --gpus=1 > "${TMP_DIR}/invalid-${invalid}.log" 2>&1; then
+      echo "invalid runtime export accepted: ${invalid}" >&2; exit 1
+    fi
+    grep -q '^STATE=FAIL$' "${RUN_ROOT}/status/watchdogs/invalid-${invalid}.status"
+    [[ "$(wc -l < "${CAPTURE}" | tr -d ' ')" == "${calls_before}" ]]
+  done
 )
-echo 'PASS: derivative OOM retry validates scratch ownership without a NAS mount; controller scope stays complete'
+echo 'PASS: exact derivative runtime export and OOM retry binding; unbound compatibility; tampering rejected before scheduling'

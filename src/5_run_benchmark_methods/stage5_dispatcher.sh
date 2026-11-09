@@ -4151,10 +4151,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
       watchdog_partition="${SLURM_PARTITION_BENCHMARK_CPU}" throttle="${METHOD_THROTTLE}" \
       method_time_limit="${METHOD_TIME_LIMIT}" method_gpu_policy="${METHOD_GPU_POLICY}"
     local method_runtime_export watchdog_script ownership_manifest ownership_tmp
-    method_runtime_export="$(ecoda_runtime_export_csv stage5 "${METHOD_RUNTIME_NV}")" || return 1
-    if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
-      method_runtime_export="${method_runtime_export},ECODA_ARTIFACT_BINDING=${ECODA_ARTIFACT_BINDING},ANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT}"
-    fi
+    method_runtime_export="$(ecoda_stage5_runtime_export_csv stage5 "${METHOD_RUNTIME_NV}")" || return 1
     watchdog_script="$(stage5_source_script src/5_run_benchmark_methods/matrix_watchdog.sh)"
     local safe="$(printf '%s' "${group_label}" | tr '/:,\t ' '_____')"
     local array_msg array_id array_rc wd_msg wd_id wd_rc
