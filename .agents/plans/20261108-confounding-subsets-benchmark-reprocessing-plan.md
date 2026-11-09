@@ -3746,3 +3746,61 @@ are stable and fully validated. Such a future decision must explicitly retain
 catalog_complete=false, historical retry coverage UNVERIFIABLE, unknown exits,
 old STOP and an unapproved/incomplete historical audit. Current strict reboot
 publisher is unchanged; no alternative release is implemented or approved now.
+
+### Four-MrVI copy release completed and independently reviewed
+
+At 18:18:40 UTC, the exact pinned `8ad3bcace28100c80d613528843169e87a03780d`
+publisher completed `stage5_failed16_unc4_release_20261109_v1`, with zero
+scheduler submissions and zero new fits. Twelve source-identical distance,
+original-runtime and timing files are now in its fresh scratch/NAS release.
+Pinned terminal validation passed; independent terminal review approved the
+artifact release. Receipt SHA
+`2d7407bb6c889cab5905484108351e18d4615c600ad1862bca835fd6ab5aa76e`;
+terminal observation SHA
+`d49ae9c1b73203389d43f4ccec7fe9fde00dc6f98bb0fefbaeaad60b7d67f820`.
+All selected NAS files/sidecars are 666, directories 777, and all 24 selected
+checksum entries pass. New terminal is NOOP_VALIDATED. Original failed science
+gate, 23 raw accounting rows, runtime birth paths and missing physical-exit
+knowledge remain unchanged. Sample-metadata exports are not part of this copy.
+The approved control/science/review/terminal evidence lives under
+`.gate/failed16_unc4_release_20261109_v1/`.
+
+### Remaining95 proposal and observer launch contract
+
+The full original inventory yields 95 remaining candidate physical rows:
+benchmark 15, uncorrected 32 science, corrected 48 (including eight prep).
+A precise local proposal is `.gate/remaining95_scope_20261109_v1/`; with
+validated reuse of eight uncorrected preparation caches and sixteen metadata
+exports it conditionally emits 47 initial IDs / 138 task units, excluding OOM
+retries. These are not launch-approved counts yet: current adoption schemas
+cannot truthfully represent old STOP-parent cache provenance and possibly
+ACTIVE original owners. Audit the eight caches and original timing first;
+retain original owner states, then review a narrow explicit adoption extension.
+No cache refit is justified solely by that missing representation. The user’s
+additional allocation-diagnostic permission request is still pending; no extra
+accounting query or speculative node exclusion has been executed.
+
+The independently approved monitor-only gate is
+`ecoda_stage5_orphaned_main_observer_20261109_v1`, run
+`stage5_orphaned_main_observer_20261109_v1`. Its exact wrapper is recorded in
+`.gate/orphaned_main_observer_inputs_20261109_v1/wrapper.sh` and sealed spec
+SHA `5fecbfd0035bcd08ce3ea8436be0643359e306af6170ee97e532fae7c27754de`;
+command SHA `12c213aff7bcca65d328ea9659a01637fcd21623d731590ecac85963fd6fcc23`.
+Source is immutable `7a6c513` under `20261109-targeted-terminal-repair-v1`,
+archive SHA `feb277a9219e9c8d65f23df1e8b7b27539e313b5c9402685b1d548d85c6e7aea`,
+manifest SHA `30e2bcc8ea4a9213b4821da88398c2e9eecf3127fdda2daef6da5dcbf8588e95`;
+versioned runtime remains unchanged. Five original references were staged and
+SHA-verified; control SHA
+`b8c4f5e811e48ae8f2687d51c40935d64eab11fb26220335e0e33a970538244b`.
+
+Fresh 18:23:46 UTC prelaunch queue proof confirms the exact three dependencies
+still pending: array4665568, watchdog4665570, aggregate4665612. The wrapper
+selects one scalar 1CPU / 2G / 5-minute afterany barrier; its three selection
+rows describe dependencies only. No science, GPU, sync, accounting or old-run
+writes occur. Same checked-in profile and ecoda-benchmark group; no original
+STOP gate is a successful dependency. Exactly one unbounded official wait will
+be armed after launch. A barrier receipt keeps original outcomes UNKNOWN,
+wrapper exit null and the initial 73-ID catalog incomplete; it approves no old
+science. If scientifically ready work supersedes this monitor, retire only its
+own scheduler job and finish its terminal audit before another same-group
+launch. Never invent a second group or interrupt old scientific jobs.
