@@ -72,9 +72,10 @@ decisions have been applied to existing artifacts.
   50,809 HR fallbacks filled, 74,948 cells /26 samples /40 valid categories;
   protected counts/cells/features/embeddings unchanged. New H5AD MD5
   `678656c738597471d884f88e345e6970`. An exact22 author-HR composition-only
-  gate launched04:43:52Z and is RUNNING; its removal from the later main
-  selection stays conditional on terminal audit/reviewer approval. Other
-  affected HR methods remain pending.
+  gate launched04:43:52Z and FAILED at controller validation04:50:47Z;
+  all five scheduler rows completed0. Exact output validation is under repair,
+  with no result reuse or main-wave deduplication approved. Other affected
+  HR methods remain pending.
 - **Stage3 scientific outputs produced/synchronized: 17/17.** Wrapper finished
   `2026-11-09T02:53:27Z`. The original strict gate remains FAILED because its
   preserved accounting includes historical Alzheimer OOM attempts before
@@ -1831,7 +1832,7 @@ Future Stage3 NAS ancestor fix: `29d202e`. These commits are source fixes only;
 active gates remain pinned to their original immutablefc2949f snapshots.
 
 
-## Bassez author-HR22 independent early wave — RUNNING, 2026-11-09 04:43:52Z
+## Bassez author-HR22 independent early wave — FAILED, terminal-inspected 2026-11-09
 
 Purpose: run the already approved repaired-author-HR composition results now,
 while independent Stephenson annotation and Stage3 batch artifact validation
@@ -1931,3 +1932,66 @@ unchanged root-review proof SHA256
 Publication execution remains pending until the current ecoda-benchmark gate
 has terminal inspection/reviewer approval. No dummy Slurm job, second mutex,
 new scientific fit or failed-gate status edit is permitted for this adapter.
+
+
+## Bassez HR22 terminal failure and independent BL publication — 2026-11-09
+
+HR22 gate ended FAILED1 at04:50:47Z. Exactly one terminal inspection covered
+all five emitted IDs4663753/4663754/4663757/4663759/4663760. **Every accounting
+row is COMPLETED0:0**: input and Renv preflights, composition worker, watchdog,
+and aggregate all succeeded. The controller then rejected
+`results/Bassez_metadata.rds` as an ACTIVE input, before the exact-request RDS
+CLI ran. This is an evidenced output-vs-input validation ordering defect:
+current selected output owners intentionally stay ACTIVE until publication,
+but the post-aggregate validator used the reusable-input guard. Generic
+foreign/ACTIVE input guards must remain strict. A narrowly scoped owned
+current-output validation branch and a real-owner/real-RDS-CLI regression are
+assigned. Check existing23RDS and timing/record/owner evidence before deciding
+no-fit recovery. Original gate/statuses/owners/manifests remain unchanged;
+no reviewer approval, bridge, successful-science reuse or main dedup is claimed.
+The conditional41-row main proposal therefore remains conditional, not a launch.
+
+Failure operational review (NOT formal gate/scientific approval):
+`.gate/bassez_author_hr22_inputs_20261109_v1/failed_terminal_review.json`, SHA256
+`6d891b46f6c93ab0bdc797bc607c9d0f84cf43d4c3e1d1bbb6c0d4f8e16f01aa`.
+It binds the failed terminal manifest and sole inspection, keeps all HR22
+outputs unapproved, and permits only the independent already-reviewed BL10
+publication run to proceed. That run consumes no HR22 data and has a distinct
+output/sync root; there is no active ecoda-benchmark gate. The earlier local
+operational precondition of a successful HR22 approval was unnecessarily
+strong for this unrelated no-compute publication and is superseded by this
+explicit terminal-inspected failure review. No failed gate is approved or
+passed as a successful dependency. Stephenson annotation and16batch validation
+continue independently.
+
+### BL10 publication-only execution contract — READY
+
+- Run `stage5_bl10_publication_20261109_v1`, no scheduler submissions, no H5AD
+  reads/transfers, no model fit. Scope remains exactly20 reviewed RDS+
+  10 original scientific timing Feathers. New copied bytes/sidecars and
+  60-entry NAS checksum table; source producers and failed accounting remain
+  explicit. Old BL run/gate/status/owners/checksums stay immutable.
+- Source `3794e3e98b6d87bb18164a86747b0b624dc25c55`, snapshotparent
+  `20261109-bl10-publication-v1`, archive SHA256
+  `932528f9bee6354b190e5254936991eb0ca151e6982b16aed973c1198bedb40a`.
+  Same pinned runtime image/manifest and frozen auxiliary identity.
+- External control/review are staged and sealed in
+  `_ecoda_inputs/20261108-confounding-subsets-v1/bl-science-publication-v1`.
+  Control MD5 fe1ecb6f7d3bd0a8cf81567b8446353b, SHA5f70cbd8...;
+  original root scientific review SHA ded1c6ee... . Exact full hashes above.
+- Fresh run/log/NAS namespace and actual NAS mount are required. Common
+  selected sync owner protects the new root. Root operational helper enforces
+  the exact terminal-inspected HR22 failure review and unchanged BL controls;
+  no new global group/lock/gate or dummy scheduler ID is invented.
+- Completion requires the pinned helper's read-only `validate` mode over
+  original evidence and all copied mappings/owners/records/sidecars/modes/
+  global checksum plus terminal state, followed by explicit root review.
+  Adapter writes a fresh publication receipt and truthful NOOP_VALIDATED
+  no-fit terminal record. It never changes the original failed BL gate.
+
+Exact immutable command (SHA256
+`5c92d791b52f625925476c382a962816965ed8dc0a2e210de6e3bb6db74fb57a`):
+
+```bash
+env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bl10-publication-v1/3794e3e98b6d87bb18164a86747b0b624dc25c55/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bl10-publication-v1/3794e3e98b6d87bb18164a86747b0b624dc25c55/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bl10-publication-v1/3794e3e98b6d87bb18164a86747b0b624dc25c55/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage5_bl10_publication_20261109_v1 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage5_bl10_publication_20261109_v1 --script src/utils/bash/publish_bl_science.sh -- --control /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/bl-science-publication-v1/control.json --control-md5 fe1ecb6f7d3bd0a8cf81567b8446353b
+```
