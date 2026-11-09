@@ -24,7 +24,9 @@
   canonical
 }
 
-validate_analysis_release <- function(ledger, expected_scope) {
+validate_analysis_release <- function(ledger, expected_scope, require_projection = FALSE) {
+  if (!is.logical(require_projection) || length(require_projection) != 1L || is.na(require_projection))
+    stop("require_projection must be an explicit logical scalar")
   keys <- c("dataset", "view", "method_key")
   .analysis_fields(ledger, c(keys, "kind", "artifact_path", "run_root", "md5",
                             "receipt_path", "receipt_md5"), "release ledger")
@@ -52,13 +54,13 @@ validate_analysis_release <- function(ledger, expected_scope) {
   receipts <- vector("list", nrow(ledger))
   for (i in seq_len(nrow(ledger))) {
     row <- ledger[i, , drop = FALSE]
-    path <- .analysis_checked_file(row$artifact_path, row$md5)
     if (!grepl("^/", row$run_root)) stop("run_root must be absolute")
     root <- normalizePath(row$run_root, mustWork = TRUE)
     if (!identical(root, row$run_root)) stop("run_root must be canonical, without aliases or symlinks")
-    if (!dir.exists(root) || !startsWith(path, paste0(root, "/")))
-      stop("Artifact is outside its explicit run_root: ", path)
+    if (!dir.exists(root) || !startsWith(row$artifact_path, paste0(root, "/")))
+      stop("Artifact is outside its explicit run_root: ", row$artifact_path)
     receipt_path <- .analysis_checked_file(row$receipt_path, row$receipt_md5)
+    if (file.info(receipt_path)$size > 16 * 1024^2) stop("Release receipt must be small metadata")
     receipt <- readRDS(receipt_path)
     .analysis_checked_file(row$receipt_path, row$receipt_md5)
     if (!is.list(receipt) || !identical(receipt$schema, "ecoda_analysis_release_receipt_v1") ||
@@ -78,14 +80,23 @@ validate_analysis_release <- function(ledger, expected_scope) {
       stop("Receipt does not establish the approved current input identity")
     if (expected_scope$require_new[i] && !identical(receipt$origin, "new"))
       stop("Required new result cannot reuse a legacy artifact: ", row$method_key)
+    # This check precedes even opening the selected RDS. A scientific reuse
+    # receipt alone does not authorize transferring an RNA aggregate locally.
+    compact_screen <- identical(receipt$metadata_schema, "ecoda_cell_depth_five_v1") &&
+      identical(as.character(row$kind), "standalone_result") &&
+      identical(as.character(row$method_key), "ECODA_authors_HR_cell_subsetting")
+    if ((!is.null(receipt$projection_schema)) ||
+        (require_projection && !compact_screen && !row$kind %in% c("distance_feather", "metadata_feather")))
+      .analysis_projection_proof(row, receipt)
+    .analysis_checked_file(row$artifact_path, row$md5)
     receipts[[i]] <- receipt
   }
   attr(ledger, "receipts") <- receipts
   ledger
 }
 
-load_analysis_release <- function(ledger, expected_scope) {
-  ledger <- validate_analysis_release(ledger, expected_scope)
+load_analysis_release <- function(ledger, expected_scope, require_projection = FALSE) {
+  ledger <- validate_analysis_release(ledger, expected_scope, require_projection)
   receipts <- attr(ledger, "receipts")
   results <- vector("list", nrow(ledger))
   names(results) <- .analysis_key(ledger)
@@ -131,10 +142,357 @@ load_analysis_release <- function(ledger, expected_scope) {
       } else result <- list(feat_mat = values, dist_mat = stats::dist(values))
     }
     .analysis_checked_file(row$artifact_path, row$md5)
+    if (!is.null(receipts[[i]]$projection_schema)) {
+      proof <- .analysis_projection_proof(row, receipts[[i]])
+      if (!identical(.analysis_fingerprint(result$dist_mat), proof$distance_md5) ||
+          !identical(.analysis_fingerprint(result$labels), proof$labels_md5))
+        stop("Projected distances or stored labels differ from the parent witness")
+    }
     results[[i]] <- list(result = result, source = row, receipt = receipts[[i]],
       identity = list(dataset = row$dataset, view = row$view, method_key = row$method_key,
                       artifact_md5 = row$md5, receipt_md5 = row$receipt_md5,
                       input_md5 = receipts[[i]]$input_md5, source_policy = receipts[[i]]$source_policy))
   }
   results
+}
+
+.analysis_fingerprint <- function(value) {
+  path <- tempfile("analysis-fingerprint-")
+  on.exit(unlink(path))
+  # Version 2 materializes ALTREP vectors, so a Feather->RDS round trip does
+  # not change the witness solely through an internal vector representation.
+  saveRDS(value, path, version = 2, compress = FALSE)
+  unname(tools::md5sum(path))
+}
+
+.analysis_projection_proof <- function(row, receipt) {
+  if (!identical(receipt$projection_schema, "ecoda_analysis_projection_v1"))
+    stop("Local result intake requires a reviewed metadata projection before reading RDS: ", row$method_key)
+  path <- .analysis_checked_file(receipt$evidence_path, receipt$evidence_md5)
+  if (file.info(path)$size > 16 * 1024^2) stop("Projection witness must be small metadata")
+  proof <- readRDS(path)
+  .analysis_checked_file(path, receipt$evidence_md5)
+  if (!is.list(proof) || !identical(proof$schema, receipt$projection_schema) ||
+      !identical(proof$dataset, as.character(row$dataset)) ||
+      !identical(proof$view, as.character(row$view)) ||
+      !identical(proof$method_key, as.character(row$method_key)) ||
+      !identical(proof$output_md5, as.character(row$md5)) ||
+      !identical(proof$bundle_key, as.character(row$bundle_key)) ||
+      !identical(proof$origin, receipt$origin)) stop("Invalid projection identity or scientific origin")
+  for (field in c("parent_receipt_copy", "parent_evidence_copy")) {
+    relative <- proof[[field]]
+    if (!is.character(relative) || length(relative) != 1L ||
+        !grepl("^parents/[0-9]+\\.(receipt|evidence)$", relative)) stop("Invalid copied parent proof path")
+  }
+  parent <- readRDS(.analysis_checked_file(file.path(row$run_root, proof$parent_receipt_copy), proof$parent$receipt_md5))
+  .analysis_checked_file(file.path(row$run_root, proof$parent_evidence_copy), parent$evidence_md5)
+  fields <- c("dataset", "view", "method_key", "kind", "artifact_path", "bundle_key", "run_root", "md5")
+  if (!is.list(parent) || !identical(parent$schema, "ecoda_analysis_release_receipt_v1") ||
+      !identical(parent$status, "reviewed") || !identical(parent$origin, receipt$origin) ||
+      !identical(parent$input_md5, receipt$input_md5) || !identical(parent$source_policy, receipt$source_policy) ||
+      any(!vapply(fields, function(field) identical(parent[[field]], proof$parent[[field]]), logical(1))))
+    stop("Projection cannot change the parent scientific review, origin or input policy")
+  for (field in c("source", "runtime", "control"))
+    .analysis_checked_file(file.path(row$run_root, "parents", paste0("validation.", field)), proof$validation_md5[[field]])
+  control_path <- file.path(row$run_root, "parents", "validation.control")
+  if (file.info(control_path)$size > 16 * 1024^2) stop("Frozen parent control must be small metadata")
+  control <- readRDS(control_path)
+  key <- .analysis_key(row)
+  original <- control$ledger[.analysis_key(control$ledger) == key, , drop = FALSE]
+  expected <- control$expected_scope[.analysis_key(control$expected_scope) == key, , drop = FALSE]
+  if (nrow(original) != 1L || nrow(expected) != 1L || expected$status != "approved" ||
+      !identical(expected$current_input_md5, receipt$input_md5) ||
+      !identical(expected$source_policy, receipt$source_policy) ||
+      any(!vapply(c(fields, "receipt_path", "receipt_md5"), function(field)
+        identical(as.character(original[[field]]), proof$parent[[field]]), logical(1))))
+    stop("Projection parent must match the original approved control row, including its scientific receipt")
+  proof
+}
+
+# Only these sample-by-cell-type matrices feed maintained numbered PCA/ratio
+# panels. Other composition methods retain scalar/category metadata; RNA
+# features and pseudobulk/cache objects are never included in a projection.
+analysis_projection_ct_methods <- function() c("ECODA_authors_HR", "ECODA_authors_LR",
+  "ECODA_authors_HR_NULL", "Freq_highres", "ECODA_HiTME_HR_layer2",
+  "ECODA_scATOMIC_HR", "ECODA_seuratres_0.4", "ECODA_authors_HR_top_varexp0")
+
+.analysis_thin_result <- function(item) {
+  value <- item$result; key <- as.character(item$source$method_key)
+  if (key == "__dataset_metadata__") {
+    fields <- c("labels", "n_samples", "n_cells", "cells_per_sample", "n_cell_types_high_res")
+    if (!all(fields %in% names(value))) stop("Incomplete dataset metadata")
+    return(value[fields])
+  }
+  if (key == "__trans__") {
+    if (!exists("validate_transformation_result", mode = "function")) stop("Projection requires the pure transformation validator")
+    validate_transformation_result(value)
+    fields <- c("trans_method", unname(transformation_analysis_policy()$score_columns))
+    thin <- as.data.frame(lapply(fields, function(field) value[[field]]), stringsAsFactors = FALSE)
+    names(thin) <- fields
+    for (field in c("transformation_policy", "transformation_replicates", "composition_counts", "sample_labels"))
+      attr(thin, field) <- attr(value, field)
+    validate_transformation_result(thin)
+    return(thin)
+  }
+  if (key == "__zeroimp__") {
+    clean <- function(x, depth = 0L) {
+      if (is.list(x) && length(x) && !is.null(names(x)) &&
+          all(names(x) %in% c(evaluation_metrics(), "mod_knnsqrtn_score", "mod_knn6_score", "mod_knn9_score"))) {
+        if (anyDuplicated(names(x)) || !all(evaluation_metrics() %in% names(x)) ||
+            any(!vapply(x, function(v) is.numeric(v) && length(v) == 1L, logical(1))) ||
+            any(!vapply(x[evaluation_metrics()], is.finite, logical(1))))
+          stop("Invalid zero-imputation scalar scores")
+        return(x)
+      }
+      if (!is.list(x) || !length(x) || depth >= 2L || is.null(names(x)) || anyDuplicated(names(x)))
+        stop("Zero-imputation projection accepts only named scalar-score tables")
+      lapply(x, clean, depth = depth + 1L)
+    }
+    return(clean(value))
+  }
+  distance <- as.matrix(value$dist_mat)
+  ids <- rownames(distance)
+  if (!is.numeric(distance) || !length(ids) || anyNA(ids) || any(!nzchar(trimws(ids))) || anyDuplicated(ids) ||
+      !identical(colnames(distance), ids) || any(!is.finite(distance)) ||
+      any(distance < 0) || any(abs(distance - t(distance)) > 1e-10) || any(abs(diag(distance)) > 1e-10))
+    stop("Projection requires finite named symmetric distances")
+  if (grepl("(^|_)NULL($|_)", key) && is.null(value$labels)) stop("NULL projections require actual stored labels")
+  if (!is.null(value$labels) && (is.null(names(value$labels)) || !identical(names(value$labels), ids) ||
+      anyNA(value$labels) || any(!nzchar(trimws(as.character(value$labels))))))
+    stop("Stored labels must retain exact distance sample order")
+  fields <- c("dist_mat", "labels", "scores", "exec_time", "time_secs", "mem_GB", "timing_schema", "timing_id",
+    "variant_time_secs", "variant_mem_GB", "shared_time_secs", "shared_mem_GB", "shared_timing_id",
+    "aggregate_time_secs", "shared_fit_time_secs", "allowed_dropped_sample_ids")
+  fields <- intersect(fields, names(value))
+  thin <- setNames(lapply(fields, function(field) value[[field]]), fields)
+  thin$n_features <- if (is.null(value$feat_mat)) {
+    if (is.null(value$n_features)) NA_integer_ else value$n_features
+  } else ncol(value$feat_mat)
+  if (!is.null(thin$n_features) && (!is.numeric(thin$n_features) || length(thin$n_features) != 1L ||
+      (!is.na(thin$n_features) && (!is.finite(thin$n_features) || thin$n_features < 1 || thin$n_features != as.integer(thin$n_features)))))
+    stop("Original feature count must be a positive scalar")
+  if (!is.null(value$scores) && (!is.list(value$scores) || anyDuplicated(names(value$scores)) ||
+      any(!vapply(value$scores, function(x) is.numeric(x) && length(x) == 1L && is.finite(x), logical(1)))))
+    stop("Projection scores must be finite scalars")
+  # Count annotation categories without retaining every annotation matrix.
+  if (grepl("^ECODA_(authors|HiTME|scATOMIC|seuratres|deconv)", key) || key == "Freq_highres") {
+    categories <- if (key == "ECODA_deconv") colnames(value$feat_mat) else colnames(value$counts)
+    if (!is.null(categories)) thin$cell_type_names <- categories
+  }
+  if (item$source$view == "benchmark_analysis" && key %in% analysis_projection_ct_methods()) {
+    if (is.null(value$feat_mat) || !identical(rownames(value$feat_mat), ids) ||
+        any(!is.finite(as.matrix(value$feat_mat)))) stop("Invalid whitelisted CT feature matrix")
+    thin$feat_mat <- value$feat_mat
+    if (!is.null(value$counts)) {
+      if (!setequal(rownames(value$counts), ids) || any(!is.finite(as.matrix(value$counts)))) stop("Invalid CT counts")
+      thin$counts <- value$counts
+    }
+  }
+  thin
+}
+
+.analysis_save_new <- function(value, path) {
+  if (.analysis_exists(path)) stop("Projection output already exists: ", path)
+  tmp <- tempfile(".projection-", tmpdir = dirname(path))
+  on.exit(unlink(tmp))
+  saveRDS(value, tmp, version = 3)
+  if (!file.link(tmp, path)) stop("Cannot atomically publish new projection: ", path)
+  invisible(path)
+}
+
+.analysis_exists <- function(path) file.exists(path) ||
+  (!is.na(Sys.readlink(path)) && nzchar(Sys.readlink(path)))
+
+.analysis_projection_paths <- function(control, root) {
+  ledger <- control$ledger
+  c(ledger$artifact_path, ledger$receipt_path,
+    file.path(root, "receipts", paste0(seq_len(nrow(ledger)), ".projection.rds")),
+    file.path(root, "parents", paste0(seq_len(nrow(ledger)), ".receipt")),
+    file.path(root, "parents", paste0(seq_len(nrow(ledger)), ".evidence")),
+    file.path(root, "parents", paste0("validation.", c("source", "runtime", "control"))),
+    file.path(root, "analysis_release.rds"),
+    if (!is.null(control$execution_times)) control$execution_times$artifact_path)
+}
+
+# The producer's raw copied root remains immutable. Only fresh local access
+# receipts change paths; no scientific parent identity or thin payload changes.
+mirror_analysis_projection <- function(copied_root, output_root, control_md5) {
+  if (!identical(normalizePath(copied_root, mustWork = TRUE), copied_root) ||
+      !grepl("^/", output_root) || .analysis_exists(output_root)) stop("Explicit canonical copied root and fresh local root required")
+  path <- .analysis_checked_file(file.path(copied_root, "analysis_release.rds"), control_md5)
+  if (file.info(path)$size > 16 * 1024^2) stop("Projection control must be small metadata")
+  control <- readRDS(path)
+  roots <- unique(control$ledger$run_root)
+  if (length(roots) != 1L || !grepl("^/", roots)) stop("Expected one explicit producer projection root")
+  original_root <- roots[[1L]]
+  rebase <- function(paths, target) {
+    if (anyNA(paths) || any(!startsWith(paths, paste0(original_root, "/")))) stop("Projection path escapes its declared producer root")
+    file.path(target, substring(paths, nchar(original_root) + 2L))
+  }
+  inventory <- utils::read.delim(file.path(copied_root, "files.tsv"), header = FALSE,
+    col.names = c("path", "md5"), colClasses = "character", quote = "", comment.char = "")
+  expected_paths <- .analysis_projection_paths(control, original_root)
+  if (!nrow(inventory) || anyDuplicated(inventory$path) ||
+      !setequal(inventory$path, expected_paths)) stop("Copied projection inventory differs from its finite control")
+  source_paths <- rebase(inventory$path, copied_root)
+  for (i in seq_along(source_paths)) .analysis_checked_file(source_paths[i], inventory$md5[i])
+  # Bind each copied witness to the immutable parent control before copying
+  # anything, even when the original HPC paths are unavailable locally.
+  for (i in seq_len(nrow(control$ledger))) {
+    row <- control$ledger[i, , drop = FALSE]
+    receipt <- readRDS(.analysis_checked_file(rebase(row$receipt_path, copied_root), row$receipt_md5))
+    row$run_root <- copied_root; row$artifact_path <- rebase(row$artifact_path, copied_root)
+    receipt$evidence_path <- rebase(receipt$evidence_path, copied_root)
+    .analysis_projection_proof(row, receipt)
+  }
+  if (!dir.create(output_root) || !identical(normalizePath(output_root), output_root)) stop("Cannot create canonical local projection root")
+  dir.create(file.path(output_root, "parents")); dir.create(file.path(output_root, "receipts"))
+  destination_paths <- rebase(inventory$path, output_root)
+  # Receipts and the control are written afresh below, never overwritten.
+  access_paths <- c(control$ledger$receipt_path, file.path(original_root, "analysis_release.rds"))
+  for (i in which(!inventory$path %in% access_paths))
+    if (!file.copy(source_paths[i], destination_paths[i], overwrite = FALSE)) stop("Cannot copy finite projection metadata")
+  for (i in seq_len(nrow(control$ledger))) {
+    row <- control$ledger[i, , drop = FALSE]
+    receipt <- readRDS(rebase(row$receipt_path, copied_root))
+    control$ledger$artifact_path[i] <- rebase(row$artifact_path, output_root)
+    control$ledger$receipt_path[i] <- rebase(row$receipt_path, output_root)
+    control$ledger$run_root[i] <- output_root
+    receipt$artifact_path <- control$ledger$artifact_path[i]; receipt$run_root <- output_root
+    receipt$evidence_path <- rebase(receipt$evidence_path, output_root)
+    .analysis_save_new(receipt, control$ledger$receipt_path[i])
+    control$ledger$receipt_md5[i] <- unname(tools::md5sum(control$ledger$receipt_path[i]))
+  }
+  if (!is.null(control$execution_times)) control$execution_times$artifact_path <- rebase(control$execution_times$artifact_path, output_root)
+  validate_analysis_release(control$ledger, control$expected_scope, require_projection = TRUE)
+  .analysis_save_new(control, file.path(output_root, "analysis_release.rds"))
+  local_inventory <- data.frame(path = destination_paths, md5 = unname(tools::md5sum(destination_paths)))
+  tmp <- tempfile(".projection-inventory-", tmpdir = output_root); on.exit(unlink(tmp))
+  utils::write.table(local_inventory, tmp, sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+  if (!file.link(tmp, file.path(output_root, "files.tsv"))) stop("Cannot publish local access inventory")
+  for (i in seq_along(source_paths)) .analysis_checked_file(source_paths[i], inventory$md5[i])
+  invisible(control)
+}
+
+analysis_release_input_inventory <- function(control) {
+  ledger <- validate_analysis_release(control$ledger, control$expected_scope)
+  receipts <- attr(ledger, "receipts")
+  inventory <- data.frame(path = c(ledger$artifact_path, ledger$receipt_path,
+    vapply(receipts, `[[`, character(1), "evidence_path")),
+    md5 = c(ledger$md5, ledger$receipt_md5, vapply(receipts, `[[`, character(1), "evidence_md5")))
+  if (!is.null(control$execution_times)) {
+    timing <- control$execution_times
+    .analysis_checked_file(timing$artifact_path, timing$md5)
+    inventory <- rbind(inventory, data.frame(path = timing$artifact_path, md5 = timing$md5))
+  }
+  inventory <- unique(inventory)
+  if (anyDuplicated(inventory$path) || any(grepl("[\t\r\n]", inventory$path))) stop("Conflicting or malformed explicit input paths")
+  inventory
+}
+
+project_analysis_release <- function(control, output_root, validation_files) {
+  if (!is.list(control) || !all(c("ledger", "expected_scope") %in% names(control))) stop("Explicit approved A-control required")
+  allowed_control <- c("ledger", "expected_scope", "reference_method_key", "execution_times",
+    "schema", "status", "release_id", "datasets", "view", "expected_grid", "control_md5", "evaluation_axes")
+  if (any(!names(control) %in% allowed_control) || anyDuplicated(names(control)))
+    stop("Projection accepts a finite metadata control, never a loaded release/result object")
+  for (frame in list(control$ledger, control$expected_scope))
+    if (any(!vapply(frame, function(column) is.atomic(column) && is.null(dim(column)), logical(1))))
+      stop("Control ledger/scope columns must be metadata vectors")
+  parent <- validate_analysis_release(control$ledger, control$expected_scope)
+  if (!identical(names(validation_files), c("source", "runtime", "control"))) stop("Explicit validation source/runtime/control files required")
+  validation_md5 <- vapply(validation_files, function(path) {
+    hash <- unname(tools::md5sum(path)); .analysis_checked_file(path, hash); hash
+  }, character(1))
+  if (file.info(validation_files[["control"]])$size > 16 * 1024^2) stop("Parent control must be small metadata")
+  if (!identical(readRDS(validation_files[["control"]]), control)) stop("Approved parent control differs from frozen control")
+  if (.analysis_exists(output_root) || !grepl("^/", output_root)) stop("Projection root must be new and absolute")
+  if (!dir.create(output_root) || !identical(normalizePath(output_root), output_root)) stop("Projection root is not canonical")
+  dir.create(file.path(output_root, "parents")); dir.create(file.path(output_root, "receipts"))
+  for (field in names(validation_files))
+    if (!file.copy(validation_files[[field]], file.path(output_root, "parents", paste0("validation.", field)), overwrite = FALSE))
+      stop("Cannot freeze validation identity")
+  ledger <- parent; attr(ledger, "receipts") <- NULL
+  receipts <- attr(parent, "receipts")
+  for (dataset in unique(parent$dataset)) {
+    selected <- which(parent$dataset == dataset)
+    # Whole RNA-bearing aggregates are deserialized only on HPC, one cohort
+    # at a time. No original aggregate or cache is copied into this root.
+    loaded <- load_analysis_release(parent[selected, , drop = FALSE],
+      control$expected_scope[match(.analysis_key(parent[selected, , drop = FALSE]), .analysis_key(control$expected_scope)), , drop = FALSE])
+    for (j in seq_along(selected)) {
+      i <- selected[j]; item <- loaded[[j]]; original <- receipts[[i]]
+      parent_row <- parent[i, , drop = FALSE]
+      suffix <- if (parent_row$kind == "metadata_feather") ".feather" else ".rds"
+      path <- file.path(output_root, paste0(i, suffix))
+      thin <- if (parent_row$kind == "metadata_feather") item$result else .analysis_thin_result(item)
+      if (parent_row$kind == "metadata_feather") {
+        if (!file.copy(parent_row$artifact_path, path, overwrite = FALSE)) stop("Cannot copy selected sample metadata")
+        ledger$bundle_key[i] <- ""
+      } else {
+        .analysis_save_new(setNames(list(thin), parent_row$method_key), path)
+        ledger$kind[i] <- "rds_bundle"; ledger$bundle_key[i] <- parent_row$method_key
+      }
+      ledger$artifact_path[i] <- path; ledger$run_root[i] <- output_root
+      ledger$md5[i] <- unname(tools::md5sum(path))
+      parent_receipt_copy <- paste0("parents/", i, ".receipt")
+      parent_evidence_copy <- paste0("parents/", i, ".evidence")
+      for (pair in list(c(parent_row$receipt_path, parent_receipt_copy), c(original$evidence_path, parent_evidence_copy))) {
+        if (file.info(pair[1])$size > 16 * 1024^2 || !file.copy(pair[1], file.path(output_root, pair[2]), overwrite = FALSE))
+          stop("Parent review evidence must be bounded metadata")
+      }
+      proof <- list(schema = "ecoda_analysis_projection_v1", dataset = parent_row$dataset, view = parent_row$view,
+        method_key = parent_row$method_key, origin = original$origin, parent = as.list(parent_row),
+        parent_receipt_copy = parent_receipt_copy, parent_evidence_copy = parent_evidence_copy,
+        output_md5 = ledger$md5[i], bundle_key = ledger$bundle_key[i],
+        distance_md5 = .analysis_fingerprint(item$result$dist_mat), labels_md5 = .analysis_fingerprint(item$result$labels),
+        original_feature_count = thin$n_features, retained_fields = names(thin),
+        validation_md5 = validation_md5)
+      proof_path <- file.path(output_root, "receipts", paste0(i, ".projection.rds"))
+      .analysis_save_new(proof, proof_path)
+      receipt <- original
+      for (field in c("dataset", "view", "method_key", "kind", "artifact_path", "bundle_key", "run_root", "md5"))
+        receipt[[field]] <- as.character(ledger[[field]][i])
+      receipt$projection_schema <- proof$schema
+      receipt$evidence <- "Metadata-only projection; parent scientific origin unchanged; not a new fit"
+      receipt$evidence_path <- proof_path; receipt$evidence_md5 <- unname(tools::md5sum(proof_path))
+      ledger$receipt_path[i] <- file.path(output_root, "receipts", paste0(i, ".receipt.rds"))
+      .analysis_save_new(receipt, ledger$receipt_path[i]); ledger$receipt_md5[i] <- unname(tools::md5sum(ledger$receipt_path[i]))
+      .analysis_checked_file(parent_row$artifact_path, parent_row$md5)
+      .analysis_checked_file(parent_row$receipt_path, parent_row$receipt_md5)
+      .analysis_checked_file(original$evidence_path, original$evidence_md5)
+    }
+    rm(loaded, item, thin)
+    invisible(gc(FALSE))
+  }
+  control$ledger <- ledger
+  if (!is.null(control$execution_times)) {
+    timing <- control$execution_times
+    .analysis_checked_file(timing$artifact_path, timing$md5)
+    timing_frame <- as.data.frame(arrow::read_feather(timing$artifact_path))
+    if (!all(c("dataset", "method", "time_secs", "mem_GB") %in% names(timing_frame)) ||
+        any(!vapply(timing_frame, function(column) is.atomic(column) && is.null(dim(column)), logical(1))))
+      stop("Execution-time input must be a compact timing table")
+    path <- file.path(output_root, "execution_times.feather")
+    if (!file.copy(timing$artifact_path, path, overwrite = FALSE)) stop("Cannot copy explicit timing metadata")
+    .analysis_checked_file(path, timing$md5)
+    control$execution_times$artifact_path <- path
+    control$execution_times$parent_artifact_path <- timing$artifact_path
+  }
+  validate_analysis_release(ledger, control$expected_scope, require_projection = TRUE)
+  for (dataset in unique(ledger$dataset)) {
+    selected <- ledger$dataset == dataset
+    checked <- load_analysis_release(ledger[selected, , drop = FALSE],
+      control$expected_scope[match(.analysis_key(ledger[selected, , drop = FALSE]), .analysis_key(control$expected_scope)), , drop = FALSE],
+      require_projection = TRUE)
+    rm(checked)
+  }
+  .analysis_save_new(control, file.path(output_root, "analysis_release.rds"))
+  paths <- .analysis_projection_paths(control, output_root)
+  inventory <- data.frame(path = paths, md5 = unname(tools::md5sum(paths)))
+  tmp <- tempfile(".projection-inventory-", tmpdir = output_root)
+  on.exit(unlink(tmp), add = TRUE)
+  utils::write.table(inventory, tmp, sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+  if (!file.link(tmp, file.path(output_root, "files.tsv"))) stop("Cannot publish projection inventory")
+  invisible(control)
 }

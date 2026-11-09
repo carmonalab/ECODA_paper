@@ -39,6 +39,15 @@ receipt <- function(i, origin = if (i == 4) "new" else "legacy_reuse") {
 }
 for (i in seq_len(nrow(ledger))) receipt(i)
 control <- function() list(ledger = ledger, expected_scope = scope, reference_method_key = c(D = "ECODA_authors_HR"))
+load_raw_benchmark_release <- load_benchmark_analysis_release
+load_benchmark_analysis_release <- function(control, ...) {
+  path <- tempfile("parent-control-", tmpdir = tmp); saveRDS(control, path)
+  source <- file.path(tmp, "source.manifest"); runtime <- file.path(tmp, "runtime.identity")
+  writeLines("test source", source); writeLines("test runtime", runtime)
+  projected <- project_analysis_release(control, tempfile("projection-", tmpdir = tmp),
+    c(source = source, runtime = runtime, control = path))
+  load_raw_benchmark_release(projected, ...)
+}
 control_path <- file.path(tmp, "control.rds"); saveRDS(control(), control_path)
 stopifnot(identical(read_benchmark_analysis_control(control_path, md5(control_path)), control()))
 fail(read_benchmark_analysis_control(control_path, strrep("0", 32)))
@@ -69,7 +78,9 @@ fail(load_benchmark_analysis_release(control(), datasets, scorer))
 saveRDS(bundle, standalone); ledger$md5[4] <- md5(standalone); receipt(4)
 # scITD is the sole permitted sample-dropping method, and only with exact IDs.
 reduced <- bundle; reduced$feat_mat <- features[-6, ]; reduced$dist_mat <- dist(reduced$feat_mat); reduced$labels <- labels[-6]
-identity <- release$loaded[[1]]$identity; identity$method_key <- "scITD_hvg2000_factors5"
+stopifnot(is.null(release$loaded), is.list(release$control))
+identity <- release$provenance[[paste("D", methods[1], sep = "/")]]$primary$source_identity
+identity$method_key <- "scITD_hvg2000_factors5"
 fail(evaluate_release_result(reduced, "D", "benchmark_analysis", identity$method_key,
   list(primary = labels), "primary", score_fn = scorer, source_identity = identity))
 stopifnot(nrow(evaluate_release_result(reduced, "D", "benchmark_analysis", identity$method_key,
@@ -118,5 +129,26 @@ for (line in lines) {
   if (active) code <- c(code, line)
 }
 stopifnot(!active, chunks > 50L)
+# Cohort streaming is an observable boundary: neither the source projector nor
+# maintained intake may pass more than one cohort to the payload reader.
+two <- control(); extra_ledger <- ledger; extra_ledger$dataset <- "E"
+extra_scope <- scope; extra_scope$dataset <- "E"
+for (i in seq_len(nrow(extra_ledger))) {
+  old_receipt <- readRDS(ledger$receipt_path[i]);old_receipt$dataset <- "E"
+  extra_ledger$receipt_path[i] <- file.path(tmp,paste0("E",i,".receipt.rds"))
+  saveRDS(old_receipt,extra_ledger$receipt_path[i]);extra_ledger$receipt_md5[i] <- md5(extra_ledger$receipt_path[i])
+}
+two$ledger <- rbind(ledger,extra_ledger);two$expected_scope <- rbind(scope,extra_scope)
+two$reference_method_key <- c(D="ECODA_authors_HR",E="ECODA_authors_HR")
+reader <- load_analysis_release; cohorts_read <- list()
+load_analysis_release <- function(ledger,...) {
+  cohorts_read[[length(cohorts_read)+1L]] <<- unique(ledger$dataset)
+  reader(ledger,...)
+}
+streamed <- load_benchmark_analysis_release(two,c(datasets,list(E=datasets$D)),scorer)
+load_analysis_release <- reader
+stopifnot(length(cohorts_read)>=4L,all(lengths(cohorts_read)==1L),is.null(streamed$loaded),
+  nrow(streamed$core_scores)==40L,is.null(streamed$results$bmark$E$Pseudobulk_hvg2000$feat_mat),
+  streamed$results$bmark$E$Pseudobulk_hvg2000$n_features==3L)
 unlink(tmp, recursive = TRUE)
 cat("benchmark release reports: PASS; parsed", chunks, "R chunks\n")

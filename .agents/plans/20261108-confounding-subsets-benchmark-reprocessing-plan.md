@@ -2511,12 +2511,71 @@ P6 bounded observations completed meanwhile:
   No HiTME variance grid/PILOT-GM noncanonical expansion or optional9QC rows.
   Twenty derived rows are reuse/compatibility candidates, not new fits;
   Stephenson's two need current53-compatible metadata results. Old fast-obs
-  CSVs exist locally as compact sample×cluster metadata; oldSteph55 cannot
-  be repaired by merely dropping2rows because current clustering categories
-  differ (res50 866vs881; Harmony34vs31). No new RNA/PCA/Harmony/Leiden fit
-  is needed to tally the current saved cluster labels.
+  CSVs exist locally as compact sample×cluster metadata; oldSteph55 is not
+  valid for current53 without an exact current count/label comparison. Current
+  category-array lengths866/34 versus old active counts881/31 show a schema
+  difference, not by themselves proof of active assignment differences. No
+  new RNA/PCA/Harmony/Leiden fit is needed to tally saved current labels.
 - P6 projection/mirroring/streaming code and focused tests are green but FROZEN
   and not independently released/committed. Exact scientific origins and NULL
   permutations remain preserved, local RNA guards precede reads, and a future
   oneCPU64G2h pinned projection worker is prepared. Urgent failure diagnosis
   takes priority; no production projections/figures or extra gate has run.
+
+
+### Compact analysis code accepted; all contexts submitted — 2026-11-09
+
+At09:32:56Z benchmark had all18planned remaining method arrays/18watchdogs,
+uncorrected all7/7, and corrected had begun its7-group method submission.
+At09:34:10Z a SINGLE user-requested live queue snapshot, restricted to the
+29then-recorded method-array roots, showed5benchmark tasksRUNNING/28PENDING,
+5uncorrectedRUNNING/42PENDING, corrected32PENDING. This is a time-stamped live
+snapshot, not a periodic polling/accounting loop or a claim that every task
+is running. Metadata evidence is
+`.gate/main_recovery_failure_20261109_v2/live_queue_snapshot.json`.
+The only observed failure remains GloScope4665516_2; its watchdog reports
+non-OOMFAIL, while MOFA7, BassezHR pseudobulk parameters, and the new zeroimp
+group watchdogs reportOK. Keep successful work and let all independent jobs
+finish before final accounting/targeted recovery.
+
+Independent review accepted the P6 code package (no production run yet):
+`analysis_release.R`, benchmark helper, batch helper, projection entry, and
+focused projection/ledger/benchmark/supplement/cell-depth/batch tests.
+Local intake rejects unprojected RNA-bearing RDS before reading it; thin
+projections keep exact distances/labels/NULL/drop IDs/scalar scores/timing and
+only the finite CT-feature whitelist. Per-cohort streaming avoids retaining
+whole RNA releases. Explicit copied-root→local-root mirroring changes only
+new access metadata/receipts/control hashes; raw copies, witnesses and parent
+scientific origins are preserved. A fresh projection cannot launder legacy
+data into required-new rows.
+
+The projection entry uses the established oneCPU64G2h controller/worker and
+pinned immutable runtime pattern; it records a returned scheduler ID even on
+worker failure. Read-only --validate installs no mutating failure trap and
+requires current-run stage5/OK ownership of root, inventory and each payload.
+Negative validation tests preserve old evidence/owners byte-for-byte. All
+focused independent tests passed; protectedRplots.pdf hash is unchanged.
+No projection/evidence compute gate is launched during the active same-group
+wave; no RNA data was transferred locally and no figure is claimed refreshed.
+
+The remaining maintained active unnumbered true-feature PCA panels need a
+separate bounded metadata-coordinate extension:11PB_hvg2000 cases plus4Pelka
+latent/CT cases, with genuine source-feature PC1/2, explained variances and
+selected5(top7Bassez)loading arrows. Full-space scores stay separate; do not
+substitute distance-profile PCA for feature PCA. Numbered CT panels are
+already covered. Avg_PCA_embedding score comparisons require no coordinate
+export. The explicit old matched-allcell/55sample manual diagnostics stay
+historical unless reopened. Bassez E/NE display must meanExpander/Non-expander,
+not clinical responder categories. No coordinate extension or gene feature
+localization has been implemented by this checkpoint.
+
+Zeroimp code-history audit adds compatibility evidence, not new provenance:
+canonical LISI normalization/clamping dates toJuly15, before NASAug25–27;
+parsed relevant score/zeroimp functions match current definitions, apart from
+ANOSIM execution parallelism with the same statistic. All31required and6
+multLN settings are present in every NASsummary; missing8settings are only
+try-wrapped conditionalmultRepl branches. Actual producer/runtime and current
+count/label compatibility remain unproven until the bounded science audit.
+No9zeroimp reruns or LISI reinversion are justified by current evidence.
+Machine evidence `/private/tmp/ecoda-zeroimp-policy-audit-v1/policy_evidence.json`,
+SHA256 `801c827a3d425aa224d802864cf29ee954153ab0146a7a3ae526f13ecd7f154a`.

@@ -37,13 +37,16 @@ load_benchmark_analysis_release <- function(control, datasets, score_fn = calc_s
     if (sum(bl) != 1L || !isTRUE(scope$require_new[bl]))
       stop("Every benchmark dataset requires its new pseudobulk BL result: ", dataset)
   }
-  loaded <- load_analysis_release(ledger, scope)
+  validate_analysis_release(ledger, scope, require_projection = TRUE)
   reserved <- c("__dataset_metadata__", "__sample_metadata__", "__trans__", "__zeroimp__")
   result_list <- list(bmark = list(), trans = list(), zeroimp = list())
   scores <- diagnostics <- provenance <- statistics <- list()
   diagnostic_metrics <- c("mod_knnsqrtn_score", "mod_knn6_score", "mod_knn9_score")
   for (dataset in selected) {
-    rows <- loaded[vapply(loaded, function(x) identical(x$source$dataset, dataset), logical(1))]
+    take <- ledger$dataset == dataset & !ledger$method_key %in% c("__trans__", "__zeroimp__")
+    rows <- load_analysis_release(ledger[take, , drop = FALSE],
+      scope[match(.analysis_key(ledger[take, , drop = FALSE]), .analysis_key(scope)), , drop = FALSE],
+      require_projection = TRUE)
     keys <- vapply(rows, function(x) x$source$method_key, character(1))
     reference_key <- references[[dataset]]
     if (!reference_key %in% keys || grepl("NULL", reference_key) || grepl("^scITD", reference_key))
@@ -79,8 +82,6 @@ load_benchmark_analysis_release <- function(control, datasets, score_fn = calc_s
       item <- rows[[i]]
       method <- unname(keys[i])
       if (method %in% reserved) {
-        if (method == "__trans__") result_list$trans[[dataset]] <- item$result
-        if (method == "__zeroimp__") result_list$zeroimp[[dataset]] <- item$result
         next
       }
       if (grepl("^ECODA_PB_combo_", method)) stop("Legacy ECODA_PB_combo methods are outside publication scope")
@@ -105,7 +106,9 @@ load_benchmark_analysis_release <- function(control, datasets, score_fn = calc_s
       frame$method <- frame$method_key
       frame$score <- frame$metric
       frame$n_samples <- length(bundle$labels)
-      frame$n_features <- if (is.null(bundle$feat_mat)) NA_integer_ else ncol(bundle$feat_mat)
+      frame$n_features <- if (is.null(bundle$feat_mat)) {
+        if (is.null(bundle$n_features)) NA_integer_ else bundle$n_features
+      } else ncol(bundle$feat_mat)
       scores[[length(scores) + 1L]] <- frame
       provenance[[paste(dataset, method, sep = "/")]] <- evaluated$provenance
       # Keep the existing neighborhood diagnostics explicitly separate from
@@ -121,6 +124,8 @@ load_benchmark_analysis_release <- function(control, datasets, score_fn = calc_s
         diagnostics[[length(diagnostics) + 1L]] <- extra
       }
     }
+    rm(rows, reference, metadata, item, bundle, evaluated)
+    invisible(gc(FALSE))
   }
   frame <- do.call(rbind, scores)
   expected_grid <- frame[c("dataset", "view", "evaluation_id", "method_key", "metric")]
@@ -132,11 +137,12 @@ load_benchmark_analysis_release <- function(control, datasets, score_fn = calc_s
   }
   list(results = result_list, scores = rbind(frame, if (length(diagnostics)) do.call(rbind, diagnostics)),
        core_scores = frame, expected_grid = expected_grid, statistics = do.call(rbind, statistics),
-       provenance = provenance, loaded = loaded)
+       provenance = provenance, control = list(ledger = ledger, expected_scope = scope))
 }
 
 read_benchmark_analysis_control <- function(path, md5) {
   path <- .analysis_checked_file(path, md5)
+  if (file.info(path)$size > 16 * 1024^2) stop("Analysis control must be small metadata")
   control <- readRDS(path)
   .analysis_checked_file(path, md5)
   control
@@ -196,29 +202,30 @@ plot_benchmark_raw_metric <- function(frame, metric, method_order = unique(as.ch
 }
 
 benchmark_reviewed_screen_rows <- function(release, analysis, datasets) {
-  if (!analysis %in% c("trans", "zeroimp") || !is.list(release$loaded) || !length(datasets) || anyDuplicated(datasets))
+  if (!analysis %in% c("trans", "zeroimp") || !is.list(release$control) || !length(datasets) || anyDuplicated(datasets))
     stop("Explicit reviewed supplemental release and dataset scope are required")
   key <- paste0("__", analysis, "__")
-  items <- release$loaded[vapply(release$loaded, function(x)
-    identical(x$source$method_key, key) && identical(x$source$view, "benchmark_analysis") &&
-      x$source$dataset %in% datasets, logical(1))]
-  selected <- vapply(items, function(x) x$source$dataset, character(1))
-  if (anyDuplicated(selected) || !setequal(selected, datasets))
+  ledger <- release$control$ledger
+  ledger <- ledger[ledger$method_key == key & ledger$view == "benchmark_analysis" & ledger$dataset %in% datasets, , drop = FALSE]
+  if (anyDuplicated(ledger$dataset) || !setequal(ledger$dataset, datasets))
     stop("Every selected dataset requires its explicit reviewed ", key, " ledger row")
-  for (item in items) {
-    .analysis_checked_file(item$source$artifact_path, item$source$md5)
-    .analysis_checked_file(item$source$receipt_path, item$source$receipt_md5)
-    if (!identical(item$receipt$status, "reviewed") ||
-        (analysis == "trans" && !identical(item$receipt$origin, "new")))
-      stop("Transformation screens require the reviewed new producer; no historical summary fallback")
-  }
-  items[match(datasets, selected)]
+  ledger[match(datasets, ledger$dataset), , drop = FALSE]
+}
+
+benchmark_load_screen_row <- function(release, row) {
+  scope <- release$control$expected_scope
+  scope <- scope[match(.analysis_key(row), .analysis_key(scope)), , drop = FALSE]
+  item <- load_analysis_release(row, scope, require_projection = TRUE)[[1L]]
+  if (row$method_key == "__trans__" && !identical(item$receipt$origin, "new"))
+    stop("Transformation screens require the reviewed new producer; no historical summary fallback")
+  item
 }
 
 benchmark_zeroimp_scores <- function(release, datasets) {
   items <- benchmark_reviewed_screen_rows(release, "zeroimp", datasets)
   frames <- list()
-  for (item in items) {
+  for (i in seq_len(nrow(items))) {
+    item <- benchmark_load_screen_row(release, items[i, , drop = FALSE])
     methods <- item$result
     if (!is.list(methods) || !length(methods) || is.null(names(methods)) ||
         anyDuplicated(names(methods)) || any(!nzchar(names(methods)))) stop("Malformed reviewed zero-imputation results")
@@ -235,6 +242,7 @@ benchmark_zeroimp_scores <- function(release, datasets) {
       frames[[length(frames) + 1L]] <- data.frame(dataset = item$source$dataset,
         method = method, score = metrics, value = unname(values))
     }
+    rm(item, methods)
   }
   benchmark_validate_screen_scores(do.call(rbind, frames))
 }
@@ -246,7 +254,8 @@ benchmark_transformation_scores <- function(release, datasets) {
   items <- benchmark_reviewed_screen_rows(release, "trans", datasets)
   columns <- transformation_analysis_policy()$score_columns
   frames <- list()
-  for (item in items) {
+  for (j in seq_len(nrow(items))) {
+    item <- benchmark_load_screen_row(release, items[j, , drop = FALSE])
     table <- item$result
     validate_transformation_result(table)
     for (i in seq_len(nrow(table))) {
@@ -254,6 +263,7 @@ benchmark_transformation_scores <- function(release, datasets) {
         method = table$trans_method[i], score = names(columns),
         value = vapply(unname(columns), function(column) table[[column]][i], numeric(1)))
     }
+    rm(item, table)
   }
   benchmark_validate_screen_scores(do.call(rbind, frames))
 }
@@ -1574,7 +1584,7 @@ load_derived_cell_subsetting <- function(
         !isTRUE(control$expected_scope$require_new) ||
         control$expected_scope$method_key != "ECODA_authors_HR_cell_subsetting")
       stop("Current cell-depth output requires one required-new reviewed artifact")
-    entries <- load_analysis_release(control$ledger, control$expected_scope)
+    entries <- load_analysis_release(control$ledger, control$expected_scope, require_projection = TRUE)
     entry <- entries[[1L]]; raw <- entry$result; rds_path <- entry$source$artifact_path
     if (!identical(raw$schema, "ecoda_cell_depth_five_v1") ||
         !identical(raw$scoring_policy, evaluation_scoring_policy()) ||
@@ -1922,6 +1932,12 @@ flag_drop_annotation_methods <- function(df) {
 
 # Annotation cell-type counts
 annotation_cell_type_count <- function(bundle, method, dataset) {
+  if (!is.null(bundle$cell_type_names)) {
+    names <- trimws(as.character(bundle$cell_type_names))
+    if (!length(names) || anyNA(names) || any(!nzchar(names)) || anyDuplicated(names) ||
+        any(names %in% c("NA", "nan", "None", "Unknown"))) stop("Invalid projected cell-type identities")
+    return(length(names))
+  }
   if (is.null(bundle) || !"feat_mat" %in% names(bundle)) {
     stop(
       "Missing feature matrix for annotation method '", method,

@@ -128,7 +128,7 @@ artifact<-file.path(root,"screen.rds");saveRDS(package,artifact)
 row<-data.frame(dataset="ALL",view="benchmark_analysis",method_key="ECODA_authors_HR_cell_subsetting",kind="standalone_result",
  artifact_path=artifact,bundle_key="",run_root=root,md5=md5(artifact),receipt_path=file.path(root,"output.receipt.rds"),receipt_md5="")
 receipt<-c(as.list(row[c("dataset","view","method_key","kind","artifact_path","bundle_key","run_root","md5")]),
- list(schema="ecoda_analysis_release_receipt_v1",status="reviewed",origin="new",input_md5=md5(input),source_policy="screen-v1",
+ list(schema="ecoda_analysis_release_receipt_v1",status="reviewed",origin="new",metadata_schema="ecoda_cell_depth_five_v1",input_md5=md5(input),source_policy="screen-v1",
  evidence="reviewed output",evidence_path=evidence,evidence_md5=md5(evidence)))
 saveRDS(receipt,row$receipt_path);row$receipt_md5<-md5(row$receipt_path)
 scope<-row[c("dataset","view","method_key")];scope$require_new<-TRUE;scope$current_input_md5<-md5(input);scope$source_policy<-"screen-v1";scope$status<-"approved"

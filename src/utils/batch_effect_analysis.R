@@ -2346,7 +2346,7 @@ read_batch_release_control <- function(path, md5, view, config_path = "datasets.
       !is.logical(selected$require_new) || anyNA(selected$require_new) || !all(selected$require_new))
     stop("Current batch release must declare every method and metadata row as required new")
   # Full receipt/identity validation precedes any score or figure work.
-  validate_analysis_release(ledger, selected)
+  validate_analysis_release(ledger, selected, require_projection = TRUE)
   control$ledger <- ledger; control$expected_scope <- selected
   control$datasets <- datasets[unique(grid$dataset)]; control$view <- view
   control$expected_grid <- grid; control$control_md5 <- md5
@@ -2359,7 +2359,7 @@ load_batch_release_dataset <- function(control, dataset, score_fn = calc_sep_sco
   if (!nrow(selected) || !dataset %in% names(control$datasets)) stop("Dataset is outside batch release")
   if (length(unique(selected$current_input_md5)) != 1L)
     stop("Method/metadata rows must establish one cohort input identity")
-  loaded <- load_analysis_release(rows, selected)
+  loaded <- load_analysis_release(rows, selected, require_projection = TRUE)
   keys <- vapply(loaded, function(entry) entry$source$method_key, character(1))
   loaded <- setNames(loaded, keys)
   metadata_entry <- loaded[["__sample_metadata__"]]

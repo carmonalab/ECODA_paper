@@ -26,20 +26,34 @@ for (i in seq_len(nrow(ledger))) {
       evidence_path = evidence, evidence_md5 = md5(evidence)))
   saveRDS(receipt, ledger$receipt_path[i]); ledger$receipt_md5[i] <- md5(ledger$receipt_path[i])
 }
-release <- list(loaded = load_analysis_release(ledger, scope))
+project_screen_control <- function(ledger, scope) {
+  control <- list(ledger=ledger, expected_scope=scope)
+  path <- tempfile("parent-control-", tmpdir=tmp); saveRDS(control,path)
+  source <- file.path(tmp,"source.manifest"); runtime <- file.path(tmp,"runtime.identity")
+  writeLines("fixture source",source);writeLines("fixture runtime",runtime)
+  list(control=project_analysis_release(control,tempfile("projection-",tmpdir=tmp),
+    c(source=source,runtime=runtime,control=path)))
+}
+reject_corrupt_screen <- function(release, analysis, mutate) {
+  path <- release$control$ledger$artifact_path[1]
+  old <- readRDS(path)
+  on.exit(saveRDS(old,path))
+  altered <- old; altered[[1L]] <- mutate(altered[[1L]])
+  saveRDS(altered,path)
+  if(analysis=="trans") reject(benchmark_transformation_scores(release,c("A","B")))
+  else reject(benchmark_zeroimp_scores(release,c("A","B")))
+}
+release <- project_screen_control(ledger,scope)
 before <- tools::md5sum(ledger$artifact_path)
 frame <- benchmark_zeroimp_scores(release, c("A", "B"))
 stopifnot(nrow(frame) == 20L, setequal(unique(frame$score), metrics),
   all(frame$value[frame$score == "lisi_score"] == 0.8),
   all(frame$value[frame$score == "mod_knn3_score"] == 0.4),
   identical(tools::md5sum(ledger$artifact_path), before))
-bad <- release; bad$loaded <- bad$loaded[-1]; reject(benchmark_zeroimp_scores(bad, c("A", "B")))
-bad <- release; bad$loaded[[1]]$result$counts_all_0.5$lisi_score <- NULL
-reject(benchmark_zeroimp_scores(bad, c("A", "B")))
-bad <- release; bad$loaded[[1]]$result$counts_all_0.5$sil_score <- NA_real_
-reject(benchmark_zeroimp_scores(bad, c("A", "B")))
-bad <- release; bad$loaded[[1]]$result$counts_all_1 <- NULL
-reject(benchmark_zeroimp_scores(bad, c("A", "B")))
+bad <- release; bad$control$ledger <- bad$control$ledger[-1,]; reject(benchmark_zeroimp_scores(bad, c("A", "B")))
+reject_corrupt_screen(release,"zeroimp",function(x){x$counts_all_0.5$lisi_score<-NULL;x})
+reject_corrupt_screen(release,"zeroimp",function(x){x$counts_all_0.5$sil_score<-NA_real_;x})
+reject_corrupt_screen(release,"zeroimp",function(x){x$counts_all_1<-NULL;x})
 reject(benchmark_validate_screen_scores(frame[-1, ]))
 reject(benchmark_validate_screen_scores(rbind(frame, frame[1, ])))
 panels <- lapply(metrics, function(metric) {
@@ -101,21 +115,21 @@ for (i in seq_len(nrow(trans_ledger))) {
       evidence_path = evidence, evidence_md5 = md5(evidence)))
   saveRDS(receipt, trans_ledger$receipt_path[i]); trans_ledger$receipt_md5[i] <- md5(trans_ledger$receipt_path[i])
 }
-trans_release <- list(loaded = load_analysis_release(trans_ledger, trans_scope))
+trans_release <- project_screen_control(trans_ledger,trans_scope)
+validated <- 0L
 trans_frame <- benchmark_transformation_scores(trans_release, c("A", "B"))
 stopifnot(nrow(trans_frame) == 60L, validated == 2L, setequal(unique(trans_frame$score), metrics),
   all(trans_frame$value[trans_frame$score == "mod_knn3_score"] == 0.4),
   all(trans_frame$value[trans_frame$score == "lisi_score"] == 0.8))
-bad <- trans_release; bad$loaded[[1]]$receipt$origin <- "legacy_reuse"
+bad <- trans_release
+receipt <- readRDS(bad$control$ledger$receipt_path[1]);receipt$origin<-"legacy_reuse"
+receipt_path<-tempfile("bad-origin-",tmpdir=tmp);saveRDS(receipt,receipt_path)
+bad$control$ledger$receipt_path[1]<-receipt_path;bad$control$ledger$receipt_md5[1]<-md5(receipt_path)
 reject(benchmark_transformation_scores(bad, c("A", "B")))
-bad <- trans_release; attr(bad$loaded[[1]]$result, "transformation_policy") <- NULL
-reject(benchmark_transformation_scores(bad, c("A", "B")))
-bad <- trans_release; bad$loaded[[1]]$result$LISI_score <- NULL
-reject(benchmark_transformation_scores(bad, c("A", "B")))
-bad <- trans_release; bad$loaded[[1]]$result$Silhouette_score[1] <- NA_real_
-reject(benchmark_transformation_scores(bad, c("A", "B")))
-bad <- release; bad$loaded[[1]]$result$counts_all_0.5$lisi_score <- 2
-reject(benchmark_zeroimp_scores(bad, c("A", "B")))
+reject_corrupt_screen(trans_release,"trans",function(x){attr(x,"transformation_policy")<-NULL;x})
+reject_corrupt_screen(trans_release,"trans",function(x){x$LISI_score<-NULL;x})
+reject_corrupt_screen(trans_release,"trans",function(x){x$Silhouette_score[1]<-NA_real_;x})
+reject_corrupt_screen(release,"zeroimp",function(x){x$counts_all_0.5$lisi_score<-2;x})
 # Parse maintained screens without executing notebook or historical diagnostics.
 lines <- readLines("notebooks/benchmark_analysis.rmd"); active <- FALSE; chunks <- 0L; code <- character()
 for (line in lines) {

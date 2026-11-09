@@ -59,7 +59,19 @@ for (view in c("batch_effect_uncorrected", "batch_effect_corrected")) {
 }
 control <- list(schema = "ecoda_batch_analysis_release_v1", status = "approved", release_id = "tiny-v1",
                 ledger = do.call(rbind, ledger), expected_scope = do.call(rbind, expected))
-control_path <- file.path(root, "release.rds"); saveRDS(control, control_path)
+parent_control_path <- file.path(root, "parent-release.rds"); saveRDS(control, parent_control_path)
+# Maintained local intake rejects original bundles before result deserialization.
+raw_error <- tryCatch(read_batch_release_control(parent_control_path, md5(parent_control_path),
+  "batch_effect_uncorrected"), error = identity)
+stopifnot(inherits(raw_error, "error"),
+          grepl("reviewed metadata projection", conditionMessage(raw_error), fixed = TRUE))
+validation_source <- file.path(root, "validation-source.txt")
+validation_runtime <- file.path(root, "validation-runtime.txt")
+writeLines("Synthetic immutable source identity", validation_source)
+writeLines("Synthetic immutable runtime identity", validation_runtime)
+control <- project_analysis_release(control, file.path(root, "projection"),
+  c(source = validation_source, runtime = validation_runtime, control = parent_control_path))
+control_path <- file.path(root, "projection", "analysis_release.rds")
 seen <- list()
 scorer <- function(distance, labels) {
   seen[[length(seen) + 1L]] <<- labels
