@@ -3624,6 +3624,19 @@ stage5_verify_precompute_binding() {
 
 stage5_pending_owner_valid() {
   local ds="$1" view="$2" method="$3" owner state promotion mapping archive target digest size root relative
+  # Only the classifier passes this private result, after exact binding/scope
+  # validation. Three-argument legacy callers retain the historical checks.
+  if [[ "${4:-0}" == 1 ]]; then
+    [[ -n "${ECODA_RUN_ID:-}" && "${RUN_ID}" == "${ECODA_RUN_ID}" &&
+       "${ECODA_ARTIFACT_BINDING:-}" == "${ECODA_RUN_ROOT}/manifests/artifact_bindings.json" &&
+       "${PASS_ARG}" == corrected &&
+       "${ANALYSIS_ROOT}" == "${ECODA_RUN_ROOT}/artifacts/batch_effect/corrected_final" ]] || return 1
+    owner="$(ecoda_owner_dir stage5 "derivative/${RUN_ID}/${PASS_ARG}/${ds}/${view}/${method}")" || return 1
+    [[ ! -e "${owner}" && ! -L "${owner}" ]] || {
+      echo "BLOCKED: fresh derivative row already has an owner: ${owner}" >&2; return 1;
+    }
+    return 0
+  fi
   owner="$(ecoda_owner_dir stage5 "${PASS_ARG}/${ds}/${view}/${method}")" || return 1
   [[ -e "${owner}" || -L "${owner}" ]] || return 0
   [[ -d "${owner}" && ! -L "${owner}" && -f "${owner}/owner" && ! -L "${owner}/owner" ]] || return 1

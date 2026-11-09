@@ -1,10 +1,48 @@
 #!/bin/bash
 # Pure residual selection: callbacks validate artifacts; only the report is written.
+stage5_pending_fresh_corrected_derivative_valid() {
+  local dispatch="$1"
+  # The historical repair lane never authorizes new excluded Python fits. A
+  # fresh derivative wave has separate, immutable roots and exact scope.
+  [[ -n "${ECODA_ARTIFACT_BINDING:-}" && "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == 1 &&
+     "${RUN_ID:-${ECODA_RUN_ID:-}}" == "${ECODA_RUN_ID:-}" &&
+     "${ECODA_RECOVERY_ACTIVE:-0}" == 0 && -z "${SYNC_ONLY_RUN:-}" &&
+     "${FORCE_ARG:-0}" == 0 && "${FORCE_TARGETED_ARG:-0}" == 0 &&
+     "${TARGET_METHODS_SET:-0}" == 0 && "${METHOD_MATRIX_MODE:-0}" == 0 &&
+     -z "${EXPECTED_PENDING_ARG:-}${ECODA_EXPECTED_PENDING:-}${PRECOMPUTE_BACKUP_RECEIPT_ARG:-}${ECODA_PRECOMPUTE_BACKUP_RECEIPT:-}" &&
+     "${PASS_ARG:-}" == corrected && "${ANALYSIS_VARIANT:-${ANALYSIS_VARIANT_ARG:-}}" == corrected_final &&
+     "${METHODS_ARG:-}" == prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot ]] || return 1
+  command -v ecoda_derivative_stage5_validate >/dev/null 2>&1 || return 1
+  ecoda_derivative_stage5_validate corrected corrected_final || return 1
+  [[ "${ANALYSIS_ROOT}" == "${ECODA_RUN_ROOT}/artifacts/batch_effect/corrected_final" &&
+     "${dispatch}" == "${ECODA_RUN_ROOT}/manifests/dispatch_selection.tsv" ]] || return 1
+  "${PYTHON_BIN}" - "${ECODA_ARTIFACT_BINDING}" "${dispatch}" "${DATASETS_JSON_FILE}" <<'PY'
+import itertools,json,pathlib,sys
+binding=json.loads(pathlib.Path(sys.argv[1]).read_text());run=pathlib.Path(binding['run_root'])
+config=json.loads(pathlib.Path(sys.argv[3]).read_text())
+permitted={d for d,v in config.items() if not d.startswith('_') and v.get('use_for_batch_effect') is True}
+view='batch_effect_corrected'
+methods=('prepare_pseudobulk','pseudobulk','gloscope','composition','mrvi','pilot','qot')
+if binding.get('requested_selection') or binding['selection']!=str(run/'manifests/selection.tsv'):
+    raise SystemExit('BLOCKED: fresh corrected derivative selection identity differs')
+selection=[tuple(line.split('\t')) for line in pathlib.Path(binding['selection']).read_text().splitlines()]
+datasets={row[0] for row in selection if len(row)==3}
+rows=[tuple(line.split('\t')) for line in pathlib.Path(sys.argv[2]).read_text().splitlines()]
+expected_rows={(d,view,m) for d,m in itertools.product(datasets,methods)}
+if not datasets or not datasets<=permitted or len(selection)!=len(datasets) or any(len(r)!=3 or not all(r) or r[1]!=view for r in selection) or len(rows)!=len(expected_rows) or set(rows)!=expected_rows:
+    raise SystemExit('BLOCKED: fresh corrected derivative dispatch differs from its exact selected cohort/family scope')
+PY
+}
+
 stage5_classify_pending_rows() {
   local dispatch="$1" output="$2" ds view method extra path key pending="" needed="" seen=""
   local corrected=0
+  local fresh_derivative=0
   [[ "${ANALYSIS_VARIANT:-${ANALYSIS_VARIANT_ARG:-}}" == corrected_final ]] && corrected=1
   [[ -f "${dispatch}" && ! -L "${dispatch}" && -r "${dispatch}" ]] || return 1
+  if [[ ${corrected} -eq 1 ]] && stage5_pending_fresh_corrected_derivative_valid "${dispatch}"; then
+    fresh_derivative=1
+  fi
   while IFS=$'\t' read -r ds view method extra; do
     [[ -n "${ds}" && -n "${view}" && -n "${method}" && -z "${extra}" ]] || return 1
     key="${ds}/${view}/${method}"
@@ -17,10 +55,13 @@ stage5_classify_pending_rows() {
     fi
     if [[ ${corrected} -eq 1 ]]; then
       if command -v stage5_pending_owner_valid >/dev/null 2>&1; then
-        stage5_pending_owner_valid "${ds}" "${view}" "${method}" || return 1
+        stage5_pending_owner_valid "${ds}" "${view}" "${method}" "${fresh_derivative}" || return 1
       fi
       case "${method}" in
-        mrvi|pilot|qot) echo "BLOCKED: excluded Python row ${key} is not strictly reusable" >&2; return 1 ;;
+        mrvi|pilot|qot)
+          [[ ${fresh_derivative} -eq 1 ]] || {
+            echo "BLOCKED: excluded Python row ${key} is not strictly reusable" >&2; return 1;
+          } ;;
       esac
       benchmark_artifacts_for "${ds}" "${view}" "${method}" || return 1
       for path in ${ARTIFACT_PATHS[@]+"${ARTIFACT_PATHS[@]}"}; do
@@ -54,7 +95,7 @@ stage5_classify_pending_rows() {
     case " ${pending} " in
       *" ${key} "*)
         if command -v stage5_pending_owner_valid >/dev/null 2>&1; then
-          stage5_pending_owner_valid "${ds}" "${view}" "${method}" || return 1
+          stage5_pending_owner_valid "${ds}" "${view}" "${method}" "${fresh_derivative}" || return 1
         fi
         if [[ ${corrected} -eq 1 && "${method}" == prepare_pseudobulk ]]; then
           benchmark_artifacts_for "${ds}" "${view}" "${method}" || return 1
