@@ -22,7 +22,7 @@ source "${ECODA_SOURCE_ROOT}/src/slurm_config.sh"
 source "${ECODA_SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
 source "${ECODA_SOURCE_ROOT}/src/5_run_benchmark_methods/scheduler_recorder_fixture.sh"
 child="${ECODA_RUN_ID}"; context="${child#*_}"
-selection=""; methods_seen=0; prepared=""; prepared_sha=""; method_matrix=""
+selection=""; methods_seen=0; prepared=""; prepared_sha=""; method_matrix=""; gpu_policy=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --selection-file) selection="$2" ;;
@@ -33,12 +33,19 @@ while [[ $# -gt 0 ]]; do
     --prepared-adoption) prepared="$2" ;;
     --prepared-adoption-sha256) prepared_sha="$2" ;;
     --method-matrix) method_matrix="$2" ;;
+    --gpu-policy) [[ "${context}" != benchmark ]]; gpu_policy="$2" ;;
     *) exit 1 ;;
   esac
   shift 2
 done
 [[ "${selection}" == */manifests/campaign_"${context}".selection.tsv ]]
 [[ "${context}" == benchmark || ${methods_seen} -eq 1 ]]
+if [[ "${context}" == benchmark || "${CAMPAIGN_EXPECT_BATCH_GPU_POLICY:-auto}" == auto ]]; then
+  [[ -z "${gpu_policy}" ]]
+else
+  [[ "${gpu_policy}" == "${CAMPAIGN_EXPECT_BATCH_GPU_POLICY}" ]]
+  mkdir -p "${CAMPAIGN_BARRIER}"; printf '%s\n' "${gpu_policy}" > "${CAMPAIGN_BARRIER}/${context}.gpu_policy"
+fi
 if [[ "${CAMPAIGN_EXPECT_ADOPTION:-0}" == 1 &&
       ",${CAMPAIGN_EXPECT_ADOPTION_CONTEXTS:-benchmark,uncorrected,corrected}," == *,"${context}",* ]]; then
   [[ "${prepared}" == */manifests/campaign_prepared_adoption.json &&
@@ -130,22 +137,25 @@ parent="${HPC_ROOT}/_ecoda_runs/campaign_success"
 grep -q '^STATE=OK$' "${parent}/status/terminal"
 for spec in 'pair benchmark corrected' 'single corrected'; do
   set -- ${spec}; prefix="$1"; shift; count=$#
+  policy=auto; policy_args=()
   make_contexts "${prefix}" "$@" > "${TMP_DIR}/${prefix}.tsv"
   if [[ "${prefix}" == pair ]]; then
     printf 'Stephenson\tbatch_effect_corrected\tqot\n' > "${TMP_DIR}/corrected.matrix.tsv"
     awk -v matrix="${TMP_DIR}/corrected.matrix.tsv" 'BEGIN{FS=OFS="\t"} $1=="corrected" {$5=matrix} {print}' \
       "${TMP_DIR}/${prefix}.tsv" > "${TMP_DIR}/${prefix}.matrix.tsv"
     cp "${TMP_DIR}/${prefix}.matrix.tsv" "${TMP_DIR}/${prefix}.tsv"
+    policy=any; policy_args=(--batch-gpu-policy any)
   fi
   export CAMPAIGN_BARRIER="${TMP_DIR}/${prefix}-barrier"
   HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" NAS_TARGET_DIR="${NAS_BASE}" \
-    ECODA_RUN_ID="campaign_${prefix}" CAMPAIGN_EXPECT_CHILDREN="${count}" \
+    ECODA_RUN_ID="campaign_${prefix}" CAMPAIGN_EXPECT_CHILDREN="${count}" CAMPAIGN_EXPECT_BATCH_GPU_POLICY="${policy}" \
     bash "${SOURCE_TREE}/src/5_run_benchmark_methods/stage5_campaign.sh" \
-      --contexts "${TMP_DIR}/${prefix}.tsv" --derivative-release test-release > "${TMP_DIR}/${prefix}.log"
+      --contexts "${TMP_DIR}/${prefix}.tsv" --derivative-release test-release ${policy_args[@]+"${policy_args[@]}"} > "${TMP_DIR}/${prefix}.log"
   [[ $(wc -l < "${HPC_ROOT}/_ecoda_runs/campaign_${prefix}/manifests/campaign_scheduler_ids.tsv" | tr -d ' ') == "${count}" ]]
   [[ ! -e "${HPC_ROOT}/_ecoda_runs/${prefix}_uncorrected" ]]
 done
 cmp "${TMP_DIR}/corrected.matrix.tsv" "${HPC_ROOT}/_ecoda_runs/campaign_pair/manifests/campaign_corrected.method_matrix.tsv"
+[[ -f "${TMP_DIR}/pair-barrier/corrected.gpu_policy" && ! -e "${TMP_DIR}/pair-barrier/benchmark.gpu_policy" ]]
 [[ $(wc -l < "${parent}/manifests/campaign_scheduler_ids.tsv" | tr -d ' ') == 3 ]]
 cmp "${TMP_DIR}/benchmark.selection.tsv" "${parent}/manifests/campaign_benchmark.selection.tsv"
 [[ $(find "${TMP_DIR}/barrier" -name '*.started' | wc -l | tr -d ' ') == 3 ]]
@@ -153,7 +163,7 @@ cmp "${TMP_DIR}/benchmark.selection.tsv" "${parent}/manifests/campaign_benchmark
 import hashlib,pathlib,sys
 root=pathlib.Path(sys.argv[1]); manifest=root/'manifests'
 identities=[line.split('\t') for line in (manifest/'campaign_identities.tsv').read_text().splitlines()]
-assert len(identities)==6
+assert len(identities)==7
 for name,expected in identities:
     target=pathlib.Path(name)
     assert target.parent==manifest and hashlib.sha256(target.read_bytes()).hexdigest()==expected

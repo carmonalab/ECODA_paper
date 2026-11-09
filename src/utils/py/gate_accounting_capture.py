@@ -260,7 +260,7 @@ def create_campaign_capture(*, gate_manifest, inspect, profile, run_root):
             or not {row[0] for row in context_rows} <= set(expected_views)
             or len({row[1] for row in context_rows}) != len(context_rows) or len(original_rows) != len(context_rows)
             or [len(row) for row in original_rows] != [len(row) for row in context_rows]
-            or any(not all(row) or (len(row) == 5 and row[0] != "corrected") for row in context_rows + original_rows)
+            or any(not all(row) or (len(row) == 5 and row[0] == "benchmark") for row in context_rows + original_rows)
             or [(row[0], row[1]) for row in original_rows] != [(row[0], row[1]) for row in context_rows]):
         raise ValueError("campaign requires one to three exact unique selected context/child rows")
     sealed_hashes = {}
@@ -272,6 +272,23 @@ def create_campaign_capture(*, gate_manifest, inspect, profile, run_root):
     scheduler_capture = _receipt(paths, folder / "campaign_scheduler_ids.tsv")
     declared = [line.split("\t") for line in scheduler_capture.decode().splitlines()]
     actual, children, scope_paths = [], [], set()
+    policy_path = folder / "campaign_batch_gpu_policy.tsv"
+    policy_flags = [wrapper[i+1] for i, flag in enumerate(wrapper[:-1]) if flag == "--batch-gpu-policy"]
+    if len(policy_flags) > 1:
+        raise ValueError("duplicate campaign batch GPU policy")
+    if policy_path.exists() or policy_path.is_symlink():
+        policy_data = _receipt(paths, policy_path, producer="stage5_campaign_scope")
+        policy = policy_data.decode().rstrip("\n")
+        metadata = _fields(_remember(paths, parent / "metadata"))
+        if (policy not in {"auto", "default", "any"} or policy_data != (policy + "\n").encode()
+                or policy != (policy_flags[0] if policy_flags else "auto")
+                or sealed_hashes.get(str(policy_path)) != _sha(policy_data)
+                or metadata.get("BATCH_GPU_POLICY") != policy
+                or metadata.get("BATCH_GPU_POLICY_MANIFEST") != str(policy_path)):
+            raise ValueError("campaign batch GPU policy differs from immutable wrapper/metadata")
+        scope_paths.add(str(policy_path))
+    elif policy_flags:
+        raise ValueError("campaign batch GPU policy receipt is missing")
     parent_terminal = _fields(_remember(paths, parent / "status/terminal"))
     if parent_terminal.get("RUN_ID") != parent.name or parent_terminal.get("STATE") != "OK":
         raise ValueError("campaign parent terminal receipt is not successful")
@@ -333,16 +350,31 @@ def create_campaign_capture(*, gate_manifest, inspect, profile, run_root):
                     or any(len(row) != 3 or not all(row) or row[1] != expected_views[context] or row[2] not in allowed for row in matrix_rows)
                     or {tuple(row[:2]) for row in matrix_rows} != {tuple(row[:2]) for row in selection_rows}):
                 raise ValueError("campaign method matrix differs from the exact selected cohort/method scope")
-            child_matrix = child_folder / "method_matrix.tsv"
-            metadata = _fields(_remember(paths, root / "metadata"))
-            expected_matrix = {"METHOD_MATRIX": str(child_matrix), "METHOD_MATRIX_SOURCE": str(matrix_path),
-                "METHOD_MATRIX_MD5": hashlib.md5(matrix).hexdigest(), "METHOD_MATRIX_SIZE": str(len(matrix)),
-                "METHOD_MATRIX_SHA256": _sha(matrix), "METHOD_MATRIX_IDENTITY": _sha(matrix),
-                "DECLARED_METHOD_ROWS": str(len(matrix_rows))}
-            if (any(metadata.get(key) != value for key, value in expected_matrix.items())
-                    or _receipt(paths, child_matrix) != matrix
-                    or _receipt(paths, child_folder / "dispatch_selection.tsv") != matrix):
-                raise ValueError("child method matrix/dispatch differs from its sealed campaign scope")
+            # The real dispatcher separates identity blocks with blank lines;
+            # checksum/status/producer receipts keep their strict field parser.
+            metadata = _fields(b"\n".join(line for line in _remember(paths, root / "metadata").splitlines() if line))
+            if context == "uncorrected":
+                methods = list(dict.fromkeys(row[2] for row in matrix_rows))
+                rectangle = [[row[0], row[1], method] for method in methods for row in selection_rows]
+                expected_metadata = {"TARGET_METHODS": ",".join(methods), "METHODS": ",".join(methods),
+                    "PASS": "uncorrected", "ANALYSIS_VARIANT": "final", "FORCE_TARGETED": "0", "ROOT": str(root / "artifacts/batch_effect/uncorrected_final")}
+                if (any(len(row) != 3 or row[2] != expected_views[context] for row in selection_rows)
+                        or matrix_rows != rectangle or matrix != "".join("\t".join(row) + "\n" for row in rectangle).encode()
+                        or (set(methods) & {"pseudobulk", "composition"} and "prepare_pseudobulk" not in methods)
+                        or any(metadata.get(key) != value for key, value in expected_metadata.items())
+                        or metadata.get("METHOD_MATRIX") or (child_folder / "method_matrix.tsv").exists() or (child_folder / "method_matrix.tsv").is_symlink()
+                        or _receipt(paths, child_folder / "dispatch_selection.tsv") != matrix):
+                    raise ValueError("child uncorrected targets/dispatch differ from its sealed rectangle")
+            else:
+                child_matrix = child_folder / "method_matrix.tsv"
+                expected_matrix = {"METHOD_MATRIX": str(child_matrix), "METHOD_MATRIX_SOURCE": str(matrix_path),
+                    "METHOD_MATRIX_MD5": hashlib.md5(matrix).hexdigest(), "METHOD_MATRIX_SIZE": str(len(matrix)),
+                    "METHOD_MATRIX_SHA256": _sha(matrix), "METHOD_MATRIX_IDENTITY": _sha(matrix),
+                    "DECLARED_METHOD_ROWS": str(len(matrix_rows))}
+                if (any(metadata.get(key) != value for key, value in expected_matrix.items())
+                        or _receipt(paths, child_matrix) != matrix
+                        or _receipt(paths, child_folder / "dispatch_selection.tsv") != matrix):
+                    raise ValueError("child method matrix/dispatch differs from its sealed campaign scope")
         if context == "benchmark" and (binding.get("requested_selection") != str(child_selection)
                 or binding["identities"].get(str(child_selection)) != _sha(child_scope)):
             raise ValueError("child benchmark requested-scope binding differs")

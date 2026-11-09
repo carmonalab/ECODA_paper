@@ -7,16 +7,18 @@ source "${SCRIPT_DIR}/../slurm_config.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_runtime.sh"
 source "${SCRIPT_DIR}/../utils/bash/ecoda_run_common.sh"
 
-CONTEXTS=""; RELEASE=""; PREPARED_ADOPTION=""; PREPARED_ADOPTION_SHA=""
+CONTEXTS=""; RELEASE=""; PREPARED_ADOPTION=""; PREPARED_ADOPTION_SHA=""; BATCH_GPU_POLICY=auto; BATCH_GPU_POLICY_SET=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --contexts) CONTEXTS="${2:-}"; shift 2 ;;
     --derivative-release) RELEASE="${2:-}"; shift 2 ;;
     --prepared-adoption) PREPARED_ADOPTION="${2:?receipt required}"; shift 2 ;;
     --prepared-adoption-sha256) PREPARED_ADOPTION_SHA="${2:?receipt SHA256 required}"; shift 2 ;;
-    *) echo 'Usage: stage5_campaign.sh --contexts TSV --derivative-release ID [--prepared-adoption JSON --prepared-adoption-sha256 SHA256]' >&2; exit 1 ;;
+    --batch-gpu-policy) [[ ${BATCH_GPU_POLICY_SET} -eq 0 ]] || exit 1; BATCH_GPU_POLICY_SET=1; BATCH_GPU_POLICY="${2:-}"; shift 2 ;;
+    *) echo 'Usage: stage5_campaign.sh --contexts TSV --derivative-release ID [--batch-gpu-policy auto|default|any] [--prepared-adoption JSON --prepared-adoption-sha256 SHA256]' >&2; exit 1 ;;
   esac
 done
+case "${BATCH_GPU_POLICY}" in auto|default|any) ;; *) echo 'ERROR: invalid batch GPU policy' >&2; exit 1 ;; esac
 [[ -n "${CONTEXTS}" && "${RELEASE}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ &&
    "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == 1 ]] || {
   echo 'ERROR: campaign requires an explicit scope, release and immutable executor' >&2; exit 1;
@@ -54,9 +56,9 @@ fi
 
 # Freeze every scientific request before starting any dispatcher. The metadata
 # check reads only sizes/proofs; each existing child performs its full preflight.
-"${PYTHON_BIN}" - "${PARENT_ROOT}" "${PROJECT_ROOT}" "${ECODA_RUNS_ROOT}" <<'PY'
+"${PYTHON_BIN}" - "${PARENT_ROOT}" "${PROJECT_ROOT}" "${ECODA_RUNS_ROOT}" "${BATCH_GPU_POLICY}" <<'PY'
 import hashlib, json, os, pathlib, sys
-parent, project, runs = map(pathlib.Path, sys.argv[1:])
+parent, project, runs = map(pathlib.Path, sys.argv[1:4])
 sys.path.insert(0, str(project / 'src/utils/py'))
 from benchmark_request_scope import read_request, normalized_rows
 from derivative_artifacts import absolute, inputs
@@ -67,12 +69,12 @@ manifest = parent / 'manifests'
 rows = [line.split('\t') for line in (manifest / 'campaign_requested.tsv').read_text().splitlines()]
 expected = {'benchmark': 'benchmark_analysis', 'uncorrected': 'batch_effect_uncorrected', 'corrected': 'batch_effect_corrected'}
 if not 1 <= len(rows) <= 3 or any(len(row) not in (4, 5) or any(not value for value in row) for row in rows):
-    raise SystemExit('ERROR: campaign requires one to three four-field contexts, with an optional corrected method matrix')
+    raise SystemExit('ERROR: campaign requires one to three contexts, with an optional batch method scope')
 if (len({row[0] for row in rows}) != len(rows) or not {row[0] for row in rows} <= set(expected)
         or len({row[1] for row in rows}) != len(rows)):
     raise SystemExit('ERROR: campaign contexts and child run IDs must be unique')
-if any(len(row) == 5 and row[0] != 'corrected' for row in rows):
-    raise SystemExit('ERROR: optional method matrices are corrected-context only')
+if any(len(row) == 5 and row[0] == 'benchmark' for row in rows):
+    raise SystemExit('ERROR: optional method scopes are batch-context only')
 adoption = manifest / 'campaign_prepared_adoption.json'
 receipt = None
 context_keys = dict(benchmark='benchmark', uncorrected='batch_effect/uncorrected_final', corrected='batch_effect/corrected_final')
@@ -96,6 +98,11 @@ if adoption.exists():
     else:
         raise SystemExit('ERROR: unsupported campaign adoption schema')
 staged, identities = [], []
+policy = manifest / 'campaign_batch_gpu_policy.tsv'
+with policy.open('x') as handle:
+    handle.write(sys.argv[4] + '\n')
+policy.chmod(0o444)
+identities.append(f'{policy}\t{hashlib.sha256(policy.read_bytes()).hexdigest()}\n')
 metadata_union = set()
 for row in rows:
     context, run_id, selection_text, references_text = row[:4]
@@ -132,7 +139,14 @@ for row in rows:
             if (not matrix or len(set(matrix)) != len(matrix)
                     or any(len(item) != 3 or not all(item) or item[1] != expected[context] or item[2] not in methods for item in matrix)
                     or {item[:2] for item in matrix} != {tuple(item[:2]) for item in declared}):
-                raise SystemExit('ERROR: corrected method matrix differs from exact selected dataset/view scope')
+                raise SystemExit('ERROR: batch method scope differs from exact selected dataset/view scope')
+            if context == 'uncorrected':
+                selected_methods = list(dict.fromkeys(item[2] for item in matrix))
+                rectangle = [(item[0], item[1], method) for method in selected_methods for item in declared]
+                if (matrix != rectangle or pathlib.Path(destinations[2]).read_bytes() != ''.join('\t'.join(item) + '\n' for item in rectangle).encode()
+                        or any(config.get(item[0], {}).get('use_for_batch_effect') is not True or item[0].startswith('_') for item in declared)
+                        or (set(selected_methods) & {'pseudobulk', 'composition'} and 'prepare_pseudobulk' not in selected_methods)):
+                    raise SystemExit('ERROR: uncorrected scope must be an exact ordered rectangle with explicit preparation dependencies')
     referenced = inputs(references, config, 'stage5')
     if {key[:2] for key in referenced} != {tuple(row[:2]) for row in declared}:
         raise SystemExit('ERROR: input references differ from selected dataset/views')
@@ -169,7 +183,7 @@ while IFS=$'\t' read -r path sha; do
   }
 done < "${PARENT_ROOT}/manifests/campaign_identities.tsv"
 ecoda_atomic_write "${PARENT_ROOT}/metadata" \
-  "STAGE=stage5\nRUN_ID=${PARENT_ID}\nSTATE=ACTIVE\nCAMPAIGN_RELEASE=${RELEASE}\nCAMPAIGN_CONTEXTS=${PARENT_ROOT}/manifests/campaign_contexts.tsv\nSOURCE_MANIFEST=${PARENT_ROOT}/manifests/source.manifest\nRUNTIME_IDENTITY=${PARENT_ROOT}/manifests/runtime.identity\n"
+  "STAGE=stage5\nRUN_ID=${PARENT_ID}\nSTATE=ACTIVE\nCAMPAIGN_RELEASE=${RELEASE}\nCAMPAIGN_CONTEXTS=${PARENT_ROOT}/manifests/campaign_contexts.tsv\nBATCH_GPU_POLICY=${BATCH_GPU_POLICY}\nBATCH_GPU_POLICY_MANIFEST=${PARENT_ROOT}/manifests/campaign_batch_gpu_policy.tsv\nSOURCE_MANIFEST=${PARENT_ROOT}/manifests/source.manifest\nRUNTIME_IDENTITY=${PARENT_ROOT}/manifests/runtime.identity\n"
 
 CHILD_PIDS=(); CHILD_IDS=(); CHILD_CONTEXTS=()
 campaign_interrupt() {
@@ -182,7 +196,7 @@ campaign_interrupt() {
 trap campaign_interrupt INT TERM
 while IFS=$'\t' read -r context child selection references method_matrix; do
   (
-    unset ECODA_RUN_ROOT ECODA_ARTIFACT_BINDING ECODA_SELECTION_MANIFEST ECODA_STAGE5_METHOD_MATRIX
+    unset ECODA_RUN_ROOT ECODA_ARTIFACT_BINDING ECODA_SELECTION_MANIFEST ECODA_STAGE5_METHOD_MATRIX ECODA_STAGE5_METHOD_MATRIX_MODE
     unset ECODA_STAGE5_RECOVERY_MANIFEST ECODA_PRECOMPUTE_BACKUP_RECEIPT ECODA_EXPECTED_PENDING
     unset ANALYSIS_ROOT ANALYSIS_NAS_ROOT ANALYSIS_PASS ANALYSIS_VARIANT BENCHMARK_MANIFEST
     unset ANALYSIS_MANIFEST EXECUTION_LOG_DIR FORCE_BENCHMARK
@@ -194,11 +208,20 @@ while IFS=$'\t' read -r context child selection references method_matrix; do
        jq -e --arg c "${adoption_context}" '.target_run_ids | has($c)' "${PREPARED_ADOPTION}" >/dev/null; then
       args+=(--prepared-adoption "${PREPARED_ADOPTION}" --prepared-adoption-sha256 "${PREPARED_ADOPTION_SHA}")
     fi
+    [[ "${context}" == benchmark || "${BATCH_GPU_POLICY}" == auto ]] || args+=(--gpu-policy "${BATCH_GPU_POLICY}")
     case "${context}" in
-      uncorrected) args+=(--pass uncorrected --analysis-variant final --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot) ;;
+      uncorrected)
+        args+=(--pass uncorrected --analysis-variant final)
+        if [[ -n "${method_matrix}" ]]; then
+          ecoda_validate_checksum "${method_matrix}" || exit 1
+          target_methods="$(awk -F '\t' '!seen[$3]++ {if(n++) printf ","; printf "%s", $3} END {print ""}' "${method_matrix}")"
+          args+=(--target-methods "${target_methods}")
+        else
+          args+=(--methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot)
+        fi ;;
       corrected) args+=(--pass corrected --analysis-variant corrected_final --methods prepare_pseudobulk,pseudobulk,gloscope,composition,mrvi,pilot,qot) ;;
     esac
-    [[ -z "${method_matrix}" ]] || args+=(--method-matrix "${method_matrix}")
+    [[ -z "${method_matrix}" || "${context}" != corrected ]] || args+=(--method-matrix "${method_matrix}")
     exec bash "${SCRIPT_DIR}/stage5_dispatcher.sh" "${args[@]}"
   ) > "${PARENT_ROOT}/logs/${context}.log" 2>&1 &
   CHILD_PIDS+=("$!"); CHILD_IDS+=("${child}"); CHILD_CONTEXTS+=("${context}")

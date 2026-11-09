@@ -306,6 +306,36 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual([row["context"] for row in result["children"]], ["corrected"])
         self.assertEqual(result["requested_ids"], ["126"])
 
+    def test_uncorrected_rectangle_binds_native_targets_without_child_matrix(self):
+        self.select_contexts({"uncorrected"})
+        matrix = self.folder / "campaign_uncorrected.method_matrix.tsv"
+        data = b"Toy\tbatch_effect_uncorrected\tmrvi\n"
+        self.seal(matrix, data, "stage5_campaign_scope")
+        for name in ("campaign_contexts.tsv", "campaign_requested.tsv"):
+            path = self.folder / name
+            self.seal(path, path.read_bytes().rstrip(b"\n") + b"\t" + str(matrix).encode() + b"\n", "stage5_campaign_scope")
+        self.context_request.write_bytes((self.folder / "campaign_requested.tsv").read_bytes())
+        identities = self.folder / "campaign_identities.tsv"
+        self.seal(identities, identities.read_bytes() + f"{matrix}\t{hashlib.sha256(data).hexdigest()}\n".encode(), "stage5_campaign_scope")
+        root = self.children["uncorrected"]; metadata = root / "metadata"
+        self.seal(root / "manifests/dispatch_selection.tsv", data)
+        expected = dict(TARGET_METHODS="mrvi", METHODS="mrvi", PASS="uncorrected", ANALYSIS_VARIANT="final", FORCE_TARGETED="0", ROOT=str(root / "artifacts/batch_effect/uncorrected_final"))
+        def write_metadata(values):
+            metadata.write_text("".join(f"{key}={value}\n\n" for key, value in values.items()))
+        for key, value in (("METHODS", "prepare_pseudobulk,mrvi"), ("TARGET_METHODS", "qot"),
+                           ("ANALYSIS_VARIANT", "corrected_final"), ("FORCE_TARGETED", "1")):
+            write_metadata(dict(expected, **{key: value}))
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "sealed rectangle"):
+                capture.create_campaign_capture(**self.campaign_arguments())
+        write_metadata(expected)
+        alias = root / "manifests/method_matrix.tsv"; alias.symlink_to(root / "absent")
+        with self.assertRaisesRegex(ValueError, "sealed rectangle"):
+            capture.create_campaign_capture(**self.campaign_arguments())
+        alias.unlink()
+        result = capture.create_campaign_capture(**self.campaign_arguments())
+        self.assertEqual([child["context"] for child in result["children"]], ["uncorrected"])
+        self.assertEqual(result["requested_ids"], ["124"])
+
     def test_unknown_empty_and_extra_contexts_fail_before_projection(self):
         path = self.folder / "campaign_contexts.tsv"
         original = path.read_bytes()
@@ -314,6 +344,26 @@ class CampaignTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 capture.create_campaign_capture(**self.campaign_arguments())
         self.seal(path, original, "stage5_campaign_scope")
+
+    def test_batch_gpu_policy_is_sealed_and_matches_exact_wrapper_metadata(self):
+        self.select_contexts({"benchmark", "corrected"})
+        path = self.folder / "campaign_batch_gpu_policy.tsv"
+        self.seal(path, b"any\n", "stage5_campaign_scope")
+        identities = self.folder / "campaign_identities.tsv"
+        self.seal(identities, identities.read_bytes() + f"{path}\t{hashlib.sha256(path.read_bytes()).hexdigest()}\n".encode(), "stage5_campaign_scope")
+        self.gate["exact_command"] += " --batch-gpu-policy any"
+        self.gate["command_digest"] = hashlib.sha256(self.gate["exact_command"].encode()).hexdigest()
+        metadata = self.run / "metadata"
+        metadata.write_text(f"BATCH_GPU_POLICY=auto\nBATCH_GPU_POLICY_MANIFEST={path}\n")
+        with self.assertRaisesRegex(ValueError, "GPU policy differs"):
+            capture.create_campaign_capture(**self.campaign_arguments())
+        metadata.write_text(f"BATCH_GPU_POLICY=any\nBATCH_GPU_POLICY_MANIFEST={path}\n")
+        saved = path.read_bytes(); self.seal(path, b"default\n", "stage5_campaign_scope")
+        with self.assertRaisesRegex(ValueError, "GPU policy differs"):
+            capture.create_campaign_capture(**self.campaign_arguments())
+        self.seal(path, saved, "stage5_campaign_scope")
+        result = capture.create_campaign_capture(**self.campaign_arguments())
+        self.assertEqual(len(result["children"]), 2)
 
     def test_campaign_success_preserves_one_raw_and_three_actual_root_projections(self):
         result = capture.create_campaign_capture(**self.campaign_arguments())
