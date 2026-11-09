@@ -1501,6 +1501,10 @@ R_STUB
   DISPATCH_MANIFEST="${request_run}/manifests/dispatch_selection.tsv"
   SOURCE_IDENTITY="${request_run}/manifests/source_identity.json"
   stage5_validate_reusable_artifact() { [[ "$1" == "${ANALYSIS_ROOT}/"* ]]; }
+  # This fixture checks exact list expansion; the real produced-output owner,
+  # record, watchdog and RDS CLI boundary has its own non-stubbed regression.
+  stage5_validate_requested_output_context() { return 0; }
+  stage5_validate_requested_output_artifact() { [[ "$4" == "${ANALYSIS_ROOT}/"* ]]; }
   stage5_consolidate_gloscope
   stage5_validate_requested_rds
   stage5_allowed_producers_for "${ANALYSIS_ROOT}/pseudobulks/Adams_pseudobulk_hvg2000_bl.rds" pseudobulk

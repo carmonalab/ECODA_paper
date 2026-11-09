@@ -4708,15 +4708,87 @@ stage5_validate_final_rds_rows() {
   done
 }
 
+# Newly produced outputs remain ACTIVE until semantic validation and NAS sync
+# finish.  They are not reusable inputs: prove this run's completed producer
+# instead of weakening the input guard or prematurely publishing owner OK.
+stage5_validate_requested_output_context() {
+  local aggregate="${ECODA_RUN_ROOT}/status/aggregate" scheduler_id
+  [[ "${RUN_ID}" == "${ECODA_RUN_ID:-}" ]] || return 1
+  ecoda_stage5_requested_active && ecoda_stage5_validate_identity || return 1
+  ecoda_validate_run_owned_path "${PENDING_SELECTION}" "${ECODA_RUN_ROOT}" &&
+    ecoda_validate_manifest "${PENDING_SELECTION}" 3 &&
+    ecoda_validate_checksum "${PENDING_SELECTION}" || return 1
+  [[ "${PENDING_SELECTION}" == "${ECODA_RUN_ROOT}/manifests/pending_selection.tsv" &&
+     "${SCHEDULER_FILE}" == "${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv" ]] || return 1
+  ecoda_validate_run_owned_path "${SCHEDULER_FILE}" "${ECODA_RUN_ROOT}" &&
+    ecoda_validate_manifest "${SCHEDULER_FILE}" 2 || return 1
+  [[ -s "${aggregate}" && -f "${aggregate}" && ! -L "${aggregate}" ]] || return 1
+  ecoda_validate_run_owned_path "${aggregate}" "${ECODA_RUN_ROOT}" || return 1
+  [[ "$(stage5_watchdog_status_value "${aggregate}" STATE)" == OK ]] || return 1
+  scheduler_id="$(awk -F '\t' '$1 == "AGGREGATE_GATE" { n++; id=$2 }
+    END { if (n != 1 || id !~ /^[0-9]+$/) exit 1; print id }' "${SCHEDULER_FILE}")" || return 1
+  grep -qx "SCHEDULER_ID=${scheduler_id}" "${aggregate}" || return 1
+}
+
+stage5_validate_requested_output_artifact() {
+  local ds="$1" view="$2" label="$3" path="$4" record producer expected state matched=0
+  # Prove exact pending row and artifact membership; an arbitrary ACTIVE path
+  # under the same run is not sufficient.
+  awk -F '\t' -v ds="${ds}" -v view="${view}" -v method="${label}" \
+    '$1 == ds && $2 == view && $3 == method { n++ } END { exit n != 1 }' \
+    "${PENDING_SELECTION}" || return 1
+  benchmark_artifacts_for "${ds}" "${view}" "${label}" || return 1
+  for expected in "${ARTIFACT_PATHS[@]}"; do
+    [[ "${path}" != "${expected}" ]] || matched=1
+  done
+  [[ ${matched} -eq 1 ]] || return 1
+  [[ "${path}" == "${ANALYSIS_ROOT}/"* ]] || return 1
+  ecoda_validate_run_owned_path "${path}" "${ANALYSIS_ROOT}" || return 1
+  ecoda_artifact_owner_validate "${path}" "${RUN_ID}" >/dev/null || return 1
+  [[ "${ECODA_ARTIFACT_OWNER_STAGE:-}" == stage5 ]] || return 1
+  stage5_watchdog_state_for_method "${ds}" "${view}" "${label}" || return 1
+  [[ "${STAGE5_WATCHDOG_STATE}" == OK ]] || return 1
+  state="${ECODA_ARTIFACT_OWNER_STATE:-}"
+  case "${state}" in
+    ACTIVE|OK) ;;
+    *) return 1 ;;
+  esac
+  record="$(ecoda_artifact_record_path "${path}" "${RUN_ID}")" || return 1
+  [[ -f "${record}" && ! -L "${record}" ]] || return 1
+  producer="$(stage5_recorded_producer "${record}")" || return 1
+  stage5_producer_allowed "${path}" "${label}" "${producer}" &&
+    ecoda_validate_artifact_record "${path}" "${producer}" "${RUN_ID}" >/dev/null &&
+    ecoda_validate_checksum "${path}" || return 1
+  if [[ "${state}" == OK ]]; then
+    stage5_validate_reusable_artifact "${path}" "${label}" || return 1
+  fi
+}
+
 stage5_validate_requested_rds() {
   local ds view label path metadata
+  local output_context_validated=0 pending_row
   local list="${ECODA_RUN_ROOT}/manifests/rds_validation_requested.tsv" tmp="${ECODA_RUN_ROOT}/manifests/rds_validation_requested.build.$$"
   : > "${tmp}" || return 1
   while IFS=$'\t' read -r ds view label; do
+    pending_row=0
+    if [[ -s "${PENDING_SELECTION:-}" ]] && awk -F '\t' \
+        -v ds="${ds}" -v view="${view}" -v method="${label}" \
+        '$1 == ds && $2 == view && $3 == method { found=1 } END { exit !found }' \
+        "${PENDING_SELECTION}"; then
+      pending_row=1
+      if [[ ${output_context_validated} -eq 0 ]]; then
+        stage5_validate_requested_output_context || return 1
+        output_context_validated=1
+      fi
+    fi
     benchmark_artifacts_for "${ds}" "${view}" "${label}" || return 1
     for path in "${ARTIFACT_PATHS[@]}"; do
       [[ "${path}" == *.rds ]] || continue
-      stage5_validate_reusable_artifact "${path}" "${label}" || return 1
+      if [[ ${pending_row} -eq 1 ]]; then
+        stage5_validate_requested_output_artifact "${ds}" "${view}" "${label}" "${path}" || return 1
+      else
+        stage5_validate_reusable_artifact "${path}" "${label}" || return 1
+      fi
       metadata=0; [[ "${path}" == *_metadata.rds ]] && metadata=1
       printf '%s\t%s\t%s\t%s\t%s\n' "${path}" "${label}" "${ds}" "${view}" "${metadata}" >> "${tmp}" || return 1
     done
