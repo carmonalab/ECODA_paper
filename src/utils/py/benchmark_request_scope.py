@@ -33,7 +33,7 @@ TOKENS = {
     "scpoli": ("hvg2000_lowres_dims15", *(f"hvg2000_highres_dims{n}" for n in (2, 3, 5, 10, 15)), "hvg1000_highres_dims15", "hvg3000_highres_dims15"),
     "pilot": ("hvg2000_lowres", "hvg1000_highres", "hvg2000_highres", "hvg3000_highres"),
     "qot": ("hvg2000_lowres", "hvg1000_highres", "hvg2000_highres", "hvg3000_highres"),
-    "pilotgm": ("hvg2000_highres",),
+    "pilotgm": tuple(f"hvg{n}_highres" for n in (1000, 2000, 3000)),
 }
 
 

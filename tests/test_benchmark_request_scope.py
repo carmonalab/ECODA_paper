@@ -69,6 +69,13 @@ def run():
         request.write_text("Adams\tbenchmark_analysis\tmofa\nAdams\tbenchmark_analysis\tpseudobulk\thvg2000_bl\n")
         assert tokens_for(read_request(request, config), "Adams", "benchmark_analysis", "prepare_pseudobulk") == (
             "hvg2000", "hvg1000", "hvg3000")
+        pilotgm = tuple(f"hvg{n}_highres" for n in (1000, 2000, 3000))
+        request.write_text("".join(f"Bassez\tbenchmark_analysis\tpilotgm\t{token}\n" for token in pilotgm))
+        assert tokens_for(read_request(request, config), "Bassez", "benchmark_analysis", "pilotgm") == pilotgm
+        assert selected_files("Bassez", "pilotgm", pilotgm) == [
+            f"embeddings/Bassez_{token}_pilotgm_dists.feather" for token in pilotgm]
+        request.write_text("Bassez\tbenchmark_analysis\tpilotgm\thvg1000_lowres\n")
+        rejects(lambda: read_request(request, config), "unknown parameter token")
         request.write_text(original)
 
         config_path = base / "datasets.json"; config_path.write_text(json.dumps(config))
