@@ -33,7 +33,12 @@ local({
               "--log_file", file.path(tmp, "timing.feather"), selector,
               if (!is.null(pass)) c("--analysis_pass", pass))
     env$source <- function(...) invisible(NULL)
-    env$library <- function(...) stop("unexpected method-specific package loading")
+    env$attached <- character()
+    env$library <- function(package) {
+      name <- as.character(substitute(package))
+      if (!name %in% c("reticulate", "dplyr", "GloScope")) stop("unexpected method-specific package loading")
+      env$attached <- c(env$attached, name)
+    }
     env$commandArgs <- function(trailingOnly = FALSE) {
       if (trailingOnly) argv else paste0("--file=", script)
     }
@@ -48,6 +53,14 @@ local({
                             biology = c("A", "B", "A", "B")),
            hvg_rank_genes = "unused_rank")
     }
+    env$load_h5ad_author_hr_metadata <- function(h5ad_path, obs_columns, view) {
+      env$metadata_columns <- obs_columns
+      data.frame(Sample = paste0("s", 1:4), biology = c("A", "B", "A", "B"), HR = c("T", "B", "T", "M"))
+    }
+    env$load_h5ad_counts_free <- function(...) stop("unselected embedding loader reached")
+    env$py_to_r <- identity
+    env$get_hvg_rank_genes <- env$rename_leiden_cols <- env$load_composition_pb_variants <-
+      function(...) stop("unselected composition prerequisite reached")
     env$collapse_sample_metadata <- function(obs, ...) obs
     env$artifact_checksum_ok <- function(...) TRUE # Old aggregate must not short-circuit a shard.
     env$read_rds_checked <- function(...) stop("must not read an aggregate or unselected cache")
@@ -66,6 +79,11 @@ local({
       env$scored <- variants
       setNames(rep(list(value), length(variants)), paste0("Pseudobulk_", variants))
     }
+    env$run_composition_methods_hpc <- function(labels, metadata, pca_emb, pb_hvg2000, obs, ..., variants) {
+      stopifnot(is.null(pca_emb), is.null(pb_hvg2000), identical(obs$HR, metadata$HR))
+      env$scored <- variants
+      list()
+    }
     env$save_rds_atomic <- function(object, file, ...) {
       env$published[[file]] <- object
     }
@@ -83,6 +101,28 @@ local({
             identical(result$scored, "hvg2000_bl"),
             !any(c("LR", "HR") %in% result$metadata_columns),
             length(result$published) == 0L) # Standalone pipeline owns publication.
+  for (selection in c("CT_HR_hvg2000,CT_HR_hvg500", "hvg2000_bl,CT_HR_hvg2000,CT_HR_hvg500")) {
+    ct <- execute(FALSE, c("--pseudobulk_variants", selection))
+    stopifnot(identical(ct$scored, strsplit(selection, ",", fixed = TRUE)[[1L]]),
+              identical(ct$loaded, if (startsWith(selection, "hvg2000_bl")) "hvg2000_bl" else list()),
+              "HR" %in% ct$metadata_columns, !"LR" %in% ct$metadata_columns,
+              length(ct$published) == 0L)
+    assert_error(execute(TRUE, c("--pseudobulk_variants", selection)), "pseudobulk_variants")
+  }
+  hr_keys <- result$COMPOSITION_HR_VARIANT_NAMES
+  composition <- execute(FALSE, c("--composition_variants", paste(hr_keys, collapse = ",")), "composition")
+  stopifnot(length(hr_keys) == 22L, identical(composition$scored, hr_keys),
+            identical(composition$metadata_columns, c("Sample", "biology", "HR")),
+            identical(composition$attached, c("reticulate", "dplyr", "GloScope")),
+            length(composition$loaded) == 0L, length(composition$published) == 0L)
+  plain_hr <- execute(FALSE, c("--composition_variants", "ECODA_authors_HR"), "composition")
+  stopifnot(identical(plain_hr$attached, c("reticulate", "dplyr")))
+  for (selection in c("ECODA_deconv", "ECODA_authors_HR,ECODA_authors_HR", "ECODA_authors_HR,")) {
+    assert_error(execute(FALSE, c("--composition_variants", selection), "composition"), "composition_variants")
+  }
+  assert_error(execute(FALSE, c("--composition_variants", "ECODA_authors_HR")), "ordinary benchmark composition")
+  assert_error(execute(FALSE, c("--composition_variants", "ECODA_authors_HR"), "composition", "uncorrected"), "ordinary benchmark composition")
+  assert_error(execute(FALSE, c("--composition_variants=ECODA_authors_HR", "--composition_variants=GloProp"), "composition"), "Duplicate")
   full_prep <- execute(TRUE, selector = character())
   stopifnot(identical(full_prep$prepared, full_prep$PB_VARIANT_NAMES))
   for (preparation in c(TRUE, FALSE)) {
@@ -100,4 +140,4 @@ local({
   }
   assert_error(execute(FALSE, method = "composition"), "ordinary benchmark")
 })
-cat("PASS: BL-only preparation/result entrypoints, default preparation, and rejected contradictory selectors\n")
+cat("PASS: exact BL/HR-CT and 22 HR composition entrypoints, defaults and rejected contradictory selectors\n")

@@ -48,6 +48,13 @@ if (exists(".ecoda_artifact_source_file", inherits = FALSE)) {
 PB_VARIANT_NAMES <- c(
   "schvg2000", "hvg2000", "hvg500", "hvg2000_bl", "hvg1000", "hvg3000"
 )
+PB_CT_HR_VARIANT_NAMES <- c("CT_HR_hvg2000", "CT_HR_hvg500")
+COMPOSITION_HR_VARIANT_NAMES <- c(
+  "ECODA_authors_HR", "ECODA_authors_HR_NULL", "GloProp", "Freq_highres",
+  paste0("ECODA_authors_HR_top_varexp", seq(0, 0.9, 0.1)),
+  paste0("ECODA_authors_HR_", c("3most_varcts", "2least_varcts", "3least_varcts")),
+  paste0("ECODA_authors_HR_", c(2, 3, 5, 10, 15), "_PCA_dims")
+)
 # Every prepared cache record is published by the Stage 5 producer for its
 # variant, regardless of which downstream benchmark method consumes it.
 PB_VARIANT_PRODUCERS <- setNames(
@@ -74,8 +81,32 @@ parse_pseudobulk_variant_selection <- function(
     stop("--pseudobulk_variants requires a nonempty comma-separated variant list")
   }
   selected <- strsplit(selection, ",", fixed = TRUE)[[1L]]
-  if (anyDuplicated(selected) || any(!selected %in% PB_VARIANT_NAMES)) {
+  allowed <- if (identical(method, "pseudobulk")) {
+    c(PB_VARIANT_NAMES, PB_CT_HR_VARIANT_NAMES)
+  } else PB_VARIANT_NAMES
+  if (anyDuplicated(selected) || any(!selected %in% allowed)) {
     stop("Unknown or duplicate --pseudobulk_variants: ", selection)
+  }
+  selected
+}
+
+parse_composition_variant_selection <- function(args, raw_args, method, view, analysis_pass = NULL) {
+  if (sum(grepl("^--composition_variants($|=)", raw_args)) > 1L) {
+    stop("Duplicate --composition_variants argument")
+  }
+  selection <- args[["composition_variants"]]
+  if (is.null(selection)) return(NULL)
+  if (!identical(method, "composition") || !identical(view, "benchmark_analysis") ||
+      !is.null(analysis_pass)) {
+    stop("--composition_variants requires ordinary benchmark composition")
+  }
+  if (!is.character(selection) || length(selection) != 1L || is.na(selection) ||
+      !nzchar(selection) || grepl("(^,|,$|,,|[[:space:]])", selection)) {
+    stop("--composition_variants requires a nonempty comma-separated variant list")
+  }
+  selected <- strsplit(selection, ",", fixed = TRUE)[[1L]]
+  if (anyDuplicated(selected) || any(!selected %in% COMPOSITION_HR_VARIANT_NAMES)) {
+    stop("Unknown or duplicate --composition_variants: ", selection)
   }
   selected
 }
@@ -1401,6 +1432,14 @@ load_h5ad_counts_free <- function(
     as.list(as.character(embedding_keys)),
     as.list(as.character(obs_prefixes))
   )
+}
+
+# Author-HR composition consumes cell metadata only; it has no PCA/HVG input.
+load_h5ad_author_hr_metadata <- function(h5ad_path, obs_columns, view) {
+  ecoda_hpc_validate_h5ad_path_identity(h5ad_path, view = view, method = "composition")
+  module_dir <- normalizePath(file.path(Sys.getenv("PROJECT_ROOT"), "src/utils/py"), mustWork = TRUE)
+  loader <- reticulate::import_from_path("h5ad_obs_free", path = module_dir, convert = FALSE)
+  reticulate::py_to_r(loader$load_h5ad_obs_free(h5ad_path, as.list(as.character(obs_columns))))
 }
 
 # Read only the first metadata row for each sample. This keeps MOFA and

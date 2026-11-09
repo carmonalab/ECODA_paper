@@ -6,6 +6,7 @@
 #   --config_path --ds_name --view benchmark_analysis --method {gloscope,mofa,
 #   pseudobulk,scitd,composition} --input_dir --results_dir --pseudobulk_dir
 #   --gloscope_cache_dir --log_file [--force] [--pseudobulk_variants CSV]
+#   [--composition_variants CSV]
 # Canonical ordinary and batch pseudobulk paths use the raw H5AD CSR Sample
 # aggregate plus the direct matrix DESeq2 API.  They never materialize a
 # sample-level Seurat object.  Count-backed Seurat remains reserved for
@@ -18,19 +19,23 @@ if (project_root == "") {
   stop("PROJECT_ROOT not set. Source slurm_config.sh before calling this script.")
 }
 
-source(file.path(project_root, "src/utils/imports_worker_core.R"))
+raw_args <- commandArgs(trailingOnly = TRUE)
+if (any(grepl("^--composition_variants($|=)", raw_args))) {
+  suppressPackageStartupMessages({ library(reticulate); library(dplyr) })
+} else {
+  source(file.path(project_root, "src/utils/imports_worker_core.R"))
+}
 source(file.path(project_root, "src/utils/load_worker_functions.R"))
 source(file.path(project_root, "src/5_run_benchmark_methods/benchmark_hpc_utils.R"))
 # Artifact persistence is provided by benchmark_hpc_utils.R.
 # Its checked-load and publication functions are the single R artifact seam.
 
 
-raw_args <- commandArgs(trailingOnly = TRUE)
 args <- parse_flags(raw_args)
 unknown_args <- setdiff(names(args), c(
   "config_path", "ds_name", "view", "method", "input_dir", "results_dir",
   "pseudobulk_dir", "gloscope_cache_dir", "log_file", "force", "analysis_pass",
-  "combo", "pseudobulk_variants"
+  "combo", "pseudobulk_variants", "composition_variants"
 ))
 if (length(unknown_args)) stop("Unknown method-worker argument: ", paste(unknown_args, collapse = ", "))
 
@@ -63,6 +68,11 @@ selected_pb_variants <- if (is.null(args[["pseudobulk_variants"]])) NULL else
   parse_pseudobulk_variant_selection(
     args, raw_args, method, args$view, args[["analysis_pass"]]
   )
+selected_composition_variants <- if (is.null(args[["composition_variants"]])) NULL else
+  parse_composition_variant_selection(
+    args, raw_args, method, args$view, args[["analysis_pass"]]
+  )
+hr_composition_only <- !is.null(selected_composition_variants)
 combo_supplied <- !is.null(args[["combo"]])
 combo_token <- args[["combo"]]
 if (combo_supplied && method != "gloscope") {
@@ -77,12 +87,12 @@ if (combo_supplied && method != "gloscope") {
 # only the installed namespace (GloScope::gloscope is called qualified).
 # composition calls the EPIC::EPIC + GloScope::gloscopeProp drivers BARE
 # (in benchmark_methods_r.R; EPIC/GloScope are not attached by any loader),
-# so both must be attached for it.
+# so attach each only when its selected driver is used.
 if (method == "mofa") library(MOFA2)
 if (method == "scitd") library(scITD)
 if (method == "composition") {
-  library(EPIC)
-  library(GloScope)
+  if (!hr_composition_only) library(EPIC)
+  if (!hr_composition_only || "GloProp" %in% selected_composition_variants) library(GloScope)
 }
 
 config <- read_datasets_json(args$config_path, view = args$view)
@@ -264,9 +274,10 @@ hvg_rank_genes <- NULL
 embedding_matrices <- NULL
 embedding_sample_ids <- NULL
 if (pseudobulk_metadata_method) {
-  ct_columns <- if (method == "pseudobulk" && is.null(analysis_pass) &&
-                    is.null(selected_pb_variants)) {
-    c(entry$cell_type_low_res, entry$cell_type_high_res)
+  ct_columns <- if (method == "pseudobulk" && is.null(analysis_pass)) {
+    if (is.null(selected_pb_variants)) c(entry$cell_type_low_res, entry$cell_type_high_res)
+    else if (any(selected_pb_variants %in% PB_CT_HR_VARIANT_NAMES)) entry$cell_type_high_res
+    else character()
   } else {
     character()
   }
@@ -327,18 +338,17 @@ if (pseudobulk_metadata_method) {
   names(embedding_matrices) <- names(embedding_names)
   embedding_sample_ids <- as.character(obs[[sample_col]])
 } else if (method == "composition") {
-  # Composition keeps its existing obs-only path. It consumes the stored
-  # hvg2000 PCA embedding, the configured high-resolution cell-type column for
-  # batch-effect views, and cached pseudobulk variants.
+  # Selected author-HR runs read only cell metadata. Full composition also
+  # consumes stored PCA, generated Leiden columns, and cached pseudobulks.
   composition_obs_columns <- if (
-    is.null(analysis_pass) &&
+    !hr_composition_only && is.null(analysis_pass) &&
     length(entry$not_suitable_for_auto_annotation) == 0
   ) {
     c("layer2", "scATOMIC_pred")
   } else {
     character()
   }
-  composition_cell_type_columns <- if (!is.null(analysis_pass)) {
+  composition_cell_type_columns <- if (!is.null(analysis_pass) || hr_composition_only) {
     entry$cell_type_high_res
   } else {
     c(entry$cell_type_low_res, entry$cell_type_high_res)
@@ -350,18 +360,22 @@ if (pseudobulk_metadata_method) {
     if (correct_batch_mode) batch_keys else batch_col,
     composition_obs_columns
   )
-  adata <- load_h5ad_counts_free(
-    h5ad_path,
-    unique(obs_columns[!is.na(obs_columns) & nzchar(obs_columns)]),
-    embedding_key,
-    obs_prefixes = "leiden_res_",
-    view = args$view,
-    method = method,
-    expected_batch_contract = h5ad_expected_batch_contract,
-    allow_missing_summary = corrected_final_mode
-  )
-  obs <- py_to_r(adata$obs)
-  hvg_rank_genes <- get_hvg_rank_genes(adata)
+  if (hr_composition_only) {
+    obs <- load_h5ad_author_hr_metadata(h5ad_path, unique(obs_columns), args$view)
+  } else {
+    adata <- load_h5ad_counts_free(
+      h5ad_path,
+      unique(obs_columns[!is.na(obs_columns) & nzchar(obs_columns)]),
+      embedding_key,
+      obs_prefixes = "leiden_res_",
+      view = args$view,
+      method = method,
+      expected_batch_contract = h5ad_expected_batch_contract,
+      allow_missing_summary = corrected_final_mode
+    )
+    obs <- py_to_r(adata$obs)
+    hvg_rank_genes <- get_hvg_rank_genes(adata)
+  }
 } else {
   ad <- import("anndata", convert = FALSE)
   adata <- ad$read_h5ad(h5ad_path, backed = "r")
@@ -459,7 +473,7 @@ if (correct_batch_mode) {
   )
 }
 
-method_cache_valid <- !force && !combo_supplied && is.null(selected_pb_variants) &&
+method_cache_valid <- !force && !combo_supplied && is.null(selected_pb_variants) && !hr_composition_only &&
   artifact_checksum_ok(method_rds)
 method_cached <- NULL
 if (method_cache_valid && method == "pseudobulk" && is.null(analysis_pass)) {
@@ -604,7 +618,7 @@ if (method == "gloscope") {
   }
   dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
   requested_pb_variants <- if (!is.null(selected_pb_variants)) {
-    selected_pb_variants
+    intersect(selected_pb_variants, PB_VARIANT_NAMES)
   } else if (method == "mofa") {
     c("hvg1000", "hvg2000", "hvg3000")
   } else if (is.null(analysis_pass)) {
@@ -612,7 +626,7 @@ if (method == "gloscope") {
   } else {
     "hvg2000"
   }
-  pb_variants <- load_pb_variants(
+  pb_variants <- if (!length(requested_pb_variants)) list() else load_pb_variants(
     seurat = NULL,
     sample_col = sample_col,
     hvg_rank_genes = hvg_rank_genes,
@@ -649,18 +663,20 @@ if (method == "gloscope") {
   # (cell-level metadata), the hvg2000 obsm PCA embedding (Avg_PCA_embedding)
   # and the precomputed hvg2000 pseudobulk variant (ECODA_deconv; the submit
   # script auto-prepends prepare_pseudobulk for composition).
-  if (is.null(args$pseudobulk_dir) || identical(args$pseudobulk_dir, TRUE)) {
-    stop("Missing required --pseudobulk_dir argument for method composition")
+  if (!hr_composition_only) {
+    if (is.null(args$pseudobulk_dir) || identical(args$pseudobulk_dir, TRUE)) {
+      stop("Missing required --pseudobulk_dir argument for method composition")
+    }
+    dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
+    # Keep a configured Leiden annotation source column alongside its legacy
+    # RNA_snn_res.* alias. Parkinson declares leiden_res_5_* as its author
+    # high-resolution column; renaming it in place would invalidate that config.
+    obs <- rename_leiden_cols(
+      obs,
+      view = args$view,
+      preserve_source = TRUE
+    )
   }
-  dir.create(args$pseudobulk_dir, showWarnings = FALSE, recursive = TRUE)
-  # Keep a configured Leiden annotation source column alongside its legacy
-  # RNA_snn_res.* alias. Parkinson declares leiden_res_5_* as its author
-  # high-resolution column; renaming it in place would invalidate that config.
-  obs <- rename_leiden_cols(
-    obs,
-    view = args$view,
-    preserve_source = TRUE
-  )
   metadata <- collapse_sample_metadata(obs, sample_col = sample_col)
   if (correct_batch_mode) {
     metadata <- ecoda_hpc_apply_batch_context(
@@ -671,33 +687,37 @@ if (method == "gloscope") {
   }
   labels <- as.factor(metadata[[entry$label_col]])
   names(labels) <- metadata[[sample_col]]
-  obsm_keys <- py_to_r(import_builtins(convert = FALSE)$list(
-    adata$obsm$keys()
-  ))
-  emb_key <- embedding_key
-  if (!emb_key %in% obsm_keys) {
-    stop("Embedding '", emb_key, "' not found in adata.obsm of ", h5ad_path,
-         ". Re-run preprocessing (1.1.1_preprocess.py) for this dataset.")
+  pca_emb <- NULL
+  pb_variants <- list()
+  if (!hr_composition_only) {
+    obsm_keys <- py_to_r(import_builtins(convert = FALSE)$list(
+      adata$obsm$keys()
+    ))
+    emb_key <- embedding_key
+    if (!emb_key %in% obsm_keys) {
+      stop("Embedding '", emb_key, "' not found in adata.obsm of ", h5ad_path,
+           ". Re-run preprocessing (1.1.1_preprocess.py) for this dataset.")
+    }
+    pca_emb <- py_to_r(adata$obsm[[emb_key]])
+    if (is.null(rownames(pca_emb))) rownames(pca_emb) <- rownames(obs)
+    colnames(pca_emb) <- paste0("PC_", seq_len(ncol(pca_emb)))
+    pb_variants <- load_composition_pb_variants(
+      sample_col = sample_col,
+      hvg_rank_genes = hvg_rank_genes,
+      pseudobulk_dir = args$pseudobulk_dir,
+      ds = ds,
+      log_file = args$log_file,
+      cache_stem = cache_stem,
+      batch_col = batch_col,
+      blind = blind_mode,
+      correct_batch = correct_batch_mode,
+      variants = "hvg2000",
+      batch_keys = if (correct_batch_mode) as.list(unname(batch_keys)) else NULL,
+      batch_context = if (correct_batch_mode) batch_context else NULL,
+      batch_contract = if (correct_batch_mode) pseudobulk_batch_contract else NULL,
+      expected_h5ad_batch_contract = h5ad_expected_batch_contract
+    )
   }
-  pca_emb <- py_to_r(adata$obsm[[emb_key]])
-  if (is.null(rownames(pca_emb))) rownames(pca_emb) <- rownames(obs)
-  colnames(pca_emb) <- paste0("PC_", seq_len(ncol(pca_emb)))
-  pb_variants <- load_composition_pb_variants(
-    sample_col = sample_col,
-    hvg_rank_genes = hvg_rank_genes,
-    pseudobulk_dir = args$pseudobulk_dir,
-    ds = ds,
-    log_file = args$log_file,
-    cache_stem = cache_stem,
-    batch_col = batch_col,
-    blind = blind_mode,
-    correct_batch = correct_batch_mode,
-    variants = "hvg2000",
-    batch_keys = if (correct_batch_mode) as.list(unname(batch_keys)) else NULL,
-    batch_context = if (correct_batch_mode) batch_context else NULL,
-    batch_contract = if (correct_batch_mode) pseudobulk_batch_contract else NULL,
-    expected_h5ad_batch_contract = h5ad_expected_batch_contract
-  )
 } else {
   # scITD is the genuine cell-level count consumer.  Keep its existing
   # count-backed Seurat boundary; ordinary pseudobulk and CT never enter this
@@ -805,6 +825,7 @@ results <- switch(
       NULL
     },
     batch_contract = if (correct_batch_mode) method_batch_contract else NULL,
+    variants = selected_composition_variants,
     not_suitable_for_auto_annotation = if (
       is.null(entry$not_suitable_for_auto_annotation)
     ) {
@@ -815,7 +836,9 @@ results <- switch(
   )
 )
 
-if (!is.null(selected_pb_variants)) {
+if (hr_composition_only) {
+  message("Saved selected composition shards; method-level RDS deferred to release consolidation")
+} else if (!is.null(selected_pb_variants)) {
   message(
     "Saved pseudobulk variant shards ", paste(selected_pb_variants, collapse = ","),
     "; method-level RDS deferred to release consolidation"

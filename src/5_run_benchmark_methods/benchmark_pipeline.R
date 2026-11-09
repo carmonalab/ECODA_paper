@@ -1282,7 +1282,7 @@ run_pseudobulk_hpc <- function(
       !identical(view, "benchmark_analysis") || !is.null(batch_contract) ||
       !is.character(variants) || length(variants) == 0L ||
       anyNA(variants) || anyDuplicated(variants) ||
-      any(!variants %in% PB_VARIANT_NAMES))) {
+      any(!variants %in% c(PB_VARIANT_NAMES, PB_CT_HR_VARIANT_NAMES)))) {
     stop("Explicit pseudobulk variants require a valid ordinary variant selection")
   }
   corrected_identity_active <- identical(analysis_pass, "corrected") ||
@@ -1418,6 +1418,14 @@ run_pseudobulk_hpc <- function(
     Pseudobulk_CT_LR_hvg500 = list(ct_col = ct_col_low_res, hvg = 500),
     Pseudobulk_CT_HR_hvg500 = list(ct_col = ct_col_high_res, hvg = 500)
   )
+  if (!is.null(variants)) {
+    ct_combos <- ct_combos[sub("^Pseudobulk_", "", names(ct_combos)) %in% variants]
+    pca_combos <- character()
+    if (length(ct_combos) && (is.null(ct_col_high_res) ||
+        length(ct_col_high_res) != 1L || is.na(ct_col_high_res) || !nzchar(ct_col_high_res))) {
+      stop("Selected CT pseudobulk requires the configured high-resolution cell-type column")
+    }
+  }
 
   results <- list()
   for (nm in names(plain_combos)) {
@@ -1464,11 +1472,9 @@ run_pseudobulk_hpc <- function(
     results[[nm]] <- res
   }
 
-  # Explicit ordinary variants are standalone result shards. PCA/CT and the
-  # method-level aggregate belong to the full suite or release consolidation.
-  if (!is.null(variants)) return(results)
+  # Explicit variants publish only their ordinary and/or selected HR CT shards.
   pb_hvg2000 <- pb_variants[["hvg2000"]]
-  if (is.null(pb_hvg2000)) {
+  if (length(pca_combos) && is.null(pb_hvg2000)) {
     stop("Pseudobulk variant 'hvg2000' missing for the PCA-dims combos")
   }
   for (nm in pca_combos) {
@@ -2003,9 +2009,20 @@ run_composition_methods_hpc <- function(
   corrected = FALSE,
   batch_keys = NULL,
   metadata_validation = NULL,
-  batch_contract = NULL
+  batch_contract = NULL,
+  variants = NULL
 ) {
   set.seed(123)
+
+  if (!is.null(variants) && (batch_mode || corrected ||
+      !is.character(variants) || !length(variants) || anyNA(variants) ||
+      anyDuplicated(variants) || any(!variants %in% COMPOSITION_HR_VARIANT_NAMES))) {
+    stop("Explicit composition variants require an ordinary author-HR selection")
+  }
+  if (!is.null(variants) && (is.null(ct_col_high_res) ||
+      !ct_col_high_res %in% colnames(obs))) {
+    stop("Selected composition requires the configured high-resolution cell-type column")
+  }
 
   if (corrected && !batch_mode) {
     stop("Corrected CLR composition requires batch-effect mode")
@@ -2352,36 +2369,38 @@ run_composition_methods_hpc <- function(
   results <- list()
   combos <- list()
 
-  combos[["Avg_PCA_embedding"]] <- function() {
-    process_avg_pca_embedding_fig(NULL, labels, pca_emb = pca_emb, obs = obs)
-  }
-
-  if (is.null(pb_hvg2000)) {
-    stop("run_composition_methods_hpc: pb_hvg2000 (hvg2000 pseudobulk ",
-         "variant) is required for ECODA_deconv")
-  }
-  deconv_pb_timing <- NULL
-  if ("timing_schema" %in% names(pb_hvg2000)) {
-    validate_hpc_timing_bundle(
-      pb_hvg2000, label = paste0("Pseudobulk cache ", ds, "/hvg2000")
-    )
-    deconv_pb_timing <- list(
-      variant = as.numeric(pb_hvg2000[["variant_time_secs"]]),
-      shared = as.numeric(pb_hvg2000[["shared_time_secs"]]),
-      shared_mem = pb_hvg2000[["shared_mem_GB"]],
-      timing_id = as.character(pb_hvg2000[["timing_id"]])
-    )
-  }
-  combos[["ECODA_deconv"]] <- function() {
-    process_deconv_fig(t(pb_hvg2000$pb), labels)
-  }
-
-  if (!is.null(ct_col_low_res)) {
-    combos[["ECODA_authors_LR"]] <- function() {
-      process_coda_fig(NULL, labels, ct_col = ct_col_low_res, obs = obs)
+  if (is.null(variants)) {
+    combos[["Avg_PCA_embedding"]] <- function() {
+      process_avg_pca_embedding_fig(NULL, labels, pca_emb = pca_emb, obs = obs)
     }
-  } else {
-    warning("ECODA_authors_LR skipped: cell_type_low_res is null for ", ds)
+
+    if (is.null(pb_hvg2000)) {
+      stop("run_composition_methods_hpc: pb_hvg2000 (hvg2000 pseudobulk ",
+           "variant) is required for ECODA_deconv")
+    }
+    deconv_pb_timing <- NULL
+    if ("timing_schema" %in% names(pb_hvg2000)) {
+      validate_hpc_timing_bundle(
+        pb_hvg2000, label = paste0("Pseudobulk cache ", ds, "/hvg2000")
+      )
+      deconv_pb_timing <- list(
+        variant = as.numeric(pb_hvg2000[["variant_time_secs"]]),
+        shared = as.numeric(pb_hvg2000[["shared_time_secs"]]),
+        shared_mem = pb_hvg2000[["shared_mem_GB"]],
+        timing_id = as.character(pb_hvg2000[["timing_id"]])
+      )
+    }
+    combos[["ECODA_deconv"]] <- function() {
+      process_deconv_fig(t(pb_hvg2000$pb), labels)
+    }
+
+    if (!is.null(ct_col_low_res)) {
+      combos[["ECODA_authors_LR"]] <- function() {
+        process_coda_fig(NULL, labels, ct_col = ct_col_low_res, obs = obs)
+      }
+    } else {
+      warning("ECODA_authors_LR skipped: cell_type_low_res is null for ", ds)
+    }
   }
 
   if (!is.null(ct_col_high_res)) {
@@ -2413,6 +2432,7 @@ run_composition_methods_hpc <- function(
     combos <- c(combos, varexp_combos)
 
     for (hitme_ct in c("layer2", "layer3")) {
+      if (!is.null(variants)) next
       if (skip_hitme) {
         warning("ECODA_HiTME_HR_", hitme_ct, "* combos skipped for ", ds,
                 ": not_suitable_for_auto_annotation incl. 'hitme'")
@@ -2452,6 +2472,7 @@ run_composition_methods_hpc <- function(
     }
 
     for (hitme_ct in c("layer2", "layer3")) {
+      if (!is.null(variants)) next
       if (skip_hitme || !hitme_ct %in% colnames(obs)) next
       hitme_plain <- lapply(hitme_ct, function(ct) {
         function() {
@@ -2461,16 +2482,18 @@ run_composition_methods_hpc <- function(
       names(hitme_plain) <- paste0("ECODA_HiTME_HR_", hitme_ct)
       combos <- c(combos, hitme_plain)
     }
-    if (skip_scatomic) {
-      warning("ECODA_scATOMIC_HR combos skipped for ", ds,
-              ": not_suitable_for_auto_annotation incl. 'scatomic'")
-    } else if ("scATOMIC_pred" %in% colnames(obs)) {
-      combos[["ECODA_scATOMIC_HR"]] <- function() {
-        process_coda_fig(NULL, labels, ct_col = "scATOMIC_pred", obs = obs)
+    if (is.null(variants)) {
+      if (skip_scatomic) {
+        warning("ECODA_scATOMIC_HR combos skipped for ", ds,
+                ": not_suitable_for_auto_annotation incl. 'scatomic'")
+      } else if ("scATOMIC_pred" %in% colnames(obs)) {
+        combos[["ECODA_scATOMIC_HR"]] <- function() {
+          process_coda_fig(NULL, labels, ct_col = "scATOMIC_pred", obs = obs)
+        }
+      } else {
+        warning("ECODA_scATOMIC_HR skipped for ", ds,
+                ": obs has no 'scATOMIC_pred' column")
       }
-    } else {
-      warning("ECODA_scATOMIC_HR skipped for ", ds,
-              ": obs has no 'scATOMIC_pred' column")
     }
 
     pca_combos <- lapply(factors_test, function(i) {
@@ -2486,14 +2509,20 @@ run_composition_methods_hpc <- function(
             ds, ": cell_type_high_res is null")
   }
 
-  seuratres_combos <- lapply(seurat_res, function(r) {
-    res_col_name <- paste0("RNA_snn_res.", r)
-    function() {
-      process_coda_fig(NULL, labels, ct_col = res_col_name, obs = obs)
-    }
-  })
-  names(seuratres_combos) <- paste0("ECODA_seuratres_", seurat_res)
-  combos <- c(combos, seuratres_combos)
+  if (is.null(variants)) {
+    seuratres_combos <- lapply(seurat_res, function(r) {
+      res_col_name <- paste0("RNA_snn_res.", r)
+      function() {
+        process_coda_fig(NULL, labels, ct_col = res_col_name, obs = obs)
+      }
+    })
+    names(seuratres_combos) <- paste0("ECODA_seuratres_", seurat_res)
+    combos <- c(combos, seuratres_combos)
+  } else {
+    missing <- setdiff(variants, names(combos))
+    if (length(missing)) stop("Selected composition variants were not built: ", paste(missing, collapse = ", "))
+    combos <- combos[variants]
+  }
 
   for (nm in names(combos)) {
     bundle_file <- file.path(results_dir, paste0(ds, "_", nm, ".rds"))
