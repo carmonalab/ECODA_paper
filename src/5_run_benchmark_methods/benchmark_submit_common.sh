@@ -588,6 +588,10 @@ analysis_merge_sync_cleanup() (
   bash "${nas_utility}" preflight --nas-root "${NAS_TARGET_DIR}" \
     --report "${RUN_ROOT}/manifests/sync_nas_preflight.json" ||
     sync_fail "NAS mount/write/rename/effective-mode preflight failed"
+  [[ "${REMOTE_ROOT}" == "${NAS_TARGET_DIR}/"* && ! -L "${REMOTE_ROOT}" &&
+     "$(_ecoda_canonical_path "${REMOTE_ROOT}")" == "${REMOTE_ROOT}" ]] &&
+    _ecoda_validate_path_ancestors "${REMOTE_ROOT}/.selected-publication" "${NAS_TARGET_DIR}" ||
+    sync_fail "selected NAS publication root escapes or redirects the configured NAS boundary"
   if ! mkdir -p "${REMOTE_ROOT}" "${LOCAL_ROOT}/embeddings" "${RUN_ROOT}/manifests"; then
     sync_fail "failed to create benchmark sync directories"
   fi
@@ -905,7 +909,12 @@ PY
     fi
   done < "${SYNC_FILES}"
   if [[ "${publication_identical}" == 1 && ${retry_publication} -eq 0 ]]; then
-    benchmark_require_nas_mode "${REMOTE_ROOT}" 777 || sync_fail "NAS root effective mode is not 777"
+    remote_dir="${REMOTE_ROOT}"
+    while [[ "${remote_dir}" != "${NAS_TARGET_DIR}" ]]; do
+      benchmark_require_nas_mode "${remote_dir}" 777 ||
+        sync_fail "selected NAS ancestor effective mode is not 777: ${remote_dir}"
+      remote_dir="$(dirname "${remote_dir}")"
+    done
     while IFS= read -r rel; do
       benchmark_require_nas_mode "${REMOTE_ROOT}/${rel}" 666 ||
         sync_fail "NAS effective file mode is not 666: ${rel}"
@@ -1128,10 +1137,19 @@ PY
     sync_fail "cannot atomically install remote checksum manifest"
   }
   (cd "${REMOTE_ROOT}" && md5sum -c checksums.md5) || sync_fail "remote checksum verification failed"
-  chmod 777 "${REMOTE_ROOT}" ||
-    sync_fail "cannot set NAS benchmark root permissions"
-  benchmark_require_nas_mode "${REMOTE_ROOT}" 777 ||
-    sync_fail "NAS root effective mode is not 777"
+  # Private controller umasks also affect newly created release/run parents.
+  # Normalize only this selected path to the NAS boundary, never its root.
+  remote_dir="${REMOTE_ROOT}"
+  while [[ "${remote_dir}" != "${NAS_TARGET_DIR}" ]]; do
+    [[ "${remote_dir}" == "${NAS_TARGET_DIR}/"* &&
+       -d "${remote_dir}" && ! -L "${remote_dir}" ]] ||
+      sync_fail "selected NAS permission path escaped or redirected the configured boundary"
+    chmod 777 "${remote_dir}" ||
+      sync_fail "cannot set selected NAS ancestor permissions: ${remote_dir}"
+    benchmark_require_nas_mode "${remote_dir}" 777 ||
+      sync_fail "selected NAS ancestor effective mode is not 777: ${remote_dir}"
+    remote_dir="$(dirname "${remote_dir}")"
+  done
   while IFS= read -r rel || [[ -n "${rel}" ]]; do
     [[ -n "${rel}" ]] || continue
     chmod 666 "${REMOTE_ROOT}/${rel}" ||

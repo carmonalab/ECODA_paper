@@ -1,6 +1,7 @@
 #!/bin/bash
 # Publication boundaries only: tiny text payloads, stubbed NAS mount probe.
 set -euo pipefail
+umask 077
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/ecoda-derivative-sync.XXXXXX")"
 TMP="$(cd "${TMP}" && pwd -P)"
@@ -11,6 +12,8 @@ export DATASETS_JSON_FILE="${TMP}/datasets.json"
 export ECODA_RUN_ROOT="${HPC_SCRATCH_DIR}/_ecoda_runs/derivative-sync" ECODA_RUN_ID=derivative-sync
 mkdir -p "${ECODA_RUN_ROOT}/manifests" "${NAS_TARGET_DIR}/batch_effect/corrected_final" "${TMP}/canonical"
 printf 'old canonical result\n' > "${NAS_TARGET_DIR}/batch_effect/corrected_final/old.rds"
+mkdir -p "${NAS_TARGET_DIR}/releases/test-release/unselected"
+printf 'unrelated metadata\n' > "${NAS_TARGET_DIR}/releases/test-release/unselected/metadata.json"
 printf '{"Toy":{"columns":{"label":"biology"},"views":{"batch_effect_corrected":{"output_file_name":"toy.h5ad"}}}}\n' > "${DATASETS_JSON_FILE}"
 printf 'source identity fixture\n' > "${ECODA_RUN_ROOT}/manifests/source.manifest"
 printf 'runtime identity fixture\n' > "${ECODA_RUN_ROOT}/manifests/runtime.identity"
@@ -49,7 +52,50 @@ benchmark_sync_artifacts_for() { SYNC_ARTIFACTS=("${ANALYSIS_ROOT}/results/toy.r
 notify_sync_status() { return 0; }
 benchmark_job_durations_block() { return 0; }
 DATASET_NAMES=(Toy)
+nas_root_mode="$(_ecoda_artifact_mode_bits "${NAS_TARGET_DIR}")"
+scratch_root_mode="$(_ecoda_artifact_mode_bits "${HPC_SCRATCH_DIR}")"
+if [[ "${STAGE5_DERIVATIVE_SYNC_TRANSFER_FAULT:-0}" == 1 ]]; then
+  rsync() { return 23; }
+  if analysis_merge_sync_cleanup mrvi > "${TMP}/transfer-fault.log" 2>&1; then
+    echo 'failed selected transfer reported sync success' >&2; exit 1
+  fi
+  grep -q 'selected benchmark rsync failed' "${TMP}/transfer-fault.log"
+  [[ "$(ecoda_owner_state "$(ecoda_owner_dir stage5 "sync/${ANALYSIS_ROOT}")")" == FAIL ]]
+  [[ ! -e "${ANALYSIS_NAS_ROOT}/results/toy.rds" && ! -e "${ANALYSIS_NAS_ROOT}/checksums.md5" ]]
+  printf 'PASS: fresh derivative selected transfer failure fails closed\n'
+  exit 0
+fi
+if [[ -n "${STAGE5_DERIVATIVE_SYNC_CHMOD_FAULT:-}" ]]; then
+  fault_directory="${NAS_TARGET_DIR}/releases/test-release/derivative-sync"
+  mkdir -p "${fault_directory}"
+  chmod 700 "${fault_directory}"
+  chmod() {
+    if [[ "$1" == 777 && "${2:-}" == "${fault_directory}" ]]; then
+      [[ "${STAGE5_DERIVATIVE_SYNC_CHMOD_FAULT}" == ineffective ]] && return 0
+      return 1
+    fi
+    command chmod "$@"
+  }
+  if analysis_merge_sync_cleanup mrvi > "${TMP}/fault.log" 2>&1; then
+    echo 'incorrect selected ancestor permissions reported sync success' >&2; exit 1
+  fi
+  grep -q 'selected NAS ancestor' "${TMP}/fault.log"
+  [[ "$(_ecoda_artifact_mode_bits "${fault_directory}")" == 700 ]]
+  [[ "$(_ecoda_artifact_mode_bits "${NAS_TARGET_DIR}")" == "${nas_root_mode}" ]]
+  printf 'PASS: Stage5 selected ancestor chmod failure/ineffectiveness fails closed\n'
+  exit 0
+fi
 analysis_merge_sync_cleanup mrvi
+ancestor="${ANALYSIS_NAS_ROOT}"
+while [[ "${ancestor}" != "${NAS_TARGET_DIR}" ]]; do
+  benchmark_require_nas_mode "${ancestor}" 777
+  ancestor="$(dirname "${ancestor}")"
+done
+[[ "$(_ecoda_artifact_mode_bits "${NAS_TARGET_DIR}")" == "${nas_root_mode}" ]]
+[[ "$(_ecoda_artifact_mode_bits "${HPC_SCRATCH_DIR}")" == "${scratch_root_mode}" ]]
+[[ "$(_ecoda_artifact_mode_bits "${NAS_TARGET_DIR}/releases/test-release/unselected")" == 700 ]]
+[[ "$(_ecoda_artifact_mode_bits "${NAS_TARGET_DIR}/releases/test-release/unselected/metadata.json")" == 600 ]]
+[[ "$(cat "${NAS_TARGET_DIR}/releases/test-release/unselected/metadata.json")" == 'unrelated metadata' ]]
 cmp "${ANALYSIS_ROOT}/results/toy.rds" "${ANALYSIS_NAS_ROOT}/results/toy.rds"
 source "${ROOT}/src/utils/bash/ecoda_run_audit_stage5.sh"
 _audit_die() { echo "$*" >&2; return 1; }
@@ -104,6 +150,14 @@ ecoda_artifact_owner_validate "${ANALYSIS_NAS_ROOT}/results/toy.rds" "${RUN_ID}"
 # A repeated identical publication validates; a different existing derivative
 # payload fails closed and retains its bytes, without replacement receipts.
 analysis_merge_sync_cleanup mrvi
+# Identical publication validates ancestor modes without repairing old evidence.
+ancestor="${NAS_TARGET_DIR}/releases/test-release/derivative-sync"
+chmod 700 "${ancestor}"
+if analysis_merge_sync_cleanup mrvi > "${TMP}/identical-bad-ancestor.log" 2>&1; then
+  echo 'identical reuse accepted an untraversable ancestor' >&2; exit 1
+fi
+[[ "$(_ecoda_artifact_mode_bits "${ancestor}")" == 700 ]]
+chmod 777 "${ancestor}"
 chmod u+w "${ANALYSIS_NAS_ROOT}/results/toy.rds"
 printf 'external conflicting bytes\n' > "${ANALYSIS_NAS_ROOT}/results/toy.rds"
 if analysis_merge_sync_cleanup mrvi > "${TMP}/conflict.log" 2>&1; then
