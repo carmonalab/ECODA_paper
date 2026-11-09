@@ -11,6 +11,10 @@ SELECTION_ARG=""
 SOURCE_MANIFEST_ARG=""
 RUNTIME_IDENTITY_ARG=""
 SCHEDULER_ACCOUNTING_ARG=""
+STAGE3_REUSE_REPORT_ARG=""
+REUSE_SELECTION_ARG=""
+TERMINAL_INSPECT_ARG=""
+FAILED_GATE_MANIFEST_ARG=""
 
 
 _audit_die() {
@@ -25,6 +29,9 @@ Usage: ecoda_run_audit.sh --run-root ABSOLUTE_RUN_ROOT --stage STAGE \
        --source-manifest ABSOLUTE_SOURCE_MANIFEST \
        --runtime-identity ABSOLUTE_RUNTIME_IDENTITY \
        [--scheduler-accounting ABSOLUTE_RUN_OWNED_ACCOUNTING_TSV]
+Stage 3 validator-only subset reuse (preserves the original failed gate):
+       --stage3-reuse-report NEW_ABSOLUTE_JSON --reuse-selection ABSOLUTE_SUBSET_TSV
+       --terminal-inspect ORIGINAL_INSPECT_JSON --failed-gate-manifest ORIGINAL_GATE_JSON
 EOF
 }
 
@@ -80,6 +87,10 @@ while [[ $# -gt 0 ]]; do
       [[ -n "${SCHEDULER_ACCOUNTING_ARG}" ]] || { _audit_die "--scheduler-accounting requires a path"; exit 1; }
       shift
       ;;
+    --stage3-reuse-report) STAGE3_REUSE_REPORT_ARG="${2:-}"; shift 2 ;;
+    --reuse-selection) REUSE_SELECTION_ARG="${2:-}"; shift 2 ;;
+    --terminal-inspect) TERMINAL_INSPECT_ARG="${2:-}"; shift 2 ;;
+    --failed-gate-manifest) FAILED_GATE_MANIFEST_ARG="${2:-}"; shift 2 ;;
     -h|--help)
       _audit_usage
       exit 0
@@ -109,6 +120,14 @@ done
   _audit_die "unsupported stage: ${STAGE_ARG}"
   exit 1
 }
+
+if [[ -n "${STAGE3_REUSE_REPORT_ARG}${REUSE_SELECTION_ARG}${TERMINAL_INSPECT_ARG}${FAILED_GATE_MANIFEST_ARG}" ]]; then
+  [[ "${STAGE_ARG}" == stage3 && -z "${SCHEDULER_ACCOUNTING_ARG}" &&
+     "${STAGE3_REUSE_REPORT_ARG}" = /* && "${REUSE_SELECTION_ARG}" = /* &&
+     "${TERMINAL_INSPECT_ARG}" = /* && "${FAILED_GATE_MANIFEST_ARG}" = /* ]] || {
+    _audit_die 'Stage 3 reuse requires all four explicit absolute proof/report options'; exit 1;
+  }
+fi
 
 command -v realpath >/dev/null 2>&1 || {
   _audit_die "realpath is required for run audit"
@@ -776,6 +795,12 @@ _audit_semantic_artifact() {
         *.h5ad)
           ecoda_validate_checksum "${path}" || return 1
           _audit_benchmark_h5ad "${path}" "${view}" "Stage 3 audit" || return 1
+          if [[ -n "${STAGE3_REUSE_REPORT_ARG:-}" ]]; then
+            # Reuse validates this same cohort/obs policy in the report helper
+            # against the immutable production source references. It does not
+            # re-read historical raw expression files to recompute their MD5.
+            return 0
+          fi
           if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
             input_dir="$(ecoda_derivative_input "${dataset}" "${view}" directory)" || return 1
           else
@@ -997,6 +1022,27 @@ if [[ "${STAGE_ARG}" == stage5 ]]; then
   _audit_metadata_export_manifest || exit 1
   _audit_batch_contract_manifest || exit 1
   _audit_corrected_source_contracts || exit 1
+fi
+if [[ -n "${STAGE3_REUSE_REPORT_ARG}" ]]; then
+  # Audit the original full-run identities above. Expensive source/H5AD/NAS
+  # checks use only this exact subset; the complete failed accounting is kept.
+  [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]] || {
+    _audit_die 'Stage 3 subset reuse requires an immutable derivative binding'; exit 1;
+  }
+  reuse_helper="$(realpath "${SCRIPT_DIR}/../py/stage3_reuse_report.py")" || exit 1
+  _audit_regular_file "${reuse_helper}" || exit 1
+  reuse_python="$(_audit_python_binary)" || exit 1
+  reuse_args=(--run-root "${RUN_ROOT_REAL}" --selection "${SELECTION_ARG}"
+    --reuse-selection "${REUSE_SELECTION_ARG}" --source-manifest "${SOURCE_MANIFEST_ARG}"
+    --runtime-identity "${RUNTIME_IDENTITY_ARG}" --terminal-inspect "${TERMINAL_INSPECT_ARG}"
+    --failed-gate-manifest "${FAILED_GATE_MANIFEST_ARG}")
+  "${reuse_python}" "${reuse_helper}" "${reuse_args[@]}" --check-history || exit 1
+  SELECTION_ARG="${REUSE_SELECTION_ARG}"
+  _audit_selected_artifacts || exit 1
+  "${reuse_python}" "${reuse_helper}" "${reuse_args[@]}" \
+    --stage3-reuse-report "${STAGE3_REUSE_REPORT_ARG}" --audit-entrypoint "${SCRIPT_DIR}/ecoda_run_audit.sh" || exit 1
+  printf 'ECODA_STAGE3_NOOP_VALIDATED=%s\n' "${STAGE3_REUSE_REPORT_ARG}"
+  exit 0
 fi
 _audit_scheduler_ids || exit 1
 _audit_selected_artifacts || exit 1
