@@ -1279,3 +1279,68 @@ The later three-context proposal is currently 63 public benchmark requests,
 family rows: **142 family dispatch rows**, not a scheduler-task count.
 Physical task/artifact scope must still be frozen before launch. This wave
 has not launched. The cell-depth job contract is still under review.
+
+
+## Three-cohort metadata evidence — exact launch contract, 2026-11-09
+
+State: **RUNNING**; launched once `2026-11-09T02:41:20Z`. Prepare and reconcile
+passed (ABSENT, no discrepancies), and the reviewed Bassez dependency was
+verified by the durable launcher. Wrapper digest
+`f62dbcafba7437c9ac5cef35ba8391dec629de61f660390fa9564e7070c31cbb`.
+One unbounded durable waiter is armed (local exec `97611`); do not duplicate
+it or relaunch the wrapper. No evidence/reuse conclusion is claimed yet.
+This independent evidence gate uses the already reviewer-approved Bassez HR
+input and unchanged Zhang/Pelka inputs. BL10 v2's failure is terminal-inspected
+and understood; that failed gate remains failed and is not a predecessor.
+This audit consumes none of its scientific outputs, writes no shared
+`ANALYSIS_ROOT`, and may proceed while BL science validation is repaired.
+Retain the existing `ecoda-benchmark` group; do not create another sync group.
+Its sole formal data dependency is the reviewed Bassez Stage 2 gate.
+
+- Gate: `ecoda_stage5_auto_annotation_reuse_evidence_20261109_v1`; run: `stage5_auto_annotation_reuse_evidence_20261109_v1`.
+- Source: `669532bf01fc23d5602eac41a9f47be77fbca416`, separate snapshot parent
+  `20261109-auto-annotation-evidence-v1`; verified archive SHA256
+  `8a5c771f006bd4ede3f80e938c47dae31bfa55aa2e9e56cb5c7bf49f7fdbb965`.
+- Same pinned format-2 runtime image/manifest and frozen tracked aux as the
+  BL10 v2 contract. No environment refresh or model/annotation fitting.
+- Exact selection: Bassez, Zhang, Pelka; each `benchmark_analysis` /
+  `auto_annotation_reuse_evidence`. Three rows, SHA256
+  `477b3c88ebb2164123d081552ba02dc29b2adb7d95106af7ca0b6c42e4828bb7`.
+- Exact six-field input refs SHA256
+  `315f9ec8b22f9126ef5197f60b255e95f1b08fb0ec553d0256412da5effb66ea`.
+  They are a finite subset of the already content-verified BL10 refs.
+  Bassez MD5 `678656c738597471d884f88e345e6970`; Zhang
+  `7c0854d54bbfdc6b8eb971def8aa7f84`; Pelka
+  `f3f2fc8fff93d32a805ccef15d67041b`.
+- One ordinary Slurm job, one CPU, 64G, one hour; no array, GPU, watchdog,
+  retry, broad discovery, RNA matrix load, fit, or NAS publication.
+  Expected exactly **one scheduler ID / one scheduled task**.
+- The controller freezes the selected nonrecursive legacy RDS inventory,
+  checksum-table bytes and input file stats; the worker consumes only that
+  inventory and reads bounded obs/uns plus checked compact RDS artifacts.
+  Include author composition only for configured auto-column overlap (Zhang).
+- Expected output: new run-owned `artifacts/evidence/auto_annotation_reuse.json`,
+  checksum and truthful producer record. Classifications are evidence only;
+  `COUNT_MATCH_PROVENANCE_PENDING` does not approve reuse, and no additional
+  RNA-method rerun follows automatically from a discrepancy.
+- Terminal procedure: one existing durable waiter; one first `inspect` with
+  its sole emitted ID; pinned custom `--validate` entry against this run;
+  evidence review and second `inspect --approve-reviewer`. No standard fit
+  artifact auditor or new scheduler accounting query.
+
+Immutable wrapper:
+
+```bash
+env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-auto-annotation-evidence-v1/669532bf01fc23d5602eac41a9f47be77fbca416/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-auto-annotation-evidence-v1/669532bf01fc23d5602eac41a9f47be77fbca416/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-auto-annotation-evidence-v1/669532bf01fc23d5602eac41a9f47be77fbca416/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage5_auto_annotation_reuse_evidence_20261109_v1 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage5_auto_annotation_reuse_evidence_20261109_v1 --script src/utils/bash/auto_annotation_reuse_evidence.sh -- --selection-file /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/auto-annotation-evidence-v1/selection.tsv --input-artifacts /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/auto-annotation-evidence-v1/input_artifacts.tsv --results-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/benchmark/results --derivative-release 20261108-confounding-subsets-v1
+```
+
+The initial snapshot command stopped before creating a snapshot because the
+new parent directory was absent. After explicitly creating that new parent,
+source creation and remote control/archive hashes passed. No job had been
+submitted during that setup correction.
+
+Reviewed implementation checkpoints `d29551d` (five-metric transformation
+screen) and `669532b` (shared derivative runtime export) are pushed to master.
+The production BL-cache validator's extra-field mismatch was also reproduced
+read-only on the actual Adams output; its isolated compatibility fix is in
+progress. No completed scientific fit was repeated.
