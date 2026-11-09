@@ -61,7 +61,18 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, recovered MrVI published; observer retired; remaining95 startup repair
+## Live checkpoint — 2026-11-09, remaining97 RUNNING; all three contexts past startup
+
+- **22:42 UTC milestone:** all three contexts passed every selected H5AD
+  preflight and submitted their scoped method arrays. Benchmark has seven of
+  nine method watchdog groups OK (including the H200 scPoli group); only CPU
+  MrVI and one CPU PILOT-GM group remain active. Uncorrected has three of four
+  groups OK (pseudobulk, composition, PILOT), with QOT active. Corrected PILOT
+  is OK; remaining corrected preparation/method groups are running or waiting
+  on their explicit preparation dependencies. Batch GPU workers are actually
+  running on gpu002/gpu004. No FAIL watchdog status appeared in this bounded
+  startup-completion check. This is execution progress, not terminal release
+  approval. Evidence: `.gate/remaining97_node_recovery_20261109_v1/startup_handoff.observed.v3.json`.
 
 - **Current recovery:** `ecoda_stage5_failed16_20261109_v1` launched at
   16:41:50 UTC and reached actual `FAILED` at 17:38:05 UTC. It selected
@@ -69,31 +80,45 @@ decisions have been applied to existing artifacts.
   GloScope 1; uncorrected MrVI 4; corrected MrVI 3 and QOT 8. No healthy row,
   preparation cache or annotation is being recomputed. Initial expected graph:
   16 scheduler IDs / 38 task units, excluding recorded OOM-only retries.
-- **Monitoring:** both prior official waiters have finished. The monitor-only
-  observer was intentionally retired to release the required shared group;
-  only job4666208 was cancelled. It is honestly FAILED with one terminal
-  accounting inspection completed, and no success/release approval. Original
-  benchmark GPU jobs continue independently. A temporary one-hour sleep
-  assertion (session21067) bridges to the new recovery's process-bound waiter;
-  no persistent power setting was changed.
-- **Latest preserved queue evidence, 20:27:18 UTC:** the original two
-  benchmark scPoli tasks remain pending their required H200 hardware:
-  `4665568_1` is Stephenson and `4665568_2` is Bassez, both HR dims15.
-  Their watchdog, aggregate and monitor-only barrier `4666208` are pending
-  dependencies. The user-requested single `squeue --start` snapshot reports
-  `N/A` start times and `ReqNodeNotAvail` for both scientific tasks. No
-  polling loop or additional accounting query was used. Benchmark CPU hardware stays
-  EPYC-7742; batch analyses may use any suitable CPU/GPU. The failed16 startup
-  failures are being repaired. The user explicitly approved the additional
-  read-only allocation query from their phone; it completed once at20:42 UTC.
-  The original terminal accounting evidence remains unchanged.
-- **Next recovery scope:** the full finite original inventory identifies 95
-  remaining absent physical rows: benchmark15, uncorrected32, corrected48
-  (including eight corrected preparations). A local real-dispatcher rehearsal
-  passed exact47 initial IDs /138 task units, with synthetic scheduler and
-  science inputs only. This is graph validation, not a real launch. Eight
-  uncorrected preparations plus their original timings and16 exported metadata
-  files have passed scoped copy-only reuse review. No95 run has been launched.
+- **Current recovery RUNNING:** gate ecoda_stage5_remaining97_20261109_v1
+  launched exactly once at21:40:10 UTC. Source32769, command81887459…,
+  event generation928cad6e1cd2817f23714f5de777ff62. Expected97 selected
+  tasks (17benchmark/32uncorrected/48corrected),49 initial scheduler IDs,
+ 141 task units. Parent/child run IDs remain the explicit legacy remaining95
+  names required by the sealed preparation receipt; counts are always97.
+- **Monitoring:** exactly one official unbounded waiter is active:
+  unified session59303, sole consumer cell394, PythonPID71034/uv70886.
+  Process-bound caffeinate session72436 follows PID71034; the earlier
+  temporary assertion can expire naturally. Previous observer retirement
+  and failed16 outcomes remain intact; no extra waiter or polling loop.
+- **Latest GPU status:** the fresh read-only preflight at21:07 UTC found an
+  empty own-user queue. The native old scPoli watchdog now reports both tasks
+  FAILED0:53, with no OOM retry and both expected embedding payloads absent.
+  They are no longer pending. Current node metadata shows gpu006 idle after
+  its reboot, with four H200 NVL GPUs. No additional accounting query was used.
+  Keep the H200 requirement and add only those two failed rows to recovery.
+- **Next recovery scope:** 97 missing physical rows: benchmark17,
+  uncorrected32 and corrected48 (including eight corrected preparations).
+  The original95 scope and successful47-ID/138-unit rehearsals remain
+  immutable evidence; the two newly failed rows require a distinct97 scope
+  and a fresh expected49-ID/141-unit graph. The exact old15 benchmark rows
+  are preserved, plus Step/Bassez scPoli hvg2000_highres_dims15 only. No other
+  scPoli variant is added. Legacy remaining95 parent/child run IDs stay fixed
+  for the sealed32-target receipt; actual counts are always declared97.
+- **Launch preflight accepted:** source/runtime full SHA/NAS/all18 inputs/
+  all32 prepared sources/fresh roots passed. V3 raw BLOCKED classification
+  remains unchanged; a separately reviewed exact native interactive-SSH
+  lifetime supplement closes its sole role gap. No unknown-writer exception,
+  old-owner change or scientific gate success was fabricated.
+- **Actual startup evidence:** by22:03 UTC all17 benchmark method rows were
+  submitted in nine arrays. EPYC-7742 CPU workers and an H200 gpu006 worker
+  were actually RUNNING; four method watchdog groups already reported OK.
+  At22:07 allthree controllers were alive and progressing. Uncorrected source
+  preparation reuse passed its native RDS contract and eight metadata NOOP
+  checks, with input preflight4666269 progressing. Corrected metadata8 NOOP
+  checks passed and input preflight4666277 was submitted. Benchmark input
+  preflight4666239 and R environment4666241 passed. Do not call all97 methods
+  complete or claim batch fits started before their native input gates pass.
 - **Original main-v2 reboot incident:** login1 rebooted at 14:47:27 UTC,
   destroying its tmux runner and three login-node controllers. The gate was
   honestly transitioned by the existing CLI to `PRELAUNCH_STOP`; its wrapper
@@ -126,7 +151,7 @@ decisions have been applied to existing artifacts.
   five-metric/Kidney reporting helpers and recovery repairs are pushed. The
   reboot-specific copy publisher is reviewed but has not published real data.
   Future P6 copied-Slurm-spool bootstrap fixes passed independent fixtures;
-  they do not change active source `0314f20`.
+  they do not change active source `32769f1`.
 - **Reporting:** final maintained figures and screens await approved results.
   Preserve the external Figure 3 layout in `notebooks/benchmark_analysis.rmd`
   and previews; chat `01a1c093-4a2f-7e90-81d2-cc472ebbc728` owns those hunks
@@ -4126,3 +4151,180 @@ checking all47 initial native exclusions and19 OOM flag sets, scope47/138/95,
 unchanged scientific/hardware/dependency behavior and16 metadata NOOP rows.
 New committed snapshot, final controls, fresh read-only launch preflight and
 launch review remain required. No new scientific jobs have yet been submitted.
+
+
+### Benchmark GPU tail failed at startup; amend recovery from95 to97
+
+The old scPoli native watchdog now reports exacttask1+2 FAILED0:53 with
+RETRY_INDEX0. Both expected Step/Bassez hvg2000_highres_dims15 embeddings are
+absent. The queue is empty; do not continue calling these jobs pending, infer
+success, or invent an original wrapper exit. A live old-job descriptor had
+already expired; no second supplemental accounting query was made. Native
+status and exact output-absence observations are preserved under
+`.gate/remaining95_node_recovery_20261109_v1/`. Current gpu006 metadata is IDLE,
+with four141GB H200 NVL GPUs following its reboot (raw Slurm local timestamps
+are preserved, not silently relabelled UTC). Retain the benchmark GPU model.
+
+A distinct `.gate/remaining97_scope_20261109_v1/` preserves the old benchmark15
+byte-prefix and appends exactly two explicit scPoli rows. Benchmark selection
+SHA `db3adcc00ebb09dcdb738431bed697837af1e20d8d5ec8210f3057a9c836d4cb`.
+New benchmark selection and contexts were staged create-only/mode444 into
+Bamboo input `remaining97-scope-v1`; all batch selections/matrices,18 input
+references and the reviewed32 preparation receipt remain unchanged. The four
+legacy remaining95 run IDs are retained solely for strict32 target matching;
+new gate ID is `ecoda_stage5_remaining97_20261109_v1`, actual scope17/32/48.
+Expected graph49 IDs/141 task units/97 rows/20 method-preparation groups is
+being checked with exact32769 source. H200+one GPU stays on the two new rows;
+EPYC-7742 stays on CPU benchmark rows, and batch remains model-flexible.
+
+The new97 exact wrapper is in
+`.gate/remaining97_node_recovery_20261109_v1/wrapper.sh`; command SHA
+`81887459f0a3507248fbcc5aac4c5a3d22b44fca5dc20daefaf0aa065bd7836c`.
+Conditional independent review confirms only the contexts path differs from
+the accepted95 wrapper. Final scope/preflight/launch review remains required.
+
+### Read-only preflight V1 passed data checks, blocked only on a service PID
+
+V1 observation SHA
+`98773e4204c9b4593df9ef573e3195740ce8743fe74082890f0e1b011c982045`
+records source32769 manifest482b/archive25dac, full runtime SIF SHA
+`8fcd00b7a02592f82e8ad96ec9dffdcfb40214b3c47218f770dfb8e828e05e34`,
+unchanged host Python/R hashes, R4.5.2, exact NFS tuple, all18 input witnesses,
+all32 prepared payloads/proofs/owners, absent new targets and retired observer.
+It performed zero H5AD value reads/full hashes, fits, scores or accounting.
+It remains BLOCKED; no flags or source statuses were promoted.
+
+Its sole block was a fixed historical native PAM PID predicate; separate SSH
+sessions create different user-manager/PAM PIDs. The bounded metadata-only
+probe confirms exact own-UID (sd-pam) argv/comm and a live parent
+/usr/lib/systemd/systemd --user with PPid1 and root-owned0755 executable.
+Unknown/unreadable interpreters remain blocking. A V2 reader drops only the
+fixed PID numbers, preserving all native semantic guards; it and the new97
+control require independent review before a fresh preflight. No production
+scientific code or generic ownership guard changes for this diagnostic fix.
+
+
+### Overnight authorization and exact97 launch approved
+
+The user explicitly instructed: no further approval questions; continue the
+processing, targeted recovery, review and finalization overnight, in parallel
+as far as dependencies permit, reusing completed work. Necessary task-scoped
+read-only diagnostics/recovery operations are authorized; preserve the single
+formal terminal audit and archive supplemental diagnostics separately. Specific
+scientific/hardware restrictions and protection of unrelated work still apply.
+
+Source32769 is committed, pushed and deployed with verified immutable manifest
+`482b6d41df9af4bbd67f6a210037aa0ce494f023051e61f3ba61462cc375a597`,
+archive `25dac10aa0d6f8a23c0bd8aab1d6d794dc83d187f6e652cf92c974a8fde25092`.
+Fresh97 actual synthetic graph SHA
+`1ee61f42e01f49f1ceb07ea90d545bfc6331297e03a3f6d449a082df4aef19c8`
+passes49 initial IDs /141 task units /97 rows,20 OOM flag sets, exact17/32/48
+scope, both targetedH200 scPoli rows and all CPU exclusions. No other scPoli,
+BL10, authorHR22 or completed prep/metadata task was added.
+
+Read-only preflight V3 SHA
+`c8fe6ae96f4fb477386ad3245c46f0d6edf5c8edcb389be743babfcc5d406955`
+keeps its raw BLOCKED status. All data/source/runtime/NFS/fresh-root checks
+passed; its sole unresolved classification was the user's ordinary interactive
+SSH transport. Supplemental facts SHA
+`705e4f9e91306b78e2f93616ef0bf5970a30353f680abdb386d7aa8a87de57de`
+prove exactPID1119573/start2330961/native authenticated SSH/root parent and its
+sole idle login bash/TTY, with no selected project markers or other writer.
+Independent and operating reviews accept only that native-role classification
+for that exact process lifetime, preserving raw evidence, no unknown-process
+exception and every generic/native input guard. No full preflight rewrite or
+old scientific gate approval occurred.
+
+Final97 ready spec SHA
+`cd7b9fb9ffdbcc4c5d7e97018c557ee234bc9e621e3ecb527d1292a45e8d78bd`;
+operator preflight review SHA
+`92cd8099abdd87f5272674b8f711d57188c55a82b9e5c4caa01123aa4014eccc`.
+Exact command SHA
+`81887459f0a3507248fbcc5aac4c5a3d22b44fca5dc20daefaf0aa065bd7836c`
+is `.gate/remaining97_node_recovery_20261109_v1/wrapper.sh`; seven final
+control/evidence files were staged create-only and SHA-verified in Bamboo
+input `remaining97-launch-v1`. Independent final launch review ACCEPTS this
+one exact targeted submission. Gate `ecoda_stage5_remaining97_20261109_v1`,
+same ecoda-benchmark group, no failed-success predecessor dependencies.
+Parent/children retain legacy remaining95 run IDs for sealed32 compatibility;
+actual scope is97. Local durable control is
+`.gate/ecoda_stage5_remaining97_20261109_v1.control.py`.
+
+Proceed through normal prepare/reconcile/launch; arm exactly one official wait
+immediately after launch. Record actual emitted rows/IDs, stop unexpected scope,
+and never report submission as completed methods. No new scientific work was
+submitted at the time this prelaunch checkpoint was written.
+
+
+### Exact97 recovery launched and monitored — RUNNING21:40:10 UTC
+
+Gateecoda_stage5_remaining97_20261109_v1 passed prepare/reconcile (ABSENT,
+all invariants, no discrepancies) and launched once. Command digest
+`81887459f0a3507248fbcc5aac4c5a3d22b44fca5dc20daefaf0aa065bd7836c`;
+event generation `928cad6e1cd2817f23714f5de777ff62`.
+One official wait is armed (session59303/cell394/Python71034/uv70886), with
+process-bound sleep prevention72436. Earlier observer wait236 is finished;
+its cancelled/FAILED record remains truthful. No source/runtime/Pixi update
+was made to active workers. Runtime and frozen source remain immutable32769.
+
+Actual initial benchmark IDs: input4666239, Renv4666241; method arrays
+4666242/4666244/4666247/4666249/4666253/4666256/4666259/4666261/4666265;
+watchdogs4666243/4666246/4666248/4666252/4666255/4666258/4666260/4666264/4666267.
+The queue observes aggregate4666268 (its final native ledger emission is still
+pending). All17 requested benchmark rows are submitted, with no other scPoli
+variant. Input/current-source proofs and Renv passed. At22:03 CPU007/013
+EPYC-7742 workers and gpu006 H200 scPoli worker were actually running; four
+benchmark watchdog groups had completed OK. Batch controllers remain
+independent and active: native UNC prep reuse/schema passed and metadata8
+was NOOP; corrected metadata8 was NOOP. Their input arrays4666269 and4666277
+are submitted; later method submission remains gated by their own inputs,
+not by benchmark completion. Scope/IDs/outcomes are still provisional while
+native ledgers and wrappers are active; no terminal accounting/approval yet.
+
+Parallel no-compute work continues: exact old32 watchdog metadata was fetched
+(stable32groups/687 text files/nine one-level directories, no payloads/queries/
+old writes), SHA `b77f0e7ab1ccfdcb44257a40923ef5f0a84f0b5410e4a98a2b1166fd1727847b`.
+It shows14 native terminal statuses (allzero retries),18 missing status/logs,
+no retry files observed; complete73-ID catalog is not yet approved. Source
+precondition/preservation attestation is being checked before any narrow
+strict-B alternative. Four ownerless GloScope shards are a documented producer
+reservation mismatch, not a reason to refit. Generic guards remain unchanged.
+
+P6 finite text templates are archived/hash-verified under
+`.gate/p6_finalization_inputs_20261109_v1/` (27files/1,087,851bytes).
+Manifest SHA `aa95770d2a9850da7af7562e9415a97ebcecc7bae282467ff9f72ecd32a192b9`.
+All1100 intake keys remain BLOCKED until exact row receipts and scientific
+review; no ready/projection/render claim. Existing five-metric/Kidney code
+parses and grid contracts pass. Legacy209 input-only stopped-parent witness
+compatibility and8 already-owned UNC Glo scientific validation are being
+prepared independently while current compute runs. No redundant model refit
+or publication of unapproved artifacts is authorized by these diagnostic steps.
+
+### Overnight milestone and stopped-run publication repair —22:43 UTC
+
+All three recovery contexts have passed startup and submitted scoped method
+arrays. The22:42 bounded milestone snapshot records seven benchmark groups
+OK, three uncorrected groups OK and corrected PILOT OK; remaining jobs are
+running or waiting on their own explicit preparation dependencies. H200
+benchmark scPoli has passed, while batch GPU jobs run on other GPU nodes.
+No watchdog FAIL was observed. The single official waiter remains active;
+no extra waiter or scheduler polling loop was installed.
+
+Independently reviewed stopped-run publication extension committed as
+`ae44182` (only `bl_science_publication.py` and its focused reboot test).
+It preserves STOP/null and generic ownership guards, admits no publication
+without complete catalog/quiescence/scientific evidence, and handles only
+four exact ownerless GloScope parameter shards under documented producer
+design. Existing main/reboot fixtures passed. This commit does not update
+active source32769 or claim real-data publication.
+
+Supplemental scheduler discovery initially returned69 of73 known roots.
+A separate, explicitly four-ID query established the other four were
+CANCELLED0:0, EligibleUnknown, StartNone, with exact original9ca submission
+commands and failed-preparation dependencies. These noneligible allocations
+were omitted by default time-window discovery. Evidence:
+`.gate/old_main_scheduler_discovery_20261109_v1/four_ineligible.observed.json`
+(raw stdout SHA`8b8ac530cb685dcbd679d8ec88320a922dc3ba4644a2c0086b1a849f84965345`).
+This supplemental diagnostic is not the original sole terminal inspect and
+adds no fabricated scheduler state or gate success. Complete original
+accounting remains reserved for that inspect.
