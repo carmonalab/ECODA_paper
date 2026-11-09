@@ -199,14 +199,35 @@ ecoda_derivative_root() {
 }
 
 ecoda_derivative_input() {
-  local dataset="$1" view="$2" kind="${3:-file}" verify="${4:-metadata}"
+  local dataset="$1" view="$2" kind="${3:-file}" verify="${4:-metadata}" rc path
   local -a extra=()
   [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]] || return 1
   case "${kind}" in directory) extra+=(--directory);; file) ;; *) return 1;; esac
   case "${verify}" in content) extra+=(--verify-content);; metadata) ;; *) return 1;; esac
-  _ecoda_derivative_cli input --binding "${ECODA_ARTIFACT_BINDING}" \
+  if _ecoda_derivative_cli input --binding "${ECODA_ARTIFACT_BINDING}" \
     --run-root "${ECODA_RUN_ROOT}" --nas-root "${NAS_TARGET_DIR}" \
-    --dataset "${dataset}" --view "${view}" ${extra[@]+"${extra[@]}"}
+    --dataset "${dataset}" --view "${view}" ${extra[@]+"${extra[@]}"}; then
+    return 0
+  else
+    rc=$?
+  fi
+  # Forensics only: never retry, repair, print file contents or replace the
+  # resolver's original status. Successful stdout remains untouched.
+  printf 'ERROR: derivative input resolver failed rc=%s dataset=%q view=%q run_id=%q job_id=%q task_id=%q node=%q\n' \
+    "${rc}" "${dataset}" "${view}" "${ECODA_RUN_ID:-unknown}" \
+    "${SLURM_JOB_ID:-unknown}" "${SLURM_ARRAY_TASK_ID:-unknown}" \
+    "${SLURMD_NODENAME:-${HOSTNAME:-unknown}}" >&2 || true
+  for path in "${ECODA_ARTIFACT_BINDING}" "${ECODA_RUN_ROOT}/manifests/input_artifacts.tsv" "${ECODA_RUN_ROOT}/manifests"; do
+    printf 'DERIVATIVE_RESOLVER_STAT path=%q\n' "${path}" >&2 || true
+    if stat -c 'mode=%a type=%F size=%s dev=%d inode=%i mtime=%Y ctime=%Z path=%n' -- "${path}" >&2 2>/dev/null; then
+      :
+    elif stat -f 'mode=%Lp type=%HT size=%z dev=%d inode=%i mtime=%m ctime=%c path=%N' "${path}" >&2 2>/dev/null; then
+      :
+    else
+      printf 'DERIVATIVE_RESOLVER_STAT unavailable path=%q\n' "${path}" >&2 || true
+    fi
+  done
+  return "${rc}"
 }
 
 ecoda_derivative_input_proof() {

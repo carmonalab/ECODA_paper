@@ -61,7 +61,7 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, recovery validating inputs; no method jobs yet
+## Live checkpoint — 2026-11-09, method waves underway; one isolated failed row
 
 - P0/P1 DONE: logical checkpoints and harmonized documentation are pushed.
   Latest reviewed controller/reuse source is9ca2453, committed/pushed and
@@ -2441,3 +2441,82 @@ and investigate the nine checksum disagreements using finite independent
 backup/receipt evidence before deserializing or selecting any recompute.
 Actual full science/projection compute remains gated after the active wave's
 terminal review in the existing ecoda-benchmark serialization group.
+
+
+### Actual method launch and isolated GloScope failure — 2026-11-09
+
+At09:21:02Z benchmark had28pending family rows and4method arrays/4watchdogs;
+uncorrected had56pending rows and4method arrays/3watchdogs (another submission
+in progress); corrected had8/8compute preflightOK under4665528 and was finishing
+source/consumer checks. Benchmark preflight IDs4665493/4665514 and uncorrected
+4665505/4665515 are recorded. No source/runtime/config/snapshot was changed.
+
+MOFA array4665525 published its7-combo Stephenson result and its watchdog4665526
+reportsOK. GloScope4665516 siblings progressed/completed, but task2 failed
+before R with ENOENT for the run-owned manifests/input_artifacts.tsv. Exact
+actual matrix row2 is Stephenson/benchmark_analysis/gloscope/hvg2000_pcadims30;
+matrix MD5 `9732a9b209be8401c14679c321773e45`,size285. Local read-only forensics:
+`.gate/main_recovery_failure_20261109_v2/worker_forensics.json` and
+`failed_row_matrix_and_stat.txt`.
+
+The host TSV exists with exact binding SHA3fad7dad..., size3939, inode
+4761855699885302067, and unchanged creation-era mtime/ctime. The same failed
+worker passed earlier post-container binding validation and emitted its
+ECODA_WORKER_DISPATCH banner, then failed during ecoda_derivative_input
+directory/content resolution. Other parameter tokens/MOFA use the same mounts.
+No deletion or parameter-specific mount path was found; a static mount defect
+is not established. An exact tiny resolver fixture reproduces the phase when
+the TSV is deliberately removed after successful validation and passes when
+restored, proving the error boundary only, not the production cause. The one
+retained scontrol record lookup found the old task already purged; no terminal
+accounting query was performed. Do not infer missing data or repair sidecars:
+the TSV is bound by SHA in artifact_bindings.json and has no separate.md5 by
+design.
+
+Independent review accepted failure-only shared-resolver diagnostics plus its
+focused and existing derivative regressions: identical successful stdout/args,
+original failure code retained, selected context/path stats on stderr only,
+no retries, source/proof/owner/permission changes or cause-fix claim. This
+applies to a future immutable snapshot only; active9ca workers stay unchanged.
+
+Concrete one-row v3 recovery proposal is prepared but NOT launched:
+`/private/tmp/ecoda-single-gloscope-recovery-proposal-v3/proposal.json`, SHA256
+`fd618fd792bc03af8fd9bad362b4d7cb1a2c17a5bfe20ecebed2bc6fcc3a11f2`.
+Existing requested-scope sharding/actual standalone RDS validator tests pass:
+one CPU16/128G/12h gloscope row, one watchdog and one aggregate, plus one
+H5AD+oneR environment preflight =5initialIDs/5units. No preparation, other four
+GloScope parameters or MOFA fit is selected. Formal dependency would be only
+the approved Stage4 manifest, never the failed/current parent. Wait for active
+v2 terminal accounting/inspection and the complete failed-row catalog before
+sealing a new recovery source/control; retain every valid output. Other
+contexts/arrays continue and have not been cancelled.
+
+P6 bounded observations completed meanwhile:
+- All9NAS zeroimp counterparts match the frozen canonical table and differ
+  from scratch versions; no NAS adjacent sidecars exist. Identity metadata
+  SHA76e360294240c9a3593a447e01bc43f1a09c55fb001490050f6d6de1c0550834.
+  Nine tiny checksum-backed NAS summaries contain41–43settings each and all
+  eight stored scores, including the canonical five, all finite. No distances,
+  labels or scoring-policy witness are stored. Schema metadata SHA
+  `e1e77131b91e2e3da1f5129eddb4047512cc425a75c9c34832c07a479587f696`.
+  Scientific/current-input/LISI-definition compatibility still needs review;
+  no nine reruns, old-sidecar/table edits or scientific approval are inferred.
+- Eleven current H5ADs were probed for group/column names/shapes only: all22
+  Leiden50/Harmony2 source columns and corresponding embeddings exist. No
+  dataset values/expression groups/full hashes were read. Observation SHA
+  `74c20960df40f10a3625edff15c2bdabab60044b50cb399e802eb006f2d11c77`.
+- Numbered-figure scope proposal adds673explicit rows to231benchmark core
+  results (904total;1089intake rows including existing metadata/batch/screens).
+  Candidate sources:14Bassez publication,69main-wave,568legacy,22derivedTODO.
+  No HiTME variance grid/PILOT-GM noncanonical expansion or optional9QC rows.
+  Twenty derived rows are reuse/compatibility candidates, not new fits;
+  Stephenson's two need current53-compatible metadata results. Old fast-obs
+  CSVs exist locally as compact sample×cluster metadata; oldSteph55 cannot
+  be repaired by merely dropping2rows because current clustering categories
+  differ (res50 866vs881; Harmony34vs31). No new RNA/PCA/Harmony/Leiden fit
+  is needed to tally the current saved cluster labels.
+- P6 projection/mirroring/streaming code and focused tests are green but FROZEN
+  and not independently released/committed. Exact scientific origins and NULL
+  permutations remain preserved, local RNA guards precede reads, and a future
+  oneCPU64G2h pinned projection worker is prepared. Urgent failure diagnosis
+  takes priority; no production projections/figures or extra gate has run.
