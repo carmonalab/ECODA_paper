@@ -3961,3 +3961,36 @@ release approval. The audit must bind current ordered sample labels and check
 all finite payloads/companions without refits. Existing source-identity
 manifests contain sample IDs but not label values, so a small metadata-only
 witness may be required; no expression matrix or full H5AD is transferred.
+
+
+### Current benchmark label witness approved; expression data untouched
+
+A finite configured-Python collector read only canonical Sample and the
+configured primary biological-label column from the11 exact current benchmark
+H5AD inputs, in65,536-cell slices, one dataset at a time. It checked original
+full-hash preflight records/statuses and source MD5/size/timestamp witnesses,
+then rechecked current sources and proof bytes. It did not hash full H5ADs,
+read expression/counts/embeddings, fit models, score results or change old files.
+A review caught numeric/logical categorical conversion in the first decoder
+proposal; that version remains unexecuted. Corrected categorical rejection
+passed real HDF5 negative tests and independent review before execution.
+
+Executed collector SHA
+`f425bd45f73e5939ed102b8ec9dda924e69488a0744f7cfc142c0b38db12224b`;
+actual observation SHA
+`87595f0793d57b25e0481f5f644337c682c4246cda4b78a9dedb26a6b876c3f8`.
+All11 observed sample orders match the original source identity. Counts in
+input order: Stephenson53, Bassez26, Adams100, Gongsharma180, Kfoury32, Kim58,
+Lee27, Pelka98, Smillie64, Wu26, Zhang31. Stephenson has43 Covid/10 Healthy;
+Bassez has9 E/17 NE and74,948 cells. Named labels preserve exact textual values.
+
+Independent and operating-agent reviews approve this witness only as current
+label ground truth for the later artifact audit. No method result, old gate or
+publication was approved. Review SHA
+`61be923ad18932651b5a16ceba1469c4fc508c8ba9093015a5db26c2e620f67e`.
+Five exact observation/review/code/control/loader files were staged create-only
+and verified mode444 under the fresh Bamboo input namespace
+`old-main-present56-audit-v1`. Staging report SHA
+`e2fccf70bb928c807d0adfd833c657e85468a13839e443209614ddc1e55594df`.
+The next old56 step is a finite derived-payload/hash/owner inventory; existing
+ACTIVE/FAIL owner states must remain facts and cannot bypass input guards.
