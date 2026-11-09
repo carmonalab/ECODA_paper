@@ -3136,3 +3136,91 @@ the active remote Slurm jobs must not be relaunched. Current9ca sources and
 all completed artifacts remain unchanged. Recovery selection is still unsealed
 pending complete terminal/accounting/artifact evidence. No blanket rerun or
 new HPC job was launched during this check.
+
+
+### Overnight continuation authorized — 2026-11-09 13:31Z
+
+User explicitly requests continued overnight monitoring, failed-only recovery,
+reuse of completed outputs, and plan upkeep. They explicitly authorize checking
+Slurm pending/start estimates and GPU availability; this bounded requested
+queue check is not a recurring scheduler-poll loop. No active-v2 terminal
+accounting query has occurred.
+
+Existing SSH terminal evidence at13:27Z: benchmark array4665568 tasks1..2
+remain PENDING, squeue --start returns N/A and scontrol StartTime=Unknown,
+Reason=ReqNodeNotAvail. Required Features=nvidia_h200_nvl. The matching gpu006
+node is MIXED+DRAIN+REBOOT_REQUESTED, NextState=UNDRAIN, reasonRebootASAP.
+A currently running allocation on that node has its scheduled time-limit end
+at2026-11-09 22:00:18CET (21:00:18Z), around7.5hours after this observation.
+It may finish earlier; this is neither our jobs' estimated start nor a promise
+that reboot/queueing will finish at that time. Keep the approved benchmark
+hardware constraints. Overnight completion is plausible; tomorrow remains
+possible. Other GPU models available to batch views do not change benchmark
+hardware policy.
+
+The named tmux pane still starts the exact recorded main-v2 runner. Remote
+manifest gate ID, command digest, generationa182eff5beda6df6347bfaf5918f4e3b,
+and serialization groupecoda-benchmark match the local authoritative manifest.
+This is bounded UI-assisted identity evidence, not a successful full CLI
+reconcile or terminal audit. Fresh standalone SSH stilltimesout. Exactlyone
+local official completionwait was restored: unifiedsession66848, soleoutput
+consumercell18; processinventory confirms a singlewaiter and oneSSHreader,
+without relaunching any scientific work.
+
+Monitoring review found a global-runtime reliability gap: initial and final
+statusreads sit outside the transient-read retryloop, and waiter SSH metadata
+reads are unbounded. An implementor is preparing a minimal candidate under
+/private/tmp only, with waiter-only15s readtimeouts and existing5sbackoff,
+initial/final remote_read_error retry, and fail-closed identity/generation
+checks unchanged. Installedruntime/profile/manifest/remote workers are not
+changed by candidate authoring. Root must review/test before installation and
+handover; never run two waiters concurrently.
+
+Recovery design also distinguishes missing watchdogs from failed scientific
+fits. Dispatcher owner/finalizer checks can fail after valid results exist;
+these rows require validated copy-only publication rather than refitting.
+The current sync-only path requires original aggregateOK and cannot rescue
+that case directly. A bounded new main-v2 arm of the existing BL/HR copy-only
+publisher is IN_PROGRESS, one explicit context/freshroot and a finite,
+terminal-reviewed scientific inventory per release. Original failed statuses,
+owners, manifests and outputs remain immutable. BL/HR contracts stay strict.
+Actual failed/invalid scientific rows alone enter fresh compute selections;
+no actual catalog/receipt/newgate is sealed until original terminal evidence.
+
+
+### Local completion waiter repaired and restored — 2026-11-09 13:38Z
+
+The original restored reader66848/cell18 exited1 naturally with
+remote_read_error before reaching its retryloop. Original result SHA
+31d9283319c41911307d362b33820730c01f3863b1c8af07a995204c0ef42720 is
+preserved under.gate/monitor_recovery_20261109_v1/old_wait_result.json.
+Exact-process inventory then proved no old waiter remained; no process or
+HPC job was killed. The scientific gate stayedRUNNING with unchanged identity.
+
+The local global durable-gate runtime was minimally repaired, independently
+accepted bydocs_checkpoint_audit, and installed after seven faithful public
+lifecycle tests passed (actual isolated synthetic worker, mocked SSHfaults;
+no process-inventory bypass). Waiter-only metadata reads now time out after
+15s and initial/final remote_read_error retry with existing5sbackoff. Ordinary
+Remote/audit command timeouts remainNone, tmux eventlisten staysunbounded,
+and malformed JSON/identity/generation errors still failclosed. No profile,
+remote runner, manifest identity, production pipeline source, or HPC job changed.
+
+Global runtime SHA1a80a80ec3f79a787788e1e33b7c576aa252a2e7327d9c8248ca8bc0922eb2c9
+→919d0ebfa1087d2c7643359f849c4ce344380bd79200cf3b22c41aaffe1d3339;
+focusedtest SHA7589c5320b5350146fe48c9cef0168d627c67db8e507ec02bc1584f9d9541863.
+Before/after files, patch, installation/test/reviewer record and old local
+manifest snapshot are preserved in.gate/monitor_recovery_20261109_v1/.
+This is a local monitoring-runtime repair, separate from source9ca and future
+committed scientific recovery sources.
+
+Exactlyone repaired official waiter is now armed: unifiedsession82670,
+soleoutput consumercell33. It is safe to retry bounded transportreads inside
+this same waiter; do not add another monitor, launch wrapper, or scheduler
+poll loop. Fresh SSH remains unavailable at lasttransportcheck, while the
+existing user SSH terminal remains usable for bounded read-only observations.
+No failed method has yet been resubmitted: main-v2 still awaits its queued
+H200 work and terminal evidence. The finite scientific/publication catalog
+remains unsealed. Continue originalone terminal accountinginspect onlyafter
+completion, preserve failedgate evidence, validate completed outputs, and
+select only actual failed/missing/invalid science for freshcompute.
