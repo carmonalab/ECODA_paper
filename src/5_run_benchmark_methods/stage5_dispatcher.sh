@@ -1827,7 +1827,12 @@ benchmark_method_shard_rows() {
 }
 
 method_spec_for_group() {
-  local method="$1" resource_class="$2" saved_gpu_policy="${GPU_POLICY}" rc
+  local method="$1" resource_class="$2" view="${3:-benchmark_analysis}" saved_gpu_policy="${GPU_POLICY}" rc flag
+  local filtered_flags=()
+  case "${view}" in
+    benchmark_analysis|batch_effect_uncorrected|batch_effect_corrected) ;;
+    *) echo "ERROR: unsupported resource-policy view '${view}'." >&2; return 1 ;;
+  esac
   case "${resource_class}" in
     base)
       method_spec "${method}"
@@ -1868,6 +1873,14 @@ method_spec_for_group() {
       ;;
   esac
   GPU_POLICY="${saved_gpu_policy}"
+  # Only benchmark views contribute comparative timings. Keep the method's
+  # allocation policy for batch views, while allowing any hardware model.
+  if [[ ${rc} -eq 0 && "${view}" != benchmark_analysis ]]; then
+    for flag in "${METHOD_FLAGS[@]}"; do
+      case "${flag}" in --constraint=*) ;; *) filtered_flags+=("${flag}");; esac
+    done
+    METHOD_FLAGS=("${filtered_flags[@]}")
+  fi
   return "${rc}"
 }
 
@@ -4233,7 +4246,7 @@ if [[ -z "${SYNC_ONLY_RUN}" ]]; then
       cmp -s "${PENDING_SELECTION}" "$(jq -er '.pending.path' "${ECODA_STAGE5_RECOVERY_MANIFEST}")" || return 1
       [[ "$(ecoda_sha256_file "${ECODA_STAGE5_RECOVERY_MANIFEST}")" == "${ECODA_STAGE5_RECOVERY_MANIFEST_SHA256}" ]] || return 1
     fi
-    method_spec_for_group "${method}" "${resource_class}" || return 1
+    method_spec_for_group "${method}" "${resource_class}" "${view}" || return 1
     local method_force=0
     stage5_method_is_forced "${method}" && method_force=1
     local worker="${METHOD_WORKER}" worker_partition="${METHOD_PARTITION}" \

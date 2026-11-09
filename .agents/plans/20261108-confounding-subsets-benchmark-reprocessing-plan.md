@@ -67,14 +67,19 @@ decisions have been applied to existing artifacts.
   Active controller/reuse source is9ca2453, committed/pushed and
   deployed as an immutable Bamboo snapshot. Later reviewed diagnostics6bcf26b
   and compact-analysis code14e6749 are pushed but do not alter active workers. External application work remains excluded.
-- **Current scheduling incident:** at10:41–10:44Z benchmark/uncorrected have
-  worker outputs; corrected has all7arrays submitted and successful startup
-  preflights, but no method-start logs. One-off targeteddiagnostics prove
-  EPYC-7742 nodes are draining forRebootASAP, NextStateUNDRAIN. No new method
-  failure was found. Latest user clarification: ONLYbenchmark views are
-  timed and keepEPYC-7742; bothbatch views may use ANYCPU/GPUmodel. Exact
-  pendingbatch-only feature-constraint amendment is being applied as recorded
-  below; benchmark and running jobs are excluded.
+- **Current main wave RUNNING:** source9ca, launched08:18:46Z;32method
+  arrays and32watchdogs submitted acrossbenchmark/uncorrected/corrected.
+  Allthree contexts have actualmethod execution logs; correctedMrVI is
+  training and correctedPILOT has saved outputs. No terminalaudit yet.
+- **Hardware policy clarified/applied:** benchmarktimings retainEPYC-7742/
+  configuredGPU model; bothbatch views permit anyhardwaremodel. Exact18
+  pendingbatch tasks had onlySlurmFeatures cleared with before/afterproof;
+  zero benchmark/runningjobs changed, zero jobs submitted/cancelled.
+- **Failures being catalogued:** priorStephensonGloScope parameter4665516_2
+  and now8correctedQOT tasks4665627_1..8. QOT has no stdout/stderr files;
+  task1 failed in1sec oncpu046 with0:53. StartupI/O is a supported hypothesis,
+  not a provedcause or QOTmodel failure. Preservevalidwork; recovery scope
+  must come from complete terminalevidence, not a broad rerun.
 - **Changed inputs ready:** approved Bassez metadata repair (74948cells,
   26samples,40HRtypes); all17 Stage3 outputs produced/NAS-synced;53-sample
   Stephenson benchmark input individually NOOP-reviewed. Original Stage3 gate
@@ -93,7 +98,8 @@ decisions have been applied to existing artifacts.
 - **BL10 DONE and published/reviewed:**20RDS+10timings copied into a fresh
   validated NAS release, source3794e3e, publication finished05:03:40Z; no fit
   repeated. Original failed BL gate remains failed. Stephenson BL stays in
-  its upcoming whole-method run, once only. Aux remains unchanged.
+  its current whole-method run, once only; worker watchdogOK, final
+  source/artifact/terminal review pending. Aux remains unchanged.
 - **Bassez authorHR22 science and publication approved:** original gate
   failed only in controller ownership validation after all5jobs completed0.
   Its23RDS+one22-row timing file pass exact CLI,5finite metrics, current
@@ -101,17 +107,12 @@ decisions have been applied to existing artifacts.
   abort cleanup already finalized ownersOK; no old record was edited.
   New science receipt SHA78523c4...; new24-payload publication completed
   05:48:23Z and passed terminal validation/root review without refitting.
-- **Main Stage5 attempted; setup FAILED:** immutable sourcec534cdf launched
-  once06:17:39Z and endedFAILED1 at06:46:38Z. The sole terminal inspection
-  covered all6actual scheduler roots/30raw rows, allCOMPLETED0. No bulk
-  benchmark or batch-method arrays were submitted. Both8-row metadata-export
-  arrays succeeded, but their controller acceptance failed; this is under
-  diagnosis, not evidence that exports must be recomputed. Benchmark setup
-  rejected duplicate GloScope artifact registration after pseudobulk preparation.
-  Family-ownership deduplication and scheduler-proof repairs pass focused
-  tests and await independent review/commit. Existing valid BL10/HR22 and
-  all preprocessing outputs remain reusable. No jobs from this attempt are
-  running. No targeted HiTME100 selection was added.
+- **Historical mainv1 setup failure preserved:** sourcec534cdf,06:17–06:46Z,
+  all6actual scheduler roots/30rawrowsCOMPLETED0. DuplicateGloScope family
+  ownership and scheduler-proof controller issues were repaired/reviewed/
+  committed; source9ca finite23prepared copies reused validated outputs in
+  currentv2. The oldfailed gate was not approved or relabelled. No BL10,
+  authorHR22 or completed preprocessing was recomputed.
 - **User HiTME clarification: NO targeted refresh added.** Plain layer2
   counts match in all3audited cohorts and maintained final selectors use that
   plain key. Disputed variance entries are unused in maintained figures;
@@ -2879,3 +2880,62 @@ SHA256`fefa835e72a71334ef0182e077af9ced87f7f06d1f8157d6367aeb6f0f0cc69e`,
 Existing9ca watchdogs retain original submissionflags, so an actualfuture
 OOM retry is assessed under this same user policy if it appears; do not
 modify activewatchdogs or oldrecords.
+
+
+### Batch flexibility applied; future source accepted; startup failures separated
+
+The approved18task scheduler amendment completed: all18UPDATED_FEATURES_ONLY,
+zero benchmarkjobs changed and zero newjobs/cancellations. Each task was
+verifiedPENDING/ownedbyhalterc, exactcorrected run/source/log path,16CPU/128G/
+12h/sharedcpu immediately before clearingFeatures; every other recorded
+resource and identity field matched afterwards. Current9ca source and old
+manifests/proofs remain untouched. Remoteappend-only journal/result are under
+`_ecoda_inputs/20261108-confounding-subsets-v1/main-v2-batch-hardware-amendment-v1/`.
+Local result `.gate/main_v2_batch_hardware_20261109_v1/result.json`, SHA256
+`0ca85a0c907f6fd9dc95491709d941643891640f5e36c83dcb3916e04de9da24`.
+
+The future dispatcher change is independently accepted: onlyexactbatchviews
+filter model--constraint flags aftermethod/resource classification. Both
+initial sbatch and capturedwatchdog/OOMretry receive identicalfilteredflags.
+Benchmarkpins, CPU-vs-GPU policy,explicitVRAM/GPUcount,NV,partition,threads,
+memory andtime are unchanged. ActualBash3.2 test covers45view/method/class
+cases, initialsubmission and actualretrycommand; existingcorrected/OOM
+regressionPASS, syntax/whitespacePASS, protectedRplots.pdf unchanged. Old9ca
+watchdogs were not edited and may retain their originalpin on an actualretry;
+handle only a realpendingretry under the user's existingbatch policy.
+
+At11:12–11:15Z corrected has actualexecution, includingMrVItraining and
+PILOToutputs. CorrectedPILOT4665625_2(Stephenson) and_4(Breast) COMPLETED0 on
+cpu054(EPYC9754), with featuresnull, after the amendment. CorrectedMrVI_4
+isRUNNING oncpu035/EPYC7742. This proves the thirdcontext passedstartup;
+submission alone is no longer the evidence. Finalscience/publication review
+remains pending.
+
+A NEW incident is distinct from the earlierGloScope inputpath failure:
+correctedQOT watchdog4665628 reports all8tasks4665627 FAILED0:53, nonOOM.
+All8actual expectedstdout andstderr paths areabsent. Task1/raw4665756 on
+cpu046 ran12:10:51–12:10:52clusterlocal (one second), RaisedSignal53,
+featuresnull, norestarts. SuccessfulPILOTcomparison wascpu054, notcpu046.
+cpu046 reportsIDLE; a directreadonlySSH mount/path probe timedout onport22,
+so no daemonerrno/compute-path visibility proof was obtained. Currentnode
+health/loginvisibility cannot provehistorical computeI/O. NoQOT code or
+vendoredsource changed, and no QOTrecovery job was submitted.
+
+InstalledSlurm is26.05.4. Exactofficialsource permits a misleading0:53 for
+I/Osetup: ESLURMD_IO_ERROR4021 can survive stepstatusaggregation and be
+formatted throughsignalbits. This supports—but does not establish—a batch
+stdout/stderr startupI/O failure, rather than proving an actualRTsignal
+sender or QOTalgorithm defect. Primarysource:
+https://github.com/SchedMD/slurm/blob/slurm-26-05-4-1/src/slurmd/slurmstepd/mgr.c#L2028-L2037
+andaggregation#L302-L306; formatter
+https://github.com/SchedMD/slurm/blob/slurm-26-05-4-1/src/slurmctld/job_mgr.c#L5919-L5927 .
+Exactdaemon error/errno is stillneeded forcausalconfirmation.
+
+Small incident metadata `.gate/main_v2_batch_hardware_20261109_v1/qot_startup_incident.json`,
+SHA256`2392af9c54fef05c0ae27dc2d442695f504e52b2c48d94fcce707295d2f47a58`.
+Continuevalidindependent work and the single durablewait. The oldone-row
+GloScope-only proposal is no longer a complete recoveryselection; freeze the
+actualfailed/missing/invalid rowcatalog afterterminalinspection before any
+newgate. Consider a run-scoped exclusion of suspectcpu046 only in recovery
+while investigating; do not permanentlyhardcode nodeexclusions or silently
+refit successful rows. Noaccountingquery hasbeen made for activev2.
