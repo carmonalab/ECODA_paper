@@ -2771,3 +2771,49 @@ benchmark datasets and top-level column authority. ProtectedRplots.pdf SHA
 remains unchanged. No production run occurred: a pinned controller/common
 terminal audit and prior full-content input-witness binding remain required
 before these22outputs can be generated or approved.
+
+
+### Legacy audit controller and terminal contract accepted — 2026-11-09
+
+The dedicated legacy_analysis_audit.sh controller/worker and narrow generic
+run-audit purpose route are independently accepted. API: --control ABS_JSON
+--control-sha256 SHA. Typed requestecoda_legacy_analysis_audit_gate_v1 has
+six explicit path/SHA refs: science_control(proposalv4), observation(legacy
+inventory), zeroimp_schema, zeroimp_policy, feather_headers andinput_review.
+It freezes bounded metadata under a fresh run root and emits exactly one
+pinnedCPU64G1h scalar job; no newserializationgroup or NASsync. The accepted
+Rreader alone opens selected resultRDS/Feather and configuredH5ADobs.
+
+The separate input_review is mandatory: schema
+ecoda_p6_preflight_witness_review_v1; decision
+APPROVED_INPUT_CONTENT_WITNESS_ONLY; review_complete=true;
+scientifically_approved_rows=0; formal_pipeline_dependency=false; exact
+parent_terminal_state FAILEDorCOMPLETED; four path/SHA refs namedobservation
+(the10input preflight candidate), gate_manifest, terminal_inspect andaccounting.
+selected_preflight_tasks must have exactly10PASS rows withdataset,
+fullhash_array_id, integer task_id, current_input_path, current_input_md5 and
+current_input_size. It may accept only those currentinput-content witnesses
+from a terminalFAILED parent; it does not approve that parent gate, oldlegacy
+results or historical producer/runtime identity. Pending candidate alone is
+rejected. No such final production review exists yet whilemainv2runs.
+
+The actual physical manifest ish5ad_preflight.tsv with11rows, Stephensonfirst;
+selected10 task IDs are matched to their exact dataset/view/path line. Review
+caught a mistaken input_artifacts.tsv fixture assumption and the invented
+terminal vocabularySUCCEEDED; both were corrected before acceptance using
+the real durable1.0 gate/inspect accounting schema. Complete rawone-query
+accounting and exactgateIDunion are retained, including unrelatedFAIL rows.
+Current integer H5ADstat and original record/proof/status/log/source/runtime
+bytes must match the prior witness; mtime/ctime must not postdate successful
+fullhash recordcreation. This reuses previously validated content rather
+than rehashing largeH5ADs solely for repair/validation.
+
+Both independent focused controller/generic fixturesPASS, including pending
+review/changedinput/wrongtask rejection, correctFAILED/COMPLETED cases,
+failed-worker emittedID and mismatchJSON preservation, and read-only failed/
+foreign-terminal validation. Syntax/whitespacechecksPASS. No scientific
+approvals or original file/owner/proof changes are made by this controller.
+No production gate has been prepared/launched: first finish and terminal
+inspectmainv2, review selectedpreflight evidence, seal/stage exactcontrols
+and create the next committed immutable snapshot. Saved-cluster runner
+checkpoint781b166 is committed; active9ca workers remain unchanged.

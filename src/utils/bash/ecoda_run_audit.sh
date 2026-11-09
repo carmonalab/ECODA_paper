@@ -518,17 +518,25 @@ _audit_terminal_status() {
   AUDIT_TERMINAL_STATE="${state}"
 }
 
-# These two no-fit producers have finite operation-specific output inventories,
+# These no-fit producers have finite operation-specific output inventories,
 # rather than benchmark family outputs. Their source-pinned read-only validator
 # owns that schema; the generic identity and accounting checks still apply.
 _audit_analysis_release() {
   local purpose operation expected_operation validator
+  local scope_producer=analysis_projection_scope submission_producer=analysis_projection_submission
+  local validator_name=project_analysis_release.sh
   local metadata="${RUN_ROOT_REAL}/metadata"
   purpose="$(_audit_metadata_value "${metadata}" PURPOSE)"
   [[ "$(_audit_metadata_count "${metadata}" PURPOSE)" == 1 ]] || return 1
   case "${purpose}" in
     analysis_metadata_projection) expected_operation=projection ;;
     analysis_pca_render) expected_operation=render-pca ;;
+    legacy_analysis_compatibility_audit)
+      expected_operation=legacy-audit
+      scope_producer=legacy_analysis_audit_scope
+      submission_producer=legacy_analysis_audit_submission
+      validator_name=legacy_analysis_audit.sh
+      ;;
     *) _audit_die "unsupported Stage 5 PURPOSE: ${purpose}"; return 1 ;;
   esac
   [[ "${SELECTION_ARG}" == "${RUN_ROOT_REAL}/manifests/selection.tsv" &&
@@ -539,18 +547,18 @@ _audit_analysis_release() {
     _audit_die 'analysis PURPOSE and operation disagree'; return 1;
   }
   ecoda_validate_artifact_record "${RUN_ROOT_REAL}/manifests/operation" \
-    analysis_projection_scope "${RUN_ID}" >/dev/null || return 1
+    "${scope_producer}" "${RUN_ID}" >/dev/null || return 1
   ecoda_validate_artifact_record "${SELECTION_ARG}" \
-    analysis_projection_scope "${RUN_ID}" >/dev/null || return 1
+    "${scope_producer}" "${RUN_ID}" >/dev/null || return 1
   ecoda_validate_artifact_record "${RUN_ROOT_REAL}/manifests/scheduler_ids.tsv" \
-    analysis_projection_submission "${RUN_ID}" >/dev/null || return 1
+    "${submission_producer}" "${RUN_ID}" >/dev/null || return 1
   # Each supported operation submits exactly one scalar CPU job.
   [[ "$(wc -l < "${RUN_ROOT_REAL}/manifests/scheduler_ids.tsv" | tr -d '[:space:]')" == 1 ]] || return 1
   awk -F '\t' 'NF != 2 || $1 != "ARRAY" || $2 !~ /^[0-9]+$/ { exit 1 }' \
     "${RUN_ROOT_REAL}/manifests/scheduler_ids.tsv" || return 1
   _audit_scheduler_ids || return 1
   validator="$(ecoda_require_source_script_path \
-    "${AUDIT_SOURCE_ROOT}/src/utils/bash/project_analysis_release.sh" \
+    "${AUDIT_SOURCE_ROOT}/src/utils/bash/${validator_name}" \
     "${AUDIT_SOURCE_ROOT}")" || return 1
   PROJECT_ROOT="${AUDIT_SOURCE_ROOT}" ECODA_SOURCE_ROOT="${AUDIT_SOURCE_ROOT}" \
     ECODA_SOURCE_MANIFEST="${SOURCE_MANIFEST_ARG}" ECODA_SOURCE_SNAPSHOT_REQUIRED=1 \
