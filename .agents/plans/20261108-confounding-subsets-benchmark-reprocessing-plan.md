@@ -61,93 +61,68 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, failed16 recovery RUNNING; original reboot gate remains STOP
+## Live checkpoint — 2026-11-09, failed16 recovery RUNNING
 
-- **New infrastructure incident:** login1.bamboo rebooted at14:47:27Z
-  (15:47:27CET), removing the tmux runner and three login-node controllers.
-  The original main-v2 gate is now honestly PRELAUNCH_STOP through the existing
-  CLI's fail-closed adoption path; wrapper exit remainsUNKNOWN/null. Original
-  Slurm jobs, outputs, manifests and statuses were not modified. No accounting
-  query has occurred. Earlier RUNNING/local-wait claims below are historical.
-- **Current remaining old graph:** two benchmark scPoli tasks4665568_1..2,
-  watchdog4665570 and benchmark aggregate4665612; the16:05Z incident queue
-  shows these pending. They retain H200 timing hardware. No other old science
-  job is active in that snapshot. Correct aggregate mapping is benchmark
-  4665612, uncorrected4665594, corrected4665633; earlier prose swapped the
-  firsttwo and is superseded by actual manifests/Slurm descriptors.
-- **Failed-only recovery RUNNING since16:41:50Z:**16 exact rows have terminal watchdog
-  failure reasons, matching frozen matrix rows, and absent expected payloads/
-  producer records. Fresh disjoint roots may run them while old scPoli waits;
-  same profile/group, no stopped-gate success dependency or old output writes.
-  Final original accounting/healthy-copy publication still wait for old graph
-  quiescence. New science gateecoda_stage5_failed16_20261109_v1 isRUNNING;
-  one official waiter25146/cell142 is armed. Observer remainsunlaunched.
-- P0/P1 DONE: logical checkpoints and harmonized documentation are pushed.
-  Active controller/reuse source is9ca2453, committed/pushed and
-  deployed as an immutable Bamboo snapshot. Later reviewed diagnostics6bcf26b
-  and compact-analysis code14e6749 are pushed but do not alter active workers. External application work remains excluded.
-- **Main wave last checked13:57Z:** source9ca, launched08:18:46Z;32method
-  arrays and32watchdogs submitted across benchmark/uncorrected/corrected.
-  Uncorrected MrVI task4665560_3 has reached50/50 training epochs, without
-  method-completion confirmation; corrected task4665623_3 is at31/50.
-  Two benchmarkGPU tasks4665568_1..2 are pending H200 hardware; last explicit
-  start check returnedN/A/Unknown. Matching gpu006 drains for reboot after
-  another allocation (scheduled time-limit end22:00CET, possibly earlier).
-  No child terminal marker or terminal accounting inspection has occurred.
-- **Local monitor restored:** reviewed/tested waiter-only reconnect repair
-  is installed; exactlyone officialwait82670/cell33 retries bounded SSH
-  reads. Existing user terminal stillworks; newSSH failedatlastcheck.
-  Temporary idle-sleep prevention is bound to the waiter, withACpower verified.
-- **Hardware policy clarified/applied:** benchmarktimings retainEPYC-7742/
-  configuredGPU model; bothbatch views permit anyhardwaremodel. Exact18
-  pendingbatch tasks had onlySlurmFeatures cleared with before/afterproof;
-  zero benchmark/runningjobs changed, zero jobs submitted/cancelled.
-- **Failures being catalogued:** priorStephensonGloScope parameter4665516_2
-  and now8correctedQOT tasks4665627_1..8. QOT has no stdout/stderr files;
-  task1 failed in1sec oncpu046 with0:53. StartupI/O is a supported hypothesis,
-  not a provedcause or QOTmodel failure. Preservevalidwork; recovery scope
-  must come from complete terminalevidence, not a broad rerun.
-- **Changed inputs ready:** approved Bassez metadata repair (74948cells,
-  26samples,40HRtypes); all17 Stage3 outputs produced/NAS-synced;53-sample
-  Stephenson benchmark input individually NOOP-reviewed. Original Stage3 gate
-  remains FAILED with its historical OOM evidence preserved.
-- **All16 batch inputs reviewed for reuse:** exact expected counts in both
-  views101/33/44/124/80/94/80/110.52 batch tables pass except the documented
-  two Ncl exceptions. Receipt SHAc8e1d9b5...; no old failed-gate approval.
-- **Kidney two-axis metadata validated:** both views have the same80 samples,
-  condition21AKI/26CKD/33Ref and tissue45kidney/23cortex/12medulla. Tissue is
-  fully confounded with cell/nucleus suspension and remains descriptive.
-  No extra H5AD, feature fit or cohort filtering is needed for this evaluation.
-- **Stephenson Stage4 COMPLETED and formally approved:** wrapper0 at04:50:11Z,
-  all32 raw scheduler rows0 across6roots; accounting bridge and pinned
-  protected-copy/annotation/source/runtime/NAS audit pass. New input MD5
-  `7d92fb6e0d3d7dd5c3500212fd951493`,size13,357,978,168.
-- **BL10 DONE and published/reviewed:**20RDS+10timings copied into a fresh
-  validated NAS release, source3794e3e, publication finished05:03:40Z; no fit
-  repeated. Original failed BL gate remains failed. Stephenson BL stays in
-  its current whole-method run, once only; worker watchdogOK, final
-  source/artifact/terminal review pending. Aux remains unchanged.
-- **Bassez authorHR22 science and publication approved:** original gate
-  failed only in controller ownership validation after all5jobs completed0.
-  Its23RDS+one22-row timing file pass exact CLI,5finite metrics, current
-  metadata/NULL/count/source/proof checks with no fit/H5AD read. Original
-  abort cleanup already finalized ownersOK; no old record was edited.
-  New science receipt SHA78523c4...; new24-payload publication completed
-  05:48:23Z and passed terminal validation/root review without refitting.
-- **Historical mainv1 setup failure preserved:** sourcec534cdf,06:17–06:46Z,
-  all6actual scheduler roots/30rawrowsCOMPLETED0. DuplicateGloScope family
-  ownership and scheduler-proof controller issues were repaired/reviewed/
-  committed; source9ca finite23prepared copies reused validated outputs in
-  currentv2. The oldfailed gate was not approved or relabelled. No BL10,
-  authorHR22 or completed preprocessing was recomputed.
-- **User HiTME clarification: NO targeted refresh added.** Plain layer2
-  counts match in all3audited cohorts and maintained final selectors use that
-  plain key. Disputed variance entries are unused in maintained figures;
-  their historical experimental provenance is unproven. The earlier100-row
-  refresh proposal is withdrawn from this implementation scope. The user
-  will decide any further action after clarification; do not infer approval.
-- P6 five-metric/Kidney reporting implementation is committed. Final figures
-  and remaining method/screen waves are not claimed complete or released.
+- **Current recovery:** `ecoda_stage5_failed16_20261109_v1` launched at
+  16:41:50 UTC / 17:41:50 CET from immutable source `0314f20`. It selects
+  exactly 16 failed method rows in three fresh, disjoint contexts: benchmark
+  GloScope 1; uncorrected MrVI 4; corrected MrVI 3 and QOT 8. No healthy row,
+  preparation cache or annotation is being recomputed. Initial expected graph:
+  16 scheduler IDs / 38 task units, excluding recorded OOM-only retries.
+- **Monitoring:** one official unbounded waiter, session 25146 / output
+  consumer cell 142, is active. Temporary idle-sleep prevention is bound to
+  its verified local process. No persistent power setting was changed.
+- **Latest startup/queue evidence, 16:46 UTC:** recovery has reached H5AD
+  input preflight; some preflight tasks are pending unavailable/draining
+  nodes. This does not establish that all method jobs are already running.
+  The original two benchmark scPoli tasks `4665568_1..2` are still pending
+  their required H200 hardware, with no scheduler start estimate. GPU006 is
+  draining for reboot. Benchmark hardware stays fixed; batch MrVI uses any
+  suitable GPU and batch QOT any CPU.
+- **Original main-v2 reboot incident:** login1 rebooted at 14:47:27 UTC,
+  destroying its tmux runner and three login-node controllers. The gate was
+  honestly transitioned by the existing CLI to `PRELAUNCH_STOP`; its wrapper
+  exit remains unknown/null. Surviving jobs and outputs were untouched.
+  Initial inventory has 73 IDs, not yet a complete final retry inventory.
+  No original accounting query or success approval has occurred. Final
+  original inspection/publication must wait for quiescence and complete
+  emitted-ID evidence. Missing watchdog stdout blocks the strict reuse path.
+- **Bassez:** repaired metadata preserves 74,948 cells / 26 samples and fills
+  50,809 missing HR labels, producing 40 HR categories with unchanged counts,
+  features and embeddings. The author-HR22 release (23 RDS + one timing file)
+  is published and reviewed. Remaining targeted HR-dependent outputs in the
+  original main wave still require terminal artifact review. No LR refit was
+  added solely for this repair.
+- **Stephenson:** all four approved sample exclusions are applied;
+  benchmark annotation is complete and formally approved for 53 samples.
+  Its full benchmark rerun includes BL once. Batch views have 110 samples
+  and the additional approved filtering. Existing completed outputs remain
+  reusable; whole-wave publication is not yet approved.
+- **Blacklist pseudobulk:** the ten non-Stephenson benchmark cohorts are
+  published and reviewed (20 RDS + ten timing files). Stephenson BL worker
+  completed in its main rerun, pending final publication review. The aux file
+  is unchanged; no extra sex-gene exclusion or chromosome annotation is needed.
+- **Batch inputs:** all 16 corrected/uncorrected inputs were individually
+  reviewed for reuse, with counts 101/33/44/124/80/94/80/110 in the recorded
+  cohort order. Kidney has the same 80 samples for separate condition and
+  tissue evaluation; tissue is fully confounded with suspension and remains
+  descriptive. No second H5AD or method fit is needed for that axis.
+- **Documentation and code:** checkpoint commits, documentation harmonization,
+  five-metric/Kidney reporting helpers and recovery repairs are pushed. The
+  reboot-specific copy publisher is reviewed but has not published real data.
+  Future P6 copied-Slurm-spool bootstrap fixes passed independent fixtures;
+  they do not change active source `0314f20`.
+- **Reporting:** final maintained figures and screens await approved results.
+  Preserve the external Figure 3 layout in `notebooks/benchmark_analysis.rmd`
+  and previews; chat `01a1c093-4a2f-7e90-81d2-cc472ebbc728` owns those hunks
+  and explicitly does not authorize committing/pushing them. Its read-only
+  scope confirmation changes no metrics, release intake or HPC behavior.
+  The separate cancer application chat remains outside this task's commits.
+- **HiTME:** no additional 100-row refresh is authorized. Final maintained
+  selectors use plain layer 2; the disputed experimental variance entries
+  are outside this approved rerun scope.
+
+Earlier live checkpoints and detailed run records below are historical evidence.
 
 ## 2. Confirmed scientific decisions
 
@@ -3580,3 +3555,16 @@ The latent copied-Slurm-spool bootstrap issue in the two future P6 shell
 entrypoints is assigned to benchmark_dependency_audit for a minimal isolated
 fix/fixture before any P6 launch. This does not alter active source0314 or
 external notebook work.
+
+### Future P6 spool-bootstrap fix — independently accepted
+
+`project_analysis_release.sh` and `legacy_analysis_audit.sh` now recover the
+absolute pinned `ECODA_SOURCE_ROOT` before loading configuration, matching the
+observer bootstrap. Two minimal production hunks and their existing focused
+fixtures were changed. Both fixtures execute an actual script copied to an
+unrelated Slurm spool directory; author and independent runs pass. Existing
+source/runtime/ownership/science and read-only validation guards are unchanged.
+This is a future P6 source checkpoint only, with no HPC launch or active
+`0314f20` modification. The current startup/queue snapshot is saved as
+`.gate/failed16_inputs_20261109_v1/startup_handoff.observed.json`; it contains
+one user-requested start-estimate/node-state query and no accounting query.

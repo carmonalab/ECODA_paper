@@ -34,9 +34,14 @@ set -euo pipefail
 printf '%s\n' "$*" >> "${TEST_SCRATCH}/scheduler.calls"
 args=("$@")
 set +e
-SLURM_JOB_ID=765432 bash "${args[${#args[@]}-2]}" "${args[${#args[@]}-1]}" > "${ECODA_RUN_ROOT}/logs/legacy_analysis_765432.log" 2> "${ECODA_RUN_ROOT}/logs/legacy_analysis_765432.err"
+# Slurm runs a copied spool script with no configuration siblings.
+spool="${TEST_SCRATCH}/spool/${ECODA_RUN_ID}"
+mkdir -p "${spool}"
+cp "${args[${#args[@]}-2]}" "${spool}/slurm_script"
+SLURM_JOB_ID=765432 bash "${spool}/slurm_script" "${args[${#args[@]}-1]}" > "${ECODA_RUN_ROOT}/logs/legacy_analysis_765432.log" 2> "${ECODA_RUN_ROOT}/logs/legacy_analysis_765432.err"
 rc=$?
 set -e
+[[ ${rc} -eq 0 ]] || cat "${ECODA_RUN_ROOT}/logs/legacy_analysis_765432.err" >&2
 printf '765432;fixture\n'
 exit "${rc}"
 SH

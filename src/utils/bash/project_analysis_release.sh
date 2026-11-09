@@ -2,7 +2,9 @@
 # Finite, no-fit metadata projection of an already reviewed analysis control.
 # One CPU job through the existing immutable controller/runtime worker pattern.
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+[[ "${ECODA_SOURCE_SNAPSHOT_REQUIRED:-0}" == 1 && "${ECODA_SOURCE_ROOT:-}" == /* ]] || exit 1
+# Slurm executes its spool copy; recover the pinned source before configuration.
+SCRIPT_DIR="${ECODA_SOURCE_ROOT%/}/src/utils/bash"
 source "${SCRIPT_DIR}/../../slurm_config.sh"
 source "${SCRIPT_DIR}/ecoda_run_common.sh"
 source "${SCRIPT_DIR}/ecoda_runtime.sh"
