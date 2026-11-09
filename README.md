@@ -36,7 +36,7 @@ curl -fsSL https://pixi.sh/install.sh | bash
   ```bash
   pixi install
   ```
-  *Note:* Only the interactive analysis notebooks (`notebooks/benchmark_analysis.rmd` and `notebooks/batch_effect_analysis.rmd`) are designed to run locally on precomputed results. The HPC-only pinned R source packages are installed through the guarded HPC entry points below.
+  *Note:* Only the interactive analysis notebooks (`notebooks/benchmark_analysis.rmd` and the corrected/uncorrected batch-effect notebooks) are designed to run locally on precomputed results. The HPC-only pinned R source packages are installed through the guarded HPC entry points below.
 
 - **HPC Cluster (SLURM worker build for full pipeline execution):**
   ```bash
@@ -48,22 +48,60 @@ curl -fsSL https://pixi.sh/install.sh | bash
 
 ## Workflow Overview
 
-The reproducible pipeline is structured into four main stages. Detailed execution instructions, SLURM array commands, and folder architectures are documented in [**`docs/ARCHITECTURE.md`**](docs/ARCHITECTURE.md).
+The reproducible pipeline has five numbered processing stages followed by local result evaluation. Detailed execution instructions, SLURM array commands, and folder architectures are documented in [**`docs/ARCHITECTURE.md`**](docs/ARCHITECTURE.md).
 
 ```
-Stage 1: QC Filtering           -> notebooks/QC_filtering/
-Stage 2: Preprocessing & Annot  -> src/1_stage_data/ -> src/2_dataset_specific_preprocessing/
-                                   -> src/3_scrnaseq_preprocessing/ -> src/4_cell_type_annotation/
-Stage 3: Benchmark Methods      -> src/5_run_benchmark_methods/ (Python & R arrays)
-                                   -> notebooks/benchmark_analysis.rmd (Figures & Evaluation)
-Stage 4: Batch Effect Analysis  -> notebooks/batch_effect_analysis.rmd
+Stage 1: Data staging           -> src/1_stage_data/
+Stage 2: Cohort preprocessing   -> src/2_dataset_specific_preprocessing/
+Stage 3: Canonical preprocessing -> src/3_scrnaseq_preprocessing/
+Stage 4: Dual annotation        -> src/4_cell_type_annotation/ (eligible benchmark views)
+Stage 5: Benchmark methods      -> src/5_run_benchmark_methods/ (Python & R arrays)
+Evaluation: benchmark_analysis.rmd and batch_effect_analysis_{uncorrected,corrected}.rmd
 ```
+
+Bamboo is the active HPC host after maintenance and the completed data sync.
+Yggdrasil is stale/unmaintained. Author locally and execute pinned, reviewed
+runs on Bamboo; current selections, run progress and release evidence live in
+the [active reprocessing plan](.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md).
+
+### Reviewed result intake
+
+Local reports require an explicit reviewed artifact ledger and expected scope:
+
+| Report | Control RDS path | Required control checksum |
+|---|---|---|
+| Benchmark | `ECODA_BENCHMARK_RELEASE_RDS` | `ECODA_BENCHMARK_RELEASE_MD5` |
+| Batch (both views) | `ECODA_BATCH_RELEASE_CONTROL` | `ECODA_BATCH_RELEASE_CONTROL_MD5` |
+
+The controls select exact aggregate keys or standalone results with checked
+review evidence. Missing required new BL/HR/Stephenson or batch results stop
+reporting; old artifacts are not substituted. Scores use five equally weighted
+metrics: ANOSIM, adjusted kNN-3 modularity, mean Ward/PAM ARI, Silhouette and
+LISI separation. Min–max scaling is within dataset/view/evaluation/metric,
+constant ranges use 0.5, and rankings follow the descending arithmetic mean.
+LISI is already higher-is-better. Figure 2A retains its 12 default comparators;
+Supp fig 15 uses 21 extended comparators. MDS means use the corresponding
+NULL-inclusive heatmap pool, preserving the stored primary NULL shuffle.
+
+The scalar `columns.label` remains the primary label; optional dataset-level
+`columns.evaluation_labels` adds evaluation axes. Kidney's condition and tissue
+axes share the same physical dataset, H5AD, features and distances, count as two
+equally weighted entries, and require no additional method fit. Tissue recovery
+is partly confounded with suspension; its NULL uses the recorded seed 124.
+
+Bassez's metadata-only HR repair is complete (74,948 cells, 26 samples, 50,809
+fills, 40 categories), with source inputs and protected data unchanged. Its
+approved HR-dependent benchmark reruns remain pending. Publication filenames
+and numbering are preserved; implemented reporting code does not establish
+that current production figures have been regenerated. The plan tracks Stage 3,
+BL v2 and subsequent release status. The frozen auxiliary sources are unchanged;
+no sex-gene mask or chromosome annotation was added.
 
 ### scECODA example data
 
 `src/utils/extract_scecoda_example_data.R` writes `example_data.rda` at the repository root from the existing benchmark result bundles, H5AD `obs` metadata, and Gongsharma AIFI frequency CSVs. It opens only H5AD `obs`; expression matrices and count layers are not read.
 
-On Yggdrasil, configure `NAS_SC_DIR` and run the extractor with the existing result and source-data paths:
+On Bamboo, configure `NAS_SC_DIR` and run the extractor with the existing result and source-data paths:
 
 ```bash
 source src/slurm_config.sh
@@ -85,7 +123,8 @@ The saved `example_data` list contains 12 studies, each with sample-level metada
 │   └── ARCHITECTURE.md         # Full pipeline architecture, HPC layout, and call flow
 ├── notebooks/                  # R Markdown analysis notebooks & dataset onboarding
 │   ├── benchmark_analysis.rmd  # Main benchmark figures, separation metrics, and tables
-│   ├── batch_effect_analysis.rmd # Batch effect quantification & mitigation
+│   ├── batch_effect_analysis_uncorrected.rmd # Uncorrected batch reports
+│   ├── batch_effect_analysis_corrected.rmd   # Corrected batch reports
 │   ├── QC_filtering/           # Per-dataset raw QC filtering notebooks
 │   └── dataset_onboarding/     # Onboarding scripts for new cohorts
 ├── src/                        # Pipeline source code

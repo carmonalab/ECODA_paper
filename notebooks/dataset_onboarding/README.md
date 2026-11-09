@@ -148,29 +148,44 @@ normalization, HVG selection, embeddings or correction-model covariates.
 
 - Kidney reports `condition.l1` and literal `tissue` separately on the same 80
   samples/distances: kidney (45), cortex of kidney (23), renal medulla (12).
-  Initially both evaluations count equally as independent summary entries.
+  The scalar primary label remains supported; dataset-level
+  `columns.evaluation_labels` declares both axes without a second physical
+  dataset, H5AD, feature/distance calculation or method fit. Initially both
+  evaluations count equally as independent summary entries.
   Tissue recovery is confounded with suspension and must be described as
   recorded tissue/sampling-category recovery. Region is diagnostic only.
 - Default benchmark and batch summaries use five metrics: ANOSIM, adjusted
   kNN-3 modularity, mean Ward/PAM ARI, silhouette and LISI separation. Min–max
-  normalize within dataset/evaluation x metric, weight all five equally and
-  include the two added right-hand metric columns. LISI is already inverted
-  to higher-is-better separation. Missing/nonfinite scores fail release.
+  normalize within dataset/view/evaluation x metric, using neutral 0.5 for
+  constant ranges. Rank by the descending arithmetic mean of the five equally
+  weighted scores; include the two added right-hand metric columns. LISI is
+  already higher-is-better separation and must not be inverted again.
+  Missing/nonfinite scores fail release.
 - Corrected batch comparisons will distinguish unsupervised
   `ecoda_unsupervised_harmony` (Harmony -> Leiden -> CLR) from
   `ecoda_unsupervised_harmony_limma` (the same CLR followed once by technical-only
   limma). Both use HVG2000/Leiden resolution 2 and share the same clusters;
   uncorrected comparisons retain non-Harmony PCA -> Leiden -> CLR.
-- Bassez has an approved targeted HR metadata repair: retain valid
-  `cellSubType`, otherwise use `cellType`, preserving cells/counts/embeddings.
-  The NAS audit found 50,809 missing HR labels among 74,948 cells; all have
-  valid broad fallbacks. Bamboo obs verification confirmed the same counts;
-  complete run-specific integrity and unchanged-dependency checks before
-  repair and targeted dependent reruns.
+- Bassez's HR metadata derivative is complete: valid `cellSubType` was retained
+  and 50,809 missing values were filled from `cellType` across 74,948 cells and
+  26 samples, yielding 40 categories. Source inputs and protected counts,
+  embeddings and other metadata are unchanged. The approved HR-dependent
+  benchmark methods have not yet been recomputed.
 - Recompute the whole-sample blacklist pseudobulk variant across all 11
   benchmark datasets. The chosen exclusion source is the unchanged frozen
   human aux groups G1/S, G2/M, Mito, Ribo, TCR. Filter before fitting and select
   2,000 eligible genes afterward. Add no sex/chromosome mask or exemption.
 
-These changes are approved work, not a declaration that production artifacts
-have already been repaired. The active plan tracks implementation and release.
+Report intake now requires an explicit reviewed control and its checksum:
+benchmark uses `ECODA_BENCHMARK_RELEASE_RDS`/`ECODA_BENCHMARK_RELEASE_MD5`, and
+batch uses `ECODA_BATCH_RELEASE_CONTROL`/`ECODA_BATCH_RELEASE_CONTROL_MD5`.
+The finite ledger selects exact aggregate keys or new standalone results;
+missing required new results cannot fall back to old artifacts. Figure 2A's
+12-method default pool and Supp fig 15's 21-method extended pool include NULL;
+MDS means use the corresponding pool. Preserve stored primary NULL labels,
+while Kidney tissue NULL records seed 124. Batch grids contain 360 uncorrected
+or 405 corrected values (nine evaluation entries, five metrics).
+
+The reporting code preserves publication filenames and numbering. No current
+production figure refresh is claimed. Stage 3 and BL v2 progress, subsequent
+method runs and release approval are tracked in the active plan.

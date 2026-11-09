@@ -6,7 +6,7 @@
 ---
 
 
-## Current approved work — 2026-11-08
+## Current approved work — 2026-11-09
 
 The [active reprocessing plan](.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md)
 owns current decisions, implementation status and release evidence. The
@@ -29,11 +29,11 @@ not establish that existing artifacts have been regenerated.
   44 samples. Lupus includes selected pools 20, 21 and 22.
 - **Input repairs:** the new Stephenson exclusions apply to all three views;
   Sanger is excluded from batch views. Kidney full loses Papilla and sex
-  correction. NAS and Bamboo obs checks confirmed Bassez has 50,809 missing HR
-  labels among 74,948 cells, all with valid broad fallbacks. The approved
-  targeted metadata derivative retains valid `cellSubType`, otherwise uses
-  `cellType`, preserving cells/counts/embeddings; verify full dependency
-  identity before repair and rerun only affected consumers.
+  correction. Bassez's metadata-only derivative is complete: 50,809 missing HR
+  labels were filled across 74,948 cells and 26 samples, yielding 40 categories.
+  Valid `cellSubType` was retained; only missing HR used `cellType`. Source
+  inputs and protected counts/embeddings/non-HR data are unchanged. The approved
+  HR-dependent benchmark methods have not yet been recomputed.
 - **Blacklist pseudobulk:** repair the historical no-op across all 11 benchmark
   datasets using the unchanged frozen human aux G1/S, G2/M, Mito, Ribo and TCR
   groups (1,928 unique symbols; TCR has 228 entries). Exclude before fitting,
@@ -47,17 +47,31 @@ not establish that existing artifacts have been regenerated.
   distinct. Historical unqualified outputs need explicit provenance mapping.
 - **Reporting:** ANOSIM, adjusted kNN-3 modularity, mean Ward/PAM ARI,
   silhouette and LISI separation contribute equally after min–max scaling per
-  dataset/evaluation and metric. Refresh affected maintained figures/results,
+  dataset/view/evaluation and metric; constant ranges use neutral 0.5. The
+  default ranking is the descending arithmetic mean of those five scores.
+  Refresh affected maintained figures/results,
   including the two added right-hand metric columns and per-metric supplements.
   LISI is already higher-is-better separation; never invert it again. Reuse
   valid scores or complete missing metrics from saved distances; incomplete
   or nonfinite grids fail release. Explicitly single-metric plots stay so.
   Kidney reports condition and literal tissue over the same 80 samples and
-  distances, initially weighted as two independent evaluation entries; disclose
-  tissue/suspension confounding and never infer generic biopsy anatomy.
-- **Status and preservation:** these are approved work targets, not completed
-  scientific results. New outputs use run-owned derivative roots; existing
-  artifacts/checksums/gates remain immutable. The Kidney feature-coverage split
+  distances through dataset-level `columns.evaluation_labels`, retaining the
+  scalar `columns.label`. No additional H5AD or method fit is needed for the
+  second axis. Initially weight them as two independent evaluation entries;
+  disclose tissue/suspension confounding and never infer generic biopsy anatomy.
+- **Report intake implemented:** benchmark notebooks require
+  `ECODA_BENCHMARK_RELEASE_RDS` plus `ECODA_BENCHMARK_RELEASE_MD5`; batch notebooks
+  require `ECODA_BATCH_RELEASE_CONTROL` plus `ECODA_BATCH_RELEASE_CONTROL_MD5`.
+  Each checked control supplies a finite reviewed artifact ledger and expected
+  scope. Missing required new results or blocked rows stop reporting, without
+  fallback to old aggregates. Figure 2A uses its 12 default comparators;
+  Supp fig 15 uses 21 extended comparators. MDS summaries use the matching
+  heatmap pool, including stored NULL even when not drawn. Preserve the actual
+  primary NULL shuffle; Kidney tissue NULL records its own seed 124.
+- **Status and preservation:** the report code is implemented; no current
+  production figure refresh is claimed. Stage 3 and BL v2 execution/release
+  status belongs to the active plan above. New outputs use run-owned derivative
+  roots; existing artifacts/checksums/gates remain immutable. The Kidney feature-coverage split
   below remains a retained limitation, without additional remediation runs.
 
 ### Breast cancer corrected batch policy
@@ -844,12 +858,12 @@ figure-hierarchy decision is pending.
   `N12.LPB=441`, `N14.LPA=432`, `N12.LPA=243`), and Zhang
   `Pre_P010_t=8`/`Pre_P018_b=437`. Current processed mirrors are evidence only.
 - The accepted Bassez rule fills missing HR from configured broad annotation.
-  This is not proof of production application: NAS and Bamboo obs checks on
-  2026-11-08 still found 50,809 missing HR labels. The current plan authorizes
-  a targeted metadata derivative after full dependency-identity validation. This is an accepted annotation-contract
-  change, not a biological-label substitute. Bassez and Smillie still run the
-  supported HiTME/scATOMIC Stage 4 path after Stage 3 changes so derived
-  annotation artifacts used by Figure 3 and Supp fig 19 are fresh.
+  The 2026-11-08 source audit found 50,809 missing HR labels; the accepted
+  metadata-only derivative now fills all of them in 74,948 cells/26 samples,
+  with 40 resulting categories and unchanged source/protected data. The
+  approved HR-dependent benchmark reruns remain pending. This is an annotation
+  contract change, not a biological-label substitute. The dual HiTME/scATOMIC
+  annotation requirement continues to apply after any Stage 3 input changes.
 - scPoli's label encoder can receive mixed strings and `NaN` values and fail
   under NumPy 2.x. PILOT's cost matrix can treat `NaN` as a pseudo-cell type
   with a zero-cell centroid, yielding `NaN`/invalid EMD distances. The worker
