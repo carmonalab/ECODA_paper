@@ -3068,3 +3068,34 @@ repeat of allfocusedchecksPASS. Syntax/AST/whitespacePASS and protectedRplots
 SHA unchanged. NoHPCoperation happened in these tests. Selectedmetadata
 helper checkpointbb16dd0 is committed; actualv3rowcatalog/wrapper/resources
 remainUNSEALED untilmainv2terminalinspection and access recovery.
+
+
+### User-assisted status handoff / possible Codex restart
+
+The user reports the already-established PositronSSH session stillworks and
+our queue appearsrunning. A NEWPositronSSH session failskex/resetbypeer,
+matching the agent's newconnectiontimeouts. This corroborates a new-login
+transport/service problem, not proof of stopped Slurmjobs or a Codexapproval
+block. Localssh-agent publickeylistingworks. Freshper-method statuses after
+11:15Z remain unverified by the orchestrator; no activev2accounting query.
+
+Nativecomputer access toPositron timedout on itsfirstgetApp call; no terminal
+command or jobchange was executed. CUAcompletion was recorded. The user
+allowed window/screenshot access and reportsmacOS mayrequireCodexrestart
+for the newpermission. They explicitly offered to pastecommands into the
+workingSSH terminal. Nextstep is a boundedreadonlythree-context watchdog/
+terminalstatus reader (noSlurmaccounting/submission) and pastedoutput. Keep
+the existingPositronSSH connectionopen. NoChromeextensionpermission is
+required for thiscopy/paste route.
+
+Before anyapprestart: sourcecheckpointsbb16dd0(selectedmetadata) andf2df1c9
+(selectedrecoverycampaign) are committed/pushed; scopedtrackedwork isclean.
+Externalapplication/Word/editor files remainuntracked and untouched. Remote
+Slurmjobs/persistentgate are independentofCodex; localtool sessions/monitor
+attachment mayneedrecovery. Onresume firstcheck the originalsinglewait
+process/session36153 and consumer977, thenreconcile existinggate identity
+whenSSHworks. Neverblindlylaunch anotherwrapper or secondwait. Active
+scientificsource remains9ca; no newsource hasbeenpulled/hotpatched remotely.
+Actualrecoveryrows/wrapper/run controls remainUNSEALED pendingterminal
+inspection andcompletefailed-row catalog. Minimumknownfailures remain
+StephensonGloScope30 +8correctedQOTstartup failures.
