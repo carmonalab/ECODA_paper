@@ -6,10 +6,13 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/ecoda-analysis-projection.XXXXXX")"
 TMP="$(cd "${TMP}" && pwd -P)"
 trap 'chmod -R u+w "${TMP}"; rm -rf "${TMP}"' EXIT
 TREE="${TMP}/snapshot/tree"; SCRATCH="${TMP}/scratch"
-mkdir -p "${TREE}/src/utils/bash" "${TREE}/src/5_run_benchmark_methods" "${SCRATCH}/_ecoda_inputs" "${TMP}/bin"
+mkdir -p "${TREE}/src/utils/bash" "${TREE}/src/notebooks" "${TREE}/src/5_run_benchmark_methods" "${SCRATCH}/_ecoda_inputs" "${TMP}/bin"
 cp "${ROOT}/src/utils/bash/project_analysis_release.sh" "${ROOT}/src/utils/bash/ecoda_run_common.sh" "${TREE}/src/utils/bash/"
 cp "${ROOT}/src/utils/analysis_release.R" "${ROOT}/src/utils/evaluation_scores.R" "${TREE}/src/utils/"
 cp "${ROOT}/src/5_run_benchmark_methods/benchmark_pipeline.R" "${TREE}/src/5_run_benchmark_methods/"
+for name in datasets_io.R math_utils.R scoring_metrics.R plotting.R; do cp "${ROOT}/src/utils/${name}" "${TREE}/src/utils/"; done
+cp "${ROOT}/src/notebooks/benchmark_analysis.R" "${TREE}/src/notebooks/"
+cp "${ROOT}/datasets.json" "${TREE}/datasets.json"
 printf 'SOURCE_ROOT=%s\n' "${TREE}" > "${TREE}/source.manifest"
 cat > "${TREE}/src/slurm_config.sh" <<'SH'
 export PROJECT_ROOT="${TEST_TREE}" HPC_SCRATCH_DIR="${TEST_SCRATCH}"
@@ -84,6 +87,9 @@ reject() { if "$@" > "${TMP}/failure.log" 2>&1; then echo 'expected projection f
 invoke good > "${TMP}/success.log"
 run="${SCRATCH}/_ecoda_runs/good"; output="${run}/artifacts/analysis_projection"
 grep -q '^STATE=OK$' "${run}/status/terminal"
+grep -q '^PURPOSE=analysis_metadata_projection$' "${run}/metadata"
+[[ "$(cat "${run}/manifests/selection.tsv")" == $'D\tbenchmark_analysis\tPseudobulk_hvg2000' ]]
+ecoda_validate_artifact_record "${run}/manifests/selection.tsv" analysis_projection_scope good >/dev/null
 grep -q '^PINNED_RUNTIME_WORKER$' "${run}/logs/analysis_projection_765432.log"
 [[ "$(cat "${run}/manifests/scheduler_ids.tsv")" == $'ARRAY\t765432' ]]
 ecoda_validate_artifact_record "${run}/manifests/scheduler_ids.tsv" analysis_projection_submission good >/dev/null
@@ -117,16 +123,45 @@ ECODA_RUN_ID=good ECODA_RUN_ROOT="${run}" reject bash "${TREE}/src/utils/bash/pr
    "$(ecoda_md5_file "${inventory_owner}")" == "${owner_hash}" &&
    "$(ecoda_md5_file "${directory_owner}")" == "${directory_hash}" ]]
 cp "${TMP}/inventory.owner.saved" "${inventory_owner}"
+cp "${run}/status/terminal" "${TMP}/terminal.saved"
+for terminal_fault in failed wrong_run; do
+  if [[ "${terminal_fault}" == failed ]]; then
+    sed 's/STATE=OK/STATE=FAIL/' "${TMP}/terminal.saved" > "${run}/status/terminal"
+  else
+    sed 's/RUN_ID=good/RUN_ID=foreign/' "${TMP}/terminal.saved" > "${run}/status/terminal"
+  fi
+  terminal_hash="$(ecoda_md5_file "${run}/status/terminal")"
+  ECODA_RUN_ID=good ECODA_RUN_ROOT="${run}" reject bash "${TREE}/src/utils/bash/project_analysis_release.sh" --validate
+  [[ "$(ecoda_md5_file "${run}/status/analysis_projection.status")" == "${status_hash}" &&
+     "$(ecoda_md5_file "${run}/status/terminal")" == "${terminal_hash}" &&
+     "$(ecoda_md5_file "${inventory_owner}")" == "$(ecoda_md5_file "${TMP}/inventory.owner.saved")" &&
+     "$(ecoda_md5_file "${directory_owner}")" == "${directory_hash}" ]]
+done
+cp "${TMP}/terminal.saved" "${run}/status/terminal"
 PROJECTION_TEST_FAIL=1 reject invoke failed_worker
 failed_run="${SCRATCH}/_ecoda_runs/failed_worker"
 grep -q '^STATE=FAIL$' "${failed_run}/status/terminal"
 [[ "$(cat "${failed_run}/manifests/scheduler_ids.tsv")" == $'ARRAY\t765432' ]]
 ecoda_validate_artifact_record "${failed_run}/manifests/scheduler_ids.tsv" analysis_projection_submission failed_worker >/dev/null
 [[ ! -e "${failed_run}/artifacts/analysis_projection" ]]
+PCA_RENDER_FIXTURE_ONLY=1 PCA_RENDER_FIXTURE_ROOT="${SCRATCH}/_ecoda_inputs/render_data" \
+  "${TEST_RSCRIPT}" --vanilla "${ROOT}/tests/test_benchmark_pca_render.R" > "${TMP}/render-fixture.log" 2>&1
+RENDER_CONTROL="${SCRATCH}/_ecoda_inputs/render_data/control.rds"
+ECODA_RUN_ID=render ECODA_RUN_ROOT="${SCRATCH}/_ecoda_runs/render" \
+  bash "${TREE}/src/utils/bash/project_analysis_release.sh" --analysis-release "${RENDER_CONTROL}" \
+    --analysis-release-md5 "$(ecoda_md5_file "${RENDER_CONTROL}")" --operation render-pca > "${TMP}/render.log"
+render="${SCRATCH}/_ecoda_runs/render"
+grep -q '^STATE=OK$' "${render}/status/terminal"
+grep -q '^PURPOSE=analysis_pca_render$' "${render}/metadata"
+[[ "$(wc -l < "${render}/manifests/selection.tsv" | tr -d ' ')" == 34 ]]
+[[ "$(cat "${render}/manifests/operation")" == render-pca ]]
+ecoda_validate_artifact_record "${render}/artifacts/benchmark_pca/render_manifest.rds" analysis_pca_render render >/dev/null
+[[ "$(wc -l < "${render}/artifacts/benchmark_pca/files.tsv" | tr -d ' ')" == 20 ]]
+ECODA_RUN_ID=render ECODA_RUN_ROOT="${render}" bash "${TREE}/src/utils/bash/project_analysis_release.sh" --validate > "${TMP}/render-validation.log"
 ecoda_artifact_owner_acquire "${SCRATCH}/_ecoda_inputs/RNA.rds" stage5 foreign_writer 0 0 0 >/dev/null
 reject invoke blocked_writer
 grep -q '^STATE=FAIL$' "${SCRATCH}/_ecoda_runs/blocked_writer/status/terminal"
 [[ ! -e "${SCRATCH}/_ecoda_runs/blocked_writer/artifacts/analysis_projection" ]]
 [[ "$(ecoda_md5_file "${SCRATCH}/_ecoda_inputs/RNA.rds")" == "${SOURCE_BEFORE}" && ! -e "${TMP}/scheduler.called" ]]
-[[ "$(wc -l < "${SCRATCH}/sbatch.calls" | tr -d ' ')" == 2 ]]
+[[ "$(wc -l < "${SCRATCH}/sbatch.calls" | tr -d ' ')" == 3 ]]
 echo 'PASS: one pinned CPU projection worker, ID-bound logs/records including failed worker, real projection/owners/origin, input-writer guard and read-only terminal validation'

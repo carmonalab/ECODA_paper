@@ -157,6 +157,29 @@ JSON
     "${tree}/src/utils/bash/ecoda_stage5_policy.sh"
   cp "${ROOT}/src/utils/bash/ecoda_run_audit_stage5.sh" \
     "${tree}/src/utils/bash/ecoda_run_audit_stage5.sh"
+  # The operation producer has its own real projection/render integration test.
+  # This frozen validator double isolates generic routing and uses real records.
+  cat > "${tree}/src/utils/bash/project_analysis_release.sh" <<'SH'
+#!/bin/bash
+set -euo pipefail
+[[ "$#" == 1 && "$1" == --validate && "${ECODA_SOURCE_SNAPSHOT_REQUIRED}" == 1 ]] || exit 1
+[[ "${PROJECT_ROOT}" == "${ECODA_SOURCE_ROOT}" ]] || exit 1
+cmp -s "${ECODA_SOURCE_MANIFEST}" "${ECODA_RUN_ROOT}/manifests/source.manifest"
+cmp -s "${AUDIT_FIXTURE_RUNTIME}" "${ECODA_RUN_ROOT}/manifests/runtime.identity"
+source "${AUDIT_FIXTURE_COMMON}"
+cmp -s "${ECODA_RUN_ROOT}/manifests/selection.tsv" "${ECODA_RUN_ROOT}/manifests/expected.tsv"
+case "$(cat "${ECODA_RUN_ROOT}/manifests/operation")" in
+  projection) producer=analysis_metadata_projection; output=analysis_projection ;;
+  render-pca) producer=analysis_pca_render; output=benchmark_pca ;;
+  *) exit 1 ;;
+esac
+path="${ECODA_RUN_ROOT}/artifacts/${output}/result.txt"
+ecoda_validate_artifact_record "${path}" "${producer}" "${ECODA_RUN_ID}" >/dev/null
+_ecoda_artifact_owner_validate_dir "$(ecoda_artifact_owner_dir "${path}")" "${path}"
+[[ "${ECODA_ARTIFACT_OWNER_STAGE}" == stage5 &&
+   "${ECODA_ARTIFACT_OWNER_RUN}" == "${ECODA_RUN_ID}" && "${ECODA_ARTIFACT_OWNER_STATE}" == OK ]] || exit 1
+printf 'operation-validator:%s\n' "${producer}" >> "${AUDIT_VALIDATOR_LOG}"
+SH
   printf '# fixture matrix validator\n' > \
     "${tree}/src/5_run_benchmark_methods/matrix_artifact_validator.py"
   printf '# fixture h5ad validator\n' > \
@@ -659,6 +682,82 @@ run_audit() {
     return 1
   }
 }
+
+test_analysis_operations() {
+  local operation purpose output run_root selection accounting path name
+  export AUDIT_FIXTURE_COMMON="${ROOT}/src/utils/bash/ecoda_run_common.sh"
+  export AUDIT_FIXTURE_RUNTIME="${RUNTIME_IDENTITY}"
+  for operation in projection render-pca; do
+    case "${operation}" in
+      projection) purpose=analysis_metadata_projection; output=analysis_projection ;;
+      render-pca) purpose=analysis_pca_render; output=benchmark_pca ;;
+    esac
+    run_root="${SCRATCH}/_ecoda_runs/audit_${operation}"
+    mkdir -p "${run_root}/manifests" "${run_root}/status" "${run_root}/artifacts/${output}"
+    make_run_identities "${run_root}" "${SOURCE_MANIFEST}" "${RUNTIME_IDENTITY}"
+    printf 'STAGE=stage5\nRUN_ID=%s\nSTATE=OK\nPURPOSE=%s\n' "${run_root##*/}" "${purpose}" > "${run_root}/metadata"
+    printf 'STATE=OK\nRUN_ID=%s\n' "${run_root##*/}" > "${run_root}/status/terminal"
+    printf '%s\n' "${operation}" > "${run_root}/manifests/operation"
+    selection="${run_root}/manifests/selection.tsv"
+    printf 'Fixture\tbenchmark_analysis\tECODA_authors_HR\n' > "${selection}"
+    cp "${selection}" "${run_root}/manifests/expected.tsv"
+    printf 'ARRAY\t765432\n' > "${run_root}/manifests/scheduler_ids.tsv"
+    accounting="${run_root}/manifests/scheduler_accounting.tsv"
+    printf '765432|COMPLETED|0:0\n' > "${accounting}"
+    for name in operation selection.tsv scheduler_ids.tsv scheduler_accounting.tsv; do
+      ecoda_write_checksum "${run_root}/manifests/${name}" >/dev/null
+    done
+    for name in operation selection.tsv; do
+      ecoda_write_artifact_record "${run_root}/manifests/${name}" analysis_projection_scope "${run_root##*/}" >/dev/null
+    done
+    ecoda_write_artifact_record "${run_root}/manifests/scheduler_ids.tsv" analysis_projection_submission "${run_root##*/}" >/dev/null
+    path="${run_root}/artifacts/${output}/result.txt"
+    printf 'finite operation output\n' > "${path}"
+    ecoda_write_checksum "${path}" >/dev/null
+    ecoda_artifact_owner_acquire "${path}" stage5 "${run_root##*/}" 0 1 0 >/dev/null
+    ecoda_write_artifact_record "${path}" "${purpose}" "${run_root##*/}" >/dev/null
+    ecoda_artifact_owner_set_state "${path}" OK test >/dev/null
+    run_audit "${run_root}" stage5 "${selection}" 0 --scheduler-accounting "${accounting}"
+    grep -q "^operation-validator:${purpose}$" "${VALIDATOR_LOG}"
+
+    # Unknown, absent, duplicate, and mismatched purpose cannot bypass family audit.
+    cp "${run_root}/metadata" "${TMP_DIR}/operation-metadata.saved"
+    for replacement in 'PURPOSE=unknown' 'PURPOSE=analysis_pca_render'; do
+      [[ "${replacement}" != "PURPOSE=${purpose}" ]] || replacement=PURPOSE=analysis_metadata_projection
+      sed "s/^PURPOSE=.*/${replacement}/" "${TMP_DIR}/operation-metadata.saved" > "${run_root}/metadata"
+      run_audit "${run_root}" stage5 "${selection}" 1 --scheduler-accounting "${accounting}"
+    done
+    sed '/^PURPOSE=/d' "${TMP_DIR}/operation-metadata.saved" > "${run_root}/metadata"
+    run_audit "${run_root}" stage5 "${selection}" 1 --scheduler-accounting "${accounting}"
+    cp "${TMP_DIR}/operation-metadata.saved" "${run_root}/metadata"
+    printf 'PURPOSE=%s\n' "${purpose}" >> "${run_root}/metadata"
+    run_audit "${run_root}" stage5 "${selection}" 1 --scheduler-accounting "${accounting}"
+    cp "${TMP_DIR}/operation-metadata.saved" "${run_root}/metadata"
+
+    # Even re-checksummed selection/operation edits cannot replace frozen scope records.
+    chmod u+w "${selection}" "${selection}.md5"
+    printf 'Fixture\tbenchmark_analysis\tWrong\n' > "${selection}"
+    ecoda_write_checksum "${selection}" >/dev/null
+    run_audit "${run_root}" stage5 "${selection}" 1 --scheduler-accounting "${accounting}"
+    cp "${run_root}/manifests/expected.tsv" "${selection}"
+    ecoda_write_checksum "${selection}" >/dev/null
+    # Accounting and delegated output proof/owner checks are still mandatory.
+    printf '765432|FAILED|1:0\n' > "${accounting}"
+    ecoda_write_checksum "${accounting}" >/dev/null
+    run_audit "${run_root}" stage5 "${selection}" 1 --scheduler-accounting "${accounting}"
+    printf '765432|COMPLETED|0:0\n' > "${accounting}"
+    ecoda_write_checksum "${accounting}" >/dev/null
+    ecoda_artifact_owner_set_state "${path}" FAIL fault >/dev/null
+    run_audit "${run_root}" stage5 "${selection}" 1 --scheduler-accounting "${accounting}"
+    ecoda_artifact_owner_set_state "${path}" OK test >/dev/null
+    chmod u+w "${path}"; printf 'corruption\n' > "${path}"
+    run_audit "${run_root}" stage5 "${selection}" 1 --scheduler-accounting "${accounting}"
+  done
+  echo 'run audit pins projection/render purpose, scope, accounting and delegated outputs: OK'
+}
+
+test_analysis_operations
+[[ "${ECODA_ANALYSIS_AUDIT_ONLY:-0}" != 1 ]] || exit 0
 
 prepare_corrected_final_run
 CORRECTED_SELECTION="${CORRECTED_RUN_ROOT}/manifests/selection.tsv"

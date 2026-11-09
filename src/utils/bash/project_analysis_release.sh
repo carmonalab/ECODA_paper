@@ -9,13 +9,14 @@ source "${SCRIPT_DIR}/ecoda_runtime.sh"
 MODE=controller
 if [[ "${1:-}" == --worker || "${1:-}" == --validate ]]; then MODE="${1#--}"; shift; fi
 SELF="${SCRIPT_DIR}/project_analysis_release.sh"
-CONTROL=""; CONTROL_MD5=""
+CONTROL=""; CONTROL_MD5=""; OPERATION=projection
 while [[ $# -gt 0 ]]; do
   [[ $# -ge 2 ]] || exit 1
   case "$1" in
     --analysis-release) CONTROL="$2" ;;
     --analysis-release-md5) CONTROL_MD5="$2" ;;
-    *) echo 'Usage: project_analysis_release.sh --analysis-release ABS --analysis-release-md5 MD5' >&2; exit 1 ;;
+    --operation) OPERATION="$2" ;;
+    *) echo 'Usage: project_analysis_release.sh --analysis-release ABS --analysis-release-md5 MD5 [--operation projection|render-pca]' >&2; exit 1 ;;
   esac
   shift 2
 done
@@ -30,13 +31,23 @@ if [[ "${MODE}" == controller ]]; then
      "${CONTROL_MD5}" =~ ^[a-f0-9]{32}$ && -f "${CONTROL}" && ! -L "${CONTROL}" &&
      "$(ecoda_realpath_existing "${CONTROL}")" == "${CONTROL}" &&
      "$(ecoda_md5_file "${CONTROL}")" == "${CONTROL_MD5}" ]] || exit 1
+  [[ "${OPERATION}" == projection || "${OPERATION}" == render-pca ]] || exit 1
   ecoda_init_run stage5 "${ECODA_RUN_ID}" >/dev/null
+  ecoda_atomic_write "${RUN}/manifests/operation" "${OPERATION}\n"
 else
-  [[ -z "${CONTROL}${CONTROL_MD5}" ]] || exit 1
+  [[ -z "${CONTROL}${CONTROL_MD5}" && "${OPERATION}" == projection ]] || exit 1
   ecoda_open_run "${ECODA_RUN_ID}" stage5
+  OPERATION="$(cat "${RUN}/manifests/operation")"
+  [[ "${OPERATION}" == projection || "${OPERATION}" == render-pca ]] || exit 1
 fi
 export ECODA_RUN_ROOT="${RUN}" RETICULATE_PYTHON="${PYTHON_BIN}" ECODA_RUNTIME_PROFILE=stage5
 OUTPUT="${RUN}/artifacts/analysis_projection"
+PRODUCER=analysis_metadata_projection
+if [[ "${OPERATION}" == render-pca ]]; then OUTPUT="${RUN}/artifacts/benchmark_pca"; PRODUCER=analysis_pca_render; fi
+PURPOSE="${PRODUCER}"
+if [[ "${MODE}" == controller ]]; then
+  ecoda_atomic_write "${RUN}/metadata" "STAGE=stage5\nRUN_ID=${ECODA_RUN_ID}\nSTATE=ACTIVE\nPURPOSE=${PURPOSE}\n"
+fi
 STATUS="${RUN}/status/analysis_projection.status"
 OWNED_FILES=()
 failed() {
@@ -58,26 +69,40 @@ if [[ "${MODE}" == controller ]]; then
   [[ "$(ecoda_md5_file "${RUN}/manifests/analysis_release.rds")" == "${CONTROL_MD5}" ]] || exit 1
   ecoda_atomic_copy "${ECODA_SOURCE_MANIFEST}" "${RUN}/manifests/source.manifest"
   ecoda_runtime_validate_submission apptainer
-  for NAME in analysis_release.rds source.manifest runtime.identity; do
+  for NAME in analysis_release.rds source.manifest runtime.identity operation; do
     ecoda_write_checksum "${RUN}/manifests/${NAME}"
     ecoda_write_artifact_record "${RUN}/manifests/${NAME}" analysis_projection_scope "${ECODA_RUN_ID}" >/dev/null
   done
   # Only control/receipt metadata are read on the controller; RNA-bearing RDS
   # payloads are opened by the single pinned-runtime compute worker below.
-  ${PIXI_RSCRIPT} --vanilla - "${PROJECT_ROOT}" "${RUN}" "${CONTROL_MD5}" <<'R'
+  ${PIXI_RSCRIPT} --vanilla - "${PROJECT_ROOT}" "${RUN}" "${CONTROL_MD5}" "${OPERATION}" <<'R'
 args <- commandArgs(TRUE)
 source(file.path(args[1], "src/utils/analysis_release.R"))
 path <- file.path(args[2], "manifests/analysis_release.rds")
 .analysis_checked_file(path, args[3])
-inventory <- analysis_release_input_inventory(readRDS(path))
+control <- readRDS(path)
+if (args[4] == "render-pca") {
+  source(file.path(args[1], "src/utils/datasets_io.R"))
+  source(file.path(args[1], "src/notebooks/benchmark_analysis.R"))
+  datasets <- read_datasets_json(file.path(args[1], "datasets.json"), view="benchmark_analysis")
+  datasets <- datasets[vapply(datasets,function(x)isTRUE(x$use_for_benchmark),logical(1)) & !grepl("_debug$",names(datasets))]
+  control <- benchmark_pca_render_scope(control,datasets)
+}
+inventory <- analysis_release_input_inventory(control)
+selection <- control$ledger[c("dataset", "view", "method_key")]
+if (!nrow(selection) || anyDuplicated(selection)) stop("Projection selection must be finite and unique")
+utils::write.table(selection, file.path(args[2], "manifests/selection.tsv"),
+  sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
 if (any(!startsWith(inventory$path, paste0(Sys.getenv("HPC_SCRATCH_DIR"), "/"))))
   stop("Every selected input, receipt and evidence file must be staged explicitly on HPC scratch")
 utils::write.table(inventory, file.path(args[2], "manifests/inputs.tsv"),
   sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
 .analysis_checked_file(path, args[3])
 R
-  ecoda_write_checksum "${RUN}/manifests/inputs.tsv"
-  ecoda_write_artifact_record "${RUN}/manifests/inputs.tsv" analysis_projection_scope "${ECODA_RUN_ID}" >/dev/null
+  for NAME in inputs.tsv selection.tsv; do
+    ecoda_write_checksum "${RUN}/manifests/${NAME}"
+    ecoda_write_artifact_record "${RUN}/manifests/${NAME}" analysis_projection_scope "${ECODA_RUN_ID}" >/dev/null
+  done
 fi
 validate_inputs() {
   local path md5 extra
@@ -91,10 +116,29 @@ validate_inputs() {
 validate_scope() {
   local name
   ecoda_runtime_validate_bound_run || return 1
+  [[ "$(sed -n 's/^PURPOSE=//p' "${RUN}/metadata")" == "${PURPOSE}" ]] || return 1
   cmp -s "${ECODA_SOURCE_MANIFEST}" "${RUN}/manifests/source.manifest" || return 1
-  for name in analysis_release.rds source.manifest runtime.identity inputs.tsv; do
+  for name in analysis_release.rds source.manifest runtime.identity inputs.tsv operation selection.tsv; do
     ecoda_validate_artifact_record "${RUN}/manifests/${name}" analysis_projection_scope "${ECODA_RUN_ID}" >/dev/null || return 1
   done
+  ${PIXI_RSCRIPT} --vanilla - "${PROJECT_ROOT}" "${RUN}" "${OPERATION}" <<'R' || return 1
+a <- commandArgs(TRUE)
+source(file.path(a[1], "src/utils/analysis_release.R"))
+control <- readRDS(file.path(a[2], "manifests/analysis_release.rds"))
+if (a[3] == "render-pca") {
+  source(file.path(a[1], "src/utils/datasets_io.R"))
+  source(file.path(a[1], "src/notebooks/benchmark_analysis.R"))
+  datasets <- read_datasets_json(file.path(a[1], "datasets.json"), view="benchmark_analysis")
+  datasets <- datasets[vapply(datasets,function(x)isTRUE(x$use_for_benchmark),logical(1)) & !grepl("_debug$",names(datasets))]
+  control <- benchmark_pca_render_scope(control,datasets)
+}
+selection <- control$ledger[c("dataset", "view", "method_key")]
+if (!nrow(selection) || anyDuplicated(selection)) stop("Invalid projection selection")
+expected <- paste0(paste(apply(selection, 1L, paste, collapse="\t"), collapse="\n"), "\n")
+path <- file.path(a[2], "manifests/selection.tsv")
+if (!identical(rawToChar(readBin(path, "raw", n=file.info(path)$size)), expected))
+  stop("Projection selection differs from the operation-scoped control")
+R
   validate_inputs
 }
 validate_report() {
@@ -102,7 +146,7 @@ validate_report() {
   validate_scope || return 1
   [[ -s "${STATUS}" && "$(sed -n 's/^STATE=//p' "${STATUS}")" == OK &&
      "$(sed -n 's/^RUN_ID=//p' "${STATUS}")" == "${ECODA_RUN_ID}" ]] || return 1
-  ecoda_validate_artifact_record "${OUTPUT}/files.tsv" analysis_metadata_projection "${ECODA_RUN_ID}" >/dev/null || return 1
+  ecoda_validate_artifact_record "${OUTPUT}/files.tsv" "${PRODUCER}" "${ECODA_RUN_ID}" >/dev/null || return 1
   for path in "${OUTPUT}" "${OUTPUT}/files.tsv"; do
     owner="$(ecoda_artifact_owner_dir "${path}")" || return 1
     _ecoda_artifact_owner_validate_dir "${owner}" "${path}" || return 1
@@ -111,17 +155,27 @@ validate_report() {
   done
   while IFS=$'\t' read -r path hash extra; do
     [[ "${path}" == "${OUTPUT}/"* && "${hash}" =~ ^[0-9a-f]{32}$ && -z "${extra}" ]] || return 1
-    ecoda_validate_artifact_record "${path}" analysis_metadata_projection "${ECODA_RUN_ID}" >/dev/null || return 1
+    ecoda_validate_artifact_record "${path}" "${PRODUCER}" "${ECODA_RUN_ID}" >/dev/null || return 1
     [[ "${ECODA_ARTIFACT_RECORD_MD5}" == "${hash}" ]] || return 1
     owner="$(ecoda_artifact_owner_dir "${path}")" || return 1
     _ecoda_artifact_owner_validate_dir "${owner}" "${path}" || return 1
     [[ "${ECODA_ARTIFACT_OWNER_RUN}" == "${ECODA_RUN_ID}" &&
        "${ECODA_ARTIFACT_OWNER_STAGE}" == stage5 && "${ECODA_ARTIFACT_OWNER_STATE}" == OK ]] || return 1
   done < "${OUTPUT}/files.tsv"
+  if [[ "${OPERATION}" == render-pca ]]; then
+    ${PIXI_RSCRIPT} --vanilla - "${PROJECT_ROOT}" "${OUTPUT}/render_manifest.rds" "$(ecoda_md5_file "${OUTPUT}/render_manifest.rds")" "$(ecoda_md5_file "${RUN}/manifests/analysis_release.rds")" <<'R'
+a <- commandArgs(TRUE)
+source(file.path(a[1],"src/utils/analysis_release.R"))
+source(file.path(a[1],"src/notebooks/benchmark_analysis.R"))
+report <- read_benchmark_pca_render(a[2],a[3],character())
+if(!identical(report$control_md5,a[4]))stop("Rendered PCA control differs")
+R
+  fi
 }
 if [[ "${MODE}" == validate ]]; then
   validate_report
-  [[ "$(sed -n 's/^STATE=//p' "${RUN}/status/terminal")" == OK ]]
+  [[ "$(sed -n 's/^STATE=//p' "${RUN}/status/terminal")" == OK &&
+     "$(sed -n 's/^RUN_ID=//p' "${RUN}/status/terminal")" == "${ECODA_RUN_ID}" ]] || exit 1
   for NAME in scheduler_ids.tsv sbatch_submission.txt; do
     ecoda_validate_artifact_record "${RUN}/manifests/${NAME}" analysis_projection_submission "${ECODA_RUN_ID}" >/dev/null
   done
@@ -138,7 +192,7 @@ if [[ "${MODE}" == worker ]]; then
   [[ "${ECODA_ARTIFACT_OWNER_RUN}" == "${ECODA_RUN_ID}" && "${ECODA_ARTIFACT_OWNER_STATE}" == ACTIVE &&
      ! -e "${OUTPUT}" && ! -L "${OUTPUT}" ]]
   CONTROL_MD5="$(ecoda_md5_file "${RUN}/manifests/analysis_release.rds")"
-${PIXI_RSCRIPT} --vanilla - "${PROJECT_ROOT}" "${RUN}" "${CONTROL_MD5}" <<'R'
+${PIXI_RSCRIPT} --vanilla - "${PROJECT_ROOT}" "${RUN}" "${CONTROL_MD5}" "${OPERATION}" <<'R'
 args <- commandArgs(TRUE)
 source(file.path(args[1], "src/utils/analysis_release.R"))
 source(file.path(args[1], "src/utils/evaluation_scores.R"))
@@ -146,8 +200,17 @@ source(file.path(args[1], "src/5_run_benchmark_methods/benchmark_pipeline.R"))
 path <- file.path(args[2], "manifests/analysis_release.rds")
 .analysis_checked_file(path, args[3])
 control <- readRDS(path)
-project_analysis_release(control, file.path(args[2], "artifacts/analysis_projection"),
-  c(source = file.path(args[2], "manifests/source.manifest"), runtime = file.path(args[2], "manifests/runtime.identity"), control = path))
+if (args[4] == "projection") {
+  project_analysis_release(control, file.path(args[2], "artifacts/analysis_projection"),
+    c(source = file.path(args[2], "manifests/source.manifest"), runtime = file.path(args[2], "manifests/runtime.identity"), control = path))
+} else {
+  suppressPackageStartupMessages({library(dplyr);library(ggplot2)})
+  for(file in c("src/utils/datasets_io.R","src/utils/math_utils.R","src/utils/scoring_metrics.R",
+      "src/utils/plotting.R","src/notebooks/benchmark_analysis.R"))source(file.path(args[1],file))
+  datasets <- read_datasets_json(file.path(args[1],"datasets.json"),view="benchmark_analysis")
+  datasets <- datasets[vapply(datasets,function(x)isTRUE(x$use_for_benchmark),logical(1)) & !grepl("_debug$",names(datasets))]
+  render_benchmark_pca_release(control,file.path(args[2],"artifacts/benchmark_pca"),datasets,args[3])
+}
 .analysis_checked_file(path, args[3])
 R
 ecoda_runtime_validate_bound_run
@@ -160,14 +223,14 @@ while IFS=$'\t' read -r PATH_IN MD5_IN EXTRA; do
   ecoda_artifact_owner_acquire "${PATH_IN}" stage5 "${ECODA_RUN_ID}" 0 0 0 >/dev/null
   OWNED_FILES+=("${PATH_IN}")
   ecoda_write_checksum "${PATH_IN}"
-  ecoda_write_artifact_record "${PATH_IN}" analysis_metadata_projection "${ECODA_RUN_ID}" >/dev/null
+  ecoda_write_artifact_record "${PATH_IN}" "${PRODUCER}" "${ECODA_RUN_ID}" >/dev/null
 done < "${OUTPUT}/files.tsv"
 ecoda_artifact_owner_acquire "${OUTPUT}/files.tsv" stage5 "${ECODA_RUN_ID}" 0 0 0 >/dev/null
 OWNED_FILES+=("${OUTPUT}/files.tsv")
 ecoda_write_checksum "${OUTPUT}/files.tsv"
-ecoda_write_artifact_record "${OUTPUT}/files.tsv" analysis_metadata_projection "${ECODA_RUN_ID}" >/dev/null
+ecoda_write_artifact_record "${OUTPUT}/files.tsv" "${PRODUCER}" "${ECODA_RUN_ID}" >/dev/null
 for PATH_IN in "${OWNED_FILES[@]}"; do
-  ecoda_validate_artifact_record "${PATH_IN}" analysis_metadata_projection "${ECODA_RUN_ID}" >/dev/null
+  ecoda_validate_artifact_record "${PATH_IN}" "${PRODUCER}" "${ECODA_RUN_ID}" >/dev/null
   ecoda_artifact_owner_set_state "${PATH_IN}" OK metadata_projection_complete >/dev/null
 done
 ecoda_artifact_owner_set_state "${OUTPUT}" OK metadata_projection_complete >/dev/null
@@ -200,4 +263,8 @@ done
 validate_report
 ecoda_set_run_state OK metadata_projection_complete_scientific_origins_preserved
 trap - EXIT
-printf 'ANALYSIS_PROJECTION_CONTROL=%s/analysis_release.rds\nNO_MODEL_FITS=1\n' "${OUTPUT}"
+if [[ "${OPERATION}" == render-pca ]]; then
+  printf 'BENCHMARK_PCA_RENDER_RDS=%s/render_manifest.rds\nNO_MODEL_FITS=1\n' "${OUTPUT}"
+else
+  printf 'ANALYSIS_PROJECTION_CONTROL=%s/analysis_release.rds\nNO_MODEL_FITS=1\n' "${OUTPUT}"
+fi

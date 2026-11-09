@@ -158,6 +158,184 @@ read_benchmark_execution_times <- function(control) {
   normalize_exec_times(frame)
 }
 
+# Finished RNA PCA figures are rendered on HPC from reviewed result features.
+# Their local counterpart reads only this finite figure/summary manifest.
+benchmark_pca_render_scope <- function(control, datasets) {
+  selected <- names(datasets)
+  if (length(selected) != 11L || anyDuplicated(selected) || !"Bassez" %in% selected || any(grepl("_debug$", selected)))
+    stop("Saved PCA rendering requires the explicit eleven-cohort benchmark scope")
+  expected <- expand.grid(dataset=selected, view="benchmark_analysis",
+    method_key=c("ECODA_authors_HR", "Pseudobulk_hvg2000", "__dataset_metadata__"), stringsAsFactors=FALSE)
+  expected <- rbind(expected, data.frame(dataset="Bassez",view="benchmark_analysis",method_key="Pseudobulk_hvg3000"))
+  keys <- .analysis_key(expected)
+  if (anyDuplicated(.analysis_key(control$ledger)) || anyDuplicated(.analysis_key(control$expected_scope)))
+    stop("Duplicate saved PCA source keys are prohibited")
+  ledger <- control$ledger[match(keys,.analysis_key(control$ledger)),,drop=FALSE]
+  scope <- control$expected_scope[match(keys,.analysis_key(control$expected_scope)),,drop=FALSE]
+  if (anyNA(ledger$method_key) || anyNA(scope$method_key) ||
+      any(!ledger$kind %in% c("rds_bundle","standalone_result")) ||
+      any(grepl("/pseudobulks/|\\.h5ad$",ledger$artifact_path)))
+    stop("Saved PCA inputs require every declared result/metadata row; caches and H5ADs are prohibited")
+  validate_analysis_release(ledger,scope)
+  list(ledger=ledger,expected_scope=scope)
+}
+
+benchmark_pca_csv_columns <- function() list(
+  methods=c("method","n_samples","n_features","n_E","n_NE","n_samples_overlap","n_samples_missing","sample_scope","ANOSIM","mod_knn3","ARI","Silhouette","LISI"),
+  features=c("method","feature","variance","variance_rank","mean_E","mean_NE","delta_E_minus_NE","group_R2","loading_PC1","loading_PC2","contribution_PC1_percent","contribution_PC2_percent","contribution_PC1_PC2_percent","group_contrast_percent"),
+  pcs=c("method","PC","variance_percent","group_R2"),
+  proportions=c("method","feature","median_raw_percent_E","median_raw_percent_NE","delta_median_raw_percent_E_minus_NE","prevalence_E","prevalence_NE","zero_fraction_E","zero_fraction_NE","denominator","n_denominator_categories","pseudocount_removed","denominator_min_E","denominator_max_E","denominator_min_NE","denominator_max_NE"),
+  marker_coverage=c("method","marker","present","variance","variance_rank","interpretation"),
+  sensitivity=c("method","comparison","ANOSIM_R","ANOSIM_R_min","ANOSIM_R_max","n_samples","n_features","n_features_removed","n_evaluable","status","IG_variance_percent","IG_PC1_contribution_percent","IG_PC2_contribution_percent","retained_raw_cells_median_E","retained_raw_cells_median_NE","PC1_log_retained_cells_correlation","rarefaction_depth","seed"))
+
+benchmark_pca_render_files <- function(datasets) c(paste0("benchmark_pca_",datasets,".pdf"),
+  "Bassez_feature_PCA_ECODA_HR_PB2000.pdf","Bassez_feature_PCA_ECODA_HR_PB2000.png",
+  paste0("Bassez_",names(benchmark_pca_csv_columns()),".csv"))
+
+benchmark_pca_display_labels <- function(labels,dataset) {
+  if(dataset=="Bassez") {
+    map<-c(E="Expander",NE="Non-expander");values<-unname(map[as.character(labels)])
+    if(anyNA(values))stop("Unexpected Bassez expansion label")
+    return(setNames(factor(values,levels=unname(map)),names(labels)))
+  }
+  if(dataset=="Zhang") {labels<-factor(labels);levels(labels)<-tools::toTitleCase(levels(labels))}
+  labels
+}
+
+validate_benchmark_pca_tables <- function(tables,bounds) {
+  schemas<-benchmark_pca_csv_columns()
+  if(!setequal(names(tables),names(schemas)))stop("Missing saved PCA summary tables")
+  for(name in names(schemas)) {
+    frame<-tables[[name]]
+    if(!is.data.frame(frame)||!identical(names(frame),schemas[[name]])||!nrow(frame)||
+       nrow(frame)>bounds[[name]]||any(!vapply(frame,function(x)is.atomic(x)&&is.null(dim(x)),logical(1))))
+      stop("Invalid/broad PCA summary CSV schema: ",name)
+  }
+  for(column in c("ANOSIM","mod_knn3","ARI","Silhouette","LISI"))
+    if(!is.numeric(tables$methods[[column]])||any(!is.finite(tables$methods[[column]])))stop("Missing full-space PCA summary metric")
+  invisible(TRUE)
+}
+
+render_benchmark_pca_release <- function(control,output_root,datasets,control_md5) {
+  selected<-benchmark_pca_render_scope(control,datasets)
+  if(.analysis_exists(output_root)||!grepl("^/",output_root))stop("PCA render root is create-only")
+  if(!dir.create(output_root))stop("Cannot create PCA render root")
+  output_root<-normalizePath(output_root,mustWork=TRUE)
+  publish<-function(writer,name) {
+    path<-file.path(output_root,name);tmp<-tempfile(".pca-render-",tmpdir=output_root,fileext=paste0(".",tools::file_ext(name)))
+    on.exit(unlink(tmp));writer(tmp)
+    if(!file.link(tmp,path))stop("Existing PCA output must be preserved: ",path)
+  }
+  source_rows<-list();coverage<-list();bounds<-NULL
+  set.seed(123)
+  for(dataset in names(datasets)) {
+    take<-selected$ledger$dataset==dataset
+    rows<-load_analysis_release(selected$ledger[take,,drop=FALSE],selected$expected_scope[take,,drop=FALSE])
+    methods<-vapply(rows,function(x)x$source$method_key,character(1));names(rows)<-methods
+    hr<-rows$ECODA_authors_HR$result;metadata<-rows$`__dataset_metadata__`$result
+    ids<-names(hr$labels)
+    if(is.null(ids)||anyDuplicated(ids)||anyNA(hr$labels)||
+       !identical(as.character(metadata$labels[ids]),as.character(hr$labels))||
+       !setequal(names(metadata$labels),ids)||!identical(as.integer(metadata$n_samples),as.integer(length(ids))))
+      stop("PCA reference/metadata sample identity mismatch: ",dataset)
+    counts<-as.matrix(hr$counts)-.5
+    if(!identical(rownames(counts),ids)||any(!is.finite(counts))||any(counts<0)||any(counts!=floor(counts))||
+       sum(counts)!=metadata$n_cells||ncol(counts)!=metadata$n_cell_types_high_res||
+       !identical(as.numeric(rowSums(counts)),as.numeric(metadata$cells_per_sample[ids])))
+      stop("PCA author counts disagree with current metadata: ",dataset)
+    coverage[[dataset]]<-list(n_samples=length(ids),n_cells=metadata$n_cells,n_cell_types=ncol(counts))
+    bundles<-list()
+    for(method in setdiff(methods,"__dataset_metadata__")) {
+      item<-rows[[method]];bundle<-item$result;x<-as.matrix(bundle$feat_mat)
+      if(!is.numeric(x)||!identical(rownames(x),ids)||!ncol(x)||any(!is.finite(x))||
+         (nrow(x)==ncol(x)&&identical(colnames(x),ids))||
+         !identical(as.character(bundle$labels[ids]),as.character(hr$labels)))
+        stop("A genuine, sample-aligned feature matrix is required for PCA: ",dataset,"/",method)
+      calculated<-NULL;scorer<-function(distance,labels){calculated<<-calc_sep_score(distance,labels,parallel=1L);calculated}
+      evaluated<-evaluate_release_result(bundle,dataset,"benchmark_analysis",method,list(primary=hr$labels),"primary",
+        source_identity=item$identity,stored_policy=item$receipt$scoring_policy,score_fn=scorer)
+      five<-setNames(as.list(evaluated$scores$value),evaluated$scores$metric)
+      bundle$scores<-utils::modifyList(if(is.null(bundle$scores))list() else bundle$scores,
+        if(is.null(calculated))five else utils::modifyList(calculated,five))
+      bundles[[method]]<-bundle
+    }
+    panels<-lapply(c("Pseudobulk_hvg2000","ECODA_authors_HR"),function(method) {
+      p<-plot_pca(bundles[[method]]$feat_mat,benchmark_pca_display_labels(hr$labels,dataset),
+        cluster_score=FALSE,mod_score=FALSE,anosim_score=FALSE,coord_equal=FALSE,
+        n_ct_show=5,invisible="quali",repel=TRUE,
+        title=if(method=="ECODA_authors_HR")"Cell type composition (ECODA)" else "Pseudobulk")
+      if(dataset=="Bassez")p<-p+ggplot2::labs(color="Clonal expansion",shape="Clonal expansion")
+      if(dataset=="Zhang")p<-p+ggplot2::labs(color="Tissue",shape="Tissue")
+      p
+    })
+    paired<-patchwork::wrap_plots(panels,nrow=1,guides="collect")
+    publish(function(path)ggplot2::ggsave(path,paired,width=8,height=3.5),paste0("benchmark_pca_",dataset,".pdf"))
+    if(dataset=="Bassez") {
+      summaries<-bassez_feature_diagnostics(bundles)
+      metric_columns<-c(Silhouette="sil_score",LISI="lisi_score")
+      for(column in names(metric_columns)) {
+        field<-metric_columns[[column]]
+        summaries$methods[[column]]<-vapply(summaries$methods$method,function(method)bundles[[method]]$scores[[field]],numeric(1))
+      }
+      summaries$proportions$denominator<-"Recovered raw cells in current approved author-HR categories; total/coverage verified against current metadata"
+      tables<-summaries[names(benchmark_pca_csv_columns())]
+      bounds<-c(methods=3L,features=sum(vapply(bundles[c("ECODA_authors_HR","Pseudobulk_hvg2000")],function(x)ncol(x$feat_mat),integer(1))),
+        pcs=2L*(length(ids)-1L),proportions=ncol(counts),marker_coverage=36L,sensitivity=5L)
+      validate_benchmark_pca_tables(tables,bounds)
+      for(name in names(tables))publish(function(path)utils::write.csv(tables[[name]],path,row.names=FALSE),paste0("Bassez_",name,".csv"))
+      panels<-lapply(c("ECODA_authors_HR","Pseudobulk_hvg2000"),function(method)
+        plot_pca(bundles[[method]]$feat_mat,benchmark_pca_display_labels(hr$labels,dataset),scale.=FALSE,
+          n_ct_show=7,invisible="quali",repel=TRUE,coord_equal=FALSE,title=if(method=="ECODA_authors_HR")"ECODA authors HR" else "Pseudobulk HVG2000",
+          cluster_score=FALSE,mod_score=FALSE,sil_score=FALSE,anosim_score=FALSE) +
+          ggplot2::labs(color="Clonal expansion",shape="Clonal expansion"))
+      paired<-patchwork::wrap_plots(panels,nrow=1,guides="collect")+patchwork::plot_annotation(title="Bassez: centered, unscaled feature PCA",
+        subtitle="E/NE denotes expansion, not clinical response; arrows selected without labels")
+      for(ext in c("pdf","png"))publish(function(path)ggplot2::ggsave(path,paired,width=12,height=6,dpi=300),paste0("Bassez_feature_PCA_ECODA_HR_PB2000.",ext))
+    }
+    for(item in rows)source_rows[[length(source_rows)+1L]]<-data.frame(dataset=dataset,method_key=item$source$method_key,
+      artifact_path=item$source$artifact_path,artifact_md5=item$source$md5,receipt_path=item$source$receipt_path,
+      receipt_md5=item$source$receipt_md5,origin=item$receipt$origin,input_md5=item$identity$input_md5,source_policy=item$identity$source_policy)
+    rm(rows,bundles,panels,paired,hr,metadata,counts);invisible(gc(FALSE))
+  }
+  filenames<-benchmark_pca_render_files(names(datasets));paths<-file.path(output_root,filenames)
+  report<-list(schema="ecoda_saved_pca_render_v1",control_md5=control_md5,datasets=names(datasets),
+    operation="RENDER_SAVED_FEATURES_WITHOUT_MODEL_REFIT",sources=do.call(rbind,source_rows),coverage=coverage,csv_bounds=bounds,
+    files=data.frame(basename=filenames,md5=unname(tools::md5sum(paths))))
+  .analysis_save_new(report,file.path(output_root,"render_manifest.rds"))
+  inventory<-data.frame(path=c(paths,file.path(output_root,"render_manifest.rds")),md5=unname(tools::md5sum(c(paths,file.path(output_root,"render_manifest.rds")))))
+  utils::write.table(inventory,file.path(output_root,"files.tsv"),sep="\t",quote=FALSE,row.names=FALSE,col.names=FALSE)
+  invisible(report)
+}
+
+read_benchmark_pca_render <- function(path,md5,datasets,expected_scope=NULL) {
+  .analysis_checked_file(path,md5)
+  if(file.info(path)$size>16*1024^2)stop("PCA manifest must be small metadata")
+  report<-readRDS(path);.analysis_checked_file(path,md5)
+  expected<-benchmark_pca_render_files(report$datasets)
+  if(!identical(report$schema,"ecoda_saved_pca_render_v1")||!all(datasets%in%report$datasets)||length(report$datasets)!=11L||
+     anyDuplicated(report$datasets)||!identical(report$operation,"RENDER_SAVED_FEATURES_WITHOUT_MODEL_REFIT")||
+     !grepl("^[a-f0-9]{32}$",report$control_md5)||
+     anyDuplicated(report$files$basename)||!setequal(report$files$basename,expected))stop("Invalid finite saved-PCA manifest")
+  required_sources<-expand.grid(dataset=report$datasets,method_key=c("ECODA_authors_HR","Pseudobulk_hvg2000","__dataset_metadata__"),stringsAsFactors=FALSE)
+  required_sources<-rbind(required_sources,data.frame(dataset="Bassez",method_key="Pseudobulk_hvg3000"))
+  source_key<-function(x)paste(x$dataset,x$method_key,sep="\r")
+  if(anyDuplicated(source_key(report$sources))||!setequal(source_key(report$sources),source_key(required_sources))||
+     any(!report$sources$origin%in%c("new","legacy_reuse")))stop("Saved PCA source coverage/origins differ")
+  if(!is.null(expected_scope)) {
+    for(i in seq_len(nrow(report$sources))) {
+      source<-report$sources[i,];row<-expected_scope[expected_scope$dataset==source$dataset&expected_scope$view=="benchmark_analysis"&expected_scope$method_key==source$method_key,,drop=FALSE]
+      if(nrow(row)!=1L||row$status!="approved"||row$current_input_md5!=source$input_md5||row$source_policy!=source$source_policy||
+         (row$require_new&&source$origin!="new"))stop("Saved PCA source differs from the current scientific scope")
+    }
+  }
+  report$files$path<-file.path(dirname(path),report$files$basename)
+  for(i in seq_len(nrow(report$files))) .analysis_checked_file(report$files$path[i],report$files$md5[i])
+  report$tables<-setNames(lapply(names(benchmark_pca_csv_columns()),function(name)
+    utils::read.csv(file.path(dirname(path),paste0("Bassez_",name,".csv")),stringsAsFactors=FALSE,check.names=FALSE)),names(benchmark_pca_csv_columns()))
+  validate_benchmark_pca_tables(report$tables,report$csv_bounds)
+  report
+}
+
 # These supplements show raw metrics individually. Validate all five before
 # display recoding or plotting; diagnostic modularities cannot replace k=3.
 benchmark_validate_screen_scores <- function(frame) {

@@ -433,7 +433,7 @@ filter_methods <- methods_in_scope(c(
   "ECODA_seuratres_2",
   "Avg_PCA_embedding",
   "Freq_highres",
-  "Pseudobulk_10_PCA_dims",
+  "Pseudobulk_hvg2000",
   "MOFA_hvg2000_factors15",
   "scITD_hvg2000_factors5",
   "MrVI_hvg2000",
@@ -453,7 +453,7 @@ df_plot_scaled <- prepare_evaluation_plot_data(df_benchmark, filter_methods,
                          "ECODA_authors_HR_NULL" = "Shuffled_baseline",
                          "ECODA_HiTME_HR_layer2" = "ECODA_automated",
                          "ECODA_seuratres_2" = "ECODA_Leiden_clustering",
-                         "Pseudobulk_10_PCA_dims" = "Pseudobulk",
+                         "Pseudobulk_hvg2000" = "Pseudobulk",
                          "Freq_highres" = "ECODA_Freq%",
                          "MOFA_hvg2000_factors15" = "MOFA",
                          "scITD_hvg2000_factors5" = "scITD",
@@ -510,7 +510,7 @@ df_benchmark %>%
                          "ECODA_authors_HR_NULL" = "Shuffled_baseline",
                          "ECODA_HiTME_HR_layer2" = "ECODA_automated",
                          "ECODA_seuratres_2" = "ECODA_unsupervised",
-                         "Pseudobulk_10_PCA_dims" = "Pseudobulk",
+                         "Pseudobulk_hvg2000" = "Pseudobulk",
                          "Freq_highres" = "Cell_type_composition_%",
                          "MOFA_hvg2000_factors15" = "MOFA",
                          "scITD_hvg2000_factors5" = "scITD",
@@ -649,7 +649,7 @@ plot_list <- list()
 methods <- list(
   "ECODA_authors_HR" = "ECODA",
   "ECODA_authors_HR_NULL" = "Shuffled_baseline",
-  "Pseudobulk_10_PCA_dims" = "Pseudobulk",
+  "Pseudobulk_hvg2000" = "Pseudobulk",
   "MOFA_hvg2000_factors15" = "MOFA",
   "scITD_hvg2000_factors5" = "scITD",
   "MrVI_hvg2000" = "MrVI",
@@ -680,68 +680,20 @@ wrap_plots(plot_list) +
 
 ### Plot PCA for all datasets (PB and ECODA)
 
+These figures are rendered by the reviewed HPC `render-pca` operation from
+saved RNA features. Only the finished PDFs and bounded summary metadata are
+transferred locally; no RNA feature matrix is read by this notebook.
+
 ```{r fig.height=4, fig.width=8}
-methods <- list(
-  "Pseudobulk_hvg2000" = "Pseudobulk",
-  # "ECODA_HiTME_HR_layer2" = "ECODA_automated",
-  "ECODA_authors_HR" = "ECODA"
-)
-methods <- methods_in_scope_named(methods)
-
-for (ds in names(result_list[["bmark"]])) {
-  plot_list <- list()
-  
-  for (m in names(methods)) {
-    feat_mat <- result_list[["bmark"]][[ds]][[m]][["feat_mat"]]
-    labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
-    
-    if (ds=="Bassez") levels(labels) <- c("Responders", "Non-responders")
-    if (ds=="Zhang") levels(labels) <- tools::toTitleCase(levels(labels))
-    
-    if (methods[[m]] == "ECODA") title <- "Cell type composition (ECODA)" else title <- methods[[m]]
-    
-    plot_list[[m]] <- plot_pca(
-      feat_mat = feat_mat,
-      labels = labels,
-      cluster_score = FALSE, mod_score = FALSE, anosim_score = FALSE,
-      coord_equal = FALSE,
-      n_ct_show = 5, invisible = "quali", repel = TRUE,
-      title = title
-    )
-    
-    if (ds=="Bassez") {
-      plot_list[[m]] <- plot_list[[m]] +
-        scale_color_discrete(
-          name = "Treatment response", 
-          labels = labels
-        ) +
-        scale_shape_discrete(
-          name = "Treatment response",
-          labels = labels
-        )
-    }
-    if (ds=="Zhang") {
-      plot_list[[m]] <- plot_list[[m]] +
-        scale_color_discrete(
-          name = "Tissue", 
-          labels = labels
-        ) +
-        scale_shape_discrete(
-          name = "Tissue", 
-          labels = labels
-        )
-    }
-    
-  }
-  
-  wrap_plots(plot_list) +
-    plot_layout(nrow = 1, guides = "collect")
-  
-  ggsave(file.path(path_plots, paste0("benchmark_pca_", ds, ".pdf")),
-         width = 8,
-         height = 3.5)
+pca_render_path <- Sys.getenv("ECODA_BENCHMARK_PCA_RENDER_RDS", unset = "")
+pca_render_md5 <- Sys.getenv("ECODA_BENCHMARK_PCA_RENDER_MD5", unset = "")
+if (!nzchar(pca_render_path)) stop("Set ECODA_BENCHMARK_PCA_RENDER_RDS/MD5 to the reviewed HPC render manifest.")
+pca_render <- read_benchmark_pca_render(pca_render_path, pca_render_md5,
+  names(datasets), benchmark_control$expected_scope)
+for (ds in names(result_list$bmark)) {
+  name <- paste0("benchmark_pca_", ds, ".pdf")
+  knitr::include_graphics(pca_render$files$path[match(name, pca_render$files$basename)])
 }
-
 ```
 
 ### Supp fig 3-13: MDS for all datasets
@@ -823,10 +775,14 @@ for (ds in names(result_list[["bmark"]])) {
 
 ### Compare PCA based on features vs dist
 
+These unsaved viewer grids are manual HPC-only diagnostics. Feature PCA
+requires the approved original feature space; distance-only methods cannot be
+substituted for RNA features. They are not run by local publication intake.
+
 Five-metric means use Supp fig 15's complete extended normalization pool,
 including NULL; individual metric annotations remain raw.
 
-```{r fig.height=6, fig.width=18}
+```{r eval=FALSE, fig.height=6, fig.width=18}
 ds <- "Pelka"
 plot_list <- list()
 
@@ -881,7 +837,7 @@ wrap_plots(plot_list) +
 
 ```
 
-```{r}
+```{r eval=FALSE}
 for (m in names(methods)) {
   dist_mat <- result_list[["bmark"]][[ds]][[m]][["dist_mat"]]
   labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
@@ -932,7 +888,7 @@ wrap_plots(plot_list) +
   plot_annotation(title = ds)
 ```
 
-```{r fig.height=12, fig.width=12}
+```{r eval=FALSE, fig.height=12, fig.width=12}
 for (m in names(methods)) {
   feat_mat <- result_list[["bmark"]][[ds]][[m]][["feat_mat"]]
   labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
@@ -1010,143 +966,29 @@ ggsave(file.path(path_plots, paste0("PCA_arrows_", ds, ".pdf")),
 
 ### Bassez: descriptive feature and PCA diagnostics
 
-This diagnostic uses only the already-loaded compact Bassez result bundles.
-E means **Expander** and NE means **Non-expander**, referring to the study's
-T-cell expansion grouping, **not clinical response** ([Bassez et al.,
-2021](https://doi.org/10.1038/s41591-021-01323-8)).
-The ECODA authors-HR and pseudobulk HVG2000 feature matrices are centered but
-not variance-scaled for PCA; labels are used only for post-hoc descriptions.
-Feature variance is not group association, PCA signs are arbitrary, and
-descriptive associations do not establish a causal mechanism. Pseudobulk VST
-values do not support a low-expression claim. The fixed marker panel checks
-coverage in the available HVG2000/HVG3000 bundles, not exclusion from the full
-expression data. In this compact snapshot, composition percentages use the
-retained author-subtyped HR T/myeloid categories as their denominator, not all
-immune or tumor cells; B and mast cells and cells without an author subtype
-are excluded. The helper documents count recovery and the denominator in the
-exported table. Sensitivity ANOSIM
-statistics are exploratory, with no permutation tests or p-values.
+The reviewed HPC renderer uses saved current author-HR and pseudobulk result
+features, with centered, unscaled PCA and label-blind loading selection. E/NE
+means **Expander/Non-expander T-cell clonal expansion**, not clinical response.
+Current HR coverage and cell totals are verified against the approved dataset
+metadata and recovered counts; no historical 33-category/24,139-cell baseline
+is substituted. The exported gene tables contain bounded aggregate statistics
+and PCA loadings, never sample-by-gene expression or pseudobulk matrices.
+Sensitivity statistics remain exploratory and use no permutation tests.
 
 ```{r bassez-feature-diagnostics, fig.height=6, fig.width=12, results='asis'}
-if (!exists("result_list") ||
-    is.null(result_list[["bmark"]][["Bassez"]])) {
-  message("Skipping Bassez feature diagnostics: no loaded Bassez bundles.")
-} else if (!all(c("ECODA_authors_HR", "Pseudobulk_hvg2000") %in%
-                names(result_list[["bmark"]][["Bassez"]]))) {
-  message(paste(
-    "Skipping Bassez feature diagnostics:",
-    "ECODA_authors_HR and Pseudobulk_hvg2000 are both required."
-  ))
-} else {
-  bassez_diagnostics <- local({
-    bundles <- result_list[["bmark"]][["Bassez"]]
-    output_dir <- file.path(
-      if (exists("path_plots")) path_plots else file.path(getwd(), "plots"),
-      "Bassez_diagnostics_2026-10-23",
-      format(Sys.time(), "%Y%m%dT%H%M%S")
-    )
-    if (file.exists(output_dir)) {
-      stop("Refusing to overwrite existing Bassez diagnostic outputs: ",
-           output_dir)
-    }
-    diagnostics <- bassez_feature_diagnostics(bundles)
-    table_names <- c(
-      "methods", "features", "pcs", "proportions",
-      "marker_coverage", "sensitivity"
-    )
-    print(knitr::kable(
-      diagnostics$methods, digits = 4,
-      caption = "Available selected methods: stored benchmark metrics (not recomputed)."
-    ))
-    method_titles <- c(
-      ECODA_authors_HR = "ECODA authors HR",
-      Pseudobulk_hvg2000 = "Pseudobulk HVG2000"
-    )
-    panels <- lapply(names(method_titles), function(method) {
-      features <- diagnostics$features[
-        diagnostics$features$method == method, , drop = FALSE
-      ]
-      print(knitr::kable(
-        utils::head(features[order(features$variance_rank), c(
-          "feature", "variance", "variance_rank", "group_R2",
-          "delta_E_minus_NE", "group_contrast_percent"
-        )], 10),
-        digits = 4, row.names = FALSE,
-        caption = paste(method_titles[[method]], "— top 10 features by variance")
-      ))
-      for (pc in c("PC1", "PC2")) {
-        loading <- paste0("loading_", pc)
-        contribution <- paste0("contribution_", pc, "_percent")
-        print(knitr::kable(
-          utils::head(features[
-            order(-abs(features[[loading]]), features$feature),
-            c("feature", loading, contribution, "variance_rank", "group_R2")
-          ], 10),
-          digits = 4, row.names = FALSE,
-          caption = paste(
-            method_titles[[method]], "— top 10 absolute", pc,
-            "loadings (signed values shown; no label-based selection)"
-          )
-        ))
-      }
-      bundle <- bundles[[method]]
-      label_names <- c(E = "Expander (E)", NE = "Non-expander (NE)")
-      plot_labels <- factor(
-        unname(label_names[as.character(bundle$labels)]),
-        levels = unname(label_names)
-      )
-      plot_pca(
-        feat_mat = bundle$feat_mat,
-        labels = plot_labels,
-        scale. = FALSE,
-        n_ct_show = 7,
-        invisible = "quali",
-        repel = TRUE,
-        coord_equal = FALSE,
-        title = method_titles[[method]],
-        cluster_score = FALSE,
-        mod_score = FALSE,
-        sil_score = FALSE,
-        anosim_score = FALSE
-      )
-    })
-    pca_plot <- patchwork::wrap_plots(panels, nrow = 1) +
-      patchwork::plot_layout(guides = "collect") +
-      patchwork::plot_annotation(
-        title = "Bassez: centered, unscaled feature PCA",
-        subtitle = "E/NE denotes expansion, not clinical response; arrows selected without labels"
-      )
-    print(pca_plot)
-    if (!dir.create(output_dir, recursive = TRUE)) {
-      stop("Could not create Bassez diagnostic output directory: ", output_dir)
-    }
-    for (table_name in table_names) {
-      utils::write.csv(
-        diagnostics[[table_name]],
-        file.path(output_dir, paste0("Bassez_", table_name, ".csv")),
-        row.names = FALSE
-      )
-    }
-    for (extension in c("png", "pdf")) {
-      ggplot2::ggsave(
-        filename = file.path(
-          output_dir, paste0("Bassez_feature_PCA_ECODA_HR_PB2000.", extension)
-        ),
-        plot = pca_plot, width = 12, height = 6, dpi = 300
-      )
-    }
-    attr(diagnostics, "output_dir") <- output_dir
-    diagnostics
-  })
-  if (exists("df_results_list")) {
-    for (bassez_table_name in c(
-      "methods", "features", "pcs", "proportions", "marker_coverage", "sensitivity"
-    )) {
-      df_results_list[[paste0("Bassez_", bassez_table_name)]] <-
-        bassez_diagnostics[[bassez_table_name]]
-    }
-  }
+if (!exists("pca_render")) {
+  pca_render <- read_benchmark_pca_render(
+    Sys.getenv("ECODA_BENCHMARK_PCA_RENDER_RDS", unset = ""),
+    Sys.getenv("ECODA_BENCHMARK_PCA_RENDER_MD5", unset = ""),
+    names(datasets), benchmark_control$expected_scope)
 }
+print(pca_render$coverage$Bassez)
+for (table_name in names(pca_render$tables)) {
+  print(knitr::kable(utils::head(pca_render$tables[[table_name]], 10), row.names = FALSE))
+  df_results_list[[paste0("Bassez_", table_name)]] <- pca_render$tables[[table_name]]
+}
+knitr::include_graphics(pca_render$files$path[match(
+  "Bassez_feature_PCA_ECODA_HR_PB2000.png", pca_render$files$basename)])
 ```
 
 ### Bassez: opt-in matched all-cell composition comparison
@@ -1170,7 +1012,9 @@ mixed categories: 33 fine + 8 fallback − 1 shared `pDC`. Fallback coverage
 still counts those 10 cells as fallback; other unsupported label collisions
 stop the comparison rather than silently pooling distinct categories.
 
-This section is disabled unless `ECODA_BASSEZ_ANNOTATION_COUNTS` names a local
+This historical comparison is manual HPC-only (`eval=FALSE`) and requires a
+separately approved original HR33 source. It is outside current mixed-HR
+publication intake. `ECODA_BASSEZ_ANNOTATION_COUNTS` names a compact
 CSV with columns `Sample,cellType,cellSubType,count`. Its adjacent file
 `<CSV path>.md5` must contain one bare 32-character MD5 digest, with optional
 surrounding whitespace. This compact input is a tabulation of original
@@ -1188,7 +1032,7 @@ matching cells removes the HR/all-cell scope difference, but does not imply
 a causal or clinical interpretation. This does not replace pseudobulk on the
 exact original HR33 cell subset; that requires expression-level subsetting.
 
-```{r bassez-matched-allcell-comparison, fig.height=6, fig.width=18, results='asis'}
+```{r bassez-matched-allcell-comparison, eval=FALSE, fig.height=6, fig.width=18, results='asis'}
 bassez_annotation_path <- Sys.getenv("ECODA_BASSEZ_ANNOTATION_COUNTS", unset = "")
 if (!nzchar(bassez_annotation_path)) {
   message("Skipping matched all-cell comparison: ECODA_BASSEZ_ANNOTATION_COUNTS is unset.")
@@ -1772,10 +1616,7 @@ for (ds in datas) {
     labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
     
     if (ds == "Bassez") {
-      labels <- as.character(labels)
-      labels[labels == "E"] <- "Responders"
-      labels[labels == "NE"] <- "Non-responders"
-      labels <- factor(labels, levels = c("Responders", "Non-responders"))
+      labels <- benchmark_pca_display_labels(labels, "Bassez")
     }
     
     pl[[m]] <- plot_mds(
@@ -1786,6 +1627,7 @@ for (ds in datas) {
       title = methods[[m]],
       separation_score = benchmark_normalized_mean(df_benchmark, ds, m, benchmark_extended_normalization_methods)
     )
+    if (ds == "Bassez") pl[[m]] <- pl[[m]] + labs(color = "Clonal expansion", shape = "Clonal expansion")
   }
   
   # Wrap the row patchwork in wrap_elements to preserve the annotation
@@ -2421,7 +2263,9 @@ ggsave(file.path(path_plots, "Supp_fig_21_HVCs_per_dataset.pdf"),
 
 # Most highly variable cell types per dataset
 
-```{r fig.height=8, fig.width=12}
+This historical HiTME feature printout is manual only. Its layer-specific variance-screen arms are outside the approved projection scope; no additional HiTME refresh is requested.
+
+```{r eval=FALSE, fig.height=8, fig.width=12}
 print("Most highly variable cell types per dataset:")
 for (ds in names(result_list[["bmark"]])) {
   print(ds)
@@ -2833,10 +2677,7 @@ plot_list <- list()
 for (m in names(methods)) {
   dist_mat <- result_list[["bmark"]][[ds]][[m]][["dist_mat"]]
   labels <- result_list[["bmark"]][[ds]][[m]][["labels"]]
-  labels <- as.character(labels)
-  labels[labels == "E"] <- "Responders"
-  labels[labels == "NE"] <- "Non-responders"
-  labels <- factor(labels, levels = c("Responders", "Non-responders"))
+  labels <- benchmark_pca_display_labels(labels, "Bassez")
   
   plot_list[[m]] <- plot_mds(
     dist_mat,
@@ -2845,7 +2686,7 @@ for (m in names(methods)) {
     coord_equal = TRUE, pointsize = 2,
     title = methods[[m]],
     separation_score = benchmark_normalized_mean(df_benchmark, ds, m, benchmark_extended_normalization_methods)
-  )
+  ) + labs(color = "Clonal expansion", shape = "Clonal expansion")
 }
 
 wrap_plots(plot_list) +
@@ -4047,7 +3888,9 @@ write_xlsx(df_results_list, path = file.path(path_data, "raw_data_for_publicatio
 
 # Info about datasets
 
-```{r}
+This manual HVC feature printout needs separately approved full CT metadata. Current local projection provides scalar feature counts and does not broaden the top-zero feature scope beyond Adams/Kfoury.
+
+```{r eval=FALSE}
 for (ds in names(result_list$bmark)) {
   print("-----------------------------------------")
   print(ds)
@@ -4829,15 +4672,14 @@ for (ds in names(result_list[["bmark"]])) {
     }
   ))))
   if (ds == "Bassez") {
-    presentation_label_levels <- sort(c("Responders", "Non-responders"))
+    presentation_label_levels <- c("Expander", "Non-expander")
   }
 
   for (m in names(presentation_mds_methods)) {
     bundle <- result_list[["bmark"]][[ds]][[m]]
     labels <- as.character(bundle$labels)
     if (ds == "Bassez") {
-      labels[labels == "E"] <- "Responders"
-      labels[labels == "NE"] <- "Non-responders"
+      labels <- as.character(benchmark_pca_display_labels(labels, "Bassez"))
     }
     labels <- factor(labels, levels = presentation_label_levels)
     presentation_scores <- vapply(
@@ -4857,6 +4699,7 @@ for (ds in names(result_list[["bmark"]])) {
       )) +
       scale_color_discrete(limits = presentation_label_levels, drop = FALSE) +
       guides(shape = "none")
+    if (ds == "Bassez") presentation_mds_plots[[m]] <- presentation_mds_plots[[m]] + labs(color = "Clonal expansion")
   }
 
   presentation_mds_plot <- wrap_plots(presentation_mds_plots) +
