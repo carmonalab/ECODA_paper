@@ -85,16 +85,18 @@ decisions have been applied to existing artifacts.
   validated NAS release, source3794e3e, publication finished05:03:40Z; no fit
   repeated. Original failed BL gate remains failed. Stephenson BL stays in
   its upcoming whole-method run, once only. Aux remains unchanged.
-- **Bassez authorHR22 science approved, publication READY:** original gate
+- **Bassez authorHR22 science and publication approved:** original gate
   failed only in controller ownership validation after all5jobs completed0.
   Its23RDS+one22-row timing file pass exact CLI,5finite metrics, current
   metadata/NULL/count/source/proof checks with no fit/H5AD read. Original
   abort cleanup already finalized ownersOK; no old record was edited.
-  New science receipt SHA78523c4...; new24-payload publication is prepared.
+  New science receipt SHA78523c4...; new24-payload publication completed
+  05:48:23Z and passed terminal validation/root review without refitting.
 - **Main Stage5 NOT LAUNCHED:** source039d79c is frozen independently; actual
   controls cover remaining41 benchmark requests plus both8-dataset batch
   contexts,77 initial IDs/248 scheduled units. Input reviews are complete;
-  root is sealing/staging controls and the last publication review. Peers in
+  all13controls/27input stat+proof references and the actual NAS mount are
+  verified; final metadata worker path fix is accepted. Peers in
   the existing campaign remain independent. No targeted HiTME100 selection.
 - **User HiTME clarification: NO targeted refresh added.** Plain layer2
   counts match in all3audited cohorts and maintained final selectors use that
@@ -2096,4 +2098,88 @@ Exact immutable command (SHA256
 
 ```bash
 env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bassez-hr22-publication-v1/fc46e0366226a4dcce2c2cb0366678df167d3aab/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bassez-hr22-publication-v1/fc46e0366226a4dcce2c2cb0366678df167d3aab/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-bassez-hr22-publication-v1/fc46e0366226a4dcce2c2cb0366678df167d3aab/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage5_bassez_hr22_publication_20261109_v1 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage5_bassez_hr22_publication_20261109_v1 --script src/utils/bash/publish_bl_science.sh -- --control /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/bassez-hr22-publication-v1/control.json --control-md5 214bd3b9054026f4dccc523065fbcf28
+```
+
+
+## Main parallel method wave — READY for exact-once launch
+
+- Gate `ecoda_stage5_main_confounds_20261109_v1`; parent run
+  `stage5_main_confounds_20261109_v1`; existing group `ecoda-benchmark`.
+  One existing campaign launches three isolated child dispatchers. Failure of
+  one child does not cancel its peers; only documented intra-dataset producer
+  dependencies serialize methods. No new framework/group/global sync owner.
+- Final source `c534cdfd28fc9a77c009f4e25fa4c4ddb7ee4400`, snapshotparent
+  `20261109-main-confounds-v2`; archive SHA256
+  `3e70d93de6ae914c5d377bf80502e05befca02d158fb2673e5588ef446e09044`.
+  Earlier source039/main-v1 snapshot and proposed wrapper were never executed
+  and remain immutable history. Final metadata-mode path fix resolves bound
+  scratch/NAS identities and input, preserving all legacy branches/ownership/
+  checksum/column guards. Real-worker/Feather tests pass for both views,
+  hidden NAS, legacy positives, Kidney2axes and foreign/tampered negatives.
+  Author+independent review passed. No scope/reference/task-count change.
+- Runtime image8fcd00... and manifest1c4c2c... remain pinned, R4.5.2/Python3.13,
+  no environment refresh or dependency/aux change. Aux MD58cacee... unchanged;
+  no new sex-gene exclusion/chromosome annotation. Dataset configSHA522342...
+  remains the confirmed top-level column/view authority.
+- Sole formal predecessors: approved Bassez Stage2 and approved Stephenson
+  Stage4 gate manifests. Never pass failed Stage3/BL/earlyHR22 gates as
+  successful dependencies. All16 batch artifacts have explicit NOOP reuse
+  review5c05ac54...; current Kidney metadata separately passed.
+- Bassez HR22 publication completed05:48:23Z,24payloads/48checksum entries.
+  Receipt MD5 `1be5722bf1a3e839da7f5e28e9d15635`, SHA256
+  `dcbd31bb47403c4ab1181e808d0dbc0d12bbd250617c070bc615ed13f6d7f4df`.
+  Root publication review SHA256
+  `3d2227f027706bf7738b9d3aba5fda09fa4aa9fe88f6e41ccbbd9c4ad5457b62`.
+  The pinned HR terminal validator passed. Original failed gate remainsfailed;
+  original23RDS/timing/owners unchanged. Thus the exact22 valid author-HR
+  composition rows stay outside recomputation. Source/science approval—not
+  oldgate success—is the reuse authority. Other20Bassez requests are retained.
+- Benchmark selection41 public rows /29 normalized families: Stephenson12
+  whole-family/screen requests; Bassez20 affected HR/screen requests; nine
+  additional transformation-only requests. No BassezBL duplication; StephBL
+  occurs once within its whole-method row. No extra HiTME100 selector or fit.
+- Both batch contexts select exactly8cohorts/56families each. Inputs are27
+  actual six-field references:11benchmark,8uncorrected,8corrected. All
+  path/size/strict3fieldproof references checked onBamboo without new H5AD
+  reads; scheduled preflights validate payloads. External controls13files
+  are hashed/sealed under `_ecoda_inputs/20261108-confounding-subsets-v1/main-confounds-v1`.
+  Existing039 proposal files remain evidence only; `wrapper.actual.sh` is
+  SHA09c8c482b659ea207ebc613cc24fc01a2f90a4ed0d9dbbe0501056b33527b551.
+- Exact selection/input hashes: benchmark selection56119d97..., normalized
+  038658d1..., inputs3fad7dad...; uncorrected selection1da3b269...,
+  inputs7fe1eb3f...; corrected selection4bbc10c8..., inputsb5f506b5...;
+  contextsdd5d41be... . Full hashes remain in `.gate/ecoda_stage5_main_confounds_20261109_v1.spec.json`.
+- Physical scope: benchmark54method/preptasks in19arrays+19watchdogs+1aggregate;
+  eachbatch56tasks in7arrays+7watchdogs+1aggregate. Production preflights:
+  H5AD27tasks/3IDs, Renv3/3, metadata exports16/2. **77 initial schedulerIDs /
+  248 scheduled task units**, before explicit bounded OOM retries. Total166
+  method/prep tasks,33watchdogs,3aggregate. Expected scientific payloads223
+  (benchmark63RDS/Feather,uncorrected64,corrected96), plus16sample-metadata
+  exports and ordinary sidecars/timing/log/control records.
+- Resources:128G initial→500G OOM ceiling; methods12h; CPU16 except trans/
+  zeroimp4; GPU8CPU+1GPU,16benchmark GPUtasks(MRVI2k1+scPoli15), batchCPUonly.
+  GPU class throttle4, CPU literal1000 bounded by selected rows. Watchdog12h.
+  Explicit source-bound wrappers retain OOM-only row retries and fail closed
+  for non-OOM/exhausted limits. If physical rows exceed declared selections,
+  cancel every emitted schedulerID and runner, preserve evidence and fail.
+- Parent/threechild run/log/NAS/gate namespaces verified fresh before prepare.
+  Actual NAS preflight passes on `smednas515:/volume1/Shared`; no synthetic
+  scratch fallback. Three independent roots/sync owners are:
+  `stage5_main_benchmark_20261109_v1/artifacts/benchmark`,
+  `stage5_main_uncorrected_20261109_v1/artifacts/batch_effect/uncorrected_final`,
+  `stage5_main_corrected_20261109_v1/artifacts/batch_effect/corrected_final`.
+  NAS mirrors are under `releases/20261108-confounding-subsets-v1/<child>/...`.
+  Child logs are within parentrun/logs/<child>, as the campaign actually sets.
+- After prepare/reconcile/launch arm exactly one unbounded durable wait.
+  Terminal review uses one union accounting query for every emitted child ID,
+  the accepted campaign raw-capture/three-child projection adapter and three
+  pinned selected run audits. No ordinary parent-only audit or repeat query.
+  Root approval/release follows all selected science/artifact/NAS checks;
+  failed child rows are recovered narrowly without recomputing valid rows.
+
+Exact immutable command (SHA256
+`950bb25c9e224f1642e2b63929e59cdfb8145c7eda745ddd7103475e9ee3f518`):
+
+```bash
+env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper BENCHMARK_MEM=128G BENCHMARK_MEM_MAX=500G BENCHMARK_CPU_CPUS_PER_TASK=16 BENCHMARK_GPU_CPUS_PER_TASK=8 BENCHMARK_CPU_TIME_LIMIT=12:00:00 BENCHMARK_GPU_DEFAULT_TIME_LIMIT=12:00:00 BENCHMARK_GPU_ANY_TIME_LIMIT=12:00:00 WATCHDOG_TIME_LIMIT=12:00:00 MAX_NUM_CHUNKS_PARALLEL=1000 BENCHMARK_GPU_DEFAULT_ARRAY_THROTTLE=4 BENCHMARK_GPU_ANY_ARRAY_THROTTLE=4 /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-main-confounds-v2/c534cdfd28fc9a77c009f4e25fa4c4ddb7ee4400/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-main-confounds-v2/c534cdfd28fc9a77c009f4e25fa4c4ddb7ee4400/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-main-confounds-v2/c534cdfd28fc9a77c009f4e25fa4c4ddb7ee4400/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage5_main_confounds_20261109_v1 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage5_main_confounds_20261109_v1 --script src/5_run_benchmark_methods/stage5_campaign.sh -- --contexts /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/main-confounds-v1/contexts.tsv --derivative-release 20261108-confounding-subsets-v1
 ```
