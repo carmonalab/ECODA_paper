@@ -2029,12 +2029,49 @@ stage5_validate_source_artifact_records() {
 }
 
 
+stage5_validate_derivative_input_row() {
+  local ds="$1" view="$2" path verified owner producer_run record producer owned_run
+  path="$(ecoda_derivative_input "${ds}" "${view}")" || return 1
+  ecoda_require_input_ownership "${path}" "${RUN_ID}" || return 1
+  verified="$(ecoda_derivative_input "${ds}" "${view}" file content)" || return 1
+  # Compute preflight still requires an existing adjacent receipt. Diagnose
+  # its absence here; derivative input validation never repairs old files.
+  [[ "${verified}" == "${path}" && -s "${path}.md5" && ! -L "${path}.md5" ]] || return 1
+  owner="$(ecoda_artifact_owner_dir "${path}")" || return 1
+  owned_run=""
+  case "${path}" in "${ECODA_RUNS_ROOT}/"*) owned_run="${path#${ECODA_RUNS_ROOT}/}"; owned_run="${owned_run%%/*}" ;; esac
+  if [[ -e "${owner}" || -L "${owner}" ]]; then
+    _ecoda_artifact_owner_validate_dir "${owner}" "${path}" || return 1
+    [[ "${ECODA_ARTIFACT_OWNER_STATE}" == OK ]] || return 1
+    producer_run="${ECODA_ARTIFACT_OWNER_RUN}"
+    [[ -z "${owned_run}" || "${owned_run}" == "${producer_run}" ]] || return 1
+    record="$(ecoda_artifact_record_path "${path}" "${producer_run}")" || return 1
+    producer="$(stage5_recorded_producer "${record}")" || return 1
+    ecoda_validate_artifact_record "${path}" "${producer}" "${producer_run}" >/dev/null || return 1
+  elif [[ -n "${owned_run}" ]]; then
+    echo "ERROR: run-owned derivative input has no published producer owner: ${path}" >&2
+    return 1
+  fi
+  # Explicit legacy inputs have no invented producer. The bound proof and
+  # fresh content hash above establish their expected identity read-only.
+  ecoda_require_input_ownership "${path}" "${RUN_ID}"
+}
+
 stage5_repair_missing_h5ad_sidecars() {
   local repair_manifest="${ECODA_RUN_ROOT}/manifests/h5ad_checksum_repairs.tsv"
   local repair_tmp="${repair_manifest}.build.$$"
   local ds view path sidecar digest size root repairs=0
   local scratch_path nas_path scratch_digest scratch_size source_key seen_sources=""
   local identity_path
+  if [[ -n "${ECODA_ARTIFACT_BINDING:-}" ]]; then
+    while IFS=$'\t' read -r ds view _scope; do
+      source_key="${ds}/${view}"
+      case " ${seen_sources} " in *" ${source_key} "*) continue ;; esac
+      seen_sources="${seen_sources} ${source_key}"
+      stage5_validate_derivative_input_row "${ds}" "${view}" || return 1
+    done < "${MANIFEST}"
+    return 0
+  fi
   [[ "${BENCHMARK_MATRIX_TEST:-0}" == 1 ]] && return 0
   : > "${repair_tmp}" || return 1
   while IFS=$'\t' read -r ds view _scope; do

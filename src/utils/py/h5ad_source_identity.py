@@ -209,7 +209,10 @@ def file_md5(path: str | Path) -> str:
 
 
 def _sidecar_fields(path: Path, *, verify_content: bool = True) -> dict[str, str]:
-    sidecar = Path(f"{path}.md5")
+    return _checksum_proof_fields(path, Path(f"{path}.md5"), verify_content=verify_content)
+
+
+def _checksum_proof_fields(path: Path, sidecar: Path, *, verify_content: bool) -> dict[str, str]:
     if not sidecar.is_file() or sidecar.stat().st_size <= 0:
         raise ValueError(f"H5AD checksum sidecar is missing: {sidecar}")
     fields: dict[str, str] = {}
@@ -231,6 +234,27 @@ def _sidecar_fields(path: Path, *, verify_content: bool = True) -> dict[str, str
     if verify_content and file_md5(path) != digest:
         raise ValueError(f"H5AD checksum MD5 mismatch: {path}")
     return {"MD5": digest, "SIZE": size, "PATH": str(path)}
+
+
+def _source_sidecar_fields(path: Path, config_path: str | Path, dataset: str, view: str,
+                          *, verify_content: bool) -> dict[str, str]:
+    if not os.environ.get("ECODA_ARTIFACT_BINDING"):
+        return _sidecar_fields(path, verify_content=verify_content)
+    try:
+        from .derivative_artifacts import active_binding, resolve_input
+    except ImportError:
+        from derivative_artifacts import active_binding, resolve_input
+    value, binding = active_binding(config_path)
+    if resolve_input(binding, config_path, dataset, view) != path:
+        raise ValueError("source checksum proof is outside the bound dataset/view/source")
+    # load/resolve_input already validate the immutable six-field manifest and
+    # each exact proof's canonical PATH, MD5 and size. Use that selected proof;
+    # never rewrite or reinterpret an older adjacent receipt's alias.
+    proofs = [Path(fields[5]) for line in Path(value["input_artifacts"]).read_text().splitlines()
+              if (fields := line.split("\t"))[:3] == [dataset, view, str(path)]]
+    if len(proofs) != 1:
+        raise ValueError("source checksum proof is not uniquely bound")
+    return _checksum_proof_fields(path, proofs[0], verify_content=verify_content)
 
 
 def resolve_h5ad_path(
@@ -296,7 +320,8 @@ def build_source_identity(
         # A source identity is never built from an unchecked artifact.  The
         # optimized caller may opt out of a second content hash only after it
         # has strictly validated every selected sidecar and source byte pair.
-        sidecar = _sidecar_fields(path, verify_content=not validated_sidecars)
+        sidecar = _source_sidecar_fields(path, config_path, dataset, view,
+                                        verify_content=not validated_sidecars)
         sample_ids = read_h5ad_sample_ids(path)
         entries.append(
             {
@@ -386,7 +411,8 @@ def verify_source_identity(
         record = records[(dataset, view)]
         if record["path"] != str(path):
             raise ValueError(f"source identity PATH mismatch for {dataset}/{view}")
-        sidecar = _sidecar_fields(path, verify_content=not validated_sidecars)
+        sidecar = _source_sidecar_fields(path, config_path, dataset, view,
+                                        verify_content=not validated_sidecars)
         if (
             int(sidecar["SIZE"]) != record["size"]
             or sidecar["MD5"] != record["md5"]
