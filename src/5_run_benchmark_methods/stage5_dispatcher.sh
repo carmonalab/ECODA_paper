@@ -3511,42 +3511,76 @@ stage5_export_final_sample_metadata() {
     export_rc=$?
     set -e
     export_id="${export_msg%%;*}"
-    [[ "${export_id}" =~ ^[0-9]+$ ]] || return 1
-    stage5_record_scheduler METADATA_EXPORT "${export_id}" || return 1
-    [[ ${export_rc} -eq 0 ]] || return 1
+    [[ "${export_id}" =~ ^[0-9]+$ ]] || {
+      echo "ERROR: metadata export scheduler ID is invalid (client exit ${export_rc}): ${export_msg}" >&2
+      return 1
+    }
+    stage5_record_scheduler METADATA_EXPORT "${export_id}" || {
+      echo "ERROR: could not record metadata export scheduler ID ${export_id}" >&2
+      return 1
+    }
+    [[ ${export_rc} -eq 0 ]] || {
+      echo "ERROR: metadata export scheduler client failed for ${export_id} (exit ${export_rc})" >&2
+      return 1
+    }
   else
     rm -f "${pending_tmp}" "${pending_manifest}" "${pending_manifest}.md5"
   fi
   pending_index=0
   while IFS=$'\t' read -r ds view input output extra; do
     [[ -n "${ds}" && "${view}" == "${required_view}" &&
-       -n "${input}" && -n "${output}" && -z "${extra}" ]] || return 1
+       -n "${input}" && -n "${output}" && -z "${extra}" ]] || {
+      echo "ERROR: invalid metadata validation manifest row for ${ds}/${view}" >&2
+      return 1
+    }
     safe="$(_ecoda_safe_component "${ds}__${view}")"
     status="${status_dir}/${safe}.status"
     if "${PYTHON_BIN}" "${exporter}" \
         --config "${DATASETS_JSON_FILE}" --dataset "${ds}" --view "${view}" \
-        --input-file "${input}" --output "${output}" --check >/dev/null 2>&1; then
-      ecoda_validate_checksum "${output}" || return 1
+        --input-file "${input}" --output "${output}" --check >/dev/null; then
+      ecoda_validate_checksum "${output}" || {
+        echo "ERROR: metadata export checksum validation failed for ${ds}/${view}: ${output}" >&2
+        return 1
+      }
       if [[ ${pending_count} -gt 0 && -s "${pending_manifest}" ]]; then
         if grep -F -q "${ds}" "${pending_manifest}"; then
           pending_index=$((pending_index + 1))
-          [[ -s "${status}" ]] || return 1
+          [[ -s "${status}" ]] || {
+            echo "ERROR: metadata export status is missing for ${ds}/${view}: ${status}" >&2
+            return 1
+          }
           state="$(sed -n 's/^STATE=//p' "${status}" | head -1 || true)"
           status_task="$(sed -n 's/^TASK_ID=//p' "${status}" | head -1 || true)"
-          [[ "${state}" == OK && "${status_task}" == "${pending_index}" ]] || return 1
+          [[ "${state}" == OK && "${status_task}" == "${pending_index}" ]] || {
+            echo "ERROR: metadata export status mismatch for ${ds}/${view}: STATE=${state} TASK_ID=${status_task}, expected OK/${pending_index}" >&2
+            return 1
+          }
         fi
       else
         ecoda_atomic_write "${status}" \
-          "STATE=OK\nSTATUS=NOOP_VALIDATED\nRUN_ID=${RUN_ID}\nDATASET=${ds}\nVIEW=${view}\nTASK_ID=0\nINPUT_FILE=${input}\nOUTPUT_FILE=${output}\n" || return 1
+          "STATE=OK\nSTATUS=NOOP_VALIDATED\nRUN_ID=${RUN_ID}\nDATASET=${ds}\nVIEW=${view}\nTASK_ID=0\nINPUT_FILE=${input}\nOUTPUT_FILE=${output}\n" || {
+          echo "ERROR: could not record metadata validation status for ${ds}/${view}: ${status}" >&2
+          return 1
+        }
       fi
     else
+      echo "ERROR: metadata export semantic validation failed for ${ds}/${view}: ${output}" >&2
       return 1
     fi
   done < "${manifest}"
-  [[ ${pending_count} -eq 0 || ${pending_index} -eq ${pending_count} ]] || return 1
+  [[ ${pending_count} -eq 0 || ${pending_index} -eq ${pending_count} ]] || {
+    echo "ERROR: metadata export pending count mismatch: validated ${pending_index}, expected ${pending_count}" >&2
+    return 1
+  }
   ecoda_atomic_write "${status_report}" \
-    "STATE=OK\nANALYSIS_VARIANT=${ANALYSIS_VARIANT}\nANALYSIS_ROOT=${ANALYSIS_ROOT}\nANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT}\nANALYSIS_PASS=${PASS_ARG}\nANALYSIS_LOG_PREFIX=${ANALYSIS_LOG_PREFIX}\nRUN_ID=${RUN_ID}\nMANIFEST=${manifest}\nCOUNT=$(awk 'END { print NR }' "${manifest}")\nPENDING=${pending_count}\n" || return 1
-  ecoda_write_checksum "${status_report}" || return 1
+    "STATE=OK\nANALYSIS_VARIANT=${ANALYSIS_VARIANT}\nANALYSIS_ROOT=${ANALYSIS_ROOT}\nANALYSIS_NAS_ROOT=${ANALYSIS_NAS_ROOT}\nANALYSIS_PASS=${PASS_ARG}\nANALYSIS_LOG_PREFIX=${ANALYSIS_LOG_PREFIX}\nRUN_ID=${RUN_ID}\nMANIFEST=${manifest}\nCOUNT=$(awk 'END { print NR }' "${manifest}")\nPENDING=${pending_count}\n" || {
+    echo "ERROR: could not write metadata export report: ${status_report}" >&2
+    return 1
+  }
+  ecoda_write_checksum "${status_report}" || {
+    echo "ERROR: could not checksum metadata export report: ${status_report}" >&2
+    return 1
+  }
   return 0
 }
 
