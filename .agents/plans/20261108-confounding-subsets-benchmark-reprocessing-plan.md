@@ -61,11 +61,11 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, preprocessing complete; main setup failed
+## Live checkpoint — 2026-11-09, recovery reviewed and READY to launch
 
 - P0/P1 DONE: logical checkpoints and harmonized documentation are pushed.
-  Latest reviewed source includes output-ownership fix039d79c and the finite
-  HR publication extensionfc46e03. External application work remains excluded.
+  Latest reviewed controller/reuse source is9ca2453, committed/pushed and
+  deployed as an immutable Bamboo snapshot. External application work remains excluded.
 - **Changed inputs ready:** approved Bassez metadata repair (74948cells,
   26samples,40HRtypes); all17 Stage3 outputs produced/NAS-synced;53-sample
   Stephenson benchmark input individually NOOP-reviewed. Original Stage3 gate
@@ -2266,7 +2266,7 @@ changes; the orchestrator owns Git, plan, controls and HPC execution.
   Feathers. Local controls/review: `.gate/main_recovery_inputs_20261109_v2/`;
   remote control: `_ecoda_inputs/20261108-confounding-subsets-v1/main-confounds-v2/prepared_adoption.json`.
   New target children are `stage5_main_{benchmark,uncorrected,corrected}_20261109_v2`.
-- The finite adoption hook is IN_PROGRESS, using existing derivative bindings,
+- The finite adoption hook is DONE/reviewed in9ca2453, using existing derivative bindings,
   strict proofs and create-only new copies. It will not relax the legacy
   validated-recovery contract or submit work. Existing scientific validators
   must accept the new copies before completed preparation is excluded.
@@ -2274,3 +2274,58 @@ changes; the orchestrator owns Git, plan, controls and HPC execution.
   unchanged. No BL10 or Bassez authorHR22 recomputation, no targetedHiTME100.
   Fresh recovery gate is PLANNED, not launched. Final immutable source,
   selected pending row count and exact wrapper will be recorded before launch.
+
+
+## Recovery parallel method wave v2 — READY, not yet launched
+
+- Gate `ecoda_stage5_main_confounds_20261109_v2`; parent
+  `stage5_main_confounds_20261109_v2`; existing group `ecoda-benchmark`.
+  Children `stage5_main_benchmark_20261109_v2`,
+  `stage5_main_uncorrected_20261109_v2`, `stage5_main_corrected_20261109_v2`.
+  The three controllers start independently/concurrently and a peer failure
+  does not cancel the other contexts. Only documented within-context
+  preparation dependencies serialize tasks.
+- Exact source `9ca2453eea7320a721ef6dfd458f9db108abecac`; snapshot
+  `_ecoda_source_snapshots/20261109-main-confounds-recovery-v1/9ca2453eea7320a721ef6dfd458f9db108abecac`;
+  source archive SHA256
+  `39b4d7bedad8806e69d44dcd1c7ef545cf08193d63b0ecac0e36ae4d48af77d0`.
+  Existing versioned format2 runtime/aux/config/lock constraints unchanged.
+- Authoritative final spec is `.gate/main_recovery_inputs_20261109_v2/spec.ready.json`,
+  SHA256 `b687bde28eff9eefda175eb8d61a55620e3460efec583d4354ccc322f1dfd9d0`.
+  Wrapper SHA256 `399cbff4e968595749ca4549e430af781d8c621c2feb0fd667f365088cae6bca`.
+  The unlaunched `spec.json` proposal is preserved and superseded: review caught
+  stale descriptive v1 run/control paths; finalready fields and executable
+  command all agree onv2. No gate was prepared/launched from that proposal.
+- Public selection remains41benchmark requests→29selected families; validated
+  preparation reuse leaves28pending families/53physical benchmark rows, plus
+  56uncorrected+56corrected rows =165pending method/preparation tasks.
+  Expected initial scheduler scope:32method arrays,32watchdogs,3aggregate gates,
+  3H5AD-preflight arrays(27tasks),3R environment jobs =73IDs/230task units.
+  Bounded OOM-only retries may add IDs for the same selected rows. No metadata
+  export arrays and no Stephenson preparation array/watchdog are required.
+- This arithmetic derives from the original77IDs/248units minus one completed
+  preparation task/watchdog and two8-task metadata arrays. The full33-matrix
+  scope/real-owner audit passed; separate actual-cache dispatcher/dependency
+  regression proves that completed preparation is skipped. Pending scientific
+  payload scope remains223. No completed BL10/HR22 or HiTME100 expansion.
+- Independent review accepted real six-cache/RDS/BL-policy/cache-reader reuse,
+  both8-cohort realFeather/exporter/coordinator reuse (`PENDING=0`/nojobs),
+  create-only/proof/schema/foreign-owner negatives, and campaign sealed-receipt
+  forwarding/concurrency/failure isolation. No fits/count reads in these tests.
+- Remote source archive/control hashes and all27input references passed
+  preflight; newrun roots absent. NAS `df` proves
+  `smednas515:/volume1/Shared` mounted at the configured Bamboo target with90TB
+  available. Formal dependencies remain only the reviewed Bassez Stage2 and
+  Stephenson Stage4 gates; no failed gate is promoted or passed as a dependency.
+- Resources unchanged: CPU16(method screens4), GPU8CPU/oneGPU, GPU throttle4,
+  128G initial/500G bounded ceiling,12h method/watchdog limits. Per-row scheduler
+  manifests and checksum proofs are persisted at each submission boundary.
+- Prepare/reconcile/launch exactly once, then arm one unbounded waiter. Record
+  launch outcome immediately. Terminal inspection/review remains required;
+  launch does not claim scientific results or figures are complete.
+
+Exact immutable wrapper command:
+
+```bash
+env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper BENCHMARK_MEM=128G BENCHMARK_MEM_MAX=500G BENCHMARK_CPU_CPUS_PER_TASK=16 BENCHMARK_GPU_CPUS_PER_TASK=8 BENCHMARK_CPU_TIME_LIMIT=12:00:00 BENCHMARK_GPU_DEFAULT_TIME_LIMIT=12:00:00 BENCHMARK_GPU_ANY_TIME_LIMIT=12:00:00 WATCHDOG_TIME_LIMIT=12:00:00 MAX_NUM_CHUNKS_PARALLEL=1000 BENCHMARK_GPU_DEFAULT_ARRAY_THROTTLE=4 BENCHMARK_GPU_ANY_ARRAY_THROTTLE=4 /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-main-confounds-recovery-v1/9ca2453eea7320a721ef6dfd458f9db108abecac/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-main-confounds-recovery-v1/9ca2453eea7320a721ef6dfd458f9db108abecac/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-main-confounds-recovery-v1/9ca2453eea7320a721ef6dfd458f9db108abecac/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage5_main_confounds_20261109_v2 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage5_main_confounds_20261109_v2 --script src/5_run_benchmark_methods/stage5_campaign.sh -- --contexts /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/main-confounds-v2/contexts.tsv --derivative-release 20261108-confounding-subsets-v1 --prepared-adoption /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/main-confounds-v2/prepared_adoption.json --prepared-adoption-sha256 be7cfc7ab3dda369c8167c4fdef043f3501d4f97b87e823f63f194f73cfe1800
+```
