@@ -28,8 +28,10 @@ import pandas as pd
 
 try:
     from h5ad_source_identity import read_obs_column_values
+    from datasets_io import read_datasets_json
 except ImportError:  # package import in focused tests
     from .h5ad_source_identity import read_obs_column_values
+    from .datasets_io import read_datasets_json
 
 
 READ_CHUNK_SIZE = 1024 * 1024
@@ -151,6 +153,22 @@ def _dataset_columns(entry: dict) -> dict:
     return columns
 
 
+def _evaluation_columns(config_path: Path, dataset: str) -> list[str]:
+    entry = read_datasets_json(str(config_path)).get(dataset)
+    if entry is None:
+        raise ValueError(f"dataset is missing from config: {dataset}")
+    return list(dict.fromkeys([entry["label_col"], *entry["evaluation_labels"].values()]))
+
+
+def _evaluation_value(value: Any, column: str) -> tuple[type, Any]:
+    value = _feather_scalar(value)
+    if value is None or (isinstance(value, str) and (
+        not value.strip() or value.strip().casefold() in {"nan", "none", "<na>"}
+    )) or (isinstance(value, float) and not math.isfinite(value)):
+        raise ValueError(f"evaluation label column {column!r} contains a missing/blank value")
+    return type(value), value
+
+
 def requested_columns(
     config_path: Path,
     dataset: str,
@@ -169,7 +187,7 @@ def requested_columns(
     # Stage 3 persists the standardized Sample column. It is the only valid
     # grouping/order key for final Stage 5; the configured raw identity remains
     # an optional source metadata column when it is still present.
-    required: list[str] = ["Sample", label_column]
+    required: list[str] = ["Sample", *_evaluation_columns(config_path, dataset)]
     required_keys = ["batch", "cell_type_low_res", "cell_type_high_res"]
     if batch_view:
         # Batch-effect methods use only the configured high-resolution
@@ -232,6 +250,7 @@ def _ordered_metadata_columns(
                 ordered.append(column)
 
     add("Sample")
+    add(_evaluation_columns(config_path, dataset))
     for key in ("label", "batch", "cell_type_low_res", "cell_type_high_res", "sample"):
         add(columns.get(key))
     add(_dataset_spec_columns(config_path, dataset))
@@ -563,6 +582,7 @@ def read_obs_metadata(
     batch_keys: Iterable[str] | None = None,
     batch_metadata_policy: Mapping[str, Any] | None = None,
     biological_column: str | None = None,
+    evaluation_columns: Iterable[str] = (),
 ) -> pd.DataFrame:
     if not input_path.is_file() or input_path.stat().st_size <= 0:
         raise ValueError(f"H5AD input is missing or empty: {input_path}")
@@ -576,6 +596,9 @@ def read_obs_metadata(
         sample_column=sample_column,
         biological_column=biological_column,
     )
+    evaluation_columns = list(dict.fromkeys(evaluation_columns))
+    if set(evaluation_columns).intersection(configured_batch_keys):
+        raise ValueError("evaluation labels cannot be technical batch keys")
     policy = _normalise_batch_metadata_policy(batch_metadata_policy)
     majority_keys: list[str] = []
     if policy is not None:
@@ -602,7 +625,7 @@ def read_obs_metadata(
         n_obs = _obs_column_length(obs[index_name])
         if n_obs <= 0:
             raise ValueError(f"H5AD obs is empty: {input_path}")
-        needed = list(dict.fromkeys([sample_column, *required, *configured_batch_keys]))
+        needed = list(dict.fromkeys([sample_column, *required, *configured_batch_keys, *evaluation_columns]))
         missing = [column for column in needed if column not in obs]
         if missing:
             raise ValueError(f"H5AD is missing configured obs columns: {missing}")
@@ -616,7 +639,7 @@ def read_obs_metadata(
             if column in obs and column not in required and column not in configured_batch_keys
         ]
         columns = list(
-            dict.fromkeys([sample_column, *required, *configured_batch_keys, *present_optional])
+            dict.fromkeys([sample_column, *required, *configured_batch_keys, *evaluation_columns, *present_optional])
         )
         values: dict[str, list[Any]] = {column: [] for column in columns}
         seen: set[str] = set()
@@ -625,6 +648,7 @@ def read_obs_metadata(
         batch_first_values: dict[
             str, dict[str, dict[Hashable, Any]]
         ] = {}
+        evaluations: dict[str, dict[str, tuple[type, Any]]] = {}
         accepted = (
             policy["accepted_sentinel_values"] if policy is not None else {}
         )
@@ -636,6 +660,12 @@ def read_obs_metadata(
             }
             for offset, raw_sample in enumerate(chunk[sample_column]):
                 sample = _normalise_sample(raw_sample)
+                sample_evaluations = evaluations.setdefault(sample, {}) if evaluation_columns else {}
+                for column in evaluation_columns:
+                    value = _evaluation_value(chunk[column][offset], column)
+                    if column in sample_evaluations and sample_evaluations[column] != value:
+                        raise ValueError(f"evaluation label column {column!r} varies within Sample {sample!r}")
+                    sample_evaluations[column] = value
                 if sample not in seen:
                     seen.add(sample)
                     sample_ids.append(sample)
@@ -727,7 +757,7 @@ def _read_sidecar(path: Path) -> dict[str, str]:
     return fields
 
 
-def validate_output(path: Path, required_columns: Iterable[str]) -> None:
+def validate_output(path: Path, required_columns: Iterable[str], *, evaluation_columns: Iterable[str] = ()) -> None:
     if not path.is_file() or path.stat().st_size <= 0:
         raise ValueError(f"metadata Feather is missing or empty: {path}")
     _read_sidecar(path)
@@ -744,6 +774,11 @@ def validate_output(path: Path, required_columns: Iterable[str]) -> None:
     ids = frame["Sample"].astype(str)
     if ids.str.strip().eq("").any() or ids.duplicated().any():
         raise ValueError(f"metadata Feather has blank or duplicate Sample IDs: {path}")
+    for column in evaluation_columns:
+        if column not in frame:
+            raise ValueError(f"metadata Feather lacks evaluation label column {column!r}")
+        for value in frame[column]:
+            _evaluation_value(value, column)
 
 
 def write_metadata(frame: pd.DataFrame, output: Path) -> None:
@@ -814,6 +849,10 @@ def export(args: argparse.Namespace) -> None:
     )
     columns = _dataset_columns(entry)
     label_column = columns["label"]
+    # Explicit extra evaluation axes require sample-stable labels. Preserve
+    # the established first-row scalar-label behavior when no map is declared.
+    evaluation_columns = (_evaluation_columns(config_path, args.dataset)
+                          if columns.get("evaluation_labels") is not None else [])
     batch_keys, policy = _resolved_batch_configuration(
         entry,
         view,
@@ -833,11 +872,11 @@ def export(args: argparse.Namespace) -> None:
         # approved majority_v1 policy.
         policy = None
     if args.check:
-        validate_output(output, required)
+        validate_output(output, required, evaluation_columns=evaluation_columns)
         return
     if output.exists() or Path(f"{output}.md5").exists():
         try:
-            validate_output(output, required)
+            validate_output(output, required, evaluation_columns=evaluation_columns)
             print(f"METADATA_EXPORT=NOOP_VALIDATED PATH={output}")
             return
         except (OSError, ValueError):
@@ -852,6 +891,7 @@ def export(args: argparse.Namespace) -> None:
         batch_keys=batch_keys,
         batch_metadata_policy=policy,
         biological_column=label_column,
+        evaluation_columns=evaluation_columns,
     )
     frame = frame.loc[
         :,
