@@ -1361,7 +1361,8 @@ lines += [f'Bassez\tbenchmark_analysis\tpseudobulk\t{t}' for t in ('hvg2000_bl',
 lines += [f'Bassez\tbenchmark_analysis\tcomposition\t{t}' for t in ('ECODA_authors_HR','ECODA_authors_HR_NULL')]
 lines += [f'Bassez\tbenchmark_analysis\tscpoli\t{t}' for t in ('hvg2000_highres_dims15','hvg1000_highres_dims15','hvg3000_highres_dims15','hvg2000_highres_dims2','hvg2000_highres_dims3','hvg2000_highres_dims5','hvg2000_highres_dims10')]
 lines += [f'Bassez\tbenchmark_analysis\t{m}\thvg{n}_highres' for m in ('pilot','qot') for n in (1000,2000,3000)]
-lines += ['Bassez\tbenchmark_analysis\tpilotgm\thvg2000_highres','Bassez\tbenchmark_analysis\ttrans','Bassez\tbenchmark_analysis\tzeroimp']
+lines += [f'Bassez\tbenchmark_analysis\tpilotgm\thvg{n}_highres' for n in (1000,2000,3000)]
+lines += ['Bassez\tbenchmark_analysis\ttrans','Bassez\tbenchmark_analysis\tzeroimp']
 (root/'request.tsv').write_text('\n'.join(lines)+'\n')
 PY
   : > "${CAPTURE}"
@@ -1393,6 +1394,16 @@ assert len(hr)==7 and all('highres' in r[3] for r in hr), hr
 for method in ('pilot','qot'):
     selected=[r for j in jobs if j[1]==method for r in j[2] if r[0]=='Bassez']
     assert len(selected)==3 and all('highres' in r[3] for r in selected), selected
+gm=[j for j in jobs if j[1]=='pilotgm']
+bassez=[r for j in gm for r in j[2] if r[0]=='Bassez']
+stephenson=[r for j in gm for r in j[2] if r[0]=='Stephenson']
+assert sorted(r[3] for r in bassez)==['hvg1000_highres','hvg2000_highres','hvg3000_highres'], bassez
+assert stephenson==[['Stephenson','benchmark_analysis','pilotgm','hvg2000_highres']], stephenson
+assert sum(len(j[2]) for j in gm)==4, gm
+for j in gm:
+    options=j[3];env=dict(p.split('=',1) for p in options['export'].split(',') if '=' in p)
+    assert env['METHOD_GPU_POLICY']=='cpu' and env['ECODA_APPTAINER_NV']=='0', env
+    assert 'gpus' not in options and 'gres' not in options and options['partition']=='shared-cpu', options
 binding=json.loads((root/'manifests/artifact_bindings.json').read_text())
 assert str(root/'manifests/requested_selection.tsv') in binding['identities']
 assert not any(r[0]!='Stephenson' for j in prep for r in j[2])
