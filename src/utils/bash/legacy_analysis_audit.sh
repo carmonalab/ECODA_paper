@@ -139,7 +139,7 @@ need(w['schema']=='ecoda_p6_preflight_witness_observation_v1' and w['scientifica
 if stopped:
     need(review['decision']=='APPROVED_PUBLISHED_INPUT_CONTENT_WITNESS_ONLY' and review['review_complete'] is True and review['scientifically_approved_rows']==0 and review['formal_pipeline_dependency'] is False and review['parent_gate_approved'] is False and review['scheduler_exit_established'] is False and review['method_science_approved'] is False,'pending/unapproved stopped-parent input witness')
     need(review['completion_basis']=='PUBLISHED_FULL_HASH_RECORD_AND_NATIVE_TASK_OK' and review['parent_gate_state']=='PRELAUNCH_STOP' and not {'terminal_inspect','accounting','parent_terminal_state'} & set(review),'invalid stopped-parent evidence basis')
-    need(gate['schema_version']=='1.0' and gate['gate_id']==w['parent_gate_id'] and gate['state']=='PRELAUNCH_STOP' and gate['terminal_status'] is None and gate['remote_exit_code'] is None and gate['audit_completed'] is False and gate['audit_state']=='NOT_STARTED','historical stopped parent identity differs')
+    need(gate['schema_version']=='1.0' and gate['gate_id']==w['parent_gate_id'] and gate['state']=='PRELAUNCH_STOP' and gate.get('terminal_status') is None and gate['remote_exit_code'] is None and gate['audit_completed'] is False and gate['audit_state']=='NOT_STARTED','historical stopped parent identity differs')
     need(isinstance(review['reviewer'],str) and review['reviewer'].strip() and isinstance(review['reviewed_at'],str) and review['reviewed_at'].strip(),'missing explicit input reviewer')
     transition=review['reviewed_device_transition']
     if transition is not None:

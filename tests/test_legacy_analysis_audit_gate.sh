@@ -11,6 +11,17 @@ ns=dict(stopped=True,review={'reviewed_device_transition':{'old_dev':66,'new_dev
 for node in tree.body:
  if isinstance(node,ast.FunctionDef) and node.name in ('need','current_witness_stat'):
   exec(compile(ast.Module(body=[node],type_ignores=[]),'<actual-stat-helper>','exec'),ns)
+# Actual e8cf historical STOP snapshot has no terminal_status field.
+condition=next(n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='need' and len(n.args)>1 and isinstance(n.args[1],ast.Constant) and n.args[1].value=='historical stopped parent identity differs')
+check=ast.Module(body=[ast.Expr(value=condition)],type_ignores=[]);ast.fix_missing_locations(check)
+ns['w']={'parent_gate_id':'g'};base=dict(schema_version='1.0',gate_id='g',state='PRELAUNCH_STOP',remote_exit_code=None,audit_completed=False,audit_state='NOT_STARTED')
+for gate in [base,dict(base,terminal_status=None)]:
+ ns['gate']=gate;exec(compile(check,'<actual-stopped-parent-condition>','exec'),ns)
+for gate in [dict(base,terminal_status={'state':'FAILED'}),dict(base,terminal_status=''),dict(base,remote_exit_code=1),dict(base,state='COMPLETED'),dict(base,audit_completed=True)]:
+ ns['gate']=gate
+ try:exec(compile(check,'<actual-stopped-parent-condition>','exec'),ns)
+ except SystemExit:pass
+ else:raise AssertionError('non-STOP/null parent accepted')
 prior=dict(dev=66,ino=100,size=25,mode=0o600,mtime_ns=10,ctime_ns=11)
 expected=dict(prior,dev=68);assert ns['current_witness_stat'](prior,'/selected/input')==expected
 for bad,path in [(dict(prior,dev=67),'/selected/input'),(prior,'/foreign'),(dict(prior,ino=True),'/selected/input')]:
@@ -155,7 +166,7 @@ r=json.loads((p/'review.json').read_text());r['observation']=save(p/'wrong_task_
 q=json.loads((p/'request.json').read_text());q['input_review']=save(p/'wrong_task_review.json',r);save(p/'wrong_task_request.json',q)
 
 # Stopped parent is a frozen historical snapshot, never a fabricated inspection.
-g=json.loads((p/'parent_gate.json').read_text());g.update(state='PRELAUNCH_STOP',terminal_status=None,remote_exit_code=None,audit_completed=False,audit_state='NOT_STARTED');g.pop('audit')
+g=json.loads((p/'parent_gate.json').read_text());g.update(state='PRELAUNCH_STOP',terminal_status=None,remote_exit_code=None,audit_completed=False,audit_state='NOT_STARTED');g.pop('audit');g.pop('terminal_status')
 label_rows=[]
 config=json.loads((pathlib.Path(os.environ['TEST_TREE'])/'datasets.json').read_text())
 def full_stat(value):
@@ -175,7 +186,7 @@ def stopped_request(name,review):
 stopped_request('stopped',r)
 for name,key,value in [('stopped_pending','review_complete',False),('stopped_science','method_science_approved',True),('stopped_exit_claim','scheduler_exit_established',True),('stopped_unknown','schema','unknown'),('stopped_accounting','accounting',{}),('stopped_dependency','formal_pipeline_dependency',True)]:
  bad=copy.deepcopy(r);bad[key]=value;stopped_request(name,bad)
-for name,key,value in [('stopped_exit','remote_exit_code',1),('stopped_success','state','COMPLETED'),('stopped_audited','audit_completed',True)]:
+for name,key,value in [('stopped_exit','remote_exit_code',1),('stopped_success','state','COMPLETED'),('stopped_audited','audit_completed',True),('stopped_terminal','terminal_status',{'state':'FAILED'})]:
  bad=copy.deepcopy(r);gate=copy.deepcopy(g);gate[key]=value;bad['gate_manifest']=save(p/(name+'_gate.json'),gate);stopped_request(name,bad)
 for name,key in [('stopped_source','source'),('stopped_runtime','runtime'),('stopped_record','record'),('stopped_proof','proof'),('stopped_status','status')]:
  bad=copy.deepcopy(r);wx=json.loads((p/'witness.json').read_text());target=wx[key] if key in ('source','runtime') else wx['rows'][0][key];target['text']+='TAMPER\n';target['sha256']=hashlib.sha256(target['text'].encode()).hexdigest();bad['observation']=save(p/(name+'_witness.json'),wx);stopped_request(name,bad)
@@ -236,7 +247,7 @@ before="$(ecoda_sha256_file "${stopped_run}/status/terminal")"
 ECODA_RUN_ID=stopped ECODA_RUN_ROOT="${stopped_run}" reject bash "${TREE}/src/utils/bash/legacy_analysis_audit.sh" --validate
 [[ "$(ecoda_sha256_file "${stopped_run}/status/terminal")" == "${before}" ]]
 cp "${TMP}/stopped-terminal.saved" "${stopped_run}/status/terminal"
-for name in pending science exit_claim unknown accounting dependency exit success audited source runtime record proof status producer task labels stat label_proof; do
+for name in pending science exit_claim unknown accounting dependency exit success audited terminal source runtime record proof status producer task labels stat label_proof; do
   reject invoke "stopped_${name}" "${INPUTS}/stopped_${name}_request.json"
 done
 reject invoke invented_state "${INPUTS}/SUCCEEDED_request.json"
