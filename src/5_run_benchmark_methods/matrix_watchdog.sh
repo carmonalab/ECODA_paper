@@ -113,8 +113,17 @@ matrix_validate_output_ownership() {
       END { exit(saw_extended ? 0 : 1) }
     ' "${manifest}"; then
     ownership_tmp="${manifest}.ownership.$$"
-    awk -F '\t' 'NF >= 3 { print $1 "\t" $2 "\t" $3 }' \
-      "${manifest}" > "${ownership_tmp}" || return 1
+    # Retry ownership uses the same unique-family projection as submission;
+    # duplicate physical rows remain invalid rather than being silently lost.
+    awk -F '\t' '
+      NF != 4 || $1 == "" || $2 == "" || $3 == "" || $4 == "" || $4 ~ /[[:space:]]/ { exit 1 }
+      seen_row[$0]++ { exit 1 }
+      !seen_family[$1 FS $2 FS $3]++ { print $1 "\t" $2 "\t" $3 }
+      END { if (NR == 0) exit 1 }
+    ' "${manifest}" > "${ownership_tmp}" || {
+      rm -f "${ownership_tmp}"
+      return 1
+    }
     ownership_manifest="${ownership_tmp}"
   fi
   ecoda_stage5_validate_output_ownership "${ownership_manifest}" "${ECODA_RUN_ID}" 0 scratch

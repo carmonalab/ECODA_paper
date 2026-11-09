@@ -930,8 +930,17 @@ stage5_validate_output_ownership() {
       END { exit(saw_extended ? 0 : 1) }
     ' "${manifest}"; then
     ownership_tmp="${manifest}.ownership.$$"
-    awk -F '\t' 'NF >= 3 { print $1 "\t" $2 "\t" $3 }' \
-      "${manifest}" > "${ownership_tmp}" || return 1
+    # Distinct physical parameter rows share one family artifact/owner scope.
+    # Keep the worker manifest intact; only this ownership projection is unique.
+    awk -F '\t' '
+      NF != 4 || $1 == "" || $2 == "" || $3 == "" || $4 == "" || $4 ~ /[[:space:]]/ { exit 1 }
+      seen_row[$0]++ { exit 1 }
+      !seen_family[$1 FS $2 FS $3]++ { print $1 "\t" $2 "\t" $3 }
+      END { if (NR == 0) exit 1 }
+    ' "${manifest}" > "${ownership_tmp}" || {
+      rm -f "${ownership_tmp}"
+      return 1
+    }
     ownership_manifest="${ownership_tmp}"
   fi
   ecoda_stage5_validate_output_ownership "${ownership_manifest}" "${RUN_ID}" \
@@ -1655,6 +1664,7 @@ stage5_record_scheduler() {
      "${kind}" == "PREFLIGHT" || "${kind}" == "METADATA_EXPORT" ]] || return 1
   [[ "${scheduler_id}" =~ ^[0-9]+$ ]] || return 1
   if [[ -s "${SCHEDULER_FILE}" ]]; then
+    ecoda_validate_checksum "${SCHEDULER_FILE}" || return 1
     while IFS=$'\t' read -r existing_kind existing_id; do
       [[ -n "${existing_kind}" && "${existing_id}" =~ ^[0-9]+$ ]] || return 1
       [[ "${existing_id}" == "${scheduler_id}" ]] && return 0
@@ -1671,6 +1681,10 @@ stage5_record_scheduler() {
     rm -f "${tmp}"
     return 1
   }
+  # Persist accounting evidence at each submission boundary, including when
+  # later setup fails before the aggregate gate or final synchronization.
+  ecoda_write_checksum "${SCHEDULER_FILE}" &&
+    ecoda_validate_checksum "${SCHEDULER_FILE}"
 }
 
 

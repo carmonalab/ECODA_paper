@@ -8,12 +8,19 @@ export TEST_EXPECTED_BATCH_METHODS="$(sed -n 's/^EXPECTED_BATCH_METHODS="\(.*\)"
 eval "$(awk '/^ROOT=/ {next} /^tar -cf / {exit} {print}' "${FIXTURE}")"
 printf '#!/bin/bash\nexec "${TEST_REAL_PYTHON}" "$@"\n' > "${HOST_PREFIX}/bin/python"
 chmod +x "${HOST_PREFIX}/bin/python"
+# Exercise the production scheduler recorder, rather than pre-sealing a stub
+# manifest that hides dispatcher failure before the normal submission tail.
+awk '/^stage5_record_scheduler\(\)/ {copy=1} copy {print} copy && /^}/ {exit}' \
+  "${ROOT}/src/5_run_benchmark_methods/stage5_dispatcher.sh" \
+  > "${SOURCE_TREE}/src/5_run_benchmark_methods/scheduler_recorder_fixture.sh"
+grep -q '^stage5_record_scheduler()' "${SOURCE_TREE}/src/5_run_benchmark_methods/scheduler_recorder_fixture.sh"
 cat > "${SOURCE_TREE}/src/5_run_benchmark_methods/stage5_dispatcher.sh" <<'CHILD'
 #!/bin/bash
 set -euo pipefail
 [[ -z "${ECODA_RUN_ROOT:-}${ECODA_ARTIFACT_BINDING:-}${ANALYSIS_ROOT:-}${ANALYSIS_PASS:-}${ECODA_SELECTION_MANIFEST:-}" ]]
 source "${ECODA_SOURCE_ROOT}/src/slurm_config.sh"
 source "${ECODA_SOURCE_ROOT}/src/utils/bash/ecoda_run_common.sh"
+source "${ECODA_SOURCE_ROOT}/src/5_run_benchmark_methods/scheduler_recorder_fixture.sh"
 child="${ECODA_RUN_ID}"; context="${child#*_}"
 selection=""; methods_seen=0
 while [[ $# -gt 0 ]]; do
@@ -35,8 +42,9 @@ if [[ "${context}" == benchmark ]]; then
 fi
 ecoda_init_run stage5 "${child}" >/dev/null
 case "${context}" in benchmark) scheduler=101;; uncorrected) scheduler=102;; corrected) scheduler=103;; esac
-printf 'ARRAY\t%s\n' "${scheduler}" > "${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
-ecoda_write_checksum "${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
+SCHEDULER_FILE="${ECODA_RUN_ROOT}/manifests/scheduler_ids.tsv"
+stage5_record_scheduler ARRAY "${scheduler}"
+ecoda_validate_checksum "${SCHEDULER_FILE}"
 mkdir -p "${CAMPAIGN_BARRIER}"
 touch "${CAMPAIGN_BARRIER}/${context}.started"
 ready=0
@@ -46,7 +54,24 @@ for attempt in {1..100}; do
 done
 [[ ${ready} -eq 1 ]]
 if [[ "${CAMPAIGN_FAIL_CONTEXT:-}" == "${context}" ]]; then
+  for record in METADATA_EXPORT:201 PREFLIGHT:301 ARRAY:401; do
+    stage5_record_scheduler "${record%%:*}" "${record#*:}"
+    ecoda_validate_checksum "${SCHEDULER_FILE}"
+  done
   ecoda_set_run_state FAIL 'deliberate isolated child failure'; exit 7
+fi
+if [[ "${CAMPAIGN_BAD_PROOF_CONTEXT:-}" == "${context}" ]]; then
+  printf 'invalid checksum evidence\n' > "${SCHEDULER_FILE}.md5"
+  before_manifest="$(ecoda_sha256_file "${SCHEDULER_FILE}")"
+  before_proof="$(ecoda_sha256_file "${SCHEDULER_FILE}.md5")"
+  if stage5_record_scheduler ARRAY "${scheduler}"; then
+    echo 'duplicate scheduler record accepted corrupt proof' >&2; exit 1
+  fi
+  if stage5_record_scheduler PREFLIGHT 999; then
+    echo 'new scheduler record repaired corrupt proof' >&2; exit 1
+  fi
+  [[ "$(ecoda_sha256_file "${SCHEDULER_FILE}")" == "${before_manifest}" &&
+     "$(ecoda_sha256_file "${SCHEDULER_FILE}.md5")" == "${before_proof}" ]]
 fi
 [[ "${CAMPAIGN_MISSING_TERMINAL:-}" != "${context}" ]] || exit 0
 ecoda_set_run_state OK 'fixture completed with all peers started'
@@ -110,7 +135,23 @@ grep -q '^STATE=FAIL$' "${HPC_ROOT}/_ecoda_runs/campaign_failure/status/terminal
 for context in uncorrected corrected; do
   grep -q '^STATE=OK$' "${HPC_ROOT}/_ecoda_runs/retry_${context}/status/terminal"
 done
-[[ $(wc -l < "${HPC_ROOT}/_ecoda_runs/campaign_failure/manifests/campaign_scheduler_ids.tsv" | tr -d ' ') == 3 ]]
+[[ $(wc -l < "${HPC_ROOT}/_ecoda_runs/campaign_failure/manifests/campaign_scheduler_ids.tsv" | tr -d ' ') == 6 ]]
+for record in METADATA_EXPORT:201 PREFLIGHT:301 ARRAY:401; do
+  grep -qx $'benchmark\tretry_benchmark\t'"${record%%:*}"$'\t'"${record#*:}" \
+    "${HPC_ROOT}/_ecoda_runs/campaign_failure/manifests/campaign_scheduler_ids.tsv"
+done
+
+export CAMPAIGN_BARRIER="${TMP_DIR}/bad-proof-barrier"
+make_contexts proof > "${TMP_DIR}/proof.tsv"
+if HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" NAS_TARGET_DIR="${NAS_BASE}" \
+    ECODA_RUN_ID=campaign_bad_proof CAMPAIGN_BAD_PROOF_CONTEXT=benchmark \
+    bash "${SOURCE_TREE}/src/5_run_benchmark_methods/stage5_campaign.sh" \
+    --contexts "${TMP_DIR}/proof.tsv" --derivative-release test-release > "${TMP_DIR}/proof.log" 2>&1; then
+  echo 'campaign accepted invalid scheduler proof' >&2; exit 1
+fi
+grep -q 'ERROR: campaign scheduler manifest is missing or checksum-invalid: benchmark:proof_benchmark:' "${TMP_DIR}/proof.log"
+grep -q '^STATE=FAIL$' "${HPC_ROOT}/_ecoda_runs/campaign_bad_proof/status/terminal"
+[[ $(wc -l < "${HPC_ROOT}/_ecoda_runs/campaign_bad_proof/manifests/campaign_scheduler_ids.tsv" | tr -d ' ') == 2 ]]
 
 export CAMPAIGN_BARRIER="${TMP_DIR}/missing-status-barrier"
 make_contexts missing > "${TMP_DIR}/missing.tsv"

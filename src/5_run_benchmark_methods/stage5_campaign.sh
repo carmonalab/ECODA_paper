@@ -160,6 +160,7 @@ for idx in "${!CHILD_PIDS[@]}"; do
         >> "${PARENT_ROOT}/manifests/campaign_scheduler_ids.build.$$"
     done < "${scheduler}"
   else
+    echo "ERROR: campaign scheduler manifest is missing or checksum-invalid: ${context}:${child}:${scheduler}; preserve child records/logs for terminal accounting" >&2
     child_rc=1
   fi
   [[ ${child_rc} -eq 0 ]] || failed=1

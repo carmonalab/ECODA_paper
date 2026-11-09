@@ -61,7 +61,7 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, inputs reviewed; main wave not launched
+## Live checkpoint — 2026-11-09, preprocessing complete; main setup failed
 
 - P0/P1 DONE: logical checkpoints and harmonized documentation are pushed.
   Latest reviewed source includes output-ownership fix039d79c and the finite
@@ -92,12 +92,17 @@ decisions have been applied to existing artifacts.
   abort cleanup already finalized ownersOK; no old record was edited.
   New science receipt SHA78523c4...; new24-payload publication completed
   05:48:23Z and passed terminal validation/root review without refitting.
-- **Main Stage5 NOT LAUNCHED:** source039d79c is frozen independently; actual
-  controls cover remaining41 benchmark requests plus both8-dataset batch
-  contexts,77 initial IDs/248 scheduled units. Input reviews are complete;
-  all13controls/27input stat+proof references and the actual NAS mount are
-  verified; final metadata worker path fix is accepted. Peers in
-  the existing campaign remain independent. No targeted HiTME100 selection.
+- **Main Stage5 attempted; setup FAILED:** immutable sourcec534cdf launched
+  once06:17:39Z and endedFAILED1 at06:46:38Z. The sole terminal inspection
+  covered all6actual scheduler roots/30raw rows, allCOMPLETED0. No bulk
+  benchmark or batch-method arrays were submitted. Both8-row metadata-export
+  arrays succeeded, but their controller acceptance failed; this is under
+  diagnosis, not evidence that exports must be recomputed. Benchmark setup
+  rejected duplicate GloScope artifact registration after pseudobulk preparation.
+  Family-ownership deduplication and scheduler-proof repairs pass focused
+  tests and await independent review/commit. Existing valid BL10/HR22 and
+  all preprocessing outputs remain reusable. No jobs from this attempt are
+  running. No targeted HiTME100 selection was added.
 - **User HiTME clarification: NO targeted refresh added.** Plain layer2
   counts match in all3audited cohorts and maintained final selectors use that
   plain key. Disputed variance entries are unused in maintained figures;
@@ -2183,3 +2188,42 @@ Exact immutable command (SHA256
 ```bash
 env ECODA_HPC_CLUSTER=bamboo ECODA_NAS_TARGET_DIR=/srv/smednas515.unige.ch/carmona_smb/Projects/ECODA_paper BENCHMARK_MEM=128G BENCHMARK_MEM_MAX=500G BENCHMARK_CPU_CPUS_PER_TASK=16 BENCHMARK_GPU_CPUS_PER_TASK=8 BENCHMARK_CPU_TIME_LIMIT=12:00:00 BENCHMARK_GPU_DEFAULT_TIME_LIMIT=12:00:00 BENCHMARK_GPU_ANY_TIME_LIMIT=12:00:00 WATCHDOG_TIME_LIMIT=12:00:00 MAX_NUM_CHUNKS_PARALLEL=1000 BENCHMARK_GPU_DEFAULT_ARRAY_THROTTLE=4 BENCHMARK_GPU_ANY_ARRAY_THROTTLE=4 /bin/bash /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-main-confounds-v2/c534cdfd28fc9a77c009f4e25fa4c4ddb7ee4400/tree/src/utils/bash/ecoda_source_snapshot.sh exec --source-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-main-confounds-v2/c534cdfd28fc9a77c009f4e25fa4c4ddb7ee4400/tree --source-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_source_snapshots/20261109-main-confounds-v2/c534cdfd28fc9a77c009f4e25fa4c4ddb7ee4400/identity/source.manifest --host-env-prefix /home/users/h/halterc/ECODA_paper/.pixi/envs/py-cuda13 --runtime-image /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif --runtime-manifest /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_runtime/ecoda-py-cuda13-6bbf70b-relocated/ecoda-py-cuda13.sif.manifest --run-id stage5_main_confounds_20261109_v1 --scratch-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper --logs-root /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_run_logs/stage5_main_confounds_20261109_v1 --script src/5_run_benchmark_methods/stage5_campaign.sh -- --contexts /srv/beegfs/scratch/users/h/halterc/ECODA_paper/_ecoda_inputs/20261108-confounding-subsets-v1/main-confounds-v1/contexts.tsv --derivative-release 20261108-confounding-subsets-v1
 ```
+
+
+## Main wave setup failure — terminal evidence, 2026-11-09
+
+Gate `ecoda_stage5_main_confounds_20261109_v1` launched06:17:39Z from
+`c534cdfd28fc9a77c009f4e25fa4c4ddb7ee4400`, command SHA256
+`950bb25c9e224f1642e2b63929e59cdfb8145c7eda745ddd7103475e9ee3f518`,
+and endedFAILED1 at06:46:38Z. The one unbounded wait has finished; one
+terminal inspect already captured all actual scheduler IDs. Preserve this
+failed gate, source snapshot, owners, logs, manifests and accounting unchanged.
+
+Actual IDs:4663922 benchmark input preflight(11tasks),4665386 R environment,
+4665398 Stephenson pseudobulk preparation,4665399 its watchdog,
+4663913 uncorrected metadata(8tasks),4665389 corrected metadata(8tasks).
+All30raw accounting rows completed0. Bulk method arrays never launched.
+
+Confirmed benchmark failure: parameter-matrix ownership projection repeated
+the same GloScope family, triggering the existing duplicate-artifact guard.
+Future repair deduplicates family ownership while preserving distinct physical
+parameter rows and the duplicate-path protection. A separate scheduler recorder
+checksum lifecycle bug prevented failed children from exposing their IDs to
+the parent campaign; root supplied the corroborated6IDs to terminal inspect.
+
+All16 metadata worker logs report successful exports with expected sample
+counts; both controllers nevertheless rejected final acceptance. The omitted
+explicit analysis-variant flag is NOT a proven cause: the exporter deliberately
+uses the exported environment fallback and real16-table fixtures pass both
+forms. Diagnose the original unsuppressed host check/status/proof before
+patching or rerunning any export. No production metadata fix is yet approved.
+
+Stephenson preparation may already contain all6pseudobulk variants, including
+the corrected blacklist cache. Inspect exact caches/proofs/input identity and
+timing without compute before deciding reuse. Its scored blacklist result is
+still missing; do not count preparation alone as completed pseudobulk_bl.
+
+Recovery must use a fresh run identity and reviewed committed source, adopt
+only individually validated prepared artifacts, exclude completed BL10 and
+Bassez authorHR22, and record the revised exact selection before launch.
+Current work is controller diagnosis/review; no HPC method arrays are running.
