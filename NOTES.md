@@ -879,6 +879,12 @@ figure-hierarchy decision is pending.
   covariance repair before EMD and rejects any remaining nonfinite output.
 - MrVI is stochastic. CPU/GPU choice and preprocessing/input changes can alter
   learned distances despite `scvi.settings.seed = 0`.
+- Comparative timings use benchmark views only, with their configured hardware
+  model constraints. Both batch views permit any compatible CPU/GPU model.
+  Batch MrVI remains CPU by default; explicit `--gpu-policy any` or `default`
+  permits a future CUDA run. Preserve any explicit VRAM request and actual
+  device provenance. Existing jobs and valid artifacts are unaffected; GPU
+  VRAM exhaustion is not repaired by increasing host RAM.
 - Gene-expression methods can differ slightly because the old Seurat
   preprocessing and current Scanpy preprocessing are not bit-identical.
 - Zhang old/new differences additionally include the two low-cell samples,

@@ -24,6 +24,12 @@ not a production job manifest.
   owns approved decisions, exact raw-ID selection, execution scope, and applied
   status. The selections below are approved targets; registry edits or valid
   historical checksums do not establish that existing results already use them.
+- Only benchmark views supply comparative timings and retain their configured
+  CPU/GPU model constraints. Both batch views permit any compatible hardware
+  model. Batch MrVI defaults to CPU; future GPU work requires explicit
+  `--gpu-policy any` or `default`, with pinned CUDA/runtime validation and any
+  explicit VRAM request preserved. This does not alter current jobs or require
+  recomputing valid results.
 
 ## Cohorts examined
 

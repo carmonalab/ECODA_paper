@@ -1722,7 +1722,7 @@ method_spec() {
   case "${method}" in
     mrvi|scpoli)
       METHOD_RUNTIME_NV=1
-      if [[ "${method}" == mrvi && -n "${PASS_ARG}" ]]; then
+      if [[ "${method}" == mrvi && -n "${PASS_ARG}" && "${effective_gpu_policy}" == auto ]]; then
         effective_gpu_policy=cpu
       elif [[ "${effective_gpu_policy}" == auto ]]; then
         if ! gpu_method_is_default "${method}"; then
@@ -1773,8 +1773,8 @@ method_spec() {
       ;;
     *) echo "ERROR: unsupported benchmark method/analysis '${method}'." >&2; return 1 ;;
   esac
-  if [[ "${method}" == mrvi && -n "${PASS_ARG}" && -n "${PARTITION_ARG}" ]]; then
-    echo "ERROR: batch-view MRVI uses the deterministic CPU resource policy and rejects --partition overrides." >&2
+  if [[ "${method}" == mrvi && -n "${PASS_ARG}" && "${METHOD_GPU_POLICY}" == cpu && -n "${PARTITION_ARG}" ]]; then
+    echo "ERROR: batch-view MRVI defaults to CPU; an explicit GPU partition requires --gpu-policy any or default." >&2
     return 1
   fi
   if [[ -n "${PARTITION_ARG}" ]]; then

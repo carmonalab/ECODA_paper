@@ -2939,3 +2939,39 @@ actualfailed/missing/invalid rowcatalog afterterminalinspection before any
 newgate. Consider a run-scoped exclusion of suspectcpu046 only in recovery
 while investigating; do not permanentlyhardcode nodeexclusions or silently
 refit successful rows. Noaccountingquery hasbeen made for activev2.
+
+
+### Explicit GPU flexibility for future batch MrVI accepted
+
+Follow-up code/history review found that batchMrVI's CPU-only guard was a
+previous queue/resource workaround(commit3531e67), not a model/scientific
+requirement. Under the user's new anyCPU/GPU batch authorization, the minimal
+implementation preserves auto→CPU to avoid unexpectedly moving work intoGPU
+queues, but honors existing explicit --gpu-policy any/default for future
+batchMrVI. No newCLI or automatic GPU migration is introduced. Benchmark
+resource/timing policy and all current runningCPU fits remain unchanged.
+
+The existing CUDAavailability/runtime check remains fail-closed. Scientific
+MrVI setup, sample/technicalbatch keys, seed,50epochs and distance logic are
+unchanged; only the permitted acceleratorselection changes. ExplicitGPU
+count/VRAM,partition,time,threads andNV survive normaldispatch and OOMretry.
+IncreasinghostRAM does not solve GPUVRAM exhaustion; no numericalbitidentity
+claim is made for CPU-vs-GPU stochastic model output. Actualbatch device/GPU
+name is logged. The newprovenance logger is exactbatchview-only, guarded by
+CUDAavailability: it performs ZERO CUDAproperty calls on benchmarkviews, so
+benchmark context initialization is not moved outside the method timer.
+
+README,NOTES and onboardingREADME now state benchmark-only comparative
+timings and unrestricted compatiblebatch hardware models, with CPUdefault
+and explicitGPU option. Focused actualshell/AST device+allocation testPASS,
+real watchdogVRAM/NV/retry regressionPASS, actualrequested-scope dispatcher
+regressionPASS. Root independently reran/reviewed the finalfocused test and
+timing-boundary correction; syntax/whitespacechecksPASS, protectedRplotsSHA
+unchanged. This changes future committedsources only; no newGPU job, backend
+change to running work, or recomputation of valid results occurred.
+
+Inparallel, bounded controller fixes are being tested for exactselected
+recoverycontexts/correctedmethodmatrix and eight metadata-only copies. The
+current mainwave must still terminalinspect before sealing actualfailed-row
+scope and launchingrecovery. Its originalone-rowGloScope proposal remains
+incomplete after the correctedQOT startup failures.

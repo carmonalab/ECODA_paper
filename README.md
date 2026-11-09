@@ -64,6 +64,14 @@ Yggdrasil is stale/unmaintained. Author locally and execute pinned, reviewed
 runs on Bamboo; current selections, run progress and release evidence live in
 the [active reprocessing plan](.agents/plans/20261108-confounding-subsets-benchmark-reprocessing-plan.md).
 
+Only benchmark views contribute comparative timings and retain their configured
+CPU/GPU model constraints. Both batch views may use any compatible hardware
+model. Batch MrVI defaults to CPU; explicitly select `--gpu-policy any` or
+`--gpu-policy default` for a future GPU run. The any-GPU policy preserves an
+explicit `BENCHMARK_GPU_ANY_VRAM_PER_GPU` request. CUDA availability and pinned
+runtime checks remain mandatory; this does not change running jobs or rerun
+valid results.
+
 ### Reviewed result intake
 
 Local reports require an explicit reviewed artifact ledger and expected scope:

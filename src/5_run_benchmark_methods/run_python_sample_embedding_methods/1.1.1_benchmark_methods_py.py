@@ -1358,12 +1358,7 @@ def validate_gpu_execution(method, device, combo=None, analysis_pass=None, view=
         "batch_effect_uncorrected",
         "batch_effect_corrected",
     }
-    if method == "mrvi" and batch_view:
-        if device != "cpu":
-            raise RuntimeError(
-                "Batch-view MrVI must run with --device cpu; "
-                "GPU allocation is reserved for benchmark views"
-            )
+    if method == "mrvi" and batch_view and device == "cpu":
         return
     if method == "mrvi" and device == "cpu":
         if combo is None or combo == "hvg2000":
@@ -2468,7 +2463,7 @@ def main():
     parser.add_argument("--device", default="auto",
                         choices=["auto", "cpu", "cuda"],
                         help="Training device; benchmark MrVI/scPoli combos "
-                             "require CUDA, batch-view MrVI requires CPU")
+                             "require CUDA, batch-view MrVI accepts explicit CPU or CUDA")
     args = parser.parse_args()
 
     args.hvg = sorted(set(args.hvg))
@@ -2485,6 +2480,18 @@ def main():
     scvi.settings.seed = 0
     print("scvi-tools version:", scvi.__version__)
     print("torch.cuda.is_available():", torch.cuda.is_available())
+    if args.method == "mrvi" and args.view in {
+        "batch_effect_uncorrected", "batch_effect_corrected"
+    }:
+        device_name = (
+            torch.cuda.get_device_name(torch.cuda.current_device())
+            if args.device == "cuda" and torch.cuda.is_available()
+            else "unavailable" if args.device == "cuda" else "cpu"
+        )
+        print(
+            f"MRVI_DEVICE device={args.device} name={device_name} view={args.view}",
+            flush=True,
+        )
 
     config = read_datasets_json(args.config_path, view=args.view)
     if args.ds_name not in config:

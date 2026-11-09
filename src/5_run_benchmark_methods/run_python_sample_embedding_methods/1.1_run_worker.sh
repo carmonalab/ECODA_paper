@@ -334,8 +334,8 @@ HIGH_RES_FLAG=()
 COMBO_FLAG=()
 [[ -n "${ROW_COMBO:-}" ]] && COMBO_FLAG=(--combo "${ROW_COMBO}")
 # GPU-backed benchmark methods receive an explicit CUDA device. Batch-view
-# MrVI is explicitly CPU-bound so a GPU queue cannot delay its run; the Python
-# entry point rejects the default "auto" value for both paths.
+# MrVI defaults to CPU to avoid GPU queues, but explicit GPU policy uses CUDA.
+# The Python entry point rejects the implicit "auto" device for both paths.
 GPU_DEVICE_ARGS=()
 case "${ECODA_APPTAINER_NV:-0}" in
   0)

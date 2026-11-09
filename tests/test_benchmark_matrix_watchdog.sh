@@ -174,7 +174,7 @@ WATCHDOG_OUTPUT="$(HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" ANALYSIS
   SLURM_JOB_ID=999999 SLURM_SUBMIT_DIR="${ROOT}" \
   bash "${ROOT}/src/5_run_benchmark_methods/matrix_watchdog.sh" "${RUN_ROOT}" mrvi "${MANIFEST}" 1001 128G 256G shared-gpu 4 \
   "${SOURCE_TREE}/src/5_run_benchmark_methods/run_python_sample_embedding_methods/1.1_run_worker.sh" \
-  "${RUNTIME_EXPORT}" --gpus=1)"
+  "${RUNTIME_EXPORT}" --gres=gpu:1,VramPerGpu:80G --cpus-per-task=8)"
 STATUS="${RUN_ROOT}/status/watchdogs/mrvi.status"
 [[ "$(grep '^STATE=' "${STATUS}")" == "STATE=OK" ]]
 RETRY="${RUN_ROOT}/manifests/mrvi.retry_1.tsv"
@@ -263,6 +263,7 @@ rm -rf "${HPC_ROOT}/_ecoda_owners/artifact"
 case "${RETRY_CALLS}" in *"--time=03:00:00"*) ;; *) echo "matrix retry worker time limit missing" >&2; exit 1 ;; esac
 case "${RETRY_CALLS}" in *"--mem=256G"*) ;; *) echo "matrix retry did not respect memory ceiling" >&2; exit 1 ;; esac
 case "${RETRY_CALLS}" in *"ECODA_RUNTIME_PROFILE=stage5"*"ECODA_APPTAINER_NV=1"*) ;; *) echo "matrix retry runtime export missing" >&2; exit 1 ;; esac
+case "${RETRY_CALLS}" in *"--gres=gpu:1,VramPerGpu:80G"*"--cpus-per-task=8"*) ;; *) echo "matrix retry GPU VRAM/CPU allocation changed" >&2; exit 1 ;; esac
 SCHEDULER_MANIFEST="${RUN_ROOT}/manifests/scheduler_ids.tsv"
 printf 'ARRAY\t1001\nWATCHDOG\t1003\n' > "${SCHEDULER_MANIFEST}"
 PROJECT_ROOT="${SOURCE_TREE}" SLURM_JOB_ID=1004 HOME="${TMP_DIR}/home" PATH="${TMP_DIR}/bin:${PATH}" \
