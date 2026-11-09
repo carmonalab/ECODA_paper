@@ -435,8 +435,15 @@ ecoda_validate_derived_manifest <- function(
   }
   if (length(manifest_source_mode) != 1L ||
       !manifest_source_mode %in%
-        c("h5ad", "composition_snapshot", "local_composition")) {
+        c("h5ad", "composition_snapshot", "local_composition", "bound_saved_cluster_obs")) {
     stop("derived manifest source_mode is invalid")
+  }
+  if (identical(manifest_source_mode, "bound_saved_cluster_obs")) {
+    if (!manifest$analysis %in% c("res50", "harmony") ||
+        !is.character(manifest$input_references_path) || length(manifest$input_references_path) != 1L ||
+        !.ecoda_is_absolute_path(manifest$input_references_path) ||
+        !is.character(manifest$input_references_sha256) || length(manifest$input_references_sha256) != 1L ||
+        !grepl("^[a-f0-9]{64}$", manifest$input_references_sha256)) stop("Bound saved-cluster manifest identity is invalid")
   }
   snapshot_config_fields <- c("snapshot_config_path", "snapshot_config_md5")
   snapshot_config_present <- snapshot_config_fields %in% names(manifest)
@@ -463,6 +470,19 @@ ecoda_validate_derived_manifest <- function(
   }
   if (is.list(manifest$sources) && length(manifest$sources)) {
     for (source in manifest$sources) {
+      if (identical(manifest_source_mode, "bound_saved_cluster_obs")) {
+        expected_cluster <- ECODA_DERIVED_METHODS[[manifest$analysis]][[1L]]$obs_col
+        fields <- c("sample_col", "label_col", "cluster_col", "input_proof", "input_identity_guarantee")
+        if (!all(fields %in% names(source)) || !all(vapply(source[fields], function(x)
+            is.character(x) && length(x) == 1L && !is.na(x) && nzchar(x), logical(1))) ||
+            !identical(source$cluster_col, expected_cluster) || !.ecoda_is_absolute_path(source$input_proof) ||
+            !identical(source$input_identity_guarantee, "strict proof/stat; prior full-content validation witness required; not rehashed here") ||
+            !is.numeric(source$h5ad_size) || length(source$h5ad_size) != 1L || !is.finite(source$h5ad_size) || source$h5ad_size <= 0 ||
+            !is.list(source$stat) || !identical(source$stat$size, source$h5ad_size) ||
+            !all(vapply(source$stat[c("mtime", "ctime")], function(x) is.numeric(x) && length(x) == 1L && is.finite(x), logical(1))) ||
+            !is.character(source$stat$proof_md5) || length(source$stat$proof_md5) != 1L ||
+            !grepl("^[a-f0-9]{32}$", source$stat$proof_md5)) stop("Bound source columns/stat/proof identity is invalid")
+      }
       if (identical(manifest_source_mode, "local_composition")) {
         needed <- c(
           "dataset", "view", "composition_path", "composition_md5",
@@ -1770,7 +1790,8 @@ ECODA_DERIVED_METHODS <- list(
 .ecoda_parse_flags <- function(raw_args) {
   args <- list()
   allowed <- c("analysis", "scope", "config_path", "input_dir", "output_dir", "composition_snapshot",
-    "composition_dir", "cores", "seeds", "run_id", "analysis_release", "analysis_release_md5", "historical_inputs", "datasets", "validate_output")
+    "composition_dir", "cores", "seeds", "run_id", "analysis_release", "analysis_release_md5", "historical_inputs", "datasets", "validate_output",
+    "input_references", "input_references_sha256")
   i <- 1L
   while (i <= length(raw_args)) {
     flag <- raw_args[[i]]
@@ -1795,6 +1816,97 @@ ECODA_DERIVED_METHODS <- list(
     }
   }
   args
+}
+
+# Current saved-cluster analysis: exact bound sources, obs only, no expression
+# contract scan or embedding materialization. The enclosing gate must bind the
+# prior full-content/preflight witness; this lane checks its strict proof/stat.
+.ecoda_bound_input_stat <- function(source) {
+  for (path in c(source$h5ad_path, source$input_proof)) {
+    if (!file.exists(path) || dir.exists(path) || !identical(normalizePath(path), path))
+      stop("Bound source/proof must be an existing canonical file")
+  }
+  stat <- file.info(source$h5ad_path)
+  if (stat$size != source$h5ad_size || file.info(source$input_proof)$size > 16384)
+    stop("Bound source size/proof differs")
+  lines <- readLines(source$input_proof, warn = FALSE)
+  if (length(lines) != 3L || !identical(sub("=.*$", "", lines), c("MD5", "SIZE", "PATH")) ||
+      !identical(sub("^MD5=", "", lines[1]), source$h5ad_md5) ||
+      !identical(sub("^SIZE=", "", lines[2]), as.character(source$h5ad_size)) ||
+      !identical(sub("^PATH=", "", lines[3]), source$h5ad_path)) stop("Bound source checksum proof differs")
+  list(size = as.numeric(stat$size), mtime = as.numeric(stat$mtime), ctime = as.numeric(stat$ctime),
+    proof_md5 = .ecoda_md5(source$input_proof))
+}
+.ecoda_bound_sources <- function(args, raw_config, selected, analysis) {
+  path <- args$input_references; sha <- args$input_references_sha256
+  if (!is.character(path) || length(path) != 1L || !file.exists(path) || dir.exists(path) ||
+      !identical(normalizePath(path), path) || !is.character(sha) || length(sha) != 1L ||
+      !grepl("^[a-f0-9]{64}$", sha) || !identical(digest::digest(file = path, algo = "sha256"), sha))
+    stop("Exact canonical --input_references and --input_references_sha256 are required")
+  if (any(utils::count.fields(path, sep = "\t", quote = "", comment.char = "") != 6L)) stop("Input references require exactly six fields")
+  refs <- utils::read.delim(path, header = FALSE, col.names = c("dataset", "view", "path", "md5", "size", "proof"),
+    colClasses = "character", quote = "", comment.char = "", na.strings = NULL)
+  eligible <- ecoda_raw_config_union(raw_config, args$scope)
+  if (!nrow(refs) || anyDuplicated(refs$dataset) || any(refs$view != "benchmark_analysis") ||
+      !all(refs$dataset %in% eligible) || !all(selected %in% refs$dataset) ||
+      any(!grepl("^[a-f0-9]{32}$", refs$md5)) || any(!grepl("^[1-9][0-9]*$", refs$size)))
+    stop("Input references disagree with the exact enabled benchmark scope")
+  method <- names(ECODA_DERIVED_METHODS[[analysis]])[[1L]]
+  sources <- setNames(lapply(selected, function(dataset) {
+    entry <- raw_config[[dataset]]; row <- refs[refs$dataset == dataset, ]
+    if (!is.null(entry$views$benchmark_analysis$columns)) stop("View-level columns are prohibited")
+    for (field in c("sample", "label")) {
+      column <- entry$columns[[field]]
+      if (!is.character(column) || length(column) != 1L || is.na(column) || !nzchar(column))
+        stop("Missing dataset-level ", field, " column")
+    }
+    if (!identical(basename(row$path), entry$views$benchmark_analysis$output_file_name))
+      stop("Bound H5AD basename differs from configured processed view")
+    source <- list(dataset = dataset, view = "benchmark_analysis", h5ad_path = row$path, h5ad_md5 = row$md5,
+      h5ad_size = as.numeric(row$size), input_proof = row$proof, analysis = analysis,
+      sample_col = entry$columns$sample, label_col = entry$columns$label,
+      cluster_col = ECODA_DERIVED_METHODS[[analysis]][[method]]$obs_col,
+      input_identity_guarantee = "strict proof/stat; prior full-content validation witness required; not rehashed here")
+    source$stat <- .ecoda_bound_input_stat(source)
+    source
+  }), selected)
+  if (!identical(digest::digest(file = path, algo = "sha256"), sha)) stop("Input references changed during read")
+  sources
+}
+.ecoda_bound_counts <- function(source, project_root) {
+  if (!identical(.ecoda_bound_input_stat(source), source$stat)) stop("Bound source/proof stat changed")
+  python <- Sys.getenv("RETICULATE_PYTHON")
+  if (!grepl("^/", python) || !file.exists(python)) stop("Explicit configured RETICULATE_PYTHON required")
+  h5py <- reticulate::import("h5py", convert = FALSE)
+  decoder <- reticulate::import_from_path("h5ad_source_identity", path = file.path(project_root, "src/utils/py"), convert = FALSE)
+  handle <- h5py$File(source$h5ad_path, "r"); on.exit(handle$close())
+  group <- handle$get("obs")
+  columns <- unique(c(source$sample_col, source$label_col, source$cluster_col))
+  values <- setNames(lapply(columns, function(column)
+    as.character(reticulate::py_to_r(decoder$read_obs_column(group, column)))), columns)
+  if (length(unique(lengths(values))) != 1L || lengths(values)[1] <= 0L) stop("Configured obs column lengths disagree")
+  obs <- as.data.frame(values, stringsAsFactors = FALSE, check.names = FALSE)
+  samples <- as.character(obs[[source$sample_col]])
+  if (!length(samples) || any(.ecoda_is_missing_sentinel(samples))) stop("Invalid configured sample IDs")
+  ids <- unique(samples); biology <- as.character(obs[[source$label_col]])
+  labels <- setNames(vapply(ids, function(id) {
+    x <- unique(biology[samples == id])
+    if (length(x) != 1L || any(.ecoda_is_missing_sentinel(x))) stop("Missing/conflicting biological labels within sample")
+    x
+  }, character(1)), ids)
+  if (length(unique(labels)) < 2L) stop("At least two evaluation groups are required")
+  if (identical(source$dataset, "Stephenson") && length(ids) != 53L)
+    stop("Current Stephenson derived results require the approved 53-sample source")
+  counts <- get_ct_comp_df(obs, source$sample_col, source$cluster_col)
+  if (!setequal(rownames(counts), ids)) stop("Saved cluster annotations omit entire samples")
+  counts <- counts[ids, colSums(counts) > 0, drop = FALSE]
+  if (!ncol(counts) || any(!is.finite(as.matrix(counts))) || any(as.matrix(counts) < 0) ||
+      any(as.matrix(counts) != floor(as.matrix(counts))) || any(rowSums(counts) <= 0)) stop("Invalid saved-label counts")
+  if (!identical(.ecoda_bound_input_stat(source), source$stat)) stop("Bound source changed during obs read")
+  list(counts = counts, labels = factor(labels), sample_ids = ids, n_obs = nrow(obs),
+    used_annotation_cells = sum(counts), dropped_annotation_cells = nrow(obs) - sum(counts),
+    count_fingerprint = .ecoda_screen_digest(counts),
+    legacy_csv_compatibility = "not claimed; old CSVs remain immutable compatibility candidates")
 }
 
 .ecoda_resolve_source <- function(input_dir, dataset, view_spec) {
@@ -2303,11 +2415,16 @@ ECODA_DERIVED_METHODS <- list(
 .ecoda_run <- function(args) {
   if (!is.null(args$validate_output)) return(ecoda_validate_screen_output(args))
   .ecoda_clear_in_process_owner()
+  bound_mode <- !is.null(args$input_references) || !is.null(args$input_references_sha256)
   snapshot_mode <- !is.null(args$composition_snapshot)
   release_mode <- !is.null(args$analysis_release)
   if (release_mode && !is.null(args$composition_dir)) stop("Use only one reviewed release or historical composition directory")
   composition_mode <- !is.null(args$composition_dir) || release_mode
-  source_mode <- if (snapshot_mode) {
+  if (bound_mode && (snapshot_mode || composition_mode || !is.null(args$input_dir) || is.null(args$datasets)))
+    stop("Bound saved-cluster inputs require explicit --datasets and cannot mix source modes/input_dir")
+  source_mode <- if (bound_mode) {
+    "bound_saved_cluster_obs"
+  } else if (snapshot_mode) {
     "composition_snapshot"
   } else if (composition_mode) {
     "local_composition"
@@ -2334,7 +2451,7 @@ ECODA_DERIVED_METHODS <- list(
     stop("--composition_dir must be one non-empty directory")
   }
   required <- c("config_path", "output_dir", "analysis", "scope")
-  if (!snapshot_mode && !composition_mode) {
+  if (!snapshot_mode && !composition_mode && !bound_mode) {
     required <- c(required, "input_dir")
   }
   for (name in required) {
@@ -2346,6 +2463,13 @@ ECODA_DERIVED_METHODS <- list(
     as.character(args$analysis),
     c("res50", "harmony", "cell_subsetting")
   )
+  if (bound_mode && !analysis %in% c("res50", "harmony")) stop("Bound input references are only for res50/harmony")
+  if (analysis %in% c("res50", "harmony") && !bound_mode && !identical(args$historical_inputs, "true"))
+    stop("Current res50/harmony runs require bound input references; historical inputs need explicit --historical_inputs true")
+  if (bound_mode) {
+    old_score_options <- options(mc.cores = 1L)
+    on.exit(options(old_score_options), add = TRUE)
+  }
   if (composition_mode && analysis != "cell_subsetting") {
     stop("--composition_dir is supported only for --analysis cell_subsetting")
   }
@@ -2383,7 +2507,7 @@ ECODA_DERIVED_METHODS <- list(
   derived_root <- .ecoda_derived_root(project_root)
 
   config_path <- .ecoda_path(as.character(args$config_path), must_work = TRUE)
-  input_dir <- if (snapshot_mode || composition_mode) {
+  input_dir <- if (snapshot_mode || composition_mode || bound_mode) {
     NULL
   } else {
     .ecoda_path(as.character(args$input_dir))
@@ -2423,7 +2547,7 @@ ECODA_DERIVED_METHODS <- list(
   oldwd <- getwd()
   tryCatch({
     setwd(project_root)
-    if (snapshot_mode || composition_mode) {
+    if (snapshot_mode || composition_mode || bound_mode) {
       if (!requireNamespace("dplyr", quietly = TRUE)) {
         stop("dplyr is required for compact composition scoring")
       }
@@ -2433,13 +2557,14 @@ ECODA_DERIVED_METHODS <- list(
     } else {
       source(file.path(project_root, "src/utils/imports_worker_core.R"))
     }
-    if (composition_mode) {
+    if (composition_mode || bound_mode) {
       # Local composition mode needs only the scoring/composition definitions.
       # Avoid loading the full worker graph so this standalone path remains
       # independent of unrelated notebook/helper sources.
       source(file.path(project_root, "src/utils/analysis_release.R"))
       source(file.path(project_root, "src/utils/math_utils.R"))
       source(file.path(project_root, "src/utils/scoring_metrics.R"))
+      if (bound_mode) source(file.path(project_root, "src/utils/seurat_utils.R"))
       source(file.path(
         project_root,
         "src/5_run_benchmark_methods/benchmark_methods_r.R"
@@ -2470,7 +2595,7 @@ ECODA_DERIVED_METHODS <- list(
   raw_config <- jsonlite::fromJSON(config_path, simplifyVector = FALSE)
   if (!is.list(raw_config) || is.null(names(raw_config))) stop("datasets config is not an object")
   eligible <- ecoda_raw_config_union(raw_config, scope = scope)
-  if (analysis != "cell_subsetting" && !is.null(args$datasets)) stop("--datasets is cell-depth only")
+  if (analysis != "cell_subsetting" && !bound_mode && !is.null(args$datasets)) stop("--datasets requires current bound inputs outside cell-depth")
   selected <- ecoda_select_screen_datasets(eligible, args$datasets)
   if (analysis == "cell_subsetting" && !snapshot_mode && !release_mode && !identical(args$historical_inputs, "true"))
     stop("Current cell-depth runs require --analysis_release or checked --composition_snapshot; historical inputs need explicit --historical_inputs true")
@@ -2482,6 +2607,10 @@ ECODA_DERIVED_METHODS <- list(
   source_rows <- list()
   source_configs <- list()
   snapshot <- NULL
+  if (bound_mode) {
+    source_configs <- .ecoda_bound_sources(args, raw_config, selected, analysis)
+    source_rows <- unname(source_configs)
+  }
   if (snapshot_mode) {
     snapshot <- .ecoda_validate_composition_snapshot(
       args$composition_snapshot,
@@ -2514,7 +2643,7 @@ ECODA_DERIVED_METHODS <- list(
                            reason = "raw-config union is empty")
   }
 
-  if (!snapshot_mode && !composition_mode) {
+  if (!snapshot_mode && !composition_mode && !bound_mode) {
   for (dataset in selected) {
     entry <- raw_config[[dataset]]
     block <- function(reason) {
@@ -2748,6 +2877,10 @@ ECODA_DERIVED_METHODS <- list(
     artifacts = list(),
     sources = source_rows
   )
+  if (bound_mode) {
+    source_manifest$input_references_path <- args$input_references
+    source_manifest$input_references_sha256 <- args$input_references_sha256
+  }
   ecoda_validate_derived_manifest(source_manifest, required_sources = TRUE)
   if (snapshot_mode) {
     source_manifest$source_mode <- "composition_snapshot"
@@ -2778,6 +2911,10 @@ ECODA_DERIVED_METHODS <- list(
     artifacts = list(),
     sources = source_rows
   )
+  if (bound_mode) {
+    run_manifest$input_references_path <- args$input_references
+    run_manifest$input_references_sha256 <- args$input_references_sha256
+  }
   if (snapshot_mode) {
     run_manifest$source_mode <- "composition_snapshot"
     run_manifest$snapshot_path <- snapshot$path
@@ -2814,7 +2951,26 @@ ECODA_DERIVED_METHODS <- list(
   if (analysis %in% c("res50", "harmony")) {
     method <- names(ECODA_DERIVED_METHODS[[analysis]])[[1L]]
     method_spec <- ECODA_DERIVED_METHODS[[analysis]][[method]]
-    if (snapshot_mode) {
+    if (bound_mode) {
+      for (dataset in selected) {
+        source <- source_configs[[dataset]]
+        input <- .ecoda_bound_counts(source, project_root)
+        if (!identical(rownames(input$counts), input$sample_ids) || !identical(names(input$labels), input$sample_ids))
+          stop("Saved-label counts/labels do not match their original sample order")
+        bundle <- .ecoda_counts_bundle(input$counts, input$labels, input$sample_ids, method)
+        if (!all(.ecoda_screen_metrics() %in% names(bundle$scores)) ||
+            any(!is.finite(unlist(bundle$scores[.ecoda_screen_metrics()]))) ||
+            bundle$scores$lisi_score < 0 || bundle$scores$lisi_score > 1)
+          stop("Saved-cluster results require all five finite separation scores")
+        bundle$scoring_policy <- "calc_sep_score_five_v1_lisi_separation"
+        bundle$source_identity <- c(source, input[c("n_obs", "used_annotation_cells", "dropped_annotation_cells", "count_fingerprint", "legacy_csv_compatibility")])
+        artifact_path <- .ecoda_output_path(file.path(output_dir, paste0(dataset, "_", method, ".rds")), output_dir)
+        .ecoda_save_rds(bundle, artifact_path)
+        artifacts[[length(artifacts) + 1L]] <- .ecoda_artifact_record(artifact_path, dataset, method)
+        if (!identical(.ecoda_bound_input_stat(source), source$stat)) stop("Bound source changed while scoring")
+        rm(source, input, bundle); gc(verbose = FALSE)
+      }
+    } else if (snapshot_mode) {
       snapshot_counts <- snapshot$counts[
         snapshot$counts$analysis == analysis, , drop = FALSE
       ]
@@ -3220,6 +3376,8 @@ ECODA_DERIVED_METHODS <- list(
     if (snapshot_mode && !identical(.ecoda_md5(snapshot$path), snapshot$md5))
       stop("Cell-depth snapshot changed during scoring")
   }
+  if (bound_mode && !identical(digest::digest(file = args$input_references, algo = "sha256"), args$input_references_sha256))
+    stop("Input references changed during scoring")
   run_manifest$status <- "COMPLETED"
   run_manifest$artifacts <- artifacts
   ecoda_validate_derived_manifest(run_manifest, required_sources = TRUE)

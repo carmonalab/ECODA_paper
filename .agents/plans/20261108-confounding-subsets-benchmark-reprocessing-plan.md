@@ -61,12 +61,19 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, method waves underway; one isolated failed row
+## Live checkpoint — 2026-11-09, method wave active; CPU reboots delay pending tasks
 
 - P0/P1 DONE: logical checkpoints and harmonized documentation are pushed.
   Active controller/reuse source is9ca2453, committed/pushed and
   deployed as an immutable Bamboo snapshot. Later reviewed diagnostics6bcf26b
   and compact-analysis code14e6749 are pushed but do not alter active workers. External application work remains excluded.
+- **Current scheduling incident:** at10:41–10:44Z benchmark/uncorrected have
+  worker outputs; corrected has all7arrays submitted and successful startup
+  preflights, but no method-start logs. One-off targeteddiagnostics prove
+  EPYC-7742 nodes are draining forRebootASAP, NextStateUNDRAIN. No new method
+  failure was found. User choice is pending on also allowingEPYC-7763 for
+  queuedCPU tasks, with mixed-hardware timing provenance; no job/resource
+  changes have been made.
 - **Changed inputs ready:** approved Bassez metadata repair (74948cells,
   26samples,40HRtypes); all17 Stage3 outputs produced/NAS-synced;53-sample
   Stephenson benchmark input individually NOOP-reviewed. Original Stage3 gate
@@ -2687,3 +2694,80 @@ contract alsoPASS without payload reads. The minimal one-job controller and
 terminal-audit integration is a separate pending package; controls are still
 proposals, and no evidence job was launched. Renderer/audit checkpoint0b8729c
 is pushed. Active main9ca source and all completed outputs remain unchanged.
+
+
+### CPU-node reboot allocation delay and continued progress — 2026-11-09 10:44Z
+
+A bounded run-owned log/status check at10:41:36Z found no additional error
+signatures: benchmark7watchdogsOK/1FAIL (sameGloScope4665516_2),44method/
+watchdoglogs; uncorrected20logs with actual output progress (e.g.JoanitoMrVI
+completed its50epochs and saved distances); corrected0methodlogs despite
+all7methodarrays submitted. CorrectedR-environment log4665565 and input
+preflight statuses areOK. These are worker-level observations, not terminal
+accounting, completed publication or a claim allthree contexts are executing.
+
+To distinguish scheduler waiting from a broken controller/dependency, a SINGLE
+targeted scontrol read of corrected4665615,4665619,4665623 was made (no repeat
+squeue/sacct poll). Jobs arePENDING with ReqNodeNotAvail/UnavailableNodes;
+preparation hasDependency=null. Node inventory shows all configuredEPYC-7742
+shared-CPU nodesDRAIN/REBOOT_REQUESTED, reasonRebootASAP since~10:12Z, with
+NextStateUNDRAIN oncpu007. Existing allocations may finish before reboot.
+cpu046 isIDLE EPYC-7763; cpu047 isDOWN/nonresponding, cpu048DRAINED. This is
+a new external allocation constraint, not evidence of another pipeline defect.
+
+The existing benchmarkCPU-model constraintEPYC-7742 is an approved timing
+contract. An async user question is pending: temporarily also allowEPYC-7763
+for still-pendingCPU work and explicitly record mixed-hardware timings, or
+retainEPYC-7742 and wait for rebooted nodes. No resources, constraints, scopes,
+IDs, sources, oldmanifests or outputs have changed. Do not treat elapsed time
+as approval. Continue independent code/review work and the original single
+durable waiter while awaiting the decision. GPU policy is outside this choice.
+
+Reporting checkpoints0b8729c and3477954 are pushed. The thin legacy evidence
+controller/terminal audit is being tested independently; a minimal existing
+derived-runner obs-only lane for22savedcluster-label results is being
+implemented separately. No new fits/PCA/Harmony/Leiden runs are authorized
+for those derived results. No additional gate has been launched.
+
+Current input-content candidate witness: ten selected inputs' existing
+full-checksum stage5preflight records, source/runtime/inputmanifest, exact
+status/log/proof hashes and integer file stats were observed read-only. All
+ten currentmtime/ctime precede their immutable successful preflightrecord
+mtime; ZEROH5AD payloadbytes read. Small observation
+`.gate/p6_legacy_evidence_20261109_v1/input_preflight_witness.observed.json`,
+SHA256`5f838063ed15ec2d58dc3b50a0d3de7affcdc7b392c787d332428ee12a639684`.
+It remains unapproved and terminal-accounting-review-pending. A future
+separate APPROVED_INPUT_CONTENT_WITNESS_ONLY receipt may bind the sole
+terminalinspect/accounting and selected10preflightPASS even if the overall
+parentFAILED, without approving that gate or making it a formal dependency.
+
+
+### Saved-cluster derived implementation independently accepted — 2026-11-09
+
+The minimal existing run_local_ecoda_derived.R lane and focused regression are
+accepted. Current res50/Harmony2 operations require explicit six-field bound
+inputrefs/SHA and dataset selection; top-level sample/label columns are sole
+authority (including Bassezsample and GongSharmaspecimen.specimenGuid), with
+AND(enabled+benchmarkview) participation and no canonical-path fallback. It
+reads only savedobs cluster labels throughh5py; no RNA/countlayers/obsm or
+new PCA/Harmony/Leiden/model fit. Active categories only are tallied before
++.5CLR; unused categorical/global-zero padding is removed. Sample order and
+production missing-cluster semantics are preserved; wholly missing samples
+fail, and currentStephenson must have53samples. Biological labels affect only
+evaluation, verified by label-permutation invariance of counts/features/
+distances. Existing counts-bundle implementation supplies allfive scores.
+
+Expected production result scope is11res50+11Harmony2 standalone bundles in
+two fresh analysis roots. These are new distance/score derivations from saved
+labels, not rerun embeddings/clustering or claims of old-derived RDS reuse.
+Old20CSV count slices remain immutable compatibility candidates; this lane
+does NOT claim they were validated/reused. Oldraw/snapshot modes require
+explicit historical_inputs=true. Cell-depth extraction/snapshot schema and
+its181draw schedules are unchanged and are not run by this new lane.
+
+Independent actual obs-only fixture, existing cell-depth R regression and
+stubbed cell-depth gate allPASS. Current config confirms exactly11enabled
+benchmark datasets and top-level column authority. ProtectedRplots.pdf SHA
+remains unchanged. No production run occurred: a pinned controller/common
+terminal audit and prior full-content input-witness binding remain required
+before these22outputs can be generated or approved.
