@@ -3,6 +3,37 @@
 # execution are isolated here. The accepted R fixture tests the science reader.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+# Execute the actual production stat helper/check without filesystem mutation.
+"${ROOT}/.pixi/envs/default/bin/python" - "${ROOT}/src/utils/bash/legacy_analysis_audit.sh" <<'PY_STAT'
+import ast,pathlib,sys
+source=pathlib.Path(sys.argv[1]).read_text().split("<<'PY'\n",1)[1].split('\nPY\n}',1)[0];tree=ast.parse(source)
+ns=dict(stopped=True,review={'reviewed_device_transition':{'old_dev':66,'new_dev':68,'reason':'OBSERVED_LOGIN_REBOOT_REMOUNT','paths':['/selected/input']}})
+for node in tree.body:
+ if isinstance(node,ast.FunctionDef) and node.name in ('need','current_witness_stat'):
+  exec(compile(ast.Module(body=[node],type_ignores=[]),'<actual-stat-helper>','exec'),ns)
+prior=dict(dev=66,ino=100,size=25,mode=0o600,mtime_ns=10,ctime_ns=11)
+expected=dict(prior,dev=68);assert ns['current_witness_stat'](prior,'/selected/input')==expected
+for bad,path in [(dict(prior,dev=67),'/selected/input'),(prior,'/foreign'),(dict(prior,ino=True),'/selected/input')]:
+ try:ns['current_witness_stat'](bad,path)
+ except SystemExit:pass
+ else:raise AssertionError('invalid stat accepted')
+# Exercise the exact production input-stat comparison for each mismatch.
+loop=next(n for n in tree.body if isinstance(n,ast.For) and ast.unparse(n.target)=='r' and any(isinstance(v,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='current' for t in v.targets) for v in n.body))
+check=next(v for v in loop.body if isinstance(v,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='current' for t in v.targets))
+check_index=loop.body.index(check);comparison=loop.body[check_index+1]
+ns['r']=dict(current_input_path='/selected/input',current_stat=prior,current_input_size='25')
+def run(current):
+ ns['stat']=lambda path:current
+ exec(compile(ast.Module(body=[check,comparison],type_ignores=[]),'<actual-input-stat-check>','exec'),ns)
+run(expected)
+for key in expected:
+ changed=dict(expected);changed[key]+=1
+ try:run(changed)
+ except SystemExit:pass
+ else:raise AssertionError('stat drift accepted: '+key)
+ns['stopped']=False;assert ns['current_witness_stat'](prior,'/foreign')==prior
+print('PASS actual stat boundary: explicit66→68 only; all other fields/path/terminal strict')
+PY_STAT
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/ecoda-legacy-audit.XXXXXX")"; TMP="$(cd "${TMP}" && pwd -P)"
 trap 'chmod -R u+w "${TMP}"; rm -rf "${TMP}"' EXIT
 TREE="${TMP}/snapshot/tree"; SCRATCH="${TMP}/scratch"; INPUTS="${SCRATCH}/_ecoda_inputs/audit"
@@ -51,6 +82,13 @@ exec "${TEST_PYTHON}" "${TEST_TMP}/emit_report.py" "$@"
 SH
 for name in sbatch Rscript; do chmod +x "${TMP}/bin/${name}"; done
 for name in sacct squeue rsync; do printf '#!/bin/bash\necho forbidden >> "%s"\nexit 99\n' "${TMP}/forbidden" > "${TMP}/bin/${name}"; chmod +x "${TMP}/bin/${name}"; done
+# Read exact historical producer blobs; never execute them in the fixture.
+OLD_SOURCE="${TMP}/native-9ca"
+mkdir -p "${OLD_SOURCE}/src/utils/bash"
+for name in h5ad_preflight_worker.sh ecoda_run_common.sh; do
+  git -C "${ROOT}" show "9ca2453eea7320a721ef6dfd458f9db108abecac:src/utils/bash/${name}" > "${OLD_SOURCE}/src/utils/bash/${name}"
+done
+export LEGACY_TEST_OLD_SOURCE="${OLD_SOURCE}"
 export TEST_TREE="${TREE}" TEST_SCRATCH="${SCRATCH}" TEST_TMP="${TMP}"
 export TEST_PYTHON="${ROOT}/.pixi/envs/default/bin/python" TEST_RSCRIPT="${TMP}/bin/Rscript"
 export PATH="${TMP}/bin:${PATH}" ECODA_SOURCE_ROOT="${TREE}" ECODA_SOURCE_MANIFEST="${TREE}/source.manifest" ECODA_SOURCE_SNAPSHOT_REQUIRED=1
@@ -64,7 +102,7 @@ def evidence(path,text):
  path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text);return dict(path=str(path),sha256=sha(path),stat=stat(path),text=text)
 def save(path,x):path.write_text(json.dumps(x));return dict(path=str(path),sha256=sha(path))
 cohorts=['Adams','Bassez','Gongsharma_cmv_young_males','Kfoury','Kim','Lee','Pelka','Smillie','Wu','Zhang']
-source=evidence(m/'source.manifest','SOURCE_COMMIT=9ca2453\n');runtime=evidence(m/'runtime.identity','prior pinned runtime\n')
+source=evidence(m/'source.manifest','SOURCE_COMMIT=9ca2453eea7320a721ef6dfd458f9db108abecac\nSOURCE_ROOT='+os.environ['LEGACY_TEST_OLD_SOURCE']+'\nDATASETS_SHA256='+sha(pathlib.Path(os.environ['TEST_TREE'])/'datasets.json')+'\n');runtime=evidence(m/'runtime.identity','prior pinned runtime\n')
 w=[];files=[];rows=[];pairs=[]
 for n,ds in enumerate(cohorts):
  task=2 if ds=='Bassez' else 3 if ds=='Adams' else n+2
@@ -115,6 +153,36 @@ request['input_review']=save(p/'pending_review.json',pending);save(p/'pending_re
 wrong=copy.deepcopy(json.loads((p/'witness.json').read_text()));wrong['rows'][0]['task_id']=2
 r=json.loads((p/'review.json').read_text());r['observation']=save(p/'wrong_task_witness.json',wrong);r['selected_preflight_tasks'][0]['task_id']=2
 q=json.loads((p/'request.json').read_text());q['input_review']=save(p/'wrong_task_review.json',r);save(p/'wrong_task_request.json',q)
+
+# Stopped parent is a frozen historical snapshot, never a fabricated inspection.
+g=json.loads((p/'parent_gate.json').read_text());g.update(state='PRELAUNCH_STOP',terminal_status=None,remote_exit_code=None,audit_completed=False,audit_state='NOT_STARTED');g.pop('audit')
+label_rows=[]
+config=json.loads((pathlib.Path(os.environ['TEST_TREE'])/'datasets.json').read_text())
+def full_stat(value):
+ return {'st_'+k:v for k,v in value.items() if k!='mode'}|{'st_mode':0o100000|value['mode']}
+for row in w:
+ ds=row['dataset'];columns=config[ds]['columns']
+ label_rows.append(dict(dataset=ds,view='benchmark_analysis',path=row['current_input_path'],expected_source_md5=row['current_input_md5'],size=int(row['current_input_size']),canonical_sample_column='Sample',configured_sample_column=columns['sample'],label_column=columns['label'],sample_ids=['s2','s1'],named_labels={'s1':'B','s2':'A'},ordered_primary_labels=['A','B'],observed_first_cell_sample_ids=['s2','s1'],source_identity_order_matches_observed=True,n_samples=2,stat_before=full_stat(row['current_stat']),stat_after=full_stat(row['current_stat']),preflight_record=dict(path=row['record']['path'],sha256=row['record']['sha256'],stat=full_stat(row['record']['stat'])),preflight_status={k:row['status'][k] for k in ('path','sha256')},proof={k:row['proof'][k] for k in ('path','sha256')}))
+label_rows.append(dict(dataset='Stephenson')) # Unselected labels are not consumed.
+labels=dict(schema='ecoda_old56_current_benchmark_labels_observation_v1',scientific_reuse_approved=False,expression_values_read=False,full_h5ad_hashes=0,fits=0,scores_computed=0,normalization_policy='exact_text_storage_v2_no_numeric_or_logical_conversion',original_source_commit='9ca2453eea7320a721ef6dfd458f9db108abecac',collector_sha256='a'*64,rows=label_rows)
+label_ref=save(p/'labels.json',labels)
+label_review=dict(schema='ecoda_current_primary_label_witness_review_v1',status='APPROVED_CURRENT_PRIMARY_LABEL_WITNESS',scientific_result_reuse_approved=False,observation_sha256=label_ref['sha256'],collector_sha256=labels['collector_sha256'],datasets=11)
+r=dict(reviewed_device_transition=None,reviewer='fixture input-only reviewer',reviewed_at='2026-11-09T22:00:00Z',schema='ecoda_p6_stopped_parent_input_review_v1',decision='APPROVED_PUBLISHED_INPUT_CONTENT_WITNESS_ONLY',review_complete=True,scientifically_approved_rows=0,formal_pipeline_dependency=False,parent_gate_approved=False,scheduler_exit_established=False,method_science_approved=False,parent_gate_state='PRELAUNCH_STOP',completion_basis='PUBLISHED_FULL_HASH_RECORD_AND_NATIVE_TASK_OK',observation=witness,gate_manifest=save(p/'stopped_gate.json',g),current_labels=label_ref,current_labels_review=save(p/'label_review.json',label_review),selected_preflight_tasks=json.loads((p/'review.json').read_text())['selected_preflight_tasks'])
+for key,name in [('native_preflight_worker','h5ad_preflight_worker.sh'),('native_checksum_helper','ecoda_run_common.sh')]:
+ path=pathlib.Path(os.environ['LEGACY_TEST_OLD_SOURCE'])/'src/utils/bash'/name;r[key]=dict(path=str(path),sha256=sha(path))
+def stopped_request(name,review):
+ q=json.loads((p/'request.json').read_text());q['input_review']=save(p/(name+'_review.json'),review);save(p/(name+'_request.json'),q)
+stopped_request('stopped',r)
+for name,key,value in [('stopped_pending','review_complete',False),('stopped_science','method_science_approved',True),('stopped_exit_claim','scheduler_exit_established',True),('stopped_unknown','schema','unknown'),('stopped_accounting','accounting',{}),('stopped_dependency','formal_pipeline_dependency',True)]:
+ bad=copy.deepcopy(r);bad[key]=value;stopped_request(name,bad)
+for name,key,value in [('stopped_exit','remote_exit_code',1),('stopped_success','state','COMPLETED'),('stopped_audited','audit_completed',True)]:
+ bad=copy.deepcopy(r);gate=copy.deepcopy(g);gate[key]=value;bad['gate_manifest']=save(p/(name+'_gate.json'),gate);stopped_request(name,bad)
+for name,key in [('stopped_source','source'),('stopped_runtime','runtime'),('stopped_record','record'),('stopped_proof','proof'),('stopped_status','status')]:
+ bad=copy.deepcopy(r);wx=json.loads((p/'witness.json').read_text());target=wx[key] if key in ('source','runtime') else wx['rows'][0][key];target['text']+='TAMPER\n';target['sha256']=hashlib.sha256(target['text'].encode()).hexdigest();bad['observation']=save(p/(name+'_witness.json'),wx);stopped_request(name,bad)
+bad=copy.deepcopy(r);bad['native_preflight_worker']['sha256']='b'*64;stopped_request('stopped_producer',bad)
+bad=copy.deepcopy(r);wx=json.loads((p/'witness.json').read_text());wx['rows'][0]['task_id']=2;bad['observation']=save(p/'stopped_task_witness.json',wx);bad['selected_preflight_tasks'][0]['task_id']=2;stopped_request('stopped_task',bad)
+for name,change in [('stopped_labels',lambda row:row['ordered_primary_labels'].reverse()),('stopped_stat',lambda row:row['stat_after'].__setitem__('st_ino',999)),('stopped_label_proof',lambda row:row['proof'].__setitem__('sha256','c'*64))]:
+ bad=copy.deepcopy(r);lx=copy.deepcopy(labels);change(lx['rows'][0]);bad['current_labels']=save(p/(name+'_labels.json'),lx);lr=copy.deepcopy(label_review);lr['observation_sha256']=bad['current_labels']['sha256'];bad['current_labels_review']=save(p/(name+'_label_review.json'),lr);stopped_request(name,bad)
 PY
 cat > "${TMP}/emit_report.py" <<'PY'
 import csv,hashlib,json,os,pathlib,sys
@@ -153,6 +221,24 @@ ECODA_RUN_ID=good ECODA_RUN_ROOT="${run}" reject bash "${TREE}/src/utils/bash/le
 cp "${TMP}/terminal.saved" "${run}/status/terminal"
 invoke completed "${INPUTS}/COMPLETED_request.json" > "${TMP}/completed.log"
 grep -q '^STATE=OK$' "${SCRATCH}/_ecoda_runs/completed/status/terminal"
+invoke stopped "${INPUTS}/stopped_request.json" > "${TMP}/stopped.log"
+stopped_run="${SCRATCH}/_ecoda_runs/stopped"
+[[ ! -e "${stopped_run}/manifests/parent_inspect.json" && ! -e "${stopped_run}/manifests/parent_accounting.tsv" ]]
+"${TEST_PYTHON}" - "${stopped_run}/manifests/input_basis.json" <<'PY'
+import json,sys
+x=json.load(open(sys.argv[1]));assert x['parent_snapshot_state']=='PRELAUNCH_STOP' and x['parent_snapshot_terminal_status'] is None and x['parent_snapshot_remote_exit_code'] is None
+assert x['scheduler_exit_established'] is False and x['method_science_approved'] is False and x['parent_gate_approved'] is False and x['formal_pipeline_dependency'] is False and x['scientifically_approved_rows']==0
+PY
+ECODA_RUN_ID=stopped ECODA_RUN_ROOT="${stopped_run}" bash "${TREE}/src/utils/bash/legacy_analysis_audit.sh" --validate > "${TMP}/stopped-validated.log"
+cp "${stopped_run}/status/terminal" "${TMP}/stopped-terminal.saved"
+sed 's/STATE=OK/STATE=FAIL/' "${TMP}/stopped-terminal.saved" > "${stopped_run}/status/terminal"
+before="$(ecoda_sha256_file "${stopped_run}/status/terminal")"
+ECODA_RUN_ID=stopped ECODA_RUN_ROOT="${stopped_run}" reject bash "${TREE}/src/utils/bash/legacy_analysis_audit.sh" --validate
+[[ "$(ecoda_sha256_file "${stopped_run}/status/terminal")" == "${before}" ]]
+cp "${TMP}/stopped-terminal.saved" "${stopped_run}/status/terminal"
+for name in pending science exit_claim unknown accounting dependency exit success audited source runtime record proof status producer task labels stat label_proof; do
+  reject invoke "stopped_${name}" "${INPUTS}/stopped_${name}_request.json"
+done
 reject invoke invented_state "${INPUTS}/SUCCEEDED_request.json"
 reject invoke wrong_task "${INPUTS}/wrong_task_request.json"
 grep -q 'preflight task does not match its exact physical manifest row' "${TMP}/negative.log"
@@ -171,5 +257,6 @@ PY
 [[ "${protected_before}" == "${protected_after}" ]]
 printf changed >> "${SCRATCH}/Adams/input.h5ad"
 reject invoke changed "${INPUTS}/request.json"
-[[ "$(wc -l < "${SCRATCH}/scheduler.calls" | tr -d ' ')" == 3 && ! -e "${TMP}/forbidden" ]]
-echo 'PASS: exact finite legacy scope, final input-content review/stat witness, pinned CPU job, failed ID/mismatch report preservation, read-only terminal validation and immutable original sources'
+reject invoke stopped_changed "${INPUTS}/stopped_request.json"
+[[ "$(wc -l < "${SCRATCH}/scheduler.calls" | tr -d ' ')" == 4 && ! -e "${TMP}/forbidden" ]]
+echo 'PASS: exact finite legacy scope, terminal/stopped typed input-content review/stat/label/source witness, pinned CPU job, failed ID/mismatch report preservation, read-only terminal validation and immutable original sources'
