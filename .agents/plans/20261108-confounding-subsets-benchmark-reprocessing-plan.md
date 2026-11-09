@@ -61,7 +61,7 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, login reboot archived; disjoint failed-row recovery being prepared
+## Live checkpoint — 2026-11-09, failed16 recovery RUNNING; original reboot gate remains STOP
 
 - **New infrastructure incident:** login1.bamboo rebooted at14:47:27Z
   (15:47:27CET), removing the tmux runner and three login-node controllers.
@@ -75,12 +75,13 @@ decisions have been applied to existing artifacts.
   job is active in that snapshot. Correct aggregate mapping is benchmark
   4665612, uncorrected4665594, corrected4665633; earlier prose swapped the
   firsttwo and is superseded by actual manifests/Slurm descriptors.
-- **Failed-only recovery being prepared:**16 exact rows have terminal watchdog
+- **Failed-only recovery RUNNING since16:41:50Z:**16 exact rows have terminal watchdog
   failure reasons, matching frozen matrix rows, and absent expected payloads/
   producer records. Fresh disjoint roots may run them while old scPoli waits;
   same profile/group, no stopped-gate success dependency or old output writes.
   Final original accounting/healthy-copy publication still wait for old graph
-  quiescence. No new science/observer gate has been launched yet.
+  quiescence. New science gateecoda_stage5_failed16_20261109_v1 isRUNNING;
+  one official waiter25146/cell142 is armed. Observer remainsunlaunched.
 - P0/P1 DONE: logical checkpoints and harmonized documentation are pushed.
   Active controller/reuse source is9ca2453, committed/pushed and
   deployed as an immutable Bamboo snapshot. Later reviewed diagnostics6bcf26b
@@ -3527,3 +3528,33 @@ preflights. Final fixture/launch review is pending at this documentation point.
 GloScope's old error was a missing input_artifacts.tsv during startup despite
 that authoritative file existing; this supports transient filesystem visibility,
 not a demonstrated GloScope model defect. Preserve original error evidence.
+
+### Failed16 launch — RUNNING at2026-11-09T16:41:50Z
+
+Final independent review explicitly APPROVED_LAUNCH. Sealed spec SHA
+60af89721e39bb87be34cfce1683a7e7365e59abb99880dc8d2390d93aece7e1;
+launch review SHA f7d7c6d9ca961d77f2c999ea3f72405546d1a4d8f3f6722479a8c6d1c63ce885.
+Actual dispatcher fixture passed exact16 science tasks/four fit arrays/four
+watchdogs/three aggregates; physical proof93762dae43d614408e4369715bc39a49b4ad65d7362215a41b3fc5472ae75ea9,
+raw stub callscaac647d9b3611fc6f163357e126c797329ec02d6ab49bc17548884f5f05214f.
+Production overhead remains3H5 arrays/13tasks plus2Renvjobs:16initialIDs/
+38units before any explicitly recorded OOM-only retries.
+
+Existing-profile prepare/reconcile/launch completed once. ReconcileABSENT with
+all invariants passing; actual tmux launch recorded16:41:50Z and stateRUNNING.
+Command digest5e6137ed04ce71d91fd98764d8bfab0cc446bba9845c2776f0c680751b00cc61;
+event generation8ff9033f48b16de7f2eee6077bd32cb6. No alternate group/profile,
+force flag, original job cancellation or old output write occurred.
+Exactlyone official unboundedwait is active: unifiedsession25146, sole output
+consumerfunctionscell142; verifiedlocalPythonwaiterPID53846/uvparent53640.
+Temporary caffeinate-i-w53846 (session43747) prevents idle system sleep only
+for this waiter and changes no persistent power settings. The older one-hour
+assertion can expire naturally. First nonmutating handoff status wasRUNNING,
+no terminal receipt/audit; child initialization had begun. This proves runner
+startup, not that all method jobs are already executing. Read actual scheduler
+ledgers at the appropriate completion/recovery boundary; preserve all emitted
+IDs for the one terminal inspect. No new accounting query has occurred.
+
+Future reboot-publication packageB is independent from this active0314 source.
+Its final catalog must fail closed on missing/truncated retry enumeration;
+missing old evidence cannot be replaced with fabricated worker statuses.
