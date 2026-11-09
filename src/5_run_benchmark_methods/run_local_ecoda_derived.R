@@ -79,7 +79,7 @@ ecoda_raw_config_union <- function(
     if (!is.list(entry)) return(FALSE)
     has_view <- is.list(entry$views) &&
       "benchmark_analysis" %in% names(entry$views)
-    isTRUE(entry$use_for_benchmark) || has_view
+    isTRUE(entry$use_for_benchmark) && has_view
   }, logical(1))
   names_config[eligible & !startsWith(names_config, "_")]
 }
@@ -87,6 +87,215 @@ ecoda_raw_config_union <- function(
 # Exact publication order for the cell-depth analysis.
 ecoda_derived_targets <- function() {
   c("all cells", "2000", "1000", "500", "400", "300", "200", "150", "100", "50")
+}
+
+ecoda_select_screen_datasets <- function(eligible, requested = NULL) {
+  if (is.null(requested)) return(eligible)
+  if (!is.character(requested) || length(requested) != 1L || is.na(requested))
+    stop("--datasets must be an explicit comma-separated dataset list")
+  selected <- strsplit(requested, ",", fixed = TRUE)[[1L]]
+  if (grepl("(^,|,$|,,)", requested) || !length(selected) || any(!nzchar(selected)) || any(trimws(selected) != selected) ||
+      anyDuplicated(selected) || !all(selected %in% eligible))
+    stop("--datasets contains an empty, duplicate or ineligible dataset")
+  selected
+}
+
+.ecoda_screen_metrics <- function() {
+  c("anosim_score", "mod_knn3_score", "cluster_score", "sil_score", "lisi_score")
+}
+
+.ecoda_screen_digest <- function(value) {
+  path <- tempfile("ecoda-screen-identity-")
+  on.exit(unlink(path))
+  saveRDS(value, path, compress = FALSE, version = 3)
+  unname(tools::md5sum(path))
+}
+
+.ecoda_screen_source_identity <- function(dataset, source) {
+  fields <- intersect(c("composition_path", "composition_md5", "composition_bundle_key",
+    "metadata_path", "metadata_md5", "metadata_bundle_key", "input_md5", "h5ad_path", "h5ad_md5"), names(source))
+  .ecoda_screen_digest(c(list(dataset = dataset), source[fields]))
+}
+
+.ecoda_screen_package <- function(results, draws, sources, config_md5, runner_md5, source_manifest_md5, origin) {
+  .ecoda_validate_cell_subsetting_results(results)
+  .ecoda_validate_screen_draws(draws, results)
+  list(schema = "ecoda_cell_depth_five_v1", results = results, draws = draws,
+    scoring_policy = "calc_sep_score_five_v1_lisi_separation", sources = sources,
+    config_md5 = config_md5, runner_md5 = runner_md5, source_manifest_md5 = source_manifest_md5,
+    R_version = R.version.string, RNG_kind = RNGkind(), draw_origin = origin,
+    draws_reused = origin %in% c("persisted_snapshot_counts", "saved_compact_draw_rescore"),
+    current_inputs = setNames(lapply(sources, function(x) x$input_md5 %||% x$h5ad_md5),
+                             vapply(sources, `[[`, character(1), "dataset")))
+}
+
+ecoda_screen_release_sources <- function(path, md5, selected, raw_config) {
+  .analysis_checked_file(path, md5)
+  control <- readRDS(path)
+  .analysis_checked_file(path, md5)
+  if (!identical(control$schema, "ecoda_cell_depth_inputs_v1") || !identical(control$status, "approved"))
+    stop("Current cell-depth inputs require an approved checked analysis release")
+  scope <- control$expected_scope[control$expected_scope$dataset %in% selected, , drop = FALSE]
+  ledger <- control$ledger[control$ledger$dataset %in% selected, , drop = FALSE]
+  expected <- expand.grid(dataset = selected, view = "benchmark_analysis",
+    method_key = c("ECODA_authors_HR", "__dataset_metadata__"), stringsAsFactors = FALSE)
+  if (!setequal(.analysis_key(scope), .analysis_key(expected))) stop("Cell-depth release requires exactly HR/metadata rows")
+  changed <- scope$dataset %in% c("Bassez", "Stephenson")
+  if (any(!scope$require_new[changed])) stop("Changed cell-depth HR/metadata rows must require new artifacts")
+  loaded <- load_analysis_release(ledger, scope)
+  configs <- setNames(vector("list", length(selected)), selected)
+  for (dataset in selected) {
+    items <- loaded[vapply(loaded, function(x) identical(x$source$dataset, dataset), logical(1))]
+    names(items) <- vapply(items, function(x) x$source$method_key, character(1))
+    hr <- items$ECODA_authors_HR; metadata <- items$`__dataset_metadata__`
+    if (!identical(hr$identity$input_md5, metadata$identity$input_md5)) stop("HR and metadata current input identities differ")
+    config <- list(composition_path = hr$source$artifact_path, composition_md5 = hr$source$md5,
+      composition_size = as.numeric(file.info(hr$source$artifact_path)$size),
+      composition_mtime = as.numeric(file.info(hr$source$artifact_path)$mtime),
+      composition_bundle_key = hr$source$bundle_key,
+      metadata_path = metadata$source$artifact_path, metadata_md5 = metadata$source$md5,
+      metadata_size = as.numeric(file.info(metadata$source$artifact_path)$size),
+      metadata_mtime = as.numeric(file.info(metadata$source$artifact_path)$mtime),
+      metadata_bundle_key = metadata$source$bundle_key, input_md5 = hr$identity$input_md5)
+    observed <- .ecoda_load_local_composition(config)
+    contract <- control$cohort_contract[[dataset]]
+    shape <- c(n_samples = length(observed$sample_ids), n_cell_types = ncol(observed$counts),
+      total_cells = sum(observed$total_cells), annotated_cells = sum(observed$annotated_cells))
+    if (!is.list(contract) || !identical(as.character(contract$sample_ids), observed$sample_ids) ||
+        !identical(as.numeric(unlist(contract[names(shape)])), as.numeric(shape)))
+      stop("Current cell-depth sample/count contract mismatch: ", dataset)
+    if (dataset == "Bassez" && !identical(as.numeric(shape), c(26, 40, 74948, 74948)))
+      stop("Current Bassez cell-depth input must contain 26 samples, 40 types and all 74948 cells")
+    if (dataset == "Stephenson") {
+      excluded <- unlist(raw_config[[dataset]]$views$benchmark_analysis$subset_vars$Sample$values)
+      if (length(observed$sample_ids) != 53L || any(observed$sample_ids %in% excluded))
+        stop("Current Stephenson cell-depth input requires the approved 53-sample mask")
+    }
+    configs[[dataset]] <- config
+  }
+  configs
+}
+
+.ecoda_screen_draw <- function(dataset, plan_row, bundle, source_identity) {
+  counts <- as.matrix(bundle$counts) - 0.5
+  ids <- rownames(counts)
+  if (!is.numeric(counts) || !nrow(counts) || !ncol(counts) ||
+      any(!is.finite(counts)) || any(counts < 0) || any(counts != floor(counts)) ||
+      any(rowSums(counts) <= 0) || is.null(ids) || anyDuplicated(ids) ||
+      is.null(colnames(counts)) || anyDuplicated(colnames(counts)) ||
+      !identical(names(bundle$labels), ids)) stop("Invalid compact cell-depth draw")
+  record <- list(dataset = dataset, target = as.character(plan_row$target),
+    target_cells = as.integer(plan_row$target_cells), replicate = as.integer(plan_row$replicate),
+    seed = as.integer(plan_row$seed), source_identity = source_identity,
+    counts = counts, labels = bundle$labels,
+    features_md5 = .ecoda_screen_digest(bundle$feat_mat),
+    distance_md5 = .ecoda_screen_digest(bundle$dist_mat))
+  record$draw_id <- .ecoda_screen_digest(record)
+  record
+}
+
+.ecoda_screen_scores <- function(bundle, draw_id) {
+  values <- vapply(.ecoda_screen_metrics(), function(metric) {
+    value <- bundle$scores[[metric]]
+    if (!is.numeric(value) || length(value) != 1L || !is.finite(value))
+      stop("Cell-depth scorer lacks finite metric ", metric)
+    value
+  }, numeric(1))
+  if (values[["lisi_score"]] < 0 || values[["lisi_score"]] > 1)
+    stop("Cell-depth LISI must already be separation in [0,1]")
+  c(as.list(values), list(draw_id = draw_id))
+}
+
+.ecoda_validate_screen_draws <- function(draws, results) {
+  if (!is.list(draws) || length(draws) != nrow(results) || anyDuplicated(results$draw_id))
+    stop("Cell-depth draw/result identity coverage mismatch")
+  for (i in seq_along(draws)) {
+    draw <- draws[[i]]
+    identity <- draw$draw_id; draw$draw_id <- NULL
+    if (!identical(identity, results$draw_id[i]) ||
+        !identical(identity, .ecoda_screen_digest(draw))) stop("Cell-depth draw fingerprint mismatch")
+    for (field in c("dataset", "target", "replicate", "seed")) {
+      if (!identical(as.character(draw[[field]]), as.character(results[[field]][i])))
+        stop("Cell-depth draw schedule mismatch: ", field)
+    }
+    if (!identical(paste(rownames(draw$counts), collapse = "|"), results$sample_ids[i]) ||
+        sum(draw$counts) != results$effective_cells[i]) stop("Cell-depth draw sample/count mismatch")
+  }
+  invisible(TRUE)
+}
+
+# Rebuild CLR/distances from retained category counts; never call the sampler.
+ecoda_rescore_screen_draws <- function(package) {
+  if (!identical(package$schema, "ecoda_cell_depth_five_v1")) stop("Saved compact draws are required")
+  .ecoda_validate_screen_draws(package$draws, package$results)
+  output <- package
+  output$csv <- NULL # A refreshed publication must bind its newly written CSV.
+  output$draw_origin <- "saved_compact_draw_rescore"
+  output$draws_reused <- TRUE
+  for (i in seq_along(package$draws)) {
+    draw <- package$draws[[i]]
+    bundle <- .ecoda_counts_bundle(draw$counts, draw$labels, rownames(draw$counts), "ECODA_authors_HR_cell_subsetting")
+    if (!identical(.ecoda_screen_digest(bundle$feat_mat), draw$features_md5) ||
+        !identical(.ecoda_screen_digest(bundle$dist_mat), draw$distance_md5))
+      stop("Saved-draw feature/distance definition changed")
+    values <- .ecoda_screen_scores(bundle, draw$draw_id)
+    for (metric in .ecoda_screen_metrics()) output$results[[metric]][i] <- values[[metric]]
+    output$results$ANOSIM[i] <- values$anosim_score
+  }
+  .ecoda_validate_cell_subsetting_results(output$results)
+  output
+}
+
+ecoda_validate_screen_output <- function(args) {
+  if (is.null(args$datasets)) stop("Validation requires exact --datasets")
+  project <- dirname(dirname(dirname(.ecoda_runner_path())))
+  source(file.path(project, "src/utils/analysis_release.R"))
+  raw_config <- jsonlite::fromJSON(args$config_path, simplifyVector = FALSE)
+  selected <- ecoda_select_screen_datasets(ecoda_raw_config_union(raw_config, args$scope), args$datasets)
+  configs <- ecoda_screen_release_sources(args$analysis_release, args$analysis_release_md5, selected, raw_config)
+  output <- .ecoda_path(args$validate_output, must_work = TRUE)
+  rds <- file.path(output, "ECODA_authors_HR_cell_subsetting.rds")
+  csv <- file.path(output, "ECODA_authors_HR_cell_subsetting.csv")
+  .ecoda_validate_output_sidecar(rds); .ecoda_validate_output_sidecar(csv)
+  package <- readRDS(rds)
+  if (!identical(package$schema, "ecoda_cell_depth_five_v1") ||
+      !identical(package$scoring_policy, "calc_sep_score_five_v1_lisi_separation") ||
+      !identical(package$config_md5, .ecoda_md5(args$config_path)) ||
+      !identical(package$runner_md5, .ecoda_md5(.ecoda_runner_path())) ||
+      !identical(package$source_release_md5, args$analysis_release_md5) ||
+      !identical(package$csv$basename, basename(csv)) || !identical(package$csv$md5, .ecoda_md5(csv)))
+    stop("Cell-depth output input/code/CSV policy identity mismatch")
+  manifest_path <- file.path(output, "derived_run_manifest.json")
+  manifest <- jsonlite::fromJSON(manifest_path, simplifyVector = FALSE)
+  ecoda_validate_derived_manifest(manifest)
+  if (!identical(manifest$status, "COMPLETED") ||
+      !identical(unlist(manifest$selected_datasets, use.names = FALSE), selected) ||
+      !identical(package$source_manifest_md5, .ecoda_md5(file.path(output, "derived_source_manifest.json"))))
+    stop("Cell-depth output manifest/selection mismatch")
+  .ecoda_validate_cell_subsetting_results(package$results)
+  .ecoda_validate_screen_draws(package$draws, package$results)
+  if (!setequal(unique(package$results$dataset), selected)) stop("Cell-depth output cohort scope mismatch")
+  for (dataset in selected) {
+    input <- .ecoda_load_local_composition(configs[[dataset]])
+    if (!identical(package$current_inputs[[dataset]], configs[[dataset]]$input_md5))
+      stop("Cell-depth current input lineage changed")
+    draws <- Filter(function(x) identical(x$dataset, dataset), package$draws)
+    for (draw in draws) {
+      if (!identical(draw$source_identity, .ecoda_screen_source_identity(dataset, configs[[dataset]])) ||
+          !identical(rownames(draw$counts), input$sample_ids) ||
+          !identical(colnames(draw$counts), colnames(input$counts)) ||
+          !identical(draw$labels, input$labels) || any(draw$counts > input$counts) ||
+          !identical(as.numeric(rowSums(draw$counts)), as.numeric(if (draw$target == "all cells")
+            rowSums(input$counts) else pmin(rowSums(input$counts), draw$target_cells))))
+        stop("Cell-depth saved draw conflicts with its current count source")
+    }
+  }
+  table <- read.csv(csv, check.names = FALSE)
+  if (!isTRUE(all.equal(table, package$results, check.attributes = FALSE, tolerance = 1e-8)))
+    stop("Cell-depth CSV and RDS scores differ")
+  .ecoda_validate_output_sidecar(rds); .ecoda_validate_output_sidecar(csv)
+  message("ECODA_CELL_DEPTH_VALIDATED=", manifest$run_id)
+  invisible(package)
 }
 
 ecoda_parse_seeds <- function(value = NULL) {
@@ -731,6 +940,8 @@ ECODA_DERIVED_METHODS <- list(
            conditionMessage(error))
     }
   )
+  if (!is.null(source_config$composition_bundle_key) && nzchar(source_config$composition_bundle_key))
+    composition <- composition[[source_config$composition_bundle_key]]
   if (!is.list(composition) || !"counts" %in% names(composition) ||
       !"labels" %in% names(composition)) {
     stop("local HR composition bundle must contain counts and labels")
@@ -813,6 +1024,8 @@ ECODA_DERIVED_METHODS <- list(
            conditionMessage(error))
     }
   )
+  if (!is.null(source_config$metadata_bundle_key) && nzchar(source_config$metadata_bundle_key))
+    metadata <- metadata[[source_config$metadata_bundle_key]]
   if (!is.list(metadata) || is.null(metadata$cells_per_sample)) {
     stop("local metadata bundle is missing cells_per_sample")
   }
@@ -1483,6 +1696,7 @@ ECODA_DERIVED_METHODS <- list(
     sample_ids, original_counts, seeds = seeds
   )
   result_rows <- vector("list", nrow(plan))
+  draws <- vector("list", nrow(plan))
 
   for (plan_row in seq_len(nrow(plan))) {
     target <- plan$target[[plan_row]]
@@ -1502,6 +1716,8 @@ ECODA_DERIVED_METHODS <- list(
     bundle <- .ecoda_counts_bundle(
       counts_sub, labels, sample_ids, method
     )
+    draws[[plan_row]] <- .ecoda_screen_draw(dataset, plan[plan_row, ], bundle,
+      .ecoda_screen_source_identity(dataset, source_config))
     score <- bundle$scores$anosim_score
     if (!is.numeric(score) || length(score) != 1L || !is.finite(score)) {
       stop("cell-subsetting ANOSIM is nonfinite for ", dataset, "/", target)
@@ -1539,23 +1755,28 @@ ECODA_DERIVED_METHODS <- list(
       source_limitation = source_limitation,
       stringsAsFactors = FALSE
     )
+    result_rows[[plan_row]] <- cbind(result_rows[[plan_row]],
+      as.data.frame(.ecoda_screen_scores(bundle, draws[[plan_row]]$draw_id)))
     rm(counts_sub, effective_counts, bundle, score)
   }
 
   result_table <- do.call(rbind, result_rows)
   .ecoda_validate_cell_subsetting_results(result_table)
-  result_table
+  list(results = result_table, draws = draws)
 }
 
 
 
 .ecoda_parse_flags <- function(raw_args) {
   args <- list()
+  allowed <- c("analysis", "scope", "config_path", "input_dir", "output_dir", "composition_snapshot",
+    "composition_dir", "cores", "seeds", "run_id", "analysis_release", "analysis_release_md5", "historical_inputs", "datasets", "validate_output")
   i <- 1L
   while (i <= length(raw_args)) {
     flag <- raw_args[[i]]
     if (!startsWith(flag, "--")) stop("Unexpected positional argument: ", flag)
     name <- sub("^--", "", flag)
+    if (!sub("=.*$", "", name) %in% allowed) stop("Unknown derived-screen argument: ", name)
     if (grepl("=", name, fixed = TRUE)) {
       kv <- strsplit(name, "=", fixed = TRUE)[[1L]]
       if (length(kv) != 2L || !nzchar(kv[[1L]]) || kv[[1L]] %in% names(args)) {
@@ -1864,12 +2085,18 @@ ECODA_DERIVED_METHODS <- list(
     "total_cells_per_sample", "original_cells_per_sample",
     "annotated_cells_per_sample", "effective_cells_per_sample",
     "original_total_cells", "annotated_cells", "total_cells",
-    "effective_cells", "ANOSIM"
+    "effective_cells", "ANOSIM", .ecoda_screen_metrics(), "draw_id"
   )
   if (!is.data.frame(result_table) || !nrow(result_table) ||
       !all(required %in% colnames(result_table))) {
     stop("cell-subsetting result table is incomplete or nonfinite")
   }
+  for (metric in .ecoda_screen_metrics()) {
+    if (!is.numeric(result_table[[metric]]) || any(!is.finite(result_table[[metric]])))
+      stop("Cell-depth results require finite metric ", metric)
+  }
+  if (any(result_table$lisi_score < 0 | result_table$lisi_score > 1) ||
+      !identical(result_table$ANOSIM, result_table$anosim_score)) stop("Invalid cell-depth score policy")
   integer_fields <- c(
     "original_total_cells", "annotated_cells", "total_cells",
     "effective_cells"
@@ -2074,9 +2301,12 @@ ECODA_DERIVED_METHODS <- list(
   )
 }
 .ecoda_run <- function(args) {
+  if (!is.null(args$validate_output)) return(ecoda_validate_screen_output(args))
   .ecoda_clear_in_process_owner()
   snapshot_mode <- !is.null(args$composition_snapshot)
-  composition_mode <- !is.null(args$composition_dir)
+  release_mode <- !is.null(args$analysis_release)
+  if (release_mode && !is.null(args$composition_dir)) stop("Use only one reviewed release or historical composition directory")
+  composition_mode <- !is.null(args$composition_dir) || release_mode
   source_mode <- if (snapshot_mode) {
     "composition_snapshot"
   } else if (composition_mode) {
@@ -2095,7 +2325,7 @@ ECODA_DERIVED_METHODS <- list(
        !nzchar(args$composition_snapshot))) {
     stop("--composition_snapshot must be one non-empty RDS path")
   }
-  if (composition_mode &&
+  if (composition_mode && !release_mode &&
       (identical(args$composition_dir, TRUE) ||
        !is.character(args$composition_dir) ||
        length(args$composition_dir) != 1L ||
@@ -2158,7 +2388,7 @@ ECODA_DERIVED_METHODS <- list(
   } else {
     .ecoda_path(as.character(args$input_dir))
   }
-  composition_dir <- if (composition_mode) {
+  composition_dir <- if (composition_mode && !release_mode) {
     .ecoda_path(as.character(args$composition_dir), must_work = TRUE)
   } else {
     NULL
@@ -2193,7 +2423,7 @@ ECODA_DERIVED_METHODS <- list(
   oldwd <- getwd()
   tryCatch({
     setwd(project_root)
-    if (snapshot_mode) {
+    if (snapshot_mode || composition_mode) {
       if (!requireNamespace("dplyr", quietly = TRUE)) {
         stop("dplyr is required for compact composition scoring")
       }
@@ -2207,6 +2437,7 @@ ECODA_DERIVED_METHODS <- list(
       # Local composition mode needs only the scoring/composition definitions.
       # Avoid loading the full worker graph so this standalone path remains
       # independent of unrelated notebook/helper sources.
+      source(file.path(project_root, "src/utils/analysis_release.R"))
       source(file.path(project_root, "src/utils/math_utils.R"))
       source(file.path(project_root, "src/utils/scoring_metrics.R"))
       source(file.path(
@@ -2238,7 +2469,12 @@ ECODA_DERIVED_METHODS <- list(
 
   raw_config <- jsonlite::fromJSON(config_path, simplifyVector = FALSE)
   if (!is.list(raw_config) || is.null(names(raw_config))) stop("datasets config is not an object")
-  selected <- ecoda_raw_config_union(raw_config, scope = scope)
+  eligible <- ecoda_raw_config_union(raw_config, scope = scope)
+  if (analysis != "cell_subsetting" && !is.null(args$datasets)) stop("--datasets is cell-depth only")
+  selected <- ecoda_select_screen_datasets(eligible, args$datasets)
+  if (analysis == "cell_subsetting" && !snapshot_mode && !release_mode && !identical(args$historical_inputs, "true"))
+    stop("Current cell-depth runs require --analysis_release or checked --composition_snapshot; historical inputs need explicit --historical_inputs true")
+  approved_configs <- if (release_mode) ecoda_screen_release_sources(args$analysis_release, args$analysis_release_md5, selected, raw_config) else NULL
   if (!length(selected)) {
     selected <- if (scope == "debug") "_debug" else character()
   }
@@ -2252,7 +2488,7 @@ ECODA_DERIVED_METHODS <- list(
       config_path = config_path,
       config_md5 = config_md5,
       scope = scope,
-      selected = selected
+      selected = eligible
     )
     snapshot_sources <- snapshot$manifest$sources
     snapshot_source_names <- vapply(
@@ -2395,7 +2631,7 @@ ECODA_DERIVED_METHODS <- list(
         next
       }
       paths <- tryCatch(
-        .ecoda_resolve_local_composition(composition_dir, dataset),
+        if (release_mode) approved_configs[[dataset]] else .ecoda_resolve_local_composition(composition_dir, dataset),
         error = function(error) {
           block(conditionMessage(error))
           NULL
@@ -2432,6 +2668,7 @@ ECODA_DERIVED_METHODS <- list(
         metadata_size = metadata_identity$SIZE,
         metadata_mtime = metadata_identity$MTIME
       )
+      if (release_mode) source_config <- approved_configs[[dataset]]
       preflight_composition <- tryCatch(
         .ecoda_load_local_composition(source_config),
         error = function(error) {
@@ -2473,6 +2710,11 @@ ECODA_DERIVED_METHODS <- list(
         annotated_total_cells =
           as.integer(sum(preflight_composition$annotated_cells))
       )
+      if (release_mode) {
+        latest <- length(source_rows)
+        for (field in c("composition_bundle_key", "metadata_bundle_key", "input_md5"))
+          source_rows[[latest]][[field]] <- source_config[[field]]
+      }
       source_configs[[dataset]] <- source_config
       if (length(preflight_composition$mismatch_samples)) {
         message(
@@ -2494,6 +2736,7 @@ ECODA_DERIVED_METHODS <- list(
     scope = scope,
     source_mode = source_mode,
     requested_cores = as.integer(cores),
+    selected_datasets = selected,
     derived_root = derived_root,
     status = if (length(blocked)) "BLOCKED" else "SOURCES_VERIFIED",
     config_path = config_path,
@@ -2522,6 +2765,7 @@ ECODA_DERIVED_METHODS <- list(
     scope = scope,
     source_mode = source_mode,
     requested_cores = as.integer(cores),
+    selected_datasets = selected,
     status = if (length(blocked)) "BLOCKED" else "RUNNING",
     output_dir = output_dir,
     derived_root = derived_root,
@@ -2566,6 +2810,7 @@ ECODA_DERIVED_METHODS <- list(
   }
 
   artifacts <- list()
+  draw_records <- list()
   if (analysis %in% c("res50", "harmony")) {
     method <- names(ECODA_DERIVED_METHODS[[analysis]])[[1L]]
     method_spec <- ECODA_DERIVED_METHODS[[analysis]][[method]]
@@ -2688,6 +2933,8 @@ ECODA_DERIVED_METHODS <- list(
           bundle <- .ecoda_snapshot_bundle(
             key_rows, labels, sample_ids, method
           )
+          draw <- .ecoda_screen_draw(dataset, plan[plan_row, ], bundle,
+            .ecoda_screen_source_identity(dataset, source_rows[[match(dataset, vapply(source_rows, `[[`, character(1), "dataset"))]]))
           score <- bundle$scores$anosim_score
           if (!is.numeric(score) || length(score) != 1L || !is.finite(score)) {
             stop("cell-subsetting ANOSIM is nonfinite for ", dataset, "/", target)
@@ -2723,7 +2970,9 @@ ECODA_DERIVED_METHODS <- list(
             ANOSIM = as.numeric(score),
             stringsAsFactors = FALSE
           )
-          rm(key_rows, effective_counts, bundle, score)
+          draw_records[[row_index]] <- draw
+          result_rows[[row_index]] <- cbind(result_rows[[row_index]], as.data.frame(.ecoda_screen_scores(bundle, draw$draw_id)))
+          rm(key_rows, effective_counts, bundle, score, draw)
         }
         rm(
           ds_labels, sample_ids, total_counts, annotated_counts,
@@ -2741,8 +2990,12 @@ ECODA_DERIVED_METHODS <- list(
         file.path(output_dir, "ECODA_authors_HR_cell_subsetting.csv"),
         output_dir
       )
-      .ecoda_save_rds(result_table, rds_path)
       .ecoda_save_csv(result_table, csv_path)
+      packaged <- .ecoda_screen_package(result_table, draw_records, source_rows, config_md5, runner_md5, source_manifest_md5,
+        if (snapshot_mode) "persisted_snapshot_counts" else "compact_counts_sampling")
+      packaged$csv <- list(basename = basename(csv_path), md5 = .ecoda_md5(csv_path))
+      packaged$source_release_md5 <- if (release_mode) args$analysis_release_md5 else if (snapshot_mode) snapshot$md5 else NA_character_
+      .ecoda_save_rds(packaged, rds_path)
       .ecoda_validate_output_sidecar(csv_path)
       artifacts[[1L]] <- .ecoda_artifact_record(
         rds_path, "ALL", "ECODA_authors_HR_cell_subsetting"
@@ -2765,6 +3018,10 @@ ECODA_DERIVED_METHODS <- list(
       if (worker_count < 1L) {
         stop("local subsetting requires at least one selected dataset")
       }
+      if (worker_count == 1L) {
+        local_results <- lapply(selected, function(dataset)
+          .ecoda_process_local_dataset(dataset, source_configs[[dataset]], seeds))
+      } else {
       cluster <- NULL
       on.exit(
         if (!is.null(cluster)) {
@@ -2784,7 +3041,8 @@ ECODA_DERIVED_METHODS <- list(
           ".ecoda_load_local_composition", ".ecoda_counts_bundle",
           ".ecoda_local_sample_counts", ".ecoda_validate_bundle",
           ".ecoda_validate_cell_subsetting_results",
-          ".ecoda_process_local_dataset",
+          ".ecoda_process_local_dataset", ".ecoda_screen_metrics", ".ecoda_screen_digest",
+          ".ecoda_screen_source_identity", ".ecoda_screen_draw", ".ecoda_screen_scores",
           "ecoda_subsetting_plan", "ecoda_derived_targets",
           "impute_zeros", "clr", "create_result_bundle",
           "align_result_samples", "calc_sep_score", "calc_sil",
@@ -2793,8 +3051,7 @@ ECODA_DERIVED_METHODS <- list(
         ),
         .packages = c("dplyr"),
         .errorhandling = "stop",
-        .inorder = TRUE,
-        .combine = rbind
+        .inorder = TRUE
       ) %dopar% {
         .ecoda_process_local_dataset(
           dataset = dataset,
@@ -2804,7 +3061,9 @@ ECODA_DERIVED_METHODS <- list(
       }
       parallel::stopCluster(cluster)
       cluster <- NULL
-      result_table <- local_results
+      }
+      result_table <- do.call(rbind, lapply(local_results, `[[`, "results"))
+      draw_records <- do.call(c, lapply(local_results, `[[`, "draws"))
       .ecoda_validate_cell_subsetting_results(result_table)
       rds_path <- .ecoda_output_path(
         file.path(output_dir, "ECODA_authors_HR_cell_subsetting.rds"),
@@ -2814,8 +3073,12 @@ ECODA_DERIVED_METHODS <- list(
         file.path(output_dir, "ECODA_authors_HR_cell_subsetting.csv"),
         output_dir
       )
-      .ecoda_save_rds(result_table, rds_path)
       .ecoda_save_csv(result_table, csv_path)
+      packaged <- .ecoda_screen_package(result_table, draw_records, source_rows, config_md5, runner_md5, source_manifest_md5,
+        if (snapshot_mode) "persisted_snapshot_counts" else "compact_counts_sampling")
+      packaged$csv <- list(basename = basename(csv_path), md5 = .ecoda_md5(csv_path))
+      packaged$source_release_md5 <- if (release_mode) args$analysis_release_md5 else if (snapshot_mode) snapshot$md5 else NA_character_
+      .ecoda_save_rds(packaged, rds_path)
       .ecoda_validate_output_sidecar(csv_path)
       artifacts[[1L]] <- .ecoda_artifact_record(
         rds_path, "ALL", "ECODA_authors_HR_cell_subsetting"
@@ -2881,6 +3144,8 @@ ECODA_DERIVED_METHODS <- list(
           obs = obs_sub
         )
         .ecoda_validate_bundle(bundle, sample_ids, "ECODA_authors_HR_cell_subsetting")
+        draw <- .ecoda_screen_draw(dataset, plan[plan_row, ], bundle,
+          .ecoda_screen_source_identity(dataset, source_rows[[match(dataset, vapply(source_rows, `[[`, character(1), "dataset"))]]))
         score <- bundle$scores$anosim_score
         if (!is.numeric(score) || length(score) != 1L || !is.finite(score)) {
           stop("cell-subsetting ANOSIM is nonfinite for ", dataset, "/", target)
@@ -2912,7 +3177,9 @@ ECODA_DERIVED_METHODS <- list(
           ANOSIM = as.numeric(score),
           stringsAsFactors = FALSE
         )
-        rm(obs_sub, labels, bundle, keep, score)
+        draw_records[[row_index]] <- draw
+        result_rows[[row_index]] <- cbind(result_rows[[row_index]], as.data.frame(.ecoda_screen_scores(bundle, draw$draw_id)))
+        rm(obs_sub, labels, bundle, keep, score, draw)
       }
       rm(
         obs, source_config, sample_values, sample_ids, total_counts,
@@ -2929,8 +3196,10 @@ ECODA_DERIVED_METHODS <- list(
     csv_path <- .ecoda_output_path(
       file.path(output_dir, "ECODA_authors_HR_cell_subsetting.csv"), output_dir
     )
-    .ecoda_save_rds(result_table, rds_path)
     .ecoda_save_csv(result_table, csv_path)
+    packaged <- .ecoda_screen_package(result_table, draw_records, source_rows, config_md5, runner_md5, source_manifest_md5, "sampled_cell_indices")
+    packaged$csv <- list(basename = basename(csv_path), md5 = .ecoda_md5(csv_path))
+    .ecoda_save_rds(packaged, rds_path)
     .ecoda_validate_output_sidecar(csv_path)
     artifacts[[1L]] <- .ecoda_artifact_record(
       rds_path, "ALL", "ECODA_authors_HR_cell_subsetting"
@@ -2941,6 +3210,16 @@ ECODA_DERIVED_METHODS <- list(
     }
   }
 
+  if (analysis == "cell_subsetting") {
+    for (source in source_rows) if (!is.null(source$composition_path)) {
+      if (!identical(.ecoda_md5(source$composition_path), source$composition_md5) ||
+          !identical(.ecoda_md5(source$metadata_path), source$metadata_md5))
+        stop("Cell-depth input changed during scoring")
+    }
+    if (release_mode) .analysis_checked_file(args$analysis_release, args$analysis_release_md5)
+    if (snapshot_mode && !identical(.ecoda_md5(snapshot$path), snapshot$md5))
+      stop("Cell-depth snapshot changed during scoring")
+  }
   run_manifest$status <- "COMPLETED"
   run_manifest$artifacts <- artifacts
   ecoda_validate_derived_manifest(run_manifest, required_sources = TRUE)

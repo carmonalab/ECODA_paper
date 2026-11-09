@@ -190,21 +190,26 @@ ds_stats_list <- split(release_statistics, release_statistics$dataset)
 ds_stats_df <- bind_rows(ds_stats_list)
 # All additional method variants must be explicit rows in the same ledger.
 # No independent derived-root opt-in may append an unreviewed generation.
-path_derived_cell_subsetting <- .derived_requested_root("ECODA_DERIVED_CELL_SUBSETTING_DIR", "cell-subsetting")
-cell_subsetting_requested <- !is.null(path_derived_cell_subsetting)
+cell_depth_release_path <- Sys.getenv("ECODA_CELL_DEPTH_RELEASE_RDS", unset = "")
+cell_depth_release_md5 <- Sys.getenv("ECODA_CELL_DEPTH_RELEASE_MD5", unset = "")
+cell_subsetting_requested <- nzchar(cell_depth_release_path)
 cell_subsetting_results <- NULL
+if (nzchar(Sys.getenv("ECODA_DERIVED_CELL_SUBSETTING_DIR", unset = "")))
+  stop("Historical cell-depth directories cannot qualify as the current five-metric release; use ECODA_CELL_DEPTH_RELEASE_RDS/MD5")
 if (cell_subsetting_requested) {
-  expected_samples_by_dataset <- setNames(lapply(names(datasets), function(ds) {
-    names(result_list$bmark[[ds]][[benchmark_control$reference_method_key[[ds]]]]$labels)
+  expected_labels_by_dataset <- setNames(lapply(names(datasets), function(ds)
+    result_list$bmark[[ds]][[benchmark_control$reference_method_key[[ds]]]]$labels), names(datasets))
+  expected_samples_by_dataset <- lapply(expected_labels_by_dataset, names)
+  expected_current_inputs <- setNames(lapply(names(datasets), function(ds) {
+    rows <- benchmark_control$expected_scope[benchmark_control$expected_scope$dataset == ds &
+      benchmark_control$expected_scope$view == "benchmark_analysis" &
+      benchmark_control$expected_scope$method_key == "ECODA_authors_HR", , drop = FALSE]
+    if (nrow(rows) != 1L) stop("Cell-depth input requires the current reviewed HR identity: ", ds)
+    rows$current_input_md5[[1L]]
   }), names(datasets))
-  # This separate, explicitly opted-in diagnostic does not append method rows
-  # to the reviewed benchmark comparison.
-  cell_subsetting_results <- load_derived_cell_subsetting(
-    rds_path = .derived_run_artifact_path(path_derived_cell_subsetting,
-      "ECODA_authors_HR_cell_subsetting.rds", "cell-subsetting RDS"),
-    csv_path = .derived_run_artifact_path(path_derived_cell_subsetting,
-      "ECODA_authors_HR_cell_subsetting.csv", "cell-subsetting CSV"),
-    expected_datasets = names(datasets), expected_samples_by_dataset = expected_samples_by_dataset)
+  cell_subsetting_results <- load_derived_cell_subsetting(NULL, NULL, names(datasets), expected_samples_by_dataset,
+    release_control_path = cell_depth_release_path, release_control_md5 = cell_depth_release_md5,
+    expected_labels_by_dataset = expected_labels_by_dataset, expected_current_inputs = expected_current_inputs)
 }
 
 ```
@@ -1295,7 +1300,10 @@ their first letter, and rotates them 45° with extra left margin.
 The `_noharmony.pdf` variant additionally excludes Harmony Leiden resolution 2,
 retaining the remaining methods, their order, and the paired comparisons.
 
-### Supp fig 18: paired annotation-method Modularity and ARI comparison
+### Supp fig 18: paired annotation-method metric companions
+
+Modularity (k=3), ARI, Silhouette and LISI separation complement Figure 3A's
+explicit raw ANOSIM panel. These panels retain each metric's original units.
 
 
 ```{r fig.height=6, fig.width=5}
@@ -1464,13 +1472,23 @@ ggsave(file.path(path_plots, "benchmark_summary_barplot_ari_annotationmethods_re
        height = 4)
 
 
-supp_fig_18_annotation <- wrap_plots(list(p_mod, p_ari)) +
-  plot_layout(nrow = 1, guides = "collect")
+annotation_metric_scores <- prepare_evaluation_plot_data(df_benchmark, filter_methods,
+  expected_grid = benchmark_expected_grid) %>%
+  flag_drop_annotation_methods() %>% apply_method_labels(method_label_map_annotation)
+p_annotation_sil <- plot_benchmark_raw_metric(annotation_metric_scores, "sil_score",
+  method_order = annotation_method_order, reference = "ECODA_authors_HR")
+p_annotation_lisi <- plot_benchmark_raw_metric(annotation_metric_scores, "lisi_score",
+  method_order = annotation_method_order, reference = "ECODA_authors_HR")
+ggsave(file.path(path_plots, "Supp_fig_18_annotationmethods_barplot_sil_lisi.pdf"),
+  plot = wrap_plots(list(p_annotation_sil, p_annotation_lisi), nrow = 1, guides = "collect"),
+  width = 9, height = 5)
+supp_fig_18_annotation <- wrap_plots(list(p_mod, p_ari, p_annotation_sil, p_annotation_lisi)) +
+  plot_layout(ncol = 2, guides = "collect")
 print(supp_fig_18_annotation)
 ggsave(file.path(path_plots, "Supp_fig_18_annotationmethods_barplot_mod_ari.pdf"),
        plot = supp_fig_18_annotation,
        width = 9,
-       height = 5)
+       height = 10)
 
 ```
 ### Figure X3 B: Number of cell types by annotation method
@@ -2210,7 +2228,9 @@ ggsave(file.path(path_plots, "Figure_4_AB_featureselectionHVC_barplot_anosim.pdf
        height = 6)
 ```
 
-#### Supp fig 20: HVC Mod + ARI
+#### Supp fig 20: HVC metric companions
+
+The four raw metric panels complement Figure 4AB's explicit ANOSIM diagnostic.
 
 ```{r fig.height=3.5, fig.width=8}
 p3 <- df_benchmark_sub %>%
@@ -2244,8 +2264,15 @@ p4 <- df_benchmark_sub %>%
 print(p4)
 
 
-# Combine the plots vertically
-combined_plot <- (p3 + p4) + 
+benchmark_validate_screen_scores(df_benchmark_sub)
+p_hvc_sil <- plot_benchmark_raw_metric(df_benchmark_sub, "sil_score",
+  method_order = levels(df_benchmark_sub$method), x_label = "Variance explained (%)")
+p_hvc_lisi <- plot_benchmark_raw_metric(df_benchmark_sub, "lisi_score",
+  method_order = levels(df_benchmark_sub$method), x_label = "Variance explained (%)")
+ggsave(file.path(path_plots, "Supp_fig_20_featureselectionHVC_barplot_sil_lisi.pdf"),
+  plot = wrap_plots(list(p_hvc_sil, p_hvc_lisi), nrow = 1, guides = "collect"),
+  width = 8, height = 3.5)
+combined_plot <- wrap_plots(list(p3, p4, p_hvc_sil, p_hvc_lisi), ncol = 2) +
   plot_layout(guides = "collect") +
   plot_annotation(tag_levels = 'A') & 
   theme(
@@ -2258,7 +2285,7 @@ combined_plot <- (p3 + p4) +
 print(combined_plot)
 ggsave(file.path(path_plots, "Supp_fig_20_featureselectionHVC_barplot_mod_ari.pdf"),
        width = 8,
-       height = 3.5)
+       height = 7)
 ```
 
 ### Show example PCAs
@@ -3446,40 +3473,30 @@ ggsave(
 
 # Supp fig 16 A: Plot normalization results
 
+Only reviewed new transformation outputs with the versioned five-metric policy
+qualify. Modularity uses k=3; LISI is already higher-is-better separation.
+ALR_minCVref selects the minimum-CV reference, and ALR_randref uses its recorded
+seeded random reference. Historical summaries with reversed ALR mappings or
+missing metrics are rejected rather than relabeled.
+
 ## Plot results
 
 ```{r}
-if (length(result_list[["trans"]]) == 0) {
-  stop("No transformation-analysis results found (result_list$trans is empty).",
-       "\nRun the HPC trans pipeline first (run_transformation_zeroimp_analysis/).")
-}
-
-# Per-dataset trans bundles are summarized data.frames without a dataset
-# column; add it here so the paired lines/points below can group by dataset.
-df_normalization <- imap_dfr(result_list[["trans"]], ~ mutate(.x, dataset = .y)) %>%
+df_normalization <- benchmark_transformation_scores(benchmark_release, names(datasets)) %>%
   mutate(
     trans_method = recode(
-      trans_method,
+      method,
       "clr" = "CLR",
       "alr_mincvref" = "ALR_minCVref",
       "alr_randref" = "ALR_randref",
       "arcsine_sqrt" = "Arcsine_sqrt",
       "counts" = "Counts",
-      "freq" = "Frequency%"
+      "freq" = "Frequency(%)"
     )
   )
 
-df_normalization <- df_normalization %>%
-  pivot_longer(
-    cols = c(ANOSIM_score, Modularity_score, Adjusted_Rand_Index),
-    names_to = "score",
-    values_to = "value"
-  ) %>%
-  as.data.frame()
-
-
 df_normalization_anosim <- df_normalization %>%
-  filter(score == "ANOSIM_score") %>%
+  filter(score == "anosim_score") %>%
   group_by(trans_method) %>%
   summarize(mean = mean(value), sem = sd(value) / sqrt(length(value)))
 
@@ -3500,7 +3517,7 @@ df_results_list[["Normalization"]] <- df_normalization
 
 
 p1 <- df_normalization %>%
-  filter(score == "ANOSIM_score") %>%
+  filter(score == "anosim_score") %>%
 
   ggplot(aes(x = trans_method, y = value)) +
   stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
@@ -3528,6 +3545,16 @@ ggsave(
   width = 2.5,
   height = 3.5
 )
+transformation_companion_scores <- df_normalization %>% mutate(method = as.character(trans_method))
+transformation_companions <- lapply(setdiff(evaluation_metrics(), "anosim_score"), function(metric) {
+  panel <- plot_benchmark_raw_metric(transformation_companion_scores, metric,
+    method_order = levels(df_normalization$trans_method), reference = "CLR")
+  ggsave(file.path(path_plots, paste0("Supp_fig_16A_transformations_", metric, ".pdf")),
+    plot = panel, width = 5, height = 4)
+  panel
+})
+ggsave(file.path(path_plots, "Supp_fig_16A_transformations_metric_companions.pdf"),
+  plot = wrap_plots(transformation_companions, ncol = 2, guides = "collect"), width = 10, height = 8)
 
 
 df_normalization %>%
@@ -3567,7 +3594,7 @@ my_comparisons <- list(
 )
 
 df_normalization %>%
-  filter(score == "ANOSIM_score") %>%
+  filter(score == "anosim_score") %>%
   filter(trans_method %in% c("Counts", "Frequency(%)", "CLR")) %>%
 
   ggplot(aes(
@@ -3643,7 +3670,7 @@ ggsave(
 )
 
 df_normalization_anosim <- df_normalization %>%
-  filter(score == "ANOSIM_score")
+  filter(score == "anosim_score")
 
 df_normalization_anosim <- df_normalization_anosim[
   !grepl("pca", df_normalization_anosim$trans_method),
@@ -3719,38 +3746,9 @@ ggplot(df_normalization_anosim, aes(x = trans_method, y = value)) +
 ## Plot results
 
 ```{r}
-zeroimp_result_list <- result_list[["zeroimp"]]
-if (length(zeroimp_result_list) == 0) {
-  stop("No zero-imputation results found (result_list$zeroimp is empty).",
-       "\nRun the HPC zeroimp pipeline first (run_transformation_zeroimp_analysis/).")
-}
-
-df_zeroimp <- imap_dfr(zeroimp_result_list, ~ {
-  dataset_name <- .y
-  imap_dfr(.x, function(method_value, method_name) {
-    if (is.list(method_value) && !is.data.frame(method_value)) {
-      if (length(method_value) == 1 && is.list(method_value[[1]])) {
-        method_value <- method_value[[1]]
-      }
-      if (!all(sapply(method_value, is.numeric))) {
-        message(
-          "Dropping non-numeric zeroimp rows for ", dataset_name, "/",
-          method_name
-        )
-        return(tibble())
-      }
-    }
-    imap_dfr(method_value, ~ tibble(
-      dataset = dataset_name,
-      method = method_name,
-      score = .y,
-      value = as.numeric(.x)
-    ))
-  })
-})
-
-df_zeroimp <- df_zeroimp[!grepl("impRZilr", df_zeroimp$method), ]
-df_zeroimp <- df_zeroimp[!df_zeroimp$score == "mod_score", ]
+df_zeroimp <- benchmark_zeroimp_scores(benchmark_release, names(datasets))
+# Canonical five only: extra stored neighborhood modularities are diagnostics,
+# and cannot add panels or replace a missing k=3 score.
 
 df_results_list[["Zero_imputation"]] <- df_zeroimp
 
@@ -3795,6 +3793,17 @@ print(p2)
 ggsave(file.path(path_plots, "Supp_fig_16B_zero_replacement_anosim.pdf"),
        width = 7.5,
        height = 4)
+
+zeroimp_companion_scores <- df_zeroimp %>% filter(method != "asinsqrt", !grepl("perc", method))
+zeroimp_companions <- lapply(setdiff(evaluation_metrics(), "anosim_score"), function(metric) {
+  panel <- plot_benchmark_raw_metric(zeroimp_companion_scores, metric,
+    method_order = levels(droplevels(zeroimp_companion_scores$method)), reference = "counts_all_0.5")
+  ggsave(file.path(path_plots, paste0("Supp_fig_16B_zero_replacement_", metric, ".pdf")),
+    plot = panel, width = 7.5, height = 4)
+  panel
+})
+ggsave(file.path(path_plots, "Supp_fig_16B_zero_replacement_metric_companions.pdf"),
+  plot = wrap_plots(zeroimp_companions, ncol = 2, guides = "collect"), width = 15, height = 8)
 
 
 
@@ -4083,101 +4092,48 @@ for (i in seq_len(nrow(ds_stats_df))) {
 
 # Supp fig X: ECODA author annotation sensitivity to cell depth
 
-```{r fig.width=4.5, fig.height=3.6}
+The checked counts-only release retains all five raw separation metrics for
+one all-cells baseline and 20 draws at each of nine depths (seeds 101–120).
+Compact category counts, exact sample labels and draw/source fingerprints are
+saved, so later metric refreshes need no draw replay. This is not summary-only
+rescoring of the historical ANOSIM table. Current Bassez uses all 74,948 cells,
+26 samples and 40 types; current Stephenson uses the approved 53 samples.
+
+Each panel displays one raw metric, never a mixture of raw metric scales.
+Dataset points first average the 20 replicates (the baseline has one row);
+bars and standard errors then weight datasets equally. No RNA preprocessing,
+model fitting or resampling occurs in this reporting chunk.
+
+```{r fig.width=14, fig.height=9}
 if (isTRUE(cell_subsetting_requested) && !is.null(cell_subsetting_results)) {
-cell_subsetting_targets <- c(
-  "all cells", "2000", "1000", "500", "400",
-  "300", "200", "150", "100", "50"
-)
-
-cell_subsetting_dataset_means <- cell_subsetting_results$results %>%
-  mutate(
-    target = factor(target, levels = cell_subsetting_targets),
-    dataset_display = if_else(
-      dataset == "Gongsharma_cmv_young_males",
-      "GongSharma",
-      as.character(dataset)
-    )
-  ) %>%
-  group_by(dataset, dataset_display, target) %>%
-  summarise(
-    anosim = mean(anosim),
-    .groups = "drop"
-  )
-
-cell_subsetting_aggregate <- cell_subsetting_dataset_means %>%
-  group_by(target) %>%
-  summarise(
-    mean_anosim = mean(anosim),
-    se_anosim = sd(anosim) / sqrt(n()),
-    .groups = "drop"
-  )
-
-p_cell_subsetting <- ggplot() +
-  # Draw error bars first so the bars cover their redundant central segment.
-  geom_errorbar(
-    data = cell_subsetting_aggregate,
-    aes(
-      x = target,
-      ymin = mean_anosim - se_anosim,
-      ymax = mean_anosim + se_anosim
-    ),
-    width = 0.2
-  ) +
-  geom_col(
-    data = cell_subsetting_aggregate,
-    aes(x = target, y = mean_anosim),
-    fill = "white",
-    color = "black",
-    width = 0.9
-  ) +
-  geom_point(
-    data = cell_subsetting_dataset_means,
-    aes(
-      x = target,
-      y = anosim,
-      shape = dataset_display,
-      color = dataset_display
-    ),
-    size = pointsize
-  ) +
-  scale_shape_manual(
-    values = seq_along(unique(cell_subsetting_dataset_means$dataset_display))
-  ) +
-  geom_line(
-    data = cell_subsetting_dataset_means,
-    aes(
-      x = target,
-      y = anosim,
-      group = dataset_display,
-      color = dataset_display,
-      linetype = dataset_display
-    ),
-    alpha = 1
-  ) +
-  scale_x_discrete(
-    limits = cell_subsetting_targets,
-    drop = FALSE
-  ) +
-  labs(
-    x = "Cells per sample",
-    y = "Separation score (ANOSIM)",
-    color = "Dataset",
-    shape = "Dataset",
-    linetype = "Dataset"
-  ) +
-  theme_classic() +
-  theme(axis.text.x = element_text(angle = 65, vjust = 1, hjust = 1))
-
-print(p_cell_subsetting)
-ggsave(
-  file.path(path_plots, "Supp_fig_X_ECODA_authors_HR_cell_subsetting.pdf"),
-  width = 4.5,
-  height = 3.6
-)
+  cell_subsetting_targets <- c("all cells", "2000", "1000", "500", "400", "300", "200", "150", "100", "50")
+  cell_subsetting_dataset_means <- cell_subsetting_results$results %>%
+    pivot_longer(all_of(evaluation_metrics()), names_to = "metric", values_to = "value") %>%
+    mutate(target = factor(target, levels = cell_subsetting_targets),
+      dataset_display = if_else(dataset == "Gongsharma_cmv_young_males", "GongSharma", as.character(dataset)),
+      metric = factor(metric, levels = evaluation_metrics())) %>%
+    group_by(dataset, dataset_display, target, metric) %>%
+    summarise(value = mean(value), .groups = "drop")
+  cell_subsetting_aggregate <- cell_subsetting_dataset_means %>%
+    group_by(target, metric) %>%
+    summarise(value = mean(value), se = sd(value) / sqrt(n()), .groups = "drop")
+  p_cell_subsetting <- ggplot() +
+    geom_errorbar(data = cell_subsetting_aggregate,
+      aes(target, ymin = value - se, ymax = value + se), width = .2) +
+    geom_col(data = cell_subsetting_aggregate, aes(target, value), fill = "white", color = "black", width = .9) +
+    geom_point(data = cell_subsetting_dataset_means, aes(target, value, shape = dataset_display, color = dataset_display), size = 1.5) +
+    geom_line(data = cell_subsetting_dataset_means, aes(target, value, group = dataset_display,
+      color = dataset_display, linetype = dataset_display)) +
+    scale_shape_manual(values = seq_along(unique(cell_subsetting_dataset_means$dataset_display))) +
+    scale_x_discrete(limits = cell_subsetting_targets, drop = FALSE) +
+    facet_wrap(~metric, scales = "free_y", ncol = 3, labeller = as_labeller(score_facet_labels)) +
+    labs(x = "Cells per sample", y = "Raw separation (higher is better)", color = "Dataset", shape = "Dataset", linetype = "Dataset") +
+    theme_classic() + theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom")
+  print(p_cell_subsetting)
+  ggsave(file.path(path_plots, "Supp_fig_X_ECODA_authors_HR_cell_subsetting.pdf"),
+    plot = p_cell_subsetting, width = 14, height = 9)
 }
 ```
-
 
 # Exploratory Stephenson UCell activity versus ECODA
 

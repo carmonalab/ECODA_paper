@@ -152,6 +152,112 @@ read_benchmark_execution_times <- function(control) {
   normalize_exec_times(frame)
 }
 
+# These supplements show raw metrics individually. Validate all five before
+# display recoding or plotting; diagnostic modularities cannot replace k=3.
+benchmark_validate_screen_scores <- function(frame) {
+  fields <- c("dataset", "method", "score", "value")
+  if (!is.data.frame(frame) || !all(fields %in% names(frame))) stop("Malformed supplemental score table")
+  core <- as.data.frame(frame[fields])
+  core$view <- "benchmark_analysis"
+  core$evaluation_id <- "primary"
+  core$method_key <- as.character(core$method)
+  core$metric <- as.character(core$score)
+  grid <- merge(unique(core[c("dataset", "view", "evaluation_id")]),
+    expand.grid(method_key = unique(core$method_key), metric = evaluation_metrics(), stringsAsFactors = FALSE), by = NULL)
+  aggregate_evaluation_scores(core, grid)
+  lisi <- core$value[core$metric == "lisi_score"]
+  if (any(lisi < 0 | lisi > 1)) stop("Supplemental LISI must use the higher-is-better separation scale")
+  frame
+}
+
+plot_benchmark_raw_metric <- function(frame, metric, method_order = unique(as.character(frame$method)),
+                                      x_label = "", reference = NULL) {
+  frame <- benchmark_validate_screen_scores(frame)
+  if (!metric %in% evaluation_metrics() || !setequal(method_order, unique(as.character(frame$method))))
+    stop("Supplemental metric or method order differs from the complete comparison")
+  frame <- frame[frame$score == metric, , drop = FALSE]
+  frame$method <- factor(frame$method, levels = method_order)
+  panel <- ggplot2::ggplot(frame, ggplot2::aes(x = method, y = value)) +
+    ggplot2::stat_summary(fun.data = "mean_se", geom = "errorbar", width = 0.2) +
+    ggplot2::stat_summary(fun = mean, geom = "bar", fill = "white", color = "black") +
+    ggplot2::geom_point(ggplot2::aes(shape = dataset, color = dataset), size = 1.5) +
+    ggplot2::scale_shape_manual(values = seq_along(unique(frame$dataset))) +
+    ggplot2::geom_line(ggplot2::aes(group = dataset, color = dataset)) +
+    ggplot2::labs(x = x_label, y = paste("Raw", score_facet_labels[[metric]])) +
+    ggplot2::theme_classic() +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 65, vjust = 1, hjust = 1))
+  if (!is.null(reference)) {
+    if (!reference %in% method_order) stop("Supplemental reference method is absent")
+    panel <- panel + ggpubr::stat_compare_means(ref.group = reference,
+      method = "wilcox.test", paired = TRUE, method.args = list(exact = FALSE),
+      ggplot2::aes(label = ggplot2::after_stat(p.signif)), size = 3)
+  }
+  panel
+}
+
+benchmark_reviewed_screen_rows <- function(release, analysis, datasets) {
+  if (!analysis %in% c("trans", "zeroimp") || !is.list(release$loaded) || !length(datasets) || anyDuplicated(datasets))
+    stop("Explicit reviewed supplemental release and dataset scope are required")
+  key <- paste0("__", analysis, "__")
+  items <- release$loaded[vapply(release$loaded, function(x)
+    identical(x$source$method_key, key) && identical(x$source$view, "benchmark_analysis") &&
+      x$source$dataset %in% datasets, logical(1))]
+  selected <- vapply(items, function(x) x$source$dataset, character(1))
+  if (anyDuplicated(selected) || !setequal(selected, datasets))
+    stop("Every selected dataset requires its explicit reviewed ", key, " ledger row")
+  for (item in items) {
+    .analysis_checked_file(item$source$artifact_path, item$source$md5)
+    .analysis_checked_file(item$source$receipt_path, item$source$receipt_md5)
+    if (!identical(item$receipt$status, "reviewed") ||
+        (analysis == "trans" && !identical(item$receipt$origin, "new")))
+      stop("Transformation screens require the reviewed new producer; no historical summary fallback")
+  }
+  items[match(datasets, selected)]
+}
+
+benchmark_zeroimp_scores <- function(release, datasets) {
+  items <- benchmark_reviewed_screen_rows(release, "zeroimp", datasets)
+  frames <- list()
+  for (item in items) {
+    methods <- item$result
+    if (!is.list(methods) || !length(methods) || is.null(names(methods)) ||
+        anyDuplicated(names(methods)) || any(!nzchar(names(methods)))) stop("Malformed reviewed zero-imputation results")
+    for (method in names(methods)) {
+      values <- methods[[method]]
+      if (is.list(values) && length(values) == 1L && is.list(values[[1L]])) values <- values[[1L]]
+      metrics <- evaluation_metrics()
+      if (!is.list(values) || anyDuplicated(names(values)) || !all(metrics %in% names(values)))
+        stop("Zero-imputation method lacks the canonical five metrics: ", method)
+      values <- vapply(values[metrics], function(x) {
+        if (!is.numeric(x) || length(x) != 1L || !is.finite(x)) stop("Nonfinite zero-imputation metric")
+        x
+      }, numeric(1))
+      frames[[length(frames) + 1L]] <- data.frame(dataset = item$source$dataset,
+        method = method, score = metrics, value = unname(values))
+    }
+  }
+  benchmark_validate_screen_scores(do.call(rbind, frames))
+}
+
+benchmark_transformation_scores <- function(release, datasets) {
+  if (!exists("validate_transformation_result", mode = "function") ||
+      !exists("transformation_analysis_policy", mode = "function"))
+    stop("Source the versioned transformation producer's pure validator before reporting")
+  items <- benchmark_reviewed_screen_rows(release, "trans", datasets)
+  columns <- transformation_analysis_policy()$score_columns
+  frames <- list()
+  for (item in items) {
+    table <- item$result
+    validate_transformation_result(table)
+    for (i in seq_len(nrow(table))) {
+      frames[[length(frames) + 1L]] <- data.frame(dataset = item$source$dataset,
+        method = table$trans_method[i], score = names(columns),
+        value = vapply(unname(columns), function(column) table[[column]][i], numeric(1)))
+    }
+  }
+  benchmark_validate_screen_scores(do.call(rbind, frames))
+}
+
 # Derived-run loading
 # Strict loader for local, run-owned derived analyses.  A derived RDS is never
 # trusted from its filename alone: the completed run record, source manifest,
@@ -1450,11 +1556,46 @@ load_derived_cell_subsetting <- function(
   rds_path,
   csv_path,
   expected_datasets,
-  expected_samples_by_dataset
+  expected_samples_by_dataset,
+  release_control_path = NULL, release_control_md5 = NULL,
+  expected_labels_by_dataset = NULL, expected_current_inputs = NULL
 ) {
-  rds_path <- .derived_resolve_path(rds_path)
-  csv_path <- .derived_resolve_path(csv_path)
-  context <- .derived_run_context(rds_path, expected_analysis = "cell_subsetting")
+  portable <- !is.null(release_control_path)
+  if (portable) {
+    if (!all(expected_datasets %in% names(expected_current_inputs)) ||
+        !all(expected_datasets %in% names(expected_labels_by_dataset)) ||
+        any(!vapply(expected_current_inputs[expected_datasets], function(x)
+          is.character(x) && length(x) == 1L && !is.na(x) && grepl("^[a-f0-9]{32}$", x), logical(1))))
+      stop("Current cell-depth reading requires explicit current input hashes and named labels")
+    .analysis_checked_file(release_control_path, release_control_md5)
+    control <- readRDS(release_control_path)
+    .analysis_checked_file(release_control_path, release_control_md5)
+    if (nrow(control$expected_scope) != 1L ||
+        !isTRUE(control$expected_scope$require_new) ||
+        control$expected_scope$method_key != "ECODA_authors_HR_cell_subsetting")
+      stop("Current cell-depth output requires one required-new reviewed artifact")
+    entries <- load_analysis_release(control$ledger, control$expected_scope)
+    entry <- entries[[1L]]; raw <- entry$result; rds_path <- entry$source$artifact_path
+    if (!identical(raw$schema, "ecoda_cell_depth_five_v1") ||
+        !identical(raw$scoring_policy, evaluation_scoring_policy()) ||
+        !identical(raw$source_release_md5, entry$identity$input_md5))
+      stop("Current cell-depth source/scoring identity mismatch")
+    for (dataset in expected_datasets) {
+      if (!identical(raw$current_inputs[[dataset]], expected_current_inputs[[dataset]]))
+        stop("Cell-depth output does not use the current approved input: ", dataset)
+    }
+    name <- raw$csv$basename
+    if (!is.character(name) || length(name) != 1L || is.na(name) ||
+        !identical(basename(name), name) || name %in% c(".", ".."))
+      stop("Cell-depth CSV requires an explicit safe relative basename")
+    csv_path <- file.path(dirname(rds_path), name)
+    .analysis_checked_file(csv_path, raw$csv$md5)
+    context <- list(sources = raw$sources, source_mode = "reviewed_screen", artifact = entry$source)
+  } else {
+    rds_path <- .derived_resolve_path(rds_path)
+    csv_path <- .derived_resolve_path(csv_path)
+    context <- .derived_run_context(rds_path, expected_analysis = "cell_subsetting")
+  }
   expected_datasets <- as.character(expected_datasets)
   if (length(expected_datasets) == 0L || anyDuplicated(expected_datasets)) {
     stop("Invalid expected datasets for cell-subsetting results.")
@@ -1464,6 +1605,7 @@ load_derived_cell_subsetting <- function(
       !setequal(source_datasets, expected_datasets)) {
     stop("Cell-subsetting source manifest does not cover the expected datasets.")
   }
+  if (!portable) {
   rds_records <- Filter(function(x) identical(x$path, rds_path), context$artifacts)
   csv_records <- Filter(function(x) identical(x$path, csv_path), context$artifacts)
   if (length(rds_records) != 1L || length(csv_records) != 1L) {
@@ -1482,6 +1624,7 @@ load_derived_cell_subsetting <- function(
     error = function(e) stop("Could not read cell-subsetting RDS: ",
                              conditionMessage(e))
   )
+  }
   results <- if (is.data.frame(raw)) {
     raw
   } else if (is.list(raw) && is.data.frame(raw$results)) {
@@ -1490,6 +1633,42 @@ load_derived_cell_subsetting <- function(
     stop("Cell-subsetting RDS must contain a results data.frame.")
   }
   rds_table <- results
+  if (portable) {
+    if (!all(c(evaluation_metrics(), "draw_id") %in% names(results)) ||
+        !is.list(raw$draws) || length(raw$draws) != nrow(results) || anyDuplicated(results$draw_id))
+      stop("Current cell-depth release lacks all five metrics and exact saved draws")
+    for (metric in evaluation_metrics()) {
+      if (!is.numeric(results[[metric]]) || any(!is.finite(results[[metric]])))
+        stop("Cell-depth release has missing/nonfinite metric ", metric)
+    }
+    if (any(results$lisi_score < 0 | results$lisi_score > 1) ||
+        !identical(results$anosim_score, results$ANOSIM)) stop("Cell-depth score policy mismatch")
+    for (i in seq_along(raw$draws)) {
+      draw <- raw$draws[[i]]; identity <- draw$draw_id; draw$draw_id <- NULL
+      if (!identical(identity, results$draw_id[i]) || !identical(identity, .evaluation_fingerprint(draw)))
+        stop("Cell-depth saved draw identity mismatch")
+      for (field in c("dataset", "target", "replicate", "seed")) {
+        if (!identical(as.character(draw[[field]]), as.character(results[[field]][i])))
+          stop("Cell-depth saved draw schedule mismatch")
+      }
+      counts <- draw$counts; ids <- expected_samples_by_dataset[[draw$dataset]]
+      source <- Filter(function(x) identical(x$dataset, draw$dataset), raw$sources)
+      fields <- c("composition_path", "composition_md5", "composition_bundle_key", "metadata_path",
+        "metadata_md5", "metadata_bundle_key", "input_md5", "h5ad_path", "h5ad_md5")
+      if (length(source) != 1L || !identical(draw$source_identity,
+          .evaluation_fingerprint(c(list(dataset = draw$dataset), source[[1]][intersect(fields, names(source[[1]]))]))))
+        stop("Cell-depth draw does not bind its declared source")
+      if (!is.matrix(counts) || !is.numeric(counts) || any(!is.finite(counts)) ||
+          any(counts < 0) || any(counts != floor(counts)) || any(rowSums(counts) <= 0) ||
+          !identical(rownames(counts), ids) || sum(counts) != results$effective_cells[i] ||
+          !identical(as.character(draw$labels), as.character(expected_labels_by_dataset[[draw$dataset]][ids])) ||
+          !identical(names(draw$labels), ids)) stop("Cell-depth draw counts/labels disagree with current cohort")
+      if (draw$target == "all cells" && draw$dataset == "Bassez" &&
+          (nrow(counts) != 26L || ncol(counts) != 40L || sum(counts) != 74948L))
+        stop("Stale Bassez cell-depth population")
+      if (draw$dataset == "Stephenson" && nrow(counts) != 53L) stop("Stale Stephenson cell-depth sample universe")
+    }
+  }
   required <- c(
     "dataset", "target", "target_cells", "replicate", "seed", "sample_ids",
     "original_cells_per_sample", "effective_cells_per_sample",
@@ -1664,7 +1843,7 @@ load_derived_cell_subsetting <- function(
       nrow(csv) != nrow(rds_table)) {
     stop("Cell-subsetting CSV does not match the RDS result table.")
   }
-  exact_columns <- setdiff(names(rds_table), c("seed", "ANOSIM"))
+  exact_columns <- setdiff(names(rds_table), c("seed", "ANOSIM", if (portable) evaluation_metrics()))
   for (column in exact_columns) {
     if (!identical(as.character(csv[[column]]),
                    as.character(rds_table[[column]]))) {
@@ -1692,6 +1871,15 @@ load_derived_cell_subsetting <- function(
   if (any(abs(csv_anosim - results$anosim) >
           anosim_tolerance * pmax(1, abs(results$anosim)))) {
     stop("Cell-subsetting CSV ANOSIM diagnostics do not match the RDS result table.")
+  }
+  if (portable) {
+    for (metric in evaluation_metrics()) {
+      if (!is.numeric(csv[[metric]]) || any(!is.finite(csv[[metric]])) ||
+          any(abs(csv[[metric]] - results[[metric]]) > 1e-8 * pmax(1, abs(results[[metric]]))))
+        stop("Cell-depth CSV metric differs from the checked RDS: ", metric)
+    }
+    .analysis_checked_file(csv_path, raw$csv$md5)
+    .analysis_checked_file(rds_path, entry$source$md5)
   }
   list(results = results, raw = raw, context = context)
 }
