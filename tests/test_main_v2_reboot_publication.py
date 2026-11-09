@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -49,6 +50,16 @@ def fixture(base, context):
     ids = [row[3] for row in emitted]
     final_inventory = write(root / 'emitted.json', json.dumps(dict(schema='ecoda_orphaned_main_emitted_scheduler_inventory_v1', final_emitted_catalog_complete=True, original_files_written=False, catalog_sha256=sha(emitted_path), initial_catalog=proof(initial_path), initial_inventory=proof(initial_inventory), single_inspect_scheduler_ids=ids, original_child_ledgers=ledgers, watchdog_evidence=snapshots)))
     gate = json.loads(x['gate_path'].read_text())
+    # Real old dispatcher argv can name only external controls, with RUN_ID in env.
+    external = []
+    for line in x['context_file'].read_text().splitlines():
+        label, child, selected_path, refs_path = line.split('\t')
+        selection_path = write(root / 'original-controls' / (label + '.selection.tsv'), Path(selected_path).read_text())
+        references_path = write(root / 'original-controls' / (label + '.inputs.tsv'), Path(refs_path).read_text())
+        external.append('\t'.join((label, child, str(selection_path), str(references_path))) + '\n')
+    original_contexts = write(root / 'original-controls/contexts.tsv', ''.join(external))
+    gate['exact_command'] = shlex.join([*shlex.split(gate['exact_command']), '--contexts', str(original_contexts)])
+    gate['command_digest'] = hashlib.sha256(gate['exact_command'].encode()).hexdigest()
     gate.update(state='PRELAUNCH_STOP', terminal_status=None, remote_exit_code=None, remote_host='bamboo', launch_timestamp='2026-11-09T08:18:46Z', tmux_session='ecoda-old-main-v2')
     for key, suffix in (('remote_manifest', '.manifest.json'), ('remote_runner', '.runner.sh'), ('remote_status', '.status.json'), ('remote_failure_status', '.status.json.failure')):
         gate[key] = str(scratch / 'gates' / (gate['gate_id'] + suffix))
@@ -60,6 +71,7 @@ def fixture(base, context):
     obs = dict(schema='ecoda_login_reboot_operational_observation_v1', observed_at='2026-11-09T16:05:11.164862+00:00', hostname='login1.bamboo', boot_epoch=1794235647, boot_utc='2026-11-09T14:47:27+00:00', no_accounting_query=True, no_scientific_payload_reads=True, no_remote_writes=True, tmux=dict(exit=1, stdout=''), processes=dict(exit=0, stdout='123 1 python -\n'), queue=dict(exit=0, stdout=''), files=files, active_job_descriptors={'4665612': dict(exit=0, stdout=f'JobId=4665612 matrix_gate.sh {names["benchmark"]}')})
     observation = write(root / 'observation.json', json.dumps(obs))
     quiet = copy.deepcopy(obs); quiet['observed_at'] = '2026-11-10T04:00:00+00:00'; quiet['tmux'] = dict(exit=0, stdout='ecoda-fresh-recovery: 1 windows\n')
+    quiet['processes']['stdout'] = f'123 1 bash {base}/fresh0314/tree/src/5_run_benchmark_methods/stage5_dispatcher.sh --selection-file {base}/fresh-controls/benchmark.selection.tsv\n'
     quiescence = write(root / 'quiescence.json', json.dumps(quiet))
     agg = write(scratch / '_ecoda_runs' / names['corrected'] / 'logs/5_matrix_gate_4665633.log', '')
     aggregate = write(root / 'aggregate.json', json.dumps([dict(**proof(agg), exists=True)]))
@@ -129,6 +141,11 @@ def run():
                 path.write_bytes(original);x['incident'].write_bytes(ibytes);x['receipt'].write_bytes(sbytes);x['review'].write_bytes(rbytes);control.write_bytes(cbytes); control.chmod(cmode)
             rejected(x['quiescence'], lambda v:v['queue'].update(stdout='990001 RUNNING\n'), 'queued retry accepted')
             rejected(x['quiescence'], lambda v:v['processes'].update(stdout=MAIN_RUNS[context]), 'live controller accepted')
+            old_argv = f"123 1 bash {x['source']}/src/5_run_benchmark_methods/stage5_dispatcher.sh --selection-file {x['root']}/original-controls/benchmark.selection.tsv\n"
+            assert not any(run_id in old_argv for run_id in (*MAIN_RUNS.values(), 'stage5_main_confounds_20261109_v2'))
+            rejected(x['quiescence'], lambda v:v['processes'].update(stdout=old_argv), 'env-only old dispatcher accepted')
+            control_argv = f"123 1 bash /some-other-entry.sh --selection-file {x['root']}/original-controls/benchmark.selection.tsv\n"
+            rejected(x['quiescence'], lambda v:v['processes'].update(stdout=control_argv), 'original control writer accepted')
             rejected(x['quiescence'], lambda v:v['tmux'].update(stdout='ecoda-old-main-v2: 1 windows\n'), 'old tmux accepted')
             rejected(x['observation'], lambda v:v.update(boot_epoch=1), 'wrong boot accepted')
             rejected(x['observation'], lambda v:v['files'][-1].update(exists=True), 'fabricated done accepted')

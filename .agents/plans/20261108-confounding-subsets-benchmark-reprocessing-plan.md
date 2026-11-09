@@ -3568,3 +3568,39 @@ This is a future P6 source checkpoint only, with no HPC launch or active
 `0314f20` modification. The current startup/queue snapshot is saved as
 `.gate/failed16_inputs_20261109_v1/startup_handoff.observed.json`; it contains
 one user-requested start-estimate/node-state query and no accounting query.
+
+### Follow-up publication hold: actual old controller argv identity
+
+Further independent review of the future postmortem collector found that an old
+child dispatcher's run ID can be environment-only: matching run-ID substrings
+alone could miss its actual argv. The same gap exists in the new reboot-only
+publication verifier. The prior B acceptance is therefore narrowed pending an
+exact old-source campaign/dispatcher/control-path check and focused negative
+fixtures. Commit `3b995b5` is preserved as history; it has not been deployed or
+used for real publication. The active failed16 source `0314f20` is unaffected.
+Normal BL/HR/main publication guards remain unchanged. No missing-process or
+successful old-worker claim is inferred from the incomplete identity check.
+
+### Publication quiescence correction — independently accepted
+
+The follow-up closes the environment-only run-ID gap by matching exact old
+immutable campaign/dispatcher source and original control-path identities.
+Actual-style old child argv without a run-ID token now blocks publication;
+unrelated fresh `0314f20` controllers remain allowed. The full reboot fixture
+and independent run pass. Publisher SHA
+`61db0f63e2c3eaef99a398c17e6ec5becee1ad0f0e9f6142e0b96515f1801d5e`, test
+`fbbdb6d90af0ab780d8bcae43756d9e2d49ede1e700c9ca0960b5af6310bed8c`.
+Normal BL/HR/main contracts are unchanged. This supersedes the preceding
+code-review hold only; actual operational publication is still unapproved.
+
+The read-only postmortem collector is independently accepted at
+`.gate/orphaned_main_20261109_v1/collect_postmortem_candidate.py`, SHA
+`a68f214950fff301dd403a5673eec1ea02f26d5a88fd7c2f7714666300b4b39e`.
+Root will run it only at the later completion/recovery boundary using configured
+Bamboo Python and staged immutable STOP/initial-catalog/proof controls. It
+preserves bounded text/absence snapshots, actual retry markers and unchanged
+ledgers; one queue/process/tmux observation verifies quiescence. Missing
+watchdog stdout, queued old roots/retries, old writers or changed evidence
+block readiness. `READY_FOR_SOLE_INSPECT` is only an enumeration/absence
+observation, never a terminal science approval. No accounting or submission
+occurs in this collector, and it has not yet been executed on Bamboo.

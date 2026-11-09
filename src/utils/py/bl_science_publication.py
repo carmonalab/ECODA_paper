@@ -264,6 +264,23 @@ def verified_scope(args):
     return control, science, inventory, run, nas, destination
 
 
+def main_v2_writer_tokens(gate):
+    """Exact old entrypoints/controls also identify env-only run-ID controllers."""
+    argv = shlex.split(gate['exact_command'])
+    source = safe(cli_value(argv, '--source-root'))
+    contexts = safe(cli_value(argv, '--contexts'))
+    require(contexts.suffix == '.tsv' and contexts.stat().st_size <= 65536, 'Wrong original contexts control')
+    before = digest(contexts)
+    rows = [line.split('\t') for line in contexts.read_text().splitlines()]
+    children = {'benchmark': MAIN_RUNS['benchmark'], 'uncorrected': MAIN_RUNS['batch_effect/uncorrected_final'],
+                'corrected': MAIN_RUNS['batch_effect/corrected_final']}
+    require(len(rows) == 3 and {row[0] for row in rows} == set(children)
+            and all(len(row) == 4 and children.get(row[0]) == row[1] for row in rows)
+            and digest(contexts) == before, 'Wrong/changing original context identities')
+    return [str(source / 'src/5_run_benchmark_methods' / script) for script in ('stage5_campaign.sh', 'stage5_dispatcher.sh')] + [
+        str(contexts), *(str(safe(path)) for row in rows for path in row[2:])]
+
+
 def verify_login_reboot(control, science, review, gate, inspected, evidence, schedulers, ids, original):
     """One fixed reboot incident; never turn missing wrapper status into success."""
     incident = read_json(proof(control['incident']))
@@ -290,6 +307,7 @@ def verify_login_reboot(control, science, review, gate, inspected, evidence, sch
         require(gate[key] == str(original.parent.parent / 'gates' / (gate['gate_id'] + suffix)), 'Foreign original gate path')
     observation = read_json(paths['observation']); quiescence = read_json(paths['quiescence_observation'])
     boot = datetime.datetime.fromisoformat('2026-11-09T14:47:27+00:00')
+    writer_tokens = [*MAIN_RUNS.values(), 'stage5_main_confounds_20261109_v2', *main_v2_writer_tokens(gate)]
     for item in (observation, quiescence):
         require(item['schema'] == 'ecoda_login_reboot_operational_observation_v1'
                 and item['hostname'] == 'login1.bamboo' and item['boot_epoch'] == 1794235647
@@ -302,7 +320,7 @@ def verify_login_reboot(control, science, review, gate, inspected, evidence, sch
                 and item['processes']['exit'] == 0 and item['queue']['exit'] == 0,
                 'Missing reboot/host/absence observation')
         processes = item['processes']['stdout']
-        require(not any(name in processes for name in (*MAIN_RUNS.values(), 'stage5_main_confounds_20261109_v2')),
+        require(not any(name in processes for name in writer_tokens),
                 'An original controller/runner is still observed')
         files = {row['path']: row for row in item['files']}
         require(len(files) == len(item['files']), 'Duplicate reboot snapshot')
