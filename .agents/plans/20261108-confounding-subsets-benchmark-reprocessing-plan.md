@@ -61,17 +61,19 @@ Provenance: repository planning anchor
 execution commits separately. A dirty configuration is not proof that its
 decisions have been applied to existing artifacts.
 
-## Live checkpoint — 2026-11-09, method wave active; CPU reboots delay pending tasks
+## Live checkpoint — 2026-11-09 13:20Z, live MrVI progress confirmed; recovery pending terminal evidence
 
 - P0/P1 DONE: logical checkpoints and harmonized documentation are pushed.
   Active controller/reuse source is9ca2453, committed/pushed and
   deployed as an immutable Bamboo snapshot. Later reviewed diagnostics6bcf26b
   and compact-analysis code14e6749 are pushed but do not alter active workers. External application work remains excluded.
-- **Main wave last confirmed RUNNING (11:15Z):** source9ca, launched08:18:46Z;32method
-  arrays and32watchdogs submitted acrossbenchmark/uncorrected/corrected.
-  Allthree contexts have actualmethod execution logs; correctedMrVI is
-  training and correctedPILOT has saved outputs. FreshSSH reads laterstalled;
-  no new terminalevent or accounting audit has been observed.
+- **Main wave progress confirmed at13:20Z:** source9ca, launched08:18:46Z;32method
+  arrays and32watchdogs submitted across benchmark/uncorrected/corrected.
+  Existing Positron SSH terminal confirms uncorrected MrVI task4665560_3
+  around epoch44/50 and corrected task4665623_3 around24/50, with recent
+  log writes. User queue at13:09Z shows both RUNNING and benchmark GPU
+  tasks4665568_1..2 waiting for unavailable/reserved hardware. No context
+  terminal marker or terminal accounting inspection has been observed.
 - **Hardware policy clarified/applied:** benchmarktimings retainEPYC-7742/
   configuredGPU model; bothbatch views permit anyhardwaremodel. Exact18
   pendingbatch tasks had onlySlurmFeatures cleared with before/afterproof;
@@ -3099,3 +3101,38 @@ scientificsource remains9ca; no newsource hasbeenpulled/hotpatched remotely.
 Actualrecoveryrows/wrapper/run controls remainUNSEALED pendingterminal
 inspection andcompletefailed-row catalog. Minimumknownfailures remain
 StephensonGloScope30 +8correctedQOTstartup failures.
+
+
+### Restart recovery and user-assisted evidence — 2026-11-09 13:20Z
+
+The user restarted Codex and supplied a 13:09:20Z queue/status snapshot.
+Benchmark reports are eight OK and one FAIL out of eighteen watchdogs;
+uncorrected has one OK report out of seven; corrected has one FAIL report
+out of seven. The known failures remain Stephenson GloScope parameter task2
+and all eight corrected QOT tasks. Missing reports are unresolved, never
+inferred successful from absence in the queue. Dependency-pending aggregate
+IDs in the supplied queue include4665594,4665612,4665633; include these and
+all other actual emitted/retry IDs in the eventual single terminal inspect.
+
+Native Positron access now works after restart. The orchestrator raised the
+ECODA workspace and used only the existing Bamboo SSH terminal for bounded
+read-only filesystem/log commands. The connection remains open at its prompt;
+no submit/cancel/accounting/source mutation was performed. A fresh standalone
+SSH attempt still timed out, corroborating the new-connection problem.
+At13:20:40Z, uncorrected MrVI task4665560_3 log was around44/50 epochs
+(last write13:18:27Z) and corrected task4665623_3 around24/50
+(last write13:16:58Z). Both scientific fits are making progress. Watchdog
+log discovery found only the same reporting families; other watchdog startup
+or completion status still requires the final catalog. No additional method
+failure is asserted without evidence. The durable gate status file is absent;
+that absence alone does not establish failure or terminal state.
+
+Local exact-process inventory after restart proves the original durable wait
+and output-consumer processes are no longer present. Historical claims that
+sessions36153/977 remain attached are superseded by this restart observation.
+No duplicate waiter or wrapper was started. Reconcile the existing remote gate
+identity when fresh SSH is restored, then restore exactly one durable wait;
+the active remote Slurm jobs must not be relaunched. Current9ca sources and
+all completed artifacts remain unchanged. Recovery selection is still unsealed
+pending complete terminal/accounting/artifact evidence. No blanket rerun or
+new HPC job was launched during this check.
