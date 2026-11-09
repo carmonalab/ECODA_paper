@@ -71,8 +71,10 @@ decisions have been applied to existing artifacts.
   worker outputs; corrected has all7arrays submitted and successful startup
   preflights, but no method-start logs. One-off targeteddiagnostics prove
   EPYC-7742 nodes are draining forRebootASAP, NextStateUNDRAIN. No new method
-  failure was found. The user explicitly chose to retainEPYC-7742 and wait
-  for nodes to return; no CPU-model/resource changes are authorized or made.
+  failure was found. Latest user clarification: ONLYbenchmark views are
+  timed and keepEPYC-7742; bothbatch views may use ANYCPU/GPUmodel. Exact
+  pendingbatch-only feature-constraint amendment is being applied as recorded
+  below; benchmark and running jobs are excluded.
 - **Changed inputs ready:** approved Bassez metadata repair (74948cells,
   26samples,40HRtypes); all17 Stage3 outputs produced/NAS-synced;53-sample
   Stephenson benchmark input individually NOOP-reviewed. Original Stage3 gate
@@ -2841,3 +2843,39 @@ The existing durable waitprocess(session36153) has one asynchronous output
 consumer(cell977). This is not a second gatewait or scheduler poll. Observe
 completion through that consumer; do not attach another consumer directly to
 session36153 or start another durablewait command.
+
+
+### User clarified hardware policy: benchmark-only timings; batch unrestricted
+
+The user explicitly clarified: **only benchmarkdatasets/views are used for
+timing; anybatch uncorrected orcorrected analyses can run on anyCPUorGPU.**
+This narrows the preceding retainEPYC-7742 decision to benchmarkviews ONLY.
+Keep benchmarkCPU/GPU model constraints for timing comparability. For the
+exacttwo batch views remove hardwareMODEL constraints; preserve eachmethod's
+CPU-vs-GPU dispatch, accelerator allocation/VRAM, threads, memory, time limit,
+scientific inputs/methods and pinned runtime. Do not ask again for this
+already-authorized batch flexibility. No environment or immutable source is
+hotpatched; a minimal dispatcher fix for futurewaves is being implemented
+and reviewed separately, including watchdog/OOM flag propagation.
+
+A SINGLE explicit pending-task inventory of the14batch arrays (not aperiodic
+scheduler poll) found only18pending CPUtasks at this point; otheroriginal
+batch tasks have leftPENDING. Exact selected scope:
+4665623_7/8 (correctedMrVI),4665625_1..8 (correctedPILOT),4665627_1..8
+(correctedQOT). All werePENDING, EPYC-7742,16CPU,128G in the frozen inventory.
+No benchmark IDs, running/completed jobs, newmethod rows or cancellations
+are included. Source remains9ca; original runmanifests/proofs are unchanged.
+
+The proposed operational amendment clears onlySlurmFeatures on those
+individual pending task IDs. Recheck each exacttask's owner/run/source/log
+identity, state and resource contract immediately before updating; if it
+has started, leave it untouched and recordSKIPPED_RUNNING. Preserve every
+other resource and jobID; capture before/result/after metadata and report any
+failures without broadresubmission. Installed scontroldocumentation explicitly
+supports blankFeatures= and task-specificArrayJobID_TaskID updates.
+Selection `.gate/main_v2_batch_hardware_20261109_v1/selection.proposed.json`,
+SHA256`fefa835e72a71334ef0182e077af9ced87f7f06d1f8157d6367aeb6f0f0cc69e`,
+18tasks. No update has yet occurred by this checkpoint; record outcome next.
+Existing9ca watchdogs retain original submissionflags, so an actualfuture
+OOM retry is assessed under this same user policy if it appears; do not
+modify activewatchdogs or oldrecords.
