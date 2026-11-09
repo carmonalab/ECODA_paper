@@ -2377,3 +2377,67 @@ the workstation/SSH connection and can continue while the workstation sleeps.
 - Existing BL10/HR22 and all original prepared artifacts remain preserved.
   Further intervention/monitor setup is deferred pending the user's reply;
   this does not pause or cancel the already launched Bamboo campaign.
+
+
+### User resumed work; submission progress and P6 preparation — 2026-11-09
+
+The user will leave the workstation awake and explicitly directed continued
+work. This supersedes the earlier request to pause after a one-off check.
+Keep the existing server runner/single waiter; do not create another launch,
+waiter or periodic scheduler-accounting loop.
+
+At08:41:45Z benchmark compute-preflight4665493 had11/11workerOK statuses;
+uncorrected4665505 had7/8OK (Alzheimer pending). At08:48:48Z benchmark had
+also recorded R-environment preflight4665514 and passed all selected source
+contract checks. Both batch metadata reports now exist and areOK,COUNT8,
+PENDING0. Therefore all23approved prepared payloads have been copied without
+refits/export jobs; current full input validation continues. No worker or
+controller failure was observed and no running source was changed.
+
+Important evidence correction: an empty scheduler ledger alone cannot prove
+that no scheduler work exists. The shared H5AD helper records its ID only
+after sbatch --wait returns; worker filenames/statuses can show in-flight
+preflight work sooner. All earlier zero-method statements concern method
+arrays, not these compute-preflight arrays. Future source-only improvement
+may persist IDs before waiting; the current source is immutable.
+
+Read-only startup/performance audit explains the delay: corrected source
+contract checks stream counts on the login controller, bound sidecar checks
+hash whole selected H5ADs sequentially, compute preflight repeats mandatory
+schema/content checks concurrently, and source artifact checks can repeat
+count scans. Source-identity helper itself reads obs/proofs rather than doing
+another full hash; immutable runtime validation uses the existing fast path.
+Do not interrupt healthy checks or bypass integrity to accelerate this run.
+Future-only candidates: timestamped per-input phase logging; persist an
+in-flight ID before waiting; reuse exact current-run preflight evidence only
+for proven immutable inputs with a focused regression. No such change is
+implemented or hot-swapped into the running snapshot.
+
+P6 implementors resumed the previously frozen compact metadata projection,
+streaming local intake and exact supplementary-scope audit. No production
+figure execution/intake or RNA-bearing local transfers are authorized by a
+code fixture passing. The batch projection-required guard is independently
+assigned and tests both Kidney axes/360+405values. Publication parameter
+scope beyond the231core benchmark rows is being enumerated explicitly;
+no targetedHiTME100 or additional model rerun is inferred.
+
+Finite checksum/provenance audit completed outside scientific outputs:
+`_ecoda_inputs/20261108-confounding-subsets-v1/p6-legacy-evidence-v1/legacy_inventory.observed.json`,
+SHA256 `f7e732aa07a28acce44a6764b64277ecfcf9fae5dfb954a92f4c3ab7c3115e4a`;
+local metadata copy `.gate/p6_legacy_evidence_20261109_v1/`. Exact114result
+paths plus one timing Feather were stream-hashed, with no deserialization,
+H5AD/count/SIF read, scoring, fit, scheduler query or old-file write.
+106payloads match the frozen canonical checksum table; nine existing
+zero-imputation companion RDS files disagree (Adams,Gongsharma,Kfoury,Kim,
+Lee,Pelka,Smillie,Wu,Zhang). This is **not** scientific reuse approval and
+does not authorize nine reruns or checksum-table repair.
+
+All115legacy global owners are absent; adjacent receipts retain historical
+home-alias PATH values. Missing historical ownership/provenance must remain
+truthful and cannot be invented/promoted; it is not by itself evidence that
+the stored scientific distances are invalid. Prepare the bounded science
+audit against externally frozen exact MD5/size/current-input/key/label scope,
+and investigate the nine checksum disagreements using finite independent
+backup/receipt evidence before deserializing or selecting any recompute.
+Actual full science/projection compute remains gated after the active wave's
+terminal review in the existing ecoda-benchmark serialization group.
