@@ -82,12 +82,17 @@ if adoption.exists():
     receipt = json.loads(adoption.read_text())
     targets = {context_keys[row[0]]: row[1] for row in rows}
     if (receipt.get('state') != 'APPROVED_COPY_ONLY'
-            or receipt.get('original_gate_state') != 'FAILED'
+            or (receipt.get('schema') != 'ecoda_stage5_batch_prepared_adoption_v1' and receipt.get('original_gate_state') != 'FAILED')
             or receipt.get('config_sha256') != hashlib.sha256((project / 'datasets.json').read_bytes()).hexdigest()):
         raise SystemExit('ERROR: prepared-adoption receipt differs from the exact campaign scope')
     if receipt.get('schema') == 'ecoda_stage5_prepared_adoption_v1':
         if len(rows) != 3 or receipt.get('target_run_ids') != targets:
             raise SystemExit('ERROR: original prepared adoption requires all three exact contexts')
+    elif receipt.get('schema') == 'ecoda_stage5_batch_prepared_adoption_v1':
+        from stage5_prepared_adoption import batch_review
+        batch_review(receipt, {key for key, value in config.items() if not key.startswith('_') and value.get('use_for_batch_effect') is True})
+        if any(targets.get(context) != child for context, child in receipt['target_run_ids'].items()):
+            raise SystemExit('ERROR: batch-prepared adoption differs from exact target batch contexts')
     elif receipt.get('schema') == 'ecoda_stage5_metadata_adoption_v1':
         copies = receipt.get('target_run_ids', {})
         if (not copies or not set(copies) <= {'batch_effect/uncorrected_final', 'batch_effect/corrected_final'}
@@ -150,8 +155,9 @@ for row in rows:
     referenced = inputs(references, config, 'stage5')
     if {key[:2] for key in referenced} != {tuple(row[:2]) for row in declared}:
         raise SystemExit('ERROR: input references differ from selected dataset/views')
-    if receipt and receipt['schema'] == 'ecoda_stage5_metadata_adoption_v1' and context_keys[context] in receipt['target_run_ids']:
-        requested = receipt['selected_metadata'][context_keys[context]]
+    if receipt and receipt['schema'] in ('ecoda_stage5_metadata_adoption_v1', 'ecoda_stage5_batch_prepared_adoption_v1') and context_keys[context] in receipt['target_run_ids']:
+        requested = (receipt['selected_metadata'][context_keys[context]] if receipt['schema'] == 'ecoda_stage5_metadata_adoption_v1' else
+                     [{key: item[key] for key in ('dataset', 'view')} for item in receipt['artifacts'] if item['context'] == context_keys[context] and item['kind'] == 'metadata'])
         pairs = [(item.get('dataset'), item.get('view')) for item in requested if isinstance(item, dict) and set(item) == {'dataset', 'view'}]
         if len(pairs) != len(requested) or len(set(pairs)) != len(pairs) or set(pairs) != {tuple(item[:2]) for item in declared}:
             raise SystemExit('ERROR: metadata-only adoption must cover the exact selected dataset/views')

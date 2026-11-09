@@ -3094,6 +3094,7 @@ benchmark_selected_artifacts_valid() {
         if [[ -n "${ANALYSIS_VARIANT:-}" ]]; then
           rds_args+=(--analysis-variant "${ANALYSIS_VARIANT}")
         fi
+        [[ -n "${PASS_ARG:-}" ]] && rds_args+=(--batch-pass "${PASS_ARG}")
         [[ "${path}" == *_metadata.rds ]] && rds_args+=(--metadata)
         [[ -s "${SOURCE_IDENTITY}" ]] && rds_args+=(--source-identity "${SOURCE_IDENTITY}" --source-identity-verified)
         [[ -n "${batch_identity}" && "$(ecoda_stage5_rds_artifact_method "${label}" "${path}")" == "${label}" ]] &&

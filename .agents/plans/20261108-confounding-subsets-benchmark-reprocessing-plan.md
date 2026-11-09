@@ -3827,3 +3827,55 @@ placement. The eight uncorrected caches are being audited via bounded metadata/
 hash and then pinned RDS schema checks; existing STOP-parent/ACTIVE-owner state
 must remain truthful. No new95 wave has been launched, and the pending user
 allocation-diagnostic exception has not been executed.
+
+### Eight-cache semantic audit passed; strict32 code checkpoint accepted
+
+The actual configured R 4.5.2 read-only audit passes all eight caches and their
+original timing files. Report SHA
+`10dffdf2f0e4b3d215f33b2bf379c1089a9b853f8b625224be29de7dbf1cf039`;
+metadata/hash witness SHA
+`2265fcf5a6545fa257ea15971971c32dd7b6515cb2ccdccebb746ffa79a53141`.
+The exact immutable8ad RDS CLI passed (`benchmark RDS artifact-list contract OK`).
+Ordered sample counts124/110/101/33/44/80/94/80, 2000 unique named features per
+cache, schema2 attributes and exactly one shared/variant timing row each agree.
+Cache owners are actually FAIL, not ACTIVE; timing owners are absent. Neither
+was changed. Both semantic flags are true but reuse_approved remains false.
+Audit code SHA `e3f635bde0b2c882df87a06fa260444f56ee2da8d906039ff3722e04db6335ec`
+was independently reviewed and archived before execution. The first invocation
+stopped before R because the snapshot's host interpreter prefix was omitted;
+the unchanged audit succeeded after explicitly setting the canonical host
+prefix. Both invocation logs are preserved; no H5AD or normalization/model fit
+was performed by either attempt.
+
+The strict32 preparation-adoption code is independently accepted: one new
+schema through the existing API carries unc8 cache +8 original timing files
+from v2 STOP, and16 EXPORTED metadata files from the two v1 FAILED contexts.
+Per-kind source roles retain those distinct actual states and immutable source
+commits. Existing old23 and metadata-only schemas remain unchanged. Cache
+owners must be FAIL; ACTIVE/foreign/missing owners are rejected, and timing
+owner absence is mandatory. All real receipts remain unapproved until a clean
+selected-source writer observation and root reviews are sealed.
+
+The native regression exposed a separate existing callback bug: individual
+uncorrected-final RDS checks omitted --batch-pass uncorrected. The copied caches
+were valid yet the classifier incorrectly requested40 rows. One dispatcher
+argument line now passes the selected batch pass; the same native fixture proves
+that prep8 are skipped and only32 missing science rows remain. Corrected
+contract arguments and benchmark behavior are unchanged. Full copy/native,
+legacy old23, selected metadata, six-cache and campaign fixtures passed; the
+independent full fixture also passed.
+
+### Selected-source writer observation: unresolved native process identities
+
+The one real own-user observation at19:15:28 UTC preserved all16 prep artifact
+identities and classified every queued job as either the known benchmark tail
+or fresh observer4666208. However, it correctly remains BLOCKED because two
+own processes had unreadable /proc metadata (PIDs646186 and790299). The latter
+was the collector's SSH parent; the former was a child of user systemd, but
+those roles are not approved from a guess. Source observation SHA
+`168bbc5c22bc4d174883be9b367e3807b9d56714d6e4c9a3243a235afde52678`.
+A bounded metadata supplement is being prepared to establish native service/
+transport identities and then narrowly correct any false classification.
+Unknown writer candidates must still block; no blanket unreadable-process
+exception or owner promotion is authorized. The blocked report is unchanged,
+and no cache adoption or new95 launch has occurred.

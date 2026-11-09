@@ -2,7 +2,7 @@
 # Copy only the finite, reviewed preparation set; ordinary dispatch/reuse checks
 # remain authoritative. Source after the common helpers and dispatcher setup.
 stage5_adopt_prepared_artifacts() {
-  local receipt="$1" receipt_sha="$2" context="$3" helper plan bound_receipt
+  local receipt="$1" receipt_sha="$2" context="$3" helper plan bound_receipt schema
   local kind ds view original target producer md5 size owner path
   local cache_list="${ECODA_RUN_ROOT}/manifests/prepared_adoption_caches.tsv"
   local -a adopted_paths=()
@@ -19,6 +19,7 @@ stage5_adopt_prepared_artifacts() {
   [[ "$(ecoda_sha256_file "${receipt}")" == "${receipt_sha}" ]] || return 1
   ecoda_atomic_copy "${receipt}" "${bound_receipt}" || return 1
   [[ "$(ecoda_sha256_file "${bound_receipt}")" == "${receipt_sha}" ]] || return 1
+  schema="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1]))["schema"])' "${bound_receipt}")" || return 1
   ecoda_write_checksum "${bound_receipt}" || return 1
   ecoda_write_artifact_record "${bound_receipt}" stage5_prepared_adoption_receipt "${RUN_ID}" >/dev/null || return 1
   "${PYTHON_BIN}" "${helper}" plan --receipt "${bound_receipt}" --sha256 "${receipt_sha}" \
@@ -61,17 +62,25 @@ stage5_adopt_prepared_artifacts() {
     ecoda_atomic_install_manifest "${cache_list}.build.$$" "${cache_list}" 5 || return 1
     rm -f "${cache_list}.build.$$"
     ecoda_write_checksum "${cache_list}" || return 1
+    if [[ "${schema}" == ecoda_stage5_batch_prepared_adoption_v1 ]]; then
+      [[ "${context}" == batch_effect/uncorrected_final ]] || return 1
+      ${PIXI_RSCRIPT} "${PROJECT_ROOT}/src/5_run_benchmark_methods/validate_benchmark_rds_contract.R" \
+        --artifact-list "${cache_list}" --config "${DATASETS_JSON_FILE}" \
+        --input-root "${HPC_SCRATCH_DIR}" --source-identity "${SOURCE_IDENTITY}" \
+        --source-identity-verified --batch-pass uncorrected --analysis-variant final || return 1
+    else
     ${PIXI_RSCRIPT} "${PROJECT_ROOT}/src/5_run_benchmark_methods/validate_benchmark_rds_contract.R" \
       --artifact-list "${cache_list}" --config "${DATASETS_JSON_FILE}" \
       --input-root "${HPC_SCRATCH_DIR}" --source-identity "${SOURCE_IDENTITY}" \
       --source-identity-verified || return 1
+    fi
   fi
   rm -f "${cache_list}.build.$$"
   path="${ECODA_RUN_ROOT}/manifests/prepared_adoption.json"
   ecoda_write_checksum "${path}" || return 1
   ecoda_write_artifact_record "${path}" stage5_prepared_adoption "${RUN_ID}" >/dev/null || return 1
   # Only a fully validated copy set becomes reusable. Its immutable report
-  # preserves original fit/timing identity and the failed original gate.
+  # preserves original fit/timing identity and each original source gate state.
   for path in "${adopted_paths[@]}"; do
     ecoda_artifact_owner_set_state "${path}" OK 'validated prepared artifact byte-copy; no scientific refit' || return 1
   done

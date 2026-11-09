@@ -42,7 +42,7 @@ def common(environment, script, *arguments):
     return result
 
 
-def build_fixture(base):
+def build_fixture(base, *, run_ids=None, old_source_commit="1" * 40):
     """Return three bound old/new contexts and exactly 23 declared artifacts.
 
     Cache/timing bytes are opaque placeholders for the peer's RDS fixture to
@@ -74,8 +74,9 @@ def build_fixture(base):
         lane = "benchmark" if context == "benchmark" else context.split("/")[1].removesuffix("_final")
         view = "benchmark_analysis" if lane == "benchmark" else "batch_effect_" + lane
         datasets = ("Stephenson",) if lane == "benchmark" else BATCH_DATASETS
-        old_run = scratch / "_ecoda_runs" / ("old_" + lane)
-        new_run = scratch / "_ecoda_runs" / ("new_" + lane)
+        old_id, new_id = (run_ids or {}).get(context, ("old_" + lane, "new_" + lane))
+        old_run = scratch / "_ecoda_runs" / old_id
+        new_run = scratch / "_ecoda_runs" / new_id
         inputs = base / (lane + ".inputs.tsv")
         input_rows = []
         for dataset in datasets:
@@ -102,7 +103,7 @@ def build_fixture(base):
             fields(run / "metadata", {"STAGE": "stage5", "RUN_ID": run.name,
                                       "STATE": "FAIL" if run == old_run else "ACTIVE"})
             fields(manifests / "source.manifest", {"FORMAT": 1, "SOURCE_ROOT": source,
-                "SOURCE_COMMIT": "1" * 40 if run == old_run else "2" * 40,
+                "SOURCE_COMMIT": old_source_commit if run == old_run else "2" * 40,
                 "DATASETS_SHA256": digest(config)})
             fields(manifests / "runtime.identity", runtime_identity)
             selection = manifests / "selection.tsv"
